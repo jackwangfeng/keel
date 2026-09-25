@@ -33,6 +33,20 @@ type Category struct {
 	UpdatedAt  pgtype.Timestamptz
 }
 
+type IdempotencyKey struct {
+	Scope        string
+	MerchantID   int64
+	UserID       int64
+	IdemKey      string
+	RequestHash  string
+	Status       int16
+	ResponseCode *int32
+	ResponseBody []byte
+	ExpireAt     pgtype.Timestamptz
+	CreatedAt    pgtype.Timestamptz
+	UpdatedAt    pgtype.Timestamptz
+}
+
 type Inventory struct {
 	SkuID        int64
 	AvailableQty int32
@@ -163,6 +177,26 @@ type User struct {
 	Gender       int16
 	Status       int16
 	LastLoginAt  pgtype.Timestamptz
+	DeletedAt    pgtype.Timestamptz
+	CreatedAt    pgtype.Timestamptz
+	UpdatedAt    pgtype.Timestamptz
+}
+
+type UserAddress struct {
+	ID           int64
+	MerchantID   int64
+	UserID       int64
+	ReceiverName string
+	Phone        string
+	Province     string
+	City         string
+	District     string
+	Street       string
+	Detail       string
+	RegionCode   *string
+	PostalCode   *string
+	Tag          int16
+	IsDefault    bool
 	DeletedAt    pgtype.Timestamptz
 	CreatedAt    pgtype.Timestamptz
 	UpdatedAt    pgtype.Timestamptz

@@ -51,6 +51,7 @@ type Tx interface {
 	ProductTx
 	SagaTx
 	UserTx
+	OrderTx
 }
 
 // ProductTx 是商品读取这一面。
