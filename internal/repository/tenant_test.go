@@ -47,14 +47,15 @@ func ensureSchema() error {
 	}
 	defer admin.Close(ctx)
 
-	var ok bool
-	if err := admin.QueryRow(ctx,
-		`SELECT to_regclass('public.products') IS NOT NULL`).Scan(&ok); err != nil {
+	// 无条件重建 schema —— 理由与 internal/handler/main_test.go 里那段相同：
+	// 跳过会让可变状态跨轮次累积（种子是 NOT EXISTS 幂等的，补不回被扣掉的库存），
+	// 而且改了一份已应用的迁移之后，暖库上是假绿。后者是「删掉被守护的那段逻辑、
+	// 看它红不红」这套方法的地基。
+	if _, err := admin.Exec(ctx,
+		`DROP SCHEMA public CASCADE; CREATE SCHEMA public`); err != nil {
 		return err
 	}
-	if ok {
-		return nil
-	}
+
 	// 与 internal/db 的迁移测试同一个惯例：调 make 这个稳定入口，
 	// 而不是把 `go -C tools run ...` 抄一份进测试。
 	out, err := exec.Command("make", "-C", "../..", "migrate",

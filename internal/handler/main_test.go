@@ -143,13 +143,24 @@ func ensureSchema(ctx context.Context) error {
 	}
 	defer admin.Close(ctx)
 
-	var ok bool
-	if err := admin.QueryRow(ctx,
-		`SELECT to_regclass('public.products') IS NOT NULL`).Scan(&ok); err != nil {
+	// 无条件重建 schema，不做「表已经在了就跳过」。
+	//
+	// 跳过有两个代价，都由验收实测出来：
+	//
+	//  一、**可变状态会跨轮次累积。** 种子是 NOT EXISTS 幂等的，补不回被扣掉的
+	//     库存。同一个库连跑 handler 包，前三轮绿、第四轮起必红
+	//     （`shop-a 里找不到水位 >= 2 的 SKU`）。红的是夹具不是被测语义。
+	//
+	//  二、**改了一份已应用的迁移，在暖库上是假绿。** 实测：删掉 orders.user_id
+	//     的复合外键，暖库上 internal/db 照样 ok，换空库才红。
+	//
+	// 第二条尤其要紧：它是「删掉被守护的那段逻辑、看它红不红」这套方法的地基。
+	// 验收自己第一轮变异就跑在被污染的库上，5 条测试同时红、红的全是夹具，
+	// 结论作废重做了一遍。一个会把「没有区分力的断言」判成「有区分力」的
+	// 测试环境，比慢几秒糟得多。
+	if _, err := admin.Exec(ctx,
+		`DROP SCHEMA public CASCADE; CREATE SCHEMA public`); err != nil {
 		return err
-	}
-	if ok {
-		return nil
 	}
 	out, err := exec.Command("make", "-C", "../..", "migrate",
 		"GOOSE_DBSTRING="+db.AdminDSN()).CombinedOutput()

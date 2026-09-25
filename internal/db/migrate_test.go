@@ -25,8 +25,35 @@ import (
 // 形式暴露。
 func migrate(t *testing.T) ([]byte, error) {
 	t.Helper()
+	resetSchema(t)
 	cmd := exec.Command("make", "-C", "../..", "migrate", "GOOSE_DBSTRING="+db.AdminDSN())
 	return cmd.CombinedOutput()
+}
+
+// resetSchema 在每次迁移前把 public 清空。
+//
+// 不清的话，goose 看到版本已是最新就什么都不做 —— 于是**改了一份已应用的迁移，
+// 在暖库上是假绿**。实测过：删掉 orders.user_id 的复合外键，暖库上
+// TestForeignKeysAreNotSilentlyMissing 照样 ok，换空库才红。
+//
+// 这条对本包尤其要命：本包的测试全部是「拿系统目录核对迁移写了什么」，
+// 而它们读的是**库**不是**文件**。库不跟着文件走的时候，这些断言守的是
+// 上一次跑过的那份迁移，不是工作区里这份。
+//
+// 代价是每个测试都要重跑一遍全部迁移（约一秒）。这个仓库在这类取舍上一贯
+// 选正确性：-count=1 是为了不让缓存假绿，-p 1 是为了不让并发迁移互撞，
+// 这一条是同一类。
+func resetSchema(t *testing.T) {
+	t.Helper()
+	admin, err := pgx.Connect(context.Background(), db.AdminDSN())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close(context.Background())
+	if _, err := admin.Exec(context.Background(),
+		`DROP SCHEMA public CASCADE; CREATE SCHEMA public`); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // migratedConn 跑一次迁移并返回一条应用角色连接。
