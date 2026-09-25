@@ -1,11 +1,44 @@
-# Keel 的镜像：一个构建阶段，两个产物（应用、迁移器）。
+# Keel 的镜像：三个构建阶段，两个产物（应用、迁移器）。
 #
-# 两个产物共用一个构建阶段，是为了让它们必然来自同一份源码与同一套钉死的依赖。
-# 分开两个 Dockerfile 的话，「迁移器镜像是上周的、应用是今天的」这种组合
-# 随时会出现，症状是应用连上一个 schema 比它旧一版的库 —— 查询报
+# 应用与迁移器共用同一个 Go 构建阶段，是为了让它们必然来自同一份源码与同一套
+# 钉死的依赖。分开两个 Dockerfile 的话，「迁移器镜像是上周的、应用是今天的」
+# 这种组合随时会出现，症状是应用连上一个 schema 比它旧一版的库 —— 查询报
 # 「column does not exist」，而没有任何东西指向真因。
 
-# ---------- 构建 ----------
+# ---------- dtmrs（Rust → C ABI 动态库） ----------
+# 单独一个阶段，而且**只 COPY 那一个脚本**。
+#
+# 这一层的缓存键因此只跟 scripts/fetch-dtmrs.sh 的内容有关：改一行 Go 代码、
+# 改一份 markdown，这一层照样命中缓存。跟 Go 构建挤在一个阶段的话，`COPY . .`
+# 一动就要重来一次 cargo build --release（本机实测 47 秒，runner 上 registry
+# 是冷的还要更久），而它跟改的那行代码毫无关系。
+#
+# 底座必须和下面的 build 阶段是**同一个** golang 镜像：.so 在这里编，在 build
+# 阶段被链接，在 app 阶段被加载，三处的 glibc 必须兼容。同一个底座是最省心的
+# 保证方式 —— 换成 rust:xxx 的话就多一个「它是 bookworm 还是 trixie」要人盯着，
+# 而盯漏的症状是运行期 `GLIBC_2.41 not found`。
+FROM golang:1.26 AS dtmrs
+
+# Debian trixie 的 rustc/cargo 是 1.85.1（实测 apt-cache policy），满足 dtmrs
+# 要的 1.82+。走 apt 而不是 rustup：rustup 要多下一整套工具链（几百 MB），
+# 而这里只需要能跑一次 cargo build --release。
+#
+# Retries / Timeout 不是装饰：这一步要下 106 MB（实测），而本机撞到过一次连接卡死——
+# apt 默认会一直等下去，于是 docker build 停在一行不动的输出上二十多分钟，
+# 看起来跟「正在编译」一模一样。超时加重试把「卡死」变成「慢一点」。
+RUN apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=30 \
+    && apt-get install -y --no-install-recommends \
+        -o Acquire::Retries=5 -o Acquire::http::Timeout=30 \
+        cargo rustc \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+COPY scripts/fetch-dtmrs.sh ./scripts/
+# 版本（v0.11.0）钉在脚本里，不是 @latest —— 上游改了 C ABI 而这里悄悄跟着变，
+# 是最难查的一类失败。产物是 /dtmrs/lib/libdtmrs.so 与 /dtmrs/include/dtmrs.h。
+RUN ./scripts/fetch-dtmrs.sh /dtmrs
+
+# ---------- Go 构建 ----------
 # 版本下限是 go.mod 里的 go 1.26.0。它不是随手挑的：tools/ 里钉住的 sqlc 与 goose
 # 都声明了 go 1.26，下限由它们传染而来。用更低的 golang 镜像会在 go mod download
 # 那一步就失败。
@@ -29,20 +62,26 @@ RUN go -C tools mod download
 
 COPY . .
 
-# CGO_ENABLED=0 —— **M2 要改这一行**。
+# .so 与头文件从 dtmrs 阶段取，落到 internal/dtm 的 #cgo 指令指的那个路径。
+# 排在 `COPY . .` 后面：反过来的话，构建上下文里万一有同名文件会把它盖掉
+# （third_party 在 .dockerignore 里，正常不会有，但顺序不该依赖那一条）。
+COPY --from=dtmrs /dtmrs /src/third_party/dtmrs
+
+# CGO_ENABLED=1 —— M1 那行 `CGO_ENABLED=0` 在这里被 M2 改掉了，它的时机
+# 就写在它自己的注释里：接入嵌入式事务协调器的那一刻。
 #
-# M1 不接 dtmrs，纯 Go 依赖，静态编译可用，产物能跑在 scratch 上。
-# M2 接入嵌入式事务协调器之后就不行了：dtmrs 是 Rust 实现，经 cgo 以 C ABI
-# 动态库嵌入（CONTRIBUTING「为什么需要 Rust 工具链」那一节），届时
-#   - 这里要变成 CGO_ENABLED=1，构建阶段还要装 Rust 工具链并编出 libdtmrs.so；
-#   - 最终镜像也不能再是 scratch 或 distroless/static —— 动态链接的二进制需要
-#     glibc 与动态链接器，那时的底座是 debian-slim 一类，并且要把 .so 一起拷进去。
-# 留着 CGO_ENABLED=0 而不删，是因为它在 M1 是对的；改它的时机由上面这段话界定。
-RUN CGO_ENABLED=0 go build -trimpath -o /out/keel ./cmd/keel
+# dtmrs 是 Rust 实现，经 cgo 以 C ABI 动态库嵌入（internal/dtm）。代价是确定的，
+# 不要试图绕：静态编译没了，最终镜像也不能再是 scratch（见下面 app 阶段）。
+# 静态链接 libdtmrs.a 是可行的（约 15 MB 单文件），但那是另一次权衡，
+# 不是这次改动的范围。
+RUN CGO_ENABLED=1 go build -trimpath -o /out/keel ./cmd/keel
 
 # goose 从 tools/ 编译，版本由 tools/go.mod 锁定 —— 和 `make migrate` 用的是
 # 同一个版本。镜像里 go install @latest 的话，本地与容器会在某天装到两个版本的
 # 迁移工具，代价是生产库上一次不一致的 schema。
+#
+# 它仍然是 CGO_ENABLED=0：goose 是纯 Go，静态编译可用，于是迁移器镜像还能留在
+# scratch 上。只有应用被 cgo 传染，没必要让迁移器陪着换底座。
 RUN CGO_ENABLED=0 go -C tools build -trimpath \
         -o /out/goose github.com/pressly/goose/v3/cmd/goose
 
@@ -57,35 +96,63 @@ ENTRYPOINT ["/goose"]
 CMD ["up"]
 
 # ---------- 应用 ----------
-# 底座是 scratch，不是 gcr.io/distroless/static-debian12。
+# 底座从 scratch 换成 debian:trixie-slim。
 #
-# 理由是可达性：gcr.io 在不少网络环境下根本连不上（本机实测
-# `docker pull gcr.io/distroless/static-debian12` 超时），而
-# 「clone 下来 docker compose up 就能跑」是这个项目的承诺之一。
+# 换的原因只有一个：cgo 之后的二进制是**动态链接**的，它需要 glibc 与动态链接器
+# （ld-linux-x86-64.so.2），scratch 两样都没有，症状是容器起来就
+# `exec /keel: no such file or directory` —— 一句指向文件不存在、而文件明明在那里的错。
 #
-# 两者**不等价**，差集列在这里，别把它读成「反正一样」：
-#   - 没有 /tmp。今天无害（代码里没有任何东西落临时文件），但商品图片上传
-#     一到位就会踩：net/http 的 ParseMultipartForm 超过内存阈值后会往
-#     os.TempDir() 落盘，那时报的是 "no such file or directory"，
-#     而排查会从上传代码开始。届时加一句 `COPY --from=build --chown=65532 /tmp /tmp`
-#     或者在镜像里建出这个目录。
-#   - 没有 tzdata。`time.LoadLocation("Asia/Shanghai")` 会失败 ——
-#     订单超时、促销的本地时间窗口都需要它。加固办法是在 cmd/keel 里
-#     `import _ "time/tzdata"`（约 450KB，把时区库编进二进制），
-#     那样底座带不带 tzdata 都无所谓。眼下代码里没有用到，所以没加。
-#   - 没有 /etc/passwd。`user.Current()` 会失败，而下面的 USER 只能写数字 UID。
-# 另外 CA 证书也要自己拷（下面那条 COPY），distroless 是自带的。
-FROM scratch AS app
+# 为什么是 debian:trixie-slim 而不是 gcr.io/distroless/base-debian12：
+#   - 可达性。gcr.io 在不少网络环境下根本连不上（本机实测 `docker pull
+#     gcr.io/distroless/static-debian12` 超时），而「clone 下来 docker compose up
+#     就能跑」是这个项目的承诺之一。
+#   - trixie 不是随手挑的：上面两个构建阶段的底座 golang:1.26 就是 Debian 13
+#     trixie（glibc 2.41，实测）。底座低一档（bookworm，glibc 2.36）的话，
+#     二进制链接期用到的符号在运行期找不到，报的是 `GLIBC_2.41 not found`。
+#
+# M1 在 scratch 下记了三个缺失，换底座之后**逐条复核如下（都在 debian:trixie-slim
+# 里实测过，不是推断）**：
+#   - /tmp：**有了**（drwxrwxrwt）。商品图片上传时 ParseMultipartForm 超过内存
+#     阈值会往 os.TempDir() 落盘，那条路现在是通的。
+#   - tzdata：**有了**（/usr/share/zoneinfo/Asia/Shanghai 在）。
+#     time.LoadLocation("Asia/Shanghai") 可用 —— 订单超时与促销的本地时间窗口
+#     都需要它。所以 cmd/keel 里不必 `import _ "time/tzdata"`。
+#   - /etc/passwd：**文件有了，但里面没有 65532 这个 uid**（实测最大的是
+#     nobody:65534）。所以它不是「换底座就自动解决」的那一条 —— 下面显式建了
+#     nonroot。不建的话 user.Current() 仍然会失败，只是失败的理由从
+#     「没有这个文件」变成「这个文件里没有你」。
+# 还有一条没变：**CA 证书仍然要自己拷**。debian slim 不带 ca-certificates
+# （实测 /etc/ssl/certs/ca-certificates.crt 不存在），distroless 才自带。
+FROM debian:trixie-slim AS app
 
 # 眼下这个二进制不发起任何 TLS 连接（pgx 走内网 sslmode=disable），证书是为
 # 将来备的：配 sslmode=verify-full、或调外部支付/物流 API 的那一天，缺证书的
 # 症状是 "x509: certificate signed by unknown authority"，排查会从应用代码开始，
 # 而真因是镜像里少一个文件。一层几百 KB，换掉那次排查很划算。
 COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+
+# libdtmrs.so 必须跟着进来，否则二进制起不来。
+#
+# 放 /usr/local/lib 并 ldconfig，而不是靠编译期烧进去的 rpath：rpath 指的是
+# 构建阶段那个 /src/third_party/dtmrs/lib，这个镜像里没有那个目录。
+# ld.so 找不到 rpath 目录时会继续往默认路径找，所以两者不冲突 ——
+# 但真正把它找到的是 ldconfig 建出来的缓存，不是 rpath。
+COPY --from=dtmrs /dtmrs/lib/libdtmrs.so /usr/local/lib/
+RUN ldconfig
+
 COPY --from=build /out/keel /keel
 
-# 非 root 运行。scratch 里没有 /etc/passwd，所以只能写数字 UID —— 这没问题，
-# 容器运行时不需要把 UID 解析成名字。65532 是 distroless 的 nonroot，沿用它。
+# 非 root 运行。65532 是 distroless 的 nonroot，沿用它 —— 但 debian 的
+# /etc/passwd 里没有这个 uid，所以这里显式建出来，好让 user.Current() 能用。
+#
+# 顺带建出协调器存储的目录：KEEL_DTM_DSN 指向的 sqlite 文件落在这里，
+# compose 把一个具名卷挂到这个路径上。**属主必须在这里就设好** ——
+# Docker 建新卷时会把镜像里该路径的内容与属主一起复制过去，路径不存在的话
+# 卷是 root 所有的，应用写不进去，症状是启动时 `unable to open database file`。
+RUN groupadd -g 65532 nonroot \
+    && useradd -u 65532 -g 65532 -M -s /usr/sbin/nologin nonroot \
+    && mkdir -p /var/lib/keel \
+    && chown 65532:65532 /var/lib/keel
 USER 65532:65532
 
 EXPOSE 8080

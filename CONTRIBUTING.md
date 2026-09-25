@@ -31,19 +31,23 @@
 | 依赖 | 版本 | 说明 |
 |---|---|---|
 | Go | 1.26+ | 后端。下限由 `tools/` 里钉的 sqlc 与 goose 传染而来——两者都声明 `go 1.26` |
-| Rust | 1.82+ | **M2 起才需要**：编译 dtmrs 的 C ABI 动态库，经 cgo 嵌入。M1 不接 dtmrs，`docker/Dockerfile` 现在就是 `CGO_ENABLED=0` |
+| Rust | 1.82+ | **必需**（M2 起）：编译 dtmrs 的 C ABI 动态库，主模块经 cgo 嵌入它。`make dtmrs-deps` 会取回源码并编出 `third_party/dtmrs/lib/libdtmrs.so`；`make build` 与 `make test-db` 缺了它会自动建一次。已验证于 Debian trixie 自带的 cargo/rustc 1.85.1 |
 | PostgreSQL | 16+ | M1 只用原生特性；**pgvector 是 M3 才需要的**，compose 起的是官方 `postgres:16`，装不装 pgvector 都跑得起来 |
 | Node | 22.18+ | `make generate-ts` 生成 TS 侧契约类型、`make schema-check` 编译 `web/src`、`make sdk-smoke` 直接跑 `.mts`（靠 Node 自带的类型剥离，不经构建步骤——这是下限的来源）。已验证于 v24.10.0 |
 | Docker | 任意近期版本 | `docker compose up` 起全栈 |
 
-> **为什么（将来）需要 Rust 工具链**：事务协调器 [dtmrs](https://github.com/jackwangfeng/dtmrs)
-> 是 Rust 实现，通过 cgo 以嵌入式模式运行，那时 `CGO_ENABLED=0` 静态编译不再可用，
-> 最终镜像也不能再是 `scratch`（动态链接需要 glibc 与动态链接器）。
+> **为什么需要 Rust 工具链**：事务协调器 [dtmrs](https://github.com/jackwangfeng/dtmrs)
+> 是 Rust 实现，主模块通过 cgo 以嵌入式模式运行它（`internal/dtm`）。
+> 代价是确定的，别想绕：`CGO_ENABLED=0` 静态编译没了，最终镜像也不再是
+> `scratch`（动态链接需要 glibc 与动态链接器，M2 换成了 `debian:trixie-slim`）。
 >
-> **但这是 M2 的事。** 现在只做 M1 的话，Go + PostgreSQL + Docker 就够了，
-> Rust 与 pgvector 都可以先不装 —— `docker/Dockerfile` 里那行 `CGO_ENABLED=0`
-> 和它上面那段注释界定了改它的时机。想提前体验嵌入式 TC，
-> 见 `examples/dtmrs-embedded/`（它有自己的 `make deps`，会拉源码并编出 `.so`）。
+> **M1 时这一条写的是「将来才需要」，M2 把它变成了现在。** 没装 Rust 时的症状是
+> 链接器的一句 `cannot find -ldtmrs`；`make build` / `make test-db` 会先替你
+> 跑一次 `make dtmrs-deps`（本机实测约 1 分钟），而那一步缺 cargo 会打印
+> 一句指名道姓的中文提示。
+>
+> 版本钉在 `scripts/fetch-dtmrs.sh` 里（v0.11.0），**只有那一处** ——
+> `examples/dtmrs-embedded` 的 `make deps` 调的也是它。
 >
 > 如果你不想装 Rust，也可以用独立 TC 进程的部署形态开发，
 > 见[总体架构](./docs/电商系统-总体架构.md)的「部署演进」一节。

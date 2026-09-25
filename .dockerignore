@@ -12,6 +12,12 @@ target
 *.dylib
 *.test
 
+# 宿主机上 scripts/fetch-dtmrs.sh 的产物（.so、头文件、以及那棵 dtmrs 源码树）。
+# 整个目录挡在上下文之外，而不是只挡 *.so：镜像里这个目录只能来自 Dockerfile
+# 的 dtmrs 阶段。放它进来的话，宿主机上一份旧的 / 平台不对的 .so 会跟着进构建，
+# 而症状要到容器起来那一刻才出现。
+third_party
+
 # 本地卷与私密文件
 data
 .env
