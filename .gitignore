@@ -1,0 +1,26 @@
+# Go
+/bin/
+*.exe
+*.test
+*.out
+
+# Rust / dtmrs 本地构建产物
+/target/
+*.so
+*.a
+*.dylib
+
+# 本地环境
+.env
+.env.local
+*.db
+*.sqlite
+
+# 编辑器
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# 一期文件存储 driver 的本地卷
+/data/uploads/
