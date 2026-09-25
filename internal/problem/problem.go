@@ -20,8 +20,9 @@ import (
 // 目前用到的 problem type。它们是 URI 形式的稳定标识，客户端按它分支，
 // 所以改一个等于改契约的一部分 —— 不要顺手改措辞。
 const (
-	TypeNotFound = "https://keel.dev/problems/not-found"
-	TypeInternal = "https://keel.dev/problems/internal"
+	TypeNotFound         = "https://keel.dev/problems/not-found"
+	TypeMethodNotAllowed = "https://keel.dev/problems/method-not-allowed"
+	TypeInternal         = "https://keel.dev/problems/internal"
 )
 
 // Write 写一个 RFC 9457 响应并中止后续 handler。

@@ -17,6 +17,7 @@ import (
 
 	"github.com/keel/keel/internal/db"
 	"github.com/keel/keel/internal/handler"
+	"github.com/keel/keel/internal/problem"
 	"github.com/keel/keel/internal/repository"
 	"github.com/keel/keel/internal/service"
 	"github.com/keel/keel/internal/tenant"
@@ -59,6 +60,25 @@ func ConfigFromEnv() Config {
 func Router(pool *pgxpool.Pool, res *tenant.Resolver) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery())
+
+	// 没匹配上的路径与方法也要回契约里的 Problem。
+	//
+	// gin 默认回的是 text/plain 的 "404 page not found"，而契约里每个接口的响应
+	// 集合都是 `200` 加 `default: Problem` —— 一个 text/plain 的 404 两头都不沾，
+	// 按契约生成的客户端会在它最需要读懂的那类响应上解析失败。路由拼错、
+	// 版本前缀漏掉、用 POST 打了个只读接口，都走这两条。
+	//
+	// HandleMethodNotAllowed 必须显式打开：默认是 false，那时方法不匹配会掉进
+	// NoRoute 变成 404，而 404 和 405 对调用方是两件事（「没这个接口」
+	// 和「接口在，但不收这个方法」）。
+	r.HandleMethodNotAllowed = true
+	r.NoRoute(func(c *gin.Context) {
+		problem.Write(c, http.StatusNotFound, problem.TypeNotFound, "接口不存在")
+	})
+	r.NoMethod(func(c *gin.Context) {
+		problem.Write(c, http.StatusMethodNotAllowed,
+			problem.TypeMethodNotAllowed, "该接口不支持这个方法")
+	})
 
 	// healthz 在租户中间件之外：它回答的是「这个进程还活着吗」，
 	// 挂在中间件后面的话，一个没配对的 Host 会让编排系统以为进程死了。

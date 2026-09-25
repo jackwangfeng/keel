@@ -19,6 +19,8 @@ GORUN := go -C $(TOOLS) run
 
 # TS 侧生成器没有 Go 那样的模块锁，只能在这里钉死版本号
 OPENAPI_TS := openapi-typescript@7.13.0
+# 只用来 typecheck 入库的 schema.d.ts，同样钉死版本
+TSC := typescript@5.9.2
 
 # 产物落在源码树里，并且**入库**。
 #
@@ -54,7 +56,7 @@ GOOSE := GOOSE_DRIVER=postgres GOOSE_DBSTRING="$(GOOSE_DBSTRING)" \
 	$(GORUN) github.com/pressly/goose/v3/cmd/goose
 
 .PHONY: help generate generate-go generate-ts generate-sql tools-versions \
-	contract-check migrate migrate-down migrate-status test-db
+	contract-check schema-check migrate migrate-down migrate-status test-db
 
 help:
 	@echo "make generate       生成 Go + TS 两侧契约产物"
@@ -62,6 +64,7 @@ help:
 	@echo "make generate-ts    只生成 TS 侧（TS_OUT 可覆盖）"
 	@echo "make generate-sql   跑 sqlc，重生成 internal/repository/internal/db"
 	@echo "make contract-check 校验 3.1 可空语义没有被生成器悄悄改掉"
+	@echo "make schema-check   用 tsc --strict 检查入库的 TS 契约产物编译得过"
 	@echo "make tools-versions 打印钉住的工具版本"
 	@echo "make migrate        把 db/migrations 迁到最新（GOOSE_DBSTRING 可覆盖）"
 	@echo "make migrate-down   回滚一个版本"
@@ -70,16 +73,37 @@ help:
 
 generate: generate-go generate-ts
 
+# 先写临时文件，成功了才 mv 覆盖目标 —— 不要写成 `oapi-codegen … > $(GO_OUT)`。
+#
+# shell 的重定向在生成器跑起来**之前**就把目标清成 0 字节了。产物落在被 gitignore
+# 的目录里时这无所谓，入库之后就不是了：任何一次失败都当场毁掉版本库里的文件。
+# 触发条件不止「没装 Go」—— 契约写崩、生成器 panic、磁盘满、Ctrl-C 都算。
+# 而症状极具误导性：别处以 `undefined: api.ProductSummary` 爆炸，不指向真凶。
 generate-go:
 	@mkdir -p $(dir $(GO_OUT))
+	@tmp=$$(mktemp "$(GO_OUT).XXXXXX"); \
+	trap 'rm -f "$$tmp"' EXIT INT TERM; \
 	$(GORUN) github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen \
-		-package $(GO_PACKAGE) -generate $(GO_MODE) "$(CONTRACT)" > $(GO_OUT)
+		-package $(GO_PACKAGE) -generate $(GO_MODE) "$(CONTRACT)" > "$$tmp" || exit 1; \
+	chmod 0644 "$$tmp"; \
+	mv "$$tmp" "$(GO_OUT)"
 	@echo "generated $(abspath $(GO_OUT))"
 
+# 用生成器自己的 -o，不要改成 `> $(TS_OUT)`：那会把上面 generate-go 里那个
+# 「失败即清空入库产物」的坑原样复制到 TS 侧。
 generate-ts:
 	@mkdir -p $(dir $(TS_OUT))
 	npx --yes $(OPENAPI_TS) "$(CONTRACT)" -o $(TS_OUT)
 	@echo "generated $(abspath $(TS_OUT))"
+
+# TS 侧产物能不能编译。契约产物入库之后，守着这 176KB 的只有 contract-check 里
+# 的一条 grep —— 它只能证明其中一行长什么样。tsc --noEmit 是只读的，且单文件秒级。
+#
+# 刻意不建 web/package.json：那会凭空引入一棵没人维护的 npm 依赖树。
+# 前端脚手架是前端任务的事，这里只要一句「它编译得过」。
+schema-check:
+	npx --yes -p $(TSC) tsc --noEmit --strict "$(TS_OUT)"
+	@echo "schema-check OK: $(abspath $(TS_OUT)) 在 --strict 下编译通过"
 
 # sqlc 的配置路径必须是绝对的，理由同 MIGRATIONS：GORUN 用 `go -C $(TOOLS)`，
 # sqlc 的工作目录是 tools/，裸 `sqlc generate` 会在那里找 sqlc.yaml 并报找不到。

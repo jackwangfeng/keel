@@ -288,3 +288,59 @@ func TestUnknownHostGetsProblemJSON(t *testing.T) {
 		}
 	}
 }
+
+// assertProblem 断言一个响应是契约里的 Problem：Content-Type 对，
+// 三个必填字段齐，status 与 HTTP 状态码一致。
+func assertProblem(t *testing.T, w *httptest.ResponseRecorder, want int, what string) {
+	t.Helper()
+	if w.Code != want {
+		t.Fatalf("%s 期望 %d，实得 %d：%s", what, want, w.Code, w.Body.String())
+	}
+	if ct := w.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/problem+json") {
+		t.Fatalf("%s 的 Content-Type 是 %q，契约要求 application/problem+json（正文：%q）",
+			what, ct, w.Body.String())
+	}
+	var p struct {
+		Type   string `json:"type"`
+		Title  string `json:"title"`
+		Status int    `json:"status"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &p); err != nil {
+		t.Fatalf("%s 的响应体不是 Problem: %v（%q）", what, err, w.Body.String())
+	}
+	// Problem 的 required 是 type / title / status，一个都不能缺。
+	if p.Type == "" || p.Title == "" || p.Status != want {
+		t.Fatalf("%s 的 Problem 不完整：type=%q title=%q status=%d",
+			what, p.Type, p.Title, p.Status)
+	}
+}
+
+// 没匹配上的路径回 Problem，不是 gin 默认的 text/plain "404 page not found"。
+//
+// 契约里每个接口的响应集合都是 200 加 default: Problem。一个 text/plain 的 404
+// 两头都不沾，而路由拼错、版本前缀漏掉恰恰是客户端最常撞上的那类错误。
+func TestUnknownPathGetsProblemJSON(t *testing.T) {
+	for _, path := range []string{
+		"/api/v1/nonexistent",
+		"/api/v2/products", // 版本前缀写错
+		"/products",        // 漏掉版本前缀
+		"/",
+	} {
+		w := do(t, "shop-a."+baseDomain, path)
+		assertProblem(t, w, http.StatusNotFound, "GET "+path)
+	}
+}
+
+// 方法不匹配回 405 + Problem，而不是掉进 NoRoute 变成 404。
+//
+// 404 和 405 对调用方是两件事：「没这个接口」和「接口在，但不收这个方法」。
+// gin 的 HandleMethodNotAllowed 默认是 false，不显式打开的话这个区别就没了。
+func TestWrongMethodGetsProblemJSON(t *testing.T) {
+	for _, method := range []string{http.MethodPost, http.MethodDelete, http.MethodPut} {
+		req := httptest.NewRequest(method, "/api/v1/products", nil)
+		req.Host = "shop-a." + baseDomain
+		w := httptest.NewRecorder()
+		testEngine.ServeHTTP(w, req)
+		assertProblem(t, w, http.StatusMethodNotAllowed, method+" /api/v1/products")
+	}
+}

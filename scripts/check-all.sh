@@ -12,29 +12,44 @@ for script in check_links check_promises check_openapi check_capabilities check_
     fi
 done
 
-# 契约产物的闸门。它跑 make generate 重生成 Go 与 TS 两侧，再确认 3.1 的可空语义
-# 两边都还在 —— 而重生成本身也是一道检查：产物入库之后，「有人手改了生成文件」
-# 会在这里被原样覆盖掉，接着由下面的 git diff 喊出来。
+# 契约产物的闸门。
 #
-# 它需要 Node（TS 侧走 npx）。没有 Node 的环境里这一步会失败，那是诚实的失败：
+# 生成到临时目录，再和入库的产物比对 —— 这个脚本对工作区**只读**。
+# 上一版直接重生成到源码树里再 `git diff`，有两个毛病：
+#   - 生成失败会毁掉入库产物（generate-go 当时还是 shell 重定向），于是
+#     「跑一次检查」这个动作本身有破坏性；
+#   - 未 `git add` 的手改会被重生成悄悄冲掉，闸门看不见 —— 而那正是它该抓的。
+# 比对临时产物两个毛病都没有：入库的文件一个字节都不会被碰。
+#
+# 需要 Node（TS 侧走 npx）。没有 Node 的环境里这一步会失败，那是诚实的失败：
 # 契约产物确实没被验证过。
-printf '\n=== contract-check ===\n'
-if ! make contract-check; then
+printf '\n=== contract-check（生成到临时目录，不碰工作区） ===\n'
+tmpdir=$(mktemp -d)
+trap 'rm -rf "$tmpdir"' EXIT
+
+if make contract-check GO_OUT="$tmpdir/openapi.gen.go" TS_OUT="$tmpdir/schema.d.ts"; then
+    for pair in "internal/api/openapi.gen.go:$tmpdir/openapi.gen.go" \
+                "web/src/api/schema.d.ts:$tmpdir/schema.d.ts"; do
+        committed=${pair%%:*}
+        fresh=${pair#*:}
+        if ! diff -q "$committed" "$fresh" >/dev/null 2>&1; then
+            echo "FAIL: $committed 与契约重生成的结果不一致。"
+            echo "      契约改了却没重生成，或者有人手改了生成文件。请跑 make generate 并一起提交："
+            diff -u "$committed" "$fresh" | head -20
+            fail=1
+        fi
+    done
+    if [ "$fail" -eq 0 ]; then
+        echo '契约产物与契约同步'
+    fi
+else
     fail=1
 fi
 
-# 入库的产物必须与契约同步。契约改了却没重生成（或者有人手改了生成文件），
-# 上面那次 make 会把差异写进工作区，这里把它变成一次失败。
-#
-# 只看这两个路径，不看整个工作区：check-all.sh 会在开发中途跑，别处有未提交的
-# 改动是常态。
-printf '\n=== 契约产物是否与契约同步 ===\n'
-if git diff --quiet -- internal/api/openapi.gen.go web/src/api/schema.d.ts; then
-    echo '契约产物与契约同步'
-else
-    echo 'FAIL: 重生成之后契约产物变了 —— 契约改了却没重生成，或者有人手改了生成文件。'
-    echo '      请跑 make generate 并把产物一起提交：'
-    git diff --stat -- internal/api/openapi.gen.go web/src/api/schema.d.ts
+# 入库的 TS 产物能不能编译。contract-check 只 grep 了其中一行，
+# 证明不了这 176KB 整体是合法的 TypeScript。
+printf '\n=== schema-check ===\n'
+if ! make schema-check; then
     fail=1
 fi
 
