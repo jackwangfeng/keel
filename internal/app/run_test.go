@@ -79,15 +79,20 @@ func (s *spy) listen(addr string, _ http.Handler) error {
 	return nil
 }
 
-// env 把三个变量一次设全，包括要清空的那些。
+// env 把四个变量一次设全，包括要清空的那些。
 //
 // 只设要用的、不清其它的话，测试会继承开发机上已有的 KEEL_* 变量，
 // 于是同一份代码在两台机器上跑出不同结果 —— 而这组测试断言的正是配置的组合。
+//
+// 协调器的存储每条测试一个临时 sqlite 文件：它是有状态的（存的就是「哪些事务
+// 还没跑完」），共用一份的话，前一条测试留下的事务会在后一条里被推进，
+// 而那正是这组测试最不该有的那种耦合。
 func env(t *testing.T, defaultMerchant, baseDomain string) {
 	t.Helper()
 	t.Setenv(app.EnvDefaultMerchant, defaultMerchant)
 	t.Setenv(app.EnvBaseDomain, baseDomain)
 	t.Setenv(app.EnvAddr, "127.0.0.1:0")
+	t.Setenv(app.EnvDTMDSN, "sqlite:"+filepath.Join(t.TempDir(), "dtm.db"))
 }
 
 // 阳性对照，必须排在前面。
@@ -156,6 +161,72 @@ func TestRunRefusesToStartWhenDefaultMerchantHidesOtherShops(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "活跃商家") {
 		t.Fatalf("错误信息不像是那道「默认商家遮住了其它店」的检查：%v", err)
+	}
+	t.Logf("Run 如期拒绝启动：%v", err)
+}
+
+// 没配协调器存储时，Run 必须在监听之前退出。
+//
+// 这一条守的是一个「不配也能跑起来」的诱惑：给 KEEL_DTM_DSN 一个默认值
+// （当前目录下的 sqlite 文件，或者干脆内存）就没人会看见这条错误，而代价要到
+// 很久以后才显形 —— 协调器存的是「哪些全局事务还没跑完」，这份状态随容器一起
+// 消失时，正向阶段已经扣掉的库存与已经核销的券就再也没人回补。
+// 架构 §5 说的「少卖」在那一刻从可恢复变成永久漏账。
+//
+// 断言的是行为：给一份除了 DSN 之外完全合法的配置，看 Run 有没有在监听之前退出。
+func TestRunRefusesToStartWithoutCoordinatorStore(t *testing.T) {
+	env(t, "", "example.com")
+	t.Setenv(app.EnvDTMDSN, "")
+
+	var s spy
+	err := app.Run(context.Background(), s.listen)
+	if err == nil {
+		t.Fatal("没配协调器存储，Run 必须拒绝启动")
+	}
+	if s.called {
+		t.Fatalf("没配协调器存储却已经开始监听（addr=%q）", s.addr)
+	}
+	// 断言的是**那句给人看的话**，不是「有没有报错」。
+	//
+	// 这一条是实测出来的：把 Run 里那个空值检查删掉，dtmrs 自己也会失败 ——
+	// 但它说的是 `error with configuration: relative URL without a base`，
+	// 一句不指向任何该做的事的话。检查还在的话，运维看到的是变量名加上
+	// 单机 / 多实例两种配法。所以这里要的是后者，只查「报了错」是查不出区别的。
+	for _, want := range []string{app.EnvDTMDSN, "必须显式指定", "sqlite:"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("错误信息里没有 %q —— 这说明拒绝启动的不是那个显式检查，"+
+				"而是 dtmrs 自己在一个说不清真因的地方失败了：%v", want, err)
+		}
+	}
+	t.Logf("Run 如期拒绝启动：%v", err)
+}
+
+// 协调器起不来时，Run 必须在监听之前退出。
+//
+// 上一条只证明「空配置会被挡住」，那是一句纯字符串判断 —— 单有它的话，一个
+// 「先监听、再在后台慢慢把协调器拉起来」的实现照样绿。这条走的是真的去建存储
+// 那一支：DSN 合法但落不下去，失败只能来自 dtm.Start。
+//
+// 它守的是顺序。协调器起不来就一笔订单也做不了，而此时开始接请求，客人看到的是
+// 「提交订单」按下去之后的 500，编排系统看到的是一个健康的进程 ——
+// 没有任何东西会把这两件事联系起来。
+func TestRunRefusesToStartWhenCoordinatorCannotStart(t *testing.T) {
+	env(t, "", "example.com")
+	// 目录不存在 → sqlite 落不下去。Open 不碰数据库，Start 才碰，
+	// 所以这里失败的一定是 Start。
+	t.Setenv(app.EnvDTMDSN, "sqlite:"+filepath.Join(t.TempDir(), "没有这个目录", "dtm.db"))
+
+	var s spy
+	err := app.Run(context.Background(), s.listen)
+	if err == nil {
+		t.Fatal("协调器存储落不下去，Run 必须拒绝启动")
+	}
+	if s.called {
+		t.Fatalf("协调器没起来却已经开始监听（addr=%q）—— "+
+			"dtm.Start 排到监听后面去了", s.addr)
+	}
+	if !strings.Contains(err.Error(), "协调器") {
+		t.Fatalf("错误信息不像是协调器启动失败：%v", err)
 	}
 	t.Logf("Run 如期拒绝启动：%v", err)
 }

@@ -100,10 +100,28 @@ services:
       # 它必须和 db/seed/single.sql 播的那家 code 一致，而且库里只能有这一家活跃商家——
       # 两条都由 tenant.Preflight 在启动时查，对不上就拒绝启动而不是猜。
       KEEL_DEFAULT_MERCHANT: demo
+      # 嵌入式事务协调器自己的存储。**没有默认值，不配就拒绝启动**（见
+      # internal/app 里 EnvDTMDSN 的注释）：它存的是「哪些全局事务还没跑完」，
+      # 这份状态丢了，正向阶段已经扣掉的库存与已经核销的券就再也没人回补。
+      #
+      # 单机形态用 sqlite，落在下面那个具名卷上。**不能**复用业务库那份连接：
+      # 协调器启动时要建自己的三张表（trans_global / trans_branch_op /
+      # auth_token），keel_app 没有建表权限（实测报 permission denied for
+      # schema public），而换管理员角色会让应用握着能绕过 RLS 的凭据。
+      #
+      # 多实例形态（架构 §6 形态 B/C）必须换成 Postgres/MySQL/Redis 并给它
+      # 自己的角色 —— sqlite 撑不住多实例并发写，dtmrs 自己的部署文档写明了。
+      KEEL_DTM_DSN: sqlite:/var/lib/keel/dtm.db
       # 镜像是拿来跑的，不是拿来开发的：gin 的 debug 模式会在启动时打一屏
       # 「你没有设置 release」的警告，而 `docker compose up` 的头一屏正是
       # 新人对这个项目的第一印象。它不改变任何路由行为。
       GIN_MODE: release
+    volumes:
+      # 协调器的 sqlite 必须活过容器重建，否则「崩溃后把未完成的事务推到终态」
+      # 这条能力就是假的 —— 而它正是 SAGA 敢在正向阶段就真实扣减库存的前提。
+      # 镜像里 /var/lib/keel 已经建好并且属主是 65532，Docker 建新卷时会连属主
+      # 一起复制过去；路径不存在的话卷是 root 所有的，应用写不进去。
+      - dtmdata:/var/lib/keel
     ports:
       # 宿主机端口可换（8080 在开发机上常被占）：`KEEL_HTTP_PORT=18080 docker compose up -d`。
       # scripts/smoke.sh 读的是同一个变量，两边不会各说各话。
@@ -111,10 +129,16 @@ services:
     depends_on:
       seed:
         condition: service_completed_successfully
-    # 刻意不配容器级 healthcheck：镜像是 scratch，里面没有 curl、wget，也没有
-    # shell 可以拿来发一个请求。给应用二进制加一个自检子命令是可以的，但那是
+    # 刻意不配容器级 healthcheck。
+    #
+    # M2 换底座之后镜像里**有** shell 了（debian:trixie-slim），但仍然没有
+    # curl / wget（slim 不带），所以「在容器里发一个 HTTP 请求」这件事还是做不到。
+    # 给应用二进制加一个自检子命令是可以的，但那是给应用二进制加一个自检子命令是可以的，但那是
     # 为了一个只有 compose 会看的信号去改 cmd/keel。外部的探活由 scripts/smoke.sh
     # 做（它从宿主机打 /healthz），编排系统接管时再由它自己的探针打同一个路径。
 
 volumes:
   pgdata:
+  # 协调器的 sqlite。和 pgdata 一样是有状态的东西，`docker compose down -v`
+  # 会连它一起删掉 —— 那之后未完成的全局事务就真的没人推了。
+  dtmdata:

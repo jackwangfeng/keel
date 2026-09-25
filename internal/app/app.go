@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/keel/keel/internal/db"
+	"github.com/keel/keel/internal/dtm"
 	"github.com/keel/keel/internal/handler"
 	"github.com/keel/keel/internal/problem"
 	"github.com/keel/keel/internal/repository"
@@ -32,11 +33,33 @@ const (
 	EnvDefaultMerchant = "KEEL_DEFAULT_MERCHANT"
 	EnvBaseDomain      = "KEEL_BASE_DOMAIN"
 	EnvAddr            = "KEEL_ADDR"
+
+	// EnvDTMDSN 是嵌入式事务协调器自己的存储。**没有默认值，空着就拒绝启动。**
+	//
+	// 这一条比另外三个更需要人明确回答，因为它错了不报错。协调器存的是
+	// 「哪些全局事务还没跑完」；这份状态丢了，正向阶段已经扣掉的库存与已经核销
+	// 的券就再也没人回补 —— 架构 §5 说的「少卖」从可恢复变成永久漏账。
+	// 给它一个「反正能跑起来」的默认值（比如当前目录下的一个 sqlite 文件），
+	// 就是让每一个忘了配它的部署都安静地拿到这个结局。
+	//
+	// 它也**不能**直接用业务库那份连接。实测两条：
+	//   - Start() 会跑 dtmrs 自己的 migrate()，建 trans_global / trans_branch_op /
+	//     auth_token 三张表，还会对已有表发 ALTER TABLE ADD COLUMN。用 keel_app
+	//     去做，报的是 `permission denied for schema public`。
+	//   - 换成管理员角色能建出来，但那三张表就落进了业务库的 public 下，
+	//     db/tenancy.json 的四道闸门当场全红（实测：ENABLE/FORCE、租户策略、
+	//     唯一约束、GRANT 面各一条），而且应用进程从此握着能绕过 RLS 的凭据。
+	//
+	// 所以它是一个独立的存储。单机形态（架构 §6 形态 A）用挂在卷上的 sqlite；
+	// 多实例形态必须换成 Postgres/MySQL/Redis，并且那套库要有自己的角色 ——
+	// sqlite 撑不住多实例并发写（dtmrs 自己的部署文档写明了这一条）。
+	EnvDTMDSN = "KEEL_DTM_DSN"
 )
 
 // Config 是一次部署的全部配置。
 type Config struct {
 	Addr   string
+	DTMDSN string
 	Tenant tenant.Config
 }
 
@@ -47,7 +70,8 @@ func ConfigFromEnv() Config {
 		addr = ":8080"
 	}
 	return Config{
-		Addr: addr,
+		Addr:   addr,
+		DTMDSN: os.Getenv(EnvDTMDSN),
 		Tenant: tenant.Config{
 			DefaultCode: os.Getenv(EnvDefaultMerchant),
 			BaseDomain:  os.Getenv(EnvBaseDomain),
@@ -91,6 +115,19 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver) *gin.Engine {
 	return r
 }
 
+// Branches 是要注册到协调器上的全部进程内分支，键就是编排里 "local://" 后面
+// 那个名字。
+//
+// 今天是空的：下单 SAGA 的三个正向分支与它们的补偿属于任务 5，屏障属于任务 2。
+// 先把这个口子开出来，是因为**注册必须发生在 Start 之前**，而这条顺序踩错了
+// 不当场报错 —— 症状要等到第一次提交时才出现（未注册的 local:// 名字在提交期
+// 被拒），那时错误指向的是提交它的那段业务代码。顺序封在 dtm.Start 里，
+// 任务 5 只要往这个 map 里加条目。
+//
+// 注册机制本身由 internal/dtm 的 TestBranchRecoversTenantFromGID 覆盖（它注册
+// 真分支、跑真事务）；这里为空不代表那条路没被测到。
+func Branches() map[string]dtm.BranchFunc { return nil }
+
 // Listen 是默认的监听方式。它是 Run 的一个参数，好让测试换掉它。
 func Listen(addr string, h http.Handler) error {
 	return (&http.Server{Addr: addr, Handler: h}).ListenAndServe()
@@ -103,9 +140,16 @@ func Listen(addr string, h http.Handler) error {
 // 任何请求报错，它们只会让请求安静地答错：客人看到别家的店、全站 404、
 // 某几家店谁也打不开。开始监听之后再发现这些，代价是已经答错的那些请求。
 //
-// listen 可注入是为了让「Preflight 没过就不监听」这句话可以被测试观察到。
-// 只在 main 里写一行 Preflight 是测不出来的：把那行删掉，所有测试照样绿，
-// 而 tenant 包里那四道检查会一声不响地变成死代码。
+// 事务协调器排在 Preflight 之后、监听之前，两头都是硬的：
+//
+//   - 排在 Preflight 之后：一份注定要被拒绝的配置，不该先把协调器的存储建出来
+//     （dtmrs 的 Start 会建表）。启动失败留下三张表，下一次排查会从那三张表开始。
+//   - 排在监听之前：协调器起不来就一笔订单也做不了，而此时开始接请求，
+//     客人看到的是「提交订单」按钮按下去之后的 500，编排系统看到的是一个健康的进程。
+//
+// listen 可注入是为了让上面这两句话可以被测试观察到。只在 main 里写一行
+// Preflight 是测不出来的：把那行删掉，所有测试照样绿，而 tenant 包里那四道检查
+// 会一声不响地变成死代码。协调器这一段同理。
 func Run(ctx context.Context, listen func(addr string, h http.Handler) error) error {
 	cfg := ConfigFromEnv()
 
@@ -119,6 +163,23 @@ func Run(ctx context.Context, listen func(addr string, h http.Handler) error) er
 	if err := res.Preflight(ctx); err != nil {
 		return fmt.Errorf("启动自检未通过，拒绝启动: %w", err)
 	}
+
+	if cfg.DTMDSN == "" {
+		return fmt.Errorf("没有配置 %s，拒绝启动：事务协调器的存储必须显式指定。"+
+			"单机形态用挂在卷上的 sqlite（%s=sqlite:/var/lib/keel/dtm.db），"+
+			"多实例形态换成 Postgres/MySQL/Redis 并给它自己的角色 —— "+
+			"它不能用业务库那份凭据（keel_app 没有建表权限，而管理员角色会让"+
+			"应用握着能绕过 RLS 的连接）",
+			EnvDTMDSN, EnvDTMDSN)
+	}
+	tc, err := dtm.Start(cfg.DTMDSN, 0, Branches())
+	if err != nil {
+		return fmt.Errorf("启动事务协调器失败（%s）: %w", EnvDTMDSN, err)
+	}
+	// 干净收尾：listen 返回（不论正常还是出错）之后把协调器关掉，
+	// 它才有机会把 tokio 运行时停下来、把注册分支的 cgo.Handle 还回去。
+	// Close 是幂等的，所以这条 defer 与将来可能加的显式收尾不会撞车。
+	defer tc.Close()
 
 	return listen(cfg.Addr, Router(pool, res))
 }

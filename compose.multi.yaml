@@ -34,6 +34,13 @@ services:
 
 # 卷名写死，而不是让 compose 按项目名自动生成 `keel_pgdata`：
 # 两个 compose 文件叠在一起时项目名仍是 keel，不写死的话它和默认形态的卷是同一个。
+#
+# 协调器的存储卷要和库一起隔开，理由是同一个：它存的是「哪些全局事务还没跑完」，
+# 而那些事务的 gid 里带着**另一个库里的** merchant_id 与 order_no。共用一个卷时，
+# 切到多商家形态的第一秒，协调器就会拿单商家库里遗留的事务去重放分支，
+# 而那些分支会在一个根本没有这些订单的库上跑补偿。
 volumes:
   pgdata:
     name: keel_pgdata_multi
+  dtmdata:
+    name: keel_dtmdata_multi
