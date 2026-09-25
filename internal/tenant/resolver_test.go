@@ -224,6 +224,21 @@ func onlyActive(t *testing.T, code string) {
 	})
 }
 
+// newMerchant 建一家临时商家，测试结束删掉。domain 为空则不登记域名。
+func newMerchant(t *testing.T, code, domain string) {
+	t.Helper()
+	adminExec(t, `INSERT INTO merchants (code, name, status) VALUES ($1, $1 || ' 的店', 1)`, code)
+	t.Cleanup(func() { adminExec(t, `DELETE FROM merchants WHERE code = $1`, code) })
+	if domain != "" {
+		adminExec(t, `INSERT INTO shop_settings (merchant_id, domain)
+			SELECT id, $2 FROM merchants WHERE code = $1`, code, domain)
+		t.Cleanup(func() {
+			adminExec(t, `DELETE FROM shop_settings WHERE merchant_id =
+				(SELECT id FROM merchants WHERE code = $1)`, code)
+		})
+	}
+}
+
 // claimDomain 让某家商家把 domain 登记成 name，测试结束还原。
 // 用来演一遍「商家自己填的域名想抢平台的名字」。
 func claimDomain(t *testing.T, code, name string) {
@@ -410,6 +425,11 @@ func TestSubdomainMatchingIsAnchoredToBaseDomain(t *testing.T) {
 // 里就有那么一条），没人登记它的时候那条断言恒绿。必须真的让一家商家登记它。
 func TestBaseDomainApexIsNeverAMerchant(t *testing.T) {
 	claimDomain(t, "shop-c", baseDomain)
+	// 再放一家 code 为空串的商家：apex 的「标签」就是空串，
+	// 少了 label == "" 那道判断的实现会拿它去 byCode("") 并匹配上。
+	// merchants.code 是裸 TEXT NOT NULL，'' 插得进去。
+	newMerchant(t, "", "")
+
 	if got := do(newRouter(t, multi()), baseDomain).Code; got != 404 {
 		t.Fatalf("有商家登记了基础域名 apex，期望仍然 404，实得 %d —— 平台主站被商家拿走了", got)
 	}
@@ -423,6 +443,13 @@ func TestBaseDomainApexIsNeverAMerchant(t *testing.T) {
 func TestMultiLevelNamesUnderBaseDomainAreNeverAMerchant(t *testing.T) {
 	const name = "admin.internal.example.com"
 	claimDomain(t, "shop-c", name)
+	// 关键的一家：code 里带点。merchants.code 是裸 TEXT，没有 DNS 标签约束
+	// （那正是 Preflight 检查 code 写法的前提），所以 'admin.internal' 这种 code
+	// 建得出来。没有它的话，去掉「label 含点就拒绝」那道判断的实现会让
+	// byCode("admin.internal") 恒查不到，本用例照样绿 —— 一个只证明了
+	// 「多级名字没掉进 byDomain」、没证明「多级名字谁也拿不到」的空断言。
+	newMerchant(t, "admin.internal", "")
+
 	if got := do(newRouter(t, multi()), name).Code; got != 404 {
 		t.Fatalf("有商家登记了 %q，期望仍然 404，实得 %d —— 基础域名下的多级名字被商家占走了",
 			name, got)
@@ -685,6 +712,87 @@ func TestPreflightRejectsMerchantWhoseCodeCannotAppearInAHostname(t *testing.T) 
 	t.Logf("Preflight 如期拒绝：%v", err)
 }
 
+// 平台保留的一级名字不发给商家：请求时不解析，启动时报错。
+//
+// 「基础域名下的每一个名字都归平台」这句话，光有 apex 和多级名字兑现不了 ——
+// 平台真正会用到的 www / api / admin / mail 恰恰都在一级这层。
+func TestReservedNamesAreNotServedToMerchants(t *testing.T) {
+	for _, code := range []string{"www", "admin", "api", "mail"} {
+		newMerchant(t, code, "")
+	}
+	r := newRouter(t, multi())
+	for _, code := range []string{"www", "admin", "api", "mail"} {
+		if got := do(r, code+"."+baseDomain).Code; got != 404 {
+			t.Fatalf("Host %q 期望 404，实得 %d —— 平台自己要用的名字被商家拿走了",
+				code+"."+baseDomain, got)
+		}
+	}
+
+	err := tenant.NewResolver(newPool(t), multi()).Preflight(context.Background())
+	if err == nil {
+		t.Fatal("有商家占用了保留名字，Preflight 竟然放行")
+	}
+	for _, want := range []string{"www", "保留"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("错误信息里没有 %q：%v", want, err)
+		}
+	}
+	t.Logf("Preflight 如期拒绝：%v", err)
+}
+
+// 登记在基础域名下的 domain 等于没有登记 —— 自检的判据必须和解析行为一致。
+//
+// 这家店的 code 不是合法 DNS 标签（进不了子域名那条路），domain 又登记在基础
+// 域名下（那片地盘只认 code，永远不会采纳它）。于是它全站 404，
+// 而「有 s.domain 就算可达」的自检会放行 —— 正是自检要消灭的那种症状。
+func TestPreflightCountsABaseDomainRegistrationAsNoEntrance(t *testing.T) {
+	newMerchant(t, "Bad_Hole", "bad-hole."+baseDomain)
+
+	r := newRouter(t, multi())
+	for _, host := range []string{"bad-hole." + baseDomain, "Bad_Hole." + baseDomain} {
+		if got := do(r, host).Code; got != 404 {
+			t.Fatalf("Host %q 期望 404，实得 %d", host, got)
+		}
+	}
+
+	err := tenant.NewResolver(newPool(t), multi()).Preflight(context.Background())
+	if err == nil {
+		t.Fatal("这家店没有任何入口，Preflight 竟然放行 —— " +
+			"判据仍然停在「有 s.domain 就可达」？")
+	}
+	if !strings.Contains(err.Error(), "Bad_Hole") {
+		t.Fatalf("错误信息里没有那家店：%v", err)
+	}
+	t.Logf("Preflight 如期拒绝：%v", err)
+}
+
+// 基础域名本身写错了形状 —— 拒绝启动。
+//
+// ".example.com" 这种手滑（想表达「通配」时很自然）一个字符做三件事：
+// 子域名匹配整个失效、商家登记的域名重新能抢别家规范 URL、
+// 而自检因为 baseDomain 非空、以为入口天然存在而一声不吭。
+func TestPreflightRejectsMalformedBaseDomain(t *testing.T) {
+	// "example.com." 不在这个名单里：结尾的点是 FQDN 的合法写法，
+	// normalizeHost 会把它去掉，配成那样没有任何副作用。
+	for _, bad := range []string{".example.com", "net", "exa mple.com", "-example.com", "EXAMPLE..com"} {
+		err := tenant.NewResolver(newPool(t), tenant.Config{BaseDomain: bad}).
+			Preflight(context.Background())
+		if err == nil {
+			t.Fatalf("KEEL_BASE_DOMAIN=%q 形状不合法，Preflight 竟然放行", bad)
+		}
+		if !strings.Contains(err.Error(), "KEEL_BASE_DOMAIN") {
+			t.Fatalf("错误信息里没有变量名：%v", err)
+		}
+	}
+	// 前导点是最容易手滑的一种，错误信息要直接点出来怎么改。
+	err := tenant.NewResolver(newPool(t), tenant.Config{BaseDomain: ".example.com"}).
+		Preflight(context.Background())
+	if !strings.Contains(err.Error(), "去掉开头的点") {
+		t.Fatalf("前导点的错误信息没给出改法：%v", err)
+	}
+	t.Logf("Preflight 如期拒绝：%v", err)
+}
+
 // 不可达的商家不止一家时，要一次报多家。
 // 只报一家的话，运维得「改一家、重启、再看下一家」，一次修复被拖成 N 轮。
 func TestPreflightListsSeveralUnreachableMerchants(t *testing.T) {
@@ -736,6 +844,38 @@ func TestPreflightAcceptsMultiTenantWithBaseDomain(t *testing.T) {
 
 // ---------- 种子 ----------
 
+// seededCodes 返回库里那些 code 出现在种子文件里的商家。
+//
+// 反过来做（解析 SQL 抽 code）要写一个小小的 SQL 解析器，而且种子的写法一改
+// 就失灵。拿库里的 code 去种子文本里找，只依赖「code 在文件里带引号出现过」
+// 这一条，种子怎么写都成立。
+func seededCodes(t *testing.T, conn *pgx.Conn) []string {
+	t.Helper()
+	seed, err := os.ReadFile(filepath.Join("..", "..", "db", "seed", "dev.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := conn.Query(context.Background(), `SELECT code FROM merchants`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var codes []string
+	for rows.Next() {
+		var code string
+		if err := rows.Scan(&code); err != nil {
+			t.Fatal(err)
+		}
+		if code != "" && strings.Contains(string(seed), "'"+code+"'") {
+			codes = append(codes, code)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return codes
+}
+
 // 种子必须幂等：测试每跑一次就加载一次，而数据库是跨运行保留的。
 // 不幂等的种子会让「每个租户 N 件商品」这类断言随运行次数漂移 ——
 // 第一次绿，之后红；断言写成 >= 时则永远绿，比红更糟。
@@ -750,7 +890,14 @@ func TestSeedIsIdempotent(t *testing.T) {
 	// 只数种子自己播的那几家。数全表的话，并行跑的别的包在两次计数之间
 	// 插入或删掉它们的夹具商家，就会表现成「种子不幂等」——
 	// 一个指向错误方向的、偶发的红。
-	seeded := []string{"shop-a", "shop-b", "shop-c", "shop-closed", "shop-deleted", "shop-nodomain"}
+	//
+	// 名单从种子文件里现取，不写死：写死的话它要靠人和 db/seed/dev.sql
+	// 手工保持同步，而不同步的后果是「新加的种子行不被这条断言覆盖」——
+	// 一个不会报错、只会悄悄少测一块的退化。
+	seeded := seededCodes(t, conn)
+	if len(seeded) < 6 {
+		t.Fatalf("从种子文件里只认出 %d 个 code（%v），种子的写法是不是变了？", len(seeded), seeded)
+	}
 	count := func() (int64, int64) {
 		t.Helper()
 		var merchants, settings int64

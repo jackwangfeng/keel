@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -104,6 +105,54 @@ func NewResolver(pool *pgxpool.Pool, cfg Config) *Resolver {
 	}
 }
 
+// reservedCodes 是基础域名下不发给商家的一级名字。
+//
+// 「基础域名下的每一个名字都归平台」这句话，光靠 apex 和多级名字兑现不了 ——
+// 平台真正会用到的恰恰是一级名字：www 是主站，api 是接口，admin 是后台，
+// mail/mx/smtp 关系到这个域的邮件能不能收。一家商家把 code 取成 www，
+// 拿走的就是平台主站的 URL。
+//
+// 名单只覆盖「平台迟早要用」和「域名基础设施占着」的两类，不做敏感词过滤：
+// 判据是「这个名字被商家占走之后，平台还能不能正常运转」。
+// 刻意不含 demo（契约里的示例商家 code 就是它）和 shop 这类正常的店名。
+//
+// 眼下由 Preflight 在启动时拒绝、Resolve 在请求时不发放。真正的拦截点是
+// 建商家那个写路径——那属于后面的任务，这里两道是它到位之前的兜底。
+var reservedCodes = map[string]struct{}{}
+
+func init() {
+	for _, c := range []string{
+		// 平台自己的门面
+		"www", "www2", "web", "app", "apps", "api", "admin", "console", "dashboard",
+		"portal", "internal", "intranet", "status", "health", "metrics", "monitor",
+		// 账号与鉴权
+		"account", "accounts", "login", "logout", "signup", "register", "auth",
+		"oauth", "sso", "id",
+		// 邮件与域名基础设施（被占走会直接影响这个域收不收得到信）
+		"mail", "webmail", "mx", "smtp", "imap", "pop", "pop3", "ns", "ns1", "ns2",
+		"autodiscover", "autoconfig", "dmarc", "dkim", "postmaster", "hostmaster",
+		"webmaster", "abuse",
+		// 静态资源与分发
+		"cdn", "static", "assets", "media", "img", "images", "files", "download", "downloads",
+		// 研发与运维
+		"dev", "test", "staging", "stage", "beta", "preview", "git", "ci", "registry",
+		"proxy", "gateway", "edge", "origin", "lb", "vpn", "ftp", "sftp", "ssh",
+		"docs", "doc", "help", "support", "blog", "news", "security", "localhost", "root",
+	} {
+		reservedCodes[c] = struct{}{}
+	}
+}
+
+// baseDomainShape 是 BaseDomain 必须满足的写法：至少两段，每段都是合法 DNS 标签。
+//
+// 单独校验它，是因为一个字符的手滑会静默关掉整条规则。写成 ".example.com"
+// （想表达「通配」时很自然的写法）之后：子域名匹配全部失效（没有 Host 会以
+// "..example.com" 结尾），商家登记的 domain 重新能抢别家的规范 URL，
+// 而 Preflight 因为 baseDomain 非空、以为入口天然存在，一声不吭。
+// 单标签（"net"、"local"）同理：它要么是公共后缀，要么根本不是这套部署的域名。
+var baseDomainShape = regexp.MustCompile(
+	`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$`)
+
 // dnsLabel 是 code 想出现在 `{code}.{BaseDomain}` 里必须满足的写法。
 // 小写、数字、连字符，不以连字符开头或结尾，最长 63 —— 就是 DNS 标签的规矩。
 // Host 在解析前会被统一成小写，所以 code 里但凡有大写字母就永远匹配不上。
@@ -159,6 +208,28 @@ func (r *Resolver) Preflight(ctx context.Context) error {
 		return nil
 	}
 
+	if r.baseDomain != "" && !baseDomainShape.MatchString(r.baseDomain) {
+		hint := ""
+		if strings.HasPrefix(r.baseDomain, ".") {
+			hint = "（去掉开头的点：基础域名写成 example.com，不是 .example.com）"
+		}
+		return fmt.Errorf(
+			"KEEL_BASE_DOMAIN=%q 不是一个合法的基础域名%s。"+
+				"它必须至少有两段、每段都是合法 DNS 标签 —— 写错的话子域名解析会静默"+
+				"失效（没有 Host 匹配得上），而商家登记的域名会重新抢到别家的规范 URL",
+			r.baseDomain, hint)
+	}
+
+	if n, sample, err := r.reserved(ctx); err != nil {
+		return err
+	} else if n > 0 {
+		return fmt.Errorf(
+			"有 %d 家活跃商家（%s）的 code 占用了平台保留的名字。"+
+				"基础域名下的一级名字里，www/api/admin/mail 这类是平台自己要用的"+
+				"（主站、接口、后台、收信），发给商家之后平台就没法在这个域上提供它们了。"+
+				"请给这些商家改 code", n, sample)
+	}
+
 	// 多商家部署：把「谁也访问不到」的商家找出来。
 	//
 	// 一家活跃商家的入口只有两个：登记过的域名，或者 `{code}.{BaseDomain}`。
@@ -186,11 +257,51 @@ func (r *Resolver) Preflight(ctx context.Context) error {
 	return nil
 }
 
+// reserved 数出 code 占用了平台保留名字的活跃商家。
+//
+// 只在配了基础域名时有意义：没有基础域名就没有「{code}.{基础域名}」这个入口，
+// code 也就抢不走平台的任何名字。
+func (r *Resolver) reserved(ctx context.Context) (int64, string, error) {
+	if r.baseDomain == "" {
+		return 0, "", nil
+	}
+	names := make([]string, 0, len(reservedCodes))
+	for c := range reservedCodes {
+		names = append(names, c)
+	}
+	const q = `
+	WITH bad AS (
+	    SELECT m.code
+	      FROM merchants m
+	     WHERE m.deleted_at IS NULL
+	       AND m.status = 1
+	       AND m.code = ANY($1)
+	)
+	SELECT (SELECT count(*) FROM bad),
+	       coalesce((SELECT string_agg(code, ', ')
+	                   FROM (SELECT code FROM bad ORDER BY code LIMIT 5) t), '')`
+	var n int64
+	var sample string
+	if err := r.pool.QueryRow(ctx, q, names).Scan(&n, &sample); err != nil {
+		return 0, "", fmt.Errorf("检查保留 code 失败: %w", err)
+	}
+	if n > 5 {
+		sample += " …"
+	}
+	return n, sample, nil
+}
+
 // unreachable 数出没有任何入口的活跃商家，并列出其中前几个的 code。
 //
 // 列前几个而不是只列一个：只报一家的话，有 N 家不可达时运维要「改一家、
 // 重启、再看下一家」，把一次修复拖成 N 轮。
 func (r *Resolver) unreachable(ctx context.Context) (int64, string, error) {
+	// 「有 s.domain 就可达」是不成立的：登记在基础域名下的 domain 永远不会被
+	// 采纳（那片地盘只认 code），所以那种登记等于没有登记。判据必须和 Resolve
+	// 的实际行为一致，否则自检放行的正是它要消灭的那种全站 404。
+	//
+	// 用 right(...) 而不是 LIKE '%.' || $3：LIKE 里的 _ 是通配符，域名里出现
+	// 下划线时匹配会悄悄放宽。
 	const q = `
 	WITH bad AS (
 	    SELECT m.code
@@ -198,15 +309,19 @@ func (r *Resolver) unreachable(ctx context.Context) (int64, string, error) {
 	      LEFT JOIN shop_settings s ON s.merchant_id = m.id
 	     WHERE m.deleted_at IS NULL
 	       AND m.status = 1
-	       AND s.domain IS NULL
+	       -- 没有可用的自定义域名入口
+	       AND (s.domain IS NULL
+	            OR ($3 <> '' AND (s.domain = $3
+	                              OR right(s.domain, length($3) + 1) = '.' || $3)))
+	       -- 也没有可用的子域名入口
 	       AND ($1 OR m.code !~ $2)
-	     ORDER BY m.code
 	)
 	SELECT (SELECT count(*) FROM bad),
-	       coalesce((SELECT string_agg(code, ', ') FROM (SELECT code FROM bad LIMIT 5) t), '')`
+	       coalesce((SELECT string_agg(code, ', ')
+	                   FROM (SELECT code FROM bad ORDER BY code LIMIT 5) t), '')`
 	var n int64
 	var sample string
-	if err := r.pool.QueryRow(ctx, q, r.baseDomain == "", dnsLabel).Scan(&n, &sample); err != nil {
+	if err := r.pool.QueryRow(ctx, q, r.baseDomain == "", dnsLabel, r.baseDomain).Scan(&n, &sample); err != nil {
 		return 0, "", fmt.Errorf("检查商家可达性失败: %w", err)
 	}
 	if n > 5 {
@@ -276,6 +391,12 @@ func (r *Resolver) Resolve(ctx context.Context, host string) (int64, error) {
 		if label == "" || strings.Contains(label, ".") {
 			// 基础域名本身（apex），或它下面多于一级的名字。
 			// 这些名字归平台，不归任何商家，所以不查任何表，直接 404。
+			return 0, ErrNoMerchant
+		}
+		if _, reserved := reservedCodes[label]; reserved {
+			// 平台自己要用的一级名字，同样不查库。
+			// Preflight 会在启动时把「已经有商家占着这种 code」喊出来；
+			// 这里这道是运行期新建的商家在下次重启之前的兜底。
 			return 0, ErrNoMerchant
 		}
 		return r.byCode(ctx, label)
