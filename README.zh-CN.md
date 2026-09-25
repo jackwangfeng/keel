@@ -83,6 +83,9 @@ docker compose up
 不需要 Elasticsearch，不需要 MongoDB，不需要 RabbitMQ，不需要 Redis。
 **只有一个数据库。** 向量检索在 `pgvector`，全文检索在 `tsvector`，任务队列是一张表。
 
+> 文件（商品图、头像、退款凭证）默认写本地磁盘卷，不是额外的服务。
+> 换 S3 形态时才会多一个组件。
+
 > 没有 GPU 也能跑——推理引擎会降级为 CPU 小模型。
 > 搜索质量会下降，但不会崩。
 

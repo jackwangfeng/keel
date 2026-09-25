@@ -86,6 +86,9 @@ No Elasticsearch. No MongoDB. No RabbitMQ. No Redis.
 **One database.** Vector search lives in `pgvector`, full-text in `tsvector`,
 the job queue in a table.
 
+> Files (product images, avatars, refund evidence) go to a local disk volume by
+> default — not another service. Switching to the S3 driver is what adds a component.
+
 > Works without a GPU — the inference engine falls back to small CPU models.
 > Search quality degrades gracefully; nothing breaks.
 
