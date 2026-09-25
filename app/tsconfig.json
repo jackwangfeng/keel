@@ -1,0 +1,29 @@
+{
+  // 这份 tsconfig 是给 **uni-app x 自带的 UTS/tsc 检查** 用的，不是给 CI 闸门用的。
+  // 闸门那份在 app/typecheck/tsconfig.json —— 两者范围不同，见 app/README.md。
+  //
+  // extends 指到 uni-uts-v1 自带的那份：uni-app x 的 tsc 选项（module/moduleResolution/
+  // jsx/strict…）由工具链定义，这里抄一遍就等于多一份会漂移的真相源。
+  "extends": "./node_modules/@dcloudio/uni-uts-v1/lib/tsconfig/tsconfig.vue.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "lib": ["ESNext"],
+    "noImplicitAny": false,
+    "useDefineForClassFields": false,
+    "paths": { "@/*": ["./src/*"] }
+  },
+  // 前三个 d.ts 是 uni-uts-v1 给 HBuilderX 环境准备的全局声明（console、
+  // createSSRApp、uni 命名空间等）。CLI 模式下它们不会被自动带上，
+  // 不显式列进来的话，`console.log` 会报 "Cannot find name 'console'"。
+  // env.d.ts 刻意**不**列：它 import 的是只有 HBuilderX 里才存在的虚拟模块。
+  "include": [
+    "./node_modules/@dcloudio/uni-app-x/index.d.ts",
+    "./node_modules/@dcloudio/uni-uts-v1/lib/tsconfig/shim-uni.d.ts",
+    "./node_modules/@dcloudio/uni-uts-v1/lib/tsconfig/shim-dom.d.ts",
+    "./node_modules/@dcloudio/uni-uts-v1/lib/tsconfig/global.d.ts",
+    "src/**/*.uts",
+    "src/**/*.ts",
+    "src/**/*.d.ts",
+    "src/**/*.uvue"
+  ]
+}

@@ -1,0 +1,222 @@
+<template>
+  <view class="page">
+    <view class="card">
+      <text class="title">下单</text>
+      <view class="row line">
+        <text class="label">sku_id</text>
+        <input class="input" type="number" v-model="skuIdText" @input="invalidate" />
+      </view>
+      <view class="row line">
+        <text class="label">数量</text>
+        <input class="input" type="number" v-model="quantityText" @input="invalidate" />
+      </view>
+      <view class="row line">
+        <text class="label">address_id</text>
+        <input class="input" type="number" v-model="addressIdText" @input="invalidate" />
+      </view>
+      <!-- 地址是手填的：契约里有 GET /addresses，后端这一版没有。
+           与其画一个假的地址簿，不如把这件事摆在页面上。 -->
+      <text class="muted">GET /addresses 后端尚未实现，地址先手填（种子买家名下是 1）。</text>
+      <button class="btn-ghost" @click="preview">试算</button>
+    </view>
+
+    <view v-if="pv != null" class="card">
+      <text class="title">试算结果</text>
+      <view class="row line"><text class="label">商品金额</text><text>{{ pv!.goodsAmountText }}</text></view>
+      <view class="row line"><text class="label">运费</text><text>{{ pv!.freightText }}</text></view>
+      <view class="row line"><text class="label">优惠</text><text>{{ pv!.discountText }}</text></view>
+      <view class="row line"><text class="label">应付</text><text class="price">{{ pv!.payableText }}</text></view>
+      <button class="btn" :disabled="busy" @click="submit">提交订单</button>
+    </view>
+
+    <view class="card">
+      <text class="title">幂等键</text>
+      <text class="mono">{{ idemKey }}</text>
+      <text class="muted">
+        进这个页面时生成一次，之后每次提交都复用它。每次点击重新生成等于把幂等
+        整个废掉：用户手抖点两下就是两笔订单。服务端对重放返回 201 +
+        Idempotency-Replayed: true，对同键异体返回 422。
+      </text>
+      <button v-if="needNewKey" class="btn-ghost" @click="rotate">订单内容变了，换一个新键</button>
+    </view>
+
+    <text v-if="message != ''" :class="failed ? 'err pad' : 'ok pad'">{{ message }}</text>
+    <button v-if="orderNo != ''" class="btn-ghost" @click="openOrder">查看订单详情</button>
+  </view>
+</template>
+
+<script>
+import { createOrder, previewOrder, ApiFailure, PROBLEM_IDEMPOTENCY_KEY_IN_FLIGHT, PROBLEM_IDEMPOTENCY_KEY_REUSED } from '@/api/client.uts'
+import { newIdempotencyKey } from '@/api/idempotency.uts'
+import { isLoggedIn, rememberOrder } from '@/api/config.uts'
+import { OrderCreateRequest } from '@/api/schema.uts'
+import { previewView, PreviewView } from '@/api/view.uts'
+
+export default {
+  data() {
+    return {
+      skuIdText: '1',
+      quantityText: '1',
+      addressIdText: '1',
+      idemKey: '',
+      pv: null as PreviewView | null,
+      message: '',
+      failed: false,
+      busy: false,
+      needNewKey: false,
+      orderNo: '',
+    }
+  },
+  onLoad(options: OnLoadOptions) {
+    const raw = options['sku_id']
+    if (raw != null) {
+      this.skuIdText = '' + raw
+    }
+    // **这里，且只有这里。** 见模板里那段说明。
+    this.idemKey = newIdempotencyKey()
+  },
+  methods: {
+    body(): OrderCreateRequest {
+      const req: OrderCreateRequest = {
+        items: [{ sku_id: parseInt(this.skuIdText), quantity: parseInt(this.quantityText) }],
+        address_id: parseInt(this.addressIdText),
+      }
+      // 试算过就带上 expected_payable_cents：契约说服务端复算不一致时返回 409
+      // price-changed，防止用户以旧价成交。没试算过就不带 —— 带一个瞎猜的值
+      // 只会把每一单都变成 409。
+      if (this.pv != null) {
+        req.expected_payable_cents = this.pv!.payableCents
+      }
+      return req
+    },
+    // 改了订单内容就把试算结果作废。
+    //
+    // 两件事：(1) expected_payable_cents 是**上一份内容**算出来的，带着它提交
+    // 服务端会以 409 price-changed 打回 —— 那句话对用户是误导，价格没变，是数量变了；
+    // (2) 契约里下单要用户先看见应付金额再确认，试算结果过期了就不该还摆在那儿。
+    invalidate() {
+      this.pv = null
+      this.message = ''
+    },
+    preview() {
+      if (!isLoggedIn()) {
+        this.failed = true
+        this.message = '下单接口要登录（契约里 /orders/preview 没有 security: []）'
+        return
+      }
+      this.failed = false
+      this.message = ''
+      previewOrder(
+        this.body(),
+        (p) => {
+          this.pv = previewView(p)
+        },
+        (f: ApiFailure) => {
+          this.failed = true
+          this.message = f.message
+        }
+      )
+    },
+    submit() {
+      if (!isLoggedIn()) {
+        this.failed = true
+        this.message = '先登录'
+        return
+      }
+      this.busy = true
+      this.failed = false
+      this.message = ''
+      this.send(0)
+    },
+    // 重试用递归而不是循环：uni.request 是回调式的。attempt 只用来封顶。
+    send(attempt: number) {
+      createOrder(
+        this.body(),
+        this.idemKey,
+        (order, replayed) => {
+          this.busy = false
+          this.failed = false
+          this.orderNo = order.order_no
+          // 刻意**不**自动跳走：跳走的话「这次到底是真下了单还是重放」这句话
+          // 用户根本来不及看见，而那正是 Idempotency-Replayed 存在的理由。
+          this.message = replayed
+            ? '这是上次那单（Idempotency-Replayed: true），本次没有真的执行任何业务动作：' + order.order_no
+            : '下单成功：' + order.order_no
+          rememberOrder(order.order_no)
+        },
+        (f: ApiFailure) => {
+          const t = f.problem != null ? f.problem!.type : ''
+          if (t == PROBLEM_IDEMPOTENCY_KEY_IN_FLIGHT && attempt < 3) {
+            // 契约：这不是业务失败，客户端应按 Retry-After 退避重试。
+            // 弹窗说「下单失败」是错的 —— 那一单很可能正在成功。
+            this.message = '同一个幂等键正在处理中，' + f.retryAfter.toString() + ' 秒后重试…'
+            const wait = (f.retryAfter > 0 ? f.retryAfter : 1) * 1000
+            setTimeout(() => {
+              this.send(attempt + 1)
+            }, wait)
+            return
+          }
+          this.busy = false
+          this.failed = true
+          if (t == PROBLEM_IDEMPOTENCY_KEY_REUSED) {
+            // 同键异体。服务端宁可显式失败也不把不同的请求当重放吞掉 ——
+            // 那会让用户以为下单成功而实际什么都没发生。这里照实说，
+            // 并且把「换新键」做成一个要用户按的按钮，而不是偷偷换掉。
+            this.needNewKey = true
+            this.message = '订单内容和这个幂等键第一次提交的那份不一样（422）。' +
+              '这是服务端在保护你：换一个新键再提交，才是一笔新订单。'
+            return
+          }
+          this.message = f.message
+        }
+      )
+    },
+    openOrder() {
+      uni.navigateTo({ url: '/pages/order/detail?order_no=' + this.orderNo })
+    },
+    rotate() {
+      this.idemKey = newIdempotencyKey()
+      this.needNewKey = false
+      this.message = '已换新键'
+      this.failed = false
+    },
+  },
+}
+</script>
+
+<style>
+.title {
+  font-size: 15px;
+  font-weight: bold;
+}
+.line {
+  margin-top: 8px;
+}
+.label {
+  width: 90px;
+  font-size: 14px;
+  color: #666666;
+}
+.input {
+  flex: 1;
+  height: 34px;
+  padding-left: 8px;
+  border-width: 1px;
+  border-style: solid;
+  border-color: #dddddd;
+  border-radius: 4px;
+  font-size: 14px;
+}
+.mono {
+  font-size: 12px;
+  color: #333333;
+  margin-top: 4px;
+}
+.pad {
+  padding: 12px;
+}
+.ok {
+  color: #237804;
+  font-size: 13px;
+}
+</style>

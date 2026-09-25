@@ -1,0 +1,15 @@
+// H5（web）平台的 main 会被 @dcloudio/uni-h5-vite 改写：它把源码里**第一次**出现的
+// `createSSRApp` 替换成 `createVueApp as createSSRApp`。所以这里必须写成 import 形式 ——
+// 第一次出现落在 import 上，替换之后仍然是一句合法的 import；写成 uni-app x 文档里
+// 那种「createSSRApp 是全局、不用 import」的形式，替换会落到
+// `const app = createSSRApp(App)` 上，变成 `const app = createVueApp as createSSRApp(App)`，
+// 于是报一句 `main.uts:4:43 - error TS1005: ',' expected.`，位置指向一个源码里根本不存在的列。
+import { createSSRApp } from 'vue'
+import App from './App.uvue'
+
+export function createApp() {
+  const app = createSSRApp(App)
+  return {
+    app,
+  }
+}

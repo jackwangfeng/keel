@@ -1,0 +1,533 @@
+// Keel 买家端的 HTTP 层。
+//
+// ## 这里一个手写的请求/响应结构体都没有
+//
+// 所有形状都来自 ./schema.uts —— 那是 scripts/gen_uts_schema.py 从
+// docs/电商系统-OpenAPI.yaml 生成并入库的产物。契约里把 `min_price_cents` 改个名字，
+// 重新 `make generate-uts` 之后，下面每一处读它的代码都会在类型检查下变红。
+//
+// 手写一份 `type Product = { ... }` 也能编译、也能跑通，但它和契约之间只剩人的注意力
+// 在维系 —— 这个仓库已经为此付过三次账（problem type 整体分叉了一个里程碑、
+// barrier 两边都以为对方会建、契约与数据模型对不上）。
+//
+// ## 为什么是回调不是 Promise
+//
+// UTS 的 async/await 在各平台上的成熟度不一致（Kotlin 协程 / Swift async 各有各的
+// 落地方式）。回调在三端都是同一件事，而这一层薄到不值得为语法糖冒这个险。
+//
+// ## 错误一律走 onErr，不混进返回值
+//
+// 让错误走成功路径的话，每个调用点都要先分辨这次到底成没成功，而漏判的那些
+// 会一直编译得过 —— 直到线上。
+
+import {
+  PaymentCreateRequest,
+  ListOrdersQuery,
+  ListOrdersResponse,
+  ListProductsQuery,
+  ListProductsResponse,
+  LoginRequest,
+  LoginResponse,
+  Order,
+  OrderCreateRequest,
+  OrderDetail,
+  OrderPreview,
+  PaymentIntent,
+  Problem,
+  ProductDetail,
+  RefreshTokenRequest,
+} from './schema.uts'
+import { getBaseUrl, loadSession } from './config.uts'
+
+// ---------------------------------------------------------------------------
+// 契约里的 Problem type。**不要在别处再抄一遍字符串。**
+// 与 internal/problem 的常量逐条对应。
+// ---------------------------------------------------------------------------
+
+export const PROBLEM_NOT_FOUND = 'https://keel.dev/problems/not-found'
+export const PROBLEM_METHOD_NOT_ALLOWED = 'https://keel.dev/problems/method-not-allowed'
+export const PROBLEM_NOT_IMPLEMENTED = 'https://keel.dev/problems/not-implemented'
+export const PROBLEM_UNAUTHORIZED = 'https://keel.dev/problems/unauthorized'
+export const PROBLEM_TOKEN_EXPIRED = 'https://keel.dev/problems/token-expired'
+export const PROBLEM_TOKEN_TENANT_MISMATCH = 'https://keel.dev/problems/token-tenant-mismatch'
+export const PROBLEM_IDEMPOTENCY_KEY_IN_FLIGHT = 'https://keel.dev/problems/idempotency-key-in-flight'
+export const PROBLEM_IDEMPOTENCY_KEY_REUSED = 'https://keel.dev/problems/idempotency-key-reused'
+export const PROBLEM_INSUFFICIENT_STOCK = 'https://keel.dev/problems/insufficient-stock'
+export const PROBLEM_PRICE_CHANGED = 'https://keel.dev/problems/price-changed'
+
+/**
+ * 一次失败的调用。
+ *
+ * `notImplemented` 是这一版特有的一个字段：后端有几条接口（GET /products/{id}、
+ * GET /orders、GET /orders/{order_no}、POST /orders/{order_no}/payments）
+ * 还在并发补，现在打过去是路由层的 404 / 405。把它和「这件商品不存在」区分开，
+ * 页面才能说「该接口后端尚未实现」而不是骗用户说东西没了。
+ */
+export type ApiFailure = {
+  /** HTTP 状态码。0 表示请求根本没发出去（断网、地址写错、CORS）。 */
+  status : number
+  /** 契约里的 Problem。响应体不是 Problem 时为 null。 */
+  problem : Problem | null
+  /** 给用户看的一句话。 */
+  message : string
+  /** 409 幂等键处理中时服务端建议的退避秒数；没有就是 0。 */
+  retryAfter : number
+  /** 这条接口后端还没接上（路由层 404 / 405，或显式的 not-implemented）。 */
+  notImplemented : boolean
+}
+
+export type FailureHandler = (failure : ApiFailure) => void
+
+function failureOf(status : number, problem : Problem | null, retryAfter : number) : ApiFailure {
+  let message = ''
+  let notImplemented = false
+  if (problem != null) {
+    const t = problem!.type
+    notImplemented =
+      t == PROBLEM_NOT_IMPLEMENTED ||
+      ((status == 404 || status == 405) &&
+        (t == PROBLEM_NOT_FOUND || t == PROBLEM_METHOD_NOT_ALLOWED))
+    const detail = problem!.detail
+    message = detail != null && detail != '' ? detail! : problem!.title
+  } else if (status == 0) {
+    message = '连不上服务：检查「服务地址」设置，以及后端是否起着'
+  } else {
+    message = 'HTTP ' + status.toString() + '：响应体不是契约里的 Problem'
+  }
+  return {
+    status: status,
+    problem: problem,
+    message: message,
+    retryAfter: retryAfter,
+    notImplemented: notImplemented,
+  } as ApiFailure
+}
+
+// ---------------------------------------------------------------------------
+// 请求原语
+// ---------------------------------------------------------------------------
+
+/**
+ * 成功时的原始响应：状态码、文本、以及这一次是不是幂等重放。
+ *
+ * 为什么把 `replayed` 一路带上来：契约里 POST /orders 的重放命中同样返回 201
+ * 与首次的响应体，只有 `Idempotency-Replayed: true` 这个头能区分「我真的下了单」
+ * 和「这是上次那单」。丢掉它，用户连点两次会看到两遍「下单成功」。
+ */
+type RawOk = (status : number, text : string, replayed : boolean) => void
+
+/**
+ * 从响应头里取一个值。
+ *
+ * **只用下标访问，不用 UTSJSONObject 的 getString。** 实测（uni-app x 5.2.6、H5）：
+ * `res.header` 在 web 端就是一个普通 JS 对象，`getString` / `toMap` 这些方法
+ * UTS 编译器原样透传、运行时并不存在，页面当场
+ * `TypeError: e.getString is not a function`。下标访问在三端都成立。
+ *
+ * 大小写两种都查：H5 下 XHR/fetch 把响应头名字统一成小写，原生端保留服务端写的那个。
+ */
+function headerValue(header : UTSJSONObject | null, name : string) : string | null {
+  if (header == null) {
+    return null
+  }
+  const exact = header![name]
+  if (exact != null) {
+    return '' + exact
+  }
+  const lower = header![name.toLowerCase()]
+  if (lower != null) {
+    return '' + lower
+  }
+  return null
+}
+
+/** 这一层只用得到这两个方法。写成字面量联合而不是 string：uni.request 的
+ *  method 就是一个字面量联合（RequestMethod），传 string 过去在 UTS 下不合法。 */
+export type HttpMethod = 'GET' | 'POST'
+
+/**
+ * @param query 已经拼好的查询串（含开头的 `?`），没有就传空串。
+ *              不收一个 UTSJSONObject 让这里去遍历：见 headerValue 上面那段，
+ *              web 端没有 toMap。
+ * @param idempotencyKey 契约要求带 Idempotency-Key 的那两条接口给，其余传 null。
+ */
+function send(
+  method : HttpMethod,
+  path : string,
+  query : string,
+  body : any | null,
+  idempotencyKey : string | null,
+  onOk : RawOk,
+  onErr : FailureHandler
+) {
+  const header = {
+    'Accept': 'application/json, application/problem+json',
+  } as UTSJSONObject
+  const session = loadSession()
+  if (session != null) {
+    header['Authorization'] = 'Bearer ' + session!.accessToken
+  }
+  if (body != null) {
+    header['Content-Type'] = 'application/json'
+  }
+  if (idempotencyKey != null) {
+    header['Idempotency-Key'] = idempotencyKey
+  }
+
+  uni.request<string>({
+    url: getBaseUrl() + path + query,
+    method: method,
+    // dataType 不是 'json'：错误响应体是 Problem，和成功响应体不是一个形状。
+    // 让框架按成功类型去反序列化，错误那一支要么拿到 null 要么拿到半个对象，
+    // 而客户端最需要读懂的恰恰是错误。自己拿文本，自己决定按哪个类型解。
+    dataType: 'text',
+    responseType: 'text',
+    header: header,
+    data: body,
+    success: (res) => {
+      const status = res.statusCode
+      const text = res.data != null ? res.data! : ''
+      const rawHeader = res.header as UTSJSONObject | null
+      if (status >= 200 && status < 300) {
+        const replayed = headerValue(rawHeader, 'Idempotency-Replayed') == 'true'
+        onOk(status, text, replayed)
+        return
+      }
+      const retryAfterText = headerValue(rawHeader, 'Retry-After')
+      let retryAfter = 0
+      if (retryAfterText != null) {
+        const n = parseInt(retryAfterText!)
+        if (!isNaN(n)) {
+          retryAfter = n
+        }
+      }
+      onErr(failureOf(status, text != '' ? JSON.parse<Problem>(text) : null, retryAfter))
+    },
+    fail: (_err) => {
+      onErr(failureOf(0, null, 0))
+    },
+  })
+}
+
+/** 把 `k=v` 列表拼成查询串。空列表返回空串（不要拼出一个光秃秃的 `?`）。 */
+function queryString(parts : string[]) : string {
+  if (parts.length == 0) {
+    return ''
+  }
+  return '?' + parts.join('&')
+}
+
+// 参数写成**可选**（`value ?: number`）而不是 `number | null`：契约里非 required
+// 的 query 参数生成出来是 `page?: number`，UTS 下那是 `number | null`，
+// tsc 下那是 `number | undefined`。可选参数两边都对得上。
+function param(key : string, value ?: number) : string | null {
+  if (value == null) {
+    return null
+  }
+  return encodeURIComponent(key) + '=' + encodeURIComponent(value!.toString())
+}
+
+function pushIf(parts : string[], p : string | null) {
+  if (p != null) {
+    parts.push(p!)
+  }
+}
+
+/** 响应体解析失败时的统一出口。服务端违约（或者这一跳根本没到 Keel）。 */
+function decodeFailure(status : number) : ApiFailure {
+  return {
+    status: status,
+    problem: null,
+    message: '响应体解析失败：服务端返回的不是契约描述的形状',
+    retryAfter: 0,
+    notImplemented: false,
+  } as ApiFailure
+}
+
+// ---------------------------------------------------------------------------
+// 接口。一条一个函数，形状全部来自 schema.uts。
+// ---------------------------------------------------------------------------
+
+export function listProducts(
+  query : ListProductsQuery,
+  onOk : (page : ListProductsResponse) => void,
+  onErr : FailureHandler
+) {
+  const parts : string[] = []
+  pushIf(parts, param('page', query.page))
+  pushIf(parts, param('page_size', query.page_size))
+  pushIf(parts, param('category_id', query.category_id))
+  send('GET', '/products', queryString(parts), null, null,
+    (_s : number, text : string, _r : boolean) => {
+    const body = JSON.parse<ListProductsResponse>(text)
+    if (body == null) {
+      onErr(decodeFailure(200))
+      return
+    }
+    onOk(body!)
+  }, onErr)
+}
+
+/** GET /products/{product_id}。**后端尚未接上**，失败时 failure.notImplemented 为 true。 */
+export function getProduct(
+  productId : number,
+  onOk : (detail : ProductDetail) => void,
+  onErr : FailureHandler
+) {
+  send('GET', '/products/' + productId.toString(), '', null, null,
+    (_s : number, text : string, _r : boolean) => {
+      const body = JSON.parse<ProductDetail>(text)
+      if (body == null) {
+        onErr(decodeFailure(200))
+        return
+      }
+      onOk(body!)
+    }, onErr)
+}
+
+export function login(
+  req : LoginRequest,
+  onOk : (res : LoginResponse) => void,
+  onErr : FailureHandler
+) {
+  send('POST', '/auth/login', '', req, null, (_s : number, text : string, _r : boolean) => {
+    const body = JSON.parse<LoginResponse>(text)
+    if (body == null) {
+      onErr(decodeFailure(200))
+      return
+    }
+    onOk(body!)
+  }, onErr)
+}
+
+export function refresh(
+  req : RefreshTokenRequest,
+  onOk : (res : LoginResponse) => void,
+  onErr : FailureHandler
+) {
+  send('POST', '/auth/refresh', '', req, null, (_s : number, text : string, _r : boolean) => {
+    const body = JSON.parse<LoginResponse>(text)
+    if (body == null) {
+      onErr(decodeFailure(200))
+      return
+    }
+    onOk(body!)
+  }, onErr)
+}
+
+/** POST /auth/logout。契约里是 204，没有响应体。 */
+export function logout(onOk : () => void, onErr : FailureHandler) {
+  send('POST', '/auth/logout', '', null, null,
+    (_s : number, _text : string, _r : boolean) => {
+      onOk()
+    }, onErr)
+}
+
+export function previewOrder(
+  req : OrderCreateRequest,
+  onOk : (preview : OrderPreview) => void,
+  onErr : FailureHandler
+) {
+  send('POST', '/orders/preview', '', req, null, (_s : number, text : string, _r : boolean) => {
+    const body = JSON.parse<OrderPreview>(text)
+    if (body == null) {
+      onErr(decodeFailure(200))
+      return
+    }
+    onOk(body!)
+  }, onErr)
+}
+
+/**
+ * POST /orders。
+ *
+ * `idempotencyKey` 由调用方给，而且**必须是进下单页时生成的那一个**（见
+ * ./idempotency.uts）。每次点击重新生成等于把幂等整个废掉：用户手抖点两下
+ * 就是两笔订单，而服务端那套「同键异体 422 / 重放 201」一次都用不上。
+ *
+ * `onOk` 的第二个参数就是 `Idempotency-Replayed`：true 表示这次什么都没执行，
+ * 返回的是上一次那单。
+ */
+export function createOrder(
+  req : OrderCreateRequest,
+  idempotencyKey : string,
+  onOk : (order : Order, replayed : boolean) => void,
+  onErr : FailureHandler
+) {
+  send('POST', '/orders', '', req, idempotencyKey,
+    (_s : number, text : string, replayed : boolean) => {
+    const body = JSON.parse<Order>(text)
+    if (body == null) {
+      onErr(decodeFailure(201))
+      return
+    }
+    onOk(body!, replayed)
+  }, onErr)
+}
+
+/** GET /orders。**后端尚未接上**（现在是 405）。 */
+export function listOrders(
+  query : ListOrdersQuery,
+  onOk : (page : ListOrdersResponse) => void,
+  onErr : FailureHandler
+) {
+  const parts : string[] = []
+  pushIf(parts, param('page', query.page))
+  pushIf(parts, param('page_size', query.page_size))
+  pushIf(parts, param('status', query.status))
+  pushIf(parts, param('refund_status', query.refund_status))
+  send('GET', '/orders', queryString(parts), null, null,
+    (_s : number, text : string, _r : boolean) => {
+    const body = JSON.parse<ListOrdersResponse>(text)
+    if (body == null) {
+      onErr(decodeFailure(200))
+      return
+    }
+    onOk(body!)
+  }, onErr)
+}
+
+/** GET /orders/{order_no}。**后端尚未接上**（现在是 404）。 */
+export function getOrder(
+  orderNo : string,
+  onOk : (detail : OrderDetail) => void,
+  onErr : FailureHandler
+) {
+  send('GET', '/orders/' + encodeURIComponent(orderNo), '', null, null,
+    (_s : number, text : string, _r : boolean) => {
+      const body = JSON.parse<OrderDetail>(text)
+      if (body == null) {
+        onErr(decodeFailure(200))
+        return
+      }
+      onOk(body!)
+    }, onErr)
+}
+
+/** POST /orders/{order_no}/payments。**后端尚未接上**（现在是 404）。 */
+export function createPayment(
+  orderNo : string,
+  req : PaymentCreateRequest,
+  idempotencyKey : string,
+  onOk : (intent : PaymentIntent, replayed : boolean) => void,
+  onErr : FailureHandler
+) {
+  send('POST', '/orders/' + encodeURIComponent(orderNo) + '/payments', '', req, idempotencyKey,
+    (_s : number, text : string, replayed : boolean) => {
+      const body = JSON.parse<PaymentIntent>(text)
+      if (body == null) {
+        onErr(decodeFailure(201))
+        return
+      }
+      onOk(body!, replayed)
+    }, onErr)
+}
+
+// ---------------------------------------------------------------------------
+// 沙箱结算
+// ---------------------------------------------------------------------------
+//
+// ## 这不是一条捷径
+//
+// `POST /orders/{order_no}/payments` 在沙箱形态下，`payload.settle` 里给的是
+// **一份用这家店真实密钥签好名的规范回调报文**。把它原样 POST 到
+// `/api/v1/webhooks/payments/{channel}`，走的就是生产那条完整的入账路径：
+// 验签、金额校验、`uk_payments_channel_txn` 幂等、订单 10 → 20 的状态机
+// （见 internal/service/payment.go）。客户端这边一行业务逻辑都没有，
+// 它只是把服务端交给它的信封投进去。
+//
+// ## 为什么这几个类型是手写的
+//
+// 契约里 `PaymentIntent.payload` 是 `additionalProperties: true` —— 它**刻意**
+// 不描述形状，因为那是渠道特定的（微信 JSAPI 的 prepay 参数长什么样，
+// 不该写进 Keel 的契约）。所以这里没有可生成的东西，也就没有「两份真相源」
+// 可言：这几个字段的唯一定义在 internal/service/payment_intent.go 的
+// sandboxPayload 里，而下面的代码对缺席是宽容的 —— 拿不到 settle 就说
+// 「这个渠道没给沙箱结算指令」，不猜、不编。
+
+/** payload.settle —— 服务端交给客户端的那个信封。 */
+export type SandboxSettle = {
+  method : string
+  /** 相对路径（服务端不知道自己对外是什么 origin，猜一个只会在自定义域名上猜错）。 */
+  url : string
+  headers : UTSJSONObject
+  /** 已经序列化好的 JSON 字符串。**必须原样发出去** —— 签名签的是这串字节。 */
+  body : string
+}
+
+export type SandboxPayload = {
+  sandbox ?: boolean
+  sandbox_notice ?: string
+  channel_txn_id ?: string
+  settle ?: SandboxSettle
+}
+
+/**
+ * 把 PaymentIntent.payload 读成沙箱信封。
+ *
+ * 走「重新序列化再按类型解析」这一步，而不是 `payload['settle'] as SandboxSettle`：
+ * UTSJSONObject 的下标取出来是 any，在 UTS 里对 any 再做下标/强转要落到 Kotlin 的
+ * 受检转换上，运行时会是 ClassCastException。JSON.parse<T> 在三端都是构造出
+ * 那个类型本身。
+ */
+export function sandboxPayloadOf(intent : PaymentIntent) : SandboxPayload | null {
+  const payload = intent.payload
+  if (payload == null) {
+    return null
+  }
+  return JSON.parse<SandboxPayload>(JSON.stringify(payload))
+}
+
+/**
+ * 把 base URL 削成 origin。
+ *
+ * settle.url 是 `/api/v1/webhooks/...`（已经含 /api/v1），而 base URL 是
+ * `.../api/v1`。直接拼会变成 `/api/v1/api/v1/...`。
+ * base URL 本身是相对路径（H5 的默认）时返回空串，拼出来就是同源的绝对路径。
+ */
+export function originOf(baseUrl : string) : string {
+  const i = baseUrl.indexOf('://')
+  if (i < 0) {
+    return ''
+  }
+  const rest = baseUrl.substring(i + 3)
+  const slash = rest.indexOf('/')
+  if (slash < 0) {
+    return baseUrl
+  }
+  return baseUrl.substring(0, i + 3 + slash)
+}
+
+/**
+ * 投递沙箱回调。
+ *
+ * 不复用上面那个 send：这一跳的 URL、方法、头、报文体全部由服务端指定，
+ * 而 send 会自作主张加 Authorization 与 Accept —— 回调的调用方是渠道，
+ * 它没有令牌（契约里这条接口是 security: []）。
+ */
+export function settleSandbox(
+  settle : SandboxSettle,
+  onOk : () => void,
+  onErr : FailureHandler
+) {
+  uni.request<string>({
+    url: originOf(getBaseUrl()) + settle.url,
+    method: 'POST',
+    dataType: 'text',
+    responseType: 'text',
+    header: settle.headers,
+    data: settle.body,
+    success: (res) => {
+      const status = res.statusCode
+      const text = res.data != null ? res.data! : ''
+      if (status >= 200 && status < 300) {
+        onOk()
+        return
+      }
+      onErr(failureOf(status, text != '' ? JSON.parse<Problem>(text) : null, 0))
+    },
+    fail: (_err) => {
+      onErr(failureOf(0, null, 0))
+    },
+  })
+}

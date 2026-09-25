@@ -1,0 +1,125 @@
+<template>
+  <view class="page">
+    <!-- 搜索框先占位：GET /search 是 M3 的东西，后端还没有。
+         做成一个点了会说清楚「还没通」的输入框，而不是一个点了没反应的框。 -->
+    <view class="card row">
+      <input class="search" type="text" placeholder="搜索商品（M3 的 /search 通了再接）" :disabled="true" />
+    </view>
+
+    <view class="card row">
+      <text class="muted">{{ baseUrl }}</text>
+      <view class="spacer"></view>
+      <text class="link" @click="goSettings">服务地址</text>
+      <text class="link" @click="goOrders">我的订单</text>
+      <text class="link" @click="goLogin">{{ loginText }}</text>
+    </view>
+
+    <text v-if="error != ''" class="err">{{ error }}</text>
+
+    <scroll-view class="list" direction="vertical">
+      <view v-for="item in rows" :key="item.id" class="card" @click="openDetail(item.id)">
+        <text class="title">{{ item.title }}</text>
+        <text v-if="item.subtitle != ''" class="muted">{{ item.subtitle }}</text>
+        <view class="row">
+          <text class="price">{{ item.priceText }}</text>
+          <text v-if="item.offShelf" class="tag">已下架</text>
+          <text v-else-if="item.soldOut" class="tag">无货</text>
+        </view>
+      </view>
+      <text v-if="!loading && rows.length == 0 && error == ''" class="muted">没有商品</text>
+      <text v-if="loading" class="muted">加载中…</text>
+    </scroll-view>
+
+    <text class="muted footer">共 {{ total }} 件</text>
+  </view>
+</template>
+
+<script>
+import { listProducts, ApiFailure } from '@/api/client.uts'
+import { getBaseUrl, isLoggedIn } from '@/api/config.uts'
+import { productRow, ProductRow } from '@/api/view.uts'
+
+export default {
+  data() {
+    return {
+      rows: [] as ProductRow[],
+      total: 0,
+      loading: false,
+      error: '',
+      baseUrl: '',
+      loginText: '登录',
+    }
+  },
+  onShow() {
+    // onShow 而不是 onLoad：从「服务地址」页改完地址退回来时要重新拉。
+    this.baseUrl = getBaseUrl()
+    this.loginText = isLoggedIn() ? '已登录' : '登录'
+    this.load()
+  },
+  methods: {
+    load() {
+      this.loading = true
+      this.error = ''
+      listProducts(
+        { page: 1, page_size: 20 },
+        (page) => {
+          const rows: ProductRow[] = []
+          for (let i = 0; i < page.items.length; i++) {
+            rows.push(productRow(page.items[i]))
+          }
+          this.rows = rows
+          this.total = page.total
+          this.loading = false
+        },
+        (f: ApiFailure) => {
+          this.error = f.message
+          this.loading = false
+        }
+      )
+    },
+    openDetail(id: number) {
+      uni.navigateTo({ url: '/pages/products/detail?id=' + id.toString() })
+    },
+    goLogin() {
+      uni.navigateTo({ url: '/pages/auth/login' })
+    },
+    goOrders() {
+      uni.navigateTo({ url: '/pages/order/list' })
+    },
+    goSettings() {
+      uni.navigateTo({ url: '/pages/settings/base' })
+    },
+  },
+}
+</script>
+
+<style>
+.search {
+  flex: 1;
+  height: 32px;
+  font-size: 14px;
+}
+.spacer {
+  flex: 1;
+}
+.link {
+  color: #1677ff;
+  font-size: 13px;
+  margin-left: 12px;
+}
+.list {
+  flex: 1;
+}
+.title {
+  font-size: 15px;
+  font-weight: bold;
+}
+.tag {
+  margin-left: 8px;
+  font-size: 12px;
+  color: #888888;
+}
+.footer {
+  padding: 8px;
+}
+</style>

@@ -1,0 +1,105 @@
+<template>
+  <view class="page">
+    <view class="card">
+      <text class="title">手机号 + 口令登录</text>
+      <text class="muted">
+        契约里 code（短信验证码）与 password 二选一。后端这一版只有口令这条通了，
+        所以这里只放口令。
+      </text>
+      <input class="input" type="text" v-model="phone" placeholder="手机号" />
+      <input class="input" type="password" v-model="password" placeholder="口令" />
+      <button class="btn" :disabled="busy" @click="submit">登录</button>
+      <button v-if="loggedIn" class="btn-ghost" @click="doLogout">退出登录</button>
+      <text v-if="message != ''" class="err">{{ message }}</text>
+    </view>
+
+    <view class="card">
+      <text class="muted">
+        令牌是按「这个服务地址」存的。换了服务地址（= 换了一家店），本地令牌当场作废 ——
+        服务端刻意让 A 店签发的令牌在 B 店被拒，留着它只会让用户撞上一个来路不明的 401。
+      </text>
+      <text class="muted">当前服务地址：{{ baseUrl }}</text>
+    </view>
+  </view>
+</template>
+
+<script>
+import { login, logout, ApiFailure } from '@/api/client.uts'
+import { clearSession, getBaseUrl, isLoggedIn, saveSession, Session } from '@/api/config.uts'
+
+export default {
+  data() {
+    return {
+      phone: '13800000000',
+      password: 'keel-demo-2026',
+      message: '',
+      busy: false,
+      loggedIn: false,
+      baseUrl: '',
+    }
+  },
+  onShow() {
+    this.baseUrl = getBaseUrl()
+    this.loggedIn = isLoggedIn()
+  },
+  methods: {
+    submit() {
+      this.busy = true
+      this.message = ''
+      login(
+        { phone: this.phone, password: this.password },
+        (res) => {
+          const user = res.user
+          const session: Session = {
+            baseUrl: getBaseUrl(),
+            accessToken: res.access_token,
+            refreshToken: res.refresh_token != null ? res.refresh_token! : '',
+            nickname: user.nickname != null ? user.nickname! : '',
+          }
+          saveSession(session)
+          this.busy = false
+          this.loggedIn = true
+          this.message = '登录成功：' + (session.nickname != '' ? session.nickname : this.phone)
+        },
+        (f: ApiFailure) => {
+          this.busy = false
+          this.message = f.message
+        }
+      )
+    },
+    doLogout() {
+      logout(
+        () => {
+          clearSession()
+          this.loggedIn = false
+          this.message = '已退出'
+        },
+        (f: ApiFailure) => {
+          // 服务端那边吊销失败也要把本地清掉：留着一串已知不可用的令牌
+          // 只会让下一次请求变成一个莫名其妙的 401。
+          clearSession()
+          this.loggedIn = false
+          this.message = '本地已退出（服务端吊销失败：' + f.message + '）'
+        }
+      )
+    },
+  },
+}
+</script>
+
+<style>
+.title {
+  font-size: 15px;
+  font-weight: bold;
+}
+.input {
+  height: 38px;
+  margin-top: 10px;
+  padding-left: 8px;
+  border-width: 1px;
+  border-style: solid;
+  border-color: #dddddd;
+  border-radius: 4px;
+  font-size: 14px;
+}
+</style>

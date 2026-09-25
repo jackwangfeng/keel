@@ -1,0 +1,54 @@
+<script>
+export default {
+  onLaunch: function () {
+    console.log('Keel 买家端启动')
+  },
+}
+</script>
+
+<style>
+/* uni-app x 的样式是原生排版（flex 布局、不是 CSS 全集），
+   这里只放几个跨页面复用的原子类。 */
+.page {
+  flex: 1;
+  background-color: #f5f5f5;
+}
+.card {
+  background-color: #ffffff;
+  margin: 8px;
+  padding: 12px;
+  border-radius: 8px;
+}
+.row {
+  flex-direction: row;
+  align-items: center;
+}
+.muted {
+  color: #888888;
+  font-size: 12px;
+}
+.price {
+  color: #d4380d;
+  font-size: 16px;
+  font-weight: bold;
+}
+.btn {
+  background-color: #1677ff;
+  color: #ffffff;
+  border-radius: 6px;
+  margin-top: 12px;
+}
+.btn-ghost {
+  background-color: #ffffff;
+  color: #1677ff;
+  border-width: 1px;
+  border-style: solid;
+  border-color: #1677ff;
+  border-radius: 6px;
+}
+.err {
+  color: #d4380d;
+  font-size: 13px;
+  margin-top: 8px;
+}
+</style>
