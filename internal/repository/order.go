@@ -130,9 +130,19 @@ type NewOrderItem struct {
 // 做成常量而不是让调用方传 1 / 2：这两个值会决定对账时一行流水算「扣」还是
 // 算「补」，而一个写反了的字面量在任何测试里都长得像一次正常的库存波动。
 const (
-	InventoryLogOrderDeduct  int16 = 1 // 下单扣减
-	InventoryLogSagaCompense int16 = 2 // SAGA 补偿回补
+	InventoryLogOrderDeduct    int16 = 1 // 下单扣减
+	InventoryLogSagaCompense   int16 = 2 // SAGA 补偿回补
+	InventoryLogTimeoutRelease int16 = 3 // 超时关单释放
 )
+
+// 2 与 3 的差别值得单说一句，因为两者在库里长得一模一样（同一个 sku、同一个
+// 正数 change_qty、同一个订单号）：
+//
+//   - 2 是**下单没成功**，SAGA 在正向阶段自己把刚扣的货放了回去；
+//   - 3 是**下单成功了但用户没付钱**，几十分钟之后由定时任务放回去。
+//
+// 合并成一个值的话，「这批货被锁了多久」与「转化率在哪一步掉的」两个问题
+// 都答不出来 —— 而它们正是这条链路上运营最先会问的两个。
 
 // IdempotencyRecord 是幂等键那一行里服务层要用的部分（数据模型 §12）。
 type IdempotencyRecord struct {

@@ -5,6 +5,7 @@ import (
 	"go/parser"
 	"go/token"
 	"io/fs"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -27,6 +28,24 @@ import (
 // 行为侧的证明在 internal/handler 的 TestBranchTakesItsTenantFromTheGIDOnly：
 // 拿别家的 gid 调分支，业务跑不起来、库存一分没动。两条一起才完整：
 // 那条证明「现在这条路是对的」，这条证明「没有第二条路」。
+//
+// # M2 任务 6 让这条检查第一次需要一个豁免面，理由与形状
+//
+// 超时补偿定时任务（sweep.go）**没有 gid**，也没有 Host —— 它跑在任何 HTTP
+// 请求之外，而它要处理的订单分属不同的租户。它拿租户的唯一办法就是枚举
+// merchants 再一家一家 tenant.NewContext（论证写在 repository/sweep.go 与
+// service/sweep.go 的文件头）。
+//
+// 所以这条检查从「本包里一次都不许出现」变成「只许出现在登记过的文件里」。
+// 那是一次真实的放宽，所以它配了三道，缺一道这份清单就会烂掉：
+//
+//	① 清单是**按文件**的，每一条要写 reason —— 和 db/tenancy.json 的豁免面
+//	  同一个规矩：往里加一行是一个需要解释的动作。
+//	② 登记过的文件**不许同时出现 WithSagaBranch**。这一条是豁免与它的理由
+//	  之间的锁：豁免的依据是「这个文件不是 SAGA 分支」，而不是「这个文件比较
+//	  特殊」。哪天有人把一个分支搬进 sweep.go，豁免当场失效。
+//	③ 登记了却已经不用 tenant.NewContext 的文件 → 红。清单不能留着过期的行，
+//	  否则下一个人会以为那个文件天然享有豁免。
 func TestServiceNeverBuildsATenantContextByHand(t *testing.T) {
 	fset := token.NewFileSet()
 	pkgs, err := parser.ParseDir(fset, ".", func(fi fs.FileInfo) bool {
@@ -38,10 +57,19 @@ func TestServiceNeverBuildsATenantContextByHand(t *testing.T) {
 	files := 0
 	handmade := 0
 	fromGID := 0
+	usedAllowance := map[string]bool{}
 
 	for _, pkg := range pkgs {
 		for name, f := range pkg.Files {
 			files++
+			base := filepath.Base(name)
+			// ② 豁免的依据是「这个文件不是 SAGA 分支」。把依据本身查一遍，
+			// 而不是相信登记的那一刻依据成立。
+			if _, allowed := tenantContextAllowed[base]; allowed && mentions(f, "WithSagaBranch") {
+				t.Errorf("%s 登记在 tenantContextAllowed 里，但它在调 WithSagaBranch —— "+
+					"豁免的依据是「这个文件不是 SAGA 分支」，而它现在是了。"+
+					"把分支挪回 order_saga.go，或者删掉这条豁免", base)
+			}
 			ast.Inspect(f, func(n ast.Node) bool {
 				call, ok := n.(*ast.CallExpr)
 				if !ok {
@@ -57,12 +85,20 @@ func TestServiceNeverBuildsATenantContextByHand(t *testing.T) {
 				}
 				switch {
 				case ident.Name == "tenant" && sel.Sel.Name == "NewContext":
+					if why, allowed := tenantContextAllowed[base]; allowed {
+						usedAllowance[base] = true
+						t.Logf("%s:%d tenant.NewContext 按登记放行：%s",
+							base, fset.Position(call.Pos()).Line, why)
+						return true
+					}
 					handmade++
 					t.Errorf("%s:%d 手搓了一个租户上下文（tenant.NewContext）—— "+
 						"SAGA 分支的租户只许由 dtm.TenantContextFromGID 从 gid 解出来。"+
 						"repository 那一层不会复核，所以一个错租户会被原样执行："+
-						"屏障与业务都跑在别家店下，而且不报错",
-						name, fset.Position(call.Pos()).Line)
+						"屏障与业务都跑在别家店下，而且不报错。"+
+						"如果这段代码真的没有 gid 可用（比如定时任务），"+
+						"请往 tenantContextAllowed 里加一行并写明理由",
+						base, fset.Position(call.Pos()).Line)
 				case ident.Name == "dtm" && sel.Sel.Name == "TenantContextFromGID":
 					fromGID++
 				}
@@ -80,6 +116,42 @@ func TestServiceNeverBuildsATenantContextByHand(t *testing.T) {
 		t.Fatal("本包里一次 dtm.TenantContextFromGID 都没有 —— " +
 			"要么分支代码搬走了（那这条测试该跟着搬），要么租户改成从别处来了")
 	}
-	t.Logf("扫了 %d 个源文件：手搓租户上下文 %d 处，经 gid 解析 %d 处",
-		files, handmade, fromGID)
+	// ③ 清单不能烂掉：登记了却已经不用的行必须被删掉。
+	for base, why := range tenantContextAllowed {
+		if !usedAllowance[base] {
+			t.Errorf("tenantContextAllowed 里挂着 %q（%s），但它已经不再调 "+
+				"tenant.NewContext 了 —— 请删掉这一行，别让下一个人以为"+
+				"这个文件天然享有豁免", base, why)
+		}
+	}
+
+	t.Logf("扫了 %d 个源文件：手搓租户上下文 %d 处（登记放行 %d 个文件），经 gid 解析 %d 处",
+		files, handmade, len(usedAllowance), fromGID)
+}
+
+// tenantContextAllowed 是允许出现 tenant.NewContext 的源文件，键是文件名。
+//
+// **每一条都要写清楚「为什么这里没有 gid 也没有 Host」**，因为那是豁免的全部
+// 依据。默认答案是「租户从 gid 来」——想加一行之前先确认真的不是这种情况。
+var tenantContextAllowed = map[string]string{
+	"sweep.go": "超时补偿定时任务跑在任何 HTTP 请求之外：没有 Host（tenant.Resolver 用不上）、" +
+		"也没有 gid（它处理的订单不属于任何一笔正在跑的全局事务）。它拿租户的唯一办法是" +
+		"枚举 merchants（tenant-root 类，没有 RLS）再逐家进 WithTenant —— " +
+		"论证写在 repository/sweep.go 与 service/sweep.go 的文件头。" +
+		"它不是 SAGA 分支，上面第 ② 道会把这一点钉住。",
+}
+
+// mentions 判断这个文件里有没有出现某个标识符（作为选择器的字段名）。
+//
+// 只看名字、不做类型解析：这条检查要的是「这个文件里有没有 SAGA 分支的味道」，
+// 而一个假阳性（提到了但没调用）的代价只是逼人写清楚，比漏掉便宜得多。
+func mentions(f *ast.File, name string) bool {
+	found := false
+	ast.Inspect(f, func(n ast.Node) bool {
+		if sel, ok := n.(*ast.SelectorExpr); ok && sel.Sel.Name == name {
+			found = true
+		}
+		return !found
+	})
+	return found
 }

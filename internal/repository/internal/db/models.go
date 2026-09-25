@@ -121,6 +121,21 @@ type OrderStatusTransition struct {
 	ToStatus   int16
 }
 
+type Payment struct {
+	ID            int64
+	MerchantID    int64
+	PaymentNo     string
+	OrderID       int64
+	Channel       int16
+	AmountCents   int64
+	Status        int16
+	ChannelTxnID  *string
+	NotifyPayload []byte
+	PaidAt        pgtype.Timestamptz
+	CreatedAt     pgtype.Timestamptz
+	UpdatedAt     pgtype.Timestamptz
+}
+
 type Product struct {
 	ID            int64
 	MerchantID    int64

@@ -247,6 +247,26 @@ func Run(ctx context.Context, listen func(addr string, h http.Handler) error) er
 	// Close 是幂等的，所以这条 defer 与将来可能加的显式收尾不会撞车。
 	defer tc.Close()
 
+	// 超时补偿定时任务（Task 6）。
+	//
+	// **它排在协调器之后、监听之前，而且两头都是硬的。**
+	//
+	//   - 排在协调器之后：它处理的正是 SAGA 在正向阶段扣掉、而用户始终没付钱的
+	//     那批库存。协调器没起来就一笔订单也做不了，也就没有它要补的东西；
+	//     更要紧的是协调器起不来时 Run 会直接返回，那时不该已经有一个后台
+	//     goroutine 在扫库。
+	//   - 排在监听之前：这个任务停掉的代价不是「慢一点」，是**永久漏卖**
+	//     （架构 §5 的「少卖」从可恢复变成不可恢复）。先开始接单、再去起补偿，
+	//     中间那段时间里下的单如果没付，它们的库存要等到下一次重启才有人管。
+	//
+	// 用一个跟着 listen 的生命周期走的 ctx：listen 返回（进程要退了）时
+	// cancel，Run 里那个 select 会走 ctx.Done() 那一支干净退出，
+	// 而不是被进程退出从一次事务中间掐断。
+	sweepCtx, stopSweep := context.WithCancel(ctx)
+	defer stopSweep()
+	sweeper := service.NewSweepService(repository.New(pool), service.SweepConfig{}, nil)
+	go sweeper.Run(sweepCtx)
+
 	return listen(cfg.Addr, Router(pool, res, signer, orders))
 }
 

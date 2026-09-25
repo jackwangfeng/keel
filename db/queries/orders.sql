@@ -154,3 +154,71 @@ SELECT request_hash, status, response_code, response_body
 UPDATE idempotency_keys
    SET status = $4, response_code = $5, response_body = $6
  WHERE scope = $1 AND user_id = $2 AND idem_key = $3;
+
+-- ---------------------------------------------------------------------------
+-- 超时补偿定时任务（Task 6）。
+--
+-- 两类行、两条扫描、两种处置，逐条的理由写在 internal/service/sweep.go。
+-- 这里要说的只有一条形状上的：**扫描与处置是分开的两步，而处置那一步带着
+-- 与扫描完全相同的谓词**。扫出来的订单号在被处理之前可能已经被支付回调改掉了
+-- （那是一次真实的竞态，不是理论），所以真正决定「这一单归谁」的是处置那条
+-- UPDATE 的 rows_affected，不是扫描的结果。
+-- ---------------------------------------------------------------------------
+
+-- name: ListExpiredPendingOrders :many
+-- 第一类：正常的超时未支付。它们进过 SAGA，库存已经真实扣减，要回补。
+--
+-- 走 idx_orders_status_expire（00006，WHERE status = 10）。
+-- 按 expire_at 升序：过期最久的先处理，否则一个持续入单的租户能让最老的那批
+-- 永远排在后面。
+SELECT id, order_no
+  FROM orders
+ WHERE status = 10 AND expire_at < now()
+ ORDER BY expire_at
+ LIMIT $1;
+
+-- name: ListExpiredDraftOrders :many
+-- 第二类：孤儿草稿（00013 文件头那笔明写的欠账）。它们**没进过 SAGA**，
+-- 一件库存都没扣，所以只关单、不回补。
+--
+-- 走 idx_orders_draft_expire（00015，WHERE status = 0）。
+SELECT id, order_no
+  FROM orders
+ WHERE status = 0 AND expire_at < now()
+ ORDER BY expire_at
+ LIMIT $1;
+
+-- name: ClaimExpiredPendingOrder :execrows
+-- 原子占位：把一笔超时未支付的订单关到 90。**返回 1 才算这一单归我。**
+--
+-- 谓词里 status = 10 与 expire_at < now() 两个条件缺一不可：
+--   · status = 10  —— 支付回调刚把它推到 20 时，这里必须落空。少了它，
+--     一笔已付款的订单会被关掉，而库存还会被「回补」一次 —— 超卖。
+--   · expire_at    —— 不是冗余：扫描与处置之间订单的 expire_at 理论上可被延长
+--     （续期），而一条无条件的关单会把续期后的订单照关不误。
+--
+-- 回补库存与这条 UPDATE 在**同一个事务**里，所以「关了单却没回补」与
+-- 「回补了却没关单」两种半成品都不存在。
+UPDATE orders SET status = 90
+ WHERE order_no = $1 AND status = 10 AND expire_at < now();
+
+-- name: CloseExpiredDraftOrder :execrows
+-- 孤儿草稿的处置：0 → 90。**不回补库存**，理由见 sweep.go。
+--
+-- 同样带条件：一笔草稿在扫描与处置之间可能被 SAGA 的建单分支推到 10
+-- （一个跑了很久才回来的重放），那时它不再是孤儿，这里必须落空。
+UPDATE orders SET status = 90
+ WHERE order_no = $1 AND status = 0 AND expire_at < now();
+
+-- name: CountInventoryLogsForOrder :one
+-- 这一单在库存流水上留下过几行。
+--
+-- 它只有一个用途，而且是**不变量的守卫**，不是业务查询：关闭孤儿草稿之前，
+-- 核对一下这一单真的一件库存都没扣过。
+--
+-- 那条不变量今天由编排顺序保证（建单在前、库存在后，见 service/order.go 的
+-- 文件头）：订单还停在 0，说明建单分支的正向没成功，而库存分支排在它后面，
+-- 连开始都没开始。**但这是一条靠「另一个文件里的常量」维持的不变量** ——
+-- 哪天有人把 sagaSteps 的两行对调，孤儿清理就会开始静默地漏掉库存回补，
+-- 而水位、订单状态、日志全都正常。所以这里花一次点查把它变成一次响亮的失败。
+SELECT count(*) FROM inventory_logs WHERE biz_id = $1;

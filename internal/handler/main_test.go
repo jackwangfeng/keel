@@ -49,6 +49,19 @@ var (
 	testSigner = auth.NewSigner([]byte("keel-test-secret-key-32-bytes-long!!"))
 )
 
+// newSweeper 建一个超时补偿服务，接在**同一个池**上。
+//
+// 每条测试自己建一个而不是共用一个包级实例：SweepService 里有一个轮转游标
+// （cursor），共用的话一条测试跑过之后下一条的起点就变了 —— 而公平调度那条
+// 测试恰恰要断言「这一轮从哪家开始」。每条测试拿一个干净的游标，
+// 断言才有确定的含义。
+//
+// 预算由调用方给：默认值（每租户 50、每轮 500）对公平调度那条测试没有区分力，
+// 因为种子里的订单量远够不到上限。
+func newSweeper(cfg service.SweepConfig) *service.SweepService {
+	return service.NewSweepService(repository.New(testPool), cfg, nil)
+}
+
 // TestMain 备好 schema、加载种子、装一次路由。
 //
 // 种子不走 `psql -f`：宿主机上不一定有 psql（数据库跑在容器里，客户端二进制
