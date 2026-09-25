@@ -21,6 +21,7 @@ import (
 	"github.com/keel/keel/internal/db"
 	"github.com/keel/keel/internal/dtm"
 	"github.com/keel/keel/internal/handler"
+	"github.com/keel/keel/internal/inference"
 	"github.com/keel/keel/internal/problem"
 	"github.com/keel/keel/internal/repository"
 	"github.com/keel/keel/internal/service"
@@ -340,10 +341,45 @@ func Run(ctx context.Context, listen func(addr string, h http.Handler) error) er
 	// 用一个跟着 listen 的生命周期走的 ctx：listen 返回（进程要退了）时
 	// cancel，Run 里那个 select 会走 ctx.Done() 那一支干净退出，
 	// 而不是被进程退出从一次事务中间掐断。
-	sweepCtx, stopSweep := context.WithCancel(ctx)
-	defer stopSweep()
+	// 两个后台任务（超时补偿、派生数据入库）共用这一个 ctx：它们的生命周期是
+	// 同一条 —— 跟着 listen 走，进程要退时一起收到取消。
+	bgCtx, stopBackground := context.WithCancel(ctx)
+	defer stopBackground()
 	sweeper := service.NewSweepService(repository.New(pool), service.SweepConfig{}, nil)
-	go sweeper.Run(sweepCtx)
+	go sweeper.Run(bgCtx)
+
+	// 派生数据入库的增量任务（M3 Task 3）：商品变了就把文本向量与 bigram 串重算。
+	//
+	// **没配 KEEL_EMBED_ENDPOINT 时它不启动，而且要喊出来。**
+	//
+	// 这里与 KEEL_DTM_DSN 那条「空着就拒绝启动」不同类，理由与 KEEL_AUTH_SECRET
+	// 那一段同构 —— 看代价：协调器的存储丢了是不可恢复的数据损失，而没有推理引擎
+	// 只是**检索效果**降级（关键词召回那一半还在，因为 bigram 串不依赖引擎……
+	// 不，它也停了：没有引擎就没有这个任务，两份派生数据一起停）。
+	//
+	// 那为什么还不拒绝启动？因为 README 承诺的 `docker compose up` 里没有引擎 ——
+	// 它是 compose.inference.yaml 那个叠加层，2.27 GB 权重、冷启动约 75 秒。
+	// 让主 compose 因为缺它而起不来，等于把那条一行命令的 Demo 废掉。
+	//
+	// 代价说清楚，所以有这条 WARN：不启动它的后果是**新品与改过的商品搜不到**，
+	// 而且症状出现在几小时后 —— 索引是异步的，没有人在等它的返回码。
+	embedder, embErr := inference.FromEnv()
+	if embErr != nil {
+		slog.WarnContext(ctx, "没有配置 "+inference.EnvEndpoint+
+			"，商品派生数据入库任务不启动：文本向量与 bigram 关键词串都不会被维护。"+
+			"后果是新建与改过的商品搜不到（向量表没有它们的行，search_text 还是 NULL），"+
+			"而且不会有任何报错 —— 索引是异步的，没有人在等它的返回码。"+
+			"要开起来：docker compose -f compose.yaml -f compose.inference.yaml up -d inference，"+
+			"然后配 "+inference.EnvEndpoint+"=http://inference:8000",
+			"err", embErr)
+	} else {
+		indexer, err := service.NewIndexService(repository.New(pool), embedder,
+			service.IndexConfig{}, nil)
+		if err != nil {
+			return fmt.Errorf("建派生数据入库任务失败: %w", err)
+		}
+		go indexer.Run(bgCtx)
+	}
 
 	if cfg.Payment.Sandbox {
 		// 这条 WARN 是那个默认值的另一半。没有它，一个忘了配
