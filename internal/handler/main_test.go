@@ -17,6 +17,9 @@ import (
 	"github.com/keel/keel/internal/app"
 	"github.com/keel/keel/internal/auth"
 	"github.com/keel/keel/internal/db"
+	"github.com/keel/keel/internal/dtm"
+	"github.com/keel/keel/internal/repository"
+	"github.com/keel/keel/internal/service"
 	"github.com/keel/keel/internal/tenant"
 )
 
@@ -26,6 +29,18 @@ const baseDomain = "example.com"
 var (
 	testPool   *pgxpool.Pool
 	testEngine *gin.Engine
+
+	// testTC 是**真的**嵌入式协调器，存储是一个临时目录里的 sqlite。
+	//
+	// 不 mock 它：下单这条链路里最容易出问题的东西全在 Go→C→Rust→C→Go 那条
+	// 边界上（分支被不被调用、gid 有没有被改、失败到底触不触发补偿），
+	// 而 mock 掉那条边界等于把要测的东西整个换掉。
+	testTC *dtm.TC
+
+	// testOrders 是路由里那一个下单服务 —— 同一个实例。分支注册在它身上，
+	// 而失败原因是经它内部那张表递给 HTTP 那一侧的（见 service/order_saga.go
+	// 的 branchNotes）。换一个实例，那条路径就断了而测试看不出来。
+	testOrders *service.OrderService
 
 	// testSigner 是路由里那一个 —— **同一个实例**，不是一份长得一样的复制品。
 	// 测试要用它签出「过期的」「别家店的」「类型不对的」令牌，而那些令牌必须
@@ -46,6 +61,9 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	code := m.Run()
+	if testTC != nil {
+		testTC.Close()
+	}
 	testPool.Close()
 	os.Exit(code)
 }
@@ -69,10 +87,38 @@ func setup() error {
 	// 不是一份在旁边慢慢跑偏的复制品。测试里若自己 r.GET("/api/v1/products", ...)，
 	// 那么「main 把路由挂错了路径」这类错误谁也发现不了。
 	//
+	// 下单服务 → 注册分支 → 起协调器 → 接上。顺序与 app.Run 里一模一样，
+	// 理由见 service.OrderService.AttachCoordinator。
+	testOrders = service.NewOrderService(repository.New(pool), nil, nil)
+	dtmDir, err := os.MkdirTemp("", "keel-handler-dtm-")
+	if err != nil {
+		return err
+	}
+	// 除了真分支，还注册两个**只在测试里存在**的分支。
+	//
+	// 它们是为了让「库存补偿真的把货放回去了」这条断言有一条可达的路径。
+	// 生产编排里库存是最后一步，而一个失败的分支是原子回滚的（屏障那一行和
+	// 业务写在同一个事务里），所以正常链路上库存的补偿永远轮不到真的执行 ——
+	// 对着一条不可达的分支写断言，正是这个仓库前几轮反复踩到的那种空转。
+	//
+	// 有了 test_always_fail，测试可以提交一个「真库存分支 + 注定失败的第二步」
+	// 的 SAGA：第一步扣完并提交，第二步失败，协调器回过头来调真的补偿。
+	// 被测的是真分支、真屏障、真库，只有「让它失败」这件事是测试提供的。
+	branches := app.Branches(testOrders)
+	branches["test_always_fail"] = func(string, string, string) int { return dtm.Failure }
+	branches["test_always_fail_undo"] = func(string, string, string) int { return dtm.Success }
+
+	tc, err := dtm.Start("sqlite:"+filepath.Join(dtmDir, "dtm.db"), 0, branches)
+	if err != nil {
+		return fmt.Errorf("起协调器失败: %w", err)
+	}
+	testTC = tc
+	testOrders.AttachCoordinator(tc)
+
 	// 刻意不配默认商家：跨租户测试要走 Host 解析那条真实路径。
 	gin.SetMode(gin.TestMode)
 	testEngine = app.Router(pool,
-		tenant.NewResolver(pool, tenant.Config{BaseDomain: baseDomain}), testSigner)
+		tenant.NewResolver(pool, tenant.Config{BaseDomain: baseDomain}), testSigner, testOrders)
 	return nil
 }
 

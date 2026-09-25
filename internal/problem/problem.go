@@ -42,6 +42,25 @@ const (
 	// 请求体本身不合法（缺字段、两种凭据都给了或都没给）。
 	TypeInvalidRequest = "https://keel.dev/problems/invalid-request"
 
+	// 下单链路的四个。它们同样分得细，因为客户端对它们的处置各不相同：
+	//
+	//   insufficient-stock        → 让用户改数量或换商品
+	//   price-changed             → 重新试算再提交（**不要**直接重试原请求）
+	//   idempotency-key-in-flight → 按 Retry-After 退避重试，**不是**业务失败，
+	//                               不该弹窗，更不该让用户再点一次「提交订单」
+	//   idempotency-key-reused    → 客户端自己的 bug：同一把钥匙配了两个请求体
+	//
+	// 前两个都是 409，后两个一个 409 一个 422 —— 只看状态码分不开，而
+	// 「退避重试」与「让用户改购物车」是完全相反的动作。
+	//
+	// 契约里这几个写的是 https://errors.example.com/... 那个示例域名；
+	// 本仓库统一用 keel.dev（见本常量块开头那句话：改一个等于改契约的一部分，
+	// 所以也不顺手去改那几个）。这处不一致已在报告里列为 defer。
+	TypeInsufficientStock      = "https://keel.dev/problems/insufficient-stock"
+	TypePriceChanged           = "https://keel.dev/problems/price-changed"
+	TypeIdempotencyKeyInFlight = "https://keel.dev/problems/idempotency-key-in-flight"
+	TypeIdempotencyKeyReused   = "https://keel.dev/problems/idempotency-key-reused"
+
 	// 契约声明了、本轮刻意没有实现的路径。用一个**专门的** type 而不是复用
 	// internal：客户端能据此分辨「这个功能还没有」与「服务器炸了」，
 	// 而这两件事的重试策略完全相反。

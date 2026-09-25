@@ -106,7 +106,15 @@ func ConfigFromEnv() Config {
 
 // Router 装路由。测试与 main 共用它，所以测试打的是真实的那套链路，
 // 而不是一份在旁边慢慢跑偏的复制品。
-func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer) *gin.Engine {
+// orders 是外面造好之后传进来的，与 product / auth 两个服务在这里现场 new
+// 不一样。理由是一个真实的环：下单服务的 SAGA 分支要注册进协调器，而注册必须
+// 发生在 dtm.Start 之前 —— 也就是在 Router 被调用之前。所以它只能先在 Run 里
+// 造出来、注册、Start，再带着一个接好的协调器进到这里。
+//
+// 传 nil 会让 /orders 那两条路由挂上去却在第一次下单时报 500。Run 不会这么做；
+// 测试要这么做的话，那正是它想测的东西。
+func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
+	orders *service.OrderService) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery())
 
@@ -136,6 +144,7 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer) *gin.
 	repo := repository.New(pool)
 	ph := handler.NewProductHandler(service.NewProductService(repo))
 	ah := handler.NewAuthHandler(service.NewAuthService(repo, signer, nil))
+	oh := handler.NewOrderHandler(orders)
 
 	v1 := r.Group("/api/v1", res.Middleware())
 	v1.GET("/products", ph.List)
@@ -151,21 +160,28 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer) *gin.
 	// bearer 中间件挂在租户中间件**之后**（v1 这个组已经带着后者），
 	// 顺序反了的话它取不到租户，也就没法校验令牌属不属于这家店。
 	v1.POST("/auth/logout", auth.Bearer(signer, nil), ah.Logout)
+
+	// 下单两条接口都要令牌：契约里它们没有 security: []，继承全局 bearerAuth。
+	// 试算也要 —— 它读的是这个买家的价格，而且 Create 与它共用同一份定价，
+	// 一条要身份另一条不要会让「两边算出来一样」这条性质多一个可以破的口子。
+	v1.POST("/orders/preview", auth.Bearer(signer, nil), oh.Preview)
+	v1.POST("/orders", auth.Bearer(signer, nil), oh.Create)
 	return r
 }
 
 // Branches 是要注册到协调器上的全部进程内分支，键就是编排里 "local://" 后面
 // 那个名字。
 //
-// 今天是空的：下单 SAGA 的三个正向分支与它们的补偿属于任务 5，屏障属于任务 2。
-// 先把这个口子开出来，是因为**注册必须发生在 Start 之前**，而这条顺序踩错了
-// 不当场报错 —— 症状要等到第一次提交时才出现（未注册的 local:// 名字在提交期
-// 被拒），那时错误指向的是提交它的那段业务代码。顺序封在 dtm.Start 里，
-// 任务 5 只要往这个 map 里加条目。
+// **注册必须发生在 Start 之前**（顺序封在 dtm.Start 里）。这条顺序踩错了不当场
+// 报错 —— 症状要等到第一次提交时才出现（未注册的 local:// 名字在提交期被拒），
+// 那时错误指向的是提交它的那段业务代码。
 //
-// 注册机制本身由 internal/dtm 的 TestBranchRecoversTenantFromGID 覆盖（它注册
-// 真分支、跑真事务）；这里为空不代表那条路没被测到。
-func Branches() map[string]dtm.BranchFunc { return nil }
+// 分支清单由下单服务自己给出（service.OrderService.Branches），而不是在这里
+// 抄一份名字：抄一份就意味着编排 JSON、注册表、这里，三处要同时对得上，
+// 而其中两处对不上时没有任何编译错误。
+func Branches(orders *service.OrderService) map[string]dtm.BranchFunc {
+	return orders.Branches()
+}
 
 // Listen 是默认的监听方式。它是 Run 的一个参数，好让测试换掉它。
 func Listen(addr string, h http.Handler) error {
@@ -216,16 +232,22 @@ func Run(ctx context.Context, listen func(addr string, h http.Handler) error) er
 		return err
 	}
 
-	tc, err := dtm.Start(cfg.DTMDSN, 0, Branches())
+	// 下单服务要先造出来才能拿到它的分支，而协调器要先拿到分支才能 Start，
+	// 服务又要在 Start 之后才能拿到协调器 —— 这个环在
+	// service.OrderService.AttachCoordinator 那里被打开，理由写在那儿。
+	orders := service.NewOrderService(repository.New(pool), nil, nil)
+
+	tc, err := dtm.Start(cfg.DTMDSN, 0, Branches(orders))
 	if err != nil {
 		return fmt.Errorf("启动事务协调器失败（%s）: %w", EnvDTMDSN, err)
 	}
+	orders.AttachCoordinator(tc)
 	// 干净收尾：listen 返回（不论正常还是出错）之后把协调器关掉，
 	// 它才有机会把 tokio 运行时停下来、把注册分支的 cgo.Handle 还回去。
 	// Close 是幂等的，所以这条 defer 与将来可能加的显式收尾不会撞车。
 	defer tc.Close()
 
-	return listen(cfg.Addr, Router(pool, res, signer))
+	return listen(cfg.Addr, Router(pool, res, signer, orders))
 }
 
 // authSigner 按配置建令牌签名器。没配 KEEL_AUTH_SECRET 时随机取一个并告警，

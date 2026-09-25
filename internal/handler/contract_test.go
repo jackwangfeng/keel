@@ -1,6 +1,7 @@
 package handler_test
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -70,6 +71,21 @@ type route struct {
 	// auth_test.go 的 TestSMSLoginSaysItIsNotImplemented 断言那条路真的返回 501,
 	// 并且断言这里真的挂着这一笔。实现了它，那条测试就会红。
 	NotYetImplementedBody map[string]string
+
+	// NotYetImplementedResponse 是**响应体**里契约声明了、这条 handler 刻意不
+	// 填的字段，与前两笔账是同一件事的第三种形状。
+	//
+	// 眼下只有一条：下单两条接口的 freight_cents。运费模板在数据模型里没有落地，
+	// 所以这条链路**没有算过运费** —— 而「算出来是 0」与「没算」对客户端是两件
+	// 不同的事（前者意味着包邮，后者意味着这个数还会变）。契约里它是可选字段，
+	// 所以「没算」的诚实形状是整个不出现，不是 0。
+	//
+	// 两个方向都锁得住：
+	//   - 契约把这个字段改名或删掉 → 下面那条对账测试红（清单在描述一个不存在
+	//     的东西）；
+	//   - 真的实现了运费、字段开始出现在响应里 → order_test.go 的
+	//     TestFreightIsAbsentNotZero 红，逼人回来删掉这一行。
+	NotYetImplementedResponse map[string]string
 }
 
 func (r route) ginPath() string { return apiPrefix + r.ContractPath }
@@ -100,6 +116,38 @@ var routes = []route{
 				"（contract 的 default: Problem 收得住），而不是一个假装失败的 401。" +
 				"连带地，契约里「验证码登录且手机号未注册时首登即注册」也没有实现 —— " +
 				"那个语义只属于这条路，密码路径刻意不带它。",
+		},
+	},
+	{
+		ContractPath:   "/orders/preview",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "order.go",
+		NoQueryParams:  "试算的入参全在请求体里（与 POST /orders 共用 OrderCreateRequest）",
+		NotYetImplementedBody: map[string]string{
+			"user_coupon_id": "券的三张表（coupon_templates / user_coupons / coupon_scopes）" +
+				"本轮没有建（M2 计划「券为什么从任务 5 里拆出来」）。传了它返回 501，" +
+				"**不是静默忽略** —— 忽略会让用户以为试算价是用券后的价，而他正是照着" +
+				"这个数决定要不要下单的。",
+		},
+		NotYetImplementedResponse: map[string]string{
+			"freight_cents": "运费模板没有设计落地，这条链路没有算过运费。响应里整个不出现，" +
+				"而不是填 0：0 意味着包邮，缺席意味着这个数还会变。",
+		},
+	},
+	{
+		ContractPath:   "/orders",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "order.go",
+		NoQueryParams:  "下单的参数在请求体与 Idempotency-Key 请求头里，没有 query 参数",
+		NotYetImplementedBody: map[string]string{
+			"user_coupon_id": "同 /orders/preview。**传了券却被忽略 = 用户以为用了券、" +
+				"实际按原价成交**，那是钱的问题，所以这条路返回 501 而不是当作没看见。",
+		},
+		NotYetImplementedResponse: map[string]string{
+			"freight_cents": "同 /orders/preview。库里 orders.freight_cents 是 0（chk_amount " +
+				"的恒等式要它），但那是账，不是「算过了」。",
 		},
 	},
 	{
@@ -269,26 +317,7 @@ func TestContractQueryParamsAreHandledOrListed(t *testing.T) {
 func contractQueryParams(t *testing.T, r route) map[string]string {
 	t.Helper()
 
-	raw, err := os.ReadFile(filepath.Join("..", "..", "docs", "电商系统-OpenAPI.yaml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// 用 map[string]any 逐层走，而不是一把 unmarshal 进结构体：OpenAPI 的
-	// path item 里，`parameters`（一个序列）和 `get`/`post`（映射）是平级的
-	// 兄弟键，强类型的 map[string]操作对象 会在解析别的路径时直接炸掉。
-	var doc struct {
-		Paths      map[string]map[string]any `yaml:"paths"`
-		Components struct {
-			Parameters map[string]struct {
-				Name string `yaml:"name"`
-				In   string `yaml:"in"`
-			} `yaml:"parameters"`
-		} `yaml:"components"`
-	}
-	if err := yaml.Unmarshal(raw, &doc); err != nil {
-		t.Fatalf("解析契约失败: %v", err)
-	}
+	doc := loadContract(t)
 
 	item, ok := doc.Paths[r.ContractPath]
 	if !ok {
@@ -445,6 +474,42 @@ func TestNotYetImplementedBodyFieldsExistInContract(t *testing.T) {
 	}
 }
 
+// contractDoc 是契约里这几条测试要用到的那几块。
+//
+// 用 map[string]any 逐层走，而不是一把 unmarshal 进强类型结构体：OpenAPI 的
+// path item 里 parameters（序列）与 get/post（映射）是平级的兄弟键。
+type contractDoc struct {
+	Paths      map[string]map[string]any `yaml:"paths"`
+	Components struct {
+		Parameters map[string]struct {
+			Name string `yaml:"name"`
+			In   string `yaml:"in"`
+		} `yaml:"parameters"`
+		Schemas map[string]map[string]any `yaml:"schemas"`
+	} `yaml:"components"`
+}
+
+// loadContract 读一次契约。
+//
+// 三条测试共用它，而不是各自 ReadFile + Unmarshal 一遍：三份解析意味着三份
+// 会各自跑偏的对契约结构的假设，而它们跑偏时谁也不会红。
+func loadContract(t *testing.T) contractDoc {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("..", "..", "docs", "电商系统-OpenAPI.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc contractDoc
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("解析契约失败: %v", err)
+	}
+	if len(doc.Paths) == 0 || len(doc.Components.Schemas) == 0 {
+		t.Fatalf("契约解析出来是空的（paths=%d schemas=%d）—— 这些测试没在检查任何东西",
+			len(doc.Paths), len(doc.Components.Schemas))
+	}
+	return doc
+}
+
 // contractBodyProps 取出该接口 application/json 请求体的顶层属性名。
 //
 // 只认 `requestBody.content["application/json"].schema.properties` 这一种形状：
@@ -453,17 +518,7 @@ func TestNotYetImplementedBodyFieldsExistInContract(t *testing.T) {
 func contractBodyProps(t *testing.T, r route) map[string]bool {
 	t.Helper()
 
-	raw, err := os.ReadFile(filepath.Join("..", "..", "docs", "电商系统-OpenAPI.yaml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var doc struct {
-		Paths map[string]map[string]any `yaml:"paths"`
-	}
-	if err := yaml.Unmarshal(raw, &doc); err != nil {
-		t.Fatalf("解析契约失败: %v", err)
-	}
-
+	doc := loadContract(t)
 	op, ok := doc.Paths[r.ContractPath][r.ContractMethod].(map[string]any)
 	if !ok {
 		t.Fatalf("契约里没有 %s %s", r.ContractMethod, r.ContractPath)
@@ -482,18 +537,134 @@ func contractBodyProps(t *testing.T, r route) map[string]bool {
 	}
 	schema, ok := media["schema"].(map[string]any)
 	if !ok {
-		t.Fatalf("契约里 %s %s 的请求体没有内联 schema —— "+
-			"改成 $ref 之后这个解析器跟不上了，请把它一起改",
-			r.ContractMethod, r.ContractPath)
+		t.Fatalf("契约里 %s %s 的请求体没有内联 schema", r.ContractMethod, r.ContractPath)
 	}
-	props, ok := schema["properties"].(map[string]any)
+	return schemaProps(t, doc.Components.Schemas, schema,
+		fmt.Sprintf("%s %s 的请求体", r.ContractMethod, r.ContractPath))
+}
+
+// contractResponseProps 取出该接口**成功响应**的 application/json body 的顶层属性名。
+//
+// 成功码按 201 → 200 的顺序找：契约里建单是 201、试算是 200，而写死其中一个会
+// 让另一条路悄悄退化成「一个属性都没解析出来」，那正是下面那条测试的 Fatal 要
+// 抓的东西。
+func contractResponseProps(t *testing.T, r route) map[string]bool {
+	t.Helper()
+
+	doc := loadContract(t)
+	op, ok := doc.Paths[r.ContractPath][r.ContractMethod].(map[string]any)
 	if !ok {
-		t.Fatalf("契约里 %s %s 的请求体 schema 没有 properties",
-			r.ContractMethod, r.ContractPath)
+		t.Fatalf("契约里没有 %s %s", r.ContractMethod, r.ContractPath)
 	}
+	resps, ok := op["responses"].(map[string]any)
+	if !ok {
+		t.Fatalf("契约里 %s %s 没有 responses", r.ContractMethod, r.ContractPath)
+	}
+	var body map[string]any
+	for _, code := range []string{"201", "200"} {
+		if v, ok := resps[code].(map[string]any); ok {
+			body = v
+			break
+		}
+	}
+	if body == nil {
+		t.Fatalf("契约里 %s %s 既没有 200 也没有 201 响应", r.ContractMethod, r.ContractPath)
+	}
+	content, ok := body["content"].(map[string]any)
+	if !ok {
+		t.Fatalf("契约里 %s %s 的成功响应没有 content", r.ContractMethod, r.ContractPath)
+	}
+	media, ok := content["application/json"].(map[string]any)
+	if !ok {
+		t.Fatalf("契约里 %s %s 的成功响应不是 application/json", r.ContractMethod, r.ContractPath)
+	}
+	schema, ok := media["schema"].(map[string]any)
+	if !ok {
+		t.Fatalf("契约里 %s %s 的成功响应没有 schema", r.ContractMethod, r.ContractPath)
+	}
+	return schemaProps(t, doc.Components.Schemas, schema,
+		fmt.Sprintf("%s %s 的成功响应", r.ContractMethod, r.ContractPath))
+}
+
+// schemaProps 把一个 schema 解成顶层属性名集合，顺带跟 $ref 与 allOf。
+//
+// 跟 $ref 是必须的：契约里 OrderCreateRequest / Order 都是 $ref 到
+// components.schemas 的。不跟的话这两条接口会解出空集，而空集会让上面那些
+// 断言一次也不执行 —— 恒绿，正是这一整个文件要消灭的东西。
+//
+// 不认识的形状一律 Fatal，不返回空集。理由同上。
+func schemaProps(t *testing.T, defs map[string]map[string]any,
+	schema map[string]any, where string) map[string]bool {
+	t.Helper()
+
 	out := map[string]bool{}
-	for name := range props {
-		out[name] = true
+	var walk func(s map[string]any, depth int)
+	walk = func(s map[string]any, depth int) {
+		if depth > 8 {
+			t.Fatalf("%s 的 schema 嵌套太深或成环", where)
+		}
+		if ref, ok := s["$ref"].(string); ok {
+			const prefix = "#/components/schemas/"
+			if !strings.HasPrefix(ref, prefix) {
+				t.Fatalf("%s 里不认识的引用 %q", where, ref)
+			}
+			target, ok := defs[strings.TrimPrefix(ref, prefix)]
+			if !ok {
+				t.Fatalf("%s 的引用 %q 指向一个不存在的 schema", where, ref)
+			}
+			walk(target, depth+1)
+			return
+		}
+		if all, ok := s["allOf"].([]any); ok {
+			for _, one := range all {
+				m, ok := one.(map[string]any)
+				if !ok {
+					t.Fatalf("%s 的 allOf 里有一项不是映射", where)
+				}
+				walk(m, depth+1)
+			}
+		}
+		props, ok := s["properties"].(map[string]any)
+		if !ok {
+			return
+		}
+		for name := range props {
+			out[name] = true
+		}
+	}
+	walk(schema, 0)
+	if len(out) == 0 {
+		t.Fatalf("%s 一个属性都没解析出来 —— 这个解析器跟不上契约的形状了", where)
 	}
 	return out
+}
+
+// NotYetImplementedResponse 里挂的每一笔账，都必须是契约成功响应里真有的字段。
+//
+// 与请求体那条同理，这里只做「清单 → 契约」这一个方向的机械对账。
+// 反向（实现了却忘了划掉）由行为测试 order_test.go 的 TestFreightIsAbsentNotZero
+// 盯着：它断言响应里**没有**这个键，真的实现了运费它就会红。
+func TestNotYetImplementedResponseFieldsExistInContract(t *testing.T) {
+	checked := 0
+	for _, r := range routes {
+		if len(r.NotYetImplementedResponse) == 0 {
+			continue
+		}
+		t.Run(r.HTTPMethod+" "+r.ContractPath, func(t *testing.T) {
+			props := contractResponseProps(t, r)
+			for name, why := range r.NotYetImplementedResponse {
+				if !props[name] {
+					t.Errorf("NotYetImplementedResponse 里挂着 %q（%s），"+
+						"但契约的成功响应里没有这个字段了 —— 清单烂了，请删掉这一行",
+						name, why)
+				}
+				checked++
+			}
+			t.Logf("契约成功响应声明 %v；挂账 %v", sortedBool(props), sorted(r.NotYetImplementedResponse))
+		})
+	}
+	if checked == 0 {
+		t.Fatal("一笔响应体挂账都没查到 —— 挂账清空了就该把这条测试一起删掉，" +
+			"留着一条恒绿的测试比没有更糟")
+	}
 }
