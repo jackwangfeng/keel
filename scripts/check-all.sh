@@ -46,6 +46,38 @@ else
     fail=1
 fi
 
+# sqlc 产物的漂移闸门。
+#
+# oapi-codegen 与 openapi-typescript 的产物上面刚比对过，**sqlc 的没有**——
+# 而真正执行的 SQL 就在 internal/repository/internal/db/ 里。
+#
+# 实测这个洞的样子：手改产物，给 ListProducts 加上
+# `AND merchant_id = current_merchant()`（正是 check_query_tenancy 存在的全部
+# 理由要防的那句话）→ **全绿**，而且脚本还会打印「check_query_tenancy OK：
+# 1 个查询文件里没有应用层租户过滤」——因为它读的是 db/queries/products.sql，
+# 而进程跑的是产物。源与产物之间没有任何东西把它们钉在一起。
+#
+# 做法与上面的 contract-check 一致：生成到临时目录再 diff，**对工作区只读**。
+# 不要退回「重生成到源码树再 git diff」——那正是 e29f877 修掉的东西。
+printf '\n=== sqlc-check（生成到临时目录，不碰工作区） ===\n'
+sqlcroot="$tmpdir/sqlc"
+mkdir -p "$sqlcroot"
+
+if ! python3 scripts/sqlc_check_config.py "$PWD" "$sqlcroot" out; then
+    fail=1
+elif ! make generate-sql SQLC_CONFIG="$sqlcroot/sqlc.yaml" >/dev/null; then
+    echo 'FAIL: sqlc 生成失败。'
+    fail=1
+elif ! diff -r -q internal/repository/internal/db "$sqlcroot/out" >/dev/null 2>&1; then
+    echo 'FAIL: internal/repository/internal/db 与 sqlc 重生成的结果不一致。'
+    echo '      迁移或 db/queries 改了却没重生成，或者有人手改了生成文件。'
+    echo '      请跑 make generate-sql 并一起提交：'
+    diff -r -u internal/repository/internal/db "$sqlcroot/out" | head -20
+    fail=1
+else
+    echo 'sqlc 产物与 db/migrations + db/queries 同步'
+fi
+
 # 入库的 TS 产物能不能编译。contract-check 只 grep 了其中一行，
 # 证明不了这 176KB 整体是合法的 TypeScript。
 printf '\n=== schema-check ===\n'

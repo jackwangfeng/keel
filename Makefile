@@ -62,7 +62,7 @@ help:
 	@echo "make generate       生成 Go + TS 两侧契约产物"
 	@echo "make generate-go    只生成 Go 侧（GO_OUT / GO_PACKAGE / GO_MODE 可覆盖）"
 	@echo "make generate-ts    只生成 TS 侧（TS_OUT 可覆盖）"
-	@echo "make generate-sql   跑 sqlc，重生成 internal/repository/internal/db"
+	@echo "make generate-sql   跑 sqlc，重生成 internal/repository/internal/db（SQLC_CONFIG 可覆盖）"
 	@echo "make contract-check 校验 3.1 可空语义没有被生成器悄悄改掉"
 	@echo "make schema-check   用 tsc --strict 检查整个 web/src（含契约产物与 SDK）"
 	@echo "make sdk-smoke      用 TS SDK 对跑着的服务真打一次 GET /products"
@@ -125,9 +125,15 @@ sdk-smoke:
 # sqlc 的配置路径必须是绝对的，理由同 MIGRATIONS：GORUN 用 `go -C $(TOOLS)`，
 # sqlc 的工作目录是 tools/，裸 `sqlc generate` 会在那里找 sqlc.yaml 并报找不到。
 # 产物路径（schema / queries / out）由 sqlc 按 sqlc.yaml 所在目录解析，不受此影响。
+#
+# SQLC_CONFIG 可覆盖，和 GO_OUT / TS_OUT 是同一个用途：让 scripts/check-all.sh
+# 能把产物生成到临时目录去比对，而**一个字节都不碰工作区里入库的那一份**。
+# 那个脚本会自己拼一份改了 out 路径的临时配置，再从这里传进来。
+SQLC_CONFIG ?= $(ROOT)/sqlc.yaml
+
 generate-sql:
-	$(GORUN) github.com/sqlc-dev/sqlc/cmd/sqlc -f $(ROOT)/sqlc.yaml generate
-	@echo "generated $(ROOT)/internal/repository/internal/db"
+	$(GORUN) github.com/sqlc-dev/sqlc/cmd/sqlc -f $(SQLC_CONFIG) generate
+	@echo "generated from $(SQLC_CONFIG)"
 
 tools-versions:
 	@go -C $(TOOLS) list -m -f "{{.Path}} {{.Version}}" \
