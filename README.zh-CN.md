@@ -5,11 +5,11 @@
 **自带分布式事务引擎的 AI 原生电商系统**
 *单机可跑，扩展无需重写，AI 全本地推理*
 
-<!-- 徽章沿用快速开始里 clone 地址的 <org> 占位符：这个仓库还没有远端。
-     组织名定下来之后，两份 README 各 sed 一次即可。
-     scripts/check_promises.py 会在 .github/workflows/ 不存在时把构建徽章判为虚标，
-     所以徽章活不过它所宣称的那套 CI。 -->
-[![CI](https://github.com/<org>/keel/actions/workflows/ci.yml/badge.svg)](https://github.com/<org>/keel/actions/workflows/ci.yml)
+<!-- 徽章与快速开始里的 clone 地址指向同一个仓库。
+     scripts/check_promises.py 守两件事：.github/workflows/ 不存在时构建徽章判为虚标；
+     以及两份 README 里指向本仓库的 GitHub 地址必须同源——要么都还是占位符，
+     要么都已填好且是同一个组织名。只替换一半是最容易发生也最难发现的那种错。 -->
+[![CI](https://github.com/jackwangfeng/keel/actions/workflows/ci.yml/badge.svg)](https://github.com/jackwangfeng/keel/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](./LICENSE)
 ![Go](https://img.shields.io/badge/Go-1.26+-00ADD8)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16+-336791)
@@ -90,7 +90,7 @@ Keel 不需要选。
 ## 快速开始
 
 ```bash
-git clone https://github.com/<org>/keel && cd keel
+git clone https://github.com/jackwangfeng/keel && cd keel
 docker compose up -d --build
 ./scripts/smoke.sh                        # 退出码 0 表示链路通
 curl http://localhost:8080/api/v1/products
@@ -128,7 +128,9 @@ curl "http://localhost:$KEEL_HTTP_PORT/api/v1/products"
 起来的全部。这份 README 的其余部分描述的是正在建的系统；下面这些还在路线图上，
 列在这里是为了让上面那段不会被读成「已经有了」：
 
-- `pgvector` 扩展与语义检索
+- 语义检索本身。`pgvector` 扩展与四张向量 / 理解表已经进了盒子（数据库镜像是
+  `pgvector/pgvector:pg16`，`docker compose up` 就会建好），但向量召回、关键词召回
+  与 `/search` 接口还没有 —— 今天盒子里有的是底座，不是搜索
 - 推理引擎，以及没有 GPU 时降级到 CPU 小模型这件事
 - 店铺前台与后台界面——3000 端口上目前没有任何页面
 

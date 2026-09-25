@@ -5,11 +5,12 @@
 **An AI-native commerce platform with a built-in distributed transaction engine.**
 *Runs on a single machine. Scales without a rewrite. No external AI APIs.*
 
-<!-- The badge uses the same <org> placeholder as the clone URL in the quick start:
-     this repository has no remote yet. Once the org is decided, one sed over both
-     READMEs fixes it. scripts/check_promises.py already refuses a build badge when
-     .github/workflows/ is missing, so the badge cannot outlive the CI it claims. -->
-[![CI](https://github.com/<org>/keel/actions/workflows/ci.yml/badge.svg)](https://github.com/<org>/keel/actions/workflows/ci.yml)
+<!-- The badge and the clone URL in the quick start point at the same repository.
+     scripts/check_promises.py guards two things: a build badge is a false claim when
+     .github/workflows/ does not exist; and every GitHub URL pointing at this repository
+     must agree — either all still placeholders, or all filled in with the same owner.
+     Replacing only half is both the easiest mistake to make and the hardest to spot. -->
+[![CI](https://github.com/jackwangfeng/keel/actions/workflows/ci.yml/badge.svg)](https://github.com/jackwangfeng/keel/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](./LICENSE)
 ![Go](https://img.shields.io/badge/Go-1.26+-00ADD8)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16+-336791)
@@ -96,7 +97,7 @@ row-level security underneath. All three are checked mechanically: the
 ## Quick start
 
 ```bash
-git clone https://github.com/<org>/keel && cd keel
+git clone https://github.com/jackwangfeng/keel && cd keel
 docker compose up -d --build
 ./scripts/smoke.sh                        # exit 0 means the chain works
 curl http://localhost:8080/api/v1/products
@@ -138,7 +139,10 @@ all `docker compose up` brings up today. The rest of this README describes the
 system being built; these parts are on the roadmap and are listed here so that
 nothing above reads as if it already ships:
 
-- the `pgvector` extension and semantic search
+- semantic search itself. The `pgvector` extension and the four vector/understanding
+  tables are in the box now (the database image is `pgvector/pgvector:pg16`, and
+  `docker compose up` creates them), but vector recall, keyword recall and the
+  `/search` endpoint are not — what ships today is the substrate, not the search
 - the inference engine, and its fallback to small CPU models where there is no GPU
 - the storefront and admin UI — there is no page on port 3000 yet
 
