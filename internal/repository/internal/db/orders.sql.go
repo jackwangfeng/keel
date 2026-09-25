@@ -435,6 +435,54 @@ func (q *Queries) GetUserAddress(ctx context.Context, arg GetUserAddressParams) 
 	return i, err
 }
 
+const insertPayment = `-- name: InsertPayment :one
+INSERT INTO payments (payment_no, order_id, channel, amount_cents, status,
+                      channel_txn_id, notify_payload, paid_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+RETURNING id, payment_no, status
+`
+
+type InsertPaymentParams struct {
+	PaymentNo     string
+	OrderID       int64
+	Channel       int16
+	AmountCents   int64
+	Status        int16
+	ChannelTxnID  *string
+	NotifyPayload []byte
+	PaidAt        pgtype.Timestamptz
+}
+
+type InsertPaymentRow struct {
+	ID        int64
+	PaymentNo string
+	Status    int16
+}
+
+// 支付单落库。**一条光秃秃的 INSERT，刻意不带 ON CONFLICT**。
+//
+// 幂等由 uk_payments_channel_txn（00014）兜底：重复回调撞唯一冲突，
+// 由 Go 侧按约束名把它挑成 repository.ErrDuplicateChannelTxn，其余 23505
+// 原样上浮。写成 `ON CONFLICT DO NOTHING` 会顺带吞掉 payment_no 撞车 ——
+// 那是熵源坏了，必须炸出来。完整论证在 00014 的文件头。
+//
+// 租户列不出现在这条语句里（00014 的 DEFAULT current_merchant()）。
+func (q *Queries) InsertPayment(ctx context.Context, arg InsertPaymentParams) (InsertPaymentRow, error) {
+	row := q.db.QueryRow(ctx, insertPayment,
+		arg.PaymentNo,
+		arg.OrderID,
+		arg.Channel,
+		arg.AmountCents,
+		arg.Status,
+		arg.ChannelTxnID,
+		arg.NotifyPayload,
+		arg.PaidAt,
+	)
+	var i InsertPaymentRow
+	err := row.Scan(&i.ID, &i.PaymentNo, &i.Status)
+	return i, err
+}
+
 const listExpiredDraftOrders = `-- name: ListExpiredDraftOrders :many
 SELECT id, order_no
   FROM orders
@@ -645,6 +693,41 @@ UPDATE orders SET status = 10 WHERE order_no = $1 AND status = 0
 // 两者都不该被当成成功。
 func (q *Queries) PromoteOrderDraft(ctx context.Context, orderNo string) (int64, error) {
 	result, err := q.db.Exec(ctx, promoteOrderDraft, orderNo)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const settleOrder = `-- name: SettleOrder :execrows
+
+UPDATE orders SET status = 20, paid_cents = $2, paid_at = $3
+ WHERE order_no = $1 AND status = 10
+`
+
+type SettleOrderParams struct {
+	OrderNo   string
+	PaidCents int64
+	PaidAt    pgtype.Timestamptz
+}
+
+// ---------------------------------------------------------------------------
+// 支付回调（Task 7）。
+// ---------------------------------------------------------------------------
+// 支付成功：10 待支付 → 20 已支付，记下实收与到账时间。
+//
+// `status = 10` 在谓词里，与上面那条关单互为对手：两者都是条件 UPDATE，
+// 撞在同一行上时由行锁排队，**恰好一个返回 1**。这就是「超时任务与支付回调
+// 撞车」那条竞态的全部处理 —— 不是在应用层加锁，是让数据库回答「谁赢了」。
+//
+// 返回 0 行不是错误，是一种要**大声记下来**的事实：钱已经到账了，而这一单
+// 已经不在待支付上（被超时关掉了，或者已经付过一次了）。处置见 service/payment.go。
+//
+// paid_cents 直接赋值而不是累加：本轮不支持部分支付（契约里也没有），
+// 累加会让一笔重复到账把 chk_amount 的 `refunded_cents <= paid_cents` 撑出
+// 一个不该有的空间。
+func (q *Queries) SettleOrder(ctx context.Context, arg SettleOrderParams) (int64, error) {
+	result, err := q.db.Exec(ctx, settleOrder, arg.OrderNo, arg.PaidCents, arg.PaidAt)
 	if err != nil {
 		return 0, err
 	}

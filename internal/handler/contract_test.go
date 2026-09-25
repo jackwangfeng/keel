@@ -88,8 +88,20 @@ type route struct {
 	NotYetImplementedResponse map[string]string
 }
 
-func (r route) ginPath() string { return apiPrefix + r.ContractPath }
-func (r route) key() string     { return r.HTTPMethod + " " + r.ginPath() }
+// ginPath 把契约路径翻成 gin 注册的那一个：加前缀，并把 OpenAPI 的 {name}
+// 换成 gin 的 :name。
+//
+// 两种写法在这张表里必须有一份是源、另一份是导出来的，不能各写各的：
+// 手写 gin 路径的话，`/webhooks/payments/{channel}` 与
+// `/api/v1/webhooks/payments/:channel` 之间任何一个字母的出入都不会红 ——
+// 表里那一行只是永远配不上任何已注册路由，而那条对账测试会把它报成
+// 「登记了但没注册」，指向一个错的方向。
+func (r route) ginPath() string {
+	p := apiPrefix + r.ContractPath
+	p = strings.ReplaceAll(p, "{", ":")
+	return strings.ReplaceAll(p, "}", "")
+}
+func (r route) key() string { return r.HTTPMethod + " " + r.ginPath() }
 
 // routes 是本包已实现的全部契约接口。加一条路由就要在这里加一行。
 var routes = []route{
@@ -149,6 +161,15 @@ var routes = []route{
 			"freight_cents": "同 /orders/preview。库里 orders.freight_cents 是 0（chk_amount " +
 				"的恒等式要它），但那是账，不是「算过了」。",
 		},
+	},
+	{
+		ContractPath:   "/webhooks/payments/{channel}",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "webhook.go",
+		NoQueryParams: "渠道在路径里（path 参数 channel），报文在请求体里；" +
+			"签名在 X-Keel-Signature 请求头里 —— 刻意不放 query：" +
+			"query 会进访问日志，而签名进日志等于每一条日志都是一次密钥泄露的半成品",
 	},
 	{
 		ContractPath:   "/auth/refresh",

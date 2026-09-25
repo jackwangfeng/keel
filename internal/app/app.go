@@ -166,6 +166,19 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	// 一条要身份另一条不要会让「两边算出来一样」这条性质多一个可以破的口子。
 	v1.POST("/orders/preview", auth.Bearer(signer, nil), oh.Preview)
 	v1.POST("/orders", auth.Bearer(signer, nil), oh.Create)
+
+	// 支付渠道异步回调。契约里它是 security: []（调用方是渠道，它没有令牌），
+	// 所以**没有** auth.Bearer —— 但它仍然在 v1 组里，也就仍然带着上面那道
+	// res.Middleware()。
+	//
+	// 这一点值得在装配这一处再写一遍，因为它是这条路由与别人唯一的差别：
+	// **不需要令牌不等于不需要租户。** 租户照旧从 Host 来，和别的每一条接口
+	// 一模一样，没有为 webhook 破例（internal/tenant/resolver.go 写着
+	// 「刻意不支持用请求头指定租户」，而一条未认证的接口正是那条规矩最该守的
+	// 地方）。Host 回答「哪家店」，签名回答「这是不是真的」——
+	// 两者合起来才成立，完整论证在 service/payment.go 的文件头。
+	v1.POST("/webhooks/payments/:channel",
+		handler.NewPaymentWebhookHandler(service.NewPaymentService(repo, nil)).Notify)
 	return r
 }
 

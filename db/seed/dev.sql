@@ -54,6 +54,40 @@ SELECT m.id, 'custom.example.net'
  WHERE m.code = 'shop-c'
    AND NOT EXISTS (SELECT 1 FROM shop_settings s WHERE s.merchant_id = m.id);
 
+-- ### 支付渠道的回调验签密钥（M2 任务 7）
+--
+-- 支付回调是**未认证入口**：租户由 Host 定，而「这份报文是不是真的」由验签定。
+-- 密钥是每租户每渠道一把，存在 shop_settings.extra 里（数据模型 §1 建的那一列）——
+-- 不为它新建一张表的理由写在 internal/repository/payment.go 的
+-- ChannelNotifySecret 上（一张文档里没有的表会让 check_tenancy 当场红）。
+--
+-- **这几把密钥写死在种子里，和买家口令一样**（口令的理由见下面 users 那段）：
+-- 它们是测试夹具，不是凭据。真实部署里这一列要由建店流程写入。
+--
+-- shop-a 与 shop-b 都配上，**shop-c 刻意不配** —— 它是「没配密钥的店」那条
+-- 断言的靶子：没配密钥必须是**拒绝**（401），不是「跳过验签」。
+-- 那是这类代码最经典的洞，而没有一家没配密钥的店，那条断言就没有可达的路径。
+--
+-- **balance 这一把是刻意配上的，而契约里 webhook 根本没有 balance 这个渠道**
+-- （余额支付不产生渠道回调）。它是「渠道白名单」那条断言的靶子：
+-- 不配的话，「一条 balance 回调被拒了」既可能是白名单挡的、也可能只是因为
+-- 没有 balance 密钥可验 —— 两件事分不开，而把 balance 加进白名单的那种改动
+-- 会照样绿。配上之后，那条断言只由白名单守着。（变异验证 P6 就是这么发现的。）
+--
+-- jsonb_set 的第四个参数 true = 路径不存在时创建。用它而不是整个覆盖 extra：
+-- 这份种子会被反复加载，整个覆盖会把别的测试往 extra 里放的东西冲掉。
+UPDATE shop_settings s
+   SET extra = jsonb_set(s.extra, ARRAY['payment_channels'],
+                         jsonb_build_object(
+                             'wechat', jsonb_build_object('notify_secret', 'seed-wechat-secret-' || m.code),
+                             'alipay', jsonb_build_object('notify_secret', 'seed-alipay-secret-' || m.code),
+                             'balance', jsonb_build_object('notify_secret', 'seed-balance-secret-' || m.code)),
+                         true)
+  FROM merchants m
+ WHERE m.id = s.merchant_id
+   AND m.code IN ('shop-a', 'shop-b')
+   AND NOT (s.extra ? 'payment_channels');
+
 -- ### 商品
 --
 -- shop-a 与 shop-b 各自有商品，**件数刻意不同**（3 与 2）。
