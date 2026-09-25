@@ -8,6 +8,17 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+// 子事务屏障（数据模型 §6）。形状照抄 dtmrs-barrier v0.11.0，别加列。
+type Barrier struct {
+	TransType  string
+	Gid        string
+	BranchID   string
+	Op         string
+	BarrierID  string
+	Reason     string
+	CreateTime int64
+}
+
 type Category struct {
 	ID         int64
 	MerchantID int64

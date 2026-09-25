@@ -77,9 +77,8 @@
     },
     "barrier": {
       "class": "cross-tenant-infra",
-      "documented_only": true,
-      "grants": ["SELECT", "INSERT", "UPDATE", "DELETE"],
-      "reason": "dtmrs 的子事务屏障表（数据模型 §6）。架构要求它与业务表同库，但它的主键是 (gid, branch_id, op, barrier_id) —— 全局事务维度，没有 merchant_id 可挂。M2 接上 dtmrs 后应按实际调用面收窄 GRANT，这里先按 dtmrs 自己 migrate() 出来的形态申明。"
+      "grants": ["INSERT"],
+      "reason": "子事务屏障表（数据模型 §6）。它与业务表同库是硬要求：屏障记录必须和业务变更在同一个本地事务里提交，那就是屏障成立的全部意义。主键是 (gid, branch_id, op, barrier_id) —— 全局事务维度，没有 merchant_id 可挂。GRANT 面按 M2 任务 3 接上 dtmrs 后的**实际调用面**收窄到只有 INSERT：屏障算法自始至终只发一条语句，`INSERT ... ON CONFLICT DO NOTHING`，靠它的 rows_affected 判空回滚与重复请求；不读、不改、不删。实测两条（PostgreSQL 16，keel_app 只有 INSERT）：不带冲突目标的 `ON CONFLICT DO NOTHING` 跑得通（首次 INSERT 0 1、重复 INSERT 0 0），而写成 `ON CONFLICT (gid,branch_id,op,barrier_id) DO NOTHING` 会报 permission denied —— 带冲突目标要额外的 SELECT 权。所以这条 GRANT 面同时是一道形状约束：屏障的 SQL 不许写冲突目标。另：这张表**不是** dtmrs 建的。dtmrs 的 migrate() 建的是 trans_global / trans_branch_op / auth_token 三张（实测），barrier 由 dtmrs-barrier 那个 crate 建，而 C ABI 根本不依赖它（dtmrs-ffi 的 Cargo.toml 与符号表里都没有）。所以它由本项目自己的迁移建出来。"
     },
     "merchants": {
       "class": "tenant-root",
