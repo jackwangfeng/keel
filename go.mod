@@ -7,7 +7,6 @@ require (
 	github.com/goccy/go-yaml v1.19.2
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/oapi-codegen/runtime v1.7.0
-	github.com/pgvector/pgvector-go v0.4.1
 	golang.org/x/crypto v0.48.0
 )
 

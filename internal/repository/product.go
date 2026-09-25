@@ -58,6 +58,7 @@ type Tx interface {
 	OrderQueryTx
 	SweepTx
 	PaymentTx
+	IndexTx
 }
 
 // ProductTx 是商品读取这一面。

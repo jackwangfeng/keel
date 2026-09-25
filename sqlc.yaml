@@ -23,3 +23,22 @@ sql:
         out: internal/repository/internal/db
         sql_package: pgx/v5
         emit_pointers_for_null_types: true
+        # pgvector 的 vector 列在 Go 侧收成 string，而不是 sqlc 默认的
+        # github.com/pgvector/pgvector-go。
+        #
+        # 默认那一条会往主模块的 go.mod 里加一个**运行时**依赖，而且它在 pgx/v5
+        # 下还要在每条连接上跑一次类型注册（pgxvector.RegisterTypes）——
+        # 忘了注册的症状是运行期的编解码报错，而注册这件事没有任何编译期落点。
+        #
+        # 换成 string 之后，入库侧送的是 pgvector 的文本字面量 `[0.1,0.2,…]`，
+        # 服务端按 `$n::vector` 解析。internal/db/semantic_test.go 里那批断言
+        # 用的就是这个形式，也就是说这条路径早就在冷库里跑通了。
+        #
+        # 代价说清楚：Go 这一侧的类型不再表达「这是一个 1024 维的向量」。
+        # 所以维度与 L2 范数的闸门必须由入库那一层自己守 ——
+        # internal/repository/semantic.go 的 UpsertProductTextVector 就是那一层，
+        # 它在把 []float32 变成字面量之前先核维度与范数。
+        overrides:
+          - db_type: "vector"
+            go_type: "string"
+            nullable: false

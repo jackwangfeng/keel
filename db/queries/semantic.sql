@@ -1,0 +1,137 @@
+-- 派生数据入库（M3 Task 3）的查询面：文本向量 + bigram 关键词串。
+--
+-- 和这个目录里别的文件一样，**一个 merchant_id 都没有** —— 租户由 RLS 在数据库
+-- 层过滤，四张语义表的 merchant_id 都带 DEFAULT current_merchant()（00016 第二节），
+-- 所以写入语句里根本不需要提到它，生成的 Go 函数签名里也没有那个参数。
+-- 理由见 scripts/check_query_tenancy.py 的文件头。
+
+-- name: ListStaleProductsForIndex :many
+-- 增量的**触发点**（00016 文件头第四节 / M3 计划第四条）。
+--
+-- 这一条只负责「不许漏算」，它故意很粗：products.updated_at 只要走在
+-- product_understanding.updated_at 前面，这件商品就要被重新**判定**一次。
+-- 改 sales_count 也会让它前进（TestStalenessCriterionRawMaterial 的 ② 钉着
+-- 这个事实），所以它一定会捞回一批其实什么都不用做的商品 —— 那是刻意的：
+-- 判定只读几列、算两个 sha256，而漏掉一次真的标题变更的代价是
+-- 「这件商品从此搜不到自己的新名字」，没有任何东西会报错。
+--
+-- **判定（不许滥算）不在这条 SQL 里**，它在应用层，只看 input_hashes 的两格
+-- 与当前文本算出的指纹是否相等。判据为什么必须是两段的，见 00016 文件头第四节。
+--
+-- 为什么比的是 product_understanding.updated_at 而不是 product_text_vectors.updated_at：
+-- 后者只在**真的重算了向量**时才前进。一次 sales_count 变更之后向量不重算，
+-- 于是这件商品每一轮都会被重新捞回来、排在队首（ORDER BY updated_at），
+-- 把每租户配额占满 —— 队尾那件真的改了标题的商品一轮也轮不到。
+-- 那是公平调度要防的饿死换了个地方发生。product_understanding 是
+-- 「这个商品被加工到哪一步了」的那张表，把「我已经判定过这个版本」记在它身上
+-- 是它本来的职责，而且写它的是应用（判定之后才写），不是数据库触发器 ——
+-- 后者会让先后关系变成恒等式，那正是 00016 文件头点名不许引入的那条变异。
+--
+-- 三个 OR 分支各挡一种「时间戳看着很新、派生数据其实不在」的形态：
+-- 向量行被删了（比如手工清理、或者将来换模型时清空重建）、search_text 还是 NULL
+-- （00016 刚加上这一列时全库都是 NULL，时间戳却不会因此前进）。
+--
+-- status = 1 AND deleted_at IS NULL 与 ListProducts 逐字一致：草稿与下架商品
+-- 检索里本来就不会出现，为它们花 embedding 的钱是纯浪费。草稿一旦上架，
+-- products.updated_at 前进，它当轮就会被这条捞到。
+SELECT p.id, p.title, p.subtitle, c.name AS category_name,
+       p.updated_at, p.search_text,
+       pu.input_hashes,
+       v.model_name    AS vector_model_name,
+       v.model_version AS vector_model_version
+  FROM products p
+  JOIN categories c ON c.id = p.category_id
+  LEFT JOIN product_understanding pu ON pu.product_id = p.id
+  LEFT JOIN product_text_vectors  v  ON v.product_id  = p.id
+ WHERE p.deleted_at IS NULL
+   AND p.status = 1
+   AND (p.updated_at > COALESCE(pu.updated_at, '-infinity'::timestamptz)
+        OR v.product_id IS NULL
+        OR p.search_text IS NULL)
+ ORDER BY p.updated_at, p.id
+ LIMIT @row_limit;
+
+-- name: ListProductsForIndex :many
+-- 全量那条路：不看触发点，按 id 翻页把全部在架商品过一遍。
+--
+-- 它与上面那条的差别只有 WHERE 里少了触发点那一段 —— 判定仍然照常做，
+-- 所以「全量」默认也不会把没变的商品重算一遍（要真的强制重算，走
+-- cmd/keel-index 的 -force，那是换模型 / 改模板之后的动作）。
+--
+-- 翻页用 id 游标而不是 OFFSET：全量跑的过程中商品还在被改，OFFSET 会让
+-- 边翻边变的行漏掉或重复，而这一条正是「补齐历史存量」用的，漏掉就白跑。
+SELECT p.id, p.title, p.subtitle, c.name AS category_name,
+       p.updated_at, p.search_text,
+       pu.input_hashes,
+       v.model_name    AS vector_model_name,
+       v.model_version AS vector_model_version
+  FROM products p
+  JOIN categories c ON c.id = p.category_id
+  LEFT JOIN product_understanding pu ON pu.product_id = p.id
+  LEFT JOIN product_text_vectors  v  ON v.product_id  = p.id
+ WHERE p.deleted_at IS NULL
+   AND p.status = 1
+   AND p.id > @after_id
+ ORDER BY p.id
+ LIMIT @row_limit;
+
+-- name: LockProductForIndex :one
+-- 写回之前拿住这一行，并把它当时的 updated_at 交出来做乐观校验。
+--
+-- 为什么需要它：判定与写回之间隔着一次 HTTP（调引擎算向量，秒级）。这段时间里
+-- 商家完全可能又改了一次标题。那时候写回去的是**上一个版本**算出来的向量，
+-- 而 product_understanding 会被盖上「已按当前版本判定过」的时间戳 —— 这件商品
+-- 从此不再是候选，库里那条向量永远停在旧标题上，且不会有任何东西报错。
+--
+-- 调用方拿到的 updated_at 与判定时读到的不一致就整条跳过，留给下一轮。
+-- FOR UPDATE 是为了让「读到的值」与「接下来写进去的东西」之间没有第三者。
+SELECT updated_at FROM products
+ WHERE id = @product_id AND deleted_at IS NULL
+ FOR UPDATE;
+
+-- name: UpsertProductTextVector :exec
+-- 文本向量入库。
+--
+-- model_name / model_version 跟着向量一起写，而且来自引擎的响应（语义检索层 §10
+-- 「模型名与版本随响应返回」），不是从配置里抄一份。抄配置的话，引擎换了模型
+-- 而配置没跟，这两列记的就是假的，而它们正是「这批向量要不要重算」的另一半依据。
+--
+-- updated_at 不在列里：INSERT 走 DEFAULT now()，ON CONFLICT 那一支由 00016 挂上的
+-- touch_product_text_vectors_updated_at 触发器填。两条路都落在同一个事务时间戳上。
+INSERT INTO product_text_vectors (product_id, content, embedding, model_name, model_version)
+VALUES (@product_id, @content, @embedding::vector, @model_name, @model_version)
+ON CONFLICT (product_id) DO UPDATE
+   SET content       = EXCLUDED.content,
+       embedding     = EXCLUDED.embedding,
+       model_name    = EXCLUDED.model_name,
+       model_version = EXCLUDED.model_version;
+
+-- name: SetProductSearchText :execrows
+-- bigram 串入库。search_vector 是生成列，由这一列生成（00016 / 语义检索层 §3），
+-- 写不得也不用写。
+UPDATE products SET search_text = @search_text WHERE id = @product_id;
+
+-- name: MarkProductIndexed :exec
+-- 把这一轮的判定结果记进 product_understanding：指纹（判定的依据）与
+-- updated_at（触发点的水位线）。
+--
+-- input_hashes 用 `||` **合并**而不是整体覆盖。这一列是四个 processor 共用的
+-- （text_embedding / search_text / image_embedding / attribute_extract），
+-- 整体覆盖会把别人那几格抹掉 —— 而抹掉的后果是「从没算过」，也就是下一轮
+-- 把图像向量重算一遍。JSONB 的 `||` 是顶层键的浅合并，两格都是标量字符串，
+-- 正好是要的语义。
+--
+-- status 写 1（部分完成）而不是 2（完成）：本轮只有两个 processor 落地，
+-- 图像向量与属性抽取还没有实现。写 2 会让后台的「未完成」列表
+-- （idx_pu_unfinished，WHERE status IN (0,1,3)）从第一天起就是空的，
+-- 而那张列表存在的全部意义是看见没做完的东西。
+--
+-- last_error 清空：这一次成功了。它只保留最近一次失败（§8），
+-- 留着上一次的错误会让后台以为这件商品还卡着。
+INSERT INTO product_understanding (product_id, status, input_hashes, pipeline_version)
+VALUES (@product_id, @status, @input_hashes, @pipeline_version)
+ON CONFLICT (product_id) DO UPDATE
+   SET status           = EXCLUDED.status,
+       input_hashes     = product_understanding.input_hashes || EXCLUDED.input_hashes,
+       pipeline_version = EXCLUDED.pipeline_version,
+       last_error       = NULL;
