@@ -39,6 +39,19 @@ COMPOSE_PORT_RE = re.compile(
     r'^\s*-\s*["\']?(?P<host>\$\{[A-Za-z_][A-Za-z0-9_]*:-(?P<default>\d+)\}|\d+)'
     r':(?P<container>\d+)(?:/(?:tcp|udp))?["\']?\s*$')
 PLACEHOLDER_LINK_RE = re.compile(r'\[[^\]]*\]\(#\)')
+# README 里所有指向本仓库的 GitHub URL 的「组织名」那一段。
+#
+# 这个仓库还没有远端，所以 clone 地址与构建徽章都写着 <org> 占位符。
+# 占位符本身不算虚标：它显然不是一个真地址，读者一眼就知道要自己替换。
+#
+# 真正会出事的是**只替换了一半**：定下组织名之后把 clone 地址改了、
+# 忘了徽章（或反过来）。那时徽章指向一个不存在的仓库，GitHub 上显示成裂图，
+# 而这是一个「看起来已经填好了」的状态，没人会再去检查。
+#
+# 所以这里不检查「有没有占位符」，而是检查**一致性**：要么都还是占位符，
+# 要么都已填好。这样这条检查会在替换动作发生的那一刻自己到期——
+# 不需要谁记得回来把豁免删掉。
+GITHUB_OWNER_RE = re.compile(r'https://github\.com/([^/\s)]+)/keel')
 # 任何形如「CI / build / tests + passing/success」的徽章图片。
 # 不能只认 shields.io —— GitHub Actions 的官方徽章走 github.com/.../badge.svg，
 # 那恰恰是最可能被真加回来的写法。
@@ -62,6 +75,7 @@ def published_ports(root):
 def main():
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     problems = []
+    owners = []
     # 徽章是否虚标，取决于仓库里到底有没有 CI
     wf = os.path.join(root, '.github', 'workflows')
     has_ci = os.path.isdir(wf) and any(
@@ -95,6 +109,26 @@ def main():
                     problems.append(
                         '%s:%d 挂着构建状态徽章但仓库没有 CI（.github/workflows/ 不存在），'
                         '属于虚标: %s' % (rel, lineno, url))
+            for owner in GITHUB_OWNER_RE.findall(line):
+                owners.append((rel, lineno, owner))
+
+    # 占位符一致性：要么都还是 <org>，要么都已填好。
+    placeholder = [o for o in owners if o[2].startswith('<')]
+    real = [o for o in owners if not o[2].startswith('<')]
+    if placeholder and real:
+        problems.append(
+            '指向本仓库的 GitHub 地址只替换了一半 —— 组织名已填好 %d 处、'
+            '仍是占位符 %d 处。徽章指向一个不存在的仓库时在 GitHub 上是裂图，'
+            '而这是个「看起来已经填好了」的状态，不会有人再去检查。'
+            % (len(real), len(placeholder)))
+        for rel, lineno, owner in placeholder:
+            problems.append('    %s:%d 还是 %s' % (rel, lineno, owner))
+        for rel, lineno, owner in real:
+            problems.append('    %s:%d 已是 %s' % (rel, lineno, owner))
+    if len({o[2] for o in real}) > 1:
+        problems.append(
+            '指向本仓库的 GitHub 地址用了不止一个组织名：%s'
+            % ', '.join(sorted({o[2] for o in real})))
 
     if problems:
         print('发现 %d 处问题：' % len(problems))

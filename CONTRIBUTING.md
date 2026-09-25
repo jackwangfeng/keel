@@ -180,15 +180,22 @@ KEEL_HTTP_PORT=18080 ./scripts/smoke.sh
 
 ## 提交信息
 
-用英文，遵循 Conventional Commits：
+用中文，遵循 Conventional Commits 的类型前缀：
 
 ```
-feat: add coupon allocation to order items
-fix: reject refund when quantity exceeds remaining
-docs: clarify saga compensation ordering
+feat: 订单项带上优惠分摊
+fix: 退款数量超过剩余时拒绝
+docs: 说清 saga 补偿的顺序
 ```
 
-正文可以用中文解释「为什么」，但标题行用英文。
+标题行说**做了什么**，正文说**为什么**——为什么这一条尤其重要：
+这个仓库里很多改动的价值不在代码本身，而在它替换掉了哪一条容易出错的
+人工纪律。那种理由写不进一行标题，但半年后回来看 `git log` 时，
+它才是你真正需要的那句话。
+
+> 早先这里写的是「标题行用英文」，而实际提交已经是中文居多。
+> 统一成中文，判据是：设计文档、评审记录、代码注释全是中文，
+> 标题行单独用英文会让「为什么」在标题和正文之间断一次。
 
 ## 代码之外
 
