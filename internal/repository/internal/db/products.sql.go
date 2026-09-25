@@ -31,6 +31,110 @@ func (q *Queries) CountProducts(ctx context.Context) (int64, error) {
 	return count, err
 }
 
+const getProduct = `-- name: GetProduct :one
+SELECT id, category_id, title, subtitle, description, min_price_cents,
+       max_price_cents, sales_count, status
+  FROM products
+ WHERE id = $1
+   AND deleted_at IS NULL
+   AND status = 1
+`
+
+type GetProductRow struct {
+	ID            int64
+	CategoryID    int64
+	Title         string
+	Subtitle      *string
+	Description   *string
+	MinPriceCents int64
+	MaxPriceCents int64
+	SalesCount    int32
+	Status        int16
+}
+
+// 商品详情。谓词与 ListProducts 逐字一致（deleted_at IS NULL AND status = 1），
+// 理由和 CountProducts 那条一样：详情页放行的东西比列表多一件，就等于开了一条
+// 「列表里看不见、知道 id 就点得进去」的后门 —— 草稿商品与软删商品会从这里漏出去。
+//
+// 同样刻意不带 WHERE merchant_id：租户由 RLS 挡。拿别家店的 product_id 打过来，
+// 这条查询返回 0 行，服务层把它翻成 404 —— 与「这个 id 不存在」同一个响应，
+// 不给探测器留下区分两者的口子。
+func (q *Queries) GetProduct(ctx context.Context, id int64) (GetProductRow, error) {
+	row := q.db.QueryRow(ctx, getProduct, id)
+	var i GetProductRow
+	err := row.Scan(
+		&i.ID,
+		&i.CategoryID,
+		&i.Title,
+		&i.Subtitle,
+		&i.Description,
+		&i.MinPriceCents,
+		&i.MaxPriceCents,
+		&i.SalesCount,
+		&i.Status,
+	)
+	return i, err
+}
+
+const listProductSKUs = `-- name: ListProductSKUs :many
+SELECT s.id, s.sku_code, s.spec_values, s.price_cents, s.image_url,
+       COALESCE(i.available_qty, 0)::int AS available_qty
+  FROM skus s
+  LEFT JOIN inventories i ON i.sku_id = s.id
+ WHERE s.product_id = $1
+   AND s.status = 1
+ ORDER BY s.id
+`
+
+type ListProductSKUsRow struct {
+	ID           int64
+	SkuCode      string
+	SpecValues   []byte
+	PriceCents   int64
+	ImageUrl     *string
+	AvailableQty int32
+}
+
+// 一件商品的全部在售 SKU，带上当前可售水位。契约的 ProductDetail.skus。
+//
+// s.status = 1 与 ListSKUsForPricing 的那个条件对齐：详情页列出来的 SKU
+// 必须是真的下得了单的那些，否则用户点进去加购再下单才被 422 拒掉，
+// 而那条错误里没有任何东西指向「这个规格已经下架了」。
+//
+// LEFT JOIN 而不是 JOIN：种子里的 SKU-NOSTOCKROW 是一个**有 SKU、没有库存行**
+// 的真实状态（下单链路靠它当靶子）。用 JOIN 的话这类 SKU 会整个从详情里消失，
+// 而它真实的样子是「在售、可售 0 件」。COALESCE 把「没有库存行」记成 0 ——
+// 这一次两者确实同义：都表示一件也买不到。
+//
+// inventories 没有 merchant_id 列（parent-scoped，00006），它的 RLS 谓词是对
+// skus 的 EXISTS 子查询，所以这条 JOIN 同样在 RLS 之下。
+func (q *Queries) ListProductSKUs(ctx context.Context, productID int64) ([]ListProductSKUsRow, error) {
+	rows, err := q.db.Query(ctx, listProductSKUs, productID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListProductSKUsRow
+	for rows.Next() {
+		var i ListProductSKUsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.SkuCode,
+			&i.SpecValues,
+			&i.PriceCents,
+			&i.ImageUrl,
+			&i.AvailableQty,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listProducts = `-- name: ListProducts :many
 SELECT id, title, subtitle, min_price_cents, max_price_cents,
        total_stock, sales_count, status

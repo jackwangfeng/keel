@@ -2,8 +2,11 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/keel/keel/internal/repository/internal/db"
 )
@@ -52,6 +55,7 @@ type Tx interface {
 	SagaTx
 	UserTx
 	OrderTx
+	OrderQueryTx
 	SweepTx
 	PaymentTx
 }
@@ -67,6 +71,12 @@ type ProductTx interface {
 
 	// CountProducts 返回当前租户在架商品的总数，用于填契约里必填的 total。
 	CountProducts(ctx context.Context) (int64, error)
+
+	// FindProduct 取一件**可见**商品（在架且未软删）。查不到返回 ErrProductNotFound。
+	FindProduct(ctx context.Context, id int64) (ProductDetail, error)
+
+	// ListProductSKUs 取一件商品的全部在售 SKU，带上当前可售水位。
+	ListProductSKUs(ctx context.Context, productID int64) ([]SKU, error)
 
 	// 库存的两个方法搬去了 SagaTx（saga.go）：它们本来就是为 SAGA 分支存在的
 	// —— 正向扣减、补偿回补、超时关单释放。它们的三条出路是这一层唯一一处
@@ -111,4 +121,83 @@ func (t tenantTx) ListProducts(ctx context.Context, limit, offset int64) ([]Prod
 
 func (t tenantTx) CountProducts(ctx context.Context) (int64, error) {
 	return t.q.CountProducts(ctx)
+}
+
+// ProductDetail 是商品详情在 repository 边界上的形状（契约的 ProductDetail）。
+//
+// 与 Product 分开而不是给它加几个字段：列表一页要搬 20 行，而 description
+// 是一整段富文本。两者共用一个结构体的话，列表要么白搬这些字节，要么把它们
+// 留成零值 —— 而「零值」与「这件商品没有描述」在 *string 上长得一模一样。
+type ProductDetail struct {
+	ID            int64
+	CategoryID    int64
+	Title         string
+	Subtitle      *string
+	Description   *string
+	MinPriceCents int64
+	MaxPriceCents int64
+	SalesCount    int32
+	Status        int16
+}
+
+// SKU 是详情页里的一个规格，带上当前可售水位。
+//
+// AvailableQty 来自 inventories 的 LEFT JOIN，没有库存行时是 0。
+// SpecValues 是 JSONB 原样的字节：这一层不解释它，解释放在 service ——
+// repository 认得的是列的类型，不是它的语义。
+type SKU struct {
+	ID           int64
+	SKUCode      string
+	SpecValues   []byte
+	PriceCents   int64
+	ImageURL     *string
+	AvailableQty int32
+}
+
+// ErrProductNotFound：这个 product_id 在本租户查不到，或者它不可见
+// （草稿 / 已下架 / 已软删）。
+//
+// 三种成因刻意合成一个：商品 id 是自增的，所以「这个 id 存在但你看不到」
+// 与「这个 id 不存在」一旦分开报，这个接口就成了一个能数出别家店有多少商品的
+// 探测器 —— 而它是 security: [] 的，谁都打得到。
+var ErrProductNotFound = errors.New("商品不存在或不可见")
+
+func (t tenantTx) FindProduct(ctx context.Context, id int64) (ProductDetail, error) {
+	r, err := t.q.GetProduct(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ProductDetail{}, fmt.Errorf("product %d: %w", id, ErrProductNotFound)
+	}
+	if err != nil {
+		return ProductDetail{}, err
+	}
+	return ProductDetail{
+		ID:            r.ID,
+		CategoryID:    r.CategoryID,
+		Title:         r.Title,
+		Subtitle:      r.Subtitle,
+		Description:   r.Description,
+		MinPriceCents: r.MinPriceCents,
+		MaxPriceCents: r.MaxPriceCents,
+		SalesCount:    r.SalesCount,
+		Status:        r.Status,
+	}, nil
+}
+
+func (t tenantTx) ListProductSKUs(ctx context.Context, productID int64) ([]SKU, error) {
+	rows, err := t.q.ListProductSKUs(ctx, productID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]SKU, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, SKU{
+			ID:           r.ID,
+			SKUCode:      r.SkuCode,
+			SpecValues:   r.SpecValues,
+			PriceCents:   r.PriceCents,
+			ImageURL:     r.ImageUrl,
+			AvailableQty: r.AvailableQty,
+		})
+	}
+	return out, nil
 }

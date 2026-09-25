@@ -3,6 +3,9 @@ package service
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
 
 	"github.com/keel/keel/internal/repository"
 )
@@ -139,4 +142,132 @@ func offsetOf(page, pageSize int) int64 {
 		return maxOffset
 	}
 	return off
+}
+
+// ErrProductNotFound：这个 product_id 在本租户查不到，或者它不可见
+// （草稿 / 已下架 / 已软删）。handler 把它映射成契约里的 404。
+//
+// 三种成因合成一个，理由写在 repository.ErrProductNotFound 上：商品 id 是自增的，
+// 而这条接口是 security: []。
+var ErrProductNotFound = errors.New("商品不存在")
+
+// SKU 是详情里的一个规格（契约的 Sku）。
+//
+// SpecValues 在这一层已经是 map 了，不是 JSONB 的字节：repository 认得列的类型，
+// service 认得它的语义。解不开就报错而不是给个空 map —— 空 map 会让详情页显示
+// 一件没有任何规格的商品，而用户点下去才发现选不了。
+type SKU struct {
+	ID           int64
+	SKUCode      string
+	SpecValues   map[string]string
+	PriceCents   int64
+	ImageURL     *string
+	AvailableQty int32
+}
+
+// ProductDetail 是一件商品的详情（契约的 ProductDetail = ProductSummary + 四个字段）。
+//
+// 内嵌 ProductSummary 而不是把七个字段再抄一遍：契约里它就是 allOf 的第一项，
+// 而抄一遍意味着列表与详情可以对同一件商品给出不同的 status / 价格区间。
+type ProductDetail struct {
+	ProductSummary
+
+	CategoryID  int64
+	Description *string
+	SKUs        []SKU
+
+	// InStock 是「这件商品现在还买得到吗」：任意一个在售 SKU 水位 > 0。
+	//
+	// 它是**算出来的**，不是 products.total_stock 那一列。那一列是冗余的汇总，
+	// 由别处维护，而详情页正下方就列着每个 SKU 的真实水位 —— 两个数对不上时，
+	// 用户看到的是「有货」配一排全是 0 的规格。
+	InStock bool
+}
+
+// Detail 返回一件在架商品的详情，含全部在售 SKU 与它们的可售水位。
+//
+// 商品与 SKU 在**同一个事务**里读，理由与 List 里那对计数/取页一样：
+// 分两次访问的话，中间的一次下架会让「商品在架，但一个 SKU 都没有」这种
+// 自相矛盾的响应偶发出现。
+func (s *ProductService) Detail(ctx context.Context, id int64) (ProductDetail, error) {
+	var out ProductDetail
+	err := s.repo.WithTenant(ctx, func(q repository.Tx) error {
+		p, err := q.FindProduct(ctx, id)
+		if errors.Is(err, repository.ErrProductNotFound) {
+			return fmt.Errorf("%w: product_id=%d", ErrProductNotFound, id)
+		}
+		if err != nil {
+			return err
+		}
+		rows, err := q.ListProductSKUs(ctx, p.ID)
+		if err != nil {
+			return err
+		}
+
+		skus := make([]SKU, 0, len(rows))
+		inStock := false
+		for _, r := range rows {
+			spec, err := DecodeSpecValues(r.SpecValues)
+			if err != nil {
+				return fmt.Errorf("sku %d 的 spec_values 解不开: %w", r.ID, err)
+			}
+			if r.AvailableQty > 0 {
+				inStock = true
+			}
+			skus = append(skus, SKU{
+				ID:           r.ID,
+				SKUCode:      r.SKUCode,
+				SpecValues:   spec,
+				PriceCents:   r.PriceCents,
+				ImageURL:     r.ImageURL,
+				AvailableQty: r.AvailableQty,
+			})
+		}
+		out = ProductDetail{
+			ProductSummary: ProductSummary{
+				ID:            p.ID,
+				Title:         p.Title,
+				Subtitle:      p.Subtitle,
+				MinPriceCents: p.MinPriceCents,
+				MaxPriceCents: p.MaxPriceCents,
+				SalesCount:    p.SalesCount,
+				Status:        p.Status,
+			},
+			CategoryID:  p.CategoryID,
+			Description: p.Description,
+			SKUs:        skus,
+			InStock:     inStock,
+		}
+		return nil
+	})
+	if err != nil {
+		return ProductDetail{}, err
+	}
+	return out, nil
+}
+
+// DecodeSpecValues 把 JSONB 的字节解成 map[string]string（契约的
+// `additionalProperties: {type: string}`）。
+//
+// 导出是因为 handler 那边读 order_items.spec_snapshot 要用同一套解法。
+// 那里对**失败**的处置与这里相反（历史快照解不开不该让订单打不开），
+// 但「怎么解」必须是同一份：两份解法意味着同一块 JSONB 在商品页和订单页上
+// 可以显示出不同的规格。
+//
+// 空字节按空 map 处理：列的 DEFAULT 是 '{}'，但历史行里可能是 SQL NULL，
+// 而 nil 与 []byte("{}") 在这里是同一个意思 —— 这件 SKU 没有规格维度。
+// 值不是字符串时报错而不是丢掉那一项：静默丢掉会让「颜色」这一维凭空消失，
+// 而用户在下单时并不知道自己少选了一个维度。
+func DecodeSpecValues(raw []byte) (map[string]string, error) {
+	if len(raw) == 0 {
+		return map[string]string{}, nil
+	}
+	var m map[string]string
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil, err
+	}
+	if m == nil {
+		return map[string]string{}, nil
+	}
+	return m, nil
 }

@@ -73,6 +73,11 @@ type Address struct {
 }
 
 // Order 是订单在 repository 边界上的形状。
+//
+// 后面三个时间戳是可空的（*time.Time），而 ExpireAt / CreatedAt 不是 —— 那不是
+// 风格的不一致，是列本身的语义：DDL 上前两列 NOT NULL，后三列可空。用零值
+// time.Time 表示「还没发生」会让 handler 分不清「没付款」与「在 0001-01-01
+// 付的款」，而契约里 paid_at 这类字段的缺席正是「这件事还没发生」的唯一表达。
 type Order struct {
 	ID               int64
 	OrderNo          string
@@ -87,6 +92,21 @@ type Order struct {
 	RefundStatus     int16
 	ExpireAt         time.Time
 	CreatedAt        time.Time
+	PaidAt           *time.Time
+	ShippedAt        *time.Time
+	FinishedAt       *time.Time
+}
+
+// optTime 把 pgtype.Timestamptz 收成 *time.Time：NULL → nil。
+//
+// 一个函数而不是在五处各写一遍 `if r.PaidAt.Valid { ... }`：写岔一处的症状是
+// 某一条路径上「未发货的订单带着一个 0001 年的发货时间」，而那看上去像数据脏了。
+func optTime(ts pgtype.Timestamptz) *time.Time {
+	if !ts.Valid {
+		return nil
+	}
+	t := ts.Time
+	return &t
 }
 
 // OrderLine 是库存分支重建「扣减意图」所需的全部信息。
@@ -329,6 +349,9 @@ func (t tenantTx) FindOrderByNo(ctx context.Context, orderNo string) (Order, err
 		RefundStatus:     r.RefundStatus,
 		ExpireAt:         r.ExpireAt.Time,
 		CreatedAt:        r.CreatedAt.Time,
+		PaidAt:           optTime(r.PaidAt),
+		ShippedAt:        optTime(r.ShippedAt),
+		FinishedAt:       optTime(r.FinishedAt),
 	}, nil
 }
 

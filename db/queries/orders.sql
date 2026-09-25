@@ -76,9 +76,17 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10);
 --
 -- 它在 RLS 之下：分支跑在 dtm.TenantContextFromGID 造出来的租户上下文里，
 -- 所以拿着 A 店的 gid 去查 B 店的订单，结果是查不到，而不是查到了别人的单。
+--
+-- paid_at / shipped_at / finished_at 是买家侧读接口（GET /orders 与
+-- GET /orders/{order_no}）补上来的三列。契约的 Order 里它们都声明过，而在此之前
+-- 这条查询根本没 SELECT 它们 —— 于是「付款时间」在支付成功之后的响应里
+-- 依然缺席，客户端只能显示一个没有时间的「已支付」。
+-- 三列一起取而不是只取 paid_at：shipped_at 是「发货后 N 天自动确认收货」倒计时
+-- 的起点（契约里明写），finished_at 同理属于同一张时间线，分两次加意味着
+-- 这条查询与它的领域类型要被改两遍。
 SELECT id, order_no, user_id, status, goods_amount_cents, freight_cents,
        discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
-       expire_at, created_at
+       expire_at, paid_at, shipped_at, finished_at, created_at
   FROM orders
  WHERE order_no = $1;
 
@@ -275,3 +283,106 @@ INSERT INTO payments (payment_no, order_id, channel, amount_cents, status,
                       channel_txn_id, notify_payload, paid_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 RETURNING id, payment_no, status;
+
+-- ---------------------------------------------------------------------------
+-- 买家侧读接口：GET /orders（我的订单）与 GET /orders/{order_no}（订单详情）。
+--
+-- 这一段里每一条查询都带 user_id，而这**不是**租户过滤，别把它和
+-- check_query_tenancy.py 挡的那件事混起来：
+--
+--   · 租户过滤（merchant_id）由 RLS 做，应用层再加一遍会让 RLS 变得测不出来；
+--   · 买家过滤（user_id）RLS 做不了 —— 策略只认 current_merchant()，
+--     它管不到「同一家店里 A 买家和 B 买家」这一层。
+--
+-- 也就是说：去掉 user_id，跨租户仍然是安全的（RLS 还在），而**同一家店的任意
+-- 买家可以凭一个自增页码翻遍全店的订单**。这是本组接口唯一一处只能靠查询条件
+-- 守住的越权面，与 GetUserAddress 上那条注释说的是同一件事（数据模型 §9 约定 4）。
+-- ---------------------------------------------------------------------------
+
+-- name: ListUserOrders :many
+-- 我的订单，一页。
+--
+-- status <> 0 不是可选的：0 是「创建中」，是 SAGA 还没跑完的中间态
+-- （00013 与 service/order.go 的文件头）。它一旦出现在「我的订单」里，用户会看到
+-- 一笔既不能支付也不能取消的订单，而它可能在下一秒被补偿关掉。
+--
+-- 两个筛选条件用 sqlc.narg 做成可空参数：传 NULL 就是不筛。写成两条查询
+-- （筛的和不筛的）的话，「total 与 items 用的是同一套谓词」这条性质要靠人维护，
+-- 而它一旦破掉的症状是客户端一直翻到一页空的。
+--
+-- 排序 created_at DESC 之后再按 id DESC：同一毫秒内建的两笔订单在只按时间排序时
+-- 顺序是不确定的，而不确定的顺序会让同一页在两次请求之间变样 —— 分页最经典的
+-- 那种「第二页又看到了第一页的那一单」。
+SELECT id, order_no, user_id, status, goods_amount_cents, freight_cents,
+       discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
+       expire_at, paid_at, shipped_at, finished_at, created_at
+  FROM orders
+ WHERE user_id = $1
+   AND status <> 0
+   AND (sqlc.narg(status)::smallint IS NULL OR status = sqlc.narg(status)::smallint)
+   AND (sqlc.narg(refund_status)::smallint IS NULL
+        OR refund_status = sqlc.narg(refund_status)::smallint)
+ ORDER BY created_at DESC, id DESC
+ LIMIT sqlc.arg(page_limit) OFFSET sqlc.arg(page_offset);
+
+-- name: CountUserOrders :one
+-- 契约里 PageMeta.total 是必填字段，而它是**全部条数**，不是本页条数。
+--
+-- 谓词必须与 ListUserOrders 逐字一致（user_id、status <> 0、两个可空筛选），
+-- 理由与 CountProducts 那条一样，只是后果更重：这里少一个 user_id，
+-- total 数的就是全店的订单数，于是「我的订单」页脚会告诉每个买家这家店一共
+-- 有多少单 —— 一次不需要读到任何一行别人的数据就完成的信息泄露。
+SELECT count(*)
+  FROM orders
+ WHERE user_id = $1
+   AND status <> 0
+   AND (sqlc.narg(status)::smallint IS NULL OR status = sqlc.narg(status)::smallint)
+   AND (sqlc.narg(refund_status)::smallint IS NULL
+        OR refund_status = sqlc.narg(refund_status)::smallint);
+
+-- name: GetUserOrderByNo :one
+-- 订单详情 / 发起支付共用：按单号取**当前买家自己**的订单。
+--
+-- 与上面那条 GetOrderByNo 分开而不是加个参数：那一条是 SAGA 分支与支付回调用的，
+-- 它们跑在没有买家身份的上下文里（协调器重放、渠道回调），给它加一个 user_id
+-- 参数只会逼那两处传一个假的。两条查询、两个调用面，谁也伪造不了对方的条件。
+--
+-- 查不到与「不是你的」回同一个 404：order_no 是 72 bit 随机不可枚举的，
+-- 分开报会把它变成一个「这个单号存不存在」的判定器。
+SELECT id, order_no, user_id, status, goods_amount_cents, freight_cents,
+       discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
+       expire_at, paid_at, shipped_at, finished_at, created_at
+  FROM orders
+ WHERE order_no = $1
+   AND user_id = $2
+   AND status <> 0;
+
+-- name: ListOrderItemsForDetail :many
+-- 订单详情里的行。与 ListOrderItemsForBranch 分开：那一条只取 (sku_id, quantity)
+-- 并按 sku_id 排序，因为它是**库存分支拿行锁的顺序**（改了会死锁）。
+-- 这一条取的是展示用的全部快照列，按 id 排序 —— 两者的排序有完全不同的理由，
+-- 合成一条之后改其中一个会静默改掉另一个。
+SELECT id, sku_id, product_id, title_snapshot, spec_snapshot, image_snapshot,
+       price_cents, quantity, amount_cents, discount_cents, refunded_qty
+  FROM order_items
+ WHERE order_id = $1
+ ORDER BY id;
+
+-- name: GetOrderReceiver :one
+-- 下单时拍下的收货信息快照（契约的 OrderDetail.receiver）。
+--
+-- 单独一条查询而不是并进 GetUserOrderByNo：receiver_snapshot 是一整块 JSONB，
+-- 而那条查询被订单列表**逐行**复用 —— 列表里没有任何地方要展示收货地址，
+-- 每页多搬 20 份快照是白搬的。
+SELECT receiver_snapshot
+  FROM orders
+ WHERE id = $1;
+
+-- name: ListPaymentsForOrder :many
+-- 这一单的全部支付尝试（契约的 OrderDetail.payments）。
+--
+-- 走 idx_payments_order（00014）。按 id 升序：对账时人要看的是「先发生了什么」。
+SELECT payment_no, channel, amount_cents, status, paid_at
+  FROM payments
+ WHERE order_id = $1
+ ORDER BY id;

@@ -111,9 +111,14 @@ SELECT m.id, '默认分类', '/', 1
 
 -- generate_series 的上界按店取：件数不同才让跨租户断言有区分力（见上）。
 -- 它引用了同一个 FROM 里的 m —— FROM 里的集合返回函数是隐式 LATERAL 的。
-INSERT INTO products (merchant_id, category_id, title, min_price_cents,
+--
+-- description 也播上：契约的 ProductDetail 里有它，而 products.description
+-- 在种子里一直是 NULL —— 那会让「详情把 description 填出来了」这句话没有靶子
+-- （字段是可选的，NULL 时它整个不出现，与「压根没实现」长得一模一样）。
+INSERT INTO products (merchant_id, category_id, title, description, min_price_cents,
                       max_price_cents, total_stock, sales_count, status, published_at)
-SELECT c.merchant_id, c.id, m.code || ' 的商品 ' || g, 1990, 4990, 100, 0, 1, now()
+SELECT c.merchant_id, c.id, m.code || ' 的商品 ' || g,
+       m.code || ' 的商品 ' || g || ' 的详细描述', 1990, 4990, 100, 0, 1, now()
   FROM merchants m
   JOIN categories c ON c.merchant_id = m.id AND c.name = '默认分类'
   CROSS JOIN generate_series(1, CASE m.code WHEN 'shop-a' THEN 3 ELSE 2 END) g
@@ -209,6 +214,20 @@ SELECT s.id, 10 + (s.id % 7) * 5, 3
 --   13800000004  已软删（deleted_at 非空）：uk_users_phone 带 deleted_at IS NULL，
 --                所以它和 13800000001 可以共存于 shop-a —— 号码复用那条规则
 --                （§9）在种子里就有一个活着的例子，而登录必须查不到它。
+--
+-- ### shop-a 里还有第二个**能登录、能下单**的买家（13800000005）
+--
+-- 它是「订单只能看见自己的」那条断言唯一可达的靶子。
+--
+-- 租户隔离由 RLS 挡，而**同一家店里 A 买家能不能读到 B 买家的订单**是 RLS 管不到
+-- 的那一层（策略里只有 current_merchant()，它认不出买家）。只有同一个 merchant_id
+-- 下的两个真实买家各自下过一单，`GET /orders` 与 `GET /orders/{order_no}` 上那个
+-- user_id 条件才是可证伪的：把它删掉，两条断言当场红。
+--
+-- 上面三个反例都当不了这个靶子 —— 封禁的、没有口令的、已软删的，
+-- 一个都登录不进来，也就一单都下不了。跨店的那个 13800000001@shop-b 也不行：
+-- 它被 RLS 挡着，删掉 user_id 条件它照样看不见 A 店的订单，于是那条断言
+-- 会在被测逻辑已经失效的情况下保持绿色。
 INSERT INTO users (merchant_id, phone, password_hash, nickname, status, deleted_at)
 SELECT m.id, v.phone, v.hash, v.nickname, v.status, v.deleted_at
   FROM merchants m
@@ -225,7 +244,10 @@ SELECT m.id, v.phone, v.hash, v.nickname, v.status, v.deleted_at
         ('shop-a', '13800000003', NULL,
          'A 店的仅第三方登录买家', 1::smallint, NULL::timestamptz),
         ('shop-a', '13800000004', NULL,
-         'A 店的已注销买家', 1::smallint, now())
+         'A 店的已注销买家', 1::smallint, now()),
+        ('shop-a', '13800000005',
+         '$argon2id$v=19$m=19456,t=2,p=1$coA0R4QAIztkIeGLvk6xdw$K/7KBumFV9XK6XzvHRglarBYZToW3JPVQYTkjPMNeNE',
+         'A 店的第二个买家', 1::smallint, NULL::timestamptz)
      ) AS v(code, phone, hash, nickname, status, deleted_at)
  WHERE m.code = v.code
    AND NOT EXISTS (SELECT 1 FROM users u
@@ -263,6 +285,27 @@ SELECT u.merchant_id, u.id, v.receiver, '13800000001',
    AND u.deleted_at IS NULL
    AND NOT EXISTS (SELECT 1 FROM user_addresses a
                     WHERE a.user_id = u.id AND a.receiver_name = v.receiver);
+
+-- shop-a 第二个买家（13800000005）的地址。
+--
+-- 单独一条 INSERT 而不是并进上面那个 CROSS JOIN：那一段是按 (code, receiver)
+-- 给「每家店的 13800000001」播的，硬塞进去要给它加一个号码维度，而那会让
+-- 上面那两行的含义变得要读两遍才明白。
+--
+-- 它必须有地址：契约里 address_id 是必填的，没有地址这个买家就一单也下不了，
+-- 而「订单只能看见自己的」那条断言需要他真的有一单。
+INSERT INTO user_addresses (merchant_id, user_id, receiver_name, phone,
+                            province, city, district, street, detail,
+                            region_code, is_default)
+SELECT u.merchant_id, u.id, 'A 店第二个收件人', '13800000005',
+       '浙江省', '杭州市', '滨江区', '江南大道', '300 号 3 单元 303', '330108', TRUE
+  FROM users u
+  JOIN merchants m ON m.id = u.merchant_id
+ WHERE m.code = 'shop-a'
+   AND u.phone = '13800000005'
+   AND u.deleted_at IS NULL
+   AND NOT EXISTS (SELECT 1 FROM user_addresses a
+                    WHERE a.user_id = u.id AND a.receiver_name = 'A 店第二个收件人');
 
 -- ---------------------------------------------------------------------------
 -- 一个**没有库存行**的 SKU（shop-a）
