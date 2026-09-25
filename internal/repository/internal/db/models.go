@@ -151,3 +151,42 @@ type Sku struct {
 	CreatedAt  pgtype.Timestamptz
 	UpdatedAt  pgtype.Timestamptz
 }
+
+type User struct {
+	ID           int64
+	MerchantID   int64
+	Phone        *string
+	Email        *string
+	PasswordHash *string
+	Nickname     string
+	AvatarUrl    *string
+	Gender       int16
+	Status       int16
+	LastLoginAt  pgtype.Timestamptz
+	DeletedAt    pgtype.Timestamptz
+	CreatedAt    pgtype.Timestamptz
+	UpdatedAt    pgtype.Timestamptz
+}
+
+type UserIdentity struct {
+	ID         int64
+	MerchantID int64
+	UserID     int64
+	Provider   int16
+	ExternalID string
+	UnionID    *string
+	Credential []byte
+	CreatedAt  pgtype.Timestamptz
+	UpdatedAt  pgtype.Timestamptz
+}
+
+type UserToken struct {
+	ID         int64
+	MerchantID int64
+	UserID     int64
+	TokenHash  []byte
+	ExpireAt   pgtype.Timestamptz
+	RevokedAt  pgtype.Timestamptz
+	CreatedAt  pgtype.Timestamptz
+	UpdatedAt  pgtype.Timestamptz
+}
