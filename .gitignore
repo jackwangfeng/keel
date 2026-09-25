@@ -14,6 +14,11 @@
 # 分开管理迟早对不上。`make dtmrs-deps` 随时能重建。
 /third_party/
 
+# Python（推理引擎服务）。宿主机上直接跑一次 uvicorn 就会落下 __pycache__，
+# 而 .pyc 是平台 + 解释器版本相关的产物，入库之后谁也不会去更新它。
+__pycache__/
+*.py[cod]
+
 # 本地环境
 .env
 .env.local
