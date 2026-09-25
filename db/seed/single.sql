@@ -72,3 +72,43 @@ SELECT c.merchant_id, c.id, v.title, v.subtitle, v.min_cents, v.max_cents, 100, 
  WHERE m.code = 'demo'
    AND NOT EXISTS (SELECT 1 FROM products p
                     WHERE p.merchant_id = c.merchant_id AND p.title = v.title);
+
+-- ---------------------------------------------------------------------------
+-- SKU 与库存
+-- ---------------------------------------------------------------------------
+--
+-- 下单链路（M2 Task 4/5）要的是 SKU 和库存行，而不是商品本身 —— products 上的
+-- total_stock 是给列表页看的汇总，真正被扣减的是 inventories.available_qty。
+--
+-- 价格刻意和 products 的 min/max 对齐：手冲咖啡壶 12900–15900 就真的有两个
+-- 分别是 12900 与 15900 的 SKU。不对齐的话，「min_price_cents 是不是真的等于
+-- 最便宜那个 SKU」这类断言在种子数据上永远无法证伪。
+INSERT INTO skus (merchant_id, product_id, sku_code, spec_values, price_cents, status)
+SELECT p.merchant_id, p.id, v.code, v.spec, v.cents, 1
+  FROM products p
+  JOIN merchants m ON m.id = p.merchant_id
+  CROSS JOIN LATERAL (VALUES
+        ('手冲咖啡壶',     'HCP-600',  '{"容量":"600ml"}'::jsonb, 12900::bigint),
+        ('手冲咖啡壶',     'HCP-900',  '{"容量":"900ml"}'::jsonb, 15900::bigint),
+        ('陶瓷马克杯',     'MUG-2',    '{"装量":"两只"}'::jsonb,   4900::bigint),
+        ('挂耳咖啡 10 包', 'DRIP-10',  '{"烘焙":"中度"}'::jsonb,   6900::bigint),
+        ('挂耳咖啡 10 包', 'DRIP-20',  '{"烘焙":"深度"}'::jsonb,   8900::bigint)
+     ) AS v(title, code, spec, cents)
+ WHERE m.code = 'demo'
+   AND p.title = v.title
+   AND NOT EXISTS (SELECT 1 FROM skus s
+                    WHERE s.merchant_id = p.merchant_id AND s.sku_code = v.code);
+
+-- 每个 SKU 一行库存。数量刻意不相等：全都是同一个数的话，「扣的是不是这一个
+-- SKU」在断言里看不出来。
+INSERT INTO inventories (sku_id, available_qty, warning_qty)
+SELECT s.id, v.qty, 5
+  FROM skus s
+  JOIN merchants m ON m.id = s.merchant_id
+  CROSS JOIN LATERAL (VALUES
+        ('HCP-600', 20), ('HCP-900', 12), ('MUG-2', 50),
+        ('DRIP-10', 30), ('DRIP-20', 18)
+     ) AS v(code, qty)
+ WHERE m.code = 'demo'
+   AND s.sku_code = v.code
+   AND NOT EXISTS (SELECT 1 FROM inventories i WHERE i.sku_id = s.id);

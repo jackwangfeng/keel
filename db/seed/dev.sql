@@ -114,3 +114,27 @@ SELECT c.merchant_id, c.id, v.title, 1990, 4990, 100, 0, v.status, now(), v.dele
  WHERE m.code = 'shop-a'
    AND NOT EXISTS (SELECT 1 FROM products p
                     WHERE p.merchant_id = c.merchant_id AND p.title = v.title);
+
+-- ---------------------------------------------------------------------------
+-- SKU 与库存
+-- ---------------------------------------------------------------------------
+--
+-- 每件商品一个 SKU（含草稿与软删的那两件 —— 商品下架不等于 SKU 消失，
+-- 而「下架商品的 SKU 还能不能被下单」正是需要能被证伪的那类问题）。
+--
+-- sku_code 由商品标题派生，保证重复执行时 NOT EXISTS 认得出来。
+INSERT INTO skus (merchant_id, product_id, sku_code, price_cents, status)
+SELECT p.merchant_id, p.id, 'SKU-' || p.id, p.min_price_cents, 1
+  FROM products p
+  JOIN merchants m ON m.id = p.merchant_id
+ WHERE m.code IN ('shop-a', 'shop-b')
+   AND NOT EXISTS (SELECT 1 FROM skus s
+                    WHERE s.merchant_id = p.merchant_id AND s.product_id = p.id);
+
+-- 库存数量按 SKU id 取模错开，理由同 single.sql：全相等就分不出扣的是哪一个。
+INSERT INTO inventories (sku_id, available_qty, warning_qty)
+SELECT s.id, 10 + (s.id % 7) * 5, 3
+  FROM skus s
+  JOIN merchants m ON m.id = s.merchant_id
+ WHERE m.code IN ('shop-a', 'shop-b')
+   AND NOT EXISTS (SELECT 1 FROM inventories i WHERE i.sku_id = s.id);
