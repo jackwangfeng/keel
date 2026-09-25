@@ -3,7 +3,10 @@ package db_test
 import (
 	"context"
 	"os/exec"
+	"slices"
 	"testing"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/keel/keel/internal/db"
 )
@@ -52,9 +55,9 @@ func TestMigrateIsIdempotent(t *testing.T) {
 		t.Fatalf("current_merchant() 的 volatility 是 %q，必须是 \"s\"(STABLE)", volatility)
 	}
 
-	// 三张业务表必须同时 ENABLE 且 FORCE —— 只 ENABLE 的话表属主绕过 RLS，
+	// 每张业务表都必须同时 ENABLE 且 FORCE —— 只 ENABLE 的话表属主绕过 RLS，
 	// 而迁移工具跑出来的属主通常就是应用自己。
-	for _, tbl := range []string{"categories", "products", "skus"} {
+	for _, tbl := range businessTables(t, conn) {
 		var enabled, forced bool
 		err := conn.QueryRow(context.Background(),
 			`SELECT relrowsecurity, relforcerowsecurity FROM pg_class WHERE relname = $1`,
@@ -101,9 +104,39 @@ func TestTenantPoliciesArePresentAndExact(t *testing.T) {
 	}
 	defer conn.Close(context.Background())
 
-	const wantQual = "(merchant_id = current_merchant())"
+	// 谓词逐表申明，而不是所有表共用一个常量。
+	//
+	// 这张表本身就是断言的一部分：下面会要求它和系统目录枚举出来的业务表
+	// 一一对上。M2 新建一张表时，测试会红在「没申明谓词」上，逼作者把这张表
+	// 的隔离方式**写下来**——而不是让它悄悄享受一条为别的表写的断言。
+	//
+	// 留出按表不同的余地是必需的：inventories 按规矩一豁免了 merchant_id
+	// （见数据模型文档 §4），它的策略谓词是一个对 skus 的 EXISTS 子查询，
+	// 和这里其余各表的列比较不是一个形状。
+	wantQual := map[string]string{
+		"categories": "(merchant_id = current_merchant())",
+		"products":   "(merchant_id = current_merchant())",
+		"skus":       "(merchant_id = current_merchant())",
+	}
 
-	for _, tbl := range []string{"categories", "products", "skus"} {
+	tables := businessTables(t, conn)
+	for _, tbl := range tables {
+		if _, ok := wantQual[tbl]; !ok {
+			t.Errorf("业务表 %s 没有申明期望的策略谓词——"+
+				"新表必须在 wantQual 里写明它的租户隔离谓词，不能默认继承别的表的断言", tbl)
+		}
+	}
+	for tbl := range wantQual {
+		if !slices.Contains(tables, tbl) {
+			t.Errorf("wantQual 里的 %s 不是（或不再是）业务表，该清理了", tbl)
+		}
+	}
+
+	for _, tbl := range tables {
+		want, ok := wantQual[tbl]
+		if !ok {
+			continue // 上面已经报过了
+		}
 		rows, err := conn.Query(context.Background(),
 			`SELECT policyname, permissive, cmd,
 			        coalesce(qual, ''), coalesce(with_check, '')
@@ -135,8 +168,8 @@ func TestTenantPoliciesArePresentAndExact(t *testing.T) {
 		if p.name != "tenant" {
 			t.Errorf("%s: 策略名是 %q，期望 \"tenant\"", tbl, p.name)
 		}
-		if p.qual != wantQual {
-			t.Errorf("%s: 策略谓词是 %q，期望 %q", tbl, p.qual, wantQual)
+		if p.qual != want {
+			t.Errorf("%s: 策略谓词是 %q，期望 %q", tbl, p.qual, want)
 		}
 		if p.cmd != "ALL" {
 			t.Errorf("%s: 策略作用于 %q，期望 \"ALL\"——只保 SELECT 的话写入侧没人管", tbl, p.cmd)
@@ -144,12 +177,75 @@ func TestTenantPoliciesArePresentAndExact(t *testing.T) {
 		// 空表示省略 WITH CHECK，PostgreSQL 回退到 qual，而 qual 上面刚断言过。
 		// 非空就必须是同一个谓词：WITH CHECK (true) 时上面四项全部照旧通过，
 		// 但租户 A 能往租户 B 名下插行。
-		if p.withCheck != "" && p.withCheck != wantQual {
+		if p.withCheck != "" && p.withCheck != want {
 			t.Errorf("%s: 策略的写谓词是 %q，期望为空（回退到读谓词）或 %q——"+
-				"写谓词被单独放开时，读侧看不出任何异常", tbl, p.withCheck, wantQual)
+				"写谓词被单独放开时，读侧看不出任何异常", tbl, p.withCheck, want)
 		}
 		if p.permissive != "PERMISSIVE" {
 			t.Errorf("%s: 策略是 %q", tbl, p.permissive)
 		}
 	}
+}
+
+// 业务表的清单从系统目录里枚举，不写死。
+//
+// 原先这里是 []string{"categories", "products", "skus"} 这样的字面量，出现在
+// 两个测试里。它的问题不在今天对不对，而在明天：M2 会新增 inventories、orders、
+// order_items……新表只要没人记得往这两个字面量里补名字，就不在任何断言的视野里，
+// 而「忘了给新表挂 RLS」恰恰是最可能发生、后果最重的那种疏忽。
+//
+// 反过来枚举之后，新建一张表却没挂策略，测试当场变红，不依赖任何人的记性。
+//
+// 豁免必须写明理由——往这里加表是一个需要解释的动作，不是默认行为。
+var notBusinessTables = map[string]string{
+	"goose_db_version": "goose 自己的迁移记录表，不由本项目定义",
+
+	// 下面两张是真正的例外，理由是同一个：租户解析发生在 SET LOCAL 之前。
+	// 请求刚进来时还不知道是哪个租户，正是要靠读这两张表才能知道；
+	// 此时 current_merchant() 为 NULL，挂上 RLS 会让解析永远查不到行，
+	// 整个站点在第一跳就 404。它们的防护靠的是 keel_app 的 GRANT 面
+	// （见 00003_app_role.sql）与解析层自身，不是 RLS。
+	"merchants":     "租户表自身；租户解析要在确定租户之前读它",
+	"shop_settings": "同上，解析期就要读，此时还没有 current_merchant()",
+}
+
+func businessTables(t *testing.T, conn *pgx.Conn) []string {
+	t.Helper()
+	rows, err := conn.Query(context.Background(),
+		`SELECT c.relname
+		   FROM pg_class c
+		   JOIN pg_namespace n ON n.oid = c.relnamespace
+		  WHERE n.nspname = 'public' AND c.relkind = 'r'
+		  ORDER BY c.relname`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+
+	var all, out []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatal(err)
+		}
+		all = append(all, name)
+		if _, exempt := notBusinessTables[name]; !exempt {
+			out = append(out, name)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	// 豁免清单里写着一张库里根本没有的表，说明清单过期了——它会静默地
+	// 豁免掉一张将来重名的表。
+	for name := range notBusinessTables {
+		if !slices.Contains(all, name) {
+			t.Errorf("豁免清单里的 %s 并不存在于库中，清单该清理了", name)
+		}
+	}
+	if len(out) == 0 {
+		t.Fatal("一张业务表都没枚举到——这个检查本身失效了")
+	}
+	return out
 }
