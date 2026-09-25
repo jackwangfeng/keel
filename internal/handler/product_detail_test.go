@@ -197,8 +197,14 @@ func TestProductDetailSaysOutOfStockWhenEverySKUIsZero(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("详情失败：%d %s", code, raw)
 	}
-	if d.InStock == nil || *d.InStock {
-		t.Fatalf("全部 SKU 水位都是 0，in_stock 却是 %v", d.InStock)
+	if d.InStock == nil {
+		t.Fatal("全部 SKU 水位都是 0，而响应里连 in_stock 都没有")
+	}
+	if *d.InStock {
+		// 打值而不是打指针：变异验证时这条信息是唯一的线索，
+		// 而一个 0x6d0ca010580 说明不了任何事（实测：第一次跑这条变异，
+		// 它红了，但红出来的那行读不出 in_stock 到底是什么）。
+		t.Fatalf("全部 SKU 水位都是 0，in_stock 却是 %v", *d.InStock)
 	}
 	for _, s := range d.Skus {
 		if s.AvailableQty != 0 {
