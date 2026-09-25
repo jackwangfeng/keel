@@ -1,20 +1,34 @@
 package tenant_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/keel/keel/internal/db"
 	"github.com/keel/keel/internal/tenant"
 )
+
+// baseDomain 是这些测试里的平台基础域名，与种子里的域名一致。
+const baseDomain = "example.com"
+
+// single / multi 是两种部署形态的配置。测试里每次都写全，是为了让每个用例
+// 自己说清它在测哪种形态 —— 这两种形态的解析规则完全不同。
+func single(code string) tenant.Config { return tenant.Config{DefaultCode: code} }
+func multi() tenant.Config             { return tenant.Config{BaseDomain: baseDomain} }
 
 // TestMain 加载 db/seed/dev.sql。
 //
@@ -49,22 +63,43 @@ func loadSeed() error {
 	return err
 }
 
-// newRouter 造一个挂了解析中间件的路由，/probe 回显当前租户。
-//
-// 池经 db.NewPool 拿，不是 pgxpool.New：后者不检查角色，于是「测试跑在一条能
-// 绕过 RLS 的连接上」这个洞会原样回来。这里虽然只读 merchants（无 RLS），
-// 但这个 helper 迟早会被抄去写别的测试。
-func newRouter(t *testing.T, defaultCode string) *gin.Engine {
+// ---------- 夹具 ----------
+
+// newPool 建池。用 db.NewPool 而不是 pgxpool.New：后者不检查角色，于是
+// 「测试跑在一条能绕过 RLS 的连接上」这个洞会原样回来。
+func newPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	pool, err := db.NewPool(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
+	return pool
+}
 
+// testWriter 把解析器的日志转给 t.Log：默认丢弃会让失败用例少掉最有用的线索，
+// 直接打到 stderr 又会污染其它用例的输出。
+type testWriter struct{ t *testing.T }
+
+func (w testWriter) Write(p []byte) (int, error) {
+	w.t.Logf("resolver: %s", bytes.TrimRight(p, "\n"))
+	return len(p), nil
+}
+
+// newRouter 造一个挂了解析中间件的路由，/probe 回显当前租户。
+func newRouter(t *testing.T, cfg tenant.Config) *gin.Engine {
+	t.Helper()
+	return newRouterWithPool(t, newPool(t), cfg)
+}
+
+func newRouterWithPool(t *testing.T, pool *pgxpool.Pool, cfg tenant.Config) *gin.Engine {
+	t.Helper()
+	if cfg.Log == nil {
+		cfg.Log = slog.New(slog.NewTextHandler(testWriter{t}, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	}
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.Use(tenant.NewResolver(pool, defaultCode).Middleware())
+	r.Use(tenant.NewResolver(pool, cfg).Middleware())
 	r.GET("/probe", func(c *gin.Context) {
 		id, err := tenant.FromContext(c.Request.Context())
 		if err != nil {
@@ -107,7 +142,7 @@ func resolved(t *testing.T, w *httptest.ResponseRecorder) int64 {
 }
 
 // merchantID 直接查库拿种子商家的 ID，用来断言「解析到的是哪一家」。
-// 只断言状态码不够：回落到错误的商家同样是 200。
+// 只断言状态码不够：解析到错误的商家同样是 200。
 func merchantID(t *testing.T, code string) int64 {
 	t.Helper()
 	ctx := context.Background()
@@ -123,28 +158,168 @@ func merchantID(t *testing.T, code string) int64 {
 	return id
 }
 
-// 单商家部署：配了默认商家，不指名任何店的裸主机名解析到它。
+// adminExec 用管理员连接改库，供需要「运行期变更商家」的用例使用。
+func adminExec(t *testing.T, sql string, args ...any) {
+	t.Helper()
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, db.AdminDSN())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+	if _, err := conn.Exec(ctx, sql, args...); err != nil {
+		t.Fatalf("%s: %v", sql, err)
+	}
+}
+
+// setStatus 改一家商家的状态，测试结束还原。
+func setStatus(t *testing.T, code string, status int16) {
+	t.Helper()
+	var old int16
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, db.AdminDSN())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.QueryRow(ctx,
+		`UPDATE merchants SET status = $2 WHERE code = $1 RETURNING (SELECT status FROM merchants WHERE code = $1)`,
+		code, status).Scan(&old); err != nil {
+		conn.Close(ctx)
+		t.Fatal(err)
+	}
+	conn.Close(ctx)
+	t.Cleanup(func() { adminExec(t, `UPDATE merchants SET status = $2 WHERE code = $1`, code, old) })
+}
+
+// onlyActive 把除 code 之外的活跃商家全部停用，测试结束还原。
+// 用来造出「库里真的只有一家店」那种单商家部署。
+func onlyActive(t *testing.T, code string) {
+	t.Helper()
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, db.AdminDSN())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+	rows, err := conn.Query(ctx,
+		`UPDATE merchants SET status = 2
+		  WHERE deleted_at IS NULL AND status = 1 AND code <> $1
+		  RETURNING code`, code)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var restored []string
+	for rows.Next() {
+		var c string
+		if err := rows.Scan(&c); err != nil {
+			t.Fatal(err)
+		}
+		restored = append(restored, c)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		adminExec(t, `UPDATE merchants SET status = 1 WHERE code = ANY($1)`, restored)
+	})
+}
+
+// fakeClock 让 TTL 不必真的等待。
+type fakeClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (c *fakeClock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *fakeClock) advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.t = c.t.Add(d)
+}
+
+// ---------- 单商家部署 ----------
+
+// 单商家部署：配了默认商家，请求解析到它。
 func TestDefaultMerchantResolves(t *testing.T) {
-	got := resolved(t, do(newRouter(t, "shop-a"), "localhost:8080"))
+	got := resolved(t, do(newRouter(t, single("shop-a")), "localhost:8080"))
 	if want := merchantID(t, "shop-a"); got != want {
 		t.Fatalf("期望解析到 shop-a(%d)，实得 %d", want, got)
 	}
 }
 
-// 多商家部署：子域名匹配 merchants.code。
+// 单商家部署忽略 Host —— 任何 Host 都解析到默认商家。
+//
+// 这是 Ruling 22：把「哪个租户」和「这个 Host 允不允许」拆开。
+// 「库里其实不止一家店，却还配着默认商家」那种误配，由 Preflight 在启动时
+// 一次性拒绝（见 TestPreflightRejectsDefaultWithMultipleActiveMerchants），
+// 而不是靠每个请求去猜 Host 像不像在指名某家店 —— 后者会把 k8s 的
+// svc.cluster.local、PaaS 生成域名、蓝绿预发域名全部误伤成裸 404。
+func TestDefaultDeploymentIgnoresHost(t *testing.T) {
+	want := merchantID(t, "shop-a")
+	r := newRouter(t, single("shop-a"))
+	for _, host := range []string{
+		"localhost:8080",
+		"keel.default.svc.cluster.local",
+		"10.0.0.7:8080",
+		"shop-a.example.com",
+		"nope.example.com",
+		"custom.example.net",
+		"shop-b.example.com", // 库里只有一家店时它不存在；有第二家时 Preflight 会拒绝启动
+	} {
+		if got := resolved(t, do(r, host)); got != want {
+			t.Fatalf("Host %q：单商家部署期望恒定解析到 shop-a(%d)，实得 %d", host, want, got)
+		}
+	}
+
+	// 同时配了基础域名时也一样。没有这一段的话，「单商家模式偷偷又去匹配
+	// 基础域名下的子域名」这个退化通不过任何断言 —— 上面那组 Host 在
+	// BaseDomain 为空时本来就走不到子域名那一支。
+	both := single("shop-a")
+	both.BaseDomain = baseDomain
+	rBoth := newRouter(t, both)
+	for _, host := range []string{"shop-b.example.com", "nope.example.com"} {
+		if got := resolved(t, do(rBoth, host)); got != want {
+			t.Fatalf("Host %q：同时配了基础域名的单商家部署仍应解析到 shop-a(%d)，实得 %d",
+				host, want, got)
+		}
+	}
+}
+
+// 默认商家停用后不可访问。
+func TestDisabledDefaultMerchantIs404(t *testing.T) {
+	if got := do(newRouter(t, single("shop-closed")), "localhost:8080").Code; got != 404 {
+		t.Fatalf("停用的默认商家期望 404，实得 %d", got)
+	}
+}
+
+// 默认商家被软删后同样不可访问。
+func TestSoftDeletedDefaultMerchantIs404(t *testing.T) {
+	if got := do(newRouter(t, single("shop-deleted")), "localhost:8080").Code; got != 404 {
+		t.Fatalf("软删的默认商家期望 404，实得 %d", got)
+	}
+}
+
+// ---------- 多商家部署 ----------
+
+// 子域名匹配 merchants.code。
 func TestSubdomainResolves(t *testing.T) {
-	got := resolved(t, do(newRouter(t, ""), "shop-b.example.com"))
+	got := resolved(t, do(newRouter(t, multi()), "shop-b.example.com"))
 	if want := merchantID(t, "shop-b"); got != want {
 		t.Fatalf("期望解析到 shop-b(%d)，实得 %d", want, got)
 	}
 }
 
-// 自定义域名：域名里不含 code，只能靠 shop_settings.domain 匹配。
+// 自定义域名：域名落在基础域名之外，只能靠 shop_settings.domain 匹配。
 //
 // shop-c 的域名是 custom.example.net，它的第一段 "custom" 不是任何商家的 code。
 // 拿子域名去比完整域名的实现会在这里 404。
 func TestCustomDomainResolves(t *testing.T) {
-	got := resolved(t, do(newRouter(t, ""), "custom.example.net"))
+	got := resolved(t, do(newRouter(t, multi()), "custom.example.net"))
 	if want := merchantID(t, "shop-c"); got != want {
 		t.Fatalf("期望解析到 shop-c(%d)，实得 %d", want, got)
 	}
@@ -153,68 +328,113 @@ func TestCustomDomainResolves(t *testing.T) {
 // Host 大小写不敏感，端口与结尾的点都不参与匹配。
 func TestHostNormalization(t *testing.T) {
 	want := merchantID(t, "shop-b")
+	r := newRouter(t, multi())
 	for _, host := range []string{
 		"SHOP-B.Example.COM",
 		"shop-b.example.com:8443",
 		"shop-b.example.com.",
 	} {
-		if got := resolved(t, do(newRouter(t, ""), host)); got != want {
+		if got := resolved(t, do(r, host)); got != want {
 			t.Fatalf("Host %q 期望解析到 shop-b(%d)，实得 %d", host, want, got)
 		}
 	}
 }
 
-// Review Focus 第 1 条：未知子域名必须 404，**不能回落到默认商家**。
-// 回落等于任何人拼一个不存在的子域名就能看到默认店的数据。
-func TestUnknownHostIs404NotFallback(t *testing.T) {
-	if got := do(newRouter(t, "shop-a"), "nope.example.com").Code; got != 404 {
-		t.Fatalf("未知 Host 期望 404，实得 %d —— 是否错误地回落到了默认商家？", got)
+// 未知子域名必须 404，不能回落到任何商家。
+// 回落等于任何人拼一个不存在的子域名就能看到某家店的数据。
+func TestUnknownSubdomainIs404NotFallback(t *testing.T) {
+	if got := do(newRouter(t, multi()), "nope.example.com").Code; got != 404 {
+		t.Fatalf("未知子域名期望 404，实得 %d —— 是否回落到了某个商家？", got)
 	}
 }
 
-// 单商家部署里，Host 也不能把请求领到别的商家去。
+// 子域名匹配必须锚定平台基础域名。
 //
-// Host 是客户端可以随便写的。配了默认商家的部署只服务那一家，一个指名了别家店的
-// Host 必须 404 —— 否则「单商家部署」只是配置上的说法，实际谁都能挑租户。
-func TestDefaultDeploymentRejectsAnotherMerchantsHost(t *testing.T) {
-	if got := do(newRouter(t, "shop-a"), "shop-b.example.com").Code; got != 404 {
-		t.Fatalf("指向别家店的 Host 期望 404，实得 %d", got)
+// 不锚定的话，攻击者把自己控制的 shop-b.attacker.example.org 指过来，就能在
+// **自己的 origin** 上提供 shop-b 的店面：钓鱼页面、cookie 作用域、CSP、
+// 支付回跳的白名单全部跟着那个域名走。
+func TestSubdomainMatchingIsAnchoredToBaseDomain(t *testing.T) {
+	r := newRouter(t, multi())
+	for _, host := range []string{
+		"shop-b.attacker.example.org", // 别人的域名，第一段撞上了 code
+		"shop-b.example.com.evil.org", // 基础域名只是中间的一段
+		"shop-b.notexample.com",       // 后缀差一点
+		"a.shop-b.example.com",        // 更深的层级，「哪一段是店名」没有唯一答案
+		"example.com",                 // 基础域名本身不属于任何商家
+	} {
+		if got := do(r, host).Code; got != 404 {
+			t.Fatalf("Host %q 期望 404，实得 %d —— 子域名匹配没有锚定 %q？", host, got, baseDomain)
+		}
 	}
 }
 
-// 但默认商家自己的域名当然要能用：单商家部署也可以挂在真实域名上。
-func TestDefaultDeploymentAcceptsItsOwnDomain(t *testing.T) {
-	got := resolved(t, do(newRouter(t, "shop-a"), "shop-a.example.com"))
-	if want := merchantID(t, "shop-a"); got != want {
-		t.Fatalf("期望解析到 shop-a(%d)，实得 %d", want, got)
+// 基础域名下 code 匹配必须赢过商家自己登记的 domain。
+//
+// shop_settings.domain 是商家自己填的。允许它在基础域名下生效的话，商家 C 把
+// domain 填成 `shop-nodomain.example.com`，就在那家店的规范 URL 上开了自己的店 ——
+// 而那家店根本不需要登记域名，子域名是天然的，于是它连「域名被占了」都察觉不到。
+func TestCodeWinsOverMerchantSuppliedDomainUnderBaseDomain(t *testing.T) {
+	const hijacked = "shop-nodomain.example.com"
+	adminExec(t, `UPDATE shop_settings SET domain = $1 WHERE merchant_id =
+		(SELECT id FROM merchants WHERE code = 'shop-c')`, hijacked)
+	t.Cleanup(func() {
+		adminExec(t, `UPDATE shop_settings SET domain = 'custom.example.net' WHERE merchant_id =
+			(SELECT id FROM merchants WHERE code = 'shop-c')`)
+	})
+
+	got := resolved(t, do(newRouter(t, multi()), hijacked))
+	if want := merchantID(t, "shop-nodomain"); got != want {
+		t.Fatalf("Host %q 解析到了 %d，期望 shop-nodomain(%d) —— "+
+			"商家填的 domain 抢到了基础域名下别家店的规范 URL", hijacked, got, want)
 	}
 }
 
-// Review Focus 第 2 条：停用的商家不可访问。
+// 停用的商家不可访问。
 func TestDisabledMerchantIs404(t *testing.T) {
-	if got := do(newRouter(t, ""), "shop-closed.example.com").Code; got != 404 {
+	if got := do(newRouter(t, multi()), "shop-closed.example.com").Code; got != 404 {
 		t.Fatalf("停用商家期望 404，实得 %d", got)
 	}
 }
 
-// 停用的商家被配成默认商家时同样不可访问 —— 否则 status = 2 只拦住了一条路径。
-func TestDisabledDefaultMerchantIs404(t *testing.T) {
-	if got := do(newRouter(t, "shop-closed"), "localhost:8080").Code; got != 404 {
-		t.Fatalf("停用的默认商家期望 404，实得 %d", got)
+// 软删的商家不可访问。
+//
+// shop-deleted 的 status 仍是 1，只有 deleted_at 非空 —— 单靠 status 过滤的实现
+// 会在这里放行。种子里那家店就是为这条断言存在的。
+func TestSoftDeletedMerchantIs404(t *testing.T) {
+	if got := do(newRouter(t, multi()), "shop-deleted.example.com").Code; got != 404 {
+		t.Fatalf("软删商家期望 404，实得 %d —— 是否漏了 deleted_at IS NULL？", got)
 	}
 }
 
 // 多商家部署里没有默认商家可回落，裸主机名就是 404。
 func TestBareHostWithoutDefaultIs404(t *testing.T) {
-	if got := do(newRouter(t, ""), "localhost:8080").Code; got != 404 {
+	if got := do(newRouter(t, multi()), "localhost:8080").Code; got != 404 {
 		t.Fatalf("无默认商家的裸主机名期望 404，实得 %d", got)
 	}
 }
 
-// 租户不可由请求头指定。
-//
+// 没配基础域名时，子域名匹配必须整个关掉，而不是退化成「任何域名的第一段都算」。
+func TestWithoutBaseDomainOnlyRegisteredDomainsResolve(t *testing.T) {
+	r := newRouter(t, tenant.Config{}) // 既无默认商家，也无基础域名
+	// shop-nodomain 没有 shop_settings 行，只能靠子域名匹配被找到 ——
+	// 而子域名匹配此时是关掉的。（拿 shop-b 来试没有意义：它登记过
+	// shop-b.example.com，解析成功是走的 domain 那一支，证明不了任何事。）
+	if got := do(r, "shop-nodomain.example.com").Code; got != 404 {
+		t.Fatalf("没配基础域名时子域名不该解析，实得 %d", got)
+	}
+	got := resolved(t, do(r, "custom.example.net"))
+	if want := merchantID(t, "shop-c"); got != want {
+		t.Fatalf("登记过的域名仍应可用：期望 shop-c(%d)，实得 %d", want, got)
+	}
+}
+
+// ---------- 租户不可由请求头指定 ----------
+
 // 公开接口没有鉴权，支持用请求头挑租户等于让调用方自己声明它是哪家店。
 // 这个测试钉住「我们没有偷偷加一个方便本地开发的头」。
+//
+// X-Forwarded-Host 在列表里是有意的：将来有人「顺手」让中间件信任它，
+// 这个测试会红。要信任它必须同时约定「谁在设它、谁在剥它」，不是顺手能加的。
 func TestRequestHeadersCannotChooseTheTenant(t *testing.T) {
 	a := merchantID(t, "shop-a")
 	headers := [][]string{
@@ -224,17 +444,168 @@ func TestRequestHeadersCannotChooseTheTenant(t *testing.T) {
 		{"X-Forwarded-Host", "shop-b.example.com"},
 		{"X-Tenant", "shop-b"},
 	}
+	rSingle, rMulti := newRouter(t, single("shop-a")), newRouter(t, multi())
 	for _, h := range headers {
 		// 单商家部署：无论头里写什么，都还是默认商家。
-		if got := resolved(t, do(newRouter(t, "shop-a"), "localhost:8080", h...)); got != a {
+		if got := resolved(t, do(rSingle, "localhost:8080", h...)); got != a {
 			t.Fatalf("请求头 %v 改变了解析结果：期望 shop-a(%d)，实得 %d", h, a, got)
 		}
 		// 多商家部署：头不能替 Host 背书，未知 Host 仍是 404。
-		if got := do(newRouter(t, ""), "nope.example.com", h...).Code; got != 404 {
+		if got := do(rMulti, "nope.example.com", h...).Code; got != 404 {
 			t.Fatalf("请求头 %v 让未知 Host 解析成功了（%d）", h, got)
 		}
 	}
 }
+
+// ---------- 可观测性 ----------
+
+// 解析不到的 Host 必须留下日志。
+//
+// 裸 404 对运维是不可观测的：「有人在扫子域名」和「某家店的域名忘了登记」
+// 在客户端看来是同一个响应，只有这条日志能把两者分开。
+func TestUnresolvedHostIsLogged(t *testing.T) {
+	var buf bytes.Buffer
+	cfg := multi()
+	cfg.Log = slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	if got := do(newRouter(t, cfg), "nope.example.com").Code; got != 404 {
+		t.Fatalf("期望 404，实得 %d", got)
+	}
+	line := buf.String()
+	for _, want := range []string{"WARN", "nope.example.com", "/probe"} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("解析失败的日志里没有 %q：%s", want, line)
+		}
+	}
+}
+
+// ---------- 故障与缓存 ----------
+
+// 查库失败是 500，不是 404。
+//
+// 报成 404 的话，一次数据库抖动会表现为「所有店铺集体下架」，
+// 而监控上看不到任何 5xx —— 值班的人会先去查 CDN 和 DNS。
+func TestDatabaseFailureIs500NotNotFound(t *testing.T) {
+	pool := newPool(t)
+	r := newRouterWithPool(t, pool, multi())
+	pool.Close() // 模拟「库没了」：后续查询直接报错，而不是返回零行
+
+	if got := do(r, "shop-b.example.com").Code; got != http.StatusInternalServerError {
+		t.Fatalf("查库失败期望 500，实得 %d —— 数据库故障被伪装成了「店不存在」", got)
+	}
+}
+
+// 缓存必须过期：停用一家商家之后，它要真的访问不了。
+//
+// 用注入的时钟而不是 sleep：TTL 是配置项，真实值是 30s，用 sleep 去测要么
+// 让测试跑 30 秒，要么把 TTL 改到小得不像真实配置。
+// 时钟可注入之后，这条断言既快又测的是真正的 TTL 逻辑。
+func TestCacheExpiresSoDisablingAMerchantTakesEffect(t *testing.T) {
+	clock := &fakeClock{t: time.Now()}
+	cfg := multi()
+	cfg.CacheTTL = 30 * time.Second
+	cfg.Now = clock.now
+	r := newRouter(t, cfg)
+
+	if got := resolved(t, do(r, "shop-b.example.com")); got != merchantID(t, "shop-b") {
+		t.Fatalf("预热失败，解析到了 %d", got)
+	}
+
+	setStatus(t, "shop-b", 2) // 停用
+
+	// 还在 TTL 之内：缓存仍然命中（这一条同时证明缓存确实在生效，
+	// 否则下面那条断言即使把缓存整个删掉也会绿）。
+	clock.advance(29 * time.Second)
+	if got := do(r, "shop-b.example.com").Code; got != 200 {
+		t.Fatalf("TTL 之内期望仍命中缓存（200），实得 %d", got)
+	}
+
+	// 越过 TTL：必须重新查库，看到 status = 2。
+	clock.advance(2 * time.Second)
+	if got := do(r, "shop-b.example.com").Code; got != 404 {
+		t.Fatalf("TTL 之后期望 404，实得 %d —— 缓存永不过期的话，"+
+			"停用一家商家要等到进程重启才生效", got)
+	}
+}
+
+// 亚秒级 TTL 在真实时钟上同样成立 —— 证明上面那条不是只对假时钟有效。
+func TestCacheTTLAlsoHoldsOnTheRealClock(t *testing.T) {
+	cfg := multi()
+	cfg.CacheTTL = 50 * time.Millisecond
+	r := newRouter(t, cfg)
+
+	if got := resolved(t, do(r, "shop-b.example.com")); got != merchantID(t, "shop-b") {
+		t.Fatalf("预热失败，解析到了 %d", got)
+	}
+	setStatus(t, "shop-b", 2)
+	time.Sleep(80 * time.Millisecond)
+	if got := do(r, "shop-b.example.com").Code; got != 404 {
+		t.Fatalf("TTL 过后期望 404，实得 %d", got)
+	}
+}
+
+// ---------- 启动自检 ----------
+
+// 配了默认商家，库里却不止一家活跃商家 —— 拒绝启动。
+//
+// 这是 Ruling 22 的主检查：单商家模式忽略 Host，所以「单商家起步、后来加了
+// 第二家商家、却忘了取消 KEEL_DEFAULT_MERCHANT」这种误配会把所有商家的流量
+// 都送到默认店去。它在运行期不报错、不报警，只是所有人都看到同一家店。
+func TestPreflightRejectsDefaultWithMultipleActiveMerchants(t *testing.T) {
+	r := tenant.NewResolver(newPool(t), single("shop-a"))
+	err := r.Preflight(context.Background())
+	if err == nil {
+		t.Fatal("库里有多家活跃商家却配了默认商家，Preflight 竟然放行")
+	}
+	for _, want := range []string{"KEEL_DEFAULT_MERCHANT", "shop-a"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("错误信息里没有 %q，运维看不出该改什么：%v", want, err)
+		}
+	}
+	t.Logf("Preflight 如期拒绝：%v", err)
+}
+
+// 库里真的只有一家活跃商家时，单商家部署放行。
+func TestPreflightAcceptsGenuineSingleTenantDeployment(t *testing.T) {
+	onlyActive(t, "shop-a")
+	pool := newPool(t)
+
+	if err := tenant.NewResolver(pool, single("shop-a")).Preflight(context.Background()); err != nil {
+		t.Fatalf("库里只有 shop-a 一家活跃商家，Preflight 不该报错：%v", err)
+	}
+	// 同一个夹具下顺便验证另外两条：默认商家不存在 / 已停用，同样拒绝启动。
+	// 否则症状是「全站 404」，而真因是配置里的 code 写错了一个字母。
+	for _, code := range []string{"no-such-shop", "shop-closed"} {
+		if err := tenant.NewResolver(pool, single(code)).Preflight(context.Background()); err == nil {
+			t.Fatalf("默认商家 %q 不可服务，Preflight 竟然放行", code)
+		}
+	}
+}
+
+// 多商家部署没配基础域名，而有活跃商家没登记域名 —— 拒绝启动。
+// 那些店没有任何入口，症状是「某几家店 404」，不会有人想到是少配了环境变量。
+func TestPreflightRejectsMultiTenantWithoutBaseDomainWhenAShopIsUnreachable(t *testing.T) {
+	r := tenant.NewResolver(newPool(t), tenant.Config{})
+	err := r.Preflight(context.Background())
+	if err == nil {
+		t.Fatal("有商家既没有基础域名也没有登记域名，Preflight 竟然放行")
+	}
+	for _, want := range []string{"KEEL_BASE_DOMAIN", "shop-nodomain"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("错误信息里没有 %q：%v", want, err)
+		}
+	}
+	t.Logf("Preflight 如期拒绝：%v", err)
+}
+
+// 多商家部署配了基础域名，放行。
+func TestPreflightAcceptsMultiTenantWithBaseDomain(t *testing.T) {
+	if err := tenant.NewResolver(newPool(t), multi()).Preflight(context.Background()); err != nil {
+		t.Fatalf("多商家部署配了基础域名，Preflight 不该报错：%v", err)
+	}
+}
+
+// ---------- 种子 ----------
 
 // 种子必须幂等：测试每跑一次就加载一次，而数据库是跨运行保留的。
 // 不幂等的种子会让「每个租户 N 件商品」这类断言随运行次数漂移 ——

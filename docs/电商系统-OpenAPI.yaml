@@ -26,9 +26,18 @@ info:
     name: Apache-2.0
 servers:
   - url: http://localhost:8080/api/v1
-    description: Local
+    description: 本地（单商家；租户由 KEEL_DEFAULT_MERCHANT 指定，请求不必携带任何东西）
   - url: https://api.example.com/v1
     description: Production
+  - url: https://{shop}.example.com/api/v1
+    description: >-
+      多商家；租户由子域名确定，子域名锚定平台基础域名 KEEL_BASE_DOMAIN。
+      商家也可绑定自己的域名（shop_settings.domain），此时整个域名就是入口。
+      租户定位是部署配置，不改变任何路径，请求也不携带任何标识租户的头。
+    variables:
+      shop:
+        default: demo
+        description: 商家的 code
 
 security:
   - bearerAuth: []
