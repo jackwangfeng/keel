@@ -19,9 +19,22 @@ REQUIRED_PATHS = [
     ('/uploads/{upload_id}', 'get'),
     ('/search/events', 'post'),
     ('/cart/items/batch-delete', 'post'),
+    ('/admin/auth/bootstrap', 'post'),
+    ('/admin/auth/email-link', 'post'),
+    ('/admin/auth/session', 'post'),
+    ('/admin/staff', 'get'),
+    ('/admin/staff', 'post'),
+    ('/admin/staff/{staff_id}', 'patch'),
+    ('/admin/me', 'get'),
+    ('/admin/merchants', 'post'),
+    ('/admin/orders/{order_no}/shipments', 'post'),
+    ('/admin/refunds/{refund_no}/audit', 'post'),
 ]
 
-REQUIRED_SCHEMAS = ['UploadTarget', 'Upload']
+REQUIRED_SCHEMAS = ['UploadTarget', 'Upload',
+                    'Staff', 'StaffRole', 'StaffSession', 'StaffCreateRequest',
+                    'Merchant', 'MerchantCreateRequest',
+                    'Shipment', 'ShipmentCreateRequest']
 
 # (schema 名, 必须存在的属性名)
 REQUIRED_FIELDS = [
@@ -34,6 +47,10 @@ REQUIRED_FIELDS = [
 # 豁免必须在此显式列出并写明理由，不允许静默遗漏。
 IDEMPOTENCY_EXEMPT = {
     '/search':            '无副作用；用 POST 只因请求体结构复杂',
+    '/admin/auth/bootstrap':  '一次性 token 换会话，重放由 used_at 拦截',
+    '/admin/auth/email-link': '重复请求只是多发一封信，且有频控',
+    '/admin/auth/session':    '一次性 token 换会话，重放由 used_at 拦截',
+    '/admin/merchants':       'code 全局唯一，重复建店必然撞唯一索引',
     '/assistant/chat':    '无副作用；会话状态由 session_id 承载',
     '/orders/preview':    '无副作用；纯试算',
     '/coupons/applicable': '无副作用；纯查询',
@@ -224,6 +241,11 @@ def main():
                 elif 'default' in sch and param.get('name') not in SAFE_DEFAULT_PARAMS:
                     problems.append('%s %s 的查询参数 %s 带 default'
                                     % (method.upper(), p, param.get('name')))
+
+            # 约定 6：后台接口一律在 /admin/ 前缀下
+            if 'Admin' in (op.get('tags') or []) and not p.startswith('/admin/'):
+                problems.append('%s %s 带 Admin tag 却不在 /admin/ 前缀下'
+                                '（文件头约定 6）' % (method.upper(), p))
 
             # 有副作用的 POST 必须接受 Idempotency-Key
             if method == 'post' and p not in IDEMPOTENCY_EXEMPT:

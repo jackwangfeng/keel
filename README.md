@@ -70,6 +70,20 @@ Thanks to dtmrs's embeddable coordinator, transaction orchestration code is
 Traditional systems force a choice: a monolith that's easy to deploy but hard to scale,
 or microservices that scale but are a deployment nightmare. Keel doesn't require choosing.
 
+### Four — one deployment, many merchants
+
+Each merchant gets their own storefront, and orders never span merchants.
+
+**This does not cost you the single-machine story.** A small shop runs
+`docker compose up` and gets a deployment with exactly one tenant; nothing about
+multi-tenancy is visible to them, and opening a second shop later does not mean
+changing architecture.
+
+Cross-tenant isolation does not rest on remembering a `WHERE` clause — that kind of
+bug is invisible against single-tenant test data. It rests on every table carrying
+`merchant_id`, parent-child rows pinned by composite foreign keys, and PostgreSQL
+row-level security underneath. A script checks the first of those before you commit.
+
 ---
 
 ## Quick start
