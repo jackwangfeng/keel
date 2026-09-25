@@ -65,8 +65,14 @@ PGPORT=5433 make test-db
 | `keel`（超级用户） | **只有迁移**。建表、建角色、授权要属主权限 | `db.AdminDSN()`，env `KEEL_ADMIN_USER` / `KEEL_ADMIN_PASSWORD` |
 | `keel_app`（`NOSUPERUSER NOBYPASSRLS`） | 应用与**所有测试** | `db.DSN()`，env `PGUSER` / `PGPASSWORD` |
 
-由 `db/migrations/00003_app_role.sql` 建出来，口令默认 `keel_app`，
-生产经 `KEEL_APP_PASSWORD` 注入。
+由 `db/migrations/00003_app_role.sql` 建出来。**口令只在角色首次创建时设置**：
+有 `KEEL_APP_PASSWORD` 就用它，没有就用开发默认值 `keel_app`。
+角色已存在时迁移一个字都不碰口令——角色是集群级对象而 `GRANT` 是单库的，
+同集群每多一个库就要再跑一遍这份迁移，若写成无条件设置，
+给第二个库跑 `goose up` 时忘了带环境变量就会把生产口令静默重置回版本库里的默认值。
+
+代价是**轮换口令要走单独的运维操作**（`ALTER ROLE keel_app PASSWORD ...`），
+迁移不负责这件事。首次 provisioning 请务必带上 `KEEL_APP_PASSWORD`。
 
 **为什么必须分开**：超级用户和带 `BYPASSRLS` 的角色无条件绕过行级安全，
 `FORCE` 也拦不住。用 `keel` 连上来，`00002` 里的租户隔离就是一张废纸——

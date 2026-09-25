@@ -73,12 +73,23 @@ func TestMigrateIsIdempotent(t *testing.T) {
 // 将来有人为了修一个「查不到数据」的 bug，会去放宽谓词或直接 DROP POLICY，
 // 前两条断言对此一声不吭，库照样漏。
 //
-// 这里对三张表逐一钉死：有且只有一条名为 tenant 的策略，谓词正好是
-// merchant_id = current_merchant()，且作用于 ALL 而不只是 SELECT。
+// 这里对三张表逐一钉死：有且只有一条名为 tenant 的策略，读谓词正好是
+// merchant_id = current_merchant()，作用于 ALL 而不只是 SELECT，
+// 且写谓词没有被单独放开。
 //
-// cmd='ALL' 这条顺带把写入侧也钉住：FOR ALL 省略 WITH CHECK 时 PostgreSQL 拿
-// USING 当 WITH CHECK 用，所以 INSERT/UPDATE 也受同一个谓词约束。有人改成
-// FOR SELECT 的那天，写入侧的保护会静默消失，而这条断言会红。
+// 读侧和写侧要分别断言，它们是两件事：
+//
+//   - cmd='ALL' 只保证策略「作用于」写入。改成 FOR SELECT 的话写入侧就没人管了，
+//     这条断言会红。
+//   - 但作用于写入不等于写入用的是租户谓词。写入实际套用的是 with_check，
+//     省略时才回退到 using。所以 `ALTER POLICY ... WITH CHECK (true)` 能在
+//     policyname / qual / cmd / permissive 四项全部不变的情况下，把写入侧整个放开——
+//     租户 A 可以往租户 B 名下插行，而读侧一切正常。
+//
+// 因此 with_check 要么为空（回退到上面已经钉死的 qual），要么必须等于同一个谓词。
+//
+// 早先的注释和 b57068f 的 commit message 都写过「cmd='ALL' 顺带把写入侧钉死」，
+// 那是错的：它钉住的是「写入受不受策略管」，不是「写入用哪个谓词」。
 func TestTenantPoliciesArePresentAndExact(t *testing.T) {
 	if _, err := migrate(t); err != nil {
 		t.Fatalf("迁移失败: %v", err)
@@ -94,18 +105,19 @@ func TestTenantPoliciesArePresentAndExact(t *testing.T) {
 
 	for _, tbl := range []string{"categories", "products", "skus"} {
 		rows, err := conn.Query(context.Background(),
-			`SELECT policyname, permissive, cmd, coalesce(qual, '')
+			`SELECT policyname, permissive, cmd,
+			        coalesce(qual, ''), coalesce(with_check, '')
 			   FROM pg_policies
 			  WHERE schemaname = 'public' AND tablename = $1
 			  ORDER BY policyname`, tbl)
 		if err != nil {
 			t.Fatal(err)
 		}
-		type policy struct{ name, permissive, cmd, qual string }
+		type policy struct{ name, permissive, cmd, qual, withCheck string }
 		var got []policy
 		for rows.Next() {
 			var p policy
-			if err := rows.Scan(&p.name, &p.permissive, &p.cmd, &p.qual); err != nil {
+			if err := rows.Scan(&p.name, &p.permissive, &p.cmd, &p.qual, &p.withCheck); err != nil {
 				t.Fatal(err)
 			}
 			got = append(got, p)
@@ -128,6 +140,13 @@ func TestTenantPoliciesArePresentAndExact(t *testing.T) {
 		}
 		if p.cmd != "ALL" {
 			t.Errorf("%s: 策略作用于 %q，期望 \"ALL\"——只保 SELECT 的话写入侧没人管", tbl, p.cmd)
+		}
+		// 空表示省略 WITH CHECK，PostgreSQL 回退到 qual，而 qual 上面刚断言过。
+		// 非空就必须是同一个谓词：WITH CHECK (true) 时上面四项全部照旧通过，
+		// 但租户 A 能往租户 B 名下插行。
+		if p.withCheck != "" && p.withCheck != wantQual {
+			t.Errorf("%s: 策略的写谓词是 %q，期望为空（回退到读谓词）或 %q——"+
+				"写谓词被单独放开时，读侧看不出任何异常", tbl, p.withCheck, wantQual)
 		}
 		if p.permissive != "PERMISSIVE" {
 			t.Errorf("%s: 策略是 %q", tbl, p.permissive)

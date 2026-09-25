@@ -12,24 +12,37 @@
 -- 那时 00002 的 FORCE 从「冗余保险」变成「唯一防线」——别把它当多余的删掉。
 
 -- +goose Up
+-- 口令经环境变量注入，开发有默认值。
+--
+-- 它只在「角色本来不存在」那一支里用，**绝不能**写成顶层的无条件 ALTER ROLE：
+-- 角色是集群级对象，而 GRANT 是单库的，所以同一个集群里每多一个库就要再跑一遍
+-- 这份迁移。写成无条件的话，给第二个库跑 goose up 而忘了带 KEEL_APP_PASSWORD，
+-- 会把生产上已经设好的强口令静默重置回开发默认值——没有报错，没有痕迹，
+-- 只是某一天应用连不上，或者更糟：连得上，而口令是公开在版本库里的那个。
+--
+-- 口令经 SET LOCAL 传进下面的 DO 块，而不是直接写在块里：goose 的 ENVSUB 按行替换，
+-- 且会把 $$ 当成转义的 $，所以 ${...} 和 $$ 不能出现在同一段里。
+-- SET LOCAL 只在本事务内有效（goose 默认把每份迁移包在事务里），出了事务即失效。
+-- +goose ENVSUB ON
+SET LOCAL keel.app_password = '${KEEL_APP_PASSWORD:-keel_app}';
+-- +goose ENVSUB OFF
+
 -- +goose StatementBegin
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'keel_app') THEN
-        CREATE ROLE keel_app LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
+        -- 用 format %L 而不是字符串拼接：口令里有单引号也不会破坏语句。
+        EXECUTE format(
+            'CREATE ROLE keel_app LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE '
+            'PASSWORD %L', current_setting('keel.app_password'));
     ELSE
-        -- 角色是集群级对象，可能是别的库建的。无论如何把危险属性压掉。
+        -- 角色已存在（同集群别的库建的，或这是重跑）。
+        -- 危险属性无论如何压掉——不跳过，否则别人建的同名弱角色能混进来。
+        -- 但口令一个字不碰，理由见上。需要轮换口令请走单独的运维操作。
         ALTER ROLE keel_app NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
     END IF;
 END $$;
 -- +goose StatementEnd
-
--- 口令只有开发默认值，生产必须经 KEEL_APP_PASSWORD 注入。
--- 单独一行是因为下面要开 ENVSUB：goose 的变量替换按行做，而 $$ 会被它当成转义的 $，
--- 所以上面那个 DO 块必须留在 ENVSUB 之外。
--- +goose ENVSUB ON
-ALTER ROLE keel_app PASSWORD '${KEEL_APP_PASSWORD:-keel_app}';
--- +goose ENVSUB OFF
 
 GRANT USAGE ON SCHEMA public TO keel_app;
 GRANT SELECT, INSERT, UPDATE, DELETE
