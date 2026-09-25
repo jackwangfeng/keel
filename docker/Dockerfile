@@ -13,23 +13,25 @@
 # 一动就要重来一次 cargo build --release（本机实测 47 秒，runner 上 registry
 # 是冷的还要更久），而它跟改的那行代码毫无关系。
 #
-# 底座必须和下面的 build 阶段是**同一个** golang 镜像：.so 在这里编，在 build
-# 阶段被链接，在 app 阶段被加载，三处的 glibc 必须兼容。同一个底座是最省心的
-# 保证方式 —— 换成 rust:xxx 的话就多一个「它是 bookworm 还是 trixie」要人盯着，
-# 而盯漏的症状是运行期 `GLIBC_2.41 not found`。
-FROM golang:1.26 AS dtmrs
-
-# Debian trixie 的 rustc/cargo 是 1.85.1（实测 apt-cache policy），满足 dtmrs
-# 要的 1.82+。走 apt 而不是 rustup：rustup 要多下一整套工具链（几百 MB），
-# 而这里只需要能跑一次 cargo build --release。
+# **底座必须是 trixie**，因为下面 build 阶段的 golang:1.26 就是 Debian 13 trixie
+# （glibc 2.41，实测）。.so 在这里编、在 build 阶段被链接、在 app 阶段被加载，
+# 三处的 glibc 必须兼容；底座低一档（bookworm，glibc 2.36）编出来的东西
+# 在这里能用，反过来不行，而弄反了的症状是运行期 `GLIBC_2.41 not found`。
 #
-# Retries / Timeout 不是装饰：这一步要下 106 MB（实测），而本机撞到过一次连接卡死——
-# apt 默认会一直等下去，于是 docker build 停在一行不动的输出上二十多分钟，
-# 看起来跟「正在编译」一模一样。超时加重试把「卡死」变成「慢一点」。
+# **为什么不在 golang 镜像里 apt install cargo rustc。** 试过，不行：
+# trixie 的 rustc 是 1.85.1，而 dtmrs v0.11.0 的 Cargo.lock 锁着一批要求更高的
+# 依赖，实测报 `error: rustc 1.85.1 is not supported by the following packages:
+# home@0.5.12 requires rustc 1.88 / icu_*@2.2.0 requires rustc 1.86`。
+# **所以「Rust 1.82+」这个下限是错的** —— 那是 dtmrs 自己声明的 rust-version，
+# 但真正卡住构建的是它锁定的依赖树，实测下限是 1.88。
+# 用官方 rust 镜像还顺带把版本钉住了：apt 的 rustc 会随 Debian 点版本漂。
+FROM rust:1.90-slim-trixie AS dtmrs
+
+# 官方 rust 镜像里没有 git（slim），而取回脚本要 clone。
 RUN apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=30 \
     && apt-get install -y --no-install-recommends \
         -o Acquire::Retries=5 -o Acquire::http::Timeout=30 \
-        cargo rustc \
+        git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src

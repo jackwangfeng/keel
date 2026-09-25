@@ -72,7 +72,7 @@ help:
 	@echo "make migrate-down   回滚一个版本"
 	@echo "make migrate-status 打印各版本的应用状态"
 	@echo "make test-db      跑需要数据库的测试（强制不吃缓存）"
-	@echo "make dtmrs-deps     取回 dtmrs 并编出 libdtmrs.so（需要 Rust 1.82+）"
+	@echo "make dtmrs-deps     取回 dtmrs 并编出 libdtmrs.so（需要 Rust 1.88+）"
 	@echo "make build          编译主模块（会先确保 libdtmrs.so 在）"
 
 generate: generate-go generate-ts
@@ -217,7 +217,7 @@ dtmrs-deps:
 # 49 秒）。这个代价是值得的：另一条路是让每个新来的人先撞一次 `cannot find
 # -ldtmrs`，再去翻文档找到该跑哪个目标。
 $(DTMRS_LIB):
-	@echo "==> 没找到 $(DTMRS_LIB)，先建它（需要 Rust 1.82+，约 1 分钟）"
+	@echo "==> 没找到 $(DTMRS_LIB)，先建它（需要 Rust 1.88+，约 1 分钟）"
 	@$(MAKE) dtmrs-deps
 
 build: $(DTMRS_LIB)

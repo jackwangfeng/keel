@@ -57,10 +57,16 @@ jobs:
           cache-dependency-path: examples/dtmrs-embedded/go.sum
 
       # 刻意不装 rust-toolchain action：ubuntu-latest 的 runner 镜像自带 rustup
-      # 与 stable 工具链，而例子只要 1.82+。多引一个第三方 action 是多一条
-      # 供应链，换来的只是一个这里用不上的版本选择能力。
-      # 镜像哪天不带了，报错会是 fetch-dtmrs.sh 那句「需要 Rust 工具链（1.82+）」，
-      # 指向明确；届时在这里加 dtolnay/rust-toolchain@stable 即可。
+      # 与 stable 工具链。多引一个第三方 action 是多一条供应链，
+      # 换来的只是一个这里用不上的版本选择能力。
+      # **「runner 自带」这条至今没有在真 runner 上验证过**（本机验证不了 runner
+      # 镜像里装了什么）。不带了的话，报错是 fetch-dtmrs.sh 那句「需要 Rust
+      # 工具链」，指向明确；届时在这里加 dtolnay/rust-toolchain@stable 即可。
+      #
+      # 版本下限是 **1.88**，不是 dtmrs 声明的 1.82：卡住构建的是它 Cargo.lock
+      # 锁定的依赖树（实测 1.85.1 报 home@0.5.12 requires rustc 1.88）。
+      # runner 自带的是 stable，够；但版本不够时报的是 cargo 自己那句话，
+      # 而它已经把该装哪个版本说清楚了。
       - name: 工具链版本
         run: |
           cargo --version

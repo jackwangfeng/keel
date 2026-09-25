@@ -5,8 +5,15 @@
 node_modules
 web/node_modules
 
-# 本地构建产物（Rust / dtmrs 那边的，以及 Go 的测试二进制）
-target
+# 本地构建产物（Rust / dtmrs 那边的，以及 Go 的测试二进制）。
+#
+# **要写 `**/target` 而不是 `target`。** docker 的忽略规则是相对上下文根匹配的，
+# 光写 target 只挡得住 /target —— 而真正大的那个是
+# examples/dtmrs-embedded/.dtmrs-src/target（cargo 的构建目录）。
+# 实测的代价：上下文传输 953 MB，每一次 docker build 都要传一遍，
+# 而里面没有一个字节会进镜像。
+**/target
+**/.dtmrs-src
 *.so
 *.a
 *.dylib

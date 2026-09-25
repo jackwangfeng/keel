@@ -8,7 +8,7 @@ SHELL := /usr/bin/env bash
 .PHONY: help deps build run-saga run-topology race clean verify
 
 help:
-	@echo "make deps          取回 dtmrs 并构建 C ABI 动态库（需要 Rust 1.82+，调 ../../scripts/fetch-dtmrs.sh）"
+	@echo "make deps          取回 dtmrs 并构建 C ABI 动态库（需要 Rust 1.88+，调 ../../scripts/fetch-dtmrs.sh）"
 	@echo "make build         编译两个示例程序到 bin/"
 	@echo "make run-saga      SAGA 提交 / 逆序补偿 / 拉取式分支 / 提交期校验"
 	@echo "make run-topology  同一段编排跑 local 与 remote 两种形态"

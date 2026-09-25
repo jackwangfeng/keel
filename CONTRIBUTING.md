@@ -31,7 +31,7 @@
 | 依赖 | 版本 | 说明 |
 |---|---|---|
 | Go | 1.26+ | 后端。下限由 `tools/` 里钉的 sqlc 与 goose 传染而来——两者都声明 `go 1.26` |
-| Rust | 1.82+ | **必需**（M2 起）：编译 dtmrs 的 C ABI 动态库，主模块经 cgo 嵌入它。`make dtmrs-deps` 会取回源码并编出 `third_party/dtmrs/lib/libdtmrs.so`；`make build` 与 `make test-db` 缺了它会自动建一次。已验证于 Debian trixie 自带的 cargo/rustc 1.85.1 |
+| Rust | **1.88+** | **必需**（M2 起）：编译 dtmrs 的 C ABI 动态库，主模块经 cgo 嵌入它。`make dtmrs-deps` 会取回源码并编出 `third_party/dtmrs/lib/libdtmrs.so`；`make build` 与 `make test-db` 缺了它会自动建一次。**下限不是 dtmrs 声明的 1.82** —— 那是它的 `rust-version`，而卡住构建的是它 `Cargo.lock` 锁定的依赖树：实测 1.85.1 直接报 `home@0.5.12 requires rustc 1.88`。Debian trixie 的 apt 版正好是 1.85.1，不够，用 rustup。已验证于 1.94.0（本机）与镜像里的 `rust:1.90-slim-trixie` |
 | PostgreSQL | 16+ | M1 只用原生特性；**pgvector 是 M3 才需要的**，compose 起的是官方 `postgres:16`，装不装 pgvector 都跑得起来 |
 | Node | 22.18+ | `make generate-ts` 生成 TS 侧契约类型、`make schema-check` 编译 `web/src`、`make sdk-smoke` 直接跑 `.mts`（靠 Node 自带的类型剥离，不经构建步骤——这是下限的来源）。已验证于 v24.10.0 |
 | Docker | 任意近期版本 | `docker compose up` 起全栈 |

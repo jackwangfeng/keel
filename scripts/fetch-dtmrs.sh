@@ -26,10 +26,18 @@ REPO="${DTMRS_REPO:-https://github.com/jackwangfeng/dtmrs}"
 REF="${DTMRS_REF:-v0.11.0}"
 SRC="${DTMRS_SRC:-$DEST/.dtmrs-src}"
 
+# 下限是 **1.88**，不是 dtmrs 自己声明的 1.82。
+#
+# 1.82 是它 Cargo.toml 里的 rust-version，但真正卡住构建的是它 Cargo.lock 锁定的
+# 依赖树。实测：Debian trixie 自带的 rustc 1.85.1 直接报
+#   error: rustc 1.85.1 is not supported by the following packages:
+#     home@0.5.12 requires rustc 1.88 / icu_*@2.2.0 requires rustc 1.86
+# 这里只查「有没有 cargo」，不查版本 —— 版本不够时 cargo 自己那句话已经很清楚，
+# 再加一层版本解析只会多一个会过期的判断。
 command -v cargo >/dev/null || {
-    echo "需要 Rust 工具链（1.82+）。dtmrs 是 Rust 实现的，Keel 自 M2 起" >&2
-    echo "通过 cgo 嵌入它，绕不开这一步。见 CONTRIBUTING「开发环境」。" >&2
-    echo "Debian/Ubuntu: apt-get install cargo rustc；或 https://rustup.rs" >&2
+    echo "需要 Rust 工具链（实测下限 1.88，见本脚本注释）。dtmrs 是 Rust 实现的，" >&2
+    echo "Keel 自 M2 起通过 cgo 嵌入它，绕不开这一步。见 CONTRIBUTING「开发环境」。" >&2
+    echo "装法：https://rustup.rs（Debian trixie 的 apt 版是 1.85.1，不够）" >&2
     exit 1
 }
 
