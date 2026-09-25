@@ -14,7 +14,6 @@ import (
 
 	"github.com/keel/keel/internal/db"
 	"github.com/keel/keel/internal/repository"
-	sqlcdb "github.com/keel/keel/internal/repository/internal/db"
 	"github.com/keel/keel/internal/tenant"
 )
 
@@ -22,6 +21,10 @@ import (
 // sqlc 产物 —— internal 规则按 import 方所在目录判定，与包名无关。
 // 这正是要守的边界本身：只有 repository 这一层看得见生成代码。
 // internal/handler/isolation_test.go 从另一侧钉住「其余任何地方都看不见」。
+//
+// 它也刻意不再用那个产物：WithTenant 交给 fn 的是 repository.Tx（接口），
+// 断言写在领域类型上。测试若还拿着 sqlc 的 params 结构体，就等于替业务层
+// 演练了一遍「我其实够得着生成代码」，而那正是这一层要消灭的姿势。
 
 // TestMain 保证库里有 schema。
 //
@@ -79,7 +82,7 @@ func pool(t *testing.T) *pgxpool.Pool {
 // 没有租户上下文时必须直接失败，不能退化成「查全部」，也不能回落到某个默认租户。
 func TestWithTenantRefusesMissingTenant(t *testing.T) {
 	r := repository.New(pool(t))
-	err := r.WithTenant(context.Background(), func(q *repository.Queries) error {
+	err := r.WithTenant(context.Background(), func(q repository.Tx) error {
 		t.Error("不应该执行到这里：没有租户上下文时 fn 不该被调用")
 		return nil
 	})
@@ -94,7 +97,7 @@ func TestWithTenantRefusesZeroTenant(t *testing.T) {
 	r := repository.New(pool(t))
 	for _, id := range []int64{0, -1} {
 		err := r.WithTenant(tenant.NewContext(context.Background(), id),
-			func(q *repository.Queries) error {
+			func(q repository.Tx) error {
 				t.Errorf("租户 %d 不应该被接受", id)
 				return nil
 			})
@@ -109,11 +112,11 @@ func TestTenantDoesNotLeakToNextCall(t *testing.T) {
 	r := repository.New(pool(t))
 
 	ctx := tenant.NewContext(context.Background(), 1)
-	if err := r.WithTenant(ctx, func(q *repository.Queries) error { return nil }); err != nil {
+	if err := r.WithTenant(ctx, func(q repository.Tx) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 
-	err := r.WithTenant(context.Background(), func(q *repository.Queries) error {
+	err := r.WithTenant(context.Background(), func(q repository.Tx) error {
 		t.Error("不应该执行到这里")
 		return nil
 	})
@@ -135,7 +138,7 @@ func TestTenantSettingDiesWithTheTransaction(t *testing.T) {
 	r := repository.New(p)
 
 	if err := r.WithTenant(tenant.NewContext(ctx, 4242),
-		func(q *repository.Queries) error { return nil }); err != nil {
+		func(q repository.Tx) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 
@@ -173,8 +176,8 @@ func TestWithTenantScopesGeneratedQueryToTheTenant(t *testing.T) {
 		want string
 	}{{idA, "product-A"}, {idB, "product-B"}} {
 		var titles []string
-		err := r.WithTenant(tenant.NewContext(ctx, tc.id), func(q *repository.Queries) error {
-			rows, err := q.ListProducts(ctx, sqlcdb.ListProductsParams{Limit: 100, Offset: 0})
+		err := r.WithTenant(tenant.NewContext(ctx, tc.id), func(q repository.Tx) error {
+			rows, err := q.ListProducts(ctx, 100, 0)
 			if err != nil {
 				return err
 			}

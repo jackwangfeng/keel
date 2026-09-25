@@ -14,3 +14,17 @@ SELECT id, title, subtitle, min_price_cents, max_price_cents,
    AND status = 1
  ORDER BY published_at DESC NULLS LAST, id DESC
  LIMIT $1 OFFSET $2;
+
+-- name: CountProducts :one
+-- 同样刻意不带 WHERE merchant_id —— 理由与 ListProducts 一模一样。
+--
+-- 契约的 200 响应是 PageMeta + items，而 PageMeta 的 total 是必填字段。
+-- 没有这条查询，total 就只能靠 len(items) 现编，那在「还有下一页」时是错的，
+-- 而且错得很安静：客户端据此算出的总页数会少，最后几页谁也翻不到。
+--
+-- 条件必须与 ListProducts 逐字一致：两边只要有一处不同，total 数的就不是
+-- 列表实际会分出来的那批行。
+SELECT count(*)
+  FROM products
+ WHERE deleted_at IS NULL
+   AND status = 1;

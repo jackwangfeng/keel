@@ -53,3 +53,37 @@ SELECT m.id, 'custom.example.net'
   FROM merchants m
  WHERE m.code = 'shop-c'
    AND NOT EXISTS (SELECT 1 FROM shop_settings s WHERE s.merchant_id = m.id);
+
+-- ### 商品
+--
+-- shop-a 与 shop-b 各自有商品，**件数刻意不同**（3 与 2）。
+--
+-- 两点都是必须的。只给一家播商品的话，跨租户测试形同虚设：另一边拿到空列表，
+-- 而空列表既可能是 RLS 把别家的数据挡住了，也可能只是那家店本来就没有商品。
+-- 件数相同的话，「两边都返回 3 件」这个观察同样区分不开「各看各的 3 件」和
+-- 「都看到了全部 3 件」——只有当 a 是 3、b 是 2，RLS 一旦失效两边就都变成 5，
+-- 断言立刻红。
+--
+-- 用 WHERE NOT EXISTS 而不是 ON CONFLICT DO NOTHING：categories 与 products 上
+-- 没有能撞到的唯一约束（UNIQUE (id, merchant_id) 里的 id 是自增的，永远撞不上），
+-- 所以 ON CONFLICT 在这两张表上什么也不做，重复加载会一遍遍累积重复行 ——
+-- 实测两次之后行数从 2 变成 4。而测试每跑一次就加载一次这个文件。
+INSERT INTO categories (merchant_id, name, path, status)
+SELECT m.id, '默认分类', '/', 1
+  FROM merchants m
+ WHERE m.code IN ('shop-a', 'shop-b')
+   AND NOT EXISTS (SELECT 1 FROM categories c
+                    WHERE c.merchant_id = m.id AND c.name = '默认分类');
+
+-- generate_series 的上界按店取：件数不同才让跨租户断言有区分力（见上）。
+-- 它引用了同一个 FROM 里的 m —— FROM 里的集合返回函数是隐式 LATERAL 的。
+INSERT INTO products (merchant_id, category_id, title, min_price_cents,
+                      max_price_cents, total_stock, sales_count, status, published_at)
+SELECT c.merchant_id, c.id, m.code || ' 的商品 ' || g, 1990, 4990, 100, 0, 1, now()
+  FROM merchants m
+  JOIN categories c ON c.merchant_id = m.id AND c.name = '默认分类'
+  CROSS JOIN generate_series(1, CASE m.code WHEN 'shop-a' THEN 3 ELSE 2 END) g
+ WHERE m.code IN ('shop-a', 'shop-b')
+   AND NOT EXISTS (SELECT 1 FROM products p
+                    WHERE p.merchant_id = c.merchant_id
+                      AND p.title = m.code || ' 的商品 ' || g);

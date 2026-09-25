@@ -62,6 +62,12 @@ func TestGeneratedDBIsUnreachableFromHandler(t *testing.T) {
 // buildProbe 在模块内写一个只 import pkg 的探针包，对它跑 go build，返回合并输出。
 func buildProbe(t *testing.T, pkg string) ([]byte, error) {
 	t.Helper()
+	return buildProbeSrc(t, "package "+probeDir+"\n\nimport _ \""+pkg+"\"\n")
+}
+
+// buildProbeSrc 同上，但探针的源码由调用方给全。
+func buildProbeSrc(t *testing.T, src string) ([]byte, error) {
+	t.Helper()
 
 	// 测试的工作目录是本包目录，仓库根在上两级（与 internal/db 的迁移测试同惯例）。
 	root := filepath.Join("..", "..")
@@ -85,7 +91,6 @@ func buildProbe(t *testing.T, pkg string) ([]byte, error) {
 		}
 	})
 
-	src := "package " + probeDir + "\n\nimport _ \"" + pkg + "\"\n"
 	if err := os.WriteFile(filepath.Join(dir, "probe.go"), []byte(src), 0o644); err != nil {
 		t.Fatalf("写探针文件失败: %v", err)
 	}
@@ -93,4 +98,44 @@ func buildProbe(t *testing.T, pkg string) ([]byte, error) {
 	cmd := exec.Command("go", "build", "./internal/"+probeDir+"/")
 	cmd.Dir = root
 	return cmd.CombinedOutput()
+}
+
+// WithTenant 交给业务层的 Tx 上不能有 WithTx。
+//
+// *db.Queries 有一个导出方法 WithTx(pgx.Tx) *Queries。只要业务层握着的是那个
+// 具体类型，「自己 Begin 一个事务再 WithTx 过去」就是一句能编译的话 —— 那条路上
+// 没有 set_config('app.merchant_id')，查询会撞上 current_merchant() 抛的 42501。
+// 比 db.New(pool) 那个缺口窄，但一样是缺口。
+//
+// 上面两条测试守的是「看不见生成代码这个包」，这一条守的是「看得见的那个类型上
+// 没有那个方法」—— 把 repository.Tx 换回 *db.Queries 的类型别名，这条会红，
+// 而上面两条不会：别名指向的包名根本不出现在业务代码里，internal 规则不响。
+func TestTenantTxDoesNotExposeWithTx(t *testing.T) {
+	src := `package ` + probeDir + `
+
+import (
+	"context"
+
+	"github.com/jackc/pgx/v5"
+
+	"github.com/keel/keel/internal/repository"
+)
+
+func probe(r *repository.Repo, ctx context.Context, tx pgx.Tx) {
+	_ = r.WithTenant(ctx, func(q repository.Tx) error {
+		_ = q.WithTx(tx)
+		return nil
+	})
+}
+`
+	out, err := buildProbeSrc(t, src)
+	if err == nil {
+		t.Fatal("业务层拿到的 repository.Tx 上竟然有 WithTx —— " +
+			"「自己 Begin 一个没设租户的事务」这条路又回来了")
+	}
+	if !strings.Contains(string(out), "WithTx undefined") {
+		t.Fatalf("构建确实失败了，但不是因为 WithTx 不存在 —— "+
+			"这种绿是假的。实际输出：\n%s", out)
+	}
+	t.Logf("go build 如期拒绝：\n%s", strings.TrimSpace(string(out)))
 }

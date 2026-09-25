@@ -1,7 +1,7 @@
 // Package repository 是数据访问层，也是业务代码进入数据库的唯一入口。
 //
 // sqlc 产物在 internal/db 之下，Go 的 internal 规则让 internal/repository/ 之外的
-// 包 import 不到它。于是 handler 与 service 只能经由 WithTenant 拿到 *Queries，
+// 包 import 不到它。于是 handler 与 service 只能经由 WithTenant 拿到 Tx，
 // 而 WithTenant 保证每一次访问都发生在一个设过 app.merchant_id 的事务里。
 //
 // 这条约束必须靠编译器而不是靠自觉：sqlc 的 DBTX 接口同时被 *pgxpool.Pool 和
@@ -25,14 +25,14 @@ type Repo struct{ pool *pgxpool.Pool }
 
 func New(pool *pgxpool.Pool) *Repo { return &Repo{pool: pool} }
 
-// Queries 是给业务层看的类型别名，这样 service 的函数签名里不必出现
-// （也不可能出现）internal 包的名字。
-type Queries = db.Queries
-
 // WithTenant 在一个设好租户上下文的事务里执行 fn。
 //
 // 租户从 ctx 取，不从参数传 —— 调用方没有那个参数可以传错。
-func (r *Repo) WithTenant(ctx context.Context, fn func(*Queries) error) error {
+//
+// fn 收到的是 Tx（接口），不是 *db.Queries。理由见 product.go 里 Tx 的注释：
+// 生成代码上的导出方法 WithTx(pgx.Tx) 会让「自己 Begin 一个没设租户的事务」
+// 重新变成一句能编译的话，而接口让那个方法在业务层根本不存在。
+func (r *Repo) WithTenant(ctx context.Context, fn func(Tx) error) error {
 	merchantID, err := tenant.FromContext(ctx)
 	if err != nil {
 		return err
@@ -63,7 +63,7 @@ func (r *Repo) WithTenant(ctx context.Context, fn func(*Queries) error) error {
 		return err
 	}
 
-	if err := fn(db.New(tx)); err != nil {
+	if err := fn(tenantTx{q: db.New(tx)}); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

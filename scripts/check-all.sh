@@ -5,7 +5,7 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 
 fail=0
-for script in check_links check_promises check_openapi check_capabilities check_tenancy; do
+for script in check_links check_promises check_openapi check_capabilities check_tenancy check_query_tenancy; do
     printf '\n=== %s ===\n' "$script"
     if ! python3 "scripts/${script}.py"; then
         fail=1

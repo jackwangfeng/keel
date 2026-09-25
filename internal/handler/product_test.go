@@ -1,0 +1,228 @@
+package handler_test
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"sort"
+	"strconv"
+	"strings"
+	"testing"
+)
+
+// listResp 只声明断言要用到的字段，但 total / page / page_size 一个都不能少：
+// 它们是契约 200 响应里 PageMeta 的必填字段。
+type listResp struct {
+	Page     int        `json:"page"`
+	PageSize int        `json:"page_size"`
+	Total    int64      `json:"total"`
+	Items    []respItem `json:"items"`
+}
+
+type respItem struct {
+	ID            int64  `json:"id"`
+	Title         string `json:"title"`
+	MinPriceCents int64  `json:"min_price_cents"`
+	Status        int16  `json:"status"`
+}
+
+// 种子里两家店的商品件数。刻意不同 —— 相同的话，「两边都返回 N 件」
+// 区分不开「各看各的」和「都看到了全部」。
+const (
+	wantA = 3
+	wantB = 2
+)
+
+func get(t *testing.T, host, path string) (*httptest.ResponseRecorder, listResp) {
+	t.Helper()
+	w := do(t, host, path)
+	var body listResp
+	if w.Code == http.StatusOK {
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatalf("响应不是预期结构: %v\n%s", err, w.Body.String())
+		}
+	}
+	return w, body
+}
+
+// 两个租户各自只看得到自己的商品：件数对得上，且 id 集合无交集。
+//
+// 这一条是整套多租户设计唯一真正要命的地方，而它在单租户测试数据下完全看不
+// 出来——加不加 WHERE merchant_id 结果一模一样。
+//
+// 断言具体条数而不是「非空」「无交集」：把 RLS 策略删掉之后，两家店都会看到
+// 全部 5 件，此时 id 集合**确实有交集**，所以无交集那条也会红；但如果哪天
+// 两家店的商品变成一样多，只剩无交集这一条时，「两边各返回一半」这种半失效
+// 就漏过去了。件数 + 无交集 + 标题归属，三条各挡一类失效。
+func TestTenantsSeeOnlyTheirOwnProducts(t *testing.T) {
+	wa, a := get(t, "shop-a."+baseDomain, "/api/v1/products")
+	wb, b := get(t, "shop-b."+baseDomain, "/api/v1/products")
+	if wa.Code != http.StatusOK || wb.Code != http.StatusOK {
+		t.Fatalf("状态码 a=%d b=%d\na=%s\nb=%s",
+			wa.Code, wb.Code, wa.Body.String(), wb.Body.String())
+	}
+
+	if len(a.Items) != wantA || len(b.Items) != wantB {
+		t.Fatalf("件数不对：shop-a 得 %d 件（期望 %d），shop-b 得 %d 件（期望 %d）。"+
+			"两边都变成 %d 件的话，就是租户过滤整个失效了；"+
+			"件数比种子多则是种子不幂等（重复加载在累积重复行）",
+			len(a.Items), wantA, len(b.Items), wantB, wantA+wantB)
+	}
+
+	// total 是契约里客户端拿来算总页数的那个数，它同样必须是**本租户的**总数。
+	// 只断言 items 的话，一个「列表走 RLS、计数不走」的实现能安静地混过去，
+	// 症状是客户端一直翻到一页空的。
+	if a.Total != wantA || b.Total != wantB {
+		t.Fatalf("total 不对：shop-a=%d（期望 %d），shop-b=%d（期望 %d）",
+			a.Total, wantA, b.Total, wantB)
+	}
+
+	seen := map[int64]bool{}
+	for _, it := range a.Items {
+		seen[it.ID] = true
+	}
+	for _, it := range b.Items {
+		if seen[it.ID] {
+			t.Fatalf("商品 %d 同时出现在两个租户的结果里 —— RLS 没生效", it.ID)
+		}
+	}
+
+	// 标题里带着店铺 code。它挡的是「件数对、id 也不重叠，但两边拿错了对方那批」
+	// 这种交叉——上面两条对它都是绿的。
+	for _, tc := range []struct {
+		code  string
+		items []respItem
+	}{{"shop-a", a.Items}, {"shop-b", b.Items}} {
+		for _, it := range tc.items {
+			if !strings.HasPrefix(it.Title, tc.code+" ") {
+				t.Fatalf("%s 的结果里出现了 %q —— 它不属于这家店", tc.code, it.Title)
+			}
+		}
+	}
+}
+
+// 分页参数越界必须被钳制，而且钳制的结果要能从响应里看出来。
+//
+// 只断言「状态码是 200 或 400」是测不出钳制的：不钳制也一样返回 200。
+// 断言回显的 page / page_size 是钳制后的值，删掉 service 里的钳制就会红。
+func TestPaginationIsClamped(t *testing.T) {
+	for _, tc := range []struct {
+		query          string
+		page, pageSize int
+	}{
+		{"", 1, 20},
+		{"?page=0", 1, 20},
+		{"?page=-1", 1, 20},
+		{"?page_size=0", 1, 20},
+		{"?page_size=-5", 1, 20},
+		{"?page_size=100000", 1, 100},
+		{"?page_size=101", 1, 100},
+		{"?page=abc", 1, 20},
+		{"?page=2&page_size=2", 2, 2},
+	} {
+		w, body := get(t, "shop-a."+baseDomain, "/api/v1/products"+tc.query)
+		if w.Code != http.StatusOK {
+			t.Fatalf("%q 期望 200，实得 %d：%s", tc.query, w.Code, w.Body.String())
+		}
+		if body.Page != tc.page || body.PageSize != tc.pageSize {
+			t.Fatalf("%q 回显 page=%d page_size=%d，期望 %d / %d —— "+
+				"越界的分页参数没有被钳制，它们会原样进 SQL",
+				tc.query, body.Page, body.PageSize, tc.page, tc.pageSize)
+		}
+		if len(body.Items) > tc.pageSize {
+			t.Fatalf("%q 返回了 %d 件，超过 page_size=%d", tc.query, len(body.Items), tc.pageSize)
+		}
+	}
+}
+
+// 巨大的页码不能变成一个负的 OFFSET。
+//
+// (page-1)*pageSize 在 int32 里会绕回负数，而负的 OFFSET 让 Postgres 报错 ——
+// 一个 500，错误信息里只字不提「页码太大」。sqlc 生成的参数正是 int32。
+func TestHugePageDoesNotOverflow(t *testing.T) {
+	for _, q := range []string{"?page=999999999", "?page=9223372036854775807"} {
+		w, body := get(t, "shop-a."+baseDomain, "/api/v1/products"+q)
+		if w.Code != http.StatusOK {
+			t.Fatalf("%q 期望 200，实得 %d：%s", q, w.Code, w.Body.String())
+		}
+		if len(body.Items) != 0 {
+			t.Fatalf("%q 期望空页，实得 %d 件", q, len(body.Items))
+		}
+	}
+}
+
+// 分页真的在翻页：两页的 id 不重复，合起来正好是全部。
+//
+// 没有这条的话，一个把 OFFSET 恒当成 0 的实现在上面所有断言下都是绿的。
+func TestPagingWalksThroughTheWholeList(t *testing.T) {
+	var ids []int64
+	for page := 1; page <= wantA; page++ {
+		_, body := get(t, "shop-a."+baseDomain,
+			"/api/v1/products?page_size=1&page="+strconv.Itoa(page))
+		if len(body.Items) != 1 {
+			t.Fatalf("第 %d 页期望 1 件，实得 %d 件", page, len(body.Items))
+		}
+		ids = append(ids, body.Items[0].ID)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	for i := 1; i < len(ids); i++ {
+		if ids[i] == ids[i-1] {
+			t.Fatalf("翻页翻出了重复的商品 %d —— OFFSET 可能没生效：%v", ids[i], ids)
+		}
+	}
+
+	_, past := get(t, "shop-a."+baseDomain, "/api/v1/products?page_size=1&page="+strconv.Itoa(wantA+1))
+	if len(past.Items) != 0 {
+		t.Fatalf("越过最后一页还有 %d 件", len(past.Items))
+	}
+}
+
+// 未知的 Host 拿不到任何商品：解析不到商家就是 404，不会回落到某一家店。
+func TestUnknownHostGetsNoProducts(t *testing.T) {
+	for _, host := range []string{"nobody." + baseDomain, "shop-a.attacker.example.org"} {
+		w := do(t, host, "/api/v1/products")
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("Host %q 期望 404，实得 %d：%s", host, w.Code, w.Body.String())
+		}
+	}
+}
+
+// healthz 在租户中间件之外：它回答「进程还活着吗」，不该因为 Host 没配对而变红。
+func TestHealthzIgnoresHost(t *testing.T) {
+	w := do(t, "whatever.invalid", "/healthz")
+	if w.Code != http.StatusOK || w.Body.String() != "ok" {
+		t.Fatalf("healthz: 状态 %d，正文 %q", w.Code, w.Body.String())
+	}
+}
+
+// 响应的形状必须是契约里的 PageMeta + items，而不是 {code,message,data} 信封。
+func TestResponseShapeMatchesContract(t *testing.T) {
+	w := do(t, "shop-a."+baseDomain, "/api/v1/products")
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(w.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("响应不是 JSON 对象: %v\n%s", err, w.Body.String())
+	}
+	for _, k := range []string{"page", "page_size", "total", "items"} {
+		if _, ok := raw[k]; !ok {
+			t.Fatalf("响应缺少契约里的必填字段 %q：%s", k, w.Body.String())
+		}
+	}
+	if len(raw) != 4 {
+		t.Fatalf("响应多出了契约里没有的顶层字段：%s", w.Body.String())
+	}
+
+	var items []map[string]json.RawMessage
+	if err := json.Unmarshal(raw["items"], &items); err != nil {
+		t.Fatal(err)
+	}
+	if len(items) == 0 {
+		t.Fatal("种子数据不足，无法检查 items 的形状")
+	}
+	// ProductSummary 的 required：id / title / min_price_cents / status。
+	// status 尤其不能带 omitempty —— 0 在契约里是「草稿」这个有意义的取值。
+	for _, k := range []string{"id", "title", "min_price_cents", "status"} {
+		if _, ok := items[0][k]; !ok {
+			t.Fatalf("items[0] 缺少契约里的必填字段 %q：%s", k, raw["items"])
+		}
+	}
+}
