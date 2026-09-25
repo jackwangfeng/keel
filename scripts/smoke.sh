@@ -8,6 +8,8 @@
 # 退出码 0 表示链路通。
 set -euo pipefail
 
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+
 # 端口与 compose.yaml 里的映射用同一个变量，两边不会各说各话。
 PORT="${KEEL_HTTP_PORT:-8080}"
 BASE="${KEEL_BASE:-http://localhost:$PORT}"
@@ -111,6 +113,109 @@ print(tok)
 PYEOF
 ) || { echo "登录响应不是预期的 LoginResponse：" >&2; cat "$login_file" >&2; echo >&2; exit 1; }
 echo "    拿到 access_token（${#token} 字符）"
+
+# ---------------------------------------------------------------------------
+# 下单到收款（M2 主链路）
+# ---------------------------------------------------------------------------
+#
+# 这一段是 M2 验收点名补的。在它之前，`grep -c "orders\|webhooks\|payments"`
+# 这个文件的结果是 0：M2 的主链路完全靠 internal/handler 的 httptest 撑着，
+# 而那些测试**不经过真实 HTTP server、不经过 compose 起来的那个镜像**。
+#
+# 也就是说：镜像里 libdtmrs.so 链接坏了、KEEL_DTM_DSN 指到一个不可写的路径、
+# webhook 路由忘了挂进 v1 组、沙箱开关被关掉了 —— 以上任何一条成立，全部单元
+# 测试照样绿，smoke 也照样绿。产出标志「能下单能支付」在进程外一个闸门都没有。
+
+AUTH=(-H "Authorization: Bearer $token")
+
+# 地址 id 固定取 1：种子（db/seed/single.sql）给这个买家只插一条地址，而 compose
+# 起的是一卷全新的库。契约里没有 GET /addresses，没有别的拿法。
+SMOKE_ADDRESS_ID="${KEEL_SMOKE_ADDRESS_ID:-1}"
+
+product_id=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["items"][0]["id"])' "$body_file")
+
+echo "==> GET $BASE/api/v1/products/$product_id 挑一个有货的 SKU"
+detail_file=$(mktemp)
+order_file=$(mktemp)
+intent_file=$(mktemp)
+trap 'rm -f "$body_file" "$login_file" "$detail_file" "$order_file" "$intent_file"' EXIT
+
+code=$(curl "${curl_args[@]}" "${AUTH[@]}" -o "$detail_file" -w '%{http_code}' \
+    "$BASE/api/v1/products/$product_id")
+if [ "$code" != "200" ]; then
+    echo "商品详情返回 $code，期望 200：" >&2; cat "$detail_file" >&2; echo >&2; exit 1
+fi
+read -r sku_id stock_before < <(python3 "$SCRIPT_DIR/smoke_pick_sku.py" "$detail_file") \
+    || { echo "商品详情里挑不出有货的 SKU：" >&2; cat "$detail_file" >&2; echo >&2; exit 1; }
+echo "    sku=$sku_id 下单前水位=$stock_before"
+
+order_body="{\"items\":[{\"sku_id\":$sku_id,\"quantity\":1}],\"address_id\":$SMOKE_ADDRESS_ID}"
+
+echo "==> POST $BASE/api/v1/orders/preview 试算"
+code=$(curl "${curl_args[@]}" "${AUTH[@]}" -o "$order_file" -w '%{http_code}' \
+    -H 'Content-Type: application/json' -d "$order_body" "$BASE/api/v1/orders/preview")
+if [ "$code" != "200" ]; then
+    echo "试算返回 $code，期望 200：" >&2; cat "$order_file" >&2; echo >&2; exit 1
+fi
+echo "    应付 $(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["payable_cents"])' "$order_file") 分"
+
+# 幂等键每次跑都换一把。同一把键重放会返回 201 + Idempotency-Replayed: true
+# 而**不扣库存** —— 那样下面的水位断言会红在幂等上，而不是红在它要守的事情上。
+idem="smoke-$(date +%s%N)"
+echo "==> POST $BASE/api/v1/orders 下单（Idempotency-Key: $idem）"
+code=$(curl "${curl_args[@]}" "${AUTH[@]}" -o "$order_file" -w '%{http_code}' \
+    -H 'Content-Type: application/json' -H "Idempotency-Key: $idem" \
+    -d "$order_body" "$BASE/api/v1/orders")
+if [ "$code" != "201" ]; then
+    echo "下单返回 $code，期望 201：" >&2; cat "$order_file" >&2; echo >&2; exit 1
+fi
+order_no=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["order_no"])' "$order_file")
+order_status=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["status"])' "$order_file")
+if [ "$order_status" != "10" ]; then
+    echo "新建订单状态是 $order_status，期望 10 待支付" >&2; exit 1
+fi
+echo "    order_no=$order_no status=10"
+
+# 库存真的少了 —— 这一条证明 SAGA 的库存分支在**这个镜像里**真的跑起来了。
+# 协调器起不来、分支没注册上、libdtmrs.so 链接坏了，都会红在这里。
+curl "${curl_args[@]}" "${AUTH[@]}" -s -o "$detail_file" "$BASE/api/v1/products/$product_id"
+stock_after=$(python3 "$SCRIPT_DIR/smoke_pick_sku.py" "$detail_file" "$sku_id")
+if [ "$stock_after" != "$((stock_before - 1))" ]; then
+    echo "下单后水位是 $stock_after，期望 $((stock_before - 1)) —— SAGA 的库存分支没扣" >&2
+    exit 1
+fi
+echo "    库存 $stock_before → $stock_after"
+
+echo "==> POST $BASE/api/v1/orders/$order_no/payments 发起支付（沙箱）"
+code=$(curl "${curl_args[@]}" "${AUTH[@]}" -o "$intent_file" -w '%{http_code}' \
+    -H 'Content-Type: application/json' -H "Idempotency-Key: pay-$idem" \
+    -d '{"channel":"wechat"}' "$BASE/api/v1/orders/$order_no/payments")
+if [ "$code" != "201" ]; then
+    echo "发起支付返回 $code，期望 201（沙箱被关掉的话是 501）：" >&2
+    cat "$intent_file" >&2; echo >&2; exit 1
+fi
+
+# 沙箱交出来的是一份签好名的回调报文，不是一条捷径。把它原样投回去，走的是
+# 真实渠道回调**完全相同**的那条路：验签、金额校验、uk_payments_channel_txn
+# 幂等、SettleOrder 里 status = 10 那个与超时补偿撞车时的唯一裁判。
+read -r settle_url settle_sig < <(python3 "$SCRIPT_DIR/smoke_settle.py" head "$intent_file") \
+    || { echo "发起支付的响应里没有可用的沙箱结算指令：" >&2; cat "$intent_file" >&2; echo >&2; exit 1; }
+settle_body=$(python3 "$SCRIPT_DIR/smoke_settle.py" body "$intent_file")
+
+echo "==> POST $settle_url 把签好名的回调原样投回去"
+code=$(curl "${curl_args[@]}" -o /dev/null -w '%{http_code}' \
+    -H 'Content-Type: application/json' -H "X-Keel-Signature: $settle_sig" \
+    -d "$settle_body" "$BASE$settle_url")
+if [ "$code" != "200" ]; then
+    echo "回调返回 $code，期望 200 —— 验签或入账路径断了" >&2; exit 1
+fi
+
+curl "${curl_args[@]}" "${AUTH[@]}" -s -o "$order_file" "$BASE/api/v1/orders/$order_no"
+paid_status=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["status"])' "$order_file")
+if [ "$paid_status" != "20" ]; then
+    echo "回调之后订单状态是 $paid_status，期望 20 已支付：" >&2; cat "$order_file" >&2; echo >&2; exit 1
+fi
+echo "    订单 $order_no 已支付"
 
 echo "==> POST $BASE/api/v1/auth/logout 带上刚拿到的令牌"
 code=$(curl "${curl_args[@]}" -o /dev/null -w '%{http_code}' -X POST \
