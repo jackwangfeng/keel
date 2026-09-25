@@ -5,6 +5,11 @@
 **An AI-native commerce platform with a built-in distributed transaction engine.**
 *Runs on a single machine. Scales without a rewrite. No external AI APIs.*
 
+<!-- The badge uses the same <org> placeholder as the clone URL in the quick start:
+     this repository has no remote yet. Once the org is decided, one sed over both
+     READMEs fixes it. scripts/check_promises.py already refuses a build badge when
+     .github/workflows/ is missing, so the badge cannot outlive the CI it claims. -->
+[![CI](https://github.com/<org>/keel/actions/workflows/ci.yml/badge.svg)](https://github.com/<org>/keel/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](./LICENSE)
 ![Go](https://img.shields.io/badge/Go-1.26+-00ADD8)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16+-336791)

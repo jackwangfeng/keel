@@ -5,6 +5,11 @@
 **自带分布式事务引擎的 AI 原生电商系统**
 *单机可跑，扩展无需重写，AI 全本地推理*
 
+<!-- 徽章沿用快速开始里 clone 地址的 <org> 占位符：这个仓库还没有远端。
+     组织名定下来之后，两份 README 各 sed 一次即可。
+     scripts/check_promises.py 会在 .github/workflows/ 不存在时把构建徽章判为虚标，
+     所以徽章活不过它所宣称的那套 CI。 -->
+[![CI](https://github.com/<org>/keel/actions/workflows/ci.yml/badge.svg)](https://github.com/<org>/keel/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](./LICENSE)
 ![Go](https://img.shields.io/badge/Go-1.26+-00ADD8)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16+-336791)

@@ -15,7 +15,13 @@ HTML_SRC_RE = re.compile(r'<(?:a|img|source)\b[^>]*?(?:href|src)\s*=\s*["\']([^"
 HEADING_RE = re.compile(r'^#{1,6}\s+(.*?)\s*$', re.MULTILINE)
 FENCE_RE = re.compile(r'^\s*(```|~~~)')
 INLINE_CODE_RE = re.compile(r'`[^`]*`')
-SKIP_DIRS = {'.git', '.superpowers', 'node_modules', 'target', 'vendor'}
+# 跳过的目录：版本库元数据，以及**别人的**源码——依赖树、构建产物、
+# 以及 examples/dtmrs-embedded/scripts/fetch-dtmrs.sh clone 下来的 dtmrs 源码树。
+# 最后这一条是补一个真实发生过的坑：跑过一次 `make deps`（例子的 README 就是
+# 这么教的，CI 的 example-dtmrs workflow 也这么跑）之后，check-all.sh 会红在
+# 上游 dtmrs 自己文档的两个锚点上——一个这个仓库既没写、也改不了、还看不懂
+# 为什么归自己管的失败。闸门指错了地方，比不报还糟。
+SKIP_DIRS = {'.git', '.superpowers', 'node_modules', 'target', 'vendor', '.dtmrs-src'}
 
 
 def slugify(heading):

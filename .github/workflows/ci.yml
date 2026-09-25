@@ -1,0 +1,196 @@
+# 把仓库里已有的每一道闸门接到 PR 上。
+#
+# 这些闸门本来就都在：scripts/check-all.sh（六个文档/契约校验 + 契约产物漂移
+# 比对 + schema-check）、make test-db、docker compose + scripts/smoke.sh +
+# make sdk-smoke。这个文件刻意**不重新实现**其中任何一条，只调用它们。
+#
+# 理由是「本地绿、CI 红」这类事故的排查成本：闸门一旦有两份实现，每次不一致
+# 都要先花时间分辨是代码错了还是两份实现错开了。把判据留在仓库里那一份，
+# 贡献者在本地跑的和 CI 跑的就是同一段代码，对不上的时候只有一个嫌疑人。
+#
+# ## 为什么分成三个 job
+#
+# 三者的前置条件不相交：gates 只要 Go 工具链 + Node，go 要一个 PostgreSQL，
+# e2e 要 Docker。串成一个 job 的话，最慢的那段（compose 建镜像，分钟级）会挡住
+# 最快的那段（文档校验，本机实测 2.4 秒），而 PR 上最常红的恰恰是最快那段。
+#
+# 代价是 Go 模块要各下一遍。可以接受：真正贵的是 docker build，而它只在 e2e 里。
+#
+# ## 没有覆盖到的（说出来，别让读者以为都盖住了）
+#
+#   - 多商家形态（compose.multi.yaml + KEEL_SMOKE_HOST）。e2e 只跑默认的单商家
+#     形态。叠加层与它自己的数据卷目前只有人手动验证过。
+#   - -race。make test-db 是 `go test -count=1 -p 1 ./...`，没有 -race；
+#     要加得先决定它属于 Makefile 还是属于这里。
+#   - examples/dtmrs-embedded 在自己的 workflow 里（example-dtmrs.yml），
+#     它要 Rust 工具链，不该挂在每个 PR 的关键路径上。
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # 手动触发。没有它，一个还没开 PR 的分支没有任何办法看见 CI 的判断，
+  # 而「先跑一遍再开 PR」是这个仓库的习惯。
+  workflow_dispatch:
+
+# 只读。这些 job 一个字都不往仓库里写，默认的可写令牌是白给的风险面。
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # 只在 PR 上取消。往 PR 连推三次，没必要让三个 e2e 同时建镜像——有意义的
+  # 判断只有最后一个 commit 那次。main 上不取消：那里每个 commit 的结论
+  # 都要留痕，被取消的那次事后说不清是绿还是红。
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 文档、契约、以及入库的生成产物有没有漂移
+  # ---------------------------------------------------------------------------
+  gates:
+    name: 文档与契约闸门
+    runs-on: ubuntu-latest
+    # 这一段本机 2.4 秒。给 15 分钟是留给 npx 首次下载与 Go 模块下载的，
+    # 不是留给「卡住也没关系」——真卡住时，六小时的默认上限会把 runner 额度
+    # 烧光，而失败信息还是那句超时。
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          # 版本从 go.mod 读，不写字面量。下限 1.26 不是随手挑的：tools/ 里钉住的
+          # sqlc 与 goose 都声明 go 1.26，下限由它们传染而来（docker/Dockerfile
+          # 与 CONTRIBUTING 都记了这件事）。写死一个数字，将来 go.mod 提上去而这里
+          # 忘了跟，报出来的会是 go mod download 的一句和真因无关的错。
+          go-version-file: go.mod
+          # 两个模块各有自己的 go.sum。只给根那份的话，tools/ 的依赖树（sqlc 拖进来
+          # 270+ 个模块）每次都要重下，而缓存键还会在 tools/go.sum 变了之后不失效。
+          cache-dependency-path: |
+            go.sum
+            tools/go.sum
+
+      - uses: actions/setup-node@v4
+        with:
+          # check-all.sh 的漂移比对要 npx openapi-typescript，schema-check 要 npx tsc。
+          # 没有 Node 时那两步会失败，而那是**诚实的失败**（契约产物确实没被验证过），
+          # 所以这里必须真的把 Node 装上，不能改成「没有就跳过」。
+          # 下限 22.18（Node 自带类型剥离），CONTRIBUTING 记的已验证版本是 24.10.0。
+          node-version: '24'
+
+      # 先打印版本再跑闸门：contract-check 红的时候，第一个要问的问题就是
+      # 「两边的生成器是不是同一个版本」，答案应该已经在日志上面几行。
+      - name: 钉住的工具版本
+        run: make tools-versions
+
+      # 六个 python 校验 + 契约产物漂移比对 + schema-check，一条命令。
+      # 漂移比对是生成到临时目录再 diff，对工作区只读——CI 上不会出现
+      # 「检查跑完工作区被改了」这种要额外一步 git diff --exit-code 去收尾的事。
+      - name: 全部闸门
+        run: ./scripts/check-all.sh
+
+  # ---------------------------------------------------------------------------
+  # Go 侧：编译、vet、以及碰数据库的测试
+  # ---------------------------------------------------------------------------
+  go:
+    name: Go 构建与测试
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          # keel / keel / keel 与 internal/db.AdminDSN() 的默认值逐项对应，
+          # 迁移用的就是这个角色。对上之后这个 job 一个 PG* 环境变量都不用配，
+          # 少一处「Makefile、compose、workflow 三份连接串各说各话」的机会。
+          # 应用与测试连的是 keel_app，它由 00003_app_role.sql 在迁移里建出来。
+          POSTGRES_USER: keel
+          POSTGRES_PASSWORD: keel
+          POSTGRES_DB: keel
+        ports:
+          # 测试进程跑在 runner 宿主机上，不在容器网络里，所以必须映射出来。
+          # 映到 5432 是为了让 internal/db 的默认 PGPORT 直接成立。
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U keel -d keel"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            tools/go.sum
+
+      - run: go build ./...
+
+      - run: go vet ./...
+
+      # make test-db，不是裸 go test。Makefile 里那两个参数都是闸门的一部分：
+      #   -count=1  这些测试真正的输入是数据库状态，在 Go 的视野之外；不禁缓存的话
+      #             把 RLS 策略删掉也照样 `ok (cached)`。
+      #   -p 1      各包的 TestMain 对同一个库跑 goose 迁移，默认并行会撞成
+      #             `relation "goose_db_version" does not exist` 一类的错。
+      #
+      # 上面那个竞态的方向和一般抖动相反：**库是暖的必绿，库是冷的必红**。
+      # 所以这里刻意不做任何「复用一个已迁移的库」的优化——服务容器每次都是全新空库，
+      # 而 CI 恰恰是唯一每次都会踩到这类问题的地方。为了跑得快去缓存它，等于把
+      # 这个 job 换成一个只在该报警时失灵的 job。
+      - name: 数据库测试（每次都是冷库）
+        run: make test-db
+
+  # ---------------------------------------------------------------------------
+  # 端到端：起全栈，再从外面打进去
+  # ---------------------------------------------------------------------------
+  #
+  # 这个 job 是 db/seed/single.sql 唯一的自动化覆盖。单元测试用的是 dev.sql，
+  # single.sql 此前零覆盖——它播的那家 demo 店对不上 KEEL_DEFAULT_MERCHANT 时，
+  # 只有这条链路会红。
+  e2e:
+    name: 端到端（compose + smoke + SDK）
+    runs-on: ubuntu-latest
+    # 比另外两个宽：这里要在 runner 上从零建两个镜像，Go 依赖在容器里重下一遍。
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # 只为 make sdk-smoke —— 它 `node web/src/api/smoke.mts` 直接跑 .mts，
+          # 靠 Node 自带的类型剥离，没有构建步骤也没有 node_modules。
+          node-version: '24'
+
+      # 端口刻意用默认的 8080，不换。这一整段就是 README 快速开始里那三行命令，
+      # 一字不改地跑一遍——换了端口，CI 验证的就不再是 README 让读者跑的那件事。
+      - name: 起全栈
+        run: docker compose up -d --build
+
+      # **判据在这一步，不在上一步。**
+      #
+      # `docker compose up -d` 只等到容器**启动**：应用随后因为 tenant.Preflight
+      # 自检不过而退出，它照样返回 0（本机实测过）。所以单跑 up 等于没跑，
+      # 这两步必须都在、且都不能被 `|| true`、管道或 continue-on-error 吃掉——
+      # 一个永远不会红的 e2e job 比没有 e2e job 更糟，它还会让人放心。
+      - name: 冒烟（HTTP 一路通到种子数据）
+        run: ./scripts/smoke.sh
+
+      # 与上一步不重复：smoke.sh 用 curl 证明链路通，这个证明**从契约推出来的
+      # TS SDK 自己**能把契约描述的响应在真实网络、真实响应头下读出来。
+      # tsc 只知道服务端答应返回什么。
+      - name: SDK 冒烟
+        run: make sdk-smoke
+
+      # 失败时把现场摊开。没有这一步，红了只能看到一句超时，而真因在某个
+      # 已经退出的容器的日志里（compose 的依赖链是 postgres -> migrate -> seed -> app，
+      # 坏在哪一段决定了该看谁）。if: failure() 不会改变这个 job 的结论。
+      - name: 失败时打印容器状态与日志
+        if: failure()
+        run: |
+          docker compose ps --all
+          docker compose logs --no-color --timestamps
