@@ -62,7 +62,7 @@ GOOSE := GOOSE_DRIVER=postgres GOOSE_DBSTRING="$(GOOSE_DBSTRING)" \
 	$(GORUN) github.com/pressly/goose/v3/cmd/goose
 
 .PHONY: help generate generate-go generate-ts generate-sql generate-uts tools-versions \
-	contract-check schema-check app-install app-build-h5 app-build-android \
+	contract-check schema-check app-type-check app-install app-build-h5 app-build-android \
 	sdk-smoke migrate migrate-down migrate-status test-db \
 	test-engine dtmrs-deps build
 
@@ -74,6 +74,7 @@ help:
 	@echo "make generate-sql   跑 sqlc，重生成 internal/repository/internal/db（SQLC_CONFIG 可覆盖）"
 	@echo "make contract-check 校验 3.1 可空语义没有被生成器悄悄改掉"
 	@echo "make schema-check   用 tsc --strict 检查整个 web/src（含契约产物与 SDK）"
+	@echo "make app-type-check 用 tsc --strict 检查 app/src 下全部 .uts"
 	@echo "make app-install    装客户端依赖（含 npm 跳过 uts 原生 binding 的绕法）"
 	@echo "make app-build-h5   用 DCloud 编译器真编一遍 H5（要先 app-install）"
 	@echo "make sdk-smoke      用 TS SDK 对跑着的服务真打一次 GET /products"
@@ -131,6 +132,13 @@ schema-check:
 # 而为了一份 600 行的类型再钉一个 npm 生成器版本不划算。
 generate-uts:
 	python3 $(ROOT)/scripts/gen_uts_schema.py -o $(UTS_OUT)
+
+# app/src 下全部 .uts 在 --strict 下能不能编译。
+#
+# 范围由脚本自己核对（tsc 对「范围里没有这个文件」是静默的，
+# 和 check_ts_scope.py 挡的是同一个坑）。零 node_modules，只 npx 拉 tsc。
+app-type-check:
+	python3 $(ROOT)/scripts/check_app_types.py $(TSC)
 
 # 装客户端依赖。**不要直接 npm ci** —— 见脚本里那段：npm 11 会把
 # @dcloudio/uts-linux-x64-gnu 当成 libc 不匹配跳过，而少了它 uni 的编译器

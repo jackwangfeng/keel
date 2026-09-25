@@ -8,10 +8,11 @@
 # 都要先花时间分辨是代码错了还是两份实现错开了。把判据留在仓库里那一份，
 # 贡献者在本地跑的和 CI 跑的就是同一段代码，对不上的时候只有一个嫌疑人。
 #
-# ## 为什么分成三个 job
+# ## 为什么分成四个 job
 #
-# 三者的前置条件不相交：gates 只要 Go 工具链 + Node，go 要一个 PostgreSQL，
-# e2e 要 Docker。串成一个 job 的话，最慢的那段（compose 建镜像，分钟级）会挡住
+# 四者的前置条件不相交：gates 只要 Go 工具链 + Node，go 要一个 PostgreSQL，
+# e2e 要 Docker，client 要 app/ 那棵 527 个包的 npm 依赖树（含一个 16MB 的
+# 原生 UTS 编译器）。串成一个 job 的话，最慢的那段（compose 建镜像，分钟级）会挡住
 # 最快的那段（文档校验，本机实测 2.4 秒），而 PR 上最常红的恰恰是最快那段。
 #
 # 代价是 Go 模块要各下一遍。可以接受：真正贵的是 docker build，而它只在 e2e 里。
@@ -25,6 +26,11 @@
 #   - examples/dtmrs-embedded 在自己的 workflow 里（example-dtmrs.yml）。
 #     它跑的是那个例子自己的五项验证（TCC、拉取式分支、崩溃恢复…），
 #     和服务端要的东西不一样，所以没有并进来。
+#   - 客户端（app/）的**原生 App 产物**。client 这个 job 只到「UTS 编译成 Kotlin」
+#     为止 —— 从 Kotlin 到 apk 要 HBuilderX 或 DCloud 云打包，命令行做不到。
+#     详见 app/README.md，那里写了实测到哪一步、卡在哪。
+#   - 客户端跑起来之后的行为。client 只编译，不启动浏览器、不打真后端。
+#     H5 形态对着真后端跑通过一次（记录在 app/README.md），但那是人手动跑的。
 #
 # ## M2 起 Rust 进了关键路径
 #
@@ -254,3 +260,54 @@ jobs:
         run: |
           docker compose ps --all
           docker compose logs --no-color --timestamps
+
+  # ---------------------------------------------------------------------------
+  # 客户端（app/，uni-app x）：用 DCloud 自己的编译器真编一遍
+  # ---------------------------------------------------------------------------
+  #
+  # 与 gates 里那条 app-type-check **不重复**：
+  #
+  #   · app-type-check 跑的是 tsc，范围是 app/src 下的 .uts。零 node_modules，
+  #     秒级，挡的是「契约改了而客户端没跟上」。
+  #   · 这个 job 跑的是 DCloud 的 UTS 编译器，范围多出 .uvue（模板表达式、样式、
+  #     pages.json 路由）与 UTS 自己那套落到 Kotlin 上的语义。
+  #
+  # 两者谁也替不了谁。实测过一条界线：把契约里的字段改个名之后，
+  # **DCloud 的编译器不报「访问了不存在的属性」**（本机实测：给一个 type 加一句
+  # `p.totally_bogus_field` 照样 exit 0），而 tsc 报 TS2551。
+  # 所以契约漂移这件事的判据在 gates 那条，不在这里。
+  client:
+    name: 客户端（uni-app x 编译）
+    runs-on: ubuntu-latest
+    # 本机实测：npm ci 约 30 秒（冷缓存），两次 uni build 各几秒。
+    # 15 分钟给的是 runner 上下载 527 个包 + 那个 16MB 原生 binding 的余量。
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      # 不是裸 npm ci —— npm 11 会把 @dcloudio/uts-linux-x64-gnu 按「libc 不匹配」
+      # 跳过（它的 package.json 写 "libc": ["gnu"]，而 npm 报的是 "glibc"），
+      # 而少了它 uni 的编译器在加载 vite.config.js 时就死。
+      # app/scripts/install-deps.sh 装完会自己核对一遍，缺了就取 tarball 解开。
+      - name: 装客户端依赖
+        run: make app-install
+
+      # H5（web）。这是唯一会跑类型检查的目标 —— uni-uts-v1 里 `check: isWeb`。
+      - name: 编 H5
+        run: make app-build-h5
+
+      # Android：UTS -> Kotlin。**到此为止，不产出 apk**（见文件头「没有覆盖到的」）。
+      # 它仍然值得跑：uvue/uts 里有些写法在 web 上能过、落到 Kotlin 上不成立，
+      # 而那类问题只有这一步会暴露。
+      - name: 编 Android（UTS -> Kotlin）
+        run: make app-build-android
+
+      - name: 失败时列出产物
+        if: failure()
+        run: ls -R app/dist || true

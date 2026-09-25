@@ -85,6 +85,20 @@ if ! make schema-check; then
     fail=1
 fi
 
+# 客户端（app/，uni-app x）读契约字段的每一处能不能编译。
+#
+# 上面那条 check_uts_contract 只证明 app/src/api/schema.uts 与契约同步，
+# 证明不了**客户端跟上了**：字段改了名，重生成之后读它的代码已经对不上，
+# 而那一步不会红。这一条补上另一半。
+#
+# 和 schema-check 一样只用 npx 拉一个钉死版本的 tsc，全程零 node_modules。
+# 真的用 DCloud 自己的编译器编一遍（含 .uvue 模板）是另一道，要 500 多个包，
+# 跑在 CI 的独立 job 里 —— scripts/check_app_build.py。
+printf '\n=== app-type-check ===\n'
+if ! make app-type-check; then
+    fail=1
+fi
+
 if [ "$fail" -ne 0 ]; then
     echo ''
     echo '校验未通过。'
