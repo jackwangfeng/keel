@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -600,5 +601,99 @@ func TestAppRoleGrantSurface(t *testing.T) {
 				"多给的每一项都是一条可写的路径，少给的每一项都是一次运行期 42501",
 				tbl, appRole, got, w, cls)
 		}
+	}
+}
+
+// 带 updated_at 的表必须挂上 touch_updated_at 触发器。
+//
+// 在 00007 之前，七张带这一列的表都只有 DEFAULT now()：那一列记的是**创建
+// 时间**，改一行不会动它。这种错不报警，只会让「这条记录最后什么时候变过」
+// 在半年后得到一个自信而错误的答案。
+//
+// 清单从系统目录枚举，判据是「有没有 updated_at 这一列」——不需要豁免机制，
+// 因为没有这一列的表天然不在范围内。新表加了这一列却忘了挂触发器就会红。
+func TestUpdatedAtIsMaintainedByTrigger(t *testing.T) {
+	if _, err := migrate(t); err != nil {
+		t.Fatalf("迁移失败: %v", err)
+	}
+
+	conn, err := db.Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(context.Background())
+
+	rows, err := conn.Query(context.Background(), `
+		SELECT c.relname,
+		       EXISTS (SELECT 1
+		                 FROM pg_trigger tg
+		                 JOIN pg_proc p ON p.oid = tg.tgfoid
+		                WHERE tg.tgrelid = c.oid
+		                  AND NOT tg.tgisinternal
+		                  AND p.proname = 'touch_updated_at')
+		  FROM pg_class c
+		  JOIN pg_namespace n ON n.oid = c.relnamespace
+		 WHERE n.nspname = 'public' AND c.relkind = 'r'
+		   AND EXISTS (SELECT 1 FROM pg_attribute a
+		                WHERE a.attrelid = c.oid
+		                  AND a.attname = 'updated_at' AND a.attnum > 0)
+		 ORDER BY 1`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+
+	checked := 0
+	for rows.Next() {
+		var name string
+		var hasTrigger bool
+		if err := rows.Scan(&name, &hasTrigger); err != nil {
+			t.Fatal(err)
+		}
+		checked++
+		if !hasTrigger {
+			t.Errorf("表 %s 有 updated_at 列但没挂 touch_updated_at 触发器——"+
+				"那一列会一直停在创建时间上，而且不会有任何报错", name)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if checked == 0 {
+		t.Fatal("一张带 updated_at 的表都没枚举到——这个检查本身失效了")
+	}
+
+	// 上面只证明触发器**挂着**，不证明它**干活**。
+	//
+	// 教训来自同一轮的另一处：策略谓词的形状断言对 `... OR true` 完全失明，
+	// 因为它要的那几个词一个不少。触发器这里同样存在形状与行为的缝隙——
+	// 一个 RETURN NEW 却不改 updated_at 的函数，上面全部断言照样绿。
+	// 探针走管理员连接：keel_app 对 merchants 只有 SELECT（00005 收窄的
+	// GRANT 面），而这里要验的是触发器，不是权限。
+	admin, err := pgx.Connect(context.Background(), db.AdminDSN())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close(context.Background())
+
+	var before, after time.Time
+	if err := admin.QueryRow(context.Background(),
+		`INSERT INTO merchants (code, name) VALUES ('touch-probe', '触发器探针')
+		 ON CONFLICT (code) DO UPDATE SET name = excluded.name
+		 RETURNING updated_at`).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	if err := admin.QueryRow(context.Background(),
+		`UPDATE merchants SET name = '触发器探针（改过）' WHERE code = 'touch-probe'
+		 RETURNING updated_at`).Scan(&after); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(context.Background(),
+		`DELETE FROM merchants WHERE code = 'touch-probe'`); err != nil {
+		t.Fatal(err)
+	}
+	if !after.After(before) {
+		t.Errorf("改了一行之后 updated_at 没有前进：%v → %v——"+
+			"触发器挂着但没干活", before, after)
 	}
 }
