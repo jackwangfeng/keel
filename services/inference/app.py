@@ -115,8 +115,14 @@ async def lifespan(app: FastAPI):
     """模型在**启动时**加载，不是第一次请求时。
 
     懒加载的代价是 /healthz 会在模型还没下载完的时候就回 ok，编排系统于是
-    把流量切进来，第一个真实请求等上几十秒下载 2GB 权重然后超时。
-    启动时加载让「容器 ready」和「能算向量」是同一件事。
+    把流量切进来，第一个真实请求等上几十秒下载 2.27 GB 权重然后超时。
+    放在 lifespan 里，「容器 ready」和「能算向量」就是同一件事。
+
+    实测这条更强：uvicorn 在 lifespan 跑完之前**根本不开始监听**。
+    空卷冷启动 75 秒（下载 + 加载 69.6 秒），这 75 秒里端口一直是拒绝连接，
+    健康检查一次都没绿过。所以下面 healthz 里那个 503 分支实际上够不到 ——
+    留着它是因为它比「假设上游行为不变」便宜，但别指望在加载期看到 503，
+    那段时间看到的是 connection refused。
     """
     global _pool
     from sentence_transformers import SentenceTransformer

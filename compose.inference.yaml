@@ -9,7 +9,8 @@
 #
 #   镜像                 1.39 GB（python:3.12-slim + torch CPU 轮子 + transformers）
 #   模型权重             2.27 GB（BAAI/bge-m3 的 pytorch_model.bin，上游没有 safetensors）
-#   首次启动             要下那 2.27 GB；本机 HF 缓存已暖时加载 1.1 s
+#   首次启动             空卷冷启动 75 s（下载 2.27 GB + 加载 69.6 s，实测）
+#                        缓存暖了之后加载 1.1 s
 #   常驻内存             约 673 MiB（加载完并跑过若干批之后的稳定值）
 #   单条                 62 ms
 #   批 32                1055 ms（33.0 ms/条）
@@ -60,9 +61,13 @@ services:
     healthcheck:
       # 镜像里没有 curl（slim 不带），但 python 一定在——它就是这个服务本身。
       #
-      # /healthz 在模型加载完之前回 503：模型在 lifespan 里加载，不是懒加载。
-      # 懒加载的话容器会在权重还没下完时就报健康，编排把流量切进来，
-      # 第一个真实请求等上十几分钟然后超时。
+      # 模型在 lifespan 里加载，不是懒加载。懒加载的话容器会在权重还没下完时
+      # 就报健康，编排把流量切进来，第一个真实请求等上十几分钟然后超时。
+      #
+      # 实测：uvicorn 在 lifespan 跑完之前根本不开始监听，所以加载期这条探针
+      # 拿到的是 connection refused（不是 503）。空卷冷启动本机实测 75 秒
+      # （下载 2.27 GB + 加载 69.6 秒，那条链路真的跑过一次），网络慢的地方
+      # 是十几分钟 —— start_period 给的就是这段。
       test: ["CMD", "python", "-c",
              "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/healthz')"]
       interval: 10s
