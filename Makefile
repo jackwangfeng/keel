@@ -27,7 +27,24 @@ GO_PACKAGE ?= api
 GO_MODE    ?= types
 TS_OUT     ?= $(ROOT)/build/codegen/schema.d.ts
 
-.PHONY: help generate generate-go generate-ts tools-versions contract-check
+# 迁移目录必须是绝对路径：GORUN 用的 `go -C $(TOOLS)` 让 goose 的工作目录是
+# tools/，相对路径会从那里解析。
+MIGRATIONS := $(ROOT)/db/migrations
+
+# 连接串的默认值与 internal/db.DSN() 的默认值一一对应。调用方（比如
+# internal/db 的迁移测试）应当显式传 GOOSE_DBSTRING，让 Go 侧那份保持唯一权威。
+GOOSE_DBSTRING ?= postgres://$(or $(PGUSER),keel):$(or $(PGPASSWORD),keel)@$(or $(PGHOST),127.0.0.1):$(or $(PGPORT),5432)/$(or $(PGDATABASE),keel)?sslmode=disable
+
+# 用 GOOSE_* 环境变量而不是 `goose -dir X postgres DSN up` 那套位置参数：
+# goose 的用法是 `goose DRIVER DBSTRING [OPTIONS] COMMAND`，选项必须排在两个
+# 位置参数之后，把 -dir 写在前面它会把 DSN 当成命令名，报 "no such command"。
+# 环境变量形式没有顺序问题。
+GOOSE := GOOSE_DRIVER=postgres GOOSE_DBSTRING="$(GOOSE_DBSTRING)" \
+	GOOSE_MIGRATION_DIR=$(MIGRATIONS) \
+	$(GORUN) github.com/pressly/goose/v3/cmd/goose
+
+.PHONY: help generate generate-go generate-ts tools-versions contract-check \
+	migrate migrate-down migrate-status
 
 help:
 	@echo "make generate       生成 Go + TS 两侧契约产物"
@@ -35,6 +52,9 @@ help:
 	@echo "make generate-ts    只生成 TS 侧（TS_OUT 可覆盖）"
 	@echo "make contract-check 校验 3.1 可空语义没有被生成器悄悄改掉"
 	@echo "make tools-versions 打印钉住的工具版本"
+	@echo "make migrate        把 db/migrations 迁到最新（GOOSE_DBSTRING 可覆盖）"
+	@echo "make migrate-down   回滚一个版本"
+	@echo "make migrate-status 打印各版本的应用状态"
 
 generate: generate-go generate-ts
 
@@ -65,3 +85,14 @@ contract-check: generate
 	@grep -q 'merchant_id: number | null;' $(TS_OUT) \
 		|| { echo "FAIL: TS 侧 merchant_id 不再是必填的 number | null"; exit 1; }
 	@echo "contract-check OK: 3.1 可空语义两侧都在"
+
+# goose 与 sqlc、oapi-codegen 一样钉在 tools/go.mod，不装全局二进制：
+# 本地和 CI 装到不同版本的迁移工具，代价是生产库上一次不一致的 schema。
+migrate:
+	$(GOOSE) up
+
+migrate-down:
+	$(GOOSE) down
+
+migrate-status:
+	$(GOOSE) status

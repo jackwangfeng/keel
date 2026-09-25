@@ -41,6 +41,28 @@
 > 如果你不想装 Rust，可以用独立 TC 进程的部署形态开发，
 > 见[总体架构](./docs/电商系统-总体架构.md)的「部署演进」一节。
 
+## 本地数据库
+
+```bash
+docker run -d --name keel-pg -e POSTGRES_PASSWORD=keel -e POSTGRES_USER=keel \
+    -e POSTGRES_DB=keel -p 5432:5432 postgres:16
+make migrate          # 迁到最新；make migrate-status 看状态，make migrate-down 回滚一格
+```
+
+连接参数走 `PGHOST` / `PGPORT` / `PGUSER` / `PGPASSWORD` / `PGDATABASE`，
+默认值与 `internal/db.DSN()` 一致。5432 被别的容器占了就换端口，
+`make migrate` 与 `go test ./internal/db/` 都认这套变量：
+
+```bash
+docker run -d --name keel-pg ... -p 5433:5432 postgres:16
+PGPORT=5433 make migrate
+PGPORT=5433 go test ./internal/db/
+```
+
+goose 不装全局二进制，它和 sqlc、oapi-codegen 一样钉在 `tools/go.mod`，
+只经 `make migrate` 调用——本地与 CI 装到不同版本的迁移工具，
+代价是生产库上一次不一致的 schema。
+
 ## 提交前自查
 
 ```bash
