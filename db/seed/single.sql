@@ -50,6 +50,23 @@ INSERT INTO merchants (code, name, status)
 SELECT 'demo', '示例小店', 1
  WHERE NOT EXISTS (SELECT 1 FROM merchants m WHERE m.code = 'demo');
 
+-- 支付渠道的回调验签密钥（M2 任务 7）。
+--
+-- 没有它，`docker compose up` 起来的这套演示**下得了单但付不了款** ——
+-- 支付回调是未认证入口，验签过不了就是 401，而「这家店没配密钥」正是被拒的
+-- 成因之一（那是刻意的：没配密钥就放行会让每一家还没接支付的店都成为伪造入口）。
+-- 而 M2 的产出标志是「能下单能支付」，所以这一行属于这份演示种子。
+--
+-- **这把密钥是公开的、写死的，和下面那个买家口令一样**：它是演示夹具，不是凭据。
+-- 任何真实部署都必须换掉它 —— 拿着它的人可以伪造一条「已支付」的回调。
+INSERT INTO shop_settings (merchant_id, extra)
+SELECT m.id, jsonb_build_object('payment_channels', jsonb_build_object(
+           'wechat', jsonb_build_object('notify_secret', 'demo-wechat-notify-secret'),
+           'alipay', jsonb_build_object('notify_secret', 'demo-alipay-notify-secret')))
+  FROM merchants m
+ WHERE m.code = 'demo'
+   AND NOT EXISTS (SELECT 1 FROM shop_settings s WHERE s.merchant_id = m.id);
+
 INSERT INTO categories (merchant_id, name, path, status)
 SELECT m.id, '默认分类', '/', 1
   FROM merchants m
