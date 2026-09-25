@@ -162,6 +162,17 @@ func TestPagingWalksThroughTheWholeList(t *testing.T) {
 		if len(body.Items) != 1 {
 			t.Fatalf("第 %d 页期望 1 件，实得 %d 件", page, len(body.Items))
 		}
+		// total 是**全部**的条数，不是本页的条数。
+		//
+		// 这条断言必须在 page_size=1 上做：默认 page_size=20 而种子只有 3 件时
+		// len(items) 恰好等于 total，把 handler 改成 Total: len(items) 全部测试
+		// 照样绿——实测过。db/queries/products.sql 花一整段论证 total 必须由
+		// 数据库 COUNT(*) OVER() 给出而不是应用层现编，那段论证在默认页长下
+		// 没有任何东西守着。
+		if body.Total != wantA {
+			t.Fatalf("第 %d 页回显 total=%d，期望 %d —— total 是全部条数，"+
+				"不是本页条数（page_size=1 时两者必然不同）", page, body.Total, wantA)
+		}
 		ids = append(ids, body.Items[0].ID)
 	}
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
@@ -174,6 +185,11 @@ func TestPagingWalksThroughTheWholeList(t *testing.T) {
 	_, past := get(t, "shop-a."+baseDomain, "/api/v1/products?page_size=1&page="+strconv.Itoa(wantA+1))
 	if len(past.Items) != 0 {
 		t.Fatalf("越过最后一页还有 %d 件", len(past.Items))
+	}
+	// 越界页仍要回显真实的 total —— 前端靠它画页码。这里 items 为空，
+	// 所以 Total: len(items) 那种实现会给 0。
+	if past.Total != wantA {
+		t.Fatalf("越过最后一页回显 total=%d，期望 %d", past.Total, wantA)
 	}
 }
 
