@@ -211,8 +211,14 @@ func seedTwoTenants(t *testing.T) (int64, int64) {
 
 	suffix := fmt.Sprintf("repotest-%d", time.Now().UnixNano())
 	var ids []int64
+	// status = 2（停用）不是随手写的：这两家是为了测隔离而存在的夹具，不是
+	// 对外营业的店铺，而 tenant 包的 Preflight 断言的是**整个库**的形态
+	// （「配了默认商家时活跃商家只能有一家」）。go test ./... 按包并行，
+	// 四个包共用同一个库，所以这里插一家活跃商家，会在另一个包里表现为
+	// 一次随机的断言失败，凶手名字还出现在别人的错误信息里。
+	// 隔离测试本身不关心 status —— RLS 的谓词只看 merchant_id。
 	rows, err := admin.Query(ctx,
-		`INSERT INTO merchants (code, name) VALUES ($1,'A'), ($2,'B') RETURNING id`,
+		`INSERT INTO merchants (code, name, status) VALUES ($1,'A', 2), ($2,'B', 2) RETURNING id`,
 		suffix+"-a", suffix+"-b")
 	if err != nil {
 		t.Fatal(err)

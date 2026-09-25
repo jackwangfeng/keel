@@ -104,15 +104,30 @@ func NewResolver(pool *pgxpool.Pool, cfg Config) *Resolver {
 	}
 }
 
+// dnsLabel 是 code 想出现在 `{code}.{BaseDomain}` 里必须满足的写法。
+// 小写、数字、连字符，不以连字符开头或结尾，最长 63 —— 就是 DNS 标签的规矩。
+// Host 在解析前会被统一成小写，所以 code 里但凡有大写字母就永远匹配不上。
+const dnsLabel = `^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`
+
 // Preflight 在启动时检查部署配置与库里的数据对不对得上，对不上就拒绝启动。
 //
 // 手法和 db.Guard 拒绝超级用户角色是同一个：**误配要在启动时响一次，
-// 而不是每个请求静默地错一点点**。这三条如果留到运行期，症状分别是
-// 「客人看到了别家的店」「全站 404」「某些店谁也打不开」，
-// 三种都不会指向「配置写错了」这个真因。
+// 而不是每个请求静默地错一点点**。这几条如果留到运行期，症状分别是
+// 「客人看到了别家的店」「全站 404」「某几家店谁也打不开」，
+// 三种都不指向「配置写错了」这个真因。
 //
 // main 里该这么用：解析器建好之后、开始监听之前调一次，返回错误就退出。
 func (r *Resolver) Preflight(ctx context.Context) error {
+	// 纯配置的检查排在最前面：它不查库，而且两个变量互斥这件事比库里有什么
+	// 更基础。排在后面的话，这种误配会被别的检查先报出来，指向错的方向。
+	if r.cfg.DefaultCode != "" && r.baseDomain != "" {
+		return fmt.Errorf(
+			"KEEL_DEFAULT_MERCHANT（%q）与 KEEL_BASE_DOMAIN（%q）不能同时配置："+
+				"配了默认商家就是单商家部署，Host 完全不参与解析，基础域名会被静默忽略。"+
+				"多商家部署请清空 KEEL_DEFAULT_MERCHANT",
+			r.cfg.DefaultCode, r.baseDomain)
+	}
+
 	if r.cfg.DefaultCode != "" {
 		// 单商家模式忽略 Host，所以库里必须真的只有一家店。
 		//
@@ -144,28 +159,60 @@ func (r *Resolver) Preflight(ctx context.Context) error {
 		return nil
 	}
 
-	if r.baseDomain == "" {
-		// 多商家部署又没有基础域名：子域名匹配整个关掉了，只剩登记过域名的店能访问。
-		// 有店没登记域名的话，那些店谁也打不开，而症状是「某几家店 404」——
-		// 不会有人想到是少配了一个环境变量。
-		var n int64
-		var sample string
-		if err := r.pool.QueryRow(ctx, `
-			SELECT count(*), coalesce(min(m.code), '')
-			  FROM merchants m
-			  LEFT JOIN shop_settings s ON s.merchant_id = m.id
-			 WHERE m.deleted_at IS NULL AND m.status = 1
-			   AND s.domain IS NULL`).Scan(&n, &sample); err != nil {
-			return fmt.Errorf("检查商家可达性失败: %w", err)
-		}
-		if n > 0 {
+	// 多商家部署：把「谁也访问不到」的商家找出来。
+	//
+	// 一家活跃商家的入口只有两个：登记过的域名，或者 `{code}.{BaseDomain}`。
+	// 两个都没有，它就是一家开着门却没有地址的店 —— 症状是「某几家店全站 404」，
+	// 而真因（少配了 KEEL_BASE_DOMAIN，或者 code 写成了 Shop_UPPER）
+	// 在 404 里看不出一丝痕迹。
+	n, sample, err := r.unreachable(ctx)
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		if r.baseDomain == "" {
 			return fmt.Errorf(
 				"没有配置 KEEL_BASE_DOMAIN，子域名解析被关闭，而有 %d 家活跃商家"+
-					"（例如 %q）没有登记 shop_settings.domain —— 它们没有任何可访问的入口。"+
+					"（%s）没有登记 shop_settings.domain —— 它们没有任何可访问的入口。"+
 					"请设置 KEEL_BASE_DOMAIN，或给这些商家登记域名", n, sample)
 		}
+		return fmt.Errorf(
+			"有 %d 家活跃商家（%s）的 code 不是合法的 DNS 标签"+
+				"（小写字母、数字、连字符，不以连字符开头结尾，最长 63），"+
+				"没法出现在 {code}.%s 里，而它们也没有登记 shop_settings.domain —— "+
+				"它们没有任何可访问的入口。请改 code，或给它们登记域名",
+			n, sample, r.baseDomain)
 	}
 	return nil
+}
+
+// unreachable 数出没有任何入口的活跃商家，并列出其中前几个的 code。
+//
+// 列前几个而不是只列一个：只报一家的话，有 N 家不可达时运维要「改一家、
+// 重启、再看下一家」，把一次修复拖成 N 轮。
+func (r *Resolver) unreachable(ctx context.Context) (int64, string, error) {
+	const q = `
+	WITH bad AS (
+	    SELECT m.code
+	      FROM merchants m
+	      LEFT JOIN shop_settings s ON s.merchant_id = m.id
+	     WHERE m.deleted_at IS NULL
+	       AND m.status = 1
+	       AND s.domain IS NULL
+	       AND ($1 OR m.code !~ $2)
+	     ORDER BY m.code
+	)
+	SELECT (SELECT count(*) FROM bad),
+	       coalesce((SELECT string_agg(code, ', ') FROM (SELECT code FROM bad LIMIT 5) t), '')`
+	var n int64
+	var sample string
+	if err := r.pool.QueryRow(ctx, q, r.baseDomain == "", dnsLabel).Scan(&n, &sample); err != nil {
+		return 0, "", fmt.Errorf("检查商家可达性失败: %w", err)
+	}
+	if n > 5 {
+		sample += " …"
+	}
+	return n, sample, nil
 }
 
 // Middleware 解析租户并放进 request context。解析不到就中止请求。
@@ -225,7 +272,12 @@ func (r *Resolver) Resolve(ctx context.Context, host string) (int64, error) {
 	if name == "" {
 		return 0, ErrNoMerchant
 	}
-	if label, ok := subdomainOf(name, r.baseDomain); ok {
+	if label, under := underBaseDomain(name, r.baseDomain); under {
+		if label == "" || strings.Contains(label, ".") {
+			// 基础域名本身（apex），或它下面多于一级的名字。
+			// 这些名字归平台，不归任何商家，所以不查任何表，直接 404。
+			return 0, ErrNoMerchant
+		}
 		return r.byCode(ctx, label)
 	}
 	return r.byDomain(ctx, name)
@@ -246,25 +298,28 @@ func normalizeHost(host string) string {
 	return strings.ToLower(host)
 }
 
-// subdomainOf 判断 name 是不是 base 的直接子域名，是就返回那一段标签。
+// underBaseDomain 判断 name 是不是落在 base 这片地盘里（含 base 本身），
+// 是就返回 base 之前的那一段（apex 时是空串，多级时含点）。
 //
-// 只认直接子域名（shop-b.example.com），不认更深的层级（a.b.example.com）：
-// 更深的层级里「哪一段是店名」没有唯一答案，而猜错的代价是把一家店的页面
-// 挂到另一个名字下面。base 为空时永远返回 false —— 子域名匹配整个关掉，
+// 判据是「在不在基础域名下」，**不是**「是不是恰好一级子域名」。这个区别就是
+// 隔离本身：只认恰好一级的话，`example.com`（apex）和 `a.b.example.com`
+// （多级）都会掉进 byDomain 那一支去读商家自己填的 domain —— 于是商家登记一个
+// `example.com` 就拿到了平台主站，登记一个 `admin.internal.example.com` 就占住了
+// 平台将来要用的后台域名。基础域名下的每一个名字都归平台。
+//
+// base 为空时永远返回 false —— 子域名匹配整个关掉，
 // 而不是退化成「任何域名的第一段都算」。
-func subdomainOf(name, base string) (string, bool) {
+func underBaseDomain(name, base string) (string, bool) {
 	if base == "" || name == "" {
 		return "", false
 	}
-	suffix := "." + base
-	if !strings.HasSuffix(name, suffix) {
-		return "", false
+	if name == base {
+		return "", true
 	}
-	label := strings.TrimSuffix(name, suffix)
-	if label == "" || strings.Contains(label, ".") {
-		return "", false
+	if suffix := "." + base; strings.HasSuffix(name, suffix) {
+		return strings.TrimSuffix(name, suffix), true
 	}
-	return label, true
+	return "", false
 }
 
 // byCode 按 merchants.code 找商家。

@@ -224,6 +224,34 @@ func onlyActive(t *testing.T, code string) {
 	})
 }
 
+// claimDomain 让某家商家把 domain 登记成 name，测试结束还原。
+// 用来演一遍「商家自己填的域名想抢平台的名字」。
+func claimDomain(t *testing.T, code, name string) {
+	t.Helper()
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, db.AdminDSN())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+
+	// 先把原值读出来照原样还原。写成「还原成 code + 基础域名」会静默改掉
+	// shop-c 的 custom.example.net，让后面的自定义域名用例测的是另一回事。
+	var old *string
+	if err := conn.QueryRow(ctx, `SELECT s.domain FROM shop_settings s
+		JOIN merchants m ON m.id = s.merchant_id WHERE m.code = $1`, code).Scan(&old); err != nil {
+		t.Fatalf("读 %s 的原域名失败: %v", code, err)
+	}
+	if _, err := conn.Exec(ctx, `UPDATE shop_settings SET domain = $2
+		WHERE merchant_id = (SELECT id FROM merchants WHERE code = $1)`, code, name); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		adminExec(t, `UPDATE shop_settings SET domain = $2
+			WHERE merchant_id = (SELECT id FROM merchants WHERE code = $1)`, code, old)
+	})
+}
+
 // fakeClock 让 TTL 不必真的等待。
 type fakeClock struct {
 	mu sync.Mutex
@@ -279,6 +307,10 @@ func TestDefaultDeploymentIgnoresHost(t *testing.T) {
 	// 同时配了基础域名时也一样。没有这一段的话，「单商家模式偷偷又去匹配
 	// 基础域名下的子域名」这个退化通不过任何断言 —— 上面那组 Host 在
 	// BaseDomain 为空时本来就走不到子域名那一支。
+	//
+	// 这个组合本身是会被 Preflight 拒绝的（见 TestPreflightRejectsBothTenantSourcesConfigured）。
+	// 这里仍然断言它的解析行为，是纵深防御：万一有人绕过启动自检把它跑起来，
+	// Host 也不该改变解析结果。
 	both := single("shop-a")
 	both.BaseDomain = baseDomain
 	rBoth := newRouter(t, both)
@@ -368,6 +400,35 @@ func TestSubdomainMatchingIsAnchoredToBaseDomain(t *testing.T) {
 	}
 }
 
+// 基础域名的 apex 不归任何商家 —— 哪怕有商家把它登记成了自己的 domain。
+//
+// 这条和「基础域名下只认 code」是同一条规则，只是往上挪了一层：
+// 判据要是「是不是恰好一级子域名」，apex 就不算，于是掉进读 shop_settings
+// 那一支，商家登记一个 example.com 就拿到了平台主站。
+//
+// 注意：光断言 example.com → 404 是不够的（TestSubdomainMatchingIsAnchoredToBaseDomain
+// 里就有那么一条），没人登记它的时候那条断言恒绿。必须真的让一家商家登记它。
+func TestBaseDomainApexIsNeverAMerchant(t *testing.T) {
+	claimDomain(t, "shop-c", baseDomain)
+	if got := do(newRouter(t, multi()), baseDomain).Code; got != 404 {
+		t.Fatalf("有商家登记了基础域名 apex，期望仍然 404，实得 %d —— 平台主站被商家拿走了", got)
+	}
+}
+
+// 基础域名下多于一级的名字同样归平台。
+//
+// 判据是「在不在基础域名下」而不是「是不是恰好一级」，否则平台将来在
+// example.com 下放任何两级以上的东西（api.v2、admin.internal），
+// 商家都能抢先登记占走。
+func TestMultiLevelNamesUnderBaseDomainAreNeverAMerchant(t *testing.T) {
+	const name = "admin.internal.example.com"
+	claimDomain(t, "shop-c", name)
+	if got := do(newRouter(t, multi()), name).Code; got != 404 {
+		t.Fatalf("有商家登记了 %q，期望仍然 404，实得 %d —— 基础域名下的多级名字被商家占走了",
+			name, got)
+	}
+}
+
 // 基础域名下 code 匹配必须赢过商家自己登记的 domain。
 //
 // shop_settings.domain 是商家自己填的。允许它在基础域名下生效的话，商家 C 把
@@ -375,12 +436,7 @@ func TestSubdomainMatchingIsAnchoredToBaseDomain(t *testing.T) {
 // 而那家店根本不需要登记域名，子域名是天然的，于是它连「域名被占了」都察觉不到。
 func TestCodeWinsOverMerchantSuppliedDomainUnderBaseDomain(t *testing.T) {
 	const hijacked = "shop-nodomain.example.com"
-	adminExec(t, `UPDATE shop_settings SET domain = $1 WHERE merchant_id =
-		(SELECT id FROM merchants WHERE code = 'shop-c')`, hijacked)
-	t.Cleanup(func() {
-		adminExec(t, `UPDATE shop_settings SET domain = 'custom.example.net' WHERE merchant_id =
-			(SELECT id FROM merchants WHERE code = 'shop-c')`)
-	})
+	claimDomain(t, "shop-c", hijacked)
 
 	got := resolved(t, do(newRouter(t, multi()), hijacked))
 	if want := merchantID(t, "shop-nodomain"); got != want {
@@ -598,6 +654,79 @@ func TestPreflightRejectsMultiTenantWithoutBaseDomainWhenAShopIsUnreachable(t *t
 	t.Logf("Preflight 如期拒绝：%v", err)
 }
 
+// code 不是合法 DNS 标签的商家，在所有 Host 上都 404 —— 启动自检必须说出这件事。
+//
+// merchants.code 在库里是裸 TEXT，没有任何 DNS 标签约束，而 Host 在解析前统一
+// 转小写，所以 code 里有大写字母或下划线的商家，`{code}.{基础域名}` 永远匹配不上。
+// 没有这条检查的话，症状是「某几家店全站 404」，而真因是 code 的写法 ——
+// 两者之间没有任何指引。
+func TestPreflightRejectsMerchantWhoseCodeCannotAppearInAHostname(t *testing.T) {
+	const bad = "Shop_UPPER"
+	adminExec(t, `INSERT INTO merchants (code, name, status) VALUES ($1, '写法不合法的店', 1)`, bad)
+	t.Cleanup(func() { adminExec(t, `DELETE FROM merchants WHERE code = $1`, bad) })
+
+	// 先记录症状：这家店在任何写法的 Host 上都进不去。
+	r := newRouter(t, multi())
+	for _, host := range []string{"Shop_UPPER.example.com", "shop_upper.example.com"} {
+		if got := do(r, host).Code; got != 404 {
+			t.Fatalf("Host %q 期望 404，实得 %d", host, got)
+		}
+	}
+
+	err := tenant.NewResolver(newPool(t), multi()).Preflight(context.Background())
+	if err == nil {
+		t.Fatal("有商家的 code 没法出现在主机名里，Preflight 竟然放行")
+	}
+	for _, want := range []string{bad, "DNS"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("错误信息里没有 %q，运维看不出该改什么：%v", want, err)
+		}
+	}
+	t.Logf("Preflight 如期拒绝：%v", err)
+}
+
+// 不可达的商家不止一家时，要一次报多家。
+// 只报一家的话，运维得「改一家、重启、再看下一家」，一次修复被拖成 N 轮。
+func TestPreflightListsSeveralUnreachableMerchants(t *testing.T) {
+	for _, bad := range []string{"Bad_One", "Bad_Two"} {
+		adminExec(t, `INSERT INTO merchants (code, name, status) VALUES ($1, '写法不合法的店', 1)`, bad)
+		t.Cleanup(func() { adminExec(t, `DELETE FROM merchants WHERE code = $1`, bad) })
+	}
+	err := tenant.NewResolver(newPool(t), multi()).Preflight(context.Background())
+	if err == nil {
+		t.Fatal("Preflight 竟然放行")
+	}
+	for _, want := range []string{"Bad_One", "Bad_Two"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("错误信息里只报了一部分，%q 不在里面：%v", want, err)
+		}
+	}
+}
+
+// 两个租户来源同时配置 —— 拒绝启动。
+//
+// 单商家模式忽略 Host，于是 KEEL_BASE_DOMAIN 被静默忽略：运维以为配的是多商家，
+// 实际全站只有一家店。这种误配不该靠读代码才能发现。
+func TestPreflightRejectsBothTenantSourcesConfigured(t *testing.T) {
+	// 库里只留一家活跃商家：否则「活跃商家 > 1」那条检查会先报错，而它的
+	// 修复建议里同样出现 KEEL_DEFAULT_MERCHANT 和 KEEL_BASE_DOMAIN 两个词 ——
+	// 断言写成「错误里有这两个词」就会在这条检查被整个删掉时照样绿。
+	onlyActive(t, "shop-a")
+
+	cfg := single("shop-a")
+	cfg.BaseDomain = baseDomain
+	err := tenant.NewResolver(newPool(t), cfg).Preflight(context.Background())
+	if err == nil {
+		t.Fatal("同时配了默认商家和基础域名，Preflight 竟然放行")
+	}
+	for _, want := range []string{"KEEL_DEFAULT_MERCHANT", "KEEL_BASE_DOMAIN", "不能同时配置"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("错误信息里没有 %q：%v", want, err)
+		}
+	}
+	t.Logf("Preflight 如期拒绝：%v", err)
+}
+
 // 多商家部署配了基础域名，放行。
 func TestPreflightAcceptsMultiTenantWithBaseDomain(t *testing.T) {
 	if err := tenant.NewResolver(newPool(t), multi()).Preflight(context.Background()); err != nil {
@@ -618,12 +747,18 @@ func TestSeedIsIdempotent(t *testing.T) {
 	}
 	defer conn.Close(ctx)
 
+	// 只数种子自己播的那几家。数全表的话，并行跑的别的包在两次计数之间
+	// 插入或删掉它们的夹具商家，就会表现成「种子不幂等」——
+	// 一个指向错误方向的、偶发的红。
+	seeded := []string{"shop-a", "shop-b", "shop-c", "shop-closed", "shop-deleted", "shop-nodomain"}
 	count := func() (int64, int64) {
 		t.Helper()
 		var merchants, settings int64
-		if err := conn.QueryRow(ctx,
-			`SELECT (SELECT count(*) FROM merchants), (SELECT count(*) FROM shop_settings)`).
-			Scan(&merchants, &settings); err != nil {
+		if err := conn.QueryRow(ctx, `
+			SELECT (SELECT count(*) FROM merchants WHERE code = ANY($1)),
+			       (SELECT count(*) FROM shop_settings s
+			          JOIN merchants m ON m.id = s.merchant_id WHERE m.code = ANY($1))`,
+			seeded).Scan(&merchants, &settings); err != nil {
 			t.Fatal(err)
 		}
 		return merchants, settings
