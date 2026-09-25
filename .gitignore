@@ -24,3 +24,5 @@
 
 # 一期文件存储 driver 的本地卷
 /data/uploads/
+# make generate 的默认输出位置
+/build/

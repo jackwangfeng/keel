@@ -30,9 +30,10 @@
 
 | 依赖 | 版本 | 说明 |
 |---|---|---|
-| Go | 1.23+ | 后端 |
+| Go | 1.26+ | 后端。下限由 `tools/` 里钉的 sqlc 与 goose 传染而来——两者都声明 `go 1.26` |
 | Rust | 1.82+ | 编译 dtmrs 的 C ABI 动态库，经 cgo 嵌入 |
 | PostgreSQL | 16+ | 需要 pgvector 扩展 |
+| Node | 见说明 | 只为 `make generate-ts` 生成 TS 侧契约类型。包未声明 `engines`，故不编造下限——已验证于 v24.10.0 |
 | Docker | 任意近期版本 | `docker compose up` 起全栈 |
 
 > **为什么需要 Rust 工具链**：事务协调器 [dtmrs](https://github.com/jackwangfeng/dtmrs)

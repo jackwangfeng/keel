@@ -2639,7 +2639,7 @@ components:
 
     Staff:
       type: object
-      required: [id, email, role, status, created_at]
+      required: [id, email, role, status, merchant_id, created_at]
       properties:
         id:    { type: integer, format: int64 }
         email: { type: string, format: email }

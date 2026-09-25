@@ -6,7 +6,7 @@
 *Runs on a single machine. Scales without a rewrite. No external AI APIs.*
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](./LICENSE)
-![Go](https://img.shields.io/badge/Go-1.23+-00ADD8)
+![Go](https://img.shields.io/badge/Go-1.26+-00ADD8)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16+-336791)
 
 [Documentation](./docs) · [中文文档](./README.zh-CN.md)
