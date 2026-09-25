@@ -120,7 +120,14 @@ jobs:
     timeout-minutes: 20
     services:
       postgres:
-        image: postgres:16
+        # 和 compose.yaml 同一个镜像，理由完整写在那里：M3 的第一条迁移开头是
+        # `CREATE EXTENSION IF NOT EXISTS vector`，官方 postgres:16 里实测报
+        # `extension "vector" is not available`，于是整条迁移链在那里断掉 ——
+        # 而错误停在 goose 上，不指向真因。
+        #
+        # 两处必须一起换。只换一处的后果是最难查的那种：本地 compose 绿、CI 红
+        # （或反过来），而两边跑的是同一份迁移，谁都不会先怀疑镜像。
+        image: pgvector/pgvector:pg16
         env:
           # keel / keel / keel 与 internal/db.AdminDSN() 的默认值逐项对应，
           # 迁移用的就是这个角色。对上之后这个 job 一个 PG* 环境变量都不用配，

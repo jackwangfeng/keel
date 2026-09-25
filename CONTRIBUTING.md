@@ -32,7 +32,7 @@
 |---|---|---|
 | Go | 1.26+ | 后端。下限由 `tools/` 里钉的 sqlc 与 goose 传染而来——两者都声明 `go 1.26` |
 | Rust | **1.88+** | **必需**（M2 起）：编译 dtmrs 的 C ABI 动态库，主模块经 cgo 嵌入它。`make dtmrs-deps` 会取回源码并编出 `third_party/dtmrs/lib/libdtmrs.so`；`make build` 与 `make test-db` 缺了它会自动建一次。**下限不是 dtmrs 声明的 1.82** —— 那是它的 `rust-version`，而卡住构建的是它 `Cargo.lock` 锁定的依赖树：实测 1.85.1 直接报 `home@0.5.12 requires rustc 1.88`。Debian trixie 的 apt 版正好是 1.85.1，不够，用 rustup。已验证于 1.94.0（本机）与镜像里的 `rust:1.90-slim-trixie` |
-| PostgreSQL | 16+ | M1 只用原生特性；**pgvector 是 M3 才需要的**，compose 起的是官方 `postgres:16`，装不装 pgvector 都跑得起来 |
+| PostgreSQL | 16+ **且装了 pgvector 0.8+** | M3 起 `db/migrations/00016` 的第一条语句就是 `CREATE EXTENSION IF NOT EXISTS vector`，官方 `postgres:16` 里实测报 `extension "vector" is not available`，整条迁移链在那里断掉。compose 与 CI 都换成了 `pgvector/pgvector:pg16`（本机实测 vector 0.8.6 / PostgreSQL 16.15），本地起库请用同一个镜像。0.8 是 `hnsw.iterative_scan` 的下限 |
 | Node | 22.18+ | `make generate-ts` 生成 TS 侧契约类型、`make schema-check` 编译 `web/src`、`make sdk-smoke` 直接跑 `.mts`（靠 Node 自带的类型剥离，不经构建步骤——这是下限的来源）。已验证于 v24.10.0 |
 | Docker | 任意近期版本 | `docker compose up` 起全栈 |
 
@@ -55,8 +55,10 @@
 ## 本地数据库
 
 ```bash
+# 镜像是 pgvector/pgvector:pg16，不是官方 postgres:16 —— 官方镜像里没有 vector
+# 扩展，00016 的第一条语句就会失败，而错误停在 goose 上、不指向真因。
 docker run -d --name keel-pg -e POSTGRES_PASSWORD=keel -e POSTGRES_USER=keel \
-    -e POSTGRES_DB=keel -p 5432:5432 postgres:16
+    -e POSTGRES_DB=keel -p 5432:5432 pgvector/pgvector:pg16
 make migrate          # 迁到最新；make migrate-status 看状态，make migrate-down 回滚一格
 make test-db          # 跑碰数据库的测试
 ```
@@ -64,7 +66,7 @@ make test-db          # 跑碰数据库的测试
 5432 被别的容器占了就换端口，两个目标都认 `PG*` 变量：
 
 ```bash
-docker run -d --name keel-pg ... -p 5433:5432 postgres:16
+docker run -d --name keel-pg ... -p 5433:5432 pgvector/pgvector:pg16
 PGPORT=5433 make migrate
 PGPORT=5433 make test-db
 ```

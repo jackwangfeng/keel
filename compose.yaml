@@ -16,7 +16,25 @@ name: keel
 
 services:
   postgres:
-    image: postgres:16
+    # pgvector/pgvector:pg16，不是官方 postgres:16。
+    #
+    # M3 的第一条迁移（00016）开头就是 `CREATE EXTENSION IF NOT EXISTS vector`，
+    # 官方镜像里实测报 `extension "vector" is not available` (SQLSTATE 0A000)，
+    # 整条迁移链在那里断掉。goose 那一句报错本身不冤枉人，会冤枉人的是这一层：
+    # `up -d` 只等到容器启动就返回 0，app 因为 depends_on 根本不起，
+    # 读者看到的是「curl 连不上 8080」，而真因埋在 `logs migrate` 里。
+    #
+    # 为什么用官方 pgvector 镜像而不是自己 `FROM postgres:16 && apt install`：
+    #   · 体积不是代价：本机 `docker images` 实测 pgvector/pgvector:pg16 是
+    #     438MB，官方 postgres:16 是 451MB —— 反而小一点（它基于 bookworm，
+    #     官方 16 的 latest 标签已经走到 trixie）。
+    #   · 自建要多维护一个 Dockerfile 和一个构建步骤，而 CI 与开发机都得先
+    #     build 一次才能起库；官方镜像是 docker pull，CI 上是缓存命中。
+    #   · 可信度：pgvector/pgvector 是 pgvector 上游自己发的镜像，与扩展同一个
+    #     发布流程，版本对得上（本机实测 vector 0.8.6 / PostgreSQL 16.15）。
+    #     0.8 是 `hnsw.iterative_scan` 的下限，而那个 GUC 是多租户下向量召回
+    #     能用的前提（理由写在 00016 的文件头）。
+    image: pgvector/pgvector:pg16
     environment:
       POSTGRES_USER: keel
       POSTGRES_PASSWORD: ${KEEL_ADMIN_PASSWORD:-keel}
@@ -63,13 +81,15 @@ services:
 
   # 种子。默认加载只有一家店的 single.sql，理由写在那个文件的开头。
   #
-  # 用 postgres:16 镜像跑 psql，而不是在迁移器镜像里再塞一个客户端：
-  # 那个镜像是 scratch + goose，没有 shell 也没有 psql；而 postgres:16 这个镜像
-  # 上面已经拉下来了，psql 是它自带的。ON_ERROR_STOP=1 不能省 —— 没有它，
+  # 用上面那个数据库镜像跑 psql，而不是在迁移器镜像里再塞一个客户端：
+  # 那个镜像是 scratch + goose，没有 shell 也没有 psql；而这个镜像上面已经拉
+  # 下来了，psql 是它自带的。**镜像名要和 postgres 服务保持一致**——写死
+  # postgres:16 的话，只为了一个 psql 客户端就要多拉 451MB，而且两个镜像的
+  # 客户端版本会各自漂移。ON_ERROR_STOP=1 不能省 —— 没有它，
   # psql 遇到报错会接着往下跑，最后以 0 退出，于是「种子加载失败」会表现为
   # 「商品列表是空的」，一个指向错误方向的症状。
   seed:
-    image: postgres:16
+    image: pgvector/pgvector:pg16
     environment:
       PGPASSWORD: ${KEEL_ADMIN_PASSWORD:-keel}
     volumes:
