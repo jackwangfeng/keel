@@ -153,6 +153,10 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	v1 := r.Group("/api/v1", res.Middleware())
 	v1.GET("/products", ph.List)
 
+	// 商品详情与列表一样是 security: []（契约里两条都写着）：还没登录的人
+	// 也要看得到商品，否则小程序的首页到详情页这一跳就需要先登录。
+	v1.GET("/products/:product_id", ph.Detail)
+
 	// /auth/login 与 /auth/refresh 在契约里是 security: []（公开的）：
 	// 一个还没有令牌的人要能打到它们。**这不等于它们不校验租户** ——
 	// 租户由上面那道 res.Middleware() 从 Host 定出来，而 refresh 自己会再核对
@@ -170,6 +174,14 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	// 一条要身份另一条不要会让「两边算出来一样」这条性质多一个可以破的口子。
 	v1.POST("/orders/preview", auth.Bearer(signer, nil), oh.Preview)
 	v1.POST("/orders", auth.Bearer(signer, nil), oh.Create)
+
+	// 买家侧的两条读接口。它们要令牌的理由比下单更硬：**它们读的是「我的」
+	// 东西**。租户由 res.Middleware() 挡住，而「同一家店里这一单是不是你的」
+	// 只能由令牌里的 user_id 回答 —— 这道 auth.Bearer 摘掉之后，service 那边
+	// auth.FromContext 会返回 ErrNoUser（它刻意不回落到任何默认用户），
+	// 于是请求 500 而不是匿名读到全店的订单。
+	v1.GET("/orders", auth.Bearer(signer, nil), oh.List)
+	v1.GET("/orders/:order_no", auth.Bearer(signer, nil), oh.Detail)
 
 	// 支付渠道异步回调。契约里它是 security: []（调用方是渠道，它没有令牌），
 	// 所以**没有** auth.Bearer —— 但它仍然在 v1 组里，也就仍然带着上面那道

@@ -253,10 +253,13 @@ func TestRouterServesContractPaths(t *testing.T) {
 	r := app.Router(pool, tenant.NewResolver(pool, tenant.Config{BaseDomain: "example.com"}),
 		auth.NewSigner([]byte("keel-test-secret-key-32-bytes-long!!")), orders)
 	want := map[string]bool{
-		"GET /healthz":                false,
-		"GET /api/v1/products":        false,
-		"POST /api/v1/orders":         false,
-		"POST /api/v1/orders/preview": false,
+		"GET /healthz":                     false,
+		"GET /api/v1/products":             false,
+		"GET /api/v1/products/:product_id": false,
+		"POST /api/v1/orders":              false,
+		"POST /api/v1/orders/preview":      false,
+		"GET /api/v1/orders":               false,
+		"GET /api/v1/orders/:order_no":     false,
 	}
 	for _, ri := range r.Routes() {
 		key := ri.Method + " " + ri.Path

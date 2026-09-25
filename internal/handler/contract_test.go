@@ -172,6 +172,41 @@ var routes = []route{
 			"query 会进访问日志，而签名进日志等于每一条日志都是一次密钥泄露的半成品",
 	},
 	{
+		ContractPath:   "/products/{product_id}",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "product_detail.go",
+		NoQueryParams: "详情只吃路径参数 product_id；契约里这条接口一个 query 参数都没有" +
+			"（列表那些筛选条件属于 /products，不属于这里）",
+		NotYetImplementedResponse: map[string]string{
+			"image_url": "商品主图。products 表上没有图片列，商品图在数据模型里还没有落地" +
+				"（uploads 那张表存的是上传件，没有与商品的关联）。回空串会让客户端渲染一个" +
+				"「加载失败」的占位图，缺席说的才是实话：这个字段还没有数据来源。",
+			"images": "商品图集，同 image_url。回空数组会让轮播图组件显示「无图」，" +
+				"而那与「这件商品确实没有配图」是两件事。",
+		},
+	},
+	{
+		ContractPath:   "/orders",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "order_list.go",
+		// 四个 query 参数（page / page_size / status / refund_status）全都实现了，
+		// 所以这里既不写 NoQueryParams 也不挂账 —— 对账测试会两个方向都核一遍。
+	},
+	{
+		ContractPath:   "/orders/{order_no}",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "order_detail.go",
+		NoQueryParams:  "详情只吃路径参数 order_no",
+		NotYetImplementedResponse: map[string]string{
+			"refunds": "退款域的三张表（refunds / refund_items / refund_logs）本轮没有建，" +
+				"所以这里不是「这一单没有退款」，而是**没查过**。回空数组会让详情页显示" +
+				"「无售后记录」—— 一句在退款上线之前都不会被纠正的假话。",
+		},
+	},
+	{
 		ContractPath:   "/auth/refresh",
 		ContractMethod: "post",
 		HTTPMethod:     http.MethodPost,

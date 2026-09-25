@@ -184,6 +184,14 @@ func apiOrder(o repository.Order) api.Order {
 		ExpireAt:         &expire,
 		CreatedAt:        o.CreatedAt,
 
+		// 三个可空时间戳原样递出去：库里是 NULL 就让它们在 JSON 里整个不出现。
+		// 它们的缺席是有意义的信息 —— paid_at 没有就是「还没付」，
+		// 而一个 0001-01-01 会让客户端显示一个荒唐的日期，或者更糟：
+		// 让「已支付但没有付款时间」这种数据损坏看上去很正常。
+		PaidAt:     o.PaidAt,
+		ShippedAt:  o.ShippedAt,
+		FinishedAt: o.FinishedAt,
+
 		// FreightCents 同 preview：本期不计运费，字段整个不出现。
 		// 库里那一列是 0（chk_amount 的恒等式要它），但那是账，不是「算过了」。
 	}
@@ -239,6 +247,12 @@ func writeOrderError(c *gin.Context, err error) {
 	case errors.Is(err, service.ErrBadRequest):
 		problem.Write(c, http.StatusUnprocessableEntity,
 			problem.TypeInvalidRequest, "请求参数不合法")
+
+	case errors.Is(err, service.ErrOrderNotFound):
+		// 契约里 GET /orders/{order_no} 明写了 404。它同时覆盖「没有这一单」
+		// 与「这一单是别人的」—— 分开报会把这条接口变成一个单号存在性判定器
+		// （service/order_query.go）。
+		problem.Write(c, http.StatusNotFound, problem.TypeNotFound, "订单不存在")
 
 	case errors.Is(err, service.ErrCrossTenantSKU):
 		// **刻意不是 409「库存不足」。**
