@@ -195,12 +195,47 @@ func promoteOrder(ctx context.Context, tx repository.Tx, order repository.Order)
 
 // closeOrder 是建单分支的补偿：把订单关到 90。
 //
-// 受影响 0 行**不算失败**：屏障保证这个函数最多被真的执行一次，而 0 行只可能
-// 意味着这一单已经是 90 了（比如上一次尝试提交成功了但协调器没收到回执）。
-// 补偿必须是幂等的 —— 在这里报错会让协调器一直重试一件已经做完的事。
+// # 受影响 0 行有两种成因，本轮把它们分开了
+//
+// 原来这里是 `_, err := tx.CloseOrder(...); return err` —— 0 行一律当成功，
+// 理由是「补偿必须幂等，报错会让协调器一直重试一件已经做完的事」。那句话没错，
+// 但它把两件事合在了一起：
+//
+//	① 这一单已经是 90 了     幂等重放。正常，静默。
+//	② 这一单已经是 20 或更远  **它在补偿跑到之前被付掉了。**
+//
+// ② 是接上支付回调（任务 7）之后才第一次变得可能的。它的后果很具体：
+// 用户付了钱、订单显示已支付，而库存分支失败了 —— 那批货根本没扣，
+// 而 SAGA 会向 HTTP 那一侧报「库存不足」。钱在里面，货没有。
+//
+// **它今天不可达**，而且不是靠运气：order_no 是 72 bit 随机不可枚举，
+// 且只在 SAGA 到达终态之后才对外返回（order.go 的 Create 第三段），
+// 所以窗口里没有任何人知道该付哪一单。完整论证写在架构 §5 第 8 条。
+//
+// 那为什么还要写这一段：**不可达不等于不存在**。它靠的是「单号在终态前不外泄」
+// 这条不变量，而那条不变量住在另一个函数里。哪天有人让 Create 提前返回单号
+// （比如为了「让前端早点开始轮询」），这个洞就开了，而在此之前没有任何东西
+// 会提醒他。这里花五行，让它一旦发生就有声音。
+//
+// 仍然返回 nil：报错会让协调器无限重试一件它改不了的事（订单已经付掉了，
+// 重试一百次也关不掉）。声音留在日志与库里 —— 那一单的状态是 20，
+// 而它一件库存都没有，对账会撞上它。
 func closeOrder(ctx context.Context, tx repository.Tx, order repository.Order) error {
-	_, err := tx.CloseOrder(ctx, order.OrderNo)
-	return err
+	n, err := tx.CloseOrder(ctx, order.OrderNo)
+	if err != nil {
+		return err
+	}
+	if n == 0 && order.Status != orderStatusClosed {
+		// order.Status 是**这个屏障事务里刚读出来的**那一个（branch() 里的
+		// FindOrderByNo），不是某个缓存下来的快照 —— 所以它和上面那条 UPDATE
+		// 看到的是同一行。
+		slog.ErrorContext(ctx, "建单补偿关不掉这一单，它已经被支付了 —— "+
+			"「建单在前、库存在后」的窗口真的被踩到了。这一单显示已支付，"+
+			"而它的库存从没扣过：需要人工退款。"+
+			"是不是有人让 POST /orders 在 SAGA 到终态之前就把订单号返回了？",
+			"order_no", order.OrderNo, "status", order.Status)
+	}
+	return nil
 }
 
 // deductStock 是库存分支的正向：逐行扣减，并记流水。

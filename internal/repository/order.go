@@ -206,6 +206,12 @@ type OrderTx interface {
 	// 同一件事就有了两个可能对不上的真相（存档回放时按哪一个？）。
 	FinishIdempotencyKey(ctx context.Context, scope string, userID int64, key string,
 		status int16, responseCode *int32, responseBody []byte) error
+
+	// ReleaseIdempotencyKey 撤销一次抢占，返回是否真的撤掉了一行。
+	//
+	// 它只对**处理中**的记录生效（status = 0）。返回 false 表示这把钥匙上的
+	// 记录已经不是「处理中」了 —— 那时撤销不该发生，也没有发生。
+	ReleaseIdempotencyKey(ctx context.Context, scope string, userID int64, key string) (bool, error)
 }
 
 func (t tenantTx) ListSKUsForPricing(ctx context.Context, skuIDs []int64) ([]PriceableSKU, error) {
@@ -405,4 +411,15 @@ func (t tenantTx) FinishIdempotencyKey(ctx context.Context, scope string, userID
 		ResponseCode: responseCode,
 		ResponseBody: responseBody,
 	})
+}
+
+func (t tenantTx) ReleaseIdempotencyKey(ctx context.Context, scope string, userID int64,
+	key string) (bool, error) {
+	n, err := t.q.ReleaseIdempotencyKey(ctx, db.ReleaseIdempotencyKeyParams{
+		Scope: scope, UserID: userID, IdemKey: key,
+	})
+	if err != nil {
+		return false, err
+	}
+	return n == 1, nil
 }

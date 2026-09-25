@@ -51,8 +51,28 @@ import (
 //     （那段代码在进程崩溃时不会跑）。
 //
 // 换来的窗口是：建单成功、库存还没扣的那一瞬间，订单已经是 10 待支付。
-// 本期没有支付回调（Task 7），所以这个窗口里没有任何人能对它做什么；
-// 接上支付之后这里要重新算一遍账 —— 已在报告里列为 defer。
+//
+// # 那个窗口，接上支付回调（Task 7）之后重新算过了：结论是维持
+//
+// 上一轮写的是「本期没有支付回调，窗口里没有任何人能对它做什么；接上支付之后
+// 这里要重新算一遍账」。现在算完了。
+//
+// **窗口仍然不可达**，而且不是靠运气 —— 它靠一条这个函数自己维持的不变量：
+// `order_no` 是 72 bit 随机不可枚举（newOrderNo），而 Create **只在 SAGA 到达
+// 终态、并且重新读库确认 status = 10 之后**才把单号交出去（下面第三段）。
+// 支付回调必须带着订单号才找得到订单，所以窗口里没有任何人知道该付哪一单。
+//
+// **换成「库存在前」的代价比这个窗口大**，这是本轮真正推翻的那一句：
+// 上一轮维持这个顺序的理由是「库存在前的话，那笔 status = 0 的订单永远没人关」，
+// 而任务 6 的孤儿草稿清理恰好把那条理由消掉了（service/sweep.go）。所以理由要换
+// 一条新的，而新的这条更硬：库存排在前面时，`order_create_undo` 在**每一条**
+// 失败路径上都退化成空回滚 —— 建单排在最后，它自己失败时补偿是空回滚，
+// 它成功时整笔 SAGA 就成功了。于是下单主链路上「补偿到底跑没跑」这件事
+// 再也测不出来，而那正是 SAGA 最需要能被证伪的性质。
+//
+// 维持的同时补了一道：`closeOrder`（建单分支的补偿）在关不掉这一单时不再静默
+// 成功，它要能区分「已经是 90」与「已经被付掉了」。理由写在那个函数上：
+// 不可达不等于不存在，而这个洞靠的是「单号在终态前不外泄」这条住在别处的不变量。
 
 // 下单相关的业务错误。handler 按它们映射契约里明写的响应码。
 var (
@@ -305,15 +325,61 @@ func (s *OrderService) Create(ctx context.Context, req CreateRequest, idemKey st
 
 	if err := s.tc.SubmitSaga(gid, sagaSteps); err != nil {
 		// 提交都没成功：分支一个都没跑过，订单还停在 status = 0。
-		// 不存档（业务没执行过），让客户端能拿同一个键重试 —— 但那把键已经
-		// 被抢占并提交了，所以它会撞上 409 处理中。这是一处已知的粗糙，
-		// 已在报告里列为 defer：抢占记录应当在这里被主动撤销。
+		//
+		// **把抢占记录撤掉**，这是上一轮记下的那笔账。不撤的话，客户端拿同一把
+		// 钥匙重试会一直撞 409 处理中，直到 24 小时后 expire_at 过期 ——
+		// 而「同一个逻辑请求的重试用同一把钥匙」正是 Idempotency-Key 的语义，
+		// 也就是说我们锁死的是客户端**正确的**行为。
+		//
+		// 竞态想清楚了，结论是「撤是安全的，但不是无代价的」：
+		//
+		//   · SubmitSaga 返回错误不等于「协调器一定没收下这笔事务」。它有可能
+		//     在协调器已经落库之后才断的连接，那时那笔 SAGA 是活的。撤了钥匙、
+		//     客户端立刻重试，就会有**第二笔**订单，而第一笔照样会被推完。
+		//   · 但第一笔的单号从没返回给任何人（Create 只在终态之后才交出单号），
+		//     所以它是一笔谁也付不了的待支付订单 —— 它会在 30 分钟后被超时补偿
+		//     任务关掉、库存回补（service/sweep.go）。代价是那段时间里的少卖，
+		//     **有界且可恢复**。
+		//   · 反过来不撤的代价是那把钥匙锁死 24 小时，客户端除了换钥匙没有出路，
+		//     而换钥匙这件事恰恰是幂等协议要它别做的。
+		//
+		// 所以撤。草稿订单**刻意不一起关掉**：正因为那笔 SAGA 可能是活的 ——
+		// 关掉它会让一个正在跑的建单分支撞上 errOrderNotDraft，把一笔本来能成的
+		// 订单变成一次全局补偿。留给超时补偿任务是对的，它有 30 分钟可以等。
+		//
+		// 撤销失败只记日志：这一路本来就已经在返回错误了，把撤销的失败盖在
+		// 原因上面，会让排查从「提交事务失败」变成「删一行失败」。
+		if relErr := s.releaseKey(ctx, id.UserID, idemKey); relErr != nil {
+			s.log.ErrorContext(ctx, "撤销幂等键抢占失败，这把键会一直返回 409 处理中直到过期",
+				"gid", gid, "err", relErr)
+		}
 		return CreateResult{}, fmt.Errorf("提交下单事务失败（gid=%s）: %w", gid, err)
 	}
 
 	status, waitErr := s.tc.WaitFinal(gid, int(sagaWaitTimeout/time.Millisecond))
 	if waitErr != nil {
 		// 超时不是失败：SAGA 可能还在跑。不存档，返回「处理中」让客户端退避重试。
+		//
+		// **这里留着上一轮那笔账的另一半，本轮刻意没有收，理由写在这儿。**
+		// 幂等行会停在「处理中」，而 SAGA 之后可能成功了却没人把存档补上 ——
+		// 于是那把钥匙在 24 小时里一直回 409。
+		//
+		// 两条候选的改法各有一个要先想清楚的问题，都不在本任务的范围里：
+		//
+		//   ① 起一个后台 goroutine 接着等，等到终态再补存档。它占的是
+		//      internal/dtm 那个**有界信号量**的通行证（32 张），而超时最可能
+		//      成批发生 —— 协调器一卡，每个超时请求都留下一个续等的 goroutine，
+		//      通行证很快被续等占满，**新的 SubmitSaga 再也进不去**。
+		//      要做就得给续等单独一份更小的预算，而「两份预算怎么分」需要实测，
+		//      examples 里那组数据是按提交并发测的，不含续等。
+		//   ② 把草稿单号写进幂等行，重试时按单号自愈。这条能覆盖进程崩溃，
+		//      是真正完整的解，但它要一列（或者把 response_body 当成一个
+		//      「还没最终」的暂存位），也就要动数据模型 §12 的 DDL。
+		//
+		// 不收的代价是**有界的，而且不含钱与货**：那一笔订单要么被建单分支推到
+		// 10（没人付钱，30 分钟后被超时补偿任务关掉、库存回补），要么被补偿关到
+		// 90。库存不会漏，订单不会重复。退化的只是那一把钥匙，客户端换一把新的
+		// 就能继续下单。
 		s.log.WarnContext(ctx, "等待下单事务终态超时", "gid", gid, "err", waitErr)
 		return CreateResult{}, fmt.Errorf("%w（gid=%s）: %v", ErrIdempotencyInFlight, gid, waitErr)
 	}
@@ -500,6 +566,24 @@ func (s *OrderService) archiveFailure(ctx context.Context, userID int64, idemKey
 	if err := s.finishKey(ctx, userID, idemKey, repository.IdempotencyFailed, nil, body); err != nil {
 		s.log.ErrorContext(ctx, "写失败存档失败", "err", err)
 	}
+}
+
+// releaseKey 撤销一次幂等键抢占。只在 SubmitSaga 失败那一路调用。
+//
+// 撤不到行（返回 false）不是错误：那意味着这条记录已经不是「处理中」了，
+// 而那时本来就不该撤。当成错误报出来的话，一条正常的竞态会变成一条 Error 日志。
+func (s *OrderService) releaseKey(ctx context.Context, userID int64, idemKey string) error {
+	return s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+		released, err := tx.ReleaseIdempotencyKey(ctx, idempotencyScope, userID, idemKey)
+		if err != nil {
+			return err
+		}
+		if !released {
+			s.log.WarnContext(ctx, "想撤销幂等键抢占，但那一行已经不是「处理中」了",
+				"scope", idempotencyScope, "user_id", userID)
+		}
+		return nil
+	})
 }
 
 func (s *OrderService) finishKey(ctx context.Context, userID int64, idemKey string,

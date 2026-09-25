@@ -699,6 +699,40 @@ func (q *Queries) PromoteOrderDraft(ctx context.Context, orderNo string) (int64,
 	return result.RowsAffected(), nil
 }
 
+const releaseIdempotencyKey = `-- name: ReleaseIdempotencyKey :execrows
+DELETE FROM idempotency_keys
+ WHERE scope = $1 AND user_id = $2 AND idem_key = $3 AND status = 0
+`
+
+type ReleaseIdempotencyKeyParams struct {
+	Scope   string
+	UserID  int64
+	IdemKey string
+}
+
+// 撤销一次幂等键抢占。**只撤处理中的那些**（status = 0）。
+//
+// 它只有一个调用点：SubmitSaga 失败时（service/order.go 第二段）。那一刻
+// 抢占记录与订单草稿都已经提交了，而 SAGA 一个分支都没跑过 —— 不撤的话，
+// 客户端拿同一把钥匙重试会一直撞 409 处理中，直到 24 小时后 expire_at 过期。
+// 而 Idempotency-Key 的语义恰恰是「同一个逻辑请求的重试用同一把钥匙」，
+// 所以那是把客户端**正确的**行为锁死了。
+//
+// 用 DELETE 而不是「写一条失败存档」：存档是给「业务真的执行过」的失败用的
+// （§12），而这里业务一次都没执行。留一条失败存档会让重试拿到一个回放的错误，
+// 那比 409 更糟 —— 客户端会以为下单真的失败过。
+//
+// `status = 0` 在谓词里不是冗余：撤销与「另一个并发请求刚刚把它推到成功」
+// 之间有窗口（虽然同一把钥匙上不该有两个并发请求），而删掉一条已成功的存档
+// 等于把一笔已经建成的订单的幂等证据抹掉，下一次重试会建出第二笔订单。
+func (q *Queries) ReleaseIdempotencyKey(ctx context.Context, arg ReleaseIdempotencyKeyParams) (int64, error) {
+	result, err := q.db.Exec(ctx, releaseIdempotencyKey, arg.Scope, arg.UserID, arg.IdemKey)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const settleOrder = `-- name: SettleOrder :execrows
 
 UPDATE orders SET status = 20, paid_cents = $2, paid_at = $3
