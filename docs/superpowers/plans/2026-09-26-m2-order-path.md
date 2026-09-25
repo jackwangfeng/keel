@@ -53,13 +53,44 @@ M1 的结论是骨架站得住、租户隔离四个方向都没挖穿。M2 是�
 数据模型 §4 已经写下这条。它需要的是代码，不是文档：扣减语句要能区分
 「行存在但数量不够」与「行根本不可见」。
 
-### 四、构建形态要变
+### 四、构建形态要变（已完成，且原计划有两处说错了）
 
-`CGO_ENABLED=1` + 构建阶段装 Rust 并编出 `libdtmrs.so` + 最终镜像不能再是
-`scratch`（动态链接需要 glibc 与动态链接器）。`docker/Dockerfile:32-40`
-已经把这件事和它的时机写清楚了。
+`CGO_ENABLED=1` + 构建阶段装 Rust 并编出 `libdtmrs.so` + 最终镜像换成
+debian-slim 底座。已落地，镜像 26.7 MB → 118 MB。
 
-换底座之后，M1 记下的 tzdata / `/tmp` / `/etc/passwd` 三个缺失会一并解决。
+两处原计划写错、由实测改正的：
+
+- **Rust 的下限是 1.88，不是 1.82。** 1.82 是 dtmrs 自己的 `rust-version`，
+  但卡住构建的是它 `Cargo.lock` 锁定的依赖树（`home@0.5.12 requires rustc 1.88`）。
+  所以镜像里不能 `apt install cargo rustc`（Debian trixie 给的是 1.85.1），
+  换成官方 `rust:1.90-slim-trixie`。
+- **`/etc/passwd` 不是换底座自动解决的。** 文件确实有了，但里面没有 65532。
+  现在显式建了 nonroot 用户。tzdata 与 `/tmp` 则确实随底座一起来了。
+
+### 五、协调器的存储必须显式配置（原计划没有定，由 Task 3 定下）
+
+`KEEL_DTM_DSN`，**没有默认值，空着拒绝启动**。
+
+实测两条：用 `keel_app` 调 `Start()` 报 `permission denied for schema public`
+（协调器要建表还要 `ALTER TABLE ADD COLUMN`）；换管理员角色能建出来，但那三张
+表（`trans_global` / `trans_branch_op` / `auth_token`）落进业务库 `public` 之后
+**`internal/db` 的四道闸门当场全红**，而且应用从此握着一份能绕过 RLS 的凭据。
+
+不给默认值的理由：这份状态丢了，正向阶段已扣的库存与已核销的券再没人回补，
+架构 §5 的「少卖」从可恢复变成永久漏账。一个「反正能跑起来」的默认值会让每个
+忘配它的部署安静地拿到这个结局。
+
+> **`barrier` 不是 dtmrs 建的**（原计划说是，错了）。把 C ABI 的 `dtmrs_start`
+> 指向空库跑一遍，长出来的只有协调器自己的三张状态表。barrier 由
+> `dtmrs-barrier` crate 的 `BranchBarrier::migrate` 建，而 `dtmrs-ffi` 没有这个
+> 依赖——这不是缺口是必然：`decide()` 接收调用方的事务，结构上过不了 FFI。
+> 现在由本项目的 `00008_barrier.sql` 建，`keel_app` 的 GRANT 面**只有 INSERT**。
+>
+> 那条 GRANT 面同时是一道**形状约束**：实测 `ON CONFLICT DO NOTHING` 跑得通
+> （首次 `INSERT 0 1`、重复 `INSERT 0 0`，正是算法要的两个值），而写成
+> `ON CONFLICT (gid,...) DO NOTHING` 报 `permission denied`——带冲突目标要额外的
+> SELECT 权。屏障的 SQL 因此不许写冲突目标，权限会当场拒绝，而不是让一个错误的
+> 幂等语义悄悄生效。
 
 ---
 
@@ -67,13 +98,19 @@ M1 的结论是骨架站得住、租户隔离四个方向都没挖穿。M2 是�
 
 | # | 任务 | 依赖 | 可并发 |
 |---|---|---|---|
-| 1 | 订单域 schema + RLS（orders / order_items / inventories / inventory_logs / barrier） | — | 与 3 并发 |
-| 2 | 屏障从 `examples/` 产品化进 `internal/`，按上面第二条的形状 | 1 | |
-| 3 | dtmrs 嵌入应用 + 构建形态变更 + CI 跟着改 | — | 与 1 并发 |
-| 4 | `POST /orders/preview`（无副作用试算） | 1 | 与 2、3 并发 |
-| 5 | `POST /orders`：SAGA 正向三分支（库存 / 券 / 建单） | 1,2,3,4 | 汇合点 |
+| 1 | 订单域 schema + RLS（orders / order_items / inventories / inventory_logs） | — | ✅ 已完成 |
+| 3 | dtmrs 嵌入应用 + 构建形态变更 + CI + `barrier` 建表 | — | ✅ 已完成 |
+| 1.5 | 买家身份：`users` / `user_identities` + `/auth/login` + bearer 中间件 | 1 | |
+| 2 | 屏障从 `examples/` 产品化进 `internal/repository` | 3 | |
+| 4 | `POST /orders/preview`（无副作用试算） | 1.5 | |
+| 5 | `POST /orders`：SAGA 正向三分支（库存 / 券 / 建单） | 1.5,2,4 | 汇合点 |
 | 6 | 超时未支付的补偿定时任务 | 5 | |
 | 7 | 支付回调 + 二阶段消息 | 5 | |
+
+> **任务 1.5 是被一条刻意留红的线逼出来的。** Task 1 建 `orders` 时没有给
+> `user_id` 加外键（`users` 还不存在，没有落点），也**刻意没有**把它登记进
+> `fk_missing_ok`——登记等于把提醒关掉。于是 `users` 一被建出来，
+> `TestForeignKeysAreNotSilentlyMissing` 当场红，那份迁移不补复合外键就过不去。
 
 ## 每个任务的硬性要求（沿用 M1）
 
