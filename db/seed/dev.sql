@@ -132,11 +132,17 @@ SELECT p.merchant_id, p.id, 'SKU-' || p.id, p.min_price_cents, 1
                     WHERE s.merchant_id = p.merchant_id AND s.product_id = p.id);
 
 -- 库存数量按 SKU id 取模错开，理由同 single.sql：全相等就分不出扣的是哪一个。
+--
+-- SKU-NOSTOCKROW 刻意排除在外 —— 它就是为了「有 SKU、没有库存行」这个状态而
+-- 存在的（见文件末尾那段）。排除条件写在这里而不是靠「它在这条语句之后才建出来」
+-- ：这个文件每次测试都会重新加载一遍，第二次加载时它已经在库里了，
+-- 少了这个条件就会被顺手补上一行库存，而那条断言会从此空转。
 INSERT INTO inventories (sku_id, available_qty, warning_qty)
 SELECT s.id, 10 + (s.id % 7) * 5, 3
   FROM skus s
   JOIN merchants m ON m.id = s.merchant_id
  WHERE m.code IN ('shop-a', 'shop-b')
+   AND s.sku_code <> 'SKU-NOSTOCKROW'
    AND NOT EXISTS (SELECT 1 FROM inventories i WHERE i.sku_id = s.id);
 
 -- ---------------------------------------------------------------------------
@@ -191,3 +197,62 @@ SELECT m.id, v.phone, v.hash, v.nickname, v.status, v.deleted_at
    AND NOT EXISTS (SELECT 1 FROM users u
                     WHERE u.merchant_id = m.id AND u.phone = v.phone
                       AND u.nickname = v.nickname);
+
+-- ---------------------------------------------------------------------------
+-- 收货地址
+-- ---------------------------------------------------------------------------
+--
+-- 契约里 OrderCreateRequest.address_id 是**必填**，所以没有地址就一单也下不了。
+-- 两家店的可登录买家各一条默认地址（13800000001 在 A 店和 B 店是两行 users，
+-- 见上面那段）。
+--
+-- **两家都要有**，而且 receiver_name 不同：只给一家播的话，「A 店的买家用了
+-- B 店的 address_id 会怎样」这条断言就没有靶子 —— 失败也可能只是因为那一行
+-- 根本不存在，而那正是要排除的另一种解释。
+--
+-- 幂等守卫用 (user_id, receiver_name)：这张表上没有能撞到的唯一约束
+-- （uk_user_addresses_default 只管「至多一个默认」），ON CONFLICT 在这里什么
+-- 也不做，重复加载会一遍遍累积重复行。
+INSERT INTO user_addresses (merchant_id, user_id, receiver_name, phone,
+                            province, city, district, street, detail,
+                            region_code, is_default)
+SELECT u.merchant_id, u.id, v.receiver, '13800000001',
+       '浙江省', '杭州市', '西湖区', '文三路', v.detail, '330106', TRUE
+  FROM users u
+  JOIN merchants m ON m.id = u.merchant_id
+  CROSS JOIN (VALUES
+        ('shop-a', 'A 店收件人', '100 号 1 单元 101'),
+        ('shop-b', 'B 店收件人', '200 号 2 单元 202')
+     ) AS v(code, receiver, detail)
+ WHERE m.code = v.code
+   AND u.phone = '13800000001'
+   AND u.deleted_at IS NULL
+   AND NOT EXISTS (SELECT 1 FROM user_addresses a
+                    WHERE a.user_id = u.id AND a.receiver_name = v.receiver);
+
+-- ---------------------------------------------------------------------------
+-- 一个**没有库存行**的 SKU（shop-a）
+-- ---------------------------------------------------------------------------
+--
+-- 它是 repository.ErrSKUNotInTenant 在 HTTP 层唯一可达的靶子。
+--
+-- 那个 sentinel 覆盖两件事：「这一行属于别的商家」与「它根本没有库存行」。
+-- 前者在下单接口上**不可达** —— order_items 的复合外键
+-- (sku_id, merchant_id) → skus(id, merchant_id) 让跨租户的订单行根本写不进去，
+-- 而定价那一步更早就把别家的 sku_id 当成「不可售」拒了。
+--
+-- 没有这一行数据，「跨租户 SKU 不会被翻译成库存不足」这条断言就只能对着一条
+-- 不可达的分支空转 —— 这个仓库前几轮反复出现的正是这种「断言存在但和被测代码
+-- 没有因果关系」。有了它，POST /orders 能真的走到扣减那一步、真的拿到那个
+-- sentinel，于是「它没有被翻译成 409 库存不足」才是一句被证实过的话。
+--
+-- 挂在一件在架商品上（所以定价查得到它、试算会成功），但 inventories 里没有
+-- 对应行（所以扣减时那一行在本租户不可见）。
+INSERT INTO skus (merchant_id, product_id, sku_code, spec_values, price_cents, status)
+SELECT p.merchant_id, p.id, 'SKU-NOSTOCKROW', '{"备注":"刻意没有库存行"}'::jsonb, 1990, 1
+  FROM products p
+  JOIN merchants m ON m.id = p.merchant_id
+ WHERE m.code = 'shop-a'
+   AND p.title = 'shop-a 的商品 1'
+   AND NOT EXISTS (SELECT 1 FROM skus s
+                    WHERE s.merchant_id = p.merchant_id AND s.sku_code = 'SKU-NOSTOCKROW');

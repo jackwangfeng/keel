@@ -137,3 +137,26 @@ SELECT m.id, '13800000000',
  WHERE m.code = 'demo'
    AND NOT EXISTS (SELECT 1 FROM users u
                     WHERE u.merchant_id = m.id AND u.phone = '13800000000');
+
+-- ---------------------------------------------------------------------------
+-- 收货地址
+-- ---------------------------------------------------------------------------
+--
+-- 契约里 OrderCreateRequest.address_id 是**必填**，没有地址就一单也下不了。
+-- 冒烟脚本与 M2 Task 4/5 的端到端都要用这一条：先 /auth/login 拿令牌，
+-- 再 GET 不到地址列表（地址簿接口还没做），所以它的 id 只能从这里来 ——
+-- 端到端脚本按 receiver_name 反查。
+--
+-- 幂等守卫用 (user_id, receiver_name)，理由同 dev.sql：这张表上没有能撞到的
+-- 唯一约束，ON CONFLICT 在这里什么也不做。
+INSERT INTO user_addresses (merchant_id, user_id, receiver_name, phone,
+                            province, city, district, street, detail,
+                            region_code, is_default)
+SELECT u.merchant_id, u.id, '示例收件人', '13800000000',
+       '浙江省', '杭州市', '西湖区', '文三路', '1 号楼 101', '330106', TRUE
+  FROM users u
+  JOIN merchants m ON m.id = u.merchant_id
+ WHERE m.code = 'demo'
+   AND u.phone = '13800000000'
+   AND NOT EXISTS (SELECT 1 FROM user_addresses a
+                    WHERE a.user_id = u.id AND a.receiver_name = '示例收件人');
