@@ -43,7 +43,17 @@ type Product struct {
 //
 // 新查询加进来时，这个接口跟着长 —— 长的过程本身就是一次复核：
 // 这个能力确实要交给业务层吗？
+//
+// 它由若干个按主题拆开的接口嵌套而成，而不是一张平铺的方法表。理由是并发：
+// 同一时期有好几条任务在往这一层加能力，平铺意味着他们改的是同一处声明的
+// 同一批行。拆开之后每条任务加自己那个文件里的方法，这里只多一行嵌入。
 type Tx interface {
+	ProductTx
+	SagaTx
+}
+
+// ProductTx 是商品读取这一面。
+type ProductTx interface {
 	// ListProducts 返回当前租户的在架商品，按上架时间倒序。
 	//
 	// limit / offset 的钳制是业务规则，在 service 里做。这里只负责把它们安全地
@@ -54,10 +64,9 @@ type Tx interface {
 	// CountProducts 返回当前租户在架商品的总数，用于填契约里必填的 total。
 	CountProducts(ctx context.Context) (int64, error)
 
-	// DeductInventory / RestoreInventory 见 inventory.go —— 它们的三条出路
-	// 是本接口里唯一一处「用返回值的形状去挡一类误用」的设计，注释写在那边。
-	DeductInventory(ctx context.Context, skuID int64, qty int32) (int32, error)
-	RestoreInventory(ctx context.Context, skuID int64, qty int32) (int32, error)
+	// 库存的两个方法搬去了 SagaTx（saga.go）：它们本来就是为 SAGA 分支存在的
+	// —— 正向扣减、补偿回补、超时关单释放。它们的三条出路是这一层唯一一处
+	// 「用返回值的形状去挡一类误用」的设计，注释仍在 inventory.go。
 }
 
 // tenantTx 是 Tx 的唯一实现：一层薄薄的转换，把 sqlc 的行变成领域类型。

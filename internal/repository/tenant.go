@@ -14,6 +14,7 @@ import (
 	"context"
 	"strconv"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/keel/keel/internal/repository/internal/db"
@@ -33,6 +34,18 @@ func New(pool *pgxpool.Pool) *Repo { return &Repo{pool: pool} }
 // 生成代码上的导出方法 WithTx(pgx.Tx) 会让「自己 Begin 一个没设租户的事务」
 // 重新变成一句能编译的话，而接口让那个方法在业务层根本不存在。
 func (r *Repo) WithTenant(ctx context.Context, fn func(Tx) error) error {
+	return r.withTenantTx(ctx, func(_ pgx.Tx, q Tx) error { return fn(q) })
+}
+
+// withTenantTx 是「开事务 → 设租户 → 跑 fn → 提交」这一串的**唯一**实现。
+//
+// 包内的 fn 除了 Tx 还拿得到 pgx.Tx，因为子事务屏障要在同一个事务里发自己那条
+// INSERT（见 saga.go）。它是包内的：pgx.Tx 到不了本包之外，Tx 才是交出去的东西。
+//
+// 合成一处而不是让 WithSagaBranch 自己再写一遍 Begin + set_config：那句
+// set_config 是整个租户隔离的落点，两份实现意味着将来有人只改对其中一份，
+// 而漏掉的那一份的症状是线上偶发 42501。
+func (r *Repo) withTenantTx(ctx context.Context, fn func(pgx.Tx, Tx) error) error {
 	merchantID, err := tenant.FromContext(ctx)
 	if err != nil {
 		return err
@@ -63,7 +76,7 @@ func (r *Repo) WithTenant(ctx context.Context, fn func(Tx) error) error {
 		return err
 	}
 
-	if err := fn(tenantTx{q: db.New(tx)}); err != nil {
+	if err := fn(tx, tenantTx{q: db.New(tx)}); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
