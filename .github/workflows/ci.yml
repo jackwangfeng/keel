@@ -22,8 +22,22 @@
 #     形态。叠加层与它自己的数据卷目前只有人手动验证过。
 #   - -race。make test-db 是 `go test -count=1 -p 1 ./...`，没有 -race；
 #     要加得先决定它属于 Makefile 还是属于这里。
-#   - examples/dtmrs-embedded 在自己的 workflow 里（example-dtmrs.yml），
-#     它要 Rust 工具链，不该挂在每个 PR 的关键路径上。
+#   - examples/dtmrs-embedded 在自己的 workflow 里（example-dtmrs.yml）。
+#     它跑的是那个例子自己的五项验证（TCC、拉取式分支、崩溃恢复…），
+#     和服务端要的东西不一样，所以没有并进来。
+#
+# ## M2 起 Rust 进了关键路径
+#
+# 主模块经 cgo 嵌入 dtmrs（internal/dtm），所以 `go build ./...` 需要
+# libdtmrs.so。go 与 e2e 两个 job 都要它，gates 不要（它只跑文档校验与契约产物
+# 比对，一行主模块代码都不编）。
+#
+# **「ubuntu-latest 自带 rustup 与 stable 工具链」这条至今没有在真 runner 上
+# 验证过。** 上一轮给 example-dtmrs.yml 写这条时就明确标注了，这一轮仍然没有 ——
+# 本机验证不了 runner 镜像里装了什么。区别是代价变了：那个 workflow 是路径触发的，
+# 这个挡着每一个 PR。所以这里没有沿用「不装 action」的做法去赌，而是
+# **显式检查并在缺失时当场失败**，让报错就是真因（见下面「Rust 工具链」那一步）。
+# 真到了那一天，修法是在这个文件里加一行 dtolnay/rust-toolchain@stable。
 name: CI
 
 on:
@@ -128,6 +142,44 @@ jobs:
             go.sum
             tools/go.sum
 
+      # libdtmrs.so —— 主模块经 cgo 嵌入 dtmrs，没有它 `go build ./...` 停在
+      # 链接器的一句 `cannot find -ldtmrs` 上，那句话不指向任何该做的事。
+      #
+      # 缓存键取 scripts/fetch-dtmrs.sh 的内容哈希：dtmrs 的版本（v0.11.0）就钉在
+      # 那个脚本里，改版本必然改脚本，缓存自然失效。命中时整段 Rust 都不跑。
+      - uses: actions/cache@v4
+        id: libdtmrs
+        with:
+          path: |
+            third_party/dtmrs/lib
+            third_party/dtmrs/include
+          key: libdtmrs-${{ runner.os }}-${{ hashFiles('scripts/fetch-dtmrs.sh') }}
+
+      # 先确认工具链在，再去构建。
+      #
+      # 没有这一步的话，缺 Rust 时报出来的是 fetch-dtmrs.sh 里那句中文提示
+      # 混在 make 的输出里 —— 已经不错了，但它出现在「构建 libdtmrs」这一步，
+      # 读的人第一反应是 dtmrs 出了问题。单独一步、名字就叫工具链，
+      # 让失败信息在 job 的步骤列表里就指向真因。
+      #
+      # **这一步同时是那条未验证假设的兜底**：「ubuntu-latest 自带 rustup 与
+      # stable 工具链」从来没有在真 runner 上验证过（本机验证不了 runner 镜像
+      # 装了什么）。哪天它不成立，红的是这一步，而修法只有一行：在它前面加
+      # `- uses: dtolnay/rust-toolchain@stable`。
+      - name: Rust 工具链
+        if: steps.libdtmrs.outputs.cache-hit != 'true'
+        run: |
+          command -v cargo >/dev/null || {
+            echo "::error::runner 上没有 cargo。dtmrs 是 Rust 实现，Keel 自 M2 起经 cgo 嵌入它。修法：在这一步前面加 - uses: dtolnay/rust-toolchain@stable"
+            exit 1
+          }
+          cargo --version
+          rustc --version
+
+      - name: 构建 libdtmrs
+        if: steps.libdtmrs.outputs.cache-hit != 'true'
+        run: make dtmrs-deps
+
       - run: go build ./...
 
       - run: go vet ./...
@@ -156,6 +208,14 @@ jobs:
     name: 端到端（compose + smoke + SDK）
     runs-on: ubuntu-latest
     # 比另外两个宽：这里要在 runner 上从零建两个镜像，Go 依赖在容器里重下一遍。
+    #
+    # M2 又加了一段：镜像里多一个 Rust 阶段（装 cargo/rustc、clone dtmrs、
+    # cargo build --release）。本机实测那一段 47 秒（cargo registry 是暖的），
+    # runner 上是冷的，而且 docker build 的层缓存在 runner 上**一次都不会命中**
+    # （每个 job 都是新机器，这里也没有配 buildx 的远端缓存）。所以它是每次
+    # 都要付的固定成本，30 分钟对它还够，但余量比 M1 时薄了。
+    # 真顶到上限的话，第一件该做的事是给 docker build 配 GHA 缓存后端，
+    # 而不是继续往上加分钟数。
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
