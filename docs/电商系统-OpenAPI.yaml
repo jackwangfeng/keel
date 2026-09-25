@@ -52,15 +52,13 @@ tags:
       避免实现时各写各的。
   - name: Upload
     description: 文件上传（商品图 / 头像 / 退款凭证）
+# S13 不做（一期）：用户自助领券（GET /coupon-templates、POST .../claim）。
+# 一期只做后台定向发放 —— coupon_templates 的 total_count / per_user_limit
+# 这套发放控制是为「领券中心」准备的，而领券中心涉及活动页、分享裂变、
+# 限流防刷，是独立的产品面，不该夹在核心交易链路里顺手做。
+# 需要时再开，数据模型已经支持。
   - name: Coupon
-    description: |
-      优惠券查询与试算。
-
-      # S13 不做（一期）：用户自助领券（GET /coupon-templates、POST .../claim）。
-      # 一期只做后台定向发放 —— coupon_templates 的 total_count / per_user_limit
-      # 这套发放控制是为「领券中心」准备的，而领券中心涉及活动页、分享裂变、
-      # 限流防刷，是独立的产品面，不该夹在核心交易链路里顺手做。
-      # 需要时再开，数据模型已经支持。
+    description: 优惠券查询与试算。
 
 # =============================================================================
 paths:
@@ -301,6 +299,54 @@ paths:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
         '422': { $ref: '#/components/responses/IdempotencyKeyReused' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /uploads/{upload_id}:
+    get:
+      tags: [Upload]
+      summary: 读取文件
+      description: |
+        **这个端点是归属校验的落点。** 文件不按公开静态资源直接暴露，
+        而是走这里——服务端按 `uploads.user_id` 与 `purpose` 判定调用者可否读取：
+
+        | purpose | 可读者 |
+        |---|---|
+        | 1 商品图 | 所有人（上架商品的图本就公开） |
+        | 2 头像 | 所有人 |
+        | 3 退款凭证 | **仅上传者本人与后台客服** |
+
+        退款凭证是隐私内容，而 URL 会被转发、被日志记录、被截图。
+        把它当静态文件发出去，等于任何拿到 URL 的人都能看别人的退货照片
+        （见数据模型 §12）。
+
+        响应为 302，跳转到 driver 生成的**限时**地址：本地磁盘 driver 跳到
+        带签名与过期时间的站内地址，S3 driver 跳到预签名 URL。
+        两种 driver 都不返回长期有效的裸路径。
+      parameters:
+        - name: upload_id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        '302':
+          description: 跳转到限时访问地址
+          headers:
+            Location:
+              description: 限时地址，默认有效期 5 分钟
+              schema: { type: string }
+        '403':
+          description: |
+            无权读取该文件（典型情况：他人的退款凭证）。
+            刻意返回 403 而非 404 —— 文件 id 是自增的，用 404 掩盖存在性
+            并不能阻止枚举，反而让合法用户分不清「没权限」和「传错了 id」。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: 文件不存在或已被孤儿回收清理
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
         default: { $ref: '#/components/responses/Problem' }
 
   # ---------------------------------------------------------------- User
@@ -729,6 +775,8 @@ paths:
     post:
       tags: [Search]
       summary: 搜索行为回传
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       description: |
         回传点击 / 加购 / 下单事件，用于填充 `search_logs` 的 `clicked_id`、
         `ordered_id`、`session_id`。
@@ -811,6 +859,8 @@ paths:
         若该 `sku_id` 已在车中，则**数量累加**（`cart_items` 上有
         `UNIQUE (cart_id, sku_id)`，重复加购必然走合并路径）。
         累加后超过 999 返回 422，不做静默截断。
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
         content:
@@ -832,6 +882,16 @@ paths:
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: |
+            累加后数量超过 999。Problem `type` 为
+            `https://keel.dev/problems/cart-quantity-exceeded`，
+            `detail` 给出当前数量与上限。不做静默截断——
+            客户端以为加了 5 件、实际只加了 2 件，比报错更糟。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
 
   /cart/selection:
     put:
@@ -877,6 +937,8 @@ paths:
 
         用 POST 而不是 `DELETE /cart/items?ids=1,2,3`，是因为条目多时
         查询串会超长，且 DELETE 带 body 在部分网关与客户端上行为不一致。
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
         content:
@@ -1896,7 +1958,10 @@ components:
 
         订单列表的售后标签必须由这两列**组合**渲染，不能只看 `status`。
       enum: [0, 1, 2, 3]
-      default: 0
+      # 注意：这里**不能**放 default。这个 schema 同时被 GET /orders 的
+      # refund_status 查询参数引用，参数上的 default 会在客户端不传时被代入，
+      # 于是「我的订单」默认只返回从未退款的订单。默认值放在 Order.refund_status
+      # 这个响应属性上（它对应 DDL 的 NOT NULL DEFAULT 0）。
 
     OrderItemInput:
       type: object
@@ -1956,7 +2021,8 @@ components:
         order_no: { type: string }
         status:   { $ref: '#/components/schemas/OrderStatus' }
         refund_status:
-          $ref: '#/components/schemas/OrderRefundStatus'
+          allOf: [{ $ref: '#/components/schemas/OrderRefundStatus' }]
+          default: 0
           description: |
             售后状态，与 status 正交，必返字段（DB 上是 `NOT NULL DEFAULT 0`）。
             没有它，「买 3 件退 1 件的已发货订单」和「完全没有售后的订单」
@@ -2024,6 +2090,10 @@ components:
             退款流程中（退款单尚未到达 `40 已退款` 或终态）占用的件数。
 
             **本行还可退的件数 = `quantity - refunded_qty - refunding_qty`。**
+
+            这不是持久化列，是 `refund_items ⋈ refunds WHERE status IN (10,20,30)`
+            的聚合，定义式见数据模型 §10。**数据库的 CHECK 拦不住在途超退**，
+            服务端必须在同一事务内复算——不要以为提交上去有兜底。
             没有这个字段，客户端算不出可退数量，只能先提交再被 409
             `refund-quantity-exceeded` 打回——那是把校验规则藏在服务端错误里。
 
@@ -2246,9 +2316,13 @@ components:
         url:
           type: string
           description: |
-            可直接写入业务字段（如 `evidence_urls`、`avatar_url`）的访问地址。
-            具体形态由服务端的 storage driver 决定：本地磁盘 driver 返回站内路径，
-            S3 driver 返回签名 URL。客户端不应解析它，原样回传即可。
+            可直接写入业务字段（如 `evidence_urls`、`avatar_url`）的访问地址，
+            形如 `/api/v1/uploads/{upload_id}`。
+
+            **它指向 `GET /uploads/{upload_id}`，不是裸的存储路径。**
+            读取时在那里做归属校验，再 302 到限时地址——
+            无论底层是本地磁盘还是 S3，对客户端都是同一个形状。
+            客户端不应解析它，原样回传即可。
         content_type: { type: string, example: image/jpeg }
         size_bytes: { type: integer, format: int64 }
         created_at: { type: string, format: date-time }

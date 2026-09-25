@@ -7,6 +7,11 @@ import sys
 import urllib.parse
 
 LINK_RE = re.compile(r'\[[^\]]*\]\(([^)]+)\)')
+# 引用式链接的定义行：[ref]: ./path.md
+REF_DEF_RE = re.compile(r'^\s{0,3}\[[^\]]+\]:\s*(\S+)')
+# HTML 写法（README 里做居中徽章时很常见）
+HTML_SRC_RE = re.compile(r'<(?:a|img|source)\b[^>]*?(?:href|src)\s*=\s*["\']([^"\']+)["\']',
+                         re.IGNORECASE)
 HEADING_RE = re.compile(r'^#{1,6}\s+(.*?)\s*$', re.MULTILINE)
 FENCE_RE = re.compile(r'^\s*(```|~~~)')
 INLINE_CODE_RE = re.compile(r'`[^`]*`')
@@ -54,10 +59,24 @@ def main():
     for path in sorted(md_files(root)):
         text = io.open(path, encoding='utf-8').read()
         for lineno, line in prose_lines(text):
-            for target in LINK_RE.findall(line):
+            targets = list(LINK_RE.findall(line))
+            targets += REF_DEF_RE.findall(line)
+            targets += HTML_SRC_RE.findall(line)
+            for target in targets:
                 target = target.strip()
+                # 剥离链接标题：[x](./a.md "标题")
+                m = re.match(r'^(\S+)\s+["\'(].*$', target)
+                if m:
+                    target = m.group(1)
                 # 跳过外链、页内锚点、邮件、内联数据
-                if target.startswith(('http://', 'https://', 'mailto:', '#', 'data:')):
+                if target.startswith(('http://', 'https://', 'mailto:', 'data:')):
+                    continue
+                if target.startswith('#'):
+                    # 同文件锚点：以前直接跳过，于是加目录时写错小节名没人发现
+                    a = urllib.parse.unquote(target[1:])
+                    if a and slugify(a) not in anchors_of(path):
+                        problems.append('%s:%d 同文件锚点不存在 -> %s'
+                                        % (os.path.relpath(path, root), lineno, target))
                     continue
                 filepart, _, anchor = target.partition('#')
                 # 关键：中文文件名常被写成百分号编码，必须先解码再比对
