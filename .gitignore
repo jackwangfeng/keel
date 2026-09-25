@@ -24,5 +24,6 @@
 
 # 一期文件存储 driver 的本地卷
 /data/uploads/
-# make generate 的默认输出位置
-/build/
+# make generate 的默认输出位置。点号前缀让 Go 工具链忽略它——
+# 放在 build/ 时里面的 .go 产物会被 go mod tidy 扫进主模块的依赖图。
+/.codegen/

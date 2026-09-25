@@ -22,10 +22,15 @@ OPENAPI_TS := openapi-typescript@7.13.0
 
 # 输出位置由后续任务按实际骨架覆盖，例如：
 #   make generate GO_OUT=internal/api/openapi.gen.go TS_OUT=web/src/api/schema.d.ts
-GO_OUT     ?= $(ROOT)/build/codegen/openapi.gen.go
+#
+# 默认落在 .codegen/ 而不是 build/：Go 工具链忽略 . 和 _ 开头的目录，所以这里的
+# openapi.gen.go 不会被当成主模块的包。放在 build/ 时它会被 `go mod tidy` 扫到，
+# 把 oapi-codegen/runtime 写进主模块的 go.mod —— 于是 go.mod 的内容取决于
+# 「你跑没跑过 make generate」，跑过的人 tidy 出来多一条依赖，没跑过的又少一条。
+GO_OUT     ?= $(ROOT)/.codegen/openapi.gen.go
 GO_PACKAGE ?= api
 GO_MODE    ?= types
-TS_OUT     ?= $(ROOT)/build/codegen/schema.d.ts
+TS_OUT     ?= $(ROOT)/.codegen/schema.d.ts
 
 # 迁移目录必须是绝对路径：GORUN 用的 `go -C $(TOOLS)` 让 goose 的工作目录是
 # tools/，相对路径会从那里解析。
@@ -44,7 +49,7 @@ GOOSE := GOOSE_DRIVER=postgres GOOSE_DBSTRING="$(GOOSE_DBSTRING)" \
 	$(GORUN) github.com/pressly/goose/v3/cmd/goose
 
 .PHONY: help generate generate-go generate-ts tools-versions contract-check \
-	migrate migrate-down migrate-status
+	migrate migrate-down migrate-status test-db
 
 help:
 	@echo "make generate       生成 Go + TS 两侧契约产物"
@@ -55,6 +60,7 @@ help:
 	@echo "make migrate        把 db/migrations 迁到最新（GOOSE_DBSTRING 可覆盖）"
 	@echo "make migrate-down   回滚一个版本"
 	@echo "make migrate-status 打印各版本的应用状态"
+	@echo "make test-db      跑需要数据库的测试（强制不吃缓存）"
 
 generate: generate-go generate-ts
 
@@ -96,3 +102,12 @@ migrate-down:
 
 migrate-status:
 	$(GOOSE) status
+
+# 跑碰数据库的测试。-count=1 不是可选项：这些测试真正依赖的输入是数据库状态，
+# 而那在 Go 的视野之外。源码和环境变量没变时 `go test` 会直接回放上次的成功结果，
+# 于是把 RLS 策略删掉、把谓词改成 USING (true)，测试照样 `ok (cached)`。
+# 一个「本地跑两遍就永远绿」的测试，恰恰只在它该报警的时候失灵。
+TEST_PKGS ?= ./...
+
+test-db:
+	go test -count=1 $(TEST_PKGS)

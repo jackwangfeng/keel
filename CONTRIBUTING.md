@@ -47,17 +47,49 @@
 docker run -d --name keel-pg -e POSTGRES_PASSWORD=keel -e POSTGRES_USER=keel \
     -e POSTGRES_DB=keel -p 5432:5432 postgres:16
 make migrate          # 迁到最新；make migrate-status 看状态，make migrate-down 回滚一格
+make test-db          # 跑碰数据库的测试
 ```
 
-连接参数走 `PGHOST` / `PGPORT` / `PGUSER` / `PGPASSWORD` / `PGDATABASE`，
-默认值与 `internal/db.DSN()` 一致。5432 被别的容器占了就换端口，
-`make migrate` 与 `go test ./internal/db/` 都认这套变量：
+5432 被别的容器占了就换端口，两个目标都认 `PG*` 变量：
 
 ```bash
 docker run -d --name keel-pg ... -p 5433:5432 postgres:16
 PGPORT=5433 make migrate
-PGPORT=5433 go test ./internal/db/
+PGPORT=5433 make test-db
 ```
+
+### 两个角色，别用错
+
+| 角色 | 谁用 | 连接串 |
+|---|---|---|
+| `keel`（超级用户） | **只有迁移**。建表、建角色、授权要属主权限 | `db.AdminDSN()`，env `KEEL_ADMIN_USER` / `KEEL_ADMIN_PASSWORD` |
+| `keel_app`（`NOSUPERUSER NOBYPASSRLS`） | 应用与**所有测试** | `db.DSN()`，env `PGUSER` / `PGPASSWORD` |
+
+由 `db/migrations/00003_app_role.sql` 建出来，口令默认 `keel_app`，
+生产经 `KEEL_APP_PASSWORD` 注入。
+
+**为什么必须分开**：超级用户和带 `BYPASSRLS` 的角色无条件绕过行级安全，
+`FORCE` 也拦不住。用 `keel` 连上来，`00002` 里的租户隔离就是一张废纸——
+既读得到别家租户的数据，也不会在忘记设 `app.merchant_id` 时报错，
+而且**所有「跨租户读不到数据」的测试都会假绿**。
+所以 `internal/db.Connect()` 在建连接时就会查 `rolsuper` / `rolbypassrls`，
+发现能绕过就拒绝返回连接。拿连接请走它，别自己 `pgx.Connect`。
+
+### 表属主是 `keel`，不是 `keel_app`
+
+`keel_app` 只是被授权者。这意味着它走普通 RLS 路径，`ENABLE` 就足以约束它；
+`00002` 里的 `FORCE` 是给「属主自己连上来」那种部署形态兜底的。
+**如果以后有人 `ALTER TABLE ... OWNER TO keel_app`，安全边界就只剩 `FORCE` 一道**，
+那时它从冗余保险变成唯一防线——别当多余的删掉。
+
+新增的表由 `ALTER DEFAULT PRIVILEGES` 自动授权给 `keel_app`，不用逐张补 `GRANT`。
+
+### 跑数据库测试请走 `make test-db`
+
+它把 `-count=1` 钉死了。这些测试真正依赖的输入是**数据库状态**，
+而那在 Go 的视野之外：源码和环境变量没变时 `go test` 会直接回放上次的成功结果。
+实测过——把 RLS 策略整个 `DROP` 掉，裸 `go test` 照样报 `ok (cached)`。
+一个「本地跑两遍就永远绿」的测试，恰恰只在它该报警的时候失灵。
 
 goose 不装全局二进制，它和 sqlc、oapi-codegen 一样钉在 `tools/go.mod`，
 只经 `make migrate` 调用——本地与 CI 装到不同版本的迁移工具，
