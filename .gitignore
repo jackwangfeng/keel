@@ -9,6 +9,10 @@
 *.so
 *.a
 *.dylib
+# scripts/fetch-dtmrs.sh 的产物：libdtmrs.{so,a}、dtmrs.h、以及取回来的源码树。
+# 整个目录不入库 —— .so 是平台相关的，而头文件必须与 .so 同版本，
+# 分开管理迟早对不上。`make dtmrs-deps` 随时能重建。
+/third_party/
 
 # 本地环境
 .env

@@ -12,7 +12,7 @@
 
 ## 跑起来
 
-版本：**dtmrs v0.11.0**（`scripts/fetch-dtmrs.sh` 里钉死）。
+版本：**dtmrs v0.11.0**（仓库根目录的 `scripts/fetch-dtmrs.sh` 里钉死）。
 
 ```bash
 make deps      # 取回 dtmrs 并构建 libdtmrs.so（需要 Rust 1.82+）
@@ -219,11 +219,14 @@ cmd/saga/       SAGA 四种行为
 cmd/topology/   「只改一行」的实证
 cmd/tcc/        TCC 两条路径
 cmd/barrier/    屏障三种异常（需 PostgreSQL）
-scripts/        取回并构建 libdtmrs
 ```
 
 `lib/`、`include/`、`bin/` 都是构建产物，不入库——
 `.so` 是平台相关的，而头文件必须与 `.so` 同版本，分开管理迟早对不上。
 
-`scripts/fetch-dtmrs.sh` 把上游版本**钉死在一个 commit** 上。
-上游改了 C ABI 而这里悄悄跟着变，是最难查的一类问题。
+取回与构建由仓库根目录的 `scripts/fetch-dtmrs.sh` 完成（`make deps` 调它），
+版本**钉死在一个 tag** 上。上游改了 C ABI 而这里悄悄跟着变，是最难查的一类问题。
+
+脚本在根目录而不在这里，是因为 M2 起主模块也嵌入 dtmrs，两边必须用同一个
+`.so`。两份脚本就是两个 REF，它们会在某次升级里错开，而症状是
+「例子绿、服务红」，报错停在 C ABI 的某个符号上，不指向真因。

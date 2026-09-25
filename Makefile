@@ -56,7 +56,8 @@ GOOSE := GOOSE_DRIVER=postgres GOOSE_DBSTRING="$(GOOSE_DBSTRING)" \
 	$(GORUN) github.com/pressly/goose/v3/cmd/goose
 
 .PHONY: help generate generate-go generate-ts generate-sql tools-versions \
-	contract-check schema-check sdk-smoke migrate migrate-down migrate-status test-db
+	contract-check schema-check sdk-smoke migrate migrate-down migrate-status test-db \
+	dtmrs-deps build
 
 help:
 	@echo "make generate       生成 Go + TS 两侧契约产物"
@@ -71,6 +72,8 @@ help:
 	@echo "make migrate-down   回滚一个版本"
 	@echo "make migrate-status 打印各版本的应用状态"
 	@echo "make test-db      跑需要数据库的测试（强制不吃缓存）"
+	@echo "make dtmrs-deps     取回 dtmrs 并编出 libdtmrs.so（需要 Rust 1.82+）"
+	@echo "make build          编译主模块（会先确保 libdtmrs.so 在）"
 
 generate: generate-go generate-ts
 
@@ -185,5 +188,37 @@ TEST_PKGS ?= ./...
 # 不用 -p 1 的另一条路是让 TestMain 抢一把咨询锁再迁移，那是把并发正确性
 # 做进测试基建；在只有一个共享库的前提下不值当，理由和 -count=1 是同一类：
 # 宁可慢一点，也不要一个「只在该报警时失灵」的测试。
-test-db:
+test-db: $(DTMRS_LIB)
 	go test -count=1 -p 1 $(TEST_PKGS)
+
+# ---------------------------------------------------------------------------
+# dtmrs：嵌入式事务协调器的 C ABI 动态库
+# ---------------------------------------------------------------------------
+#
+# M2 起主模块经 cgo 嵌入 dtmrs（internal/dtm），所以 `go build ./...` 需要这个
+# .so 与它的头文件。没有它的时候，报错停在链接器的一句
+# `cannot find -ldtmrs` 上 —— 那句话不会告诉任何人该跑什么。
+#
+# 产物不入库（.gitignore 里 /third_party/）：.so 是平台相关的，而头文件必须与
+# .so 同版本，分开管理迟早对不上。
+#
+# 版本钉在 scripts/fetch-dtmrs.sh 里（v0.11.0），examples/dtmrs-embedded 调的
+# 也是同一份脚本 —— 两份脚本就是两个版本，而它们错开时的症状是
+# 「例子绿、服务红」，报错停在 C ABI 的某个符号上，不指向真因。
+DTMRS_DIR := $(ROOT)/third_party/dtmrs
+DTMRS_LIB := $(DTMRS_DIR)/lib/libdtmrs.so
+
+dtmrs-deps:
+	$(ROOT)/scripts/fetch-dtmrs.sh $(DTMRS_DIR)
+
+# 缺了就自动建一次，而不是报一句链接错。
+#
+# 代价是第一次 `make test-db` 会多等一分钟左右（本机实测 cargo 缓存是暖的时
+# 49 秒）。这个代价是值得的：另一条路是让每个新来的人先撞一次 `cannot find
+# -ldtmrs`，再去翻文档找到该跑哪个目标。
+$(DTMRS_LIB):
+	@echo "==> 没找到 $(DTMRS_LIB)，先建它（需要 Rust 1.82+，约 1 分钟）"
+	@$(MAKE) dtmrs-deps
+
+build: $(DTMRS_LIB)
+	go build ./...
