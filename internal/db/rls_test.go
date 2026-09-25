@@ -158,3 +158,169 @@ func TestAppRoleCannotBypassRLS(t *testing.T) {
 	}
 	t.Logf("应用角色 %q: rolsuper=%v rolbypassrls=%v", who, super, bypass)
 }
+
+// inventories 的策略是全库唯一一条**不是列比较**的租户策略：它没有 merchant_id
+// 列（按规矩一豁免，数据模型 §4），谓词是对 skus 的 EXISTS 子查询。
+//
+// 上面 migrate_test.go 里那条 TestTenantPoliciesArePresentAndExact 只断言了
+// 谓词文本里出现过 skus / sku_id / current_merchant() 三个词。那是形状检查，
+// 不是行为检查：把子查询写成 `EXISTS (SELECT 1 FROM skus s WHERE s.id = s.id
+// AND s.merchant_id = current_merchant() OR true)` 照样含有这三个词，而它
+// 对所有人都是真。
+//
+// 所以这里用**真实数据**把三个面各走一遍——读、改、插。数据模型 §4 的实测表
+// 就是这三行，本测试是那张表的可执行版本。
+func TestInventoriesPolicyBlocksCrossTenantAccess(t *testing.T) {
+	ctx := context.Background()
+
+	if _, err := migrate(t); err != nil {
+		t.Fatalf("迁移失败: %v", err)
+	}
+
+	admin, err := pgx.Connect(ctx, db.AdminDSN())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { admin.Close(context.Background()) })
+
+	suffix := fmt.Sprintf("invtest-%d", time.Now().UnixNano())
+	// status = 2（停用）：这两家是夹具不是营业中的店，理由同上一个测试——
+	// tenant.Preflight 断言的是整个库的形态，插一家活跃商家会让别的包随机红。
+	var idA, idB int64
+	if err := admin.QueryRow(ctx,
+		`INSERT INTO merchants (code, name, status) VALUES ($1,'A',2), ($2,'B',2)
+		 RETURNING id`, suffix+"-a", suffix+"-b").Scan(&idA); err != nil {
+		t.Fatal(err)
+	}
+	if err := admin.QueryRow(ctx,
+		`SELECT id FROM merchants WHERE code = $1`, suffix+"-b").Scan(&idB); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		c := context.Background()
+		ids := []int64{idA, idB}
+		for _, stmt := range []string{
+			`DELETE FROM inventories WHERE sku_id IN
+			   (SELECT id FROM skus WHERE merchant_id = ANY($1))`,
+			`DELETE FROM skus       WHERE merchant_id = ANY($1)`,
+			`DELETE FROM products   WHERE merchant_id = ANY($1)`,
+			`DELETE FROM categories WHERE merchant_id = ANY($1)`,
+			`DELETE FROM merchants  WHERE id          = ANY($1)`,
+		} {
+			if _, err := admin.Exec(c, stmt, ids); err != nil {
+				t.Errorf("清理失败 (%s): %v", stmt, err)
+			}
+		}
+	})
+
+	skuOf := map[int64]int64{}
+	for _, m := range []int64{idA, idB} {
+		var catID, prodID, skuID int64
+		if err := admin.QueryRow(ctx,
+			`INSERT INTO categories (merchant_id, name, path) VALUES ($1,'c','/c/')
+			 RETURNING id`, m).Scan(&catID); err != nil {
+			t.Fatal(err)
+		}
+		if err := admin.QueryRow(ctx,
+			`INSERT INTO products (merchant_id, category_id, title, status, published_at)
+			 VALUES ($1,$2,'p',1,now()) RETURNING id`, m, catID).Scan(&prodID); err != nil {
+			t.Fatal(err)
+		}
+		if err := admin.QueryRow(ctx,
+			`INSERT INTO skus (merchant_id, product_id, sku_code, price_cents)
+			 VALUES ($1,$2,$3,100) RETURNING id`,
+			m, prodID, fmt.Sprintf("%s-%d", suffix, m)).Scan(&skuID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := admin.Exec(ctx,
+			`INSERT INTO inventories (sku_id, available_qty) VALUES ($1, 50)`,
+			skuID); err != nil {
+			t.Fatal(err)
+		}
+		skuOf[m] = skuID
+	}
+
+	app, err := db.Connect(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Close(ctx)
+	// 以商家 A 的身份连着做下面三件事。
+	if _, err := app.Exec(ctx,
+		`SELECT set_config('app.merchant_id', $1, false)`, fmt.Sprint(idA)); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("读不到别家的库存水位", func(t *testing.T) {
+		// 这一条在数据模型 §4 的实测表里原先没写。读得到水位本身就是泄露：
+		// 竞对能按分钟采样别家的可售数，直接反推销量。
+		var n int
+		if err := app.QueryRow(ctx,
+			`SELECT count(*) FROM inventories WHERE sku_id = $1`, skuOf[idB]).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		if n != 0 {
+			t.Fatalf("商家 A 看得到商家 B 的库存行（%d 行）—— EXISTS 策略的读侧没生效", n)
+		}
+		// 对照：自己的那一行必须看得见。否则「看不到」可能只是数据没播进去，
+		// 上面那条断言会在策略被整个删掉的那天照样绿。
+		if err := app.QueryRow(ctx,
+			`SELECT count(*) FROM inventories WHERE sku_id = $1`, skuOf[idA]).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		if n != 1 {
+			t.Fatalf("商家 A 看不到自己的库存行（%d 行）—— 夹具或策略写反了", n)
+		}
+	})
+
+	t.Run("改不动别家的库存水位", func(t *testing.T) {
+		tag, err := app.Exec(ctx,
+			`UPDATE inventories SET available_qty = 1 WHERE sku_id = $1`, skuOf[idB])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tag.RowsAffected() != 0 {
+			t.Fatalf("商家 A 改动了商家 B 的库存（%d 行）", tag.RowsAffected())
+		}
+		// 真的没改到：绕过 RLS 用管理员连接回读。RowsAffected 为 0 但值变了
+		// 是不可能的，但这一步顺带证明了夹具还在。
+		var qty int32
+		if err := admin.QueryRow(ctx,
+			`SELECT available_qty FROM inventories WHERE sku_id = $1`, skuOf[idB]).Scan(&qty); err != nil {
+			t.Fatal(err)
+		}
+		if qty != 50 {
+			t.Fatalf("商家 B 的库存变成了 %d，期望 50", qty)
+		}
+	})
+
+	t.Run("插不进别家 SKU 的库存行", func(t *testing.T) {
+		// 这是 WITH CHECK 那一侧。数据模型 §4 记着：无策略时这句
+		// `INSERT 0 1` 得手——「主键就是 sku_id 所以没有填错的自由度」
+		// 那个旧判据是错的，挡住它的一直是策略。
+		//
+		// 先删掉 B 的库存行（用管理员连接），否则主键冲突会先于 RLS 报错，
+		// 这条断言就变成在测主键。
+		if _, err := admin.Exec(ctx,
+			`DELETE FROM inventories WHERE sku_id = $1`, skuOf[idB]); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if _, err := admin.Exec(context.Background(),
+				`INSERT INTO inventories (sku_id, available_qty) VALUES ($1, 50)
+				 ON CONFLICT (sku_id) DO NOTHING`, skuOf[idB]); err != nil {
+				t.Errorf("恢复夹具失败: %v", err)
+			}
+		})
+
+		_, err := app.Exec(ctx,
+			`INSERT INTO inventories (sku_id, available_qty) VALUES ($1, 999)`, skuOf[idB])
+		if err == nil {
+			t.Fatal("商家 A 往商家 B 的 SKU 上插进了库存行 —— WITH CHECK 没生效")
+		}
+		var pgErr *pgconn.PgError
+		if !errors.As(err, &pgErr) || pgErr.Code != "42501" {
+			t.Fatalf("期望 42501（new row violates row-level security policy），实得: %v", err)
+		}
+	})
+}
