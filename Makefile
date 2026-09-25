@@ -56,7 +56,7 @@ GOOSE := GOOSE_DRIVER=postgres GOOSE_DBSTRING="$(GOOSE_DBSTRING)" \
 	$(GORUN) github.com/pressly/goose/v3/cmd/goose
 
 .PHONY: help generate generate-go generate-ts generate-sql tools-versions \
-	contract-check schema-check migrate migrate-down migrate-status test-db
+	contract-check schema-check sdk-smoke migrate migrate-down migrate-status test-db
 
 help:
 	@echo "make generate       生成 Go + TS 两侧契约产物"
@@ -64,7 +64,8 @@ help:
 	@echo "make generate-ts    只生成 TS 侧（TS_OUT 可覆盖）"
 	@echo "make generate-sql   跑 sqlc，重生成 internal/repository/internal/db"
 	@echo "make contract-check 校验 3.1 可空语义没有被生成器悄悄改掉"
-	@echo "make schema-check   用 tsc --strict 检查入库的 TS 契约产物编译得过"
+	@echo "make schema-check   用 tsc --strict 检查整个 web/src（含契约产物与 SDK）"
+	@echo "make sdk-smoke      用 TS SDK 对跑着的服务真打一次 GET /products"
 	@echo "make tools-versions 打印钉住的工具版本"
 	@echo "make migrate        把 db/migrations 迁到最新（GOOSE_DBSTRING 可覆盖）"
 	@echo "make migrate-down   回滚一个版本"
@@ -96,14 +97,29 @@ generate-ts:
 	npx --yes $(OPENAPI_TS) "$(CONTRACT)" -o $(TS_OUT)
 	@echo "generated $(abspath $(TS_OUT))"
 
-# TS 侧产物能不能编译。契约产物入库之后，守着这 176KB 的只有 contract-check 里
-# 的一条 grep —— 它只能证明其中一行长什么样。tsc --noEmit 是只读的，且单文件秒级。
+# TS 侧能不能编译。契约产物入库之后，守着这 176KB 的只有 contract-check 里
+# 的一条 grep —— 它只能证明其中一行长什么样。tsc --noEmit 是只读的，秒级。
 #
-# 刻意不建 web/package.json：那会凭空引入一棵没人维护的 npm 依赖树。
-# 前端脚手架是前端任务的事，这里只要一句「它编译得过」。
+# 范围是**整个 web/src**，不是单个 schema.d.ts。只编译产物的话，从产物推导出
+# 类型的那个 SDK（web/src/api/client.mts）不在任何闸门的视野里 —— 契约改了、
+# 产物跟着变了，而 SDK 的调用点已经对不上了，构建照样绿。
+# web/src/api/type-tests.mts 里那批 @ts-expect-error 也只有在这个范围里才会被执行到。
+#
+# 刻意仍然不建 web/package.json：那会凭空引入一棵没人维护的 npm 依赖树。
+# web/tsconfig.json 不是脚手架的开端，它只是这条命令的参数表 —— 全程零 node_modules。
 schema-check:
-	npx --yes -p $(TSC) tsc --noEmit --strict "$(TS_OUT)"
-	@echo "schema-check OK: $(abspath $(TS_OUT)) 在 --strict 下编译通过"
+	npx --yes -p $(TSC) tsc --noEmit -p $(ROOT)/web/tsconfig.json
+	@echo "schema-check OK: $(ROOT)/web/src 在 --strict 下编译通过"
+
+# 用 SDK 对**真的跑起来的**服务打一次 GET /products。
+#
+# 需要栈起着：`docker compose up -d --build`。它与 scripts/smoke.sh 不重复 ——
+# 那个用 curl 证明链路通，这个证明 SDK 自己能把契约描述的响应在真实网络上读出来。
+#
+# 直接 `node xxx.ts`：Node 24 自带类型剥离，不需要 tsx、不需要构建步骤，
+# 也就不需要一个 package.json。类型由上面的 schema-check 检查，这里只管跑。
+sdk-smoke:
+	node $(ROOT)/web/src/api/smoke.mts
 
 # sqlc 的配置路径必须是绝对的，理由同 MIGRATIONS：GORUN 用 `go -C $(TOOLS)`，
 # sqlc 的工作目录是 tools/，裸 `sqlc generate` 会在那里找 sqlc.yaml 并报找不到。

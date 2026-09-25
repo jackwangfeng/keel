@@ -1,0 +1,52 @@
+{
+  // 这份 tsconfig 是 `make schema-check` 的编译范围定义，不是前端脚手架的开端。
+  //
+  // 刻意**没有** package.json：Makefile 里那条决定仍然成立 —— 建一个 package.json
+  // 会凭空引入一棵没人维护的 npm 依赖树。tsconfig 不引入任何依赖，它只是
+  // `tsc --noEmit` 的参数表；没有它就只能把这一串 flag 抄在 Makefile 的配方里，
+  // 而那份参数表编辑器读不到，于是 IDE 里看到的类型和闸门里的不是同一套。
+  //
+  // 同理没有 @types/node：运行时只用全局 fetch（DOM lib 里就有），
+  // 脚本需要的那几个 Node 全局在 src/node.d.ts 里按需自己声明。
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2023", "DOM"],
+
+    // module: preserve —— 这些文件是拿给 `node web/src/api/smoke.mts` 直接跑的，
+    // 由 Node 24 的类型剥离当场执行，没有 emit 这一步。preserve 不做 CJS/ESM 的
+    // 推断，一律按 ESM 看待、原样保留 import —— 和 .mts 这个后缀说的是同一件事。
+    //
+    // 为什么源码是 .mts 而不是 .ts：`.ts` 的模块类型要靠**最近的 package.json**
+    // 的 "type" 字段决定，而这里刻意没有 package.json，于是 Node 会一路往上找到
+    // 仓库外面去 —— 本机上它找到的是 /home/jeffwang/package.json。那个文件不归
+    // 这个仓库管，它哪天多一行 "type": "commonjs"，`make sdk-smoke` 就会以
+    // "Cannot use import statement outside a module" 失败，而仓库里一个字节没变。
+    // `.mts` 无歧义地就是 ESM，把这条外部依赖整个去掉（顺带消掉 Node 的
+    // MODULE_TYPELESS_PACKAGE_JSON 警告与它带来的重新解析开销）。
+    "module": "preserve",
+
+    // Node 24 的类型剥离要求 import 写**真实文件名**（./client.mts），
+    // 而 tsc 默认不许 import 带 .ts/.mts 后缀。noEmit 下开这个开关是它的正规用法。
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+
+    // types: [] —— 不要去 node_modules/@types 下扫任何东西。
+    // 没有这一行，装过全局 @types 的机器上会多出一堆此处并不存在的全局。
+    "types": [],
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "verbatimModuleSyntax": true,
+
+    // skipLibCheck 保持 false（默认）：schema.d.ts 本身就是被检查的对象，
+    // 跳过 .d.ts 检查等于把这道闸门关掉。
+    "skipLibCheck": false
+  },
+  // 范围是整个 src 目录，不是单个 schema.d.ts —— 新写的 SDK 必须在闸门视野里。
+  // 写目录而不是 "src/**/*.ts"：后者匹配不到 .mts，于是 SDK 会安静地掉出编译范围，
+  // 而 tsc 仍然报「通过」。
+  "include": ["src"]
+}
