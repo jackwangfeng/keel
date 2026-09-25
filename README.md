@@ -5,12 +5,11 @@
 **An AI-native commerce platform with a built-in distributed transaction engine.**
 *Runs on a single machine. Scales without a rewrite. No external AI APIs.*
 
-[![CI](https://img.shields.io/badge/CI-passing-brightgreen)](#)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](./LICENSE)
-[![Go](https://img.shields.io/badge/Go-1.23+-00ADD8)](#)
-[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16+-336791)](#)
+![Go](https://img.shields.io/badge/Go-1.23+-00ADD8)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16+-336791)
 
-[Documentation](./docs) · [Live Demo](#) · [中文文档](./README.zh-CN.md)
+[Documentation](./docs) · [中文文档](./README.zh-CN.md)
 
 </div>
 
