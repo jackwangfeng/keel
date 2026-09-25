@@ -182,6 +182,37 @@ Keel 自带客户端，不只是一套 API。
 
 ---
 
+## 买家端 —— `app/` 里现在真的有什么
+
+上面那张表是计划。这一节是已经存在的那部分，免得上面读起来像是都已经发布了。
+
+[`app/`](./app) 是买家端店面，用 [uni-app x](https://doc.dcloud.net.cn/uni-app-x/)
+写（UTS 编译成原生 Kotlin/Swift，不走 webview）。页面流是：商品列表 → 商品详情 →
+登录 → 下单（试算 → 提交）→ 我的订单 → 订单详情 → 发起支付。
+搜索框是禁用的占位：`GET /search` 是 M3 的东西。
+
+**它的类型同样从契约生成，但不是 `web/` 那份产物。** UTS 不是 TypeScript ——
+它的类型系统要落到 Kotlin 与 Swift 上，`web/src/api/client.mts` 里那套条件类型与
+映射类型没有任何东西可以生成成。所以另有一个生成器
+（`scripts/gen_uts_schema.py`）从同一份 `docs/电商系统-OpenAPI.yaml` 生成
+`app/src/api/schema.uts`，产物入库，两道闸门钉着它：
+`scripts/check_uts_contract.py`（重生成到临时目录再 diff）与
+`scripts/check_app_types.py`（`tsc --strict` 编译每一个 `.uts`）。
+把契约里的字段改个名，两道都会红 —— 变异验证的完整输出在
+[`app/README.md`](./app/README.md)。
+
+**命令行能构建到 H5 与 Kotlin，构建不出 apk。**
+`uni build --platform h5` 出的是可直接发布的 web 产物；
+`uni build --platform app-android` 出的是 Kotlin 源码，到此为止 ——
+从那堆 Kotlin 到一个能装的 App 需要 HBuilderX 或 DCloud 云打包，没有对应的
+命令行。CI 跑的就是这两步，不多不少。`app/README.md` 记了实测到哪一步，
+包括为了让一个纯命令行项目能编起来绕开的五个坑。
+
+怎么跑起来见 [`app/README.md`](./app/README.md)。H5 形态必须与 API 同源
+（服务端不发 CORS 头），`app/vite.config.js` 里那段开发服务器代理干的就是这件事。
+
+---
+
 ## 架构
 
 ```

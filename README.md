@@ -195,6 +195,42 @@ If you are selling in that market, a web-only storefront is not a storefront.
 
 ---
 
+## Buyer app — what's actually in `app/` today
+
+The table above is the plan. This section is the part that exists, so that
+nothing above reads as if the rest already ships.
+
+[`app/`](./app) is the buyer storefront, written in
+[uni-app x](https://doc.dcloud.net.cn/uni-app-x/) (UTS compiled to native
+Kotlin/Swift — not a webview). Product list → product detail → login →
+checkout (preview then submit) → my orders → order detail → pay.
+Search is a disabled placeholder: `GET /search` lands in M3.
+
+**Its types are generated from the same OpenAPI spec, but not from the same
+artifact as `web/`.** UTS is not TypeScript — its type system has to land on
+Kotlin and Swift, so the conditional/mapped types in `web/src/api/client.mts`
+have nothing to compile to. A second generator
+(`scripts/gen_uts_schema.py`) emits `app/src/api/schema.uts` from the same
+`docs/电商系统-OpenAPI.yaml`, the artifact is committed, and two gates hold it
+in place: `scripts/check_uts_contract.py` (regenerate to a temp dir and diff)
+and `scripts/check_app_types.py` (`tsc --strict` over every `.uts`).
+Rename a contract field and both go red — the mutation transcript is in
+[`app/README.md`](./app/README.md).
+
+**Command-line builds reach H5 and Kotlin, not an apk.**
+`uni build --platform h5` produces a deployable web bundle;
+`uni build --platform app-android` produces Kotlin source and stops there —
+turning that into an installable app needs HBuilderX or DCloud's cloud build,
+and there is no CLI for it. CI runs exactly those two steps and says so.
+`app/README.md` records what was measured, including the five things that had
+to be worked around to get a CLI project to build at all.
+
+Building and running it: see [`app/README.md`](./app/README.md).
+The H5 form needs to be served same-origin with the API (the server sends no
+CORS headers), which is what the dev-server proxy in `app/vite.config.js` does.
+
+---
+
 ## Architecture
 
 ```
