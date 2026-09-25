@@ -100,7 +100,7 @@ debian-slim 底座。已落地，镜像 26.7 MB → 118 MB。
 |---|---|---|---|
 | 1 | 订单域 schema + RLS（orders / order_items / inventories / inventory_logs） | — | ✅ 已完成 |
 | 3 | dtmrs 嵌入应用 + 构建形态变更 + CI + `barrier` 建表 | — | ✅ 已完成 |
-| 1.5 | 买家身份：`users` / `user_identities` + `/auth/login` + bearer 中间件 | 1 | |
+| 1.5 | 买家身份：`users` / `user_identities` + `/auth/login` + bearer 中间件 | 1 | ✅ 已完成 |
 | 2 | 屏障从 `examples/` 产品化进 `internal/repository` | 3 | |
 | 4 | `POST /orders/preview`（无副作用试算） | 1.5 | |
 | 5 | `POST /orders`：SAGA 正向**两**分支（库存 / 建单） | 1.5,2,4 | 汇合点 |
@@ -112,6 +112,15 @@ debian-slim 底座。已落地，镜像 26.7 MB → 118 MB。
 > `user_id` 加外键（`users` 还不存在，没有落点），也**刻意没有**把它登记进
 > `fk_missing_ok`——登记等于把提醒关掉。于是 `users` 一被建出来，
 > `TestForeignKeysAreNotSilentlyMissing` 当场红，那份迁移不补复合外键就过不去。
+
+> **任务 1.5 撞出的一处两份真相源对不上（未解决，记在这里）。**
+> 契约的 `POST /auth/logout` 写着「服务端吊销当前 refresh_token」，而数据模型
+> §9 的买家侧**没有任何会话表**（§14 只给后台建了 `staff_tokens`）。
+> 「吊销」必须有服务端状态，没有那张表时 logout 只能回一个什么也没做的 204。
+> 本轮按契约实现，表由 `00010_user_tokens.sql` 单独建出来（**不掺进 00009**），
+> 那份迁移的文件头写明了这处偏离。收口动作有两条，二选一，都不在任务 1.5 的
+> 范围里：把这张表补进数据模型 §9，或者改契约把 logout 降级成「客户端丢弃令牌」
+> ——后者要同时接受「共用设备上退不掉登录」这个结论。
 
 ## 每个任务的硬性要求（沿用 M1）
 

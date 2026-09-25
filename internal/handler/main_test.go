@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/keel/keel/internal/app"
+	"github.com/keel/keel/internal/auth"
 	"github.com/keel/keel/internal/db"
 	"github.com/keel/keel/internal/tenant"
 )
@@ -25,6 +26,12 @@ const baseDomain = "example.com"
 var (
 	testPool   *pgxpool.Pool
 	testEngine *gin.Engine
+
+	// testSigner 是路由里那一个 —— **同一个实例**，不是一份长得一样的复制品。
+	// 测试要用它签出「过期的」「别家店的」「类型不对的」令牌，而那些令牌必须
+	// 真的能被服务端验签，否则测试验的就只是「随便一串东西会被拒」，
+	// 那对任何一条断言都没有区分力。
+	testSigner = auth.NewSigner([]byte("keel-test-secret-key-32-bytes-long!!"))
 )
 
 // TestMain 备好 schema、加载种子、装一次路由。
@@ -64,7 +71,8 @@ func setup() error {
 	//
 	// 刻意不配默认商家：跨租户测试要走 Host 解析那条真实路径。
 	gin.SetMode(gin.TestMode)
-	testEngine = app.Router(pool, tenant.NewResolver(pool, tenant.Config{BaseDomain: baseDomain}))
+	testEngine = app.Router(pool,
+		tenant.NewResolver(pool, tenant.Config{BaseDomain: baseDomain}), testSigner)
 	return nil
 }
 

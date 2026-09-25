@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/keel/keel/internal/app"
+	"github.com/keel/keel/internal/auth"
 	"github.com/keel/keel/internal/db"
 	"github.com/keel/keel/internal/tenant"
 )
@@ -242,7 +243,8 @@ func TestRouterServesContractPaths(t *testing.T) {
 	}
 	defer pool.Close()
 
-	r := app.Router(pool, tenant.NewResolver(pool, tenant.Config{BaseDomain: "example.com"}))
+	r := app.Router(pool, tenant.NewResolver(pool, tenant.Config{BaseDomain: "example.com"}),
+		auth.NewSigner([]byte("keel-test-secret-key-32-bytes-long!!")))
 	want := map[string]bool{
 		"GET /healthz":         false,
 		"GET /api/v1/products": false,

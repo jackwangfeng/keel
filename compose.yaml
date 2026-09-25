@@ -112,6 +112,18 @@ services:
       # 多实例形态（架构 §6 形态 B/C）必须换成 Postgres/MySQL/Redis 并给它
       # 自己的角色 —— sqlite 撑不住多实例并发写，dtmrs 自己的部署文档写明了。
       KEEL_DTM_DSN: sqlite:/var/lib/keel/dtm.db
+      # 买家令牌的 HMAC 签名密钥。**这里刻意不给默认值，留空是有意的。**
+      #
+      # 给一个默认值的后果比「没配」严重得多：每一份照着这个 compose 起的部署
+      # 都会用同一个密钥，于是任何人都能给任何一家店签出一串合法的令牌 ——
+      # 一个写在公开仓库里的默认密钥，等于整套鉴权不存在。
+      #
+      # 留空时应用会**随机取一个**并打一条 WARN（见 internal/app 的
+      # EnvAuthSecret）。代价是：进程一重启全体买家被登出一次；多实例部署下
+      # 各实例的密钥不同，症状是「刷新几次页面就要重新登录」。
+      # 本地演示这两条都无所谓，真在服务客人的部署请显式配置：
+      #   KEEL_AUTH_SECRET=$(openssl rand -base64 48) docker compose up -d
+      KEEL_AUTH_SECRET: ${KEEL_AUTH_SECRET:-}
       # 镜像是拿来跑的，不是拿来开发的：gin 的 debug 模式会在启动时打一屏
       # 「你没有设置 release」的警告，而 `docker compose up` 的头一屏正是
       # 新人对这个项目的第一印象。它不改变任何路由行为。

@@ -44,6 +44,32 @@ type route struct {
 	// 判成错误是违约，而且实现之后还得把那个 400 撤回去。也不在契约的 description
 	// 里写「未实现」—— 契约描述的是接口，不是实现进度。
 	NotYetImplemented map[string]string
+
+	// NoQueryParams 非空时表示「这条接口在契约里一个 query 参数都没有」，
+	// 值是写下这句话的依据。
+	//
+	// 需要这个字段，是因为下面那条参数对账测试有一道阳性对照：契约侧解析出
+	// 零个参数就 Fatal —— 那是在防「路径改名之后测试恒绿」。而 /auth/* 三条
+	// 接口本来就没有 query 参数，它们会当场撞上这道对照。
+	//
+	// 处理方式不是给对照开个口子（那会让路径改名重新变得无声无息），
+	// 而是把「没有参数」也变成一条**登记过的事实**：登记了却在契约里长出
+	// 参数来 → 红；登记了而 handler 却在读 query → 红。
+	NoQueryParams string
+
+	// NotYetImplementedBody 是**请求体**里契约声明了、这条 handler 还没实现的
+	// 字段，与 NotYetImplemented 是同一笔账的两种形状。
+	//
+	// 眼下只有一条：/auth/login 的 code（短信验证码）。本项目没有接短信服务，
+	// 所以那条路返回一个明确的 501，而不是假装失败。
+	//
+	// 它比 query 那份弱一格，要说清楚：query 参数能从 handler 的 AST 里读出
+	// c.Query("x") 来做双向对账，而「请求体里的某个字段有没有被实现」读不出来
+	// —— 结构体上有这个 json tag 只说明它被解析了，不说明它被实现了。
+	// 所以反向（实现了却忘了划掉）由行为测试盯着：
+	// auth_test.go 的 TestSMSLoginSaysItIsNotImplemented 断言那条路真的返回 501,
+	// 并且断言这里真的挂着这一笔。实现了它，那条测试就会红。
+	NotYetImplementedBody map[string]string
 }
 
 func (r route) ginPath() string { return apiPrefix + r.ContractPath }
@@ -63,6 +89,46 @@ var routes = []route{
 			"max_price_cents": "价格区间上界，同上",
 		},
 	},
+	{
+		ContractPath:   "/auth/login",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "auth.go",
+		NoQueryParams:  "登录参数全在请求体里（契约的 requestBody）",
+		NotYetImplementedBody: map[string]string{
+			"code": "短信验证码登录。本项目还没有短信服务，这条路返回 501 " +
+				"（contract 的 default: Problem 收得住），而不是一个假装失败的 401。" +
+				"连带地，契约里「验证码登录且手机号未注册时首登即注册」也没有实现 —— " +
+				"那个语义只属于这条路，密码路径刻意不带它。",
+		},
+	},
+	{
+		ContractPath:   "/auth/refresh",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "auth.go",
+		NoQueryParams:  "refresh_token 在请求体里",
+	},
+	{
+		ContractPath:   "/auth/logout",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "auth.go",
+		NoQueryParams:  "没有参数：吊销哪个会话由 access_token 里的 sid 决定",
+	},
+}
+
+// routeOf 按方法与契约路径取出登记行。取不到就 Fatal —— 调用方（别的测试文件）
+// 拿它来交叉引用这张表，而一个静默的零值会让那种引用变成空转。
+func routeOf(t *testing.T, method, contractPath string) route {
+	t.Helper()
+	for _, r := range routes {
+		if r.HTTPMethod == method && r.ContractPath == contractPath {
+			return r
+		}
+	}
+	t.Fatalf("routes 表里没有 %s %s", method, contractPath)
+	return route{}
 }
 
 // nonContractRoutes 是注册了但刻意不在契约里的路由，每条写明理由。
@@ -128,6 +194,23 @@ func TestContractQueryParamsAreHandledOrListed(t *testing.T) {
 		t.Run(r.HTTPMethod+" "+r.ContractPath, func(t *testing.T) {
 			declared := contractQueryParams(t, r)
 			handled := queryParamsReadByHandler(t, r)
+
+			if r.NoQueryParams != "" {
+				// 登记过「这条接口没有 query 参数」。两个方向都要核对，
+				// 否则这行登记就成了一条永不失效的豁免。
+				if len(declared) > 0 {
+					t.Fatalf("表里写着这条接口没有 query 参数（%s），"+
+						"但契约里声明了 %v —— 登记过期了，要么实现它们，"+
+						"要么改成 NotYetImplemented 挂账", r.NoQueryParams, sorted(declared))
+				}
+				if len(handled) > 0 {
+					t.Fatalf("表里写着这条接口没有 query 参数（%s），"+
+						"但 %s 在读 %v —— handler 读了一个契约里没有的参数",
+						r.NoQueryParams, r.HandlerFile, sortedBool(handled))
+				}
+				t.Logf("契约与 handler 两侧都没有 query 参数：%s", r.NoQueryParams)
+				return
+			}
 
 			for name := range declared {
 				if handled[name] {
@@ -321,5 +404,96 @@ func sortedBool(m map[string]bool) []string {
 		out = append(out, k)
 	}
 	sort.Strings(out)
+	return out
+}
+
+// NotYetImplementedBody 里挂的每一笔账，都必须是契约请求体里真有的字段。
+//
+// 与 query 那条的差别写在 route.NotYetImplementedBody 的注释里：这里只能做
+// 「清单 → 契约」这一个方向的机械对账，反向（实现了却忘了划掉）由行为测试
+// auth_test.go 的 TestSMSLoginSaysItIsNotImplemented 盯着。
+//
+// 一个方向也比没有强：契约把 code 改名或删掉时，这条会红并指出那一行清单
+// 已经在描述一个不存在的东西 —— 而挂账一旦烂掉，它就从「欠账」退化成
+// 「一段没人读的注释」。
+func TestNotYetImplementedBodyFieldsExistInContract(t *testing.T) {
+	checked := 0
+	for _, r := range routes {
+		if len(r.NotYetImplementedBody) == 0 {
+			continue
+		}
+		t.Run(r.HTTPMethod+" "+r.ContractPath, func(t *testing.T) {
+			props := contractBodyProps(t, r)
+			if len(props) == 0 {
+				t.Fatalf("契约里 %s %s 的请求体一个属性都没解析出来 —— "+
+					"这条测试没在检查任何东西", r.ContractMethod, r.ContractPath)
+			}
+			for name, why := range r.NotYetImplementedBody {
+				if !props[name] {
+					t.Errorf("NotYetImplementedBody 里挂着 %q（%s），"+
+						"但契约的请求体里没有这个字段了 —— 清单烂了，请删掉这一行",
+						name, why)
+				}
+				checked++
+			}
+			t.Logf("契约请求体声明 %v；挂账 %v", sortedBool(props), sorted(r.NotYetImplementedBody))
+		})
+	}
+	if checked == 0 {
+		t.Fatal("一笔请求体挂账都没查到 —— 挂账清空了就该把这条测试一起删掉，" +
+			"留着一条恒绿的测试比没有更糟")
+	}
+}
+
+// contractBodyProps 取出该接口 application/json 请求体的顶层属性名。
+//
+// 只认 `requestBody.content["application/json"].schema.properties` 这一种形状：
+// 契约里出现别的写法（$ref 到 components.schemas、multipart…）时宁可 Fatal，
+// 也不要静默返回空集 —— 空集会让上面那条测试一次也不执行。
+func contractBodyProps(t *testing.T, r route) map[string]bool {
+	t.Helper()
+
+	raw, err := os.ReadFile(filepath.Join("..", "..", "docs", "电商系统-OpenAPI.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Paths map[string]map[string]any `yaml:"paths"`
+	}
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("解析契约失败: %v", err)
+	}
+
+	op, ok := doc.Paths[r.ContractPath][r.ContractMethod].(map[string]any)
+	if !ok {
+		t.Fatalf("契约里没有 %s %s", r.ContractMethod, r.ContractPath)
+	}
+	body, ok := op["requestBody"].(map[string]any)
+	if !ok {
+		t.Fatalf("契约里 %s %s 没有 requestBody", r.ContractMethod, r.ContractPath)
+	}
+	content, ok := body["content"].(map[string]any)
+	if !ok {
+		t.Fatalf("契约里 %s %s 的 requestBody 没有 content", r.ContractMethod, r.ContractPath)
+	}
+	media, ok := content["application/json"].(map[string]any)
+	if !ok {
+		t.Fatalf("契约里 %s %s 的请求体不是 application/json", r.ContractMethod, r.ContractPath)
+	}
+	schema, ok := media["schema"].(map[string]any)
+	if !ok {
+		t.Fatalf("契约里 %s %s 的请求体没有内联 schema —— "+
+			"改成 $ref 之后这个解析器跟不上了，请把它一起改",
+			r.ContractMethod, r.ContractPath)
+	}
+	props, ok := schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("契约里 %s %s 的请求体 schema 没有 properties",
+			r.ContractMethod, r.ContractPath)
+	}
+	out := map[string]bool{}
+	for name := range props {
+		out[name] = true
+	}
 	return out
 }

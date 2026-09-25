@@ -9,12 +9,14 @@ package app
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/keel/keel/internal/auth"
 	"github.com/keel/keel/internal/db"
 	"github.com/keel/keel/internal/dtm"
 	"github.com/keel/keel/internal/handler"
@@ -54,13 +56,35 @@ const (
 	// 多实例形态必须换成 Postgres/MySQL/Redis，并且那套库要有自己的角色 ——
 	// sqlite 撑不住多实例并发写（dtmrs 自己的部署文档写明了这一条）。
 	EnvDTMDSN = "KEEL_DTM_DSN"
+
+	// EnvAuthSecret 是签买家令牌用的 HMAC 密钥（至少 32 字节）。
+	//
+	// **它有一个「没配就随机取一个」的兜底，而 KEEL_DTM_DSN 没有。** 两者看着
+	// 同类，代价却不同量级，所以处置也不同：
+	//
+	//   - 协调器的存储丢了，正向阶段已扣的库存与已核销的券再没人回补 ——
+	//     架构 §5 的「少卖」从可恢复变成永久漏账。那是**不可恢复的数据损失**，
+	//     所以它宁可拒绝启动。
+	//   - 签名密钥丢了，全体买家被登出一次，重新登录即可。**可恢复**。
+	//     为它拒绝启动，代价是 README 承诺的那条 `docker compose up`
+	//     再也不是一条命令 —— 而 docker/ 下的 compose 文件不在本任务的范围里。
+	//
+	// 但兜底不是免费的，两条代价必须说清楚，所以它会打一条 WARN：
+	//
+	//   - 进程一重启，之前签发的全部令牌当场失效（密钥换了）；
+	//   - **多实例部署下这个兜底是错的**：A 实例签的令牌在 B 实例验不过，
+	//     症状是「刷新几次页面就要重新登录一次」，而且只在多实例下复现。
+	//
+	// 所以：单机跑着玩可以不配；任何一个真的在服务客人的部署都必须配。
+	EnvAuthSecret = "KEEL_AUTH_SECRET"
 )
 
 // Config 是一次部署的全部配置。
 type Config struct {
-	Addr   string
-	DTMDSN string
-	Tenant tenant.Config
+	Addr       string
+	DTMDSN     string
+	AuthSecret string
+	Tenant     tenant.Config
 }
 
 // ConfigFromEnv 从环境变量读配置。
@@ -70,8 +94,9 @@ func ConfigFromEnv() Config {
 		addr = ":8080"
 	}
 	return Config{
-		Addr:   addr,
-		DTMDSN: os.Getenv(EnvDTMDSN),
+		Addr:       addr,
+		DTMDSN:     os.Getenv(EnvDTMDSN),
+		AuthSecret: os.Getenv(EnvAuthSecret),
 		Tenant: tenant.Config{
 			DefaultCode: os.Getenv(EnvDefaultMerchant),
 			BaseDomain:  os.Getenv(EnvBaseDomain),
@@ -81,7 +106,7 @@ func ConfigFromEnv() Config {
 
 // Router 装路由。测试与 main 共用它，所以测试打的是真实的那套链路，
 // 而不是一份在旁边慢慢跑偏的复制品。
-func Router(pool *pgxpool.Pool, res *tenant.Resolver) *gin.Engine {
+func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery())
 
@@ -108,10 +133,24 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver) *gin.Engine {
 	// 挂在中间件后面的话，一个没配对的 Host 会让编排系统以为进程死了。
 	r.GET("/healthz", func(c *gin.Context) { c.String(http.StatusOK, "ok") })
 
-	ph := handler.NewProductHandler(service.NewProductService(repository.New(pool)))
+	repo := repository.New(pool)
+	ph := handler.NewProductHandler(service.NewProductService(repo))
+	ah := handler.NewAuthHandler(service.NewAuthService(repo, signer, nil))
 
 	v1 := r.Group("/api/v1", res.Middleware())
 	v1.GET("/products", ph.List)
+
+	// /auth/login 与 /auth/refresh 在契约里是 security: []（公开的）：
+	// 一个还没有令牌的人要能打到它们。**这不等于它们不校验租户** ——
+	// 租户由上面那道 res.Middleware() 从 Host 定出来，而 refresh 自己会再核对
+	// 「这串令牌是不是签给这家店的」（见 service.AuthService.Refresh）。
+	v1.POST("/auth/login", ah.Login)
+	v1.POST("/auth/refresh", ah.Refresh)
+
+	// /auth/logout 要令牌：契约里它没有 security: []，继承全局的 bearerAuth。
+	// bearer 中间件挂在租户中间件**之后**（v1 这个组已经带着后者），
+	// 顺序反了的话它取不到租户，也就没法校验令牌属不属于这家店。
+	v1.POST("/auth/logout", auth.Bearer(signer, nil), ah.Logout)
 	return r
 }
 
@@ -172,6 +211,11 @@ func Run(ctx context.Context, listen func(addr string, h http.Handler) error) er
 			"应用握着能绕过 RLS 的连接）",
 			EnvDTMDSN, EnvDTMDSN)
 	}
+	signer, err := authSigner(ctx, cfg)
+	if err != nil {
+		return err
+	}
+
 	tc, err := dtm.Start(cfg.DTMDSN, 0, Branches())
 	if err != nil {
 		return fmt.Errorf("启动事务协调器失败（%s）: %w", EnvDTMDSN, err)
@@ -181,5 +225,34 @@ func Run(ctx context.Context, listen func(addr string, h http.Handler) error) er
 	// Close 是幂等的，所以这条 defer 与将来可能加的显式收尾不会撞车。
 	defer tc.Close()
 
-	return listen(cfg.Addr, Router(pool, res))
+	return listen(cfg.Addr, Router(pool, res, signer))
+}
+
+// authSigner 按配置建令牌签名器。没配 KEEL_AUTH_SECRET 时随机取一个并告警，
+// 理由与两条代价写在 EnvAuthSecret 那段。
+//
+// 密钥长度下限 32 字节：HMAC-SHA256 的安全强度就是密钥熵，而一个
+// "keel" 这样的密钥意味着任何人都能签出一串合法的令牌 —— 那不是「弱一点」，
+// 是整套鉴权不成立。短了就拒绝启动：这一条与「没配」不同，
+// 配了一个短密钥的人以为自己配好了。
+func authSigner(ctx context.Context, cfg Config) (*auth.Signer, error) {
+	const minLen = 32
+	if cfg.AuthSecret == "" {
+		key, err := auth.NewRandomKey()
+		if err != nil {
+			return nil, err
+		}
+		slog.WarnContext(ctx, "没有配置 "+EnvAuthSecret+"，本次启动随机取了一个签名密钥："+
+			"进程一重启全体买家会被登出一次；多实例部署下这样是错的"+
+			"（A 实例签的令牌在 B 实例验不过，症状是刷新几次就要重新登录）。"+
+			"任何在服务客人的部署都请显式配置它（至少 32 字节随机值）")
+		return auth.NewSigner(key), nil
+	}
+	if len(cfg.AuthSecret) < minLen {
+		return nil, fmt.Errorf(
+			"%s 只有 %d 字节，至少要 %d 字节：HMAC 的安全强度就是密钥的熵，"+
+				"密钥猜得到的话任何人都能签出一串合法令牌，整套鉴权不成立",
+			EnvAuthSecret, len(cfg.AuthSecret), minLen)
+	}
+	return auth.NewSigner([]byte(cfg.AuthSecret)), nil
 }

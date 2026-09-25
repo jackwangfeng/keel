@@ -72,4 +72,62 @@ if [ "$n" -lt 1 ]; then
 fi
 echo "    本页 $n 件，total=$total"
 
+# ---------------------------------------------------------------------------
+# 买家身份（M2 任务 1.5）
+# ---------------------------------------------------------------------------
+#
+# 口令固定在 db/seed/single.sql 里，那个文件写明了为什么可以固定。
+# 这一段断言的同样是链路而不是函数：users 表迁出来了吗、种子里那行买家插进去
+# 了吗、argon2id 的哈希在**真的跑起来的进程**里验得过吗、令牌签发与 bearer
+# 中间件接上了吗、退出登录真的落到 user_tokens 上了吗。单元测试一条都盖不住
+# 这些，它们全在进程之外。
+SMOKE_PHONE="${KEEL_SMOKE_PHONE:-13800000000}"
+SMOKE_PASSWORD="${KEEL_SMOKE_PASSWORD:-keel-demo-2026}"
+
+echo "==> POST $BASE/api/v1/auth/login 用种子里的买家登录"
+login_file=$(mktemp)
+trap 'rm -f "$body_file" "$login_file"' EXIT
+code=$(curl "${curl_args[@]}" -o "$login_file" -w '%{http_code}' \
+    -H 'Content-Type: application/json' \
+    -d "{\"phone\":\"$SMOKE_PHONE\",\"password\":\"$SMOKE_PASSWORD\"}" \
+    "$BASE/api/v1/auth/login")
+if [ "$code" != "200" ]; then
+    echo "登录返回 $code，期望 200：" >&2
+    cat "$login_file" >&2
+    echo >&2
+    exit 1
+fi
+
+# 同样用 python3 解析：grep 分不清「真有 access_token」和「响应体里恰好有
+# 这几个字母」—— 一个 Problem 响应里的 detail 就可能带上它。
+token=$(python3 - "$login_file" <<'PYEOF'
+import json, sys
+with open(sys.argv[1]) as f:
+    body = json.load(f)
+tok = body["access_token"]
+if not tok or body["token_type"] != "Bearer":
+    raise SystemExit("登录响应里没有可用的 access_token")
+print(tok)
+PYEOF
+) || { echo "登录响应不是预期的 LoginResponse：" >&2; cat "$login_file" >&2; echo >&2; exit 1; }
+echo "    拿到 access_token（${#token} 字符）"
+
+echo "==> POST $BASE/api/v1/auth/logout 带上刚拿到的令牌"
+code=$(curl "${curl_args[@]}" -o /dev/null -w '%{http_code}' -X POST \
+    -H "Authorization: Bearer $token" "$BASE/api/v1/auth/logout")
+if [ "$code" != "204" ]; then
+    echo "退出登录返回 $code，期望 204 —— bearer 中间件或会话吊销没接上" >&2
+    exit 1
+fi
+
+# 反例：不带令牌必须 401。没有这一条，上面那个 204 既可能是鉴权通过，
+# 也可能是这条路由压根没挂中间件。
+code=$(curl "${curl_args[@]}" -o /dev/null -w '%{http_code}' -X POST \
+    "$BASE/api/v1/auth/logout")
+if [ "$code" != "401" ]; then
+    echo "不带令牌调 logout 返回 $code，期望 401 —— bearer 中间件没挂上" >&2
+    exit 1
+fi
+echo "    令牌可用，且不带令牌会被拒"
+
 echo "全部通过。"
