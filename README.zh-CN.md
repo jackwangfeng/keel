@@ -163,10 +163,10 @@ Keel 自带客户端，不只是一套 API。
                    └─────────────┘
 ```
 
-详见：[总体架构](./docs/architecture.md) ·
-[数据模型](./docs/schema-design.md) ·
-[语义检索层](./docs/search-design.md) ·
-[商品理解服务](./docs/product-understanding.md)
+详见：[总体架构](./docs/电商系统-总体架构.md) ·
+[数据模型](./docs/电商系统-数据模型设计.md) ·
+[语义检索层](./docs/电商系统-语义检索层设计.md) ·
+[商品理解服务](./docs/电商系统-商品理解服务设计.md)
 
 ---
 

@@ -170,10 +170,10 @@ Clients (Web · Mini Program · App · Admin)
                    └─────────────┘
 ```
 
-Full details: [Architecture](./docs/architecture.md) ·
-[Data model](./docs/schema-design.md) ·
-[Search layer](./docs/search-design.md) ·
-[Product understanding](./docs/product-understanding.md)
+Full details: [Architecture](./docs/电商系统-总体架构.md) ·
+[Data model](./docs/电商系统-数据模型设计.md) ·
+[Search layer](./docs/电商系统-语义检索层设计.md) ·
+[Product understanding](./docs/电商系统-商品理解服务设计.md)
 
 ---
 
