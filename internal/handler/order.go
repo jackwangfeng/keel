@@ -249,10 +249,40 @@ func writeOrderError(c *gin.Context, err error) {
 			problem.TypeInvalidRequest, "请求参数不合法")
 
 	case errors.Is(err, service.ErrOrderNotFound):
-		// 契约里 GET /orders/{order_no} 明写了 404。它同时覆盖「没有这一单」
-		// 与「这一单是别人的」—— 分开报会把这条接口变成一个单号存在性判定器
-		// （service/order_query.go）。
+		// 契约里 GET /orders/{order_no} 与 POST /orders/{order_no}/payments
+		// 都明写了 404。它同时覆盖「没有这一单」与「这一单是别人的」——
+		// 分开报会把这条接口变成一个单号存在性判定器（service/order_query.go）。
 		problem.Write(c, http.StatusNotFound, problem.TypeNotFound, "订单不存在")
+
+	case errors.Is(err, service.ErrOrderNotPayable):
+		// 契约：409 `.../order-status-not-payable`，描述里明写「非 10 待支付，
+		// 或已超时关闭」。刻意不是 422：请求本身没毛病，是这一单的状态变了，
+		// 客户端该做的是刷新订单而不是改参数重发。
+		problem.Write(c, http.StatusConflict, problem.TypeOrderStatusNotPayable,
+			"这笔订单当前不能支付（已支付、已关闭或已超时）")
+
+	case errors.Is(err, service.ErrPaymentChannelUnknown):
+		problem.Write(c, http.StatusUnprocessableEntity,
+			problem.TypeInvalidRequest, "不认识的支付渠道")
+
+	case errors.Is(err, service.ErrBalancePaymentNotImplemented):
+		// 501 而不是静默当成微信支付。余额支付不走渠道回调，它要自己的账户表，
+		// 而数据模型里没有那张表 —— 假装受理会让用户以为钱从余额里扣了。
+		_ = c.Error(err)
+		problem.Write(c, http.StatusNotImplemented, problem.TypeNotImplemented,
+			"余额支付尚未实现：余额账户表还没有建")
+
+	case errors.Is(err, service.ErrSandboxDisabled):
+		// 沙箱关了而真渠道没接。这是那种配置下唯一诚实的回答。
+		_ = c.Error(err)
+		problem.Write(c, http.StatusNotImplemented, problem.TypeNotImplemented,
+			"支付未开通：本部署关闭了沙箱支付，而真实支付渠道尚未对接")
+
+	case errors.Is(err, service.ErrSandboxNoSecret):
+		// 这家店没配回调密钥。是**部署没配好**，不是客户端的错，所以要留日志。
+		_ = c.Error(err)
+		problem.Write(c, http.StatusNotImplemented, problem.TypeNotImplemented,
+			"支付未开通：本店没有配置该渠道的回调密钥")
 
 	case errors.Is(err, service.ErrCrossTenantSKU):
 		// **刻意不是 409「库存不足」。**

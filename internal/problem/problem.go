@@ -61,6 +61,15 @@ const (
 	TypeIdempotencyKeyInFlight = "https://keel.dev/problems/idempotency-key-in-flight"
 	TypeIdempotencyKeyReused   = "https://keel.dev/problems/idempotency-key-reused"
 
+	// 发起支付那条接口上的业务冲突。契约里 POST /orders/{order_no}/payments 的
+	// 409 描述逐字写着这个 type：「订单当前状态不允许支付（非 10 待支付，
+	// 或已超时关闭）」。
+	//
+	// 它与 insufficient-stock / price-changed 同为 409，而客户端的处置完全不同：
+	// 这一个要刷新订单（这一单可能已经付过了，再付一次是重复付款），
+	// 那两个要改购物车。只看状态码分不开。
+	TypeOrderStatusNotPayable = "https://keel.dev/problems/order-status-not-payable"
+
 	// 契约声明了、本轮刻意没有实现的路径。用一个**专门的** type 而不是复用
 	// internal：客户端能据此分辨「这个功能还没有」与「服务器炸了」，
 	// 而这两件事的重试策略完全相反。

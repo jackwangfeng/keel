@@ -207,6 +207,14 @@ var routes = []route{
 		},
 	},
 	{
+		ContractPath:   "/orders/{order_no}/payments",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "payment_intent.go",
+		NoQueryParams: "渠道在请求体里，订单号在路径上，幂等键在 Idempotency-Key 请求头里；" +
+			"契约里这条接口没有任何 query 参数",
+	},
+	{
 		ContractPath:   "/auth/refresh",
 		ContractMethod: "post",
 		HTTPMethod:     http.MethodPost,

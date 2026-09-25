@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -77,6 +78,25 @@ const (
 	//
 	// 所以：单机跑着玩可以不配；任何一个真的在服务客人的部署都必须配。
 	EnvAuthSecret = "KEEL_AUTH_SECRET"
+
+	// EnvPaymentSandbox 关掉沙箱支付。**默认是开的**，值为 "off" / "false" /
+	// "0" 时关闭。
+	//
+	// 默认开而不是默认关，是因为本轮一个真实支付渠道都没接：关掉之后
+	// POST /orders/{order_no}/payments 除了 501 什么也回不了，而 README 承诺的
+	// 那条 `docker compose up` Demo 要走到支付这一步（架构 §13 的 M2 产出标志
+	// 就是「能下单能支付（沙箱）」）。一个默认关的开关会让每一个照着 README
+	// 走的人都在支付那一步撞墙。
+	//
+	// 代价说清楚：沙箱开着的时候，买家能给**自己的**订单造一份合法签名的回调，
+	// 也就是能免费把自己的单推成已支付（只有这一单、只有这个金额 ——
+	// 报文的每个字节都进了 HMAC，密钥本身不会泄露）。那正是沙箱的定义。
+	// 所以进程启动时会为它打一条 WARN，而任何真的在收钱的部署都必须显式关掉它。
+	//
+	// 它与 KEEL_AUTH_SECRET 那个「没配就随机取一个」的兜底不同类：那个是
+	// 「没配也能跑，代价是重启掉线」，这个是「默认开着一条本来就不该在生产上
+	// 存在的路」。所以它不是兜底，是一个需要被关掉的默认值，而 WARN 是它的提醒。
+	EnvPaymentSandbox = "KEEL_PAYMENT_SANDBOX"
 )
 
 // Config 是一次部署的全部配置。
@@ -85,6 +105,7 @@ type Config struct {
 	DTMDSN     string
 	AuthSecret string
 	Tenant     tenant.Config
+	Payment    service.PaymentConfig
 }
 
 // ConfigFromEnv 从环境变量读配置。
@@ -101,6 +122,22 @@ func ConfigFromEnv() Config {
 			DefaultCode: os.Getenv(EnvDefaultMerchant),
 			BaseDomain:  os.Getenv(EnvBaseDomain),
 		},
+		Payment: service.PaymentConfig{Sandbox: sandboxEnabled(os.Getenv(EnvPaymentSandbox))},
+	}
+}
+
+// sandboxEnabled 解 KEEL_PAYMENT_SANDBOX。空 = 开。
+//
+// 只认三个明确的「关」，别的一律当开：一个写错的值（"no"、"disabled"）
+// 被当成「关」的话，部署方会以为自己关掉了沙箱，而这条路其实还开着 ——
+// 那是这个开关最坏的失效方向。反过来（写错时当成开）只会让 Demo 继续能跑，
+// 而启动日志里那条 WARN 还在，看得见。
+func sandboxEnabled(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "off", "false", "0":
+		return false
+	default:
+		return true
 	}
 }
 
@@ -114,7 +151,7 @@ func ConfigFromEnv() Config {
 // 传 nil 会让 /orders 那两条路由挂上去却在第一次下单时报 500。Run 不会这么做；
 // 测试要这么做的话，那正是它想测的东西。
 func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
-	orders *service.OrderService) *gin.Engine {
+	orders *service.OrderService, payment service.PaymentConfig) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery())
 
@@ -150,6 +187,11 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	ah := handler.NewAuthHandler(service.NewAuthService(repo, signer, nil))
 	oh := handler.NewOrderHandler(orders)
 
+	// 发起支付与支付回调共用同一个 PaymentService —— 沙箱造出来的报文与回调
+	// 认得的报文必须是同一个形状、同一把密钥、同一个签名算法。两个实例的话，
+	// 它们分叉时的症状是「沙箱支付 401」，看上去像密钥配错了。
+	payments := service.NewPaymentService(repo, payment, nil)
+
 	v1 := r.Group("/api/v1", res.Middleware())
 	v1.GET("/products", ph.List)
 
@@ -175,13 +217,16 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	v1.POST("/orders/preview", auth.Bearer(signer, nil), oh.Preview)
 	v1.POST("/orders", auth.Bearer(signer, nil), oh.Create)
 
-	// 买家侧的两条读接口。它们要令牌的理由比下单更硬：**它们读的是「我的」
-	// 东西**。租户由 res.Middleware() 挡住，而「同一家店里这一单是不是你的」
-	// 只能由令牌里的 user_id 回答 —— 这道 auth.Bearer 摘掉之后，service 那边
-	// auth.FromContext 会返回 ErrNoUser（它刻意不回落到任何默认用户），
-	// 于是请求 500 而不是匿名读到全店的订单。
+	// 买家侧的两条读接口与发起支付。三条都要令牌，而且理由比下单更硬：
+	// **它们读的是「我的」东西**。租户由 res.Middleware() 挡住，
+	// 而「同一家店里这一单是不是你的」只能由令牌里的 user_id 回答 ——
+	// 这道 auth.Bearer 摘掉之后，service 那边 auth.FromContext 会返回
+	// ErrNoUser（它刻意不回落到任何默认用户），于是请求 500 而不是
+	// 匿名读到全店的订单。
 	v1.GET("/orders", auth.Bearer(signer, nil), oh.List)
 	v1.GET("/orders/:order_no", auth.Bearer(signer, nil), oh.Detail)
+	v1.POST("/orders/:order_no/payments", auth.Bearer(signer, nil),
+		handler.NewPaymentHandler(payments).Create)
 
 	// 支付渠道异步回调。契约里它是 security: []（调用方是渠道，它没有令牌），
 	// 所以**没有** auth.Bearer —— 但它仍然在 v1 组里，也就仍然带着上面那道
@@ -193,8 +238,12 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	// 「刻意不支持用请求头指定租户」，而一条未认证的接口正是那条规矩最该守的
 	// 地方）。Host 回答「哪家店」，签名回答「这是不是真的」——
 	// 两者合起来才成立，完整论证在 service/payment.go 的文件头。
+	//
+	// 它与上面那条发起支付共用同一个 PaymentService，而两者的 security 相反
+	// （那条要 bearer，这条不要）。同一个服务上挂着一条认证接口和一条未认证
+	// 接口，差别只在这一行有没有 auth.Bearer —— 所以这一行是要盯着看的那一行。
 	v1.POST("/webhooks/payments/:channel",
-		handler.NewPaymentWebhookHandler(service.NewPaymentService(repo, nil)).Notify)
+		handler.NewPaymentWebhookHandler(payments).Notify)
 	return r
 }
 
@@ -296,7 +345,17 @@ func Run(ctx context.Context, listen func(addr string, h http.Handler) error) er
 	sweeper := service.NewSweepService(repository.New(pool), service.SweepConfig{}, nil)
 	go sweeper.Run(sweepCtx)
 
-	return listen(cfg.Addr, Router(pool, res, signer, orders))
+	if cfg.Payment.Sandbox {
+		// 这条 WARN 是那个默认值的另一半。没有它，一个忘了配
+		// KEEL_PAYMENT_SANDBOX 的部署里，「买家能免费把自己的订单推成已支付」
+		// 这件事在任何地方都没有痕迹。
+		slog.WarnContext(ctx, "沙箱支付是开着的（"+EnvPaymentSandbox+" 未设为 off）："+
+			"POST /orders/{order_no}/payments 返回的是带 KEEL-SANDBOX- 前缀的沙箱参数，"+
+			"买家可以据此给自己的订单造一份合法签名的回调、把它推成已支付。"+
+			"这不是真实支付，任何在收钱的部署都必须设 "+EnvPaymentSandbox+"=off")
+	}
+
+	return listen(cfg.Addr, Router(pool, res, signer, orders, cfg.Payment))
 }
 
 // authSigner 按配置建令牌签名器。没配 KEEL_AUTH_SECRET 时随机取一个并告警，

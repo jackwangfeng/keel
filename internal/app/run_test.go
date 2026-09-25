@@ -251,15 +251,17 @@ func TestRouterServesContractPaths(t *testing.T) {
 	// 真要下单时 Create 会当场报「协调器没有接上」—— 那是刻意的失败方向。
 	orders := service.NewOrderService(repository.New(pool), nil, nil)
 	r := app.Router(pool, tenant.NewResolver(pool, tenant.Config{BaseDomain: "example.com"}),
-		auth.NewSigner([]byte("keel-test-secret-key-32-bytes-long!!")), orders)
+		auth.NewSigner([]byte("keel-test-secret-key-32-bytes-long!!")), orders,
+		service.PaymentConfig{Sandbox: true})
 	want := map[string]bool{
-		"GET /healthz":                     false,
-		"GET /api/v1/products":             false,
-		"GET /api/v1/products/:product_id": false,
-		"POST /api/v1/orders":              false,
-		"POST /api/v1/orders/preview":      false,
-		"GET /api/v1/orders":               false,
-		"GET /api/v1/orders/:order_no":     false,
+		"GET /healthz":                           false,
+		"GET /api/v1/products":                   false,
+		"GET /api/v1/products/:product_id":       false,
+		"POST /api/v1/orders":                    false,
+		"POST /api/v1/orders/preview":            false,
+		"GET /api/v1/orders":                     false,
+		"GET /api/v1/orders/:order_no":           false,
+		"POST /api/v1/orders/:order_no/payments": false,
 	}
 	for _, ri := range r.Routes() {
 		key := ri.Method + " " + ri.Path

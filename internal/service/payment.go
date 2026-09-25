@@ -156,18 +156,24 @@ type PaymentRepository interface {
 	ChannelNotifySecret(ctx context.Context, channel string) (string, error)
 }
 
-// PaymentService 实现支付渠道异步回调。
+// PaymentService 实现支付渠道异步回调，以及发起支付（payment_intent.go）。
+//
+// 两条接口在同一个服务上，不是凑在一起的：发起支付要用的验签密钥、渠道映射、
+// 规范报文的形状，与回调用的是同一份。拆成两个服务就要把它们复制一遍，
+// 而复制之后沙箱造出来的报文与回调认得的报文可以慢慢分叉 —— 那种分叉的症状是
+// 「沙箱支付 401」，看上去像密钥配错了。
 type PaymentService struct {
 	repo PaymentRepository
+	cfg  PaymentConfig
 	log  *slog.Logger
 	now  func() time.Time
 }
 
-func NewPaymentService(r PaymentRepository, log *slog.Logger) *PaymentService {
+func NewPaymentService(r PaymentRepository, cfg PaymentConfig, log *slog.Logger) *PaymentService {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &PaymentService{repo: r, log: log, now: time.Now}
+	return &PaymentService{repo: r, cfg: cfg, log: log, now: time.Now}
 }
 
 // Notify 处理一次支付渠道回调。

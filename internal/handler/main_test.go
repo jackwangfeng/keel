@@ -130,8 +130,13 @@ func setup() error {
 
 	// 刻意不配默认商家：跨租户测试要走 Host 解析那条真实路径。
 	gin.SetMode(gin.TestMode)
+	// 沙箱支付打开：本包里「发起支付 → 回调 → 订单变 20」那一组测试走的就是它。
+	// 关掉沙箱的那条路（501）由 TestPaymentIntentIsRefusedWhenSandboxIsOff 用
+	// 一个单独装出来的路由验，不动这个包级实例 —— 换掉它会让别的测试
+	// 在一个它们没预期的配置上跑。
 	testEngine = app.Router(pool,
-		tenant.NewResolver(pool, tenant.Config{BaseDomain: baseDomain}), testSigner, testOrders)
+		tenant.NewResolver(pool, tenant.Config{BaseDomain: baseDomain}), testSigner, testOrders,
+		service.PaymentConfig{Sandbox: true})
 	return nil
 }
 
