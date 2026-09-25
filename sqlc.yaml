@@ -1,0 +1,25 @@
+# sqlc 配置。
+#
+# 通过 `make generate-sql` 调用，版本钉在 tools/go.mod —— 不要装全局 sqlc 二进制，
+# 理由与 goose 相同（见 Makefile 顶部）。
+version: "2"
+sql:
+  - engine: postgresql
+    schema: db/migrations
+    queries: db/queries
+    gen:
+      go:
+        package: db
+        # 关键：产物落在 repository/internal 之下。
+        #
+        # sqlc 的 DBTX 接口同时被 *pgxpool.Pool 和 pgx.Tx 满足，所以 db.New(pool)
+        # 是能编译过的 —— 而那条路径没有事务，也就没有 SET LOCAL app.merchant_id，
+        # 租户过滤只剩 RLS 一层（而 RLS 在没有租户上下文时会直接报错，
+        # 于是真正的症状是「线上偶发 42501」而不是「越权读取」，更难查）。
+        #
+        # Go 的 internal 规则让 internal/repository/ 之外的包 import 不到这里，
+        # 于是那个错误写法在编译期就不存在。internal/handler/isolation_test.go
+        # 守住这个结构。
+        out: internal/repository/internal/db
+        sql_package: pgx/v5
+        emit_pointers_for_null_types: true

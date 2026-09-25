@@ -48,13 +48,14 @@ GOOSE := GOOSE_DRIVER=postgres GOOSE_DBSTRING="$(GOOSE_DBSTRING)" \
 	GOOSE_MIGRATION_DIR=$(MIGRATIONS) \
 	$(GORUN) github.com/pressly/goose/v3/cmd/goose
 
-.PHONY: help generate generate-go generate-ts tools-versions contract-check \
-	migrate migrate-down migrate-status test-db
+.PHONY: help generate generate-go generate-ts generate-sql tools-versions \
+	contract-check migrate migrate-down migrate-status test-db
 
 help:
 	@echo "make generate       生成 Go + TS 两侧契约产物"
 	@echo "make generate-go    只生成 Go 侧（GO_OUT / GO_PACKAGE / GO_MODE 可覆盖）"
 	@echo "make generate-ts    只生成 TS 侧（TS_OUT 可覆盖）"
+	@echo "make generate-sql   跑 sqlc，重生成 internal/repository/internal/db"
 	@echo "make contract-check 校验 3.1 可空语义没有被生成器悄悄改掉"
 	@echo "make tools-versions 打印钉住的工具版本"
 	@echo "make migrate        把 db/migrations 迁到最新（GOOSE_DBSTRING 可覆盖）"
@@ -74,6 +75,13 @@ generate-ts:
 	@mkdir -p $(dir $(TS_OUT))
 	npx --yes $(OPENAPI_TS) "$(CONTRACT)" -o $(TS_OUT)
 	@echo "generated $(abspath $(TS_OUT))"
+
+# sqlc 的配置路径必须是绝对的，理由同 MIGRATIONS：GORUN 用 `go -C $(TOOLS)`，
+# sqlc 的工作目录是 tools/，裸 `sqlc generate` 会在那里找 sqlc.yaml 并报找不到。
+# 产物路径（schema / queries / out）由 sqlc 按 sqlc.yaml 所在目录解析，不受此影响。
+generate-sql:
+	$(GORUN) github.com/sqlc-dev/sqlc/cmd/sqlc -f $(ROOT)/sqlc.yaml generate
+	@echo "generated $(ROOT)/internal/repository/internal/db"
 
 tools-versions:
 	@go -C $(TOOLS) list -m -f "{{.Path}} {{.Version}}" \
