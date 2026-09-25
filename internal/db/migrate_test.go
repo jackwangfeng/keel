@@ -249,3 +249,75 @@ func businessTables(t *testing.T, conn *pgx.Conn) []string {
 	}
 	return out
 }
+
+// 规矩二（父子关系用复合外键钉死）此前没有任何机械检查。
+//
+// 规矩一有 scripts/check_tenancy.py 守着，但那个脚本读的是**设计文档**，
+// 不是迁移。于是存在一种没人会发现的脱节：文档完全正确，而库是错的。
+// 这正是这条测试写出来时抓到的第一件事——设计文档里 categories.parent_id
+// 早就是 FOREIGN KEY (parent_id, merchant_id)，迁移里却是单列的
+// REFERENCES categories(id)，A 商家的分类可以挂到 B 商家的分类下面。
+//
+// 判据直接从系统目录反查，不解析 SQL：凡是**两端都带 merchant_id** 的外键，
+// 约束列里就必须有 merchant_id。指向 merchants 自己的那一条除外——
+// 那条外键的单列就是租户列本身。
+//
+// 这样写的好处和 businessTables 一样：新表、新外键自动进视野，
+// 不依赖谁记得往某个清单里补一笔。
+func TestCrossTenantForeignKeysAreComposite(t *testing.T) {
+	if _, err := migrate(t); err != nil {
+		t.Fatalf("迁移失败: %v", err)
+	}
+
+	conn, err := db.Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(context.Background())
+
+	rows, err := conn.Query(context.Background(), `
+		SELECT c.conname,
+		       c.conrelid::regclass::text  AS from_tbl,
+		       c.confrelid::regclass::text AS to_tbl,
+		       (SELECT array_agg(a.attname ORDER BY k.ord)
+		          FROM unnest(c.conkey) WITH ORDINALITY k(att, ord)
+		          JOIN pg_attribute a
+		            ON a.attrelid = c.conrelid AND a.attnum = k.att) AS cols
+		  FROM pg_constraint c
+		  JOIN pg_namespace n ON n.oid = c.connamespace
+		 WHERE c.contype = 'f' AND n.nspname = 'public'
+		   -- 两端都带 merchant_id 才是「跨租户可错挂」的形状。
+		   AND EXISTS (SELECT 1 FROM pg_attribute a
+		                WHERE a.attrelid = c.conrelid
+		                  AND a.attname = 'merchant_id' AND a.attnum > 0)
+		   AND EXISTS (SELECT 1 FROM pg_attribute a
+		                WHERE a.attrelid = c.confrelid
+		                  AND a.attname = 'merchant_id' AND a.attnum > 0)
+		 ORDER BY 2, 1`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+
+	checked := 0
+	for rows.Next() {
+		var name, from, to string
+		var cols []string
+		if err := rows.Scan(&name, &from, &to, &cols); err != nil {
+			t.Fatal(err)
+		}
+		checked++
+		if !slices.Contains(cols, "merchant_id") {
+			t.Errorf("外键 %s（%s → %s）只引用了 %v，没带 merchant_id——"+
+				"A 商家的行可以挂到 B 商家的行上，数据库不会拒绝。"+
+				"改成 FOREIGN KEY (..., merchant_id) REFERENCES %s(id, merchant_id)",
+				name, from, to, cols, to)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if checked == 0 {
+		t.Fatal("一条跨租户外键都没查到——这个检查本身失效了")
+	}
+}
