@@ -82,7 +82,8 @@ Keel 不需要选。
 
 跨租户隔离不靠「每个查询记得加 WHERE」——那种 bug 在单租户测试数据下完全看不出来。
 靠的是每张表都带 `merchant_id`、父子关系用复合外键钉死、以及 PostgreSQL 行级安全兜底。
-提交前有脚本机械检查这一条。
+三条都有机械检查：`merchant_id` 那条由脚本核对**设计文档里的 DDL**，
+行级安全与复合外键那两条由测试直接查**真实数据库的系统目录**。
 
 ---
 
@@ -99,7 +100,19 @@ curl http://localhost:8080/api/v1/products
 那条 `curl` 直接返回这家店的商品，而请求里没有任何东西说明「哪家店」——
 这套部署的租户数就是 1，正是上面承诺给小商家的那个形态。
 
-8080 被占就换端口：`KEEL_HTTP_PORT=18080 docker compose up -d`（冒烟脚本读同一个变量）。
+8080 被占就整组换端口 —— 上面四条命令读的是同一个变量，但那条 `curl` 里的
+端口号是写死的，别只改第一条：
+
+```bash
+export KEEL_HTTP_PORT=18080
+docker compose up -d --build
+./scripts/smoke.sh
+curl "http://localhost:$KEEL_HTTP_PORT/api/v1/products"
+```
+
+> 8080 被别的服务占着时，原样照抄的那条 `curl` 会从**那个服务**拿到 404，
+> 看起来像「Keel 起崩了」，其实是打到了别人身上。
+
 要多商家形态（由 `Host` 头决定是哪家店）：
 `docker compose -f compose.yaml -f compose.multi.yaml up -d --build`。
 

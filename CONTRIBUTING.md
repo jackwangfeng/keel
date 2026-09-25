@@ -31,14 +31,21 @@
 | 依赖 | 版本 | 说明 |
 |---|---|---|
 | Go | 1.26+ | 后端。下限由 `tools/` 里钉的 sqlc 与 goose 传染而来——两者都声明 `go 1.26` |
-| Rust | 1.82+ | 编译 dtmrs 的 C ABI 动态库，经 cgo 嵌入 |
-| PostgreSQL | 16+ | 需要 pgvector 扩展 |
+| Rust | 1.82+ | **M2 起才需要**：编译 dtmrs 的 C ABI 动态库，经 cgo 嵌入。M1 不接 dtmrs，`docker/Dockerfile` 现在就是 `CGO_ENABLED=0` |
+| PostgreSQL | 16+ | M1 只用原生特性；**pgvector 是 M3 才需要的**，compose 起的是官方 `postgres:16`，装不装 pgvector 都跑得起来 |
 | Node | 22.18+ | `make generate-ts` 生成 TS 侧契约类型、`make schema-check` 编译 `web/src`、`make sdk-smoke` 直接跑 `.mts`（靠 Node 自带的类型剥离，不经构建步骤——这是下限的来源）。已验证于 v24.10.0 |
 | Docker | 任意近期版本 | `docker compose up` 起全栈 |
 
-> **为什么需要 Rust 工具链**：事务协调器 [dtmrs](https://github.com/jackwangfeng/dtmrs)
-> 是 Rust 实现，通过 cgo 以嵌入式模式运行。这意味着 `CGO_ENABLED=0` 静态编译不可用。
-> 如果你不想装 Rust，可以用独立 TC 进程的部署形态开发，
+> **为什么（将来）需要 Rust 工具链**：事务协调器 [dtmrs](https://github.com/jackwangfeng/dtmrs)
+> 是 Rust 实现，通过 cgo 以嵌入式模式运行，那时 `CGO_ENABLED=0` 静态编译不再可用，
+> 最终镜像也不能再是 `scratch`（动态链接需要 glibc 与动态链接器）。
+>
+> **但这是 M2 的事。** 现在只做 M1 的话，Go + PostgreSQL + Docker 就够了，
+> Rust 与 pgvector 都可以先不装 —— `docker/Dockerfile` 里那行 `CGO_ENABLED=0`
+> 和它上面那段注释界定了改它的时机。想提前体验嵌入式 TC，
+> 见 `examples/dtmrs-embedded/`（它有自己的 `make deps`，会拉源码并编出 `.so`）。
+>
+> 如果你不想装 Rust，也可以用独立 TC 进程的部署形态开发，
 > 见[总体架构](./docs/电商系统-总体架构.md)的「部署演进」一节。
 
 ## 本地数据库
@@ -151,12 +158,25 @@ KEEL_HTTP_PORT=18080 ./scripts/smoke.sh
 ./scripts/check-all.sh
 ```
 
-这条命令会校验：文档链接是否有效（含中文文件名的百分号编码与锚点）、
-README 承诺的文件是否真实存在、OpenAPI 契约结构是否有效且无悬空引用、
-架构文档声称的 AI 能力条目数是否与清单一致、
-以及**每张业务表是否都带 `merchant_id`**（多租户隔离，漏一次就是跨租户泄露）。
+**它需要 Node**（最后两步走 `npx`）。没有 Node 的环境里会失败，那是诚实的失败：
+契约产物确实没被验证过。
+
+八步，依次是：
+
+1. 文档链接是否有效（含中文文件名的百分号编码与锚点）
+2. README 承诺的文件是否真实存在，以及快速开始里的端口是否真的在 compose 里映射
+3. OpenAPI 契约结构是否有效且无悬空引用
+4. 架构文档声称的 AI 能力条目数是否与清单一致
+5. **每张业务表是否都带 `merchant_id`**（多租户隔离，漏一次就是跨租户泄露）
+6. `db/queries/*.sql` 里有没有应用层的租户过滤（那是 RLS 的活；应用层再加一份，
+   「RLS 到底有没有生效」就永远测不出来了）
+7. **契约产物漂移比对** —— 生成到临时目录再和入库产物比，对工作区只读
+8. `make schema-check` —— `web/src` 在 `--strict` 下编译得过，且编译范围真的覆盖到每个源文件
 
 改动文档或契约的 PR 必须先让它通过。
+
+> 注意它**不**碰数据库。RLS 策略、跨租户复合外键这些只有真库能验的东西在
+> `make test-db` 里（需要一个 PostgreSQL 16）。两条命令合起来才是完整的自查。
 
 ## 提交信息
 

@@ -87,7 +87,9 @@ changing architecture.
 Cross-tenant isolation does not rest on remembering a `WHERE` clause — that kind of
 bug is invisible against single-tenant test data. It rests on every table carrying
 `merchant_id`, parent-child rows pinned by composite foreign keys, and PostgreSQL
-row-level security underneath. A script checks the first of those before you commit.
+row-level security underneath. All three are checked mechanically: the
+`merchant_id` rule against **the DDL in the design doc**, the other two against
+**the live database's catalog** in the test suite.
 
 ---
 
@@ -105,9 +107,21 @@ starts the API. That `curl` comes back with the shop's products, and nothing in
 it says which shop — the deployment has exactly one tenant, which is the
 small-shop shape promised above.
 
-If 8080 is taken: `KEEL_HTTP_PORT=18080 docker compose up -d` (the smoke check
-reads the same variable). For the multi-merchant shape, where the `Host` header
-picks the shop:
+If 8080 is taken, move the whole group — the four commands above read the same
+variable, but the port in that `curl` is hard-coded, so don't change only the first:
+
+```bash
+export KEEL_HTTP_PORT=18080
+docker compose up -d --build
+./scripts/smoke.sh
+curl "http://localhost:$KEEL_HTTP_PORT/api/v1/products"
+```
+
+> When something else holds 8080, the `curl` copied verbatim gets a 404 from
+> **that** service. It reads like "Keel failed to start" when in fact the request
+> never reached Keel.
+
+For the multi-merchant shape, where the `Host` header picks the shop:
 `docker compose -f compose.yaml -f compose.multi.yaml up -d --build`.
 
 No Elasticsearch. No MongoDB. No RabbitMQ. No Redis.
