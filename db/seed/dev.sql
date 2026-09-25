@@ -138,3 +138,56 @@ SELECT s.id, 10 + (s.id % 7) * 5, 3
   JOIN merchants m ON m.id = s.merchant_id
  WHERE m.code IN ('shop-a', 'shop-b')
    AND NOT EXISTS (SELECT 1 FROM inventories i WHERE i.sku_id = s.id);
+
+-- ---------------------------------------------------------------------------
+-- 买家
+-- ---------------------------------------------------------------------------
+--
+-- **口令固定：密码 keel-dev-2026**，手机号见下。internal/handler 与
+-- internal/auth 的测试拿它登录，M2 Task 4/5 的下单链路也要用。
+--
+-- ### shop-a 与 shop-b 的买家共用同一个手机号，这是刻意的
+--
+-- 数据模型 §8/§9 定的是「买家属于商家」—— 同一个人在 A 店和 B 店是**两行
+-- users**，uk_users_phone 的首列是 merchant_id 正是这条语义的落地。
+-- 两边用同一个号码之后，下面这些断言才有区分力：
+--
+--   · 在 A 店按这个号码登录，拿到的必须是 A 店那一行（user_id 不同、昵称不同）；
+--   · A 店签出的令牌拿去 B 店，必须被当作**鉴权失败**拒绝，
+--     而不是「在 B 店查不到这个人」—— 这家店明明有这个号码；
+--   · 唯一索引没收进租户内的话，第二家店的这一行根本插不进去，种子当场失败。
+--
+-- 号码不同的话，跨店那条测试的「被拒绝」既可能是租户校验起了作用，
+-- 也可能只是因为 B 店压根没有这个人。那就什么也证明不了。
+--
+-- ### 三个反例
+--
+--   13800000002  status = 2（封禁）：401 与 403 是契约里两种不同的响应，
+--                没有一个被封的账号，那两条分支里永远只有一条被走到。
+--   13800000003  password_hash 为空（仅第三方登录的账号，§9 明写这一列可空）：
+--                契约要求这种账号传 password 回 401，而不是 500。
+--   13800000004  已软删（deleted_at 非空）：uk_users_phone 带 deleted_at IS NULL，
+--                所以它和 13800000001 可以共存于 shop-a —— 号码复用那条规则
+--                （§9）在种子里就有一个活着的例子，而登录必须查不到它。
+INSERT INTO users (merchant_id, phone, password_hash, nickname, status, deleted_at)
+SELECT m.id, v.phone, v.hash, v.nickname, v.status, v.deleted_at
+  FROM merchants m
+  CROSS JOIN (VALUES
+        ('shop-a', '13800000001',
+         '$argon2id$v=19$m=19456,t=2,p=1$KDDF6U9F6TwfTQ1agq3d2Q$KEULoLsSDb6bROT+qoKhR+rDPMp5LrgPjfIpBRE3bGk',
+         'A 店的买家', 1::smallint, NULL::timestamptz),
+        ('shop-b', '13800000001',
+         '$argon2id$v=19$m=19456,t=2,p=1$iTGAOt8186mE/De9Kp87pg$FB1XmLG0ayHpZZU1Z4YAb8XZH7HXh31FhRXL7mwAFbQ',
+         'B 店的买家', 1::smallint, NULL::timestamptz),
+        ('shop-a', '13800000002',
+         '$argon2id$v=19$m=19456,t=2,p=1$/KYk3di70nEP/Ta9DxhHWw$5wpDREBvZhMmIFH9OhyS4xBleIryuNdRlB0qtnvtZXA',
+         'A 店的封禁买家', 2::smallint, NULL::timestamptz),
+        ('shop-a', '13800000003', NULL,
+         'A 店的仅第三方登录买家', 1::smallint, NULL::timestamptz),
+        ('shop-a', '13800000004', NULL,
+         'A 店的已注销买家', 1::smallint, now())
+     ) AS v(code, phone, hash, nickname, status, deleted_at)
+ WHERE m.code = v.code
+   AND NOT EXISTS (SELECT 1 FROM users u
+                    WHERE u.merchant_id = m.id AND u.phone = v.phone
+                      AND u.nickname = v.nickname);

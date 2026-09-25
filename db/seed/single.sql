@@ -112,3 +112,28 @@ SELECT s.id, v.qty, 5
  WHERE m.code = 'demo'
    AND s.sku_code = v.code
    AND NOT EXISTS (SELECT 1 FROM inventories i WHERE i.sku_id = s.id);
+
+-- ---------------------------------------------------------------------------
+-- 可登录的买家
+-- ---------------------------------------------------------------------------
+--
+-- **口令是固定的，写在这里：手机号 13800000000，密码 keel-demo-2026。**
+-- 冒烟脚本（scripts/smoke.sh）与 M2 Task 4/5 的端到端都要用它登录。
+-- 这是**开发种子**里的固定口令，和「生产环境有个默认密码」是两件事：
+-- 这个文件只由 compose 的 seed 服务加载，而那一栈本来就是本地演示用的。
+--
+-- password_hash 是 argon2id 的 PHC 字符串（internal/auth/password.go 生成）。
+-- 它**不是**在这里现算的 —— SQL 里没有 argon2，pgcrypto 也只到 bcrypt。
+-- 于是这一行是一份预先算好的常量，重算它要跑那个包里的 HashPassword。
+-- 盐是随机的，所以同一个口令在 dev.sql 里那几行长得完全不一样，那是对的。
+--
+-- nickname 不留空：契约里 User.nickname 是必填的，空串会让前端显示一个
+-- 没有名字的人 —— 而那不是种子想验证的东西。
+INSERT INTO users (merchant_id, phone, password_hash, nickname, status)
+SELECT m.id, '13800000000',
+       '$argon2id$v=19$m=19456,t=2,p=1$J4kXTFFYK0Ts2p5Co+JeQg$RKPijLxGoS00y5FOKXGh260eD1CC5AT6IlGEo0vC7qY',
+       '示例买家', 1
+  FROM merchants m
+ WHERE m.code = 'demo'
+   AND NOT EXISTS (SELECT 1 FROM users u
+                    WHERE u.merchant_id = m.id AND u.phone = '13800000000');
