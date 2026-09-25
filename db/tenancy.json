@@ -28,37 +28,49 @@
     "改名这个动作本身会变成一次显式的、要改这个文件的动作。",
     "数据模型文档 §4 原先写的是 inventories_tenant，本轮统一成 tenant。"
   ],
-
   "policy_name": "tenant",
-
   "classes": {
     "tenant": {
       "_": "常规业务表。自带 merchant_id 列，策略是直接的列比较。这是默认类别——不在 tables 里登记的表一律按这一类查。",
       "merchant_id": "required",
       "policy": "column",
       "unique_scoped": true,
-      "grants": ["SELECT", "INSERT", "UPDATE", "DELETE"]
+      "grants": [
+        "SELECT",
+        "INSERT",
+        "UPDATE",
+        "DELETE"
+      ]
     },
     "parent-scoped": {
       "_": "没有 merchant_id 列，租户归属由父表决定。它**要**策略——谓词是对父表的 EXISTS 子查询。规矩一的豁免（不冗余那一列）与「挂不挂得上策略」是正交的两件事：策略谓词可以是任意布尔表达式，不必是本表的列比较。",
       "merchant_id": "absent",
       "policy": "parent",
       "unique_scoped": true,
-      "grants": ["SELECT", "INSERT", "UPDATE", "DELETE"]
+      "grants": [
+        "SELECT",
+        "INSERT",
+        "UPDATE",
+        "DELETE"
+      ]
     },
     "tenant-root": {
       "_": "租户目录自身。租户解析要在 SET LOCAL 之前读它，此时 current_merchant() 会报错，挂 RLS 会让整站在第一跳 404。防护改由 GRANT 面承担：keel_app 只读。写入走管理员角色（建店、迁移、种子）。",
       "merchant_id": "special",
       "policy": "none",
       "unique_scoped": true,
-      "grants": ["SELECT"]
+      "grants": [
+        "SELECT"
+      ]
     },
     "shared-reference": {
       "_": "全租户共用的静态参考数据（状态机之类）。没有租户维度，挂租户策略会让所有人都读不到；「唯一约束收进租户内」也无从谈起。keel_app 只读——任何租户都能改状态机，是个比跨租户读取更难发现的洞。",
       "merchant_id": "absent",
       "policy": "none",
       "unique_scoped": false,
-      "grants": ["SELECT"]
+      "grants": [
+        "SELECT"
+      ]
     },
     "cross-tenant-infra": {
       "_": "不由本项目定义的跨租户基础设施表。它们记的是全局事务 id / 迁移版本，没有租户维度可言。GRANT 面逐表申明，不吃类别默认值。",
@@ -68,7 +80,6 @@
       "grants": []
     }
   },
-
   "tables": {
     "goose_db_version": {
       "class": "cross-tenant-infra",
@@ -77,7 +88,9 @@
     },
     "barrier": {
       "class": "cross-tenant-infra",
-      "grants": ["INSERT"],
+      "grants": [
+        "INSERT"
+      ],
       "reason": "子事务屏障表（数据模型 §6）。它与业务表同库是硬要求：屏障记录必须和业务变更在同一个本地事务里提交，那就是屏障成立的全部意义。主键是 (gid, branch_id, op, barrier_id) —— 全局事务维度，没有 merchant_id 可挂。GRANT 面按 M2 任务 3 接上 dtmrs 后的**实际调用面**收窄到只有 INSERT：屏障算法自始至终只发一条语句，`INSERT ... ON CONFLICT DO NOTHING`，靠它的 rows_affected 判空回滚与重复请求；不读、不改、不删。实测两条（PostgreSQL 16，keel_app 只有 INSERT）：不带冲突目标的 `ON CONFLICT DO NOTHING` 跑得通（首次 INSERT 0 1、重复 INSERT 0 0），而写成 `ON CONFLICT (gid,branch_id,op,barrier_id) DO NOTHING` 会报 permission denied —— 带冲突目标要额外的 SELECT 权。所以这条 GRANT 面同时是一道形状约束：屏障的 SQL 不许写冲突目标。另：这张表**不是** dtmrs 建的。dtmrs 的 migrate() 建的是 trans_global / trans_branch_op / auth_token 三张（实测），barrier 由 dtmrs-barrier 那个 crate 建，而 C ABI 根本不依赖它（dtmrs-ffi 的 Cargo.toml 与符号表里都没有）。所以它由本项目自己的迁移建出来。"
     },
     "merchants": {
@@ -90,7 +103,6 @@
     },
     "order_status_transitions": {
       "class": "shared-reference",
-      "documented_only": true,
       "reason": "订单状态机（数据模型 §5），所有租户共用同一张迁移表，只有 (from_status, to_status) 两列。"
     },
     "refund_status_transitions": {
@@ -102,7 +114,6 @@
       "class": "parent-scoped",
       "parent": "skus",
       "via": "sku_id",
-      "documented_only": true,
       "reason": "主键就是 sku_id，租户归属由 skus 决定；且它是下单 SAGA 的热点表，多一列索引成本不划算（数据模型 §4）。它**要**策略：实测无策略时商家 A 能往商家 B 的 SKU 上插库存行、能改对方水位。"
     },
     "staff_tokens": {
@@ -113,7 +124,6 @@
       "reason": "跟随 staff，租户归属由 staff.merchant_id 决定（数据模型 §14）。staff.merchant_id 本来就可空，复制一份下来也表达不了「平台级 token」属于谁。"
     }
   },
-
   "fk_missing_ok": {
     "_readme": [
       "规矩二的**对偶**豁免：列名形如 <x>_id、能解析到一张同名父表、却没有任何外键引用它。",
@@ -122,7 +132,6 @@
     "search_logs.user_id": "搜索日志要能记录未登录访客（该列可空），且日志表不该因为用户注销而卡住删除顺序（数据模型 §8）。",
     "idempotency_keys.user_id": "纯基础设施表，随 expire_at 过期即删。挂外键会让清理任务和用户注销互相牵制（数据模型 §12）。"
   },
-
   "fk_single_column_ok": {
     "_readme": [
       "规矩二的豁免：两端都带 merchant_id、却只能用单列外键的那些引用。",
@@ -132,7 +141,6 @@
     "shipments(created_by)": "同上，指向 staff。审计字段，不在资金与库存的主链路上。",
     "uploads(staff_id)": "同上，指向 staff。归属字段；同表的 user_id 走的是复合外键，两者待遇不同不是笔误（数据模型 §14）。"
   },
-
   "unique_global_ok": {
     "_readme": [
       "规矩三（唯一约束一律收进租户内）的豁免：首列不是 merchant_id 的唯一索引 / 约束。",

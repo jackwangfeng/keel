@@ -3,7 +3,9 @@ package db_test
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -695,5 +697,93 @@ func TestUpdatedAtIsMaintainedByTrigger(t *testing.T) {
 	if !after.After(before) {
 		t.Errorf("改了一行之后 updated_at 没有前进：%v → %v——"+
 			"触发器挂着但没干活", before, after)
+	}
+}
+
+// 库里的每一张表都必须在设计文档里有 DDL。
+//
+// CONTRIBUTING 的硬规矩二写着「数据库表结构的唯一真相源是数据模型文档」，
+// 而此前没有任何东西在守这一条的**这个方向**：
+//
+//   - check_tenancy.py 只读文档，库里多出一张表它一无所知
+//   - Go 侧的闸门只读系统目录，对未登记的表按默认类别查——查得很严，
+//     但从不问「这张表凭什么在这里」
+//
+// 于是「建了一张没写进设计文档的表」是一个全绿的状态。这不是假想：
+// 买家会话表 user_tokens 就是这么来的（契约要求服务端吊销 refresh_token，
+// 而数据模型 §9 当时没有任何买家侧的会话表），它在库里存在了一整个任务的
+// 时间而没有任何测试提过一句。
+//
+// 刻意不在文档里的表（goose 自己的迁移记录表）在 db/tenancy.json 里写
+// "documented": false 并附理由——和这个仓库其余豁免一样，是个需要解释的动作。
+func TestEveryTableInTheDatabaseIsDocumented(t *testing.T) {
+	if _, err := migrate(t); err != nil {
+		t.Fatalf("迁移失败: %v", err)
+	}
+
+	conn, err := db.Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(context.Background())
+
+	manifest := loadManifest(t)
+
+	const schemaDoc = "../../docs/电商系统-数据模型设计.md"
+	doc, err := os.ReadFile(schemaDoc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 只认 DDL，不认散文里提到的表名 —— 「§14 用一段散文补丁修改 §13 的 DDL」
+	// 那种写法躲过了所有机械检查，正是这里不该重蹈的。
+	documented := map[string]bool{}
+	for _, m := range regexp.MustCompile(
+		`(?m)^CREATE TABLE (?:IF NOT EXISTS )?([a-z_]+)\s*\(`).FindAllSubmatch(doc, -1) {
+		documented[string(m[1])] = true
+	}
+	if len(documented) < 30 {
+		t.Fatalf("设计文档里只解析出 %d 张表的 DDL，这个检查本身失效了", len(documented))
+	}
+
+	rows, err := conn.Query(context.Background(),
+		`SELECT c.relname FROM pg_class c
+		   JOIN pg_namespace n ON n.oid = c.relnamespace
+		  WHERE n.nspname = 'public' AND c.relkind = 'r' ORDER BY 1`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+
+	live := map[string]bool{}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatal(err)
+		}
+		live[name] = true
+
+		entry := manifest.Tables[name]
+		exempt := entry.Documented != nil && !*entry.Documented
+		if !documented[name] && !exempt {
+			t.Errorf("表 %s 在库里，但设计文档里没有它的 CREATE TABLE——"+
+				"要么把 DDL 补进文档（CONTRIBUTING 硬规矩二：表结构的唯一真相源是"+
+				"数据模型文档），要么在 db/tenancy.json 里写 \"documented\": false 并说明理由",
+				name)
+		}
+		if exempt && entry.Reason == "" {
+			t.Errorf("表 %s 标了 documented:false 却没写理由", name)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	// documented_only 是「文档里有、库里还没有」。表真的建出来之后这个标记就过期了，
+	// 留着会让下一个人以为它还没落地。
+	for name, entry := range manifest.Tables {
+		if entry.DocumentedOnly && live[name] {
+			t.Errorf("表 %s 在 db/tenancy.json 里还标着 documented_only，"+
+				"但它已经建出来了——把这个标记摘掉", name)
+		}
 	}
 }

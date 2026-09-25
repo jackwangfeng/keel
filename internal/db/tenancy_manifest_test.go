@@ -47,6 +47,13 @@ type tenancyTable struct {
 	// 逐表覆盖类别默认的 GRANT 面；nil 表示吃类别默认值。
 	Grants []string `json:"grants"`
 	Reason string   `json:"reason"`
+
+	// Documented 为显式的 false 时，表示这张表**刻意**不在设计文档里
+	// （goose 的迁移记录表那种）。指针是为了区分「写了 false」与「没写」。
+	Documented *bool `json:"documented"`
+	// DocumentedOnly 表示文档里有、库里还没有。表一旦真的建出来，
+	// 这个标记就该摘掉——TestEveryTableInTheDatabaseIsDocumented 会催。
+	DocumentedOnly bool `json:"documented_only"`
 }
 
 type tenancyManifest struct {
