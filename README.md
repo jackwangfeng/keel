@@ -5,12 +5,11 @@
 **An AI-native commerce platform with a built-in distributed transaction engine.**
 *Runs on a single machine. Scales without a rewrite. No external AI APIs.*
 
-[![CI](https://img.shields.io/badge/CI-passing-brightgreen)](#)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](./LICENSE)
-[![Go](https://img.shields.io/badge/Go-1.23+-00ADD8)](#)
-[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16+-336791)](#)
+![Go](https://img.shields.io/badge/Go-1.23+-00ADD8)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16+-336791)
 
-[Documentation](./docs) · [Live Demo](#) · [中文文档](./README.zh-CN.md)
+[Documentation](./docs) · [中文文档](./README.zh-CN.md)
 
 </div>
 
@@ -86,6 +85,9 @@ the inference engine and seed data. Open <http://localhost:3000>.
 No Elasticsearch. No MongoDB. No RabbitMQ. No Redis.
 **One database.** Vector search lives in `pgvector`, full-text in `tsvector`,
 the job queue in a table.
+
+> Files (product images, avatars, refund evidence) go to a local disk volume by
+> default — not another service. Switching to the S3 driver is what adds a component.
 
 > Works without a GPU — the inference engine falls back to small CPU models.
 > Search quality degrades gracefully; nothing breaks.
@@ -170,10 +172,10 @@ Clients (Web · Mini Program · App · Admin)
                    └─────────────┘
 ```
 
-Full details: [Architecture](./docs/architecture.md) ·
-[Data model](./docs/schema-design.md) ·
-[Search layer](./docs/search-design.md) ·
-[Product understanding](./docs/product-understanding.md)
+Full details: [Architecture](./docs/电商系统-总体架构.md) ·
+[Data model](./docs/电商系统-数据模型设计.md) ·
+[Search layer](./docs/电商系统-语义检索层设计.md) ·
+[Product understanding](./docs/电商系统-商品理解服务设计.md)
 
 ---
 

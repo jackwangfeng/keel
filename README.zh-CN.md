@@ -5,12 +5,11 @@
 **自带分布式事务引擎的 AI 原生电商系统**
 *单机可跑，扩展无需重写，AI 全本地推理*
 
-[![CI](https://img.shields.io/badge/CI-passing-brightgreen)](#)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](./LICENSE)
-[![Go](https://img.shields.io/badge/Go-1.23+-00ADD8)](#)
-[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16+-336791)](#)
+![Go](https://img.shields.io/badge/Go-1.23+-00ADD8)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16+-336791)
 
-[文档](./docs) · [在线演示](#) · [English](./README.md)
+[文档](./docs) · [English](./README.md)
 
 </div>
 
@@ -83,6 +82,9 @@ docker compose up
 
 不需要 Elasticsearch，不需要 MongoDB，不需要 RabbitMQ，不需要 Redis。
 **只有一个数据库。** 向量检索在 `pgvector`，全文检索在 `tsvector`，任务队列是一张表。
+
+> 文件（商品图、头像、退款凭证）默认写本地磁盘卷，不是额外的服务。
+> 换 S3 形态时才会多一个组件。
 
 > 没有 GPU 也能跑——推理引擎会降级为 CPU 小模型。
 > 搜索质量会下降，但不会崩。
@@ -163,10 +165,10 @@ Keel 自带客户端，不只是一套 API。
                    └─────────────┘
 ```
 
-详见：[总体架构](./docs/architecture.md) ·
-[数据模型](./docs/schema-design.md) ·
-[语义检索层](./docs/search-design.md) ·
-[商品理解服务](./docs/product-understanding.md)
+详见：[总体架构](./docs/电商系统-总体架构.md) ·
+[数据模型](./docs/电商系统-数据模型设计.md) ·
+[语义检索层](./docs/电商系统-语义检索层设计.md) ·
+[商品理解服务](./docs/电商系统-商品理解服务设计.md)
 
 ---
 
