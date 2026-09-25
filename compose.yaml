@@ -1,0 +1,117 @@
+# 一条命令起全栈：`docker compose up`。
+#
+# 默认形态是**单商家**：一个数据库、一次迁移、一份只播一家店的种子、一个应用进程。
+# 这正是 README 承诺给小商家的那个形态 —— 起来之后 `curl localhost:8080/api/v1/products`
+# 直接有商品，请求里不需要出现任何和「租户」有关的东西。
+# `scripts/smoke.sh` 跑的就是这条链路。
+#
+# 想要多商家形态（6 家种子商家 + 按 Host 解析）：
+#     docker compose -f compose.yaml -f compose.multi.yaml up -d --build
+# 两种形态共用同一个数据卷，而它们对「库里有几家活跃商家」的要求正好相反
+# （单商家形态下 tenant.Preflight 会拒绝启动在多商家的库上），所以换形态之前要
+# `docker compose down -v`。这不是缺陷：那道自检正是为了让这种误配在启动时就响。
+name: keel
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: keel
+      POSTGRES_PASSWORD: ${KEEL_ADMIN_PASSWORD:-keel}
+      POSTGRES_DB: keel
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # 刻意不往宿主机映射端口。开发机上 5432 被别的东西占着是常事，而为了一个
+    # 谁都不必用到的端口让 `docker compose up` 直接失败，代价和收益完全不成比例。
+    # 要用 psql 连进去看的话，加一行 `ports: ["5432:5432"]`，或者
+    # `docker compose exec postgres psql -U keel keel`。
+    healthcheck:
+      # -h 127.0.0.1 不能省。initdb 期间官方镜像会先起一个**只听 unix socket**
+      # 的临时服务器来建库建角色，那时不带 -h 的 pg_isready 走 socket，会报 ready——
+      # 而此刻 TCP 上还没有人监听。下游的 migrate 于是在第一次连接上就
+      # "connection refused" 退出，`docker compose up` 整体失败，报错却指向迁移。
+      # 指定 TCP 地址之后，健康这个词的意思和下游真正需要的东西才是同一件事。
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 -U keel -d keel"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # 迁移。跑完即退出，应用等它成功。
+  #
+  # 用管理员角色 keel 连：建表、建 keel_app 角色、授权都要属主权限。
+  # 这是除了 `make migrate` 之外唯一该用这个角色的地方。
+  migrate:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: migrate
+      args:
+        GOPROXY: ${GOPROXY:-}
+    environment:
+      GOOSE_DBSTRING: postgres://keel:${KEEL_ADMIN_PASSWORD:-keel}@postgres:5432/keel?sslmode=disable
+      # 00003 建 keel_app 时用它设口令，下面 app 用同一个变量连库 —— 一处定义，
+      # 两处引用。分别写死两个字面量的话，改了一边就是「应用连不上库」，
+      # 而迁移与应用各自都看着没错。
+      # 口令只在角色**首次创建**时设置（见 00003 的注释），轮换要走单独的运维操作。
+      KEEL_APP_PASSWORD: ${KEEL_APP_PASSWORD:-keel_app}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # 种子。默认加载只有一家店的 single.sql，理由写在那个文件的开头。
+  #
+  # 用 postgres:16 镜像跑 psql，而不是在迁移器镜像里再塞一个客户端：
+  # 那个镜像是 scratch + goose，没有 shell 也没有 psql；而 postgres:16 这个镜像
+  # 上面已经拉下来了，psql 是它自带的。ON_ERROR_STOP=1 不能省 —— 没有它，
+  # psql 遇到报错会接着往下跑，最后以 0 退出，于是「种子加载失败」会表现为
+  # 「商品列表是空的」，一个指向错误方向的症状。
+  seed:
+    image: postgres:16
+    environment:
+      PGPASSWORD: ${KEEL_ADMIN_PASSWORD:-keel}
+    volumes:
+      - ./db/seed:/seed:ro
+    command: >
+      psql -v ON_ERROR_STOP=1 -h postgres -U keel -d keel -f /seed/single.sql
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  app:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: app
+      args:
+        GOPROXY: ${GOPROXY:-}
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: keel
+      # 应用连 keel_app，不连 keel。超级用户无条件绕过行级安全，FORCE 也拦不住——
+      # 用 keel 连上来，00002 里的租户隔离就是一张废纸。internal/db.NewPool 会在
+      # 每条物理连接建立时查 rolsuper/rolbypassrls，发现能绕过就拒绝启动。
+      PGUSER: keel_app
+      PGPASSWORD: ${KEEL_APP_PASSWORD:-keel_app}
+      # 单商家部署：Host 完全不参与解析，所有请求都属于这家店。
+      # 它必须和 db/seed/single.sql 播的那家 code 一致，而且库里只能有这一家活跃商家——
+      # 两条都由 tenant.Preflight 在启动时查，对不上就拒绝启动而不是猜。
+      KEEL_DEFAULT_MERCHANT: demo
+      # 镜像是拿来跑的，不是拿来开发的：gin 的 debug 模式会在启动时打一屏
+      # 「你没有设置 release」的警告，而 `docker compose up` 的头一屏正是
+      # 新人对这个项目的第一印象。它不改变任何路由行为。
+      GIN_MODE: release
+    ports:
+      # 宿主机端口可换（8080 在开发机上常被占）：`KEEL_HTTP_PORT=18080 docker compose up -d`。
+      # scripts/smoke.sh 读的是同一个变量，两边不会各说各话。
+      - "${KEEL_HTTP_PORT:-8080}:8080"
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+    # 刻意不配容器级 healthcheck：镜像是 scratch，里面没有 curl、wget，也没有
+    # shell 可以拿来发一个请求。给应用二进制加一个自检子命令是可以的，但那是
+    # 为了一个只有 compose 会看的信号去改 cmd/keel。外部的探活由 scripts/smoke.sh
+    # 做（它从宿主机打 /healthz），编排系统接管时再由它自己的探针打同一个路径。
+
+volumes:
+  pgdata:

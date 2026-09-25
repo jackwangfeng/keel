@@ -1,0 +1,27 @@
+# 多商家形态的叠加层。用法：
+#     docker compose -f compose.yaml -f compose.multi.yaml up -d --build
+#     KEEL_SMOKE_HOST=shop-a.example.com ./scripts/smoke.sh
+#
+# 它只改两件事：种子换成完整的 dev.sql（6 家商家，含停用 / 软删 / 没登记域名的
+# 反例），应用从「配了默认商家」换成「按 Host 在 example.com 下解析」。
+#
+# 存在的理由：默认形态为了兑现「小商家感知不到多租户」只播一家店，那会让
+# compose 这条路径再也碰不到多商家的那套解析。这个叠加层把它接回来，
+# 而且用的就是测试用的那份种子 —— 不是另写一份只在这里出现、没人维护的数据。
+#
+# 换形态之前请 `docker compose down -v`：两种形态对「库里有几家活跃商家」的要求
+# 正好相反，而数据卷是共用的。
+services:
+  seed:
+    command: >
+      psql -v ON_ERROR_STOP=1 -h postgres -U keel -d keel -f /seed/dev.sql
+
+  app:
+    environment:
+      # 清空而不是删掉这一行：compose 合并 environment 是按键合并的，
+      # 叠加层没法「移除」基础文件里的键，只能把它置空。空串对 Go 侧就是没配
+      # （os.Getenv 返回 ""），于是解析器进入多商家分支。
+      # 留着不置空的话，Preflight 会因为两个租户来源同时配置而拒绝启动。
+      KEEL_DEFAULT_MERCHANT: ""
+      # 与 dev.sql 里登记的域名一致（shop-a.example.com 这些）。
+      KEEL_BASE_DOMAIN: example.com

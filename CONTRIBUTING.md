@@ -101,6 +101,45 @@ goose 不装全局二进制，它和 sqlc、oapi-codegen 一样钉在 `tools/go.
 只经 `make migrate` 调用——本地与 CI 装到不同版本的迁移工具，
 代价是生产库上一次不一致的 schema。
 
+## 起全栈：`docker compose up`
+
+```bash
+docker compose up -d --build
+./scripts/smoke.sh          # 退出码 0 表示链路通
+```
+
+四个服务依次跑：`postgres` → `migrate`（goose，跑完退出）→ `seed`（psql 加载种子，
+跑完退出）→ `app`。每一段都等上一段**成功**，所以 `up` 失败时看最后一个没起来的
+服务的日志就够了，不必猜是谁先坏的。
+
+**默认是单商家形态**：种子只播一家店（`db/seed/single.sql` 里的 `demo`），
+应用配 `KEEL_DEFAULT_MERCHANT=demo`，Host 完全不参与解析——
+`curl localhost:8080/api/v1/products` 直接有商品。这就是 README 承诺给小商家的那个形态。
+
+**别把测试夹具 `db/seed/dev.sql` 加载进这个形态**：它播 6 家商家（其中 4 家活跃），
+而 `tenant.Preflight` 在「配了默认商家 + 库里多家活跃商家」时会拒绝启动——
+实测报的是 `启动自检未通过，拒绝启动: 配置了默认商家 "demo"……但库里有 4 家活跃商家`。
+要多商家形态请走叠加层，它换的是种子与租户来源两件事：
+
+```bash
+docker compose -f compose.yaml -f compose.multi.yaml up -d --build
+KEEL_SMOKE_HOST=shop-a.example.com ./scripts/smoke.sh
+```
+
+两种形态共用同一个数据卷，而它们对「库里有几家活跃商家」的要求正好相反，
+所以换形态之前要 `docker compose down -v`。
+
+宿主机的 8080 被占就换端口，compose 与 smoke 读的是同一个变量：
+
+```bash
+KEEL_HTTP_PORT=18080 docker compose up -d
+KEEL_HTTP_PORT=18080 ./scripts/smoke.sh
+```
+
+数据库刻意**不**往宿主机映射端口：开发机上 5432 被别的容器占着是常事，
+为一个谁都不必用到的端口让 `docker compose up` 当场失败，代价和收益不成比例。
+要连进去看：`docker compose exec postgres psql -U keel keel`。
+
 ## 提交前自查
 
 ```bash

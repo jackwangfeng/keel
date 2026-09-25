@@ -1,0 +1,18 @@
+# 构建上下文里不需要的东西。这不只是为了快：上下文里每变一个字节，
+# `COPY . .` 那一层的缓存就作废，于是改一份 markdown 也要重编一次。
+.git
+.superpowers
+node_modules
+web/node_modules
+
+# 本地构建产物（Rust / dtmrs 那边的，以及 Go 的测试二进制）
+target
+*.so
+*.a
+*.dylib
+*.test
+
+# 本地卷与私密文件
+data
+.env
+.env.local
