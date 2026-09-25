@@ -21,6 +21,14 @@ REQUIRED_SCHEMAS = [
 ]
 
 
+# (schema 名, 必须存在的属性名)
+REQUIRED_FIELDS = [
+    ('Cart', 'selected_total_cents'),   # S1
+    ('OrderItem', 'refunding_qty'),     # S2
+    ('OrderDetail', 'refunds'),         # S15
+]
+
+
 def walk_refs(text):
     return set(re.findall(r"\$ref:\s*['\"]?(#[^'\"\s]+)", text))
 
@@ -71,6 +79,33 @@ def main():
     for name in REQUIRED_SCHEMAS:
         if name not in schemas:
             problems.append('缺少 schema: %s' % name)
+
+    def props_of(schema_name, _seen=None):
+        """取 schema 的属性名集合。OrderDetail 用 allOf 继承 Order，
+        只查顶层 properties 会漏掉继承来的字段，必须展开 allOf。"""
+        _seen = _seen or set()
+        if schema_name in _seen:
+            return set()
+        _seen.add(schema_name)
+        node = schemas.get(schema_name, {})
+        names = set(node.get('properties', {}))
+        for branch in node.get('allOf', []):
+            if '$ref' in branch:
+                names |= props_of(branch['$ref'].rsplit('/', 1)[-1], _seen)
+            else:
+                names |= set(branch.get('properties', {}))
+        return names
+
+    for schema_name, field in REQUIRED_FIELDS:
+        if field not in props_of(schema_name):
+            problems.append('schema %s 缺少字段: %s' % (schema_name, field))
+
+    # S3: GET /orders 必须支持按售后状态筛选
+    get_orders = paths.get('/orders', {}).get('get', {})
+    names = {p.get('name') for p in get_orders.get('parameters', [])
+             if isinstance(p, dict)}
+    if 'refund_status' not in names:
+        problems.append('GET /orders 缺少 refund_status 查询参数')
 
     if problems:
         print('发现 %d 处问题：' % len(problems))
