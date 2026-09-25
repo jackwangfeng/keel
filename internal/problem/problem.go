@@ -23,6 +23,29 @@ const (
 	TypeNotFound         = "https://keel.dev/problems/not-found"
 	TypeMethodNotAllowed = "https://keel.dev/problems/method-not-allowed"
 	TypeInternal         = "https://keel.dev/problems/internal"
+
+	// 鉴权相关的四个。它们分得这么细，是因为客户端对它们的处置**各不相同**：
+	//
+	//   unauthorized         → 重新登录
+	//   token-expired        → 去 /auth/refresh，不必打扰用户
+	//   token-tenant-mismatch→ 这串令牌不属于本店；客户端该丢掉它，
+	//                          而运维该知道有人在跨店用令牌
+	//   account-disabled     → 封禁 / 注销，重新登录也没用
+	//
+	// 全都压成一个 unauthorized 的话，客户端只能靠猜，而猜错的那一半会
+	// 把用户踢回登录页；跨店那一条更是会淹没在一片普通的鉴权失败里。
+	TypeUnauthorized        = "https://keel.dev/problems/unauthorized"
+	TypeTokenExpired        = "https://keel.dev/problems/token-expired"
+	TypeTokenTenantMismatch = "https://keel.dev/problems/token-tenant-mismatch"
+	TypeAccountDisabled     = "https://keel.dev/problems/account-disabled"
+
+	// 请求体本身不合法（缺字段、两种凭据都给了或都没给）。
+	TypeInvalidRequest = "https://keel.dev/problems/invalid-request"
+
+	// 契约声明了、本轮刻意没有实现的路径。用一个**专门的** type 而不是复用
+	// internal：客户端能据此分辨「这个功能还没有」与「服务器炸了」，
+	// 而这两件事的重试策略完全相反。
+	TypeNotImplemented = "https://keel.dev/problems/not-implemented"
 )
 
 // Write 写一个 RFC 9457 响应并中止后续 handler。

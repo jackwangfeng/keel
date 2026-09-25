@@ -138,12 +138,30 @@ generate-sql:
 	$(GORUN) github.com/sqlc-dev/sqlc/cmd/sqlc -f $(SQLC_CONFIG) generate
 	@echo "generated from $(SQLC_CONFIG)"
 
+# 打印钉住的版本。
+#
+# 它原先只打构建期工具，因为主模块的运行时依赖是 0 —— 那时「工具版本」
+# 就是这个仓库全部的第三方版本。M2 Task 1.5 之后不是了：口令哈希需要
+# golang.org/x/crypto（argon2id），那是主模块第一个**运行时**依赖。
+#
+# 所以这里跟着长一段。两段的版本纪律其实不同，写清楚免得有人以为是同一回事：
+#
+#   · 构建期工具钉在 tools/go.mod，理由是 Makefile 顶部那段（不许 @latest）；
+#   · 运行时依赖钉在主模块的 go.mod + **go.sum**，后者是密码学校验 ——
+#     版本对不上不是「装到了别的版本」，是 go build 直接拒绝。
+#
+# 顺带一句 x/crypto 的账：它**不是**一个新拖进来的模块。gin、validator、
+# oapi-codegen/runtime、quic-go 早就各自依赖它，它一直在 go.mod 的 indirect 段里。
+# 这次只是从 indirect 升成 direct —— 依赖图的模块数一个没多。
 tools-versions:
+	@echo "== 构建期工具（tools/go.mod） =="
 	@go -C $(TOOLS) list -m -f "{{.Path}} {{.Version}}" \
 		github.com/oapi-codegen/oapi-codegen/v2 \
 		github.com/pressly/goose/v3 \
 		github.com/sqlc-dev/sqlc
 	@echo "$(OPENAPI_TS)"
+	@echo "== 运行时依赖（go.mod 的 direct，由 go.sum 做完整性校验） =="
+	@go list -m -f "{{if not .Indirect}}{{.Path}} {{.Version}}{{end}}" all | grep -v '^$$' | tail -n +2
 
 # 契约是 OpenAPI 3.1，用了 3.0 没有的写法。这个检查把 2026-09-25 的选型结论
 # 变成一道回归闸：Staff.merchant_id 必须两侧都还是可空的。
