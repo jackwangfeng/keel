@@ -107,9 +107,10 @@ generate-ts:
 #
 # 刻意仍然不建 web/package.json：那会凭空引入一棵没人维护的 npm 依赖树。
 # web/tsconfig.json 不是脚手架的开端，它只是这条命令的参数表 —— 全程零 node_modules。
+# 范围由 check_ts_scope.py 核对：tsc 对「范围里没有这个文件」是静默的，
+# 把 include 写成 `src/**/*.ts` 就能悄悄漏掉所有 .mts 而照样退出 0。
 schema-check:
-	npx --yes -p $(TSC) tsc --noEmit -p $(ROOT)/web/tsconfig.json
-	@echo "schema-check OK: $(ROOT)/web/src 在 --strict 下编译通过"
+	python3 $(ROOT)/scripts/check_ts_scope.py $(TSC)
 
 # 用 SDK 对**真的跑起来的**服务打一次 GET /products。
 #
@@ -162,5 +163,21 @@ migrate-status:
 # 一个「本地跑两遍就永远绿」的测试，恰恰只在它该报警的时候失灵。
 TEST_PKGS ?= ./...
 
+# -p 1：包级串行。
+#
+# 各个包的 TestMain 都会对**同一个库**跑一遍 goose 迁移。go test 默认按包
+# 并行，于是五个包会同时建 goose_db_version、同时跑 00001_init.sql，互相
+# 撞成 `relation "goose_db_version" does not exist` / `duplicate key value
+# violates unique constraint "pg_type_typname_nsp_index"` / `relation
+# "merchants" already exists`。
+#
+# 这个竞态的方向和一般的抖动相反：**库是暖的就必绿，库是冷的就必红**。
+# 迁移过一次之后 goose 看到版本已是最新，什么都不做，窗口根本不存在——
+# 所以本地反复跑永远看不到它，而 CI 每一次都是全新空库，每一次都会踩。
+# 实测冷库 3/3 全红，加上 -p 1 后 3/3 全绿。
+#
+# 不用 -p 1 的另一条路是让 TestMain 抢一把咨询锁再迁移，那是把并发正确性
+# 做进测试基建；在只有一个共享库的前提下不值当，理由和 -count=1 是同一类：
+# 宁可慢一点，也不要一个「只在该报警时失灵」的测试。
 test-db:
-	go test -count=1 $(TEST_PKGS)
+	go test -count=1 -p 1 $(TEST_PKGS)
