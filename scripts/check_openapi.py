@@ -27,11 +27,14 @@ REQUIRED_PATHS = [
     ('/admin/staff/{staff_id}', 'patch'),
     ('/admin/me', 'get'),
     ('/admin/merchants', 'post'),
+    ('/admin/orders/{order_no}/shipments', 'post'),
+    ('/admin/refunds/{refund_no}/audit', 'post'),
 ]
 
 REQUIRED_SCHEMAS = ['UploadTarget', 'Upload',
                     'Staff', 'StaffRole', 'StaffSession', 'StaffCreateRequest',
-                    'Merchant', 'MerchantCreateRequest']
+                    'Merchant', 'MerchantCreateRequest',
+                    'Shipment', 'ShipmentCreateRequest']
 
 # (schema 名, 必须存在的属性名)
 REQUIRED_FIELDS = [
@@ -238,6 +241,11 @@ def main():
                 elif 'default' in sch and param.get('name') not in SAFE_DEFAULT_PARAMS:
                     problems.append('%s %s 的查询参数 %s 带 default'
                                     % (method.upper(), p, param.get('name')))
+
+            # 约定 6：后台接口一律在 /admin/ 前缀下
+            if 'Admin' in (op.get('tags') or []) and not p.startswith('/admin/'):
+                problems.append('%s %s 带 Admin tag 却不在 /admin/ 前缀下'
+                                '（文件头约定 6）' % (method.upper(), p))
 
             # 有副作用的 POST 必须接受 Idempotency-Key
             if method == 'post' and p not in IDEMPOTENCY_EXEMPT:
