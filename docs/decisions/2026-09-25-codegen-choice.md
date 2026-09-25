@@ -244,7 +244,9 @@ cd tools && go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen ...
 ```
 
 这层调用已经由根目录 `Makefile` 包掉，后续任务与 CI 用 `make generate` 即可，
-不要再各自拼命令行。
+不要再各自拼命令行。输出位置用 `GO_OUT` / `TS_OUT` 覆盖，**相对路径一律相对仓库根解析**
+（`make generate GO_OUT=internal/api/openapi.gen.go`）——工具虽然跑在 `tools/` 里，
+但 Makefile 用 `go -C` 而非 `cd`，shell 始终留在仓库根，两个变量行为一致。
 
 **Go 版本下限 1.26.0**：`sqlc v1.31.1` 与 `goose v3.28.0` 都声明要求 Go 1.26。
 虽然现在只有 `tools/` 模块被传染，但装不了 1.26 就跑不了 `make generate`，

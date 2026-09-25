@@ -11,8 +11,11 @@ ROOT     := $(CURDIR)
 TOOLS    := $(ROOT)/tools
 CONTRACT := $(ROOT)/docs/电商系统-OpenAPI.yaml
 
-# 经 tools 子模块跑工具：版本由 tools/go.mod 锁定
-GORUN := cd $(TOOLS) && go run
+# 经 tools 子模块跑工具：版本由 tools/go.mod 锁定。
+# 用 `go -C` 而不是 `cd $(TOOLS) && go run` —— 后者会把 shell 也带进 tools/，
+# 于是配方里的重定向和相对路径全部相对 tools/ 解析。GO_OUT 给个裸文件名时，
+# 产物会静默落在 tools/ 下并照样报 exit 0，是最难查的那种错。
+GORUN := go -C $(TOOLS) run
 
 # TS 侧生成器没有 Go 那样的模块锁，只能在这里钉死版本号
 OPENAPI_TS := openapi-typescript@7.13.0
@@ -39,14 +42,15 @@ generate-go:
 	@mkdir -p $(dir $(GO_OUT))
 	$(GORUN) github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen \
 		-package $(GO_PACKAGE) -generate $(GO_MODE) "$(CONTRACT)" > $(GO_OUT)
-	@echo "generated $(GO_OUT)"
+	@echo "generated $(abspath $(GO_OUT))"
 
 generate-ts:
 	@mkdir -p $(dir $(TS_OUT))
 	npx --yes $(OPENAPI_TS) "$(CONTRACT)" -o $(TS_OUT)
+	@echo "generated $(abspath $(TS_OUT))"
 
 tools-versions:
-	@cd $(TOOLS) && go list -m -f "{{.Path}} {{.Version}}" \
+	@go -C $(TOOLS) list -m -f "{{.Path}} {{.Version}}" \
 		github.com/oapi-codegen/oapi-codegen/v2 \
 		github.com/pressly/goose/v3 \
 		github.com/sqlc-dev/sqlc
