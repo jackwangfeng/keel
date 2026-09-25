@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """检查 README 宣称存在的东西是否真的存在，以及有没有占位/虚标。"""
+import glob
 import io
 import os
 import re
@@ -17,6 +18,26 @@ PROMISED_FILES = [
 ]
 
 READMES = ['README.md', 'README.zh-CN.md']
+
+# README 里出现的 localhost 端口，必须在某个 compose 文件里真的映射出来。
+#
+# 这条检查是补一个已经发生过的坑：README 的快速开始长期写着「打开
+# http://localhost:3000」，而 compose 里从来没有 3000 这个端口——在
+# `docker compose up` 这条命令还不存在的时候，那段话是路线图；命令一旦存在，
+# 同一段话就变成了对一个已发布命令的错误描述，读者照着跑会打开一个死链。
+# 原来的检查只验「承诺的文件存在吗」，验不了这种行为描述。
+#
+# 判据刻意只认 localhost/127.0.0.1 的 URL 写法：那是「你现在就能打开它」的意思。
+# 说一个还不存在的端口（路线图那一节）请写成「3000 端口上还没有页面」，
+# 别写成一个能点的链接——链接本身就是承诺。
+COMPOSE_GLOB = 'compose*.y*ml'
+README_LOCALHOST_RE = re.compile(r'(?:localhost|127\.0\.0\.1):(\d{2,5})')
+# compose 的端口映射列表项：`- "8080:8080"` / `- "${KEEL_HTTP_PORT:-8080}:8080"`。
+# 宿主机一侧只认纯数字或带默认值的变量——写成别的形状时这条检查宁可漏报，
+# 也不去猜一个它读不懂的写法到底映射了什么。
+COMPOSE_PORT_RE = re.compile(
+    r'^\s*-\s*["\']?(?P<host>\$\{[A-Za-z_][A-Za-z0-9_]*:-(?P<default>\d+)\}|\d+)'
+    r':(?P<container>\d+)(?:/(?:tcp|udp))?["\']?\s*$')
 PLACEHOLDER_LINK_RE = re.compile(r'\[[^\]]*\]\(#\)')
 # 任何形如「CI / build / tests + passing/success」的徽章图片。
 # 不能只认 shields.io —— GitHub Actions 的官方徽章走 github.com/.../badge.svg，
@@ -27,6 +48,17 @@ BUILD_BADGE_RE = re.compile(
     r')[^)]*)\)', re.IGNORECASE)
 
 
+def published_ports(root):
+    """所有 compose 文件里映射到宿主机的端口。"""
+    ports = set()
+    for path in sorted(glob.glob(os.path.join(root, COMPOSE_GLOB))):
+        for line in io.open(path, encoding='utf-8').read().split('\n'):
+            m = COMPOSE_PORT_RE.match(line)
+            if m:
+                ports.add(int(m.group('default') or m.group('host')))
+    return ports
+
+
 def main():
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     problems = []
@@ -34,6 +66,7 @@ def main():
     wf = os.path.join(root, '.github', 'workflows')
     has_ci = os.path.isdir(wf) and any(
         f.endswith(('.yml', '.yaml')) for f in os.listdir(wf))
+    ports = published_ports(root)
 
     for rel in PROMISED_FILES:
         if not os.path.exists(os.path.join(root, rel)):
@@ -49,6 +82,14 @@ def main():
             for hit in PLACEHOLDER_LINK_RE.findall(line):
                 problems.append(
                     '%s:%d 占位链接（指向 "#"）: %s' % (rel, lineno, hit.strip()))
+            for port in README_LOCALHOST_RE.findall(line):
+                if int(port) not in ports:
+                    problems.append(
+                        '%s:%d 让读者打开 localhost:%s，但没有任何 compose 文件把这个'
+                        '端口映射到宿主机（已映射的是 %s）。要么在 compose 里映射它，'
+                        '要么别用能点的链接去说一个还不存在的端口。'
+                        % (rel, lineno, port,
+                           ', '.join(str(x) for x in sorted(ports)) or '（没有）'))
             for url in BUILD_BADGE_RE.findall(line):
                 if not has_ci:
                     problems.append(

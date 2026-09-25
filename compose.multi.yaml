@@ -9,8 +9,14 @@
 # compose 这条路径再也碰不到多商家的那套解析。这个叠加层把它接回来，
 # 而且用的就是测试用的那份种子 —— 不是另写一份只在这里出现、没人维护的数据。
 #
-# 换形态之前请 `docker compose down -v`：两种形态对「库里有几家活跃商家」的要求
-# 正好相反，而数据卷是共用的。
+# 它用**自己的数据卷**，和默认形态的库完全隔开，所以两种形态可以来回切，
+# 不需要 `docker compose down -v`。这不是洁癖：两种形态的种子都是增量式的，
+# 共用一个卷时 single → multi 这个方向会静默出错 —— dev.sql 叠在 demo 上，
+# 库里变成 7 家商家，而 Preflight 在多商家模式下不检查「有几家」，于是应用照常启动、
+# 冒烟照常绿，只是多了一家本不该存在的店，且 demo.example.com 真能访问到它。
+# 反方向（multi → single）倒是会响（默认形态拒绝启动在多商家的库上），
+# 但一条只在一个方向上生效的保护不叫保护。与其在注释里写一条人工纪律，
+# 不如让它在结构上不可能发生。
 services:
   seed:
     command: >
@@ -25,3 +31,9 @@ services:
       KEEL_DEFAULT_MERCHANT: ""
       # 与 dev.sql 里登记的域名一致（shop-a.example.com 这些）。
       KEEL_BASE_DOMAIN: example.com
+
+# 卷名写死，而不是让 compose 按项目名自动生成 `keel_pgdata`：
+# 两个 compose 文件叠在一起时项目名仍是 keel，不写死的话它和默认形态的卷是同一个。
+volumes:
+  pgdata:
+    name: keel_pgdata_multi

@@ -126,8 +126,13 @@ docker compose -f compose.yaml -f compose.multi.yaml up -d --build
 KEEL_SMOKE_HOST=shop-a.example.com ./scripts/smoke.sh
 ```
 
-两种形态共用同一个数据卷，而它们对「库里有几家活跃商家」的要求正好相反，
-所以换形态之前要 `docker compose down -v`。
+叠加层用的是**自己的数据卷**（`keel_pgdata_multi`），两种形态可以来回切，
+不需要 `docker compose down -v`。共用一个卷的话，`single → multi` 这个方向会静默出错：
+两份种子都是增量式的，dev.sql 叠在 `demo` 上会变成 7 家商家，而多商家模式的 Preflight
+不检查「有几家」，于是应用照常起、冒烟照常绿，只是库里多了一家本不该存在的店。
+
+**判据是 `./scripts/smoke.sh` 的退出码，不是 `docker compose up -d` 的**：
+后者只等到容器启动，应用随后因为启动自检没过而退出，它照样返回 0。
 
 宿主机的 8080 被占就换端口，compose 与 smoke 读的是同一个变量：
 

@@ -85,11 +85,18 @@ Keel 不需要选。
 
 ```bash
 git clone https://github.com/<org>/keel && cd keel
-docker compose up
+docker compose up -d --build
+./scripts/smoke.sh                        # 退出码 0 表示链路通
+curl http://localhost:8080/api/v1/products
 ```
 
-就这一条。API、PostgreSQL（含 pgvector）、推理引擎和种子数据全部起来。
-打开 <http://localhost:3000>。
+一条命令起 PostgreSQL、跑迁移、加载一家种子店铺、起 API。
+那条 `curl` 直接返回这家店的商品，而请求里没有任何东西说明「哪家店」——
+这套部署的租户数就是 1，正是上面承诺给小商家的那个形态。
+
+8080 被占就换端口：`KEEL_HTTP_PORT=18080 docker compose up -d`（冒烟脚本读同一个变量）。
+要多商家形态（由 `Host` 头决定是哪家店）：
+`docker compose -f compose.yaml -f compose.multi.yaml up -d --build`。
 
 不需要 Elasticsearch，不需要 MongoDB，不需要 RabbitMQ，不需要 Redis。
 **只有一个数据库。** 向量检索在 `pgvector`，全文检索在 `tsvector`，任务队列是一张表。
@@ -97,8 +104,15 @@ docker compose up
 > 文件（商品图、头像、退款凭证）默认写本地磁盘卷，不是额外的服务。
 > 换 S3 形态时才会多一个组件。
 
-> 没有 GPU 也能跑——推理引擎会降级为 CPU 小模型。
-> 搜索质量会下降，但不会崩。
+### 还没在盒子里的
+
+上面那三个服务——PostgreSQL、迁移与种子、API——就是今天 `docker compose up`
+起来的全部。这份 README 的其余部分描述的是正在建的系统；下面这些还在路线图上，
+列在这里是为了让上面那段不会被读成「已经有了」：
+
+- `pgvector` 扩展与语义检索
+- 推理引擎，以及没有 GPU 时降级到 CPU 小模型这件事
+- 店铺前台与后台界面——3000 端口上目前没有任何页面
 
 ---
 

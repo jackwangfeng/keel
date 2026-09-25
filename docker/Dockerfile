@@ -59,11 +59,22 @@ CMD ["up"]
 # ---------- 应用 ----------
 # 底座是 scratch，不是 gcr.io/distroless/static-debian12。
 #
-# 两者对这个二进制而言是等价的（都没有 shell、没有包管理器、没有 libc），
-# 而 scratch 不需要从第三个 registry 拉东西 —— gcr.io 在不少网络环境下
-# 根本连不上（本机实测 `docker pull gcr.io/distroless/static-debian12` 超时），
-# 那会让「clone 下来 docker compose up」这句承诺在那些环境里当场作废。
-# 代价是要自己把 CA 证书拷进来，见下。
+# 理由是可达性：gcr.io 在不少网络环境下根本连不上（本机实测
+# `docker pull gcr.io/distroless/static-debian12` 超时），而
+# 「clone 下来 docker compose up 就能跑」是这个项目的承诺之一。
+#
+# 两者**不等价**，差集列在这里，别把它读成「反正一样」：
+#   - 没有 /tmp。今天无害（代码里没有任何东西落临时文件），但商品图片上传
+#     一到位就会踩：net/http 的 ParseMultipartForm 超过内存阈值后会往
+#     os.TempDir() 落盘，那时报的是 "no such file or directory"，
+#     而排查会从上传代码开始。届时加一句 `COPY --from=build --chown=65532 /tmp /tmp`
+#     或者在镜像里建出这个目录。
+#   - 没有 tzdata。`time.LoadLocation("Asia/Shanghai")` 会失败 ——
+#     订单超时、促销的本地时间窗口都需要它。加固办法是在 cmd/keel 里
+#     `import _ "time/tzdata"`（约 450KB，把时区库编进二进制），
+#     那样底座带不带 tzdata 都无所谓。眼下代码里没有用到，所以没加。
+#   - 没有 /etc/passwd。`user.Current()` 会失败，而下面的 USER 只能写数字 UID。
+# 另外 CA 证书也要自己拷（下面那条 COPY），distroless 是自带的。
 FROM scratch AS app
 
 # 眼下这个二进制不发起任何 TLS 连接（pgx 走内网 sslmode=disable），证书是为

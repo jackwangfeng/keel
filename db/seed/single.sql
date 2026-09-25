@@ -30,6 +30,19 @@
 -- 后者只在真有唯一约束被撞到时才沉默跳过，而 categories/products 上撞不到，
 -- 重复加载会一遍遍累积重复行。compose 每次 `up` 都会重跑一次这个文件。
 --
+-- ### 这份文件没有任何自动化覆盖（拆两份种子的真实代价）
+--
+-- dev.sql 有 `make test-db` 守着：表结构一改，加载它的那几个 TestMain 当场失败。
+-- 这份没有。改个列名、加个 NOT NULL，dev.sql 那边会响，这边要等到有人跑
+-- `docker compose up` 才响 —— 而那可能是发布前的最后一刻，也可能是一个新人
+-- 第一次 clone 这个仓库的时候。
+--
+-- 补它的办法不是再写一个 Go 测试（那会把 compose 的种子也变成夹具），
+-- 而是让 CI 真的跑一次 `docker compose up -d --build && ./scripts/smoke.sh`。
+-- Task 8 的 CI 必须接上这条，否则这里就是一笔欠账。
+-- 注意 `up -d` 在应用随后崩溃时**仍然退出 0**，所以 CI 里单跑 up 等于没跑，
+-- 必须跟上 smoke。
+--
 -- 用管理员角色加载（compose 里的 seed 服务是 `psql postgres://keel:keel@...`）：
 -- categories/products 带 RLS，keel_app 在没有租户上下文的连接上一行都插不进去。
 

@@ -7,9 +7,11 @@
 #
 # 想要多商家形态（6 家种子商家 + 按 Host 解析）：
 #     docker compose -f compose.yaml -f compose.multi.yaml up -d --build
-# 两种形态共用同一个数据卷，而它们对「库里有几家活跃商家」的要求正好相反
-# （单商家形态下 tenant.Preflight 会拒绝启动在多商家的库上），所以换形态之前要
-# `docker compose down -v`。这不是缺陷：那道自检正是为了让这种误配在启动时就响。
+# 那个叠加层用自己的数据卷，两种形态可以随便来回切，不需要 `docker compose down -v`
+# —— 理由写在 compose.multi.yaml 里（共用卷时 single → multi 这个方向会静默出错）。
+#
+# 判据永远是 smoke 的退出码，不是 `up` 的：`docker compose up -d` 只等到容器**启动**，
+# 应用随后因为自检不过而退出，它照样返回 0。
 name: keel
 
 services:
@@ -26,11 +28,12 @@ services:
     # 要用 psql 连进去看的话，加一行 `ports: ["5432:5432"]`，或者
     # `docker compose exec postgres psql -U keel keel`。
     healthcheck:
-      # -h 127.0.0.1 不能省。initdb 期间官方镜像会先起一个**只听 unix socket**
-      # 的临时服务器来建库建角色，那时不带 -h 的 pg_isready 走 socket，会报 ready——
-      # 而此刻 TCP 上还没有人监听。下游的 migrate 于是在第一次连接上就
-      # "connection refused" 退出，`docker compose up` 整体失败，报错却指向迁移。
-      # 指定 TCP 地址之后，健康这个词的意思和下游真正需要的东西才是同一件事。
+      # -h 127.0.0.1 是防御性的，不是对某次故障的复盘：官方镜像在 initdb 期间会先起
+      # 一个**只听 unix socket** 的临时服务器来建库建角色，而不带 -h 的 pg_isready
+      # 走的正是 socket。本机没有复现出它在那个窗口里报 ready（镜像自己也做了防护），
+      # 但「健康」这个词该和下游真正需要的东西是同一件事——下游要的是 TCP 连得上。
+      # 真踩上的话症状是 migrate 在第一次连接就 connection refused 退出，
+      # 报错指向迁移，而真因在上一个服务的健康定义里。
       test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 -U keel -d keel"]
       interval: 2s
       timeout: 3s

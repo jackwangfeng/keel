@@ -90,11 +90,20 @@ row-level security underneath. A script checks the first of those before you com
 
 ```bash
 git clone https://github.com/<org>/keel && cd keel
-docker compose up
+docker compose up -d --build
+./scripts/smoke.sh                        # exit 0 means the chain works
+curl http://localhost:8080/api/v1/products
 ```
 
-That's it. One command brings up the API, PostgreSQL (with pgvector),
-the inference engine and seed data. Open <http://localhost:3000>.
+One command brings up PostgreSQL, runs the migrations, loads a seed shop and
+starts the API. That `curl` comes back with the shop's products, and nothing in
+it says which shop — the deployment has exactly one tenant, which is the
+small-shop shape promised above.
+
+If 8080 is taken: `KEEL_HTTP_PORT=18080 docker compose up -d` (the smoke check
+reads the same variable). For the multi-merchant shape, where the `Host` header
+picks the shop:
+`docker compose -f compose.yaml -f compose.multi.yaml up -d --build`.
 
 No Elasticsearch. No MongoDB. No RabbitMQ. No Redis.
 **One database.** Vector search lives in `pgvector`, full-text in `tsvector`,
@@ -103,8 +112,16 @@ the job queue in a table.
 > Files (product images, avatars, refund evidence) go to a local disk volume by
 > default — not another service. Switching to the S3 driver is what adds a component.
 
-> Works without a GPU — the inference engine falls back to small CPU models.
-> Search quality degrades gracefully; nothing breaks.
+### Not in the box yet
+
+The three services above — PostgreSQL, the migrations plus seed, the API — are
+all `docker compose up` brings up today. The rest of this README describes the
+system being built; these parts are on the roadmap and are listed here so that
+nothing above reads as if it already ships:
+
+- the `pgvector` extension and semantic search
+- the inference engine, and its fallback to small CPU models where there is no GPU
+- the storefront and admin UI — there is no page on port 3000 yet
 
 ---
 
