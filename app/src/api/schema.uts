@@ -1,0 +1,623 @@
+// 由 scripts/gen_uts_schema.py 从 docs/电商系统-OpenAPI.yaml 生成。**请勿手改。**
+//
+// 手改会被 scripts/check_uts_contract.py 抓住：那个闸门把契约重新生成到临时目录
+// 再和这个文件比对，对不上就红。改契约 -> `make generate-uts` -> 一起提交。
+//
+// 这里只有类型，没有一行运行时代码 —— 运行时在 app/src/api/client.uts。
+
+export type Address = {
+  receiver_name : string
+  phone : string
+  province : string
+  city : string
+  district : string
+  street? : string
+  /** 门牌号等 */
+  detail : string
+  /** 行政区划码。比省市区三个字符串可靠 ——「内蒙古」与「内蒙古自治区」 */
+  region_code? : string
+  postal_code? : string
+  /** 0 无 / 1 家 / 2 公司 / 3 学校 */
+  tag? : number
+  /** 仅在**新增**时有效（服务端同事务内先清旧默认再置新）。 */
+  is_default : boolean
+  id : number
+  created_at? : string
+  updated_at? : string
+}
+
+export type AddressInput = {
+  receiver_name : string
+  phone : string
+  province : string
+  city : string
+  district : string
+  street? : string
+  /** 门牌号等 */
+  detail : string
+  /** 行政区划码。比省市区三个字符串可靠 ——「内蒙古」与「内蒙古自治区」 */
+  region_code? : string
+  postal_code? : string
+  /** 0 无 / 1 家 / 2 公司 / 3 学校 */
+  tag? : number
+  /** 仅在**新增**时有效（服务端同事务内先清旧默认再置新）。 */
+  is_default? : boolean
+}
+
+/** 金额，单位「分」。禁止使用浮点。 */
+export type Money = number
+
+export type CartItem = {
+  id : number
+  sku_id : number
+  product_id? : number
+  title? : string
+  spec_values? : UTSJSONObject
+  image_url? : string
+  /** **实时价，不是加购时的快照。** 购物车刻意不存价格快照（见数据模型 §9）， */
+  price_cents : Money
+  quantity : number
+  /** 是否勾选结算，对应 `cart_items.selected`。 */
+  selected : boolean
+  /** 库存是否充足 */
+  available? : boolean
+}
+
+export type Cart = {
+  items : CartItem[]
+  /** **全车**商品金额合计，与 `selected` 无关。 */
+  total_cents : Money
+  /** **仅已勾选**（`selected: true`）条目的金额合计，即点「去结算」时的预估金额。 */
+  selected_total_cents : Money
+}
+
+export type Category = {
+  id : number
+  name : string
+  level : number
+  children? : Category[]
+}
+
+export type ProductSummary = {
+  id : number
+  title : string
+  subtitle? : string
+  image_url? : string
+  /** 金额，单位「分」。禁止使用浮点。 */
+  min_price_cents : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  max_price_cents? : Money
+  in_stock? : boolean
+  sales_count? : number
+  /** 对应 `products.status`：0 草稿 / 1 上架 / 2 下架。 */
+  status : number
+}
+
+export type ChatReplyAction = {
+  type? : string
+  params? : UTSJSONObject
+}
+
+export type ChatReply = {
+  session_id : string
+  /** 面向用户的自然语言回复 */
+  reply : string
+  /** 真实检索结果，非模型生成 */
+  products? : ProductSummary[]
+  /** 解析出的结构化意图 */
+  intent? : UTSJSONObject
+  /** 写操作路由指令。前端据此跳转到对应表单并预填参数， */
+  action? : ChatReplyAction
+}
+
+/** 第三方身份来源，对应 `user_identities.provider`： */
+export type IdentityProvider = number
+
+export type User = {
+  id : number
+  nickname : string
+  avatar_url? : string
+  /** 脱敏返回，如 138****8000。完整号码只在绑定流程中由用户自己输入 */
+  phone? : string
+  /** 0 未知 / 1 男 / 2 女 */
+  gender? : number
+  /** `users.password_hash` 可空 —— 仅第三方登录的用户没有密码。 */
+  has_password? : boolean
+  created_at? : string
+  last_login_at? : string
+}
+
+export type LoginResponse = {
+  /** JWT，放进 Authorization: Bearer 头 */
+  access_token : string
+  refresh_token? : string
+  token_type : string
+  /** access_token 有效期，单位秒 */
+  expires_in : number
+  user : User
+  /** 首登即注册时为 true，供前端引导补全资料 */
+  is_new_user? : boolean
+}
+
+export type Merchant = {
+  id : number
+  /** 短标识，全局唯一，用于域名或路径路由 */
+  code : string
+  name : string
+  /** 1 正常 2 停用 3 待审核 */
+  status : number
+  /** 自定义域名；为空则走 `/s/{code}` 路径路由 */
+  domain? : string
+  created_at : string
+}
+
+export type MerchantCreateRequest = {
+  code : string
+  name : string
+  /** 该店第一个管理员的邮箱，建好后给他发登录链接 */
+  admin_email : string
+}
+
+/** **履约维度** —— 货走到哪儿了。资金维度另见 `Order.refund_status`。 */
+export type OrderStatus = number
+
+/** **资金维度** —— 钱退了多少，与 `status` 正交，由退款单驱动。 */
+export type OrderRefundStatus = number
+
+export type Order = {
+  order_no : string
+  /** **履约维度** —— 货走到哪儿了。资金维度另见 `Order.refund_status`。 */
+  status : OrderStatus
+  /** 售后状态，与 status 正交，必返字段（DB 上是 `NOT NULL DEFAULT 0`）。 */
+  refund_status : OrderRefundStatus
+  /** 金额，单位「分」。禁止使用浮点。 */
+  goods_amount_cents? : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  freight_cents? : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  discount_cents? : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  payable_cents : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  paid_cents? : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  refunded_cents? : Money
+  expire_at? : string
+  created_at : string
+  paid_at? : string
+  /** 发货时间。「发货后 N 天自动确认收货」的倒计时从这里算 */
+  shipped_at? : string
+  finished_at? : string
+}
+
+export type OrderItemInput = {
+  sku_id : number
+  quantity : number
+}
+
+export type OrderCreateRequest = {
+  items : OrderItemInput[]
+  address_id : number
+  /** 第一期仅支持单张券 */
+  user_coupon_id? : number
+  remark? : string
+  /** 金额，单位「分」。禁止使用浮点。 */
+  expected_payable_cents? : Money
+}
+
+/** 下单瞬间从 `user_addresses` 拷贝的收货信息快照，落在 */
+export type ReceiverSnapshot = {
+  receiver_name : string
+  phone : string
+  province : string
+  city : string
+  district : string
+  street? : string
+  detail : string
+  region_code? : string
+  postal_code? : string
+}
+
+export type OrderItem = {
+  id : number
+  sku_id : number
+  product_id? : number
+  /** 下单时快照 */
+  title : string
+  spec_values? : UTSJSONObject
+  image_url? : string
+  /** 金额，单位「分」。禁止使用浮点。 */
+  price_cents : Money
+  quantity : number
+  /** 金额，单位「分」。禁止使用浮点。 */
+  amount_cents? : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  discount_cents? : Money
+  /** 已退款完成的件数 */
+  refunded_qty? : number
+  /** 退款流程中（退款单尚未到达 `40 已退款` 或终态）占用的件数。 */
+  refunding_qty? : number
+}
+
+export type PaymentRecord = {
+  payment_no? : string
+  /** 对外字符串 ↔ `payments.channel`：wechat=1 / alipay=2 / balance=3 */
+  channel? : string
+  /** 金额，单位「分」。禁止使用浮点。 */
+  amount_cents? : Money
+  /** 0待支付 1成功 2失败 3已关闭 */
+  status? : number
+  paid_at? : string
+}
+
+/** 1 仅退款 / 2 退货退款。对应 `refunds.refund_type`。 */
+export type RefundType = number
+
+/** 退款单状态机，与 `refunds.status` 的 SMALLINT 取值逐值一致。 */
+export type RefundStatus = number
+
+export type RefundItem = {
+  order_item_id : number
+  /** 下单时的商品标题快照 */
+  title? : string
+  image_url? : string
+  quantity : number
+  /** 金额，单位「分」。禁止使用浮点。 */
+  amount_cents : Money
+}
+
+/** 对应 `refunds.reason_code`： */
+export type RefundReasonCode = number
+
+export type Refund = {
+  /** 对外编号，不可枚举 */
+  refund_no : string
+  order_no : string
+  /** 原路退回的落点 —— 退的是哪一笔支付。一个订单可能有多次支付尝试， */
+  payment_no? : string
+  /** 1 仅退款 / 2 退货退款。对应 `refunds.refund_type`。 */
+  refund_type : RefundType
+  /** 退款单状态机，与 `refunds.status` 的 SMALLINT 取值逐值一致。 */
+  status : RefundStatus
+  /** 退款明细，对应 `refund_items`。申请时按明细提交了，查询时就要能拿回来， */
+  items : RefundItem[]
+  /** 金额，单位「分」。禁止使用浮点。 */
+  goods_amount_cents? : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  freight_cents? : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  amount_cents : Money
+  /** 退款渠道，冗余自原支付单（对账按渠道跑）。 */
+  channel? : string
+  /** 渠道退款流水号，由退款回调写入。用户报障与客服对账要这个号。 */
+  channel_refund_id? : string
+  /** 对应 `refunds.reason_code`： */
+  reason_code? : RefundReasonCode
+  reason_text? : string
+  evidence_urls? : string[]
+  /** 审核驳回理由，`status=50 已拒绝` 时返回。 */
+  reject_reason? : string
+  /** 审核时间 */
+  audited_at? : string
+  /** 到账时间 */
+  refunded_at? : string
+  created_at : string
+  updated_at? : string
+}
+
+export type OrderDetail = {
+  order_no : string
+  /** **履约维度** —— 货走到哪儿了。资金维度另见 `Order.refund_status`。 */
+  status : OrderStatus
+  /** 售后状态，与 status 正交，必返字段（DB 上是 `NOT NULL DEFAULT 0`）。 */
+  refund_status : OrderRefundStatus
+  /** 金额，单位「分」。禁止使用浮点。 */
+  goods_amount_cents? : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  freight_cents? : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  discount_cents? : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  payable_cents : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  paid_cents? : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  refunded_cents? : Money
+  expire_at? : string
+  created_at : string
+  paid_at? : string
+  /** 发货时间。「发货后 N 天自动确认收货」的倒计时从这里算 */
+  shipped_at? : string
+  finished_at? : string
+  /** 下单时的收货信息快照 */
+  receiver? : ReceiverSnapshot
+  items? : OrderItem[]
+  payments? : PaymentRecord[]
+  /** 该订单下的全部退款单，按申请时间倒序。 */
+  refunds? : Refund[]
+}
+
+export type OrderPreviewItemsItem = {
+  sku_id? : number
+  quantity? : number
+  /** 金额，单位「分」。禁止使用浮点。 */
+  amount_cents? : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  discount_cents? : Money
+}
+
+export type UserCoupon = {
+  id : number
+  coupon_code : string
+  name? : string
+  /** 1满减 2折扣 3立减 4包邮 */
+  coupon_type : number
+  /** 金额，单位「分」。禁止使用浮点。 */
+  threshold_cents? : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  discount_cents? : Money
+  /** 千分比，850 = 8.5 折 */
+  discount_rate? : number
+  /** 金额，单位「分」。禁止使用浮点。 */
+  max_discount_cents? : Money
+  /** 1 未使用 · 2 锁定 · 3 已使用 · 4 已过期 */
+  status : number
+  valid_start_at? : string
+  valid_end_at? : string
+}
+
+export type OrderPreview = {
+  /** 金额，单位「分」。禁止使用浮点。 */
+  goods_amount_cents : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  freight_cents? : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  discount_cents? : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  payable_cents : Money
+  /** 含优惠分摊结果 */
+  items : OrderPreviewItemsItem[]
+  applicable_coupons? : UserCoupon[]
+}
+
+export type PageMeta = {
+  page : number
+  page_size : number
+  total : number
+}
+
+export type PaymentCreateRequest = {
+  /** 渠道。**沙箱与否不在这个枚举里** —— 「用哪个渠道付」和「这是不是 */
+  channel : string
+}
+
+export type PaymentIntent = {
+  payment_no : string
+  /** 对外字符串 ↔ `payments.channel`：wechat=1 / alipay=2 / balance=3 */
+  channel : string
+  /** 金额，单位「分」。禁止使用浮点。 */
+  amount_cents : Money
+  /** 渠道特定的调起参数（如微信 JSAPI 的 prepay 参数） */
+  payload? : UTSJSONObject
+}
+
+export type ProblemErrorsItem = {
+  field? : string
+  message? : string
+}
+
+/** RFC 9457 Problem Details */
+export type Problem = {
+  type : string
+  title : string
+  status : number
+  detail? : string
+  instance? : string
+  trace_id? : string
+  /** 字段级校验错误 */
+  errors? : ProblemErrorsItem[]
+}
+
+export type Sku = {
+  id : number
+  sku_code : string
+  spec_values? : UTSJSONObject
+  /** 金额，单位「分」。禁止使用浮点。 */
+  price_cents : Money
+  available_qty : number
+  image_url? : string
+}
+
+export type ProductDetail = {
+  id : number
+  title : string
+  subtitle? : string
+  image_url? : string
+  /** 金额，单位「分」。禁止使用浮点。 */
+  min_price_cents : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  max_price_cents? : Money
+  in_stock? : boolean
+  sales_count? : number
+  /** 对应 `products.status`：0 草稿 / 1 上架 / 2 下架。 */
+  status : number
+  description? : string
+  category_id? : number
+  images? : string[]
+  skus : Sku[]
+}
+
+export type RefundItemInput = {
+  /** 必须属于该订单。服务端强制校验「该 item 属于该 order */
+  order_item_id : number
+  quantity : number
+}
+
+export type RefundCreateRequest = {
+  items : RefundItemInput[]
+  /** 1 仅退款 / 2 退货退款。对应 `refunds.refund_type`。 */
+  refund_type : RefundType
+  /** 对应 `refunds.reason_code`： */
+  reason_code : RefundReasonCode
+  /** 补充说明。reason_code=5（其他）时建议必填 */
+  reason_text? : string
+  /** 凭证图片，先走上传接口拿到 URL */
+  evidence_urls? : string[]
+}
+
+export type SearchFilters = {
+  category_id? : number
+  /** 金额，单位「分」。禁止使用浮点。 */
+  min_price_cents? : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  max_price_cents? : Money
+  in_stock_only? : boolean
+}
+
+export type SearchHitScores = {
+  vector? : number
+  keyword? : number
+  rrf? : number
+  rerank? : number
+  business? : number
+  final? : number
+}
+
+export type SearchHit = {
+  id : number
+  title : string
+  subtitle? : string
+  image_url? : string
+  /** 金额，单位「分」。禁止使用浮点。 */
+  min_price_cents : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  max_price_cents? : Money
+  in_stock? : boolean
+  sales_count? : number
+  /** 对应 `products.status`：0 草稿 / 1 上架 / 2 下架。 */
+  status : number
+  /** explain=true 时返回，用于效果调优 */
+  scores? : SearchHitScores
+  /** 该结果来自哪一路召回，`explain=true` 时返回。 */
+  recall_source? : string
+}
+
+export type Shipment = {
+  id : number
+  /** 承运商标识，如 sf / jd / yto */
+  carrier_code : string
+  tracking_no : string
+  /** 1 已发出 · 2 已签收 · 3 异常 */
+  status : number
+  shipped_at : string
+  delivered_at? : string
+}
+
+/** 一期不接受发货明细——整单发货，包裹内容即订单全部商品。 */
+export type ShipmentCreateRequest = {
+  carrier_code : string
+  tracking_no : string
+}
+
+/** 1 管理员 · 2 操作员 */
+export type StaffRole = number
+
+export type Staff = {
+  id : number
+  email : string
+  name? : string
+  /** 1 管理员 · 2 操作员 */
+  role : StaffRole
+  /** 1 正常 2 停用 */
+  status : number
+  /** 所属商家。**为 null 表示平台级操作员**——他不属于任何一家店， */
+  merchant_id : number | null
+  last_login_at? : string
+  created_at : string
+}
+
+/** **没有 `merchant_id` 字段，这是刻意的。** 租户归属从调用者的会话继承。 */
+export type StaffCreateRequest = {
+  email : string
+  name? : string
+  /** 1 管理员 · 2 操作员 */
+  role : StaffRole
+}
+
+export type StaffSession = {
+  /** 会话 token，放进 `Authorization: Bearer`。默认 7 天。 */
+  token : string
+  expire_at : string
+  staff : Staff
+}
+
+export type Upload = {
+  id : number
+  /** 可直接写入业务字段（如 `evidence_urls`、`avatar_url`）的访问地址， */
+  url : string
+  content_type : string
+  size_bytes : number
+  created_at : string
+}
+
+/** 文件用途，取值与 `uploads.purpose` 逐值一致： */
+export type UploadTarget = number
+
+export type UserIdentity = {
+  id : number
+  /** 第三方身份来源，对应 `user_identities.provider`： */
+  provider : IdentityProvider
+  /** 是否已取到 unionid（能否跨应用打通） */
+  has_union_id? : boolean
+  /** 绑定时间 */
+  created_at : string
+}
+
+/** GET /products 的 query 参数 */
+export type ListProductsQuery = {
+  page? : number
+  page_size? : number
+  category_id? : number
+  sort? : string
+  min_price_cents? : number
+  max_price_cents? : number
+}
+
+/** GET /products 的 200 响应体 */
+export type ListProductsResponse = {
+  page : number
+  page_size : number
+  total : number
+  items : ProductSummary[]
+}
+
+/** POST /auth/login 的请求体 */
+export type LoginRequest = {
+  phone : string
+  /** 短信验证码 */
+  code? : string
+  password? : string
+}
+
+/** POST /auth/refresh 的请求体 */
+export type RefreshTokenRequest = {
+  refresh_token : string
+}
+
+/** GET /orders 的 query 参数 */
+export type ListOrdersQuery = {
+  page? : number
+  page_size? : number
+  /** **履约维度** —— 货走到哪儿了。资金维度另见 `Order.refund_status`。 */
+  status? : OrderStatus
+  /** **资金维度** —— 钱退了多少，与 `status` 正交，由退款单驱动。 */
+  refund_status? : OrderRefundStatus
+}
+
+/** GET /orders 的 200 响应体 */
+export type ListOrdersResponse = {
+  page : number
+  page_size : number
+  total : number
+  items : Order[]
+}

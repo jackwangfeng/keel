@@ -38,6 +38,12 @@ GO_OUT     ?= $(ROOT)/internal/api/openapi.gen.go
 GO_PACKAGE ?= api
 GO_MODE    ?= types
 TS_OUT     ?= $(ROOT)/web/src/api/schema.d.ts
+# 客户端（app/，uni-app x）那一份契约产物。**UTS 不是 TypeScript** ——
+# 它的类型系统要落到 Kotlin/Swift 上，openapi-typescript 的产物里那些
+# 映射类型、条件类型、索引签名都没有对应物（实测结论在 app/README.md）。
+# 所以 UTS 侧另生成一份，而不是共用 TS_OUT；生成器是自己的 Python 脚本，
+# 不引入新的 npm 生成器版本要钉。
+UTS_OUT    ?= $(ROOT)/app/src/api/schema.uts
 
 # 迁移目录必须是绝对路径：GORUN 用的 `go -C $(TOOLS)` 让 goose 的工作目录是
 # tools/，相对路径会从那里解析。
@@ -55,7 +61,7 @@ GOOSE := GOOSE_DRIVER=postgres GOOSE_DBSTRING="$(GOOSE_DBSTRING)" \
 	GOOSE_MIGRATION_DIR=$(MIGRATIONS) \
 	$(GORUN) github.com/pressly/goose/v3/cmd/goose
 
-.PHONY: help generate generate-go generate-ts generate-sql tools-versions \
+.PHONY: help generate generate-go generate-ts generate-sql generate-uts tools-versions \
 	contract-check schema-check sdk-smoke migrate migrate-down migrate-status test-db \
 	test-engine dtmrs-deps build
 
@@ -63,6 +69,7 @@ help:
 	@echo "make generate       生成 Go + TS 两侧契约产物"
 	@echo "make generate-go    只生成 Go 侧（GO_OUT / GO_PACKAGE / GO_MODE 可覆盖）"
 	@echo "make generate-ts    只生成 TS 侧（TS_OUT 可覆盖）"
+	@echo "make generate-uts   只生成客户端 UTS 侧（UTS_OUT 可覆盖）"
 	@echo "make generate-sql   跑 sqlc，重生成 internal/repository/internal/db（SQLC_CONFIG 可覆盖）"
 	@echo "make contract-check 校验 3.1 可空语义没有被生成器悄悄改掉"
 	@echo "make schema-check   用 tsc --strict 检查整个 web/src（含契约产物与 SDK）"
@@ -115,6 +122,12 @@ generate-ts:
 # 把 include 写成 `src/**/*.ts` 就能悄悄漏掉所有 .mts 而照样退出 0。
 schema-check:
 	python3 $(ROOT)/scripts/check_ts_scope.py $(TSC)
+
+# 客户端的契约产物。生成器是 Python + PyYAML，刻意不是又一个 npm 生成器：
+# openapi-typescript 的产物 UTS 吃不下（见 app/README.md 的实测记录），
+# 而为了一份 600 行的类型再钉一个 npm 生成器版本不划算。
+generate-uts:
+	python3 $(ROOT)/scripts/gen_uts_schema.py -o $(UTS_OUT)
 
 # 用 SDK 对**真的跑起来的**服务打一次 GET /products。
 #
