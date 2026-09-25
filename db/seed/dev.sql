@@ -87,3 +87,30 @@ SELECT c.merchant_id, c.id, m.code || ' 的商品 ' || g, 1990, 4990, 100, 0, 1,
    AND NOT EXISTS (SELECT 1 FROM products p
                     WHERE p.merchant_id = c.merchant_id
                       AND p.title = m.code || ' 的商品 ' || g);
+
+-- 反例商品：shop-a 各一件草稿（status = 0）与一件软删（deleted_at 非空）。
+--
+-- 它们的作用是让 ListProducts / CountProducts 里那两个谓词**可被证伪**。
+-- 没有它们的话，`WHERE deleted_at IS NULL AND status = 1` 这两行删掉之后
+-- 查询结果一个字都不变，全部测试照样绿 —— 而 CountProducts 的注释里写着
+-- 「条件必须与 ListProducts 逐字一致」，那句话原本没有任何东西在守。
+--
+-- 同理，status 字段在响应里带不带 omitempty 也要靠反例才看得出来：
+-- 在架商品的 status 恒为 1，omitempty 永远不触发。
+--
+-- 件数刻意不进 shop-a 的那 3 件里：它们必须**不**出现在列表和 total 里，
+-- 所以 wantA 仍然是 3，而库里 shop-a 实际有 5 行。
+-- internal/handler 的 TestDraftAndDeletedProductsAreInvisible 拿这个差值做断言。
+INSERT INTO products (merchant_id, category_id, title, min_price_cents,
+                      max_price_cents, total_stock, sales_count, status,
+                      published_at, deleted_at)
+SELECT c.merchant_id, c.id, v.title, 1990, 4990, 100, 0, v.status, now(), v.deleted_at
+  FROM merchants m
+  JOIN categories c ON c.merchant_id = m.id AND c.name = '默认分类'
+  CROSS JOIN (VALUES
+                ('shop-a 的草稿商品', 0::smallint, NULL::timestamptz),
+                ('shop-a 的已删商品', 1::smallint, now())
+             ) AS v(title, status, deleted_at)
+ WHERE m.code = 'shop-a'
+   AND NOT EXISTS (SELECT 1 FROM products p
+                    WHERE p.merchant_id = c.merchant_id AND p.title = v.title);

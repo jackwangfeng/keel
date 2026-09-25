@@ -177,16 +177,6 @@ func TestPagingWalksThroughTheWholeList(t *testing.T) {
 	}
 }
 
-// 未知的 Host 拿不到任何商品：解析不到商家就是 404，不会回落到某一家店。
-func TestUnknownHostGetsNoProducts(t *testing.T) {
-	for _, host := range []string{"nobody." + baseDomain, "shop-a.attacker.example.org"} {
-		w := do(t, host, "/api/v1/products")
-		if w.Code != http.StatusNotFound {
-			t.Fatalf("Host %q 期望 404，实得 %d：%s", host, w.Code, w.Body.String())
-		}
-	}
-}
-
 // healthz 在租户中间件之外：它回答「进程还活着吗」，不该因为 Host 没配对而变红。
 func TestHealthzIgnoresHost(t *testing.T) {
 	w := do(t, "whatever.invalid", "/healthz")
@@ -223,6 +213,78 @@ func TestResponseShapeMatchesContract(t *testing.T) {
 	for _, k := range []string{"id", "title", "min_price_cents", "status"} {
 		if _, ok := items[0][k]; !ok {
 			t.Fatalf("items[0] 缺少契约里的必填字段 %q：%s", k, raw["items"])
+		}
+	}
+}
+
+// 草稿（status = 0）与软删（deleted_at 非空）的商品既不出现在列表里，
+// 也不计进 total。
+//
+// 这条测试守的是 ListProducts 与 CountProducts 里那两个谓词。没有它 ——
+// 更准确地说，没有种子里那两件反例商品 —— 把 `AND status = 1` 从 CountProducts
+// 里删掉，全部测试照样绿：在架商品的 status 恒为 1，那个谓词永远筛不掉任何东西，
+// 于是它可被删除而无症状。`db/queries/products.sql` 的注释写着「条件必须与
+// ListProducts 逐字一致」，这条测试是那句话唯一的执行者。
+func TestDraftAndDeletedProductsAreInvisible(t *testing.T) {
+	visible, all := rawProductCount(t, "shop-a")
+
+	// 阳性对照，必须排在断言前面：库里没有不可见的行时，下面两条断言在
+	// 「谓词被删掉」和「谓词还在」两种情况下的结果一模一样。
+	if all <= visible {
+		t.Fatalf("shop-a 在库里有 %d 行，其中 %d 行可见 —— 种子里没有草稿或软删的"+
+			"商品，这条测试证明不了任何事。db/seed/dev.sql 的反例商品还在吗？",
+			all, visible)
+	}
+	if visible != wantA {
+		t.Fatalf("shop-a 可见商品 %d 件，期望 %d 件", visible, wantA)
+	}
+
+	_, body := get(t, "shop-a."+baseDomain, "/api/v1/products?page_size=100")
+	if len(body.Items) != visible {
+		t.Fatalf("接口返回 %d 件，库里可见的只有 %d 件（全部 %d 行）—— "+
+			"草稿或软删的商品漏出来了", len(body.Items), visible, all)
+	}
+	if body.Total != int64(visible) {
+		t.Fatalf("total=%d，库里可见的只有 %d 件（全部 %d 行）—— "+
+			"CountProducts 的过滤条件和 ListProducts 对不上了",
+			body.Total, visible, all)
+	}
+	for _, it := range body.Items {
+		if strings.Contains(it.Title, "草稿") || strings.Contains(it.Title, "已删") {
+			t.Fatalf("不该露面的商品出现在列表里：%q", it.Title)
+		}
+	}
+}
+
+// 解析不到商家时的 404 必须带 RFC 9457 的响应体。
+//
+// 契约里 /products 的响应集合只有 200 和 default（Problem）。一个
+// Content-Length: 0 的 404 不在这个集合里 —— 按契约生成的客户端会拿到一个
+// 解析不出来的响应，而 404 恰恰是它最需要读懂的那个（「这家店不存在」
+// 和「服务挂了」得分得开）。
+func TestUnknownHostGetsProblemJSON(t *testing.T) {
+	for _, host := range []string{"nobody." + baseDomain, "shop-a.attacker.example.org"} {
+		w := do(t, host, "/api/v1/products")
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("Host %q 期望 404，实得 %d：%s", host, w.Code, w.Body.String())
+		}
+		if ct := w.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/problem+json") {
+			t.Fatalf("Host %q 的 404 Content-Type 是 %q，契约要求 application/problem+json",
+				host, ct)
+		}
+		var p struct {
+			Type   string `json:"type"`
+			Title  string `json:"title"`
+			Status int    `json:"status"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &p); err != nil {
+			t.Fatalf("Host %q 的 404 响应体不是 Problem: %v（%q）",
+				host, err, w.Body.String())
+		}
+		// Problem 的 required 是 type / title / status，一个都不能缺。
+		if p.Type == "" || p.Title == "" || p.Status != http.StatusNotFound {
+			t.Fatalf("Host %q 的 Problem 不完整：type=%q title=%q status=%d",
+				host, p.Type, p.Title, p.Status)
 		}
 	}
 }

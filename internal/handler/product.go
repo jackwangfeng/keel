@@ -2,6 +2,12 @@
 //
 // 这里不准出现 SQL 和事务（CONTRIBUTING 的硬规矩一）。业务规则在 service，
 // 数据访问在 repository —— 包括分页的钳制：它是业务规则，不是解析细节。
+//
+// 响应体用 internal/api 里由契约生成的类型，不手写结构体。手写的那版能编译、
+// 能通过测试，却和契约之间只有人的注意力在维系：契约里把 min_price_cents 改个
+// 名字、把 status 从 required 里挪走，构建照样绿，直到线上客户端解析失败。
+// 用生成的类型之后，同一个改动会让 go build 当场失败 —— 那才是硬规矩二
+// 「OpenAPI 是唯一真相源」的字面意思。
 package handler
 
 import (
@@ -10,6 +16,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/keel/keel/internal/api"
+	"github.com/keel/keel/internal/problem"
 	"github.com/keel/keel/internal/service"
 )
 
@@ -19,68 +27,57 @@ func NewProductHandler(s *service.ProductService) *ProductHandler {
 	return &ProductHandler{svc: s}
 }
 
-// productSummary 是契约 ProductSummary 在响应里的形状。
+// listResponse 是契约里 `allOf: [PageMeta, {items}]` 的 Go 形状。
 //
-// 手写而不是直接 JSON 化 service 的类型：字段名（min_price_cents 而不是
-// MinPriceCents）和「哪些字段可以缺席」都是契约的规定，得有一个地方对着契约写。
-// 可选字段用指针 + omitempty，必填字段（id / title / min_price_cents / status）
-// 不带 omitempty —— 否则 status=0 的商品会让 status 整个消失，而 0 在契约里
-// 是「草稿」这个有意义的取值。
-type productSummary struct {
-	ID            int64   `json:"id"`
-	Title         string  `json:"title"`
-	Subtitle      *string `json:"subtitle,omitempty"`
-	MinPriceCents int64   `json:"min_price_cents"`
-	MaxPriceCents int64   `json:"max_price_cents"`
-	SalesCount    int32   `json:"sales_count"`
-	Status        int16   `json:"status"`
-}
-
-// listResponse 是契约里 PageMeta + items 的那个 allOf。
+// 内嵌 api.PageMeta 而不是重打一遍 page / page_size / total 三个 tag：
+// 内嵌会把它们平铺进同一层 JSON，正是 allOf 的意思，而且它们的名字与类型
+// 由生成代码说了算。
 type listResponse struct {
-	Page     int              `json:"page"`
-	PageSize int              `json:"page_size"`
-	Total    int64            `json:"total"`
-	Items    []productSummary `json:"items"`
+	api.PageMeta
+	Items []api.ProductSummary `json:"items"`
 }
 
 // List 实现 GET /api/v1/products。
 func (h *ProductHandler) List(c *gin.Context) {
 	// 解析失败就当没传：page / page_size 是可选参数，`?page=abc` 与不带 page
 	// 对客户端是同一件事。越界值不在这里判 —— 钳制规则在 service。
+	//
+	// 契约里这个接口还有 category_id / sort / min_price_cents / max_price_cents
+	// 四个可选参数，眼下**没有实现**，传了会被忽略。它们不在这里读，也不该在这里
+	// 回 400 —— 对一份冻结的契约把 optional 参数判成错误是违约。
+	// contract_test.go 里那份 notYetImplemented 清单钉着这笔账：契约新增参数、
+	// 或者某个参数实现了却忘了从清单里划掉，那条测试都会红。
 	page, _ := strconv.Atoi(c.Query("page"))
 	pageSize, _ := strconv.Atoi(c.Query("page_size"))
 
 	list, err := h.svc.List(c.Request.Context(), page, pageSize)
 	if err != nil {
 		_ = c.Error(err)
-		problem(c, http.StatusInternalServerError,
-			"https://keel.dev/problems/internal", "服务内部错误")
+		problem.Write(c, http.StatusInternalServerError,
+			problem.TypeInternal, "服务内部错误")
 		return
 	}
 
-	items := make([]productSummary, 0, len(list.Items))
+	items := make([]api.ProductSummary, 0, len(list.Items))
 	for _, it := range list.Items {
-		items = append(items, productSummary{
-			ID:            it.ID,
+		max := api.Money(it.MaxPriceCents)
+		sales := int(it.SalesCount)
+		items = append(items, api.ProductSummary{
+			Id:            it.ID,
 			Title:         it.Title,
 			Subtitle:      it.Subtitle,
-			MinPriceCents: it.MinPriceCents,
-			MaxPriceCents: it.MaxPriceCents,
-			SalesCount:    it.SalesCount,
-			Status:        it.Status,
+			MinPriceCents: api.Money(it.MinPriceCents),
+			MaxPriceCents: &max,
+			SalesCount:    &sales,
+			Status:        api.ProductSummaryStatus(it.Status),
 		})
 	}
 	c.JSON(http.StatusOK, listResponse{
-		Page: list.Page, PageSize: list.PageSize, Total: list.Total, Items: items,
+		PageMeta: api.PageMeta{
+			Page:     list.Page,
+			PageSize: list.PageSize,
+			Total:    int(list.Total),
+		},
+		Items: items,
 	})
-}
-
-// problem 按 RFC 9457 回错误，不使用 {code,message,data} 信封。
-//
-// 刻意不把 err 的内容放进响应：这个接口是匿名可访问的，而数据库错误里
-// 常常带着表名、列名和参数值。
-func problem(c *gin.Context, status int, kind, title string) {
-	c.Header("Content-Type", "application/problem+json")
-	c.JSON(status, gin.H{"type": kind, "title": title, "status": status})
 }

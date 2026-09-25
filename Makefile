@@ -20,17 +20,22 @@ GORUN := go -C $(TOOLS) run
 # TS 侧生成器没有 Go 那样的模块锁，只能在这里钉死版本号
 OPENAPI_TS := openapi-typescript@7.13.0
 
-# 输出位置由后续任务按实际骨架覆盖，例如：
-#   make generate GO_OUT=internal/api/openapi.gen.go TS_OUT=web/src/api/schema.d.ts
+# 产物落在源码树里，并且**入库**。
 #
-# 默认落在 .codegen/ 而不是 build/：Go 工具链忽略 . 和 _ 开头的目录，所以这里的
-# openapi.gen.go 不会被当成主模块的包。放在 build/ 时它会被 `go mod tidy` 扫到，
-# 把 oapi-codegen/runtime 写进主模块的 go.mod —— 于是 go.mod 的内容取决于
-# 「你跑没跑过 make generate」，跑过的人 tidy 出来多一条依赖，没跑过的又少一条。
-GO_OUT     ?= $(ROOT)/.codegen/openapi.gen.go
+# 一开始它们默认落在 .codegen/（被 gitignore），理由是「放进主模块会把
+# oapi-codegen/runtime 写进 go.mod，于是 go.mod 的内容取决于你跑没跑过
+# make generate」。那个顾虑只在产物是临时的时候成立：产物入库之后，go.mod 里
+# 那条依赖和产物本身一样是版本库的一部分，谁 clone 下来都一模一样。
+#
+# 而不入库的代价要大得多：仓库里没有任何契约产物，前后端都没有编译期绑定，
+# 「契约是唯一真相源」就只剩一句口号 —— 契约里把 min_price_cents 改个名字，
+# 构建照样通过，直到线上客户端解析失败。入库之后 go build 会当场失败。
+#
+# 想生成到别处（比如临时对比两个生成器的输出）就覆盖这几个变量。
+GO_OUT     ?= $(ROOT)/internal/api/openapi.gen.go
 GO_PACKAGE ?= api
 GO_MODE    ?= types
-TS_OUT     ?= $(ROOT)/.codegen/schema.d.ts
+TS_OUT     ?= $(ROOT)/web/src/api/schema.d.ts
 
 # 迁移目录必须是绝对路径：GORUN 用的 `go -C $(TOOLS)` 让 goose 的工作目录是
 # tools/，相对路径会从那里解析。

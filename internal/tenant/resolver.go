@@ -15,6 +15,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/keel/keel/internal/problem"
 )
 
 // DefaultCacheTTL 是解析结果的默认缓存时长，也就是一次商家变更最久多久生效。
@@ -346,7 +348,7 @@ func (r *Resolver) Middleware() gin.HandlerFunc {
 			r.cfg.Log.WarnContext(c.Request.Context(), "租户解析失败，返回 404",
 				"host", host, "path", c.Request.URL.Path,
 				"default_merchant", r.cfg.DefaultCode, "base_domain", r.baseDomain)
-			c.AbortWithStatus(http.StatusNotFound)
+			problem.Write(c, http.StatusNotFound, problem.TypeNotFound, "找不到这家店")
 			return
 		default:
 			// 查库失败是服务端故障。把它也报成 404 的话，一次数据库抖动会表现为
@@ -354,7 +356,7 @@ func (r *Resolver) Middleware() gin.HandlerFunc {
 			r.cfg.Log.ErrorContext(c.Request.Context(), "租户解析查库失败",
 				"host", host, "path", c.Request.URL.Path, "err", err)
 			_ = c.Error(err)
-			c.AbortWithStatus(http.StatusInternalServerError)
+			problem.Write(c, http.StatusInternalServerError, problem.TypeInternal, "服务内部错误")
 			return
 		}
 		c.Request = c.Request.WithContext(NewContext(c.Request.Context(), id))

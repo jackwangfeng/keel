@@ -118,3 +118,28 @@ func do(t *testing.T, host, path string) *httptest.ResponseRecorder {
 	testEngine.ServeHTTP(w, req)
 	return w
 }
+
+// rawProductCount 用管理员连接（绕过 RLS）直接数库里的行：
+// 该店可见的（status = 1 且未软删）与全部的。
+//
+// 它是「草稿与软删商品不可见」那条测试的阳性对照：库里没有不可见的行时，
+// 那条测试什么也证明不了，而这个差值会当场说出来。
+func rawProductCount(t *testing.T, code string) (visible, all int) {
+	t.Helper()
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, db.AdminDSN())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+
+	if err := conn.QueryRow(ctx, `
+		SELECT count(*) FILTER (WHERE p.status = 1 AND p.deleted_at IS NULL),
+		       count(*)
+		  FROM products p
+		  JOIN merchants m ON m.id = p.merchant_id
+		 WHERE m.code = $1`, code).Scan(&visible, &all); err != nil {
+		t.Fatal(err)
+	}
+	return visible, all
+}
