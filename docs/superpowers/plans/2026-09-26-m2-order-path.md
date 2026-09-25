@@ -103,7 +103,8 @@ debian-slim 底座。已落地，镜像 26.7 MB → 118 MB。
 | 1.5 | 买家身份：`users` / `user_identities` + `/auth/login` + bearer 中间件 | 1 | |
 | 2 | 屏障从 `examples/` 产品化进 `internal/repository` | 3 | |
 | 4 | `POST /orders/preview`（无副作用试算） | 1.5 | |
-| 5 | `POST /orders`：SAGA 正向三分支（库存 / 券 / 建单） | 1.5,2,4 | 汇合点 |
+| 5 | `POST /orders`：SAGA 正向**两**分支（库存 / 建单） | 1.5,2,4 | 汇合点 |
+| 5.5 | 券：`coupon_templates` / `user_coupons` / `coupon_scopes` + SAGA 第三分支 | 5 | 可推到 M2 收口 |
 | 6 | 超时未支付的补偿定时任务 | 5 | |
 | 7 | 支付回调 + 二阶段消息 | 5 | |
 
@@ -119,6 +120,34 @@ debian-slim 底座。已落地，镜像 26.7 MB → 118 MB。
 2. 冷库 `make test-db` 全绿、`./scripts/check-all.sh` 全绿、端到端全绿。
 3. 新表必须在 `db/tenancy.json` 里有类别；不在清单里的按 `tenant` 类查。
 4. 发现任务书自相矛盾或与仓库既有决定冲突，**先说出来再动手**。
+
+## 券为什么从任务 5 里拆出来
+
+架构 §5 的正向阶段画的是三分支：库存、券、建单。而券的三张表
+（`coupon_templates` / `user_coupons` / `coupon_scopes`）一张都还没建——
+和 `users` 当初的情况一样，它是任务 5 的隐藏前置。
+
+判据是 M2 的产出标志：**能下单能支付**。一笔没有用券的订单是完整的订单，
+所以券不在这条判据里。而 SAGA 本身要验的东西（正向、补偿、屏障幂等、
+崩溃重放）两个分支就已经全都走到了——第三个分支是重复同一种结构，不是
+多验一件事。
+
+拆出来的代价要说清楚：任务 5 落地时 `docs/电商系统-总体架构.md` §5 的流程图
+与实现不一致（图上有券，代码里没有）。**这不许靠「以后会补」糊过去**——
+任务 5 必须在那张图旁边注明当前实现到哪一步，理由与本节一致。
+README 的「还没在盒子里的」那一节是同一套做法。
+
+## 任务 5 的一条硬约束（来自任务 2）
+
+`WithSagaBranch` 不解析 gid，租户从 ctx 取（与 `WithTenant` 同规矩）。于是
+「ctx 里的租户」与「gid 里的租户」一致性，由唯一的产生者
+`dtm.TenantContextFromGID` 按构造保证，repository 那一层**没有复核**。
+
+让 repository import `internal/dtm` 会把 cgo 拖进数据访问层，还要让它认得 gid
+的文法（多一份会漂移的真相），所以刻意不做。
+
+**因此任务 5 只许经 `dtm.TenantContextFromGID` 造那个 ctx，不许手搓。**
+手搓一个带着别家租户的 ctx，屏障与业务都会老老实实跑在那个错租户下。
 
 ## 已知会在 M2 路上撞到的
 
