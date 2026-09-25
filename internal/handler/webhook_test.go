@@ -1,15 +1,19 @@
 package handler_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -427,4 +431,38 @@ func TestPaymentWebhookRejectsChannelsOutsideTheContract(t *testing.T) {
 		t.Fatalf("alipay 的回调没把订单推到 20（当前 %d）", got)
 	}
 	t.Logf("balance（有密钥）/ unionpay / 大小写不符都被拒，而 alipay 走得通")
+}
+
+// 「不认这笔账」的四条出路必须真的留下一条 Error 日志。
+//
+// 支付回调把「钱到了货没扣」从一条不变量降级成了运维约定：支付单留在库里 +
+// 一条日志给人看。webhook.go 与 service/payment.go 的注释都是照着这条约定写的
+// （「钱可能是真的到账了，所以这条要响」）。而在挂上 app.logHandlerErrors 之前，
+// 那半条约定是假的 —— 全仓库 12 处 `_ = c.Error(err)` 没有任何人 drain，
+// gin 的 c.Error 只是往 c.Errors 里 append。
+//
+// 验收用一次真撞车量出了代价：44 笔「支付单已入账 / 订单被关到 90 / 库存已回补」，
+// 合计约 ¥2205，日志里一条都没有。
+//
+// 所以这条测试断言的不是「代码里有没有写 c.Error」，而是**日志里真的出现了一条
+// Error 记录** —— 前者在黑洞存在时也是真的。
+func TestUnsettleableWebhookLeavesAnErrorInTheLog(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelError})))
+	defer slog.SetDefault(prev)
+
+	// 签名完全正确，只是订单号不存在 —— 这正是「钱可能真的到账了」那一支。
+	body := payload("no-such-order-"+strconv.FormatInt(time.Now().UnixNano(), 10),
+		"txn-"+strconv.FormatInt(time.Now().UnixNano(), 10), 1)
+	w := notifyPayment(t, "shop-a."+baseDomain, "shop-a", "wechat", body)
+
+	// 回 200 是对的：这种情况渠道重推也没用，让它停下来。
+	if w.Code != http.StatusOK {
+		t.Fatalf("状态码是 %d，期望 200", w.Code)
+	}
+	if got := buf.String(); !strings.Contains(got, "level=ERROR") {
+		t.Fatalf("一笔认不下来的支付没有在日志里留下任何 Error 记录——"+
+			"「钱可能是真的到账了，所以这条要响」这句注释就是假的。实际日志：%q", got)
+	}
 }

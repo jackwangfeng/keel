@@ -118,6 +118,10 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	r := gin.New()
 	r.Use(gin.Recovery())
 
+	// 必须在所有业务中间件之外：它靠 c.Next() 返回之后 drain c.Errors，
+	// 挂在里层会漏掉外层中间件（比如租户解析）记下的错误。
+	r.Use(logHandlerErrors())
+
 	// 没匹配上的路径与方法也要回契约里的 Problem。
 	//
 	// gin 默认回的是 text/plain 的 "404 page not found"，而契约里每个接口的响应

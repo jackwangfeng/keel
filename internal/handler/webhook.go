@@ -7,6 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/keel/keel/internal/problem"
 	"github.com/keel/keel/internal/service"
 )
 
@@ -21,13 +22,13 @@ import (
 // 入账，请重推」这句话**在契约里说不出来**。
 //
 // 本轮的处置：除验签失败外一律 200，每一种不正常都留一条 Error 级日志。
-// 这是在现有契约下唯一诚实的做法 —— 编一个契约里没有的状态码，
+// 这是唯一诚实的做法 —— 编一个契约里没有的状态码，
 // 按契约生成的渠道侧客户端解析不了；而把失败伪装成成功却不告警，
 // 会让一笔真实到账无声无息地消失。
 //
-// **这是一处契约缺口，已在报告里提出来，由契约的 owner 决定要不要补。**
-// 补的形状应当是给它一个 `default: { $ref: Problem }`（同文件里别的接口都有），
-// 那时这里的 500 分支才写得出来。契约文件与两个生成产物本轮一个字都没有动。
+// 这处契约缺口已经补上了（ff6d0e1 给两条 webhook 加了
+// `default: { $ref: Problem }`），所以下面的 500 分支回的是 Problem 体，
+// 不是一个 Content-Length: 0 的裸状态码。
 //
 // # 它为什么挂在 v1 组里（带租户中间件、不带 bearer）
 //
@@ -99,18 +100,24 @@ func (h *PaymentWebhookHandler) Notify(c *gin.Context) {
 	default:
 		// 剩下的是**基础设施故障**（连不上库、事务提交失败）。
 		//
-		// 这一支回 500，**而契约里没有 500**。这是本轮唯一一处刻意的越约，
-		// 理由是两害相权：
+		// 这一支回 500。契约现在**有**这条（`default: { $ref: Problem }`，
+		// 见 ff6d0e1）—— 当初写这段注释时它还没有，那是契约缺一句话，不是实现
+		// 越界。理由是两害相权：
 		//   · 回 200 的话渠道不会再推，而我们确实没入账 —— 一笔真实到账
 		//     就这么没了，只在日志里留个影；
 		//   · 回 500 是每个渠道都懂的「稍后重推」，而重推正是这里该发生的事
 		//     （下一分钟数据库可能就好了，幂等由 uk_payments_channel_txn 兜着，
 		//     重推不会重复入账）。
 		//
-		// 换句话说：契约表达不了这件事，而这件事真的会发生。补契约的形状
-		// （给这条接口加 default: Problem）写在文件头，不在本轮范围里。
+		// 换句话说：这件事真的会发生，所以契约必须说得出来。
+		//
+		// 响应体走 Problem，不是光秃秃的 c.Status —— 契约声明的是
+		// `application/problem+json`，回一个 Content-Length: 0 的裸 500，
+		// 按契约生成的客户端会在它最需要读懂的那类响应上解析失败。
+		// 这正是 NoRoute/NoMethod 当初不肯用 gin 默认 text/plain 404 的同一条理由。
 		_ = c.Error(err)
-		c.Status(http.StatusInternalServerError)
+		problem.Write(c, http.StatusInternalServerError, problem.TypeInternal,
+			"回调未能入账，请稍后重推")
 	}
 }
 
