@@ -1377,6 +1377,7 @@ paths:
                       items:
                         type: array
                         items: { $ref: '#/components/schemas/Order' }
+        default: { $ref: '#/components/responses/Problem' }
 
   /orders/{order_no}:
     get:
@@ -1391,6 +1392,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/OrderDetail' }
         '404': { $ref: '#/components/responses/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
 
   /orders/{order_no}/cancel:
     post:
@@ -1816,16 +1818,17 @@ paths:
         required: true
         content:
           application/json:
-            schema:
-              type: object
-              required: [channel]
-              properties:
-                channel:
-                  type: string
-                  enum: [wechat, alipay, balance]
+            schema: { $ref: '#/components/schemas/PaymentCreateRequest' }
       responses:
         '201':
-          description: 支付单已创建
+          description: |
+            **支付调起**已创建。
+
+            注意这里创建的不是支付单：支付单在渠道回调入账时才落库，
+            主键之外还要带上渠道流水号（`uk_payments_channel_txn` 是回调幂等的
+            唯一闸门，预落一行同号的支付单会让真回调撞上它、订单永远推不到已支付）。
+            本响应里的 `payment_no` 是**这次调起的凭据**，入账后以
+            `channel_txn_id` 的形式出现在支付单上，两者据此对账。
           headers:
             Idempotency-Replayed: { $ref: '#/components/headers/IdempotencyReplayed' }
           content:
@@ -2441,6 +2444,18 @@ components:
             `refund-quantity-exceeded` 打回——那是把校验规则藏在服务端错误里。
 
     # ---- 支付与退款 ----
+    PaymentCreateRequest:
+      type: object
+      required: [channel]
+      properties:
+        channel:
+          type: string
+          enum: [wechat, alipay, balance]
+          description: |
+            渠道。**沙箱与否不在这个枚举里** —— 「用哪个渠道付」和「这是不是
+            沙箱」是两件正交的事，挤进同一个字段之后真接渠道时还得把枚举改回去。
+            沙箱形态由服务端配置决定，并在响应的 `payload` 里自报。
+
     PaymentIntent:
       type: object
       required: [payment_no, channel, amount_cents]

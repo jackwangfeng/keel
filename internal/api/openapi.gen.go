@@ -204,6 +204,27 @@ func (e OrderStatus) Valid() bool {
 	}
 }
 
+// Defines values for PaymentCreateRequestChannel.
+const (
+	PaymentCreateRequestChannelAlipay  PaymentCreateRequestChannel = "alipay"
+	PaymentCreateRequestChannelBalance PaymentCreateRequestChannel = "balance"
+	PaymentCreateRequestChannelWechat  PaymentCreateRequestChannel = "wechat"
+)
+
+// Valid indicates whether the value is a known member of the PaymentCreateRequestChannel enum.
+func (e PaymentCreateRequestChannel) Valid() bool {
+	switch e {
+	case PaymentCreateRequestChannelAlipay:
+		return true
+	case PaymentCreateRequestChannelBalance:
+		return true
+	case PaymentCreateRequestChannelWechat:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for PaymentIntentChannel.
 const (
 	PaymentIntentChannelAlipay  PaymentIntentChannel = "alipay"
@@ -720,27 +741,6 @@ func (e PatchMeJSONBodyGender) Valid() bool {
 	}
 }
 
-// Defines values for PostOrdersOrderNoPaymentsJSONBodyChannel.
-const (
-	PostOrdersOrderNoPaymentsJSONBodyChannelAlipay  PostOrdersOrderNoPaymentsJSONBodyChannel = "alipay"
-	PostOrdersOrderNoPaymentsJSONBodyChannelBalance PostOrdersOrderNoPaymentsJSONBodyChannel = "balance"
-	PostOrdersOrderNoPaymentsJSONBodyChannelWechat  PostOrdersOrderNoPaymentsJSONBodyChannel = "wechat"
-)
-
-// Valid indicates whether the value is a known member of the PostOrdersOrderNoPaymentsJSONBodyChannel enum.
-func (e PostOrdersOrderNoPaymentsJSONBodyChannel) Valid() bool {
-	switch e {
-	case PostOrdersOrderNoPaymentsJSONBodyChannelAlipay:
-		return true
-	case PostOrdersOrderNoPaymentsJSONBodyChannelBalance:
-		return true
-	case PostOrdersOrderNoPaymentsJSONBodyChannelWechat:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for GetProductsParamsSort.
 const (
 	Default   GetProductsParamsSort = "default"
@@ -1247,6 +1247,19 @@ type PageMeta struct {
 	PageSize int `json:"page_size"`
 	Total    int `json:"total"`
 }
+
+// PaymentCreateRequest defines model for PaymentCreateRequest.
+type PaymentCreateRequest struct {
+	// Channel 渠道。**沙箱与否不在这个枚举里** —— 「用哪个渠道付」和「这是不是
+	// 沙箱」是两件正交的事，挤进同一个字段之后真接渠道时还得把枚举改回去。
+	// 沙箱形态由服务端配置决定，并在响应的 `payload` 里自报。
+	Channel PaymentCreateRequestChannel `json:"channel"`
+}
+
+// PaymentCreateRequestChannel 渠道。**沙箱与否不在这个枚举里** —— 「用哪个渠道付」和「这是不是
+// 沙箱」是两件正交的事，挤进同一个字段之后真接渠道时还得把枚举改回去。
+// 沙箱形态由服务端配置决定，并在响应的 `payload` 里自报。
+type PaymentCreateRequestChannel string
 
 // PaymentIntent defines model for PaymentIntent.
 type PaymentIntent struct {
@@ -2257,11 +2270,6 @@ type PostOrdersOrderNoConfirmParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
-// PostOrdersOrderNoPaymentsJSONBody defines parameters for PostOrdersOrderNoPayments.
-type PostOrdersOrderNoPaymentsJSONBody struct {
-	Channel PostOrdersOrderNoPaymentsJSONBodyChannel `json:"channel"`
-}
-
 // PostOrdersOrderNoPaymentsParams defines parameters for PostOrdersOrderNoPayments.
 type PostOrdersOrderNoPaymentsParams struct {
 	// IdempotencyKey 客户端生成的 UUID。幂等作用域为 `(接口 scope, user_id, key)`，
@@ -2280,9 +2288,6 @@ type PostOrdersOrderNoPaymentsParams struct {
 	//   确需重试的场景请换一个新 key
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
-
-// PostOrdersOrderNoPaymentsJSONBodyChannel defines parameters for PostOrdersOrderNoPayments.
-type PostOrdersOrderNoPaymentsJSONBodyChannel string
 
 // PostOrdersOrderNoRefundsParams defines parameters for PostOrdersOrderNoRefunds.
 type PostOrdersOrderNoRefundsParams struct {
@@ -2508,7 +2513,7 @@ type PostOrdersJSONRequestBody = OrderCreateRequest
 type PostOrdersPreviewJSONRequestBody = OrderCreateRequest
 
 // PostOrdersOrderNoPaymentsJSONRequestBody defines body for PostOrdersOrderNoPayments for application/json ContentType.
-type PostOrdersOrderNoPaymentsJSONRequestBody PostOrdersOrderNoPaymentsJSONBody
+type PostOrdersOrderNoPaymentsJSONRequestBody = PaymentCreateRequest
 
 // PostOrdersOrderNoRefundsJSONRequestBody defines body for PostOrdersOrderNoRefunds for application/json ContentType.
 type PostOrdersOrderNoRefundsJSONRequestBody = RefundCreateRequest

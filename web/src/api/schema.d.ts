@@ -2419,6 +2419,7 @@ export interface paths {
                         };
                     };
                 };
+                default: components["responses"]["Problem"];
             };
         };
         put?: never;
@@ -2538,6 +2539,7 @@ export interface paths {
                     };
                 };
                 404: components["responses"]["Problem"];
+                default: components["responses"]["Problem"];
             };
         };
         put?: never;
@@ -3370,14 +3372,19 @@ export interface paths {
             };
             requestBody: {
                 content: {
-                    "application/json": {
-                        /** @enum {string} */
-                        channel: "wechat" | "alipay" | "balance";
-                    };
+                    "application/json": components["schemas"]["PaymentCreateRequest"];
                 };
             };
             responses: {
-                /** @description 支付单已创建 */
+                /**
+                 * @description **支付调起**已创建。
+                 *
+                 *     注意这里创建的不是支付单：支付单在渠道回调入账时才落库，
+                 *     主键之外还要带上渠道流水号（`uk_payments_channel_txn` 是回调幂等的
+                 *     唯一闸门，预落一行同号的支付单会让真回调撞上它、订单永远推不到已支付）。
+                 *     本响应里的 `payment_no` 是**这次调起的凭据**，入账后以
+                 *     `channel_txn_id` 的形式出现在支付单上，两者据此对账。
+                 */
                 201: {
                     headers: {
                         "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
@@ -3920,6 +3927,15 @@ export interface components {
              *     `refund-quantity-exceeded` 打回——那是把校验规则藏在服务端错误里。
              */
             refunding_qty?: number;
+        };
+        PaymentCreateRequest: {
+            /**
+             * @description 渠道。**沙箱与否不在这个枚举里** —— 「用哪个渠道付」和「这是不是
+             *     沙箱」是两件正交的事，挤进同一个字段之后真接渠道时还得把枚举改回去。
+             *     沙箱形态由服务端配置决定，并在响应的 `payload` 里自报。
+             * @enum {string}
+             */
+            channel: "wechat" | "alipay" | "balance";
         };
         PaymentIntent: {
             payment_no: string;
