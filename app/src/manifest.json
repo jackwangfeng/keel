@@ -1,0 +1,20 @@
+{
+  "name": "Keel 商城",
+  "appid": "__UNI__KEEL01",
+  "description": "Keel 买家端",
+  "versionName": "0.1.0",
+  "versionCode": "1",
+  "uni-app-x": {},
+  "app": {
+    "distribute": {
+      "android": {
+        "minSdkVersion": 21
+      }
+    }
+  },
+  "h5": {
+    "router": {
+      "base": "./"
+    }
+  }
+}

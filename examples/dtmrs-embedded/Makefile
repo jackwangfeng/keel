@@ -8,7 +8,7 @@ SHELL := /usr/bin/env bash
 .PHONY: help deps build run-saga run-topology race clean verify
 
 help:
-	@echo "make deps          取回 dtmrs 并构建 C ABI 动态库（需要 Rust 1.82+）"
+	@echo "make deps          取回 dtmrs 并构建 C ABI 动态库（需要 Rust 1.88+，调 ../../scripts/fetch-dtmrs.sh）"
 	@echo "make build         编译两个示例程序到 bin/"
 	@echo "make run-saga      SAGA 提交 / 逆序补偿 / 拉取式分支 / 提交期校验"
 	@echo "make run-topology  同一段编排跑 local 与 remote 两种形态"
@@ -21,8 +21,13 @@ help:
 lib/libdtmrs.so:
 	@$(MAKE) deps
 
+# 调仓库根目录那一份，而不是自己留一份。
+#
+# M2 把 dtmrs 接进了主模块，于是主模块和这个例子都要同一个 .so。两份脚本意味着
+# 两个 REF，它们会在某次升级里错开，而症状是「例子绿、服务红」，报错停在 C ABI
+# 的某个符号上，不指向真因。版本钉子只有 scripts/fetch-dtmrs.sh 那一处。
 deps:
-	./scripts/fetch-dtmrs.sh
+	../../scripts/fetch-dtmrs.sh "$(CURDIR)"
 
 build: lib/libdtmrs.so
 	go build -o bin/saga ./cmd/saga

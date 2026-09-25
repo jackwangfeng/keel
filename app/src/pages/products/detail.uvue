@@ -1,0 +1,150 @@
+<template>
+  <view class="page">
+    <text v-if="loading" class="muted pad">加载中…</text>
+
+    <!-- 后端还没接上这条接口时，说的是实话，不是「商品不存在」。
+         把 404 一律翻译成「没有这件商品」会让人去查种子数据，而真因是路由没挂。 -->
+    <view v-if="notImplemented" class="card">
+      <text class="title">GET /products/&#123;product_id&#125; 后端尚未接上</text>
+      <text class="muted">
+        这条接口打过去是 {{ error }}。页面是按契约写好的，接口一通就能用；
+        在那之前用下面的降级输入让下单链路仍然可走。
+      </text>
+    </view>
+    <text v-else-if="error != ''" class="err pad">{{ error }}</text>
+
+    <view v-if="detail != null" class="card">
+      <text class="title">{{ detail!.title }}</text>
+      <text v-if="detail!.subtitle != ''" class="muted">{{ detail!.subtitle }}</text>
+      <text class="price">{{ detail!.priceText }}</text>
+      <text v-if="detail!.offShelf" class="err">已下架</text>
+      <text v-if="detail!.description != ''" class="desc">{{ detail!.description }}</text>
+    </view>
+
+    <view v-if="detail != null" class="card">
+      <text class="title">规格</text>
+      <view v-for="sku in detail!.skus" :key="sku.id" class="row sku" @click="pick(sku.id)">
+        <text :class="sku.id == skuId ? 'sku-on' : 'sku-off'">{{ sku.label }}</text>
+        <view class="spacer"></view>
+        <text class="price">{{ sku.priceText }}</text>
+        <text class="muted">库存 {{ sku.availableQty }}</text>
+      </view>
+    </view>
+
+    <!-- 降级形态：详情接口没通时，SKU 列表拿不到，只能让用户自己填 sku_id。
+         这很难看，但它诚实 —— 比假装有一个规格选择器好。 -->
+    <view v-if="notImplemented" class="card">
+      <text class="title">选规格（降级）</text>
+      <text class="muted">详情接口没通，拿不到 SKU 列表。先手填 sku_id：</text>
+      <input class="input" type="number" v-model="skuIdText" placeholder="sku_id" />
+    </view>
+
+    <button class="btn" @click="buy">立即下单</button>
+    <text v-if="hint != ''" class="err pad">{{ hint }}</text>
+  </view>
+</template>
+
+<script>
+import { getProduct, ApiFailure } from '@/api/client.uts'
+import { productDetailView, ProductDetailView } from '@/api/view.uts'
+
+export default {
+  data() {
+    return {
+      productId: 0,
+      detail: null as ProductDetailView | null,
+      skuId: 0,
+      skuIdText: '',
+      loading: false,
+      error: '',
+      hint: '',
+      notImplemented: false,
+    }
+  },
+  onLoad(options: OnLoadOptions) {
+    const raw = options['id']
+    this.productId = raw != null ? parseInt('' + raw) : 0
+    this.load()
+  },
+  methods: {
+    load() {
+      if (this.productId <= 0) {
+        this.error = '没有 product_id'
+        return
+      }
+      this.loading = true
+      getProduct(
+        this.productId,
+        (d) => {
+          const view = productDetailView(d)
+          this.detail = view
+          if (view.skus.length > 0) {
+            this.skuId = view.skus[0].id
+          }
+          this.loading = false
+        },
+        (f: ApiFailure) => {
+          this.loading = false
+          this.notImplemented = f.notImplemented
+          this.error = f.message
+        }
+      )
+    },
+    pick(id: number) {
+      this.skuId = id
+    },
+    buy() {
+      let sku = this.skuId
+      if (sku <= 0 && this.skuIdText != '') {
+        sku = parseInt(this.skuIdText)
+      }
+      if (isNaN(sku) || sku <= 0) {
+        this.hint = '先选一个规格（或在降级输入框里填 sku_id）'
+        return
+      }
+      this.hint = ''
+      uni.navigateTo({ url: '/pages/order/create?sku_id=' + sku.toString() })
+    },
+  },
+}
+</script>
+
+<style>
+.pad {
+  padding: 12px;
+}
+.title {
+  font-size: 15px;
+  font-weight: bold;
+}
+.desc {
+  margin-top: 8px;
+  font-size: 13px;
+  color: #444444;
+}
+.sku {
+  margin-top: 8px;
+}
+.sku-on {
+  color: #1677ff;
+  font-weight: bold;
+  font-size: 14px;
+}
+.sku-off {
+  color: #333333;
+  font-size: 14px;
+}
+.spacer {
+  flex: 1;
+}
+.input {
+  height: 36px;
+  margin-top: 8px;
+  padding-left: 8px;
+  border-width: 1px;
+  border-style: solid;
+  border-color: #dddddd;
+  border-radius: 4px;
+  font-size: 14px;
+}
+</style>

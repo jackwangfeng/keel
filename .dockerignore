@@ -1,0 +1,31 @@
+# 构建上下文里不需要的东西。这不只是为了快：上下文里每变一个字节，
+# `COPY . .` 那一层的缓存就作废，于是改一份 markdown 也要重编一次。
+.git
+.superpowers
+node_modules
+web/node_modules
+
+# 本地构建产物（Rust / dtmrs 那边的，以及 Go 的测试二进制）。
+#
+# **要写 `**/target` 而不是 `target`。** docker 的忽略规则是相对上下文根匹配的，
+# 光写 target 只挡得住 /target —— 而真正大的那个是
+# examples/dtmrs-embedded/.dtmrs-src/target（cargo 的构建目录）。
+# 实测的代价：上下文传输 953 MB，每一次 docker build 都要传一遍，
+# 而里面没有一个字节会进镜像。
+**/target
+**/.dtmrs-src
+*.so
+*.a
+*.dylib
+*.test
+
+# 宿主机上 scripts/fetch-dtmrs.sh 的产物（.so、头文件、以及那棵 dtmrs 源码树）。
+# 整个目录挡在上下文之外，而不是只挡 *.so：镜像里这个目录只能来自 Dockerfile
+# 的 dtmrs 阶段。放它进来的话，宿主机上一份旧的 / 平台不对的 .so 会跟着进构建，
+# 而症状要到容器起来那一刻才出现。
+third_party
+
+# 本地卷与私密文件
+data
+.env
+.env.local

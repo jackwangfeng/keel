@@ -1,0 +1,320 @@
+# 把仓库里已有的每一道闸门接到 PR 上。
+#
+# 这些闸门本来就都在：scripts/check-all.sh（六个文档/契约校验 + 契约产物漂移
+# 比对 + schema-check）、make test-db、docker compose + scripts/smoke.sh +
+# make sdk-smoke。这个文件刻意**不重新实现**其中任何一条，只调用它们。
+#
+# 理由是「本地绿、CI 红」这类事故的排查成本：闸门一旦有两份实现，每次不一致
+# 都要先花时间分辨是代码错了还是两份实现错开了。把判据留在仓库里那一份，
+# 贡献者在本地跑的和 CI 跑的就是同一段代码，对不上的时候只有一个嫌疑人。
+#
+# ## 为什么分成四个 job
+#
+# 四者的前置条件不相交：gates 只要 Go 工具链 + Node，go 要一个 PostgreSQL，
+# e2e 要 Docker，client 要 app/ 那棵 527 个包的 npm 依赖树（含一个 16MB 的
+# 原生 UTS 编译器）。串成一个 job 的话，最慢的那段（compose 建镜像，分钟级）会挡住
+# 最快的那段（文档校验，本机实测 2.4 秒），而 PR 上最常红的恰恰是最快那段。
+#
+# 代价是 Go 模块要各下一遍。可以接受：真正贵的是 docker build，而它只在 e2e 里。
+#
+# ## 没有覆盖到的（说出来，别让读者以为都盖住了）
+#
+#   - 多商家形态（compose.multi.yaml + KEEL_SMOKE_HOST）。e2e 只跑默认的单商家
+#     形态。叠加层与它自己的数据卷目前只有人手动验证过。
+#   - -race。make test-db 是 `go test -count=1 -p 1 ./...`，没有 -race；
+#     要加得先决定它属于 Makefile 还是属于这里。
+#   - examples/dtmrs-embedded 在自己的 workflow 里（example-dtmrs.yml）。
+#     它跑的是那个例子自己的五项验证（TCC、拉取式分支、崩溃恢复…），
+#     和服务端要的东西不一样，所以没有并进来。
+#   - 客户端（app/）的**原生 App 产物**。client 这个 job 只到「UTS 编译成 Kotlin」
+#     为止 —— 从 Kotlin 到 apk 要 HBuilderX 或 DCloud 云打包，命令行做不到。
+#     详见 app/README.md，那里写了实测到哪一步、卡在哪。
+#   - 客户端跑起来之后的行为。client 只编译，不启动浏览器、不打真后端。
+#     H5 形态对着真后端跑通过一次（记录在 app/README.md），但那是人手动跑的。
+#
+# ## M2 起 Rust 进了关键路径
+#
+# 主模块经 cgo 嵌入 dtmrs（internal/dtm），所以 `go build ./...` 需要
+# libdtmrs.so。go 与 e2e 两个 job 都要它，gates 不要（它只跑文档校验与契约产物
+# 比对，一行主模块代码都不编）。
+#
+# **「ubuntu-latest 自带 rustup 与 stable 工具链」这条至今没有在真 runner 上
+# 验证过。** 上一轮给 example-dtmrs.yml 写这条时就明确标注了，这一轮仍然没有 ——
+# 本机验证不了 runner 镜像里装了什么。区别是代价变了：那个 workflow 是路径触发的，
+# 这个挡着每一个 PR。所以这里没有沿用「不装 action」的做法去赌，而是
+# **显式检查并在缺失时当场失败**，让报错就是真因（见下面「Rust 工具链」那一步）。
+# 真到了那一天，修法是在这个文件里加一行 dtolnay/rust-toolchain@stable。
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # 手动触发。没有它，一个还没开 PR 的分支没有任何办法看见 CI 的判断，
+  # 而「先跑一遍再开 PR」是这个仓库的习惯。
+  workflow_dispatch:
+
+# 只读。这些 job 一个字都不往仓库里写，默认的可写令牌是白给的风险面。
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # 只在 PR 上取消。往 PR 连推三次，没必要让三个 e2e 同时建镜像——有意义的
+  # 判断只有最后一个 commit 那次。main 上不取消：那里每个 commit 的结论
+  # 都要留痕，被取消的那次事后说不清是绿还是红。
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 文档、契约、以及入库的生成产物有没有漂移
+  # ---------------------------------------------------------------------------
+  gates:
+    name: 文档与契约闸门
+    runs-on: ubuntu-latest
+    # 这一段本机 2.4 秒。给 15 分钟是留给 npx 首次下载与 Go 模块下载的，
+    # 不是留给「卡住也没关系」——真卡住时，六小时的默认上限会把 runner 额度
+    # 烧光，而失败信息还是那句超时。
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          # 版本从 go.mod 读，不写字面量。下限 1.26 不是随手挑的：tools/ 里钉住的
+          # sqlc 与 goose 都声明 go 1.26，下限由它们传染而来（docker/Dockerfile
+          # 与 CONTRIBUTING 都记了这件事）。写死一个数字，将来 go.mod 提上去而这里
+          # 忘了跟，报出来的会是 go mod download 的一句和真因无关的错。
+          go-version-file: go.mod
+          # 两个模块各有自己的 go.sum。只给根那份的话，tools/ 的依赖树（sqlc 拖进来
+          # 270+ 个模块）每次都要重下，而缓存键还会在 tools/go.sum 变了之后不失效。
+          cache-dependency-path: |
+            go.sum
+            tools/go.sum
+
+      - uses: actions/setup-node@v4
+        with:
+          # check-all.sh 的漂移比对要 npx openapi-typescript，schema-check 要 npx tsc。
+          # 没有 Node 时那两步会失败，而那是**诚实的失败**（契约产物确实没被验证过），
+          # 所以这里必须真的把 Node 装上，不能改成「没有就跳过」。
+          # 下限 22.18（Node 自带类型剥离），CONTRIBUTING 记的已验证版本是 24.10.0。
+          node-version: '24'
+
+      # 先打印版本再跑闸门：contract-check 红的时候，第一个要问的问题就是
+      # 「两边的生成器是不是同一个版本」，答案应该已经在日志上面几行。
+      - name: 钉住的工具版本
+        run: make tools-versions
+
+      # 六个 python 校验 + 契约产物漂移比对 + schema-check，一条命令。
+      # 漂移比对是生成到临时目录再 diff，对工作区只读——CI 上不会出现
+      # 「检查跑完工作区被改了」这种要额外一步 git diff --exit-code 去收尾的事。
+      - name: 全部闸门
+        run: ./scripts/check-all.sh
+
+  # ---------------------------------------------------------------------------
+  # Go 侧：编译、vet、以及碰数据库的测试
+  # ---------------------------------------------------------------------------
+  go:
+    name: Go 构建与测试
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        # 和 compose.yaml 同一个镜像，理由完整写在那里：M3 的第一条迁移开头是
+        # `CREATE EXTENSION IF NOT EXISTS vector`，官方 postgres:16 里实测报
+        # `extension "vector" is not available`，于是整条迁移链在那里断掉 ——
+        # 而错误停在 goose 上，不指向真因。
+        #
+        # 两处必须一起换。只换一处的后果是最难查的那种：本地 compose 绿、CI 红
+        # （或反过来），而两边跑的是同一份迁移，谁都不会先怀疑镜像。
+        image: pgvector/pgvector:pg16
+        env:
+          # keel / keel / keel 与 internal/db.AdminDSN() 的默认值逐项对应，
+          # 迁移用的就是这个角色。对上之后这个 job 一个 PG* 环境变量都不用配，
+          # 少一处「Makefile、compose、workflow 三份连接串各说各话」的机会。
+          # 应用与测试连的是 keel_app，它由 00003_app_role.sql 在迁移里建出来。
+          POSTGRES_USER: keel
+          POSTGRES_PASSWORD: keel
+          POSTGRES_DB: keel
+        ports:
+          # 测试进程跑在 runner 宿主机上，不在容器网络里，所以必须映射出来。
+          # 映到 5432 是为了让 internal/db 的默认 PGPORT 直接成立。
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U keel -d keel"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            tools/go.sum
+
+      # libdtmrs.so —— 主模块经 cgo 嵌入 dtmrs，没有它 `go build ./...` 停在
+      # 链接器的一句 `cannot find -ldtmrs` 上，那句话不指向任何该做的事。
+      #
+      # 缓存键取 scripts/fetch-dtmrs.sh 的内容哈希：dtmrs 的版本（v0.11.0）就钉在
+      # 那个脚本里，改版本必然改脚本，缓存自然失效。命中时整段 Rust 都不跑。
+      - uses: actions/cache@v4
+        id: libdtmrs
+        with:
+          path: |
+            third_party/dtmrs/lib
+            third_party/dtmrs/include
+          key: libdtmrs-${{ runner.os }}-${{ hashFiles('scripts/fetch-dtmrs.sh') }}
+
+      # 先确认工具链在，再去构建。
+      #
+      # 没有这一步的话，缺 Rust 时报出来的是 fetch-dtmrs.sh 里那句中文提示
+      # 混在 make 的输出里 —— 已经不错了，但它出现在「构建 libdtmrs」这一步，
+      # 读的人第一反应是 dtmrs 出了问题。单独一步、名字就叫工具链，
+      # 让失败信息在 job 的步骤列表里就指向真因。
+      #
+      # **这一步同时是那条未验证假设的兜底**：「ubuntu-latest 自带 rustup 与
+      # stable 工具链」从来没有在真 runner 上验证过（本机验证不了 runner 镜像
+      # 装了什么）。哪天它不成立，红的是这一步，而修法只有一行：在它前面加
+      # `- uses: dtolnay/rust-toolchain@stable`。
+      - name: Rust 工具链
+        if: steps.libdtmrs.outputs.cache-hit != 'true'
+        run: |
+          command -v cargo >/dev/null || {
+            echo "::error::runner 上没有 cargo。dtmrs 是 Rust 实现，Keel 自 M2 起经 cgo 嵌入它。修法：在这一步前面加 - uses: dtolnay/rust-toolchain@stable"
+            exit 1
+          }
+          cargo --version
+          rustc --version
+
+      - name: 构建 libdtmrs
+        if: steps.libdtmrs.outputs.cache-hit != 'true'
+        run: make dtmrs-deps
+
+      - run: go build ./...
+
+      - run: go vet ./...
+
+      # make test-db，不是裸 go test。Makefile 里那两个参数都是闸门的一部分：
+      #   -count=1  这些测试真正的输入是数据库状态，在 Go 的视野之外；不禁缓存的话
+      #             把 RLS 策略删掉也照样 `ok (cached)`。
+      #   -p 1      各包的 TestMain 对同一个库跑 goose 迁移，默认并行会撞成
+      #             `relation "goose_db_version" does not exist` 一类的错。
+      #
+      # 上面那个竞态的方向和一般抖动相反：**库是暖的必绿，库是冷的必红**。
+      # 所以这里刻意不做任何「复用一个已迁移的库」的优化——服务容器每次都是全新空库，
+      # 而 CI 恰恰是唯一每次都会踩到这类问题的地方。为了跑得快去缓存它，等于把
+      # 这个 job 换成一个只在该报警时失灵的 job。
+      - name: 数据库测试（每次都是冷库）
+        run: make test-db
+
+  # ---------------------------------------------------------------------------
+  # 端到端：起全栈，再从外面打进去
+  # ---------------------------------------------------------------------------
+  #
+  # 这个 job 是 db/seed/single.sql 唯一的自动化覆盖。单元测试用的是 dev.sql，
+  # single.sql 此前零覆盖——它播的那家 demo 店对不上 KEEL_DEFAULT_MERCHANT 时，
+  # 只有这条链路会红。
+  e2e:
+    name: 端到端（compose + smoke + SDK）
+    runs-on: ubuntu-latest
+    # 比另外两个宽：这里要在 runner 上从零建两个镜像，Go 依赖在容器里重下一遍。
+    #
+    # M2 又加了一段：镜像里多一个 Rust 阶段（装 cargo/rustc、clone dtmrs、
+    # cargo build --release）。本机实测那一段 47 秒（cargo registry 是暖的），
+    # runner 上是冷的，而且 docker build 的层缓存在 runner 上**一次都不会命中**
+    # （每个 job 都是新机器，这里也没有配 buildx 的远端缓存）。所以它是每次
+    # 都要付的固定成本，30 分钟对它还够，但余量比 M1 时薄了。
+    # 真顶到上限的话，第一件该做的事是给 docker build 配 GHA 缓存后端，
+    # 而不是继续往上加分钟数。
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # 只为 make sdk-smoke —— 它 `node web/src/api/smoke.mts` 直接跑 .mts，
+          # 靠 Node 自带的类型剥离，没有构建步骤也没有 node_modules。
+          node-version: '24'
+
+      # 端口刻意用默认的 8080，不换。这一整段就是 README 快速开始里那三行命令，
+      # 一字不改地跑一遍——换了端口，CI 验证的就不再是 README 让读者跑的那件事。
+      - name: 起全栈
+        run: docker compose up -d --build
+
+      # **判据在这一步，不在上一步。**
+      #
+      # `docker compose up -d` 只等到容器**启动**：应用随后因为 tenant.Preflight
+      # 自检不过而退出，它照样返回 0（本机实测过）。所以单跑 up 等于没跑，
+      # 这两步必须都在、且都不能被 `|| true`、管道或 continue-on-error 吃掉——
+      # 一个永远不会红的 e2e job 比没有 e2e job 更糟，它还会让人放心。
+      - name: 冒烟（HTTP 一路通到种子数据）
+        run: ./scripts/smoke.sh
+
+      # 与上一步不重复：smoke.sh 用 curl 证明链路通，这个证明**从契约推出来的
+      # TS SDK 自己**能把契约描述的响应在真实网络、真实响应头下读出来。
+      # tsc 只知道服务端答应返回什么。
+      - name: SDK 冒烟
+        run: make sdk-smoke
+
+      # 失败时把现场摊开。没有这一步，红了只能看到一句超时，而真因在某个
+      # 已经退出的容器的日志里（compose 的依赖链是 postgres -> migrate -> seed -> app，
+      # 坏在哪一段决定了该看谁）。if: failure() 不会改变这个 job 的结论。
+      - name: 失败时打印容器状态与日志
+        if: failure()
+        run: |
+          docker compose ps --all
+          docker compose logs --no-color --timestamps
+
+  # ---------------------------------------------------------------------------
+  # 客户端（app/，uni-app x）：用 DCloud 自己的编译器真编一遍
+  # ---------------------------------------------------------------------------
+  #
+  # 与 gates 里那条 app-type-check **不重复**：
+  #
+  #   · app-type-check 跑的是 tsc，范围是 app/src 下的 .uts。零 node_modules，
+  #     秒级，挡的是「契约改了而客户端没跟上」。
+  #   · 这个 job 跑的是 DCloud 的 UTS 编译器，范围多出 .uvue（模板表达式、样式、
+  #     pages.json 路由）与 UTS 自己那套落到 Kotlin 上的语义。
+  #
+  # 两者谁也替不了谁。实测过一条界线：把契约里的字段改个名之后，
+  # **DCloud 的编译器不报「访问了不存在的属性」**（本机实测：给一个 type 加一句
+  # `p.totally_bogus_field` 照样 exit 0），而 tsc 报 TS2551。
+  # 所以契约漂移这件事的判据在 gates 那条，不在这里。
+  client:
+    name: 客户端（uni-app x 编译）
+    runs-on: ubuntu-latest
+    # 本机实测：npm ci 约 30 秒（冷缓存），两次 uni build 各几秒。
+    # 15 分钟给的是 runner 上下载 527 个包 + 那个 16MB 原生 binding 的余量。
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      # 不是裸 npm ci —— npm 11 会把 @dcloudio/uts-linux-x64-gnu 按「libc 不匹配」
+      # 跳过（它的 package.json 写 "libc": ["gnu"]，而 npm 报的是 "glibc"），
+      # 而少了它 uni 的编译器在加载 vite.config.js 时就死。
+      # app/scripts/install-deps.sh 装完会自己核对一遍，缺了就取 tarball 解开。
+      - name: 装客户端依赖
+        run: make app-install
+
+      # H5（web）。这是唯一会跑类型检查的目标 —— uni-uts-v1 里 `check: isWeb`。
+      - name: 编 H5
+        run: make app-build-h5
+
+      # Android：UTS -> Kotlin。**到此为止，不产出 apk**（见文件头「没有覆盖到的」）。
+      # 它仍然值得跑：uvue/uts 里有些写法在 web 上能过、落到 Kotlin 上不成立，
+      # 而那类问题只有这一步会暴露。
+      - name: 编 Android（UTS -> Kotlin）
+        run: make app-build-android
+
+      - name: 失败时列出产物
+        if: failure()
+        run: ls -R app/dist || true

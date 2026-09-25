@@ -1,0 +1,165 @@
+package handler
+
+import (
+	"net/http"
+
+	"github.com/gin-gonic/gin"
+
+	"github.com/keel/keel/internal/api"
+	"github.com/keel/keel/internal/repository"
+	"github.com/keel/keel/internal/service"
+)
+
+// 订单详情：GET /api/v1/orders/{order_no}。
+//
+// 单独一个文件，理由同 product_detail.go 的文件头（contract_test.go 按文件对账
+// query 参数，这条接口一个都没有）。
+
+// channelNames 是 payments.channel 到契约那个字符串枚举的反向映射。
+//
+// 正向那张表在 service/payment.go（webhookChannels），这里是它的逆。两张表而不是
+// 一张双向的：正向那张是**白名单**（哪些渠道可以从 webhook 进来，balance 刻意
+// 不在里面），逆向这张是**展示**（库里存着 3 就得显示 balance，不然余额支付的
+// 历史记录会变成一片空白）。合成一张的话，往白名单里加 balance 就成了「顺手」的
+// 一步，而那一步会开出一条用伪造的余额回调把订单推成已支付的路。
+var channelNames = map[int16]string{
+	repository.PaymentChannelWechat:  "wechat",
+	repository.PaymentChannelAlipay:  "alipay",
+	repository.PaymentChannelBalance: "balance",
+}
+
+// Detail 实现 GET /api/v1/orders/{order_no}。
+func (h *OrderHandler) Detail(c *gin.Context) {
+	d, err := h.svc.Detail(c.Request.Context(), c.Param("order_no"))
+	if err != nil {
+		// service.ErrOrderNotFound → 404（writeOrderError 里那一支）。
+		// 它同时覆盖「这一单是别人的」，所以这条路径就是买家隔离在 HTTP 层的出口。
+		writeOrderError(c, err)
+		return
+	}
+
+	base := apiOrder(d.Order)
+	items := apiOrderItems(d.Items)
+	payments := apiPayments(d.Payments)
+	receiver := api.ReceiverSnapshot{
+		ReceiverName: d.Receiver.ReceiverName,
+		Phone:        d.Receiver.Phone,
+		Province:     d.Receiver.Province,
+		City:         d.Receiver.City,
+		District:     d.Receiver.District,
+		Street:       &d.Receiver.Street,
+		Detail:       d.Receiver.Detail,
+		RegionCode:   d.Receiver.RegionCode,
+		PostalCode:   d.Receiver.PostalCode,
+	}
+
+	// OrderDetail 在契约里是 `allOf: [Order, {...}]`，而生成器把它摊成了一个
+	// 独立的扁平结构体（不是内嵌 api.Order）。所以这里要逐字段搬一遍。
+	//
+	// 搬而不是给 api.Order 加几个字段：那个类型由契约生成，手改会被
+	// check-all.sh 的产物闸门当场抓住。字段漏搬一个会怎样：契约里它是可选的，
+	// JSON 里就整个不出现 —— 所以下面这段必须与 apiOrder 逐行对齐，
+	// 而 order_query_test.go 里那条「详情与列表对同一单给出同样的 Order 部分」
+	// 的断言就是钉这件事的。
+	c.JSON(http.StatusOK, api.OrderDetail{
+		OrderNo:          base.OrderNo,
+		Status:           base.Status,
+		RefundStatus:     base.RefundStatus,
+		PayableCents:     base.PayableCents,
+		GoodsAmountCents: base.GoodsAmountCents,
+		DiscountCents:    base.DiscountCents,
+		PaidCents:        base.PaidCents,
+		RefundedCents:    base.RefundedCents,
+		FreightCents:     base.FreightCents,
+		ExpireAt:         base.ExpireAt,
+		CreatedAt:        base.CreatedAt,
+		PaidAt:           base.PaidAt,
+		ShippedAt:        base.ShippedAt,
+		FinishedAt:       base.FinishedAt,
+
+		Receiver: &receiver,
+		Items:    &items,
+		Payments: &payments,
+
+		// Refunds 刻意缺席：退款域的三张表（refunds / refund_items /
+		// refund_logs）本轮没有建，所以这里不是「这一单没有退款」，而是
+		// **没查过**。回一个空数组会让详情页显示「无售后记录」——
+		// 一句在退款上线之前都不会被纠正的假话。
+		// 这笔账挂在 contract_test.go 的 NotYetImplementedResponse 里。
+	})
+}
+
+// apiOrderItems 把订单行装成契约的 OrderItem。
+func apiOrderItems(rows []repository.OrderItem) []api.OrderItem {
+	out := make([]api.OrderItem, 0, len(rows))
+	for _, it := range rows {
+		amount := api.Money(it.AmountCents)
+		discount := api.Money(it.DiscountCents)
+		product := it.ProductID
+		refunded := int(it.RefundedQty)
+
+		// 规格快照解不开时给一个空 map，**不让整条请求失败**。
+		//
+		// 这里与 service 里 decodeSpec 的处置刻意相反，因为两处的「解不开」
+		// 意味着不同的东西：商品详情读的是 skus 的当前值（解不开 = 数据坏了，
+		// 该炸出来），而这里读的是一份**历史快照**，它可能是几个月前由一版
+		// 更老的代码写下的。为一行读不懂的旧快照让用户打不开自己的订单，
+		// 换来的不是正确性，是一个再也修不了的历史订单。
+		spec := map[string]string{}
+		if m, err := service.DecodeSpecValues(it.SpecSnapshot); err == nil {
+			spec = m
+		}
+
+		out = append(out, api.OrderItem{
+			Id:            it.ID,
+			SkuId:         it.SKUID,
+			ProductId:     &product,
+			Title:         it.TitleSnapshot,
+			SpecValues:    &spec,
+			ImageUrl:      it.ImageSnapshot,
+			PriceCents:    api.Money(it.PriceCents),
+			Quantity:      int(it.Quantity),
+			AmountCents:   &amount,
+			DiscountCents: &discount,
+
+			// RefundedQty 是 order_items 上一列真实存在的数（DDL 里
+			// NOT NULL DEFAULT 0），所以它填得出来，今天恒为 0 也照填。
+			RefundedQty: &refunded,
+
+			// RefundingQty 刻意缺席：它不是持久化列，是
+			// `refund_items ⋈ refunds WHERE status IN (10,20,30)` 的聚合，
+			// 而那两张表本轮没建 —— 它是「没查过」，不是 0。
+			//
+			// 这一笔**挂不进** contract_test.go 的 NotYetImplementedResponse：
+			// 那套机制只对账成功响应的顶层属性，而这个字段在 OrderItem 里，
+			// 嵌了一层。所以它只能记在这里和报告里，这是那套清账机制当前的
+			// 一个边界，已列为 defer。
+		})
+	}
+	return out
+}
+
+// apiPayments 把支付记录装成契约的 PaymentRecord。
+func apiPayments(rows []repository.Payment) []api.PaymentRecord {
+	out := make([]api.PaymentRecord, 0, len(rows))
+	for _, p := range rows {
+		no := p.PaymentNo
+		amount := api.Money(p.AmountCents)
+		status := int(p.Status)
+		rec := api.PaymentRecord{
+			PaymentNo:   &no,
+			AmountCents: &amount,
+			Status:      &status,
+			PaidAt:      p.PaidAt,
+		}
+		// 认不出来的渠道号让 channel 缺席，而不是回一个 ""。
+		// 空串不在契约的枚举里，按契约生成的客户端会在它上面解析失败；
+		// 缺席则是一个它本来就要处理的情况（这是可选字段）。
+		if name, ok := channelNames[p.Channel]; ok {
+			ch := api.PaymentRecordChannel(name)
+			rec.Channel = &ch
+		}
+		out = append(out, rec)
+	}
+	return out
+}

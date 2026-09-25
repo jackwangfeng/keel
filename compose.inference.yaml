@@ -1,0 +1,99 @@
+# 推理引擎的叠加层。语义检索层 §10 的 POST /v1/embed，跑真的 BGE-M3。
+#
+#     docker compose -f compose.yaml -f compose.inference.yaml up -d --build
+#
+# ## 为什么是叠加层，不是直接进 compose.yaml
+#
+# 因为它不适合放进 README 承诺的那条 `docker compose up`。实测数字（本机，
+# 20 核 x86-64，无 GPU）：
+#
+#   镜像                 1.39 GB（python:3.12-slim + torch CPU 轮子 + transformers）
+#   模型权重             2.27 GB（BAAI/bge-m3 的 pytorch_model.bin，上游没有 safetensors）
+#   首次启动             空卷冷启动 75 s（下载 2.27 GB + 加载 69.6 s，实测）
+#                        缓存暖了之后加载 1.1 s
+#   常驻内存             约 673 MiB（加载完并跑过若干批之后的稳定值）
+#   单条                 62 ms
+#   批 32                1055 ms（33.0 ms/条）
+#   批 64                2003 ms（31.3 ms/条）
+#
+# 把它并进默认 compose，`docker compose up` 从「拉两个镜像」变成「再下 3.7 GB、
+# 首次要等十几分钟」，而 README 那条命令是很多人对这个项目的第一印象。
+# 更要紧的是上面那组耗时：§8 给 query embedding 的预算是 15 ms，而 CPU 上单条
+# 要 62 ms——**这套配置能用于索引，不适合直接挡在搜索请求前面**。查询侧要么
+# 上 GPU（架构 §6 形态 B/C），要么换小模型（那要连 DDL 一起改，见下），
+# 要么给热门 query 做缓存。这件事 M3 任务 4 做向量召回时会再撞上一次。
+#
+# 所以这里是一个显式的 `-f`：想要语义检索的人自己加上它，并且知道自己在等什么。
+#
+# ## 维度是 DDL 定的，不是这里定的
+#
+# `product_text_vectors.embedding` 是 `vector(1024)`（数据模型 §8），
+# 而 pgvector 的维度写在列类型上。换模型往往同时换维度，于是换模型 =
+# 新建表 + 双写 + 原子切换（语义检索层 §2.2 的影子表方案），不是改一行
+# KEEL_EMBED_MODEL_REPO。服务启动时会核对加载出来的维度，对不上就拒绝启动。
+
+name: keel
+
+services:
+  inference:
+    build:
+      context: ./services/inference
+    environment:
+      # 模型缓存落在下面那个具名卷上，而不是容器层——容器一重建，
+      # 2.27 GB 白下一次。
+      HF_HOME: /models
+      # 服务端预算。超了立刻回 504，由调用方走 §8 的降级链；
+      # 挂着不回的话降级链根本不会被触发，调用方只会一直等到自己的超时，
+      # 而那时它已经吃掉了整个延迟预算。
+      #
+      # 5000 是**索引侧**的量级（批 64 在 CPU 上要 2 秒）。查询侧的 15 ms 预算
+      # 不靠这个值，靠调用方传一个更紧的 context。
+      KEEL_EMBED_TIMEOUT_MS: "5000"
+    volumes:
+      # 权重不进镜像：它是 2.27 GB 的**不变数据**，不是代码。
+      # 烤进去的话镜像翻倍，而且每次 build 都要重拉。
+      - hfcache:/models
+    ports:
+      # 映出来是为了能直接对引擎跑
+      # `KEEL_EMBED_ENDPOINT=http://127.0.0.1:8001 go test -tags keel_real_engine ./internal/inference/`。
+      # 8001 在开发机上被占的话换一个：KEEL_EMBED_PORT=18001 docker compose ... up -d
+      - "${KEEL_EMBED_PORT:-8001}:8000"
+    healthcheck:
+      # 镜像里没有 curl（slim 不带），但 python 一定在——它就是这个服务本身。
+      #
+      # 模型在 lifespan 里加载，不是懒加载。懒加载的话容器会在权重还没下完时
+      # 就报健康，编排把流量切进来，第一个真实请求等上十几分钟然后超时。
+      #
+      # 实测：uvicorn 在 lifespan 跑完之前根本不开始监听，所以加载期这条探针
+      # 拿到的是 connection refused（不是 503）。空卷冷启动本机实测 75 秒
+      # （下载 2.27 GB + 加载 69.6 秒，那条链路真的跑过一次），网络慢的地方
+      # 是十几分钟 —— start_period 给的就是这段。
+      test: ["CMD", "python", "-c",
+             "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/healthz')"]
+      interval: 10s
+      timeout: 5s
+      # start_period 给的是**第一次启动要下 2.27 GB 权重**那段时间。
+      # 这段时间里失败不计数；之后还给 120 次 × 10s = 20 分钟。
+      # 网络慢的地方这仍然可能不够——那时容器会被判 unhealthy，
+      # 而日志里是 huggingface_hub 的下载进度，指向真因。
+      start_period: 300s
+      retries: 120
+
+  app:
+    environment:
+      # 引擎地址。**客户端没有默认值，空着就拒绝构造**（见
+      # internal/inference 的 EnvEndpoint），理由与 KEEL_DTM_DSN 同构：
+      # 一个「反正能跑起来」的默认值，会让忘了配它的部署每次索引都连不上，
+      # 而索引是异步的——没有人在等它的返回码，症状是几小时后的
+      # 「新品怎么搜不到」。
+      KEEL_EMBED_ENDPOINT: http://inference:8000
+    depends_on:
+      # 引擎没 ready 就开始接请求的话，第一批索引全部失败，
+      # 而它们是异步的、失败了没人看见。
+      inference:
+        condition: service_healthy
+
+volumes:
+  # 模型缓存。和 pgdata / dtmdata 一样是有状态的东西，
+  # `docker compose down -v` 会连它一起删掉——那之后下一次启动要重下 2.27 GB。
+  hfcache:

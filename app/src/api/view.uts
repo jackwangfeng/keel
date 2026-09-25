@@ -1,0 +1,307 @@
+// 契约类型 -> 页面要显示的东西。
+//
+// ## 为什么这一层存在，而不是让模板直接 `{{ item.min_price_cents }}`
+//
+// 两个理由，第二个是硬的：
+//
+//  1. 金额一律是「分」的整数（契约约定 1），展示要除以 100。散在各个模板里
+//     写 `/100` 迟早漏一处，而漏掉的那处会把 4900 分显示成 4900 元。
+//
+//  2. **类型闸门看不见 .uvue 里的模板表达式。** scripts/check_app_types.py 跑的是
+//     tsc，tsc 不解析 SFC；模板里写 `item.min_price_cents` 时契约把这个字段改了名，
+//     tsc 不会红。把所有契约字段的读取收进 .uts，闸门的视野就覆盖了全部读取点，
+//     模板只碰下面这些**我们自己**的 Row 类型。
+//
+//     （uni-app x 自带的 UTS 编译器确实会检查 .uvue，但它把类型错误打成 warning
+//     并且照样 exit 0 —— 见 app/README.md「类型检查」那一节。所以它是第二道，
+//     不是第一道。）
+
+import {
+  Money,
+  Order,
+  OrderDetail,
+  OrderItem,
+  OrderPreview,
+  OrderStatus,
+  PaymentRecord,
+  ProductDetail,
+  ProductSummary,
+  Sku,
+} from './schema.uts'
+
+// ---------------------------------------------------------------------------
+// 金额
+// ---------------------------------------------------------------------------
+
+/**
+ * 分 -> 「¥12.90」。契约约定 1：金额一律 integer 分，禁止浮点。
+ *
+ * 参数写成**可选**（`cents ?: Money`）而不是 `Money | null`，是为了同时对上两套
+ * 语言：契约里非 required 的金额字段生成出来是 `freight_cents?: Money`，
+ * 在 UTS 下那是 `Money | null`，在 tsc 下那是 `Money | undefined`。
+ * 声明成 `Money | null` 的话 tsc 会拒绝传 undefined，而声明成可选参数两边都成立。
+ */
+export function yuan(cents ?: Money) : string {
+  const c = cents != null ? cents! : 0
+  const neg = c < 0
+  const abs = neg ? -c : c
+  const intPart = Math.floor(abs / 100)
+  const frac = abs % 100
+  const fracText = frac < 10 ? '0' + frac.toString() : frac.toString()
+  return (neg ? '-¥' : '¥') + intPart.toString() + '.' + fracText
+}
+
+// ---------------------------------------------------------------------------
+// 商品
+// ---------------------------------------------------------------------------
+
+export type ProductRow = {
+  id : number
+  title : string
+  subtitle : string
+  priceText : string
+  /** 契约里 status: 0 草稿 / 1 上架 / 2 下架。下架的要显式说出来。 */
+  offShelf : boolean
+  soldOut : boolean
+}
+
+export function productRow(p : ProductSummary) : ProductRow {
+  const min = p.min_price_cents
+  const max = p.max_price_cents
+  let priceText = yuan(min)
+  if (max != null && min != null && max! > min!) {
+    priceText = yuan(min) + ' ~ ' + yuan(max)
+  }
+  return {
+    id: p.id,
+    title: p.title,
+    subtitle: p.subtitle != null ? p.subtitle! : '',
+    priceText: priceText,
+    offShelf: p.status == 2,
+    // in_stock 是可选字段：契约没保证一定返回。没返回时不敢说它没货。
+    soldOut: p.in_stock != null && !p.in_stock!,
+  } as ProductRow
+}
+
+export type SkuRow = {
+  id : number
+  label : string
+  priceText : string
+  availableQty : number
+  soldOut : boolean
+}
+
+export function skuRow(s : Sku) : SkuRow {
+  // 只用 sku_code 做标签，**不去遍历 spec_values**。
+  // 契约里 spec_values 是 `additionalProperties: {type: string}`，生成到 UTS 是
+  // UTSJSONObject；而 UTSJSONObject 的 toMap()/getString() 在 web 端运行时并不存在
+  // （UTS 编译器原样透传，页面当场 TypeError —— 实测记录在 app/README.md）。
+  // 等哪天需要展示规格，要么由服务端给一个拼好的字符串，要么在这里按已知键取值。
+  const label = s.spec_values != null ? s.sku_code : s.sku_code
+  return {
+    id: s.id,
+    label: label,
+    priceText: yuan(s.price_cents),
+    availableQty: s.available_qty,
+    soldOut: s.available_qty <= 0,
+  } as SkuRow
+}
+
+export type ProductDetailView = {
+  id : number
+  title : string
+  subtitle : string
+  description : string
+  priceText : string
+  offShelf : boolean
+  skus : SkuRow[]
+}
+
+export function productDetailView(p : ProductDetail) : ProductDetailView {
+  const rows : SkuRow[] = []
+  for (let i = 0; i < p.skus.length; i++) {
+    rows.push(skuRow(p.skus[i]))
+  }
+  return {
+    id: p.id,
+    title: p.title,
+    subtitle: p.subtitle != null ? p.subtitle! : '',
+    description: p.description != null ? p.description! : '',
+    priceText: yuan(p.min_price_cents),
+    offShelf: p.status == 2,
+    skus: rows,
+  } as ProductDetailView
+}
+
+// ---------------------------------------------------------------------------
+// 订单
+// ---------------------------------------------------------------------------
+
+/**
+ * 履约维度的文案。契约 OrderStatus：
+ * 10 待支付 / 20 已支付 / 30 已发货 / 40 已完成 / 50 退款中 / 60 已退款 / 90 已关闭。
+ */
+export function orderStatusText(status : OrderStatus) : string {
+  if (status == 10) return '待支付'
+  if (status == 20) return '已支付'
+  if (status == 30) return '已发货'
+  if (status == 40) return '已完成'
+  if (status == 50) return '退款中'
+  if (status == 60) return '已退款'
+  if (status == 90) return '已关闭'
+  return '未知状态 ' + status.toString()
+}
+
+/**
+ * 售后维度的文案。**必须和 status 组合渲染**（契约 OrderRefundStatus 的注释写着
+ * 这件事）：只看 status 的话，「买三退一的已发货订单」和「完全没有售后的订单」
+ * 长得一模一样。没有售后时返回空串，由页面决定不显示。
+ */
+export function refundStatusText(refundStatus : number) : string {
+  if (refundStatus == 1) return '退款中'
+  if (refundStatus == 2) return '部分退款'
+  if (refundStatus == 3) return '已全额退款'
+  return ''
+}
+
+export type OrderRow = {
+  orderNo : string
+  statusText : string
+  refundText : string
+  payableText : string
+  createdAt : string
+  payable : boolean
+}
+
+export function orderRow(o : Order) : OrderRow {
+  return {
+    orderNo: o.order_no,
+    statusText: orderStatusText(o.status),
+    refundText: refundStatusText(o.refund_status),
+    payableText: yuan(o.payable_cents),
+    createdAt: o.created_at,
+    // 契约：仅 status=10（待支付）能发起支付。
+    payable: o.status == 10,
+  } as OrderRow
+}
+
+export type OrderItemRow = {
+  title : string
+  quantity : number
+  priceText : string
+  amountText : string
+}
+
+export function orderItemRow(it : OrderItem) : OrderItemRow {
+  return {
+    title: it.title,
+    quantity: it.quantity,
+    priceText: yuan(it.price_cents),
+    amountText: yuan(it.amount_cents),
+  } as OrderItemRow
+}
+
+export type PaymentRow = {
+  channelText : string
+  statusText : string
+  amountText : string
+}
+
+/** 渠道字符串 -> 中文。契约 PaymentRecord.channel 的枚举是 wechat/alipay/balance。 */
+export function paymentRow(p : PaymentRecord) : PaymentRow {
+  const ch = p.channel != null ? p.channel! : ''
+  let channelText = ch
+  if (ch == 'wechat') channelText = '微信'
+  if (ch == 'alipay') channelText = '支付宝'
+  if (ch == 'balance') channelText = '余额'
+  // 契约 PaymentRecord.status：0 待支付 / 1 成功 / 2 失败 / 3 已关闭。
+  const st = p.status != null ? p.status! : -1
+  let statusText = '未知'
+  if (st == 0) statusText = '待支付'
+  if (st == 1) statusText = '成功'
+  if (st == 2) statusText = '失败'
+  if (st == 3) statusText = '已关闭'
+  return {
+    channelText: channelText,
+    statusText: statusText,
+    amountText: yuan(p.amount_cents),
+  } as PaymentRow
+}
+
+export type OrderDetailView = {
+  head : OrderRow
+  receiver : string
+  goodsAmountText : string
+  freightText : string
+  discountText : string
+  paidText : string
+  items : OrderItemRow[]
+  payments : PaymentRow[]
+}
+
+export function orderDetailView(o : OrderDetail) : OrderDetailView {
+  const rows : OrderItemRow[] = []
+  const items = o.items
+  if (items != null) {
+    for (let i = 0; i < items!.length; i++) {
+      rows.push(orderItemRow(items![i]))
+    }
+  }
+  let receiver = ''
+  const r = o.receiver
+  if (r != null) {
+    receiver = r!.receiver_name + ' ' + r!.phone + ' ' + r!.province + r!.city + r!.district + r!.detail
+  }
+  // 这里**不能**写 `orderRow(o)`：OrderDetail 在契约里是 `allOf: [Order, {...}]`，
+  // 生成到 UTS 之后是一个展平出来的独立类型。TS 的结构化类型下它可以直接当 Order 用，
+  // 但 UTS 要落到 Kotlin/Swift，那边只有名义类型 —— 两个类没有继承关系就是两个类。
+  // 所以字段在这里重新取一遍，而不是靠一个只在 TS 下成立的赋值兼容。
+  const head = {
+    orderNo: o.order_no,
+    statusText: orderStatusText(o.status),
+    refundText: refundStatusText(o.refund_status),
+    payableText: yuan(o.payable_cents),
+    createdAt: o.created_at,
+    payable: o.status == 10,
+  } as OrderRow
+  const pays : PaymentRow[] = []
+  const payments = o.payments
+  if (payments != null) {
+    for (let i = 0; i < payments!.length; i++) {
+      pays.push(paymentRow(payments![i]))
+    }
+  }
+  return {
+    head: head,
+    payments: pays,
+    receiver: receiver,
+    goodsAmountText: yuan(o.goods_amount_cents),
+    freightText: yuan(o.freight_cents),
+    discountText: yuan(o.discount_cents),
+    paidText: yuan(o.paid_cents),
+    items: rows,
+  } as OrderDetailView
+}
+
+// ---------------------------------------------------------------------------
+// 下单试算
+// ---------------------------------------------------------------------------
+
+export type PreviewView = {
+  goodsAmountText : string
+  freightText : string
+  discountText : string
+  payableText : string
+  /** 提交订单时要回填给服务端的 expected_payable_cents（契约：对不上回 409）。 */
+  payableCents : number
+}
+
+export function previewView(p : OrderPreview) : PreviewView {
+  return {
+    goodsAmountText: yuan(p.goods_amount_cents),
+    freightText: yuan(p.freight_cents),
+    discountText: yuan(p.discount_cents),
+    payableText: yuan(p.payable_cents),
+    payableCents: p.payable_cents,
+  } as PreviewView
+}

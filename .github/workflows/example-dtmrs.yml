@@ -1,0 +1,84 @@
+# examples/dtmrs-embedded 的验证，单独一个 workflow。
+#
+# ## 为什么不并进 ci.yml
+#
+# 它要 Rust 工具链，还要从 GitHub 取回 dtmrs 源码再 cargo build --release。
+# 这是 M1 服务端完全不需要的一整套前置（CONTRIBUTING 说得很清楚：M1 的服务端
+# 不依赖 Rust），挂在每个 PR 的关键路径上，等于让改一行 markdown 的人
+# 也去等一次 Rust 构建。
+#
+# ## 但也不能不跑
+#
+# 这个例子是「一套代码，从笔记本到集群」——README 的第三条卖点、架构文档
+# ADR #1 的那个前提——**唯一可执行的证据**。它是 examples/ 里的代码，
+# 没有任何东西编译它、更没有东西跑它；上游 dtmrs 改一次 C ABI，
+# 这个例子就会悄悄烂掉，而谁都不会知道，直到有人照着 README 跑一遍。
+#
+# 所以按路径触发：碰了这个例子（或这个文件）才跑。
+name: example-dtmrs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'examples/dtmrs-embedded/**'
+      - '.github/workflows/example-dtmrs.yml'
+  pull_request:
+    paths:
+      - 'examples/dtmrs-embedded/**'
+      - '.github/workflows/example-dtmrs.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  verify:
+    name: 嵌入式协调器验证
+    runs-on: ubuntu-latest
+    # 本机实测：make deps（clone + cargo build --release，cargo 缓存是暖的）
+    # 49 秒，make verify 二十来秒。runner 上 cargo registry 是冷的，给足余量。
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: examples/dtmrs-embedded
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          # 这个例子是**独立模块**（examples/dtmrs-embedded/go.mod），
+          # 版本和依赖都与主模块无关，所以读的是它自己的 go.mod。
+          go-version-file: examples/dtmrs-embedded/go.mod
+          cache-dependency-path: examples/dtmrs-embedded/go.sum
+
+      # 刻意不装 rust-toolchain action：ubuntu-latest 的 runner 镜像自带 rustup
+      # 与 stable 工具链。多引一个第三方 action 是多一条供应链，
+      # 换来的只是一个这里用不上的版本选择能力。
+      # **「runner 自带」这条至今没有在真 runner 上验证过**（本机验证不了 runner
+      # 镜像里装了什么）。不带了的话，报错是 fetch-dtmrs.sh 那句「需要 Rust
+      # 工具链」，指向明确；届时在这里加 dtolnay/rust-toolchain@stable 即可。
+      #
+      # 版本下限是 **1.88**，不是 dtmrs 声明的 1.82：卡住构建的是它 Cargo.lock
+      # 锁定的依赖树（实测 1.85.1 报 home@0.5.12 requires rustc 1.88）。
+      # runner 自带的是 stable，够；但版本不够时报的是 cargo 自己那句话，
+      # 而它已经把该装哪个版本说清楚了。
+      - name: 工具链版本
+        run: |
+          cargo --version
+          go version
+
+      # 取回 dtmrs 并编出 libdtmrs.so。版本钉在 scripts/fetch-dtmrs.sh 里
+      # （v0.11.0），不是 @latest——上游改了 C ABI 而这里悄悄跟着变，
+      # 是这个例子最难查的一类失败。
+      - name: 构建 libdtmrs
+        run: make deps
+
+      # SAGA 提交与逆序补偿、local/remote 两种形态、崩溃恢复、TCC、-race。
+      # 子事务屏障那一项要真 PostgreSQL，README 里单列，这里不跑。
+      - name: 跑全部验证
+        run: make verify

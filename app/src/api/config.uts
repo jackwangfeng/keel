@@ -1,0 +1,137 @@
+// 服务地址（= 租户）与本地会话。
+//
+// ## 租户由 Host 决定，不是请求头
+//
+// internal/tenant/resolver.go 写着「**刻意不支持用请求头指定租户**：公开接口没有
+// 鉴权，那等于让调用方自己声明它是哪家店」。所以这个客户端**没有** X-Merchant 之类
+// 的头，一个字节都没有。它唯一能配的是 base URL：
+//
+//   · 单商家部署 —— 直接指到那台机器，例如 http://localhost:8080/api/v1
+//   · 多商家部署 —— 指到 {code}.{base_domain}，例如 https://demo.example.com/api/v1
+//
+// 路径前缀 /api/v1 属于 base URL 而不属于路径：契约里写的是 /products，
+// 实际挂在 /api/v1/products（见 internal/app.Router）。web/src/api/client.mts
+// 在同一处做了同样的选择，两边保持一致。
+//
+// ## 换了 base URL，本地令牌必须当场作废
+//
+// 服务端刻意让 A 店签发的令牌在 B 店被拒（service.AuthService 会核对令牌属不属于
+// 这家店）。如果切了地址还留着旧令牌，用户看到的是一个来路不明的 401 ——
+// 他没退出登录，也没改密码。所以令牌**连同它是给哪个 base URL 签的**一起存，
+// 对不上就当没有。
+
+const KEY_BASE_URL = 'keel.baseUrl'
+const KEY_SESSION = 'keel.session'
+
+/**
+ * 默认服务地址。
+ *
+ * 是**相对路径**，不是 http://localhost:8080/api/v1。理由是 H5：
+ * 服务端现在不发任何 CORS 头（实测 `OPTIONS /api/v1/products` 回 405），
+ * 所以浏览器里跨源根本打不通。相对路径把请求留在页面自己的 origin 上，
+ * 由反向代理（开发期是 vite.config.js 里那段 server.proxy）转给 Keel ——
+ * 而「页面的 origin 就是店」正是这套多租户的设计：租户由 Host 决定。
+ *
+ * 原生 App 没有 origin 这回事，必须在「服务地址」页填一个绝对地址，
+ * 例如 http://192.168.1.10:8080/api/v1 或 https://demo.example.com/api/v1。
+ */
+export const DEFAULT_BASE_URL = '/api/v1'
+
+export function getBaseUrl(): string {
+  const v = uni.getStorageSync(KEY_BASE_URL)
+  if (typeof v == 'string' && (v as string).length > 0) {
+    return v as string
+  }
+  return DEFAULT_BASE_URL
+}
+
+/**
+ * 换服务地址。**顺带把会话清掉** —— 见文件头那段。
+ * 返回归一化之后的地址（去掉末尾斜杠，不然会拼出 //products）。
+ */
+export function setBaseUrl(url: string): string {
+  let next = url.trim()
+  while (next.endsWith('/')) {
+    next = next.substring(0, next.length - 1)
+  }
+  if (next != getBaseUrl()) {
+    clearSession()
+  }
+  uni.setStorageSync(KEY_BASE_URL, next)
+  return next
+}
+
+/** 本地会话。`baseUrl` 是它的作用域，不是冗余信息。 */
+export type Session = {
+  baseUrl : string
+  accessToken : string
+  refreshToken : string
+  /** 展示用。契约里 user.nickname 可空，这里统一成空串。 */
+  nickname : string
+}
+
+export function loadSession(): Session | null {
+  const raw = uni.getStorageSync(KEY_SESSION)
+  if (typeof raw != 'string' || (raw as string).length == 0) {
+    return null
+  }
+  const s = JSON.parse<Session>(raw as string)
+  if (s == null) {
+    return null
+  }
+  // 作用域对不上 —— 用户换过服务地址，这串令牌不属于现在这家店。
+  if (s!.baseUrl != getBaseUrl()) {
+    clearSession()
+    return null
+  }
+  return s
+}
+
+export function saveSession(s: Session) {
+  uni.setStorageSync(KEY_SESSION, JSON.stringify(s))
+}
+
+export function clearSession() {
+  uni.removeStorageSync(KEY_SESSION)
+}
+
+export function isLoggedIn(): boolean {
+  return loadSession() != null
+}
+
+// ---------------------------------------------------------------------------
+// 本机下过的单
+// ---------------------------------------------------------------------------
+//
+// GET /orders 后端还没接上（现在是 405）。在它通之前，「我的订单」页唯一诚实的
+// 内容是**这台设备自己下过的单**：订单号是 POST /orders 真的返回的，不是编的。
+// 页面上会标清楚这一点，不会假装它是服务端给的列表。
+//
+// 同样按 base URL 分桶：换了店，上一家店的订单号在这家店查不到。
+
+const KEY_LOCAL_ORDERS = 'keel.localOrders'
+
+function localOrdersKey(): string {
+  return KEY_LOCAL_ORDERS + '@' + getBaseUrl()
+}
+
+export function rememberOrder(orderNo: string) {
+  const list = localOrders()
+  if (list.indexOf(orderNo) >= 0) {
+    return
+  }
+  list.unshift(orderNo)
+  while (list.length > 20) {
+    list.pop()
+  }
+  uni.setStorageSync(localOrdersKey(), JSON.stringify(list))
+}
+
+export function localOrders(): string[] {
+  const raw = uni.getStorageSync(localOrdersKey())
+  if (typeof raw != 'string' || (raw as string).length == 0) {
+    return [] as string[]
+  }
+  const list = JSON.parse<string[]>(raw as string)
+  return list != null ? list! : ([] as string[])
+}

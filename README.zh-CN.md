@@ -5,8 +5,13 @@
 **自带分布式事务引擎的 AI 原生电商系统**
 *单机可跑，扩展无需重写，AI 全本地推理*
 
+<!-- 徽章与快速开始里的 clone 地址指向同一个仓库。
+     scripts/check_promises.py 守两件事：.github/workflows/ 不存在时构建徽章判为虚标；
+     以及两份 README 里指向本仓库的 GitHub 地址必须同源——要么都还是占位符，
+     要么都已填好且是同一个组织名。只替换一半是最容易发生也最难发现的那种错。 -->
+[![CI](https://github.com/jackwangfeng/keel/actions/workflows/ci.yml/badge.svg)](https://github.com/jackwangfeng/keel/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](./LICENSE)
-![Go](https://img.shields.io/badge/Go-1.23+-00ADD8)
+![Go](https://img.shields.io/badge/Go-1.26+-00ADD8)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16+-336791)
 
 [文档](./docs) · [English](./README.md)
@@ -77,19 +82,39 @@ Keel 不需要选。
 
 跨租户隔离不靠「每个查询记得加 WHERE」——那种 bug 在单租户测试数据下完全看不出来。
 靠的是每张表都带 `merchant_id`、父子关系用复合外键钉死、以及 PostgreSQL 行级安全兜底。
-提交前有脚本机械检查这一条。
+三条都有机械检查：`merchant_id` 那条由脚本核对**设计文档里的 DDL**，
+行级安全与复合外键那两条由测试直接查**真实数据库的系统目录**。
 
 ---
 
 ## 快速开始
 
 ```bash
-git clone https://github.com/<org>/keel && cd keel
-docker compose up
+git clone https://github.com/jackwangfeng/keel && cd keel
+docker compose up -d --build
+./scripts/smoke.sh                        # 退出码 0 表示链路通
+curl http://localhost:8080/api/v1/products
 ```
 
-就这一条。API、PostgreSQL（含 pgvector）、推理引擎和种子数据全部起来。
-打开 <http://localhost:3000>。
+一条命令起 PostgreSQL、跑迁移、加载一家种子店铺、起 API。
+那条 `curl` 直接返回这家店的商品，而请求里没有任何东西说明「哪家店」——
+这套部署的租户数就是 1，正是上面承诺给小商家的那个形态。
+
+8080 被占就整组换端口 —— 上面四条命令读的是同一个变量，但那条 `curl` 里的
+端口号是写死的，别只改第一条：
+
+```bash
+export KEEL_HTTP_PORT=18080
+docker compose up -d --build
+./scripts/smoke.sh
+curl "http://localhost:$KEEL_HTTP_PORT/api/v1/products"
+```
+
+> 8080 被别的服务占着时，原样照抄的那条 `curl` 会从**那个服务**拿到 404，
+> 看起来像「Keel 起崩了」，其实是打到了别人身上。
+
+要多商家形态（由 `Host` 头决定是哪家店）：
+`docker compose -f compose.yaml -f compose.multi.yaml up -d --build`。
 
 不需要 Elasticsearch，不需要 MongoDB，不需要 RabbitMQ，不需要 Redis。
 **只有一个数据库。** 向量检索在 `pgvector`，全文检索在 `tsvector`，任务队列是一张表。
@@ -97,8 +122,17 @@ docker compose up
 > 文件（商品图、头像、退款凭证）默认写本地磁盘卷，不是额外的服务。
 > 换 S3 形态时才会多一个组件。
 
-> 没有 GPU 也能跑——推理引擎会降级为 CPU 小模型。
-> 搜索质量会下降，但不会崩。
+### 还没在盒子里的
+
+上面那三个服务——PostgreSQL、迁移与种子、API——就是今天 `docker compose up`
+起来的全部。这份 README 的其余部分描述的是正在建的系统；下面这些还在路线图上，
+列在这里是为了让上面那段不会被读成「已经有了」：
+
+- 语义检索本身。`pgvector` 扩展与四张向量 / 理解表已经进了盒子（数据库镜像是
+  `pgvector/pgvector:pg16`，`docker compose up` 就会建好），但向量召回、关键词召回
+  与 `/search` 接口还没有 —— 今天盒子里有的是底座，不是搜索
+- 推理引擎，以及没有 GPU 时降级到 CPU 小模型这件事
+- 店铺前台与后台界面——3000 端口上目前没有任何页面
 
 ---
 
@@ -147,6 +181,37 @@ Keel 自带客户端，不只是一套 API。
 
 > 首个版本交付管理后台与 H5 / 小程序商城前台。
 > 原生 App 打包与桌面端优化的 Web 商城随后跟上。
+
+---
+
+## 买家端 —— `app/` 里现在真的有什么
+
+上面那张表是计划。这一节是已经存在的那部分，免得上面读起来像是都已经发布了。
+
+[`app/`](./app) 是买家端店面，用 [uni-app x](https://doc.dcloud.net.cn/uni-app-x/)
+写（UTS 编译成原生 Kotlin/Swift，不走 webview）。页面流是：商品列表 → 商品详情 →
+登录 → 下单（试算 → 提交）→ 我的订单 → 订单详情 → 发起支付。
+搜索框是禁用的占位：`GET /search` 是 M3 的东西。
+
+**它的类型同样从契约生成，但不是 `web/` 那份产物。** UTS 不是 TypeScript ——
+它的类型系统要落到 Kotlin 与 Swift 上，`web/src/api/client.mts` 里那套条件类型与
+映射类型没有任何东西可以生成成。所以另有一个生成器
+（`scripts/gen_uts_schema.py`）从同一份 `docs/电商系统-OpenAPI.yaml` 生成
+`app/src/api/schema.uts`，产物入库，两道闸门钉着它：
+`scripts/check_uts_contract.py`（重生成到临时目录再 diff）与
+`scripts/check_app_types.py`（`tsc --strict` 编译每一个 `.uts`）。
+把契约里的字段改个名，两道都会红 —— 变异验证的完整输出在
+[`app/README.md`](./app/README.md)。
+
+**命令行能构建到 H5 与 Kotlin，构建不出 apk。**
+`uni build --platform h5` 出的是可直接发布的 web 产物；
+`uni build --platform app-android` 出的是 Kotlin 源码，到此为止 ——
+从那堆 Kotlin 到一个能装的 App 需要 HBuilderX 或 DCloud 云打包，没有对应的
+命令行。CI 跑的就是这两步，不多不少。`app/README.md` 记了实测到哪一步，
+包括为了让一个纯命令行项目能编起来绕开的五个坑。
+
+怎么跑起来见 [`app/README.md`](./app/README.md)。H5 形态必须与 API 同源
+（服务端不发 CORS 头），`app/vite.config.js` 里那段开发服务器代理干的就是这件事。
 
 ---
 

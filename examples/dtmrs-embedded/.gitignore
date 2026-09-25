@@ -3,3 +3,9 @@ lib/
 include/
 bin/
 *.db
+
+# clone 下来的 dtmrs 源码树（约 870MB）。原先漏了这一条，于是任何跑过
+# `make deps` 的人 —— 现在包括照着 CI 跑的人 —— `git status` 里都会多出
+# 一整棵未跟踪的源码树，而 `git add .` 会把它吞进去。
+# 理由和上面几条是同一个：它是 fetch-dtmrs.sh 的产物，不入库。
+.dtmrs-src/

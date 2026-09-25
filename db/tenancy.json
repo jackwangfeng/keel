@@ -1,0 +1,182 @@
+{
+  "_readme": [
+    "多租户闸门的**单一真相源**。Python 侧（scripts/check_tenancy.py，读设计文档）",
+    "与 Go 侧（internal/db/migrate_test.go，读真库的系统目录）都从这里取清单。",
+    "",
+    "为什么是一份而不是两份：此前 migrate_test.go 的 notBusinessTables 有 3 张表、",
+    "check_tenancy.py 的 EXEMPT 有 7 张，两边各自成立、接起来不成立。后果是具体的：",
+    "M2 接 dtmrs 建出 barrier（跨租户基础设施，本就不该有租户策略），Go 侧那两条",
+    "测试当场红；order_status_transitions / refund_status_transitions 同理。",
+    "两份清单谁也不知道对方豁免了什么，而它们豁免的是同一件事的两个面。",
+    "",
+    "所以：往这里加条目是一个需要解释的动作，每一条都要写 reason。",
+    "改这个文件之前先读下面的 classes —— 先想清楚这张表属于哪一类，",
+    "而不是先想清楚要豁免掉哪条检查。",
+    "",
+    "### 清单不完整会怎样",
+    "",
+    "两个方向都会响：库里出现一张没分类的表 → Go 侧红；文档里出现一张没分类的表",
+    "→ Python 侧红；这里写了一张文档里根本没有的表 → Python 侧红（清单过期）。",
+    "唯独「这里写了、库里还没建」是允许的 —— 这个文件刻意是**前瞻**的，",
+    "M2 要建的表现在就登记在册，撞上之前就登记好，不是撞上了再补。",
+    "",
+    "### 策略命名约定",
+    "",
+    "所有租户策略一律命名为 policy_name（下面那个字段，值是 tenant）。",
+    "PostgreSQL 的策略名以表为作用域，`inventories_tenant` 里的表名前缀是冗余的；",
+    "而名字固定之后，「恰好一条、且叫 tenant」比「恰好一条、名字不限」严格：",
+    "改名这个动作本身会变成一次显式的、要改这个文件的动作。",
+    "数据模型文档 §4 原先写的是 inventories_tenant，本轮统一成 tenant。"
+  ],
+  "policy_name": "tenant",
+  "classes": {
+    "tenant": {
+      "_": "常规业务表。自带 merchant_id 列，策略是直接的列比较。这是默认类别——不在 tables 里登记的表一律按这一类查。",
+      "merchant_id": "required",
+      "policy": "column",
+      "unique_scoped": true,
+      "grants": [
+        "SELECT",
+        "INSERT",
+        "UPDATE",
+        "DELETE"
+      ]
+    },
+    "parent-scoped": {
+      "_": "没有 merchant_id 列，租户归属由父表决定。它**要**策略——谓词是对父表的 EXISTS 子查询。规矩一的豁免（不冗余那一列）与「挂不挂得上策略」是正交的两件事：策略谓词可以是任意布尔表达式，不必是本表的列比较。",
+      "merchant_id": "absent",
+      "policy": "parent",
+      "unique_scoped": true,
+      "grants": [
+        "SELECT",
+        "INSERT",
+        "UPDATE",
+        "DELETE"
+      ]
+    },
+    "tenant-root": {
+      "_": "租户目录自身。租户解析要在 SET LOCAL 之前读它，此时 current_merchant() 会报错，挂 RLS 会让整站在第一跳 404。防护改由 GRANT 面承担：keel_app 只读。写入走管理员角色（建店、迁移、种子）。",
+      "merchant_id": "special",
+      "policy": "none",
+      "unique_scoped": true,
+      "grants": [
+        "SELECT"
+      ]
+    },
+    "shared-reference": {
+      "_": "全租户共用的静态参考数据（状态机之类）。没有租户维度，挂租户策略会让所有人都读不到；「唯一约束收进租户内」也无从谈起。keel_app 只读——任何租户都能改状态机，是个比跨租户读取更难发现的洞。",
+      "merchant_id": "absent",
+      "policy": "none",
+      "unique_scoped": false,
+      "grants": [
+        "SELECT"
+      ]
+    },
+    "cross-tenant-infra": {
+      "_": "不由本项目定义的跨租户基础设施表。它们记的是全局事务 id / 迁移版本，没有租户维度可言。GRANT 面逐表申明，不吃类别默认值。",
+      "merchant_id": "absent",
+      "policy": "none",
+      "unique_scoped": false,
+      "grants": []
+    }
+  },
+  "tables": {
+    "goose_db_version": {
+      "class": "cross-tenant-infra",
+      "documented": false,
+      "reason": "goose 自己的迁移记录表，不由本项目定义，也不在设计文档里。keel_app 一个权限都不该有。"
+    },
+    "barrier": {
+      "class": "cross-tenant-infra",
+      "grants": [
+        "INSERT"
+      ],
+      "reason": "子事务屏障表（数据模型 §6）。它与业务表同库是硬要求：屏障记录必须和业务变更在同一个本地事务里提交，那就是屏障成立的全部意义。主键是 (gid, branch_id, op, barrier_id) —— 全局事务维度，没有 merchant_id 可挂。GRANT 面按 M2 任务 3 接上 dtmrs 后的**实际调用面**收窄到只有 INSERT：屏障算法自始至终只发一条语句，`INSERT ... ON CONFLICT DO NOTHING`，靠它的 rows_affected 判空回滚与重复请求；不读、不改、不删。实测两条（PostgreSQL 16，keel_app 只有 INSERT）：不带冲突目标的 `ON CONFLICT DO NOTHING` 跑得通（首次 INSERT 0 1、重复 INSERT 0 0），而写成 `ON CONFLICT (gid,branch_id,op,barrier_id) DO NOTHING` 会报 permission denied —— 带冲突目标要额外的 SELECT 权。所以这条 GRANT 面同时是一道形状约束：屏障的 SQL 不许写冲突目标。另：这张表**不是** dtmrs 建的。dtmrs 的 migrate() 建的是 trans_global / trans_branch_op / auth_token 三张（实测），barrier 由 dtmrs-barrier 那个 crate 建，而 C ABI 根本不依赖它（dtmrs-ffi 的 Cargo.toml 与符号表里都没有）。所以它由本项目自己的迁移建出来。"
+    },
+    "merchants": {
+      "class": "tenant-root",
+      "reason": "租户表自身；租户解析要在确定租户之前读它。"
+    },
+    "shop_settings": {
+      "class": "tenant-root",
+      "reason": "同上，解析期就要读，此时还没有 current_merchant()；主键就是 merchant_id。"
+    },
+    "order_status_transitions": {
+      "class": "shared-reference",
+      "reason": "订单状态机（数据模型 §5），所有租户共用同一张迁移表，只有 (from_status, to_status) 两列。"
+    },
+    "refund_status_transitions": {
+      "class": "shared-reference",
+      "documented_only": true,
+      "reason": "退款状态机（数据模型 §11），同上。"
+    },
+    "inventories": {
+      "class": "parent-scoped",
+      "parent": "skus",
+      "via": "sku_id",
+      "reason": "主键就是 sku_id，租户归属由 skus 决定；且它是下单 SAGA 的热点表，多一列索引成本不划算（数据模型 §4）。它**要**策略：实测无策略时商家 A 能往商家 B 的 SKU 上插库存行、能改对方水位。"
+    },
+    "staff_tokens": {
+      "class": "parent-scoped",
+      "parent": "staff",
+      "via": "staff_id",
+      "documented_only": true,
+      "reason": "跟随 staff，租户归属由 staff.merchant_id 决定（数据模型 §14）。staff.merchant_id 本来就可空，复制一份下来也表达不了「平台级 token」属于谁。"
+    }
+  },
+  "fk_missing_ok": {
+    "_readme": [
+      "规矩二的**对偶**豁免：列名形如 <x>_id、能解析到一张同名父表、却没有任何外键引用它。",
+      "键是 表名.列名。每一条都要说清为什么这里不该有外键 —— 默认答案是「补上外键」。"
+    ],
+    "search_logs.user_id": "搜索日志要能记录未登录访客（该列可空），且日志表不该因为用户注销而卡住删除顺序（数据模型 §8）。",
+    "idempotency_keys.user_id": "纯基础设施表，随 expire_at 过期即删。挂外键会让清理任务和用户注销互相牵制（数据模型 §12）。"
+  },
+  "fk_single_column_ok": {
+    "_readme": [
+      "规矩二的豁免：两端都带 merchant_id、却只能用单列外键的那些引用。",
+      "键是 表名(列名)。这三条全部指向 staff，理由是同一个。"
+    ],
+    "staff(created_by)": "staff 是全文唯一一张 merchant_id 可空的表（平台级操作员为 NULL）。复合外键要求父子两边 merchant_id 相等，而 NULL 下 MATCH SIMPLE 直接跳过检查，于是「平台管理员创建某家店的管理员」写不进去 —— 那正是认证流程 ② 的主路径（数据模型 §14）。",
+    "shipments(created_by)": "同上，指向 staff。审计字段，不在资金与库存的主链路上。",
+    "uploads(staff_id)": "同上，指向 staff。归属字段；同表的 user_id 走的是复合外键，两者待遇不同不是笔误（数据模型 §14）。"
+  },
+  "unique_global_ok": {
+    "_readme": [
+      "规矩三（唯一约束一律收进租户内）的豁免：首列不是 merchant_id 的唯一索引 / 约束。",
+      "键是 表名(列名,列名)，按索引里的列序写。",
+      "",
+      "两条**自动**放行，不必往这里写，也不该往这里写：",
+      "  · 首列是 merchant_id —— 这就是规矩三本身；",
+      "  · 首列是本表的代理主键 id —— 它按构造就全局唯一，`UNIQUE (id, merchant_id)`",
+      "    这种给子表复合外键当落点的索引一律属于这一类，比已有的主键更弱，是空谈。",
+      "检查只作用于有租户维度的类别（tenant / parent-scoped / tenant-root）；",
+      "shared-reference 与 cross-tenant-infra 本来就没有租户维度，「收进租户内」无从谈起。",
+      "",
+      "剩下的两类，判据见数据模型 §2 那条分界线：",
+      "  ① 我们自己生成的不可枚举编号 —— 全局唯一是我们能兑现的承诺；",
+      "  ② 物理资源与安全凭据 —— 撞了就是真的互相覆盖 / 真的撞库；",
+      "  ③ 首列已经是租户内标识（cart_id、refund_id、user_id …）—— 已经蕴含租户。"
+    ],
+    "merchants(code)": "① 它就是租户标识本身，全局唯一是定义。",
+    "shop_settings(domain)": "② 自定义域名是全局物理资源，两家店绑同一个域名就是真的互相劫持。",
+    "orders(order_no)": "① 对外编号，要跟支付渠道对账；随机不可枚举，全局唯一不泄露任何东西（数据模型 §2）。",
+    "payments(payment_no)": "① 同上。",
+    "refunds(refund_no)": "① 同上。",
+    "user_coupons(coupon_code)": "① 同上。",
+    "user_coupons(order_id)": "③ 「一张订单至多用一张券」的部分唯一索引，首列 order_id 已蕴含租户。",
+    "search_logs(trace_id)": "① 链路追踪标识，日志 / 指标 / APM 三处按它对齐，按租户切会让跨系统排查失去锚点（数据模型 §8）。",
+    "uploads(driver,storage_key)": "② storage_key 是磁盘或对象存储里的物理路径，两个租户写到同一个路径就是真的互相覆盖文件（数据模型 §13）。",
+    "staff_tokens(token_hash)": "② 它和支付密钥同量级；按租户切会让同一个 hash 在两家店下并存，而校验是按 hash 的点查。",
+    "carts(user_id)": "③ 首列 user_id 已蕴含租户（users 自带 merchant_id），一个用户一个购物车。",
+    "user_addresses(user_id)": "③ 同上，「每个用户至多一个默认地址」的部分唯一索引。",
+    "cart_items(cart_id,sku_id)": "③ 首列 cart_id 已蕴含租户（数据模型 §10 明写）。",
+    "refund_items(refund_id,order_item_id)": "③ 首列 refund_id 已蕴含租户。",
+    "idempotency_keys(scope,user_id,idem_key)": "③ user_id 已蕴含租户；幂等键由客户端生成，scope 打头是为了让抢占插入是一次点查（数据模型 §12 明写不加 merchant_id 的理由）。",
+    "product_text_vectors(product_id)": "③ 主键就是 product_id，一个商品一行；product_id 已蕴含租户（products 自带 merchant_id）。",
+    "product_image_vectors(product_id)": "③ 同上。",
+    "product_understanding(product_id)": "③ 同上。",
+    "product_clusters(product_id)": "③ 同上。",
+    "inventories(sku_id)": "③ 主键就是 sku_id，租户归属由 skus 决定（数据模型 §4）。"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "pages": [
+    { "path": "pages/products/list",  "style": { "navigationBarTitleText": "Keel 商城" } },
+    { "path": "pages/products/detail","style": { "navigationBarTitleText": "商品详情" } },
+    { "path": "pages/auth/login",     "style": { "navigationBarTitleText": "登录" } },
+    { "path": "pages/order/create",   "style": { "navigationBarTitleText": "确认订单" } },
+    { "path": "pages/order/list",     "style": { "navigationBarTitleText": "我的订单" } },
+    { "path": "pages/order/detail",   "style": { "navigationBarTitleText": "订单详情" } },
+    { "path": "pages/settings/base",  "style": { "navigationBarTitleText": "服务地址" } }
+  ],
+  "globalStyle": {
+    "navigationBarTextStyle": "black",
+    "navigationBarBackgroundColor": "#ffffff",
+    "backgroundColor": "#f5f5f5"
+  }
+}

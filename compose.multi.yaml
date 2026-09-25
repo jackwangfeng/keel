@@ -1,0 +1,46 @@
+# 多商家形态的叠加层。用法：
+#     docker compose -f compose.yaml -f compose.multi.yaml up -d --build
+#     KEEL_SMOKE_HOST=shop-a.example.com ./scripts/smoke.sh
+#
+# 它只改两件事：种子换成完整的 dev.sql（6 家商家，含停用 / 软删 / 没登记域名的
+# 反例），应用从「配了默认商家」换成「按 Host 在 example.com 下解析」。
+#
+# 存在的理由：默认形态为了兑现「小商家感知不到多租户」只播一家店，那会让
+# compose 这条路径再也碰不到多商家的那套解析。这个叠加层把它接回来，
+# 而且用的就是测试用的那份种子 —— 不是另写一份只在这里出现、没人维护的数据。
+#
+# 它用**自己的数据卷**，和默认形态的库完全隔开，所以两种形态可以来回切，
+# 不需要 `docker compose down -v`。这不是洁癖：两种形态的种子都是增量式的，
+# 共用一个卷时 single → multi 这个方向会静默出错 —— dev.sql 叠在 demo 上，
+# 库里变成 7 家商家，而 Preflight 在多商家模式下不检查「有几家」，于是应用照常启动、
+# 冒烟照常绿，只是多了一家本不该存在的店，且 demo.example.com 真能访问到它。
+# 反方向（multi → single）倒是会响（默认形态拒绝启动在多商家的库上），
+# 但一条只在一个方向上生效的保护不叫保护。与其在注释里写一条人工纪律，
+# 不如让它在结构上不可能发生。
+services:
+  seed:
+    command: >
+      psql -v ON_ERROR_STOP=1 -h postgres -U keel -d keel -f /seed/dev.sql
+
+  app:
+    environment:
+      # 清空而不是删掉这一行：compose 合并 environment 是按键合并的，
+      # 叠加层没法「移除」基础文件里的键，只能把它置空。空串对 Go 侧就是没配
+      # （os.Getenv 返回 ""），于是解析器进入多商家分支。
+      # 留着不置空的话，Preflight 会因为两个租户来源同时配置而拒绝启动。
+      KEEL_DEFAULT_MERCHANT: ""
+      # 与 dev.sql 里登记的域名一致（shop-a.example.com 这些）。
+      KEEL_BASE_DOMAIN: example.com
+
+# 卷名写死，而不是让 compose 按项目名自动生成 `keel_pgdata`：
+# 两个 compose 文件叠在一起时项目名仍是 keel，不写死的话它和默认形态的卷是同一个。
+#
+# 协调器的存储卷要和库一起隔开，理由是同一个：它存的是「哪些全局事务还没跑完」，
+# 而那些事务的 gid 里带着**另一个库里的** merchant_id 与 order_no。共用一个卷时，
+# 切到多商家形态的第一秒，协调器就会拿单商家库里遗留的事务去重放分支，
+# 而那些分支会在一个根本没有这些订单的库上跑补偿。
+volumes:
+  pgdata:
+    name: keel_pgdata_multi
+  dtmdata:
+    name: keel_dtmdata_multi

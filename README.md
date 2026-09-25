@@ -5,8 +5,14 @@
 **An AI-native commerce platform with a built-in distributed transaction engine.**
 *Runs on a single machine. Scales without a rewrite. No external AI APIs.*
 
+<!-- The badge and the clone URL in the quick start point at the same repository.
+     scripts/check_promises.py guards two things: a build badge is a false claim when
+     .github/workflows/ does not exist; and every GitHub URL pointing at this repository
+     must agree — either all still placeholders, or all filled in with the same owner.
+     Replacing only half is both the easiest mistake to make and the hardest to spot. -->
+[![CI](https://github.com/jackwangfeng/keel/actions/workflows/ci.yml/badge.svg)](https://github.com/jackwangfeng/keel/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](./LICENSE)
-![Go](https://img.shields.io/badge/Go-1.23+-00ADD8)
+![Go](https://img.shields.io/badge/Go-1.26+-00ADD8)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16+-336791)
 
 [Documentation](./docs) · [中文文档](./README.zh-CN.md)
@@ -82,19 +88,42 @@ changing architecture.
 Cross-tenant isolation does not rest on remembering a `WHERE` clause — that kind of
 bug is invisible against single-tenant test data. It rests on every table carrying
 `merchant_id`, parent-child rows pinned by composite foreign keys, and PostgreSQL
-row-level security underneath. A script checks the first of those before you commit.
+row-level security underneath. All three are checked mechanically: the
+`merchant_id` rule against **the DDL in the design doc**, the other two against
+**the live database's catalog** in the test suite.
 
 ---
 
 ## Quick start
 
 ```bash
-git clone https://github.com/<org>/keel && cd keel
-docker compose up
+git clone https://github.com/jackwangfeng/keel && cd keel
+docker compose up -d --build
+./scripts/smoke.sh                        # exit 0 means the chain works
+curl http://localhost:8080/api/v1/products
 ```
 
-That's it. One command brings up the API, PostgreSQL (with pgvector),
-the inference engine and seed data. Open <http://localhost:3000>.
+One command brings up PostgreSQL, runs the migrations, loads a seed shop and
+starts the API. That `curl` comes back with the shop's products, and nothing in
+it says which shop — the deployment has exactly one tenant, which is the
+small-shop shape promised above.
+
+If 8080 is taken, move the whole group — the four commands above read the same
+variable, but the port in that `curl` is hard-coded, so don't change only the first:
+
+```bash
+export KEEL_HTTP_PORT=18080
+docker compose up -d --build
+./scripts/smoke.sh
+curl "http://localhost:$KEEL_HTTP_PORT/api/v1/products"
+```
+
+> When something else holds 8080, the `curl` copied verbatim gets a 404 from
+> **that** service. It reads like "Keel failed to start" when in fact the request
+> never reached Keel.
+
+For the multi-merchant shape, where the `Host` header picks the shop:
+`docker compose -f compose.yaml -f compose.multi.yaml up -d --build`.
 
 No Elasticsearch. No MongoDB. No RabbitMQ. No Redis.
 **One database.** Vector search lives in `pgvector`, full-text in `tsvector`,
@@ -103,8 +132,19 @@ the job queue in a table.
 > Files (product images, avatars, refund evidence) go to a local disk volume by
 > default — not another service. Switching to the S3 driver is what adds a component.
 
-> Works without a GPU — the inference engine falls back to small CPU models.
-> Search quality degrades gracefully; nothing breaks.
+### Not in the box yet
+
+The three services above — PostgreSQL, the migrations plus seed, the API — are
+all `docker compose up` brings up today. The rest of this README describes the
+system being built; these parts are on the roadmap and are listed here so that
+nothing above reads as if it already ships:
+
+- semantic search itself. The `pgvector` extension and the four vector/understanding
+  tables are in the box now (the database image is `pgvector/pgvector:pg16`, and
+  `docker compose up` creates them), but vector recall, keyword recall and the
+  `/search` endpoint are not — what ships today is the substrate, not the search
+- the inference engine, and its fallback to small CPU models where there is no GPU
+- the storefront and admin UI — there is no page on port 3000 yet
 
 ---
 
@@ -156,6 +196,42 @@ If you are selling in that market, a web-only storefront is not a storefront.
 
 > First release ships the admin console and the H5 / Mini Program storefront.
 > Native app builds and a desktop-optimized web storefront follow.
+
+---
+
+## Buyer app — what's actually in `app/` today
+
+The table above is the plan. This section is the part that exists, so that
+nothing above reads as if the rest already ships.
+
+[`app/`](./app) is the buyer storefront, written in
+[uni-app x](https://doc.dcloud.net.cn/uni-app-x/) (UTS compiled to native
+Kotlin/Swift — not a webview). Product list → product detail → login →
+checkout (preview then submit) → my orders → order detail → pay.
+Search is a disabled placeholder: `GET /search` lands in M3.
+
+**Its types are generated from the same OpenAPI spec, but not from the same
+artifact as `web/`.** UTS is not TypeScript — its type system has to land on
+Kotlin and Swift, so the conditional/mapped types in `web/src/api/client.mts`
+have nothing to compile to. A second generator
+(`scripts/gen_uts_schema.py`) emits `app/src/api/schema.uts` from the same
+`docs/电商系统-OpenAPI.yaml`, the artifact is committed, and two gates hold it
+in place: `scripts/check_uts_contract.py` (regenerate to a temp dir and diff)
+and `scripts/check_app_types.py` (`tsc --strict` over every `.uts`).
+Rename a contract field and both go red — the mutation transcript is in
+[`app/README.md`](./app/README.md).
+
+**Command-line builds reach H5 and Kotlin, not an apk.**
+`uni build --platform h5` produces a deployable web bundle;
+`uni build --platform app-android` produces Kotlin source and stops there —
+turning that into an installable app needs HBuilderX or DCloud's cloud build,
+and there is no CLI for it. CI runs exactly those two steps and says so.
+`app/README.md` records what was measured, including the five things that had
+to be worked around to get a CLI project to build at all.
+
+Building and running it: see [`app/README.md`](./app/README.md).
+The H5 form needs to be served same-origin with the API (the server sends no
+CORS headers), which is what the dev-server proxy in `app/vite.config.js` does.
 
 ---
 

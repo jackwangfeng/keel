@@ -6,6 +6,7 @@
 "$ref:" 误报成悬空引用。
 """
 import io
+import re
 import os
 import sys
 
@@ -71,6 +72,12 @@ SAFE_DEFAULT_PARAMS = {'page', 'page_size', 'size', 'sort', 'explain', 'strategy
 class DupKeyLoader(yaml.SafeLoader):
     """拒绝重复键。默认 loader 会静默让后者覆盖前者——
     一个被覆盖的 schema 在结构上完全合法，却不是作者写的那个。"""
+
+
+# 契约里出现的 problem type URI。判据是路径里带 /problems/ 或域名以 errors. 开头——
+# 后者是为了让「退回旧占位域名」这个动作也被抓住，而不是只认新域名然后对旧的失明。
+PROBLEM_TYPE_RE = re.compile(r'https?://(?:errors\.[^/\s"\']+|[^/\s"\']+)/problems?/[a-z0-9-]+'
+                             r'|https?://errors\.[^/\s"\']+/[a-z0-9-]+')
 
 
 def _no_dup(loader, node, deep=False):
@@ -166,6 +173,29 @@ def main():
     seen, schemas = reachable_schemas(doc)
     for name in sorted(set(schemas) - seen):
         problems.append('不可达 schema（从 paths 出发引用不到）: %s' % name)
+
+    # RFC 9457 的 problem type 必须全部同源。
+    #
+    # 这里抓过一次真的：契约里 13 个 type 全在 https://errors.example.com/，
+    # 而 internal/problem 产出的 13 个全在 https://keel.dev/problems/，
+    # 只有 4 个名字重合。两份「唯一真相源」在这件事上整体分叉了一个里程碑，
+    # 而没有任何东西会响 —— type 是客户端**用来分支**的字段，不是展示文案，
+    # 分叉的代价是客户端照契约写的 switch 一条都命不中。
+    #
+    # 判据只管「同源」，不管域名叫什么：域名将来会变，而「契约里说的 type
+    # 和服务端发的 type 是同一个」这条不会变。
+    hosts = {}
+    for m in PROBLEM_TYPE_RE.finditer(text):
+        url = m.group(0)
+        host = url.split('/')[2]
+        hosts.setdefault(host, []).append(url)
+    if len(hosts) > 1:
+        problems.append(
+            'problem type 用了不止一个域名：%s —— type 是客户端用来分支的字段，'
+            '分叉之后照契约写的 switch 一条都命不中'
+            % '、'.join('%s（%d 处）' % (h, len(v)) for h, v in sorted(hosts.items())))
+    elif not hosts:
+        problems.append('契约里一个 problem type 都没找到——这条检查本身失效了')
 
     paths = doc.get('paths', {})
     for p, method in REQUIRED_PATHS:
