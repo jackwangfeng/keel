@@ -57,7 +57,7 @@ GOOSE := GOOSE_DRIVER=postgres GOOSE_DBSTRING="$(GOOSE_DBSTRING)" \
 
 .PHONY: help generate generate-go generate-ts generate-sql tools-versions \
 	contract-check schema-check sdk-smoke migrate migrate-down migrate-status test-db \
-	dtmrs-deps build
+	test-engine dtmrs-deps build
 
 help:
 	@echo "make generate       生成 Go + TS 两侧契约产物"
@@ -71,7 +71,8 @@ help:
 	@echo "make migrate        把 db/migrations 迁到最新（GOOSE_DBSTRING 可覆盖）"
 	@echo "make migrate-down   回滚一个版本"
 	@echo "make migrate-status 打印各版本的应用状态"
-	@echo "make test-db      跑需要数据库的测试（强制不吃缓存）"
+	@echo "make test-db      跑需要数据库的测试（强制不吃缓存，含替身那一组）"
+	@echo "make test-engine    对**真的跑着的**推理引擎跑一次（要 KEEL_EMBED_ENDPOINT）"
 	@echo "make dtmrs-deps     取回 dtmrs 并编出 libdtmrs.so（需要 Rust 1.88+）"
 	@echo "make build          编译主模块（会先确保 libdtmrs.so 在）"
 
@@ -208,6 +209,30 @@ TEST_PKGS ?= ./...
 # 宁可慢一点，也不要一个「只在该报警时失灵」的测试。
 test-db: $(DTMRS_LIB)
 	go test -count=1 -p 1 $(TEST_PKGS)
+	@echo "==> 替身那一组（-tags keel_fake_embedder）"
+	go test -count=1 -tags keel_fake_embedder ./internal/inference/...
+
+# 推理引擎的替身（internal/inference/fake）带编译标签，默认构建里不存在——
+# 那是有意的（生产路径够不着它，理由写在那个包的 doc.go 里）。代价是
+# 「替身跑不出真实语义相关性」那条测试默认也不会跑，于是它会慢慢烂掉。
+# 所以上面那行把它接回 test-db：一条不在闸门里的测试，等于没有。
+
+# 对**真的跑着的**推理引擎跑一次。
+#
+# 它不在 test-db 里，因为它要 2.27 GB 权重和一个起了几十秒的进程。
+# 但它必须存在：internal/inference 别的所有测试用的都是假引擎（httptest），
+# 它们能证明客户端的判断力，证明不了「这套东西真的能算出语义相近」——
+# 而那正是 M3 的验收标准（搜「连衣裙」能返回相关商品）。
+#
+# 起引擎：
+#     docker compose -f compose.yaml -f compose.inference.yaml up -d --build inference
+# 然后：
+#     KEEL_EMBED_ENDPOINT=http://127.0.0.1:8001 make test-engine
+#
+# 刻意不 Skip：没配 KEEL_EMBED_ENDPOINT 时那些测试 Fatal 而不是 Skip。
+# 一条会自己跳过的测试，在它该报警的时候是静默的。
+test-engine:
+	go test -count=1 -v -tags keel_real_engine ./internal/inference/
 
 # ---------------------------------------------------------------------------
 # dtmrs：嵌入式事务协调器的 C ABI 动态库
