@@ -1299,7 +1299,7 @@ type Problem struct {
 	Title   string  `json:"title"`
 	TraceId *string `json:"trace_id,omitempty"`
 
-	// Type Examples: https://errors.example.com/insufficient-stock
+	// Type Examples: https://keel.dev/problems/insufficient-stock
 	Type string `json:"type"`
 }
 
@@ -1830,10 +1830,10 @@ type PostAddressesParams struct {
 	// · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
 	//   并带 `Idempotency-Replayed: true` 响应头
 	// · **同 key 正在处理中**：`409` + `Retry-After`，
-	//   type=https://errors.example.com/idempotency-key-in-flight，
+	//   type=https://keel.dev/problems/idempotency-key-in-flight，
 	//   客户端应退避重试，不要当成业务失败
 	// · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
-	//   type=https://errors.example.com/idempotency-key-reused。
+	//   type=https://keel.dev/problems/idempotency-key-reused。
 	//   宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
 	//   那会让用户以为下单成功了而实际什么都没发生
 	// · 首次执行失败（存档为失败态）时同样回放该失败响应；
@@ -1868,10 +1868,10 @@ type PostAdminMerchantsParams struct {
 	// · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
 	//   并带 `Idempotency-Replayed: true` 响应头
 	// · **同 key 正在处理中**：`409` + `Retry-After`，
-	//   type=https://errors.example.com/idempotency-key-in-flight，
+	//   type=https://keel.dev/problems/idempotency-key-in-flight，
 	//   客户端应退避重试，不要当成业务失败
 	// · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
-	//   type=https://errors.example.com/idempotency-key-reused。
+	//   type=https://keel.dev/problems/idempotency-key-reused。
 	//   宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
 	//   那会让用户以为下单成功了而实际什么都没发生
 	// · 首次执行失败（存档为失败态）时同样回放该失败响应；
@@ -1887,10 +1887,10 @@ type PostAdminOrdersOrderNoShipmentsParams struct {
 	// · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
 	//   并带 `Idempotency-Replayed: true` 响应头
 	// · **同 key 正在处理中**：`409` + `Retry-After`，
-	//   type=https://errors.example.com/idempotency-key-in-flight，
+	//   type=https://keel.dev/problems/idempotency-key-in-flight，
 	//   客户端应退避重试，不要当成业务失败
 	// · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
-	//   type=https://errors.example.com/idempotency-key-reused。
+	//   type=https://keel.dev/problems/idempotency-key-reused。
 	//   宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
 	//   那会让用户以为下单成功了而实际什么都没发生
 	// · 首次执行失败（存档为失败态）时同样回放该失败响应；
@@ -1917,10 +1917,10 @@ type PostAdminRefundsRefundNoAuditParams struct {
 	// · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
 	//   并带 `Idempotency-Replayed: true` 响应头
 	// · **同 key 正在处理中**：`409` + `Retry-After`，
-	//   type=https://errors.example.com/idempotency-key-in-flight，
+	//   type=https://keel.dev/problems/idempotency-key-in-flight，
 	//   客户端应退避重试，不要当成业务失败
 	// · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
-	//   type=https://errors.example.com/idempotency-key-reused。
+	//   type=https://keel.dev/problems/idempotency-key-reused。
 	//   宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
 	//   那会让用户以为下单成功了而实际什么都没发生
 	// · 首次执行失败（存档为失败态）时同样回放该失败响应；
@@ -1945,10 +1945,10 @@ type PostAdminStaffParams struct {
 	// · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
 	//   并带 `Idempotency-Replayed: true` 响应头
 	// · **同 key 正在处理中**：`409` + `Retry-After`，
-	//   type=https://errors.example.com/idempotency-key-in-flight，
+	//   type=https://keel.dev/problems/idempotency-key-in-flight，
 	//   客户端应退避重试，不要当成业务失败
 	// · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
-	//   type=https://errors.example.com/idempotency-key-reused。
+	//   type=https://keel.dev/problems/idempotency-key-reused。
 	//   宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
 	//   那会让用户以为下单成功了而实际什么都没发生
 	// · 首次执行失败（存档为失败态）时同样回放该失败响应；
@@ -2042,10 +2042,10 @@ type PostCartItemsParams struct {
 	// · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
 	//   并带 `Idempotency-Replayed: true` 响应头
 	// · **同 key 正在处理中**：`409` + `Retry-After`，
-	//   type=https://errors.example.com/idempotency-key-in-flight，
+	//   type=https://keel.dev/problems/idempotency-key-in-flight，
 	//   客户端应退避重试，不要当成业务失败
 	// · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
-	//   type=https://errors.example.com/idempotency-key-reused。
+	//   type=https://keel.dev/problems/idempotency-key-reused。
 	//   宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
 	//   那会让用户以为下单成功了而实际什么都没发生
 	// · 首次执行失败（存档为失败态）时同样回放该失败响应；
@@ -2069,10 +2069,10 @@ type PostCartItemsBatchDeleteParams struct {
 	// · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
 	//   并带 `Idempotency-Replayed: true` 响应头
 	// · **同 key 正在处理中**：`409` + `Retry-After`，
-	//   type=https://errors.example.com/idempotency-key-in-flight，
+	//   type=https://keel.dev/problems/idempotency-key-in-flight，
 	//   客户端应退避重试，不要当成业务失败
 	// · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
-	//   type=https://errors.example.com/idempotency-key-reused。
+	//   type=https://keel.dev/problems/idempotency-key-reused。
 	//   宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
 	//   那会让用户以为下单成功了而实际什么都没发生
 	// · 首次执行失败（存档为失败态）时同样回放该失败响应；
@@ -2149,10 +2149,10 @@ type PostMeIdentitiesWechatParams struct {
 	// · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
 	//   并带 `Idempotency-Replayed: true` 响应头
 	// · **同 key 正在处理中**：`409` + `Retry-After`，
-	//   type=https://errors.example.com/idempotency-key-in-flight，
+	//   type=https://keel.dev/problems/idempotency-key-in-flight，
 	//   客户端应退避重试，不要当成业务失败
 	// · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
-	//   type=https://errors.example.com/idempotency-key-reused。
+	//   type=https://keel.dev/problems/idempotency-key-reused。
 	//   宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
 	//   那会让用户以为下单成功了而实际什么都没发生
 	// · 首次执行失败（存档为失败态）时同样回放该失败响应；
@@ -2175,10 +2175,10 @@ type PostMePhoneParams struct {
 	// · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
 	//   并带 `Idempotency-Replayed: true` 响应头
 	// · **同 key 正在处理中**：`409` + `Retry-After`，
-	//   type=https://errors.example.com/idempotency-key-in-flight，
+	//   type=https://keel.dev/problems/idempotency-key-in-flight，
 	//   客户端应退避重试，不要当成业务失败
 	// · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
-	//   type=https://errors.example.com/idempotency-key-reused。
+	//   type=https://keel.dev/problems/idempotency-key-reused。
 	//   宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
 	//   那会让用户以为下单成功了而实际什么都没发生
 	// · 首次执行失败（存档为失败态）时同样回放该失败响应；
@@ -2208,10 +2208,10 @@ type PostOrdersParams struct {
 	// · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
 	//   并带 `Idempotency-Replayed: true` 响应头
 	// · **同 key 正在处理中**：`409` + `Retry-After`，
-	//   type=https://errors.example.com/idempotency-key-in-flight，
+	//   type=https://keel.dev/problems/idempotency-key-in-flight，
 	//   客户端应退避重试，不要当成业务失败
 	// · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
-	//   type=https://errors.example.com/idempotency-key-reused。
+	//   type=https://keel.dev/problems/idempotency-key-reused。
 	//   宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
 	//   那会让用户以为下单成功了而实际什么都没发生
 	// · 首次执行失败（存档为失败态）时同样回放该失败响应；
@@ -2227,10 +2227,10 @@ type PostOrdersOrderNoCancelParams struct {
 	// · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
 	//   并带 `Idempotency-Replayed: true` 响应头
 	// · **同 key 正在处理中**：`409` + `Retry-After`，
-	//   type=https://errors.example.com/idempotency-key-in-flight，
+	//   type=https://keel.dev/problems/idempotency-key-in-flight，
 	//   客户端应退避重试，不要当成业务失败
 	// · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
-	//   type=https://errors.example.com/idempotency-key-reused。
+	//   type=https://keel.dev/problems/idempotency-key-reused。
 	//   宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
 	//   那会让用户以为下单成功了而实际什么都没发生
 	// · 首次执行失败（存档为失败态）时同样回放该失败响应；
@@ -2246,10 +2246,10 @@ type PostOrdersOrderNoConfirmParams struct {
 	// · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
 	//   并带 `Idempotency-Replayed: true` 响应头
 	// · **同 key 正在处理中**：`409` + `Retry-After`，
-	//   type=https://errors.example.com/idempotency-key-in-flight，
+	//   type=https://keel.dev/problems/idempotency-key-in-flight，
 	//   客户端应退避重试，不要当成业务失败
 	// · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
-	//   type=https://errors.example.com/idempotency-key-reused。
+	//   type=https://keel.dev/problems/idempotency-key-reused。
 	//   宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
 	//   那会让用户以为下单成功了而实际什么都没发生
 	// · 首次执行失败（存档为失败态）时同样回放该失败响应；
@@ -2270,10 +2270,10 @@ type PostOrdersOrderNoPaymentsParams struct {
 	// · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
 	//   并带 `Idempotency-Replayed: true` 响应头
 	// · **同 key 正在处理中**：`409` + `Retry-After`，
-	//   type=https://errors.example.com/idempotency-key-in-flight，
+	//   type=https://keel.dev/problems/idempotency-key-in-flight，
 	//   客户端应退避重试，不要当成业务失败
 	// · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
-	//   type=https://errors.example.com/idempotency-key-reused。
+	//   type=https://keel.dev/problems/idempotency-key-reused。
 	//   宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
 	//   那会让用户以为下单成功了而实际什么都没发生
 	// · 首次执行失败（存档为失败态）时同样回放该失败响应；
@@ -2292,10 +2292,10 @@ type PostOrdersOrderNoRefundsParams struct {
 	// · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
 	//   并带 `Idempotency-Replayed: true` 响应头
 	// · **同 key 正在处理中**：`409` + `Retry-After`，
-	//   type=https://errors.example.com/idempotency-key-in-flight，
+	//   type=https://keel.dev/problems/idempotency-key-in-flight，
 	//   客户端应退避重试，不要当成业务失败
 	// · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
-	//   type=https://errors.example.com/idempotency-key-reused。
+	//   type=https://keel.dev/problems/idempotency-key-reused。
 	//   宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
 	//   那会让用户以为下单成功了而实际什么都没发生
 	// · 首次执行失败（存档为失败态）时同样回放该失败响应；
@@ -2333,10 +2333,10 @@ type PostRefundsRefundNoCancelParams struct {
 	// · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
 	//   并带 `Idempotency-Replayed: true` 响应头
 	// · **同 key 正在处理中**：`409` + `Retry-After`，
-	//   type=https://errors.example.com/idempotency-key-in-flight，
+	//   type=https://keel.dev/problems/idempotency-key-in-flight，
 	//   客户端应退避重试，不要当成业务失败
 	// · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
-	//   type=https://errors.example.com/idempotency-key-reused。
+	//   type=https://keel.dev/problems/idempotency-key-reused。
 	//   宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
 	//   那会让用户以为下单成功了而实际什么都没发生
 	// · 首次执行失败（存档为失败态）时同样回放该失败响应；
@@ -2375,10 +2375,10 @@ type PostSearchEventsParams struct {
 	// · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
 	//   并带 `Idempotency-Replayed: true` 响应头
 	// · **同 key 正在处理中**：`409` + `Retry-After`，
-	//   type=https://errors.example.com/idempotency-key-in-flight，
+	//   type=https://keel.dev/problems/idempotency-key-in-flight，
 	//   客户端应退避重试，不要当成业务失败
 	// · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
-	//   type=https://errors.example.com/idempotency-key-reused。
+	//   type=https://keel.dev/problems/idempotency-key-reused。
 	//   宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
 	//   那会让用户以为下单成功了而实际什么都没发生
 	// · 首次执行失败（存档为失败态）时同样回放该失败响应；
@@ -2409,10 +2409,10 @@ type PostUploadsParams struct {
 	// · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
 	//   并带 `Idempotency-Replayed: true` 响应头
 	// · **同 key 正在处理中**：`409` + `Retry-After`，
-	//   type=https://errors.example.com/idempotency-key-in-flight，
+	//   type=https://keel.dev/problems/idempotency-key-in-flight，
 	//   客户端应退避重试，不要当成业务失败
 	// · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
-	//   type=https://errors.example.com/idempotency-key-reused。
+	//   type=https://keel.dev/problems/idempotency-key-reused。
 	//   宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
 	//   那会让用户以为下单成功了而实际什么都没发生
 	// · 首次执行失败（存档为失败态）时同样回放该失败响应；

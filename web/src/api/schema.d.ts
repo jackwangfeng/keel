@@ -66,7 +66,7 @@ export interface paths {
                 };
                 /**
                  * @description 该微信身份关联的手机号已属于另一账号，需用户手动换绑。
-                 *     type=https://errors.example.com/identity-conflict
+                 *     type=https://keel.dev/problems/identity-conflict
                  */
                 409: {
                     headers: {
@@ -135,7 +135,7 @@ export interface paths {
                         "application/problem+json": components["schemas"]["Problem"];
                     };
                 };
-                /** @description 发送过于频繁。type=https://errors.example.com/rate-limited */
+                /** @description 发送过于频繁。type=https://keel.dev/problems/rate-limited */
                 429: {
                     headers: {
                         /** @description 建议退避秒数 */
@@ -210,7 +210,7 @@ export interface paths {
                 };
                 /**
                  * @description 账号已封禁或已注销（对应 users.status = 2 / 3）。
-                 *     type=https://errors.example.com/account-disabled
+                 *     type=https://keel.dev/problems/account-disabled
                  */
                 403: {
                     headers: {
@@ -568,10 +568,10 @@ export interface paths {
                      *     · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
                      *       并带 `Idempotency-Replayed: true` 响应头
                      *     · **同 key 正在处理中**：`409` + `Retry-After`，
-                     *       type=https://errors.example.com/idempotency-key-in-flight，
+                     *       type=https://keel.dev/problems/idempotency-key-in-flight，
                      *       客户端应退避重试，不要当成业务失败
                      *     · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
-                     *       type=https://errors.example.com/idempotency-key-reused。
+                     *       type=https://keel.dev/problems/idempotency-key-reused。
                      *       宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
                      *       那会让用户以为下单成功了而实际什么都没发生
                      *     · 首次执行失败（存档为失败态）时同样回放该失败响应；
@@ -682,10 +682,10 @@ export interface paths {
                      *     · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
                      *       并带 `Idempotency-Replayed: true` 响应头
                      *     · **同 key 正在处理中**：`409` + `Retry-After`，
-                     *       type=https://errors.example.com/idempotency-key-in-flight，
+                     *       type=https://keel.dev/problems/idempotency-key-in-flight，
                      *       客户端应退避重试，不要当成业务失败
                      *     · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
-                     *       type=https://errors.example.com/idempotency-key-reused。
+                     *       type=https://keel.dev/problems/idempotency-key-reused。
                      *       宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
                      *       那会让用户以为下单成功了而实际什么都没发生
                      *     · 首次执行失败（存档为失败态）时同样回放该失败响应；
@@ -843,10 +843,10 @@ export interface paths {
                      *     · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
                      *       并带 `Idempotency-Replayed: true` 响应头
                      *     · **同 key 正在处理中**：`409` + `Retry-After`，
-                     *       type=https://errors.example.com/idempotency-key-in-flight，
+                     *       type=https://keel.dev/problems/idempotency-key-in-flight，
                      *       客户端应退避重试，不要当成业务失败
                      *     · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
-                     *       type=https://errors.example.com/idempotency-key-reused。
+                     *       type=https://keel.dev/problems/idempotency-key-reused。
                      *       宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
                      *       那会让用户以为下单成功了而实际什么都没发生
                      *     · 首次执行失败（存档为失败态）时同样回放该失败响应；
@@ -1144,10 +1144,10 @@ export interface paths {
                      *     · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
                      *       并带 `Idempotency-Replayed: true` 响应头
                      *     · **同 key 正在处理中**：`409` + `Retry-After`，
-                     *       type=https://errors.example.com/idempotency-key-in-flight，
+                     *       type=https://keel.dev/problems/idempotency-key-in-flight，
                      *       客户端应退避重试，不要当成业务失败
                      *     · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
-                     *       type=https://errors.example.com/idempotency-key-reused。
+                     *       type=https://keel.dev/problems/idempotency-key-reused。
                      *       宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
                      *       那会让用户以为下单成功了而实际什么都没发生
                      *     · 首次执行失败（存档为失败态）时同样回放该失败响应；
@@ -1180,11 +1180,11 @@ export interface paths {
                 };
                 /**
                  * @description · 该微信身份已绑定到另一账号（对应 `UNIQUE (provider, external_id)`）——
-                 *       type=https://errors.example.com/identity-already-bound
+                 *       type=https://keel.dev/problems/identity-already-bound
                  *     · 当前账号在该 provider 下已有绑定 ——
-                 *       type=https://errors.example.com/identity-duplicate-provider
+                 *       type=https://keel.dev/problems/identity-duplicate-provider
                  *     · 同一 Idempotency-Key 正在处理中 ——
-                 *       type=https://errors.example.com/idempotency-key-in-flight
+                 *       type=https://keel.dev/problems/idempotency-key-in-flight
                  */
                 409: {
                     headers: {
@@ -1236,7 +1236,7 @@ export interface paths {
                 404: components["responses"]["Problem"];
                 /**
                  * @description 解绑后账号将没有任何可登录凭据（既无密码也无其他身份），拒绝解绑。
-                 *     type=https://errors.example.com/last-credential
+                 *     type=https://keel.dev/problems/last-credential
                  *     —— 数据模型文档 §8 说明了这条约束跨表、只能由代码兜。
                  */
                 409: {
@@ -1279,10 +1279,10 @@ export interface paths {
                      *     · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
                      *       并带 `Idempotency-Replayed: true` 响应头
                      *     · **同 key 正在处理中**：`409` + `Retry-After`，
-                     *       type=https://errors.example.com/idempotency-key-in-flight，
+                     *       type=https://keel.dev/problems/idempotency-key-in-flight，
                      *       客户端应退避重试，不要当成业务失败
                      *     · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
-                     *       type=https://errors.example.com/idempotency-key-reused。
+                     *       type=https://keel.dev/problems/idempotency-key-reused。
                      *       宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
                      *       那会让用户以为下单成功了而实际什么都没发生
                      *     · 首次执行失败（存档为失败态）时同样回放该失败响应；
@@ -1324,9 +1324,9 @@ export interface paths {
                 };
                 /**
                  * @description · 该手机号已被其他账号占用（对应 `uk_users_phone` 部分唯一索引）——
-                 *       type=https://errors.example.com/phone-already-taken
+                 *       type=https://keel.dev/problems/phone-already-taken
                  *     · 同一 Idempotency-Key 正在处理中 ——
-                 *       type=https://errors.example.com/idempotency-key-in-flight
+                 *       type=https://keel.dev/problems/idempotency-key-in-flight
                  */
                 409: {
                     headers: {
@@ -1395,10 +1395,10 @@ export interface paths {
                      *     · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
                      *       并带 `Idempotency-Replayed: true` 响应头
                      *     · **同 key 正在处理中**：`409` + `Retry-After`，
-                     *       type=https://errors.example.com/idempotency-key-in-flight，
+                     *       type=https://keel.dev/problems/idempotency-key-in-flight，
                      *       客户端应退避重试，不要当成业务失败
                      *     · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
-                     *       type=https://errors.example.com/idempotency-key-reused。
+                     *       type=https://keel.dev/problems/idempotency-key-reused。
                      *       宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
                      *       那会让用户以为下单成功了而实际什么都没发生
                      *     · 首次执行失败（存档为失败态）时同样回放该失败响应；
@@ -1428,7 +1428,7 @@ export interface paths {
                 409: components["responses"]["IdempotencyInFlight"];
                 /**
                  * @description 字段校验失败（见 Problem.errors），或同一 Idempotency-Key 配了不同请求体
-                 *     （type=https://errors.example.com/idempotency-key-reused）。
+                 *     （type=https://keel.dev/problems/idempotency-key-reused）。
                  */
                 422: {
                     headers: {
@@ -1526,7 +1526,7 @@ export interface paths {
                 404: components["responses"]["Problem"];
                 /**
                  * @description 字段校验失败，或试图通过本接口切换默认地址
-                 *     （type=https://errors.example.com/use-default-endpoint）。
+                 *     （type=https://keel.dev/problems/use-default-endpoint）。
                  */
                 422: {
                     headers: {
@@ -1871,10 +1871,10 @@ export interface paths {
                      *     · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
                      *       并带 `Idempotency-Replayed: true` 响应头
                      *     · **同 key 正在处理中**：`409` + `Retry-After`，
-                     *       type=https://errors.example.com/idempotency-key-in-flight，
+                     *       type=https://keel.dev/problems/idempotency-key-in-flight，
                      *       客户端应退避重试，不要当成业务失败
                      *     · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
-                     *       type=https://errors.example.com/idempotency-key-reused。
+                     *       type=https://keel.dev/problems/idempotency-key-reused。
                      *       宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
                      *       那会让用户以为下单成功了而实际什么都没发生
                      *     · 首次执行失败（存档为失败态）时同样回放该失败响应；
@@ -2045,10 +2045,10 @@ export interface paths {
                      *     · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
                      *       并带 `Idempotency-Replayed: true` 响应头
                      *     · **同 key 正在处理中**：`409` + `Retry-After`，
-                     *       type=https://errors.example.com/idempotency-key-in-flight，
+                     *       type=https://keel.dev/problems/idempotency-key-in-flight，
                      *       客户端应退避重试，不要当成业务失败
                      *     · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
-                     *       type=https://errors.example.com/idempotency-key-reused。
+                     *       type=https://keel.dev/problems/idempotency-key-reused。
                      *       宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
                      *       那会让用户以为下单成功了而实际什么都没发生
                      *     · 首次执行失败（存档为失败态）时同样回放该失败响应；
@@ -2197,10 +2197,10 @@ export interface paths {
                      *     · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
                      *       并带 `Idempotency-Replayed: true` 响应头
                      *     · **同 key 正在处理中**：`409` + `Retry-After`，
-                     *       type=https://errors.example.com/idempotency-key-in-flight，
+                     *       type=https://keel.dev/problems/idempotency-key-in-flight，
                      *       客户端应退避重试，不要当成业务失败
                      *     · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
-                     *       type=https://errors.example.com/idempotency-key-reused。
+                     *       type=https://keel.dev/problems/idempotency-key-reused。
                      *       宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
                      *       那会让用户以为下单成功了而实际什么都没发生
                      *     · 首次执行失败（存档为失败态）时同样回放该失败响应；
@@ -2371,6 +2371,7 @@ export interface paths {
                         "application/json": components["schemas"]["OrderPreview"];
                     };
                 };
+                default: components["responses"]["Problem"];
             };
         };
         delete?: never;
@@ -2447,10 +2448,10 @@ export interface paths {
                      *     · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
                      *       并带 `Idempotency-Replayed: true` 响应头
                      *     · **同 key 正在处理中**：`409` + `Retry-After`，
-                     *       type=https://errors.example.com/idempotency-key-in-flight，
+                     *       type=https://keel.dev/problems/idempotency-key-in-flight，
                      *       客户端应退避重试，不要当成业务失败
                      *     · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
-                     *       type=https://errors.example.com/idempotency-key-reused。
+                     *       type=https://keel.dev/problems/idempotency-key-reused。
                      *       宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
                      *       那会让用户以为下单成功了而实际什么都没发生
                      *     · 首次执行失败（存档为失败态）时同样回放该失败响应；
@@ -2571,10 +2572,10 @@ export interface paths {
                      *     · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
                      *       并带 `Idempotency-Replayed: true` 响应头
                      *     · **同 key 正在处理中**：`409` + `Retry-After`，
-                     *       type=https://errors.example.com/idempotency-key-in-flight，
+                     *       type=https://keel.dev/problems/idempotency-key-in-flight，
                      *       客户端应退避重试，不要当成业务失败
                      *     · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
-                     *       type=https://errors.example.com/idempotency-key-reused。
+                     *       type=https://keel.dev/problems/idempotency-key-reused。
                      *       宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
                      *       那会让用户以为下单成功了而实际什么都没发生
                      *     · 首次执行失败（存档为失败态）时同样回放该失败响应；
@@ -2651,10 +2652,10 @@ export interface paths {
                      *     · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
                      *       并带 `Idempotency-Replayed: true` 响应头
                      *     · **同 key 正在处理中**：`409` + `Retry-After`，
-                     *       type=https://errors.example.com/idempotency-key-in-flight，
+                     *       type=https://keel.dev/problems/idempotency-key-in-flight，
                      *       客户端应退避重试，不要当成业务失败
                      *     · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
-                     *       type=https://errors.example.com/idempotency-key-reused。
+                     *       type=https://keel.dev/problems/idempotency-key-reused。
                      *       宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
                      *       那会让用户以为下单成功了而实际什么都没发生
                      *     · 首次执行失败（存档为失败态）时同样回放该失败响应；
@@ -2682,7 +2683,7 @@ export interface paths {
                 404: components["responses"]["Problem"];
                 /**
                  * @description · 当前状态不允许确认收货（仅 status=30 可调）——
-                 *       type=https://errors.example.com/order-status-not-confirmable
+                 *       type=https://keel.dev/problems/order-status-not-confirmable
                  *     · 同一 Idempotency-Key 正在处理中 —— .../idempotency-key-in-flight
                  */
                 409: {
@@ -2767,10 +2768,10 @@ export interface paths {
                      *     · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
                      *       并带 `Idempotency-Replayed: true` 响应头
                      *     · **同 key 正在处理中**：`409` + `Retry-After`，
-                     *       type=https://errors.example.com/idempotency-key-in-flight，
+                     *       type=https://keel.dev/problems/idempotency-key-in-flight，
                      *       客户端应退避重试，不要当成业务失败
                      *     · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
-                     *       type=https://errors.example.com/idempotency-key-reused。
+                     *       type=https://keel.dev/problems/idempotency-key-reused。
                      *       宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
                      *       那会让用户以为下单成功了而实际什么都没发生
                      *     · 首次执行失败（存档为失败态）时同样回放该失败响应；
@@ -2801,7 +2802,7 @@ export interface paths {
                 };
                 /**
                  * @description 订单不存在或不属于当前用户。
-                 *     type=https://errors.example.com/order-not-found
+                 *     type=https://keel.dev/problems/order-not-found
                  */
                 404: {
                     headers: {
@@ -2966,10 +2967,10 @@ export interface paths {
                      *     · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
                      *       并带 `Idempotency-Replayed: true` 响应头
                      *     · **同 key 正在处理中**：`409` + `Retry-After`，
-                     *       type=https://errors.example.com/idempotency-key-in-flight，
+                     *       type=https://keel.dev/problems/idempotency-key-in-flight，
                      *       客户端应退避重试，不要当成业务失败
                      *     · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
-                     *       type=https://errors.example.com/idempotency-key-reused。
+                     *       type=https://keel.dev/problems/idempotency-key-reused。
                      *       宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
                      *       那会让用户以为下单成功了而实际什么都没发生
                      *     · 首次执行失败（存档为失败态）时同样回放该失败响应；
@@ -3058,10 +3059,10 @@ export interface paths {
                      *     · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
                      *       并带 `Idempotency-Replayed: true` 响应头
                      *     · **同 key 正在处理中**：`409` + `Retry-After`，
-                     *       type=https://errors.example.com/idempotency-key-in-flight，
+                     *       type=https://keel.dev/problems/idempotency-key-in-flight，
                      *       客户端应退避重试，不要当成业务失败
                      *     · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
-                     *       type=https://errors.example.com/idempotency-key-reused。
+                     *       type=https://keel.dev/problems/idempotency-key-reused。
                      *       宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
                      *       那会让用户以为下单成功了而实际什么都没发生
                      *     · 首次执行失败（存档为失败态）时同样回放该失败响应；
@@ -3162,10 +3163,10 @@ export interface paths {
                      *     · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
                      *       并带 `Idempotency-Replayed: true` 响应头
                      *     · **同 key 正在处理中**：`409` + `Retry-After`，
-                     *       type=https://errors.example.com/idempotency-key-in-flight，
+                     *       type=https://keel.dev/problems/idempotency-key-in-flight，
                      *       客户端应退避重试，不要当成业务失败
                      *     · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
-                     *       type=https://errors.example.com/idempotency-key-reused。
+                     *       type=https://keel.dev/problems/idempotency-key-reused。
                      *       宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
                      *       那会让用户以为下单成功了而实际什么都没发生
                      *     · 首次执行失败（存档为失败态）时同样回放该失败响应；
@@ -3331,10 +3332,10 @@ export interface paths {
                      *     · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
                      *       并带 `Idempotency-Replayed: true` 响应头
                      *     · **同 key 正在处理中**：`409` + `Retry-After`，
-                     *       type=https://errors.example.com/idempotency-key-in-flight，
+                     *       type=https://keel.dev/problems/idempotency-key-in-flight，
                      *       客户端应退避重试，不要当成业务失败
                      *     · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
-                     *       type=https://errors.example.com/idempotency-key-reused。
+                     *       type=https://keel.dev/problems/idempotency-key-reused。
                      *       宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
                      *       那会让用户以为下单成功了而实际什么都没发生
                      *     · 首次执行失败（存档为失败态）时同样回放该失败响应；
@@ -3559,7 +3560,7 @@ export interface components {
         Problem: {
             /**
              * Format: uri
-             * @example https://errors.example.com/insufficient-stock
+             * @example https://keel.dev/problems/insufficient-stock
              */
             type: string;
             /** @example Insufficient stock */
@@ -4330,7 +4331,7 @@ export interface components {
         };
         /**
          * @description 同一 Idempotency-Key 正在处理中（另一并发请求已抢占）。
-         *     type=https://errors.example.com/idempotency-key-in-flight。
+         *     type=https://keel.dev/problems/idempotency-key-in-flight。
          *     客户端应按 `Retry-After` 退避重试，而不是当成业务失败弹窗。
          */
         IdempotencyInFlight: {
@@ -4345,7 +4346,7 @@ export interface components {
         };
         /**
          * @description 同一 Idempotency-Key 配了不同的请求体（`request_hash` 不一致），拒绝执行。
-         *     type=https://errors.example.com/idempotency-key-reused。
+         *     type=https://keel.dev/problems/idempotency-key-reused。
          *     见数据模型文档 §11：这类失败必须显式，不能被当成重放静默吞掉。
          */
         IdempotencyKeyReused: {
@@ -4375,10 +4376,10 @@ export interface components {
          *     · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
          *       并带 `Idempotency-Replayed: true` 响应头
          *     · **同 key 正在处理中**：`409` + `Retry-After`，
-         *       type=https://errors.example.com/idempotency-key-in-flight，
+         *       type=https://keel.dev/problems/idempotency-key-in-flight，
          *       客户端应退避重试，不要当成业务失败
          *     · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
-         *       type=https://errors.example.com/idempotency-key-reused。
+         *       type=https://keel.dev/problems/idempotency-key-reused。
          *       宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
          *       那会让用户以为下单成功了而实际什么都没发生
          *     · 首次执行失败（存档为失败态）时同样回放该失败响应；
