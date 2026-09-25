@@ -6,6 +6,7 @@ package db
 
 import (
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/pgvector/pgvector-go"
 )
 
 // 子事务屏障（数据模型 §6）。形状照抄 dtmrs-barrier v0.11.0，别加列。
@@ -153,6 +154,50 @@ type Product struct {
 	DeletedAt     pgtype.Timestamptz
 	CreatedAt     pgtype.Timestamptz
 	UpdatedAt     pgtype.Timestamptz
+	SearchText    *string
+	SearchVector  interface{}
+}
+
+type ProductCluster struct {
+	ProductID  int64
+	MerchantID int64
+	ClusterID  int64
+	Confidence float32
+	Method     int16
+	CreatedAt  pgtype.Timestamptz
+	UpdatedAt  pgtype.Timestamptz
+}
+
+type ProductImageVector struct {
+	ProductID    int64
+	MerchantID   int64
+	ImageUrl     string
+	Embedding    *pgvector.Vector
+	ModelName    string
+	ModelVersion string
+	UpdatedAt    pgtype.Timestamptz
+}
+
+type ProductTextVector struct {
+	ProductID    int64
+	MerchantID   int64
+	Content      string
+	Embedding    *pgvector.Vector
+	ModelName    string
+	ModelVersion string
+	UpdatedAt    pgtype.Timestamptz
+}
+
+type ProductUnderstanding struct {
+	ProductID       int64
+	MerchantID      int64
+	Status          int16
+	InputHashes     []byte
+	Results         []byte
+	PipelineVersion string
+	LastError       *string
+	CreatedAt       pgtype.Timestamptz
+	UpdatedAt       pgtype.Timestamptz
 }
 
 type ShopSetting struct {
