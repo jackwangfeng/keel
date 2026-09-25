@@ -9,7 +9,7 @@ cd "$(dirname "$0")/.."
 
 REPO="${DTMRS_REPO:-https://github.com/jackwangfeng/dtmrs}"
 # 钉死版本。上游改了 C ABI 而这里悄悄跟着变，是最难查的一类问题。
-REF="${DTMRS_REF:-8259c6a}"
+REF="${DTMRS_REF:-v0.11.0}"
 SRC="${DTMRS_SRC:-$PWD/.dtmrs-src}"
 
 command -v cargo >/dev/null || {

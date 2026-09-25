@@ -12,9 +12,11 @@
 
 ## 跑起来
 
+版本：**dtmrs v0.11.0**（`scripts/fetch-dtmrs.sh` 里钉死）。
+
 ```bash
 make deps      # 取回 dtmrs 并构建 libdtmrs.so（需要 Rust 1.82+）
-make verify    # 跑全部四项验证
+make verify    # 跑全部五项验证
 ```
 
 单项：
@@ -22,7 +24,17 @@ make verify    # 跑全部四项验证
 ```bash
 make run-saga       # SAGA 提交 / 逆序补偿 / 拉取式分支 / 提交期校验
 make run-topology   # 同一段编排，local 与 remote 两种形态
+make run-tcc        # TCC：Try 全成功 -> Confirm；Try 失败 -> 逆序 Cancel
 make race           # -race 跑一遍
+make run-barrier    # 子事务屏障三种异常（需要 PostgreSQL）
+```
+
+屏障那一项要真数据库——它的意义就在于与业务 SQL 同事务提交：
+
+```bash
+docker run -d --name keel-dtmrs -e POSTGRES_PASSWORD=x -e POSTGRES_DB=dtm \
+    -p 55433:5432 postgres:16
+make run-barrier
 ```
 
 > 不需要 PostgreSQL。默认落 sqlite，`DTMRS_DSN=postgres://...` 可切换。
@@ -62,7 +74,26 @@ mode=remote  status=succeed
 `cmd/saga` 覆盖：正向提交、失败后逆序补偿、拉取式异步分支、
 以及未注册的 `local://` 名字在**提交期**就被拒绝（而不是执行到一半才炸）。
 
-### 三、崩溃后跨进程恢复
+### 三、TCC 可用（0.11 新增）
+
+0.8 的 C ABI 只有 `dtmrs_submit_saga`，这曾是「预售定金 / 多仓调拨」唯一的拦路石。
+0.11 导出 22 个符号（0.8 是 11 个，**只增不减**），TCC / XA / 二阶段消息 /
+workflow 全部可用。
+
+`cmd/tcc` 两条路径都验过：全部 Try 成功 → Submit → 逐个 Confirm；
+第二步 Try 失败 → Abort → **逆序** Cancel（02 先于 01）。
+
+TCC 的一阶段由调用方自己跑，所以它是按 gid 的一串调用而不是一次提交。
+两条纪律写在 `dtmrs/tc.go` 的注释里，都有代价：先 register 再跑 Try
+（反过来 Try 冻结的资源 TC 不知道），以及 Submit 之后不能 Abort。
+
+### 四、子事务屏障（Go 侧自己实现）
+
+三种异常实测通过：**重复请求**、**空回滚**（补偿先到、正向从未执行）、
+**悬挂**（补偿已到，迟到的正向不得执行）。另有 50 协程并发投递同一分支，
+结果恰好一次 `Execute`、49 次 `Duplicated`。
+
+### 五、崩溃后跨进程恢复
 
 ```bash
 go run ./cmd/saga fail      # 提交后不 close 直接 exit(7)
@@ -70,6 +101,46 @@ RESUME=1 go run ./cmd/saga  # 重启，未完成的事务被驱动到终态
 ```
 
 ---
+
+## 并发行为：每个阻塞的 cgo 调用占一个 OS 线程
+
+这是当初列为「最高优先级剩余风险」的一项，已实测。结论比预想的清楚：
+
+**线程数跟的是「同时卡在 cgo 里的调用数」，不是总工作量。**
+2000 个 SAGA、handler 各阻塞 50ms，只改提交并发度：
+
+| 提交并发 | 峰值 OS 线程 | 吞吐 |
+|---|---|---|
+| 2000（不限制） | 1213 | 246.8 saga/s |
+| 256 | 290 | 247.2 saga/s |
+| 32 | 70 | 243.7 saga/s |
+
+**吞吐三者几乎相同。** 限制进入 cgo 的并发度不花任何代价，却省掉一千多个线程。
+
+超出 Go 的线程上限（默认 10000）不是返回错误，是**进程直接死**：
+
+```console
+$ MAX_THREADS=100 ./stress push 2000 50        # 不限制提交并发
+runtime: program exceeds 100-thread limit
+fatal error: thread exhaustion
+
+$ MAX_THREADS=100 ./stress push 2000 50 32     # 同样上限，提交并发限到 32
+执行阶段峰值线程=64   吞吐=221.5 saga/s        # 安然跑完
+```
+
+所以规则很简单：**所有进入 dtmrs 的调用都要过一个有界的信号量。**
+`SubmitSaga`、`WaitFinal` 都是阻塞 cgo 调用，`WaitFinal` 尤其——
+它按设计就要等到终态，n 个并发等待就是 n 个线程。
+
+> **我第一版测错了。** 最初以为线程增长来自「Go 的分支 handler 阻塞了 tokio worker」，
+> 于是对比推模式与拉模式，结果两者线程数一样高——而拉模式的 handler 跑在普通
+> goroutine 里、根本不占 M。查下去才发现增长来自我自己那 n 个并发的
+> `SubmitSaga` 和 `WaitFinal`。
+>
+> 记在这里是因为：**这个误判很容易再犯一次**。看到「cgo + 线程暴涨」
+> 第一反应是怪回调，但回调只是众多阻塞调用中的一种。
+
+> **另一个观察**：Go 不回收已创建的 M，线程数只涨不落。峰值即终值。
 
 ## 两个会咬人的坑（都已在代码里处理）
 
@@ -108,22 +179,14 @@ panic 意味着「我不知道业务做没做」。返回 `Failure` 是在断言
 
 ## 已知边界（实测，不是推断）
 
-**C ABI 只导出 SAGA，没有 TCC。** `libdtmrs.so` 导出 11 个符号，
-事务提交入口只有 `dtmrs_submit_saga`：
+**子事务屏障不在 C ABI 里，也不可能在。**
 
-```console
-$ nm -D --defined-only lib/libdtmrs.so | grep ' T .*dtmrs_'
-dtmrs_close  dtmrs_last_error  dtmrs_next_task  dtmrs_open
-dtmrs_register  dtmrs_register_pull  dtmrs_reply  dtmrs_start
-dtmrs_status  dtmrs_submit_saga  dtmrs_wait_final
-```
+dtmrs 的 `decide()` 签名是 `decide(&mut self, tx: &mut Transaction)`——
+它接收**调用方的事务**，因为屏障记录必须与业务变更在同一个本地事务内提交，
+这正是屏障成立的全部意义。Go 侧事务握在 pgx 手里，没有办法递过 C 边界。
 
-Rust 侧的 `Embedded` 同样只有 `saga()` / `submit_workflow()`——
-**所以换 Rust 也绕不开这个缺口**。要做预售定金、多仓调拨这类需要预留语义的场景，
-得先给 dtmrs 补一个 `dtmrs_submit_tcc` 导出。
-
-好在引擎层 TCC 与 SAGA 共用同一条分支调用路径（`registry.rs` 的 `parse_target`），
-`local://` 对 TCC 天然可用，缺的只是提交 API。而下单链路本来就该走 SAGA。
+所以这不是 dtmrs 的缺口，是**结构上的必然**：任何非 Rust 宿主都得自己实现
+那三十行。算法见 `barrier/barrier.go`，与 `dtmrs-barrier/src/lib.rs` 逐行对应。
 
 **引入 cgo 意味着失去 `CGO_ENABLED=0` 静态编译。** 静态链接 `libdtmrs.a` 可行，
 单文件二进制约 15 MB，但 dtmrs 上游不提供预编译产物、CI 只跑 ubuntu-latest。
@@ -136,23 +199,26 @@ Keel 要么要求贡献者装 Rust，要么自建多平台预编译流水线。
 
 诚实地说清楚边界，比多列几条战果有用：
 
-- **未验证高并发下的 OS 线程行为**。tokio runtime 与 Go runtime 共存、
-  `block_on` 占 OS 线程，单机 demo 跑通不代表压力下不出事。**这是最高优先级的剩余风险。**
-- **未验证子事务屏障的三种异常**（空回滚 / 悬挂 / 重复）的端到端表现。
-  而那恰恰是分布式事务最容易出错的地方。
 - **未验证 macOS / arm64 构建**。上游 CI 只跑 ubuntu-latest。
 - Go panic 跨 C 栈只做了理论分析，没有实际压测。
 
-**这个例子证明的是「demo 能跑通」，不是「能上生产」。** 两者之间还差 5–7 人日。
+**这个例子证明的是「demo 能跑通」，不是「能上生产」。**
+
+已补完的：并发线程行为、屏障三种异常、TCC 两条路径。
+仍未做的：macOS / arm64 构建（上游 CI 只跑 ubuntu-latest，本机也没有那两个环境），
+以及 Go panic 跨 C 栈的实际压测（目前只有理论分析与 defer recover 的写法约定）。
 
 ---
 
 ## 目录
 
 ```
-dtmrs/          C ABI 的 Go 绑定（TC 类型、分支注册、拉取式任务）
+dtmrs/          C ABI 的 Go 绑定（TC 类型、分支注册、拉取式任务、TCC）
+barrier/        子事务屏障的 Go 实现（C ABI 不提供，见上）
 cmd/saga/       SAGA 四种行为
 cmd/topology/   「只改一行」的实证
+cmd/tcc/        TCC 两条路径
+cmd/barrier/    屏障三种异常（需 PostgreSQL）
 scripts/        取回并构建 libdtmrs
 ```
 
