@@ -50,6 +50,7 @@ type Product struct {
 type Tx interface {
 	ProductTx
 	SagaTx
+	UserTx
 }
 
 // ProductTx 是商品读取这一面。
