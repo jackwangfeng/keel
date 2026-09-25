@@ -3289,7 +3289,13 @@ export interface paths {
                 };
             };
             responses: {
-                /** @description 已受理（无论首次还是重复） */
+                /**
+                 * @description 已受理（无论首次还是重复）。
+                 *
+                 *     **业务性结论也回 200**：订单查不到、金额不符、订单已不在待支付、
+                 *     报文解不开——这四种渠道重推也没用，让它继续重推只会放大噪音。
+                 *     这类结论在服务端留 Error 日志等人处置。
+                 */
                 200: {
                     headers: {
                         [name: string]: unknown;
@@ -3302,6 +3308,20 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content?: never;
+                };
+                /**
+                 * @description 未能入账，**请渠道重推**。基础设施故障（库不可达之类）走这里。
+                 *
+                 *     这条不是形式：回 200 会让渠道停止重推，而我们确实没入账，
+                 *     一笔真实到账就只在日志里留个影。
+                 */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
                 };
             };
         };
@@ -3433,7 +3453,13 @@ export interface paths {
                 };
             };
             responses: {
-                /** @description 已受理（无论首次还是重复） */
+                /**
+                 * @description 已受理（无论首次还是重复）。
+                 *
+                 *     **业务性结论也回 200**：订单查不到、金额不符、订单已不在待支付、
+                 *     报文解不开——这四种渠道重推也没用，让它继续重推只会放大噪音。
+                 *     这类结论在服务端留 Error 日志等人处置。
+                 */
                 200: {
                     headers: {
                         [name: string]: unknown;
@@ -3446,6 +3472,20 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content?: never;
+                };
+                /**
+                 * @description 未能入账，**请渠道重推**。基础设施故障（库不可达之类）走这里。
+                 *
+                 *     这条不是形式：回 200 会让渠道停止重推，而我们确实没入账，
+                 *     一笔真实到账就只在日志里留个影。
+                 */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
                 };
             };
         };
