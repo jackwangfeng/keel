@@ -22,6 +22,25 @@ type Category struct {
 	UpdatedAt  pgtype.Timestamptz
 }
 
+type Inventory struct {
+	SkuID        int64
+	AvailableQty int32
+	WarningQty   int32
+	UpdatedAt    pgtype.Timestamptz
+}
+
+type InventoryLog struct {
+	ID              int64
+	MerchantID      int64
+	SkuID           int64
+	ChangeQty       int32
+	BizType         int16
+	BizID           string
+	BeforeAvailable int32
+	AfterAvailable  int32
+	CreatedAt       pgtype.Timestamptz
+}
+
 type Merchant struct {
 	ID        int64
 	Code      string
@@ -30,6 +49,51 @@ type Merchant struct {
 	DeletedAt pgtype.Timestamptz
 	CreatedAt pgtype.Timestamptz
 	UpdatedAt pgtype.Timestamptz
+}
+
+type Order struct {
+	ID               int64
+	MerchantID       int64
+	OrderNo          string
+	UserID           int64
+	Status           int16
+	RefundStatus     int16
+	GoodsAmountCents int64
+	FreightCents     int64
+	DiscountCents    int64
+	PayableCents     int64
+	PaidCents        int64
+	RefundedCents    int64
+	ReceiverSnapshot []byte
+	Remark           *string
+	ExpireAt         pgtype.Timestamptz
+	PaidAt           pgtype.Timestamptz
+	ShippedAt        pgtype.Timestamptz
+	FinishedAt       pgtype.Timestamptz
+	CreatedAt        pgtype.Timestamptz
+	UpdatedAt        pgtype.Timestamptz
+}
+
+type OrderItem struct {
+	ID            int64
+	MerchantID    int64
+	OrderID       int64
+	SkuID         int64
+	ProductID     int64
+	TitleSnapshot string
+	SpecSnapshot  []byte
+	ImageSnapshot *string
+	PriceCents    int64
+	Quantity      int32
+	AmountCents   int64
+	DiscountCents int64
+	RefundedQty   int32
+	RefundedCents int64
+}
+
+type OrderStatusTransition struct {
+	FromStatus int16
+	ToStatus   int16
 }
 
 type Product struct {

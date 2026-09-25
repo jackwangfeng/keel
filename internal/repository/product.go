@@ -53,6 +53,11 @@ type Tx interface {
 
 	// CountProducts 返回当前租户在架商品的总数，用于填契约里必填的 total。
 	CountProducts(ctx context.Context) (int64, error)
+
+	// DeductInventory / RestoreInventory 见 inventory.go —— 它们的三条出路
+	// 是本接口里唯一一处「用返回值的形状去挡一类误用」的设计，注释写在那边。
+	DeductInventory(ctx context.Context, skuID int64, qty int32) (int32, error)
+	RestoreInventory(ctx context.Context, skuID int64, qty int32) (int32, error)
 }
 
 // tenantTx 是 Tx 的唯一实现：一层薄薄的转换，把 sqlc 的行变成领域类型。
