@@ -32,6 +32,12 @@ func unlistInStore(t *testing.T, bs buyerShop, storeID, productID int64) {
 		`{"listed":false}`, bs.Token), http.StatusOK, "门店下架")
 }
 
+func unlistInRegion(t *testing.T, bs buyerShop, regionID, productID int64) {
+	t.Helper()
+	wantStatus(t, putAs(t, bs.Host, fmt.Sprintf("/api/v1/admin/regions/%d/products/%d/listing", regionID, productID),
+		`{"listed":false}`, bs.Token), http.StatusOK, "大区下架")
+}
+
 func unpublish(t *testing.T, bs buyerShop, productID int64) {
 	t.Helper()
 	wantStatus(t, postIdem(t, bs.Host, fmt.Sprintf("/api/v1/admin/products/%d/publication", productID),
@@ -141,7 +147,8 @@ func TestCartFlagsUnavailableLinesInsteadOfDroppingThem(t *testing.T) {
 	unlistedProd, unlistedSKU := createPublishedSKU(t, bs.adminShop, bs.ParentCat, "本店不卖", 2000)
 	_, emptySKU := createPublishedSKU(t, bs.adminShop, bs.ParentCat, "将售罄", 3000)
 	_, lowSKU := createPublishedSKU(t, bs.adminShop, bs.ParentCat, "将不够", 4000)
-	for _, sku := range []int64{offSKU, unlistedSKU, emptySKU, lowSKU} {
+	regionProd, regionSKU := createPublishedSKU(t, bs.adminShop, bs.ParentCat, "本大区不卖", 5100)
+	for _, sku := range []int64{offSKU, unlistedSKU, emptySKU, lowSKU, regionSKU} {
 		setStoreStock(t, bs.adminShop, bs.NorthStore, sku, 10)
 	}
 	bs.mustAdd(t, b, bs.NorthStore, bs.DressSKU, 1)
@@ -149,15 +156,17 @@ func TestCartFlagsUnavailableLinesInsteadOfDroppingThem(t *testing.T) {
 	bs.mustAdd(t, b, bs.NorthStore, unlistedSKU, 1)
 	bs.mustAdd(t, b, bs.NorthStore, emptySKU, 1)
 	bs.mustAdd(t, b, bs.NorthStore, lowSKU, 5)
+	bs.mustAdd(t, b, bs.NorthStore, regionSKU, 1)
 
-	// 加购之后世界变了：下架、本店排除、清零、只剩 2 件。
+	// 加购之后世界变了：下架、本店排除、大区排除、清零、只剩 2 件。
 	unpublish(t, bs, offProd)
 	unlistInStore(t, bs, bs.NorthStore, unlistedProd)
 	setStoreStock(t, bs.adminShop, bs.NorthStore, emptySKU, 0)
 	setStoreStock(t, bs.adminShop, bs.NorthStore, lowSKU, 2)
+	unlistInRegion(t, bs, bs.NorthRegion, regionProd) // 大区那一层排除，门店自己没动
 
 	c := bs.getCart(t, b, bs.NorthStore)
-	if len(c.Items) != 5 {
+	if len(c.Items) != 6 {
 		t.Fatalf("失效的行不该从车里消失：实得 %d 行", len(c.Items))
 	}
 	for _, tc := range []struct {
@@ -168,6 +177,7 @@ func TestCartFlagsUnavailableLinesInsteadOfDroppingThem(t *testing.T) {
 		{bs.DressSKU, api.CartItemStatusAvailable, ptr64(6000)},
 		{offSKU, api.CartItemStatusOffShelf, nil},
 		{unlistedSKU, api.CartItemStatusNotSoldInStore, nil},
+		{regionSKU, api.CartItemStatusNotSoldInStore, nil},
 		{emptySKU, api.CartItemStatusOutOfStock, ptr64(3000)},
 		{lowSKU, api.CartItemStatusInsufficientStock, ptr64(4000)},
 	} {
