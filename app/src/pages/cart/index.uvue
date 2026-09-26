@@ -38,6 +38,7 @@
               <text class="t-section cart-title">{{ r.title }}</text>
               <text v-if="r.specText != ''" class="t-hint">{{ r.specText }}</text>
               <text v-if="r.statusText != ''" class="t-err cart-status">{{ r.statusText }}</text>
+              <text v-if="r.undeliverableText != ''" class="t-err cart-status undeliverable">{{ r.undeliverableText }}</text>
               <view class="gap-s"></view>
               <view class="between">
                 <text class="t-price">{{ r.priceText }}</text>
@@ -73,6 +74,9 @@
           <text class="t-hint">合计</text>
           <text class="t-price-l cart-total">{{ selectedText }}</text>
         </view>
+        <!-- 预估运费按默认地址算（结算页可换地址）。没有地址时服务端不给 freight：不显示，
+             不能写成「包邮」。 -->
+        <text v-if="!editing && freightText != ''" class="t-hint cart-freight">运费 {{ freightText }}{{ freightNote != '' ? '（' + freightNote + '）' : '' }}</text>
       </view>
       <view v-if="editing" :class="['btn', 'bar-btn', 'btn-danger', deletableCount == 0 ? 'btn-off' : '']" @click="removeSelected">
         <text class="btn-text">删除({{ deletableCount }})</text>
@@ -113,6 +117,8 @@ export default {
       selectedCount: 0,
       allSelected: false,
       availableCount: 0,
+      freightText: '',
+      freightNote: '',
       loggedIn: false,
       loaded: false,
       error: '',
@@ -148,7 +154,7 @@ export default {
         (s: CurrentStore) => {
           this.storeId = s.storeId != null ? s.storeId! : 0
           this.storeLine = s.storeId != null ? '按「' + s.name + '」的价格与库存' : '当前位置暂不在配送范围内'
-          getCart(this.sid(), (c) => this.apply(cartView(c)), (f: ApiFailure) => {
+          getCart(this.sid(), null, (c) => this.apply(cartView(c)), (f: ApiFailure) => {
             this.error = f.message
             this.loaded = true
           })
@@ -168,6 +174,8 @@ export default {
       this.selectedCount = v.selectedCount
       this.allSelected = v.allSelected
       this.availableCount = v.availableCount
+      this.freightText = v.freightText
+      this.freightNote = v.freightNote
       this.loaded = true
       this.busy = false
     },
@@ -196,14 +204,14 @@ export default {
       if (!r.available || this.busy) return
       this.busy = true
       this.message = ''
-      updateCartItem(cartCheckRequest(!r.selected), id, this.sid(),
+      updateCartItem(cartCheckRequest(!r.selected), id, this.sid(), null,
         (c) => this.apply(cartView(c)), (f: ApiFailure) => this.failed(f))
     },
     toggleAll() {
       if (this.availableCount == 0 || this.busy) return
       this.busy = true
       this.message = ''
-      selectCartItems(cartSelectAllRequest(!this.allSelected), this.sid(),
+      selectCartItems(cartSelectAllRequest(!this.allSelected), this.sid(), null,
         (c) => this.apply(cartView(c)), (f: ApiFailure) => this.failed(f))
     },
     changeQty(id: number, next: number) {
@@ -211,7 +219,7 @@ export default {
       this.busy = true
       this.message = ''
       // 调大超过可售量是 409，detail 写了原因；调小永远放行（契约）。
-      updateCartItem(cartQuantityRequest(next), id, this.sid(),
+      updateCartItem(cartQuantityRequest(next), id, this.sid(), null,
         (c) => this.apply(cartView(c)), (f: ApiFailure) => this.failed(f))
     },
     removeSelected() {
@@ -227,7 +235,7 @@ export default {
         success: (res) => {
           if (!res.confirm) return
           this.busy = true
-          batchDeleteCartItems(cartDeleteRequest(ids), this.sid(), newIdempotencyKey(),
+          batchDeleteCartItems(cartDeleteRequest(ids), this.sid(), null, newIdempotencyKey(),
             (c) => {
               this.removeIds = []
               this.editing = false
@@ -336,6 +344,10 @@ export default {
 }
 .cart-total {
   margin-left: 6px;
+}
+.cart-freight {
+  text-align: right;
+  padding-right: 12px;
 }
 .bar-btn {
   width: 132px;

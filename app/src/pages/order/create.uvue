@@ -40,6 +40,7 @@
             <view class="fill item-info">
               <text class="t-section">{{ it.title }}</text>
               <text class="t-hint">{{ it.specText }}</text>
+              <text v-if="undeliverableOf(it.skuId) != ''" class="t-err undeliverable">{{ undeliverableOf(it.skuId) }}</text>
               <view class="gap-s"></view>
               <view class="between">
                 <text class="t-price">{{ it.priceText }}</text>
@@ -58,6 +59,7 @@
             <view class="fill item-info">
               <text class="t-section">{{ itemTitle }}</text>
               <text class="t-hint">{{ itemSpec }}</text>
+              <text v-if="undeliverableOf(parseInt(skuIdText)) != ''" class="t-err undeliverable">{{ undeliverableOf(parseInt(skuIdText)) }}</text>
               <view class="gap-s"></view>
               <view class="between">
                 <text class="t-price">{{ unitPrice }}</text>
@@ -108,7 +110,15 @@
           </view>
           <view v-else-if="pv != null">
             <view class="kv"><text class="t-sub">商品金额</text><text class="t-body">{{ pv!.goodsAmountText }}</text></view>
-            <view class="kv"><text class="t-sub">运费</text><text class="t-body">{{ pv!.freightText }}</text></view>
+            <!-- 运费用服务端算的 freight_cents，不自己算；说明来自 freight.groups（满额包邮、首件续件）。 -->
+            <view class="kv">
+              <text class="t-sub">运费</text>
+              <view class="row">
+                <text v-if="pv!.freightNote != ''" class="t-hint freight-note">{{ pv!.freightNote }}</text>
+                <text class="t-body">{{ pv!.freightText }}</text>
+              </view>
+            </view>
+            <view v-if="pv!.freightDiscountText != ''" class="kv"><text class="t-sub">运费抵扣</text><text class="t-body">{{ pv!.freightDiscountText }}</text></view>
             <view class="kv"><text class="t-sub">优惠</text><text class="t-body">{{ pv!.discountText }}</text></view>
             <view class="divider"></view>
             <view class="kv"><text class="t-section">应付</text><text class="t-price">{{ pv!.payableText }}</text></view>
@@ -125,6 +135,10 @@
         <!-- 结果 -->
         <view v-if="message != ''" :class="['card', failed ? 'result-err' : 'result-ok']">
           <text :class="failed ? 't-err' : 't-ok'">{{ message }}</text>
+          <view v-if="provinceUnknown">
+            <view class="gap-m"></view>
+            <view class="btn-ghost fix-addr" @click="fixAddress"><text class="btn-ghost-text">去补全地址</text></view>
+          </view>
           <view v-if="needNewKey">
             <view class="gap-m"></view>
             <view class="btn-ghost" @click="rotate"><text class="btn-ghost-text">作为新订单提交</text></view>
@@ -161,10 +175,10 @@
 </template>
 
 <script>
-import { batchDeleteCartItems, createOrder, getCart, getProduct, listAddresses, previewOrder, ApiFailure, PROBLEM_COUPON_NOT_APPLICABLE, PROBLEM_IDEMPOTENCY_KEY_IN_FLIGHT, PROBLEM_IDEMPOTENCY_KEY_REUSED } from '@/api/client.uts'
+import { batchDeleteCartItems, createOrder, getCart, getProduct, listAddresses, previewOrder, ApiFailure, PROBLEM_REGION_NOT_DELIVERABLE, PROBLEM_COUPON_NOT_APPLICABLE, PROBLEM_IDEMPOTENCY_KEY_IN_FLIGHT, PROBLEM_IDEMPOTENCY_KEY_REUSED } from '@/api/client.uts'
 import { newIdempotencyKey } from '@/api/idempotency.uts'
 import { isLoggedIn, rememberOrder, takePickedAddress } from '@/api/config.uts'
-import { addressRow, cartDeleteRequest, cartView, checkoutLines, coverOf, orderRequest, previewView, productDetailView, AddressRow, CartRow, CouponOption, OrderLine, PreviewView } from '@/api/view.uts'
+import { undeliverableLines, UndeliverableLine, addressRow, cartDeleteRequest, cartView, checkoutLines, coverOf, orderRequest, previewView, productDetailView, AddressRow, CartRow, CouponOption, OrderLine, PreviewView } from '@/api/view.uts'
 import { ensureStore, CurrentStore } from '@/api/store.uts'
 import { searchConverted } from '@/api/search-trace.uts'
 
@@ -184,6 +198,9 @@ export default {
       fromCart: false,
       cartRows: [] as CartRow[],
       cartLoaded: false,
+      // 最近一次 422 region-not-deliverable 里送不到的行（按 skuId 标在商品上）；成功试算后清空。
+      undeliverable: [] as UndeliverableLine[],
+      provinceUnknown: false,
       idemKey: '',
       pv: null as PreviewView | null,
       previewing: false,
@@ -313,6 +330,32 @@ export default {
     // 而 store_id 变成必填那一次，这里写着的字面量两道检查都没拦住。
     //
     // 试算过才带 expected_payable_cents（防以旧价成交），没试算过不带。
+    undeliverableOf(skuId: number): string {
+      for (let i = 0; i < this.undeliverable.length; i++) {
+        if (this.undeliverable[i].skuId == skuId) return this.undeliverable[i].reason
+      }
+      return ''
+    },
+    // 422 region-not-deliverable：逐行标出，并告诉用户能怎么办。省份判不了（地址不全）时引导补全地址，
+    // 而不是让他去掉商品 —— 商品本身没问题。
+    notDeliverable(f: ApiFailure): boolean {
+      if (f.problem == null || f.problem!.type != PROBLEM_REGION_NOT_DELIVERABLE) return false
+      const lines = undeliverableLines(f.problem)
+      this.undeliverable = lines
+      let unknown = false
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i].provinceUnknown) unknown = true
+      }
+      this.provinceUnknown = unknown
+      this.failed = true
+      this.message = unknown
+        ? '收货地址缺少省份信息，判断不了能不能配送，请补全地址'
+        : '有商品送不到这个收货地址，请换一个地址' + (this.fromCart ? '，或回购物车去掉标红的商品' : '')
+      return true
+    },
+    fixAddress() {
+      if (this.addressId > 0) uni.navigateTo({ url: '/pages/address/edit?id=' + this.addressId.toString() })
+    },
     lines(): OrderLine[] {
       if (this.fromCart) return checkoutLines(this.cartRows)
       return [{ skuId: parseInt(this.skuIdText), quantity: this.quantity } as OrderLine]
@@ -405,6 +448,7 @@ export default {
     loadCart(storeId: number) {
       getCart(
         storeId,
+        this.addressId > 0 ? this.addressId : null,
         (c) => {
           const v = cartView(c)
           const rows: CartRow[] = []
@@ -444,10 +488,13 @@ export default {
           }
           this.previewing = false
           this.pv = v
+          this.undeliverable = []
+          this.provinceUnknown = false
         },
         (f: ApiFailure) => {
           if (qty != this.quantity || coupon != this.couponId) return
           this.previewing = false
+          if (this.notDeliverable(f)) return
           this.failed = true
           // coupon-not-applicable 的 detail 就是原因（「未满 ¥50」之类），failureOf 已经把它
           // 放进 message 了。展开券列表，让用户换一张或不用 —— 由他决定，不替他退回原价。
@@ -512,6 +559,12 @@ export default {
           }
           this.busy = false
           this.failed = true
+          if (this.notDeliverable(f)) {
+            // 这一单没建成；换了地址再提交是新请求，换个键免得撞「同键异体」。
+            this.idemKey = newIdempotencyKey()
+            this.pv = null
+            return
+          }
           if (t == PROBLEM_IDEMPOTENCY_KEY_REUSED) {
             // 同键异体。服务端宁可显式失败也不把不同的请求当重放吞掉 ——
             // 那会让用户以为下单成功而实际什么都没发生。这里照实说，
@@ -556,7 +609,7 @@ export default {
       this.deleteCartRows(ids, key, 0)
     },
     deleteCartRows(ids: number[], key: string, attempt: number) {
-      batchDeleteCartItems(cartDeleteRequest(ids), this.storeId, key,
+      batchDeleteCartItems(cartDeleteRequest(ids), this.storeId, this.addressId > 0 ? this.addressId : null, key,
         (_c) => {},
         (_f: ApiFailure) => {
           if (attempt == 0) {
@@ -685,5 +738,14 @@ export default {
 .radio-on {
   border-width: 5px;
   border-color: #3B2A20;
+}
+.freight-note {
+  margin-right: 8px;
+}
+.undeliverable {
+  margin-top: 2px;
+}
+.fix-addr {
+  width: 140px;
 }
 </style>

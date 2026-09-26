@@ -105,6 +105,8 @@ export const PROBLEM_REFUND_QUANTITY_EXCEEDED = 'https://keel.dev/problems/refun
 export const PROBLEM_REFUND_ALREADY_IN_PROGRESS = 'https://keel.dev/problems/refund-already-in-progress'
 export const PROBLEM_REFUND_NOT_CANCELABLE = 'https://keel.dev/problems/refund-status-not-cancelable'
 // 不是退货退款，或当前不在 20 待买家退货：不能填 / 改寄回物流。
+// 试算 / 下单：有商品送不到这个收货地址。Problem.undeliverable_items 逐行给原因。
+export const PROBLEM_REGION_NOT_DELIVERABLE = 'https://keel.dev/problems/region-not-deliverable'
 export const PROBLEM_REFUND_NOT_RETURNABLE = 'https://keel.dev/problems/refund-status-not-returnable'
 
 /**
@@ -809,8 +811,14 @@ export function setDefaultAddress(
 // 换一家店算，购物车上的合计就和结算页试算出来的对不上。
 // 请求体参数放在第一位：check_app_types.py 的字面量检查只看第一个参数。
 
-function storeQuery(storeId : number | null) : string {
-  return storeId != null ? '?store_id=' + storeId!.toString() : ''
+// address_id：按哪个收货地址算运费（Cart.freight）与送不送得到（CartItem.undeliverable）。
+// 传结算页选中的那一个，购物车上的运费才和试算的一致；null = 服务端用默认地址，
+// 默认地址也没有时 freight 整个不出现（没有地址就没有运费可算，不是「包邮」）。
+function storeQuery(storeId : number | null, addressId : number | null) : string {
+  const parts : string[] = []
+  if (storeId != null) parts.push('store_id=' + storeId!.toString())
+  if (addressId != null) parts.push('address_id=' + addressId!.toString())
+  return queryString(parts)
 }
 
 function cartOk(onOk : (c : Cart) => void, onErr : FailureHandler) : RawOk {
@@ -824,8 +832,9 @@ function cartOk(onOk : (c : Cart) => void, onErr : FailureHandler) : RawOk {
   }
 }
 
-export function getCart(storeId : number | null, onOk : (c : Cart) => void, onErr : FailureHandler) {
-  send('GET', '/cart', storeQuery(storeId), null, null, cartOk(onOk, onErr), onErr)
+export function getCart(storeId : number | null,
+  addressId : number | null, onOk : (c : Cart) => void, onErr : FailureHandler) {
+  send('GET', '/cart', storeQuery(storeId, addressId), null, null, cartOk(onOk, onErr), onErr)
 }
 
 /**
@@ -836,11 +845,12 @@ export function getCart(storeId : number | null, onOk : (c : Cart) => void, onEr
 export function addCartItem(
   req : AddCartItemRequest,
   storeId : number | null,
+  addressId : number | null,
   idempotencyKey : string,
   onOk : (c : Cart) => void,
   onErr : FailureHandler
 ) {
-  send('POST', '/cart/items', storeQuery(storeId), req, idempotencyKey, cartOk(onOk, onErr), onErr)
+  send('POST', '/cart/items', storeQuery(storeId, addressId), req, idempotencyKey, cartOk(onOk, onErr), onErr)
 }
 
 /** PATCH /cart/items/{id}：改数量 / 勾选。调大数量超过可售量回 409，调小永远放行。 */
@@ -848,10 +858,11 @@ export function updateCartItem(
   req : UpdateCartItemRequest,
   itemId : number,
   storeId : number | null,
+  addressId : number | null,
   onOk : (c : Cart) => void,
   onErr : FailureHandler
 ) {
-  send('PATCH', '/cart/items/' + itemId.toString(), storeQuery(storeId), req, null,
+  send('PATCH', '/cart/items/' + itemId.toString(), storeQuery(storeId, addressId), req, null,
     cartOk(onOk, onErr), onErr)
 }
 
@@ -859,21 +870,23 @@ export function updateCartItem(
 export function selectCartItems(
   req : SelectCartItemsRequest,
   storeId : number | null,
+  addressId : number | null,
   onOk : (c : Cart) => void,
   onErr : FailureHandler
 ) {
-  send('PUT', '/cart/selection', storeQuery(storeId), req, null, cartOk(onOk, onErr), onErr)
+  send('PUT', '/cart/selection', storeQuery(storeId, addressId), req, null, cartOk(onOk, onErr), onErr)
 }
 
 /** POST /cart/items/batch-delete：**必带 Idempotency-Key**。item_ids 与 selected:true 二选一。 */
 export function batchDeleteCartItems(
   req : BatchDeleteCartItemsRequest,
   storeId : number | null,
+  addressId : number | null,
   idempotencyKey : string,
   onOk : (c : Cart) => void,
   onErr : FailureHandler
 ) {
-  send('POST', '/cart/items/batch-delete', storeQuery(storeId), req, idempotencyKey,
+  send('POST', '/cart/items/batch-delete', storeQuery(storeId, addressId), req, idempotencyKey,
     cartOk(onOk, onErr), onErr)
 }
 

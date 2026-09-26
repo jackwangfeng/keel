@@ -17,6 +17,7 @@
 //     不是第一道。）
 
 import {
+  FreightBreakdown,
   ListNotificationsQuery,
   Notification,
   ReportSearchEventRequest,
@@ -397,6 +398,10 @@ export type OrderDetailView = {
   paidText : string
   /** 已退金额（refunded_cents）；没退过是空串，页面不显示那一行。 */
   refundedText : string
+  /** 包邮券抵掉的运费；没有是空串。 */
+  freightDiscountText : string
+  /** 运费说明（下单时的 freight 快照）；老订单没有快照，空串。 */
+  freightNote : string
   /** 待支付才能取消。 */
   canCancel : boolean
   /** 已发货才能确认收货。 */
@@ -454,6 +459,8 @@ export function orderDetailView(o : OrderDetail) : OrderDetailView {
     discountText: yuan(o.discount_cents),
     paidText: yuan(o.paid_cents),
     refundedText: o.refunded_cents != null && o.refunded_cents! > 0 ? yuan(o.refunded_cents!) : '',
+    freightDiscountText: o.freight_discount_cents != null && o.freight_discount_cents! > 0 ? '-' + yuan(o.freight_discount_cents!) : '',
+    freightNote: o.freight != null ? freightNote(o.freight!) : '',
     canCancel: o.status == 10,
     canConfirm: o.status == 30,
     canRefund: (o.status == 20 || o.status == 30 || o.status == 40) && refundableItems(o).length > 0,
@@ -475,6 +482,10 @@ export type PreviewView = {
   payableText : string
   /** 提交订单时要回填给服务端的 expected_payable_cents（契约：对不上回 409）。 */
   payableCents : number
+  /** 包邮券抵掉的运费；没有抵扣是空串（页面不显示那一行）。 */
+  freightDiscountText : string
+  /** 「满¥99 包邮」「已满¥99 包邮」这类说明，来自 freight.groups；没什么可说是空串。 */
+  freightNote : string
   /** 服务端认下的券（回显的 user_coupon_id），0 = 这次试算没用券。 */
   couponId : number
   /** 这一单能用的券，按优惠金额从大到小（服务端排好的，第一张就是最省的）。 */
@@ -495,6 +506,8 @@ export function previewView(p : OrderPreview) : PreviewView {
     discountText: yuan(p.discount_cents),
     payableText: yuan(p.payable_cents),
     payableCents: p.payable_cents,
+    freightDiscountText: p.freight_discount_cents > 0 ? '-' + yuan(p.freight_discount_cents) : '',
+    freightNote: freightNote(p.freight),
     couponId: p.user_coupon_id != null ? p.user_coupon_id! : 0,
     coupons: options,
   } as PreviewView
@@ -928,6 +941,8 @@ export type CartRow = {
   available : boolean
   /** 不能买的原因；available 的行是空串。 */
   statusText : string
+  /** 送不到当前收货地址的原因（CartItem.undeliverable）；送得到或没有地址是空串。 */
+  undeliverableText : string
   cover : Cover
 }
 
@@ -965,6 +980,7 @@ export function cartRow(it : CartItem) : CartRow {
     selected: it.selected && available,
     available: available,
     statusText: cartStatusText(it.status),
+    undeliverableText: it.undeliverable != null ? it.undeliverable!.reason : '',
     cover: coverOf(pid > 0 ? pid : it.sku_id, title, it.image_url),
   } as CartRow
 }
@@ -981,6 +997,12 @@ export type CartView = {
   availableCount : number
   /** 这次按哪家门店算的（服务端回显）；0 = 没有门店（match_type = none）。 */
   storeId : number
+  /**
+   * 预估运费（Cart.freight.freight_cents）。**没有地址时是空串** —— 服务端那时整个不给 freight，
+   * 那是「算不了」，不是「包邮」，页面不能显示成 ¥0.00。
+   */
+  freightText : string
+  freightNote : string
 }
 
 export function cartView(c : Cart) : CartView {
@@ -1002,6 +1024,8 @@ export function cartView(c : Cart) : CartView {
     allSelected: avail > 0 && selected == avail,
     availableCount: avail,
     storeId: sid != null ? sid! : 0,
+    freightText: c.freight != null ? yuan(c.freight!.freight_cents) : '',
+    freightNote: c.freight != null ? freightNote(c.freight!) : '',
   } as CartView
 }
 
@@ -1410,4 +1434,53 @@ export function notificationRow(n : Notification) : NotificationRow {
 
 export function notificationListQuery(page : number, pageSize : number) : ListNotificationsQuery {
   return { page: page, page_size: pageSize } as ListNotificationsQuery
+}
+
+// ---------------------------------------------------------------------------
+// 运费
+// ---------------------------------------------------------------------------
+//
+// **运费一律用服务端算的数**（freight_cents / payable_cents），这里只把 freight.groups 翻成一句说明。
+// 规则（首件续件、满额包邮、偏远地区）在服务端的运费模板里，客户端不复算。
+
+/**
+ * freight.groups -> 一句说明：
+ *   · 免了：满额「已满¥99 包邮」/ 满件「已满 N 件包邮」；
+ *   · 没免但模板有满额包邮：「满¥99 包邮」；
+ *   · 没免也没有包邮门槛（偏远地区之类）：「首件¥15，续件¥5」。
+ * 多组（多个模板）时只说第一组 —— 一期演示店只有一个模板，多模板的细分以后再做。
+ */
+export function freightNote(b : FreightBreakdown) : string {
+  if (b.groups.length == 0) return ''
+  const g = b.groups[0]
+  const reason = g.free_reason != null ? g.free_reason! : ''
+  const rule = g.rule
+  if (reason == 'threshold' && rule != null) return '已满' + faceYuan(rule!.free_threshold_cents) + ' 包邮'
+  if (reason == 'quantity' && rule != null) return '已满 ' + rule!.free_quantity.toString() + ' 件包邮'
+  if (reason != '' || rule == null) return ''
+  if (rule!.free_threshold_cents > 0) return '满' + faceYuan(rule!.free_threshold_cents) + ' 包邮'
+  return '首件' + faceYuan(rule!.first_fee_cents) + '，续件' + faceYuan(rule!.additional_fee_cents)
+}
+
+/** 422 region-not-deliverable 里送不到的一行。 */
+export type UndeliverableLine = {
+  skuId : number
+  reason : string
+  /** 收货地址归不到省：引导补全地址，而不是让用户去掉商品。 */
+  provinceUnknown : boolean
+}
+
+export function undeliverableLines(p : Problem | null) : UndeliverableLine[] {
+  const out : UndeliverableLine[] = []
+  if (p == null) return out
+  const items = p!.undeliverable_items
+  if (items == null) return out
+  for (let i = 0; i < items!.length; i++) {
+    out.push({
+      skuId: items![i].sku_id,
+      reason: items![i].reason,
+      provinceUnknown: items![i].reason_code == 'province_unknown',
+    } as UndeliverableLine)
+  }
+  return out
 }

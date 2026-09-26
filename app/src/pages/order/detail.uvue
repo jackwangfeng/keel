@@ -43,7 +43,14 @@
 
           <view class="divider"></view>
           <view class="kv"><text class="t-sub">商品金额</text><text class="t-body">{{ view!.goodsAmountText }}</text></view>
-          <view class="kv"><text class="t-sub">运费</text><text class="t-body">{{ view!.freightText }}</text></view>
+          <view class="kv">
+            <text class="t-sub">运费</text>
+            <view class="row">
+              <text v-if="view!.freightNote != ''" class="t-hint freight-note">{{ view!.freightNote }}</text>
+              <text class="t-body">{{ view!.freightText }}</text>
+            </view>
+          </view>
+          <view v-if="view!.freightDiscountText != ''" class="kv"><text class="t-sub">运费抵扣</text><text class="t-body">{{ view!.freightDiscountText }}</text></view>
           <view class="kv">
             <text class="t-sub">{{ view!.couponId > 0 ? '优惠券' : '优惠' }}</text>
             <text class="t-body coupon-used">{{ view!.couponId > 0 ? (view!.couponName != '' ? view!.couponName + ' ' : '') + '-' + view!.discountText : view!.discountText }}</text>
@@ -474,5 +481,8 @@ export default {
   margin-left: 6px;
   font-size: 16px;
   color: #A89C90;
+}
+.freight-note {
+  margin-right: 8px;
 }
 </style>
