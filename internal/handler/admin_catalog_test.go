@@ -281,9 +281,18 @@ func TestMerchantCanPublishAProductAndBuyersSeeIt(t *testing.T) {
 		t.Fatalf("买家在 /products 里看不到刚上架的商品 %d，列表里有 %d 件",
 			p.Id, len(list.Items))
 	}
-	if seen.MinPriceCents != 12900 || seen.MaxPriceCents == nil || *seen.MaxPriceCents != 15900 {
-		t.Fatalf("买家看到的价格区间是 (%d, %v)，期望 (12900, 15900)",
-			seen.MinPriceCents, seen.MaxPriceCents)
+	// max_price_cents 在契约里不是必填的，所以生成类型上它是指针。
+	// 先判 nil 再解引用，而且**打印的是值不是指针** —— 一条打出
+	// 「期望 15900，实际 0xc0001a2b30」的失败信息，读它的人得再跑一次才知道
+	// 那个数是多少，而这条断言恰恰是价格现算那件事唯一的买家侧靶子。
+	if seen.MaxPriceCents == nil {
+		t.Fatalf("买家看到的 max_price_cents 缺席了，期望 15900")
+	}
+	if seen.MinPriceCents != 12900 || *seen.MaxPriceCents != 15900 {
+		t.Fatalf("买家看到的价格区间是 (%d, %d)，期望 (12900, 15900) —— "+
+			"这两个数在库里的 products 行上根本不存在（00019 删了那两列），"+
+			"它们由 ListProducts 的 LEFT JOIN LATERAL 从 skus 现算",
+			seen.MinPriceCents, *seen.MaxPriceCents)
 	}
 
 	// ⑩ 检索：跑一次**真实的**派生数据入库任务，再搜。

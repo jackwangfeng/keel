@@ -1119,8 +1119,8 @@ func TestBothRecallPathsFilterIdentically(t *testing.T) {
 		name string
 		f    repository.SearchFilters
 	}{
-		{"价格下界 30000", repository.SearchFilters{MinPriceCents: &minC}},
-		{"价格上界 30000", repository.SearchFilters{MaxPriceCents: &maxC}},
+		{"价格下界 20000", repository.SearchFilters{MinPriceCents: &minC}},
+		{"价格上界 20000", repository.SearchFilters{MaxPriceCents: &maxC}},
 		{"限定女装类目", repository.SearchFilters{CategoryID: &dressCat}},
 		{"只看有货", repository.SearchFilters{InStockOnly: true}},
 	}
