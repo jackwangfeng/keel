@@ -226,8 +226,20 @@ type SearchResult struct {
 	Strategy string
 
 	// Degraded 为真表示向量那一路没跑成（引擎不可用 / 超时 / 没配引擎），
-	// 这一次是纯关键词结果。handler 不把它放进响应（契约里没有这个字段），
-	// 它的去处是日志与测试。
+	// 这一次是纯关键词结果。handler 不把它放进响应 —— 契约里没有这个字段，
+	// 而加一个字段要改契约，那是一次独立的动作。
+	//
+	// 所以它的去处只有两处，两处都要真的存在：
+	//
+	//	· **日志**：下面 Search 里那条 WARN 就是由它驱动的（`if degraded`，
+	//	  不是再判一次 vecErr）。这是「搜索质量怎么突然变差了」在系统里
+	//	  唯一的痕迹。
+	//	· **测试**：handler/search_test.go 的
+	//	  TestDegradationIsMarkedOnTheResultAndLeavesAWarnInTheLog 同时读这个
+	//	  字段和那条 WARN，并且两个方向都锁：引擎挂了必须有，引擎好着必须没有。
+	//
+	// 在那条测试之前这个字段一处读者都没有（grep 只有定义、注释、赋值），
+	// 那条 WARN 也没有任何断言 —— 整段删掉，全绿。
 	Degraded bool
 }
 
@@ -291,8 +303,12 @@ func (s *SearchService) Search(ctx context.Context, req SearchRequest) (SearchRe
 	wg.Wait()
 
 	degraded := vecErr != nil
-	if vecErr != nil {
+	if degraded {
 		// 明确记下来，而不是当成「这一路没有结果」。
+		//
+		// 判的是 degraded 而不是再判一次 vecErr != nil：这条 WARN 是
+		// SearchResult.Degraded 唯一的运行期去处，让它们共用同一个条件，
+		// 「字段说降级了」与「日志里有一条」就不会各自漂移。
 		// 引擎不可用是会自己好的一类（§8 的降级链），所以是 WARN 不是 ERROR；
 		// 但它必须出现在日志里 —— 否则「搜索质量怎么突然变差了」这件事
 		// 在任何地方都没有痕迹。

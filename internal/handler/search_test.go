@@ -1,9 +1,11 @@
 package handler_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -307,8 +309,12 @@ func TestSearchDegradesToKeywordWhenEngineIsDown(t *testing.T) {
 	t.Logf("引擎打不通时仍返回 %d 条，全部来自关键词路：%v", len(titles), titles)
 }
 
-// routerWithDeadEngine 装一套接着「真的连不上的引擎」的路由。
-func routerWithDeadEngine(t *testing.T) http.Handler {
+// deadEngineClient 建一个指着「真的连不上的地址」的引擎客户端。
+//
+// 不用「Embed 直接 return err」的替身：替身跑不到客户端的超时、连接错误、
+// 错误分类（ErrUnavailable / ErrProtocol）那一段，而降级链要判断的恰恰是
+// 「这是哪一类错误」。
+func deadEngineClient(t *testing.T) inference.Embedder {
 	t.Helper()
 
 	// 拿一个端口再立刻还回去：这样它在本机上确定是空的，
@@ -333,6 +339,100 @@ func routerWithDeadEngine(t *testing.T) http.Handler {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return client
+}
+
+// 降级这件事在系统里真的留下了痕迹：SearchResult.Degraded 与一条 WARN 日志。
+//
+// service/search.go 写着那条 WARN「**必须**出现在日志里 —— 否则『搜索质量
+// 怎么突然变差了』这件事在任何地方都没有痕迹」，SearchResult.Degraded 的注释
+// 写着「它的去处是日志与测试」。在这条测试之前，两句话都是假的：
+// grep Degraded 只有定义、注释、赋值三处，没有任何 handler 或测试读它；
+// 那条 WarnContext 也没有任何断言 —— 整段删掉，全绿。
+//
+// 两个方向都锁住，这是这条测试的形状，不是凑数：
+//
+//	· **引擎挂了 ⇒ 必须有**。删掉那条 WarnContext（或者把级别降成 Debug /
+//	  Info）红的是下半段。
+//	· **引擎好着 ⇒ 必须没有**。少了这一半，一条无条件打印的日志也能让上半段
+//	  变绿，而那时「有 WARN」就不再说明任何事情了。上半段同时读 Degraded
+//	  必须是 false —— 这个字段在两个方向上都被读到。
+//
+// 用真的连不上的地址而不是「Embed 直接 return err」的替身，理由见
+// deadEngineClient：降级链要判断的是错误的**类别**，替身跑不到那一段。
+func TestDegradationIsMarkedOnTheResultAndLeavesAWarnInTheLog(t *testing.T) {
+	fx := newSearchFixture(t)
+	ctx := tenant.NewContext(t.Context(), fx.MerchantA)
+	req := service.SearchRequest{
+		Query:   "连衣裙",
+		Filters: service.SearchFilters{InStockOnly: true},
+	}
+
+	// 阴性对照：引擎好着。
+	okRes, okLog := searchCapturingLog(t, conceptEmbedder{}, ctx, req)
+	if okRes.Degraded {
+		t.Fatalf("引擎好着却报了降级 —— 下半段那条「降级时有 WARN」因此"+
+			"证明不了任何事。日志：%q", okLog)
+	}
+	if len(okRes.Items) == 0 {
+		t.Fatal("引擎好着却一条都没召回，这条测试的前提不成立")
+	}
+	if strings.Contains(okLog, degradeLogMarker) {
+		t.Fatalf("引擎好着的时候也打了那条降级 WARN —— 它是无条件打印的，"+
+			"于是「降级时日志里有痕迹」这件事在任何情况下都为真，等于没有。日志：%q", okLog)
+	}
+
+	// 降级：引擎真的连不上。
+	badRes, badLog := searchCapturingLog(t, deadEngineClient(t), ctx, req)
+	if !badRes.Degraded {
+		t.Fatalf("引擎连不上，SearchResult.Degraded 却是 false —— "+
+			"「这一次是纯关键词结果」这件事上层读不出来。日志：%q", badLog)
+	}
+	if len(badRes.Items) == 0 {
+		t.Fatal("引擎连不上之后返回了空列表 —— 关键词那一路被一起拖下水了" +
+			"（语义检索层 §8 的降级链没生效）")
+	}
+	if !strings.Contains(badLog, "level=WARN") || !strings.Contains(badLog, degradeLogMarker) {
+		t.Fatalf("向量召回整路失败，日志里却没有那条 WARN —— "+
+			"「搜索质量怎么突然变差了」这件事在系统里没有任何痕迹，"+
+			"而 service/search.go 那句「必须出现在日志里」就是假的。实际日志：%q", badLog)
+	}
+	t.Logf("降级时的日志：%s", strings.TrimSpace(badLog))
+}
+
+// degradeLogMarker 是那条降级 WARN 里一段稳定的话。
+//
+// 匹配一段话而不是只匹配 level=WARN：这条链路上别的地方也可能打 WARN，
+// 那时「有 WARN」就不等于「降级被记下来了」。
+const degradeLogMarker = "退化为纯关键词召回"
+
+// searchCapturingLog 用给定的引擎跑一次检索，并把这期间的 slog 输出收下来。
+//
+// slog.Default() 必须在 **NewSearchService 之前**换掉：那个构造函数在 log 为
+// nil 时把当时的 slog.Default() 存进结构体，之后再换默认 logger 就晚了 ——
+// 而「晚了」的症状是一个永远抓不到日志的空缓冲区，看上去和「那条日志不存在」
+// 一模一样。
+func searchCapturingLog(t *testing.T, emb inference.Embedder, ctx context.Context,
+	req service.SearchRequest) (service.SearchResult, string) {
+	t.Helper()
+
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	defer slog.SetDefault(prev)
+
+	svc := service.NewSearchService(repository.New(testPool), emb, service.SearchConfig{}, nil)
+	res, err := svc.Search(ctx, req)
+	if err != nil {
+		t.Fatalf("检索报错：%v", err)
+	}
+	return res, buf.String()
+}
+
+// routerWithDeadEngine 装一套接着「真的连不上的引擎」的路由。
+func routerWithDeadEngine(t *testing.T) http.Handler {
+	t.Helper()
+	client := deadEngineClient(t)
 	return app.Router(testPool,
 		tenant.NewResolver(testPool, tenant.Config{BaseDomain: baseDomain}),
 		auth.NewSigner([]byte("keel-test-secret-key-32-bytes-long!!")),
