@@ -921,6 +921,46 @@ export type MerchantUpdateRequest = {
   status? : number
 }
 
+/** 通知的种类。**文案不要按它拼**（服务端已渲染好 `title` / `body`）， */
+export type NotificationKind = string
+
+/** 点了这条通知跳到哪里。四个定位字段都一定出现，用不上的是 `null`： */
+export type NotificationTarget = {
+  type : string
+  order_no : string | null
+  refund_no : string | null
+  store_id : number | null
+  sku_id : number | null
+}
+
+export type Notification = {
+  id : number
+  /** 通知的种类。**文案不要按它拼**（服务端已渲染好 `title` / `body`）， */
+  kind : NotificationKind
+  /** 服务端渲染好的中文标题，原样展示 */
+  title : string
+  /** 服务端渲染好的中文正文，原样展示 */
+  body : string
+  /** 点了这条通知跳到哪里。四个定位字段都一定出现，用不上的是 `null`： */
+  target : NotificationTarget
+  /** 已读时间；`null` 即未读。后台是**调用者自己**的已读时间。 */
+  read_at : string | null
+  created_at : string
+}
+
+export type NotificationList = {
+  page : number
+  page_size : number
+  total : number
+  items : Notification[]
+  /** 调用者的未读总数（与 `unread_only` 无关，也不受分页影响）。 */
+  unread_count : number
+}
+
+export type NotificationUnreadCount = {
+  unread_count : number
+}
+
 export type Order = {
   order_no : string
   /** 履约门店。**必返**（DB 上是 `NOT NULL`）。 */

@@ -70,6 +70,12 @@ tags:
 
       两级身份：平台级操作员（能建商家、跨租户运维）与商家级操作员
       （只看得见自己那一份数据）。详见数据模型 §14。
+  - name: Notification
+    description: |
+      消息通知：买家消息中心（`/me/notifications`）与后台待办提醒（`/admin/notifications`）。
+      通知在订单 / 售后状态变化的**同一个事务**里写入（数据模型 §16 的 outbox），
+      标题与正文由服务端渲染。外发渠道（微信订阅消息 / 短信 / 邮件）本期未接，
+      投递记录里记为「未配置、跳过」。
   - name: Upload
     description: 文件上传（商品图 / 头像 / 退款凭证）
   - name: Store
@@ -3169,6 +3175,84 @@ paths:
         '422': { $ref: '#/components/responses/IdempotencyKeyReused' }
         default: { $ref: '#/components/responses/Problem' }
 
+  # ---------------------------------------------------------------- Notification（买家消息中心）
+  /me/notifications:
+    get:
+      tags: [Notification]
+      summary: 我的消息（站内通知）
+      description: |
+        订单与售后的关键状态变化产生的站内通知，按时间倒序（数据模型 §16）。
+        **标题与正文由服务端渲染好**（中文），客户端原样展示，不要按 `kind` 自己拼文案 ——
+        `kind` 只用来挑图标、决定点了跳哪里。点了跳哪里看 `target`。
+
+        只看得到**自己的**通知：同一家店里 A 买家读不到 B 买家的（按令牌里的 user_id 过滤）。
+
+        哪些状态变化会发通知、发给谁，见 `NotificationKind` 的描述。
+        通知保留 90 天，更早的会被清理。
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - name: unread_only
+          in: query
+          description: 为 `true` 时只返回未读的。
+          schema: { type: boolean }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NotificationList' }
+        '401': { $ref: '#/components/responses/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /me/notifications/unread-count:
+    get:
+      tags: [Notification]
+      summary: 我的未读消息数
+      description: 给「我的」页与底栏角标用的轻量接口，只回一个数。
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NotificationUnreadCount' }
+        '401': { $ref: '#/components/responses/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /me/notifications/{notification_id}/read:
+    post:
+      tags: [Notification]
+      summary: 标记一条消息已读
+      description: |
+        幂等：已经读过的再标一次照样 200，已读时间不变。
+        不是自己的通知（或不存在）一律 404，不区分两者。
+        响应是标完之后的未读数，客户端据此刷新角标，不必再调一次未读数接口。
+      parameters:
+        - $ref: '#/components/parameters/NotificationId'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NotificationUnreadCount' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /me/notifications/read-all:
+    post:
+      tags: [Notification]
+      summary: 全部标记已读
+      description: 把自己的未读消息全部标成已读。响应是标完之后的未读数（正常为 0）。
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NotificationUnreadCount' }
+        '401': { $ref: '#/components/responses/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
   # ---------------------------------------------------------------- Address
   /addresses:
     get:
@@ -4854,6 +4938,89 @@ paths:
         '422': { $ref: '#/components/responses/IdempotencyKeyReused' }
         default: { $ref: '#/components/responses/Problem' }
 
+  /admin/notifications:
+    get:
+      tags: [Admin, Notification]
+      summary: 后台待办提醒（铃铛）
+      description: |
+        商家侧的站内通知：新的已支付待发货订单、新的待审核售后、买家填了寄回物流、
+        库存降到预警线（数据模型 §16）。按时间倒序，标题与正文由服务端渲染好。
+
+        **范围**与 `GET /admin/orders` 相同：每条通知都属于一家门店，
+        大区管理员看当前挂在他大区下的门店的，门店管理员看自己门店的，
+        管理员与操作员看全店的。
+
+        **已读是每个员工各自的**：一条「新订单待发货」是管这家店的所有员工共享的，
+        谁点开了只算谁读了（`read_at` 是调用者自己的已读时间）。
+
+        响应里带调用者范围内的未读数，铃铛角标与下拉列表一次取齐。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - name: unread_only
+          in: query
+          description: 为 `true` 时只返回调用者还没读的。
+          schema: { type: boolean }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NotificationList' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /admin/notifications/unread-count:
+    get:
+      tags: [Admin, Notification]
+      summary: 后台未读提醒数
+      description: 顶栏铃铛轮询用。范围同 `GET /admin/notifications`。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NotificationUnreadCount' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /admin/notifications/{notification_id}/read:
+    post:
+      tags: [Admin, Notification]
+      summary: 标记一条提醒已读（调用者自己的已读状态）
+      description: |
+        幂等：已经读过的再标一次照样 200。
+        不在调用者范围里（别的大区 / 别的门店的提醒）或不存在：404 —— 铃铛里看不见的，
+        也标不了；与「不存在」不作区分，理由同列表收窄（看不见的东西不承认它存在）。
+        响应是标完之后调用者范围内的未读数。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+        - $ref: '#/components/parameters/NotificationId'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NotificationUnreadCount' }
+        '404': { $ref: '#/components/responses/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /admin/notifications/read-all:
+    post:
+      tags: [Admin, Notification]
+      summary: 范围内的提醒全部标记已读
+      description: 只标调用者范围内的；别人的已读状态不受影响。响应是标完之后的未读数。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NotificationUnreadCount' }
+        default: { $ref: '#/components/responses/Problem' }
+
   /webhooks/refunds/{channel}:
     post:
       tags: [Refund]
@@ -5285,6 +5452,12 @@ components:
         后台每一条挂后台会话的操作都声明了它（机械核对：
         `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
       schema: { type: string, pattern: '^[a-z0-9][a-z0-9-]{1,30}$' }
+    NotificationId:
+      name: notification_id
+      in: path
+      required: true
+      description: '`notifications.id`。按约定 4 用自增 id 对外，越权由服务端按收件人 / 员工范围过滤，查不到即 404。'
+      schema: { type: integer, format: int64 }
     MerchantId:
       name: merchant_id
       in: path
@@ -7260,6 +7433,96 @@ components:
         user_id:        { type: integer, format: int64 }
         user_coupon_id: { type: integer, format: int64 }
         coupon_code:    { type: string }
+
+    # ---- 消息通知（数据模型 §16）----
+    NotificationKind:
+      type: string
+      description: |
+        通知的种类。**文案不要按它拼**（服务端已渲染好 `title` / `body`），
+        它只用来挑图标与分组。发给谁、由哪一次状态变化产生：
+
+        买家（`GET /me/notifications`）：
+        · `order_paid` —— 支付成功（订单 `10 → 20`，支付回调入账）
+        · `order_shipped` —— 已发货，正文带承运商与运单号（`20 → 30`）
+        · `order_auto_confirm_soon` —— 自动确认收货即将到期（到期前 1 天；有在途售后的单不提醒）
+        · `order_finished` —— 系统自动确认收货，订单完成（`30 → 40`，定时任务）。
+          买家**自己**点确认收货不发：动作是他做的，不需要再告诉他
+        · `order_timeout_closed` —— 超时未支付被系统关闭（`10 → 90`，超时补偿任务）。
+          买家自己取消不发，理由同上
+        · `refund_approved` —— 售后审核通过（退货退款提示去填寄回物流）
+        · `refund_rejected` —— 售后被驳回，正文带驳回理由
+        · `refund_succeeded` —— 退款到账（退款单 `30 → 40`）
+
+        商家（`GET /admin/notifications`）：
+        · `merchant_order_paid` —— 新的已支付待发货订单
+        · `merchant_refund_requested` —— 新的待审核售后
+        · `merchant_return_shipped` —— 买家填了（或改了）退货寄回物流
+        · `merchant_inventory_low` —— 下单扣减后门店库存降到预警线（`warning_qty`）或以下；
+          扣到 0 时标题是「已售罄」
+      enum:
+        - order_paid
+        - order_shipped
+        - order_auto_confirm_soon
+        - order_finished
+        - order_timeout_closed
+        - refund_approved
+        - refund_rejected
+        - refund_succeeded
+        - merchant_order_paid
+        - merchant_refund_requested
+        - merchant_return_shipped
+        - merchant_inventory_low
+
+    NotificationTarget:
+      type: object
+      required: [type, order_no, refund_no, store_id, sku_id]
+      description: |
+        点了这条通知跳到哪里。四个定位字段都一定出现，用不上的是 `null`：
+        · `order` —— `order_no` 非空，跳订单详情；
+        · `refund` —— `refund_no` 非空（`order_no` 也给出所属订单），跳售后详情；
+        · `inventory` —— `store_id` 与 `sku_id` 非空，跳那家门店的库存（只出现在后台）。
+      properties:
+        type:
+          type: string
+          enum: [order, refund, inventory]
+        order_no:  { type: [string, 'null'] }
+        refund_no: { type: [string, 'null'] }
+        store_id:  { type: [integer, 'null'], format: int64 }
+        sku_id:    { type: [integer, 'null'], format: int64 }
+
+    Notification:
+      type: object
+      required: [id, kind, title, body, target, read_at, created_at]
+      properties:
+        id:    { type: integer, format: int64 }
+        kind:  { $ref: '#/components/schemas/NotificationKind' }
+        title: { type: string, description: 服务端渲染好的中文标题，原样展示 }
+        body:  { type: string, description: 服务端渲染好的中文正文，原样展示 }
+        target: { $ref: '#/components/schemas/NotificationTarget' }
+        read_at:
+          type: [string, 'null']
+          format: date-time
+          description: 已读时间；`null` 即未读。后台是**调用者自己**的已读时间。
+        created_at: { type: string, format: date-time }
+
+    NotificationList:
+      allOf:
+        - $ref: '#/components/schemas/PageMeta'
+        - type: object
+          required: [items, unread_count]
+          properties:
+            items:
+              type: array
+              items: { $ref: '#/components/schemas/Notification' }
+            unread_count:
+              type: integer
+              description: 调用者的未读总数（与 `unread_only` 无关，也不受分页影响）。
+
+    NotificationUnreadCount:
+      type: object
+      required: [unread_count]
+      properties:
+        unread_count: { type: integer }
 
     # ---- 门店、大区与围栏（数据模型 §4）----
 

@@ -39,7 +39,7 @@ so "which one is running?" never depends on anyone's memory.
 
 ## [Unreleased]
 
-Migrations `00027`–`00038`.
+Migrations `00027`–`00038` and `00053`.
 
 ### Added
 
@@ -135,6 +135,42 @@ Migrations `00027`–`00038`.
 - Other buyers' addresses and cart lines are **404, not 403**, for every
   operation — within a shop and across shops — and every one of the 19 new
   routes requires a buyer token (both checked by tests).
+- **In-app notifications** (data model §16, migration `00053`). Key order and
+  after-sales state changes now notify someone: payment received, shipped (with
+  carrier and tracking number), auto-confirm due within a day, auto-confirmed,
+  closed for non-payment, refund approved / rejected (with the reason), refund
+  paid out — for the buyer; new paid order to ship, new refund to review, return
+  shipped back, stock dropping to the warning line — for the store. Titles and
+  bodies are rendered on the server (Chinese); clients display them verbatim.
+- **Written in the same transaction as the state change (outbox).** The
+  `notifications` row *is* the in-app delivery, and a `notification.deliver` job
+  for outbound channels is enqueued in the same transaction on the existing
+  `jobs` queue — a state change that commits always has its notification, a
+  rolled-back one never leaves one behind (tested with commit-time failing
+  triggers on both sides). A `dedupe_key` unique index keeps one event to one
+  notification.
+- **Buyer message center**: `GET /me/notifications` (paged, `unread_only`),
+  `GET /me/notifications/unread-count`, `POST /me/notifications/{id}/read`,
+  `POST /me/notifications/read-all`. Buyers only ever see their own.
+- **Console to-do bell**: the same four operations under `/admin/notifications`,
+  narrowed to the caller's store scope with the same rule as the order list,
+  read state kept per staff member (`notification_reads`). A bell in the console
+  top bar shows the unread count and a drop-down that jumps to the order, refund
+  or store stock.
+- **Pluggable outbound channels** (WeChat subscribe messages, SMS, e-mail) behind
+  a `NotificationChannel` interface. All three default to "not configured": every
+  attempt is recorded as skipped in `notification_deliveries`, nothing errors or
+  retries. Failures back off and retry only the channel that failed; exhausted
+  jobs go to the dead-letter state. A draft integration guide is in
+  `docs/指南/消息通知外发渠道接入.md`.
+- **90-day retention**: expired notifications are deleted per tenant in bounded
+  batches; reads and delivery records cascade.
+- **A source-level test enumerates every state transition** — every statement in
+  `db/queries` that changes an order status, touches a refund or moves stock is
+  traced to each service call site, which must either send a named notification
+  or state why it deliberately does not (buyers' own actions, SAGA
+  create/compensate, amount-mismatch callbacks, manual stock edits…). Every edge
+  of both state machines must be accounted for too.
 
 ### Added — order fulfillment (migration 00033)
 
@@ -340,6 +376,9 @@ Migrations `00027`–`00038`.
 
 ### Not yet
 
+- No outbound notification channel is wired up (WeChat subscribe messages, SMS
+  and e-mail all need credentials this project does not have); buyers have no
+  notification preferences yet.
 - The second-search rate (semantic search design §9.2) still cannot be computed:
   `/search` is public and `search_logs.session_id` is always `NULL`, so there is
   no way to tell that two searches came from the same person.

@@ -246,7 +246,11 @@ func (s *AdminOrderService) Ship(ctx context.Context, orderNo string, req ShipRe
 			if errors.Is(err, repository.ErrTrackingNoDuplicated) {
 				return repository.Shipment{}, fmt.Errorf("%w: %v", ErrTrackingNoDuplicated, err)
 			}
-			return sh, err
+			if err != nil {
+				return repository.Shipment{}, err
+			}
+			// 通知与 20 → 30 同一个事务（数据模型 §16）。
+			return sh, notifyOrderShipped(ctx, tx, order, req.CarrierCode, req.TrackingNo)
 		})
 }
 
