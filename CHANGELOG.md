@@ -39,7 +39,28 @@ so "which one is running?" never depends on anyone's memory.
 
 ## [Unreleased]
 
-Nothing yet.
+### Added — order fulfillment (migration 00033)
+
+- **Buyer cancellation** (`POST /orders/{order_no}/cancel`): closes a pending
+  order and, in the same local transaction, returns its stock to the store it
+  was deducted from and unlocks its coupon. It reuses the exact release path of
+  the order-timeout sweep, so the two can never drift; stock movements are
+  logged with a new `biz_type = 6` so "changed their mind" and "forgot to pay"
+  stay distinguishable.
+- **Shipping** (`POST /admin/orders/{order_no}/shipments`) and **delivery
+  confirmation** (`POST /orders/{order_no}/confirm`). Whole-order shipment only;
+  shipping never touches stock, is refused while a whole-order refund is pending,
+  and a duplicated tracking number is a `409`, not a second parcel. Who may ship
+  follows the store-inventory row of the role matrix: admins and operators
+  anywhere, region and store managers only within their scope.
+- **The order state machine is now enforced by the database.** A trigger checks
+  every `orders.status` change against `order_status_transitions` and rejects
+  anything else with `23514 order_status_transition`; a new
+  `chk_fulfillment_timestamps` ties `paid_at` / `shipped_at` / `finished_at` to
+  the states that imply them. Service-level conditional updates remain the first
+  line and map to the contract's `409`s.
+- All three write endpoints honour `Idempotency-Key` in a single transaction
+  (claim → business → archive), shared with the admin write path.
 
 ## [0.1.0] - 2026-09-26
 

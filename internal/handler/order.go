@@ -297,6 +297,22 @@ func writeOrderError(c *gin.Context, err error) {
 		problem.Write(c, http.StatusConflict, problem.TypeOrderStatusNotPayable,
 			"这笔订单当前不能支付（已支付、已关闭或已超时）")
 
+	case errors.Is(err, service.ErrOrderNotCancelable):
+		// 契约：409 order-status-not-cancelable。多半是刚付完款或刚被超时关掉，
+		// 客户端刷新订单即可看到原因。
+		problem.Write(c, http.StatusConflict, problem.TypeOrderStatusNotCancelable,
+			"这笔订单当前不能取消（只有待支付的订单可以取消）")
+
+	case errors.Is(err, service.ErrOrderNotConfirmable):
+		problem.Write(c, http.StatusConflict, problem.TypeOrderStatusNotConfirmable,
+			"这笔订单当前不能确认收货（只有已发货的订单可以确认收货）")
+
+	case errors.Is(err, service.ErrIdempotencyKeyMissing):
+		// 取消 / 确认收货把 Idempotency-Key 定成 required。422 而不是 400：
+		// 这几条接口的错误集合里有 422 没有 400。
+		problem.Write(c, http.StatusUnprocessableEntity,
+			problem.TypeInvalidRequest, "缺少必填的 Idempotency-Key 请求头")
+
 	case errors.Is(err, service.ErrPaymentChannelUnknown):
 		problem.Write(c, http.StatusUnprocessableEntity,
 			problem.TypeInvalidRequest, "不认识的支付渠道")

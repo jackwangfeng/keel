@@ -307,6 +307,20 @@ type RegionSkuPrice struct {
 	UpdatedAt  pgtype.Timestamptz
 }
 
+type Shipment struct {
+	ID          int64
+	MerchantID  int64
+	OrderID     int64
+	CarrierCode string
+	TrackingNo  string
+	Status      int16
+	ShippedAt   pgtype.Timestamptz
+	DeliveredAt pgtype.Timestamptz
+	CreatedBy   *int64
+	CreatedAt   pgtype.Timestamptz
+	UpdatedAt   pgtype.Timestamptz
+}
+
 type ShopSetting struct {
 	MerchantID      int64
 	Domain          *string

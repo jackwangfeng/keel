@@ -8334,9 +8334,13 @@ export interface paths {
                 };
             };
             responses: {
-                /** @description 已发货 */
+                /**
+                 * @description 已发货。幂等重放命中成功记录时，同样返回 201 与首次的响应体，
+                 *     并带 `Idempotency-Replayed: true`。
+                 */
                 201: {
                     headers: {
+                        "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
                         [name: string]: unknown;
                     };
                     content: {

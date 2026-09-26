@@ -288,6 +288,9 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	v1.GET("/orders/:order_no", auth.Bearer(signer, nil), oh.Detail)
 	v1.POST("/orders/:order_no/payments", auth.Bearer(signer, nil),
 		handler.NewPaymentHandler(payments).Create)
+	// 订单后半程（00033）：买家取消与确认收货。两条都是本地事务，幂等键必填。
+	v1.POST("/orders/:order_no/cancel", auth.Bearer(signer, nil), oh.Cancel)
+	v1.POST("/orders/:order_no/confirm", auth.Bearer(signer, nil), oh.Confirm)
 
 	// 优惠券的买家侧四条（契约 Coupon tag）。四条都要令牌：我的券、本单可用券
 	// 读的是「我的」东西；领券中心要回「我已经领了几张」；领券写的是「我的」券包。
@@ -468,6 +471,10 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 
 	// 券管理（契约 /admin/coupon-templates 那一段）。角色检查在业务层：
 	// 本期只放商家级的管理员与操作员（role 1、2），见 service/admin_coupon.go 的文件头。
+	// 订单后半程（00033）：发货。判权按门店库存那一行（service/order_fulfillment.go）。
+	aoh := handler.NewAdminOrderHandler(service.NewAdminOrderService(repo))
+	v1.POST("/admin/orders/:order_no/shipments", staffAuth, aoh.Ship)
+
 	cpa := handler.NewAdminCouponHandler(service.NewAdminCouponService(repo))
 	v1.GET("/admin/coupon-templates", staffAuth, cpa.List)
 	v1.POST("/admin/coupon-templates", staffAuth, cpa.Create)

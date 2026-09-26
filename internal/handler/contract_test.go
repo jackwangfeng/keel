@@ -288,6 +288,28 @@ var routes = []route{
 		NoQueryParams: "渠道在请求体里，订单号在路径上，幂等键在 Idempotency-Key 请求头里；" +
 			"契约里这条接口没有任何 query 参数",
 	},
+	// —— 订单后半程（00033）：买家取消与确认收货、后台发货。
+	{
+		ContractPath:   "/orders/{order_no}/cancel",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "order_fulfillment.go",
+		NoQueryParams:  "要取消哪一单在路径上，幂等键在 Idempotency-Key 请求头里；没有请求体",
+	},
+	{
+		ContractPath:   "/orders/{order_no}/confirm",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "order_fulfillment.go",
+		NoQueryParams:  "要确认哪一单在路径上，幂等键在 Idempotency-Key 请求头里；没有请求体",
+	},
+	{
+		ContractPath:   "/admin/orders/{order_no}/shipments",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "admin_order.go",
+		NoQueryParams:  "承运商与运单号在请求体里，订单号在路径上，幂等键在请求头里",
+	},
 	{
 		ContractPath:   "/search",
 		ContractMethod: "post",
@@ -920,18 +942,15 @@ type pendingOp struct {
 //	  叫 repository.WithNewTenant；
 //	· 多门店落地（00020）把那 21 条一条不剩地划掉。
 //
-// 于是剩下 2 条。两条剩下的理由不同，而且都不是「还没轮到」：
-// 它们各缺一样今天不存在的东西，逐条写在下面。
+// 于是剩下 2 条：发货与退款审核。订单后半程那一轮（00033）先划掉了发货，
+// 剩下的一条缺的是退款域的表与状态机（它的迁移在后面那一步）。
 var notYetRouted = []pendingOp{
 	// —— M1 就在契约里的 10 条，任务 2 划掉了其中 7 条。
 	//
-	// 剩下这 2 条**不再是「缺后台鉴权」**了 —— 那套中间件已经有了
-	// （auth.StaffBearer），它们缺的是各自的业务。理由要跟着改，
-	// 否则下一个人会照着一句过期的话去找一个已经存在的东西。
-	{"/admin/orders/{order_no}/shipments", "post", "发货。shipments 表已落地（数据模型 §5），" +
-		"后台鉴权也已落地，缺的是 handler 与 §5 那三条发货规则。"},
-	{"/admin/refunds/{refund_no}/audit", "post", "退款审核。退款域的表已落地（§11），" +
-		"后台鉴权也已落地，缺的是 handler 与退款状态机那几条边。"},
+	// 剩下这 1 条**不是「缺后台鉴权」** —— 那套中间件已经有了
+	// （auth.StaffBearer），它缺的是自己的业务。
+	{"/admin/refunds/{refund_no}/audit", "post", "退款审核。退款域的表（§11 refunds / refund_items / " +
+		"refund_status_transitions）在设计文档里、还没有迁移；缺的是那份迁移、handler 与退款状态机那几条边。"},
 
 	// —— 多门店 + 电子围栏 + 大区那 21 条**本轮全部落地，一条不剩**。
 	//

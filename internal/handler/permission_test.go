@@ -378,6 +378,16 @@ var permMatrix = []permRoute{
 			Body: fmt.Sprintf(`{"expected_available_qty":%d,"available_qty":%d}`, cur, cur+1),
 			OK:   http.StatusOK}
 	}},
+
+	// —— 订单后半程（00033）。契约的 StaffRole 矩阵里没有「发货」这一行，
+	// 判据取「门店库存」那一行（storeOperate）：货从哪家店出，就由管那家店库存的人发。
+	// 理由写在 service/order_fulfillment.go 的 Ship 上。每格现场造一笔新的已支付订单，
+	// 挂在范围内（N1）或范围外（E1）的门店上 —— 共用一笔的话第二格就是 409 已发过货。
+	{"POST", v1 + "/admin/orders/:order_no/shipments", storeOperate, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		no := permPaidOrder(t, fx, fx.store(c))
+		return permReq{Method: "POST", Path: v1 + "/admin/orders/" + no + "/shipments",
+			Body: fmt.Sprintf(`{"carrier_code":"sf","tracking_no":"SF%s"}`, fx.next()), OK: http.StatusCreated}
+	}},
 }
 
 // permExempt 是刻意不在矩阵里的 /admin/ 路由，每条写明理由。
@@ -531,6 +541,42 @@ func permCleanupCoupons(t *testing.T, fx *permFixture) {
 			`DELETE FROM coupon_scopes WHERE merchant_id = $1`,
 			`DELETE FROM coupon_templates WHERE merchant_id = $1`,
 			`DELETE FROM users WHERE merchant_id = $1 AND nickname = '权限矩阵买家'`,
+		} {
+			adminExec(t, q, fx.sh.MerchantID)
+		}
+	})
+}
+
+// permPaidOrder 在 storeID 这家门店上造一笔**已支付**的订单（直接插库），返回单号。
+//
+// 走管理员连接直接插，而不是下单 + 沙箱支付：矩阵关心的是「谁能对这一单做什么」，
+// 不是下单链路；而一格一笔真实下单要带上库存、地址、SAGA，二十几格下来
+// 慢且与权限毫无关系。状态 20 要带 paid_at（00033 的 chk_fulfillment_timestamps）。
+func permPaidOrder(t *testing.T, fx *permFixture, storeID int64) string {
+	t.Helper()
+	permCleanupOrders(t, fx)
+	no := "PERM" + fx.next()
+	uid := adminQueryInt64(t, `INSERT INTO users (merchant_id, phone, nickname)
+	                           VALUES ($1, $2, '权限矩阵下单人') RETURNING id`,
+		fx.sh.MerchantID, fmt.Sprintf("136%08d", fx.seq.Add(1)%100_000_000))
+	adminExec(t, `
+		INSERT INTO orders (merchant_id, order_no, user_id, status, goods_amount_cents, payable_cents,
+		                    paid_cents, paid_at, receiver_snapshot, expire_at,
+		                    store_id, region_id, store_snapshot)
+		SELECT $1, $2, $3, 20, 1000, 1000, 1000, now(), '{}'::jsonb, now() + interval '30 minutes',
+		       st.id, st.region_id, '{}'::jsonb
+		  FROM stores st WHERE st.id = $4`, fx.sh.MerchantID, no, uid, storeID)
+	return no
+}
+
+// permCleanupOrders 在这一格结束时删掉矩阵造出来的订单与它们的下游行，
+// 理由与 permCleanupCoupons 一样：夹具最后要删 merchants 行，而这些行挂着指向它的外键。
+func permCleanupOrders(t *testing.T, fx *permFixture) {
+	t.Cleanup(func() {
+		for _, q := range []string{
+			`DELETE FROM shipments WHERE merchant_id = $1`,
+			`DELETE FROM orders WHERE merchant_id = $1`,
+			`DELETE FROM users WHERE merchant_id = $1 AND nickname = '权限矩阵下单人'`,
 		} {
 			adminExec(t, q, fx.sh.MerchantID)
 		}

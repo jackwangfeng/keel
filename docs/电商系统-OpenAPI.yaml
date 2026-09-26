@@ -4145,7 +4145,11 @@ paths:
             schema: { $ref: '#/components/schemas/ShipmentCreateRequest' }
       responses:
         '201':
-          description: 已发货
+          description: |
+            已发货。幂等重放命中成功记录时，同样返回 201 与首次的响应体，
+            并带 `Idempotency-Replayed: true`。
+          headers:
+            Idempotency-Replayed: { $ref: '#/components/headers/IdempotencyReplayed' }
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Shipment' }
