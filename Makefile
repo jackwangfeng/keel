@@ -71,7 +71,7 @@ GOOSE := GOOSE_DRIVER=postgres GOOSE_DBSTRING="$(GOOSE_DBSTRING)" \
 	$(GOOSE_BIN)
 
 .PHONY: help generate generate-go generate-ts generate-sql generate-uts tools-versions version search-metrics \
-	contract-check schema-check app-type-check admin-install admin-type-check admin-test admin-build app-install app-build-h5 app-build-android app-build-mp-weixin app-apk app-apk-e2e app-e2e app-adb-wifi app-ios app-ios-e2e app-e2e-ios \
+	contract-check schema-check app-type-check admin-install admin-type-check admin-test admin-build app-install app-build-h5 app-build-android app-build-mp-weixin app-apk app-apk-e2e app-e2e app-e2e-h5 app-adb-wifi app-ios app-ios-e2e app-e2e-ios \
 	sdk-smoke goose-bin migrate migrate-down migrate-status test-db \
 	test-engine dtmrs-deps build
 
@@ -241,6 +241,11 @@ app-apk-e2e:
 
 app-e2e:
 	cd $(ROOT)/app && npm run test:e2e
+
+# 同一套用例在本机 Chrome 无头里跑（带自动化运行时编 H5 → 同源反代 → playwright）。
+# 真机都锁屏时的兜底，一轮不到一分钟；只覆盖 JS / H5 那一层。要 KEEL_API_BASE。
+app-e2e-h5:
+	bash $(ROOT)/app/scripts/e2e-h5.sh
 
 # 插着线跑一次，之后拔线也能 make app-e2e。手机重启后要重跑。
 app-adb-wifi:

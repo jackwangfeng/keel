@@ -12,7 +12,16 @@ make app-e2e                                                      # 装包、启
 # iOS
 KEEL_IOS_TEAM=2Q89DQSSH6 KEEL_API_BASE=http://192.168.0.110:18099/api/v1 make app-ios-e2e
 make app-e2e-ios
+
+# H5 无头（真机都锁屏时的兜底，一轮不到一分钟）
+KEEL_API_BASE=http://192.168.0.110:18099/api/v1 make app-e2e-h5
 ```
+
+H5 无头：`scripts/e2e-h5.sh` 带自动化运行时编 H5（`--auto-host 127.0.0.1 --auto-port 9520`），
+`e2e/h5-serve.js` 托管产物并把 `/api` 反代到 `KEEL_API_BASE`（H5 只能同源；Host 换成服务端的，和 App
+访问同一家店），官方 H5 puppet 用 playwright 以 `channel: 'chrome'` 起本机 Chrome（不下载 playwright
+自带的浏览器）。`KEEL_E2E_H5_HEADED=1` 可以看着跑。**它只证明 JS / H5 那一层**：Android 的 Kotlin 产物
+与 iOS 原生那层测不到，那两端要么上真机，要么在报告里写明「只验证了编译」。
 
 前置条件：Android 开了 USB 调试并已授权（`adb devices` 显示 `device`），想拔线的话插着线跑一次
 `make app-adb-wifi`（切到无线调试；手机重启后要重跑）；iPhone 已配对
@@ -110,7 +119,7 @@ iOS 的自动化运行时没实现 `App.callFunction`，所以 `program.evaluate
 要在 App 里探查什么，用 `program.callUniMethod('request', {...})` 这类 uni API 调用（它把
 success 回调的结果原样带回来）。
 
-版本：`@dcloudio/uni-automator` 与编译器同一版（`3.0.0-5020620260917001`）；`jest 27.0.4`、
+版本：`playwright 1.63.0`（H5 无头，只用它的库，浏览器用本机 Chrome）；`@dcloudio/uni-automator` 与编译器同一版（`3.0.0-5020620260917001`）；`jest 27.0.4`、
 `jest-environment-node 27.5.1` 是它的 peer 依赖钉的版本；`adbkit 2.11.1` 照 HBuilderX
 测试插件用的版本。
 
