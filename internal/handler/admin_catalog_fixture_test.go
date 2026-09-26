@@ -74,6 +74,10 @@ func newAdminShop(t *testing.T) adminShop {
 		// 否则 `DELETE FROM staff` 会以 23503 失败，而那条错误会出现在
 		// **别的**测试里（清理是 t.Cleanup，失败的却是下一条用到 staff 的测试）。
 		for _, stmt := range []string{
+			// jobs 指向 merchants，而且它是**跨租户共享**的（00022：这张表没有
+			// RLS）。留下的待执行任务会被别的测试里那个 Drain 捞走，
+			// 而那时它指向的商品已经不在了。
+			`DELETE FROM jobs WHERE merchant_id = $1`,
 			`DELETE FROM product_images WHERE merchant_id = $1`,
 			`DELETE FROM product_text_vectors WHERE merchant_id = $1`,
 			`DELETE FROM product_understanding WHERE merchant_id = $1`,

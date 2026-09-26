@@ -306,8 +306,15 @@ func TestMerchantCanPublishAProductAndBuyersSeeIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// 两步：全量**入队**，再把队列抽干。M4 阶段 1 把这条路切成了生产者 +
+	// 消费者（jobs 表，数据模型 §12），Backfill 现在只负责前半段。
+	// 少了 Drain 这一步的症状正是下面那条断言：索引「跑完」了却搜不到 ——
+	// 因为活还躺在队列里。
 	if _, err := idx.Backfill(context.Background(), sh.MerchantID, false); err != nil {
-		t.Fatalf("派生数据入库失败: %v", err)
+		t.Fatalf("派生数据入队失败: %v", err)
+	}
+	if _, err := idx.Drain(context.Background()); err != nil {
+		t.Fatalf("抽干理解队列失败: %v", err)
 	}
 	_, hits := doSearch(t, sh.Host, `{"query":"咖啡壶"}`)
 	if !contains(titlesOf(hits), published.Title) {
