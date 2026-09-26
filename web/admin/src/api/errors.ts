@@ -89,6 +89,14 @@ export function problemHint(type: string): string {
             return "这张退款单已经不是「待买家退货」了。刷新看它现在的状态。";
         case ProblemType.refundFreightExceeded:
             return "退运费超过了订单实收运费（扣掉别的退款单已占的部分）。改小一点，或者留空保持申请时的值。";
+        case ProblemType.importFileTooLarge:
+            return "单个导入文件不超过 5 MB。把表格拆成几个文件分批导入。";
+        case ProblemType.importUnsupportedFormat:
+            return "只认 xlsx 与 csv。老式 .xls 或加了密码的工作簿请在 Excel 里另存为不加密的 .xlsx。";
+        case ProblemType.importFileInvalid:
+            return "整份文件不成立，上面逐条列了原因（缺列、超过 2000 行、表头合并……）。改好文件再传；从「下载模板」开始最省事。";
+        case ProblemType.importNothingToImport:
+            return "没有一件商品能导入：每件要么有红色的错误行，要么还没选类目。回到预检结果改完再确认。";
         default:
             return "";
     }

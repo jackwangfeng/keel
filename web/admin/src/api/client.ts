@@ -82,6 +82,17 @@ export type StoreCreateRequest = S["StoreCreateRequest"];
 export type StoreUpdateRequest = S["StoreUpdateRequest"];
 export type MerchantUpdateRequest = S["MerchantUpdateRequest"];
 
+// 商品批量导入（契约 /admin/product-imports）。
+export type ProductImportFormat = S["ProductImportFormat"];
+export type ProductImportPreview = S["ProductImportPreview"];
+export type ProductImportProduct = S["ProductImportProduct"];
+export type ProductImportRow = S["ProductImportRow"];
+export type ProductImportIssue = S["ProductImportIssue"];
+export type ProductImportCategoryCandidate = S["ProductImportCategoryCandidate"];
+export type ProductImportCategoryChoice = S["ProductImportCategoryChoice"];
+export type ProductImportResult = S["ProductImportResult"];
+export type ProductImportOutcome = S["ProductImportOutcome"];
+
 // 订单与售后（后台视角，00035）。
 export type AdminOrderSummary = S["AdminOrderSummary"];
 export type AdminOrderDetail = S["AdminOrderDetail"];
@@ -250,6 +261,100 @@ export async function uploadProductImage(file: File, idempotencyKey: string): Pr
 }
 
 // ---------------------------------------------------------------------------
+// 商品批量导入：两条 multipart + 一条下载
+// ---------------------------------------------------------------------------
+//
+// 与 uploadProductImage 同一个理由不走 SDK：SDK 的 body 槽只认 JSON。错误处理也同一套
+// （抛 ProblemError / UnexpectedResponseError），调用方不用为这几条接口写第二套 catch。
+// 响应类型仍然从契约取。5 MB / 2000 行的上限**不在前端重复**：服务端回 413 / 422，
+// 界面把 Problem 原样摊开 —— 前端抄一份阈值，改契约时就会有一处忘了改。
+
+async function postMultipart<T>(path: string, form: FormData, extra: Record<string, string>): Promise<T> {
+    const url = `${API_BASE.replace(/\/+$/, "")}${path}`;
+    const headers = new Headers({ Accept: "application/json, application/problem+json", ...extra });
+    for (const [k, v] of Object.entries(authHeaders())) headers.set(k, v);
+    const response = await globalThis.fetch(url, { method: "POST", body: form, headers });
+    handleUnauthorized(response.status);
+    const text = await response.text();
+    if (!response.ok) {
+        let parsed: unknown;
+        try {
+            parsed = JSON.parse(text) as unknown;
+        } catch {
+            throw new UnexpectedResponseError(url, response.status, response.headers.get("content-type"), text);
+        }
+        if (!isProblem(parsed)) {
+            throw new UnexpectedResponseError(url, response.status, response.headers.get("content-type"), text);
+        }
+        throw new ProblemError(url, response.status, parsed);
+    }
+    return JSON.parse(text) as T;
+}
+
+/** `POST /admin/product-imports/preview`：只校验不落库。 */
+export async function previewProductImport(file: File): Promise<ProductImportPreview> {
+    const form = new FormData();
+    form.append("file", file);
+    return postMultipart<ProductImportPreview>("/admin/product-imports/preview", form, {});
+}
+
+/**
+ * `POST /admin/product-imports`：同一份文件 + 每件商品选定的类目。
+ *
+ * categories 按契约是 multipart 里一项 `application/json` 编码的数组。
+ */
+export async function commitProductImport(
+    file: File,
+    categories: ProductImportCategoryChoice[],
+    idempotencyKey: string,
+): Promise<ProductImportResult> {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("categories", new Blob([JSON.stringify(categories)], { type: "application/json" }));
+    return postMultipart<ProductImportResult>("/admin/product-imports", form, {
+        "Idempotency-Key": idempotencyKey,
+    });
+}
+
+/**
+ * `GET /admin/product-imports/template` → 让浏览器存成文件。
+ *
+ * 不能用 `<a href>` 直链：那样带不了 Authorization 头。取回字节后用 object URL
+ * 触发一次下载，用完即还。
+ */
+export async function downloadImportTemplate(format: ProductImportFormat): Promise<void> {
+    const url = `${API_BASE.replace(/\/+$/, "")}/admin/product-imports/template?format=${format}`;
+    const headers = new Headers();
+    for (const [k, v] of Object.entries(authHeaders())) headers.set(k, v);
+    const response = await globalThis.fetch(url, { headers });
+    handleUnauthorized(response.status);
+    if (!response.ok) {
+        const text = await response.text();
+        let parsed: unknown = null;
+        try {
+            parsed = JSON.parse(text) as unknown;
+        } catch {
+            // 落到下面的 UnexpectedResponseError
+        }
+        if (isProblem(parsed)) throw new ProblemError(url, response.status, parsed);
+        throw new UnexpectedResponseError(url, response.status, response.headers.get("content-type"), text);
+    }
+    const blob = await response.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    try {
+        const a = document.createElement("a");
+        a.href = objectUrl;
+        a.download = format === "csv" ? "商品导入模板.csv" : "商品导入模板.xlsx";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+    } finally {
+        // 下一个事件循环再还：同步还掉的话，个别浏览器会在下载开始前就丢了那块内存。
+        setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // 读需要鉴权的文件（退款凭证）
 // ---------------------------------------------------------------------------
 
@@ -319,6 +424,11 @@ export const ProblemType = {
     refundStatusNotAuditable: `${P}refund-status-not-auditable`,
     refundStatusNotReceivable: `${P}refund-status-not-receivable`,
     refundFreightExceeded: `${P}refund-freight-exceeded`,
+    // 商品批量导入。
+    importFileTooLarge: `${P}import-file-too-large`,
+    importUnsupportedFormat: `${P}import-unsupported-format`,
+    importFileInvalid: `${P}import-file-invalid`,
+    importNothingToImport: `${P}import-nothing-to-import`,
 } as const;
 
 /** 这个错误是不是某个 type 的 Problem。 */

@@ -194,6 +194,8 @@ admin-type-check:
 # 不做一次浮点乘法 —— Number("0.29") * 100 是 28.999999999999996），
 # 还有订单与售后页的界面规则（src/api/orderRules.ts：哪个状态亮哪个按钮、
 # 审核请求体里运费带不带、日期范围怎么变成半开区间）。
+# 以及批量导入页的规则（src/api/importRules.ts：只预选服务端判定可信的类目、
+# 确认时把推荐的类目显式带回——服务端确认那一步不调引擎、不自动采用推荐）。
 #
 # 守的是「偏了不会报错」那一类错：经纬度写反、坐标系没换，服务端都会收下一个
 # **合法**的多边形，只是位置偏了几百米，买家被判进错的门店。
@@ -203,7 +205,7 @@ admin-type-check:
 # node_modules。别往 geo.ts 里加运行时 import，否则这里会以
 # ERR_MODULE_NOT_FOUND 失败。
 admin-test:
-	cd $(ROOT)/web/admin && node --test src/api/geo.test.ts src/api/money.test.ts src/api/orderRules.test.ts
+	cd $(ROOT)/web/admin && node --test src/api/geo.test.ts src/api/money.test.ts src/api/orderRules.test.ts src/api/importRules.test.ts
 
 # 构建静态产物到 web/admin/dist。日常不用跑：compose 起栈时在
 # docker/Dockerfile.admin 的 node 阶段里构建，产物交给 nginx。
