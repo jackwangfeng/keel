@@ -275,6 +275,21 @@ func TestStaffScopeIsolatesPlatformFromTenants(t *testing.T) {
 		}
 	})
 
+	// 这一组的因果关系做过变异验证，结论要写下来，因为它反直觉：
+	//
+	//   · 只把 staff_tokens 的策略里那句 staff_scope_merchant() 比较去掉
+	//     （谓词剩 `EXISTS (SELECT 1 FROM staff s WHERE s.id = ...)`）→ **仍然绿**。
+	//     原因：PostgreSQL 对策略表达式里引用到的表**同样施加 RLS**，
+	//     于是那个子查询里的 staff 已经被 staff 自己的策略过滤过了。
+	//   · 只把 staff 的策略放成 USING (true)、staff_tokens 那句留着 →
+	//     下面这一组**仍然绿**（上面那几组 staff 的断言则全红）。
+	//   · 两条一起放开 → 下面这一组才红。
+	//
+	// 也就是说两条策略在这件事上**各自都够**，互为冗余。这里如实记下来，
+	// 免得下一个人以为下面这几行断言与 staff_tokens 的谓词一一对应 ——
+	// 本仓库反复抓到的正是这种「断言存在但因果关系在别处」。
+	// 两条都保留是刻意的：staff 的策略哪天被人动了（那是一次显式改动，
+	// 上面那几组会红），staff_tokens 这一条仍然独立成立。
 	t.Run("staff_tokens 跟着父表走", func(t *testing.T) {
 		hashesIn := func(platform bool, merchantID int64) []string {
 			tx, err := app.Begin(ctx)
