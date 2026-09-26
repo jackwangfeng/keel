@@ -154,6 +154,15 @@ jobs:
       - name: 钉住的工具版本
         run: make tools-versions
 
+      # 商家后台那道类型闸门（admin-type-check）要 web/admin/node_modules：
+      # vue-tsc 才认 .vue，而 npx 拉不到一个能用的 vue-tsc + vue 组合。
+      # 约 130 个包、本机实测 5 秒；版本由入库的 package-lock.json 锁死。
+      #
+      # **不能改成「没装就跳过」**：那会让「后台的类型检查跑过了」这句话
+      # 在 CI 上是假的，而它看起来是真的。理由与上面 Node 那一步一字不差。
+      - name: 商家后台依赖
+        run: make admin-install
+
       # 六个 python 校验 + 契约产物漂移比对 + schema-check，一条命令。
       # 漂移比对是生成到临时目录再 diff，对工作区只读——CI 上不会出现
       # 「检查跑完工作区被改了」这种要额外一步 git diff --exit-code 去收尾的事。

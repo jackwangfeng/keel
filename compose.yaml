@@ -1,5 +1,11 @@
 # 一条命令起全栈：`docker compose up`。
 #
+# 起来之后有两个入口：
+#   · 买家侧 API   http://localhost:8080/api/v1/products （KEEL_HTTP_PORT 可换）
+#   · 商家后台界面 http://localhost:8081                 （KEEL_CONSOLE_PORT 可换）
+# 第一次进后台要一串引导 token，它明文打在 app 的日志里：
+#   docker compose logs app | grep bootstrap_token
+#
 # 默认形态是**单商家**：一个数据库、一次迁移、一份只播一家店的种子、一个应用进程。
 # 这正是 README 承诺给小商家的那个形态 —— 起来之后 `curl localhost:8080/api/v1/products`
 # 直接有商品，请求里不需要出现任何和「租户」有关的东西。
@@ -196,6 +202,37 @@ services:
     # 给应用二进制加一个自检子命令是可以的，但那是给应用二进制加一个自检子命令是可以的，但那是
     # 为了一个只有 compose 会看的信号去改 cmd/keel。外部的探活由 scripts/smoke.sh
     # 做（它从宿主机打 /healthz），编排系统接管时再由它自己的探针打同一个路径。
+
+  # 商家后台（web/admin）。**跟着栈一起起来，不是「再手动 npm run dev」。**
+  #
+  # README 承诺的是「`docker compose up` 一条命令起全栈」，而 M4 的产出标志
+  # 写着「商家可自助发布」——没有界面，那句话只对会用 curl 的人成立。
+  # 所以它在这里，和 app 同级。
+  #
+  # 多阶段构建：node 阶段 `npm ci` + `vite build`，nginx 阶段托管产物并把
+  # /api 反代给 app。于是浏览器看到的是**同源**，不需要 CORS
+  # （完整论证在 docker/Dockerfile.admin 的文件头）。
+  console:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.admin
+      target: console
+    ports:
+      # 8081，不与 app 的 8080 撞。换端口：
+      # `KEEL_CONSOLE_PORT=18081 docker compose up -d`。
+      #
+      # **变量名刻意不叫 KEEL_ADMIN_PORT**：这个文件里已经有一个
+      # KEEL_ADMIN_PASSWORD，而那是**数据库超级用户**的口令，和后台界面
+      # 毫无关系。两个 KEEL_ADMIN_* 挨在一起，迟早有人把后台的端口配进
+      # 数据库的口令里。
+      - "${KEEL_CONSOLE_PORT:-8081}:80"
+    depends_on:
+      # 只等 app **启动**，不等它健康 —— app 刻意没有容器级 healthcheck
+      # （理由写在它自己那段）。后台先起来也无妨：nginx 把 /api 反代过去，
+      # app 还没就绪时浏览器拿到 502，而登录页本身是静态的，打得开。
+      app:
+        condition: service_started
+    # 刻意不配 healthcheck，与 app 同一个理由：外部探活由 scripts/smoke.sh 做。
 
 volumes:
   pgdata:
