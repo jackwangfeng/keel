@@ -11,7 +11,7 @@
 // 表格里一行一个 SKU；类目选择框只画在每件商品的第一行上。错误行标红，
 // 违禁词在原文上标出来（HighlightedText），不阻断导入：导入的是草稿，上架时才拦。
 
-import { computed, onMounted, ref } from "vue";
+import { computed, nextTick, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { Back, Download, Upload } from "@element-plus/icons-vue";
 import type { UploadFile } from "element-plus";
@@ -62,6 +62,8 @@ const onlyProblems = ref(false);
 const committing = ref(false);
 const commitError = ref<unknown>(null);
 const result = ref<ProductImportResult | null>(null);
+// 结果卡片：确认之后滚过去（预检表可能有几百行高，结果在它下面，不滚的话看起来像没反应）。
+const resultCard = ref<{ $el?: HTMLElement } | null>(null);
 // 一次预检结果对应一次提交：换文件 / 重新预检时换钥匙。判据在 api/idempotency.ts 文件头。
 const submission = new IdempotentSubmission();
 
@@ -138,6 +140,8 @@ async function submit(): Promise<void> {
         const res = await withIdempotency(submission, (key) => commitProductImport(file.value as File, choices, key));
         result.value = res;
         step.value = 2;
+        await nextTick();
+        resultCard.value?.$el?.scrollIntoView({ behavior: "smooth", block: "start" });
         notifyOk(res.already_imported
             ? "这份文件之前已经导入过，这次没有重复建商品"
             : `已导入 ${res.created_products} 件商品（${res.created_skus} 个 SKU），全部是草稿`);
@@ -313,7 +317,9 @@ const imageOutcomes = computed(() =>
                     。导入的商品一律是草稿。
                 </span>
                 <span class="grow" />
-                <el-button type="primary" :loading="committing" :disabled="!canCommit(preview, selections) || !can.editCatalog()" @click="submit">
+                <!-- 导入完成之后按钮置灰：同一份文件再确认只会拿回那一次的结果（服务端认得这份文件），
+                     点了也不会重复建，但会让人以为又导了一遍。要再导，点结果页的「再导一份」。 -->
+                <el-button type="primary" :loading="committing" :disabled="!canCommit(preview, selections) || !can.editCatalog() || result !== null" @click="submit">
                     确认导入
                 </el-button>
             </div>
@@ -321,7 +327,7 @@ const imageOutcomes = computed(() =>
         </el-card>
 
         <!-- 第三步：结果 -->
-        <el-card v-if="result && step === 2" shadow="never">
+        <el-card v-if="result && step === 2" ref="resultCard" shadow="never">
             <template #header>3. 导入结果（导入记录 #{{ result.import_id }}）</template>
             <el-result
                 :icon="result.failed_rows > 0 ? 'warning' : 'success'"
