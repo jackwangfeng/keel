@@ -83,6 +83,12 @@ type Staff struct {
 	Status      int16
 	LastLoginAt *time.Time
 	CreatedAt   time.Time
+
+	// RegionIDs / StoreIDs 是管辖范围（00025）。staff 表的查询**不填**它们 ——
+	// 范围在另一张表里，由 service 按需用 StaffScopeTx 补上。nil 与空切片在
+	// 响应里都是 []。
+	RegionIDs []int64
+	StoreIDs  []int64
 }
 
 // StaffSession 是一条会话校验通过之后，调用方需要知道的全部。
@@ -174,6 +180,12 @@ type StaffTx interface {
 	// TouchLiveStaffSession 校验一条会话 token 并记一次 last_seen_at。
 	// 校验与续活是同一条语句，理由见 db/queries/staff.sql。
 	TouchLiveStaffSession(ctx context.Context, tokenHash string) (StaffSession, error)
+
+	// 管辖范围（staff_scope.go）。**只在租户作用域里可调**：staff_scopes 的
+	// 策略调 current_merchant()，平台作用域里是 RAISE。放进 StaffTx 而不是
+	// 只放进 Tx，是因为 StaffService 的 inScope 递下来的就是 StaffTx，
+	// 而会话校验要在同一个事务里连同范围一起读（StaffIdentity 的注释）。
+	StaffScopeTx
 }
 
 // WithPlatform 在一个**平台级作用域**的事务里执行 fn。

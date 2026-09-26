@@ -746,22 +746,26 @@ func TestLastAdminCannotBeDemotedOrDisabled(t *testing.T) {
 	sess := staffSession(t, hostA, onlyAdmin)
 	path := fmt.Sprintf("/api/v1/admin/staff/%d", onlyAdmin)
 
-	for _, body := range []string{`{"role":2}`, `{"status":2}`} {
-		p := problemOf(t, patchAs(t, hostA, path, body, sess.Token), http.StatusConflict)
-		if p.Type != "https://keel.dev/problems/last-admin" {
-			t.Errorf("改 %s 时 type 是 %q，期望 last-admin", body, p.Type)
-		}
+	// 停用自己：唯一还能踩到这条 409 的路径。
+	//
+	// 分级权限（v0.1.0）之后「任何人都不能改自己的角色」（403 role-forbidden，
+	// 见 permission_test.go 的 TestNobodyCanChangeTheirOwnRole），于是降级
+	// 最后一个管理员这件事只剩「别人来降」—— 而来降的那个人自己就是在岗管理员，
+	// 被降的那个按定义不是最后一个。所以这条规则今天只挡「最后一个管理员停用自己」。
+	p := problemOf(t, patchAs(t, hostA, path, `{"status":2}`, sess.Token), http.StatusConflict)
+	if p.Type != "https://keel.dev/problems/last-admin" {
+		t.Errorf("停用自己时 type 是 %q，期望 last-admin", p.Type)
 	}
 
 	// 阳性对照：再加一个管理员之后，同一个请求就该通过。
-	// 没有它，一个「PATCH 恒 409」的实现会让上面那两条全绿。
+	// 没有它，一个「PATCH 恒 409」的实现会让上面那条全绿。
 	second := mkStaff(t, "shop-a", "second-admin-a@example.com", 1, 1)
-	w := patchAs(t, hostA, path, `{"role":2}`, sess.Token)
+	secondSess := staffSession(t, hostA, second)
+	w := patchAs(t, hostA, path, `{"role":2}`, secondSess.Token)
 	got := staffOf(t, w, http.StatusOK)
 	if got.Role != 2 {
 		t.Errorf("降级之后 role 是 %d，期望 2", got.Role)
 	}
-	_ = second
 }
 
 // 别家店的 staff_id 一律 404，不是 403（契约 /admin/ 那一段的约定 3）。

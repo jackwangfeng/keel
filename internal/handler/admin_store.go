@@ -72,6 +72,9 @@ func NewAdminStoreHandler(s *service.AdminStoreService) *AdminStoreHandler {
 //	   sentinel，漏了就掉进 500，而那句 ST_IsValidReason 是运营唯一能拿来
 //	   定位自己画错在哪儿的东西。
 func writeStoreError(c *gin.Context, err error) {
+	if writePermissionError(c, err) {
+		return
+	}
 	var invConflict *repository.StoreInventoryConflict
 	var badFence *repository.InvalidFenceError
 

@@ -45,9 +45,14 @@ type adminSessionRequest struct {
 // status 给 0 是一个不存在的状态（枚举只有 1/2），没给是「别动它」。
 // 用值类型的话两者都是 0，于是每一次只改 role 的 PATCH 都会顺手把 status
 // 判成非法，或者（更糟）把它当成一个有效值写进去。
+//
+// region_ids / store_ids 用 *[]int64：「没给」是不动范围，「给了 []」是清空，
+// 两者在这条接口上是两件事（契约：给了就是整体替换）。
 type adminStaffPatchRequest struct {
-	Role   *int16 `json:"role"`
-	Status *int16 `json:"status"`
+	Role      *int16   `json:"role"`
+	Status    *int16   `json:"status"`
+	RegionIDs *[]int64 `json:"region_ids"`
+	StoreIDs  *[]int64 `json:"store_ids"`
 }
 
 // Bootstrap 实现 POST /api/v1/admin/auth/bootstrap。
@@ -131,8 +136,15 @@ func (h *AdminAuthHandler) CreateStaff(c *gin.Context) {
 	if req.Name != nil {
 		name = *req.Name
 	}
+	var scopes repository.StaffScopes
+	if req.RegionIds != nil {
+		scopes.RegionIDs = *req.RegionIds
+	}
+	if req.StoreIds != nil {
+		scopes.StoreIDs = *req.StoreIds
+	}
 	out, err := h.svc.CreateStaff(c.Request.Context(),
-		string(req.Email), name, int16(req.Role))
+		string(req.Email), name, int16(req.Role), scopes)
 	if err != nil {
 		writeStaffError(c, err)
 		return
@@ -166,7 +178,8 @@ func (h *AdminAuthHandler) UpdateStaff(c *gin.Context) {
 			problem.TypeInvalidRequest, "请求体不是合法的 JSON")
 		return
 	}
-	st, err := h.svc.UpdateStaff(c.Request.Context(), id, req.Role, req.Status)
+	st, err := h.svc.UpdateStaff(c.Request.Context(), id, req.Role, req.Status,
+		req.RegionIDs, req.StoreIDs)
 	if err != nil {
 		writeStaffError(c, err)
 		return
@@ -205,6 +218,9 @@ func apiStaff(st repository.Staff) api.Staff {
 		// 两者对客户端是两件事：缺席意味着「这个字段还没实现」，
 		// null 意味着「这个人不属于任何一家店」。
 		MerchantId: st.MerchantID,
+		// 契约里两者都是必返的数组：没有范围是 []，不是 null 也不是缺席。
+		RegionIds: nonNilIDs(st.RegionIDs),
+		StoreIds:  nonNilIDs(st.StoreIDs),
 	}
 	if st.Name != "" {
 		name := st.Name
@@ -229,6 +245,9 @@ func staffSessionResponse(s service.StaffSessionResult) api.StaffSession {
 // 每一条都对应契约里明写的一个状态码；没对上的一律 500 —— 兜底分支不该猜一个
 // 4xx，那会把服务端的 bug 报成客户端的错，而客户端会照着这个错重试。
 func writeStaffError(c *gin.Context, err error) {
+	if writePermissionError(c, err) {
+		return
+	}
 	switch {
 	case errors.Is(err, service.ErrStaffBadRequest):
 		problem.Write(c, http.StatusUnprocessableEntity,
@@ -289,4 +308,13 @@ func writeStaffError(c *gin.Context, err error) {
 		problem.Write(c, http.StatusInternalServerError,
 			problem.TypeInternal, "服务内部错误")
 	}
+}
+
+// nonNilIDs 让 nil 切片序列化成 []：encoding/json 把 nil 切片写成 null，
+// 而契约把 region_ids / store_ids 定成必返的数组。
+func nonNilIDs(ids []int64) []int64 {
+	if ids == nil {
+		return []int64{}
+	}
+	return ids
 }

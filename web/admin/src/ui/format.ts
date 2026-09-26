@@ -43,8 +43,8 @@ export const CATEGORY_STATUS: Record<0 | 1, { text: string; tag: "info" | "succe
     1: { text: "启用", tag: "success" },
 };
 
-/** `staff.role`：契约里 StaffRole 是 1 | 2。 */
-export const STAFF_ROLE: Record<1 | 2, string> = { 1: "管理员", 2: "操作员" };
+/** `staff.role`：契约里 StaffRole 是 1 | 2 | 3 | 4。显示名只有一份，在 auth/permissions.ts。 */
+export { ROLE_TEXT as STAFF_ROLE } from "../auth/permissions.ts";
 
 /** `staff.status`：1 正常 2 停用。 */
 export const STAFF_STATUS: Record<1 | 2, { text: string; tag: "success" | "info" }> = {

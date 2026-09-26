@@ -35,6 +35,7 @@ import { IdempotentSubmission, withIdempotency } from "../api/idempotency.ts";
 import { fieldErrorsOf } from "../api/errors.ts";
 import { datetime, PRODUCT_STATUS, SKU_STATUS, yuan } from "../ui/format.ts";
 import { notifyError, notifyOk } from "../ui/notify.ts";
+import { can, NO_PERMISSION } from "../auth/permissions.ts";
 import ProblemAlert from "../components/ProblemAlert.vue";
 import HighlightedText from "../components/HighlightedText.vue";
 import InventoryDialog, { type InventoryTarget } from "../components/InventoryDialog.vue";
@@ -421,10 +422,10 @@ function onInventoryUpdated(inv: AdminInventory): void {
                 <el-tag v-if="product.deleted_at" type="danger" size="small">已软删</el-tag>
                 <span class="grow" />
                 <span class="hint">首次上架：{{ datetime(product.published_at) }}</span>
-                <el-button type="primary" :loading="publishing" @click="togglePublication">
+                <el-button type="primary" :loading="publishing" :disabled="!can.editCatalog()" :title="can.editCatalog() ? '' : NO_PERMISSION" @click="togglePublication">
                     {{ product.status === 1 ? "下架" : "上架" }}
                 </el-button>
-                <el-button type="danger" plain :icon="Delete" @click="removeProduct">删除</el-button>
+                <el-button type="danger" plain :icon="Delete" :disabled="!can.editCatalog()" :title="can.editCatalog() ? '' : NO_PERMISSION" @click="removeProduct">删除</el-button>
             </div>
 
             <ProblemAlert v-if="publishError" :error="publishError" />
@@ -480,7 +481,7 @@ function onInventoryUpdated(inv: AdminInventory): void {
                             </el-select>
                         </el-form-item>
                         <el-form-item>
-                            <el-button type="primary" :loading="saving" @click="saveBasic">保存</el-button>
+                            <el-button type="primary" :loading="saving" :disabled="!can.editCatalog()" :title="can.editCatalog() ? '' : NO_PERMISSION" @click="saveBasic">保存</el-button>
                             <span class="hint ml8">
                                 在架商品的文案改动要过一次违禁词检查；草稿与已下架的不过。
                             </span>
@@ -513,11 +514,11 @@ function onInventoryUpdated(inv: AdminInventory): void {
                             :before-upload="beforeUpload"
                             accept="image/jpeg,image/png,image/webp"
                         >
-                            <el-button :icon="Plus" :loading="uploading">上传图片</el-button>
+                            <el-button :icon="Plus" :loading="uploading" :disabled="!can.editCatalog()" :title="can.editCatalog() ? '' : NO_PERMISSION">上传图片</el-button>
                         </el-upload>
                         <span class="hint">单文件不超过 10 MB，只接受 jpeg / png / webp（服务端判据）</span>
                         <span class="grow" />
-                        <el-button type="primary" :loading="imagesSaving" :disabled="!imagesDirty" @click="saveImages">
+                        <el-button type="primary" :loading="imagesSaving" :disabled="!imagesDirty || !can.editCatalog()" @click="saveImages">
                             保存图片顺序
                         </el-button>
                     </div>
@@ -548,7 +549,7 @@ function onInventoryUpdated(inv: AdminInventory): void {
                             漏建的话这件商品会表现为「永远缺货」。
                         </span>
                         <span class="grow" />
-                        <el-button type="primary" :icon="Plus" @click="openSkuCreate">加 SKU</el-button>
+                        <el-button type="primary" :icon="Plus" :disabled="!can.editCatalog()" :title="can.editCatalog() ? '' : NO_PERMISSION" @click="openSkuCreate">加 SKU</el-button>
                     </div>
 
                     <el-table :data="product.skus" border stripe>
@@ -583,9 +584,9 @@ function onInventoryUpdated(inv: AdminInventory): void {
                         </el-table-column>
                         <el-table-column label="操作" width="220" fixed="right">
                             <template #default="{ row }: { row: AdminSku }">
-                                <el-button link type="primary" @click="openSkuEdit(row)">编辑</el-button>
+                                <el-button link type="primary" :disabled="!can.editCatalog()" :title="can.editCatalog() ? '' : NO_PERMISSION" @click="openSkuEdit(row)">编辑</el-button>
                                 <el-button link type="primary" @click="openInventory(row)">改库存</el-button>
-                                <el-button link type="danger" @click="removeSku(row)">删除</el-button>
+                                <el-button link type="danger" :disabled="!can.editCatalog()" :title="can.editCatalog() ? '' : NO_PERMISSION" @click="removeSku(row)">删除</el-button>
                             </template>
                         </el-table-column>
                     </el-table>

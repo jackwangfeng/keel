@@ -112,13 +112,15 @@ type StoreInventoryPage struct {
 func (s *AdminStoreService) ListRegions(ctx context.Context, page, pageSize int,
 	includeDeleted bool) (RegionPage, error) {
 
-	if _, err := requireStaff(ctx); err != nil {
-		return RegionPage{}, err
-	}
 	page, pageSize = clampPaging(page, pageSize)
 	out := RegionPage{Items: []repository.Region{}, Page: page, PageSize: pageSize}
 	err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
-		items, total, err := tx.AdminListRegions(ctx, includeDeleted,
+		// 大区 / 门店管理员只看得见范围内的（authz.go 的 listFilter）。
+		only, _, err := listFilter(ctx, tx)
+		if err != nil {
+			return err
+		}
+		items, total, err := tx.AdminListRegions(ctx, includeDeleted, only,
 			int32(pageSize), int32(offsetOf(page, pageSize)))
 		if err != nil {
 			return err
@@ -136,7 +138,9 @@ func (s *AdminStoreService) ListRegions(ctx context.Context, page, pageSize int,
 func (s *AdminStoreService) CreateRegion(ctx context.Context,
 	n repository.NewRegion) (repository.Region, error) {
 
-	if _, err := requireStaff(ctx); err != nil {
+	// 大区管理员**不能建新大区**：建出来的大区不在他的范围里，而要让它在，
+	// 就得有人给他扩范围 —— 那一步只有管理员能做，建大区也就只该由全店范围的人做。
+	if _, err := requireMerchantWide(ctx); err != nil {
 		return repository.Region{}, err
 	}
 	if err := checkCode("code", n.Code); err != nil {
@@ -158,7 +162,7 @@ func (s *AdminStoreService) CreateRegion(ctx context.Context,
 func (s *AdminStoreService) UpdateRegion(ctx context.Context, id int64,
 	p repository.RegionPatch) (repository.Region, error) {
 
-	if _, err := requireStaff(ctx); err != nil {
+	if _, err := authorizeRegion(ctx, id); err != nil {
 		return repository.Region{}, err
 	}
 	// 一个字段都没传是 422，不是「原样返回 200」。契约在三条 PATCH 上都写着
@@ -197,7 +201,7 @@ func (s *AdminStoreService) UpdateRegion(ctx context.Context, id int64,
 // 级联软删一个大区会连带让它下面所有门店接不到单，而调用方在点下删除时
 // 看到的只是一个大区名。
 func (s *AdminStoreService) DeleteRegion(ctx context.Context, id int64) error {
-	if _, err := requireStaff(ctx); err != nil {
+	if _, err := authorizeRegion(ctx, id); err != nil {
 		return err
 	}
 	return s.repo.WithTenant(ctx, func(tx repository.Tx) error {
@@ -213,13 +217,14 @@ func (s *AdminStoreService) DeleteRegion(ctx context.Context, id int64) error {
 func (s *AdminStoreService) ListStores(ctx context.Context, regionID *int64,
 	includeDeleted bool, page, pageSize int) (AdminStorePage, error) {
 
-	if _, err := requireStaff(ctx); err != nil {
-		return AdminStorePage{}, err
-	}
 	page, pageSize = clampPaging(page, pageSize)
 	out := AdminStorePage{Items: []repository.Store{}, Page: page, PageSize: pageSize}
 	err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
-		items, total, hasDefault, e := tx.AdminListStores(ctx, regionID, includeDeleted,
+		_, only, e := listFilter(ctx, tx)
+		if e != nil {
+			return e
+		}
+		items, total, hasDefault, e := tx.AdminListStores(ctx, regionID, includeDeleted, only,
 			int32(pageSize), int32(offsetOf(page, pageSize)))
 		if e != nil {
 			return e
@@ -235,11 +240,11 @@ func (s *AdminStoreService) ListStores(ctx context.Context, regionID *int64,
 
 // FindStore 实现 GET /admin/stores/{store_id}。
 func (s *AdminStoreService) FindStore(ctx context.Context, id int64) (repository.Store, error) {
-	if _, err := requireStaff(ctx); err != nil {
-		return repository.Store{}, err
-	}
 	var out repository.Store
 	err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+		if _, e := authorizeStore(ctx, tx, id, storeOperate); e != nil {
+			return e
+		}
 		var e error
 		out, e = tx.FindStore(ctx, id)
 		return e
@@ -256,7 +261,7 @@ func (s *AdminStoreService) FindStore(ctx context.Context, id int64) (repository
 func (s *AdminStoreService) CreateStore(ctx context.Context,
 	n repository.NewStore) (repository.Store, error) {
 
-	if _, err := requireStaff(ctx); err != nil {
+	if _, err := authorizeNewStore(ctx, n.RegionID, n.IsDefault); err != nil {
 		return repository.Store{}, err
 	}
 	if n.RegionID <= 0 {
@@ -291,9 +296,6 @@ func (s *AdminStoreService) CreateStore(ctx context.Context,
 func (s *AdminStoreService) UpdateStore(ctx context.Context, id int64,
 	p repository.StorePatch) (repository.Store, error) {
 
-	if _, err := requireStaff(ctx); err != nil {
-		return repository.Store{}, err
-	}
 	if p.RegionID == nil && p.Code == nil && p.Name == nil && p.Phone == nil &&
 		p.Province == nil && p.City == nil && p.District == nil && p.Address == nil &&
 		p.Status == nil && !p.SetLocation {
@@ -339,6 +341,11 @@ func (s *AdminStoreService) UpdateStore(ctx context.Context, id int64,
 	}
 	var out repository.Store
 	err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+		// 换大区时新旧两个大区都得在范围内（authorizeStoreMove 的注释）。
+		// 与写同一个事务：判权时读到的「旧大区」必须就是写的时候那一个。
+		if _, e := authorizeStoreMove(ctx, tx, id, p.RegionID); e != nil {
+			return e
+		}
 		var e error
 		out, e = tx.UpdateStore(ctx, id, p)
 		return e
@@ -351,10 +358,10 @@ func (s *AdminStoreService) UpdateStore(ctx context.Context, id int64,
 // 硬删不掉：inventories / orders / inventory_logs 三张表对它有外键。
 // 那不是这一层要处理的事 —— 软删是这条端点的语义，不是绕过外键的手段。
 func (s *AdminStoreService) DeleteStore(ctx context.Context, id int64) error {
-	if _, err := requireStaff(ctx); err != nil {
-		return err
-	}
 	return s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+		if _, e := authorizeStore(ctx, tx, id, storeManage); e != nil {
+			return e
+		}
 		return tx.SoftDeleteStore(ctx, id)
 	})
 }
@@ -372,11 +379,11 @@ func (s *AdminStoreService) DeleteStore(ctx context.Context, id int64) error {
 func (s *AdminStoreService) SetFence(ctx context.Context, id int64,
 	geojson *string) (repository.Store, error) {
 
-	if _, err := requireStaff(ctx); err != nil {
-		return repository.Store{}, err
-	}
 	var out repository.Store
 	err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+		if _, e := authorizeStore(ctx, tx, id, storeManage); e != nil {
+			return e
+		}
 		var e error
 		out, e = tx.SetStoreFence(ctx, id, geojson)
 		return e
@@ -386,7 +393,7 @@ func (s *AdminStoreService) SetFence(ctx context.Context, id int64,
 
 // MakeDefault 实现 PUT /admin/stores/{store_id}/default。
 func (s *AdminStoreService) MakeDefault(ctx context.Context, id int64) (repository.Store, error) {
-	if _, err := requireStaff(ctx); err != nil {
+	if _, err := requireMerchantAdmin(ctx); err != nil {
 		return repository.Store{}, err
 	}
 	var out repository.Store
@@ -409,12 +416,12 @@ func (s *AdminStoreService) MakeDefault(ctx context.Context, id int64) (reposito
 func (s *AdminStoreService) ListStoreProducts(ctx context.Context, storeID int64,
 	listed *bool, page, pageSize int) (ScopedListingPage, error) {
 
-	if _, err := requireStaff(ctx); err != nil {
-		return ScopedListingPage{}, err
-	}
 	page, pageSize = clampPaging(page, pageSize)
 	out := ScopedListingPage{Items: []repository.ScopedListing{}, Page: page, PageSize: pageSize}
 	err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+		if _, e := authorizeStore(ctx, tx, storeID, storeOperate); e != nil {
+			return e
+		}
 		// scope 与读在同一个事务里：分成两次的话，中间的一次「换大区」会让
 		// 这一页按旧大区算可见性与价格，而大区是两层覆盖的外层。
 		_, regionID, e := tx.StoreScope(ctx, storeID)
@@ -439,7 +446,7 @@ func (s *AdminStoreService) ListStoreProducts(ctx context.Context, storeID int64
 func (s *AdminStoreService) ListRegionProducts(ctx context.Context, regionID int64,
 	listed *bool, page, pageSize int) (ScopedListingPage, error) {
 
-	if _, err := requireStaff(ctx); err != nil {
+	if _, err := authorizeRegion(ctx, regionID); err != nil {
 		return ScopedListingPage{}, err
 	}
 	page, pageSize = clampPaging(page, pageSize)
@@ -473,12 +480,12 @@ func (s *AdminStoreService) ListRegionProducts(ctx context.Context, regionID int
 func (s *AdminStoreService) SetStoreListing(ctx context.Context, storeID, productID int64,
 	listed bool) (repository.ScopedListing, error) {
 
-	staff, err := requireStaff(ctx)
-	if err != nil {
-		return repository.ScopedListing{}, err
-	}
 	var out repository.ScopedListing
-	err = s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+	err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+		staff, e := authorizeStore(ctx, tx, storeID, storeOperate)
+		if e != nil {
+			return e
+		}
 		_, regionID, e := tx.StoreScope(ctx, storeID)
 		if e != nil {
 			return e
@@ -494,7 +501,7 @@ func (s *AdminStoreService) SetStoreListing(ctx context.Context, storeID, produc
 func (s *AdminStoreService) SetRegionListing(ctx context.Context, regionID, productID int64,
 	listed bool) (repository.ScopedListing, error) {
 
-	staff, err := requireStaff(ctx)
+	staff, err := authorizeRegion(ctx, regionID)
 	if err != nil {
 		return repository.ScopedListing{}, err
 	}
@@ -518,9 +525,6 @@ func (s *AdminStoreService) SetRegionListing(ctx context.Context, regionID, prod
 func (s *AdminStoreService) SetStorePrice(ctx context.Context, storeID, skuID, cents int64) (
 	repository.ScopedPrice, error) {
 
-	if _, err := requireStaff(ctx); err != nil {
-		return repository.ScopedPrice{}, err
-	}
 	// 非负同时由 chk_store_price_nonneg 兜底。两道都要：数据库那道挡的是
 	// 任何路径，这一道给的是一句能读懂的话（契约的 422）。
 	if err := checkNonNeg("price_cents", cents); err != nil {
@@ -528,6 +532,9 @@ func (s *AdminStoreService) SetStorePrice(ctx context.Context, storeID, skuID, c
 	}
 	var out repository.ScopedPrice
 	err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+		if _, e := authorizeStore(ctx, tx, storeID, storeOperate); e != nil {
+			return e
+		}
 		var e error
 		out, e = tx.SetStorePrice(ctx, storeID, skuID, cents)
 		return e
@@ -541,10 +548,10 @@ func (s *AdminStoreService) SetStorePrice(ctx context.Context, storeID, skuID, c
 // 自己的价」，那个意图在两种情况下都已经达成。404 留给「门店或 SKU 根本不
 // 存在」，而那一条由 repository 在删之前单独确认。
 func (s *AdminStoreService) ClearStorePrice(ctx context.Context, storeID, skuID int64) error {
-	if _, err := requireStaff(ctx); err != nil {
-		return err
-	}
 	return s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+		if _, e := authorizeStore(ctx, tx, storeID, storeOperate); e != nil {
+			return e
+		}
 		// 先确认这两个 id 真的存在 —— **这一步不能省，而且只能在这里做**。
 		//
 		// 那条 DELETE 对「本来就没有那一行」与「门店根本不存在」返回的东西
@@ -566,7 +573,7 @@ func (s *AdminStoreService) ClearStorePrice(ctx context.Context, storeID, skuID 
 func (s *AdminStoreService) SetRegionPrice(ctx context.Context, regionID, skuID, cents int64) (
 	repository.ScopedPrice, error) {
 
-	if _, err := requireStaff(ctx); err != nil {
+	if _, err := authorizeRegion(ctx, regionID); err != nil {
 		return repository.ScopedPrice{}, err
 	}
 	if err := checkNonNeg("price_cents", cents); err != nil {
@@ -586,7 +593,7 @@ func (s *AdminStoreService) SetRegionPrice(ctx context.Context, regionID, skuID,
 // 撤销大区价回到基准价，**不动门店价**：门店那一层如果自己定了价，
 // 撤销大区价之后它仍然生效。覆盖是逐层独立的。
 func (s *AdminStoreService) ClearRegionPrice(ctx context.Context, regionID, skuID int64) error {
-	if _, err := requireStaff(ctx); err != nil {
+	if _, err := authorizeRegion(ctx, regionID); err != nil {
 		return err
 	}
 	return s.repo.WithTenant(ctx, func(tx repository.Tx) error {
@@ -614,12 +621,12 @@ func (s *AdminStoreService) ClearRegionPrice(ctx context.Context, regionID, skuI
 func (s *AdminStoreService) ListStoreInventories(ctx context.Context, storeID int64,
 	lowStockOnly bool, page, pageSize int) (StoreInventoryPage, error) {
 
-	if _, err := requireStaff(ctx); err != nil {
-		return StoreInventoryPage{}, err
-	}
 	page, pageSize = clampPaging(page, pageSize)
 	out := StoreInventoryPage{Items: []repository.StoreInventory{}, Page: page, PageSize: pageSize}
 	err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+		if _, e := authorizeStore(ctx, tx, storeID, storeOperate); e != nil {
+			return e
+		}
 		if _, _, e := tx.StoreScope(ctx, storeID); e != nil {
 			return e
 		}
@@ -647,9 +654,6 @@ func (s *AdminStoreService) ListStoreInventories(ctx context.Context, storeID in
 func (s *AdminStoreService) SetStoreInventory(ctx context.Context, storeID, skuID int64,
 	in repository.InventorySet) (repository.StoreInventory, error) {
 
-	if _, err := requireStaff(ctx); err != nil {
-		return repository.StoreInventory{}, err
-	}
 	if err := checkNonNeg("available_qty", int64(in.AvailableQty)); err != nil {
 		return repository.StoreInventory{}, err
 	}
@@ -663,6 +667,9 @@ func (s *AdminStoreService) SetStoreInventory(ctx context.Context, storeID, skuI
 	}
 	var out repository.StoreInventory
 	err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+		if _, e := authorizeStore(ctx, tx, storeID, storeOperate); e != nil {
+			return e
+		}
 		var e error
 		out, e = tx.SetStoreInventory(ctx, storeID, skuID, in)
 		return e

@@ -224,7 +224,7 @@ func (s *AdminCatalogService) FindProduct(ctx context.Context, id int64) (AdminP
 func (s *AdminCatalogService) CreateProduct(ctx context.Context, n repository.NewProduct,
 	idemKey string) (repository.AdminProduct, bool, error) {
 
-	if _, err := requireStaff(ctx); err != nil {
+	if _, err := requireMerchantWide(ctx); err != nil {
 		return repository.AdminProduct{}, false, err
 	}
 	// 校验排在抢占幂等键**之前**：一个注定被拒的请求不该占掉客户端的那把
@@ -253,7 +253,7 @@ func (s *AdminCatalogService) CreateProduct(ctx context.Context, n repository.Ne
 func (s *AdminCatalogService) UpdateProduct(ctx context.Context, id int64,
 	p repository.ProductPatch) (repository.AdminProduct, error) {
 
-	if _, err := requireStaff(ctx); err != nil {
+	if _, err := requireMerchantWide(ctx); err != nil {
 		return repository.AdminProduct{}, err
 	}
 	// 契约：minProperties: 1。一个字段都没传是 422，不是「什么也不改的 200」——
@@ -310,7 +310,7 @@ const productStatusPublished int16 = 1
 
 // DeleteProduct 实现 DELETE /admin/products/{product_id}。
 func (s *AdminCatalogService) DeleteProduct(ctx context.Context, id int64) error {
-	if _, err := requireStaff(ctx); err != nil {
+	if _, err := requireMerchantWide(ctx); err != nil {
 		return err
 	}
 	return s.repo.WithTenant(ctx, func(tx repository.Tx) error {
@@ -327,7 +327,7 @@ func (s *AdminCatalogService) DeleteProduct(ctx context.Context, id int64) error
 func (s *AdminCatalogService) SetPublication(ctx context.Context, id int64, publish bool,
 	idemKey string) (repository.AdminProduct, bool, error) {
 
-	if _, err := requireStaff(ctx); err != nil {
+	if _, err := requireMerchantWide(ctx); err != nil {
 		return repository.AdminProduct{}, false, err
 	}
 	// 这一条**本来就天生幂等**（状态机终点相同），接上幂等键仍然有意义：
@@ -371,7 +371,7 @@ func (s *AdminCatalogService) SetPublication(ctx context.Context, id int64, publ
 func (s *AdminCatalogService) ReplaceImages(ctx context.Context, productID int64,
 	uploadIDs []int64) ([]repository.ProductImage, error) {
 
-	if _, err := requireStaff(ctx); err != nil {
+	if _, err := requireMerchantWide(ctx); err != nil {
 		return nil, err
 	}
 	if len(uploadIDs) > maxProductImages {
@@ -412,7 +412,7 @@ type NewSKUInput struct {
 func (s *AdminCatalogService) CreateSKU(ctx context.Context, productID int64,
 	in NewSKUInput, idemKey string) (repository.AdminSKU, bool, error) {
 
-	if _, err := requireStaff(ctx); err != nil {
+	if _, err := requireMerchantWide(ctx); err != nil {
 		return repository.AdminSKU{}, false, err
 	}
 	if err := checkSKUCode(in.SKUCode); err != nil {
@@ -487,7 +487,7 @@ type SKUPatchInput struct {
 func (s *AdminCatalogService) UpdateSKU(ctx context.Context, skuID int64,
 	in SKUPatchInput) (repository.AdminSKU, error) {
 
-	if _, err := requireStaff(ctx); err != nil {
+	if _, err := requireMerchantWide(ctx); err != nil {
 		return repository.AdminSKU{}, err
 	}
 	if in.SKUCode == nil && in.SpecValues == nil && in.PriceCents == nil &&
@@ -551,7 +551,7 @@ func (s *AdminCatalogService) UpdateSKU(ctx context.Context, skuID int64,
 
 // DeleteSKU 实现 DELETE /admin/skus/{sku_id}。
 func (s *AdminCatalogService) DeleteSKU(ctx context.Context, skuID int64) error {
-	if _, err := requireStaff(ctx); err != nil {
+	if _, err := requireMerchantWide(ctx); err != nil {
 		return err
 	}
 	return s.repo.WithTenant(ctx, func(tx repository.Tx) error {
@@ -568,9 +568,6 @@ func (s *AdminCatalogService) DeleteSKU(ctx context.Context, skuID int64) error 
 func (s *AdminCatalogService) SetInventory(ctx context.Context, skuID int64,
 	expected, want int32, warning *int32) (repository.Inventory, error) {
 
-	if _, err := requireStaff(ctx); err != nil {
-		return repository.Inventory{}, err
-	}
 	// 契约：两个数量都是 minimum: 0，为负是 422。
 	// **不靠 chk_qty_nonneg 兜底**：它兜不住负的 expected，而一个负的 expected
 	// 永远匹配不上任何一行，症状是「怎么改都 409」—— 而 409 的含义是
@@ -599,6 +596,12 @@ func (s *AdminCatalogService) SetInventory(ctx context.Context, skuID int64,
 		// 而那时正确答案已经是 409 了。
 		storeID, e := tx.SoleStore(ctx)
 		if e != nil {
+			return e
+		}
+		// 判权排在解析**之后**：这条捷径改的是「那唯一一家店」的库存，
+		// 大区 / 门店管理员只有那家店在范围内时才放行 —— 与按门店那条
+		// PUT /admin/stores/{id}/skus/{id}/inventory 同一个判据、同一个事务。
+		if _, e := authorizeStore(ctx, tx, storeID, storeOperate); e != nil {
 			return e
 		}
 		out, e = tx.SetInventory(ctx, storeID, skuID, expected, want, warning)
@@ -666,7 +669,7 @@ func (s *AdminCatalogService) ListCategories(ctx context.Context) ([]repository.
 func (s *AdminCatalogService) CreateCategory(ctx context.Context, n repository.NewCategory,
 	idemKey string) (repository.AdminCategory, bool, error) {
 
-	if _, err := requireStaff(ctx); err != nil {
+	if _, err := requireMerchantWide(ctx); err != nil {
 		return repository.AdminCategory{}, false, err
 	}
 	if err := checkName(n.Name); err != nil {
@@ -705,7 +708,7 @@ type CategoryPatchInput struct {
 func (s *AdminCatalogService) UpdateCategory(ctx context.Context, id int64,
 	in CategoryPatchInput) (repository.AdminCategory, error) {
 
-	if _, err := requireStaff(ctx); err != nil {
+	if _, err := requireMerchantWide(ctx); err != nil {
 		return repository.AdminCategory{}, err
 	}
 	if in.Name == nil && in.SortOrder == nil && in.Status == nil && !in.SetParentID {
@@ -756,7 +759,7 @@ func (s *AdminCatalogService) UpdateCategory(ctx context.Context, id int64,
 // 「有子分类」「有商品」两条闸门在 repository.SoftDeleteCategory 里，
 // 不在这里 —— 它们各有一个 sentinel，而契约给了两个不同的 Problem type。
 func (s *AdminCatalogService) DeleteCategory(ctx context.Context, id int64) error {
-	if _, err := requireStaff(ctx); err != nil {
+	if _, err := requireMerchantWide(ctx); err != nil {
 		return err
 	}
 	return s.repo.WithTenant(ctx, func(tx repository.Tx) error {
@@ -784,7 +787,7 @@ func (s *AdminCatalogService) DeleteCategory(ctx context.Context, id int64) erro
 func (s *AdminCatalogService) CreateUpload(ctx context.Context, contentType string,
 	body io.Reader, idemKey string) (repository.Upload, bool, error) {
 
-	id, err := requireStaff(ctx)
+	id, err := requireMerchantWide(ctx)
 	if err != nil {
 		return repository.Upload{}, false, err
 	}

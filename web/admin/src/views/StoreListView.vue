@@ -18,6 +18,7 @@ import { keel, type AdminRegion, type AdminStore, type AdminStoreList, type Stor
 import { IdempotentSubmission, withIdempotency } from "../api/idempotency.ts";
 import { isIncomplete, listAllRegions } from "../api/stores.ts";
 import { notifyError, notifyOk } from "../ui/notify.ts";
+import { can, NO_PERMISSION } from "../auth/permissions.ts";
 import ProblemAlert from "../components/ProblemAlert.vue";
 
 const route = useRoute();
@@ -169,7 +170,7 @@ async function remove(row: AdminStore): Promise<void> {
             <el-checkbox v-model="includeDeleted" @change="(pageNo = 1), load()">含已软删</el-checkbox>
             <span class="grow" />
             <el-button :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
-            <el-button type="primary" :icon="Plus" :disabled="regions.length === 0" @click="openCreate">新建门店</el-button>
+            <el-button type="primary" :icon="Plus" :disabled="regions.length === 0 || !regions.some((r) => can.createStoreIn(r.id))" @click="openCreate">新建门店</el-button>
         </div>
         <p v-if="regions.length === 0" class="hint">门店必须属于一个大区（stores.region_id NOT NULL）——先去「大区」建一个。</p>
 
@@ -220,13 +221,13 @@ async function remove(row: AdminStore): Promise<void> {
                     <el-button
                         link
                         type="primary"
-                        :disabled="row.is_default || !!row.deleted_at || row.status !== 1"
-                        :title="row.status !== 1 ? '停业的门店不能作为回落目标' : ''"
+                        :disabled="row.is_default || !!row.deleted_at || row.status !== 1 || !can.setDefaultStore()"
+                        :title="!can.setDefaultStore() ? NO_PERMISSION : row.status !== 1 ? '停业的门店不能作为回落目标' : ''"
                         @click="makeDefault(row)"
                     >
                         设为默认
                     </el-button>
-                    <el-button link type="danger" :disabled="!!row.deleted_at" @click="remove(row)">删除</el-button>
+                    <el-button link type="danger" :disabled="!!row.deleted_at || !can.manageStore(row)" @click="remove(row)">删除</el-button>
                 </template>
             </el-table-column>
         </el-table>

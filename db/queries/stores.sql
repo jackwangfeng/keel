@@ -40,6 +40,9 @@
 -- name: AdminListStores :many
 -- 后台门店列表。region_name 一起带出来：后台列表要显示大区名，
 -- 而让客户端拿 region_id 再查一遍等于把一次 JOIN 换成 N 次往返。
+--
+-- only_region_ids / only_store_ids 为空即不限：大区管理员只看得见本大区的门店，
+-- 门店管理员只看得见自己那几家（00025）。同一租户内的权限过滤，不是租户过滤。
 SELECT st.id, st.region_id, r.name AS region_name, st.code, st.name, st.phone,
        st.province, st.city, st.district, st.address,
        (st.location IS NOT NULL)::boolean AS has_location,
@@ -51,6 +54,8 @@ SELECT st.id, st.region_id, r.name AS region_name, st.code, st.name, st.phone,
   JOIN regions r ON r.id = st.region_id
  WHERE (sqlc.arg(include_deleted)::boolean OR st.deleted_at IS NULL)
    AND (sqlc.narg(region_id)::bigint IS NULL OR st.region_id = sqlc.narg(region_id)::bigint)
+   AND (sqlc.narg(only_region_ids)::bigint[] IS NULL OR st.region_id = ANY(sqlc.narg(only_region_ids)::bigint[]))
+   AND (sqlc.narg(only_store_ids)::bigint[] IS NULL OR st.id = ANY(sqlc.narg(only_store_ids)::bigint[]))
  ORDER BY st.id
  LIMIT sqlc.arg(page_limit) OFFSET sqlc.arg(page_offset);
 
@@ -58,7 +63,9 @@ SELECT st.id, st.region_id, r.name AS region_name, st.code, st.name, st.phone,
 -- 条件必须与 AdminListStores 逐字一致。
 SELECT count(*) FROM stores st
  WHERE (sqlc.arg(include_deleted)::boolean OR st.deleted_at IS NULL)
-   AND (sqlc.narg(region_id)::bigint IS NULL OR st.region_id = sqlc.narg(region_id)::bigint);
+   AND (sqlc.narg(region_id)::bigint IS NULL OR st.region_id = sqlc.narg(region_id)::bigint)
+   AND (sqlc.narg(only_region_ids)::bigint[] IS NULL OR st.region_id = ANY(sqlc.narg(only_region_ids)::bigint[]))
+   AND (sqlc.narg(only_store_ids)::bigint[] IS NULL OR st.id = ANY(sqlc.narg(only_store_ids)::bigint[]));
 
 -- name: HasDefaultStore :one
 -- AdminStoreList.has_default，契约里是**必返**的。

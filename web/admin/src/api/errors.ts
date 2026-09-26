@@ -69,6 +69,12 @@ export function problemHint(type: string): string {
             return "这是单商家部署：再开一家店（或启用另一家）会让它下次重启时启动自检失败。要开多家店，先切到多商家部署：清空 KEEL_DEFAULT_MERCHANT、配置 KEEL_BASE_DOMAIN。";
         case ProblemType.platformOnly:
             return "这件事只有平台级操作员（开店、停用启用要平台级管理员）能做。";
+        case ProblemType.roleForbidden:
+            return "你的角色做不了这件事。重试不会成功——请找商家管理员来做，或者请他调整你的角色。";
+        case ProblemType.outOfScope:
+            return "这一个不在你的管辖范围里。重试不会成功——请找管那个大区 / 门店的人，或者请商家管理员调整你的管辖范围。";
+        case ProblemType.staffForbidden:
+            return "只有管理员（以及只管门店管理员的大区管理员）能管员工。";
         case ProblemType.inventoryPrecondition:
             return "库存在你读到它之后被改过。用服务端回来的当前值刷新后重试就会成功。";
         default:

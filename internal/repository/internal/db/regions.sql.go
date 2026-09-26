@@ -14,11 +14,17 @@ import (
 const adminCountRegions = `-- name: AdminCountRegions :one
 SELECT count(*) FROM regions r
  WHERE ($1::boolean OR r.deleted_at IS NULL)
+   AND ($2::bigint[] IS NULL OR r.id = ANY($2::bigint[]))
 `
 
+type AdminCountRegionsParams struct {
+	IncludeDeleted bool
+	OnlyIds        []int64
+}
+
 // 条件必须与 AdminListRegions 逐字一致，否则 total 与 items 各说各话。
-func (q *Queries) AdminCountRegions(ctx context.Context, includeDeleted bool) (int64, error) {
-	row := q.db.QueryRow(ctx, adminCountRegions, includeDeleted)
+func (q *Queries) AdminCountRegions(ctx context.Context, arg AdminCountRegionsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, adminCountRegions, arg.IncludeDeleted, arg.OnlyIds)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -69,12 +75,14 @@ SELECT r.id, r.code, r.name, r.status, r.deleted_at, r.created_at, r.updated_at,
          WHERE st.region_id = r.id AND st.deleted_at IS NULL)::int AS store_count
   FROM regions r
  WHERE ($1::boolean OR r.deleted_at IS NULL)
+   AND ($2::bigint[] IS NULL OR r.id = ANY($2::bigint[]))
  ORDER BY r.id
- LIMIT $3 OFFSET $2
+ LIMIT $4 OFFSET $3
 `
 
 type AdminListRegionsParams struct {
 	IncludeDeleted bool
+	OnlyIds        []int64
 	PageOffset     int32
 	PageLimit      int32
 }
@@ -97,6 +105,10 @@ type AdminListRegionsRow struct {
 // 测不出来了。注释里一个反引号都不许有（见 inventories.sql 文件头第三条）。
 // 大区列表。store_count 是名下**未软删**的门店数。
 //
+// only_ids 为空即不限；非空时只列这几个大区 —— 大区管理员 / 门店管理员只看得见
+// 自己范围内的（00025）。它是**同一租户内**的权限过滤，不是租户过滤：
+// 租户仍然只由 RLS 管，这里一个 merchant_id 都没有。
+//
 // 它在列表里直接给出来，不是冗余：删大区时会因为它非零而被拒（409），
 // 而「点了删除才知道删不掉」是一次本可以省掉的往返。
 //
@@ -104,7 +116,12 @@ type AdminListRegionsRow struct {
 // 而 GROUP BY 会把 regions 的每一列都拖进分组键，改一次 SELECT 列表就要
 // 改一次 GROUP BY —— 那是一处不会报错、只会算错的耦合。
 func (q *Queries) AdminListRegions(ctx context.Context, arg AdminListRegionsParams) ([]AdminListRegionsRow, error) {
-	rows, err := q.db.Query(ctx, adminListRegions, arg.IncludeDeleted, arg.PageOffset, arg.PageLimit)
+	rows, err := q.db.Query(ctx, adminListRegions,
+		arg.IncludeDeleted,
+		arg.OnlyIds,
+		arg.PageOffset,
+		arg.PageLimit,
+	)
 	if err != nil {
 		return nil, err
 	}

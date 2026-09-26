@@ -27,6 +27,7 @@ import { isIncomplete, listAllRegions } from "../api/stores.ts";
 import { listAllStoreInventories } from "../api/storeInventory.ts";
 import { datetime } from "../ui/format.ts";
 import { notifyError, notifyOk } from "../ui/notify.ts";
+import { can, NO_PERMISSION } from "../auth/permissions.ts";
 import ProblemAlert from "../components/ProblemAlert.vue";
 import FenceEditor from "../components/FenceEditor.vue";
 import ScopedProducts from "../components/ScopedProducts.vue";
@@ -234,8 +235,8 @@ function onInventoryUpdated(inv: AdminInventory): void {
                 <el-tag v-if="isIncomplete(store)" type="warning" effect="dark" size="small">未完成</el-tag>
                 <span class="hint">大区：{{ store.region_name ?? `#${store.region_id}` }}</span>
                 <span class="grow" />
-                <el-button :disabled="store.is_default || store.status !== 1" @click="makeDefault">设为默认门店</el-button>
-                <el-button type="danger" plain :icon="Delete" @click="remove">删除</el-button>
+                <el-button :disabled="store.is_default || store.status !== 1 || !can.setDefaultStore()" @click="makeDefault">设为默认门店</el-button>
+                <el-button type="danger" plain :icon="Delete" :disabled="!can.manageStore(store)" :title="can.manageStore(store) ? '' : NO_PERMISSION" @click="remove">删除</el-button>
             </div>
 
             <el-alert v-if="isIncomplete(store)" type="warning" :closable="false" show-icon class="mb12">
@@ -282,7 +283,7 @@ function onInventoryUpdated(inv: AdminInventory): void {
                             <p class="hint">停业的门店不参与围栏判定，也不能下单。</p>
                         </el-form-item>
                         <el-form-item>
-                            <el-button type="primary" :loading="saving" @click="saveBasic">保存</el-button>
+                            <el-button type="primary" :loading="saving" :disabled="!can.manageStore(store)" :title="can.manageStore(store) ? '' : NO_PERMISSION" @click="saveBasic">保存</el-button>
                             <span class="hint ml8">更新于 {{ datetime(store.updated_at) }}</span>
                         </el-form-item>
                     </el-form>
@@ -297,6 +298,7 @@ function onInventoryUpdated(inv: AdminInventory): void {
                         :error-point="fenceErrorAt"
                         :busy="fenceBusy"
                         :is-default="store.is_default"
+                        :readonly="!can.manageStore(store)"
                         @save="saveFence"
                     />
                 </el-tab-pane>
@@ -304,7 +306,7 @@ function onInventoryUpdated(inv: AdminInventory): void {
                 <!-- -------------------------------------------- 商品与定价 -->
                 <el-tab-pane label="商品与定价" name="products" lazy>
                     <ScopedProducts
-                        :scope="{ kind: 'store', id: store.id, name: store.name, regionName: store.region_name ?? `#${store.region_id}` }"
+                        :scope="{ kind: 'store', id: store.id, regionId: store.region_id, name: store.name, regionName: store.region_name ?? `#${store.region_id}` }"
                     />
                 </el-tab-pane>
 
@@ -335,7 +337,7 @@ function onInventoryUpdated(inv: AdminInventory): void {
                         </el-table-column>
                         <el-table-column label="操作" width="120">
                             <template #default="{ row }: { row: AdminInventory }">
-                                <el-button link type="primary" @click="openInventory(row)">改库存</el-button>
+                                <el-button link type="primary" :disabled="!can.operateStore(store)" :title="can.operateStore(store) ? '' : NO_PERMISSION" @click="openInventory(row)">改库存</el-button>
                             </template>
                         </el-table-column>
                     </el-table>

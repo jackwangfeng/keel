@@ -21,6 +21,7 @@ import { indentedLabel, listCategories } from "../api/catalog.ts";
 import { IdempotentSubmission, withIdempotency } from "../api/idempotency.ts";
 import { CATEGORY_STATUS } from "../ui/format.ts";
 import { notifyError, notifyOk } from "../ui/notify.ts";
+import { can, NO_PERMISSION } from "../auth/permissions.ts";
 import ProblemAlert from "../components/ProblemAlert.vue";
 
 const loading = ref(false);
@@ -176,7 +177,7 @@ async function removeCategory(row: AdminCategory): Promise<void> {
             </span>
             <span class="grow" />
             <el-button :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
-            <el-button type="primary" :icon="Plus" @click="openCreate(null)">新建根类目</el-button>
+            <el-button type="primary" :icon="Plus" :disabled="!can.editCatalog()" :title="can.editCatalog() ? '' : NO_PERMISSION" @click="openCreate(null)">新建根类目</el-button>
         </div>
 
         <el-table :data="rows" v-loading="loading" border stripe row-key="id">
@@ -203,9 +204,9 @@ async function removeCategory(row: AdminCategory): Promise<void> {
             </el-table-column>
             <el-table-column label="操作" width="220" fixed="right">
                 <template #default="{ row }: { row: AdminCategory }">
-                    <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
-                    <el-button link type="primary" @click="openCreate(row)">加子类目</el-button>
-                    <el-button link type="danger" @click="removeCategory(row)">删除</el-button>
+                    <el-button link type="primary" :disabled="!can.editCatalog()" :title="can.editCatalog() ? '' : NO_PERMISSION" @click="openEdit(row)">编辑</el-button>
+                    <el-button link type="primary" :disabled="!can.editCatalog()" :title="can.editCatalog() ? '' : NO_PERMISSION" @click="openCreate(row)">加子类目</el-button>
+                    <el-button link type="danger" :disabled="!can.editCatalog()" :title="can.editCatalog() ? '' : NO_PERMISSION" @click="removeCategory(row)">删除</el-button>
                 </template>
             </el-table-column>
         </el-table>

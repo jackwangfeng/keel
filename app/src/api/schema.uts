@@ -921,19 +921,23 @@ export type SkuUpdateRequest = {
   status? : number
 }
 
-/** 1 管理员 · 2 操作员 */
+/** 1 管理员 · 2 操作员 · 3 大区管理员 · 4 门店管理员 */
 export type StaffRole = number
 
 export type Staff = {
   id : number
   email : string
   name? : string
-  /** 1 管理员 · 2 操作员 */
+  /** 1 管理员 · 2 操作员 · 3 大区管理员 · 4 门店管理员 */
   role : StaffRole
   /** 1 正常 2 停用 */
   status : number
   /** 所属商家。**为 null 表示平台级操作员**——他不属于任何一家店， */
   merchant_id : number | null
+  /** 管辖的大区（仅 role 3 非空）。按 id 升序 */
+  region_ids : number[]
+  /** 管辖的门店（仅 role 4 非空）。按 id 升序 */
+  store_ids : number[]
   last_login_at? : string
   created_at : string
 }
@@ -942,8 +946,12 @@ export type Staff = {
 export type StaffCreateRequest = {
   email : string
   name? : string
-  /** 1 管理员 · 2 操作员 */
+  /** 1 管理员 · 2 操作员 · 3 大区管理员 · 4 门店管理员 */
   role : StaffRole
+  /** role 3 必填且至少一个；其余角色不带 */
+  region_ids? : number[]
+  /** role 4 必填且至少一个；其余角色不带 */
+  store_ids? : number[]
 }
 
 export type StaffSession = {

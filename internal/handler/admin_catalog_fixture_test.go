@@ -102,6 +102,10 @@ func newAdminShop(t *testing.T) adminShop {
 			`DELETE FROM skus WHERE merchant_id = $1`,
 			`DELETE FROM products WHERE merchant_id = $1`,
 			`DELETE FROM categories WHERE merchant_id = $1`,
+			// staff_scopes（00025）指向 stores / regions / staff。三条外键都是
+			// ON DELETE CASCADE，这一句不写也删得掉；写出来是为了让这张清单
+			// 仍然是「这家店名下有哪些表」的完整答案。
+			`DELETE FROM staff_scopes WHERE merchant_id = $1`,
 			`DELETE FROM stores WHERE merchant_id = $1`,
 			`DELETE FROM regions WHERE merchant_id = $1`,
 			`DELETE FROM uploads WHERE merchant_id = $1`,

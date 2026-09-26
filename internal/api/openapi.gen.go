@@ -772,6 +772,8 @@ func (e StaffStatus) Valid() bool {
 const (
 	StaffRoleN1 StaffRole = 1
 	StaffRoleN2 StaffRole = 2
+	StaffRoleN3 StaffRole = 3
+	StaffRoleN4 StaffRole = 4
 )
 
 // Valid indicates whether the value is a known member of the StaffRole enum.
@@ -780,6 +782,10 @@ func (e StaffRole) Valid() bool {
 	case StaffRoleN1:
 		return true
 	case StaffRoleN2:
+		return true
+	case StaffRoleN3:
+		return true
+	case StaffRoleN4:
 		return true
 	default:
 		return false
@@ -2734,14 +2740,38 @@ type Staff struct {
 	MerchantId *int64  `json:"merchant_id"`
 	Name       *string `json:"name,omitempty"`
 
-	// Role 1 管理员 · 2 操作员
+	// RegionIds 管辖的大区（仅 role 3 非空）。按 id 升序
+	RegionIds []int64 `json:"region_ids"`
+
+	// Role 1 管理员 · 2 操作员 · 3 大区管理员 · 4 门店管理员
 	//
 	// 角色在各自层级内生效：平台级的管理员能加平台操作员、能开店；
-	// 商家级的管理员只能加自己店的员工。
+	// 商家级的管理员只能加自己店的员工。3 / 4 只存在于商家级，
+	// 各自带管辖范围（`Staff.region_ids` / `Staff.store_ids`，一个人可以管多个）。
+	//
+	// 同一租户内的权限矩阵（服务端逐条执行，界面上的置灰只是体验）：
+	//
+	// | 能做什么 | 1 | 2 | 3 | 4 |
+	// |---|:-:|:-:|:-:|:-:|
+	// | 商品、SKU、基准价、类目、上传 | ✅ | ✅ | 只读 | 只读 |
+	// | 大区：改、删、大区价、大区上下架 | ✅ | ✅ | 只限自己的大区 | ❌ |
+	// | 大区：建 | ✅ | ✅ | ❌ | ❌ |
+	// | 门店：建、改、删、围栏 | ✅ | ✅ | 只限本大区的门店（换大区时新旧都得在范围内） | ❌ |
+	// | 门店价、门店上下架、门店库存 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
+	// | 设默认门店（含建店时 is_default） | ✅ | ❌ | ❌ | ❌ |
+	// | 员工管理 | ✅ | ❌ | 只能加、改本大区门店的门店管理员 | ❌ |
+	// | 开店 | 仅平台级管理员 | | | |
+	//
+	// `PUT /admin/skus/{sku_id}/inventory`（商家恰好一家门店时的捷径）对 3 / 4
+	// 只在那家店在范围内时放行。列表类接口对 3 / 4 只返回范围内的；
+	// 商品目录全量可读。被拒回 403，type 是 role-forbidden 或 out-of-scope。
 	Role StaffRole `json:"role"`
 
 	// Status 1 正常 2 停用
 	Status StaffStatus `json:"status"`
+
+	// StoreIds 管辖的门店（仅 role 4 非空）。按 id 升序
+	StoreIds []int64 `json:"store_ids"`
 }
 
 // StaffStatus 1 正常 2 停用
@@ -2752,17 +2782,59 @@ type StaffCreateRequest struct {
 	Email openapi_types.Email `json:"email"`
 	Name  *string             `json:"name,omitempty"`
 
-	// Role 1 管理员 · 2 操作员
+	// RegionIds role 3 必填且至少一个；其余角色不带
+	RegionIds *[]int64 `json:"region_ids,omitempty"`
+
+	// Role 1 管理员 · 2 操作员 · 3 大区管理员 · 4 门店管理员
 	//
 	// 角色在各自层级内生效：平台级的管理员能加平台操作员、能开店；
-	// 商家级的管理员只能加自己店的员工。
+	// 商家级的管理员只能加自己店的员工。3 / 4 只存在于商家级，
+	// 各自带管辖范围（`Staff.region_ids` / `Staff.store_ids`，一个人可以管多个）。
+	//
+	// 同一租户内的权限矩阵（服务端逐条执行，界面上的置灰只是体验）：
+	//
+	// | 能做什么 | 1 | 2 | 3 | 4 |
+	// |---|:-:|:-:|:-:|:-:|
+	// | 商品、SKU、基准价、类目、上传 | ✅ | ✅ | 只读 | 只读 |
+	// | 大区：改、删、大区价、大区上下架 | ✅ | ✅ | 只限自己的大区 | ❌ |
+	// | 大区：建 | ✅ | ✅ | ❌ | ❌ |
+	// | 门店：建、改、删、围栏 | ✅ | ✅ | 只限本大区的门店（换大区时新旧都得在范围内） | ❌ |
+	// | 门店价、门店上下架、门店库存 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
+	// | 设默认门店（含建店时 is_default） | ✅ | ❌ | ❌ | ❌ |
+	// | 员工管理 | ✅ | ❌ | 只能加、改本大区门店的门店管理员 | ❌ |
+	// | 开店 | 仅平台级管理员 | | | |
+	//
+	// `PUT /admin/skus/{sku_id}/inventory`（商家恰好一家门店时的捷径）对 3 / 4
+	// 只在那家店在范围内时放行。列表类接口对 3 / 4 只返回范围内的；
+	// 商品目录全量可读。被拒回 403，type 是 role-forbidden 或 out-of-scope。
 	Role StaffRole `json:"role"`
+
+	// StoreIds role 4 必填且至少一个；其余角色不带
+	StoreIds *[]int64 `json:"store_ids,omitempty"`
 }
 
-// StaffRole 1 管理员 · 2 操作员
+// StaffRole 1 管理员 · 2 操作员 · 3 大区管理员 · 4 门店管理员
 //
 // 角色在各自层级内生效：平台级的管理员能加平台操作员、能开店；
-// 商家级的管理员只能加自己店的员工。
+// 商家级的管理员只能加自己店的员工。3 / 4 只存在于商家级，
+// 各自带管辖范围（`Staff.region_ids` / `Staff.store_ids`，一个人可以管多个）。
+//
+// 同一租户内的权限矩阵（服务端逐条执行，界面上的置灰只是体验）：
+//
+// | 能做什么 | 1 | 2 | 3 | 4 |
+// |---|:-:|:-:|:-:|:-:|
+// | 商品、SKU、基准价、类目、上传 | ✅ | ✅ | 只读 | 只读 |
+// | 大区：改、删、大区价、大区上下架 | ✅ | ✅ | 只限自己的大区 | ❌ |
+// | 大区：建 | ✅ | ✅ | ❌ | ❌ |
+// | 门店：建、改、删、围栏 | ✅ | ✅ | 只限本大区的门店（换大区时新旧都得在范围内） | ❌ |
+// | 门店价、门店上下架、门店库存 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
+// | 设默认门店（含建店时 is_default） | ✅ | ❌ | ❌ | ❌ |
+// | 员工管理 | ✅ | ❌ | 只能加、改本大区门店的门店管理员 | ❌ |
+// | 开店 | 仅平台级管理员 | | | |
+//
+// `PUT /admin/skus/{sku_id}/inventory`（商家恰好一家门店时的捷径）对 3 / 4
+// 只在那家店在范围内时放行。列表类接口对 3 / 4 只返回范围内的；
+// 商品目录全量可读。被拒回 403，type 是 role-forbidden 或 out-of-scope。
 type StaffRole int
 
 // StaffSession defines model for StaffSession.
@@ -4167,14 +4239,38 @@ type PostAdminStaffParams struct {
 
 // PatchAdminStaffStaffIdJSONBody defines parameters for PatchAdminStaffStaffId.
 type PatchAdminStaffStaffIdJSONBody struct {
-	// Role 1 管理员 · 2 操作员
+	// RegionIds 大区管理员管的大区，整体替换
+	RegionIds *[]int64 `json:"region_ids,omitempty"`
+
+	// Role 1 管理员 · 2 操作员 · 3 大区管理员 · 4 门店管理员
 	//
 	// 角色在各自层级内生效：平台级的管理员能加平台操作员、能开店；
-	// 商家级的管理员只能加自己店的员工。
+	// 商家级的管理员只能加自己店的员工。3 / 4 只存在于商家级，
+	// 各自带管辖范围（`Staff.region_ids` / `Staff.store_ids`，一个人可以管多个）。
+	//
+	// 同一租户内的权限矩阵（服务端逐条执行，界面上的置灰只是体验）：
+	//
+	// | 能做什么 | 1 | 2 | 3 | 4 |
+	// |---|:-:|:-:|:-:|:-:|
+	// | 商品、SKU、基准价、类目、上传 | ✅ | ✅ | 只读 | 只读 |
+	// | 大区：改、删、大区价、大区上下架 | ✅ | ✅ | 只限自己的大区 | ❌ |
+	// | 大区：建 | ✅ | ✅ | ❌ | ❌ |
+	// | 门店：建、改、删、围栏 | ✅ | ✅ | 只限本大区的门店（换大区时新旧都得在范围内） | ❌ |
+	// | 门店价、门店上下架、门店库存 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
+	// | 设默认门店（含建店时 is_default） | ✅ | ❌ | ❌ | ❌ |
+	// | 员工管理 | ✅ | ❌ | 只能加、改本大区门店的门店管理员 | ❌ |
+	// | 开店 | 仅平台级管理员 | | | |
+	//
+	// `PUT /admin/skus/{sku_id}/inventory`（商家恰好一家门店时的捷径）对 3 / 4
+	// 只在那家店在范围内时放行。列表类接口对 3 / 4 只返回范围内的；
+	// 商品目录全量可读。被拒回 403，type 是 role-forbidden 或 out-of-scope。
 	Role *StaffRole `json:"role,omitempty"`
 
 	// Status 1 正常 2 停用
 	Status *PatchAdminStaffStaffIdJSONBodyStatus `json:"status,omitempty"`
+
+	// StoreIds 门店管理员管的门店，整体替换
+	StoreIds *[]int64 `json:"store_ids,omitempty"`
 }
 
 // PatchAdminStaffStaffIdParams defines parameters for PatchAdminStaffStaffId.

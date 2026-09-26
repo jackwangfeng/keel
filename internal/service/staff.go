@@ -405,12 +405,19 @@ func (s *StaffService) LoadStaffSession(ctx context.Context, claims auth.StaffCl
 				"token_staff_id", claims.StaffID, "session_staff_id", sess.StaffID)
 			return ErrStaffTokenInvalid
 		}
+		// 管辖范围与 Role 在同一个事务里读（staff_scope.go 的 loadStaffScopes）。
+		sc, err := loadStaffScopes(ctx, tx, claims.Platform, sess.StaffID)
+		if err != nil {
+			return err
+		}
 		out = auth.StaffIdentity{
 			StaffID:    sess.StaffID,
 			SessionID:  sess.SessionID,
 			MerchantID: sess.MerchantID,
 			Role:       sess.Role,
 			Status:     sess.Status,
+			RegionIDs:  sc.RegionIDs,
+			StoreIDs:   sc.StoreIDs,
 		}
 		return nil
 	})
@@ -436,7 +443,10 @@ func (s *StaffService) Me(ctx context.Context) (repository.Staff, error) {
 		if errors.Is(err, repository.ErrStaffNotFound) {
 			return ErrStaffNotFound
 		}
-		out = st
+		if err != nil {
+			return err
+		}
+		out, err = withScopes(ctx, tx, id.Platform(), st)
 		return err
 	})
 	if err != nil {
@@ -468,11 +478,40 @@ func (s *StaffService) ListStaff(ctx context.Context, page, pageSize int) (Staff
 
 	out := StaffPage{Page: page, PageSize: pageSize}
 	err = s.inScope(ctx, id.Platform(), func(tx repository.StaffTx) error {
-		total, err := tx.CountStaff(ctx)
+		var (
+			total int64
+			items []repository.Staff
+			err   error
+		)
+		// 同一租户内再按角色收窄（契约 GET /admin/staff 的描述）。这是
+		// 权限过滤，不是租户过滤 —— 租户仍然只由作用域与 RLS 给出。
+		switch {
+		case id.MerchantWide():
+			total, err = tx.CountStaff(ctx)
+			if err == nil {
+				items, err = tx.ListStaff(ctx, int64(pageSize), offsetOf(page, pageSize))
+			}
+		case id.Role == auth.StaffRoleRegionManager:
+			total, err = tx.CountManagedStaff(ctx, id.StaffID, nonNil(id.RegionIDs))
+			if err == nil {
+				items, err = tx.ListManagedStaff(ctx, id.StaffID, nonNil(id.RegionIDs),
+					int64(pageSize), offsetOf(page, pageSize))
+			}
+		default:
+			// 门店管理员（以及任何未知角色）只看得见自己。
+			var self repository.Staff
+			self, err = tx.FindStaff(ctx, id.StaffID)
+			if err == nil {
+				total, items = 1, []repository.Staff{}
+				if page == 1 {
+					items = append(items, self)
+				}
+			}
+		}
 		if err != nil {
 			return err
 		}
-		items, err := tx.ListStaff(ctx, int64(pageSize), offsetOf(page, pageSize))
+		items, err = withScopesAll(ctx, tx, id.Platform(), items)
 		if err != nil {
 			return err
 		}
@@ -504,24 +543,37 @@ type StaffCreated struct {
 // 那一列的值由数据库的 DEFAULT staff_scope_merchant() 给出（00017），
 // 而作用域由调用者的身份决定 —— 整条链路上没有一个地方有 merchant_id 这个
 // 参数可以传错，包括生成的 Go 函数签名。
-func (s *StaffService) CreateStaff(ctx context.Context, email, name string, role int16) (StaffCreated, error) {
+//
+// 带范围（role 3 / 4）时，范围行与员工行在同一个事务里建出来：分成两步的话，
+// 中间那一刻存在一个「至少一个范围」不成立的大区管理员，而他的登录链接已经签出去了。
+func (s *StaffService) CreateStaff(ctx context.Context, email, name string, role int16,
+	scopes repository.StaffScopes) (StaffCreated, error) {
+
 	id, err := auth.StaffFromContext(ctx)
 	if err != nil {
 		return StaffCreated{}, err
-	}
-	if !id.IsAdmin() {
-		return StaffCreated{}, ErrStaffForbidden
 	}
 	email = strings.TrimSpace(email)
 	if email == "" {
 		return StaffCreated{}, fmt.Errorf("%w: 缺 email", ErrStaffBadRequest)
 	}
-	if role != auth.StaffRoleAdmin && role != auth.StaffRoleOperator {
-		return StaffCreated{}, fmt.Errorf("%w: role 只能是 1 或 2", ErrStaffBadRequest)
+	scopes = repository.StaffScopes{
+		RegionIDs: normalizeIDs(scopes.RegionIDs), StoreIDs: normalizeIDs(scopes.StoreIDs),
 	}
 
 	var out StaffCreated
 	err = s.inScope(ctx, id.Platform(), func(tx repository.StaffTx) error {
+		// 判权排在配套校验**之前**：一个大区管理员建管理员，得到的必须是
+		// 403 role-forbidden，而不是「管理员不带范围」那句 422 —— 后者会让他
+		// 以为把范围去掉就能建成。
+		if _, err := authorizeStaffWrite(ctx, tx, staffWrite{
+			NewRole: role, NewScopes: scopes,
+		}); err != nil {
+			return err
+		}
+		if err := checkRoleScopes(ctx, tx, id.Platform(), role, scopes); err != nil {
+			return err
+		}
 		creator := id.StaffID
 		st, err := tx.CreateStaff(ctx, email, strings.TrimSpace(name), role, &creator)
 		if err != nil {
@@ -530,6 +582,12 @@ func (s *StaffService) CreateStaff(ctx context.Context, email, name string, role
 			}
 			return err
 		}
+		if !id.Platform() {
+			if err := tx.ReplaceStaffScopes(ctx, st.ID, scopes); err != nil {
+				return err
+			}
+		}
+		st.RegionIDs, st.StoreIDs = scopes.RegionIDs, scopes.StoreIDs
 		token, err := auth.NewOpaqueToken()
 		if err != nil {
 			return err
@@ -549,21 +607,20 @@ func (s *StaffService) CreateStaff(ctx context.Context, email, name string, role
 }
 
 // UpdateStaff 实现 PATCH /admin/staff/{staff_id}。
-func (s *StaffService) UpdateStaff(ctx context.Context, staffID int64, role, status *int16) (repository.Staff, error) {
+//
+// regionIDs / storeIDs 为 nil 表示「不动」，非 nil 表示整体替换（契约）。
+// 角色改成 1 / 2 而没给范围时，范围自动清空 —— 全店范围的人不该留着范围行。
+func (s *StaffService) UpdateStaff(ctx context.Context, staffID int64, role, status *int16,
+	regionIDs, storeIDs *[]int64) (repository.Staff, error) {
+
 	id, err := auth.StaffFromContext(ctx)
 	if err != nil {
 		return repository.Staff{}, err
 	}
-	if !id.IsAdmin() {
-		return repository.Staff{}, ErrStaffForbidden
-	}
-	if role == nil && status == nil {
+	if role == nil && status == nil && regionIDs == nil && storeIDs == nil {
 		// 契约里请求体是 minProperties: 1。一个什么都不改的 PATCH 回 200
 		// 会让客户端以为它改成功了。
-		return repository.Staff{}, fmt.Errorf("%w: role 与 status 至少给一个", ErrStaffBadRequest)
-	}
-	if role != nil && *role != auth.StaffRoleAdmin && *role != auth.StaffRoleOperator {
-		return repository.Staff{}, fmt.Errorf("%w: role 只能是 1 或 2", ErrStaffBadRequest)
+		return repository.Staff{}, fmt.Errorf("%w: role、status、region_ids、store_ids 至少给一个", ErrStaffBadRequest)
 	}
 	if status != nil && *status != auth.StaffStatusActive && *status != auth.StaffStatusDisabled {
 		return repository.Staff{}, fmt.Errorf("%w: status 只能是 1 或 2", ErrStaffBadRequest)
@@ -579,6 +636,42 @@ func (s *StaffService) UpdateStaff(ctx context.Context, staffID int64, role, sta
 			return ErrStaffNotFound
 		}
 		if err != nil {
+			return err
+		}
+		beforeScopes, err := loadStaffScopes(ctx, tx, id.Platform(), staffID)
+		if err != nil {
+			return err
+		}
+
+		// 改完之后的角色与范围。
+		newRole := before.Role
+		if role != nil {
+			newRole = *role
+		}
+		newScopes := beforeScopes
+		scopesGiven := regionIDs != nil || storeIDs != nil
+		if scopesGiven {
+			newScopes = repository.StaffScopes{RegionIDs: []int64{}, StoreIDs: []int64{}}
+			if regionIDs != nil {
+				newScopes.RegionIDs = normalizeIDs(*regionIDs)
+			}
+			if storeIDs != nil {
+				newScopes.StoreIDs = normalizeIDs(*storeIDs)
+			}
+		} else if newRole == auth.StaffRoleAdmin || newRole == auth.StaffRoleOperator {
+			newScopes = repository.StaffScopes{RegionIDs: []int64{}, StoreIDs: []int64{}}
+		}
+		scopesChanged := !sameIDs(newScopes.RegionIDs, beforeScopes.RegionIDs) ||
+			!sameIDs(newScopes.StoreIDs, beforeScopes.StoreIDs)
+
+		if _, err := authorizeStaffWrite(ctx, tx, staffWrite{
+			Target: &before, TargetScopes: beforeScopes,
+			RoleChanged: newRole != before.Role, ScopesChanged: scopesChanged,
+			NewRole: newRole, NewScopes: newScopes,
+		}); err != nil {
+			return err
+		}
+		if err := checkRoleScopes(ctx, tx, id.Platform(), newRole, newScopes); err != nil {
 			return err
 		}
 
@@ -607,8 +700,17 @@ func (s *StaffService) UpdateStaff(ctx context.Context, staffID int64, role, sta
 		if errors.Is(err, repository.ErrStaffNotFound) {
 			return ErrStaffNotFound
 		}
+		if err != nil {
+			return err
+		}
+		if scopesChanged {
+			if err := tx.ReplaceStaffScopes(ctx, staffID, newScopes); err != nil {
+				return err
+			}
+		}
+		st.RegionIDs, st.StoreIDs = newScopes.RegionIDs, newScopes.StoreIDs
 		out = st
-		return err
+		return nil
 	})
 	if err != nil {
 		return repository.Staff{}, err
@@ -656,6 +758,12 @@ func (s *StaffService) issueSession(ctx context.Context, tx repository.StaffTx,
 		return StaffSessionResult{}, err
 	}
 	if err := tx.TouchStaffLogin(ctx, st.ID); err != nil {
+		return StaffSessionResult{}, err
+	}
+	// 契约里 Staff.region_ids / store_ids 是必返的，登录的响应也不例外 ——
+	// 界面拿它决定菜单怎么显示，不必为此再打一次 /admin/me。
+	st, err = withScopes(ctx, tx, st.MerchantID == nil, st)
+	if err != nil {
 		return StaffSessionResult{}, err
 	}
 	// 返回的 staff 用刚才读到的那一份，但 last_login_at 已经被上面那句改掉了。

@@ -15,16 +15,25 @@ const adminCountStores = `-- name: AdminCountStores :one
 SELECT count(*) FROM stores st
  WHERE ($1::boolean OR st.deleted_at IS NULL)
    AND ($2::bigint IS NULL OR st.region_id = $2::bigint)
+   AND ($3::bigint[] IS NULL OR st.region_id = ANY($3::bigint[]))
+   AND ($4::bigint[] IS NULL OR st.id = ANY($4::bigint[]))
 `
 
 type AdminCountStoresParams struct {
 	IncludeDeleted bool
 	RegionID       *int64
+	OnlyRegionIds  []int64
+	OnlyStoreIds   []int64
 }
 
 // 条件必须与 AdminListStores 逐字一致。
 func (q *Queries) AdminCountStores(ctx context.Context, arg AdminCountStoresParams) (int64, error) {
-	row := q.db.QueryRow(ctx, adminCountStores, arg.IncludeDeleted, arg.RegionID)
+	row := q.db.QueryRow(ctx, adminCountStores,
+		arg.IncludeDeleted,
+		arg.RegionID,
+		arg.OnlyRegionIds,
+		arg.OnlyStoreIds,
+	)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -106,13 +115,17 @@ SELECT st.id, st.region_id, r.name AS region_name, st.code, st.name, st.phone,
   JOIN regions r ON r.id = st.region_id
  WHERE ($1::boolean OR st.deleted_at IS NULL)
    AND ($2::bigint IS NULL OR st.region_id = $2::bigint)
+   AND ($3::bigint[] IS NULL OR st.region_id = ANY($3::bigint[]))
+   AND ($4::bigint[] IS NULL OR st.id = ANY($4::bigint[]))
  ORDER BY st.id
- LIMIT $4 OFFSET $3
+ LIMIT $6 OFFSET $5
 `
 
 type AdminListStoresParams struct {
 	IncludeDeleted bool
 	RegionID       *int64
+	OnlyRegionIds  []int64
+	OnlyStoreIds   []int64
 	PageOffset     int32
 	PageLimit      int32
 }
@@ -179,10 +192,15 @@ type AdminListStoresRow struct {
 // 上系统性偏斜，且看起来完全正常（数据模型 §4）。
 // 后台门店列表。region_name 一起带出来：后台列表要显示大区名，
 // 而让客户端拿 region_id 再查一遍等于把一次 JOIN 换成 N 次往返。
+//
+// only_region_ids / only_store_ids 为空即不限：大区管理员只看得见本大区的门店，
+// 门店管理员只看得见自己那几家（00025）。同一租户内的权限过滤，不是租户过滤。
 func (q *Queries) AdminListStores(ctx context.Context, arg AdminListStoresParams) ([]AdminListStoresRow, error) {
 	rows, err := q.db.Query(ctx, adminListStores,
 		arg.IncludeDeleted,
 		arg.RegionID,
+		arg.OnlyRegionIds,
+		arg.OnlyStoreIds,
 		arg.PageOffset,
 		arg.PageLimit,
 	)
