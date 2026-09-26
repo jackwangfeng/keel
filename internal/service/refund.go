@@ -395,7 +395,7 @@ type AuditRequest struct {
 
 // Audit 实现 POST /admin/refunds/{refund_no}/audit。
 //
-// 谁能审：与发货同一个判据（门店库存那一行，storeOperate），按订单的履约门店判。
+// 谁能审：与发货同一个判据（门店库存那一行，authorizeOrderStore），按订单的履约门店判。
 // 退款是资金动作，比发货更敏感，但它的对象仍是「这家店卖出去的这一单」——
 // 一个管不了这家店库存与发货的人，也不该能替这家店把钱退出去；反过来，
 // 门店自己的管理员处理本店售后是连锁的常态。契约没写，写在报告里。
@@ -440,7 +440,7 @@ func (s *RefundService) Audit(ctx context.Context, refundNo string, req AuditReq
 			}
 
 			if req.Action == "reject" {
-				ok, err := tx.RejectRefund(ctx, r.ID, strings.TrimSpace(*req.RejectReason))
+				ok, err := tx.RejectRefund(ctx, r.ID, strings.TrimSpace(*req.RejectReason), staff.StaffID)
 				if err := notAuditable(ok, err, refundNo); err != nil {
 					return repository.Refund{}, err
 				}
@@ -472,7 +472,7 @@ func (s *RefundService) Audit(ctx context.Context, refundNo string, req AuditReq
 			if r.RefundType == repository.RefundTypeReturnGoods {
 				next = repository.RefundAwaitingReturn
 			}
-			ok, err := tx.ApproveRefund(ctx, r.ID, next, freight)
+			ok, err := tx.ApproveRefund(ctx, r.ID, next, freight, staff.StaffID)
 			if err := notAuditable(ok, err, refundNo); err != nil {
 				return repository.Refund{}, err
 			}
@@ -518,7 +518,7 @@ func (s *RefundService) Receive(ctx context.Context, refundNo, idemKey string) (
 				return repository.Refund{}, fmt.Errorf("%w: 退款单 %s 当前状态是 %d，只有 20 待买家退货能确认收货",
 					ErrRefundNotReceivable, refundNo, status)
 			}
-			ok, err := tx.ReceiveRefundGoods(ctx, r.ID)
+			ok, err := tx.ReceiveRefundGoods(ctx, r.ID, staff.StaffID)
 			if errors.Is(err, repository.ErrIllegalRefundTransition) {
 				ok, err = false, nil
 			}
@@ -547,7 +547,7 @@ func (s *RefundService) adminLockRefund(ctx context.Context, tx repository.Tx,
 	if err != nil {
 		return repository.Refund{}, repository.Order{}, 0, err
 	}
-	if _, err := authorizeStore(ctx, tx, r.StoreID, storeOperate); err != nil {
+	if _, err := authorizeOrderStore(ctx, tx, r.StoreID); err != nil {
 		return repository.Refund{}, repository.Order{}, 0, err
 	}
 	order, status, err := lockRefund(ctx, tx, r)

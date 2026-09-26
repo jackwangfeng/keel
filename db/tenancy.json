@@ -248,10 +248,12 @@
   "fk_single_column_ok": {
     "_readme": [
       "规矩二的豁免：两端都带 merchant_id、却只能用单列外键的那些引用。",
-      "键是 表名(列名)。这三条全部指向 staff，理由是同一个。"
+      "键是 表名(列名)。这几条全部指向 staff，理由是同一个。"
     ],
     "staff(created_by)": "staff 是全文唯一一张 merchant_id 可空的表（平台级操作员为 NULL）。复合外键要求父子两边 merchant_id 相等，而 NULL 下 MATCH SIMPLE 直接跳过检查，于是「平台管理员创建某家店的管理员」写不进去 —— 那正是认证流程 ② 的主路径（数据模型 §14）。",
     "shipments(created_by)": "同上，指向 staff。审计字段，不在资金与库存的主链路上。",
+    "refunds(audited_by)": "同上，指向 staff。审核记录（00035）：谁通过 / 驳回了这张退款单。平台级员工替店里审单时 merchant_id 为 NULL，复合外键写不进去。",
+    "refunds(received_by)": "同上，指向 staff。审核记录（00035）：谁确认收到了退货。",
     "uploads(staff_id)": "同上，指向 staff。归属字段；同表的 user_id 走的是复合外键，两者待遇不同不是笔误（数据模型 §14）。",
     "store_product_overrides(updated_by)": "同上，指向 staff。审计字段：记「谁在什么时候把这件商品在这家店下架了」，不在资金与库存的主链路上（数据模型 §4）。",
     "region_product_overrides(updated_by)": "同上，指向 staff。大区那一层的同一个字段。"

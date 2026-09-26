@@ -531,6 +531,12 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	v1.POST("/admin/orders/:order_no/shipments", staffAuth, aoh.Ship)
 	v1.POST("/admin/refunds/:refund_no/audit", staffAuth, aoh.Audit)
 	v1.POST("/admin/refunds/:refund_no/receipt", staffAuth, aoh.Receive)
+	// 后台订单与退款单的列表 / 详情（00035）。列表按调用者的门店范围收窄，
+	// 详情与上面三条写操作同一个判据（service/authz.go 的 authorizeOrderStore）。
+	v1.GET("/admin/orders", staffAuth, aoh.ListOrders)
+	v1.GET("/admin/orders/:order_no", staffAuth, aoh.OrderDetail)
+	v1.GET("/admin/refunds", staffAuth, aoh.ListRefunds)
+	v1.GET("/admin/refunds/:refund_no", staffAuth, aoh.RefundDetail)
 
 	cpa := handler.NewAdminCouponHandler(service.NewAdminCouponService(repo))
 	v1.GET("/admin/coupon-templates", staffAuth, cpa.List)

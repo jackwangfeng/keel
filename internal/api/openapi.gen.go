@@ -156,6 +156,48 @@ func (e AdminProductDetailStatus) Valid() bool {
 	}
 }
 
+// Defines values for AdminRefundChannel.
+const (
+	AdminRefundChannelAlipay  AdminRefundChannel = "alipay"
+	AdminRefundChannelBalance AdminRefundChannel = "balance"
+	AdminRefundChannelWechat  AdminRefundChannel = "wechat"
+)
+
+// Valid indicates whether the value is a known member of the AdminRefundChannel enum.
+func (e AdminRefundChannel) Valid() bool {
+	switch e {
+	case AdminRefundChannelAlipay:
+		return true
+	case AdminRefundChannelBalance:
+		return true
+	case AdminRefundChannelWechat:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AdminRefundDetailChannel.
+const (
+	AdminRefundDetailChannelAlipay  AdminRefundDetailChannel = "alipay"
+	AdminRefundDetailChannelBalance AdminRefundDetailChannel = "balance"
+	AdminRefundDetailChannelWechat  AdminRefundDetailChannel = "wechat"
+)
+
+// Valid indicates whether the value is a known member of the AdminRefundDetailChannel enum.
+func (e AdminRefundDetailChannel) Valid() bool {
+	switch e {
+	case AdminRefundDetailChannelAlipay:
+		return true
+	case AdminRefundDetailChannelBalance:
+		return true
+	case AdminRefundDetailChannelWechat:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AdminRegionStatus.
 const (
 	AdminRegionStatusN0 AdminRegionStatus = 0
@@ -1561,6 +1603,183 @@ type AdminInventory struct {
 	WarningQty int       `json:"warning_qty"`
 }
 
+// AdminOrderDetail defines model for AdminOrderDetail.
+type AdminOrderDetail struct {
+	// CouponName 这一单用的券的名字，**下单时的快照**。没用券时不出现（与 `user_coupon_id` 同进同出）。
+	//
+	// 它存在订单上，不从券模板现读：模板后来改名，历史订单仍显示下单那一刻的名字 ——
+	// 与 `order_items.title_snapshot`、`OrderDetail.store` 是同一条道理。
+	// 客户端展示「已用：满 100 减 20」这类文案请用它，不要拿 `user_coupon_id`
+	// 再去查券（那张券的模板此刻可能已经叫别的名字了）。
+	CouponName *string   `json:"coupon_name,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
+
+	// DiscountCents 金额，单位「分」。禁止使用浮点。
+	DiscountCents *Money     `json:"discount_cents,omitempty"`
+	ExpireAt      *time.Time `json:"expire_at,omitempty"`
+	FinishedAt    *time.Time `json:"finished_at,omitempty"`
+
+	// FreightCents 金额，单位「分」。禁止使用浮点。
+	FreightCents *Money `json:"freight_cents,omitempty"`
+
+	// GoodsAmountCents 金额，单位「分」。禁止使用浮点。
+	GoodsAmountCents *Money `json:"goods_amount_cents,omitempty"`
+
+	// HasOpenRefund 有没有处于 10 待审核 / 20 待买家退货 / 30 退款中的退款单
+	HasOpenRefund bool `json:"has_open_refund"`
+
+	// Items 订单行，含优惠分摊（`discount_cents`）与已退 / 在途件数
+	Items   []OrderItem `json:"items"`
+	OrderNo string      `json:"order_no"`
+	PaidAt  *time.Time  `json:"paid_at,omitempty"`
+
+	// PaidCents 金额，单位「分」。禁止使用浮点。
+	PaidCents *Money `json:"paid_cents,omitempty"`
+
+	// PayableCents 金额，单位「分」。禁止使用浮点。
+	PayableCents Money           `json:"payable_cents"`
+	Payments     []PaymentRecord `json:"payments"`
+
+	// Receiver 下单时的收货信息快照
+	Receiver ReceiverSnapshot `json:"receiver"`
+
+	// RefundStatus 售后状态，与 status 正交，必返字段（DB 上是 `NOT NULL DEFAULT 0`）。
+	// 没有它，「买 3 件退 1 件的已发货订单」和「完全没有售后的订单」
+	// 在响应里一模一样 —— `refunded_cents` 在退款到账前是 0，
+	// 区分不出「退款中」与「没退款」。
+	RefundStatus OrderRefundStatus `json:"refund_status"`
+
+	// RefundedCents 金额，单位「分」。禁止使用浮点。
+	RefundedCents *Money `json:"refunded_cents,omitempty"`
+
+	// Refunds 该订单下的全部退款单，按申请时间倒序
+	Refunds []AdminRefund `json:"refunds"`
+
+	// RegionId 下单时那家门店所属的大区。**冗余在订单上，不靠 `stores.region_id` 推**：
+	// 门店可以被调到另一个大区去，而这一单的价格是按当时那个大区算的。
+	RegionId *int64 `json:"region_id,omitempty"`
+
+	// Shipments 发货包裹，按发货先后。一期整单发货，至多一个
+	Shipments []Shipment `json:"shipments"`
+
+	// ShippedAt 发货时间。「发货后 N 天自动确认收货」的倒计时从这里算
+	ShippedAt *time.Time `json:"shipped_at,omitempty"`
+
+	// Status **履约维度** —— 货走到哪儿了。资金维度另见 `Order.refund_status`。
+	//
+	// 10 待支付 / 20 已支付 / 30 已发货 / 40 已完成
+	// 50 退款中 / 60 已退款 —— **仅用于未发货的整单退款**
+	// 90 已关闭
+	//
+	// `50` / `60` 不表达部分退款：用户买三件退一件，订单**不会**变成
+	// `50 退款中`，`status` 保持不变继续走履约（已发货的照发），
+	// 售后进度看 `Order.refund_status`。若按「用户一申请退款就把订单置 50」
+	// 来实现，「部分退款后订单还能不能确认收货」这个问题会直接无解。
+	//
+	// 合法迁移（`order_status_transitions`）：
+	// `(10,20) (10,90) (20,30) (20,50) (30,40) (50,60) (50,20)`。
+	// 没有 `(30,50)` —— 已发货订单的退款走资金维度，
+	// 履约进度不该被售后流程抹掉。
+	Status OrderStatus `json:"status"`
+
+	// Store 下单时的门店与大区展示快照
+	Store OrderStoreSnapshot `json:"store"`
+
+	// StoreId 履约门店。**必返**（DB 上是 `NOT NULL`）。
+	// 它是真正的外键列，报表按它聚合——门店名走 `OrderDetail.store`
+	// 那份快照，因为门店会改名（数据模型 §5）。
+	StoreId int64 `json:"store_id"`
+
+	// UserCouponId 这一单用的券。没用券时不出现。
+	UserCouponId *int64 `json:"user_coupon_id,omitempty"`
+}
+
+// AdminOrderSummary 后台视角的订单摘要：买家侧 `Order` 的全部字段，加上收货人与门店的**下单时快照**，
+// 以及「这一单现在有没有在途的售后」。
+//
+// `has_open_refund` 与 `refund_status = 1` 说的是同一件事，但它是现查的
+// （`EXISTS` 一张 `10/20/30` 的退款单），列表上据此挂「售后中」标签、
+// 提醒发货前先看一眼退款单。
+type AdminOrderSummary struct {
+	// CouponName 这一单用的券的名字，**下单时的快照**。没用券时不出现（与 `user_coupon_id` 同进同出）。
+	//
+	// 它存在订单上，不从券模板现读：模板后来改名，历史订单仍显示下单那一刻的名字 ——
+	// 与 `order_items.title_snapshot`、`OrderDetail.store` 是同一条道理。
+	// 客户端展示「已用：满 100 减 20」这类文案请用它，不要拿 `user_coupon_id`
+	// 再去查券（那张券的模板此刻可能已经叫别的名字了）。
+	CouponName *string   `json:"coupon_name,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
+
+	// DiscountCents 金额，单位「分」。禁止使用浮点。
+	DiscountCents *Money     `json:"discount_cents,omitempty"`
+	ExpireAt      *time.Time `json:"expire_at,omitempty"`
+	FinishedAt    *time.Time `json:"finished_at,omitempty"`
+
+	// FreightCents 金额，单位「分」。禁止使用浮点。
+	FreightCents *Money `json:"freight_cents,omitempty"`
+
+	// GoodsAmountCents 金额，单位「分」。禁止使用浮点。
+	GoodsAmountCents *Money `json:"goods_amount_cents,omitempty"`
+
+	// HasOpenRefund 有没有处于 10 待审核 / 20 待买家退货 / 30 退款中的退款单
+	HasOpenRefund bool       `json:"has_open_refund"`
+	OrderNo       string     `json:"order_no"`
+	PaidAt        *time.Time `json:"paid_at,omitempty"`
+
+	// PaidCents 金额，单位「分」。禁止使用浮点。
+	PaidCents *Money `json:"paid_cents,omitempty"`
+
+	// PayableCents 金额，单位「分」。禁止使用浮点。
+	PayableCents Money `json:"payable_cents"`
+
+	// Receiver 下单时的收货信息快照
+	Receiver ReceiverSnapshot `json:"receiver"`
+
+	// RefundStatus 售后状态，与 status 正交，必返字段（DB 上是 `NOT NULL DEFAULT 0`）。
+	// 没有它，「买 3 件退 1 件的已发货订单」和「完全没有售后的订单」
+	// 在响应里一模一样 —— `refunded_cents` 在退款到账前是 0，
+	// 区分不出「退款中」与「没退款」。
+	RefundStatus OrderRefundStatus `json:"refund_status"`
+
+	// RefundedCents 金额，单位「分」。禁止使用浮点。
+	RefundedCents *Money `json:"refunded_cents,omitempty"`
+
+	// RegionId 下单时那家门店所属的大区。**冗余在订单上，不靠 `stores.region_id` 推**：
+	// 门店可以被调到另一个大区去，而这一单的价格是按当时那个大区算的。
+	RegionId *int64 `json:"region_id,omitempty"`
+
+	// ShippedAt 发货时间。「发货后 N 天自动确认收货」的倒计时从这里算
+	ShippedAt *time.Time `json:"shipped_at,omitempty"`
+
+	// Status **履约维度** —— 货走到哪儿了。资金维度另见 `Order.refund_status`。
+	//
+	// 10 待支付 / 20 已支付 / 30 已发货 / 40 已完成
+	// 50 退款中 / 60 已退款 —— **仅用于未发货的整单退款**
+	// 90 已关闭
+	//
+	// `50` / `60` 不表达部分退款：用户买三件退一件，订单**不会**变成
+	// `50 退款中`，`status` 保持不变继续走履约（已发货的照发），
+	// 售后进度看 `Order.refund_status`。若按「用户一申请退款就把订单置 50」
+	// 来实现，「部分退款后订单还能不能确认收货」这个问题会直接无解。
+	//
+	// 合法迁移（`order_status_transitions`）：
+	// `(10,20) (10,90) (20,30) (20,50) (30,40) (50,60) (50,20)`。
+	// 没有 `(30,50)` —— 已发货订单的退款走资金维度，
+	// 履约进度不该被售后流程抹掉。
+	Status OrderStatus `json:"status"`
+
+	// Store 下单时的门店与大区展示快照
+	Store OrderStoreSnapshot `json:"store"`
+
+	// StoreId 履约门店。**必返**（DB 上是 `NOT NULL`）。
+	// 它是真正的外键列，报表按它聚合——门店名走 `OrderDetail.store`
+	// 那份快照，因为门店会改名（数据模型 §5）。
+	StoreId int64 `json:"store_id"`
+
+	// UserCouponId 这一单用的券。没用券时不出现。
+	UserCouponId *int64 `json:"user_coupon_id,omitempty"`
+}
+
 // AdminProduct 后台视角的商品。与 `ProductSummary` 的差别是状态面：
 // 草稿与软删在这里是一等公民。
 type AdminProduct struct {
@@ -1651,6 +1870,225 @@ type AdminProductDetail struct {
 // AdminProductDetailStatus `products.status`：0 草稿 / 1 上架 / 2 下架。
 // 改它只能经 `POST /admin/products/{product_id}/publication`。
 type AdminProductDetailStatus int
+
+// AdminRefund 后台视角的退款单：买家侧 `Refund` 的全部字段，加上履约门店与审核记录。
+//
+// 审核记录不进买家侧的 `Refund`：「哪个员工审的」是商家内部的事。
+// `audited_by` / `received_by` 只对迁移 00035 之后的动作有值，之前的单只有时间。
+type AdminRefund struct {
+	// AmountCents 实退总额 = goods_amount_cents + freight_cents
+	AmountCents Money `json:"amount_cents"`
+
+	// AuditedAt 审核时间
+	AuditedAt *time.Time `json:"audited_at,omitempty"`
+
+	// AuditedBy 通过或驳回这张单的员工（与 `audited_at` 同一次动作）
+	AuditedBy *StaffRef `json:"audited_by,omitempty"`
+
+	// Channel 退款渠道，冗余自原支付单（对账按渠道跑）。
+	// 对外字符串 ↔ `refunds.channel`：wechat=1 / alipay=2 / balance=3。
+	Channel *AdminRefundChannel `json:"channel,omitempty"`
+
+	// ChannelRefundId 渠道退款流水号，由退款回调写入。用户报障与客服对账要这个号。
+	// `UNIQUE (channel, channel_refund_id)` 是退款回调幂等的最后一道锁。
+	ChannelRefundId *string   `json:"channel_refund_id,omitempty"`
+	CreatedAt       time.Time `json:"created_at"`
+	EvidenceUrls    *[]string `json:"evidence_urls,omitempty"`
+
+	// FreightCents 退的运费。未发货整单退全退；部分退款不退运费
+	// （运费按整单算，没有可分摊的口径）；退货退款由客服审核时裁定。
+	FreightCents *Money `json:"freight_cents,omitempty"`
+
+	// GoodsAmountCents 退的货款，已按订单优惠分摊倒算
+	GoodsAmountCents *Money `json:"goods_amount_cents,omitempty"`
+
+	// Items 退款明细，对应 `refund_items`。申请时按明细提交了，查询时就要能拿回来，
+	// 否则用户点开退款详情看不到「退了哪一件、退了几件」。
+	Items   []RefundItem `json:"items"`
+	OrderNo string       `json:"order_no"`
+
+	// OrderStatus 所属订单此刻的履约状态
+	OrderStatus OrderStatus `json:"order_status"`
+
+	// PaymentNo 原路退回的落点 —— 退的是哪一笔支付。一个订单可能有多次支付尝试，
+	// 客户端据此显示「退回到微信 xxxx」。对应 `refunds.payment_id`。
+	PaymentNo *string `json:"payment_no,omitempty"`
+
+	// ReasonCode 对应 `refunds.reason_code`：
+	// 1 不想要了 / 2 少发漏发 / 3 商品损坏 / 4 描述不符 / 5 其他
+	ReasonCode *RefundReasonCode `json:"reason_code,omitempty"`
+	ReasonText *string           `json:"reason_text,omitempty"`
+
+	// ReceivedAt 确认收到退货的时间（退货退款 `20 → 30` 那一步）
+	ReceivedAt *time.Time `json:"received_at,omitempty"`
+
+	// ReceivedBy 确认收到退货的员工
+	ReceivedBy *StaffRef `json:"received_by,omitempty"`
+
+	// RefundNo 对外编号，不可枚举
+	RefundNo string `json:"refund_no"`
+
+	// RefundType 1 仅退款 / 2 退货退款。对应 `refunds.refund_type`。
+	// 退货退款要展示寄回地址与物流填写入口，仅退款不要 ——
+	// 已发货但用户还没收到货时两种都合法，只有用户能决定，
+	// 所以必须由客户端显式传入，不能让服务端按订单状态猜。
+	RefundType RefundType `json:"refund_type"`
+
+	// RefundedAt 到账时间
+	RefundedAt *time.Time `json:"refunded_at,omitempty"`
+
+	// RejectReason 审核驳回理由，`status=50 已拒绝` 时返回。
+	// 没有这个字段，被驳回的用户只能看到一句「已拒绝」，
+	// 既不知道为什么，也不知道改什么再申请。
+	RejectReason *string `json:"reject_reason,omitempty"`
+
+	// Status 退款单状态机，与 `refunds.status` 的 SMALLINT 取值逐值一致。
+	//
+	// 10 待审核 / 20 待买家退货 / 30 退款中 / 40 已退款
+	// 50 已拒绝 / 60 已取消
+	//
+	// ```
+	// 10 待审核 ─通过(退货退款)─► 20 待买家退货 ─商家收货─► 30 退款中 ─渠道成功─► 40 已退款
+	//    │                                                   ▲
+	//    ├─通过(仅退款)───────────────────────────────────────┘
+	//    │
+	//    ├─驳回──► 50 已拒绝
+	//    └─撤销──► 60 已取消   （20 超时未寄回 / 买家撤销，同样进 60）
+	// ```
+	//
+	// 合法迁移（`refund_status_transitions`，由数据库触发器执行）：
+	// `(10,20) (10,30) (10,50) (10,60) (20,30) (20,60) (30,40)`。
+	// 每条边由谁走：`10→20/30/50` 审核（`/admin/refunds/{refund_no}/audit`）；
+	// `20→30` 商家确认收到退货（`/admin/refunds/{refund_no}/receipt`）；
+	// `10/20→60` 买家撤回；`30→40` 渠道回调（`/webhooks/refunds/{channel}`）。
+	//
+	// `50 已拒绝` 与 `30 退款中` 失败**不是一回事**，客户端要分开展示：
+	// 前者是商家驳回，要展示 `reject_reason` 并允许重新申请；
+	// 后者只是「还没退到」—— `30` 没有通向失败态的边，渠道调用失败是重试而非终态，
+	// 钱不会凭空消失，最终要么成功要么人工介入。
+	Status RefundStatus `json:"status"`
+
+	// Store 所属订单下单时的门店快照
+	Store OrderStoreSnapshot `json:"store"`
+
+	// StoreId 所属订单的履约门店（后台判权按它）
+	StoreId   int64      `json:"store_id"`
+	UpdatedAt *time.Time `json:"updated_at,omitempty"`
+}
+
+// AdminRefundChannel 退款渠道，冗余自原支付单（对账按渠道跑）。
+// 对外字符串 ↔ `refunds.channel`：wechat=1 / alipay=2 / balance=3。
+type AdminRefundChannel string
+
+// AdminRefundDetail defines model for AdminRefundDetail.
+type AdminRefundDetail struct {
+	// AmountCents 实退总额 = goods_amount_cents + freight_cents
+	AmountCents Money `json:"amount_cents"`
+
+	// AuditedAt 审核时间
+	AuditedAt *time.Time `json:"audited_at,omitempty"`
+
+	// AuditedBy 通过或驳回这张单的员工（与 `audited_at` 同一次动作）
+	AuditedBy *StaffRef `json:"audited_by,omitempty"`
+
+	// Channel 退款渠道，冗余自原支付单（对账按渠道跑）。
+	// 对外字符串 ↔ `refunds.channel`：wechat=1 / alipay=2 / balance=3。
+	Channel *AdminRefundDetailChannel `json:"channel,omitempty"`
+
+	// ChannelRefundId 渠道退款流水号，由退款回调写入。用户报障与客服对账要这个号。
+	// `UNIQUE (channel, channel_refund_id)` 是退款回调幂等的最后一道锁。
+	ChannelRefundId *string   `json:"channel_refund_id,omitempty"`
+	CreatedAt       time.Time `json:"created_at"`
+	EvidenceUrls    *[]string `json:"evidence_urls,omitempty"`
+
+	// FreightCents 退的运费。未发货整单退全退；部分退款不退运费
+	// （运费按整单算，没有可分摊的口径）；退货退款由客服审核时裁定。
+	FreightCents *Money `json:"freight_cents,omitempty"`
+
+	// GoodsAmountCents 退的货款，已按订单优惠分摊倒算
+	GoodsAmountCents *Money `json:"goods_amount_cents,omitempty"`
+
+	// Items 退款明细，对应 `refund_items`。申请时按明细提交了，查询时就要能拿回来，
+	// 否则用户点开退款详情看不到「退了哪一件、退了几件」。
+	Items []RefundItem `json:"items"`
+
+	// Order 所属订单的摘要。审核退货退款时裁定运费要看 `freight_cents`（订单实收运费）；
+	// 服务端另外会扣掉这一单别的退款单已占的运费，超了回 422 refund-freight-exceeded。
+	Order   AdminOrderSummary `json:"order"`
+	OrderNo string            `json:"order_no"`
+
+	// OrderStatus 所属订单此刻的履约状态
+	OrderStatus OrderStatus `json:"order_status"`
+
+	// PaymentNo 原路退回的落点 —— 退的是哪一笔支付。一个订单可能有多次支付尝试，
+	// 客户端据此显示「退回到微信 xxxx」。对应 `refunds.payment_id`。
+	PaymentNo *string `json:"payment_no,omitempty"`
+
+	// ReasonCode 对应 `refunds.reason_code`：
+	// 1 不想要了 / 2 少发漏发 / 3 商品损坏 / 4 描述不符 / 5 其他
+	ReasonCode *RefundReasonCode `json:"reason_code,omitempty"`
+	ReasonText *string           `json:"reason_text,omitempty"`
+
+	// ReceivedAt 确认收到退货的时间（退货退款 `20 → 30` 那一步）
+	ReceivedAt *time.Time `json:"received_at,omitempty"`
+
+	// ReceivedBy 确认收到退货的员工
+	ReceivedBy *StaffRef `json:"received_by,omitempty"`
+
+	// RefundNo 对外编号，不可枚举
+	RefundNo string `json:"refund_no"`
+
+	// RefundType 1 仅退款 / 2 退货退款。对应 `refunds.refund_type`。
+	// 退货退款要展示寄回地址与物流填写入口，仅退款不要 ——
+	// 已发货但用户还没收到货时两种都合法，只有用户能决定，
+	// 所以必须由客户端显式传入，不能让服务端按订单状态猜。
+	RefundType RefundType `json:"refund_type"`
+
+	// RefundedAt 到账时间
+	RefundedAt *time.Time `json:"refunded_at,omitempty"`
+
+	// RejectReason 审核驳回理由，`status=50 已拒绝` 时返回。
+	// 没有这个字段，被驳回的用户只能看到一句「已拒绝」，
+	// 既不知道为什么，也不知道改什么再申请。
+	RejectReason *string `json:"reject_reason,omitempty"`
+
+	// Status 退款单状态机，与 `refunds.status` 的 SMALLINT 取值逐值一致。
+	//
+	// 10 待审核 / 20 待买家退货 / 30 退款中 / 40 已退款
+	// 50 已拒绝 / 60 已取消
+	//
+	// ```
+	// 10 待审核 ─通过(退货退款)─► 20 待买家退货 ─商家收货─► 30 退款中 ─渠道成功─► 40 已退款
+	//    │                                                   ▲
+	//    ├─通过(仅退款)───────────────────────────────────────┘
+	//    │
+	//    ├─驳回──► 50 已拒绝
+	//    └─撤销──► 60 已取消   （20 超时未寄回 / 买家撤销，同样进 60）
+	// ```
+	//
+	// 合法迁移（`refund_status_transitions`，由数据库触发器执行）：
+	// `(10,20) (10,30) (10,50) (10,60) (20,30) (20,60) (30,40)`。
+	// 每条边由谁走：`10→20/30/50` 审核（`/admin/refunds/{refund_no}/audit`）；
+	// `20→30` 商家确认收到退货（`/admin/refunds/{refund_no}/receipt`）；
+	// `10/20→60` 买家撤回；`30→40` 渠道回调（`/webhooks/refunds/{channel}`）。
+	//
+	// `50 已拒绝` 与 `30 退款中` 失败**不是一回事**，客户端要分开展示：
+	// 前者是商家驳回，要展示 `reject_reason` 并允许重新申请；
+	// 后者只是「还没退到」—— `30` 没有通向失败态的边，渠道调用失败是重试而非终态，
+	// 钱不会凭空消失，最终要么成功要么人工介入。
+	Status RefundStatus `json:"status"`
+
+	// Store 所属订单下单时的门店快照
+	Store OrderStoreSnapshot `json:"store"`
+
+	// StoreId 所属订单的履约门店（后台判权按它）
+	StoreId   int64      `json:"store_id"`
+	UpdatedAt *time.Time `json:"updated_at,omitempty"`
+}
+
+// AdminRefundDetailChannel 退款渠道，冗余自原支付单（对账按渠道跑）。
+// 对外字符串 ↔ `refunds.channel`：wechat=1 / alipay=2 / balance=3。
+type AdminRefundDetailChannel string
 
 // AdminRegion 后台视角的大区。**没有几何**——大区是门店的分组，
 // 归属由 `stores.region_id` 决定（数据模型 §4 论证过为什么不给它画边界）。
@@ -3393,12 +3831,15 @@ type Staff struct {
 	// | 大区：建 | ✅ | ✅ | ❌ | ❌ |
 	// | 门店：建、改、删、围栏 | ✅ | ✅ | 只限本大区的门店（换大区时新旧都得在范围内） | ❌ |
 	// | 门店价、门店上下架、门店库存 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
+	// | 订单与售后：订单 / 退款单的列表与详情、发货、退款审核、确认收到退货 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
 	// | 设默认门店（含建店时 is_default） | ✅ | ❌ | ❌ | ❌ |
 	// | 员工管理 | ✅ | ❌ | 只能加、改本大区门店的门店管理员 | ❌ |
 	// | 开店 | 仅平台级管理员 | | | |
 	//
 	// `PUT /admin/skus/{sku_id}/inventory`（商家恰好一家门店时的捷径）对 3 / 4
 	// 只在那家店在范围内时放行。列表类接口对 3 / 4 只返回范围内的；
+	// 订单与售后按订单的**履约门店**判，门店所属的大区取它**此刻**的大区
+	// （货从哪家店出，就由管那家店库存的人处理这一单）；
 	// 商品目录全量可读。被拒回 403，type 是 role-forbidden 或 out-of-scope。
 	Role StaffRole `json:"role"`
 
@@ -3435,12 +3876,15 @@ type StaffCreateRequest struct {
 	// | 大区：建 | ✅ | ✅ | ❌ | ❌ |
 	// | 门店：建、改、删、围栏 | ✅ | ✅ | 只限本大区的门店（换大区时新旧都得在范围内） | ❌ |
 	// | 门店价、门店上下架、门店库存 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
+	// | 订单与售后：订单 / 退款单的列表与详情、发货、退款审核、确认收到退货 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
 	// | 设默认门店（含建店时 is_default） | ✅ | ❌ | ❌ | ❌ |
 	// | 员工管理 | ✅ | ❌ | 只能加、改本大区门店的门店管理员 | ❌ |
 	// | 开店 | 仅平台级管理员 | | | |
 	//
 	// `PUT /admin/skus/{sku_id}/inventory`（商家恰好一家门店时的捷径）对 3 / 4
 	// 只在那家店在范围内时放行。列表类接口对 3 / 4 只返回范围内的；
+	// 订单与售后按订单的**履约门店**判，门店所属的大区取它**此刻**的大区
+	// （货从哪家店出，就由管那家店库存的人处理这一单）；
 	// 商品目录全量可读。被拒回 403，type 是 role-forbidden 或 out-of-scope。
 	Role StaffRole `json:"role"`
 
@@ -3461,6 +3905,13 @@ type StaffLoginToken struct {
 	Token string `json:"token"`
 }
 
+// StaffRef 审计字段里的「谁」。`name` 取员工此刻的名字；平台级员工（不属于这家店）
+// 在租户作用域里读不到名字，此时只有 `id`。
+type StaffRef struct {
+	Id   int64   `json:"id"`
+	Name *string `json:"name,omitempty"`
+}
+
 // StaffRole 1 管理员 · 2 操作员 · 3 大区管理员 · 4 门店管理员
 //
 // 角色在各自层级内生效：平台级的管理员能加平台操作员、能开店；
@@ -3476,12 +3927,15 @@ type StaffLoginToken struct {
 // | 大区：建 | ✅ | ✅ | ❌ | ❌ |
 // | 门店：建、改、删、围栏 | ✅ | ✅ | 只限本大区的门店（换大区时新旧都得在范围内） | ❌ |
 // | 门店价、门店上下架、门店库存 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
+// | 订单与售后：订单 / 退款单的列表与详情、发货、退款审核、确认收到退货 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
 // | 设默认门店（含建店时 is_default） | ✅ | ❌ | ❌ | ❌ |
 // | 员工管理 | ✅ | ❌ | 只能加、改本大区门店的门店管理员 | ❌ |
 // | 开店 | 仅平台级管理员 | | | |
 //
 // `PUT /admin/skus/{sku_id}/inventory`（商家恰好一家门店时的捷径）对 3 / 4
 // 只在那家店在范围内时放行。列表类接口对 3 / 4 只返回范围内的；
+// 订单与售后按订单的**履约门店**判，门店所属的大区取它**此刻**的大区
+// （货从哪家店出，就由管那家店库存的人处理这一单）；
 // 商品目录全量可读。被拒回 403，type 是 role-forbidden 或 out-of-scope。
 type StaffRole int
 
@@ -4329,6 +4783,82 @@ type PatchAdminMerchantsMerchantIdParams struct {
 	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
 }
 
+// GetAdminOrdersParams defines parameters for GetAdminOrders.
+type GetAdminOrdersParams struct {
+	Page     *Page     `form:"page,omitempty" json:"page,omitempty"`
+	PageSize *PageSize `form:"page_size,omitempty" json:"page_size,omitempty"`
+
+	// Status 按履约状态筛选。「待发货」即 `status=20`。
+	Status *OrderStatus `form:"status,omitempty" json:"status,omitempty"`
+
+	// StoreId 只看某家履约门店的单。与调用者的范围取交集。
+	StoreId *int64 `form:"store_id,omitempty" json:"store_id,omitempty"`
+
+	// CreatedFrom 下单时间下界（含）。RFC3339。
+	CreatedFrom *time.Time `form:"created_from,omitempty" json:"created_from,omitempty"`
+
+	// CreatedTo 下单时间上界（**不含**）。RFC3339。半开区间，按天查时传次日零点。
+	CreatedTo *time.Time `form:"created_to,omitempty" json:"created_to,omitempty"`
+
+	// OrderNo 订单号，精确匹配。
+	OrderNo *string `form:"order_no,omitempty" json:"order_no,omitempty"`
+
+	// Phone 手机号，精确匹配**收货人手机号或下单买家的账号手机号**任一个。
+	// 两个都认，是因为打电话来的人报的号码不一定是收货人那一个。
+	Phone *string `form:"phone,omitempty" json:"phone,omitempty"`
+
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// GetAdminOrdersOrderNoParams defines parameters for GetAdminOrdersOrderNo.
+type GetAdminOrdersOrderNoParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
 // PostAdminOrdersOrderNoShipmentsParams defines parameters for PostAdminOrdersOrderNoShipments.
 type PostAdminOrdersOrderNoShipmentsParams struct {
 	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
@@ -4652,6 +5182,73 @@ type PostAdminProductsProductIdSkusParams struct {
 	// · 首次执行失败（存档为失败态）时同样回放该失败响应；
 	//   确需重试的场景请换一个新 key
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// GetAdminRefundsParams defines parameters for GetAdminRefunds.
+type GetAdminRefundsParams struct {
+	Page     *Page         `form:"page,omitempty" json:"page,omitempty"`
+	PageSize *PageSize     `form:"page_size,omitempty" json:"page_size,omitempty"`
+	Status   *RefundStatus `form:"status,omitempty" json:"status,omitempty"`
+
+	// StoreId 只看某家履约门店的订单上的退款单。与调用者的范围取交集。
+	StoreId *int64 `form:"store_id,omitempty" json:"store_id,omitempty"`
+
+	// CreatedFrom 申请时间下界（含）。RFC3339。
+	CreatedFrom *time.Time `form:"created_from,omitempty" json:"created_from,omitempty"`
+
+	// CreatedTo 申请时间上界（**不含**）。RFC3339。
+	CreatedTo *time.Time `form:"created_to,omitempty" json:"created_to,omitempty"`
+
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// GetAdminRefundsRefundNoParams defines parameters for GetAdminRefundsRefundNo.
+type GetAdminRefundsRefundNoParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
 }
 
 // PostAdminRefundsRefundNoAuditJSONBody defines parameters for PostAdminRefundsRefundNoAudit.
@@ -5174,12 +5771,15 @@ type PatchAdminStaffStaffIdJSONBody struct {
 	// | 大区：建 | ✅ | ✅ | ❌ | ❌ |
 	// | 门店：建、改、删、围栏 | ✅ | ✅ | 只限本大区的门店（换大区时新旧都得在范围内） | ❌ |
 	// | 门店价、门店上下架、门店库存 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
+	// | 订单与售后：订单 / 退款单的列表与详情、发货、退款审核、确认收到退货 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
 	// | 设默认门店（含建店时 is_default） | ✅ | ❌ | ❌ | ❌ |
 	// | 员工管理 | ✅ | ❌ | 只能加、改本大区门店的门店管理员 | ❌ |
 	// | 开店 | 仅平台级管理员 | | | |
 	//
 	// `PUT /admin/skus/{sku_id}/inventory`（商家恰好一家门店时的捷径）对 3 / 4
 	// 只在那家店在范围内时放行。列表类接口对 3 / 4 只返回范围内的；
+	// 订单与售后按订单的**履约门店**判，门店所属的大区取它**此刻**的大区
+	// （货从哪家店出，就由管那家店库存的人处理这一单）；
 	// 商品目录全量可读。被拒回 403，type 是 role-forbidden 或 out-of-scope。
 	Role *StaffRole `json:"role,omitempty"`
 

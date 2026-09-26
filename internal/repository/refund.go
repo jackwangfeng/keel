@@ -165,9 +165,10 @@ type RefundTx interface {
 	CountUserRefunds(ctx context.Context, userID int64, status *int16) (int64, error)
 
 	CancelRefund(ctx context.Context, refundID, userID int64) (bool, error)
-	RejectRefund(ctx context.Context, refundID int64, reason string) (bool, error)
-	ApproveRefund(ctx context.Context, refundID int64, next int16, freightCents int64) (bool, error)
-	ReceiveRefundGoods(ctx context.Context, refundID int64) (bool, error)
+	// 审核与确认收到退货三条都记下是谁做的（staffID → audited_by / received_by，00035）。
+	RejectRefund(ctx context.Context, refundID int64, reason string, staffID int64) (bool, error)
+	ApproveRefund(ctx context.Context, refundID int64, next int16, freightCents int64, staffID int64) (bool, error)
+	ReceiveRefundGoods(ctx context.Context, refundID int64, staffID int64) (bool, error)
 	// CompleteRefund 30 → 40。流水号重复返回 ErrDuplicateChannelRefund。
 	CompleteRefund(ctx context.Context, refundID int64, channelRefundID string, payload []byte, at time.Time) (bool, error)
 	RecordRefundNotify(ctx context.Context, refundID int64, payload []byte) error
@@ -478,18 +479,23 @@ func (t tenantTx) CancelRefund(ctx context.Context, refundID, userID int64) (boo
 	return rowsOrTransition(t.q.CancelRefund(ctx, db.CancelRefundParams{ID: refundID, UserID: userID}))
 }
 
-func (t tenantTx) RejectRefund(ctx context.Context, refundID int64, reason string) (bool, error) {
-	return rowsOrTransition(t.q.RejectRefund(ctx, db.RejectRefundParams{ID: refundID, RejectReason: &reason}))
-}
-
-func (t tenantTx) ApproveRefund(ctx context.Context, refundID int64, next int16, freightCents int64) (bool, error) {
-	return rowsOrTransition(t.q.ApproveRefund(ctx, db.ApproveRefundParams{
-		ID: refundID, NextStatus: next, FreightCents: freightCents,
+func (t tenantTx) RejectRefund(ctx context.Context, refundID int64, reason string, staffID int64) (bool, error) {
+	return rowsOrTransition(t.q.RejectRefund(ctx, db.RejectRefundParams{
+		ID: refundID, RejectReason: &reason, AuditedBy: &staffID,
 	}))
 }
 
-func (t tenantTx) ReceiveRefundGoods(ctx context.Context, refundID int64) (bool, error) {
-	return rowsOrTransition(t.q.ReceiveRefundGoods(ctx, refundID))
+func (t tenantTx) ApproveRefund(ctx context.Context, refundID int64, next int16, freightCents int64,
+	staffID int64) (bool, error) {
+	return rowsOrTransition(t.q.ApproveRefund(ctx, db.ApproveRefundParams{
+		ID: refundID, NextStatus: next, FreightCents: freightCents, AuditedBy: &staffID,
+	}))
+}
+
+func (t tenantTx) ReceiveRefundGoods(ctx context.Context, refundID int64, staffID int64) (bool, error) {
+	return rowsOrTransition(t.q.ReceiveRefundGoods(ctx, db.ReceiveRefundGoodsParams{
+		ID: refundID, ReceivedBy: &staffID,
+	}))
 }
 
 func (t tenantTx) CompleteRefund(ctx context.Context, refundID int64, channelRefundID string,

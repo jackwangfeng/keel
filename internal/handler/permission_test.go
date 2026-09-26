@@ -406,6 +406,22 @@ var permMatrix = []permRoute{
 		no := permRefund(t, fx, fx.store(c), 20)
 		return permReq{Method: "POST", Path: v1 + "/admin/refunds/" + no + "/receipt", OK: http.StatusOK}
 	}},
+	// 后台订单与退款单的列表 / 详情（00035）。契约 StaffRole 矩阵「订单与售后」那一行，
+	// 与发货、审核同一个判据。列表对谁都是 200 —— 范围只收窄、不拒绝，
+	// 「200 里装的是哪些单」由 admin_order_test.go 的 TestAdminOrderAndRefundListsAreScopedByRole
+	// 逐角色比对单号；详情按订单的履约门店判，范围外 403 out-of-scope。
+	{"GET", v1 + "/admin/orders", everyone, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permGet(v1 + "/admin/orders")
+	}},
+	{"GET", v1 + "/admin/orders/:order_no", storeOperate, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permGet(v1 + "/admin/orders/" + permPaidOrder(t, fx, fx.store(c)))
+	}},
+	{"GET", v1 + "/admin/refunds", everyone, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permGet(v1 + "/admin/refunds")
+	}},
+	{"GET", v1 + "/admin/refunds/:refund_no", storeOperate, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permGet(v1 + "/admin/refunds/" + permRefund(t, fx, fx.store(c), 10))
+	}},
 }
 
 // permExempt 是刻意不在矩阵里的 /admin/ 路由，每条写明理由。

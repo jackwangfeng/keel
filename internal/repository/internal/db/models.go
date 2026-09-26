@@ -321,6 +321,9 @@ type Refund struct {
 	RefundedAt       pgtype.Timestamptz
 	CreatedAt        pgtype.Timestamptz
 	UpdatedAt        pgtype.Timestamptz
+	AuditedBy        *int64
+	ReceivedAt       pgtype.Timestamptz
+	ReceivedBy       *int64
 }
 
 type RefundItem struct {

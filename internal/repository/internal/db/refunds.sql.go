@@ -30,13 +30,15 @@ func (q *Queries) AddOrderRefundedCents(ctx context.Context, arg AddOrderRefunde
 const approveRefund = `-- name: ApproveRefund :execrows
 UPDATE refunds
    SET status = $1, freight_cents = $2,
-       amount_cents = goods_amount_cents + $2, audited_at = now()
- WHERE id = $3 AND status = 10
+       amount_cents = goods_amount_cents + $2, audited_at = now(),
+       audited_by = $3
+ WHERE id = $4 AND status = 10
 `
 
 type ApproveRefundParams struct {
 	NextStatus   int16
 	FreightCents int64
+	AuditedBy    *int64
 	ID           int64
 }
 
@@ -44,7 +46,12 @@ type ApproveRefundParams struct {
 // 运费由审核裁定（退货退款）或沿用申请时按规则算好的值（仅退款），
 // 实退总额跟着重算 —— chk_refund_amount 要它恒等于货款 + 运费。
 func (q *Queries) ApproveRefund(ctx context.Context, arg ApproveRefundParams) (int64, error) {
-	result, err := q.db.Exec(ctx, approveRefund, arg.NextStatus, arg.FreightCents, arg.ID)
+	result, err := q.db.Exec(ctx, approveRefund,
+		arg.NextStatus,
+		arg.FreightCents,
+		arg.AuditedBy,
+		arg.ID,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -855,12 +862,18 @@ func (q *Queries) OtherRefundFreight(ctx context.Context, arg OtherRefundFreight
 }
 
 const receiveRefundGoods = `-- name: ReceiveRefundGoods :execrows
-UPDATE refunds SET status = 30 WHERE id = $1 AND status = 20
+UPDATE refunds SET status = 30, received_at = now(), received_by = $1
+ WHERE id = $2 AND status = 20
 `
 
-// 商家确认收到退货：20 待买家退货 → 30 退款中。
-func (q *Queries) ReceiveRefundGoods(ctx context.Context, id int64) (int64, error) {
-	result, err := q.db.Exec(ctx, receiveRefundGoods, id)
+type ReceiveRefundGoodsParams struct {
+	ReceivedBy *int64
+	ID         int64
+}
+
+// 商家确认收到退货：20 待买家退货 → 30 退款中。记下谁、什么时候收的（00035）。
+func (q *Queries) ReceiveRefundGoods(ctx context.Context, arg ReceiveRefundGoodsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, receiveRefundGoods, arg.ReceivedBy, arg.ID)
 	if err != nil {
 		return 0, err
 	}
@@ -949,18 +962,21 @@ func (q *Queries) RefundingQtyByItem(ctx context.Context, orderID int64) ([]Refu
 }
 
 const rejectRefund = `-- name: RejectRefund :execrows
-UPDATE refunds SET status = 50, reject_reason = $2, audited_at = now()
- WHERE id = $1 AND status = 10
+UPDATE refunds SET status = 50, reject_reason = $1, audited_at = now(),
+       audited_by = $2
+ WHERE id = $3 AND status = 10
 `
 
 type RejectRefundParams struct {
-	ID           int64
 	RejectReason *string
+	AuditedBy    *int64
+	ID           int64
 }
 
 // 审核驳回：10 → 50，必须带理由（chk_refund_state 也钉着这一条）。
+// audited_by 记下是谁驳回的（00035 的审核记录）。
 func (q *Queries) RejectRefund(ctx context.Context, arg RejectRefundParams) (int64, error) {
-	result, err := q.db.Exec(ctx, rejectRefund, arg.ID, arg.RejectReason)
+	result, err := q.db.Exec(ctx, rejectRefund, arg.RejectReason, arg.AuditedBy, arg.ID)
 	if err != nil {
 		return 0, err
 	}

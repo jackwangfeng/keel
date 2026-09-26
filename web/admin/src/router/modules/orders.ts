@@ -10,7 +10,7 @@ const section: AdminSection = {
         {
             path: "orders",
             name: "orders",
-            component: () => import("../../views/OrderOpsView.vue"),
+            component: () => import("../../views/orders/OrderListView.vue"),
             meta: { title: "订单", menu: true },
         },
     ],

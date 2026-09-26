@@ -186,7 +186,8 @@ compose 里已经有一个 `KEEL_ADMIN_PASSWORD`，而那是数据库超级用�
 | 上传 | 真能用 | `POST /admin/uploads` |
 | 员工 | 真能用 | `GET/POST /admin/staff`、`PATCH /admin/staff/{id}` |
 | 商家管理 | 真能用（仅平台级） | `GET/POST /admin/merchants`、`GET/PATCH /admin/merchants/{id}`，顶栏切换器带 `X-Keel-Merchant` |
-| 订单 | **留位置** | 契约里**没有**后台订单列表；`POST /admin/orders/{order_no}/shipments` 与 `POST /admin/refunds/{refund_no}/audit` 契约里有但服务端还没 handler（挂在 `contract_test.go` 的 `notYetRouted`）。这一页把这三件事写出来，不画表格 |
+| 订单 | 真能用 | `GET /admin/orders`（默认筛待发货 `status=20`）、`GET /admin/orders/{order_no}`（详情抽屉）、`POST /admin/orders/{order_no}/shipments`（发货，带 Idempotency-Key） |
+| 售后 | 真能用 | `GET /admin/refunds`（默认筛待审核 `status=10`）、`GET /admin/refunds/{refund_no}`、`POST .../audit`（同意 / 驳回，退货退款可裁定运费）、`POST .../receipt`（确认收到退货）。每行退款金额只展示服务端算好的数 |
 | 大区 | 真能用 | `GET/POST /admin/regions`、`PATCH/DELETE /admin/regions/{id}`、`GET /admin/regions/{id}/products`、`PUT .../products/{id}/listing`、`PUT/DELETE .../skus/{id}/price` |
 | 门店 | 真能用 | `GET/POST /admin/stores`、`GET/PATCH/DELETE /admin/stores/{id}`、`PUT .../fence`、`PUT .../default`、`GET .../products`、`PUT .../products/{id}/listing`、`PUT/DELETE .../skus/{id}/price`、`GET .../inventories`、`PUT .../skus/{id}/inventory` |
 
@@ -335,7 +336,7 @@ SELECT + INSERT，INSERT 策略是 `WITH CHECK (platform_scope())`——租户�
 ```bash
 make admin-install      # npm ci，版本由入库的 package-lock.json 锁定
 make admin-type-check   # vue-tsc --strict + 范围核对（已接进 check-all.sh）
-make admin-test         # 围栏几何与坐标系换算的单元测试（node --test，不需要 node_modules）
+make admin-test         # 围栏几何、金额换算、订单与售后界面规则的单元测试（node --test，不需要 node_modules）
 make admin-build        # 静态产物（compose 起栈时会自己构建，日常不用跑）
 
 cd web/admin && npm run dev   # 开发服务器，/api 由 vite proxy 转给 127.0.0.1:8080

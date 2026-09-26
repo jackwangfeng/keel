@@ -30,6 +30,12 @@ REQUIRED_PATHS = [
     ('/admin/merchants', 'post'),
     ('/admin/orders/{order_no}/shipments', 'post'),
     ('/admin/refunds/{refund_no}/audit', 'post'),
+    # 后台订单与退款单的列表 / 详情。没有它们，后台找不到待发货、待审核的单 ——
+    # 上面那两条写操作就只能靠买家报单号才用得上。
+    ('/admin/orders', 'get'),
+    ('/admin/orders/{order_no}', 'get'),
+    ('/admin/refunds', 'get'),
+    ('/admin/refunds/{refund_no}', 'get'),
     # M4 任务 1：商家自助发布的写接口面。此前 /admin/ 下一条商品写接口都没有
     # ——商家能处理订单，却没法上架商品。登记在这里，是为了让「哪天有人把这一段
     # 删了或改了名」当场红，而不是又一次在开工时当成惊喜发现。

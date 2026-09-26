@@ -247,6 +247,76 @@ func listFilter(ctx context.Context, tx repository.Tx) (regions, stores reposito
 	}
 }
 
+// ---------------------------------------------------------------------------
+// 订单与售后（契约 StaffRole 矩阵「订单与售后」那一行，判据同「门店库存」）
+// ---------------------------------------------------------------------------
+
+// authorizeOrderStore 放行对这一单的履约门店有权的人。用在后台订单 / 退款单的
+// 详情、发货、退款审核、确认收到退货。
+//
+// 与 authorizeStore(storeOperate) 只差一处：大区管理员查门店所属大区时**含已软删的
+// 门店**（StoreRegionAnyState）。authorizeStore 用的 StoreScope 只认未软删的店 ——
+// 那对「门店价、上下架、库存」是对的（店都关了，改它的价没有意义），对订单不对：
+// 店关了，它名下没发完的货、没退完的钱仍然要有人处理，而且列表（orderListScope）
+// 看得见这一单，详情却报「门店不存在」，就是一条前后矛盾的界面。
+//
+// 大区取门店**此刻**所属的大区，不取订单上冗余的 region_id（那是下单时的大区，定价用的）：
+// 门店调了大区，它的在途订单跟着交给新大区的人，与门店库存的归属一致。
+func authorizeOrderStore(ctx context.Context, tx repository.Tx, storeID int64) (auth.StaffIdentity, error) {
+	id, err := requireStaff(ctx)
+	if err != nil {
+		return auth.StaffIdentity{}, err
+	}
+	switch {
+	case id.MerchantWide():
+		return id, nil
+	case id.Role == auth.StaffRoleRegionManager:
+		regionID, err := tx.StoreRegionAnyState(ctx, storeID)
+		if err != nil {
+			return auth.StaffIdentity{}, err
+		}
+		if id.ManagesRegion(regionID) {
+			return id, nil
+		}
+		return auth.StaffIdentity{}, fmt.Errorf("%w: 这一单的履约门店 %d 所在的大区不归你管", ErrOutOfScope, storeID)
+	case id.Role == auth.StaffRoleStoreManager:
+		if id.ManagesStore(storeID) {
+			return id, nil
+		}
+		return auth.StaffIdentity{}, fmt.Errorf("%w: 这一单的履约门店 %d 不归你管", ErrOutOfScope, storeID)
+	default:
+		return auth.StaffIdentity{}, fmt.Errorf("%w: 未知角色 %d", ErrRoleForbidden, id.Role)
+	}
+}
+
+// orderListScope 把调用者的范围翻成后台订单 / 退款单列表的过滤条件，
+// 与 authorizeOrderStore 是同一个判据的两种形状（列表里看得见的，详情就放行）：
+//
+//   - 全店范围的：零值（不限）；
+//   - 大区管理员：RegionIDs = 他的大区 —— SQL 那一侧按门店**此刻**的大区展开，
+//     含已软删的门店（db/queries/admin_orders.sql 的文件头）；
+//   - 门店管理员：StoreIDs = 他的门店；
+//   - 未知角色：两个都是空切片（一个都不给）。
+//
+// 与 listFilter 不同，这里不查库：门店管理员不需要把门店换算成大区。
+// 切片永远非 nil（对受限的人），理由同 listFilter。
+func orderListScope(ctx context.Context) (repository.ScopeFilter, error) {
+	id, err := requireStaff(ctx)
+	if err != nil {
+		return repository.ScopeFilter{}, err
+	}
+	switch {
+	case id.MerchantWide():
+		return repository.ScopeFilter{}, nil
+	case id.Role == auth.StaffRoleRegionManager:
+		return repository.ScopeFilter{RegionIDs: nonNil(id.RegionIDs)}, nil
+	case id.Role == auth.StaffRoleStoreManager:
+		return repository.ScopeFilter{StoreIDs: nonNil(id.StoreIDs)}, nil
+	default:
+		return repository.ScopeFilter{RegionIDs: []int64{}, StoreIDs: []int64{}}, nil
+	}
+}
+
 func nonNil(ids []int64) []int64 {
 	if ids == nil {
 		return []int64{}

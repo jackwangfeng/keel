@@ -156,9 +156,10 @@ If 8081 is taken: `KEEL_CONSOLE_PORT=18081 docker compose up -d --build`.
 > "currently managing" switcher), plus **regions and stores**: per-region and per-store product
 > visibility and pricing, per-store stock, and delivery fences drawn on
 > OpenStreetMap (WGS-84 — the same datum as the `GEOGRAPHY(POLYGON, 4326)`
-> column and the buyer app's location, with no conversion on the way). The
-> orders page is text only: there is no "admin order list" operation in the
-> contract, and that page says exactly that.
+> column and the buyer app's location, with no conversion on the way), and
+> **orders and after-sales**: find orders by status, store, date, order number
+> or phone, ship them, review refunds (approve / reject, set the return freight)
+> and confirm returned goods.
 
 For the multi-merchant shape, where the `Host` header picks the shop:
 `docker compose -f compose.yaml -f compose.multi.yaml up -d --build`.
@@ -181,14 +182,14 @@ the job queue in a table.
 What `docker compose up` brings up today is PostgreSQL, the migrations plus
 seed, the API and the merchant console. Buyers can browse, filter by category,
 search, claim coupons, check out and pay (sandbox); merchants can list
-products, run regions and stores, issue coupons and manage staff. These parts
+products, run regions and stores, issue coupons, manage staff, ship orders and
+handle after-sales. These parts
 are not there yet, and are listed so that nothing above reads as if it ships:
 
-- **admin order and refund lists.** Shipping, refund review and "return
-  received" endpoints exist, but the contract has no "list orders awaiting
-  shipment / refunds awaiting review" yet, so the console cannot find the work.
-  Auto-confirming receipt after N days and buyer-entered return tracking
-  numbers are not there either
+- **auto-confirm receipt and return tracking numbers.** The console's orders
+  and after-sales pages are there (find, ship, review, confirm returned goods),
+  but auto-confirming receipt N days after shipping and buyer-entered return
+  tracking numbers are not
 - **cross-encoder reranking.** `POST /search` today is three-stage — vector
   recall and keyword recall fused with RRF, then business re-ranking
   (out-of-stock products are demoted multiplicatively below everything in
@@ -401,7 +402,9 @@ battle-tested at scale. What it has is a stronger core.
   → **v0.1.0, first public release**
 - [x] **Cart, after-sales and shipping** — finish the buyer and admin
   endpoints the contract already describes
-- [ ] **Admin order and refund lists**, auto-confirm receipt
+- [x] **Admin order and refund lists** — orders and after-sales pages, lists
+  narrowed to the caller's store scope
+- [ ] Auto-confirm receipt, buyer-entered return tracking numbers
 - [ ] **M5** — Reranking + business re-ranking + search analytics
 - [ ] **M6** — Image embeddings → visual search
 - [ ] **M7** — Conversational shopping assistant

@@ -206,8 +206,10 @@ UPDATE refunds SET status = 60
 
 -- name: RejectRefund :execrows
 -- 审核驳回：10 → 50，必须带理由（chk_refund_state 也钉着这一条）。
-UPDATE refunds SET status = 50, reject_reason = $2, audited_at = now()
- WHERE id = $1 AND status = 10;
+-- audited_by 记下是谁驳回的（00035 的审核记录）。
+UPDATE refunds SET status = 50, reject_reason = sqlc.arg(reject_reason), audited_at = now(),
+       audited_by = sqlc.arg(audited_by)
+ WHERE id = sqlc.arg(id) AND status = 10;
 
 -- name: ApproveRefund :execrows
 -- 审核通过：10 → 20（退货退款）或 10 → 30（仅退款）。
@@ -215,12 +217,14 @@ UPDATE refunds SET status = 50, reject_reason = $2, audited_at = now()
 -- 实退总额跟着重算 —— chk_refund_amount 要它恒等于货款 + 运费。
 UPDATE refunds
    SET status = sqlc.arg(next_status), freight_cents = sqlc.arg(freight_cents),
-       amount_cents = goods_amount_cents + sqlc.arg(freight_cents), audited_at = now()
+       amount_cents = goods_amount_cents + sqlc.arg(freight_cents), audited_at = now(),
+       audited_by = sqlc.arg(audited_by)
  WHERE id = sqlc.arg(id) AND status = 10;
 
 -- name: ReceiveRefundGoods :execrows
--- 商家确认收到退货：20 待买家退货 → 30 退款中。
-UPDATE refunds SET status = 30 WHERE id = $1 AND status = 20;
+-- 商家确认收到退货：20 待买家退货 → 30 退款中。记下谁、什么时候收的（00035）。
+UPDATE refunds SET status = 30, received_at = now(), received_by = sqlc.arg(received_by)
+ WHERE id = sqlc.arg(id) AND status = 20;
 
 -- name: CompleteRefund :execrows
 -- 渠道回调入账：30 退款中 → 40 已退款，写下渠道流水号、原始报文与到账时间。
