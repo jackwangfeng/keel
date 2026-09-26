@@ -63,7 +63,7 @@
 | `uploads` 把「归属校验」列为建表首要理由，契约却没有任何读取端点可做校验 | 补 `GET /uploads/{upload_id}`，302 到限时地址，按 `purpose` 判权 |
 | `GET /orders` 的 `refund_status` 参数复用了带 `default: 0` 的 schema，不传时会只返回无退款订单 | `default` 从共享 schema 挪到 `Order.refund_status` 响应属性上 |
 | S13 的「不做」记录写进了 `description:` 块体，会渲染进对外 API 文档 | 改为真正的 YAML 注释 |
-| `POST /search/events`、`/cart/items`、`/cart/items/batch-delete` 未接受 `Idempotency-Key` | 三处补齐。校验器新增该规则，豁免项须写明理由 |
+| `POST /search/events`、`/cart/items`、`/cart/items/batch-delete` 未接受 `Idempotency-Key` | 三处补齐。校验器新增该规则，豁免项须写明理由。（后记：`/search/events` 实现时改为豁免——它公开、多半没有 `user_id` 可作幂等键作用域，且每列首次为准本身就是天然幂等；理由写进了 `scripts/check_openapi.py` 的豁免表） |
 | `sha256 -- 秒传与去重` 与同节的隐私论证对冲（凭 hash 命中会把 A 的退货照片交给 B） | 注释改为「完整性校验与将来去重的预留，一期不做秒传」 |
 | `referenced` 是单向布尔，「引用后又解引用」的文件永不回收 | 承认为已知缺口并写明理由，列入待确认事项 |
 | 「五项需数据积累」与清单标记对不上（实际 8 行标「是」） | 「需积累」列拆成 否 / 业务 / 行为 三档，架构说的五项对应「行为」档 |

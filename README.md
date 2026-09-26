@@ -258,7 +258,9 @@ the remaining gaps are under "Not in the box yet" above.
   contracted but not built — semantically relevant is not the same as worth
   selling, and that distinction is the point of the last two stages. Every
   search writes a `search_logs` row (strategy, stages that actually ran, model
-  version) for offline evaluation and per-strategy comparison.
+  version); clients report the clicks, add-to-carts and orders that follow via
+  `POST /search/events`, and `make search-metrics` turns them into CTR@10,
+  search→cart and search→order rates per strategy.
 - **Conversational shopping** — understands intent, never invents products.
   Every item shown comes from a real retrieval result.
 - **Visual search** — find the same product from a photo.
