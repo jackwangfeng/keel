@@ -15,7 +15,7 @@
 #      找不到就从 Go 的官方源下载一份 —— 那个源在国内很慢。
 #   2. 它默认开着依赖缓存：开头从 GitHub 的缓存服务下载一个几百 MB 的包，
 #      结尾再上传回去。**在自建 runner 上这纯属负收益**：同一台机器，
-#      GOMODCACHE 本来就一直留在盘上，GOPROXY 配的是国内的 goproxy.cn。
+#      GOMODCACHE 本来就一直留在盘上，缺的模块经 runner .env 里的本机代理拉。
 #
 # 托管 runner 每次都是新虚拟机，setup-go 是对的；自建 runner 不是。
 #
@@ -31,6 +31,15 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+
+# runner 以系统服务身份运行，PATH 取自 actions-runner/.path，是装机时那份
+# 系统默认值，不含 /usr/local/go/bin（登录 shell 的 profile 不会被读）。
+# 第一版只看 command -v go，于是在 lenserver 上三个 job 全报"没有 go"。
+# 在官方安装位置找到就用它，并写进 $GITHUB_PATH 让后续步骤也看得见。
+if ! command -v go >/dev/null 2>&1 && [ -x /usr/local/go/bin/go ]; then
+    export PATH="/usr/local/go/bin:$PATH"
+    if [ -n "${GITHUB_PATH:-}" ]; then echo /usr/local/go/bin >> "$GITHUB_PATH"; fi
+fi
 
 if ! command -v go >/dev/null 2>&1; then
     echo "::error::runner 上没有 go。CI 用本机工具链（见本脚本文件头），请在 runner 上装 Go $(awk '/^go /{print $2}' go.mod) 或更高版本。"
