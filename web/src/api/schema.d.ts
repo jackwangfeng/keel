@@ -810,6 +810,1353 @@ export interface paths {
         };
         trace?: never;
     };
+    "/admin/uploads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 上传商品图（后台）
+         * @description 与 `POST /uploads` 是**两条路**，不是一条路的两种用法。
+         *
+         *     `uploads` 的上传者二选一，由 `chk_upload_owner` 这条 CHECK 约束钉死
+         *     （数据模型 §13 / §14）：C 端用户填 `user_id`，后台操作员填 `staff_id`。
+         *     哪一列被填上，取决于这次调用带的是买家 token 还是 staff 会话 token。
+         *     同一个路径同时接受两种身份，等于把「这次是谁传的」变成一个要在 handler
+         *     里靠 token 形状猜的东西——而猜错的代价是「运营的操作记在某个 C 端用户
+         *     名下」，那正是数据模型 §15 第 8 条要求在写商品写入接口之前定下来的事。
+         *
+         *     所以商品图走这里，`purpose` 固定为 `1 商品图`，**请求体里没有这个字段**——
+         *     路径已经决定了它。头像（2）与退款凭证（3）仍走 `POST /uploads`。
+         *
+         *     限制与 `POST /uploads` 逐条一致：单文件不超过 **10 MB**（超出 413），
+         *     `content_type` 仅接受 `image/jpeg` / `image/png` / `image/webp`（其余 415）。
+         *
+         *     上传只是把文件放进 `uploads`，此时 `referenced = FALSE`。真正与商品建立
+         *     关联的是 `PUT /admin/products/{product_id}/images`，那一步在同一个事务里
+         *     把 `referenced` 置为 TRUE。**超过 24 小时仍未被引用的文件会被清理任务
+         *     删掉**（数据模型 §13），所以拿到 `id` 之后请尽快提交。
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /**
+                     * @description 客户端生成的 UUID。幂等作用域为 `(接口 scope, user_id, key)`，
+                     *     有效期 24h，过期后同一 key 可复用（见数据模型文档 §11）。
+                     *
+                     *     · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
+                     *       并带 `Idempotency-Replayed: true` 响应头
+                     *     · **同 key 正在处理中**：`409` + `Retry-After`，
+                     *       type=https://keel.dev/problems/idempotency-key-in-flight，
+                     *       客户端应退避重试，不要当成业务失败
+                     *     · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
+                     *       type=https://keel.dev/problems/idempotency-key-reused。
+                     *       宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
+                     *       那会让用户以为下单成功了而实际什么都没发生
+                     *     · 首次执行失败（存档为失败态）时同样回放该失败响应；
+                     *       确需重试的场景请换一个新 key
+                     */
+                    "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "multipart/form-data": {
+                        /**
+                         * Format: binary
+                         * @description 文件内容，不超过 10 MB
+                         */
+                        file: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description 上传成功 */
+                201: {
+                    headers: {
+                        "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Upload"];
+                    };
+                };
+                /** @description 未登录，或带的不是 staff 会话 token */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                409: components["responses"]["IdempotencyInFlight"];
+                /** @description 文件超过 10 MB。`type` 为 `https://keel.dev/problems/upload-too-large`。 */
+                413: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /**
+                 * @description `content_type` 不在允许列表内。
+                 *     `type` 为 `https://keel.dev/problems/upload-unsupported-media-type`。
+                 */
+                415: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                422: components["responses"]["IdempotencyKeyReused"];
+                default: components["responses"]["Problem"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/products": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 商品列表（后台）
+         * @description **不能用 `GET /products` 代替。** 前台那条只返回 `status = 1 上架`
+         *     的商品，而后台要管的恰恰是草稿与已下架的那些——一个刚创建、还没上架的
+         *     商品在前台的任何一个视图里都不存在，商家也就没有任何入口回去编辑它。
+         *
+         *     不传 `status` 时返回**全部未软删**的商品（含草稿与下架），
+         *     这与前台默认只看上架是刻意相反的：后台的默认视图是「我店里的全部商品」。
+         */
+        get: {
+            parameters: {
+                query?: {
+                    page?: components["parameters"]["Page"];
+                    page_size?: components["parameters"]["PageSize"];
+                    /**
+                     * @description 按 `products.status` 筛选：0 草稿 / 1 上架 / 2 下架。
+                     *     **刻意不给 default**——缺省被代入会静默改变「返回哪些行」，
+                     *     而那正是本仓库那条契约检查要挡的东西。省略即不按状态筛。
+                     */
+                    status?: 0 | 1 | 2;
+                    /** @description 按类目筛选。只匹配直接挂在该类目下的商品，不含子类目。 */
+                    category_id?: number;
+                    /**
+                     * @description 传 `true` 时把软删（`deleted_at` 非空）的商品也带上，用于核对。
+                     *     省略即不含——一期没有恢复接口，这个参数只为「看得见」存在。
+                     */
+                    include_deleted?: boolean;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PageMeta"] & {
+                            items: components["schemas"]["AdminProduct"][];
+                        };
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        put?: never;
+        /**
+         * 创建商品（落地即草稿）
+         * @description 新建的商品一律是 `status = 0 草稿`，`published_at` 为空。
+         *     **请求体里没有 `status`**：创建与发布是两个动作，合成一个会让
+         *     「建一个还没配好 SKU 的商品」这件最普通的事没法表达。
+         *
+         *     创建时不带 SKU。原因是 SKU 有自己的唯一约束（`uk_skus_code`）与库存行，
+         *     嵌在商品创建里意味着一次部分失败要回答「商品建出来了吗」——
+         *     而分成两步之后，失败的那一步就是失败的那一步。
+         *     上架前至少要有一个 SKU，那条闸门在 `POST .../publication` 上。
+         *
+         *     响应里的 `min_price_cents` / `max_price_cents` / `total_stock` 此刻都是 0，
+         *     它们由 SKU 变更时同步（数据模型 §3），不是这里的入参。
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /**
+                     * @description 客户端生成的 UUID。幂等作用域为 `(接口 scope, user_id, key)`，
+                     *     有效期 24h，过期后同一 key 可复用（见数据模型文档 §11）。
+                     *
+                     *     · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
+                     *       并带 `Idempotency-Replayed: true` 响应头
+                     *     · **同 key 正在处理中**：`409` + `Retry-After`，
+                     *       type=https://keel.dev/problems/idempotency-key-in-flight，
+                     *       客户端应退避重试，不要当成业务失败
+                     *     · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
+                     *       type=https://keel.dev/problems/idempotency-key-reused。
+                     *       宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
+                     *       那会让用户以为下单成功了而实际什么都没发生
+                     *     · 首次执行失败（存档为失败态）时同样回放该失败响应；
+                     *       确需重试的场景请换一个新 key
+                     */
+                    "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["ProductCreateRequest"];
+                };
+            };
+            responses: {
+                /** @description 已创建（草稿） */
+                201: {
+                    headers: {
+                        "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AdminProduct"];
+                    };
+                };
+                /**
+                 * @description `category_id` 不存在，或不属于当前租户。
+                 *     跨租户挂接在库里也是不可能的——`products.category_id` 是
+                 *     复合外键 `(category_id, merchant_id)`（数据模型 §3）。
+                 */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                409: components["responses"]["IdempotencyInFlight"];
+                422: components["responses"]["IdempotencyKeyReused"];
+                default: components["responses"]["Problem"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/products/{product_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description `products.id`。按约定 4，商品对外用自增 id；越权由服务端按租户强制过滤 ——
+                 *     查不到当前租户名下的该 id 即 404（不是 403，理由见 /admin/ 段头第 3 条）。
+                 */
+                product_id: components["parameters"]["ProductId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * 商品详情（后台，含全部 SKU、库存与图片）
+         * @description 与 `GET /products/{product_id}` 的差别不只是「能看草稿」：
+         *     这里带 `cost_cents`（成本，前台永远不该出现）、带每个 SKU 的
+         *     `available_qty` 与 `warning_qty`、带软删标记。
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /**
+                     * @description `products.id`。按约定 4，商品对外用自增 id；越权由服务端按租户强制过滤 ——
+                     *     查不到当前租户名下的该 id 即 404（不是 403，理由见 /admin/ 段头第 3 条）。
+                     */
+                    product_id: components["parameters"]["ProductId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AdminProductDetail"];
+                    };
+                };
+                /** @description 商品不存在，或不属于当前租户 */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        put?: never;
+        post?: never;
+        /**
+         * 删除商品（软删）
+         * @description 置 `deleted_at`，**不删行**。行必须留着：`order_items` 虽然是下单即快照
+         *     （数据模型 §5），但 `cart_items` 与四张派生表（向量 / 理解结果 / 同款簇）
+         *     都对 `products` 有复合外键，硬删会被数据库直接拒绝。
+         *
+         *     **在架商品（`status = 1`）拒绝删除，返回 409。** 先下架再删。
+         *     理由不是洁癖：删一个仍在前台列表与检索结果里的商品，会让一个正在
+         *     下单的买家在 SAGA 中途撞上一个消失的商品，而那条路上的补偿分支
+         *     处理的是「库存不足」，不是「商品没了」。
+         *
+         *     软删之后该商品不出现在任何前台视图里，后台列表也要显式传
+         *     `include_deleted=true` 才看得到。**一期不提供恢复接口**——
+         *     恢复要回答「恢复出来是草稿还是下架」以及「它的 SKU 跟着恢复吗」，
+         *     那两个问题现在都没有答案，留一个答不上来的接口比不留更糟。
+         */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /**
+                     * @description `products.id`。按约定 4，商品对外用自增 id；越权由服务端按租户强制过滤 ——
+                     *     查不到当前租户名下的该 id 即 404（不是 403，理由见 /admin/ 段头第 3 条）。
+                     */
+                    product_id: components["parameters"]["ProductId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description 已软删 */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description 商品不存在、不属于当前租户，或已被软删 */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /**
+                 * @description 商品仍在架（`status = 1`），请先下架——
+                 *     `type` 为 `https://keel.dev/problems/product-still-published`。
+                 */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        options?: never;
+        head?: never;
+        /**
+         * 改商品信息
+         * @description 只改文案与归属，**不改状态**（上下架走 `POST .../publication`，
+         *     软删走 `DELETE`）。把状态混进这个 PATCH 里，等于让「改个错别字」
+         *     和「把商品从前台撤下来」共用一条审计记录。
+         *
+         *     在架商品也能改——改标题不需要先下架。代价是前台会看到改动即时生效，
+         *     这是刻意的：要求「先下架再改再上架」会让商家为一个错别字付出一次
+         *     商品从搜索结果里消失的代价。
+         */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /**
+                     * @description `products.id`。按约定 4，商品对外用自增 id；越权由服务端按租户强制过滤 ——
+                     *     查不到当前租户名下的该 id 即 404（不是 403，理由见 /admin/ 段头第 3 条）。
+                     */
+                    product_id: components["parameters"]["ProductId"];
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["ProductUpdateRequest"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AdminProduct"];
+                    };
+                };
+                /** @description 商品不存在、不属于当前租户，或新的 `category_id` 不属于当前租户 */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /**
+                 * @description 商品已软删，不接受修改——
+                 *     `type` 为 `https://keel.dev/problems/product-deleted`。
+                 */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /** @description 一个字段都没传（`minProperties: 1`），或字段取值非法 */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        trace?: never;
+    };
+    "/admin/products/{product_id}/publication": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 上架 / 下架
+         * @description 状态机的那条边单独成一个子资源，与 `POST /admin/refunds/{refund_no}/audit`
+         *     同一个形状：让每一次状态变更都有一个明确的触发入口，而不是散在一个
+         *     什么都能改的 PATCH 里。
+         *
+         *     · `publish`   → `status` 置 1。允许的来源是 `0 草稿` 与 `2 下架`。
+         *     · `unpublish` → `status` 置 2。允许的来源是 `1 上架`。
+         *
+         *     **`published_at` 只在第一次上架时置位，之后永不覆盖。** 它是「首次发布
+         *     时间」，前台 `GET /products?sort=newest` 按它倒序排；每次上架都覆盖的话，
+         *     一次临时下架再上架就能把一件老商品顶到列表最前面，而那不是商家点
+         *     「上架」时想要的东西。
+         *
+         *     **没有回到 `0 草稿` 的动作。** 草稿的含义是「从未对外出现过」，
+         *     一旦发布过就不再为真，给它一条回头路只会让 `published_at` 非空而
+         *     `status = 0` 这种自相矛盾的状态变得可达。
+         *
+         *     **重复调用是幂等的**：已经在架的商品再 `publish` 返回 200 且什么都不改，
+         *     不报 409。状态机的终点相同，这里没有可失败的东西。
+         *
+         *     闸门：**没有任何 SKU 的商品不能上架**（409）。上架意味着它会出现在
+         *     前台列表与检索结果里，而一个没有 SKU 的商品点进去既没有价格也没有
+         *     可加购的东西——`min_price_cents` 会是 0，前台会把它渲染成免费。
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /**
+                     * @description 客户端生成的 UUID。幂等作用域为 `(接口 scope, user_id, key)`，
+                     *     有效期 24h，过期后同一 key 可复用（见数据模型文档 §11）。
+                     *
+                     *     · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
+                     *       并带 `Idempotency-Replayed: true` 响应头
+                     *     · **同 key 正在处理中**：`409` + `Retry-After`，
+                     *       type=https://keel.dev/problems/idempotency-key-in-flight，
+                     *       客户端应退避重试，不要当成业务失败
+                     *     · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
+                     *       type=https://keel.dev/problems/idempotency-key-reused。
+                     *       宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
+                     *       那会让用户以为下单成功了而实际什么都没发生
+                     *     · 首次执行失败（存档为失败态）时同样回放该失败响应；
+                     *       确需重试的场景请换一个新 key
+                     */
+                    "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    /**
+                     * @description `products.id`。按约定 4，商品对外用自增 id；越权由服务端按租户强制过滤 ——
+                     *     查不到当前租户名下的该 id 即 404（不是 403，理由见 /admin/ 段头第 3 条）。
+                     */
+                    product_id: components["parameters"]["ProductId"];
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["ProductPublicationRequest"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AdminProduct"];
+                    };
+                };
+                /** @description 商品不存在、不属于当前租户，或已被软删 */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /**
+                 * @description 按 Problem `type` 区分：
+                 *
+                 *     · 商品一个 SKU 都没有，不能上架——
+                 *       `https://keel.dev/problems/product-has-no-sku`
+                 *     · 同一 Idempotency-Key 正在处理中——
+                 *       `https://keel.dev/problems/idempotency-key-in-flight`
+                 */
+                409: {
+                    headers: {
+                        /** @description 仅幂等键处理中时返回，建议退避秒数 */
+                        "Retry-After"?: number;
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                422: components["responses"]["IdempotencyKeyReused"];
+                default: components["responses"]["Problem"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/products/{product_id}/images": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * 设置商品图（整组替换）
+         * @description **一次调用替换整组，而不是「加一张 / 删一张 / 调顺序」三个端点。**
+         *
+         *     理由是并发：图片的顺序是一个整体，增量接口下「把第 3 张挪到第 1 位」
+         *     与「删掉第 2 张」两个并发请求会互相踩，而中间态（有两张主图、
+         *     顺序出现空洞）在增量模型里是可表达的。整组替换让顺序只有一个写入点，
+         *     PUT 也因此天然幂等——重发同一个请求不会多出一张图。
+         *
+         *     **`images[0]` 就是主图**，没有 `is_primary` 布尔。一个布尔允许
+         *     「零张主图」和「两张主图」这两种在业务上不存在的状态被表达出来，
+         *     而顺序本来就要维护。「设为主图」在客户端就是把那一项挪到数组第一位，
+         *     与「调整顺序」是同一个动作，不需要第二个概念。
+         *     `ProductSummary.image_url` 取的就是这一张。
+         *
+         *     传空数组即清空全部图片。
+         *
+         *     每个元素只有一个 `upload_id`，不是一个 URL 字符串。收 URL 意味着客户端
+         *     能往这里写任意地址（站外图床、别家租户的文件），而收 id 把取值域关死在
+         *     自己的 `uploads` 表里，并且能在同一个事务里把 `referenced` 置为 TRUE——
+         *     数据模型 §13 明写这一步必须与引用它的业务对象同事务，否则孤儿回收会在
+         *     提交与扫描之间的窗口里删掉刚用上的图。
+         *
+         *     已知缺口（数据模型 §13 记过）：`referenced` 是单向布尔，被替换下来的
+         *     旧图会永远停在 `TRUE`，不会被回收。一期接受这个磁盘增长。
+         */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /**
+                     * @description `products.id`。按约定 4，商品对外用自增 id；越权由服务端按租户强制过滤 ——
+                     *     查不到当前租户名下的该 id 即 404（不是 403，理由见 /admin/ 段头第 3 条）。
+                     */
+                    product_id: components["parameters"]["ProductId"];
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["ProductImagesReplaceRequest"];
+                };
+            };
+            responses: {
+                /** @description 替换后的完整图片列表，顺序即展示顺序 */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ProductImage"][];
+                    };
+                };
+                /** @description 商品不存在、不属于当前租户，或已被软删 */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /**
+                 * @description 按 Problem `type` 区分：
+                 *
+                 *     · 某个 `upload_id` 不存在或不属于当前租户——
+                 *       `https://keel.dev/problems/upload-not-found`
+                 *     · 某个 `upload_id` 的 `purpose` 不是 `1 商品图`（例如拿退款凭证
+                 *       当商品图挂上去）——`https://keel.dev/problems/upload-wrong-purpose`
+                 *     · 同一个 `upload_id` 在数组里出现了两次——
+                 *       `https://keel.dev/problems/product-image-duplicated`
+                 */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/products/{product_id}/skus": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 给商品加一个 SKU
+         * @description **同一个事务里还会建出这个 SKU 的 `inventories` 行。** 这不是顺手做的：
+         *     `inventories.sku_id` 是主键，且下单 SAGA 的正向分支是
+         *     `UPDATE ... WHERE sku_id = $1 AND available_qty >= $2`——
+         *     没有那一行时 `rows_affected = 0`，而 SAGA 把它判成**库存不足**
+         *     （数据模型 §4）。于是一个漏建库存行的 SKU 表现为「这件商品永远缺货」，
+         *     排查方向从一开始就是错的。所以建 SKU 必须建库存行，
+         *     初始量由 `available_qty` 给出，省略为 0。
+         *
+         *     `sku_code` 在**租户内**唯一（`uk_skus_code` 是 `(merchant_id, sku_code)`），
+         *     不是商品内唯一，也不是全局唯一：两家店各有一个 `A001` 是正常的，
+         *     同一家店的两个商品用同一个 `A001` 不是。
+         *
+         *     `spec_values` 是自由的键值对（`skus.spec_values` 是 JSONB），
+         *     契约不规定键名。一期**不校验**同一商品下各 SKU 的规格键是否一致——
+         *     规格模板（「这个商品有颜色和尺码两个维度」）没有落地的表，
+         *     在没有模板的前提下校验只能靠猜。
+         *
+         *     写入后服务端重算 `products.min_price_cents` / `max_price_cents` /
+         *     `total_stock`（数据模型 §3 的冗余字段）。
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /**
+                     * @description 客户端生成的 UUID。幂等作用域为 `(接口 scope, user_id, key)`，
+                     *     有效期 24h，过期后同一 key 可复用（见数据模型文档 §11）。
+                     *
+                     *     · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
+                     *       并带 `Idempotency-Replayed: true` 响应头
+                     *     · **同 key 正在处理中**：`409` + `Retry-After`，
+                     *       type=https://keel.dev/problems/idempotency-key-in-flight，
+                     *       客户端应退避重试，不要当成业务失败
+                     *     · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
+                     *       type=https://keel.dev/problems/idempotency-key-reused。
+                     *       宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
+                     *       那会让用户以为下单成功了而实际什么都没发生
+                     *     · 首次执行失败（存档为失败态）时同样回放该失败响应；
+                     *       确需重试的场景请换一个新 key
+                     */
+                    "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    /**
+                     * @description `products.id`。按约定 4，商品对外用自增 id；越权由服务端按租户强制过滤 ——
+                     *     查不到当前租户名下的该 id 即 404（不是 403，理由见 /admin/ 段头第 3 条）。
+                     */
+                    product_id: components["parameters"]["ProductId"];
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["SkuCreateRequest"];
+                };
+            };
+            responses: {
+                /** @description 已创建（含库存行） */
+                201: {
+                    headers: {
+                        "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AdminSku"];
+                    };
+                };
+                /** @description 商品不存在、不属于当前租户，或已被软删 */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /**
+                 * @description 按 Problem `type` 区分：
+                 *
+                 *     · 该租户内已有同一个 `sku_code`——
+                 *       `https://keel.dev/problems/sku-code-duplicated`
+                 *     · 同一 Idempotency-Key 正在处理中——
+                 *       `https://keel.dev/problems/idempotency-key-in-flight`
+                 */
+                409: {
+                    headers: {
+                        /** @description 仅幂等键处理中时返回，建议退避秒数 */
+                        "Retry-After"?: number;
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                422: components["responses"]["IdempotencyKeyReused"];
+                default: components["responses"]["Problem"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/skus/{sku_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description `skus.id`。同 ProductId，查不到即 404。 */
+                sku_id: components["parameters"]["SkuId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * 删除 SKU（软删）
+         * @description 置 `skus.deleted_at`，**不删行**。
+         *
+         *     硬删在这个 schema 下根本做不到，这一点值得写在契约里而不是等实现时
+         *     撞上：`order_items`、`cart_items`、`inventories`、`inventory_logs`
+         *     四张表都对 `skus` 有外键，一个卖过一次的 SKU 永远删不掉。
+         *     （`skus` 原先没有 `deleted_at`，是本轮为这条接口补进数据模型 §3 的。）
+         *
+         *     软删之后它的 `sku_code` 可以被重新使用——`uk_skus_code` 因此改成了
+         *     `WHERE deleted_at IS NULL` 的部分唯一索引。不这么做的话，一个被删掉的
+         *     规格会永久占住一个货号，而货号是商家自己的编码体系，不是我们的 id。
+         *
+         *     **拒绝删掉在架商品（`status = 1`）的最后一个 SKU**，返回 409。
+         *     那会让一个在前台可见的商品变成没有任何可买规格，
+         *     与「没有 SKU 不能上架」是同一条闸门的另一侧。
+         */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description `skus.id`。同 ProductId，查不到即 404。 */
+                    sku_id: components["parameters"]["SkuId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description 已软删 */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description SKU 不存在、不属于当前租户，或已被软删 */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /**
+                 * @description 这是某个在架商品的最后一个 SKU——
+                 *     `type` 为 `https://keel.dev/problems/sku-last-of-published-product`。
+                 */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        options?: never;
+        head?: never;
+        /**
+         * 改 SKU（含改价）
+         * @description **请求体里没有 `available_qty`，这是刻意的。** 库存走
+         *     `PUT /admin/skus/{sku_id}/inventory`，理由写在那个端点上：
+         *     它要表达乐观并发，而一个「什么都能改」的 PATCH 表达不了
+         *     「基于我看到的值改」。把库存混进来，一次改价就能顺带把并发下单
+         *     扣掉的量抹掉。
+         *
+         *     改价立即生效，不需要先下架。购物车里已有的条目不受影响也不报错——
+         *     **购物车不存价格快照**（数据模型 §10），结算时按当时的价重算；
+         *     真正的价格快照发生在下单那一刻（`order_items`，数据模型 §5）。
+         *     所以改价不会改变任何一笔已成交订单的金额。
+         *
+         *     改价后服务端重算 `products.min_price_cents` / `max_price_cents`。
+         *
+         *     `status` 是 SKU 自己的售卖开关：`0 停售` / `1 在售`。停售的 SKU 仍出现在
+         *     商品详情的规格矩阵里（否则买家会以为规格表变了），但不可加购、不可下单。
+         *     它与商品的上下架是两个维度：商品在架而某个规格停售，是常态。
+         */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description `skus.id`。同 ProductId，查不到即 404。 */
+                    sku_id: components["parameters"]["SkuId"];
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["SkuUpdateRequest"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AdminSku"];
+                    };
+                };
+                /** @description SKU 不存在、不属于当前租户，或已被软删 */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /**
+                 * @description 该租户内已有同一个 `sku_code`——
+                 *     `type` 为 `https://keel.dev/problems/sku-code-duplicated`。
+                 */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /** @description 一个字段都没传（`minProperties: 1`），或 `price_cents` 为负 */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        trace?: never;
+    };
+    "/admin/skus/{sku_id}/inventory": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * 改库存（比较并设置）
+         * @description **这条接口和下单 SAGA 抢同一行。** `inventories` 是数据模型 §4 的热点表，
+         *     下单正向分支是 `UPDATE inventories SET available_qty = available_qty - $2
+         *     WHERE sku_id = $1 AND available_qty >= $2`。如果后台这里写的是一个
+         *     无条件的绝对值覆盖，那么「商家看到 10、页面停了三分钟、期间卖掉 4 件、
+         *     商家把它改成 20」的结果是 20，而正确答案是 16——**并发下单扣掉的 4 件
+         *     被一次后台覆盖抹掉了**，而且没有任何东西会响。
+         *
+         *     所以请求体里 `expected_available_qty` 是**必填**的：它是「我看到的那个值」。
+         *     服务端执行的是一条比较并设置：
+         *
+         *     ```sql
+         *     UPDATE inventories
+         *        SET available_qty = $new,
+         *            warning_qty   = COALESCE($warn, warning_qty)
+         *      WHERE sku_id = $sku AND available_qty = $expected;
+         *     ```
+         *
+         *     对不上就 409，并把**当前真实值**放在 Problem 的 `current` 里一起返回，
+         *     这样后台页面能直接刷新那一格，而不是让人再点一次查询才知道发生了什么。
+         *
+         *     ### 为什么不是一个 version 列
+         *
+         *     数据模型 §4 已经论证过这张表不用 version 乐观锁，用的是**条件原子更新**。
+         *     这条接口沿用同一个手法，只是把条件从 `available_qty >= $n` 换成
+         *     `available_qty = $expected`。因此**不需要给 `inventories` 加任何新列**——
+         *     这一点是特意核过的，本任务不设计一个实现不了的契约形状。
+         *
+         *     代价诚实说一条：CAS 比的是值本身，所以存在 ABA——读到 10、期间卖掉 3 件
+         *     又退回 3 件、写的时候仍然是 10，CAS 通过。对这张表**这是良性的**：
+         *     §4 明写「可售就是库存的全部真相」，中间经历过什么不改变「我看到 10、
+         *     现在还是 10、我要它变成 20」这个意图。真正要防的是数值已经变了而覆盖照旧，
+         *     那个 CAS 挡得住。
+         *
+         *     ### 实现时必须分开的两种 0 行
+         *
+         *     `rows_affected = 0` 在这里有两个来源，而它们的处置完全不同：
+         *     **CAS 不匹配（409）** 与 **这个 SKU 不在本租户（404）**。数据模型 §4 记过
+         *     同一个坑的另一面——设了租户但 SKU 是别家的，扣减语句的 0 行信号与
+         *     「库存不足」完全一样，SAGA 会把配置错误当成缺货来补偿。
+         *     这里同样要在一条语句里把两者分别回传（`db/queries/inventories.sql`
+         *     已有的写法），而不是先 SELECT 再 UPDATE——那两步之间就是竞态本身。
+         *
+         *     ### 补货场景
+         *
+         *     进货 100 件在这条接口上要写成「expected = 当前值，new = 当前值 + 100」，
+         *     并在 409 时重读重试。一期接受这个形状：单个 SKU 上的并发写是低频的，
+         *     重试一两次就过。真正的相对调整（`delta`，天然可组合，且
+         *     `inventory_logs.biz_type = 5 手工调整` 已经为它留好了位置）留给下一轮。
+         */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description `skus.id`。同 ProductId，查不到即 404。 */
+                    sku_id: components["parameters"]["SkuId"];
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["InventorySetRequest"];
+                };
+            };
+            responses: {
+                /** @description 已更新 */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AdminInventory"];
+                    };
+                };
+                /**
+                 * @description SKU 不存在、不属于当前租户，或已被软删。
+                 *     **刻意与 409 分开**：把「不是你的 SKU」也报成 409 会让调用方
+                 *     以为重读一次再试就能成功，而那个循环永远不会结束。
+                 */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /**
+                 * @description `expected_available_qty` 与当前值不符——库存在你读到它之后被改过
+                 *     （多半是并发下单扣减）。`type` 为
+                 *     `https://keel.dev/problems/inventory-precondition-failed`，
+                 *     响应体里的 `current` 是当前的真实值，可直接用于刷新页面并重试。
+                 */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["InventoryConflict"];
+                    };
+                };
+                /**
+                 * @description `available_qty` 或 `expected_available_qty` 为负。
+                 *     非负同时由 `inventories` 的 `chk_qty_nonneg` 兜底（数据模型 §4）。
+                 */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/categories": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 分类列表（后台，扁平）
+         * @description 返回**扁平**数组而不是 `GET /categories` 那棵树，按 `path` 升序。
+         *     后台要管的是单个节点（改名、挪位置、停用），而树形结构在表格里
+         *     还得再拍平一次；`path` 与 `level` 都在每一行上，需要树的客户端
+         *     自己拼即可。
+         *
+         *     与前台那条的另一个差别：**含停用（`status = 0`）的分类**。
+         *     前台目录树只给启用的，而后台恰恰要看得见自己停掉的那些。
+         *     软删的不返回——一期没有恢复接口。
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AdminCategory"][];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        put?: never;
+        /**
+         * 新建分类
+         * @description **`path` 与 `level` 不在请求体里，由服务端从 `parent_id` 算出。**
+         *     它们是物化路径（数据模型 §3：`path` 形如 `/1/23/456/`，
+         *     `idx_categories_path` 是分类查询的主索引）。让客户端传 `path`
+         *     等于让前端去维护一个索引的内容——算错一次，前台目录树就会长出
+         *     一整个错位的子树，而数据库不会拒绝。
+         *
+         *     `parent_id` 省略或为 `null` 即建一个根分类（`level = 1`）。
+         *     父分类必须属于当前租户，这一条在库里也是硬的：`categories` 的
+         *     `parent_id` 走**自引用的复合外键** `(parent_id, merchant_id)`
+         *     （00004 补的），否则一条 `path` 会横跨两家店。
+         *
+         *     一期不设层级深度上限。
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /**
+                     * @description 客户端生成的 UUID。幂等作用域为 `(接口 scope, user_id, key)`，
+                     *     有效期 24h，过期后同一 key 可复用（见数据模型文档 §11）。
+                     *
+                     *     · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
+                     *       并带 `Idempotency-Replayed: true` 响应头
+                     *     · **同 key 正在处理中**：`409` + `Retry-After`，
+                     *       type=https://keel.dev/problems/idempotency-key-in-flight，
+                     *       客户端应退避重试，不要当成业务失败
+                     *     · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
+                     *       type=https://keel.dev/problems/idempotency-key-reused。
+                     *       宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
+                     *       那会让用户以为下单成功了而实际什么都没发生
+                     *     · 首次执行失败（存档为失败态）时同样回放该失败响应；
+                     *       确需重试的场景请换一个新 key
+                     */
+                    "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["CategoryCreateRequest"];
+                };
+            };
+            responses: {
+                /** @description 已创建 */
+                201: {
+                    headers: {
+                        "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AdminCategory"];
+                    };
+                };
+                /** @description `parent_id` 不存在，或不属于当前租户 */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                409: components["responses"]["IdempotencyInFlight"];
+                422: components["responses"]["IdempotencyKeyReused"];
+                default: components["responses"]["Problem"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/categories/{category_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description `categories.id`。同 ProductId，查不到即 404。 */
+                category_id: components["parameters"]["CategoryId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * 删除分类（软删）
+         * @description 置 `categories.deleted_at`。两条闸门，都是 409：
+         *
+         *     · **还有未软删的子分类** —— 删掉父节点会让那棵子树的 `path` 指向一个
+         *       看不见的祖先。复合外键不会拦（软删不删行），所以这一条只能在这里挡。
+         *       `type` 为 `https://keel.dev/problems/category-has-children`。
+         *     · **还有未软删的商品挂在它下面** —— `products.category_id` 是 NOT NULL
+         *       的复合外键，商品不可能「没有分类」。放行的话，前台目录树里找不到
+         *       这些商品，而它们仍在架、仍能被搜到、仍能下单。
+         *       `type` 为 `https://keel.dev/problems/category-has-products`。
+         *
+         *     换句话说：要删一个分类，先把它的商品挪走或删掉，再从叶子往上删。
+         *     这个顺序是刻意的——级联删除在一棵商家自己维护的目录树上太危险了。
+         */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description `categories.id`。同 ProductId，查不到即 404。 */
+                    category_id: components["parameters"]["CategoryId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description 已软删 */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description 分类不存在、不属于当前租户，或已被软删 */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /** @description 该分类下还有子分类或商品，见 `type` */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        options?: never;
+        head?: never;
+        /**
+         * 改分类（含移动子树）
+         * @description ### 传 `parent_id` 就是移动子树
+         *
+         *     这是本接口唯一需要展开讲的动作。改一个节点的父亲，意味着它**以及它
+         *     全部后代**的 `path` 与 `level` 都要跟着改，而那是一条语句的事：
+         *
+         *     ```sql
+         *     UPDATE categories
+         *        SET path  = $new_prefix || substring(path from length($old_prefix) + 1),
+         *            level = level + $delta
+         *      WHERE path LIKE $old_prefix || '%';
+         *     ```
+         *
+         *     与节点自身的 `parent_id` 更新在同一个事务里。不这么做的后果不是
+         *     「数据不太整齐」——`path` 是分类查询的主索引，子树的 `path` 没跟着走，
+         *     那些商品在新位置下就查不出来了，而在旧位置下还查得出来。
+         *
+         *     **拒绝成环**（409）：目标父节点不能是自己，也不能是自己的后代。
+         *     判据就用 `path`：`目标.path LIKE 自己.path || '%'` 为真即成环。
+         *     没有这条，一次误操作就能把一棵子树从树上摘下来变成一个独立的环，
+         *     而 `path` 的重写会在那个环上跑不完。
+         *
+         *     `parent_id` 显式传 `null` 表示移到根（`level` 变成 1）。
+         *     不传这个字段则不动层级——`null` 与「没传」在这里是两件事。
+         *
+         *     ### 停用不等于下架
+         *
+         *     `status = 0` 让这个分类从前台目录树里消失，**但挂在它下面的商品不受影响**：
+         *     仍然在架、仍然搜得到、仍然能直接访问详情页。停掉的是目录入口，不是商品。
+         *     要让商品下架请用 `POST /admin/products/{product_id}/publication`。
+         *     这一条必须写明，否则「我停用了分类，为什么商品还在卖」会成为一个
+         *     反复出现的问题。
+         */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description `categories.id`。同 ProductId，查不到即 404。 */
+                    category_id: components["parameters"]["CategoryId"];
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["CategoryUpdateRequest"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AdminCategory"];
+                    };
+                };
+                /** @description 分类不存在、不属于当前租户，或新的 `parent_id` 不属于当前租户 */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /**
+                 * @description 目标父节点是自己或自己的后代，移动会形成环——
+                 *     `type` 为 `https://keel.dev/problems/category-cycle`。
+                 */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /** @description 一个字段都没传（`minProperties: 1`） */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        trace?: never;
+    };
     "/uploads": {
         parameters: {
             query?: never;
@@ -1731,7 +3078,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** 分类树 */
+        /**
+         * 分类树
+         * @description 只返回 `status = 1 启用` 且未软删的分类。后台要看停用的那些，
+         *     走 `GET /admin/categories`（扁平，含停用）。
+         */
         get: {
             parameters: {
                 query?: never;
@@ -1750,6 +3101,7 @@ export interface paths {
                         "application/json": components["schemas"]["Category"][];
                     };
                 };
+                default: components["responses"]["Problem"];
             };
         };
         put?: never;
@@ -3682,6 +5034,308 @@ export interface components {
             available_qty: number;
             image_url?: string;
         };
+        /**
+         * @description 后台视角的商品。与 `ProductSummary` 的差别是状态面：
+         *     草稿与软删在这里是一等公民。
+         */
+        AdminProduct: {
+            /** Format: int64 */
+            id: number;
+            title: string;
+            subtitle?: string;
+            description?: string;
+            /** Format: int64 */
+            category_id: number;
+            /**
+             * Format: int64
+             * @description 品牌，可空。一期没有品牌管理接口，只透传。
+             */
+            brand_id?: number | null;
+            /**
+             * @description `products.status`：0 草稿 / 1 上架 / 2 下架。
+             *     改它只能经 `POST /admin/products/{product_id}/publication`。
+             * @enum {integer}
+             */
+            status: 0 | 1 | 2;
+            /**
+             * Format: date-time
+             * @description **首次**上架时间。为 null 表示从未上架过（即 `status` 一直是 0 草稿）。
+             *     再次上架不会覆盖它——理由见 publication 端点。
+             */
+            published_at?: string | null;
+            /**
+             * Format: date-time
+             * @description 软删时间。非 null 时该商品只在 `include_deleted=true` 的后台列表里出现。
+             */
+            deleted_at?: string | null;
+            min_price_cents: components["schemas"]["Money"];
+            max_price_cents: components["schemas"]["Money"];
+            /** @description 冗余字段，由 SKU 变更时同步（数据模型 §3）。不接受写入。 */
+            total_stock: number;
+            /** @description 冗余字段，由订单变更时同步。不接受写入。 */
+            sales_count: number;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at?: string;
+        };
+        AdminProductDetail: components["schemas"]["AdminProduct"] & {
+            /** @description 含已软删的 SKU 吗——**不含**。软删的 SKU 不在任何视图里返回。 */
+            skus: components["schemas"]["AdminSku"][];
+            /** @description 按展示顺序，`images[0]` 是主图。 */
+            images: components["schemas"]["ProductImage"][];
+        };
+        /**
+         * @description **没有 `status` 也没有 `merchant_id`。** 前者因为创建与发布是两个动作，
+         *     后者因为租户从会话继承（与 `StaffCreateRequest` 同理）。
+         */
+        ProductCreateRequest: {
+            /**
+             * Format: int64
+             * @description 必填。`products.category_id` 是 NOT NULL 的复合外键，没有「未分类」这个态。
+             */
+            category_id: number;
+            title: string;
+            subtitle?: string;
+            description?: string;
+            /** Format: int64 */
+            brand_id?: number | null;
+        };
+        /**
+         * @description 只改文案与归属。**不含 `status` / `published_at` / `deleted_at`**，
+         *     也不含任何冗余字段——它们各有自己的入口，或者根本不该由客户端写。
+         */
+        ProductUpdateRequest: {
+            title?: string;
+            subtitle?: string;
+            description?: string;
+            /** Format: int64 */
+            category_id?: number;
+            /** Format: int64 */
+            brand_id?: number | null;
+        };
+        ProductPublicationRequest: {
+            /**
+             * @description `publish` → `status = 1`；`unpublish` → `status = 2`。
+             *     没有回到 `0 草稿` 的取值，理由见端点描述。
+             * @enum {string}
+             */
+            action: "publish" | "unpublish";
+        };
+        /**
+         * @description 商品图与商品的关联。落地在数据模型 §3 的 `product_images` 表上——
+         *     M2 验收记过一笔账：`ProductSummary.image_url` 与 `ProductDetail.images`
+         *     声明了但服务端从不填，因为 `products` 上根本没有图片列，
+         *     `uploads` 与商品也没有任何关联。本轮补的就是这个关联。
+         */
+        ProductImage: {
+            /**
+             * Format: int64
+             * @description `uploads.id`。由 `POST /admin/uploads` 得到。
+             */
+            upload_id: number;
+            /**
+             * @description 形如 `/api/v1/uploads/{upload_id}`，与 `Upload.url` 同一个形状：
+             *     指向 `GET /uploads/{upload_id}`，不是裸的存储路径。客户端原样使用。
+             */
+            url: string;
+            /**
+             * @description 展示顺序，从 0 起。**0 就是主图**，没有单独的 `is_primary`。
+             *     它与数组下标一致，冗余返回是为了让单独拿到一个元素时也说得清位置。
+             */
+            sort_order: number;
+        };
+        /**
+         * @description 只收 `upload_id`，不收 URL。收 URL 意味着客户端能往商品上挂任意地址，
+         *     而收 id 把取值域关死在自己的 `uploads` 表里，并让 `referenced` 能在
+         *     同一个事务里置位（数据模型 §13）。
+         */
+        ProductImageInput: {
+            /** Format: int64 */
+            upload_id: number;
+        };
+        ProductImagesReplaceRequest: {
+            /**
+             * @description **整组替换**，数组顺序即展示顺序，第 0 个是主图。
+             *     传空数组即清空。同一个 `upload_id` 不得出现两次（422）。
+             */
+            images: components["schemas"]["ProductImageInput"][];
+        };
+        /**
+         * @description 后台视角的 SKU。比前台的 `Sku` 多出成本、重量、售卖开关与库存预警位——
+         *     `cost_cents` 尤其不能出现在任何前台响应里。
+         */
+        AdminSku: {
+            /** Format: int64 */
+            id: number;
+            /** Format: int64 */
+            product_id: number;
+            /** @description 商家自己的货号，租户内唯一（`uk_skus_code`），不是全局唯一。 */
+            sku_code: string;
+            /**
+             * @description `skus.spec_values`（JSONB）。键名不由契约规定。
+             * @example {
+             *       "颜色": "黑",
+             *       "尺码": "XL"
+             *     }
+             */
+            spec_values?: {
+                [key: string]: string;
+            };
+            price_cents: components["schemas"]["Money"];
+            /** @description 成本。用于业务重排（数据模型 §3），**只在后台接口里出现**。 */
+            cost_cents?: components["schemas"]["Money"];
+            weight_gram?: number;
+            /** @description 该规格的小图，形如 `/api/v1/uploads/{upload_id}`。 */
+            image_url?: string;
+            /**
+             * @description `skus.status`：0 停售 / 1 在售。停售的规格仍在规格矩阵里显示，但不可加购。
+             * @enum {integer}
+             */
+            status: 0 | 1;
+            /** @description 来自 `inventories.available_qty`。改它要走 `PUT /admin/skus/{sku_id}/inventory`。 */
+            available_qty: number;
+            /** @description 低库存预警线。一期只是一个存着的数，没有接到任何告警。 */
+            warning_qty?: number;
+            /** Format: date-time */
+            created_at?: string;
+            /** Format: date-time */
+            updated_at?: string;
+        };
+        /**
+         * @description `available_qty` 在这里是**允许的**，而在 `SkuUpdateRequest` 里不允许：
+         *     建行与改行是两件事——建的时候没有并发对手（这一行还不存在），
+         *     改的时候有（下单 SAGA 正在扣它）。
+         */
+        SkuCreateRequest: {
+            sku_code: string;
+            spec_values?: {
+                [key: string]: string;
+            };
+            price_cents: components["schemas"]["Money"];
+            cost_cents?: components["schemas"]["Money"];
+            weight_gram?: number;
+            /**
+             * Format: int64
+             * @description 该规格小图的 `uploads.id`，服务端据此写出 `skus.image_url`。
+             *     与商品图同理：收 id 不收 URL。
+             */
+            image_upload_id?: number | null;
+            /** @description 初始库存。服务端在同一事务里建出 `inventories` 行，省略即 0。 */
+            available_qty?: number;
+            /** @description 低库存预警线，省略即 0。 */
+            warning_qty?: number;
+        };
+        /**
+         * @description **刻意没有 `available_qty`**：库存有自己的端点，因为它要表达乐观并发。
+         *     见 `PUT /admin/skus/{sku_id}/inventory`。
+         */
+        SkuUpdateRequest: {
+            sku_code?: string;
+            spec_values?: {
+                [key: string]: string;
+            };
+            price_cents?: components["schemas"]["Money"];
+            cost_cents?: components["schemas"]["Money"];
+            weight_gram?: number;
+            /** Format: int64 */
+            image_upload_id?: number | null;
+            /**
+             * @description 0 停售 / 1 在售
+             * @enum {integer}
+             */
+            status?: 0 | 1;
+        };
+        AdminInventory: {
+            /** Format: int64 */
+            sku_id: number;
+            available_qty: number;
+            warning_qty: number;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        /**
+         * @description 比较并设置。两个数量都是必填，缺一不可——只给 `available_qty` 就退化成
+         *     无条件覆盖，那正是这条接口存在的理由要防的东西。
+         */
+        InventorySetRequest: {
+            /**
+             * @description **我看到的那个值。** 服务端把它作为 UPDATE 的条件；
+             *     对不上说明这行在你读到它之后被改过（多半是并发下单扣减），返回 409。
+             */
+            expected_available_qty: number;
+            /** @description 要写进去的新值（绝对值，不是增量）。 */
+            available_qty: number;
+            /** @description 低库存预警线。省略则不动。 */
+            warning_qty?: number;
+        };
+        InventoryConflict: components["schemas"]["Problem"] & {
+            current: components["schemas"]["AdminInventory"];
+        };
+        /**
+         * @description 后台视角的分类，**扁平**。与前台的 `Category` 不同，它不嵌 `children`：
+         *     后台管的是单个节点，而 `path` / `level` 足以让客户端自己拼出树。
+         */
+        AdminCategory: {
+            /** Format: int64 */
+            id: number;
+            /**
+             * Format: int64
+             * @description 为 null 即根分类。
+             */
+            parent_id?: number | null;
+            name: string;
+            /**
+             * @description 物化路径，形如 `/1/23/456/`（数据模型 §3）。
+             *     **服务端维护，不接受写入**——它是 `idx_categories_path` 的内容。
+             * @example /1/23/456/
+             */
+            path: string;
+            /** @description 层级，根为 1。同样由服务端从 `parent_id` 算出。 */
+            level: number;
+            sort_order: number;
+            /**
+             * @description `categories.status`：0 停用 / 1 启用。
+             *     停用只让它从前台目录树里消失，**不影响挂在它下面的商品的在架状态**。
+             * @enum {integer}
+             */
+            status: 0 | 1;
+            /** Format: date-time */
+            deleted_at?: string | null;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at?: string;
+        };
+        /** @description **没有 `path` 与 `level`**，它们由服务端从 `parent_id` 算出。 */
+        CategoryCreateRequest: {
+            name: string;
+            /**
+             * Format: int64
+             * @description 省略或为 null 即建根分类。必须属于当前租户。
+             */
+            parent_id?: number | null;
+            sort_order?: number;
+        };
+        /**
+         * @description 传 `parent_id` 就是**移动子树**，服务端会在同一事务里重写整棵子树的
+         *     `path` 与 `level`，并拒绝成环。详见端点描述。
+         */
+        CategoryUpdateRequest: {
+            name?: string;
+            /**
+             * Format: int64
+             * @description 显式传 `null` 表示移到根。**不传这个字段则不动层级** ——
+             *     `null` 与「没传」在这里是两件事。
+             */
+            parent_id?: number | null;
+            sort_order?: number;
+            /**
+             * @description 0 停用 / 1 启用
+             * @enum {integer}
+             */
+            status?: 0 | 1;
+        };
         SearchFilters: {
             /** Format: int64 */
             category_id?: number;
@@ -4425,6 +6079,15 @@ export interface components {
          *     越权由服务端按 `user_id` 强制过滤 —— 查不到当前用户名下的该 id 即 404。
          */
         AddressId: number;
+        /**
+         * @description `products.id`。按约定 4，商品对外用自增 id；越权由服务端按租户强制过滤 ——
+         *     查不到当前租户名下的该 id 即 404（不是 403，理由见 /admin/ 段头第 3 条）。
+         */
+        ProductId: number;
+        /** @description `skus.id`。同 ProductId，查不到即 404。 */
+        SkuId: number;
+        /** @description `categories.id`。同 ProductId，查不到即 404。 */
+        CategoryId: number;
         /**
          * @description 客户端生成的 UUID。幂等作用域为 `(接口 scope, user_id, key)`，
          *     有效期 24h，过期后同一 key 可复用（见数据模型文档 §11）。

@@ -30,18 +30,51 @@ REQUIRED_PATHS = [
     ('/admin/merchants', 'post'),
     ('/admin/orders/{order_no}/shipments', 'post'),
     ('/admin/refunds/{refund_no}/audit', 'post'),
+    # M4 任务 1：商家自助发布的写接口面。此前 /admin/ 下一条商品写接口都没有
+    # ——商家能处理订单，却没法上架商品。登记在这里，是为了让「哪天有人把这一段
+    # 删了或改了名」当场红，而不是又一次在开工时当成惊喜发现。
+    ('/admin/uploads', 'post'),
+    ('/admin/products', 'get'),
+    ('/admin/products', 'post'),
+    ('/admin/products/{product_id}', 'get'),
+    ('/admin/products/{product_id}', 'patch'),
+    ('/admin/products/{product_id}', 'delete'),
+    ('/admin/products/{product_id}/publication', 'post'),
+    ('/admin/products/{product_id}/images', 'put'),
+    ('/admin/products/{product_id}/skus', 'post'),
+    ('/admin/skus/{sku_id}', 'patch'),
+    ('/admin/skus/{sku_id}', 'delete'),
+    ('/admin/skus/{sku_id}/inventory', 'put'),
+    ('/admin/categories', 'get'),
+    ('/admin/categories', 'post'),
+    ('/admin/categories/{category_id}', 'patch'),
+    ('/admin/categories/{category_id}', 'delete'),
 ]
 
 REQUIRED_SCHEMAS = ['UploadTarget', 'Upload',
                     'Staff', 'StaffRole', 'StaffSession', 'StaffCreateRequest',
                     'Merchant', 'MerchantCreateRequest',
-                    'Shipment', 'ShipmentCreateRequest']
+                    'Shipment', 'ShipmentCreateRequest',
+                    'AdminProduct', 'AdminProductDetail',
+                    'ProductCreateRequest', 'ProductUpdateRequest',
+                    'ProductPublicationRequest',
+                    'ProductImage', 'ProductImageInput', 'ProductImagesReplaceRequest',
+                    'AdminSku', 'SkuCreateRequest', 'SkuUpdateRequest',
+                    'AdminInventory', 'InventorySetRequest', 'InventoryConflict',
+                    'AdminCategory', 'CategoryCreateRequest', 'CategoryUpdateRequest']
 
 # (schema 名, 必须存在的属性名)
 REQUIRED_FIELDS = [
     ('Cart', 'selected_total_cents'),
     ('OrderItem', 'refunding_qty'),
     ('OrderDetail', 'refunds'),
+    # 库存写接口的乐观并发全靠这一个字段。它一旦被「简化」掉，接口就退回成
+    # 无条件覆盖：商家把 10 改成 20 的那三分钟里卖掉的 4 件会被静默抹掉，
+    # 而没有任何东西会响。所以它进这张表，不只是写在描述里。
+    ('InventorySetRequest', 'expected_available_qty'),
+    # 商品图这一路的落点。M2 验收记过 image_url / images「声明了但从不填」，
+    # 原因是没有任何东西把 uploads 和商品连起来。
+    ('ProductImageInput', 'upload_id'),
 ]
 
 # 有副作用的 POST 必须接受 Idempotency-Key（文件头约定 5）。
