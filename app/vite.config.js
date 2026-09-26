@@ -13,14 +13,18 @@ const uni = require('@dcloudio/vite-plugin-uni').default
 //
 // 端口跟 compose 读同一个变量（KEEL_HTTP_PORT），不写死 8080：
 // 宿主机 8080 常被占，README 的快速开始也是这么绕的。
+//
+// 后端不在本机时（例如局域网里的一台测试机），用 KEEL_API_TARGET 指整个 origin，
+// 例如 KEEL_API_TARGET=http://192.168.0.110:18099。它优先于 KEEL_HTTP_PORT。
 const port = process.env.KEEL_HTTP_PORT || '8080'
+const target = process.env.KEEL_API_TARGET || 'http://127.0.0.1:' + port
 
 module.exports = {
   plugins: [uni()],
   server: {
     proxy: {
       '/api': {
-        target: 'http://127.0.0.1:' + port,
+        target: target,
         changeOrigin: false,
       },
     },
