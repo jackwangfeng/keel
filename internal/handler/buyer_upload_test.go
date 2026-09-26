@@ -232,13 +232,13 @@ func TestRefundEvidenceMustBeTheBuyersOwnProof(t *testing.T) {
 			item, strings.Join(quoted, ","))
 	}
 	for name, urls := range map[string][]string{
-		"别人的凭证":  {theirs.Url},
-		"自己的头像":  {myAvatar.Url},
-		"商品图":    {productImage.Url},
-		"外链":     {"https://example.com/proof.png"},
-		"带参数的变体": {mine.Url + "?x=1"},
+		"别人的凭证":   {theirs.Url},
+		"自己的头像":   {myAvatar.Url},
+		"商品图":     {productImage.Url},
+		"外链":      {"https://example.com/proof.png"},
+		"带参数的变体":  {mine.Url + "?x=1"},
 		"不存在的 id": {"/api/v1/uploads/999999999"},
-		"同一张填两次": {mine.Url, mine.Url},
+		"同一张填两次":  {mine.Url, mine.Url},
 	} {
 		if p := problemOf(t, applyRefund(t, cs.Host, o.OrderNo, b.Token, withEvidence(urls...), "ev-"+uniqueKey()),
 			http.StatusUnprocessableEntity); p.Type != problem.TypeInvalidRequest {
