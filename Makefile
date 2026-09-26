@@ -73,7 +73,7 @@ GOOSE := GOOSE_DRIVER=postgres GOOSE_DBSTRING="$(GOOSE_DBSTRING)" \
 .PHONY: help generate generate-go generate-ts generate-sql generate-uts tools-versions version search-metrics \
 	contract-check schema-check app-type-check admin-install admin-type-check admin-test admin-build app-install app-build-h5 app-build-android app-build-mp-weixin app-apk app-apk-e2e app-e2e app-e2e-h5 app-adb-wifi app-ios app-ios-e2e app-e2e-ios \
 	sdk-smoke goose-bin migrate migrate-down migrate-status test-db \
-	test-engine dtmrs-deps build
+	test-engine category-eval dtmrs-deps build
 
 help:
 	@echo "make generate       生成 Go + TS 两侧契约产物"
@@ -107,6 +107,7 @@ help:
 	@echo "make search-metrics 按店铺 × 策略统计搜索效果（PERIOD 默认 7 days，要管理员连接）"
 	@echo "make test-db      跑需要数据库的测试（强制不吃缓存，含替身那一组）"
 	@echo "make test-engine    对真的跑着的 infero 跑三条判据（要 GPU + KEEL_EMBED_ENDPOINT + 数据库）"
+	@echo "make category-eval  类目推荐的离线评测（Top-1 / Top-3 与阈值表，要跑着的 infero + KEEL_EMBED_ENDPOINT）"
 	@echo "make dtmrs-deps     取回 dtmrs 并编出 libdtmrs.so（需要 Rust 1.88+）"
 	@echo "make build          编译主模块（会先确保 libdtmrs.so 在）"
 
@@ -194,6 +195,8 @@ admin-type-check:
 # 不做一次浮点乘法 —— Number("0.29") * 100 是 28.999999999999996），
 # 还有订单与售后页的界面规则（src/api/orderRules.ts：哪个状态亮哪个按钮、
 # 审核请求体里运费带不带、日期范围怎么变成半开区间）。
+# 以及批量导入页的规则（src/api/importRules.ts：只预选服务端判定可信的类目、
+# 确认时把推荐的类目显式带回——服务端确认那一步不调引擎、不自动采用推荐）。
 #
 # 守的是「偏了不会报错」那一类错：经纬度写反、坐标系没换，服务端都会收下一个
 # **合法**的多边形，只是位置偏了几百米，买家被判进错的门店。
@@ -203,7 +206,7 @@ admin-type-check:
 # node_modules。别往 geo.ts 里加运行时 import，否则这里会以
 # ERR_MODULE_NOT_FOUND 失败。
 admin-test:
-	cd $(ROOT)/web/admin && node --test src/api/geo.test.ts src/api/money.test.ts src/api/orderRules.test.ts src/api/promotionRules.test.ts src/api/notifications.test.ts
+	cd $(ROOT)/web/admin && node --test src/api/geo.test.ts src/api/money.test.ts src/api/orderRules.test.ts src/api/notifications.test.ts src/api/importRules.test.ts src/api/promotionRules.test.ts
 
 # 构建静态产物到 web/admin/dist。日常不用跑：compose 起栈时在
 # docker/Dockerfile.admin 的 node 阶段里构建，产物交给 nginx。
@@ -392,6 +395,18 @@ test-db: $(DTMRS_LIB) goose-bin
 	go test -count=1 -timeout=$(TEST_TIMEOUT) $(TEST_PKGS)
 	@echo "==> 替身那一组（-tags keel_fake_embedder）"
 	go test -count=1 -timeout=$(TEST_TIMEOUT) -tags keel_fake_embedder ./internal/inference/...
+
+# 类目推荐的离线评测（商品批量导入的预检用它推荐类目）。
+#
+# 与 test-engine 同一个理由不在 test-db 里：要一块 GPU 和一个另外起着的 infero。
+# 评测集与算分逻辑（internal/understanding/testdata/category_eval/、
+# category_evalset_test.go）不带标签，test-db 每次都跑；这里跑的是对真引擎的那一半，
+# 打印 Top-1 / Top-3、按余弦与按分差的阈值表、推错的样本。换模型之后必须重跑，
+# 并按表重定 understanding.DefaultCategoryGate —— 余弦的尺度是模型相关的，失效时不报错。
+# 不碰数据库。
+category-eval:
+	@test -n "$$KEEL_EMBED_ENDPOINT" || { echo "要设 KEEL_EMBED_ENDPOINT（例如 http://127.0.0.1:18081）指向一个跑着的 infero"; exit 1; }
+	go test -count=1 -tags keel_category_eval -run TestCategoryEval -v ./internal/understanding/
 
 # 推理引擎的替身（internal/inference/fake）带编译标签，默认构建里不存在——
 # 那是有意的（生产路径够不着它，理由写在那个包的 doc.go 里）。代价是

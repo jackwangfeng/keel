@@ -210,6 +210,50 @@ key 的有效期是 24 小时，作用域是「接口 + 用户 + key」。哪些
 
 ---
 
+## 商品批量导入
+
+三条接口，全部要后台会话（管理员 / 操作员），平台级会话可以带 `X-Keel-Merchant`：
+
+```
+GET  /api/v1/admin/product-imports/template?format=xlsx|csv   下载模板
+POST /api/v1/admin/product-imports/preview                    预检（不写库）
+POST /api/v1/admin/product-imports                            确认导入（Idempotency-Key 必填）
+```
+
+后两条是 `multipart/form-data`，文件放在 `file` 那一项，≤ 5 MB、≤ 2000 行
+（超出分别是 413 `import-file-too-large` 与 422 `import-file-invalid`）。
+格式按内容判断：xlsx 或 csv（UTF-8 可带 BOM，GBK 也认）；老式 `.xls` 与加密工作簿是 415。
+
+```bash
+# 预检：返回逐行结果（rows）、每件商品的类目决定（products[].category）
+curl -s -H "Authorization: Bearer $STAFF_TOKEN" \
+     -F file=@商品.xlsx \
+     https://shop.example.com/api/v1/admin/product-imports/preview
+
+# 确认：同一份文件 + 每件商品选定的类目（按预检结果里的 first_row 对应）
+curl -s -H "Authorization: Bearer $STAFF_TOKEN" \
+     -H "Idempotency-Key: $(uuidgen)" \
+     -F file=@商品.xlsx \
+     -F 'categories=[{"first_row":2,"category_id":12},{"first_row":5,"category_id":7}];type=application/json' \
+     https://shop.example.com/api/v1/admin/product-imports
+```
+
+接入时要注意的几条：
+
+- **预检不落库，确认时重传同一份文件。** 服务端重新解析、重新校验，不信任客户端回传的预检结果。
+- **推荐的类目要自己带回去。** 预检里 `status = recommended` 的商品带着 `category_id`，
+  确认时请放进 `categories`——确认这一步不调推理引擎，也不会自动采用推荐。
+  `needs_review` / `unavailable` 的商品必须由人选；没选的那件在回执里是 `failed`。
+  文件里类目列对上了（`matched`）的可以不带。
+- **有错的商品整件跳过**，一件都导不了时是 422 `import-nothing-to-import`，什么都不写。
+- **幂等两层**：同一把 `Idempotency-Key` 重放返回首次结果（带 `Idempotency-Replayed: true`）；
+  同一份文件（按 sha256）在本店已经确认过时，换钥匙也不会再建，返回那一次的回执并带
+  `already_imported: true`。
+- 导入的商品一律是**草稿**（`status = 0`）；图片 URL 只出现在回执的 `image_urls` 里，不会下载。
+- 违禁词命中在 `rows[].violations`（与发布时拒绝的 `errors[]` 同一个形状），只提示不阻断。
+
+---
+
 ## 消息中心（站内通知）
 
 订单与售后的关键状态变化会给买家发一条站内消息：支付成功、已发货（带物流）、

@@ -689,6 +689,28 @@ var routes = []route{
 		HandlerFile:    "admin_category.go",
 		NoQueryParams:  "软删只吃路径参数；两条 409 闸门没有任何可以绕过它们的参数",
 	},
+	// —— 商品批量导入（下载模板 → 预检 → 确认导入）。模板那一条带 format 参数且实现了，
+	// 单独占一个 handler 文件（理由同 admin_product_list.go）；另外两条的输入全在 multipart 里。
+	{
+		ContractPath:   "/admin/product-imports/template",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "admin_product_import_template.go",
+	},
+	{
+		ContractPath:   "/admin/product-imports/preview",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "admin_product_import.go",
+		NoQueryParams:  "文件在 multipart 的 file 那一项里；预检只读不写，没有幂等键也没有 query 参数",
+	},
+	{
+		ContractPath:   "/admin/product-imports",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "admin_product_import.go",
+		NoQueryParams:  "文件与类目选择在 multipart 里（file / categories），幂等键在请求头里",
+	},
 	// —— 读文件（M4 收尾）。买家侧，没有 /admin/ 前缀。
 	{
 		ContractPath:   "/uploads/{upload_id}",

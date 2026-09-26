@@ -73,6 +73,7 @@ type Tx interface {
 	RefundTx
 	AdminOrderTx
 	PromotionTx
+	ProductImportTx
 	NotificationTx
 }
 

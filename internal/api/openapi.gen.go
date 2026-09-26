@@ -891,6 +891,87 @@ func (e ProductDetailStatus) Valid() bool {
 	}
 }
 
+// Defines values for ProductImportCategoryDecisionStatus.
+const (
+	ProductImportCategoryDecisionStatusMatched     ProductImportCategoryDecisionStatus = "matched"
+	ProductImportCategoryDecisionStatusNeedsReview ProductImportCategoryDecisionStatus = "needs_review"
+	ProductImportCategoryDecisionStatusRecommended ProductImportCategoryDecisionStatus = "recommended"
+	ProductImportCategoryDecisionStatusUnavailable ProductImportCategoryDecisionStatus = "unavailable"
+)
+
+// Valid indicates whether the value is a known member of the ProductImportCategoryDecisionStatus enum.
+func (e ProductImportCategoryDecisionStatus) Valid() bool {
+	switch e {
+	case ProductImportCategoryDecisionStatusMatched:
+		return true
+	case ProductImportCategoryDecisionStatusNeedsReview:
+		return true
+	case ProductImportCategoryDecisionStatusRecommended:
+		return true
+	case ProductImportCategoryDecisionStatusUnavailable:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ProductImportFormat.
+const (
+	Csv  ProductImportFormat = "csv"
+	Xlsx ProductImportFormat = "xlsx"
+)
+
+// Valid indicates whether the value is a known member of the ProductImportFormat enum.
+func (e ProductImportFormat) Valid() bool {
+	switch e {
+	case Csv:
+		return true
+	case Xlsx:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ProductImportOutcomeStatus.
+const (
+	Created ProductImportOutcomeStatus = "created"
+	Failed  ProductImportOutcomeStatus = "failed"
+)
+
+// Valid indicates whether the value is a known member of the ProductImportOutcomeStatus enum.
+func (e ProductImportOutcomeStatus) Valid() bool {
+	switch e {
+	case Created:
+		return true
+	case Failed:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ProductImportPreviewCategoryEngine.
+const (
+	ProductImportPreviewCategoryEngineNotConfigured ProductImportPreviewCategoryEngine = "not_configured"
+	ProductImportPreviewCategoryEngineOk            ProductImportPreviewCategoryEngine = "ok"
+	ProductImportPreviewCategoryEngineUnavailable   ProductImportPreviewCategoryEngine = "unavailable"
+)
+
+// Valid indicates whether the value is a known member of the ProductImportPreviewCategoryEngine enum.
+func (e ProductImportPreviewCategoryEngine) Valid() bool {
+	switch e {
+	case ProductImportPreviewCategoryEngineNotConfigured:
+		return true
+	case ProductImportPreviewCategoryEngineOk:
+		return true
+	case ProductImportPreviewCategoryEngineUnavailable:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ProductPublicationRequestAction.
 const (
 	Publish   ProductPublicationRequestAction = "publish"
@@ -3813,6 +3894,226 @@ type ProductImagesReplaceRequest struct {
 	Images []ProductImageInput `json:"images"`
 }
 
+// ProductImportCategoryCandidate defines model for ProductImportCategoryCandidate.
+type ProductImportCategoryCandidate struct {
+	CategoryId int64 `json:"category_id"`
+
+	// PathName 从一级到这一级的名字，用「 > 」连接
+	PathName string `json:"path_name"`
+
+	// Score 标题向量与类目路径名向量的余弦相似度，[-1, 1]，越大越像
+	Score float32 `json:"score"`
+}
+
+// ProductImportCategoryChoice defines model for ProductImportCategoryChoice.
+type ProductImportCategoryChoice struct {
+	CategoryId int64 `json:"category_id"`
+
+	// FirstRow 商品在文件里的首行行号（预检结果里的 `products[].first_row`）
+	FirstRow int `json:"first_row"`
+}
+
+// ProductImportCategoryDecision 一件商品的类目怎么定。
+//
+// | status | 含义 | `category_id` |
+// |---|---|---|
+// | `matched` | 类目列填的名字 / 路径对上了一个启用中的类目 | 那一个 |
+// | `recommended` | 类目列为空或对不上，推荐的 Top-1 足够可信，**已替商家选中** | 推荐的 Top-1 |
+// | `needs_review` | 有候选，但置信度不够，**需人工确认** | 缺席 |
+// | `unavailable` | 推理引擎没配 / 不可用 / 店里没有可选的叶子类目，**需手选** | 缺席 |
+//
+// 「足够可信」是两道门：Top-1 余弦 ≥ `ProductImportPreview.category_gate.min_score`，
+// 且与 Top-2 的分差 ≥ `min_margin`（只有一个候选时只看前者）。两个数由离线评测定出
+// （人工标注的标题集，见商品理解服务设计文档「批量导入」一节）。
+//
+// 推荐只在**叶子类目**（启用中、没有启用中的子类目）里选；`matched` 可以是任意一级。
+type ProductImportCategoryDecision struct {
+	// Candidates 按分数降序的候选（`matched` 与 `unavailable` 时为空）
+	Candidates []ProductImportCategoryCandidate    `json:"candidates"`
+	CategoryId *int64                              `json:"category_id,omitempty"`
+	PathName   *string                             `json:"path_name,omitempty"`
+	Status     ProductImportCategoryDecisionStatus `json:"status"`
+}
+
+// ProductImportCategoryDecisionStatus defines model for ProductImportCategoryDecision.Status.
+type ProductImportCategoryDecisionStatus string
+
+// ProductImportFormat 导入文件格式。服务端按内容判断，不按文件名。
+type ProductImportFormat string
+
+// ProductImportIssue 一行里的一条问题。`code` 给程序认，`message` 给人看。
+//
+// | code | 级别 | 含义 |
+// |---|---|---|
+// | `required` | 错误 | 必填列没填 |
+// | `too_long` | 错误 | 超长（按字符数） |
+// | `invalid_price` | 错误 | 不是合法金额（负数、三位小数、千分位逗号、超过一亿元……） |
+// | `invalid_integer` | 错误 | 库存 / 重量不是非负整数；或数字超出 Excel 能原样保存的精度 |
+// | `formula_cell` | 错误 | 公式格 |
+// | `date_cell` | 错误 | 被 Excel 识别成了日期 / 时间 |
+// | `error_cell` | 错误 | 错误值（`#N/A` 之类）或逻辑值 |
+// | `duplicate_sku_code` | 错误 | SKU 编码与文件里前面某一行重复 |
+// | `sku_code_exists` | 错误 | SKU 编码在店里已经存在（含已删除的 SKU） |
+// | `spec_invalid` | 错误 | 规格名与规格值对不上、有空项、名字重复 |
+// | `spec_mismatch` | 错误 | 同一商品各行的规格名不一致，或多行商品有一行没填规格 |
+// | `spec_duplicate` | 错误 | 同一商品里规格值组合重复 |
+// | `group_conflict` | 错误 | 同一商品的副标题 / 类目 / 描述前后不一致 |
+// | `image_url_invalid` | 错误 | 图片地址不是 http / https 或格式不对 |
+// | `numeric_sku_code` | 提示 | SKU 编码被 Excel 存成了数字，前导 0 可能已丢 |
+// | `merged_cell` | 提示 | 合并单元格，已按左上角的值填入 |
+// | `price_zero` | 提示 | 基准价是 0 元 |
+// | `not_contiguous` | 提示 | 与前面不相邻的某一行同标题，已合并为同一件商品 |
+// | `category_unmatched` | 提示 | 类目列填了，但对不上已有的（启用中的）类目 |
+// | `group_blocked` | 提示 | 同一商品的别的行有错，这一行随整件商品不导入 |
+type ProductImportIssue struct {
+	Code string `json:"code"`
+
+	// Column 出问题的那一列的表头名。与某一列无关时缺席。
+	Column  *string `json:"column,omitempty"`
+	Message string  `json:"message"`
+}
+
+// ProductImportOutcome defines model for ProductImportOutcome.
+type ProductImportOutcome struct {
+	CategoryId *int64 `json:"category_id,omitempty"`
+	FirstRow   int    `json:"first_row"`
+
+	// ImageUrls 文件里给这件商品填的图片地址，**只记录、没有下载**，请在商品页上传
+	ImageUrls *[]string `json:"image_urls,omitempty"`
+
+	// ProductId `created` 时有：新建的草稿商品
+	ProductId *int64 `json:"product_id,omitempty"`
+
+	// Reasons `failed` 时有：为什么没导入（每条带行号）
+	Reasons *[]string `json:"reasons,omitempty"`
+	Rows    []int     `json:"rows"`
+
+	// SkuCount `created` 时有：建了几个 SKU
+	SkuCount *int                       `json:"sku_count,omitempty"`
+	Status   ProductImportOutcomeStatus `json:"status"`
+	Title    string                     `json:"title"`
+}
+
+// ProductImportOutcomeStatus defines model for ProductImportOutcome.Status.
+type ProductImportOutcomeStatus string
+
+// ProductImportPreview defines model for ProductImportPreview.
+type ProductImportPreview struct {
+	// CategoryEngine 这次预检的类目推荐跑成了没有：`not_configured` 是部署没配推理引擎，
+	// `unavailable` 是配了但这次没在预算内给出结果（引擎忙或挂了）。后两种时所有
+	// 需要推荐的商品都是 `unavailable`，请手选——**导入本身不受影响**。
+	CategoryEngine ProductImportPreviewCategoryEngine `json:"category_engine"`
+
+	// CategoryGate 自动选中类目的两道门（见 ProductImportCategoryDecision）
+	CategoryGate struct {
+		MinMargin float32 `json:"min_margin"`
+		MinScore  float32 `json:"min_score"`
+	} `json:"category_gate"`
+
+	// ErrorRows 自身有错误的行数
+	ErrorRows int `json:"error_rows"`
+
+	// FileSha256 文件字节的 sha256（十六进制）。「同一份文件」的判据。
+	FileSha256 string `json:"file_sha256"`
+
+	// Format 导入文件格式。服务端按内容判断，不按文件名。
+	Format ProductImportFormat `json:"format"`
+
+	// Notices 文件级提示（不阻断），如「csv 按 GBK 读取」「列『备注』不认得，已忽略」
+	Notices []string `json:"notices"`
+
+	// PreviousImport 同一份文件（sha256 相同）在本店已经确认导入过时出现：再确认不会重复建。
+	PreviousImport *struct {
+		CreatedAt time.Time `json:"created_at"`
+		ImportId  int64     `json:"import_id"`
+	} `json:"previous_import,omitempty"`
+	Products []ProductImportProduct `json:"products"`
+	Rows     []ProductImportRow     `json:"rows"`
+
+	// TotalRows 数据行数（不含表头与整行空白）
+	TotalRows int `json:"total_rows"`
+}
+
+// ProductImportPreviewCategoryEngine 这次预检的类目推荐跑成了没有：`not_configured` 是部署没配推理引擎，
+// `unavailable` 是配了但这次没在预算内给出结果（引擎忙或挂了）。后两种时所有
+// 需要推荐的商品都是 `unavailable`，请手选——**导入本身不受影响**。
+type ProductImportPreviewCategoryEngine string
+
+// ProductImportProduct 文件里的一件商品（同一标题的若干行）
+type ProductImportProduct struct {
+	// Category 一件商品的类目怎么定。
+	//
+	// | status | 含义 | `category_id` |
+	// |---|---|---|
+	// | `matched` | 类目列填的名字 / 路径对上了一个启用中的类目 | 那一个 |
+	// | `recommended` | 类目列为空或对不上，推荐的 Top-1 足够可信，**已替商家选中** | 推荐的 Top-1 |
+	// | `needs_review` | 有候选，但置信度不够，**需人工确认** | 缺席 |
+	// | `unavailable` | 推理引擎没配 / 不可用 / 店里没有可选的叶子类目，**需手选** | 缺席 |
+	//
+	// 「足够可信」是两道门：Top-1 余弦 ≥ `ProductImportPreview.category_gate.min_score`，
+	// 且与 Top-2 的分差 ≥ `min_margin`（只有一个候选时只看前者）。两个数由离线评测定出
+	// （人工标注的标题集，见商品理解服务设计文档「批量导入」一节）。
+	//
+	// 推荐只在**叶子类目**（启用中、没有启用中的子类目）里选；`matched` 可以是任意一级。
+	Category ProductImportCategoryDecision `json:"category"`
+	FirstRow int                           `json:"first_row"`
+
+	// Importable 每一行都没有错误。为 false 时确认导入会跳过它。
+	Importable bool `json:"importable"`
+
+	// Rows 这件商品包含的行号
+	Rows  []int  `json:"rows"`
+	Title string `json:"title"`
+}
+
+// ProductImportResult defines model for ProductImportResult.
+type ProductImportResult struct {
+	// AlreadyImported 同一份文件此前已经确认导入过，这一次什么都没建，下面是那一次的结果
+	AlreadyImported bool      `json:"already_imported"`
+	CreatedAt       time.Time `json:"created_at"`
+	CreatedProducts int       `json:"created_products"`
+	CreatedSkus     int       `json:"created_skus"`
+
+	// FailedRows 没有导入的行数（含被同组错误拖累的行）
+	FailedRows int                    `json:"failed_rows"`
+	FileSha256 string                 `json:"file_sha256"`
+	ImportId   int64                  `json:"import_id"`
+	Products   []ProductImportOutcome `json:"products"`
+	TotalRows  int                    `json:"total_rows"`
+}
+
+// ProductImportRow 文件里的一行（一个 SKU）。有错的格对应的字段缺席（比如价格写错了就没有 `price_cents`）。
+type ProductImportRow struct {
+	// Category 类目列的原文
+	Category    *string              `json:"category,omitempty"`
+	Description *string              `json:"description,omitempty"`
+	Errors      []ProductImportIssue `json:"errors"`
+
+	// FirstRow 这一行所属商品的首行行号（同一件商品的各行相同）
+	FirstRow  int       `json:"first_row"`
+	ImageUrls *[]string `json:"image_urls,omitempty"`
+
+	// PriceCents 金额，单位「分」。禁止使用浮点。
+	PriceCents *Money `json:"price_cents,omitempty"`
+
+	// Row 行号，与 Excel 左侧的行号一致（表头是第 1 行）。整行空白的行被跳过，但不重新编号。
+	Row     int    `json:"row"`
+	SkuCode string `json:"sku_code"`
+
+	// SpecValues 规格名 → 规格值；单规格商品为空对象
+	SpecValues map[string]string `json:"spec_values"`
+	Stock      *int              `json:"stock,omitempty"`
+	Subtitle   *string           `json:"subtitle,omitempty"`
+	Title      *string           `json:"title,omitempty"`
+
+	// Violations 广告法违禁词命中（`field` 是 title / subtitle / description，`offset` / `length`
+	// 是码点位置，语义同 `FieldError`）。挂在提供这段文字的那一行上。**不阻断导入**：
+	// 导入的是草稿，上架时才拦。
+	Violations []FieldError         `json:"violations"`
+	Warnings   []ProductImportIssue `json:"warnings"`
+	WeightGram *int                 `json:"weight_gram,omitempty"`
+}
+
 // ProductListingRequest `listed = false` 写一行排除，`listed = true` 删掉那一行。
 // **幂等**：重复设成同一个值不报错。
 type ProductListingRequest struct {
@@ -4569,7 +4870,7 @@ type Staff struct {
 	//
 	// | 能做什么 | 1 | 2 | 3 | 4 |
 	// |---|:-:|:-:|:-:|:-:|
-	// | 商品、SKU、基准价、类目、上传 | ✅ | ✅ | 只读 | 只读 |
+	// | 商品、SKU、基准价、类目、上传、批量导入 | ✅ | ✅ | 只读 | 只读 |
 	// | 大区：改、删、大区价、大区上下架 | ✅ | ✅ | 只限自己的大区 | ❌ |
 	// | 大区：建 | ✅ | ✅ | ❌ | ❌ |
 	// | 门店：建、改、删、围栏 | ✅ | ✅ | 只限本大区的门店（换大区时新旧都得在范围内） | ❌ |
@@ -4614,7 +4915,7 @@ type StaffCreateRequest struct {
 	//
 	// | 能做什么 | 1 | 2 | 3 | 4 |
 	// |---|:-:|:-:|:-:|:-:|
-	// | 商品、SKU、基准价、类目、上传 | ✅ | ✅ | 只读 | 只读 |
+	// | 商品、SKU、基准价、类目、上传、批量导入 | ✅ | ✅ | 只读 | 只读 |
 	// | 大区：改、删、大区价、大区上下架 | ✅ | ✅ | 只限自己的大区 | ❌ |
 	// | 大区：建 | ✅ | ✅ | ❌ | ❌ |
 	// | 门店：建、改、删、围栏 | ✅ | ✅ | 只限本大区的门店（换大区时新旧都得在范围内） | ❌ |
@@ -4665,7 +4966,7 @@ type StaffRef struct {
 //
 // | 能做什么 | 1 | 2 | 3 | 4 |
 // |---|:-:|:-:|:-:|:-:|
-// | 商品、SKU、基准价、类目、上传 | ✅ | ✅ | 只读 | 只读 |
+// | 商品、SKU、基准价、类目、上传、批量导入 | ✅ | ✅ | 只读 | 只读 |
 // | 大区：改、删、大区价、大区上下架 | ✅ | ✅ | 只限自己的大区 | ❌ |
 // | 大区：建 | ✅ | ✅ | ❌ | ❌ |
 // | 门店：建、改、删、围栏 | ✅ | ✅ | 只限本大区的门店（换大区时新旧都得在范围内） | ❌ |
@@ -5765,6 +6066,121 @@ type PostAdminOrdersOrderNoShipmentsParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
+// PostAdminProductImportsMultipartBody defines parameters for PostAdminProductImports.
+type PostAdminProductImportsMultipartBody struct {
+	// Categories 每件商品选定的类目。按 `first_row`（该商品在文件里的首行行号）对应。
+	Categories *[]ProductImportCategoryChoice `json:"categories,omitempty"`
+
+	// File 与预检时同一份文件
+	File openapi_types.File `json:"file"`
+}
+
+// PostAdminProductImportsParams defines parameters for PostAdminProductImports.
+type PostAdminProductImportsParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+
+	// IdempotencyKey 客户端生成的 UUID。幂等作用域为 `(接口 scope, user_id, key)`，
+	// 有效期 24h，过期后同一 key 可复用（见数据模型文档 §11）。
+	//
+	// · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
+	//   并带 `Idempotency-Replayed: true` 响应头
+	// · **同 key 正在处理中**：`409` + `Retry-After`，
+	//   type=https://keel.dev/problems/idempotency-key-in-flight，
+	//   客户端应退避重试，不要当成业务失败
+	// · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
+	//   type=https://keel.dev/problems/idempotency-key-reused。
+	//   宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
+	//   那会让用户以为下单成功了而实际什么都没发生
+	// · 首次执行失败（存档为失败态）时同样回放该失败响应；
+	//   确需重试的场景请换一个新 key
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// PostAdminProductImportsPreviewMultipartBody defines parameters for PostAdminProductImportsPreview.
+type PostAdminProductImportsPreviewMultipartBody struct {
+	// File xlsx 或 csv，不超过 5 MB
+	File openapi_types.File `json:"file"`
+}
+
+// PostAdminProductImportsPreviewParams defines parameters for PostAdminProductImportsPreview.
+type PostAdminProductImportsPreviewParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// GetAdminProductImportsTemplateParams defines parameters for GetAdminProductImportsTemplate.
+type GetAdminProductImportsTemplateParams struct {
+	// Format 模板格式，默认 `xlsx`。
+	Format *ProductImportFormat `form:"format,omitempty" json:"format,omitempty"`
+
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
 // GetAdminProductsParams defines parameters for GetAdminProducts.
 type GetAdminProductsParams struct {
 	Page     *Page     `form:"page,omitempty" json:"page,omitempty"`
@@ -6768,7 +7184,7 @@ type PatchAdminStaffStaffIdJSONBody struct {
 	//
 	// | 能做什么 | 1 | 2 | 3 | 4 |
 	// |---|:-:|:-:|:-:|:-:|
-	// | 商品、SKU、基准价、类目、上传 | ✅ | ✅ | 只读 | 只读 |
+	// | 商品、SKU、基准价、类目、上传、批量导入 | ✅ | ✅ | 只读 | 只读 |
 	// | 大区：改、删、大区价、大区上下架 | ✅ | ✅ | 只限自己的大区 | ❌ |
 	// | 大区：建 | ✅ | ✅ | ❌ | ❌ |
 	// | 门店：建、改、删、围栏 | ✅ | ✅ | 只限本大区的门店（换大区时新旧都得在范围内） | ❌ |
@@ -7947,6 +8363,12 @@ type PatchAdminMerchantsMerchantIdJSONRequestBody = MerchantUpdateRequest
 
 // PostAdminOrdersOrderNoShipmentsJSONRequestBody defines body for PostAdminOrdersOrderNoShipments for application/json ContentType.
 type PostAdminOrdersOrderNoShipmentsJSONRequestBody = ShipmentCreateRequest
+
+// PostAdminProductImportsMultipartRequestBody defines body for PostAdminProductImports for multipart/form-data ContentType.
+type PostAdminProductImportsMultipartRequestBody PostAdminProductImportsMultipartBody
+
+// PostAdminProductImportsPreviewMultipartRequestBody defines body for PostAdminProductImportsPreview for multipart/form-data ContentType.
+type PostAdminProductImportsPreviewMultipartRequestBody PostAdminProductImportsPreviewMultipartBody
 
 // PostAdminProductsJSONRequestBody defines body for PostAdminProducts for application/json ContentType.
 type PostAdminProductsJSONRequestBody = ProductCreateRequest

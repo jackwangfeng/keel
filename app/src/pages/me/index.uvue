@@ -19,6 +19,12 @@
             <text class="chev">›</text>
           </view>
           <view v-if="loggedIn" class="line"></view>
+          <view v-if="loggedIn" class="item" @click="goNotifications">
+            <text class="t-body fill">消息</text>
+            <view v-if="unread > 0" class="badge badge-refund unread-badge"><text class="badge-text badge-refund-text">{{ unread > 99 ? '99+' : unread.toString() }}</text></view>
+            <text class="chev">›</text>
+          </view>
+          <view v-if="loggedIn" class="line"></view>
           <view class="item" @click="goAddresses">
             <text class="t-body fill">收货地址</text>
             <text class="chev">›</text>
@@ -69,6 +75,7 @@
 <script>
 import { logout, ApiFailure } from '@/api/client.uts'
 import { clearSession, getBaseUrl, isLoggedIn, loadSession } from '@/api/config.uts'
+import { refreshUnreadBadge } from '@/api/badge.uts'
 
 export default {
   data() {
@@ -78,6 +85,7 @@ export default {
       host: '',
       message: '',
       statusBarHeight: 0,
+      unread: 0,
     }
   },
   computed: {
@@ -92,6 +100,9 @@ export default {
   onShow() {
     this.message = ''
     this.refresh()
+    refreshUnreadBadge((n: number) => {
+      this.unread = n
+    })
   },
   methods: {
     refresh() {
@@ -114,6 +125,9 @@ export default {
     },
     goOrders() {
       uni.switchTab({ url: '/pages/order/list' })
+    },
+    goNotifications() {
+      uni.navigateTo({ url: '/pages/me/notifications' })
     },
     goRefunds() {
       if (!this.loggedIn) {
@@ -147,12 +161,16 @@ export default {
         () => {
           clearSession()
           this.refresh()
+          this.unread = 0
+          refreshUnreadBadge(null)
           this.message = '已退出'
         },
         (f: ApiFailure) => {
           // 服务端吊销失败也要把本地清掉，理由见登录页。
           clearSession()
           this.refresh()
+          this.unread = 0
+          refreshUnreadBadge(null)
           this.message = '已在本机退出（服务端吊销失败：' + f.message + '）'
         }
       )
@@ -207,5 +225,8 @@ export default {
 .foot {
   align-items: center;
   margin-top: 40px;
+}
+.unread-badge {
+  margin-right: 6px;
 }
 </style>

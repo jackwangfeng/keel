@@ -1021,6 +1021,243 @@ paths:
         '422': { $ref: '#/components/responses/IdempotencyKeyReused' }
         default: { $ref: '#/components/responses/Problem' }
 
+  /admin/product-imports/template:
+    get:
+      tags: [Admin, Catalog]
+      summary: 下载商品批量导入模板
+      description: |
+        三步里的第一步：**下载模板 → 预检（`POST /admin/product-imports/preview`）
+        → 确认导入（`POST /admin/product-imports`）**。
+
+        模板的列（顺序即模板里的顺序；表头按名字识别，不按位置，全角半角括号、
+        多余空格都认）：
+
+        | 列 | 必填 | 说明 |
+        |---|:-:|---|
+        | 商品标题 | ✅ | ≤ 200 字。**同一个标题的多行合并成同一件商品**（一行一个 SKU） |
+        | 副标题 | | ≤ 200 字 |
+        | 类目 | | 已有类目的名字，或从一级写到末级的路径（`>` 或 `/` 分隔）。留空或对不上时按标题推荐 |
+        | 规格名 | | 多个维度用分号分隔，如 `颜色;尺码` |
+        | 规格值 | | 与规格名一一对应，如 `红;M` |
+        | SKU 编码 | ✅ | ≤ 64 字，本店内唯一（与已有 SKU 也不能重复） |
+        | 基准价（元） | ✅ | 单位元，最多两位小数，不带千分位逗号 |
+        | 库存 | ✅ | 非负整数，写进默认门店 |
+        | 重量（克） | | 非负整数 |
+        | 图片 URL | | http / https，多张用分号或换行分隔。**本期只记录不下载** |
+        | 描述 | | 商品详情文字 |
+
+        xlsx 模板有两张表：「商品」（只有表头，数据区整列设成文本格式，
+        防止 Excel 把 `1-2` 转成日期、吃掉编码的前导 0）与「填写说明」（逐列说明与示例）。
+        csv 模板是 UTF-8 带 BOM 的一行表头（不带 BOM 的话中文 Excel 双击打开是乱码）。
+        两种都**不带示例数据行**——示例行最常见的结局是被原样导入。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+        - name: format
+          in: query
+          required: false
+          description: 模板格式，默认 `xlsx`。
+          schema: { $ref: '#/components/schemas/ProductImportFormat' }
+      responses:
+        '200':
+          description: '模板文件（`Content-Disposition: attachment`）'
+          content:
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+              schema: { type: string, format: binary }
+            text/csv:
+              schema: { type: string, format: binary }
+        '422':
+          description: '`format` 不是 xlsx / csv'
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /admin/product-imports/preview:
+    post:
+      tags: [Admin, Catalog]
+      summary: 批量导入预检（不落库）
+      description: |
+        上传 xlsx 或 csv，**只校验、不写库**，返回逐行结果。同一份文件可以反复预检。
+
+        **格式按内容判断，不按文件名**：以 zip 头开始的是 xlsx，老式 .xls 与
+        加密工作簿回 415（请另存为不加密的 .xlsx），其余按 csv 读。csv 的编码先按
+        UTF-8（可带 BOM）读，不是合法 UTF-8 时按 GBK（GB18030）读 —— 中文 Excel
+        「另存为 CSV」默认写的就是 GBK。
+
+        **上限**：文件 ≤ 5 MB（超出 413），数据行 ≤ 2000（超出 422）。两个数由同步请求的
+        预算推出：预检要给每件商品算一次向量（2000 件约 32 批嵌入调用），确认导入是
+        一个事务；更大的目录请拆成多个文件。
+
+        **逐行校验**（每一条问题落在 `rows[].errors` 或 `rows[].warnings`，`code` 见
+        `ProductImportIssue`）：必填、长度、价格（元 → 分全程十进制字符串运算，
+        不经过浮点）、整数、规格格式、图片地址形状；SKU 编码在文件内唯一、
+        且与店里已有的 SKU（含已删除的）不重复。
+
+        **同一商品多规格行的合并规则**：
+
+        1. 同一个商品标题 = 同一件商品，不要求相邻（不相邻时给提示）；
+        2. 副标题、类目、描述以组内第一个非空值为准，后面的行留空或填相同内容，
+           填了不同内容那一行报错；
+        3. 组内多于一行时每行都要有规格、规格名集合相同、规格值组合不重复；
+           只有一行的商品可以不填规格；
+        4. **一行有错，整件商品不导入**（其余行带 `group_blocked` 提示）——
+           导入一半的规格比整件没进来更难察觉。
+
+        **Excel 的坑**：公式格报错（请「粘贴为数值」）；合并单元格按左上角的值
+        填进每一格并提示，表头行合并报文件级错误；被 Excel 识别成日期的格报错；
+        存成数字的 SKU 编码提示「前导 0 可能已丢」。
+
+        **合规**：标题 / 副标题 / 描述逐一过广告法违禁词表，命中标在
+        `rows[].violations`（字段 + 码点位置）。**不阻断导入**：导入的商品是草稿，
+        草稿不做合规拦截（与单个建商品同一条规矩），上架时才拦。
+
+        **类目**：见 `ProductImportCategoryDecision`。文件里填的类目对上已有类目就用它；
+        留空或对不上时按「标题 + 副标题」的向量与各叶子类目路径名的向量算余弦，
+        给 Top 3 候选。推理引擎没配或不可用时降级为 `unavailable`（需手选），
+        **不阻塞预检**。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: xlsx 或 csv，不超过 5 MB
+      responses:
+        '200':
+          description: 预检结果（即使每一行都有错也是 200——错误在 rows 里）
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProductImportPreview' }
+        '413':
+          description: 文件超过 5 MB。`type` 为 `https://keel.dev/problems/import-file-too-large`。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '415':
+          description: |
+            既不是 xlsx 也不是 csv（老式 .xls、加密工作簿、二进制文件）。
+            `type` 为 `https://keel.dev/problems/import-unsupported-format`。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: |
+            整份文件不成立：缺必填列、同一列出现两次、没有数据行、超过 2000 行、
+            表头合并、xlsx 损坏或解压后超限、工作簿加了密码、csv 编码认不出。
+            `type` 为 `https://keel.dev/problems/import-file-invalid`，
+            `errors[].message` 逐条列出原因。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /admin/product-imports:
+    post:
+      tags: [Admin, Catalog]
+      summary: 确认批量导入
+      description: |
+        把**同一份文件**再传一次，连同每件商品选定的类目，按预检的同一套规则建商品与 SKU。
+        服务端重新解析、重新校验（不信任客户端回传的预检结果），不再调推理引擎。
+
+        · **只导入没有错误的商品**，有错的整件跳过，出现在 `products[]` 里（`status = failed`）。
+          一件可导入的商品都没有时回 422 `import-nothing-to-import`，什么都不写。
+        · **类目**：文件里填的类目对上了就用它（`categories` 里给了则以给的为准）；
+          其余商品必须在 `categories` 里按 `first_row` 指定 `category_id`，
+          没指定的那件商品 `failed`。预检里 `recommended` 的那些，界面应当把推荐的
+          类目原样放进 `categories`——服务端**不会**自动采用推荐（确认这一步不调引擎，
+          结果只取决于文件与这份选择）。
+        · **一律是草稿**（`status = 0`），不上架。库存写进默认门店；没有默认门店时
+          SKU 照建、库存行不建（与单个建 SKU 同一条规矩）。
+        · **图片 URL 只记录不下载**，原样出现在 `products[].image_urls`，请在商品页上传。
+          外网下载有 SSRF 风险（内网地址、DNS 重绑定、重定向链），要白名单与大小类型
+          限制，另起一轮做。
+        · **整批一个事务**：任何一件商品在写库时失败（比如同一时刻另一个导入抢先建了
+          同一个 SKU 编码），整批回滚，响应是那个错误，什么都没建。
+
+        **幂等，两层**：
+
+        1. `Idempotency-Key`（必填）：同一把钥匙重放返回首次的结果，带
+           `Idempotency-Replayed: true`。
+        2. **同一份文件**（按文件字节的 sha256）在本店已经确认导入过：不再建任何东西，
+           返回那一次的结果，`already_imported = true`。换一把钥匙、换一种类目选择
+           都一样 —— 防的就是「点了两次」「网断了重传」「隔天又导了一遍」。
+           改过的文件是另一份文件；里面已经建过的 SKU 编码会在预检里报 `sku_code_exists`。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: 与预检时同一份文件
+                categories:
+                  type: array
+                  description: 每件商品选定的类目。按 `first_row`（该商品在文件里的首行行号）对应。
+                  items: { $ref: '#/components/schemas/ProductImportCategoryChoice' }
+            encoding:
+              categories:
+                contentType: application/json
+      responses:
+        '201':
+          description: 导入完成（或同一份文件早已导入过，`already_imported = true`）
+          headers:
+            Idempotency-Replayed: { $ref: '#/components/headers/IdempotencyReplayed' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProductImportResult' }
+        '409':
+          description: |
+            两种，按 `type` 区分：
+
+            · `idempotency-key-in-flight`：同一把钥匙正在处理中，按 `Retry-After` 退避重试；
+            · `sku-code-duplicated`：写库时某个 SKU 编码刚被别人占了（预检之后、确认之前，
+              另一个导入或手工建的 SKU 抢先用了它）。整批已回滚，什么都没建——重新预检，
+              那个编码会以 `sku_code_exists` 标出来。
+          headers:
+            Retry-After:
+              description: 只在 idempotency-key-in-flight 时出现，建议退避秒数
+              schema: { type: integer }
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '413':
+          description: 文件超过 5 MB。`type` 为 `https://keel.dev/problems/import-file-too-large`。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '415':
+          description: 既不是 xlsx 也不是 csv。`type` 为 `https://keel.dev/problems/import-unsupported-format`。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: |
+            四种，按 `type` 区分：
+
+            · `import-file-invalid`：整份文件不成立（同预检）；
+            · `import-nothing-to-import`：没有一件商品可以导入（全都有错或都没选类目）；
+            · `invalid-request`：`categories` 不是合法的 JSON 数组（指定的类目不存在或已停用
+              不在此列：那一件商品 `failed`，其余照导）；
+            · `idempotency-key-reused`：同一把钥匙配了不同的请求。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
   /admin/products/{product_id}:
     parameters:
       - $ref: '#/components/parameters/ProductId'
@@ -5930,6 +6167,244 @@ components:
         description: { type: string }
         brand_id:    { type: [integer, 'null'], format: int64 }
 
+    # ---- 商品批量导入 ----
+    ProductImportFormat:
+      type: string
+      enum: [xlsx, csv]
+      description: 导入文件格式。服务端按内容判断，不按文件名。
+
+    ProductImportIssue:
+      type: object
+      required: [code, message]
+      description: |
+        一行里的一条问题。`code` 给程序认，`message` 给人看。
+
+        | code | 级别 | 含义 |
+        |---|---|---|
+        | `required` | 错误 | 必填列没填 |
+        | `too_long` | 错误 | 超长（按字符数） |
+        | `invalid_price` | 错误 | 不是合法金额（负数、三位小数、千分位逗号、超过一亿元……） |
+        | `invalid_integer` | 错误 | 库存 / 重量不是非负整数；或数字超出 Excel 能原样保存的精度 |
+        | `formula_cell` | 错误 | 公式格 |
+        | `date_cell` | 错误 | 被 Excel 识别成了日期 / 时间 |
+        | `error_cell` | 错误 | 错误值（`#N/A` 之类）或逻辑值 |
+        | `duplicate_sku_code` | 错误 | SKU 编码与文件里前面某一行重复 |
+        | `sku_code_exists` | 错误 | SKU 编码在店里已经存在（含已删除的 SKU） |
+        | `spec_invalid` | 错误 | 规格名与规格值对不上、有空项、名字重复 |
+        | `spec_mismatch` | 错误 | 同一商品各行的规格名不一致，或多行商品有一行没填规格 |
+        | `spec_duplicate` | 错误 | 同一商品里规格值组合重复 |
+        | `group_conflict` | 错误 | 同一商品的副标题 / 类目 / 描述前后不一致 |
+        | `image_url_invalid` | 错误 | 图片地址不是 http / https 或格式不对 |
+        | `numeric_sku_code` | 提示 | SKU 编码被 Excel 存成了数字，前导 0 可能已丢 |
+        | `merged_cell` | 提示 | 合并单元格，已按左上角的值填入 |
+        | `price_zero` | 提示 | 基准价是 0 元 |
+        | `not_contiguous` | 提示 | 与前面不相邻的某一行同标题，已合并为同一件商品 |
+        | `category_unmatched` | 提示 | 类目列填了，但对不上已有的（启用中的）类目 |
+        | `group_blocked` | 提示 | 同一商品的别的行有错，这一行随整件商品不导入 |
+      properties:
+        column:
+          type: string
+          description: 出问题的那一列的表头名。与某一列无关时缺席。
+        code:    { type: string }
+        message: { type: string }
+
+    ProductImportRow:
+      type: object
+      required: [row, first_row, sku_code, spec_values, errors, warnings, violations]
+      description: |
+        文件里的一行（一个 SKU）。有错的格对应的字段缺席（比如价格写错了就没有 `price_cents`）。
+      properties:
+        row:
+          type: integer
+          description: 行号，与 Excel 左侧的行号一致（表头是第 1 行）。整行空白的行被跳过，但不重新编号。
+        first_row:
+          type: integer
+          description: 这一行所属商品的首行行号（同一件商品的各行相同）
+        title:       { type: string }
+        subtitle:    { type: string }
+        category:    { type: string, description: 类目列的原文 }
+        description: { type: string }
+        sku_code:    { type: string }
+        spec_values:
+          type: object
+          additionalProperties: { type: string }
+          description: 规格名 → 规格值；单规格商品为空对象
+        price_cents: { $ref: '#/components/schemas/Money' }
+        stock:       { type: integer }
+        weight_gram: { type: integer }
+        image_urls:
+          type: array
+          items: { type: string }
+        errors:
+          type: array
+          items: { $ref: '#/components/schemas/ProductImportIssue' }
+        warnings:
+          type: array
+          items: { $ref: '#/components/schemas/ProductImportIssue' }
+        violations:
+          type: array
+          description: |
+            广告法违禁词命中（`field` 是 title / subtitle / description，`offset` / `length`
+            是码点位置，语义同 `FieldError`）。挂在提供这段文字的那一行上。**不阻断导入**：
+            导入的是草稿，上架时才拦。
+          items: { $ref: '#/components/schemas/FieldError' }
+
+    ProductImportCategoryCandidate:
+      type: object
+      required: [category_id, path_name, score]
+      properties:
+        category_id: { type: integer, format: int64 }
+        path_name:
+          type: string
+          description: 从一级到这一级的名字，用「 > 」连接
+        score:
+          type: number
+          description: 标题向量与类目路径名向量的余弦相似度，[-1, 1]，越大越像
+
+    ProductImportCategoryDecision:
+      type: object
+      required: [status, candidates]
+      description: |
+        一件商品的类目怎么定。
+
+        | status | 含义 | `category_id` |
+        |---|---|---|
+        | `matched` | 类目列填的名字 / 路径对上了一个启用中的类目 | 那一个 |
+        | `recommended` | 类目列为空或对不上，推荐的 Top-1 足够可信，**已替商家选中** | 推荐的 Top-1 |
+        | `needs_review` | 有候选，但置信度不够，**需人工确认** | 缺席 |
+        | `unavailable` | 推理引擎没配 / 不可用 / 店里没有可选的叶子类目，**需手选** | 缺席 |
+
+        「足够可信」是两道门：Top-1 余弦 ≥ `ProductImportPreview.category_gate.min_score`，
+        且与 Top-2 的分差 ≥ `min_margin`（只有一个候选时只看前者）。两个数由离线评测定出
+        （人工标注的标题集，见商品理解服务设计文档「批量导入」一节）。
+
+        推荐只在**叶子类目**（启用中、没有启用中的子类目）里选；`matched` 可以是任意一级。
+      properties:
+        status:
+          type: string
+          enum: [matched, recommended, needs_review, unavailable]
+        category_id: { type: integer, format: int64 }
+        path_name:   { type: string }
+        candidates:
+          type: array
+          maxItems: 3
+          description: 按分数降序的候选（`matched` 与 `unavailable` 时为空）
+          items: { $ref: '#/components/schemas/ProductImportCategoryCandidate' }
+
+    ProductImportProduct:
+      type: object
+      required: [first_row, rows, title, importable, category]
+      description: 文件里的一件商品（同一标题的若干行）
+      properties:
+        first_row: { type: integer }
+        rows:
+          type: array
+          description: 这件商品包含的行号
+          items: { type: integer }
+        title: { type: string }
+        importable:
+          type: boolean
+          description: 每一行都没有错误。为 false 时确认导入会跳过它。
+        category: { $ref: '#/components/schemas/ProductImportCategoryDecision' }
+
+    ProductImportPreview:
+      type: object
+      required: [file_sha256, format, total_rows, error_rows, products, rows, notices,
+                 category_engine, category_gate]
+      properties:
+        file_sha256:
+          type: string
+          description: 文件字节的 sha256（十六进制）。「同一份文件」的判据。
+        format: { $ref: '#/components/schemas/ProductImportFormat' }
+        total_rows: { type: integer, description: 数据行数（不含表头与整行空白） }
+        error_rows: { type: integer, description: 自身有错误的行数 }
+        products:
+          type: array
+          items: { $ref: '#/components/schemas/ProductImportProduct' }
+        rows:
+          type: array
+          items: { $ref: '#/components/schemas/ProductImportRow' }
+        notices:
+          type: array
+          description: 文件级提示（不阻断），如「csv 按 GBK 读取」「列『备注』不认得，已忽略」
+          items: { type: string }
+        category_engine:
+          type: string
+          enum: [ok, unavailable, not_configured]
+          description: |
+            这次预检的类目推荐跑成了没有：`not_configured` 是部署没配推理引擎，
+            `unavailable` 是配了但这次没在预算内给出结果（引擎忙或挂了）。后两种时所有
+            需要推荐的商品都是 `unavailable`，请手选——**导入本身不受影响**。
+        category_gate:
+          type: object
+          required: [min_score, min_margin]
+          description: 自动选中类目的两道门（见 ProductImportCategoryDecision）
+          properties:
+            min_score:  { type: number }
+            min_margin: { type: number }
+        previous_import:
+          type: object
+          required: [import_id, created_at]
+          description: 同一份文件（sha256 相同）在本店已经确认导入过时出现：再确认不会重复建。
+          properties:
+            import_id:  { type: integer, format: int64 }
+            created_at: { type: string, format: date-time }
+
+    ProductImportCategoryChoice:
+      type: object
+      required: [first_row, category_id]
+      properties:
+        first_row:
+          type: integer
+          description: 商品在文件里的首行行号（预检结果里的 `products[].first_row`）
+        category_id: { type: integer, format: int64 }
+
+    ProductImportOutcome:
+      type: object
+      required: [first_row, rows, title, status]
+      properties:
+        first_row: { type: integer }
+        rows:
+          type: array
+          items: { type: integer }
+        title: { type: string }
+        status:
+          type: string
+          enum: [created, failed]
+        product_id:
+          type: integer
+          format: int64
+          description: '`created` 时有：新建的草稿商品'
+        sku_count: { type: integer, description: '`created` 时有：建了几个 SKU' }
+        category_id: { type: integer, format: int64 }
+        reasons:
+          type: array
+          description: '`failed` 时有：为什么没导入（每条带行号）'
+          items: { type: string }
+        image_urls:
+          type: array
+          description: 文件里给这件商品填的图片地址，**只记录、没有下载**，请在商品页上传
+          items: { type: string }
+
+    ProductImportResult:
+      type: object
+      required: [import_id, file_sha256, already_imported, total_rows, created_products,
+                 created_skus, failed_rows, products, created_at]
+      properties:
+        import_id: { type: integer, format: int64 }
+        file_sha256: { type: string }
+        already_imported:
+          type: boolean
+          description: 同一份文件此前已经确认导入过，这一次什么都没建，下面是那一次的结果
+        total_rows: { type: integer }
+        created_products: { type: integer }
+        created_skus: { type: integer }
+        failed_rows: { type: integer, description: 没有导入的行数（含被同组错误拖累的行） }
+        products:
+          type: array
+          items: { $ref: '#/components/schemas/ProductImportOutcome' }
+        created_at: { type: string, format: date-time }
+
     ProductUpdateRequest:
       type: object
       minProperties: 1
@@ -7006,7 +7481,7 @@ components:
 
         | 能做什么 | 1 | 2 | 3 | 4 |
         |---|:-:|:-:|:-:|:-:|
-        | 商品、SKU、基准价、类目、上传 | ✅ | ✅ | 只读 | 只读 |
+        | 商品、SKU、基准价、类目、上传、批量导入 | ✅ | ✅ | 只读 | 只读 |
         | 大区：改、删、大区价、大区上下架 | ✅ | ✅ | 只限自己的大区 | ❌ |
         | 大区：建 | ✅ | ✅ | ❌ | ❌ |
         | 门店：建、改、删、围栏 | ✅ | ✅ | 只限本大区的门店（换大区时新旧都得在范围内） | ❌ |

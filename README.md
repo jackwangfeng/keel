@@ -148,7 +148,10 @@ If 8081 is taken: `KEEL_CONSOLE_PORT=18081 docker compose up -d --build`.
 > type check goes red on the spot (`make admin-type-check`, wired into
 > `./scripts/check-all.sh`).
 >
-> Today it covers products, SKUs, stock, categories, uploads, **coupons**
+> Today it covers products, SKUs, stock, categories, uploads, **bulk product
+> import** (xlsx / csv; a dry-run preview that flags every bad cell and
+> prohibited claim and suggests categories from title embeddings, then a
+> confirm step that creates drafts), **coupons**
 > (amount-off / percent-off / no-threshold, a claim center plus targeted grants,
 > scoped by category, product, region or store), **promotions** (tiered
 > discounts, limited-time prices, flash-sale quotas with per-buyer limits,
@@ -282,6 +285,10 @@ the remaining gaps are under "Not in the box yet" above.
 - **Visual search** — find the same product from a photo.
 - **Product understanding** — extract structured attributes from messy supplier
   spreadsheets, auto-classify categories, detect duplicate listings across suppliers.
+  What ships today is the zero-shot half of auto-classification: bulk import
+  suggests categories from title embeddings (Top-3 95.9% on the offline set) and
+  leaves low-confidence ones to a human; attribute extraction waits for the
+  inference engine's generate endpoint.
 - **Compliance checks** — catch prohibited advertising claims before publish.
 
 **Correctness, taken seriously**

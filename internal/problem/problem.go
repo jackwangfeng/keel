@@ -320,6 +320,20 @@ const (
 	TypeTenantSwitchForbidden = "https://keel.dev/problems/tenant-switch-forbidden"
 	TypeUnknownMerchant       = "https://keel.dev/problems/unknown-merchant"
 	TypeSingleMerchantMode    = "https://keel.dev/problems/single-merchant-mode"
+
+	// 商品批量导入（契约 /admin/product-imports）。与上传商品图那两条分开命名，
+	// 因为上限不同（5 MB 对 10 MB）、客户端要做的事也不同：
+	//
+	//   import-file-too-large      → 拆成多个文件。413。
+	//   import-unsupported-format  → 另存为 xlsx 或 csv（老 .xls、加密工作簿）。415。
+	//   import-file-invalid        → 整份文件不成立（缺列、超行数、表头合并……），
+	//                                errors[] 逐条列原因。改文件再传。422。
+	//   import-nothing-to-import   → 没有一件商品能导入（全都有错或都没选类目）。
+	//                                回预检结果去改。422。
+	TypeImportFileTooLarge    = "https://keel.dev/problems/import-file-too-large"
+	TypeImportUnsupportedFmt  = "https://keel.dev/problems/import-unsupported-format"
+	TypeImportFileInvalid     = "https://keel.dev/problems/import-file-invalid"
+	TypeImportNothingToImport = "https://keel.dev/problems/import-nothing-to-import"
 )
 
 // Write 写一个 RFC 9457 响应并中止后续 handler。

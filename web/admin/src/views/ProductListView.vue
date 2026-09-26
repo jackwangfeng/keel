@@ -8,7 +8,7 @@
 
 import { computed, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
-import { Plus, Refresh } from "@element-plus/icons-vue";
+import { Plus, Refresh, Upload } from "@element-plus/icons-vue";
 import { ElMessageBox } from "element-plus";
 import {
     keel,
@@ -194,6 +194,7 @@ async function removeProduct(row: AdminProduct): Promise<void> {
             <span class="grow" />
 
             <el-button :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
+            <el-button :icon="Upload" :disabled="!can.editCatalog()" :title="can.editCatalog() ? '' : NO_PERMISSION" @click="router.push({ name: 'product-import' })">批量导入</el-button>
             <el-button type="primary" :icon="Plus" :disabled="!can.editCatalog()" :title="can.editCatalog() ? '' : NO_PERMISSION" @click="openCreate">新建商品</el-button>
         </div>
 

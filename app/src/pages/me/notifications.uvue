@@ -1,0 +1,154 @@
+<template>
+  <view class="page">
+    <scroll-view class="scroll" direction="vertical">
+      <view class="body">
+        <view v-if="rows.length > 0" class="between head">
+          <text class="t-hint">{{ unread > 0 ? unread.toString() + ' 条未读' : '全部已读' }}</text>
+          <text v-if="unread > 0" class="t-link read-all" @click="readAll">全部标为已读</text>
+        </view>
+
+        <view v-if="error != ''" class="card">
+          <text class="t-err">{{ error }}</text>
+          <view class="gap-m"></view>
+          <view class="btn-ghost" @click="load"><text class="btn-ghost-text">重新加载</text></view>
+        </view>
+
+        <!-- 标题、正文是服务端渲染好的，原样显示；不按 kind 拼文案。 -->
+        <view v-for="n in rows" :key="n.id" :class="['card', 'note', n.unread ? 'note-unread' : '']" @click="open(n.id)">
+          <view class="between">
+            <view class="row fill">
+              <view v-if="n.unread" class="dot"></view>
+              <text class="t-section note-title">{{ n.title }}</text>
+            </view>
+            <text class="t-hint">{{ n.time }}</text>
+          </view>
+          <text class="t-sub note-body">{{ n.body }}</text>
+        </view>
+
+        <view v-if="rows.length < total" class="more">
+          <text class="t-link" @click="loadMore">{{ loading ? '加载中…' : '加载更多' }}</text>
+        </view>
+
+        <view v-if="loaded && rows.length == 0 && error == ''" class="empty">
+          <view class="empty-mark"><text class="empty-mark-text">✉</text></view>
+          <text class="t-sub">还没有消息</text>
+          <text class="t-hint">支付、发货、售后进度会在这里通知你</text>
+        </view>
+      </view>
+    </scroll-view>
+  </view>
+</template>
+
+<script>
+import { listNotifications, markAllNotificationsRead, markNotificationRead, ApiFailure } from '@/api/client.uts'
+import { showUnreadBadge } from '@/api/badge.uts'
+import { notificationListQuery, notificationRow, NotificationRow } from '@/api/view.uts'
+
+const PAGE_SIZE = 20
+
+export default {
+  data() {
+    return {
+      rows: [] as NotificationRow[],
+      total: 0,
+      page: 1,
+      unread: 0,
+      loaded: false,
+      loading: false,
+      error: '',
+    }
+  },
+  onShow() {
+    // onShow：从订单 / 售后详情回来时，别处可能又产生了新通知。
+    this.load()
+  },
+  methods: {
+    load() {
+      this.error = ''
+      this.page = 1
+      this.fetch(1, true)
+    },
+    loadMore() {
+      if (this.loading) return
+      this.fetch(this.page + 1, false)
+    },
+    fetch(page: number, replace: boolean) {
+      this.loading = true
+      listNotifications(notificationListQuery(page, PAGE_SIZE),
+        (list) => {
+          const rows: NotificationRow[] = replace ? [] : this.rows.slice()
+          for (let i = 0; i < list.items.length; i++) rows.push(notificationRow(list.items[i]))
+          this.rows = rows
+          this.total = list.total
+          this.page = page
+          this.unread = list.unread_count
+          this.loaded = true
+          this.loading = false
+          showUnreadBadge(list.unread_count)
+        },
+        (f: ApiFailure) => {
+          this.error = f.message
+          this.loaded = true
+          this.loading = false
+        })
+    },
+    open(id: number) {
+      let url = ''
+      for (let i = 0; i < this.rows.length; i++) {
+        const r = this.rows[i]
+        if (r.id != id) continue
+        url = r.url
+        if (r.unread) {
+          // 先在页面上标掉，不等请求：点进去再回来时这条不该还亮着。
+          r.unread = false
+          this.unread = this.unread > 0 ? this.unread - 1 : 0
+          markNotificationRead(id,
+            (n: number) => {
+              this.unread = n
+              showUnreadBadge(n)
+            },
+            (_f: ApiFailure) => {})
+        }
+      }
+      if (url != '') uni.navigateTo({ url: url })
+    },
+    readAll() {
+      markAllNotificationsRead(
+        (n: number) => {
+          for (let i = 0; i < this.rows.length; i++) this.rows[i].unread = false
+          this.unread = n
+          showUnreadBadge(n)
+        },
+        (f: ApiFailure) => {
+          this.error = f.message
+        })
+    },
+  },
+}
+</script>
+
+<style>
+.head {
+  padding: 12px 4px 0 4px;
+}
+.note-unread {
+  background-color: #FFFBF3;
+}
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 4px;
+  background-color: #B4462E;
+  margin-right: 8px;
+}
+.note-title {
+  flex: 1;
+}
+.note-body {
+  margin-top: 6px;
+}
+.more {
+  align-items: center;
+  padding: 16px 0;
+}
+</style>

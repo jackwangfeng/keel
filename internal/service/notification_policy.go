@@ -64,6 +64,8 @@ var notificationCallSites = map[string]notifyPolicy{
 		"没抢到的买家由 POST /orders 同步收到 409 promotion-sold-out"},
 	"releasePromotionLine/ReleasePromotionQuota": {Silent: "SAGA 补偿、超时关单、买家取消时放回配额与限购（升高）；" +
 		"这几条路径的通知由各自的调用方决定（超时关单发 order_timeout_closed，另两条不发）"},
+	"ProductImportService.commitInTx/CreateSKU": {Silent: "批量导入时建 SKU 写初始库存：商家自己确认的导入，" +
+		"理由同 AdminCatalogService.CreateSKU；而且导入的商品是草稿，买家看不见，库存高低与任何人的订单无关"},
 }
 
 // stateEdges 登记状态机的每一条边由哪条语句走（order:/refund: 前缀，与迁移里的

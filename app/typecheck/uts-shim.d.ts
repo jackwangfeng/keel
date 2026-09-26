@@ -101,7 +101,15 @@ type UniDownloadFileOptions = {
   fail?: ((err: UniRequestFail) => void) | null
 }
 
+type UniTabBarBadgeOptions = {
+  index: number
+  text?: string | null
+  fail?: ((err: any) => void) | null
+}
+
 declare const uni: {
+  setTabBarBadge(options: UniTabBarBadgeOptions): void
+  removeTabBarBadge(options: UniTabBarBadgeOptions): void
   request<T>(options: UniRequestOptions<T>): void
   uploadFile(options: UniUploadFileOptions): void
   downloadFile(options: UniDownloadFileOptions): void

@@ -21,6 +21,9 @@
 // 会一直编译得过 —— 直到线上。
 
 import {
+  ListNotificationsQuery,
+  NotificationList,
+  NotificationUnreadCount,
   ReportSearchEventRequest,
   ReturnShipmentRequest,
   Upload,
@@ -1078,6 +1081,53 @@ export function submitReturnShipment(req : ReturnShipmentRequest, refundNo : str
   onOk : (r : Refund, replayed : boolean) => void, onErr : FailureHandler) {
   send('POST', '/refunds/' + encodeURIComponent(refundNo) + '/return-shipment', '', req, idempotencyKey,
     refundOk(onOk, onErr), onErr)
+}
+
+// ---------------------------------------------------------------------------
+// 消息中心
+// ---------------------------------------------------------------------------
+
+/** GET /me/notifications：分页，响应里带未读总数（与 unread_only、分页都无关）。 */
+export function listNotifications(query : ListNotificationsQuery,
+  onOk : (list : NotificationList) => void, onErr : FailureHandler) {
+  const parts : string[] = []
+  pushIf(parts, param('page', query.page))
+  pushIf(parts, param('page_size', query.page_size))
+  if (query.unread_only == true) parts.push('unread_only=true')
+  send('GET', '/me/notifications', queryString(parts), null, null,
+    (_s : number, text : string, _r : boolean) => {
+      const body = JSON.parse<NotificationList>(text)
+      if (body == null) {
+        onErr(decodeFailure(200))
+        return
+      }
+      onOk(body!)
+    }, onErr)
+}
+
+function unreadOk(onOk : (unread : number) => void, onErr : FailureHandler) : RawOk {
+  return (s : number, text : string, _r : boolean) => {
+    const body = JSON.parse<NotificationUnreadCount>(text)
+    if (body == null) {
+      onErr(decodeFailure(s))
+      return
+    }
+    onOk(body!.unread_count)
+  }
+}
+
+/** GET /me/notifications/unread-count：「我的」页角标。 */
+export function unreadNotificationCount(onOk : (unread : number) => void, onErr : FailureHandler) {
+  send('GET', '/me/notifications/unread-count', '', null, null, unreadOk(onOk, onErr), onErr)
+}
+
+/** POST /me/notifications/{id}/read：幂等，**不要** Idempotency-Key；响应是标完后的未读数。 */
+export function markNotificationRead(id : number, onOk : (unread : number) => void, onErr : FailureHandler) {
+  send('POST', '/me/notifications/' + id.toString() + '/read', '', null, null, unreadOk(onOk, onErr), onErr)
+}
+
+export function markAllNotificationsRead(onOk : (unread : number) => void, onErr : FailureHandler) {
+  send('POST', '/me/notifications/read-all', '', null, null, unreadOk(onOk, onErr), onErr)
 }
 
 // ---------------------------------------------------------------------------
