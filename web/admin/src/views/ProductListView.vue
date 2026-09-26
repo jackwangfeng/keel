@@ -21,6 +21,7 @@ import { indentedLabel, listCategories } from "../api/catalog.ts";
 import { IdempotentSubmission, withIdempotency } from "../api/idempotency.ts";
 import { datetime, PRODUCT_STATUS, priceRange } from "../ui/format.ts";
 import { notifyError, notifyOk } from "../ui/notify.ts";
+import { can, NO_PERMISSION } from "../auth/permissions.ts";
 import ProblemAlert from "../components/ProblemAlert.vue";
 
 const router = useRouter();
@@ -193,7 +194,7 @@ async function removeProduct(row: AdminProduct): Promise<void> {
             <span class="grow" />
 
             <el-button :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
-            <el-button type="primary" :icon="Plus" @click="openCreate">新建商品</el-button>
+            <el-button type="primary" :icon="Plus" :disabled="!can.editCatalog()" :title="can.editCatalog() ? '' : NO_PERMISSION" @click="openCreate">新建商品</el-button>
         </div>
 
         <el-table :data="page?.items ?? []" v-loading="loading" border stripe row-key="id">
@@ -238,10 +239,10 @@ async function removeProduct(row: AdminProduct): Promise<void> {
                     >
                         编辑
                     </el-button>
-                    <el-button link type="primary" :disabled="!!row.deleted_at" @click="togglePublication(row)">
+                    <el-button link type="primary" :disabled="!!row.deleted_at || !can.editCatalog()" @click="togglePublication(row)">
                         {{ row.status === 1 ? "下架" : "上架" }}
                     </el-button>
-                    <el-button link type="danger" :disabled="!!row.deleted_at" @click="removeProduct(row)">
+                    <el-button link type="danger" :disabled="!!row.deleted_at || !can.editCatalog()" @click="removeProduct(row)">
                         删除
                     </el-button>
                 </template>

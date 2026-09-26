@@ -254,6 +254,11 @@ export const ProblemType = {
     storeAmbiguous: `${P}store-ambiguous`,
     invalidFence: `${P}invalid-fence`,
     skuNotSoldInStore: `${P}sku-not-sold-in-store`,
+    // 同一租户内的分级权限（v0.1.0）。两种 403 要说两句不同的话：
+    // 一个是「找你的上级」，一个是「找管那一块的人」。
+    roleForbidden: `${P}role-forbidden`,
+    outOfScope: `${P}out-of-scope`,
+    staffForbidden: `${P}staff-forbidden`,
 } as const;
 
 /** 这个错误是不是某个 type 的 Problem。 */

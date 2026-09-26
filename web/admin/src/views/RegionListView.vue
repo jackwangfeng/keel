@@ -11,6 +11,7 @@ import { keel, type AdminRegion, type RegionCreateRequest, type RegionPage } fro
 import { IdempotentSubmission, withIdempotency } from "../api/idempotency.ts";
 import { CATEGORY_STATUS } from "../ui/format.ts";
 import { notifyError, notifyOk } from "../ui/notify.ts";
+import { can, NO_PERMISSION } from "../auth/permissions.ts";
 import ProblemAlert from "../components/ProblemAlert.vue";
 
 const router = useRouter();
@@ -130,7 +131,7 @@ async function remove(row: AdminRegion): Promise<void> {
             <el-checkbox v-model="includeDeleted" @change="(pageNo = 1), load()">含已软删</el-checkbox>
             <span class="grow" />
             <el-button :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
-            <el-button type="primary" :icon="Plus" @click="openCreate">新建大区</el-button>
+            <el-button type="primary" :icon="Plus" :disabled="!can.createRegion()" :title="can.createRegion() ? '' : NO_PERMISSION" @click="openCreate">新建大区</el-button>
         </div>
 
         <el-table :data="page?.items ?? []" v-loading="loading" border stripe>
@@ -157,13 +158,13 @@ async function remove(row: AdminRegion): Promise<void> {
                     <el-button link type="primary" @click="router.push({ name: 'region-detail', params: { regionId: row.id } })">
                         商品与定价
                     </el-button>
-                    <el-button link type="primary" :disabled="!!row.deleted_at" @click="openEdit(row)">编辑</el-button>
+                    <el-button link type="primary" :disabled="!!row.deleted_at || !can.manageRegion(row.id)" @click="openEdit(row)">编辑</el-button>
                     <el-tooltip
                         :disabled="row.store_count === 0"
                         :content="`名下还有 ${row.store_count} 家门店，删不掉（服务端 409）。先把门店挪走或删掉`"
                     >
                         <span>
-                            <el-button link type="danger" :disabled="!!row.deleted_at || row.store_count > 0" @click="remove(row)">
+                            <el-button link type="danger" :disabled="!!row.deleted_at || row.store_count > 0 || !can.manageRegion(row.id)" @click="remove(row)">
                                 删除
                             </el-button>
                         </span>

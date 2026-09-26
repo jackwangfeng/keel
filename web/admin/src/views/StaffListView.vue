@@ -8,10 +8,25 @@
 //     而且不是「隐藏了」——契约生成的 StaffCreateRequest 根本没有这个字段。
 //   · **不设密码。** 建好后服务端生成一串一次性登录链接 token。本轮没有接
 //     邮件服务，它只进进程日志，所以这里把取它的办法写出来。
+//
+// 分级权限（v0.1.0）：角色多了大区管理员（3）与门店管理员（4），各带管辖范围。
+// 能分配哪些角色、能选哪些大区 / 门店，由 src/auth/permissions.ts 与服务端的
+// 列表决定：大区管理员登录时，GET /admin/stores 本来就只回本大区的门店，
+// 所以这里的门店下拉不需要自己再过滤一遍 —— 过滤只有服务端那一份。
 
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { Plus, Refresh } from "@element-plus/icons-vue";
-import { keel, currentSession, type Staff, type StaffPage, type StaffCreateRequest } from "../api/client.ts";
+import {
+    keel,
+    currentSession,
+    type AdminRegion,
+    type AdminStore,
+    type Staff,
+    type StaffPage,
+    type StaffCreateRequest,
+    type StaffRole,
+} from "../api/client.ts";
+import { assignableRoles, can, NO_PERMISSION, ROLE, ROLE_TEXT } from "../auth/permissions.ts";
 import { IdempotentSubmission, withIdempotency } from "../api/idempotency.ts";
 import { datetime, STAFF_ROLE, STAFF_STATUS } from "../ui/format.ts";
 import { notifyOk } from "../ui/notify.ts";
@@ -24,6 +39,33 @@ const pageNo = ref(1);
 const pageSize = ref(20);
 
 const isPlatform = currentSession()?.staff.merchant_id === null;
+const selfId = currentSession()?.staff.id ?? 0;
+const roles = assignableRoles();
+
+// 大区与门店的选项。**服务端已经按调用者的范围收窄过**（大区管理员只拿到自己
+// 的大区与本大区的门店），这里原样用。平台级没有门店可选，不去拉。
+const regions = ref<AdminRegion[]>([]);
+const stores = ref<AdminStore[]>([]);
+async function loadScopeOptions(): Promise<void> {
+    if (isPlatform || roles.length === 0) return;
+    try {
+        const [r, s] = await Promise.all([
+            keel.get("/admin/regions", { query: { page: 1, page_size: 100 } }),
+            keel.get("/admin/stores", { query: { page: 1, page_size: 100 } }),
+        ]);
+        regions.value = r.items;
+        stores.value = s.items;
+    } catch (err) {
+        error.value = err;
+    }
+}
+const regionName = computed(() => new Map(regions.value.map((r) => [r.id, r.name])));
+const storeName = computed(() => new Map(stores.value.map((s) => [s.id, s.name])));
+function scopeText(row: Staff): string {
+    if (row.region_ids.length > 0) return row.region_ids.map((id) => regionName.value.get(id) ?? `大区 #${id}`).join("、");
+    if (row.store_ids.length > 0) return row.store_ids.map((id) => storeName.value.get(id) ?? `门店 #${id}`).join("、");
+    return row.role === ROLE.admin || row.role === ROLE.operator ? "全店" : "—";
+}
 
 async function load(): Promise<void> {
     loading.value = true;
@@ -37,7 +79,10 @@ async function load(): Promise<void> {
     }
 }
 
-onMounted(() => void load());
+onMounted(() => {
+    void load();
+    void loadScopeOptions();
+});
 
 // ------------------------------------------------------------------ 新建
 
@@ -45,10 +90,15 @@ const createVisible = ref(false);
 const createError = ref<unknown>(null);
 const creating = ref(false);
 const createSubmission = new IdempotentSubmission();
-const draft = ref<StaffCreateRequest>({ email: "", name: "", role: 2 });
+const defaultRole = (): StaffRole => roles[roles.length - 1] ?? 2;
+const draft = ref<StaffCreateRequest>({ email: "", name: "", role: defaultRole() });
+const draftRegions = ref<number[]>([]);
+const draftStores = ref<number[]>([]);
 
 function openCreate(): void {
-    draft.value = { email: "", name: "", role: 2 };
+    draft.value = { email: "", name: "", role: defaultRole() };
+    draftRegions.value = [];
+    draftStores.value = [];
     createError.value = null;
     createSubmission.rotate();
     createVisible.value = true;
@@ -59,7 +109,16 @@ async function submitCreate(): Promise<void> {
     createError.value = null;
     try {
         await withIdempotency(createSubmission, (key) =>
-            keel.request("post", "/admin/staff", { body: draft.value, headers: { "Idempotency-Key": key } }),
+            keel.request("post", "/admin/staff", {
+                // 范围只随对应的角色带上：角色与范围不配套时服务端回 422，
+                // 而切换角色后残留在另一个下拉里的选择不该被悄悄提交。
+                body: {
+                    ...draft.value,
+                    ...(draft.value.role === ROLE.regionManager ? { region_ids: draftRegions.value } : {}),
+                    ...(draft.value.role === ROLE.storeManager ? { store_ids: draftStores.value } : {}),
+                },
+                headers: { "Idempotency-Key": key },
+            }),
         );
         createVisible.value = false;
         notifyOk("已创建。一次性登录 token 在进程日志里：docker compose logs app | grep 登录链接");
@@ -77,13 +136,19 @@ const editVisible = ref(false);
 const editError = ref<unknown>(null);
 const saving = ref(false);
 const editing = ref<Staff | null>(null);
-const editRole = ref<1 | 2>(2);
+const editRole = ref<StaffRole>(2);
 const editStatus = ref<1 | 2>(1);
+const editRegions = ref<number[]>([]);
+const editStores = ref<number[]>([]);
+/** 改的是自己：角色与范围锁住（服务端同样拒绝，403 role-forbidden）。 */
+const editingSelf = computed(() => editing.value?.id === selfId);
 
 function openEdit(row: Staff): void {
     editing.value = row;
     editRole.value = row.role;
     editStatus.value = row.status;
+    editRegions.value = [...row.region_ids];
+    editStores.value = [...row.store_ids];
     editError.value = null;
     editVisible.value = true;
 }
@@ -96,7 +161,12 @@ async function submitEdit(): Promise<void> {
     try {
         await keel.request("patch", "/admin/staff/{staff_id}", {
             path: { staff_id: target.id },
-            body: { role: editRole.value, status: editStatus.value },
+            body: {
+                role: editRole.value,
+                status: editStatus.value,
+                ...(editRole.value === ROLE.regionManager ? { region_ids: editRegions.value } : {}),
+                ...(editRole.value === ROLE.storeManager ? { store_ids: editStores.value } : {}),
+            },
         });
         editVisible.value = false;
         notifyOk("已保存");
@@ -121,7 +191,15 @@ async function submitEdit(): Promise<void> {
             </span>
             <span class="grow" />
             <el-button :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
-            <el-button type="primary" :icon="Plus" @click="openCreate">加员工</el-button>
+            <el-button
+                type="primary"
+                :icon="Plus"
+                :disabled="!can.manageStaff()"
+                :title="can.manageStaff() ? '' : NO_PERMISSION"
+                @click="openCreate"
+            >
+                加员工
+            </el-button>
         </div>
 
         <el-table :data="page?.items ?? []" v-loading="loading" border stripe>
@@ -130,6 +208,9 @@ async function submitEdit(): Promise<void> {
             <el-table-column prop="name" label="姓名" width="140" />
             <el-table-column label="角色" width="110">
                 <template #default="{ row }: { row: Staff }">{{ STAFF_ROLE[row.role] }}</template>
+            </el-table-column>
+            <el-table-column label="管辖范围" min-width="180">
+                <template #default="{ row }: { row: Staff }">{{ scopeText(row) }}</template>
             </el-table-column>
             <el-table-column label="归属" width="140">
                 <template #default="{ row }: { row: Staff }">
@@ -149,7 +230,15 @@ async function submitEdit(): Promise<void> {
             </el-table-column>
             <el-table-column label="操作" width="100" fixed="right">
                 <template #default="{ row }: { row: Staff }">
-                    <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
+                    <el-button
+                        link
+                        type="primary"
+                        :disabled="!can.editStaff(row)"
+                        :title="can.editStaff(row) ? '' : NO_PERMISSION"
+                        @click="openEdit(row)"
+                    >
+                        编辑
+                    </el-button>
                 </template>
             </el-table-column>
         </el-table>
@@ -184,9 +273,23 @@ async function submitEdit(): Promise<void> {
                 </el-form-item>
                 <el-form-item label="角色">
                     <el-radio-group v-model="draft.role">
-                        <el-radio :value="1">管理员</el-radio>
-                        <el-radio :value="2">操作员</el-radio>
+                        <el-radio v-for="r in roles" :key="r" :value="r">{{ ROLE_TEXT[r] }}</el-radio>
                     </el-radio-group>
+                </el-form-item>
+                <el-form-item v-if="draft.role === ROLE.regionManager" label="管的大区" required>
+                    <el-select v-model="draftRegions" multiple placeholder="至少选一个大区" style="width: 100%">
+                        <el-option v-for="r in regions" :key="r.id" :label="r.name" :value="r.id" />
+                    </el-select>
+                </el-form-item>
+                <el-form-item v-if="draft.role === ROLE.storeManager" label="管的门店" required>
+                    <el-select v-model="draftStores" multiple placeholder="至少选一家门店" style="width: 100%">
+                        <el-option
+                            v-for="s in stores"
+                            :key="s.id"
+                            :label="`${s.name}（${s.region_name}）`"
+                            :value="s.id"
+                        />
+                    </el-select>
                 </el-form-item>
             </el-form>
             <template #footer>
@@ -205,12 +308,27 @@ async function submitEdit(): Promise<void> {
         <el-dialog v-model="editVisible" :title="`编辑 ${editing?.email ?? ''}`" width="480px">
             <ProblemAlert v-if="editError" :error="editError" />
             <p class="hint">不能把最后一个在职管理员降级或停用——那会让这个租户失去全部管理能力（409）。</p>
+            <p v-if="editingSelf" class="hint">这是你自己：角色与管辖范围不能自己改（服务端会拒绝），只能请别的管理员改。</p>
             <el-form label-width="80px" @submit.prevent>
                 <el-form-item label="角色">
-                    <el-radio-group v-model="editRole">
-                        <el-radio :value="1">管理员</el-radio>
-                        <el-radio :value="2">操作员</el-radio>
+                    <el-radio-group v-model="editRole" :disabled="editingSelf">
+                        <el-radio v-for="r in roles" :key="r" :value="r">{{ ROLE_TEXT[r] }}</el-radio>
                     </el-radio-group>
+                </el-form-item>
+                <el-form-item v-if="editRole === ROLE.regionManager" label="管的大区">
+                    <el-select v-model="editRegions" multiple :disabled="editingSelf" style="width: 100%">
+                        <el-option v-for="r in regions" :key="r.id" :label="r.name" :value="r.id" />
+                    </el-select>
+                </el-form-item>
+                <el-form-item v-if="editRole === ROLE.storeManager" label="管的门店">
+                    <el-select v-model="editStores" multiple :disabled="editingSelf" style="width: 100%">
+                        <el-option
+                            v-for="s in stores"
+                            :key="s.id"
+                            :label="`${s.name}（${s.region_name}）`"
+                            :value="s.id"
+                        />
+                    </el-select>
                 </el-form-item>
                 <el-form-item label="状态">
                     <el-radio-group v-model="editStatus">

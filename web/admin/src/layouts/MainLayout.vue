@@ -8,6 +8,8 @@ import { SwitchButton } from "@element-plus/icons-vue";
 import { currentSession, keel, setSession } from "../api/client.ts";
 import { notifyError } from "../ui/notify.ts";
 import { sections } from "../router/modules/index.ts";
+// 按角色的显示 / 置灰全在这个模块里，布局只调它（分级权限，v0.1.0）。
+import { roleLabel, sectionVisible } from "../auth/permissions.ts";
 
 const route = useRoute();
 const router = useRouter();
@@ -36,12 +38,7 @@ watch(() => route.fullPath, () => void checkDefaultStore(), { immediate: true })
 /** 平台级操作员：`staff.merchant_id` 为 null（数据模型 §14 的两级身份）。 */
 const isPlatform = computed(() => session.value?.staff.merchant_id === null);
 
-const roleText = computed(() => {
-    const staff = session.value?.staff;
-    if (staff === undefined) return "";
-    const role = staff.role === 1 ? "管理员" : "操作员";
-    return isPlatform.value ? `平台级${role}` : `商家级${role}`;
-});
+const roleText = computed(() => (session.value === null ? "" : roleLabel()));
 
 interface MenuItem {
     path: string;
@@ -51,7 +48,7 @@ interface MenuItem {
 
 const menu = computed<MenuItem[]>(() =>
     sections
-        .filter((s) => s.platformOnly !== true || isPlatform.value)
+        .filter((s) => (s.platformOnly !== true || isPlatform.value) && sectionVisible(s.key))
         .flatMap((s) =>
             s.routes
                 .filter((r) => r.meta?.menu === true)

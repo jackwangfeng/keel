@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from "vue-router";
 import { currentSession } from "../api/client.ts";
 import { sections } from "./modules/index.ts";
+import { refreshIdentity } from "../auth/permissions.ts";
 
 const routes: RouteRecordRaw[] = [
     {
@@ -34,9 +35,14 @@ export const router = createRouter({
     routes,
 });
 
-router.beforeEach((to) => {
+router.beforeEach(async (to) => {
     if (to.meta.anonymous === true) return true;
-    if (currentSession() !== null) return true;
+    if (currentSession() !== null) {
+        // 角色与管辖范围可能在会话期间被改过：整页加载后的第一次导航刷新一次
+        // （src/auth/permissions.ts）。之后的导航不再请求。
+        await refreshIdentity();
+        return true;
+    }
     // 带上来处：登录之后回到他本来要去的地方，而不是一律甩回首页。
     return { name: "login", query: { redirect: to.fullPath } };
 });

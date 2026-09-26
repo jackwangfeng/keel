@@ -61,6 +61,12 @@ export function problemHint(type: string): string {
             return "这家店（或它所在的大区）不卖这件商品。重试没有用，得换一家店，或者先在门店 / 大区的商品页把它上架。";
         case ProblemType.regionHasStores:
             return "这个大区下面还有门店。先把门店挪到别的大区或删掉，再删大区。";
+        case ProblemType.roleForbidden:
+            return "你的角色做不了这件事。重试不会成功——请找商家管理员来做，或者请他调整你的角色。";
+        case ProblemType.outOfScope:
+            return "这一个不在你的管辖范围里。重试不会成功——请找管那个大区 / 门店的人，或者请商家管理员调整你的管辖范围。";
+        case ProblemType.staffForbidden:
+            return "只有管理员（以及只管门店管理员的大区管理员）能管员工。";
         case ProblemType.inventoryPrecondition:
             return "库存在你读到它之后被改过。用服务端回来的当前值刷新后重试就会成功。";
         default:

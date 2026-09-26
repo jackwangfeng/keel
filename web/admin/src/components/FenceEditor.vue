@@ -51,6 +51,8 @@ const props = defineProps<{
     busy?: boolean;
     /** 是不是默认门店。决定「清空围栏」合不合法（服务端判，这里只提示）。 */
     isDefault: boolean;
+    /** 当前角色改不了围栏（src/auth/permissions.ts）。只置灰保存 / 清空，照样能看。 */
+    readonly?: boolean;
 }>();
 
 const emit = defineEmits<{ save: [fence: GeoPolygon | null] }>();
@@ -276,13 +278,13 @@ const draftGeoJson = computed(() => {
                 size="small"
                 type="danger"
                 plain
-                :disabled="saved === null || busy"
+                :disabled="saved === null || busy || readonly"
                 :title="isDefault ? '' : '非默认门店清空围栏会被服务端拒绝（409 store-fence-required）'"
                 @click="clearFence"
             >
                 清空围栏
             </el-button>
-            <el-button size="small" type="primary" :loading="busy" :disabled="vertices.length < 3" @click="save">
+            <el-button size="small" type="primary" :loading="busy" :disabled="vertices.length < 3 || readonly" @click="save">
                 保存围栏
             </el-button>
         </div>

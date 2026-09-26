@@ -34,16 +34,25 @@ import { listAllStoreInventories } from "../api/storeInventory.ts";
 import { PRICE_SOURCE } from "../api/stores.ts";
 import { PRODUCT_STATUS, yuan } from "../ui/format.ts";
 import { notifyError, notifyOk } from "../ui/notify.ts";
+import { can, NO_PERMISSION } from "../auth/permissions.ts";
 import ProblemAlert from "./ProblemAlert.vue";
 import InventoryDialog, { type InventoryTarget } from "./InventoryDialog.vue";
 
 export type Scope =
     | { kind: "region"; id: number; name: string }
-    | { kind: "store"; id: number; name: string; regionName: string };
+    | { kind: "store"; id: number; name: string; regionName: string; regionId?: number };
 
 const props = defineProps<{ scope: Scope }>();
 
 const layer = computed(() => (props.scope.kind === "store" ? "本店" : "本大区"));
+
+/** 这一层的价格 / 上下架 / 库存能不能改（src/auth/permissions.ts；服务端才是真的拦截）。 */
+const editable = computed(() => {
+    const s = props.scope;
+    return s.kind === "region"
+        ? can.manageRegion(s.id)
+        : can.operateStore({ id: s.id, region_id: s.regionId ?? -1 });
+});
 
 const loading = ref(false);
 const error = ref<unknown>(null);
@@ -279,10 +288,10 @@ function onInventoryUpdated(inv: AdminInventory): void {
                                         size="small"
                                         @update:model-value="(v: number | undefined) => priceDraft.set(sku.id, v ?? 0)"
                                     />
-                                    <el-button size="small" type="primary" link :loading="priceBusy === sku.id" @click="setPrice(sku)">
+                                    <el-button size="small" type="primary" link :loading="priceBusy === sku.id" :disabled="!editable" :title="editable ? '' : NO_PERMISSION" @click="setPrice(sku)">
                                         设价
                                     </el-button>
-                                    <el-button size="small" link :disabled="priceBusy === sku.id" @click="revokePrice(sku)">
+                                    <el-button size="small" link :disabled="priceBusy === sku.id || !editable" @click="revokePrice(sku)">
                                         撤销
                                     </el-button>
                                 </template>
@@ -302,7 +311,7 @@ function onInventoryUpdated(inv: AdminInventory): void {
                                 <template #default="{ row: sku }: { row: AdminSku }">
                                     <span>{{ inventoryBySku.get(sku.id)?.available_qty ?? 0 }}</span>
                                     <span v-if="!inventoryBySku.get(sku.id)" class="hint">（未录入）</span>
-                                    <el-button size="small" link type="primary" @click="openInventory(sku)">改</el-button>
+                                    <el-button size="small" link type="primary" :disabled="!editable" @click="openInventory(sku)">改</el-button>
                                 </template>
                             </el-table-column>
                         </el-table>
@@ -324,6 +333,7 @@ function onInventoryUpdated(inv: AdminInventory): void {
                     <el-switch
                         :model-value="row.listed"
                         :loading="toggling === row.product_id"
+                        :disabled="!editable"
                         @update:model-value="(v: string | number | boolean) => setListed(row, v === true)"
                     />
                 </template>
