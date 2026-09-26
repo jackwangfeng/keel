@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# 把 design/tabbar/*.svg 渲染成 tabBar 要的 81x81 PNG（普通 + 选中两套）。
-# 产物入库，只有改了图标才需要重跑。
+# 渲染两类位图图标，产物都入库，只有改了图标才需要重跑：
+#   · design/tabbar/*.svg -> src/static/tabbar/*.png，tabBar 要的 81x81（普通 + 选中两套）
+#   · design/app-icon.svg -> native-android/app/src/main/res/mipmap-*/ic_launcher.png
 #
-# tabBar 的 iconPath 只认位图，而这台机器上不一定有 rsvg/ImageMagick，
+# tabBar 的 iconPath 与 Android 启动图标都只认位图，而这台机器上不一定有 rsvg/ImageMagick，
 # 所以借无头 Chrome 截图：透明底 + 1 倍像素比，截出来就是 81x81。
 # SVG 里的 COLOR / FILL / INNER 是占位符：普通态是描边的浅色，选中态是实心深咖。
 set -euo pipefail
@@ -32,3 +33,14 @@ for src in design/tabbar/*.svg; do
     echo "==> $OUT/$name.png, $OUT/$name-on.png"
 done
 
+# Android 启动图标。Chrome 无头模式的窗口有最小宽度（约 500px），比 192 小的尺寸
+# 截出来会被裁，所以一律截 512 再用 sips（macOS 自带）缩。
+RES=native-android/app/src/main/res
+sed -e "s/SIZE/512/g" design/app-icon.svg > "$tmp/app-icon.svg"
+shot "$tmp/app-icon.svg" "$tmp/app-icon.png" 512
+for pair in mdpi:48 hdpi:72 xhdpi:96 xxhdpi:144 xxxhdpi:192; do
+    d=${pair%%:*}; px=${pair##*:}
+    mkdir -p "$RES/mipmap-$d"
+    sips -z "$px" "$px" "$tmp/app-icon.png" --out "$RES/mipmap-$d/ic_launcher.png" >/dev/null
+    echo "==> $RES/mipmap-$d/ic_launcher.png ($px)"
+done

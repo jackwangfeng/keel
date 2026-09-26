@@ -1,0 +1,12 @@
+// 原生 App 首次启动时用的服务地址。
+//
+// **仓库里永远是空串。** 原生 App 没有 origin，相对路径 /api/v1 在那里打不到任何地方，
+// 所以打 apk 时需要一个绝对地址；但地址是部署环境的事（局域网测试机、预发、正式），
+// 不该写进源码。app/scripts/build-apk.sh 读环境变量 KEEL_API_BASE，
+// 在拷进原生工程的 Kotlin 生成物里把下面这一行替换掉，并且断言恰好替换了一处。
+//
+// 为什么不用 vite 的 define：实测它只作用于 JS 产物，UTS 编出来的 Kotlin 里
+// 留下的是原样的标识符（记录在 app/README.md）。
+//
+// 这一行的写法（变量名、类型、空串）是 build-apk.sh 的匹配依据，改了要一起改。
+export const NATIVE_DEFAULT_BASE_URL : string = ''

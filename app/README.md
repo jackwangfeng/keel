@@ -136,7 +136,7 @@ exit=2
 |---|---|---|---|
 | H5（web） | ✅ `uni build --platform h5` | `dist/build/h5/*.html/js/css`，直接能发 | ✅ 跑 tsc |
 | Android | ✅ `uni build --platform app-android` | `dist/build/app-android/.uniappx/android/src/**/*.kt` —— **Kotlin 源码** | ❌ 不跑 |
-| Android apk | ❌ | — | — |
+| Android apk | ✅ `make app-apk`（离线 SDK + Gradle，见下文「本地打 apk」） | `dist/keel-buyer-<版本>.apk` | 经 app-android 那一格 |
 | iOS | 未验证 | — | — |
 | 微信小程序 | 未验证（缺 `@dcloudio/uni-mp-weixin` 一系包，没继续装） | — | — |
 
@@ -220,6 +220,36 @@ transform），Chrome 拒绝执行 module script，页面白屏。没有继续�
 
 ---
 
+## 本地打 apk
+
+```bash
+KEEL_API_BASE=http://192.168.0.110:18099/api/v1 make app-apk
+# -> app/dist/keel-buyer-0.1.0.apk
+```
+
+需要 JDK 17 和 Android SDK（`platforms;android-36`、`build-tools;36.0.0`）。
+Homebrew 装法：`brew install --cask android-commandlinetools`，再用 `sdkmanager` 装上面两项。
+离线 SDK（80MB）第一次跑时自动下载到 `native-android/.uni-sdk/`，钉了版本与 sha256。
+
+**不走 HBuilderX。** DCloud 的正规本地打包要先在 HBuilderX 里「生成本地打包App资源」，
+但实测 HBuilderX 5.26 用 CLI 导入这个项目就崩（最小副本也崩）。离线 SDK 的 Demo 工程
+说明了资源的真实形状：页面就是 `uniappx/src/main/java/` 下的 `.kt`，和 npm 版
+`uni build --platform app-android` 的产物是同一种东西。所以 `build-apk.sh` 直接把
+`dist/build/app-android/` 拷进 `native-android/`，再交给 Gradle。
+
+几件值得知道的事：
+
+- **默认服务地址是打包时注入的**（`KEEL_API_BASE`），源码里永远是空串，见
+  `src/api/native-default.uts`。vite 的 `define` 试过，只替换 JS 产物，Kotlin 里留下原样
+  的标识符，所以脚本在拷进原生工程的 `.kt` 上做替换，并断言恰好替换一处。
+- **aar 只挑用得到的**（`native-android/settings.gradle` 的 `uniAars`），不是 SDK 里的
+  全部 135 个。编译器在 `manifest.json` 的 `app-android.distribute.modules` 里列出代码
+  实际用到的 uni 模块，脚本会核对每一个都在清单里——漏一个，apk 照样打得出来，
+  只会在调用那个 API 时在真机上崩。
+- **签名是 debug 证书**，能装能测，不能上架。正式证书还没有。
+- **明文 HTTP 是开着的**（`usesCleartextTraffic`），因为开发期地址是局域网 http。上线换
+  HTTPS 后要关。
+
 ## 这一版真的跑通了什么
 
 对着 `docker compose up -d --build` 起来的真后端（`KEEL_HTTP_PORT=18080`），
@@ -284,9 +314,12 @@ app/
   tsconfig.json         给 uni 自带的 UTS/tsc 检查用
   index.html            H5 入口
   design/tabbar/        tabBar 图标的 SVG 源（COLOR/FILL/INNER 占位符）
+  design/app-icon.svg   Android 启动图标的 SVG 源
+  native-android/       Android 原生壳（Gradle 工程），见「本地打 apk」
   scripts/
     install-deps.sh     npm ci + 绕开 npm 对 uts 原生 binding 的 libc 误判
-    render-icons.sh     用无头 Chrome 把上面的 SVG 渲染成 src/static/tabbar/*.png（产物入库）
+    render-icons.sh     用无头 Chrome 把上面的 SVG 渲染成 tabBar 与启动图标 PNG（产物入库）
+    build-apk.sh        本地打 apk，见「本地打 apk」
   typecheck/            只给 scripts/check_app_types.py 用，不参与真构建
     tsconfig.json
     uts-shim.d.ts       uni.request / 存储 / *.uvue 的最小声明

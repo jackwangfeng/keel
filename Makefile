@@ -62,7 +62,7 @@ GOOSE := GOOSE_DRIVER=postgres GOOSE_DBSTRING="$(GOOSE_DBSTRING)" \
 	$(GORUN) github.com/pressly/goose/v3/cmd/goose
 
 .PHONY: help generate generate-go generate-ts generate-sql generate-uts tools-versions \
-	contract-check schema-check app-type-check app-install app-build-h5 app-build-android \
+	contract-check schema-check app-type-check app-install app-build-h5 app-build-android app-apk \
 	sdk-smoke migrate migrate-down migrate-status test-db \
 	test-engine dtmrs-deps build
 
@@ -77,6 +77,7 @@ help:
 	@echo "make app-type-check 用 tsc --strict 检查 app/src 下全部 .uts"
 	@echo "make app-install    装客户端依赖（含 npm 跳过 uts 原生 binding 的绕法）"
 	@echo "make app-build-h5   用 DCloud 编译器真编一遍 H5（要先 app-install）"
+	@echo "make app-apk        本地打 Android apk（KEEL_API_BASE=http://host:port/api/v1 指定默认服务地址）"
 	@echo "make sdk-smoke      用 TS SDK 对跑着的服务真打一次 GET /products"
 	@echo "make tools-versions 打印钉住的工具版本"
 	@echo "make migrate        把 db/migrations 迁到最新（GOOSE_DBSTRING 可覆盖）"
@@ -153,6 +154,11 @@ app-build-h5:
 
 app-build-android:
 	python3 $(ROOT)/scripts/check_app_build.py app-android
+
+# 本地打 apk：离线 SDK + Gradle，不经 HBuilderX、不上传。前置条件（JDK 17、Android SDK）
+# 与流程写在脚本头里。KEEL_API_BASE 是原生 App 的默认服务地址，不设就要在 App 里手填。
+app-apk:
+	bash $(ROOT)/app/scripts/build-apk.sh
 
 # 用 SDK 对**真的跑起来的**服务打一次 GET /products。
 #
