@@ -307,6 +307,27 @@ type RegionSkuPrice struct {
 	UpdatedAt  pgtype.Timestamptz
 }
 
+type SearchLog struct {
+	ID           int64
+	MerchantID   int64
+	UserID       *int64
+	SessionID    *string
+	Query        string
+	ParsedIntent []byte
+	RecallIds    []int64
+	RankedIds    []int64
+	ClickedID    *int64
+	CartedID     *int64
+	OrderedID    *int64
+	LatencyMs    *int32
+	TraceID      string
+	Strategy     string
+	Stages       []string
+	ModelName    *string
+	ModelVersion *string
+	CreatedAt    pgtype.Timestamptz
+}
+
 type ShopSetting struct {
 	MerchantID      int64
 	Domain          *string
