@@ -96,6 +96,17 @@ becomes `0.1.0` when the remaining M4 work is in.
   publication, inventory compare-and-set, uploads.
 - **Build information**: `GET /version` and a startup log line reporting
   version, commit, build date and Go version.
+- **Advertising-law term screening before a product goes public.** Publishing
+  (`POST /admin/products/{id}/publication`) and editing the copy of an
+  already-published product both run a synchronous check over `title`,
+  `subtitle` and `description`. A hit is a `422` whose `errors[]` carries the
+  offending field and the **offset and length in Unicode code points**, because
+  "rejected" on its own does not tell a merchant what to change. Drafts are not
+  screened: nothing a buyer can see has changed yet.
+- **A queue that stays fair across tenants.** The job table enforces a
+  per-tenant in-flight cap, so one merchant importing a catalogue cannot occupy
+  the whole worker pool. `priority` alone does not achieve this — it only
+  orders jobs *within* a tenant.
 
 ### Changed
 
@@ -118,5 +129,27 @@ Listed because a changelog that only lists wins is an advertisement.
   and GitHub-hosted runners do not have one, so there is no CI job that would go
   red if the engine integration broke.
 - **No hosted demo and no documentation site.**
+- **The advertising-law screen is a word list, with no model fallback for
+  variants.** The design calls for "rule list plus a small model to catch
+  variants". Only the first half exists. The three variants named in the design
+  ("蕞", "No.1", "巅峰之作") are caught because they are *enumerated in the
+  list* — anything not enumerated (character splitting, homophones, a term
+  broken up by punctuation) passes. The second half is not simply unfinished:
+  the fast path has a 200 ms budget, and under the "a check that cannot answer
+  rejects the publish" rule, putting a generative call there would turn "engine
+  busy" into "merchant cannot ship". It needs a design that does not sit on the
+  synchronous path.
+- **Category-licence screening is not implemented, because the data does not
+  exist.** No table records merchant qualifications, so there is nothing to
+  judge against. This is why medical and health claims are deliberately absent
+  from the word list: whether "for treating hypertension" is lawful depends on
+  the category and the licence, and listing those terms without the licence data
+  would permanently block a legitimate blood-pressure-monitor shop with no way out.
+- **Compliance verdicts are not persisted.** `product_understanding` carries an
+  `updated_at` touch trigger that doubles as the indexing watermark, so writing
+  a verdict there would silently drop a freshly published product out of the
+  index queue. The consequence is accepted and stated: the back office cannot
+  show why a product was rejected last time; the merchant only ever saw it in
+  that one response.
 
 [Unreleased]: https://github.com/jackwangfeng/keel/commits/main

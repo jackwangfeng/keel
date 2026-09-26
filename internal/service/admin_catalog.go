@@ -87,7 +87,7 @@ type AdminCatalogService struct {
 	repo  AdminCatalogRepository
 	store UploadStore
 
-	// compliance 是快路径的广告法违禁词检查器，完整论证在 compliance.go 的文件头。
+	// Compliance 是快路径的广告法违禁词检查器，完整论证在 compliance.go 的文件头。
 	//
 	// **导出，而且可以被改掉** —— 这是一个刻意的形状，代价与收益都说清楚：
 	// 收益是「检查卡住会怎样」这件事可以被测试造出来（真实的检查器是纯计算，
