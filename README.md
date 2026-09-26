@@ -407,15 +407,27 @@ battle-tested at scale. What it has is a stronger core.
 - [x] **M4** — Merchant self-service + multi-store and regions + compliance
   checks + product-understanding skeleton + coupons + tiered roles
   → **v0.1.0, first public release**
-- [x] **Cart, after-sales and shipping** — finish the buyer and admin
-  endpoints the contract already describes
-- [x] **Admin order and refund lists** — orders and after-sales pages, lists
-  narrowed to the caller's store scope
-- [ ] Auto-confirm receipt, buyer-entered return tracking numbers
-- [ ] **M5** — Reranking + business re-ranking + search analytics
-- [ ] **M6** — Image embeddings → visual search
-- [ ] **M7** — Conversational shopping assistant
-- [ ] **M8** — Cross-supplier duplicate detection
+- [x] **Transaction flow completed** — cart, address book, cancel, shipping,
+  confirm and auto-confirm receipt, after-sales refunds with return tracking,
+  admin orders and after-sales pages
+- [ ] **M5 Measurable search quality** — business re-ranking, search logs,
+  click-back events and metrics ✅; cross-encoder reranking (waiting on the
+  inference engine's rerank endpoint) and an offline evaluation set to do
+- [ ] **M6 Ready to open a shop** — shipping-fee templates and free-shipping
+  coupons, in-app notifications and merchant to-dos (in progress); real
+  payments, WeChat login and SMS codes need business qualifications and will
+  be wired in once those are in hand
+- [ ] **M7 Ready to do business** — promotions (tiered discounts, flash
+  prices, new-buyer gifts), business reports, Excel bulk import with AI
+  category suggestions (in progress)
+- [ ] **M8 Visual search** — image embeddings, a differentiator
+
+**Later, if real demand shows up:** conversational shopping, cross-supplier
+duplicate merging, attribute extraction and review attribution (need the
+inference engine's generate endpoint), natural-language analytics, an MCP
+server, sales forecasting (needs months of orders). These AI features demo
+well but do little for a shop that just opened, so they come after "can open a
+shop" and "can do business".
 
 ---
 
