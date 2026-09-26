@@ -101,6 +101,9 @@ func newAdminShop(t *testing.T) adminShop {
 			`DELETE FROM region_product_overrides WHERE merchant_id = $1`,
 			`DELETE FROM skus WHERE merchant_id = $1`,
 			`DELETE FROM products WHERE merchant_id = $1`,
+			// 运费模板（00055）：products 挂着它、它挂着 stores，排在两者之间。
+			`DELETE FROM freight_template_rules WHERE merchant_id = $1`,
+			`DELETE FROM freight_templates WHERE merchant_id = $1`,
 			`DELETE FROM categories WHERE merchant_id = $1`,
 			// staff_scopes（00025）指向 stores / regions / staff。三条外键都是
 			// ON DELETE CASCADE，这一句不写也删得掉；写出来是为了让这张清单

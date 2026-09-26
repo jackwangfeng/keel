@@ -93,6 +93,10 @@ type CartLineView struct {
 	// PriceCents 是这家店此刻的生效价；Status 为 off_shelf / not_sold_in_store 时为 nil。
 	PriceCents *int64
 	Status     CartLineStatus
+
+	// Undeliverable 非 nil 表示这一行送不到 CartView.AddressID 那个地址（00056）。
+	// 只对 available 的行判：别的行此刻本来就买不了。
+	Undeliverable *FreightUndeliverable
 }
 
 // CartView 是一整辆车（契约 Cart）。它也是幂等存档里存的东西，所以字段全部导出。
@@ -101,25 +105,42 @@ type CartView struct {
 	TotalCents         int64
 	SelectedTotalCents int64
 	Store              StoreContext
+
+	// AddressID / Freight：按哪个收货地址算的预估运费（00056）。没有地址时都为 nil ——
+	// 没有地址就没有运费可算，那不是「包邮」。
+	AddressID *int64
+	Freight   *FreightBreakdown
 }
 
-// cartScope 是一次请求解析出来的门店。MatchNone 时 Scope 为零值。
+// cartScope 是一次请求解析出来的门店与收货地址。MatchNone 时 Scope 为零值；
+// 没有地址（没指名、也没有默认地址）时 AddressID / Dest 为 nil。
 type cartScope struct {
 	Scope repository.StoreScope
 	Match MatchType
+
+	AddressID *int64
+	Dest      *FreightDestination
 }
 
 // resolveCartScope 走与读接口同一段 scopeIn。不在服务范围不是错误：读车照样
 // 回一辆车（每一行都不可买），由需要门店的写操作自己决定报不报错。
-func resolveCartScope(ctx context.Context, tx repository.Tx, storeID *int64) (cartScope, error) {
+//
+// 收货地址（00056，契约 CartAddressId）：指名了就用它（不存在或不是你的 → 422，
+// 不静默改用默认地址），没指名用默认地址，都没有就不算运费。
+func resolveCartScope(ctx context.Context, tx repository.Tx, userID int64,
+	storeID, addressID *int64) (cartScope, error) {
+	aid, dest, err := buyerDestination(ctx, tx, userID, addressID)
+	if err != nil {
+		return cartScope{}, err
+	}
 	sc, mt, err := scopeIn(ctx, tx, storeID)
 	if errors.Is(err, ErrOutOfServiceArea) {
-		return cartScope{Match: MatchNone}, nil
+		return cartScope{Match: MatchNone, AddressID: aid, Dest: dest}, nil
 	}
 	if err != nil {
 		return cartScope{}, err
 	}
-	return cartScope{Scope: sc, Match: mt}, nil
+	return cartScope{Scope: sc, Match: mt, AddressID: aid, Dest: dest}, nil
 }
 
 func (cs cartScope) requireStore() error {
@@ -133,14 +154,14 @@ func (cs cartScope) requireStore() error {
 func buildCart(ctx context.Context, tx repository.Tx, cartID int64, cs cartScope) (CartView, error) {
 	out := CartView{Lines: []CartLineView{}, Store: storeContextOf(cs.Scope, cs.Match)}
 	if cartID == 0 {
-		return out, nil
+		return withCartFreight(ctx, tx, out, cs)
 	}
 	lines, err := tx.ListCartLines(ctx, cartID, cs.Scope.StoreID)
 	if err != nil {
 		return CartView{}, err
 	}
 	if len(lines) == 0 {
-		return out, nil
+		return withCartFreight(ctx, tx, out, cs)
 	}
 
 	// 定价：与 priceOrder 同一条查询、同一家店。只问在架的那些 —— 失效行问了也是
@@ -193,18 +214,76 @@ func buildCart(ctx context.Context, tx repository.Tx, cartID int64, cs cartScope
 		}
 		out.Lines = append(out.Lines, v)
 	}
+	return withCartFreight(ctx, tx, out, cs)
+}
+
+// withCartFreight 给一辆车标上「送不送得到」并算预估运费（00056，契约 Cart.freight）。
+//
+// 与试算走同一份实现（freightContext.quote），两遍：
+//  1. 全部可买的行过一遍，挑出送不到的、给行打标（不只看勾选的：用户要在勾选之前就看得到）；
+//  2. 已勾选、可买、送得到的行按它们的金额合计算运费 —— 购物车不算券，所以满额包邮比的是
+//     「用券之前」的金额，最终以 /orders/preview 为准（契约写明）。
+func withCartFreight(ctx context.Context, tx repository.Tx, out CartView, cs cartScope) (CartView, error) {
+	if cs.Dest == nil {
+		return out, nil
+	}
+	var all []FreightItem
+	for _, ln := range out.Lines {
+		if ln.Status == CartLineAvailable {
+			all = append(all, FreightItem{SKUID: ln.SKUID, Quantity: ln.Quantity})
+		}
+	}
+	ids := make([]int64, 0, len(all))
+	for _, it := range all {
+		ids = append(ids, it.SKUID)
+	}
+	fc, err := loadFreightContext(ctx, tx, cs.Scope, ids)
+	if err != nil {
+		return CartView{}, err
+	}
+	_, bad, err := fc.quote(cs.Dest.ProvinceCode, all, 0)
+	if err != nil {
+		return CartView{}, err
+	}
+	badBySKU := make(map[int64]FreightUndeliverable, len(bad))
+	for _, b := range bad {
+		badBySKU[b.SKUID] = b
+	}
+	var sel []FreightItem
+	var goods int64
+	for i := range out.Lines {
+		ln := &out.Lines[i]
+		if ln.Status != CartLineAvailable {
+			continue
+		}
+		if b, ok := badBySKU[ln.SKUID]; ok {
+			b := b
+			ln.Undeliverable = &b
+			continue
+		}
+		if ln.Selected && ln.PriceCents != nil {
+			sel = append(sel, FreightItem{SKUID: ln.SKUID, Quantity: ln.Quantity})
+			goods += *ln.PriceCents * int64(ln.Quantity)
+		}
+	}
+	b, _, err := fc.quote(cs.Dest.ProvinceCode, sel, goods)
+	if err != nil {
+		return CartView{}, err
+	}
+	out.AddressID = cs.AddressID
+	out.Freight = &b
 	return out, nil
 }
 
 // Get 实现 GET /cart。
-func (s *CartService) Get(ctx context.Context, storeID *int64) (CartView, error) {
+func (s *CartService) Get(ctx context.Context, storeID, addressID *int64) (CartView, error) {
 	id, err := auth.FromContext(ctx)
 	if err != nil {
 		return CartView{}, err
 	}
 	var out CartView
 	err = s.repo.WithTenant(ctx, func(tx repository.Tx) error {
-		cs, err := resolveCartScope(ctx, tx, storeID)
+		cs, err := resolveCartScope(ctx, tx, id.UserID, storeID, addressID)
 		if err != nil {
 			return err
 		}
@@ -224,9 +303,11 @@ func (s *CartService) Get(ctx context.Context, storeID *int64) (CartView, error)
 // AddRequest 是 POST /cart/items。StoreID 来自 query，也进幂等哈希：
 // 同一个请求体按两家店算是两个不同的请求（响应里的价不一样）。
 type AddRequest struct {
-	StoreID  *int64
-	SKUID    int64
-	Quantity int32
+	StoreID *int64
+	// AddressID 同 StoreID：来自 query、进幂等哈希（响应里的运费按它算）。
+	AddressID *int64
+	SKUID     int64
+	Quantity  int32
 }
 
 // Add 实现 POST /cart/items。返回的 bool 为真表示幂等重放。
@@ -247,7 +328,7 @@ func (s *CartService) Add(ctx context.Context, req AddRequest, idemKey string) (
 	}
 	return idempotentTenantWrite(ctx, s.repo, scopeCartAdd, repository.BuyerSubject(id.UserID),
 		idemKey, hash, archivedOK, func(tx repository.Tx) (CartView, error) {
-			cs, err := resolveCartScope(ctx, tx, req.StoreID)
+			cs, err := resolveCartScope(ctx, tx, id.UserID, req.StoreID, req.AddressID)
 			if err != nil {
 				return CartView{}, err
 			}
@@ -319,10 +400,11 @@ func quantityExceeded(cur, add int32) error {
 
 // PatchRequest 是 PATCH /cart/items/{item_id}。
 type PatchRequest struct {
-	StoreID  *int64
-	ItemID   int64
-	Quantity *int32
-	Selected *bool
+	StoreID   *int64
+	AddressID *int64
+	ItemID    int64
+	Quantity  *int32
+	Selected  *bool
 }
 
 // Patch 实现 PATCH /cart/items/{item_id}。
@@ -342,7 +424,7 @@ func (s *CartService) Patch(ctx context.Context, req PatchRequest) (CartView, er
 	}
 	var out CartView
 	err = s.repo.WithTenant(ctx, func(tx repository.Tx) error {
-		cs, err := resolveCartScope(ctx, tx, req.StoreID)
+		cs, err := resolveCartScope(ctx, tx, id.UserID, req.StoreID, req.AddressID)
 		if err != nil {
 			return err
 		}
@@ -409,14 +491,15 @@ func dedupIDs(in []int64) []int64 {
 //
 // 给了 item_ids 时要么全改、要么一行不改：只要有一个不在这辆车里就回滚并 404
 // （契约：item_ids 中存在不属于当前用户购物车的条目）。
-func (s *CartService) Select(ctx context.Context, storeID *int64, selected bool, itemIDs *[]int64) (CartView, error) {
+func (s *CartService) Select(ctx context.Context, storeID, addressID *int64, selected bool,
+	itemIDs *[]int64) (CartView, error) {
 	id, err := auth.FromContext(ctx)
 	if err != nil {
 		return CartView{}, err
 	}
 	var out CartView
 	err = s.repo.WithTenant(ctx, func(tx repository.Tx) error {
-		cs, err := resolveCartScope(ctx, tx, storeID)
+		cs, err := resolveCartScope(ctx, tx, id.UserID, storeID, addressID)
 		if err != nil {
 			return err
 		}
@@ -452,9 +535,10 @@ func (s *CartService) Select(ctx context.Context, storeID *int64, selected bool,
 
 // BatchDeleteRequest 是 POST /cart/items/batch-delete。
 type BatchDeleteRequest struct {
-	StoreID  *int64
-	ItemIDs  *[]int64
-	Selected *bool
+	StoreID   *int64
+	AddressID *int64
+	ItemIDs   *[]int64
+	Selected  *bool
 }
 
 // BatchDelete 实现 POST /cart/items/batch-delete。返回的 bool 为真表示幂等重放。
@@ -486,7 +570,7 @@ func (s *CartService) BatchDelete(ctx context.Context, req BatchDeleteRequest, i
 	}
 	return idempotentTenantWrite(ctx, s.repo, scopeCartBatchDelete, repository.BuyerSubject(id.UserID),
 		idemKey, hash, archivedOK, func(tx repository.Tx) (CartView, error) {
-			cs, err := resolveCartScope(ctx, tx, req.StoreID)
+			cs, err := resolveCartScope(ctx, tx, id.UserID, req.StoreID, req.AddressID)
 			if err != nil {
 				return CartView{}, err
 			}

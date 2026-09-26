@@ -8,6 +8,7 @@ import type { AdminSection } from "../section.ts";
 import catalog from "./catalog.ts";
 import categories from "./categories.ts";
 import coupons from "./coupons.ts";
+import freight from "./freight.ts";
 import orders from "./orders.ts";
 import refunds from "./refunds.ts";
 import regions from "./regions.ts";
@@ -15,6 +16,6 @@ import staff from "./staff.ts";
 import stores from "./stores.ts";
 import merchants from "./merchants.ts";
 
-export const sections: AdminSection[] = [catalog, categories, coupons, orders, refunds, regions, stores, staff, merchants].sort(
+export const sections: AdminSection[] = [catalog, categories, coupons, freight, orders, refunds, regions, stores, staff, merchants].sort(
     (a, b) => a.order - b.order,
 );

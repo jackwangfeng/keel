@@ -89,6 +89,16 @@ SELECT id, receiver_name, phone, province, city, district, street, detail,
    AND user_id = $2
    AND deleted_at IS NULL;
 
+-- name: GetUserDefaultAddress :one
+-- 当前买家的默认收货地址（至多一条，uk_user_addresses_default）。购物车没指名地址时
+-- 按它算运费（00056）。没有默认地址是合法状态（新用户零个地址），调用方当作「没有地址」。
+SELECT id, receiver_name, phone, province, city, district, street, detail,
+       region_code, postal_code
+  FROM user_addresses
+ WHERE user_id = $1
+   AND is_default
+   AND deleted_at IS NULL;
+
 -- name: CreateOrderDraft :one
 -- 落一笔**创建中**的订单（status = 0），在提交 SAGA 之前。
 --
@@ -124,13 +134,15 @@ SELECT id, receiver_name, phone, province, city, district, street, detail,
 -- 应用先查一次券名再传进来的话，两步之间模板可以改名。没带券时子查询是 NULL；
 -- 带了券却匹配不上时 chk_coupon_name_with_coupon 与外键一起拒绝。
 INSERT INTO orders (order_no, user_id, store_id, region_id, store_snapshot,
-                    status, goods_amount_cents, freight_cents,
+                    status, goods_amount_cents, freight_cents, freight_discount_cents,
+                    freight_snapshot,
                     discount_cents, payable_cents, receiver_snapshot, remark, expire_at,
                     user_coupon_id, coupon_name)
 SELECT sqlc.arg(order_no), sqlc.arg(user_id), st.id, st.region_id,
        jsonb_build_object('store_name', st.name, 'region_name', r.name,
                           'address', st.address, 'phone', st.phone),
        0, sqlc.arg(goods_amount_cents), sqlc.arg(freight_cents),
+       sqlc.arg(freight_discount_cents), sqlc.arg(freight_snapshot),
        sqlc.arg(discount_cents), sqlc.arg(payable_cents),
        sqlc.arg(receiver_snapshot), sqlc.narg(remark), sqlc.arg(expire_at),
        sqlc.narg(user_coupon_id),
@@ -142,6 +154,7 @@ SELECT sqlc.arg(order_no), sqlc.arg(user_id), st.id, st.region_id,
   JOIN regions r ON r.id = st.region_id
  WHERE st.id = sqlc.arg(store_id) AND st.deleted_at IS NULL
 RETURNING id, order_no, store_id, region_id, status, goods_amount_cents, freight_cents,
+          freight_discount_cents,
           discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
           expire_at, created_at, user_coupon_id, coupon_name;
 
@@ -168,7 +181,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10);
 --
 -- user_coupon_id（00026）：SAGA 的券分支靠它知道这一单用的是哪张券。
 SELECT id, order_no, user_id, store_id, region_id, status,
-       goods_amount_cents, freight_cents,
+       goods_amount_cents, freight_cents, freight_discount_cents,
        discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
        expire_at, paid_at, shipped_at, finished_at, created_at, user_coupon_id,
        coupon_name
@@ -411,7 +424,7 @@ RETURNING id, payment_no, status;
 -- 顺序是不确定的，而不确定的顺序会让同一页在两次请求之间变样 —— 分页最经典的
 -- 那种「第二页又看到了第一页的那一单」。
 SELECT id, order_no, user_id, store_id, region_id, status,
-       goods_amount_cents, freight_cents,
+       goods_amount_cents, freight_cents, freight_discount_cents,
        discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
        expire_at, paid_at, shipped_at, finished_at, created_at, user_coupon_id,
        coupon_name
@@ -449,7 +462,7 @@ SELECT count(*)
 -- 查不到与「不是你的」回同一个 404：order_no 是 72 bit 随机不可枚举的，
 -- 分开报会把它变成一个「这个单号存不存在」的判定器。
 SELECT id, order_no, user_id, store_id, region_id, status,
-       goods_amount_cents, freight_cents,
+       goods_amount_cents, freight_cents, freight_discount_cents,
        discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
        expire_at, paid_at, shipped_at, finished_at, created_at, user_coupon_id,
        coupon_name
@@ -490,6 +503,15 @@ SELECT receiver_snapshot
 -- 三个月前那单的详情页要显示当时那个名字（数据模型 §5）。
 -- JOIN 出来的是今天的名字，而那正是快照存在要避免的东西。
 SELECT store_snapshot
+  FROM orders
+ WHERE id = $1;
+
+-- name: GetOrderFreightSnapshot :one
+-- 下单那一刻的运费计算明细快照（契约的 OrderDetail.freight / AdminOrderDetail.freight，00056）。
+--
+-- 与 GetOrderStoreSnapshot 同一个理由单独成条：一整块 JSONB，列表用不着。
+-- 00056 之前的订单是 NULL（那时不计运费），调用方让字段整个不出现。
+SELECT freight_snapshot
   FROM orders
  WHERE id = $1;
 

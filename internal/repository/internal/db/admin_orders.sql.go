@@ -100,7 +100,8 @@ func (q *Queries) AdminCountRefunds(ctx context.Context, arg AdminCountRefundsPa
 
 const adminGetOrderByNo = `-- name: AdminGetOrderByNo :one
 SELECT o.id, o.order_no, o.user_id, o.store_id, o.region_id, o.status,
-       o.goods_amount_cents, o.freight_cents, o.discount_cents, o.payable_cents,
+       o.goods_amount_cents, o.freight_cents, o.freight_discount_cents,
+       o.discount_cents, o.payable_cents,
        o.paid_cents, o.refunded_cents, o.refund_status, o.expire_at, o.paid_at,
        o.shipped_at, o.finished_at, o.created_at, o.user_coupon_id, o.coupon_name,
        o.receiver_snapshot, o.store_snapshot,
@@ -112,29 +113,30 @@ SELECT o.id, o.order_no, o.user_id, o.store_id, o.region_id, o.status,
 `
 
 type AdminGetOrderByNoRow struct {
-	ID               int64
-	OrderNo          string
-	UserID           int64
-	StoreID          int64
-	RegionID         int64
-	Status           int16
-	GoodsAmountCents int64
-	FreightCents     int64
-	DiscountCents    int64
-	PayableCents     int64
-	PaidCents        int64
-	RefundedCents    int64
-	RefundStatus     int16
-	ExpireAt         pgtype.Timestamptz
-	PaidAt           pgtype.Timestamptz
-	ShippedAt        pgtype.Timestamptz
-	FinishedAt       pgtype.Timestamptz
-	CreatedAt        pgtype.Timestamptz
-	UserCouponID     *int64
-	CouponName       *string
-	ReceiverSnapshot []byte
-	StoreSnapshot    []byte
-	HasOpenRefund    bool
+	ID                   int64
+	OrderNo              string
+	UserID               int64
+	StoreID              int64
+	RegionID             int64
+	Status               int16
+	GoodsAmountCents     int64
+	FreightCents         int64
+	FreightDiscountCents int64
+	DiscountCents        int64
+	PayableCents         int64
+	PaidCents            int64
+	RefundedCents        int64
+	RefundStatus         int16
+	ExpireAt             pgtype.Timestamptz
+	PaidAt               pgtype.Timestamptz
+	ShippedAt            pgtype.Timestamptz
+	FinishedAt           pgtype.Timestamptz
+	CreatedAt            pgtype.Timestamptz
+	UserCouponID         *int64
+	CouponName           *string
+	ReceiverSnapshot     []byte
+	StoreSnapshot        []byte
+	HasOpenRefund        bool
 }
 
 // 后台按单号取一笔订单（没有买家过滤；租户由 RLS 管，门店范围由 service 判）。
@@ -151,6 +153,7 @@ func (q *Queries) AdminGetOrderByNo(ctx context.Context, orderNo string) (AdminG
 		&i.Status,
 		&i.GoodsAmountCents,
 		&i.FreightCents,
+		&i.FreightDiscountCents,
 		&i.DiscountCents,
 		&i.PayableCents,
 		&i.PaidCents,
@@ -375,7 +378,8 @@ func (q *Queries) AdminListOrderRefunds(ctx context.Context, orderID int64) ([]A
 const adminListOrders = `-- name: AdminListOrders :many
 
 SELECT o.id, o.order_no, o.user_id, o.store_id, o.region_id, o.status,
-       o.goods_amount_cents, o.freight_cents, o.discount_cents, o.payable_cents,
+       o.goods_amount_cents, o.freight_cents, o.freight_discount_cents,
+       o.discount_cents, o.payable_cents,
        o.paid_cents, o.refunded_cents, o.refund_status, o.expire_at, o.paid_at,
        o.shipped_at, o.finished_at, o.created_at, o.user_coupon_id, o.coupon_name,
        o.receiver_snapshot, o.store_snapshot,
@@ -415,29 +419,30 @@ type AdminListOrdersParams struct {
 }
 
 type AdminListOrdersRow struct {
-	ID               int64
-	OrderNo          string
-	UserID           int64
-	StoreID          int64
-	RegionID         int64
-	Status           int16
-	GoodsAmountCents int64
-	FreightCents     int64
-	DiscountCents    int64
-	PayableCents     int64
-	PaidCents        int64
-	RefundedCents    int64
-	RefundStatus     int16
-	ExpireAt         pgtype.Timestamptz
-	PaidAt           pgtype.Timestamptz
-	ShippedAt        pgtype.Timestamptz
-	FinishedAt       pgtype.Timestamptz
-	CreatedAt        pgtype.Timestamptz
-	UserCouponID     *int64
-	CouponName       *string
-	ReceiverSnapshot []byte
-	StoreSnapshot    []byte
-	HasOpenRefund    bool
+	ID                   int64
+	OrderNo              string
+	UserID               int64
+	StoreID              int64
+	RegionID             int64
+	Status               int16
+	GoodsAmountCents     int64
+	FreightCents         int64
+	FreightDiscountCents int64
+	DiscountCents        int64
+	PayableCents         int64
+	PaidCents            int64
+	RefundedCents        int64
+	RefundStatus         int16
+	ExpireAt             pgtype.Timestamptz
+	PaidAt               pgtype.Timestamptz
+	ShippedAt            pgtype.Timestamptz
+	FinishedAt           pgtype.Timestamptz
+	CreatedAt            pgtype.Timestamptz
+	UserCouponID         *int64
+	CouponName           *string
+	ReceiverSnapshot     []byte
+	StoreSnapshot        []byte
+	HasOpenRefund        bool
 }
 
 // 后台订单与退款单的读：GET /admin/orders、GET /admin/orders/{order_no}、
@@ -495,6 +500,7 @@ func (q *Queries) AdminListOrders(ctx context.Context, arg AdminListOrdersParams
 			&i.Status,
 			&i.GoodsAmountCents,
 			&i.FreightCents,
+			&i.FreightDiscountCents,
 			&i.DiscountCents,
 			&i.PayableCents,
 			&i.PaidCents,

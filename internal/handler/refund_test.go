@@ -455,7 +455,7 @@ func TestReturnAndRefund(t *testing.T) {
 		http.StatusConflict); p.Type != problem.TypeRefundStatusNotReceivable {
 		t.Fatalf("待审核的单确认收货应 409 refund-status-not-receivable，实得 %+v", p)
 	}
-	// 运费裁定超过实收运费（本期运费恒为 0）。
+	// 运费裁定超过实收运费（这家店没配运费模板，实收运费是 0；有运费的情形见 freight_test.go）。
 	if p := problemOf(t, cs.audit(t, r.RefundNo, `{"action":"approve","freight_cents":1}`),
 		http.StatusUnprocessableEntity); p.Type != problem.TypeRefundFreightExceeded {
 		t.Fatalf("退运费超过实收应 422 refund-freight-exceeded，实得 %+v", p)

@@ -133,7 +133,11 @@ func templateIDsOf(cs []repository.UserCoupon) []int64 {
 //
 // 定价走 priceOrder（门店生效价、可售性校验与试算完全一样），然后逐张走
 // evaluateCoupon —— 与试算里的 applicable_coupons 是同一个函数。
-func (s *CouponService) Applicable(ctx context.Context, items []LineInput, storeID int64) ([]ApplicableCoupon, error) {
+//
+// addressID 可选（00056）：包邮券抵多少取决于运费，运费取决于地址。没带地址时
+// 结果里没有包邮券（判不了），其余券型不受影响。
+func (s *CouponService) Applicable(ctx context.Context, items []LineInput, storeID int64,
+	addressID *int64) ([]ApplicableCoupon, error) {
 	id, err := auth.FromContext(ctx)
 	if err != nil {
 		return nil, err
@@ -145,11 +149,23 @@ func (s *CouponService) Applicable(ctx context.Context, items []LineInput, store
 		if err != nil {
 			return err
 		}
-		q, err := priceOrder(ctx, tx, sc, items, couponRequest{UserID: id.UserID, Now: now})
+		var dest *FreightDestination
+		if addressID != nil {
+			addr, err := tx.FindAddress(ctx, *addressID, id.UserID)
+			if errors.Is(err, repository.ErrAddressNotFound) {
+				return fmt.Errorf("%w: address_id=%d", ErrAddressNotFound, *addressID)
+			}
+			if err != nil {
+				return err
+			}
+			d := destinationOf(addr)
+			dest = &d
+		}
+		q, err := priceOrder(ctx, tx, sc, dest, items, couponRequest{UserID: id.UserID, Now: now})
 		if err != nil {
 			return err
 		}
-		out, err = applicableCoupons(ctx, tx, sc, id.UserID, q.Lines, now)
+		out, err = applicableCoupons(ctx, tx, sc, id.UserID, q.Lines, q.freightNoCoupon, now)
 		return err
 	})
 	return out, err

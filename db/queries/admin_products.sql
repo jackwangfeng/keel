@@ -34,7 +34,8 @@ SELECT p.id, p.category_id, p.brand_id, p.title, p.subtitle, p.description,
        COALESCE(agg.max_price, 0)::bigint AS max_price_cents,
        COALESCE(agg.stock, 0)::int        AS total_stock,
        p.sales_count,
-       p.status, p.published_at, p.deleted_at, p.created_at, p.updated_at
+       p.status, p.published_at, p.deleted_at, p.created_at, p.updated_at,
+       p.freight_template_id
   FROM products p
   LEFT JOIN LATERAL (
         SELECT min(s.price_cents) AS min_price, max(s.price_cents) AS max_price,
@@ -78,7 +79,8 @@ SELECT p.id, p.category_id, p.brand_id, p.title, p.subtitle, p.description,
        COALESCE(agg.max_price, 0)::bigint AS max_price_cents,
        COALESCE(agg.stock, 0)::int        AS total_stock,
        p.sales_count,
-       p.status, p.published_at, p.deleted_at, p.created_at, p.updated_at
+       p.status, p.published_at, p.deleted_at, p.created_at, p.updated_at,
+       p.freight_template_id
   FROM products p
   LEFT JOIN LATERAL (
         SELECT min(s.price_cents) AS min_price, max(s.price_cents) AS max_price,
@@ -99,9 +101,9 @@ SELECT p.id, p.category_id, p.brand_id, p.title, p.subtitle, p.description,
 -- LEFT JOIN LATERAL 才算得出来，而 INSERT ... RETURNING 里没有那个 join 的
 -- 位置。硬填两个 0 也能过 —— 新建的商品确实一个 SKU 都没有 —— 但那会让
 -- 「价格区间怎么来的」在这个仓库里有两个答案，而第二个答案是一个常量。
-INSERT INTO products (category_id, brand_id, title, subtitle, description)
+INSERT INTO products (category_id, brand_id, title, subtitle, description, freight_template_id)
 VALUES (sqlc.arg(category_id), sqlc.narg(brand_id), sqlc.arg(title),
-        sqlc.narg(subtitle), sqlc.narg(description))
+        sqlc.narg(subtitle), sqlc.narg(description), sqlc.narg(freight_template_id))
 RETURNING id;
 
 -- name: UpdateProduct :one
@@ -138,7 +140,10 @@ WITH cur AS (
            description = COALESCE(sqlc.narg(description), u.description),
            category_id = COALESCE(sqlc.narg(category_id), u.category_id),
            brand_id    = CASE WHEN sqlc.arg(set_brand_id)::boolean
-                              THEN sqlc.narg(brand_id)::bigint ELSE u.brand_id END
+                              THEN sqlc.narg(brand_id)::bigint ELSE u.brand_id END,
+           freight_template_id = CASE WHEN sqlc.arg(set_freight_template_id)::boolean
+                              THEN sqlc.narg(freight_template_id)::bigint
+                              ELSE u.freight_template_id END
      WHERE u.id = sqlc.arg(id) AND u.deleted_at IS NULL
     RETURNING u.id
 )

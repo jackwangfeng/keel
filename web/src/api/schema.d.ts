@@ -1834,7 +1834,19 @@ export interface paths {
                     };
                 };
                 409: components["responses"]["IdempotencyInFlight"];
-                422: components["responses"]["IdempotencyKeyReused"];
+                /**
+                 * @description 同一 Idempotency-Key 配了不同的请求体（`https://keel.dev/problems/idempotency-key-reused`）；
+                 *     或 `freight_template_id` 指向门店模板、不存在或已删除的运费模板
+                 *     （`https://keel.dev/problems/invalid-request`）。
+                 */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
                 default: components["responses"]["Problem"];
             };
         };
@@ -2536,7 +2548,8 @@ export interface paths {
                 /**
                  * @description 按 Problem `type` 区分：
                  *
-                 *     · 一个字段都没传（`minProperties: 1`），或字段取值非法——
+                 *     · 一个字段都没传（`minProperties: 1`），或字段取值非法（含 `freight_template_id`
+                 *       指向门店模板、不存在或已删除的运费模板）——
                  *       `https://keel.dev/problems/invalid-request`
                  *     · 在架商品的新文案命中广告法违禁词——
                  *       `https://keel.dev/problems/compliance-rejected`。
@@ -5828,10 +5841,12 @@ export interface paths {
          *     | 1 满减 | `threshold_cents ≥ discount_cents > 0` | `discount_rate`、`max_discount_cents` |
          *     | 2 折扣 | `discount_rate` ∈ [1, 999]（千分比，850 = 8.5 折）；`threshold_cents`、`max_discount_cents` 可选 | `discount_cents` |
          *     | 3 立减 | `discount_cents > 0` | `threshold_cents`、`discount_rate`、`max_discount_cents` |
-         *     | 4 包邮 | **本期拒绝（422）** | — |
+         *     | 4 包邮 | `threshold_cents`（可为 0，比的是适用商品小计）、`max_discount_cents`（最多抵多少运费，0 = 全免）可选 | `discount_cents`、`discount_rate` |
          *
-         *     **包邮券为什么被拒绝**：本系统没有运费（`orders.freight_cents` 恒为 0，运费模板没有落地），
-         *     一张包邮券永远减 0，买家却会看到「已用包邮券」。运费落地的那一轮放开。
+         *     **包邮券抵的是运费**（00056 起可建）：适用范围与门槛的判法和别的券一样，
+         *     抵扣额 = min(本单运费, `max_discount_cents`（0 为不封顶）)，所以运费最多抵到 0。
+         *     本单运费为 0（满额包邮了、或商家没配运费模板）时这张券**不可用**——
+         *     用掉一张一分钱没抵的券，比不让用更糟。
          *
          *     有效期二选一：`valid_mode = 1` 绝对时间（`valid_start_at` < `valid_end_at`），
          *     `valid_mode = 2` 领取后 N 天（`valid_days > 0`）。
@@ -5915,7 +5930,7 @@ export interface paths {
                 };
                 409: components["responses"]["IdempotencyInFlight"];
                 /**
-                 * @description 字段组合不成立（满 100 减 200、折扣率越界、有效期倒挂、包邮券……）——
+                 * @description 字段组合不成立（满 100 减 200、折扣率越界、有效期倒挂、包邮券带了减免额……）——
                  *     `https://keel.dev/problems/invalid-request`；或同一 Idempotency-Key 配了不同的请求体。
                  */
                 422: {
@@ -6393,6 +6408,481 @@ export interface paths {
             };
         };
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/freight-templates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 运费模板列表
+         * @description 按 id 倒序。全店模板（`store_id` 为 null）与门店模板一起列出，
+         *     `store_id` 查询参数只看某一家门店的那一个。
+         *
+         *     **权限**：后台四种角色都能读（与商品目录同一个口径：大区 / 门店管理员
+         *     要看得到商品挂的是哪个模板，才说得清一单的运费是怎么来的）。
+         *     写的判据见 `POST`。
+         */
+        get: {
+            parameters: {
+                query?: {
+                    page?: components["parameters"]["Page"];
+                    page_size?: components["parameters"]["PageSize"];
+                    /** @description 只看这家门店的门店模板。不传即全部（全店模板 + 各门店模板）。 */
+                    store_id?: number;
+                };
+                header?: {
+                    /**
+                     * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+                     *
+                     *     它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+                     *     而例外成立的前提是平台级鉴权：
+                     *
+                     *     · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+                     *       读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+                     *       行级安全落在这家店上。
+                     *     · **商家级员工带了这个头：403**
+                     *       （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+                     *       静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+                     *     · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+                     *       **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+                     *       实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+                     *       请求其余部分指名的东西不存在是 422。
+                     *     · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+                     *       买家侧对它照旧 404。
+                     *     · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+                     *       （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+                     *
+                     *     后台每一条挂后台会话的操作都声明了它（机械核对：
+                     *     `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+                     */
+                    "X-Keel-Merchant"?: components["parameters"]["KeelMerchant"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PageMeta"] & {
+                            items: components["schemas"]["AdminFreightTemplate"][];
+                        };
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        put?: never;
+        /**
+         * 新建运费模板
+         * @description 一个模板 = 计费方式 + 一组按地区分的计费规则 + 包邮条件 + 不配送地区。
+         *     计算规则的唯一真相源是数据模型 §7「运费怎么算」，这里只说怎么填：
+         *
+         *     · **计费方式** `charge_mode`：1 按件（`first_unit` / `additional_unit` 是件数）、
+         *       2 按重量（单位是**克**，重量取 SKU 的 `weight_gram`）。
+         *     · **规则** `rules`：每条规则管一组省级行政区（`region_codes`，6 位省级区划码，
+         *       如 `110000` 北京、`650000` 新疆）。**恰好一条**规则的 `region_codes` 为空数组，
+         *       它是「其余地区」的默认规则。同一个省只能出现在一条规则里。
+         *       运费 = 首件（首重）费 + ⌈超出首件（首重）的部分 ÷ 续件（续重）单位⌉ × 续件（续重）费。
+         *     · **包邮条件**挂在规则上（偏远地区可以不包邮，或门槛更高）：
+         *       `free_threshold_cents` 满额包邮（0 = 不设），`free_quantity` 满件包邮（0 = 不设），
+         *       两个都设时满足任一即包邮。满额比的是**整单优惠后应付商品金额**（营销活动与
+         *       优惠券都减完之后），满件比的是整单件数。
+         *     · **不配送地区** `undeliverable_region_codes`：这些省下单时对应的行报
+         *       422 `region-not-deliverable`。不能与任何一条规则的 `region_codes` 重叠。
+         *
+         *     **两种归属**：`store_id` 为 null 是**全店模板**——商品可以挂它，`is_default = true`
+         *     的那一个是全店兜底；`store_id` 非 null 是**门店模板**——每家门店至多一个，
+         *     这家店发货的、没有单独挂模板的商品按它算。一行商品用哪个模板：
+         *     商品挂的模板 → 履约门店的门店模板 → 全店默认模板 → 都没有则这一行不计运费。
+         *
+         *     **权限**（契约 `StaffRole` 矩阵「运费模板」那一行）：全店模板只有管理员与操作员
+         *     （role 1、2）能写，理由同基准价——它决定全店每一单的运费；门店模板的判据同
+         *     门店价（本大区的大区管理员、这家店的门店管理员也能写）。
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /**
+                     * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+                     *
+                     *     它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+                     *     而例外成立的前提是平台级鉴权：
+                     *
+                     *     · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+                     *       读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+                     *       行级安全落在这家店上。
+                     *     · **商家级员工带了这个头：403**
+                     *       （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+                     *       静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+                     *     · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+                     *       **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+                     *       实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+                     *       请求其余部分指名的东西不存在是 422。
+                     *     · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+                     *       买家侧对它照旧 404。
+                     *     · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+                     *       （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+                     *
+                     *     后台每一条挂后台会话的操作都声明了它（机械核对：
+                     *     `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+                     */
+                    "X-Keel-Merchant"?: components["parameters"]["KeelMerchant"];
+                    /**
+                     * @description 客户端生成的 UUID。幂等作用域为 `(接口 scope, user_id, key)`，
+                     *     有效期 24h，过期后同一 key 可复用（见数据模型文档 §11）。
+                     *
+                     *     · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
+                     *       并带 `Idempotency-Replayed: true` 响应头
+                     *     · **同 key 正在处理中**：`409` + `Retry-After`，
+                     *       type=https://keel.dev/problems/idempotency-key-in-flight，
+                     *       客户端应退避重试，不要当成业务失败
+                     *     · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
+                     *       type=https://keel.dev/problems/idempotency-key-reused。
+                     *       宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
+                     *       那会让用户以为下单成功了而实际什么都没发生
+                     *     · 首次执行失败（存档为失败态）时同样回放该失败响应；
+                     *       确需重试的场景请换一个新 key
+                     */
+                    "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["FreightTemplateInput"];
+                };
+            };
+            responses: {
+                /** @description 已创建 */
+                201: {
+                    headers: {
+                        "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AdminFreightTemplate"];
+                    };
+                };
+                /**
+                 * @description 角色不够（`https://keel.dev/problems/role-forbidden`）或门店不在管辖范围
+                 *     （`https://keel.dev/problems/out-of-scope`）。
+                 */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /**
+                 * @description 按 `type` 区分：这家门店已经有一个门店模板 ——
+                 *     `https://keel.dev/problems/freight-template-conflict`；
+                 *     同一 Idempotency-Key 正在处理中 —— `https://keel.dev/problems/idempotency-key-in-flight`。
+                 */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /**
+                 * @description 模板不成立（没有或多于一条默认规则、区划码不认识、同一个省出现两次、
+                 *     门店模板设成全店默认、`store_id` 指向的门店不存在……）——
+                 *     `https://keel.dev/problems/invalid-request`；或同一 Idempotency-Key 配了不同的请求体。
+                 */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/freight-templates/{template_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description `freight_templates.id`。查不到（含已删除、属于别家店）即 404。 */
+                template_id: components["parameters"]["FreightTemplateId"];
+            };
+            cookie?: never;
+        };
+        /** 运费模板详情 */
+        get: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /**
+                     * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+                     *
+                     *     它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+                     *     而例外成立的前提是平台级鉴权：
+                     *
+                     *     · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+                     *       读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+                     *       行级安全落在这家店上。
+                     *     · **商家级员工带了这个头：403**
+                     *       （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+                     *       静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+                     *     · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+                     *       **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+                     *       实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+                     *       请求其余部分指名的东西不存在是 422。
+                     *     · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+                     *       买家侧对它照旧 404。
+                     *     · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+                     *       （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+                     *
+                     *     后台每一条挂后台会话的操作都声明了它（机械核对：
+                     *     `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+                     */
+                    "X-Keel-Merchant"?: components["parameters"]["KeelMerchant"];
+                };
+                path: {
+                    /** @description `freight_templates.id`。查不到（含已删除、属于别家店）即 404。 */
+                    template_id: components["parameters"]["FreightTemplateId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AdminFreightTemplate"];
+                    };
+                };
+                /** @description 模板不存在、已删除或不属于当前租户。 */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        /**
+         * 修改运费模板（整体替换）
+         * @description **整体替换**：请求体就是这个模板的全部内容，规则与不配送地区整组换掉。
+         *     规则之间互相约束（恰好一条默认、省不重叠），增量改一条规则的接口
+         *     会让「中间态不成立」这件事无处安放。PUT 天然幂等，不收 Idempotency-Key。
+         *
+         *     改动**只影响之后的试算与下单**：已下的订单在 `orders.freight_snapshot` 里
+         *     记着下单那一刻用的规则（数据模型 §5），不会被改写。
+         *
+         *     可以在全店与门店之间改归属（`store_id`），判权新旧两边都要过。
+         *     全店模板改成门店模板时，若还有商品挂着它则 409（商品只能挂全店模板）。
+         */
+        put: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /**
+                     * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+                     *
+                     *     它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+                     *     而例外成立的前提是平台级鉴权：
+                     *
+                     *     · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+                     *       读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+                     *       行级安全落在这家店上。
+                     *     · **商家级员工带了这个头：403**
+                     *       （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+                     *       静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+                     *     · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+                     *       **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+                     *       实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+                     *       请求其余部分指名的东西不存在是 422。
+                     *     · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+                     *       买家侧对它照旧 404。
+                     *     · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+                     *       （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+                     *
+                     *     后台每一条挂后台会话的操作都声明了它（机械核对：
+                     *     `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+                     */
+                    "X-Keel-Merchant"?: components["parameters"]["KeelMerchant"];
+                };
+                path: {
+                    /** @description `freight_templates.id`。查不到（含已删除、属于别家店）即 404。 */
+                    template_id: components["parameters"]["FreightTemplateId"];
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["FreightTemplateInput"];
+                };
+            };
+            responses: {
+                /** @description 已替换 */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AdminFreightTemplate"];
+                    };
+                };
+                /** @description 角色不够或门店不在管辖范围（同 `POST`）。 */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /** @description 模板不存在、已删除或不属于当前租户。 */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /**
+                 * @description 这家门店已经有别的门店模板 —— `https://keel.dev/problems/freight-template-conflict`；
+                 *     要改成门店模板而仍有商品挂着它 —— `https://keel.dev/problems/freight-template-in-use`。
+                 */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /** @description 模板不成立（同 `POST`）。 */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        post?: never;
+        /**
+         * 删除运费模板（软删）
+         * @description 置 `deleted_at`。**还有商品挂着它时拒绝（409）**：静默解除关联会让那些商品
+         *     悄悄落回门店模板或全店默认，运费变了而商家不知道。先把商品改挂别的模板。
+         *
+         *     删掉全店默认模板是允许的：之后没挂模板、所在门店也没有门店模板的商品不计运费。
+         *     历史订单不受影响（运费规则快照在订单上）。
+         */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /**
+                     * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+                     *
+                     *     它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+                     *     而例外成立的前提是平台级鉴权：
+                     *
+                     *     · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+                     *       读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+                     *       行级安全落在这家店上。
+                     *     · **商家级员工带了这个头：403**
+                     *       （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+                     *       静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+                     *     · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+                     *       **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+                     *       实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+                     *       请求其余部分指名的东西不存在是 422。
+                     *     · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+                     *       买家侧对它照旧 404。
+                     *     · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+                     *       （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+                     *
+                     *     后台每一条挂后台会话的操作都声明了它（机械核对：
+                     *     `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+                     */
+                    "X-Keel-Merchant"?: components["parameters"]["KeelMerchant"];
+                };
+                path: {
+                    /** @description `freight_templates.id`。查不到（含已删除、属于别家店）即 404。 */
+                    template_id: components["parameters"]["FreightTemplateId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description 已删除 */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description 角色不够或门店不在管辖范围（同 `POST`）。 */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /** @description 模板不存在、已删除或不属于当前租户。 */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /** @description 还有商品挂着它 —— `https://keel.dev/problems/freight-template-in-use`。 */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
         options?: never;
         head?: never;
         patch?: never;
@@ -8101,6 +8591,16 @@ export interface paths {
                      *     **刻意没有 default**：理由同 `GET /products`。
                      */
                     store_id?: components["parameters"]["CartStoreId"];
+                    /**
+                     * @description 按哪个收货地址算运费（`Cart.freight`）与「送不送得到」（`CartItem.undeliverable`）。
+                     *     **每一条返回 `Cart` 的购物车接口都收它**，与 `store_id` 同一个道理：
+                     *     客户端应当传结算页选中的那一个，于是购物车显示的运费与 `/orders/preview` 的一致。
+                     *
+                     *     不传时用这个买家的**默认地址**；也没有默认地址时 `freight` 与 `undeliverable`
+                     *     整个不出现（没有地址就没有运费可算，不是「包邮」）。
+                     *     指名一个不存在或不属于你的地址返回 422，不静默改用默认地址。
+                     */
+                    address_id?: components["parameters"]["CartAddressId"];
                 };
                 header?: never;
                 path?: never;
@@ -8117,7 +8617,10 @@ export interface paths {
                         "application/json": components["schemas"]["Cart"];
                     };
                 };
-                /** @description `store_id` 指向的门店不存在或不属于当前店铺（`https://keel.dev/problems/invalid-request`） */
+                /**
+                 * @description `store_id` 指向的门店不存在或不属于当前店铺，或 `address_id` 指向的地址不存在或
+                 *     不属于你（`https://keel.dev/problems/invalid-request`）
+                 */
                 422: {
                     headers: {
                         [name: string]: unknown;
@@ -8196,6 +8699,16 @@ export interface paths {
                      *     **刻意没有 default**：理由同 `GET /products`。
                      */
                     store_id?: components["parameters"]["CartStoreId"];
+                    /**
+                     * @description 按哪个收货地址算运费（`Cart.freight`）与「送不送得到」（`CartItem.undeliverable`）。
+                     *     **每一条返回 `Cart` 的购物车接口都收它**，与 `store_id` 同一个道理：
+                     *     客户端应当传结算页选中的那一个，于是购物车显示的运费与 `/orders/preview` 的一致。
+                     *
+                     *     不传时用这个买家的**默认地址**；也没有默认地址时 `freight` 与 `undeliverable`
+                     *     整个不出现（没有地址就没有运费可算，不是「包邮」）。
+                     *     指名一个不存在或不属于你的地址返回 422，不静默改用默认地址。
+                     */
+                    address_id?: components["parameters"]["CartAddressId"];
                 };
                 header: {
                     /**
@@ -8310,6 +8823,16 @@ export interface paths {
                      *     **刻意没有 default**：理由同 `GET /products`。
                      */
                     store_id?: components["parameters"]["CartStoreId"];
+                    /**
+                     * @description 按哪个收货地址算运费（`Cart.freight`）与「送不送得到」（`CartItem.undeliverable`）。
+                     *     **每一条返回 `Cart` 的购物车接口都收它**，与 `store_id` 同一个道理：
+                     *     客户端应当传结算页选中的那一个，于是购物车显示的运费与 `/orders/preview` 的一致。
+                     *
+                     *     不传时用这个买家的**默认地址**；也没有默认地址时 `freight` 与 `undeliverable`
+                     *     整个不出现（没有地址就没有运费可算，不是「包邮」）。
+                     *     指名一个不存在或不属于你的地址返回 422，不静默改用默认地址。
+                     */
+                    address_id?: components["parameters"]["CartAddressId"];
                 };
                 header?: never;
                 path?: never;
@@ -8391,6 +8914,16 @@ export interface paths {
                      *     **刻意没有 default**：理由同 `GET /products`。
                      */
                     store_id?: components["parameters"]["CartStoreId"];
+                    /**
+                     * @description 按哪个收货地址算运费（`Cart.freight`）与「送不送得到」（`CartItem.undeliverable`）。
+                     *     **每一条返回 `Cart` 的购物车接口都收它**，与 `store_id` 同一个道理：
+                     *     客户端应当传结算页选中的那一个，于是购物车显示的运费与 `/orders/preview` 的一致。
+                     *
+                     *     不传时用这个买家的**默认地址**；也没有默认地址时 `freight` 与 `undeliverable`
+                     *     整个不出现（没有地址就没有运费可算，不是「包邮」）。
+                     *     指名一个不存在或不属于你的地址返回 422，不静默改用默认地址。
+                     */
+                    address_id?: components["parameters"]["CartAddressId"];
                 };
                 header: {
                     /**
@@ -8538,6 +9071,16 @@ export interface paths {
                      *     **刻意没有 default**：理由同 `GET /products`。
                      */
                     store_id?: components["parameters"]["CartStoreId"];
+                    /**
+                     * @description 按哪个收货地址算运费（`Cart.freight`）与「送不送得到」（`CartItem.undeliverable`）。
+                     *     **每一条返回 `Cart` 的购物车接口都收它**，与 `store_id` 同一个道理：
+                     *     客户端应当传结算页选中的那一个，于是购物车显示的运费与 `/orders/preview` 的一致。
+                     *
+                     *     不传时用这个买家的**默认地址**；也没有默认地址时 `freight` 与 `undeliverable`
+                     *     整个不出现（没有地址就没有运费可算，不是「包邮」）。
+                     *     指名一个不存在或不属于你的地址返回 422，不静默改用默认地址。
+                     */
+                    address_id?: components["parameters"]["CartAddressId"];
                 };
                 header?: never;
                 path: {
@@ -8613,6 +9156,10 @@ export interface paths {
          *     否则用户看到的是 A 店的价、成交的是 B 店的价。
          *     请求体共用 `OrderCreateRequest`，这一点本轮没变。
          *
+         *     **运费（00056 起）按 `address_id` 那个收货地址算**，与下单同一份实现。
+         *     计价顺序固定为：商品原价 → 营销活动 → 优惠券（门槛按活动后金额判）→ 运费
+         *     （满额包邮按优惠后应付商品金额判）→ 包邮券抵运费（数据模型 §7「优惠计算顺序」）。
+         *
          *     试算会把「这家店（或它所在大区）不卖其中某几件」提前报出来（422），
          *     所以正常路径上 `POST /orders` 不该再撞上它。
          *     **但仍然会撞上**——运营随时可以在两次调用之间下架一件商品，
@@ -8657,6 +9204,8 @@ export interface paths {
                 /**
                  * @description 与 `POST /orders` 的 422 逐条一致：这家店不卖其中某几件
                  *     （`https://keel.dev/problems/sku-not-sold-in-store`），
+                 *     有商品送不到这个收货地址（`https://keel.dev/problems/region-not-deliverable`，
+                 *     `undeliverable_items` 逐行给出 SKU 与原因），
                  *     或 `store_id` / `address_id` / `sku_id` 有一个服务端不认识
                  *     （`https://keel.dev/problems/invalid-request`）。
                  *     试算的全部意义就是在下单之前把这些说出来。
@@ -8820,6 +9369,10 @@ export interface paths {
                  *       也**刻意不是 404**：那条分界线是「路径里指名的资源不存在 → 404，
                  *       请求体里指名的东西不存在或不可用 → 422」，
                  *       而这条路径是 `/orders`，报 404 会被读成「下单接口不存在」。
+                 *     · **有商品送不到这个收货地址** —— `https://keel.dev/problems/region-not-deliverable`，
+                 *       响应体的 `undeliverable_items` 逐行给出 SKU 与原因（这件商品的运费模板把
+                 *       收货地址所在的省列为不配送，或地址归不到省而模板设了不配送地区）。
+                 *       同样**不是 409**：重试不会成功，客户端该做的是去掉这几行或换一个地址。
                  *     · **`store_id` / `address_id` / `sku_id` 有一个服务端不认识** ——
                  *       `https://keel.dev/problems/invalid-request`。
                  *       「不是你的门店」与「不是你的 SKU」合用一个 type：
@@ -10887,6 +11440,9 @@ export interface paths {
          *     计算与 `POST /orders/preview`、`POST /orders` 是**同一份实现**，
          *     这里说能减多少，下单就减多少（数据模型 §7「券怎么算」）。
          *     不可用的券（门槛不够、范围不含、已过期、已锁定）不出现在结果里。
+         *
+         *     **包邮券只在带了 `address_id` 时出现**：它抵的是运费，而运费取决于收货地址。
+         *     本单运费为 0（包邮或没配运费模板）时包邮券不可用——用了也抵不了一分钱。
          */
         post: {
             parameters: {
@@ -10912,8 +11468,10 @@ export interface paths {
                 };
                 /**
                  * @description 与 `POST /orders/preview` 的 422 一致：这家店不卖其中某几件
-                 *     （`https://keel.dev/problems/sku-not-sold-in-store`），或 `store_id` / `sku_id`
-                 *     有一个服务端不认识（`https://keel.dev/problems/invalid-request`）。
+                 *     （`https://keel.dev/problems/sku-not-sold-in-store`），或 `store_id` / `sku_id` /
+                 *     `address_id` 有一个服务端不认识（`https://keel.dev/problems/invalid-request`），
+                 *     或带了 `address_id` 而有商品送不到那里（`https://keel.dev/problems/region-not-deliverable`，
+                 *     `undeliverable_items` 逐行列出）。
                  */
                 422: {
                     headers: {
@@ -11100,6 +11658,11 @@ export interface components {
             trace_id?: string;
             /** @description 字段级校验错误 */
             errors?: components["schemas"]["FieldError"][];
+            /**
+             * @description 只在 `region-not-deliverable`（试算 / 下单时有商品送不到这个收货地址）时出现：
+             *     逐行列出送不到的 SKU 与原因，客户端据此把这几行标出来让用户去掉或换地址。
+             */
+            undeliverable_items?: components["schemas"]["FreightUndeliverableLine"][];
         };
         /**
          * @description 一条字段级错误。`field` 是请求体（或商品对象）里的字段名。
@@ -11201,6 +11764,12 @@ export interface components {
              */
             brand_id?: number | null;
             /**
+             * Format: int64
+             * @description 这件商品单独挂的运费模板（只能是全店模板）。null = 不单独挂：按履约门店的门店模板、
+             *     再按全店默认模板算（数据模型 §7「一行用哪个模板」）。
+             */
+            freight_template_id?: number | null;
+            /**
              * @description `products.status`：0 草稿 / 1 上架 / 2 下架。
              *     改它只能经 `POST /admin/products/{product_id}/publication`。
              * @enum {integer}
@@ -11257,6 +11826,11 @@ export interface components {
             description?: string;
             /** Format: int64 */
             brand_id?: number | null;
+            /**
+             * Format: int64
+             * @description 单独挂的运费模板（全店模板的 id）。不填或 null = 不单独挂。指向门店模板、不存在或已删除时 422。
+             */
+            freight_template_id?: number | null;
         };
         /**
          * @description 导入文件格式。服务端按内容判断，不按文件名。
@@ -11452,6 +12026,12 @@ export interface components {
             category_id?: number;
             /** Format: int64 */
             brand_id?: number | null;
+            /**
+             * Format: int64
+             * @description 改挂的运费模板（全店模板的 id）；传 null 解除单独挂的模板。
+             *     指向门店模板、不存在或已删除时 422。只影响之后的试算与下单。
+             */
+            freight_template_id?: number | null;
         };
         ProductPublicationRequest: {
             /**
@@ -11524,6 +12104,7 @@ export interface components {
             price_cents: components["schemas"]["Money"];
             /** @description 成本。用于业务重排（数据模型 §3），**只在后台接口里出现**。 */
             cost_cents?: components["schemas"]["Money"];
+            /** @description 重量（克）。按重量计费的运费模板按它算；0 表示没填，按重量计费时这一件按 0 克计（只收首重费） */
             weight_gram?: number;
             /** @description 该规格的小图，形如 `/api/v1/uploads/{upload_id}`。 */
             image_url?: string;
@@ -11553,6 +12134,7 @@ export interface components {
             };
             price_cents: components["schemas"]["Money"];
             cost_cents?: components["schemas"]["Money"];
+            /** @description 重量（克），按重量计费的运费模板用它。省略即 0 */
             weight_gram?: number;
             /**
              * Format: int64
@@ -11576,6 +12158,7 @@ export interface components {
             };
             price_cents?: components["schemas"]["Money"];
             cost_cents?: components["schemas"]["Money"];
+            /** @description 重量（克），按重量计费的运费模板用它 */
             weight_gram?: number;
             /** Format: int64 */
             image_upload_id?: number | null;
@@ -11831,8 +12414,24 @@ export interface components {
              *     两个字段都给，是因为购物车页同时要显示这两个数——底部结算栏显示已选金额，
              *     而「全选」复选框需要知道全车总数。只给一个的话客户端就得自己遍历累加，
              *     那等于把金额计算规则复制到每个端上。
+             *
+             *     **送不到的行（`undeliverable` 非空）仍然算在里面**：它们在这家店是买得到的，
+             *     只是送不到这个地址。带着它们去 `/orders/preview` 会收到 422
+             *     `region-not-deliverable`——客户端应当在结算前提示用户取消勾选或换地址。
              */
             selected_total_cents: components["schemas"]["Money"];
+            /**
+             * Format: int64
+             * @description 本次按哪个收货地址算的运费（回显 `address_id` 参数，或买家的默认地址）。没有地址时不出现。
+             */
+            address_id?: number;
+            /**
+             * @description 已勾选、可买、送得到的那些行按 `address_id` 那个地址算出的**预估运费**。
+             *     满额包邮按 `selected_total_cents`（去掉送不到的行）判——购物车不算券，
+             *     所以它是「用券之前」的运费；用了券可能因为不满额而不包邮，也可能用包邮券抵掉。
+             *     最终以 `/orders/preview` 为准。没有地址时整个不出现。
+             */
+            freight?: components["schemas"]["FreightBreakdown"];
         };
         CartItem: {
             /** Format: int64 */
@@ -11871,6 +12470,12 @@ export interface components {
              */
             available: boolean;
             status: components["schemas"]["CartItemStatus"];
+            /**
+             * @description 这一行送不到 `Cart.address_id` 那个地址（运费模板把那个省列为不配送，或地址归不到省）。
+             *     送得到、或没有地址时整个不出现。它与 `status` 正交：`status` 说的是
+             *     这家店卖不卖、有没有货，这个字段说的是能不能送到这个地址。
+             */
+            undeliverable?: components["schemas"]["FreightUndeliverableLine"];
         };
         /**
          * @description 这一行此刻能不能买，按响应里 `store` 那家门店判。判定顺序即下表顺序，
@@ -11957,6 +12562,7 @@ export interface components {
              * @description 第一期仅支持单张券。
              *
              *     券按**这一单的门店**的生效价算，门槛比的是券适用范围内商品的小计。
+             *     包邮券（`coupon_type = 4`）抵的是运费，最多抵到 0；本单运费为 0 时它不可用（409）。
              *     不可用（不是你的、已锁定 / 已使用 / 已过期、门槛不够、范围不含这些商品或这家店）
              *     时试算与下单都返回 409 `coupon-not-applicable`，**不会静默按原价成交**。
              *     下单成功后券进入「锁定」，付款成功变成「已使用」，取消或超时关单回到「未使用」。
@@ -11982,11 +12588,25 @@ export interface components {
              */
             region_id?: number;
             goods_amount_cents: components["schemas"]["Money"];
-            freight_cents?: components["schemas"]["Money"];
+            /**
+             * @description 运费（包邮券抵扣之前）。按 `address_id` 那个收货地址、履约门店、每行商品挂的
+             *     运费模板算（数据模型 §7「运费怎么算」）。**必返**：商家没配任何运费模板时是
+             *     算出来的 0（`freight.groups[].free_reason = no_template`），不是「没算」。
+             */
+            freight_cents: components["schemas"]["Money"];
+            /** @description 包邮券抵掉的运费，≤ `freight_cents`，已经算在 `discount_cents` 里。没用包邮券为 0 */
+            freight_discount_cents: components["schemas"]["Money"];
+            /** @description 运费的明细：按模板分组、命中哪条规则、为什么包邮 */
+            freight: components["schemas"]["FreightBreakdown"];
+            /**
+             * @description 优惠合计 = 各行分摊的商品优惠之和 + `freight_discount_cents`。
+             *     应付 `payable_cents = goods_amount_cents + freight_cents − discount_cents`（与订单上的
+             *     金额恒等式同一条）。
+             */
             discount_cents?: components["schemas"]["Money"];
             payable_cents: components["schemas"]["Money"];
             /**
-             * @description 含优惠分摊结果。
+             * @description 含优惠分摊结果。包邮券抵的是运费，不分摊到行（各行 `discount_cents` 为 0）。
              *
              *     > **这一段是内联 schema，而内联在这里已经是一笔债了。**
              *     > 本轮想给每一行加一个 `price_source`（这一行的单价来自基准价 /
@@ -12053,7 +12673,14 @@ export interface components {
              */
             refund_status: components["schemas"]["OrderRefundStatus"];
             goods_amount_cents?: components["schemas"]["Money"];
+            /**
+             * @description 运费（包邮券抵扣之前），下单时算好写进订单（00056 之前的订单是 0：那时不计运费）。
+             *     **实收运费 = `freight_cents − freight_discount_cents`**，售后退运费的上限按它算。
+             */
             freight_cents?: components["schemas"]["Money"];
+            /** @description 包邮券抵掉的运费，已经算在 `discount_cents` 里。没用包邮券为 0 */
+            freight_discount_cents?: components["schemas"]["Money"];
+            /** @description 优惠合计 = 各行分摊的商品优惠之和 + `freight_discount_cents` */
             discount_cents?: components["schemas"]["Money"];
             /**
              * Format: int64
@@ -12095,6 +12722,11 @@ export interface components {
              *     与 `order_items` 存 `title_snapshot` 是同一条道理。
              */
             store?: components["schemas"]["OrderStoreSnapshot"];
+            /**
+             * @description 下单那一刻的运费计算明细快照（`orders.freight_snapshot`）：用的哪个模板、
+             *     命中哪条规则、为什么包邮。之后改模板不影响它。00056 之前的订单没有，整个不出现。
+             */
+            freight?: components["schemas"]["FreightBreakdown"];
             items?: components["schemas"]["OrderItem"][];
             payments?: components["schemas"]["PaymentRecord"][];
             /**
@@ -12375,6 +13007,8 @@ export interface components {
          *     | 能做什么 | 1 | 2 | 3 | 4 |
          *     |---|:-:|:-:|:-:|:-:|
          *     | 商品、SKU、基准价、类目、上传、批量导入 | ✅ | ✅ | 只读 | 只读 |
+         *     | 运费模板：全店模板（建、改、删、设默认）；商品挂哪个模板随商品 | ✅ | ✅ | 只读 | 只读 |
+         *     | 运费模板：门店模板（建、改、删） | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
          *     | 大区：改、删、大区价、大区上下架 | ✅ | ✅ | 只限自己的大区 | ❌ |
          *     | 大区：建 | ✅ | ✅ | ❌ | ❌ |
          *     | 门店：建、改、删、围栏 | ✅ | ✅ | 只限本大区的门店（换大区时新旧都得在范围内） | ❌ |
@@ -12442,6 +13076,8 @@ export interface components {
             has_open_refund: boolean;
         };
         AdminOrderDetail: components["schemas"]["AdminOrderSummary"] & {
+            /** @description 下单那一刻的运费计算明细快照，同买家侧 `OrderDetail.freight` */
+            freight?: components["schemas"]["FreightBreakdown"];
             /** @description 订单行，含优惠分摊（`discount_cents`）与已退 / 在途件数 */
             items: components["schemas"]["OrderItem"][];
             payments: components["schemas"]["PaymentRecord"][];
@@ -12478,7 +13114,8 @@ export interface components {
         };
         AdminRefundDetail: components["schemas"]["AdminRefund"] & {
             /**
-             * @description 所属订单的摘要。审核退货退款时裁定运费要看 `freight_cents`（订单实收运费）；
+             * @description 所属订单的摘要。审核退货退款时裁定运费要看订单实收运费
+             *     （`freight_cents − freight_discount_cents`）；
              *     服务端另外会扣掉这一单别的退款单已占的运费，超了回 422 refund-freight-exceeded。
              */
             order: components["schemas"]["AdminOrderSummary"];
@@ -12723,8 +13360,8 @@ export interface components {
         /**
          * @description 1 满减 · 2 折扣 · 3 立减 · 4 包邮。
          *
-         *     **4 包邮本期不可建**：本系统没有运费，包邮券永远减 0（数据模型 §7）。
-         *     枚举里留着它，是为了运费落地那一轮不必改契约的枚举。
+         *     **4 包邮**抵的是运费（00056 运费模板落地之后可建）：`max_discount_cents` 是最多抵多少
+         *     （0 = 运费全免），门槛与范围的判法与别的券相同。本单运费为 0 时不可用（数据模型 §7）。
          * @enum {integer}
          */
         CouponType: 1 | 2 | 3 | 4;
@@ -12816,6 +13453,13 @@ export interface components {
              * @description 履约门店，必填。理由同 `OrderCreateRequest.store_id`。
              */
             store_id: number;
+            /**
+             * Format: int64
+             * @description 收货地址，可选。**包邮券要它**：包邮券能抵多少取决于运费，运费取决于地址。
+             *     不传时结果里没有包邮券（判不了它能不能用），其余券型不受影响。
+             *     传了却不存在或不属于你：422。
+             */
+            address_id?: number;
         };
         ClaimableCouponTemplate: {
             /** Format: int64 */
@@ -13024,6 +13668,142 @@ export interface components {
         };
         NotificationUnreadCount: {
             unread_count: number;
+        };
+        /**
+         * @description 省级行政区划码（GB/T 2260 的 6 位码，后四位为 0），如 `110000` 北京、`440000` 广东、
+         *     `650000` 新疆。只收 34 个省级行政区的码（含港澳台），别的 422。
+         *     收货地址按 `region_code` 的前两位归到省；地址没有 `region_code` 时按 `province`
+         *     文字匹配（「内蒙古」与「内蒙古自治区」都认）。
+         * @example 110000
+         */
+        ProvinceCode: string;
+        /**
+         * @description 1 按件 · 2 按重量（单位克，取 SKU 的 `weight_gram`）
+         * @enum {integer}
+         */
+        FreightChargeMode: 1 | 2;
+        /**
+         * @description 一条计费规则：管哪些省、首件（首重）多少钱、续件（续重）多少钱、满什么条件包邮。
+         *     运费 = `first_fee_cents` + ⌈max(0, 件数或克数 − `first_unit`) ÷ `additional_unit`⌉ × `additional_fee_cents`。
+         */
+        FreightRule: {
+            /** @description 这条规则管哪些省。**空数组 = 默认规则**（其余地区），一个模板恰好一条。 */
+            region_codes: components["schemas"]["ProvinceCode"][];
+            /** @description 首件件数（按件）或首重克数（按重量） */
+            first_unit: number;
+            /** @description 首件（首重）费，0～1000000 分 */
+            first_fee_cents: components["schemas"]["Money"];
+            /** @description 续件件数或续重克数：每超出这么多收一次续费，不足一个单位按一个算 */
+            additional_unit: number;
+            /** @description 续件（续重）费，0～1000000 分 */
+            additional_fee_cents: components["schemas"]["Money"];
+            /**
+             * @description 满额包邮：**整单优惠后应付商品金额**（营销活动、优惠券都减完之后）≥ 它即这条规则免运费。
+             *     0 = 不设。
+             */
+            free_threshold_cents: components["schemas"]["Money"];
+            /** @description 满件包邮：整单件数 ≥ 它即这条规则免运费。0 = 不设 */
+            free_quantity: number;
+        };
+        /** @description 新建与整体替换共用。字段含义见 `POST /admin/freight-templates`。 */
+        FreightTemplateInput: {
+            name: string;
+            /**
+             * Format: int64
+             * @description null 或不填 = 全店模板；非 null = 这家门店的门店模板（每店至多一个）。
+             */
+            store_id?: number | null;
+            charge_mode: components["schemas"]["FreightChargeMode"];
+            /**
+             * @description 设为全店默认模板（只有全店模板能设）。同一时刻至多一个：设了这一个，
+             *     原来的默认在同一个事务里被取消。
+             * @default false
+             */
+            is_default: boolean;
+            rules: components["schemas"]["FreightRule"][];
+            /**
+             * @description 不配送的省。不能与任何一条规则的 `region_codes` 重叠。
+             * @default []
+             */
+            undeliverable_region_codes: components["schemas"]["ProvinceCode"][];
+        };
+        AdminFreightTemplate: {
+            /** Format: int64 */
+            id: number;
+            name: string;
+            /**
+             * Format: int64
+             * @description null = 全店模板
+             */
+            store_id: number | null;
+            charge_mode: components["schemas"]["FreightChargeMode"];
+            /** @description 是不是全店默认模板 */
+            is_default: boolean;
+            /** @description 默认规则（`region_codes` 为空）排在最后，其余按录入顺序 */
+            rules: components["schemas"]["FreightRule"][];
+            undeliverable_region_codes: components["schemas"]["ProvinceCode"][];
+            /** @description 挂着这个模板的未删除商品数。大于 0 时不能删除 */
+            product_count: number;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        /**
+         * @description 这一组为什么免运费：`threshold` 满额包邮、`quantity` 满件包邮、
+         *     `no_template` 这些商品没有任何可用的运费模板（商家没配，不计运费）。
+         *     照常计费时整个字段不出现。**包邮券抵掉的运费不算在这里**，那一笔看
+         *     `freight_discount_cents`。
+         * @enum {string}
+         */
+        FreightFreeReason: "threshold" | "quantity" | "no_template";
+        /**
+         * @description 按运费模板分的一组商品及其运费。一单里的商品挂不同模板时分成几组，
+         *     各组分别计费、**求和**（不做「首费取最大」那种跨模板合并，数据模型 §7 写了理由）。
+         */
+        FreightGroup: {
+            /**
+             * Format: int64
+             * @description 用的是哪个模板；`free_reason = no_template` 时为 null
+             */
+            template_id?: number | null;
+            /** @description 模板名（订单上是下单那一刻的名字） */
+            template_name?: string;
+            charge_mode?: components["schemas"]["FreightChargeMode"];
+            sku_ids: number[];
+            /** @description 计费量：按件是件数，按重量是克数 */
+            units: number;
+            /** @description 命中的那一条规则（`region_codes` 为空即默认规则）。没有模板时不出现 */
+            rule?: components["schemas"]["FreightRule"];
+            /** @description 这一组的运费（包邮时为 0） */
+            fee_cents: components["schemas"]["Money"];
+            free_reason?: components["schemas"]["FreightFreeReason"];
+        };
+        /**
+         * @description 运费是怎么算出来的。试算与购物车里是**现算**的，订单上是**下单那一刻的快照**
+         *     （`orders.freight_snapshot`），之后改模板不影响它。
+         */
+        FreightBreakdown: {
+            /** @description 收货地址归到的省。地址既没有可用的 `region_code` 也匹配不上省名时不出现（此时按各模板的默认规则算） */
+            province_code?: components["schemas"]["ProvinceCode"];
+            /** @description 运费合计（包邮券抵扣之前），= 各组 `fee_cents` 之和 */
+            freight_cents: components["schemas"]["Money"];
+            /** @description 包邮券抵掉的运费，≤ `freight_cents`。没用包邮券为 0 */
+            freight_discount_cents: components["schemas"]["Money"];
+            groups: components["schemas"]["FreightGroup"][];
+        };
+        FreightUndeliverableLine: {
+            /** Format: int64 */
+            sku_id: number;
+            /**
+             * @description `region_excluded`：这件商品用的运费模板把收货地址所在的省列为不配送；
+             *     `province_unknown`：收货地址归不到任何一个省（没有可用的 `region_code`，省名也匹配不上），
+             *     而这个模板设了不配送地区，判不了在不在配送范围——请买家补全地址。
+             * @enum {string}
+             */
+            reason_code: "region_excluded" | "province_unknown";
+            /** @description 给人看的一句话，如「新疆维吾尔自治区不在「默认运费」的配送范围」 */
+            reason: string;
         };
         /**
          * @description GeoJSON Polygon，SRID 固定 4326。落库成 `GEOGRAPHY(POLYGON, 4326)`。
@@ -13468,6 +14248,8 @@ export interface components {
         StoreId: number;
         /** @description `coupon_templates.id`。查不到（含属于别家店）即 404。 */
         CouponTemplateId: number;
+        /** @description `freight_templates.id`。查不到（含已删除、属于别家店）即 404。 */
+        FreightTemplateId: number;
         /** @description `regions.id`。同上，查不到即 404。 */
         RegionId: number;
         /** @description `categories.id`。同 ProductId，查不到即 404。 */
@@ -13486,6 +14268,16 @@ export interface components {
          *     **刻意没有 default**：理由同 `GET /products`。
          */
         CartStoreId: number;
+        /**
+         * @description 按哪个收货地址算运费（`Cart.freight`）与「送不送得到」（`CartItem.undeliverable`）。
+         *     **每一条返回 `Cart` 的购物车接口都收它**，与 `store_id` 同一个道理：
+         *     客户端应当传结算页选中的那一个，于是购物车显示的运费与 `/orders/preview` 的一致。
+         *
+         *     不传时用这个买家的**默认地址**；也没有默认地址时 `freight` 与 `undeliverable`
+         *     整个不出现（没有地址就没有运费可算，不是「包邮」）。
+         *     指名一个不存在或不属于你的地址返回 422，不静默改用默认地址。
+         */
+        CartAddressId: number;
         /**
          * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
          *

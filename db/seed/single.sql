@@ -449,3 +449,47 @@ SELECT m.id, v.name, v.coupon_type, v.threshold_cents, v.discount_cents,
  WHERE m.code = 'demo'
    AND NOT EXISTS (SELECT 1 FROM coupon_templates c
                     WHERE c.merchant_id = m.id AND c.name = v.name);
+
+-- ---------------------------------------------------------------------------
+-- 运费模板（00055）：全店默认一个，让演示栈的结算页有运费可看
+-- ---------------------------------------------------------------------------
+--
+-- 口径是国内小店最常见的那种：
+--
+--   · 全国（默认规则）：首件 8 元，每续 1 件 2 元，满 99 元包邮；
+--   · 偏远地区（新疆、西藏、青海、内蒙古、宁夏）：首件 15 元，每续 1 件 5 元，**不包邮**；
+--   · 港澳台不配送（下单时逐行报 422 region-not-deliverable）。
+--
+-- 演示买家的收货地址在杭州（区划码 330106），走默认规则：一单一两件几十元的商品
+-- 会看到 8～10 元运费，凑到 99 元就包邮 —— 结算页上「满额包邮按券后金额判」看得见。
+--
+-- 按件计费而不是按重量：种子里的商品都没填重量（skus.weight_gram 为 0），
+-- 按重量的话每单都只收首重，演示不出续件。
+--
+-- 幂等：模板按 (merchant_id, name) 守，规则按「这个模板还没有规则」守 ——
+-- 规则表上的唯一约束只管「至多一条默认规则」，挡不住重复灌指定地区那一条。
+-- merchant_id 显式写，理由同上面几段（管理员角色加载，没有租户上下文）。
+INSERT INTO freight_templates (merchant_id, name, charge_mode, is_default, undeliverable_region_codes)
+SELECT m.id, '全国运费（满 99 包邮）', 1, TRUE, ARRAY['710000', '810000', '820000']
+  FROM merchants m
+ WHERE m.code = 'demo'
+   AND NOT EXISTS (SELECT 1 FROM freight_templates t
+                    WHERE t.merchant_id = m.id AND t.name = '全国运费（满 99 包邮）')
+   -- 商家自己在后台另设了默认模板时不抢（uk_freight_templates_default 也会拒绝）。
+   AND NOT EXISTS (SELECT 1 FROM freight_templates t
+                    WHERE t.merchant_id = m.id AND t.is_default AND t.deleted_at IS NULL);
+
+INSERT INTO freight_template_rules (merchant_id, template_id, sort_order, region_codes,
+                                    first_unit, first_fee_cents, additional_unit, additional_fee_cents,
+                                    free_threshold_cents, free_quantity)
+SELECT t.merchant_id, t.id, v.sort_order, v.region_codes, 1, v.first_fee, 1, v.additional_fee,
+       v.free_threshold, 0
+  FROM freight_templates t
+  JOIN merchants m ON m.id = t.merchant_id
+  CROSS JOIN (VALUES
+      (0, ARRAY['650000', '540000', '630000', '150000', '640000']::TEXT[], 1500::bigint, 500::bigint, 0::bigint),
+      (1, ARRAY[]::TEXT[],                                                   800::bigint, 200::bigint, 9900::bigint)
+  ) AS v(sort_order, region_codes, first_fee, additional_fee, free_threshold)
+ WHERE m.code = 'demo'
+   AND t.name = '全国运费（满 99 包邮）'
+   AND NOT EXISTS (SELECT 1 FROM freight_template_rules r WHERE r.template_id = t.id);

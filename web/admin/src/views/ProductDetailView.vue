@@ -31,6 +31,7 @@ import {
     type SkuUpdateRequest,
 } from "../api/client.ts";
 import { indentedLabel, listCategories } from "../api/catalog.ts";
+import { CHARGE_MODE, listAllFreightTemplates, type AdminFreightTemplate } from "../api/freight.ts";
 import { IdempotentSubmission, withIdempotency } from "../api/idempotency.ts";
 import { fieldErrorsOf } from "../api/errors.ts";
 import { datetime, PRODUCT_STATUS, SKU_STATUS, yuan } from "../ui/format.ts";
@@ -49,6 +50,8 @@ const loading = ref(false);
 const loadError = ref<unknown>(null);
 const product = ref<AdminProductDetail | null>(null);
 const categories = ref<AdminCategory[]>([]);
+/** 商品能单独挂的运费模板：只有全店模板（门店模板不能挂在商品上，服务端 422）。 */
+const freightTemplates = ref<AdminFreightTemplate[]>([]);
 const tab = ref("basic");
 
 async function load(): Promise<void> {
@@ -71,6 +74,10 @@ onMounted(() => {
         (cs) => (categories.value = cs),
         (err: unknown) => notifyError(err),
     );
+    listAllFreightTemplates().then(
+        (ts) => (freightTemplates.value = ts.filter((t) => t.store_id === null)),
+        (err: unknown) => notifyError(err),
+    );
 });
 
 // ---------------------------------------------------------------- 基本信息
@@ -89,6 +96,8 @@ function syncForm(): void {
         subtitle: p.subtitle ?? "",
         description: p.description ?? "",
         category_id: p.category_id,
+        // null = 不单独挂（按门店模板、再按全店默认算）。原样回传当前值，不会误改。
+        freight_template_id: p.freight_template_id ?? null,
     };
 }
 
@@ -479,6 +488,18 @@ function onInventoryUpdated(inv: AdminInventory): void {
                                     :label="indentedLabel(c)"
                                 />
                             </el-select>
+                        </el-form-item>
+                        <el-form-item label="运费模板">
+                            <el-select v-model="form.freight_template_id" clearable style="width: 320px" placeholder="不单独挂">
+                                <el-option :value="null" label="不单独挂（按发货门店的门店模板 / 全店默认）" />
+                                <el-option
+                                    v-for="t in freightTemplates"
+                                    :key="t.id"
+                                    :value="t.id"
+                                    :label="`${t.name}（${CHARGE_MODE[t.charge_mode]}${t.is_default ? '，全店默认' : ''}）`"
+                                />
+                            </el-select>
+                            <span class="hint ml8">按重量计费的模板取各 SKU 的重量（在「规格」里填）</span>
                         </el-form-item>
                         <el-form-item>
                             <el-button type="primary" :loading="saving" :disabled="!can.editCatalog()" :title="can.editCatalog() ? '' : NO_PERMISSION" @click="saveBasic">保存</el-button>

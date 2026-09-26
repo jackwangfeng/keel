@@ -140,6 +140,9 @@ type AdminProduct struct {
 	DeletedAt     *time.Time
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
+
+	// FreightTemplateID 是商品单独挂的运费模板（00055）；nil = 不单独挂。
+	FreightTemplateID *int64
 }
 
 // AdminSKU 是后台视角的规格（契约 AdminSku）。

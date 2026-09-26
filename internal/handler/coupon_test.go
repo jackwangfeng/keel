@@ -63,7 +63,9 @@ func newCouponShop(t *testing.T) couponShop {
 			// orders.user_coupon_id 与 user_coupons.order_id 互相引用；先把订单上的券摘掉
 			// （连同优惠与券名快照，否则 chk_discount_needs_coupon /
 			// chk_coupon_name_with_coupon 不让摘），环才解得开。
+			// freight_discount_cents 一起清（00056 的 chk_freight_discount：抵运费不能超过优惠合计）。
 			`UPDATE orders SET user_coupon_id = NULL, coupon_name = NULL, discount_cents = 0,
+			        freight_discount_cents = 0,
 			        payable_cents = goods_amount_cents + freight_cents WHERE merchant_id = $1`,
 			`DELETE FROM user_coupons WHERE merchant_id = $1`,
 			`DELETE FROM coupon_scopes WHERE merchant_id = $1`,
@@ -827,7 +829,7 @@ func TestAdminCouponTemplateValidation(t *testing.T) {
 		name, body, detail string
 	}{
 		{"满100减200", `{"name":"x","coupon_type":1,"threshold_cents":10000,"discount_cents":20000,"valid_mode":2,"valid_days":1}`, "配置错误"},
-		{"包邮券", `{"name":"x","coupon_type":4,"valid_mode":2,"valid_days":1}`, "不计运费"},
+		{"包邮券带减免额", `{"name":"x","coupon_type":4,"discount_cents":100,"valid_mode":2,"valid_days":1}`, "抵的是运费"},
 		{"折扣率越界", `{"name":"x","coupon_type":2,"discount_rate":1000,"valid_mode":2,"valid_days":1}`, "千分比"},
 		{"立减带门槛", `{"name":"x","coupon_type":3,"discount_cents":100,"threshold_cents":100,"valid_mode":2,"valid_days":1}`, "没有门槛"},
 		{"有效期倒挂", `{"name":"x","coupon_type":3,"discount_cents":100,"valid_mode":1,
@@ -841,12 +843,13 @@ func TestAdminCouponTemplateValidation(t *testing.T) {
 			}
 		})
 	}
-	// 数据库的 CHECK 是最后一道：绕过接口直接插「满 100 减 200」与包邮券，被拒。
+	// 数据库的 CHECK 是最后一道：绕过接口直接插「满 100 减 200」与带了减免额的包邮券，被拒。
+	// （00056 起包邮券本身可建，只是不许带别的券型的字段。）
 	for _, sql := range []string{
 		`INSERT INTO coupon_templates (merchant_id, name, coupon_type, threshold_cents, discount_cents, valid_mode, valid_days)
 		 VALUES ($1, 'x', 1, 10000, 20000, 2, 1)`,
-		`INSERT INTO coupon_templates (merchant_id, name, coupon_type, valid_mode, valid_days)
-		 VALUES ($1, 'x', 4, 2, 1)`,
+		`INSERT INTO coupon_templates (merchant_id, name, coupon_type, discount_cents, valid_mode, valid_days)
+		 VALUES ($1, 'x', 4, 100, 2, 1)`,
 	} {
 		if _, err := admin(t).Exec(context.Background(), sql, cs.MerchantID); err == nil ||
 			!strings.Contains(err.Error(), "chk_coupon_rule") {

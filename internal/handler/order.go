@@ -96,28 +96,17 @@ func (h *OrderHandler) Preview(c *gin.Context) {
 		DiscountCents:    &discount,
 		Items:            items,
 
-		// FreightCents 刻意留 nil：**本期不计运费**，不是「算出来是 0」。
-		// 理由与两者的差别写在 service/pricing.go 的 freightNotBilledThisRelease。
-		// 这笔账挂在 contract_test.go 的 NotYetImplementedResponse 里。
-		FreightCents: freightNotBilledThisRelease(q),
+		// 运费（00056）：必返。商家没配任何模板时是算出来的 0（明细里 free_reason =
+		// no_template），不是「没算」—— 试算一定带着收货地址，所以一定算过。
+		FreightCents:         api.Money(q.FreightCents),
+		FreightDiscountCents: api.Money(q.FreightDiscountCents),
+		Freight:              apiFreightBreakdownOf(q.Freight),
 
 		// 这个买家手里本单可用的券（与 POST /coupons/applicable 同一份实现、同一段渲染）。
 		// 查过了才给：空数组的意思就是「真的一张都没有」。
 		ApplicableCoupons: &applicable,
 		UserCouponId:      q.UserCouponID,
 	})
-}
-
-// freightNotBilledThisRelease 把 Quote 里那个 nil 原样递出去。
-//
-// 单独一个函数而不是直接写 nil：它让「响应里这个字段为什么不见了」有一处可以
-// 跳转过去的落点，也让将来真的实现运费时，编译器会把每一个调用点都指出来。
-func freightNotBilledThisRelease(q service.Quote) *api.Money {
-	if q.FreightCents == nil {
-		return nil
-	}
-	m := api.Money(*q.FreightCents)
-	return &m
 }
 
 // Create 实现 POST /api/v1/orders。
@@ -182,6 +171,8 @@ func bindOrderRequest(c *gin.Context) (service.CreateRequest, bool) {
 // apiOrder 把领域订单装成契约的 Order。
 func apiOrder(o repository.Order) api.Order {
 	goods := api.Money(o.GoodsAmountCents)
+	freight := api.Money(o.FreightCents)
+	freightDiscount := api.Money(o.FreightDiscountCents)
 	discount := api.Money(o.DiscountCents)
 	paid := api.Money(o.PaidCents)
 	refunded := api.Money(o.RefundedCents)
@@ -217,8 +208,10 @@ func apiOrder(o repository.Order) api.Order {
 		// 下单时的券名快照（00029），与 user_coupon_id 同进同出。
 		CouponName: o.CouponName,
 
-		// FreightCents 同 preview：本期不计运费，字段整个不出现。
-		// 库里那一列是 0（chk_amount 的恒等式要它），但那是账，不是「算过了」。
+		// 运费（00056）：下单时算好写进订单。00056 之前的订单是 0 —— 那时确实没收运费，
+		// 0 是账上的真值。实收运费 = freight_cents - freight_discount_cents。
+		FreightCents:         &freight,
+		FreightDiscountCents: &freightDiscount,
 	}
 }
 
@@ -261,6 +254,11 @@ func writeOrderError(c *gin.Context, err error) {
 	case errors.Is(err, service.ErrSKUUnavailable):
 		problem.Write(c, http.StatusUnprocessableEntity,
 			problem.TypeInvalidRequest, "请求里有不可售的商品")
+
+	case errors.Is(err, service.ErrRegionNotDeliverable):
+		// 有商品送不到这个收货地址（00056）。**422 而不是 409**：重试不会成功，
+		// 客户端该去掉这几行或换地址。undeliverable_items 逐行给出 SKU 与原因。
+		writeUndeliverable(c, err)
 
 	// 门店那两条（00020）。**两条都是 422，按 type 分**，契约在 POST /orders
 	// 与 POST /orders/preview 的 422 描述里逐条写着。
@@ -354,4 +352,23 @@ func writeOrderError(c *gin.Context, err error) {
 		problem.Write(c, http.StatusInternalServerError,
 			problem.TypeInternal, "服务内部错误")
 	}
+}
+
+// writeUndeliverable 写 422 region-not-deliverable，带 undeliverable_items（契约 Problem）。
+func writeUndeliverable(c *gin.Context, err error) {
+	var ue *service.UndeliverableError
+	items := []api.FreightUndeliverableLine{}
+	if errors.As(err, &ue) {
+		for _, l := range ue.Lines {
+			items = append(items, apiUndeliverable(l))
+		}
+	}
+	detail := err.Error()
+	problem.WriteValue(c, http.StatusUnprocessableEntity, api.Problem{
+		Type:               problem.TypeRegionNotDeliverable,
+		Title:              "有商品送不到这个收货地址",
+		Status:             http.StatusUnprocessableEntity,
+		Detail:             &detail,
+		UndeliverableItems: &items,
+	})
 }

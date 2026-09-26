@@ -226,6 +226,33 @@ var permMatrix = []permRoute{
 			Body: fmt.Sprintf(`{"phones":[%q]}`, permBuyerPhone(t, fx)), OK: http.StatusCreated}
 	}},
 
+	// —— 运费模板（00055）。契约 StaffRole 矩阵「运费模板」两行：读对四种角色放行；
+	// 门店模板的写同门店价（storeOperate）—— 矩阵里打的就是门店模板，范围内 N1、范围外 E1。
+	// 全店模板的写（merchantWide）由 freight_test.go 的
+	// TestFreightMerchantTemplateWritesNeedMerchantWide 逐角色敲一遍（一条路由在这张表里只能登记一次）。
+	// 每格现场清掉 / 建出那家门店的门店模板：每店至多一个，共用的话第二格就是 409。
+	{"GET", v1 + "/admin/freight-templates", everyone, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permGet(v1 + "/admin/freight-templates")
+	}},
+	{"POST", v1 + "/admin/freight-templates", storeOperate, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		permClearStoreFreight(t, fx, fx.store(c))
+		return permReq{Method: "POST", Path: v1 + "/admin/freight-templates", OK: http.StatusCreated,
+			Body: permFreightBody(fx.store(c))}
+	}},
+	{"GET", v1 + "/admin/freight-templates/:template_id", everyone, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permGet(fmt.Sprintf(v1+"/admin/freight-templates/%d", permStoreFreight(t, fx, fx.store(c))))
+	}},
+	{"PUT", v1 + "/admin/freight-templates/:template_id", storeOperate, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		id := permStoreFreight(t, fx, fx.store(c))
+		return permReq{Method: "PUT", Path: fmt.Sprintf(v1+"/admin/freight-templates/%d", id),
+			Body: permFreightBody(fx.store(c)), OK: http.StatusOK}
+	}},
+	{"DELETE", v1 + "/admin/freight-templates/:template_id", storeOperate, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		id := permStoreFreight(t, fx, fx.store(c))
+		return permReq{Method: "DELETE", Path: fmt.Sprintf(v1+"/admin/freight-templates/%d", id),
+			OK: http.StatusNoContent}
+	}},
+
 	// —— 上传与商品目录
 	{"POST", v1 + "/admin/uploads", merchantWide, func(t *testing.T, fx *permFixture, c permCase) permReq {
 		return permReq{Method: "POST", Path: v1 + "/admin/uploads", Upload: true, OK: http.StatusCreated}

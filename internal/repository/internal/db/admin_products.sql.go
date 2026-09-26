@@ -44,7 +44,8 @@ SELECT p.id, p.category_id, p.brand_id, p.title, p.subtitle, p.description,
        COALESCE(agg.max_price, 0)::bigint AS max_price_cents,
        COALESCE(agg.stock, 0)::int        AS total_stock,
        p.sales_count,
-       p.status, p.published_at, p.deleted_at, p.created_at, p.updated_at
+       p.status, p.published_at, p.deleted_at, p.created_at, p.updated_at,
+       p.freight_template_id
   FROM products p
   LEFT JOIN LATERAL (
         SELECT min(s.price_cents) AS min_price, max(s.price_cents) AS max_price,
@@ -57,21 +58,22 @@ SELECT p.id, p.category_id, p.brand_id, p.title, p.subtitle, p.description,
 `
 
 type AdminGetProductRow struct {
-	ID            int64
-	CategoryID    int64
-	BrandID       *int64
-	Title         string
-	Subtitle      *string
-	Description   *string
-	MinPriceCents int64
-	MaxPriceCents int64
-	TotalStock    int32
-	SalesCount    int32
-	Status        int16
-	PublishedAt   pgtype.Timestamptz
-	DeletedAt     pgtype.Timestamptz
-	CreatedAt     pgtype.Timestamptz
-	UpdatedAt     pgtype.Timestamptz
+	ID                int64
+	CategoryID        int64
+	BrandID           *int64
+	Title             string
+	Subtitle          *string
+	Description       *string
+	MinPriceCents     int64
+	MaxPriceCents     int64
+	TotalStock        int32
+	SalesCount        int32
+	Status            int16
+	PublishedAt       pgtype.Timestamptz
+	DeletedAt         pgtype.Timestamptz
+	CreatedAt         pgtype.Timestamptz
+	UpdatedAt         pgtype.Timestamptz
+	FreightTemplateID *int64
 }
 
 // 后台详情**不过滤 deleted_at**：AdminProduct 有 deleted_at 字段，
@@ -102,6 +104,7 @@ func (q *Queries) AdminGetProduct(ctx context.Context, id int64) (AdminGetProduc
 		&i.DeletedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.FreightTemplateID,
 	)
 	return i, err
 }
@@ -113,7 +116,8 @@ SELECT p.id, p.category_id, p.brand_id, p.title, p.subtitle, p.description,
        COALESCE(agg.max_price, 0)::bigint AS max_price_cents,
        COALESCE(agg.stock, 0)::int        AS total_stock,
        p.sales_count,
-       p.status, p.published_at, p.deleted_at, p.created_at, p.updated_at
+       p.status, p.published_at, p.deleted_at, p.created_at, p.updated_at,
+       p.freight_template_id
   FROM products p
   LEFT JOIN LATERAL (
         SELECT min(s.price_cents) AS min_price, max(s.price_cents) AS max_price,
@@ -139,21 +143,22 @@ type AdminListProductsParams struct {
 }
 
 type AdminListProductsRow struct {
-	ID            int64
-	CategoryID    int64
-	BrandID       *int64
-	Title         string
-	Subtitle      *string
-	Description   *string
-	MinPriceCents int64
-	MaxPriceCents int64
-	TotalStock    int32
-	SalesCount    int32
-	Status        int16
-	PublishedAt   pgtype.Timestamptz
-	DeletedAt     pgtype.Timestamptz
-	CreatedAt     pgtype.Timestamptz
-	UpdatedAt     pgtype.Timestamptz
+	ID                int64
+	CategoryID        int64
+	BrandID           *int64
+	Title             string
+	Subtitle          *string
+	Description       *string
+	MinPriceCents     int64
+	MaxPriceCents     int64
+	TotalStock        int32
+	SalesCount        int32
+	Status            int16
+	PublishedAt       pgtype.Timestamptz
+	DeletedAt         pgtype.Timestamptz
+	CreatedAt         pgtype.Timestamptz
+	UpdatedAt         pgtype.Timestamptz
+	FreightTemplateID *int64
 }
 
 // 后台商品域的写路径（契约 /admin/products*）。M4 Task 2。
@@ -216,6 +221,7 @@ func (q *Queries) AdminListProducts(ctx context.Context, arg AdminListProductsPa
 			&i.DeletedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.FreightTemplateID,
 		); err != nil {
 			return nil, err
 		}
@@ -258,18 +264,19 @@ func (q *Queries) ClearProductImages(ctx context.Context, productID int64) (int6
 }
 
 const createProduct = `-- name: CreateProduct :one
-INSERT INTO products (category_id, brand_id, title, subtitle, description)
+INSERT INTO products (category_id, brand_id, title, subtitle, description, freight_template_id)
 VALUES ($1, $2, $3,
-        $4, $5)
+        $4, $5, $6)
 RETURNING id
 `
 
 type CreateProductParams struct {
-	CategoryID  int64
-	BrandID     *int64
-	Title       string
-	Subtitle    *string
-	Description *string
+	CategoryID        int64
+	BrandID           *int64
+	Title             string
+	Subtitle          *string
+	Description       *string
+	FreightTemplateID *int64
 }
 
 // 新建即草稿：status 走列默认值 0，published_at 保持 NULL。
@@ -288,6 +295,7 @@ func (q *Queries) CreateProduct(ctx context.Context, arg CreateProductParams) (i
 		arg.Title,
 		arg.Subtitle,
 		arg.Description,
+		arg.FreightTemplateID,
 	)
 	var id int64
 	err := row.Scan(&id)
@@ -512,7 +520,10 @@ WITH cur AS (
            description = COALESCE($4, u.description),
            category_id = COALESCE($5, u.category_id),
            brand_id    = CASE WHEN $6::boolean
-                              THEN $7::bigint ELSE u.brand_id END
+                              THEN $7::bigint ELSE u.brand_id END,
+           freight_template_id = CASE WHEN $8::boolean
+                              THEN $9::bigint
+                              ELSE u.freight_template_id END
      WHERE u.id = $1 AND u.deleted_at IS NULL
     RETURNING u.id
 )
@@ -524,13 +535,15 @@ SELECT (SELECT count(*) FROM cur) AS visible_rows,
 `
 
 type UpdateProductParams struct {
-	ID          int64
-	Title       *string
-	Subtitle    *string
-	Description *string
-	CategoryID  *int64
-	SetBrandID  bool
-	BrandID     *int64
+	ID                   int64
+	Title                *string
+	Subtitle             *string
+	Description          *string
+	CategoryID           *int64
+	SetBrandID           bool
+	BrandID              *int64
+	SetFreightTemplateID bool
+	FreightTemplateID    *int64
 }
 
 type UpdateProductRow struct {
@@ -572,6 +585,8 @@ func (q *Queries) UpdateProduct(ctx context.Context, arg UpdateProductParams) (U
 		arg.CategoryID,
 		arg.SetBrandID,
 		arg.BrandID,
+		arg.SetFreightTemplateID,
+		arg.FreightTemplateID,
 	)
 	var i UpdateProductRow
 	err := row.Scan(&i.VisibleRows, &i.UpdatedRows, &i.ID)

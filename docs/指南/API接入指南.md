@@ -115,6 +115,7 @@ key 的有效期是 24 小时，作用域是「接口 + 用户 + key」。哪些
 | 404 | `not-found` | 不存在、不属于你，或者**接口本身还没实现** |
 | 409 | `idempotency-key-in-flight` | 同一个幂等 key 正在处理 |
 | 422 | `idempotency-key-reused` / `compliance-rejected` | 幂等 key 被复用 / 商品文案命中违禁词 |
+| 422 | `region-not-deliverable` | 试算 / 下单时有商品送不到这个收货地址，`undeliverable_items` 逐行给出原因 |
 | 429 | — | 触发限流（目前只有 `/search` 按 IP 限流） |
 | 501 | — | 这条路依赖的外部服务没接（短信、微信、邮件），明确告诉你没开 |
 
@@ -126,7 +127,8 @@ key 的有效期是 24 小时，作用域是「接口 + 用户 + key」。哪些
 
 1. `GET /stores/resolve?lat=&lng=` —— 按买家位置解析服务门店。不带坐标时回落到默认门店。
    门店决定了价格和库存。
-2. `POST /orders/preview` —— 试算：价格、可用的券、优惠分摊。不落库，可以反复调。
+2. `POST /orders/preview` —— 试算：价格、运费、可用的券、优惠分摊。不落库，可以反复调。
+   运费按请求里的 `address_id` 算（见下面「运费」）。
 3. `POST /orders` —— 下单，**必须带 `Idempotency-Key`**。扣库存、锁券、建订单三步由分布式事务
    协调器（dtmrs 的 SAGA）编排，任何一步失败，已经执行的步骤都会被补偿回去。
 4. `POST /orders/{order_no}/payments` —— 发起支付，返回渠道需要的支付参数。
@@ -167,6 +169,31 @@ key 的有效期是 24 小时，作用域是「接口 + 用户 + key」。哪些
 
 购物车（`/cart`）按门店计价，请求时带上和商品页、下单页相同的 `store_id`。
 购物车金额和试算用的是同一条价格查询，两边逐分一致。
+
+### 运费
+
+运费由商家在后台配的**运费模板**决定（按件或按重量、按省设价、满额 / 满件包邮、指定地区不配送），
+服务端按收货地址算好返回，客户端**不要自己算**：
+
+- `POST /orders/preview` 必返 `freight_cents`（运费）、`freight_discount_cents`（包邮券抵掉的运费）
+  和 `freight` 明细（按模板分组：命中哪条规则、计费量、为什么包邮）。
+  **应付 = `goods_amount_cents` + `freight_cents` − `discount_cents`**，`discount_cents` 已经包含
+  包邮券抵掉的运费。商家没配任何模板时运费是 0，明细里 `free_reason = no_template`。
+- 计价顺序固定：商品原价 → 营销活动 → 优惠券（门槛按活动后金额判）→ 运费（**满额包邮按优惠后
+  应付商品金额判**）→ 包邮券抵运费。所以「满 99 包邮」的单用了一张满减券之后可能不再包邮，
+  试算会如实算出来 —— 结算页照着 `freight_cents` 显示即可。
+- **送不到**：收货省在模板的不配送地区里时，试算与下单都回 422 `region-not-deliverable`，
+  `undeliverable_items` 是 `[{sku_id, reason_code, reason}]`，把这几行标出来让买家去掉或换地址。
+  `reason_code = province_unknown` 表示地址归不到省（没有 `region_code`、省名也认不出），
+  请引导买家补全地址的省份。
+- **包邮券**（`coupon_type = 4`）抵运费、最多抵到 0；这一单运费为 0 时用不了（409 `coupon-not-applicable`）。
+  `POST /coupons/applicable` 要带 `address_id` 才会列出包邮券。
+- **购物车**：`GET /cart`（以及另外四条返回 `Cart` 的接口）收可选的 `address_id`，不传用买家的默认地址；
+  有地址时返回 `freight`（预估运费：按已勾选、送得到的行算，不含券）与 `address_id`，
+  送不到的行带 `undeliverable`。没有地址时这两个字段整个不出现（不是「包邮」）。最终以试算为准。
+- 订单上：`freight_cents` 是下单时算好的运费，`freight_discount_cents` 是包邮券抵掉的部分，
+  订单详情的 `freight` 是下单那一刻的规则快照（之后商家改模板不影响它）。
+  **实收运费 = `freight_cents − freight_discount_cents`**，售后退运费的上限按它算。
 
 ---
 
