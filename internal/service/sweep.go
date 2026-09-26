@@ -349,34 +349,10 @@ func (s *SweepService) releasePending(ctx context.Context, log *slog.Logger,
 		if err := tx.ClaimExpiredPendingOrder(ctx, o.OrderNo); err != nil {
 			return err
 		}
-		lines, err := tx.ListOrderLines(ctx, o.ID)
-		if err != nil {
-			return err
-		}
-		if len(lines) == 0 {
-			// 一笔待支付订单一行都没有，说明它当初就没建全。关掉它是对的
-			// （已经关了），但要报出来 —— 返回错误会把关单一起回滚，
-			// 于是这一单每一轮都会再被扫到、再报一次，直到有人来看。
-			return fmt.Errorf("订单 %s 是待支付状态却一行订单项都没有", o.OrderNo)
-		}
-		for _, ln := range lines {
-			after, err := tx.RestoreInventory(ctx, ln.SKUID, o.StoreID, ln.Quantity)
-			if err != nil {
-				return err
-			}
-			if err := tx.AppendInventoryLog(ctx, ln.SKUID, o.StoreID, ln.Quantity,
-				repository.InventoryLogTimeoutRelease, o.OrderNo,
-				after-ln.Quantity, after); err != nil {
-				return err
-			}
-			qty += int(ln.Quantity)
-		}
-		// 这一单锁着的券退回「未使用」，与关单、回补库存同一个事务（数据模型 §7）。
-		// 没挂券的订单受影响 0 行，是正常路径。
-		if _, err := tx.UnlockCouponForOrder(ctx, o.ID); err != nil {
-			return err
-		}
-		return nil
+		var err error
+		qty, err = releaseClosedOrder(ctx, tx, o.ID, o.OrderNo, o.StoreID,
+			repository.InventoryLogTimeoutRelease)
+		return err
 	})
 
 	switch {
@@ -445,4 +421,48 @@ func (s *SweepService) closeDraft(ctx context.Context, log *slog.Logger,
 		rep.Failed++
 		log.ErrorContext(ctx, "孤儿草稿：关单失败", "order_no", o.OrderNo, "err", err)
 	}
+}
+
+// releaseClosedOrder 把一笔**刚在本事务里从 10 关到 90** 的订单占着的东西放回去：
+// 逐行回补库存并记流水、把锁着的券退回「未使用」。
+//
+// 超时关单（releasePending）与买家取消（OrderService.Cancel）共用它 ——
+// 两者的差别只在「谁、凭什么把这一单关掉」（那条条件 UPDATE）与流水的 biz_type，
+// 关掉之后要放回去的东西一模一样。写成两份的话，哪天有人只给其中一份补上
+// 「券也要退」，另一条路径就会静默地把券锁死在一笔已关闭的订单上
+// （00026 之前超时关单正是这么漏过券的）。
+//
+// 调用方必须保证：① 已经在**同一个事务**里把这一单从 10 推到了 90（占位成功）；
+// ② 这一单进过 SAGA，库存真实扣减过。孤儿草稿（status 0）不满足 ②，
+// 走 closeDraft，不走这里。
+func releaseClosedOrder(ctx context.Context, tx repository.Tx, orderID int64,
+	orderNo string, storeID int64, bizType int16) (int, error) {
+	lines, err := tx.ListOrderLines(ctx, orderID)
+	if err != nil {
+		return 0, err
+	}
+	if len(lines) == 0 {
+		// 一笔待支付订单一行都没有，说明它当初就没建全。返回错误会把关单一起
+		// 回滚 —— 超时任务那边这一单每一轮都会再被扫到、再报一次，直到有人来看；
+		// 买家取消那边是一次 500，同样值得人看。
+		return 0, fmt.Errorf("订单 %s 是待支付状态却一行订单项都没有", orderNo)
+	}
+	qty := 0
+	for _, ln := range lines {
+		after, err := tx.RestoreInventory(ctx, ln.SKUID, storeID, ln.Quantity)
+		if err != nil {
+			return 0, err
+		}
+		if err := tx.AppendInventoryLog(ctx, ln.SKUID, storeID, ln.Quantity,
+			bizType, orderNo, after-ln.Quantity, after); err != nil {
+			return 0, err
+		}
+		qty += int(ln.Quantity)
+	}
+	// 这一单锁着的券退回「未使用」，与关单、回补库存同一个事务（数据模型 §7）。
+	// 没挂券的订单受影响 0 行，是正常路径。
+	if _, err := tx.UnlockCouponForOrder(ctx, orderID); err != nil {
+		return 0, err
+	}
+	return qty, nil
 }

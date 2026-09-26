@@ -68,6 +68,10 @@ func newCouponShop(t *testing.T) couponShop {
 			`DELETE FROM user_coupons WHERE merchant_id = $1`,
 			`DELETE FROM coupon_scopes WHERE merchant_id = $1`,
 			`DELETE FROM coupon_templates WHERE merchant_id = $1`,
+			// 订单后半程（00033 起）：包裹指向订单，排在订单之前。
+			`DELETE FROM shipments WHERE merchant_id = $1`,
+			`DELETE FROM refund_items WHERE merchant_id = $1`,
+			`DELETE FROM refunds WHERE merchant_id = $1`,
 			`DELETE FROM payments WHERE merchant_id = $1`,
 			`DELETE FROM inventory_logs WHERE merchant_id = $1`,
 			`DELETE FROM order_items WHERE merchant_id = $1`,

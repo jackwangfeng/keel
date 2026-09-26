@@ -385,6 +385,27 @@ var permMatrix = []permRoute{
 			Body: fmt.Sprintf(`{"expected_available_qty":%d,"available_qty":%d}`, cur, cur+1),
 			OK:   http.StatusOK}
 	}},
+
+	// —— 订单后半程（00033）。契约的 StaffRole 矩阵里没有「发货」这一行，
+	// 判据取「门店库存」那一行（storeOperate）：货从哪家店出，就由管那家店库存的人发。
+	// 理由写在 service/order_fulfillment.go 的 Ship 上。每格现场造一笔新的已支付订单，
+	// 挂在范围内（N1）或范围外（E1）的门店上 —— 共用一笔的话第二格就是 409 已发过货。
+	{"POST", v1 + "/admin/orders/:order_no/shipments", storeOperate, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		no := permPaidOrder(t, fx, fx.store(c))
+		return permReq{Method: "POST", Path: v1 + "/admin/orders/" + no + "/shipments",
+			Body: fmt.Sprintf(`{"carrier_code":"sf","tracking_no":"SF%s"}`, fx.next()), OK: http.StatusCreated}
+	}},
+	// 退款审核与确认收到退货（00034）：与发货同一个判据，按订单的履约门店。
+	// 审核用驳回（带理由）——通过会进 30 并触发沙箱渠道，与权限无关的副作用越少越好。
+	{"POST", v1 + "/admin/refunds/:refund_no/audit", storeOperate, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		no := permRefund(t, fx, fx.store(c), 10)
+		return permReq{Method: "POST", Path: v1 + "/admin/refunds/" + no + "/audit",
+			Body: `{"action":"reject","reject_reason":"权限矩阵驳回"}`, OK: http.StatusOK}
+	}},
+	{"POST", v1 + "/admin/refunds/:refund_no/receipt", storeOperate, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		no := permRefund(t, fx, fx.store(c), 20)
+		return permReq{Method: "POST", Path: v1 + "/admin/refunds/" + no + "/receipt", OK: http.StatusOK}
+	}},
 }
 
 // permExempt 是刻意不在矩阵里的 /admin/ 路由，每条写明理由。
@@ -538,6 +559,82 @@ func permCleanupCoupons(t *testing.T, fx *permFixture) {
 			`DELETE FROM coupon_scopes WHERE merchant_id = $1`,
 			`DELETE FROM coupon_templates WHERE merchant_id = $1`,
 			`DELETE FROM users WHERE merchant_id = $1 AND nickname = '权限矩阵买家'`,
+		} {
+			adminExec(t, q, fx.sh.MerchantID)
+		}
+	})
+}
+
+// permPaidOrder 在 storeID 这家门店上造一笔**已支付**的订单（直接插库），返回单号。
+//
+// 走管理员连接直接插，而不是下单 + 沙箱支付：矩阵关心的是「谁能对这一单做什么」，
+// 不是下单链路；而一格一笔真实下单要带上库存、地址、SAGA，二十几格下来
+// 慢且与权限毫无关系。状态 20 要带 paid_at（00033 的 chk_fulfillment_timestamps）。
+func permPaidOrder(t *testing.T, fx *permFixture, storeID int64) string {
+	t.Helper()
+	permCleanupOrders(t, fx)
+	no := "PERM" + fx.next()
+	uid := adminQueryInt64(t, `INSERT INTO users (merchant_id, phone, nickname)
+	                           VALUES ($1, $2, '权限矩阵下单人') RETURNING id`,
+		fx.sh.MerchantID, fmt.Sprintf("136%08d", fx.seq.Add(1)%100_000_000))
+	adminExec(t, `
+		INSERT INTO orders (merchant_id, order_no, user_id, status, goods_amount_cents, payable_cents,
+		                    paid_cents, paid_at, receiver_snapshot, expire_at,
+		                    store_id, region_id, store_snapshot)
+		SELECT $1, $2, $3, 20, 1000, 1000, 1000, now(), '{}'::jsonb, now() + interval '30 minutes',
+		       st.id, st.region_id, '{}'::jsonb
+		  FROM stores st WHERE st.id = $4`, fx.sh.MerchantID, no, uid, storeID)
+	return no
+}
+
+// permRefund 在 storeID 这家门店上造一笔已支付订单（带一行订单项、一笔成功支付）
+// 和挂在它上面的一张退款单，退款单停在 status（10 待审核 或 20 待买家退货），返回退款单号。
+//
+// 同样直接插库，理由同 permPaidOrder。20 要带 audited_at（00034 的 chk_refund_state），
+// 而且是退货退款（只有退货退款会停在 20）。
+func permRefund(t *testing.T, fx *permFixture, storeID int64, status int) string {
+	t.Helper()
+	orderNo := permPaidOrder(t, fx, storeID)
+	orderID := adminQueryInt64(t, `SELECT id FROM orders WHERE order_no = $1`, orderNo)
+	userID := adminQueryInt64(t, `SELECT user_id FROM orders WHERE order_no = $1`, orderNo)
+	itemID := adminQueryInt64(t, `
+		INSERT INTO order_items (merchant_id, order_id, sku_id, product_id, title_snapshot,
+		                         spec_snapshot, price_cents, quantity, amount_cents)
+		VALUES ($1, $2, $3, $4, '权限矩阵商品', '{}'::jsonb, 1000, 1, 1000) RETURNING id`,
+		fx.sh.MerchantID, orderID, fx.SKUID, fx.ProductID)
+	paymentID := adminQueryInt64(t, `
+		INSERT INTO payments (merchant_id, payment_no, order_id, channel, amount_cents, status,
+		                      channel_txn_id, paid_at)
+		VALUES ($1, $2, $3, 1, 1000, 1, $2, now()) RETURNING id`,
+		fx.sh.MerchantID, "PERMPAY"+fx.next(), orderID)
+	refundNo := "PERMRF" + fx.next()
+	refundType, audited := 1, "NULL"
+	if status == 20 {
+		refundType, audited = 2, "now()"
+	}
+	refundID := adminQueryInt64(t, `
+		INSERT INTO refunds (merchant_id, refund_no, order_id, payment_id, user_id, refund_type,
+		                     reason_code, goods_amount_cents, amount_cents, status, channel, audited_at)
+		VALUES ($1, $2, $3, $4, $5, $6, 1, 1000, 1000, $7, 1, `+audited+`) RETURNING id`,
+		fx.sh.MerchantID, refundNo, orderID, paymentID, userID, refundType, status)
+	adminExec(t, `INSERT INTO refund_items (merchant_id, refund_id, order_item_id, quantity, amount_cents)
+	              VALUES ($1, $2, $3, 1, 1000)`, fx.sh.MerchantID, refundID, itemID)
+	adminExec(t, `UPDATE orders SET refund_status = 1 WHERE id = $1`, orderID)
+	return refundNo
+}
+
+// permCleanupOrders 在这一格结束时删掉矩阵造出来的订单与它们的下游行，
+// 理由与 permCleanupCoupons 一样：夹具最后要删 merchants 行，而这些行挂着指向它的外键。
+func permCleanupOrders(t *testing.T, fx *permFixture) {
+	t.Cleanup(func() {
+		for _, q := range []string{
+			`DELETE FROM shipments WHERE merchant_id = $1`,
+			`DELETE FROM refund_items WHERE merchant_id = $1`,
+			`DELETE FROM refunds WHERE merchant_id = $1`,
+			`DELETE FROM payments WHERE merchant_id = $1`,
+			`DELETE FROM order_items WHERE merchant_id = $1`,
+			`DELETE FROM orders WHERE merchant_id = $1`,
+			`DELETE FROM users WHERE merchant_id = $1 AND nickname = '权限矩阵下单人'`,
 		} {
 			adminExec(t, q, fx.sh.MerchantID)
 		}

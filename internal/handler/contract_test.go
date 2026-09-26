@@ -240,13 +240,8 @@ var routes = []route{
 		HTTPMethod:     http.MethodGet,
 		HandlerFile:    "order_detail.go",
 		NoQueryParams:  "详情只吃路径参数 order_no",
-		NotYetImplementedResponse: map[string]string{
-			// store_id / region_id / store 三笔本轮结清：orders 上三列都落了，
-			// 详情读的是**下单当时**那份快照而不是 JOIN stores。
-			"refunds": "退款域的三张表（refunds / refund_items / refund_logs）本轮没有建，" +
-				"所以这里不是「这一单没有退款」，而是**没查过**。回空数组会让详情页显示" +
-				"「无售后记录」—— 一句在退款上线之前都不会被纠正的假话。",
-		},
+		// store_id / region_id / store 三笔早先结清；refunds 那一笔在退款域落地
+		// （00034）时结清：详情在同一个事务里读退款单与每一行的在途件数。
 	},
 	{
 		ContractPath:   "/orders/{order_no}/payments",
@@ -255,6 +250,86 @@ var routes = []route{
 		HandlerFile:    "payment_intent.go",
 		NoQueryParams: "渠道在请求体里，订单号在路径上，幂等键在 Idempotency-Key 请求头里；" +
 			"契约里这条接口没有任何 query 参数",
+	},
+	// —— 订单后半程（00033）：买家取消与确认收货、后台发货。
+	{
+		ContractPath:   "/orders/{order_no}/cancel",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "order_fulfillment.go",
+		NoQueryParams:  "要取消哪一单在路径上，幂等键在 Idempotency-Key 请求头里；没有请求体",
+	},
+	{
+		ContractPath:   "/orders/{order_no}/confirm",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "order_fulfillment.go",
+		NoQueryParams:  "要确认哪一单在路径上，幂等键在 Idempotency-Key 请求头里；没有请求体",
+	},
+	{
+		ContractPath:   "/admin/orders/{order_no}/shipments",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "admin_order.go",
+		NoQueryParams:  "承运商与运单号在请求体里，订单号在路径上，幂等键在请求头里",
+	},
+	// —— 售后（00034）。GET /refunds 带 page / page_size / status，单独一个文件。
+	{
+		ContractPath:   "/orders/{order_no}/refunds",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "refund.go",
+		NoQueryParams:  "退哪几行、几件、为什么在请求体里，订单号在路径上，幂等键在请求头里；**金额不在任何一处**，由服务端按优惠分摊倒算",
+	},
+	{
+		ContractPath:   "/orders/{order_no}/refunds",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "refund.go",
+		NoQueryParams:  "一个订单的全部退款单，没有分页也没有筛选",
+	},
+	{
+		ContractPath:   "/refunds",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "refund_list.go",
+		// page / page_size / status 三个全都实现了，既不写 NoQueryParams 也不挂账。
+	},
+	{
+		ContractPath:   "/refunds/{refund_no}",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "refund.go",
+		NoQueryParams:  "详情只吃路径参数 refund_no",
+	},
+	{
+		ContractPath:   "/refunds/{refund_no}/cancel",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "refund.go",
+		NoQueryParams:  "要撤回哪一张在路径上，幂等键在请求头里；没有请求体",
+	},
+	{
+		ContractPath:   "/admin/refunds/{refund_no}/audit",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "admin_order.go",
+		NoQueryParams:  "通过还是驳回、驳回理由、裁定的退运费都在请求体里，退款单号在路径上，幂等键在请求头里",
+	},
+	{
+		ContractPath:   "/admin/refunds/{refund_no}/receipt",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "admin_order.go",
+		NoQueryParams:  "要确认哪一张在路径上，幂等键在请求头里；没有请求体",
+	},
+	{
+		ContractPath:   "/webhooks/refunds/{channel}",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "webhook_refund.go",
+		NoQueryParams: "渠道在路径里，报文在请求体里，签名在 X-Keel-Signature 请求头里 —— " +
+			"刻意不放 query，理由同支付回调：query 会进访问日志",
 	},
 	{
 		ContractPath:   "/search",
@@ -1021,27 +1096,13 @@ type pendingOp struct {
 //	  叫 repository.WithNewTenant；
 //	· 多门店落地（00020）把那 21 条一条不剩地划掉。
 //
-// 于是剩下 2 条。两条剩下的理由不同，而且都不是「还没轮到」：
-// 它们各缺一样今天不存在的东西，逐条写在下面。
-var notYetRouted = []pendingOp{
-	// —— M1 就在契约里的 10 条，任务 2 划掉了其中 7 条。
-	//
-	// 剩下这 2 条**不再是「缺后台鉴权」**了 —— 那套中间件已经有了
-	// （auth.StaffBearer），它们缺的是各自的业务。理由要跟着改，
-	// 否则下一个人会照着一句过期的话去找一个已经存在的东西。
-	{"/admin/orders/{order_no}/shipments", "post", "发货。shipments 表已落地（数据模型 §5），" +
-		"后台鉴权也已落地，缺的是 handler 与 §5 那三条发货规则。"},
-	{"/admin/refunds/{refund_no}/audit", "post", "退款审核。退款域的表已落地（§11），" +
-		"后台鉴权也已落地，缺的是 handler 与退款状态机那几条边。"},
-
-	// —— 多门店 + 电子围栏 + 大区那 21 条**本轮全部落地，一条不剩**。
-	//
-	// 它们曾经是这张表里最长的一段，欠的东西比商品域那 16 条又多一样：
-	// 数据库扩展（围栏是 GEOGRAPHY(POLYGON, 4326)，要 PostGIS）。顺序是
-	// 换镜像 → 迁移 → repository → service → handler，第一步动了 compose 与 CI。
-	//
-	// 删掉这一段就是这一轮的验收动作：这张表是「还没实现」的锁，不是文档。
-}
+// 于是剩下 2 条：发货与退款审核。订单后半程那一轮把它们一起划掉了
+// （00033 发货、00034 退款域）—— **这张表今天是空的**。
+//
+// 空表不是删掉这套机制的理由：它是「还没实现」的锁，下一次契约先行加进来一条
+// /admin/ 操作（比如后台的订单列表、退款单列表），这里就会重新长出一行，
+// 而不是让缺口静默地躺在契约里。
+var notYetRouted = []pendingOp{}
 
 // contractHTTPMethods 是 OpenAPI path item 里哪些键算一个操作。
 // 其余的键（parameters、summary、servers…）不是操作，跳过。

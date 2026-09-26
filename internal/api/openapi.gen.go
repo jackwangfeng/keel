@@ -2565,7 +2565,7 @@ type OrderItem struct {
 	// **本行还可退的件数 = `quantity - refunded_qty - refunding_qty`。**
 	//
 	// 这不是持久化列，是 `refund_items ⋈ refunds WHERE status IN (10,20,30)`
-	// 的聚合，定义式见数据模型 §10。**数据库的 CHECK 拦不住在途超退**，
+	// 的聚合，定义式见数据模型 §11。**数据库的 CHECK 拦不住在途超退**，
 	// 服务端必须在同一事务内复算——不要以为提交上去有兜底。
 	// 没有这个字段，客户端算不出可退数量，只能先提交再被 409
 	// `refund-quantity-exceeded` 打回——那是把校验规则藏在服务端错误里。
@@ -2979,8 +2979,11 @@ type Refund struct {
 	//    └─撤销──► 60 已取消   （20 超时未寄回 / 买家撤销，同样进 60）
 	// ```
 	//
-	// 合法迁移（`refund_status_transitions`）：
+	// 合法迁移（`refund_status_transitions`，由数据库触发器执行）：
 	// `(10,20) (10,30) (10,50) (10,60) (20,30) (20,60) (30,40)`。
+	// 每条边由谁走：`10→20/30/50` 审核（`/admin/refunds/{refund_no}/audit`）；
+	// `20→30` 商家确认收到退货（`/admin/refunds/{refund_no}/receipt`）；
+	// `10/20→60` 买家撤回；`30→40` 渠道回调（`/webhooks/refunds/{channel}`）。
 	//
 	// `50 已拒绝` 与 `30 退款中` 失败**不是一回事**，客户端要分开展示：
 	// 前者是商家驳回，要展示 `reject_reason` 并允许重新申请；
@@ -3059,8 +3062,11 @@ type RefundReasonCode int
 //
 // ```
 //
-// 合法迁移（`refund_status_transitions`）：
+// 合法迁移（`refund_status_transitions`，由数据库触发器执行）：
 // `(10,20) (10,30) (10,50) (10,60) (20,30) (20,60) (30,40)`。
+// 每条边由谁走：`10→20/30/50` 审核（`/admin/refunds/{refund_no}/audit`）；
+// `20→30` 商家确认收到退货（`/admin/refunds/{refund_no}/receipt`）；
+// `10/20→60` 买家撤回；`30→40` 渠道回调（`/webhooks/refunds/{channel}`）。
 //
 // `50 已拒绝` 与 `30 退款中` 失败**不是一回事**，客户端要分开展示：
 // 前者是商家驳回，要展示 `reject_reason` 并允许重新申请；
@@ -4652,7 +4658,9 @@ type PostAdminProductsProductIdSkusParams struct {
 type PostAdminRefundsRefundNoAuditJSONBody struct {
 	Action PostAdminRefundsRefundNoAuditJSONBodyAction `json:"action"`
 
-	// FreightCents 审核裁定的退运费金额，省略则为 0
+	// FreightCents 审核裁定的退运费金额，**只对退货退款（`refund_type=2`）生效**；
+	// 省略则保持申请时的值（退货退款申请时为 0）。仅退款的运费按规则
+	// 计算（未发货整单退全退，其余不退），传一个不同的值回 422。
 	FreightCents *Money `json:"freight_cents,omitempty"`
 
 	// RejectReason action=reject 时必填
@@ -4704,6 +4712,49 @@ type PostAdminRefundsRefundNoAuditParams struct {
 
 // PostAdminRefundsRefundNoAuditJSONBodyAction defines parameters for PostAdminRefundsRefundNoAudit.
 type PostAdminRefundsRefundNoAuditJSONBodyAction string
+
+// PostAdminRefundsRefundNoReceiptParams defines parameters for PostAdminRefundsRefundNoReceipt.
+type PostAdminRefundsRefundNoReceiptParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+
+	// IdempotencyKey 客户端生成的 UUID。幂等作用域为 `(接口 scope, user_id, key)`，
+	// 有效期 24h，过期后同一 key 可复用（见数据模型文档 §11）。
+	//
+	// · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
+	//   并带 `Idempotency-Replayed: true` 响应头
+	// · **同 key 正在处理中**：`409` + `Retry-After`，
+	//   type=https://keel.dev/problems/idempotency-key-in-flight，
+	//   客户端应退避重试，不要当成业务失败
+	// · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
+	//   type=https://keel.dev/problems/idempotency-key-reused。
+	//   宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
+	//   那会让用户以为下单成功了而实际什么都没发生
+	// · 首次执行失败（存档为失败态）时同样回放该失败响应；
+	//   确需重试的场景请换一个新 key
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
 
 // GetAdminRegionsParams defines parameters for GetAdminRegions.
 type GetAdminRegionsParams struct {

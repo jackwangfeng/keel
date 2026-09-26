@@ -180,7 +180,16 @@ const (
 	InventoryLogOrderDeduct    int16 = 1 // 下单扣减
 	InventoryLogSagaCompense   int16 = 2 // SAGA 补偿回补
 	InventoryLogTimeoutRelease int16 = 3 // 超时关单释放
+	InventoryLogRefundRestock  int16 = 4 // 退款回补（未发货的退款到账时，§11）
+	InventoryLogBuyerCancel    int16 = 6 // 买家取消释放（00033 这一轮新增，§4）
 )
+
+// 6 与 3 同理要分开：两者都是「订单关了、货放回去」，差别是**谁关的** ——
+// 3 是用户什么都没做、时限到了；6 是用户主动点了取消。合成一个值的话，
+// 「多少人下单之后反悔」与「多少人忘了付钱」就分不开，而运营对这两种人的
+// 处置完全不同（前者看商品与价格，后者看支付链路与提醒）。
+// 5 已经被「手工调整」占了（§4 的原始枚举），所以新值取 6，不重排旧值 ——
+// 流水表里已经落库的数字不能改义。
 
 // 2 与 3 的差别值得单说一句，因为两者在库里长得一模一样（同一个 sku、同一个
 // 正数 change_qty、同一个订单号）：

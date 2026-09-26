@@ -298,6 +298,45 @@ type ProductUnderstanding struct {
 	UpdatedAt       pgtype.Timestamptz
 }
 
+type Refund struct {
+	ID               int64
+	MerchantID       int64
+	RefundNo         string
+	OrderID          int64
+	PaymentID        int64
+	UserID           int64
+	RefundType       int16
+	ReasonCode       int16
+	ReasonText       *string
+	EvidenceUrls     []string
+	GoodsAmountCents int64
+	FreightCents     int64
+	AmountCents      int64
+	Status           int16
+	Channel          int16
+	ChannelRefundID  *string
+	NotifyPayload    []byte
+	RejectReason     *string
+	AuditedAt        pgtype.Timestamptz
+	RefundedAt       pgtype.Timestamptz
+	CreatedAt        pgtype.Timestamptz
+	UpdatedAt        pgtype.Timestamptz
+}
+
+type RefundItem struct {
+	ID          int64
+	MerchantID  int64
+	RefundID    int64
+	OrderItemID int64
+	Quantity    int32
+	AmountCents int64
+}
+
+type RefundStatusTransition struct {
+	FromStatus int16
+	ToStatus   int16
+}
+
 type Region struct {
 	ID         int64
 	MerchantID int64
@@ -347,6 +386,20 @@ type SearchLog struct {
 	ModelName    *string
 	ModelVersion *string
 	CreatedAt    pgtype.Timestamptz
+}
+
+type Shipment struct {
+	ID          int64
+	MerchantID  int64
+	OrderID     int64
+	CarrierCode string
+	TrackingNo  string
+	Status      int16
+	ShippedAt   pgtype.Timestamptz
+	DeliveredAt pgtype.Timestamptz
+	CreatedBy   *int64
+	CreatedAt   pgtype.Timestamptz
+	UpdatedAt   pgtype.Timestamptz
 }
 
 type ShopSetting struct {

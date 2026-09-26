@@ -70,6 +70,39 @@ const (
 	// 那两个要改购物车。只看状态码分不开。
 	TypeOrderStatusNotPayable = "https://keel.dev/problems/order-status-not-payable"
 
+	// 订单后半程（取消、确认收货、发货、售后）的业务冲突，逐字取自契约各条接口的
+	// 409 / 404 / 422 描述。全是「状态不对」一类，而客户端的处置各不相同：
+	//
+	//   order-status-not-cancelable   409  只有待支付能取消。刷新订单（多半刚付完或刚超时）
+	//   order-status-not-confirmable  409  只有已发货能确认收货
+	//   order-status-not-shippable    409  后台：非已支付，或已发过货
+	//   order-has-pending-full-refund 409  后台：先去审那张整单退款单，再谈发货
+	//   tracking-no-duplicated        409  后台：运单号录重了，不是新包裹
+	//   order-not-found               404  申请退款时订单不存在或不是你的（契约在这一条上
+	//                                      点名了这个 type，别的 404 仍是通用的 not-found）
+	//   order-status-not-refundable   409  待支付 / 已关闭 / 整单退款中的订单不能申请售后
+	//   refund-quantity-exceeded      409  退的件数超过「购买 - 已退」
+	//   refund-already-in-progress    409  这一行已经在一张进行中的退款单里
+	//   order-item-mismatch           422  order_item_id 不属于这一单
+	//   refund-status-not-cancelable  409  只有待审核 / 待买家退货能撤回
+	//   refund-status-not-auditable   409  只有待审核能审
+	//   refund-status-not-receivable  409  只有待买家退货能确认收到退货
+	//   refund-freight-exceeded       422  审核裁定的退运费超过订单实收运费
+	TypeOrderStatusNotCancelable  = "https://keel.dev/problems/order-status-not-cancelable"
+	TypeOrderStatusNotConfirmable = "https://keel.dev/problems/order-status-not-confirmable"
+	TypeOrderStatusNotShippable   = "https://keel.dev/problems/order-status-not-shippable"
+	TypeOrderHasPendingFullRefund = "https://keel.dev/problems/order-has-pending-full-refund"
+	TypeTrackingNoDuplicated      = "https://keel.dev/problems/tracking-no-duplicated"
+	TypeOrderNotFound             = "https://keel.dev/problems/order-not-found"
+	TypeOrderStatusNotRefundable  = "https://keel.dev/problems/order-status-not-refundable"
+	TypeRefundQuantityExceeded    = "https://keel.dev/problems/refund-quantity-exceeded"
+	TypeRefundAlreadyInProgress   = "https://keel.dev/problems/refund-already-in-progress"
+	TypeOrderItemMismatch         = "https://keel.dev/problems/order-item-mismatch"
+	TypeRefundStatusNotCancelable = "https://keel.dev/problems/refund-status-not-cancelable"
+	TypeRefundStatusNotAuditable  = "https://keel.dev/problems/refund-status-not-auditable"
+	TypeRefundStatusNotReceivable = "https://keel.dev/problems/refund-status-not-receivable"
+	TypeRefundFreightExceeded     = "https://keel.dev/problems/refund-freight-exceeded"
+
 	// 后台身份那四个（数据模型 §14 / 契约 AdminAuth 与 Admin 两个 tag）。
 	//
 	// 它们同样分得细，理由与上面那几组一字不差 —— 契约里这四种全都是

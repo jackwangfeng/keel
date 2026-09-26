@@ -39,7 +39,7 @@ so "which one is running?" never depends on anyone's memory.
 
 ## [Unreleased]
 
-Migrations `00027`–`00031`.
+Migrations `00027`–`00034`.
 
 ### Added
 
@@ -115,6 +115,63 @@ Migrations `00027`–`00031`.
 - Other buyers' addresses and cart lines are **404, not 403**, for every
   operation — within a shop and across shops — and every one of the 19 new
   routes requires a buyer token (both checked by tests).
+
+### Added — order fulfillment (migration 00033)
+
+- **Buyer cancellation** (`POST /orders/{order_no}/cancel`): closes a pending
+  order and, in the same local transaction, returns its stock to the store it
+  was deducted from and unlocks its coupon. It reuses the exact release path of
+  the order-timeout sweep, so the two can never drift; stock movements are
+  logged with a new `biz_type = 6` so "changed their mind" and "forgot to pay"
+  stay distinguishable.
+- **Shipping** (`POST /admin/orders/{order_no}/shipments`) and **delivery
+  confirmation** (`POST /orders/{order_no}/confirm`). Whole-order shipment only;
+  shipping never touches stock, is refused while a whole-order refund is pending,
+  and a duplicated tracking number is a `409`, not a second parcel. Who may ship
+  follows the store-inventory row of the role matrix: admins and operators
+  anywhere, region and store managers only within their scope.
+- **The order state machine is now enforced by the database.** A trigger checks
+  every `orders.status` change against `order_status_transitions` and rejects
+  anything else with `23514 order_status_transition`; a new
+  `chk_fulfillment_timestamps` ties `paid_at` / `shipped_at` / `finished_at` to
+  the states that imply them. Service-level conditional updates remain the first
+  line and map to the contract's `409`s.
+- All three write endpoints honour `Idempotency-Key` in a single transaction
+  (claim → business → archive), shared with the admin write path.
+
+### Added — refunds and after-sales (migration 00034)
+
+- **Refund requests with partial refunds that add up to the cent**
+  (`POST /orders/{order_no}/refunds`). The client never sends an amount: each
+  line refunds `floor(net × k / quantity)` of its net amount — the line total
+  minus the coupon discount allocated to it at checkout — and the last unit takes
+  the remainder, so a fully refunded line always refunds exactly what was paid
+  for it. In-flight over-refunds (which no `CHECK` can catch) are prevented by
+  re-checking under an order row lock and allowing at most one in-flight refund
+  per order line.
+- **Refund lifecycle**: buyer withdrawal (`POST /refunds/{refund_no}/cancel`),
+  back-office audit (`POST /admin/refunds/{refund_no}/audit`) and a new
+  **confirm-returned-goods** step (`POST /admin/refunds/{refund_no}/receipt`) —
+  the contract's state machine always had the `20 → 30` edge but no endpoint
+  walked it. Buyer reads: `GET /refunds`, `GET /refunds/{refund_no}`,
+  `GET /orders/{order_no}/refunds`; order detail now carries `refunds` and
+  per-line `refunding_qty`.
+- **Refund webhook** (`POST /webhooks/refunds/{channel}`), isomorphic to the
+  payment webhook: per-tenant HMAC signature (a shop without a secret is always
+  rejected), amount check, and idempotency on the channel refund id via
+  `uk_refunds_channel_txn`. Settlement writes back order lines, order totals and
+  `refund_status` in one local transaction; an unshipped whole-order refund moves
+  the order `50 → 60`. Stock is restocked only if the order was never shipped;
+  the coupon is returned only once every line is fully refunded (and not expired).
+- **Sandbox refunds** follow the payment sandbox switch (`KEEL_PAYMENT_SANDBOX`):
+  when a refund enters "refunding", the server plays the channel inside the same
+  transaction — builds and signs a canonical callback and runs it through the
+  exact webhook settlement path.
+- The refund state machine is enforced by a trigger over
+  `refund_status_transitions` (`23514 refund_status_transition`), and
+  `chk_refund_state` ties "refunded" to the channel refund id and timestamp.
+- Who may audit or confirm receipt follows the same store-scoped rule as
+  shipping.
 
 ### Changed
 

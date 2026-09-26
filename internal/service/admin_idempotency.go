@@ -119,16 +119,38 @@ func idempotentWrite[T any](ctx context.Context, s *AdminCatalogService,
 	if err != nil {
 		return zero, false, err
 	}
+	// 这一句是整个改动的落点：主体是 staff，而且**它在类型上就说得出来**。
+	// 00023 之前这里只能写 id.StaffID，落进一个叫 user_id 的列。
+	return idempotentTx(ctx, s.repo, repository.StaffSubject(id.StaffID), scope, idemKey, hash, code, fn)
+}
+
+// tenantRunner 是 idempotentTx 需要的全部仓储能力：开一个租户事务。
+type tenantRunner interface {
+	WithTenant(ctx context.Context, fn func(repository.Tx) error) error
+}
+
+// idempotentTx 是 idempotentWrite 的主体无关版本：「抢占 → 业务 → 存档」在
+// **同一个事务**里，主体由调用方给（买家 BuyerSubject / 后台 StaffSubject）。
+//
+// 订单后半程那几条写接口（取消、确认收货、发货、退款申请 / 撤回 / 审核）
+// 全是本地事务，一个事务装得下，所以它们都走这里 —— 与后台那 5 条同一个形状，
+// 失败路径上不需要任何「把钥匙还回去」的善后：业务报错，整个事务回滚，
+// 抢占那一行随之消失，客户端拿同一把钥匙原样重试即可。
+//
+// 抽出来而不是再抄一份：两份「抢占 → 回放判定 → 存档」各自演化的话，
+// 迟早有一份漏掉 request_hash 的比对 —— 而那正是 §12 说「最不能省」的那一列。
+func idempotentTx[T any](ctx context.Context, repo tenantRunner, subj repository.IdempotencySubject,
+	scope, idemKey, hash string, code int32,
+	fn func(tx repository.Tx) (T, error)) (T, bool, error) {
+
+	var zero T
 	if idemKey == "" {
 		return zero, false, ErrIdempotencyKeyMissing
 	}
-	// 这一句是整个改动的落点：主体是 staff，而且**它在类型上就说得出来**。
-	// 00023 之前这里只能写 id.StaffID，落进一个叫 user_id 的列。
-	subj := repository.StaffSubject(id.StaffID)
 
 	var out T
 	replayed := false
-	err = s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+	err := repo.WithTenant(ctx, func(tx repository.Tx) error {
 		v, r, err := idempotentInTx(ctx, tx, scope, subj, idemKey, hash, code,
 			func() (T, error) { return fn(tx) })
 		out, replayed = v, r
