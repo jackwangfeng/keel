@@ -43,8 +43,16 @@ const automatorRuntime = {
   },
 }
 
+// 原生 App 的默认服务地址（见 src/api/native-default.uts）。只在 app 平台注入：
+// H5 必须同源访问（服务端不发 CORS 头），永远用相对路径。
+const isApp = (process.env.UNI_PLATFORM || '').startsWith('app')
+const nativeApiBase = isApp ? process.env.KEEL_API_BASE || '' : ''
+
 module.exports = {
   plugins: [automatorRuntime, uni()],
+  define: {
+    'process.env.KEEL_API_BASE': JSON.stringify(nativeApiBase),
+  },
   server: {
     proxy: {
       '/api': {

@@ -17,7 +17,7 @@
 #      得到 dist/build/app-android/：Kotlin 源码 + manifest.json + static/。
 #   3. 核对 manifest.json 里编译器声明用到的 uni 模块，全都在 settings.gradle 的 aar 清单里。
 #   4. 拷进 native-android/uniappx：Kotlin -> src/main/java，其余 -> assets/apps/<appid>/www。
-#   5. 注入 KEEL_API_BASE（见 src/api/native-default.uts），Gradle assembleRelease。
+#   5. Gradle assembleRelease。KEEL_API_BASE 在第 2 步编译时就注入了（见 src/api/native-default.uts）。
 #
 # ## 需要什么
 #
@@ -83,6 +83,17 @@ if [ ! -f "$SDK_DIR/.version" ] || [ "$(cat "$SDK_DIR/.version")" != "$SDK_SHA25
 fi
 
 # ---- 2. 编译 ----
+# 默认服务地址在编译期注入：vite.config.js 把 KEEL_API_BASE 放进 define，
+# DCloud 编译器把它交给 UTS → Kotlin（见 src/api/native-default.uts）。
+if [ -n "${KEEL_API_BASE:-}" ]; then
+    case "$KEEL_API_BASE" in
+        http://*|https://*) echo "==> 默认服务地址：$KEEL_API_BASE" ;;
+        *) die "KEEL_API_BASE 必须是 http(s):// 开头的绝对地址，拿到的是：$KEEL_API_BASE" ;;
+    esac
+    export KEEL_API_BASE
+else
+    echo "==> 没设 KEEL_API_BASE：App 装好后要先在「我的 → 服务地址」里填地址"
+fi
 AUTO_ARGS=()
 if [ "$E2E" = 1 ]; then
     # 官方自动化运行时是 UTS 源码，npm 编译器不输出它（见 vite.config.js 的
@@ -134,29 +145,7 @@ mkdir -p "$JAVA_DIR" "$WWW"
 cp -R "$OUT/.uniappx/android/src/." "$JAVA_DIR/"
 (cd "$OUT" && tar cf - --exclude .uniappx .) | (cd "$WWW" && tar xf -)
 
-# ---- 5. 注入默认服务地址 ----
-NEEDLE='val NATIVE_DEFAULT_BASE_URL: String = ""'
-count=$(grep -rhF "$NEEDLE" "$JAVA_DIR" | wc -l | tr -d ' ')
-[ "$count" = "1" ] || die "在 Kotlin 产物里找到 $count 处 \`$NEEDLE\`（应恰好 1 处）。src/api/native-default.uts 的写法变了？"
-if [ -n "${KEEL_API_BASE:-}" ]; then
-    case "$KEEL_API_BASE" in
-        http://*|https://*) ;;
-        *) die "KEEL_API_BASE 必须是 http(s):// 开头的绝对地址，拿到的是：$KEEL_API_BASE" ;;
-    esac
-    file=$(grep -rlF "$NEEDLE" "$JAVA_DIR")
-    python3 - "$file" "$NEEDLE" "$KEEL_API_BASE" <<'EOF'
-import json, sys
-path, needle, url = sys.argv[1:4]
-s = open(path, encoding='utf-8').read()
-open(path, 'w', encoding='utf-8').write(
-    s.replace(needle, 'val NATIVE_DEFAULT_BASE_URL: String = ' + json.dumps(url), 1))
-EOF
-    echo "==> 默认服务地址：$KEEL_API_BASE"
-else
-    echo "==> 没设 KEEL_API_BASE：App 装好后要先在「我的 → 服务地址」里填地址"
-fi
-
-# ---- 6. Gradle ----
+# ---- 5. Gradle ----
 echo "==> gradle assembleRelease（appid=$APPID version=$VNAME($VCODE)）"
 (cd "$NATIVE" && ./gradlew --console=plain -q assembleRelease \
     -PuniAppId="$APPID" -PversionName="$VNAME" -PversionCode="$VCODE")

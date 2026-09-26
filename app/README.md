@@ -239,9 +239,11 @@ Homebrew 装法：`brew install --cask android-commandlinetools`，再用 `sdkma
 
 几件值得知道的事：
 
-- **默认服务地址是打包时注入的**（`KEEL_API_BASE`），源码里永远是空串，见
-  `src/api/native-default.uts`。vite 的 `define` 试过，只替换 JS 产物，Kotlin 里留下原样
-  的标识符，所以脚本在拷进原生工程的 `.kt` 上做替换，并断言恰好替换一处。
+- **默认服务地址在编译期注入**（`KEEL_API_BASE`），源码里没有写死任何地址，见
+  `src/api/native-default.uts`：`vite.config.js` 把它放进 `define` 的 `process.env.KEEL_API_BASE`，
+  DCloud 编译器会同时交给 UTS → Kotlin（Android）与 JS（iOS、H5）两条路；H5 永远是空串。
+  （最早的做法是在拷进原生工程的 .kt 上做文本替换 —— iOS 的产物是压缩过的 JS，常量已被
+  折叠成 `"/api/v1"`，那条路走不通，才找到了这个两端通用的正规入口。）
 - **aar 只挑用得到的**（`native-android/settings.gradle` 的 `uniAars`），不是 SDK 里的
   全部 135 个。编译器在 `manifest.json` 的 `app-android.distribute.modules` 里列出代码
   实际用到的 uni 模块，脚本会核对每一个都在清单里——漏一个，apk 照样打得出来，
