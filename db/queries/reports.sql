@@ -111,50 +111,77 @@ SELECT width_bucket(r.refunded_at, sqlc.arg(edges)::timestamptz[])::int AS bucke
  ORDER BY 1;
 
 -- name: ReportProductRanking :many
--- 商品排行：窗口内支付了的订单的订单行，按商品汇总。先由 idx_orders_paid_at 收窄订单，
--- 再经 idx_order_items_order 取行 —— 订单行没有自己的时间列，窗口只能从订单那边来。
+-- 商品排行：窗口内支付了的订单的订单行，按商品汇总。订单行没有自己的时间列，窗口只能从订单那边来。
+--
+-- 写成三段（00061 那一轮按 130 万单的压测数据改的，数字在那份迁移的文件头）：
+--
+--   win    窗口内、范围内、付过钱的订单 id。由 idx_orders_paid_at 收窄。
+--   lines  这些订单的订单行，先按（商品, 订单）归并一次。
+--          多出来的那个 BETWEEN 是这一段的关键：win 里订单 id 的最小值与最大值。
+--          它在语义上是多余的（下一行的 win.id = oi.order_id 已经蕴含它），但它让
+--          订单行的索引（租户, order_id）变成一段**范围扫描** —— 订单 id 是自增的，与支付时间
+--          高度相关，30 天的窗口只扫这家店最近那一截订单行。没有它，规划器会把这家店的
+--          全部订单行扫一遍再与窗口做哈希连接（订单 id 与支付时间不相关时它退化成的也正是这个）。
+--          先按（商品, 订单）归并，是为了下一段的订单数用 count(*) 而不是 count(DISTINCT)：
+--          后者要按订单号整体排序，数据量大时落盘，那一步比连接本身还贵。
+--   外层   按商品汇总、连商品表取标题与类目、按类目筛、排序取前 N。
 --
 -- 类目含子孙：按 path 前缀（与 ListProducts 同一个写法），子孙类目**不**过滤 deleted_at ——
 -- 卖出去的时候它是有效类目，删掉之后那笔销售仍然属于它的祖先。起点类目本身必须未删除。
 --
 -- 排序键用 CASE 切换；第二排序键是另一个指标，第三是商品 id，保证并列时结果稳定。
-SELECT oi.product_id,
+WITH win AS (
+    SELECT o.id
+      FROM orders o
+     WHERE o.paid_at IS NOT NULL
+       AND o.paid_at >= sqlc.arg(window_start)::timestamptz
+       AND o.paid_at <  sqlc.arg(window_end)::timestamptz
+       AND o.status IN (20, 30, 40, 50, 60)
+       AND (sqlc.narg(store_id)::bigint IS NULL OR o.store_id = sqlc.narg(store_id)::bigint)
+       AND (sqlc.narg(region_id)::bigint IS NULL
+            OR o.store_id IN (SELECT st.id FROM stores st WHERE st.region_id = sqlc.narg(region_id)::bigint))
+       AND (sqlc.narg(only_region_ids)::bigint[] IS NULL
+            OR o.store_id IN (SELECT st.id FROM stores st
+                               WHERE st.region_id = ANY(sqlc.narg(only_region_ids)::bigint[])))
+       AND (sqlc.narg(only_store_ids)::bigint[] IS NULL
+            OR o.store_id = ANY(sqlc.narg(only_store_ids)::bigint[]))
+), span AS (
+    SELECT min(id) AS lo, max(id) AS hi FROM win
+), lines AS (
+    SELECT oi.product_id,
+           sum(oi.quantity)                         AS quantity,
+           sum(oi.amount_cents - oi.discount_cents) AS amount_cents,
+           sum(oi.refunded_qty)                     AS refunded_qty,
+           sum(oi.refunded_cents)                   AS refunded_cents
+      FROM span
+      JOIN order_items oi ON oi.order_id BETWEEN span.lo AND span.hi
+      JOIN win ON win.id = oi.order_id
+     GROUP BY oi.product_id, oi.order_id
+)
+SELECT l.product_id,
        p.title,
        p.category_id,
-       sum(oi.quantity)::bigint                          AS quantity,
-       sum(oi.amount_cents - oi.discount_cents)::bigint  AS amount_cents,
-       count(DISTINCT oi.order_id)::bigint               AS order_count,
-       sum(oi.refunded_qty)::bigint                      AS refunded_quantity,
-       sum(oi.refunded_cents)::bigint                    AS refunded_amount_cents
-  FROM orders o
-  JOIN order_items oi ON oi.order_id = o.id
-  JOIN products p     ON p.id = oi.product_id
- WHERE o.paid_at IS NOT NULL
-   AND o.paid_at >= sqlc.arg(window_start)::timestamptz
-   AND o.paid_at <  sqlc.arg(window_end)::timestamptz
-   AND o.status IN (20, 30, 40, 50, 60)
-   AND (sqlc.narg(store_id)::bigint IS NULL OR o.store_id = sqlc.narg(store_id)::bigint)
-   AND (sqlc.narg(region_id)::bigint IS NULL
-        OR o.store_id IN (SELECT st.id FROM stores st WHERE st.region_id = sqlc.narg(region_id)::bigint))
-   AND (sqlc.narg(only_region_ids)::bigint[] IS NULL
-        OR o.store_id IN (SELECT st.id FROM stores st
-                           WHERE st.region_id = ANY(sqlc.narg(only_region_ids)::bigint[])))
-   AND (sqlc.narg(only_store_ids)::bigint[] IS NULL
-        OR o.store_id = ANY(sqlc.narg(only_store_ids)::bigint[]))
-   AND (sqlc.narg(category_id)::bigint IS NULL
+       sum(l.quantity)::bigint       AS quantity,
+       sum(l.amount_cents)::bigint   AS amount_cents,
+       count(*)::bigint              AS order_count,
+       sum(l.refunded_qty)::bigint   AS refunded_quantity,
+       sum(l.refunded_cents)::bigint AS refunded_amount_cents
+  FROM lines l
+  JOIN products p ON p.id = l.product_id
+ WHERE (sqlc.narg(category_id)::bigint IS NULL
         OR p.category_id IN (
              SELECT c.id FROM categories c
               WHERE c.path LIKE (SELECT cc.path FROM categories cc
                                   WHERE cc.id = sqlc.narg(category_id)::bigint
                                     AND cc.deleted_at IS NULL) || '%'))
- GROUP BY oi.product_id, p.title, p.category_id
+ GROUP BY l.product_id, p.title, p.category_id
  ORDER BY CASE WHEN sqlc.arg(sort_by)::text = 'quantity'
-               THEN sum(oi.quantity)::bigint
-               ELSE sum(oi.amount_cents - oi.discount_cents)::bigint END DESC,
+               THEN sum(l.quantity)::bigint
+               ELSE sum(l.amount_cents)::bigint END DESC,
           CASE WHEN sqlc.arg(sort_by)::text = 'quantity'
-               THEN sum(oi.amount_cents - oi.discount_cents)::bigint
-               ELSE sum(oi.quantity)::bigint END DESC,
-          oi.product_id
+               THEN sum(l.amount_cents)::bigint
+               ELSE sum(l.quantity)::bigint END DESC,
+          l.product_id
  LIMIT sqlc.arg(row_limit);
 
 -- name: ReportStoreComparison :many
