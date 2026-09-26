@@ -103,8 +103,9 @@ const (
 // unconfiguredChannel 是本期三个渠道的默认实现：未配置，不发送。
 type unconfiguredChannel struct{ name, why string }
 
-func (c unconfiguredChannel) Name() string     { return c.name }
-func (c unconfiguredChannel) Configured() bool { return false }
+func (c unconfiguredChannel) Name() string            { return c.name }
+func (c unconfiguredChannel) Configured() bool        { return false }
+func (c unconfiguredChannel) UnconfiguredWhy() string { return c.why }
 func (c unconfiguredChannel) Send(context.Context, NotificationMessage) error {
 	return fmt.Errorf("渠道 %s 未配置：%s", c.name, c.why)
 }
@@ -396,7 +397,11 @@ func (s *NotificationDeliveryService) deliver(ctx context.Context, j repository.
 			continue
 		}
 		if !ch.Configured() {
-			results = append(results, outcome{ch.Name(), repository.NotificationDeliverySkipped, "未配置"})
+			detail := "未配置"
+			if w, ok := ch.(interface{ UnconfiguredWhy() string }); ok {
+				detail += "：" + w.UnconfiguredWhy()
+			}
+			results = append(results, outcome{ch.Name(), repository.NotificationDeliverySkipped, detail})
 			continue
 		}
 		err := ch.Send(ctx, msg)

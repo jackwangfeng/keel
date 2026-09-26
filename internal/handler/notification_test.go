@@ -681,6 +681,10 @@ func TestDeliveryWithDefaultChannelsRecordsSkippedAndFinishes(t *testing.T) {
 	if len(got) != 3 {
 		t.Fatalf("默认渠道投递之后有 %d 行投递记录，期望 3（微信订阅消息 / 短信 / 邮件各一行）：%+v", len(got), got)
 	}
+	if n := adminQueryInt64(t, `SELECT count(*) FROM notification_deliveries
+	                             WHERE notification_id = $1 AND detail LIKE '未配置：%资质%'`, id); n < 1 {
+		t.Error("跳过的投递记录没写明原因（期望「未配置：……资质……」）")
+	}
 	for _, d := range got {
 		if d.Status != repository.NotificationDeliverySkipped || d.Attempt != 1 {
 			t.Errorf("默认渠道的投递记录是 %+v，期望 status 2（未配置跳过）、attempt 1", d)

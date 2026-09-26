@@ -159,7 +159,10 @@ If 8081 is taken: `KEEL_CONSOLE_PORT=18081 docker compose up -d --build`.
 > column and the buyer app's location, with no conversion on the way), and
 > **orders and after-sales**: find orders by status, store, date, order number
 > or phone, ship them, review refunds (approve / reject, set the return freight)
-> and confirm returned goods.
+> and confirm returned goods, plus a **to-do bell** in the top bar (new paid
+> orders, refunds awaiting review, returns shipped back, low stock — narrowed to
+> the staff member's store scope, read state kept per person, each item jumps
+> straight to the order, refund or store stock it is about).
 
 For the multi-merchant shape, where the `Host` header picks the shop:
 `docker compose -f compose.yaml -f compose.multi.yaml up -d --build`.
@@ -232,7 +235,11 @@ are not there yet, and are listed so that nothing above reads as if it ships:
 - **SMS, WeChat and e-mail.** SMS-code login, WeChat login and the console's
   e-mail login link all need an outside service that is not wired up; those
   endpoints answer 501 on purpose. Buyers log in with phone + password; staff
-  get in with a one-time login token
+  get in with a one-time login token. Notifications are in the same position:
+  **in-app notifications ship** (buyer message center, console bell), and the
+  outbound-channel interface and delivery log for WeChat subscribe messages,
+  SMS and e-mail are in place, but no real channel is wired up — every
+  delivery is recorded as "not configured, skipped"
 - **shipping fees.** There are none, which is why free-shipping coupons cannot
   be created yet
 - **real payment channels.** Payments run in a sandbox whose callback path is
@@ -248,7 +255,9 @@ Products & SKUs · category tree · per-store inventory · three-tier pricing
 (base → region → store) · cart · address book · checkout · payments · cancel ·
 shipping · confirm receipt · after-sales refunds · coupons (amount-off /
 percent-off / no-threshold, claim center and targeted grants) · order state
-machine · multi-store with delivery fences · tiered staff roles
+machine · multi-store with delivery fences · tiered staff roles · in-app
+notifications (buyer message center and console to-do bell, written in the same
+transaction as the state change)
 
 Cart, address book, profile, cancel, confirm-receipt, shipping and after-sales
 refunds (partial refunds allocated to the cent, discounts included) are in;
@@ -411,6 +420,9 @@ battle-tested at scale. What it has is a stronger core.
   endpoints the contract already describes
 - [x] **Admin order and refund lists** — orders and after-sales pages, lists
   narrowed to the caller's store scope
+- [x] **Notifications** — in-app messages (buyer message center, console bell),
+  written in the same transaction as the state change; outbound channels are
+  pluggable and wait on the paperwork
 - [ ] Auto-confirm receipt, buyer-entered return tracking numbers
 - [ ] **M5** — Reranking + business re-ranking + search analytics
 - [ ] **M6** — Image embeddings → visual search
