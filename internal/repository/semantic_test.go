@@ -16,14 +16,6 @@ import (
 	"github.com/keel/keel/internal/tenant"
 )
 
-// testModelName 是这一组测试往 product_text_vectors.model_name 里写的名字。
-//
-// 取 infero 那条腿的（今天的默认部署）。这一层不比对模型名 —— 比对它的是
-// internal/inference 的 validate 与 service/index.go 的 decide；这里只要求
-// **写进去的和读出来的是同一个字符串**，所以用哪条腿的名字都行，
-// 用真的那个只是为了别在库里留一个不存在的模型名。
-var testModelName = inference.MustDialect(inference.DialectInfero).ModelName
-
 // 入库这一侧的归一化闸门（M3 Task 3 的硬约束一）。
 //
 // 语义检索层 §2.3 把这件事的性质写死了：配合 vector_cosine_ops，
@@ -127,7 +119,7 @@ func TestUpsertTextVectorRejectsUnnormalizedVector(t *testing.T) {
 			return tx.UpsertProductTextVector(ctx, repository.TextVector{
 				ProductID: prodID, Content: "红色连衣裙",
 				Embedding: scale(unitVector(), 7.3),
-				ModelName: testModelName, ModelVersion: "test",
+				ModelName: inference.ModelName, ModelVersion: "test",
 			})
 		})
 		if !errors.Is(err, repository.ErrVectorNotNormalized) {
@@ -148,7 +140,7 @@ func TestUpsertTextVectorRejectsUnnormalizedVector(t *testing.T) {
 			return tx.UpsertProductTextVector(ctx, repository.TextVector{
 				ProductID: prodID, Content: "红色连衣裙",
 				Embedding: unitVector(),
-				ModelName: testModelName, ModelVersion: "v-test",
+				ModelName: inference.ModelName, ModelVersion: "v-test",
 			})
 		}); err != nil {
 			t.Fatalf("归一化了的向量也写不进去：%v —— "+
@@ -169,8 +161,8 @@ func TestUpsertTextVectorRejectsUnnormalizedVector(t *testing.T) {
 			Scan(&name, &version, &content, &norm); err != nil {
 			t.Fatal(err)
 		}
-		if name != testModelName || version != "v-test" {
-			t.Errorf("落库的是 %s@%s，期望 %s@v-test", name, version, testModelName)
+		if name != inference.ModelName || version != "v-test" {
+			t.Errorf("落库的是 %s@%s，期望 %s@v-test", name, version, inference.ModelName)
 		}
 		if content != "红色连衣裙" {
 			t.Errorf("content 落库是 %q", content)
@@ -188,7 +180,7 @@ func TestUpsertTextVectorRejectsUnnormalizedVector(t *testing.T) {
 		err := r.WithTenant(tctx, func(tx repository.Tx) error {
 			return tx.UpsertProductTextVector(ctx, repository.TextVector{
 				ProductID: prodID, Content: "x", Embedding: short,
-				ModelName: testModelName, ModelVersion: "test",
+				ModelName: inference.ModelName, ModelVersion: "test",
 			})
 		})
 		if !errors.Is(err, repository.ErrVectorWrongDim) {
@@ -202,7 +194,7 @@ func TestUpsertTextVectorRejectsUnnormalizedVector(t *testing.T) {
 		err := r.WithTenant(tctx, func(tx repository.Tx) error {
 			return tx.UpsertProductTextVector(ctx, repository.TextVector{
 				ProductID: prodID, Content: "x", Embedding: bad,
-				ModelName: testModelName, ModelVersion: "test",
+				ModelName: inference.ModelName, ModelVersion: "test",
 			})
 		})
 		if err == nil {

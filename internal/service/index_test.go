@@ -85,7 +85,6 @@ type stubEmbedder struct {
 	calls   [][]string
 	err     error
 	version string
-	model   string
 
 	// beforeReturn 在返回之前跑一次。测试用它注入「判定与写回之间商品又变了」
 	// 那条竞态 —— 那段窗口的现实原因正是这一次 HTTP 调用的耗时。
@@ -108,20 +107,7 @@ func (e *stubEmbedder) Embed(_ context.Context, texts []string) (*inference.Resu
 	if v == "" {
 		v = "stub-v1"
 	}
-	return &inference.Result{Vectors: out, Model: e.ModelName(), ModelVersion: v}, nil
-}
-
-// ModelName 是这个替身声称的模型名 —— 也就是 decide 拿去和
-// product_text_vectors.model_name 比的那个字符串。
-//
-// 默认取 infero 那条腿的名字，因为那是今天的默认部署；
-// TestModelNameChangeMakesEveryVectorStale 把它改成另一条腿，
-// 跑的就是「换引擎之后存量行怎么判 stale」。
-func (e *stubEmbedder) ModelName() string {
-	if e.model != "" {
-		return e.model
-	}
-	return inference.MustDialect(inference.DialectInfero).ModelName
+	return &inference.Result{Vectors: out, Model: inference.ModelName, ModelVersion: v}, nil
 }
 
 func stubVector(text string) []float32 {
@@ -347,11 +333,9 @@ func TestIndexWritesVectorsAndSearchText(t *testing.T) {
 		if content != want.EmbedContent() {
 			t.Errorf("content 是 %q，期望 %q", content, want.EmbedContent())
 		}
-		if model != inference.MustDialect(inference.DialectInfero).ModelName ||
-			version != "stub-v1" {
+		if model != inference.ModelName || version != "stub-v1" {
 			t.Errorf("落库的模型是 %s@%s，期望 %s@stub-v1 —— "+
-				"这两列是「这批向量要不要重算」的另一半依据", model, version,
-				inference.MustDialect(inference.DialectInfero).ModelName)
+				"这两列是「这批向量要不要重算」的另一半依据", model, version, inference.ModelName)
 		}
 		if owner != mid {
 			t.Errorf("向量行的 merchant_id 是 %d，期望 %d —— "+
@@ -1195,63 +1179,8 @@ func TestModelChangeForcesRecompute(t *testing.T) {
 			"两个模型的向量不在同一个空间里，余弦距离算得出来、毫无意义，而且不报错", rep)
 	}
 	_, model, _, _, _, _, _ := f.vectorRow(t, pid)
-	if want := f.emb.ModelName(); model != want {
-		t.Errorf("重算之后 model_name 还是 %q，期望 %q", model, want)
-	}
-}
-
-// 换**引擎方言**⇒ 全库重算。这是上一条的真实触发场景，而不是一个手改出来的
-// model_name。
-//
-// 为什么值得单独一条：两条腿（infero/Qwen3-Embedding-0 与 keel-python/bge-m3）
-// **维度一样都是 1024，但向量空间不同**。也就是说切换 KEEL_EMBED_DIALECT 之后，
-// 库里的存量行 Postgres 一个字都不会报（vector(1024) 照收），HNSW 索引照用，
-// 检索照常返回结果 —— 只是返回的商品和搜的词无关。这是这个仓库反复点名的
-// 那类「不会报错的错误」，能抓住它的只有 decide 里那条 model_name 判据。
-//
-// 这一条同时钉住了「判据的来源」：它不改数据库，只换 embedder 报的 model 名，
-// 走的是 inference.Embedder.ModelName() 这条路。把 decide 改成从别处（配置、
-// 常量）读模型名的话，这条测试会红 —— 而那正是要防的漂移：配置没跟上换腿，
-// 全库被判成「还是新鲜的」，永远不重算。
-func TestDialectSwitchMakesEveryVectorStale(t *testing.T) {
-	ctx := context.Background()
-	f := newIndexFixture(t, "dialect", 1, 1, service.IndexConfig{})
-	pid := f.products[f.merchants[0]][0]
-
-	infero := inference.MustDialect(inference.DialectInfero)
-	python := inference.MustDialect(inference.DialectKeelPython)
-	// 自证：两条腿的模型名真的不同、维度真的相同。没有这一段，哪天两个
-	// 常量被写成同一个字符串，下面整条测试会安静地变成一次空跑。
-	if infero.ModelName == python.ModelName {
-		t.Fatalf("两条腿的 model 名相同（%q）—— 这条测试测不到任何东西",
-			infero.ModelName)
-	}
-
-	if _, err := f.svc.IndexOnce(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if _, model, _, _, _, _, _ := f.vectorRow(t, pid); model != infero.ModelName {
-		t.Fatalf("第一轮落库的 model_name 是 %q，期望 %q", model, infero.ModelName)
-	}
-
-	// 换腿。商品文本一个字没改 —— 变的是「同样的输入该算出什么」。
-	f.emb.model = python.ModelName
-	// 触发点要被拨动它才会被重新判定（换引擎这件事本身不碰 products）。
-	// 真实世界里对应的动作是 cmd/keel-index -force，那条路不依赖触发点。
-	f.exec(t, `UPDATE products SET sales_count = sales_count + 1 WHERE id = $1`, pid)
-
-	rep, err := f.svc.IndexOnce(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if rep.Embedded != 1 {
-		t.Fatalf("换了引擎方言（%s → %s）之后存量向量没有被判成过期（%+v）—— "+
-			"两条腿维度都是 1024，Postgres 收得下彼此的向量，一个字都不会报，"+
-			"而检索会拿两个空间里的向量算余弦距离",
-			infero.Name, python.Name, rep)
-	}
-	if _, model, _, _, _, _, _ := f.vectorRow(t, pid); model != python.ModelName {
-		t.Errorf("重算之后 model_name 是 %q，期望 %q", model, python.ModelName)
+	if model != inference.ModelName {
+		t.Errorf("重算之后 model_name 还是 %q", model)
 	}
 }
 

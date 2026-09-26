@@ -332,7 +332,6 @@ func deadEngineClient(t *testing.T) inference.Embedder {
 
 	client, err := inference.New(inference.Config{
 		Endpoint: "http://" + addr,
-		Dialect:  inference.DialectInfero,
 		// 超时给小一点：这条测试等的是一次 connection refused，
 		// 本机上它是立刻返回的；给 5 秒（客户端默认）只会让测试在
 		// 出别的岔子时挂很久。
@@ -799,8 +798,6 @@ func (e slowByLengthEmbedder) Embed(ctx context.Context, texts []string) (*infer
 	}
 	return conceptEmbedder{}.Embed(ctx, texts)
 }
-
-func (slowByLengthEmbedder) ModelName() string { return conceptEmbedder{}.ModelName() }
 
 // 请求体大小闸门。
 //

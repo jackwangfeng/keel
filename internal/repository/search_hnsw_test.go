@@ -347,7 +347,7 @@ func seedHNSWScaleFixture(t *testing.T, ctx context.Context) hnswFixture {
 	      SELECT p.id, p.merchant_id, p.title, keel_test_rnd_vec($2::int), $3, 'hnsw-fixture'
 	        FROM products p
 	        JOIN merchants m ON m.id = p.merchant_id
-	       WHERE m.code LIKE $1`, tag+"%", inference.Dim, testModelName)
+	       WHERE m.code LIKE $1`, tag+"%", inference.Dim, inference.ModelName)
 	insertTook := time.Since(start)
 
 	start = time.Now()

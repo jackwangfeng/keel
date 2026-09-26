@@ -39,16 +39,8 @@ func TestFakeEmbedderPassesEveryShapeGate(t *testing.T) {
 				"那它连「形状对但没语义」这个角色都演不了", i, n)
 		}
 	}
-	// 替身要**假装成当前这条腿**，否则 service/index.go 的 decide 会把每一件
-	// 商品都判成「换模型了」，于是每一轮重算全部 —— 一条永远追不完的队列。
-	if res.Model != e.ModelName() {
-		t.Fatalf("Embed 报的 model 是 %q，而 ModelName() 说 %q —— "+
-			"这两个字符串会分别落进 product_text_vectors.model_name 与"+
-			"下一轮的重算判定，对不上就是「每一轮都重算全库」",
-			res.Model, e.ModelName())
-	}
-	if want := fake.Dialect.ModelName; res.Model != want {
-		t.Fatalf("替身声称自己是 %q，而它假装的那条腿是 %q", res.Model, want)
+	if res.Model != inference.ModelName {
+		t.Fatalf("model 是 %q", res.Model)
 	}
 }
 

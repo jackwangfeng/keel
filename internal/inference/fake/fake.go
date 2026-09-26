@@ -21,14 +21,6 @@ import (
 // 那一列会直接把这件事喊出来，而不是伪装成一次正常的索引。
 const Version = "fake-not-a-real-model"
 
-// Dialect 是替身**假装**自己是哪条腿。默认 infero，因为那是今天的默认部署。
-//
-// 它存在只有一个理由：替身报的 model 名要能和 product_text_vectors.model_name
-// 对上，否则 service/index.go 的 decide 会把每一件商品都判成「换模型了」，
-// 于是每一轮都重算全部 —— 一条永远追不完的队列，而且不报错。
-// 换腿的测试（两种方言各跑一遍判定）把它改成 inference.DialectKeelPython。
-var Dialect = inference.MustDialect(inference.DialectInfero)
-
 // Embedder 是确定性替身：同样的文本永远得到同样的单位向量。
 //
 // 它**不假装**有语义。文本经 SHA-256 变成种子，种子驱动一个 PRNG 生成
@@ -37,9 +29,6 @@ var Dialect = inference.MustDialect(inference.DialectInfero)
 // 真引擎（见 fake_semantic_test.go），一个「稍微懂一点语义」的替身
 // 才是最危险的那种，因为它会让「用的是不是真引擎」这个问题变得不可观测。
 type Embedder struct {
-	// Model 是这个替身声称的模型名。零值时用 Dialect.ModelName。
-	Model string
-
 	// Calls 记下每一次调用送进来的批。测试用它核对「批量没有退化成循环单条」
 	// 这条性质在**不走 HTTP** 的路径上也成立。
 	Calls [][]string
@@ -56,18 +45,9 @@ func (e *Embedder) Embed(_ context.Context, texts []string) (*inference.Result, 
 	}
 	return &inference.Result{
 		Vectors:      out,
-		Model:        e.ModelName(),
+		Model:        inference.ModelName,
 		ModelVersion: Version,
 	}, nil
-}
-
-// ModelName 实现 inference.Embedder。理由写在那个接口上：索引侧要在**调用
-// 引擎之前**知道这个字符串，好判断库里的存量行是不是另一个模型算的。
-func (e *Embedder) ModelName() string {
-	if e.Model != "" {
-		return e.Model
-	}
-	return Dialect.ModelName
 }
 
 // Vector 把一条文本变成一个确定性的 1024 维单位向量。

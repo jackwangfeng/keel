@@ -384,7 +384,7 @@ func (s *IndexService) indexTenant(ctx context.Context, merchantID int64,
 	// 判定。这一步不碰数据库、不碰网络，只算两个 sha256。
 	plans := make([]indexPlan, 0, len(cands))
 	for i, c := range cands {
-		pl := decide(c, force, s.emb.ModelName())
+		pl := decide(c, force)
 		pl.idx = i
 		plans = append(plans, pl)
 	}
@@ -467,7 +467,7 @@ type indexPlan struct {
 //
 // 时间戳的先后关系已经在 SQL 里当过触发点了；在这里再看一次，等于把
 // 「粗但不漏」的那一半当成「准」的那一半用 —— 一次下单就会把全店商品重算。
-func decide(c repository.IndexCandidate, force bool, modelName string) indexPlan {
+func decide(c repository.IndexCandidate, force bool) indexPlan {
 	t := search.ProductText{
 		Title:        c.Title,
 		Subtitle:     c.Subtitle,
@@ -487,21 +487,10 @@ func decide(c repository.IndexCandidate, force bool, modelName string) indexPlan
 	case c.VectorModelName == nil:
 		// 没有向量行 —— 从没算过。
 		p.needEmbed = true
-	case *c.VectorModelName != modelName:
+	case *c.VectorModelName != inference.ModelName:
 		// 换模型了。这是「要不要重算」的另一半依据（语义检索层 §2.2）：
 		// 库里这条向量来自另一个模型，它与新模型算出来的向量不在同一个空间里，
 		// 余弦距离算得出来、毫无意义，而且不报错。
-		//
-		// **换引擎方言也走这一条，而且这是它唯一的自愈路径。** 两条腿
-		// （infero/Qwen3-Embedding-0 与 keel-python/bge-m3）维度都是 1024，
-		// 所以 Postgres 收得下彼此的向量，一个字都不会报。把 KEEL_EMBED_DIALECT
-		// 从一条改成另一条之后，库里存量行的 model_name 与这里的 modelName
-		// 对不上，于是逐轮被判成待重算 —— 要立刻切干净就跑一次
-		// `keel-index -force`（compose.infero.yaml 文件头「换腿要重算全库」）。
-		//
-		// modelName 由**引擎客户端自己**报（inference.Embedder.ModelName），
-		// 不是另配一份。另配一份会漂移，而漂移的形态是这条判据永远说
-		// 「没过期」—— 全库停在上一条腿算的向量上，检索照常返回结果。
 		//
 		// 注意它只认得**模型名**。同一个模型换版本（重新量化、权重刷新）
 		// 这一层看不见 —— model_version 要调一次引擎才知道，而这里
