@@ -7118,10 +7118,30 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** 购物车 */
+        /**
+         * 购物车
+         * @description 返回当前买家的整辆车，按加购时间倒序。**失效的行不会被静默丢掉**
+         *     （数据模型 §10：「下架、删除的商品不从购物车里清掉，查询时标记为失效」），
+         *     每一行的 `status` 说明它现在能不能买、为什么不能。
+         */
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    /**
+                     * @description 购物车按哪家门店算「卖不卖」「多少钱」「有没有货」。**每一条返回 `Cart` 的
+                     *     购物车接口都收它**，解析规则与 `GET /products` 的 `store_id` 逐字一致：
+                     *     不传走回落链（默认门店），指名一家不存在的门店返回 422，不静默回落。
+                     *
+                     *     车里存的只是 `sku_id` 与数量（数据模型 §10 不存价格快照），所以
+                     *     「这一行多少钱」只有在定下门店之后才有答案——三层定价下同一个 SKU
+                     *     在两家店是两个价。客户端应当传它在商品页 / 下单页用的**同一个** `store_id`，
+                     *     于是购物车显示的价、`/orders/preview` 试算的价、成交的价是同一个。
+                     *     响应里的 `store` 回显本次按哪家店算的。
+                     *
+                     *     **刻意没有 default**：理由同 `GET /products`。
+                     */
+                    store_id?: components["parameters"]["CartStoreId"];
+                };
                 header?: never;
                 path?: never;
                 cookie?: never;
@@ -7137,6 +7157,16 @@ export interface paths {
                         "application/json": components["schemas"]["Cart"];
                     };
                 };
+                /** @description `store_id` 指向的门店不存在或不属于当前店铺（`https://keel.dev/problems/invalid-request`） */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                default: components["responses"]["Problem"];
             };
         };
         put?: never;
@@ -7158,6 +7188,7 @@ export interface paths {
                     };
                     content?: never;
                 };
+                default: components["responses"]["Problem"];
             };
         };
         options?: never;
@@ -7177,12 +7208,35 @@ export interface paths {
         /**
          * 加入购物车
          * @description 若该 `sku_id` 已在车中，则**数量累加**（`cart_items` 上有
-         *     `UNIQUE (cart_id, sku_id)`，重复加购必然走合并路径）。
+         *     `UNIQUE (cart_id, sku_id)`，重复加购必然走合并路径），并把这一行重新勾选上。
          *     累加后超过 999 返回 422，不做静默截断。
+         *
+         *     加购按 `store_id` 那家店判「卖不卖」与「够不够」：这家店（或它所在大区）
+         *     不卖、商品已下架或规格已删除，返回 422；累加后的数量超过这家店的可售量，返回 409。
+         *     这两条只在**加购这一刻**判——车里已有的行之后缺货或下架，不会被删，
+         *     而是在 `GET /cart` 里以 `status` 标出来。
+         *
+         *     一辆车至多 100 种商品（不同的 `sku_id`），第 101 种返回 422
+         *     （`https://keel.dev/problems/invalid-request`）。
          */
         post: {
             parameters: {
-                query?: never;
+                query?: {
+                    /**
+                     * @description 购物车按哪家门店算「卖不卖」「多少钱」「有没有货」。**每一条返回 `Cart` 的
+                     *     购物车接口都收它**，解析规则与 `GET /products` 的 `store_id` 逐字一致：
+                     *     不传走回落链（默认门店），指名一家不存在的门店返回 422，不静默回落。
+                     *
+                     *     车里存的只是 `sku_id` 与数量（数据模型 §10 不存价格快照），所以
+                     *     「这一行多少钱」只有在定下门店之后才有答案——三层定价下同一个 SKU
+                     *     在两家店是两个价。客户端应当传它在商品页 / 下单页用的**同一个** `store_id`，
+                     *     于是购物车显示的价、`/orders/preview` 试算的价、成交的价是同一个。
+                     *     响应里的 `store` 回显本次按哪家店算的。
+                     *
+                     *     **刻意没有 default**：理由同 `GET /products`。
+                     */
+                    store_id?: components["parameters"]["CartStoreId"];
+                };
                 header: {
                     /**
                      * @description 客户端生成的 UUID。幂等作用域为 `(接口 scope, user_id, key)`，
@@ -7224,7 +7278,10 @@ export interface paths {
                         "application/json": components["schemas"]["Cart"];
                     };
                 };
-                /** @description 库存不足 */
+                /**
+                 * @description · 库存不足（累加后超过这家店的可售量）—— `https://keel.dev/problems/insufficient-stock`
+                 *     · 同一 Idempotency-Key 正在处理中 —— `https://keel.dev/problems/idempotency-key-in-flight`
+                 */
                 409: {
                     headers: {
                         [name: string]: unknown;
@@ -7234,10 +7291,14 @@ export interface paths {
                     };
                 };
                 /**
-                 * @description 累加后数量超过 999。Problem `type` 为
-                 *     `https://keel.dev/problems/cart-quantity-exceeded`，
-                 *     `detail` 给出当前数量与上限。不做静默截断——
-                 *     客户端以为加了 5 件、实际只加了 2 件，比报错更糟。
+                 * @description · 累加后数量超过 999。Problem `type` 为
+                 *       `https://keel.dev/problems/cart-quantity-exceeded`，
+                 *       `detail` 给出当前数量与上限。不做静默截断——
+                 *       客户端以为加了 5 件、实际只加了 2 件，比报错更糟。
+                 *     · 这家店（或它所在大区）不卖这件商品 —— `https://keel.dev/problems/sku-not-sold-in-store`
+                 *     · SKU 不存在、已停售、所属商品未上架，购物车已满 100 种，或 `store_id` 不认识
+                 *       —— `https://keel.dev/problems/invalid-request`
+                 *     · 同一 Idempotency-Key 配了不同的请求体 —— `https://keel.dev/problems/idempotency-key-reused`
                  */
                 422: {
                     headers: {
@@ -7268,10 +7329,28 @@ export interface paths {
          * 批量勾选 / 取消勾选
          * @description `item_ids` 省略即对全车生效（全选 / 全不选）。
          *     有了这个接口，20 条的购物车做一次「全选」是 1 个请求而不是 20 个。
+         *
+         *     `item_ids` 里只要有一个不在当前买家的车里（含别人车里的条目），整个请求
+         *     返回 404、一行都不改——不是改掉认得的那几行再报错。
          */
         put: {
             parameters: {
-                query?: never;
+                query?: {
+                    /**
+                     * @description 购物车按哪家门店算「卖不卖」「多少钱」「有没有货」。**每一条返回 `Cart` 的
+                     *     购物车接口都收它**，解析规则与 `GET /products` 的 `store_id` 逐字一致：
+                     *     不传走回落链（默认门店），指名一家不存在的门店返回 422，不静默回落。
+                     *
+                     *     车里存的只是 `sku_id` 与数量（数据模型 §10 不存价格快照），所以
+                     *     「这一行多少钱」只有在定下门店之后才有答案——三层定价下同一个 SKU
+                     *     在两家店是两个价。客户端应当传它在商品页 / 下单页用的**同一个** `store_id`，
+                     *     于是购物车显示的价、`/orders/preview` 试算的价、成交的价是同一个。
+                     *     响应里的 `store` 回显本次按哪家店算的。
+                     *
+                     *     **刻意没有 default**：理由同 `GET /products`。
+                     */
+                    store_id?: components["parameters"]["CartStoreId"];
+                };
                 header?: never;
                 path?: never;
                 cookie?: never;
@@ -7331,10 +7410,28 @@ export interface paths {
          *
          *     用 POST 而不是 `DELETE /cart/items?ids=1,2,3`，是因为条目多时
          *     查询串会超长，且 DELETE 带 body 在部分网关与客户端上行为不一致。
+         *
+         *     `item_ids` 里有不在当前买家车里的条目时整个请求返回 404、一行都不删，
+         *     与 `PUT /cart/selection` 同一条规矩。
          */
         post: {
             parameters: {
-                query?: never;
+                query?: {
+                    /**
+                     * @description 购物车按哪家门店算「卖不卖」「多少钱」「有没有货」。**每一条返回 `Cart` 的
+                     *     购物车接口都收它**，解析规则与 `GET /products` 的 `store_id` 逐字一致：
+                     *     不传走回落链（默认门店），指名一家不存在的门店返回 422，不静默回落。
+                     *
+                     *     车里存的只是 `sku_id` 与数量（数据模型 §10 不存价格快照），所以
+                     *     「这一行多少钱」只有在定下门店之后才有答案——三层定价下同一个 SKU
+                     *     在两家店是两个价。客户端应当传它在商品页 / 下单页用的**同一个** `store_id`，
+                     *     于是购物车显示的价、`/orders/preview` 试算的价、成交的价是同一个。
+                     *     响应里的 `store` 回显本次按哪家店算的。
+                     *
+                     *     **刻意没有 default**：理由同 `GET /products`。
+                     */
+                    store_id?: components["parameters"]["CartStoreId"];
+                };
                 header: {
                     /**
                      * @description 客户端生成的 UUID。幂等作用域为 `(接口 scope, user_id, key)`，
@@ -7376,7 +7473,20 @@ export interface paths {
                         "application/json": components["schemas"]["Cart"];
                     };
                 };
-                /** @description 两个字段都没给，或同时给了 */
+                /** @description item_ids 中存在不属于当前用户购物车的条目 */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                409: components["responses"]["IdempotencyInFlight"];
+                /**
+                 * @description 两个字段都没给、同时给了、或 `selected` 给了 false；
+                 *     或同一 Idempotency-Key 配了不同的请求体（`https://keel.dev/problems/idempotency-key-reused`）。
+                 */
                 422: {
                     headers: {
                         [name: string]: unknown;
@@ -7404,7 +7514,10 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        /** 删除条目 */
+        /**
+         * 删除条目
+         * @description 条目不在当前买家的购物车里（含别人车里的条目）返回 404，不是 403。
+         */
         delete: {
             parameters: {
                 query?: never;
@@ -7423,6 +7536,16 @@ export interface paths {
                     };
                     content?: never;
                 };
+                /** @description 条目不在当前买家的购物车里 */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                default: components["responses"]["Problem"];
             };
         };
         options?: never;
@@ -7431,10 +7554,31 @@ export interface paths {
          * 修改数量 / 勾选状态
          * @description `quantity` 与 `selected` 都可选，但至少传一个。
          *     勾选态存在服务端（`cart_items.selected`），换设备打开购物车不会丢。
+         *
+         *     **调大**数量时按 `store_id` 那家店判库存，超过可售量返回 409；
+         *     **调小**数量永远放行——车里 5 件、店里只剩 2 件时，用户把 5 改成 4
+         *     不该被拒，那正是他在往能买的方向改。
+         *
+         *     条目不在当前买家的车里（含别人车里的条目）返回 404，不是 403。
          */
         patch: {
             parameters: {
-                query?: never;
+                query?: {
+                    /**
+                     * @description 购物车按哪家门店算「卖不卖」「多少钱」「有没有货」。**每一条返回 `Cart` 的
+                     *     购物车接口都收它**，解析规则与 `GET /products` 的 `store_id` 逐字一致：
+                     *     不传走回落链（默认门店），指名一家不存在的门店返回 422，不静默回落。
+                     *
+                     *     车里存的只是 `sku_id` 与数量（数据模型 §10 不存价格快照），所以
+                     *     「这一行多少钱」只有在定下门店之后才有答案——三层定价下同一个 SKU
+                     *     在两家店是两个价。客户端应当传它在商品页 / 下单页用的**同一个** `store_id`，
+                     *     于是购物车显示的价、`/orders/preview` 试算的价、成交的价是同一个。
+                     *     响应里的 `store` 回显本次按哪家店算的。
+                     *
+                     *     **刻意没有 default**：理由同 `GET /products`。
+                     */
+                    store_id?: components["parameters"]["CartStoreId"];
+                };
                 header?: never;
                 path: {
                     item_id: number;
@@ -7459,6 +7603,15 @@ export interface paths {
                         "application/json": components["schemas"]["Cart"];
                     };
                 };
+                /** @description 条目不在当前买家的购物车里 */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
                 /** @description 库存不足 */
                 409: {
                     headers: {
@@ -7468,7 +7621,7 @@ export interface paths {
                         "application/problem+json": components["schemas"]["Problem"];
                     };
                 };
-                /** @description 请求体为空（quantity / selected 至少传一个） */
+                /** @description 请求体为空（quantity / selected 至少传一个），或数量不在 [1, 999] 内 */
                 422: {
                     headers: {
                         [name: string]: unknown;
@@ -7477,6 +7630,7 @@ export interface paths {
                         "application/problem+json": components["schemas"]["Problem"];
                     };
                 };
+                default: components["responses"]["Problem"];
             };
         };
         trace?: never;
@@ -9589,10 +9743,23 @@ export interface components {
         };
         Cart: {
             items: components["schemas"]["CartItem"][];
-            /** @description **全车**商品金额合计，与 `selected` 无关。 */
+            /**
+             * @description 本次的价格与可买状态是按哪家门店算的。**必返**，理由同 `GET /products`。
+             *     `match_type = none`（商家没配默认门店、又没指名门店）时，
+             *     每一行的 `status` 都是 `not_sold_in_store`、两个合计都是 0。
+             */
+            store: components["schemas"]["StoreContext"];
+            /**
+             * @description **全车**商品金额合计，与 `selected` 无关。
+             *     只计 `status = available` 的行：失效、缺货的行没有一个此刻能成交的金额，
+             *     算进去会让「全选」显示一个结算时注定对不上的数。
+             */
             total_cents: components["schemas"]["Money"];
             /**
              * @description **仅已勾选**（`selected: true`）条目的金额合计，即点「去结算」时的预估金额。
+             *     同样只计 `status = available` 的行。把这些行按同一个 `store_id` 送进
+             *     `/orders/preview`，得到的 `goods_amount_cents` 与它逐分相等——两边读的是
+             *     同一条定价查询（数据模型 §4 `sku_prices_by_store`）。
              *
              *     两个字段都给，是因为购物车页同时要显示这两个数——底部结算栏显示已选金额，
              *     而「全选」复选框需要知道全车总数。只给一个的话客户端就得自己遍历累加，
@@ -9613,11 +9780,17 @@ export interface components {
             };
             image_url?: string;
             /**
-             * @description **实时价，不是加购时的快照。** 购物车刻意不存价格快照（见数据模型 §9），
+             * Format: int64
+             * @description **实时价，不是加购时的快照。** 购物车刻意不存价格快照（见数据模型 §10），
              *     这个值随商品调价而变。不要据此做「降价提醒」；
              *     最终以 `/orders/preview` 的试算结果为准，价格快照只在下单瞬间产生。
+             *
+             *     单位「分」。按响应里 `store` 那家门店的生效价（门店价 > 大区价 > 基准价）。
+             *     **`status` 为 `not_sold_in_store` 或 `off_shelf` 时为 null**：这家店此刻
+             *     不卖它，也就没有一个「它多少钱」的答案——给一个基准价会让用户以为
+             *     还能按这个价买到。
              */
-            price_cents: components["schemas"]["Money"];
+            price_cents: number | null;
             quantity: number;
             /**
              * @description 是否勾选结算，对应 `cart_items.selected`。
@@ -9625,9 +9798,31 @@ export interface components {
              * @default true
              */
             selected: boolean;
-            /** @description 库存是否充足 */
-            available?: boolean;
+            /**
+             * @description 此刻能否按 `quantity` 买下这一行，恒等于 `status == available`。
+             *     保留它是为了只关心「能不能买」的简单客户端；要给用户看原因请读 `status`。
+             */
+            available: boolean;
+            status: components["schemas"]["CartItemStatus"];
         };
+        /**
+         * @description 这一行此刻能不能买，按响应里 `store` 那家门店判。判定顺序即下表顺序，
+         *     先命中的先报——一件被下架的商品通常也没有库存，先判库存会报「缺货」，
+         *     而用户会一直等一个不会来的补货（与库存扣减的判定顺序同一个理由，数据模型 §4）。
+         *
+         *     | 值 | 含义 | `price_cents` |
+         *     |---|---|---|
+         *     | `off_shelf` | 失效：规格已停售或删除，或商品已下架 / 删除 | null |
+         *     | `not_sold_in_store` | 这家店（或它所在大区）不卖；换一家店可能买得到 | null |
+         *     | `out_of_stock` | 这家店可售量为 0 | 有 |
+         *     | `insufficient_stock` | 这家店有货，但不够 `quantity` 件 | 有 |
+         *     | `available` | 能按 `quantity` 买下 | 有 |
+         *
+         *     **这些行不会被服务端删掉**（数据模型 §10）：替用户默默删东西，
+         *     比让他看到一条划掉的商品更讨人嫌。
+         * @enum {string}
+         */
+        CartItemStatus: "available" | "insufficient_stock" | "out_of_stock" | "not_sold_in_store" | "off_shelf";
         /**
          * @description **履约维度** —— 货走到哪儿了。资金维度另见 `Order.refund_status`。
          *
@@ -11016,6 +11211,20 @@ export interface components {
         RegionId: number;
         /** @description `categories.id`。同 ProductId，查不到即 404。 */
         CategoryId: number;
+        /**
+         * @description 购物车按哪家门店算「卖不卖」「多少钱」「有没有货」。**每一条返回 `Cart` 的
+         *     购物车接口都收它**，解析规则与 `GET /products` 的 `store_id` 逐字一致：
+         *     不传走回落链（默认门店），指名一家不存在的门店返回 422，不静默回落。
+         *
+         *     车里存的只是 `sku_id` 与数量（数据模型 §10 不存价格快照），所以
+         *     「这一行多少钱」只有在定下门店之后才有答案——三层定价下同一个 SKU
+         *     在两家店是两个价。客户端应当传它在商品页 / 下单页用的**同一个** `store_id`，
+         *     于是购物车显示的价、`/orders/preview` 试算的价、成交的价是同一个。
+         *     响应里的 `store` 回显本次按哪家店算的。
+         *
+         *     **刻意没有 default**：理由同 `GET /products`。
+         */
+        CartStoreId: number;
         /**
          * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
          *
