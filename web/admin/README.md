@@ -190,6 +190,7 @@ compose 里已经有一个 `KEEL_ADMIN_PASSWORD`，而那是数据库超级用�
 | 售后 | 真能用 | `GET /admin/refunds`（默认筛待审核 `status=10`）、`GET /admin/refunds/{refund_no}`、`POST .../audit`（同意 / 驳回，退货退款可裁定运费）、`POST .../receipt`（确认收到退货）。每行退款金额只展示服务端算好的数 |
 | 大区 | 真能用 | `GET/POST /admin/regions`、`PATCH/DELETE /admin/regions/{id}`、`GET /admin/regions/{id}/products`、`PUT .../products/{id}/listing`、`PUT/DELETE .../skus/{id}/price` |
 | 门店 | 真能用 | `GET/POST /admin/stores`、`GET/PATCH/DELETE /admin/stores/{id}`、`PUT .../fence`、`PUT .../default`、`GET .../products`、`PUT .../products/{id}/listing`、`PUT/DELETE .../skus/{id}/price`、`GET .../inventories`、`PUT .../skus/{id}/inventory` |
+| 顶栏铃铛（待办提醒） | 真能用 | `GET /admin/notifications`（下拉最近 20 条，响应带未读数）、`GET /admin/notifications/unread-count`（30 秒轮询、切页刷新）、`POST /admin/notifications/{id}/read`（点一条先标已读再跳订单 / 售后 / 门店库存页签）、`POST /admin/notifications/read-all`。范围与已读都是**调用者自己的**，跳转规则是 `src/api/notifications.ts` 的纯函数（`make admin-test`） |
 
 门店与大区当初是占位页，接上时改的正是这里原先写的两步：换掉
 `src/router/modules/stores.ts` / `regions.ts` 里的 component，`index.ts` 那一行没动。
@@ -336,7 +337,7 @@ SELECT + INSERT，INSERT 策略是 `WITH CHECK (platform_scope())`——租户�
 ```bash
 make admin-install      # npm ci，版本由入库的 package-lock.json 锁定
 make admin-type-check   # vue-tsc --strict + 范围核对（已接进 check-all.sh）
-make admin-test         # 围栏几何、金额换算、订单与售后界面规则的单元测试（node --test，不需要 node_modules）
+make admin-test         # 围栏几何、金额换算、订单与售后界面规则、铃铛跳转的单元测试（node --test，不需要 node_modules）
 make admin-build        # 静态产物（compose 起栈时会自己构建，日常不用跑）
 
 cd web/admin && npm run dev   # 开发服务器，/api 由 vite proxy 转给 127.0.0.1:8080

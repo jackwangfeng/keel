@@ -28,7 +28,8 @@ func TestBuyerSelfRoutesRequireToken(t *testing.T) {
 			continue
 		}
 		n++
-		path := strings.NewReplacer("{address_id}", "1", "{item_id}", "1", "{provider}", "1").
+		path := strings.NewReplacer("{address_id}", "1", "{item_id}", "1", "{provider}", "1",
+			"{notification_id}", "1").
 			Replace(apiPrefix + p)
 		var body *strings.Reader
 		if r.HTTPMethod == http.MethodGet || r.HTTPMethod == http.MethodDelete {
@@ -46,8 +47,8 @@ func TestBuyerSelfRoutesRequireToken(t *testing.T) {
 			t.Errorf("%s %s 不带令牌：type 是 %s", r.HTTPMethod, path, typ)
 		}
 	}
-	if n != 19 {
-		t.Fatalf("从 routes 表里筛出 %d 条买家自己的接口，期望 19 条（个人信息 6 + 地址簿 6 + 购物车 7）", n)
+	if n != 23 {
+		t.Fatalf("从 routes 表里筛出 %d 条买家自己的接口，期望 23 条（个人信息 6 + 地址簿 6 + 购物车 7 + 消息中心 4）", n)
 	}
 }
 
