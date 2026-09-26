@@ -87,6 +87,12 @@ const (
 	// 但 scope 串是同一个：两边的存档由 RLS 隔开，不靠名字。
 	scopeAdminStaffCreate    = "admin.staff.create"
 	scopeAdminMerchantCreate = "admin.merchants.create"
+
+	// 库存的相对调整（§15 第 12 / 18 条）。按门店那条与单店捷径**共用**这一个：
+	// 两条改的是同一种东西，请求哈希里用门店位（捷径写 0）把它们分开 ——
+	// 同一把钥匙跨两条路径复用得到的是 422 而不是一次静默的重放
+	// （adjustInventory 的注释）。
+	scopeAdminInventoryAdjust = "admin.inventory.adjustments"
 )
 
 // 存档里的 response_code。取值就是契约在各自 201 / 200 上写的那个。

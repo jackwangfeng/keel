@@ -115,6 +115,7 @@ key 的有效期是 24 小时，作用域是「接口 + 用户 + key」。哪些
 | 404 | `not-found` | 不存在、不属于你，或者**接口本身还没实现** |
 | 409 | `idempotency-key-in-flight` | 同一个幂等 key 正在处理 |
 | 409 | `promotion-limit-exceeded` / `promotion-sold-out` | 超出活动每人限购 / 秒杀配额在试算之后被抢光 |
+| 409 | `inventory-precondition-failed` / `inventory-insufficient` | 后台改库存：`expected_available_qty` 对不上（重读重试会成功）/ 相对调整扣完会变负（原样重试不会成功）。两者响应体都带 `current` |
 | 422 | `idempotency-key-reused` / `compliance-rejected` | 幂等 key 被复用 / 商品文案命中违禁词 |
 | 422 | `region-not-deliverable` | 试算 / 下单时有商品送不到这个收货地址，`undeliverable_items` 逐行给出原因 |
 | 429 | — | 触发限流（目前只有 `/search` 按 IP 限流） |
@@ -293,6 +294,27 @@ curl -s -H "Authorization: Bearer $STAFF_TOKEN" \
   `already_imported: true`。
 - 导入的商品一律是**草稿**（`status = 0`）；图片 URL 只出现在回执的 `image_urls` 里，不会下载。
 - 违禁词命中在 `rows[].violations`（与发布时拒绝的 `errors[]` 同一个形状），只提示不阻断。
+
+---
+
+## 后台改库存：设为与加减
+
+库存按门店分，两种写法，各管一类场景：
+
+| 场景 | 接口 | 请求体 | 幂等 |
+|---|---|---|---|
+| 进货、盘亏、验货入库（「加减 N 件」） | `POST /admin/stores/{store_id}/skus/{sku_id}/inventory/adjustments` | `{"delta": 100, "reason": "3 月进货"}` | **必须带 `Idempotency-Key`** |
+| 盘点结果（「现在就是 N 件」）、改预警线 | `PUT /admin/stores/{store_id}/skus/{sku_id}/inventory` | `{"expected_available_qty": 10, "available_qty": 37}` | 绝对值，天然幂等，不收 |
+
+两条都有去掉 `/stores/{store_id}` 的单店写法；商家门店数不是 1 时它们回 `409 store-ambiguous`，不猜一家。
+
+- **加减**在服务端的当前值上原子地加减，和并发下单互不覆盖，不会因为「别人先改了」而 409。
+  `delta` 不能为 0，绝对值不超过 1,000,000；这家店还没有这一行库存时按 0 算（正数会建出这一行）。
+  扣完会变负时回 `409 inventory-insufficient`，`current` 里是当前水位——改小扣减量或先补货，原样重试没用。
+- 加减**不是**天然幂等的（超时重发一次「+100」就是 +200），所以要带 `Idempotency-Key`；重放返回第一次的结果、不再加。
+  这条接口只存档成功：`409` 时整个请求回滚、钥匙一起释放，补完货后用同一把钥匙重试可以成功。
+- 每一次加减在同一个事务里记一行库存流水（`biz_type = 5`，前后水位与 `reason`）。
+- 两种写法都**不会**触发库存预警通知（改的人正看着那个数）。
 
 ---
 

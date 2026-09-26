@@ -88,6 +88,9 @@ type ScopedCatalogTx interface {
 
 	ListStoreInventories(ctx context.Context, storeID int64, lowStockOnly bool, limit, offset int32) ([]StoreInventory, int64, error)
 	SetStoreInventory(ctx context.Context, storeID, skuID int64, in InventorySet) (StoreInventory, error)
+	// AdjustStoreInventory 是按门店的相对调整（available_qty += delta，结果不得为负），
+	// 并在同一个事务里写一行 biz_type = 5 的流水。三条出路见实现上的注释。
+	AdjustStoreInventory(ctx context.Context, storeID, skuID int64, in InventoryAdjust) (StoreInventory, error)
 
 	// SoleStore 返回本租户唯一那家未软删门店的 id。
 	// 有零家或多家时返回 ErrStoreAmbiguous —— 契约把那条不带门店的库存路径
@@ -101,6 +104,16 @@ type InventorySet struct {
 	AvailableQty         int32
 	ExpectedAvailableQty int32
 	WarningQty           *int32
+}
+
+// InventoryAdjust 是一次相对调整的全部输入。
+//
+// BizID 由 service 拼好递下来（「adj:<staff_id>:<Idempotency-Key>」），不在这一层现编：
+// 这一层不认识员工，也不认识幂等键，而流水的 biz_id 要能顺着它找回那一次请求。
+type InventoryAdjust struct {
+	Delta  int32
+	Reason *string
+	BizID  string
 }
 
 // ---------------------------------------------------------------------------
@@ -454,6 +467,104 @@ func (e *StoreInventoryConflict) Error() string {
 // Unwrap 让 errors.Is(err, ErrInventoryPrecondition) 成立 —— handler 那张错误
 // 映射表按 sentinel 分支，而这个类型要落在同一个 409 上。
 func (e *StoreInventoryConflict) Unwrap() error { return ErrInventoryPrecondition }
+
+// ErrInventoryInsufficient：相对调整扣完会变负（契约 409 inventory-insufficient）。
+//
+// 与 ErrInventoryPrecondition 分成两个 sentinel，因为客户端对它们的处置相反：
+// CAS 对不上是「重读一次再试**会**成功」，这一个原样重试**不会** —— 要么改小扣减量，
+// 要么先补货。共用一个 type 的话，客户端会把一次「库存不够扣」写成无限重试。
+// 与下单那条的 ErrInsufficientStock 也分开：那一个是买家语境（422 / 409 各有出处），
+// 响应体里没有 current。
+var ErrInventoryInsufficient = errors.New("扣完之后库存会变负")
+
+// InventoryInsufficient 是相对调整的 409，带当前水位（缺行时为 0）。
+type InventoryInsufficient struct {
+	Delta   int32
+	Current StoreInventory
+}
+
+func (e *InventoryInsufficient) Error() string {
+	return fmt.Sprintf("门店 %d 的 sku %d：当前可售 %d，调整 %d 之后会变负",
+		e.Current.StoreID, e.Current.SKUID, e.Current.AvailableQty, e.Delta)
+}
+
+// Unwrap 让 errors.Is(err, ErrInventoryInsufficient) 成立。
+func (e *InventoryInsufficient) Unwrap() error { return ErrInventoryInsufficient }
+
+// AdjustStoreInventory 是按门店的相对调整。三条出路：
+//
+//	err == nil                                 成功（流水已在同一个事务里写好）
+//	errors.Is(err, ErrCatalogNotFound)         门店 / SKU 不可见，或这家店不卖它
+//	*InventoryInsufficient（errors.As）         扣完会变负，带当前水位
+//
+// 404 与 409 的分辨发生在 SQL 里（AdjustStoreInventory 的 sellable / wrote 两个 CTE，
+// 同一个 MVCC 快照），这一层只把两个计数翻成两种错误 —— 与 SetStoreInventory 同构。
+//
+// **流水排在写库存之后、同一个事务里**，这一层不开事务：调用方（service）已经在
+// WithTenant 里，幂等存档也在那同一个事务里。流水写失败，整个事务回滚，
+// 库存那一笔随之消失 —— 不会出现「库存加了、流水没有」的对不平。
+func (t tenantTx) AdjustStoreInventory(ctx context.Context, storeID, skuID int64,
+	in InventoryAdjust) (StoreInventory, error) {
+	if storeID <= 0 {
+		// 漏传 store_id 的症状是「每一个 SKU 都 404」，一个看起来像鉴权问题的 bug
+		// （SetInventory 上那段注释的同一条）。
+		return StoreInventory{}, fmt.Errorf("sku %d 的相对调整没有门店上下文", skuID)
+	}
+	if in.Delta == 0 {
+		// service 已经按契约拒过（422）。这里再挡一道是因为 0 会在流水里留一行
+		// before = after 的噪声，而这一层看不见调用方是谁。
+		return StoreInventory{}, fmt.Errorf("sku %d 的相对调整 delta 为 0", skuID)
+	}
+	if in.BizID == "" {
+		return StoreInventory{}, fmt.Errorf("sku %d 的相对调整没有 biz_id —— 流水会追不回那一次请求", skuID)
+	}
+	row, err := t.q.AdjustStoreInventory(ctx, db.AdjustStoreInventoryParams{
+		StoreID: storeID, SkuID: skuID, Delta: in.Delta,
+	})
+	if err != nil {
+		return StoreInventory{}, err
+	}
+	if row.SellableRows == 0 {
+		return StoreInventory{}, fmt.Errorf(
+			"sku %d 在门店 %d 不可见或已下架: %w", skuID, storeID, ErrCatalogNotFound)
+	}
+	if row.WrittenRows == 0 {
+		// 扣完会变负。缺行（current 全为 NULL）时当前值就是「可售 0」——
+		// 缺行 ≡ 可售 0，这里把那条语义兑现成一个调用方能直接看懂的数。
+		cur := StoreInventory{SKUID: skuID, StoreID: storeID}
+		if row.CurrentAvailableQty != nil {
+			cur.AvailableQty = *row.CurrentAvailableQty
+		}
+		if row.CurrentWarningQty != nil {
+			cur.WarningQty = *row.CurrentWarningQty
+		}
+		if row.CurrentUpdatedAt.Valid {
+			cur.UpdatedAt = row.CurrentUpdatedAt.Time
+		}
+		return StoreInventory{}, &InventoryInsufficient{Delta: in.Delta, Current: cur}
+	}
+	if row.NewAvailableQty == nil || row.NewWarningQty == nil {
+		// 写成功却没回传水位，只可能是那条 SQL 被改坏了。不要静默返回 0：
+		// 0 是一个合法的库存水位，而且它会被拿去算流水的 before。
+		return StoreInventory{}, fmt.Errorf(
+			"sku %d 调整成功但没有回传水位——AdjustStoreInventory 的 SQL 被改坏了", skuID)
+	}
+	after := *row.NewAvailableQty
+	// before = after - delta 是精确的：那条语句写的就是 「+ delta」，
+	// 插入那一支（缺行）也是 0 + delta。不再读一次 —— 多读一次就是多一个快照。
+	if err := t.q.AppendManualInventoryLog(ctx, db.AppendManualInventoryLogParams{
+		SkuID: skuID, StoreID: storeID, ChangeQty: in.Delta, BizID: in.BizID,
+		BeforeAvailable: after - in.Delta, AfterAvailable: after, Reason: in.Reason,
+	}); err != nil {
+		return StoreInventory{}, err
+	}
+	out := StoreInventory{SKUID: skuID, StoreID: storeID,
+		AvailableQty: after, WarningQty: *row.NewWarningQty}
+	if row.NewUpdatedAt.Valid {
+		out.UpdatedAt = row.NewUpdatedAt.Time
+	}
+	return out, nil
+}
 
 func (t tenantTx) SoleStore(ctx context.Context) (int64, error) {
 	r, err := t.q.CountStoresForTenant(ctx)

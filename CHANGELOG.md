@@ -39,11 +39,27 @@ so "which one is running?" never depends on anyone's memory.
 
 ## [Unreleased]
 
-Migrations `00027`–`00038` and `00053`–`00062`.
+Migrations `00027`–`00038`, `00053`–`00062` and `00070`.
 
 
 ### Added
 
+- **Relative inventory adjustments** (`POST /admin/stores/{store_id}/skus/{sku_id}/inventory/adjustments`,
+  plus the single-store shortcut `POST /admin/skus/{sku_id}/inventory/adjustments`;
+  migration `00070`). The body is just `delta` (non-zero, |delta| ≤ 1,000,000) and an
+  optional `reason` (≤ 200 characters). Restocking 100 units no longer means
+  read-then-compare-and-set-then-retry-on-409: the server adds the delta to the live
+  value in one conditional statement, so concurrent restocks and concurrent order
+  deductions all land. A missing inventory row counts as 0 — a positive delta creates
+  it, even when many requests race to be first. Going below zero is `409
+  inventory-insufficient` with the current stock in `current` (unlike the CAS `409`,
+  retrying as-is will not help). Because a delta is not naturally idempotent,
+  `Idempotency-Key` is required; a replay returns the first result without applying
+  it twice. Every adjustment writes an `inventory_logs` row (`biz_type = 5`, before /
+  after, `biz_id = adj:<staff id>:<key>`, and the new `reason` column) in the same
+  transaction. Staff adjustments do not raise low-stock notifications, same as the
+  CAS endpoint. The admin console's inventory dialog now defaults to "add / subtract",
+  keeping "set to" for stock-take results and the warning threshold.
 - **`KEEL_TRUSTED_PROXIES`**: a comma-separated list of reverse-proxy IPs / CIDRs.
   The `/search` and `/search/events` rate limits now key on the real client IP —
   `X-Forwarded-For` / `X-Real-IP` are honoured only on connections from a listed

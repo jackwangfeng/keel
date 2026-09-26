@@ -336,6 +336,13 @@ var permMatrix = []permRoute{
 			Body: fmt.Sprintf(`{"expected_available_qty":%d,"available_qty":%d}`, cur, cur+1),
 			Host: so.sh.Host, Token: so.tokens[c], OK: http.StatusOK}
 	}},
+	{"POST", v1 + "/admin/skus/:sku_id/inventory/adjustments", storeOperate, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		// 相对调整的单店捷径，与上面那条 PUT 捷径同一个夹具、同一个判据。
+		// delta 取 +1：正数永远不会撞上「扣完会变负」，放行与否只由判权决定。
+		so := fx.soloShop(t)
+		return permReq{Method: "POST", Path: fmt.Sprintf(v1+"/admin/skus/%d/inventory/adjustments", so.SKUID),
+			Body: `{"delta":1}`, Host: so.sh.Host, Token: so.tokens[c], OK: http.StatusOK}
+	}},
 	{"GET", v1 + "/admin/categories", everyone, func(t *testing.T, fx *permFixture, c permCase) permReq {
 		return permGet(v1 + "/admin/categories")
 	}},
@@ -454,6 +461,10 @@ var permMatrix = []permRoute{
 			fx.store(c), fx.SKUID),
 			Body: fmt.Sprintf(`{"expected_available_qty":%d,"available_qty":%d}`, cur, cur+1),
 			OK:   http.StatusOK}
+	}},
+	{"POST", v1 + "/admin/stores/:store_id/skus/:sku_id/inventory/adjustments", storeOperate, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permReq{Method: "POST", Path: fmt.Sprintf(v1+"/admin/stores/%d/skus/%d/inventory/adjustments",
+			fx.store(c), fx.SKUID), Body: `{"delta":1,"reason":"权限矩阵"}`, OK: http.StatusOK}
 	}},
 
 	// —— 订单后半程（00033）。契约的 StaffRole 矩阵里没有「发货」这一行，
@@ -656,6 +667,11 @@ func TestEveryAdminRouteIsInThePermissionMatrix(t *testing.T) {
 // TestAdminPermissionMatrix 逐格敲一遍。
 func TestAdminPermissionMatrix(t *testing.T) {
 	fx := newPermFixture(t)
+	// 单店夹具在这里、用顶层的 t 建好，不留给第一个用到它的子测试去懒建：
+	// newAdminShop 把清理挂在传进去的 t 上，懒建的话那家店会在第一个子测试
+	// （PUT 捷径）结束时被整个删掉，第二条用它的路由（相对调整的捷径）拿到的
+	// 就是一堆已经作废的令牌 —— 症状是整行 401，看起来像鉴权坏了。
+	fx.soloShop(t)
 	cells := 0
 	for _, r := range permMatrix {
 		r := r

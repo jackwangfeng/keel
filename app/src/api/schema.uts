@@ -1083,6 +1083,14 @@ export type GeoPolygon = {
 /** 第三方身份来源，对应 `user_identities.provider`： */
 export type IdentityProvider = number
 
+/** 相对调整。只有一个必填字段：加减多少。**不带「我看到的那个值」**—— */
+export type InventoryAdjustRequest = {
+  /** 可售量的增量，正数进货、负数扣减。**不能为 0**（一次什么都不改的调整 */
+  delta : number
+  /** 这次调整的原因（「3 月进货」「盘点盘亏」「退货验货入库」），写进 */
+  reason? : string
+}
+
 export type InventoryConflict = {
   type : string
   title : string

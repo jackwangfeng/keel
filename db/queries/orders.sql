@@ -246,6 +246,22 @@ INSERT INTO inventory_logs (sku_id, store_id, change_qty, biz_type, biz_id,
                             before_available, after_available)
 VALUES ($1, $2, $3, $4, $5, $6, $7);
 
+-- name: AppendManualInventoryLog :exec
+-- 手工调整那一行流水（biz_type = 5，契约 POST .../inventory/adjustments）。
+--
+-- 与 AppendInventoryLog 分成两条而不是给那条加一个可空参数：那条的四个调用点
+-- （下单、补偿、关单、退款）没有「为什么」可写 —— 它们的为什么就是 biz_id 那个订单号。
+-- 多一个参数，就多四处要写 nil 的地方，而某一处哪天顺手填了个字符串，
+-- 流水里就出现一行「订单扣减，理由：……」这种谁也解释不了的东西。
+--
+-- biz_type 写死在语句里，不是参数：这条语句只为手工调整存在。
+-- biz_id 由调用方拼成 「adj:<staff_id>:<Idempotency-Key>」—— 谁、哪一次请求；
+-- 「为什么」在 reason（00070）。
+INSERT INTO inventory_logs (sku_id, store_id, change_qty, biz_type, biz_id,
+                            before_available, after_available, reason)
+VALUES (sqlc.arg(sku_id), sqlc.arg(store_id), sqlc.arg(change_qty), 5, sqlc.arg(biz_id),
+        sqlc.arg(before_available), sqlc.arg(after_available), sqlc.narg(reason));
+
 -- name: ClaimIdempotencyKey :execrows
 -- 抢占式插入（数据模型 §12）。**主键就是那把锁。**
 --

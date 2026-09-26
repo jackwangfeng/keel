@@ -677,6 +677,108 @@ func (s *AdminStoreService) SetStoreInventory(ctx context.Context, storeID, skuI
 	return out, err
 }
 
+// InventoryAdjustInput 是契约 InventoryAdjustRequest 在业务层的形状。
+type InventoryAdjustInput struct {
+	Delta  int32   `json:"delta"`
+	Reason *string `json:"reason,omitempty"`
+}
+
+// 相对调整的边界（契约 InventoryAdjustRequest）。
+const (
+	maxInventoryAdjustDelta  = 1_000_000
+	maxInventoryAdjustReason = 200
+)
+
+// AdjustStoreInventory 实现 POST /admin/stores/{store_id}/skus/{sku_id}/inventory/adjustments。
+// 返回的 bool 为真表示幂等重放。
+func (s *AdminStoreService) AdjustStoreInventory(ctx context.Context, storeID, skuID int64,
+	in InventoryAdjustInput, idemKey string) (repository.StoreInventory, bool, error) {
+	return adjustInventory(ctx, s.repo, storeID, skuID, in, idemKey)
+}
+
+// adjustInventory 是相对调整的全部业务，两条路径共用（按门店那条与单店捷径，
+// 后者 storeID 传 0，在事务里用 SoleStore 解析）。
+//
+// ===========================================================================
+// 为什么它要幂等键，而 PUT 那条不要
+// ===========================================================================
+//
+// PUT 是绝对值：同一个请求发两次，结果与发一次相同，天然幂等。相对调整不是 ——
+// 「+100」因为网络超时被客户端重发一次就是 +200，而且没有任何东西会响。
+// 所以它走 idempotentTx：抢占、调整、写流水、存档，全在**同一个事务**里。
+// 409（扣完会变负）让整个事务回滚，抢占那一行随之消失，补完货之后拿同一把钥匙
+// 重试可以成功 —— 失败的请求等于没有发生过（admin_idempotency.go 的文件头）。
+//
+// ===========================================================================
+// 请求哈希里的门店位
+// ===========================================================================
+//
+// 路径参数进哈希（adminRequestHash 的规矩）。捷径的门店不在路径上，写 0 ——
+// 门店 id 是自增主键，不会是 0。于是同一把钥匙先打捷径、再打按门店那条，
+// 哪怕落到同一家店，也是两个不同的请求（422 idempotency-key-reused），
+// 不会被当成重放。反过来的做法（捷径先解析门店再算哈希）要把哈希挪进事务里，
+// 而那时钥匙已经抢到了 —— 一个注定 422 的请求不该先占住钥匙。
+//
+// ===========================================================================
+// 通知
+// ===========================================================================
+//
+// 不发。动作是商家自己做的，改到预警线以下时他正看着那个数 —— 与 PUT 那条同一个
+// 决定，登记在 notification_policy.go。
+func adjustInventory(ctx context.Context, repo tenantRunner, storeID, skuID int64,
+	in InventoryAdjustInput, idemKey string) (repository.StoreInventory, bool, error) {
+
+	staff, err := requireStaff(ctx)
+	if err != nil {
+		return repository.StoreInventory{}, false, err
+	}
+	// 校验排在抢占幂等键之前：一个注定被拒的请求不该占掉客户端那把钥匙
+	// （同 AdminCatalogService.CreateProduct）。
+	if in.Delta == 0 {
+		// 一次什么都不改的调整只会在流水里留下一行 before = after 的噪声。
+		return repository.StoreInventory{}, false,
+			fmt.Errorf("%w: delta 不能为 0", ErrCatalogBadRequest)
+	}
+	if in.Delta > maxInventoryAdjustDelta || in.Delta < -maxInventoryAdjustDelta {
+		// available_qty 是 INT：没有上限的话几次重复提交就能把它推到溢出，
+		// 而溢出在 PG 里是 22003，会以 500 的样子出现。
+		return repository.StoreInventory{}, false, fmt.Errorf(
+			"%w: delta 是 %d，绝对值上限是 %d", ErrCatalogBadRequest, in.Delta, maxInventoryAdjustDelta)
+	}
+	if err := checkOptText("reason", in.Reason, maxInventoryAdjustReason); err != nil {
+		return repository.StoreInventory{}, false, err
+	}
+	hash, err := adminRequestHash([]int64{storeID, skuID}, in)
+	if err != nil {
+		return repository.StoreInventory{}, false, err
+	}
+	// biz_id：谁、哪一次请求。幂等存档 24 小时后会被清掉，员工 id 不会 ——
+	// 过了存档期，流水里仍然说得出是谁调的。
+	bizID := fmt.Sprintf("adj:%d:%s", staff.StaffID, idemKey)
+
+	return idempotentTx(ctx, repo, repository.StaffSubject(staff.StaffID),
+		scopeAdminInventoryAdjust, idemKey, hash, archivedOK,
+		func(tx repository.Tx) (repository.StoreInventory, error) {
+			target := storeID
+			if target == 0 {
+				// 单店捷径。解析、判权、调整在同一个事务里（SetInventory 那段注释的
+				// 同一条理由）：分开的话，中间的一次开店会让「解析到 A 店」与
+				// 「调进 A 店」之间出现窗口，而那时正确答案已经是 409 了。
+				sole, e := tx.SoleStore(ctx)
+				if e != nil {
+					return repository.StoreInventory{}, e
+				}
+				target = sole
+			}
+			if _, e := authorizeStore(ctx, tx, target, storeOperate); e != nil {
+				return repository.StoreInventory{}, e
+			}
+			return tx.AdjustStoreInventory(ctx, target, skuID, repository.InventoryAdjust{
+				Delta: in.Delta, Reason: in.Reason, BizID: bizID,
+			})
+		})
+}
+
 // ---------------------------------------------------------------------------
 // 校验小工具
 // ---------------------------------------------------------------------------

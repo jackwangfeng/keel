@@ -38,6 +38,7 @@ import { computed, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import {
     asInventoryConflict,
+    asInventoryShortage,
     isProblemType,
     keel,
     ProblemType,
@@ -45,6 +46,7 @@ import {
     type AdminStore,
 } from "../api/client.ts";
 import { listAllStores } from "../api/stores.ts";
+import { IdempotentSubmission, withIdempotency } from "../api/idempotency.ts";
 import ProblemAlert from "./ProblemAlert.vue";
 import { notifyError, notifyOk } from "../ui/notify.ts";
 
@@ -73,6 +75,18 @@ const emit = defineEmits<{
     updated: [inventory: AdminInventory];
 }>();
 
+/**
+ * 两种改法。「加减」是进货 / 盘亏的正确形状（POST .../inventory/adjustments）：
+ * 只说加减多少，不带「我看到的值」，于是永远不会因为并发下单拿到要重读重试的 409。
+ * 「设为」留给盘点得出的绝对结论与改预警线。默认「加减」——补货是最常见的那一种。
+ */
+const mode = ref<"adjust" | "set">("adjust");
+const delta = ref(0);
+const reason = ref("");
+/** 一次打开对应一次提交；失败（除「处理中」与 503 外）换钥匙，判据在 api/idempotency.ts。 */
+const submission = new IdempotentSubmission();
+/** 「加减」扣过头时服务端回来的当前水位。 */
+const shortCurrent = ref<AdminInventory | null>(null);
 const expected = ref(0);
 const target = ref(0);
 const warning = ref(0);
@@ -89,6 +103,11 @@ watch(
     () => [props.modelValue, props.sku] as const,
     ([open, sku]) => {
         if (!open || sku === null) return;
+        mode.value = "adjust";
+        delta.value = 0;
+        reason.value = "";
+        shortCurrent.value = null;
+        submission.rotate();
         expected.value = sku.availableQty;
         target.value = sku.availableQty;
         warning.value = sku.warningQty;
@@ -112,6 +131,10 @@ function close(): void {
 }
 
 async function submit(): Promise<void> {
+    if (mode.value === "adjust") {
+        await submitAdjust();
+        return;
+    }
     const sku = props.sku;
     if (sku === null) return;
     busy.value = true;
@@ -156,6 +179,50 @@ async function submit(): Promise<void> {
     }
 }
 
+/** 相对调整。门店维度与单店捷径两条路径，错误的处置与「设为」同构。 */
+async function submitAdjust(): Promise<void> {
+    const sku = props.sku;
+    if (sku === null || delta.value === 0) return;
+    busy.value = true;
+    error.value = null;
+    shortCurrent.value = null;
+    const trimmed = reason.value.trim();
+    const body = trimmed === "" ? { delta: delta.value } : { delta: delta.value, reason: trimmed };
+    try {
+        const storeId = props.storeId;
+        const updated = await withIdempotency(submission, (key) =>
+            storeId === null || storeId === undefined
+                ? keel.request("post", "/admin/skus/{sku_id}/inventory/adjustments", {
+                      path: { sku_id: sku.skuId },
+                      body,
+                      headers: { "Idempotency-Key": key },
+                  })
+                : keel.request("post", "/admin/stores/{store_id}/skus/{sku_id}/inventory/adjustments", {
+                      path: { store_id: storeId, sku_id: sku.skuId },
+                      body,
+                      headers: { "Idempotency-Key": key },
+                  }),
+        );
+        notifyOk(`库存已${delta.value > 0 ? "加" : "减"} ${Math.abs(delta.value)}，现在是 ${updated.available_qty}`);
+        emit("updated", updated);
+        close();
+    } catch (err) {
+        if (isProblemType(err, ProblemType.storeAmbiguous)) {
+            error.value = err;
+            listAllStores().then(
+                (r) => (ambiguousStores.value = r.stores),
+                (e: unknown) => notifyError(e),
+            );
+            return;
+        }
+        const shortage = asInventoryShortage(err);
+        if (shortage !== null) shortCurrent.value = shortage.current;
+        error.value = err;
+    } finally {
+        busy.value = false;
+    }
+}
+
 function goToStoreInventory(store: AdminStore): void {
     const sku = props.sku;
     close();
@@ -187,14 +254,22 @@ function retryWithDelta(): void {
 <template>
     <el-dialog
         :model-value="modelValue"
-        title="改库存（比较并设置）"
+        title="改库存"
         width="560px"
         @update:model-value="emit('update:modelValue', $event)"
     >
         <p class="hint">
             {{ skuLabel }}
         </p>
-        <p class="hint">
+        <el-radio-group v-if="ambiguousStores === null" v-model="mode" size="small" class="mode">
+            <el-radio-button value="adjust">加减（进货 / 盘亏）</el-radio-button>
+            <el-radio-button value="set">设为（盘点结果 / 预警线）</el-radio-button>
+        </el-radio-group>
+        <p v-if="mode === 'adjust'" class="hint">
+            只说加减多少，服务端在<strong>当前真实值</strong>上加减，和同时发生的下单扣减互不覆盖；
+            扣完会变负时拒绝。网络超时重试不会加两次。
+        </p>
+        <p v-else class="hint">
             这条接口和下单抢同一行。<strong>「我看到的值」是必填的</strong>——服务端拿它当
             UPDATE 的条件，对不上就拒绝，于是「页面停了三分钟、期间卖掉 4 件」不会被一次后台覆盖抹掉。
         </p>
@@ -247,7 +322,24 @@ function retryWithDelta(): void {
             </template>
         </el-alert>
 
-        <el-form v-if="ambiguousStores === null" label-width="140px" @submit.prevent>
+        <el-alert v-if="shortCurrent" type="warning" :closable="false" show-icon class="conflict">
+            <template #title>不够扣：现在只有 {{ shortCurrent.available_qty }} 件</template>
+            <template #default>
+                <p>原样重试不会成功——改小扣减量，或者先补货。</p>
+            </template>
+        </el-alert>
+
+        <el-form v-if="ambiguousStores === null && mode === 'adjust'" label-width="140px" @submit.prevent>
+            <el-form-item label="加减多少">
+                <el-input-number v-model="delta" :min="-1000000" :max="1000000" />
+                <span class="hint ml8">正数进货，负数扣减；不能为 0</span>
+            </el-form-item>
+            <el-form-item label="原因">
+                <el-input v-model="reason" maxlength="200" show-word-limit placeholder="例如：3 月进货、盘点盘亏（可不填）" />
+            </el-form-item>
+        </el-form>
+
+        <el-form v-if="ambiguousStores === null && mode === 'set'" label-width="140px" @submit.prevent>
             <el-form-item label="我看到的值">
                 <el-input-number v-model="expected" :min="0" />
                 <span class="hint ml8">expected_available_qty</span>
@@ -264,7 +356,14 @@ function retryWithDelta(): void {
 
         <template #footer>
             <el-button @click="close">取消</el-button>
-            <el-button v-if="ambiguousStores === null" type="primary" :loading="busy" @click="submit">提交</el-button>
+            <el-button
+                v-if="ambiguousStores === null"
+                type="primary"
+                :loading="busy"
+                :disabled="mode === 'adjust' && delta === 0"
+                @click="submit"
+                >提交</el-button
+            >
         </template>
     </el-dialog>
 </template>
@@ -284,6 +383,9 @@ function retryWithDelta(): void {
 }
 .conflict {
     margin-bottom: 12px;
+}
+.mode {
+    margin-bottom: 8px;
 }
 .ml8 {
     margin-left: 8px;

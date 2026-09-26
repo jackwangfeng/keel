@@ -176,6 +176,12 @@ const (
 	TypeSKUCodeDuplicated     = "https://keel.dev/problems/sku-code-duplicated"
 	TypeSKULastOfPublished    = "https://keel.dev/problems/sku-last-of-published-product"
 	TypeInventoryPrecondition = "https://keel.dev/problems/inventory-precondition-failed"
+	// inventory-insufficient 是相对调整（POST .../inventory/adjustments）扣完会变负时的 409。
+	// 与上一条共用 409 与 InventoryConflict 响应体（都带 current），但处置相反：
+	// 上一条重读重试**会**成功，这一条原样重试**不会** —— 要改小扣减量或先补货。
+	// 也不复用买家那条 insufficient-stock：那一个的响应体里没有 current，
+	// 语境是「这单买不了」，不是「这次调整做不了」。
+	TypeInventoryInsufficient = "https://keel.dev/problems/inventory-insufficient"
 	TypeUploadNotFound        = "https://keel.dev/problems/upload-not-found"
 	// upload-forbidden 是**读**那条路上的 403：文件在、也属于这家店，
 	// 但它的 purpose 不是「所有人可读」的那一类（典型：别人的退款凭证）。

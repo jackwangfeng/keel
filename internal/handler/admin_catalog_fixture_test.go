@@ -95,6 +95,9 @@ func newAdminShop(t *testing.T) adminShop {
 			`DELETE FROM product_text_vectors WHERE merchant_id = $1`,
 			`DELETE FROM product_understanding WHERE merchant_id = $1`,
 			`DELETE FROM inventories WHERE merchant_id = $1`,
+			// inventory_logs 指向 skus 与 stores。此前只有下单那几组写它（它们有
+			// 自己的清理）；相对调整（biz_type = 5）之后，后台这一组也会留下流水。
+			`DELETE FROM inventory_logs WHERE merchant_id = $1`,
 			`DELETE FROM store_sku_prices WHERE merchant_id = $1`,
 			`DELETE FROM region_sku_prices WHERE merchant_id = $1`,
 			`DELETE FROM store_product_overrides WHERE merchant_id = $1`,

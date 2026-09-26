@@ -3333,10 +3333,14 @@ export interface paths {
          *
          *     ### 补货场景
          *
-         *     进货 100 件在这条接口上要写成「expected = 当前值，new = 当前值 + 100」，
-         *     并在 409 时重读重试。一期接受这个形状：单个 SKU 上的并发写是低频的，
-         *     重试一两次就过。真正的相对调整（`delta`，天然可组合，且
-         *     `inventory_logs.biz_type = 5 手工调整` 已经为它留好了位置）留给下一轮。
+         *     **进货、盘亏这类「加减 N 件」不要用这条接口。** 用它就得写成
+         *     「expected = 当前值，new = 当前值 + 100」，并在 409 时重读重试——
+         *     一期曾经接受过这个形状，现在有了正确的：
+         *     `POST /admin/skus/{sku_id}/inventory/adjustments`（一般形态
+         *     `POST /admin/stores/{store_id}/skus/{sku_id}/inventory/adjustments`），
+         *     请求体只有一个 `delta`，天然可组合，并在同一个事务里写一行
+         *     `inventory_logs`（`biz_type = 5 手工调整`）。
+         *     这条 PUT 留给「盘点得出现在就是 N 件」这种**绝对**结论，以及改预警线。
          */
         put: {
             parameters: {
@@ -3441,6 +3445,155 @@ export interface paths {
             };
         };
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/skus/{sku_id}/inventory/adjustments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 相对调整库存（加减 delta，仅单门店商家）
+         * @description `POST /admin/stores/{store_id}/skus/{sku_id}/inventory/adjustments` 的
+         *     「恰好一家门店」便捷写法，与 `PUT /admin/skus/{sku_id}/inventory` 之于
+         *     它的一般形态是同一个关系：**本租户恰好有一家未软删的门店时，它就是那一家；
+         *     否则返回 409 `https://keel.dev/problems/store-ambiguous`**，不猜一家。
+         *     理由见那条 PUT 的描述——猜错一家店的后果是把进货记到另一家店上，
+         *     而且没有任何东西会响。
+         *
+         *     除了门店由服务端推出，其余语义与一般形态**逐字一致**：请求体、
+         *     `Idempotency-Key`、404 / 409 的分法、流水，都看那一条。
+         *     判权也一样：改的是「那唯一一家店」的库存，门店 / 大区管理员只有那家店
+         *     在管辖范围内时才放行。
+         *
+         *     幂等存档与一般形态共用一个作用域，请求哈希里带着「这是捷径」这一位——
+         *     同一把钥匙先打捷径、再打一般形态（哪怕落到同一家店），会拿到 422
+         *     `idempotency-key-reused`，而不是被当成同一个请求的重放。
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /**
+                     * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+                     *
+                     *     它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+                     *     而例外成立的前提是平台级鉴权：
+                     *
+                     *     · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+                     *       读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+                     *       行级安全落在这家店上。
+                     *     · **商家级员工带了这个头：403**
+                     *       （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+                     *       静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+                     *     · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+                     *       **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+                     *       实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+                     *       请求其余部分指名的东西不存在是 422。
+                     *     · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+                     *       买家侧对它照旧 404。
+                     *     · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+                     *       （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+                     *
+                     *     后台每一条挂后台会话的操作都声明了它（机械核对：
+                     *     `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+                     */
+                    "X-Keel-Merchant"?: components["parameters"]["KeelMerchant"];
+                    /**
+                     * @description 客户端生成的 UUID。幂等作用域为 `(接口 scope, user_id, key)`，
+                     *     有效期 24h，过期后同一 key 可复用（见数据模型文档 §11）。
+                     *
+                     *     · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
+                     *       并带 `Idempotency-Replayed: true` 响应头
+                     *     · **同 key 正在处理中**：`409` + `Retry-After`，
+                     *       type=https://keel.dev/problems/idempotency-key-in-flight，
+                     *       客户端应退避重试，不要当成业务失败
+                     *     · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
+                     *       type=https://keel.dev/problems/idempotency-key-reused。
+                     *       宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
+                     *       那会让用户以为下单成功了而实际什么都没发生
+                     *     · 首次执行失败（存档为失败态）时同样回放该失败响应；
+                     *       确需重试的场景请换一个新 key
+                     */
+                    "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    /** @description `skus.id`。同 ProductId，查不到即 404。 */
+                    sku_id: components["parameters"]["SkuId"];
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["InventoryAdjustRequest"];
+                };
+            };
+            responses: {
+                /** @description 已调整。响应体是调整**之后**的水位；`store_id` 是服务端推出的那一家。 */
+                200: {
+                    headers: {
+                        "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AdminInventory"];
+                    };
+                };
+                /**
+                 * @description SKU 不存在、不属于当前租户、已被软删，或那唯一一家店（或它所在大区）
+                 *     已把这件商品下架。**刻意与 409 分开**，理由同一般形态。
+                 */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /**
+                 * @description 三种，按 `type` 区分：
+                 *
+                 *     · `https://keel.dev/problems/inventory-insufficient` —— 扣完会变负。
+                 *       响应体是 `InventoryConflict`，`current` 是当前水位。
+                 *     · `https://keel.dev/problems/store-ambiguous` —— 本租户的门店数不是 1。
+                 *       改调 `POST /admin/stores/{store_id}/skus/{sku_id}/inventory/adjustments`。
+                 *       响应体是普通的 `Problem`，没有 `current`。
+                 *     · `https://keel.dev/problems/idempotency-key-in-flight` —— 同一把钥匙正在处理中。
+                 */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["InventoryConflict"];
+                    };
+                };
+                /**
+                 * @description `delta` 为 0 或绝对值超过 1,000,000、`reason` 超过 200 个字符、
+                 *     缺少 `Idempotency-Key`（`https://keel.dev/problems/invalid-request`）；
+                 *     或同一把 `Idempotency-Key` 配了不同的请求体
+                 *     （`https://keel.dev/problems/idempotency-key-reused`）。
+                 */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
         delete?: never;
         options?: never;
         head?: never;
@@ -5412,6 +5565,207 @@ export interface paths {
             };
         };
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/stores/{store_id}/skus/{sku_id}/inventory/adjustments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 相对调整这家店的库存（加减 delta）
+         * @description **进货、盘亏、验货入库用这一条，不用比较并设置。** 数据模型 §15 第 12 / 18 条
+         *     在这里结清：`PUT .../inventory` 是绝对值 + `expected_available_qty`，
+         *     「进 100 件」要写成「读当前值 → 写当前值 + 100 → 409 就重读重试」，
+         *     而按门店分之后这个动作的频率乘以门店数。这里是它的正确形状——
+         *     服务端执行一条**相对**的条件原子更新：
+         *
+         *     ```sql
+         *     UPDATE inventories
+         *        SET available_qty = available_qty + $delta
+         *      WHERE sku_id = $sku AND store_id = $store
+         *        AND available_qty + $delta >= 0;
+         *     ```
+         *
+         *     它与下单扣减（`available_qty >= $n`）是同一个手法，只是方向可正可负。
+         *     **天然可组合**：两个人同时各进 100 件，结果是 +200；进货与下单扣减
+         *     同时发生，两边都不丢。调用方不需要先读一个会过期的值，也永远不会因为
+         *     「别人先改了」拿到一个要重读重试的 409。
+         *
+         *     ### 什么时候仍然用 PUT
+         *
+         *     盘点得出「现在就是 37 件」这种**绝对**结论时，用 `PUT .../inventory`：
+         *     把 37 换算成 delta 需要先读当前值，那又回到了一次会过期的读，
+         *     而 CAS 正是为那个场景设计的。改预警线也只在 PUT 上（这里不收 `warning_qty`：
+         *     预警线是一个设置，不是一次加减）。
+         *
+         *     ### 缺行 ≡ 可售 0
+         *
+         *     「这家店没有这一行库存」不是错误（数据模型 §4）。正的 `delta` 会建出这一行，
+         *     可售量就是 `delta`、预警线 0；负的 `delta` 按「从 0 扣」处理——409，`current` 为 0。
+         *     两个并发的首次进货都会生效（服务端是 `INSERT ... ON CONFLICT DO UPDATE`，
+         *     不是先查后插）。
+         *
+         *     ### 为什么必须带 `Idempotency-Key`
+         *
+         *     PUT 那条是绝对值，重发一次结果不变，天然幂等；**这一条不是**——
+         *     「+100」因为网络超时被客户端重发一次，就是 +200，而且没有任何东西会响。
+         *     所以它和别的后台 POST 一样要求 `Idempotency-Key`：同一把钥匙、同一个请求体，
+         *     第二次返回第一次的结果（带 `Idempotency-Replayed: true`），不再加一次。
+         *
+         *     只有成功会被存档。409（扣完会变负）不存档，整个事务回滚、钥匙随之释放——
+         *     补完货之后拿**同一把钥匙**原样重试是可以成功的。这与别的后台 POST 一致：
+         *     失败的请求等于没有发生过。
+         *
+         *     ### 流水
+         *
+         *     每一次成功调整在同一个事务里写一行 `inventory_logs`：`biz_type = 5 手工调整`、
+         *     `change_qty = delta`、调整前后的可售量、`reason`；`biz_id` 记
+         *     `adj:<员工 id>:<Idempotency-Key>`（谁、哪一次请求）。
+         *     幂等重放不写第二行——它根本没有执行任何写。
+         *
+         *     ### 不发通知
+         *
+         *     库存降到预警线以下时，下单扣减会给门店发 `merchant_inventory_low`；
+         *     这一条不发——动作是商家自己做的，改到预警线以下时他正看着那个数
+         *     （与 `PUT .../inventory` 同一个决定）。
+         *
+         *     ### 404 与 409 的分法与 PUT 那条相同
+         *
+         *     404：门店或 SKU 不存在 / 不属于本租户 / 已软删，或这家店（或它所在大区）
+         *     已把这件商品下架——两个 id 都在路径里，「这个 URI 下没有这个资源」是 404 的本义。
+         *     409 只留给「扣完会变负」。两者在一条语句、同一个快照里分开，不是先查再写。
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /**
+                     * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+                     *
+                     *     它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+                     *     而例外成立的前提是平台级鉴权：
+                     *
+                     *     · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+                     *       读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+                     *       行级安全落在这家店上。
+                     *     · **商家级员工带了这个头：403**
+                     *       （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+                     *       静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+                     *     · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+                     *       **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+                     *       实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+                     *       请求其余部分指名的东西不存在是 422。
+                     *     · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+                     *       买家侧对它照旧 404。
+                     *     · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+                     *       （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+                     *
+                     *     后台每一条挂后台会话的操作都声明了它（机械核对：
+                     *     `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+                     */
+                    "X-Keel-Merchant"?: components["parameters"]["KeelMerchant"];
+                    /**
+                     * @description 客户端生成的 UUID。幂等作用域为 `(接口 scope, user_id, key)`，
+                     *     有效期 24h，过期后同一 key 可复用（见数据模型文档 §11）。
+                     *
+                     *     · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
+                     *       并带 `Idempotency-Replayed: true` 响应头
+                     *     · **同 key 正在处理中**：`409` + `Retry-After`，
+                     *       type=https://keel.dev/problems/idempotency-key-in-flight，
+                     *       客户端应退避重试，不要当成业务失败
+                     *     · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
+                     *       type=https://keel.dev/problems/idempotency-key-reused。
+                     *       宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
+                     *       那会让用户以为下单成功了而实际什么都没发生
+                     *     · 首次执行失败（存档为失败态）时同样回放该失败响应；
+                     *       确需重试的场景请换一个新 key
+                     */
+                    "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    /** @description `stores.id`。同 ProductId，查不到即 404（含「不属于当前租户」与「已软删」）。 */
+                    store_id: components["parameters"]["StoreId"];
+                    /** @description `skus.id`。同 ProductId，查不到即 404。 */
+                    sku_id: components["parameters"]["SkuId"];
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["InventoryAdjustRequest"];
+                };
+            };
+            responses: {
+                /**
+                 * @description 已调整。响应体是调整**之后**的水位。
+                 *     200 而不是 201：调整不产生一个可以再 GET 的新资源，变的是这一行库存本身。
+                 */
+                200: {
+                    headers: {
+                        "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AdminInventory"];
+                    };
+                };
+                /**
+                 * @description 门店或 SKU 不存在 / 不属于当前租户 / 已软删，或这家店（或它所在大区）
+                 *     已把这件商品下架。**刻意与 409 分开**：把这些也报成 409 会让调用方
+                 *     以为补完货再试就能成功，而那个循环永远不会结束。
+                 */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /**
+                 * @description 按 `type` 区分：
+                 *
+                 *     · `https://keel.dev/problems/inventory-insufficient` —— 扣完会变负
+                 *       （`delta` 为负且绝对值大于当前可售量，或这家店还没有这一行而 `delta` 为负）。
+                 *       响应体是 `InventoryConflict`，`current` 是当前水位（缺行时 `available_qty` 为 0）。
+                 *       与 CAS 那条的 `inventory-precondition-failed` **不是一回事**：那一条重读重试就会成功，
+                 *       这一条原样重试不会——要么改小扣减量，要么先补货。
+                 *     · `https://keel.dev/problems/idempotency-key-in-flight` —— 同一把钥匙正在处理中。
+                 */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["InventoryConflict"];
+                    };
+                };
+                /**
+                 * @description `delta` 为 0 或绝对值超过 1,000,000、`reason` 超过 200 个字符、
+                 *     缺少 `Idempotency-Key`（`https://keel.dev/problems/invalid-request`）；
+                 *     或同一把 `Idempotency-Key` 配了不同的请求体
+                 *     （`https://keel.dev/problems/idempotency-key-reused`）。
+                 */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
         delete?: never;
         options?: never;
         head?: never;
@@ -13590,6 +13944,26 @@ export interface components {
             available_qty: number;
             /** @description 低库存预警线。省略则不动。 */
             warning_qty?: number;
+        };
+        /**
+         * @description 相对调整。只有一个必填字段：加减多少。**不带「我看到的那个值」**——
+         *     那正是这种形状要省掉的东西（见 `POST .../inventory/adjustments` 的描述）。
+         */
+        InventoryAdjustRequest: {
+            /**
+             * Format: int32
+             * @description 可售量的增量，正数进货、负数扣减。**不能为 0**（一次什么都不改的调整
+             *     只会在流水里留下一行噪声，422）。绝对值上限 1,000,000：一次手工调整
+             *     超过这个量几乎一定是多敲了几个 0，而 `available_qty` 是 INT，
+             *     没有上限的话几次重复提交就能把它推到溢出。
+             */
+            delta: number;
+            /**
+             * @description 这次调整的原因（「3 月进货」「盘点盘亏」「退货验货入库」），写进
+             *     `inventory_logs.reason`。可省略。流水里进货和盘亏都只是一个 ±N，
+             *     对账时对不平的那一行最需要的就是这句话。按字符计，不按字节。
+             */
+            reason?: string;
         };
         InventoryConflict: components["schemas"]["Problem"] & {
             current: components["schemas"]["AdminInventory"];

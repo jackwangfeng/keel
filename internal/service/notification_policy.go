@@ -59,6 +59,8 @@ var notificationCallSites = map[string]notifyPolicy{
 		"改到预警线以下时他正看着那个数"},
 	"AdminCatalogService.CreateSKU/CreateSKU":               {Silent: "建 SKU 时写初始库存：商家自己做的，理由同 SetInventory"},
 	"AdminStoreService.SetStoreInventory/SetStoreInventory": {Silent: "后台按门店改库存：商家自己做的，理由同 SetInventory"},
+	"adjustInventory/AdjustStoreInventory": {Silent: "后台相对调整库存（进货 / 盘亏 / 验货入库，两条路径共用）：" +
+		"商家自己做的，理由同 SetInventory —— 扣到预警线以下时他正看着那个数"},
 
 	// —— 营销活动的配额与每人限购（00058，与门店库存同一个事务）
 	"deductStock/ReservePromotionQuota": {Silent: "扣秒杀配额与每人限购：门店库存那条（同一个函数里的 DeductInventory）" +

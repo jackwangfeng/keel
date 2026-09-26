@@ -134,7 +134,14 @@ compose 里已经有一个 `KEEL_ADMIN_PASSWORD`，而那是数据库超级用�
 
 - **用新值重试** —— `expected` 换成 `current.available_qty`，新值不动；
 - **按差额重算** —— 保持「我本来想加/减多少」，在当前真实值上重算。
-  补货场景（进货 100 件）走这条。
+
+补货场景（进货 100 件）现在不走 CAS 了：对话框默认是「加减」形态，调
+`POST .../inventory/adjustments`（只带 `delta` 与可选的 `reason`，带 `Idempotency-Key`），
+服务端在当前真实值上加减，并发下单不会让它 409。扣完会变负时是 409
+`inventory-insufficient`（同样带 `current`），界面显示「不够扣：现在只有 N 件」，
+**不给重试按钮**——原样重试不会成功。收窄用的是 `asInventoryShortage`，
+与 `asInventoryConflict` 分成两个函数，让「重读重试」那段逻辑按构造碰不到这一种。
+「设为」形态保留给盘点得出的绝对结论与改预警线。
 
 收窄用的是契约类型 `InventoryConflict`（= `Problem & { current: AdminInventory }`），
 不是手写的 `{ current: ... }`。

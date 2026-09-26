@@ -53,6 +53,46 @@ func (q *Queries) AppendInventoryLog(ctx context.Context, arg AppendInventoryLog
 	return err
 }
 
+const appendManualInventoryLog = `-- name: AppendManualInventoryLog :exec
+INSERT INTO inventory_logs (sku_id, store_id, change_qty, biz_type, biz_id,
+                            before_available, after_available, reason)
+VALUES ($1, $2, $3, 5, $4,
+        $5, $6, $7)
+`
+
+type AppendManualInventoryLogParams struct {
+	SkuID           int64
+	StoreID         int64
+	ChangeQty       int32
+	BizID           string
+	BeforeAvailable int32
+	AfterAvailable  int32
+	Reason          *string
+}
+
+// 手工调整那一行流水（biz_type = 5，契约 POST .../inventory/adjustments）。
+//
+// 与 AppendInventoryLog 分成两条而不是给那条加一个可空参数：那条的四个调用点
+// （下单、补偿、关单、退款）没有「为什么」可写 —— 它们的为什么就是 biz_id 那个订单号。
+// 多一个参数，就多四处要写 nil 的地方，而某一处哪天顺手填了个字符串，
+// 流水里就出现一行「订单扣减，理由：……」这种谁也解释不了的东西。
+//
+// biz_type 写死在语句里，不是参数：这条语句只为手工调整存在。
+// biz_id 由调用方拼成 「adj:<staff_id>:<Idempotency-Key>」—— 谁、哪一次请求；
+// 「为什么」在 reason（00070）。
+func (q *Queries) AppendManualInventoryLog(ctx context.Context, arg AppendManualInventoryLogParams) error {
+	_, err := q.db.Exec(ctx, appendManualInventoryLog,
+		arg.SkuID,
+		arg.StoreID,
+		arg.ChangeQty,
+		arg.BizID,
+		arg.BeforeAvailable,
+		arg.AfterAvailable,
+		arg.Reason,
+	)
+	return err
+}
+
 const claimExpiredPendingOrder = `-- name: ClaimExpiredPendingOrder :execrows
 UPDATE orders SET status = 90
  WHERE order_no = $1 AND status = 10 AND expire_at < now()

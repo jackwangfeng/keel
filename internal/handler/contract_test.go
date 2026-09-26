@@ -722,6 +722,13 @@ var routes = []route{
 		NoQueryParams:  "expected_available_qty 与 available_qty 都在请求体里。**expected 尤其不能进 query** —— 它是一次比较并设置的条件，而 query 会进访问日志，让一次写操作的前置条件散落在日志里没有任何好处",
 	},
 	{
+		ContractPath:   "/admin/skus/{sku_id}/inventory/adjustments",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "admin_sku.go",
+		NoQueryParams:  "delta 与 reason 都在请求体里；门店由服务端推出（恰好一家），不是一个可以从 query 指定的开关",
+	},
+	{
 		ContractPath:   "/admin/categories",
 		ContractMethod: "get",
 		HTTPMethod:     http.MethodGet,
@@ -1117,6 +1124,13 @@ var routes = []route{
 		HTTPMethod:     http.MethodPut,
 		HandlerFile:    "admin_store.go",
 		NoQueryParams:  "两个 id 在路径上，三个数量在请求体里；CAS 的 expected 刻意不是 query —— 它是请求体的一部分，不是一个开关",
+	},
+	{
+		ContractPath:   "/admin/stores/{store_id}/skus/{sku_id}/inventory/adjustments",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "admin_store.go",
+		NoQueryParams:  "两个 id 在路径上，delta 与 reason 在请求体里",
 	},
 
 	// —— 买家自己的三组：个人信息 / 地址簿 / 购物车（契约 User 与 Cart tag）。

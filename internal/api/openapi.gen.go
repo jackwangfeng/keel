@@ -3721,6 +3721,21 @@ type GeoPolygonType string
 // 拿到三个不同的 openid，只有 unionid 能认成一个人，所以身份是多条而非一列。
 type IdentityProvider int
 
+// InventoryAdjustRequest 相对调整。只有一个必填字段：加减多少。**不带「我看到的那个值」**——
+// 那正是这种形状要省掉的东西（见 `POST .../inventory/adjustments` 的描述）。
+type InventoryAdjustRequest struct {
+	// Delta 可售量的增量，正数进货、负数扣减。**不能为 0**（一次什么都不改的调整
+	// 只会在流水里留下一行噪声，422）。绝对值上限 1,000,000：一次手工调整
+	// 超过这个量几乎一定是多敲了几个 0，而 `available_qty` 是 INT，
+	// 没有上限的话几次重复提交就能把它推到溢出。
+	Delta int32 `json:"delta"`
+
+	// Reason 这次调整的原因（「3 月进货」「盘点盘亏」「退货验货入库」），写进
+	// `inventory_logs.reason`。可省略。流水里进货和盘亏都只是一个 ±N，
+	// 对账时对不平的那一行最需要的就是这句话。按字符计，不按字节。
+	Reason *string `json:"reason,omitempty"`
+}
+
 // InventoryConflict defines model for InventoryConflict.
 type InventoryConflict struct {
 	Current AdminInventory `json:"current"`
@@ -8861,6 +8876,49 @@ type PutAdminSkusSkuIdInventoryParams struct {
 	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
 }
 
+// PostAdminSkusSkuIdInventoryAdjustmentsParams defines parameters for PostAdminSkusSkuIdInventoryAdjustments.
+type PostAdminSkusSkuIdInventoryAdjustmentsParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+
+	// IdempotencyKey 客户端生成的 UUID。幂等作用域为 `(接口 scope, user_id, key)`，
+	// 有效期 24h，过期后同一 key 可复用（见数据模型文档 §11）。
+	//
+	// · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
+	//   并带 `Idempotency-Replayed: true` 响应头
+	// · **同 key 正在处理中**：`409` + `Retry-After`，
+	//   type=https://keel.dev/problems/idempotency-key-in-flight，
+	//   客户端应退避重试，不要当成业务失败
+	// · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
+	//   type=https://keel.dev/problems/idempotency-key-reused。
+	//   宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
+	//   那会让用户以为下单成功了而实际什么都没发生
+	// · 首次执行失败（存档为失败态）时同样回放该失败响应；
+	//   确需重试的场景请换一个新 key
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
 // GetAdminStaffParams defines parameters for GetAdminStaff.
 type GetAdminStaffParams struct {
 	Page     *Page     `form:"page,omitempty" json:"page,omitempty"`
@@ -9368,6 +9426,49 @@ type PutAdminStoresStoreIdSkusSkuIdInventoryParams struct {
 	// 后台每一条挂后台会话的操作都声明了它（机械核对：
 	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
 	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// PostAdminStoresStoreIdSkusSkuIdInventoryAdjustmentsParams defines parameters for PostAdminStoresStoreIdSkusSkuIdInventoryAdjustments.
+type PostAdminStoresStoreIdSkusSkuIdInventoryAdjustmentsParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+
+	// IdempotencyKey 客户端生成的 UUID。幂等作用域为 `(接口 scope, user_id, key)`，
+	// 有效期 24h，过期后同一 key 可复用（见数据模型文档 §11）。
+	//
+	// · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
+	//   并带 `Idempotency-Replayed: true` 响应头
+	// · **同 key 正在处理中**：`409` + `Retry-After`，
+	//   type=https://keel.dev/problems/idempotency-key-in-flight，
+	//   客户端应退避重试，不要当成业务失败
+	// · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
+	//   type=https://keel.dev/problems/idempotency-key-reused。
+	//   宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
+	//   那会让用户以为下单成功了而实际什么都没发生
+	// · 首次执行失败（存档为失败态）时同样回放该失败响应；
+	//   确需重试的场景请换一个新 key
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
 // DeleteAdminStoresStoreIdSkusSkuIdPriceParams defines parameters for DeleteAdminStoresStoreIdSkusSkuIdPrice.
@@ -10238,6 +10339,9 @@ type PatchAdminSkusSkuIdJSONRequestBody = SkuUpdateRequest
 // PutAdminSkusSkuIdInventoryJSONRequestBody defines body for PutAdminSkusSkuIdInventory for application/json ContentType.
 type PutAdminSkusSkuIdInventoryJSONRequestBody = InventorySetRequest
 
+// PostAdminSkusSkuIdInventoryAdjustmentsJSONRequestBody defines body for PostAdminSkusSkuIdInventoryAdjustments for application/json ContentType.
+type PostAdminSkusSkuIdInventoryAdjustmentsJSONRequestBody = InventoryAdjustRequest
+
 // PostAdminStaffJSONRequestBody defines body for PostAdminStaff for application/json ContentType.
 type PostAdminStaffJSONRequestBody = StaffCreateRequest
 
@@ -10258,6 +10362,9 @@ type PutAdminStoresStoreIdProductsProductIdListingJSONRequestBody = ProductListi
 
 // PutAdminStoresStoreIdSkusSkuIdInventoryJSONRequestBody defines body for PutAdminStoresStoreIdSkusSkuIdInventory for application/json ContentType.
 type PutAdminStoresStoreIdSkusSkuIdInventoryJSONRequestBody = InventorySetRequest
+
+// PostAdminStoresStoreIdSkusSkuIdInventoryAdjustmentsJSONRequestBody defines body for PostAdminStoresStoreIdSkusSkuIdInventoryAdjustments for application/json ContentType.
+type PostAdminStoresStoreIdSkusSkuIdInventoryAdjustmentsJSONRequestBody = InventoryAdjustRequest
 
 // PutAdminStoresStoreIdSkusSkuIdPriceJSONRequestBody defines body for PutAdminStoresStoreIdSkusSkuIdPrice for application/json ContentType.
 type PutAdminStoresStoreIdSkusSkuIdPriceJSONRequestBody = SkuPriceSetRequest
