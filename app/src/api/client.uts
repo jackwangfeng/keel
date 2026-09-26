@@ -146,6 +146,25 @@ function headerValue(header : UTSJSONObject | null, name : string) : string | nu
 export type HttpMethod = 'GET' | 'POST'
 
 /**
+ * 把 uni.request 的 res.data 统一成文本。
+ *
+ * 请求里写了 dataType: 'text'（理由见 send 里的注释：成功与错误的响应体不是一个形状，
+ * 要自己拿文本、自己决定按哪个类型解）。Android 与 H5 照办；**iOS 不照办**：JSON 响应
+ * 照样被解析成对象交给 success（真机实测，iPhone / iOS 26.5，经自动化读出 typeof 是
+ * object）。拿对象去 JSON.parse<T> 必然失败，页面就只会说「响应体解析失败」。
+ * 所以这里是字符串就原样用，不是就序列化回文本，后面的按类型解析一行不用改。
+ */
+function responseText(data : any | null) : string {
+  if (data == null) {
+    return ''
+  }
+  if (typeof data == 'string') {
+    return data as string
+  }
+  return JSON.stringify(data)
+}
+
+/**
  * @param query 已经拼好的查询串（含开头的 `?`），没有就传空串。
  *              不收一个 UTSJSONObject 让这里去遍历：见 headerValue 上面那段，
  *              web 端没有 toMap。
@@ -191,7 +210,7 @@ function send(
     data: body != null ? JSON.stringify(body) : null,
     success: (res) => {
       const status = res.statusCode
-      const text = res.data != null ? res.data! : ''
+      const text = responseText(res.data)
       const rawHeader = res.header as UTSJSONObject | null
       if (status >= 200 && status < 300) {
         const replayed = headerValue(rawHeader, 'Idempotency-Replayed') == 'true'
@@ -526,7 +545,7 @@ export function settleSandbox(
     data: settle.body,
     success: (res) => {
       const status = res.statusCode
-      const text = res.data != null ? res.data! : ''
+      const text = responseText(res.data)
       if (status >= 200 && status < 300) {
         onOk()
         return
