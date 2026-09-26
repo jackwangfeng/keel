@@ -1147,7 +1147,13 @@ type pendingOp struct {
 // 空表不是删掉这套机制的理由：它是「还没实现」的锁，下一次契约先行加进来一条
 // /admin/ 操作，这里就会重新长出一行，而不是让缺口静默地躺在契约里。
 // （后台订单 / 退款单的列表与详情那四条是契约与实现同一轮落地的，没在这里挂过账。）
-var notYetRouted = []pendingOp{}
+var notYetRouted = []pendingOp{
+	// 消息通知那一轮契约先行：四条后台提醒接口先进契约，下一个提交落实现时划掉。
+	{"/admin/notifications", "get", "契约先行：消息通知的服务端实现在下一个提交"},
+	{"/admin/notifications/unread-count", "get", "契约先行：同上"},
+	{"/admin/notifications/{notification_id}/read", "post", "契约先行：同上"},
+	{"/admin/notifications/read-all", "post", "契约先行：同上"},
+}
 
 // contractHTTPMethods 是 OpenAPI path item 里哪些键算一个操作。
 // 其余的键（parameters、summary、servers…）不是操作，跳过。
