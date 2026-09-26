@@ -29,13 +29,74 @@ import (
 	"time"
 )
 
-// Dim 与 ModelName 是数据模型 §8 的 `embedding vector(1024)` 与「BGE-M3」
+// Dim 与 ModelName 是数据模型 §8 的 `embedding vector(1024)` 与当前引擎
 // 在 Go 侧的复述。它们是**闸门**，不是配置项：引擎返回别的维度或别的模型名时
 // 这个包拒收，而不是把它当成一次成功的调用。
+//
+// Dim 这次换引擎**没有动**，而那正是选 Qwen3-Embedding-0.6B 的全部理由：
+// 它原生就是 1024 维，于是 `vector(1024)` 这个列类型不用改、全库不用重算。
+// pgvector 的维度写在列类型上，换维度 = 新建表 + 双写 + 原子切换
+// （语义检索层 §2.2 的影子表方案），那是这次切换里唯一真正贵的一步，而它被免掉了。
+//
+// ModelName 从 "bge-m3" 换成 "Qwen3-Embedding-0"。**后面这个名字看着像被截断了，
+// 因为它确实是。** infero 的 model id 取自 `--model` 那个路径的
+// `Path::file_stem()`（crates/server/src/engine.rs 的 derive_model_id），
+// 而 checkpoint 目录叫 `Qwen3-Embedding-0.6B` —— `file_stem` 在**最后一个点**
+// 处切开，于是 `.6B` 被当成扩展名丢掉了。
+//
+// 这里照抄引擎真的说出口的那个字符串，而不是我们希望它说的那个。理由是这个常量的
+// 用途：它要和 product_text_vectors.model_name 里落下去的值逐字相等，而那一列
+// 回答的是「这批向量是哪个模型算的」。写一个更好看的名字进来，闸门当场就红
+// （引擎报的是别的），而且库里记的还是引擎说的那个。
+// infero 哪天把 file_stem 改对了，这条闸门会**立刻变红**并指着这行 —— 那是对的：
+// 那一天 model_name 确实变了，库里的存量行确实需要重算。
 const (
 	Dim       = 1024
-	ModelName = "bge-m3"
+	ModelName = "Qwen3-Embedding-0"
 )
+
+// PoolingSentinel 是每条文本末尾必须补上的那个 token，**不补的话语义会塌掉，
+// 而且塌得悄无声息。**
+//
+// Qwen3-Embedding 的池化方式是 last-token pooling：整条文本的向量取自
+// **最后一个 token 位置**的 hidden state。而它的 checkpoint 自带一条
+// tokenizer 后处理规则（tokenizer.json 的 `post_processor` →
+// `TemplateProcessing`），给每条序列尾部追加一个 `<|endoftext|>`(151643)。
+// 也就是说官方配方里「最后一个 token」指的是那个 EOS，不是正文的末字。
+//
+// **infero 今天不执行这条规则。** 它的 tokenizer 整个没有 post_processor 的
+// 概念（crates/tokenizer/src/lib.rs 的 encode 只做 BPE + 显式特殊 token 解析），
+// 于是池化取到了正文末字那一行。本机实测，Keel 自己那三条探针文本：
+//
+//	不补哨兵   近近 0.3380  近远 0.2419  margin +0.0960  ← 低于 MinSemanticMargin
+//	补上哨兵   近近 0.4802  近远 0.1884  margin +0.2917  ← 过线，且优于 BGE-M3 的 +0.19
+//
+// 注意失败的形态：维度对、L2 范数对到小数点后 9 位、model 名对、HTTP 200。
+// 形状断言一条都不会红，**只有 margin 这一条抓得住**。这正是
+// keel-integration.md 里「哈希伪引擎 margin −0.05」那条判据存在的理由，
+// 这次它真的抓到了一个。
+//
+// 另外两个被排除掉的猜想，都是实测排除的，不是推理排除的：
+//   - **不是 instruction 前缀的事。** Qwen3-Embedding 的 model card 给查询侧
+//     配了 `Instruct: ...\nQuery:` 前缀。只加前缀不补哨兵，margin +0.0958 ——
+//     和什么都不做的 +0.0960 在噪声里没有区别。前缀又加又补哨兵反而更低
+//     （+0.2338），因为这三条探针是「文档 vs 文档」的对称比较，给两边都套上
+//     查询前缀本来就不是它的用法。
+//   - **不是模型不行。** 同一个模型补上哨兵就是 +0.2917。
+//
+// **为什么这条补丁落在客户端，而不是等 infero 修。**
+// 这是 infero 的 bug，正确的修法在引擎那边（让 tokenizer 执行 checkpoint 自己的
+// post_processor），已经如实报上去了。但在它修好之前，这里是唯一能让
+// product_text_vectors 里的向量真的有语义的地方。
+//
+// 而它**必须**落在这一个函数里，不能落到调用方：索引侧（internal/service/index.go）
+// 与查询侧（internal/service/search.go）算的必须是同一个空间里的向量，两边
+// 有一边漏补，余弦距离就是拿两个不同空间的向量在比 —— 那又是一种不会报错的错误。
+// 放在 postBatch 里，两条路径共用同一次拼接，**结构上不可能分叉**。
+//
+// 删除条件：infero 的 tokenizer 开始执行 post_processor 之后，这里会变成
+// 追加两个 EOS。那天把这个常量和它的用法一起删掉，并重跑一次 margin。
+const PoolingSentinel = "<|endoftext|>"
 
 // NormTolerance 是 L2 范数允许偏离 1 的幅度。
 //
@@ -112,7 +173,20 @@ type Config struct {
 // 那条路径应当自己传一个更紧的 context——Embed 取 ctx 与这个值里更早的那个。
 const DefaultTimeout = 5 * time.Second
 
-// Client 是 /v1/embed 的客户端。零值不可用，走 New。
+// EmbedPath 是引擎上那条批量 embedding 接口的路径。
+//
+// 语义检索层 §10 原本把它写成 `/v1/embed`，那是 services/inference/ 那个
+// Python 服务的路径。infero 用的是 OpenAI 风格的 `/v1/embeddings` ——
+// keel-integration.md 早就写明「路径名可以谈，请求体形状不能谈」，
+// 而请求体（`{model, texts, normalize}` → `{embeddings, dim, model, model_version}`）
+// 两边逐字段一致，所以换引擎在这一层只是换一个字符串。
+//
+// 提成常量是为了让测试和实现共用同一份真相：此前 client_test.go 里
+// 硬写着 "/v1/embed"，改实现而忘了改测试的话，那条断言会继续对着一个
+// 已经不存在的路径点头。
+const EmbedPath = "/v1/embeddings"
+
+// Client 是 EmbedPath 的客户端。零值不可用，走 New。
 type Client struct {
 	endpoint  string
 	batchSize int
@@ -213,7 +287,13 @@ func (c *Client) Embed(ctx context.Context, texts []string) (*Result, error) {
 }
 
 func (c *Client) postBatch(ctx context.Context, texts []string) (*embedResponse, error) {
-	body, err := json.Marshal(embedRequest{Model: ModelName, Texts: texts, Normalize: true})
+	// 池化哨兵。**索引侧与查询侧都从这里过**，所以两边不可能只有一边补 ——
+	// 理由与代价写在 PoolingSentinel 的注释里。
+	payload := make([]string, len(texts))
+	for i, t := range texts {
+		payload[i] = t + PoolingSentinel
+	}
+	body, err := json.Marshal(embedRequest{Model: ModelName, Texts: payload, Normalize: true})
 	if err != nil {
 		return nil, fmt.Errorf("%w: 序列化请求失败: %v", ErrProtocol, err)
 	}
@@ -223,7 +303,7 @@ func (c *Client) postBatch(ctx context.Context, texts []string) (*embedResponse,
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost,
-		c.endpoint+"/v1/embed", bytes.NewReader(body))
+		c.endpoint+EmbedPath, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("%w: 构造请求失败: %v", ErrUnavailable, err)
 	}

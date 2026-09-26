@@ -46,8 +46,8 @@ func newStub(t *testing.T, respond func(w http.ResponseWriter, r *http.Request, 
 	t.Helper()
 	s := &stubEngine{respond: respond}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/embed" {
-			t.Errorf("客户端打的是 %s，语义检索层 §10 定的是 /v1/embed", r.URL.Path)
+		if r.URL.Path != inference.EmbedPath {
+			t.Errorf("客户端打的是 %s，引擎上的路径是 %s", r.URL.Path, inference.EmbedPath)
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
@@ -217,6 +217,43 @@ func TestEmbedAsksEngineToNormalize(t *testing.T) {
 	}
 	if calls[0].Model != inference.ModelName {
 		t.Fatalf("请求里 model 是 %q，要 %q", calls[0].Model, inference.ModelName)
+	}
+}
+
+// 每一条送出去的文本都必须带着池化哨兵，而且**是每一条**。
+//
+// 这一条守的不是「哨兵这个常量还在不在」，是「它有没有真的被拼到每条文本尾巴上」。
+// 漏一条的后果不会报错：那一条的向量取自正文末字而不是 EOS，于是它和同一批
+// 别的向量根本不在一个空间里，余弦距离照算不误，只是算出来的东西没有意义。
+//
+// 送两条不同长度的文本，是为了排除「只给第一条拼了」这种写法（那种写法在
+// 单条输入的测试里是绿的）。原文用 strings.CutSuffix 还原并逐字比对，
+// 是为了排除「拼错位置」与「顺手改了正文」。
+func TestEmbedAppendsPoolingSentinelToEveryText(t *testing.T) {
+	stub, url := newStub(t, nil)
+	c := mustClient(t, inference.Config{Endpoint: url})
+	want := []string{"红色碎花连衣裙 女装 夏季新款", "轮胎"}
+	if _, err := c.Embed(context.Background(), want); err != nil {
+		t.Fatalf("Embed 失败: %v", err)
+	}
+	got := stub.calls()[0].Texts
+	if len(got) != len(want) {
+		t.Fatalf("送了 %d 条，引擎收到 %d 条", len(want), len(got))
+	}
+	for i, sent := range got {
+		stripped, ok := strings.CutSuffix(sent, inference.PoolingSentinel)
+		if !ok {
+			t.Errorf("第 %d 条 %q 末尾没有池化哨兵 %q —— Qwen3-Embedding 取的是"+
+				"最后一个 token 的 hidden state，而 infero 不执行 checkpoint 自己的"+
+				"post_processor，少了这个哨兵池化就取到了正文末字（实测 margin "+
+				"从 +0.2917 塌到 +0.0960，低于 MinSemanticMargin）",
+				i, sent, inference.PoolingSentinel)
+			continue
+		}
+		if stripped != want[i] {
+			t.Errorf("第 %d 条剥掉哨兵之后是 %q，原文是 %q —— 正文被改动了",
+				i, stripped, want[i])
+		}
 	}
 }
 
