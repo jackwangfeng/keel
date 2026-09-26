@@ -57,8 +57,17 @@
       "@contract/*": ["../src/api/*"]
     }
   },
-  // 范围写成三条 glob 而不是一个目录：`tsc`/`vue-tsc` 的目录形式不收 `.vue`。
-  // 这里少一条 glob 就会静默漏掉一整类文件而照样退出 0 —— 正是
-  // scripts/check_ts_scope.py 文件头记的那个坑。范围由 check_admin_types.py 核。
+  // 范围写成三条 glob 而不是一个目录。
+  //
+  // 实测（vue-tsc 3.3.11）：目录形式 `"src"` **是**收 `.vue` 的，
+  // 和 `tsc` 漏掉 `.mts` 那件事不一样 —— 这里不复述一句没验过的话。
+  // 写成 glob 是为了把「哪些后缀在范围里」摆在明处；代价是少写一条就漏一类。
+  //
+  // 而漏了之后会不会红，实测也分两种：被 import 到的文件，编译器顺着
+  // import 照样会读（于是漏 glob 不影响）；**没有任何人 import 的那些
+  // 不会** —— 比如刚加了一个页面还没接路由。那时 vue-tsc 编译剩下的部分
+  // 然后退出 0，一个字都不说。这两条组合起来的洞由
+  // scripts/check_admin_types.py 用 --listFiles 核住（那个脚本自己跑过一次
+  // 变异验证：去掉 .vue 那条 glob + 放一个没被引用的 .vue，它红）。
   "include": ["src/**/*.ts", "src/**/*.d.ts", "src/**/*.vue", "vite.config.ts"]
 }

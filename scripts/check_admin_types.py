@@ -33,11 +33,22 @@
 
 ## 为什么还要核对范围
 
-和 check_ts_scope.py 一字不差的理由：`tsc` / `vue-tsc` 对「范围里没有这个
-文件」是**静默**的，它编译剩下的部分然后退出 0。这个项目的 include 写成
-三条 glob（`src/**/*.ts` / `src/**/*.d.ts` / `src/**/*.vue`），少一条就漏掉
-一整类文件 —— 而删那一条的人会觉得自己写得更精确了。用 `--listFiles` 让
-编译器自己报出它读了哪些文件，比重新解释一遍匹配规则可靠。
+大前提与 check_ts_scope.py 一字不差：编译器对「范围里没有这个文件」是
+**静默**的，它编译剩下的部分然后退出 0。但这个项目里那个洞的形状和 web/src
+那边不一样，实测（vue-tsc 3.3.11）过一遍再写下来，免得抄一句没验过的话：
+
+  · `tsc` 的坑是 `src/**/*.ts` 匹配不到 `.mts`。**vue-tsc 没有这个坑** ——
+    目录形式 `"src"` 是收 `.vue` 的。
+  · 被 import 到的文件，编译器顺着 import 照样会读，所以 include 少一条 glob
+    对它们没有影响。
+  · 真正会漏的是「**没有任何人 import**、include 又不匹配」的那些。最常见的
+    来源不是有人手贱改 glob，是**页面写完了还没接路由** —— 那个文件从此不在
+    任何闸门视野里，等到有人把路由接上，它已经烂了一个月。
+
+所以这条断言的价值是具体的：它把「这个文件有没有被编译过」从一个谁也不会
+去看的事实，变成一条会红的判据。变异验证跑过：去掉 tsconfig 里 `.vue` 那条
+glob，再放一个没被任何地方 import 的 `.vue` 进来（里面有类型错误），
+vue-tsc 退出 0 报绿，这个脚本红。
 
 ## 它还核对一件 check_ts_scope.py 不核对的事
 
@@ -77,7 +88,16 @@ def main() -> int:
         cwd=PROJECT, capture_output=True, text=True)
     if proc.returncode != 0:
         # 编译器的报错原样透出去，别藏在这个脚本的输出后面。
-        sys.stdout.write(proc.stdout)
+        #
+        # 但要先把 --listFiles 那几千行滤掉：真正的诊断只有两三行，
+        # 埋在 166 KB 的路径清单里等于没有。判据是「这一行是不是一个存在的
+        # 绝对路径」—— 用编译器自己输出的事实判，而不是猜诊断长什么样
+        # （猜错的那一版会把真正的报错也滤掉，而且没人会发现）。
+        for line in proc.stdout.splitlines():
+            stripped = line.strip()
+            if stripped.startswith('/') and os.path.isfile(stripped):
+                continue
+            print(line)
         sys.stderr.write(proc.stderr)
         return proc.returncode
 
@@ -109,7 +129,8 @@ def main() -> int:
             print('  - %s' % os.path.relpath(p, ROOT))
         print('')
         print('vue-tsc 对此不会报错，它会编译剩下的部分然后退出 0。')
-        print('检查 tsconfig.json 的 include —— 它是三条 glob，`src` 这个目录形式不收 .vue。')
+        print('检查 tsconfig.json 的 include。注意：被 import 到的文件不受 include 影响，')
+        print('所以能落到这里的多半是**没有任何人 import 它** —— 比如页面写完了还没接路由。')
         fail = True
 
     # 契约产物必须是**那一份**，不是副本。

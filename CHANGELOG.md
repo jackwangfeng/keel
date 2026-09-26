@@ -107,6 +107,25 @@ becomes `0.1.0` when the remaining M4 work is in.
   per-tenant in-flight cap, so one merchant importing a catalogue cannot occupy
   the whole worker pool. `priority` alone does not achieve this — it only
   orders jobs *within* a tenant.
+- **A merchant admin console** (`web/admin/`, Vue 3 + Vite + Element Plus) that
+  comes up with the same `docker compose up`, on port 8081, behind an nginx that
+  reverse-proxies `/api` to the API — same origin, no CORS. There is not one
+  hand-written request or response type in it: every shape comes from the
+  committed contract artifact `web/src/api/schema.d.ts`, and it reuses the
+  committed TypeScript SDK rather than growing a second client. A gate
+  (`make admin-type-check`, wired into `scripts/check-all.sh`) compiles every
+  `.ts` and `.vue` under `--strict` and asserts the contract artifact is really
+  in scope; renaming a contract field makes it fail immediately, which was
+  verified by mutation rather than assumed. The console surfaces the three
+  things the API deliberately designed for: the inventory compare-and-set `409`
+  shows the server's `current` and offers a one-click retry with it, the
+  advertising-law `422` highlights the offending characters in the copy using
+  the `errors[]` code-point offsets, and every idempotent POST carries an
+  `Idempotency-Key` that is held across a retry of the same submission and
+  rotated once the server has definitively rejected it. Stores and regions are
+  menu placeholders — that contract has not landed — and the orders page states
+  plainly that no admin order-list operation exists rather than drawing a fake
+  table.
 
 ### Changed
 
