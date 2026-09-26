@@ -21,6 +21,26 @@ type Barrier struct {
 	CreateTime int64
 }
 
+type Cart struct {
+	ID         int64
+	MerchantID int64
+	UserID     int64
+	CreatedAt  pgtype.Timestamptz
+	UpdatedAt  pgtype.Timestamptz
+}
+
+type CartItem struct {
+	ID         int64
+	MerchantID int64
+	CartID     int64
+	SkuID      int64
+	ProductID  int64
+	Quantity   int32
+	Selected   bool
+	CreatedAt  pgtype.Timestamptz
+	UpdatedAt  pgtype.Timestamptz
+}
+
 type Category struct {
 	ID         int64
 	MerchantID int64

@@ -92,3 +92,50 @@ UPDATE user_tokens
  WHERE id = $1
    AND revoked_at IS NULL
 RETURNING id;
+
+-- name: LockUserRow :one
+-- 锁住这个买家的 users 行，直到本事务结束。它是「每个买家一把互斥锁」：
+--
+-- 地址簿的「设为默认」要先清旧、再置新，两个并发的切换若不排队，第二个会在
+-- 清旧那一步看不见第一个刚置上的新默认（它还没提交），于是置新时撞上
+-- uk_user_addresses_default 报 500。契约专门把切换收进一个接口，就是要让
+-- 唯一性由服务端事务负责、而不是让客户端并发点两下时看到 500。
+-- 解绑第三方身份的「最后一个凭据」判定同理：数一数还剩几个、再删，两步之间
+-- 不能让另一个解绑插进来。
+--
+-- 锁 users 行而不是锁地址行：新增地址时还没有那一行可锁，而一个买家总有 users 行。
+-- 查不到（已注销软删）即 ErrNoRows。
+SELECT id FROM users WHERE id = $1 AND deleted_at IS NULL FOR UPDATE;
+
+-- name: UpdateUserProfile :one
+-- 改资料（PATCH /me）。三个字段都是「给了才改」：nickname 与 gender 用 COALESCE，
+-- avatar_url 多一个开关，因为它可以被清空（给空串即清掉头像），而
+-- 「清空」与「不改」在一个可空参数上分不开。
+UPDATE users
+   SET nickname   = COALESCE(sqlc.narg(nickname), nickname),
+       gender     = COALESCE(sqlc.narg(gender), gender),
+       avatar_url = CASE WHEN sqlc.arg(set_avatar)::boolean
+                         THEN sqlc.narg(avatar_url) ELSE avatar_url END
+ WHERE id = sqlc.arg(id)
+   AND deleted_at IS NULL
+RETURNING id, phone, password_hash, nickname, avatar_url, gender, status,
+          last_login_at, created_at;
+
+-- name: ListUserIdentities :many
+-- 已绑定的第三方身份（GET /me/identities）。
+--
+-- 只取 union_id 是否为空，不取它本身：契约写明 external_id（openid）与 union_id
+-- 属于渠道敏感标识，一律不对外返回。不 SELECT 出来，上层就没有机会把它漏出去。
+SELECT id, provider, (union_id IS NOT NULL)::boolean AS has_union_id, created_at
+  FROM user_identities
+ WHERE user_id = $1
+ ORDER BY id;
+
+-- name: CountUserIdentitiesExcept :one
+-- 这个买家在 provider 之外还有几条身份。解绑前判「最后一个凭据」用。
+SELECT count(*) FROM user_identities WHERE user_id = $1 AND provider <> $2;
+
+-- name: DeleteUserIdentities :execrows
+-- 解绑某个 provider 下的全部身份（同一个 provider 下按约定至多一条，
+-- 见契约 identity-duplicate-provider；这里不假设它）。
+DELETE FROM user_identities WHERE user_id = $1 AND provider = $2;
