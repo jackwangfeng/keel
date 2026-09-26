@@ -1855,8 +1855,9 @@ type Cart struct {
 	SelectedTotalCents Money `json:"selected_total_cents"`
 
 	// Store 本次的价格与可买状态是按哪家门店算的。**必返**，理由同 `GET /products`。
-	// `match_type = none`（商家没配默认门店、又没指名门店）时，
-	// 每一行的 `status` 都是 `not_sold_in_store`、两个合计都是 0。
+	// `match_type = none`（商家没配默认门店、又没指名门店）时没有任何一行买得到：
+	// 失效的行照旧报 `off_shelf`，其余一律 `not_sold_in_store`，两个合计都是 0；
+	// 此时加购返回 422（没有门店就判不了卖不卖）。
 	Store StoreContext `json:"store"`
 
 	// TotalCents **全车**商品金额合计，与 `selected` 无关。
