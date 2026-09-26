@@ -19,6 +19,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/keel/keel/internal/auth"
+	"github.com/keel/keel/internal/buildinfo"
 	"github.com/keel/keel/internal/db"
 	"github.com/keel/keel/internal/dtm"
 	"github.com/keel/keel/internal/handler"
@@ -197,6 +198,16 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	// healthz 在租户中间件之外：它回答的是「这个进程还活着吗」，
 	// 挂在中间件后面的话，一个没配对的 Host 会让编排系统以为进程死了。
 	r.GET("/healthz", func(c *gin.Context) { c.String(http.StatusOK, "ok") })
+
+	// version 和 healthz 并排，理由是同一条：它们都不是业务接口，都不该经过
+	// 租户中间件。**但两者刻意分开，没有把版本号塞进 healthz 的响应体**——
+	// 存活探针的正文是编排系统在轮询的东西，往里加字段等于让每一次探活都多
+	// 传一点没人读的数据；更要紧的是 compose 与 k8s 的探针配置里常常写着
+	// 对正文的精确匹配，改它的形状是一次会在别人的部署里生效的破坏。
+	//
+	// 这条路由对外可见，而仓库本身是开源的 —— commit sha 不是秘密。
+	// 它换来的是 issue 里「你跑的是哪一版」有一个不靠人回忆的答案。
+	r.GET("/version", func(c *gin.Context) { c.JSON(http.StatusOK, buildinfo.Get()) })
 
 	repo := repository.New(pool)
 	ph := handler.NewProductHandler(service.NewProductService(repo))
@@ -421,6 +432,13 @@ func Listen(addr string, h http.Handler) error {
 // Preflight 是测不出来的：把那行删掉，所有测试照样绿，而 tenant 包里那四道检查
 // 会一声不响地变成死代码。协调器这一段同理。
 func Run(ctx context.Context, listen func(addr string, h http.Handler) error) error {
+	// 版本号排在所有事情之前，包括建连接池。
+	//
+	// 启动失败的日志才是最需要它的那一份：连不上库、自检不过、协调器起不来、
+	// 这三条都会让 Run 直接返回，而排查的第一个问题永远是「跑的是哪一版」。
+	// 放在成功路径上的话，恰恰是最该有版本号的那些日志里没有。
+	slog.InfoContext(ctx, "keel "+buildinfo.String())
+
 	cfg := ConfigFromEnv()
 
 	pool, err := db.NewPool(ctx)

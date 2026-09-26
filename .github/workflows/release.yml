@@ -1,0 +1,198 @@
+# 打一个 v* 标签就发一版。
+#
+# 和 ci.yml 一样，这个文件**不重新实现任何判据**：闸门调 scripts/check-all.sh，
+# 发布说明调 scripts/changelog_section.py，版本号注入调 docker/Dockerfile 里
+# 已有的那三个 ARG。理由同 ci.yml 的文件头——判据有两份实现时，每次不一致都要
+# 先分辨是代码错了还是两份实现错开了。
+#
+# ## 为什么产物是镜像，不是二进制
+#
+# M2 起主模块经 cgo 嵌入 dtmrs，二进制是**动态链接**的，它要 libdtmrs.so 和
+# 一个 glibc 2.41 以上的运行环境（docker/Dockerfile 的文件头记着实测）。
+# 一个「下载即用」的裸二进制在这个前提下是做不到的——发出去的话，绝大多数人
+# 拿到的是一句 `error while loading shared libraries: libdtmrs.so`，
+# 而那句话不指向真因。
+#
+# 所以这里只发镜像。要裸二进制的人有两条路，都写在 release notes 里：
+# 自己 `make build`（需要 Rust 1.88+），或者从镜像里 `docker cp` 出来
+# （连带把 .so 一起拷走）。
+#
+# ## 没有覆盖到的
+#
+#   - **这个 workflow 本身没有在 GitHub 上跑过。** 首次打标签就是它的第一次
+#     执行，这一条在那之前不许当成「已验证」。本机能验的只有它调用的那几个
+#     脚本，那些都验过了。
+#   - 多架构。只构建 linux/amd64。arm64 要 QEMU 或 arm runner，而 dtmrs 那一层
+#     是 cargo build，在 QEMU 下慢到不实用。
+#   - 镜像签名 / SBOM / 来源证明。都还没有。
+
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  # 手动跑一次而不真的发布：用来在打标签之前确认闸门能过。
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '要预演的版本号（如 v0.1.0）；只跑闸门，不推镜像也不建 release'
+        required: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  # ---------------------------------------------------------------------
+  # 闸门。和 ci.yml 的 gates 是同一段代码，加两条只有发布才有意义的检查。
+  # ---------------------------------------------------------------------
+  verify:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: v
+        name: 定版本号
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = workflow_dispatch ]; then
+            v='${{ inputs.version }}'
+          else
+            v="${GITHUB_REF#refs/tags/}"
+          fi
+          # 只认 vMAJOR.MINOR.PATCH[-预发布]。形状不对就当场停 ——
+          # 一个 `v0.1` 或者 `release-1` 的标签会一路走到 release 页面上，
+          # 而语义化版本这条承诺是写进 CHANGELOG.md 的。
+          if ! [[ "$v" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::标签 '$v' 不是语义化版本（要 vX.Y.Z 或 vX.Y.Z-rc.1）"
+            exit 1
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: 仓库自己的那套闸门
+        run: ./scripts/check-all.sh
+
+      - name: 这一版有没有变更说明
+        # 这条同时是闸门和 release notes 的来源，见脚本的文档字符串。
+        run: ./scripts/changelog_section.py "${{ steps.v.outputs.version }}"
+
+  # ---------------------------------------------------------------------
+  # 镜像。构建 → **起来验一次版本号** → 推。
+  # ---------------------------------------------------------------------
+  image:
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 构建
+        env:
+          V: ${{ needs.verify.outputs.version }}
+        run: |
+          set -euo pipefail
+          docker build -f docker/Dockerfile --target app \
+            --build-arg "KEEL_VERSION=$V" \
+            --build-arg "KEEL_COMMIT=$GITHUB_SHA" \
+            --build-arg "KEEL_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -t "$IMAGE:$V" -t "$IMAGE:latest" .
+
+      # 这一步存在的理由很具体：-ldflags 那条链子有四个环节（Makefile、
+      # Dockerfile 的 ARG、compose 的 args、internal/buildinfo 的变量路径），
+      # 其中任何一环写错**都不会让构建失败**，只会让版本号静默退回 "dev"。
+      # 一个自称 dev 的正式发布镜像，是那种要到线上排查时才发现的错。
+      - name: 验版本号真的注进去了
+        env:
+          V: ${{ needs.verify.outputs.version }}
+        run: |
+          set -euo pipefail
+          # 不连库，只看二进制自己怎么说。app 阶段的 ENTRYPOINT 是 /keel，
+          # 它没有 --version 子命令（cmd/keel 刻意只有一句调用），所以这里
+          # 覆写 entrypoint 直接问 Go 的构建信息。
+          got=$(docker run --rm --entrypoint sh "$IMAGE:$V" -c \
+                  'strings /keel | grep -m1 -F "$0"' "$V" || true)
+          if [ -z "$got" ]; then
+            echo "::error::镜像里找不到版本字符串 '$V' —— ldflags 那条链子断了"
+            exit 1
+          fi
+          echo "镜像自称：$got"
+
+      - name: 推
+        if: github.event_name == 'push'
+        env:
+          V: ${{ needs.verify.outputs.version }}
+        run: |
+          set -euo pipefail
+          echo "${{ secrets.GITHUB_TOKEN }}" \
+            | docker login "$REGISTRY" -u "${{ github.actor }}" --password-stdin
+          docker push "$IMAGE:$V"
+          # latest 只跟正式版走。预发布（v0.2.0-rc.1）推自己的标签，
+          # 但不该把 `docker pull keel` 的人带到一个 rc 上。
+          case "$V" in
+            *-*) echo "预发布，不动 latest" ;;
+            *)   docker push "$IMAGE:latest" ;;
+          esac
+
+  # ---------------------------------------------------------------------
+  # Release 页面。正文来自 CHANGELOG，不是从 commit 生成的。
+  # ---------------------------------------------------------------------
+  release:
+    needs: [verify, image]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 攒发布说明
+        env:
+          V: ${{ needs.verify.outputs.version }}
+        run: |
+          set -euo pipefail
+          {
+            ./scripts/changelog_section.py "$V"
+            cat <<EOF
+
+          ---
+
+          ## Running this release
+
+          \`\`\`
+          docker pull $IMAGE:$V
+          \`\`\`
+
+          Or clone at the tag and \`docker compose up\` — the compose file
+          builds from source and passes the version through.
+
+          **There is no standalone binary**, and that is a constraint rather
+          than an omission: the process links \`libdtmrs.so\` over cgo, so a
+          bare binary needs that library and a glibc 2.41+ host beside it. If
+          you want one anyway, \`make build\` produces \`build/keel\` (needs
+          Rust 1.88+), or copy it out of the image together with
+          \`/usr/local/lib/libdtmrs.so\`.
+          EOF
+          } > /tmp/notes.md
+          cat /tmp/notes.md
+
+      - name: 建 release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          V: ${{ needs.verify.outputs.version }}
+        run: |
+          set -euo pipefail
+          prerelease=""
+          case "$V" in *-*) prerelease="--prerelease" ;; esac
+          gh release create "$V" --title "$V" --notes-file /tmp/notes.md $prerelease
