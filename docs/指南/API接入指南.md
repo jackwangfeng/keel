@@ -135,6 +135,21 @@ key 的有效期是 24 小时，作用域是「接口 + 用户 + key」。哪些
 
 `scripts/smoke.sh` 把这几步完整跑了一遍（用沙箱支付），可以直接照着读。
 
+### 之后的流程
+
+| 买家 | 接口 |
+|---|---|
+| 取消未支付的订单（库存和券退回） | `POST /orders/{order_no}/cancel` |
+| 确认收货 | `POST /orders/{order_no}/confirm` |
+| 申请售后（不传金额，按行和件数） | `POST /orders/{order_no}/refunds` |
+| 查看、撤回售后 | `GET /refunds`、`GET /refunds/{refund_no}`、`POST /refunds/{refund_no}/cancel` |
+
+写操作都要带 `Idempotency-Key`。订单详情里每一行有 `refunded_qty` 和 `refunding_qty`，
+还可以退的件数 = `quantity − refunded_qty − refunding_qty`。
+
+购物车（`/cart`）按门店计价，请求时带上和商品页、下单页相同的 `store_id`。
+购物车金额和试算用的是同一条价格查询，两边逐分一致。
+
 ---
 
 ## SDK 与代码生成

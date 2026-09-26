@@ -184,10 +184,11 @@ search, claim coupons, check out and pay (sandbox); merchants can list
 products, run regions and stores, issue coupons and manage staff. These parts
 are not there yet, and are listed so that nothing above reads as if it ships:
 
-- **order cancel / confirm-receipt, after-sales refunds, and admin shipping /
-  refund review.** They are in the contract but not implemented (calls get a
-  404 "no such endpoint"); work is in progress. The cart, address book and
-  profile endpoints exist; the buyer app does not use them yet
+- **admin order and refund lists.** Shipping, refund review and "return
+  received" endpoints exist, but the contract has no "list orders awaiting
+  shipment / refunds awaiting review" yet, so the console cannot find the work.
+  Auto-confirming receipt after N days and buyer-entered return tracking
+  numbers are not there either
 - **cross-encoder reranking.** `POST /search` today is three-stage — vector
   recall and keyword recall fused with RRF, then business re-ranking
   (out-of-stock products are demoted multiplicatively below everything in
@@ -240,12 +241,14 @@ are not there yet, and are listed so that nothing above reads as if it ships:
 
 **Commerce core**
 Products & SKUs · category tree · per-store inventory · three-tier pricing
-(base → region → store) · checkout · payments · coupons (amount-off /
+(base → region → store) · cart · address book · checkout · payments · cancel ·
+shipping · confirm receipt · after-sales refunds · coupons (amount-off /
 percent-off / no-threshold, claim center and targeted grants) · order state
 machine · multi-store with delivery fences · tiered staff roles
 
-Cart, address book and profile are in; after-sales refunds and shipping are in
-the contract and being implemented — see "Not in the box yet" above.
+Cart, address book, profile, cancel, confirm-receipt, shipping and after-sales
+refunds (partial refunds allocated to the cent, discounts included) are in;
+the remaining gaps are under "Not in the box yet" above.
 
 **AI-native capabilities**
 - **Semantic search** — hybrid vector + keyword retrieval fused with RRF, then
@@ -396,9 +399,9 @@ battle-tested at scale. What it has is a stronger core.
 - [x] **M4** — Merchant self-service + multi-store and regions + compliance
   checks + product-understanding skeleton + coupons + tiered roles
   → **v0.1.0, first public release**
-- [ ] **Cart, after-sales and shipping** — finish the buyer and admin
-  endpoints the contract already describes (cart, addresses and profile done;
-  after-sales and shipping in progress)
+- [x] **Cart, after-sales and shipping** — finish the buyer and admin
+  endpoints the contract already describes
+- [ ] **Admin order and refund lists**, auto-confirm receipt
 - [ ] **M5** — Reranking + business re-ranking + search analytics
 - [ ] **M6** — Image embeddings → visual search
 - [ ] **M7** — Conversational shopping assistant
