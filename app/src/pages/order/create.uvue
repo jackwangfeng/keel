@@ -78,7 +78,7 @@
              用不了（409 coupon-not-applicable）时照实显示原因并展开列表让用户换，
              **不**自动退回原价：那样应付金额会在用户眼皮底下变大而他不知道为什么。 -->
         <view v-if="loggedIn && (coupons.length > 0 || couponId > 0)" class="card">
-          <view class="between" @click="couponOpen = !couponOpen">
+          <view class="between coupon-head" @click="couponOpen = !couponOpen">
             <text class="t-overline">优惠券</text>
             <view class="row">
               <text :class="couponId > 0 ? 'coupon-on' : 't-hint'">{{ couponSummary }}</text>

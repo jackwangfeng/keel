@@ -57,8 +57,14 @@ describe('搜索效果回传', () => {
     let detail = await program.currentPage()
     for (let i = 0; detail.path !== 'pages/products/detail' && i < 30; i++) { await detail.waitFor(300); detail = await program.currentPage() }
     await waitData(detail, 'storeId', (v) => v > 0)
+    // 等详情真的渲染出来再点：H5 下 navigateTo 有切页动画，动画没走完就按坐标点，会点空（实测偶发：
+    // 页面数据都齐了，加购请求却没发出去）。点了 5 秒没反应再点一次 —— 多加一件不影响这条的断言。
+    await waitFor(detail, '.name', (t) => t.length > 0)
     await (await waitEl(detail, '.cart-btn')).tap()
-    await waitFor(detail, '.t-ok', (t) => t.includes('已加入购物车'))
+    await waitFor(detail, '.t-ok', (t) => t.includes('已加入购物车'), 5000).catch(async () => {
+      await (await detail.$('.cart-btn')).tap()
+      await waitFor(detail, '.t-ok', (t) => t.includes('已加入购物车'))
+    })
 
     const cart = await program.switchTab('/pages/cart/index')
     await waitData(cart, 'rows', (r) => r.length === 1 && r[0].productId === productId)

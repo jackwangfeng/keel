@@ -53,20 +53,27 @@ function apiBase() {
   return b
 }
 
-// 测试进程自己的登录（演示买家），拿 token 从服务端核对 / 布置状态。App 里的会话是另一份。
-const DEMO_PHONE = '13800000000'
-const DEMO_PASSWORD = 'keel-demo-2026'
+// 用例用哪个买家。默认是演示买家（登录页预填的那个）；演示栈对公众开放之后，公众访客也在用它 ——
+// 用例会清空购物车、改昵称、把通知标已读，两边会互相干扰。所以可以用 KEEL_E2E_PHONE / KEEL_E2E_PASSWORD
+// 指定一个专供 e2e 的买家（名下要有一条杭州的默认地址，运费用例按它断言 8 元）。
+const DEMO_PHONE = process.env.KEEL_E2E_PHONE || '13800000000'
+const DEMO_PASSWORD = process.env.KEEL_E2E_PASSWORD || 'keel-demo-2026'
 async function serverToken() {
   const res = await httpPost(apiBase() + '/auth/login', { phone: DEMO_PHONE, password: DEMO_PASSWORD })
   if (res.status !== 200) throw new Error('测试进程登录失败：' + res.status + ' ' + JSON.stringify(res.body))
   return res.body.access_token
 }
 
-// App 里从未登录开始登一次（登录页默认填的就是演示买家）。
+// App 里从未登录开始登一次。登录页预填的是演示买家；指定了别的账号就把两格改掉再登。
 async function loginInApp() {
   await program.callUniMethod('clearStorageSync')
   const page = await program.reLaunch('/pages/auth/login')
   await page.waitFor(1000)
+  if (process.env.KEEL_E2E_PHONE) {
+    const inputs = await page.$$('.field-input')
+    await inputs[0].input(DEMO_PHONE)
+    await inputs[1].input(DEMO_PASSWORD)
+  }
   await (await page.$('.btn')).tap()
   await waitFor(page, '.msg', (t) => t.includes('登录成功'))
 }

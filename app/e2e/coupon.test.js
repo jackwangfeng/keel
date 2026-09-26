@@ -92,7 +92,8 @@ describe('优惠券', () => {
     expect(pv.coupons[0].saveText).toBe('-' + pv.discountText)
 
     // 选「不使用」→ 优惠归零；再选回来 → 优惠回来。
-    await (await page.$('.chev')).tap()
+    // 券那一行的标题。不能用 .chev：地址卡上也有一个，而且排在前面（点了会跳去地址簿）。
+    await (await page.$('.coupon-head')).tap()
     const opts = await page.$$('.coupon-opt')
     await opts[opts.length - 1].tap()
     await waitFor(page, '.t-price-l', (t) => t.startsWith('¥'))
