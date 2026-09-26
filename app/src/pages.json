@@ -1,16 +1,43 @@
 {
   "pages": [
-    { "path": "pages/products/list",  "style": { "navigationBarTitleText": "Keel 商城" } },
-    { "path": "pages/products/detail","style": { "navigationBarTitleText": "商品详情" } },
-    { "path": "pages/auth/login",     "style": { "navigationBarTitleText": "登录" } },
+    { "path": "pages/products/list",  "style": { "navigationStyle": "custom" } },
+    { "path": "pages/products/detail","style": { "navigationBarTitleText": "" } },
+    { "path": "pages/auth/login",     "style": { "navigationBarTitleText": "" } },
     { "path": "pages/order/create",   "style": { "navigationBarTitleText": "确认订单" } },
     { "path": "pages/order/list",     "style": { "navigationBarTitleText": "我的订单" } },
     { "path": "pages/order/detail",   "style": { "navigationBarTitleText": "订单详情" } },
+    { "path": "pages/me/index",       "style": { "navigationStyle": "custom" } },
     { "path": "pages/settings/base",  "style": { "navigationBarTitleText": "服务地址" } }
   ],
+  "tabBar": {
+    "color": "#A89C90",
+    "selectedColor": "#3B2A20",
+    "backgroundColor": "#FFFDF9",
+    "borderStyle": "white",
+    "list": [
+      {
+        "pagePath": "pages/products/list",
+        "text": "首页",
+        "iconPath": "static/tabbar/home.png",
+        "selectedIconPath": "static/tabbar/home-on.png"
+      },
+      {
+        "pagePath": "pages/order/list",
+        "text": "订单",
+        "iconPath": "static/tabbar/orders.png",
+        "selectedIconPath": "static/tabbar/orders-on.png"
+      },
+      {
+        "pagePath": "pages/me/index",
+        "text": "我的",
+        "iconPath": "static/tabbar/me.png",
+        "selectedIconPath": "static/tabbar/me-on.png"
+      }
+    ]
+  },
   "globalStyle": {
     "navigationBarTextStyle": "black",
-    "navigationBarBackgroundColor": "#ffffff",
-    "backgroundColor": "#f5f5f5"
+    "navigationBarBackgroundColor": "#F6F1EA",
+    "backgroundColor": "#F6F1EA"
   }
 }

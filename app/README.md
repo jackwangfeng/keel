@@ -283,8 +283,10 @@ app/
   vite.config.js        uni() 插件 + /api 反代（H5 只能同源，服务端没有 CORS）
   tsconfig.json         给 uni 自带的 UTS/tsc 检查用
   index.html            H5 入口
+  design/tabbar/        tabBar 图标的 SVG 源（COLOR/FILL/INNER 占位符）
   scripts/
     install-deps.sh     npm ci + 绕开 npm 对 uts 原生 binding 的 libc 误判
+    render-icons.sh     用无头 Chrome 把上面的 SVG 渲染成 src/static/tabbar/*.png（产物入库）
   typecheck/            只给 scripts/check_app_types.py 用，不参与真构建
     tsconfig.json
     uts-shim.d.ts       uni.request / 存储 / *.uvue 的最小声明
@@ -298,7 +300,9 @@ app/
       config.uts        服务地址（= 租户）、会话、本机订单号
       idempotency.uts   幂等键
       view.uts          契约类型 -> 页面的 Row 类型（契约字段读取都收在这里）
-    pages/…             7 个页面
+    App.uvue            设计系统：色板与原子类（原生端没有 CSS 变量，改色只改这里）
+    static/tabbar/      tabBar 图标 PNG（由 render-icons.sh 生成）
+    pages/…             8 个页面；首页 / 订单 / 我的 三个是 tabBar 页
 ```
 
 ---

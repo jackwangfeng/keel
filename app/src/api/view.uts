@@ -52,6 +52,32 @@ export function yuan(cents ?: Money) : string {
 }
 
 // ---------------------------------------------------------------------------
+// 封面
+// ---------------------------------------------------------------------------
+
+/**
+ * 契约声明了 image_url，但服务端目前从不填（见 app/README.md）。没有图时用一块
+ * 按 id 取色的色块 + 标题首字占位：同一件商品在列表、详情、订单里颜色一致，
+ * 而且一眼看得出是占位，不会被当成「图挂了」。
+ */
+const COVER_TONES : string[] = ['#C9A27E', '#A7B49A', '#D4B896', '#B98A6E', '#9FA8A3', '#C7A9A0']
+
+export type Cover = {
+  imageUrl : string
+  color : string
+  glyph : string
+}
+
+export function coverOf(key : number, title : string, imageUrl ?: string) : Cover {
+  const idx = Math.abs(Math.floor(key)) % COVER_TONES.length
+  return {
+    imageUrl: imageUrl != null ? imageUrl! : '',
+    color: COVER_TONES[idx],
+    glyph: title.length > 0 ? title.substring(0, 1) : '·',
+  } as Cover
+}
+
+// ---------------------------------------------------------------------------
 // 商品
 // ---------------------------------------------------------------------------
 
@@ -63,6 +89,7 @@ export type ProductRow = {
   /** 契约里 status: 0 草稿 / 1 上架 / 2 下架。下架的要显式说出来。 */
   offShelf : boolean
   soldOut : boolean
+  cover : Cover
 }
 
 export function productRow(p : ProductSummary) : ProductRow {
@@ -80,27 +107,73 @@ export function productRow(p : ProductSummary) : ProductRow {
     offShelf: p.status == 2,
     // in_stock 是可选字段：契约没保证一定返回。没返回时不敢说它没货。
     soldOut: p.in_stock != null && !p.in_stock!,
+    cover: coverOf(p.id, p.title, p.image_url),
   } as ProductRow
 }
 
 export type SkuRow = {
   id : number
+  /** 规格值拼成的短标签，例如「中度」「900ml」；没有规格时退回 sku_code。 */
   label : string
+  /** 规格名，例如「烘焙」「容量」；页面拿它当规格区的标题。 */
+  specName : string
   priceText : string
   availableQty : number
   soldOut : boolean
 }
 
+/**
+ * 把 JSON 文本里的字符串字面量按顺序取出来：{"烘焙":"中度"} -> ["烘焙", "中度"]。
+ *
+ * 为什么不直接遍历 spec_values：契约里它是 `additionalProperties: {type: string}`，
+ * 生成到 UTS 是 UTSJSONObject，而 UTSJSONObject 的 toMap()/getString() 在 web 端
+ * 运行时并不存在（UTS 编译器原样透传，页面当场 TypeError —— 实测记录在 app/README.md）。
+ * JSON.stringify 两端都有，所以绕一道文本。契约约定值都是字符串，这里只认字符串。
+ */
+function jsonStrings(raw : string) : string[] {
+  const out : string[] = []
+  let i = 0
+  while (i < raw.length) {
+    if (raw.substring(i, i + 1) != '"') {
+      i++
+      continue
+    }
+    let j = i + 1
+    let buf = ''
+    while (j < raw.length) {
+      const c = raw.substring(j, j + 1)
+      if (c == '\\' && j + 1 < raw.length) {
+        buf += raw.substring(j + 1, j + 2)
+        j += 2
+        continue
+      }
+      if (c == '"') {
+        break
+      }
+      buf += c
+      j++
+    }
+    out.push(buf)
+    i = j + 1
+  }
+  return out
+}
+
 export function skuRow(s : Sku) : SkuRow {
-  // 只用 sku_code 做标签，**不去遍历 spec_values**。
-  // 契约里 spec_values 是 `additionalProperties: {type: string}`，生成到 UTS 是
-  // UTSJSONObject；而 UTSJSONObject 的 toMap()/getString() 在 web 端运行时并不存在
-  // （UTS 编译器原样透传，页面当场 TypeError —— 实测记录在 app/README.md）。
-  // 等哪天需要展示规格，要么由服务端给一个拼好的字符串，要么在这里按已知键取值。
-  const label = s.spec_values != null ? s.sku_code : s.sku_code
+  const names : string[] = []
+  const values : string[] = []
+  const sv = s.spec_values
+  if (sv != null) {
+    const parts = jsonStrings(JSON.stringify(sv))
+    for (let k = 0; k + 1 < parts.length; k += 2) {
+      names.push(parts[k])
+      values.push(parts[k + 1])
+    }
+  }
   return {
     id: s.id,
-    label: label,
+    label: values.length > 0 ? values.join(' / ') : s.sku_code,
+    specName: names.length > 0 ? names.join(' / ') : '规格',
     priceText: yuan(s.price_cents),
     availableQty: s.available_qty,
     soldOut: s.available_qty <= 0,
@@ -115,6 +188,7 @@ export type ProductDetailView = {
   priceText : string
   offShelf : boolean
   skus : SkuRow[]
+  cover : Cover
 }
 
 export function productDetailView(p : ProductDetail) : ProductDetailView {
@@ -130,6 +204,7 @@ export function productDetailView(p : ProductDetail) : ProductDetailView {
     priceText: yuan(p.min_price_cents),
     offShelf: p.status == 2,
     skus: rows,
+    cover: coverOf(p.id, p.title, p.image_url),
   } as ProductDetailView
 }
 
@@ -153,6 +228,17 @@ export function orderStatusText(status : OrderStatus) : string {
 }
 
 /**
+ * 状态徽章的色调，页面按它挑样式类：warn 待支付 / ok 已支付·已发货·已完成 /
+ * refund 退款中·已退款 / muted 已关闭。
+ */
+export function orderStatusTone(status : OrderStatus) : string {
+  if (status == 10) return 'warn'
+  if (status == 20 || status == 30 || status == 40) return 'ok'
+  if (status == 50 || status == 60) return 'refund'
+  return 'muted'
+}
+
+/**
  * 售后维度的文案。**必须和 status 组合渲染**（契约 OrderRefundStatus 的注释写着
  * 这件事）：只看 status 的话，「买三退一的已发货订单」和「完全没有售后的订单」
  * 长得一模一样。没有售后时返回空串，由页面决定不显示。
@@ -164,9 +250,21 @@ export function refundStatusText(refundStatus : number) : string {
   return ''
 }
 
+/**
+ * 「2026-09-26T08:05:12+08:00」->「09-26 08:05」。列表里年份和秒都是噪音。
+ * 不是这个形状（服务端改了格式）就原样返回，而不是显示一截切坏的字符串。
+ */
+export function shortTime(iso : string) : string {
+  if (iso.length >= 16 && iso.substring(10, 11) == 'T') {
+    return iso.substring(5, 10) + ' ' + iso.substring(11, 16)
+  }
+  return iso
+}
+
 export type OrderRow = {
   orderNo : string
   statusText : string
+  statusTone : string
   refundText : string
   payableText : string
   createdAt : string
@@ -177,9 +275,10 @@ export function orderRow(o : Order) : OrderRow {
   return {
     orderNo: o.order_no,
     statusText: orderStatusText(o.status),
+    statusTone: orderStatusTone(o.status),
     refundText: refundStatusText(o.refund_status),
     payableText: yuan(o.payable_cents),
-    createdAt: o.created_at,
+    createdAt: shortTime(o.created_at),
     // 契约：仅 status=10（待支付）能发起支付。
     payable: o.status == 10,
   } as OrderRow
@@ -190,6 +289,7 @@ export type OrderItemRow = {
   quantity : number
   priceText : string
   amountText : string
+  cover : Cover
 }
 
 export function orderItemRow(it : OrderItem) : OrderItemRow {
@@ -198,6 +298,8 @@ export function orderItemRow(it : OrderItem) : OrderItemRow {
     quantity: it.quantity,
     priceText: yuan(it.price_cents),
     amountText: yuan(it.amount_cents),
+    // 按 product_id 取色，和商品列表里那块一致；老订单没带 product_id 时退到 sku_id。
+    cover: coverOf(it.product_id != null ? it.product_id! : it.sku_id, it.title, it.image_url),
   } as OrderItemRow
 }
 
@@ -259,9 +361,10 @@ export function orderDetailView(o : OrderDetail) : OrderDetailView {
   const head = {
     orderNo: o.order_no,
     statusText: orderStatusText(o.status),
+    statusTone: orderStatusTone(o.status),
     refundText: refundStatusText(o.refund_status),
     payableText: yuan(o.payable_cents),
-    createdAt: o.created_at,
+    createdAt: shortTime(o.created_at),
     payable: o.status == 10,
   } as OrderRow
   const pays : PaymentRow[] = []
