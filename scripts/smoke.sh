@@ -217,6 +217,52 @@ if [ "$paid_status" != "20" ]; then
 fi
 echo "    订单 $order_no 已支付"
 
+# ---------------------------------------------------------------------------
+# 混合检索（M3 Task 4）
+# ---------------------------------------------------------------------------
+#
+# 理由与上面下单那一段完全一样：检索在进程外一个闸门都没有。
+# 迁移里 search_vector 的生成表达式写错了、种子里 search_text 忘了写、
+# /search 没挂进 v1 组、RLS 把本店的数据也一起挡了 —— 以上任何一条成立，
+# 全部单元测试照样绿，而 M3 的产出标志「自然语言搜索可用」在镜像里是假的。
+#
+# 搜的是种子里真有的词，断言命中的是**对的**那件商品，而且不相干的那件
+# **排在它后面** —— 只断言非空的话，「把全店商品原样倒出来」照样绿。
+#
+# 为什么是「排在后面」而不是「不许出现」：召回层刻意没有相似度阈值，
+# 理由与实测数字写在 scripts/smoke_search.py 的文件头。
+#
+# 它是公开接口（契约里 security: []），所以这里刻意**不带令牌**：
+# 带上的话，「不登录也搜得到」这件事就没有靶子了。
+echo "==> POST $BASE/api/v1/search 搜「连衣裙」"
+search_file=$(mktemp)
+trap 'rm -f "$body_file" "$login_file" "$detail_file" "$order_file" "$intent_file" "$search_file"' EXIT
+
+code=$(curl "${curl_args[@]}" -o "$search_file" -w '%{http_code}' \
+    -H 'Content-Type: application/json' \
+    -d '{"query":"连衣裙","explain":true}' "$BASE/api/v1/search")
+if [ "$code" != "200" ]; then
+    echo "检索返回 $code，期望 200：" >&2; cat "$search_file" >&2; echo >&2; exit 1
+fi
+
+# 期望命中「雪纺碎花连衣裙」，而「手冲咖啡壶」必须排在它后面。
+read -r hits rank source strategy < <(python3 "$SCRIPT_DIR/smoke_search.py" \
+    "$search_file" '雪纺碎花连衣裙' '手冲咖啡壶') \
+    || { echo "检索结果不对：" >&2; cat "$search_file" >&2; echo >&2; exit 1; }
+echo "    $hits 条，「雪纺碎花连衣裙」排第 $rank（recall_source=$source，strategy=$strategy）"
+
+# 反例：一串切不出任何词的东西必须被拒（422），不是 200 + 空列表。
+# 没有这一条，上面那个 200 既可能是检索真的跑了，也可能是这条路由
+# 对什么输入都回 200。
+code=$(curl "${curl_args[@]}" -o /dev/null -w '%{http_code}' \
+    -H 'Content-Type: application/json' \
+    -d '{"query":"，。；"}' "$BASE/api/v1/search")
+if [ "$code" != "422" ]; then
+    echo "搜一串标点返回 $code，期望 422 —— 「这串东西搜不了」与「这家店没有」是两件事" >&2
+    exit 1
+fi
+echo "    切不出词的查询被拒（422）"
+
 echo "==> POST $BASE/api/v1/auth/logout 带上刚拿到的令牌"
 code=$(curl "${curl_args[@]}" -o /dev/null -w '%{http_code}' -X POST \
     -H "Authorization: Bearer $token" "$BASE/api/v1/auth/logout")

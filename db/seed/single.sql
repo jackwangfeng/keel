@@ -177,3 +177,93 @@ SELECT u.merchant_id, u.id, '示例收件人', '13800000000',
    AND u.phone = '13800000000'
    AND NOT EXISTS (SELECT 1 FROM user_addresses a
                     WHERE a.user_id = u.id AND a.receiver_name = '示例收件人');
+
+-- ---------------------------------------------------------------------------
+-- 检索用的商品（M3 Task 4）
+-- ---------------------------------------------------------------------------
+--
+-- 上面那三件是咖啡器具。**混合检索需要一对「字面不像、意思相近」的商品**，
+-- 否则 `docker compose up` 起来的这套演示里，双路召回与单路召回的结果一模一样，
+-- 而 M3 的产出标志是「自然语言搜索可用」—— 看不出区别的演示等于没有演示。
+--
+-- 「雪纺碎花连衣裙」与「真丝吊带长裙」：搜「连衣裙」时，前者由关键词那一路
+-- 命中（search_text 里有「连衣」「衣裙」两个二元组），后者**一个二元组都不共享**
+-- （它切出来的是「真丝 丝吊 吊带 带长 长裙」），只能由向量那一路捞回来。
+-- 这一对是 scripts/smoke.sh 检索那一段的靶子，也是端到端演示里能看出
+-- 「语义检索真的在跑」的那一条。
+INSERT INTO categories (merchant_id, name, path, status)
+SELECT m.id, '女装', '/女装/', 1
+  FROM merchants m
+ WHERE m.code = 'demo'
+   AND NOT EXISTS (SELECT 1 FROM categories c
+                    WHERE c.merchant_id = m.id AND c.name = '女装');
+
+INSERT INTO products (merchant_id, category_id, title, subtitle, min_price_cents,
+                      max_price_cents, total_stock, sales_count, status, published_at)
+SELECT c.merchant_id, c.id, v.title, v.subtitle, v.cents, v.cents, 100, 0, 1, now()
+  FROM merchants m
+  JOIN categories c ON c.merchant_id = m.id AND c.name = '女装'
+  CROSS JOIN (VALUES
+                ('雪纺碎花连衣裙', '夏季新款 显瘦', 19900::bigint),
+                ('真丝吊带长裙',   '法式复古',     45900::bigint)
+             ) AS v(title, subtitle, cents)
+ WHERE m.code = 'demo'
+   AND NOT EXISTS (SELECT 1 FROM products p
+                    WHERE p.merchant_id = c.merchant_id AND p.title = v.title);
+
+INSERT INTO skus (merchant_id, product_id, sku_code, spec_values, price_cents, status)
+SELECT p.merchant_id, p.id, v.code, v.spec, p.min_price_cents, 1
+  FROM products p
+  JOIN merchants m ON m.id = p.merchant_id
+  CROSS JOIN LATERAL (VALUES
+        ('雪纺碎花连衣裙', 'DRESS-M', '{"尺码":"M"}'::jsonb),
+        ('真丝吊带长裙',   'SKIRT-S', '{"尺码":"S"}'::jsonb)
+     ) AS v(title, code, spec)
+ WHERE m.code = 'demo'
+   AND p.title = v.title
+   AND NOT EXISTS (SELECT 1 FROM skus s
+                    WHERE s.merchant_id = p.merchant_id AND s.sku_code = v.code);
+
+INSERT INTO inventories (sku_id, available_qty, warning_qty)
+SELECT s.id, v.qty, 3
+  FROM skus s
+  JOIN merchants m ON m.id = s.merchant_id
+  CROSS JOIN LATERAL (VALUES ('DRESS-M', 25), ('SKIRT-S', 11)) AS v(code, qty)
+ WHERE m.code = 'demo'
+   AND s.sku_code = v.code
+   AND NOT EXISTS (SELECT 1 FROM inventories i WHERE i.sku_id = s.id);
+
+-- ### search_text：预先算好的 bigram 串
+--
+-- **为什么种子要自己写这一列，而不是等索引任务去写。**
+--
+-- 派生数据入库任务（service/index.go）只在配了 KEEL_EMBED_ENDPOINT 时才启动，
+-- 而 README 承诺的那条 `docker compose up` 里**没有推理引擎**（它在
+-- compose.inference.yaml 那个叠加层里，2.27 GB 权重、冷启动约 75 秒）。
+-- 于是默认那一栈里 search_text 永远是 NULL，关键词那一路一条也召不回 ——
+-- 而语义检索层 §8 明说「任何一环故障，搜索都必须仍能返回结果」。
+-- 没有这几行，那条降级链在默认演示里是**看不到**的：搜什么都是空的。
+--
+-- 代价是这一列变成了「SQL 里的一份 bigram 切分结果」，而 internal/search 的
+-- 包注释里写着「两侧必须切得一模一样」。所以它不许靠人眼维护：
+-- internal/search/seed_bigram_test.go 会读这个文件、把下面每一行的
+-- (title, subtitle) 重新喂给 search.ProductText.SearchText()，逐字比对。
+-- 改了切分算法而忘了改这里 → 那条测试红。
+--
+-- 下面这张表的边界由这两行注释标出来，测试按它们定位。不要改这两行的文字。
+-- @keel:bigram-fixture:begin
+UPDATE products p
+   SET search_text = v.search_text
+  FROM (VALUES
+        ('手冲咖啡壶',     '600ml 玻璃',     '手冲 冲咖 咖啡 啡壶 600ml 玻璃'),
+        ('陶瓷马克杯',     '两只装',         '陶瓷 瓷马 马克 克杯 两只 只装'),
+        ('挂耳咖啡 10 包', '中度烘焙',       '挂耳 耳咖 咖啡 10 包 中度 度烘 烘焙'),
+        ('雪纺碎花连衣裙', '夏季新款 显瘦',  '雪纺 纺碎 碎花 花连 连衣 衣裙 夏季 季新 新款 显瘦'),
+        ('真丝吊带长裙',   '法式复古',       '真丝 丝吊 吊带 带长 长裙 法式 式复 复古')
+       ) AS v(title, subtitle, search_text),
+       merchants m
+ WHERE m.code = 'demo'
+   AND p.merchant_id = m.id
+   AND p.title = v.title
+   AND p.search_text IS DISTINCT FROM v.search_text;
+-- @keel:bigram-fixture:end
