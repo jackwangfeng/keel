@@ -3,9 +3,10 @@
 用 [uni-app x](https://doc.dcloud.net.cn/uni-app-x/) 写的买家端：UTS 编译成原生
 Kotlin / Swift，不走 webview；同一份代码也编 H5 与小程序。
 
-- 页面流：商品列表 → 商品详情 → 登录 → 下单（试算 → 提交）→ 我的订单 → 订单详情 → 发起支付
-- 搜索框是占位的。它要的是 `POST /search` —— **后端现在有了**（M3 落地），
-  客户端这一侧还没接上。
+- 页面流：商品列表 / 搜索 → 商品详情 → 登录 → 下单（试算 → 提交）→ 我的订单 → 订单详情 → 发起支付
+- 搜索走 `POST /search`（语义 + 关键词混合检索）。一期不翻页；服务端按相关度把召回到的都排出来、
+  不设阈值，所以不相关的商品会排在后面而不是消失。点击回传 `POST /search/events` 还没接：
+  服务端尚未实现（404），`/search` 的响应里也还没有用来串联的 `trace_id`。
 
 ---
 
@@ -137,7 +138,7 @@ exit=2
 |---|---|---|---|
 | H5（web） | ✅ `uni build --platform h5` | `dist/build/h5/*.html/js/css`，直接能发 | ✅ 跑 tsc |
 | Android | ✅ `uni build --platform app-android` | `dist/build/app-android/.uniappx/android/src/**/*.kt` —— **Kotlin 源码** | ❌ 不跑 |
-| Android apk | ❌ | — | — |
+| Android apk | ✅ `make app-apk`（离线 SDK + Gradle，见下文「本地打 apk」） | `dist/keel-buyer-<版本>.apk` | 经 app-android 那一格 |
 | iOS | 未验证 | — | — |
 | 微信小程序 | 未验证（缺 `@dcloudio/uni-mp-weixin` 一系包，没继续装） | — | — |
 
@@ -221,6 +222,76 @@ transform），Chrome 拒绝执行 module script，页面白屏。没有继续�
 
 ---
 
+## 本地打 apk
+
+```bash
+KEEL_API_BASE=http://192.168.0.110:18099/api/v1 make app-apk
+# -> app/dist/keel-buyer-0.1.0.apk
+```
+
+需要 JDK 17 和 Android SDK（`platforms;android-36`、`build-tools;36.0.0`）。
+Homebrew 装法：`brew install --cask android-commandlinetools`，再用 `sdkmanager` 装上面两项。
+离线 SDK（80MB）第一次跑时自动下载到 `native-android/.uni-sdk/`，钉了版本与 sha256。
+
+**不走 HBuilderX。** DCloud 的正规本地打包要先在 HBuilderX 里「生成本地打包App资源」，
+但实测 HBuilderX 5.26 用 CLI 导入这个项目就崩（最小副本也崩）。离线 SDK 的 Demo 工程
+说明了资源的真实形状：页面就是 `uniappx/src/main/java/` 下的 `.kt`，和 npm 版
+`uni build --platform app-android` 的产物是同一种东西。所以 `build-apk.sh` 直接把
+`dist/build/app-android/` 拷进 `native-android/`，再交给 Gradle。
+
+几件值得知道的事：
+
+- **默认服务地址在编译期注入**（`KEEL_API_BASE`），源码里没有写死任何地址，见
+  `src/api/native-default.uts`：`vite.config.js` 把它放进 `define` 的 `process.env.KEEL_API_BASE`，
+  DCloud 编译器会同时交给 UTS → Kotlin（Android）与 JS（iOS、H5）两条路；H5 永远是空串。
+  （最早的做法是在拷进原生工程的 .kt 上做文本替换 —— iOS 的产物是压缩过的 JS，常量已被
+  折叠成 `"/api/v1"`，那条路走不通，才找到了这个两端通用的正规入口。）
+- **aar 只挑用得到的**（`native-android/settings.gradle` 的 `uniAars`），不是 SDK 里的
+  全部 135 个。编译器在 `manifest.json` 的 `app-android.distribute.modules` 里列出代码
+  实际用到的 uni 模块，脚本会核对每一个都在清单里——漏一个，apk 照样打得出来，
+  只会在调用那个 API 时在真机上崩。
+- **`uni.request` 的 `data` 在 Android 上不收契约类型的对象。** 传 `LoginRequest` 这类
+  typed 对象，Android 直接走 fail：`errCode 600008 the data parameter type is invalid`；
+  H5 上一切正常，于是症状是「GET 全通、所有 POST 全挂」。`client.uts` 的 `send()` 因此
+  先 `JSON.stringify` 再交出去。真机（小米 / Android 15）上实测过登录 → 试算 → 下单 →
+  支付 → 沙箱入账整条链路。
+- **`make app-build-android` 绿 ≠ Kotlin 编得过。** 它只跑到「UTS → Kotlin 源码」为止。
+  实测在 `uni.request` 的 `fail` 回调里引用外层函数的参数，UTS 编译器是绿的，Kotlin
+  编译报 `Unresolved reference`。真正的 Kotlin 编译只在 `make app-apk` 里发生。
+- **release 包里 `console.log` 进不了 logcat**（走的是调试服务器，那个模块没打进包）。
+  真机排错时把信息显示在页面上，比如网络失败的提示后面带着 `［errCode errMsg］`。
+- **签名是 debug 证书**，能装能测，不能上架。正式证书还没有。
+- **明文 HTTP 是开着的**（`usesCleartextTraffic`），因为开发期地址是局域网 http。上线换
+  HTTPS 后要关。
+
+## 本地打 iOS 包
+
+```bash
+KEEL_IOS_TEAM=2Q89DQSSH6 KEEL_API_BASE=http://192.168.0.110:18099/api/v1 make app-ios
+# -> app/dist/ios-device/KeelBuyer.app（加 KEEL_IOS_INSTALL=1 顺手装到 USB 连着的 iPhone）
+```
+
+需要 Xcode 与 XcodeGen（`brew install xcodegen`）。离线 SDK（866MB）第一次跑时自动下载，
+只取需要的五个 xcframework 放到 `native-ios/.uni-sdk/`。
+
+**iOS 版也是原生界面，只是页面逻辑的跑法和 Android 不同**：UTS 编译成 JS
+（`app-service.js`），跑在系统的 JavaScriptCore 里，界面由 SDK 的原生渲染运行时画
+（自带 flexbox 布局引擎，输入框是 UITextView）—— 和 React Native 一个路数。所以 iOS 不编译
+我们的代码，`uni build --platform app-ios` 的产物直接作为资源放进 `native-ios`。
+
+几件实测出来的事：
+
+- **`uni.request` 在 iOS 上不理 `dataType: 'text'`**，JSON 响应照样被解析成对象。`client.uts`
+  的 `responseText()` 把它序列化回文本再按类型解析；否则所有请求都报「响应体解析失败」。
+  这条是经自动化在真机上读出 `typeof res.data === 'object'` 定位的。
+- **SDK 的场景代理会按名字加载宿主的 `Main.storyboard`**（文档没写）。没有这个文件启动即崩，
+  所以 `native-ios` 里有一个只含空页面的 `Main.storyboard`。
+- **没有模拟器版本**：`DCloudUTSExtAPI` 的模拟器切片只有 x86_64，iOS 26 模拟器不收 x86_64。
+- **签名是 Automatic**：Xcode 没登录也行，只要本机有该团队覆盖这台设备的描述文件；手动签名
+  反而拒绝 Xcode 管理的通配描述文件。
+- `.xcodeproj` 由 XcodeGen 从 `native-ios/project.yml` 生成，不入库；`Info.plist` 用
+  `INFOPLIST_FILE` 引用（XcodeGen 的 `info:` 会重新生成它，把手写的键抹掉）。
+
 ## 这一版真的跑通了什么
 
 对着 `docker compose up -d --build` 起来的真后端（`KEEL_HTTP_PORT=18080`），
@@ -243,7 +314,7 @@ H5 构建产物 + 一个把 `/api` 反代给 Keel 的静态服务器，用无头
 | 沙箱入账 | `POST /webhooks/payments/{channel}` | ✅ 把服务端签好名的 `payload.settle` 原样投回去，订单 `待支付 → 已支付`、`已付 ¥98.00`、支付记录出现「微信 / 成功」 |
 | 我的订单 | `GET /orders` | ✅ 分页列表，状态与售后状态组合渲染 |
 | 换服务地址 | — | ✅ 本地令牌当场清掉 |
-| 搜索 | `POST /search` | ⏸ 后端已落地，客户端还没接上，搜索框仍是禁用的占位 |
+| 搜索 | `POST /search` | ✅ 首页入口 → 搜索页，按相关度排序；Android / iPhone 真机 e2e 覆盖（按首页一件商品的标题搜，它排第一，点进去是它的详情） |
 
 ### 只写了、没跑通的
 
@@ -287,8 +358,13 @@ app/
   vite.config.js        uni() 插件 + /api 反代（H5 只能同源，服务端没有 CORS）
   tsconfig.json         给 uni 自带的 UTS/tsc 检查用
   index.html            H5 入口
+  design/tabbar/        tabBar 图标的 SVG 源（COLOR/FILL/INNER 占位符）
+  design/app-icon.svg   Android 启动图标的 SVG 源
+  native-android/       Android 原生壳（Gradle 工程），见「本地打 apk」
   scripts/
     install-deps.sh     npm ci + 绕开 npm 对 uts 原生 binding 的 libc 误判
+    render-icons.sh     用无头 Chrome 把上面的 SVG 渲染成 tabBar 与启动图标 PNG（产物入库）
+    build-apk.sh        本地打 apk，见「本地打 apk」
   typecheck/            只给 scripts/check_app_types.py 用，不参与真构建
     tsconfig.json
     uts-shim.d.ts       uni.request / 存储 / *.uvue 的最小声明
@@ -302,7 +378,9 @@ app/
       config.uts        服务地址（= 租户）、会话、本机订单号
       idempotency.uts   幂等键
       view.uts          契约类型 -> 页面的 Row 类型（契约字段读取都收在这里）
-    pages/…             7 个页面
+    App.uvue            设计系统：色板与原子类（原生端没有 CSS 变量，改色只改这里）
+    static/tabbar/      tabBar 图标 PNG（由 render-icons.sh 生成）
+    pages/…             8 个页面；首页 / 订单 / 我的 三个是 tabBar 页
 ```
 
 ---

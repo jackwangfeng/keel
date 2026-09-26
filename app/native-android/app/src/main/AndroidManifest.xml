@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- usesCleartextTraffic：开发期的服务地址是局域网里的 http://192.168.x.x，
+         Android 9 起默认拒绝明文 HTTP。上线换 HTTPS 后应去掉。 -->
+    <application
+        android:name="io.dcloud.uniapp.UniApplication"
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:usesCleartextTraffic="true"
+        tools:replace="android:name,android:allowBackup,android:label,android:icon">
+
+        <!-- 直接把 uni-app x 的 Activity 当启动页：这个壳没有自己的原生界面。 -->
+        <activity
+            android:name="io.dcloud.uniapp.UniAppActivity"
+            android:configChanges="orientation|keyboard|keyboardHidden|smallestScreenSize|screenLayout|screenSize|mcc|mnc|fontScale|navigation|uiMode"
+            android:exported="true"
+            android:screenOrientation="portrait"
+            android:theme="@style/UniAppX.Activity.DefaultTheme"
+            android:windowSoftInputMode="adjustResize"
+            tools:replace="android:exported,android:theme,android:configChanges,android:windowSoftInputMode,android:screenOrientation">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- 必须与 src/manifest.json 的 appid、以及 assets/apps/<appid> 目录名一致。
+             build-apk.sh 从 manifest.json 读出来，经 manifestPlaceholders 传进来。 -->
+        <meta-data android:name="DCLOUD_UNI_APPID" android:value="${uniAppId}" />
+    </application>
+</manifest>

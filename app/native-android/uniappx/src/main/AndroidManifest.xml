@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 这个模块只装 Kotlin 页面与 assets。Activity / Application / appid 声明在 app 模块：
+     它们引用的主题在 SDK 的 aar 里，而这里对 aar 是 compileOnly，资源链接看不到。 -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" />

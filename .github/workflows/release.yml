@@ -24,6 +24,13 @@
 #     脚本，那些都验过了。
 #   - 多架构。只构建 linux/amd64。arm64 要 QEMU 或 arm runner，而 dtmrs 那一层
 #     是 cargo build，在 QEMU 下慢到不实用。
+#
+# ## 跑在哪
+#
+# 和 ci.yml 一样跑自建 runner（lenserver，label `keel`）：仓库私有，GitHub 托管
+# runner 按分钟计费，额度用完 job 直接不启动 —— 而「发布卡在配额上」是最不该
+# 发生的那种失败。代价与 ci.yml 记的同一条：那是台长期运行、和别的服务共用的
+# 机器，所以这里起的容器都用一次性名字、跑完即删。
 #   - 镜像签名 / SBOM / 来源证明。都还没有。
 
 name: release
@@ -48,7 +55,7 @@ jobs:
   # 闸门。和 ci.yml 的 gates 是同一段代码，加两条只有发布才有意义的检查。
   # ---------------------------------------------------------------------
   verify:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, keel]
     outputs:
       version: ${{ steps.v.outputs.version }}
     steps:
@@ -91,7 +98,7 @@ jobs:
   # ---------------------------------------------------------------------
   image:
     needs: verify
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, keel]
     permissions:
       contents: read
       packages: write
@@ -151,7 +158,7 @@ jobs:
   release:
     needs: [verify, image]
     if: github.event_name == 'push'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, keel]
     permissions:
       contents: write
     steps:

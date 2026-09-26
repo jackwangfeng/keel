@@ -20,6 +20,8 @@
 // 他没退出登录，也没改密码。所以令牌**连同它是给哪个 base URL 签的**一起存，
 // 对不上就当没有。
 
+import { NATIVE_DEFAULT_BASE_URL } from './native-default.uts'
+
 const KEY_BASE_URL = 'keel.baseUrl'
 const KEY_SESSION = 'keel.session'
 
@@ -32,10 +34,11 @@ const KEY_SESSION = 'keel.session'
  * 由反向代理（开发期是 vite.config.js 里那段 server.proxy）转给 Keel ——
  * 而「页面的 origin 就是店」正是这套多租户的设计：租户由 Host 决定。
  *
- * 原生 App 没有 origin 这回事，必须在「服务地址」页填一个绝对地址，
- * 例如 http://192.168.1.10:8080/api/v1 或 https://demo.example.com/api/v1。
+ * 原生 App 没有 origin 这回事，需要一个绝对地址，例如 http://192.168.1.10:8080/api/v1。
+ * 打 apk 时由 build-apk.sh 通过 NATIVE_DEFAULT_BASE_URL 注入（见 native-default.uts）；
+ * 没注入就还是相对路径，用户得去「服务地址」页自己填。
  */
-export const DEFAULT_BASE_URL = '/api/v1'
+export const DEFAULT_BASE_URL : string = NATIVE_DEFAULT_BASE_URL != '' ? NATIVE_DEFAULT_BASE_URL : '/api/v1'
 
 export function getBaseUrl(): string {
   const v = uni.getStorageSync(KEY_BASE_URL)
