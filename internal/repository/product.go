@@ -61,6 +61,7 @@ type Tx interface {
 	IndexTx
 	SearchTx
 	StaffTx
+	AdminCatalogTx
 }
 
 // ProductTx 是商品读取这一面。
