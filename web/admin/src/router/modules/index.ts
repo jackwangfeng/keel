@@ -13,6 +13,6 @@ import staff from "./staff.ts";
 import stores from "./stores.ts";
 import merchants from "./merchants.ts";
 
-export const sections: AdminSection[] = [catalog, categories, orders, stores, regions, staff, merchants].sort(
+export const sections: AdminSection[] = [catalog, categories, orders, regions, stores, staff, merchants].sort(
     (a, b) => a.order - b.order,
 );

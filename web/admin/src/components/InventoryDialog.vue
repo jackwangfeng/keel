@@ -14,15 +14,60 @@
 //     并原样重发，新值不动。补货场景（进货 100 件）因此要按「新值 = 当前 + 100」
 //     来想，所以按钮旁边还有一个「按差额重算新值」的选项。
 //
+// ## 两条路径，同一个对话框
+//
+// 传了 `storeId` 就打门店维度那条（`PUT /admin/stores/{store_id}/skus/{sku_id}/inventory`），
+// 没传就打不带门店的那条（`PUT /admin/skus/{sku_id}/inventory`）。两条语义逐字一致。
+//
+// **不带门店的那条在多门店之后有一个新的 409：`store-ambiguous`。**
+// 契约写死：商家恰好一家门店时它就是那一家，否则 409——服务端不替你猜，
+// 因为猜错一家店的后果是把另一家店的水位覆盖掉。它和 CAS 冲突**共用 409**，
+// 只能靠 type 分：
+//
+//   · inventory-precondition-failed → 刷新那一格再试，会成功（上面那套）
+//   · store-ambiguous               → 重试**永远**不会成功。要换一条路径。
+//
+// 所以对后者这里不显示「有人改了库存」、不给重试按钮，而是列出这家商家的
+// 门店，每一家一个按钮直接跳到那家店的库存页。把它显示成冲突让人重试，
+// 就是教人对着一扇永远不开的门一直敲。
+//
 // 这条接口**没有**幂等键（契约的 parameters 里只有 SkuId）：PUT + CAS 本身
 // 就是幂等的，重发同一个请求要么成功一次要么 409，不会写出第二笔。
 
 import { computed, ref, watch } from "vue";
-import { asInventoryConflict, keel, type AdminInventory, type AdminSku } from "../api/client.ts";
+import { useRouter } from "vue-router";
+import {
+    asInventoryConflict,
+    isProblemType,
+    keel,
+    ProblemType,
+    type AdminInventory,
+    type AdminStore,
+} from "../api/client.ts";
+import { listAllStores } from "../api/stores.ts";
 import ProblemAlert from "./ProblemAlert.vue";
-import { notifyOk } from "../ui/notify.ts";
+import { notifyError, notifyOk } from "../ui/notify.ts";
 
-const props = defineProps<{ modelValue: boolean; sku: AdminSku | null }>();
+/** 要改的那一格。两种入口（商品详情的 SKU、门店的库存行）都能给出这个形状。 */
+export interface InventoryTarget {
+    skuId: number;
+    skuCode: string;
+    /** 规格的可读描述，可空。 */
+    spec?: string;
+    /** 你看到的可售量（这家店缺行时就是 0）。 */
+    availableQty: number;
+    warningQty: number;
+}
+
+const props = defineProps<{
+    modelValue: boolean;
+    sku: InventoryTarget | null;
+    /** 给了就走门店维度那条路径。 */
+    storeId?: number | null;
+    /** 门店名，只用于标题。 */
+    storeName?: string;
+}>();
+const router = useRouter();
 const emit = defineEmits<{
     "update:modelValue": [value: boolean];
     updated: [inventory: AdminInventory];
@@ -37,17 +82,20 @@ const error = ref<unknown>(null);
 const conflictCurrent = ref<AdminInventory | null>(null);
 /** 冲突发生时，用户原本想加/减多少。用于「按差额重算」。 */
 const intendedDelta = ref(0);
+/** store-ambiguous 时列出来让人选的门店。非 null 即进入「换路径」形态。 */
+const ambiguousStores = ref<AdminStore[] | null>(null);
 
 watch(
     () => [props.modelValue, props.sku] as const,
     ([open, sku]) => {
         if (!open || sku === null) return;
-        expected.value = sku.available_qty;
-        target.value = sku.available_qty;
-        warning.value = sku.warning_qty ?? 0;
+        expected.value = sku.availableQty;
+        target.value = sku.availableQty;
+        warning.value = sku.warningQty;
         error.value = null;
         conflictCurrent.value = null;
         intendedDelta.value = 0;
+        ambiguousStores.value = null;
     },
     { immediate: true },
 );
@@ -55,10 +103,8 @@ watch(
 const skuLabel = computed(() => {
     const sku = props.sku;
     if (sku === null) return "";
-    const spec = Object.entries(sku.spec_values ?? {})
-        .map(([k, v]) => `${k}:${v}`)
-        .join(" / ");
-    return spec === "" ? sku.sku_code : `${sku.sku_code}（${spec}）`;
+    const base = sku.spec === undefined || sku.spec === "" ? sku.skuCode : `${sku.skuCode}（${sku.spec}）`;
+    return props.storeId ? `${base} · 门店：${props.storeName ?? `#${props.storeId}`}` : base;
 });
 
 function close(): void {
@@ -70,19 +116,34 @@ async function submit(): Promise<void> {
     if (sku === null) return;
     busy.value = true;
     error.value = null;
+    const body = {
+        expected_available_qty: expected.value,
+        available_qty: target.value,
+        warning_qty: warning.value,
+    };
     try {
-        const updated = await keel.request("put", "/admin/skus/{sku_id}/inventory", {
-            path: { sku_id: sku.id },
-            body: {
-                expected_available_qty: expected.value,
-                available_qty: target.value,
-                warning_qty: warning.value,
-            },
-        });
+        const storeId = props.storeId;
+        const updated =
+            storeId === null || storeId === undefined
+                ? await keel.request("put", "/admin/skus/{sku_id}/inventory", { path: { sku_id: sku.skuId }, body })
+                : await keel.request("put", "/admin/stores/{store_id}/skus/{sku_id}/inventory", {
+                      path: { store_id: storeId, sku_id: sku.skuId },
+                      body,
+                  });
         notifyOk(`库存已改为 ${updated.available_qty}`);
         emit("updated", updated);
         close();
     } catch (err) {
+        if (isProblemType(err, ProblemType.storeAmbiguous)) {
+            // 不是冲突，是路径不对。列出门店让人选，不给「重试」。
+            conflictCurrent.value = null;
+            error.value = err;
+            listAllStores().then(
+                (r) => (ambiguousStores.value = r.stores),
+                (e: unknown) => notifyError(e),
+            );
+            return;
+        }
         const conflict = asInventoryConflict(err);
         if (conflict !== null) {
             // 记下「用户本来想改多少」，供「按差额重算」用。
@@ -93,6 +154,16 @@ async function submit(): Promise<void> {
     } finally {
         busy.value = false;
     }
+}
+
+function goToStoreInventory(store: AdminStore): void {
+    const sku = props.sku;
+    close();
+    void router.push({
+        name: "store-detail",
+        params: { storeId: store.id },
+        query: { tab: "inventory", sku: sku === null ? undefined : String(sku.skuId) },
+    });
 }
 
 /** 用服务端回来的当前值当作新的 expected，新值不动，直接重发。 */
@@ -130,6 +201,27 @@ function retryWithDelta(): void {
 
         <ProblemAlert v-if="error" :error="error" />
 
+        <el-alert v-if="ambiguousStores !== null" type="warning" :closable="false" show-icon class="ambiguous">
+            <template #title>这里改不了：商家有 {{ ambiguousStores.length }} 家门店，要指明改哪一家</template>
+            <template #default>
+                <p>
+                    多门店之后库存是按门店分的，「这个 SKU 的库存」没有唯一答案。服务端不替你猜——猜错一家店，
+                    就是把另一家店的水位覆盖掉。<b>重试没有用</b>，选一家店去改：
+                </p>
+                <div class="store-buttons">
+                    <el-button
+                        v-for="st in ambiguousStores"
+                        :key="st.id"
+                        size="small"
+                        :type="st.is_default ? 'primary' : 'default'"
+                        @click="goToStoreInventory(st)"
+                    >
+                        {{ st.name }}{{ st.is_default ? "（默认）" : "" }} → 库存
+                    </el-button>
+                </div>
+            </template>
+        </el-alert>
+
         <el-alert v-if="conflictCurrent" type="warning" :closable="false" show-icon class="conflict">
             <template #title>库存在你读到它之后被改过</template>
             <template #default>
@@ -155,7 +247,7 @@ function retryWithDelta(): void {
             </template>
         </el-alert>
 
-        <el-form label-width="140px" @submit.prevent>
+        <el-form v-if="ambiguousStores === null" label-width="140px" @submit.prevent>
             <el-form-item label="我看到的值">
                 <el-input-number v-model="expected" :min="0" />
                 <span class="hint ml8">expected_available_qty</span>
@@ -172,12 +264,24 @@ function retryWithDelta(): void {
 
         <template #footer>
             <el-button @click="close">取消</el-button>
-            <el-button type="primary" :loading="busy" @click="submit">提交</el-button>
+            <el-button v-if="ambiguousStores === null" type="primary" :loading="busy" @click="submit">提交</el-button>
         </template>
     </el-dialog>
 </template>
 
 <style scoped>
+.ambiguous {
+    margin-bottom: 12px;
+}
+.store-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 6px;
+}
+.store-buttons .el-button + .el-button {
+    margin-left: 0;
+}
 .conflict {
     margin-bottom: 12px;
 }

@@ -148,10 +148,12 @@ If 8081 is taken: `KEEL_CONSOLE_PORT=18081 docker compose up -d --build`.
 > `./scripts/check-all.sh`).
 >
 > Today it covers products, SKUs, stock, categories, uploads, staff and
-> shop creation. **Stores and regions are menu placeholders only** — that part
-> of the contract has not landed on main yet, and this console does not draw
-> pages for operations the contract does not have. Same for orders: there is no
-> "admin order list" operation in the contract, and that page says exactly that.
+> shop creation, plus **regions and stores**: per-region and per-store product
+> visibility and pricing, per-store stock, and delivery fences drawn on
+> OpenStreetMap (WGS-84 — the same datum as the `GEOGRAPHY(POLYGON, 4326)`
+> column and the buyer app's location, with no conversion on the way). The
+> orders page is text only: there is no "admin order list" operation in the
+> contract, and that page says exactly that.
 
 For the multi-merchant shape, where the `Host` header picks the shop:
 `docker compose -f compose.yaml -f compose.multi.yaml up -d --build`.

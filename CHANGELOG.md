@@ -153,10 +153,23 @@ becomes `0.1.0` when the remaining M4 work is in.
   advertising-law `422` highlights the offending characters in the copy using
   the `errors[]` code-point offsets, and every idempotent POST carries an
   `Idempotency-Key` that is held across a retry of the same submission and
-  rotated once the server has definitively rejected it. Stores and regions are
-  menu placeholders — that contract has not landed — and the orders page states
+  rotated once the server has definitively rejected it. The orders page states
   plainly that no admin order-list operation exists rather than drawing a fake
   table.
+- **Regions and stores in the admin console** — all 21 admin operations of the
+  contract's Store tag. Delivery fences are drawn with Leaflet on OpenStreetMap
+  tiles, which are WGS-84 like the `GEOGRAPHY(POLYGON, 4326)` column, so the
+  vertices clicked are the vertices stored; coordinates pasted from Chinese map
+  providers (GCJ-02, BD-09) are converted only when the operator says that is
+  where they came from, and that conversion has tests (`make admin-test`, wired
+  into `scripts/check-all.sh`). A fence PostGIS rejects shows its
+  `ST_IsValidReason` verbatim and circles the reported point on the map. `409`s
+  are handled by `type`, not status: the old single-store inventory endpoint's
+  `store-ambiguous` now routes the operator to a per-store stock page instead
+  of reading as a compare-and-set conflict to retry. A missing default store is
+  flagged on every page, a non-default store without a fence is shown as
+  "incomplete", and a product a region has delisted says so on the store's
+  page instead of looking like a switch that does nothing.
 
 ### Changed
 

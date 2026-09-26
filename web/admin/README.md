@@ -187,16 +187,75 @@ compose 里已经有一个 `KEEL_ADMIN_PASSWORD`，而那是数据库超级用�
 | 员工 | 真能用 | `GET/POST /admin/staff`、`PATCH /admin/staff/{id}` |
 | 开店 | 真能用（仅平台级） | `POST /admin/merchants` |
 | 订单 | **留位置** | 契约里**没有**后台订单列表；`POST /admin/orders/{order_no}/shipments` 与 `POST /admin/refunds/{refund_no}/audit` 契约里有但服务端还没 handler（挂在 `contract_test.go` 的 `notYetRouted`）。这一页把这三件事写出来，不画表格 |
-| 门店 / 大区 | **留位置** | 契约还在另一条分支上，没合进 main |
+| 大区 | 真能用 | `GET/POST /admin/regions`、`PATCH/DELETE /admin/regions/{id}`、`GET /admin/regions/{id}/products`、`PUT .../products/{id}/listing`、`PUT/DELETE .../skus/{id}/price` |
+| 门店 | 真能用 | `GET/POST /admin/stores`、`GET/PATCH/DELETE /admin/stores/{id}`、`PUT .../fence`、`PUT .../default`、`GET .../products`、`PUT .../products/{id}/listing`、`PUT/DELETE .../skus/{id}/price`、`GET .../inventories`、`PUT .../skus/{id}/inventory` |
 
-### 门店 / 大区接上时要改什么
+门店与大区当初是占位页，接上时改的正是这里原先写的两步：换掉
+`src/router/modules/stores.ts` / `regions.ts` 里的 component，`index.ts` 那一行没动。
+菜单项、路由、页面标题都从同一个 `AdminSection` 对象读（`src/router/section.ts`）。
 
-1. 契约合进 main → `make generate` → `web/src/api/schema.d.ts` 里就有了；
-2. 写 `src/router/modules/stores.ts` 的真页面（照着现在那个占位模块改）；
-3. `src/router/modules/index.ts` 里那一行不用动（模块名没变）。
+---
 
-菜单项、路由、页面标题都从同一个 `AdminSection` 对象读（`src/router/section.ts`），
-所以不存在「路由加了而菜单没加」这种半截状态。
+## 五之二、门店与大区：几处做错了不会报错的地方
+
+### 电子围栏的坐标系：WGS-84，编辑器这条路上没有换算
+
+库里是 `GEOGRAPHY(POLYGON, 4326)`，买家端按 `wgs84` 取定位。国内地图给的是
+GCJ-02（高德 / 腾讯）或 BD-09（百度），城区偏几百米（`geo.test.ts` 里实测北京
+约 550 米 / 1.4 公里）——偏过的多边形照样合法，ST_Intersects 照样给答案，
+只是把买家判进错的门店。
+
+所以编辑器是 **Leaflet 1.9.4 + OpenStreetMap 瓦片**（`src/components/FenceEditor.vue`）：
+OSM 与 Leaflet 的 lat/lng 都是 WGS-84，点出来的顶点原样存。考虑过国内地图，
+否决的理由是它把「存之前必须换算」变成一段只要漏一次就悄悄判错店的代码。
+代价是 OSM 瓦片在国内有时加载慢、路网细节不如高德——所以旁边有「粘贴
+GeoJSON / 坐标」入口，没网也能配；**换算只发生在那里**，且要运营显式选
+「这批坐标来自 GCJ-02 / BD-09」，默认 WGS-84、不猜。
+
+几何规则全在 `src/api/geo.ts`，有 14 条测试（`make admin-test`，接进 check-all.sh）：
+经纬度换序只经 `toPosition` / `toLatLng` 两个函数；GCJ-02 逆变换迭代到 1 厘米内；
+BD-09 往返约 5 厘米（它公开的那对公式本身不严格互逆，测试里写明了）；
+中国境内「两个值都不越界」的经纬度写反给警告。
+
+自交**不在前端判**：服务端 ST_IsValid 拒绝时 PostGIS 的原话原样显示，方括号里的
+出错位置在地图上画红圈。
+
+> **实测与契约不一致的一处**：契约说 ST_IsValidReason 在 Problem 的 `detail` 里，
+> 服务端实际把它放在 `title` 里、没有 `detail`（`internal/handler/admin_store.go`
+> 用的是只写 title 的 `problem.Write`）。界面两处都找，所以现在能用；
+> 这是服务端该改的，不在这个后台的范围里。
+
+### 409 按 type 处理，不按状态码
+
+`src/api/errors.ts` 的 `problemHint` 给每个 type 写「下一步」，`ProblemAlert` 与
+`notifyError` 都显示它。`store-code-conflict`（换编号会成功）、`default-store-conflict`
+（在 POST 上重试永远不会成功，要走 `PUT .../default`）、`store-fence-required`、
+`invalid-fence`、`store-ambiguous`、`sku-not-sold-in-store`、`region-has-stores`
+各有各的动作。
+
+### 旧的「改库存」在多门店下会拿到 409 store-ambiguous
+
+`PUT /admin/skus/{sku_id}/inventory` 只在商家恰好一家门店时可用。它和 CAS 冲突共用
+409，`InventoryDialog.vue` 按 type 分开：`store-ambiguous` 时不给重试按钮，
+列出门店，一键跳到那家店的库存页（`/stores/{id}?tab=inventory&sku=...`）。
+同一个对话框传了 `storeId` 就走门店维度那条路径。
+
+### has_default 与「未完成」
+
+没有默认门店时，框架上每一页都挂提示（契约要求后台首页挂）；门店列表里
+「非默认、没围栏」标成「未完成」——建店按契约不收围栏，这是每家新店都会
+经过的中间态，数据库不挡它。
+
+### 可见性两层「与」
+
+`ScopedProducts.vue` 把 `listed`（本层开关）与 `effective_listed`（买家看不看得见）
+分开显示；本层开着而买家看不到时说原因（「被大区下架了」），点了上架但仍看不到时
+不报成功。
+
+### 契约的一个缺口：没有按 SKU 读出本层覆盖价的接口
+
+商品这一行只给生效价区间与 `price_source`。展开到 SKU 时只能显示基准价与这次会话里
+PUT 回来的结果。要逐 SKU 回显，契约得加一条读接口。
 
 ---
 
@@ -205,6 +264,7 @@ compose 里已经有一个 `KEEL_ADMIN_PASSWORD`，而那是数据库超级用�
 ```bash
 make admin-install      # npm ci，版本由入库的 package-lock.json 锁定
 make admin-type-check   # vue-tsc --strict + 范围核对（已接进 check-all.sh）
+make admin-test         # 围栏几何与坐标系换算的单元测试（node --test，不需要 node_modules）
 make admin-build        # 静态产物（compose 起栈时会自己构建，日常不用跑）
 
 cd web/admin && npm run dev   # 开发服务器，/api 由 vite proxy 转给 127.0.0.1:8080

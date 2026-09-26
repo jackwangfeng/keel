@@ -37,7 +37,7 @@ import { datetime, PRODUCT_STATUS, SKU_STATUS, yuan } from "../ui/format.ts";
 import { notifyError, notifyOk } from "../ui/notify.ts";
 import ProblemAlert from "../components/ProblemAlert.vue";
 import HighlightedText from "../components/HighlightedText.vue";
-import InventoryDialog from "../components/InventoryDialog.vue";
+import InventoryDialog, { type InventoryTarget } from "../components/InventoryDialog.vue";
 
 const props = defineProps<{ productId: string }>();
 const router = useRouter();
@@ -379,10 +379,18 @@ async function removeSku(sku: AdminSku): Promise<void> {
 // ------------------------------------------------------------------ 库存
 
 const inventoryDialog = ref(false);
-const inventorySku = ref<AdminSku | null>(null);
+const inventorySku = ref<InventoryTarget | null>(null);
 
 function openInventory(sku: AdminSku): void {
-    inventorySku.value = sku;
+    inventorySku.value = {
+        skuId: sku.id,
+        skuCode: sku.sku_code,
+        spec: Object.entries(sku.spec_values ?? {})
+            .map(([k, v]) => `${k}:${v}`)
+            .join(" / "),
+        availableQty: sku.available_qty,
+        warningQty: sku.warning_qty ?? 0,
+    };
     inventoryDialog.value = true;
 }
 
