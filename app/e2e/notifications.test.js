@@ -59,6 +59,24 @@ describe('消息中心', () => {
     expect(readAt).not.toBeNull()
   })
 
+  // 售后类通知由后台审核产生：驳回那张单（KEEL_E2E_REJECTED_REFUND，后台代审）会带一条 refund_rejected。
+  // 通知是审核那一刻产生的，所以这条要在「全部已读」之前、且不依赖它是未读。
+  const rejected = process.env.KEEL_E2E_REJECTED_REFUND
+  ;(rejected ? it : it.skip)('售后驳回的通知点进去是那张售后单', async () => {
+    const note = (await notifications(token)).items.find((x) => x.kind === 'refund_rejected' && x.target.refund_no === rejected)
+    expect(note).toBeTruthy()
+    const page = await program.navigateTo('/pages/me/notifications')
+    const rows = await waitData(page, 'rows', (r) => r.some((x) => x.id === note.id))
+    const idx = rows.findIndex((x) => x.id === note.id)
+    expect(rows[idx].title).toBe(note.title)
+    await (await page.$$('.note'))[idx].tap()
+    let cur = await program.currentPage()
+    for (let i = 0; cur.path !== 'pages/refund/detail' && i < 30; i++) { await page.waitFor(300); cur = await program.currentPage() }
+    expect(cur.path).toBe('pages/refund/detail')
+    expect(await cur.data('refundNo')).toBe(rejected)
+    await waitFor(cur, '.t-display', (t) => t === '已拒绝')
+  })
+
   it('「全部标为已读」后未读是 0', async () => {
     const orderNo = await placeOrder(token, { pay: true })
     await waitPaidNote(token, orderNo)
