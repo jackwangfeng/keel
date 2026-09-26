@@ -31,8 +31,9 @@ describe('搜索效果回传', () => {
     await waitFor(page, '.count', (t) => t.includes('共'))
     traceId = await page.data('traceId')
     // 服务端写搜索日志失败时这批结果没有 trace_id（契约如此，页面这时存空串、不回传）。
-    // 全量跑的时候实测偶发过两次、单独跑复现不了，所以重搜一次；两次都没有才算失败 ——
-    // 客户端「从来不存 trace_id」这种回归照样抓得住。
+    // 实测偶发过两次（2026-09-26 14:55 / 14:57 UTC）：服务端核对是那台机器当时整体卡顿，
+    // 日志写入超过 200ms 上限被放弃（设计上宁可丢一行日志也不拖慢搜索）。所以重搜一次；
+    // 两次都没有才算失败 —— 客户端「从来不存 trace_id」这种回归照样抓得住。
     if (!/^[0-9a-f]{32}$/.test(traceId)) {
       console.log('searchtrace: 第一次搜索没有 trace_id，重搜一次（' + new Date().toISOString() + '）')
       await (await page.$('.go')).tap()
