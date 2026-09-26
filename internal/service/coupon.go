@@ -149,7 +149,7 @@ func (s *CouponService) Applicable(ctx context.Context, items []LineInput, store
 		if err != nil {
 			return err
 		}
-		out, err = applicableCoupons(ctx, tx, sc, id.UserID, q.Lines, now)
+		out, err = applicableCoupons(ctx, tx, sc, id.UserID, q, now)
 		return err
 	})
 	return out, err

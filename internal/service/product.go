@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/keel/keel/internal/repository"
 )
@@ -31,6 +32,10 @@ type ProductSummary struct {
 	MaxPriceCents int64
 	SalesCount    int32
 	Status        int16
+
+	// PromotionTags 是这件商品在这家店此刻生效的活动标签（00044，promotion_tags.go）。
+	// MinPriceCents 仍是门店价：活动价看标签与 SKU.PromoPriceCents。
+	PromotionTags []ProductPromotionTag
 }
 
 // ProductList 是一页商品，带上生效后的分页参数。
@@ -133,6 +138,14 @@ func (s *ProductService) List(ctx context.Context, storeID, categoryID *int64, p
 		if err != nil {
 			return err
 		}
+		ids := make([]int64, 0, len(rows))
+		for _, r := range rows {
+			ids = append(ids, r.ID)
+		}
+		tags, _, err := promotionTagsFor(ctx, q, sc, ids, time.Now())
+		if err != nil {
+			return err
+		}
 		for _, r := range rows {
 			out.Items = append(out.Items, ProductSummary{
 				ID:            r.ID,
@@ -142,6 +155,7 @@ func (s *ProductService) List(ctx context.Context, storeID, categoryID *int64, p
 				MaxPriceCents: r.MaxPriceCents,
 				SalesCount:    r.SalesCount,
 				Status:        r.Status,
+				PromotionTags: tags[r.ID],
 			})
 		}
 		return nil
@@ -213,6 +227,11 @@ type SKU struct {
 	PriceCents   int64
 	ImageURL     *string
 	AvailableQty int32
+
+	// PromoPriceCents / PromotionID：这家店此刻的活动价与给出它的活动（00044）。
+	// 没有单价类活动、或特价不低于门店价时为 nil。
+	PromoPriceCents *int64
+	PromotionID     *int64
 }
 
 // ProductDetail 是一件商品的详情（契约的 ProductDetail = ProductSummary + 四个字段）。
@@ -269,6 +288,10 @@ func (s *ProductService) Detail(ctx context.Context, storeID *int64, id int64) (
 		if err != nil {
 			return err
 		}
+		tags, promoPrices, err := promotionTagsFor(ctx, q, sc, []int64{p.ID}, time.Now())
+		if err != nil {
+			return err
+		}
 
 		skus := make([]SKU, 0, len(rows))
 		inStock := false
@@ -280,14 +303,19 @@ func (s *ProductService) Detail(ctx context.Context, storeID *int64, id int64) (
 			if r.AvailableQty > 0 {
 				inStock = true
 			}
-			skus = append(skus, SKU{
+			sku := SKU{
 				ID:           r.ID,
 				SKUCode:      r.SKUCode,
 				SpecValues:   spec,
 				PriceCents:   r.PriceCents,
 				ImageURL:     r.ImageURL,
 				AvailableQty: r.AvailableQty,
-			})
+			}
+			if pp, ok := promoPrices[r.ID]; ok {
+				price, promo := pp.PriceCents, pp.PromotionID
+				sku.PromoPriceCents, sku.PromotionID = &price, &promo
+			}
+			skus = append(skus, sku)
 		}
 		out = ProductDetail{
 			ProductSummary: ProductSummary{
@@ -298,6 +326,7 @@ func (s *ProductService) Detail(ctx context.Context, storeID *int64, id int64) (
 				MaxPriceCents: p.MaxPriceCents,
 				SalesCount:    p.SalesCount,
 				Status:        p.Status,
+				PromotionTags: tags[p.ID],
 			},
 			CategoryID:  p.CategoryID,
 			Description: p.Description,

@@ -85,6 +85,10 @@ func (h *ProductHandler) Detail(c *gin.Context) {
 			AvailableQty: int(s.AvailableQty),
 			PriceCents:   api.Money(s.PriceCents),
 			SpecValues:   &spec,
+
+			// 这家店此刻的活动价（限时折扣 / 秒杀，00044）；没有就整个不出现。
+			PromoPriceCents: moneyPtrOf(s.PromoPriceCents),
+			PromotionId:     s.PromotionID,
 		})
 	}
 
@@ -103,6 +107,7 @@ func (h *ProductHandler) Detail(c *gin.Context) {
 		SalesCount:    &sales,
 		Status:        api.ProductDetailStatus(d.Status),
 		Skus:          skus,
+		PromotionTags: ptrTags(d.PromotionTags),
 
 		// InStock 在这里是**算出来的**（任意在售 SKU 水位 > 0），不是留空。
 		// 列表那条接口上它至今没填，挂在 contract_test.go 的

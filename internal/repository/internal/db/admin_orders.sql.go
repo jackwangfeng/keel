@@ -103,6 +103,7 @@ SELECT o.id, o.order_no, o.user_id, o.store_id, o.region_id, o.status,
        o.goods_amount_cents, o.freight_cents, o.discount_cents, o.payable_cents,
        o.paid_cents, o.refunded_cents, o.refund_status, o.expire_at, o.paid_at,
        o.shipped_at, o.finished_at, o.created_at, o.user_coupon_id, o.coupon_name,
+       o.promotion_discount_cents, o.promotions,
        o.receiver_snapshot, o.store_snapshot,
        EXISTS (SELECT 1 FROM refunds r
                 WHERE r.order_id = o.id AND r.status IN (10, 20, 30)) AS has_open_refund
@@ -112,29 +113,31 @@ SELECT o.id, o.order_no, o.user_id, o.store_id, o.region_id, o.status,
 `
 
 type AdminGetOrderByNoRow struct {
-	ID               int64
-	OrderNo          string
-	UserID           int64
-	StoreID          int64
-	RegionID         int64
-	Status           int16
-	GoodsAmountCents int64
-	FreightCents     int64
-	DiscountCents    int64
-	PayableCents     int64
-	PaidCents        int64
-	RefundedCents    int64
-	RefundStatus     int16
-	ExpireAt         pgtype.Timestamptz
-	PaidAt           pgtype.Timestamptz
-	ShippedAt        pgtype.Timestamptz
-	FinishedAt       pgtype.Timestamptz
-	CreatedAt        pgtype.Timestamptz
-	UserCouponID     *int64
-	CouponName       *string
-	ReceiverSnapshot []byte
-	StoreSnapshot    []byte
-	HasOpenRefund    bool
+	ID                     int64
+	OrderNo                string
+	UserID                 int64
+	StoreID                int64
+	RegionID               int64
+	Status                 int16
+	GoodsAmountCents       int64
+	FreightCents           int64
+	DiscountCents          int64
+	PayableCents           int64
+	PaidCents              int64
+	RefundedCents          int64
+	RefundStatus           int16
+	ExpireAt               pgtype.Timestamptz
+	PaidAt                 pgtype.Timestamptz
+	ShippedAt              pgtype.Timestamptz
+	FinishedAt             pgtype.Timestamptz
+	CreatedAt              pgtype.Timestamptz
+	UserCouponID           *int64
+	CouponName             *string
+	PromotionDiscountCents int64
+	Promotions             []byte
+	ReceiverSnapshot       []byte
+	StoreSnapshot          []byte
+	HasOpenRefund          bool
 }
 
 // 后台按单号取一笔订单（没有买家过滤；租户由 RLS 管，门店范围由 service 判）。
@@ -163,6 +166,8 @@ func (q *Queries) AdminGetOrderByNo(ctx context.Context, orderNo string) (AdminG
 		&i.CreatedAt,
 		&i.UserCouponID,
 		&i.CouponName,
+		&i.PromotionDiscountCents,
+		&i.Promotions,
 		&i.ReceiverSnapshot,
 		&i.StoreSnapshot,
 		&i.HasOpenRefund,
@@ -378,6 +383,7 @@ SELECT o.id, o.order_no, o.user_id, o.store_id, o.region_id, o.status,
        o.goods_amount_cents, o.freight_cents, o.discount_cents, o.payable_cents,
        o.paid_cents, o.refunded_cents, o.refund_status, o.expire_at, o.paid_at,
        o.shipped_at, o.finished_at, o.created_at, o.user_coupon_id, o.coupon_name,
+       o.promotion_discount_cents, o.promotions,
        o.receiver_snapshot, o.store_snapshot,
        EXISTS (SELECT 1 FROM refunds r
                 WHERE r.order_id = o.id AND r.status IN (10, 20, 30)) AS has_open_refund
@@ -415,29 +421,31 @@ type AdminListOrdersParams struct {
 }
 
 type AdminListOrdersRow struct {
-	ID               int64
-	OrderNo          string
-	UserID           int64
-	StoreID          int64
-	RegionID         int64
-	Status           int16
-	GoodsAmountCents int64
-	FreightCents     int64
-	DiscountCents    int64
-	PayableCents     int64
-	PaidCents        int64
-	RefundedCents    int64
-	RefundStatus     int16
-	ExpireAt         pgtype.Timestamptz
-	PaidAt           pgtype.Timestamptz
-	ShippedAt        pgtype.Timestamptz
-	FinishedAt       pgtype.Timestamptz
-	CreatedAt        pgtype.Timestamptz
-	UserCouponID     *int64
-	CouponName       *string
-	ReceiverSnapshot []byte
-	StoreSnapshot    []byte
-	HasOpenRefund    bool
+	ID                     int64
+	OrderNo                string
+	UserID                 int64
+	StoreID                int64
+	RegionID               int64
+	Status                 int16
+	GoodsAmountCents       int64
+	FreightCents           int64
+	DiscountCents          int64
+	PayableCents           int64
+	PaidCents              int64
+	RefundedCents          int64
+	RefundStatus           int16
+	ExpireAt               pgtype.Timestamptz
+	PaidAt                 pgtype.Timestamptz
+	ShippedAt              pgtype.Timestamptz
+	FinishedAt             pgtype.Timestamptz
+	CreatedAt              pgtype.Timestamptz
+	UserCouponID           *int64
+	CouponName             *string
+	PromotionDiscountCents int64
+	Promotions             []byte
+	ReceiverSnapshot       []byte
+	StoreSnapshot          []byte
+	HasOpenRefund          bool
 }
 
 // 后台订单与退款单的读：GET /admin/orders、GET /admin/orders/{order_no}、
@@ -507,6 +515,8 @@ func (q *Queries) AdminListOrders(ctx context.Context, arg AdminListOrdersParams
 			&i.CreatedAt,
 			&i.UserCouponID,
 			&i.CouponName,
+			&i.PromotionDiscountCents,
+			&i.Promotions,
 			&i.ReceiverSnapshot,
 			&i.StoreSnapshot,
 			&i.HasOpenRefund,

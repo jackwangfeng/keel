@@ -97,6 +97,8 @@ type ExpiredOrder struct {
 	// StoreID 是这一单的履约门店。回补要回补到当初扣减的那一家 ——
 	// 而这条清扫路径跑在任何请求之外，它对那一单的记忆只有这几列。
 	StoreID int64
+	// UserID 是下单的买家（00044）：关单时放回每人限购，那个计数按买家记。
+	UserID int64
 }
 
 // SweepTx 是超时补偿在一次租户事务里能做的事。
@@ -129,7 +131,7 @@ func (t tenantTx) ListExpiredPendingOrders(ctx context.Context, limit int32) ([]
 	}
 	out := make([]ExpiredOrder, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, ExpiredOrder{ID: r.ID, OrderNo: r.OrderNo, StoreID: r.StoreID})
+		out = append(out, ExpiredOrder{ID: r.ID, OrderNo: r.OrderNo, StoreID: r.StoreID, UserID: r.UserID})
 	}
 	return out, nil
 }
@@ -141,7 +143,7 @@ func (t tenantTx) ListExpiredDraftOrders(ctx context.Context, limit int32) ([]Ex
 	}
 	out := make([]ExpiredOrder, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, ExpiredOrder{ID: r.ID, OrderNo: r.OrderNo, StoreID: r.StoreID})
+		out = append(out, ExpiredOrder{ID: r.ID, OrderNo: r.OrderNo, StoreID: r.StoreID, UserID: r.UserID})
 	}
 	return out, nil
 }

@@ -169,10 +169,13 @@ func apiCart(v service.CartView) api.Cart {
 			Title:      &title,
 			ImageUrl:   ln.ImageURL,
 			PriceCents: ln.PriceCents,
-			Quantity:   int(ln.Quantity),
-			Selected:   ln.Selected,
-			Available:  ln.Status == service.CartLineAvailable,
-			Status:     api.CartItemStatus(ln.Status),
+			// 命中限时折扣 / 秒杀时 PriceCents 是活动价，门店价给出来划线（00044）。
+			ListPriceCents:   ln.ListPriceCents,
+			PricePromotionId: ln.PricePromotionID,
+			Quantity:         int(ln.Quantity),
+			Selected:         ln.Selected,
+			Available:        ln.Status == service.CartLineAvailable,
+			Status:           api.CartItemStatus(ln.Status),
 		}
 		// 规格解不开不让整辆车 500：展示素材坏了是数据问题，不该挡住用户看到自己的车。
 		// 字段整个不出现，而不是给一个空对象 —— 空对象会被渲染成「无规格」。
@@ -185,7 +188,10 @@ func apiCart(v service.CartView) api.Cart {
 		Items:              items,
 		TotalCents:         api.Money(v.TotalCents),
 		SelectedTotalCents: api.Money(v.SelectedTotalCents),
-		Store:              apiStoreContext(v.Store),
+		// 已勾选、可买的行上满减满折的结果（与试算同一份计算、同一段渲染）。
+		PromotionDiscountCents: api.Money(v.PromotionDiscountCents),
+		Promotions:             apiPromotionHits(v.Promotions),
+		Store:                  apiStoreContext(v.Store),
 	}
 }
 

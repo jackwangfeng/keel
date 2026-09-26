@@ -156,6 +156,69 @@ func (e AdminProductDetailStatus) Valid() bool {
 	}
 }
 
+// Defines values for AdminPromotionPhase.
+const (
+	Ended     AdminPromotionPhase = "ended"
+	Offline   AdminPromotionPhase = "offline"
+	Running   AdminPromotionPhase = "running"
+	Scheduled AdminPromotionPhase = "scheduled"
+)
+
+// Valid indicates whether the value is a known member of the AdminPromotionPhase enum.
+func (e AdminPromotionPhase) Valid() bool {
+	switch e {
+	case Ended:
+		return true
+	case Offline:
+		return true
+	case Running:
+		return true
+	case Scheduled:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AdminPromotionStatus.
+const (
+	AdminPromotionStatusN0 AdminPromotionStatus = 0
+	AdminPromotionStatusN1 AdminPromotionStatus = 1
+)
+
+// Valid indicates whether the value is a known member of the AdminPromotionStatus enum.
+func (e AdminPromotionStatus) Valid() bool {
+	switch e {
+	case AdminPromotionStatusN0:
+		return true
+	case AdminPromotionStatusN1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AdminPromotionThresholdUnit.
+const (
+	AdminPromotionThresholdUnitN0 AdminPromotionThresholdUnit = 0
+	AdminPromotionThresholdUnitN1 AdminPromotionThresholdUnit = 1
+	AdminPromotionThresholdUnitN2 AdminPromotionThresholdUnit = 2
+)
+
+// Valid indicates whether the value is a known member of the AdminPromotionThresholdUnit enum.
+func (e AdminPromotionThresholdUnit) Valid() bool {
+	switch e {
+	case AdminPromotionThresholdUnitN0:
+		return true
+	case AdminPromotionThresholdUnitN1:
+		return true
+	case AdminPromotionThresholdUnitN2:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AdminRefundChannel.
 const (
 	AdminRefundChannelAlipay  AdminRefundChannel = "alipay"
@@ -256,6 +319,7 @@ func (e AdminStoreStatus) Valid() bool {
 const (
 	ApplicableCouponSourceN1 ApplicableCouponSource = 1
 	ApplicableCouponSourceN2 ApplicableCouponSource = 2
+	ApplicableCouponSourceN3 ApplicableCouponSource = 3
 )
 
 // Valid indicates whether the value is a known member of the ApplicableCouponSource enum.
@@ -264,6 +328,8 @@ func (e ApplicableCouponSource) Valid() bool {
 	case ApplicableCouponSourceN1:
 		return true
 	case ApplicableCouponSourceN2:
+		return true
+	case ApplicableCouponSourceN3:
 		return true
 	default:
 		return false
@@ -795,6 +861,114 @@ func (e ProductSummaryStatus) Valid() bool {
 	}
 }
 
+// Defines values for PromotionCreateRequestThresholdUnit.
+const (
+	PromotionCreateRequestThresholdUnitN0 PromotionCreateRequestThresholdUnit = 0
+	PromotionCreateRequestThresholdUnitN1 PromotionCreateRequestThresholdUnit = 1
+	PromotionCreateRequestThresholdUnitN2 PromotionCreateRequestThresholdUnit = 2
+)
+
+// Valid indicates whether the value is a known member of the PromotionCreateRequestThresholdUnit enum.
+func (e PromotionCreateRequestThresholdUnit) Valid() bool {
+	switch e {
+	case PromotionCreateRequestThresholdUnitN0:
+		return true
+	case PromotionCreateRequestThresholdUnitN1:
+		return true
+	case PromotionCreateRequestThresholdUnitN2:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PromotionHitThresholdUnit.
+const (
+	PromotionHitThresholdUnitN0 PromotionHitThresholdUnit = 0
+	PromotionHitThresholdUnitN1 PromotionHitThresholdUnit = 1
+	PromotionHitThresholdUnitN2 PromotionHitThresholdUnit = 2
+)
+
+// Valid indicates whether the value is a known member of the PromotionHitThresholdUnit enum.
+func (e PromotionHitThresholdUnit) Valid() bool {
+	switch e {
+	case PromotionHitThresholdUnitN0:
+		return true
+	case PromotionHitThresholdUnitN1:
+		return true
+	case PromotionHitThresholdUnitN2:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PromotionPatchRequestStatus.
+const (
+	PromotionPatchRequestStatusN0 PromotionPatchRequestStatus = 0
+	PromotionPatchRequestStatusN1 PromotionPatchRequestStatus = 1
+)
+
+// Valid indicates whether the value is a known member of the PromotionPatchRequestStatus enum.
+func (e PromotionPatchRequestStatus) Valid() bool {
+	switch e {
+	case PromotionPatchRequestStatusN0:
+		return true
+	case PromotionPatchRequestStatusN1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PromotionPatchRequestThresholdUnit.
+const (
+	PromotionPatchRequestThresholdUnitN0 PromotionPatchRequestThresholdUnit = 0
+	PromotionPatchRequestThresholdUnitN1 PromotionPatchRequestThresholdUnit = 1
+	PromotionPatchRequestThresholdUnitN2 PromotionPatchRequestThresholdUnit = 2
+)
+
+// Valid indicates whether the value is a known member of the PromotionPatchRequestThresholdUnit enum.
+func (e PromotionPatchRequestThresholdUnit) Valid() bool {
+	switch e {
+	case PromotionPatchRequestThresholdUnitN0:
+		return true
+	case PromotionPatchRequestThresholdUnitN1:
+		return true
+	case PromotionPatchRequestThresholdUnitN2:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PromotionType.
+const (
+	PromotionTypeN1 PromotionType = 1
+	PromotionTypeN2 PromotionType = 2
+	PromotionTypeN3 PromotionType = 3
+	PromotionTypeN4 PromotionType = 4
+	PromotionTypeN5 PromotionType = 5
+)
+
+// Valid indicates whether the value is a known member of the PromotionType enum.
+func (e PromotionType) Valid() bool {
+	switch e {
+	case PromotionTypeN1:
+		return true
+	case PromotionTypeN2:
+		return true
+	case PromotionTypeN3:
+		return true
+	case PromotionTypeN4:
+		return true
+	case PromotionTypeN5:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for RefundChannel.
 const (
 	RefundChannelAlipay  RefundChannel = "alipay"
@@ -1180,6 +1354,7 @@ func (e UserGender) Valid() bool {
 const (
 	UserCouponSourceN1 UserCouponSource = 1
 	UserCouponSourceN2 UserCouponSource = 2
+	UserCouponSourceN3 UserCouponSource = 3
 )
 
 // Valid indicates whether the value is a known member of the UserCouponSource enum.
@@ -1188,6 +1363,8 @@ func (e UserCouponSource) Valid() bool {
 	case UserCouponSourceN1:
 		return true
 	case UserCouponSourceN2:
+		return true
+	case UserCouponSourceN3:
 		return true
 	default:
 		return false
@@ -1251,6 +1428,51 @@ func (e GetAdminProductsParamsStatus) Valid() bool {
 	case GetAdminProductsParamsStatusN1:
 		return true
 	case GetAdminProductsParamsStatusN2:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GetAdminPromotionsParamsStatus.
+const (
+	GetAdminPromotionsParamsStatusN0 GetAdminPromotionsParamsStatus = 0
+	GetAdminPromotionsParamsStatusN1 GetAdminPromotionsParamsStatus = 1
+)
+
+// Valid indicates whether the value is a known member of the GetAdminPromotionsParamsStatus enum.
+func (e GetAdminPromotionsParamsStatus) Valid() bool {
+	switch e {
+	case GetAdminPromotionsParamsStatusN0:
+		return true
+	case GetAdminPromotionsParamsStatusN1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GetAdminPromotionsParamsPromotionType.
+const (
+	GetAdminPromotionsParamsPromotionTypeN1 GetAdminPromotionsParamsPromotionType = 1
+	GetAdminPromotionsParamsPromotionTypeN2 GetAdminPromotionsParamsPromotionType = 2
+	GetAdminPromotionsParamsPromotionTypeN3 GetAdminPromotionsParamsPromotionType = 3
+	GetAdminPromotionsParamsPromotionTypeN4 GetAdminPromotionsParamsPromotionType = 4
+	GetAdminPromotionsParamsPromotionTypeN5 GetAdminPromotionsParamsPromotionType = 5
+)
+
+// Valid indicates whether the value is a known member of the GetAdminPromotionsParamsPromotionType enum.
+func (e GetAdminPromotionsParamsPromotionType) Valid() bool {
+	switch e {
+	case GetAdminPromotionsParamsPromotionTypeN1:
+		return true
+	case GetAdminPromotionsParamsPromotionTypeN2:
+		return true
+	case GetAdminPromotionsParamsPromotionTypeN3:
+		return true
+	case GetAdminPromotionsParamsPromotionTypeN4:
+		return true
+	case GetAdminPromotionsParamsPromotionTypeN5:
 		return true
 	default:
 		return false
@@ -1640,6 +1862,12 @@ type AdminOrderDetail struct {
 	PayableCents Money           `json:"payable_cents"`
 	Payments     []PaymentRecord `json:"payments"`
 
+	// PromotionDiscountCents 满减满折的优惠合计，已含在 `discount_cents` 里。
+	PromotionDiscountCents *Money `json:"promotion_discount_cents,omitempty"`
+
+	// Promotions 这一单命中的活动，**下单时的快照**。没命中任何活动时为空数组。
+	Promotions *[]OrderPromotion `json:"promotions,omitempty"`
+
 	// Receiver 下单时的收货信息快照
 	Receiver ReceiverSnapshot `json:"receiver"`
 
@@ -1731,6 +1959,12 @@ type AdminOrderSummary struct {
 
 	// PayableCents 金额，单位「分」。禁止使用浮点。
 	PayableCents Money `json:"payable_cents"`
+
+	// PromotionDiscountCents 满减满折的优惠合计，已含在 `discount_cents` 里。
+	PromotionDiscountCents *Money `json:"promotion_discount_cents,omitempty"`
+
+	// Promotions 这一单命中的活动，**下单时的快照**。没命中任何活动时为空数组。
+	Promotions *[]OrderPromotion `json:"promotions,omitempty"`
 
 	// Receiver 下单时的收货信息快照
 	Receiver ReceiverSnapshot `json:"receiver"`
@@ -1870,6 +2104,60 @@ type AdminProductDetail struct {
 // AdminProductDetailStatus `products.status`：0 草稿 / 1 上架 / 2 下架。
 // 改它只能经 `POST /admin/products/{product_id}/publication`。
 type AdminProductDetailStatus int
+
+// AdminPromotion defines model for AdminPromotion.
+type AdminPromotion struct {
+	CreatedAt time.Time `json:"created_at"`
+	EndsAt    time.Time `json:"ends_at"`
+
+	// GiftCouponTemplateId 新人礼发哪一批券。其他类型不出现。
+	GiftCouponTemplateId *int64 `json:"gift_coupon_template_id,omitempty"`
+
+	// GiftGrantedCount 新人礼已经发出的张数。其他类型不出现。
+	GiftGrantedCount *int   `json:"gift_granted_count,omitempty"`
+	Id               int64  `json:"id"`
+	Name             string `json:"name"`
+
+	// Phase 现算的阶段：`offline` 下线；`scheduled` 已上线、未开始；`running` 进行中；`ended` 已上线、已结束。
+	Phase AdminPromotionPhase `json:"phase"`
+
+	// PromotionType 1 满减 · 2 满折 · 3 限时折扣（特价） · 4 秒杀 · 5 新人礼。
+	//
+	// 计价顺序（数据模型 §7「优惠计算顺序」）：门店最终价 → **3 / 4 改单价**
+	// （活动价 = min(门店价, 特价)）→ **1 / 2 按行分摊**（每行至多参与一个满减满折）→
+	// 券（门槛与计算基数是活动后金额）→ 运费。5 不参与计价：它在买家首单前自动发一张券。
+	PromotionType PromotionType `json:"promotion_type"`
+
+	// Scopes 适用范围（与券同一套语义）。空数组即全场、全店。
+	Scopes []CouponScope `json:"scopes"`
+
+	// Skus 限时折扣 / 秒杀的活动商品。其他类型为空数组。
+	Skus []PromotionSku `json:"skus"`
+
+	// StackWithCoupon 能否与优惠券同享。命中了一个 `false` 的活动，这一单就不能再用券
+	// （试算 / 下单带券返回 409 `coupon-not-applicable`，`applicable_coupons` 为空）。
+	StackWithCoupon bool      `json:"stack_with_coupon"`
+	StartsAt        time.Time `json:"starts_at"`
+
+	// Status 1 上线 · 0 下线。上线且在有效期内才生效（见 `phase`）。
+	Status AdminPromotionStatus `json:"status"`
+
+	// ThresholdUnit 满减满折的门槛单位：1 金额（分）· 2 件数。其他类型为 0。
+	ThresholdUnit AdminPromotionThresholdUnit `json:"threshold_unit"`
+
+	// Tiers 满减满折的阶梯，按门槛升序。其他类型为空数组。
+	Tiers     []PromotionTier `json:"tiers"`
+	UpdatedAt time.Time       `json:"updated_at"`
+}
+
+// AdminPromotionPhase 现算的阶段：`offline` 下线；`scheduled` 已上线、未开始；`running` 进行中；`ended` 已上线、已结束。
+type AdminPromotionPhase string
+
+// AdminPromotionStatus 1 上线 · 0 下线。上线且在有效期内才生效（见 `phase`）。
+type AdminPromotionStatus int
+
+// AdminPromotionThresholdUnit 满减满折的门槛单位：1 金额（分）· 2 件数。其他类型为 0。
+type AdminPromotionThresholdUnit int
 
 // AdminRefund 后台视角的退款单：买家侧 `Refund` 的全部字段，加上履约门店与审核记录。
 //
@@ -2256,7 +2544,7 @@ type ApplicableCoupon struct {
 	// Scopes 这张券的适用范围（来自模板）。空数组即全场、全店。
 	Scopes []CouponScope `json:"scopes"`
 
-	// Source 1 领券中心领取 · 2 商家定向发放
+	// Source 1 领券中心领取 · 2 商家定向发放 · 3 新人礼（营销活动自动发放，数据模型 §7）
 	Source ApplicableCouponSource `json:"source"`
 
 	// Status 1 未使用 · 2 锁定 · 3 已使用 · 4 已过期
@@ -2276,7 +2564,7 @@ type ApplicableCoupon struct {
 	ValidStartAt   time.Time  `json:"valid_start_at"`
 }
 
-// ApplicableCouponSource 1 领券中心领取 · 2 商家定向发放
+// ApplicableCouponSource 1 领券中心领取 · 2 商家定向发放 · 3 新人礼（营销活动自动发放，数据模型 §7）
 type ApplicableCouponSource int
 
 // ApplicableCouponStatus 1 未使用 · 2 锁定 · 3 已使用 · 4 已过期
@@ -2292,6 +2580,14 @@ type ApplicableCouponStatus int
 type Cart struct {
 	Items []CartItem `json:"items"`
 
+	// PromotionDiscountCents 已勾选、可买的行命中满减满折的优惠合计（不含券）。把这些行送进 `/orders/preview`，
+	// 得到的 `promotion_discount_cents` 与它逐分相等——同一份计算。
+	PromotionDiscountCents Money `json:"promotion_discount_cents"`
+
+	// Promotions 已勾选、可买的行上各活动的结果：命中了哪些、各减多少、还差多少凑满（`PromotionHit`）。
+	// 没有任何活动时为空数组。
+	Promotions []PromotionHit `json:"promotions"`
+
 	// SelectedTotalCents **仅已勾选**（`selected: true`）条目的金额合计，即点「去结算」时的预估金额。
 	// 同样只计 `status = available` 的行。把这些行按同一个 `store_id` 送进
 	// `/orders/preview`，得到的 `goods_amount_cents` 与它逐分相等——两边读的是
@@ -2300,6 +2596,8 @@ type Cart struct {
 	// 两个字段都给，是因为购物车页同时要显示这两个数——底部结算栏显示已选金额，
 	// 而「全选」复选框需要知道全车总数。只给一个的话客户端就得自己遍历累加，
 	// 那等于把金额计算规则复制到每个端上。
+	//
+	// 命中限时折扣 / 秒杀的行按**活动价**计（同 `CartItem.price_cents`），与试算一致。
 	SelectedTotalCents Money `json:"selected_total_cents"`
 
 	// Store 本次的价格与可买状态是按哪家门店算的。**必返**，理由同 `GET /products`。
@@ -2322,6 +2620,9 @@ type CartItem struct {
 	Id        int64   `json:"id"`
 	ImageUrl  *string `json:"image_url,omitempty"`
 
+	// ListPriceCents 门店最终价。只有 `price_cents` 是活动价时才出现（用来划线展示原价）。
+	ListPriceCents *int64 `json:"list_price_cents,omitempty"`
+
 	// PriceCents **实时价，不是加购时的快照。** 购物车刻意不存价格快照（见数据模型 §10），
 	// 这个值随商品调价而变。不要据此做「降价提醒」；
 	// 最终以 `/orders/preview` 的试算结果为准，价格快照只在下单瞬间产生。
@@ -2330,9 +2631,14 @@ type CartItem struct {
 	// **`status` 为 `not_sold_in_store` 或 `off_shelf` 时为 null**：这家店此刻
 	// 不卖它，也就没有一个「它多少钱」的答案——给一个基准价会让用户以为
 	// 还能按这个价买到。
+	//
+	// 命中限时折扣 / 秒杀时是**活动价**（min(门店价, 特价)），门店价在 `list_price_cents`。
 	PriceCents *int64 `json:"price_cents"`
-	ProductId  *int64 `json:"product_id,omitempty"`
-	Quantity   int    `json:"quantity"`
+
+	// PricePromotionId 给出活动价的那个限时折扣 / 秒杀活动。与 `list_price_cents` 同进同出。
+	PricePromotionId *int64 `json:"price_promotion_id,omitempty"`
+	ProductId        *int64 `json:"product_id,omitempty"`
+	Quantity         int    `json:"quantity"`
 
 	// Selected 是否勾选结算，对应 `cart_items.selected`。
 	// 勾选态存在服务端，换设备打开购物车不会丢。
@@ -2829,6 +3135,12 @@ type Order struct {
 	// PayableCents 金额，单位「分」。禁止使用浮点。
 	PayableCents Money `json:"payable_cents"`
 
+	// PromotionDiscountCents 满减满折的优惠合计，已含在 `discount_cents` 里。
+	PromotionDiscountCents *Money `json:"promotion_discount_cents,omitempty"`
+
+	// Promotions 这一单命中的活动，**下单时的快照**。没命中任何活动时为空数组。
+	Promotions *[]OrderPromotion `json:"promotions,omitempty"`
+
 	// RefundStatus 售后状态，与 status 正交，必返字段（DB 上是 `NOT NULL DEFAULT 0`）。
 	// 没有它，「买 3 件退 1 件的已发货订单」和「完全没有售后的订单」
 	// 在响应里一模一样 —— `refunded_cents` 在退款到账前是 0，
@@ -2935,6 +3247,12 @@ type OrderDetail struct {
 	PayableCents Money            `json:"payable_cents"`
 	Payments     *[]PaymentRecord `json:"payments,omitempty"`
 
+	// PromotionDiscountCents 满减满折的优惠合计，已含在 `discount_cents` 里。
+	PromotionDiscountCents *Money `json:"promotion_discount_cents,omitempty"`
+
+	// Promotions 这一单命中的活动，**下单时的快照**。没命中任何活动时为空数组。
+	Promotions *[]OrderPromotion `json:"promotions,omitempty"`
+
 	// Receiver 下单时的收货信息快照
 	Receiver *ReceiverSnapshot `json:"receiver,omitempty"`
 
@@ -2995,15 +3313,25 @@ type OrderItem struct {
 	// AmountCents 金额，单位「分」。禁止使用浮点。
 	AmountCents *Money `json:"amount_cents,omitempty"`
 
-	// DiscountCents 金额，单位「分」。禁止使用浮点。
+	// DiscountCents 该行分摊到的全部优惠（满减满折 + 券）。退款按 `amount_cents − discount_cents` 这份
+	// 实付净额退（数据模型 §11），所以一行退完恰好等于这一行的实付。
 	DiscountCents *Money  `json:"discount_cents,omitempty"`
 	Id            int64   `json:"id"`
 	ImageUrl      *string `json:"image_url,omitempty"`
 
-	// PriceCents 金额，单位「分」。禁止使用浮点。
-	PriceCents Money  `json:"price_cents"`
-	ProductId  *int64 `json:"product_id,omitempty"`
-	Quantity   int    `json:"quantity"`
+	// ListPriceCents 下单时的门店最终价（快照）。没有命中单价类活动时与 `price_cents` 相等。
+	ListPriceCents *Money `json:"list_price_cents,omitempty"`
+
+	// PriceCents 成交单价（快照）。命中限时折扣 / 秒杀时是活动价。
+	PriceCents Money `json:"price_cents"`
+
+	// PricePromotionId 改了这一行单价的限时折扣 / 秒杀活动。没有就不出现。
+	PricePromotionId *int64 `json:"price_promotion_id,omitempty"`
+	ProductId        *int64 `json:"product_id,omitempty"`
+
+	// PromotionDiscountCents 其中满减满折分摊到这一行的部分。
+	PromotionDiscountCents *Money `json:"promotion_discount_cents,omitempty"`
+	Quantity               int    `json:"quantity"`
 
 	// RefundedQty 已退款完成的件数
 	RefundedQty *int `json:"refunded_qty,omitempty"`
@@ -3035,7 +3363,13 @@ type OrderItemInput struct {
 type OrderPreview struct {
 	// ApplicableCoupons 这个买家手里本单可用的全部券，按优惠额降序——与 `POST /coupons/applicable`
 	// 同一份结果。客户端据此渲染「选券」，不必再单独请求一次。
+	//
+	// 券的门槛与计算基数是**活动后金额**（每行 `amount_cents − promotion_discount_cents`）。
+	// 本单命中了不与券同享的活动时为空数组。
 	ApplicableCoupons *[]ApplicableCoupon `json:"applicable_coupons,omitempty"`
+
+	// CouponDiscountCents 券的减免（`discount_cents − promotion_discount_cents`）。没带券为 0。
+	CouponDiscountCents Money `json:"coupon_discount_cents"`
 
 	// DiscountCents 金额，单位「分」。禁止使用浮点。
 	DiscountCents *Money `json:"discount_cents,omitempty"`
@@ -3046,40 +3380,19 @@ type OrderPreview struct {
 	// GoodsAmountCents 金额，单位「分」。禁止使用浮点。
 	GoodsAmountCents Money `json:"goods_amount_cents"`
 
-	// Items 含优惠分摊结果。
-	//
-	// > **这一段是内联 schema，而内联在这里已经是一笔债了。**
-	// > 本轮想给每一行加一个 `price_source`（这一行的单价来自基准价 /
-	// > 大区价 / 门店价的哪一层，与 `order_items.price_source` 同源），
-	// > **加不进去**：内联 schema 让 oapi-codegen 生成一个**匿名 struct**，
-	// > 而 `internal/handler/order.go` 里有一处按字段拼出来的
-	// > `[]struct{...}` 字面量 —— 匿名类型只要多一个字段就不再可赋值，
-	// > 实测报错：
-	// >
-	// > ```
-	// > internal/handler/order.go:92:21: cannot use items (variable of type
-	// >   []struct{AmountCents ...; DiscountCents ...; Quantity ...; SkuId ...})
-	// >   as []struct{AmountCents ...; DiscountCents ...;
-	// >               PriceSource *api.OrderPreviewItemsPriceSource; ...}
-	// > ```
-	// >
-	// > 这正是「请求体不要用内联 schema」那条规矩的**响应侧同一个毛病**：
-	// > 内联类型没有名字，于是它的每一次演进都是一次破坏性变更。
-	// > 提成具名的 `OrderPreviewItem` 会同样破坏那个字面量，
-	// > 所以这件事要和 handler 一起改，不能只改契约。
-	// > 记在数据模型 §15。
-	Items []struct {
-		// AmountCents 金额，单位「分」。禁止使用浮点。
-		AmountCents *Money `json:"amount_cents,omitempty"`
-
-		// DiscountCents 该行分摊到的优惠。余数归金额最大行，保证求和恒等。
-		DiscountCents *Money `json:"discount_cents,omitempty"`
-		Quantity      *int   `json:"quantity,omitempty"`
-		SkuId         *int64 `json:"sku_id,omitempty"`
-	} `json:"items"`
+	// Items 含单价类活动的活动价与优惠分摊结果（活动与券各自一份、合计一份）。
+	Items []OrderPreviewItem `json:"items"`
 
 	// PayableCents 金额，单位「分」。禁止使用浮点。
 	PayableCents Money `json:"payable_cents"`
+
+	// PromotionDiscountCents 满减满折的优惠合计，已含在 `discount_cents` 里（`discount_cents` = 活动 + 券）。
+	// 限时折扣 / 秒杀不在这里——它们改的是单价，已经体现在 `goods_amount_cents` 里。
+	PromotionDiscountCents Money `json:"promotion_discount_cents"`
+
+	// Promotions 本单各活动的结果（`PromotionHit`）：命中了哪些、各减多少、还差多少凑满。
+	// 没有任何活动时为空数组。
+	Promotions []PromotionHit `json:"promotions"`
 
 	// RegionId 那家门店所属大区。价格的中间一层按它算（数据模型 §4）。
 	RegionId *int64 `json:"region_id,omitempty"`
@@ -3090,6 +3403,46 @@ type OrderPreview struct {
 
 	// UserCouponId 本次试算用上的券（回显请求里的 `user_coupon_id`）。没带券时不出现。
 	UserCouponId *int64 `json:"user_coupon_id,omitempty"`
+}
+
+// OrderPreviewItem 试算的一行。**本轮从内联 schema 提成了具名类型**（数据模型 §15 记过的那笔债）：
+// 加 `list_price_cents` 这几个字段时，内联匿名 struct 会让 handler 里那处字面量编译失败。
+type OrderPreviewItem struct {
+	// AmountCents `price_cents × quantity`。
+	AmountCents Money `json:"amount_cents"`
+
+	// DiscountCents 该行分摊到的全部优惠（满减满折 + 券）。余数归金额最大行，保证求和恒等。
+	DiscountCents Money `json:"discount_cents"`
+
+	// ListPriceCents 门店最终价（三层定价的结果）。没有命中单价类活动时与 `price_cents` 相等。
+	ListPriceCents Money `json:"list_price_cents"`
+
+	// PriceCents 成交单价：门店价，或命中限时折扣 / 秒杀时的活动价（二者取低）。
+	PriceCents Money `json:"price_cents"`
+
+	// PricePromotionId 改了这一行单价的那个限时折扣 / 秒杀活动。没有就不出现。
+	PricePromotionId *int64 `json:"price_promotion_id,omitempty"`
+
+	// PromotionDiscountCents 其中满减满折分摊到这一行的部分。券那一部分 = `discount_cents − promotion_discount_cents`。
+	PromotionDiscountCents Money `json:"promotion_discount_cents"`
+	Quantity               int   `json:"quantity"`
+	SkuId                  int64 `json:"sku_id"`
+}
+
+// OrderPromotion 订单上命中的活动，**下单时的快照**（活动之后改名、改规则、下线都不影响它）。
+type OrderPromotion struct {
+	// DiscountCents 同 `PromotionHit.discount_cents`：满减满折计入订单优惠；限时折扣 / 秒杀已体现在单价里。
+	DiscountCents Money  `json:"discount_cents"`
+	Name          string `json:"name"`
+	PromotionId   int64  `json:"promotion_id"`
+
+	// PromotionType 1 满减 · 2 满折 · 3 限时折扣（特价） · 4 秒杀 · 5 新人礼。
+	//
+	// 计价顺序（数据模型 §7「优惠计算顺序」）：门店最终价 → **3 / 4 改单价**
+	// （活动价 = min(门店价, 特价)）→ **1 / 2 按行分摊**（每行至多参与一个满减满折）→
+	// 券（门槛与计算基数是活动后金额）→ 运费。5 不参与计价：它在买家首单前自动发一张券。
+	PromotionType PromotionType `json:"promotion_type"`
+	SkuIds        []int64       `json:"sku_ids"`
 }
 
 // OrderRefundStatus **资金维度** —— 钱退了多少，与 `status` 正交，由退款单驱动。
@@ -3237,8 +3590,13 @@ type ProductDetail struct {
 
 	// MinPriceCents 金额，单位「分」。禁止使用浮点。
 	MinPriceCents Money `json:"min_price_cents"`
-	SalesCount    *int  `json:"sales_count,omitempty"`
-	Skus          []Sku `json:"skus"`
+
+	// PromotionTags 这件商品在响应里 `store` 那家门店**此刻生效**的活动标签（满减满折、限时折扣、秒杀）。
+	// 没有活动时为空数组。`min_price_cents` 仍是门店价，不是活动价——活动价看标签与
+	// `Sku.promo_price_cents`，最终以 `/orders/preview` 为准。
+	PromotionTags *[]PromotionTag `json:"promotion_tags,omitempty"`
+	SalesCount    *int            `json:"sales_count,omitempty"`
+	Skus          []Sku           `json:"skus"`
 
 	// Status 对应 `products.status`：0 草稿 / 1 上架 / 2 下架。
 	// 前台列表与检索只返回 `1`；订单、购物车里引用的历史商品可能是 `2`，
@@ -3314,7 +3672,12 @@ type ProductSummary struct {
 
 	// MinPriceCents 金额，单位「分」。禁止使用浮点。
 	MinPriceCents Money `json:"min_price_cents"`
-	SalesCount    *int  `json:"sales_count,omitempty"`
+
+	// PromotionTags 这件商品在响应里 `store` 那家门店**此刻生效**的活动标签（满减满折、限时折扣、秒杀）。
+	// 没有活动时为空数组。`min_price_cents` 仍是门店价，不是活动价——活动价看标签与
+	// `Sku.promo_price_cents`，最终以 `/orders/preview` 为准。
+	PromotionTags *[]PromotionTag `json:"promotion_tags,omitempty"`
+	SalesCount    *int            `json:"sales_count,omitempty"`
 
 	// Status 对应 `products.status`：0 草稿 / 1 上架 / 2 下架。
 	// 前台列表与检索只返回 `1`；订单、购物车里引用的历史商品可能是 `2`，
@@ -3338,6 +3701,165 @@ type ProductUpdateRequest struct {
 	Subtitle    *string `json:"subtitle,omitempty"`
 	Title       *string `json:"title,omitempty"`
 }
+
+// PromotionCreateRequest defines model for PromotionCreateRequest.
+type PromotionCreateRequest struct {
+	EndsAt               time.Time `json:"ends_at"`
+	GiftCouponTemplateId *int64    `json:"gift_coupon_template_id,omitempty"`
+	Name                 string    `json:"name"`
+
+	// PromotionType 1 满减 · 2 满折 · 3 限时折扣（特价） · 4 秒杀 · 5 新人礼。
+	//
+	// 计价顺序（数据模型 §7「优惠计算顺序」）：门店最终价 → **3 / 4 改单价**
+	// （活动价 = min(门店价, 特价)）→ **1 / 2 按行分摊**（每行至多参与一个满减满折）→
+	// 券（门槛与计算基数是活动后金额）→ 运费。5 不参与计价：它在买家首单前自动发一张券。
+	PromotionType   PromotionType                        `json:"promotion_type"`
+	Scopes          *[]CouponScopeInput                  `json:"scopes,omitempty"`
+	Skus            *[]PromotionSkuInput                 `json:"skus,omitempty"`
+	StackWithCoupon *bool                                `json:"stack_with_coupon,omitempty"`
+	StartsAt        time.Time                            `json:"starts_at"`
+	ThresholdUnit   *PromotionCreateRequestThresholdUnit `json:"threshold_unit,omitempty"`
+	Tiers           *[]PromotionTier                     `json:"tiers,omitempty"`
+}
+
+// PromotionCreateRequestThresholdUnit defines model for PromotionCreateRequest.ThresholdUnit.
+type PromotionCreateRequestThresholdUnit int
+
+// PromotionHit 一个活动在这一单（或购物车已勾选的行）上的结果。试算、购物车、下单用的是同一份计算
+// （service/promotion_calc.go）。
+//
+//   - 满减 / 满折：`applied = true` 时 `discount_cents` 是它减掉的钱，已计入
+//     `promotion_discount_cents`，并按行分摊进每一行的 `promotion_discount_cents`；
+//     `applied = false` 时 `shortfall` 是还差多少凑满最低一档（单位见 `threshold_unit`）。
+//     命中了某一档时 `next_threshold` / `shortfall` 说的是离下一档还差多少（已是最高档则不出现）。
+//   - 限时折扣 / 秒杀：`discount_cents` 是 (门店价 − 活动价) × 件数，**已经体现在单价里**，
+//     不计入 `discount_cents` / `promotion_discount_cents`——只用来展示「活动省了多少」。
+type PromotionHit struct {
+	Applied bool `json:"applied"`
+
+	// DiscountCents 金额，单位「分」。禁止使用浮点。
+	DiscountCents Money `json:"discount_cents"`
+
+	// Message 给人看的一句话，例如「已减 10 元，再买 50 元可减 30 元」「还差 1 件享 9 折」。
+	Message string `json:"message"`
+	Name    string `json:"name"`
+
+	// NextThreshold 下一档（未命中时即最低一档）的门槛。已是最高档不出现。
+	NextThreshold *int64 `json:"next_threshold,omitempty"`
+	PromotionId   int64  `json:"promotion_id"`
+
+	// PromotionType 1 满减 · 2 满折 · 3 限时折扣（特价） · 4 秒杀 · 5 新人礼。
+	//
+	// 计价顺序（数据模型 §7「优惠计算顺序」）：门店最终价 → **3 / 4 改单价**
+	// （活动价 = min(门店价, 特价)）→ **1 / 2 按行分摊**（每行至多参与一个满减满折）→
+	// 券（门槛与计算基数是活动后金额）→ 运费。5 不参与计价：它在买家首单前自动发一张券。
+	PromotionType PromotionType `json:"promotion_type"`
+
+	// ReachedThreshold 命中的那一档门槛。未命中不出现。
+	ReachedThreshold *int64 `json:"reached_threshold,omitempty"`
+
+	// Shortfall 离 `next_threshold` 还差多少（分或件，见 `threshold_unit`）。
+	Shortfall *int64 `json:"shortfall,omitempty"`
+
+	// SkuIds 参与这个活动的行（SKU）。
+	SkuIds          []int64                    `json:"sku_ids"`
+	StackWithCoupon *bool                      `json:"stack_with_coupon,omitempty"`
+	ThresholdUnit   *PromotionHitThresholdUnit `json:"threshold_unit,omitempty"`
+}
+
+// PromotionHitThresholdUnit defines model for PromotionHit.ThresholdUnit.
+type PromotionHitThresholdUnit int
+
+// PromotionPatchRequest 只改传了的字段；`tiers` / `scopes` / `skus` 传了即整组替换。
+type PromotionPatchRequest struct {
+	EndsAt               *time.Time                          `json:"ends_at,omitempty"`
+	GiftCouponTemplateId *int64                              `json:"gift_coupon_template_id,omitempty"`
+	Name                 *string                             `json:"name,omitempty"`
+	Scopes               *[]CouponScopeInput                 `json:"scopes,omitempty"`
+	Skus                 *[]PromotionSkuInput                `json:"skus,omitempty"`
+	StackWithCoupon      *bool                               `json:"stack_with_coupon,omitempty"`
+	StartsAt             *time.Time                          `json:"starts_at,omitempty"`
+	Status               *PromotionPatchRequestStatus        `json:"status,omitempty"`
+	ThresholdUnit        *PromotionPatchRequestThresholdUnit `json:"threshold_unit,omitempty"`
+	Tiers                *[]PromotionTier                    `json:"tiers,omitempty"`
+}
+
+// PromotionPatchRequestStatus defines model for PromotionPatchRequest.Status.
+type PromotionPatchRequestStatus int
+
+// PromotionPatchRequestThresholdUnit defines model for PromotionPatchRequest.ThresholdUnit.
+type PromotionPatchRequestThresholdUnit int
+
+// PromotionSku 限时折扣 / 秒杀的一个 SKU。`promo_price_cents`（特价，分）与 `discount_rate`（千分比）二选一，
+// 另一个为 0。折扣价 = ⌈门店价 × discount_rate / 1000⌉（向上取整到分，与券的「折扣向下取整」同一个方向：
+// 误差对商家有利、每件不到 1 分）。
+type PromotionSku struct {
+	DiscountRate int `json:"discount_rate"`
+
+	// PerUserLimit 每人限购件数（同一活动、同一 SKU），0 = 不限。只计未关闭的订单。
+	PerUserLimit int `json:"per_user_limit"`
+
+	// PromoPriceCents 金额，单位「分」。禁止使用浮点。
+	PromoPriceCents Money `json:"promo_price_cents"`
+
+	// SkuCode SKU 编码（只读，展示用）。
+	SkuCode *string `json:"sku_code,omitempty"`
+	SkuId   int64   `json:"sku_id"`
+
+	// SoldQty 已按活动价售出（含待支付）的件数，只读。关单与 SAGA 补偿会放回。
+	SoldQty int `json:"sold_qty"`
+
+	// StockQty 秒杀配额（件）。**不是独立的实物库存**：秒杀成交的每一件仍然从门店库存扣，
+	// 这里只限「按秒杀价最多卖多少件」。限时折扣为 0（不限）。
+	StockQty int `json:"stock_qty"`
+
+	// Title 商品标题（只读，展示用）。
+	Title *string `json:"title,omitempty"`
+}
+
+// PromotionSkuInput defines model for PromotionSkuInput.
+type PromotionSkuInput struct {
+	DiscountRate *int `json:"discount_rate,omitempty"`
+	PerUserLimit *int `json:"per_user_limit,omitempty"`
+
+	// PromoPriceCents 金额，单位「分」。禁止使用浮点。
+	PromoPriceCents *Money `json:"promo_price_cents,omitempty"`
+	SkuId           int64  `json:"sku_id"`
+	StockQty        *int   `json:"stock_qty,omitempty"`
+}
+
+// PromotionTag 商品当前生效的活动标签（商品列表 / 详情）。按响应里 `store` 那家门店判：
+// 范围不含这家店、未上线、不在有效期内的活动不出标签。
+type PromotionTag struct {
+	EndsAt *time.Time `json:"ends_at,omitempty"`
+
+	// Label 给人看的标签，例如「满100减10」「满2件9折」「限时特价 ¥39.90」「秒杀 ¥9.90」。
+	Label       string `json:"label"`
+	PromotionId int64  `json:"promotion_id"`
+
+	// PromotionType 1 满减 · 2 满折 · 3 限时折扣（特价） · 4 秒杀 · 5 新人礼。
+	//
+	// 计价顺序（数据模型 §7「优惠计算顺序」）：门店最终价 → **3 / 4 改单价**
+	// （活动价 = min(门店价, 特价)）→ **1 / 2 按行分摊**（每行至多参与一个满减满折）→
+	// 券（门槛与计算基数是活动后金额）→ 运费。5 不参与计价：它在买家首单前自动发一张券。
+	PromotionType PromotionType `json:"promotion_type"`
+}
+
+// PromotionTier 满减 / 满折的一档。`threshold` 的单位由活动的 `threshold_unit` 决定（1 分 / 2 件）。
+// 满减填 `discount_cents`，满折填 `discount_rate`（千分比，900 = 9 折），另一个为 0。
+type PromotionTier struct {
+	// DiscountCents 金额，单位「分」。禁止使用浮点。
+	DiscountCents Money `json:"discount_cents"`
+	DiscountRate  int   `json:"discount_rate"`
+	Threshold     int64 `json:"threshold"`
+}
+
+// PromotionType 1 满减 · 2 满折 · 3 限时折扣（特价） · 4 秒杀 · 5 新人礼。
+//
+// 计价顺序（数据模型 §7「优惠计算顺序」）：门店最终价 → **3 / 4 改单价**
+// （活动价 = min(门店价, 特价)）→ **1 / 2 按行分摊**（每行至多参与一个满减满折）→
+// 券（门槛与计算基数是活动后金额）→ 运费。5 不参与计价：它在买家首单前自动发一张券。
+type PromotionType int
 
 // ReceiverSnapshot 下单瞬间从 `user_addresses` 拷贝的收货信息快照，落在
 // `orders.receiver_snapshot`。地址簿后来改了或删了，历史订单不受影响。
@@ -3683,6 +4205,11 @@ type SearchHit struct {
 	// MinPriceCents 金额，单位「分」。禁止使用浮点。
 	MinPriceCents Money `json:"min_price_cents"`
 
+	// PromotionTags 这件商品在响应里 `store` 那家门店**此刻生效**的活动标签（满减满折、限时折扣、秒杀）。
+	// 没有活动时为空数组。`min_price_cents` 仍是门店价，不是活动价——活动价看标签与
+	// `Sku.promo_price_cents`，最终以 `/orders/preview` 为准。
+	PromotionTags *[]PromotionTag `json:"promotion_tags,omitempty"`
+
 	// RecallSource 该结果来自哪一路召回，`explain=true` 时返回。
 	// 调双路召回权重时这是第一手信息——某类查询长期只由单路命中，
 	// 说明另一路在这类查询上失效了。
@@ -3780,8 +4307,15 @@ type Sku struct {
 	ImageUrl     *string `json:"image_url,omitempty"`
 
 	// PriceCents 金额，单位「分」。禁止使用浮点。
-	PriceCents Money  `json:"price_cents"`
-	SkuCode    string `json:"sku_code"`
+	PriceCents Money `json:"price_cents"`
+
+	// PromoPriceCents 这家门店此刻的活动价（限时折扣 / 秒杀，取 min(门店价, 特价)）。没有单价类活动、
+	// 或特价不低于门店价时不出现。秒杀配额已售罄时不出现。
+	PromoPriceCents *Money `json:"promo_price_cents,omitempty"`
+
+	// PromotionId 给出 `promo_price_cents` 的那个活动。与 `promo_price_cents` 同进同出。
+	PromotionId *int64 `json:"promotion_id,omitempty"`
+	SkuCode     string `json:"sku_code"`
 
 	// SpecValues Examples: {"尺码":"XL","颜色":"黑"}
 	SpecValues *map[string]string `json:"spec_values,omitempty"`
@@ -4202,7 +4736,7 @@ type UserCoupon struct {
 	// Scopes 这张券的适用范围（来自模板）。空数组即全场、全店。
 	Scopes []CouponScope `json:"scopes"`
 
-	// Source 1 领券中心领取 · 2 商家定向发放
+	// Source 1 领券中心领取 · 2 商家定向发放 · 3 新人礼（营销活动自动发放，数据模型 §7）
 	Source UserCouponSource `json:"source"`
 
 	// Status 1 未使用 · 2 锁定 · 3 已使用 · 4 已过期
@@ -4222,7 +4756,7 @@ type UserCoupon struct {
 	ValidStartAt   time.Time  `json:"valid_start_at"`
 }
 
-// UserCouponSource 1 领券中心领取 · 2 商家定向发放
+// UserCouponSource 1 领券中心领取 · 2 商家定向发放 · 3 新人礼（营销活动自动发放，数据模型 §7）
 type UserCouponSource int
 
 // UserCouponStatus 1 未使用 · 2 锁定 · 3 已使用 · 4 已过期
@@ -4283,6 +4817,9 @@ type PageSize = int
 
 // ProductId defines model for ProductId.
 type ProductId = int64
+
+// PromotionId defines model for PromotionId.
+type PromotionId = int64
 
 // RefundNo defines model for RefundNo.
 type RefundNo = string
@@ -5220,6 +5757,145 @@ type PostAdminProductsProductIdSkusParams struct {
 	// · 首次执行失败（存档为失败态）时同样回放该失败响应；
 	//   确需重试的场景请换一个新 key
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// GetAdminPromotionsParams defines parameters for GetAdminPromotions.
+type GetAdminPromotionsParams struct {
+	Page     *Page     `form:"page,omitempty" json:"page,omitempty"`
+	PageSize *PageSize `form:"page_size,omitempty" json:"page_size,omitempty"`
+
+	// Status 按上下线筛选。不传即全部。
+	Status *GetAdminPromotionsParamsStatus `form:"status,omitempty" json:"status,omitempty"`
+
+	// PromotionType 按活动类型筛选。不传即全部。
+	PromotionType *GetAdminPromotionsParamsPromotionType `form:"promotion_type,omitempty" json:"promotion_type,omitempty"`
+
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// GetAdminPromotionsParamsStatus defines parameters for GetAdminPromotions.
+type GetAdminPromotionsParamsStatus int
+
+// GetAdminPromotionsParamsPromotionType defines parameters for GetAdminPromotions.
+type GetAdminPromotionsParamsPromotionType int
+
+// PostAdminPromotionsParams defines parameters for PostAdminPromotions.
+type PostAdminPromotionsParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+
+	// IdempotencyKey 客户端生成的 UUID。幂等作用域为 `(接口 scope, user_id, key)`，
+	// 有效期 24h，过期后同一 key 可复用（见数据模型文档 §11）。
+	//
+	// · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
+	//   并带 `Idempotency-Replayed: true` 响应头
+	// · **同 key 正在处理中**：`409` + `Retry-After`，
+	//   type=https://keel.dev/problems/idempotency-key-in-flight，
+	//   客户端应退避重试，不要当成业务失败
+	// · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
+	//   type=https://keel.dev/problems/idempotency-key-reused。
+	//   宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
+	//   那会让用户以为下单成功了而实际什么都没发生
+	// · 首次执行失败（存档为失败态）时同样回放该失败响应；
+	//   确需重试的场景请换一个新 key
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// GetAdminPromotionsPromotionIdParams defines parameters for GetAdminPromotionsPromotionId.
+type GetAdminPromotionsPromotionIdParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// PatchAdminPromotionsPromotionIdParams defines parameters for PatchAdminPromotionsPromotionId.
+type PatchAdminPromotionsPromotionIdParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
 }
 
 // GetAdminRefundsParams defines parameters for GetAdminRefunds.
@@ -6989,6 +7665,12 @@ type PostAdminProductsProductIdPublicationJSONRequestBody = ProductPublicationRe
 
 // PostAdminProductsProductIdSkusJSONRequestBody defines body for PostAdminProductsProductIdSkus for application/json ContentType.
 type PostAdminProductsProductIdSkusJSONRequestBody = SkuCreateRequest
+
+// PostAdminPromotionsJSONRequestBody defines body for PostAdminPromotions for application/json ContentType.
+type PostAdminPromotionsJSONRequestBody = PromotionCreateRequest
+
+// PatchAdminPromotionsPromotionIdJSONRequestBody defines body for PatchAdminPromotionsPromotionId for application/json ContentType.
+type PatchAdminPromotionsPromotionIdJSONRequestBody = PromotionPatchRequest
 
 // PostAdminRefundsRefundNoAuditJSONRequestBody defines body for PostAdminRefundsRefundNoAudit for application/json ContentType.
 type PostAdminRefundsRefundNoAuditJSONRequestBody PostAdminRefundsRefundNoAuditJSONBody

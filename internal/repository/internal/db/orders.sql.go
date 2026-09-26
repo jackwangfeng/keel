@@ -207,7 +207,7 @@ const createOrderDraft = `-- name: CreateOrderDraft :one
 INSERT INTO orders (order_no, user_id, store_id, region_id, store_snapshot,
                     status, goods_amount_cents, freight_cents,
                     discount_cents, payable_cents, receiver_snapshot, remark, expire_at,
-                    user_coupon_id, coupon_name)
+                    user_coupon_id, coupon_name, promotion_discount_cents, promotions)
 SELECT $1, $2, st.id, st.region_id,
        jsonb_build_object('store_name', st.name, 'region_name', r.name,
                           'address', st.address, 'phone', st.phone),
@@ -218,46 +218,52 @@ SELECT $1, $2, st.id, st.region_id,
        (SELECT ct.name
           FROM user_coupons uc
           JOIN coupon_templates ct ON ct.id = uc.template_id
-         WHERE uc.id = $10)
+         WHERE uc.id = $10),
+       $11, $12
   FROM stores st
   JOIN regions r ON r.id = st.region_id
- WHERE st.id = $11 AND st.deleted_at IS NULL
+ WHERE st.id = $13 AND st.deleted_at IS NULL
 RETURNING id, order_no, store_id, region_id, status, goods_amount_cents, freight_cents,
           discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
-          expire_at, created_at, user_coupon_id, coupon_name
+          expire_at, created_at, user_coupon_id, coupon_name, promotion_discount_cents,
+          promotions
 `
 
 type CreateOrderDraftParams struct {
-	OrderNo          string
-	UserID           int64
-	GoodsAmountCents int64
-	FreightCents     int64
-	DiscountCents    int64
-	PayableCents     int64
-	ReceiverSnapshot []byte
-	Remark           *string
-	ExpireAt         pgtype.Timestamptz
-	UserCouponID     *int64
-	StoreID          int64
+	OrderNo                string
+	UserID                 int64
+	GoodsAmountCents       int64
+	FreightCents           int64
+	DiscountCents          int64
+	PayableCents           int64
+	ReceiverSnapshot       []byte
+	Remark                 *string
+	ExpireAt               pgtype.Timestamptz
+	UserCouponID           *int64
+	PromotionDiscountCents int64
+	Promotions             []byte
+	StoreID                int64
 }
 
 type CreateOrderDraftRow struct {
-	ID               int64
-	OrderNo          string
-	StoreID          int64
-	RegionID         int64
-	Status           int16
-	GoodsAmountCents int64
-	FreightCents     int64
-	DiscountCents    int64
-	PayableCents     int64
-	PaidCents        int64
-	RefundedCents    int64
-	RefundStatus     int16
-	ExpireAt         pgtype.Timestamptz
-	CreatedAt        pgtype.Timestamptz
-	UserCouponID     *int64
-	CouponName       *string
+	ID                     int64
+	OrderNo                string
+	StoreID                int64
+	RegionID               int64
+	Status                 int16
+	GoodsAmountCents       int64
+	FreightCents           int64
+	DiscountCents          int64
+	PayableCents           int64
+	PaidCents              int64
+	RefundedCents          int64
+	RefundStatus           int16
+	ExpireAt               pgtype.Timestamptz
+	CreatedAt              pgtype.Timestamptz
+	UserCouponID           *int64
+	CouponName             *string
+	PromotionDiscountCents int64
+	Promotions             []byte
 }
 
 // 落一笔**创建中**的订单（status = 0），在提交 SAGA 之前。
@@ -305,6 +311,8 @@ func (q *Queries) CreateOrderDraft(ctx context.Context, arg CreateOrderDraftPara
 		arg.Remark,
 		arg.ExpireAt,
 		arg.UserCouponID,
+		arg.PromotionDiscountCents,
+		arg.Promotions,
 		arg.StoreID,
 	)
 	var i CreateOrderDraftRow
@@ -325,30 +333,40 @@ func (q *Queries) CreateOrderDraft(ctx context.Context, arg CreateOrderDraftPara
 		&i.CreatedAt,
 		&i.UserCouponID,
 		&i.CouponName,
+		&i.PromotionDiscountCents,
+		&i.Promotions,
 	)
 	return i, err
 }
 
 const createOrderItem = `-- name: CreateOrderItem :exec
 INSERT INTO order_items (order_id, sku_id, product_id, title_snapshot, spec_snapshot,
-                         image_snapshot, price_cents, quantity, amount_cents, discount_cents)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                         image_snapshot, price_cents, quantity, amount_cents, discount_cents,
+                         list_price_cents, price_promotion_id, promotion_discount_cents)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 `
 
 type CreateOrderItemParams struct {
-	OrderID       int64
-	SkuID         int64
-	ProductID     int64
-	TitleSnapshot string
-	SpecSnapshot  []byte
-	ImageSnapshot *string
-	PriceCents    int64
-	Quantity      int32
-	AmountCents   int64
-	DiscountCents int64
+	OrderID                int64
+	SkuID                  int64
+	ProductID              int64
+	TitleSnapshot          string
+	SpecSnapshot           []byte
+	ImageSnapshot          *string
+	PriceCents             int64
+	Quantity               int32
+	AmountCents            int64
+	DiscountCents          int64
+	ListPriceCents         int64
+	PricePromotionID       *int64
+	PromotionDiscountCents int64
 }
 
 // 订单项快照（数据模型 §5：下单即快照）。商品改价改名不影响历史订单。
+//
+// 00044 起多三列：list_price_cents（门店价快照）、price_promotion_id（改了单价的
+// 限时折扣 / 秒杀）、promotion_discount_cents（满减满折分摊到这一行的那一份，
+// 已含在 discount_cents 里）。
 func (q *Queries) CreateOrderItem(ctx context.Context, arg CreateOrderItemParams) error {
 	_, err := q.db.Exec(ctx, createOrderItem,
 		arg.OrderID,
@@ -361,6 +379,9 @@ func (q *Queries) CreateOrderItem(ctx context.Context, arg CreateOrderItemParams
 		arg.Quantity,
 		arg.AmountCents,
 		arg.DiscountCents,
+		arg.ListPriceCents,
+		arg.PricePromotionID,
+		arg.PromotionDiscountCents,
 	)
 	return err
 }
@@ -441,32 +462,34 @@ SELECT id, order_no, user_id, store_id, region_id, status,
        goods_amount_cents, freight_cents,
        discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
        expire_at, paid_at, shipped_at, finished_at, created_at, user_coupon_id,
-       coupon_name
+       coupon_name, promotion_discount_cents, promotions
   FROM orders
  WHERE order_no = $1
 `
 
 type GetOrderByNoRow struct {
-	ID               int64
-	OrderNo          string
-	UserID           int64
-	StoreID          int64
-	RegionID         int64
-	Status           int16
-	GoodsAmountCents int64
-	FreightCents     int64
-	DiscountCents    int64
-	PayableCents     int64
-	PaidCents        int64
-	RefundedCents    int64
-	RefundStatus     int16
-	ExpireAt         pgtype.Timestamptz
-	PaidAt           pgtype.Timestamptz
-	ShippedAt        pgtype.Timestamptz
-	FinishedAt       pgtype.Timestamptz
-	CreatedAt        pgtype.Timestamptz
-	UserCouponID     *int64
-	CouponName       *string
+	ID                     int64
+	OrderNo                string
+	UserID                 int64
+	StoreID                int64
+	RegionID               int64
+	Status                 int16
+	GoodsAmountCents       int64
+	FreightCents           int64
+	DiscountCents          int64
+	PayableCents           int64
+	PaidCents              int64
+	RefundedCents          int64
+	RefundStatus           int16
+	ExpireAt               pgtype.Timestamptz
+	PaidAt                 pgtype.Timestamptz
+	ShippedAt              pgtype.Timestamptz
+	FinishedAt             pgtype.Timestamptz
+	CreatedAt              pgtype.Timestamptz
+	UserCouponID           *int64
+	CouponName             *string
+	PromotionDiscountCents int64
+	Promotions             []byte
 }
 
 // 按对外编号取订单。SAGA 的两个分支都靠它把「自己要处理哪一单」找回来 ——
@@ -508,6 +531,8 @@ func (q *Queries) GetOrderByNo(ctx context.Context, orderNo string) (GetOrderByN
 		&i.CreatedAt,
 		&i.UserCouponID,
 		&i.CouponName,
+		&i.PromotionDiscountCents,
+		&i.Promotions,
 	)
 	return i, err
 }
@@ -610,7 +635,7 @@ SELECT id, order_no, user_id, store_id, region_id, status,
        goods_amount_cents, freight_cents,
        discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
        expire_at, paid_at, shipped_at, finished_at, created_at, user_coupon_id,
-       coupon_name
+       coupon_name, promotion_discount_cents, promotions
   FROM orders
  WHERE order_no = $1
    AND user_id = $2
@@ -623,26 +648,28 @@ type GetUserOrderByNoParams struct {
 }
 
 type GetUserOrderByNoRow struct {
-	ID               int64
-	OrderNo          string
-	UserID           int64
-	StoreID          int64
-	RegionID         int64
-	Status           int16
-	GoodsAmountCents int64
-	FreightCents     int64
-	DiscountCents    int64
-	PayableCents     int64
-	PaidCents        int64
-	RefundedCents    int64
-	RefundStatus     int16
-	ExpireAt         pgtype.Timestamptz
-	PaidAt           pgtype.Timestamptz
-	ShippedAt        pgtype.Timestamptz
-	FinishedAt       pgtype.Timestamptz
-	CreatedAt        pgtype.Timestamptz
-	UserCouponID     *int64
-	CouponName       *string
+	ID                     int64
+	OrderNo                string
+	UserID                 int64
+	StoreID                int64
+	RegionID               int64
+	Status                 int16
+	GoodsAmountCents       int64
+	FreightCents           int64
+	DiscountCents          int64
+	PayableCents           int64
+	PaidCents              int64
+	RefundedCents          int64
+	RefundStatus           int16
+	ExpireAt               pgtype.Timestamptz
+	PaidAt                 pgtype.Timestamptz
+	ShippedAt              pgtype.Timestamptz
+	FinishedAt             pgtype.Timestamptz
+	CreatedAt              pgtype.Timestamptz
+	UserCouponID           *int64
+	CouponName             *string
+	PromotionDiscountCents int64
+	Promotions             []byte
 }
 
 // 订单详情 / 发起支付共用：按单号取**当前买家自己**的订单。
@@ -677,6 +704,8 @@ func (q *Queries) GetUserOrderByNo(ctx context.Context, arg GetUserOrderByNoPara
 		&i.CreatedAt,
 		&i.UserCouponID,
 		&i.CouponName,
+		&i.PromotionDiscountCents,
+		&i.Promotions,
 	)
 	return i, err
 }
@@ -730,7 +759,7 @@ func (q *Queries) InsertPayment(ctx context.Context, arg InsertPaymentParams) (I
 }
 
 const listExpiredDraftOrders = `-- name: ListExpiredDraftOrders :many
-SELECT id, order_no, store_id
+SELECT id, order_no, store_id, user_id
   FROM orders
  WHERE status = 0 AND expire_at < now()
  ORDER BY expire_at
@@ -741,12 +770,14 @@ type ListExpiredDraftOrdersRow struct {
 	ID      int64
 	OrderNo string
 	StoreID int64
+	UserID  int64
 }
 
 // 第二类：孤儿草稿（00013 文件头那笔明写的欠账）。它们**没进过 SAGA**，
 // 一件库存都没扣，所以只关单、不回补。
 //
 // 走 idx_orders_draft_expire（00015，WHERE status = 0）。
+// user_id 只是与上一条同形（两条共用 ExpiredOrder）；孤儿草稿不放回任何东西。
 func (q *Queries) ListExpiredDraftOrders(ctx context.Context, limit int32) ([]ListExpiredDraftOrdersRow, error) {
 	rows, err := q.db.Query(ctx, listExpiredDraftOrders, limit)
 	if err != nil {
@@ -756,7 +787,12 @@ func (q *Queries) ListExpiredDraftOrders(ctx context.Context, limit int32) ([]Li
 	var items []ListExpiredDraftOrdersRow
 	for rows.Next() {
 		var i ListExpiredDraftOrdersRow
-		if err := rows.Scan(&i.ID, &i.OrderNo, &i.StoreID); err != nil {
+		if err := rows.Scan(
+			&i.ID,
+			&i.OrderNo,
+			&i.StoreID,
+			&i.UserID,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -769,7 +805,7 @@ func (q *Queries) ListExpiredDraftOrders(ctx context.Context, limit int32) ([]Li
 
 const listExpiredPendingOrders = `-- name: ListExpiredPendingOrders :many
 
-SELECT id, order_no, store_id
+SELECT id, order_no, store_id, user_id
   FROM orders
  WHERE status = 10 AND expire_at < now()
  ORDER BY expire_at
@@ -780,6 +816,7 @@ type ListExpiredPendingOrdersRow struct {
 	ID      int64
 	OrderNo string
 	StoreID int64
+	UserID  int64
 }
 
 // ---------------------------------------------------------------------------
@@ -799,6 +836,8 @@ type ListExpiredPendingOrdersRow struct {
 // 走 idx_orders_status_expire（00006，WHERE status = 10）。
 // 按 expire_at 升序：过期最久的先处理，否则一个持续入单的租户能让最老的那批
 // 永远排在后面。
+//
+// user_id（00044）：按活动价成交的行关单时要放回每人限购，那个计数按买家记。
 func (q *Queries) ListExpiredPendingOrders(ctx context.Context, limit int32) ([]ListExpiredPendingOrdersRow, error) {
 	rows, err := q.db.Query(ctx, listExpiredPendingOrders, limit)
 	if err != nil {
@@ -808,7 +847,12 @@ func (q *Queries) ListExpiredPendingOrders(ctx context.Context, limit int32) ([]
 	var items []ListExpiredPendingOrdersRow
 	for rows.Next() {
 		var i ListExpiredPendingOrdersRow
-		if err := rows.Scan(&i.ID, &i.OrderNo, &i.StoreID); err != nil {
+		if err := rows.Scan(
+			&i.ID,
+			&i.OrderNo,
+			&i.StoreID,
+			&i.UserID,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -820,15 +864,16 @@ func (q *Queries) ListExpiredPendingOrders(ctx context.Context, limit int32) ([]
 }
 
 const listOrderItemsForBranch = `-- name: ListOrderItemsForBranch :many
-SELECT sku_id, quantity
+SELECT sku_id, quantity, price_promotion_id
   FROM order_items
  WHERE order_id = $1
  ORDER BY sku_id
 `
 
 type ListOrderItemsForBranchRow struct {
-	SkuID    int64
-	Quantity int32
+	SkuID            int64
+	Quantity         int32
+	PricePromotionID *int64
 }
 
 // 取一笔订单的全部行，供库存分支重建「扣减意图」。
@@ -836,6 +881,9 @@ type ListOrderItemsForBranchRow struct {
 // 这条查询就是硬约束二的落点：分支拿不到业务载荷，扣减意图只能从库里读回来。
 // 按 sku_id 排序而不是 id：两个分支（正向与补偿）必须按同一个顺序拿行锁，
 // 否则两笔互相交叉的订单在高并发下能互相死锁。
+//
+// price_promotion_id（00044）：这一行按限时折扣 / 秒杀价成交时，库存分支在同一个事务里
+// 扣它的活动配额与每人限购，补偿与关单时放回 —— 与库存同进同出。
 func (q *Queries) ListOrderItemsForBranch(ctx context.Context, orderID int64) ([]ListOrderItemsForBranchRow, error) {
 	rows, err := q.db.Query(ctx, listOrderItemsForBranch, orderID)
 	if err != nil {
@@ -845,7 +893,7 @@ func (q *Queries) ListOrderItemsForBranch(ctx context.Context, orderID int64) ([
 	var items []ListOrderItemsForBranchRow
 	for rows.Next() {
 		var i ListOrderItemsForBranchRow
-		if err := rows.Scan(&i.SkuID, &i.Quantity); err != nil {
+		if err := rows.Scan(&i.SkuID, &i.Quantity, &i.PricePromotionID); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -858,24 +906,28 @@ func (q *Queries) ListOrderItemsForBranch(ctx context.Context, orderID int64) ([
 
 const listOrderItemsForDetail = `-- name: ListOrderItemsForDetail :many
 SELECT id, sku_id, product_id, title_snapshot, spec_snapshot, image_snapshot,
-       price_cents, quantity, amount_cents, discount_cents, refunded_qty
+       price_cents, quantity, amount_cents, discount_cents, refunded_qty,
+       list_price_cents, price_promotion_id, promotion_discount_cents
   FROM order_items
  WHERE order_id = $1
  ORDER BY id
 `
 
 type ListOrderItemsForDetailRow struct {
-	ID            int64
-	SkuID         int64
-	ProductID     int64
-	TitleSnapshot string
-	SpecSnapshot  []byte
-	ImageSnapshot *string
-	PriceCents    int64
-	Quantity      int32
-	AmountCents   int64
-	DiscountCents int64
-	RefundedQty   int32
+	ID                     int64
+	SkuID                  int64
+	ProductID              int64
+	TitleSnapshot          string
+	SpecSnapshot           []byte
+	ImageSnapshot          *string
+	PriceCents             int64
+	Quantity               int32
+	AmountCents            int64
+	DiscountCents          int64
+	RefundedQty            int32
+	ListPriceCents         int64
+	PricePromotionID       *int64
+	PromotionDiscountCents int64
 }
 
 // 订单详情里的行。与 ListOrderItemsForBranch 分开：那一条只取 (sku_id, quantity)
@@ -903,6 +955,9 @@ func (q *Queries) ListOrderItemsForDetail(ctx context.Context, orderID int64) ([
 			&i.AmountCents,
 			&i.DiscountCents,
 			&i.RefundedQty,
+			&i.ListPriceCents,
+			&i.PricePromotionID,
+			&i.PromotionDiscountCents,
 		); err != nil {
 			return nil, err
 		}
@@ -1087,7 +1142,7 @@ SELECT id, order_no, user_id, store_id, region_id, status,
        goods_amount_cents, freight_cents,
        discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
        expire_at, paid_at, shipped_at, finished_at, created_at, user_coupon_id,
-       coupon_name
+       coupon_name, promotion_discount_cents, promotions
   FROM orders
  WHERE user_id = $1
    AND status <> 0
@@ -1107,26 +1162,28 @@ type ListUserOrdersParams struct {
 }
 
 type ListUserOrdersRow struct {
-	ID               int64
-	OrderNo          string
-	UserID           int64
-	StoreID          int64
-	RegionID         int64
-	Status           int16
-	GoodsAmountCents int64
-	FreightCents     int64
-	DiscountCents    int64
-	PayableCents     int64
-	PaidCents        int64
-	RefundedCents    int64
-	RefundStatus     int16
-	ExpireAt         pgtype.Timestamptz
-	PaidAt           pgtype.Timestamptz
-	ShippedAt        pgtype.Timestamptz
-	FinishedAt       pgtype.Timestamptz
-	CreatedAt        pgtype.Timestamptz
-	UserCouponID     *int64
-	CouponName       *string
+	ID                     int64
+	OrderNo                string
+	UserID                 int64
+	StoreID                int64
+	RegionID               int64
+	Status                 int16
+	GoodsAmountCents       int64
+	FreightCents           int64
+	DiscountCents          int64
+	PayableCents           int64
+	PaidCents              int64
+	RefundedCents          int64
+	RefundStatus           int16
+	ExpireAt               pgtype.Timestamptz
+	PaidAt                 pgtype.Timestamptz
+	ShippedAt              pgtype.Timestamptz
+	FinishedAt             pgtype.Timestamptz
+	CreatedAt              pgtype.Timestamptz
+	UserCouponID           *int64
+	CouponName             *string
+	PromotionDiscountCents int64
+	Promotions             []byte
 }
 
 // ---------------------------------------------------------------------------
@@ -1192,6 +1249,8 @@ func (q *Queries) ListUserOrders(ctx context.Context, arg ListUserOrdersParams) 
 			&i.CreatedAt,
 			&i.UserCouponID,
 			&i.CouponName,
+			&i.PromotionDiscountCents,
+			&i.Promotions,
 		); err != nil {
 			return nil, err
 		}

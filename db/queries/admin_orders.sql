@@ -29,6 +29,7 @@ SELECT o.id, o.order_no, o.user_id, o.store_id, o.region_id, o.status,
        o.goods_amount_cents, o.freight_cents, o.discount_cents, o.payable_cents,
        o.paid_cents, o.refunded_cents, o.refund_status, o.expire_at, o.paid_at,
        o.shipped_at, o.finished_at, o.created_at, o.user_coupon_id, o.coupon_name,
+       o.promotion_discount_cents, o.promotions,
        o.receiver_snapshot, o.store_snapshot,
        EXISTS (SELECT 1 FROM refunds r
                 WHERE r.order_id = o.id AND r.status IN (10, 20, 30)) AS has_open_refund
@@ -78,6 +79,7 @@ SELECT o.id, o.order_no, o.user_id, o.store_id, o.region_id, o.status,
        o.goods_amount_cents, o.freight_cents, o.discount_cents, o.payable_cents,
        o.paid_cents, o.refunded_cents, o.refund_status, o.expire_at, o.paid_at,
        o.shipped_at, o.finished_at, o.created_at, o.user_coupon_id, o.coupon_name,
+       o.promotion_discount_cents, o.promotions,
        o.receiver_snapshot, o.store_snapshot,
        EXISTS (SELECT 1 FROM refunds r
                 WHERE r.order_id = o.id AND r.status IN (10, 20, 30)) AS has_open_refund

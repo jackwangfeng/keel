@@ -774,6 +774,34 @@ var routes = []route{
 		HandlerFile:    "admin_coupon.go",
 		NoQueryParams:  "手机号在请求体里，幂等键在 Idempotency-Key 请求头",
 	},
+	// 营销活动（00044）。后台四条；带 query 参数的列表单独一个文件，理由同券模板列表。
+	{
+		ContractPath:   "/admin/promotions",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "admin_promotion_list.go",
+	},
+	{
+		ContractPath:   "/admin/promotions",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "admin_promotion.go",
+		NoQueryParams:  "建活动的参数全在请求体里；幂等键在 Idempotency-Key 请求头",
+	},
+	{
+		ContractPath:   "/admin/promotions/{promotion_id}",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "admin_promotion.go",
+		NoQueryParams:  "详情只吃路径参数",
+	},
+	{
+		ContractPath:   "/admin/promotions/{promotion_id}",
+		ContractMethod: "patch",
+		HTTPMethod:     http.MethodPatch,
+		HandlerFile:    "admin_promotion.go",
+		NoQueryParams:  "改哪一个在路径上，改什么在请求体里",
+	},
 	{
 		ContractPath:   "/admin/regions",
 		ContractMethod: "get",

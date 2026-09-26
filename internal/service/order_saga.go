@@ -182,6 +182,19 @@ func (s *OrderService) reportBranchFailure(log *slog.Logger, gid string, err err
 		s.notes.put(gid, fmt.Errorf("%w: %v", ErrCrossTenantSKU, err))
 		return dtm.Failure
 
+	case errors.Is(err, repository.ErrPromotionQuotaExhausted):
+		// 正常业务分支：秒杀配额在试算之后被别人抢光了。整个库存分支回滚（门店库存
+		// 与配额同一个事务），触发全局补偿；用户看到 409 promotion-sold-out，重新试算会按门店价报价。
+		log.Info("活动配额不足，触发全局补偿", "err", err)
+		s.notes.put(gid, fmt.Errorf("%w: %v", ErrPromotionSoldOut, err))
+		return dtm.Failure
+
+	case errors.Is(err, repository.ErrPromotionLimitReached):
+		// 正常业务分支：同一个买家的另一笔订单先占满了限购额度。409 promotion-limit-exceeded。
+		log.Info("超出活动每人限购，触发全局补偿", "err", err)
+		s.notes.put(gid, fmt.Errorf("%w: %v", ErrPromotionLimitExceeded, err))
+		return dtm.Failure
+
 	case errors.Is(err, ErrCouponNotApplicable):
 		// 正常业务分支：券在试算之后、锁券之前被别的单占了或刚好过期。
 		// 触发全局补偿（建单被关掉），用户看到 409「券不可用」。
@@ -344,6 +357,17 @@ func deductStock(ctx context.Context, tx repository.Tx, order repository.Order) 
 			repository.InventoryLogOrderDeduct, order.OrderNo, after+ln.Quantity, after); err != nil {
 			return err
 		}
+		// 按活动价成交的行：同一个事务里扣活动配额（秒杀防超卖）与每人限购（00044）。
+		//
+		// 放在库存分支里而不是另起一个分支：配额与门店库存是「同一件货」的两道闸，
+		// 必须同生共死 —— 配额扣到了、库存没扣到（或反过来）都是错账。同一个事务之后，
+		// 任一道不过整个分支回滚，补偿是一次空回滚（屏障挡住），编排也不必改。
+		if ln.PricePromotionID != nil {
+			if err := tx.ReservePromotionQuota(ctx, *ln.PricePromotionID, ln.SKUID,
+				order.UserID, ln.Quantity); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
@@ -368,6 +392,30 @@ func restoreStock(ctx context.Context, tx repository.Tx, order repository.Order)
 			repository.InventoryLogSagaCompense, order.OrderNo, after-ln.Quantity, after); err != nil {
 			return err
 		}
+		if err := releasePromotionLine(ctx, tx, ln, order.UserID, order.OrderNo); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// releasePromotionLine 把一行占的活动配额与每人限购放回。SAGA 补偿、超时关单、买家取消共用。
+//
+// 放不回（受影响 0 行）只出声不报错：那意味着这个 SKU 在下单之后被移出了活动
+// （后台只允许移除 sold_qty = 0 的 SKU，所以正常路径上走不到），报错会让补偿无限重试、
+// 让关单整体回滚 —— 为了一个计数把库存也锁在这一单上，代价比少放回几件配额大。
+func releasePromotionLine(ctx context.Context, tx repository.Tx, ln repository.OrderLine,
+	userID int64, orderNo string) error {
+	if ln.PricePromotionID == nil {
+		return nil
+	}
+	ok, err := tx.ReleasePromotionQuota(ctx, *ln.PricePromotionID, ln.SKUID, userID, ln.Quantity)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		slog.WarnContext(ctx, "放回活动配额时受影响 0 行：这个 SKU 已不在活动里，或计数不够减",
+			"order_no", orderNo, "promotion_id", *ln.PricePromotionID, "sku_id", ln.SKUID)
 	}
 	return nil
 }
@@ -458,6 +506,8 @@ var replayableFailures = map[string]error{
 	"cross_tenant_sku":      ErrCrossTenantSKU,
 	"saga_failed":           ErrOrderSagaFailed,
 	"coupon_not_applicable": ErrCouponNotApplicable,
+	"promotion_sold_out":    ErrPromotionSoldOut,
+	"promotion_limit":       ErrPromotionLimitExceeded,
 }
 
 func encodeArchivedFailure(err error) archivedFailure {

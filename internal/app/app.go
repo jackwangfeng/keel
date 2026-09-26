@@ -564,6 +564,14 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	v1.PATCH("/admin/coupon-templates/:template_id", staffAuth, cpa.Update)
 	v1.PUT("/admin/coupon-templates/:template_id/scopes", staffAuth, cpa.SetScopes)
 	v1.POST("/admin/coupon-templates/:template_id/grants", staffAuth, cpa.Grant)
+
+	// 营销活动（契约 /admin/promotions 那一段）。权限与券管理同一行（全店范围），
+	// 判据在业务层（service/admin_promotion.go 的文件头）。
+	pra := handler.NewAdminPromotionHandler(service.NewAdminPromotionService(repo))
+	v1.GET("/admin/promotions", staffAuth, pra.List)
+	v1.POST("/admin/promotions", staffAuth, pra.Create)
+	v1.GET("/admin/promotions/:promotion_id", staffAuth, pra.Detail)
+	v1.PATCH("/admin/promotions/:promotion_id", staffAuth, pra.Update)
 	return r
 }
 
