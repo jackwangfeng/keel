@@ -647,6 +647,15 @@ func (s *AdminCatalogService) SetInventory(ctx context.Context, skuID int64,
 	return out, err
 }
 
+// AdjustInventory 实现 POST /admin/skus/{sku_id}/inventory/adjustments
+// （相对调整的单店捷径）。门店在事务里用 SoleStore 解析，其余与按门店那条
+// 逐字一致 —— 两条共用 adjustInventory（admin_store.go），不各写一份：
+// 幂等、判权、流水任何一处只在一边改了，两条路径就会对同一个请求给出两种结果。
+func (s *AdminCatalogService) AdjustInventory(ctx context.Context, skuID int64,
+	in InventoryAdjustInput, idemKey string) (repository.StoreInventory, bool, error) {
+	return adjustInventory(ctx, s.repo, 0, skuID, in, idemKey)
+}
+
 // resolveSKUImage 把 image_upload_id 翻成 skus.image_url，并在同一个事务里
 // 把那个 upload 标成已引用。
 //

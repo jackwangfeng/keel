@@ -178,3 +178,28 @@ func (h *AdminCatalogHandler) SetInventory(c *gin.Context) {
 	// 它哪天开第二家店时，同一个请求会 409 store-ambiguous 而不是猜一家。
 	c.JSON(http.StatusOK, apiAdminInventory(inv))
 }
+
+// AdjustInventory 实现 POST /api/v1/admin/skus/{sku_id}/inventory/adjustments
+// （相对调整的单店捷径，Idempotency-Key 必填）。
+//
+// 门店由服务端推出（本租户恰好一家），推不出来是 409 store-ambiguous ——
+// 与 PUT 那条捷径同一个语义。错误映射与按门店那条共用 writeInventoryAdjustError。
+func (h *AdminCatalogHandler) AdjustInventory(c *gin.Context) {
+	id, ok := pathID(c, "sku_id")
+	if !ok {
+		return
+	}
+	var req api.InventoryAdjustRequest
+	if !bindJSON(c, &req) {
+		return
+	}
+	inv, replayed, err := h.svc.AdjustInventory(c.Request.Context(), id,
+		inventoryAdjustInput(req), idemKeyOf(c))
+	if err != nil {
+		writeInventoryAdjustError(c, err)
+		return
+	}
+	markReplayed(c, replayed)
+	// store_id 必返：它是服务端推出来的，调用方要知道自己刚调的是哪一家。
+	c.JSON(http.StatusOK, apiStoreInventory(inv))
+}

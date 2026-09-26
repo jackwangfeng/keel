@@ -151,6 +151,7 @@ type InventoryLog struct {
 	AfterAvailable  int32
 	CreatedAt       pgtype.Timestamptz
 	StoreID         int64
+	Reason          *string
 }
 
 type Job struct {

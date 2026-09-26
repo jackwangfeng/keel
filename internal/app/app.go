@@ -476,6 +476,7 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	v1.PATCH("/admin/skus/:sku_id", staffAuth, cat.UpdateSKU)
 	v1.DELETE("/admin/skus/:sku_id", staffAuth, cat.DeleteSKU)
 	v1.PUT("/admin/skus/:sku_id/inventory", staffAuth, cat.SetInventory)
+	v1.POST("/admin/skus/:sku_id/inventory/adjustments", staffAuth, cat.AdjustInventory)
 
 	v1.GET("/admin/categories", staffAuth, cat.ListCategories)
 	v1.POST("/admin/categories", staffAuth, cat.CreateCategory)
@@ -562,6 +563,7 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	v1.DELETE("/admin/stores/:store_id/skus/:sku_id/price", staffAuth, st.ClearStorePrice)
 	v1.GET("/admin/stores/:store_id/inventories", staffAuth, st.ListStoreInventories)
 	v1.PUT("/admin/stores/:store_id/skus/:sku_id/inventory", staffAuth, st.SetStoreInventory)
+	v1.POST("/admin/stores/:store_id/skus/:sku_id/inventory/adjustments", staffAuth, st.AdjustStoreInventory)
 
 	// 运费模板（00055，契约 /admin/freight-templates 那一段）。每一条都挂 staffAuth；
 	// 角色检查在业务层（全店模板 requireMerchantWide、门店模板同门店价），

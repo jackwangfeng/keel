@@ -742,6 +742,63 @@ func (h *AdminStoreHandler) SetStoreInventory(c *gin.Context) {
 	c.JSON(http.StatusOK, apiStoreInventory(inv))
 }
 
+// AdjustStoreInventory 实现 POST /api/v1/admin/stores/{store_id}/skus/{sku_id}/inventory/adjustments
+// （相对调整，Idempotency-Key 必填）。
+func (h *AdminStoreHandler) AdjustStoreInventory(c *gin.Context) {
+	storeID, ok := pathID(c, "store_id")
+	if !ok {
+		return
+	}
+	skuID, ok := pathID(c, "sku_id")
+	if !ok {
+		return
+	}
+	var req api.InventoryAdjustRequest
+	if !bindJSON(c, &req) {
+		return
+	}
+	inv, replayed, err := h.svc.AdjustStoreInventory(c.Request.Context(), storeID, skuID,
+		inventoryAdjustInput(req), idemKeyOf(c))
+	if err != nil {
+		writeInventoryAdjustError(c, err)
+		return
+	}
+	markReplayed(c, replayed)
+	c.JSON(http.StatusOK, apiStoreInventory(inv))
+}
+
+// inventoryAdjustInput 把契约类型收成业务层的形状。两条相对调整的路径共用。
+func inventoryAdjustInput(req api.InventoryAdjustRequest) service.InventoryAdjustInput {
+	return service.InventoryAdjustInput{Delta: req.Delta, Reason: req.Reason}
+}
+
+// writeInventoryAdjustError 是两条相对调整路径的错误映射：先接住这条接口独有的
+// 两组（幂等、扣完会变负），其余交给 writeStoreError —— 404、判权、store-ambiguous
+// 都与 PUT 那两条同一套翻法，不另抄一份。
+//
+// 两条路径用同一个映射（单店捷径也是），而不是各用自己文件的 writeCatalogError /
+// writeStoreError：它们的业务是同一个函数（service.adjustInventory），
+// 同一个错误在两条路径上翻出两种响应，调用方没法写一份处理逻辑。
+func writeInventoryAdjustError(c *gin.Context, err error) {
+	var short *repository.InventoryInsufficient
+	switch {
+	case writeAdminIdempotencyError(c, err):
+	case errors.As(err, &short):
+		// 扣完会变负。与 CAS 那条共用 InventoryConflict 响应体（带 current），
+		// type 不同：那一条重读重试会成功，这一条原样重试不会。
+		detail := fmt.Sprintf("当前可售 %d，调整 %d 之后会变负", short.Current.AvailableQty, short.Delta)
+		problem.WriteValue(c, http.StatusConflict, api.InventoryConflict{
+			Type:    problem.TypeInventoryInsufficient,
+			Title:   "库存不够扣，调整之后会变负",
+			Status:  http.StatusConflict,
+			Detail:  &detail,
+			Current: apiStoreInventory(short.Current),
+		})
+	default:
+		writeStoreError(c, err)
+	}
+}
+
 // derefStr 把可选字符串摊平成裸串。repository 的 NewStore 用裸串表示
 // 「没填」（空串），因为这几列在库里是 NOT NULL DEFAULT ”。
 func derefStr(v *string) string {

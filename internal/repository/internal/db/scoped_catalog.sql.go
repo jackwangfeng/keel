@@ -11,6 +11,135 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const adjustStoreInventory = `-- name: AdjustStoreInventory :one
+WITH sellable AS (
+    SELECT sk.id
+      FROM skus sk
+      JOIN stores st ON st.id = $1
+     WHERE sk.id = $2 AND sk.deleted_at IS NULL
+       AND st.deleted_at IS NULL
+       AND NOT EXISTS (SELECT 1 FROM store_product_overrides o
+                        WHERE o.store_id = st.id AND o.product_id = sk.product_id
+                          AND o.status = 0)
+       AND NOT EXISTS (SELECT 1 FROM region_product_overrides o2
+                        WHERE o2.region_id = st.region_id AND o2.product_id = sk.product_id
+                          AND o2.status = 0)
+), cur AS (
+    SELECT inv.sku_id, inv.available_qty, inv.warning_qty, inv.updated_at
+      FROM inventories inv
+     WHERE inv.sku_id = $2 AND inv.store_id = $1
+), wrote AS (
+    INSERT INTO inventories (sku_id, store_id, available_qty, warning_qty)
+    SELECT $2, $1, GREATEST($3::int, 0), 0
+     WHERE EXISTS (SELECT 1 FROM sellable)
+       AND (EXISTS (SELECT 1 FROM cur) OR $3::int > 0)
+    ON CONFLICT (sku_id, store_id) DO UPDATE
+       SET available_qty = inventories.available_qty + $3::int,
+           updated_at    = now()
+     WHERE inventories.available_qty + $3::int >= 0
+    RETURNING available_qty AS w_available_qty,
+              warning_qty   AS w_warning_qty,
+              updated_at    AS w_updated_at
+)
+SELECT (SELECT count(*) FROM sellable) AS sellable_rows,
+       (SELECT count(*) FROM wrote)    AS written_rows,
+       c.available_qty   AS current_available_qty,
+       c.warning_qty     AS current_warning_qty,
+       c.updated_at      AS current_updated_at,
+       w.w_available_qty AS new_available_qty,
+       w.w_warning_qty   AS new_warning_qty,
+       w.w_updated_at    AS new_updated_at
+  FROM (SELECT 1) anchor
+  LEFT JOIN cur   c ON true
+  LEFT JOIN wrote w ON true
+`
+
+type AdjustStoreInventoryParams struct {
+	StoreID int64
+	SkuID   int64
+	Delta   int32
+}
+
+type AdjustStoreInventoryRow struct {
+	SellableRows        int64
+	WrittenRows         int64
+	CurrentAvailableQty *int32
+	CurrentWarningQty   *int32
+	CurrentUpdatedAt    pgtype.Timestamptz
+	NewAvailableQty     *int32
+	NewWarningQty       *int32
+	NewUpdatedAt        pgtype.Timestamptz
+}
+
+// 按门店的**相对调整**（契约 POST /admin/stores/{store_id}/skus/{sku_id}/inventory/adjustments，
+// 以及那条不带门店的捷径）。数据模型 §15 第 12 / 18 条在这里结清。
+//
+// 与 SetStoreInventoryByCAS 同一个骨架（sellable / cur / wrote 三个 CTE、同一个 MVCC 快照），
+// 差别只在写的那一句：不是「= $expected 才写」，是
+//
+//	available_qty = available_qty + $delta，且结果不得为负
+//
+// 这是下单扣减（DeductInventory 的 「available_qty >= $n」）的同一个手法，只是方向可正可负。
+// 进货 100 件从此是一条天然可组合的语句：两个人同时各进 100，结果是 +200，
+// 没有谁需要先读一个会过期的值，也没有谁会拿到一个「重读再试」的 409。
+//
+// ### 缺行 ≡ 可售 0（数据模型 §4），于是正的 delta 要能凭空建出那一行
+//
+// 写成 INSERT ... ON CONFLICT DO UPDATE ... WHERE，不是「有行就 UPDATE、没行就 INSERT」
+// 两条分支：那是两次快照，两个并发的首次进货会一个插成功、一个撞主键报 23505。
+// ON CONFLICT 由唯一索引判定有没有，判定与写在同一个点上 —— 并发的第二个会等第一个
+// 提交，然后走 DO UPDATE 把自己那一份加上去。
+//
+// 三处写法是逼出来的，每一处写反都会以一种不响的方式坏掉：
+//
+// 一、**插入值是 GREATEST($delta, 0)，不是 $delta。** chk_qty_nonneg 是对「提议插入的那一行」
+//
+//	求值的，而且早于冲突判定 —— 行已存在、delta 为负时，提议行里的负数会让整条语句以
+//	23514 失败，根本走不到 DO UPDATE。夹成 0 之后提议行永远合法；它只在真插入的那一支
+//	生效，而那一支由下面第二条保证 delta > 0。
+//
+// 二、**插入的前提是「快照里有这一行，或者 delta > 0」。** 缺行且 delta 为负，就是「从 0 扣」，
+//
+//	一行都不该写 —— 写一行 0 会把「这家店从没录过库存」变成「录过、是 0」，
+//	而两者在盘点页上是可以分开看的。这一支落到 written_rows = 0，调用方报 409，current 为 0。
+//
+// 三、**DO UPDATE 里加的是 inventories.available_qty + $delta，不是 excluded.available_qty。**
+//
+//	excluded 是第一条夹过的那个值，与「加上 delta」没有关系。WHERE 里的非负判定同理，
+//	而且它看的是**冲突那一行的最新提交版本**（READ COMMITTED 下 ON CONFLICT 会锁住并重读它），
+//	所以并发扣减之后的真实余量才是判据，不是快照里那个旧值。
+//
+// ### 两种 0 行，与 CAS 那条同一种分法
+//
+//	sellable_rows = 0 → 404（门店 / SKU 不可见、已软删，或这家店 / 它所在大区下架了这件商品）；
+//	written_rows  = 0 → 409 inventory-insufficient（扣完会变负），current 是快照里的水位
+//	                     （缺行时为 0）。
+//
+// current 取自快照，不是 DO UPDATE 那一刻重读到的最新值：并发扣减发生在两者之间时，
+// 它可能比真实值大。这与 CAS 那条的 current 是同一个精度，而且方向是安全的 ——
+// 调用方拿它算出来的新 delta 仍然走这条带判定的语句，不会把库存扣成负数。
+//
+// 流水（inventory_logs，biz_type = 5）不在这条语句里，由 repository 在同一个事务里
+// 紧接着写：before = after - delta 在这里是精确的（写的就是 「+ delta」），不需要再读一次。
+//
+// sqlc 的将就与 SetStoreInventoryByCAS 一样：CTE 里的表各带别名，RETURNING 列改名（w_ 前缀），
+// 末尾 FROM (SELECT 1) anchor LEFT JOIN。
+func (q *Queries) AdjustStoreInventory(ctx context.Context, arg AdjustStoreInventoryParams) (AdjustStoreInventoryRow, error) {
+	row := q.db.QueryRow(ctx, adjustStoreInventory, arg.StoreID, arg.SkuID, arg.Delta)
+	var i AdjustStoreInventoryRow
+	err := row.Scan(
+		&i.SellableRows,
+		&i.WrittenRows,
+		&i.CurrentAvailableQty,
+		&i.CurrentWarningQty,
+		&i.CurrentUpdatedAt,
+		&i.NewAvailableQty,
+		&i.NewWarningQty,
+		&i.NewUpdatedAt,
+	)
+	return i, err
+}
+
 const adminCountStoreInventories = `-- name: AdminCountStoreInventories :one
 SELECT count(*)
   FROM skus s
