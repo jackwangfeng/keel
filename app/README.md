@@ -19,6 +19,12 @@ Kotlin / Swift，不走 webview；同一份代码也编 H5 与小程序。
   `not_sold_in_store` / `out_of_stock` / `insufficient_stock`）列出原因、不能勾选、不进合计。
   合计用服务端的 `selected_total_cents`；去结算时结算页按同一家店重读购物车，把能买且勾选的行
   送 `/orders/preview`，下单成功后把这几行从车里删掉。
+- 订单后半程：待支付的单能取消（详情页与列表都有，「点两下」防误触），已发货的单能确认收货。
+  申请售后：选哪几行、各退几件（可退 = 购买 − 已退 − 在途）、类型（仅退款 / 退货退款，**不给默认值**）、
+  原因；不传金额，每行实退多少看售后单里服务端算好的 `items[].amount_cents`。售后详情：30「退款中」
+  写成「正在原路退回」而不是失败；50「已拒绝」显示 `reject_reason` 并可重新申请；20 待买家退货只写
+  「请寄回商品」（填物流单号的接口还没有）；10 / 20 可撤回。「我的」→ 售后 / 退款列表。
+  凭证图片（`evidence_urls`，要先走上传接口）没接。
 - 个人资料：`GET/PATCH /me`（昵称、性别），第三方账号列表与解绑（409 `last-credential` 提示先设密码）。
   绑微信、换绑手机号服务端回 501，页面写「暂未开通」，不放必失败的按钮。
 - 优惠券：「我的」→ 领券中心（`GET /coupon-templates`，领券 `POST …/claim` 带幂等键，同一张模板在
@@ -337,6 +343,7 @@ H5 构建产物 + 一个把 `/api` 反代给 Keel 的静态服务器，用无头
 | 搜索 | `POST /search` | ✅ 首页入口 → 搜索页，按相关度排序；Android / iPhone 真机 e2e 覆盖（按首页一件商品的标题搜，它排第一，点进去是它的详情） |
 | 收货地址 | `GET/POST/PUT/DELETE /addresses…`、`PUT …/default` | ✅ 小米真机 e2e（`address.test.js`）：列表与服务端一致、默认排第一；错的表单按 `errors[].field` 标红两项，改对后新建成功；结算页自动用默认地址 |
 | 购物车 | `GET /cart`、`POST /cart/items`、`PATCH /cart/items/{id}`、`POST …/batch-delete` | ✅ 小米真机 e2e（`cart.test.js`）：加购 → 调数量，合计与服务端 `selected_total_cents` 一致 → 去结算，试算商品金额 = 购物车合计 → 下单后这行从车里删掉。调大超库存时页面显示服务端 409 的原因（调试时实测） |
+| 取消 / 售后 | `POST /orders/{no}/cancel`、`POST /orders/{no}/refunds`、`GET /refunds/{no}`、`POST /refunds/{no}/cancel` | ✅ 小米真机 e2e（`aftersale.test.js`）：待支付单取消 → 已关闭；已支付单申请仅退款 → 待审核（页面金额 = 服务端算的 `amount_cents`）→ 撤回 → 已取消。驳回 / 同意到账 / 发货后确认收货三条要 `KEEL_E2E_STAFF_TOKEN`，本次没设，**跳过了、没有跑** |
 | 个人资料 | `GET/PATCH /me`、`GET /me/identities` | ✅ 小米真机 e2e（`profile.test.js`）：回显昵称与脱敏手机号，改昵称后服务端是新值。解绑 / `last-credential` 没有自动化覆盖（演示买家没有第三方身份） |
 | 优惠券 | `GET /coupon-templates`、`POST /coupon-templates/{id}/claim`、`GET /coupons`、`POST /orders/preview` 的 `applicable_coupons` / `user_coupon_id` | ✅ 小米真机 e2e（`coupon.test.js`）：领「9 折」→ 我的优惠券四个 tab → 结算页自动用券、切「不使用」优惠归零。iOS 只验证了编译 |
 
@@ -401,7 +408,7 @@ app/
       view.uts          契约类型 -> 页面的 Row 类型（契约字段读取都收在这里）
     App.uvue            设计系统：色板与原子类（原生端没有 CSS 变量，改色只改这里）
     static/tabbar/      tabBar 图标 PNG（由 render-icons.sh 生成）
-    pages/…             15 个页面；首页 / 购物车 / 订单 / 我的 四个是 tabBar 页
+    pages/…             18 个页面；首页 / 购物车 / 订单 / 我的 四个是 tabBar 页
 ```
 
 ---

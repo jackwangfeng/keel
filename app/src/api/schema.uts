@@ -1457,3 +1457,19 @@ export type BatchDeleteCartItemsRequest = {
   /** 为 true 时删除全部已勾选条目，与 `item_ids` 互斥 */
   selected? : boolean
 }
+
+/** GET /refunds 的 query 参数 */
+export type ListRefundsQuery = {
+  page? : number
+  page_size? : number
+  /** 退款单状态机，与 `refunds.status` 的 SMALLINT 取值逐值一致。 */
+  status? : RefundStatus
+}
+
+/** GET /refunds 的 200 响应体 */
+export type ListRefundsResponse = {
+  page : number
+  page_size : number
+  total : number
+  items : Refund[]
+}

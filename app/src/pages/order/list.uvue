@@ -46,13 +46,19 @@
             <view class="divider"></view>
             <view class="between">
               <text class="t-sub">等待付款</text>
-              <text class="t-link">去支付 ›</text>
+              <view class="row">
+                <!-- 点两下才取消：第一下变「确认取消？」。@click.stop：不要顺带点进详情。 -->
+                <text class="t-link list-cancel" @click.stop="cancel(row.orderNo)">{{ armed == row.orderNo ? '确认取消？' : '取消订单' }}</text>
+                <text class="t-link">去支付 ›</text>
+              </view>
             </view>
           </view>
         </view>
 
         <!-- 只有服务端那条接口没通时才拿本机记录兜底。两个都显示会让同一单出现两次，
              而且会让人以为「本机记录」是列表接口的一部分。 -->
+        <view v-if="message != ''" class="card"><text :class="failed ? 't-err' : 't-ok'">{{ message }}</text></view>
+
         <view v-if="notImplemented" v-for="no in localNos" :key="no" class="card" @click="open(no)">
           <text class="t-mono">{{ no }}</text>
           <text class="t-hint">本机记录</text>
@@ -70,7 +76,8 @@
 </template>
 
 <script>
-import { listOrders, ApiFailure } from '@/api/client.uts'
+import { cancelOrder, listOrders, ApiFailure } from '@/api/client.uts'
+import { newIdempotencyKey } from '@/api/idempotency.uts'
 import { isLoggedIn, localOrders } from '@/api/config.uts'
 import { orderRow, OrderRow } from '@/api/view.uts'
 
@@ -83,6 +90,13 @@ export default {
       notImplemented: false,
       loggedIn: false,
       loaded: false,
+      // 两下取消：第一下点过的订单号。
+      armed: '',
+      message: '',
+      failed: false,
+      // 每笔订单一个取消用的幂等键（keyNos[i] 对应 keyVals[i]），这个页面活着期间复用。
+      keyNos: [] as string[],
+      keyVals: [] as string[],
     }
   },
   onShow() {
@@ -115,6 +129,33 @@ export default {
         }
       )
     },
+    keyFor(no: string): string {
+      const i = this.keyNos.indexOf(no)
+      if (i >= 0) return this.keyVals[i]
+      const k = newIdempotencyKey()
+      this.keyNos.push(no)
+      this.keyVals.push(k)
+      return k
+    },
+    cancel(no: string) {
+      if (this.armed != no) {
+        this.armed = no
+        return
+      }
+      this.armed = ''
+      this.message = ''
+      cancelOrder(no, this.keyFor(no),
+        (_o, _r) => {
+          this.failed = false
+          this.message = '订单 ' + no + ' 已取消'
+          this.load()
+        },
+        (f: ApiFailure) => {
+          this.failed = true
+          this.message = f.message
+          this.load()
+        })
+    },
     open(orderNo: string) {
       uni.navigateTo({ url: '/pages/order/detail?order_no=' + orderNo })
     },
@@ -134,5 +175,9 @@ export default {
 }
 .cta {
   width: 160px;
+}
+.list-cancel {
+  margin-right: 18px;
+  color: #7A6E64;
 }
 </style>

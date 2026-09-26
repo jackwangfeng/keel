@@ -15,14 +15,15 @@ async function waitFor(page, selector, predicate = () => true, timeout = 15000) 
 
 // 从测试进程直接发请求（不经过 App）。用 http 模块而不是 fetch：jest 27 的测试环境里
 // 没有全局 fetch。返回 { status, body }，body 是解析过的 JSON（解析不了就是原文）。
-function httpRequest(method, url, body = null, token = '') {
+// extra：额外的请求头（Idempotency-Key 之类）。body 是字符串时原样发（沙箱回调要逐字节原样）。
+function httpRequest(method, url, body = null, token = '', extra = {}) {
   const mod = url.startsWith('https:') ? require('https') : require('http')
-  const headers = {}
+  const headers = { ...extra }
   if (token) headers.Authorization = 'Bearer ' + token
   let payload = null
   if (body !== null) {
-    payload = JSON.stringify(body)
-    headers['Content-Type'] = 'application/json'
+    payload = typeof body === 'string' ? body : JSON.stringify(body)
+    if (!headers['Content-Type']) headers['Content-Type'] = 'application/json'
     headers['Content-Length'] = Buffer.byteLength(payload)
   }
   return new Promise((resolve, reject) => {
@@ -111,4 +112,48 @@ async function pickSku(minQty = 5) {
   return best
 }
 
-module.exports = { waitFor, waitData, waitEl, pickSku, httpGet, httpPost, httpRequest, apiBase, serverToken, loginInApp }
+// 从测试进程下一单（演示买家、默认地址、默认门店），pay=true 时顺手付掉：
+// 发起支付 → 把服务端签好的沙箱回调原样投回去 → 等订单变成已支付。
+// 用例要的是「一笔某状态的单」，下单流程本身由 checkout.test.js 在 App 里走。
+async function placeOrder(token, { pay = false, quantity = 1 } = {}) {
+  const { randomUUID } = require('crypto')
+  const sku = await pickSku(quantity + 2)
+  const store = (await httpGet(apiBase() + '/products?page_size=1')).body.store
+  const addrs = (await httpGet(apiBase() + '/addresses', token)).body
+  const addr = addrs.find((a) => a.is_default) || addrs[0]
+  if (!addr) throw new Error('演示买家名下没有地址')
+  const body = { items: [{ sku_id: sku.skuId, quantity }], store_id: store.store_id, address_id: addr.id }
+  const o = await httpRequest('POST', apiBase() + '/orders', body, token, { 'Idempotency-Key': randomUUID() })
+  if (o.status !== 201) throw new Error('下单失败：' + o.status + ' ' + JSON.stringify(o.body))
+  const orderNo = o.body.order_no
+  if (!pay) return orderNo
+  const p = await httpRequest('POST', apiBase() + '/orders/' + orderNo + '/payments', { channel: 'wechat' }, token,
+    { 'Idempotency-Key': randomUUID() })
+  if (p.status !== 201) throw new Error('发起支付失败：' + p.status + ' ' + JSON.stringify(p.body))
+  const settle = p.body.payload && p.body.payload.settle
+  if (!settle) throw new Error('支付响应里没有沙箱回调信封（演示栈没开沙箱？）')
+  const origin = apiBase().replace(/^(https?:\/\/[^/]+).*$/, '$1')
+  const w = await httpRequest(settle.method || 'POST', origin + settle.url, settle.body, '', settle.headers)
+  if (w.status >= 300) throw new Error('沙箱回调失败：' + w.status + ' ' + JSON.stringify(w.body))
+  for (let i = 0; i < 30; i++) {
+    const d = (await httpGet(apiBase() + '/orders/' + orderNo, token)).body
+    if (d.status === 20) return orderNo
+    await new Promise((r) => setTimeout(r, 300))
+  }
+  throw new Error('付款后订单没有变成已支付：' + orderNo)
+}
+
+// 后台员工会话（发货、审核售后）。只从环境变量读，不进仓库；没设就返回空串，
+// 用到它的用例自己跳过 —— 买家侧的用例不依赖它。
+function staffToken() {
+  return process.env.KEEL_E2E_STAFF_TOKEN || ''
+}
+
+async function staffPost(path, body) {
+  const { randomUUID } = require('crypto')
+  const r = await httpRequest('POST', apiBase() + path, body, staffToken(), { 'Idempotency-Key': randomUUID() })
+  if (r.status >= 300) throw new Error('后台 ' + path + ' 失败：' + r.status + ' ' + JSON.stringify(r.body))
+  return r.body
+}
+
+module.exports = { placeOrder, staffToken, staffPost, waitFor, waitData, waitEl, pickSku, httpGet, httpPost, httpRequest, apiBase, serverToken, loginInApp }

@@ -17,6 +17,10 @@
 //     不是第一道。）
 
 import {
+  ListRefundsQuery,
+  Refund,
+  RefundCreateRequest,
+  RefundItemInput,
   AddCartItemRequest,
   Address,
   AddressInput,
@@ -386,6 +390,15 @@ export type OrderDetailView = {
   freightText : string
   discountText : string
   paidText : string
+  /** 已退金额（refunded_cents）；没退过是空串，页面不显示那一行。 */
+  refundedText : string
+  /** 待支付才能取消。 */
+  canCancel : boolean
+  /** 已发货才能确认收货。 */
+  canConfirm : boolean
+  /** 已支付 / 已发货 / 已完成，且还有没退完、也没在途售后的件数。 */
+  canRefund : boolean
+  refunds : RefundRow[]
   /** 这一单用的券（user_coupon_id），0 = 没用券。 */
   couponId : number
   /** 券名，**下单时的快照**（Order.coupon_name）；没用券是空串。 */
@@ -435,6 +448,11 @@ export function orderDetailView(o : OrderDetail) : OrderDetailView {
     freightText: yuan(o.freight_cents),
     discountText: yuan(o.discount_cents),
     paidText: yuan(o.paid_cents),
+    refundedText: o.refunded_cents != null && o.refunded_cents! > 0 ? yuan(o.refunded_cents!) : '',
+    canCancel: o.status == 10,
+    canConfirm: o.status == 30,
+    canRefund: (o.status == 20 || o.status == 30 || o.status == 40) && refundableItems(o).length > 0,
+    refunds: refundRowsOf(o.refunds),
     couponId: o.user_coupon_id != null ? o.user_coupon_id! : 0,
     couponName: o.coupon_name != null ? o.coupon_name! : '',
     items: rows,
@@ -1073,4 +1091,210 @@ export function identityRow(i : UserIdentity) : IdentityRow {
     name: identityName(i.provider),
     boundAt: shortTime(i.created_at),
   } as IdentityRow
+}
+
+// ---------------------------------------------------------------------------
+// 售后
+// ---------------------------------------------------------------------------
+
+/**
+ * 退款单状态（RefundStatus）。和订单上的 refund_status（资金维度，refundStatusText）不是一个东西。
+ *
+ * 30「退款中」**不是失败**：契约里 30 没有通向失败态的边，渠道调用失败是重试，钱不会凭空消失。
+ * 所以文案是「退款中，等待到账」，不用红色。50「已拒绝」才是商家驳回。
+ */
+export function refundStateText(status : number) : string {
+  if (status == 10) return '待审核'
+  if (status == 20) return '待买家退货'
+  if (status == 30) return '退款中'
+  if (status == 40) return '已退款'
+  if (status == 50) return '已拒绝'
+  if (status == 60) return '已取消'
+  return '未知状态 ' + status.toString()
+}
+
+/** 徽章色调：warn 进行中 / ok 已退款 / refund 已拒绝 / muted 已取消。 */
+export function refundStateTone(status : number) : string {
+  if (status == 10 || status == 20 || status == 30) return 'warn'
+  if (status == 40) return 'ok'
+  if (status == 50) return 'refund'
+  return 'muted'
+}
+
+export function refundTypeText(t : number) : string {
+  return t == 2 ? '退货退款' : '仅退款'
+}
+
+export function refundReasonText(code : number) : string {
+  if (code == 1) return '不想要了'
+  if (code == 2) return '少发漏发'
+  if (code == 3) return '商品损坏'
+  if (code == 4) return '描述不符'
+  if (code == 5) return '其他'
+  return ''
+}
+
+export type RefundRow = {
+  refundNo : string
+  orderNo : string
+  status : number
+  statusText : string
+  statusTone : string
+  typeText : string
+  amountText : string
+  createdAt : string
+  /** 「亚麻四件套 ×1 等 2 件」 */
+  itemsText : string
+}
+
+export function refundRow(r : Refund) : RefundRow {
+  let itemsText = ''
+  let count = 0
+  for (let i = 0; i < r.items.length; i++) count += r.items[i].quantity
+  if (r.items.length > 0) {
+    const first = r.items[0]
+    const title = first.title != null ? first.title! : '商品'
+    itemsText = r.items.length == 1
+      ? title + ' ×' + first.quantity.toString()
+      : title + ' 等 ' + count.toString() + ' 件'
+  }
+  return {
+    refundNo: r.refund_no,
+    orderNo: r.order_no,
+    status: r.status,
+    statusText: refundStateText(r.status),
+    statusTone: refundStateTone(r.status),
+    typeText: refundTypeText(r.refund_type),
+    amountText: yuan(r.amount_cents),
+    createdAt: shortTime(r.created_at),
+    itemsText: itemsText,
+  } as RefundRow
+}
+
+function refundRowsOf(list ?: Refund[]) : RefundRow[] {
+  const out : RefundRow[] = []
+  if (list == null) return out
+  for (let i = 0; i < list!.length; i++) out.push(refundRow(list![i]))
+  return out
+}
+
+export type RefundItemRow = {
+  title : string
+  quantity : number
+  /** 这一行实退多少：服务端按优惠分摊算的，客户端不算。 */
+  amountText : string
+  cover : Cover
+}
+
+export type RefundDetailView = {
+  head : RefundRow
+  items : RefundItemRow[]
+  reasonText : string
+  /** 50 已拒绝时的驳回理由；别的状态是空串。 */
+  rejectReason : string
+  /** 10 待审核 / 20 待买家退货 可以撤回。 */
+  canCancel : boolean
+  /** 20：退货退款审核通过，等买家寄回。填物流单号的接口还没有，只能写说明。 */
+  awaitingReturn : boolean
+  /** 30：钱在路上。 */
+  inTransit : boolean
+  /** 50：可以重新申请。 */
+  rejected : boolean
+  refundedAt : string
+  channelRefundId : string
+  goodsText : string
+  freightText : string
+}
+
+export function refundDetailView(r : Refund) : RefundDetailView {
+  const items : RefundItemRow[] = []
+  for (let i = 0; i < r.items.length; i++) {
+    const it = r.items[i]
+    const title = it.title != null ? it.title! : '商品 #' + it.order_item_id.toString()
+    items.push({
+      title: title,
+      quantity: it.quantity,
+      amountText: yuan(it.amount_cents),
+      cover: coverOf(it.order_item_id, title, it.image_url),
+    } as RefundItemRow)
+  }
+  const code = r.reason_code != null ? r.reason_code! : 0
+  const text = r.reason_text != null ? r.reason_text! : ''
+  const reason = refundReasonText(code)
+  return {
+    head: refundRow(r),
+    items: items,
+    reasonText: reason != '' && text != '' ? reason + '：' + text : (reason != '' ? reason : text),
+    rejectReason: r.status == 50 && r.reject_reason != null ? r.reject_reason! : '',
+    canCancel: r.status == 10 || r.status == 20,
+    awaitingReturn: r.status == 20,
+    inTransit: r.status == 30,
+    rejected: r.status == 50,
+    refundedAt: r.refunded_at != null ? shortTime(r.refunded_at!) : '',
+    channelRefundId: r.channel_refund_id != null ? r.channel_refund_id! : '',
+    goodsText: yuan(r.goods_amount_cents),
+    freightText: yuan(r.freight_cents),
+  } as RefundDetailView
+}
+
+/** 申请售后时可以选的一行。maxQty = 购买 − 已退 − 在途；为 0 的行不列出来。 */
+export type RefundableItem = {
+  orderItemId : number
+  title : string
+  specText : string
+  priceText : string
+  maxQty : number
+  cover : Cover
+}
+
+export function refundableItems(o : OrderDetail) : RefundableItem[] {
+  const out : RefundableItem[] = []
+  const items = o.items
+  if (items == null) return out
+  for (let i = 0; i < items!.length; i++) {
+    const it = items![i]
+    const refunded = it.refunded_qty != null ? it.refunded_qty! : 0
+    const refunding = it.refunding_qty != null ? it.refunding_qty! : 0
+    const max = it.quantity - refunded - refunding
+    if (max <= 0) continue
+    const values : string[] = []
+    const sv = it.spec_values
+    if (sv != null) {
+      const parts = jsonStrings(JSON.stringify(sv))
+      for (let k = 0; k + 1 < parts.length; k += 2) values.push(parts[k + 1])
+    }
+    out.push({
+      orderItemId: it.id,
+      title: it.title,
+      specText: values.join(' / '),
+      priceText: yuan(it.price_cents),
+      maxQty: max,
+      cover: coverOf(it.product_id != null ? it.product_id! : it.sku_id, it.title, it.image_url),
+    } as RefundableItem)
+  }
+  return out
+}
+
+/** 申请售后选中的一行。 */
+export type RefundLine = {
+  orderItemId : number
+  quantity : number
+}
+
+/**
+ * 售后申请的请求体。**不带金额**：每行实退多少由服务端按优惠分摊算。
+ * refundType 由用户选（1 仅退款 / 2 退货退款），页面不给默认值 —— 服务端不猜，客户端也不猜。
+ */
+export function refundRequest(lines : RefundLine[], refundType : number, reasonCode : number, reasonText : string) : RefundCreateRequest {
+  const items : RefundItemInput[] = []
+  for (let i = 0; i < lines.length; i++) {
+    items.push({ order_item_id: lines[i].orderItemId, quantity: lines[i].quantity } as RefundItemInput)
+  }
+  const r : RefundCreateRequest = { items: items, refund_type: refundType, reason_code: reasonCode }
+  if (reasonText != '') r.reason_text = reasonText
+  return r
+}
+
+export function refundListQuery(page : number, pageSize : number) : ListRefundsQuery {
+  return { page: page, page_size: pageSize } as ListRefundsQuery
 }

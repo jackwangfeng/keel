@@ -1,0 +1,201 @@
+<template>
+  <view class="page">
+    <scroll-view class="scroll" direction="vertical">
+      <view class="body">
+        <view v-if="error != ''" class="card"><text class="t-err">{{ error }}</text></view>
+
+        <view v-if="v != null" class="status">
+          <text class="t-display">{{ v!.head.statusText }}</text>
+          <text class="t-sub">{{ statusLine }}</text>
+        </view>
+
+        <!-- 50 已拒绝：商家驳回，理由写出来，可以重新申请。和 30「退款中」是两回事。 -->
+        <view v-if="v != null && v!.rejected" class="card result-err">
+          <text class="t-overline">驳回理由</text>
+          <text class="t-err reject">{{ v!.rejectReason != '' ? v!.rejectReason : '商家没有填写理由' }}</text>
+          <view class="gap-m"></view>
+          <view class="btn-ghost reapply-btn" @click="reapply"><text class="btn-ghost-text">重新申请</text></view>
+        </view>
+
+        <!-- 20 待买家退货：寄回物流单号的接口还没有，只能写说明。 -->
+        <view v-if="v != null && v!.awaitingReturn" class="notice">
+          <text class="notice-title">请把商品寄回商家</text>
+          <text class="notice-text">商家确认收到退货后会退款。在线填写物流单号的功能还没有开放，如需帮助请联系商家。</text>
+        </view>
+
+        <view v-if="v != null" class="card">
+          <view v-for="(it, idx) in v!.items" :key="idx" :class="['row', idx > 0 ? 'line-next' : '']">
+            <view class="cover thumb" :style="{ backgroundColor: it.cover.color }">
+              <image v-if="it.cover.imageUrl != ''" class="cover-img" :src="it.cover.imageUrl" mode="aspectFill"></image>
+              <text v-else class="cover-glyph thumb-glyph">{{ it.cover.glyph }}</text>
+            </view>
+            <view class="fill item-info">
+              <text class="t-body">{{ it.title }}</text>
+              <text class="t-hint">× {{ it.quantity }}</text>
+            </view>
+            <text class="t-price">{{ it.amountText }}</text>
+          </view>
+          <view class="divider"></view>
+          <view class="kv"><text class="t-sub">退款金额</text><text class="t-price refund-amount">{{ v!.head.amountText }}</text></view>
+          <view class="kv"><text class="t-sub">售后类型</text><text class="t-body">{{ v!.head.typeText }}</text></view>
+          <view v-if="v!.reasonText != ''" class="kv"><text class="t-sub">原因</text><text class="t-body reason">{{ v!.reasonText }}</text></view>
+          <view v-if="v!.refundedAt != ''" class="kv"><text class="t-sub">到账时间</text><text class="t-body">{{ v!.refundedAt }}</text></view>
+          <view v-if="v!.channelRefundId != ''" class="kv"><text class="t-sub">退款流水号</text><text class="t-mono">{{ v!.channelRefundId }}</text></view>
+        </view>
+
+        <view v-if="v != null && v!.canCancel" class="actions row">
+          <view :class="['btn-ghost', 'act', 'cancel-refund-btn', busy ? 'btn-off' : '']" @click="cancel">
+            <text class="btn-ghost-text">{{ armed ? '再点一次确认撤回' : '撤回申请' }}</text>
+          </view>
+        </view>
+        <view v-if="message != ''" class="msg"><text :class="failed ? 't-err' : 't-ok'">{{ message }}</text></view>
+
+        <view v-if="v != null" class="meta">
+          <view class="kv"><text class="t-hint">售后单号</text><text class="t-mono">{{ v!.head.refundNo }}</text></view>
+          <view class="kv" @click="openOrder"><text class="t-hint">订单号</text><text class="t-link">{{ v!.head.orderNo }} ›</text></view>
+          <view class="kv"><text class="t-hint">申请时间</text><text class="t-hint">{{ v!.head.createdAt }}</text></view>
+        </view>
+      </view>
+    </scroll-view>
+  </view>
+</template>
+
+<script>
+import { cancelRefund, getRefund, ApiFailure } from '@/api/client.uts'
+import { newIdempotencyKey } from '@/api/idempotency.uts'
+import { refundDetailView, RefundDetailView } from '@/api/view.uts'
+
+export default {
+  data() {
+    return {
+      refundNo: '',
+      v: null as RefundDetailView | null,
+      error: '',
+      message: '',
+      failed: false,
+      busy: false,
+      armed: false,
+      cancelKey: '',
+    }
+  },
+  computed: {
+    statusLine(): string {
+      const v = this.v
+      if (v == null) return ''
+      const s = v.head.status
+      if (s == 10) return '等待商家审核'
+      if (s == 20) return '审核已通过，请寄回商品'
+      // 30 不是失败：钱在路上，不会凭空消失。
+      if (s == 30) return '商家已同意，退款正在原路退回，到账时间以支付渠道为准'
+      if (s == 40) return '退款已原路退回'
+      if (s == 50) return '商家驳回了这次申请'
+      if (s == 60) return '这次申请已撤回'
+      return ''
+    },
+  },
+  onLoad(options: OnLoadOptions) {
+    const raw = options['refund_no']
+    this.refundNo = raw != null ? (decodeURIComponent('' + raw) ?? '') : ''
+    this.cancelKey = newIdempotencyKey()
+  },
+  onShow() {
+    this.load()
+  },
+  methods: {
+    load() {
+      getRefund(this.refundNo,
+        (r) => {
+          this.v = refundDetailView(r)
+          this.error = ''
+        },
+        (f: ApiFailure) => {
+          this.error = f.message
+        })
+    },
+    cancel() {
+      if (this.busy) return
+      if (!this.armed) {
+        this.armed = true
+        return
+      }
+      this.armed = false
+      this.busy = true
+      this.message = ''
+      cancelRefund(this.refundNo, this.cancelKey,
+        (r, _rp) => {
+          this.busy = false
+          this.failed = false
+          this.message = '已撤回'
+          this.v = refundDetailView(r)
+        },
+        (f: ApiFailure) => {
+          this.busy = false
+          this.failed = true
+          // 多半是商家刚审完：照实说，并刷新成现在的状态。
+          this.message = f.message
+          this.load()
+        })
+    },
+    reapply() {
+      const v = this.v
+      if (v == null) return
+      uni.redirectTo({ url: '/pages/refund/apply?order_no=' + encodeURIComponent(v.head.orderNo) })
+    },
+    openOrder() {
+      const v = this.v
+      if (v == null) return
+      uni.navigateTo({ url: '/pages/order/detail?order_no=' + encodeURIComponent(v.head.orderNo) })
+    },
+  },
+}
+</script>
+
+<style>
+.status {
+  padding: 20px 4px 8px 4px;
+}
+.reject {
+  margin-top: 6px;
+  font-size: 15px;
+}
+.reapply-btn {
+  width: 140px;
+}
+.thumb {
+  width: 56px;
+  height: 56px;
+  border-radius: 10px;
+}
+.thumb-glyph {
+  font-size: 22px;
+}
+.item-info {
+  margin-left: 12px;
+}
+.line-next {
+  margin-top: 12px;
+}
+.reason {
+  flex: 1;
+  text-align: right;
+  margin-left: 16px;
+}
+.actions {
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+.act {
+  padding: 0 18px;
+}
+.result-err {
+  background-color: #F8EAE5;
+}
+.msg {
+  margin-top: 10px;
+  align-items: flex-end;
+}
+.meta {
+  margin-top: 20px;
+  padding: 0 4px;
+}
+</style>

@@ -21,6 +21,10 @@
 // 会一直编译得过 —— 直到线上。
 
 import {
+  ListRefundsQuery,
+  ListRefundsResponse,
+  Refund,
+  RefundCreateRequest,
   AddCartItemRequest,
   Address,
   AddressInput,
@@ -86,6 +90,14 @@ export const PROBLEM_SKU_NOT_SOLD_IN_STORE = 'https://keel.dev/problems/sku-not-
 export const PROBLEM_CART_QUANTITY_EXCEEDED = 'https://keel.dev/problems/cart-quantity-exceeded'
 // 个人信息：解绑后账号没有任何可登录凭据。
 export const PROBLEM_LAST_CREDENTIAL = 'https://keel.dev/problems/last-credential'
+// 订单后半程（internal/problem/problem.go 那一节）。都是「这个状态不能做这件事」，
+// 页面据此刷新订单 / 售后单，而不是只弹一句错。
+export const PROBLEM_ORDER_NOT_CANCELABLE = 'https://keel.dev/problems/order-status-not-cancelable'
+export const PROBLEM_ORDER_NOT_CONFIRMABLE = 'https://keel.dev/problems/order-status-not-confirmable'
+export const PROBLEM_ORDER_NOT_REFUNDABLE = 'https://keel.dev/problems/order-status-not-refundable'
+export const PROBLEM_REFUND_QUANTITY_EXCEEDED = 'https://keel.dev/problems/refund-quantity-exceeded'
+export const PROBLEM_REFUND_ALREADY_IN_PROGRESS = 'https://keel.dev/problems/refund-already-in-progress'
+export const PROBLEM_REFUND_NOT_CANCELABLE = 'https://keel.dev/problems/refund-status-not-cancelable'
 
 /**
  * 一次失败的调用。
@@ -847,6 +859,101 @@ export function clearCart(onOk : () => void, onErr : FailureHandler) {
   send('DELETE', '/cart', '', null, null, (_s : number, _t : string, _r : boolean) => {
     onOk()
   }, onErr)
+}
+
+// ---------------------------------------------------------------------------
+// 订单后半程：取消、确认收货、售后
+// ---------------------------------------------------------------------------
+//
+// 写操作**都要 Idempotency-Key**，都不带金额：售后每行实退多少由服务端按优惠分摊算好，
+// 在响应的 items[].amount_cents 里回传。键由页面给，同一次操作的重试复用同一个键。
+
+function orderOk(onOk : (o : Order, replayed : boolean) => void, onErr : FailureHandler) : RawOk {
+  return (s : number, text : string, replayed : boolean) => {
+    const body = JSON.parse<Order>(text)
+    if (body == null) {
+      onErr(decodeFailure(s))
+      return
+    }
+    onOk(body!, replayed)
+  }
+}
+
+function refundOk(onOk : (r : Refund, replayed : boolean) => void, onErr : FailureHandler) : RawOk {
+  return (s : number, text : string, replayed : boolean) => {
+    const body = JSON.parse<Refund>(text)
+    if (body == null) {
+      onErr(decodeFailure(s))
+      return
+    }
+    onOk(body!, replayed)
+  }
+}
+
+/** POST /orders/{no}/cancel：只有待支付的单能取消；库存与锁住的券同一事务退回。 */
+export function cancelOrder(orderNo : string, idempotencyKey : string,
+  onOk : (o : Order, replayed : boolean) => void, onErr : FailureHandler) {
+  send('POST', '/orders/' + encodeURIComponent(orderNo) + '/cancel', '', null, idempotencyKey,
+    orderOk(onOk, onErr), onErr)
+}
+
+/** POST /orders/{no}/confirm：已发货（30）的单才行。 */
+export function confirmOrder(orderNo : string, idempotencyKey : string,
+  onOk : (o : Order, replayed : boolean) => void, onErr : FailureHandler) {
+  send('POST', '/orders/' + encodeURIComponent(orderNo) + '/confirm', '', null, idempotencyKey,
+    orderOk(onOk, onErr), onErr)
+}
+
+/** POST /orders/{no}/refunds：申请售后。请求体不带金额。 */
+export function createRefund(req : RefundCreateRequest, orderNo : string, idempotencyKey : string,
+  onOk : (r : Refund, replayed : boolean) => void, onErr : FailureHandler) {
+  send('POST', '/orders/' + encodeURIComponent(orderNo) + '/refunds', '', req, idempotencyKey,
+    refundOk(onOk, onErr), onErr)
+}
+
+/** GET /orders/{no}/refunds：这一单的售后单，200 是裸数组。 */
+export function listOrderRefunds(orderNo : string,
+  onOk : (list : Refund[]) => void, onErr : FailureHandler) {
+  send('GET', '/orders/' + encodeURIComponent(orderNo) + '/refunds', '', null, null,
+    (_s : number, text : string, _r : boolean) => {
+      const body = JSON.parse<Refund[]>(text)
+      if (body == null) {
+        onErr(decodeFailure(200))
+        return
+      }
+      onOk(body!)
+    }, onErr)
+}
+
+/** GET /refunds：我的全部售后单，可按 status 过滤。 */
+export function listRefunds(query : ListRefundsQuery,
+  onOk : (page : ListRefundsResponse) => void, onErr : FailureHandler) {
+  const parts : string[] = []
+  pushIf(parts, param('page', query.page))
+  pushIf(parts, param('page_size', query.page_size))
+  pushIf(parts, param('status', query.status))
+  send('GET', '/refunds', queryString(parts), null, null,
+    (_s : number, text : string, _r : boolean) => {
+      const body = JSON.parse<ListRefundsResponse>(text)
+      if (body == null) {
+        onErr(decodeFailure(200))
+        return
+      }
+      onOk(body!)
+    }, onErr)
+}
+
+export function getRefund(refundNo : string,
+  onOk : (r : Refund) => void, onErr : FailureHandler) {
+  send('GET', '/refunds/' + encodeURIComponent(refundNo), '', null, null,
+    refundOk((r : Refund, _rp : boolean) => { onOk(r) }, onErr), onErr)
+}
+
+/** POST /refunds/{no}/cancel：撤回。10 待审核、20 待买家退货时可以。 */
+export function cancelRefund(refundNo : string, idempotencyKey : string,
+  onOk : (r : Refund, replayed : boolean) => void, onErr : FailureHandler) {
+  send('POST', '/refunds/' + encodeURIComponent(refundNo) + '/cancel', '', null, idempotencyKey,
+    refundOk(onOk, onErr), onErr)
 }
 
 // ---------------------------------------------------------------------------

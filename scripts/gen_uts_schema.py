@@ -82,6 +82,10 @@ OPERATIONS = [
     ('patch', '/cart/items/{item_id}', 'UpdateCartItem'),
     ('put', '/cart/selection', 'SelectCartItems'),
     ('post', '/cart/items/batch-delete', 'BatchDeleteCartItems'),
+    # 订单后半程。取消 / 确认收货 / 撤回售后都没有请求体，200 直接 $ref，不用进表；
+    # GET /orders/{order_no}/refunds 是裸数组，同 GET /addresses。
+    ('post', '/orders/{order_no}/refunds', 'CreateRefund'),
+    ('get', '/refunds', 'ListRefunds'),
 ]
 
 HEADER = '''// 由 scripts/gen_uts_schema.py 从 docs/电商系统-OpenAPI.yaml 生成。**请勿手改。**

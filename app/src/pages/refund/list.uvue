@@ -1,0 +1,76 @@
+<template>
+  <view class="page">
+    <scroll-view class="scroll" direction="vertical">
+      <view class="body">
+        <view v-if="error != ''" class="card">
+          <text class="t-err">{{ error }}</text>
+          <view class="gap-m"></view>
+          <view class="btn-ghost" @click="load"><text class="btn-ghost-text">重新加载</text></view>
+        </view>
+
+        <view v-for="r in rows" :key="r.refundNo" class="card refund-card" @click="open(r.refundNo)">
+          <view class="between">
+            <text class="t-body">{{ r.typeText }}</text>
+            <view :class="['badge', 'badge-' + r.statusTone]"><text :class="['badge-text', 'badge-' + r.statusTone + '-text']">{{ r.statusText }}</text></view>
+          </view>
+          <text class="t-sub items">{{ r.itemsText }}</text>
+          <view class="between foot">
+            <text class="t-hint">{{ r.createdAt }}</text>
+            <text class="t-price">{{ r.amountText }}</text>
+          </view>
+        </view>
+
+        <view v-if="loaded && rows.length == 0 && error == ''" class="empty">
+          <view class="empty-mark"><text class="empty-mark-text">↺</text></view>
+          <text class="t-sub">还没有售后记录</text>
+        </view>
+      </view>
+    </scroll-view>
+  </view>
+</template>
+
+<script>
+import { listRefunds, ApiFailure } from '@/api/client.uts'
+import { refundListQuery, refundRow, RefundRow } from '@/api/view.uts'
+
+export default {
+  data() {
+    return {
+      rows: [] as RefundRow[],
+      loaded: false,
+      error: '',
+    }
+  },
+  onShow() {
+    this.load()
+  },
+  methods: {
+    load() {
+      this.error = ''
+      listRefunds(refundListQuery(1, 50),
+        (page) => {
+          const rows: RefundRow[] = []
+          for (let i = 0; i < page.items.length; i++) rows.push(refundRow(page.items[i]))
+          this.rows = rows
+          this.loaded = true
+        },
+        (f: ApiFailure) => {
+          this.error = f.message
+          this.loaded = true
+        })
+    },
+    open(no: string) {
+      uni.navigateTo({ url: '/pages/refund/detail?refund_no=' + encodeURIComponent(no) })
+    },
+  },
+}
+</script>
+
+<style>
+.items {
+  margin-top: 8px;
+}
+.foot {
+  margin-top: 10px;
+}
+</style>

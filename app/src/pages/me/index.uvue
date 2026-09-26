@@ -29,6 +29,11 @@
             <text class="chev">›</text>
           </view>
           <view class="line"></view>
+          <view class="item" @click="goRefunds">
+            <text class="t-body fill">售后 / 退款</text>
+            <text class="chev">›</text>
+          </view>
+          <view class="line"></view>
           <view class="item" @click="goCoupons">
             <text class="t-body fill">我的优惠券</text>
             <text class="chev">›</text>
@@ -109,6 +114,13 @@ export default {
     },
     goOrders() {
       uni.switchTab({ url: '/pages/order/list' })
+    },
+    goRefunds() {
+      if (!this.loggedIn) {
+        uni.navigateTo({ url: '/pages/auth/login' })
+        return
+      }
+      uni.navigateTo({ url: '/pages/refund/list' })
     },
     goProfile() {
       uni.navigateTo({ url: '/pages/me/profile' })

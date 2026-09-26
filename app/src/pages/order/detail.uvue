@@ -49,6 +49,7 @@
             <text class="t-body coupon-used">{{ view!.couponId > 0 ? (view!.couponName != '' ? view!.couponName + ' ' : '') + '-' + view!.discountText : view!.discountText }}</text>
           </view>
           <view class="kv"><text class="t-sub">已付</text><text class="t-body">{{ view!.paidText }}</text></view>
+          <view v-if="view!.refundedText != ''" class="kv"><text class="t-sub">已退</text><text class="t-body">{{ view!.refundedText }}</text></view>
           <view class="divider"></view>
           <view class="kv"><text class="t-section">应付</text><text class="t-price">{{ view!.head.payableText }}</text></view>
         </view>
@@ -94,6 +95,38 @@
           <text v-if="settleMessage != ''" :class="settleFailed ? 't-err' : 't-ok'">{{ settleMessage }}</text>
         </view>
 
+        <!-- 售后单。点进去看进度、撤回。 -->
+        <view v-if="view != null && view!.refunds.length > 0" class="card">
+          <text class="t-overline">售后</text>
+          <view v-for="r in view!.refunds" :key="r.refundNo" class="refund-row between" @click="openRefund(r.refundNo)">
+            <view class="fill">
+              <text class="t-body">{{ r.typeText }} · {{ r.itemsText }}</text>
+              <text class="t-hint">{{ r.createdAt }}</text>
+            </view>
+            <view class="row">
+              <view :class="['badge', 'badge-' + r.statusTone]"><text :class="['badge-text', 'badge-' + r.statusTone + '-text']">{{ r.statusText }}</text></view>
+              <text class="chev">›</text>
+            </view>
+          </view>
+        </view>
+
+        <!-- 订单动作。取消与确认收货都是「点两下」：第一下变成「再点一次确认」，第二下才发请求。
+             不用系统弹窗：结果一样防误触，而且留在页面里、看得见。 -->
+        <view v-if="view != null && (view!.canCancel || view!.canConfirm || view!.canRefund)" class="actions row">
+          <view v-if="view!.canCancel" :class="['btn-ghost', 'act', 'cancel-btn', acting ? 'btn-off' : '']" @click="cancel">
+            <text class="btn-ghost-text">{{ armed == 'cancel' ? '再点一次确认取消' : '取消订单' }}</text>
+          </view>
+          <view v-if="view!.canRefund" class="btn-ghost act refund-btn" @click="applyRefund">
+            <text class="btn-ghost-text">申请售后</text>
+          </view>
+          <view v-if="view!.canConfirm" :class="['btn', 'act', 'confirm-btn', acting ? 'btn-off' : '']" @click="confirmReceipt">
+            <text class="btn-text">{{ armed == 'confirm' ? '再点一次确认收货' : '确认收货' }}</text>
+          </view>
+        </view>
+        <view v-if="actMessage != ''" class="msg">
+          <text :class="actFailed ? 't-err' : 't-ok'">{{ actMessage }}</text>
+        </view>
+
         <view class="meta">
           <view class="kv"><text class="t-hint">订单号</text><text class="t-mono">{{ orderNo }}</text></view>
           <view v-if="view != null" class="kv"><text class="t-hint">下单时间</text><text class="t-hint">{{ view!.head.createdAt }}</text></view>
@@ -115,6 +148,8 @@
 
 <script>
 import {
+  cancelOrder,
+  confirmOrder,
   createPayment,
   getOrder,
   sandboxPayloadOf,
@@ -157,6 +192,15 @@ export default {
       settleMessage: '',
       settleFailed: false,
       safeBottom: 0,
+      // 取消 / 确认收货：各自一个幂等键，进页面生成一次，重试复用。
+      cancelKey: '',
+      confirmKey: '',
+      // 'cancel' / 'confirm'：第一下点过了，等第二下。
+      armed: '',
+      acting: false,
+      actMessage: '',
+      actFailed: false,
+      loadedOnce: false,
     }
   },
   computed: {
@@ -178,9 +222,69 @@ export default {
     this.orderNo = raw != null ? '' + raw : ''
     // 支付的幂等键同样是「进页面生成一次」。
     this.payKey = newIdempotencyKey()
+    this.cancelKey = newIdempotencyKey()
+    this.confirmKey = newIdempotencyKey()
     this.load()
   },
+  onShow() {
+    // 从售后申请 / 售后详情回来：售后状态和可退件数都可能变了。
+    if (this.loadedOnce) this.load()
+  },
   methods: {
+    cancel() {
+      if (this.acting) return
+      if (this.armed != 'cancel') {
+        this.armed = 'cancel'
+        return
+      }
+      this.armed = ''
+      this.acting = true
+      this.actMessage = ''
+      cancelOrder(this.orderNo, this.cancelKey,
+        (_o, _r) => {
+          this.acting = false
+          this.actFailed = false
+          this.actMessage = '订单已取消，库存与优惠券已退回'
+          this.payable = false
+          this.load()
+        },
+        (f: ApiFailure) => {
+          this.acting = false
+          this.actFailed = true
+          // 多半是刚付完或刚超时关闭：照实说，并刷新成现在的状态。
+          this.actMessage = f.message
+          this.load()
+        })
+    },
+    confirmReceipt() {
+      if (this.acting) return
+      if (this.armed != 'confirm') {
+        this.armed = 'confirm'
+        return
+      }
+      this.armed = ''
+      this.acting = true
+      this.actMessage = ''
+      confirmOrder(this.orderNo, this.confirmKey,
+        (_o, _r) => {
+          this.acting = false
+          this.actFailed = false
+          this.actMessage = '已确认收货'
+          this.load()
+        },
+        (f: ApiFailure) => {
+          this.acting = false
+          this.actFailed = true
+          this.actMessage = f.message
+          this.load()
+        })
+    },
+    applyRefund() {
+      uni.navigateTo({ url: '/pages/refund/apply?order_no=' + encodeURIComponent(this.orderNo) })
+    },
+    openRefund(no: string) {
+      uni.navigateTo({ url: '/pages/refund/detail?refund_no=' + encodeURIComponent(no) })
+    },
     load() {
       if (this.orderNo == '') {
         this.error = '没有指定订单'
@@ -191,6 +295,7 @@ export default {
         (d) => {
           const v = orderDetailView(d)
           this.view = v
+          this.loadedOnce = true
           this.payable = v.head.payable
           this.error = ''
           this.notImplemented = false
@@ -349,5 +454,21 @@ export default {
 }
 .coupon-used {
   color: #B4462E;
+}
+.refund-row {
+  padding: 12px 0 2px 0;
+}
+.actions {
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+.act {
+  padding: 0 18px;
+  margin-left: 10px;
+}
+.chev {
+  margin-left: 6px;
+  font-size: 16px;
+  color: #A89C90;
 }
 </style>

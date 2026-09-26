@@ -76,7 +76,8 @@ IMPORT_RE = re.compile(r"""(from\s+|import\s*\(\s*)(['"])([^'"]+)\.uts\2""")
 REQUEST_FNS = ('listProducts', 'search', 'previewOrder', 'createOrder',
                'listCouponTemplates', 'listCoupons',
                'updateMe', 'createAddress', 'updateAddress',
-               'addCartItem', 'updateCartItem', 'selectCartItems', 'batchDeleteCartItems')
+               'addCartItem', 'updateCartItem', 'selectCartItems', 'batchDeleteCartItems',
+               'createRefund', 'listRefunds')
 
 SCHEMA_IMPORT_RE = re.compile(r"""from\s+['"][^'"]*/schema\.uts['"]""")
 INLINE_LITERAL_RE = re.compile(r'\b(%s)\(\s*\{' % '|'.join(REQUEST_FNS))
