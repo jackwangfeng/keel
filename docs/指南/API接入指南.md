@@ -146,6 +146,7 @@ key 的有效期是 24 小时，作用域是「接口 + 用户 + key」。哪些
 | 申请售后（不传金额，按行和件数） | `POST /orders/{order_no}/refunds` |
 | 查看、撤回售后 | `GET /refunds`、`GET /refunds/{refund_no}`、`POST /refunds/{refund_no}/cancel` |
 | 上传退款凭证 / 头像 | `POST /uploads`（multipart：`purpose` = `3` 凭证 / `2` 头像，`file`） |
+| 换头像 | `PATCH /me`（`avatar_url` 只收本人 `purpose=2` 上传的 `url`，空串清掉） |
 | 退货退款：填寄回的物流 | `POST /refunds/{refund_no}/return-shipment`（`carrier_code`、`tracking_no`） |
 
 写操作都要带 `Idempotency-Key`。订单详情里每一行有 `refunded_qty` 和 `refunding_qty`，
@@ -163,9 +164,23 @@ key 的有效期是 24 小时，作用域是「接口 + 用户 + key」。哪些
 商家收到货确认后才进入退款；`20` 期间可以再调一次改掉填错的单号。
 填过的物流在退款单的 `return_shipment` 里。
 
+**寄回时限**：`20 待买家退货` 且还没填物流的退款单带 `return_deadline_at`（审核通过时间 +
+店铺设置的天数，默认 7 天）。过了这个时间还没填，系统把它关到 `60 已取消`（至多晚十分钟），
+买家收到一条 `refund_return_expired` 通知，可以重新申请。填过物流的不关。客户端据此提示
+「请在 X 前寄回」，不要自己按 7 天算 —— 天数是商家可改的。
+
 **自动确认收货**：发货后买家不点确认，满店铺设置的天数（默认 7 天）系统替他确认，
 订单到 `40 已完成`；这一单有进行中的售后时暂停，售后结束后再确认。
-客户端要展示倒计时的话按 `shipped_at` + 7 天估算（天数目前没有对外接口）。
+`30 已发货` 的订单详情带 `auto_confirm_at`（发货时间 + 此刻的天数），倒计时照它显示，
+不要按 7 天估。
+
+**头像**（破坏性变化）：`PATCH /me` 的 `avatar_url` 只收你自己用 `POST /uploads`（`purpose=2`）
+传的那个 `url`，外链（包括微信头像地址）、别人的文件、退款凭证都回 422 并点名 `avatar_url`。
+所以换头像是两步：先上传拿到 `url`，再 `PATCH /me`。换掉（或清掉）的旧头像 24 小时后会被清理，
+不要缓存旧地址。已经存着外链头像的老用户照常显示，直到他自己改掉。
+
+**上传了没用上的文件**：`POST /uploads` 传上来、24 小时内没有写进任何业务对象（售后申请、头像）
+的文件会被清理。拿到 `url` 之后请尽快提交对应的表单；清理掉的地址再拿去提交是 422。
 
 购物车（`/cart`）按门店计价，请求时带上和商品页、下单页相同的 `store_id`。
 购物车金额和试算用的是同一条价格查询，两边逐分一致。
@@ -243,7 +258,7 @@ curl -s -H "Authorization: Bearer $STAFF_TOKEN" \
 
 ## 经营报表
 
-六条只读接口，都在 `/admin/reports/` 下，要后台会话（`Authorization: Bearer <会话 token>`），
+六条只读接口（外加两份 CSV 导出），都在 `/admin/reports/` 下，要后台会话（`Authorization: Bearer <会话 token>`），
 平台级会话同样可以带 `X-Keel-Merchant` 切店。口径的唯一真相源是契约里的 `ReportWindow`
 与 `ReportMetrics`，这里只列要点：
 
@@ -255,13 +270,15 @@ curl -s -H "Authorization: Bearer $STAFF_TOKEN" \
 | `GET /admin/reports/stores` | 门店与大区对比 | — |
 | `GET /admin/reports/inventory-alerts` | `available_qty <= warning_qty` 的门店 SKU | `limit`（1–200），没有时间参数 |
 | `GET /admin/reports/search` | 搜索次数、无结果率、热门词、无结果词 | `limit`（1–50） |
+| `GET /admin/reports/products.csv` | 商品排行导出为 CSV | 同 `products` |
+| `GET /admin/reports/stores.csv` | 门店与大区对比导出为 CSV | 同 `stores` |
 
 **时间窗口**（前五条里除库存预警外都收）：`period` = `today`（默认）/ `yesterday` /
 `last_7_days` / `last_30_days` / `custom`；`custom` 必须同时给 `start_date` 与 `end_date`
 （`YYYY-MM-DD`，**都含**），最多跨 **366 天**。窗口写错（不认识的 `period`、缺日期、起晚于止、
 超过 366 天）一律 `422 invalid-request`，不会悄悄回退成今天。
 
-- **时区**：按店铺时区（`shop_settings.timezone`，没有就是 `Asia/Shanghai`）切自然日与整点，
+- **时区**：按店铺时区（店铺设置 `GET /admin/shop-settings` 的 `timezone`，没改过就是 `Asia/Shanghai`）切自然日与整点，
   响应的 `window.timezone` 回显实际用的那一个。`window.current` / `window.previous` 给出
   半开区间 `[start_at, end_at)`（UTC）和店铺时区里的 `start_date` / `end_date`（都含）。
 - **`last_7_days` / `last_30_days` 不含今天**；`today` 的上一周期是**昨天的同一时段**。
@@ -278,13 +295,36 @@ curl -H "Authorization: Bearer $STAFF_TOKEN" \
   "http://localhost:8080/api/v1/admin/reports/overview?period=custom&start_date=2026-09-01&end_date=2026-09-26"
 ```
 
+**CSV 导出**：两条 `.csv` 接口与对应的 JSON 接口同参数、同判权、同范围，返回 `text/csv` 附件
+（`Content-Disposition` 里的文件名带窗口起止日期）。UTF-8 带 BOM、CRLF、RFC 4180 引号；
+金额按元、两位小数；以 `= + - @` 开头的文本单元格前加 `'`（防 Excel 公式注入）。
+窗口写错仍是 `422` 的 Problem JSON，不是一份空文件。
+
+```bash
+curl -OJ -H "Authorization: Bearer $STAFF_TOKEN" \
+  "http://localhost:8080/api/v1/admin/reports/products.csv?period=last_30_days&sort_by=quantity"
+```
+
+## 店铺设置
+
+`GET /admin/shop-settings` / `PUT /admin/shop-settings`，只有管理员（平台级经 `X-Keel-Merchant`
+切店也行）。`PUT` 是整体替换、天然幂等，**不收** `Idempotency-Key`：
+
+```json
+{"timezone": "Asia/Shanghai", "auto_confirm_days": 7, "return_ship_days": 7, "service_phone": "400-800-1234"}
+```
+
+`timezone` 必须是能加载的 IANA 名字；两个天数 1–365；`service_phone` 不给即清空。
+响应另带只读的 `shop_name` 与 `updated_at`（从没改过为 `null`）。改完立即生效：报表下一个请求、
+自动确认与退货超时的下一轮（至多十分钟）就按新值算。
+
 ---
 
 ## 消息中心（站内通知）
 
 订单与售后的关键状态变化会给买家发一条站内消息：支付成功、已发货（带物流）、
 自动确认收货即将到期（到期前一天）、系统自动确认收货、超时未支付被关闭、
-售后审核通过 / 驳回（带理由）、退款到账。买家**自己**做的动作（取消、确认收货、撤回售后）不发。
+售后审核通过 / 驳回（带理由）、退款到账、退货超时未寄回被关闭。买家**自己**做的动作（取消、确认收货、撤回售后）不发。
 通知与状态变化在同一个数据库事务里写入：状态改了消息一定在，回滚了消息一定不在。
 
 | 买家 | 接口 |

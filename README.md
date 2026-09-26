@@ -197,13 +197,15 @@ products, run regions and stores, issue coupons, manage staff, ship orders and
 handle after-sales. These parts
 are not there yet, and are listed so that nothing above reads as if it ships:
 
-- **two after-sales timers and two buyer-app screens.** Auto-confirming receipt
-  N days after shipping, buyer-entered return tracking numbers and private refund
-  evidence uploads (visible only to the buyer and to staff) are there, but closing
-  a return-and-refund whose goods never come back, and cleaning up uploads left
-  unreferenced for 24 hours, have no background job yet; the buyer app has not
-  wired the evidence upload and return-shipment endpoints (the server and the
-  contract are ready)
+- **a few after-sales and profile screens in the buyer app.** Auto-confirming
+  receipt N days after shipping, closing a return-and-refund whose goods are never
+  shipped back, cleaning up uploads left unreferenced for 24 hours, buyer-entered
+  return tracking numbers, private refund evidence and avatar uploads (avatars
+  accept only the buyer's own upload) are all on the server, with the day counts
+  set by the merchant under "Shop settings" in the console; the buyer app has not
+  wired the evidence upload, return-shipment and avatar upload endpoints, nor shown
+  the auto-confirm and return deadlines (the server and the contract are ready:
+  `auto_confirm_at`, `return_deadline_at`)
 - **cross-encoder reranking.** `POST /search` today is three-stage — vector
   recall and keyword recall fused with RRF, then business re-ranking
   (out-of-stock products are demoted multiplicatively below everything in

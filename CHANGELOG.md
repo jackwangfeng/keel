@@ -39,7 +39,7 @@ so "which one is running?" never depends on anyone's memory.
 
 ## [Unreleased]
 
-Migrations `00027`–`00038` and `00053`–`00057`.
+Migrations `00027`–`00038`, `00053`–`00057` and `00059`–`00061`.
 
 
 ### Added
@@ -209,7 +209,7 @@ Migrations `00027`–`00038` and `00053`–`00057`.
   hours of yesterday). Sales are attributed by payment time, refunds by the time
   the money actually went back (status `40`); drafts, unpaid and closed orders
   never count, fully refunded orders still count as paid. Days and hours are cut
-  in the shop's time zone (`shop_settings.timezone`, falling back to
+  in the shop's time zone (shop settings' `timezone`, falling back to
   `Asia/Shanghai`, echoed in the response); `last_7_days` / `last_30_days` are
   complete days excluding today; a custom window is capped at 366 days, since
   every report aggregates the raw rows on the spot. Scope follows the order list:
@@ -219,6 +219,48 @@ Migrations `00027`–`00038` and `00053`–`00057`.
   partial / covering indexes back the windows (migration `00057`); measured on
   1.3M orders and 1M search logs, a 30-day overview is ~20 ms and a 366-day one
   under 200 ms. No materialized views or rollup tables.
+- **CSV export of the product ranking and the store comparison**
+  (`GET /admin/reports/products.csv`, `/admin/reports/stores.csv`). Same parameters,
+  same scope and the same service call as the JSON reports — the file is exactly the
+  table on screen. UTF-8 with a BOM (so Chinese Excel opens it without mojibake),
+  CRLF, RFC 4180 quoting, amounts in yuan with two decimals, and text cells starting
+  with `=` `+` `-` `@` prefixed with `'` so a product title cannot become a formula in
+  someone's spreadsheet. The file name carries the window's dates. The dashboard's
+  ranking and store-comparison cards gain an "Export" button.
+- **Shop settings** (`GET` / `PUT /admin/shop-settings`, migration `00059`; admins
+  only, including a platform admin switched in with `X-Keel-Merchant`): time zone
+  (validated as a loadable IANA name — `Local`, empty strings and abbreviations are
+  rejected; reports switch on the next request), automatic delivery-confirmation days
+  (1–365), return-shipment deadline days (1–365, new) and a customer-service phone.
+  The shop name is echoed read-only (the merchant directory stays platform-managed).
+  `PUT` replaces the whole document and is naturally idempotent. The editable half
+  lives in a new tenant table, `shop_preferences`; `timezone` and `auto_confirm_days`
+  **moved** there from `shop_settings` (not copied), because granting the app role
+  `UPDATE` on `shop_settings` — which has no row-level security, since tenant
+  resolution reads it — would let one tenant rewrite another's custom domain or
+  payment-callback secret. The back office gains a "Shop settings" page.
+- **`OrderDetail.auto_confirm_at`** (shipped orders only): shipped time plus the
+  shop's current auto-confirm days, so clients no longer guess seven days.
+  **`Refund.return_deadline_at`** (return-and-refund requests waiting for the buyer
+  to ship): audit time plus the shop's return-shipment deadline.
+- **Returns not shipped in time are closed automatically** (`20 → 60`, the edge the
+  refund state machine always had). A background job — same per-tenant fair scheduler
+  as auto-confirmation, every ten minutes — closes return-and-refund requests whose
+  approval (`audited_at`) is older than the shop's return-shipment deadline (default 7
+  days) and that still have no return tracking number. Requests with a tracking number
+  are never closed. Closing runs the same order-side wrap-up as a buyer withdrawal
+  (in-flight quantities are released, a whole-order refund returns the order to paid)
+  and notifies the buyer with the new `refund_return_expired` kind. The check is
+  repeated under the order and refund row locks, in the same lock order as submitting
+  a tracking number, so a buyer who ships at the last second is never closed. Partial
+  index `idx_refunds_return_due` (migration `00060`).
+- **Orphaned uploads are cleaned up** (data model §13's 24-hour rule finally has an
+  executor). Uploads that are not referenced and older than 24 hours — unsubmitted
+  refund evidence, unused product images, replaced avatars — are deleted, row first
+  and then the stored file, hourly, per tenant. The delete re-checks `NOT referenced`
+  under the row lock, so it cannot race a refund that is marking the same evidence as
+  referenced: whichever takes the lock first wins, and the loser either skips the file
+  or fails the refund with the same `422` as a missing upload.
 - **The back office opens on a business-overview dashboard**: metric cards with
   period-over-period change and the definition of each metric on hover, a trend
   line (hourly for a single day, daily otherwise) with a crosshair tooltip, top
@@ -296,15 +338,15 @@ Migrations `00027`–`00038` and `00053`–`00057`.
 - All three write endpoints honour `Idempotency-Key` in a single transaction
   (claim → business → archive), shared with the admin write path.
 - **Automatic delivery confirmation** (migration 00036). A background job moves
-  orders that have been shipped for `shop_settings.auto_confirm_days` days
-  (default 7 — the column existed since 00001, now guarded by
-  `chk_auto_confirm_days`, 1–365) from `30` to `40`, through the very same
+  orders that have been shipped for the shop's `auto_confirm_days` days
+  (default 7 — the column existed since 00001, guarded to 1–365; it lives in
+  `shop_preferences` since 00059) from `30` to `40`, through the very same
   conditional update as the buyer's own confirmation. It runs like the order
   timeout sweep — per tenant, with the same fairness scheduler, now shared as
   `fairRound` — every ten minutes. Orders with an open refund (`10`/`20`/`30`)
   are paused rather than confirmed, re-checked under the order row lock that
   refund requests also take; once the refund ends they are confirmed on the
-  next round. A shop without a `shop_settings` row falls back to the column
+  next round. A shop that never changed its settings falls back to the column
   default.
 
 ### Added — refunds and after-sales (migration 00034)
@@ -424,6 +466,27 @@ Migrations `00027`–`00038` and `00053`–`00057`.
   its shape (`^[0-9a-f]{32}$`) and when it is absent.
 - Migration 00030 gives `user_addresses.merchant_id` a
   `DEFAULT current_merchant()`, now that the application writes that table.
+- **Contract (breaking for clients): `PATCH /me` only accepts the buyer's own avatar
+  upload in `avatar_url`.** It must be exactly an `Upload.url` from `POST /uploads`
+  with `purpose = 2` by the same buyer; external links (including WeChat avatar URLs),
+  someone else's upload, refund evidence and query-string variants are a `422` naming
+  `avatar_url`. An empty string still clears the avatar. The new avatar is marked
+  referenced in the same transaction; the previous one, if it was the buyer's upload,
+  is unmarked and removed by orphan cleanup after 24 hours. Avatars stored before this
+  change are kept as they are until the buyer changes them. Clients must upload first
+  (`POST /uploads`, `purpose=2`) and then send the returned `url`.
+- **`shop_settings.timezone` and `shop_settings.auto_confirm_days` moved to
+  `shop_preferences`** (migration `00059`, values carried over). Anything that wrote
+  those columns directly — seed scripts, manual SQL — must write `shop_preferences`
+  instead.
+- **Product ranking is faster on large shops.** The query now bounds order lines by
+  the range of order ids in the window (order ids grow with payment time, so a 30-day
+  window scans the last slice of order lines instead of all of them) and aggregates per
+  (product, order) first so the order count no longer needs a `count(DISTINCT)` sort;
+  `idx_order_items_order` became a covering index with the same key (migration `00061`).
+  On 1.3M orders: 7 days 108 → 61 ms, 30 days 557 → 244 ms, 90 days 1321 → 842 ms;
+  the 365-day window is about 12% slower (3.2 → 3.6 s). The index is about three times
+  larger. Results are identical to the old query across 72 parameter combinations.
 - **Contract: `RefundCreateRequest.evidence_urls` only accepts the buyer's own
   refund-evidence uploads** — each entry must be exactly an `Upload.url` from
   `POST /uploads` with `purpose = 3` by the same buyer, no duplicates; anything
@@ -496,6 +559,10 @@ Migrations `00027`–`00038` and `00053`–`00057`.
   and lines on different templates are summed rather than merged the way a
   single parcel would be. Who pays return freight is still decided by staff at
   audit.
+- The shop's customer-service phone is stored and editable but not yet shown to
+  buyers anywhere. Replaced product images and withdrawn refunds' evidence still stay
+  referenced forever — only avatars are unmarked on replacement. If deleting a file
+  fails after its upload row was removed, the file is left on disk (logged as an error).
 - No outbound notification channel is wired up (WeChat subscribe messages, SMS
   and e-mail all need credentials this project does not have); buyers have no
   notification preferences yet.
