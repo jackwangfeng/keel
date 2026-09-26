@@ -25,6 +25,21 @@ type UploadTx interface {
 	// FindUpload 取一条文件元数据。查不到（不存在，或被 RLS 挡在租户外）
 	// 返回 ErrUploadNotFound。
 	FindUpload(ctx context.Context, id int64) (Upload, error)
+
+	// MarkUploadReferenced 把 referenced 置为 TRUE。
+	//
+	// **它必须与引用这个文件的那次业务写入在同一个事务里**（数据模型 §13 明写）。
+	// 否则存在这样的窗口：业务对象刚提交、孤儿回收恰好扫到、文件被删，
+	// 而页面上那张图已经是 404。跑在 WithTenant 的事务里这件事由结构保证。
+	//
+	// 商品图那一路（ReplaceProductImages）在包内直接调 q，不经过这里；
+	// 这个方法是给 skus.image_url 那一路用的 —— 建 / 改 SKU 时传
+	// image_upload_id，服务端据此写出 image_url，那同样是一次「业务对象引用
+	// 了一个文件」。少了这一句，那张规格小图会在 24 小时后被孤儿回收删掉，
+	// 而 skus.image_url 还指着它。
+	//
+	// 幂等：已经是 TRUE 时再调一次什么也不改。
+	MarkUploadReferenced(ctx context.Context, id int64) error
 }
 
 // NewUpload 是登记一个上传的入参。
@@ -90,4 +105,19 @@ func uploadFrom(r db.GetUploadRow) Upload {
 		ContentType: r.ContentType, SizeBytes: r.SizeBytes, SHA256: r.Sha256,
 		Referenced: r.Referenced, CreatedAt: r.CreatedAt.Time,
 	}
+}
+
+func (t tenantTx) MarkUploadReferenced(ctx context.Context, id int64) error {
+	n, err := t.q.MarkUploadReferenced(ctx, id)
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		// 0 行只可能是这个 id 不在本租户视野内（RLS）或者根本不存在。
+		// 调用方应当先 FindUpload 过一遍，所以走到这里说明那一步漏了 ——
+		// 静默返回 nil 会让「文件被标记过了」成为一句假话，
+		// 而它的症状是 24 小时后那张图消失。
+		return fmt.Errorf("upload %d: %w", id, ErrUploadNotFound)
+	}
+	return nil
 }

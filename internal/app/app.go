@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -35,8 +36,12 @@ import (
 // 自检会礼貌地告诉运维「请清空 KEEL_DEFAULT_MERCHANT」，而那个变量谁也没设过。
 const (
 	EnvDefaultMerchant = "KEEL_DEFAULT_MERCHANT"
-	EnvBaseDomain      = "KEEL_BASE_DOMAIN"
-	EnvAddr            = "KEEL_ADDR"
+
+	// EnvUploadRoot 是本地磁盘 driver 的根目录（数据模型 §13）。
+	// 没配就落临时目录并告警，完整论证在 uploadStoreFromEnv 上。
+	EnvUploadRoot = "KEEL_UPLOAD_ROOT"
+	EnvBaseDomain = "KEEL_BASE_DOMAIN"
+	EnvAddr       = "KEEL_ADDR"
 
 	// EnvDTMDSN 是嵌入式事务协调器自己的存储。**没有默认值，空着就拒绝启动。**
 	//
@@ -300,7 +305,81 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	v1.GET("/admin/staff", staffAuth, adm.ListStaff)
 	v1.POST("/admin/staff", staffAuth, adm.CreateStaff)
 	v1.PATCH("/admin/staff/:staff_id", staffAuth, adm.UpdateStaff)
+
+	// -----------------------------------------------------------------------
+	// 商家自助发布：商品 / SKU / 库存 / 类目 / 上传（M4 Task 3，契约 16 条）
+	// -----------------------------------------------------------------------
+	//
+	// **每一条都挂 staffAuth**，一条都不能漏。漏掉一条的症状不是 401，
+	// 是一个匿名请求能改这家店的商品价格并拿到 200 —— 租户中间件仍然会把
+	// Host 解出来，WithTenant 照常开事务。
+	//
+	// 这件事有两道执行者，缺一不可：
+	//   · internal/app/run_test.go 的 TestRouterServesContractPaths 核路径；
+	//   · internal/handler 的 TestAdminCatalogRoutesAllRequireStaffSession
+	//     **逐条**不带令牌打一次，断言它们全是 401。只核路径的话，
+	//     把这一行的 staffAuth 删掉，路由表一个字都不会变。
+	cat := handler.NewAdminCatalogHandler(
+		service.NewAdminCatalogService(repo, uploadStoreFromEnv()))
+
+	v1.POST("/admin/uploads", staffAuth, cat.CreateUpload)
+
+	v1.GET("/admin/products", staffAuth, cat.ListProducts)
+	v1.POST("/admin/products", staffAuth, cat.Create)
+	v1.GET("/admin/products/:product_id", staffAuth, cat.Detail)
+	v1.PATCH("/admin/products/:product_id", staffAuth, cat.Update)
+	v1.DELETE("/admin/products/:product_id", staffAuth, cat.Delete)
+	v1.POST("/admin/products/:product_id/publication", staffAuth, cat.Publication)
+	v1.PUT("/admin/products/:product_id/images", staffAuth, cat.ReplaceImages)
+	v1.POST("/admin/products/:product_id/skus", staffAuth, cat.CreateSKU)
+
+	v1.PATCH("/admin/skus/:sku_id", staffAuth, cat.UpdateSKU)
+	v1.DELETE("/admin/skus/:sku_id", staffAuth, cat.DeleteSKU)
+	v1.PUT("/admin/skus/:sku_id/inventory", staffAuth, cat.SetInventory)
+
+	v1.GET("/admin/categories", staffAuth, cat.ListCategories)
+	v1.POST("/admin/categories", staffAuth, cat.CreateCategory)
+	v1.PATCH("/admin/categories/:category_id", staffAuth, cat.UpdateCategory)
+	v1.DELETE("/admin/categories/:category_id", staffAuth, cat.DeleteCategory)
 	return r
+}
+
+// uploadStoreFromEnv 按 KEEL_UPLOAD_ROOT 建本地磁盘 driver（数据模型 §13）。
+//
+// 在 Router 里读环境变量，与 searchRateLimiterFromEnv 同一个先例：
+// 它是一件「装配时决定、之后不再变」的事，而把它提成 Router 的参数会让
+// 每一个调用点（cmd、四个测试包）都要多传一个它们不关心的东西。
+//
+// ===========================================================================
+// 没配它的时候用临时目录，并且喊出来
+// ===========================================================================
+//
+// 这与 KEEL_DTM_DSN 那条「空着就拒绝启动」不同类，判据还是看代价
+// （与 KEEL_AUTH_SECRET 那一段同构）：
+//
+//   - 协调器的存储丢了是**不可恢复的数据损失**（已扣的库存再没人回补），
+//     所以它宁可拒绝启动。
+//   - 商品图丢了，商家重新传一次即可。**可恢复**。为它拒绝启动，代价是
+//     README 承诺的那条 docker compose up 再也不是一条命令 ——
+//     而 docker/ 与 compose*.yaml 不在本任务的范围里，我加不了那个卷。
+//
+// 但兜底不是免费的，两条代价必须说清楚，所以有这条 WARN：
+//
+//   - 临时目录会被系统清理，也不跨容器重建存活 —— **已上架商品的图会消失**，
+//     而 uploads 表里那些记录还在，指着一堆不存在的文件；
+//   - 多实例部署下这个兜底是错的：A 实例写的文件 B 实例读不到。
+//
+// 任何一个真的在服务客人的部署都必须把它指到一个挂载的卷上。
+func uploadStoreFromEnv() *service.LocalDiskStore {
+	root := strings.TrimSpace(os.Getenv(EnvUploadRoot))
+	if root == "" {
+		root = filepath.Join(os.TempDir(), "keel-uploads")
+		slog.Warn("没有配置 " + EnvUploadRoot + "，商品图落在临时目录 " + root +
+			"：系统清理或容器重建之后这些文件会消失，而 uploads 表里的记录还在，" +
+			"指着一堆不存在的文件；多实例部署下这个兜底是错的（A 实例写的 B 实例读不到）。" +
+			"任何在服务客人的部署都请把它指到一个挂载的卷上")
+	}
+	return service.NewLocalDiskStore(root)
 }
 
 // Branches 是要注册到协调器上的全部进程内分支，键就是编排里 "local://" 后面

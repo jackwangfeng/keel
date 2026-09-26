@@ -89,6 +89,44 @@ const (
 	TypeStaffEmailTaken = "https://keel.dev/problems/staff-email-taken"
 	TypeLastAdmin       = "https://keel.dev/problems/last-admin"
 
+	// 商家写路径那一组（M4，契约 Admin + Catalog 两个 tag 的 16 条）。
+	//
+	// 它们**全部是 404 或 409 或 422**，而只看状态码分不开 —— 契约在每一条
+	// 端点上都写着「按 Problem type 区分」。分得细的理由与上面那几组同构：
+	// 客户端对它们的处置完全不同，而这里有两处混掉会直接造出无限重试：
+	//
+	//   inventory-precondition-failed → 刷新那一格（响应体里带 current）再试一次，
+	//                                   **会成功**
+	//   （对照）404 SKU 不在本租户    → 重试**永远**不会成功
+	//
+	//   product-deleted               → 这件商品已经软删，改它没有意义
+	//   product-still-published       → 先下架再删（两步都是调用方做得到的）
+	//   product-has-no-sku            → 先加一个 SKU 再上架
+	//   sku-code-duplicated           → 换一个货号
+	//   sku-last-of-published-product → 先下架商品，或者先加一个兄弟规格
+	//   category-has-children /
+	//   category-has-products         → 先把子分类 / 商品挪走，再从叶子往上删
+	//   category-cycle                → 目标父节点是自己的后代，换一个
+	//   upload-not-found /
+	//   upload-wrong-purpose /
+	//   product-image-duplicated      → 这三条都是 422，客户端要改的东西各不相同
+	//
+	// 逐字对着契约里那几段 description 里写出来的 URI，不要顺手改措辞。
+	TypeProductDeleted         = "https://keel.dev/problems/product-deleted"
+	TypeProductStillPublished  = "https://keel.dev/problems/product-still-published"
+	TypeProductHasNoSKU        = "https://keel.dev/problems/product-has-no-sku"
+	TypeSKUCodeDuplicated      = "https://keel.dev/problems/sku-code-duplicated"
+	TypeSKULastOfPublished     = "https://keel.dev/problems/sku-last-of-published-product"
+	TypeInventoryPrecondition  = "https://keel.dev/problems/inventory-precondition-failed"
+	TypeUploadNotFound         = "https://keel.dev/problems/upload-not-found"
+	TypeUploadWrongPurpose     = "https://keel.dev/problems/upload-wrong-purpose"
+	TypeProductImageDuplicated = "https://keel.dev/problems/product-image-duplicated"
+	TypeCategoryHasChildren    = "https://keel.dev/problems/category-has-children"
+	TypeCategoryHasProducts    = "https://keel.dev/problems/category-has-products"
+	TypeCategoryCycle          = "https://keel.dev/problems/category-cycle"
+	TypeUploadTooLarge         = "https://keel.dev/problems/upload-too-large"
+	TypeUploadUnsupportedMedia = "https://keel.dev/problems/upload-unsupported-media-type"
+
 	// 契约声明了、本轮刻意没有实现的路径。用一个**专门的** type 而不是复用
 	// internal：客户端能据此分辨「这个功能还没有」与「服务器炸了」，
 	// 而这两件事的重试策略完全相反。
@@ -118,4 +156,24 @@ func Write(c *gin.Context, status int, kind, title string) {
 		Title:  title,
 		Status: status,
 	})
+}
+
+// WriteValue 写一个**带扩展成员**的 problem 响应。
+//
+// RFC 9457 允许 problem 对象带扩展成员，而契约里真的用了一处：
+// PUT /admin/skus/{sku_id}/inventory 的 409 回的是 InventoryConflict ——
+// Problem 加一个必填的 current。Write 那个函数只收 type / title / status，
+// 表达不了它。
+//
+// 收 any 而不是给 Write 加一个 extras map：扩展的形状由契约决定（InventoryConflict
+// 是一个有具体字段的 schema），而 map 会让调用方自己拼键名，
+// 那正是「响应体用生成类型，不手写结构体」要挡的东西 —— 调用方传进来的
+// 应当是 api.InventoryConflict 本身。
+//
+// Content-Type 与 Write 走同一句：两处各写一遍的话，分叉时的症状是某一条
+// 错误响应的 Content-Type 退回 application/json，而按契约生成的客户端
+// 会在它最需要读懂的那类响应上走错分支。
+func WriteValue(c *gin.Context, status int, body any) {
+	c.Header("Content-Type", "application/problem+json")
+	c.AbortWithStatusJSON(status, body)
 }

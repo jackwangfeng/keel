@@ -37,6 +37,11 @@ var (
 	// 而 mock 掉那条边界等于把要测的东西整个换掉。
 	testTC *dtm.TC
 
+	// testUploadRoot 是本地磁盘 driver 在测试里的根目录，由 setup 建。
+	// 上传那条测试拿它把 storage_key 翻成真实路径去比对字节 ——
+	// 「文件真的存下来了」这件事只能在文件系统上判。
+	testUploadRoot string
+
 	// testOrders 是路由里那一个下单服务 —— 同一个实例。分支注册在它身上，
 	// 而失败原因是经它内部那张表递给 HTTP 那一侧的（见 service/order_saga.go
 	// 的 branchNotes）。换一个实例，那条路径就断了而测试看不出来。
@@ -152,6 +157,19 @@ func setup() error {
 	// /search 上」那件事由它证明。
 	os.Setenv(app.EnvSearchRateLimit, "100000")
 	os.Setenv(app.EnvSearchRateBurst, "100000")
+
+	// 商品图落在一个临时目录里。**必须显式配**：不配的话
+	// app.uploadStoreFromEnv 会取 os.TempDir()/keel-uploads，
+	// 那是一个跨测试轮次、跨进程共享的目录，而
+	// TestUploadChecksMediaTypeAndActuallyStoresTheBytes 要按 storage_key
+	// 去磁盘上比对内容 —— 共享目录下那条断言仍然会绿，只是它验的东西
+	// 可能是上一轮留下的。
+	uploadRoot, err := os.MkdirTemp("", "keel-handler-uploads-")
+	if err != nil {
+		return err
+	}
+	testUploadRoot = uploadRoot
+	os.Setenv(app.EnvUploadRoot, uploadRoot)
 
 	testEngine = app.Router(pool,
 		tenant.NewResolver(pool, tenant.Config{BaseDomain: baseDomain}), testSigner, testOrders,

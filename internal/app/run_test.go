@@ -276,6 +276,27 @@ func TestRouterServesContractPaths(t *testing.T) {
 		"GET /api/v1/admin/staff":             false,
 		"POST /api/v1/admin/staff":            false,
 		"PATCH /api/v1/admin/staff/:staff_id": false,
+
+		// 商家自助发布那 16 条（M4 Task 3）。同样只核路径 ——
+		// 「每一条都挂了 staffAuth」由 internal/handler 的
+		// TestAdminCatalogRoutesAllRequireStaffSession 逐条打一次来证明，
+		// 因为把某一行的中间件删掉，这张路由表一个字都不会变。
+		"POST /api/v1/admin/uploads":                          false,
+		"GET /api/v1/admin/products":                          false,
+		"POST /api/v1/admin/products":                         false,
+		"GET /api/v1/admin/products/:product_id":              false,
+		"PATCH /api/v1/admin/products/:product_id":            false,
+		"DELETE /api/v1/admin/products/:product_id":           false,
+		"POST /api/v1/admin/products/:product_id/publication": false,
+		"PUT /api/v1/admin/products/:product_id/images":       false,
+		"POST /api/v1/admin/products/:product_id/skus":        false,
+		"PATCH /api/v1/admin/skus/:sku_id":                    false,
+		"DELETE /api/v1/admin/skus/:sku_id":                   false,
+		"PUT /api/v1/admin/skus/:sku_id/inventory":            false,
+		"GET /api/v1/admin/categories":                        false,
+		"POST /api/v1/admin/categories":                       false,
+		"PATCH /api/v1/admin/categories/:category_id":         false,
+		"DELETE /api/v1/admin/categories/:category_id":        false,
 	}
 	for _, ri := range r.Routes() {
 		key := ri.Method + " " + ri.Path

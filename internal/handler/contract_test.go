@@ -72,6 +72,29 @@ type route struct {
 	// 并且断言这里真的挂着这一笔。实现了它，那条测试就会红。
 	NotYetImplementedBody map[string]string
 
+	// NotYetImplementedHeader 是契约声明为 required 的**请求头**里，这条
+	// handler 还没实现的那些。与上面两笔是同一笔账的第三种形状。
+	//
+	// 眼下只有一个名字：Idempotency-Key。它出现在 M4 那 5 条 POST 上
+	// （/admin/uploads、/admin/products、.../publication、.../skus、
+	// /admin/categories），而本轮没有实现幂等，理由逐条写在值里。
+	//
+	// 它比 query 那份弱一格，与 NotYetImplementedBody 完全同级，
+	// 要说清楚为什么：query 参数能从 handler 的 AST 里读出 c.Query("x") 来做
+	// **双向**对账；请求头不行 —— 已经实现了幂等的那两条
+	// （POST /orders 与 POST /orders/{order_no}/payments）读的是
+	// `c.GetHeader(idempotencyKeyHeader)`，第一个实参是一个包级常量而不是
+	// 字符串字面量，AST 跟不过去。硬要跟就得在测试里实现一遍常量求值，
+	// 而那份求值器自己会和它模仿的语言分叉。
+	//
+	// 所以这里只做「清单 → 契约」这一个方向的机械对账（那个名字必须真的是
+	// 契约里一个 required 的请求头参数），反向由**行为测试**盯着：
+	// admin_catalog_test.go 的 TestAdminWritesAreNotYetIdempotent 拿同一把
+	// Idempotency-Key 建两次商品，断言真的建出了两件 —— 也就是说
+	// 「还没实现」这件事本身有靶子。真的实现了幂等，那条测试就会红，
+	// 逼人回来删掉这里的登记。
+	NotYetImplementedHeader map[string]string
+
 	// NotYetImplementedResponse 是**响应体**里契约声明了、这条 handler 刻意不
 	// 填的字段，与前两笔账是同一件事的第三种形状。
 	//
@@ -330,6 +353,141 @@ var routes = []route{
 		HandlerFile:    "admin_auth.go",
 		NoQueryParams:  "要改谁在路径上，改什么在请求体里",
 	},
+	// —— 商家自助发布（M4 Task 3）。契约 Admin + Catalog 两个 tag 的 16 条写接口。
+	//
+	// 它们分在四个 handler 文件里，而**分法是闸门定的**：下面那条 query 参数
+	// 对账按 HandlerFile 解析整份源码里的 c.Query 调用，所以带参数的那一条
+	// （GET /admin/products）必须自己一个文件，否则同文件里另外 15 条
+	// NoQueryParams 的登记会被判成「handler 读了一个契约里没有的参数」。
+	{
+		ContractPath:   "/admin/uploads",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "admin_upload.go",
+		NoQueryParams:  "文件在 multipart 的 file 那一项里，purpose 由路径决定（固定 1 商品图）；契约里这条接口一个 query 参数都没有",
+		NotYetImplementedHeader: map[string]string{
+			"Idempotency-Key": "本轮没有实现幂等。**不是忘了，是缺一样东西**：idempotency_keys 的主键是 (scope, user_id, idem_key)，而 user_id 那一列在后台这条路上要放的是 staff_id —— 而「把 staff_id 当成 user_id 用」正是 auth/staff_middleware.go 与数据模型 §14 反复点名的那件事（两张表的 id 来自同一种自增序列）。把它做对要么给那张表换一个主体列、要么另起一张表，那是一次 schema 决定，与缺一个「在指定租户里开事务」入口的 POST /admin/merchants 属于同一批。\n暴露面说清楚：重发同一个请求会多建一件草稿商品 / 一个类目 / 一条上传记录。SKU 那条由 uk_skus_code 挡（第二次是 409），publication 天生幂等（状态机终点相同），上传的重复件 24 小时后被孤儿回收清掉。也就是说真正的代价是「后台列表里多一行，商家自己删掉」，不是钱。\n反向由行为测试盯着：TestAdminWritesAreNotYetIdempotent。",
+		},
+	},
+	{
+		// 这 16 条里**唯一**带 query 参数的一条，五个全都实现了，
+		// 所以这里既不写 NoQueryParams 也不挂账 —— 对账测试会两个方向都核一遍。
+		// 它单独占一个 handler 文件，理由写在 admin_product_list.go 的头上。
+		ContractPath:   "/admin/products",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "admin_product_list.go",
+	},
+	{
+		ContractPath:   "/admin/products",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "admin_product.go",
+		NoQueryParams:  "新建商品的字段全在请求体里（ProductCreateRequest），幂等键在请求头里",
+		NotYetImplementedHeader: map[string]string{
+			"Idempotency-Key": "本轮没有实现幂等。**不是忘了，是缺一样东西**：idempotency_keys 的主键是 (scope, user_id, idem_key)，而 user_id 那一列在后台这条路上要放的是 staff_id —— 而「把 staff_id 当成 user_id 用」正是 auth/staff_middleware.go 与数据模型 §14 反复点名的那件事（两张表的 id 来自同一种自增序列）。把它做对要么给那张表换一个主体列、要么另起一张表，那是一次 schema 决定，与缺一个「在指定租户里开事务」入口的 POST /admin/merchants 属于同一批。\n暴露面说清楚：重发同一个请求会多建一件草稿商品 / 一个类目 / 一条上传记录。SKU 那条由 uk_skus_code 挡（第二次是 409），publication 天生幂等（状态机终点相同），上传的重复件 24 小时后被孤儿回收清掉。也就是说真正的代价是「后台列表里多一行，商家自己删掉」，不是钱。\n反向由行为测试盯着：TestAdminWritesAreNotYetIdempotent。",
+		},
+	},
+	{
+		ContractPath:   "/admin/products/{product_id}",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "admin_product.go",
+		NoQueryParams:  "后台详情只吃路径参数 product_id；它比前台那条多返回成本、库存与图片，而那不需要任何参数",
+	},
+	{
+		ContractPath:   "/admin/products/{product_id}",
+		ContractMethod: "patch",
+		HTTPMethod:     http.MethodPatch,
+		HandlerFile:    "admin_product.go",
+		NoQueryParams:  "要改哪件在路径上，改什么在请求体里",
+	},
+	{
+		ContractPath:   "/admin/products/{product_id}",
+		ContractMethod: "delete",
+		HTTPMethod:     http.MethodDelete,
+		HandlerFile:    "admin_product.go",
+		NoQueryParams:  "软删只吃路径参数；**刻意没有一个 force 之类的参数** —— 在架商品要先下架，那是一次单独的调用，不是一个开关",
+	},
+	{
+		ContractPath:   "/admin/products/{product_id}/publication",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "admin_product.go",
+		NoQueryParams:  "上架还是下架在请求体的 action 里，幂等键在请求头里",
+		NotYetImplementedHeader: map[string]string{
+			"Idempotency-Key": "本轮没有实现幂等。**不是忘了，是缺一样东西**：idempotency_keys 的主键是 (scope, user_id, idem_key)，而 user_id 那一列在后台这条路上要放的是 staff_id —— 而「把 staff_id 当成 user_id 用」正是 auth/staff_middleware.go 与数据模型 §14 反复点名的那件事（两张表的 id 来自同一种自增序列）。把它做对要么给那张表换一个主体列、要么另起一张表，那是一次 schema 决定，与缺一个「在指定租户里开事务」入口的 POST /admin/merchants 属于同一批。\n暴露面说清楚：重发同一个请求会多建一件草稿商品 / 一个类目 / 一条上传记录。SKU 那条由 uk_skus_code 挡（第二次是 409），publication 天生幂等（状态机终点相同），上传的重复件 24 小时后被孤儿回收清掉。也就是说真正的代价是「后台列表里多一行，商家自己删掉」，不是钱。\n反向由行为测试盯着：TestAdminWritesAreNotYetIdempotent。",
+		},
+	},
+	{
+		ContractPath:   "/admin/products/{product_id}/images",
+		ContractMethod: "put",
+		HTTPMethod:     http.MethodPut,
+		HandlerFile:    "admin_product.go",
+		NoQueryParams:  "整组图在请求体的 images 数组里；顺序就是数组下标，没有任何参数可以改变它",
+	},
+	{
+		ContractPath:   "/admin/products/{product_id}/skus",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "admin_sku.go",
+		NoQueryParams:  "新建规格的字段全在请求体里（SkuCreateRequest），商品在路径上，幂等键在请求头里",
+		NotYetImplementedHeader: map[string]string{
+			"Idempotency-Key": "本轮没有实现幂等。**不是忘了，是缺一样东西**：idempotency_keys 的主键是 (scope, user_id, idem_key)，而 user_id 那一列在后台这条路上要放的是 staff_id —— 而「把 staff_id 当成 user_id 用」正是 auth/staff_middleware.go 与数据模型 §14 反复点名的那件事（两张表的 id 来自同一种自增序列）。把它做对要么给那张表换一个主体列、要么另起一张表，那是一次 schema 决定，与缺一个「在指定租户里开事务」入口的 POST /admin/merchants 属于同一批。\n暴露面说清楚：重发同一个请求会多建一件草稿商品 / 一个类目 / 一条上传记录。SKU 那条由 uk_skus_code 挡（第二次是 409），publication 天生幂等（状态机终点相同），上传的重复件 24 小时后被孤儿回收清掉。也就是说真正的代价是「后台列表里多一行，商家自己删掉」，不是钱。\n反向由行为测试盯着：TestAdminWritesAreNotYetIdempotent。",
+		},
+	},
+	{
+		ContractPath:   "/admin/skus/{sku_id}",
+		ContractMethod: "patch",
+		HTTPMethod:     http.MethodPatch,
+		HandlerFile:    "admin_sku.go",
+		NoQueryParams:  "要改哪个规格在路径上，改什么在请求体里；**available_qty 不在其中任何一处**，它有自己的端点",
+	},
+	{
+		ContractPath:   "/admin/skus/{sku_id}",
+		ContractMethod: "delete",
+		HTTPMethod:     http.MethodDelete,
+		HandlerFile:    "admin_sku.go",
+		NoQueryParams:  "软删只吃路径参数",
+	},
+	{
+		ContractPath:   "/admin/skus/{sku_id}/inventory",
+		ContractMethod: "put",
+		HTTPMethod:     http.MethodPut,
+		HandlerFile:    "admin_sku.go",
+		NoQueryParams:  "expected_available_qty 与 available_qty 都在请求体里。**expected 尤其不能进 query** —— 它是一次比较并设置的条件，而 query 会进访问日志，让一次写操作的前置条件散落在日志里没有任何好处",
+	},
+	{
+		ContractPath:   "/admin/categories",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "admin_category.go",
+		NoQueryParams:  "后台分类列表返回整棵树拍平之后的全部节点，没有分页也没有筛选 —— 契约里这条接口一个 query 参数都没有",
+	},
+	{
+		ContractPath:   "/admin/categories",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "admin_category.go",
+		NoQueryParams:  "名字与父节点在请求体里，path / level 由服务端算，幂等键在请求头里",
+		NotYetImplementedHeader: map[string]string{
+			"Idempotency-Key": "本轮没有实现幂等。**不是忘了，是缺一样东西**：idempotency_keys 的主键是 (scope, user_id, idem_key)，而 user_id 那一列在后台这条路上要放的是 staff_id —— 而「把 staff_id 当成 user_id 用」正是 auth/staff_middleware.go 与数据模型 §14 反复点名的那件事（两张表的 id 来自同一种自增序列）。把它做对要么给那张表换一个主体列、要么另起一张表，那是一次 schema 决定，与缺一个「在指定租户里开事务」入口的 POST /admin/merchants 属于同一批。\n暴露面说清楚：重发同一个请求会多建一件草稿商品 / 一个类目 / 一条上传记录。SKU 那条由 uk_skus_code 挡（第二次是 409），publication 天生幂等（状态机终点相同），上传的重复件 24 小时后被孤儿回收清掉。也就是说真正的代价是「后台列表里多一行，商家自己删掉」，不是钱。\n反向由行为测试盯着：TestAdminWritesAreNotYetIdempotent。",
+		},
+	},
+	{
+		ContractPath:   "/admin/categories/{category_id}",
+		ContractMethod: "patch",
+		HTTPMethod:     http.MethodPatch,
+		HandlerFile:    "admin_category.go",
+		NoQueryParams:  "要改哪个在路径上，改什么（含移动子树的 parent_id）在请求体里",
+	},
+	{
+		ContractPath:   "/admin/categories/{category_id}",
+		ContractMethod: "delete",
+		HTTPMethod:     http.MethodDelete,
+		HandlerFile:    "admin_category.go",
+		NoQueryParams:  "软删只吃路径参数；两条 409 闸门没有任何可以绕过它们的参数",
+	},
 	{
 		ContractPath:   "/auth/refresh",
 		ContractMethod: "post",
@@ -394,11 +552,15 @@ type pendingOp struct {
 // notYetRouted 是全部 /admin/ 操作里还没有落地的那些。
 //
 // M4 任务 1 落地时这里有 26 条 —— 契约里每一条 /admin/ 操作都在。
-// 本轮（后台身份）划掉了 7 条：三条 /admin/auth/*、/admin/me，
+// 任务 2（后台身份）划掉了 7 条：三条 /admin/auth/*、/admin/me，
 // 以及 /admin/staff 的三个操作。它们是别的 19 条的前置，
 // 因为 26 条里没有一条不需要后台身份。
+//
+// **本轮（M4 任务 3，商家自助发布）划掉了 16 条**，剩下 3 条。
+// 三条剩下的理由各不相同，而且没有一条是「还没轮到」：
+// 它们各缺一样今天不存在的东西，逐条写在下面。
 var notYetRouted = []pendingOp{
-	// —— M1 就在契约里的 10 条，本轮（M4 后台身份）划掉了其中 7 条。
+	// —— M1 就在契约里的 10 条，任务 2 划掉了其中 7 条。
 	//
 	// 剩下这 3 条**不再是「缺后台鉴权」**了 —— 那套中间件已经有了
 	// （auth.StaffBearer），它们缺的是各自的业务。理由要跟着改，
@@ -411,29 +573,6 @@ var notYetRouted = []pendingOp{
 		"后台鉴权也已落地，缺的是 handler 与 §5 那三条发货规则。"},
 	{"/admin/refunds/{refund_no}/audit", "post", "退款审核。退款域的表已落地（§11），" +
 		"后台鉴权也已落地，缺的是 handler 与退款状态机那几条边。"},
-
-	// —— M4 任务 1 本轮补进契约的 16 条：商家自助发布的写接口面。
-	//
-	// 它们比上面那 10 条多欠一样东西：**迁移**。契约里的
-	// product_images 与 skus.deleted_at 目前只存在于数据模型文档里，
-	// db/migrations 下还没有对应的那一版（那是 M4 的下一个任务）。
-	// 所以这 16 条不是「写个 handler 就能绿」，顺序是 迁移 → repository → handler。
-	{"/admin/uploads", "post", "商品图上传（purpose=1 走 staff_id）。要先有 staff 会话中间件与 Storage driver。"},
-	{"/admin/products", "get", "后台商品列表（含草稿与下架）。"},
-	{"/admin/products", "post", "创建商品（落地即草稿）。"},
-	{"/admin/products/{product_id}", "get", "后台商品详情（含成本、库存、图片）。"},
-	{"/admin/products/{product_id}", "patch", "改商品文案与归属。"},
-	{"/admin/products/{product_id}", "delete", "商品软删。"},
-	{"/admin/products/{product_id}/publication", "post", "上下架。published_at 只在首次上架置位，那条规则要在 repository 层落。"},
-	{"/admin/products/{product_id}/images", "put", "整组替换商品图。**依赖 product_images 表，迁移还没写**（数据模型 §3 本轮补的 DDL）。"},
-	{"/admin/products/{product_id}/skus", "post", "加 SKU，并在同事务里建出 inventories 行。"},
-	{"/admin/skus/{sku_id}", "patch", "改 SKU（含改价），要连带重算 products 的冗余价格区间。"},
-	{"/admin/skus/{sku_id}", "delete", "SKU 软删。**依赖 skus.deleted_at 与部分唯一索引 uk_skus_code，迁移还没写**。"},
-	{"/admin/skus/{sku_id}/inventory", "put", "库存的比较并设置。要在一条语句里把「CAS 不匹配」与「SKU 不在本租户」分别回传（数据模型 §4）。"},
-	{"/admin/categories", "get", "后台分类列表（扁平，含停用）。"},
-	{"/admin/categories", "post", "新建分类，path / level 由服务端算。"},
-	{"/admin/categories/{category_id}", "patch", "改分类，含移动子树时重写整棵子树的 path / level 并拒绝成环。"},
-	{"/admin/categories/{category_id}", "delete", "分类软删，有子分类或有商品时拒绝。"},
 }
 
 // contractHTTPMethods 是 OpenAPI path item 里哪些键算一个操作。
@@ -833,6 +972,9 @@ type contractDoc struct {
 		Parameters map[string]struct {
 			Name string `yaml:"name"`
 			In   string `yaml:"in"`
+			// Required 只有请求头那条对账用得上，但它必须解在这里：
+			// 两份 contractDoc 意味着两份会各自跑偏的对契约结构的假设。
+			Required bool `yaml:"required"`
 		} `yaml:"parameters"`
 		Schemas map[string]map[string]any `yaml:"schemas"`
 	} `yaml:"components"`
@@ -1070,4 +1212,101 @@ func contractOperationDescription(t *testing.T, r route) string {
 			r.ContractMethod, r.ContractPath)
 	}
 	return desc
+}
+
+// NotYetImplementedHeader 里挂的每一笔账，都必须是契约里**真有且必填**的一个
+// 请求头参数。
+//
+// 与请求体那条同理，这里只做「清单 → 契约」这一个方向的机械对账，
+// 理由写在 route.NotYetImplementedHeader 上（AST 跟不过一个包级常量）。
+// 反向（真的实现了却忘了划掉）由 admin_catalog_test.go 的
+// TestAdminWritesAreNotYetIdempotent 盯着：它断言同一把 Idempotency-Key
+// 打两次真的建出了两件商品。
+//
+// 为什么判据里带上「必填」：一个 optional 的请求头没被读，是「这个可选能力
+// 还没做」；一个 required 的请求头没被读，是**服务端在违约** ——
+// 契约告诉客户端「你必须带上它」，而服务端连看都没看。
+// 两者该被区别对待，所以这条断言只认后者。
+func TestNotYetImplementedHeadersExistInContract(t *testing.T) {
+	checked := 0
+	for _, r := range routes {
+		if len(r.NotYetImplementedHeader) == 0 {
+			continue
+		}
+		t.Run(r.HTTPMethod+" "+r.ContractPath, func(t *testing.T) {
+			required := contractRequiredHeaders(t, r)
+			if len(required) == 0 {
+				t.Fatalf("契约里 %s %s 一个必填请求头都没解析出来 —— "+
+					"这条测试没在检查任何东西", r.ContractMethod, r.ContractPath)
+			}
+			for name, why := range r.NotYetImplementedHeader {
+				if !required[name] {
+					t.Errorf("NotYetImplementedHeader 里挂着 %q（%s），"+
+						"但契约里 %s %s 已经没有这个必填请求头了 —— "+
+						"清单烂了，请删掉这一行。当前必填请求头：%v",
+						name, why, r.ContractMethod, r.ContractPath, sortedBool(required))
+				}
+				checked++
+			}
+			t.Logf("契约必填请求头 %v；挂账 %v", sortedBool(required), sorted(r.NotYetImplementedHeader))
+		})
+	}
+	if checked == 0 {
+		t.Fatal("一笔请求头挂账都没查到 —— 挂账清空了就该把这条测试一起删掉，" +
+			"留着一条恒绿的测试比没有更糟")
+	}
+}
+
+// contractRequiredHeaders 取出该接口全部 required: true 的请求头参数名。
+//
+// 与 contractQueryParams 走同一套 $ref 解析（Idempotency-Key 在契约里正是
+// 一条 $ref 到 components.parameters 的引用），不认识的引用形式一律 Fatal ——
+// 静默跳过等于让上面那条断言少检查一个名字，而它只有这一个判据。
+func contractRequiredHeaders(t *testing.T, r route) map[string]bool {
+	t.Helper()
+
+	doc := loadContract(t)
+	item, ok := doc.Paths[r.ContractPath]
+	if !ok {
+		t.Fatalf("契约里没有路径 %s", r.ContractPath)
+	}
+	var params []any
+	if v, ok := item["parameters"].([]any); ok {
+		params = append(params, v...)
+	}
+	op, ok := item[r.ContractMethod].(map[string]any)
+	if !ok {
+		t.Fatalf("契约里 %s %s 不是一个映射", r.ContractMethod, r.ContractPath)
+	}
+	if v, ok := op["parameters"].([]any); ok {
+		params = append(params, v...)
+	}
+
+	out := map[string]bool{}
+	for _, raw := range params {
+		pm, ok := raw.(map[string]any)
+		if !ok {
+			t.Fatalf("参数项不是映射: %#v", raw)
+		}
+		name, in, required := "", "", false
+		if ref, ok := pm["$ref"].(string); ok {
+			const prefix = "#/components/parameters/"
+			if !strings.HasPrefix(ref, prefix) {
+				t.Fatalf("不认识的参数引用 %q", ref)
+			}
+			c, ok := doc.Components.Parameters[strings.TrimPrefix(ref, prefix)]
+			if !ok {
+				t.Fatalf("契约里的引用 %q 指向一个不存在的参数", ref)
+			}
+			name, in, required = c.Name, c.In, c.Required
+		} else {
+			name, _ = pm["name"].(string)
+			in, _ = pm["in"].(string)
+			required, _ = pm["required"].(bool)
+		}
+		if in == "header" && required && name != "" {
+			out[name] = true
+		}
+	}
+	return out
 }

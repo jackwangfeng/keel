@@ -1025,3 +1025,135 @@ func (brokenKeywordTx) SearchProductsByKeyword(ctx context.Context, tsquery stri
 	f repository.SearchFilters, limit int32) ([]repository.SearchHit, error) {
 	return nil, fmt.Errorf("注入的故障：关键词召回这一路挂了")
 }
+
+// 两路召回的过滤条件必须**逐字一致**，直接比一次。
+//
+// ===========================================================================
+// 为什么行为测试不够，还要这一条
+// ===========================================================================
+//
+// db/queries/search.sql 的文件头写着这条纪律。它此前的执行者有两条：
+// TestSearchAppliesFilters（价格区间）与 TestDraftAndDeletedProductsAreInvisibleInSearch
+// （status / deleted_at）。它们都是打 POST /search 看**融合之后**的结果，
+// 而 RRF 融合的是两路的**并集** —— 也就是说它们只抓得住一个方向：
+//
+//	· 某一路**放行得更多**（把草稿放进来、把价格过滤删掉）→ 并集里多出东西 → 红。
+//	· 某一路**放行得更少**（那一路的过滤条件更严，或者算错了价格）→
+//	  并集一点没变，因为另一路照样召回了它 → **全绿**。
+//
+// 后一个方向不是理论问题：M4 Task 3 把价格区间改成现算之后，那个
+// LEFT JOIN LATERAL 在两条查询里各写了一遍。把其中一条的 LATERAL 写岔
+// （比如漏掉 COALESCE，或者 WHERE 里少一个条件），症状正是「这一路少召回
+// 一些」—— 而上面那两条测试对它是全绿的。
+//
+// 这条测试直接比两路**自己的过滤决定**，绕开「两路召回面本来就不同」这件事：
+//
+//	common  := 不带筛选时两路都召回到的那批
+//	assert  带上筛选之后，两路从 common 里筛掉的是**同一批**
+//
+// 它对两个方向都红，而且不依赖 RRF。
+func TestBothRecallPathsFilterIdentically(t *testing.T) {
+	fx := newSearchFixture(t)
+	ctx := tenant.NewContext(t.Context(), fx.MerchantA)
+	repo := repository.New(testPool)
+
+	// 一条能把两路都撑开的查询：向量用「连衣裙 咖啡壶」这个混合概念，
+	// 关键词用它的 bigram 串。两路的候选面仍然不同（向量路召回全部有向量的
+	// 商品，关键词路只召回 tsquery 命中的），所以下面只在交集上比。
+	const probe = "连衣裙 长裙 咖啡壶"
+	emb, err := (conceptEmbedder{}).Embed(ctx, []string{probe})
+	if err != nil {
+		t.Fatal(err)
+	}
+	vec := emb.Vectors[0]
+	tsq := search.TSQueryOr(search.Bigram(probe))
+	if tsq == "" {
+		t.Fatal("tsquery 切不出任何词 —— 这条测试没在检查任何东西")
+	}
+
+	const limit = 100
+	recall := func(f repository.SearchFilters) (map[int64]bool, map[int64]bool) {
+		t.Helper()
+		v, k := map[int64]bool{}, map[int64]bool{}
+		if err := repo.WithTenant(ctx, func(tx repository.Tx) error {
+			vh, err := tx.SearchProductsByVector(ctx, vec, f, limit)
+			if err != nil {
+				return err
+			}
+			for _, h := range vh {
+				v[h.ID] = true
+			}
+			kh, err := tx.SearchProductsByKeyword(ctx, tsq, f, limit)
+			if err != nil {
+				return err
+			}
+			for _, h := range kh {
+				k[h.ID] = true
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return v, k
+	}
+
+	baseVec, baseKw := recall(repository.SearchFilters{InStockOnly: false})
+	common := map[int64]bool{}
+	for id := range baseVec {
+		if baseKw[id] {
+			common[id] = true
+		}
+	}
+	// 阳性对照一：两路都召回到的那批不能是空的，否则下面所有比较都在比空集。
+	if len(common) < 2 {
+		t.Fatalf("不带筛选时两路的交集只有 %d 件（向量路 %d、关键词路 %d）—— "+
+			"这条测试没在检查任何东西", len(common), len(baseVec), len(baseKw))
+	}
+
+	// 20000 这个数是按夹具挑的：交集里四件商品的价格是 12900 / 19900 /
+	// 22900 / 45900，所以上下界各自都真的会筛掉两件 —— 下面那条
+	// 「这组条件一件都没筛掉」的阳性对照因此不是摆设。
+	minC, maxC := int64(20000), int64(20000)
+	dressCat := fx.CategoryDressA
+	cases := []struct {
+		name string
+		f    repository.SearchFilters
+	}{
+		{"价格下界 30000", repository.SearchFilters{MinPriceCents: &minC}},
+		{"价格上界 30000", repository.SearchFilters{MaxPriceCents: &maxC}},
+		{"限定女装类目", repository.SearchFilters{CategoryID: &dressCat}},
+		{"只看有货", repository.SearchFilters{InStockOnly: true}},
+	}
+	for _, c := range cases {
+		gotVec, gotKw := recall(c.f)
+		var onlyVec, onlyKw []int64
+		removed := 0
+		for id := range common {
+			v, k := gotVec[id], gotKw[id]
+			if !v && !k {
+				removed++
+				continue
+			}
+			if v && !k {
+				onlyVec = append(onlyVec, id)
+			}
+			if k && !v {
+				onlyKw = append(onlyKw, id)
+			}
+		}
+		if len(onlyVec) > 0 || len(onlyKw) > 0 {
+			t.Errorf("[%s] 两路对同一批商品给出了不同的过滤结果："+
+				"只有向量路放行的 %v，只有关键词路放行的 %v —— "+
+				"db/queries/search.sql 那两条查询的过滤条件（含 00019 之后那个"+
+				"LEFT JOIN LATERAL 与两处 COALESCE）必须逐字一致。"+
+				"RRF 只看名次，它拿到的是两份对「哪些商品存在」意见不同的列表",
+				c.name, onlyVec, onlyKw)
+		}
+		// 阳性对照二：这组条件必须**真的筛掉**交集里的一些东西。
+		// 一个什么都不筛的条件下，「两路筛掉的一样」是恒真的。
+		if removed == 0 {
+			t.Errorf("[%s] 这组筛选条件一件都没筛掉（交集 %d 件）—— "+
+				"上面那条断言在这一组上是恒真的", c.name, len(common))
+		}
+	}
+}
