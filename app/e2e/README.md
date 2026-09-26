@@ -63,9 +63,11 @@ const orderNo = await page.data('orderNo')
 `profile.test.js`：改完昵称在 afterAll 里改回原值。
 
 `aftersale.test.js`：一笔「某状态的单」由测试进程用 `helpers.placeOrder` 造（下单、发起支付、把
-服务端签好的沙箱回调原样投回去），App 里只走被测的那一步。驳回 / 同意到账 / 发货后确认收货三条要后台
-员工会话：设 `KEEL_E2E_STAFF_TOKEN`（演示栈上的 e2e 操作员会话，找服务端那边要，**只放环境变量、
-不进仓库**），没设时这三条 `skip`，买家侧照跑。
+服务端签好的沙箱回调原样投回去），App 里只走被测的那一步。驳回 / 同意到账 / 发货后确认收货三条的前置状态
+要后台员工来做，两种给法：设 `KEEL_E2E_STAFF_TOKEN`（用例自己调后台接口；**只放环境变量、不进仓库**），
+或者先用 `placeOrder` 造好单、请服务端那边的后台会话代为发货 / 驳回 / 同意，再把单号交给
+`KEEL_E2E_SHIPPED_ORDER` / `KEEL_E2E_REJECTED_REFUND` / `KEEL_E2E_REFUNDED_REFUND`。都没有时这三条
+`skip`，买家侧照跑。
 
 `coupon.test.js`：演示买家的券状态跑一次变一次（「9 折」第一次领是 201，之后是 409 每人限领；
 结算用例会把自动选上的券真的用掉）。所以它断言的是**终态**：领完按钮是「已领取」、这张券在

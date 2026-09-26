@@ -343,7 +343,7 @@ H5 构建产物 + 一个把 `/api` 反代给 Keel 的静态服务器，用无头
 | 搜索 | `POST /search` | ✅ 首页入口 → 搜索页，按相关度排序；Android / iPhone 真机 e2e 覆盖（按首页一件商品的标题搜，它排第一，点进去是它的详情） |
 | 收货地址 | `GET/POST/PUT/DELETE /addresses…`、`PUT …/default` | ✅ 小米真机 e2e（`address.test.js`）：列表与服务端一致、默认排第一；错的表单按 `errors[].field` 标红两项，改对后新建成功；结算页自动用默认地址 |
 | 购物车 | `GET /cart`、`POST /cart/items`、`PATCH /cart/items/{id}`、`POST …/batch-delete` | ✅ 小米真机 e2e（`cart.test.js`）：加购 → 调数量，合计与服务端 `selected_total_cents` 一致 → 去结算，试算商品金额 = 购物车合计 → 下单后这行从车里删掉。调大超库存时页面显示服务端 409 的原因（调试时实测） |
-| 取消 / 售后 | `POST /orders/{no}/cancel`、`POST /orders/{no}/refunds`、`GET /refunds/{no}`、`POST /refunds/{no}/cancel` | ✅ 小米真机 e2e（`aftersale.test.js`）：待支付单取消 → 已关闭；已支付单申请仅退款 → 待审核（页面金额 = 服务端算的 `amount_cents`）→ 撤回 → 已取消。驳回 / 同意到账 / 发货后确认收货三条要 `KEEL_E2E_STAFF_TOKEN`，本次没设，**跳过了、没有跑** |
+| 取消 / 售后 | `POST /orders/{no}/cancel`、`POST /orders/{no}/refunds`、`GET /refunds/{no}`、`POST /refunds/{no}/cancel` | ✅ 小米真机 e2e（`aftersale.test.js`）：待支付单取消 → 已关闭；已支付单申请仅退款 → 待审核（页面金额 = 服务端算的 `amount_cents`）→ 撤回 → 已取消。驳回（显示 `reject_reason`、可重新申请）/ 同意仅退款（已退款，整单全退的订单走到 60 已退款、详情显示已退金额）/ 发货后确认收货 → 已完成：前置状态由服务端的后台会话代做，单号经 `KEEL_E2E_*` 环境变量交给用例 |
 | 个人资料 | `GET/PATCH /me`、`GET /me/identities` | ✅ 小米真机 e2e（`profile.test.js`）：回显昵称与脱敏手机号，改昵称后服务端是新值。解绑 / `last-credential` 没有自动化覆盖（演示买家没有第三方身份） |
 | 优惠券 | `GET /coupon-templates`、`POST /coupon-templates/{id}/claim`、`GET /coupons`、`POST /orders/preview` 的 `applicable_coupons` / `user_coupon_id` | ✅ 小米真机 e2e（`coupon.test.js`）：领「9 折」→ 我的优惠券四个 tab → 结算页自动用券、切「不使用」优惠归零。iOS 只验证了编译 |
 

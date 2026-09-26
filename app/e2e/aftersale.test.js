@@ -4,12 +4,16 @@
 // 「一笔某状态的单」由测试进程直接造（helpers.placeOrder：下单、付款、投递沙箱回调），
 // 用例只在 App 里走被测的那一步。下单本身由 checkout.test.js 在 App 里走过。
 //
-// 后台那三条要 KEEL_E2E_STAFF_TOKEN（演示栈上的 e2e 操作员会话，只从环境变量读）；
-// 没设就跳过，买家侧的用例照跑。
+// 后台那三条的前置状态（已发货 / 已驳回 / 已退款）要后台员工来做。两种给法：
+//   · KEEL_E2E_STAFF_TOKEN：用例自己造单、自己调后台接口；
+//   · 现成的单号：KEEL_E2E_SHIPPED_ORDER（已发货的单）、KEEL_E2E_REJECTED_REFUND（已驳回的售后单）、
+//     KEEL_E2E_REFUNDED_REFUND（已同意的仅退款售后单）—— 由服务端那边的后台会话代做好再交过来。
+// 都没有就跳过，买家侧的用例照跑。
 const { randomUUID } = require('crypto')
 const { waitFor, waitEl, httpGet, httpRequest, apiBase, serverToken, loginInApp, placeOrder, staffToken, staffPost } = require('./helpers')
 
-const withStaff = staffToken() ? it : it.skip
+const env = process.env
+const withStaff = (fixture) => (staffToken() || env[fixture] ? it : it.skip)
 
 async function tapTwice(page, selector) {
   // 取消 / 确认收货 / 撤回都是「点两下」：第一下变成「再点一次确认」。
@@ -79,20 +83,32 @@ describe('订单后半程', () => {
     expect((await httpGet(apiBase() + '/refunds/' + refundNo, token)).body.status).toBe(60)
   })
 
-  withStaff('商家驳回：显示驳回理由，可以重新申请', async () => {
-    const orderNo = await placeOrder(token, { pay: true })
-    const r = await buyerRefund(token, orderNo, 1)
-    await staffPost('/admin/refunds/' + r.refund_no + '/audit', { action: 'reject', reject_reason: 'e2e 驳回' })
-    const page = await program.navigateTo('/pages/refund/detail?refund_no=' + r.refund_no)
+  withStaff('KEEL_E2E_REJECTED_REFUND')('商家驳回：显示驳回理由，可以重新申请', async () => {
+    let refundNo = env.KEEL_E2E_REJECTED_REFUND
+    if (staffToken()) {
+      const orderNo = await placeOrder(token, { pay: true })
+      const r = await buyerRefund(token, orderNo, 1)
+      await staffPost('/admin/refunds/' + r.refund_no + '/audit', { action: 'reject', reject_reason: 'e2e 驳回' })
+      refundNo = r.refund_no
+    }
+    const server = (await httpGet(apiBase() + '/refunds/' + refundNo, token)).body
+    expect(server.status).toBe(50)
+    const page = await program.navigateTo('/pages/refund/detail?refund_no=' + refundNo)
     await waitFor(page, '.t-display', (t) => t === '已拒绝')
-    await waitFor(page, '.reject', (t) => t.includes('e2e 驳回'))
+    await waitFor(page, '.reject', (t) => t.includes(server.reject_reason))
     expect(await page.$('.reapply-btn')).not.toBeNull()
   })
 
-  withStaff('商家同意仅退款：沙箱下直接到已退款，订单详情显示已退金额', async () => {
-    const orderNo = await placeOrder(token, { pay: true })
-    const r = await buyerRefund(token, orderNo, 1)
-    await staffPost('/admin/refunds/' + r.refund_no + '/audit', { action: 'approve' })
+  withStaff('KEEL_E2E_REFUNDED_REFUND')('商家同意仅退款：沙箱下直接到已退款，订单详情显示已退金额', async () => {
+    let r
+    if (staffToken()) {
+      const orderNo = await placeOrder(token, { pay: true })
+      r = await buyerRefund(token, orderNo, 1)
+      await staffPost('/admin/refunds/' + r.refund_no + '/audit', { action: 'approve' })
+    } else {
+      r = (await httpGet(apiBase() + '/refunds/' + env.KEEL_E2E_REFUNDED_REFUND, token)).body
+    }
+    const orderNo = r.order_no
     const page = await program.navigateTo('/pages/refund/detail?refund_no=' + r.refund_no)
     // 30 退款中 → 40 已退款：沙箱回调是异步的，页面 onShow 读到哪个都算对，重进一次读终态。
     let ok = false
@@ -106,13 +122,19 @@ describe('订单后半程', () => {
     await waitFor(again, '.t-display', (t) => t === '已退款')
     const od = await program.navigateTo('/pages/order/detail?order_no=' + orderNo)
     await waitFor(od, '.t-display', (t) => t.length > 0)
+    // 未发货的整单全退，订单按状态机走到 60（20→50→60）；部分退款的话 status 不变。
+    const orderStatus = (await httpGet(apiBase() + '/orders/' + orderNo, token)).body.status
+    if (orderStatus === 60) await waitFor(od, '.t-display', (t) => t === '已退款')
     const view = await od.data('view')
     expect(view.refundedText).toBe('¥' + (r.amount_cents / 100).toFixed(2))
   })
 
-  withStaff('已发货的单确认收货后是已完成', async () => {
-    const orderNo = await placeOrder(token, { pay: true })
-    await staffPost('/admin/orders/' + orderNo + '/shipments', { carrier_code: 'SF', tracking_no: 'E2E' + Date.now() })
+  withStaff('KEEL_E2E_SHIPPED_ORDER')('已发货的单确认收货后是已完成', async () => {
+    let orderNo = env.KEEL_E2E_SHIPPED_ORDER
+    if (staffToken()) {
+      orderNo = await placeOrder(token, { pay: true })
+      await staffPost('/admin/orders/' + orderNo + '/shipments', { carrier_code: 'SF', tracking_no: 'E2E' + Date.now() })
+    }
     const page = await program.navigateTo('/pages/order/detail?order_no=' + orderNo)
     await waitFor(page, '.t-display', (t) => t === '已发货')
     await tapTwice(page, '.confirm-btn')

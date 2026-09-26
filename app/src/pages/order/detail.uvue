@@ -213,6 +213,9 @@ export default {
       if (t == '已发货') return '包裹已在路上'
       if (t == '已完成') return '订单已完成，感谢光临'
       if (t == '已关闭') return '订单已关闭'
+      // 50 / 60 只用于未发货的整单退款（契约 OrderStatus）；部分退款不改 status。
+      if (t == '退款中') return '整单退款处理中'
+      if (t == '已退款') return '整单已退款，钱已原路退回'
       return ''
     },
   },
