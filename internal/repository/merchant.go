@@ -87,18 +87,41 @@ type Merchant struct {
 //
 // 它**不读 ctx 里的租户**，和 WithPlatform 一样：开店请求的 Host 可以是任何
 // 一家店，那家店与这个事务无关。
-func (r *Repo) WithNewTenant(ctx context.Context, code, name string,
-	fn func(Merchant, StaffTx) error) (Merchant, error) {
+//
+// ===========================================================================
+// guard：幂等存档的两个钩子，都跑在 ① 平台作用域里（00028）
+// ===========================================================================
+//
+// 开店的幂等记录属于平台（调用者是平台管理员），落在 idempotency_keys 里
+// merchant_id 为 NULL 的那一抽屉 —— 只有平台作用域读写得到它。所以抢占与存档
+// 必须发生在 ① 那一段，而不是 ② 新店的作用域里（那里 RLS 只放行新店自己的行，
+// 抢占插入会被 WITH CHECK 当场拒绝）：
+//
+//	① 平台作用域   guard.Claim（抢占；返回 false = 这是一次重放，下面全部跳过）
+//	              → 建 merchants 那一行
+//	              → guard.Archive（把这家店存档 —— 契约 201 的响应体就是它）
+//	② 新店作用域   fn（建第一个管理员、签登录 token）
+//
+// 存档排在 fn **之前**不是问题：它们在同一个事务里，fn 失败会把抢占、店、存档
+// 一起回滚。存档只需要 Merchant，而 Merchant 在 ① 结束时就是完整的 ——
+// 这样事务只切一次作用域，不必为了存档再从新店切回平台（那会是一个「平台作用域
+// 里 app.merchant_id 仍是新店」的中间态，没有理由造出来）。
+//
+// 第二个返回值 created 为 false 表示 guard.Claim 判定这是一次重放：
+// 本次调用没有建店，返回的 Merchant 是零值，重放的内容由调用方自己从存档里取。
+func (r *Repo) WithNewTenant(ctx context.Context, code, name string, guard NewTenantGuard,
+	fn func(Merchant, StaffTx) error) (Merchant, bool, error) {
 
-	if fn == nil {
+	if fn == nil || guard.Claim == nil || guard.Archive == nil {
 		// 与 WithSagaBranch 同一条：在开事务之前拒绝。一个 nil 的 fn 意味着
-		// 「建了店但没建管理员」，而那正是这个入口存在的全部理由。
-		return Merchant{}, errors.New("开店缺少「在新店作用域里做什么」的那一段")
+		// 「建了店但没建管理员」，而那正是这个入口存在的全部理由；
+		// 一个 nil 的 guard 意味着开店悄悄退回到「没有幂等」。
+		return Merchant{}, false, errors.New("开店缺少「在新店作用域里做什么」或幂等那两个钩子")
 	}
 
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
-		return Merchant{}, err
+		return Merchant{}, false, err
 	}
 	// Commit 之后再 Rollback 是无害的 no-op（pgx 返回 ErrTxClosed）。
 	defer tx.Rollback(ctx)
@@ -107,33 +130,62 @@ func (r *Repo) WithNewTenant(ctx context.Context, code, name string,
 	// 会话级的话这条设置会留在连接上，被池交给下一个请求就是一次提权。
 	if _, err := tx.Exec(ctx,
 		`SELECT set_config('app.platform_scope', 'on', true)`); err != nil {
-		return Merchant{}, err
+		return Merchant{}, false, err
 	}
 
 	q := db.New(tx)
+	platform := tenantTx{q: q, scope: nil}
+	proceed, err := guard.Claim(platform)
+	if err != nil {
+		return Merchant{}, false, err
+	}
+	if !proceed {
+		// 重放：什么都没写（抢占插入撞了主键，0 行）。提交与回滚等价，
+		// 提交是为了让「读存档」那一步与正常路径的事务收尾一致。
+		if err := tx.Commit(ctx); err != nil {
+			return Merchant{}, false, err
+		}
+		return Merchant{}, false, nil
+	}
+
 	row, err := q.CreateMerchant(ctx, db.CreateMerchantParams{Code: code, Name: name})
 	if err != nil {
-		return Merchant{}, asMerchantCodeTaken(err)
+		return Merchant{}, false, asMerchantCodeTaken(err)
 	}
 	m := Merchant{
 		ID: row.ID, Code: row.Code, Name: row.Name,
 		Status: row.Status, CreatedAt: row.CreatedAt.Time,
 	}
+	if err := guard.Archive(m, platform); err != nil {
+		return Merchant{}, false, err
+	}
 
 	// ② 切到新店的租户作用域。
 	if err := enterTenantScope(ctx, tx, m.ID); err != nil {
-		return Merchant{}, err
+		return Merchant{}, false, err
 	}
 
 	// scope 取一份副本的地址，理由同 withTenantTx 里那一处。
 	scope := m.ID
 	if err := fn(m, tenantTx{q: q, scope: &scope}); err != nil {
-		return Merchant{}, err
+		return Merchant{}, false, err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return Merchant{}, err
+		return Merchant{}, false, err
 	}
-	return m, nil
+	return m, true, nil
+}
+
+// NewTenantGuard 是 WithNewTenant 在 ① 平台作用域里的两个幂等钩子。
+//
+// 交出去的是 IdempotencyTx 而不是 PlatformTx：这一段里除了幂等存档没有别的
+// 事可做（建店由 WithNewTenant 自己做），给多了只会让它慢慢长成第二个 WithPlatform。
+type NewTenantGuard struct {
+	// Claim 抢占幂等键。返回 false 表示已存在（重放或冲突由调用方判定），
+	// WithNewTenant 于是不建店、不调 fn。
+	Claim func(IdempotencyTx) (bool, error)
+	// Archive 把刚建出来的店存档。
+	Archive func(Merchant, IdempotencyTx) error
 }
 
 // asMerchantCodeTaken 把 code 唯一冲突挑成 ErrMerchantCodeTaken，

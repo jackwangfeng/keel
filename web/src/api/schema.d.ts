@@ -658,6 +658,11 @@ export interface paths {
          *     所有请求都落在默认商家上：新开的店谁也访问不到，而且启动自检
          *     （活跃商家必须恰好一家）会让这套部署**下一次重启就起不来**。
          *     要开多家店，先切到多商家部署：清空 `KEEL_DEFAULT_MERCHANT`、配置 `KEEL_BASE_DOMAIN`。
+         *
+         *     **幂等**（v0.1.0 之后）：同一个平台管理员拿同一把 `Idempotency-Key` 重发，
+         *     回放首次的 `201` 与那一份 `Merchant`，带 `Idempotency-Replayed: true`，
+         *     不会再建店，**也不会再给新店管理员签第二条登录链接**。
+         *     幂等记录属于平台作用域，任何商家级会话都读写不到它。
          */
         post: {
             parameters: {
@@ -718,6 +723,7 @@ export interface paths {
                 /** @description 已创建 */
                 201: {
                     headers: {
+                        "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
                         [name: string]: unknown;
                     };
                     content: {
@@ -740,15 +746,20 @@ export interface paths {
                  *     · 这是一套单商家部署，不能开第二家店 ——
                  *       `https://keel.dev/problems/single-merchant-mode`。换个 code 重试没有用，
                  *       要改的是部署形态（见上面的描述）
+                 *     · 同一 Idempotency-Key 正在处理中 ——
+                 *       `https://keel.dev/problems/idempotency-key-in-flight`
                  */
                 409: {
                     headers: {
+                        /** @description 仅幂等键处理中时返回，建议退避秒数 */
+                        "Retry-After"?: number;
                         [name: string]: unknown;
                     };
                     content: {
                         "application/problem+json": components["schemas"]["Problem"];
                     };
                 };
+                422: components["responses"]["IdempotencyKeyReused"];
                 default: components["responses"]["Problem"];
             };
         };
@@ -1041,6 +1052,12 @@ export interface paths {
          *     > 这条是多租户系统里最容易出事的地方，所以写在契约里而不只写在代码里。
          *
          *     建好后给该邮箱发一次性登录链接，对方点开即完成首次登录。**不设密码。**
+         *
+         *     **幂等**（v0.1.0 之后）：同一个调用者拿同一把 `Idempotency-Key` 重发，
+         *     回放首次的 `201` 与那一份 `Staff`，带 `Idempotency-Replayed: true`，
+         *     不会再建人，**也不会再签第二条登录链接**。平台管理员与商家管理员都有幂等，
+         *     语义一致；幂等记录落在调用者自己的作用域里 —— 平台管理员的记录任何
+         *     商家级会话都读写不到，反之亦然。
          */
         post: {
             parameters: {
@@ -1098,9 +1115,10 @@ export interface paths {
                 };
             };
             responses: {
-                /** @description 已创建并已发出登录链接 */
+                /** @description 已创建并已发出登录链接（重放时不再发） */
                 201: {
                     headers: {
+                        "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
                         [name: string]: unknown;
                     };
                     content: {
@@ -1120,15 +1138,24 @@ export interface paths {
                         "application/problem+json": components["schemas"]["Problem"];
                     };
                 };
-                /** @description 该租户内邮箱已存在 */
+                /**
+                 * @description 按 `type` 区分：
+                 *
+                 *     · 该租户内邮箱已存在 —— `https://keel.dev/problems/staff-email-taken`
+                 *     · 同一 Idempotency-Key 正在处理中 ——
+                 *       `https://keel.dev/problems/idempotency-key-in-flight`
+                 */
                 409: {
                     headers: {
+                        /** @description 仅幂等键处理中时返回，建议退避秒数 */
+                        "Retry-After"?: number;
                         [name: string]: unknown;
                     };
                     content: {
                         "application/problem+json": components["schemas"]["Problem"];
                     };
                 };
+                422: components["responses"]["IdempotencyKeyReused"];
                 default: components["responses"]["Problem"];
             };
         };

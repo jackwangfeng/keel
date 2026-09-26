@@ -100,7 +100,7 @@
       ]
     },
     "tenant-nullable": {
-      "_": "staff 一张表。自带 merchant_id 列，但那一列**可空** —— NULL 表示平台级操作员，他不属于任何一家店（数据模型 §14）。标准 tenant 策略对 NULL 行恒为假，于是平台级操作员对所有人不可见，包括他自己；而把策略改成 `... OR merchant_id IS NULL` 会让写侧（USING 同时充当 WITH CHECK）变成一个提权入口：任何商家级管理员都能插出一行 merchant_id 为 NULL 的 staff，也就是给自己造一个平台管理员。所以谓词改成对一个**可以是 NULL 的作用域值**做 IS NOT DISTINCT FROM：租户作用域下它逐行等价于标准策略，平台作用域下它只解锁 merchant_id IS NULL 那一抽屉。完整论证在 db/migrations/00017_staff.sql 的文件头。",
+      "_": "staff 与 idempotency_keys 两张表（后者是 00028 加进来的：平台作用域的幂等存档要一个落点，形状与理由同 staff，见那份迁移的文件头）。自带 merchant_id 列，但那一列**可空** —— NULL 表示平台级操作员，他不属于任何一家店（数据模型 §14）。标准 tenant 策略对 NULL 行恒为假，于是平台级操作员对所有人不可见，包括他自己；而把策略改成 `... OR merchant_id IS NULL` 会让写侧（USING 同时充当 WITH CHECK）变成一个提权入口：任何商家级管理员都能插出一行 merchant_id 为 NULL 的 staff，也就是给自己造一个平台管理员。所以谓词改成对一个**可以是 NULL 的作用域值**做 IS NOT DISTINCT FROM：租户作用域下它逐行等价于标准策略，平台作用域下它只解锁 merchant_id IS NULL 那一抽屉。完整论证在 db/migrations/00017_staff.sql 的文件头。",
       "merchant_id": "required",
       "policy": "column-scope",
       "unique_scoped": true,
@@ -228,6 +228,11 @@
       "via": "staff_id",
       "scope_fn": "staff_scope_merchant()",
       "reason": "跟随 staff，租户归属由 staff.merchant_id 决定（数据模型 §14）。staff.merchant_id 本来就可空，复制一份下来也表达不了「平台级 token」属于谁。父表可空这件事也传染给了策略谓词：子查询里比的是 staff_scope_merchant() 而不是 current_merchant()，见 classes.parent-scoped-nullable。"
+    },
+    "idempotency_keys": {
+      "class": "tenant-nullable",
+      "reason": "幂等存档（数据模型 §12）。merchant_id 从 00028 起可空：NULL = 平台作用域的存档（开店、平台管理员加平台操作员 —— 那两条接口跑在 app.platform_scope = 'on' 里，current_merchant() 是 RAISE）。策略与 staff 逐字相同（IS NOT DISTINCT FROM staff_scope_merchant()）：租户作用域里逐行等价于标准 tenant 策略，商家员工读不到也写不出 NULL 行；平台作用域里只看得见 NULL 那一抽屉，读不到也写不出任何一家店的存档。另有 CHECK (merchant_id IS NOT NULL OR subject_kind = 2)：平台那一抽屉里只可能是后台操作员。为什么不另起一张平台表，见 db/migrations/00028_platform_idempotency.sql 的文件头。",
+      "policy_qual": "(NOT (merchant_id IS DISTINCT FROM staff_scope_merchant()))"
     },
     "merchant_revisions": {
       "class": "directory-log",

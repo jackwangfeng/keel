@@ -71,7 +71,7 @@ type CouponTemplate struct {
 
 type IdempotencyKey struct {
 	Scope        string
-	MerchantID   int64
+	MerchantID   *int64
 	SubjectID    int64
 	IdemKey      string
 	RequestHash  string

@@ -72,45 +72,12 @@ type route struct {
 	// 并且断言这里真的挂着这一笔。实现了它，那条测试就会红。
 	NotYetImplementedBody map[string]string
 
-	// NotYetImplementedHeader 是契约声明为 required 的**请求头**里，这条
-	// handler 还没实现的那些。与上面两笔是同一笔账的第三种形状。
-	//
-	// 眼下只有一个名字：Idempotency-Key，挂在两条接口上
-	// （POST /admin/merchants 与 POST /admin/staff）。
-	//
-	// **它原先还挂在另外 5 条上**（/admin/uploads、/admin/products、
-	// .../publication、.../skus、/admin/categories），那 5 条在 M4 收尾这一轮
-	// 实现了幂等，挂账随之删掉 —— 挡着它们的是一次 schema 决定
-	// （00023：把 idempotency_keys 的主体列从 user_id 换成
-	// (subject_kind, subject_id)），而不是缺代码。
-	//
-	// 剩下这两条缺的是**另一件**东西，而且是同一件：它们可能跑在平台作用域里
-	// （平台管理员开店、平台管理员加平台操作员），而 idempotency_keys.merchant_id
-	// 的默认值是 current_merchant() —— 那个函数在平台作用域里是 RAISE 不是 NULL。
-	// 逐条的理由与暴露面写在值里。
-	//
-	// 它比 query 那份弱一格，与 NotYetImplementedBody 完全同级，
-	// 要说清楚为什么：query 参数能从 handler 的 AST 里读出 c.Query("x") 来做
-	// **双向**对账；请求头不行 —— 已经实现了幂等的那两条
-	// （POST /orders 与 POST /orders/{order_no}/payments）读的是
-	// `c.GetHeader(idempotencyKeyHeader)`，第一个实参是一个包级常量而不是
-	// 字符串字面量，AST 跟不过去。硬要跟就得在测试里实现一遍常量求值，
-	// 而那份求值器自己会和它模仿的语言分叉。
-	//
-	// 所以这里只做「清单 → 契约」这一个方向的机械对账（那个名字必须真的是
-	// 契约里一个 required 的请求头参数），反向由**行为测试**盯着。
-	//
-	// 那两条行为测试是：
-	//   · admin_catalog_test.go 的 TestAdminWritesAreIdempotent —— 它现在断言
-	//     的是**真的幂等**（同一把钥匙第二次回首次那件商品、库里不多一行；
-	//     同一把钥匙配不同请求体回 422）。这条测试本轮翻了个面：它原先叫
-	//     TestAdminWritesAreNotYetIdempotent，断言「同一把钥匙会建出两件」。
-	//   · admin_auth_test.go 的 TestPlatformScopedWritesAreNotYetIdempotent ——
-	//     剩下这两条的靶子：同一把钥匙第二次不是重放。
-	//
-	// 也就是说「实现了没有」两个方向都有执行者：实现了而忘了从这里划掉 → 红；
-	// 从这里划掉了而其实没实现 → 也红。
-	NotYetImplementedHeader map[string]string
+	// （这里原先还有第三种形状 NotYetImplementedHeader：契约声明为 required 的
+	// 请求头里 handler 还没实现的那些。最后挂着的两笔是 POST /admin/merchants 与
+	// POST /admin/staff 的 Idempotency-Key，00028 给幂等键加了平台级落点之后
+	// 两条都实现了幂等，挂账清空，字段与它那条对账测试一起删掉 —— 留着一条恒绿的
+	// 测试比没有更糟。行为由 admin_auth_test.go 的 TestPlatformScopedWritesAreIdempotent
+	// 与 TestMerchantStaffCreateIsIdempotentToo 盯着。）
 
 	// NotYetImplementedResponse 是**响应体**里契约声明了、这条 handler 刻意不
 	// 填的字段，与前两笔账是同一件事的第三种形状。
@@ -374,20 +341,6 @@ var routes = []route{
 			"**租户不在任何一处** —— 它从调用者的会话继承（契约与数据模型 §14 " +
 			"认证流程 ④ 都写着这一条），落地方式是 staff.merchant_id 的 " +
 			"DEFAULT staff_scope_merchant()，整条链路上没有一个 merchant_id 参数可以传错",
-		NotYetImplementedHeader: map[string]string{
-			"Idempotency-Key": "与 POST /admin/merchants 撞的是同一堵墙，而这一条撞得更别扭：" +
-				"它的作用域**取决于调用者** —— 平台管理员加的是平台操作员（平台作用域），" +
-				"商家管理员加的是自己店的员工（租户作用域）。而 idempotency_keys.merchant_id " +
-				"的默认值是 current_merchant()，它在平台作用域里是 RAISE 不是 NULL。\n" +
-				"只给商家那一半接上幂等是**更糟**的一条路：同一条接口会有两种语义，" +
-				"而客户端（同一个后台前端，登录的人可能是两级中的任何一级）没有任何办法知道" +
-				"自己这次落在哪一半上。要么两半一起有，要么两半一起没有 —— 前者要的正是" +
-				"那次「平台级幂等落点」的 schema 决定（merchant_id 可空 + 策略跟着改）。\n" +
-				"暴露面：重发同一个请求建不出第二个人 —— 邮箱唯一约束挡住了" +
-				"（uk_staff_email 商家级那条 / uk_staff_email_platform 平台级那条），" +
-				"第二次返回 409。代价是「重放本该回 201 存档，实际回 409」。\n" +
-				"反向由 admin_auth_test.go 的 TestPlatformScopedWritesAreNotYetIdempotent 盯着。",
-		},
 	},
 	{
 		ContractPath:   "/admin/staff/{staff_id}",
@@ -407,18 +360,6 @@ var routes = []route{
 			"**租户不在任何一处，而这条比别的更彻底** —— 这条接口建的就是那个租户，" +
 			"它由 repository.WithNewTenant 在同一个事务里造出来再切进去，" +
 			"整条链路上没有一个 merchant_id 参数可以传错",
-		NotYetImplementedHeader: map[string]string{
-			"Idempotency-Key": "这条接口**用不了** idempotency_keys 那张表，而不是没轮到：" +
-				"那张表的 merchant_id 列默认值是 current_merchant()，而开店跑在平台作用域里 —— " +
-				"app.merchant_id 根本没设，current_merchant() 在那里是 RAISE（00002 那条会说人话的异常），" +
-				"不是 NULL。也就是说抢占插入那一句在这条路上会当场报错。" +
-				"要让它可用，得给幂等键一个「平台级」的落点（merchant_id 可空 + 策略跟着改），" +
-				"那是又一次 schema 决定，不该和本轮那次（00023，把主体列从 user_id 换成 " +
-				"(subject_kind, subject_id)）混在一起做。\n" +
-				"暴露面说清楚，而它比那 5 条轻得多：merchants.code 是全局唯一的，" +
-				"所以重发同一个请求**建不出第二家店** —— 第二次撞 merchants_code_key，返回 409。" +
-				"代价只是「重放本该回 201 存档，实际回 409」，客户端两种情况下都知道店已经开好了。",
-		},
 	},
 	{
 		// 商家列表。读 page / page_size，所以自己一个文件（admin_merchant_list.go），
@@ -1593,101 +1534,4 @@ func contractOperationDescription(t *testing.T, r route) string {
 			r.ContractMethod, r.ContractPath)
 	}
 	return desc
-}
-
-// NotYetImplementedHeader 里挂的每一笔账，都必须是契约里**真有且必填**的一个
-// 请求头参数。
-//
-// 与请求体那条同理，这里只做「清单 → 契约」这一个方向的机械对账，
-// 理由写在 route.NotYetImplementedHeader 上（AST 跟不过一个包级常量）。
-// 反向（真的实现了却忘了划掉）由 admin_catalog_test.go 的
-// TestAdminWritesAreNotYetIdempotent 盯着：它断言同一把 Idempotency-Key
-// 打两次真的建出了两件商品。
-//
-// 为什么判据里带上「必填」：一个 optional 的请求头没被读，是「这个可选能力
-// 还没做」；一个 required 的请求头没被读，是**服务端在违约** ——
-// 契约告诉客户端「你必须带上它」，而服务端连看都没看。
-// 两者该被区别对待，所以这条断言只认后者。
-func TestNotYetImplementedHeadersExistInContract(t *testing.T) {
-	checked := 0
-	for _, r := range routes {
-		if len(r.NotYetImplementedHeader) == 0 {
-			continue
-		}
-		t.Run(r.HTTPMethod+" "+r.ContractPath, func(t *testing.T) {
-			required := contractRequiredHeaders(t, r)
-			if len(required) == 0 {
-				t.Fatalf("契约里 %s %s 一个必填请求头都没解析出来 —— "+
-					"这条测试没在检查任何东西", r.ContractMethod, r.ContractPath)
-			}
-			for name, why := range r.NotYetImplementedHeader {
-				if !required[name] {
-					t.Errorf("NotYetImplementedHeader 里挂着 %q（%s），"+
-						"但契约里 %s %s 已经没有这个必填请求头了 —— "+
-						"清单烂了，请删掉这一行。当前必填请求头：%v",
-						name, why, r.ContractMethod, r.ContractPath, sortedBool(required))
-				}
-				checked++
-			}
-			t.Logf("契约必填请求头 %v；挂账 %v", sortedBool(required), sorted(r.NotYetImplementedHeader))
-		})
-	}
-	if checked == 0 {
-		t.Fatal("一笔请求头挂账都没查到 —— 挂账清空了就该把这条测试一起删掉，" +
-			"留着一条恒绿的测试比没有更糟")
-	}
-}
-
-// contractRequiredHeaders 取出该接口全部 required: true 的请求头参数名。
-//
-// 与 contractQueryParams 走同一套 $ref 解析（Idempotency-Key 在契约里正是
-// 一条 $ref 到 components.parameters 的引用），不认识的引用形式一律 Fatal ——
-// 静默跳过等于让上面那条断言少检查一个名字，而它只有这一个判据。
-func contractRequiredHeaders(t *testing.T, r route) map[string]bool {
-	t.Helper()
-
-	doc := loadContract(t)
-	item, ok := doc.Paths[r.ContractPath]
-	if !ok {
-		t.Fatalf("契约里没有路径 %s", r.ContractPath)
-	}
-	var params []any
-	if v, ok := item["parameters"].([]any); ok {
-		params = append(params, v...)
-	}
-	op, ok := item[r.ContractMethod].(map[string]any)
-	if !ok {
-		t.Fatalf("契约里 %s %s 不是一个映射", r.ContractMethod, r.ContractPath)
-	}
-	if v, ok := op["parameters"].([]any); ok {
-		params = append(params, v...)
-	}
-
-	out := map[string]bool{}
-	for _, raw := range params {
-		pm, ok := raw.(map[string]any)
-		if !ok {
-			t.Fatalf("参数项不是映射: %#v", raw)
-		}
-		name, in, required := "", "", false
-		if ref, ok := pm["$ref"].(string); ok {
-			const prefix = "#/components/parameters/"
-			if !strings.HasPrefix(ref, prefix) {
-				t.Fatalf("不认识的参数引用 %q", ref)
-			}
-			c, ok := doc.Components.Parameters[strings.TrimPrefix(ref, prefix)]
-			if !ok {
-				t.Fatalf("契约里的引用 %q 指向一个不存在的参数", ref)
-			}
-			name, in, required = c.Name, c.In, c.Required
-		} else {
-			name, _ = pm["name"].(string)
-			in, _ = pm["in"].(string)
-			required, _ = pm["required"].(bool)
-		}
-		if in == "header" && required && name != "" {
-			out[name] = true
-		}
-	}
-	return out
 }

@@ -532,7 +532,7 @@ func TestNewStaffInheritsTheCallersTenant(t *testing.T) {
 	idA := mkStaff(t, "shop-a", "creator-a@example.com", 1, 1)
 	sess := staffSession(t, hostA, idA)
 
-	w := post(t, hostA, "/api/v1/admin/staff",
+	w := postIdem(t, hostA, "/api/v1/admin/staff",
 		`{"email":"hired-a@example.com","name":"新人","role":2}`, sess.Token)
 	got := staffOf(t, w, http.StatusCreated)
 
@@ -715,7 +715,7 @@ func TestOperatorCannotAddStaff(t *testing.T) {
 	opID := mkStaff(t, "shop-a", "op-a@example.com", 2, 1)
 
 	opSess := staffSession(t, hostA, opID)
-	p := problemOf(t, post(t, hostA, "/api/v1/admin/staff",
+	p := problemOf(t, postIdem(t, hostA, "/api/v1/admin/staff",
 		`{"email":"nope-a@example.com","role":2}`, opSess.Token), http.StatusForbidden)
 	if p.Type != "https://keel.dev/problems/staff-forbidden" {
 		t.Errorf("type 是 %q，期望 staff-forbidden", p.Type)
@@ -724,7 +724,7 @@ func TestOperatorCannotAddStaff(t *testing.T) {
 	// 阳性对照：同一个请求，管理员发就成。没有它，一个「POST /admin/staff
 	// 恒 403」的实现会让上面那条全绿。
 	adminSess := staffSession(t, hostA, adminID)
-	if w := post(t, hostA, "/api/v1/admin/staff",
+	if w := postIdem(t, hostA, "/api/v1/admin/staff",
 		`{"email":"yes-a@example.com","role":2}`, adminSess.Token); w.Code != http.StatusCreated {
 		t.Fatalf("管理员加人也失败了：%d %s", w.Code, w.Body.String())
 	}
@@ -799,11 +799,11 @@ func TestDuplicateStaffEmailInTheSameTenantConflicts(t *testing.T) {
 	adminA := mkStaff(t, "shop-a", "dup-admin-a@example.com", 1, 1)
 	sess := staffSession(t, hostA, adminA)
 
-	if w := post(t, hostA, "/api/v1/admin/staff",
+	if w := postIdem(t, hostA, "/api/v1/admin/staff",
 		`{"email":"dup-a@example.com","role":2}`, sess.Token); w.Code != http.StatusCreated {
 		t.Fatalf("第一次加人就失败了：%d %s", w.Code, w.Body.String())
 	}
-	p := problemOf(t, post(t, hostA, "/api/v1/admin/staff",
+	p := problemOf(t, postIdem(t, hostA, "/api/v1/admin/staff",
 		`{"email":"dup-a@example.com","role":2}`, sess.Token), http.StatusConflict)
 	if p.Type != "https://keel.dev/problems/staff-email-taken" {
 		t.Errorf("type 是 %q，期望 staff-email-taken", p.Type)
@@ -814,7 +814,7 @@ func TestDuplicateStaffEmailInTheSameTenantConflicts(t *testing.T) {
 	// 而那会让后开的那家店建不了同名邮箱的员工。
 	adminB := mkStaff(t, "shop-b", "dup-admin-b@example.com", 1, 1)
 	sessB := staffSession(t, hostB, adminB)
-	if w := post(t, hostB, "/api/v1/admin/staff",
+	if w := postIdem(t, hostB, "/api/v1/admin/staff",
 		`{"email":"dup-a@example.com","role":2}`, sessB.Token); w.Code != http.StatusCreated {
 		t.Fatalf("同一个邮箱在 B 店也被拒了：%d %s —— "+
 			"唯一约束没有收进租户内", w.Code, w.Body.String())
@@ -846,61 +846,178 @@ func TestAdminEmailLinkSaysItIsNotImplemented(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 挂着的账要有靶子
+// 平台作用域的幂等（00028）
 // ---------------------------------------------------------------------------
 
-// POST /admin/staff 与 POST /admin/merchants **还没有实现幂等**，
-// 而契约里 Idempotency-Key 在这两条上都是必填请求头。
+// POST /admin/staff 与 POST /admin/merchants 在平台作用域里也幂等了。
 //
-// 这条测试是 contract_test.go 那两笔 NotYetImplementedHeader 的反向执行者：
-// 挂账只能做「清单 → 契约」一个方向的机械对账（AST 跟不过一个包级常量），
-// 所以「实现了却忘了划掉」由这里盯着 —— 真的做了幂等，它会红。
+// 0.1.0 这两条没有幂等（CHANGELOG 的 Known gaps），当时这里的测试叫
+// TestPlatformScopedWritesAreNotYetIdempotent，断言同一把钥匙第二次回 409。
+// 00028 给 idempotency_keys 加了平台级落点（merchant_id 可空 + staff 那一种策略），
+// 这条测试翻了个面：
 //
-// 它同时是那两笔账的**暴露面说明书**，而这份暴露面比另外 5 条轻：
-// 两条接口各自被一条唯一约束兜住，重发建不出第二个人、也建不出第二家店，
-// 第二次拿到的是 409 而不是一次重放的 201。
+//   - 同一把钥匙 + 同一个请求体 → 201 重放，带 Idempotency-Replayed，id 与首次相同，
+//     库里不多一行，**也不多签一串登录 token**（重放不该再发一把钥匙）；
+//   - 同一把钥匙 + 不同请求体 → 422 idempotency-key-reused，第二个请求什么都没建；
+//   - 存档真的落在平台那一抽屉（merchant_id IS NULL）。
 //
-// 它们缺的是同一样东西：idempotency_keys.merchant_id 的默认值是
-// current_merchant()，而这两条都可能跑在平台作用域里 —— 那里
-// current_merchant() 是 RAISE，不是 NULL。
-func TestPlatformScopedWritesAreNotYetIdempotent(t *testing.T) {
+// 变异验证（本轮实跑）：让 idempotentInTx 在没抢到时也照常执行业务（去掉重放分支），
+// 或让开店的 Claim 钩子恒返回 true，这条测试红。
+func TestPlatformScopedWritesAreIdempotent(t *testing.T) {
 	token := newPlatformAdmin(t)
-	key := "cccccccc-dddd-eeee-ffff-" + fmt.Sprintf("%012d", time.Now().UnixNano()%1_000_000_000_000)
+	key := freshIdemKey()
+	t.Cleanup(func() { adminExec(t, `DELETE FROM idempotency_keys WHERE idem_key = $1`, key) })
 
 	// —— 加平台操作员。
 	email := fmt.Sprintf("twice-%d@keel.test", time.Now().UnixNano())
-	t.Cleanup(func() { adminExec(t, `DELETE FROM staff WHERE email = $1`, email) })
+	other := "other-" + email
+	t.Cleanup(func() {
+		adminExec(t, `DELETE FROM staff_tokens WHERE staff_id IN
+		              (SELECT id FROM staff WHERE email = ANY($1))`, []string{email, other})
+		adminExec(t, `DELETE FROM staff WHERE email = ANY($1)`, []string{email, other})
+	})
 	body := fmt.Sprintf(`{"email":%q,"role":2}`, email)
 
-	if w := postWithKey(t, hostA, "/api/v1/admin/staff", body, token, key); w.Code != http.StatusCreated {
-		t.Fatalf("第一次加员工失败：%d %s", w.Code, w.Body.String())
-	}
+	first := staffOf(t, postWithKey(t, hostA, "/api/v1/admin/staff", body, token, key), http.StatusCreated)
 	w := postWithKey(t, hostA, "/api/v1/admin/staff", body, token, key)
-	if w.Code == http.StatusCreated && w.Header().Get("Idempotency-Replayed") == "true" {
-		t.Fatalf("同一把 Idempotency-Key 打两次 POST /admin/staff 拿到了重放 —— " +
-			"幂等实现了。请把 contract_test.go 里那笔 NotYetImplementedHeader 挂账删掉，" +
-			"并把这条测试改成断言真正的幂等")
+	again := staffOf(t, w, http.StatusCreated)
+	if w.Header().Get("Idempotency-Replayed") != "true" {
+		t.Error("重放没有带 Idempotency-Replayed: true —— 客户端会把它记成一次新建")
 	}
-	if w.Code != http.StatusConflict {
-		t.Fatalf("第二次加同一个邮箱回了 %d，期望 409（邮箱唯一约束挡住了）：%s",
-			w.Code, w.Body.String())
+	if again.Id != first.Id || again.MerchantId != nil {
+		t.Errorf("重放回的是 id=%d merchant_id=%v，期望首次那一个（id=%d，平台级）",
+			again.Id, again.MerchantId, first.Id)
+	}
+	if n := adminQueryInt64(t, `SELECT count(*) FROM staff WHERE email = $1`, email); n != 1 {
+		t.Errorf("库里有 %d 个 %s，期望 1", n, email)
+	}
+	if n := adminQueryInt64(t, `SELECT count(*) FROM staff_tokens WHERE staff_id = $1`, first.Id); n != 1 {
+		t.Errorf("新员工身上有 %d 串 token，期望 1 —— 重放又签了一条登录链接", n)
+	}
+	if n := adminQueryInt64(t, `SELECT count(*) FROM idempotency_keys
+		WHERE scope = 'admin.staff.create' AND idem_key = $1 AND merchant_id IS NULL`, key); n != 1 {
+		t.Errorf("平台那一抽屉里这把钥匙的存档有 %d 行，期望 1", n)
 	}
 
-	// —— 开店。同一把钥匙，同一个 code。
+	p := problemOf(t, postWithKey(t, hostA, "/api/v1/admin/staff",
+		fmt.Sprintf(`{"email":%q,"role":2}`, other), token, key), http.StatusUnprocessableEntity)
+	if p.Type != "https://keel.dev/problems/idempotency-key-reused" {
+		t.Errorf("同一把钥匙配不同请求体，type 是 %q，期望 idempotency-key-reused", p.Type)
+	}
+	if n := adminQueryInt64(t, `SELECT count(*) FROM staff WHERE email = $1`, other); n != 0 {
+		t.Errorf("冲突的那个请求建出了 %d 个人 —— 它被当成新请求执行了", n)
+	}
+
+	// —— 开店。同一把钥匙（scope 不同，互不影响），同一个 code。
 	code := fmt.Sprintf("twice%d", time.Now().UnixNano()%1_000_000_000)
 	dropShop(t, code)
 	shop := fmt.Sprintf(`{"code":%q,"name":"重发不会变两家","admin_email":%q}`,
 		code, code+"@keel.test")
-	if w := postWithKey(t, hostA, "/api/v1/admin/merchants", shop, token, key); w.Code != http.StatusCreated {
-		t.Fatalf("第一次开店失败：%d %s", w.Code, w.Body.String())
-	}
+	var m1, m2 api.Merchant
+	decodeInto(t, postWithKey(t, hostA, "/api/v1/admin/merchants", shop, token, key), http.StatusCreated, "首次开店", &m1)
 	w2 := postWithKey(t, hostA, "/api/v1/admin/merchants", shop, token, key)
-	if w2.Code == http.StatusCreated && w2.Header().Get("Idempotency-Replayed") == "true" {
-		t.Fatalf("同一把 Idempotency-Key 打两次 POST /admin/merchants 拿到了重放 —— " +
-			"幂等实现了，请把那笔挂账删掉")
+	decodeInto(t, w2, http.StatusCreated, "重放开店", &m2)
+	if w2.Header().Get("Idempotency-Replayed") != "true" {
+		t.Error("开店重放没有带 Idempotency-Replayed: true")
 	}
-	if w2.Code != http.StatusConflict {
-		t.Fatalf("第二次开同一个 code 回了 %d，期望 409（code 全局唯一挡住了）：%s",
-			w2.Code, w2.Body.String())
+	if m2.Id != m1.Id || m2.Code != code {
+		t.Errorf("开店重放回的是 id=%d code=%s，期望首次那家（id=%d）", m2.Id, m2.Code, m1.Id)
+	}
+	if n := adminQueryInt64(t, `SELECT count(*) FROM staff WHERE merchant_id = $1`, m1.Id); n != 1 {
+		t.Errorf("新店里有 %d 个员工，期望 1 —— 重放又建了一个管理员", n)
+	}
+	if n := adminQueryInt64(t, `SELECT count(*) FROM staff_tokens t JOIN staff s ON s.id = t.staff_id
+		WHERE s.merchant_id = $1`, m1.Id); n != 1 {
+		t.Errorf("新店管理员身上有 %d 串 token，期望 1 —— 重放又签了一条登录链接", n)
+	}
+	if n := adminQueryInt64(t, `SELECT count(*) FROM idempotency_keys
+		WHERE scope = 'admin.merchants.create' AND idem_key = $1 AND merchant_id IS NULL`, key); n != 1 {
+		t.Errorf("开店的存档在平台那一抽屉里有 %d 行，期望 1 —— 它落进了新店的作用域？", n)
+	}
+
+	other2 := code + "x"
+	dropShop(t, other2)
+	p = problemOf(t, postWithKey(t, hostA, "/api/v1/admin/merchants",
+		fmt.Sprintf(`{"code":%q,"name":"换了 code","admin_email":%q}`, other2, other2+"@keel.test"),
+		token, key), http.StatusUnprocessableEntity)
+	if p.Type != "https://keel.dev/problems/idempotency-key-reused" {
+		t.Errorf("开店同一把钥匙配不同请求体，type 是 %q，期望 idempotency-key-reused", p.Type)
+	}
+	if n := adminQueryInt64(t, `SELECT count(*) FROM merchants WHERE code = $1`, other2); n != 0 {
+		t.Errorf("冲突的那个开店请求建出了店")
+	}
+}
+
+// 加员工的另一半：商家管理员也有幂等，存档落在本店，语义与平台那一半一致。
+//
+// 只接上平台那一半会让同一条接口有两种语义（contract_test.go 原先那笔挂账
+// 写过这句话），所以两半一起有，这条盯着商家那一半。
+func TestMerchantStaffCreateIsIdempotentToo(t *testing.T) {
+	adminA := mkStaff(t, "shop-a", fmt.Sprintf("idem-admin-%d@example.com", time.Now().UnixNano()), 1, 1)
+	sess := staffSession(t, hostA, adminA)
+	key := freshIdemKey()
+	t.Cleanup(func() { adminExec(t, `DELETE FROM idempotency_keys WHERE idem_key = $1`, key) })
+	email := fmt.Sprintf("idem-hire-%d@example.com", time.Now().UnixNano())
+	body := fmt.Sprintf(`{"email":%q,"role":2}`, email)
+
+	first := staffOf(t, postWithKey(t, hostA, "/api/v1/admin/staff", body, sess.Token, key), http.StatusCreated)
+	w := postWithKey(t, hostA, "/api/v1/admin/staff", body, sess.Token, key)
+	again := staffOf(t, w, http.StatusCreated)
+	if w.Header().Get("Idempotency-Replayed") != "true" || again.Id != first.Id {
+		t.Errorf("商家管理员重放：replayed=%q id=%d，期望 true / %d",
+			w.Header().Get("Idempotency-Replayed"), again.Id, first.Id)
+	}
+	if n := adminQueryInt64(t, `SELECT count(*) FROM staff WHERE email = $1`, email); n != 1 {
+		t.Errorf("库里有 %d 个 %s，期望 1", n, email)
+	}
+	if got := adminQueryInt64(t, `SELECT coalesce(merchant_id, -1) FROM idempotency_keys
+		WHERE scope = 'admin.staff.create' AND idem_key = $1`, key); got != merchantIDOf(t, "shop-a") {
+		t.Errorf("商家管理员的存档落在 merchant_id=%d，期望 shop-a（-1 = 落进了平台那一抽屉）", got)
+	}
+}
+
+// 商家员工命中不了平台的存档，平台也命中不了商家的。
+//
+// 两边拿**同一把钥匙、同一个请求体**各发一次：各自得到一次真正的新建
+// （不是重放、不是 422），各自的存档落在各自的作用域里。
+//
+// 这条在 HTTP 层能证明的有限，要说清楚：两边的主体（staff_id）本来就不同，
+// 主键已经把它们分开了。真正的隔离（商家作用域里读不到、写不出 merchant_id 为
+// NULL 的行，反之亦然）由 internal/db 的 TestIdempotencyKeysIsolatePlatformFromTenants
+// 直接对着 RLS 验。这一条守的是端到端的那一半：两个作用域的请求确实各自走进
+// 了各自的抽屉，没有谁落错。
+func TestMerchantStaffCannotHitPlatformIdempotencyRecords(t *testing.T) {
+	platform := newPlatformAdmin(t)
+	adminA := mkStaff(t, "shop-a", fmt.Sprintf("cross-admin-%d@example.com", time.Now().UnixNano()), 1, 1)
+	merchant := staffSession(t, hostA, adminA).Token
+	key := freshIdemKey()
+	email := fmt.Sprintf("cross-%d@keel.test", time.Now().UnixNano())
+	t.Cleanup(func() {
+		adminExec(t, `DELETE FROM idempotency_keys WHERE idem_key = $1`, key)
+		adminExec(t, `DELETE FROM staff_tokens WHERE staff_id IN (SELECT id FROM staff WHERE email = $1)`, email)
+		adminExec(t, `DELETE FROM staff WHERE email = $1`, email)
+	})
+	body := fmt.Sprintf(`{"email":%q,"role":2}`, email)
+
+	wp := postWithKey(t, hostA, "/api/v1/admin/staff", body, platform, key)
+	sp := staffOf(t, wp, http.StatusCreated)
+	wm := postWithKey(t, hostA, "/api/v1/admin/staff", body, merchant, key)
+	sm := staffOf(t, wm, http.StatusCreated)
+
+	if wm.Header().Get("Idempotency-Replayed") == "true" || sm.Id == sp.Id {
+		t.Fatalf("商家管理员拿平台管理员的钥匙拿到了重放（id=%d，平台那次是 %d）—— "+
+			"商家作用域命中了平台的存档", sm.Id, sp.Id)
+	}
+	if sp.MerchantId != nil || sm.MerchantId == nil {
+		t.Errorf("平台那次建出的 merchant_id=%v（期望 null），商家那次=%v（期望 shop-a）",
+			sp.MerchantId, sm.MerchantId)
+	}
+	if n := adminQueryInt64(t, `SELECT count(*) FROM idempotency_keys
+		WHERE idem_key = $1 AND merchant_id IS NULL`, key); n != 1 {
+		t.Errorf("平台那一抽屉里有 %d 行这把钥匙，期望 1", n)
+	}
+	if n := adminQueryInt64(t, `SELECT count(*) FROM idempotency_keys
+		WHERE idem_key = $1 AND merchant_id = $2`, key, merchantIDOf(t, "shop-a")); n != 1 {
+		t.Errorf("shop-a 名下有 %d 行这把钥匙，期望 1", n)
 	}
 }

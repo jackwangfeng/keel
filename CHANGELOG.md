@@ -39,7 +39,30 @@ so "which one is running?" never depends on anyone's memory.
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- **Opening a shop (`POST /admin/merchants`) and adding staff (`POST /admin/staff`)
+  are now idempotent**, closing the first item under 0.1.0's Known gaps. Sending
+  the same `Idempotency-Key` with the same body replays the original `201` with
+  `Idempotency-Replayed: true` — no second shop, no second staff member, and no
+  second one-time login link. The same key with a different body is a `422`
+  `idempotency-key-reused`, as on every other back-office write. Adding staff is
+  idempotent for both kinds of caller (a platform admin adding platform
+  operators, a shop admin adding shop staff), so the endpoint has one meaning.
+  A request without the header is now rejected with `422`, as the contract
+  always required.
+
+  The fix is the one the Known gaps entry described: `idempotency_keys.merchant_id`
+  became nullable (NULL = a platform-scope record) and its row-level-security
+  policy became the one `staff` already uses —
+  `merchant_id IS NOT DISTINCT FROM staff_scope_merchant()`, for both reading and
+  writing. Inside a shop's scope that is row-for-row the old policy, so buyers
+  and shop staff cannot read or write platform records; inside the platform
+  scope only the NULL rows are visible, so a platform session cannot pick up a
+  shop's record either. The privilege-escalation shape
+  (`... OR merchant_id IS NULL`) is exactly what the tenancy gate's verbatim
+  policy check rejects. Migration `00028`; the reasoning for not using a
+  separate platform table is in its header.
 
 ## [0.1.0] - 2026-09-26
 

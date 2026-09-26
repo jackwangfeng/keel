@@ -143,10 +143,17 @@ func (h *AdminAuthHandler) CreateStaff(c *gin.Context) {
 	if req.StoreIds != nil {
 		scopes.StoreIDs = *req.StoreIds
 	}
-	out, err := h.svc.CreateStaff(c.Request.Context(),
-		string(req.Email), name, int16(req.Role), scopes)
+	out, replayed, err := h.svc.CreateStaff(c.Request.Context(),
+		string(req.Email), name, int16(req.Role), scopes, idemKeyOf(c))
 	if err != nil {
 		writeStaffError(c, err)
+		return
+	}
+	if replayed {
+		// 幂等重放：本次没有建人，也没有签登录链接（存档里只有 Staff，
+		// 一次性凭据的明文不进数据库）。第一次那串已经进过日志。
+		markReplayed(c, true)
+		c.JSON(http.StatusCreated, apiStaff(out.Staff))
 		return
 	}
 
@@ -245,7 +252,7 @@ func staffSessionResponse(s service.StaffSessionResult) api.StaffSession {
 // 每一条都对应契约里明写的一个状态码；没对上的一律 500 —— 兜底分支不该猜一个
 // 4xx，那会把服务端的 bug 报成客户端的错，而客户端会照着这个错重试。
 func writeStaffError(c *gin.Context, err error) {
-	if writePermissionError(c, err) {
+	if writePermissionError(c, err) || writeAdminIdempotencyError(c, err) {
 		return
 	}
 	switch {

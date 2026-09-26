@@ -281,6 +281,26 @@ type OrderTx interface {
 	AppendInventoryLog(ctx context.Context, skuID, storeID int64, changeQty int32,
 		bizType int16, bizID string, before, after int32) error
 
+	IdempotencyTx
+
+	// ReleaseIdempotencyKey 撤销一次抢占，返回是否真的撤掉了一行。
+	//
+	// 它只对**处理中**的记录生效（status = 0）。返回 false 表示这把钥匙上的
+	// 记录已经不是「处理中」了 —— 那时撤销不该发生，也没有发生。
+	ReleaseIdempotencyKey(ctx context.Context, scope string, subj IdempotencySubject, key string) (bool, error)
+}
+
+// IdempotencyTx 是幂等存档的「抢占 → 读 → 存档」三步（数据模型 §12）。
+//
+// 从 OrderTx 里拆出来，是因为 00028 之后它有了**两种作用域**的持有者：
+// 租户作用域的 Tx（买家下单、后台那几条商家写接口）与平台作用域的 PlatformTx
+// （开店、平台管理员加平台操作员）。同一份实现、同一张表、同三条 SQL ——
+// 差别全在事务里那句 set_config 与 RLS 上，这里一个字都不知道自己跑在哪一边。
+// 那正是想要的：作用域没有任何一处可以被调用方传错。
+//
+// ReleaseIdempotencyKey 不在这里：它只服务下单那条跨事务的 SAGA，
+// 单事务的写接口不需要「把钥匙还回去」（admin_idempotency.go 的文件头）。
+type IdempotencyTx interface {
 	// ClaimIdempotencyKey 抢占式插入。抢到返回 true；已存在返回 false。
 	ClaimIdempotencyKey(ctx context.Context, scope string, subj IdempotencySubject,
 		key, requestHash string) (bool, error)
@@ -296,12 +316,6 @@ type OrderTx interface {
 	// 同一件事就有了两个可能对不上的真相（存档回放时按哪一个？）。
 	FinishIdempotencyKey(ctx context.Context, scope string, subj IdempotencySubject, key string,
 		status int16, responseCode *int32, responseBody []byte) error
-
-	// ReleaseIdempotencyKey 撤销一次抢占，返回是否真的撤掉了一行。
-	//
-	// 它只对**处理中**的记录生效（status = 0）。返回 false 表示这把钥匙上的
-	// 记录已经不是「处理中」了 —— 那时撤销不该发生，也没有发生。
-	ReleaseIdempotencyKey(ctx context.Context, scope string, subj IdempotencySubject, key string) (bool, error)
 }
 
 func (t tenantTx) ListSKUsForPricing(ctx context.Context, sc StoreScope, skuIDs []int64) ([]PriceableSKU, error) {
