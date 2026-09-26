@@ -157,13 +157,21 @@ nothing above reads as if it already ships:
   costs a 2–3 GB CUDA base image plus GPU passthrough. The measured reasoning
   is in the header of `scripts/infero-up.sh`.
 
-  **Search still answers without it** — it degrades to keyword-only recall,
-  which is a supported path, not a failure. Note that path is narrower than it
-  used to be: `services/inference/` (Python + CPU + BGE-M3) is still in the
-  repo, but `internal/inference`'s client now only speaks infero's dialect
-  (path, model name and pooling sentinel are all constants). So **a machine
-  without a GPU has no semantic search today**, only the keyword half. Making
-  both legs work again means turning that dialect into explicit configuration
+  **Without a GPU the stack still runs, and search still answers.** Leave
+  `KEEL_EMBED_ENDPOINT` unset and `/search` takes the keyword-only path
+  (bigram recall plus business re-ranking): HTTP 200, no error, and
+  `explain: true` reports exactly which stages ran. That degradation is a
+  designed path with tests behind it, not a failure mode. What you lose is the
+  semantic half — a query like "something slimming for summer" shares no
+  characters with the product titles it should match, and recall drops
+  visibly. The derived-data indexer does not start either; the startup log
+  carries one WARN spelling that out.
+
+  **That is the only shape a GPU-less deployment has today.** infero has CUDA
+  and Metal backends and no CPU backend yet, and this repo does not keep a
+  second engine implementation around as a stand-in — the M3 Python service
+  (BGE-M3 on CPU) has been retired. The fix is a CPU backend inside infero
+  itself; **it is not written yet**, so this is an intention, not a feature
 - the merchant admin surface. The contract has it; the implementation does not —
   a merchant can process orders but cannot list a product yet (M4)
 - the storefront and admin UI — there is no page on port 3000 yet

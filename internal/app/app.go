@@ -160,7 +160,9 @@ func sandboxEnabled(v string) bool {
 // embedder 与 orders 不同：**传 nil 是一个正常形态**，那时 /search 只跑关键词
 // 那一路，仍然返回结果。这正是语义检索层 §8 的降级链（「任何一环故障，
 // 搜索都必须仍能返回结果」），而 README 承诺的那条 `docker compose up`
-// 里本来就没有推理引擎 —— 引擎在 compose.inference.yaml 那个叠加层里。
+// 里本来就没有推理引擎 —— 引擎是 infero，GPU-only，跑在 compose 之外的宿主机
+// 进程里（scripts/infero-up.sh + compose.infero.yaml）。没有 NVIDIA GPU 的机器
+// 今天**只有**这个形态：栈起得来、搜索有结果，只是没有语义召回。
 // 它与「派生数据入库任务没有引擎就拒绝构造」刻意相反，两边的理由都写在
 // service/search.go 与 service/index.go 的文件头。
 func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
