@@ -36,7 +36,7 @@ import (
 // stateChangingQuery 判一条 sqlc 语句是不是「状态变化」：改订单履约状态、改退款单（任何列）、
 // 建退款单、改库存水位。
 //
-// 营销活动（00044）起「库存水位」多了一层：秒杀的活动配额（promotion_skus.sold_qty）与每人限购
+// 营销活动（00058）起「库存水位」多了一层：秒杀的活动配额（promotion_skus.sold_qty）与每人限购
 // （promotion_purchases）。它们与门店库存在同一个事务里扣、同一处放回，同样要决定发不发通知。
 var stateChangingQuery = regexp.MustCompile(
 	`(?i)\bUPDATE\s+orders\s+(?:\w+\s+)?SET\s+status\b` +

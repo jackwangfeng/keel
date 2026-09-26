@@ -30,7 +30,7 @@ import (
 // 解析走 scopeIn —— 与 /products、/search 逐字同一段代码（不传走回落链，指名一家
 // 不存在的门店报 422）。
 //
-// # 营销活动：与试算同一份计算（00044）
+// # 营销活动：与试算同一份计算（00058）
 //
 // 命中限时折扣 / 秒杀的行，price_cents 是活动价（门店价另给 list_price_cents 划线），
 // 合计按活动价算 —— 于是 selected_total_cents 与同一批行的试算 goods_amount_cents 仍然

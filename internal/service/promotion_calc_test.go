@@ -394,7 +394,7 @@ func TestNonStackablePromotionBlocksCoupons(t *testing.T) {
 
 func TestCouponThresholdUsesPostPromotionAmount(t *testing.T) {
 	// 商品 100 元，满减活动减 10 → 活动后 90 元；一张满 100 减 20 的券不该可用（差 10 元）。
-	// 00044 之前券按 100 元判门槛，这张券能用 —— 那是在已经打过折的钱上再凑一次门槛。
+	// 00058 之前券按 100 元判门槛，这张券能用 —— 那是在已经打过折的钱上再凑一次门槛。
 	lines := []PricedLine{{ProductID: 1, AmountCents: 10000, PromotionDiscountCents: 1000, categoryPath: str("/1/")}}
 	in := couponLinesOf(lines)
 	if in[0].AmountCents != 9000 {

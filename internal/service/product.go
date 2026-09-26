@@ -33,7 +33,7 @@ type ProductSummary struct {
 	SalesCount    int32
 	Status        int16
 
-	// PromotionTags 是这件商品在这家店此刻生效的活动标签（00044，promotion_tags.go）。
+	// PromotionTags 是这件商品在这家店此刻生效的活动标签（00058，promotion_tags.go）。
 	// MinPriceCents 仍是门店价：活动价看标签与 SKU.PromoPriceCents。
 	PromotionTags []ProductPromotionTag
 }
@@ -228,7 +228,7 @@ type SKU struct {
 	ImageURL     *string
 	AvailableQty int32
 
-	// PromoPriceCents / PromotionID：这家店此刻的活动价与给出它的活动（00044）。
+	// PromoPriceCents / PromotionID：这家店此刻的活动价与给出它的活动（00058）。
 	// 没有单价类活动、或特价不低于门店价时为 nil。
 	PromoPriceCents *int64
 	PromotionID     *int64

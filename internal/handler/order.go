@@ -51,7 +51,7 @@ func (h *OrderHandler) Preview(c *gin.Context) {
 		return
 	}
 
-	// Items 的元素类型本轮（00044）从契约里的内联 schema 提成了具名的 OrderPreviewItem。
+	// Items 的元素类型本轮（00058）从契约里的内联 schema 提成了具名的 OrderPreviewItem。
 	// 此前这里要把匿名结构体原样再写一遍，而匿名类型多一个字段就不再可赋值 ——
 	// 给每一行加活动价与活动分摊时正是撞上了这个（数据模型 §15 记过的那笔债）。
 	// 具名之后字段照样由契约生成：契约改一个字，这段照样编译不过。
@@ -92,7 +92,7 @@ func (h *OrderHandler) Preview(c *gin.Context) {
 		ApplicableCoupons: &applicable,
 		UserCouponId:      q.UserCouponID,
 
-		// 营销活动（00044）：DiscountCents = 活动 + 券，两个来源各给一份；
+		// 营销活动（00058）：DiscountCents = 活动 + 券，两个来源各给一份；
 		// promotions 是命中了哪些、各减多少、还差多少凑满（与购物车同一段渲染）。
 		PromotionDiscountCents: api.Money(q.PromotionDiscountCents),
 		CouponDiscountCents:    api.Money(q.CouponDiscountCents),

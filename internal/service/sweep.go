@@ -475,7 +475,7 @@ func releaseClosedOrder(ctx context.Context, tx repository.Tx, orderID int64,
 			bizType, orderNo, after-ln.Quantity, after); err != nil {
 			return 0, err
 		}
-		// 按活动价成交的行：活动配额与每人限购一起放回（00044），与回补库存同一个事务。
+		// 按活动价成交的行：活动配额与每人限购一起放回（00058），与回补库存同一个事务。
 		if err := releasePromotionLine(ctx, tx, ln, userID, orderNo); err != nil {
 			return 0, err
 		}

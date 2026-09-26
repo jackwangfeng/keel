@@ -150,7 +150,7 @@ func apiOrderItems(rows []repository.OrderItem) []api.OrderItem {
 			AmountCents:   &amount,
 			DiscountCents: &discount,
 
-			// 活动（00044）：门店价快照、改了单价的活动、满减满折分摊到这一行的那一份。
+			// 活动（00058）：门店价快照、改了单价的活动、满减满折分摊到这一行的那一份。
 			ListPriceCents:         &listPrice,
 			PricePromotionId:       it.PricePromotionID,
 			PromotionDiscountCents: &promoDiscount,

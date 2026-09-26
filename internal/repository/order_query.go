@@ -58,7 +58,7 @@ type OrderItem struct {
 	AmountCents   int64
 	DiscountCents int64
 	RefundedQty   int32
-	// 00044：门店价快照、改了单价的活动、满减满折分摊到这一行的那一份。
+	// 00058：门店价快照、改了单价的活动、满减满折分摊到这一行的那一份。
 	ListPriceCents         int64
 	PricePromotionID       *int64
 	PromotionDiscountCents int64

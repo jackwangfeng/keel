@@ -68,7 +68,7 @@ func newCouponShop(t *testing.T) couponShop {
 			        promotion_discount_cents = 0,
 			        freight_discount_cents = 0,
 			        payable_cents = goods_amount_cents + freight_cents WHERE merchant_id = $1`,
-			// 营销活动（00044）：订单行指向活动（price_promotion_id），新人礼的活动指向券模板、
+			// 营销活动（00058）：订单行指向活动（price_promotion_id），新人礼的活动指向券模板、
 			// 发放记录指向券 —— 先把订单行上的活动摘掉（连同活动价，否则 chk_item_price_promotion
 			// 不让摘），再按引用方向删活动的几张表，都排在券与券模板之前。
 			`UPDATE order_items SET price_promotion_id = NULL, price_cents = list_price_cents

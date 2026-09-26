@@ -12,7 +12,7 @@ import (
 	"github.com/keel/keel/internal/repository/internal/db"
 )
 
-// 营销活动在 repository 边界上的那一面。数据模型 §7「营销活动」，迁移 00044。
+// 营销活动在 repository 边界上的那一面。数据模型 §7「营销活动」，迁移 00058。
 //
 // 与 coupon.go 同一个分工：这一层**只取素材、只做条件更新**，不判定「这个活动在
 // 这一单上减多少、哪几行参与」—— 那个判定只有一份实现（service/promotion_calc.go）。
@@ -49,7 +49,7 @@ const (
 	ThresholdByQty    int16 = 2 // 件数
 )
 
-// CouponSourceNewBuyerGift 是新人礼发出的券（user_coupons.source = 3，00044）。
+// CouponSourceNewBuyerGift 是新人礼发出的券（user_coupons.source = 3，00058）。
 const CouponSourceNewBuyerGift int16 = 3
 
 // Promotion 是一个活动本体（不含阶梯、范围、活动商品）。

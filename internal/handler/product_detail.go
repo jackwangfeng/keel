@@ -86,7 +86,7 @@ func (h *ProductHandler) Detail(c *gin.Context) {
 			PriceCents:   api.Money(s.PriceCents),
 			SpecValues:   &spec,
 
-			// 这家店此刻的活动价（限时折扣 / 秒杀，00044）；没有就整个不出现。
+			// 这家店此刻的活动价（限时折扣 / 秒杀，00058）；没有就整个不出现。
 			PromoPriceCents: moneyPtrOf(s.PromoPriceCents),
 			PromotionId:     s.PromotionID,
 		})

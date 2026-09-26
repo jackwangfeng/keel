@@ -18,7 +18,7 @@ import (
 	"github.com/keel/keel/internal/service"
 )
 
-// 营销活动（数据模型 §7·二，迁移 00044）的端到端测试。夹具是 couponShop：一家新开的店，
+// 营销活动（数据模型 §7·二，迁移 00058）的端到端测试。夹具是 couponShop：一家新开的店，
 // 连衣裙 60 元（服装 / 连衣裙）、衬衫 50 元（服装），华北、华南门店各 50 件。
 // 活动全部走后台接口建、上线；买家侧全部走买家接口 —— 测的是装配好的整条链路。
 
@@ -198,7 +198,7 @@ func TestFullReductionStacksWithCouponAndRefundsToTheCent(t *testing.T) {
 }
 
 // 券的门槛按活动后金额判：两件衬衫 100 元，满减活动减 10 → 90 元，满 100 减 20 的券不可用。
-// 00044 之前券按 100 元判门槛、这张券可用 —— 那是在已经打过折的钱上再凑一次门槛。
+// 00058 之前券按 100 元判门槛、这张券可用 —— 那是在已经打过折的钱上再凑一次门槛。
 func TestCouponThresholdIsCheckedAfterPromotions(t *testing.T) {
 	cs := newCouponShop(t)
 	cs.livePromotion(t, "满100减10", fullReduction100)

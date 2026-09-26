@@ -226,7 +226,7 @@ var permMatrix = []permRoute{
 			Body: fmt.Sprintf(`{"phones":[%q]}`, permBuyerPhone(t, fx)), OK: http.StatusCreated}
 	}},
 
-	// —— 营销活动（00044）。与券同一行：活动直接决定实付，判据是全店范围。
+	// —— 营销活动（00058）。与券同一行：活动直接决定实付，判据是全店范围。
 	// 每格现场建一个新活动（下线状态，规则还能改）。
 	{"GET", v1 + "/admin/promotions", merchantWide, func(t *testing.T, fx *permFixture, c permCase) permReq {
 		return permGet(v1 + "/admin/promotions")

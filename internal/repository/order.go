@@ -120,7 +120,7 @@ type Order struct {
 	// 由 CreateOrderDraft 那条 INSERT ... SELECT 从券模板现读写入，之后模板改名不影响它。
 	CouponName *string
 
-	// PromotionDiscountCents 是满减满折的优惠合计（00044），已含在 DiscountCents 里：
+	// PromotionDiscountCents 是满减满折的优惠合计（00058），已含在 DiscountCents 里：
 	// DiscountCents = 活动 + 券，chk_discount_sources 钉住「没挂券就恰好等于活动那一份」。
 	PromotionDiscountCents int64
 	// Promotions 是命中活动的快照（JSONB 原样，形状见 service.OrderPromotionSnapshot）。
@@ -150,7 +150,7 @@ func optTime(ts pgtype.Timestamptz) *time.Time {
 type OrderLine struct {
 	SKUID    int64
 	Quantity int32
-	// PricePromotionID 是这一行按哪个限时折扣 / 秒杀的活动价成交（00044）。非 nil 时库存分支
+	// PricePromotionID 是这一行按哪个限时折扣 / 秒杀的活动价成交（00058）。非 nil 时库存分支
 	// 在同一个事务里扣它的活动配额与每人限购，补偿与关单时放回。
 	PricePromotionID *int64
 }
@@ -180,7 +180,7 @@ type NewOrderDraft struct {
 	ExpireAt         time.Time
 	UserCouponID     *int64
 
-	// PromotionDiscountCents / Promotions 见 Order 上同名字段（00044）。
+	// PromotionDiscountCents / Promotions 见 Order 上同名字段（00058）。
 	PromotionDiscountCents int64
 	Promotions             []byte
 }
@@ -198,7 +198,7 @@ type NewOrderItem struct {
 	AmountCents   int64
 	DiscountCents int64
 
-	// 00044：门店价快照、改了单价的活动、满减满折分摊到这一行的那一份（已含在 DiscountCents 里）。
+	// 00058：门店价快照、改了单价的活动、满减满折分摊到这一行的那一份（已含在 DiscountCents 里）。
 	ListPriceCents         int64
 	PricePromotionID       *int64
 	PromotionDiscountCents int64

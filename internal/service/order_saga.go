@@ -361,7 +361,7 @@ func deductStock(ctx context.Context, tx repository.Tx, order repository.Order) 
 		if err := notifyLowStockIfCrossed(ctx, tx, order, ln.SKUID, ln.Quantity, after); err != nil {
 			return err
 		}
-		// 按活动价成交的行：同一个事务里扣活动配额（秒杀防超卖）与每人限购（00044）。
+		// 按活动价成交的行：同一个事务里扣活动配额（秒杀防超卖）与每人限购（00058）。
 		//
 		// 放在库存分支里而不是另起一个分支：配额与门店库存是「同一件货」的两道闸，
 		// 必须同生共死 —— 配额扣到了、库存没扣到（或反过来）都是错账。同一个事务之后，

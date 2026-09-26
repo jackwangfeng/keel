@@ -373,7 +373,7 @@ type CreateOrderItemParams struct {
 
 // 订单项快照（数据模型 §5：下单即快照）。商品改价改名不影响历史订单。
 //
-// 00044 起多三列：list_price_cents（门店价快照）、price_promotion_id（改了单价的
+// 00058 起多三列：list_price_cents（门店价快照）、price_promotion_id（改了单价的
 // 限时折扣 / 秒杀）、promotion_discount_cents（满减满折分摊到这一行的那一份，
 // 已含在 discount_cents 里）。
 func (q *Queries) CreateOrderItem(ctx context.Context, arg CreateOrderItemParams) error {
@@ -909,7 +909,7 @@ type ListExpiredPendingOrdersRow struct {
 // 按 expire_at 升序：过期最久的先处理，否则一个持续入单的租户能让最老的那批
 // 永远排在后面。
 //
-// user_id（00044）：按活动价成交的行关单时要放回每人限购，那个计数按买家记。
+// user_id（00058）：按活动价成交的行关单时要放回每人限购，那个计数按买家记。
 func (q *Queries) ListExpiredPendingOrders(ctx context.Context, limit int32) ([]ListExpiredPendingOrdersRow, error) {
 	rows, err := q.db.Query(ctx, listExpiredPendingOrders, limit)
 	if err != nil {
@@ -954,7 +954,7 @@ type ListOrderItemsForBranchRow struct {
 // 按 sku_id 排序而不是 id：两个分支（正向与补偿）必须按同一个顺序拿行锁，
 // 否则两笔互相交叉的订单在高并发下能互相死锁。
 //
-// price_promotion_id（00044）：这一行按限时折扣 / 秒杀价成交时，库存分支在同一个事务里
+// price_promotion_id（00058）：这一行按限时折扣 / 秒杀价成交时，库存分支在同一个事务里
 // 扣它的活动配额与每人限购，补偿与关单时放回 —— 与库存同进同出。
 func (q *Queries) ListOrderItemsForBranch(ctx context.Context, orderID int64) ([]ListOrderItemsForBranchRow, error) {
 	rows, err := q.db.Query(ctx, listOrderItemsForBranch, orderID)

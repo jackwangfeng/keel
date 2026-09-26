@@ -58,7 +58,7 @@ var notificationCallSites = map[string]notifyPolicy{
 	"AdminCatalogService.CreateSKU/CreateSKU":               {Silent: "建 SKU 时写初始库存：商家自己做的，理由同 SetInventory"},
 	"AdminStoreService.SetStoreInventory/SetStoreInventory": {Silent: "后台按门店改库存：商家自己做的，理由同 SetInventory"},
 
-	// —— 营销活动的配额与每人限购（00044，与门店库存同一个事务）
+	// —— 营销活动的配额与每人限购（00058，与门店库存同一个事务）
 	"deductStock/ReservePromotionQuota": {Silent: "扣秒杀配额与每人限购：门店库存那条（同一个函数里的 DeductInventory）" +
 		"已经按预警线决定了发不发库存预警；配额抢光是活动的正常结局，不是要人处理的事 —— " +
 		"没抢到的买家由 POST /orders 同步收到 409 promotion-sold-out"},

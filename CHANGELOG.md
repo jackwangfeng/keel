@@ -39,7 +39,7 @@ so "which one is running?" never depends on anyone's memory.
 
 ## [Unreleased]
 
-Migrations `00027`–`00038`, `00044` and `00053`–`00057`.
+Migrations `00027`–`00038` and `00053`–`00058`.
 
 
 ### Added

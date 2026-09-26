@@ -83,7 +83,7 @@ type PricedLine struct {
 	// 两个来源合在一列里，「一行退完 = 这一行实付」才恒等。
 	DiscountCents int64
 
-	// PromotionDiscountCents 是其中满减满折分摊到这一行的那一份（00044）。
+	// PromotionDiscountCents 是其中满减满折分摊到这一行的那一份（00058）。
 	// 券那一份 = DiscountCents − PromotionDiscountCents。
 	PromotionDiscountCents int64
 
@@ -118,7 +118,7 @@ type Quote struct {
 	DiscountCents int64
 	PayableCents  int64
 
-	// PromotionDiscountCents / CouponDiscountCents 是 DiscountCents 的两个来源（00044）。
+	// PromotionDiscountCents / CouponDiscountCents 是 DiscountCents 的两个来源（00058）。
 	PromotionDiscountCents int64
 	CouponDiscountCents    int64
 

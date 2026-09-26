@@ -122,7 +122,7 @@ func (h *ProductHandler) List(c *gin.Context) {
 			MaxPriceCents: &max,
 			SalesCount:    &sales,
 			Status:        api.ProductSummaryStatus(it.Status),
-			// 这家店此刻生效的活动标签（00044）。没有活动时是空数组。
+			// 这家店此刻生效的活动标签（00058）。没有活动时是空数组。
 			PromotionTags: ptrTags(it.PromotionTags),
 		})
 	}

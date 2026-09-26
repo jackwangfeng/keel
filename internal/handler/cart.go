@@ -181,7 +181,7 @@ func apiCart(v service.CartView) api.Cart {
 			Title:      &title,
 			ImageUrl:   ln.ImageURL,
 			PriceCents: ln.PriceCents,
-			// 命中限时折扣 / 秒杀时 PriceCents 是活动价，门店价给出来划线（00044）。
+			// 命中限时折扣 / 秒杀时 PriceCents 是活动价，门店价给出来划线（00058）。
 			ListPriceCents:   ln.ListPriceCents,
 			PricePromotionId: ln.PricePromotionID,
 			Quantity:         int(ln.Quantity),

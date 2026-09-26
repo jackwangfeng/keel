@@ -253,10 +253,10 @@ type Order struct {
 	StoreSnapshot          []byte
 	UserCouponID           *int64
 	CouponName             *string
-	PromotionDiscountCents int64
-	Promotions             []byte
 	FreightDiscountCents   int64
 	FreightSnapshot        []byte
+	PromotionDiscountCents int64
+	Promotions             []byte
 }
 
 type OrderItem struct {

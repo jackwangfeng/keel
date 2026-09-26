@@ -9303,7 +9303,7 @@ components:
           type: string
           description: 给人看的一句话，如「新疆维吾尔自治区不在「默认运费」的配送范围」
 
-    # ---- 营销活动（数据模型 §7「营销活动」，迁移 00044）----
+    # ---- 营销活动（数据模型 §7「营销活动」，迁移 00058）----
     PromotionType:
       type: integer
       description: |
