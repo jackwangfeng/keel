@@ -491,6 +491,29 @@ var permMatrix = []permRoute{
 		return permReq{Method: http.MethodGet, OK: http.StatusFound,
 			Path: fmt.Sprintf(v1+"/admin/uploads/%d", permEvidence(t, fx, fx.store(c)))}
 	}},
+	// 经营报表（00057）。契约 StaffRole 矩阵「经营报表」两行：五条按门店收窄的报表与
+	// 订单列表同一个判据 —— 对谁都是 200，范围只收窄、不拒绝（带一家范围外的 store_id
+	// 也是 200，只是全零）；「200 里算进了哪些单」由 report_test.go 的
+	// TestReportsAreScopedLikeTheOrderList 逐角色核对金额。搜索概况没有门店维度，
+	// 只放全店范围的人，大区 / 门店管理员 403 role-forbidden。
+	{"GET", v1 + "/admin/reports/overview", everyone, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permGet(fmt.Sprintf(v1+"/admin/reports/overview?store_id=%d", fx.store(c)))
+	}},
+	{"GET", v1 + "/admin/reports/trend", everyone, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permGet(fmt.Sprintf(v1+"/admin/reports/trend?period=last_7_days&region_id=%d", fx.region(c)))
+	}},
+	{"GET", v1 + "/admin/reports/products", everyone, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permGet(fmt.Sprintf(v1+"/admin/reports/products?store_id=%d", fx.store(c)))
+	}},
+	{"GET", v1 + "/admin/reports/stores", everyone, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permGet(fmt.Sprintf(v1+"/admin/reports/stores?region_id=%d", fx.region(c)))
+	}},
+	{"GET", v1 + "/admin/reports/inventory-alerts", everyone, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permGet(fmt.Sprintf(v1+"/admin/reports/inventory-alerts?store_id=%d", fx.store(c)))
+	}},
+	{"GET", v1 + "/admin/reports/search", merchantWide, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permGet(v1 + "/admin/reports/search?period=last_30_days")
+	}},
 }
 
 // permImportCSV 造一份只有一件商品的导入 csv，编码带序号，每次都是一份新文件。

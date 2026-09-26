@@ -1515,6 +1515,186 @@ export type RegionUpdateRequest = {
   status? : number
 }
 
+export type ReportInventoryAlert = {
+  store_id : number
+  store_name : string
+  region_id : number
+  sku_id : number
+  sku_code : string
+  /** SKU 的规格值，如 `{"颜色":"红","尺码":"M"}` */
+  spec_values : UTSJSONObject
+  product_id : number
+  product_title : string
+  available_qty : number
+  warning_qty : number
+}
+
+export type ReportInventoryAlerts = {
+  /** 符合条件的总条数（不受 limit 影响） */
+  total : number
+  items : ReportInventoryAlert[]
+}
+
+/** 一段窗口里的核心指标。**订单口径**：已支付的五种状态 */
+export type ReportMetrics = {
+  /** 金额，单位「分」。禁止使用浮点。 */
+  paid_amount_cents : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  refund_amount_cents : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  net_sales_cents : Money
+  /** 支付订单数：上述订单的笔数。 */
+  order_count : number
+  /** 支付买家数：上述订单的下单买家去重数。 */
+  buyer_count : number
+  /** 金额，单位「分」。禁止使用浮点。 */
+  avg_order_value_cents : Money
+  /** 退款笔数：窗口内到账的退款单张数。 */
+  refund_count : number
+  /** 退款率 = 退款金额 ÷ 支付金额（同一窗口），支付金额为 0 时为 `null`（不是 0）。 */
+  refund_rate : number | null
+}
+
+/** 一段半开区间 `[start_at, end_at)`，同时给出它在店铺时区里的起止日期（都含）。 */
+export type ReportRange = {
+  /** 区间起点（含），UTC */
+  start_at : string
+  /** 区间终点（**不含**），UTC */
+  end_at : string
+  /** 起点在店铺时区里的日期 */
+  start_date : string
+  /** 最后一个被覆盖的自然日（含），店铺时区 */
+  end_date : string
+}
+
+/** 一次报表查询的时间窗口。**六条报表共用这一份口径**： */
+export type ReportWindow = {
+  period : string
+  timezone : string
+  /** 一段半开区间 `[start_at, end_at)`，同时给出它在店铺时区里的起止日期（都含）。 */
+  current : ReportRange
+  /** 一段半开区间 `[start_at, end_at)`，同时给出它在店铺时区里的起止日期（都含）。 */
+  previous : ReportRange
+}
+
+export type ReportOverview = {
+  /** 一次报表查询的时间窗口。**六条报表共用这一份口径**： */
+  window : ReportWindow
+  /** 一段窗口里的核心指标。**订单口径**：已支付的五种状态 */
+  current : ReportMetrics
+  /** 一段窗口里的核心指标。**订单口径**：已支付的五种状态 */
+  previous : ReportMetrics
+}
+
+export type ReportProductRankItem = {
+  /** 名次，从 1 开始 */
+  rank : number
+  product_id : number
+  /** 商品当前的标题 */
+  title : string
+  category_id : number
+  /** 销量（件） */
+  quantity : number
+  /** 金额，单位「分」。禁止使用浮点。 */
+  amount_cents : Money
+  /** 含这件商品的支付订单数 */
+  order_count : number
+  /** 这些订单行截至查询时已退的件数。 */
+  refunded_quantity : number
+  /** 金额，单位「分」。禁止使用浮点。 */
+  refunded_amount_cents : Money
+}
+
+export type ReportProductRanking = {
+  /** 一次报表查询的时间窗口。**六条报表共用这一份口径**： */
+  window : ReportWindow
+  sort_by : string
+  items : ReportProductRankItem[]
+}
+
+export type ReportRegionRow = {
+  region_id : number
+  region_name : string
+  /** 这个大区在 stores 里出现的门店数 */
+  store_count : number
+  /** 金额，单位「分」。禁止使用浮点。 */
+  paid_amount_cents : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  refund_amount_cents : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  net_sales_cents : Money
+  order_count : number
+}
+
+export type ReportSearchTerm = {
+  /** 归并后的搜索词（去首尾空白、小写） */
+  query : string
+  search_count : number
+  zero_result_count : number
+}
+
+export type ReportSearchOverview = {
+  /** 一次报表查询的时间窗口。**六条报表共用这一份口径**： */
+  window : ReportWindow
+  search_count : number
+  zero_result_count : number
+  /** 无结果次数 ÷ 搜索次数；没有搜索时为 `null`。 */
+  zero_result_rate : number | null
+  click_count : number
+  /** 热门搜索词 Top N。 */
+  top_queries : ReportSearchTerm[]
+  /** 无结果搜索词 Top N（按无结果次数排）。 */
+  zero_result_queries : ReportSearchTerm[]
+}
+
+export type ReportStoreRow = {
+  store_id : number
+  store_name : string
+  store_code : string
+  /** 门店此刻所属的大区 */
+  region_id : number
+  region_name : string
+  /** 门店已删除（只在窗口内有成交或退款时出现） */
+  deleted : boolean
+  /** 金额，单位「分」。禁止使用浮点。 */
+  paid_amount_cents : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  refund_amount_cents : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  net_sales_cents : Money
+  order_count : number
+}
+
+export type ReportStoreComparison = {
+  /** 一次报表查询的时间窗口。**六条报表共用这一份口径**： */
+  window : ReportWindow
+  stores : ReportStoreRow[]
+  regions : ReportRegionRow[]
+}
+
+export type ReportTrendPoint = {
+  /** 桶的起点，UTC */
+  bucket_start_at : string
+  /** 桶在店铺时区里的显示名：按天是 `MM-DD`，按小时是 `HH:00`。 */
+  label : string
+  /** 金额，单位「分」。禁止使用浮点。 */
+  paid_amount_cents : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  refund_amount_cents : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  net_sales_cents : Money
+  order_count : number
+}
+
+export type ReportTrend = {
+  /** 一次报表查询的时间窗口。**六条报表共用这一份口径**： */
+  window : ReportWindow
+  /** 窗口只有一个自然日时按小时，否则按天。 */
+  granularity : string
+  /** 按时间升序，每个桶一个点，没有数据的桶是 0。 */
+  points : ReportTrendPoint[]
+}
+
 export type ReturnShipmentRequest = {
   /** 承运商标识，如 sf / jd / yto（与发货的 `Shipment.carrier_code` 同一套） */
   carrier_code : string

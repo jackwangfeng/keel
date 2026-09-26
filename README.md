@@ -165,7 +165,12 @@ If 8081 is taken: `KEEL_CONSOLE_PORT=18081 docker compose up -d --build`.
 > and confirm returned goods, plus a **to-do bell** in the top bar (new paid
 > orders, refunds awaiting review, returns shipped back, low stock — narrowed to
 > the staff member's store scope, read state kept per person, each item jumps
-> straight to the order, refund or store stock it is about).
+> straight to the order, refund or store stock it is about), and the **business
+> overview** dashboard on the home page: net sales (paid minus refunded), orders,
+> paying buyers, average order value and refund rate against the previous period,
+> an hourly / daily trend line, top products, store and region comparison,
+> low-stock alerts and a search summary (top queries and zero-result queries) —
+> fixed definitions, days cut in the shop's time zone, scoped by role, no AI involved.
 
 For the multi-merchant shape, where the `Host` header picks the shop:
 `docker compose -f compose.yaml -f compose.multi.yaml up -d --build`.
@@ -261,7 +266,8 @@ an amount or a quantity after discounts, undeliverable regions, per store or
 shop-wide) · order state
 machine · multi-store with delivery fences · tiered staff roles · in-app
 notifications (buyer message center and console to-do bell, written in the same
-transaction as the state change)
+transaction as the state change) · business reports (overview vs. previous
+period, trend, top products, store comparison, low-stock alerts, search summary)
 
 Cart, address book, profile, cancel, confirm-receipt, shipping and after-sales
 refunds (partial refunds allocated to the cent, discounts included) are in;

@@ -11097,6 +11097,594 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/reports/overview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 经营概览（指标卡 + 上一周期对比）
+         * @description 指定时间窗口里的核心经营指标，以及**紧挨着它之前、等长的上一周期**的同一组指标，
+         *     供界面算环比。时间窗口、时区、金额单位的口径见 `ReportWindow`；每个指标的口径见
+         *     `ReportMetrics`。
+         *
+         *     **范围**与后台订单列表同一个判据（`StaffRole` 矩阵「经营报表」那一行，
+         *     与「订单与售后」相同）：管理员、操作员看全店；大区管理员只看**当前**挂在他大区下的
+         *     门店；门店管理员只看自己的门店。按订单的履约门店 `store_id` 判，门店的大区取它
+         *     **此刻**的大区。`store_id` / `region_id` 与范围取**交集**：范围外的门店拿到的是全零，
+         *     不是 403（与 `GET /admin/orders?store_id=` 一致）。
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /**
+                     * @description 时间窗口，按店铺时区的自然日切（口径见 `ReportWindow`）：
+                     *     `today` 今天 0 点到此刻 · `yesterday` 昨天 · `last_7_days` 最近 7 个完整自然日（不含今天）·
+                     *     `last_30_days` 最近 30 个完整自然日（不含今天）· `custom` 自定义（必须同时给
+                     *     `start_date` 与 `end_date`）。**不传即 `today`**（写在这里而不是 schema 的 `default` 上：
+                     *     查询参数的缺省值会被生成器代入，静默改变筛选语义，check_openapi.py 不许）。
+                     */
+                    period?: components["parameters"]["ReportPeriod"];
+                    /**
+                     * @description `period=custom` 时的起始日（含），店铺时区的日期，形如 `2026-09-01`。
+                     *     其它 period 下给了也不读。
+                     */
+                    start_date?: components["parameters"]["ReportStartDate"];
+                    /**
+                     * @description `period=custom` 时的结束日（**含**），店铺时区的日期。起止最多跨 **366 天**
+                     *     （含首尾，一整个闰年），超出 422 —— 理由见 `ReportWindow`。
+                     */
+                    end_date?: components["parameters"]["ReportEndDate"];
+                    /** @description 只看这一家门店（履约门店）。与调用者的范围取交集，范围外得到空结果而不是 403。 */
+                    store_id?: components["parameters"]["ReportStoreId"];
+                    /** @description 只看此刻挂在这个大区下的门店。与调用者的范围取交集。 */
+                    region_id?: components["parameters"]["ReportRegionId"];
+                };
+                header?: {
+                    /**
+                     * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+                     *
+                     *     它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+                     *     而例外成立的前提是平台级鉴权：
+                     *
+                     *     · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+                     *       读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+                     *       行级安全落在这家店上。
+                     *     · **商家级员工带了这个头：403**
+                     *       （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+                     *       静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+                     *     · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+                     *       **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+                     *       实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+                     *       请求其余部分指名的东西不存在是 422。
+                     *     · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+                     *       买家侧对它照旧 404。
+                     *     · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+                     *       （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+                     *
+                     *     后台每一条挂后台会话的操作都声明了它（机械核对：
+                     *     `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+                     */
+                    "X-Keel-Merchant"?: components["parameters"]["KeelMerchant"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ReportOverview"];
+                    };
+                };
+                422: components["responses"]["ReportBadWindow"];
+                default: components["responses"]["Problem"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/reports/trend": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 销售趋势（按天 / 按小时）
+         * @description 时间窗口内按桶汇总的支付金额、退款金额、净销售额、支付订单数。
+         *     **桶的粒度由窗口长度决定**，不由调用方指定：窗口只有一个自然日（`today`、
+         *     `yesterday`、或 `custom` 的起止是同一天）按小时，否则按天。桶按店铺时区切，
+         *     每个桶都出现（没有数据的桶是 0，不是缺席），界面可以直接画折线。
+         *     `today` 只出到当前这一小时（含）。
+         *
+         *     各列的口径与 `ReportMetrics` 同名字段逐字一致：支付按支付时间落桶，
+         *     退款按到账时间落桶。范围规则同 `GET /admin/reports/overview`。
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /**
+                     * @description 时间窗口，按店铺时区的自然日切（口径见 `ReportWindow`）：
+                     *     `today` 今天 0 点到此刻 · `yesterday` 昨天 · `last_7_days` 最近 7 个完整自然日（不含今天）·
+                     *     `last_30_days` 最近 30 个完整自然日（不含今天）· `custom` 自定义（必须同时给
+                     *     `start_date` 与 `end_date`）。**不传即 `today`**（写在这里而不是 schema 的 `default` 上：
+                     *     查询参数的缺省值会被生成器代入，静默改变筛选语义，check_openapi.py 不许）。
+                     */
+                    period?: components["parameters"]["ReportPeriod"];
+                    /**
+                     * @description `period=custom` 时的起始日（含），店铺时区的日期，形如 `2026-09-01`。
+                     *     其它 period 下给了也不读。
+                     */
+                    start_date?: components["parameters"]["ReportStartDate"];
+                    /**
+                     * @description `period=custom` 时的结束日（**含**），店铺时区的日期。起止最多跨 **366 天**
+                     *     （含首尾，一整个闰年），超出 422 —— 理由见 `ReportWindow`。
+                     */
+                    end_date?: components["parameters"]["ReportEndDate"];
+                    /** @description 只看这一家门店（履约门店）。与调用者的范围取交集，范围外得到空结果而不是 403。 */
+                    store_id?: components["parameters"]["ReportStoreId"];
+                    /** @description 只看此刻挂在这个大区下的门店。与调用者的范围取交集。 */
+                    region_id?: components["parameters"]["ReportRegionId"];
+                };
+                header?: {
+                    /**
+                     * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+                     *
+                     *     它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+                     *     而例外成立的前提是平台级鉴权：
+                     *
+                     *     · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+                     *       读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+                     *       行级安全落在这家店上。
+                     *     · **商家级员工带了这个头：403**
+                     *       （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+                     *       静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+                     *     · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+                     *       **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+                     *       实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+                     *       请求其余部分指名的东西不存在是 422。
+                     *     · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+                     *       买家侧对它照旧 404。
+                     *     · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+                     *       （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+                     *
+                     *     后台每一条挂后台会话的操作都声明了它（机械核对：
+                     *     `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+                     */
+                    "X-Keel-Merchant"?: components["parameters"]["KeelMerchant"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ReportTrend"];
+                    };
+                };
+                422: components["responses"]["ReportBadWindow"];
+                default: components["responses"]["Problem"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/reports/products": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 商品排行（销量 / 销售额 Top N）
+         * @description 时间窗口内**支付了的**订单里各商品（SPU）的销量与销售额排行。
+         *
+         *     · 归属：按**订单的支付时间**落入窗口；订单状态口径与 `ReportMetrics.order_count` 相同
+         *       （已支付的五种状态，不含草稿、待支付、已关闭）。
+         *     · `quantity`：订单行的件数之和（毛销量，不减退货）。
+         *     · `amount_cents`：订单行的实付分摊之和 = 行金额 `amount_cents` 减分摊到这一行的券优惠
+         *       `discount_cents`（**不含运费**）。
+         *     · `refunded_quantity` / `refunded_amount_cents`：这些订单行**截至查询时**已退的
+         *       件数与金额（`order_items.refunded_qty / refunded_cents`，退款到账时回写）。
+         *       它们描述的是「这一批销量后来退了多少」，**不按退款时间**切，
+         *       所以与概览的退款金额口径不同，不要拿来相加减。
+         *     · `category_id` 含子孙类目（按类目 `path` 前缀），已删除的子类目下卖出的也算。
+         *     · 标题取商品**当前**的标题；并列时按另一个指标、再按商品 id 升序，结果稳定。
+         *
+         *     范围规则同 `GET /admin/reports/overview`（按订单的履约门店）。
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /**
+                     * @description 时间窗口，按店铺时区的自然日切（口径见 `ReportWindow`）：
+                     *     `today` 今天 0 点到此刻 · `yesterday` 昨天 · `last_7_days` 最近 7 个完整自然日（不含今天）·
+                     *     `last_30_days` 最近 30 个完整自然日（不含今天）· `custom` 自定义（必须同时给
+                     *     `start_date` 与 `end_date`）。**不传即 `today`**（写在这里而不是 schema 的 `default` 上：
+                     *     查询参数的缺省值会被生成器代入，静默改变筛选语义，check_openapi.py 不许）。
+                     */
+                    period?: components["parameters"]["ReportPeriod"];
+                    /**
+                     * @description `period=custom` 时的起始日（含），店铺时区的日期，形如 `2026-09-01`。
+                     *     其它 period 下给了也不读。
+                     */
+                    start_date?: components["parameters"]["ReportStartDate"];
+                    /**
+                     * @description `period=custom` 时的结束日（**含**），店铺时区的日期。起止最多跨 **366 天**
+                     *     （含首尾，一整个闰年），超出 422 —— 理由见 `ReportWindow`。
+                     */
+                    end_date?: components["parameters"]["ReportEndDate"];
+                    /** @description 只看这一家门店（履约门店）。与调用者的范围取交集，范围外得到空结果而不是 403。 */
+                    store_id?: components["parameters"]["ReportStoreId"];
+                    /** @description 只看此刻挂在这个大区下的门店。与调用者的范围取交集。 */
+                    region_id?: components["parameters"]["ReportRegionId"];
+                    /** @description 按什么排：`amount` 销售额、`quantity` 销量。不传或不认识的值按 `amount`。 */
+                    sort_by?: "amount" | "quantity";
+                    /** @description 只看这个类目（含子孙类目）下的商品。类目不存在或已删除时结果为空。 */
+                    category_id?: number;
+                    /** @description Top N 的 N，不传即 10。超出范围按边界钳制。 */
+                    limit?: components["parameters"]["ReportLimit"];
+                };
+                header?: {
+                    /**
+                     * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+                     *
+                     *     它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+                     *     而例外成立的前提是平台级鉴权：
+                     *
+                     *     · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+                     *       读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+                     *       行级安全落在这家店上。
+                     *     · **商家级员工带了这个头：403**
+                     *       （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+                     *       静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+                     *     · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+                     *       **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+                     *       实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+                     *       请求其余部分指名的东西不存在是 422。
+                     *     · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+                     *       买家侧对它照旧 404。
+                     *     · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+                     *       （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+                     *
+                     *     后台每一条挂后台会话的操作都声明了它（机械核对：
+                     *     `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+                     */
+                    "X-Keel-Merchant"?: components["parameters"]["KeelMerchant"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ReportProductRanking"];
+                    };
+                };
+                422: components["responses"]["ReportBadWindow"];
+                default: components["responses"]["Problem"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/reports/stores": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 门店 / 大区对比
+         * @description 时间窗口内各门店的支付金额、退款金额、净销售额、支付订单数，以及按大区的小计。
+         *     口径与 `ReportMetrics` 同名字段逐字一致。
+         *
+         *     · 列出范围内**全部未删除的门店**（没有成交的是 0，便于看出哪家店没动静），
+         *       外加窗口内有成交或退款的**已删除门店**（`deleted = true`）——
+         *       店关了，关店前的成交仍然是这个窗口的真实数字。
+         *     · 大区取门店**此刻**所属的大区（与判权同一个口径），不取订单上下单时的 `region_id`。
+         *       `regions` 是 `stores` 按大区的合计，两边的总和一致。
+         *     · 门店按净销售额倒序，并列按门店 id 升序；大区同理。
+         *
+         *     范围规则同 `GET /admin/reports/overview`。
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /**
+                     * @description 时间窗口，按店铺时区的自然日切（口径见 `ReportWindow`）：
+                     *     `today` 今天 0 点到此刻 · `yesterday` 昨天 · `last_7_days` 最近 7 个完整自然日（不含今天）·
+                     *     `last_30_days` 最近 30 个完整自然日（不含今天）· `custom` 自定义（必须同时给
+                     *     `start_date` 与 `end_date`）。**不传即 `today`**（写在这里而不是 schema 的 `default` 上：
+                     *     查询参数的缺省值会被生成器代入，静默改变筛选语义，check_openapi.py 不许）。
+                     */
+                    period?: components["parameters"]["ReportPeriod"];
+                    /**
+                     * @description `period=custom` 时的起始日（含），店铺时区的日期，形如 `2026-09-01`。
+                     *     其它 period 下给了也不读。
+                     */
+                    start_date?: components["parameters"]["ReportStartDate"];
+                    /**
+                     * @description `period=custom` 时的结束日（**含**），店铺时区的日期。起止最多跨 **366 天**
+                     *     （含首尾，一整个闰年），超出 422 —— 理由见 `ReportWindow`。
+                     */
+                    end_date?: components["parameters"]["ReportEndDate"];
+                    /** @description 只看此刻挂在这个大区下的门店。与调用者的范围取交集。 */
+                    region_id?: components["parameters"]["ReportRegionId"];
+                };
+                header?: {
+                    /**
+                     * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+                     *
+                     *     它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+                     *     而例外成立的前提是平台级鉴权：
+                     *
+                     *     · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+                     *       读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+                     *       行级安全落在这家店上。
+                     *     · **商家级员工带了这个头：403**
+                     *       （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+                     *       静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+                     *     · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+                     *       **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+                     *       实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+                     *       请求其余部分指名的东西不存在是 422。
+                     *     · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+                     *       买家侧对它照旧 404。
+                     *     · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+                     *       （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+                     *
+                     *     后台每一条挂后台会话的操作都声明了它（机械核对：
+                     *     `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+                     */
+                    "X-Keel-Merchant"?: components["parameters"]["KeelMerchant"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ReportStoreComparison"];
+                    };
+                };
+                422: components["responses"]["ReportBadWindow"];
+                default: components["responses"]["Problem"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/reports/inventory-alerts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 库存预警
+         * @description **此刻**可售库存不高于预警线的门店 SKU：`available_qty <= warning_qty`
+         *     （`inventories.warning_qty`，门店库存那一行设的预警线）。没有时间窗口 —— 库存是现状，不是流量。
+         *
+         *     · 预警线是 0 的 SKU 在卖空（可售 0）时同样出现：卖空是最该补货的一种。
+         *     · 不含已删除的门店、SKU、商品。
+         *     · 按「低于预警线多少」（`available_qty - warning_qty`）升序，其次可售升序、门店 id、
+         *       SKU id，最缺的在最上面。`total` 是符合条件的总条数，`items` 只取前 `limit` 条。
+         *
+         *     范围与门店库存同一个判据：管理员、操作员全店；大区管理员本大区的门店；
+         *     门店管理员自己的门店。`store_id` / `region_id` 与范围取交集。
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description 只看这一家门店（履约门店）。与调用者的范围取交集，范围外得到空结果而不是 403。 */
+                    store_id?: components["parameters"]["ReportStoreId"];
+                    /** @description 只看此刻挂在这个大区下的门店。与调用者的范围取交集。 */
+                    region_id?: components["parameters"]["ReportRegionId"];
+                    /** @description 最多返回几条，不传即 50。超出范围按边界钳制。 */
+                    limit?: number;
+                };
+                header?: {
+                    /**
+                     * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+                     *
+                     *     它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+                     *     而例外成立的前提是平台级鉴权：
+                     *
+                     *     · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+                     *       读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+                     *       行级安全落在这家店上。
+                     *     · **商家级员工带了这个头：403**
+                     *       （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+                     *       静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+                     *     · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+                     *       **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+                     *       实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+                     *       请求其余部分指名的东西不存在是 422。
+                     *     · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+                     *       买家侧对它照旧 404。
+                     *     · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+                     *       （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+                     *
+                     *     后台每一条挂后台会话的操作都声明了它（机械核对：
+                     *     `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+                     */
+                    "X-Keel-Merchant"?: components["parameters"]["KeelMerchant"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ReportInventoryAlerts"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/reports/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 搜索概况
+         * @description 时间窗口内买家搜索的次数、无结果率、热门搜索词、无结果搜索词（`search_logs`，
+         *     语义检索层 §9）。无结果搜索词是选品最直接的信号：买家在找、店里没有。
+         *
+         *     · `search_count`：窗口内 `search_logs` 的行数（每次成功返回的检索一行）。
+         *     · 无结果：这次检索返回的结果为空（`ranked_ids` 为空）。
+         *       `zero_result_rate` = 无结果次数 ÷ 搜索次数，搜索次数为 0 时为 `null`。
+         *       与 `make search-metrics` 的 `zero_rate` 同一个口径。
+         *     · `click_count`：有点击回传的检索次数（`clicked_id` 非空）。
+         *     · 搜索词先去掉首尾空白、转小写再归并（「Nike 」与「nike」算一个词）；
+         *       按次数倒序，并列按词升序。
+         *     · 时间窗口按检索发生的时间（`search_logs.created_at`）切，口径见 `ReportWindow`。
+         *
+         *     **只有管理员、操作员能看**（大区 / 门店管理员 403 role-forbidden）：
+         *     搜索是全店的公开入口，检索日志上没有门店这一维，没有办法按门店收窄 ——
+         *     把全店的搜索词给一个门店管理员看，等于越过了他的范围。
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /**
+                     * @description 时间窗口，按店铺时区的自然日切（口径见 `ReportWindow`）：
+                     *     `today` 今天 0 点到此刻 · `yesterday` 昨天 · `last_7_days` 最近 7 个完整自然日（不含今天）·
+                     *     `last_30_days` 最近 30 个完整自然日（不含今天）· `custom` 自定义（必须同时给
+                     *     `start_date` 与 `end_date`）。**不传即 `today`**（写在这里而不是 schema 的 `default` 上：
+                     *     查询参数的缺省值会被生成器代入，静默改变筛选语义，check_openapi.py 不许）。
+                     */
+                    period?: components["parameters"]["ReportPeriod"];
+                    /**
+                     * @description `period=custom` 时的起始日（含），店铺时区的日期，形如 `2026-09-01`。
+                     *     其它 period 下给了也不读。
+                     */
+                    start_date?: components["parameters"]["ReportStartDate"];
+                    /**
+                     * @description `period=custom` 时的结束日（**含**），店铺时区的日期。起止最多跨 **366 天**
+                     *     （含首尾，一整个闰年），超出 422 —— 理由见 `ReportWindow`。
+                     */
+                    end_date?: components["parameters"]["ReportEndDate"];
+                    /** @description Top N 的 N，不传即 10。超出范围按边界钳制。 */
+                    limit?: components["parameters"]["ReportLimit"];
+                };
+                header?: {
+                    /**
+                     * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+                     *
+                     *     它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+                     *     而例外成立的前提是平台级鉴权：
+                     *
+                     *     · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+                     *       读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+                     *       行级安全落在这家店上。
+                     *     · **商家级员工带了这个头：403**
+                     *       （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+                     *       静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+                     *     · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+                     *       **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+                     *       实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+                     *       请求其余部分指名的东西不存在是 422。
+                     *     · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+                     *       买家侧对它照旧 404。
+                     *     · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+                     *       （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+                     *
+                     *     后台每一条挂后台会话的操作都声明了它（机械核对：
+                     *     `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+                     */
+                    "X-Keel-Merchant"?: components["parameters"]["KeelMerchant"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ReportSearchOverview"];
+                    };
+                };
+                403: components["responses"]["Problem"];
+                422: components["responses"]["ReportBadWindow"];
+                default: components["responses"]["Problem"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/webhooks/refunds/{channel}": {
         parameters: {
             query?: never;
@@ -13014,6 +13602,8 @@ export interface components {
          *     | 门店：建、改、删、围栏 | ✅ | ✅ | 只限本大区的门店（换大区时新旧都得在范围内） | ❌ |
          *     | 门店价、门店上下架、门店库存 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
          *     | 订单与售后：订单 / 退款单的列表与详情、发货、退款审核、确认收到退货 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
+         *     | 经营报表：概览、趋势、商品排行、门店对比、库存预警 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
+         *     | 经营报表：搜索概况（检索日志没有门店维度） | ✅ | ✅ | ❌ | ❌ |
          *     | 设默认门店（含建店时 is_default） | ✅ | ❌ | ❌ | ❌ |
          *     | 员工管理 | ✅ | ❌ | 只能加、改本大区门店的门店管理员 | ❌ |
          *     | 开店 | 仅平台级管理员 | | | |
@@ -13049,6 +13639,263 @@ export interface components {
         ShipmentCreateRequest: {
             carrier_code: string;
             tracking_no: string;
+        };
+        /** @description 一段半开区间 `[start_at, end_at)`，同时给出它在店铺时区里的起止日期（都含）。 */
+        ReportRange: {
+            /**
+             * Format: date-time
+             * @description 区间起点（含），UTC
+             */
+            start_at: string;
+            /**
+             * Format: date-time
+             * @description 区间终点（**不含**），UTC
+             */
+            end_at: string;
+            /**
+             * Format: date
+             * @description 起点在店铺时区里的日期
+             */
+            start_date: string;
+            /**
+             * Format: date
+             * @description 最后一个被覆盖的自然日（含），店铺时区
+             */
+            end_date: string;
+        };
+        /**
+         * @description 一次报表查询的时间窗口。**六条报表共用这一份口径**：
+         *
+         *     **时区**：店铺时区 `shop_settings.timezone`；这家店没有那一行、或那一列不是合法的
+         *     IANA 时区名时按 **Asia/Shanghai**。回显在 `timezone` 里。「今天」「昨天」「按天」「按小时」
+         *     全部按这个时区的自然日 / 整点切，不按服务器时区、也不按 UTC。
+         *
+         *     **窗口**（`current`，半开区间 `[start_at, end_at)`）：
+         *     · `today`：今天 0 点 → 此刻；
+         *     · `yesterday`：昨天 0 点 → 今天 0 点；
+         *     · `last_7_days` / `last_30_days`：最近 7 / 30 个**完整**自然日，**不含今天**
+         *       （今天还没过完，放进去会让每天早上的数字都偏低）；
+         *     · `custom`：`start_date` 0 点 → `end_date` 次日 0 点。
+         *
+         *     **上一周期**（`previous`）：紧挨在 `current` 之前、等长的一段 ——
+         *     `today` 对比**昨天的同一时段**（昨天 0 点 → 昨天的此刻），其余对比前面同样天数的
+         *     自然日（`yesterday` 对前天，`last_7_days` 对再往前的 7 天，`custom` 同理）。
+         *
+         *     **归属时间**：销售（支付金额、订单数、买家数、商品排行）按**支付时间**
+         *     `orders.paid_at` 落窗口 —— 下单了没付钱不是销售；退款按**到账时间**
+         *     `refunds.refunded_at` 落窗口 —— 申请了没退出去的钱仍然在店里。
+         *     于是一笔 9 月 30 日付款、10 月 2 日退款的单，9 月的销售里有它，10 月的退款里有它。
+         *
+         *     **金额**一律整数分（`Money`），不做任何四舍五入以外的换算。
+         *
+         *     **跨度上限 366 天**（`custom`）：每条报表都是对窗口内的订单 / 退款 / 检索日志
+         *     现场聚合（不预先汇总），扫描量与窗口长度成正比；366 天覆盖「今年以来」与
+         *     「同比去年」这两种最长的日常问法，再长的分析该去离线数仓，而不是压在交易库上。
+         */
+        ReportWindow: {
+            /** @enum {string} */
+            period: "today" | "yesterday" | "last_7_days" | "last_30_days" | "custom";
+            /** @example Asia/Shanghai */
+            timezone: string;
+            current: components["schemas"]["ReportRange"];
+            previous: components["schemas"]["ReportRange"];
+        };
+        /**
+         * @description 一段窗口里的核心指标。**订单口径**：已支付的五种状态
+         *     （`20 待发货`、`30 已发货`、`40 已完成`、`50 退款中`、`60 已退款`）且支付时间落在窗口里；
+         *     草稿（`0`）、待支付（`10`）、已关闭 / 取消（`90`）一律不计。整单退掉的单（`60`）
+         *     仍然计入支付 —— 它确实付过钱，退掉的那部分由退款金额扣回。
+         */
+        ReportMetrics: {
+            /** @description 支付金额：上述订单的实付 `paid_cents` 之和（含运费，已扣券）。 */
+            paid_amount_cents: components["schemas"]["Money"];
+            /**
+             * @description 退款金额：窗口内**到账**（退款单 `40 已退款`，按 `refunded_at`）的退款 `amount_cents` 之和。
+             *     审核中、退款中、已驳回、已撤回的不计。不论那一单是哪天付的款。
+             */
+            refund_amount_cents: components["schemas"]["Money"];
+            /** @description 销售额（净）= 支付金额 − 退款金额。可以为负（这段时间退的比卖的多）。 */
+            net_sales_cents: components["schemas"]["Money"];
+            /**
+             * Format: int64
+             * @description 支付订单数：上述订单的笔数。
+             */
+            order_count: number;
+            /**
+             * Format: int64
+             * @description 支付买家数：上述订单的下单买家去重数。
+             */
+            buyer_count: number;
+            /** @description 客单价 = 支付金额 ÷ 支付买家数，四舍五入到分；没有买家时为 0。 */
+            avg_order_value_cents: components["schemas"]["Money"];
+            /**
+             * Format: int64
+             * @description 退款笔数：窗口内到账的退款单张数。
+             */
+            refund_count: number;
+            /**
+             * Format: double
+             * @description 退款率 = 退款金额 ÷ 支付金额（同一窗口），支付金额为 0 时为 `null`（不是 0）。
+             *     因为两边按各自的时间归属，**它可以大于 1**（本期退的是上期卖的）。
+             */
+            refund_rate: number | null;
+        };
+        ReportOverview: {
+            window: components["schemas"]["ReportWindow"];
+            current: components["schemas"]["ReportMetrics"];
+            previous: components["schemas"]["ReportMetrics"];
+        };
+        ReportTrendPoint: {
+            /**
+             * Format: date-time
+             * @description 桶的起点，UTC
+             */
+            bucket_start_at: string;
+            /**
+             * @description 桶在店铺时区里的显示名：按天是 `MM-DD`，按小时是 `HH:00`。
+             * @example 09-26
+             * @example 14:00
+             */
+            label: string;
+            paid_amount_cents: components["schemas"]["Money"];
+            refund_amount_cents: components["schemas"]["Money"];
+            net_sales_cents: components["schemas"]["Money"];
+            /** Format: int64 */
+            order_count: number;
+        };
+        ReportTrend: {
+            window: components["schemas"]["ReportWindow"];
+            /**
+             * @description 窗口只有一个自然日时按小时，否则按天。
+             * @enum {string}
+             */
+            granularity: "hour" | "day";
+            /** @description 按时间升序，每个桶一个点，没有数据的桶是 0。 */
+            points: components["schemas"]["ReportTrendPoint"][];
+        };
+        ReportProductRankItem: {
+            /** @description 名次，从 1 开始 */
+            rank: number;
+            /** Format: int64 */
+            product_id: number;
+            /** @description 商品当前的标题 */
+            title: string;
+            /** Format: int64 */
+            category_id: number;
+            /**
+             * Format: int64
+             * @description 销量（件）
+             */
+            quantity: number;
+            /** @description 销售额：订单行实付分摊之和（不含运费）。 */
+            amount_cents: components["schemas"]["Money"];
+            /**
+             * Format: int64
+             * @description 含这件商品的支付订单数
+             */
+            order_count: number;
+            /**
+             * Format: int64
+             * @description 这些订单行截至查询时已退的件数。
+             */
+            refunded_quantity: number;
+            /** @description 这些订单行截至查询时已退的金额。 */
+            refunded_amount_cents: components["schemas"]["Money"];
+        };
+        ReportProductRanking: {
+            window: components["schemas"]["ReportWindow"];
+            /** @enum {string} */
+            sort_by: "amount" | "quantity";
+            items: components["schemas"]["ReportProductRankItem"][];
+        };
+        ReportStoreRow: {
+            /** Format: int64 */
+            store_id: number;
+            store_name: string;
+            store_code: string;
+            /**
+             * Format: int64
+             * @description 门店此刻所属的大区
+             */
+            region_id: number;
+            region_name: string;
+            /** @description 门店已删除（只在窗口内有成交或退款时出现） */
+            deleted: boolean;
+            paid_amount_cents: components["schemas"]["Money"];
+            refund_amount_cents: components["schemas"]["Money"];
+            net_sales_cents: components["schemas"]["Money"];
+            /** Format: int64 */
+            order_count: number;
+        };
+        ReportRegionRow: {
+            /** Format: int64 */
+            region_id: number;
+            region_name: string;
+            /** @description 这个大区在 stores 里出现的门店数 */
+            store_count: number;
+            paid_amount_cents: components["schemas"]["Money"];
+            refund_amount_cents: components["schemas"]["Money"];
+            net_sales_cents: components["schemas"]["Money"];
+            /** Format: int64 */
+            order_count: number;
+        };
+        ReportStoreComparison: {
+            window: components["schemas"]["ReportWindow"];
+            stores: components["schemas"]["ReportStoreRow"][];
+            regions: components["schemas"]["ReportRegionRow"][];
+        };
+        ReportInventoryAlert: {
+            /** Format: int64 */
+            store_id: number;
+            store_name: string;
+            /** Format: int64 */
+            region_id: number;
+            /** Format: int64 */
+            sku_id: number;
+            sku_code: string;
+            /** @description SKU 的规格值，如 `{"颜色":"红","尺码":"M"}` */
+            spec_values: {
+                [key: string]: string;
+            };
+            /** Format: int64 */
+            product_id: number;
+            product_title: string;
+            available_qty: number;
+            warning_qty: number;
+        };
+        ReportInventoryAlerts: {
+            /**
+             * Format: int64
+             * @description 符合条件的总条数（不受 limit 影响）
+             */
+            total: number;
+            items: components["schemas"]["ReportInventoryAlert"][];
+        };
+        ReportSearchTerm: {
+            /** @description 归并后的搜索词（去首尾空白、小写） */
+            query: string;
+            /** Format: int64 */
+            search_count: number;
+            /** Format: int64 */
+            zero_result_count: number;
+        };
+        ReportSearchOverview: {
+            window: components["schemas"]["ReportWindow"];
+            /** Format: int64 */
+            search_count: number;
+            /** Format: int64 */
+            zero_result_count: number;
+            /**
+             * Format: double
+             * @description 无结果次数 ÷ 搜索次数；没有搜索时为 `null`。
+             */
+            zero_result_rate: number | null;
+            /** Format: int64 */
+            click_count: number;
+            /** @description 热门搜索词 Top N。 */
+            top_queries: components["schemas"]["ReportSearchTerm"][];
+            /** @description 无结果搜索词 Top N（按无结果次数排）。 */
+            zero_result_queries: components["schemas"]["ReportSearchTerm"][];
         };
         /**
          * @description 审计字段里的「谁」。`name` 取员工此刻的名字；平台级员工（不属于这家店）
@@ -14198,6 +15045,20 @@ export interface components {
             };
         };
         /**
+         * @description 时间窗口不合法（type=https://keel.dev/problems/invalid-request）：
+         *     `period` 不在枚举里；`custom` 缺 `start_date` / `end_date` 或日期格式不对；
+         *     起始日晚于结束日；起止跨度超过 366 天。
+         *     **不当成「没传」**：窗口写错时回一份今天的数字，会让人把它当成那段时间的数字。
+         */
+        ReportBadWindow: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /**
          * @description 同一 Idempotency-Key 正在处理中（另一并发请求已抢占）。
          *     type=https://keel.dev/problems/idempotency-key-in-flight。
          *     客户端应按 `Retry-After` 退避重试，而不是当成业务失败弹窗。
@@ -14278,6 +15139,30 @@ export interface components {
          *     指名一个不存在或不属于你的地址返回 422，不静默改用默认地址。
          */
         CartAddressId: number;
+        /**
+         * @description 时间窗口，按店铺时区的自然日切（口径见 `ReportWindow`）：
+         *     `today` 今天 0 点到此刻 · `yesterday` 昨天 · `last_7_days` 最近 7 个完整自然日（不含今天）·
+         *     `last_30_days` 最近 30 个完整自然日（不含今天）· `custom` 自定义（必须同时给
+         *     `start_date` 与 `end_date`）。**不传即 `today`**（写在这里而不是 schema 的 `default` 上：
+         *     查询参数的缺省值会被生成器代入，静默改变筛选语义，check_openapi.py 不许）。
+         */
+        ReportPeriod: "today" | "yesterday" | "last_7_days" | "last_30_days" | "custom";
+        /**
+         * @description `period=custom` 时的起始日（含），店铺时区的日期，形如 `2026-09-01`。
+         *     其它 period 下给了也不读。
+         */
+        ReportStartDate: string;
+        /**
+         * @description `period=custom` 时的结束日（**含**），店铺时区的日期。起止最多跨 **366 天**
+         *     （含首尾，一整个闰年），超出 422 —— 理由见 `ReportWindow`。
+         */
+        ReportEndDate: string;
+        /** @description 只看这一家门店（履约门店）。与调用者的范围取交集，范围外得到空结果而不是 403。 */
+        ReportStoreId: number;
+        /** @description 只看此刻挂在这个大区下的门店。与调用者的范围取交集。 */
+        ReportRegionId: number;
+        /** @description Top N 的 N，不传即 10。超出范围按边界钳制。 */
+        ReportLimit: number;
         /**
          * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
          *
