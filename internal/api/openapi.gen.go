@@ -2277,7 +2277,14 @@ type Money = int64
 
 // Order defines model for Order.
 type Order struct {
-	CreatedAt time.Time `json:"created_at"`
+	// CouponName 这一单用的券的名字，**下单时的快照**。没用券时不出现（与 `user_coupon_id` 同进同出）。
+	//
+	// 它存在订单上，不从券模板现读：模板后来改名，历史订单仍显示下单那一刻的名字 ——
+	// 与 `order_items.title_snapshot`、`OrderDetail.store` 是同一条道理。
+	// 客户端展示「已用：满 100 减 20」这类文案请用它，不要拿 `user_coupon_id`
+	// 再去查券（那张券的模板此刻可能已经叫别的名字了）。
+	CouponName *string   `json:"coupon_name,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
 
 	// DiscountCents 金额，单位「分」。禁止使用浮点。
 	DiscountCents *Money     `json:"discount_cents,omitempty"`
@@ -2374,7 +2381,14 @@ type OrderCreateRequest struct {
 
 // OrderDetail defines model for OrderDetail.
 type OrderDetail struct {
-	CreatedAt time.Time `json:"created_at"`
+	// CouponName 这一单用的券的名字，**下单时的快照**。没用券时不出现（与 `user_coupon_id` 同进同出）。
+	//
+	// 它存在订单上，不从券模板现读：模板后来改名，历史订单仍显示下单那一刻的名字 ——
+	// 与 `order_items.title_snapshot`、`OrderDetail.store` 是同一条道理。
+	// 客户端展示「已用：满 100 减 20」这类文案请用它，不要拿 `user_coupon_id`
+	// 再去查券（那张券的模板此刻可能已经叫别的名字了）。
+	CouponName *string   `json:"coupon_name,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
 
 	// DiscountCents 金额，单位「分」。禁止使用浮点。
 	DiscountCents *Money     `json:"discount_cents,omitempty"`
@@ -3350,6 +3364,19 @@ type StaffCreateRequest struct {
 
 	// StoreIds role 4 必填且至少一个；其余角色不带
 	StoreIds *[]int64 `json:"store_ids,omitempty"`
+}
+
+// StaffLoginToken 一串一次性登录 token，与新建员工时服务端签的那一串同一种（15 分钟、用掉即失效），
+// 拿去换 `POST /admin/auth/session`。
+type StaffLoginToken struct {
+	ExpireAt time.Time `json:"expire_at"`
+
+	// StaffId 这串 token 属于谁
+	StaffId int64 `json:"staff_id"`
+
+	// Token 一次性登录 token 明文。**服务端只存它的 sha256**，明文只在这一次响应
+	// （和进程日志）里出现。
+	Token string `json:"token"`
 }
 
 // StaffRole 1 管理员 · 2 操作员 · 3 大区管理员 · 4 门店管理员
@@ -5062,6 +5089,33 @@ type PatchAdminStaffStaffIdParams struct {
 
 // PatchAdminStaffStaffIdJSONBodyStatus defines parameters for PatchAdminStaffStaffId.
 type PatchAdminStaffStaffIdJSONBodyStatus int
+
+// PostAdminStaffStaffIdLoginTokenParams defines parameters for PostAdminStaffStaffIdLoginToken.
+type PostAdminStaffStaffIdLoginTokenParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
 
 // GetAdminStoresParams defines parameters for GetAdminStores.
 type GetAdminStoresParams struct {

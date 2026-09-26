@@ -39,7 +39,7 @@ so "which one is running?" never depends on anyone's memory.
 
 ## [Unreleased]
 
-Lands on migration `00027`.
+Migrations `00027`–`00029`.
 
 ### Added
 
@@ -66,6 +66,32 @@ Lands on migration `00027`.
   candidate ids and the returned ids, server-side latency and a random 128-bit
   `trace_id`. A failed log write is reported as an `ERROR` and never fails the
   search. Tenant-isolated with `ENABLE` + `FORCE` row-level security.
+- **Orders carry the name of the coupon they were placed with** (`coupon_name` on
+  `Order`, so on the order detail, the order list and the create response). It
+  is a snapshot taken by the same statement that writes `user_coupon_id`: renaming
+  the coupon template later does not change what past orders show, the same rule
+  as the item title and store snapshots. The field is absent when no coupon was
+  used; a `CHECK` keeps the two columns present or absent together. Migration
+  `00029` backfills existing orders from the template's name at migration time —
+  the name at order time was never recorded, so an order placed before a rename
+  that happened before this migration shows the newer name. Coupons shipped the
+  same day as 0.1.0, so that window is hours wide.
+
+- **A staff member whose session expired can be let back in without being
+  deleted and re-created.** `POST /admin/staff/{staff_id}/login-token` issues a
+  fresh one-time login token — the same kind a new staff member gets (15 minutes,
+  single use, exchanged at `POST /admin/auth/session`) — and revokes that
+  person's earlier unused ones, so calling it twice leaves exactly one valid
+  token (which is why it takes no `Idempotency-Key`: replaying an archived
+  response would put the token in the database). Until now a 7-day session was
+  the end of the road: the e-mail link answers `501` because there is no mail
+  service, and the only other one-time token was the one printed when the account
+  was created. Who may issue for whom is exactly who may edit whom
+  (`PATCH /admin/staff/{staff_id}`); disabled staff get `409 staff-disabled`.
+  **The token is returned in the response body** as well as logged — without a
+  mail service the admin has to hand it over some other way. The issuer can
+  therefore log in once as that person; they could already change that person's
+  role and status. The back office's staff page has a button for it.
 
 ### Changed
 
@@ -85,6 +111,28 @@ Lands on migration `00027`.
 
 ### Fixed
 
+- **Opening a shop (`POST /admin/merchants`) and adding staff (`POST /admin/staff`)
+  are now idempotent**, closing the first item under 0.1.0's Known gaps. Sending
+  the same `Idempotency-Key` with the same body replays the original `201` with
+  `Idempotency-Replayed: true` — no second shop, no second staff member, and no
+  second one-time login link. The same key with a different body is a `422`
+  `idempotency-key-reused`, as on every other back-office write. Adding staff is
+  idempotent for both kinds of caller (a platform admin adding platform
+  operators, a shop admin adding shop staff), so the endpoint has one meaning.
+  A request without the header is now rejected with `422`, as the contract
+  always required.
+
+  The fix is the one the Known gaps entry described: `idempotency_keys.merchant_id`
+  became nullable (NULL = a platform-scope record) and its row-level-security
+  policy became the one `staff` already uses —
+  `merchant_id IS NOT DISTINCT FROM staff_scope_merchant()`, for both reading and
+  writing. Inside a shop's scope that is row-for-row the old policy, so buyers
+  and shop staff cannot read or write platform records; inside the platform
+  scope only the NULL rows are visible, so a platform session cannot pick up a
+  shop's record either. The privilege-escalation shape
+  (`... OR merchant_id IS NULL`) is exactly what the tenancy gate's verbatim
+  policy check rejects. Migration `00028`; the reasoning for not using a
+  separate platform table is in its header.
 - **Uploaded files did not survive a container rebuild under the stock
   `compose.yaml`.** `KEEL_UPLOAD_ROOT` was never set, so the API fell back to a
   temporary directory inside the container (it logged a WARN saying exactly

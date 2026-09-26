@@ -169,6 +169,10 @@ type StaffTx interface {
 	// tokenHash 是 sha256(明文) 的十六进制 —— 明文不进这一层。
 	CreateStaffToken(ctx context.Context, staffID int64, tokenHash string, kind int16, expireAt time.Time) (int64, error)
 
+	// RevokeLiveOneTimeTokens 作废某人还活着的某一种一次性 token，返回作废了几串。
+	// 重签登录 token 时先调它：新钥匙发出去，旧的同时失效（db/queries/staff.sql）。
+	RevokeLiveOneTimeTokens(ctx context.Context, staffID int64, kind int16) (int64, error)
+
 	// FindLiveOneTimeToken 按 hash 取一串还活着的一次性 token（kind 1/2）。
 	// 查不到返回 ErrStaffTokenNotFound。
 	FindLiveOneTimeToken(ctx context.Context, tokenHash string, kind int16) (StaffOneTimeToken, error)
@@ -186,6 +190,18 @@ type StaffTx interface {
 	// 只放进 Tx，是因为 StaffService 的 inScope 递下来的就是 StaffTx，
 	// 而会话校验要在同一个事务里连同范围一起读（StaffIdentity 的注释）。
 	StaffScopeTx
+}
+
+// PlatformTx 是平台作用域的事务交出去的东西：后台身份那一面，加上幂等存档。
+//
+// 幂等存档放进来而不是放进 StaffTx，是因为 StaffTx 在租户作用域里也会被交出去
+// （StaffService.inScope），而那里要用的是 Tx 上同名的那三个方法 —— 两个接口
+// 各自完整，谁也不必知道对方。实现是同一个 tenantTx：抢占插入里没有
+// merchant_id，那一列由 DEFAULT staff_scope_merchant() 按事务的作用域填
+// （平台作用域里是 NULL），RLS 保证平台事务读不到、也写不出任何一家店的存档。
+type PlatformTx interface {
+	StaffTx
+	IdempotencyTx
 }
 
 // WithPlatform 在一个**平台级作用域**的事务里执行 fn。
@@ -209,12 +225,13 @@ type StaffTx interface {
 // 42501（00002 里那条会说人话的 RAISE）。平台路径误读业务表时是一条错误，
 // 不是一个看上去很像「这家店没有数据」的空结果集。
 //
-// fn 收到的是 StaffTx 而不是 Tx：平台作用域里别的表一碰就是 42501，
-// 所以这条路径能拿到的接口就该只有后台身份那几个方法。
+// fn 收到的是 PlatformTx 而不是 Tx：平台作用域里别的表一碰就是 42501，
+// 所以这条路径能拿到的接口就该只有后台身份那几个方法，外加幂等存档
+// （00028 之后 idempotency_keys 在平台作用域里有了 merchant_id 为 NULL 的那一抽屉）。
 //
 // 它也不需要 ctx 里有租户 —— 平台级请求的 Host 可以是任何一家店，
 // 而那个租户与这个事务无关。
-func (r *Repo) WithPlatform(ctx context.Context, fn func(StaffTx) error) error {
+func (r *Repo) WithPlatform(ctx context.Context, fn func(PlatformTx) error) error {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -366,6 +383,12 @@ func (t tenantTx) CreateStaffToken(ctx context.Context, staffID int64, tokenHash
 		TokenHash: tokenHash,
 		Kind:      kind,
 		ExpireAt:  pgtype.Timestamptz{Time: expireAt, Valid: true},
+	})
+}
+
+func (t tenantTx) RevokeLiveOneTimeTokens(ctx context.Context, staffID int64, kind int16) (int64, error) {
+	return t.q.RevokeLiveOneTimeStaffTokens(ctx, db.RevokeLiveOneTimeStaffTokensParams{
+		StaffID: staffID, Kind: kind,
 	})
 }
 

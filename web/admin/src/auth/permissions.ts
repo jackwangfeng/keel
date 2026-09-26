@@ -74,6 +74,12 @@ export const can = {
     /** 改这个员工：大区管理员只能改门店管理员；谁都不能改自己的角色（那一格在表单里单独锁）。 */
     editStaff: (target: Staff): boolean =>
         role() === ROLE.admin || (role() === ROLE.regionManager && target.role === ROLE.storeManager),
+    /**
+     * 给这个员工重签一次性登录 token。服务端的判据与「改这个员工」是同一个
+     * （authorizeStaffWrite），所以这里也跟 editStaff 同一个判断；停用的人另外
+     * 置灰（服务端 409 staff-disabled），那一条在页面上单独说原因。
+     */
+    reissueLoginToken: (target: Staff): boolean => can.editStaff(target),
     /** 大区管理员能不能动大区列表里的这一行（只读的时候仍然能点进详情）。 */
     seeRegionsSection: (): boolean => role() !== ROLE.storeManager,
     seeStaffSection: (): boolean => role() !== ROLE.storeManager,

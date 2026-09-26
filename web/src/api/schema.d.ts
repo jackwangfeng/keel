@@ -658,6 +658,11 @@ export interface paths {
          *     所有请求都落在默认商家上：新开的店谁也访问不到，而且启动自检
          *     （活跃商家必须恰好一家）会让这套部署**下一次重启就起不来**。
          *     要开多家店，先切到多商家部署：清空 `KEEL_DEFAULT_MERCHANT`、配置 `KEEL_BASE_DOMAIN`。
+         *
+         *     **幂等**（v0.1.0 之后）：同一个平台管理员拿同一把 `Idempotency-Key` 重发，
+         *     回放首次的 `201` 与那一份 `Merchant`，带 `Idempotency-Replayed: true`，
+         *     不会再建店，**也不会再给新店管理员签第二条登录链接**。
+         *     幂等记录属于平台作用域，任何商家级会话都读写不到它。
          */
         post: {
             parameters: {
@@ -718,6 +723,7 @@ export interface paths {
                 /** @description 已创建 */
                 201: {
                     headers: {
+                        "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
                         [name: string]: unknown;
                     };
                     content: {
@@ -740,15 +746,20 @@ export interface paths {
                  *     · 这是一套单商家部署，不能开第二家店 ——
                  *       `https://keel.dev/problems/single-merchant-mode`。换个 code 重试没有用，
                  *       要改的是部署形态（见上面的描述）
+                 *     · 同一 Idempotency-Key 正在处理中 ——
+                 *       `https://keel.dev/problems/idempotency-key-in-flight`
                  */
                 409: {
                     headers: {
+                        /** @description 仅幂等键处理中时返回，建议退避秒数 */
+                        "Retry-After"?: number;
                         [name: string]: unknown;
                     };
                     content: {
                         "application/problem+json": components["schemas"]["Problem"];
                     };
                 };
+                422: components["responses"]["IdempotencyKeyReused"];
                 default: components["responses"]["Problem"];
             };
         };
@@ -1041,6 +1052,12 @@ export interface paths {
          *     > 这条是多租户系统里最容易出事的地方，所以写在契约里而不只写在代码里。
          *
          *     建好后给该邮箱发一次性登录链接，对方点开即完成首次登录。**不设密码。**
+         *
+         *     **幂等**（v0.1.0 之后）：同一个调用者拿同一把 `Idempotency-Key` 重发，
+         *     回放首次的 `201` 与那一份 `Staff`，带 `Idempotency-Replayed: true`，
+         *     不会再建人，**也不会再签第二条登录链接**。平台管理员与商家管理员都有幂等，
+         *     语义一致；幂等记录落在调用者自己的作用域里 —— 平台管理员的记录任何
+         *     商家级会话都读写不到，反之亦然。
          */
         post: {
             parameters: {
@@ -1098,9 +1115,10 @@ export interface paths {
                 };
             };
             responses: {
-                /** @description 已创建并已发出登录链接 */
+                /** @description 已创建并已发出登录链接（重放时不再发） */
                 201: {
                     headers: {
+                        "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
                         [name: string]: unknown;
                     };
                     content: {
@@ -1120,15 +1138,24 @@ export interface paths {
                         "application/problem+json": components["schemas"]["Problem"];
                     };
                 };
-                /** @description 该租户内邮箱已存在 */
+                /**
+                 * @description 按 `type` 区分：
+                 *
+                 *     · 该租户内邮箱已存在 —— `https://keel.dev/problems/staff-email-taken`
+                 *     · 同一 Idempotency-Key 正在处理中 ——
+                 *       `https://keel.dev/problems/idempotency-key-in-flight`
+                 */
                 409: {
                     headers: {
+                        /** @description 仅幂等键处理中时返回，建议退避秒数 */
+                        "Retry-After"?: number;
                         [name: string]: unknown;
                     };
                     content: {
                         "application/problem+json": components["schemas"]["Problem"];
                     };
                 };
+                422: components["responses"]["IdempotencyKeyReused"];
                 default: components["responses"]["Problem"];
             };
         };
@@ -1253,6 +1280,126 @@ export interface paths {
                 default: components["responses"]["Problem"];
             };
         };
+        trace?: never;
+    };
+    "/admin/staff/{staff_id}/login-token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 给已有员工重签一次性登录 token（管理员；大区管理员只能给本大区的门店管理员签）
+         * @description 员工会话 7 天过期之后，唯一的重新登录办法是一串一次性登录 token 去换
+         *     `POST /admin/auth/session`。而邮箱登录链接（`POST /admin/auth/email-link`）
+         *     本轮没有邮件服务、回 501，新建员工时签的那一串 15 分钟就过期 —— 没有这条接口，
+         *     员工过期之后只能删了重建。
+         *
+         *     签出来的与新建员工时那一串**同一种**：一次性、15 分钟有效、用掉即失效，
+         *     拿去换 `POST /admin/auth/session`。签发时**作废这个人此前还没用掉的登录链接
+         *     token**，所以重复调用的结果是「只有最新那一串有效」，与只调一次等价 ——
+         *     这条接口因此不接受 `Idempotency-Key`（存档重放会让 token 明文进库）。
+         *
+         *     **谁能签谁，与 `PATCH /admin/staff/{staff_id}` 完全一致**：能改这个人的，
+         *     才能给他签。商家管理员能给本店任何人签（包括自己）；大区管理员只能给「只管
+         *     本大区门店」的门店管理员签，不能给自己、也不能给管理员 / 操作员 / 别的大区
+         *     管理员签；操作员与门店管理员不能签；平台管理员只能给平台级的人签。
+         *     别的租户的人一律 404（与 PATCH 同一条约定）。
+         *
+         *     **停用的员工不能签**（409 `staff-disabled`）：先启用，再签。
+         *
+         *     > **token 明文会出现在响应体里**，这是与新建员工那条的唯一差别，而且是刻意的：
+         *     > 没有邮件服务时，管理员拿到它才能通过别的渠道交给本人。代价是签发人在这
+         *     > 15 分钟里能以对方的身份登录一次 —— 而签发人本来就能改对方的角色与状态，
+         *     > 权限按构造不高于签发人。它同时照旧打进进程日志，方便运维追查是谁在什么时候
+         *     > 给谁签过。接上邮件服务之后，这条接口应当改成直接发信、不再回明文。
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /**
+                     * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+                     *
+                     *     它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+                     *     而例外成立的前提是平台级鉴权：
+                     *
+                     *     · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+                     *       读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+                     *       行级安全落在这家店上。
+                     *     · **商家级员工带了这个头：403**
+                     *       （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+                     *       静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+                     *     · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+                     *       **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+                     *       实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+                     *       请求其余部分指名的东西不存在是 422。
+                     *     · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+                     *       买家侧对它照旧 404。
+                     *     · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+                     *       （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+                     *
+                     *     后台每一条挂后台会话的操作都声明了它（机械核对：
+                     *     `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+                     */
+                    "X-Keel-Merchant"?: components["parameters"]["KeelMerchant"];
+                };
+                path: {
+                    staff_id: number;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description 已签发（此前没用掉的登录链接 token 同时作废） */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["StaffLoginToken"];
+                    };
+                };
+                /**
+                 * @description 调用者不能给这个人签：不是管理员（staff-forbidden）、大区管理员想给门店管理员
+                 *     之外的人或自己签（role-forbidden）、或目标不归他管（out-of-scope）
+                 */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /** @description 员工不存在、已软删，或不在调用者的租户里 */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /** @description 员工已停用 —— `https://keel.dev/problems/staff-disabled` */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/admin/uploads": {
@@ -9804,6 +9951,15 @@ export interface components {
              * @description 这一单用的券。没用券时不出现。
              */
             user_coupon_id?: number;
+            /**
+             * @description 这一单用的券的名字，**下单时的快照**。没用券时不出现（与 `user_coupon_id` 同进同出）。
+             *
+             *     它存在订单上，不从券模板现读：模板后来改名，历史订单仍显示下单那一刻的名字 ——
+             *     与 `order_items.title_snapshot`、`OrderDetail.store` 是同一条道理。
+             *     客户端展示「已用：满 100 减 20」这类文案请用它，不要拿 `user_coupon_id`
+             *     再去查券（那张券的模板此刻可能已经叫别的名字了）。
+             */
+            coupon_name?: string;
             payable_cents: components["schemas"]["Money"];
             paid_cents?: components["schemas"]["Money"];
             refunded_cents?: components["schemas"]["Money"];
@@ -10156,6 +10312,24 @@ export interface components {
             /** Format: date-time */
             expire_at: string;
             staff: components["schemas"]["Staff"];
+        };
+        /**
+         * @description 一串一次性登录 token，与新建员工时服务端签的那一串同一种（15 分钟、用掉即失效），
+         *     拿去换 `POST /admin/auth/session`。
+         */
+        StaffLoginToken: {
+            /**
+             * Format: int64
+             * @description 这串 token 属于谁
+             */
+            staff_id: number;
+            /**
+             * @description 一次性登录 token 明文。**服务端只存它的 sha256**，明文只在这一次响应
+             *     （和进程日志）里出现。
+             */
+            token: string;
+            /** Format: date-time */
+            expire_at: string;
         };
         /** @description **没有 `merchant_id` 字段，这是刻意的。** 租户归属从调用者的会话继承。 */
         StaffCreateRequest: {

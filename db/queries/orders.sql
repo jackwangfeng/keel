@@ -118,23 +118,32 @@ SELECT id, receiver_name, phone, province, city, district, street, detail,
 --
 -- user_coupon_id（00026）也在这里落：SAGA 的券分支只拿到三个字符串，
 -- 「这一单用哪张券」只能从订单行上读回来。
+--
+-- coupon_name（00029）是券名快照，**与 store_snapshot 同一条道理、同一个写法**：
+-- 从 user_coupons → coupon_templates 现读，和外键 user_coupon_id 落在同一条语句里。
+-- 应用先查一次券名再传进来的话，两步之间模板可以改名。没带券时子查询是 NULL；
+-- 带了券却匹配不上时 chk_coupon_name_with_coupon 与外键一起拒绝。
 INSERT INTO orders (order_no, user_id, store_id, region_id, store_snapshot,
                     status, goods_amount_cents, freight_cents,
                     discount_cents, payable_cents, receiver_snapshot, remark, expire_at,
-                    user_coupon_id)
+                    user_coupon_id, coupon_name)
 SELECT sqlc.arg(order_no), sqlc.arg(user_id), st.id, st.region_id,
        jsonb_build_object('store_name', st.name, 'region_name', r.name,
                           'address', st.address, 'phone', st.phone),
        0, sqlc.arg(goods_amount_cents), sqlc.arg(freight_cents),
        sqlc.arg(discount_cents), sqlc.arg(payable_cents),
        sqlc.arg(receiver_snapshot), sqlc.narg(remark), sqlc.arg(expire_at),
-       sqlc.narg(user_coupon_id)
+       sqlc.narg(user_coupon_id),
+       (SELECT ct.name
+          FROM user_coupons uc
+          JOIN coupon_templates ct ON ct.id = uc.template_id
+         WHERE uc.id = sqlc.narg(user_coupon_id))
   FROM stores st
   JOIN regions r ON r.id = st.region_id
  WHERE st.id = sqlc.arg(store_id) AND st.deleted_at IS NULL
 RETURNING id, order_no, store_id, region_id, status, goods_amount_cents, freight_cents,
           discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
-          expire_at, created_at, user_coupon_id;
+          expire_at, created_at, user_coupon_id, coupon_name;
 
 -- name: CreateOrderItem :exec
 -- 订单项快照（数据模型 §5：下单即快照）。商品改价改名不影响历史订单。
@@ -161,7 +170,8 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10);
 SELECT id, order_no, user_id, store_id, region_id, status,
        goods_amount_cents, freight_cents,
        discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
-       expire_at, paid_at, shipped_at, finished_at, created_at, user_coupon_id
+       expire_at, paid_at, shipped_at, finished_at, created_at, user_coupon_id,
+       coupon_name
   FROM orders
  WHERE order_no = $1;
 
@@ -403,7 +413,8 @@ RETURNING id, payment_no, status;
 SELECT id, order_no, user_id, store_id, region_id, status,
        goods_amount_cents, freight_cents,
        discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
-       expire_at, paid_at, shipped_at, finished_at, created_at, user_coupon_id
+       expire_at, paid_at, shipped_at, finished_at, created_at, user_coupon_id,
+       coupon_name
   FROM orders
  WHERE user_id = $1
    AND status <> 0
@@ -440,7 +451,8 @@ SELECT count(*)
 SELECT id, order_no, user_id, store_id, region_id, status,
        goods_amount_cents, freight_cents,
        discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
-       expire_at, paid_at, shipped_at, finished_at, created_at, user_coupon_id
+       expire_at, paid_at, shipped_at, finished_at, created_at, user_coupon_id,
+       coupon_name
   FROM orders
  WHERE order_no = $1
    AND user_id = $2

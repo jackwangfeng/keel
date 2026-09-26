@@ -39,6 +39,10 @@ var (
 	// ErrStaffEmailTaken：该作用域内邮箱已存在（契约里那个 409）。
 	ErrStaffEmailTaken = errors.New("该邮箱已经有人在用")
 
+	// ErrStaffDisabled：给一个停用的员工重签登录 token（契约 409 staff-disabled）。
+	// 签给他也换不出会话（exchangeIn 拒绝停用账号），所以在签之前就说清楚：先启用。
+	ErrStaffDisabled = errors.New("员工已停用")
+
 	// ErrLastAdmin：这一改会让该租户一个在岗管理员都不剩（契约里那个 409）。
 	// 数据模型 §14 那条「进不了数据库的约束」，只能在这一层拦。
 	ErrLastAdmin = errors.New("不能让该租户失去最后一个在岗管理员")
@@ -70,9 +74,9 @@ const bootstrapPlaceholderEmail = "bootstrap@keel.invalid"
 // 一个平台级管理员）。完整论证在 repository.WithNewTenant 上。
 type StaffRepository interface {
 	WithTenant(ctx context.Context, fn func(repository.Tx) error) error
-	WithPlatform(ctx context.Context, fn func(repository.StaffTx) error) error
-	WithNewTenant(ctx context.Context, code, name string,
-		fn func(repository.Merchant, repository.StaffTx) error) (repository.Merchant, error)
+	WithPlatform(ctx context.Context, fn func(repository.PlatformTx) error) error
+	WithNewTenant(ctx context.Context, code, name string, guard repository.NewTenantGuard,
+		fn func(repository.Merchant, repository.StaffTx) error) (repository.Merchant, bool, error)
 }
 
 // StaffService 实现 /admin/auth/* 与 /admin/staff* 那几条接口。
@@ -147,7 +151,7 @@ type StaffSessionResult struct {
 // 本来就拥有这个部署。
 func (s *StaffService) EnsureBootstrapAdmin(ctx context.Context) (string, error) {
 	var plaintext string
-	err := s.repo.WithPlatform(ctx, func(tx repository.StaffTx) error {
+	err := s.repo.WithPlatform(ctx, func(tx repository.PlatformTx) error {
 		state, err := tx.BootstrapChannelState(ctx, bootstrapPlaceholderEmail)
 		if err != nil {
 			return err
@@ -223,7 +227,7 @@ func (s *StaffService) Bootstrap(ctx context.Context, token, email string) (Staf
 	}
 
 	var out StaffSessionResult
-	err := s.repo.WithPlatform(ctx, func(tx repository.StaffTx) error {
+	err := s.repo.WithPlatform(ctx, func(tx repository.PlatformTx) error {
 		hit, err := tx.FindLiveOneTimeToken(ctx, auth.HashStaffToken(token),
 			repository.StaffTokenBootstrap)
 		if errors.Is(err, repository.ErrStaffTokenNotFound) {
@@ -546,23 +550,86 @@ type StaffCreated struct {
 //
 // 带范围（role 3 / 4）时，范围行与员工行在同一个事务里建出来：分成两步的话，
 // 中间那一刻存在一个「至少一个范围」不成立的大区管理员，而他的登录链接已经签出去了。
+//
+// ===========================================================================
+// 幂等（00028 之后）：两半一起有
+// ===========================================================================
+//
+// 契约给这条接口声明了必填的 Idempotency-Key。它的作用域取决于调用者：
+// 平台管理员加平台操作员（平台作用域）、商家管理员加本店员工（租户作用域）。
+// 只接上商家那一半会让同一条接口有两种语义，而客户端没有办法知道自己落在
+// 哪一半 —— 所以两半一起接，存档落在调用者自己的作用域里（inScopeIdempotent）。
+//
+// 重放时**不签新的登录链接**：返回的 StaffCreated.LoginToken 为空，handler
+// 据此不往日志里打 token。存档里也没有它 —— 存的是 repository.Staff，
+// 一次性登录凭据的明文绝不能进数据库（库里只有它的 sha256）。
+// 第一次那串 token 已经进过日志，重放的客户端要的是「那个人建好了没有」，
+// 不是第二把钥匙。
+//
+// 第三个返回值为 true 表示这是一次重放。
 func (s *StaffService) CreateStaff(ctx context.Context, email, name string, role int16,
-	scopes repository.StaffScopes) (StaffCreated, error) {
+	scopes repository.StaffScopes, idemKey string) (StaffCreated, bool, error) {
 
 	id, err := auth.StaffFromContext(ctx)
 	if err != nil {
-		return StaffCreated{}, err
+		return StaffCreated{}, false, err
+	}
+	if idemKey == "" {
+		return StaffCreated{}, false, ErrIdempotencyKeyMissing
 	}
 	email = strings.TrimSpace(email)
 	if email == "" {
-		return StaffCreated{}, fmt.Errorf("%w: 缺 email", ErrStaffBadRequest)
+		return StaffCreated{}, false, fmt.Errorf("%w: 缺 email", ErrStaffBadRequest)
 	}
+	name = strings.TrimSpace(name)
 	scopes = repository.StaffScopes{
 		RegionIDs: normalizeIDs(scopes.RegionIDs), StoreIDs: normalizeIDs(scopes.StoreIDs),
 	}
+	// 哈希取规范化之后的值：邮箱两头多一个空格、范围换个顺序，是同一个请求。
+	hash, err := adminRequestHash(nil, struct {
+		Email     string  `json:"email"`
+		Name      string  `json:"name"`
+		Role      int16   `json:"role"`
+		RegionIDs []int64 `json:"region_ids"`
+		StoreIDs  []int64 `json:"store_ids"`
+	}{email, name, role, scopes.RegionIDs, scopes.StoreIDs})
+	if err != nil {
+		return StaffCreated{}, false, err
+	}
+	subj := repository.StaffSubject(id.StaffID)
 
 	var out StaffCreated
-	err = s.inScope(ctx, id.Platform(), func(tx repository.StaffTx) error {
+	replayed := false
+	err = s.inScopeIdempotent(ctx, id.Platform(), func(tx repository.StaffTx, itx repository.IdempotencyTx) error {
+		st, r, err := idempotentInTx(ctx, itx, scopeAdminStaffCreate, subj, idemKey, hash, archivedCreated,
+			func() (repository.Staff, error) {
+				created, err := s.createStaffIn(ctx, tx, id, email, name, role, scopes)
+				if err != nil {
+					return repository.Staff{}, err
+				}
+				out = created
+				return created.Staff, nil
+			})
+		if err != nil {
+			return err
+		}
+		if r {
+			out, replayed = StaffCreated{Staff: st}, true
+		}
+		return nil
+	})
+	if err != nil {
+		return StaffCreated{}, false, err
+	}
+	return out, replayed, nil
+}
+
+// createStaffIn 是加员工的业务本身，跑在调用方开好的那个事务里。
+func (s *StaffService) createStaffIn(ctx context.Context, tx repository.StaffTx, id auth.StaffIdentity,
+	email, name string, role int16, scopes repository.StaffScopes) (StaffCreated, error) {
+
+	var out StaffCreated
+	err := func() error {
 		// 判权排在配套校验**之前**：一个大区管理员建管理员，得到的必须是
 		// 403 role-forbidden，而不是「管理员不带范围」那句 422 —— 后者会让他
 		// 以为把范围去掉就能建成。
@@ -575,7 +642,7 @@ func (s *StaffService) CreateStaff(ctx context.Context, email, name string, role
 			return err
 		}
 		creator := id.StaffID
-		st, err := tx.CreateStaff(ctx, email, strings.TrimSpace(name), role, &creator)
+		st, err := tx.CreateStaff(ctx, email, name, role, &creator)
 		if err != nil {
 			if errors.Is(err, repository.ErrStaffEmailTaken) {
 				return ErrStaffEmailTaken
@@ -599,7 +666,7 @@ func (s *StaffService) CreateStaff(ctx context.Context, email, name string, role
 		}
 		out = StaffCreated{Staff: st, LoginToken: token}
 		return nil
-	})
+	}()
 	if err != nil {
 		return StaffCreated{}, err
 	}
@@ -718,6 +785,99 @@ func (s *StaffService) UpdateStaff(ctx context.Context, staffID int64, role, sta
 	return out, nil
 }
 
+// StaffLoginToken 是重签出来的一次性登录 token。
+type StaffLoginToken struct {
+	StaffID  int64
+	Token    string // 明文，只在这一次返回里存在；库里只有 sha256
+	ExpireAt time.Time
+}
+
+// ReissueLoginToken 实现 POST /admin/staff/{staff_id}/login-token：给一个已有的
+// 员工重签一串一次性登录 token（与新建时那一串同一种：kind 2 邮件登录链接、
+// StaffEmailLinkTTL、用掉即失效）。
+//
+// ===========================================================================
+// 为什么需要它
+// ===========================================================================
+//
+// 会话 7 天（auth.StaffSessionTTL）过期之后，重新登录只有「一次性 token 换会话」
+// 这一条路，而一次性 token 此前只在两处签：进程启动时的引导 token（每个部署一次）
+// 与新建员工时的那一串（15 分钟）。邮箱登录链接回 501（没接邮件服务）。
+// 于是一个员工过期之后，唯一的办法是删了重建 —— 丢掉他的 id、审计字段里的
+// created_by 引用，以及大区 / 门店范围。
+//
+// ===========================================================================
+// 权限：与 PATCH /admin/staff/{id} 同一个判据，一个字都不另写
+// ===========================================================================
+//
+// 「能给他签」= 「能改他」。走 authorizeStaffWrite，角色与范围都不变
+// （RoleChanged / ScopesChanged 为假）—— 于是：管理员能给本店任何人签（含自己）；
+// 大区管理员只能给归他管的门店管理员签（给管理员签是 role-forbidden，给自己签
+// 按那个函数的 4a 同样是 role-forbidden）；操作员与门店管理员 staff-forbidden；
+// 别的作用域的人在本作用域里查不出来，404。
+//
+// 签发的 token 会回到调用者手里（契约写明了为什么），所以这条判据同时是「谁能在
+// 15 分钟里以谁的身份登录一次」的判据 —— 它与「谁能改谁的角色和状态」是同一张表，
+// 而后者本来就是一种更强的控制。另起一套判据的话，两张表分叉的那天，
+// 某个大区管理员就能给管理员签 token，而没有任何东西会红。
+//
+// 判权排在「停用」检查之前：没有权限的人不该从 409 里得知这个人被停用了。
+//
+// ===========================================================================
+// 签新的同时作废旧的
+// ===========================================================================
+//
+// 同一个人此前还没用掉的登录链接 token 一并作废（RevokeLiveOneTimeTokens）。
+// 所以重复调用的结果是「只有最新那一串有效」—— 与只调一次等价，这条接口因此不
+// 需要 Idempotency-Key（存档重放会让 token 明文进库，那是更糟的事）。
+func (s *StaffService) ReissueLoginToken(ctx context.Context, staffID int64) (StaffLoginToken, error) {
+	id, err := auth.StaffFromContext(ctx)
+	if err != nil {
+		return StaffLoginToken{}, err
+	}
+	var out StaffLoginToken
+	err = s.inScope(ctx, id.Platform(), func(tx repository.StaffTx) error {
+		target, err := tx.FindStaff(ctx, staffID)
+		if errors.Is(err, repository.ErrStaffNotFound) {
+			return ErrStaffNotFound
+		}
+		if err != nil {
+			return err
+		}
+		scopes, err := loadStaffScopes(ctx, tx, id.Platform(), staffID)
+		if err != nil {
+			return err
+		}
+		if _, err := authorizeStaffWrite(ctx, tx, staffWrite{
+			Target: &target, TargetScopes: scopes,
+			NewRole: target.Role, NewScopes: scopes,
+		}); err != nil {
+			return err
+		}
+		if target.Status != auth.StaffStatusActive {
+			return fmt.Errorf("%w（staff_id=%d）", ErrStaffDisabled, staffID)
+		}
+		if _, err := tx.RevokeLiveOneTimeTokens(ctx, staffID, repository.StaffTokenEmailLink); err != nil {
+			return err
+		}
+		token, err := auth.NewOpaqueToken()
+		if err != nil {
+			return err
+		}
+		expireAt := s.now().UTC().Add(auth.StaffEmailLinkTTL)
+		if _, err := tx.CreateStaffToken(ctx, staffID, auth.HashStaffToken(token),
+			repository.StaffTokenEmailLink, expireAt); err != nil {
+			return err
+		}
+		out = StaffLoginToken{StaffID: staffID, Token: token, ExpireAt: expireAt}
+		return nil
+	})
+	if err != nil {
+		return StaffLoginToken{}, err
+	}
+	return out, nil
+}
+
 // ---------------------------------------------------------------------------
 // 内部
 // ---------------------------------------------------------------------------
@@ -730,9 +890,24 @@ func (s *StaffService) UpdateStaff(ctx context.Context, staffID int64, role, sta
 // 「按调用者的身份选作用域」这条规则只有一份实现。
 func (s *StaffService) inScope(ctx context.Context, platform bool, fn func(repository.StaffTx) error) error {
 	if platform {
-		return s.repo.WithPlatform(ctx, fn)
+		return s.repo.WithPlatform(ctx, func(tx repository.PlatformTx) error { return fn(tx) })
 	}
 	return s.repo.WithTenant(ctx, func(tx repository.Tx) error { return fn(tx) })
+}
+
+// inScopeIdempotent 与 inScope 是同一条规则（作用域由调用者的身份决定），
+// 只是多交出幂等存档那一面。
+//
+// 两种作用域交出去的是同一个对象的两个接口：平台作用域里是 PlatformTx，
+// 租户作用域里是 Tx。幂等记录因此落在调用者自己的作用域里 —— 平台管理员的
+// 落在 merchant_id 为 NULL 的那一抽屉，商家管理员的落在本店 —— 而不是由
+// 这里的任何一个参数决定（00028）。
+func (s *StaffService) inScopeIdempotent(ctx context.Context, platform bool,
+	fn func(repository.StaffTx, repository.IdempotencyTx) error) error {
+	if platform {
+		return s.repo.WithPlatform(ctx, func(tx repository.PlatformTx) error { return fn(tx, tx) })
+	}
+	return s.repo.WithTenant(ctx, func(tx repository.Tx) error { return fn(tx, tx) })
 }
 
 // inScopeFor 按令牌里的声明选作用域，给中间件那一次查库用。

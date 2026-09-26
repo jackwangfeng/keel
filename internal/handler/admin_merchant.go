@@ -58,9 +58,16 @@ func (h *AdminMerchantHandler) OpenShop(c *gin.Context) {
 		return
 	}
 
-	out, err := h.svc.OpenShop(c.Request.Context(), req.Code, req.Name, string(req.AdminEmail))
+	out, replayed, err := h.svc.OpenShop(c.Request.Context(), req.Code, req.Name,
+		string(req.AdminEmail), idemKeyOf(c))
 	if err != nil {
 		writeMerchantError(c, err, "只有平台级管理员能开店")
+		return
+	}
+	if replayed {
+		// 幂等重放：店早就开好了，本次什么都没建，也没有新的登录链接可打。
+		markReplayed(c, true)
+		c.JSON(http.StatusCreated, apiMerchant(out.Merchant))
 		return
 	}
 

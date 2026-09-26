@@ -172,6 +172,13 @@ var permMatrix = []permRoute{
 		return permReq{Method: "PATCH", Path: fmt.Sprintf(v1+"/admin/staff/%d", target),
 			Body: `{"status":1}`, OK: http.StatusOK}
 	}},
+	{"POST", v1 + "/admin/staff/:staff_id/login-token", staffWrite, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		// 重签登录 token：判据与 PATCH 同一个（authorizeStaffWrite），目标也同一个 ——
+		// 一个新建的门店管理员，范围内管 N1，范围外管 E1。
+		target := fx.createStaff(t, fx.sh.Token, 4, nil, []int64{fx.store(c)})
+		return permReq{Method: "POST", Path: fmt.Sprintf(v1+"/admin/staff/%d/login-token", target),
+			OK: http.StatusCreated}
+	}},
 	{"POST", v1 + "/admin/merchants", platformOnlyRoute, func(t *testing.T, fx *permFixture, c permCase) permReq {
 		return permReq{Method: "POST", Path: v1 + "/admin/merchants", OK: http.StatusCreated,
 			Body: fmt.Sprintf(`{"code":"pm%d","name":"不该建出来的店","admin_email":"x%s@keel.test"}`,

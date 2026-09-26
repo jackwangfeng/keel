@@ -140,12 +140,14 @@ func (s *MerchantAdminService) Update(ctx context.Context, merchantID int64, nam
 // 身份判断排在单商家判断前面：一个商家级员工调这条接口该收到的是
 // 「你不是平台管理员」，而不是「这套部署是单商家的」——后者对他是一条
 // 与他无关、还泄露了部署形态的消息。
-func (s *MerchantAdminService) OpenShop(ctx context.Context, code, name, adminEmail string) (ShopOpened, error) {
+//
+// 第二个返回值为 true 表示这是一次幂等重放（StaffService.OpenShop）。
+func (s *MerchantAdminService) OpenShop(ctx context.Context, code, name, adminEmail, idemKey string) (ShopOpened, bool, error) {
 	if _, err := requirePlatform(ctx, true); err != nil {
-		return ShopOpened{}, err
+		return ShopOpened{}, false, err
 	}
 	if s.SingleMerchantMode() {
-		return ShopOpened{}, fmt.Errorf("%w（KEEL_DEFAULT_MERCHANT=%s）", ErrSingleMerchantMode, s.defaultCode)
+		return ShopOpened{}, false, fmt.Errorf("%w（KEEL_DEFAULT_MERCHANT=%s）", ErrSingleMerchantMode, s.defaultCode)
 	}
-	return s.staff.OpenShop(ctx, code, name, adminEmail)
+	return s.staff.OpenShop(ctx, code, name, adminEmail, idemKey)
 }

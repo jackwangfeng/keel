@@ -14,6 +14,10 @@ import (
 // 后台那 5 条 POST 的幂等（契约给它们都声明了必填的 Idempotency-Key 与
 // 422 IdempotencyKeyReused）。M4 收尾。
 //
+// 00028 之后加员工与开店也走这里（idempotentInTx / replayArchived /
+// archiveIdempotent），存档落在平台作用域的那一抽屉或调用者自己的店里 ——
+// 由事务的作用域决定，这个文件不知道、也不需要知道是哪一边。
+//
 // ===========================================================================
 // 它此前缺的不是代码，是一列
 // ===========================================================================
@@ -77,6 +81,12 @@ const (
 	scopeAdminProductPublish = "admin.products.publication"
 	scopeAdminSKUCreate      = "admin.skus.create"
 	scopeAdminCategoryCreate = "admin.categories.create"
+
+	// 下面两条是 00028 之后才接上的。加员工的作用域取决于调用者（平台管理员
+	// 的存档落在 merchant_id 为 NULL 的那一抽屉，商家管理员的落在本店），
+	// 但 scope 串是同一个：两边的存档由 RLS 隔开，不靠名字。
+	scopeAdminStaffCreate    = "admin.staff.create"
+	scopeAdminMerchantCreate = "admin.merchants.create"
 )
 
 // 存档里的 response_code。取值就是契约在各自 201 / 200 上写的那个。
@@ -119,33 +129,10 @@ func idempotentWrite[T any](ctx context.Context, s *AdminCatalogService,
 	var out T
 	replayed := false
 	err = s.repo.WithTenant(ctx, func(tx repository.Tx) error {
-		claimed, err := tx.ClaimIdempotencyKey(ctx, scope, subj, idemKey, hash)
-		if err != nil {
-			return err
-		}
-		if !claimed {
-			v, err := replayArchived[T](ctx, tx, scope, subj, idemKey, hash)
-			if err != nil {
-				return err
-			}
-			out, replayed = v, true
-			return nil
-		}
-
-		v, err := fn(tx)
-		if err != nil {
-			return err
-		}
-		body, err := json.Marshal(v)
-		if err != nil {
-			return err
-		}
-		if err := tx.FinishIdempotencyKey(ctx, scope, subj, idemKey,
-			repository.IdempotencySucceeded, &code, body); err != nil {
-			return err
-		}
-		out = v
-		return nil
+		v, r, err := idempotentInTx(ctx, tx, scope, subj, idemKey, hash, code,
+			func() (T, error) { return fn(tx) })
+		out, replayed = v, r
+		return err
 	})
 	if err != nil {
 		return zero, false, err
@@ -153,8 +140,52 @@ func idempotentWrite[T any](ctx context.Context, s *AdminCatalogService,
 	return out, replayed, nil
 }
 
+// idempotentInTx 是「抢占 → 业务 → 存档」在一个**已经开好的**事务里的那一段。
+//
+// 它与作用域无关：tx 是租户作用域的 Tx 还是平台作用域的 PlatformTx，
+// 由调用方开事务时决定（00028 之后平台那两条接口也走这里）。抽出来是为了
+// 让「三态处置 + 存档」只有一份实现 —— 商家那 5 条、加员工的两半、开店，
+// 全部经过同一个 replayArchived。
+func idempotentInTx[T any](ctx context.Context, tx repository.IdempotencyTx,
+	scope string, subj repository.IdempotencySubject, idemKey, hash string, code int32,
+	fn func() (T, error)) (T, bool, error) {
+
+	var zero T
+	claimed, err := tx.ClaimIdempotencyKey(ctx, scope, subj, idemKey, hash)
+	if err != nil {
+		return zero, false, err
+	}
+	if !claimed {
+		v, err := replayArchived[T](ctx, tx, scope, subj, idemKey, hash)
+		if err != nil {
+			return zero, false, err
+		}
+		return v, true, nil
+	}
+
+	v, err := fn()
+	if err != nil {
+		return zero, false, err
+	}
+	if err := archiveIdempotent(ctx, tx, scope, subj, idemKey, code, v); err != nil {
+		return zero, false, err
+	}
+	return v, false, nil
+}
+
+// archiveIdempotent 把一次成功的结果写成存档（status = 1）。
+func archiveIdempotent[T any](ctx context.Context, tx repository.IdempotencyTx,
+	scope string, subj repository.IdempotencySubject, idemKey string, code int32, v T) error {
+	body, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	return tx.FinishIdempotencyKey(ctx, scope, subj, idemKey,
+		repository.IdempotencySucceeded, &code, body)
+}
+
 // replayArchived 读出已存在的那一行，按三态处置（§12 那张表）。
-func replayArchived[T any](ctx context.Context, tx repository.Tx,
+func replayArchived[T any](ctx context.Context, tx repository.IdempotencyTx,
 	scope string, subj repository.IdempotencySubject, idemKey, hash string) (T, error) {
 
 	var zero T

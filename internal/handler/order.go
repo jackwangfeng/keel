@@ -214,6 +214,8 @@ func apiOrder(o repository.Order) api.Order {
 
 		// 这一单用的券；没用券时整个不出现。
 		UserCouponId: o.UserCouponID,
+		// 下单时的券名快照（00029），与 user_coupon_id 同进同出。
+		CouponName: o.CouponName,
 
 		// FreightCents 同 preview：本期不计运费，字段整个不出现。
 		// 库里那一列是 0（chk_amount 的恒等式要它），但那是账，不是「算过了」。

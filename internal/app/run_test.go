@@ -262,6 +262,8 @@ func TestRouterServesContractPaths(t *testing.T) {
 		"GET /api/v1/admin/staff":             false,
 		"POST /api/v1/admin/staff":            false,
 		"PATCH /api/v1/admin/staff/:staff_id": false,
+		// 重签一次性登录 token（员工会话过期后唯一的回来路径）。
+		"POST /api/v1/admin/staff/:staff_id/login-token": false,
 
 		// 开店（M4 收尾）。它挂同一道 staffAuth，而「只有平台级管理员能调」
 		// 那一条是业务规则，由 internal/handler 的

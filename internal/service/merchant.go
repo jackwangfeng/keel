@@ -63,33 +63,77 @@ type ShopOpened struct {
 // **鉴权在这一层，不在 handler。** handler 那边只有一次
 // auth.StaffFromContext，而「谁能调这条接口」是业务规则不是传输细节；
 // 放在 handler 里的话，下一条平台级接口的作者要么重抄一遍，要么忘了抄。
-func (s *StaffService) OpenShop(ctx context.Context, code, name, adminEmail string) (ShopOpened, error) {
+//
+// ===========================================================================
+// 幂等（00028 之后）
+// ===========================================================================
+//
+// 存档落在平台作用域（idempotency_keys 里 merchant_id 为 NULL 的那一抽屉），
+// 抢占与存档都在 repository.WithNewTenant 的 ① 平台作用域那一段里做，
+// 与建店同一个事务 —— 理由写在 WithNewTenant 的 guard 那一段。
+// 存的是 Merchant（契约 201 的响应体就是它），**不含**第一个管理员的登录
+// token：重放不签第二串，也不回放第一串（那串明文不能进数据库）。
+//
+// 第二个返回值为 true 表示这是一次重放。
+func (s *StaffService) OpenShop(ctx context.Context, code, name, adminEmail, idemKey string) (ShopOpened, bool, error) {
 	id, err := auth.StaffFromContext(ctx)
 	if err != nil {
-		return ShopOpened{}, err
+		return ShopOpened{}, false, err
 	}
 	if !id.Platform() || !id.IsAdmin() {
-		return ShopOpened{}, fmt.Errorf("%w（当前身份：platform=%v role=%d）",
+		return ShopOpened{}, false, fmt.Errorf("%w（当前身份：platform=%v role=%d）",
 			ErrPlatformOnly, id.Platform(), id.Role)
+	}
+	if idemKey == "" {
+		return ShopOpened{}, false, ErrIdempotencyKeyMissing
 	}
 
 	code = strings.TrimSpace(code)
 	if !merchantCodePattern.MatchString(code) {
-		return ShopOpened{}, fmt.Errorf(
+		return ShopOpened{}, false, fmt.Errorf(
 			"%w: code %q 不满足契约的 ^[a-z0-9][a-z0-9-]{1,30}$", ErrStaffBadRequest, code)
 	}
 	name = strings.TrimSpace(name)
 	if name == "" {
-		return ShopOpened{}, fmt.Errorf("%w: 缺 name", ErrStaffBadRequest)
+		return ShopOpened{}, false, fmt.Errorf("%w: 缺 name", ErrStaffBadRequest)
 	}
 	adminEmail = strings.TrimSpace(adminEmail)
 	if adminEmail == "" {
-		return ShopOpened{}, fmt.Errorf("%w: 缺 admin_email", ErrStaffBadRequest)
+		return ShopOpened{}, false, fmt.Errorf("%w: 缺 admin_email", ErrStaffBadRequest)
+	}
+	hash, err := adminRequestHash(nil, struct {
+		Code       string `json:"code"`
+		Name       string `json:"name"`
+		AdminEmail string `json:"admin_email"`
+	}{code, name, adminEmail})
+	if err != nil {
+		return ShopOpened{}, false, err
+	}
+	subj := repository.StaffSubject(id.StaffID)
+
+	var replay repository.Merchant
+	guard := repository.NewTenantGuard{
+		Claim: func(tx repository.IdempotencyTx) (bool, error) {
+			claimed, err := tx.ClaimIdempotencyKey(ctx, scopeAdminMerchantCreate, subj, idemKey, hash)
+			if err != nil || claimed {
+				return claimed, err
+			}
+			v, err := replayArchived[repository.Merchant](ctx, tx,
+				scopeAdminMerchantCreate, subj, idemKey, hash)
+			if err != nil {
+				return false, err
+			}
+			replay = v
+			return false, nil
+		},
+		Archive: func(m repository.Merchant, tx repository.IdempotencyTx) error {
+			return archiveIdempotent(ctx, tx, scopeAdminMerchantCreate, subj, idemKey, archivedCreated, m)
+		},
 	}
 
 	var out ShopOpened
 	creator := id.StaffID
-	m, err := s.repo.WithNewTenant(ctx, code, name,
+	m, created, err := s.repo.WithNewTenant(ctx, code, name, guard,
 		func(m repository.Merchant, tx repository.StaffTx) error {
 			// 这一段跑在**新店的**租户作用域里（repository.WithNewTenant），
 			// 所以这里一个 merchant_id 都没有：那一列的值由
@@ -123,8 +167,11 @@ func (s *StaffService) OpenShop(ctx context.Context, code, name, adminEmail stri
 			return nil
 		})
 	if err != nil {
-		return ShopOpened{}, err
+		return ShopOpened{}, false, err
+	}
+	if !created {
+		return ShopOpened{Merchant: replay}, true, nil
 	}
 	out.Merchant = m
-	return out, nil
+	return out, false, nil
 }
