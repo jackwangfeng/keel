@@ -17,10 +17,31 @@
           <view class="btn-ghost reapply-btn" @click="reapply"><text class="btn-ghost-text">重新申请</text></view>
         </view>
 
-        <!-- 20 待买家退货：寄回物流单号的接口还没有，只能写说明。 -->
+        <!-- 20 待买家退货（退货退款）：寄回后在这里填物流。填完状态仍是 20，商家确认收到才到 30；
+             20 期间可以改。 -->
         <view v-if="v != null && v!.awaitingReturn" class="notice">
           <text class="notice-title">请把商品寄回商家</text>
-          <text class="notice-text">商家确认收到退货后会退款。在线填写物流单号的功能还没有开放，如需帮助请联系商家。</text>
+          <text class="notice-text">寄出后填写物流单号，商家确认收到退货后会退款。</text>
+        </view>
+        <view v-if="v != null && v!.canFillReturn" class="card">
+          <text class="t-overline">寄回物流</text>
+          <view v-if="v!.returnTrackingNo != ''" class="kv">
+            <text class="t-body return-filled">{{ v!.returnCarrierText }} {{ v!.returnTrackingNo }}</text>
+            <text class="t-hint">{{ v!.returnSubmittedAt }} 提交</text>
+          </view>
+          <view class="row wrap carriers">
+            <view v-for="c in carrierList" :key="c.code" :class="['opt', 'carrier-opt', carrier == c.code ? 'opt-on' : '']" @click="carrier = c.code">
+              <text :class="carrier == c.code ? 'opt-text-on' : 'opt-text'">{{ c.name }}</text>
+            </view>
+          </view>
+          <view class="field">
+            <text class="field-label">运单号</text>
+            <input class="field-input f-tracking" v-model="trackingNo" maxlength="64" placeholder="快递单上的单号" />
+          </view>
+          <view class="gap-m"></view>
+          <view :class="['btn', 'return-btn', carrier != '' && trackingNo.trim() != '' && !shipping ? '' : 'btn-off']" @click="submitShipment">
+            <text class="btn-text">{{ shipping ? '提交中…' : (v!.returnTrackingNo != '' ? '修改物流信息' : '提交物流信息') }}</text>
+          </view>
         </view>
 
         <view v-if="v != null" class="card">
@@ -41,6 +62,11 @@
           <view v-if="v!.reasonText != ''" class="kv"><text class="t-sub">原因</text><text class="t-body reason">{{ v!.reasonText }}</text></view>
           <view v-if="v!.refundedAt != ''" class="kv"><text class="t-sub">到账时间</text><text class="t-body">{{ v!.refundedAt }}</text></view>
           <view v-if="v!.channelRefundId != ''" class="kv"><text class="t-sub">退款流水号</text><text class="t-mono">{{ v!.channelRefundId }}</text></view>
+          <!-- 凭证图要带令牌读（本人才能看），先 downloadFile 成本地文件再显示。 -->
+          <view v-if="evidencePaths.length > 0" class="row wrap ev-grid">
+            <image v-for="(p, idx) in evidencePaths" :key="idx" class="ev-img evidence-img" :src="p" mode="aspectFill"></image>
+          </view>
+          <text v-if="evidenceError != ''" class="t-hint">{{ evidenceError }}</text>
         </view>
 
         <view v-if="v != null && v!.canCancel" class="actions row">
@@ -61,9 +87,9 @@
 </template>
 
 <script>
-import { cancelRefund, getRefund, ApiFailure } from '@/api/client.uts'
+import { cancelRefund, fetchUpload, getRefund, submitReturnShipment, ApiFailure } from '@/api/client.uts'
 import { newIdempotencyKey } from '@/api/idempotency.uts'
-import { refundDetailView, RefundDetailView } from '@/api/view.uts'
+import { carriers, refundDetailView, returnShipmentRequest, Carrier, RefundDetailView } from '@/api/view.uts'
 
 export default {
   data() {
@@ -76,6 +102,14 @@ export default {
       busy: false,
       armed: false,
       cancelKey: '',
+      evidencePaths: [] as string[],
+      evidenceError: '',
+      carrierList: [] as Carrier[],
+      carrier: '',
+      trackingNo: '',
+      shipping: false,
+      // 这张物流表单的幂等键。提交成功后换一个：再改一次是一次新的请求，不是重放。
+      shipKey: '',
     }
   },
   computed: {
@@ -97,6 +131,8 @@ export default {
     const raw = options['refund_no']
     this.refundNo = raw != null ? (decodeURIComponent('' + raw) ?? '') : ''
     this.cancelKey = newIdempotencyKey()
+    this.shipKey = newIdempotencyKey()
+    this.carrierList = carriers()
   },
   onShow() {
     this.load()
@@ -105,8 +141,13 @@ export default {
     load() {
       getRefund(this.refundNo,
         (r) => {
-          this.v = refundDetailView(r)
+          const v = refundDetailView(r)
+          this.v = v
           this.error = ''
+          // 表单预填已提交的那一份，改起来方便。
+          if (this.carrier == '' && v.returnCarrierCode != '') this.carrier = v.returnCarrierCode.toLowerCase()
+          if (this.trackingNo == '' && v.returnTrackingNo != '') this.trackingNo = v.returnTrackingNo
+          if (this.evidencePaths.length == 0 && v.evidenceUrls.length > 0) this.loadEvidence(v.evidenceUrls)
         },
         (f: ApiFailure) => {
           this.error = f.message
@@ -134,6 +175,46 @@ export default {
           // 多半是商家刚审完：照实说，并刷新成现在的状态。
           this.message = f.message
           this.load()
+        })
+    },
+    loadEvidence(urls: string[]) {
+      const paths: string[] = []
+      let pending = urls.length
+      for (let i = 0; i < urls.length; i++) paths.push('')
+      for (let i = 0; i < urls.length; i++) {
+        const at = i
+        fetchUpload(urls[i],
+          (p) => {
+            paths[at] = p
+            pending--
+            if (pending == 0) this.evidencePaths = paths.filter((x) => x != '')
+          },
+          (f: ApiFailure) => {
+            pending--
+            this.evidenceError = '有凭证图片读取失败（' + f.message + '）'
+            if (pending == 0) this.evidencePaths = paths.filter((x) => x != '')
+          })
+      }
+    },
+    submitShipment() {
+      if (this.shipping || this.carrier == '' || this.trackingNo.trim() == '') return
+      this.shipping = true
+      this.message = ''
+      submitReturnShipment(returnShipmentRequest(this.carrier, this.trackingNo.trim()), this.refundNo, this.shipKey,
+        (r, _rp) => {
+          this.shipping = false
+          this.failed = false
+          this.message = '物流信息已提交，等待商家确认收货'
+          this.shipKey = newIdempotencyKey()
+          this.v = refundDetailView(r)
+        },
+        (f: ApiFailure) => {
+          this.shipping = false
+          this.failed = true
+          // 409 refund-status-not-returnable：商家刚确认收货 / 状态变了，刷新。
+          this.message = f.message
+          if (f.status == 409) this.load()
+          if (f.status == 422) this.shipKey = newIdempotencyKey()
         })
     },
     reapply() {
@@ -197,5 +278,42 @@ export default {
 .meta {
   margin-top: 20px;
   padding: 0 4px;
+}
+.carriers {
+  margin-top: 12px;
+}
+.opt {
+  padding: 7px 14px;
+  border-radius: 15px;
+  border-width: 1px;
+  border-style: solid;
+  border-color: #E3D9CC;
+  margin-right: 8px;
+  margin-bottom: 8px;
+}
+.opt-on {
+  background-color: #3B2A20;
+  border-color: #3B2A20;
+}
+.opt-text {
+  font-size: 13px;
+  color: #2A211B;
+}
+.opt-text-on {
+  font-size: 13px;
+  color: #FFFDF9;
+}
+.wrap {
+  flex-wrap: wrap;
+}
+.ev-grid {
+  margin-top: 12px;
+}
+.ev-img {
+  width: 72px;
+  height: 72px;
+  border-radius: 10px;
+  margin-right: 10px;
+  margin-bottom: 10px;
 }
 </style>

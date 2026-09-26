@@ -22,6 +22,8 @@
 
 import {
   ReportSearchEventRequest,
+  ReturnShipmentRequest,
+  Upload,
   ListRefundsQuery,
   ListRefundsResponse,
   Refund,
@@ -99,6 +101,8 @@ export const PROBLEM_ORDER_NOT_REFUNDABLE = 'https://keel.dev/problems/order-sta
 export const PROBLEM_REFUND_QUANTITY_EXCEEDED = 'https://keel.dev/problems/refund-quantity-exceeded'
 export const PROBLEM_REFUND_ALREADY_IN_PROGRESS = 'https://keel.dev/problems/refund-already-in-progress'
 export const PROBLEM_REFUND_NOT_CANCELABLE = 'https://keel.dev/problems/refund-status-not-cancelable'
+// 不是退货退款，或当前不在 20 待买家退货：不能填 / 改寄回物流。
+export const PROBLEM_REFUND_NOT_RETURNABLE = 'https://keel.dev/problems/refund-status-not-returnable'
 
 /**
  * 一次失败的调用。
@@ -977,6 +981,102 @@ export function getRefund(refundNo : string,
 export function cancelRefund(refundNo : string, idempotencyKey : string,
   onOk : (r : Refund, replayed : boolean) => void, onErr : FailureHandler) {
   send('POST', '/refunds/' + encodeURIComponent(refundNo) + '/cancel', '', null, idempotencyKey,
+    refundOk(onOk, onErr), onErr)
+}
+
+// ---------------------------------------------------------------------------
+// 买家上传（售后凭证）与寄回物流
+// ---------------------------------------------------------------------------
+
+/**
+ * POST /uploads：multipart，purpose=3 售后凭证。**要令牌和 Idempotency-Key**；
+ * 同一张图的重试复用同一个键（页面给）。201 返回的 url 形如 /api/v1/uploads/{id}，
+ * 原样放进申请售后的 evidence_urls —— 服务端只收本人用 purpose=3 传的这种地址。
+ *
+ * 不走 send：multipart 只能用 uni.uploadFile。它拿不到响应头，所以没有 replayed。
+ */
+export function uploadEvidence(
+  filePath : string,
+  idempotencyKey : string,
+  onOk : (u : Upload) => void,
+  onErr : FailureHandler
+) {
+  const header = {
+    'Accept': 'application/json, application/problem+json',
+    'Idempotency-Key': idempotencyKey,
+  } as UTSJSONObject
+  const session = loadSession()
+  if (session != null) {
+    header['Authorization'] = 'Bearer ' + session!.accessToken
+  }
+  uni.uploadFile({
+    url: getBaseUrl() + '/uploads',
+    filePath: filePath,
+    name: 'file',
+    header: header,
+    formData: { 'purpose': '3' } as UTSJSONObject,
+    success: (res) => {
+      const status = res.statusCode
+      const text = responseText(res.data)
+      if (status >= 200 && status < 300) {
+        const body = JSON.parse<Upload>(text)
+        if (body == null) {
+          onErr(decodeFailure(status))
+          return
+        }
+        onOk(body!)
+        return
+      }
+      onErr(failureOf(status, text != '' ? JSON.parse<Problem>(text) : null, 0))
+    },
+    fail: (err) => {
+      const f = failureOf(0, null, 0)
+      f.message = f.message + '［' + err.errCode.toString() + ' ' + err.errMsg + '］'
+      onErr(f)
+    },
+  })
+}
+
+/**
+ * 读自己的凭证图，给 <image> 用。GET /uploads/{id} **必须带 Authorization**（本人 302 到限时地址，
+ * 匿名或别人 403），而 <image src> 带不了请求头 —— 所以先 downloadFile 取成本地临时文件。
+ * url 是服务端给的 /api/v1/uploads/{id}（已含 /api/v1），拼 origin 而不是 base URL，理由同 settleSandbox。
+ */
+export function fetchUpload(
+  url : string,
+  onOk : (tempFilePath : string) => void,
+  onErr : FailureHandler
+) {
+  const header = {} as UTSJSONObject
+  const session = loadSession()
+  if (session != null) {
+    header['Authorization'] = 'Bearer ' + session!.accessToken
+  }
+  uni.downloadFile({
+    url: originOf(getBaseUrl()) + url,
+    header: header,
+    success: (res) => {
+      if (res.statusCode >= 200 && res.statusCode < 300) {
+        onOk(res.tempFilePath)
+        return
+      }
+      onErr(failureOf(res.statusCode, null, 0))
+    },
+    fail: (err) => {
+      const f = failureOf(0, null, 0)
+      f.message = f.message + '［' + err.errCode.toString() + ' ' + err.errMsg + '］'
+      onErr(f)
+    },
+  })
+}
+
+/**
+ * POST /refunds/{no}/return-shipment：填 / 改寄回物流。只有退货退款且 20 待买家退货时能填，
+ * 否则 409 refund-status-not-returnable；20 期间可以改。填完状态仍是 20。
+ */
+export function submitReturnShipment(req : ReturnShipmentRequest, refundNo : string, idempotencyKey : string,
+  onOk : (r : Refund, replayed : boolean) => void, onErr : FailureHandler) {
+  send('POST', '/refunds/' + encodeURIComponent(refundNo) + '/return-shipment', '', req, idempotencyKey,
     refundOk(onOk, onErr), onErr)
 }
 

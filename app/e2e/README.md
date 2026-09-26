@@ -67,7 +67,9 @@ const orderNo = await page.data('orderNo')
 要后台员工来做，两种给法：设 `KEEL_E2E_STAFF_TOKEN`（用例自己调后台接口；**只放环境变量、不进仓库**），
 或者先用 `placeOrder` 造好单、请服务端那边的后台会话代为发货 / 驳回 / 同意，再把单号交给
 `KEEL_E2E_SHIPPED_ORDER` / `KEEL_E2E_REJECTED_REFUND` / `KEEL_E2E_REFUNDED_REFUND`。都没有时这三条
-`skip`，买家侧照跑。
+`skip`，买家侧照跑。「待买家退货填物流」只收单号：`KEEL_E2E_RETURN_REFUND`（一张已同意到 20 的退货退款单；
+退货退款要先发货，所以是两轮：请后台发货 → 买家申请退货退款 → 请后台同意）。凭证图由测试进程
+`uploadEvidenceFromTest` 上传（multipart、purpose=3），App 内的相册选图不在自动化范围里。
 
 `coupon.test.js`：演示买家的券状态跑一次变一次（「9 折」第一次领是 201，之后是 409 每人限领；
 结算用例会把自动选上的券真的用掉）。所以它断言的是**终态**：领完按钮是「已领取」、这张券在

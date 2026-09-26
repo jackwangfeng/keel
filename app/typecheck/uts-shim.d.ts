@@ -73,8 +73,38 @@ type UniGetLocationOptions = {
 declare function setTimeout(handler: () => void, timeout?: number): number
 declare function clearTimeout(id: number): void
 
+// uni.uploadFile / uni.downloadFile：只声明 client.uts 用到的那几样（售后凭证的上传与读取）。
+type UniUploadFileSuccess = {
+  data: string
+  statusCode: number
+}
+
+type UniUploadFileOptions = {
+  url: string
+  filePath: string
+  name: string
+  header?: UTSJSONObject | null
+  formData?: UTSJSONObject | null
+  success?: ((res: UniUploadFileSuccess) => void) | null
+  fail?: ((err: UniRequestFail) => void) | null
+}
+
+type UniDownloadFileSuccess = {
+  tempFilePath: string
+  statusCode: number
+}
+
+type UniDownloadFileOptions = {
+  url: string
+  header?: UTSJSONObject | null
+  success?: ((res: UniDownloadFileSuccess) => void) | null
+  fail?: ((err: UniRequestFail) => void) | null
+}
+
 declare const uni: {
   request<T>(options: UniRequestOptions<T>): void
+  uploadFile(options: UniUploadFileOptions): void
+  downloadFile(options: UniDownloadFileOptions): void
   getStorageSync(key: string): any
   setStorageSync(key: string, value: any): void
   removeStorageSync(key: string): void
