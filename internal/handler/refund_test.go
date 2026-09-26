@@ -247,6 +247,34 @@ func TestPartialRefundsAllocateTheCouponPerLine(t *testing.T) {
 	}
 }
 
+// 除不尽的那一行：三件衬衫 150 元、满 100 减 20，净额 13000 分，三等分除不尽。
+// 先退 1 件 floor(13000 / 3) = 4333，再退剩下 2 件 = 13000 - 4333 = 8667 ——
+// 最后一次把余数退干净，合计 = 实付。把「最后一件吃掉余数」那一支删掉，
+// 第二笔会变成 floor(13000 × 2 / 3) = 8666，少退 1 分，这条会红。
+func TestLastRefundTakesTheRemainder(t *testing.T) {
+	cs := newCouponShop(t)
+	b := cs.newBuyer(t, "remainder")
+	coupon := cs.wholeStoreCoupon(t, b)
+	o := cs.placePaid(t, b, cs.NorthStore, cs.ShirtSKU, 3, &coupon.Id)
+	if o.PayableCents != 13000 {
+		t.Fatalf("应付 %d，期望 13000 —— 前提不成立", o.PayableCents)
+	}
+	wantStatus(t, cs.ship(t, o.OrderNo, "sf", "SF"+uniqueKey()), http.StatusCreated, "发货")
+	_, lines := cs.lines(t, b, o.OrderNo)
+	shirt := lines[cs.ShirtSKU]
+
+	r1 := cs.mustApply(t, b, o.OrderNo, refundBody(1, [2]int64{shirt.Id, 1}))
+	cs.mustApprove(t, r1.RefundNo)
+	r2 := cs.mustApply(t, b, o.OrderNo, refundBody(1, [2]int64{shirt.Id, 2}))
+	cs.mustApprove(t, r2.RefundNo)
+	if r1.AmountCents != 4333 || r2.AmountCents != 8667 {
+		t.Fatalf("两笔是 %d + %d，期望 4333 + 8667", r1.AmountCents, r2.AmountCents)
+	}
+	if m := orderMoneyOf(t, o.OrderNo); m.Refunded != m.Paid || m.RefundStatus != 3 {
+		t.Fatalf("退完之后订单是 %+v，期望 refunded = paid、refund_status 3 —— 余数没退干净", m)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // 未发货整单退：20 → 50 → 60，运费全退，库存回补，券退回
 // ---------------------------------------------------------------------------
@@ -578,12 +606,17 @@ func TestRefundWritesAreIdempotent(t *testing.T) {
 	}
 }
 
-// 两个并发的申请抢同一行的最后一件：订单行锁让它们串行，恰好一个成功 ——
-// 在途超退是 chk_item_refund 拦不住的那一种（§11），只能靠这把锁。
+// 几个并发的申请抢同一行的最后一件：订单行锁让它们串行，恰好一个成功 ——
+// 在途超退是 chk_item_refund 拦不住的那一种（§11），只能靠这把锁加在途复算。
+//
+// 用两行的订单、只退衬衫那一行：这是**部分**退款，订单不会进 50。要是用单行订单，
+// 第一张申请就把订单推进 50，后来者全被「50 不能再申请」挡掉 —— 那样这条测试
+// 在在途复算整个被删掉时照样绿（实测过），证明不了它要证明的东西。
 func TestConcurrentRefundsCannotOverRefund(t *testing.T) {
 	cs := newCouponShop(t)
 	b := cs.newBuyer(t, "rrace")
-	o := cs.placePaid(t, b, cs.NorthStore, cs.ShirtSKU, 1, nil)
+	o := cs.twoLineOrder(t, b, nil)
+	cs.pay(t, o.OrderNo, o.PayableCents)
 	_, lines := cs.lines(t, b, o.OrderNo)
 	body := refundBody(1, [2]int64{lines[cs.ShirtSKU].Id, 1})
 
@@ -610,6 +643,9 @@ func TestConcurrentRefundsCannotOverRefund(t *testing.T) {
 	}
 	if created != 1 {
 		t.Fatalf("%d 个并发申请里成功了 %d 个（%v），期望恰好 1 个", n, created, codes)
+	}
+	if st := orderStatusOf(t, o.OrderNo); st != 20 {
+		t.Fatalf("部分退款不该改订单状态，实得 %d —— 这条测试的前提（不走 50）不成立", st)
 	}
 }
 
