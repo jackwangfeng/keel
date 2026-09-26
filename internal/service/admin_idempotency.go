@@ -72,11 +72,11 @@ import (
 // 那个前缀今天不承担任何逻辑（主体域由 subject_kind 那一列说了算），
 // 它是给读日志的人看的。
 const (
-	scopeAdminUploadCreate      = "admin.uploads.create"
-	scopeAdminProductCreate     = "admin.products.create"
-	scopeAdminProductPublish    = "admin.products.publication"
-	scopeAdminSKUCreate         = "admin.skus.create"
-	scopeAdminCategoryCreate    = "admin.categories.create"
+	scopeAdminUploadCreate   = "admin.uploads.create"
+	scopeAdminProductCreate  = "admin.products.create"
+	scopeAdminProductPublish = "admin.products.publication"
+	scopeAdminSKUCreate      = "admin.skus.create"
+	scopeAdminCategoryCreate = "admin.categories.create"
 )
 
 // 存档里的 response_code。取值就是契约在各自 201 / 200 上写的那个。
