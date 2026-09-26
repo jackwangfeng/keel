@@ -177,7 +177,7 @@ type ShipRequest struct {
 // # 谁能发货
 //
 // 契约的权限矩阵（StaffRole）里没有「发货」这一行。这里按「门店库存」那一行判
-// （authorizeStore 的 storeOperate）：管理员与操作员全店都能发；大区管理员只能发
+// （authorizeOrderStore，与 authorizeStore 的 storeOperate 同一个判据）：管理员与操作员全店都能发；大区管理员只能发
 // 本大区门店的单；门店管理员只能发自己门店的单。理由是履约与库存是同一件事的
 // 两面 —— 货从哪家店出，就该由管那家店库存的人发，一个能改 A 店库存却不能发 A 店
 // 货的角色，或者反过来，都说不出道理。
@@ -213,7 +213,7 @@ func (s *AdminOrderService) Ship(ctx context.Context, orderNo string, req ShipRe
 			if err != nil {
 				return repository.Shipment{}, err
 			}
-			if _, err := authorizeStore(ctx, tx, order.StoreID, storeOperate); err != nil {
+			if _, err := authorizeOrderStore(ctx, tx, order.StoreID); err != nil {
 				return repository.Shipment{}, err
 			}
 			switch {
