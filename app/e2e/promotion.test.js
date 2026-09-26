@@ -66,15 +66,24 @@ describe('营销活动与包邮券', () => {
     expect(pv.payableCents).toBe(cents(pv.goodsAmountText) + cents(pv.freightText) - cents(pv.discountText))
   })
 
-  it('包邮券：99 元以下的单自动选上、抵掉 8 元运费；已包邮的单里不出现', async () => {
+  it('包邮券：99 元以下的单能用、抵掉 8 元运费（自动选的是最省的那张）；已包邮的单里不出现', async () => {
     const claim = await httpRequest('POST', apiBase() + '/coupon-templates/' + FREE_SHIP_TEMPLATE + '/claim', null, token,
       { 'Idempotency-Key': randomUUID() })
     expect(claim.status).toBe(201)
 
     const cheap = await checkout(CHEAP)
-    const pv = await waitData(cheap, 'pv', (p) => p != null && p.couponId > 0)
-    const chosen = pv.coupons.find((c) => c.id === pv.couponId)
-    expect(chosen.name).toContain('包邮')
+    const first = await waitData(cheap, 'pv', (p) => p != null && p.couponId > 0)
+    // 自动选的是最省的那张（服务端排好的第一张）。买家手上有别的券（例如满 50 减 10 在 55.8 元的单上省 10 元，
+    // 比包邮券的 8 元多）时它不是包邮券 —— 所以这里不断言自动选中的是包邮券，而是手动切过去。
+    expect(first.couponId).toBe(first.coupons[0].id)
+    const idx = first.coupons.findIndex((c) => c.name.includes('包邮'))
+    expect(idx).toBeGreaterThanOrEqual(0)
+    if (first.coupons[idx].id !== first.couponId) {
+      await (await cheap.$('.coupon-head')).tap()
+      await (await cheap.$$('.coupon-opt'))[idx].tap()
+    }
+    const freeShipId = first.coupons[idx].id
+    const pv = await waitData(cheap, 'pv', (p) => p != null && p.couponId === freeShipId)
     expect(pv.freightText).toBe('¥8.00')
     expect(pv.freightDiscountText).toBe('-¥8.00')
     expect(pv.payableCents).toBe(cents(pv.goodsAmountText))
@@ -86,10 +95,18 @@ describe('营销活动与包邮券', () => {
   })
 
   it('包邮券选着时数量加到满 99 包邮：显示「包邮券抵不了钱」并展开券列表，不悄悄换掉', async () => {
-    // 上一条已经领过包邮券。挂耳 1 件（49.9 + 8 运费）会自动选上它，加到 2 件（99.8）就包邮了。
+    // 上一条已经领过包邮券。挂耳 1 件（49.9 + 8 运费）选上包邮券，加到 2 件（99.8）就包邮了。
+    // 显式选包邮券，不依赖它恰好是自动选中的那张（取决于买家手上还有什么券）。
     const page = await checkout(GUAER)
-    const pv = await waitData(page, 'pv', (p) => p != null && p.couponId > 0)
-    expect(pv.coupons.find((c) => c.id === pv.couponId).name).toContain('包邮')
+    const first = await waitData(page, 'pv', (p) => p != null)
+    const idx = first.coupons.findIndex((c) => c.name.includes('包邮'))
+    expect(idx).toBeGreaterThanOrEqual(0)
+    const freeShipId = first.coupons[idx].id
+    if (first.couponId !== freeShipId) {
+      await (await page.$('.coupon-head')).tap()
+      await (await page.$$('.coupon-opt'))[idx].tap()
+    }
+    await waitData(page, 'pv', (p) => p != null && p.couponId === freeShipId)
     await (await page.$$('.step'))[1].tap()
     await waitFor(page, '.result-err', (t) => t.includes('包邮券'))
     expect(await page.data('couponOpen')).toBe(true)

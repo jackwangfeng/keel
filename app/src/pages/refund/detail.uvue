@@ -22,6 +22,8 @@
         <view v-if="v != null && v!.awaitingReturn" class="notice">
           <text class="notice-title">请把商品寄回商家</text>
           <text class="notice-text">寄出后填写物流单号，商家确认收到退货后会退款。</text>
+          <!-- 截止前没填寄回物流，售后会被自动关闭（服务端发 refund_return_expired 通知）。 -->
+          <text v-if="v!.returnDeadlineAt != '' && v!.returnTrackingNo == ''" class="notice-text return-deadline">请在 {{ v!.returnDeadlineAt }} 前寄回并填写物流单号，逾期售后将自动关闭</text>
         </view>
         <view v-if="v != null && v!.canFillReturn" class="card">
           <text class="t-overline">寄回物流</text>

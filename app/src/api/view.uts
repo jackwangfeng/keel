@@ -422,6 +422,8 @@ export type OrderDetailView = {
   refundedText : string
   /** 包邮券抵掉的运费；没有是空串。 */
   freightDiscountText : string
+  /** 已发货单的自动确认收货时间（auto_confirm_at，「09-30 14:05」）；没有是空串。 */
+  autoConfirmAt : string
   /** 活动优惠合计；没有是空串。 */
   promotionDiscountText : string
   /** 命中的活动快照：「全场满 199 减 20 -¥20.00」。 */
@@ -488,6 +490,7 @@ export function orderDetailView(o : OrderDetail) : OrderDetailView {
     freightDiscountText: o.freight_discount_cents != null && o.freight_discount_cents! > 0 ? '-' + yuan(o.freight_discount_cents!) : '',
     freightNote: o.freight != null ? freightNote(o.freight!) : '',
     promotionDiscountText: o.promotion_discount_cents != null && o.promotion_discount_cents! > 0 ? '-' + yuan(o.promotion_discount_cents!) : '',
+    autoConfirmAt: o.auto_confirm_at != null ? shortTime(o.auto_confirm_at!) : '',
     promotionLines: orderPromotionLines(o),
     canCancel: o.status == 10,
     canConfirm: o.status == 30,
@@ -1288,6 +1291,8 @@ export type RefundDetailView = {
   returnCarrierText : string
   returnTrackingNo : string
   returnSubmittedAt : string
+  /** 待买家退货的寄回截止时间（return_deadline_at）；过了还没填物流，售后会被自动关闭。没有是空串。 */
+  returnDeadlineAt : string
 }
 
 export function refundDetailView(r : Refund) : RefundDetailView {
@@ -1325,6 +1330,7 @@ export function refundDetailView(r : Refund) : RefundDetailView {
     returnCarrierText: rs != null ? carrierName(rs!.carrier_code) : '',
     returnTrackingNo: rs != null ? rs!.tracking_no : '',
     returnSubmittedAt: rs != null ? shortTime(rs!.submitted_at) : '',
+    returnDeadlineAt: r.status == 20 && r.return_deadline_at != null ? shortTime(r.return_deadline_at!) : '',
   } as RefundDetailView
 }
 
