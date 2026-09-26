@@ -492,8 +492,9 @@ func Run(ctx context.Context, listen func(addr string, h http.Handler) error) er
 	// 不，它也停了：没有引擎就没有这个任务，两份派生数据一起停）。
 	//
 	// 那为什么还不拒绝启动？因为 README 承诺的 `docker compose up` 里没有引擎 ——
-	// 它是 compose.inference.yaml 那个叠加层，2.27 GB 权重、冷启动约 75 秒。
-	// 让主 compose 因为缺它而起不来，等于把那条一行命令的 Demo 废掉。
+	// M4 起引擎是 infero，它**根本不在 compose 里**（GPU-only，跑在宿主机进程里，
+	// 见 scripts/infero-up.sh 的文件头）。让主 compose 因为缺它而起不来，
+	// 等于把那条一行命令的 Demo 废掉，而且是在一台可能根本没有 GPU 的机器上。
 	//
 	// 代价说清楚，所以有这条 WARN：不启动它的后果是**新品与改过的商品搜不到**，
 	// 而且症状出现在几小时后 —— 索引是异步的，没有人在等它的返回码。
@@ -505,8 +506,10 @@ func Run(ctx context.Context, listen func(addr string, h http.Handler) error) er
 			"而且不会有任何报错 —— 索引是异步的，没有人在等它的返回码。"+
 			"POST /search 仍然可用，但只剩关键词那一路（语义检索层 §8 的降级链）—— "+
 			"而关键词那一路依赖的 search_text 也由这个任务维护，所以新品两路都搜不到。"+
-			"要开起来：docker compose -f compose.yaml -f compose.inference.yaml up -d inference，"+
-			"然后配 "+inference.EnvEndpoint+"=http://inference:8000",
+			"要开起来（需要 NVIDIA GPU）：先在宿主机 ./scripts/infero-up.sh，"+
+			"再带上 compose.infero.yaml 这个叠加层起栈，它会把 "+inference.EnvEndpoint+
+			" 指到 http://host.docker.internal:18081。"+
+			"没有 GPU 的机器今天没有语义检索这条路 —— infero 只有 CUDA / Metal 后端",
 			"err", embErr)
 	} else {
 		indexer, err := service.NewIndexService(repository.New(pool), embedder,

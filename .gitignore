@@ -33,3 +33,11 @@ __pycache__/
 
 # 一期文件存储 driver 的本地卷
 /data/uploads/
+
+# Claude Code 给子 agent 开的隔离工作树。它是**整棵仓库的一份副本**（本机实测
+# 1 GB），跑完就是垃圾，但 agent 异常退出时会留在这里。不写进 .gitignore 的话
+# 它会一直挂在 git status 里，而「git status 干净」是这个仓库好几道闸门的前置条件。
+#
+# 只忽略 worktrees 这一层，不忽略整个 .claude/ —— 那底下还可能放团队共享的
+# settings.json 与 agent 定义，那些是该入库的。
+/.claude/worktrees/

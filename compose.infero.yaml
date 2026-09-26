@@ -1,0 +1,80 @@
+# 自研推理引擎 infero 的叠加层。
+#
+#     ./scripts/infero-up.sh                                  # 先在宿主机起引擎
+#     docker compose -f compose.yaml -f compose.infero.yaml up -d
+#
+# ## 这个叠加层里**没有 inference 服务**，这是刻意的
+#
+# 它只做一件事：把 app 的 KEEL_EMBED_ENDPOINT 指到宿主机上那个 infero 进程。
+# 引擎本身跑在 compose 之外，理由完整写在 scripts/infero-up.sh 的文件头，
+# 摘要是显存账：infero 是 GPU-only，一块卡同时只装得下一份，而本机这块
+# RTX A4000 还分给另外两个项目；容器化换来的只有「一条命令起全栈」，
+# 代价是 2–3 GB 的 CUDA 基础镜像、GPU 透传，以及把 infero 那套 dlopen 的
+# CUDA 用户态库也一起挂进去。不值。
+#
+# **代价是真的：`docker compose up` 不再能一条命令起全栈。** 不先跑
+# infero-up.sh 的话，栈照样起得来，只是 /search 走纯关键词降级路径
+# （语义检索层 §8）—— 不报错，只是没有语义召回。README 的
+# 「还没在盒子里的」那一节记着这条。
+#
+# ## 为什么另起一个文件，而不是改 compose.inference.yaml
+#
+# compose.inference.yaml 是 **Python + BGE-M3** 那条腿的叠加层，这一个是
+# **infero + Qwen3-Embedding** 这条腿的。两者互斥，不是同一个东西的两种配置：
+#
+#   - 前置条件不相交。那个要网络（下 2.27 GB 权重）、不要 GPU；
+#     这个要 GPU、不要网络（权重在宿主机上），而且引擎根本不在 compose 里。
+#   - 向量空间不同。BGE-M3 与 Qwen3-Embedding 算出来的是两套不能混用的向量，
+#     product_text_vectors.model_name 记着是哪一套。换腿 = 全库重算
+#     （ListStaleProductsForIndex 会按 model_name/model_version 把旧行判成待重算，
+#     这条路本来就通）。
+#   - 合并成一个文件的话，两套互斥的配置要靠环境变量互相拆台，而
+#     `docker compose -f a -f b` 的覆盖语义是「后面的赢」——
+#     两个叠加层都定义 inference 服务时，出错的形态是「起了一个，连了另一个」。
+#
+# 分成两个文件，选哪条腿就是 `-f` 后面写哪个文件，没有第三种状态。
+#
+# ## ⚠️ 换腿要重算全库
+#
+# 从 Python/BGE-M3 换到这里之后，库里已有的 product_text_vectors 行
+# **不会自动失效**——它们的 model_name 是 'bge-m3'，而新引擎报的是
+# 'Qwen3-Embedding-0'。增量索引任务会把它们判成待重算并逐轮追上，
+# 但在追上之前，那些行和新算的查询向量不在同一个空间里，检索结果没有意义。
+# 要立刻切干净就跑一次全量回填：
+#
+#     docker compose exec app /keel-index -force
+#
+name: keel
+
+services:
+  app:
+    environment:
+      # 引擎地址。**客户端没有默认值，空着就拒绝构造**（见 internal/inference
+      # 的 EnvEndpoint），理由与 KEEL_DTM_DSN 同构：一个「反正能跑起来」的
+      # 默认值，会让忘了配它的部署每次索引都连不上，而索引是异步的——
+      # 没有人在等它的返回码，症状是几小时后的「新品怎么搜不到」。
+      #
+      # host.docker.internal 是容器访问**宿主机**的名字。Linux 上它不是天生
+      # 就有的，靠下面 extra_hosts 那条 host-gateway 注进来。
+      #
+      # ⚠️ 不要图省事写成 172.17.0.1。那是**默认 bridge** 网络的网关，而
+      # compose 给每个 project 建的是自己的网络（本机实测 keel 这个 project
+      # 拿到的是 192.168.16.1），网段是动态分配的。写死任何一个都会在别的机器
+      # 上、或者同一台机器换个 project 名之后连不上。host-gateway 是 Docker
+      # 自己解析的，这两种情况都对。
+      KEEL_EMBED_ENDPOINT: http://host.docker.internal:${KEEL_INFERO_PORT:-18081}
+    extra_hosts:
+      # Linux 上 host.docker.internal 要显式映射（macOS/Windows 的 Docker
+      # Desktop 自带）。host-gateway 这个特殊值由 Docker 解析成宿主机地址。
+      - "host.docker.internal:host-gateway"
+    # 刻意**不加** depends_on。
+    #
+    # Python 那条腿里 app 是 `depends_on: inference: service_healthy` 的：
+    # 引擎没 ready 就开始接请求的话，第一批索引全部失败，而它们是异步的、
+    # 失败了没人看见。这里做不到同一件事 —— 引擎根本不是 compose 管的对象，
+    # compose 没有办法等一个它不认识的进程。
+    #
+    # 后果说清楚：先 up、后起引擎的话，中间这段时间里索引任务每轮都会
+    # connection refused。它**不会把坏值写进库**（客户端把连不上归成
+    # ErrUnavailable，一个向量都不返回，见 internal/inference 的三条错误分类），
+    # 下一轮就会自己追上。代价是这段时间里新品搜不到，日志里是 WARN。
