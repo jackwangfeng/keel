@@ -24,6 +24,10 @@ const APPID = manifest.appid
 const PKG = 'dev.keel.buyer' // 与 native-android/app/build.gradle 的 applicationId 一致
 const APK = path.join(APP, 'dist', `keel-buyer-${manifest.versionName}-e2e.apk`)
 const IOS = process.env.UNI_APP_PLATFORM === 'ios'
+// H5 无头（make app-e2e-h5）：真机都锁屏时的兜底。浏览器由 playwright 用本机 Chrome 起，
+// 页面由 e2e/h5-serve.js 托管（同源反代 /api，H5 只能同源）。
+const H5 = process.env.UNI_PLATFORM === 'h5'
+const H5_PORT = Number(process.env.KEEL_E2E_H5_PORT || 5199)
 const IOS_APP = path.join(APP, 'dist', 'ios-device-e2e', 'KeelBuyer.app')
 
 function adbPath() {
@@ -53,7 +57,7 @@ function androidSerial() {
   console.log(`[e2e] 有 ${online.length} 台 Android 设备在线，用 ${pick}（ANDROID_SERIAL 可指定）`)
   return pick
 }
-const SERIAL = IOS ? '' : androidSerial()
+const SERIAL = IOS || H5 ? '' : androidSerial()
 const adb = (...args) => run(adbPath(), ['-s', SERIAL, ...args])
 
 // iPhone：用 Xcode 的 devicectl（USB 连着、已配对）。KEEL_IOS_DEVICE 可指定设备，默认取第一台。
@@ -124,7 +128,7 @@ const puppet = Object.assign({}, official, {
 })
 
 module.exports = {
-  platform: 'app-plus',
+  platform: H5 ? 'h5' : 'app-plus',
   projectPath: path.join(APP, 'src'),
   cliPath: APP,
   port: PORT,
@@ -136,5 +140,12 @@ module.exports = {
     platform: IOS ? 'ios' : 'android',
     android: { id: SERIAL || undefined, package: PKG, appid: APPID, executablePath: APK },
     ios: { bundleId: PKG, appid: APPID, executablePath: IOS_APP },
+  },
+  // 给了 url，官方 H5 puppet 就不自己编译（shouldCompile: !url），直接打开这个地址。
+  // channel: 'chrome' 用本机装的 Google Chrome，不下载 playwright 自带的浏览器。
+  h5: {
+    url: `http://127.0.0.1:${H5_PORT}/`,
+    options: { headless: process.env.KEEL_E2E_H5_HEADED !== '1', channel: 'chrome' },
+    teardown: 'close',
   },
 }

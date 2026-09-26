@@ -101,6 +101,16 @@ REQUIRED_PATHS = [
     ('/admin/coupon-templates/{template_id}', 'patch'),
     ('/admin/coupon-templates/{template_id}/scopes', 'put'),
     ('/admin/coupon-templates/{template_id}/grants', 'post'),
+    # 消息通知：买家消息中心与后台待办提醒（数据模型 §16）。通知是在订单 / 售后
+    # 状态变化的同一个事务里写的，读它的接口没了，那些写入就成了没人看的行。
+    ('/me/notifications', 'get'),
+    ('/me/notifications/unread-count', 'get'),
+    ('/me/notifications/{notification_id}/read', 'post'),
+    ('/me/notifications/read-all', 'post'),
+    ('/admin/notifications', 'get'),
+    ('/admin/notifications/unread-count', 'get'),
+    ('/admin/notifications/{notification_id}/read', 'post'),
+    ('/admin/notifications/read-all', 'post'),
 ]
 
 REQUIRED_SCHEMAS = ['UploadTarget', 'Upload',
@@ -196,6 +206,12 @@ IDEMPOTENCY_EXEMPT = {
     '/webhooks/refunds/{channel}':  '同上，靠 (channel, channel_refund_id)',
     '/admin/product-imports/preview': '无副作用；只解析与校验上传的表格，不写库。'
                                       '用 POST 只因要传文件（multipart）',
+    # 消息通知的四条「标已读」：已读是一次**设置**（read_at 从空到有，已有则不动），
+    # 不是累加，重放与首次效果相同；响应只是此刻的未读数，不是需要存档的结果。
+    '/me/notifications/{notification_id}/read':    '天然幂等：已读是设置不是累加，已读的再标一次不变',
+    '/me/notifications/read-all':                  '天然幂等：同上',
+    '/admin/notifications/{notification_id}/read': '天然幂等：同上（每个员工各自的已读状态）',
+    '/admin/notifications/read-all':               '天然幂等：同上',
 }
 
 # 这些查询参数带 default 是正常的：它们不改变「返回哪些行」，只改变排序/分页/详略。

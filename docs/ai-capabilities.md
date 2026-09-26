@@ -30,10 +30,10 @@
 
 | 接口 | 用途 | 对应里程碑 |
 |---|---|---|
-| `POST /v1/embeddings` | 文本 / 图像向量 | M3 / M6（文本那一半 M4 起跑在 infero 上） |
+| `POST /v1/embeddings` | 文本 / 图像向量 | M3 / M8（文本那一半 M4 起跑在 infero 上） |
 | `POST /v1/rerank` | cross-encoder 精排 | M5 |
-| `POST /v1/generate` | 带 schema 约束的结构化生成 | M9 |
-| `POST /v1/forecast` | 时序预测（Chronos-2） | M12 |
+| `POST /v1/generate` | 带 schema 约束的结构化生成 | 远期（2026-09-26 路线图重排） |
+| `POST /v1/forecast` | 时序预测（Chronos-2） | 远期（2026-09-26 路线图重排） |
 
 > **`generate` 的 schema 约束是自建引擎相对通用 API 的实打实优势**：
 > 引擎侧用约束解码保证输出合法，避免「解析失败→重试→再失败」的循环。

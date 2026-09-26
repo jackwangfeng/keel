@@ -134,6 +134,11 @@ func TestServiceNeverBuildsATenantContextByHand(t *testing.T) {
 // **每一条都要写清楚「为什么这里没有 gid 也没有 Host」**，因为那是豁免的全部
 // 依据。默认答案是「租户从 gid 来」——想加一行之前先确认真的不是这种情况。
 var tenantContextAllowed = map[string]string{
+	"notification_delivery.go": "消息通知的外发 worker 与保留期清理，与 index.go 同一处境：" +
+		"跑在任何 HTTP 请求之外，没有 Host 也没有 gid。消费侧按出队那一行的 jobs.merchant_id " +
+		"进 WithTenant（与 index.go 的消费侧同一个做法）；保留期清理要逐家删过期的通知" +
+		"（notifications 有 RLS，没有能跨租户的 DELETE），拿租户的办法照抄 sweep：" +
+		"枚举 merchants 再逐家进，公平调度共用 fairRound。它不是 SAGA 分支，上面第 ② 道会把这一点钉住。",
 	"auto_confirm.go": "自动确认收货定时任务，与 sweep.go 同一处境：跑在任何 HTTP 请求之外，" +
 		"没有 Host 也没有 gid（它推进的是已发货订单，不属于任何一笔正在跑的全局事务）。" +
 		"拿租户的办法照抄 sweep：枚举 merchants 再逐家进 WithTenant，公平调度直接共用 fairRound。" +

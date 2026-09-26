@@ -10,10 +10,12 @@
 //     KEEL_E2E_REFUNDED_REFUND（已同意的仅退款售后单）—— 由服务端那边的后台会话代做好再交过来。
 // 都没有就跳过，买家侧的用例照跑。
 const { randomUUID } = require('crypto')
-const { waitFor, waitEl, httpGet, httpRequest, apiBase, serverToken, loginInApp, placeOrder, staffToken, staffPost } = require('./helpers')
+const { waitFor, waitEl, httpGet, httpRequest, apiBase, serverToken, loginInApp, placeOrder, staffToken, staffPost, uploadEvidenceFromTest } = require('./helpers')
 
 const env = process.env
 const withStaff = (fixture) => (staffToken() || env[fixture] ? it : it.skip)
+// 只能由后台交单号的那几条（没有 staff token 的自动造数路径）。
+const withFixture = (fixture) => (env[fixture] ? it : it.skip)
 
 async function tapTwice(page, selector) {
   // 取消 / 确认收货 / 撤回都是「点两下」：第一下变成「再点一次确认」。
@@ -61,6 +63,11 @@ describe('订单后半程', () => {
     await waitEl(page, '.submit-btn')
     // 只有一行时默认全选了可退件数；类型与原因必须用户选，没选时按钮是灰的。
     expect(await page.data('refundType')).toBe(0)
+    // 未发货：服务端只收仅退款，「退货退款」置灰、点了不生效。
+    await waitFor(page, '.type-note', (t) => t.includes('只能申请仅退款'))
+    expect(await page.data('returnAllowed')).toBe(false)
+    await (await page.$$('.type-opt'))[1].tap()
+    expect(await page.data('refundType')).toBe(0)
     await (await page.$$('.type-opt'))[0].tap()      // 仅退款
     await (await page.$$('.reason-opt'))[0].tap()    // 不想要了
     await (await page.$('.submit-btn')).tap()
@@ -81,6 +88,58 @@ describe('订单后半程', () => {
     await tapTwice(rd, '.cancel-refund-btn')
     await waitFor(rd, '.t-display', (t) => t === '已取消')
     expect((await httpGet(apiBase() + '/refunds/' + refundNo, token)).body.status).toBe(60)
+  })
+
+  it('带凭证的售后单：凭证图带令牌读出来显示', async () => {
+    // 相册选图没法自动化：凭证由测试进程上传（POST /uploads，purpose=3），售后单也由测试进程建，
+    // App 里验证的是 GET /uploads/{id} 要带令牌读、<image> 带不了头这一段 —— downloadFile 之后显示。
+    const orderNo = await placeOrder(token, { pay: true })
+    const up = await uploadEvidenceFromTest(token)
+    const d = (await httpGet(apiBase() + '/orders/' + orderNo, token)).body
+    const r = await httpRequest('POST', apiBase() + '/orders/' + orderNo + '/refunds',
+      { items: [{ order_item_id: d.items[0].id, quantity: 1 }], refund_type: 1, reason_code: 3, evidence_urls: [up.url] },
+      token, { 'Idempotency-Key': randomUUID() })
+    expect(r.status).toBe(201)
+    const page = await program.navigateTo('/pages/refund/detail?refund_no=' + r.body.refund_no)
+    await waitFor(page, '.t-display', (t) => t === '待审核')
+    const deadline = Date.now() + 15000
+    let imgs = []
+    while (imgs.length === 0 && Date.now() < deadline) {
+      imgs = await page.$$('.evidence-img')
+      if (imgs.length === 0) await page.waitFor(300)
+    }
+    expect(imgs.length).toBe(1)
+    expect(await page.data('evidenceError')).toBe('')
+    // 收尾：撤回，免得演示库里堆待审核的单。
+    await httpRequest('POST', apiBase() + '/refunds/' + r.body.refund_no + '/cancel', null, token, { 'Idempotency-Key': randomUUID() })
+  })
+
+  withFixture('KEEL_E2E_RETURN_REFUND')('待买家退货：填寄回物流，再改一次，状态仍是待买家退货', async () => {
+    // 前置：一张退货退款单被商家同意（10→20）。只能由后台做，单号经环境变量交来（staff token 路径没实现这条）。
+    const refundNo = env.KEEL_E2E_RETURN_REFUND
+    const page = await program.navigateTo('/pages/refund/detail?refund_no=' + refundNo)
+    await waitFor(page, '.t-display', (t) => t === '待买家退货')
+    await waitEl(page, '.return-btn')
+    const no1 = 'E2E' + Date.now()
+    await (await page.$$('.carrier-opt'))[0].tap()   // 顺丰 sf
+    await (await page.$('.f-tracking')).input(no1)
+    await (await page.$('.return-btn')).tap()
+    await waitFor(page, '.t-ok', (t) => t.includes('物流信息已提交'))
+    let server = (await httpGet(apiBase() + '/refunds/' + refundNo, token)).body
+    expect(server.status).toBe(20)
+    expect(server.return_shipment.carrier_code).toBe('sf')
+    expect(server.return_shipment.tracking_no).toBe(no1)
+    await waitFor(page, '.return-filled', (t) => t.includes(no1))
+
+    const no2 = no1 + 'B'
+    await (await page.$$('.carrier-opt'))[1].tap()   // 京东 jd
+    await (await page.$('.f-tracking')).input(no2)
+    await (await page.$('.return-btn')).tap()
+    await waitFor(page, '.return-filled', (t) => t.includes(no2))
+    server = (await httpGet(apiBase() + '/refunds/' + refundNo, token)).body
+    expect(server.status).toBe(20)
+    expect(server.return_shipment.carrier_code).toBe('jd')
+    expect(server.return_shipment.tracking_no).toBe(no2)
   })
 
   withStaff('KEEL_E2E_REJECTED_REFUND')('商家驳回：显示驳回理由，可以重新申请', async () => {

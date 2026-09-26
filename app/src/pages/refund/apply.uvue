@@ -35,11 +35,13 @@
         <view v-if="items.length > 0" class="card">
           <text class="t-overline">售后类型</text>
           <view class="row opts">
-            <view v-for="t in types" :key="t.value" :class="['opt', 'type-opt', refundType == t.value ? 'opt-on' : '']" @click="refundType = t.value">
+            <view v-for="t in types" :key="t.value" :class="['opt', 'type-opt', refundType == t.value ? 'opt-on' : '', t.value == 2 && !returnAllowed ? 'btn-off' : '']" @click="pickType(t.value)">
               <text :class="refundType == t.value ? 'opt-text-on' : 'opt-text'">{{ t.label }}</text>
             </view>
           </view>
-          <text v-if="refundType == 2" class="t-hint type-note">审核通过后需要把商品寄回商家</text>
+          <!-- 未发货的单服务端只收仅退款：没有货可退。选项留着、置灰并写原因，而不是悄悄藏掉。 -->
+          <text v-if="!returnAllowed" class="t-hint type-note">订单还没发货，只能申请仅退款</text>
+          <text v-else-if="refundType == 2" class="t-hint type-note">审核通过后需要把商品寄回商家，并在售后详情里填写物流单号</text>
         </view>
 
         <view v-if="items.length > 0" class="card">
@@ -51,6 +53,24 @@
           </view>
           <view class="field">
             <input class="field-input f-reason" v-model="reasonText" maxlength="200" :placeholder="reasonCode == 5 ? '请说明原因（必填）' : '补充说明（选填）'" />
+          </view>
+        </view>
+
+        <!-- 凭证图：选图后立刻逐张上传（POST /uploads，purpose=3），拿到的 url 原样放进 evidence_urls。
+             显示的是本地临时文件，不用再去服务端读一遍。 -->
+        <view v-if="items.length > 0" class="card">
+          <view class="between">
+            <text class="t-overline">凭证图片（选填，最多 9 张）</text>
+            <text class="t-hint">{{ evidence.length }}/9</text>
+          </view>
+          <view class="row wrap ev-grid">
+            <view v-for="(e, idx) in evidence" :key="e.key" class="ev-cell">
+              <image class="ev-img" :src="e.path" mode="aspectFill"></image>
+              <view v-if="e.state == 'uploading'" class="ev-mask"><text class="ev-mask-text">上传中</text></view>
+              <view v-else-if="e.state == 'failed'" class="ev-mask" @click="retryUpload(idx)"><text class="ev-mask-text">失败，点重试</text></view>
+              <view class="ev-del" @click="removeEvidence(idx)"><text class="ev-del-text">×</text></view>
+            </view>
+            <view v-if="evidence.length < 9" class="ev-cell ev-add evidence-add" @click="pickImages"><text class="ev-add-text">＋</text></view>
           </view>
         </view>
 
@@ -67,13 +87,21 @@
 </template>
 
 <script>
-import { createRefund, getOrder, ApiFailure } from '@/api/client.uts'
+import { createRefund, getOrder, uploadEvidence, ApiFailure } from '@/api/client.uts'
 import { newIdempotencyKey } from '@/api/idempotency.uts'
-import { refundableItems, refundReasonText, refundRequest, RefundableItem, RefundLine } from '@/api/view.uts'
+import { refundableItems, refundReasonText, refundRequest, refundReturnAllowed, RefundableItem, RefundLine } from '@/api/view.uts'
 
 type Opt = {
   value : number
   label : string
+}
+
+// 一张凭证图。state：uploading / done / failed。key 是这张图的幂等键，重试复用它。
+type Evidence = {
+  key : string
+  path : string
+  url : string
+  state : string
 }
 
 export default {
@@ -92,6 +120,8 @@ export default {
       refundType: 0,
       reasonCode: 0,
       reasonText: '',
+      returnAllowed: false,
+      evidence: [] as Evidence[],
       loaded: false,
       error: '',
       message: '',
@@ -110,6 +140,10 @@ export default {
       }
       if (!any || this.refundType == 0 || this.reasonCode == 0) return false
       if (this.reasonCode == 5 && this.reasonText.trim() == '') return false
+      // 还有图在传 / 传失败：等它传完，或者让用户删掉失败的那张 —— 不悄悄少交一张凭证。
+      for (let i = 0; i < this.evidence.length; i++) {
+        if (this.evidence[i].state != 'done') return false
+      }
       return true
     },
   },
@@ -129,6 +163,8 @@ export default {
         (d) => {
           const items = refundableItems(d)
           this.items = items
+          this.returnAllowed = refundReturnAllowed(d)
+          if (!this.returnAllowed && this.refundType == 2) this.refundType = 0
           const q: number[] = []
           // 只有一行时默认勾上全部可退件数；多行时让用户自己勾。
           for (let i = 0; i < items.length; i++) q.push(items.length == 1 ? items[i].maxQty : 0)
@@ -139,6 +175,58 @@ export default {
           this.error = f.message
           this.loaded = true
         })
+    },
+    pickType(t: number) {
+      if (t == 2 && !this.returnAllowed) return
+      this.refundType = t
+    },
+    pickImages() {
+      const left = 9 - this.evidence.length
+      if (left <= 0) return
+      uni.chooseImage({
+        count: left,
+        sizeType: ['compressed'],
+        // 只开相册：拍照要多申请相机权限，Android 还要配 FileProvider；凭证图通常本来就在相册里。
+        sourceType: ['album'],
+        success: (res) => {
+          for (let i = 0; i < res.tempFilePaths.length && this.evidence.length < 9; i++) {
+            const e = { key: newIdempotencyKey(), path: res.tempFilePaths[i], url: '', state: 'uploading' } as Evidence
+            this.evidence.push(e)
+            this.upload(e.key)
+          }
+        },
+      })
+    },
+    evidenceAt(key: string): number {
+      for (let i = 0; i < this.evidence.length; i++) {
+        if (this.evidence[i].key == key) return i
+      }
+      return -1
+    },
+    upload(key: string) {
+      const at = this.evidenceAt(key)
+      if (at < 0) return
+      uploadEvidence(this.evidence[at].path, key,
+        (u) => {
+          const i = this.evidenceAt(key)
+          if (i < 0) return
+          this.evidence[i].url = u.url
+          this.evidence[i].state = 'done'
+        },
+        (f: ApiFailure) => {
+          const i = this.evidenceAt(key)
+          if (i < 0) return
+          this.evidence[i].state = 'failed'
+          this.message = '有一张图片没传上去：' + f.message
+        })
+    },
+    retryUpload(idx: number) {
+      this.evidence[idx].state = 'uploading'
+      this.message = ''
+      this.upload(this.evidence[idx].key)
+    },
+    removeEvidence(idx: number) {
+      this.evidence.splice(idx, 1)
     },
     toggleItem(idx: number) {
       const q = this.qty.slice()
@@ -158,9 +246,11 @@ export default {
       for (let i = 0; i < this.items.length; i++) {
         if (this.qty[i] > 0) lines.push({ orderItemId: this.items[i].orderItemId, quantity: this.qty[i] } as RefundLine)
       }
+      const urls: string[] = []
+      for (let i = 0; i < this.evidence.length; i++) urls.push(this.evidence[i].url)
       this.busy = true
       this.message = ''
-      createRefund(refundRequest(lines, this.refundType, this.reasonCode, this.reasonText.trim()), this.orderNo, this.idemKey,
+      createRefund(refundRequest(lines, this.refundType, this.reasonCode, this.reasonText.trim(), urls), this.orderNo, this.idemKey,
         (r, _replayed) => {
           this.busy = false
           // redirectTo 而不是 navigateTo：返回键回到订单详情，不回到这张已经交掉的表单。
@@ -272,5 +362,61 @@ export default {
 }
 .bar-btn {
   width: 140px;
+}
+.ev-grid {
+  margin-top: 12px;
+}
+.ev-cell {
+  width: 72px;
+  height: 72px;
+  border-radius: 10px;
+  overflow: hidden;
+  margin-right: 10px;
+  margin-bottom: 10px;
+  background-color: #F3ECE3;
+}
+.ev-img {
+  width: 72px;
+  height: 72px;
+}
+.ev-mask {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 72px;
+  height: 72px;
+  background-color: rgba(42, 33, 27, 0.55);
+  align-items: center;
+  justify-content: center;
+}
+.ev-mask-text {
+  font-size: 11px;
+  color: #FFFDF9;
+}
+.ev-del {
+  position: absolute;
+  right: 0;
+  top: 0;
+  width: 20px;
+  height: 20px;
+  border-bottom-left-radius: 8px;
+  background-color: rgba(42, 33, 27, 0.6);
+  align-items: center;
+  justify-content: center;
+}
+.ev-del-text {
+  font-size: 13px;
+  color: #FFFDF9;
+}
+.ev-add {
+  align-items: center;
+  justify-content: center;
+  border-width: 1px;
+  border-style: dashed;
+  border-color: #CFC3B5;
+}
+.ev-add-text {
+  font-size: 26px;
+  color: #A89C90;
 }
 </style>

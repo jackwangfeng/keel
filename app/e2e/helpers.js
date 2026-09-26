@@ -156,4 +156,39 @@ async function staffPost(path, body) {
   return r.body
 }
 
-module.exports = { placeOrder, staffToken, staffPost, waitFor, waitData, waitEl, pickSku, httpGet, httpPost, httpRequest, apiBase, serverToken, loginInApp }
+// 从测试进程上传一张售后凭证（POST /uploads，multipart，purpose=3）。App 里的相册选图没法自动化，
+// 用例拿这个造「带凭证的售后单」，再在 App 里验证凭证能带令牌读出来显示。图是一张 1×1 的 PNG。
+const PNG_1PX = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64')
+async function uploadEvidenceFromTest(token) {
+  const { randomUUID } = require('crypto')
+  const boundary = '----keel' + randomUUID().replace(/-/g, '')
+  const body = Buffer.concat([
+    Buffer.from('--' + boundary + '\r\nContent-Disposition: form-data; name="purpose"\r\n\r\n3\r\n'),
+    Buffer.from('--' + boundary + '\r\nContent-Disposition: form-data; name="file"; filename="e2e.png"\r\nContent-Type: image/png\r\n\r\n'),
+    PNG_1PX,
+    Buffer.from('\r\n--' + boundary + '--\r\n'),
+  ])
+  const url = apiBase() + '/uploads'
+  const mod = url.startsWith('https:') ? require('https') : require('http')
+  return new Promise((resolve, reject) => {
+    const req = mod.request(url, { method: 'POST', headers: {
+      'Content-Type': 'multipart/form-data; boundary=' + boundary,
+      'Content-Length': body.length,
+      Authorization: 'Bearer ' + token,
+      'Idempotency-Key': randomUUID(),
+    } }, (res) => {
+      let raw = ''
+      res.setEncoding('utf8')
+      res.on('data', (c) => { raw += c })
+      res.on('end', () => {
+        if (res.statusCode !== 201) return reject(new Error('上传凭证失败：' + res.statusCode + ' ' + raw))
+        resolve(JSON.parse(raw))
+      })
+    })
+    req.on('error', reject)
+    req.write(body)
+    req.end()
+  })
+}
+
+module.exports = { uploadEvidenceFromTest, placeOrder, staffToken, staffPost, waitFor, waitData, waitEl, pickSku, httpGet, httpPost, httpRequest, apiBase, serverToken, loginInApp }
