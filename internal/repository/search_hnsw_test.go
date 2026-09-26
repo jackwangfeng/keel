@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/keel/keel/internal/db"
@@ -63,12 +64,13 @@ import (
 // 数据集上变绿。
 //
 // ===========================================================================
-// 代价：这条测试要跑约半分钟
+// 代价：这条测试要跑约二十秒
 // ===========================================================================
 //
-// 本机实测：造 3.3 万条随机单位向量约 3 s，重建 HNSW 索引约 24 s，清理约 2 s。
+// 本机实测：造 3.3 万条随机单位向量约 3 s，重建 HNSW 索引约 11 s（并行建；
+// 串行是 24～27 s，/dev/shm 不够大时会退回串行，见 buildHNSWIndex），清理约 2 s。
 // 索引是**先删掉、灌完数据再建回来**的 —— 带着索引逐条插 3 万条要 124 s，
-// 建一次只要 24 s。t.Cleanup 会把索引按 00016 里的原样建回去。
+// 建一次（串行）只要 24 s。t.Cleanup 会把索引按 00016 里的原样建回去。
 //
 // 这半分钟买的是这个任务唯一一件真的会静默失效的事。把它挪出 test-db
 // 之前请先想清楚：一条不在闸门里的测试等于没有（Makefile 里那段关于
@@ -367,8 +369,8 @@ func seedHNSWScaleFixture(t *testing.T, ctx context.Context) hnswFixture {
 			return
 		}
 		// 上面某一步 Fatal 了，索引还没建回去 —— 这里补上，
-		// 否则下一个包里那条「索引建没建上」的测试会红在一个与它无关的原因上。
-		if _, err := admin.Exec(context.Background(), recreate); err != nil {
+		// 否则本包后面用到这个索引的测试会红在一个与它无关的原因上。
+		if err := buildHNSWIndex(t, context.Background(), admin, recreate); err != nil {
 			t.Errorf("把 idx_ptv_hnsw 建回去失败: %v", err)
 		}
 	})
@@ -383,10 +385,9 @@ func seedHNSWScaleFixture(t *testing.T, ctx context.Context) hnswFixture {
 	insertTook := time.Since(start)
 
 	start = time.Now()
-	// maintenance_work_mem 与并行度只影响建索引的**速度**，不影响图的参数。
-	exec(`SET maintenance_work_mem = '512MB'`)
-	exec(`SET max_parallel_maintenance_workers = 7`)
-	exec(recreate)
+	if err := buildHNSWIndex(t, ctx, admin, recreate); err != nil {
+		t.Fatalf("%s\n%v", recreate, err)
+	}
 	// ANALYZE 不是可选的。规划器对 `merchant_id = current_merchant()` 的
 	// 选择性估算全靠统计信息，而 current_merchant() 是 stable 函数、
 	// 规划期就会被求值 —— 统计信息没跟上时它估出来的行数与真实值差一两个
@@ -398,8 +399,6 @@ func seedHNSWScaleFixture(t *testing.T, ctx context.Context) hnswFixture {
 	// 取决于一张统计表新不新**，而那是应用完全管不着的东西。
 	exec(`ANALYZE product_text_vectors`)
 	exec(`ANALYZE products`)
-	exec(`RESET maintenance_work_mem`)
-	exec(`RESET max_parallel_maintenance_workers`)
 	indexBack = true
 	buildTook := time.Since(start)
 
@@ -452,6 +451,93 @@ func seedHNSWScaleFixture(t *testing.T, ctx context.Context) hnswFixture {
 		victimStore:      victimStore,
 		victimRegion:     victimRegion,
 	}
+}
+
+// buildHNSWIndex 执行 stmt（建 idx_ptv_hnsw 的那句），尽量并行建。
+//
+// 这里只动建索引的**速度**：三个 SET 都是会话级的建库参数，不进索引定义，
+// 建出来的图与串行建的参数一模一样（m、ef_construction 由 stmt 决定）。
+//
+// # 原来那两行 SET 为什么从来没起作用
+//
+// 这里原先就有 `SET maintenance_work_mem = '512MB'` 与
+// `SET max_parallel_maintenance_workers = 7`，但建索引一直是串行的，24 秒上下。
+// 打开 client_min_messages = debug1 能看到原因：
+//
+//	DEBUG:  building index "..." on table "..." serially
+//
+// 并行度是按**主表**的页数算的（min_parallel_table_scan_size 默认 8MB，
+// 不到就是 0 个 worker）。而 1024 维的向量一条 4 KB，超过 TOAST 阈值，
+// 全部行外存储 —— 主表只剩几百页，于是规划器永远给 0 个 worker。
+// 所以要在同一个会话里把 min_parallel_table_scan_size 设成 0。
+//
+// # 为什么要 /dev/shm 够大，以及不够时怎么办
+//
+// pgvector 并行建 HNSW 时，整张图放在一块**动态共享内存**里，大小就是
+// maintenance_work_mem。Docker 默认给容器的 /dev/shm 只有 64 MB，实测：
+//
+//	ERROR:  could not resize shared memory segment "/PostgreSQL.…" to 533843552 bytes:
+//	        No space left on device
+//
+// 而把 maintenance_work_mem 压到 64 MB 以内更糟：图放不下（3.3 万条要约
+// 160 MB），pgvector 转去一边建一边落盘，实测 60 MB 要 106 秒、32 MB 要 125 秒，
+// 比串行还慢四五倍。所以 CI 与 CONTRIBUTING 起测试库时加了 --shm-size=1g。
+//
+// 没加的库（比如按旧命令起的开发库）照样能跑：共享内存申请失败时这里退回串行
+// 建一次，并在日志里说明白 —— 结果完全一样，只是慢二十秒左右。
+// 不做成失败：/dev/shm 大小只影响快慢，不影响这条测试证明的任何事。
+//
+// 取值（本机实测，同一份 3.4 万条 1024 维数据，建索引耗时）：
+//
+//	串行（原状）                   24～32 s
+//	256MB，3 个 worker             11.2 s
+//	256MB，7 个 worker              9.9 s
+//	512MB，7 个 worker             14.2 s（申请与清零更大的共享内存要时间）
+//
+// 7 是镜像默认 max_worker_processes / max_parallel_workers（都是 8）减去
+// leader 自己；256MB 装得下这张图且有余量。
+func buildHNSWIndex(t *testing.T, ctx context.Context, admin *pgx.Conn, stmt string) error {
+	t.Helper()
+	set := func(sqls ...string) error {
+		for _, q := range sqls {
+			if _, err := admin.Exec(ctx, q); err != nil {
+				return fmt.Errorf("%s: %w", q, err)
+			}
+		}
+		return nil
+	}
+	defer func() {
+		_ = set(`RESET maintenance_work_mem`, `RESET max_parallel_maintenance_workers`,
+			`RESET min_parallel_table_scan_size`)
+	}()
+	if err := set(`SET maintenance_work_mem = '256MB'`,
+		`SET max_parallel_maintenance_workers = 7`,
+		`SET min_parallel_table_scan_size = 0`); err != nil {
+		return err
+	}
+	_, err := admin.Exec(ctx, stmt)
+	if err == nil || !isSharedMemoryExhausted(err) {
+		return err
+	}
+	t.Logf("并行建 HNSW 索引要的共享内存申请不到（%v）。"+
+		"数据库容器的 /dev/shm 太小 —— Docker 默认 64 MB；起库时加 --shm-size=1g "+
+		"（见 CONTRIBUTING）。这次退回串行建，结果一样，只是慢二十秒左右", err)
+	if err := set(`SET max_parallel_maintenance_workers = 0`); err != nil {
+		return err
+	}
+	_, err = admin.Exec(ctx, stmt)
+	return err
+}
+
+// isSharedMemoryExhausted 认 PostgreSQL 申请动态共享内存失败的那一类错。
+// /dev/shm 满时是 ENOSPC，映射成 53100（disk_full）；ENOMEM 映射成 53200。
+// 只认 53 类还不够窄（真的磁盘满也是 53100），所以同时核对消息里的
+// "shared memory segment"。
+func isSharedMemoryExhausted(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) &&
+		strings.HasPrefix(pgErr.Code, "53") &&
+		strings.Contains(pgErr.Message, "shared memory segment")
 }
 
 // deterministicUnitVector 造一条确定的单位向量当查询向量。

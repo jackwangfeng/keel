@@ -9,7 +9,6 @@ import (
 	"math"
 	"math/rand/v2"
 	"os"
-	"os/exec"
 	"testing"
 	"time"
 
@@ -21,6 +20,7 @@ import (
 	"github.com/keel/keel/internal/repository"
 	"github.com/keel/keel/internal/search"
 	"github.com/keel/keel/internal/service"
+	"github.com/keel/keel/internal/testdb"
 )
 
 // 派生数据入库（M3 Task 3）的行为闸门。
@@ -35,34 +35,11 @@ import (
 // **触发点确实捞到了这件商品**（Judged == 1）—— 也就是说它被判定过、
 // 并且判定的结论是不用算。少了这半句，把整条任务注释掉也照绿。
 
-// TestMain 保证库里有 schema。形状与理由逐字同 internal/repository/tenant_test.go：
-// 无条件重建，因为跳过会让可变状态跨轮次累积，而「删掉被守护的那段逻辑、
-// 看它红不红」这套方法的地基就是每一轮从同一个起点开始。
+// TestMain 给本包一个只属于它的库（keel_test_service），在上面从空库跑一遍
+// 迁移。形状与理由同 internal/repository/tenant_test.go：每次运行都是新库，
+// 可变状态不会跨轮次累积。见 internal/testdb。
 func TestMain(m *testing.M) {
-	if err := ensureSchema(); err != nil {
-		fmt.Fprintf(os.Stderr, "准备 schema 失败: %v\n", err)
-		os.Exit(1)
-	}
-	os.Exit(m.Run())
-}
-
-func ensureSchema() error {
-	ctx := context.Background()
-	admin, err := pgx.Connect(ctx, db.AdminDSN())
-	if err != nil {
-		return err
-	}
-	defer admin.Close(ctx)
-	if _, err := admin.Exec(ctx,
-		`DROP SCHEMA public CASCADE; CREATE SCHEMA public`); err != nil {
-		return err
-	}
-	out, err := exec.Command("make", "-C", "../..", "migrate",
-		"GOOSE_DBSTRING="+db.AdminDSN()).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("%w\n%s", err, out)
-	}
-	return nil
+	os.Exit(testdb.Main(m, testdb.Package{Name: "service"}))
 }
 
 // ---------------------------------------------------------------------------
