@@ -11,7 +11,7 @@ import (
 	"github.com/keel/keel/internal/repository/internal/db"
 )
 
-// 商品批量导入的仓储那一面（db/queries/product_imports.sql，迁移 00050）。
+// 商品批量导入的仓储那一面（db/queries/product_imports.sql，迁移 00054）。
 //
 // 建商品、建 SKU 不在这里：它们走 AdminCatalogTx 里已有的 CreateProduct / CreateSKU，
 // 与后台逐个建商品是**同一段代码** —— 导入只是在一个事务里把它们调很多次。

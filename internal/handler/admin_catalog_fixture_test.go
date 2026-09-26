@@ -109,7 +109,7 @@ func newAdminShop(t *testing.T) adminShop {
 			`DELETE FROM stores WHERE merchant_id = $1`,
 			`DELETE FROM regions WHERE merchant_id = $1`,
 			`DELETE FROM uploads WHERE merchant_id = $1`,
-			// product_import_batches（00050）指向 staff 与 merchants：批量导入那一组
+			// product_import_batches（00054）指向 staff 与 merchants：批量导入那一组
 			// 与权限矩阵每确认一次就留一行，要排在 staff 之前删。
 			`DELETE FROM product_import_batches WHERE merchant_id = $1`,
 			`DELETE FROM staff WHERE merchant_id = $1`,

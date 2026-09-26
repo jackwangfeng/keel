@@ -39,11 +39,11 @@ so "which one is running?" never depends on anyone's memory.
 
 ## [Unreleased]
 
-Migrations `00027`–`00038`, `00050` and `00053`.
+Migrations `00027`–`00038`, `00053` and `00054`.
 
 ### Added
 
-- **Bulk product import** (`/admin/product-imports`, migration `00050`). Download an
+- **Bulk product import** (`/admin/product-imports`, migration `00054`). Download an
   xlsx or csv template, upload it for a **dry-run preview** that writes nothing —
   per-row errors (required cells, prices parsed as decimal strings with no
   floating point, duplicate SKU codes within the file and against the shop,
