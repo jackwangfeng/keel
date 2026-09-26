@@ -11,8 +11,9 @@
 #   发布 verify    Post setup-go  386 s   （结尾：把依赖缓存上传回 GitHub）
 #
 # 两个 405 秒一模一样，像是下载超时之后才落到别的路上。它慢在两件事：
-#   1. 它不认本机 /usr/local/go 里已经装好的 Go，要在自己的工具缓存里找，
-#      找不到就从 Go 的官方源下载一份 —— 那个源在国内很慢。
+#   1. 它要在自己的工具缓存里找指定版本，找不到就从 Go 的官方源下载一份
+#      —— 那个源在国内很慢。（lenserver 的 /usr/local/go 是 1.25.6，不够用；
+#      1.26.0 就在工具缓存里，是以前 setup-go 下载的。）
 #   2. 它默认开着依赖缓存：开头从 GitHub 的缓存服务下载一个几百 MB 的包，
 #      结尾再上传回去。**在自建 runner 上这纯属负收益**：同一台机器，
 #      GOMODCACHE 本来就一直留在盘上，缺的模块经 runner .env 里的本机代理拉。
@@ -21,8 +22,9 @@
 #
 # ## 这个脚本做什么
 #
-#   · 本机没有 go → 失败，并说清要在 runner 上装什么版本。
-#   · 本机 go 低于 go.mod（以及 tools/go.mod）的 go 指令 → 失败。**不自动下载**：
+#   · 在本机已有的几份 Go 里挑第一个版本够 go.mod（以及 tools/go.mod）的，
+#     放到 PATH 最前面（候选见下方正文）。
+#   · 一份够的都没有 → 失败，列出找到的版本，说清要装什么。**不自动下载**：
 #     GOTOOLCHAIN=local 写进后续所有步骤的环境，Go 不会因为版本不够而悄悄去拉
 #     一个新工具链 —— 那正是上面那 405 秒的来路之一，而且失败时报错不指向真因。
 #   · 版本从 go.mod 读，不写字面量：tools/ 里钉住的 sqlc 与 goose 都声明 go 1.26，
@@ -32,35 +34,51 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-# runner 以系统服务身份运行，PATH 取自 actions-runner/.path，是装机时那份
-# 系统默认值，不含 /usr/local/go/bin（登录 shell 的 profile 不会被读）。
-# 第一版只看 command -v go，于是在 lenserver 上三个 job 全报"没有 go"。
-# 在官方安装位置找到就用它，并写进 $GITHUB_PATH 让后续步骤也看得见。
-if ! command -v go >/dev/null 2>&1 && [ -x /usr/local/go/bin/go ]; then
-    export PATH="/usr/local/go/bin:$PATH"
-    if [ -n "${GITHUB_PATH:-}" ]; then echo /usr/local/go/bin >> "$GITHUB_PATH"; fi
-fi
+# 要求的版本：go.mod 与 tools/go.mod 里较高的那个。
+want=$(for mod in go.mod tools/go.mod; do awk '/^go /{print $2; exit}' "$mod"; done | sort -V | tail -1)
 
-if ! command -v go >/dev/null 2>&1; then
-    echo "::error::runner 上没有 go。CI 用本机工具链（见本脚本文件头），请在 runner 上装 Go $(awk '/^go /{print $2}' go.mod) 或更高版本。"
-    exit 1
-fi
+# 候选工具链，按顺序挑第一个版本够的：
+#   · PATH 里的 go
+#   · /usr/local/go —— runner 以系统服务身份运行，PATH 取自 actions-runner/.path，
+#     不含它（登录 shell 的 profile 不会被读）
+#   · runner 的工具缓存（以前 setup-go 下载的就放在这）
+#   · 模块缓存里 Go 自动切换时下载过的 golang.org/toolchain
+#
+# 每个候选都用 GOTOOLCHAIN=local 问版本。不加的话，go 在仓库目录里会按 go.mod
+# 自动切到模块缓存里的新工具链，报的是切换后的版本：lenserver 上
+# /usr/local/go 实际是 1.25.6，却自称 1.26.0。第一版脚本就这样放行了，
+# 后续步骤一设 GOTOOLCHAIN=local 就报 "go.mod requires go >= 1.26.0
+# (running go 1.25.6)"。
+candidates=()
+if command -v go >/dev/null 2>&1; then candidates+=("$(command -v go)"); fi
+candidates+=(/usr/local/go/bin/go)
+for d in "${RUNNER_TOOL_CACHE:-/nonexistent}"/go/*/x64/bin/go; do candidates+=("$d"); done
+modcache=$(GOTOOLCHAIN=local go env GOMODCACHE 2>/dev/null || echo "$HOME/go/pkg/mod")
+for d in "$modcache"/golang.org/toolchain@*/bin/go; do candidates+=("$d"); done
 
-have=$(go env GOVERSION | sed 's/^go//')
-for mod in go.mod tools/go.mod; do
-    want=$(awk '/^go /{print $2; exit}' "$mod")
-    lowest=$(printf '%s\n%s\n' "$want" "$have" | sort -V | head -1)
-    if [ "$lowest" != "$want" ]; then
-        echo "::error::runner 上的 Go 是 $have，而 $mod 要求 $want。请升级 runner 上的 Go —— 这里不会自动下载（GOTOOLCHAIN=local）。"
-        exit 1
+chosen="" have="" seen=""
+for g in "${candidates[@]}"; do
+    [ -x "$g" ] || continue
+    v=$(GOTOOLCHAIN=local "$g" env GOVERSION 2>/dev/null | sed 's/^go//') || continue
+    [ -n "$v" ] || continue
+    seen="$seen $v($g)"
+    if [ "$(printf '%s\n%s\n' "$want" "$v" | sort -V | head -1)" = "$want" ]; then
+        chosen=$g have=$v
+        break
     fi
 done
 
-# 让后续所有步骤都不自动下载工具链。不在 Actions 里跑（本地手动执行）时没有这个文件，跳过。
-if [ -n "${GITHUB_ENV:-}" ]; then
-    echo "GOTOOLCHAIN=local" >> "$GITHUB_ENV"
+if [ -z "$chosen" ]; then
+    echo "::error::runner 上找不到 Go $want 或更高版本（找到的：${seen:- 无}）。请在 runner 上装一份 —— 这里不会自动下载（GOTOOLCHAIN=local）。"
+    exit 1
 fi
 
-echo "Go $have（本机 $(command -v go)），满足 go.mod $(awk '/^go /{print $2; exit}' go.mod)"
+bindir=$(dirname "$chosen")
+export PATH="$bindir:$PATH" GOTOOLCHAIN=local
+# 让后续所有步骤用同一份工具链、且不自动下载。本地手动执行时没有这两个文件，跳过。
+if [ -n "${GITHUB_PATH:-}" ]; then echo "$bindir" >> "$GITHUB_PATH"; fi
+if [ -n "${GITHUB_ENV:-}" ]; then echo "GOTOOLCHAIN=local" >> "$GITHUB_ENV"; fi
+
+echo "Go $have（$chosen），满足 go.mod 要求的 $want"
 echo "GOMODCACHE=$(go env GOMODCACHE)"
 echo "GOPROXY=$(go env GOPROXY)"
