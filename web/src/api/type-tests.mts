@@ -33,6 +33,7 @@ import type {
     ProductListQuery,
     ProductSummary,
     ResponseBodyOf,
+    StoreContext,
 } from "./client.mts";
 
 // ---------------------------------------------------------------------------
@@ -55,20 +56,35 @@ type RequiredKeys<T> = { [K in keyof T]-?: object extends Pick<T, K> ? never : K
 // 正面断言：推导出来的确实是契约里那个形状，不是 any、不是 never
 // ---------------------------------------------------------------------------
 
-// GET /products 的响应体 = PageMeta 的三个字段 + items。
+// GET /products 的响应体 = PageMeta 的三个字段 + items + store 上下文。
 // 这条如果退化成 any 或 unknown，Equal 立刻为 false。
-type _ProductListPageShape = Expect<Equal<ProductListPage, PageMeta & { items: ProductSummary[] }>>;
+//
+// `store` 是多门店那一轮加的，**必返**：按门店分之后「这家店卖哪些、
+// 各卖多少钱、有没有货」三件都随门店变，客户端拿到的 `in_stock` 与价格
+// 不知道属于谁就没有意义（数据模型 §4、契约里 StoreContext 的描述）。
+// 把它写进这条编译期断言，是为了让「哪天有人把它从响应里拿掉」当场红 ——
+// 少了它不会有任何运行时错误，只会有一批算错的价格。
+type _ProductListPageShape = Expect<
+    Equal<ProductListPage, PageMeta & { items: ProductSummary[]; store: StoreContext }>
+>;
 
 // 分页元信息原样透出，SDK 没有在中间重新包装。
 type _PageMetaShape = Expect<Equal<PageMeta, { page: number; page_size: number; total: number }>>;
 
-// query 参数是契约里那六个，全部可选。
+// query 参数是契约里那八个，全部可选。
+//
+// `store_id` 与 `in_stock_only` 是多门店那一轮加的，两个都**刻意没有 default**：
+// 查询参数带 default 会被静默代入，而这两个改变的正是「返回哪些行」
+// （`scripts/check_openapi.py` 机械检查这一条）。
+// `store_id` 不传不是「全租户并集」，是走「默认门店 → 不在服务范围」那条回落链。
 type _ProductListQueryShape = Expect<
     Equal<
         ProductListQuery,
         {
             page?: number;
             page_size?: number;
+            store_id?: number;
+            in_stock_only?: boolean;
             category_id?: number;
             sort?: "default" | "price_asc" | "price_desc" | "sales_desc" | "newest";
             min_price_cents?: number;

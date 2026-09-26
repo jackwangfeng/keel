@@ -160,6 +160,17 @@ var routes = []route{
 			"sort":            "排序策略，同上",
 			"min_price_cents": "价格区间下界，同上",
 			"max_price_cents": "价格区间上界，同上",
+			"store_id": "按哪家门店算「卖不卖 / 多少钱 / 有没有货」。" + storeNotYetWhy +
+				"**在它落地之前这条接口返回的是租户级目录**，而契约说的是门店级 —— " +
+				"这笔账挂在这里，正是为了让「静默忽略」变成一行看得见的欠条。",
+			"in_stock_only": "只看当前门店有货的。默认值本轮与 SearchFilters 对齐成 false" +
+				"（M3 独立验收 I10），但两边都还没有执行者。",
+		},
+		NotYetImplementedResponse: map[string]string{
+			"store": "本次结果按哪家门店算的（StoreContext）。" + storeNotYetWhy +
+				"**刻意不回一个假的**：回 match_type=fallback_default 而实际上" +
+				"根本没有门店表，等于告诉客户端「已经按默认店算过了」——" +
+				"而那是一句在门店落地之前都不会被纠正的假话。",
 		},
 	},
 	{
@@ -221,8 +232,11 @@ var routes = []route{
 		ContractMethod: "get",
 		HTTPMethod:     http.MethodGet,
 		HandlerFile:    "product_detail.go",
-		NoQueryParams: "详情只吃路径参数 product_id；契约里这条接口一个 query 参数都没有" +
-			"（列表那些筛选条件属于 /products，不属于这里）",
+		NotYetImplemented: map[string]string{
+			"store_id": "按哪家门店算这件商品的价格与库存。" + storeNotYetWhy +
+				"**这条接口原先登记的是 NoQueryParams（「详情只吃路径参数」）**，" +
+				"本轮那句话不再成立：门店决定了 SKU 的价与水位，它必须能从外面传进来。",
+		},
 		NotYetImplementedResponse: map[string]string{
 			"image_url": "商品主图。**缺的东西本轮（M4 任务 1）变了，理由要跟着改**：" +
 				"原先写的是「products 表上没有图片列，uploads 与商品没有任何关联」，" +
@@ -248,6 +262,9 @@ var routes = []route{
 		HandlerFile:    "order_detail.go",
 		NoQueryParams:  "详情只吃路径参数 order_no",
 		NotYetImplementedResponse: map[string]string{
+			"store_id":  "履约门店。" + storeNotYetWhy,
+			"region_id": "下单时那家门店所属大区。" + storeNotYetWhy,
+			"store":     "门店与大区的展示快照（OrderStoreSnapshot）。" + storeNotYetWhy,
 			"refunds": "退款域的三张表（refunds / refund_items / refund_logs）本轮没有建，" +
 				"所以这里不是「这一单没有退款」，而是**没查过**。回空数组会让详情页显示" +
 				"「无售后记录」—— 一句在退款上线之前都不会被纠正的假话。",
@@ -269,6 +286,11 @@ var routes = []route{
 		NoQueryParams: "检索的参数全在请求体里（query / filters / size / strategy / explain）；" +
 			"契约里这条接口一个 query 参数都没有",
 		NotYetImplementedResponse: map[string]string{
+			"store": "本次检索按哪家门店算的（StoreContext），与 GET /products 的同名字段同义。" +
+				storeNotYetWhy +
+				"**这一条在契约里是 required 而 handler 不填**，是一笔明账：" +
+				"契约里的形状是对的（检索结果确实取决于门店），实现还没到。" +
+				"回一个假的 match_type 会让客户端以为已经按门店筛过了。",
 			"trace_id": "检索日志 search_logs 那张表本轮没有建，POST /search/events 也没有实现。" +
 				"trace_id 在契约里唯一的用处就是把一次检索与它后续的点击 / 加购 / 下单串起来" +
 				"（那条接口的描述原话），而串到的那一头不存在。回一个谁也存不进去的 id " +
@@ -543,6 +565,10 @@ var nonContractRoutes = map[string]string{
 // 「设计阶段漏了一整块」——同一份契约里，商家能处理订单却没法上架商品，
 // 这种缺口只有机械检查发现得了。范围写小一点、锁得住一点，好过写大一点、
 // 挂一百行没人读的账。
+// storeNotYetWhy 是多门店那一整块欠账的共同理由，抽出来避免十几处各写一遍
+// （各写一遍的结果是它们会各自漂）。
+const storeNotYetWhy = "多门店那一轮（契约先行）新加的。门店、大区、两层可见性排除、三层价格覆盖、按门店分的库存，一张表都还没建，`stores` 更要 PostGIS —— 现在的镜像 pgvector/pgvector:pg16 里没有它（数据模型 §4 有换镜像的方案与实测）。顺序是 换镜像 → 迁移 → repository → handler。"
+
 type pendingOp struct {
 	ContractPath   string // 契约里的路径
 	ContractMethod string // 契约里的方法，小写
@@ -573,6 +599,36 @@ var notYetRouted = []pendingOp{
 		"后台鉴权也已落地，缺的是 handler 与 §5 那三条发货规则。"},
 	{"/admin/refunds/{refund_no}/audit", "post", "退款审核。退款域的表已落地（§11），" +
 		"后台鉴权也已落地，缺的是 handler 与退款状态机那几条边。"},
+
+	// —— 多门店 + 电子围栏 + 大区，本轮补进契约的 21 条（其中 2 条在 /admin/ 之外，
+	// 不归这张表管：GET /stores 与 GET /stores/resolve）。
+	//
+	// 它们欠的东西比上面那 16 条又多一样：**数据库扩展**。围栏是
+	// GEOGRAPHY(POLYGON, 4326)，要 PostGIS，而现在的镜像 pgvector/pgvector:pg16
+	// 里没有它（数据模型 §4 有换镜像的方案与实测）。所以顺序是
+	// 换镜像 → 迁移 → repository → handler，比商品域那 16 条多一步，
+	// 而且第一步会动 compose 与 CI。
+	{"/admin/regions", "get", "大区列表。大区是门店的分组，没有自己的几何（数据模型 §4）。"},
+	{"/admin/regions", "post", "建大区。建店的前置——stores.region_id 是 NOT NULL。"},
+	{"/admin/regions/{region_id}", "patch", "改大区。"},
+	{"/admin/regions/{region_id}", "delete", "大区软删，名下还有门店时拒绝。"},
+	{"/admin/regions/{region_id}/products", "get", "大区维度的可见性与生效价，读 sku_prices_by_store 视图。"},
+	{"/admin/regions/{region_id}/products/{product_id}/listing", "put", "大区维度上下架。写/删 region_product_overrides 一行。"},
+	{"/admin/regions/{region_id}/skus/{sku_id}/price", "put", "大区价 upsert。"},
+	{"/admin/regions/{region_id}/skus/{sku_id}/price", "delete", "撤销大区价，回到基准价。本来就没有那一行时也返回 204。"},
+	{"/admin/stores", "get", "门店列表。响应的 has_default 是「没配默认店」那条代价的出口。"},
+	{"/admin/stores", "post", "建店。围栏不在这里传，先建店后画围栏。"},
+	{"/admin/stores/{store_id}", "get", "门店详情（含围栏）。"},
+	{"/admin/stores/{store_id}", "patch", "改门店。改不了围栏与 is_default，那两样各有自己的端点。"},
+	{"/admin/stores/{store_id}", "delete", "门店软删。inventories / orders / inventory_logs 三张表对它有外键，硬删不掉。"},
+	{"/admin/stores/{store_id}/fence", "put", "配围栏。落库前要过 ST_IsValid，自交多边形在 ST_Intersects 下行为未定义。"},
+	{"/admin/stores/{store_id}/default", "put", "设默认店。必须在同一事务里先清旧再置新，否则撞 uk_stores_default。"},
+	{"/admin/stores/{store_id}/products", "get", "门店维度的可见性与生效价。"},
+	{"/admin/stores/{store_id}/products/{product_id}/listing", "put", "门店维度上下架。大区排掉的这里捞不回来（effective_listed）。"},
+	{"/admin/stores/{store_id}/skus/{sku_id}/price", "put", "门店价 upsert，三层定价的最内层。"},
+	{"/admin/stores/{store_id}/skus/{sku_id}/price", "delete", "撤销门店价，回到大区价。"},
+	{"/admin/stores/{store_id}/inventories", "get", "这家店的库存清单。缺行要显示成 0，不能漏掉。"},
+	{"/admin/stores/{store_id}/skus/{sku_id}/inventory", "put", "门店维度的库存比较并设置。CAS 条件里不能漏 store_id——漏了会一次改掉该 SKU 在所有门店的行。"},
 }
 
 // contractHTTPMethods 是 OpenAPI path item 里哪些键算一个操作。
@@ -791,9 +847,23 @@ func TestContractQueryParamsAreHandledOrListed(t *testing.T) {
 				t.Fatalf("从契约里一个 query 参数都没解析出来 —— %s %s 还在吗？",
 					r.ContractMethod, r.ContractPath)
 			}
-			if len(handled) == 0 {
-				t.Fatalf("从 %s 里一个 c.Query 调用都没解析出来 —— 这条测试没在检查任何东西",
-					r.HandlerFile)
+			// 这一条本轮放宽了一次，理由要写清楚，因为放宽一个阳性对照是个
+			// 该被质疑的动作。
+			//
+			// 原先它是无条件的：handler 一个 c.Query 都没读就 Fatal。
+			// 那默认了「契约声明了 query 参数 ⇒ handler 至少实现了一个」，
+			// 而多门店这一轮出现了第三种状态：**契约声明了，但全部挂在
+			// NotYetImplemented 上**（GET /products/{product_id} 只有一个
+			// store_id，而门店表还没建）。此时 handled 合法地为空集。
+			//
+			// 放宽之后还剩什么在守：handler 文件改名或改坏时，
+			// queryParamsReadByHandler 里的 parser.ParseFile 会先 t.Fatal ——
+			// 「解析失败让整条测试恒绿」那个真正要防的失败模式由它挡住，
+			// 不靠这一条。所以这里只在「本该有人实现」时才要求非空。
+			if len(handled) == 0 && len(declared) > len(r.NotYetImplemented) {
+				t.Fatalf("从 %s 里一个 c.Query 调用都没解析出来，而契约声明了 %d 个参数、"+
+					"只有 %d 个挂了账 —— 这条测试没在检查任何东西",
+					r.HandlerFile, len(declared), len(r.NotYetImplemented))
 			}
 			t.Logf("契约声明 %v；handler 读取 %v", sorted(declared), sortedBool(handled))
 		})
