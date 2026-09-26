@@ -128,18 +128,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
-        with:
-          # 版本从 go.mod 读，不写字面量。下限 1.26 不是随手挑的：tools/ 里钉住的
-          # sqlc 与 goose 都声明 go 1.26，下限由它们传染而来（docker/Dockerfile
-          # 与 CONTRIBUTING 都记了这件事）。写死一个数字，将来 go.mod 提上去而这里
-          # 忘了跟，报出来的会是 go mod download 的一句和真因无关的错。
-          go-version-file: go.mod
-          # 两个模块各有自己的 go.sum。只给根那份的话，tools/ 的依赖树（sqlc 拖进来
-          # 270+ 个模块）每次都要重下，而缓存键还会在 tools/go.sum 变了之后不失效。
-          cache-dependency-path: |
-            go.sum
-            tools/go.sum
+      # Go 用 runner 本机装好的那一份，不用 actions/setup-go：在这台国内的自建 runner 上，
+      # setup-go 每个 job 要吃掉 6～7 分钟（下载工具链 + 上传下载 GitHub 依赖缓存），
+      # 比整个全量测试还慢。实测数据与理由在脚本文件头。
+      - name: Go 工具链（runner 本机）
+        run: scripts/ci_go_toolchain.sh
 
       - uses: actions/setup-node@v4
         with:
@@ -259,12 +252,11 @@ jobs:
           docker logs keelci-pg
           exit 1
 
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: |
-            go.sum
-            tools/go.sum
+      # Go 用 runner 本机装好的那一份，不用 actions/setup-go：在这台国内的自建 runner 上，
+      # setup-go 每个 job 要吃掉 6～7 分钟（下载工具链 + 上传下载 GitHub 依赖缓存），
+      # 比整个全量测试还慢。实测数据与理由在脚本文件头。
+      - name: Go 工具链（runner 本机）
+        run: scripts/ci_go_toolchain.sh
 
       # libdtmrs.so —— 主模块经 cgo 嵌入 dtmrs，没有它 `go build ./...` 停在
       # 链接器的一句 `cannot find -ldtmrs` 上，那句话不指向任何该做的事。

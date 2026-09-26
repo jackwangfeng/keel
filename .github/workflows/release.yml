@@ -79,9 +79,11 @@ jobs:
           fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
+      # Go 用 runner 本机装好的那一份，不用 actions/setup-go：在这台国内的自建 runner 上，
+      # setup-go 每个 job 要吃掉 6～7 分钟（下载工具链 + 上传下载 GitHub 依赖缓存），
+      # 比整个全量测试还慢。实测数据与理由在脚本文件头。
+      - name: Go 工具链（runner 本机）
+        run: scripts/ci_go_toolchain.sh
       - uses: actions/setup-node@v4
         with:
           # 与 ci.yml 的 gates 同一个版本：两处不一致时，「CI 绿、发布红」是最难查的那种。
