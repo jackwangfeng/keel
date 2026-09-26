@@ -8,6 +8,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/textproto"
 	"strings"
 	"testing"
 
@@ -43,7 +44,21 @@ func importReq(t *testing.T, host, token, path string, file []byte, categories, 
 	if _, err := part.Write(file); err != nil {
 		t.Fatal(err)
 	}
-	if categories != "" {
+	switch {
+	case strings.HasPrefix(categories, "json-part:"):
+		// 照契约的 encoding（contentType: application/json）发成一个带文件名的 part ——
+		// 浏览器里 FormData.append(name, Blob) 就是这个形状。
+		h := make(textproto.MIMEHeader)
+		h.Set("Content-Disposition", `form-data; name="categories"; filename="blob"`)
+		h.Set("Content-Type", "application/json")
+		pw, err := mw.CreatePart(h)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pw.Write([]byte(strings.TrimPrefix(categories, "json-part:"))); err != nil {
+			t.Fatal(err)
+		}
+	case categories != "":
 		if err := mw.WriteField("categories", categories); err != nil {
 			t.Fatal(err)
 		}
@@ -284,8 +299,10 @@ func TestImportCommitCreatesDraftsAndIsIdempotentTwice(t *testing.T) {
 	// 界面的做法：推荐的原样带回来，needs_review 的那件人工选「女装」以外的一个。
 	choices := choicesJSON(t, map[int]int64{2: *findProduct(t, pv, 2).Category.CategoryId, 6: fx.coffee})
 
+	// categories 按契约的 encoding 发成 application/json 的 part（后台界面就是这么发的）；
+	// 下面几次重放 / 再确认用普通字段，两种形状都要认。
 	key := freshIdemKey()
-	w := importReq(t, sh.Host, sh.Token, "/api/v1/admin/product-imports", fx.file, choices, key)
+	w := importReq(t, sh.Host, sh.Token, "/api/v1/admin/product-imports", fx.file, "json-part:"+choices, key)
 	var res api.ProductImportResult
 	decodeInto(t, w, http.StatusCreated, "确认导入", &res)
 	if res.AlreadyImported || res.CreatedProducts != 4 || res.CreatedSkus != 5 || res.FailedRows != 1 || res.TotalRows != 6 {

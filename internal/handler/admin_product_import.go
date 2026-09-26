@@ -132,8 +132,12 @@ func (h *ProductImportHandler) Commit(c *gin.Context) {
 	if !ok {
 		return
 	}
+	raw, ok := categoriesField(c)
+	if !ok {
+		return
+	}
 	var choices []api.ProductImportCategoryChoice
-	if raw := strings.TrimSpace(c.Request.FormValue("categories")); raw != "" {
+	if raw != "" {
 		if err := json.Unmarshal([]byte(raw), &choices); err != nil {
 			problem.Write(c, http.StatusUnprocessableEntity, problem.TypeInvalidRequest,
 				"categories 不是合法的 JSON 数组（元素形如 {\"first_row\":2,\"category_id\":7}）")
@@ -151,6 +155,42 @@ func (h *ProductImportHandler) Commit(c *gin.Context) {
 	}
 	markReplayed(c, replayed)
 	c.JSON(http.StatusCreated, apiImportResult(res))
+}
+
+// categoriesField 取 multipart 里的 categories 那一项。
+//
+// **两种形状都要认**：契约给它写的是 `encoding: contentType: application/json`，
+// 照契约生成的客户端（和浏览器里 `form.append("categories", new Blob([...], {type:
+// "application/json"}))`）会把它发成一个**带文件名的 part**，而 net/http 把带文件名的
+// part 放进 MultipartForm.File、不放进 FormValue。只读 FormValue 的话，这些客户端
+// 选的类目会被静默丢掉 —— 后台界面上实测过：推荐的类目全部变成「没有选类目」，
+// 而请求是 201。curl 的 `-F categories='[...]'` 则是普通字段。
+func categoriesField(c *gin.Context) (string, bool) {
+	if v := strings.TrimSpace(c.Request.FormValue("categories")); v != "" {
+		return v, true
+	}
+	if c.Request.MultipartForm == nil {
+		return "", true
+	}
+	files := c.Request.MultipartForm.File["categories"]
+	if len(files) == 0 {
+		return "", true
+	}
+	f, err := files[0].Open()
+	if err != nil {
+		_ = c.Error(err)
+		problem.Write(c, http.StatusInternalServerError, problem.TypeInternal, "读取 categories 失败")
+		return "", false
+	}
+	defer func() { _ = f.Close() }()
+	// 2000 件商品 × 每条几十字节，1 MB 绰绰有余；再大就是请求本身有问题。
+	b, err := io.ReadAll(io.LimitReader(f, 1<<20))
+	if err != nil {
+		_ = c.Error(err)
+		problem.Write(c, http.StatusInternalServerError, problem.TypeInternal, "读取 categories 失败")
+		return "", false
+	}
+	return strings.TrimSpace(string(b)), true
 }
 
 // ---------------------------------------------------------------------------
