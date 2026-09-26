@@ -85,7 +85,7 @@ becomes `0.1.0` when the remaining M4 work is in.
   does not re-embed anything and renaming a category re-embeds exactly the
   products whose text actually contains it.
 
-### Added — merchant self-service (M4, in progress)
+### Added — merchant self-service and chain stores (M4)
 
 - **Back-office identity**: email-link sessions, platform-level and
   merchant-level scopes, and a `staff` table whose nullable `merchant_id` is
@@ -207,6 +207,49 @@ becomes `0.1.0` when the remaining M4 work is in.
   field. The admin console has a coupon page (templates, a scope picker,
   claim toggle, grant dialog, issuance and redemption counts); for now only
   merchant admins and operators may use it.
+
+- **Tiered back-office permissions.** Two new roles on top of merchant admin
+  and operator: **region manager** and **store manager**, each scoped to one or
+  more regions or stores (`staff_scopes`, migration 00025). Region managers run
+  their regions' prices, listings and stores; store managers run their own
+  stores' prices, listings and inventory; product master data and base prices
+  stay merchant-wide. Authorization lives in one place
+  (`internal/service/authz.go`) and every admin write calls exactly one check.
+  The executor is a matrix test — every `/admin/` route × every role × in and out
+  of scope, 408 cells — that also fails the build when a new admin route is
+  registered without a row in it. Nobody can change their own role or scope.
+- **Buyer-side categories**: `GET /categories` returns the enabled category tree
+  (a disabled category hides its whole subtree), and `GET /products?category_id=`
+  filters by a category **including its descendants**. An unknown category is an
+  empty list, not every product.
+- **Buyer app** (`app/`, uni-app x): resolves the serving store once from the
+  device location (WGS-84; denied location falls back to the default store) and
+  uses the same store for browsing, search and checkout, so the price in a list
+  is the price charged; category chips on the home page; a coupon centre, *My
+  coupons*, coupon selection at checkout, and the coupon on the order page.
+  Verified on an Android device; iOS is compiled but was not run on a device for
+  this release.
+
+### Fixed
+
+- **A deployment could lock itself out of the back office for good.** The
+  one-time bootstrap token is printed once and valid for 24 hours; if it expired
+  unused, the unredeemed placeholder admin still counted as "an admin exists", so
+  no new token was ever issued — and e-mail login answers 501 without SMTP. A
+  restart now re-issues a token for the same placeholder when nobody has ever
+  redeemed one and none is still live.
+- **Order detail dropped the coupon.** `GET /orders/{order_no}` omitted
+  `user_coupon_id` although the contract declares it. The test meant to catch
+  this compared three hand-picked fields; it now compares every field of `Order`
+  by reflection.
+- **An invalid geofence reported its reason in the wrong field.** PostGIS's
+  `ST_IsValidReason` was sent as the problem `title`; it is now in `detail`, as
+  the contract says, and `title` is fixed per problem type.
+- **The database image was built on an end-of-life OS.** `keel-postgres:16` was
+  based on Debian 11, whose support ended in June 2026, and its older glibc made
+  PostgreSQL report a collation mismatch on volumes created by the previous image
+  — the warning that precedes silently wrong text-index lookups. It is now built
+  on `postgres:16-bookworm` with PostGIS and pgvector from PGDG.
 
 ### Changed
 
