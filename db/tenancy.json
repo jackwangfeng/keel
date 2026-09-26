@@ -162,8 +162,7 @@
       "规矩二的**对偶**豁免：列名形如 <x>_id、能解析到一张同名父表、却没有任何外键引用它。",
       "键是 表名.列名。每一条都要说清为什么这里不该有外键 —— 默认答案是「补上外键」。"
     ],
-    "search_logs.user_id": "搜索日志要能记录未登录访客（该列可空），且日志表不该因为用户注销而卡住删除顺序（数据模型 §8）。",
-    "idempotency_keys.user_id": "纯基础设施表，随 expire_at 过期即删。挂外键会让清理任务和用户注销互相牵制（数据模型 §12）。"
+    "search_logs.user_id": "搜索日志要能记录未登录访客（该列可空），且日志表不该因为用户注销而卡住删除顺序（数据模型 §8）。"
   },
   "fk_single_column_ok": {
     "_readme": [
@@ -206,7 +205,7 @@
     "user_addresses(user_id)": "③ 同上，「每个用户至多一个默认地址」的部分唯一索引。",
     "cart_items(cart_id,sku_id)": "③ 首列 cart_id 已蕴含租户（数据模型 §10 明写）。",
     "refund_items(refund_id,order_item_id)": "③ 首列 refund_id 已蕴含租户。",
-    "idempotency_keys(scope,user_id,idem_key)": "③ user_id 已蕴含租户；幂等键由客户端生成，scope 打头是为了让抢占插入是一次点查（数据模型 §12 明写不加 merchant_id 的理由）。",
+    "idempotency_keys(scope,subject_kind,subject_id,idem_key)": "③ subject_id 已蕴含租户（买家是 users.id、后台操作员是 staff.id，两张表都自带 merchant_id）；幂等键由客户端生成，scope 打头是为了让抢占插入是一次点查（数据模型 §12 明写不加 merchant_id 的理由）。subject_kind 紧跟 scope 是 00023 加的：它把买家与后台切成两个键空间，否则 staff.id 与 users.id 来自同一种自增序列，7 号员工与 7 号买家会落在同一行上。",
     "product_text_vectors(product_id)": "③ 主键就是 product_id，一个商品一行；product_id 已蕴含租户（products 自带 merchant_id）。",
     "product_image_vectors(product_id)": "③ 同上。",
     "product_understanding(product_id)": "③ 同上。",
