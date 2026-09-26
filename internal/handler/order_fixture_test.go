@@ -134,6 +134,29 @@ func availableOf(t *testing.T, skuID int64) int32 {
 	return qty
 }
 
+// storeIDOf 取这家商家那家默认门店的 id（种子里 db/seed/dev.sql 播的那一家）。
+//
+// 不写死 id，理由同 skuIDOf：种子里的 id 是自增的，跟加载顺序走。
+//
+// 查不到直接 Fatal，**不回落到「随便一家店」**：契约里 store_id 是必填的，
+// 而服务端那一侧刻意没有写任何回落分支（见 handler/order.go 上那段注释）。
+// 夹具要是自己回落了，「漏传 store_id 会怎样」这件事就永远测不到，
+// 而线上那一笔会按错误的门店扣减、按错误的门店计价，两边都是合法数据。
+func storeIDOf(t *testing.T, merchantCode string) int64 {
+	t.Helper()
+	var id int64
+	err := admin(t).QueryRow(context.Background(), `
+		SELECT st.id FROM stores st
+		  JOIN merchants m ON m.id = st.merchant_id
+		 WHERE m.code = $1 AND st.is_default AND st.deleted_at IS NULL`,
+		merchantCode).Scan(&id)
+	if err != nil {
+		t.Fatalf("取 %s 的默认门店失败: %v —— db/seed/dev.sql 里那段门店种子还在吗？",
+			merchantCode, err)
+	}
+	return id
+}
+
 // addressIDOf 按商家 code + 收件人取地址 id（种子里播的那两条）。
 func addressIDOf(t *testing.T, merchantCode, receiver string) int64 {
 	t.Helper()
@@ -238,9 +261,14 @@ func ordersWithNo(t *testing.T, orderNo string) int {
 }
 
 // orderBody 拼一个 OrderCreateRequest。
-func orderBody(addressID int64, skuID int64, qty int, extra string) string {
-	body := fmt.Sprintf(`{"address_id":%d,"items":[{"sku_id":%d,"quantity":%d}]`,
-		addressID, skuID, qty)
+//
+// store_id 由 merchantCode 现查（00020 起契约把它定成**必填**），而不是留给
+// 每个调用点自己拼：漏掉它的症状是一个 422，而那个 422 与「请求体别处写错了」
+// 长得一模一样 —— 二十来个调用点里只要有一个漏了，排查的人会先去翻定价。
+func orderBody(t *testing.T, merchantCode string, addressID, skuID int64, qty int, extra string) string {
+	t.Helper()
+	body := fmt.Sprintf(`{"address_id":%d,"store_id":%d,"items":[{"sku_id":%d,"quantity":%d}]`,
+		addressID, storeIDOf(t, merchantCode), skuID, qty)
 	if extra != "" {
 		body += "," + extra
 	}

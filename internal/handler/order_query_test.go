@@ -129,7 +129,7 @@ func placeOrderFor(t *testing.T, bearer, addressName, tag string) string {
 	t.Helper()
 	addr := addressIDOf(t, "shop-a", addressName)
 	sku, _ := anySKUWithStock(t, "shop-a", 2)
-	w := createOrder(t, hostA, orderBody(addr, sku, 1, ""), bearer, tag+"-"+uniqueKey())
+	w := createOrder(t, hostA, orderBody(t, "shop-a", addr, sku, 1, ""), bearer, tag+"-"+uniqueKey())
 	if w.Code != http.StatusCreated {
 		t.Fatalf("下单失败：%d %s", w.Code, w.Body.String())
 	}
@@ -349,10 +349,20 @@ func TestDraftOrdersNeverShowUp(t *testing.T) {
 
 	ctx := context.Background()
 	conn := admin(t)
+	// store_id / region_id / store_snapshot 三列都是 NOT NULL（00020），
+	// 所以这一行靶子也得挂在一家真实的门店上 —— 取种子里那家默认店。
+	// 快照按 00020 回填段同一个形状拼：只放展示字段，不放 id。
 	if _, err := conn.Exec(ctx, `
 		INSERT INTO orders (merchant_id, order_no, user_id, status, goods_amount_cents,
-		                    payable_cents, receiver_snapshot, expire_at)
-		VALUES ($1, $2, $3, 0, 1990, 1990, '{}'::jsonb, now() + interval '30 minutes')`,
+		                    payable_cents, receiver_snapshot, expire_at,
+		                    store_id, region_id, store_snapshot)
+		SELECT $1, $2, $3, 0, 1990, 1990, '{}'::jsonb, now() + interval '30 minutes',
+		       st.id, st.region_id,
+		       jsonb_build_object('store_name', st.name, 'region_name', r.name,
+		                          'address', st.address, 'phone', st.phone)
+		  FROM stores  st
+		  JOIN regions r ON r.id = st.region_id
+		 WHERE st.merchant_id = $1 AND st.is_default AND st.deleted_at IS NULL`,
 		mid, no, uid); err != nil {
 		t.Fatalf("插入草稿订单失败: %v", err)
 	}
@@ -389,7 +399,7 @@ func TestOrderDetailCarriesSnapshotAndItems(t *testing.T) {
 	tok := tokenA(t)
 	addr := addressIDOf(t, "shop-a", seedAddressA)
 	sku, _ := anySKUWithStock(t, "shop-a", 3)
-	w := createOrder(t, hostA, orderBody(addr, sku, 2, ""), tok, "detail-"+uniqueKey())
+	w := createOrder(t, hostA, orderBody(t, "shop-a", addr, sku, 2, ""), tok, "detail-"+uniqueKey())
 	if w.Code != http.StatusCreated {
 		t.Fatalf("下单失败：%d %s", w.Code, w.Body.String())
 	}

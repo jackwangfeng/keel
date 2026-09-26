@@ -177,7 +177,7 @@ func TestMerchantCanPublishAProductAndBuyersSeeIt(t *testing.T) {
 	var left int32
 	if err := repository.New(testPool).WithTenant(ctx, func(q repository.Tx) error {
 		var e error
-		left, e = q.DeductInventory(ctx, sku2.Id, 1)
+		left, e = q.DeductInventory(ctx, sku2.Id, sh.StoreID, 1)
 		return e
 	}); err != nil {
 		t.Fatalf("新建 SKU 扣不动库存: %v —— 那一行 inventories 没建出来，"+

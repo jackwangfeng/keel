@@ -220,7 +220,7 @@ type CreateRequest struct {
 	// 买家在 A 店看到的价格与库存，下单时若被服务端静默落到默认门店 B，
 	// 结果是「在 A 店看的货从 B 店发出、按 B 店的价成交」——
 	// 而那是一个没有任何东西会报出来的错（两家店都有这件商品、两个价都合法）。
-	StoreID int64
+	StoreID              int64
 	Remark               *string
 	ExpectedPayableCents *int64
 	UserCouponID         *int64

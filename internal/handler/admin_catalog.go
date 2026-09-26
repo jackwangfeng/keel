@@ -123,9 +123,9 @@ func writeCatalogError(c *gin.Context, err error) {
 		// CAS 对不上。响应体是 InventoryConflict（Problem + 必填的 current），
 		// 用生成类型而不是手拼一个 map：契约改字段名时这里当场编译失败。
 		problem.WriteValue(c, http.StatusConflict, api.InventoryConflict{
-			Type:   problem.TypeInventoryPrecondition,
-			Title:  "库存的 expected_available_qty 与当前值不符",
-			Status: http.StatusConflict,
+			Type:    problem.TypeInventoryPrecondition,
+			Title:   "库存的 expected_available_qty 与当前值不符",
+			Status:  http.StatusConflict,
 			Current: apiAdminInventory(conflict.Current),
 		})
 

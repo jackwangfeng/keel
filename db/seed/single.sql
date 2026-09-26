@@ -68,6 +68,39 @@ SELECT m.id, jsonb_build_object('payment_channels', jsonb_build_object(
    AND NOT EXISTS (SELECT 1 FROM shop_settings s WHERE s.merchant_id = m.id);
 
 -- ---------------------------------------------------------------------------
+-- 大区与门店
+-- ---------------------------------------------------------------------------
+--
+-- 00020 之后 inventories 的 store_id 是 NOT NULL，没有门店就一行库存也插不
+-- 进去，而那条迁移的回填只覆盖迁移那一刻库里已有的商家 —— demo 是之后才建的。
+--
+-- 单店部署只要一家默认店：is_default = TRUE 让它成为「全国兜底」的接单目标，
+-- 默认店靠「全国兜底」接单，不靠围栏，所以不画围栏是正常形态。
+-- **刻意不画围栏、不给坐标**：这套演示里没有任何一条路径按距离或围栏选店，
+-- 编一组经纬度进去只会让人以为 `docker compose up` 起来的这家店真的开在那儿。
+--
+-- 幂等守卫同本文件其余部分：uk_regions_code / uk_stores_code 是带
+-- `WHERE deleted_at IS NULL` 的部分唯一索引，NOT EXISTS 不依赖它们也照样幂等。
+--
+-- merchant_id 显式写：这个文件由管理员角色加载（见文件头），连接上没有
+-- app.merchant_id，列默认值 current_merchant() 会直接 RAISE。
+INSERT INTO regions (merchant_id, code, name)
+SELECT m.id, 'default', '默认大区'
+  FROM merchants m
+ WHERE m.code = 'demo'
+   AND NOT EXISTS (SELECT 1 FROM regions r
+                    WHERE r.merchant_id = m.id AND r.code = 'default');
+
+INSERT INTO stores (merchant_id, region_id, code, name, is_default)
+SELECT r.merchant_id, r.id, 'default', '示例小店（默认门店）', TRUE
+  FROM regions r
+  JOIN merchants m ON m.id = r.merchant_id
+ WHERE m.code = 'demo'
+   AND r.code = 'default'
+   AND NOT EXISTS (SELECT 1 FROM stores st
+                    WHERE st.merchant_id = r.merchant_id AND st.code = 'default');
+
+-- ---------------------------------------------------------------------------
 -- 类目
 -- ---------------------------------------------------------------------------
 --
@@ -216,10 +249,17 @@ SELECT p.merchant_id, p.id, v.code, v.spec, v.cents, 1
 --
 -- **CARD-F 是 0**，它是 in_stock 那条判据唯一的反例：没有一件 0 库存的商品，
 -- 把 `EXISTS (... AND i.available_qty > 0)` 里那个 `> 0` 删掉也不会红。
-INSERT INTO inventories (sku_id, available_qty, warning_qty)
-SELECT s.id, v.qty, 5
+--
+-- 全部挂在上面那家默认门店上（00020：主键是 (sku_id, store_id)）。用 JOIN 取
+-- 门店而不是标量子查询：门店那一行缺失时这条语句应当**一行都不插**，
+-- 让「没有库存」当场暴露，而不是插一个 NULL 去撞 NOT NULL —— 后者的报错
+-- 指向约束名，指不回真因。
+INSERT INTO inventories (sku_id, store_id, merchant_id, available_qty, warning_qty)
+SELECT s.id, st.id, s.merchant_id, v.qty, 5
   FROM skus s
   JOIN merchants m ON m.id = s.merchant_id
+  JOIN stores st ON st.merchant_id = s.merchant_id
+                AND st.is_default AND st.deleted_at IS NULL
   CROSS JOIN LATERAL (VALUES
         ('HCP-600', 20), ('HCP-900', 12), ('MUG-2', 50),
         ('DRIP-10', 30), ('DRIP-20', 18), ('ESP-01', 6),
@@ -233,7 +273,8 @@ SELECT s.id, v.qty, 5
      ) AS v(code, qty)
  WHERE m.code = 'demo'
    AND s.sku_code = v.code
-   AND NOT EXISTS (SELECT 1 FROM inventories i WHERE i.sku_id = s.id);
+   AND NOT EXISTS (SELECT 1 FROM inventories i
+                    WHERE i.sku_id = s.id AND i.store_id = st.id);
 
 -- ---------------------------------------------------------------------------
 -- 可登录的买家

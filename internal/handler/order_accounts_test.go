@@ -83,6 +83,11 @@ func TestSubmitSagaFailureReleasesTheIdempotencyKey(t *testing.T) {
 	_, err := svc.Create(ctx, service.CreateRequest{
 		Items:     []service.LineInput{{SKUID: sku, Quantity: 1}},
 		AddressID: addr,
+		// store_id 是必填的（00020），服务端没有回落分支。不填的话这一段
+		// 会在「门店不合法」上失败，而这条测试要的失败是**提交失败**——
+		// 两者都返回错误，而第 ① 段的前置条件（抢占与草稿真的落了库）
+		// 只有后者成立。
+		StoreID: storeIDOf(t, "shop-a"),
 	}, key)
 	if !errors.Is(err, errSubmitRefused) {
 		t.Fatalf("下单返回的错误是 %v，期望包着 errSubmitRefused —— "+
@@ -112,7 +117,7 @@ func TestSubmitSagaFailureReleasesTheIdempotencyKey(t *testing.T) {
 
 	// ③ 同一把钥匙、真实 HTTP 链路，必须能下单成功。
 	tok := login(t, hostA, seedPhone, seedPassword).AccessToken
-	w := createOrder(t, hostA, orderBody(addr, sku, 1, ""), tok, key)
+	w := createOrder(t, hostA, orderBody(t, "shop-a", addr, sku, 1, ""), tok, key)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("拿同一把钥匙重试返回 %d，期望 201：%s\n"+
 			"409 说明那行抢占没撤掉；其它码说明重试路径上还有别的问题",

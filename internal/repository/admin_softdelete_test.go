@@ -39,7 +39,7 @@ func TestSoftDeletedSKUDisappearsFromBuyerViews(t *testing.T) {
 	var before []repository.SKU
 	if err := r.WithTenant(asA, func(q repository.Tx) error {
 		var e error
-		before, e = q.ListProductSKUs(ctx, f.prodA)
+		before, e = q.ListProductSKUs(ctx, f.scopeA(), f.prodA)
 		return e
 	}); err != nil {
 		t.Fatal(err)
@@ -58,7 +58,7 @@ func TestSoftDeletedSKUDisappearsFromBuyerViews(t *testing.T) {
 	var after []repository.SKU
 	if err := r.WithTenant(asA, func(q repository.Tx) error {
 		var e error
-		after, e = q.ListProductSKUs(ctx, f.prodA)
+		after, e = q.ListProductSKUs(ctx, f.scopeA(), f.prodA)
 		return e
 	}); err != nil {
 		t.Fatal(err)

@@ -177,8 +177,13 @@ func TestWithTenantScopesGeneratedQueryToTheTenant(t *testing.T) {
 		want string
 	}{{idA, "product-A"}, {idB, "product-B"}} {
 		var titles []string
+		// 作用域取这家自己的默认门店：00020 之后 ListProducts 按门店取价、
+		// 按门店算 in_stock、按门店与大区排除不卖的款。这条测试要的仍然是
+		// 「RLS 拦不拦得住别家」，所以门店必须是**本家**那一家 ——
+		// 传别家的店，失败的原因就换成了门店不匹配，测的不再是 RLS。
+		sc := defaultScope(t, tc.id)
 		err := r.WithTenant(tenant.NewContext(ctx, tc.id), func(q repository.Tx) error {
-			rows, err := q.ListProducts(ctx, 100, 0)
+			rows, err := q.ListProducts(ctx, sc, 100, 0)
 			if err != nil {
 				return err
 			}
@@ -250,6 +255,11 @@ func seedTwoTenants(t *testing.T) (int64, int64) {
 		for _, stmt := range []string{
 			`DELETE FROM products   WHERE merchant_id = ANY($1)`,
 			`DELETE FROM categories WHERE merchant_id = ANY($1)`,
+			// stores → regions 排在 merchants 之前（00020 加的两条外键）。
+			// 漏掉它们不会让这条测试红，会让**下一轮**那句
+			// `DELETE FROM merchants` 以 23503 失败，而那条错误出现在别处。
+			`DELETE FROM stores     WHERE merchant_id = ANY($1)`,
+			`DELETE FROM regions    WHERE merchant_id = ANY($1)`,
 			`DELETE FROM merchants  WHERE id          = ANY($1)`,
 		} {
 			if _, err := admin.Exec(c, stmt, all); err != nil {
@@ -257,6 +267,25 @@ func seedTwoTenants(t *testing.T) (int64, int64) {
 			}
 		}
 	})
+
+	// 每家一个大区 + 一家默认门店。00020 之后买家侧的读路径都带 StoreScope
+	// （价格按门店取、in_stock 按门店算、两层可见性排除按门店与大区查），
+	// 而迁移里那段回填只覆盖迁移那一刻库里已有的商家 —— 这两家是之后插的。
+	// is_default = TRUE，不画围栏：默认店靠「全国兜底」接单（「非默认 且
+	// 「非默认 且 无围栏」，这里没有一条断言碰地理。
+	for _, m := range []int64{idA, idB} {
+		var regionID int64
+		if err := admin.QueryRow(ctx,
+			`INSERT INTO regions (merchant_id, code, name) VALUES ($1,'default','默认大区')
+			 RETURNING id`, m).Scan(&regionID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := admin.Exec(ctx,
+			`INSERT INTO stores (merchant_id, region_id, code, name, is_default)
+			 VALUES ($1,$2,'default','默认门店',TRUE)`, m, regionID); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	for _, s := range []struct {
 		merchant int64
@@ -276,4 +305,29 @@ func seedTwoTenants(t *testing.T) (int64, int64) {
 		}
 	}
 	return idA, idB
+}
+
+// defaultScope 取这家商家那家默认门店的作用域。
+//
+// 现查而不是让 seedTwoTenants 多返回两个 id：那个函数被三个文件调，
+// 改签名等于把「门店」这件事摊到每一个不关心它的调用点上。
+// 现查还顺带钉住一件事 —— 夹具里那家默认店真的存在；查不到直接 Fatal，
+// 而不是让下游拿着一个 0 去查询（那会让按门店取价、按门店算 in_stock
+// 全部退化成恒空，且没有任何东西会红）。
+func defaultScope(t *testing.T, merchantID int64) repository.StoreScope {
+	t.Helper()
+	ctx := context.Background()
+	admin, err := pgx.Connect(ctx, db.AdminDSN())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close(ctx)
+	var sc repository.StoreScope
+	if err := admin.QueryRow(ctx,
+		`SELECT id, region_id FROM stores
+		  WHERE merchant_id = $1 AND is_default AND deleted_at IS NULL`,
+		merchantID).Scan(&sc.StoreID, &sc.RegionID); err != nil {
+		t.Fatalf("商家 %d 没有默认门店（夹具漏了）: %v", merchantID, err)
+	}
+	return sc
 }

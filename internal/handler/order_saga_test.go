@@ -42,12 +42,25 @@ func seedDraftOrder(t *testing.T, merchantCode string, skuID int64, qty int32) (
 
 	orderNo := fmt.Sprintf("saga%d", time.Now().UnixNano())
 	var orderID int64
+	// store_id / region_id / store_snapshot 三列都是 NOT NULL（00020）。
+	// 它们不是补给约束看的摆设：分支拿到的只有三个字符串（gid / branchID /
+	// op），扣减扣的是**订单行上那家店**，这笔夹具单挂错店，
+	// 下面「扣的是不是这个 SKU 这家店」的断言就落在另一行库存上。
+	// 门店与大区从 stores 现取（种子里那家默认店），快照按 00020 回填段
+	// 同一个形状拼 —— 展示字段，不放 id。
 	if err := conn.QueryRow(ctx, `
 		INSERT INTO orders (merchant_id, order_no, user_id, status,
-		                    goods_amount_cents, payable_cents, receiver_snapshot, expire_at)
+		                    goods_amount_cents, payable_cents, receiver_snapshot, expire_at,
+		                    store_id, region_id, store_snapshot)
 		SELECT $1, $2, $3, 0, s.price_cents * $5, s.price_cents * $5,
-		       '{"receiver_name":"夹具"}'::jsonb, now() + interval '30 minutes'
-		  FROM skus s WHERE s.id = $4
+		       '{"receiver_name":"夹具"}'::jsonb, now() + interval '30 minutes',
+		       st.id, st.region_id,
+		       jsonb_build_object('store_name', st.name, 'region_name', r.name,
+		                          'address', st.address, 'phone', st.phone)
+		  FROM skus s
+		  JOIN stores  st ON st.merchant_id = $1 AND st.is_default AND st.deleted_at IS NULL
+		  JOIN regions r  ON r.id = st.region_id
+		 WHERE s.id = $4
 		RETURNING id`, merchantID, orderNo, userID, skuID, qty).Scan(&orderID); err != nil {
 		t.Fatalf("造订单夹具失败: %v", err)
 	}

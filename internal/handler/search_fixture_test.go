@@ -158,6 +158,25 @@ type searchFixture struct {
 	IDsB            map[string]int64
 	CategoryDressA  int64
 	CategoryCoffeeA int64
+
+	// 两家各自的默认门店与它所在的大区。00020 之后两路召回都按门店取价、
+	// 按门店算 in_stock、按门店与大区排除不卖的款，所以任何一条直接调
+	// repository 的检索测试都得带上它们。
+	StoreA, RegionA int64
+	StoreB, RegionB int64
+}
+
+// ScopeA / ScopeB 是买家侧读路径要的门店作用域。
+//
+// 收在一处而不是让调用点自己拼 StoreScope{...}：门店与大区必须是**同一家店
+// 的那一对**，配错了（A 的店配 B 的大区）查询不报错，只会安静地按另一个大区
+// 取价、按另一个大区排除商品。
+func (f searchFixture) ScopeA() repository.StoreScope {
+	return repository.StoreScope{StoreID: f.StoreA, RegionID: f.RegionA}
+}
+
+func (f searchFixture) ScopeB() repository.StoreScope {
+	return repository.StoreScope{StoreID: f.StoreB, RegionID: f.RegionB}
 }
 
 // 夹具商品。三件在 A 店，其中两件是裙子、一件是咖啡器具；
@@ -230,10 +249,16 @@ func newSearchFixture(t *testing.T) searchFixture {
 		for _, stmt := range []string{
 			`DELETE FROM product_text_vectors  WHERE merchant_id = ANY($1)`,
 			`DELETE FROM product_understanding WHERE merchant_id = ANY($1)`,
-			`DELETE FROM inventories WHERE sku_id IN (SELECT id FROM skus WHERE merchant_id = ANY($1))`,
+			// inventories 自带 merchant_id 了（00020），不必再绕 skus 的子查询。
+			// stores / regions 排在 merchants 之前：漏掉它们不会让这条测试红，
+			// 会让**下一轮**的 `DELETE FROM merchants` 以 23503 失败，
+			// 而那条错误出现在别的测试里，指不回这里。
+			`DELETE FROM inventories WHERE merchant_id = ANY($1)`,
 			`DELETE FROM skus       WHERE merchant_id = ANY($1)`,
 			`DELETE FROM products   WHERE merchant_id = ANY($1)`,
 			`DELETE FROM categories WHERE merchant_id = ANY($1)`,
+			`DELETE FROM stores     WHERE merchant_id = ANY($1)`,
+			`DELETE FROM regions    WHERE merchant_id = ANY($1)`,
 			`DELETE FROM merchants  WHERE id          = ANY($1)`,
 		} {
 			if _, err := admin.Exec(c, stmt, ids); err != nil {
@@ -242,11 +267,40 @@ func newSearchFixture(t *testing.T) searchFixture {
 		}
 	})
 
+	// 两家各一个大区 + 一家默认门店。00020 之后 inventories.store_id 是
+	// NOT NULL，下面每一行库存都要挂在一家真实的门店上，而那家门店必须属于
+	// 同一个商家（复合外键 (store_id, merchant_id) 钉死）。
+	// 迁移里那段回填只覆盖迁移那一刻已有的商家，这两家是之后插的。
+	//
+	// is_default = TRUE 且不画围栏：默认店靠「全国兜底」接单（「非默认 且
+	// 「非默认 且 无围栏」。检索这一组测试一条都不按坐标或围栏选店，
+	// 编一个多边形进去只会让人以为那几个顶点是有意义的。
+	storeOf := map[int64]int64{}
+	regionOf := map[int64]int64{}
+	for _, m := range []int64{idA, idB} {
+		var regionID, storeID int64
+		if err := admin.QueryRow(ctx,
+			`INSERT INTO regions (merchant_id, code, name) VALUES ($1,'default','默认大区')
+			 RETURNING id`, m).Scan(&regionID); err != nil {
+			t.Fatal(err)
+		}
+		if err := admin.QueryRow(ctx,
+			`INSERT INTO stores (merchant_id, region_id, code, name, is_default)
+			 VALUES ($1,$2,'default','默认门店',TRUE) RETURNING id`,
+			m, regionID).Scan(&storeID); err != nil {
+			t.Fatal(err)
+		}
+		storeOf[m] = storeID
+		regionOf[m] = regionID
+	}
+
 	fx := searchFixture{
 		HostA:     codeA + "." + baseDomain,
 		HostB:     codeB + "." + baseDomain,
 		MerchantA: idA, MerchantB: idB,
 		IDsA: map[string]int64{}, IDsB: map[string]int64{},
+		StoreA: storeOf[idA], RegionA: regionOf[idA],
+		StoreB: storeOf[idB], RegionB: regionOf[idB],
 	}
 
 	type plan struct {
@@ -308,9 +362,13 @@ func newSearchFixture(t *testing.T) searchFixture {
 		}
 		// 库存行总是插，数量可以是 0 —— 「有 SKU、水位 0」与「没有库存行」
 		// 对 in_stock_only 是同一个结果，但前者才是断货商品真实的样子。
+		//
+		// merchant_id 显式写：这是管理员连接，没有 app.merchant_id，
+		// 列默认值 current_merchant() 会 RAISE 而不是填一个空。
 		if _, err := admin.Exec(ctx,
-			`INSERT INTO inventories (sku_id, available_qty, warning_qty) VALUES ($1,$2,1)`,
-			sid, pl.p.Stock); err != nil {
+			`INSERT INTO inventories (sku_id, store_id, merchant_id, available_qty, warning_qty)
+			 VALUES ($1,$2,$3,$4,1)`,
+			sid, storeOf[pl.merchant], pl.merchant, pl.p.Stock); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -37,7 +37,7 @@ func TestPreviewAndCreateAgreeOnTheMoney(t *testing.T) {
 	tok := tokenA(t)
 	addr := addressIDOf(t, "shop-a", seedAddressA)
 	sku, _ := anySKUWithStock(t, "shop-a", 3)
-	body := orderBody(addr, sku, 2, "")
+	body := orderBody(t, "shop-a", addr, sku, 2, "")
 
 	pw := previewOrder(t, hostA, body, tok)
 	if pw.Code != http.StatusOK {
@@ -82,7 +82,7 @@ func TestCreateDeductsInventory(t *testing.T) {
 	sku, before := anySKUWithStock(t, "shop-a", 4)
 	const qty = 3
 
-	w := createOrder(t, hostA, orderBody(addr, sku, qty, ""), tok, "deduct-"+uniqueKey())
+	w := createOrder(t, hostA, orderBody(t, "shop-a", addr, sku, qty, ""), tok, "deduct-"+uniqueKey())
 	if w.Code != http.StatusCreated {
 		t.Fatalf("下单失败：%d %s", w.Code, w.Body.String())
 	}
@@ -123,7 +123,7 @@ func TestInsufficientStockClosesTheOrderAndTouchesNothing(t *testing.T) {
 	addr := addressIDOf(t, "shop-a", seedAddressA)
 	sku, before := anySKUWithStock(t, "shop-a", 1)
 
-	w := createOrder(t, hostA, orderBody(addr, sku, int(before)+1, ""), tok,
+	w := createOrder(t, hostA, orderBody(t, "shop-a", addr, sku, int(before)+1, ""), tok,
 		"starve-"+uniqueKey())
 	p := problemOf(t, w, http.StatusConflict)
 	if p.Type != problem.TypeInsufficientStock {
@@ -156,7 +156,7 @@ func TestSameIdempotencyKeyProducesExactlyOneOrder(t *testing.T) {
 	sku, before := anySKUWithStock(t, "shop-a", 4)
 	const qty = 2
 	key := "idem-" + uniqueKey()
-	body := orderBody(addr, sku, qty, "")
+	body := orderBody(t, "shop-a", addr, sku, qty, "")
 
 	first := createOrder(t, hostA, body, tok, key)
 	if first.Code != http.StatusCreated {
@@ -215,10 +215,10 @@ func TestSameKeyDifferentBodyIsRejected(t *testing.T) {
 	sku, _ := anySKUWithStock(t, "shop-a", 4)
 	key := "reuse-" + uniqueKey()
 
-	if w := createOrder(t, hostA, orderBody(addr, sku, 1, ""), tok, key); w.Code != http.StatusCreated {
+	if w := createOrder(t, hostA, orderBody(t, "shop-a", addr, sku, 1, ""), tok, key); w.Code != http.StatusCreated {
 		t.Fatalf("第一次下单失败：%d %s", w.Code, w.Body.String())
 	}
-	w := createOrder(t, hostA, orderBody(addr, sku, 2, ""), tok, key)
+	w := createOrder(t, hostA, orderBody(t, "shop-a", addr, sku, 2, ""), tok, key)
 	p := problemOf(t, w, http.StatusUnprocessableEntity)
 	if p.Type != problem.TypeIdempotencyKeyReused {
 		t.Fatalf("problem type 是 %q，期望 %q", p.Type, problem.TypeIdempotencyKeyReused)
@@ -234,7 +234,7 @@ func TestOldQuoteIsRejectedAfterAPriceChange(t *testing.T) {
 	tok := tokenA(t)
 	addr := addressIDOf(t, "shop-a", seedAddressA)
 	sku, _ := anySKUWithStock(t, "shop-a", 4)
-	body := orderBody(addr, sku, 1, "")
+	body := orderBody(t, "shop-a", addr, sku, 1, "")
 
 	pw := previewOrder(t, hostA, body, tok)
 	if pw.Code != http.StatusOK {
@@ -261,7 +261,7 @@ func TestOldQuoteIsRejectedAfterAPriceChange(t *testing.T) {
 		}
 	})
 
-	withOldQuote := orderBody(addr, sku, 1,
+	withOldQuote := orderBody(t, "shop-a", addr, sku, 1,
 		fmt.Sprintf(`"expected_payable_cents":%d`, preview.PayableCents))
 	w := createOrder(t, hostA, withOldQuote, tok, "price-"+uniqueKey())
 	p := problemOf(t, w, http.StatusConflict)
@@ -280,7 +280,7 @@ func TestOldQuoteIsRejectedAfterAPriceChange(t *testing.T) {
 		t.Fatalf("涨价之后试算还是 %d —— 定价没有读真实价格，这条测试没有区分力",
 			fresh.PayableCents)
 	}
-	ok := createOrder(t, hostA, orderBody(addr, sku, 1,
+	ok := createOrder(t, hostA, orderBody(t, "shop-a", addr, sku, 1,
 		fmt.Sprintf(`"expected_payable_cents":%d`, fresh.PayableCents)), tok,
 		"price-ok-"+uniqueKey())
 	if ok.Code != http.StatusCreated {
@@ -302,7 +302,7 @@ func TestCouponIsRejectedNotSilentlyIgnored(t *testing.T) {
 	tok := tokenA(t)
 	addr := addressIDOf(t, "shop-a", seedAddressA)
 	sku, _ := anySKUWithStock(t, "shop-a", 2)
-	withCoupon := orderBody(addr, sku, 1, `"user_coupon_id":123`)
+	withCoupon := orderBody(t, "shop-a", addr, sku, 1, `"user_coupon_id":123`)
 
 	for _, tc := range []struct {
 		name         string
@@ -331,7 +331,7 @@ func TestCouponIsRejectedNotSilentlyIgnored(t *testing.T) {
 
 	// 阳性对照：同样的请求去掉券就能成功。否则上面的 501 也可能只是因为
 	// 这个请求体本身就是坏的。
-	if w := previewOrder(t, hostA, orderBody(addr, sku, 1, ""), tok); w.Code != http.StatusOK {
+	if w := previewOrder(t, hostA, orderBody(t, "shop-a", addr, sku, 1, ""), tok); w.Code != http.StatusOK {
 		t.Fatalf("去掉券之后试算仍然失败：%d %s", w.Code, w.Body.String())
 	}
 }
@@ -347,7 +347,7 @@ func TestFreightIsAbsentNotZero(t *testing.T) {
 	tok := tokenA(t)
 	addr := addressIDOf(t, "shop-a", seedAddressA)
 	sku, _ := anySKUWithStock(t, "shop-a", 2)
-	body := orderBody(addr, sku, 1, "")
+	body := orderBody(t, "shop-a", addr, sku, 1, "")
 
 	check := func(t *testing.T, contractPath string, raw []byte) {
 		t.Helper()
@@ -384,20 +384,37 @@ func TestFreightIsAbsentNotZero(t *testing.T) {
 	check(t, "/orders", cw.Body.Bytes())
 }
 
-// 「这一行在本租户不可见」**不会**被翻译成「库存不足」。
+// 「这家店没有这一行库存」≡「可售 0」，报 409 缺货 —— 而**不是**「本店不卖」。
 //
-// 硬约束三。种子里 SKU-NOSTOCKROW 是一个在架、可定价、但**没有库存行**的 SKU
-// （db/seed/dev.sql 末尾写明了它为什么存在）。扣减时 repository 返回的是
-// ErrSKUNotInTenant，而这条链路必须把它报成 500，不是 409 库存不足 ——
-// 后者会让客户端提示用户「换一件商品」，把一次 bug 或越权伪装成一次正常缺货。
+// ===========================================================================
+// 这条测试本轮换了靶子，原来那个被 00020 拿掉了
+// ===========================================================================
 //
-// 为什么不用「别家商家的 sku_id」来测：那条路在 HTTP 层**不可达**。
-// order_items 的复合外键 (sku_id, merchant_id) → skus(id, merchant_id) 让跨租户
-// 的订单行根本写不进去，而定价那一步更早就把它当成「不可售」拒了。
-// 对着一条不可达的分支写断言就是空转。真正的跨租户扣减由
+// 它原先叫「不可见的库存行不会被翻译成库存不足」，断言的是 SKU-NOSTOCKROW
+// 触发 ErrSKUNotInTenant、链路报 500。**那个行为本轮是被有意改掉的**：
+// 00020 把扣减的失败从两种拆成四种，并把「这家店根本没有这一行」从
+// ErrSKUNotInTenant 挪进了 ErrInsufficientStock（internal/repository/inventory.go
+// 的文件头逐条写着，并注明这是数据模型 §4 里唯一一处与任务书字面不同的地方）。
+//
+// 理由是「开店即营业」：库存按门店分之后，「缺行」从罕见变成常态 ——
+// 新店、新品、缺货清零都会缺行。把它判成「本店不卖」会让一家刚开的店在录
+// 库存之前对每一件商品都回「本店不卖」，而那是产品明确不要的形态。
+//
+// 于是硬约束三（不可见不能伪装成缺货）在 HTTP 层**没有可达的靶子了**：
+//
+//	· 别家的 sku_id —— 定价那一步（ListSKUsForPricing）先把它当成不可售拒掉；
+//	· 软删的 sku_id —— 同上，那条查询带着 s.deleted_at IS NULL；
+//	· 别家的 store_id —— CreateOrderDraft 那条 INSERT ... SELECT FROM stores
+//	  插 0 行，在 SAGA 跑起来之前就是 422。
+//
+// 三条都够不着扣减。硬约束三今天由
 // repository/inventory_test.go 的 TestDeductInventoryTellsStarvationFromCrossTenant
-// 用两家商家的真实数据证明分得开。
-func TestInvisibleInventoryRowIsNotReportedAsOutOfStock(t *testing.T) {
+// 用两家商家的真实数据守着，那里能直接调 DeductInventory。
+//
+// 所以这条测试改成守**替换它的那条语义**，而不是删掉：缺行 ≡ 可售 0。
+// 没有它的话，把「缺行」重新判成 ErrSKUNotSoldInStore（422）这个回退
+// 在整个仓库里没有任何东西会红 —— 而它的症状正是「新店什么都不卖」。
+func TestMissingInventoryRowMeansZeroStockNotUnsold(t *testing.T) {
 	tok := tokenA(t)
 	addr := addressIDOf(t, "shop-a", seedAddressA)
 	sku := skuIDOf(t, "shop-a", "SKU-NOSTOCKROW")
@@ -416,22 +433,24 @@ func TestInvisibleInventoryRowIsNotReportedAsOutOfStock(t *testing.T) {
 
 	// 试算必须成功：定价不看库存（架构 §5 论证过判定点在 SAGA 正向阶段）。
 	// 这一步同时排除了「500 只是因为这个 SKU 压根查不到」这种解释。
-	if w := previewOrder(t, hostA, orderBody(addr, sku, 1, ""), tok); w.Code != http.StatusOK {
+	if w := previewOrder(t, hostA, orderBody(t, "shop-a", addr, sku, 1, ""), tok); w.Code != http.StatusOK {
 		t.Fatalf("试算这个 SKU 就失败了：%d %s —— 下面那个 500 证明不了任何东西",
 			w.Code, w.Body.String())
 	}
 
-	w := createOrder(t, hostA, orderBody(addr, sku, 1, ""), tok, "invisible-"+uniqueKey())
-	if w.Code == http.StatusConflict {
-		p := problemOf(t, w, http.StatusConflict)
-		t.Fatalf("返回了 409 %s —— 一行在本租户不可见的库存被翻译成了「库存不足」，"+
-			"这正是硬约束三禁止的事", p.Type)
+	w := createOrder(t, hostA, orderBody(t, "shop-a", addr, sku, 1, ""), tok, "nostockrow-"+uniqueKey())
+	p := problemOf(t, w, http.StatusConflict)
+	if p.Type == problem.TypeSKUNotSoldInStore {
+		t.Fatalf("返回了 422/409 %s —— 「这家店没有这一行库存」被判成了「本店不卖」。"+
+			"缺行 ≡ 可售 0（数据模型 §4）：判成「不卖」会让一家刚开的店在录库存之前"+
+			"对每一件商品都回「本店不卖」，而那与「开店即营业」正面冲突", p.Type)
 	}
-	p := problemOf(t, w, http.StatusInternalServerError)
-	if p.Type != problem.TypeInternal {
-		t.Fatalf("problem type 是 %q，期望 %q", p.Type, problem.TypeInternal)
+	if p.Type != problem.TypeInsufficientStock {
+		t.Fatalf("problem type 是 %q，期望 %q —— 缺行要报成缺货，"+
+			"客户端据此提示「暂时没货」并允许稍后再来",
+			p.Type, problem.TypeInsufficientStock)
 	}
-	t.Logf("不可见的库存行报成了 500 %s，没有伪装成缺货", p.Type)
+	t.Logf("缺库存行报成了 409 %s：缺行 ≡ 可售 0，不是「本店不卖」", p.Type)
 }
 
 // 不带 Idempotency-Key 的下单要被拒。契约把它写成 required。
@@ -440,7 +459,7 @@ func TestCreateRequiresAnIdempotencyKey(t *testing.T) {
 	addr := addressIDOf(t, "shop-a", seedAddressA)
 	sku, _ := anySKUWithStock(t, "shop-a", 2)
 
-	w := postJSON(t, hostA, "/api/v1/orders", orderBody(addr, sku, 1, ""), tok, nil)
+	w := postJSON(t, hostA, "/api/v1/orders", orderBody(t, "shop-a", addr, sku, 1, ""), tok, nil)
 	p := problemOf(t, w, http.StatusUnprocessableEntity)
 	if p.Type != problem.TypeInvalidRequest {
 		t.Fatalf("problem type 是 %q，期望 %q", p.Type, problem.TypeInvalidRequest)
@@ -456,14 +475,14 @@ func TestAnotherShopsAddressIsRejected(t *testing.T) {
 	foreign := addressIDOf(t, "shop-b", "B 店收件人")
 	sku, _ := anySKUWithStock(t, "shop-a", 2)
 
-	w := createOrder(t, hostA, orderBody(foreign, sku, 1, ""), tok, "addr-"+uniqueKey())
+	w := createOrder(t, hostA, orderBody(t, "shop-a", foreign, sku, 1, ""), tok, "addr-"+uniqueKey())
 	p := problemOf(t, w, http.StatusUnprocessableEntity)
 	if p.Type != problem.TypeInvalidRequest {
 		t.Fatalf("problem type 是 %q，期望 %q", p.Type, problem.TypeInvalidRequest)
 	}
 	// 阳性对照：同样的请求换成自己的地址必须成功。
 	own := addressIDOf(t, "shop-a", seedAddressA)
-	if ok := createOrder(t, hostA, orderBody(own, sku, 1, ""), tok,
+	if ok := createOrder(t, hostA, orderBody(t, "shop-a", own, sku, 1, ""), tok,
 		"addr-ok-"+uniqueKey()); ok.Code != http.StatusCreated {
 		t.Fatalf("换成自己的地址也失败了：%d %s", ok.Code, ok.Body.String())
 	}

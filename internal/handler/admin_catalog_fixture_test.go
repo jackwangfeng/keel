@@ -39,8 +39,13 @@ type adminShop struct {
 	Host       string
 	MerchantID int64
 	StaffID    int64
-	Token      string
-	Suffix     string
+	// StoreID 是这家店唯一的那家默认门店。00020 之后它不是可选的夹具细节：
+	// CreateSKU 在同事务里建库存行那一步（CreateInventoryRow）挑的就是默认
+	// 门店，**没有默认店时它一行都不建，而且那不算失败** —— 于是漏掉这一行
+	// 夹具的症状是「新建的 SKU 永远缺货」，而不是任何一句报错。
+	StoreID int64
+	Token   string
+	Suffix  string
 }
 
 // newAdminShop 造一家**真的能被 Host 解析出来**的店（status = 1 且有域名），
@@ -73,14 +78,25 @@ func newAdminShop(t *testing.T) adminShop {
 		// uploads；uploads 指向 staff —— 所以 staff 必须排在 uploads 后面，
 		// 否则 `DELETE FROM staff` 会以 23503 失败，而那条错误会出现在
 		// **别的**测试里（清理是 t.Cleanup，失败的却是下一条用到 staff 的测试）。
+		//
+		// 00020 又加了三条边：inventories → stores → regions → merchants，
+		// 而 store_product_overrides / store_sku_prices 也挂在 stores 上
+		// （这一组测试会调上下架与定价那几条接口）。它们全排在 stores 之前。
+		// inventories 自带 merchant_id 了，不必再绕 skus 的子查询。
 		for _, stmt := range []string{
 			`DELETE FROM product_images WHERE merchant_id = $1`,
 			`DELETE FROM product_text_vectors WHERE merchant_id = $1`,
 			`DELETE FROM product_understanding WHERE merchant_id = $1`,
-			`DELETE FROM inventories WHERE sku_id IN (SELECT id FROM skus WHERE merchant_id = $1)`,
+			`DELETE FROM inventories WHERE merchant_id = $1`,
+			`DELETE FROM store_sku_prices WHERE merchant_id = $1`,
+			`DELETE FROM region_sku_prices WHERE merchant_id = $1`,
+			`DELETE FROM store_product_overrides WHERE merchant_id = $1`,
+			`DELETE FROM region_product_overrides WHERE merchant_id = $1`,
 			`DELETE FROM skus WHERE merchant_id = $1`,
 			`DELETE FROM products WHERE merchant_id = $1`,
 			`DELETE FROM categories WHERE merchant_id = $1`,
+			`DELETE FROM stores WHERE merchant_id = $1`,
+			`DELETE FROM regions WHERE merchant_id = $1`,
 			`DELETE FROM uploads WHERE merchant_id = $1`,
 			`DELETE FROM staff WHERE merchant_id = $1`,
 			`DELETE FROM merchants WHERE id = $1`,
@@ -91,11 +107,28 @@ func newAdminShop(t *testing.T) adminShop {
 		}
 	})
 
+	// 一个大区 + 一家默认门店。00020 的回填只覆盖迁移那一刻库里已有的商家，
+	// 这一家是测试现建的，所以门店得自己播（理由见 StoreID 那段注释）。
+	// is_default = TRUE：默认店靠「全国兜底」接单，不画围栏是正常形态；
+	// 这一组测试一条都不按坐标或围栏选店。
+	var regionID, storeID int64
+	if err := admin.QueryRow(ctx,
+		`INSERT INTO regions (merchant_id, code, name) VALUES ($1,'default','默认大区')
+		 RETURNING id`, merchantID).Scan(&regionID); err != nil {
+		t.Fatal(err)
+	}
+	if err := admin.QueryRow(ctx,
+		`INSERT INTO stores (merchant_id, region_id, code, name, is_default)
+		 VALUES ($1,$2,'default','默认门店',TRUE) RETURNING id`,
+		merchantID, regionID).Scan(&storeID); err != nil {
+		t.Fatal(err)
+	}
+
 	staffID := mkStaff(t, code, "boss-"+suffix+"@keel.test", 1, 1)
 	host := code + "." + baseDomain
 	sess := staffSession(t, host, staffID)
 	return adminShop{Host: host, MerchantID: merchantID, StaffID: staffID,
-		Token: sess.Token, Suffix: suffix}
+		StoreID: storeID, Token: sess.Token, Suffix: suffix}
 }
 
 // ---------------------------------------------------------------------------

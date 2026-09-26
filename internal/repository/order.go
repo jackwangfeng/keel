@@ -86,9 +86,9 @@ type Order struct {
 	// （数据模型 §5）：SAGA 分支读回订单行拿到 NULL 时无路可走 —— 既不能猜
 	// 默认店（那会把单扣到另一家店去），也不能失败（订单已经落库了）。
 	// 库存分支的扣减与回补都按这个 StoreID 走。
-	StoreID  int64
-	RegionID int64
-	Status   int16
+	StoreID          int64
+	RegionID         int64
+	Status           int16
 	GoodsAmountCents int64
 	FreightCents     int64
 	DiscountCents    int64

@@ -99,7 +99,7 @@ func TestSagaBranchExecutesOnceThenReportsDuplicated(t *testing.T) {
 	calls := 0
 	deduct := func(q repository.Tx) error {
 		calls++
-		_, err := q.DeductInventory(ctx, f.skuA, 1)
+		_, err := q.DeductInventory(ctx, f.skuA, f.storeA, 1)
 		return err
 	}
 
@@ -169,13 +169,13 @@ func TestSagaBranchNullCompensationThenSuspendedAction(t *testing.T) {
 	restored := 0
 	restore := func(q repository.Tx) error {
 		restored++
-		_, err := q.RestoreInventory(ctx, f.skuA, 5)
+		_, err := q.RestoreInventory(ctx, f.skuA, f.storeA, 5)
 		return err
 	}
 	deducted := 0
 	deduct := func(q repository.Tx) error {
 		deducted++
-		_, err := q.DeductInventory(ctx, f.skuA, 5)
+		_, err := q.DeductInventory(ctx, f.skuA, f.storeA, 5)
 		return err
 	}
 
@@ -223,8 +223,8 @@ func TestSagaBranchCompensatesAfterARealAction(t *testing.T) {
 	asA := tenant.NewContext(ctx, f.merchantA)
 	gid := barrierGID(t, f.merchantA)
 
-	deduct := func(q repository.Tx) error { _, e := q.DeductInventory(ctx, f.skuA, 4); return e }
-	restore := func(q repository.Tx) error { _, e := q.RestoreInventory(ctx, f.skuA, 4); return e }
+	deduct := func(q repository.Tx) error { _, e := q.DeductInventory(ctx, f.skuA, f.storeA, 4); return e }
+	restore := func(q repository.Tx) error { _, e := q.RestoreInventory(ctx, f.skuA, f.storeA, 4); return e }
 
 	d, err := r.WithSagaBranch(asA, gid, "01", "action", deduct)
 	failIfBarrierDenied(t, err)
@@ -285,7 +285,7 @@ func TestSagaBranchRollsBackTheBarrierWithTheBusiness(t *testing.T) {
 	errBoom := errors.New("业务自己炸了")
 
 	d, err := r.WithSagaBranch(asA, gid, "01", "action", func(q repository.Tx) error {
-		if _, e := q.DeductInventory(ctx, f.skuA, 3); e != nil {
+		if _, e := q.DeductInventory(ctx, f.skuA, f.storeA, 3); e != nil {
 			return e
 		}
 		return errBoom
@@ -310,7 +310,7 @@ func TestSagaBranchRollsBackTheBarrierWithTheBusiness(t *testing.T) {
 
 	// 重试：协调器重放的样子。必须重新是 Execute，而且业务这次真的落地。
 	d, err = r.WithSagaBranch(asA, gid, "01", "action", func(q repository.Tx) error {
-		_, e := q.DeductInventory(ctx, f.skuA, 3)
+		_, e := q.DeductInventory(ctx, f.skuA, f.storeA, 3)
 		return e
 	})
 	failIfBarrierDenied(t, err)
@@ -342,7 +342,7 @@ func TestSagaBranchRefusesUnknownOp(t *testing.T) {
 		called := false
 		d, err := r.WithSagaBranch(asA, gid, "01", op, func(q repository.Tx) error {
 			called = true
-			_, e := q.DeductInventory(ctx, f.skuA, 1)
+			_, e := q.DeductInventory(ctx, f.skuA, f.storeA, 1)
 			return e
 		})
 		if !errors.Is(err, repository.ErrUnknownBranchOp) {
@@ -406,7 +406,7 @@ func TestSagaBranchStillRunsUnderRLS(t *testing.T) {
 	}
 
 	_, err := r.WithSagaBranch(asA, gid, "01", "action", func(q repository.Tx) error {
-		_, e := q.DeductInventory(ctx, f.skuB, 1)
+		_, e := q.DeductInventory(ctx, f.skuB, f.storeB, 1)
 		return e
 	})
 	if !errors.Is(err, repository.ErrSKUNotInTenant) {
@@ -446,7 +446,7 @@ func TestSagaBranchIsIdempotentUnderConcurrency(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			d, err := r.WithSagaBranch(asA, gid, "01", "action", func(q repository.Tx) error {
-				_, e := q.DeductInventory(ctx, f.skuA, 1)
+				_, e := q.DeductInventory(ctx, f.skuA, f.storeA, 1)
 				return e
 			})
 			mu.Lock()

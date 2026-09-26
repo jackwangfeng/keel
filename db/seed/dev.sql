@@ -155,6 +155,44 @@ SELECT c.merchant_id, c.id, v.title, 100, 0, v.status, now(), v.deleted_at
                     WHERE p.merchant_id = c.merchant_id AND p.title = v.title);
 
 -- ---------------------------------------------------------------------------
+-- 大区与门店
+-- ---------------------------------------------------------------------------
+--
+-- 00020 之后 inventories 的主键是 (sku_id, store_id) 且 store_id NOT NULL：
+-- 没有门店就一行库存也插不进去。那条迁移里的回填只覆盖**迁移那一刻库里已有
+-- 的**商家，而这六家全是迁移之后才插的，所以门店得自己播。
+--
+-- 六家都播，包括停用的（shop-closed）和软删的（shop-deleted）：理由与迁移
+-- 回填那一段同一条 —— 「跳过不营业的商家」会让它名下的行无处可落，而报错指向
+-- 的是一条 NOT NULL 约束，不是这个判断。何况这份种子会重复加载，
+-- 「哪几家有门店」与「哪几家有商品」不是同一批的话，下一个往 shop-c 加一件
+-- 商品的人会撞上一条完全看不出真因的报错。
+--
+-- is_default = TRUE 且不画围栏：默认店靠「全国兜底」接单，不靠围栏（「非默认 且
+-- 无围栏」这一种组合。这批夹具没有一条断言碰地理围栏，画一个假多边形只会让
+-- 后来人以为那几个坐标是有意义的。location 同理留空。
+--
+-- 显式写 merchant_id 而不吃列默认值：这个文件由管理员角色加载
+-- （见文件头），连接上没有 app.merchant_id，current_merchant() 会直接 RAISE。
+INSERT INTO regions (merchant_id, code, name)
+SELECT m.id, 'default', '默认大区'
+  FROM merchants m
+ WHERE m.code IN ('shop-a', 'shop-b', 'shop-c',
+                  'shop-closed', 'shop-deleted', 'shop-nodomain')
+   AND NOT EXISTS (SELECT 1 FROM regions r
+                    WHERE r.merchant_id = m.id AND r.code = 'default');
+
+INSERT INTO stores (merchant_id, region_id, code, name, is_default)
+SELECT r.merchant_id, r.id, 'default', '默认门店', TRUE
+  FROM regions r
+  JOIN merchants m ON m.id = r.merchant_id
+ WHERE m.code IN ('shop-a', 'shop-b', 'shop-c',
+                  'shop-closed', 'shop-deleted', 'shop-nodomain')
+   AND r.code = 'default'
+   AND NOT EXISTS (SELECT 1 FROM stores st
+                    WHERE st.merchant_id = r.merchant_id AND st.code = 'default');
+
+-- ---------------------------------------------------------------------------
 -- SKU 与库存
 -- ---------------------------------------------------------------------------
 --
@@ -180,13 +218,23 @@ SELECT p.merchant_id, p.id, 'SKU-' || p.id, 1990, 1
 -- 存在的（见文件末尾那段）。排除条件写在这里而不是靠「它在这条语句之后才建出来」
 -- ：这个文件每次测试都会重新加载一遍，第二次加载时它已经在库里了，
 -- 少了这个条件就会被顺手补上一行库存，而那条断言会从此空转。
-INSERT INTO inventories (sku_id, available_qty, warning_qty)
-SELECT s.id, 10 + (s.id % 7) * 5, 3
+--
+-- 库存挂在上面那家默认门店上（00020：store_id NOT NULL，主键是
+-- (sku_id, store_id)）。JOIN 而不是标量子查询：少了门店那一行时这条语句
+-- 应当**一行都不插**并让后续断言红，而不是插进一个 NULL 去撞 NOT NULL ——
+-- 后者的报错指向约束，指不回这里。
+-- merchant_id 同样显式写：管理员连接上没有 app.merchant_id，列默认值
+-- current_merchant() 会 RAISE。
+INSERT INTO inventories (sku_id, store_id, merchant_id, available_qty, warning_qty)
+SELECT s.id, st.id, s.merchant_id, 10 + (s.id % 7) * 5, 3
   FROM skus s
   JOIN merchants m ON m.id = s.merchant_id
+  JOIN stores st ON st.merchant_id = s.merchant_id
+                AND st.is_default AND st.deleted_at IS NULL
  WHERE m.code IN ('shop-a', 'shop-b')
    AND s.sku_code <> 'SKU-NOSTOCKROW'
-   AND NOT EXISTS (SELECT 1 FROM inventories i WHERE i.sku_id = s.id);
+   AND NOT EXISTS (SELECT 1 FROM inventories i
+                    WHERE i.sku_id = s.id AND i.store_id = st.id);
 
 -- ---------------------------------------------------------------------------
 -- 买家
@@ -315,20 +363,24 @@ SELECT u.merchant_id, u.id, 'A 店第二个收件人', '13800000005',
 -- 一个**没有库存行**的 SKU（shop-a）
 -- ---------------------------------------------------------------------------
 --
--- 它是 repository.ErrSKUNotInTenant 在 HTTP 层唯一可达的靶子。
+-- **它守的东西本轮（00020）换了，行本身还要留着。**
 --
--- 那个 sentinel 覆盖两件事：「这一行属于别的商家」与「它根本没有库存行」。
--- 前者在下单接口上**不可达** —— order_items 的复合外键
--- (sku_id, merchant_id) → skus(id, merchant_id) 让跨租户的订单行根本写不进去，
--- 而定价那一步更早就把别家的 sku_id 当成「不可售」拒了。
+-- 从前它是 repository.ErrSKUNotInTenant 在 HTTP 层唯一可达的靶子：那个
+-- sentinel 当时同时覆盖「这一行属于别的商家」与「它根本没有库存行」。
 --
--- 没有这一行数据，「跨租户 SKU 不会被翻译成库存不足」这条断言就只能对着一条
--- 不可达的分支空转 —— 这个仓库前几轮反复出现的正是这种「断言存在但和被测代码
--- 没有因果关系」。有了它，POST /orders 能真的走到扣减那一步、真的拿到那个
--- sentinel，于是「它没有被翻译成 409 库存不足」才是一句被证实过的话。
+-- 00020 把扣减的失败从两种拆成四种，并把「这家店根本没有这一行」挪进了
+-- ErrInsufficientStock（internal/repository/inventory.go 的文件头逐条写着）。
+-- 理由是库存按门店分之后「缺行」从罕见变成常态 —— 新店、新品、缺货清零都会
+-- 缺行 —— 而判成「本店不卖」会让一家刚开的店在录库存之前什么都不卖。
+--
+-- 于是这一行现在守的是**那条新语义**：缺行 ≡ 可售 0，报 409 缺货，
+-- 不是 422「本店不卖」。执行者是 internal/handler 的
+-- TestMissingInventoryRowMeansZeroStockNotUnsold。
+-- 它同时还是 products.sql 那条 in_stock 判据的反例（「有 SKU、没有库存行」
+-- 的商品不算有货）—— 那一条本轮没变。
 --
 -- 挂在一件在架商品上（所以定价查得到它、试算会成功），但 inventories 里没有
--- 对应行（所以扣减时那一行在本租户不可见）。
+-- 对应行 —— 而下面那条库存 INSERT 明确把它排除在外。
 INSERT INTO skus (merchant_id, product_id, sku_code, spec_values, price_cents, status)
 SELECT p.merchant_id, p.id, 'SKU-NOSTOCKROW', '{"备注":"刻意没有库存行"}'::jsonb, 1990, 1
   FROM products p
