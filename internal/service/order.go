@@ -211,8 +211,16 @@ func NewOrderService(r OrderRepository, tc Coordinator, log *slog.Logger) *Order
 // 共用同一个入参类型是「共用同一份定价」这件事在类型上的第一道保证：
 // 两边连能传进去的东西都是同一个，剩下的差别只能在副作用上，不能在金额上。
 type CreateRequest struct {
-	Items                []LineInput
-	AddressID            int64
+	Items     []LineInput
+	AddressID int64
+
+	// StoreID 是履约门店。**契约里它是必填的，服务端不替客户端猜。**
+	//
+	// 读接口（/products、/search）省略 store_id 时会走回落链，这里刻意不走：
+	// 买家在 A 店看到的价格与库存，下单时若被服务端静默落到默认门店 B，
+	// 结果是「在 A 店看的货从 B 店发出、按 B 店的价成交」——
+	// 而那是一个没有任何东西会报出来的错（两家店都有这件商品、两个价都合法）。
+	StoreID int64
 	Remark               *string
 	ExpectedPayableCents *int64
 	UserCouponID         *int64
@@ -250,11 +258,36 @@ func (s *OrderService) Preview(ctx context.Context, req CreateRequest) (Quote, e
 
 	var q Quote
 	err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
-		var err error
-		q, err = priceOrder(ctx, tx, req.Items)
+		sc, err := orderScope(ctx, tx, req.StoreID)
+		if err != nil {
+			return err
+		}
+		q, err = priceOrder(ctx, tx, sc, req.Items)
 		return err
 	})
 	return q, err
+}
+
+// orderScope 把请求里那个必填的 store_id 变成一个 StoreScope。
+//
+// 门店不存在 / 不属于本租户 / 已软删 → ErrStoreNotFound，由 handler 翻成 422
+// （store_id 在请求体里，不在路径里 —— 数据模型 §4 那条分界线）。
+//
+// **不回落**：见 CreateRequest.StoreID 上那段。这个函数存在的意义就是让
+// 「下单也顺手回落一下」写不出来 —— 它连那条路径都没有。
+func orderScope(ctx context.Context, tx repository.Tx, storeID int64) (repository.StoreScope, error) {
+	if storeID <= 0 {
+		return repository.StoreScope{}, fmt.Errorf("%w: store_id 必须为正，实得 %d",
+			ErrBadRequest, storeID)
+	}
+	_, regionID, err := tx.StoreScope(ctx, storeID)
+	if errors.Is(err, repository.ErrCatalogNotFound) {
+		return repository.StoreScope{}, fmt.Errorf("%w: store_id=%d", ErrStoreNotFound, storeID)
+	}
+	if err != nil {
+		return repository.StoreScope{}, err
+	}
+	return repository.StoreScope{StoreID: storeID, RegionID: regionID}, nil
 }
 
 // Create 实现 POST /orders。
@@ -423,7 +456,12 @@ func (s *OrderService) placeDraft(ctx context.Context, tx repository.Tx,
 		return repository.Order{}, err
 	}
 
-	q, err := priceOrder(ctx, tx, req.Items)
+	sc, err := orderScope(ctx, tx, req.StoreID)
+	if err != nil {
+		return repository.Order{}, err
+	}
+
+	q, err := priceOrder(ctx, tx, sc, req.Items)
 	if err != nil {
 		return repository.Order{}, err
 	}
@@ -459,6 +497,7 @@ func (s *OrderService) placeDraft(ctx context.Context, tx repository.Tx,
 	draft, err := tx.CreateOrderDraft(ctx, repository.NewOrderDraft{
 		OrderNo:          orderNo,
 		UserID:           userID,
+		StoreID:          sc.StoreID,
 		GoodsAmountCents: q.GoodsAmountCents,
 		FreightCents:     freightForLedger,
 		DiscountCents:    q.DiscountCents,

@@ -194,7 +194,7 @@ const (
 type OrderTx interface {
 	// ListSKUsForPricing 按一批 sku_id 取定价与快照素材。
 	// **试算与真下单共用它** —— 两条路算出不同的钱是这条链路最严重的一类 bug。
-	ListSKUsForPricing(ctx context.Context, skuIDs []int64) ([]PriceableSKU, error)
+	ListSKUsForPricing(ctx context.Context, sc StoreScope, skuIDs []int64) ([]PriceableSKU, error)
 
 	// FindAddress 取当前买家名下的一条收货地址。查不到返回 ErrAddressNotFound。
 	FindAddress(ctx context.Context, addressID, userID int64) (Address, error)
@@ -250,13 +250,20 @@ type OrderTx interface {
 	ReleaseIdempotencyKey(ctx context.Context, scope string, userID int64, key string) (bool, error)
 }
 
-func (t tenantTx) ListSKUsForPricing(ctx context.Context, skuIDs []int64) ([]PriceableSKU, error) {
+func (t tenantTx) ListSKUsForPricing(ctx context.Context, sc StoreScope, skuIDs []int64) ([]PriceableSKU, error) {
 	if len(skuIDs) == 0 {
 		// 空数组交给 Postgres 是合法的（回 0 行），但让它走到这里意味着上游的
 		// 「至少一行」校验没生效。报错而不是回空：空结果会一路变成一笔 0 元订单。
 		return nil, errors.New("定价查询收到了空的 sku 列表")
 	}
-	rows, err := t.q.ListSKUsForPricing(ctx, skuIDs)
+	if sc.StoreID <= 0 {
+		// 没有门店就没有价：视图的键是 (store_id, sku_id)，store_id = 0 会让
+		// 这条查询安静地返回 0 行，而调用方会把它读成「这些 SKU 都不可售」。
+		return nil, errors.New("定价查询没有门店上下文")
+	}
+	rows, err := t.q.ListSKUsForPricing(ctx, db.ListSKUsForPricingParams{
+		StoreID: sc.StoreID, RegionID: sc.RegionID, SkuIds: skuIDs,
+	})
 	if err != nil {
 		return nil, err
 	}

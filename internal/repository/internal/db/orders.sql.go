@@ -914,16 +914,29 @@ func (q *Queries) ListPaymentsForOrder(ctx context.Context, orderID int64) ([]Li
 
 const listSKUsForPricing = `-- name: ListSKUsForPricing :many
 
-SELECT s.id, s.product_id, s.spec_values, s.price_cents, s.image_url,
+SELECT s.id, s.product_id, s.spec_values, v.price_cents, s.image_url,
        p.title
   FROM skus s
   JOIN products p ON p.id = s.product_id
- WHERE s.id = ANY($1::bigint[])
+  JOIN sku_prices_by_store v ON v.sku_id = s.id AND v.store_id = $1
+ WHERE s.id = ANY($2::bigint[])
    AND s.status = 1
    AND s.deleted_at IS NULL
    AND p.status = 1
    AND p.deleted_at IS NULL
+   AND NOT EXISTS (SELECT 1 FROM region_product_overrides ro
+                    WHERE ro.region_id = $3
+                      AND ro.product_id = p.id AND ro.status = 0)
+   AND NOT EXISTS (SELECT 1 FROM store_product_overrides so
+                    WHERE so.store_id = $1
+                      AND so.product_id = p.id AND so.status = 0)
 `
+
+type ListSKUsForPricingParams struct {
+	StoreID  int64
+	SkuIds   []int64
+	RegionID int64
+}
 
 type ListSKUsForPricingRow struct {
 	ID         int64
@@ -964,8 +977,25 @@ type ListSKUsForPricingRow struct {
 // 不在这里 JOIN inventories：试算是**无副作用的金额试算**，不是可售性承诺。
 // 把库存并进来会让试算看起来像一次预留，而 SAGA 的正向阶段才是真正的判定点
 // （架构 §5：超卖为零、少卖存在，正是因为扣减发生在那里而不是这里）。
-func (q *Queries) ListSKUsForPricing(ctx context.Context, skuIds []int64) ([]ListSKUsForPricingRow, error) {
-	rows, err := q.db.Query(ctx, listSKUsForPricing, skuIds)
+//
+// ### 本轮（00020）取价口换成了 sku_prices_by_store 视图
+//
+// 这是「试算与下单共用同一份定价」那条纪律在三层定价下的兑现：视图是全仓库
+// 唯一一处写 COALESCE(门店价, 大区价, 基准价) 的地方，而商品列表、详情、
+// 检索结果也都经过它。取 skus.price_cents 的话，**列表显示的价与下单成交的价
+// 会在「这家店定了自己的价」的那些商品上分叉** —— 而那正是最不可能被夹具
+// 覆盖到的一种。
+//
+// 两条 NOT EXISTS 也一起进来：一件这家店（或它所在大区）不卖的商品
+// 在这里就不该有价。少了它们，试算会给出一个金额，而 SAGA 的库存分支随后以
+// ErrSKUNotSoldInStore 拒掉整单 —— 用户看到的是「试算成功、下单失败」，
+// 而两次调用之间什么都没变。可售性的判定必须和金额在同一条查询里。
+//
+// JOIN 视图而不是 LEFT JOIN：视图对每一个 (未软删门店 × 未软删 SKU) 都恰好
+// 有一行，缺行意味着门店或 SKU 已经不在了，而那时这一行本来就不该可售 ——
+// 少掉的行会让调用方拿到「这些 SKU 不可售」，那正是对的答案。
+func (q *Queries) ListSKUsForPricing(ctx context.Context, arg ListSKUsForPricingParams) ([]ListSKUsForPricingRow, error) {
+	rows, err := q.db.Query(ctx, listSKUsForPricing, arg.StoreID, arg.SkuIds, arg.RegionID)
 	if err != nil {
 		return nil, err
 	}
