@@ -5,8 +5,6 @@
 package db
 
 import (
-	"net/netip"
-
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -235,33 +233,6 @@ type Sku struct {
 	CreatedAt  pgtype.Timestamptz
 	UpdatedAt  pgtype.Timestamptz
 	DeletedAt  pgtype.Timestamptz
-}
-
-type Staff struct {
-	ID          int64
-	MerchantID  *int64
-	Email       string
-	Name        string
-	Role        int16
-	Status      int16
-	CreatedBy   *int64
-	LastLoginAt pgtype.Timestamptz
-	DeletedAt   pgtype.Timestamptz
-	CreatedAt   pgtype.Timestamptz
-	UpdatedAt   pgtype.Timestamptz
-}
-
-type StaffToken struct {
-	ID         int64
-	StaffID    int64
-	TokenHash  string
-	Kind       int16
-	ExpireAt   pgtype.Timestamptz
-	UsedAt     pgtype.Timestamptz
-	RevokedAt  pgtype.Timestamptz
-	LastSeenAt pgtype.Timestamptz
-	CreatedIp  *netip.Addr
-	CreatedAt  pgtype.Timestamptz
 }
 
 type Upload struct {
