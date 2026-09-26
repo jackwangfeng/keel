@@ -39,10 +39,38 @@ so "which one is running?" never depends on anyone's memory.
 
 ## [Unreleased]
 
-Migrations `00027`–`00038` and `00053`.
+Migrations `00027`–`00038`, `00050` and `00053`.
 
 ### Added
 
+- **Bulk product import** (`/admin/product-imports`, migration `00050`). Download an
+  xlsx or csv template, upload it for a **dry-run preview** that writes nothing —
+  per-row errors (required cells, prices parsed as decimal strings with no
+  floating point, duplicate SKU codes within the file and against the shop,
+  multi-spec rows merged by title), prohibited-claim hits located to the code
+  point, and a category decision per product — then **confirm** by re-sending the
+  same file with the chosen categories. The confirm step re-validates everything,
+  runs in one transaction, creates drafts only, and is idempotent twice over: the
+  `Idempotency-Key`, and a per-shop unique index on the file's sha256 so the same
+  file is never imported twice. Limits are 5 MB / 2000 rows. Excel pitfalls are
+  handled explicitly: formulas are rejected, merged cells are filled down (merged
+  headers are rejected), cells Excel turned into dates are flagged, and GBK-encoded
+  csv is read. Image URLs are recorded, not downloaded (server-side fetching is an
+  SSRF surface that needs its own allow-list work). New dependency:
+  `github.com/xuri/excelize/v2`.
+- **Category suggestions from embeddings.** When the category column is empty or
+  does not match, the preview ranks leaf categories by cosine between the
+  title+subtitle embedding and each category path's embedding, and returns the top
+  three. It auto-selects only when the top score is at least 0.50 *and* beats the
+  runner-up by 0.03; otherwise it asks a human. With no inference engine (or when it
+  is down) the preview degrades to "pick manually" instead of failing. Offline
+  evaluation (123 hand-labelled titles over 41 leaf categories, Qwen3-Embedding-0.6B
+  on infero): Top-1 83.7%, Top-3 95.9%, 96.7% precision on the 74% it
+  auto-selects. The set lives in `internal/understanding/testdata/category_eval/`;
+  `make category-eval` reruns it against a live engine.
+- **Admin console: "Bulk import" page** — template download, preview table with
+  error rows in red and prohibited words highlighted, editable category per
+  product, confirm, and a result page listing created drafts and skipped rows.
 - **Business re-ranking in `POST /search`** (semantic search design §6). After
   RRF fusion and before truncating to `size`, every candidate's score is
   multiplied by a business factor — multiplicative decay, not an additive

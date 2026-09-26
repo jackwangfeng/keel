@@ -57,6 +57,8 @@ var notificationCallSites = map[string]notifyPolicy{
 		"改到预警线以下时他正看着那个数"},
 	"AdminCatalogService.CreateSKU/CreateSKU":               {Silent: "建 SKU 时写初始库存：商家自己做的，理由同 SetInventory"},
 	"AdminStoreService.SetStoreInventory/SetStoreInventory": {Silent: "后台按门店改库存：商家自己做的，理由同 SetInventory"},
+	"ProductImportService.commitInTx/CreateSKU": {Silent: "批量导入时建 SKU 写初始库存：商家自己确认的导入，" +
+		"理由同 AdminCatalogService.CreateSKU；而且导入的商品是草稿，买家看不见，库存高低与任何人的订单无关"},
 }
 
 // stateEdges 登记状态机的每一条边由哪条语句走（order:/refund: 前缀，与迁移里的

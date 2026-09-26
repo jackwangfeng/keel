@@ -241,6 +241,13 @@ func sendAs(t *testing.T, host string, r permReq, token string) *httptest.Respon
 	if r.Upload {
 		return uploadImage(t, adminShop{Host: host, Token: token}, "image/png", []byte("\x89PNG permission "+time.Now().String()))
 	}
+	if r.Import != nil {
+		key := ""
+		if r.Path == v1+"/admin/product-imports" {
+			key = freshIdemKey()
+		}
+		return importReq(t, host, token, r.Path, r.Import, r.ImportCategories, key)
+	}
 	return reqAs(t, r.Method, host, r.Path, r.Body, token)
 }
 
