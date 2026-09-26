@@ -246,6 +246,16 @@ Homebrew 装法：`brew install --cask android-commandlinetools`，再用 `sdkma
   全部 135 个。编译器在 `manifest.json` 的 `app-android.distribute.modules` 里列出代码
   实际用到的 uni 模块，脚本会核对每一个都在清单里——漏一个，apk 照样打得出来，
   只会在调用那个 API 时在真机上崩。
+- **`uni.request` 的 `data` 在 Android 上不收契约类型的对象。** 传 `LoginRequest` 这类
+  typed 对象，Android 直接走 fail：`errCode 600008 the data parameter type is invalid`；
+  H5 上一切正常，于是症状是「GET 全通、所有 POST 全挂」。`client.uts` 的 `send()` 因此
+  先 `JSON.stringify` 再交出去。真机（小米 / Android 15）上实测过登录 → 试算 → 下单 →
+  支付 → 沙箱入账整条链路。
+- **`make app-build-android` 绿 ≠ Kotlin 编得过。** 它只跑到「UTS → Kotlin 源码」为止。
+  实测在 `uni.request` 的 `fail` 回调里引用外层函数的参数，UTS 编译器是绿的，Kotlin
+  编译报 `Unresolved reference`。真正的 Kotlin 编译只在 `make app-apk` 里发生。
+- **release 包里 `console.log` 进不了 logcat**（走的是调试服务器，那个模块没打进包）。
+  真机排错时把信息显示在页面上，比如网络失败的提示后面带着 `［errCode errMsg］`。
 - **签名是 debug 证书**，能装能测，不能上架。正式证书还没有。
 - **明文 HTTP 是开着的**（`usesCleartextTraffic`），因为开发期地址是局域网 http。上线换
   HTTPS 后要关。

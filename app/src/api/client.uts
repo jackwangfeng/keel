@@ -183,7 +183,12 @@ function send(
     dataType: 'text',
     responseType: 'text',
     header: header,
-    data: body,
+    // **自己序列化，不把对象交给 uni.request。** body 是契约类型（LoginRequest 之类），
+    // 落到 Kotlin 是一个 UTSObject 子类的实例；app-android 的 uni.request 不收它，
+    // 直接走 fail：errCode 600008「the data parameter type is invalid」（真机实测，
+    // 小米 / Android 15）。H5 上它是普通对象所以一直没事 —— 于是 GET 全通、
+    // 所有 POST（登录、试算、下单、支付）全挂。字符串两端都收，Content-Type 上面已经设了。
+    data: body != null ? JSON.stringify(body) : null,
     success: (res) => {
       const status = res.statusCode
       const text = res.data != null ? res.data! : ''
@@ -203,8 +208,10 @@ function send(
       }
       onErr(failureOf(status, text != '' ? JSON.parse<Problem>(text) : null, retryAfter))
     },
-    fail: (_err) => {
-      onErr(failureOf(0, null, 0))
+    fail: (err) => {
+      const f = failureOf(0, null, 0)
+      f.message = f.message + '［' + err.errCode.toString() + ' ' + err.errMsg + '］'
+      onErr(f)
     },
   })
 }
@@ -526,8 +533,10 @@ export function settleSandbox(
       }
       onErr(failureOf(status, text != '' ? JSON.parse<Problem>(text) : null, 0))
     },
-    fail: (_err) => {
-      onErr(failureOf(0, null, 0))
+    fail: (err) => {
+      const f = failureOf(0, null, 0)
+      f.message = f.message + '［' + err.errCode.toString() + ' ' + err.errMsg + '］'
+      onErr(f)
     },
   })
 }
