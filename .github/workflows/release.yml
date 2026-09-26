@@ -115,7 +115,12 @@ jobs:
           V: ${{ needs.verify.outputs.version }}
         run: |
           set -euo pipefail
-          docker build -f docker/Dockerfile --target app \
+          # 国内的自建 runner 要经代理才拉得到 GitHub（dtmrs 那一层要 git clone）。
+          # 第一版这里没带：ci.yml 的 e2e 修了，这里漏了，打 v0.1.0 标签的那一刻
+          # 发布流水线就会卡在这一步。代理参数与 ci.yml 共用一个脚本。
+          # shellcheck disable=SC2046
+          docker build $(scripts/ci_build_proxy_args.sh) \
+            -f docker/Dockerfile --target app \
             --build-arg "KEEL_VERSION=$V" \
             --build-arg "KEEL_COMMIT=$GITHUB_SHA" \
             --build-arg "KEEL_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \

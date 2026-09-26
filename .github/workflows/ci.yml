@@ -216,7 +216,10 @@ jobs:
           # 这里会因为重名直接失败，而那句报错完全不指向真因。
           docker rm -f keelci-pg >/dev/null 2>&1 || true
 
-          docker build -t keel-postgres:16 docker/postgres
+          # 要 apt 装 PostGIS / pgvector，国内直连 apt.postgresql.org 常常超时，
+          # 与 e2e 那一步同一个代理（scripts/ci_build_proxy_args.sh）。
+          # shellcheck disable=SC2046
+          docker build $(scripts/ci_build_proxy_args.sh) -t keel-postgres:16 docker/postgres
           docker run -d --name keelci-pg \
             -e POSTGRES_USER=keel -e POSTGRES_PASSWORD=keel -e POSTGRES_DB=keel \
             -p 15432:5432 keel-postgres:16
@@ -377,17 +380,12 @@ jobs:
       # 不写进全局的 ~/.docker/config.json，那会给同机演示环境的每个容器都塞上代理。
       # 构建容器里 127.0.0.1 是容器自己，所以那个地址是宿主机的局域网 IP。没配就照原样直连。
       - name: 起全栈
+        # 代理参数由 scripts/ci_build_proxy_args.sh 统一给（没配就是空），
+        # 另外两处构建（go job 的 keel-postgres、release.yml）调的是同一个脚本。
         run: |
-          if [ -n "${KEEL_CI_BUILD_PROXY:-}" ]; then
-            p="$KEEL_CI_BUILD_PROXY"
-            docker compose build \
-              --build-arg HTTP_PROXY="$p" --build-arg HTTPS_PROXY="$p" \
-              --build-arg http_proxy="$p" --build-arg https_proxy="$p" \
-              --build-arg NO_PROXY=localhost,127.0.0.1 --build-arg no_proxy=localhost,127.0.0.1
-            docker compose up -d
-          else
-            docker compose up -d --build
-          fi
+          # shellcheck disable=SC2046  # 要的就是按空格拆成多个参数
+          docker compose build $(scripts/ci_build_proxy_args.sh)
+          docker compose up -d
 
       # **判据在这一步，不在上一步。**
       #
