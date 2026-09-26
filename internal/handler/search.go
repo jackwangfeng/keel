@@ -2,6 +2,7 @@ package handler
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -66,6 +67,21 @@ type searchRequest struct {
 	Filters  *api.SearchFilters `json:"filters"`
 }
 
+// MaxSearchBodyBytes 是 /search 请求体的大小上限。
+//
+// 8 KiB。契约允许的最长 query 是 200 个字（UTF-8 下最多 800 字节），
+// 加上 filters / size / strategy / explain 与 JSON 的骨架，一个合法请求
+// 远在 1 KiB 以内；8 KiB 是留给将来多几个筛选字段的余量。
+//
+// 为什么这条路由**必须**有它：/search 在契约里是 security: []（公开无鉴权，
+// TestSearchIsPublic 钉着），而在此之前全仓库唯一一处请求体大小限制是
+// handler/webhook.go 那一处。一个公开的、每次请求都要在 CPU 上跑模型推理的
+// 接口，连读多少字节都不限。
+//
+// 顺序与 webhook.go 那一处相同：**先限大小，再解析**。那边的理由是验签要读
+// 完全部字节，这边没有验签，但 ShouldBindJSON 同样会把整个 body 读进内存。
+const MaxSearchBodyBytes = 8 << 10
+
 // Search 实现 POST /api/v1/search。
 func (h *SearchHandler) Search(c *gin.Context) {
 	// latency_ms 是契约里的必填字段，量的是**服务端这一侧**的耗时。
@@ -73,8 +89,22 @@ func (h *SearchHandler) Search(c *gin.Context) {
 	// 只有网络往返不算（契约里 §8 的预算写着「不含网络」）。
 	start := time.Now()
 
+	// 大小闸门在解析之前，形状同 webhook.go。
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, MaxSearchBodyBytes)
+
 	var req searchRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
+		// 超长与「不是合法 JSON」分开回。两者对调用方是两件事：
+		// 前者要它把请求改小（而且它多半是个 bug 或者一次探测），
+		// 后者要它去看序列化。都回 422 的话，一个被闸门截断的请求
+		// 读起来像「我的 JSON 写错了」。
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			problem.Write(c, http.StatusRequestEntityTooLarge,
+				problem.TypeInvalidRequest,
+				fmt.Sprintf("请求体最大 %d 字节", MaxSearchBodyBytes))
+			return
+		}
 		problem.Write(c, http.StatusUnprocessableEntity,
 			problem.TypeInvalidRequest, "请求体不是合法的 JSON")
 		return
@@ -109,6 +139,18 @@ func (h *SearchHandler) Search(c *gin.Context) {
 		// 后者该提示这家店没有。回空列表会把前者伪装成后者。
 		problem.Write(c, http.StatusUnprocessableEntity,
 			problem.TypeInvalidRequest, "查询词里没有可检索的内容")
+		return
+	}
+	if errors.Is(err, service.ErrQueryTooLong) {
+		// 契约给 query 写了 maxLength: 200，而此前这里一个字都没校验。
+		//
+		// 不校验不是「宽容一点」：向量那一路给引擎的时间是按字数算的
+		// （service.DefaultQueryEmbedTimeout 上那段实测），没有上限它就没有
+		// 上界 —— 一条请求体闸门之内放得下的超长 query 会让一个**公开无鉴权**
+		// 的接口占着引擎跑很久。同形于上面那条：这不是「没搜到」，
+		// 是「这串东西搜不了」。
+		problem.Write(c, http.StatusUnprocessableEntity, problem.TypeInvalidRequest,
+			fmt.Sprintf("查询词最长 %d 个字", service.MaxQueryRunes))
 		return
 	}
 	if err != nil {

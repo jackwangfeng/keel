@@ -143,16 +143,62 @@ type SearchConfig struct {
 	EmbedTimeout time.Duration
 }
 
-// DefaultQueryEmbedTimeout 是查询侧给引擎的时间上限。
+// DefaultQueryEmbedTimeout 是查询侧给引擎的时间上限里**与长度无关的那一段**。
 //
 // 250 ms 不是 §8 那个 15 ms 的预算，而是**放弃等待的那条线**：实测 CPU 单条
-// 62 ms，250 ms 是它的 4 倍，留给一次 GC、一次批处理排队、一次网络抖动。
-// 超过它就走降级链交纯关键词结果 —— 那比让用户等到 5 秒（内 inference 客户端
-// 的 DefaultTimeout，那是**索引侧**的量级）再看到结果要好得多。
+// **短**查询 62 ms，250 ms 是它的 4 倍，留给一次 GC、一次批处理排队、
+// 一次网络抖动。超过它就走降级链交纯关键词结果 —— 那比让用户等到 5 秒
+// （inference 客户端的 DefaultTimeout，那是**索引侧**的量级）再看到结果要好得多。
 //
-// 250 + 关键词那一路的几毫秒，仍在 P95 < 300 ms 之内，但只是勉强 ——
-// 所以它是上限，不是目标。
+// ## 「62 ms 的 4 倍」这句话只对短查询成立
+//
+// 上一版把这个常数当成整个 embedding 步骤的上限，那是错的：**embedding 的
+// 耗时随输入长度线性涨，而一个常数上限不涨**。直接打引擎实测（重复三次稳定）：
+//
+//	3 字   0.048s      60 字  0.125s     150 字 0.258s
+//	210 字 0.424s      600 字 0.980s
+//
+// 契约给 query 的上限是 maxLength: 200。也就是说在**契约允许长度的 75%**
+// （150 字）处，向量那一路就已经必然超时 —— 端到端实测 latency_ms 稳定停在
+// 250，返回的是纯关键词结果，而响应是一个正常的 200、strategy 照样回
+// "rrf-v1"。用户看不出任何异常，日志里只有一条 WARN。
+//
+// 所以上限改成跟着长度走：DefaultQueryEmbedTimeout + PerRuneEmbedBudget × 字数。
+// 200 字（契约上限）时是 250 + 600 = 850 ms，对着实测的 0.42 s 有两倍余量；
+// 短查询仍然正好是 250 ms，与改之前一模一样。
+//
+// ## 这会让长查询超出 P95 < 300 ms 的目标，这是**刻意**的
+//
+// 一条 200 字的查询在 CPU 上光 embedding 就要 0.42 s，**无论超时定成多少
+// 都进不了 300 ms**。能选的只有两件事：安静地降级（快，但语义那一路整个没了，
+// 而调用方看不出来），或者慢一点但把活干完。选后者 —— 静默少做正是这个仓库
+// 反复在消灭的东西。
+//
+// M3 计划里那笔延迟账（62 + 30 + 1 + 15 = 108 ms，三倍余量）同样只在极短
+// 查询上成立，那份文档要跟着改。
 const DefaultQueryEmbedTimeout = 250 * time.Millisecond
+
+// PerRuneEmbedBudget 是每个字再多给的等待时间。
+//
+// 实测的斜率约 1.6 ms/字（600 字 0.98 s 与 3 字 0.048 s 之间），取 3 ms/字
+// 是它的将近两倍 —— 与 250 ms 对 62 ms 取 4 倍是同一种留法，只是这一段
+// 要留的是「这台机器比实测那台慢一点」而不是「一次 GC」。
+//
+// 它不是配置项：一个能被调小的超时意味着某个部署会在长查询上全面静默降级，
+// 而那正是这一条要消灭的东西。
+const PerRuneEmbedBudget = 3 * time.Millisecond
+
+// MaxQueryRunes 是查询词的字数上限，**与契约里 query 的 maxLength 相同**。
+//
+// 契约写了这个上限，而 handler 此前一个字都没校验。不校验的代价不是
+// 「多花一点钱」：它与上面那段是同一件事的两半 —— 没有上限的话，
+// 「给引擎的时间随长度走」就没有上界，一条 60 KB 的 query（请求体大小闸门
+// 之内完全放得下）会让一个公开接口上的 goroutine 占着引擎跑几十秒。
+//
+// 数的是 rune 不是 byte：OpenAPI 的 maxLength 数的是字符，
+// 「连衣裙」在 UTF-8 里是 9 字节 3 个字符，按字节算会在 67 个汉字处就拒绝，
+// 而那是契约允许的长度的三分之一。
+const MaxQueryRunes = 200
 
 // SearchFilters 是契约 SearchFilters 在业务层的形状。
 //
@@ -270,9 +316,24 @@ func NewSearchService(r SearchRepository, emb inference.Embedder,
 // handler 把它映射成 422 —— 这不是「没搜到」，是「这串东西搜不了」。
 var ErrEmptyQuery = errors.New("查询词里没有可检索的内容")
 
+// ErrQueryTooLong：查询词超过契约给的 maxLength。handler 同样映射成 422。
+//
+// 校验放在 service 而不是 handler：ErrEmptyQuery 也在这里，两条是同一类
+// 「这串东西搜不了」，分开两处的话，下一个调用方（比如将来的 gRPC 面或者
+// 一条命令行工具）只会带上其中一条。
+var ErrQueryTooLong = errors.New("查询词超过长度上限")
+
 // Search 跑一次混合检索。
 func (s *SearchService) Search(ctx context.Context, req SearchRequest) (SearchResult, error) {
 	size := clampSearchSize(req.Size)
+
+	// 长度先于一切：下面 recallByVector 给引擎的时间是按字数算的，
+	// 没有这道闸门它就没有上界。
+	runes := len([]rune(req.Query))
+	if runes > MaxQueryRunes {
+		return SearchResult{}, fmt.Errorf("%w：%d 字，上限 %d 字",
+			ErrQueryTooLong, runes, MaxQueryRunes)
+	}
 
 	tsquery := search.TSQueryOr(req.Query)
 	if tsquery == "" {
@@ -399,7 +460,10 @@ func (s *SearchService) recallByVector(ctx context.Context, query string,
 	// 查询侧自己带一个更紧的上限：inference 客户端的 DefaultTimeout 是 5 秒，
 	// 那是**索引侧**的量级（批 64 在 CPU 上要 2 秒）。在一个人正盯着的搜索框
 	// 前面等 5 秒，比返回一份纯关键词结果糟糕得多。
-	ectx, cancel := context.WithTimeout(ctx, s.cfg.EmbedTimeout)
+	//
+	// **它跟着输入长度走**，理由与实测数据写在 DefaultQueryEmbedTimeout 上：
+	// embedding 的耗时随长度线性涨，一个常数上限会让长查询必然静默降级。
+	ectx, cancel := context.WithTimeout(ctx, s.embedTimeoutFor(query))
 	defer cancel()
 
 	out, err := s.emb.Embed(ectx, []string{query})
@@ -421,6 +485,21 @@ func (s *SearchService) recallByVector(ctx context.Context, query string,
 		return nil, err
 	}
 	return hits, nil
+}
+
+// embedTimeoutFor 给这一条查询算出等引擎的上限。
+//
+// 上界是确定的：query 的字数由 MaxQueryRunes 挡住（契约的 maxLength），
+// 所以这个函数的值域是 [EmbedTimeout, EmbedTimeout + 200×PerRuneEmbedBudget]，
+// 默认配置下是 250 ms 到 850 ms。没有那道长度闸门的话它就没有上界。
+func (s *SearchService) embedTimeoutFor(query string) time.Duration {
+	n := len([]rune(query))
+	if n > MaxQueryRunes {
+		// 正常走不到（Search 已经挡过了）。兜一笔，免得将来多一个调用方
+		// 绕过那道闸门时，这里变成一个没有上界的等待。
+		n = MaxQueryRunes
+	}
+	return s.cfg.EmbedTimeout + time.Duration(n)*PerRuneEmbedBudget
 }
 
 // clampSearchSize 把 size 收进契约允许的范围。钳制而不是报 400，

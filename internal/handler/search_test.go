@@ -16,6 +16,7 @@ import (
 	"github.com/keel/keel/internal/api"
 	"github.com/keel/keel/internal/app"
 	"github.com/keel/keel/internal/auth"
+	"github.com/keel/keel/internal/handler"
 	"github.com/keel/keel/internal/inference"
 	"github.com/keel/keel/internal/repository"
 	"github.com/keel/keel/internal/search"
@@ -684,6 +685,215 @@ func TestSearchRejectsQueriesWithNothingSearchable(t *testing.T) {
 	w, _ := doSearch(t, fx.HostA, `{"query":"连衣裙"}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("正常查询返回 %d，上面那些 422 因此说明不了什么", w.Code)
+	}
+}
+
+// 契约给 query 写了 maxLength: 200，handler 要真的挡住它。
+//
+// 为什么这是正确性而不是洁癖：向量那一路给引擎的等待上限是**按字数算的**
+// （service.PerRuneEmbedBudget），没有长度闸门它就没有上界 —— 一条请求体
+// 大小闸门之内完全放得下的超长 query（8 KiB 能装两千多个汉字）会让一个
+// **公开无鉴权**的接口占着引擎跑很久。
+//
+// 数的是字不是字节：200 个汉字在 UTF-8 里是 600 字节。按字节挡的话，
+// 边界会落在 66 个汉字上 —— 契约允许长度的三分之一，而且没有任何东西会红。
+// 下面三个用例正是为此：200 个汉字必须过，201 个必须被拒。
+func TestSearchRejectsQueriesLongerThanTheContractAllows(t *testing.T) {
+	fx := newSearchFixture(t)
+
+	// 刚好卡在契约上限上：200 个汉字（UTF-8 600 字节）必须是 200。
+	// 这一条是阳性对照 —— 没有它，一个把上限当成字节数的实现照样绿。
+	atLimit := strings.Repeat("连", service.MaxQueryRunes)
+	if n := len([]rune(atLimit)); n != 200 {
+		t.Fatalf("用例自己就不对：%d 个字", n)
+	}
+	w, _ := doSearch(t, fx.HostA, fmt.Sprintf(`{"query":%q}`, atLimit))
+	if w.Code != http.StatusOK {
+		t.Errorf("正好 %d 个字（契约的 maxLength）被拒了，返回 %d：%s —— "+
+			"上限被当成字节数了？200 个汉字是 %d 字节",
+			service.MaxQueryRunes, w.Code, w.Body.String(), len(atLimit))
+	}
+
+	// 超一个字就该 422，与「切不出词」同形。
+	tooLong := strings.Repeat("连", service.MaxQueryRunes+1)
+	w, _ = doSearch(t, fx.HostA, fmt.Sprintf(`{"query":%q}`, tooLong))
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("%d 个字（超过契约的 maxLength: %d）返回 %d，期望 422 —— "+
+			"handler 对这个上限一个字都没校验，而向量那一路的等待上限是按字数算的，"+
+			"没有这道闸门它就没有上界。响应：%s",
+			service.MaxQueryRunes+1, service.MaxQueryRunes, w.Code, w.Body.String())
+	}
+	if ct := w.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/problem+json") {
+		t.Errorf("422 的 Content-Type 是 %q，期望 application/problem+json", ct)
+	}
+}
+
+// 引擎的等待上限跟着查询长度走，长查询不再必然静默降级。
+//
+// 这条测试守的是 service.DefaultQueryEmbedTimeout 上那段实测：embedding 的
+// 耗时随长度线性涨，而上一版的上限是一个常数 250 ms。验收直接打引擎量到
+// 150 字就要 0.258 s —— 也就是说在**契约允许长度的 75%** 处，向量那一路
+// 已经必然超时，端到端 latency_ms 稳定停在 250，返回纯关键词结果，
+// 而响应是一个正常的 200、strategy 照样回 "rrf-v1"。
+//
+// 这里不依赖真引擎（那是 make test-engine 的事），而是拿一个**按输入长度
+// 真的睡觉**的替身：它把「耗时随长度涨」这条性质做进夹具，于是
+// 「上限是不是也随长度涨」这件事就能被断言。斜率取得比生产机器慢
+// （2 ms/字 对实测的 1.6 ms/字），这样断言不会因为 CI 机器快一点就失去意义。
+func TestEmbedTimeoutGrowsWithQueryLength(t *testing.T) {
+	fx := newSearchFixture(t)
+	ctx := tenant.NewContext(t.Context(), fx.MerchantA)
+
+	// 60 字与 200 字（契约上限）。前者在旧的常数上限下也能过，
+	// 后者在旧上限下必然超时 —— 两条一起断言，才说明变的是「随长度」
+	// 而不是「把常数调大了」。
+	for _, n := range []int{60, service.MaxQueryRunes} {
+		query := strings.Repeat("连衣裙", n/3)[:0] + strings.Repeat("裙", n)
+		svc := service.NewSearchService(repository.New(testPool),
+			slowByLengthEmbedder{perRune: 2 * time.Millisecond}, service.SearchConfig{}, nil)
+		res, err := svc.Search(ctx, service.SearchRequest{
+			Query:   query,
+			Filters: service.SearchFilters{InStockOnly: true},
+		})
+		if err != nil {
+			t.Fatalf("%d 字的查询报错：%v", n, err)
+		}
+		if res.Degraded {
+			t.Errorf("%d 字的查询降级了 —— 引擎只用了 %v，而契约允许这个长度。"+
+				"给引擎的等待上限没有跟着长度走，长查询会**必然**静默降级："+
+				"响应仍是 200、strategy 仍是 rrf-v1，访客看不出任何异常",
+				n, time.Duration(n)*2*time.Millisecond)
+		}
+	}
+
+	// 阴性对照：慢到超出上限时仍然要降级（而不是变成无限等待）。
+	// 少了它，「不降级」也可能只是因为超时被取消掉了。
+	svc := service.NewSearchService(repository.New(testPool),
+		slowByLengthEmbedder{perRune: 40 * time.Millisecond}, service.SearchConfig{}, nil)
+	res, err := svc.Search(ctx, service.SearchRequest{
+		Query:   strings.Repeat("裙", 60),
+		Filters: service.SearchFilters{InStockOnly: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Degraded {
+		t.Error("引擎慢到 2.4 秒也没有降级 —— 上限没有上界了，" +
+			"一个人正盯着的搜索框前面会一直等下去")
+	}
+}
+
+// slowByLengthEmbedder 按输入长度睡觉，模拟真引擎「耗时随字数线性涨」。
+type slowByLengthEmbedder struct{ perRune time.Duration }
+
+func (e slowByLengthEmbedder) Embed(ctx context.Context, texts []string) (*inference.Result, error) {
+	n := 0
+	for _, t := range texts {
+		n += len([]rune(t))
+	}
+	select {
+	case <-time.After(time.Duration(n) * e.perRune):
+	case <-ctx.Done():
+		return nil, fmt.Errorf("%w：%v", inference.ErrUnavailable, ctx.Err())
+	}
+	return conceptEmbedder{}.Embed(ctx, texts)
+}
+
+// 请求体大小闸门。
+//
+// /search 是 security: []（公开无鉴权），而在此之前全仓库唯一一处
+// MaxBytesReader 在 handler/webhook.go。一个公开的、每次请求都要在 CPU 上
+// 跑模型推理的接口，连读多少字节都不限。
+func TestSearchRejectsAnOversizedBody(t *testing.T) {
+	fx := newSearchFixture(t)
+
+	// 闸门之内：一个正常请求必须照常 200。阳性对照。
+	w, _ := doSearch(t, fx.HostA, `{"query":"连衣裙"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("正常请求返回 %d，下面那条 413 因此说明不了什么：%s", w.Code, w.Body.String())
+	}
+
+	// 闸门之外：塞一个超长的 strategy（它不受 query 的长度闸门管），
+	// 把请求体顶到 MaxSearchBodyBytes 之上。
+	//
+	// 刻意不用超长的 query：那会被长度闸门先挡成 422，于是这条测试
+	// 测的就是那一条，而不是大小闸门。
+	body := fmt.Sprintf(`{"query":"连衣裙","strategy":%q}`,
+		strings.Repeat("x", handler.MaxSearchBodyBytes+1))
+	w, _ = doSearch(t, fx.HostA, body)
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("%d 字节的请求体返回 %d，期望 413 —— 大小闸门没挂上。响应：%s",
+			len(body), w.Code, w.Body.String())
+	}
+}
+
+// 一个 IP 打洪水会被挡下来，别的 IP 不受牵连。
+//
+// 验收实测：20 个并发的 198 字查询（契约允许的长度）打进去之后，同时发的
+// 5 个正常短查询全部从 n=5 lat=55 变成 n=1 lat=250 —— 整站掉到纯关键词。
+// 这条测试真的把配额打满并断言被拒，而不是断言「配置读进来了」。
+//
+// 它自己装一套路由（走的是同一个 app.Router），因为包级那套把配额调到了
+// 测试打不穿的数 —— 理由写在 main_test.go。也就是说这条测试同时证明了
+// 「限流真的挂在 /search 这条路由上」。
+func TestSearchRateLimitsAFloodFromOneIP(t *testing.T) {
+	fx := newSearchFixture(t)
+
+	const burst = 3
+	t.Setenv(app.EnvSearchRateLimit, "0.001") // 慢到这次测试里补不回一个额度
+	t.Setenv(app.EnvSearchRateBurst, fmt.Sprint(burst))
+	limited := app.Router(testPool,
+		tenant.NewResolver(testPool, tenant.Config{BaseDomain: baseDomain}),
+		auth.NewSigner([]byte("keel-test-secret-key-32-bytes-long!!")),
+		testOrders, service.PaymentConfig{Sandbox: true}, conceptEmbedder{})
+
+	const flood = burst + 5
+	var ok, rejected int
+	var lastRejected *httptest.ResponseRecorder
+	for i := 0; i < flood; i++ {
+		w, _ := searchOn(t, limited, fx.HostA, `{"query":"连衣裙"}`)
+		switch w.Code {
+		case http.StatusOK:
+			ok++
+		case http.StatusTooManyRequests:
+			rejected++
+			lastRejected = w
+		default:
+			t.Fatalf("第 %d 个请求返回 %d，既不是 200 也不是 429：%s",
+				i, w.Code, w.Body.String())
+		}
+	}
+	if ok != burst {
+		t.Errorf("放行了 %d 个，期望正好 %d（瞬时额度）", ok, burst)
+	}
+	if rejected != flood-burst {
+		t.Fatalf("只挡下了 %d 个（共打了 %d 个，额度 %d）—— "+
+			"限流没生效。单机一条 for 循环就能让一个公开 Demo 的语义搜索"+
+			"变成关键词搜索，而访客看不出任何异常", rejected, flood, burst)
+	}
+	if got := lastRejected.Header().Get("Retry-After"); got == "" {
+		t.Error("429 没带 Retry-After —— 客户端能做的只有立刻重试，" +
+			"而那正好是限流要挡的行为")
+	}
+	if ct := lastRejected.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/problem+json") {
+		t.Errorf("429 的 Content-Type 是 %q，期望 application/problem+json", ct)
+	}
+	if !strings.Contains(lastRejected.Body.String(), "problems/rate-limited") {
+		t.Errorf("429 的 type 不是 rate-limited：%s", lastRejected.Body.String())
+	}
+
+	// 别的 IP 不受牵连 —— 否则这就不是「按 IP 限流」，是一个全局开关，
+	// 一个攻击者能把所有人一起关在门外。
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/search",
+		strings.NewReader(`{"query":"连衣裙"}`))
+	req.Host = fx.HostA
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "198.51.100.7:4321"
+	other := httptest.NewRecorder()
+	limited.ServeHTTP(other, req)
+	if other.Code != http.StatusOK {
+		t.Fatalf("另一个 IP 也被挡了（%d）—— 这不是按 IP 限流，"+
+			"一个攻击者能把所有人一起关在门外：%s", other.Code, other.Body.String())
 	}
 }
 

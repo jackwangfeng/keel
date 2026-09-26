@@ -141,6 +141,18 @@ func setup() error {
 	// 降级链（引擎真的打不通）那一条不用这个实例：它单独装一套路由，
 	// 接一个指向**真的没人监听的端口**的 inference.Client，
 	// 见 TestSearchDegradesToKeywordWhenEngineIsDown。
+	// /search 上挂着按 IP 的限流（app/ratelimit.go）。这个包里的测试全部
+	// 从同一个来源地址（httptest 的 192.0.2.1）打进来，几十次检索会把默认
+	// 配额（4/秒、瞬时 8）打穿 —— 那时红的会是一批与限流毫无关系的测试，
+	// 而且红得没有规律（取决于跑到第几个）。
+	//
+	// 所以这个包级路由把配额调到一个测试打不穿的数。**限流本身仍然有执行者**：
+	// TestSearchRateLimitsAFloodFromOneIP 自己用 t.Setenv 配一个很紧的配额、
+	// 自己装一套路由（走的是同一个 app.Router），所以「这道闸门真的挂在
+	// /search 上」那件事由它证明。
+	os.Setenv(app.EnvSearchRateLimit, "100000")
+	os.Setenv(app.EnvSearchRateBurst, "100000")
+
 	testEngine = app.Router(pool,
 		tenant.NewResolver(pool, tenant.Config{BaseDomain: baseDomain}), testSigner, testOrders,
 		service.PaymentConfig{Sandbox: true}, conceptEmbedder{})
