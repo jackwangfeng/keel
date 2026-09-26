@@ -75,9 +75,19 @@ type route struct {
 	// NotYetImplementedHeader 是契约声明为 required 的**请求头**里，这条
 	// handler 还没实现的那些。与上面两笔是同一笔账的第三种形状。
 	//
-	// 眼下只有一个名字：Idempotency-Key。它出现在 M4 那 5 条 POST 上
-	// （/admin/uploads、/admin/products、.../publication、.../skus、
-	// /admin/categories），而本轮没有实现幂等，理由逐条写在值里。
+	// 眼下只有一个名字：Idempotency-Key，挂在两条接口上
+	// （POST /admin/merchants 与 POST /admin/staff）。
+	//
+	// **它原先还挂在另外 5 条上**（/admin/uploads、/admin/products、
+	// .../publication、.../skus、/admin/categories），那 5 条在 M4 收尾这一轮
+	// 实现了幂等，挂账随之删掉 —— 挡着它们的是一次 schema 决定
+	// （00022：把 idempotency_keys 的主体列从 user_id 换成
+	// (subject_kind, subject_id)），而不是缺代码。
+	//
+	// 剩下这两条缺的是**另一件**东西，而且是同一件：它们可能跑在平台作用域里
+	// （平台管理员开店、平台管理员加平台操作员），而 idempotency_keys.merchant_id
+	// 的默认值是 current_merchant() —— 那个函数在平台作用域里是 RAISE 不是 NULL。
+	// 逐条的理由与暴露面写在值里。
 	//
 	// 它比 query 那份弱一格，与 NotYetImplementedBody 完全同级，
 	// 要说清楚为什么：query 参数能从 handler 的 AST 里读出 c.Query("x") 来做
@@ -88,11 +98,18 @@ type route struct {
 	// 而那份求值器自己会和它模仿的语言分叉。
 	//
 	// 所以这里只做「清单 → 契约」这一个方向的机械对账（那个名字必须真的是
-	// 契约里一个 required 的请求头参数），反向由**行为测试**盯着：
-	// admin_catalog_test.go 的 TestAdminWritesAreNotYetIdempotent 拿同一把
-	// Idempotency-Key 建两次商品，断言真的建出了两件 —— 也就是说
-	// 「还没实现」这件事本身有靶子。真的实现了幂等，那条测试就会红，
-	// 逼人回来删掉这里的登记。
+	// 契约里一个 required 的请求头参数），反向由**行为测试**盯着。
+	//
+	// 那两条行为测试是：
+	//   · admin_catalog_test.go 的 TestAdminWritesAreIdempotent —— 它现在断言
+	//     的是**真的幂等**（同一把钥匙第二次回首次那件商品、库里不多一行；
+	//     同一把钥匙配不同请求体回 422）。这条测试本轮翻了个面：它原先叫
+	//     TestAdminWritesAreNotYetIdempotent，断言「同一把钥匙会建出两件」。
+	//   · admin_auth_test.go 的 TestPlatformScopedWritesAreNotYetIdempotent ——
+	//     剩下这两条的靶子：同一把钥匙第二次不是重放。
+	//
+	// 也就是说「实现了没有」两个方向都有执行者：实现了而忘了从这里划掉 → 红；
+	// 从这里划掉了而其实没实现 → 也红。
 	NotYetImplementedHeader map[string]string
 
 	// NotYetImplementedResponse 是**响应体**里契约声明了、这条 handler 刻意不
@@ -345,6 +362,20 @@ var routes = []route{
 			"**租户不在任何一处** —— 它从调用者的会话继承（契约与数据模型 §14 " +
 			"认证流程 ④ 都写着这一条），落地方式是 staff.merchant_id 的 " +
 			"DEFAULT staff_scope_merchant()，整条链路上没有一个 merchant_id 参数可以传错",
+		NotYetImplementedHeader: map[string]string{
+			"Idempotency-Key": "与 POST /admin/merchants 撞的是同一堵墙，而这一条撞得更别扭：" +
+				"它的作用域**取决于调用者** —— 平台管理员加的是平台操作员（平台作用域），" +
+				"商家管理员加的是自己店的员工（租户作用域）。而 idempotency_keys.merchant_id " +
+				"的默认值是 current_merchant()，它在平台作用域里是 RAISE 不是 NULL。\n" +
+				"只给商家那一半接上幂等是**更糟**的一条路：同一条接口会有两种语义，" +
+				"而客户端（同一个后台前端，登录的人可能是两级中的任何一级）没有任何办法知道" +
+				"自己这次落在哪一半上。要么两半一起有，要么两半一起没有 —— 前者要的正是" +
+				"那次「平台级幂等落点」的 schema 决定（merchant_id 可空 + 策略跟着改）。\n" +
+				"暴露面：重发同一个请求建不出第二个人 —— 邮箱唯一约束挡住了" +
+				"（uk_staff_email 商家级那条 / uk_staff_email_platform 平台级那条），" +
+				"第二次返回 409。代价是「重放本该回 201 存档，实际回 409」。\n" +
+				"反向由 admin_auth_test.go 的 TestPlatformScopedWritesAreNotYetIdempotent 盯着。",
+		},
 	},
 	{
 		ContractPath:   "/admin/staff/{staff_id}",
@@ -389,9 +420,6 @@ var routes = []route{
 		HTTPMethod:     http.MethodPost,
 		HandlerFile:    "admin_upload.go",
 		NoQueryParams:  "文件在 multipart 的 file 那一项里，purpose 由路径决定（固定 1 商品图）；契约里这条接口一个 query 参数都没有",
-		NotYetImplementedHeader: map[string]string{
-			"Idempotency-Key": "本轮没有实现幂等。**不是忘了，是缺一样东西**：idempotency_keys 的主键是 (scope, user_id, idem_key)，而 user_id 那一列在后台这条路上要放的是 staff_id —— 而「把 staff_id 当成 user_id 用」正是 auth/staff_middleware.go 与数据模型 §14 反复点名的那件事（两张表的 id 来自同一种自增序列）。把它做对要么给那张表换一个主体列、要么另起一张表，那是一次 schema 决定，与缺一个「在指定租户里开事务」入口的 POST /admin/merchants 属于同一批。\n暴露面说清楚：重发同一个请求会多建一件草稿商品 / 一个类目 / 一条上传记录。SKU 那条由 uk_skus_code 挡（第二次是 409），publication 天生幂等（状态机终点相同），上传的重复件 24 小时后被孤儿回收清掉。也就是说真正的代价是「后台列表里多一行，商家自己删掉」，不是钱。\n反向由行为测试盯着：TestAdminWritesAreNotYetIdempotent。",
-		},
 	},
 	{
 		// 这 16 条里**唯一**带 query 参数的一条，五个全都实现了，
@@ -408,9 +436,6 @@ var routes = []route{
 		HTTPMethod:     http.MethodPost,
 		HandlerFile:    "admin_product.go",
 		NoQueryParams:  "新建商品的字段全在请求体里（ProductCreateRequest），幂等键在请求头里",
-		NotYetImplementedHeader: map[string]string{
-			"Idempotency-Key": "本轮没有实现幂等。**不是忘了，是缺一样东西**：idempotency_keys 的主键是 (scope, user_id, idem_key)，而 user_id 那一列在后台这条路上要放的是 staff_id —— 而「把 staff_id 当成 user_id 用」正是 auth/staff_middleware.go 与数据模型 §14 反复点名的那件事（两张表的 id 来自同一种自增序列）。把它做对要么给那张表换一个主体列、要么另起一张表，那是一次 schema 决定，与缺一个「在指定租户里开事务」入口的 POST /admin/merchants 属于同一批。\n暴露面说清楚：重发同一个请求会多建一件草稿商品 / 一个类目 / 一条上传记录。SKU 那条由 uk_skus_code 挡（第二次是 409），publication 天生幂等（状态机终点相同），上传的重复件 24 小时后被孤儿回收清掉。也就是说真正的代价是「后台列表里多一行，商家自己删掉」，不是钱。\n反向由行为测试盯着：TestAdminWritesAreNotYetIdempotent。",
-		},
 	},
 	{
 		ContractPath:   "/admin/products/{product_id}",
@@ -439,9 +464,6 @@ var routes = []route{
 		HTTPMethod:     http.MethodPost,
 		HandlerFile:    "admin_product.go",
 		NoQueryParams:  "上架还是下架在请求体的 action 里，幂等键在请求头里",
-		NotYetImplementedHeader: map[string]string{
-			"Idempotency-Key": "本轮没有实现幂等。**不是忘了，是缺一样东西**：idempotency_keys 的主键是 (scope, user_id, idem_key)，而 user_id 那一列在后台这条路上要放的是 staff_id —— 而「把 staff_id 当成 user_id 用」正是 auth/staff_middleware.go 与数据模型 §14 反复点名的那件事（两张表的 id 来自同一种自增序列）。把它做对要么给那张表换一个主体列、要么另起一张表，那是一次 schema 决定，与缺一个「在指定租户里开事务」入口的 POST /admin/merchants 属于同一批。\n暴露面说清楚：重发同一个请求会多建一件草稿商品 / 一个类目 / 一条上传记录。SKU 那条由 uk_skus_code 挡（第二次是 409），publication 天生幂等（状态机终点相同），上传的重复件 24 小时后被孤儿回收清掉。也就是说真正的代价是「后台列表里多一行，商家自己删掉」，不是钱。\n反向由行为测试盯着：TestAdminWritesAreNotYetIdempotent。",
-		},
 	},
 	{
 		ContractPath:   "/admin/products/{product_id}/images",
@@ -456,9 +478,6 @@ var routes = []route{
 		HTTPMethod:     http.MethodPost,
 		HandlerFile:    "admin_sku.go",
 		NoQueryParams:  "新建规格的字段全在请求体里（SkuCreateRequest），商品在路径上，幂等键在请求头里",
-		NotYetImplementedHeader: map[string]string{
-			"Idempotency-Key": "本轮没有实现幂等。**不是忘了，是缺一样东西**：idempotency_keys 的主键是 (scope, user_id, idem_key)，而 user_id 那一列在后台这条路上要放的是 staff_id —— 而「把 staff_id 当成 user_id 用」正是 auth/staff_middleware.go 与数据模型 §14 反复点名的那件事（两张表的 id 来自同一种自增序列）。把它做对要么给那张表换一个主体列、要么另起一张表，那是一次 schema 决定，与缺一个「在指定租户里开事务」入口的 POST /admin/merchants 属于同一批。\n暴露面说清楚：重发同一个请求会多建一件草稿商品 / 一个类目 / 一条上传记录。SKU 那条由 uk_skus_code 挡（第二次是 409），publication 天生幂等（状态机终点相同），上传的重复件 24 小时后被孤儿回收清掉。也就是说真正的代价是「后台列表里多一行，商家自己删掉」，不是钱。\n反向由行为测试盯着：TestAdminWritesAreNotYetIdempotent。",
-		},
 	},
 	{
 		ContractPath:   "/admin/skus/{sku_id}",
@@ -494,9 +513,6 @@ var routes = []route{
 		HTTPMethod:     http.MethodPost,
 		HandlerFile:    "admin_category.go",
 		NoQueryParams:  "名字与父节点在请求体里，path / level 由服务端算，幂等键在请求头里",
-		NotYetImplementedHeader: map[string]string{
-			"Idempotency-Key": "本轮没有实现幂等。**不是忘了，是缺一样东西**：idempotency_keys 的主键是 (scope, user_id, idem_key)，而 user_id 那一列在后台这条路上要放的是 staff_id —— 而「把 staff_id 当成 user_id 用」正是 auth/staff_middleware.go 与数据模型 §14 反复点名的那件事（两张表的 id 来自同一种自增序列）。把它做对要么给那张表换一个主体列、要么另起一张表，那是一次 schema 决定，与缺一个「在指定租户里开事务」入口的 POST /admin/merchants 属于同一批。\n暴露面说清楚：重发同一个请求会多建一件草稿商品 / 一个类目 / 一条上传记录。SKU 那条由 uk_skus_code 挡（第二次是 409），publication 天生幂等（状态机终点相同），上传的重复件 24 小时后被孤儿回收清掉。也就是说真正的代价是「后台列表里多一行，商家自己删掉」，不是钱。\n反向由行为测试盯着：TestAdminWritesAreNotYetIdempotent。",
-		},
 	},
 	{
 		ContractPath:   "/admin/categories/{category_id}",

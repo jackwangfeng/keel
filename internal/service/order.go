@@ -292,7 +292,7 @@ func (s *OrderService) Create(ctx context.Context, req CreateRequest, idemKey st
 		replayErr error
 	)
 	err = s.repo.WithTenant(ctx, func(tx repository.Tx) error {
-		claimed, err := tx.ClaimIdempotencyKey(ctx, idempotencyScope, id.UserID, idemKey, hash)
+		claimed, err := tx.ClaimIdempotencyKey(ctx, idempotencyScope, repository.BuyerSubject(id.UserID), idemKey, hash)
 		if err != nil {
 			return err
 		}
@@ -495,7 +495,7 @@ func (s *OrderService) placeDraft(ctx context.Context, tx repository.Tx,
 // （命中失败存档时非 nil）、以及真正的 error（读库失败）。
 func (s *OrderService) replay(ctx context.Context, tx repository.Tx, userID int64,
 	idemKey, hash string) (*CreateResult, error, error) {
-	rec, err := tx.FindIdempotencyKey(ctx, idempotencyScope, userID, idemKey)
+	rec, err := tx.FindIdempotencyKey(ctx, idempotencyScope, repository.BuyerSubject(userID), idemKey)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -574,7 +574,7 @@ func (s *OrderService) archiveFailure(ctx context.Context, userID int64, idemKey
 // 而那时本来就不该撤。当成错误报出来的话，一条正常的竞态会变成一条 Error 日志。
 func (s *OrderService) releaseKey(ctx context.Context, userID int64, idemKey string) error {
 	return s.repo.WithTenant(ctx, func(tx repository.Tx) error {
-		released, err := tx.ReleaseIdempotencyKey(ctx, idempotencyScope, userID, idemKey)
+		released, err := tx.ReleaseIdempotencyKey(ctx, idempotencyScope, repository.BuyerSubject(userID), idemKey)
 		if err != nil {
 			return err
 		}
@@ -589,7 +589,7 @@ func (s *OrderService) releaseKey(ctx context.Context, userID int64, idemKey str
 func (s *OrderService) finishKey(ctx context.Context, userID int64, idemKey string,
 	status int16, code *int32, body []byte) error {
 	return s.repo.WithTenant(ctx, func(tx repository.Tx) error {
-		return tx.FinishIdempotencyKey(ctx, idempotencyScope, userID, idemKey, status, code, body)
+		return tx.FinishIdempotencyKey(ctx, idempotencyScope, repository.BuyerSubject(userID), idemKey, status, code, body)
 	})
 }
 

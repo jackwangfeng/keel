@@ -37,9 +37,7 @@ import (
 
 // UploadStore 是 §13 那三个方法里本轮用得上的那一个：写入并返回 storage_key。
 //
-// 删除不在这里：它属于孤儿回收任务（§12 的 jobs，还没有执行者）。
-//
-// 「生成访问 URL」那一个也不在：契约把对外地址钉成了
+// 「生成访问 URL」那一个不在：契约把对外地址钉成了
 // /api/v1/uploads/{upload_id} 这个固定形状 —— 它由 upload 的 id 拼出来，
 // 与 driver 无关，所以它不该是 driver 的方法。driver 要回答的是**下一跳**：
 // 「把字节给我」（Open），或者将来换 S3 时「给我一个预签名地址」。
@@ -68,6 +66,18 @@ type UploadStore interface {
 	//
 	// 调用方负责 Close。
 	Open(key string) (io.ReadCloser, error)
+
+	// Remove 删掉一个**还没有进 uploads 表**的文件。
+	//
+	// 它是 §13 三个方法里的「删除」，但用途比那一条窄，说清楚：
+	// 孤儿回收（§12 的 jobs，还没有执行者）将来会用它，而今天它唯一的调用点
+	// 是 CreateUpload 的幂等重放分支 —— 那条路上字节已经落盘、而元数据这一行
+	// 是上一次那把钥匙留下的，于是刚写的那个文件既不在 uploads 表里、
+	// 也就永远不会被任何回收任务看见。**一个谁也不认识的字节堆，
+	// 而且每重试一次多一个。**
+	//
+	// key 不存在时返回 nil：这个方法的语义是「确保它没了」。
+	Remove(key string) error
 }
 
 // LocalDiskStore 是 §13 的本地磁盘 driver。
@@ -196,4 +206,21 @@ func (s *LocalDiskStore) Open(key string) (io.ReadCloser, error) {
 		return nil, err
 	}
 	return f, nil
+}
+
+// Remove 实现 UploadStore.Remove。
+func (s *LocalDiskStore) Remove(key string) error {
+	if s.root == "" {
+		return errors.New("本地磁盘 driver 没有配置根目录")
+	}
+	if key == "" || strings.HasPrefix(key, "/") || strings.Contains(key, "..") {
+		// 与 Open 同一道形状检查，理由也一样。这里尤其要紧：一个能穿越出去的
+		// key 在 Open 上是越权读，在这里是**越权删**。
+		return fmt.Errorf("storage_key %q 的形状不合法，拒绝删除", key)
+	}
+	if err := os.Remove(filepath.Join(s.root, filepath.FromSlash(key))); err != nil &&
+		!errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
 }

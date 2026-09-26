@@ -38,7 +38,7 @@ type Category struct {
 type IdempotencyKey struct {
 	Scope        string
 	MerchantID   int64
-	UserID       int64
+	SubjectID    int64
 	IdemKey      string
 	RequestHash  string
 	Status       int16
@@ -47,6 +47,7 @@ type IdempotencyKey struct {
 	ExpireAt     pgtype.Timestamptz
 	CreatedAt    pgtype.Timestamptz
 	UpdatedAt    pgtype.Timestamptz
+	SubjectKind  int16
 }
 
 type Inventory struct {

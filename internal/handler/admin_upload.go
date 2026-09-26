@@ -98,7 +98,7 @@ func (h *AdminCatalogHandler) CreateUpload(c *gin.Context) {
 	// 与契约说的不是同一件事。
 	contentType := header.Header.Get("Content-Type")
 
-	up, err := h.svc.CreateUpload(c.Request.Context(), contentType, file)
+	up, replayed, err := h.svc.CreateUpload(c.Request.Context(), contentType, file, idemKeyOf(c))
 	if err != nil {
 		// MaxBytesReader 触发时 io.Copy 会带回一个 *http.MaxBytesError，
 		// 而不是 service.ErrUploadTooLarge —— 两条路都要落到 413，
@@ -112,6 +112,7 @@ func (h *AdminCatalogHandler) CreateUpload(c *gin.Context) {
 		writeCatalogError(c, err)
 		return
 	}
+	markReplayed(c, replayed)
 	c.JSON(http.StatusCreated, api.Upload{
 		Id:          up.ID,
 		Url:         service.UploadURL(up.ID),

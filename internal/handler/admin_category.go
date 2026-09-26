@@ -51,11 +51,12 @@ func (h *AdminCatalogHandler) CreateCategory(c *gin.Context) {
 	if req.SortOrder != nil {
 		n.SortOrder = int32(*req.SortOrder)
 	}
-	cat, err := h.svc.CreateCategory(c.Request.Context(), n)
+	cat, replayed, err := h.svc.CreateCategory(c.Request.Context(), n, idemKeyOf(c))
 	if err != nil {
 		writeCatalogError(c, err)
 		return
 	}
+	markReplayed(c, replayed)
 	c.JSON(http.StatusCreated, apiAdminCategory(cat))
 }
 

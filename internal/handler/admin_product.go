@@ -47,17 +47,18 @@ func (h *AdminCatalogHandler) Create(c *gin.Context) {
 	if !bindJSON(c, &req) {
 		return
 	}
-	p, err := h.svc.CreateProduct(c.Request.Context(), repository.NewProduct{
+	p, replayed, err := h.svc.CreateProduct(c.Request.Context(), repository.NewProduct{
 		CategoryID:  req.CategoryId,
 		BrandID:     req.BrandId,
 		Title:       req.Title,
 		Subtitle:    req.Subtitle,
 		Description: req.Description,
-	})
+	}, idemKeyOf(c))
 	if err != nil {
 		writeCatalogError(c, err)
 		return
 	}
+	markReplayed(c, replayed)
 	c.JSON(http.StatusCreated, apiAdminProduct(p))
 }
 
@@ -180,11 +181,12 @@ func (h *AdminCatalogHandler) Publication(c *gin.Context) {
 			problem.TypeInvalidRequest, `action 只能是 "publish" 或 "unpublish"`)
 		return
 	}
-	p, err := h.svc.SetPublication(c.Request.Context(), id, publish)
+	p, replayed, err := h.svc.SetPublication(c.Request.Context(), id, publish, idemKeyOf(c))
 	if err != nil {
 		writeCatalogError(c, err)
 		return
 	}
+	markReplayed(c, replayed)
 	c.JSON(http.StatusOK, apiAdminProduct(p))
 }
 
