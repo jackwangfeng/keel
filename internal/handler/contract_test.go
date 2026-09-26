@@ -1102,7 +1102,14 @@ type pendingOp struct {
 // 空表不是删掉这套机制的理由：它是「还没实现」的锁，下一次契约先行加进来一条
 // /admin/ 操作（比如后台的订单列表、退款单列表），这里就会重新长出一行，
 // 而不是让缺口静默地躺在契约里。
-var notYetRouted = []pendingOp{}
+var notYetRouted = []pendingOp{
+	// 后台订单与退款单的列表 / 详情：契约先行这一步只落了契约与产物，
+	// 服务端（00035 的索引与审核记录列、service、handler）在下一个提交里。
+	{ContractPath: "/admin/orders", ContractMethod: "get", Why: "契约先行：服务端在下一个提交"},
+	{ContractPath: "/admin/orders/{order_no}", ContractMethod: "get", Why: "契约先行：服务端在下一个提交"},
+	{ContractPath: "/admin/refunds", ContractMethod: "get", Why: "契约先行：服务端在下一个提交"},
+	{ContractPath: "/admin/refunds/{refund_no}", ContractMethod: "get", Why: "契约先行：服务端在下一个提交"},
+}
 
 // contractHTTPMethods 是 OpenAPI path item 里哪些键算一个操作。
 // 其余的键（parameters、summary、servers…）不是操作，跳过。

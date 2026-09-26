@@ -8550,6 +8550,203 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/orders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 后台订单列表
+         * @description 这家店的订单，按下单时间倒序（同一时刻按内部 id 倒序，翻页才稳定）。
+         *     创建中（`status = 0`，下单 SAGA 还没走完）的草稿单不出现，与买家侧一致。
+         *
+         *     **范围**（`StaffRole` 矩阵里「订单与售后」那一行，与「门店库存」同一个判据）：
+         *     管理员、操作员看全店；大区管理员只看**当前**挂在他大区下的门店的单；
+         *     门店管理员只看自己门店的单。按订单的履约门店 `store_id` 判，
+         *     大区看门店**此刻**所属的大区（与发货、审核判权用的是同一个口径），
+         *     不看订单上冗余的 `region_id`——那是下单那一刻的大区，定价用的。
+         *
+         *     筛选条件与范围是**交集**：大区管理员带一个别的大区的 `store_id`，
+         *     拿到的是空页，不是 403（与 `GET /admin/stores?region_id=` 一致）。
+         *
+         *     `order_no` 与 `phone` 是精确匹配，给客服「报单号 / 报手机号」找单用，
+         *     不做模糊搜索（模糊匹配手机号等于把这条接口变成一个手机号探测器）。
+         */
+        get: {
+            parameters: {
+                query?: {
+                    page?: components["parameters"]["Page"];
+                    page_size?: components["parameters"]["PageSize"];
+                    /** @description 按履约状态筛选。「待发货」即 `status=20`。 */
+                    status?: components["schemas"]["OrderStatus"];
+                    /** @description 只看某家履约门店的单。与调用者的范围取交集。 */
+                    store_id?: number;
+                    /** @description 下单时间下界（含）。RFC3339。 */
+                    created_from?: string;
+                    /** @description 下单时间上界（**不含**）。RFC3339。半开区间，按天查时传次日零点。 */
+                    created_to?: string;
+                    /** @description 订单号，精确匹配。 */
+                    order_no?: string;
+                    /**
+                     * @description 手机号，精确匹配**收货人手机号或下单买家的账号手机号**任一个。
+                     *     两个都认，是因为打电话来的人报的号码不一定是收货人那一个。
+                     */
+                    phone?: string;
+                };
+                header?: {
+                    /**
+                     * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+                     *
+                     *     它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+                     *     而例外成立的前提是平台级鉴权：
+                     *
+                     *     · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+                     *       读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+                     *       行级安全落在这家店上。
+                     *     · **商家级员工带了这个头：403**
+                     *       （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+                     *       静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+                     *     · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+                     *       **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+                     *       实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+                     *       请求其余部分指名的东西不存在是 422。
+                     *     · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+                     *       买家侧对它照旧 404。
+                     *     · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+                     *       （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+                     *
+                     *     后台每一条挂后台会话的操作都声明了它（机械核对：
+                     *     `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+                     */
+                    "X-Keel-Merchant"?: components["parameters"]["KeelMerchant"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PageMeta"] & {
+                            items: components["schemas"]["AdminOrderSummary"][];
+                        };
+                    };
+                };
+                /**
+                 * @description `created_from` / `created_to` 不是合法的 RFC3339 时间，或下界不早于上界
+                 *     （type=https://keel.dev/problems/invalid-request）。
+                 *     **不当成「没传」**：时间范围写错时回一页不带筛选的全量订单，
+                 *     会让人以为那段时间就这么多单。
+                 */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/orders/{order_no}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 后台订单详情
+         * @description 订单行（含优惠分摊 `discount_cents`、已退 / 在途件数）、支付记录、发货包裹、
+         *     全部退款单，与订单读自同一个事务 —— 支付回调或退款入账落地的那一瞬间，
+         *     不会出现「订单还是 20、下面却列着一笔已退款」的自相矛盾。
+         *
+         *     判权与发货相同（按订单的履约门店，「订单与售后」那一行）：
+         *     不在范围内回 403 out-of-scope（订单在调用者自己的租户里，说「不归你管」是真话，
+         *     与 `GET /admin/stores/{store_id}` 一致）；别家租户的单号回 404。
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /**
+                     * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+                     *
+                     *     它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+                     *     而例外成立的前提是平台级鉴权：
+                     *
+                     *     · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+                     *       读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+                     *       行级安全落在这家店上。
+                     *     · **商家级员工带了这个头：403**
+                     *       （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+                     *       静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+                     *     · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+                     *       **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+                     *       实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+                     *       请求其余部分指名的东西不存在是 422。
+                     *     · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+                     *       买家侧对它照旧 404。
+                     *     · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+                     *       （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+                     *
+                     *     后台每一条挂后台会话的操作都声明了它（机械核对：
+                     *     `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+                     */
+                    "X-Keel-Merchant"?: components["parameters"]["KeelMerchant"];
+                };
+                path: {
+                    order_no: components["parameters"]["OrderNo"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AdminOrderDetail"];
+                    };
+                };
+                403: components["responses"]["Problem"];
+                /** @description 订单不存在，或不属于当前租户 */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/orders/{order_no}/shipments": {
         parameters: {
             query?: never;
@@ -8679,6 +8876,185 @@ export interface paths {
                 default: components["responses"]["Problem"];
             };
         };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/refunds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 后台退款单列表
+         * @description 这家店的退款单，按申请时间倒序。「待审核」即 `status=10`，
+         *     「待确认收到退货」即 `status=20`。
+         *
+         *     范围与 `GET /admin/orders` 相同：按退款单所属订单的履约门店判，
+         *     大区管理员看当前挂在他大区下的门店，门店管理员看自己的门店；
+         *     筛选条件与范围取交集。
+         */
+        get: {
+            parameters: {
+                query?: {
+                    page?: components["parameters"]["Page"];
+                    page_size?: components["parameters"]["PageSize"];
+                    status?: components["schemas"]["RefundStatus"];
+                    /** @description 只看某家履约门店的订单上的退款单。与调用者的范围取交集。 */
+                    store_id?: number;
+                    /** @description 申请时间下界（含）。RFC3339。 */
+                    created_from?: string;
+                    /** @description 申请时间上界（**不含**）。RFC3339。 */
+                    created_to?: string;
+                };
+                header?: {
+                    /**
+                     * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+                     *
+                     *     它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+                     *     而例外成立的前提是平台级鉴权：
+                     *
+                     *     · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+                     *       读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+                     *       行级安全落在这家店上。
+                     *     · **商家级员工带了这个头：403**
+                     *       （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+                     *       静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+                     *     · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+                     *       **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+                     *       实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+                     *       请求其余部分指名的东西不存在是 422。
+                     *     · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+                     *       买家侧对它照旧 404。
+                     *     · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+                     *       （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+                     *
+                     *     后台每一条挂后台会话的操作都声明了它（机械核对：
+                     *     `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+                     */
+                    "X-Keel-Merchant"?: components["parameters"]["KeelMerchant"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PageMeta"] & {
+                            items: components["schemas"]["AdminRefund"][];
+                        };
+                    };
+                };
+                /**
+                 * @description 时间参数不是合法的 RFC3339，或下界不早于上界
+                 *     （type=https://keel.dev/problems/invalid-request）。理由同 `GET /admin/orders`。
+                 */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/refunds/{refund_no}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 后台退款单详情
+         * @description 退款明细（每一行的实退金额由服务端按优惠分摊算好，后台界面只展示、不让人填）、
+         *     凭证、审核记录（谁在什么时候通过 / 驳回、驳回理由、裁定的运费；
+         *     退货退款还有谁在什么时候确认收到退货），以及所属订单的摘要 ——
+         *     审核退运费要看订单实收了多少运费。
+         *
+         *     判权同审核（按订单的履约门店）：不在范围内 403 out-of-scope，别家租户的 404。
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /**
+                     * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+                     *
+                     *     它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+                     *     而例外成立的前提是平台级鉴权：
+                     *
+                     *     · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+                     *       读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+                     *       行级安全落在这家店上。
+                     *     · **商家级员工带了这个头：403**
+                     *       （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+                     *       静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+                     *     · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+                     *       **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+                     *       实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+                     *       请求其余部分指名的东西不存在是 422。
+                     *     · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+                     *       买家侧对它照旧 404。
+                     *     · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+                     *       （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+                     *
+                     *     后台每一条挂后台会话的操作都声明了它（机械核对：
+                     *     `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+                     */
+                    "X-Keel-Merchant"?: components["parameters"]["KeelMerchant"];
+                };
+                path: {
+                    /** @description 退款单对外编号，不可枚举 */
+                    refund_no: components["parameters"]["RefundNo"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AdminRefundDetail"];
+                    };
+                };
+                403: components["responses"]["Problem"];
+                /** @description 退款单不存在，或不属于当前租户 */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -10578,12 +10954,15 @@ export interface components {
          *     | 大区：建 | ✅ | ✅ | ❌ | ❌ |
          *     | 门店：建、改、删、围栏 | ✅ | ✅ | 只限本大区的门店（换大区时新旧都得在范围内） | ❌ |
          *     | 门店价、门店上下架、门店库存 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
+         *     | 订单与售后：订单 / 退款单的列表与详情、发货、退款审核、确认收到退货 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
          *     | 设默认门店（含建店时 is_default） | ✅ | ❌ | ❌ | ❌ |
          *     | 员工管理 | ✅ | ❌ | 只能加、改本大区门店的门店管理员 | ❌ |
          *     | 开店 | 仅平台级管理员 | | | |
          *
          *     `PUT /admin/skus/{sku_id}/inventory`（商家恰好一家门店时的捷径）对 3 / 4
          *     只在那家店在范围内时放行。列表类接口对 3 / 4 只返回范围内的；
+         *     订单与售后按订单的**履约门店**判，门店所属的大区取它**此刻**的大区
+         *     （货从哪家店出，就由管那家店库存的人处理这一单）；
          *     商品目录全量可读。被拒回 403，type 是 role-forbidden 或 out-of-scope。
          * @enum {integer}
          */
@@ -10611,6 +10990,73 @@ export interface components {
         ShipmentCreateRequest: {
             carrier_code: string;
             tracking_no: string;
+        };
+        /**
+         * @description 审计字段里的「谁」。`name` 取员工此刻的名字；平台级员工（不属于这家店）
+         *     在租户作用域里读不到名字，此时只有 `id`。
+         */
+        StaffRef: {
+            /** Format: int64 */
+            id: number;
+            name?: string;
+        };
+        /**
+         * @description 后台视角的订单摘要：买家侧 `Order` 的全部字段，加上收货人与门店的**下单时快照**，
+         *     以及「这一单现在有没有在途的售后」。
+         *
+         *     `has_open_refund` 与 `refund_status = 1` 说的是同一件事，但它是现查的
+         *     （`EXISTS` 一张 `10/20/30` 的退款单），列表上据此挂「售后中」标签、
+         *     提醒发货前先看一眼退款单。
+         */
+        AdminOrderSummary: components["schemas"]["Order"] & {
+            /** @description 下单时的收货信息快照 */
+            receiver: components["schemas"]["ReceiverSnapshot"];
+            /** @description 下单时的门店与大区展示快照 */
+            store: components["schemas"]["OrderStoreSnapshot"];
+            /** @description 有没有处于 10 待审核 / 20 待买家退货 / 30 退款中的退款单 */
+            has_open_refund: boolean;
+        };
+        AdminOrderDetail: components["schemas"]["AdminOrderSummary"] & {
+            /** @description 订单行，含优惠分摊（`discount_cents`）与已退 / 在途件数 */
+            items: components["schemas"]["OrderItem"][];
+            payments: components["schemas"]["PaymentRecord"][];
+            /** @description 发货包裹，按发货先后。一期整单发货，至多一个 */
+            shipments: components["schemas"]["Shipment"][];
+            /** @description 该订单下的全部退款单，按申请时间倒序 */
+            refunds: components["schemas"]["AdminRefund"][];
+        };
+        /**
+         * @description 后台视角的退款单：买家侧 `Refund` 的全部字段，加上履约门店与审核记录。
+         *
+         *     审核记录不进买家侧的 `Refund`：「哪个员工审的」是商家内部的事。
+         *     `audited_by` / `received_by` 只对迁移 00035 之后的动作有值，之前的单只有时间。
+         */
+        AdminRefund: components["schemas"]["Refund"] & {
+            /**
+             * Format: int64
+             * @description 所属订单的履约门店（后台判权按它）
+             */
+            store_id: number;
+            /** @description 所属订单下单时的门店快照 */
+            store: components["schemas"]["OrderStoreSnapshot"];
+            /** @description 所属订单此刻的履约状态 */
+            order_status: components["schemas"]["OrderStatus"];
+            /** @description 通过或驳回这张单的员工（与 `audited_at` 同一次动作） */
+            audited_by?: components["schemas"]["StaffRef"];
+            /**
+             * Format: date-time
+             * @description 确认收到退货的时间（退货退款 `20 → 30` 那一步）
+             */
+            received_at?: string;
+            /** @description 确认收到退货的员工 */
+            received_by?: components["schemas"]["StaffRef"];
+        };
+        AdminRefundDetail: components["schemas"]["AdminRefund"] & {
+            /**
+             * @description 所属订单的摘要。审核退货退款时裁定运费要看 `freight_cents`（订单实收运费）；
+             *     服务端另外会扣掉这一单别的退款单已占的运费，超了回 422 refund-freight-exceeded。
+             */
+            order: components["schemas"]["AdminOrderSummary"];
         };
         Staff: {
             /** Format: int64 */

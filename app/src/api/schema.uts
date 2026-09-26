@@ -141,6 +141,238 @@ export type AdminInventory = {
   updated_at : string
 }
 
+/** **履约维度** —— 货走到哪儿了。资金维度另见 `Order.refund_status`。 */
+export type OrderStatus = number
+
+/** **资金维度** —— 钱退了多少，与 `status` 正交，由退款单驱动。 */
+export type OrderRefundStatus = number
+
+/** 下单瞬间从 `user_addresses` 拷贝的收货信息快照，落在 */
+export type ReceiverSnapshot = {
+  receiver_name : string
+  phone : string
+  province : string
+  city : string
+  district : string
+  street? : string
+  detail : string
+  region_code? : string
+  postal_code? : string
+}
+
+/** 下单那一瞬间的门店与大区展示信息，取自 `orders.store_snapshot`。 */
+export type OrderStoreSnapshot = {
+  store_name : string
+  store_phone? : string
+  store_address? : string
+  region_name? : string
+}
+
+export type OrderItem = {
+  id : number
+  sku_id : number
+  product_id? : number
+  /** 下单时快照 */
+  title : string
+  spec_values? : UTSJSONObject
+  image_url? : string
+  /** 金额，单位「分」。禁止使用浮点。 */
+  price_cents : Money
+  quantity : number
+  /** 金额，单位「分」。禁止使用浮点。 */
+  amount_cents? : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  discount_cents? : Money
+  /** 已退款完成的件数 */
+  refunded_qty? : number
+  /** 退款流程中（退款单尚未到达 `40 已退款` 或终态）占用的件数。 */
+  refunding_qty? : number
+}
+
+export type PaymentRecord = {
+  payment_no? : string
+  /** 对外字符串 ↔ `payments.channel`：wechat=1 / alipay=2 / balance=3 */
+  channel? : string
+  /** 金额，单位「分」。禁止使用浮点。 */
+  amount_cents? : Money
+  /** 0待支付 1成功 2失败 3已关闭 */
+  status? : number
+  paid_at? : string
+}
+
+export type Shipment = {
+  id : number
+  /** 承运商标识，如 sf / jd / yto */
+  carrier_code : string
+  tracking_no : string
+  /** 1 已发出 · 2 已签收 · 3 异常 */
+  status : number
+  shipped_at : string
+  delivered_at? : string
+}
+
+/** 1 仅退款 / 2 退货退款。对应 `refunds.refund_type`。 */
+export type RefundType = number
+
+/** 退款单状态机，与 `refunds.status` 的 SMALLINT 取值逐值一致。 */
+export type RefundStatus = number
+
+export type RefundItem = {
+  order_item_id : number
+  /** 下单时的商品标题快照 */
+  title? : string
+  image_url? : string
+  quantity : number
+  /** 金额，单位「分」。禁止使用浮点。 */
+  amount_cents : Money
+}
+
+/** 对应 `refunds.reason_code`： */
+export type RefundReasonCode = number
+
+/** 审计字段里的「谁」。`name` 取员工此刻的名字；平台级员工（不属于这家店） */
+export type StaffRef = {
+  id : number
+  name? : string
+}
+
+/** 后台视角的退款单：买家侧 `Refund` 的全部字段，加上履约门店与审核记录。 */
+export type AdminRefund = {
+  /** 对外编号，不可枚举 */
+  refund_no : string
+  order_no : string
+  /** 原路退回的落点 —— 退的是哪一笔支付。一个订单可能有多次支付尝试， */
+  payment_no? : string
+  /** 1 仅退款 / 2 退货退款。对应 `refunds.refund_type`。 */
+  refund_type : RefundType
+  /** 退款单状态机，与 `refunds.status` 的 SMALLINT 取值逐值一致。 */
+  status : RefundStatus
+  /** 退款明细，对应 `refund_items`。申请时按明细提交了，查询时就要能拿回来， */
+  items : RefundItem[]
+  /** 金额，单位「分」。禁止使用浮点。 */
+  goods_amount_cents? : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  freight_cents? : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  amount_cents : Money
+  /** 退款渠道，冗余自原支付单（对账按渠道跑）。 */
+  channel? : string
+  /** 渠道退款流水号，由退款回调写入。用户报障与客服对账要这个号。 */
+  channel_refund_id? : string
+  /** 对应 `refunds.reason_code`： */
+  reason_code? : RefundReasonCode
+  reason_text? : string
+  evidence_urls? : string[]
+  /** 审核驳回理由，`status=50 已拒绝` 时返回。 */
+  reject_reason? : string
+  /** 审核时间 */
+  audited_at? : string
+  /** 到账时间 */
+  refunded_at? : string
+  created_at : string
+  updated_at? : string
+  /** 所属订单的履约门店（后台判权按它） */
+  store_id : number
+  /** 所属订单下单时的门店快照 */
+  store : OrderStoreSnapshot
+  /** 所属订单此刻的履约状态 */
+  order_status : OrderStatus
+  /** 通过或驳回这张单的员工（与 `audited_at` 同一次动作） */
+  audited_by? : StaffRef
+  /** 确认收到退货的时间（退货退款 `20 → 30` 那一步） */
+  received_at? : string
+  /** 确认收到退货的员工 */
+  received_by? : StaffRef
+}
+
+export type AdminOrderDetail = {
+  order_no : string
+  /** 履约门店。**必返**（DB 上是 `NOT NULL`）。 */
+  store_id : number
+  /** 下单时那家门店所属的大区。**冗余在订单上，不靠 `stores.region_id` 推**： */
+  region_id? : number
+  /** **履约维度** —— 货走到哪儿了。资金维度另见 `Order.refund_status`。 */
+  status : OrderStatus
+  /** 售后状态，与 status 正交，必返字段（DB 上是 `NOT NULL DEFAULT 0`）。 */
+  refund_status : OrderRefundStatus
+  /** 金额，单位「分」。禁止使用浮点。 */
+  goods_amount_cents? : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  freight_cents? : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  discount_cents? : Money
+  /** 这一单用的券。没用券时不出现。 */
+  user_coupon_id? : number
+  /** 这一单用的券的名字，**下单时的快照**。没用券时不出现（与 `user_coupon_id` 同进同出）。 */
+  coupon_name? : string
+  /** 金额，单位「分」。禁止使用浮点。 */
+  payable_cents : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  paid_cents? : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  refunded_cents? : Money
+  expire_at? : string
+  created_at : string
+  paid_at? : string
+  /** 发货时间。「发货后 N 天自动确认收货」的倒计时从这里算 */
+  shipped_at? : string
+  finished_at? : string
+  /** 下单时的收货信息快照 */
+  receiver : ReceiverSnapshot
+  /** 下单时的门店与大区展示快照 */
+  store : OrderStoreSnapshot
+  /** 有没有处于 10 待审核 / 20 待买家退货 / 30 退款中的退款单 */
+  has_open_refund : boolean
+  /** 订单行，含优惠分摊（`discount_cents`）与已退 / 在途件数 */
+  items : OrderItem[]
+  payments : PaymentRecord[]
+  /** 发货包裹，按发货先后。一期整单发货，至多一个 */
+  shipments : Shipment[]
+  /** 该订单下的全部退款单，按申请时间倒序 */
+  refunds : AdminRefund[]
+}
+
+/** 后台视角的订单摘要：买家侧 `Order` 的全部字段，加上收货人与门店的**下单时快照**， */
+export type AdminOrderSummary = {
+  order_no : string
+  /** 履约门店。**必返**（DB 上是 `NOT NULL`）。 */
+  store_id : number
+  /** 下单时那家门店所属的大区。**冗余在订单上，不靠 `stores.region_id` 推**： */
+  region_id? : number
+  /** **履约维度** —— 货走到哪儿了。资金维度另见 `Order.refund_status`。 */
+  status : OrderStatus
+  /** 售后状态，与 status 正交，必返字段（DB 上是 `NOT NULL DEFAULT 0`）。 */
+  refund_status : OrderRefundStatus
+  /** 金额，单位「分」。禁止使用浮点。 */
+  goods_amount_cents? : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  freight_cents? : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  discount_cents? : Money
+  /** 这一单用的券。没用券时不出现。 */
+  user_coupon_id? : number
+  /** 这一单用的券的名字，**下单时的快照**。没用券时不出现（与 `user_coupon_id` 同进同出）。 */
+  coupon_name? : string
+  /** 金额，单位「分」。禁止使用浮点。 */
+  payable_cents : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  paid_cents? : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  refunded_cents? : Money
+  expire_at? : string
+  created_at : string
+  paid_at? : string
+  /** 发货时间。「发货后 N 天自动确认收货」的倒计时从这里算 */
+  shipped_at? : string
+  finished_at? : string
+  /** 下单时的收货信息快照 */
+  receiver : ReceiverSnapshot
+  /** 下单时的门店与大区展示快照 */
+  store : OrderStoreSnapshot
+  /** 有没有处于 10 待审核 / 20 待买家退货 / 30 退款中的退款单 */
+  has_open_refund : boolean
+}
+
 /** 后台视角的商品。与 `ProductSummary` 的差别是状态面： */
 export type AdminProduct = {
   id : number
@@ -231,6 +463,56 @@ export type AdminProductDetail = {
   skus : AdminSku[]
   /** 按展示顺序，`images[0]` 是主图。 */
   images : ProductImage[]
+}
+
+export type AdminRefundDetail = {
+  /** 对外编号，不可枚举 */
+  refund_no : string
+  order_no : string
+  /** 原路退回的落点 —— 退的是哪一笔支付。一个订单可能有多次支付尝试， */
+  payment_no? : string
+  /** 1 仅退款 / 2 退货退款。对应 `refunds.refund_type`。 */
+  refund_type : RefundType
+  /** 退款单状态机，与 `refunds.status` 的 SMALLINT 取值逐值一致。 */
+  status : RefundStatus
+  /** 退款明细，对应 `refund_items`。申请时按明细提交了，查询时就要能拿回来， */
+  items : RefundItem[]
+  /** 金额，单位「分」。禁止使用浮点。 */
+  goods_amount_cents? : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  freight_cents? : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  amount_cents : Money
+  /** 退款渠道，冗余自原支付单（对账按渠道跑）。 */
+  channel? : string
+  /** 渠道退款流水号，由退款回调写入。用户报障与客服对账要这个号。 */
+  channel_refund_id? : string
+  /** 对应 `refunds.reason_code`： */
+  reason_code? : RefundReasonCode
+  reason_text? : string
+  evidence_urls? : string[]
+  /** 审核驳回理由，`status=50 已拒绝` 时返回。 */
+  reject_reason? : string
+  /** 审核时间 */
+  audited_at? : string
+  /** 到账时间 */
+  refunded_at? : string
+  created_at : string
+  updated_at? : string
+  /** 所属订单的履约门店（后台判权按它） */
+  store_id : number
+  /** 所属订单下单时的门店快照 */
+  store : OrderStoreSnapshot
+  /** 所属订单此刻的履约状态 */
+  order_status : OrderStatus
+  /** 通过或驳回这张单的员工（与 `audited_at` 同一次动作） */
+  audited_by? : StaffRef
+  /** 确认收到退货的时间（退货退款 `20 → 30` 那一步） */
+  received_at? : string
+  /** 确认收到退货的员工 */
+  received_by? : StaffRef
+  /** 所属订单的摘要。审核退货退款时裁定运费要看 `freight_cents`（订单实收运费）； */
+  order : AdminOrderSummary
 }
 
 /** 后台视角的大区。**没有几何**——大区是门店的分组， */
@@ -628,12 +910,6 @@ export type MerchantUpdateRequest = {
   status? : number
 }
 
-/** **履约维度** —— 货走到哪儿了。资金维度另见 `Order.refund_status`。 */
-export type OrderStatus = number
-
-/** **资金维度** —— 钱退了多少，与 `status` 正交，由退款单驱动。 */
-export type OrderRefundStatus = number
-
 export type Order = {
   order_no : string
   /** 履约门店。**必返**（DB 上是 `NOT NULL`）。 */
@@ -679,78 +955,6 @@ export type OrderCreateRequest = {
   /** 金额，单位「分」。禁止使用浮点。 */
   expected_payable_cents? : Money
 }
-
-/** 下单瞬间从 `user_addresses` 拷贝的收货信息快照，落在 */
-export type ReceiverSnapshot = {
-  receiver_name : string
-  phone : string
-  province : string
-  city : string
-  district : string
-  street? : string
-  detail : string
-  region_code? : string
-  postal_code? : string
-}
-
-/** 下单那一瞬间的门店与大区展示信息，取自 `orders.store_snapshot`。 */
-export type OrderStoreSnapshot = {
-  store_name : string
-  store_phone? : string
-  store_address? : string
-  region_name? : string
-}
-
-export type OrderItem = {
-  id : number
-  sku_id : number
-  product_id? : number
-  /** 下单时快照 */
-  title : string
-  spec_values? : UTSJSONObject
-  image_url? : string
-  /** 金额，单位「分」。禁止使用浮点。 */
-  price_cents : Money
-  quantity : number
-  /** 金额，单位「分」。禁止使用浮点。 */
-  amount_cents? : Money
-  /** 金额，单位「分」。禁止使用浮点。 */
-  discount_cents? : Money
-  /** 已退款完成的件数 */
-  refunded_qty? : number
-  /** 退款流程中（退款单尚未到达 `40 已退款` 或终态）占用的件数。 */
-  refunding_qty? : number
-}
-
-export type PaymentRecord = {
-  payment_no? : string
-  /** 对外字符串 ↔ `payments.channel`：wechat=1 / alipay=2 / balance=3 */
-  channel? : string
-  /** 金额，单位「分」。禁止使用浮点。 */
-  amount_cents? : Money
-  /** 0待支付 1成功 2失败 3已关闭 */
-  status? : number
-  paid_at? : string
-}
-
-/** 1 仅退款 / 2 退货退款。对应 `refunds.refund_type`。 */
-export type RefundType = number
-
-/** 退款单状态机，与 `refunds.status` 的 SMALLINT 取值逐值一致。 */
-export type RefundStatus = number
-
-export type RefundItem = {
-  order_item_id : number
-  /** 下单时的商品标题快照 */
-  title? : string
-  image_url? : string
-  quantity : number
-  /** 金额，单位「分」。禁止使用浮点。 */
-  amount_cents : Money
-}
-
-/** 对应 `refunds.reason_code`： */
-export type RefundReasonCode = number
 
 export type Refund = {
   /** 对外编号，不可枚举 */
@@ -1074,17 +1278,6 @@ export type SearchRequest = {
   strategy? : string
   /** 返回各阶段得分，用于调试与效果评估 */
   explain? : boolean
-}
-
-export type Shipment = {
-  id : number
-  /** 承运商标识，如 sf / jd / yto */
-  carrier_code : string
-  tracking_no : string
-  /** 1 已发出 · 2 已签收 · 3 异常 */
-  status : number
-  shipped_at : string
-  delivered_at? : string
 }
 
 /** 一期不接受发货明细——整单发货，包裹内容即订单全部商品。 */
