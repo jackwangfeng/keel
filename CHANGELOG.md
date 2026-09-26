@@ -545,6 +545,14 @@ Migrations `00027`–`00038` and `00053`–`00061`.
 
 ### Fixed
 
+- **Buyer app times were 8 hours early** (order, payment, refund, coupon, notification
+  times and the new auto-confirm / return deadlines). The API sends UTC RFC3339 as the
+  contract says; the app sliced the string instead of parsing it, so a Beijing buyer saw
+  UTC clock time — and coupon validity dates could be off by a day. Times are now parsed
+  as instants (fractional seconds normalised to milliseconds first) and shown in the
+  device's local time zone. The back office already parsed them; reports already cut days
+  in the shop's time zone.
+
 - **`PATCH /admin/products/{product_id}` with `"brand_id": null` now clears the
   brand.** `encoding/json` turns a JSON `null` into a nil pointer without calling
   `UnmarshalJSON`, so an explicit `null` was indistinguishable from an omitted

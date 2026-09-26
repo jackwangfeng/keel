@@ -331,15 +331,45 @@ export function refundStatusText(refundStatus : number) : string {
   return ''
 }
 
+function pad2(n : number) : string {
+  return n < 10 ? '0' + n.toString() : n.toString()
+}
+
 /**
- * 「2026-09-26T08:05:12+08:00」->「09-26 08:05」。列表里年份和秒都是噪音。
- * 不是这个形状（服务端改了格式）就原样返回，而不是显示一截切坏的字符串。
+ * 把服务端的时间解析成一个时刻。契约里时间一律是带时区的 RFC3339，而且**是 UTC**
+ * （「2026-09-26T00:05:12Z」）—— 所以不能截字符串显示，那样看到的是 UTC 钟点，
+ * 比北京时间早 8 小时。解析失败（服务端改了格式）返回 null，由调用方原样显示。
+ */
+function parseInstant(iso : string) : Date | null {
+  if (iso.length < 16 || iso.substring(10, 11) != 'T') return null
+  // Go 按 RFC3339Nano 输出，库里是微秒，于是常见「…:12.123456Z」。小数秒多于三位时
+  // 有的 Date 实现（老 Safari 等）直接解析失败，统一截到毫秒再交给它。
+  let norm = iso
+  const dot = iso.indexOf('.', 19)
+  if (dot == 19) {
+    let end = 20
+    while (end < iso.length) {
+      const c = iso.charCodeAt(end)!
+      if (c < 48 || c > 57) break
+      end++
+    }
+    const frac = iso.substring(20, end)
+    norm = iso.substring(0, 20) + (frac + '000').substring(0, 3) + iso.substring(end)
+  }
+  const d = new Date(norm)
+  if (isNaN(d.getTime())) return null
+  return d
+}
+
+/**
+ * 「2026-09-26T00:05:12Z」->「09-26 08:05」（设备本地时区，在国内即北京时间）。
+ * 列表里年份和秒都是噪音。不是 RFC3339 就原样返回，而不是显示一截切坏的字符串。
  */
 export function shortTime(iso : string) : string {
-  if (iso.length >= 16 && iso.substring(10, 11) == 'T') {
-    return iso.substring(5, 10) + ' ' + iso.substring(11, 16)
-  }
-  return iso
+  const d = parseInstant(iso)
+  if (d == null) return iso
+  return pad2(d!.getMonth() + 1) + '-' + pad2(d!.getDate()) + ' ' +
+    pad2(d!.getHours()) + ':' + pad2(d!.getMinutes())
 }
 
 export type OrderRow = {
@@ -626,8 +656,11 @@ export function couponScopeText(scopes : CouponScope[]) : string {
 }
 
 /** 「2026-10-26T…」->「2026-10-26」。 */
+/** 「2026-09-30T16:00:00Z」->「2026-10-01」：同样按设备本地时区取日期，不截 UTC 的那一天。 */
 function day(iso : string) : string {
-  return iso.length >= 10 ? iso.substring(0, 10) : iso
+  const d = parseInstant(iso)
+  if (d == null) return iso.length >= 10 ? iso.substring(0, 10) : iso
+  return d!.getFullYear().toString() + '-' + pad2(d!.getMonth() + 1) + '-' + pad2(d!.getDate())
 }
 
 /** 领券中心的一行。 */
