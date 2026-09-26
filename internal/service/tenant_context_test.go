@@ -146,7 +146,7 @@ var tenantContextAllowed = map[string]string{
 		"再逐家进 WithTenant，公平调度也照那一套（每租户上限 + 每轮总预算 + 轮转起点 + 兜底）。" +
 		"论证写在 repository/sweep.go 与 service/sweep.go 的文件头，" +
 		"service/index.go 的文件头第二节只说了与它不同的那一处（上限的量级按一次 " +
-		"/v1/embed 的批大小定）。它不是 SAGA 分支，上面第 ② 道会把这一点钉住。",
+		"/v1/embeddings 的批大小定）。它不是 SAGA 分支，上面第 ② 道会把这一点钉住。",
 }
 
 // mentions 判断这个文件里有没有出现某个标识符（作为选择器的字段名）。
