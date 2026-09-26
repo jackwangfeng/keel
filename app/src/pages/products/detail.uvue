@@ -211,7 +211,7 @@ export default {
       this.added = ''
       // 每次点击一个新的幂等键：同一个 sku 再点一次**就是**想再加一件（服务端累加），
       // 不能当重放吞掉。手抖连点由 adding 挡住 —— 请求在飞时第二下不发。
-      addCartItem(addCartRequest(this.skuId, 1), this.storeId, newIdempotencyKey(),
+      addCartItem(addCartRequest(this.skuId, 1), this.storeId, null, newIdempotencyKey(),
         (c) => {
           this.adding = false
           this.added = '已加入购物车（共 ' + c.items.length.toString() + ' 种）'
