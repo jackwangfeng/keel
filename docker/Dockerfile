@@ -76,7 +76,22 @@ COPY --from=dtmrs /dtmrs /src/third_party/dtmrs
 # 不要试图绕：静态编译没了，最终镜像也不能再是 scratch（见下面 app 阶段）。
 # 静态链接 libdtmrs.a 是可行的（约 15 MB 单文件），但那是另一次权衡，
 # 不是这次改动的范围。
-RUN CGO_ENABLED=1 go build -trimpath -o /out/keel ./cmd/keel
+# 版本号从外面传进来，**不是在这里算的**：.dockerignore 第 3 行把 .git 排除在
+# 构建上下文之外（那是刻意的，整个 .git 进上下文会让每次构建多传几十 MB，
+# 且任何一次提交都让缓存失效），所以这一层里既没有 git 也没有 VCS 信息。
+#
+# 三个都留空是允许的 —— internal/buildinfo 的默认值是 "dev"，一个没注入版本的
+# 镜像会诚实地说自己是开发构建。CI 的 release 流水线会传真值（见
+# .github/workflows/release.yml）。
+ARG KEEL_VERSION=dev
+ARG KEEL_COMMIT=
+ARG KEEL_DATE=
+
+RUN CGO_ENABLED=1 go build -trimpath \
+        -ldflags "-X github.com/keel/keel/internal/buildinfo.Version=${KEEL_VERSION} \
+                  -X github.com/keel/keel/internal/buildinfo.Commit=${KEEL_COMMIT} \
+                  -X github.com/keel/keel/internal/buildinfo.Date=${KEEL_DATE}" \
+        -o /out/keel ./cmd/keel
 
 # goose 从 tools/ 编译，版本由 tools/go.mod 锁定 —— 和 `make migrate` 用的是
 # 同一个版本。镜像里 go install @latest 的话，本地与容器会在某天装到两个版本的

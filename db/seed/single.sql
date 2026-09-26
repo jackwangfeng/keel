@@ -302,8 +302,9 @@ SELECT u.merchant_id, u.id, '示例收件人', '13800000000',
 -- **为什么种子要自己写这一列，而不是等索引任务去写。**
 --
 -- 派生数据入库任务（service/index.go）只在配了 KEEL_EMBED_ENDPOINT 时才启动，
--- 而 README 承诺的那条 `docker compose up` 里**没有推理引擎**（它在
--- compose.inference.yaml 那个叠加层里，2.27 GB 权重、冷启动约 75 秒）。
+-- 而 README 承诺的那条 `docker compose up` 里**没有推理引擎**（引擎是 infero，
+-- GPU-only，跑在 compose 之外的宿主机进程里，见 scripts/infero-up.sh）。
+-- 没有 GPU 的机器更是永远处在这个状态。
 -- 于是默认那一栈里 search_text 永远是 NULL，关键词那一路一条也召不回 ——
 -- 而语义检索层 §8 明说「任何一环故障，搜索都必须仍能返回结果」。
 -- 没有这几行，那条降级链在默认演示里是**看不到**的：搜什么都是空的。

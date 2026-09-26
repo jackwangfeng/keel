@@ -411,7 +411,7 @@ func TestEmbedIsCalledOncePerTenantNotPerProduct(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(f.emb.calls) != 1 {
-		t.Fatalf("打了 %d 次 /v1/embed，期望 1 次 —— 5 件商品退化成了循环单条。"+
+		t.Fatalf("打了 %d 次 /v1/embeddings，期望 1 次 —— 5 件商品退化成了循环单条。"+
 			"一次 HTTP 往返的固定开销在循环单条时要乘 5 遍（§10：禁止循环单条调用）",
 			len(f.emb.calls))
 	}

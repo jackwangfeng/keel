@@ -66,6 +66,7 @@ OPERATIONS = [
     ('get', '/orders', 'ListOrders'),
     ('get', '/orders/{order_no}', 'GetOrder'),
     ('post', '/orders/{order_no}/payments', 'CreatePayment'),
+    ('post', '/search', 'Search'),
 ]
 
 HEADER = '''// 由 scripts/gen_uts_schema.py 从 docs/电商系统-OpenAPI.yaml 生成。**请勿手改。**

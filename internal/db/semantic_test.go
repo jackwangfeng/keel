@@ -132,7 +132,7 @@ func TestVectorTablesPolicyBlocksCrossTenantAccess(t *testing.T) {
 		if _, err := admin.Exec(ctx,
 			`INSERT INTO product_text_vectors
 			     (product_id, merchant_id, content, embedding, model_name, model_version)
-			 VALUES ($1, $2, $3, $4::vector, 'bge-m3', 'test')`,
+			 VALUES ($1, $2, $3, $4::vector, 'Qwen3-Embedding-0', 'test')`,
 			products[m], m, fmt.Sprintf("商品-%d 的拼接文本", m),
 			vectorLiteral(dims, 0.001)); err != nil {
 			t.Fatal(err)
@@ -262,7 +262,7 @@ func TestVectorTablesPolicyBlocksCrossTenantAccess(t *testing.T) {
 		_, err := app.Exec(ctx,
 			`INSERT INTO product_text_vectors
 			     (product_id, merchant_id, content, embedding, model_name, model_version)
-			 VALUES ($1, $2, '偷插的', $3::vector, 'bge-m3', 'test')`,
+			 VALUES ($1, $2, '偷插的', $3::vector, 'Qwen3-Embedding-0', 'test')`,
 			products[idB], idB, vectorLiteral(dims, 0.002))
 		if err == nil {
 			t.Fatal("商家 A 往商家 B 的商品上插进了向量行 —— WITH CHECK 没生效")
@@ -281,7 +281,7 @@ func TestVectorTablesPolicyBlocksCrossTenantAccess(t *testing.T) {
 		if _, err := app.Exec(ctx,
 			`INSERT INTO product_text_vectors
 			     (product_id, content, embedding, model_name, model_version)
-			 VALUES ($1, '自己的', $2::vector, 'bge-m3', 'test')`,
+			 VALUES ($1, '自己的', $2::vector, 'Qwen3-Embedding-0', 'test')`,
 			products[idA], vectorLiteral(dims, 0.002)); err != nil {
 			t.Fatalf("商家 A 写自己名下的向量也失败了，说明上一条断言的红不是 RLS 给的: %v", err)
 		}
@@ -587,7 +587,7 @@ func TestStalenessCriterionRawMaterial(t *testing.T) {
 	if _, err := admin.Exec(ctx,
 		`INSERT INTO product_text_vectors
 		     (product_id, merchant_id, content, embedding, model_name, model_version)
-		 VALUES ($1, $2, '拼接文本', $3::vector, 'bge-m3', 'test')`,
+		 VALUES ($1, $2, '拼接文本', $3::vector, 'Qwen3-Embedding-0', 'test')`,
 		pid, idA, vectorLiteral(1024, 0.001)); err != nil {
 		t.Fatal(err)
 	}

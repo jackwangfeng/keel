@@ -1,0 +1,14 @@
+buildscript {
+    // DCloud 的 UTS Kotlin 编译插件：不在任何 maven 仓库里，只随离线 SDK 分发。
+    def plugins = new File(gradle.ext.uniSdk, 'plugins')
+    dependencies {
+        classpath(files("${plugins}/uts-kotlin-compiler-plugin-0.0.1.jar"))
+        classpath(files("${plugins}/uts-kotlin-gradle-plugin-0.0.1.jar"))
+    }
+}
+
+plugins {
+    alias(libs.plugins.android.application) apply false
+    alias(libs.plugins.android.library) apply false
+    alias(libs.plugins.jetbrains.kotlin.android) apply false
+}

@@ -41,3 +41,7 @@ __pycache__/
 # 只忽略 worktrees 这一层，不忽略整个 .claude/ —— 那底下还可能放团队共享的
 # settings.json 与 agent 定义，那些是该入库的。
 /.claude/worktrees/
+
+# make build 的产物（-ldflags 注了版本号的那个二进制）。
+# 不入库：37 MB，且每次构建都不一样（构建时间在里面）。
+/build/

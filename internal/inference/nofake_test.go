@@ -1,6 +1,7 @@
 package inference_test
 
 import (
+	"bytes"
 	"os/exec"
 	"slices"
 	"strings"
@@ -60,12 +61,19 @@ func productionMainPackages(t *testing.T, tags string) []string {
 // 用真的 go list 而不是读源码找 `//go:build` 那一行：判据要和**构建系统实际的
 // 判断**是同一个。grep 一行注释的话，把标签写错（比如 `//go:build keel_fake` 少
 // 一截）会让 grep 绿而构建里那个包其实是**默认可见**的——正好反了。
+//
+// 结果只取 stdout。stderr 另收，只在失败时报：模块缓存是冷的时候（CI 上推理引擎那个
+// job 就是），go 会往 stderr 打 `go: downloading ...`，用 CombinedOutput 的话这一行
+// 会混进包列表，下一次 go list 把它当成包路径 —— "malformed import path ... invalid
+// char ':'"。这条测试就这样在冷缓存上红了，而它守的那件事其实完好。
 func goList(t *testing.T, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("go", append([]string{"list"}, args...)...)
-	out, err := cmd.CombinedOutput()
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
 	if err != nil {
-		t.Fatalf("go list %v 失败: %v\n%s", args, err, out)
+		t.Fatalf("go list %v 失败: %v\n%s%s", args, err, out, stderr.String())
 	}
 	return string(out)
 }

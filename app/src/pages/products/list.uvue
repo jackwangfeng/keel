@@ -1,42 +1,67 @@
 <template>
   <view class="page">
-    <!-- 搜索框先占位：GET /search 是 M3 的东西，后端还没有。
-         做成一个点了会说清楚「还没通」的输入框，而不是一个点了没反应的框。 -->
-    <view class="card row">
-      <input class="search" type="text" placeholder="搜索商品（M3 的 /search 通了再接）" :disabled="true" />
-    </view>
+    <scroll-view class="scroll" direction="vertical">
+      <view class="head" :style="{ paddingTop: (statusBarHeight + 20) + 'px' }">
+        <text class="t-overline">KEEL · 精选好物</text>
+        <view class="gap-s"></view>
+        <text class="t-display">{{ greeting }}</text>
+        <text class="t-sub head-sub">慢一点，好好喝一杯</text>
 
-    <view class="card row">
-      <text class="muted">{{ baseUrl }}</text>
-      <view class="spacer"></view>
-      <text class="link" @click="goSettings">服务地址</text>
-      <text class="link" @click="goOrders">我的订单</text>
-      <text class="link" @click="goLogin">{{ loginText }}</text>
-    </view>
-
-    <text v-if="error != ''" class="err">{{ error }}</text>
-
-    <scroll-view class="list" direction="vertical">
-      <view v-for="item in rows" :key="item.id" class="card" @click="openDetail(item.id)">
-        <text class="title">{{ item.title }}</text>
-        <text v-if="item.subtitle != ''" class="muted">{{ item.subtitle }}</text>
-        <view class="row">
-          <text class="price">{{ item.priceText }}</text>
-          <text v-if="item.offShelf" class="tag">已下架</text>
-          <text v-else-if="item.soldOut" class="tag">无货</text>
+        <!-- 首页只放一个入口，真正的输入框在搜索页：首页的输入框一获得焦点就弹键盘、
+             挡住商品，而搜索结果本来就要一整页来放。 -->
+        <view class="search row" @click="goSearch">
+          <text class="search-icon">⌕</text>
+          <text class="t-hint">搜索商品</text>
         </view>
       </view>
-      <text v-if="!loading && rows.length == 0 && error == ''" class="muted">没有商品</text>
-      <text v-if="loading" class="muted">加载中…</text>
-    </scroll-view>
 
-    <text class="muted footer">共 {{ total }} 件</text>
+      <view class="section between">
+        <text class="t-section">全部商品</text>
+        <text v-if="total > 0" class="t-hint">共 {{ total }} 件</text>
+      </view>
+
+      <view v-if="error != ''" class="body">
+        <view class="card">
+          <text class="t-err">{{ error }}</text>
+          <view class="gap-m"></view>
+          <view class="btn-ghost" @click="load"><text class="btn-ghost-text">重新加载</text></view>
+        </view>
+      </view>
+
+      <view class="grid">
+        <view v-for="item in rows" :key="item.id" class="cell" @click="openDetail(item.id)">
+          <view class="tile">
+            <view class="cover tile-cover" :style="{ backgroundColor: item.cover.color }">
+              <image v-if="item.cover.imageUrl != ''" class="cover-img" :src="item.cover.imageUrl" mode="aspectFill"></image>
+              <text v-else class="cover-glyph tile-glyph">{{ item.cover.glyph }}</text>
+              <view v-if="item.offShelf || item.soldOut" class="tile-flag">
+                <text class="tile-flag-text">{{ item.offShelf ? '已下架' : '暂时无货' }}</text>
+              </view>
+            </view>
+            <view class="tile-info">
+              <text class="tile-title">{{ item.title }}</text>
+              <text v-if="item.subtitle != ''" class="t-hint">{{ item.subtitle }}</text>
+              <view class="gap-s"></view>
+              <text class="t-price">{{ item.priceText }}</text>
+            </view>
+          </view>
+        </view>
+      </view>
+
+      <view v-if="!loading && rows.length == 0 && error == ''" class="empty">
+        <view class="empty-mark"><text class="empty-mark-text">☕</text></view>
+        <text class="t-sub">店里还没有上架商品</text>
+      </view>
+      <view v-if="loading && rows.length == 0" class="empty">
+        <text class="t-hint">正在加载…</text>
+      </view>
+      <view class="gap-l"></view>
+    </scroll-view>
   </view>
 </template>
 
 <script>
 import { listProducts, ApiFailure } from '@/api/client.uts'
-import { getBaseUrl, isLoggedIn } from '@/api/config.uts'
 import { productRow, ProductRow } from '@/api/view.uts'
 
 export default {
@@ -46,14 +71,17 @@ export default {
       total: 0,
       loading: false,
       error: '',
-      baseUrl: '',
-      loginText: '登录',
+      greeting: '',
+      statusBarHeight: 0,
     }
   },
+  onLoad() {
+    this.statusBarHeight = uni.getWindowInfo().statusBarHeight
+  },
   onShow() {
-    // onShow 而不是 onLoad：从「服务地址」页改完地址退回来时要重新拉。
-    this.baseUrl = getBaseUrl()
-    this.loginText = isLoggedIn() ? '已登录' : '登录'
+    // onShow 而不是 onLoad：从「服务地址」页改完地址切回来时要重新拉。
+    const h = new Date().getHours()
+    this.greeting = h < 11 ? '早上好' : (h < 18 ? '下午好' : '晚上好')
     this.load()
   },
   methods: {
@@ -77,49 +105,80 @@ export default {
         }
       )
     },
+    goSearch() {
+      uni.navigateTo({ url: '/pages/search/index' })
+    },
     openDetail(id: number) {
       uni.navigateTo({ url: '/pages/products/detail?id=' + id.toString() })
-    },
-    goLogin() {
-      uni.navigateTo({ url: '/pages/auth/login' })
-    },
-    goOrders() {
-      uni.navigateTo({ url: '/pages/order/list' })
-    },
-    goSettings() {
-      uni.navigateTo({ url: '/pages/settings/base' })
     },
   },
 }
 </script>
 
 <style>
+.head {
+  padding-left: 20px;
+  padding-right: 20px;
+  padding-bottom: 8px;
+}
+.head-sub {
+  margin-top: 4px;
+}
 .search {
-  flex: 1;
-  height: 32px;
+  margin-top: 20px;
+  height: 44px;
+  border-radius: 22px;
+  background-color: #EFE7DC;
+  padding: 0 18px;
+}
+.search-icon {
+  font-size: 18px;
+  color: #A89C90;
+  margin-right: 8px;
+}
+.section {
+  padding: 24px 20px 4px 20px;
+}
+.grid {
+  flex-direction: row;
+  flex-wrap: wrap;
+  padding: 0 10px;
+}
+.cell {
+  width: 50%;
+  padding: 6px;
+}
+.tile {
+  background-color: #FFFDF9;
+  border-radius: 16px;
+  overflow: hidden;
+}
+.tile-cover {
+  width: 100%;
+  height: 156px;
+}
+.tile-glyph {
+  font-size: 44px;
+}
+.tile-flag {
+  position: absolute;
+  left: 10px;
+  top: 10px;
+  padding: 2px 8px;
+  border-radius: 8px;
+  background-color: rgba(42, 33, 27, 0.6);
+}
+.tile-flag-text {
+  font-size: 11px;
+  color: #FFFDF9;
+}
+.tile-info {
+  padding: 12px 12px 14px 12px;
+}
+.tile-title {
   font-size: 14px;
-}
-.spacer {
-  flex: 1;
-}
-.link {
-  color: #1677ff;
-  font-size: 13px;
-  margin-left: 12px;
-}
-.list {
-  flex: 1;
-}
-.title {
-  font-size: 15px;
   font-weight: bold;
-}
-.tag {
-  margin-left: 8px;
-  font-size: 12px;
-  color: #888888;
-}
-.footer {
-  padding: 8px;
+  color: #2A211B;
+  margin-bottom: 2px;
 }
 </style>

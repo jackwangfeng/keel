@@ -171,10 +171,12 @@ KEEL_HTTP_PORT=18080 ./scripts/smoke.sh
 商品的两份派生数据（`product_text_vectors.embedding` 与 `products.search_text`）
 由 `internal/service` 的派生数据入库任务维护，它**要一个真的推理引擎**。
 
-引擎是叠加层（`compose.inference.yaml`，2.27 GB 权重、首次冷启动约 75 秒）：
+引擎是 infero，**要一块 NVIDIA GPU**，而且它跑在 compose 之外的宿主机进程里
+（显存账写在 `scripts/infero-up.sh` 的文件头）：
 
 ```bash
-docker compose -f compose.yaml -f compose.inference.yaml up -d --build
+./scripts/infero-up.sh                                       # 先起引擎
+docker compose -f compose.yaml -f compose.infero.yaml up -d   # 再起栈
 ```
 
 叠加层会给 `app` 配上 `KEEL_EMBED_ENDPOINT`，进程里的**增量**任务随之启动：
@@ -184,6 +186,8 @@ docker compose -f compose.yaml -f compose.inference.yaml up -d --build
 
 **没配 `KEEL_EMBED_ENDPOINT` 时它不启动**，启动日志里有一条 WARN 说明后果
 （新品与改过的商品搜不到）。这是刻意的：默认那条 `docker compose up` 里没有引擎。
+没有 GPU 的机器今天就是这条路 —— 栈起得来、`/search` 走纯关键词降级链，
+只是没有语义召回（infero 只有 CUDA / Metal 后端，CPU 后端还没有）。
 
 **全量**走一条单独的命令，补两类增量看不见的东西：存量（00016 刚落地时全库
 `search_text` 都是 NULL，而没有任何 `updated_at` 因此前进），以及换模型 / 改拼接模板：

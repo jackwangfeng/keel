@@ -1,0 +1,64 @@
+plugins {
+    alias(libs.plugins.android.application)
+    alias(libs.plugins.jetbrains.kotlin.android)
+}
+
+// 这三个值由 build-apk.sh 从 src/manifest.json 读出来传进来，保证 apk 与 H5 同一份版本号。
+def appId = providers.gradleProperty('uniAppId').getOrElse('__UNI__KEEL01')
+def verName = providers.gradleProperty('versionName').getOrElse('0.1.0')
+def verCode = providers.gradleProperty('versionCode').getOrElse('1').toInteger()
+
+android {
+    namespace 'dev.keel.buyer'
+    compileSdk 36
+
+    defaultConfig {
+        applicationId 'dev.keel.buyer'
+        minSdk 21
+        targetSdk 36
+        versionCode verCode
+        versionName verName
+        manifestPlaceholders = [uniAppId: appId]
+
+        // uni-app x 运行时从宿主的 BuildConfig 里读这几项注册表（组件 / provider / hook /
+        // easycom）。SDK Demo 里填满了地图、支付、推送；这个 App 一样都没用，给空表 ——
+        // 不给的话运行时反射取字段会失败。
+        buildConfigField 'String', 'DCLOUDUnionId', '""'
+        buildConfigField 'String', 'UTSRegisterComponents', '"[]"'
+        buildConfigField 'String', 'UTSRegisterProviders', '"[]"'
+        buildConfigField 'String[]', 'UTSHooksClassArray', '{}'
+        buildConfigField 'String', 'UTSEasyCom', '"[]"'
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            // 还没有正式签名证书：release 先用 debug 证书签，能装能测，不能上架。
+            signingConfig signingConfigs.debug
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+    kotlinOptions {
+        jvmTarget = '1.8'
+    }
+    packaging {
+        resources {
+            excludes += '/META-INF/{AL2.0,LGPL2.1}'
+        }
+        jniLibs {
+            pickFirsts += ['lib/*/libc++_shared.so', 'lib/*/libstlport_shared.so']
+        }
+    }
+    aaptOptions {
+        additionalParameters '--auto-add-overlay'
+        ignoreAssetsPattern '!.svn:!.git:.*:!CVS:!thumbs.db:!picasa.ini:!*.scc:*~'
+    }
+}
+
+dependencies {
+    implementation project(':uniappx')
+    implementation files(gradle.ext.uniAars)
+}

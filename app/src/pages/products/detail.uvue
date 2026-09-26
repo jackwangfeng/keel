@@ -1,46 +1,73 @@
 <template>
   <view class="page">
-    <text v-if="loading" class="muted pad">加载中…</text>
+    <scroll-view class="scroll" direction="vertical">
+      <view v-if="detail != null" class="cover hero" :style="{ backgroundColor: detail!.cover.color }">
+        <image v-if="detail!.cover.imageUrl != ''" class="cover-img" :src="detail!.cover.imageUrl" mode="aspectFill"></image>
+        <text v-else class="cover-glyph hero-glyph">{{ detail!.cover.glyph }}</text>
+      </view>
 
-    <!-- 后端还没接上这条接口时，说的是实话，不是「商品不存在」。
-         把 404 一律翻译成「没有这件商品」会让人去查种子数据，而真因是路由没挂。 -->
-    <view v-if="notImplemented" class="card">
-      <text class="title">GET /products/&#123;product_id&#125; 后端尚未接上</text>
-      <text class="muted">
-        这条接口打过去是 {{ error }}。页面是按契约写好的，接口一通就能用；
-        在那之前用下面的降级输入让下单链路仍然可走。
-      </text>
-    </view>
-    <text v-else-if="error != ''" class="err pad">{{ error }}</text>
+      <view v-if="detail != null" class="sheet">
+        <text class="t-overline">{{ detail!.offShelf ? '已下架' : 'KEEL 精选' }}</text>
+        <text class="name">{{ detail!.title }}</text>
+        <text v-if="detail!.subtitle != ''" class="t-sub">{{ detail!.subtitle }}</text>
+        <view class="gap-m"></view>
+        <view class="row">
+          <text class="t-price-l">{{ selectedPrice }}</text>
+          <text v-if="selectedStock >= 0" class="t-hint stock">库存 {{ selectedStock }}</text>
+        </view>
 
-    <view v-if="detail != null" class="card">
-      <text class="title">{{ detail!.title }}</text>
-      <text v-if="detail!.subtitle != ''" class="muted">{{ detail!.subtitle }}</text>
-      <text class="price">{{ detail!.priceText }}</text>
-      <text v-if="detail!.offShelf" class="err">已下架</text>
-      <text v-if="detail!.description != ''" class="desc">{{ detail!.description }}</text>
-    </view>
+        <view class="divider"></view>
 
-    <view v-if="detail != null" class="card">
-      <text class="title">规格</text>
-      <view v-for="sku in detail!.skus" :key="sku.id" class="row sku" @click="pick(sku.id)">
-        <text :class="sku.id == skuId ? 'sku-on' : 'sku-off'">{{ sku.label }}</text>
-        <view class="spacer"></view>
-        <text class="price">{{ sku.priceText }}</text>
-        <text class="muted">库存 {{ sku.availableQty }}</text>
+        <text class="t-section">{{ specName }}</text>
+        <view class="chips">
+          <view
+            v-for="sku in detail!.skus"
+            :key="sku.id"
+            :class="['chip', sku.id == skuId ? 'chip-on' : '', sku.soldOut ? 'btn-off' : '']"
+            @click="pick(sku.id, sku.soldOut)"
+          >
+            <text :class="sku.id == skuId ? 'chip-text-on' : 'chip-text'">{{ sku.label }}</text>
+          </view>
+        </view>
+
+        <view v-if="detail!.description != ''">
+          <view class="divider"></view>
+          <text class="t-section">商品介绍</text>
+          <view class="gap-s"></view>
+          <text class="t-body">{{ detail!.description }}</text>
+        </view>
+      </view>
+
+      <view class="body">
+        <view v-if="loading" class="empty"><text class="t-hint">正在加载…</text></view>
+
+        <!-- 后端还没接上这条接口时，说的是实话，不是「商品不存在」。
+             把 404 一律翻译成「没有这件商品」会让人去查种子数据，而真因是路由没挂。 -->
+        <view v-if="notImplemented" class="card">
+          <text class="t-section">商品详情暂时无法加载</text>
+          <text class="t-sub">服务器还没有开放这项功能（{{ error }}）。可以先填规格编号继续下单。</text>
+          <!-- 降级形态：拿不到 SKU 列表，只能让用户自己填 sku_id。
+               这很难看，但它诚实 —— 比假装有一个规格选择器好。 -->
+          <view class="field">
+            <text class="field-label">规格编号</text>
+            <input class="field-input" type="number" v-model="skuIdText" placeholder="sku_id" />
+          </view>
+        </view>
+        <view v-else-if="error != ''" class="card">
+          <text class="t-err">{{ error }}</text>
+        </view>
+      </view>
+    </scroll-view>
+
+    <view class="bar" :style="{ paddingBottom: (10 + safeBottom) + 'px' }">
+      <view class="bar-info">
+        <text v-if="hint != ''" class="t-err">{{ hint }}</text>
+        <text v-else class="t-hint">{{ detail != null ? '已选 ' + selectedLabel : '' }}</text>
+      </view>
+      <view :class="['btn', 'bar-btn', canBuy ? '' : 'btn-off']" @click="buy">
+        <text class="btn-text">立即购买</text>
       </view>
     </view>
-
-    <!-- 降级形态：详情接口没通时，SKU 列表拿不到，只能让用户自己填 sku_id。
-         这很难看，但它诚实 —— 比假装有一个规格选择器好。 -->
-    <view v-if="notImplemented" class="card">
-      <text class="title">选规格（降级）</text>
-      <text class="muted">详情接口没通，拿不到 SKU 列表。先手填 sku_id：</text>
-      <input class="input" type="number" v-model="skuIdText" placeholder="sku_id" />
-    </view>
-
-    <button class="btn" @click="buy">立即下单</button>
-    <text v-if="hint != ''" class="err pad">{{ hint }}</text>
   </view>
 </template>
 
@@ -59,9 +86,47 @@ export default {
       error: '',
       hint: '',
       notImplemented: false,
+      safeBottom: 0,
     }
   },
+  computed: {
+    specName(): string {
+      const d = this.detail
+      if (d == null || d.skus.length == 0) return '规格'
+      return d.skus[0].specName
+    },
+    selectedPrice(): string {
+      const d = this.detail
+      if (d == null) return ''
+      for (let i = 0; i < d.skus.length; i++) {
+        if (d.skus[i].id == this.skuId) return d.skus[i].priceText
+      }
+      return d.priceText
+    },
+    selectedLabel(): string {
+      const d = this.detail
+      if (d == null) return ''
+      for (let i = 0; i < d.skus.length; i++) {
+        if (d.skus[i].id == this.skuId) return d.skus[i].label
+      }
+      return '—'
+    },
+    selectedStock(): number {
+      const d = this.detail
+      if (d == null) return -1
+      for (let i = 0; i < d.skus.length; i++) {
+        if (d.skus[i].id == this.skuId) return d.skus[i].availableQty
+      }
+      return -1
+    },
+    canBuy(): boolean {
+      if (this.notImplemented) return this.skuIdText != ''
+      const d = this.detail
+      return d != null && !d.offShelf && this.skuId > 0
+    },
+  },
   onLoad(options: OnLoadOptions) {
+    this.safeBottom = uni.getWindowInfo().safeAreaInsets.bottom
     const raw = options['id']
     this.productId = raw != null ? parseInt('' + raw) : 0
     this.load()
@@ -69,7 +134,7 @@ export default {
   methods: {
     load() {
       if (this.productId <= 0) {
-        this.error = '没有 product_id'
+        this.error = '没有指定商品'
         return
       }
       this.loading = true
@@ -78,8 +143,12 @@ export default {
         (d) => {
           const view = productDetailView(d)
           this.detail = view
-          if (view.skus.length > 0) {
-            this.skuId = view.skus[0].id
+          // 默认选第一个有货的规格。
+          for (let i = 0; i < view.skus.length; i++) {
+            if (!view.skus[i].soldOut) {
+              this.skuId = view.skus[i].id
+              break
+            }
           }
           this.loading = false
         },
@@ -90,7 +159,12 @@ export default {
         }
       )
     },
-    pick(id: number) {
+    pick(id: number, soldOut: boolean) {
+      if (soldOut) {
+        this.hint = '这个规格暂时无货'
+        return
+      }
+      this.hint = ''
       this.skuId = id
     },
     buy() {
@@ -99,52 +173,80 @@ export default {
         sku = parseInt(this.skuIdText)
       }
       if (isNaN(sku) || sku <= 0) {
-        this.hint = '先选一个规格（或在降级输入框里填 sku_id）'
+        this.hint = '请先选择规格'
+        return
+      }
+      const d = this.detail
+      if (d != null && d.offShelf) {
+        this.hint = '这件商品已下架'
         return
       }
       this.hint = ''
-      uni.navigateTo({ url: '/pages/order/create?sku_id=' + sku.toString() })
+      uni.navigateTo({
+        url: '/pages/order/create?sku_id=' + sku.toString() + '&product_id=' + this.productId.toString(),
+      })
     },
   },
 }
 </script>
 
 <style>
-.pad {
-  padding: 12px;
+.hero {
+  width: 100%;
+  height: 340px;
 }
-.title {
-  font-size: 15px;
+.hero-glyph {
+  font-size: 96px;
+}
+.sheet {
+  margin-top: -24px;
+  border-top-left-radius: 24px;
+  border-top-right-radius: 24px;
+  background-color: #FFFDF9;
+  padding: 24px 20px 28px 20px;
+}
+.name {
+  font-size: 22px;
   font-weight: bold;
-}
-.desc {
+  color: #2A211B;
   margin-top: 8px;
-  font-size: 13px;
-  color: #444444;
+  margin-bottom: 4px;
 }
-.sku {
-  margin-top: 8px;
+.stock {
+  margin-left: 12px;
 }
-.sku-on {
-  color: #1677ff;
-  font-weight: bold;
-  font-size: 14px;
+.chips {
+  flex-direction: row;
+  flex-wrap: wrap;
+  margin-top: 12px;
 }
-.sku-off {
-  color: #333333;
-  font-size: 14px;
-}
-.spacer {
-  flex: 1;
-}
-.input {
-  height: 36px;
-  margin-top: 8px;
-  padding-left: 8px;
+.chip {
+  padding: 8px 18px;
+  border-radius: 18px;
   border-width: 1px;
   border-style: solid;
-  border-color: #dddddd;
-  border-radius: 4px;
+  border-color: #E3D9CC;
+  background-color: #FFFDF9;
+  margin-right: 10px;
+  margin-bottom: 10px;
+}
+.chip-on {
+  background-color: #3B2A20;
+  border-color: #3B2A20;
+}
+.chip-text {
   font-size: 14px;
+  color: #2A211B;
+}
+.chip-text-on {
+  font-size: 14px;
+  color: #FFFDF9;
+}
+.bar-info {
+  flex: 1;
+  padding-right: 12px;
+}
+.bar-btn {
+  width: 160px;
 }
 </style>
