@@ -440,7 +440,7 @@ func TestPaymentIntentIsRefusedWhenSandboxIsOff(t *testing.T) {
 
 	off := app.Router(testPool,
 		tenant.NewResolver(testPool, tenant.Config{BaseDomain: baseDomain}),
-		testSigner, testOrders, service.PaymentConfig{Sandbox: false})
+		testSigner, testOrders, service.PaymentConfig{Sandbox: false}, conceptEmbedder{})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/orders/"+no+"/payments",
 		strings.NewReader(`{"channel":"wechat"}`))

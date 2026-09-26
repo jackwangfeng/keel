@@ -86,6 +86,23 @@ type route struct {
 	//   - 真的实现了运费、字段开始出现在响应里 → order_test.go 的
 	//     TestFreightIsAbsentNotZero 红，逼人回来删掉这一行。
 	NotYetImplementedResponse map[string]string
+
+	// NotYetImplementedStage 是契约的 **description** 里写着、这条 handler
+	// 还没跑的流水线阶段，与前三笔账是同一件事的第四种形状。
+	//
+	// 需要第四种形状，是因为前三种都够不着这一笔。/search 的响应形状是完整的
+	// （items / latency_ms / total / strategy 一个不少），请求参数也全实现了 ——
+	// 少做的是**流水线里的两层**，而那件事只写在 description 的一句话里：
+	// 「四层流水线：双路召回 → RRF 融合 → Reranker 精排 → 业务重排」。
+	// 没有这笔账的话，「接口看上去全实现了，实际只跑了一半」在任何闸门里
+	// 都留不下痕迹。
+	//
+	// 键是**契约描述里那几个字**，逐字。两个方向都锁得住：
+	//   - 契约把这个阶段改名或删掉 → TestNotYetImplementedStagesAreNamedInContract
+	//     红（清单在描述一个契约里不存在的东西）；
+	//   - 真的实现了这一层、响应里开始出现它的得分 → search_test.go 的
+	//     TestExplainOmitsStagesThatDidNotRun 红，逼人回来删掉这一行。
+	NotYetImplementedStage map[string]string
 }
 
 // ginPath 把契约路径翻成 gin 注册的那一个：加前缀，并把 OpenAPI 的 {name}
@@ -213,6 +230,31 @@ var routes = []route{
 		HandlerFile:    "payment_intent.go",
 		NoQueryParams: "渠道在请求体里，订单号在路径上，幂等键在 Idempotency-Key 请求头里；" +
 			"契约里这条接口没有任何 query 参数",
+	},
+	{
+		ContractPath:   "/search",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "search.go",
+		NoQueryParams: "检索的参数全在请求体里（query / filters / size / strategy / explain）；" +
+			"契约里这条接口一个 query 参数都没有",
+		NotYetImplementedResponse: map[string]string{
+			"trace_id": "检索日志 search_logs 那张表本轮没有建，POST /search/events 也没有实现。" +
+				"trace_id 在契约里唯一的用处就是把一次检索与它后续的点击 / 加购 / 下单串起来" +
+				"（那条接口的描述原话），而串到的那一头不存在。回一个谁也存不进去的 id " +
+				"不是「先占个位」，是让客户端以为它拿到的东西有下文。",
+		},
+		NotYetImplementedStage: map[string]string{
+			"Reranker 精排": "cross-encoder 精排（语义检索层 §5 / §11 阶段 3，路线图 M5）。" +
+				"它是延迟大头（§8 给 80 ms），而本轮连离线评测集（§9.1）都还没有 —— " +
+				"没有评测集就上精排，等于把一层没人能判断好坏的东西放进排序里。" +
+				"explain=true 时 scores.rerank **整个不出现**，而不是填 0。",
+			"业务重排": "缺货 / 活动失效 / 负毛利降权（语义检索层 §6，路线图 M5）。" +
+				"它要的是活动与毛利数据，而 promotions 与成本价在数据模型里都还没有落地 —— " +
+				"眼下能做的只有「缺货降权」那一条，而那条已经由 filters.in_stock_only " +
+				"（默认 true）以过滤的形式做掉了。只做三分之一再叫「业务重排」，" +
+				"比不做更容易让人以为它在了。explain=true 时 scores.business 同样缺席。",
+		},
 	},
 	{
 		ContractPath:   "/auth/refresh",
@@ -731,4 +773,58 @@ func TestNotYetImplementedResponseFieldsExistInContract(t *testing.T) {
 		t.Fatal("一笔响应体挂账都没查到 —— 挂账清空了就该把这条测试一起删掉，" +
 			"留着一条恒绿的测试比没有更糟")
 	}
+}
+
+// NotYetImplementedStage 里挂的每一笔账，都必须是契约描述里真提到的那个阶段。
+//
+// 与请求体那条同理，这里只做「清单 → 契约」这一个方向的机械对账：
+// 契约把某个阶段改名或删掉时这条会红，指出那一行清单已经在描述一个不存在的
+// 东西。反向（真的实现了却忘了划掉）由行为测试 search_test.go 的
+// TestExplainOmitsStagesThatDidNotRun 盯着。
+//
+// 为什么判据是「描述里出现过这几个字」而不是别的：因为那句描述**就是**契约对
+// 这条接口的全部承诺 —— 契约在响应形状上分不出「跑了四层」和「跑了两层」，
+// 它们的 items 长得一模一样。
+func TestNotYetImplementedStagesAreNamedInContract(t *testing.T) {
+	checked := 0
+	for _, r := range routes {
+		if len(r.NotYetImplementedStage) == 0 {
+			continue
+		}
+		t.Run(r.HTTPMethod+" "+r.ContractPath, func(t *testing.T) {
+			desc := contractOperationDescription(t, r)
+			for name, why := range r.NotYetImplementedStage {
+				if !strings.Contains(desc, name) {
+					t.Errorf("NotYetImplementedStage 里挂着 %q（%s），"+
+						"但契约里 %s %s 的描述已经不提它了 —— 清单烂了，"+
+						"请对着新的描述改这一行或删掉它。当前描述：%q",
+						name, why, r.ContractMethod, r.ContractPath, desc)
+				}
+				checked++
+			}
+			t.Logf("契约描述 %q；挂账 %v", desc, sorted(r.NotYetImplementedStage))
+		})
+	}
+	if checked == 0 {
+		t.Fatal("一笔流水线阶段挂账都没查到 —— 挂账清空了就该把这条测试一起删掉，" +
+			"留着一条恒绿的测试比没有更糟")
+	}
+}
+
+// contractOperationDescription 取出该接口的 description。
+// 取不到或者是空串就 Fatal：一条对着空串做 strings.Contains 的测试恒绿。
+func contractOperationDescription(t *testing.T, r route) string {
+	t.Helper()
+
+	doc := loadContract(t)
+	op, ok := doc.Paths[r.ContractPath][r.ContractMethod].(map[string]any)
+	if !ok {
+		t.Fatalf("契约里没有 %s %s", r.ContractMethod, r.ContractPath)
+	}
+	desc, _ := op["description"].(string)
+	if strings.TrimSpace(desc) == "" {
+		t.Fatalf("契约里 %s %s 没有 description —— 这条测试没在检查任何东西",
+			r.ContractMethod, r.ContractPath)
+	}
+	return desc
 }

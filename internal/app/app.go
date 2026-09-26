@@ -151,8 +151,16 @@ func sandboxEnabled(v string) bool {
 //
 // 传 nil 会让 /orders 那两条路由挂上去却在第一次下单时报 500。Run 不会这么做；
 // 测试要这么做的话，那正是它想测的东西。
+//
+// embedder 与 orders 不同：**传 nil 是一个正常形态**，那时 /search 只跑关键词
+// 那一路，仍然返回结果。这正是语义检索层 §8 的降级链（「任何一环故障，
+// 搜索都必须仍能返回结果」），而 README 承诺的那条 `docker compose up`
+// 里本来就没有推理引擎 —— 引擎在 compose.inference.yaml 那个叠加层里。
+// 它与「派生数据入库任务没有引擎就拒绝构造」刻意相反，两边的理由都写在
+// service/search.go 与 service/index.go 的文件头。
 func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
-	orders *service.OrderService, payment service.PaymentConfig) *gin.Engine {
+	orders *service.OrderService, payment service.PaymentConfig,
+	embedder inference.Embedder) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery())
 
@@ -195,6 +203,17 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 
 	v1 := r.Group("/api/v1", res.Middleware())
 	v1.GET("/products", ph.List)
+
+	// 混合检索。契约里它是 security: []（公开的）：还没登录的人也要搜得到东西，
+	// 否则小程序首页的搜索框要先弹登录。**这不等于它不校验租户** ——
+	// 租户由上面那道 res.Middleware() 从 Host 定出来，而真正挡住跨店结果的是
+	// RLS：两条召回查询里一个 merchant_id 都没有（db/queries/search.sql）。
+	//
+	// 它走的是本仓库第一条**索引扫描**读路径（HNSW），与之前验过的顺序扫描
+	// 不是同一条 —— internal/handler/search_test.go 里有一条用真实数据跑的
+	// 跨租户断言专门盯这条路。
+	v1.POST("/search", handler.NewSearchHandler(
+		service.NewSearchService(repo, embedder, service.SearchConfig{}, nil)).Search)
 
 	// 商品详情与列表一样是 security: []（契约里两条都写着）：还没登录的人
 	// 也要看得到商品，否则小程序的首页到详情页这一跳就需要先登录。
@@ -369,6 +388,8 @@ func Run(ctx context.Context, listen func(addr string, h http.Handler) error) er
 			"，商品派生数据入库任务不启动：文本向量与 bigram 关键词串都不会被维护。"+
 			"后果是新建与改过的商品搜不到（向量表没有它们的行，search_text 还是 NULL），"+
 			"而且不会有任何报错 —— 索引是异步的，没有人在等它的返回码。"+
+			"POST /search 仍然可用，但只剩关键词那一路（语义检索层 §8 的降级链）—— "+
+			"而关键词那一路依赖的 search_text 也由这个任务维护，所以新品两路都搜不到。"+
 			"要开起来：docker compose -f compose.yaml -f compose.inference.yaml up -d inference，"+
 			"然后配 "+inference.EnvEndpoint+"=http://inference:8000",
 			"err", embErr)
@@ -391,7 +412,18 @@ func Run(ctx context.Context, listen func(addr string, h http.Handler) error) er
 			"这不是真实支付，任何在收钱的部署都必须设 "+EnvPaymentSandbox+"=off")
 	}
 
-	return listen(cfg.Addr, Router(pool, res, signer, orders, cfg.Payment))
+	// 没配引擎时交给检索的必须是一个**真的 nil 接口**。
+	//
+	// 不能写成 `var e inference.Embedder = embedder`：embedder 的静态类型是
+	// *inference.Client，FromEnv 出错时它是一个 nil 指针，而一个装着 nil 指针的
+	// 接口值 `!= nil`。那样 NewSearchService 会以为自己拿到了引擎，
+	// 第一次检索在 s.emb.Embed 上 panic —— 一个只在「没配引擎的部署」上出现、
+	// 而且发生在请求处理中的 nil 解引用。降级链要挡的正是这种部署。
+	var searchEmbedder inference.Embedder
+	if embErr == nil {
+		searchEmbedder = embedder
+	}
+	return listen(cfg.Addr, Router(pool, res, signer, orders, cfg.Payment, searchEmbedder))
 }
 
 // authSigner 按配置建令牌签名器。没配 KEEL_AUTH_SECRET 时随机取一个并告警，

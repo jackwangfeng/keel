@@ -252,10 +252,14 @@ func TestRouterServesContractPaths(t *testing.T) {
 	orders := service.NewOrderService(repository.New(pool), nil, nil)
 	r := app.Router(pool, tenant.NewResolver(pool, tenant.Config{BaseDomain: "example.com"}),
 		auth.NewSigner([]byte("keel-test-secret-key-32-bytes-long!!")), orders,
-		service.PaymentConfig{Sandbox: true})
+		// 引擎传 nil：这条测试只看路由表，而 /search 在没有引擎时照样挂得上去
+		// （退化成纯关键词召回，语义检索层 §8）。传 nil 同时是一次形状断言 ——
+		// 哪天 Router 变成「没有引擎就不挂这条路由」，下面那张表会红。
+		service.PaymentConfig{Sandbox: true}, nil)
 	want := map[string]bool{
 		"GET /healthz":                           false,
 		"GET /api/v1/products":                   false,
+		"POST /api/v1/search":                    false,
 		"GET /api/v1/products/:product_id":       false,
 		"POST /api/v1/orders":                    false,
 		"POST /api/v1/orders/preview":            false,

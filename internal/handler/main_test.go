@@ -134,9 +134,16 @@ func setup() error {
 	// 关掉沙箱的那条路（501）由 TestPaymentIntentIsRefusedWhenSandboxIsOff 用
 	// 一个单独装出来的路由验，不动这个包级实例 —— 换掉它会让别的测试
 	// 在一个它们没预期的配置上跑。
+	// 检索那一路挂的是 conceptEmbedder（search_fixture_test.go）——
+	// 一个**语义可控**的替身：它按文本里出现的概念词给向量，而不是按字面哈希。
+	// 为什么需要「可控」而不是「随便一个确定性向量」，写在那个文件的头上。
+	//
+	// 降级链（引擎真的打不通）那一条不用这个实例：它单独装一套路由，
+	// 接一个指向**真的没人监听的端口**的 inference.Client，
+	// 见 TestSearchDegradesToKeywordWhenEngineIsDown。
 	testEngine = app.Router(pool,
 		tenant.NewResolver(pool, tenant.Config{BaseDomain: baseDomain}), testSigner, testOrders,
-		service.PaymentConfig{Sandbox: true})
+		service.PaymentConfig{Sandbox: true}, conceptEmbedder{})
 	return nil
 }
 
