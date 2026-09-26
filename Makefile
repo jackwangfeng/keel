@@ -70,7 +70,7 @@ GOOSE := GOOSE_DRIVER=postgres GOOSE_DBSTRING="$(GOOSE_DBSTRING)" \
 	GOOSE_MIGRATION_DIR=$(MIGRATIONS) \
 	$(GOOSE_BIN)
 
-.PHONY: help generate generate-go generate-ts generate-sql generate-uts tools-versions version \
+.PHONY: help generate generate-go generate-ts generate-sql generate-uts tools-versions version search-metrics \
 	contract-check schema-check app-type-check admin-install admin-type-check admin-test admin-build app-install app-build-h5 app-build-android app-build-mp-weixin app-apk app-apk-e2e app-e2e app-adb-wifi app-ios app-ios-e2e app-e2e-ios \
 	sdk-smoke goose-bin migrate migrate-down migrate-status test-db \
 	test-engine dtmrs-deps build
@@ -104,6 +104,7 @@ help:
 	@echo "make migrate        把 db/migrations 迁到最新（GOOSE_DBSTRING 可覆盖）"
 	@echo "make migrate-down   回滚一个版本"
 	@echo "make migrate-status 打印各版本的应用状态"
+	@echo "make search-metrics 按店铺 × 策略统计搜索效果（PERIOD 默认 7 days，要管理员连接）"
 	@echo "make test-db      跑需要数据库的测试（强制不吃缓存，含替身那一组）"
 	@echo "make test-engine    对真的跑着的 infero 跑三条判据（要 GPU + KEEL_EMBED_ENDPOINT + 数据库）"
 	@echo "make dtmrs-deps     取回 dtmrs 并编出 libdtmrs.so（需要 Rust 1.88+）"
@@ -335,6 +336,18 @@ migrate-down: goose-bin
 
 migrate-status: goose-bin
 	$(GOOSE) status
+
+# 搜索效果的离线统计（语义检索层 §9.2）：无结果率、CTR@10、搜索→加购率、
+# 搜索→下单转化率、首次点击名次倒数，按店铺 × 策略 × 实际跑过的阶段分组。
+# 口径与用法写在 scripts/search_metrics.sql 的文件头。
+#
+# 连接走 libpq 的环境变量，**要管理员角色**：search_logs 有 RLS，keel_app 在一条
+# 没有租户上下文的连接上一行都读不到（它会安静地打印一张空表，而不是报错）。
+# 演示栈里可以：docker compose exec -T postgres psql -U keel -d keel \
+#   -v period='7 days' -f - < scripts/search_metrics.sql
+PERIOD ?= 7 days
+search-metrics:
+	psql -X -v ON_ERROR_STOP=1 -v period='$(PERIOD)' -f $(ROOT)/scripts/search_metrics.sql
 
 # 跑碰数据库的测试。-count=1 不是可选项：这些测试真正依赖的输入是数据库状态，
 # 而那在 Go 的视野之外。源码和环境变量没变时 `go test` 会直接回放上次的成功结果，

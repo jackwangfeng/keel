@@ -172,7 +172,7 @@ func TestSearchEventsFillTheirColumnAndTheFirstWriteWins(t *testing.T) {
 	send("click", first)
 	send("click", second)
 	if b := behaviorOf(t, trace); !eqID(b.Clicked, first) {
-		t.Fatalf("第二、三次 click 之后 clicked_id = %v，期望仍是首次的 %d —— 首次为准", b.Clicked, first)
+		t.Fatalf("第二、三次 click 之后 %v，clicked 期望仍是首次的 %d —— 首次为准", b, first)
 	}
 
 	send("add_cart", second)
