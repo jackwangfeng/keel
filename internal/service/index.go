@@ -246,7 +246,7 @@ const (
 	// 真正起作用的是这条上限：回填再多也只能占住有限几个 worker。
 	// idx_jobs_inflight 那个索引就是为它建的。
 	//
-	// 取值等于一次 /v1/embed 的批大小：一家店同时在途的量，正好是它能把
+	// 取值等于一次 /v1/embeddings 的批大小：一家店同时在途的量，正好是它能把
 	// 引擎占住的那一次调用。再大就是让一家店占住两个批。
 	DefaultIndexPerTenantInflight = inference.DefaultBatchSize
 
@@ -271,7 +271,7 @@ const (
 
 	// indexStuckAfter 超过这么久还没交回的任务会被回收（repository.ReapStuckJobs）。
 	//
-	// 它必须显著大于一次正常处理的耗时（一批 64 件 ≈ 一次 /v1/embed，
+	// 它必须显著大于一次正常处理的耗时（一批 64 件 ≈ 一次 /v1/embeddings，
 	// 实测 CPU 上 33ms/条 ≈ 2 秒；GPU 上快一个量级），又必须显著小于
 	// 「运维发现搜索不更新了」的时间。5 分钟。
 	//
@@ -705,7 +705,7 @@ func (s *IndexService) WorkOnce(ctx context.Context) (IndexReport, error) {
 	}
 
 	// 按租户分组：写回要在那家店的租户事务里做，而引擎调用按租户攒批
-	// （一家店一批，正好一次 /v1/embed）。
+	// （一家店一批，正好一次 /v1/embeddings）。
 	byTenant := map[int64][]repository.Job{}
 	order := []int64{}
 	for _, j := range jobs {

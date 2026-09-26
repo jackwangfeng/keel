@@ -129,7 +129,7 @@ type Processor interface {
 //
 // 它只负责「输入是什么、指纹怎么算、送进模型的文本长什么样」。**真的去调引擎
 // 不在这里** —— 那要批量（§6），而批量是调用方的事（internal/service/index.go
-// 攒够一批再打一次 /v1/embed）。
+// 攒够一批再打一次 /v1/embeddings）。
 type TextEmbedding struct{}
 
 func (TextEmbedding) Name() string { return search.ProcessorTextEmbedding }
@@ -148,7 +148,7 @@ func (p TextEmbedding) Fingerprint(in ProductInput) string {
 	return p.text(in).EmbedFingerprint()
 }
 
-// Content 是真正送进 /v1/embed 的那段文本，也是写进
+// Content 是真正送进 /v1/embeddings 的那段文本，也是写进
 // product_text_vectors.content 的那一份。
 func (p TextEmbedding) Content(in ProductInput) string {
 	return p.text(in).EmbedContent()
