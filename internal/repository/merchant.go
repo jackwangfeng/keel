@@ -34,6 +34,12 @@ type Merchant struct {
 	Name      string
 	Status    int16
 	CreatedAt time.Time
+
+	// Domain 是 shop_settings.domain（自定义域名），没绑时为 nil。
+	// 只有商家目录的读接口（merchant_directory.go）填它；开店这条路不写 shop_settings。
+	Domain *string
+	// RevisedAt 是最新一行 merchant_revisions 的时间；从没改过名 / 状态时为 nil。
+	RevisedAt *time.Time
 }
 
 // WithNewTenant 在**一个**事务里建一家新店，把作用域切到这家新店，再执行 fn。

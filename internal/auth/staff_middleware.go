@@ -116,7 +116,9 @@ type StaffSessionLoader interface {
 // 第 6 步单独一步而不是并进第 5 步：停用（status=2）要回 403 而不是 401。
 // 401 会让被停用的人一遍遍重新登录，而他登得进来 —— 邮箱链接照样发得出去，
 // 只是每次都在同一个地方被挡。403 说的是「你的账号被停了」，那是真话。
-func StaffBearer(s *Signer, loader StaffSessionLoader, log *slog.Logger) gin.HandlerFunc {
+//
+// 第 7 步：平台级会话的租户切换（X-Keel-Merchant），规则与理由在 staff_tenant.go。
+func StaffBearer(s *Signer, loader StaffSessionLoader, dir MerchantDirectory, log *slog.Logger) gin.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -194,6 +196,9 @@ func StaffBearer(s *Signer, loader StaffSessionLoader, log *slog.Logger) gin.Han
 		}
 
 		c.Request = c.Request.WithContext(NewStaffContext(ctx, id))
+		if !applyPlatformTenantSwitch(c, dir, id, log) {
+			return
+		}
 		c.Next()
 	}
 }

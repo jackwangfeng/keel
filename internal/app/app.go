@@ -330,7 +330,9 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	// **它与买家那道 auth.Bearer 是两个不同的中间件、两个不同的 context key。**
 	// 共用一个的话，一条 /admin/ 路由会把 staff_id 当成 user_id 用，
 	// 而两张表的 id 来自同一种自增序列 —— 撞上不是小概率，是日常。
-	staffAuth := auth.StaffBearer(signer, staffSvc, nil)
+	// res 同时是租户切换的商家目录（平台级会话的 X-Keel-Merchant，
+	// 规则在 internal/auth/staff_tenant.go）。
+	staffAuth := auth.StaffBearer(signer, staffSvc, res, nil)
 	v1.GET("/admin/me", staffAuth, adm.Me)
 	v1.GET("/admin/staff", staffAuth, adm.ListStaff)
 	v1.POST("/admin/staff", staffAuth, adm.CreateStaff)
@@ -340,7 +342,16 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	// 是业务规则，在 service.StaffService.OpenShop 里 —— 不在这里再套一层
 	// 中间件：那会让同一个判据有两份实现，而中间件那一份没有任何测试盯着
 	// 「它到底挂没挂在这条路由上」。
-	v1.POST("/admin/merchants", staffAuth, adm.OpenShop)
+	//
+	// 商家管理（列表 / 详情 / 改名与停用启用）与开店共用一个 handler：开店要先过
+	// 「单商家部署不能开第二家店」那道闸（service.MerchantAdminService），而那道闸
+	// 读的是解析器的同一个配置值（res.DefaultCode）。
+	mh := handler.NewAdminMerchantHandler(
+		service.NewMerchantAdminService(repo, staffSvc, res.DefaultCode()))
+	v1.GET("/admin/merchants", staffAuth, mh.ListMerchants)
+	v1.POST("/admin/merchants", staffAuth, mh.OpenShop)
+	v1.GET("/admin/merchants/:merchant_id", staffAuth, mh.GetMerchant)
+	v1.PATCH("/admin/merchants/:merchant_id", staffAuth, mh.UpdateMerchant)
 
 	// -----------------------------------------------------------------------
 	// 商家自助发布：商品 / SKU / 库存 / 类目 / 上传（M4 Task 3，契约 16 条）

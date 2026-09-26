@@ -70,6 +70,13 @@ type Config struct {
 //
 // 刻意不支持用请求头指定租户。公开接口没有鉴权，
 // 那等于让调用方自己声明它是哪家店。本地开发的便利由默认商家提供。
+//
+// **后台有一个例外，它不违背上面这条**：平台级会话可以用 X-Keel-Merchant
+// 切换要管理的商家（internal/auth/staff_tenant.go）。上面那条规矩的理由是
+// 「公开接口没有鉴权」——而那个例外只在**已经通过后台会话校验、且会话是
+// 平台级**之后才读这个头，平台级操作员按定义就能跨租户运维。本解析器本身
+// 一个字没改：它照旧只看配置与 Host，从不读任何请求头；切换发生在鉴权
+// 之后、由鉴权那一层替换 ctx 里的租户，而且只调下面的 ByCodeForPlatform。
 type Resolver struct {
 	pool       *pgxpool.Pool
 	cfg        Config
@@ -160,6 +167,31 @@ var baseDomainShape = regexp.MustCompile(
 // Host 在解析前会被统一成小写，所以 code 里但凡有大写字母就永远匹配不上。
 const dnsLabel = `^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`
 
+// effectiveMerchant 是「merchants 连上它最新一行修订」的 FROM 片段。
+//
+// 商家的当前名字与状态不在 merchants 那一行上：改名与停用追加一行
+// merchant_revisions（迁移 00024 —— keel_app 在 merchants 上没有 UPDATE），
+// 最新一行说了算，一行都没有时回落到 merchants 自己那一列。
+//
+// **读「这家店现在是不是正常营业」的每一处都要用它**：解析、启动自检、
+// repository.ActiveMerchants（定时任务）。漏一处的症状是「停用了但买家还打得开」
+// 或「启用了但定时任务不扫它」，而两种都不报错。写成一个常量，让四处共用同一份文本。
+const effectiveMerchant = `merchants m
+	  LEFT JOIN LATERAL (
+	      SELECT r.name, r.status, r.created_at
+	        FROM merchant_revisions r
+	       WHERE r.merchant_id = m.id
+	       ORDER BY r.id DESC
+	       LIMIT 1) rev ON true`
+
+// EffectiveMerchantFrom / EffectiveStatus 导出给 repository：商家目录的读接口
+// 与 ActiveMerchants 要和解析层读同一个「当前状态」，文本只有这一份。
+const (
+	EffectiveMerchantFrom = effectiveMerchant
+	EffectiveStatus       = `coalesce(rev.status, m.status)`
+	EffectiveName         = `coalesce(rev.name, m.name)`
+)
+
 // Preflight 在启动时检查部署配置与库里的数据对不对得上，对不上就拒绝启动。
 //
 // 手法和 db.Guard 拒绝超级用户角色是同一个：**误配要在启动时响一次，
@@ -188,7 +220,8 @@ func (r *Resolver) Preflight(ctx context.Context) error {
 		// 只是所有人都看到同一家店的数据。
 		var n int64
 		if err := r.pool.QueryRow(ctx,
-			`SELECT count(*) FROM merchants WHERE deleted_at IS NULL AND status = 1`).
+			`SELECT count(*) FROM `+effectiveMerchant+`
+			  WHERE m.deleted_at IS NULL AND `+EffectiveStatus+` = 1`).
 			Scan(&n); err != nil {
 			return fmt.Errorf("统计活跃商家失败: %w", err)
 		}
@@ -271,12 +304,12 @@ func (r *Resolver) reserved(ctx context.Context) (int64, string, error) {
 	for c := range reservedCodes {
 		names = append(names, c)
 	}
-	const q = `
+	q := `
 	WITH bad AS (
 	    SELECT m.code
-	      FROM merchants m
+	      FROM ` + effectiveMerchant + `
 	     WHERE m.deleted_at IS NULL
-	       AND m.status = 1
+	       AND ` + EffectiveStatus + ` = 1
 	       AND m.code = ANY($1)
 	)
 	SELECT (SELECT count(*) FROM bad),
@@ -304,13 +337,13 @@ func (r *Resolver) unreachable(ctx context.Context) (int64, string, error) {
 	//
 	// 用 right(...) 而不是 LIKE '%.' || $3：LIKE 里的 _ 是通配符，域名里出现
 	// 下划线时匹配会悄悄放宽。
-	const q = `
+	q := `
 	WITH bad AS (
 	    SELECT m.code
-	      FROM merchants m
+	      FROM ` + effectiveMerchant + `
 	      LEFT JOIN shop_settings s ON s.merchant_id = m.id
 	     WHERE m.deleted_at IS NULL
-	       AND m.status = 1
+	       AND ` + EffectiveStatus + ` = 1
 	       -- 没有可用的自定义域名入口
 	       AND (s.domain IS NULL
 	            OR ($3 <> '' AND (s.domain = $3
@@ -449,23 +482,58 @@ func underBaseDomain(name, base string) (string, bool) {
 func (r *Resolver) byCode(ctx context.Context, code string) (int64, error) {
 	// status = 1 才算可访问：停用的商家不该还能被逛。
 	// deleted_at IS NULL 同理：软删的商家在库里还在，但它不该还能接客。
-	const q = `
+	// status 取的是**当前**状态（最新一行修订），见 effectiveMerchant。
+	q := `
 	SELECT m.id
-	  FROM merchants m
+	  FROM ` + effectiveMerchant + `
 	 WHERE m.deleted_at IS NULL
-	   AND m.status = 1
+	   AND ` + EffectiveStatus + ` = 1
 	   AND m.code = $1`
 	return r.lookup(ctx, "code:"+code, q, code)
 }
 
+// DefaultCode 返回单商家部署的默认商家 code（KEEL_DEFAULT_MERCHANT）；多商家部署返回空串。
+//
+// 商家管理要据此拒绝在单商家部署里开店（service.MerchantAdminService）：
+// 单商家模式下活跃商家必须恰好一家，否则 Preflight 拒绝启动——
+// 判据与这里读的是同一个配置值，不另读一遍环境变量。
+func (r *Resolver) DefaultCode() string { return r.cfg.DefaultCode }
+
+// ByCodeForPlatform 按 code 找商家，**含停用与待审核的**，不含软删的。
+//
+// 它只给一个调用方用：平台级会话的租户切换（internal/auth/staff_tenant.go）。
+// 与 byCode 的两处差别都是刻意的：
+//
+//   - **不看 status**：平台管理员要能切进一家停用的店——要进得去才修得好、再启用。
+//     买家侧照旧走 byCode，停用的店对买家照旧 404。
+//   - **不走缓存**：切换的目标刚被软删的话，下一个请求就该失败，
+//     而不是在缓存里再活半分钟、让运营往一家已经删掉的店里写东西。
+//     这条路只在平台运维时走，一次索引命中的代价可以忽略。
+//
+// 找不到返回 ErrNoMerchant。调用方必须把它报成错误，**不许回落**到 Host 解析
+// 出来的那家——回落意味着运营以为在管 B 店，实际改的是 A 店。
+func (r *Resolver) ByCodeForPlatform(ctx context.Context, code string) (int64, error) {
+	var id int64
+	err := r.pool.QueryRow(ctx,
+		`SELECT id FROM merchants WHERE deleted_at IS NULL AND code = $1`, code).Scan(&id)
+	switch {
+	case err == nil:
+		return id, nil
+	case errors.Is(err, pgx.ErrNoRows):
+		return 0, ErrNoMerchant
+	default:
+		return 0, err
+	}
+}
+
 // byDomain 按 shop_settings.domain 找商家（自定义域名形态）。
 func (r *Resolver) byDomain(ctx context.Context, name string) (int64, error) {
-	const q = `
+	q := `
 	SELECT m.id
-	  FROM merchants m
+	  FROM ` + effectiveMerchant + `
 	  JOIN shop_settings s ON s.merchant_id = m.id
 	 WHERE m.deleted_at IS NULL
-	   AND m.status = 1
+	   AND ` + EffectiveStatus + ` = 1
 	   AND s.domain = $1`
 	return r.lookup(ctx, "domain:"+name, q, name)
 }

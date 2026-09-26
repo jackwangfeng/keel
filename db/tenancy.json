@@ -149,6 +149,16 @@
         "UPDATE",
         "DELETE"
       ]
+    },
+    "directory-log": {
+      "_": "merchant_revisions 一张表：商家目录的只追加修订（改名、停用 / 启用）。它有 merchant_id（指向被改的那家店），但**不是**那家店的数据 —— 改它的是平台，不是那家店自己，所以不挂 tenant 策略。策略是两条而不是一条 ALL：读侧 USING (true)（租户解析要在确定租户之前读当前状态，与 tenant-root 同一条理由），写侧 INSERT WITH CHECK (platform_scope())（租户作用域里插不进来，这是本类存在的全部理由：它把「租户 1 的上下文里停用租户 2」钉成数据库层的 42501）。keel_app 只有 SELECT + INSERT：改不了也删不掉历史。完整论证在 db/migrations/00024_merchant_revisions.sql 的文件头。",
+      "merchant_id": "required",
+      "policy": "directory-log",
+      "unique_scoped": true,
+      "grants": [
+        "SELECT",
+        "INSERT"
+      ]
     }
   },
   "tables": {
@@ -208,6 +218,10 @@
       "via": "staff_id",
       "scope_fn": "staff_scope_merchant()",
       "reason": "跟随 staff，租户归属由 staff.merchant_id 决定（数据模型 §14）。staff.merchant_id 本来就可空，复制一份下来也表达不了「平台级 token」属于谁。父表可空这件事也传染给了策略谓词：子查询里比的是 staff_scope_merchant() 而不是 current_merchant()，见 classes.parent-scoped-nullable。"
+    },
+    "merchant_revisions": {
+      "class": "directory-log",
+      "reason": "商家目录的修订日志。改名与停用不能走 UPDATE merchants（keel_app 在 merchants 上没有 UPDATE，给了就等于任何租户上下文都能改商家目录），改走平台作用域里追加一行。读侧放开、写侧钉在 platform_scope()，见 directory-log 类的说明与 00024 的文件头。"
     }
   },
   "fk_missing_ok": {

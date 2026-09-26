@@ -214,6 +214,24 @@ const (
 	// （「建议退避秒数」）。没有它的话，客户端能做的只有立刻重试，
 	// 而那正好是限流要挡的行为。
 	TypeRateLimited = "https://keel.dev/problems/rate-limited"
+
+	// 商家管理与平台级租户切换（契约 components/parameters/KeelMerchant、
+	// /admin/merchants*）。三个都得按 type 分，因为它们各自要客户端做的事相反：
+	//
+	//   tenant-switch-forbidden → 商家级员工带了 X-Keel-Merchant。**不生效、不静默忽略**：
+	//                             静默忽略的话，一个以为自己切过去了的客户端会往
+	//                             自己的店里写本该写给别家的数据。客户端该做的是
+	//                             别带这个头。403。
+	//   unknown-merchant        → 头里的 code 不存在或已软删。**不回落**到 Host 那家——
+	//                             回落意味着运营以为在管 B 店，实际改的是 A 店。
+	//                             422：头不是路径，按本契约的分法「请求其余部分
+	//                             指名的东西不存在」是 422 而不是 404。
+	//   single-merchant-mode    → 单商家部署（KEEL_DEFAULT_MERCHANT）里开店，或停用
+	//                             那唯一一家店。重试、换 code 都没有用，要改的是部署形态。
+	//                             409。
+	TypeTenantSwitchForbidden = "https://keel.dev/problems/tenant-switch-forbidden"
+	TypeUnknownMerchant       = "https://keel.dev/problems/unknown-merchant"
+	TypeSingleMerchantMode    = "https://keel.dev/problems/single-merchant-mode"
 )
 
 // Write 写一个 RFC 9457 响应并中止后续 handler。
