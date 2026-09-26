@@ -415,7 +415,7 @@ test-engine: goose-bin
 # 产物不入库（.gitignore 里 /third_party/）：.so 是平台相关的，而头文件必须与
 # .so 同版本，分开管理迟早对不上。
 #
-# 版本钉在 scripts/fetch-dtmrs.sh 里（v0.11.0），examples/dtmrs-embedded 调的
+# 版本钉在 scripts/fetch-dtmrs.sh 里（v0.11.1），examples/dtmrs-embedded 调的
 # 也是同一份脚本 —— 两份脚本就是两个版本，而它们错开时的症状是
 # 「例子绿、服务红」，报错停在 C ABI 的某个符号上，不指向真因。
 DTMRS_DIR := $(ROOT)/third_party/dtmrs

@@ -23,7 +23,7 @@ DEST="$(cd "$DEST" && pwd)"
 
 REPO="${DTMRS_REPO:-https://github.com/jackwangfeng/dtmrs}"
 # 钉死版本。上游改了 C ABI 而这里悄悄跟着变，是最难查的一类问题。
-REF="${DTMRS_REF:-v0.11.0}"
+REF="${DTMRS_REF:-v0.11.1}"
 SRC="${DTMRS_SRC:-$DEST/.dtmrs-src}"
 
 # 下限是 **1.88**，不是 dtmrs 自己声明的 1.82。

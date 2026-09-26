@@ -14,10 +14,9 @@ import (
 // 这一组测试要真的把协调器跑起来（sqlite 落到 t.TempDir()），不 mock。
 // mock 掉 cgo 边界就等于不测 cgo 边界，而这一层里出问题的全在那条边界上。
 
-// tempDSN 走 dtmtest.SQLiteDSN 而不是直接拼 t.TempDir()：dtmrs_close 返回之后
-// 它的 sqlite 连接线程还会在目录里删建文件，和 t.TempDir 的清理赛跑
-// （TestCloseIsIdempotent 偶发 `directory not empty` 的真因，完整链条写在
-// dtmtest 的包注释里）。
+// tempDSN 走 dtmtest.SQLiteDSN 而不是直接拼 t.TempDir()：它在清理时断言
+// Close 返回时 sqlite 存储已经关干净（目录里只剩 dtm.db）。v0.11.0 做不到这一点，
+// TestCloseIsIdempotent 因此偶发 `directory not empty`；来龙去脉在 dtmtest 的包注释里。
 func tempDSN(t *testing.T) string {
 	t.Helper()
 	return dtmtest.SQLiteDSN(t)

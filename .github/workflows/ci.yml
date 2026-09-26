@@ -261,7 +261,7 @@ jobs:
       # libdtmrs.so —— 主模块经 cgo 嵌入 dtmrs，没有它 `go build ./...` 停在
       # 链接器的一句 `cannot find -ldtmrs` 上，那句话不指向任何该做的事。
       #
-      # 缓存键取 scripts/fetch-dtmrs.sh 的内容哈希：dtmrs 的版本（v0.11.0）就钉在
+      # 缓存键取 scripts/fetch-dtmrs.sh 的内容哈希：dtmrs 的版本（v0.11.1）就钉在
       # 那个脚本里，改版本必然改脚本，缓存自然失效。命中时整段 Rust 都不跑。
       - uses: actions/cache@v4
         id: libdtmrs

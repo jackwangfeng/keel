@@ -79,8 +79,7 @@ func env(t *testing.T, defaultMerchant, baseDomain string) {
 	t.Setenv(app.EnvDefaultMerchant, defaultMerchant)
 	t.Setenv(app.EnvBaseDomain, baseDomain)
 	t.Setenv(app.EnvAddr, "127.0.0.1:0")
-	// 走 dtmtest：Run 返回（协调器已 Close）之后 dtmrs 的 sqlite 线程还会在目录里
-	// 删建文件，直接用 t.TempDir() 会偶发 `directory not empty`。见 dtmtest 包注释。
+	// 走 dtmtest：它断言 Run 返回（协调器已 Close）时 sqlite 存储已经关干净。见 dtmtest 包注释。
 	t.Setenv(app.EnvDTMDSN, dtmtest.SQLiteDSN(t))
 }
 

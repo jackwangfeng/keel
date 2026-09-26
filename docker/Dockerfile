@@ -36,7 +36,7 @@ RUN apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=30 \
 
 WORKDIR /src
 COPY scripts/fetch-dtmrs.sh ./scripts/
-# 版本（v0.11.0）钉在脚本里，不是 @latest —— 上游改了 C ABI 而这里悄悄跟着变，
+# 版本（v0.11.1）钉在脚本里，不是 @latest —— 上游改了 C ABI 而这里悄悄跟着变，
 # 是最难查的一类失败。产物是 /dtmrs/lib/libdtmrs.so 与 /dtmrs/include/dtmrs.h。
 RUN ./scripts/fetch-dtmrs.sh /dtmrs
 

@@ -12,7 +12,7 @@
 
 ## 跑起来
 
-版本：**dtmrs v0.11.0**（仓库根目录的 `scripts/fetch-dtmrs.sh` 里钉死）。
+版本：**dtmrs v0.11.1**（仓库根目录的 `scripts/fetch-dtmrs.sh` 里钉死）。
 
 ```bash
 make deps      # 取回 dtmrs 并构建 libdtmrs.so（需要 Rust 1.88+）

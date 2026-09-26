@@ -82,7 +82,7 @@ jobs:
           go version
 
       # 取回 dtmrs 并编出 libdtmrs.so。版本钉在 scripts/fetch-dtmrs.sh 里
-      # （v0.11.0），不是 @latest——上游改了 C ABI 而这里悄悄跟着变，
+      # （v0.11.1），不是 @latest——上游改了 C ABI 而这里悄悄跟着变，
       # 是这个例子最难查的一类失败。
       - name: 构建 libdtmrs
         run: make deps

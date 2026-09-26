@@ -142,6 +142,16 @@ Migrations `00027`–`00031`.
 
 ### Fixed
 
+- **The embedded coordinator's storage is fully closed when `Close` returns.**
+  Bumped dtmrs to v0.11.1. Under v0.11.0, `dtmrs_close` dropped its runtime
+  before its SQLite connection pool and never closed the pool, so SQLite's
+  per-connection threads were still checkpointing and deleting `-wal` / `-shm`
+  after the call had returned — anything that removed or reopened the data
+  directory right after shutdown could race them (it showed up as a flaky
+  `directory not empty` in `TestCloseIsIdempotent`). The test helper that used
+  to wait for those threads now asserts instead: after `Close`, only `dtm.db`
+  may remain. Against v0.11.0 that assertion fails 600 times out of 600; against
+  v0.11.1, 0.
 - **Opening a shop (`POST /admin/merchants`) and adding staff (`POST /admin/staff`)
   are now idempotent**, closing the first item under 0.1.0's Known gaps. Sending
   the same `Idempotency-Key` with the same body replays the original `201` with
