@@ -15,18 +15,18 @@ import (
 
 // 混合检索：POST /api/v1/search。
 //
-// # 契约写的是四层，这条 handler 只跑得出前两层 —— 而它不假装
+// # 契约写的是四层，这条 handler 跑得出三层 —— 缺的那层它不假装
 //
-// 契约的描述是「双路召回 → RRF 融合 → Reranker 精排 → 业务重排」，
-// 后两层是 M5。两处不改契约就能把这件事说清楚，论证在
-// service/search.go 的文件头：
+// 契约的描述是「双路召回 → RRF 融合 → Reranker 精排 → 业务重排」。
+// M5 接上了业务重排，**cross-encoder 精排仍然没有**（推理引擎还没有
+// /v1/rerank）。两处不改契约就能把这件事说清楚，论证在 service/search.go 的文件头：
 //
-//	· strategy 回显的是**真的跑过的**那条流水线（"rrf-v1"），不是回显请求值；
-//	· explain=true 时 scores 里只出现算过的那几项，rerank / business
-//	  **整个不出现**（契约里它们是可选字段，缺席才是实话）。
+//	· strategy 回显的是**真的跑过的**那条流水线（默认 "rrf-biz-v1"），不是回显请求值；
+//	· explain=true 时 scores 里只出现这一次真正算过的那几项（service 给出的
+//	  Stages），rerank **整个不出现**（契约里它是可选字段，缺席才是实话）。
 //
-// contract_test.go 的 NotYetImplementedStage 挂着这两笔账，
-// search_test.go 的 TestExplainOmitsStagesThatDidNotRun 从另一个方向锁住。
+// contract_test.go 的 NotYetImplementedStage 挂着精排这笔账，
+// search_test.go 的 TestExplainListsExactlyTheStagesThatRan 从另一个方向锁住。
 //
 // # 为什么 explain 不是 query 参数
 //
@@ -48,9 +48,10 @@ func NewSearchHandler(s *service.SearchService) *SearchHandler {
 // 与 intentRequest 那里是同一处够不着的地方，同样记在 defer 里。
 //
 // trace_id 不在这里：它是可选字段，而它唯一的用处是把一次检索和后续的
-// /search/events 回传串起来（契约原话），而 search_logs 那张表本轮没有建、
-// /search/events 也没有实现。回一个谁也存不进去的 id 不是「先占个位」，
-// 是让客户端以为它拿到的东西有下文。contract_test.go 里挂着这笔账。
+// /search/events 回传串起来（契约原话）。M5 起 search_logs 建了、每次检索
+// 都生成一个 trace_id 写进那一行，但 /search/events 还没有实现 ——
+// 回一个没有任何接口收得下的 id 不是「先占个位」，是让客户端以为它拿到的
+// 东西有下文。contract_test.go 里挂着这笔账。
 type searchResponse struct {
 	Items     []api.SearchHit `json:"items"`
 	LatencyMs int             `json:"latency_ms"`
@@ -194,7 +195,7 @@ func (h *SearchHandler) Search(c *gin.Context) {
 		if sr.Explain {
 			src := api.SearchHitRecallSource(it.Source)
 			hit.RecallSource = &src
-			hit.Scores = explainScores(it)
+			hit.Scores = explainScores(it, res.Stages)
 		}
 		items = append(items, hit)
 	}
@@ -229,31 +230,55 @@ type searchScores = struct {
 	Vector   *float32 `json:"vector,omitempty"`
 }
 
-// explainScores 填 explain=true 时的各阶段得分。
+// explainScores 填 explain=true 时的各阶段得分：**这一次真正跑过的阶段才有键**。
 //
-// **rerank 与 business 刻意不填。** 它们在契约里是可选字段，而本轮这两层
-// 根本没跑（M5）。填 0 会让「这一条被业务规则扣到 0 分」与「没算过」
-// 长得一模一样，而 explain 存在的全部意义就是让人看出排序是怎么来的。
-// 与下单那边 freight_cents「缺席而不是 0」是同一条纪律。
+// 判据是 service 给出的 stages，不是「这个分数是不是 0」：
 //
-// final 等于 rrf：本轮 RRF 之后没有别的层了。它仍然单独填一份，
-// 因为「最终分」这个位置的语义是稳定的 —— 精排上线后填的是精排分，
-// 而调用方读的一直是 final。
-func explainScores(it service.SearchHit) *searchScores {
-	vec := float32(it.VectorScore)
-	kw := float32(it.KeywordScore)
-	rrf := float32(it.RRFScore)
-	final := rrf
-	return &searchScores{Vector: &vec, Keyword: &kw, Rrf: &rrf, Final: &final}
+//	· vector：向量路跑成了才有。降级（引擎挂了 / 没配引擎）时整个不出现 ——
+//	  那时每一条的相似度都是零值，填进去就是「算过、分数是 0」。
+//	· keyword：同理，关键词路跑成了才有。
+//	· business：业务重排跑了才有（strategy = rrf-v1 时没有）。
+//	· rerank：cross-encoder 精排**本轮不存在**，永远不出现。
+//	· rrf / final：只要有结果就一定跑过。final 是排序真正依据的那个分
+//	  （跑了业务重排就是 rrf × business，没跑就等于 rrf）—— 这个位置的语义
+//	  是稳定的，精排上线后调用方读的仍然是 final。
+//
+// 与下单那边 freight_cents「缺席而不是 0」是同一条纪律：0 会让「这一条被
+// 业务规则扣到 0 分」与「没算过」长得一模一样，而 explain 存在的全部意义
+// 就是让人看出排序是怎么来的。
+func explainScores(it service.SearchHit, stages []string) *searchScores {
+	out := &searchScores{}
+	f32 := func(v float64) *float32 { x := float32(v); return &x }
+	for _, st := range stages {
+		switch st {
+		case service.StageVector:
+			out.Vector = f32(it.VectorScore)
+		case service.StageKeyword:
+			out.Keyword = f32(it.KeywordScore)
+		case service.StageRRF:
+			out.Rrf = f32(it.RRFScore)
+		case service.StageBusiness:
+			out.Business = f32(it.BusinessScore)
+		}
+	}
+	out.Final = f32(it.FinalScore)
+	return out
 }
 
 // defaultSearchFilters 是请求里一个 filters 都没带时生效的那一份。
 //
-// in_stock_only 默认 **true**，这是契约里写的（SearchFilters.in_stock_only
-// 的 default）。它不是一个无关紧要的默认值：它意味着默认搜不到缺货商品。
-// 把它写在一个有名字的函数里而不是散在解析代码里，是为了让这条默认值
-// 有一个能被直接测的落点 —— 漏掉它的症状是「搜索结果里混进一堆买不到的东西」，
-// 而那看上去只是「排序有点怪」。
+// in_stock_only 默认 **false**，这是契约里写的（SearchFilters.in_stock_only
+// 的 default，M3 独立验收 I10 从 true 改成了 false）。
+//
+// 这里此前一直是 true —— 契约改了、这一行没跟，而那正是契约自己点名的矛盾：
+// 「/search 的描述写着业务重排会把缺货商品**降权**，而 in_stock_only: true
+// 说的是**删掉**。两者并存时默认值那一份赢，于是降权那句话从来没被执行过。」
+// M5 接上业务重排之后，这个默认值才第一次有了意义：缺货商品默认出现在结果里，
+// 但由 w_stock = 0.05 压到所有有货商品之后（internal/search/business.go）；
+// 要彻底不看缺货的，显式传 in_stock_only: true。
+//
+// 写在一个有名字的函数里而不是散在解析代码里，是为了让这条默认值有一个
+// 能被直接测的落点（search_test.go 的 TestSearchFiltersApply）。
 func defaultSearchFilters() service.SearchFilters {
-	return service.SearchFilters{InStockOnly: true}
+	return service.SearchFilters{InStockOnly: false}
 }

@@ -19,8 +19,8 @@ import (
 // SearchFilters 是契约 SearchFilters 在这一层的形状。
 //
 // 指针表示「没传」：category_id 传 0 与不传是两件事（前者会筛掉一切，
-// 后者不筛）。InStockOnly 不是指针 —— 契约给了它 default: true，
-// 「没传」在契约里就等于 true，service 负责把这件事落定，到这一层时它已经
+// 后者不筛）。InStockOnly 不是指针 —— 契约给了它 default（false），
+// 「没传」在契约里就等于 false，handler 负责把这件事落定，到这一层时它已经
 // 是一个确定的布尔值。
 type SearchFilters struct {
 	CategoryID    *int64

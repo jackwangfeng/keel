@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -108,8 +109,8 @@ func contains(ss []string, s string) bool {
 // 第 ③ 条为什么是「排在前面」而不是「不在结果里」：**召回层没有相似度阈值，
 // 这是刻意的**。ANN 返回的是最近的 N 条，不是「足够近的那些」；而定一个
 // 「余弦距离小于多少才算相关」的阈值需要 §9.1 的离线评测集，那个东西还不存在，
-// 现在拍一个数就是 §9 开头点名的「盲调」。精度那两层（Reranker 精排 / 业务重排）
-// 在契约里本来就是后两层，本轮没有。
+// 现在拍一个数就是 §9 开头点名的「盲调」。管相关度的是 Reranker 精排，本轮没有；
+// M5 接上的业务重排只管「该不该卖」，不替召回层挡不相关的东西。
 //
 // 代价在小店上最刺眼：一家只有 4 件商品的店，搜什么都会把 4 件全返回，
 // 只是顺序不同。这条测试把它写成断言而不是假装看不见。
@@ -228,16 +229,15 @@ func TestSearchDoesNotLeakAcrossTenants(t *testing.T) {
 
 	// 两种过滤条件各查一次，而且**两次都要**断言。
 	//
-	// 不是凑数：默认那次带着 in_stock_only=true，而那个条件是一条对
-	// skus / inventories 的 EXISTS —— 那两张表有它们自己的 RLS 策略。
-	// 也就是说默认那一次即使 products 与 product_text_vectors 的策略双双失效，
-	// 别家商品也会被 skus 的策略挡在 EXISTS 里（变异验证实测：把那两条策略
-	// 都改成 `OR true`，只有默认那一次仍然是绿的）。
-	// 关掉 in_stock_only 的那一次把 skus 这条路撤掉，让断言真的落在
-	// 检索自己那两张表的策略上。
+	// 不是凑数：in_stock_only=true 那次带着一条对 skus / inventories 的
+	// EXISTS —— 那两张表有它们自己的 RLS 策略。也就是说那一次即使 products 与
+	// product_text_vectors 的策略双双失效，别家商品也会被 skus 的策略挡在
+	// EXISTS 里（变异验证实测：把那两条策略都改成 `OR true`，只有带 EXISTS
+	// 的那一次仍然是绿的）。不带 EXISTS 的那一次（默认，in_stock_only=false）
+	// 让断言真的落在检索自己那两张表的策略上。
 	for _, tc := range []struct{ name, body string }{
-		{"默认（in_stock_only=true）", `{"query":"连衣裙"}`},
-		{"in_stock_only=false", `{"query":"连衣裙","filters":{"in_stock_only":false}}`},
+		{"默认（in_stock_only=false）", `{"query":"连衣裙"}`},
+		{"in_stock_only=true", `{"query":"连衣裙","filters":{"in_stock_only":true}}`},
 	} {
 		_, bodyA := doSearch(t, fx.HostA, tc.body)
 		got := idsOf(bodyA)
@@ -440,53 +440,95 @@ func routerWithDeadEngine(t *testing.T) http.Handler {
 		testOrders, service.PaymentConfig{Sandbox: true}, client)
 }
 
-// explain=true 时，**没跑过的那两层整个不出现**。
+// explain=true 时，scores 里**恰好**是这一次真正跑过的那几个阶段。
 //
-// 这是 contract_test.go 那张 NotYetImplementedStage 挂账的反向锁：
-// 精排或业务重排哪天真的接上了、开始往 scores 里填这两个键，这条测试就红，
-// 逼人回来把挂账划掉。与 order_test.go 的 TestFreightIsAbsentNotZero 同一个形状。
+// 三种形态各验一次，每一种都同时断言「该有的在」与「不该有的不在」：
 //
-// 它同时断言挂账**真的还挂在那儿**。少了这半句，把整张挂账删掉之后
-// 这条测试照样绿 —— 那正是上一轮 TestSalesCountChangeDoesNotRecompute
-// 学到的那一课：先断言「判定发生了」，再断言「没重算」。
-func TestExplainOmitsStagesThatDidNotRun(t *testing.T) {
+//	· 默认策略、引擎好着：vector / keyword / rrf / business / final，没有 rerank；
+//	· strategy = rrf-v1：没有 business（那条流水线不做业务重排），final = rrf；
+//	· 引擎挂了（降级）：没有 vector —— 向量路没跑成，相似度是零值，填进去
+//	  就是「算过、分数是 0」。
+//
+// 这是 contract_test.go 那张 NotYetImplementedStage 挂账的反向锁：精排哪天
+// 真的接上了、开始往 scores 里填 rerank，这条测试就红，逼人回来把挂账划掉。
+// 它同时断言挂账**真的还挂在那儿**（少了这半句，把挂账删掉之后照样绿），
+// 并且断言「业务重排」已经**不在**挂账里 —— 实现了还挂着，是另一种不诚实。
+func TestExplainListsExactlyTheStagesThatRan(t *testing.T) {
 	r := routeOf(t, http.MethodPost, "/search")
-	for _, stage := range []string{"Reranker 精排", "业务重排"} {
-		if _, ok := r.NotYetImplementedStage[stage]; !ok {
-			t.Fatalf("contract_test.go 的 routes 表里 /search 没有挂 %q 这笔账 —— "+
-				"要么这一层真的实现了（那这条测试该删），要么挂账被删了"+
-				"（那「契约写四层、这里只跑两层」这件事就没人记着了）", stage)
-		}
+	if _, ok := r.NotYetImplementedStage["Reranker 精排"]; !ok {
+		t.Fatal("contract_test.go 的 routes 表里 /search 没有挂「Reranker 精排」这笔账 —— " +
+			"要么精排真的实现了（那这条测试该改），要么挂账被删了" +
+			"（那「契约写四层、这里只跑三层」这件事就没人记着了）")
+	}
+	if why, ok := r.NotYetImplementedStage["业务重排"]; ok {
+		t.Fatalf("「业务重排」还挂在 NotYetImplementedStage 上（%s），但它已经实现了", why)
 	}
 
 	fx := newSearchFixture(t)
-	w, body := doSearch(t, fx.HostA, `{"query":"连衣裙","explain":true}`)
-	if w.Code != http.StatusOK {
-		t.Fatalf("检索返回 %d：%s", w.Code, w.Body.String())
-	}
-	if len(body.Items) == 0 {
-		t.Fatal("结果是空的，下面的断言没有对象")
-	}
-	for _, it := range body.Items {
-		scores, ok := it["scores"].(map[string]any)
-		if !ok {
-			t.Fatalf("explain=true 但 %v 没有 scores", it["title"])
+	check := func(name string, engine http.Handler, body string, want, absent []string) []map[string]any {
+		t.Helper()
+		w, resp := searchOn(t, engine, fx.HostA, body)
+		if w.Code != http.StatusOK {
+			t.Fatalf("[%s] 检索返回 %d：%s", name, w.Code, w.Body.String())
 		}
-		for _, want := range []string{"vector", "keyword", "rrf", "final"} {
-			if _, ok := scores[want]; !ok {
-				t.Errorf("%v 的 scores 里没有 %q —— 跑过的阶段必须有分",
-					it["title"], want)
+		if len(resp.Items) == 0 {
+			t.Fatalf("[%s] 结果是空的，下面的断言没有对象", name)
+		}
+		for _, it := range resp.Items {
+			scores, ok := it["scores"].(map[string]any)
+			if !ok {
+				t.Fatalf("[%s] explain=true 但 %v 没有 scores", name, it["title"])
+			}
+			for _, k := range want {
+				if _, ok := scores[k]; !ok {
+					t.Errorf("[%s] %v 的 scores 里没有 %q —— 跑过的阶段必须有分",
+						name, it["title"], k)
+				}
+			}
+			for _, k := range absent {
+				if v, ok := scores[k]; ok {
+					t.Errorf("[%s] %v 的 scores 里出现了 %q（值 %v）—— 这一次没跑这一层，"+
+						"缺席才是实话，0 与「没算过」是两件事", name, it["title"], k, v)
+				}
 			}
 		}
-		for _, absent := range []string{"rerank", "business"} {
-			if v, ok := scores[absent]; ok {
-				t.Errorf("%v 的 scores 里出现了 %q（值 %v）—— 这一层本轮没有跑。"+
-					"要么它真的实现了（请回 contract_test.go 划掉那笔挂账），"+
-					"要么它被填成了 0，而 0 与「没算过」是两件事",
-					it["title"], absent, v)
-			}
+		return resp.Items
+	}
+
+	items := check("默认策略", testEngine, `{"query":"连衣裙","explain":true}`,
+		[]string{"vector", "keyword", "rrf", "business", "final"}, []string{"rerank"})
+	// final 真的是 rrf × business，business 真的是库存因子。
+	sawSoldOut := false
+	for _, it := range items {
+		sc := it["scores"].(map[string]any)
+		rrf, biz, fin := sc["rrf"].(float64), sc["business"].(float64), sc["final"].(float64)
+		wantBiz := search.StockFactorInStock
+		if it["in_stock"] == false {
+			wantBiz = search.StockFactorOutOfStock
+			sawSoldOut = true
+		}
+		if math.Abs(biz-wantBiz) > 1e-6 {
+			t.Errorf("%v（in_stock=%v）的 business = %v，期望 %v", it["title"], it["in_stock"], biz, wantBiz)
+		}
+		if math.Abs(fin-rrf*biz) > 1e-6 {
+			t.Errorf("%v 的 final = %v，期望 rrf × business = %v", it["title"], fin, rrf*biz)
 		}
 	}
+	if !sawSoldOut {
+		t.Error("结果里没有断货商品，business = 0.05 那一档没被验到")
+	}
+
+	for _, it := range check("strategy=rrf-v1", testEngine,
+		`{"query":"连衣裙","explain":true,"strategy":"rrf-v1"}`,
+		[]string{"vector", "keyword", "rrf", "final"}, []string{"rerank", "business"}) {
+		sc := it["scores"].(map[string]any)
+		if sc["final"] != sc["rrf"] {
+			t.Errorf("rrf-v1 下 %v 的 final = %v，期望等于 rrf = %v", it["title"], sc["final"], sc["rrf"])
+		}
+	}
+
+	check("引擎挂了", routerWithDeadEngine(t), `{"query":"连衣裙","explain":true}`,
+		[]string{"keyword", "rrf", "business", "final"}, []string{"rerank", "vector"})
 
 	// explain=false 时连 scores 都不该出现（契约：「explain=true 时返回」）。
 	_, plain := doSearch(t, fx.HostA, `{"query":"连衣裙"}`)
@@ -498,6 +540,55 @@ func TestExplainOmitsStagesThatDidNotRun(t *testing.T) {
 			t.Errorf("explain 没开，%v 却带着 recall_source", it["title"])
 		}
 	}
+}
+
+// 缺货商品默认**出现**在结果里，但排在所有有货商品之后（语义检索层 §6，
+// §11 阶段 4 的验收标准「缺货商品不再出现在首屏」）。
+//
+// 阳性对照是同一个查询走 rrf-v1（不做业务重排）：那时断货的「亚麻直筒连衣裙」
+// 两路都命中（字面有「连衣 衣裙」，语义也是裙子），必须排在至少一件有货商品
+// 前面。少了这一半，「它排在最后」也可能只是它本来就相关度最低 ——
+// 那样把业务重排整段删掉，这条测试照样绿。
+func TestOutOfStockIsDemotedNotDropped(t *testing.T) {
+	fx := newSearchFixture(t)
+
+	posOf := func(titles []string, want string) int {
+		for i, x := range titles {
+			if x == want {
+				return i
+			}
+		}
+		return -1
+	}
+
+	_, plain := doSearch(t, fx.HostA, `{"query":"连衣裙","strategy":"rrf-v1"}`)
+	pt := titlesOf(plain)
+	sp := posOf(pt, fxSoldOut.Title)
+	if sp < 0 {
+		t.Fatalf("rrf-v1 下没搜到断货的 %q，对照不成立。结果：%v", fxSoldOut.Title, pt)
+	}
+	if sp == len(pt)-1 {
+		t.Fatalf("rrf-v1 下断货的 %q 本来就排在最后（%v）—— 下面那条「业务重排把它压到最后」"+
+			"因此证明不了任何事，夹具需要一件相关度低于它的有货商品", fxSoldOut.Title, pt)
+	}
+
+	_, body := doSearch(t, fx.HostA, `{"query":"连衣裙"}`)
+	if body.Strategy != service.DefaultStrategy {
+		t.Fatalf("默认策略回显 %q，期望 %q", body.Strategy, service.DefaultStrategy)
+	}
+	titles := titlesOf(body)
+	so := posOf(titles, fxSoldOut.Title)
+	if so < 0 {
+		t.Fatalf("默认检索没搜到断货的 %q —— 业务重排是降权，不是删除"+
+			"（删除是 in_stock_only=true 的事）。结果：%v", fxSoldOut.Title, titles)
+	}
+	for i, it := range body.Items {
+		if it["in_stock"] == true && i > so {
+			t.Errorf("有货的 %v 排在断货的 %q 后面（结果：%v）—— 业务重排没有把缺货压下去",
+				it["title"], fxSoldOut.Title, titles)
+		}
+	}
+	t.Logf("rrf-v1：%v；默认（业务重排）：%v", pt, titles)
 }
 
 // trace_id 不在响应里 —— 它是 NotYetImplementedResponse 那笔挂账的反向锁。
@@ -514,8 +605,8 @@ func TestTraceIDIsAbsentNotEmpty(t *testing.T) {
 		t.Fatalf("检索返回 %d：%s", w.Code, w.Body.String())
 	}
 	if v, ok := body.raw["trace_id"]; ok {
-		t.Fatalf("响应里出现了 trace_id（%v）—— search_logs 那张表还没建、"+
-			"/search/events 也没实现，这个 id 串不到任何东西。"+
+		t.Fatalf("响应里出现了 trace_id（%v）—— /search/events 还没实现，"+
+			"这个 id 回出去没有任何接口收得下。"+
 			"真的实现了就回 contract_test.go 划掉那笔挂账", v)
 	}
 }
@@ -530,7 +621,7 @@ func TestStrategyEchoesThePipelineThatActuallyRan(t *testing.T) {
 	for _, body := range []string{
 		`{"query":"连衣裙"}`,
 		`{"query":"连衣裙","strategy":"default"}`,
-		`{"query":"连衣裙","strategy":"rrf-v1"}`,
+		`{"query":"连衣裙","strategy":"rrf-biz-v1"}`,
 		`{"query":"连衣裙","strategy":"with-reranker-someday"}`,
 	} {
 		w, got := doSearch(t, fx.HostA, body)
@@ -538,9 +629,15 @@ func TestStrategyEchoesThePipelineThatActuallyRan(t *testing.T) {
 			t.Fatalf("%s → %d：%s", body, w.Code, w.Body.String())
 		}
 		if got.Strategy != service.DefaultStrategy {
-			t.Errorf("%s → strategy=%q，期望 %q（本轮只有这一条流水线，"+
-				"不管请求里写了什么）", body, got.Strategy, service.DefaultStrategy)
+			t.Errorf("%s → strategy=%q，期望 %q（请求值不是回显值："+
+				"回的是真的跑过的那条流水线）", body, got.Strategy, service.DefaultStrategy)
 		}
+	}
+	// 唯一被认出来的另一条：rrf-v1，M3 那条不做业务重排的流水线。
+	// 它必须回显它自己 —— 业务重排上线之后，这个名字仍然指同一条流水线。
+	if w, got := doSearch(t, fx.HostA, `{"query":"连衣裙","strategy":"rrf-v1"}`); w.Code != http.StatusOK ||
+		got.Strategy != service.StrategyRRFOnly {
+		t.Errorf("strategy=rrf-v1 → %d / %q，期望 200 / %q", w.Code, got.Strategy, service.StrategyRRFOnly)
 	}
 	// 一个没人认得的策略不该被拒 —— 契约里它是可选参数，
 	// 客户端从回显里就看得出自己没落到想要的那一桶。
@@ -550,27 +647,28 @@ func TestStrategyEchoesThePipelineThatActuallyRan(t *testing.T) {
 	}
 }
 
-// filters 真的在筛，而且 in_stock_only 默认是 true。
+// filters 真的在筛，而且 in_stock_only 默认是 false。
 //
 // 默认值那一条单独断言：契约把 SearchFilters.in_stock_only 的 default 定成
-// true，也就是**不传 filters 时断货商品就该看不见**。漏掉这个默认值的实现
-// （默认 false）在「传了 in_stock_only:true 能筛掉」这条断言下照样绿。
+// false（M3 独立验收 I10），也就是**不传 filters 时断货商品照常出现**，
+// 由业务重排压到有货商品之后（TestOutOfStockIsDemotedNotDropped 盯排序那一半）。
+// handler 此前一直按 true 在跑，与契约相反，而这条测试当时断言的也是 true ——
+// 测试照着实现写，于是两者一起偏离了契约，谁也没红。
 func TestSearchFiltersApply(t *testing.T) {
 	fx := newSearchFixture(t)
 
-	// 一个字都不传 filters：断货的那件不该出现。
+	// 一个字都不传 filters：断货的那件要出现。
 	_, def := doSearch(t, fx.HostA, `{"query":"连衣裙"}`)
-	if contains(titlesOf(def), fxSoldOut.Title) {
-		t.Errorf("没传 filters 时搜到了断货的 %q —— in_stock_only 的默认值不是 true"+
+	if !contains(titlesOf(def), fxSoldOut.Title) {
+		t.Errorf("没传 filters 时没搜到断货的 %q —— in_stock_only 的默认值不是 false"+
 			"（契约 SearchFilters.in_stock_only 的 default）。结果：%v",
 			fxSoldOut.Title, titlesOf(def))
 	}
-	// 阳性对照：显式关掉之后它必须出现，否则上面那条既可能是默认值生效，
-	// 也可能只是这件商品压根没被召回。
-	_, all := doSearch(t, fx.HostA, `{"query":"连衣裙","filters":{"in_stock_only":false}}`)
-	if !contains(titlesOf(all), fxSoldOut.Title) {
-		t.Fatalf("显式 in_stock_only=false 也没搜到断货的 %q —— "+
-			"上面那条断言因此证明不了默认值。结果：%v", fxSoldOut.Title, titlesOf(all))
+	// 显式打开之后它必须消失，否则 in_stock_only 这个开关本身没在筛。
+	_, only := doSearch(t, fx.HostA, `{"query":"连衣裙","filters":{"in_stock_only":true}}`)
+	if contains(titlesOf(only), fxSoldOut.Title) {
+		t.Fatalf("显式 in_stock_only=true 还搜到了断货的 %q。结果：%v",
+			fxSoldOut.Title, titlesOf(only))
 	}
 
 	// 类目筛选。
@@ -637,8 +735,8 @@ func TestDraftAndDeletedProductsAreInvisibleInSearch(t *testing.T) {
 		name string
 		body string
 	}{
-		{"不带 filters（in_stock_only 默认 true）", `{"query":"连衣裙"}`},
-		{"in_stock_only=false", `{"query":"连衣裙","filters":{"in_stock_only":false}}`},
+		{"不带 filters（in_stock_only 默认 false）", `{"query":"连衣裙"}`},
+		{"in_stock_only=true", `{"query":"连衣裙","filters":{"in_stock_only":true}}`},
 		{"限定女装类目", fmt.Sprintf(`{"query":"连衣裙","filters":{"category_id":%d}}`, fx.CategoryDressA)},
 		{"价格区间 10000-30000", `{"query":"连衣裙","filters":{"min_price_cents":10000,"max_price_cents":30000}}`},
 	}
@@ -976,9 +1074,9 @@ func TestSearchResponseDecodesIntoGeneratedTypes(t *testing.T) {
 		}
 		if it.InStock == nil {
 			t.Errorf("%q 没有 in_stock 字段", it.Title)
-		} else if !*it.InStock {
-			t.Errorf("%q 的 in_stock 是 false，默认 in_stock_only=true 时只该返回有货的",
-				it.Title)
+		}
+		if it.Scores == nil || it.Scores.Business == nil || it.Scores.Final == nil {
+			t.Errorf("%q 的 scores 解不出 business / final：%+v", it.Title, it.Scores)
 		}
 	}
 	if body.LatencyMs < 0 {
