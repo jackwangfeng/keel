@@ -168,7 +168,6 @@ IDEMPOTENCY_EXEMPT = {
     '/admin/auth/bootstrap':  '一次性 token 换会话，重放由 used_at 拦截',
     '/admin/auth/email-link': '重复请求只是多发一封信，且有频控',
     '/admin/auth/session':    '一次性 token 换会话，重放由 used_at 拦截',
-    '/admin/merchants':       'code 全局唯一，重复建店必然撞唯一索引',
     '/assistant/chat':    '无副作用；会话状态由 session_id 承载',
     '/orders/preview':    '无副作用；纯试算',
     '/coupons/applicable': '无副作用；纯查询',
