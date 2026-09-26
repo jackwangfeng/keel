@@ -773,6 +773,11 @@ func Run(ctx context.Context, listen func(addr string, h http.Handler) error) er
 	returnTimeout := service.NewReturnTimeoutService(repository.New(pool), service.SweepConfig{}, nil)
 	go returnTimeout.Run(bgCtx)
 
+	// 孤儿上传文件回收（数据模型 §13 的 24 小时规则）：没被引用、创建超过 24 小时的文件，
+	// 删记录再删文件。存储与 Router 里写文件的是同一个 driver（同一个 KEEL_UPLOAD_ROOT）。
+	uploadGC := service.NewUploadGCService(repository.New(pool), uploadStoreFromEnv(), service.SweepConfig{}, nil)
+	go uploadGC.Run(bgCtx)
+
 	// 消息通知的外发投递与保留期清理（数据模型 §16）。站内消息不靠它 —— 通知行在业务事务里
 	// 就写好了；它只消费 outbox 里的 notification.deliver 任务，把每个外发渠道的结果记下来。
 	// 本期三个渠道（微信订阅消息 / 短信 / 邮件）都未配置，投递记录一律是「跳过」。

@@ -251,6 +251,12 @@ func claimEvidence(ctx context.Context, tx repository.Tx, urls []string, userID 
 				ErrRefundBadRequest, urls[i])
 		}
 		if err := tx.MarkUploadReferenced(ctx, uid); err != nil {
+			if errors.Is(err, repository.ErrUploadNotFound) {
+				// 读到之后、标引用之前被孤儿回收删掉了（upload_gc.go 的条件删除先拿到了行锁）。
+				// 与「不存在」同一个 422，而不是一个 500。
+				return fmt.Errorf("%w: evidence_urls 里的 %q 不是你用 purpose=3 传的退款凭证",
+					ErrRefundBadRequest, urls[i])
+			}
 			return err
 		}
 	}

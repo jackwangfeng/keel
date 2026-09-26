@@ -84,3 +84,35 @@ SELECT id, user_id, staff_id, purpose, driver, storage_key,
 -- 一个静默的 0 行会让 referenced 永远停在 FALSE，然后 24 小时后被回收掉。
 UPDATE uploads SET referenced = TRUE
  WHERE id = $1;
+
+-- name: ListOrphanUploads :many
+-- 孤儿回收的候选（数据模型 §13 的 24 小时规则，service/upload_gc.go）：没被任何业务对象引用、
+-- 创建早于截止（now() 减 24 小时，由调用方算好）的文件，只取这个 driver 的（删文件要同一个 driver）。
+-- 买家凭证、头像、后台商品图一视同仁。按创建时间从早到晚。部分索引 idx_uploads_orphan 对上这条扫描。
+-- 这只是预筛；删不删由 DeleteOrphanUpload 的谓词在行锁之下再判一次。
+SELECT id, storage_key
+  FROM uploads
+ WHERE NOT referenced
+   AND created_at < sqlc.arg(cutoff)::timestamptz
+   AND driver = sqlc.arg(driver)
+ ORDER BY created_at, id
+ LIMIT sqlc.arg(page_limit);
+
+-- name: DeleteOrphanUpload :one
+-- 删一条孤儿记录，返回它的 storage_key（调用方在事务提交之后删存储里的文件）。
+--
+-- **谓词把「没被引用、够老」再判一遍，这是与引用赛跑的裁判**：提交售后时标引用
+-- （MarkUploadReferenced）与这条 DELETE 撞在同一行上时，谁先拿到行锁谁赢 ——
+-- 标引用先拿到：这条 DELETE 等它提交，PostgreSQL 按新版本重算谓词，NOT referenced 不成立，
+-- 0 行，文件留着；这条先拿到并提交：标引用那条 UPDATE 影响 0 行，售后申请以「凭证不存在」失败，
+-- 而不是落库一张带着 404 图片的申请。只按 id 删的话，前一种交错会删掉一张刚被引用的凭证。
+DELETE FROM uploads
+ WHERE id = sqlc.arg(id) AND NOT referenced
+   AND created_at < sqlc.arg(cutoff)::timestamptz
+RETURNING storage_key;
+
+-- name: UnmarkUploadReferenced :execrows
+-- 取消引用（头像换掉之后旧头像，PATCH /me）。之后它就是一个普通的孤儿，
+-- 创建超过 24 小时即由 upload_gc 回收。只动这个买家自己传的头像：别人的、别的用途的不碰。
+UPDATE uploads SET referenced = FALSE
+ WHERE id = sqlc.arg(id) AND user_id = sqlc.arg(user_id) AND purpose = 2;
