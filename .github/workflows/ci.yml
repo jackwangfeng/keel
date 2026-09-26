@@ -151,35 +151,60 @@ jobs:
     name: Go 构建与测试
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    services:
-      postgres:
-        # 和 compose.yaml 同一个镜像，理由完整写在那里：M3 的第一条迁移开头是
-        # `CREATE EXTENSION IF NOT EXISTS vector`，官方 postgres:16 里实测报
-        # `extension "vector" is not available`，于是整条迁移链在那里断掉 ——
-        # 而错误停在 goose 上，不指向真因。
-        #
-        # 两处必须一起换。只换一处的后果是最难查的那种：本地 compose 绿、CI 红
-        # （或反过来），而两边跑的是同一份迁移，谁都不会先怀疑镜像。
-        image: pgvector/pgvector:pg16
-        env:
+    # 没有 services.postgres 这一段了。**这不是疏忽，是没得选。**
+    #
+    # 00020 的电子围栏要 PostGIS，00016 的向量要 pgvector，而没有任何一个
+    # 官方镜像同时带这两样（完整论证在 compose.yaml 的 postgres 服务上方与
+    # 数据模型 §4）。仓库因此自建 docker/postgres/Dockerfile —— 而
+    # `services.<id>.image` **只吃一个能 pull 下来的标签，不接受 build**。
+    #
+    # 于是这个 job 自己起库：下面「数据库」那一步 docker build + docker run，
+    # 端口同样映到 5432，环境变量与原来那段逐字相同，健康检查用同一条
+    # pg_isready。对后面每一步来说，这与 services 那段是同一件事。
+    #
+    # 代价说清楚：那 90 秒的 docker build 每次都要付（services 那段是一次
+    # docker pull，走 runner 的镜像缓存）。**没有走 GHCR 把它变成一次 pull**，
+    # 理由与 compose.yaml 里那段一致：推 GHCR 要一条发布 workflow、一份
+    # packages:write 权限和一个此刻不存在的凭据，而它换来的是让测试基建依赖
+    # 一个仓库之外的可变产物。构建脚本在仓库里，90 秒买的是「谁跑的都是同一个」。
+    #
+    # 也没有用 actions/cache 缓存镜像层：docker save / load 一个 794 MB 的镜像
+    # 在 GitHub 的缓存上传下载里实测不会比 90 秒的 build 快，而它多引入一个
+    # 「缓存过期了但没人发现」的失效面。真要优化，正确的那条路是 GHCR。
+    steps:
+      - uses: actions/checkout@v4
+
+      # 数据库。与 compose.yaml 的 postgres 服务**同一个 Dockerfile** ——
+      # 两边只要有一处还指着旧镜像，症状就是最难查的那种：本地 compose 绿、
+      # CI 红（或反过来），而两边跑的是同一份迁移，谁都不会先怀疑镜像。
+      - name: 数据库（PostGIS + pgvector，自建镜像）
+        run: |
+          docker build -t keel-postgres:16 docker/postgres
+          docker run -d --name keel-ci-pg \
+            -e POSTGRES_USER=keel -e POSTGRES_PASSWORD=keel -e POSTGRES_DB=keel \
+            -p 5432:5432 keel-postgres:16
           # keel / keel / keel 与 internal/db.AdminDSN() 的默认值逐项对应，
           # 迁移用的就是这个角色。对上之后这个 job 一个 PG* 环境变量都不用配，
           # 少一处「Makefile、compose、workflow 三份连接串各说各话」的机会。
           # 应用与测试连的是 keel_app，它由 00003_app_role.sql 在迁移里建出来。
-          POSTGRES_USER: keel
-          POSTGRES_PASSWORD: keel
-          POSTGRES_DB: keel
-        ports:
-          # 测试进程跑在 runner 宿主机上，不在容器网络里，所以必须映射出来。
-          # 映到 5432 是为了让 internal/db 的默认 PGPORT 直接成立。
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -h 127.0.0.1 -U keel -d keel"
-          --health-interval 2s
-          --health-timeout 3s
-          --health-retries 30
-    steps:
-      - uses: actions/checkout@v4
+          #
+          # 端口映到 5432 是为了让 internal/db 的默认 PGPORT 直接成立。
+          #
+          # 等健康：原先那段 services 用 --health-cmd 让 runner 替我们等，
+          # 自己起容器就得自己等。判据用同一条 pg_isready，-h 127.0.0.1 同样
+          # 不能省（理由写在 compose.yaml 的 healthcheck 上：initdb 期间镜像会先
+          # 起一个只听 unix socket 的临时服务器，不带 -h 的 pg_isready 走的正是
+          # 那个 socket，于是它会在库还没真的可连时就报 ready）。
+          for i in $(seq 1 60); do
+            if docker exec keel-ci-pg pg_isready -h 127.0.0.1 -U keel -d keel >/dev/null 2>&1; then
+              echo "数据库就绪（第 ${i} 次探测）"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::数据库 120 秒内没有就绪"
+          docker logs keel-ci-pg
+          exit 1
 
       - uses: actions/setup-go@v5
         with:
