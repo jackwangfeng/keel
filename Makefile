@@ -61,7 +61,7 @@ GOOSE := GOOSE_DRIVER=postgres GOOSE_DBSTRING="$(GOOSE_DBSTRING)" \
 	GOOSE_MIGRATION_DIR=$(MIGRATIONS) \
 	$(GORUN) github.com/pressly/goose/v3/cmd/goose
 
-.PHONY: help generate generate-go generate-ts generate-sql generate-uts tools-versions \
+.PHONY: help generate generate-go generate-ts generate-sql generate-uts tools-versions version \
 	contract-check schema-check app-type-check app-install app-build-h5 app-build-android \
 	sdk-smoke migrate migrate-down migrate-status test-db \
 	test-engine dtmrs-deps build
@@ -316,5 +316,36 @@ $(DTMRS_LIB):
 	@echo "==> 没找到 $(DTMRS_LIB)，先建它（需要 Rust 1.88+，约 1 分钟）"
 	@$(MAKE) dtmrs-deps
 
+# ---------------------------------------------------------------------------
+# 版本号
+# ---------------------------------------------------------------------------
+#
+# 三个值经 -ldflags -X 注入 internal/buildinfo。为什么不靠 Go 自带的 VCS 烧录
+# （go 1.18 起 `go build` 会自动写 vcs.revision）：**镜像里拿不到**，
+# docker/Dockerfile 的构建上下文把 .git 排除在外（.dockerignore 第 3 行），
+# 而发布出去的恰恰是镜像。详见 internal/buildinfo/buildinfo.go 的包注释。
+#
+# VERSION 可以从外面覆盖（`make build VERSION=v0.1.0`）。默认值取 git describe：
+# 打过 tag 就是 tag 名，没打过是 `<最近的tag>-<距离>-g<sha>`，一个 tag 都没有时
+# 回落到 `dev-<sha>`。**不写死成某个版本号** —— 一个没被注入的构建应当说自己是
+# 开发构建，而不是冒充某一版。
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+COMMIT  ?= $(shell git rev-parse HEAD 2>/dev/null)
+# UTC + RFC3339。本地时区会让两台机器上同一次提交编出两个不同的「构建时间」。
+DATE    ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+
+BUILDINFO := github.com/keel/keel/internal/buildinfo
+LDFLAGS   := -X $(BUILDINFO).Version=$(VERSION)              -X $(BUILDINFO).Commit=$(COMMIT)              -X $(BUILDINFO).Date=$(DATE)
+
+# `go build ./...` 不落产物（除了缓存），所以这里同时编一份带版本号的二进制到
+# build/ —— 那才是 -ldflags 看得见效果的地方。两条都留着：前者是编译期检查
+# （所有包都要能编过，包括没有 main 的），后者是产物。
 build: $(DTMRS_LIB)
 	go build ./...
+	go build -trimpath -ldflags '$(LDFLAGS)' -o build/keel ./cmd/keel
+
+# 打印将要注入的版本，给 CI 和「这次到底编出的是什么」用。
+version:
+	@echo "VERSION=$(VERSION)"
+	@echo "COMMIT=$(COMMIT)"
+	@echo "DATE=$(DATE)"

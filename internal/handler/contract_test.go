@@ -523,6 +523,10 @@ func routeOf(t *testing.T, method, contractPath string) route {
 // 找不到它」，而契约是前后端唯一的约定。
 var nonContractRoutes = map[string]string{
 	"GET /healthz": "存活探针，给编排系统和 compose 用；契约描述的是业务接口",
+	"GET /version": "构建信息（版本 / commit / 构建时间 / Go 版本），给运维与 issue 里" +
+		"「你跑的是哪一版」用；和 healthz 同类，不是业务接口。" +
+		"刻意不进契约：契约是前后端的约定，而没有任何客户端该按版本号分支行为 —— " +
+		"真要那样做，那是一次显式的能力协商设计，不是读一个字符串。",
 }
 
 // pendingOp 是契约里声明了、这个包**还没有注册任何路由**的一个操作。

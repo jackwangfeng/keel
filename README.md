@@ -15,7 +15,7 @@
 ![Go](https://img.shields.io/badge/Go-1.26+-00ADD8)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16+-336791)
 
-[Documentation](./docs) · [中文文档](./README.zh-CN.md)
+[Documentation](./docs) · [Changelog](./CHANGELOG.md) · [中文文档](./README.zh-CN.md)
 
 </div>
 

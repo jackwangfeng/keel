@@ -107,6 +107,12 @@ services:
       target: app
       args:
         GOPROXY: ${GOPROXY:-}
+        # 版本号透传。不传就是 "dev"（internal/buildinfo 的默认值），
+        # 本地 `docker compose build` 因此不会冒充某一版。
+        # 打版本时：`KEEL_VERSION=v0.1.0 docker compose build app`。
+        KEEL_VERSION: ${KEEL_VERSION:-dev}
+        KEEL_COMMIT: ${KEEL_COMMIT:-}
+        KEEL_DATE: ${KEEL_DATE:-}
     environment:
       PGHOST: postgres
       PGPORT: "5432"
