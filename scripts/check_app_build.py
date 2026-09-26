@@ -35,8 +35,11 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 APP = os.path.join(ROOT, 'app')
 
-# uts 插件把类型诊断打成这两种形状。两种都要抓。
-DIAG_RE = re.compile(r'(^|\s)warning:|error TS\d+')
+# uts 插件把类型诊断打成前两种形状；第三种是 app-android 的样式检查
+# （`[plugin:uni:app-uvue-css] ERROR: property value `grid` is not supported ...`）——
+# 原生端只支持 CSS 的一个子集，写了不支持的属性，uni build 打一行 ERROR 然后照样 exit 0，
+# 而那条样式在真机上就是静默不生效。三种都要抓。
+DIAG_RE = re.compile(r'(^|\s)warning:|error TS\d+|\]\s*ERROR:')
 # 终端色彩会把上面的匹配搅乱，先剥掉。
 ANSI_RE = re.compile(r'\x1b\[[0-9;]*[A-Za-z]|​')
 
