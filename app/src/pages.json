@@ -9,6 +9,7 @@
     { "path": "pages/order/list",     "style": { "navigationBarTitleText": "我的订单" } },
     { "path": "pages/order/detail",   "style": { "navigationBarTitleText": "订单详情" } },
     { "path": "pages/me/index",       "style": { "navigationStyle": "custom" } },
+    { "path": "pages/me/notifications", "style": { "navigationBarTitleText": "消息" } },
     { "path": "pages/me/profile",     "style": { "navigationBarTitleText": "个人资料" } },
     { "path": "pages/refund/apply",   "style": { "navigationBarTitleText": "申请售后" } },
     { "path": "pages/refund/detail",  "style": { "navigationBarTitleText": "售后详情" } },

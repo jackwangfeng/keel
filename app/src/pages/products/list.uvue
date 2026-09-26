@@ -80,6 +80,7 @@
 import { listCategories, listProducts, ApiFailure } from '@/api/client.uts'
 import { categoryChips, productRow, productListQuery, CategoryChip, ProductRow } from '@/api/view.uts'
 import { ensureStore, CurrentStore } from '@/api/store.uts'
+import { refreshUnreadBadge } from '@/api/badge.uts'
 
 export default {
   data() {
@@ -114,6 +115,8 @@ export default {
     const h = new Date().getHours()
     this.greeting = h < 11 ? '早上好' : (h < 18 ? '下午好' : '晚上好')
     this.load()
+    // 进 App 第一个看到的是首页：在这里就把「我的」上的未读角标挂上。
+    refreshUnreadBadge(null)
   },
   methods: {
     load() {

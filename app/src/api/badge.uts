@@ -1,0 +1,34 @@
+// 「我的」tab 上的未读消息角标。
+//
+// 放在一处，是因为有好几个地方会让未读数变化或需要刷新：进首页 / 我的页（切回前台、从别处回来）、
+// 在消息页标已读 / 全部已读。每处都自己拼一遍 setTabBarBadge，迟早有一处忘了 remove。
+
+import { unreadNotificationCount } from './client.uts'
+import { isLoggedIn } from './config.uts'
+
+// tabBar 顺序见 pages.json：首页 / 购物车 / 订单 / 我的。
+const ME_TAB = 3
+
+/** 按一个已知的未读数更新角标（标已读的响应里就带着新的未读数，不必再查一次）。 */
+export function showUnreadBadge(unread : number) {
+  if (unread > 0) {
+    uni.setTabBarBadge({ index: ME_TAB, text: unread > 99 ? '99+' : unread.toString(), fail: (_e) => {} })
+  } else {
+    uni.removeTabBarBadge({ index: ME_TAB, fail: (_e) => {} })
+  }
+}
+
+/** 查一次未读数并更新角标。没登录就清掉；查失败不打扰 —— 角标只是提示。 */
+export function refreshUnreadBadge(onCount : ((unread : number) => void) | null) {
+  if (!isLoggedIn()) {
+    showUnreadBadge(0)
+    if (onCount != null) onCount!(0)
+    return
+  }
+  unreadNotificationCount(
+    (n : number) => {
+      showUnreadBadge(n)
+      if (onCount != null) onCount!(n)
+    },
+    (_f) => {})
+}

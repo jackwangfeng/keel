@@ -17,6 +17,8 @@
 //     不是第一道。）
 
 import {
+  ListNotificationsQuery,
+  Notification,
   ReportSearchEventRequest,
   ReturnShipmentRequest,
   ListRefundsQuery,
@@ -1371,4 +1373,41 @@ export function searchTraceId(res : SearchResponse) : string {
 /** event：click / add_cart / order。 */
 export function searchEventRequest(traceId : string, event : string, productId : number) : ReportSearchEventRequest {
   return { trace_id: traceId, event: event, product_id: productId } as ReportSearchEventRequest
+}
+
+// ---------------------------------------------------------------------------
+// 消息中心
+// ---------------------------------------------------------------------------
+
+export type NotificationRow = {
+  id : number
+  /** 服务端渲染好的标题 / 正文，原样显示 —— **不按 kind 拼文案**（模板在服务端）。 */
+  title : string
+  body : string
+  time : string
+  unread : boolean
+  /** 点了跳到哪：订单详情 / 售后详情；跳不了（后台才有的库存类，或字段缺了）是空串。 */
+  url : string
+}
+
+export function notificationRow(n : Notification) : NotificationRow {
+  let url = ''
+  const t = n.target
+  if (t.type == 'refund' && t.refund_no != null) {
+    url = '/pages/refund/detail?refund_no=' + encodeURIComponent(t.refund_no!)
+  } else if (t.type == 'order' && t.order_no != null) {
+    url = '/pages/order/detail?order_no=' + encodeURIComponent(t.order_no!)
+  }
+  return {
+    id: n.id,
+    title: n.title,
+    body: n.body,
+    time: shortTime(n.created_at),
+    unread: n.read_at == null,
+    url: url,
+  } as NotificationRow
+}
+
+export function notificationListQuery(page : number, pageSize : number) : ListNotificationsQuery {
+  return { page: page, page_size: pageSize } as ListNotificationsQuery
 }

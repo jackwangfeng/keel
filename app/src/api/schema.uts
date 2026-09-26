@@ -1735,3 +1735,10 @@ export type ListRefundsResponse = {
   total : number
   items : Refund[]
 }
+
+/** GET /me/notifications 的 query 参数 */
+export type ListNotificationsQuery = {
+  page? : number
+  page_size? : number
+  unread_only? : boolean
+}

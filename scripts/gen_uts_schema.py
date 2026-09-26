@@ -87,6 +87,8 @@ OPERATIONS = [
     # GET /orders/{order_no}/refunds 是裸数组，同 GET /addresses。
     ('post', '/orders/{order_no}/refunds', 'CreateRefund'),
     ('get', '/refunds', 'ListRefunds'),
+    # 消息中心。未读数 / 标已读 / 全部已读的响应都直接 $ref，不用进表。
+    ('get', '/me/notifications', 'ListNotifications'),
 ]
 
 HEADER = '''// 由 scripts/gen_uts_schema.py 从 docs/电商系统-OpenAPI.yaml 生成。**请勿手改。**
