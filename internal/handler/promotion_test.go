@@ -13,7 +13,9 @@ import (
 
 	"github.com/keel/keel/internal/api"
 	"github.com/keel/keel/internal/auth"
+	"github.com/keel/keel/internal/dtm"
 	"github.com/keel/keel/internal/problem"
+	"github.com/keel/keel/internal/service"
 )
 
 // 营销活动（数据模型 §7·二，迁移 00044）的端到端测试。夹具是 couponShop：一家新开的店，
@@ -450,6 +452,51 @@ func TestFlashSalePerUserLimitHoldsUnderConcurrency(t *testing.T) {
 	}
 	if ok != 1 {
 		t.Fatalf("同一买家并发 %d 单，成功 %d 单，期望恰好 1 单", tries, ok)
+	}
+}
+
+// 库存分支才是配额与限购的最终仲裁（试算与建单只是预告）。
+//
+// 上面两条并发用例里，大多数「超限」在建单那一步就被试算挡掉了（先提交的那一单已经把
+// 限购计数写进库），打不到库存分支的条件 upsert 上。这里把那条竞态**确定性地**造出来：
+// 先在活动下线时下两单普通价的衬衫（B、C），活动上线后 A 按秒杀价买走限购额度，再在库里
+// 把 B、C 改成「按秒杀价成交」的样子，直接调库存分支 —— 就是两笔并发订单里后到的那一笔
+// 在库存分支里看到的世界。
+func TestStockBranchIsTheFinalArbiterOfQuotaAndLimit(t *testing.T) {
+	cs := newCouponShop(t)
+	p := cs.createPromotion(t, "秒杀仲裁", fmt.Sprintf(`"promotion_type":4,`+
+		`"skus":[{"sku_id":%d,"promo_price_cents":990,"stock_qty":2,"per_user_limit":1}]`, cs.ShirtSKU))
+	b := cs.newBuyer(t, "arbiter-b")
+	c := cs.newBuyer(t, "arbiter-c")
+	orderB := cs.placeOrder(t, b, cs.NorthStore, cs.ShirtSKU, 1, nil) // 活动还没上线：门店价
+	orderC := cs.placeOrder(t, c, cs.NorthStore, cs.ShirtSKU, 1, nil)
+	wantStatus(t, cs.patchPromotion(t, p.Id, `{"status":1}`), http.StatusOK, "上线")
+	orderA := cs.placeOrder(t, b, cs.NorthStore, cs.ShirtSKU, 1, nil) // 秒杀价，占掉 b 的限购
+	if orderA.PayableCents != 990 {
+		t.Fatalf("A 应当按秒杀价 990 成交，实得 %d", orderA.PayableCents)
+	}
+	for _, no := range []string{orderB.OrderNo, orderC.OrderNo} {
+		adminExec(t, `UPDATE order_items SET price_promotion_id = $1, price_cents = 990
+		               WHERE order_id = (SELECT id FROM orders WHERE order_no = $2)`, p.Id, no)
+	}
+	sold := func() int64 {
+		return adminQueryInt64(t, `SELECT sold_qty FROM promotion_skus WHERE promotion_id = $1`, p.Id)
+	}
+	stock := availableAt(t, cs.NorthStore, cs.ShirtSKU)
+
+	// B：同一个买家，限购 1 件已经用掉 —— 条件 upsert 受影响 0 行，整个分支回滚。
+	if got := branchOf(t, service.BranchOrderStock)(gidFor(t, cs.MerchantID, orderB.OrderNo), "13", "action"); got != dtm.Failure {
+		t.Fatalf("超出每人限购，库存分支应当返回 Failure，实得 %d", got)
+	}
+	// C：换个买家，但把配额收紧到已售数 —— 条件 UPDATE 受影响 0 行。
+	adminExec(t, `UPDATE promotion_skus SET stock_qty = sold_qty WHERE promotion_id = $1`, p.Id)
+	if got := branchOf(t, service.BranchOrderStock)(gidFor(t, cs.MerchantID, orderC.OrderNo), "13", "action"); got != dtm.Failure {
+		t.Fatalf("配额已满，库存分支应当返回 Failure，实得 %d", got)
+	}
+	// 两次失败都是整体回滚：配额、限购、门店库存一件没动。
+	if sold() != 1 || availableAt(t, cs.NorthStore, cs.ShirtSKU) != stock ||
+		adminQueryInt64(t, `SELECT COALESCE(sum(qty), 0) FROM promotion_purchases WHERE promotion_id = $1`, p.Id) != 1 {
+		t.Fatalf("失败的分支动了账：已售 %d、门店库存 %d→%d", sold(), stock, availableAt(t, cs.NorthStore, cs.ShirtSKU))
 	}
 }
 
