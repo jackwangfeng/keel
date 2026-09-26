@@ -512,6 +512,30 @@ var routes = []route{
 		HandlerFile:    "admin_category.go",
 		NoQueryParams:  "软删只吃路径参数；两条 409 闸门没有任何可以绕过它们的参数",
 	},
+	// —— 读文件（M4 收尾）。买家侧，没有 /admin/ 前缀。
+	{
+		ContractPath:   "/uploads/{upload_id}",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "upload.go",
+		NoQueryParams: "要读哪个文件在路径上；契约里这条接口一个 query 参数都没有。" +
+			"第二跳（GET /uploads/{upload_id}/blob，不在契约里）确实要读 exp 与 sig，" +
+			"而它因此单独占了 upload_blob.go —— 下面那条对账按 HandlerFile 解析" +
+			"**整份源码**里的 c.Query，两跳同文件会让这一行登记当场红。" +
+			"同一条纪律让 GET /admin/products 单独占了 admin_product_list.go",
+		NotYetImplementedStage: map[string]string{
+			"仅上传者本人与后台客服": "契约描述里那张 purpose 准入表的第三行（3 退款凭证）。" +
+				"本轮的处置是**一律 403**，而不是「认上传者」—— 判「是不是上传者本人」要一个" +
+				"可选鉴权中间件（这条路由是公开的，契约里没有 security），" +
+				"而那条中间件今天**没有任何可测的输入**：purpose=3 的行只能由 C 端的 " +
+				"POST /uploads 产生，而那条接口还没有实现。也就是说写出来的会是一段" +
+				"任何测试都够不着的鉴权代码，而鉴权代码恰恰是最不该没有执行者的那一类。\n" +
+				"失败方向是安全的那一边：所有人都读不到，而不是所有人都读得到。" +
+				"反向由 upload_test.go 的 TestRefundProofIsNotPubliclyReadable 盯着 —— " +
+				"它直接插一行 purpose=3 再打这条接口，断言 403。真的实现了「认上传者本人」，" +
+				"那条测试会红，逼人回来删掉这一行。",
+		},
+	},
 	{
 		ContractPath:   "/auth/refresh",
 		ContractMethod: "post",
@@ -547,6 +571,18 @@ func routeOf(t *testing.T, method, contractPath string) route {
 // 找不到它」，而契约是前后端唯一的约定。
 var nonContractRoutes = map[string]string{
 	"GET /healthz": "存活探针，给编排系统和 compose 用；契约描述的是业务接口",
+
+	"GET /api/v1/uploads/:upload_id/blob": "GET /uploads/{upload_id} 跳过去的那个限时地址本身。" +
+		"契约在那条接口上写的是「302，跳转到 driver 生成的**限时**地址：本地磁盘 driver " +
+		"跳到带签名与过期时间的站内地址，S3 driver 跳到预签名 URL」—— " +
+		"也就是说这个地址的形状**随 driver 变**，把它写进契约等于把本地磁盘这一种形态钉死，" +
+		"而换 S3 那天契约就成了假话。契约里那条（/uploads/{upload_id}）永远是要过归属校验的" +
+		"那一跳，它才是客户端该拿在手里的形状（Upload.url 的描述也是这么写的：" +
+		"「客户端不应解析它，原样回传即可」）。\n" +
+		"它实现在 upload_blob.go 而不是和第一跳同一个文件：routes 表那条 query 参数对账" +
+		"按 HandlerFile 解析整份源码，而这一跳要读 exp 与 sig 两个 query 参数 —— " +
+		"同文件会让第一跳那行 NoQueryParams 登记当场红。两跳各自挡什么，" +
+		"写在 service/upload.go 的文件头。",
 }
 
 // pendingOp 是契约里声明了、这个包**还没有注册任何路由**的一个操作。

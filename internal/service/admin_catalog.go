@@ -55,10 +55,12 @@ const maxProductImages = 20
 // 拼在这一层而不是 repository：那一层认得的是列，不是对外路由
 // （repository.ProductImage 上刻意没有 URL 字段，注释写着这条）。
 //
-// **它今天指向一条还没有实现的路由**（GET /uploads/{upload_id} 是买家侧接口，
-// 不在本轮那 16 条写接口里）。仍然照契约拼出来，而不是回空串：契约把这个字段
-// 定成必填，空串会让客户端渲染一个「加载失败」的占位图，
-// 而那与「这件商品确实没有配图」是两件事。
+// 它指向 GET /uploads/{upload_id}（买家侧接口，M4 收尾那一轮实现了，
+// 见 service/upload.go）：那一跳判完归属再 302 到一个限时地址。
+// 客户端不该解析这个串，原样回传即可 —— 契约在 Upload.url 上是这么写的。
+//
+// 这一段原先写的是「它今天指向一条还没有实现的路由」。那句话过期了，
+// 而留着一句过期的「还没实现」，下一个人会照着它去找一个已经存在的东西。
 const uploadURLPrefix = "/api/v1/uploads/"
 
 // UploadURL 按 upload id 拼出对外地址。导出给 handler 用（它要填三种响应）。

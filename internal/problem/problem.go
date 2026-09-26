@@ -121,13 +121,20 @@ const (
 	//   product-image-duplicated      → 这三条都是 422，客户端要改的东西各不相同
 	//
 	// 逐字对着契约里那几段 description 里写出来的 URI，不要顺手改措辞。
-	TypeProductDeleted         = "https://keel.dev/problems/product-deleted"
-	TypeProductStillPublished  = "https://keel.dev/problems/product-still-published"
-	TypeProductHasNoSKU        = "https://keel.dev/problems/product-has-no-sku"
-	TypeSKUCodeDuplicated      = "https://keel.dev/problems/sku-code-duplicated"
-	TypeSKULastOfPublished     = "https://keel.dev/problems/sku-last-of-published-product"
-	TypeInventoryPrecondition  = "https://keel.dev/problems/inventory-precondition-failed"
-	TypeUploadNotFound         = "https://keel.dev/problems/upload-not-found"
+	TypeProductDeleted        = "https://keel.dev/problems/product-deleted"
+	TypeProductStillPublished = "https://keel.dev/problems/product-still-published"
+	TypeProductHasNoSKU       = "https://keel.dev/problems/product-has-no-sku"
+	TypeSKUCodeDuplicated     = "https://keel.dev/problems/sku-code-duplicated"
+	TypeSKULastOfPublished    = "https://keel.dev/problems/sku-last-of-published-product"
+	TypeInventoryPrecondition = "https://keel.dev/problems/inventory-precondition-failed"
+	TypeUploadNotFound        = "https://keel.dev/problems/upload-not-found"
+	// upload-forbidden 是**读**那条路上的 403：文件在、也属于这家店，
+	// 但它的 purpose 不是「所有人可读」的那一类（典型：别人的退款凭证）。
+	// 契约在 GET /uploads/{upload_id} 上明写这里不能用 404 掩盖存在性。
+	// 与 upload-not-found 分开：那一个合并了「不存在」与「是别家店的」，
+	// 因为 upload id 是全局自增的 —— 两条的掩盖策略刚好相反，
+	// 压成一个之后必然有一条是错的。
+	TypeUploadForbidden        = "https://keel.dev/problems/upload-forbidden"
 	TypeUploadWrongPurpose     = "https://keel.dev/problems/upload-wrong-purpose"
 	TypeProductImageDuplicated = "https://keel.dev/problems/product-image-duplicated"
 	TypeCategoryHasChildren    = "https://keel.dev/problems/category-has-children"

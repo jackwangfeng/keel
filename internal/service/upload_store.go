@@ -29,17 +29,20 @@ import (
 // 既然读文件那一步反正要做，把 io.Copy 的目的地从 io.Discard 换成一个真实
 // 文件是 30 行的事 —— 比在契约清单上再挂一笔账便宜。
 //
-// **仍然缺的那一半要说清楚**：契约里读文件那条 GET /uploads/{upload_id}
-// 没有实现（它是买家侧接口，不在本轮那 16 条 /admin/ 写接口里）。
-// 所以 Upload.url 指向的地址今天会 404。字节是真的在磁盘上，缺的是读它的路由。
-// 这两件事的差别不是措辞：前者「文件在，路由还没写」下一个任务就能补上，
-// 后者「文件从来没存过」意味着存量数据全是废的。
+// 这个取舍在 M4 收尾那一轮兑现了它的价值：读文件那条
+// GET /uploads/{upload_id} 补上了（service/upload.go），而**此前登记的每一条
+// 记录都直接可用** —— 因为字节一直在磁盘上。当时那句「文件在、路由还没写」
+// 与「文件从来没存过」的差别不是措辞，补路由的那天它就是「存量全都有用」
+// 与「存量全是废的」。
 
 // UploadStore 是 §13 那三个方法里本轮用得上的那一个：写入并返回 storage_key。
 //
-// 删除与「生成访问 URL」不在这里：前者属于孤儿回收任务（§12 的 jobs，
-// 本轮没有），后者在契约里被钉成了 /api/v1/uploads/{upload_id} 这个固定形状 ——
-// 它由 upload 的 id 拼出来，与 driver 无关，所以它不该是 driver 的方法。
+// 删除不在这里：它属于孤儿回收任务（§12 的 jobs，还没有执行者）。
+//
+// 「生成访问 URL」那一个也不在：契约把对外地址钉成了
+// /api/v1/uploads/{upload_id} 这个固定形状 —— 它由 upload 的 id 拼出来，
+// 与 driver 无关，所以它不该是 driver 的方法。driver 要回答的是**下一跳**：
+// 「把字节给我」（Open），或者将来换 S3 时「给我一个预签名地址」。
 type UploadStore interface {
 	// Driver 是 uploads.driver 的取值：1 本地磁盘 / 2 S3 兼容（§13）。
 	Driver() int16
@@ -53,6 +56,18 @@ type UploadStore interface {
 	// **不留下半个文件** —— 判大小不能靠先读进内存再比，那样一个 2 GB 的
 	// 请求体会在判出来之前就把进程吃掉。
 	Put(merchantID int64, ext string, r io.Reader, limit int64) (key string, size int64, sum string, err error)
+
+	// Open 打开 key 指向的内容，供 GET /uploads/{upload_id} 那条路读出来。
+	//
+	// 它是 §13 三个方法里的第三个（「生成访问 URL」）在本地磁盘 driver 上的
+	// 形态。**刻意不叫 URL()**：契约把对外地址钉成了
+	// /api/v1/uploads/{upload_id} 这个固定形状，跳转目标也由应用签名生成
+	// （service/upload.go），两者都与 driver 无关。driver 要回答的只有
+	// 「把字节给我」—— 换 S3 时这个方法可以改成返回预签名地址，
+	// 而那是一次接口变更，不是一次「谁来拼 URL」的分歧。
+	//
+	// 调用方负责 Close。
+	Open(key string) (io.ReadCloser, error)
 }
 
 // LocalDiskStore 是 §13 的本地磁盘 driver。
@@ -151,4 +166,34 @@ func uploadExtensionFor(contentType string) (string, string, bool) {
 	}
 	ext, ok := uploadExtensions[mime]
 	return mime, ext, ok
+}
+
+// ErrUploadBlobMissing：元数据在，字节不在。
+//
+// 它与「这条元数据不存在」必须分开：后者是正常的 404（契约：文件不存在或
+// 已被孤儿回收清理），而这一个是**库与磁盘不一致** —— 要么卷没挂上，
+// 要么有人手工删过文件，要么换 driver 时存量没搬完。回同一个 404 的话，
+// 一次运维事故会长得和一次正常的过期回收一模一样。
+var ErrUploadBlobMissing = errors.New("文件元数据在，但 driver 里没有对应的字节")
+
+// Open 实现 UploadStore.Open。
+func (s *LocalDiskStore) Open(key string) (io.ReadCloser, error) {
+	if s.root == "" {
+		return nil, errors.New("本地磁盘 driver 没有配置根目录")
+	}
+	// key 来自库里那一行，而那一行是 Put 写进去的 —— 也就是说它此刻是可信的。
+	// 仍然检查一遍：这一层的输入哪天换成别的来源（迁移进来的存量、S3 转本地
+	// 的导出清单），"../../etc/passwd" 就会变成一条真实的路径穿越，
+	// 而那次改动看上去只是「换了个数据来源」。
+	if key == "" || strings.HasPrefix(key, "/") || strings.Contains(key, "..") {
+		return nil, fmt.Errorf("%w: storage_key %q 的形状不合法", ErrUploadBlobMissing, key)
+	}
+	f, err := os.Open(filepath.Join(s.root, filepath.FromSlash(key)))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("%w: %s", ErrUploadBlobMissing, key)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return f, nil
 }
