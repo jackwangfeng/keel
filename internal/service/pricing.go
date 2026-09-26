@@ -112,6 +112,11 @@ type Quote struct {
 
 	// ApplicableCoupons 只有试算才填：这个买家手里本单可用的全部券。
 	ApplicableCoupons []ApplicableCoupon
+
+	// Store 是这次按哪家门店算的。契约把 OrderPreview.store_id 定成必返
+	// （「试算与下单必须是同一家店，回显是客户端唯一能核对这件事的办法」），
+	// 此前 handler 一直没填，回的是 0。
+	Store repository.StoreScope
 }
 
 // couponRequest 是「这一单带没带券、是谁的券、按哪个时刻判有效期」。
@@ -203,6 +208,7 @@ func priceOrder(ctx context.Context, tx repository.Tx, sc repository.StoreScope,
 	q := Quote{
 		Lines:        make([]PricedLine, 0, len(items)),
 		FreightCents: freightNotBilledThisRelease,
+		Store:        sc,
 	}
 	for _, it := range items {
 		sku := bySKU[it.SKUID]

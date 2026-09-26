@@ -314,6 +314,9 @@ func TestCouponNorthRegionEndToEnd(t *testing.T) {
 		t.Fatalf("华北试算：优惠 %d 应付 %d 券 %v，期望 2000 / 10000 / %d",
 			*pv.DiscountCents, pv.PayableCents, pv.UserCouponId, coupon.Id)
 	}
+	if pv.StoreId != cs.NorthStore || pv.RegionId == nil || *pv.RegionId != cs.NorthRegion {
+		t.Fatalf("试算回显的门店 / 大区是 %d / %v，期望 %d / %d", pv.StoreId, pv.RegionId, cs.NorthStore, cs.NorthRegion)
+	}
 	if pv.ApplicableCoupons == nil || len(*pv.ApplicableCoupons) != 1 {
 		t.Fatalf("试算里的 applicable_coupons 应有 1 张：%+v", pv.ApplicableCoupons)
 	}

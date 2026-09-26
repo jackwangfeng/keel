@@ -86,7 +86,11 @@ func (h *OrderHandler) Preview(c *gin.Context) {
 
 	discount := api.Money(q.DiscountCents)
 	applicable := apiApplicableCoupons(q.ApplicableCoupons)
+	regionID := q.Store.RegionID
 	c.JSON(http.StatusOK, api.OrderPreview{
+		// 回显门店与大区：契约把 store_id 定成必返，客户端靠它核对试算与下单是同一家店。
+		StoreId:          q.Store.StoreID,
+		RegionId:         &regionID,
 		GoodsAmountCents: api.Money(q.GoodsAmountCents),
 		PayableCents:     api.Money(q.PayableCents),
 		DiscountCents:    &discount,
