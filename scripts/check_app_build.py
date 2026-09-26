@@ -46,6 +46,8 @@ ANSI_RE = re.compile(r'\x1b\[[0-9;]*[A-Za-z]|​')
 
 def main():
     platform = sys.argv[1] if len(sys.argv) > 1 else 'h5'
+    # 其余参数原样交给 `uni build`（例如自动化构建的 --auto-host / --auto-port）。
+    extra = sys.argv[2:]
 
     if not os.path.isdir(os.path.join(APP, 'node_modules')):
         print('FAIL: app/node_modules 不在。先跑 `make app-install`。')
@@ -59,7 +61,7 @@ def main():
     env['FORCE_COLOR'] = '0'
 
     proc = subprocess.run(
-        ['npx', 'uni', 'build', '--platform', platform],
+        ['npx', 'uni', 'build', '--platform', platform] + extra,
         cwd=APP, capture_output=True, text=True, env=env)
     output = ANSI_RE.sub('', proc.stdout + proc.stderr)
     sys.stdout.write(output)

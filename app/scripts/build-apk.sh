@@ -5,6 +5,11 @@
 #
 # 产物：app/dist/keel-buyer-<versionName>.apk
 #
+#   ./app/scripts/build-apk.sh --e2e      # 自动化测试包，见 app/e2e/README 与下文
+#
+# 产物：app/dist/keel-buyer-<versionName>-e2e.apk。它多带一份官方的自动化运行时，
+# 启动后连 ws://127.0.0.1:${KEEL_E2E_PORT:-9520}（测试时由 adb reverse 转回本机）。
+#
 # ## 流程
 #
 #   1. 离线 SDK：没有就下载到 native-android/.uni-sdk/（钉版本 + sha256）。
@@ -27,6 +32,10 @@
 # 页面就是 uniappx/src/main/java/ 下的 .kt —— 和 npm 版 `uni build` 的产物同一种东西。
 # 所以这里跳过 HBuilderX，直接喂 npm 编译器的产物。
 set -euo pipefail
+
+E2E=0
+[ "${1:-}" = "--e2e" ] && E2E=1
+E2E_PORT=${KEEL_E2E_PORT:-9520}
 
 cd "$(dirname "$0")/.."
 APP=$(pwd)
@@ -74,8 +83,21 @@ if [ ! -f "$SDK_DIR/.version" ] || [ "$(cat "$SDK_DIR/.version")" != "$SDK_SHA25
 fi
 
 # ---- 2. 编译 ----
-echo "==> uni build --platform app-android"
-python3 "$ROOT/scripts/check_app_build.py" app-android
+AUTO_ARGS=()
+if [ "$E2E" = 1 ]; then
+    # 官方自动化运行时是 UTS 源码，npm 编译器不输出它（见 vite.config.js 的
+    # keel-automator-runtime）。临时拷进 src/，构建完就删：它满是 @ts-expect-error，
+    # 留在 src/ 里会让 scripts/check_app_types.py 那道 tsc 闸门红掉。
+    RUNTIME=$APP/src/automator-runtime
+    rm -rf "$RUNTIME"
+    cp -R "$APP/node_modules/@dcloudio/uni-app-uts/lib/automator/android" "$RUNTIME"
+    CLEANUP="$CLEANUP $RUNTIME"
+    # 127.0.0.1 而不是局域网 IP：测试时 adb reverse 把手机的这个端口转回本机，
+    # 不依赖手机与电脑同网段，也不用开防火墙。
+    AUTO_ARGS=(--auto-host 127.0.0.1 --auto-port "$E2E_PORT")
+fi
+echo "==> uni build --platform app-android ${AUTO_ARGS[*]:-}"
+python3 "$ROOT/scripts/check_app_build.py" app-android ${AUTO_ARGS[@]+"${AUTO_ARGS[@]}"}
 OUT=$APP/dist/build/app-android
 MANIFEST=$OUT/manifest.json
 [ -f "$OUT/.uniappx/android/src/index.kt" ] || die "编译产物里没有 index.kt：$OUT"
@@ -141,6 +163,8 @@ echo "==> gradle assembleRelease（appid=$APPID version=$VNAME($VCODE)）"
 
 APK_SRC=$NATIVE/app/build/outputs/apk/release/app-release.apk
 [ -f "$APK_SRC" ] || die "Gradle 说成功了，但没有 $APK_SRC"
-APK=$APP/dist/keel-buyer-$VNAME.apk
+SUFFIX=""
+[ "$E2E" = 1 ] && SUFFIX="-e2e"
+APK=$APP/dist/keel-buyer-$VNAME$SUFFIX.apk
 cp "$APK_SRC" "$APK"
 echo "==> ${APK}（$(du -h "$APK" | awk '{print $1}')）"

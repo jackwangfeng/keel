@@ -1,2 +1,4 @@
 node_modules/
 dist/
+# build-apk.sh --e2e 临时拷进来的官方自动化运行时
+src/automator-runtime/
