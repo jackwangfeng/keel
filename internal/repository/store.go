@@ -57,11 +57,17 @@ var (
 	ErrDefaultStoreConflict = errors.New("已经有一家默认门店")
 
 	// ErrStoreFenceRequired：给一家**非默认**门店清空围栏（契约 409
-	// store-fence-required），对应 chk_store_fence_or_default 那条 CHECK。
+	// store-fence-required）。
 	//
 	// 一家非默认店没有围栏就是一家永远接不到单的店 —— 它不会被任何坐标命中，
 	// 也不是回落目标。后台会把它列出来、能配库存、能上下架、能定价，
 	// 而它一单也接不到。
+	//
+	// **判据在 SetStoreFence 里，不在数据库上。** 本轮契约先行那一版把它写成
+	// stores 的一条 CHECK (is_default OR fence IS NOT NULL)，落地实测那条 CHECK
+	// 挡死了两条主路径（POST /admin/stores 建不出任何非默认店；
+	// PUT .../default 在每一个迁移过的库上都失败，因为回填造出来的默认店没有
+	// 围栏）。论证与两次实测记在 00020 里 stores 表的定义上。
 	ErrStoreFenceRequired = errors.New("非默认门店必须有围栏")
 
 	// ErrStoreUnavailable：这家门店已被软删或已停业，不能作为回落目标
@@ -88,7 +94,9 @@ var (
 // 定位自己画错在哪儿的东西，丢掉它，422 就只剩「你画的不对」。
 type InvalidFenceError struct{ Reason string }
 
-func (e *InvalidFenceError) Error() string { return "围栏不是一个合法的多边形: " + e.Reason }
+func (e *InvalidFenceError) Error() string {
+	return "围栏不是一个合法的多边形: " + e.Reason
+}
 
 // Region 是大区的领域类型。
 type Region struct {
@@ -152,11 +160,11 @@ type RegionPatch struct {
 }
 
 type NewStore struct {
-	RegionID                                  int64
-	Code, Name, Phone                         string
-	Province, City, District, Address         string
-	Lat, Lng                                  *float64
-	IsDefault                                 bool
+	RegionID                          int64
+	Code, Name, Phone                 string
+	Province, City, District, Address string
+	Lat, Lng                          *float64
+	IsDefault                         bool
 }
 
 // StorePatch **刻意没有 Fence 与 IsDefault**：它们各有自己的端点，
@@ -306,7 +314,6 @@ func (t tenantTx) SoftDeleteRegion(ctx context.Context, id int64) error {
 const (
 	storeCodeIndex    = "uk_stores_code"
 	storeDefaultIndex = "uk_stores_default"
-	storeFenceCheck   = "chk_store_fence_or_default"
 )
 
 // storeFromRow 是四条查询共用的一处转换。
@@ -398,12 +405,6 @@ func (t tenantTx) CreateStore(ctx context.Context, n NewStore) (Store, error) {
 		return Store{}, fmt.Errorf("store code %q: %w", n.Code, ErrStoreCodeConflict)
 	case isUniqueViolation(err, storeDefaultIndex):
 		return Store{}, fmt.Errorf("store code %q: %w", n.Code, ErrDefaultStoreConflict)
-	case isCheckViolation(err, storeFenceCheck):
-		// 建店不传围栏，所以这条 CHECK 只会在 is_default = false 时撞上 ——
-		// 而契约说那是一个合法的中间态（先建店后画围栏）。撞上它说明 DDL
-		// 或这条 SQL 被改过，不该翻成一个业务错误。
-		return Store{}, fmt.Errorf("建店撞上 %s，而建店本来就不传围栏——"+
-			"DDL 或 CreateStore 的 SQL 被改过: %w", storeFenceCheck, err)
 	case isForeignKeyViolation(err):
 		// region_id 不存在或不属于本租户。契约 422，与 ErrCatalogNotFound 分开：
 		// 路径里指名的资源不存在 → 404，请求体里指名的东西不存在 → 422
@@ -449,14 +450,32 @@ func (t tenantTx) SoftDeleteStore(ctx context.Context, id int64) error {
 // 三步，顺序有理由：
 //
 //	① 门店必须在本租户可见 —— 否则 404，而不是先去校验一个谁也用不上的多边形；
-//	② 多边形必须合法 —— ST_IsValid，假则 422 并原样转述 ST_IsValidReason；
-//	③ 落库 —— 清空非默认店的围栏由 chk_store_fence_or_default 拒绝（409）。
+//	② 清空只对默认门店合法 —— 否则 409（判定见下面那段）；
+//	③ 多边形必须合法 —— ST_IsValid，假则 422 并原样转述 ST_IsValidReason。
 //
-// ③ 那条闸门**不在应用层先判一次**：先判后改之间另一个会话可以把 is_default
-// 改掉，而 CHECK 约束是唯一真正能挡住它的东西。
+// ② 排在 ③ 前面：清空那一支根本没有多边形可校验，反过来写会让一次
+// 「给非默认店清空围栏」先跑一遍不存在的校验。
 func (t tenantTx) SetStoreFence(ctx context.Context, id int64, geojson *string) (Store, error) {
-	if _, err := t.FindStore(ctx, id); err != nil {
+	st, err := t.FindStore(ctx, id)
+	if err != nil {
 		return Store{}, err
+	}
+	// **非默认门店不许清空围栏**（契约 409 store-fence-required）。
+	//
+	// 这一条原本是 stores 上的一条 CHECK (is_default OR fence IS NOT NULL)。
+	// 落地时对着真库跑出来它挡住的是两条主路径（建一家普通店、切换默认店），
+	// 完整论证与实测记在 00020 那张表的定义上。所以它退成了这一处判定：
+	// 只管 PUT .../fence 这一条路径，别的路径不再被数据库挡着。
+	//
+	// 退让的是什么，说清楚：这中间有一个窗口 —— 这次 FindStore 与下面那条
+	// UPDATE 之间，另一个事务可以把这家店的默认位抢走（MakeStoreDefault 会清
+	// 旧的那家），于是一次「给默认店清空围栏」会落在一家已经不是默认的店上。
+	// 两条都在 WithTenant 的同一个事务里跑，READ COMMITTED 下后写的那个会看到
+	// 前者已提交的结果，所以它是一个真实但极窄的竞态，后果是多出一家
+	// 「未完成」的门店 —— 而那个状态契约本来就允许存在、后台本来就会提示。
+	// 用一条 CHECK 去关死这个窗口的代价，上面那两条主路径已经付过一次了。
+	if geojson == nil && !st.IsDefault {
+		return Store{}, fmt.Errorf("store %d: %w", id, ErrStoreFenceRequired)
 	}
 	if geojson != nil {
 		v, err := t.q.CheckPolygonValidity(ctx, *geojson)
@@ -471,9 +490,6 @@ func (t tenantTx) SetStoreFence(ctx context.Context, id int64, geojson *string) 
 		}
 	}
 	if _, err := t.q.SetStoreFence(ctx, db.SetStoreFenceParams{ID: id, Geojson: geojson}); err != nil {
-		if isCheckViolation(err, storeFenceCheck) {
-			return Store{}, fmt.Errorf("store %d: %w", id, ErrStoreFenceRequired)
-		}
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Store{}, fmt.Errorf("store %d: %w", id, ErrCatalogNotFound)
 		}

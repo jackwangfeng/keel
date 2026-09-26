@@ -56,8 +56,7 @@
 -- 一样要有归属，而「跳过软删商家」会让那批行无处可落，ALTER 当场失败，
 -- 报错指向一条 NOT NULL 约束而不是这条判断。
 --
--- 建出来的默认门店没有围栏（fence IS NULL）。这合法，而且只对默认店合法：
--- chk_store_fence_or_default 只禁「非默认 且 无围栏」这一种组合，
+-- 建出来的默认门店没有围栏（fence IS NULL）。这合法：
 -- 因为默认店本来就靠「全国兜底」而不是靠围栏接单。
 --
 -- ===========================================================================
@@ -127,12 +126,31 @@ CREATE TABLE stores (
     deleted_at    TIMESTAMPTZ,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-    -- 一家非默认店没有围栏，就是一家永远接不到单的店：它不会被任何坐标命中，
-    -- 也不是回落目标。后台会把它列出来、能配库存、能上下架、能定价，而它一单也
-    -- 接不到 —— 那种「配置完成了，但什么都没发生」的故障，症状与真因之间没有
-    -- 任何线索。所以用一条 CHECK 把它变成写不进去。
-    -- 默认店可以有围栏（旗舰店同时是兜底店），这条只禁「非默认 且 无围栏」。
-    CONSTRAINT chk_store_fence_or_default CHECK (is_default OR fence IS NOT NULL),
+    -- ### 这里**没有** CHECK (is_default OR fence IS NOT NULL)，这是想清楚之后删掉的
+    --
+    -- 本轮契约先行的那一版写着这条 CHECK，理由是「一家非默认店没有围栏就是
+    -- 一家永远接不到单的店」—— 那个判断本身没错，错的是把它做成写入约束。
+    -- 落地时对着真库跑了一遍，它让**两条契约明写的流程直接不可能**：
+    --
+    --   A) POST /admin/stores 按契约**不收围栏**（建店是表单、画围栏是地图，
+    --      后台的两个界面）。于是这条端点建不出任何一家非默认门店 ——
+    --      实测 23514，整个多门店功能从第一步就走不通。
+    --
+    --   B) PUT /admin/stores/{id}/default 的第一步是「清掉旧的那家默认店」。
+    --      而上面那段回填给**每一个**已有商家造出的正是「默认店 + 无围栏」，
+    --      于是这条 UPDATE 在每一个迁移过的库上都以 23514 失败 ——
+    --      实测过，报错指着被清掉 is_default 的那一行。
+    --
+    -- 两条都不是边角情况，是主路径。所以这条规则从「写不进去」退成
+    -- 「这一条路径上不许这么改」：**PUT .../fence 传 null 时，如果这家店不是
+    -- 默认店，service 层拒掉（409 store-fence-required）**，
+    -- 见 repository.SetStoreFence。
+    --
+    -- 诚实地说清楚退让了什么：这个状态**现在是可达的**（新建一家店、或者把
+    -- 默认位让给别人），数据库不再挡它。契约本来就把它定义成一个正常的中间态
+    -- （AdminStore.fence 为 null + is_default 为 false ⇒ 后台挂「未完成」提示），
+    -- 所以可达不是新问题；从前那条 CHECK 只是在同时宣称「它不可达」
+    -- 与「它是一个要显示的状态」，而两句话不能都对。
     FOREIGN KEY (region_id, merchant_id) REFERENCES regions(id, merchant_id)
 );
 -- 「至多一个默认店」这条规则**就是**这条部分唯一索引，不必在代码里写

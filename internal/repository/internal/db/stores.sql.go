@@ -312,8 +312,9 @@ type CreateStoreParams struct {
 
 // 建店。**围栏不在这里传**（契约：建店是表单、画围栏是地图，是后台的两个界面），
 // 所以这条建出来的非默认门店 fence 为 NULL —— 那是一个「未完成」的中间态，
-// chk_store_fence_or_default 允许它，因为 is_default 为 true 才是那条 CHECK 的
-// 另一半；非默认且无围栏会被数据库当场拒掉。
+// 契约把它定义成一个正常状态（后台列表据此挂「未完成」提示）。
+// 数据库上没有 CHECK 挡它：挡了的话这条端点一家非默认门店都建不出来
+// （实测 23514），完整论证在 00020 里 stores 的定义上。
 //
 // region_id 不属于本租户时挂在复合外键上（23503），由 repository 翻成 422。
 // 不在这里先查一遍：先查后建之间的窗口里那个大区可以被软删掉。
@@ -591,8 +592,9 @@ type SetStoreFenceParams struct {
 // 整体替换围栏。地图上画的是一个环，没有「改第三个顶点」这种操作。
 //
 // geojson 传 NULL 即清空。清空只对默认门店合法 —— 给一家非默认门店清空围栏
-// 会让它永远接不到单，chk_store_fence_or_default 会当场拒绝（23514），
-// 由 repository 翻成契约的 409 store-fence-required。
+// 会让它永远接不到单。这一条由 repository.SetStoreFence 在调这条语句之前
+// 显式拒掉（409 store-fence-required），**不是数据库约束** ——
+// 那一版实测挡死了建普通店与切换默认店两条主路径（00020 里 stores 的定义）。
 //
 // **不在应用层先判一次「是不是默认店」**：先判后改之间另一个会话可以把
 // is_default 改掉，而 CHECK 约束是唯一真正能挡住它的东西。

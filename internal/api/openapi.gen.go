@@ -1426,10 +1426,11 @@ type AdminStore struct {
 	District  *string    `json:"district,omitempty"`
 
 	// Fence 电子围栏。**为 null 且 `is_default = false` 的门店是一家永远接不到单的店**——
-	// 它不会被任何坐标命中，也不是回落目标。数据库上有
-	// `CHECK (is_default OR fence IS NOT NULL)` 挡住这种组合，
-	// 但这条端点允许先建店后画围栏，所以这个字段在那个中间态是 null，
-	// 后台列表应当据此挂「未完成」提示。
+	// 它不会被任何坐标命中，也不是回落目标。
+	// 这是一个**可达的中间态**：建店不传围栏（`POST /admin/stores`），
+	// 以及把默认位让给别家（`PUT .../default`），都会造出它。
+	// 后台列表应当据此挂「未完成」提示——那个提示是这个状态唯一的出口，
+	// 数据库不挡它（理由见迁移 00020 里 `stores` 的定义）。
 	Fence *GeoPolygon `json:"fence,omitempty"`
 	Id    int64       `json:"id"`
 
@@ -2777,7 +2778,7 @@ type StoreCreateRequest struct {
 type StoreFenceRequest struct {
 	// Fence 传 `null` 即清空围栏。**清空只对默认门店合法**——
 	// 给一家非默认门店清空围栏会让它永远接不到单，返回 409
-	// （对应 `chk_store_fence_or_default`）。
+	// （`https://keel.dev/problems/store-fence-required`）。
 	Fence *GeoPolygon `json:"fence"`
 }
 

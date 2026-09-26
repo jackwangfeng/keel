@@ -362,8 +362,9 @@ func (s *AdminStoreService) DeleteStore(ctx context.Context, id int64) error {
 // SetFence 实现 PUT /admin/stores/{store_id}/fence。
 //
 // geojson 为 nil 即清空围栏。**清空只对默认门店合法**：一家非默认店没有围栏
-// 就是一家永远接不到单的店。那条判定由数据库的 chk_store_fence_or_default
-// 做，repository 把 23514 按约束名翻成 ErrStoreFenceRequired（409）。
+// 就是一家永远接不到单的店。那条判定在 repository.SetStoreFence 里
+// （ErrStoreFenceRequired → 409），**不是数据库约束** —— 做成约束的那一版
+// 实测挡死了建普通店与切换默认店两条主路径，论证在 00020 里 stores 的定义上。
 //
 // 合法性由 PostGIS 的 ST_IsValid 判，不在这里自己写一遍：自交多边形在
 // ST_Intersects 下行为未定义，而「哪里自交」这句话（ST_IsValidReason）
@@ -544,6 +545,19 @@ func (s *AdminStoreService) ClearStorePrice(ctx context.Context, storeID, skuID 
 		return err
 	}
 	return s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+		// 先确认这两个 id 真的存在 —— **这一步不能省，而且只能在这里做**。
+		//
+		// 那条 DELETE 对「本来就没有那一行」与「门店根本不存在」返回的东西
+		// 一模一样（都是 0 行，都成功），而契约把两者分成 204 与 404。
+		// 少了这一步，`DELETE /admin/stores/99999/skus/1/price` 会回 204 ——
+		// 调用方会以为自己撤销了一家并不存在的门店的价格，
+		// 而它下一次读回来仍然是老价。
+		if _, _, e := tx.StoreScope(ctx, storeID); e != nil {
+			return e
+		}
+		if _, e := tx.AdminFindSKU(ctx, skuID); e != nil {
+			return e
+		}
 		return tx.ClearStorePrice(ctx, storeID, skuID)
 	})
 }
@@ -576,6 +590,14 @@ func (s *AdminStoreService) ClearRegionPrice(ctx context.Context, regionID, skuI
 		return err
 	}
 	return s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+		// 同 ClearStorePrice：DELETE 分不开「没有覆盖」与「大区不存在」，
+		// 而契约把它们分成 204 与 404。
+		if _, e := tx.FindRegion(ctx, regionID); e != nil {
+			return e
+		}
+		if _, e := tx.AdminFindSKU(ctx, skuID); e != nil {
+			return e
+		}
 		return tx.ClearRegionPrice(ctx, regionID, skuID)
 	})
 }

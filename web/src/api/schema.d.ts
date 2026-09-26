@@ -2469,11 +2469,16 @@ export interface paths {
          * @description **围栏不在这里传。** 建店与画围栏分成两步（`PUT .../fence`），
          *     理由是它们在后台是两个界面：一个是表单，一个是地图。
          *
-         *     但数据库上有一条 `CHECK (is_default OR fence IS NOT NULL)`：
          *     **非默认门店没有围栏就是一家永远接不到单的店**，它不会被任何坐标命中，
          *     也不是回落目标。所以这条端点建出来的非默认门店在配上围栏之前，
          *     服务端要把它当成「未完成」——`AdminStore.fence` 为 `null` 即是那个状态，
          *     后台列表按它挂提示。
+         *
+         *     这一版曾经写着「数据库上有一条 `CHECK (is_default OR fence IS NOT NULL)`
+         *     挡住这种组合」。**那句话与这条端点不能同时成立**：本端点不收围栏，
+         *     于是那条 CHECK 让它建不出任何一家非默认门店（实测 23514）。CHECK 已经
+         *     删掉，规则退成 `PUT .../fence` 那一条路径上的服务端判定；
+         *     论证与实测记在迁移 00020 里 `stores` 的定义上。
          *
          *     建第一家门店时若还没有任何大区，返回 422（`region_id` 必填且必须存在）。
          */
@@ -2741,8 +2746,12 @@ export interface paths {
          *     ### 整体替换，不做局部编辑
          *
          *     地图上画的是一个环，没有「改第三个顶点」这种操作。
-         *     `PUT` 一次覆盖，`fence` 传 `null` 即清空——清空只对默认门店合法
-         *     （`chk_store_fence_or_default`），对普通门店返回 409。
+         *     `PUT` 一次覆盖，`fence` 传 `null` 即清空——清空只对默认门店合法，
+         *     对普通门店返回 409。判据在服务端（`repository.SetStoreFence`），
+         *     **不在数据库上**：这条规则曾经写成 `stores` 的一条
+         *     `CHECK (is_default OR fence IS NOT NULL)`，落地实测那条 CHECK 同时挡死了
+         *     建普通店（本端点按契约不收围栏）与切换默认门店（回填造出来的默认店没有
+         *     围栏），两条都是主路径。论证与实测记在迁移 00020 里 `stores` 的定义上。
          */
         put: {
             parameters: {
@@ -2780,8 +2789,8 @@ export interface paths {
                 };
                 /**
                  * @description 给一家**非默认**门店清空围栏。`type` 为
-                 *     `https://keel.dev/problems/store-fence-required`——
-                 *     对应 `chk_store_fence_or_default` 这条 CHECK。
+                 *     `https://keel.dev/problems/store-fence-required`。
+                 *     判据在服务端，不在数据库上（见本端点 description 末尾）。
                  */
                 409: {
                     headers: {
@@ -8058,10 +8067,11 @@ export interface components {
             lng?: number | null;
             /**
              * @description 电子围栏。**为 null 且 `is_default = false` 的门店是一家永远接不到单的店**——
-             *     它不会被任何坐标命中，也不是回落目标。数据库上有
-             *     `CHECK (is_default OR fence IS NOT NULL)` 挡住这种组合，
-             *     但这条端点允许先建店后画围栏，所以这个字段在那个中间态是 null，
-             *     后台列表应当据此挂「未完成」提示。
+             *     它不会被任何坐标命中，也不是回落目标。
+             *     这是一个**可达的中间态**：建店不传围栏（`POST /admin/stores`），
+             *     以及把默认位让给别家（`PUT .../default`），都会造出它。
+             *     后台列表应当据此挂「未完成」提示——那个提示是这个状态唯一的出口，
+             *     数据库不挡它（理由见迁移 00020 里 `stores` 的定义）。
              */
             fence?: components["schemas"]["GeoPolygon"] | null;
             /**
@@ -8154,7 +8164,7 @@ export interface components {
             /**
              * @description 传 `null` 即清空围栏。**清空只对默认门店合法**——
              *     给一家非默认门店清空围栏会让它永远接不到单，返回 409
-             *     （对应 `chk_store_fence_or_default`）。
+             *     （`https://keel.dev/problems/store-fence-required`）。
              */
             fence: components["schemas"]["GeoPolygon"] | null;
         };

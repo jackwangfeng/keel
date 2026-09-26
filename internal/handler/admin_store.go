@@ -526,7 +526,7 @@ func (h *AdminStoreHandler) DeleteStore(c *gin.Context) {
 // 两种输入在 Go 这一侧长得一样（都是 nil），而契约把不传定成 422。
 // 这里不额外区分：bindJSON 之后一个缺席的 required 字段与显式 null 无法分辨，
 // 而两者的意图（清空）在这条端点上恰好一致 —— 清空对非默认门店仍然是 409，
-// 那道判据在数据库的 chk_store_fence_or_default 上，跑不掉。
+// 那道判据在 repository.SetStoreFence 里。
 func (h *AdminStoreHandler) SetFence(c *gin.Context) {
 	id, ok := pathID(c, "store_id")
 	if !ok {

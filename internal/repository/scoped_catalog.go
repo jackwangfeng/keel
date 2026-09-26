@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/keel/keel/internal/repository/internal/db"
 )
@@ -23,15 +23,6 @@ import (
 // 合成一个的话，POST /admin/stores 里一个错的 region_id 会让整条端点回 404，
 // 而客户端会以为 /admin/stores 这个 URL 不存在。
 var ErrCatalogBadReference = errors.New("请求体里引用的对象不存在或不属于当前租户")
-
-// isCheckViolation 按**约束名**挑出 23514，与 isUniqueViolation 同一条理由：
-// 「凡是 23514 都当成同一件事」会把 chk_qty_nonneg 与
-// chk_store_fence_or_default 翻成同一个业务错误，而它们引导调用方去改的
-// 是两样完全不同的东西。
-func isCheckViolation(err error, constraint string) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == "23514" && pgErr.ConstraintName == constraint
-}
 
 // pgMessage 取 PostgreSQL 自己那句话，用来填 Problem 的 detail。
 //
