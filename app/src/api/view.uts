@@ -655,7 +655,6 @@ export function couponScopeText(scopes : CouponScope[]) : string {
   return t
 }
 
-/** 「2026-10-26T…」->「2026-10-26」。 */
 /** 「2026-09-30T16:00:00Z」->「2026-10-01」：同样按设备本地时区取日期，不截 UTC 的那一天。 */
 function day(iso : string) : string {
   const d = parseInstant(iso)

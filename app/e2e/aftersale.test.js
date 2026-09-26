@@ -13,6 +13,14 @@ const { randomUUID } = require('crypto')
 const { waitFor, waitEl, httpGet, httpRequest, apiBase, serverToken, loginInApp, placeOrder, staffToken, staffPost, uploadEvidenceFromTest } = require('./helpers')
 
 const env = process.env
+
+// 服务端时间（UTC 的 RFC3339）按本机时区出「MM-DD HH:mm」—— 和 App 的 shortTime 同一口径。
+// H5 无头跑时 Chrome 的时区跟随本机，测试进程也是本机，所以两边一致；不写死北京时间的钟点。
+function localShort(iso) {
+  const d = new Date(iso)
+  const p = (n) => String(n).padStart(2, '0')
+  return p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes())
+}
 const withStaff = (fixture) => (staffToken() || env[fixture] ? it : it.skip)
 // 只能由后台交单号的那几条（没有 staff token 的自动造数路径）。
 const withFixture = (fixture) => (env[fixture] ? it : it.skip)
@@ -120,6 +128,11 @@ describe('订单后半程', () => {
     const page = await program.navigateTo('/pages/refund/detail?refund_no=' + refundNo)
     await waitFor(page, '.t-display', (t) => t === '待买家退货')
     await waitEl(page, '.return-btn')
+    // 还没填物流时提示寄回截止时间（return_deadline_at，本地时区）。
+    const before = (await httpGet(apiBase() + '/refunds/' + refundNo, token)).body
+    expect(before.return_deadline_at).toBeTruthy()
+    expect(before.return_shipment == null).toBe(true)   // 这条要一张还没填过物流的单
+    await waitFor(page, '.return-deadline', (t) => t.includes('请在 ' + localShort(before.return_deadline_at) + ' 前寄回'))
     const no1 = 'E2E' + Date.now()
     await (await page.$$('.carrier-opt'))[0].tap()   // 顺丰 sf
     await (await page.$('.f-tracking')).input(no1)
@@ -196,6 +209,10 @@ describe('订单后半程', () => {
     }
     const page = await program.navigateTo('/pages/order/detail?order_no=' + orderNo)
     await waitFor(page, '.t-display', (t) => t === '已发货')
+    // 自动确认收货的时间照服务端的 auto_confirm_at 显示（本地时区），不再按 7 天估。
+    const autoAt = (await httpGet(apiBase() + '/orders/' + orderNo, token)).body.auto_confirm_at
+    expect(autoAt).toBeTruthy()
+    await waitFor(page, '.t-sub', (t) => t.includes(localShort(autoAt) + ' 未确认将自动确认收货'))
     await tapTwice(page, '.confirm-btn')
     await waitFor(page, '.t-display', (t) => t === '已完成')
     expect((await httpGet(apiBase() + '/orders/' + orderNo, token)).body.status).toBe(40)
