@@ -165,8 +165,8 @@ exit=2
 | H5（web） | ✅ `uni build --platform h5` | `dist/build/h5/*.html/js/css`，直接能发 | ✅ 跑 tsc |
 | Android | ✅ `uni build --platform app-android` | `dist/build/app-android/.uniappx/android/src/**/*.kt` —— **Kotlin 源码** | ❌ 不跑 |
 | Android apk | ✅ `make app-apk`（离线 SDK + Gradle，见下文「本地打 apk」） | `dist/keel-buyer-<版本>.apk` | 经 app-android 那一格 |
-| iOS | 未验证 | — | — |
-| 微信小程序 | 未验证（缺 `@dcloudio/uni-mp-weixin` 一系包，没继续装） | — | — |
+| iOS | ✅ `make app-ios`（见下文「本地打 iOS 包」） | `dist/ios-device/KeelBuyer.app` | 经 check_app_build |
+| 微信小程序 | ✅ `make app-build-mp-weixin` | `dist/build/mp-weixin`，微信开发者工具直接打开 | 经 check_app_build |
 
 「Android 到 Kotlin 为止」这件事值得说清楚：`uni build --platform app-android`
 在一台没有 HBuilderX、没有 Android SDK、没有 JDK 的机器上跑得通，它输出的是
@@ -290,6 +290,28 @@ Homebrew 装法：`brew install --cask android-commandlinetools`，再用 `sdkma
 - **明文 HTTP 是开着的**（`usesCleartextTraffic`），因为开发期地址是局域网 http。上线换
   HTTPS 后要关。
 
+## 微信小程序
+
+```bash
+KEEL_API_BASE=http://192.168.0.110:18099/api/v1 make app-build-mp-weixin
+# -> app/dist/build/mp-weixin，用微信开发者工具打开
+/Applications/wechatwebdevtools.app/Contents/MacOS/cli open --project "$PWD/app/dist/build/mp-weixin"
+```
+
+- uni-app x 从 4.41 起支持微信小程序（我们是 5.26）；支付宝小程序标的是 5.31 起，其余小程序平台不支持
+  （以编译器自带的 API 类型声明为准）。
+- AppID 在 `src/manifest.json` 的 `mp-weixin.appid`。**必须是小程序类型的 AppID**：拿一个小游戏的 AppID
+  开发者工具会进「小游戏模式」、模拟器黑屏、日志里 `gameLaunch error`，连空白小程序都跑不起来（实测）。
+- 接口地址：小程序和原生 App 一样没有页面 origin，`KEEL_API_BASE` 编进包里（`vite.config.js`）。
+  局域网 HTTP 地址只能在开发者工具里跑（`setting.urlCheck: false`）；真机预览与上线要 HTTPS 域名、
+  在小程序后台配成 request 合法域名。
+- 定位：`manifest.json` 里声明了 `scope.userLocation` 与 `requiredPrivateInfos: ["getLocation"]`，
+  首次进首页会弹授权框。拒绝时回落默认门店，和 App 同一条路径。
+- 实测（开发者工具 2.02 模拟器，`miniprogram-automator` 驱动，定位 mock 成失败）：首页回落默认门店、
+  20 件商品；登录；结算页带出默认地址并试算出应付；购物车；搜索。这些是一次性的手动验证，
+  **没有**做成 `app/e2e` 那样的用例。
+- 还没有的：微信登录（服务端绑微信回 501，现在用手机号 + 密码）、微信支付（沙箱那套是 App 的）。
+
 ## 本地打 iOS 包
 
 ```bash
@@ -360,8 +382,8 @@ H5 构建产物 + 一个把 `/api` 反代给 Keel 的静态服务器，用无头
 
 ### 完全没有验证的
 
-原生 App 形态（编到 Kotlin 为止，**没有 apk，没有在设备上跑过**）、iOS、
-微信小程序、多商家形态（`compose.multi.yaml` + Host 选店）。
+多商家形态（`compose.multi.yaml` + Host 选店）。微信小程序只在开发者工具的模拟器里跑过（见「微信小程序」），
+没有真机预览、没有上线。
 
 ### 沙箱支付这件事，请不要误读截图
 

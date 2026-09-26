@@ -48,10 +48,12 @@ const automatorRuntime = {
   },
 }
 
-// 原生 App 的默认服务地址（见 src/api/native-default.uts）。只在 app 平台注入：
+// 默认服务地址（见 src/api/native-default.uts）。原生 App 与小程序注入：两者都没有「页面 origin」，
+// 必须是绝对地址（小程序的 uni.request 拿到相对路径直接失败）。
 // H5 必须同源访问（服务端不发 CORS 头），永远用相对路径。
-const isApp = (process.env.UNI_PLATFORM || '').startsWith('app')
-const nativeApiBase = isApp ? process.env.KEEL_API_BASE || '' : ''
+const platform = process.env.UNI_PLATFORM || ''
+const needsAbsolute = platform.startsWith('app') || platform.startsWith('mp-')
+const nativeApiBase = needsAbsolute ? process.env.KEEL_API_BASE || '' : ''
 
 module.exports = {
   plugins: [automatorRuntime, uni()],
