@@ -10,7 +10,7 @@
 // 搜索概况只对全店范围的人显示（服务端对其他人 403，契约 GET /admin/reports/search）。
 
 import { computed, onMounted, ref, watch } from "vue";
-import { useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { QuestionFilled, Refresh } from "@element-plus/icons-vue";
 import {
     keel,
@@ -43,9 +43,12 @@ import { yuan } from "../../ui/format.ts";
 import ProblemAlert from "../../components/ProblemAlert.vue";
 import TrendChart from "./TrendChart.vue";
 
+const route = useRoute();
 const router = useRouter();
 
-const filters = ref<ReportFilterForm>({ period: "today", dateRange: null, storeId: null });
+// 地址栏的 ?period= 决定打开时看哪一段（今日 / 近 7 天……），方便把一个视图发给别人。
+const initialPeriod = PERIOD_OPTIONS.find((o) => o.value === route.query["period"] && o.value !== "custom")?.value ?? "today";
+const filters = ref<ReportFilterForm>({ period: initialPeriod, dateRange: null, storeId: null });
 const rangeError = ref("");
 
 const stores = ref<AdminStore[]>([]);
@@ -164,6 +167,13 @@ function countCard(key: string, title: string, hint: string, c: number, p: numbe
     return { key, title, hint, value: String(c), prev: String(p), change: deltaText(delta(c, p)), tone: tone(c, p, true) };
 }
 
+/** 退款卡的变化行：金额环比 + 本期退款率；两期都有退款率时再补一句百分点变化。 */
+function refundChange(c: ReportMetrics, p: ReportMetrics): string {
+    const base = `${deltaText(delta(c.refund_amount_cents, p.refund_amount_cents))} · 退款率 ${rateText(c.refund_rate)}`;
+    const pp = rateDeltaText(c.refund_rate, p.refund_rate);
+    return pp === "—" ? base : `${base}（${pp}）`;
+}
+
 const cards = computed<Card[]>(() => {
     const d = overview.value.data;
     if (d === null) return [];
@@ -181,7 +191,7 @@ const cards = computed<Card[]>(() => {
             hint: "按到账时间计：退款到账（已退款）的金额之和，不论那一单哪天付的款。审核中、退款中、已驳回不计。退款率 = 退款金额 ÷ 支付金额，可以大于 100%（本期退的是上期卖的）。",
             value: yuan(c.refund_amount_cents),
             prev: `${yuan(p.refund_amount_cents)} · 退款率 ${rateText(p.refund_rate)}`,
-            change: `${deltaText(delta(c.refund_amount_cents, p.refund_amount_cents))} · 退款率 ${rateText(c.refund_rate)}（${rateDeltaText(c.refund_rate, p.refund_rate)}）`,
+            change: refundChange(c, p),
             tone: tone(c.refund_amount_cents, p.refund_amount_cents, false),
         },
     ];
@@ -409,7 +419,7 @@ function openStore(id: number): void {
 }
 .cards {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
     gap: 12px;
     margin-bottom: 12px;
     min-height: 60px;
@@ -481,7 +491,7 @@ function openStore(id: number): void {
 }
 .bar-row {
     display: grid;
-    grid-template-columns: 120px 1fr 130px;
+    grid-template-columns: 150px 1fr 130px;
     align-items: center;
     gap: 8px;
     height: 28px;

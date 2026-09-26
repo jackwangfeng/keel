@@ -75,15 +75,15 @@ func sh(d, h, m, s int) time.Time { return time.Date(2025, 3, d, h, m, s, 0, sha
 
 type reportFixture struct {
 	*permFixture
-	users      map[string]int64
-	orders     map[string]int64
-	p2         int64 // 第二件商品，挂在 childCat 下
-	sku2       int64
-	rootCat    int64
-	childCat   int64
-	userSeq    int
-	paymentOf  map[int64]int64
-	refundSeq  int
+	users     map[string]int64
+	orders    map[string]int64
+	p2        int64 // 第二件商品，挂在 childCat 下
+	sku2      int64
+	rootCat   int64
+	childCat  int64
+	userSeq   int
+	paymentOf map[int64]int64
+	refundSeq int
 }
 
 func newReportFixture(t *testing.T) *reportFixture {
@@ -266,6 +266,14 @@ func (fx *reportFixture) get(t *testing.T, role permRole, path string, v any) {
 		http.StatusOK, "GET "+path+"（"+role.String()+"）", v)
 }
 
+// fmtRate 把可空的比率打印成数或 null（%v 打出来的是指针地址）。
+func fmtRate(r *float64) string {
+	if r == nil {
+		return "null"
+	}
+	return fmt.Sprintf("%.6f", *r)
+}
+
 func wantMetrics(t *testing.T, what string, got api.ReportMetrics, paid, refund, orders, buyers, refunds int64) {
 	t.Helper()
 	if got.PaidAmountCents != paid || got.RefundAmountCents != refund || got.OrderCount != orders ||
@@ -294,7 +302,7 @@ func TestReportOverviewMetricDefinitions(t *testing.T) {
 		t.Errorf("客单价 = %d，想要 7900 ÷ 4 = 1975", o.Current.AvgOrderValueCents)
 	}
 	if o.Current.RefundRate == nil || math.Abs(*o.Current.RefundRate-2250.0/7900.0) > 1e-9 {
-		t.Errorf("退款率 = %v，想要 2250 ÷ 7900", o.Current.RefundRate)
+		t.Errorf("退款率 = %s，想要 2250 ÷ 7900", fmtRate(o.Current.RefundRate))
 	}
 	wantMetrics(t, "全店上一周期（03-08 ～ 03-09）", o.Previous, 700, 0, 1, 1, 0)
 
@@ -417,8 +425,8 @@ func TestReportsAreScopedLikeTheOrderList(t *testing.T) {
 	fx.seedStandard(t)
 
 	cases := []struct {
-		role                           permRole
-		query                          string
+		role                            permRole
+		query                           string
 		paid, refund, orders, buyers, n int64
 	}{
 		{roleOperator, "", 7900, 2250, 5, 4, 4},
@@ -680,7 +688,7 @@ func TestReportSearchOverview(t *testing.T) {
 		t.Errorf("搜索 %d 次、无结果 %d、有点击 %d；想要 6 / 3 / 1", so.SearchCount, so.ZeroResultCount, so.ClickCount)
 	}
 	if so.ZeroResultRate == nil || *so.ZeroResultRate != 0.5 {
-		t.Errorf("无结果率 = %v，想要 0.5", so.ZeroResultRate)
+		t.Errorf("无结果率 = %s，想要 0.5", fmtRate(so.ZeroResultRate))
 	}
 	terms := func(ts []api.ReportSearchTerm) string {
 		parts := []string{}

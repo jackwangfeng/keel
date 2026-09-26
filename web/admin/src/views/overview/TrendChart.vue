@@ -33,8 +33,9 @@ onMounted(() => {
 onBeforeUnmount(() => ro?.disconnect());
 
 const box = computed<PlotBox>(() => ({ width: width.value, height: 240, left: 56, right: 16, top: 12, bottom: 28 }));
+// 全零（或很小）时纵轴至少到 ¥100：否则五根刻度全写着 ¥0，一条贴底的线看不出是「没有成交」。
 const ticks = computed(() =>
-    niceTicks(Math.max(0, ...props.points.flatMap((p) => [p.paid_amount_cents, p.refund_amount_cents]))),
+    niceTicks(Math.max(10_000, ...props.points.flatMap((p) => [p.paid_amount_cents, p.refund_amount_cents]))),
 );
 const top = computed(() => ticks.value[ticks.value.length - 1] ?? 1);
 const paths = computed(() =>
