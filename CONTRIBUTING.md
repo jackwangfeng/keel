@@ -32,7 +32,7 @@
 |---|---|---|
 | Go | 1.26+ | 后端。下限由 `tools/` 里钉的 sqlc 与 goose 传染而来——两者都声明 `go 1.26` |
 | Rust | **1.88+** | **必需**（M2 起）：编译 dtmrs 的 C ABI 动态库，主模块经 cgo 嵌入它。`make dtmrs-deps` 会取回源码并编出 `third_party/dtmrs/lib/libdtmrs.so`；`make build` 与 `make test-db` 缺了它会自动建一次。**下限不是 dtmrs 声明的 1.82** —— 那是它的 `rust-version`，而卡住构建的是它 `Cargo.lock` 锁定的依赖树：实测 1.85.1 直接报 `home@0.5.12 requires rustc 1.88`。Debian trixie 的 apt 版正好是 1.85.1，不够，用 rustup。已验证于 1.94.0（本机）与镜像里的 `rust:1.90-slim-trixie` |
-| PostgreSQL | 16+ **且同时装了 pgvector 0.8+ 与 PostGIS 3+** | 两条扩展各有一条迁移点名要它：`00016` 的第一句是 `CREATE EXTENSION IF NOT EXISTS vector`，`00020` 的第一句是 `CREATE EXTENSION IF NOT EXISTS postgis`。缺哪一个都是整条迁移链断在那里，而错误停在 goose 上、不指向真因。**没有任何官方镜像同时带这两样**（pgvector 上游的镜像没有 PostGIS，PostGIS 上游的没有 pgvector），所以仓库自建：`docker/postgres/Dockerfile`，`docker build -t keel-postgres:16 docker/postgres`（本机实测 90 秒，之后走层缓存）。实测 PostgreSQL 16.15 / vector 0.8.6 / postgis 3.4.3；前两个与换镜像之前逐项一致。0.8 是 `hnsw.iterative_scan` 的下限 |
+| PostgreSQL | 16+ **且同时装了 pgvector 0.8+ 与 PostGIS 3+** | 两条扩展各有一条迁移点名要它：`00016` 的第一句是 `CREATE EXTENSION IF NOT EXISTS vector`，`00020` 的第一句是 `CREATE EXTENSION IF NOT EXISTS postgis`。缺哪一个都是整条迁移链断在那里，而错误停在 goose 上、不指向真因。**没有任何官方镜像同时带这两样**（pgvector 上游的镜像没有 PostGIS，PostGIS 上游的没有 pgvector），所以仓库自建：`docker/postgres/Dockerfile`，`docker build -t keel-postgres:16 docker/postgres`（本机实测约 60 秒，之后走层缓存）。底座是官方 `postgres:16-bookworm`，两个扩展都从 PGDG 装。实测 PostgreSQL 16.15 / vector 0.8.6 / postgis 3.6.4 / glibc 2.36；PG、vector、glibc 三项与换镜像之前逐项一致 —— **glibc 那一项最要紧**，它决定旧数据卷挂上来之后文本索引还能不能信（见 `docker/postgres/Dockerfile` 文件头）。0.8 是 `hnsw.iterative_scan` 的下限 |
 | Node | 22.18+ | `make generate-ts` 生成 TS 侧契约类型、`make schema-check` 编译 `web/src`、`make sdk-smoke` 直接跑 `.mts`（靠 Node 自带的类型剥离，不经构建步骤——这是下限的来源）。已验证于 v24.10.0 |
 | Docker | 任意近期版本 | `docker compose up` 起全栈 |
 
@@ -59,7 +59,7 @@
 `docker compose` 用的也是它。
 
 ```bash
-docker build -t keel-postgres:16 docker/postgres   # 本机实测 90 秒，之后走层缓存
+docker build -t keel-postgres:16 docker/postgres   # 本机实测约 60 秒，之后走层缓存
 docker run -d --name keel-pg -e POSTGRES_PASSWORD=keel -e POSTGRES_USER=keel \
     -e POSTGRES_DB=keel -p 5432:5432 keel-postgres:16
 make migrate          # 迁到最新；make migrate-status 看状态，make migrate-down 回滚一格
@@ -74,10 +74,19 @@ PGPORT=5433 make migrate
 PGPORT=5433 make test-db
 ```
 
-> 已经有一个旧的 `keel-pg`（跑着 `pgvector/pgvector:pg16`）的话，**换镜像要连卷
-> 一起换**：PostGIS 的入口脚本只在数据目录为空时建扩展，挂着旧 `pgdata` 起新镜像
-> 是「镜像里有、这个库里没建过」。迁移里那句 `CREATE EXTENSION IF NOT EXISTS
-> postgis` 正是为这种情况写的，它会补上；但旧容器本身要先删掉。
+> 已经有一个旧的 `keel-pg`（跑着 `pgvector/pgvector:pg16`）的话，**数据卷可以留着**，
+> 只换容器：删掉旧容器，用同一个卷起 `keel-postgres:16`，再 `make migrate`。
+> 两个镜像的底座都是 Debian bookworm、glibc 2.36，排序规则对得上；PostGIS 由
+> `00020` 那句 `CREATE EXTENSION IF NOT EXISTS postgis` 在迁移时补建 ——
+> 官方 postgres 镜像的入口脚本本来就不建任何扩展，这句话正是为挂着旧卷升级上来
+> 的库写的。
+>
+> **唯一的例外**：如果你的卷**曾经**被 `keel-postgres:16` 的第一版（底座是
+> bullseye、glibc 2.31，M4 合并后短暂存在过）打开过，PostgreSQL 会报
+> `collation version mismatch`。那时在库里跑一次
+> `REINDEX DATABASE keel; ALTER DATABASE keel REFRESH COLLATION VERSION;`
+> —— 前一句重建在错的排序规则下建出来的文本索引，后一句只是清掉警告，
+> **单跑后一句不修任何东西**。
 
 ### 两个角色，别用错
 

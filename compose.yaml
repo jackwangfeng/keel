@@ -27,16 +27,22 @@ services:
     #
     # 原先那三条判据逐条重算（数据模型 §4「数据库镜像」那一节有完整的表）：
     #   · 有没有现成的官方镜像：当时有，现在**没有**。这一条翻了，别的都从它派生。
-    #   · 体积：438 MB → 794 MB（实测）。多出来的约 350 MB 是 GEOS / PROJ / GDAL。
-    #   · 构建代价：多一次 docker build，本机实测 90 秒（拉基础镜像 19 s +
-    #     apt 68 s），之后走层缓存。
-    #   · 可信度不变：底座是 PostGIS 上游自己发的镜像，pgvector 来自 PGDG
-    #     官方 apt 源（apt.postgresql.org），同样是 pgvector 的官方分发渠道。
+    #   · 体积：438 MB → 648 MB（实测）。多出来的约 210 MB 是 GEOS / PROJ / GDAL。
+    #   · 构建代价：多一次 docker build，本机实测约 60 秒（apt 占大头），
+    #     之后走层缓存。
+    #   · 可信度不变：底座是官方 postgres:16-bookworm，PostGIS 与 pgvector
+    #     都来自 PGDG 官方 apt 源（apt.postgresql.org）。
     #
-    # **最要紧的一行**：实测 PostgreSQL 16.15 / vector 0.8.6 / postgis 3.4.3，
-    # 其中 16.15 与 0.8.6 和换之前的 pgvector/pgvector:pg16 逐项一致 ——
-    # 换镜像不改变 M3 依赖的任何东西，`hnsw.iterative_scan` 要的 vector ≥ 0.8
-    # 仍然满足（00016 文件头把它列为多租户下向量召回可用的前提）。
+    # **底座换过一次**：第一版是 postgis/postgis:16-3.4，它是 Debian 11
+    # bullseye（glibc 2.31），而旧 pgvector 镜像是 bookworm（glibc 2.36）。
+    # 挂着旧卷换上去，PostgreSQL 当场报排序规则版本不匹配 —— 那是文本索引
+    # 静默失效的前兆；而且 bullseye 在 2026-06-30 已经完全停止支持。
+    # 完整经过写在 docker/postgres/Dockerfile 的文件头。
+    #
+    # **最要紧的一行**：实测 PostgreSQL 16.15 / vector 0.8.6 / postgis 3.6.4，
+    # glibc 2.36-9+deb12u14。其中 PG、vector 与 glibc 三项和换之前的
+    # pgvector/pgvector:pg16 逐项一致 —— glibc 那一项是第一版漏掉的，
+    # 它决定了旧数据卷挂上来之后索引还能不能信。
     #
     # 00016 那条 `CREATE EXTENSION IF NOT EXISTS vector` 报错时的症状照旧：
     # `up -d` 只等到容器启动就返回 0，app 因为 depends_on 根本不起，
