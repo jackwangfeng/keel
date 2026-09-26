@@ -135,10 +135,11 @@ docker compose logs app | grep bootstrap_token
 > `web/src/api/schema.d.ts`。契约改个字段名，后台的类型检查当场变红
 > （`make admin-type-check`，已接进 `./scripts/check-all.sh`）。
 >
-> 今天的后台覆盖商品、SKU、库存、类目、上传、员工、开店。
-> **门店与大区只留了菜单位置**，点进去是一句「还没接上」——那部分契约
-> 还没合进 main，而契约里没有的接口这个后台不画。订单同理：契约里没有
-> 「后台订单列表」这条接口，那一页写的是这件事本身。
+> 今天的后台覆盖商品、SKU、库存、类目、上传、员工、开店，以及**大区与门店**：
+> 大区 / 门店维度的商品可见性与定价、门店库存，和在 OpenStreetMap 上画的
+> 电子围栏（WGS-84，与库里的 `GEOGRAPHY(POLYGON, 4326)` 和买家端定位同一个
+> 坐标系，不经任何换算）。订单这一页只有字：契约里没有「后台订单列表」
+> 这条接口，那一页写的是这件事本身。
 
 要多商家形态（由 `Host` 头决定是哪家店）：
 `docker compose -f compose.yaml -f compose.multi.yaml up -d --build`。

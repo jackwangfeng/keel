@@ -165,7 +165,11 @@ async function saveFence(fence: GeoPolygon | null): Promise<void> {
     } catch (err) {
         fenceError.value = err;
         if (isProblemType(err, ProblemType.invalidFence) && err instanceof ProblemError) {
-            fenceErrorAt.value = fenceErrorPoint(err.problem.detail ?? "");
+            // 契约说 ST_IsValidReason 在 detail 里；**实测服务端把它放在 title 里、
+            // detail 缺席**（internal/handler/admin_store.go 用的是只写 title 的
+            // problem.Write）。两处都找，谁有用谁——界面上反正两个都原样显示。
+            fenceErrorAt.value =
+                fenceErrorPoint(err.problem.detail ?? "") ?? fenceErrorPoint(err.problem.title);
         }
     } finally {
         fenceBusy.value = false;
