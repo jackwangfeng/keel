@@ -250,13 +250,27 @@ func (s *SweepService) SweepOnce(ctx context.Context) (SweepReport, error) {
 	start := int(s.cursor % uint64(len(merchants)))
 	s.cursor++
 
-	budget := s.cfg.RoundBudget
+	rep.Fallback = fairRound(merchants, start, s.cfg.PerTenantCap, s.cfg.RoundBudget,
+		func(merchantID int64, limit int) int {
+			return s.sweepTenant(ctx, merchantID, limit, &rep)
+		})
+	return rep, nil
+}
 
-	// 第一趟：每家至多 PerTenantCap。
+// fairRound 跑一轮公平调度：两趟、每租户上限、总预算、轮转起点（文件头那三条）。
+//
+// work(merchantID, limit) 处理一家至多 limit 笔，返回**动过的**笔数（含竞态与失败，
+// 理由见 sweepTenant）。返回值是这一轮有没有跑兜底那一趟。
+//
+// 超时关单与自动确认收货（auto_confirm.go）共用它。两个任务的「处置一笔」完全不同，
+// 而「这一轮先给谁、给多少、谁被卡住了要不要再扫一趟」是同一个问题 ——
+// 写成两份的话，哪天有人只在其中一份里修了一个饿死问题，另一个任务照旧饿着。
+func fairRound(merchants []int64, start, perTenantCap, budget int, work func(int64, int) int) bool {
+	// 第一趟：每家至多 perTenantCap。
 	capped := false
 	for i := 0; i < len(merchants) && budget > 0; i++ {
-		take := min(s.cfg.PerTenantCap, budget)
-		done := s.sweepTenant(ctx, merchants[(start+i)%len(merchants)], take, &rep)
+		take := min(perTenantCap, budget)
+		done := work(merchants[(start+i)%len(merchants)], take)
 		budget -= done
 		if done >= take {
 			// 这家取满了配额，说明它**可能**还有积压。记下来，兜底那一趟据此触发。
@@ -272,13 +286,13 @@ func (s *SweepService) SweepOnce(ctx context.Context) (SweepReport, error) {
 	// 两个条件缺一不可。少了 capped，一轮里所有店都没积压时也会白扫第二遍；
 	// 少了 budget > 0，兜底会把总预算这道闸门整个绕开，而那道闸门是这个任务
 	// 对数据库的压力上限。
-	if capped && budget > 0 {
-		rep.Fallback = true
-		for i := 0; i < len(merchants) && budget > 0; i++ {
-			budget -= s.sweepTenant(ctx, merchants[(start+i)%len(merchants)], budget, &rep)
-		}
+	if !capped || budget <= 0 {
+		return false
 	}
-	return rep, nil
+	for i := 0; i < len(merchants) && budget > 0; i++ {
+		budget -= work(merchants[(start+i)%len(merchants)], budget)
+	}
+	return true
 }
 
 // sweepTenant 处理一家商户至多 limit 笔，返回**真的动过**的笔数（含竞态与失败）。

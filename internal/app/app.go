@@ -693,6 +693,13 @@ func Run(ctx context.Context, listen func(addr string, h http.Handler) error) er
 	sweeper := service.NewSweepService(repository.New(pool), service.SweepConfig{}, nil)
 	go sweeper.Run(bgCtx)
 
+	// 自动确认收货（数据模型 §5 发货第三条规则）：发货满 shop_settings.auto_confirm_days
+	// 天的 30 已发货订单推到 40。与超时补偿同一套机制（按租户扫描、同一份公平调度），
+	// 同一个生命周期。它不像超时补偿那样卡着库存，晚起一轮不丢任何东西，
+	// 所以不需要排在监听之前的那份讲究 —— 放在这里只是为了共用 bgCtx。
+	confirmer := service.NewAutoConfirmService(repository.New(pool), service.SweepConfig{}, nil)
+	go confirmer.Run(bgCtx)
+
 	// 派生数据入库的增量任务（M3 Task 3）：商品变了就把文本向量与 bigram 串重算。
 	//
 	// **没配 KEEL_EMBED_ENDPOINT 时它不启动，而且要喊出来。**

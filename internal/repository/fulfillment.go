@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/keel/keel/internal/repository/internal/db"
 )
@@ -77,6 +78,25 @@ type FulfillmentTx interface {
 
 	// ListOrderShipments 这一单的包裹。
 	ListOrderShipments(ctx context.Context, orderID int64) ([]Shipment, error)
+
+	// ListAutoConfirmableOrders 发货早于 cutoff、仍在 30、没有在途售后的订单，
+	// 按发货时间从早到晚，至多 limit 笔（自动确认收货的扫描，00036）。
+	ListAutoConfirmableOrders(ctx context.Context, cutoff time.Time, limit int32) ([]AutoConfirmCandidate, error)
+
+	// OrderHasOpenRefund 这一单此刻有没有 10 / 20 / 30 的退款单。
+	// 在订单行锁之下调用才有意义（申请退款也先锁订单行）。
+	OrderHasOpenRefund(ctx context.Context, orderID int64) (bool, error)
+}
+
+// AutoConfirmCandidate 是自动确认收货扫到的一笔订单。
+//
+// 带 UserID 是因为处置走的是买家确认收货**同一条** UPDATE（ConfirmOrderReceipt，
+// 谓词里有 user_id）—— 自动确认就是「系统替买家点了确认收货」，
+// 状态迁移与副作用只该有一份。
+type AutoConfirmCandidate struct {
+	ID      int64
+	OrderNo string
+	UserID  int64
 }
 
 // transitionErr 把状态机触发器的 23514 挑成 ErrIllegalOrderTransition，
@@ -155,4 +175,24 @@ func (t tenantTx) ListOrderShipments(ctx context.Context, orderID int64) ([]Ship
 		})
 	}
 	return out, nil
+}
+
+func (t tenantTx) ListAutoConfirmableOrders(ctx context.Context, cutoff time.Time,
+	limit int32) ([]AutoConfirmCandidate, error) {
+	rows, err := t.q.ListAutoConfirmableOrders(ctx, db.ListAutoConfirmableOrdersParams{
+		Cutoff:    pgtype.Timestamptz{Time: cutoff, Valid: true},
+		PageLimit: limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]AutoConfirmCandidate, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, AutoConfirmCandidate{ID: r.ID, OrderNo: r.OrderNo, UserID: r.UserID})
+	}
+	return out, nil
+}
+
+func (t tenantTx) OrderHasOpenRefund(ctx context.Context, orderID int64) (bool, error) {
+	return t.q.OrderHasOpenRefund(ctx, orderID)
 }
