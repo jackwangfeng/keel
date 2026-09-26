@@ -129,6 +129,23 @@ jobs:
             --build-arg "KEEL_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             -t "$IMAGE:$V" -t "$IMAGE:latest" .
 
+          # 只有 API 镜像的话，不从源码构建就起不来一整套：还要带扩展的 Postgres
+          # （pgvector + PostGIS）、跑迁移的那一层、后台界面。
+          # 三者与 compose 里的 build 段一一对应，推到 $IMAGE-<名字>。
+          # source 标签让 ghcr 把新包挂到本仓库下。
+          src="org.opencontainers.image.source=https://github.com/${{ github.repository }}"
+          # shellcheck disable=SC2046
+          docker build $(scripts/ci_build_proxy_args.sh) --label "$src" \
+            -f docker/Dockerfile --target migrate \
+            -t "$IMAGE-migrate:$V" -t "$IMAGE-migrate:latest" .
+          # shellcheck disable=SC2046
+          docker build $(scripts/ci_build_proxy_args.sh) --label "$src" \
+            -f docker/Dockerfile.admin --target console \
+            -t "$IMAGE-console:$V" -t "$IMAGE-console:latest" .
+          # shellcheck disable=SC2046
+          docker build $(scripts/ci_build_proxy_args.sh) --label "$src" \
+            -t "$IMAGE-postgres:$V" -t "$IMAGE-postgres:latest" docker/postgres
+
       # 这一步存在的理由很具体：-ldflags 那条链子有四个环节（Makefile、
       # Dockerfile 的 ARG、compose 的 args、internal/buildinfo 的变量路径），
       # 其中任何一环写错**都不会让构建失败**，只会让版本号静默退回 "dev"。
@@ -165,13 +182,15 @@ jobs:
           set -euo pipefail
           echo "${{ secrets.GITHUB_TOKEN }}" \
             | docker login "$REGISTRY" -u "${{ github.actor }}" --password-stdin
-          docker push "$IMAGE:$V"
           # latest 只跟正式版走。预发布（v0.2.0-rc.1）推自己的标签，
           # 但不该把 `docker pull keel` 的人带到一个 rc 上。
-          case "$V" in
-            *-*) echo "预发布，不动 latest" ;;
-            *)   docker push "$IMAGE:latest" ;;
-          esac
+          for img in "$IMAGE" "$IMAGE-migrate" "$IMAGE-console" "$IMAGE-postgres"; do
+            docker push "$img:$V"
+            case "$V" in
+              *-*) echo "预发布，不动 $img:latest" ;;
+              *)   docker push "$img:latest" ;;
+            esac
+          done
 
   # ---------------------------------------------------------------------
   # Release 页面。正文来自 CHANGELOG，不是从 commit 生成的。
@@ -199,7 +218,10 @@ jobs:
           ## Running this release
 
           \`\`\`
-          docker pull $IMAGE:$V
+          docker pull $IMAGE:$V            # API
+          docker pull $IMAGE-migrate:$V    # goose + migrations
+          docker pull $IMAGE-postgres:$V   # Postgres 16 with pgvector + PostGIS
+          docker pull $IMAGE-console:$V    # merchant console (nginx, proxies /api to app)
           \`\`\`
 
           Or clone at the tag and \`docker compose up\` — the compose file
