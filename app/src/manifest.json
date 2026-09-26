@@ -26,6 +26,18 @@
       }
     }
   },
+  "mp-weixin": {
+    "appid": "wx49d872db96d90546",
+    "setting": {
+      "urlCheck": false
+    },
+    "permission": {
+      "scope.userLocation": {
+        "desc": "按你的位置选择就近的门店，价格与库存跟着门店走"
+      }
+    },
+    "requiredPrivateInfos": ["getLocation"]
+  },
   "app-ios": {
     "distribute": {
       "modules": {

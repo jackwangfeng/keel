@@ -71,7 +71,7 @@ GOOSE := GOOSE_DRIVER=postgres GOOSE_DBSTRING="$(GOOSE_DBSTRING)" \
 	$(GOOSE_BIN)
 
 .PHONY: help generate generate-go generate-ts generate-sql generate-uts tools-versions version \
-	contract-check schema-check app-type-check admin-install admin-type-check admin-test admin-build app-install app-build-h5 app-build-android app-apk app-apk-e2e app-e2e app-adb-wifi app-ios app-ios-e2e app-e2e-ios \
+	contract-check schema-check app-type-check admin-install admin-type-check admin-test admin-build app-install app-build-h5 app-build-android app-build-mp-weixin app-apk app-apk-e2e app-e2e app-adb-wifi app-ios app-ios-e2e app-e2e-ios \
 	sdk-smoke goose-bin migrate migrate-down migrate-status test-db \
 	test-engine dtmrs-deps build
 
@@ -90,6 +90,7 @@ help:
 	@echo "make admin-build    构建商家后台静态产物（compose 起栈时会自己构建，日常不用跑）"
 	@echo "make app-install    装客户端依赖（含 npm 跳过 uts 原生 binding 的绕法）"
 	@echo "make app-build-h5   用 DCloud 编译器真编一遍 H5（要先 app-install）"
+	@echo "make app-build-mp-weixin  编微信小程序到 app/dist/build/mp-weixin（读 KEEL_API_BASE）"
 	@echo "make app-apk        本地打 Android apk（KEEL_API_BASE=http://host:port/api/v1 指定默认服务地址）"
 	@echo "make app-apk-e2e    打带自动化运行时的测试包（同样读 KEEL_API_BASE）"
 	@echo "make app-e2e        在 Android 真机上跑 app/e2e 下的自动化用例（USB 或无线）"
@@ -219,6 +220,11 @@ app-build-h5:
 
 app-build-android:
 	python3 $(ROOT)/scripts/check_app_build.py app-android
+
+# 微信小程序。产物用微信开发者工具打开 app/dist/build/mp-weixin。小程序没有「页面 origin」，
+# 和原生 App 一样要绝对地址：KEEL_API_BASE 编进去（见 app/vite.config.js）。
+app-build-mp-weixin:
+	python3 $(ROOT)/scripts/check_app_build.py mp-weixin
 
 # 本地打 apk：离线 SDK + Gradle，不经 HBuilderX、不上传。前置条件（JDK 17、Android SDK）
 # 与流程写在脚本头里。KEEL_API_BASE 是原生 App 的默认服务地址，不设就要在 App 里手填。
