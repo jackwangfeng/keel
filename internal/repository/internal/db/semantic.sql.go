@@ -83,6 +83,81 @@ func (q *Queries) ListProductsForIndex(ctx context.Context, arg ListProductsForI
 	return items, nil
 }
 
+const listProductsForIndexByIDs = `-- name: ListProductsForIndexByIDs :many
+SELECT p.id, p.title, p.subtitle, c.name AS category_name,
+       p.updated_at, p.search_text,
+       pu.input_hashes,
+       v.model_name    AS vector_model_name,
+       v.model_version AS vector_model_version
+  FROM products p
+  JOIN categories c ON c.id = p.category_id
+  LEFT JOIN product_understanding pu ON pu.product_id = p.id
+  LEFT JOIN product_text_vectors  v  ON v.product_id  = p.id
+ WHERE p.deleted_at IS NULL
+   AND p.status = 1
+   AND p.id = ANY($1::bigint[])
+ ORDER BY p.id
+`
+
+type ListProductsForIndexByIDsRow struct {
+	ID                 int64
+	Title              string
+	Subtitle           *string
+	CategoryName       string
+	UpdatedAt          pgtype.Timestamptz
+	SearchText         *string
+	InputHashes        []byte
+	VectorModelName    *string
+	VectorModelVersion *string
+}
+
+// 队列那条路：worker 出队之后按 product_id 把候选行读回来。
+//
+// 它与上面两条 SELECT 的列完全一致 —— 三条路（触发点增量 / 全量翻页 / 队列）
+// 喂给同一个判定函数（internal/service/index.go 的 decide），列对不上时
+// 症状是某一条路的判定读到零值、于是永远判成「要重算」，钱白花而不报错。
+//
+// ### 这条查询顺带补上了队列那张表缺掉的那道防线
+//
+// jobs **没有 RLS**（00022 文件头第一节）。于是一条 payload 里写着别家商品
+// product_id 的任务，理论上能被派到当前这家店的 worker 手里。而这条查询跑在
+// 一个设好 app.merchant_id 的事务里，products 是 tenant 类 ——
+// 那一行读不出来，这件任务的判定结果是「商品不在了」，直接标成功收摊。
+// 也就是说：**队列可以指错，写回不会写错**。
+//
+// status = 1 AND deleted_at IS NULL 与另外两条逐字一致。入队与出队之间商品
+// 被下架或软删是正常的（队列是异步的），那时这条查询读不到它 ——
+// 调用方据此把任务标成成功而不是失败：没有东西可做不是故障。
+func (q *Queries) ListProductsForIndexByIDs(ctx context.Context, productIds []int64) ([]ListProductsForIndexByIDsRow, error) {
+	rows, err := q.db.Query(ctx, listProductsForIndexByIDs, productIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListProductsForIndexByIDsRow
+	for rows.Next() {
+		var i ListProductsForIndexByIDsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Title,
+			&i.Subtitle,
+			&i.CategoryName,
+			&i.UpdatedAt,
+			&i.SearchText,
+			&i.InputHashes,
+			&i.VectorModelName,
+			&i.VectorModelVersion,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listStaleProductsForIndex = `-- name: ListStaleProductsForIndex :many
 
 SELECT p.id, p.title, p.subtitle, c.name AS category_name,

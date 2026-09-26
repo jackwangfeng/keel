@@ -68,6 +68,24 @@ type InventoryLog struct {
 	CreatedAt       pgtype.Timestamptz
 }
 
+type Job struct {
+	ID          int64
+	MerchantID  int64
+	Queue       string
+	JobKey      string
+	Payload     []byte
+	Priority    int16
+	Status      int16
+	Attempts    int32
+	MaxAttempts int32
+	RunAfter    pgtype.Timestamptz
+	LockedBy    *string
+	LockedAt    pgtype.Timestamptz
+	LastError   *string
+	CreatedAt   pgtype.Timestamptz
+	UpdatedAt   pgtype.Timestamptz
+}
+
 type Merchant struct {
 	ID        int64
 	Code      string

@@ -87,36 +87,51 @@ func run(ctx context.Context, merchant int64, force bool) error {
 	}
 
 	started := time.Now()
+
+	// 两段：先把全部商户的商品**入队**，再把队列抽干。
+	//
+	// 分两段而不是一家一家「入队 + 处理」跑完再下一家，是为了让每租户在途上限
+	// 真的有事可做（数据模型 §12 / 商品理解服务设计 §8）：全部入队之后，
+	// 出队那条 SQL 才同时看得见多家店的待办，公平调度才有得调。
+	// 一家一家串着跑的话，队列里永远只有一家店的任务，那条上限一次都不生效 ——
+	// 而这条命令恰恰是 §8 那个场景（「一个新商家导入一次商品目录」）的发源地。
 	var total service.IndexReport
 	for _, m := range merchants {
 		rep, err := idx.Backfill(ctx, m, force)
 		if err != nil {
 			return fmt.Errorf("商户 %d: %w", m, err)
 		}
-		log.Info("全量索引完成一家商户", "merchant_id", m,
-			"judged", rep.Judged, "embedded", rep.Embedded,
-			"search_text", rep.SearchTextWritten, "skipped", rep.Skipped,
-			"raced", rep.Raced, "failed", rep.Failed, "engine_down", rep.EngineDown)
-		total.Judged += rep.Judged
-		total.Embedded += rep.Embedded
-		total.SearchTextWritten += rep.SearchTextWritten
-		total.Skipped += rep.Skipped
-		total.Raced += rep.Raced
-		total.Failed += rep.Failed
-		total.EngineDown += rep.EngineDown
+		log.Info("全量入队完成一家商户", "merchant_id", m,
+			"scanned", rep.Scanned, "enqueued", rep.Enqueued, "deduped", rep.Deduped)
+		total = total.Merge(rep)
 	}
 
-	fmt.Printf("全量索引完成：%d 家商户，判定 %d 件，重算向量 %d 条，"+
-		"重写 bigram 串 %d 条，跳过 %d 件，竞态 %d 件，失败 %d 件，引擎故障 %d 次，耗时 %s\n",
-		len(merchants), total.Judged, total.Embedded, total.SearchTextWritten,
-		total.Skipped, total.Raced, total.Failed, total.EngineDown,
+	// 抽干。
+	//
+	// **它会连别人入队的任务一起做掉** —— 队列是共享的，出队按 (priority, id)
+	// 给出全局顺序，不按「是谁入的」。这不是缺陷：这条命令的目的就是把活干完，
+	// 而多做几条别人的任务与少做几条自己的相比，前者无害。
+	// 真正要注意的是反过来：服务进程如果正开着，它自己的消费者也在抽同一个队列，
+	// 于是这条命令报出来的数字会**少于**它入队的数量。那也是对的。
+	work, err := idx.Drain(ctx)
+	if err != nil {
+		return fmt.Errorf("抽干队列失败: %w", err)
+	}
+	total = total.Merge(work)
+
+	fmt.Printf("全量索引完成：%d 家商户，扫描 %d 件（入队 %d / 已在队列 %d），"+
+		"判定 %d 件，重算向量 %d 条，重写 bigram 串 %d 条，跳过 %d 件，"+
+		"竞态 %d 件，商品已不在 %d 件，失败 %d 件，死信 %d 条，引擎故障 %d 次，耗时 %s\n",
+		len(merchants), total.Scanned, total.Enqueued, total.Deduped,
+		total.Judged, total.Embedded, total.SearchTextWritten, total.Skipped,
+		total.Raced, total.Gone, total.Failed, total.DeadLettered, total.EngineDown,
 		time.Since(started).Round(time.Millisecond))
 
 	// 失败要反映在退出码上。一条打印着「完成」却其实一半没做的命令，
 	// 在 CI 或运维脚本里等于没跑。
-	if total.Failed > 0 || total.EngineDown > 0 {
-		return fmt.Errorf("有 %d 件商品处理失败、%d 次引擎故障",
-			total.Failed, total.EngineDown)
+	if total.Failed > 0 || total.EngineDown > 0 || total.DeadLettered > 0 {
+		return fmt.Errorf("有 %d 件商品处理失败、%d 条任务进死信、%d 次引擎故障",
+			total.Failed, total.DeadLettered, total.EngineDown)
 	}
 	return nil
 }

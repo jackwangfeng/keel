@@ -208,6 +208,11 @@ func newIndexFixture(t *testing.T, tag string, n, perMerchant int, cfg service.I
 	t.Cleanup(func() {
 		c := context.Background()
 		for _, stmt := range []string{
+			// jobs 要排在 merchants 之前删：它有一条指向 merchants 的外键。
+			// 而它必须被删 —— 队列是**跨租户共享**的（00022：这张表没有 RLS），
+			// 留下的待执行任务会被下一个测试的 Drain 捞走，
+			// 而那时它指向的商品已经不在了。症状是别的测试里凭空多出一个 Gone。
+			`DELETE FROM jobs                  WHERE merchant_id = ANY($1)`,
 			`DELETE FROM product_text_vectors  WHERE merchant_id = ANY($1)`,
 			`DELETE FROM product_understanding WHERE merchant_id = ANY($1)`,
 			`DELETE FROM products              WHERE merchant_id = ANY($1)`,
@@ -237,6 +242,67 @@ func newIndexFixture(t *testing.T, tag string, n, perMerchant int, cfg service.I
 
 func quietLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+}
+
+// indexRound 跑一整轮：触发点扫描入队（生产者）+ 把队列抽干（消费者）。
+//
+// M3 那一版里这是一个方法（IndexOnce）：扫描、判定、调引擎、写回在一次调用里
+// 一气呵成。M4 阶段 1 把中间插进了 §12 那张 jobs 表，于是它成了两步。
+//
+// **测试仍然按「一轮」断言，是刻意的**：这一组测试守的是判据（触发点 + 判定）
+// 与写回的性质，那些性质一个字都没变；把它们改写成「断言队列里有几条」
+// 只会让它们跟着实现走，而不是跟着行为走。队列自己的性质（每租户在途上限、
+// 退避、死信、SKIP LOCKED）由 internal/repository/jobs_test.go 单独盯，
+// 那边才是它该被观察的地方。
+func indexRound(ctx context.Context, s *service.IndexService) (service.IndexReport, error) {
+	rep, err := s.EnqueueOnce(ctx)
+	if err != nil {
+		return rep, err
+	}
+	work, err := s.Drain(ctx)
+	return rep.Merge(work), err
+}
+
+// backfillRound 是 indexRound 的全量版：全量入队 + 抽干。
+func backfillRound(ctx context.Context, s *service.IndexService,
+	merchantID int64, force bool) (service.IndexReport, error) {
+	rep, err := s.Backfill(ctx, merchantID, force)
+	if err != nil {
+		return rep, err
+	}
+	work, err := s.Drain(ctx)
+	return rep.Merge(work), err
+}
+
+// backoffElapsed 把队列里全部待执行任务的 run_after 拨到过去，
+// 也就是「指数退避的那几秒过去了」。
+//
+// 不用真的 sleep：第一次失败的退避是 2 秒（§12 的 1 秒 × 2^attempts，
+// attempts 在占位时已经加到 1），把它乘进每一条重试路径的测试里，
+// 这一组测试会慢十几秒。而这里要观察的是「退避之后它回来了」，
+// 不是「退避真的等了 2 秒」—— 后者由 RetryJob 那条 SQL 的形状保证，
+// 由 internal/repository/jobs_test.go 直接读 run_after 来断言。
+func (f *indexFixture) backoffElapsed(t *testing.T) {
+	t.Helper()
+	f.exec(t, `UPDATE jobs SET run_after = now() - interval '1 second'
+	            WHERE merchant_id = ANY($1) AND status = 0`, f.merchants)
+}
+
+// job 读一件商品对应的那条任务（不论状态）。没有则 ok = false。
+func (f *indexFixture) job(t *testing.T, pid int64) (status int16, attempts int32,
+	lastErr *string, runAfter time.Time, ok bool) {
+	t.Helper()
+	err := f.admin.QueryRow(context.Background(),
+		`SELECT status, attempts, last_error, run_after FROM jobs
+		  WHERE job_key = $1 ORDER BY id DESC LIMIT 1`,
+		fmt.Sprintf("product:%d", pid)).Scan(&status, &attempts, &lastErr, &runAfter)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, 0, nil, time.Time{}, false
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return status, attempts, lastErr, runAfter, true
 }
 
 // --- 读库的小工具 ---
@@ -314,7 +380,7 @@ func TestIndexWritesVectorsAndSearchText(t *testing.T) {
 	ctx := context.Background()
 	f := newIndexFixture(t, "write", 2, 1, service.IndexConfig{})
 
-	rep, err := f.svc.IndexOnce(ctx)
+	rep, err := indexRound(ctx, f.svc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -407,7 +473,7 @@ func TestEmbedIsCalledOncePerTenantNotPerProduct(t *testing.T) {
 	ctx := context.Background()
 	f := newIndexFixture(t, "batch", 1, 5, service.IndexConfig{})
 
-	if _, err := f.svc.IndexOnce(ctx); err != nil {
+	if _, err := indexRound(ctx, f.svc); err != nil {
 		t.Fatal(err)
 	}
 	if len(f.emb.calls) != 1 {
@@ -429,12 +495,12 @@ func TestSecondRoundHasNothingToDo(t *testing.T) {
 	ctx := context.Background()
 	f := newIndexFixture(t, "idem", 1, 3, service.IndexConfig{})
 
-	if _, err := f.svc.IndexOnce(ctx); err != nil {
+	if _, err := indexRound(ctx, f.svc); err != nil {
 		t.Fatal(err)
 	}
 	callsAfterFirst := len(f.emb.calls)
 
-	rep, err := f.svc.IndexOnce(ctx)
+	rep, err := indexRound(ctx, f.svc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -455,14 +521,14 @@ func TestTitleChangeRecomputes(t *testing.T) {
 	f := newIndexFixture(t, "title", 1, 1, service.IndexConfig{})
 	pid := f.products[f.merchants[0]][0]
 
-	if _, err := f.svc.IndexOnce(ctx); err != nil {
+	if _, err := indexRound(ctx, f.svc); err != nil {
 		t.Fatal(err)
 	}
 	before, _, _, _, _, _, _ := f.vectorRow(t, pid)
 
 	f.exec(t, `UPDATE products SET title = '蓝色针织衫' WHERE id = $1`, pid)
 
-	rep, err := f.svc.IndexOnce(ctx)
+	rep, err := indexRound(ctx, f.svc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -499,7 +565,7 @@ func TestSalesCountChangeDoesNotRecompute(t *testing.T) {
 	f := newIndexFixture(t, "sales", 1, 1, service.IndexConfig{})
 	pid := f.products[f.merchants[0]][0]
 
-	if _, err := f.svc.IndexOnce(ctx); err != nil {
+	if _, err := indexRound(ctx, f.svc); err != nil {
 		t.Fatal(err)
 	}
 	_, _, _, _, _, vecBefore, _ := f.vectorRow(t, pid)
@@ -521,7 +587,7 @@ func TestSalesCountChangeDoesNotRecompute(t *testing.T) {
 			"触发点的前提变了，下面那条断言证明不了任何事（00016 文件头第四节要重写）")
 	}
 
-	rep, err := f.svc.IndexOnce(ctx)
+	rep, err := indexRound(ctx, f.svc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -561,7 +627,7 @@ func TestCategoryChangeTouchesOnlyTheEmbeddingFingerprint(t *testing.T) {
 	mid := f.merchants[0]
 	pid := f.products[mid][0]
 
-	if _, err := f.svc.IndexOnce(ctx); err != nil {
+	if _, err := indexRound(ctx, f.svc); err != nil {
 		t.Fatal(err)
 	}
 	before := f.hashes(t, pid)
@@ -577,7 +643,7 @@ func TestCategoryChangeTouchesOnlyTheEmbeddingFingerprint(t *testing.T) {
 	// 直接针对触发点的那一条是 TestCategoryRenameRefreshesEveryProductInThatCategory。
 	f.exec(t, `UPDATE categories SET name = '裙装' WHERE id = $1`, f.catID[mid])
 
-	rep, err := f.svc.IndexOnce(ctx)
+	rep, err := indexRound(ctx, f.svc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -631,7 +697,7 @@ func TestCategoryRenameRefreshesEveryProductInThatCategory(t *testing.T) {
 	mid := f.merchants[0]
 	pids := f.products[mid]
 
-	if _, err := f.svc.IndexOnce(ctx); err != nil {
+	if _, err := indexRound(ctx, f.svc); err != nil {
 		t.Fatal(err)
 	}
 	// 起点：三件商品的 content 里都是建夹具时那个类目名。
@@ -642,7 +708,7 @@ func TestCategoryRenameRefreshesEveryProductInThatCategory(t *testing.T) {
 	for _, name := range []string{"裙装", "连衣裙专区"} {
 		f.exec(t, `UPDATE categories SET name = $1 WHERE id = $2`, name, f.catID[mid])
 
-		rep, err := f.svc.IndexOnce(ctx)
+		rep, err := indexRound(ctx, f.svc)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -668,7 +734,7 @@ func TestCategoryRenameRefreshesEveryProductInThatCategory(t *testing.T) {
 	// 少了这一段，一个「每一轮无条件重算全部商品」的实现能让上面每一条断言
 	// 都变绿 —— 那正好是判据存在的全部理由被删掉的样子。
 	f.exec(t, `UPDATE categories SET sort_order = sort_order + 1 WHERE id = $1`, f.catID[mid])
-	rep, err := f.svc.IndexOnce(ctx)
+	rep, err := indexRound(ctx, f.svc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -741,7 +807,7 @@ func TestWriteBackFailureLeavesTheProductInTheCandidateSet(t *testing.T) {
 	f := newIndexFixture(t, "wbfail", 1, 1, service.IndexConfig{})
 	pid := f.products[f.merchants[0]][0]
 
-	if _, err := f.svc.IndexOnce(ctx); err != nil {
+	if _, err := indexRound(ctx, f.svc); err != nil {
 		t.Fatal(err)
 	}
 	_, _, mark0 := f.understanding(t, pid)
@@ -760,7 +826,7 @@ func TestWriteBackFailureLeavesTheProductInTheCandidateSet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rep, err := broken.IndexOnce(ctx)
+	rep, err := indexRound(ctx, broken)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -769,7 +835,7 @@ func TestWriteBackFailureLeavesTheProductInTheCandidateSet(t *testing.T) {
 			"因此都在一条没出过错的路径上，证明不了任何事", rep)
 	}
 
-	// ① 挂账的反向锁：这两列今天没有写入点。
+	// ① 挂账的反向锁：product_understanding 这两列今天仍然没有写入点。
 	status, lastErr, mark1 := f.understanding(t, pid)
 	if lastErr != nil {
 		t.Errorf("last_error 被写成了 %q。补写入点之前必须先把「失败」与"+
@@ -790,15 +856,44 @@ func TestWriteBackFailureLeavesTheProductInTheCandidateSet(t *testing.T) {
 			"而且没有任何东西会报错", mark0, mark1)
 	}
 
-	// ③ 所以下一轮（引擎与数据库都好着）把它补上。
-	rep2, err := f.svc.IndexOnce(ctx)
+	// ③ 失败**有**地方住了，只是不在水位线上：它落在 jobs 那一行。
+	//
+	// 这是 M4 阶段 1 相对 M3 唯一改变的一件事，而它恰恰是上面那笔挂账的解法：
+	// 「重试与失败是队列的账」（数据模型 §8 那句「同一件事只记一处」）。
+	// 少了这三条断言，把 RetryJob 那一路删掉也照绿 —— 而症状是一件永远写不回去
+	// 的商品每 30 秒被重算一次，永远，没有退避也没有死信。
+	jobStatus, attempts, jobErr, runAfter, ok := f.job(t, pid)
+	if !ok {
+		t.Fatal("这件商品没有对应的任务行 —— 入队那一步没发生，" +
+			"上面那条「写回失败」是从别的路径来的")
+	}
+	if jobStatus != 0 {
+		t.Errorf("任务的 status 是 %d，期望 0（退避后待执行）—— "+
+			"写回失败之后任务必须回到队列，否则它再也不会被重试", jobStatus)
+	}
+	if attempts != 1 {
+		t.Errorf("任务的 attempts 是 %d，期望 1 —— 占位那一步没有加计数，"+
+			"于是 max_attempts 永远到不了，一条坏任务会被无限重试", attempts)
+	}
+	if jobErr == nil || *jobErr == "" {
+		t.Error("jobs.last_error 是空的 —— 失败的原因没有落库，" +
+			"而 product_understanding.last_error 按上面那笔挂账是不能写的，" +
+			"两处都不写就等于这次失败在库里没有任何痕迹")
+	}
+	if !runAfter.After(time.Now()) {
+		t.Errorf("run_after 是 %v，不在未来 —— 指数退避没生效，"+
+			"一个连续失败的任务会被连续重试，把引擎和数据库一起打满", runAfter)
+	}
+
+	// ④ 退避过去之后，同一条任务被重新取出来并做完。
+	f.backoffElapsed(t)
+	rep2, err := indexRound(ctx, f.svc)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if rep2.Judged != 1 || rep2.Embedded != 1 {
-		t.Fatalf("写回失败的商品没有在下一轮被重试（报告 %+v）—— "+
-			"「重试由候选集天然承担」这句话是假的，而那正是不写 last_error 的全部依据",
-			rep2)
+		t.Fatalf("写回失败的商品没有在退避之后被重试（报告 %+v）—— "+
+			"那条任务卡在队列里再也出不来了", rep2)
 	}
 	assertVectorContent(t, f, pid, "女装")
 }
@@ -853,7 +948,7 @@ func TestEngineFailureWritesNoVectorAtAll(t *testing.T) {
 	pid := f.products[f.merchants[0]][0]
 
 	f.emb.err = fmt.Errorf("%w: 连不上", inference.ErrUnavailable)
-	rep, err := f.svc.IndexOnce(ctx)
+	rep, err := indexRound(ctx, f.svc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -879,10 +974,21 @@ func TestEngineFailureWritesNoVectorAtAll(t *testing.T) {
 			"这件商品从此不再是候选，引擎恢复之后也不会被重算", h)
 	}
 
+	// 引擎挂掉的那一批走的是退避重试（§12），不是「下一轮重新扫」——
+	// 这是队列换来的东西：扫描式版本里「引擎连续挂了五轮」和「挂了一轮」
+	// 在库里长得一模一样，现在前者会进死信并告警。
+	// 代价是阳性对照要等退避过去，这里直接把时间拨过去。
+	if st, attempts, jobErr, _, ok := f.job(t, pid); !ok || st != 0 || attempts != 1 || jobErr == nil {
+		t.Fatalf("引擎故障没有落在任务上（ok=%v status=%d attempts=%d err=%v）—— "+
+			"那条任务要么被标成了成功（这批商品从此再没人管），要么根本没入队",
+			ok, st, attempts, jobErr)
+	}
+	f.backoffElapsed(t)
+
 	// 阳性对照：引擎好了之后同一批商品照常入库。
 	// 没有它，上面几条在「这批商品根本没被扫到」时同样全绿。
 	f.emb.err = nil
-	rep2, err := f.svc.IndexOnce(ctx)
+	rep2, err := indexRound(ctx, f.svc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -905,14 +1011,14 @@ func TestEngineFailureDoesNotBlockSearchTextOnlyWork(t *testing.T) {
 	pid := f.products[f.merchants[0]][0]
 
 	// 先正常索引一遍，让这件商品有向量、有指纹。
-	if _, err := f.svc.IndexOnce(ctx); err != nil {
+	if _, err := indexRound(ctx, f.svc); err != nil {
 		t.Fatal(err)
 	}
 	// 再把 search_text 抹掉（模拟「只有 bigram 串这一半要补」）。
 	f.exec(t, `UPDATE products SET search_text = NULL WHERE id = $1`, pid)
 
 	f.emb.err = fmt.Errorf("%w: 连不上", inference.ErrUnavailable)
-	rep, err := f.svc.IndexOnce(ctx)
+	rep, err := indexRound(ctx, f.svc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -950,7 +1056,7 @@ func TestProductChangedDuringEmbedIsLeftForNextRound(t *testing.T) {
 			t.Error(err)
 		}
 	}
-	rep, err := f.svc.IndexOnce(ctx)
+	rep, err := indexRound(ctx, f.svc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -967,7 +1073,7 @@ func TestProductChangedDuringEmbedIsLeftForNextRound(t *testing.T) {
 
 	// 阳性对照：下一轮（没有竞态了）照常入库，而且按**新**标题。
 	f.emb.beforeReturn = nil
-	if _, err := f.svc.IndexOnce(ctx); err != nil {
+	if _, err := indexRound(ctx, f.svc); err != nil {
 		t.Fatal(err)
 	}
 	content, _, _, _, _, _, ok := f.vectorRow(t, pid)
@@ -997,13 +1103,13 @@ func TestStalenessGateHoldsAfterIndexing(t *testing.T) {
 	ctx := context.Background()
 	f := newIndexFixture(t, "gate", 2, 2, service.IndexConfig{})
 
-	if _, err := f.svc.IndexOnce(ctx); err != nil {
+	if _, err := indexRound(ctx, f.svc); err != nil {
 		t.Fatal(err)
 	}
 	// 制造出「时间戳走在前面、但文本没变」的那批行。
 	f.exec(t, `UPDATE products SET sales_count = sales_count + 1 WHERE merchant_id = ANY($1)`,
 		f.merchants)
-	if _, err := f.svc.IndexOnce(ctx); err != nil {
+	if _, err := indexRound(ctx, f.svc); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1083,7 +1189,7 @@ func TestFairSchedulingRotatesAcrossTenants(t *testing.T) {
 	}
 
 	for round := 0; round < 2; round++ {
-		rep, err := f.svc.IndexOnce(ctx)
+		rep, err := indexRound(ctx, f.svc)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1111,11 +1217,15 @@ func TestFairSchedulingRotatesAcrossTenants(t *testing.T) {
 // Backfill 翻页把全部商品过一遍；-force 跳过判定无条件重算（换模型的杠杆）。
 func TestBackfillPagesThroughEverythingAndForceRecomputes(t *testing.T) {
 	ctx := context.Background()
-	// PerTenantCap = 2，商品 5 件 —— 逼它真的翻三页。
-	f := newIndexFixture(t, "full", 1, 5, service.IndexConfig{PerTenantCap: 2})
+	// PerTenantCap = 2，商品 5 件 —— 逼入队那一侧真的翻三页。
+	// PerTenantInflight = 2 —— 逼出队那一侧也真的分三批，
+	// 于是「打了几次引擎」这条断言仍然在量批处理，而不是量入队的页大小。
+	// 两个参数现在管的是两件事：一个是「一轮入多少」，一个是「一批做多少」。
+	f := newIndexFixture(t, "full", 1, 5,
+		service.IndexConfig{PerTenantCap: 2, PerTenantInflight: 2})
 	mid := f.merchants[0]
 
-	rep, err := f.svc.Backfill(ctx, mid, false)
+	rep, err := backfillRound(ctx, f.svc, mid, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1123,11 +1233,13 @@ func TestBackfillPagesThroughEverythingAndForceRecomputes(t *testing.T) {
 		t.Fatalf("全量只重算了 %d 条，期望 5 条（%+v）—— 翻页漏了", rep.Embedded, rep)
 	}
 	if len(f.emb.calls) != 3 {
-		t.Fatalf("打了 %d 次引擎，期望 3 次（5 件 ÷ 每页 2 件）", len(f.emb.calls))
+		t.Fatalf("打了 %d 次引擎，期望 3 次（5 件 ÷ 每批 2 件）—— "+
+			"要么批处理退化成了循环单条，要么整批一次打完（那会绕过每租户在途上限）",
+			len(f.emb.calls))
 	}
 
 	// 再跑一次非 force 的全量：判定生效，一条也不该重算。
-	rep2, err := f.svc.Backfill(ctx, mid, false)
+	rep2, err := backfillRound(ctx, f.svc, mid, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1141,7 +1253,7 @@ func TestBackfillPagesThroughEverythingAndForceRecomputes(t *testing.T) {
 	}
 
 	// -force：无条件重算。换模型、改拼接模板之后的那条路。
-	rep3, err := f.svc.Backfill(ctx, mid, true)
+	rep3, err := backfillRound(ctx, f.svc, mid, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1160,7 +1272,7 @@ func TestModelChangeForcesRecompute(t *testing.T) {
 	f := newIndexFixture(t, "model", 1, 1, service.IndexConfig{})
 	pid := f.products[f.merchants[0]][0]
 
-	if _, err := f.svc.IndexOnce(ctx); err != nil {
+	if _, err := indexRound(ctx, f.svc); err != nil {
 		t.Fatal(err)
 	}
 	f.exec(t, `UPDATE product_text_vectors SET model_name = 'some-older-model'
@@ -1170,7 +1282,7 @@ func TestModelChangeForcesRecompute(t *testing.T) {
 	// 这里只验判定那一半认不认得 model_name。
 	f.exec(t, `UPDATE products SET sales_count = sales_count + 1 WHERE id = $1`, pid)
 
-	rep, err := f.svc.IndexOnce(ctx)
+	rep, err := indexRound(ctx, f.svc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1200,7 +1312,7 @@ func TestIndexKeepsOtherProcessorsFingerprints(t *testing.T) {
 	             (product_id, merchant_id, pipeline_version, input_hashes)
 	           VALUES ($1, $2, 'image-v1', '{"image_embedding":"IMGHASH"}'::jsonb)`, pid, mid)
 
-	if _, err := f.svc.IndexOnce(ctx); err != nil {
+	if _, err := indexRound(ctx, f.svc); err != nil {
 		t.Fatal(err)
 	}
 
