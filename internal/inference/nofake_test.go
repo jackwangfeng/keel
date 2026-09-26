@@ -2,6 +2,7 @@ package inference_test
 
 import (
 	"os/exec"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -19,11 +20,40 @@ import (
 
 const (
 	fakePkg = "github.com/keel/keel/internal/inference/fake"
-	// 用导入路径而不是 ./cmd/keel：go list 的相对路径是相对**当前工作目录**解析的，
-	// 而 go test 把工作目录设成被测包所在的目录。
-	mainPkg     = "github.com/keel/keel/cmd/keel"
-	embedderPkg = "github.com/keel/keel/internal/inference"
+	// 用导入路径而不是 ./...：go list 的相对路径是相对**当前工作目录**解析的，
+	// 而 go test 把工作目录设成被测包所在的目录 —— 在 internal/inference 下
+	// `./...` 只能列出这个子树，一个 cmd 都看不到。`github.com/keel/keel/...`
+	// 是同一个模式的绝对写法，从模块里任何一个目录跑结果都一样。
+	modulePattern = "github.com/keel/keel/..."
+	embedderPkg   = "github.com/keel/keel/internal/inference"
 )
+
+// productionMainPackages 枚举这个模块里**全部** main 包。
+//
+// 它原先是一个字符串常量（只有 cmd/keel）。M3 新增的 cmd/keel-index 因此
+// 不在名单里，而它是直接 import internal/inference 的生产二进制：在
+// cmd/keel-index/ 下放一个带 //go:build keel_fake_embedder 的装配文件
+// （「引擎连不上就退回替身」这种好心），两条 nofake 测试都不会红 ——
+// 然后一条全量索引命令会把伪随机向量灌进 product_text_vectors，
+// 检索照常返回结果，只是结果和搜的词无关。
+//
+// 所以判据改成**枚举**：下一个二进制不用回来改这条测试。这与文件头那条
+// 「判据要和构建系统实际的判断是同一个」是同一个理由 —— 一份手写的名单
+// 是又一处要靠人记的东西，而漏记不会报错。
+func productionMainPackages(t *testing.T, tags string) []string {
+	t.Helper()
+	args := []string{"-f", `{{if eq .Name "main"}}{{.ImportPath}}{{end}}`}
+	if tags != "" {
+		args = append([]string{"-tags", tags}, args...)
+	}
+	var out []string
+	for _, line := range strings.Split(goList(t, append(args, modulePattern)...), "\n") {
+		if p := strings.TrimSpace(line); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
 
 // goList 跑一次 go list，失败时把 stderr 一起报出来。
 //
@@ -71,19 +101,44 @@ func TestFakeEmbedderIsExcludedFromDefaultBuild(t *testing.T) {
 // 生产二进制的依赖闭包里没有替身包。
 //
 // 这一条与上一条不重复：上一条守编译标签还在，这一条守「没人绕过它」。
-// 绕法是存在的——给 cmd/keel 的构建也加上 keel_fake_embedder 标签，
+// 绕法是存在的——给某个 cmd 的构建也加上 keel_fake_embedder 标签，
 // 那时上一条照样绿。
+//
+// 查的包是**枚举出来的全部 main 包**加上 internal/inference 本身：
+//
+//   - 每一个 main 包都是一个生产二进制。cmd/keel 是服务，cmd/keel-index 是
+//     全量索引命令（M3 新增，它直接 import internal/inference）。名单写死的
+//     时候，后者整个不在视野里 —— 在它下面放一个带标签的装配文件，
+//     两条 nofake 测试都不会红，然后一条命令就能把伪随机向量灌满整张
+//     product_text_vectors。
+//   - internal/inference 是客户端自己。这一半守的是另一个方向：
+//     客户端反过来依赖替身（比如「找不到引擎就退回替身」这种好心）。
 func TestProductionBinaryDoesNotDependOnFake(t *testing.T) {
-	// 两个包都查：
-	//   - cmd/keel 是生产二进制本身。**今天它还没有 import internal/inference**
-	//     （接进索引路径是 M3 任务 3 的事），所以这一半现在是空跑的；
-	//     任务 3 一接上去它就自动变成有牙的。这一点写出来，免得有人以为
-	//     它今天已经在守着什么。
-	//   - internal/inference 是任务 3 会 import 的那个包。这一半**今天就有效**：
-	//     客户端反过来依赖替身的话（比如「找不到引擎就退回替身」这种好心），
-	//     红的是它。
-	for _, pkg := range []string{mainPkg, embedderPkg} {
-		for _, tags := range []string{"", "keel_fake_embedder"} {
+	for _, tags := range []string{"", "keel_fake_embedder"} {
+		mains := productionMainPackages(t, tags)
+
+		// 自证：枚举真的枚举到了东西，而且包含今天已知的那两个二进制。
+		//
+		// 少了这一段，把 modulePattern 写错（或者 go list 的 -f 模板被改坏）
+		// 会让 mains 变成空列表，而**空列表上的循环永远不会失败**——
+		// 这条测试于是在看上去最正常的样子下彻底失去牙齿。
+		if len(mains) == 0 {
+			t.Fatalf("一个 main 包都没枚举到（-tags %q）—— "+
+				"go list 的模式或 -f 模板坏了，这条测试正在空跑", tags)
+		}
+		for _, want := range []string{
+			"github.com/keel/keel/cmd/keel",
+			"github.com/keel/keel/cmd/keel-index",
+		} {
+			if !slices.Contains(mains, want) {
+				t.Fatalf("枚举出的 main 包 %v 里没有 %s（-tags %q）—— "+
+					"要么这个二进制被删了（那这里该跟着改），"+
+					"要么枚举漏了它（那这条测试正在漏掉一个生产二进制）",
+					mains, want, tags)
+			}
+		}
+
+		for _, pkg := range append(slices.Clone(mains), embedderPkg) {
 			args := []string{"-deps", "-f", "{{.ImportPath}}"}
 			if tags != "" {
 				args = append([]string{"-tags", tags}, args...)
@@ -98,5 +153,6 @@ func TestProductionBinaryDoesNotDependOnFake(t *testing.T) {
 				}
 			}
 		}
+		t.Logf("-tags %q：查过 %d 个 main 包 %v，加 %s", tags, len(mains), mains, embedderPkg)
 	}
 }
