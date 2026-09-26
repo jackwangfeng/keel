@@ -175,8 +175,32 @@ UPDATE products SET search_text = @search_text WHERE id = @product_id;
 -- （idx_pu_unfinished，WHERE status IN (0,1,3)）从第一天起就是空的，
 -- 而那张列表存在的全部意义是看见没做完的东西。
 --
--- last_error 清空：这一次成功了。它只保留最近一次失败（§8），
--- 留着上一次的错误会让后台以为这件商品还卡着。
+-- last_error 清空：这一次成功了。
+--
+-- **挂账：今天这一列恒为 NULL，因为没有任何地方写它。** 这里的 `= NULL` 是
+-- 为将来那个写入点先立好的规矩（「只保留最近一次失败」，§8），不是在描述
+-- 一个已经在工作的机制。同样地，status 唯一的写入点是常量 1（见
+-- service/index.go 的 statusPartiallyDone），所以 00016 的 idx_pu_unfinished
+-- （WHERE status IN (0,1,3)）今天等价于全表。
+--
+-- 为什么不顺手在写回失败那一支补一次 `status = 3 + last_error`：
+-- product_understanding 上挂着 touch_product_understanding_updated_at，
+-- **任何一次 UPDATE 都会把 updated_at 推到 now()**，而那一列正是触发点的
+-- 水位线。本机实测（pgvector/pgvector:pg16）：
+--
+--     ① 商家改了标题，写回失败之前     p.updated_at > pu.updated_at = t（是候选）
+--     ② 写一次 status=3 + last_error   p.updated_at > pu.updated_at = f（不是了）
+--
+-- 也就是说「记下这次失败」这个动作本身会让这件商品**静默退出候选集**，
+-- 它的向量从此永远停在旧标题上，而且不报任何错 —— 正是这一轮刚修掉的
+-- 「改类目名让全类目向量永久过期」的同一类缺陷。写回失败之后什么都不写，
+-- 水位线不动，这件商品下一轮还在候选里，重试由候选集天然承担；
+-- 这条性质由 internal/service/index_test.go 的
+-- TestWriteBackFailureLeavesTheProductInTheCandidateSet 钉住。
+--
+-- 真要让 last_error 工作，代价不是补一个 UPDATE，是先把「失败」与「水位线」
+-- 拆成两件事（多一列 last_error_at，或者让触发点不看 pu.updated_at）。
+-- 那是一次独立的动作，本轮不夹带。
 INSERT INTO product_understanding (product_id, status, input_hashes, pipeline_version)
 VALUES (@product_id, @status, @input_hashes, @pipeline_version)
 ON CONFLICT (product_id) DO UPDATE

@@ -240,14 +240,23 @@ CREATE TABLE product_understanding (
     -- 非向量类结果：标准化属性、卖点、类目预测、质量分、合规结论
     results          JSONB       NOT NULL DEFAULT '{}',
     pipeline_version TEXT        NOT NULL,
-    last_error       TEXT,                            -- 最近一次失败原因，供后台排查
+    -- 最近一次失败原因，供后台排查。
+    -- **今天没有任何地方写它，这一列恒为 NULL** —— 理由（写它会把触发点的
+    -- 水位线推掉，让失败的商品静默退出候选集）与挂账写在
+    -- db/queries/semantic.sql 的 MarkProductIndexed 上。
+    last_error       TEXT,
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
     FOREIGN KEY (product_id, merchant_id)
         REFERENCES products(id, merchant_id) ON DELETE CASCADE
 );
 
--- 后台「待处理 / 部分完成 / 失败」列表与重跑扫描
+-- 后台「待处理 / 部分完成 / 失败」列表与重跑扫描。
+--
+-- **今天 status 唯一的写入点是常量 1**（service/index.go 的
+-- statusPartiallyDone：本轮只有两个 processor 落地），所以这个部分索引的
+-- 谓词对每一行都成立，它等价于一个全表索引。等图像向量与属性抽取落地、
+-- 有东西开始写 2 的那天，它才真的开始筛。挂账同上。
 CREATE INDEX idx_pu_unfinished
     ON product_understanding(merchant_id, status, updated_at)
     WHERE status IN (0, 1, 3);

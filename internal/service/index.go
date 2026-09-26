@@ -94,6 +94,28 @@ import (
 // 失败的那一批不写 product_understanding.last_error。一次引擎不可用会波及整批，
 // 为它写 N 行内容完全相同的 last_error，只是把一次故障放大成一轮写风暴；
 // 而重试由下一轮的候选集天然承担 —— 它们的水位线没被推过，下一轮还在。
+//
+// ### 写库失败那一类也不写，理由不是写风暴
+//
+// 上面那段只覆盖引擎故障。写回失败（writeBack 的 default: 分支）是一件一件
+// 发生的，没有写风暴的问题，而它恰恰是 00016 说「要人来看」的那一类。
+// 它照样不写 last_error，理由是另一条，而且更硬：
+//
+// product_understanding 上挂着 touch_product_understanding_updated_at，
+// **任何一次 UPDATE 都会把 updated_at 推到 now()**，而那一列就是触发点的
+// 水位线（ListStaleProductsForIndex 比的正是它）。于是「记下这次失败」这个
+// 动作本身会把这件商品从候选集里踢出去 —— 它的向量从此永远停在旧文本上，
+// 不报任何错。本机实测两行，写在 db/queries/semantic.sql 的 MarkProductIndexed 上。
+//
+// 所以这一轮的选择是：**写回失败什么都不写，水位线不动，下一轮照常重试**，
+// 并把「last_error 恒为 NULL / status 恒为 1 / idx_pu_unfinished 等价于全表」
+// 这三件事在三处注释里明确挂账，而不是让它们读起来像已经在工作。
+// 真要让 last_error 工作，代价是先把「失败」与「水位线」拆开（多一列
+// last_error_at，或者让触发点不看 pu.updated_at），那是一次独立的动作。
+//
+// 支撑这个选择的性质由 index_test.go 的
+// TestWriteBackFailureLeavesTheProductInTheCandidateSet 钉住：写回失败之后
+// 水位线一动不动，下一轮把它补上。
 
 // IndexRepository 是这个任务需要的仓储能力。
 //
@@ -569,6 +591,11 @@ func (s *IndexService) writeBack(ctx context.Context, log *slog.Logger, p indexP
 // 图像向量与属性抽取还没有实现。写 2 会让后台的「未完成」列表
 // （00016 的 idx_pu_unfinished，WHERE status IN (0,1,3)）从第一天起就是空的，
 // 而那张列表存在的全部意义是看见没做完的东西。
+//
+// **挂账：它是这一列今天唯一的写入点，所以 status 恒为 1**，那张「未完成」
+// 列表因此等价于全表 —— 它今天筛不掉任何东西。3（失败）没有写入点，
+// 理由见上面文件头第三节那段。这两件事写出来，免得 00016 那条索引
+// 与这个常量的注释读起来像是已经在分类。
 const statusPartiallyDone int16 = 1
 
 var errRacedDuringIndex = errors.New("商品在判定与写回之间又变了")

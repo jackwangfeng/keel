@@ -714,6 +714,131 @@ func assertVectorContent(t *testing.T, f *indexFixture, pid int64, categoryName 
 	}
 }
 
+// 写回失败之后，这件商品**仍然是候选**，下一轮把它补上。
+//
+// 这条测试是 last_error 那笔挂账的支撑，也是它的反向锁。
+//
+// db/queries/semantic.sql 写着「last_error 只保留最近一次失败」、00016 写着
+// 「最近一次失败原因，供后台排查」、idx_pu_unfinished 的谓词是
+// `status IN (0,1,3)`。三处读起来都像这套东西在工作，而实测：last_error 只
+// 出现在 MarkProductIndexed 的 `= NULL` 和那两处注释里，status 唯一的写入点
+// 是常量 1 —— 这一列恒为 NULL、那一列恒为 1、那张「未完成」列表等价于全表。
+//
+// 本轮的选择是**不补那个写入点**，把三处注释改成显式挂账。理由不是
+// 「以后再说」，是写下去会引入一个新的静默缺陷：
+// product_understanding 上挂着 touch_product_understanding_updated_at，
+// 任何一次 UPDATE 都会把 updated_at 推到 now()，而那一列就是触发点的水位线。
+// 于是「记下这次失败」这个动作本身会把这件商品踢出候选集，它的向量从此
+// 永远停在旧文本上，且不报任何错 —— 与这一轮刚修掉的「改类目名让全类目
+// 向量永久过期」是同一类缺陷。
+//
+// 所以这条测试钉的是那个**替代品**：水位线一动不动，重试由候选集天然承担。
+// 它同时是反向锁 —— 哪天有人补上 status=3 + last_error 的写入而没有先把
+// 「失败」与「水位线」拆开，红的就是这里，而不是半年后某件商品搜不到自己
+// 的新标题。
+func TestWriteBackFailureLeavesTheProductInTheCandidateSet(t *testing.T) {
+	ctx := context.Background()
+	f := newIndexFixture(t, "wbfail", 1, 1, service.IndexConfig{})
+	pid := f.products[f.merchants[0]][0]
+
+	if _, err := f.svc.IndexOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	_, _, mark0 := f.understanding(t, pid)
+
+	// 商家改了标题：这件商品成为候选。
+	f.exec(t, `UPDATE products SET title = '新标题连衣裙' WHERE id = $1`, pid)
+
+	// 这一轮的写回整个失败。注入在事务**中间**那一步（SetProductSearchText）：
+	// 前面刚写进去的向量会跟着一起回滚，正是一次真实写库失败的样子。
+	//
+	// 刻意不注在 MarkProductIndexed 上：那会让「失败之后还能不能写
+	// product_understanding」这件事也一起断掉，而这条测试要能区分
+	// 「没写」和「写不了」。
+	broken, err := service.NewIndexService(
+		writeBackBrokenRepo{fixtureRepo: f.repo}, f.emb, service.IndexConfig{}, quietLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep, err := broken.IndexOnce(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Judged != 1 || rep.Failed != 1 {
+		t.Fatalf("注入的写回失败没有发生（报告 %+v）—— 下面每一条断言"+
+			"因此都在一条没出过错的路径上，证明不了任何事", rep)
+	}
+
+	// ① 挂账的反向锁：这两列今天没有写入点。
+	status, lastErr, mark1 := f.understanding(t, pid)
+	if lastErr != nil {
+		t.Errorf("last_error 被写成了 %q。补写入点之前必须先把「失败」与"+
+			"「水位线」拆开（多一列 last_error_at，或者让触发点不看 pu.updated_at）——"+
+			"否则这一次 UPDATE 会把 updated_at 推到 now()，这件商品静默退出候选集，"+
+			"它的向量从此永远停在旧文本上而且不报错。同时回去把 "+
+			"db/queries/semantic.sql、00016、service/index.go 三处挂账划掉", *lastErr)
+	}
+	if status != 1 {
+		t.Errorf("status 被写成了 %d。同上：写它就是一次 UPDATE，水位线跟着走",
+			status)
+	}
+
+	// ② 真正要守的那条性质：水位线一动不动。
+	if !mark1.Equal(mark0) {
+		t.Fatalf("写回失败之后 product_understanding.updated_at 动了（%v → %v）——"+
+			"触发点的水位线被推过了，这件商品已经不是候选，它的向量会永远停在旧标题上，"+
+			"而且没有任何东西会报错", mark0, mark1)
+	}
+
+	// ③ 所以下一轮（引擎与数据库都好着）把它补上。
+	rep2, err := f.svc.IndexOnce(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep2.Judged != 1 || rep2.Embedded != 1 {
+		t.Fatalf("写回失败的商品没有在下一轮被重试（报告 %+v）—— "+
+			"「重试由候选集天然承担」这句话是假的，而那正是不写 last_error 的全部依据",
+			rep2)
+	}
+	assertVectorContent(t, f, pid, "女装")
+}
+
+// writeBackBrokenRepo 让写回事务中间那一步（SetProductSearchText）报错，别的照常。
+//
+// 注在中间而不是第一步：一次真实的写库失败（磁盘满、连接断、约束冲突）通常
+// 发生在事务已经写过东西之后，整个事务一起回滚。注在第一步的话，
+// 「向量写了但指纹没记」这种半截状态根本不会被触及。
+//
+// 也刻意不注在 MarkProductIndexed 上：那会让「失败之后还能不能写
+// product_understanding」这件事一起断掉，而这条测试要能区分「没写」和「写不了」。
+type writeBackBrokenRepo struct{ fixtureRepo }
+
+func (r writeBackBrokenRepo) WithTenant(ctx context.Context, fn func(repository.Tx) error) error {
+	return r.fixtureRepo.WithTenant(ctx, func(tx repository.Tx) error {
+		return fn(writeBackBrokenTx{Tx: tx})
+	})
+}
+
+type writeBackBrokenTx struct{ repository.Tx }
+
+func (writeBackBrokenTx) SetProductSearchText(context.Context, int64, string) error {
+	return errors.New("注入的故障：写回事务中间那一步失败了")
+}
+
+// understanding 读 product_understanding 的 status / last_error / updated_at。
+func (f *indexFixture) understanding(t *testing.T, pid int64) (int16, *string, time.Time) {
+	t.Helper()
+	var status int16
+	var lastErr *string
+	var updatedAt time.Time
+	if err := f.admin.QueryRow(context.Background(),
+		`SELECT status, last_error, updated_at FROM product_understanding WHERE product_id = $1`,
+		pid).Scan(&status, &lastErr, &updatedAt); err != nil {
+		t.Fatal(err)
+	}
+	return status, lastErr, updatedAt
+}
+
 // ---------------------------------------------------------------------------
 // 三、引擎挂了
 // ---------------------------------------------------------------------------
