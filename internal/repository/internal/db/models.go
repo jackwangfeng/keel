@@ -100,6 +100,15 @@ type Merchant struct {
 	UpdatedAt pgtype.Timestamptz
 }
 
+type MerchantRevision struct {
+	ID         int64
+	MerchantID int64
+	Name       string
+	Status     int16
+	ChangedBy  int64
+	CreatedAt  pgtype.Timestamptz
+}
+
 type Order struct {
 	ID               int64
 	MerchantID       int64

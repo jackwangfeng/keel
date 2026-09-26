@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/keel/keel/internal/repository/internal/db"
+	"github.com/keel/keel/internal/tenant"
 )
 
 // 超时补偿定时任务（Task 6）在 repository 边界上的那一面。
@@ -43,10 +44,11 @@ import (
 // 都跑在一个设好 app.merchant_id 的事务里。这一条查询恰恰是在**还没有租户**
 // 的时候发的，它不属于那一面。tenant/resolver.go 读 merchants 时同此惯例。
 func (r *Repo) ActiveMerchants(ctx context.Context) ([]int64, error) {
+	// 「当前状态」取最新一行修订（00024），文本与解析层共用同一份。
 	rows, err := r.pool.Query(ctx, `
-		SELECT id FROM merchants
-		 WHERE deleted_at IS NULL AND status = 1
-		 ORDER BY id`)
+		SELECT m.id FROM `+tenant.EffectiveMerchantFrom+`
+		 WHERE m.deleted_at IS NULL AND `+tenant.EffectiveStatus+` = 1
+		 ORDER BY m.id`)
 	if err != nil {
 		return nil, fmt.Errorf("读活跃商家清单失败: %w", err)
 	}

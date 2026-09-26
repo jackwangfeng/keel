@@ -135,7 +135,8 @@ docker compose logs app | grep bootstrap_token
 > `web/src/api/schema.d.ts`。契约改个字段名，后台的类型检查当场变红
 > （`make admin-type-check`，已接进 `./scripts/check-all.sh`）。
 >
-> 今天的后台覆盖商品、SKU、库存、类目、上传、员工、开店，以及**大区与门店**：
+> 今天的后台覆盖商品、SKU、库存、类目、上传、员工、**商家管理**（平台级：列表、开店、停用启用，
+> 顶栏切换「当前管理哪家店」），以及**大区与门店**：
 > 大区 / 门店维度的商品可见性与定价、门店库存，和在 OpenStreetMap 上画的
 > 电子围栏（WGS-84，与库里的 `GEOGRAPHY(POLYGON, 4326)` 和买家端定位同一个
 > 坐标系，不经任何换算）。订单这一页只有字：契约里没有「后台订单列表」

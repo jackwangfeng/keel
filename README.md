@@ -147,8 +147,9 @@ If 8081 is taken: `KEEL_CONSOLE_PORT=18081 docker compose up -d --build`.
 > type check goes red on the spot (`make admin-type-check`, wired into
 > `./scripts/check-all.sh`).
 >
-> Today it covers products, SKUs, stock, categories, uploads, staff and
-> shop creation, plus **regions and stores**: per-region and per-store product
+> Today it covers products, SKUs, stock, categories, uploads, staff,
+> **merchant management** (platform-level: list, open, disable / enable, and a
+> "currently managing" switcher), plus **regions and stores**: per-region and per-store product
 > visibility and pricing, per-store stock, and delivery fences drawn on
 > OpenStreetMap (WGS-84 — the same datum as the `GEOGRAPHY(POLYGON, 4326)`
 > column and the buyer app's location, with no conversion on the way). The

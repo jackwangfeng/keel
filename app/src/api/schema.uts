@@ -379,6 +379,8 @@ export type Merchant = {
   /** 自定义域名；为空则走 `/s/{code}` 路径路由 */
   domain? : string
   created_at : string
+  /** 最近一次改名或改状态的时间（最新一行 `merchant_revisions` 的时间）。从没改过时缺席。 */
+  updated_at? : string
 }
 
 export type MerchantCreateRequest = {
@@ -386,6 +388,21 @@ export type MerchantCreateRequest = {
   name : string
   /** 该店第一个管理员的邮箱，建好后给他发登录链接 */
   admin_email : string
+}
+
+export type MerchantList = {
+  page : number
+  page_size : number
+  total : number
+  items : Merchant[]
+  /** 这套部署是不是单商家形态（配了 `KEEL_DEFAULT_MERCHANT`）。**必返。** */
+  single_merchant_mode : boolean
+}
+
+export type MerchantUpdateRequest = {
+  name? : string
+  /** 1 正常 2 停用。没有 3：审核流程本轮不存在。 */
+  status? : number
 }
 
 /** **履约维度** —— 货走到哪儿了。资金维度另见 `Order.refund_status`。 */

@@ -162,6 +162,30 @@ func TestMigrateIsIdempotent(t *testing.T) {
 
 type policy struct{ name, permissive, cmd, qual, withCheck string }
 
+// checkDirectoryLogPolicies 是 directory-log 类（merchant_revisions）的策略断言。
+// 理由写在调用处。期望值写死在这里而不是清单里：这两条谓词就是这个类别本身，
+// 清单里的类别说明已经逐字写着它们。
+func checkDirectoryLogPolicies(t *testing.T, tbl string, got []policy) {
+	t.Helper()
+	want := []policy{
+		// pg_policies 按 policyname 排序（policiesOf 里的 ORDER BY）。
+		{name: "directory_read", permissive: "PERMISSIVE", cmd: "SELECT", qual: "true", withCheck: ""},
+		{name: "platform_write", permissive: "PERMISSIVE", cmd: "INSERT", qual: "", withCheck: "platform_scope()"},
+	}
+	if len(got) != len(want) {
+		t.Errorf("%s: 期望恰好 %d 条策略（directory_read / platform_write），实际 %d 条: %+v",
+			tbl, len(want), len(got), got)
+		return
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("%s: 第 %d 条策略是 %+v，期望 %+v —— 写侧一旦放宽，"+
+				"租户作用域里就能改商家目录（停用别家店），而读侧看不出任何异常",
+				tbl, i+1, got[i], want[i])
+		}
+	}
+}
+
 func policiesOf(t *testing.T, conn *pgx.Conn, tbl string) []policy {
 	t.Helper()
 	rows, err := conn.Query(context.Background(),
@@ -234,6 +258,21 @@ func TestTenantPoliciesArePresentAndExact(t *testing.T) {
 			continue
 		}
 		checked++
+
+		if spec.Policy == "directory-log" {
+			// merchant_revisions 一张表（00024）。它是唯一一类**两条**策略的表，
+			// 所以不走下面「恰好一条 ALL」那套，而是把两条逐字钉死：
+			//
+			//   directory_read  FOR SELECT  USING (true)
+			//   platform_write  FOR INSERT  WITH CHECK (platform_scope())
+			//
+			// 要盯的是写侧：把 platform_write 的 WITH CHECK 放宽成 true，或者把
+			// directory_read 改成 FOR ALL（USING (true) 于是同时充当写谓词），
+			// 「租户 1 的上下文里停用租户 2」就重新写得进去——而读侧一切照旧。
+			// 多出第三条 permissive 策略同理（策略之间是 OR）。
+			checkDirectoryLogPolicies(t, tbl, got)
+			continue
+		}
 
 		// 不是「至少有一条」而是「有且只有一条」：permissive 策略之间是 OR，
 		// 多加一条 USING (true) 就能把隔离整个抵消掉，且不动原策略一个字。

@@ -34,6 +34,7 @@ import {
     type ResponseBodyOf,
 } from "@contract/client.mts";
 import type { components } from "@contract/schema.js";
+import { merchantScopeHeaders } from "./merchantScope.ts";
 
 export { KeelError, ProblemError, UnexpectedResponseError, isProblem } from "@contract/client.mts";
 export type { Problem } from "@contract/client.mts";
@@ -78,6 +79,7 @@ export type RegionCreateRequest = S["RegionCreateRequest"];
 export type RegionUpdateRequest = S["RegionUpdateRequest"];
 export type StoreCreateRequest = S["StoreCreateRequest"];
 export type StoreUpdateRequest = S["StoreUpdateRequest"];
+export type MerchantUpdateRequest = S["MerchantUpdateRequest"];
 
 /** `GET /admin/products` 的响应体（PageMeta 三个字段 + items）。 */
 export type AdminProductPage = ResponseBodyOf<"/admin/products", "get">;
@@ -89,6 +91,8 @@ export type RegionPage = ResponseBodyOf<"/admin/regions", "get">;
 export type ScopedProductPage = ResponseBodyOf<"/admin/stores/{store_id}/products", "get">;
 /** `GET /admin/stores/{store_id}/inventories` 的响应体。 */
 export type StoreInventoryPage = ResponseBodyOf<"/admin/stores/{store_id}/inventories", "get">;
+/** `GET /admin/merchants` 的响应体（含 single_merchant_mode）。 */
+export type MerchantList = ResponseBodyOf<"/admin/merchants", "get">;
 /** `POST /admin/uploads` 的响应体。 */
 export type UploadResponse = ResponseBodyOf<"/admin/uploads", "post">;
 
@@ -160,7 +164,9 @@ export function setUnauthorizedHandler(fn: () => void): void {
 }
 
 function authHeaders(): Record<string, string> {
-    return session === null ? {} : { Authorization: `Bearer ${session.token}` };
+    if (session === null) return {};
+    // X-Keel-Merchant 只会出现在平台级会话上（api/merchantScope.ts）。
+    return { Authorization: `Bearer ${session.token}`, ...merchantScopeHeaders(session) };
 }
 
 function handleUnauthorized(status: number): void {
@@ -254,6 +260,11 @@ export const ProblemType = {
     storeAmbiguous: `${P}store-ambiguous`,
     invalidFence: `${P}invalid-fence`,
     skuNotSoldInStore: `${P}sku-not-sold-in-store`,
+    // 商家管理与平台级租户切换。
+    tenantSwitchForbidden: `${P}tenant-switch-forbidden`,
+    unknownMerchant: `${P}unknown-merchant`,
+    singleMerchantMode: `${P}single-merchant-mode`,
+    platformOnly: `${P}platform-only`,
 } as const;
 
 /** 这个错误是不是某个 type 的 Problem。 */

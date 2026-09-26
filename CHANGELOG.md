@@ -156,6 +156,23 @@ becomes `0.1.0` when the remaining M4 work is in.
   rotated once the server has definitively rejected it. The orders page states
   plainly that no admin order-list operation exists rather than drawing a fake
   table.
+- **Merchant management for platform operators.** `GET /admin/merchants`
+  (including disabled shops, so there is a way to re-enable them),
+  `GET/PATCH /admin/merchants/{id}` for renaming and disabling / enabling, and an
+  `X-Keel-Merchant` header that lets a **platform-level** session choose which
+  shop a request manages. The header is read only after the staff session has
+  been verified; a merchant-level session sending it gets `403
+  tenant-switch-forbidden` rather than having it silently ignored, an unknown
+  code is `422 unknown-merchant` rather than a fallback to the Host's shop, and
+  buyer and public endpoints never read it. Renames and status changes do not
+  grant the application role `UPDATE` on `merchants`: they append to
+  `merchant_revisions` (migration 00024), whose insert policy only admits the
+  platform scope, so a tenant-scoped transaction cannot disable another shop
+  even through a bug. A single-merchant deployment (`KEEL_DEFAULT_MERCHANT`)
+  refuses to open a second shop with `409 single-merchant-mode` instead of
+  creating one that would make the next start fail its preflight check. The
+  admin console gains a merchant list and a "currently managing" switcher with
+  a banner on every page.
 - **Regions and stores in the admin console** — all 21 admin operations of the
   contract's Store tag. Delivery fences are drawn with Leaflet on OpenStreetMap
   tiles, which are WGS-84 like the `GEOGRAPHY(POLYGON, 4326)` column, so the

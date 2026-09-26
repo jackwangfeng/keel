@@ -284,6 +284,12 @@ func TestRouterServesContractPaths(t *testing.T) {
 		// TestOpeningAShopIsPlatformOnly 打一次商家级会话来证明。
 		"POST /api/v1/admin/merchants": false,
 
+		// 商家管理（列表 / 详情 / 改名与停用启用）。「只有平台级能调」由
+		// internal/handler 的 tenant_switch_test.go 打商家级会话来证明。
+		"GET /api/v1/admin/merchants":                false,
+		"GET /api/v1/admin/merchants/:merchant_id":   false,
+		"PATCH /api/v1/admin/merchants/:merchant_id": false,
+
 		// 商家自助发布那 16 条（M4 Task 3）。同样只核路径 ——
 		// 「每一条都挂了 staffAuth」由 internal/handler 的
 		// TestAdminCatalogRoutesAllRequireStaffSession 逐条打一次来证明，

@@ -34,6 +34,9 @@ servers:
       多商家；租户由子域名确定，子域名锚定平台基础域名 KEEL_BASE_DOMAIN。
       商家也可绑定自己的域名（shop_settings.domain），此时整个域名就是入口。
       租户定位是部署配置，不改变任何路径，请求也不携带任何标识租户的头。
+      **唯一的例外在后台**：平台级会话可以用 `X-Keel-Merchant` 头切换要管理的
+      商家（见 components/parameters/KeelMerchant）。它的前提是平台级鉴权，
+      公开接口与买家接口一律不读这个头。
     variables:
       shop:
         default: demo
@@ -362,6 +365,8 @@ paths:
 
   /admin/me:
     get:
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
       tags: [AdminAuth]
       summary: 当前后台身份
       responses:
@@ -373,6 +378,35 @@ paths:
         default: { $ref: '#/components/responses/Problem' }
 
   /admin/merchants:
+    get:
+      tags: [Admin]
+      summary: 商家列表（仅平台级）
+      description: |
+        平台级操作员看见的全部商家，**含停用（`status = 2`）与待审核（`status = 3`）的**。
+        不含停用的话，平台就没有任何入口把一家停掉的店启用回来。
+        软删的不返回 —— 一期没有恢复接口。
+
+        商家级员工调用返回 403（`https://keel.dev/problems/platform-only`）：
+        店的列表是这个部署的全貌，不是任何一家店该看见的东西。
+
+        响应里的 `single_merchant_mode` 回答「这套部署能不能再开店」——
+        后台据此把「开店」按钮置灰并说明原因，而不是让人点了才知道。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MerchantList' }
+        '403':
+          description: 调用者不是平台级操作员
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
     post:
       tags: [Admin]
       summary: 开店（仅平台级管理员）
@@ -380,7 +414,14 @@ paths:
         建商家，并为其创建第一个商家级管理员，给该邮箱发登录链接。
 
         调用者必须是平台级（`merchant_id` 为空）且 `role = 1`，否则 403。
+
+        **单商家部署（配了 `KEEL_DEFAULT_MERCHANT`）里拒绝开店**，返回 409
+        `https://keel.dev/problems/single-merchant-mode`。单商家部署忽略 Host，
+        所有请求都落在默认商家上：新开的店谁也访问不到，而且启动自检
+        （活跃商家必须恰好一家）会让这套部署**下一次重启就起不来**。
+        要开多家店，先切到多商家部署：清空 `KEEL_DEFAULT_MERCHANT`、配置 `KEEL_BASE_DOMAIN`。
       parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
@@ -399,7 +440,95 @@ paths:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
         '409':
-          description: code 已被占用
+          description: |
+            按 `type` 区分：
+
+            · code 已被占用 —— `https://keel.dev/problems/merchant-code-taken`
+            · 这是一套单商家部署，不能开第二家店 ——
+              `https://keel.dev/problems/single-merchant-mode`。换个 code 重试没有用，
+              要改的是部署形态（见上面的描述）
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /admin/merchants/{merchant_id}:
+    parameters:
+      - $ref: '#/components/parameters/MerchantId'
+    get:
+      tags: [Admin]
+      summary: 商家详情（仅平台级）
+      description: 含停用与待审核的；软删的 404。商家级员工 403。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Merchant' }
+        '403':
+          description: 调用者不是平台级操作员
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: 商家不存在或已软删
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+    patch:
+      tags: [Admin]
+      summary: 改名、停用或启用商家（仅平台级管理员）
+      description: |
+        调用者必须是平台级且 `role = 1`，否则 403（与开店同一条门槛）。
+
+        · **停用（`status = 2`）**：买家侧对这家店的全部请求随之 404
+          （租户解析只认 `status = 1`，解析结果最多缓存 30 秒，所以生效最多延迟半分钟）。
+          平台管理员仍然能用 `X-Keel-Merchant` 切进去 —— 要进得去才修得好、再启用。
+        · **启用（`status = 1`）**：反过来。
+        · 不能把商家改成 `3 待审核`：审核流程本轮不存在，给它一条写入路径只会造出
+          一个谁也推不动的状态。
+
+        **单商家部署里停用默认商家会被拒绝**（409 `single-merchant-mode`）：
+        那是这套部署唯一一家店，停掉之后启动自检过不了，下次重启就起不来。
+
+        写入不改 `merchants` 那一行：应用角色在 merchants 上没有 UPDATE
+        （给了就等于任何租户上下文都能改商家目录）。每次修改在平台作用域里
+        追加一行 `merchant_revisions`，当前的名字与状态取最新一行 ——
+        见数据模型 §2 与迁移 00024 的文件头。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MerchantUpdateRequest' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Merchant' }
+        '403':
+          description: 调用者不是平台级管理员
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: 商家不存在或已软删
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '409':
+          description: |
+            单商家部署里停用默认商家 —— `https://keel.dev/problems/single-merchant-mode`。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: 一个字段都没传、名字为空，或 `status` 不是 1 / 2
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
@@ -411,6 +540,7 @@ paths:
       summary: 员工列表
       description: 平台级看见平台操作员，商家级只看见自己店的。
       parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
         - $ref: '#/components/parameters/Page'
         - $ref: '#/components/parameters/PageSize'
       responses:
@@ -439,6 +569,7 @@ paths:
 
         建好后给该邮箱发一次性登录链接，对方点开即完成首次登录。**不设密码。**
       parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
@@ -471,6 +602,7 @@ paths:
         只能改同租户内的人。**不能把最后一个在职管理员降级或停用**——
         那会让该租户失去全部管理能力，返回 409。
       parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
         - name: staff_id
           in: path
           required: true
@@ -553,6 +685,7 @@ paths:
         把 `referenced` 置为 TRUE。**超过 24 小时仍未被引用的文件会被清理任务
         删掉**（数据模型 §13），所以拿到 `id` 之后请尽快提交。
       parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
@@ -611,6 +744,7 @@ paths:
         不传 `status` 时返回**全部未软删**的商品（含草稿与下架），
         这与前台默认只看上架是刻意相反的：后台的默认视图是「我店里的全部商品」。
       parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
         - $ref: '#/components/parameters/Page'
         - $ref: '#/components/parameters/PageSize'
         - name: status
@@ -662,6 +796,7 @@ paths:
         因为这件商品还一个 SKU 都没有——这三个数是服务端按需现算的
         （迁移 00019），不是入参，也不是一份等着被同步的冗余副本。
       parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
@@ -692,6 +827,8 @@ paths:
     parameters:
       - $ref: '#/components/parameters/ProductId'
     get:
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
       tags: [Admin, Catalog]
       summary: 商品详情（后台，含全部 SKU、库存与图片）
       description: |
@@ -711,6 +848,8 @@ paths:
               schema: { $ref: '#/components/schemas/Problem' }
         default: { $ref: '#/components/responses/Problem' }
     patch:
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
       tags: [Admin, Catalog]
       summary: 改商品信息
       description: |
@@ -778,6 +917,8 @@ paths:
               schema: { $ref: '#/components/schemas/Problem' }
         default: { $ref: '#/components/responses/Problem' }
     delete:
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
       tags: [Admin, Catalog]
       summary: 删除商品（软删）
       description: |
@@ -861,6 +1002,7 @@ paths:
         （拆字、谐音、拼音）今天一个也拦不住。类目资质那一半也没有做——
         库里没有任何一张表记录商家资质。
       parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
         - $ref: '#/components/parameters/ProductId'
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -955,6 +1097,7 @@ paths:
         已知缺口（数据模型 §13 记过）：`referenced` 是单向布尔，被替换下来的
         旧图会永远停在 `TRUE`，不会被回收。一期接受这个磁盘增长。
       parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
         - $ref: '#/components/parameters/ProductId'
       requestBody:
         required: true
@@ -1016,6 +1159,7 @@ paths:
         `inventories` 现算的（迁移 00019）。也就是说不存在「加了 SKU 但
         商品上的价格区间还是旧的」这个中间态。
       parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
         - $ref: '#/components/parameters/ProductId'
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -1058,6 +1202,8 @@ paths:
     parameters:
       - $ref: '#/components/parameters/SkuId'
     patch:
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
       tags: [Admin, Catalog]
       summary: 改 SKU（含改价）
       description: |
@@ -1108,6 +1254,8 @@ paths:
               schema: { $ref: '#/components/schemas/Problem' }
         default: { $ref: '#/components/responses/Problem' }
     delete:
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
       tags: [Admin, Catalog]
       summary: 删除 SKU（软删）
       description: |
@@ -1217,6 +1365,7 @@ paths:
         重试一两次就过。真正的相对调整（`delta`，天然可组合，且
         `inventory_logs.biz_type = 5 手工调整` 已经为它留好了位置）留给下一轮。
       parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
         - $ref: '#/components/parameters/SkuId'
       requestBody:
         required: true
@@ -1266,6 +1415,8 @@ paths:
 
   /admin/categories:
     get:
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
       tags: [Admin, Catalog]
       summary: 分类列表（后台，扁平）
       description: |
@@ -1303,6 +1454,7 @@ paths:
 
         一期不设层级深度上限。
       parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
@@ -1330,6 +1482,8 @@ paths:
     parameters:
       - $ref: '#/components/parameters/CategoryId'
     patch:
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
       tags: [Admin, Catalog]
       summary: 改分类（含移动子树）
       description: |
@@ -1394,6 +1548,8 @@ paths:
               schema: { $ref: '#/components/schemas/Problem' }
         default: { $ref: '#/components/responses/Problem' }
     delete:
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
       tags: [Admin, Catalog]
       summary: 删除分类（软删）
       description: |
@@ -1453,6 +1609,7 @@ paths:
         大区决定两件事：这一层的商品可见性（`region_product_overrides`）
         与这一层的价格（`region_sku_prices`）。
       parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
         - $ref: '#/components/parameters/Page'
         - $ref: '#/components/parameters/PageSize'
         - name: include_deleted
@@ -1485,6 +1642,7 @@ paths:
         建商家（`POST /admin/merchants`）会在同一个事务里建出一个默认大区，
         所以正常路径上不必先调这条。
       parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
@@ -1515,6 +1673,8 @@ paths:
     parameters:
       - $ref: '#/components/parameters/RegionId'
     patch:
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
       tags: [Admin, Store]
       summary: 改大区
       requestBody:
@@ -1535,6 +1695,8 @@ paths:
               schema: { $ref: '#/components/schemas/Problem' }
         default: { $ref: '#/components/responses/Problem' }
     delete:
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
       tags: [Admin, Store]
       summary: 软删大区
       description: |
@@ -1575,6 +1737,7 @@ paths:
         放在列表响应里而不是做成建店时的强制项，理由是建店与画围栏是
         两个人在两个时刻做的事，强制会把第一步卡死在第二步上。
       parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
         - $ref: '#/components/parameters/Page'
         - $ref: '#/components/parameters/PageSize'
         - name: region_id
@@ -1612,6 +1775,7 @@ paths:
 
         建第一家门店时若还没有任何大区，返回 422（`region_id` 必填且必须存在）。
       parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
@@ -1652,6 +1816,8 @@ paths:
     parameters:
       - $ref: '#/components/parameters/StoreId'
     get:
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
       tags: [Admin, Store]
       summary: 门店详情（含围栏）
       responses:
@@ -1667,6 +1833,8 @@ paths:
               schema: { $ref: '#/components/schemas/Problem' }
         default: { $ref: '#/components/responses/Problem' }
     patch:
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
       tags: [Admin, Store]
       summary: 改门店
       description: |
@@ -1705,6 +1873,8 @@ paths:
               schema: { $ref: '#/components/schemas/Problem' }
         default: { $ref: '#/components/responses/Problem' }
     delete:
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
       tags: [Admin, Store]
       summary: 软删门店
       description: |
@@ -1755,6 +1925,7 @@ paths:
         建普通店（本端点按契约不收围栏）与切换默认门店（回填造出来的默认店没有
         围栏），两条都是主路径。论证与实测记在迁移 00020 里 `stores` 的定义上。
       parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
         - $ref: '#/components/parameters/StoreId'
       requestBody:
         required: true
@@ -1807,6 +1978,7 @@ paths:
         而那是一个应该由「把默认改成另一家」表达的意图。真要清空，
         走 `DELETE /admin/stores/{store_id}`。
       parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
         - $ref: '#/components/parameters/StoreId'
       responses:
         '200':
@@ -1842,6 +2014,7 @@ paths:
         1 基准价 / 2 大区价 / 3 门店价），取自 `sku_prices_by_store` 视图——
         全仓库唯一一处写 `COALESCE(门店价, 大区价, 基准价)` 的地方。
       parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
         - $ref: '#/components/parameters/StoreId'
         - $ref: '#/components/parameters/Page'
         - $ref: '#/components/parameters/PageSize'
@@ -1888,6 +2061,7 @@ paths:
         `effective_listed` 会是 `false` 而 `listed` 是 `true`，
         两个字段刻意分开——否则后台会显示「已上架」而买家看不到。
       parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
         - $ref: '#/components/parameters/StoreId'
         - $ref: '#/components/parameters/ProductId'
       requestBody:
@@ -1919,6 +2093,7 @@ paths:
         产品原话是「大区价格统一，但是每个门店可以自己调整价格」，
         这条端点就是那句话的后半句。
       parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
         - $ref: '#/components/parameters/StoreId'
         - $ref: '#/components/parameters/SkuId'
       requestBody:
@@ -1955,6 +2130,7 @@ paths:
         「这家店不要自己的价」，那个意图在两种情况下都已经达成。
         404 留给「门店或 SKU 根本不存在」——那是一个真的错。
       parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
         - $ref: '#/components/parameters/StoreId'
         - $ref: '#/components/parameters/SkuId'
       responses:
@@ -1984,6 +2160,7 @@ paths:
         一家刚开的店在录库存之前每个 SKU 都缺行，这条列表要把它们显示成
         `available_qty = 0`，而不是漏掉。
       parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
         - $ref: '#/components/parameters/StoreId'
         - $ref: '#/components/parameters/Page'
         - $ref: '#/components/parameters/PageSize'
@@ -2053,6 +2230,7 @@ paths:
         **「这家店没有这一行库存」不在上面三种里**，它是一次正常的首次录入：
         服务端 upsert，`expected_available_qty` 必须传 `0`。
       parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
         - $ref: '#/components/parameters/StoreId'
         - $ref: '#/components/parameters/SkuId'
       requestBody:
@@ -2101,6 +2279,7 @@ paths:
         这里的 `price_cents` 是「基准价 → 大区价」两层之后的值，
         `price_source` 只会是 1 或 2。
       parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
         - $ref: '#/components/parameters/RegionId'
         - $ref: '#/components/parameters/Page'
         - $ref: '#/components/parameters/PageSize'
@@ -2137,6 +2316,7 @@ paths:
         与门店那条同构，作用在 `region_product_overrides` 上。
         **这一层排掉的，下面的门店捞不回来。**
       parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
         - $ref: '#/components/parameters/RegionId'
         - $ref: '#/components/parameters/ProductId'
       requestBody:
@@ -2166,6 +2346,7 @@ paths:
         不同大区内商品价格不一样」——这条端点就是那句话。
         门店可以再覆盖它（`PUT /admin/stores/{store_id}/skus/{sku_id}/price`）。
       parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
         - $ref: '#/components/parameters/RegionId'
         - $ref: '#/components/parameters/SkuId'
       requestBody:
@@ -2199,6 +2380,7 @@ paths:
         **注意这不会动门店价**：门店那一层如果自己定了价，撤销大区价之后
         它仍然生效——覆盖是逐层独立的。
       parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
         - $ref: '#/components/parameters/RegionId'
         - $ref: '#/components/parameters/SkuId'
       responses:
@@ -3618,6 +3800,7 @@ paths:
         发货后 `shop_settings.auto_confirm_days` 天由定时任务自动
         `30 → 40`，买家也可以主动 `POST /orders/{order_no}/confirm`。
       parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
         - $ref: '#/components/parameters/OrderNo'
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -3671,6 +3854,7 @@ paths:
         `freight_cents` 是退货退款场景下客服裁定的退运费金额 ——
         一期没有可自动判定的口径，故开放给审核人填写。
       parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
         - $ref: '#/components/parameters/RefundNo'
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -4006,6 +4190,40 @@ components:
       in: path
       required: true
       description: '`categories.id`。同 ProductId，查不到即 404。'
+      schema: { type: integer, format: int64 }
+    KeelMerchant:
+      name: X-Keel-Merchant
+      in: header
+      required: false
+      description: |
+        **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+
+        它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+        而例外成立的前提是平台级鉴权：
+
+        · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+          读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+          行级安全落在这家店上。
+        · **商家级员工带了这个头：403**
+          （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+          静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+        · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+          **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+          实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+          请求其余部分指名的东西不存在是 422。
+        · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+          买家侧对它照旧 404。
+        · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+          （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+
+        后台每一条挂后台会话的操作都声明了它（机械核对：
+        `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+      schema: { type: string, pattern: '^[a-z0-9][a-z0-9-]{1,30}$' }
+    MerchantId:
+      name: merchant_id
+      in: path
+      required: true
+      description: '`merchants.id`。软删的商家 404。'
       schema: { type: integer, format: int64 }
     IdempotencyKey:
       name: Idempotency-Key
@@ -5274,6 +5492,36 @@ components:
           type: string
           description: 自定义域名；为空则走 `/s/{code}` 路径路由
         created_at: { type: string, format: date-time }
+        updated_at:
+          type: string
+          format: date-time
+          description: 最近一次改名或改状态的时间（最新一行 `merchant_revisions` 的时间）。从没改过时缺席。
+
+    MerchantList:
+      allOf:
+        - $ref: '#/components/schemas/PageMeta'
+        - type: object
+          required: [items, single_merchant_mode]
+          properties:
+            items:
+              type: array
+              items: { $ref: '#/components/schemas/Merchant' }
+            single_merchant_mode:
+              type: boolean
+              description: |
+                这套部署是不是单商家形态（配了 `KEEL_DEFAULT_MERCHANT`）。**必返。**
+                为 `true` 时 `POST /admin/merchants` 一定返回 409 `single-merchant-mode`，
+                后台据此把开店入口置灰并说明原因。
+
+    MerchantUpdateRequest:
+      type: object
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 1 }
+        status:
+          type: integer
+          enum: [1, 2]
+          description: '1 正常 2 停用。没有 3：审核流程本轮不存在。'
 
     MerchantCreateRequest:
       type: object

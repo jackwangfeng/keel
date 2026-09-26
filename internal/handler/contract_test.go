@@ -430,6 +430,28 @@ var routes = []route{
 				"代价只是「重放本该回 201 存档，实际回 409」，客户端两种情况下都知道店已经开好了。",
 		},
 	},
+	{
+		// 商家列表。读 page / page_size，所以自己一个文件（admin_merchant_list.go），
+		// 理由同 admin_staff_list.go。
+		ContractPath:   "/admin/merchants",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "admin_merchant_list.go",
+	},
+	{
+		ContractPath:   "/admin/merchants/{merchant_id}",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "admin_merchant.go",
+		NoQueryParams:  "要看哪家店在路径上",
+	},
+	{
+		ContractPath:   "/admin/merchants/{merchant_id}",
+		ContractMethod: "patch",
+		HTTPMethod:     http.MethodPatch,
+		HandlerFile:    "admin_merchant.go",
+		NoQueryParams:  "改哪家店在路径上，改什么（名字、状态）在请求体里",
+	},
 	// —— 商家自助发布（M4 Task 3）。契约 Admin + Catalog 两个 tag 的 16 条写接口。
 	//
 	// 它们分在四个 handler 文件里，而**分法是闸门定的**：下面那条 query 参数
