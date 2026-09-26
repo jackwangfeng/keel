@@ -3,6 +3,7 @@ package handler_test
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/keel/keel/internal/api"
@@ -364,9 +365,19 @@ func TestSelfIntersectingFenceIsRejectedWithTheReason(t *testing.T) {
 	if prob.Type != "https://keel.dev/problems/invalid-fence" {
 		t.Fatalf("problem type 是 %q，期望 .../invalid-fence", prob.Type)
 	}
-	if prob.Title == "" || prob.Title == "请求参数不合法" {
-		t.Fatalf("detail/title 是 %q —— 契约要求转述 ST_IsValidReason，"+
-			"那句话是运营唯一能拿来定位自己画错在哪儿的东西", prob.Title)
+	// 契约：detail 转述 ST_IsValidReason。第一版这里断言的是 title，
+	// 照着一个把原因写进 title 的实现写的，两边一起错、一直是绿的。
+	if prob.Detail == nil || !strings.Contains(*prob.Detail, "Self-intersection") {
+		got := "<nil>"
+		if prob.Detail != nil {
+			got = *prob.Detail
+		}
+		t.Fatalf("detail 是 %q，期望转述 ST_IsValidReason（含 Self-intersection）—— "+
+			"那句话是运营唯一能拿来定位自己画错在哪儿的东西", got)
+	}
+	// title 是这一类问题固定的那句话，不随每次的原因变化（RFC 7807）。
+	if strings.Contains(prob.Title, "Self-intersection") {
+		t.Errorf("title 里出现了具体原因 %q —— 原因该在 detail 里", prob.Title)
 	}
 }
 

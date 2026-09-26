@@ -106,8 +106,20 @@ func writeStoreError(c *gin.Context, err error) {
 		//
 		// 这是全仓库唯一一处把 PostgreSQL 的错误消息转述给调用方的地方，
 		// 而且只在**校验**失败这一支上 —— 别处那么做一般是在泄露 schema。
-		problem.Write(c, http.StatusUnprocessableEntity,
-			problem.TypeInvalidFence, badFence.Reason)
+		//
+		// **原因放 detail，不放 title**（契约原话：detail 转述 ST_IsValidReason）。
+		// 第一版放在了 title 里，对应的测试也照着断言 title，于是两边一起错、
+		// 闸门一直绿 —— 后台界面是两个字段都去找才碰巧能用。按 RFC 7807，title 是
+		// 同一个 type 下**固定不变**的一句话，每次出错的具体情况属于 detail；
+		// 客户端按 title 分组统计或者做本地化时，一个每次都不同的 title 会把
+		// 同一类错误拆成成百上千种。
+		reason := badFence.Reason
+		problem.WriteValue(c, http.StatusUnprocessableEntity, api.Problem{
+			Type:   problem.TypeInvalidFence,
+			Title:  "围栏不是一个合法的多边形",
+			Status: http.StatusUnprocessableEntity,
+			Detail: &reason,
+		})
 
 	// —— 409。状态码分不开它们，契约在每条端点上都写着「按 type 区分」。
 	case errors.As(err, &invConflict):
