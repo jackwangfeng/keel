@@ -145,7 +145,8 @@ var tenantContextAllowed = map[string]string{
 		"拿租户的办法照抄 sweep：枚举 merchants（tenant-root 类，没有 RLS）" +
 		"再逐家进 WithTenant，公平调度也照那一套（每租户上限 + 每轮总预算 + 轮转起点 + 兜底）。" +
 		"论证写在 repository/sweep.go 与 service/sweep.go 的文件头，" +
-		"service/index.go 的文件头第二节只说了与它不同的那两处。" +
+		"service/index.go 的文件头第二节只说了与它不同的那两处（其一：上限的量级" +
+		"按一次 /v1/embeddings 的批大小定）。" +
 		"M4 阶段 1 在中间插进了 jobs 表之后，**消费侧其实不再需要这条豁免**：" +
 		"出队拿到的每一行都带着 jobs.merchant_id，worker 按它进 WithTenant。" +
 		"生产侧仍然需要 —— 触发点扫描是按租户切的 N 条查询（products 有 RLS，" +

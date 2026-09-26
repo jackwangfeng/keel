@@ -39,7 +39,10 @@ concurrency:
 jobs:
   verify:
     name: 嵌入式协调器验证
-    runs-on: ubuntu-latest
+    # 自建 runner（lenserver，label keel），理由见 ci.yml 顶部「跑在哪」：私有仓库的托管 runner
+    # 按分钟计费。make verify 里只有 cmd/topology 占一个宿主机端口（127.0.0.1:18089），
+    # 同机空闲；不起容器，不用额外清理。
+    runs-on: [self-hosted, keel]
     # 本机实测：make deps（clone + cargo build --release，cargo 缓存是暖的）
     # 49 秒，make verify 二十来秒。runner 上 cargo registry 是冷的，给足余量。
     timeout-minutes: 30
@@ -69,6 +72,11 @@ jobs:
       # 而它已经把该装哪个版本说清楚了。
       - name: 工具链版本
         run: |
+          # runner 作为 systemd 服务跑，PATH 里没有 rustup 装的 ~/.cargo/bin。
+          if [ -x "$HOME/.cargo/bin/cargo" ]; then
+            export PATH="$HOME/.cargo/bin:$PATH"
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          fi
           cargo --version
           go version
 

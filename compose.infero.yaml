@@ -17,30 +17,22 @@
 # （语义检索层 §8）—— 不报错，只是没有语义召回。README 的
 # 「还没在盒子里的」那一节记着这条。
 #
-# ## 为什么另起一个文件，而不是改 compose.inference.yaml
+# ## 没有 GPU 的机器怎么办：不加这个 `-f`，就这一种形态
 #
-# compose.inference.yaml 是 **Python + BGE-M3** 那条腿的叠加层，这一个是
-# **infero + Qwen3-Embedding** 这条腿的。两者互斥，不是同一个东西的两种配置：
+# infero 只有 CUDA / Metal 后端，**没有 CPU 后端**。所以没有卡的机器直接
+# `docker compose up`，不配 KEEL_EMBED_ENDPOINT：栈起得来、能下单、
+# /search 返回 200 走关键词那一路，少的是语义召回。**这是唯一的形态**，
+# 没有「换一个 CPU 引擎」的第二条路 —— M3 那个跑 BGE-M3 的 Python 服务
+# 已经退役，这个仓库不为无 GPU 备胎维护第二个推理引擎实现。
+# 正解是给 infero 自己加 CPU 后端，今天还没有。
 #
-#   - 前置条件不相交。那个要网络（下 2.27 GB 权重）、不要 GPU；
-#     这个要 GPU、不要网络（权重在宿主机上），而且引擎根本不在 compose 里。
-#   - 向量空间不同。BGE-M3 与 Qwen3-Embedding 算出来的是两套不能混用的向量，
-#     product_text_vectors.model_name 记着是哪一套。换腿 = 全库重算
-#     （ListStaleProductsForIndex 会按 model_name/model_version 把旧行判成待重算，
-#     这条路本来就通）。
-#   - 合并成一个文件的话，两套互斥的配置要靠环境变量互相拆台，而
-#     `docker compose -f a -f b` 的覆盖语义是「后面的赢」——
-#     两个叠加层都定义 inference 服务时，出错的形态是「起了一个，连了另一个」。
+# ## ⚠️ 换引擎 / 换模型要重算全库
 #
-# 分成两个文件，选哪条腿就是 `-f` 后面写哪个文件，没有第三种状态。
-#
-# ## ⚠️ 换腿要重算全库
-#
-# 从 Python/BGE-M3 换到这里之后，库里已有的 product_text_vectors 行
-# **不会自动失效**——它们的 model_name 是 'bge-m3'，而新引擎报的是
-# 'Qwen3-Embedding-0'。增量索引任务会把它们判成待重算并逐轮追上，
-# 但在追上之前，那些行和新算的查询向量不在同一个空间里，检索结果没有意义。
-# 要立刻切干净就跑一次全量回填：
+# product_text_vectors 的每一行都记着 model_name / model_version。引擎报的
+# 模型名一变（M4 那次是 'bge-m3' → 'Qwen3-Embedding-0'），库里的存量行就与
+# 新算的查询向量不在同一个空间里 —— 维度一样，Postgres 一个字都不会报，
+# 检索照常返回结果，只是结果没有意义。增量索引任务会按 model_name 把它们判成
+# 待重算并逐轮追上；要立刻切干净就跑一次全量回填：
 #
 #     docker compose exec app /keel-index -force
 #

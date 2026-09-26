@@ -10,6 +10,8 @@ import sys
 PROMISED_FILES = [
     'LICENSE',
     'CONTRIBUTING.md',
+    'CHANGELOG.md',
+    'SECURITY.md',
     'docs/电商系统-总体架构.md',
     'docs/电商系统-数据模型设计.md',
     'docs/电商系统-语义检索层设计.md',

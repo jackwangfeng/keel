@@ -69,7 +69,7 @@ type ProductText struct {
 	CategoryName string
 }
 
-// EmbedContent 是真正送进 /v1/embed 的那段文本，也是写进
+// EmbedContent 是真正送进 /v1/embeddings 的那段文本，也是写进
 // product_text_vectors.content 的那一份（留作调试与将来精排的输入）。
 //
 // 形状照语义检索层 §2.1 的模板，标题重复一次以提升它的权重。

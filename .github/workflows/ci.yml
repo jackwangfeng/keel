@@ -36,34 +36,40 @@
 #     H5 形态对着真后端跑通过一次（记录在 app/README.md），但那是人手动跑的。
 #   - **真引擎（`make test-engine`）在 CI 里没有任何执行者，一个都没有。**
 #     这一条从「不挡 PR 的 inference job」退成了「不存在」，因为 M4 把引擎从
-#     Python + BGE-M3 换成了自研的 infero，而 **infero 只有 CUDA / Metal 后端，
-#     没有 CPU 后端** —— GitHub 托管 runner 上没有 GPU，那个 job 再留着也只是
-#     一个永远跑不动的空壳。原来的 job 已经删掉，而不是改成 continue-on-error
-#     或者挂一个不存在的 self-hosted 标签：一个永远排队 / 永远跳过的 job，
-#     在列表里看着像还守着什么，那比明说没有更糟。
+#     Python + BGE-M3 换成了自研的 infero，而 infero 只有 CUDA / Metal 后端。
+#     原来那个 job 建的是 services/inference（已删），留着必然永远红。
 #
 #     所以 keel-integration.md 那三条判据（归一化从库里读回来验、语义 margin
-#     > 0.10、引擎挂了要报错）现在**只有人手动跑**，在一台有 NVIDIA GPU 的机器上：
+#     > 0.10、引擎挂了要报错）现在**只有人手动跑**：
 #
 #         ./scripts/infero-up.sh
 #         KEEL_EMBED_ENDPOINT=http://127.0.0.1:18081 PGHOST=… PGPORT=… make test-engine
 #
-#     要把它接回 CI，唯一的路是一台自托管 GPU runner。在那之前这里是空的，
-#     并且这行字就是用来提醒「它是空的」。
+#     **这一条原本写的是「唯一的路是一台自托管 GPU runner，在那之前这里是空的」。
+#     那个前提已经不成立了** —— 全部 job 现在就跑在 lenserver 上，而 lenserver
+#     正是那台带 NVIDIA GPU、infero 就在上面跑着的机器。也就是说这不再是
+#     「做不到」，是**「还没写」**。两者差别很大，别让这行字继续冒充前者。
+#
+#     写它的时候有一条约束先记在这里，免得下一个人照着别的 job 的样子起容器：
+#     **这个 job 不许自己起 infero**。那块卡（A4000 16G）是三个项目共用的，
+#     infero 一份权重约 4.8 GB，实测起第二份直接 CUDA_ERROR_OUT_OF_MEMORY。
+#     正确的形状是**连宿主机上已经跑着的那一份**（127.0.0.1:18081），
+#     和演示栈的做法一致；起不来就跳过，而不是把线上那份挤掉。
 #   - **向量检索这条路的端到端。** e2e 验的是不带引擎的默认栈 —— 那时 smoke 里
 #     的检索走的是纯关键词降级路径。「索引任务把真向量写进库、/search 用它召回」
 #     这条完整链路在 CI 里同样没有执行者，只有人手动跑过（M4 这一轮真的跑过一次，
 #     输出记在那次的交付报告里）。
-#   - **`services/inference/`（Python + BGE-M3）现在没有任何东西在用它。**
-#     它没被删，因为它是无 GPU 部署唯一可能的选项；但它今天**也接不上**：
-#     internal/inference 的客户端把 infero 的路径（/v1/embeddings）、模型名
-#     （Qwen3-Embedding-0）和池化哨兵写成了常量，那三样对 Python 那条腿都不对。
-#     要让它重新可用，得先把「引擎方言」从常量变成一份显式配置（没有默认值，
-#     照 KEEL_EMBED_ENDPOINT 的纪律来）—— 那是一次设计改动，不是改三个字符串，
-#     所以这一轮没做。在它做完之前，**「无 GPU 也能跑语义检索」这句话不成立**，
-#     无 GPU 部署只有「不配 KEEL_EMBED_ENDPOINT、/search 走纯关键词降级」这一种形态。
-#   - services/inference/app.py **没有自己的单元测试**，而现在连那个通过真实
-#     HTTP 验证它的 job 也没有了 —— 它当前是完全没有执行者的代码。
+#   - **「无 GPU 也能跑语义检索」这句话今天不成立，而且短期内不会成立。**
+#     infero 没有 CPU 后端；M3 那个跑 BGE-M3 的 Python 服务已经退役，
+#     这个仓库不为「无 GPU 备胎」长期维护第二个推理引擎实现（它退役前有整整
+#     一轮既没有调用方也没有测试，那就是维护第二实现的真实成本）。
+#     所以无 GPU 部署只有一种形态：不配 KEEL_EMBED_ENDPOINT、/search 走
+#     §8 的纯关键词降级链 —— 栈起得来、搜索有结果，只是没有语义召回。
+#     正解是 infero 自己的 CPU 后端，那还没写。
+#     这一条与上面那条的关系变了：CI 现在**有** GPU（lenserver），
+#     所以「CI 只跑得到降级那一侧」已经不是硬约束，只是 e2e 这个 job 今天
+#     刻意只验降级侧 —— 它起的是裸 compose，不连引擎。带引擎那一侧要等
+#     上面那个还没写的 job。
 #
 # ## M2 起 Rust 进了关键路径
 #
@@ -91,6 +97,16 @@ on:
 permissions:
   contents: read
 
+# ## 跑在哪
+#
+# 全部 job 跑在自建 runner 上（lenserver，192.168.0.110，label `keel`）：仓库是私有的，
+# GitHub 托管的 runner 按分钟计费，额度用完 job 直接不启动。自建 runner 不计费，
+# 但它是一台**长期运行、和别的服务共用**的机器 —— 托管 runner 每次都是新虚拟机，
+# 这里不是。所以下面凡是占宿主机端口、起具名容器、建 compose 项目的地方，都满足三条：
+#   · 不用宿主机上已被占的端口（5432 有 quant_postgres，8080 有别的服务）；
+#   · 名字带 keelci 前缀，和同机的演示环境（COMPOSE_PROJECT_NAME=keeldemo，18099）隔开；
+#   · 开始前、结束后都清理（结束后 if: always()），上一次残留不会让下一次重名失败。
+# 只有一个 keel runner，job 串行，所以固定名字就够；要并行得先把这些名字与端口参数化。
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   # 只在 PR 上取消。往 PR 连推三次，没必要让三个 e2e 同时建镜像——有意义的
@@ -104,7 +120,7 @@ jobs:
   # ---------------------------------------------------------------------------
   gates:
     name: 文档与契约闸门
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, keel]
     # 这一段本机 2.4 秒。给 15 分钟是留给 npx 首次下载与 Go 模块下载的，
     # 不是留给「卡住也没关系」——真卡住时，六小时的默认上限会把 runner 额度
     # 烧光，而失败信息还是那句超时。
@@ -149,7 +165,9 @@ jobs:
   # ---------------------------------------------------------------------------
   go:
     name: Go 构建与测试
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, keel]
+    env:
+      PGPORT: "15432"
     timeout-minutes: 20
     services:
       postgres:
@@ -171,8 +189,10 @@ jobs:
           POSTGRES_DB: keel
         ports:
           # 测试进程跑在 runner 宿主机上，不在容器网络里，所以必须映射出来。
-          # 映到 5432 是为了让 internal/db 的默认 PGPORT 直接成立。
-          - 5432:5432
+          # 原来映到 5432、让 internal/db 的默认 PGPORT 直接成立；自建 runner 上 5432
+          # 被同机的 quant_postgres 占着，改成 15432，job 级的 PGPORT 跟着改
+          # （internal/db/dsn.go 与 Makefile 的 GOOSE_DBSTRING 都读它）。
+          - 15432:5432
         options: >-
           --health-cmd "pg_isready -h 127.0.0.1 -U keel -d keel"
           --health-interval 2s
@@ -215,6 +235,11 @@ jobs:
       - name: Rust 工具链
         if: steps.libdtmrs.outputs.cache-hit != 'true'
         run: |
+          # runner 作为 systemd 服务跑，PATH 里没有 rustup 装的 ~/.cargo/bin。
+          if [ -x "$HOME/.cargo/bin/cargo" ]; then
+            export PATH="$HOME/.cargo/bin:$PATH"
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          fi
           command -v cargo >/dev/null || {
             echo "::error::runner 上没有 cargo。dtmrs 是 Rust 实现，Keel 自 M2 起经 cgo 嵌入它。修法：在这一步前面加 - uses: dtolnay/rust-toolchain@stable"
             exit 1
@@ -252,7 +277,12 @@ jobs:
   # 只有这条链路会红。
   e2e:
     name: 端到端（compose + smoke + SDK）
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, keel]
+    env:
+      # 和同机演示环境（keeldemo / 18099）隔开；宿主机 8080 被占。
+      # smoke.sh 与 web/src/api/smoke.mts 都读 KEEL_HTTP_PORT。
+      COMPOSE_PROJECT_NAME: keelci
+      KEEL_HTTP_PORT: "18180"
     # 比另外两个宽：这里要在 runner 上从零建两个镜像，Go 依赖在容器里重下一遍。
     #
     # M2 又加了一段：镜像里多一个 Rust 阶段（装 cargo/rustc、clone dtmrs、
@@ -274,6 +304,9 @@ jobs:
 
       # 端口刻意用默认的 8080，不换。这一整段就是 README 快速开始里那三行命令，
       # 一字不改地跑一遍——换了端口，CI 验证的就不再是 README 让读者跑的那件事。
+      - name: 清掉上一次的残留
+        run: docker compose down -v --remove-orphans || true
+
       - name: 起全栈
         run: docker compose up -d --build
 
@@ -301,6 +334,11 @@ jobs:
           docker compose ps --all
           docker compose logs --no-color --timestamps
 
+      # 自建 runner 不会替你删容器和卷。
+      - name: 收拾
+        if: always()
+        run: docker compose down -v --remove-orphans
+
   # ---------------------------------------------------------------------------
   # 客户端（app/，uni-app x）：用 DCloud 自己的编译器真编一遍
   # ---------------------------------------------------------------------------
@@ -318,7 +356,7 @@ jobs:
   # 所以契约漂移这件事的判据在 gates 那条，不在这里。
   client:
     name: 客户端（uni-app x 编译）
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, keel]
     # 本机实测：npm ci 约 30 秒（冷缓存），两次 uni build 各几秒。
     # 15 分钟给的是 runner 上下载 527 个包 + 那个 16MB 原生 binding 的余量。
     timeout-minutes: 15

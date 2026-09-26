@@ -1,0 +1,14 @@
+# 离线 SDK（build-apk.sh 下载）
+/.uni-sdk/
+# build-apk.sh 每次从 dist/build/app-android 拷进来的生成物
+/uniappx/src/main/java/
+/uniappx/src/main/assets/
+# Gradle / IDE
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+# 本地签名
+*.keystore
+*.jks

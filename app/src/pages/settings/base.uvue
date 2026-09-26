@@ -1,27 +1,35 @@
 <template>
   <view class="page">
-    <view class="card">
-      <text class="title">服务地址</text>
-      <text class="muted">
-        租户由 Host 决定，不是请求头。internal/tenant/resolver.go 写着「刻意不支持
-        用请求头指定租户：公开接口没有鉴权，那等于让调用方自己声明它是哪家店」。
-        所以这个客户端能配的只有下面这一个地址：单商家部署直接指过去，多商家部署指到
-        {code}.{base_domain}。它不会发任何 X-Merchant 之类的头。
-      </text>
-      <input class="input" type="text" v-model="url" placeholder="http://localhost:8080/api/v1" />
-      <text class="muted">路径前缀 /api/v1 属于地址，不属于契约里的路径。</text>
-      <button class="btn" @click="save">保存</button>
-      <text v-if="message != ''" class="ok">{{ message }}</text>
-    </view>
+    <scroll-view class="scroll" direction="vertical">
+      <view class="body">
+        <!-- 租户由 Host 决定，不是请求头：internal/tenant/resolver.go 刻意不支持用请求头
+             指定租户（公开接口没有鉴权，那等于让调用方自己声明它是哪家店）。所以这个客户端
+             能配的只有这一个地址：单商家部署直接指过去，多商家部署指到 {code}.{base_domain}。
+             它不会发任何 X-Merchant 之类的头。路径前缀 /api/v1 属于地址，不属于契约路径。 -->
+        <view class="card">
+          <text class="t-overline">店铺服务地址</text>
+          <view class="field">
+            <input class="field-input" type="text" v-model="url" placeholder="http://192.168.1.10:8080/api/v1" />
+          </view>
+          <view class="gap-s"></view>
+          <text class="t-hint">每家店有自己的地址，包含 /api/v1 前缀。H5 保持 /api/v1 即可。</text>
+          <view class="gap-m"></view>
+          <view class="btn" @click="save"><text class="btn-text">保存</text></view>
+          <text v-if="message != ''" class="t-ok msg">{{ message }}</text>
+        </view>
 
-    <view class="card">
-      <text class="title">换地址 = 换一家店 = 本地令牌作废</text>
-      <text class="muted">
-        服务端刻意让 A 店签发的令牌在 B 店被拒。保存一个不同的地址时，本地会话会被
-        当场清掉 —— 否则用户下一次点什么都会撞上一个他解释不了的 401。
-      </text>
-      <text class="muted">当前：{{ current }}{{ loggedIn ? '（已登录）' : '（未登录）' }}</text>
-    </view>
+        <!-- 服务端刻意让 A 店签发的令牌在 B 店被拒。保存一个不同的地址时本地会话当场清掉 ——
+             否则用户下一次点什么都会撞上一个他解释不了的 401。 -->
+        <view class="notice">
+          <text class="notice-title">切换地址会退出登录</text>
+          <text class="notice-text">换了地址就是换了一家店，之前的登录状态在新店无效。</text>
+        </view>
+
+        <view class="meta">
+          <text class="t-hint">当前：{{ current }}{{ loggedIn ? '（已登录）' : '（未登录）' }}</text>
+        </view>
+      </view>
+    </scroll-view>
   </view>
 </template>
 
@@ -49,30 +57,19 @@ export default {
       this.current = next
       this.url = next
       this.loggedIn = isLoggedIn()
-      this.message = before && !this.loggedIn ? '已保存，并清掉了上一家店的令牌' : '已保存'
+      this.message = before && !this.loggedIn ? '已保存，并退出了上一家店的登录' : '已保存'
     },
   },
 }
 </script>
 
 <style>
-.title {
-  font-size: 15px;
-  font-weight: bold;
+.msg {
+  margin-top: 12px;
+  text-align: center;
 }
-.input {
-  height: 38px;
-  margin-top: 10px;
-  padding-left: 8px;
-  border-width: 1px;
-  border-style: solid;
-  border-color: #dddddd;
-  border-radius: 4px;
-  font-size: 14px;
-}
-.ok {
-  color: #237804;
-  font-size: 13px;
-  margin-top: 8px;
+.meta {
+  padding: 16px 4px;
+  align-items: center;
 }
 </style>

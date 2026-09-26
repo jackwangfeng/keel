@@ -1,0 +1,61 @@
+// Keel 买家端的 Android 原生壳。结构照 DCloud uni-app x 离线 SDK（VDOM 模式）自带的
+// uniappxnativepackage 工程：app 是壳，uniappx 装 `uni build --platform app-android`
+// 编出来的 Kotlin 源码与资源。怎么用见 app/scripts/build-apk.sh。
+//
+pluginManagement {
+    repositories {
+        maven { url 'https://maven.aliyun.com/repository/google' }
+        maven { url 'https://maven.aliyun.com/repository/gradle-plugin' }
+        gradlePluginPortal()
+        google()
+        mavenCentral()
+    }
+}
+// pluginManagement 必须是文件里第一个块，所以这段只能放在它后面。
+// 离线 SDK（80MB、135 个 aar）不入库，由 build-apk.sh 下载到 .uni-sdk/，这里读的是它。
+def uniSdk = file(providers.gradleProperty('uniSdkDir').getOrElse("${rootDir}/.uni-sdk"))
+
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        // UTS 的 Kotlin 编译器插件（io.dcloud.uts.kotlin:uts-kotlin-compiler-plugin）
+        // 由 uts-kotlin-gradle-plugin 当依赖拉，只能从 SDK 的 plugins/ 目录里找到。
+        flatDir { dirs(new File(uniSdk, 'plugins')) }
+        maven { url 'https://maven.aliyun.com/repository/google' }
+        maven { url 'https://maven.aliyun.com/repository/public' }
+        maven { url = uri('https://jitpack.io') }
+        google()
+        mavenCentral()
+    }
+}
+
+gradle.ext.uniSdk = uniSdk
+
+// 只挑用得到的 aar，而不是把 SDK/libs 里 135 个（广告、地图、推送、人脸……）全塞进 apk。
+//   · 运行时核心：没有它们起不来。
+//   · 模块：`uni build` 在 dist/build/app-android/manifest.json 的
+//     app-android.distribute.modules 里列出了代码实际用到的 uni API 模块；
+//     build-apk.sh 会核对那份清单里的每一个都在下面，缺了就红。
+gradle.ext.uniAars = [
+    // 运行时核心
+    'app-common', 'app-runtime', 'framework', 'dcloud-layout', 'breakpad-build', 'uts-runtime',
+    'android-gif-drawable-1.2.30',
+    'uni-crash', 'uni-exit', 'uni-theme', 'uni-prompt', 'uni-rpx2px', 'uni-privacy',
+    'uni-getAppBaseInfo', 'uni-getDeviceInfo', 'uni-getAccessibilityInfo',
+    'uni-getAppAuthorizeSetting', 'uni-getSystemSetting', 'uni-openAppAuthorizeSetting',
+    'uni-createRequestPermissionListener', 'uni-requestSystemPermission',
+    // 代码用到的模块（与 manifest.json 的 modules 对齐）
+    'uni-storage', 'uni-getSystemInfo', 'uni-network',
+    // 自动化测试运行时（build-apk.sh --e2e）额外用到的模块。普通包里也带着：
+    // 一共几百 KB，换来两种构建用同一份清单，不必在 Gradle 里分叉。
+    'uni-websocket', 'uni-fileSystemManager', 'uni-actionSheet', 'uni-showLoading',
+    // uni.showModal 在 uni-modal 里，但编译器的 modules 清单没列它（实测）：
+    // 清单核对拦不住，是 Kotlin 编译报 Unresolved reference 'showModal' 才发现的。
+    'uni-modal',
+].collect { name ->
+    def f = new File(uniSdk, "SDK/libs/${name}-release.aar")
+    f.exists() ? f : new File(uniSdk, "SDK/libs/${name}.aar")
+}
+rootProject.name = 'keel-buyer'
+include ':app'
+include ':uniappx'

@@ -848,3 +848,25 @@ export type ListOrdersResponse = {
   total : number
   items : Order[]
 }
+
+/** POST /search 的请求体 */
+export type SearchRequest = {
+  query : string
+  filters? : SearchFilters
+  size? : number
+  /** 排序策略标识，用于 A/B 对比。记入检索日志后可按策略分组 */
+  strategy? : string
+  /** 返回各阶段得分，用于调试与效果评估 */
+  explain? : boolean
+}
+
+/** POST /search 的 200 响应体 */
+export type SearchResponse = {
+  items : SearchHit[]
+  latency_ms : number
+  /** 本次召回并排序后的结果总数（上限即 `size`）。 */
+  total? : number
+  /** 本次实际生效的策略标识（回显）。服务端做分流时， */
+  strategy : string
+  trace_id? : string
+}

@@ -1,0 +1,92 @@
+name: Bug report
+description: Something behaves differently from what the documentation says.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Found a way for one tenant to reach another tenant's data, or to
+        escalate to a platform-level operator?** That is not an issue — close
+        this and use the Security tab → *Report a vulnerability*. See
+        [SECURITY.md](../blob/main/SECURITY.md).
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: >-
+        The output of `curl localhost:8080/version`, or the first line of the
+        startup log. If you built from source and it says `dev`, paste the
+        commit instead.
+      placeholder: 'v0.1.0 (a1b2c3d4e5f6, 2026-09-26T05:35:47Z) go1.26.0'
+    validations:
+      required: true
+
+  - type: dropdown
+    id: shape
+    attributes:
+      label: How are you running it?
+      options:
+        - docker compose up (the default single-merchant stack)
+        - docker compose with compose.multi.yaml (multi-merchant)
+        - Built from source, own Postgres
+        - Other (describe below)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: engine
+    attributes:
+      label: Is the inference engine connected?
+      description: >-
+        `KEEL_EMBED_ENDPOINT` unset is a supported configuration — search
+        degrades to keyword-only by design. Saying which one you are in
+        separates "search is broken" from "search is in its documented
+        fallback".
+      options:
+        - 'Yes — infero is running and KEEL_EMBED_ENDPOINT is set'
+        - 'No — KEEL_EMBED_ENDPOINT is unset (keyword-only fallback)'
+        - 'Set, but the engine is unreachable'
+        - "Don't know"
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect, and where does it say so?
+      description: >-
+        A link to the line in the docs, the contract
+        (`docs/电商系统-OpenAPI.yaml`), or a test. If nothing states it, say
+        that — "the docs are silent and I expected X" is a legitimate report
+        and often the more useful one.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened instead?
+      description: Paste the actual response or log lines, not a summary of them.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to reproduce
+      description: >-
+        Shortest path from a clean `docker compose up`. If it only reproduces
+        with your own data, say what is different about it.
+    validations:
+      required: true
+
+  - type: textarea
+    id: gate
+    attributes:
+      label: Did any gate catch it?
+      description: >-
+        Optional. Output of `./scripts/check-all.sh` or the failing test name,
+        if you ran them. A bug that every gate stays green through is a
+        different (and more interesting) problem than one that turns something
+        red.
