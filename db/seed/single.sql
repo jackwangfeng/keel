@@ -110,12 +110,39 @@ SELECT r.merchant_id, r.id, 'default', '示例小店（默认门店）', TRUE
 -- 「默认分类」这个名字留着没改：它是第一版种子里咖啡器具那三件的归属，
 -- 改名要动的是数据而不是结构，而改它换不来任何东西。
 INSERT INTO categories (merchant_id, name, path, status)
-SELECT m.id, v.name, '/' || v.name || '/', 1
+SELECT m.id, v.name, '', 1
   FROM merchants m
   CROSS JOIN (VALUES ('默认分类'), ('女装'), ('家居'), ('数码配件'), ('食品饮料')) AS v(name)
  WHERE m.code = 'demo'
    AND NOT EXISTS (SELECT 1 FROM categories c
                     WHERE c.merchant_id = m.id AND c.name = v.name);
+
+-- path 要**含自己的 id**（形如 /12/），不能用名字。
+--
+-- 第一版这里写的是 '/' || v.name || '/'，也就是 /女装/。后台建类目、挪子树、判环
+-- 全部按 path 前缀工作（admin_categories.sql 的 CreateCategoryRow、repository 的
+-- MoveCategory），而买家侧按类目筛商品也按前缀取子树（products.sql 文件头）。
+-- 用 id 的全部意义是**让前缀唯一**：两个同名顶层类目的 path 都是 /女装/ 时，
+-- 挪其中一棵子树会连另一棵一起改写，按类目筛也会把两棵并在一起。
+--
+-- 为什么不在上面那条 INSERT 里直接写 id：id 是 GENERATED ALWAYS AS IDENTITY，
+-- 插之前不知道；而写成数据修改 CTE 在 PostgreSQL 里是静默无效的（同一条语句的
+-- 各个 CTE 共享快照，UPDATE 看不到刚插的行，理由同 CreateCategoryRow）。
+--
+-- 写成可以反复跑的：种子每次 compose up 都会跑，挂着一个由旧种子初始化的库时，
+-- 这一条把名字格式的 path 连同它们的子孙一起改成 id 格式。按商家对齐，
+-- 因为子孙判定是字符串前缀，不带商家的话两家店的同名类目会互相改写。
+UPDATE categories c
+   SET path = '/' || r.id || '/' || substr(c.path, length(r.path) + 1)
+  FROM categories r
+ WHERE r.parent_id IS NULL
+   AND r.path !~ '^/[0-9]+/$'
+   AND c.merchant_id = r.merchant_id
+   AND (c.id = r.id
+        -- 按前缀带上子孙只在旧 path 真有内容时做。空串或单个 / 当前缀，
+        -- LIKE 会匹配这家商家的**全部**类目，一条种子改写整张表。
+        OR (length(r.path) > 1 AND c.path LIKE r.path || '%'));
+
 
 -- ---------------------------------------------------------------------------
 -- 商品

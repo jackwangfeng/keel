@@ -260,6 +260,7 @@ func TestRouterServesContractPaths(t *testing.T) {
 		"GET /healthz":                           false,
 		"GET /version":                           false,
 		"GET /api/v1/products":                   false,
+		"GET /api/v1/categories":                 false,
 		"POST /api/v1/search":                    false,
 		"GET /api/v1/products/:product_id":       false,
 		"POST /api/v1/orders":                    false,

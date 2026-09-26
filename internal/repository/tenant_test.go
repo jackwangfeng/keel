@@ -183,7 +183,7 @@ func TestWithTenantScopesGeneratedQueryToTheTenant(t *testing.T) {
 		// 传别家的店，失败的原因就换成了门店不匹配，测的不再是 RLS。
 		sc := defaultScope(t, tc.id)
 		err := r.WithTenant(tenant.NewContext(ctx, tc.id), func(q repository.Tx) error {
-			rows, err := q.ListProducts(ctx, sc, 100, 0)
+			rows, err := q.ListProducts(ctx, sc, nil, 100, 0)
 			if err != nil {
 				return err
 			}

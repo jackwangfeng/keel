@@ -93,10 +93,19 @@ type ProductTx interface {
 	// limit / offset 的钳制是业务规则，在 service 里做。这里只负责把它们安全地
 	// 送进 int32 的参数位 —— 越界的值到这一层还是要挡，因为 int32 溢出的后果是
 	// 一个负数 OFFSET，Postgres 会报错，而错误里没有任何东西指向「页码太大」。
-	ListProducts(ctx context.Context, sc StoreScope, limit, offset int64) ([]Product, error)
+	//
+	// categoryID 为 nil 表示不按类目筛；非 nil 时**含子孙**（db/queries/products.sql
+	// 文件头那一段）。不存在或已软删的类目返回空列表，不是错误。
+	ListProducts(ctx context.Context, sc StoreScope, categoryID *int64, limit, offset int64) ([]Product, error)
 
 	// CountProducts 返回当前租户在架商品的总数，用于填契约里必填的 total。
-	CountProducts(ctx context.Context, sc StoreScope) (int64, error)
+	// categoryID 必须与同一页 ListProducts 传的是同一个 —— 两边条件不一致，
+	// total 数的就不是列表实际会分出来的那批行。
+	CountProducts(ctx context.Context, sc StoreScope, categoryID *int64) (int64, error)
+
+	// ListVisibleCategories 返回启用且未软删的类目，扁平，父节点先于子节点。
+	// 拼成树是 service 的事（那里有「父节点停用则整棵子树不显示」这条规则）。
+	ListVisibleCategories(ctx context.Context) ([]CategoryNode, error)
 
 	// FindProduct 取一件**可见**商品（在架且未软删）。查不到返回 ErrProductNotFound。
 	FindProduct(ctx context.Context, sc StoreScope, id int64) (ProductDetail, error)
@@ -124,7 +133,7 @@ type tenantTx struct {
 	scope *int64
 }
 
-func (t tenantTx) ListProducts(ctx context.Context, sc StoreScope, limit, offset int64) ([]Product, error) {
+func (t tenantTx) ListProducts(ctx context.Context, sc StoreScope, categoryID *int64, limit, offset int64) ([]Product, error) {
 	// 到这里还越界只可能是上游的钳制没生效。报错而不是截断：截断会把
 	// 「第 1 亿页」悄悄变成某一页真实数据，一个错误的结果比一个错误更难发现。
 	if limit < 0 || limit > math.MaxInt32 {
@@ -137,6 +146,7 @@ func (t tenantTx) ListProducts(ctx context.Context, sc StoreScope, limit, offset
 	rows, err := t.q.ListProducts(ctx, db.ListProductsParams{
 		StoreID:    sc.StoreID,
 		RegionID:   sc.RegionID,
+		CategoryID: categoryID,
 		PageLimit:  int32(limit),
 		PageOffset: int32(offset),
 	})
@@ -159,10 +169,34 @@ func (t tenantTx) ListProducts(ctx context.Context, sc StoreScope, limit, offset
 	return out, nil
 }
 
-func (t tenantTx) CountProducts(ctx context.Context, sc StoreScope) (int64, error) {
+func (t tenantTx) CountProducts(ctx context.Context, sc StoreScope, categoryID *int64) (int64, error) {
 	return t.q.CountProducts(ctx, db.CountProductsParams{
-		StoreID: sc.StoreID, RegionID: sc.RegionID,
+		StoreID: sc.StoreID, RegionID: sc.RegionID, CategoryID: categoryID,
 	})
+}
+
+// CategoryNode 是一个启用中的类目，扁平形态。树由 service 拼。
+type CategoryNode struct {
+	ID        int64
+	ParentID  *int64
+	Name      string
+	Level     int16
+	SortOrder int32
+}
+
+func (t tenantTx) ListVisibleCategories(ctx context.Context) ([]CategoryNode, error) {
+	rows, err := t.q.ListVisibleCategories(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]CategoryNode, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, CategoryNode{
+			ID: r.ID, ParentID: r.ParentID, Name: r.Name,
+			Level: r.Level, SortOrder: r.SortOrder,
+		})
+	}
+	return out, nil
 }
 
 // ProductDetail 是商品详情在 repository 边界上的形状（契约的 ProductDetail）。
