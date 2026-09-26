@@ -173,9 +173,12 @@ all `docker compose up` brings up today. The rest of this README describes the
 system being built; these parts are on the roadmap and are listed here so that
 nothing above reads as if it already ships:
 
-- **cross-encoder reranking and business re-ranking.** `POST /search` today is
-  two-stage — vector recall and keyword recall, fused with RRF. The contract
-  describes four stages; the last two land in M5. `explain: true` names the
+- **cross-encoder reranking.** `POST /search` today is three-stage — vector
+  recall and keyword recall fused with RRF, then business re-ranking
+  (out-of-stock products are demoted multiplicatively below everything in
+  stock). The contract's fourth stage, reranking, is missing: the inference
+  engine has no `/v1/rerank` yet. Business re-ranking itself has only the stock
+  factor; promotions and quality have no data to read. `explain: true` names the
   stages that actually ran, so the response never claims more than it did
 - **the inference engine is not part of `docker compose up`, and it needs an
   NVIDIA GPU.** Since M4 the engine is our own
@@ -219,10 +222,13 @@ Products & SKUs · inventory · cart · checkout · payments · refunds ·
 coupons · order state machine
 
 **AI-native capabilities**
-- **Semantic search** — hybrid vector + keyword retrieval fused with RRF.
-  Cross-encoder reranking and *business re-ranking* (stock, promotions, quality)
-  are designed and contracted, and land in M5 — semantically relevant is not the
-  same as worth selling, and that distinction is the point of the last two stages.
+- **Semantic search** — hybrid vector + keyword retrieval fused with RRF, then
+  *business re-ranking* (since M5: out-of-stock demotion; the promotion and
+  quality factors have no data yet). Cross-encoder reranking is designed and
+  contracted but not built — semantically relevant is not the same as worth
+  selling, and that distinction is the point of the last two stages. Every
+  search writes a `search_logs` row (strategy, stages that actually ran, model
+  version) for offline evaluation and per-strategy comparison.
 - **Conversational shopping** — understands intent, never invents products.
   Every item shown comes from a real retrieval result.
 - **Visual search** — find the same product from a photo.

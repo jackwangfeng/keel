@@ -39,7 +39,54 @@ so "which one is running?" never depends on anyone's memory.
 
 ## [Unreleased]
 
-Nothing yet.
+Lands on migration `00027`.
+
+### Added
+
+- **Business re-ranking in `POST /search`** (semantic search design §6). After
+  RRF fusion and before truncating to `size`, every candidate's score is
+  multiplied by a business factor — multiplicative decay, not an additive
+  penalty. Only the stock factor exists so far: out-of-stock products get
+  `0.05`, which is small enough to sink the best out-of-stock candidate below
+  the worst in-stock one across the whole recall window, while keeping relevance
+  order among out-of-stock items. The promotion and quality factors have no data
+  to read (there is no promotions table and no reviews); freshness and sales are
+  deliberately left out until reranking gives scores a real dynamic range and an
+  offline evaluation set exists; margin weighting is not implemented, per the
+  design's own advice to keep it off.
+- **Two named strategies.** The default is now `rrf-biz-v1` (hybrid recall +
+  RRF + business re-ranking). `rrf-v1`, the previous pipeline without business
+  re-ranking, can still be requested explicitly and does exactly what its name
+  says, so the two can be compared. Any other value still falls back to the
+  default without an error, and the response echoes the strategy that ran.
+- **`search_logs`** (data model §8, migration `00027`). Every successful search
+  writes one row: the query, the resolved strategy, the stages that actually ran
+  (a new `stages` column — a degraded keyword-only search no longer hides under
+  the same strategy as a hybrid one), the embedding model and version, the fused
+  candidate ids and the returned ids, server-side latency and a random 128-bit
+  `trace_id`. A failed log write is reported as an `ERROR` and never fails the
+  search. Tenant-isolated with `ENABLE` + `FORCE` row-level security.
+
+### Changed
+
+- **`explain: true` lists exactly the stages that ran.** `scores.business`
+  appears when business re-ranking ran; `scores.vector` is absent when the
+  vector route did not run (engine down or not configured); `scores.final` is
+  the score the ordering actually used. `scores.rerank` never appears —
+  cross-encoder reranking is still not implemented, because the inference
+  engine has no `/v1/rerank` endpoint yet.
+- **`filters.in_stock_only` now defaults to `false`, as the contract has said
+  since M3.** The handler had kept defaulting to `true`, which silently turned
+  the contract's "out-of-stock products are demoted" into "out-of-stock products
+  are dropped". Out-of-stock products now appear, ranked last; pass
+  `in_stock_only: true` to drop them.
+- When the caller is outside every store's service area, `strategy` now echoes
+  the resolved strategy instead of the raw request string.
+
+### Not yet
+
+- `trace_id` is generated and stored but still not returned by `/search`: its
+  only consumer, `POST /search/events`, is not implemented.
 
 ## [0.1.0] - 2026-09-26
 
