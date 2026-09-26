@@ -1207,7 +1207,21 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ProductImportResult' }
-        '409': { $ref: '#/components/responses/IdempotencyInFlight' }
+        '409':
+          description: |
+            两种，按 `type` 区分：
+
+            · `idempotency-key-in-flight`：同一把钥匙正在处理中，按 `Retry-After` 退避重试；
+            · `sku-code-duplicated`：写库时某个 SKU 编码刚被别人占了（预检之后、确认之前，
+              另一个导入或手工建的 SKU 抢先用了它）。整批已回滚，什么都没建——重新预检，
+              那个编码会以 `sku_code_exists` 标出来。
+          headers:
+            Retry-After:
+              description: 只在 idempotency-key-in-flight 时出现，建议退避秒数
+              schema: { type: integer }
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
         '413':
           description: 文件超过 5 MB。`type` 为 `https://keel.dev/problems/import-file-too-large`。
           content:

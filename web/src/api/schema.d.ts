@@ -2206,7 +2206,24 @@ export interface paths {
                         "application/json": components["schemas"]["ProductImportResult"];
                     };
                 };
-                409: components["responses"]["IdempotencyInFlight"];
+                /**
+                 * @description 两种，按 `type` 区分：
+                 *
+                 *     · `idempotency-key-in-flight`：同一把钥匙正在处理中，按 `Retry-After` 退避重试；
+                 *     · `sku-code-duplicated`：写库时某个 SKU 编码刚被别人占了（预检之后、确认之前，
+                 *       另一个导入或手工建的 SKU 抢先用了它）。整批已回滚，什么都没建——重新预检，
+                 *       那个编码会以 `sku_code_exists` 标出来。
+                 */
+                409: {
+                    headers: {
+                        /** @description 只在 idempotency-key-in-flight 时出现，建议退避秒数 */
+                        "Retry-After"?: number;
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
                 /** @description 文件超过 5 MB。`type` 为 `https://keel.dev/problems/import-file-too-large`。 */
                 413: {
                     headers: {
