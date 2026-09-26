@@ -9,6 +9,24 @@ import (
 	"context"
 )
 
+const getSearchLogRankedIDs = `-- name: GetSearchLogRankedIDs :one
+
+SELECT ranked_ids FROM search_logs WHERE trace_id = $1
+`
+
+// 下面四条是 POST /search/events 的落点（数据模型 §8 那段 trace_id 的注）。
+//
+// 定位靠 trace_id 上的全局唯一索引（uk_search_logs_trace），一次点查。
+// 没有一处写 merchant_id：别家店的 trace_id 被 RLS 过滤成「查无此行」，
+// 与不存在的 trace_id 是同一个结果 —— service 把两者合成同一个 404。
+// 这次检索真正返回的那几条。service 拿它判 product_id 在不在里面（防刷指标）。
+func (q *Queries) GetSearchLogRankedIDs(ctx context.Context, traceID string) ([]int64, error) {
+	row := q.db.QueryRow(ctx, getSearchLogRankedIDs, traceID)
+	var ranked_ids []int64
+	err := row.Scan(&ranked_ids)
+	return ranked_ids, err
+}
+
 const insertSearchLog = `-- name: InsertSearchLog :exec
 
 INSERT INTO search_logs (query, recall_ids, ranked_ids, latency_ms, trace_id,
@@ -39,9 +57,9 @@ type InsertSearchLogParams struct {
 // 注释里一个反引号都不许有，理由见 db/queries/inventories.sql 的第三条说明。
 // POST /search 每次成功返回写一行。
 //
-// user_id / session_id / parsed_intent 与三个行为列本轮不写：搜索是公开接口，
+// user_id / session_id / parsed_intent 与三个行为列不在这里写：搜索是公开接口，
 // 买家身份不在这条路径上；查询理解还没有；行为列由 POST /search/events 回填
-// （本轮未实现）。它们留着列的默认值 NULL —— 那是实话，不是占位。
+// （下面那几条）。它们留着列的默认值 NULL —— 那是实话，不是占位。
 func (q *Queries) InsertSearchLog(ctx context.Context, arg InsertSearchLogParams) error {
 	_, err := q.db.Exec(ctx, insertSearchLog,
 		arg.Query,
@@ -55,4 +73,63 @@ func (q *Queries) InsertSearchLog(ctx context.Context, arg InsertSearchLogParams
 		arg.ModelVersion,
 	)
 	return err
+}
+
+const setSearchLogCarted = `-- name: SetSearchLogCarted :execrows
+UPDATE search_logs SET carted_id = $1::bigint
+ WHERE trace_id = $2 AND carted_id IS NULL
+`
+
+type SetSearchLogCartedParams struct {
+	ProductID int64
+	TraceID   string
+}
+
+// 同上，加购。
+func (q *Queries) SetSearchLogCarted(ctx context.Context, arg SetSearchLogCartedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setSearchLogCarted, arg.ProductID, arg.TraceID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const setSearchLogClicked = `-- name: SetSearchLogClicked :execrows
+UPDATE search_logs SET clicked_id = $1::bigint
+ WHERE trace_id = $2 AND clicked_id IS NULL
+`
+
+type SetSearchLogClickedParams struct {
+	ProductID int64
+	TraceID   string
+}
+
+// 首次为准：已有值就一行都不改（影响行数 0），重放因此与首次效果相同。
+// 条件写在 WHERE 而不是 SET COALESCE：并发的两次回传里后到的那个
+// 会在行锁释放后重新求值 WHERE，于是看得见先到的那一次写下的值。
+func (q *Queries) SetSearchLogClicked(ctx context.Context, arg SetSearchLogClickedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setSearchLogClicked, arg.ProductID, arg.TraceID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const setSearchLogOrdered = `-- name: SetSearchLogOrdered :execrows
+UPDATE search_logs SET ordered_id = $1::bigint
+ WHERE trace_id = $2 AND ordered_id IS NULL
+`
+
+type SetSearchLogOrderedParams struct {
+	ProductID int64
+	TraceID   string
+}
+
+// 同上，下单。
+func (q *Queries) SetSearchLogOrdered(ctx context.Context, arg SetSearchLogOrderedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setSearchLogOrdered, arg.ProductID, arg.TraceID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }

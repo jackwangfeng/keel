@@ -7120,6 +7120,15 @@ export interface paths {
                              *     客户端必须知道自己落到了哪一桶，否则埋点对不上。
                              */
                             strategy: string;
+                            /**
+                             * @description 本次检索在 `search_logs` 里那一行的定位键（128 位随机数的十六进制，
+                             *     不可枚举）。客户端在用户点击 / 加购 / 下单**这一次检索返回的商品**时，
+                             *     把它原样带给 `POST /search/events`。不透明，不要解析、不要自己造。
+                             *
+                             *     **可能缺席**：检索日志写失败时不回。日志是辅助数据，写失败不让
+                             *     检索失败（语义检索层 §8）；而回一个库里没有的 id，只会让这次检索
+                             *     之后的每一次回传都 404。缺席时客户端**跳过回传**即可，不要重搜。
+                             */
                             trace_id?: string;
                         };
                     };
@@ -7144,58 +7153,109 @@ export interface paths {
         put?: never;
         /**
          * 搜索行为回传
-         * @description 回传点击 / 加购 / 下单事件，用于填充 `search_logs` 的 `clicked_id`、
-         *     `ordered_id`、`session_id`。
+         * @description 回传点击 / 加购 / 下单事件，回填 `search_logs` 那一行的 `clicked_id` /
+         *     `carted_id` / `ordered_id`（事件 `click` / `add_cart` / `order` 各对一列）。
          *
          *     没有这个接口，语义检索层设计 §9.2 的在线指标——首屏点击率 CTR@10、
-         *     搜索→加购率、搜索→下单转化率、二次搜索率——**一个都算不出来**。
+         *     搜索→加购率、搜索→下单转化率——**一个都算不出来**。
          *     而「埋点成本极低、补埋成本极高」正是数据模型文档自己强调的。
          *
          *     `trace_id` 用 `/search` 响应里那个，正好把一次搜索和它的后续行为串起来。
+         *
+         *     ### 公开，与 `/search` 一样
+         *
+         *     `security: []`：没登录的访客也在搜、也在点，只收登录用户的回传会让
+         *     CTR 只统计到一个有偏的子集。租户仍由 Host 定，`search_logs` 上有 RLS——
+         *     别家店的 `trace_id` 在这里与不存在的 `trace_id` 是同一个 404。
+         *
+         *     ### 防刷指标：只认这次检索真正返回过的商品
+         *
+         *     `product_id` 必须在这次检索**真正返回的那几条**（`search_logs.ranked_ids`）里，
+         *     否则 422、一列都不写。一个公开接口若接受任意商品 id，任何人都能拿一个
+         *     `trace_id` 把某件商品的「点击」刷上去。
+         *
+         *     ### 幂等：每一列首次写入为准，**不接受 `Idempotency-Key`**
+         *
+         *     同一次检索的同一种事件只记第一次：`clicked_id` 已有值时再报 `click`
+         *     （不论是不是同一件商品）返回 204，但不覆盖。于是重放与首次效果相同，
+         *     重试是安全的——这是**天然幂等**，不需要幂等键：幂等键的作用域是
+         *     `(接口, user_id, key)`，而这条公开接口上多半没有 `user_id`；
+         *     存档重放也只会把一个 204 存下来再回放一遍。
+         *
+         *     「首次」的语义对指标是对的：CTR@10 问的是「这次检索有没有被点」，
+         *     记住第一次点的是哪件（它在 `ranked_ids` 里的名次）正好够算 MRR；
+         *     一次下单里有多件商品时也只记第一件——「这次检索有没有带来下单」是一个是非题。
+         *
+         *     ### 失败不影响业务
+         *
+         *     回传是辅助数据：任何非 2xx 客户端都可以忽略，**不要重试 4xx**、
+         *     不要因此打断点击 / 加购 / 下单本身。
          */
         post: {
             parameters: {
                 query?: never;
-                header: {
-                    /**
-                     * @description 客户端生成的 UUID。幂等作用域为 `(接口 scope, user_id, key)`，
-                     *     有效期 24h，过期后同一 key 可复用（见数据模型文档 §11）。
-                     *
-                     *     · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
-                     *       并带 `Idempotency-Replayed: true` 响应头
-                     *     · **同 key 正在处理中**：`409` + `Retry-After`，
-                     *       type=https://keel.dev/problems/idempotency-key-in-flight，
-                     *       客户端应退避重试，不要当成业务失败
-                     *     · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
-                     *       type=https://keel.dev/problems/idempotency-key-reused。
-                     *       宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
-                     *       那会让用户以为下单成功了而实际什么都没发生
-                     *     · 首次执行失败（存档为失败态）时同样回放该失败响应；
-                     *       确需重试的场景请换一个新 key
-                     */
-                    "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                };
+                header?: never;
                 path?: never;
                 cookie?: never;
             };
             requestBody: {
                 content: {
                     "application/json": {
+                        /** @description `POST /search` 响应里的 `trace_id`，原样带回 */
                         trace_id: string;
                         /** @enum {string} */
                         event: "click" | "add_cart" | "order";
-                        /** Format: int64 */
-                        product_id?: number;
+                        /**
+                         * Format: int64
+                         * @description 被点击 / 加购 / 下单的商品。必须是这次检索返回的 `items[].id` 之一。
+                         */
+                        product_id: number;
                     };
                 };
             };
             responses: {
-                /** @description 已记录。回传失败不影响任何业务流程，客户端可忽略错误 */
+                /**
+                 * @description 已记录；或这一列此前已经记过（首次为准，本次不覆盖）。两者不区分：
+                 *     客户端对两者该做的事一样——什么都不用做。
+                 */
                 204: {
                     headers: {
                         [name: string]: unknown;
                     };
                     content?: never;
+                };
+                /**
+                 * @description `trace_id` 不存在，或不属于当前店铺。两者合成一个 404，
+                 *     理由同 §2「查不到即 404，不是 403」。
+                 */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /**
+                 * @description 请求体不合法（缺字段、`event` 不在枚举里、`trace_id` 形状不对），
+                 *     或 `product_id` 不是这次检索返回过的商品。
+                 */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /** @description 按来源 IP 限流（与 `/search` 各自一只桶），带 `Retry-After` */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
                 };
                 default: components["responses"]["Problem"];
             };

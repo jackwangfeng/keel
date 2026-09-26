@@ -138,8 +138,10 @@ import (
 //	· 同步写，不开 goroutine：一次单行 INSERT 在毫秒量级，而异步写意味着
 //	  进程退出时丢日志、测试里要等一个看不见的 goroutine。
 //
-// trace_id 由这里生成并落在这一行上，但本轮**不回给客户端** —— 它唯一的
-// 消费方 POST /search/events 还没实现（handler/contract_test.go 挂着这笔账）。
+// trace_id 由这里生成并落在这一行上，**只在这一行真的写进去了时**回给客户端
+// （SearchResult.TraceID）。它唯一的消费方是 POST /search/events（search_event.go），
+// 回一个库里没有的 id 只会让之后每一次回传都 404 —— 所以写失败时它缺席，
+// 契约里 trace_id 是可选字段，缺席就是「这次检索没有可回传的落点」。
 
 // SearchRepository 是检索需要的仓储能力。
 type SearchRepository interface {
@@ -379,6 +381,11 @@ type SearchResult struct {
 	// 在那条测试之前这个字段一处读者都没有（grep 只有定义、注释、赋值），
 	// 那条 WARN 也没有任何断言 —— 整段删掉，全绿。
 	Degraded bool
+
+	// TraceID 是这次检索在 search_logs 里那一行的定位键，客户端回传行为时带回来
+	// （POST /search/events）。**检索日志没写进去时为空串**：那时库里没有这一行，
+	// 回一个 id 出去只会换来之后每一次回传的 404（文件头第六节）。
+	TraceID string
 }
 
 // SearchService 是混合检索。
@@ -466,7 +473,7 @@ func (s *SearchService) Search(ctx context.Context, req SearchRequest) (SearchRe
 			}
 			// 也记一行：stages 为空、ranked_ids 为空。「不在服务范围」的检索
 			// 有多少，本身就是一个该被看见的数（默认门店没配、围栏画漏了）。
-			s.recordSearchLog(ctx, req.Query, res, nil, embedModel{}, start)
+			res.TraceID = s.recordSearchLog(ctx, req.Query, res, nil, embedModel{}, start)
 			return res, nil
 		}
 		return SearchResult{}, err
@@ -602,7 +609,7 @@ func (s *SearchService) Search(ctx context.Context, req SearchRequest) (SearchRe
 		Degraded: degraded,
 		Store:    storeContextOf(scope, matchTyp),
 	}
-	s.recordSearchLog(ctx, req.Query, res, fused, model, start)
+	res.TraceID = s.recordSearchLog(ctx, req.Query, res, fused, model, start)
 	return res, nil
 }
 
@@ -615,9 +622,12 @@ type embedModel struct{ Name, Version string }
 // 也不会有任何东西红。
 const SearchLogFailed = "检索日志没写进去（search_logs）。检索结果照常返回，但这一次检索在效果评测与策略对比里缺席"
 
-// recordSearchLog 写一行 search_logs。**不返回错误**：失败只记日志（文件头第六节）。
+// recordSearchLog 写一行 search_logs，返回那一行的 trace_id。
+//
+// **不返回错误**：失败只记日志（文件头第六节），返回空串 —— 调用方据此不把
+// trace_id 回给客户端。
 func (s *SearchService) recordSearchLog(ctx context.Context, query string, res SearchResult,
-	fused []search.Fused, model embedModel, start time.Time) {
+	fused []search.Fused, model embedModel, start time.Time) string {
 
 	recallIDs := make([]int64, 0, len(fused))
 	for _, f := range fused {
@@ -651,14 +661,16 @@ func (s *SearchService) recordSearchLog(ctx context.Context, query string, res S
 	}); err != nil {
 		s.log.ErrorContext(ctx, SearchLogFailed,
 			"query", query, "strategy", res.Strategy, "trace_id", entry.TraceID, "err", err)
+		return ""
 	}
+	return entry.TraceID
 }
 
 // newTraceID 生成一个 128 位随机的 trace_id（32 个十六进制字符）。
 //
 // 随机而不是自增：它是全局唯一索引上的键（uk_search_logs_trace），
 // 数据模型 §2 那条分界线把它归在「我们自己生成的不可枚举标识」一类 ——
-// 将来回给客户端之后，一个可枚举的 id 等于让人按序号去回传别人的检索行为。
+// 它回给客户端之后，一个可枚举的 id 等于让人按序号去回传别人的检索行为。
 func newTraceID() string {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {

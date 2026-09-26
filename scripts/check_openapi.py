@@ -177,6 +177,8 @@ IDEMPOTENCY_EXEMPT = {
     '/admin/staff/{staff_id}/login-token': '每次签发作废此前没用掉的登录链接 token，'
                                            '重复调用 = 只有最新一串有效；存档重放会让 token 明文进库',
     '/assistant/chat':    '无副作用；会话状态由 session_id 承载',
+    '/search/events':     '天然幂等：每一列首次写入为准、不覆盖，重放与首次效果相同；'
+                          '且是公开接口，幂等键的 (scope, user_id, key) 作用域在这里没有 user_id',
     '/orders/preview':    '无副作用；纯试算',
     '/coupons/applicable': '无副作用；纯查询',
     '/auth/sms/code':     '重复请求由 429 频控拦截，不是幂等键的战场',

@@ -242,8 +242,16 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	// 就能把整站压成纯关键词，而访客看不出任何异常。桶的形状、它挡得住什么、
 	// 挡不住什么，都写在 ratelimit.go 的文件头。请求体大小闸门在 handler 里
 	// （handler.MaxSearchBodyBytes），和 webhook 那处同一个顺序：先限大小再解析。
-	v1.POST("/search", rateLimitByIP(searchRateLimiterFromEnv()), handler.NewSearchHandler(
-		service.NewSearchService(repo, embedder, service.SearchConfig{}, nil)).Search)
+	srh := handler.NewSearchHandler(
+		service.NewSearchService(repo, embedder, service.SearchConfig{}, nil))
+	v1.POST("/search", rateLimitByIP(searchRateLimiterFromEnv()), srh.Search)
+
+	// 搜索行为回传（契约 security: []，与 /search 一样公开：没登录的访客也在点）。
+	// 挡刷指标的不是限流，是 service 那道「product_id 必须在这次检索返回的
+	// ranked_ids 里」与「每列首次为准」—— 限流挡的是写放大：它每次是一条
+	// 点查 + 一条单行 UPDATE，桶单独一只、额度是 /search 的三倍，理由在
+	// ratelimit.go 的 DefaultSearchEventRatePerSec 上。
+	v1.POST("/search/events", rateLimitByIP(searchEventRateLimiterFromEnv()), srh.Event)
 
 	// 商品详情与列表一样是 security: []（契约里两条都写着）：还没登录的人
 	// 也要看得到商品，否则小程序的首页到详情页这一跳就需要先登录。

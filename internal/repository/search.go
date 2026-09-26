@@ -2,6 +2,10 @@ package repository
 
 import (
 	"context"
+	"errors"
+	"fmt"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/keel/keel/internal/repository/internal/db"
 )
@@ -72,12 +76,61 @@ type SearchTx interface {
 
 	// InsertSearchLog 写一行检索日志（数据模型 §8，迁移 00027）。
 	InsertSearchLog(ctx context.Context, l SearchLog) error
+
+	// SearchLogRankedIDs 读 trace_id 那一行的 ranked_ids（这次检索真正返回的那几条）。
+	// 行不存在、或属于别的租户（RLS 过滤掉了），都是 ErrSearchLogNotFound。
+	SearchLogRankedIDs(ctx context.Context, traceID string) ([]int64, error)
+
+	// SetSearchLogBehavior 回填一个行为列（POST /search/events）。
+	// **首次为准**：那一列已有值时一行都不改，返回 false；写下了返回 true。
+	// 行不存在时同样返回 false —— 调用方应当先用 SearchLogRankedIDs 判存在。
+	SetSearchLogBehavior(ctx context.Context, traceID string, col SearchBehavior,
+		productID int64) (bool, error)
+}
+
+// SearchBehavior 是 search_logs 的三个行为列，一一对应契约里 /search/events 的三种事件。
+type SearchBehavior int
+
+const (
+	BehaviorClicked SearchBehavior = iota + 1 // clicked_id ← click
+	BehaviorCarted                            // carted_id  ← add_cart
+	BehaviorOrdered                           // ordered_id ← order
+)
+
+// ErrSearchLogNotFound：trace_id 在当前租户下查无此行。
+var ErrSearchLogNotFound = errors.New("检索日志不存在或不属于当前租户")
+
+func (t tenantTx) SearchLogRankedIDs(ctx context.Context, traceID string) ([]int64, error) {
+	ids, err := t.q.GetSearchLogRankedIDs(ctx, traceID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrSearchLogNotFound
+	}
+	return ids, err
+}
+
+func (t tenantTx) SetSearchLogBehavior(ctx context.Context, traceID string,
+	col SearchBehavior, productID int64) (bool, error) {
+	var (
+		n   int64
+		err error
+	)
+	switch col {
+	case BehaviorClicked:
+		n, err = t.q.SetSearchLogClicked(ctx, db.SetSearchLogClickedParams{ProductID: productID, TraceID: traceID})
+	case BehaviorCarted:
+		n, err = t.q.SetSearchLogCarted(ctx, db.SetSearchLogCartedParams{ProductID: productID, TraceID: traceID})
+	case BehaviorOrdered:
+		n, err = t.q.SetSearchLogOrdered(ctx, db.SetSearchLogOrderedParams{ProductID: productID, TraceID: traceID})
+	default:
+		return false, fmt.Errorf("未知的行为列 %d", col)
+	}
+	return n > 0, err
 }
 
 // SearchLog 是一行检索日志在这一层的形状。
 //
 // 只收 POST /search 这一刻知道的那些列；user_id / session_id / parsed_intent
-// 与三个行为列不在这里 —— 见 db/queries/search_logs.sql。
+// 不在这里，三个行为列由 SetSearchLogBehavior 事后回填 —— 见 db/queries/search_logs.sql。
 type SearchLog struct {
 	Query     string
 	RecallIDs []int64

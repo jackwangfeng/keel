@@ -160,6 +160,10 @@ func setup(ctx context.Context) error {
 	// /search 上」那件事由它证明。
 	os.Setenv(app.EnvSearchRateLimit, "100000")
 	os.Setenv(app.EnvSearchRateBurst, "100000")
+	// /search/events 那只桶同理（它与 /search 各自一只），执行者是
+	// search_event_test.go 的 TestSearchEventsAreRateLimitedInTheirOwnBucket。
+	os.Setenv(app.EnvSearchEventRateLimit, "100000")
+	os.Setenv(app.EnvSearchEventRateBurst, "100000")
 
 	// 商品图落在一个临时目录里。**必须显式配**：不配的话
 	// app.uploadStoreFromEnv 会取 os.TempDir()/keel-uploads，

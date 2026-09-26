@@ -66,6 +66,26 @@ Migrations `00027`–`00035`.
   candidate ids and the returned ids, server-side latency and a random 128-bit
   `trace_id`. A failed log write is reported as an `ERROR` and never fails the
   search. Tenant-isolated with `ENABLE` + `FORCE` row-level security.
+- **Search feedback: `/search` returns `trace_id`, and `POST /search/events`
+  is implemented** (semantic search design §9.2). Clients send
+  `{trace_id, event, product_id}` with `event` one of `click` / `add_cart` /
+  `order`; the server fills `clicked_id` / `carted_id` / `ordered_id` on that
+  search's log row. Public like `/search`. `product_id` must be one of the
+  products that search actually returned (`ranked_ids`), otherwise `422` and
+  nothing is written — an open endpoint accepting any id would let anyone
+  inflate a product's click-through. Each column keeps its first value; a
+  repeated event returns `204` without overwriting, so retries are safe. An
+  unknown `trace_id` and another shop's `trace_id` are the same `404`.
+  `trace_id` is omitted from the `/search` response when the log row could not
+  be written, since every event sent with it would 404. Rate-limited per IP in
+  its own bucket, separate from `/search` (default 36/s, burst 36 — three times
+  the search quota, one per behaviour column); override with
+  `KEEL_SEARCH_EVENT_RATE_PER_SEC` / `KEEL_SEARCH_EVENT_RATE_BURST`.
+- **`make search-metrics`** prints zero-result rate, CTR@10, search→add-to-cart
+  rate, search→order rate and the mean reciprocal rank of the first click, per
+  shop × strategy × stages that ran, over the last `PERIOD` (default `7 days`).
+  The query lives in `scripts/search_metrics.sql` and is tested against a
+  hand-computed dataset. Needs an admin connection (the table has RLS).
 - **Orders carry the name of the coupon they were placed with** (`coupon_name` on
   `Order`, so on the order detail, the order list and the create response). It
   is a snapshot taken by the same statement that writes `user_coupon_id`: renaming
@@ -217,6 +237,11 @@ Migrations `00027`–`00035`.
   now required; `CartItem.price_cents` is nullable (null for lines that are
   off the shelf or not sold at that store); `CartItem.available` is required
   and always equals `status == available`. Regenerate your client.
+- **Contract (breaking for generated clients):** `POST /search/events` is now
+  `security: []`, no longer takes an `Idempotency-Key` (it is naturally
+  idempotent, and a public endpoint usually has no `user_id` to scope a key to),
+  and `product_id` is required. `trace_id` on the `/search` response documents
+  its shape (`^[0-9a-f]{32}$`) and when it is absent.
 - Migration 00030 gives `user_addresses.merchant_id` a
   `DEFAULT current_merchant()`, now that the application writes that table.
 
@@ -272,8 +297,9 @@ Migrations `00027`–`00035`.
 
 ### Not yet
 
-- `trace_id` is generated and stored but still not returned by `/search`: its
-  only consumer, `POST /search/events`, is not implemented.
+- The second-search rate (semantic search design §9.2) still cannot be computed:
+  `/search` is public and `search_logs.session_id` is always `NULL`, so there is
+  no way to tell that two searches came from the same person.
 
 ## [0.1.0] - 2026-09-26
 

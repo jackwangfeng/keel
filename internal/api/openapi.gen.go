@@ -6776,28 +6776,13 @@ type PostRefundsRefundNoCancelParams struct {
 
 // PostSearchEventsJSONBody defines parameters for PostSearchEvents.
 type PostSearchEventsJSONBody struct {
-	Event     PostSearchEventsJSONBodyEvent `json:"event"`
-	ProductId *int64                        `json:"product_id,omitempty"`
-	TraceId   string                        `json:"trace_id"`
-}
+	Event PostSearchEventsJSONBodyEvent `json:"event"`
 
-// PostSearchEventsParams defines parameters for PostSearchEvents.
-type PostSearchEventsParams struct {
-	// IdempotencyKey 客户端生成的 UUID。幂等作用域为 `(接口 scope, user_id, key)`，
-	// 有效期 24h，过期后同一 key 可复用（见数据模型文档 §11）。
-	//
-	// · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
-	//   并带 `Idempotency-Replayed: true` 响应头
-	// · **同 key 正在处理中**：`409` + `Retry-After`，
-	//   type=https://keel.dev/problems/idempotency-key-in-flight，
-	//   客户端应退避重试，不要当成业务失败
-	// · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
-	//   type=https://keel.dev/problems/idempotency-key-reused。
-	//   宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
-	//   那会让用户以为下单成功了而实际什么都没发生
-	// · 首次执行失败（存档为失败态）时同样回放该失败响应；
-	//   确需重试的场景请换一个新 key
-	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+	// ProductId 被点击 / 加购 / 下单的商品。必须是这次检索返回的 `items[].id` 之一。
+	ProductId int64 `json:"product_id"`
+
+	// TraceId `POST /search` 响应里的 `trace_id`，原样带回
+	TraceId string `json:"trace_id"`
 }
 
 // PostSearchEventsJSONBodyEvent defines parameters for PostSearchEvents.
