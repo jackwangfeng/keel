@@ -54,6 +54,30 @@
         "DELETE"
       ]
     },
+    "tenant-nullable": {
+      "_": "staff 一张表。自带 merchant_id 列，但那一列**可空** —— NULL 表示平台级操作员，他不属于任何一家店（数据模型 §14）。标准 tenant 策略对 NULL 行恒为假，于是平台级操作员对所有人不可见，包括他自己；而把策略改成 `... OR merchant_id IS NULL` 会让写侧（USING 同时充当 WITH CHECK）变成一个提权入口：任何商家级管理员都能插出一行 merchant_id 为 NULL 的 staff，也就是给自己造一个平台管理员。所以谓词改成对一个**可以是 NULL 的作用域值**做 IS NOT DISTINCT FROM：租户作用域下它逐行等价于标准策略，平台作用域下它只解锁 merchant_id IS NULL 那一抽屉。完整论证在 db/migrations/00017_staff.sql 的文件头。",
+      "merchant_id": "required",
+      "policy": "column-scope",
+      "unique_scoped": true,
+      "grants": [
+        "SELECT",
+        "INSERT",
+        "UPDATE",
+        "DELETE"
+      ]
+    },
+    "parent-scoped-nullable": {
+      "_": "staff_tokens 一张表。形状与 parent-scoped 完全一样（没有 merchant_id 列，谓词是对父表的 EXISTS 子查询），只差子查询里比的是 staff_scope_merchant() 而不是 current_merchant() —— 父表是 staff，而平台级 token 挂在一行 merchant_id 为 NULL 的 staff 上，current_merchant() 在平台作用域里是 RAISE 而不是 NULL。不复用 parent-scoped：那一类的闸门断言里逐字要求 current_merchant()，放宽成「两者任一」等于让一张真正的 parent-scoped 表漏掉租户比较也照样绿。",
+      "merchant_id": "absent",
+      "policy": "parent-scope",
+      "unique_scoped": true,
+      "grants": [
+        "SELECT",
+        "INSERT",
+        "UPDATE",
+        "DELETE"
+      ]
+    },
     "tenant-root": {
       "_": "租户目录自身。租户解析要在 SET LOCAL 之前读它，此时 current_merchant() 会报错，挂 RLS 会让整站在第一跳 404。防护改由 GRANT 面承担：keel_app 只读。写入走管理员角色（建店、迁移、种子）。",
       "merchant_id": "special",
@@ -116,12 +140,17 @@
       "via": "sku_id",
       "reason": "主键就是 sku_id，租户归属由 skus 决定；且它是下单 SAGA 的热点表，多一列索引成本不划算（数据模型 §4）。它**要**策略：实测无策略时商家 A 能往商家 B 的 SKU 上插库存行、能改对方水位。"
     },
+    "staff": {
+      "class": "tenant-nullable",
+      "reason": "全文唯一一张 merchant_id 可空的表：NULL 表示平台级操作员（数据模型 §14）。它不能吃默认的 tenant 类 —— 标准策略对 NULL 行恒为假，平台级操作员于是对所有人不可见，包括他自己，整条平台级路径是死的。类别的完整论证见 classes.tenant-nullable 与 db/migrations/00017_staff.sql 的文件头。",
+      "policy_qual": "(NOT (merchant_id IS DISTINCT FROM staff_scope_merchant()))"
+    },
     "staff_tokens": {
-      "class": "parent-scoped",
+      "class": "parent-scoped-nullable",
       "parent": "staff",
       "via": "staff_id",
-      "documented_only": true,
-      "reason": "跟随 staff，租户归属由 staff.merchant_id 决定（数据模型 §14）。staff.merchant_id 本来就可空，复制一份下来也表达不了「平台级 token」属于谁。"
+      "scope_fn": "staff_scope_merchant()",
+      "reason": "跟随 staff，租户归属由 staff.merchant_id 决定（数据模型 §14）。staff.merchant_id 本来就可空，复制一份下来也表达不了「平台级 token」属于谁。父表可空这件事也传染给了策略谓词：子查询里比的是 staff_scope_merchant() 而不是 current_merchant()，见 classes.parent-scoped-nullable。"
     }
   },
   "fk_missing_ok": {
@@ -167,6 +196,7 @@
     "user_coupons(order_id)": "③ 「一张订单至多用一张券」的部分唯一索引，首列 order_id 已蕴含租户。",
     "search_logs(trace_id)": "① 链路追踪标识，日志 / 指标 / APM 三处按它对齐，按租户切会让跨系统排查失去锚点（数据模型 §8）。",
     "uploads(driver,storage_key)": "② storage_key 是磁盘或对象存储里的物理路径，两个租户写到同一个路径就是真的互相覆盖文件（数据模型 §13）。",
+    "staff(email)": "② 平台级操作员的邮箱唯一性。uk_staff_email(merchant_id, email) 对它**不去重** —— 部分唯一索引里 NULL 彼此相异，(NULL, 'ops@x.com') 可以存在两行。而「邮箱才是真正的信任根」（数据模型 §14 原话：能收这个邮箱的人就拥有后台全权），两个平台管理员共用一个邮箱意味着一封找回信能开出两把钥匙。首列只能是 email：这一行按定义不属于任何租户，没有 merchant_id 可以打头。索引是 uk_staff_email_platform，带 WHERE merchant_id IS NULL AND deleted_at IS NULL。",
     "staff_tokens(token_hash)": "② 它和支付密钥同量级；按租户切会让同一个 hash 在两家店下并存，而校验是按 hash 的点查。",
     "carts(user_id)": "③ 首列 user_id 已蕴含租户（users 自带 merchant_id），一个用户一个购物车。",
     "user_addresses(user_id)": "③ 同上，「每个用户至多一个默认地址」的部分唯一索引。",

@@ -31,9 +31,12 @@ type tenancyClass struct {
 	// "special"  = 这张表的租户列形态特殊（merchants 根本没有这一列，
 	//              shop_settings 的主键就是它），不做机械判断。
 	MerchantID string `json:"merchant_id"`
-	// "column" = 策略谓词是 merchant_id 的列比较；
-	// "parent" = 谓词是对父表的 EXISTS 子查询；
-	// "none"   = 不该有任何策略。
+	// "column"       = 策略谓词是 merchant_id 的列比较；
+	// "parent"       = 谓词是对父表的 EXISTS 子查询；
+	// "column-scope" = 列比较，但比的是一个**可以是 NULL 的**作用域值
+	//                  （staff.merchant_id 可空，见 00017 的文件头）；
+	// "parent-scope" = 父表 EXISTS 子查询，比的同样是那个作用域值；
+	// "none"         = 不该有任何策略。
 	Policy string `json:"policy"`
 	// 规矩三（唯一约束收进租户内）是否适用。
 	UniqueScoped bool     `json:"unique_scoped"`
@@ -47,6 +50,13 @@ type tenancyTable struct {
 	// 逐表覆盖类别默认的 GRANT 面；nil 表示吃类别默认值。
 	Grants []string `json:"grants"`
 	Reason string   `json:"reason"`
+
+	// PolicyQual 是 column-scope 类必须逐字对上的策略谓词（pg_policies.qual
+	// 那一列的原文）。写在清单里而不是写死在测试里，理由与 policy_name 相同：
+	// 这个谓词是隔离本身，改它必须是一次改清单的显式动作，而不是改一行 SQL。
+	PolicyQual string `json:"policy_qual"`
+	// ScopeFn 是 parent-scope 类的子查询里必须出现的那个作用域函数。
+	ScopeFn string `json:"scope_fn"`
 
 	// Documented 为显式的 false 时，表示这张表**刻意**不在设计文档里
 	// （goose 的迁移记录表那种）。指针是为了区分「写了 false」与「没写」。

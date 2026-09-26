@@ -274,6 +274,47 @@ func TestTenantPoliciesArePresentAndExact(t *testing.T) {
 						tbl, p.qual, needle, entry.Parent)
 				}
 			}
+		case "column-scope":
+			// staff 一张表。它的 merchant_id **可空**（NULL = 平台级操作员），
+			// 于是标准的列比较对那一行恒为假 —— 平台级操作员对所有人不可见，
+			// 包括他自己。谓词改成对一个可以是 NULL 的作用域值做
+			// IS NOT DISTINCT FROM，完整论证在 00017 的文件头与清单里这一类的说明。
+			//
+			// 逐字比对，期望值从清单里取：这个谓词是隔离本身，
+			// 「租户作用域下逐行等价于标准策略」这条性质靠的就是它的确切形状，
+			// 换成 OR 写法（`= current_merchant() OR merchant_id IS NULL`）之后
+			// 读侧看不出差别，而写侧变成一个提权入口。
+			if entry.PolicyQual == "" {
+				t.Errorf("%s 是 column-scope 类，但清单里没写 policy_qual —— "+
+					"这一类的谓词不是通用形状，没有期望值就等于没在检查", tbl)
+				continue
+			}
+			if p.qual != entry.PolicyQual {
+				t.Errorf("%s: 策略谓词是 %q，清单说应该是 %q", tbl, p.qual, entry.PolicyQual)
+			}
+		case "parent-scope":
+			// 形状与 parent 完全一样，只差子查询里比的是清单声明的那个作用域函数
+			// 而不是 current_merchant()（父表的租户列可空，current_merchant()
+			// 在平台作用域里是 RAISE 而不是 NULL）。
+			//
+			// 不把它并进 parent 去「两者任一」：那会让一张真正的 parent-scoped
+			// 表漏掉租户比较也照样绿。
+			if entry.Parent == "" || entry.ScopeFn == "" {
+				t.Errorf("%s 是 parent-scope 类却没在清单里写 parent / scope_fn", tbl)
+				continue
+			}
+			if strings.Contains(p.qual, "current_merchant()") {
+				t.Errorf("%s: 策略谓词里出现了 current_merchant()（%q）—— "+
+					"这一类的父表租户列可空，current_merchant() 在平台作用域里会报错，"+
+					"要的是 %s", tbl, p.qual, entry.ScopeFn)
+			}
+			for _, needle := range []string{entry.Parent, entry.ScopeFn, entry.Via} {
+				if !strings.Contains(p.qual, needle) {
+					t.Errorf("%s: 策略谓词 %q 里没有 %q——"+
+						"父表定租户的表，谓词必须真的去 %s 里按 %s 查",
+						tbl, p.qual, needle, entry.Parent, entry.ScopeFn)
+				}
+			}
 		default:
 			t.Errorf("%s: 清单里的 policy 形态 %q 无法理解", tbl, spec.Policy)
 		}
