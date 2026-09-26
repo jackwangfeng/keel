@@ -368,15 +368,9 @@ var routes = []route{
 		HandlerFile:    "search.go",
 		NoQueryParams: "检索的参数全在请求体里（query / filters / size / strategy / explain）；" +
 			"契约里这条接口一个 query 参数都没有",
-		NotYetImplementedResponse: map[string]string{
-			// store 本轮结清：检索结果按解析到的那家门店算，
-			// 响应里回的是真实的 StoreContext，不是一个假的 match_type。
-			"trace_id": "M5 起 search_logs 建了，每次检索都生成一个 trace_id 写进那一行；" +
-				"但 POST /search/events 还没有实现。trace_id 在契约里唯一的用处就是把一次检索" +
-				"与它后续的点击 / 加购 / 下单串起来（那条接口的描述原话），而收它的那一头不存在。" +
-				"回一个没有任何接口收得下的 id 不是「先占个位」，是让客户端以为它拿到的东西有下文。" +
-				"/search/events 落地的那一轮把它回出去，并删掉这一行。",
-		},
+		// NotYetImplementedResponse 在这里挂过两笔：store（门店上下文，00020 结清）与
+		// trace_id（POST /search/events 落地那一轮结清 —— 那时它才第一次有了收得下它的
+		// 接口）。反向由 search_event_test.go 的 TestSearchReturnsTheTraceIDOfItsLogRow 盯着。
 		NotYetImplementedStage: map[string]string{
 			"Reranker 精排": "cross-encoder 精排（语义检索层 §5 / §11 阶段 3，路线图 M5）。" +
 				"它是延迟大头（§8 给 80 ms），而本轮连离线评测集（§9.1）都还没有 —— " +
@@ -393,6 +387,14 @@ var routes = []route{
 				"是一段没有执行者的代码。另：skus.cost_cents 默认 0，「成本未知」与「零成本」" +
 				"分不开，按它判负毛利会把所有没填成本的商品一并误判。",
 		},
+	},
+	{
+		ContractPath:   "/search/events",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "search_event.go",
+		NoQueryParams: "trace_id / event / product_id 全在请求体里；契约里这条接口一个 query 参数都没有。" +
+			"与 /search 分文件，理由同 /stores 与 /stores/resolve：参数对账按文件做",
 	},
 	// —— 后台身份（M4 本轮）。契约 AdminAuth 与 Admin 两个 tag 的 7 条。
 	{

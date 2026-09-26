@@ -596,26 +596,6 @@ func TestOutOfStockIsDemotedNotDropped(t *testing.T) {
 	t.Logf("rrf-v1：%v；默认（业务重排）：%v", pt, titles)
 }
 
-// trace_id 不在响应里 —— 它是 NotYetImplementedResponse 那笔挂账的反向锁。
-func TestTraceIDIsAbsentNotEmpty(t *testing.T) {
-	r := routeOf(t, http.MethodPost, "/search")
-	if _, ok := r.NotYetImplementedResponse["trace_id"]; !ok {
-		t.Fatal("contract_test.go 里 /search 没有挂 trace_id 这笔账 —— " +
-			"要么它实现了（那这条测试该删），要么挂账被删了")
-	}
-
-	fx := newSearchFixture(t)
-	w, body := doSearch(t, fx.HostA, `{"query":"连衣裙"}`)
-	if w.Code != http.StatusOK {
-		t.Fatalf("检索返回 %d：%s", w.Code, w.Body.String())
-	}
-	if v, ok := body.raw["trace_id"]; ok {
-		t.Fatalf("响应里出现了 trace_id（%v）—— /search/events 还没实现，"+
-			"这个 id 回出去没有任何接口收得下。"+
-			"真的实现了就回 contract_test.go 划掉那笔挂账", v)
-	}
-}
-
 // strategy 回显的是**真的跑过的**那条流水线，不是回显请求里那个字符串。
 //
 // 语义检索层 §9.3：strategy_id 写进检索日志、按策略分组对比线上指标。

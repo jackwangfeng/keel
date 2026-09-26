@@ -44,19 +44,19 @@ func NewSearchHandler(s *service.SearchService) *SearchHandler {
 // searchResponse 是契约里那个内联的 200 响应。
 //
 // items 用生成的 api.SearchHit，理由是 package handler 文件头那条硬规矩；
-// 外层这四个字段契约里是内联 schema（没有 $ref），生成器没有为它出类型 ——
+// 外层这几个字段契约里是内联 schema（没有 $ref），生成器没有为它出类型 ——
 // 与 intentRequest 那里是同一处够不着的地方，同样记在 defer 里。
 //
-// trace_id 不在这里：它是可选字段，而它唯一的用处是把一次检索和后续的
-// /search/events 回传串起来（契约原话）。M5 起 search_logs 建了、每次检索
-// 都生成一个 trace_id 写进那一行，但 /search/events 还没有实现 ——
-// 回一个没有任何接口收得下的 id 不是「先占个位」，是让客户端以为它拿到的
-// 东西有下文。contract_test.go 里挂着这笔账。
+// trace_id 是可选字段，**只在这次检索的日志行真的写进去了时**出现
+// （service.SearchResult.TraceID 的注释）：它唯一的用处是让客户端把之后的
+// 点击 / 加购 / 下单带给 POST /search/events（search_event.go），
+// 而一个库里没有的 id 只会换来之后每一次回传的 404。
 type searchResponse struct {
 	Items     []api.SearchHit `json:"items"`
 	LatencyMs int             `json:"latency_ms"`
 	Total     int             `json:"total"`
 	Strategy  string          `json:"strategy"`
+	TraceID   string          `json:"trace_id,omitempty"`
 
 	// Store 在契约里是**必返**的，与 GET /products 的同名字段同义：
 	// 检索结果里的价格区间、in_stock、以及「这家店卖不卖这件商品」
@@ -206,6 +206,7 @@ func (h *SearchHandler) Search(c *gin.Context) {
 		// 一期不支持翻页，所以它就是 len(items) —— 不是「库里有多少件匹配」。
 		Total:     len(items),
 		Strategy:  res.Strategy,
+		TraceID:   res.TraceID,
 		LatencyMs: int(time.Since(start).Milliseconds()),
 		Store:     apiStoreContext(res.Store),
 	})

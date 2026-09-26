@@ -13,7 +13,8 @@ import (
 	"github.com/keel/keel/internal/problem"
 )
 
-// 按来源 IP 的粗粒度限流。**只给 /search 用。**
+// 按来源 IP 的粗粒度限流。给 /search 与 /search/events 用，**两只桶各自独立**
+// （后者的额度与理由在 DefaultSearchEventRatePerSec 上）。
 //
 // ===========================================================================
 // 一、它挡的是什么：几十个并发就能让全站掉到关键词搜索
@@ -154,6 +155,34 @@ const (
 	DefaultSearchRateBurst = 12.0
 )
 
+const (
+	// EnvSearchEventRateLimit / EnvSearchEventRateBurst 是 /search/events 那只桶。
+	// <= 0 关闭限流。
+	EnvSearchEventRateLimit = "KEEL_SEARCH_EVENT_RATE_PER_SEC"
+	EnvSearchEventRateBurst = "KEEL_SEARCH_EVENT_RATE_BURST"
+
+	// DefaultSearchEventRatePerSec 默认每 IP 每秒 36 次，是 /search 的三倍。
+	//
+	// **为什么单独一只桶，而不是和 /search 共用**：共用的话，一个刚搜完、
+	// 连着点了几件商品的真人会把自己下一次搜索的额度吃掉 —— 回传是辅助数据，
+	// 它不该让主业务 429。
+	//
+	// **为什么是三倍**：一次检索最多有三次**有效**回传（click / add_cart / order
+	// 各填一列，首次为准，之后的同类回传是空操作）。一个没超 /search 配额的
+	// 客户端，有效回传就不会超 3 × 12/s；超出的那部分全是重复上报或刷量。
+	//
+	// **为什么这里的限流不是防刷指标的那道闸门**：刷指标挡在 service 里 ——
+	// product_id 必须在这次检索返回的 ranked_ids 里、每列首次为准，于是一个
+	// trace_id 最多贡献三次写入，发多少次都一样。限流挡的是另一件事：每次回传
+	// 是一次点查加一次单行 UPDATE，不限的话一条 for 循环可以把写压力无上限地
+	// 推给数据库。它比 /search 便宜得多（不碰推理引擎），所以额度可以宽。
+	DefaultSearchEventRatePerSec = 3 * DefaultSearchRatePerSec
+
+	// DefaultSearchEventRateBurst 默认瞬时 36 个额度，同样是 /search 的三倍：
+	// 一页结果里连点几件、加购、再下单，都落在一个瞬时窗口里。
+	DefaultSearchEventRateBurst = 3 * DefaultSearchRateBurst
+)
+
 // ipRateLimiter 是一组按来源 IP 分的 token bucket。
 type ipRateLimiter struct {
 	ratePerSec float64
@@ -264,6 +293,17 @@ func rateLimitByIP(lim *ipRateLimiter) gin.HandlerFunc {
 func searchRateLimiterFromEnv() *ipRateLimiter {
 	rate := envFloat(EnvSearchRateLimit, DefaultSearchRatePerSec)
 	burst := envFloat(EnvSearchRateBurst, DefaultSearchRateBurst)
+	if rate <= 0 || burst < 1 {
+		return nil
+	}
+	return newIPRateLimiter(rate, burst)
+}
+
+// searchEventRateLimiterFromEnv 是 /search/events 那只桶。每次调用造一只**新**桶，
+// 与 searchRateLimiterFromEnv 那只互不相干。
+func searchEventRateLimiterFromEnv() *ipRateLimiter {
+	rate := envFloat(EnvSearchEventRateLimit, DefaultSearchEventRatePerSec)
+	burst := envFloat(EnvSearchEventRateBurst, DefaultSearchEventRateBurst)
 	if rate <= 0 || burst < 1 {
 		return nil
 	}
