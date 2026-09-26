@@ -42,11 +42,12 @@ import (
 // 有数据库兜底。仍然在这里查一遍，是为了让错误信息里有商品 id 和两个维度值，
 // 而不是一句 `expected 1024 dimensions, not 768`。
 
-// ErrVectorNotNormalized：要入库的向量 L2 范数不是 1。
+// ErrVectorNotNormalized：向量的 L2 范数不是 1。入库与检索两侧共用一个 sentinel：
+// 两边坏的是同一件事（余弦距离失真），而调用方对它的处置也一样 —— 重试没有用。
 //
 // 做成 sentinel 而不是一句普通错误：调用方对它的处置与「数据库连不上」完全不同 ——
 // 重试没有用，这是一个坏值，要么是引擎坏了，要么是调用方自己算的。
-var ErrVectorNotNormalized = errors.New("向量没有 L2 归一化，拒绝入库")
+var ErrVectorNotNormalized = errors.New("向量没有 L2 归一化，拒绝使用")
 
 // ErrVectorWrongDim：维度不是 inference.Dim。
 var ErrVectorWrongDim = errors.New("向量维度与 product_text_vectors.embedding 对不上")
@@ -202,7 +203,7 @@ func (t tenantTx) LockProductForIndex(ctx context.Context, productID int64) (tim
 }
 
 func (t tenantTx) UpsertProductTextVector(ctx context.Context, v TextVector) error {
-	lit, err := vectorLiteral(v.ProductID, v.Embedding)
+	lit, err := vectorLiteral(fmt.Sprintf("product %d", v.ProductID), v.Embedding)
 	if err != nil {
 		return err
 	}
@@ -226,10 +227,16 @@ func (t tenantTx) UpsertProductTextVector(ctx context.Context, v TextVector) err
 //
 // 顺序是先查后拼，不是先拼后查：拼完再查的话，一个坏值已经变成了一个
 // 长得完全正常的字符串，而字符串上看不出范数。
-func vectorLiteral(productID int64, v []float32) (string, error) {
+//
+// subject 是错误信息里的主语（"product 12" / "查询向量"）。它是参数而不是写死的
+// 「product %d」，因为这道闸门有两个调用方：入库那一条，以及检索那一条
+// （search.go 的 SearchProductsByVector）。**查询向量同样必须归一化** ——
+// `<=>` 算的是余弦距离，它对查询侧的模长同样敏感；一个没归一化的查询向量
+// 不会报错，只会让距离排序失真，与 §2.3 说的入库侧是同一件事的另一半。
+func vectorLiteral(subject string, v []float32) (string, error) {
 	if len(v) != inference.Dim {
-		return "", fmt.Errorf("product %d: %w（%d 维 vs %d 维）",
-			productID, ErrVectorWrongDim, len(v), inference.Dim)
+		return "", fmt.Errorf("%s: %w（%d 维 vs %d 维）",
+			subject, ErrVectorWrongDim, len(v), inference.Dim)
 	}
 	var sum float64
 	for _, x := range v {
@@ -238,17 +245,17 @@ func vectorLiteral(productID int64, v []float32) (string, error) {
 			// NaN 能写进 vector 列，而它让这一行与任何查询向量的距离都是 NaN。
 			// 排序里 NaN 被当成最大值，于是这件商品从检索结果里彻底消失 ——
 			// 一个不报错的、单向的静默失踪。
-			return "", fmt.Errorf("product %d: 向量里有 NaN 或 Inf，拒绝入库", productID)
+			return "", fmt.Errorf("%s: 向量里有 NaN 或 Inf，拒绝使用", subject)
 		}
 		sum += f * f
 	}
 	norm := math.Sqrt(sum)
 	if math.Abs(norm-1) > inference.NormTolerance {
-		return "", fmt.Errorf("product %d: %w —— L2 范数是 %.6f，不是 1（容差 %g）。"+
+		return "", fmt.Errorf("%s: %w —— L2 范数是 %.6f，不是 1（容差 %g）。"+
 			"配合 vector_cosine_ops 写入未归一化的向量会让距离失真，"+
 			"而它入库之后不会报错、不会变慢、检索照常返回结果，"+
 			"只会悄悄拉低召回质量（语义检索层 §2.3）",
-			productID, ErrVectorNotNormalized, norm, inference.NormTolerance)
+			subject, ErrVectorNotNormalized, norm, inference.NormTolerance)
 	}
 
 	var b strings.Builder
