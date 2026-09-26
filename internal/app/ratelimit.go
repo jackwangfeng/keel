@@ -1,10 +1,13 @@
 package app
 
 import (
+	"fmt"
 	"math"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -270,16 +273,11 @@ func rateLimitByIP(lim *ipRateLimiter) gin.HandlerFunc {
 		return func(c *gin.Context) { c.Next() }
 	}
 	return func(c *gin.Context) {
-		// gin 的 ClientIP 会读 X-Forwarded-For / X-Real-IP，而那两个头是
-		// 客户端可以随便写的 —— 除非前面确实有一个会覆写它们的反向代理。
-		// gin 默认的 TrustedProxies 是「全部信任」，也就是说 ClientIP 在
-		// 裸跑时等于「攻击者自己说他是谁」，限流形同虚设。
-		//
-		// 所以这里用 RemoteIP：它只认 TCP 连接的对端地址。代价是部署在
-		// 反向代理后面时全部流量会算到代理那一个 IP 上 —— 那种部署要显式
-		// 配 TrustedProxies 并改用 ClientIP，是一次有意识的动作，
-		// 不该是默认行为。这笔账写在这里。
-		if ok, retry := lim.allow(c.RemoteIP()); !ok {
+		// ClientIP 只在连接对端属于 KEEL_TRUSTED_PROXIES 时才读 X-Forwarded-For /
+		// X-Real-IP，否则就是 RemoteIP —— 见 trustProxies。那两个头是客户端可以
+		// 随便写的，gin 默认却「全部信任」，所以 Router 总会先调 trustProxies
+		// 把默认值换掉：不配就一个都不信，配了只信名单里的代理。
+		if ok, retry := lim.allow(c.ClientIP()); !ok {
 			c.Header("Retry-After", strconv.Itoa(retry))
 			problem.Write(c, http.StatusTooManyRequests, problem.TypeRateLimited,
 				"请求过于频繁，请稍后再试")
@@ -287,6 +285,38 @@ func rateLimitByIP(lim *ipRateLimiter) gin.HandlerFunc {
 		}
 		c.Next()
 	}
+}
+
+// EnvTrustedProxies 是反向代理的地址名单（逗号分隔的 IP 或 CIDR）。
+//
+// 部署在反向代理后面时，TCP 对端永远是代理，按它限流等于全部访客共用一个桶：
+// 一个人刷搜索，所有人一起 429。名单里的来源发来的 X-Forwarded-For / X-Real-IP
+// 才会被采信（gin 从右往左跳过受信代理，取第一个不受信的地址）；不在名单里的
+// 来源自报什么都不信。**不配就是一个都不信**，和裸跑的安全默认一致。
+//
+// 只写真正会覆写 / 追加这两个头的代理，写宽了（比如 0.0.0.0/0）等于把
+// 「我是谁」交给客户端自己说。
+const EnvTrustedProxies = "KEEL_TRUSTED_PROXIES"
+
+// trustProxies 按 raw（EnvTrustedProxies 的值）配 r 的受信代理。
+// 空串即不信任任何代理；有一项不是合法的 IP / CIDR 就报错，Run 据此拒绝启动 ——
+// 名单写错时静默退回「一个都不信」会让限流又退化成共用一个桶，而且没人发现。
+func trustProxies(r *gin.Engine, raw string) error {
+	var list []string
+	if strings.TrimSpace(raw) != "" {
+		for _, item := range strings.Split(raw, ",") {
+			item = strings.TrimSpace(item)
+			if item == "" {
+				return fmt.Errorf("%s 里有空项：%q", EnvTrustedProxies, raw)
+			}
+			if _, _, err := net.ParseCIDR(item); err != nil && net.ParseIP(item) == nil {
+				return fmt.Errorf("%s 里的 %q 不是合法的 IP 或 CIDR", EnvTrustedProxies, item)
+			}
+			list = append(list, item)
+		}
+	}
+	// nil 在 gin 里就是「一个都不信」，ClientIP 退回 RemoteIP。
+	return r.SetTrustedProxies(list)
 }
 
 // searchRateLimiterFromEnv 按环境变量造限流器。配 0 或负数就是关掉。

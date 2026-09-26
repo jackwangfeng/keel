@@ -207,14 +207,12 @@ services:
       KEEL_SEARCH_RATE_PER_SEC: ${KEEL_SEARCH_RATE_PER_SEC:-}
       KEEL_SEARCH_RATE_BURST: ${KEEL_SEARCH_RATE_BURST:-}
 
-      # ⚠️ 限流按 `RemoteIP()` 计，不是 `ClientIP()`。gin 默认信任全部代理，
-      # 而 `ClientIP()` 读的是 X-Forwarded-For —— 裸跑时那等于「攻击者自己说
-      # 他是谁」，限流形同虚设。
-      #
-      # 代价是**部署在反向代理后面时，全部流量会算到代理那一个 IP 上**，
-      # 于是所有人共用一份配额。那种部署必须显式配 gin 的 TrustedProxies
-      # 并改用 ClientIP —— 这件事今天没有开关，要改代码。
-      # 在它有开关之前，反代后面的部署请把配额调大或在代理层限流。
+      # 限流按真实客户端 IP 计，但 X-Forwarded-For / X-Real-IP 只在连接来自
+      # KEEL_TRUSTED_PROXIES 名单（逗号分隔的 IP / CIDR）里的代理时才采信。
+      # 不配就一个都不信 —— 裸跑时那两个头等于「攻击者自己说他是谁」。
+      # 放在反向代理后面时必须配，否则全部访客算到代理那一个 IP 上、共用一份配额。
+      # 只写真正会覆写 / 追加这两个头的代理，别写 0.0.0.0/0。
+      KEEL_TRUSTED_PROXIES: ${KEEL_TRUSTED_PROXIES:-}
 
       # 镜像是拿来跑的，不是拿来开发的：gin 的 debug 模式会在启动时打一屏
       # 「你没有设置 release」的警告，而 `docker compose up` 的头一屏正是

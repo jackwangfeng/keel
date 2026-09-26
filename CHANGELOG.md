@@ -44,6 +44,12 @@ Migrations `00027`–`00038` and `00053`–`00061`.
 
 ### Added
 
+- **`KEEL_TRUSTED_PROXIES`**: a comma-separated list of reverse-proxy IPs / CIDRs.
+  The `/search` and `/search/events` rate limits now key on the real client IP —
+  `X-Forwarded-For` / `X-Real-IP` are honoured only on connections from a listed
+  proxy (gin's "trust everyone" default is always replaced). Unset means trust no
+  one, which is the old behaviour; before this, every visitor behind a reverse proxy
+  shared the proxy's single bucket. An invalid entry refuses to start.
 - **Bulk product import** (`/admin/product-imports`, migration `00054`). Download an
   xlsx or csv template, upload it for a **dry-run preview** that writes nothing —
   per-row errors (required cells, prices parsed as decimal strings with no

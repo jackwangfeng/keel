@@ -170,6 +170,10 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	orders *service.OrderService, payment service.PaymentConfig,
 	embedder inference.Embedder) *gin.Engine {
 	r := gin.New()
+	// Run 在建连接池之前已经校验过这份名单，这里再出错只可能是测试直接调 Router 时配错了。
+	if err := trustProxies(r, os.Getenv(EnvTrustedProxies)); err != nil {
+		panic(err)
+	}
 	r.Use(gin.Recovery())
 
 	// 必须在所有业务中间件之外：它靠 c.Next() 返回之后 drain c.Errors，
@@ -710,6 +714,10 @@ func Run(ctx context.Context, listen func(addr string, h http.Handler) error) er
 	slog.InfoContext(ctx, "keel "+buildinfo.String())
 
 	cfg := ConfigFromEnv()
+
+	if err := trustProxies(gin.New(), os.Getenv(EnvTrustedProxies)); err != nil {
+		return fmt.Errorf("拒绝启动: %w", err)
+	}
 
 	pool, err := db.NewPool(ctx)
 	if err != nil {
