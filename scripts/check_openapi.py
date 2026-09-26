@@ -55,6 +55,11 @@ REQUIRED_PATHS = [
     ('/admin/categories', 'post'),
     ('/admin/categories/{category_id}', 'patch'),
     ('/admin/categories/{category_id}', 'delete'),
+    # 商品批量导入：下载模板 → 预检（不落库）→ 确认导入。三条缺一条，
+    # 后台那个「批量导入」页面就走不通，而别的检查都不会发现。
+    ('/admin/product-imports/template', 'get'),
+    ('/admin/product-imports/preview', 'post'),
+    ('/admin/product-imports', 'post'),
     # 多门店 + 电子围栏 + 大区。登记在这里的理由与上面那 16 条一样：
     # 让「哪天有人把这一段删了或改了名」当场红。
     #
@@ -189,6 +194,8 @@ IDEMPOTENCY_EXEMPT = {
     '/webhooks/payments/{channel}': '渠道不会带我们的幂等头；幂等由 '
                                     '(channel, channel_txn_id) 唯一索引兜底',
     '/webhooks/refunds/{channel}':  '同上，靠 (channel, channel_refund_id)',
+    '/admin/product-imports/preview': '无副作用；只解析与校验上传的表格，不写库。'
+                                      '用 POST 只因要传文件（multipart）',
 }
 
 # 这些查询参数带 default 是正常的：它们不改变「返回哪些行」，只改变排序/分页/详略。

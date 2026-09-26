@@ -1159,6 +1159,138 @@ export type ProductImagesReplaceRequest = {
   images : ProductImageInput[]
 }
 
+export type ProductImportCategoryCandidate = {
+  category_id : number
+  /** 从一级到这一级的名字，用「 > 」连接 */
+  path_name : string
+  /** 标题向量与类目路径名向量的余弦相似度，[-1, 1]，越大越像 */
+  score : number
+}
+
+export type ProductImportCategoryChoice = {
+  /** 商品在文件里的首行行号（预检结果里的 `products[].first_row`） */
+  first_row : number
+  category_id : number
+}
+
+/** 一件商品的类目怎么定。 */
+export type ProductImportCategoryDecision = {
+  status : string
+  category_id? : number
+  path_name? : string
+  /** 按分数降序的候选（`matched` 与 `unavailable` 时为空） */
+  candidates : ProductImportCategoryCandidate[]
+}
+
+/** 导入文件格式。服务端按内容判断，不按文件名。 */
+export type ProductImportFormat = string
+
+/** 一行里的一条问题。`code` 给程序认，`message` 给人看。 */
+export type ProductImportIssue = {
+  /** 出问题的那一列的表头名。与某一列无关时缺席。 */
+  column? : string
+  code : string
+  message : string
+}
+
+export type ProductImportOutcome = {
+  first_row : number
+  rows : number[]
+  title : string
+  status : string
+  /** `created` 时有：新建的草稿商品 */
+  product_id? : number
+  /** `created` 时有：建了几个 SKU */
+  sku_count? : number
+  category_id? : number
+  /** `failed` 时有：为什么没导入（每条带行号） */
+  reasons? : string[]
+  /** 文件里给这件商品填的图片地址，**只记录、没有下载**，请在商品页上传 */
+  image_urls? : string[]
+}
+
+/** 文件里的一件商品（同一标题的若干行） */
+export type ProductImportProduct = {
+  first_row : number
+  /** 这件商品包含的行号 */
+  rows : number[]
+  title : string
+  /** 每一行都没有错误。为 false 时确认导入会跳过它。 */
+  importable : boolean
+  /** 一件商品的类目怎么定。 */
+  category : ProductImportCategoryDecision
+}
+
+/** 文件里的一行（一个 SKU）。有错的格对应的字段缺席（比如价格写错了就没有 `price_cents`）。 */
+export type ProductImportRow = {
+  /** 行号，与 Excel 左侧的行号一致（表头是第 1 行）。整行空白的行被跳过，但不重新编号。 */
+  row : number
+  /** 这一行所属商品的首行行号（同一件商品的各行相同） */
+  first_row : number
+  title? : string
+  subtitle? : string
+  /** 类目列的原文 */
+  category? : string
+  description? : string
+  sku_code : string
+  /** 规格名 → 规格值；单规格商品为空对象 */
+  spec_values : UTSJSONObject
+  /** 金额，单位「分」。禁止使用浮点。 */
+  price_cents? : Money
+  stock? : number
+  weight_gram? : number
+  image_urls? : string[]
+  errors : ProductImportIssue[]
+  warnings : ProductImportIssue[]
+  /** 广告法违禁词命中（`field` 是 title / subtitle / description，`offset` / `length` */
+  violations : FieldError[]
+}
+
+export type ProductImportPreviewCategoryGate = {
+  min_score : number
+  min_margin : number
+}
+
+export type ProductImportPreviewPreviousImport = {
+  import_id : number
+  created_at : string
+}
+
+export type ProductImportPreview = {
+  /** 文件字节的 sha256（十六进制）。「同一份文件」的判据。 */
+  file_sha256 : string
+  /** 导入文件格式。服务端按内容判断，不按文件名。 */
+  format : ProductImportFormat
+  /** 数据行数（不含表头与整行空白） */
+  total_rows : number
+  /** 自身有错误的行数 */
+  error_rows : number
+  products : ProductImportProduct[]
+  rows : ProductImportRow[]
+  /** 文件级提示（不阻断），如「csv 按 GBK 读取」「列『备注』不认得，已忽略」 */
+  notices : string[]
+  /** 这次预检的类目推荐跑成了没有：`not_configured` 是部署没配推理引擎， */
+  category_engine : string
+  /** 自动选中类目的两道门（见 ProductImportCategoryDecision） */
+  category_gate : ProductImportPreviewCategoryGate
+  /** 同一份文件（sha256 相同）在本店已经确认导入过时出现：再确认不会重复建。 */
+  previous_import? : ProductImportPreviewPreviousImport
+}
+
+export type ProductImportResult = {
+  import_id : number
+  file_sha256 : string
+  /** 同一份文件此前已经确认导入过，这一次什么都没建，下面是那一次的结果 */
+  already_imported : boolean
+  total_rows : number
+  created_products : number
+  created_skus : number
+  /** 没有导入的行数（含被同组错误拖累的行） */
+  failed_rows : number
+  products : ProductImportOutcome[]
+  created_at : string
+}
+
 /** `listed = false` 写一行排除，`listed = true` 删掉那一行。 */
 export type ProductListingRequest = {
   /** 这一层卖不卖它。注意这不保证买家看得见—— */

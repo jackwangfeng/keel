@@ -1844,6 +1844,413 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/product-imports/template": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 下载商品批量导入模板
+         * @description 三步里的第一步：**下载模板 → 预检（`POST /admin/product-imports/preview`）
+         *     → 确认导入（`POST /admin/product-imports`）**。
+         *
+         *     模板的列（顺序即模板里的顺序；表头按名字识别，不按位置，全角半角括号、
+         *     多余空格都认）：
+         *
+         *     | 列 | 必填 | 说明 |
+         *     |---|:-:|---|
+         *     | 商品标题 | ✅ | ≤ 200 字。**同一个标题的多行合并成同一件商品**（一行一个 SKU） |
+         *     | 副标题 | | ≤ 200 字 |
+         *     | 类目 | | 已有类目的名字，或从一级写到末级的路径（`>` 或 `/` 分隔）。留空或对不上时按标题推荐 |
+         *     | 规格名 | | 多个维度用分号分隔，如 `颜色;尺码` |
+         *     | 规格值 | | 与规格名一一对应，如 `红;M` |
+         *     | SKU 编码 | ✅ | ≤ 64 字，本店内唯一（与已有 SKU 也不能重复） |
+         *     | 基准价（元） | ✅ | 单位元，最多两位小数，不带千分位逗号 |
+         *     | 库存 | ✅ | 非负整数，写进默认门店 |
+         *     | 重量（克） | | 非负整数 |
+         *     | 图片 URL | | http / https，多张用分号或换行分隔。**本期只记录不下载** |
+         *     | 描述 | | 商品详情文字 |
+         *
+         *     xlsx 模板有两张表：「商品」（只有表头，数据区整列设成文本格式，
+         *     防止 Excel 把 `1-2` 转成日期、吃掉编码的前导 0）与「填写说明」（逐列说明与示例）。
+         *     csv 模板是 UTF-8 带 BOM 的一行表头（不带 BOM 的话中文 Excel 双击打开是乱码）。
+         *     两种都**不带示例数据行**——示例行最常见的结局是被原样导入。
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description 模板格式，默认 `xlsx`。 */
+                    format?: components["schemas"]["ProductImportFormat"];
+                };
+                header?: {
+                    /**
+                     * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+                     *
+                     *     它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+                     *     而例外成立的前提是平台级鉴权：
+                     *
+                     *     · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+                     *       读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+                     *       行级安全落在这家店上。
+                     *     · **商家级员工带了这个头：403**
+                     *       （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+                     *       静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+                     *     · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+                     *       **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+                     *       实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+                     *       请求其余部分指名的东西不存在是 422。
+                     *     · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+                     *       买家侧对它照旧 404。
+                     *     · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+                     *       （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+                     *
+                     *     后台每一条挂后台会话的操作都声明了它（机械核对：
+                     *     `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+                     */
+                    "X-Keel-Merchant"?: components["parameters"]["KeelMerchant"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description 模板文件（`Content-Disposition: attachment`） */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": string;
+                        "text/csv": string;
+                    };
+                };
+                /** @description `format` 不是 xlsx / csv */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/product-imports/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 批量导入预检（不落库）
+         * @description 上传 xlsx 或 csv，**只校验、不写库**，返回逐行结果。同一份文件可以反复预检。
+         *
+         *     **格式按内容判断，不按文件名**：以 zip 头开始的是 xlsx，老式 .xls 与
+         *     加密工作簿回 415（请另存为不加密的 .xlsx），其余按 csv 读。csv 的编码先按
+         *     UTF-8（可带 BOM）读，不是合法 UTF-8 时按 GBK（GB18030）读 —— 中文 Excel
+         *     「另存为 CSV」默认写的就是 GBK。
+         *
+         *     **上限**：文件 ≤ 5 MB（超出 413），数据行 ≤ 2000（超出 422）。两个数由同步请求的
+         *     预算推出：预检要给每件商品算一次向量（2000 件约 32 批嵌入调用），确认导入是
+         *     一个事务；更大的目录请拆成多个文件。
+         *
+         *     **逐行校验**（每一条问题落在 `rows[].errors` 或 `rows[].warnings`，`code` 见
+         *     `ProductImportIssue`）：必填、长度、价格（元 → 分全程十进制字符串运算，
+         *     不经过浮点）、整数、规格格式、图片地址形状；SKU 编码在文件内唯一、
+         *     且与店里已有的 SKU（含已删除的）不重复。
+         *
+         *     **同一商品多规格行的合并规则**：
+         *
+         *     1. 同一个商品标题 = 同一件商品，不要求相邻（不相邻时给提示）；
+         *     2. 副标题、类目、描述以组内第一个非空值为准，后面的行留空或填相同内容，
+         *        填了不同内容那一行报错；
+         *     3. 组内多于一行时每行都要有规格、规格名集合相同、规格值组合不重复；
+         *        只有一行的商品可以不填规格；
+         *     4. **一行有错，整件商品不导入**（其余行带 `group_blocked` 提示）——
+         *        导入一半的规格比整件没进来更难察觉。
+         *
+         *     **Excel 的坑**：公式格报错（请「粘贴为数值」）；合并单元格按左上角的值
+         *     填进每一格并提示，表头行合并报文件级错误；被 Excel 识别成日期的格报错；
+         *     存成数字的 SKU 编码提示「前导 0 可能已丢」。
+         *
+         *     **合规**：标题 / 副标题 / 描述逐一过广告法违禁词表，命中标在
+         *     `rows[].violations`（字段 + 码点位置）。**不阻断导入**：导入的商品是草稿，
+         *     草稿不做合规拦截（与单个建商品同一条规矩），上架时才拦。
+         *
+         *     **类目**：见 `ProductImportCategoryDecision`。文件里填的类目对上已有类目就用它；
+         *     留空或对不上时按「标题 + 副标题」的向量与各叶子类目路径名的向量算余弦，
+         *     给 Top 3 候选。推理引擎没配或不可用时降级为 `unavailable`（需手选），
+         *     **不阻塞预检**。
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /**
+                     * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+                     *
+                     *     它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+                     *     而例外成立的前提是平台级鉴权：
+                     *
+                     *     · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+                     *       读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+                     *       行级安全落在这家店上。
+                     *     · **商家级员工带了这个头：403**
+                     *       （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+                     *       静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+                     *     · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+                     *       **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+                     *       实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+                     *       请求其余部分指名的东西不存在是 422。
+                     *     · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+                     *       买家侧对它照旧 404。
+                     *     · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+                     *       （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+                     *
+                     *     后台每一条挂后台会话的操作都声明了它（机械核对：
+                     *     `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+                     */
+                    "X-Keel-Merchant"?: components["parameters"]["KeelMerchant"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "multipart/form-data": {
+                        /**
+                         * Format: binary
+                         * @description xlsx 或 csv，不超过 5 MB
+                         */
+                        file: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description 预检结果（即使每一行都有错也是 200——错误在 rows 里） */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ProductImportPreview"];
+                    };
+                };
+                /** @description 文件超过 5 MB。`type` 为 `https://keel.dev/problems/import-file-too-large`。 */
+                413: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /**
+                 * @description 既不是 xlsx 也不是 csv（老式 .xls、加密工作簿、二进制文件）。
+                 *     `type` 为 `https://keel.dev/problems/import-unsupported-format`。
+                 */
+                415: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /**
+                 * @description 整份文件不成立：缺必填列、同一列出现两次、没有数据行、超过 2000 行、
+                 *     表头合并、xlsx 损坏或解压后超限、工作簿加了密码、csv 编码认不出。
+                 *     `type` 为 `https://keel.dev/problems/import-file-invalid`，
+                 *     `errors[].message` 逐条列出原因。
+                 */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/product-imports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 确认批量导入
+         * @description 把**同一份文件**再传一次，连同每件商品选定的类目，按预检的同一套规则建商品与 SKU。
+         *     服务端重新解析、重新校验（不信任客户端回传的预检结果），不再调推理引擎。
+         *
+         *     · **只导入没有错误的商品**，有错的整件跳过，出现在 `products[]` 里（`status = failed`）。
+         *       一件可导入的商品都没有时回 422 `import-nothing-to-import`，什么都不写。
+         *     · **类目**：文件里填的类目对上了就用它（`categories` 里给了则以给的为准）；
+         *       其余商品必须在 `categories` 里按 `first_row` 指定 `category_id`，
+         *       没指定的那件商品 `failed`。预检里 `recommended` 的那些，界面应当把推荐的
+         *       类目原样放进 `categories`——服务端**不会**自动采用推荐（确认这一步不调引擎，
+         *       结果只取决于文件与这份选择）。
+         *     · **一律是草稿**（`status = 0`），不上架。库存写进默认门店；没有默认门店时
+         *       SKU 照建、库存行不建（与单个建 SKU 同一条规矩）。
+         *     · **图片 URL 只记录不下载**，原样出现在 `products[].image_urls`，请在商品页上传。
+         *       外网下载有 SSRF 风险（内网地址、DNS 重绑定、重定向链），要白名单与大小类型
+         *       限制，另起一轮做。
+         *     · **整批一个事务**：任何一件商品在写库时失败（比如同一时刻另一个导入抢先建了
+         *       同一个 SKU 编码），整批回滚，响应是那个错误，什么都没建。
+         *
+         *     **幂等，两层**：
+         *
+         *     1. `Idempotency-Key`（必填）：同一把钥匙重放返回首次的结果，带
+         *        `Idempotency-Replayed: true`。
+         *     2. **同一份文件**（按文件字节的 sha256）在本店已经确认导入过：不再建任何东西，
+         *        返回那一次的结果，`already_imported = true`。换一把钥匙、换一种类目选择
+         *        都一样 —— 防的就是「点了两次」「网断了重传」「隔天又导了一遍」。
+         *        改过的文件是另一份文件；里面已经建过的 SKU 编码会在预检里报 `sku_code_exists`。
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /**
+                     * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+                     *
+                     *     它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+                     *     而例外成立的前提是平台级鉴权：
+                     *
+                     *     · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+                     *       读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+                     *       行级安全落在这家店上。
+                     *     · **商家级员工带了这个头：403**
+                     *       （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+                     *       静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+                     *     · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+                     *       **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+                     *       实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+                     *       请求其余部分指名的东西不存在是 422。
+                     *     · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+                     *       买家侧对它照旧 404。
+                     *     · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+                     *       （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+                     *
+                     *     后台每一条挂后台会话的操作都声明了它（机械核对：
+                     *     `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+                     */
+                    "X-Keel-Merchant"?: components["parameters"]["KeelMerchant"];
+                    /**
+                     * @description 客户端生成的 UUID。幂等作用域为 `(接口 scope, user_id, key)`，
+                     *     有效期 24h，过期后同一 key 可复用（见数据模型文档 §11）。
+                     *
+                     *     · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
+                     *       并带 `Idempotency-Replayed: true` 响应头
+                     *     · **同 key 正在处理中**：`409` + `Retry-After`，
+                     *       type=https://keel.dev/problems/idempotency-key-in-flight，
+                     *       客户端应退避重试，不要当成业务失败
+                     *     · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
+                     *       type=https://keel.dev/problems/idempotency-key-reused。
+                     *       宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
+                     *       那会让用户以为下单成功了而实际什么都没发生
+                     *     · 首次执行失败（存档为失败态）时同样回放该失败响应；
+                     *       确需重试的场景请换一个新 key
+                     */
+                    "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "multipart/form-data": {
+                        /**
+                         * Format: binary
+                         * @description 与预检时同一份文件
+                         */
+                        file: string;
+                        /** @description 每件商品选定的类目。按 `first_row`（该商品在文件里的首行行号）对应。 */
+                        categories?: components["schemas"]["ProductImportCategoryChoice"][];
+                    };
+                };
+            };
+            responses: {
+                /** @description 导入完成（或同一份文件早已导入过，`already_imported = true`） */
+                201: {
+                    headers: {
+                        "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ProductImportResult"];
+                    };
+                };
+                409: components["responses"]["IdempotencyInFlight"];
+                /** @description 文件超过 5 MB。`type` 为 `https://keel.dev/problems/import-file-too-large`。 */
+                413: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /** @description 既不是 xlsx 也不是 csv。`type` 为 `https://keel.dev/problems/import-unsupported-format`。 */
+                415: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /**
+                 * @description 四种，按 `type` 区分：
+                 *
+                 *     · `import-file-invalid`：整份文件不成立（同预检）；
+                 *     · `import-nothing-to-import`：没有一件商品可以导入（全都有错或都没选类目）；
+                 *     · `invalid-request`：`categories` 不是合法的 JSON 数组（指定的类目不存在或已停用
+                 *       不在此列：那一件商品 `failed`，其余照导）；
+                 *     · `idempotency-key-reused`：同一把钥匙配了不同的请求。
+                 */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/products/{product_id}": {
         parameters: {
             query?: never;
@@ -10367,6 +10774,188 @@ export interface components {
             brand_id?: number | null;
         };
         /**
+         * @description 导入文件格式。服务端按内容判断，不按文件名。
+         * @enum {string}
+         */
+        ProductImportFormat: "xlsx" | "csv";
+        /**
+         * @description 一行里的一条问题。`code` 给程序认，`message` 给人看。
+         *
+         *     | code | 级别 | 含义 |
+         *     |---|---|---|
+         *     | `required` | 错误 | 必填列没填 |
+         *     | `too_long` | 错误 | 超长（按字符数） |
+         *     | `invalid_price` | 错误 | 不是合法金额（负数、三位小数、千分位逗号、超过一亿元……） |
+         *     | `invalid_integer` | 错误 | 库存 / 重量不是非负整数；或数字超出 Excel 能原样保存的精度 |
+         *     | `formula_cell` | 错误 | 公式格 |
+         *     | `date_cell` | 错误 | 被 Excel 识别成了日期 / 时间 |
+         *     | `error_cell` | 错误 | 错误值（`#N/A` 之类）或逻辑值 |
+         *     | `duplicate_sku_code` | 错误 | SKU 编码与文件里前面某一行重复 |
+         *     | `sku_code_exists` | 错误 | SKU 编码在店里已经存在（含已删除的 SKU） |
+         *     | `spec_invalid` | 错误 | 规格名与规格值对不上、有空项、名字重复 |
+         *     | `spec_mismatch` | 错误 | 同一商品各行的规格名不一致，或多行商品有一行没填规格 |
+         *     | `spec_duplicate` | 错误 | 同一商品里规格值组合重复 |
+         *     | `group_conflict` | 错误 | 同一商品的副标题 / 类目 / 描述前后不一致 |
+         *     | `image_url_invalid` | 错误 | 图片地址不是 http / https 或格式不对 |
+         *     | `numeric_sku_code` | 提示 | SKU 编码被 Excel 存成了数字，前导 0 可能已丢 |
+         *     | `merged_cell` | 提示 | 合并单元格，已按左上角的值填入 |
+         *     | `price_zero` | 提示 | 基准价是 0 元 |
+         *     | `not_contiguous` | 提示 | 与前面不相邻的某一行同标题，已合并为同一件商品 |
+         *     | `category_unmatched` | 提示 | 类目列填了，但对不上已有的（启用中的）类目 |
+         *     | `group_blocked` | 提示 | 同一商品的别的行有错，这一行随整件商品不导入 |
+         */
+        ProductImportIssue: {
+            /** @description 出问题的那一列的表头名。与某一列无关时缺席。 */
+            column?: string;
+            code: string;
+            message: string;
+        };
+        /** @description 文件里的一行（一个 SKU）。有错的格对应的字段缺席（比如价格写错了就没有 `price_cents`）。 */
+        ProductImportRow: {
+            /** @description 行号，与 Excel 左侧的行号一致（表头是第 1 行）。整行空白的行被跳过，但不重新编号。 */
+            row: number;
+            /** @description 这一行所属商品的首行行号（同一件商品的各行相同） */
+            first_row: number;
+            title?: string;
+            subtitle?: string;
+            /** @description 类目列的原文 */
+            category?: string;
+            description?: string;
+            sku_code: string;
+            /** @description 规格名 → 规格值；单规格商品为空对象 */
+            spec_values: {
+                [key: string]: string;
+            };
+            price_cents?: components["schemas"]["Money"];
+            stock?: number;
+            weight_gram?: number;
+            image_urls?: string[];
+            errors: components["schemas"]["ProductImportIssue"][];
+            warnings: components["schemas"]["ProductImportIssue"][];
+            /**
+             * @description 广告法违禁词命中（`field` 是 title / subtitle / description，`offset` / `length`
+             *     是码点位置，语义同 `FieldError`）。挂在提供这段文字的那一行上。**不阻断导入**：
+             *     导入的是草稿，上架时才拦。
+             */
+            violations: components["schemas"]["FieldError"][];
+        };
+        ProductImportCategoryCandidate: {
+            /** Format: int64 */
+            category_id: number;
+            /** @description 从一级到这一级的名字，用「 > 」连接 */
+            path_name: string;
+            /** @description 标题向量与类目路径名向量的余弦相似度，[-1, 1]，越大越像 */
+            score: number;
+        };
+        /**
+         * @description 一件商品的类目怎么定。
+         *
+         *     | status | 含义 | `category_id` |
+         *     |---|---|---|
+         *     | `matched` | 类目列填的名字 / 路径对上了一个启用中的类目 | 那一个 |
+         *     | `recommended` | 类目列为空或对不上，推荐的 Top-1 足够可信，**已替商家选中** | 推荐的 Top-1 |
+         *     | `needs_review` | 有候选，但置信度不够，**需人工确认** | 缺席 |
+         *     | `unavailable` | 推理引擎没配 / 不可用 / 店里没有可选的叶子类目，**需手选** | 缺席 |
+         *
+         *     「足够可信」是两道门：Top-1 余弦 ≥ `ProductImportPreview.category_gate.min_score`，
+         *     且与 Top-2 的分差 ≥ `min_margin`（只有一个候选时只看前者）。两个数由离线评测定出
+         *     （人工标注的标题集，见商品理解服务设计文档「批量导入」一节）。
+         *
+         *     推荐只在**叶子类目**（启用中、没有启用中的子类目）里选；`matched` 可以是任意一级。
+         */
+        ProductImportCategoryDecision: {
+            /** @enum {string} */
+            status: "matched" | "recommended" | "needs_review" | "unavailable";
+            /** Format: int64 */
+            category_id?: number;
+            path_name?: string;
+            /** @description 按分数降序的候选（`matched` 与 `unavailable` 时为空） */
+            candidates: components["schemas"]["ProductImportCategoryCandidate"][];
+        };
+        /** @description 文件里的一件商品（同一标题的若干行） */
+        ProductImportProduct: {
+            first_row: number;
+            /** @description 这件商品包含的行号 */
+            rows: number[];
+            title: string;
+            /** @description 每一行都没有错误。为 false 时确认导入会跳过它。 */
+            importable: boolean;
+            category: components["schemas"]["ProductImportCategoryDecision"];
+        };
+        ProductImportPreview: {
+            /** @description 文件字节的 sha256（十六进制）。「同一份文件」的判据。 */
+            file_sha256: string;
+            format: components["schemas"]["ProductImportFormat"];
+            /** @description 数据行数（不含表头与整行空白） */
+            total_rows: number;
+            /** @description 自身有错误的行数 */
+            error_rows: number;
+            products: components["schemas"]["ProductImportProduct"][];
+            rows: components["schemas"]["ProductImportRow"][];
+            /** @description 文件级提示（不阻断），如「csv 按 GBK 读取」「列『备注』不认得，已忽略」 */
+            notices: string[];
+            /**
+             * @description 这次预检的类目推荐跑成了没有：`not_configured` 是部署没配推理引擎，
+             *     `unavailable` 是配了但这次没在预算内给出结果（引擎忙或挂了）。后两种时所有
+             *     需要推荐的商品都是 `unavailable`，请手选——**导入本身不受影响**。
+             * @enum {string}
+             */
+            category_engine: "ok" | "unavailable" | "not_configured";
+            /** @description 自动选中类目的两道门（见 ProductImportCategoryDecision） */
+            category_gate: {
+                min_score: number;
+                min_margin: number;
+            };
+            /** @description 同一份文件（sha256 相同）在本店已经确认导入过时出现：再确认不会重复建。 */
+            previous_import?: {
+                /** Format: int64 */
+                import_id: number;
+                /** Format: date-time */
+                created_at: string;
+            };
+        };
+        ProductImportCategoryChoice: {
+            /** @description 商品在文件里的首行行号（预检结果里的 `products[].first_row`） */
+            first_row: number;
+            /** Format: int64 */
+            category_id: number;
+        };
+        ProductImportOutcome: {
+            first_row: number;
+            rows: number[];
+            title: string;
+            /** @enum {string} */
+            status: "created" | "failed";
+            /**
+             * Format: int64
+             * @description `created` 时有：新建的草稿商品
+             */
+            product_id?: number;
+            /** @description `created` 时有：建了几个 SKU */
+            sku_count?: number;
+            /** Format: int64 */
+            category_id?: number;
+            /** @description `failed` 时有：为什么没导入（每条带行号） */
+            reasons?: string[];
+            /** @description 文件里给这件商品填的图片地址，**只记录、没有下载**，请在商品页上传 */
+            image_urls?: string[];
+        };
+        ProductImportResult: {
+            /** Format: int64 */
+            import_id: number;
+            file_sha256: string;
+            /** @description 同一份文件此前已经确认导入过，这一次什么都没建，下面是那一次的结果 */
+            already_imported: boolean;
+            total_rows: number;
+            created_products: number;
+            created_skus: number;
+            /** @description 没有导入的行数（含被同组错误拖累的行） */
+            failed_rows: number;
+            products: components["schemas"]["ProductImportOutcome"][];
+            /** Format: date-time */
+            created_at: string;
+        };
+        /**
          * @description 只改文案与归属。**不含 `status` / `published_at` / `deleted_at`**，
          *     也不含任何冗余字段——它们各有自己的入口，或者根本不该由客户端写。
          */
@@ -11300,7 +11889,7 @@ export interface components {
          *
          *     | 能做什么 | 1 | 2 | 3 | 4 |
          *     |---|:-:|:-:|:-:|:-:|
-         *     | 商品、SKU、基准价、类目、上传 | ✅ | ✅ | 只读 | 只读 |
+         *     | 商品、SKU、基准价、类目、上传、批量导入 | ✅ | ✅ | 只读 | 只读 |
          *     | 大区：改、删、大区价、大区上下架 | ✅ | ✅ | 只限自己的大区 | ❌ |
          *     | 大区：建 | ✅ | ✅ | ❌ | ❌ |
          *     | 门店：建、改、删、围栏 | ✅ | ✅ | 只限本大区的门店（换大区时新旧都得在范围内） | ❌ |
