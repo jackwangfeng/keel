@@ -97,6 +97,7 @@ SELECT p.id, p.title, p.subtitle, c.name AS category_name,
  WHERE p.deleted_at IS NULL
    AND p.status = 1
    AND (p.updated_at > COALESCE(pu.updated_at, '-infinity'::timestamptz)
+        OR c.updated_at > COALESCE(pu.updated_at, '-infinity'::timestamptz)
         OR v.product_id IS NULL
         OR p.search_text IS NULL)
  ORDER BY p.updated_at, p.id
@@ -142,9 +143,57 @@ type ListStaleProductsForIndexRow struct {
 // 是它本来的职责，而且写它的是应用（判定之后才写），不是数据库触发器 ——
 // 后者会让先后关系变成恒等式，那正是 00016 文件头点名不许引入的那条变异。
 //
-// 三个 OR 分支各挡一种「时间戳看着很新、派生数据其实不在」的形态：
-// 向量行被删了（比如手工清理、或者将来换模型时清空重建）、search_text 还是 NULL
-// （00016 刚加上这一列时全库都是 NULL，时间戳却不会因此前进）。
+// 四个 OR 分支各挡一种「时间戳看着很新、派生数据其实不在」的形态：
+// products 自己动了、**类目动了**、向量行被删了（比如手工清理、或者将来换模型时
+// 清空重建）、search_text 还是 NULL（00016 刚加上这一列时全库都是 NULL，
+// 时间戳却不会因此前进）。
+//
+// ### 为什么触发点要看 categories.updated_at
+//
+// 送进模型的文本是「标题 / 副标题 / **类目名**」（search.ProductText.EmbedContent），
+// 指纹（search.ProductText.EmbedFingerprint）也把类目名算进去。而
+// `UPDATE categories SET name = ...` **不碰任何 products 行** —— 于是少了这一支，
+// 改一次类目名之后该类目下的商品一件也不会被重新捞回来，判定那一半（指纹比对）
+// 根本没有机会跑，库里那批向量的 content 永远停在旧类目名上。没有任何东西会报错：
+// 检索照常返回结果，只是它对「类目」这个维度的理解落后了一代或几代。
+//
+// 这不是一个将来才成立的隐患：M4 的 PATCH /admin/categories/{id} 一落地，
+// 它就是一次普通商家操作的直接后果。
+//
+// **两件不同的事不要当成一件**：
+//
+//	· 把商品挪到另一个类目 —— `UPDATE products SET category_id = ...`，
+//	  它自己就拨动了 p.updated_at，只影响那一件商品；
+//	· 给类目改名 —— `UPDATE categories SET name = ...`，它一行 products 都不碰，
+//	  一次影响该类目下**全部**商品。
+//
+// 只有前者被 p.updated_at 那一支盖住。后者要的就是这一支。
+//
+// ### 为什么是这一行，而不是在 categories 上挂一个 touch 全类目商品的触发器
+//
+// 那条路会把「触发点」这件事拆到两处（一处 SQL、一处触发器），于是下一次往
+// EmbedContent 里加一个新输入时，要记着的地方从一处变成两处 —— 而 00016 文件头
+// 第四节整节的立场就是判据要有**一个**能被读到的形状。它还有三笔额外的代价：
+//
+//  1. 写放大没有上界：商家改一个类目名，事务里就要 UPDATE 掉该类目下的全部
+//     products 行，一个 PATCH 请求的锁面与耗时由类目大小决定；
+//  2. 它会污染 products.updated_at 的语义 ——「这条商品记录最后什么时候变过」
+//     会因为别人改了类目名而前进，而那一列不止这个任务在读；
+//  3. 它是一个跨表的级联时间戳触发器，与 00016 文件头点名不许引入的那一条
+//     （把 product_text_vectors.updated_at 同步成 products.updated_at）是同一族。
+//     那一条的致命处是「判据变成恒等式」，这一条没有那个毛病（它拨的是触发点，
+//     不是判定，判定仍然只看指纹），但它同样把一件本可以由应用一眼读完的判据
+//     藏进了数据库的隐式行为里。
+//
+// 这一支的代价是「粗」：改类目的 status / sort_order / path 也会让该类目下的
+// 商品被重新**判定**一次。那正是触发点该有的性质（不许漏算），而那一批的判定
+// 结论会是「指纹没变，什么都不用做」，只推一次水位线 —— 也就是 IndexReport.Skipped。
+// 判定只读几列、算两个 sha256，而漏掉一次真的类目改名的代价是
+// 「这一整类商品从此搜不到自己的新类目」，没有任何东西会报错。
+//
+// 水位线仍然只推 product_understanding.updated_at（MarkProductIndexed），
+// 所以判定过一轮之后 pu.updated_at > c.updated_at，这批商品当轮就退出候选集，
+// 不会每一轮都回来把配额占满。
 //
 // status = 1 AND deleted_at IS NULL 与 ListProducts 逐字一致：草稿与下架商品
 // 检索里本来就不会出现，为它们花 embedding 的钱是纯浪费。草稿一旦上架，

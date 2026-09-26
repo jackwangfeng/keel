@@ -27,7 +27,11 @@ import (
 // 而重算一遍 embedding 的钱是真花出去的。
 //
 //	· 触发点（不许漏算）：时间戳的先后关系。粗，但不漏。在 SQL 里
-//	  （db/queries/semantic.sql 的 ListStaleProductsForIndex）。
+//	  （db/queries/semantic.sql 的 ListStaleProductsForIndex）。它看的是
+//	  **products 与 categories 两张表**的 updated_at —— 送进模型的文本里有
+//	  类目名，而 `UPDATE categories SET name = ...` 一行 products 都不碰。
+//	  少了类目那一支，改一次类目名就让该类目下全部商品的向量永久过期，
+//	  判定那一半连跑的机会都没有。完整论证与「为什么不挂触发器」写在那条 SQL 上。
 //	· 判定（不许滥算）：**只看指纹**。在这个文件的 decide 里，
 //	  只比 product_understanding.input_hashes 的那一格与当前文本算出的指纹。
 //

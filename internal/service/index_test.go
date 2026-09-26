@@ -568,11 +568,14 @@ func TestCategoryChangeTouchesOnlyTheEmbeddingFingerprint(t *testing.T) {
 	stBefore := f.searchText(t, pid)
 
 	// 换类目名（等价于把商品挪到另一个类目 —— 进 embedding 的是类目**名**）。
+	//
+	// 这一句**不碰任何 products 行**，所以它同时依赖触发点里 c.updated_at
+	// 那一支（db/queries/semantic.sql）。这里刻意不补一句「等价的触碰」去
+	// UPDATE products —— 那是现实不会提供的因果链，补上之后这条测试测的就
+	// 不再是「改类目名之后会发生什么」，而是「假设有人替我拨了触发点之后
+	// 会发生什么」。触发点漏算这件事因此会完全绕开它。
+	// 直接针对触发点的那一条是 TestCategoryRenameRefreshesEveryProductInThatCategory。
 	f.exec(t, `UPDATE categories SET name = '裙装' WHERE id = $1`, f.catID[mid])
-	// categories 的 updated_at 变了不会碰 products.updated_at，所以触发点要自己拨。
-	// 真实世界里「换类目」是 UPDATE products SET category_id = ...，那一句本身
-	// 就会拨动触发点；这里改的是类目名，所以补一句等价的触碰。
-	f.exec(t, `UPDATE products SET category_id = category_id WHERE id = $1`, pid)
 
 	rep, err := f.svc.IndexOnce(ctx)
 	if err != nil {
@@ -596,6 +599,118 @@ func TestCategoryChangeTouchesOnlyTheEmbeddingFingerprint(t *testing.T) {
 	}
 	if stAfter := f.searchText(t, pid); *stAfter != *stBefore {
 		t.Errorf("search_text 列被重写了：%q → %q", *stBefore, *stAfter)
+	}
+}
+
+// 改一次类目名，该类目下**每一件**商品的向量都要跟上。
+//
+// 这条与上面那条的区别不是「又测一遍」：上面那条测的是**判定**的粒度
+// （两格指纹分得开），这一条测的是**触发点**本身 —— 一次
+// `UPDATE categories SET name = ...` 一行 products 都不碰，少了
+// ListStaleProductsForIndex 里 c.updated_at 那一支，这批商品根本不会被捞回来，
+// 判定那一半连跑的机会都没有。
+//
+// 这条测试的三处形状是刻意的：
+//
+//	① **断言看的是库里真实的 content，不是 IndexReport 的计数。**
+//	   计数来自应用自己的记账，它对「写回去的到底是什么」一无所知 ——
+//	   一个把旧文本又写了一遍的实现照样报 Embedded=3。
+//	② **每一件都查**，不是抽一件。触发点漏算的形态是「整类目一起漏」，
+//	   但也可能是「只捞回了 LIMIT 里靠前的那几件」，抽查看不出后者。
+//	③ **改两次名**。验收实测到的症状正是「向量落后了两代」：第一次改名之后
+//	   如果有什么东西碰巧拨动过触发点（比如同一轮里商品被别的写入摸过），
+//	   只改一次可能侥幸绿。第二次改名之后再核一遍，那条侥幸就不存在了。
+//
+// 最后一段是**判定那一半的阳性对照**：类目名不再变之后，下一轮必须
+// 一条向量都不重算。少了它，一个「每轮无条件重算全部商品」的实现
+// 也能让上面每一条断言变绿，而那正好是判据存在的全部理由被删掉的样子。
+func TestCategoryRenameRefreshesEveryProductInThatCategory(t *testing.T) {
+	ctx := context.Background()
+	const n = 3
+	f := newIndexFixture(t, "catrename", 1, n, service.IndexConfig{})
+	mid := f.merchants[0]
+	pids := f.products[mid]
+
+	if _, err := f.svc.IndexOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// 起点：三件商品的 content 里都是建夹具时那个类目名。
+	for _, pid := range pids {
+		assertVectorContent(t, f, pid, "女装")
+	}
+
+	for _, name := range []string{"裙装", "连衣裙专区"} {
+		f.exec(t, `UPDATE categories SET name = $1 WHERE id = $2`, name, f.catID[mid])
+
+		rep, err := f.svc.IndexOnce(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rep.Judged < n {
+			t.Fatalf("改类目名为 %q 之后只判定了 %d 件（共 %d 件）—— "+
+				"触发点漏了这一类目下的商品。UPDATE categories SET name = ... "+
+				"一行 products 都不碰，ListStaleProductsForIndex 里必须有一支看 "+
+				"categories.updated_at，否则这批向量的 content 永远停在旧类目名上，"+
+				"而且不会有任何东西报错。报告：%+v", name, rep.Judged, n, rep)
+		}
+		// 库里真实的 content —— 不看 rep.Embedded。
+		for _, pid := range pids {
+			assertVectorContent(t, f, pid, name)
+		}
+	}
+
+	// 判定那一半的阳性对照，也是这一支新增的**代价**的落点。
+	//
+	// 动一下类目里与文本无关的列：触发点（c.updated_at）照样前进，该类目下
+	// 三件商品**都会被重新判定**（Judged == n，这一半证明下面那句不是空的），
+	// 而判定的结论必须是「指纹没变，一条都不用算」（Embedded == 0）。
+	//
+	// 少了这一段，一个「每一轮无条件重算全部商品」的实现能让上面每一条断言
+	// 都变绿 —— 那正好是判据存在的全部理由被删掉的样子。
+	f.exec(t, `UPDATE categories SET sort_order = sort_order + 1 WHERE id = $1`, f.catID[mid])
+	rep, err := f.svc.IndexOnce(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Judged != n {
+		t.Fatalf("动了类目的 sort_order 之后只判定了 %d 件（共 %d 件）—— "+
+			"下面那条「没重算」因此证明不了任何事：它们可能只是没被看见。报告：%+v",
+			rep.Judged, n, rep)
+	}
+	if rep.Embedded != 0 {
+		t.Errorf("类目名一个字都没变，这一轮却重算了 %d 条向量 —— "+
+			"触发点那一支把判定也一起绕过去了。改一次类目排序就把全类目商品"+
+			"重算一遍，钱是真花出去的，而检索结果看上去完全正常。报告：%+v",
+			rep.Embedded, rep)
+	}
+	if rep.SearchTextWritten != 0 {
+		t.Errorf("动类目的 sort_order 却重写了 %d 条 bigram 串 —— "+
+			"search_text 的输入只有标题与副标题", rep.SearchTextWritten)
+	}
+}
+
+// assertVectorContent 核对库里那条向量的 content 就是按当前类目名拼出来的那一段。
+//
+// 它比「content 里含有新类目名」严格：拼接模板（search.ProductText.EmbedContent）
+// 是送进模型的那段文本本身，只要求「含有」的话，一个把新旧类目名拼在一起的
+// 实现也算过。
+func assertVectorContent(t *testing.T, f *indexFixture, pid int64, categoryName string) {
+	t.Helper()
+	var title, subtitle string
+	if err := f.admin.QueryRow(context.Background(),
+		`SELECT title, coalesce(subtitle,'') FROM products WHERE id = $1`, pid).
+		Scan(&title, &subtitle); err != nil {
+		t.Fatal(err)
+	}
+	want := search.ProductText{Title: title, Subtitle: subtitle, CategoryName: categoryName}.
+		EmbedContent()
+	got, _, _, _, _, _, ok := f.vectorRow(t, pid)
+	if !ok {
+		t.Fatalf("商品 %d 根本没有向量行", pid)
+	}
+	if got != want {
+		t.Errorf("商品 %d 的向量 content 是 %q，期望 %q —— "+
+			"库里这条向量落后于当前的商品文本", pid, got, want)
 	}
 }
 
