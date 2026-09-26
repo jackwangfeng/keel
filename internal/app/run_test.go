@@ -2,10 +2,8 @@ package app_test
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -15,9 +13,11 @@ import (
 	"github.com/keel/keel/internal/app"
 	"github.com/keel/keel/internal/auth"
 	"github.com/keel/keel/internal/db"
+	"github.com/keel/keel/internal/dtm/dtmtest"
 	"github.com/keel/keel/internal/repository"
 	"github.com/keel/keel/internal/service"
 	"github.com/keel/keel/internal/tenant"
+	"github.com/keel/keel/internal/testdb"
 )
 
 // 这一组测试守的是一句只有一行代码的事实：**启动路径上调了 Preflight，
@@ -33,36 +33,18 @@ import (
 // 环境变量，然后看 Run 有没有在监听之前退出。把 Run 里那行 Preflight 删掉，
 // 下面 TestRunRefuses* 两条都会红。
 
+// TestMain 给本包一个只属于它的库（keel_test_app），迁移之后加载种子。
+// 每次运行都是新库，理由见 internal/testdb。
 func TestMain(m *testing.M) {
-	if err := setup(); err != nil {
-		fmt.Fprintf(os.Stderr, "准备测试环境失败: %v\n", err)
-		os.Exit(1)
-	}
-	os.Exit(m.Run())
+	os.Exit(testdb.Main(m, testdb.Package{Name: "app", Setup: loadSeed}))
 }
 
-func setup() error {
-	ctx := context.Background()
+func loadSeed(ctx context.Context) error {
 	admin, err := pgx.Connect(ctx, db.AdminDSN())
 	if err != nil {
 		return err
 	}
 	defer admin.Close(ctx)
-
-	// 无条件重建 schema —— 理由与 internal/handler/main_test.go 里那段相同：
-	// 跳过会让可变状态跨轮次累积（种子是 NOT EXISTS 幂等的，补不回被扣掉的库存），
-	// 而且改了一份已应用的迁移之后，暖库上是假绿。后者是「删掉被守护的那段逻辑、
-	// 看它红不红」这套方法的地基。
-	if _, err := admin.Exec(ctx,
-		`DROP SCHEMA public CASCADE; CREATE SCHEMA public`); err != nil {
-		return err
-	}
-
-	out, err := exec.Command("make", "-C", "../..", "migrate",
-		"GOOSE_DBSTRING="+db.AdminDSN()).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("%w\n%s", err, out)
-	}
 
 	seed, err := os.ReadFile(filepath.Join("..", "..", "db", "seed", "dev.sql"))
 	if err != nil {
@@ -97,7 +79,9 @@ func env(t *testing.T, defaultMerchant, baseDomain string) {
 	t.Setenv(app.EnvDefaultMerchant, defaultMerchant)
 	t.Setenv(app.EnvBaseDomain, baseDomain)
 	t.Setenv(app.EnvAddr, "127.0.0.1:0")
-	t.Setenv(app.EnvDTMDSN, "sqlite:"+filepath.Join(t.TempDir(), "dtm.db"))
+	// 走 dtmtest：Run 返回（协调器已 Close）之后 dtmrs 的 sqlite 线程还会在目录里
+	// 删建文件，直接用 t.TempDir() 会偶发 `directory not empty`。见 dtmtest 包注释。
+	t.Setenv(app.EnvDTMDSN, dtmtest.SQLiteDSN(t))
 }
 
 // 阳性对照，必须排在前面。

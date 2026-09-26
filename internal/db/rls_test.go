@@ -42,9 +42,10 @@ func TestRLSIsolatesTenants(t *testing.T) {
 	var idA, idB int64
 	// status = 2（停用）不是随手写的：这两家是为了测隔离而存在的夹具，不是
 	// 对外营业的店铺，而 tenant 包的 Preflight 断言的是**整个库**的形态
-	// （「配了默认商家时活跃商家只能有一家」）。go test ./... 按包并行，
-	// 四个包共用同一个库，所以这里插一家活跃商家，会在另一个包里表现为
-	// 一次随机的断言失败，凶手名字还出现在别人的错误信息里。
+	// （「配了默认商家时活跃商家只能有一家」）。这段写下时各包共用同一个库，
+	// 这里插一家活跃商家会在另一个包里表现为一次随机的断言失败，凶手名字
+	// 还出现在别人的错误信息里。现在各包各有自己的库（internal/testdb），
+	// 跨包这条路断了；但同一个包里的测试仍共用一个库，所以照旧停用。
 	// 隔离测试本身不关心 status —— RLS 的谓词只看 merchant_id。
 	if err := admin.QueryRow(ctx,
 		`INSERT INTO merchants (code, name, status) VALUES ($1, 'A', 2), ($2, 'B', 2) RETURNING id`,

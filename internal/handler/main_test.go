@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -21,6 +20,7 @@ import (
 	"github.com/keel/keel/internal/repository"
 	"github.com/keel/keel/internal/service"
 	"github.com/keel/keel/internal/tenant"
+	"github.com/keel/keel/internal/testdb"
 )
 
 // baseDomain 与种子里登记的域名一致。
@@ -73,24 +73,27 @@ func newSweeper(cfg service.SweepConfig) *service.SweepService {
 // 并不随之出现在 PATH 上），而 exec 一个不存在的命令报的是 "executable file
 // not found" —— 看上去像环境坏了，而不是「种子没加载」。用 Go 读文件再 Exec，
 // 依赖面只剩下已经被测试依赖的 pgx。internal/tenant 的测试同此惯例。
+//
+// 库是本包自己的（keel_test_handler），由 testdb.Main 新建并迁移 —— 每次运行
+// 都是新库，所以不存在「可变状态跨轮次累积」（种子是 NOT EXISTS 幂等的，补不回
+// 被扣掉的库存；以前同一个库连跑到第四轮必红）和「改了已应用的迁移、暖库假绿」。
+// 以前这两件事靠 ensureSchema 无条件 DROP SCHEMA 保证，见 internal/testdb。
+// 第二条是「删掉被守护的那段逻辑、看它红不红」这套方法的地基：验收有一轮变异
+// 跑在被污染的库上，5 条测试同时红、红的全是夹具，结论作废重做。
 func TestMain(m *testing.M) {
-	if err := setup(); err != nil {
-		fmt.Fprintf(os.Stderr, "准备测试环境失败: %v\n", err)
-		os.Exit(1)
-	}
-	code := m.Run()
+	os.Exit(testdb.Main(m, testdb.Package{Name: "handler", Setup: setup, Teardown: teardown}))
+}
+
+func teardown() {
 	if testTC != nil {
 		testTC.Close()
 	}
-	testPool.Close()
-	os.Exit(code)
+	if testPool != nil {
+		testPool.Close()
+	}
 }
 
-func setup() error {
-	ctx := context.Background()
-	if err := ensureSchema(ctx); err != nil {
-		return err
-	}
+func setup(ctx context.Context) error {
 	if err := loadSeed(ctx); err != nil {
 		return err
 	}
@@ -174,41 +177,6 @@ func setup() error {
 	testEngine = app.Router(pool,
 		tenant.NewResolver(pool, tenant.Config{BaseDomain: baseDomain}), testSigner, testOrders,
 		service.PaymentConfig{Sandbox: true}, conceptEmbedder{})
-	return nil
-}
-
-// ensureSchema 只在缺 schema 时才跑迁移，惯例同 internal/repository 的测试。
-func ensureSchema(ctx context.Context) error {
-	admin, err := pgx.Connect(ctx, db.AdminDSN())
-	if err != nil {
-		return err
-	}
-	defer admin.Close(ctx)
-
-	// 无条件重建 schema，不做「表已经在了就跳过」。
-	//
-	// 跳过有两个代价，都由验收实测出来：
-	//
-	//  一、**可变状态会跨轮次累积。** 种子是 NOT EXISTS 幂等的，补不回被扣掉的
-	//     库存。同一个库连跑 handler 包，前三轮绿、第四轮起必红
-	//     （`shop-a 里找不到水位 >= 2 的 SKU`）。红的是夹具不是被测语义。
-	//
-	//  二、**改了一份已应用的迁移，在暖库上是假绿。** 实测：删掉 orders.user_id
-	//     的复合外键，暖库上 internal/db 照样 ok，换空库才红。
-	//
-	// 第二条尤其要紧：它是「删掉被守护的那段逻辑、看它红不红」这套方法的地基。
-	// 验收自己第一轮变异就跑在被污染的库上，5 条测试同时红、红的全是夹具，
-	// 结论作废重做了一遍。一个会把「没有区分力的断言」判成「有区分力」的
-	// 测试环境，比慢几秒糟得多。
-	if _, err := admin.Exec(ctx,
-		`DROP SCHEMA public CASCADE; CREATE SCHEMA public`); err != nil {
-		return err
-	}
-	out, err := exec.Command("make", "-C", "../..", "migrate",
-		"GOOSE_DBSTRING="+db.AdminDSN()).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("%w\n%s", err, out)
-	}
 	return nil
 }
 

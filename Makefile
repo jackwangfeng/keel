@@ -57,13 +57,22 @@ GOOSE_DBSTRING ?= postgres://$(or $(PGUSER),keel):$(or $(PGPASSWORD),keel)@$(or 
 # goose 的用法是 `goose DRIVER DBSTRING [OPTIONS] COMMAND`，选项必须排在两个
 # 位置参数之后，把 -dir 写在前面它会把 DSN 当成命令名，报 "no such command"。
 # 环境变量形式没有顺序问题。
+#
+# goose 先编成二进制（$(GOOSE_BIN)，见 goose-bin 目标）再调，不走 $(GORUN)。
+# `go run` 每次都要重新链接一遍 goose（它把 mysql、sqlite、clickhouse 等驱动
+# 全链进来，二进制 60 MB），本机实测每次多花 0.5～1 秒，机器忙的时候更多；
+# internal/db 的测试每条都要迁一次，这笔钱乘上测试条数就是几十秒。
+# 版本仍然只由 tools/go.mod 决定：goose-bin 每次都执行 `go build -o`，
+# 由 go 自己的构建缓存判断要不要重链 —— 不靠 make 的时间戳，
+# 所以 tools/go.mod 改了版本之后不会有一个旧二进制被悄悄沿用。
+GOOSE_BIN := $(ROOT)/bin/goose
 GOOSE := GOOSE_DRIVER=postgres GOOSE_DBSTRING="$(GOOSE_DBSTRING)" \
 	GOOSE_MIGRATION_DIR=$(MIGRATIONS) \
-	$(GORUN) github.com/pressly/goose/v3/cmd/goose
+	$(GOOSE_BIN)
 
 .PHONY: help generate generate-go generate-ts generate-sql generate-uts tools-versions version \
 	contract-check schema-check app-type-check admin-install admin-type-check admin-test admin-build app-install app-build-h5 app-build-android app-apk app-apk-e2e app-e2e app-adb-wifi app-ios app-ios-e2e app-e2e-ios \
-	sdk-smoke migrate migrate-down migrate-status test-db \
+	sdk-smoke goose-bin migrate migrate-down migrate-status test-db \
 	test-engine dtmrs-deps build
 
 help:
@@ -90,6 +99,7 @@ help:
 	@echo "make app-e2e-ios    在 USB 连着的 iPhone 上跑 app/e2e 下的自动化用例"
 	@echo "make sdk-smoke      用 TS SDK 对跑着的服务真打一次 GET /products"
 	@echo "make tools-versions 打印钉住的工具版本"
+	@echo "make goose-bin      把钉在 tools/go.mod 的 goose 编到 bin/goose（migrate 会先调它）"
 	@echo "make migrate        把 db/migrations 迁到最新（GOOSE_DBSTRING 可覆盖）"
 	@echo "make migrate-down   回滚一个版本"
 	@echo "make migrate-status 打印各版本的应用状态"
@@ -298,13 +308,24 @@ contract-check: generate
 
 # goose 与 sqlc、oapi-codegen 一样钉在 tools/go.mod，不装全局二进制：
 # 本地和 CI 装到不同版本的迁移工具，代价是生产库上一次不一致的 schema。
-migrate:
+#
+# goose-bin 把它编到仓库里的 bin/（已被 .gitignore 忽略），不是 PATH 上。
+# 输出路径必须是绝对的，理由同 MIGRATIONS：`go -C $(TOOLS)` 下相对路径
+# 会从 tools/ 解析。二进制已是最新时这一步约 0.15 秒（go 比对 build ID，不重链）。
+#
+# 测试（internal/testdb）调的仍是 `make migrate`，不直接 exec bin/goose：
+# 调用方式（环境变量、迁移目录、二进制在哪）只在这个文件里写一份。
+goose-bin:
+	@mkdir -p $(dir $(GOOSE_BIN))
+	@go -C $(TOOLS) build -o $(GOOSE_BIN) github.com/pressly/goose/v3/cmd/goose
+
+migrate: goose-bin
 	$(GOOSE) up
 
-migrate-down:
+migrate-down: goose-bin
 	$(GOOSE) down
 
-migrate-status:
+migrate-status: goose-bin
 	$(GOOSE) status
 
 # 跑碰数据库的测试。-count=1 不是可选项：这些测试真正依赖的输入是数据库状态，
@@ -313,26 +334,38 @@ migrate-status:
 # 一个「本地跑两遍就永远绿」的测试，恰恰只在它该报警的时候失灵。
 TEST_PKGS ?= ./...
 
-# -p 1：包级串行。
+# 包级并行（go test 的默认 -p，即 CPU 数）。
 #
-# 各个包的 TestMain 都会对**同一个库**跑一遍 goose 迁移。go test 默认按包
-# 并行，于是五个包会同时建 goose_db_version、同时跑 00001_init.sql，互相
-# 撞成 `relation "goose_db_version" does not exist` / `duplicate key value
-# violates unique constraint "pg_type_typname_nsp_index"` / `relation
-# "merchants" already exists`。
+# 以前这里是 -p 1：各个包的 TestMain 都对**同一个库**跑 goose 迁移，并行的话
+# 五个包会同时建 goose_db_version、同时跑 00001_init.sql，互相撞成
+# `relation "goose_db_version" does not exist` / `duplicate key value violates
+# unique constraint "pg_type_typname_nsp_index"`。那个竞态的方向和一般抖动相反：
+# **库是暖的就必绿，库是冷的就必红**，所以本地反复跑永远看不到它，而 CI 每一次
+# 都是全新空库，每一次都会踩（实测冷库 3/3 全红，加上 -p 1 后 3/3 全绿）。
 #
-# 这个竞态的方向和一般的抖动相反：**库是暖的就必绿，库是冷的就必红**。
-# 迁移过一次之后 goose 看到版本已是最新，什么都不做，窗口根本不存在——
-# 所以本地反复跑永远看不到它，而 CI 每一次都是全新空库，每一次都会踩。
-# 实测冷库 3/3 全红，加上 -p 1 后 3/3 全绿。
+# 现在每个碰库的包在自己的 TestMain 里经 internal/testdb 建一个只属于它的库
+# （keel_test_<包名>），在上面迁移、跑测试、结束时删掉 —— 包与包之间没有共享的
+# schema，那个竞态的前提没了。剩下两处跨库共享的东西都在 testdb 里处理了：
+# keel_app 是集群级角色，两个库同时迁移会在 00003 上撞（实测
+# `tuple concurrently updated`），所以迁移那一步在集群范围内串行；
+# 两个包写了同一个库名时，后到的那个带着说明失败，而不是悄悄共用。
 #
-# 不用 -p 1 的另一条路是让 TestMain 抢一把咨询锁再迁移，那是把并发正确性
-# 做进测试基建；在只有一个共享库的前提下不值当，理由和 -count=1 是同一类：
-# 宁可慢一点，也不要一个「只在该报警时失灵」的测试。
-test-db: $(DTMRS_LIB)
-	go test -count=1 -p 1 $(TEST_PKGS)
+# 连接方式没变：PGHOST / PGPORT 指向集群，PGDATABASE（默认 keel）现在只是
+# 建库删库用的维护库，测试数据不再写进去。
+#
+# test-db 先编好 goose（goose-bin）再起 go test：各包的 TestMain 都会经
+# make migrate 用到它，先编好就不会有几个包同时去链接同一个输出文件。
+#
+# -timeout：go test 默认 10 分钟，而且是**每个包**各自计时。并行化之后最慢的包
+# 本机实测在 30 秒以内（见提交说明），负载重的时候观察到过三倍的抖动；
+# 给 5 分钟，真卡住时 5 分钟内会带着各 goroutine 的栈失败，而不是陪着等满
+# CI job 的 timeout-minutes、最后只留下一句「超时」。
+TEST_TIMEOUT ?= 5m
+
+test-db: $(DTMRS_LIB) goose-bin
+	go test -count=1 -timeout=$(TEST_TIMEOUT) $(TEST_PKGS)
 	@echo "==> 替身那一组（-tags keel_fake_embedder）"
-	go test -count=1 -tags keel_fake_embedder ./internal/inference/...
+	go test -count=1 -timeout=$(TEST_TIMEOUT) -tags keel_fake_embedder ./internal/inference/...
 
 # 推理引擎的替身（internal/inference/fake）带编译标签，默认构建里不存在——
 # 那是有意的（生产路径够不着它，理由写在那个包的 doc.go 里）。代价是
@@ -363,13 +396,13 @@ test-db: $(DTMRS_LIB)
 # 代价说明白：这条目标因此同时要 KEEL_EMBED_ENDPOINT 和一个迁好的数据库
 # （PGHOST/PGPORT，和 test-db 同一套）。少一样都会 Fatal，不会 Skip。
 #
-# 注意 -p 1：internal/repository 那一组和 test-db 一样共用同一个库，
-# 并行跑会互相踩（理由见 test-db 上面那段）。
+# 不再需要 -p 1：internal/repository 的测试经 internal/testdb 用自己的库
+# （keel_test_repository），理由见 test-db 上面那段。
 #
 # 刻意不 Skip：没配 KEEL_EMBED_ENDPOINT 时那些测试 Fatal 而不是 Skip。
 # 一条会自己跳过的测试，在它该报警的时候是静默的。
-test-engine:
-	go test -count=1 -v -p 1 -tags keel_real_engine ./internal/inference/ ./internal/repository/
+test-engine: goose-bin
+	go test -count=1 -v -timeout=$(TEST_TIMEOUT) -tags keel_real_engine ./internal/inference/ ./internal/repository/
 
 # ---------------------------------------------------------------------------
 # dtmrs：嵌入式事务协调器的 C ABI 动态库

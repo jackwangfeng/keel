@@ -60,7 +60,7 @@
 
 ```bash
 docker build -t keel-postgres:16 docker/postgres   # 本机实测约 60 秒，之后走层缓存
-docker run -d --name keel-pg -e POSTGRES_PASSWORD=keel -e POSTGRES_USER=keel \
+docker run -d --name keel-pg --shm-size=1g -e POSTGRES_PASSWORD=keel -e POSTGRES_USER=keel \
     -e POSTGRES_DB=keel -p 5432:5432 keel-postgres:16
 make migrate          # 迁到最新；make migrate-status 看状态，make migrate-down 回滚一格
 make test-db          # 跑碰数据库的测试
@@ -73,6 +73,17 @@ docker run -d --name keel-pg ... -p 5433:5432 keel-postgres:16
 PGPORT=5433 make migrate
 PGPORT=5433 make test-db
 ```
+
+`--shm-size=1g` 只影响一条测试的快慢：`internal/repository` 的 HNSW 测试要并行建
+一个 3.4 万条向量的索引，pgvector 把整张图放在共享内存里，而 Docker 默认的
+`/dev/shm` 只有 64 MB。按旧命令起的库照样能跑，那条测试会退回串行建索引，
+慢二十秒左右，日志里有一句说明。
+
+`make test-db` **不往你的 `keel` 库里写东西**。每个碰库的测试包建一个自己的库
+（`keel_test_db`、`keel_test_handler`……），在上面从空库迁移、跑完删掉；`PGDATABASE`
+（默认 `keel`）只用来建库、删库。所以各包可以并行跑，也不会冲掉你库里的数据。
+实现和理由见 `internal/testdb`。测试被 `-timeout` 杀掉时库会留下来，下一次运行
+会先删掉再建。
 
 > 已经有一个旧的 `keel-pg`（跑着 `pgvector/pgvector:pg16`）的话，**数据卷可以留着**，
 > 只换容器：删掉旧容器，用同一个卷起 `keel-postgres:16`，再 `make migrate`。
@@ -129,7 +140,9 @@ PGPORT=5433 make test-db
 
 goose 不装全局二进制，它和 sqlc、oapi-codegen 一样钉在 `tools/go.mod`，
 只经 `make migrate` 调用——本地与 CI 装到不同版本的迁移工具，
-代价是生产库上一次不一致的 schema。
+代价是生产库上一次不一致的 schema。`make migrate` 先把它编到仓库里的
+`bin/goose`（已忽略，不在 PATH 上），已是最新时这一步约 0.15 秒；
+测试调的也是 `make migrate`，不另写一份调用方式。
 
 ## 起全栈：`docker compose up`
 

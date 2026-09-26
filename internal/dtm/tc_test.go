@@ -7,15 +7,20 @@ import (
 	"testing"
 	"time"
 
+	"github.com/keel/keel/internal/dtm/dtmtest"
 	"github.com/keel/keel/internal/tenant"
 )
 
 // 这一组测试要真的把协调器跑起来（sqlite 落到 t.TempDir()），不 mock。
 // mock 掉 cgo 边界就等于不测 cgo 边界，而这一层里出问题的全在那条边界上。
 
+// tempDSN 走 dtmtest.SQLiteDSN 而不是直接拼 t.TempDir()：dtmrs_close 返回之后
+// 它的 sqlite 连接线程还会在目录里删建文件，和 t.TempDir 的清理赛跑
+// （TestCloseIsIdempotent 偶发 `directory not empty` 的真因，完整链条写在
+// dtmtest 的包注释里）。
 func tempDSN(t *testing.T) string {
 	t.Helper()
-	return "sqlite:" + filepath.Join(t.TempDir(), "dtm.db")
+	return dtmtest.SQLiteDSN(t)
 }
 
 const oneStep = `[{"action":"local://act","compensate":"local://act_undo"}]`

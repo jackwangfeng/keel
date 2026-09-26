@@ -20,6 +20,7 @@ import (
 
 	"github.com/keel/keel/internal/db"
 	"github.com/keel/keel/internal/tenant"
+	"github.com/keel/keel/internal/testdb"
 )
 
 // baseDomain 是这些测试里的平台基础域名，与种子里的域名一致。
@@ -40,19 +41,20 @@ func multi() tenant.Config             { return tenant.Config{BaseDomain: baseDo
 // 用管理员连接：种子要往带 RLS 的表里写（眼下只有 merchants/shop_settings 没有
 // RLS，但 categories/products 随时会加进来），而 keel_app 在没有租户上下文的
 // 连接上一行都插不进去。这是少数几个正当使用 AdminDSN 的地方之一。
+//
+// 库是本包自己的（keel_test_tenant），由 testdb.Main 新建并迁移。
+// **以前这里不迁移**，只加载种子：它靠的是 `go test -p 1` 按字母序先跑完的
+// internal/service 留下的 schema —— 在冷库上单独跑这个包、或者换一个包序，
+// 种子会因为表不存在而 panic。每个包自己迁移之后，这层隐含的先后依赖没了。
 func TestMain(m *testing.M) {
-	if err := loadSeed(); err != nil {
-		panic(err)
-	}
-	os.Exit(m.Run())
+	os.Exit(testdb.Main(m, testdb.Package{Name: "tenant", Setup: loadSeed}))
 }
 
-func loadSeed() error {
+func loadSeed(ctx context.Context) error {
 	sql, err := os.ReadFile(filepath.Join("..", "..", "db", "seed", "dev.sql"))
 	if err != nil {
 		return err
 	}
-	ctx := context.Background()
 	conn, err := pgx.Connect(ctx, db.AdminDSN())
 	if err != nil {
 		return err
@@ -912,7 +914,7 @@ func TestSeedIsIdempotent(t *testing.T) {
 	}
 
 	m1, s1 := count()
-	if err := loadSeed(); err != nil {
+	if err := loadSeed(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	m2, s2 := count()

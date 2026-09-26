@@ -34,7 +34,7 @@ import (
 // TestDraftAndDeletedProductsAreInvisible 拿 rawProductCount 做阳性对照）
 // 就要跟着我们的写入一起动 —— 而它们红起来的时候，真因是这个文件。
 //
-// 这正是 main_test.go 里 ensureSchema 那段「可变状态会跨轮次累积」记下的
+// 这正是 main_test.go 里 TestMain 上那段「可变状态会跨轮次累积」记下的
 // 同一类问题的另一面：那边是跨轮次，这边是跨测试。
 
 // adminShop 是一家临时的店，带一个在岗的商家级管理员会话。

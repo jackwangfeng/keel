@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"regexp"
 	"slices"
 	"strings"
@@ -14,46 +13,35 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/keel/keel/internal/db"
+	"github.com/keel/keel/internal/testdb"
 )
 
-// migrate 通过根 Makefile 的 migrate 目标跑迁移。
+// migrate 给本条测试换一个刚迁完的库，并返回 make migrate 的输出。
 //
-// 不直接 exec "goose"：goose 钉在 tools/go.mod 里（见 Makefile 顶部关于工具
-// 子模块的说明），PATH 上没有、也不该有一个 goose 二进制。测试调 make 这个
-// 稳定入口，而不是把 `go -C tools run ...` 这条长命令抄一份到测试里——抄一份
-// 就意味着以后改调用方式要改两个地方，而漏改的那个会以「本地能过 CI 红」的
-// 形式暴露。
-func migrate(t *testing.T) ([]byte, error) {
-	t.Helper()
-	resetSchema(t)
-	cmd := exec.Command("make", "-C", "../..", "migrate", "GOOSE_DBSTRING="+db.AdminDSN())
-	return cmd.CombinedOutput()
-}
-
-// resetSchema 在每次迁移前把 public 清空。
+// 两步：
 //
-// 不清的话，goose 看到版本已是最新就什么都不做 —— 于是**改了一份已应用的迁移，
-// 在暖库上是假绿**。实测过：删掉 orders.user_id 的复合外键，暖库上
-// TestForeignKeysAreNotSilentlyMissing 照样 ok，换空库才红。
+//  1. testdb.Reset —— 删掉本包的库，从本次运行现建的模板克隆一个新的。
+//     模板是 TestMain 里对一个空库跑 make migrate 得到的，读的是工作区里
+//     此刻的 db/migrations；它从不跨运行复用。为什么克隆而不是每条重迁、
+//     以及这样为什么不会「暖库假绿」，写在 testdb.Reset 上。
 //
-// 这条对本包尤其要命：本包的测试全部是「拿系统目录核对迁移写了什么」，
+//  2. testdb.Migrate —— 在克隆出来的库上再跑一次 make migrate。正常情况下
+//     它什么都不做（版本已是最新），但它让每条测试都真的经过一次 goose：
+//     模板要是落后于文件，缺的迁移会在这里补上，结果仍然是当前文件的迁移结果。
+//
+// 迁移仍然只经 make 这个稳定入口，不把 goose 的调用方式抄进测试 ——
+// 抄一份就意味着以后改调用方式要改两个地方，而漏改的那个会以「本地能过
+// CI 红」的形式暴露。
+//
+// 这条对本包尤其要紧：本包的测试全部是「拿系统目录核对迁移写了什么」，
 // 而它们读的是**库**不是**文件**。库不跟着文件走的时候，这些断言守的是
 // 上一次跑过的那份迁移，不是工作区里这份。
-//
-// 代价是每个测试都要重跑一遍全部迁移（约一秒）。这个仓库在这类取舍上一贯
-// 选正确性：-count=1 是为了不让缓存假绿，-p 1 是为了不让并发迁移互撞，
-// 这一条是同一类。
-func resetSchema(t *testing.T) {
+func migrate(t *testing.T) ([]byte, error) {
 	t.Helper()
-	admin, err := pgx.Connect(context.Background(), db.AdminDSN())
-	if err != nil {
+	if err := testdb.Reset(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	defer admin.Close(context.Background())
-	if _, err := admin.Exec(context.Background(),
-		`DROP SCHEMA public CASCADE; CREATE SCHEMA public`); err != nil {
-		t.Fatal(err)
-	}
+	return testdb.Migrate(context.Background())
 }
 
 // migratedConn 跑一次迁移并返回一条应用角色连接。

@@ -24,7 +24,7 @@
 #
 #   - 多商家形态（compose.multi.yaml + KEEL_SMOKE_HOST）。e2e 只跑默认的单商家
 #     形态。叠加层与它自己的数据卷目前只有人手动验证过。
-#   - -race。make test-db 是 `go test -count=1 -p 1 ./...`，没有 -race；
+#   - -race。make test-db 是 `go test -count=1 -timeout=5m ./...`，没有 -race；
 #     要加得先决定它属于 Makefile 还是属于这里。
 #   - examples/dtmrs-embedded 在自己的 workflow 里（example-dtmrs.yml）。
 #     它跑的是那个例子自己的五项验证（TCC、拉取式分支、崩溃恢复…），
@@ -177,6 +177,9 @@ jobs:
     runs-on: [self-hosted, keel]
     env:
       PGPORT: "15432"
+    # 20 分钟是按最坏的冷路径算的，不是按平常：镜像层缓存被清掉时 docker build
+    # 约 90 秒、libdtmrs 缓存不命中时 cargo 冷编要几分钟，再加上「数据库测试」
+    # 那一步自己的 12 分钟上限。平常（缓存都在）整个 job 两三分钟。
     timeout-minutes: 20
     # 没有 services.postgres 这一段了。**这不是疏忽，是没得选。**
     #
@@ -214,15 +217,21 @@ jobs:
           # 上一次的残留。自建 runner 不像托管 runner 那样每次给新机器，
           # 上一跑要是没走到「收拾」那一步（job 被取消、runner 重启），
           # 这里会因为重名直接失败，而那句报错完全不指向真因。
-          docker rm -f keelci-pg >/dev/null 2>&1 || true
+          # -v：postgres 镜像的数据目录是匿名卷，不带 -v 删容器会把卷漏在机器上。
+          docker rm -f -v keelci-pg >/dev/null 2>&1 || true
 
           # 要 apt 装 PostGIS / pgvector，国内直连 apt.postgresql.org 常常超时，
           # 与 e2e 那一步同一个代理（scripts/ci_build_proxy_args.sh）。
           # shellcheck disable=SC2046
           docker build $(scripts/ci_build_proxy_args.sh) -t keel-postgres:16 docker/postgres
-          docker run -d --name keelci-pg \
+          docker run -d --name keelci-pg --shm-size=1g \
             -e POSTGRES_USER=keel -e POSTGRES_PASSWORD=keel -e POSTGRES_DB=keel \
             -p 15432:5432 keel-postgres:16
+          # --shm-size=1g：internal/repository 的 HNSW 测试并行建索引，pgvector
+          # 把整张图放在一块大小等于 maintenance_work_mem（256MB）的动态共享内存里，
+          # 而 Docker 默认的 /dev/shm 只有 64MB。不给的话那条测试会退回串行建
+          # （结果一样，慢二十秒左右，日志里有一句说明）。理由与实测数据在
+          # internal/repository/search_hnsw_test.go 的 buildHNSWIndex 上。
           # keel / keel / keel 与 internal/db.AdminDSN() 的默认值逐项对应，
           # 迁移用的就是这个角色。对上之后这个 job 除了 PGPORT 一个 PG* 环境
           # 变量都不用配，少一处「Makefile、compose、workflow 三份连接串各说
@@ -304,17 +313,26 @@ jobs:
 
       - run: go vet ./...
 
-      # make test-db，不是裸 go test。Makefile 里那两个参数都是闸门的一部分：
-      #   -count=1  这些测试真正的输入是数据库状态，在 Go 的视野之外；不禁缓存的话
-      #             把 RLS 策略删掉也照样 `ok (cached)`。
-      #   -p 1      各包的 TestMain 对同一个库跑 goose 迁移，默认并行会撞成
-      #             `relation "goose_db_version" does not exist` 一类的错。
+      # make test-db，不是裸 go test。Makefile 里那几个参数都是闸门的一部分：
+      #   -count=1   这些测试真正的输入是数据库状态，在 Go 的视野之外；不禁缓存的话
+      #              把 RLS 策略删掉也照样 `ok (cached)`。
+      #   -timeout   每个包 5 分钟。卡住的测试在那之内带着栈失败，不陪着等满
+      #              下面的 timeout-minutes。
       #
-      # 上面那个竞态的方向和一般抖动相反：**库是暖的必绿，库是冷的必红**。
-      # 所以这里刻意不做任何「复用一个已迁移的库」的优化——服务容器每次都是全新空库，
-      # 而 CI 恰恰是唯一每次都会踩到这类问题的地方。为了跑得快去缓存它，等于把
-      # 这个 job 换成一个只在该报警时失灵的 job。
+      # 以前这里还有 -p 1（各包的 TestMain 对同一个库跑 goose，并行会撞）。现在
+      # 每个包经 internal/testdb 建自己的库 keel_test_<包名>，包之间可以并行，
+      # 理由与剩下那两处跨库共享（keel_app 角色、库名）的处理见 Makefile 的 test-db。
+      #
+      # 仍然刻意不做任何「跨运行复用一个已迁移的库」的优化：容器每次都是全新空库，
+      # 每个包都在自己的新库上从空迁移一遍。库是暖的必绿、库是冷的必红那一类问题，
+      # CI 是唯一每次都会踩到的地方。为了跑得快去缓存它，等于把这个 job 换成一个
+      # 只在该报警时失灵的 job。
+      #
+      # 步骤级的 timeout-minutes：make test-db 里两次 go test，每次每个包最多 5 分钟，
+      # 最坏 10 分钟。给这一步单独一个上限，卡住时红的是这一步、名字就说明了在哪卡住，
+      # 而不是整个 job 的一句超时。正常耗时本机实测一分钟以内。
       - name: 数据库测试（每次都是冷库）
+        timeout-minutes: 12
         run: make test-db
 
       # 失败时把库的日志摊开。迁移在 TestMain 里跑，红了以后 Go 那侧只会说

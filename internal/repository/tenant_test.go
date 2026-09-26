@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"testing"
 	"time"
 
@@ -15,6 +14,7 @@ import (
 	"github.com/keel/keel/internal/db"
 	"github.com/keel/keel/internal/repository"
 	"github.com/keel/keel/internal/tenant"
+	"github.com/keel/keel/internal/testdb"
 )
 
 // 本文件在 internal/repository/ 目录下，所以它 import 得到 internal/db 那个
@@ -26,44 +26,12 @@ import (
 // 断言写在领域类型上。测试若还拿着 sqlc 的 params 结构体，就等于替业务层
 // 演练了一遍「我其实够得着生成代码」，而那正是这一层要消灭的姿势。
 
-// TestMain 保证库里有 schema。
-//
-// 只在缺 schema 时才跑迁移：internal/db 的测试也在跑 goose，而 `go test ./...`
-// 会并行跑多个包。在已迁好的库上，这里只是一次读版本表的空转；在全新库上，
-// 两个包仍可能同时 goose up，那时一方会带着明确的冲突报错红掉，不会静默。
+// TestMain 给本包一个只属于它的库（keel_test_repository），在上面从空库
+// 跑一遍迁移。每次运行都是新建的库，所以「可变状态跨轮次累积」和「改了已应用
+// 的迁移、暖库假绿」这两件事都不存在 —— 以前靠 DROP SCHEMA 保证，现在靠
+// 库本身是新的。见 internal/testdb。
 func TestMain(m *testing.M) {
-	if err := ensureSchema(); err != nil {
-		fmt.Fprintf(os.Stderr, "准备 schema 失败: %v\n", err)
-		os.Exit(1)
-	}
-	os.Exit(m.Run())
-}
-
-func ensureSchema() error {
-	ctx := context.Background()
-	admin, err := pgx.Connect(ctx, db.AdminDSN())
-	if err != nil {
-		return err
-	}
-	defer admin.Close(ctx)
-
-	// 无条件重建 schema —— 理由与 internal/handler/main_test.go 里那段相同：
-	// 跳过会让可变状态跨轮次累积（种子是 NOT EXISTS 幂等的，补不回被扣掉的库存），
-	// 而且改了一份已应用的迁移之后，暖库上是假绿。后者是「删掉被守护的那段逻辑、
-	// 看它红不红」这套方法的地基。
-	if _, err := admin.Exec(ctx,
-		`DROP SCHEMA public CASCADE; CREATE SCHEMA public`); err != nil {
-		return err
-	}
-
-	// 与 internal/db 的迁移测试同一个惯例：调 make 这个稳定入口，
-	// 而不是把 `go -C tools run ...` 抄一份进测试。
-	out, err := exec.Command("make", "-C", "../..", "migrate",
-		"GOOSE_DBSTRING="+db.AdminDSN()).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("%w\n%s", err, out)
-	}
-	return nil
+	os.Exit(testdb.Main(m, testdb.Package{Name: "repository"}))
 }
 
 // pool 走 db.NewPool 而不是 pgxpool.New：前者把「这条连接能不能绕过 RLS」
@@ -222,9 +190,10 @@ func seedTwoTenants(t *testing.T) (int64, int64) {
 	var ids []int64
 	// status = 2（停用）不是随手写的：这两家是为了测隔离而存在的夹具，不是
 	// 对外营业的店铺，而 tenant 包的 Preflight 断言的是**整个库**的形态
-	// （「配了默认商家时活跃商家只能有一家」）。go test ./... 按包并行，
-	// 四个包共用同一个库，所以这里插一家活跃商家，会在另一个包里表现为
-	// 一次随机的断言失败，凶手名字还出现在别人的错误信息里。
+	// （「配了默认商家时活跃商家只能有一家」）。这段写下时各包共用同一个库，
+	// 这里插一家活跃商家会在另一个包里表现为一次随机的断言失败，凶手名字
+	// 还出现在别人的错误信息里。现在各包各有自己的库（internal/testdb），
+	// 跨包这条路断了；但同一个包里的测试仍共用一个库，所以照旧停用。
 	// 隔离测试本身不关心 status —— RLS 的谓词只看 merchant_id。
 	rows, err := admin.Query(ctx,
 		`INSERT INTO merchants (code, name, status) VALUES ($1,'A', 2), ($2,'B', 2) RETURNING id`,
