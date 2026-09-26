@@ -912,13 +912,13 @@ func TestPublishingABannedTitleIsRejectedWithPositions(t *testing.T) {
 	sh := newAdminShop(t)
 
 	var cat api.AdminCategory
-	decodeInto(t, post(t, sh.Host, "/api/v1/admin/categories",
+	decodeInto(t, postIdem(t, sh.Host, "/api/v1/admin/categories",
 		`{"name":"违禁词类目"}`, sh.Token), http.StatusCreated, "建类目", &cat)
 
 	// 标题里塞一处违规：「最佳」。前缀「本店」是为了让 offset 不是 0 ——
 	// offset 恒为 0 的实现（比如漏传那个字段）在 offset = 0 的用例上是绿的。
 	var p api.AdminProduct
-	decodeInto(t, post(t, sh.Host, "/api/v1/admin/products",
+	decodeInto(t, postIdem(t, sh.Host, "/api/v1/admin/products",
 		fmt.Sprintf(`{"category_id":%d,"title":"本店最佳咖啡壶 %s","subtitle":"600ml 玻璃"}`,
 			cat.Id, sh.Suffix), sh.Token),
 		http.StatusCreated, "建违规草稿", &p)
@@ -926,11 +926,11 @@ func TestPublishingABannedTitleIsRejectedWithPositions(t *testing.T) {
 	// 这半句同时是下面那个 422 的阳性对照 —— 一个「哪里都查」的实现
 	// 在上面这一步就会红。
 
-	decodeInto(t, post(t, sh.Host, fmt.Sprintf("/api/v1/admin/products/%d/skus", p.Id),
+	decodeInto(t, postIdem(t, sh.Host, fmt.Sprintf("/api/v1/admin/products/%d/skus", p.Id),
 		fmt.Sprintf(`{"sku_code":"BAN-%s","price_cents":9900,"available_qty":3}`, sh.Suffix),
 		sh.Token), http.StatusCreated, "建 SKU", &api.AdminSku{})
 
-	w := post(t, sh.Host, fmt.Sprintf("/api/v1/admin/products/%d/publication", p.Id),
+	w := postIdem(t, sh.Host, fmt.Sprintf("/api/v1/admin/products/%d/publication", p.Id),
 		`{"action":"publish"}`, sh.Token)
 	if w.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("上架一件标题含「最佳」的商品回了 %d，期望 422 —— "+
