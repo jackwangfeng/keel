@@ -615,6 +615,75 @@ func (e MerchantUpdateRequestStatus) Valid() bool {
 	}
 }
 
+// Defines values for NotificationKind.
+const (
+	MerchantInventoryLow    NotificationKind = "merchant_inventory_low"
+	MerchantOrderPaid       NotificationKind = "merchant_order_paid"
+	MerchantRefundRequested NotificationKind = "merchant_refund_requested"
+	MerchantReturnShipped   NotificationKind = "merchant_return_shipped"
+	OrderAutoConfirmSoon    NotificationKind = "order_auto_confirm_soon"
+	OrderFinished           NotificationKind = "order_finished"
+	OrderPaid               NotificationKind = "order_paid"
+	OrderShipped            NotificationKind = "order_shipped"
+	OrderTimeoutClosed      NotificationKind = "order_timeout_closed"
+	RefundApproved          NotificationKind = "refund_approved"
+	RefundRejected          NotificationKind = "refund_rejected"
+	RefundSucceeded         NotificationKind = "refund_succeeded"
+)
+
+// Valid indicates whether the value is a known member of the NotificationKind enum.
+func (e NotificationKind) Valid() bool {
+	switch e {
+	case MerchantInventoryLow:
+		return true
+	case MerchantOrderPaid:
+		return true
+	case MerchantRefundRequested:
+		return true
+	case MerchantReturnShipped:
+		return true
+	case OrderAutoConfirmSoon:
+		return true
+	case OrderFinished:
+		return true
+	case OrderPaid:
+		return true
+	case OrderShipped:
+		return true
+	case OrderTimeoutClosed:
+		return true
+	case RefundApproved:
+		return true
+	case RefundRejected:
+		return true
+	case RefundSucceeded:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for NotificationTargetType.
+const (
+	NotificationTargetTypeInventory NotificationTargetType = "inventory"
+	NotificationTargetTypeOrder     NotificationTargetType = "order"
+	NotificationTargetTypeRefund    NotificationTargetType = "refund"
+)
+
+// Valid indicates whether the value is a known member of the NotificationTargetType enum.
+func (e NotificationTargetType) Valid() bool {
+	switch e {
+	case NotificationTargetTypeInventory:
+		return true
+	case NotificationTargetTypeOrder:
+		return true
+	case NotificationTargetTypeRefund:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for OrderRefundStatus.
 const (
 	OrderRefundStatusN0 OrderRefundStatus = 0
@@ -3042,6 +3111,108 @@ type MerchantUpdateRequestStatus int
 // Money 金额，单位「分」。禁止使用浮点。
 type Money = int64
 
+// Notification defines model for Notification.
+type Notification struct {
+	// Body 服务端渲染好的中文正文，原样展示
+	Body      string    `json:"body"`
+	CreatedAt time.Time `json:"created_at"`
+	Id        int64     `json:"id"`
+
+	// Kind 通知的种类。**文案不要按它拼**（服务端已渲染好 `title` / `body`），
+	// 它只用来挑图标与分组。发给谁、由哪一次状态变化产生：
+	//
+	// 买家（`GET /me/notifications`）：
+	// · `order_paid` —— 支付成功（订单 `10 → 20`，支付回调入账）
+	// · `order_shipped` —— 已发货，正文带承运商与运单号（`20 → 30`）
+	// · `order_auto_confirm_soon` —— 自动确认收货即将到期（到期前 1 天；有在途售后的单不提醒）
+	// · `order_finished` —— 系统自动确认收货，订单完成（`30 → 40`，定时任务）。
+	//   买家**自己**点确认收货不发：动作是他做的，不需要再告诉他
+	// · `order_timeout_closed` —— 超时未支付被系统关闭（`10 → 90`，超时补偿任务）。
+	//   买家自己取消不发，理由同上
+	// · `refund_approved` —— 售后审核通过（退货退款提示去填寄回物流）
+	// · `refund_rejected` —— 售后被驳回，正文带驳回理由
+	// · `refund_succeeded` —— 退款到账（退款单 `30 → 40`）
+	//
+	// 商家（`GET /admin/notifications`）：
+	// · `merchant_order_paid` —— 新的已支付待发货订单
+	// · `merchant_refund_requested` —— 新的待审核售后
+	// · `merchant_return_shipped` —— 买家填了（或改了）退货寄回物流
+	// · `merchant_inventory_low` —— 下单扣减后门店库存降到预警线（`warning_qty`）或以下；
+	//   扣到 0 时标题是「已售罄」
+	Kind NotificationKind `json:"kind"`
+
+	// ReadAt 已读时间；`null` 即未读。后台是**调用者自己**的已读时间。
+	ReadAt *time.Time `json:"read_at"`
+
+	// Target 点了这条通知跳到哪里。四个定位字段都一定出现，用不上的是 `null`：
+	// · `order` —— `order_no` 非空，跳订单详情；
+	// · `refund` —— `refund_no` 非空（`order_no` 也给出所属订单），跳售后详情；
+	// · `inventory` —— `store_id` 与 `sku_id` 非空，跳那家门店的库存（只出现在后台）。
+	Target NotificationTarget `json:"target"`
+
+	// Title 服务端渲染好的中文标题，原样展示
+	Title string `json:"title"`
+}
+
+// NotificationKind 通知的种类。**文案不要按它拼**（服务端已渲染好 `title` / `body`），
+// 它只用来挑图标与分组。发给谁、由哪一次状态变化产生：
+//
+// 买家（`GET /me/notifications`）：
+// · `order_paid` —— 支付成功（订单 `10 → 20`，支付回调入账）
+// · `order_shipped` —— 已发货，正文带承运商与运单号（`20 → 30`）
+// · `order_auto_confirm_soon` —— 自动确认收货即将到期（到期前 1 天；有在途售后的单不提醒）
+// · `order_finished` —— 系统自动确认收货，订单完成（`30 → 40`，定时任务）。
+//
+//	买家**自己**点确认收货不发：动作是他做的，不需要再告诉他
+//
+// · `order_timeout_closed` —— 超时未支付被系统关闭（`10 → 90`，超时补偿任务）。
+//
+//	买家自己取消不发，理由同上
+//
+// · `refund_approved` —— 售后审核通过（退货退款提示去填寄回物流）
+// · `refund_rejected` —— 售后被驳回，正文带驳回理由
+// · `refund_succeeded` —— 退款到账（退款单 `30 → 40`）
+//
+// 商家（`GET /admin/notifications`）：
+// · `merchant_order_paid` —— 新的已支付待发货订单
+// · `merchant_refund_requested` —— 新的待审核售后
+// · `merchant_return_shipped` —— 买家填了（或改了）退货寄回物流
+// · `merchant_inventory_low` —— 下单扣减后门店库存降到预警线（`warning_qty`）或以下；
+//
+//	扣到 0 时标题是「已售罄」
+type NotificationKind string
+
+// NotificationList defines model for NotificationList.
+type NotificationList struct {
+	Items    []Notification `json:"items"`
+	Page     int            `json:"page"`
+	PageSize int            `json:"page_size"`
+	Total    int            `json:"total"`
+
+	// UnreadCount 调用者的未读总数（与 `unread_only` 无关，也不受分页影响）。
+	UnreadCount int `json:"unread_count"`
+}
+
+// NotificationTarget 点了这条通知跳到哪里。四个定位字段都一定出现，用不上的是 `null`：
+// · `order` —— `order_no` 非空，跳订单详情；
+// · `refund` —— `refund_no` 非空（`order_no` 也给出所属订单），跳售后详情；
+// · `inventory` —— `store_id` 与 `sku_id` 非空，跳那家门店的库存（只出现在后台）。
+type NotificationTarget struct {
+	OrderNo  *string                `json:"order_no"`
+	RefundNo *string                `json:"refund_no"`
+	SkuId    *int64                 `json:"sku_id"`
+	StoreId  *int64                 `json:"store_id"`
+	Type     NotificationTargetType `json:"type"`
+}
+
+// NotificationTargetType defines model for NotificationTarget.Type.
+type NotificationTargetType string
+
+// NotificationUnreadCount defines model for NotificationUnreadCount.
+type NotificationUnreadCount struct {
+	UnreadCount int `json:"unread_count"`
+}
+
 // Order defines model for Order.
 type Order struct {
 	// CouponName 这一单用的券的名字，**下单时的快照**。没用券时不出现（与 `user_coupon_id` 同进同出）。
@@ -4935,6 +5106,9 @@ type KeelMerchant = string
 // MerchantId defines model for MerchantId.
 type MerchantId = int64
 
+// NotificationId defines model for NotificationId.
+type NotificationId = int64
+
 // OrderNo defines model for OrderNo.
 type OrderNo = string
 
@@ -5480,6 +5654,120 @@ type GetAdminMerchantsMerchantIdParams struct {
 
 // PatchAdminMerchantsMerchantIdParams defines parameters for PatchAdminMerchantsMerchantId.
 type PatchAdminMerchantsMerchantIdParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// GetAdminNotificationsParams defines parameters for GetAdminNotifications.
+type GetAdminNotificationsParams struct {
+	Page     *Page     `form:"page,omitempty" json:"page,omitempty"`
+	PageSize *PageSize `form:"page_size,omitempty" json:"page_size,omitempty"`
+
+	// UnreadOnly 为 `true` 时只返回调用者还没读的。
+	UnreadOnly *bool `form:"unread_only,omitempty" json:"unread_only,omitempty"`
+
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// PostAdminNotificationsReadAllParams defines parameters for PostAdminNotificationsReadAll.
+type PostAdminNotificationsReadAllParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// GetAdminNotificationsUnreadCountParams defines parameters for GetAdminNotificationsUnreadCount.
+type GetAdminNotificationsUnreadCountParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// PostAdminNotificationsNotificationIdReadParams defines parameters for PostAdminNotificationsNotificationIdRead.
+type PostAdminNotificationsNotificationIdReadParams struct {
 	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
 	//
 	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
@@ -7603,6 +7891,15 @@ type PostMeIdentitiesWechatParams struct {
 	// · 首次执行失败（存档为失败态）时同样回放该失败响应；
 	//   确需重试的场景请换一个新 key
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// GetMeNotificationsParams defines parameters for GetMeNotifications.
+type GetMeNotificationsParams struct {
+	Page     *Page     `form:"page,omitempty" json:"page,omitempty"`
+	PageSize *PageSize `form:"page_size,omitempty" json:"page_size,omitempty"`
+
+	// UnreadOnly 为 `true` 时只返回未读的。
+	UnreadOnly *bool `form:"unread_only,omitempty" json:"unread_only,omitempty"`
 }
 
 // PostMePhoneJSONBody defines parameters for PostMePhone.

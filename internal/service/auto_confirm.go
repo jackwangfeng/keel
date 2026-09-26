@@ -96,6 +96,9 @@ type AutoConfirmReport struct {
 	// Failed 处置时真的出错了。非零就该有人看日志。
 	Failed int
 
+	// Reminded 这一轮发出的「自动确认收货即将到期」提醒（到期前一天，数据模型 §16）。
+	Reminded int
+
 	Fallback bool
 }
 
@@ -137,12 +140,12 @@ func (s *AutoConfirmService) Run(ctx context.Context) {
 		switch {
 		case err != nil:
 			s.log.ErrorContext(ctx, "自动确认收货这一轮没跑起来", "err", err)
-		case rep.Confirmed == 0 && rep.Paused == 0 && rep.Raced == 0 && rep.Failed == 0:
+		case rep.Confirmed == 0 && rep.Paused == 0 && rep.Raced == 0 && rep.Failed == 0 && rep.Reminded == 0:
 			s.log.DebugContext(ctx, "自动确认收货这一轮没有到期的订单", "tenants", rep.Tenants)
 		default:
 			s.log.InfoContext(ctx, "自动确认收货完成一轮",
 				"tenants", rep.Tenants, "confirmed", rep.Confirmed, "paused", rep.Paused,
-				"raced", rep.Raced, "failed", rep.Failed, "fallback", rep.Fallback)
+				"raced", rep.Raced, "failed", rep.Failed, "reminded", rep.Reminded, "fallback", rep.Fallback)
 		}
 		select {
 		case <-ctx.Done():
@@ -208,15 +211,16 @@ func (s *AutoConfirmService) confirmTenant(ctx context.Context, merchantID int64
 		return 0
 	}
 	for _, o := range due {
-		s.confirmOne(tctx, log, o, cutoff, rep)
+		s.confirmOne(tctx, log, o, cutoff, days, rep)
 	}
-	return len(due)
+	// 「即将自动确认」的提醒与确认共用这一家的配额：先确认到期的，剩下的给提醒。
+	return len(due) + s.remindTenant(tctx, log, days, limit-len(due), rep)
 }
 
 // confirmOne 处置一笔：锁订单 → 复核（仍在 30、发货早于截止、没有在途售后）→
 // 买家确认收货同一条 UPDATE。一个事务，一单一个（理由同 sweep.go「每一单一个事务」）。
 func (s *AutoConfirmService) confirmOne(ctx context.Context, log *slog.Logger,
-	o repository.AutoConfirmCandidate, cutoff time.Time, rep *AutoConfirmReport) {
+	o repository.AutoConfirmCandidate, cutoff time.Time, days int, rep *AutoConfirmReport) {
 	err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
 		order, err := tx.LockOrderByID(ctx, o.ID)
 		if err != nil {
@@ -243,7 +247,8 @@ func (s *AutoConfirmService) confirmOne(ctx context.Context, log *slog.Logger,
 			// 持有行锁、刚读到 30，这条 UPDATE 却匹配 0 行：谓词被改坏了。
 			return fmt.Errorf("订单 %s 在行锁之下从 30 推 40 失败", o.OrderNo)
 		}
-		return nil
+		// 通知与 30 → 40 同一个事务（数据模型 §16）。
+		return notifyOrderAutoFinished(ctx, tx, order, days)
 	})
 
 	switch {
@@ -260,4 +265,42 @@ func (s *AutoConfirmService) confirmOne(ctx context.Context, log *slog.Logger,
 		rep.Failed++
 		log.ErrorContext(ctx, "自动确认收货失败", "order_no", o.OrderNo, "err", err)
 	}
+}
+
+// remindTenant 给这一家「到期前一天」的已发货订单发「即将自动确认收货」，至多 limit 笔，
+// 返回发出的笔数。
+//
+// 候选是仍停在 30、发货早于 now - (N - 1) 天、没有在途售后、还没提醒过的单
+// （db/queries/notifications.sql 的 ListAutoConfirmReminders）。「还没提醒过」靠通知的
+// 去重键：提醒一旦写进去，这一单就不再是候选 —— 每十分钟一轮的扫描不会重复提醒。
+//
+// 一批一个事务：这里只写通知，不动任何业务状态；一条写失败整批回滚，下一轮原样再来，
+// 没有「提醒了一半」的中间态需要收拾。
+func (s *AutoConfirmService) remindTenant(ctx context.Context, log *slog.Logger, days, limit int,
+	rep *AutoConfirmReport) int {
+	if limit <= 0 {
+		return 0
+	}
+	remindBefore := s.now().Add(-time.Duration(days-1) * 24 * time.Hour)
+	sent := 0
+	err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+		due, err := tx.ListAutoConfirmReminders(ctx, remindBefore, int32(limit))
+		if err != nil {
+			return err
+		}
+		for _, r := range due {
+			if err := notifyAutoConfirmSoon(ctx, tx, r, days); err != nil {
+				return err
+			}
+		}
+		sent = len(due)
+		return nil
+	})
+	if err != nil {
+		rep.Failed++
+		log.ErrorContext(ctx, "发「即将自动确认收货」提醒失败", "err", err)
+		return 0
+	}
+	rep.Reminded += sent
+	return sent
 }

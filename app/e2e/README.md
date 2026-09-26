@@ -12,7 +12,16 @@ make app-e2e                                                      # 装包、启
 # iOS
 KEEL_IOS_TEAM=2Q89DQSSH6 KEEL_API_BASE=http://192.168.0.110:18099/api/v1 make app-ios-e2e
 make app-e2e-ios
+
+# H5 无头（真机都锁屏时的兜底，一轮不到一分钟）
+KEEL_API_BASE=http://192.168.0.110:18099/api/v1 make app-e2e-h5
 ```
+
+H5 无头：`scripts/e2e-h5.sh` 带自动化运行时编 H5（`--auto-host 127.0.0.1 --auto-port 9520`），
+`e2e/h5-serve.js` 托管产物并把 `/api` 反代到 `KEEL_API_BASE`（H5 只能同源；Host 换成服务端的，和 App
+访问同一家店），官方 H5 puppet 用 playwright 以 `channel: 'chrome'` 起本机 Chrome（不下载 playwright
+自带的浏览器）。`KEEL_E2E_H5_HEADED=1` 可以看着跑。**它只证明 JS / H5 那一层**：Android 的 Kotlin 产物
+与 iOS 原生那层测不到，那两端要么上真机，要么在报告里写明「只验证了编译」。
 
 前置条件：Android 开了 USB 调试并已授权（`adb devices` 显示 `device`），想拔线的话插着线跑一次
 `make app-adb-wifi`（切到无线调试；手机重启后要重跑）；iPhone 已配对
@@ -67,7 +76,9 @@ const orderNo = await page.data('orderNo')
 要后台员工来做，两种给法：设 `KEEL_E2E_STAFF_TOKEN`（用例自己调后台接口；**只放环境变量、不进仓库**），
 或者先用 `placeOrder` 造好单、请服务端那边的后台会话代为发货 / 驳回 / 同意，再把单号交给
 `KEEL_E2E_SHIPPED_ORDER` / `KEEL_E2E_REJECTED_REFUND` / `KEEL_E2E_REFUNDED_REFUND`。都没有时这三条
-`skip`，买家侧照跑。
+`skip`，买家侧照跑。「待买家退货填物流」只收单号：`KEEL_E2E_RETURN_REFUND`（一张已同意到 20 的退货退款单；
+退货退款要先发货，所以是两轮：请后台发货 → 买家申请退货退款 → 请后台同意）。凭证图由测试进程
+`uploadEvidenceFromTest` 上传（multipart、purpose=3），App 内的相册选图不在自动化范围里。
 
 `coupon.test.js`：演示买家的券状态跑一次变一次（「9 折」第一次领是 201，之后是 409 每人限领；
 结算用例会把自动选上的券真的用掉）。所以它断言的是**终态**：领完按钮是「已领取」、这张券在
@@ -108,7 +119,7 @@ iOS 的自动化运行时没实现 `App.callFunction`，所以 `program.evaluate
 要在 App 里探查什么，用 `program.callUniMethod('request', {...})` 这类 uni API 调用（它把
 success 回调的结果原样带回来）。
 
-版本：`@dcloudio/uni-automator` 与编译器同一版（`3.0.0-5020620260917001`）；`jest 27.0.4`、
+版本：`playwright 1.63.0`（H5 无头，只用它的库，浏览器用本机 Chrome）；`@dcloudio/uni-automator` 与编译器同一版（`3.0.0-5020620260917001`）；`jest 27.0.4`、
 `jest-environment-node 27.5.1` 是它的 peer 依赖钉的版本；`adbkit 2.11.1` 照 HBuilderX
 测试插件用的版本。
 

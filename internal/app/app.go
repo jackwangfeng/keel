@@ -343,6 +343,14 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	v1.DELETE("/me/identities/:provider", auth.Bearer(signer, nil), me.Unbind)
 	v1.POST("/me/phone", auth.Bearer(signer, nil), me.BindPhone)
 
+	// 消息通知（数据模型 §16）：买家消息中心。只看自己的（service 按令牌里的 user_id 过滤）。
+	// read-all 是静态段，与 :notification_id 同一层不冲突（理由同上面 identities 那一段）。
+	nh := handler.NewNotificationHandler(service.NewNotificationService(repo))
+	v1.GET("/me/notifications", auth.Bearer(signer, nil), nh.ListMine)
+	v1.GET("/me/notifications/unread-count", auth.Bearer(signer, nil), nh.UnreadMine)
+	v1.POST("/me/notifications/read-all", auth.Bearer(signer, nil), nh.MarkAllMineRead)
+	v1.POST("/me/notifications/:notification_id/read", auth.Bearer(signer, nil), nh.MarkMineRead)
+
 	addr := handler.NewAddressHandler(service.NewAddressService(repo))
 	v1.GET("/addresses", auth.Bearer(signer, nil), addr.List)
 	v1.POST("/addresses", auth.Bearer(signer, nil), addr.Create)
@@ -556,6 +564,12 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	v1.GET("/admin/orders/:order_no", staffAuth, aoh.OrderDetail)
 	v1.GET("/admin/refunds", staffAuth, aoh.ListRefunds)
 	v1.GET("/admin/refunds/:refund_no", staffAuth, aoh.RefundDetail)
+	// 后台待办提醒（铃铛，数据模型 §16）。范围与订单 / 售后列表同一个判据（orderListScope），
+	// 已读状态每个员工各一份。
+	v1.GET("/admin/notifications", staffAuth, nh.ListForStaff)
+	v1.GET("/admin/notifications/unread-count", staffAuth, nh.UnreadForStaff)
+	v1.POST("/admin/notifications/read-all", staffAuth, nh.MarkAllReadForStaff)
+	v1.POST("/admin/notifications/:notification_id/read", staffAuth, nh.MarkReadForStaff)
 
 	// 经营报表（契约 Report tag，迁移 00048 的索引）。六条都是只读聚合。
 	// 范围与后台订单列表同一个判据（service/authz.go 的 orderListScope），
@@ -729,6 +743,14 @@ func Run(ctx context.Context, listen func(addr string, h http.Handler) error) er
 	// 所以不需要排在监听之前的那份讲究 —— 放在这里只是为了共用 bgCtx。
 	confirmer := service.NewAutoConfirmService(repository.New(pool), service.SweepConfig{}, nil)
 	go confirmer.Run(bgCtx)
+
+	// 消息通知的外发投递与保留期清理（数据模型 §16）。站内消息不靠它 —— 通知行在业务事务里
+	// 就写好了；它只消费 outbox 里的 notification.deliver 任务，把每个外发渠道的结果记下来。
+	// 本期三个渠道（微信订阅消息 / 短信 / 邮件）都未配置，投递记录一律是「跳过」。
+	// 同一个生命周期（bgCtx），晚起一轮不丢任何东西：任务在 jobs 里等着。
+	notifier := service.NewNotificationDeliveryService(repository.New(pool), nil,
+		service.NotificationDeliveryConfig{}, nil)
+	go notifier.Run(bgCtx)
 
 	// 派生数据入库的增量任务（M3 Task 3）：商品变了就把文本向量与 bigram 串重算。
 	//
