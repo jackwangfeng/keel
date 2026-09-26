@@ -62,7 +62,7 @@ GOOSE := GOOSE_DRIVER=postgres GOOSE_DBSTRING="$(GOOSE_DBSTRING)" \
 	$(GORUN) github.com/pressly/goose/v3/cmd/goose
 
 .PHONY: help generate generate-go generate-ts generate-sql generate-uts tools-versions \
-	contract-check schema-check app-type-check app-install app-build-h5 app-build-android app-apk app-apk-e2e app-e2e \
+	contract-check schema-check app-type-check app-install app-build-h5 app-build-android app-apk app-apk-e2e app-e2e app-ios \
 	sdk-smoke migrate migrate-down migrate-status test-db \
 	test-engine dtmrs-deps build
 
@@ -80,6 +80,7 @@ help:
 	@echo "make app-apk        本地打 Android apk（KEEL_API_BASE=http://host:port/api/v1 指定默认服务地址）"
 	@echo "make app-apk-e2e    打带自动化运行时的测试包（同样读 KEEL_API_BASE）"
 	@echo "make app-e2e        在 USB 连着的 Android 真机上跑 app/e2e 下的自动化用例"
+	@echo "make app-ios        本地打 iOS 真机包（KEEL_IOS_TEAM 指定签名团队，KEEL_API_BASE 同上）"
 	@echo "make sdk-smoke      用 TS SDK 对跑着的服务真打一次 GET /products"
 	@echo "make tools-versions 打印钉住的工具版本"
 	@echo "make migrate        把 db/migrations 迁到最新（GOOSE_DBSTRING 可覆盖）"
@@ -169,6 +170,11 @@ app-apk-e2e:
 
 app-e2e:
 	cd $(ROOT)/app && npm run test:e2e
+
+# iOS：页面逻辑编译成 JS 跑在 JavaScriptCore，界面原生渲染；本地用离线 SDK + XcodeGen + xcodebuild
+# 出真机包（没有模拟器版本，理由见 app/scripts/build-ios.sh 头）。
+app-ios:
+	bash $(ROOT)/app/scripts/build-ios.sh
 
 # 用 SDK 对**真的跑起来的**服务打一次 GET /products。
 #

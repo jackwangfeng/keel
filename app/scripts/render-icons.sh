@@ -2,6 +2,7 @@
 # 渲染两类位图图标，产物都入库，只有改了图标才需要重跑：
 #   · design/tabbar/*.svg -> src/static/tabbar/*.png，tabBar 要的 81x81（普通 + 选中两套）
 #   · design/app-icon.svg -> native-android/app/src/main/res/mipmap-*/ic_launcher.png
+#                         -> native-ios/KeelBuyer/Assets.xcassets/AppIcon.appiconset（1024，直角不透明）
 #
 # tabBar 的 iconPath 与 Android 启动图标都只认位图，而这台机器上不一定有 rsvg/ImageMagick，
 # 所以借无头 Chrome 截图：透明底 + 1 倍像素比，截出来就是 81x81。
@@ -44,3 +45,21 @@ for pair in mdpi:48 hdpi:72 xhdpi:96 xxhdpi:144 xxxhdpi:192; do
     sips -z "$px" "$px" "$tmp/app-icon.png" --out "$RES/mipmap-$d/ic_launcher.png" >/dev/null
     echo "==> $RES/mipmap-$d/ic_launcher.png ($px)"
 done
+
+# iOS 启动图标：一张 1024x1024。系统自己切圆角，而且不允许透明通道（App Store 会拒），
+# 所以把圆角半径改成 0 再截图，然后用 sips 转成不带 alpha 的 JPEG 再转回 PNG。
+IOS=native-ios/KeelBuyer/Assets.xcassets/AppIcon.appiconset
+mkdir -p "$IOS"
+sed -e "s/SIZE/1024/g" -e 's/rx="44"/rx="0"/' design/app-icon.svg > "$tmp/ios-icon.svg"
+shot "$tmp/ios-icon.svg" "$tmp/ios-icon.png" 1024
+sips -s format jpeg "$tmp/ios-icon.png" --out "$tmp/ios-icon.jpg" >/dev/null
+sips -s format png "$tmp/ios-icon.jpg" --out "$IOS/icon-1024.png" >/dev/null
+cat > "$IOS/Contents.json" <<'JSON'
+{
+  "images" : [
+    { "filename" : "icon-1024.png", "idiom" : "universal", "platform" : "ios", "size" : "1024x1024" }
+  ],
+  "info" : { "author" : "xcode", "version" : 1 }
+}
+JSON
+echo "==> $IOS/icon-1024.png (1024)"

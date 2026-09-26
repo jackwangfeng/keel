@@ -262,6 +262,34 @@ Homebrew 装法：`brew install --cask android-commandlinetools`，再用 `sdkma
 - **明文 HTTP 是开着的**（`usesCleartextTraffic`），因为开发期地址是局域网 http。上线换
   HTTPS 后要关。
 
+## 本地打 iOS 包
+
+```bash
+KEEL_IOS_TEAM=2Q89DQSSH6 KEEL_API_BASE=http://192.168.0.110:18099/api/v1 make app-ios
+# -> app/dist/ios-device/KeelBuyer.app（加 KEEL_IOS_INSTALL=1 顺手装到 USB 连着的 iPhone）
+```
+
+需要 Xcode 与 XcodeGen（`brew install xcodegen`）。离线 SDK（866MB）第一次跑时自动下载，
+只取需要的五个 xcframework 放到 `native-ios/.uni-sdk/`。
+
+**iOS 版也是原生界面，只是页面逻辑的跑法和 Android 不同**：UTS 编译成 JS
+（`app-service.js`），跑在系统的 JavaScriptCore 里，界面由 SDK 的原生渲染运行时画
+（自带 flexbox 布局引擎，输入框是 UITextView）—— 和 React Native 一个路数。所以 iOS 不编译
+我们的代码，`uni build --platform app-ios` 的产物直接作为资源放进 `native-ios`。
+
+几件实测出来的事：
+
+- **`uni.request` 在 iOS 上不理 `dataType: 'text'`**，JSON 响应照样被解析成对象。`client.uts`
+  的 `responseText()` 把它序列化回文本再按类型解析；否则所有请求都报「响应体解析失败」。
+  这条是经自动化在真机上读出 `typeof res.data === 'object'` 定位的。
+- **SDK 的场景代理会按名字加载宿主的 `Main.storyboard`**（文档没写）。没有这个文件启动即崩，
+  所以 `native-ios` 里有一个只含空页面的 `Main.storyboard`。
+- **没有模拟器版本**：`DCloudUTSExtAPI` 的模拟器切片只有 x86_64，iOS 26 模拟器不收 x86_64。
+- **签名是 Automatic**：Xcode 没登录也行，只要本机有该团队覆盖这台设备的描述文件；手动签名
+  反而拒绝 Xcode 管理的通配描述文件。
+- `.xcodeproj` 由 XcodeGen 从 `native-ios/project.yml` 生成，不入库；`Info.plist` 用
+  `INFOPLIST_FILE` 引用（XcodeGen 的 `info:` 会重新生成它，把手写的键抹掉）。
+
 ## 这一版真的跑通了什么
 
 对着 `docker compose up -d --build` 起来的真后端（`KEEL_HTTP_PORT=18080`），

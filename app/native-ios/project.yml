@@ -1,0 +1,51 @@
+# Keel 买家端的 iOS 原生壳（XcodeGen）。.xcodeproj 是生成物，不入库：
+# 声明式的这一份能 review，手改 project.pbxproj 不能。
+#
+# 用法见 app/scripts/build-ios.sh。离线 SDK（866MB）不入库，由脚本取需要的几个
+# xcframework 放到 .uni-sdk/。结构照 SDK 自带的 UniAppXDemo，但只链接必需的五个库
+# （Demo 里还有广告、地图、支付、直播……一整串）。
+name: KeelBuyer
+options:
+  bundleIdPrefix: dev.keel
+  deploymentTarget:
+    iOS: "15.0"   # DCloud 文档给的下限
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+targets:
+  KeelBuyer:
+    type: application
+    platform: iOS
+    sources:
+      - path: KeelBuyer
+        excludes: ["uni-app-x"]
+      # 编译产物（build-ios.sh 拷进来）。必须是 folder reference：运行时按
+      # uni-app-x/apps/<appid>/www 的目录结构找资源，打平成 group 就找不到了。
+      - path: KeelBuyer/uni-app-x
+        type: folder
+        buildPhase: resources
+      - path: .uni-sdk/Resources/uni-prompt.bundle
+        buildPhase: resources
+    settings:
+      base:
+        # 用 INFOPLIST_FILE 而不是 XcodeGen 的 info: —— 后者会按自己的属性重新生成这个文件，
+        # 把 uniapp-x、ATS 这些手写的键整个抹掉（实测）。
+        INFOPLIST_FILE: KeelBuyer/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        PRODUCT_BUNDLE_IDENTIFIER: dev.keel.buyer
+        PRODUCT_NAME: KeelBuyer
+        MARKETING_VERSION: ${KEEL_VERSION_NAME}
+        CURRENT_PROJECT_VERSION: ${KEEL_VERSION_CODE}
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        OTHER_LDFLAGS: ["$(inherited)", "-ObjC"]
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: ${KEEL_IOS_TEAM}
+    dependencies:
+      - framework: .uni-sdk/Libs/DCloudUniappRuntime.xcframework
+      - framework: .uni-sdk/Libs/DCloudUTSFoundation.xcframework
+      - framework: .uni-sdk/Libs/DCloudUTSExtAPI.xcframework
+      - framework: .uni-sdk/Libs/SDWebImage.xcframework
+      - framework: .uni-sdk/Libs/KSCrash.xcframework
+      - sdk: JavaScriptCore.framework
+      - sdk: libc++.tbd
