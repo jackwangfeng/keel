@@ -184,10 +184,10 @@ search, claim coupons, check out and pay (sandbox); merchants can list
 products, run regions and stores, issue coupons and manage staff. These parts
 are not there yet, and are listed so that nothing above reads as if it ships:
 
-- **cart, address book, profile, order cancel / confirm-receipt, after-sales
-  refunds, and admin shipping / refund review.** They are in the contract but
-  not implemented (calls get a 404 "no such endpoint"); work is in progress.
-  Checkout today is "pick a SKU and order", using the address from the seed
+- **order cancel / confirm-receipt, after-sales refunds, and admin shipping /
+  refund review.** They are in the contract but not implemented (calls get a
+  404 "no such endpoint"); work is in progress. The cart, address book and
+  profile endpoints exist; the buyer app does not use them yet
 - **cross-encoder reranking.** `POST /search` today is three-stage — vector
   recall and keyword recall fused with RRF, then business re-ranking
   (out-of-stock products are demoted multiplicatively below everything in
@@ -244,8 +244,8 @@ Products & SKUs · category tree · per-store inventory · three-tier pricing
 percent-off / no-threshold, claim center and targeted grants) · order state
 machine · multi-store with delivery fences · tiered staff roles
 
-Cart, after-sales refunds and shipping are in the contract and being
-implemented — see "Not in the box yet" above.
+Cart, address book and profile are in; after-sales refunds and shipping are in
+the contract and being implemented — see "Not in the box yet" above.
 
 **AI-native capabilities**
 - **Semantic search** — hybrid vector + keyword retrieval fused with RRF, then
@@ -397,7 +397,8 @@ battle-tested at scale. What it has is a stronger core.
   checks + product-understanding skeleton + coupons + tiered roles
   → **v0.1.0, first public release**
 - [ ] **Cart, after-sales and shipping** — finish the buyer and admin
-  endpoints the contract already describes (in progress)
+  endpoints the contract already describes (cart, addresses and profile done;
+  after-sales and shipping in progress)
 - [ ] **M5** — Reranking + business re-ranking + search analytics
 - [ ] **M6** — Image embeddings → visual search
 - [ ] **M7** — Conversational shopping assistant

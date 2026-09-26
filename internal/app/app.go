@@ -298,6 +298,47 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	v1.GET("/coupon-templates", auth.Bearer(signer, nil), cpn.ListClaimable)
 	v1.POST("/coupon-templates/:template_id/claim", auth.Bearer(signer, nil), cpn.Claim)
 
+	// 买家自己的三组：个人信息、地址簿、购物车（契约 User 与 Cart tag）。
+	//
+	// **每一条都挂 auth.Bearer**，一条都不能漏，理由比订单那几条更直接：它们读写的
+	// 全是「我的」东西，而「我是谁」只由令牌里的 user_id 回答。漏掉一条的症状
+	// 不是匿名读到别人的车 —— service 那边 auth.FromContext 会返回 ErrNoUser
+	// （它刻意不回落到任何默认用户），请求 500 —— 但 500 同样是错的答案。
+	// internal/handler 的 TestBuyerSelfRoutesRequireToken 逐条不带令牌打一次，
+	// 断言它们全是 401。
+	//
+	// 越权（别人的地址 / 别人车里的条目）是 404 不是 403，判据在 SQL 里：
+	// db/queries/addresses.sql 与 db/queries/carts.sql 的文件头。
+	//
+	// 注册顺序无关紧要但要知道：/me/identities/wechat（POST）与
+	// /me/identities/:provider（DELETE）、/cart/items/batch-delete（POST）与
+	// /cart/items/:item_id（PATCH / DELETE）各自共用一个前缀。gin 的路由树按
+	// 静态段优先匹配，所以 wechat 与 batch-delete 不会被当成参数。
+	me := handler.NewMeHandler(service.NewProfileService(repo))
+	v1.GET("/me", auth.Bearer(signer, nil), me.Get)
+	v1.PATCH("/me", auth.Bearer(signer, nil), me.Patch)
+	v1.GET("/me/identities", auth.Bearer(signer, nil), me.Identities)
+	v1.POST("/me/identities/wechat", auth.Bearer(signer, nil), me.BindWechat)
+	v1.DELETE("/me/identities/:provider", auth.Bearer(signer, nil), me.Unbind)
+	v1.POST("/me/phone", auth.Bearer(signer, nil), me.BindPhone)
+
+	addr := handler.NewAddressHandler(service.NewAddressService(repo))
+	v1.GET("/addresses", auth.Bearer(signer, nil), addr.List)
+	v1.POST("/addresses", auth.Bearer(signer, nil), addr.Create)
+	v1.GET("/addresses/:address_id", auth.Bearer(signer, nil), addr.Get)
+	v1.PUT("/addresses/:address_id", auth.Bearer(signer, nil), addr.Replace)
+	v1.DELETE("/addresses/:address_id", auth.Bearer(signer, nil), addr.Delete)
+	v1.PUT("/addresses/:address_id/default", auth.Bearer(signer, nil), addr.SetDefault)
+
+	cart := handler.NewCartHandler(service.NewCartService(repo))
+	v1.GET("/cart", auth.Bearer(signer, nil), cart.Get)
+	v1.DELETE("/cart", auth.Bearer(signer, nil), cart.Clear)
+	v1.POST("/cart/items", auth.Bearer(signer, nil), cart.AddItem)
+	v1.PUT("/cart/selection", auth.Bearer(signer, nil), cart.Select)
+	v1.POST("/cart/items/batch-delete", auth.Bearer(signer, nil), cart.BatchDelete)
+	v1.PATCH("/cart/items/:item_id", auth.Bearer(signer, nil), cart.PatchItem)
+	v1.DELETE("/cart/items/:item_id", auth.Bearer(signer, nil), cart.DeleteItem)
+
 	// 支付渠道异步回调。契约里它是 security: []（调用方是渠道，它没有令牌），
 	// 所以**没有** auth.Bearer —— 但它仍然在 v1 组里，也就仍然带着上面那道
 	// res.Middleware()。

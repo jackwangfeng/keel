@@ -11,6 +11,23 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countUserIdentitiesExcept = `-- name: CountUserIdentitiesExcept :one
+SELECT count(*) FROM user_identities WHERE user_id = $1 AND provider <> $2
+`
+
+type CountUserIdentitiesExceptParams struct {
+	UserID   int64
+	Provider int16
+}
+
+// 这个买家在 provider 之外还有几条身份。解绑前判「最后一个凭据」用。
+func (q *Queries) CountUserIdentitiesExcept(ctx context.Context, arg CountUserIdentitiesExceptParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countUserIdentitiesExcept, arg.UserID, arg.Provider)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createUserToken = `-- name: CreateUserToken :one
 INSERT INTO user_tokens (user_id, token_hash, expire_at)
 VALUES ($1, $2, $3)
@@ -31,6 +48,25 @@ func (q *Queries) CreateUserToken(ctx context.Context, arg CreateUserTokenParams
 	var id int64
 	err := row.Scan(&id)
 	return id, err
+}
+
+const deleteUserIdentities = `-- name: DeleteUserIdentities :execrows
+DELETE FROM user_identities WHERE user_id = $1 AND provider = $2
+`
+
+type DeleteUserIdentitiesParams struct {
+	UserID   int64
+	Provider int16
+}
+
+// 解绑某个 provider 下的全部身份（同一个 provider 下按约定至多一条，
+// 见契约 identity-duplicate-provider；这里不假设它）。
+func (q *Queries) DeleteUserIdentities(ctx context.Context, arg DeleteUserIdentitiesParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteUserIdentities, arg.UserID, arg.Provider)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const findLiveUserToken = `-- name: FindLiveUserToken :one
@@ -154,6 +190,71 @@ func (q *Queries) GetUserByPhone(ctx context.Context, phone *string) (GetUserByP
 	return i, err
 }
 
+const listUserIdentities = `-- name: ListUserIdentities :many
+SELECT id, provider, (union_id IS NOT NULL)::boolean AS has_union_id, created_at
+  FROM user_identities
+ WHERE user_id = $1
+ ORDER BY id
+`
+
+type ListUserIdentitiesRow struct {
+	ID         int64
+	Provider   int16
+	HasUnionID bool
+	CreatedAt  pgtype.Timestamptz
+}
+
+// 已绑定的第三方身份（GET /me/identities）。
+//
+// 只取 union_id 是否为空，不取它本身：契约写明 external_id（openid）与 union_id
+// 属于渠道敏感标识，一律不对外返回。不 SELECT 出来，上层就没有机会把它漏出去。
+func (q *Queries) ListUserIdentities(ctx context.Context, userID int64) ([]ListUserIdentitiesRow, error) {
+	rows, err := q.db.Query(ctx, listUserIdentities, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListUserIdentitiesRow
+	for rows.Next() {
+		var i ListUserIdentitiesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Provider,
+			&i.HasUnionID,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const lockUserRow = `-- name: LockUserRow :one
+SELECT id FROM users WHERE id = $1 AND deleted_at IS NULL FOR UPDATE
+`
+
+// 锁住这个买家的 users 行，直到本事务结束。它是「每个买家一把互斥锁」：
+//
+// 地址簿的「设为默认」要先清旧、再置新，两个并发的切换若不排队，第二个会在
+// 清旧那一步看不见第一个刚置上的新默认（它还没提交），于是置新时撞上
+// uk_user_addresses_default 报 500。契约专门把切换收进一个接口，就是要让
+// 唯一性由服务端事务负责、而不是让客户端并发点两下时看到 500。
+// 解绑第三方身份的「最后一个凭据」判定同理：数一数还剩几个、再删，两步之间
+// 不能让另一个解绑插进来。
+//
+// 锁 users 行而不是锁地址行：新增地址时还没有那一行可锁，而一个买家总有 users 行。
+// 查不到（已注销软删）即 ErrNoRows。
+func (q *Queries) LockUserRow(ctx context.Context, id int64) (int64, error) {
+	row := q.db.QueryRow(ctx, lockUserRow, id)
+	var id_2 int64
+	err := row.Scan(&id_2)
+	return id_2, err
+}
+
 const revokeUserToken = `-- name: RevokeUserToken :one
 UPDATE user_tokens
    SET revoked_at = now()
@@ -219,4 +320,62 @@ UPDATE users SET last_login_at = now() WHERE id = $1
 func (q *Queries) TouchUserLogin(ctx context.Context, id int64) error {
 	_, err := q.db.Exec(ctx, touchUserLogin, id)
 	return err
+}
+
+const updateUserProfile = `-- name: UpdateUserProfile :one
+UPDATE users
+   SET nickname   = COALESCE($1, nickname),
+       gender     = COALESCE($2, gender),
+       avatar_url = CASE WHEN $3::boolean
+                         THEN $4 ELSE avatar_url END
+ WHERE id = $5
+   AND deleted_at IS NULL
+RETURNING id, phone, password_hash, nickname, avatar_url, gender, status,
+          last_login_at, created_at
+`
+
+type UpdateUserProfileParams struct {
+	Nickname  *string
+	Gender    *int16
+	SetAvatar bool
+	AvatarUrl *string
+	ID        int64
+}
+
+type UpdateUserProfileRow struct {
+	ID           int64
+	Phone        *string
+	PasswordHash *string
+	Nickname     string
+	AvatarUrl    *string
+	Gender       int16
+	Status       int16
+	LastLoginAt  pgtype.Timestamptz
+	CreatedAt    pgtype.Timestamptz
+}
+
+// 改资料（PATCH /me）。三个字段都是「给了才改」：nickname 与 gender 用 COALESCE，
+// avatar_url 多一个开关，因为它可以被清空（给空串即清掉头像），而
+// 「清空」与「不改」在一个可空参数上分不开。
+func (q *Queries) UpdateUserProfile(ctx context.Context, arg UpdateUserProfileParams) (UpdateUserProfileRow, error) {
+	row := q.db.QueryRow(ctx, updateUserProfile,
+		arg.Nickname,
+		arg.Gender,
+		arg.SetAvatar,
+		arg.AvatarUrl,
+		arg.ID,
+	)
+	var i UpdateUserProfileRow
+	err := row.Scan(
+		&i.ID,
+		&i.Phone,
+		&i.PasswordHash,
+		&i.Nickname,
+		&i.AvatarUrl,
+		&i.Gender,
+		&i.Status,
+		&i.LastLoginAt,
+		&i.CreatedAt,
+	)
+	return i, err
 }

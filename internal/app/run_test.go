@@ -334,6 +334,29 @@ func TestRouterServesContractPaths(t *testing.T) {
 		"DELETE /api/v1/admin/stores/:store_id/skus/:sku_id/price":          false,
 		"GET /api/v1/admin/stores/:store_id/inventories":                    false,
 		"PUT /api/v1/admin/stores/:store_id/skus/:sku_id/inventory":         false,
+
+		// 买家自己的三组：个人信息 6 条、地址簿 6 条、购物车 7 条。同样只核路径 ——
+		// 「每一条都挂了 auth.Bearer」由 internal/handler 的
+		// TestBuyerSelfRoutesRequireToken 逐条不带令牌打一次来证明。
+		"GET /api/v1/me":                            false,
+		"PATCH /api/v1/me":                          false,
+		"GET /api/v1/me/identities":                 false,
+		"POST /api/v1/me/identities/wechat":         false,
+		"DELETE /api/v1/me/identities/:provider":    false,
+		"POST /api/v1/me/phone":                     false,
+		"GET /api/v1/addresses":                     false,
+		"POST /api/v1/addresses":                    false,
+		"GET /api/v1/addresses/:address_id":         false,
+		"PUT /api/v1/addresses/:address_id":         false,
+		"DELETE /api/v1/addresses/:address_id":      false,
+		"PUT /api/v1/addresses/:address_id/default": false,
+		"GET /api/v1/cart":                          false,
+		"DELETE /api/v1/cart":                       false,
+		"POST /api/v1/cart/items":                   false,
+		"PUT /api/v1/cart/selection":                false,
+		"POST /api/v1/cart/items/batch-delete":      false,
+		"PATCH /api/v1/cart/items/:item_id":         false,
+		"DELETE /api/v1/cart/items/:item_id":        false,
 	}
 	for _, ri := range r.Routes() {
 		key := ri.Method + " " + ri.Path

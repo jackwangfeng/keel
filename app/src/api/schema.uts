@@ -313,6 +313,9 @@ export type ApplicableCoupon = {
   applicable_discount_cents : Money
 }
 
+/** 这一行此刻能不能买，按响应里 `store` 那家门店判。判定顺序即下表顺序， */
+export type CartItemStatus = string
+
 export type CartItem = {
   id : number
   sku_id : number
@@ -320,17 +323,34 @@ export type CartItem = {
   title? : string
   spec_values? : UTSJSONObject
   image_url? : string
-  /** **实时价，不是加购时的快照。** 购物车刻意不存价格快照（见数据模型 §9）， */
-  price_cents : Money
+  /** **实时价，不是加购时的快照。** 购物车刻意不存价格快照（见数据模型 §10）， */
+  price_cents : number | null
   quantity : number
   /** 是否勾选结算，对应 `cart_items.selected`。 */
   selected : boolean
-  /** 库存是否充足 */
-  available? : boolean
+  /** 此刻能否按 `quantity` 买下这一行，恒等于 `status == available`。 */
+  available : boolean
+  /** 这一行此刻能不能买，按响应里 `store` 那家门店判。判定顺序即下表顺序， */
+  status : CartItemStatus
+}
+
+/** 「当前门店」是怎么定下来的。这三个值是产品规则的对外形状， */
+export type StoreMatchType = string
+
+/** 每一条会受门店影响的读接口都回显它。**没有它，客户端拿到的 */
+export type StoreContext = {
+  /** 本次响应是按哪家门店算的。`match_type = none` 时为 null。 */
+  store_id? : number | null
+  /** 那家门店所属大区。价格的中间一层按它算。 */
+  region_id? : number | null
+  /** 「当前门店」是怎么定下来的。这三个值是产品规则的对外形状， */
+  match_type : StoreMatchType
 }
 
 export type Cart = {
   items : CartItem[]
+  /** 本次的价格与可买状态是按哪家门店算的。**必返**，理由同 `GET /products`。 */
+  store : StoreContext
   /** **全车**商品金额合计，与 `selected` 无关。 */
   total_cents : Money
   /** **仅已勾选**（`selected: true`）条目的金额合计，即点「去结算」时的预估金额。 */
@@ -1169,19 +1189,6 @@ export type Store = {
   lng? : number | null
   /** 是否是这家商家的「全国配送」回落门店。 */
   is_default : boolean
-}
-
-/** 「当前门店」是怎么定下来的。这三个值是产品规则的对外形状， */
-export type StoreMatchType = string
-
-/** 每一条会受门店影响的读接口都回显它。**没有它，客户端拿到的 */
-export type StoreContext = {
-  /** 本次响应是按哪家门店算的。`match_type = none` 时为 null。 */
-  store_id? : number | null
-  /** 那家门店所属大区。价格的中间一层按它算。 */
-  region_id? : number | null
-  /** 「当前门店」是怎么定下来的。这三个值是产品规则的对外形状， */
-  match_type : StoreMatchType
 }
 
 /** **围栏不在这里传**，走 `PUT /admin/stores/{store_id}/fence`。 */

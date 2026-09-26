@@ -252,6 +252,33 @@ func (e ApplicableCouponStatus) Valid() bool {
 	}
 }
 
+// Defines values for CartItemStatus.
+const (
+	CartItemStatusAvailable         CartItemStatus = "available"
+	CartItemStatusInsufficientStock CartItemStatus = "insufficient_stock"
+	CartItemStatusNotSoldInStore    CartItemStatus = "not_sold_in_store"
+	CartItemStatusOffShelf          CartItemStatus = "off_shelf"
+	CartItemStatusOutOfStock        CartItemStatus = "out_of_stock"
+)
+
+// Valid indicates whether the value is a known member of the CartItemStatus enum.
+func (e CartItemStatus) Valid() bool {
+	switch e {
+	case CartItemStatusAvailable:
+		return true
+	case CartItemStatusInsufficientStock:
+		return true
+	case CartItemStatusNotSoldInStore:
+		return true
+	case CartItemStatusOffShelf:
+		return true
+	case CartItemStatusOutOfStock:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for CategoryUpdateRequestStatus.
 const (
 	CategoryUpdateRequestStatusN0 CategoryUpdateRequestStatus = 0
@@ -1244,22 +1271,22 @@ func (e PostAuthSmsCodeJSONBodyScene) Valid() bool {
 
 // Defines values for GetCouponsParamsStatus.
 const (
-	Available GetCouponsParamsStatus = "available"
-	Expired   GetCouponsParamsStatus = "expired"
-	Locked    GetCouponsParamsStatus = "locked"
-	Used      GetCouponsParamsStatus = "used"
+	GetCouponsParamsStatusAvailable GetCouponsParamsStatus = "available"
+	GetCouponsParamsStatusExpired   GetCouponsParamsStatus = "expired"
+	GetCouponsParamsStatusLocked    GetCouponsParamsStatus = "locked"
+	GetCouponsParamsStatusUsed      GetCouponsParamsStatus = "used"
 )
 
 // Valid indicates whether the value is a known member of the GetCouponsParamsStatus enum.
 func (e GetCouponsParamsStatus) Valid() bool {
 	switch e {
-	case Available:
+	case GetCouponsParamsStatusAvailable:
 		return true
-	case Expired:
+	case GetCouponsParamsStatusExpired:
 		return true
-	case Locked:
+	case GetCouponsParamsStatusLocked:
 		return true
-	case Used:
+	case GetCouponsParamsStatusUsed:
 		return true
 	default:
 		return false
@@ -1818,27 +1845,44 @@ type Cart struct {
 	Items []CartItem `json:"items"`
 
 	// SelectedTotalCents **仅已勾选**（`selected: true`）条目的金额合计，即点「去结算」时的预估金额。
+	// 同样只计 `status = available` 的行。把这些行按同一个 `store_id` 送进
+	// `/orders/preview`，得到的 `goods_amount_cents` 与它逐分相等——两边读的是
+	// 同一条定价查询（数据模型 §4 `sku_prices_by_store`）。
 	//
 	// 两个字段都给，是因为购物车页同时要显示这两个数——底部结算栏显示已选金额，
 	// 而「全选」复选框需要知道全车总数。只给一个的话客户端就得自己遍历累加，
 	// 那等于把金额计算规则复制到每个端上。
 	SelectedTotalCents Money `json:"selected_total_cents"`
 
+	// Store 本次的价格与可买状态是按哪家门店算的。**必返**，理由同 `GET /products`。
+	// `match_type = none`（商家没配默认门店、又没指名门店）时没有任何一行买得到：
+	// 失效的行照旧报 `off_shelf`，其余一律 `not_sold_in_store`，两个合计都是 0；
+	// 此时加购返回 422（没有门店就判不了卖不卖）。
+	Store StoreContext `json:"store"`
+
 	// TotalCents **全车**商品金额合计，与 `selected` 无关。
+	// 只计 `status = available` 的行：失效、缺货的行没有一个此刻能成交的金额，
+	// 算进去会让「全选」显示一个结算时注定对不上的数。
 	TotalCents Money `json:"total_cents"`
 }
 
 // CartItem defines model for CartItem.
 type CartItem struct {
-	// Available 库存是否充足
-	Available *bool   `json:"available,omitempty"`
+	// Available 此刻能否按 `quantity` 买下这一行，恒等于 `status == available`。
+	// 保留它是为了只关心「能不能买」的简单客户端；要给用户看原因请读 `status`。
+	Available bool    `json:"available"`
 	Id        int64   `json:"id"`
 	ImageUrl  *string `json:"image_url,omitempty"`
 
-	// PriceCents **实时价，不是加购时的快照。** 购物车刻意不存价格快照（见数据模型 §9），
+	// PriceCents **实时价，不是加购时的快照。** 购物车刻意不存价格快照（见数据模型 §10），
 	// 这个值随商品调价而变。不要据此做「降价提醒」；
 	// 最终以 `/orders/preview` 的试算结果为准，价格快照只在下单瞬间产生。
-	PriceCents Money  `json:"price_cents"`
+	//
+	// 单位「分」。按响应里 `store` 那家门店的生效价（门店价 > 大区价 > 基准价）。
+	// **`status` 为 `not_sold_in_store` 或 `off_shelf` 时为 null**：这家店此刻
+	// 不卖它，也就没有一个「它多少钱」的答案——给一个基准价会让用户以为
+	// 还能按这个价买到。
+	PriceCents *int64 `json:"price_cents"`
 	ProductId  *int64 `json:"product_id,omitempty"`
 	Quantity   int    `json:"quantity"`
 
@@ -1847,8 +1891,40 @@ type CartItem struct {
 	Selected   bool               `json:"selected"`
 	SkuId      int64              `json:"sku_id"`
 	SpecValues *map[string]string `json:"spec_values,omitempty"`
-	Title      *string            `json:"title,omitempty"`
+
+	// Status 这一行此刻能不能买，按响应里 `store` 那家门店判。判定顺序即下表顺序，
+	// 先命中的先报——一件被下架的商品通常也没有库存，先判库存会报「缺货」，
+	// 而用户会一直等一个不会来的补货（与库存扣减的判定顺序同一个理由，数据模型 §4）。
+	//
+	// | 值 | 含义 | `price_cents` |
+	// |---|---|---|
+	// | `off_shelf` | 失效：规格已停售或删除，或商品已下架 / 删除 | null |
+	// | `not_sold_in_store` | 这家店（或它所在大区）不卖；换一家店可能买得到 | null |
+	// | `out_of_stock` | 这家店可售量为 0 | 有 |
+	// | `insufficient_stock` | 这家店有货，但不够 `quantity` 件 | 有 |
+	// | `available` | 能按 `quantity` 买下 | 有 |
+	//
+	// **这些行不会被服务端删掉**（数据模型 §10）：替用户默默删东西，
+	// 比让他看到一条划掉的商品更讨人嫌。
+	Status CartItemStatus `json:"status"`
+	Title  *string        `json:"title,omitempty"`
 }
+
+// CartItemStatus 这一行此刻能不能买，按响应里 `store` 那家门店判。判定顺序即下表顺序，
+// 先命中的先报——一件被下架的商品通常也没有库存，先判库存会报「缺货」，
+// 而用户会一直等一个不会来的补货（与库存扣减的判定顺序同一个理由，数据模型 §4）。
+//
+// | 值 | 含义 | `price_cents` |
+// |---|---|---|
+// | `off_shelf` | 失效：规格已停售或删除，或商品已下架 / 删除 | null |
+// | `not_sold_in_store` | 这家店（或它所在大区）不卖；换一家店可能买得到 | null |
+// | `out_of_stock` | 这家店可售量为 0 | 有 |
+// | `insufficient_stock` | 这家店有货，但不够 `quantity` 件 | 有 |
+// | `available` | 能按 `quantity` 买下 | 有 |
+//
+// **这些行不会被服务端删掉**（数据模型 §10）：替用户默默删东西，
+// 比让他看到一条划掉的商品更讨人嫌。
+type CartItemStatus string
 
 // Category defines model for Category.
 type Category struct {
@@ -3679,6 +3755,9 @@ type UserIdentity struct {
 
 // AddressId defines model for AddressId.
 type AddressId = int64
+
+// CartStoreId defines model for CartStoreId.
+type CartStoreId = int64
 
 // CategoryId defines model for CategoryId.
 type CategoryId = int64
@@ -5612,6 +5691,22 @@ type PostAuthWechatLoginJSONBody struct {
 	Provider *IdentityProvider `json:"provider,omitempty"`
 }
 
+// GetCartParams defines parameters for GetCart.
+type GetCartParams struct {
+	// StoreId 购物车按哪家门店算「卖不卖」「多少钱」「有没有货」。**每一条返回 `Cart` 的
+	// 购物车接口都收它**，解析规则与 `GET /products` 的 `store_id` 逐字一致：
+	// 不传走回落链（默认门店），指名一家不存在的门店返回 422，不静默回落。
+	//
+	// 车里存的只是 `sku_id` 与数量（数据模型 §10 不存价格快照），所以
+	// 「这一行多少钱」只有在定下门店之后才有答案——三层定价下同一个 SKU
+	// 在两家店是两个价。客户端应当传它在商品页 / 下单页用的**同一个** `store_id`，
+	// 于是购物车显示的价、`/orders/preview` 试算的价、成交的价是同一个。
+	// 响应里的 `store` 回显本次按哪家店算的。
+	//
+	// **刻意没有 default**：理由同 `GET /products`。
+	StoreId *CartStoreId `form:"store_id,omitempty" json:"store_id,omitempty"`
+}
+
 // PostCartItemsJSONBody defines parameters for PostCartItems.
 type PostCartItemsJSONBody struct {
 	Quantity int   `json:"quantity"`
@@ -5620,6 +5715,19 @@ type PostCartItemsJSONBody struct {
 
 // PostCartItemsParams defines parameters for PostCartItems.
 type PostCartItemsParams struct {
+	// StoreId 购物车按哪家门店算「卖不卖」「多少钱」「有没有货」。**每一条返回 `Cart` 的
+	// 购物车接口都收它**，解析规则与 `GET /products` 的 `store_id` 逐字一致：
+	// 不传走回落链（默认门店），指名一家不存在的门店返回 422，不静默回落。
+	//
+	// 车里存的只是 `sku_id` 与数量（数据模型 §10 不存价格快照），所以
+	// 「这一行多少钱」只有在定下门店之后才有答案——三层定价下同一个 SKU
+	// 在两家店是两个价。客户端应当传它在商品页 / 下单页用的**同一个** `store_id`，
+	// 于是购物车显示的价、`/orders/preview` 试算的价、成交的价是同一个。
+	// 响应里的 `store` 回显本次按哪家店算的。
+	//
+	// **刻意没有 default**：理由同 `GET /products`。
+	StoreId *CartStoreId `form:"store_id,omitempty" json:"store_id,omitempty"`
+
 	// IdempotencyKey 客户端生成的 UUID。幂等作用域为 `(接口 scope, user_id, key)`，
 	// 有效期 24h，过期后同一 key 可复用（见数据模型文档 §11）。
 	//
@@ -5647,6 +5755,19 @@ type PostCartItemsBatchDeleteJSONBody struct {
 
 // PostCartItemsBatchDeleteParams defines parameters for PostCartItemsBatchDelete.
 type PostCartItemsBatchDeleteParams struct {
+	// StoreId 购物车按哪家门店算「卖不卖」「多少钱」「有没有货」。**每一条返回 `Cart` 的
+	// 购物车接口都收它**，解析规则与 `GET /products` 的 `store_id` 逐字一致：
+	// 不传走回落链（默认门店），指名一家不存在的门店返回 422，不静默回落。
+	//
+	// 车里存的只是 `sku_id` 与数量（数据模型 §10 不存价格快照），所以
+	// 「这一行多少钱」只有在定下门店之后才有答案——三层定价下同一个 SKU
+	// 在两家店是两个价。客户端应当传它在商品页 / 下单页用的**同一个** `store_id`，
+	// 于是购物车显示的价、`/orders/preview` 试算的价、成交的价是同一个。
+	// 响应里的 `store` 回显本次按哪家店算的。
+	//
+	// **刻意没有 default**：理由同 `GET /products`。
+	StoreId *CartStoreId `form:"store_id,omitempty" json:"store_id,omitempty"`
+
 	// IdempotencyKey 客户端生成的 UUID。幂等作用域为 `(接口 scope, user_id, key)`，
 	// 有效期 24h，过期后同一 key 可复用（见数据模型文档 §11）。
 	//
@@ -5670,11 +5791,43 @@ type PatchCartItemsItemIdJSONBody struct {
 	Selected *bool `json:"selected,omitempty"`
 }
 
+// PatchCartItemsItemIdParams defines parameters for PatchCartItemsItemId.
+type PatchCartItemsItemIdParams struct {
+	// StoreId 购物车按哪家门店算「卖不卖」「多少钱」「有没有货」。**每一条返回 `Cart` 的
+	// 购物车接口都收它**，解析规则与 `GET /products` 的 `store_id` 逐字一致：
+	// 不传走回落链（默认门店），指名一家不存在的门店返回 422，不静默回落。
+	//
+	// 车里存的只是 `sku_id` 与数量（数据模型 §10 不存价格快照），所以
+	// 「这一行多少钱」只有在定下门店之后才有答案——三层定价下同一个 SKU
+	// 在两家店是两个价。客户端应当传它在商品页 / 下单页用的**同一个** `store_id`，
+	// 于是购物车显示的价、`/orders/preview` 试算的价、成交的价是同一个。
+	// 响应里的 `store` 回显本次按哪家店算的。
+	//
+	// **刻意没有 default**：理由同 `GET /products`。
+	StoreId *CartStoreId `form:"store_id,omitempty" json:"store_id,omitempty"`
+}
+
 // PutCartSelectionJSONBody defines parameters for PutCartSelection.
 type PutCartSelectionJSONBody struct {
 	// ItemIds 省略则作用于全部条目
 	ItemIds  *[]int64 `json:"item_ids,omitempty"`
 	Selected bool     `json:"selected"`
+}
+
+// PutCartSelectionParams defines parameters for PutCartSelection.
+type PutCartSelectionParams struct {
+	// StoreId 购物车按哪家门店算「卖不卖」「多少钱」「有没有货」。**每一条返回 `Cart` 的
+	// 购物车接口都收它**，解析规则与 `GET /products` 的 `store_id` 逐字一致：
+	// 不传走回落链（默认门店），指名一家不存在的门店返回 422，不静默回落。
+	//
+	// 车里存的只是 `sku_id` 与数量（数据模型 §10 不存价格快照），所以
+	// 「这一行多少钱」只有在定下门店之后才有答案——三层定价下同一个 SKU
+	// 在两家店是两个价。客户端应当传它在商品页 / 下单页用的**同一个** `store_id`，
+	// 于是购物车显示的价、`/orders/preview` 试算的价、成交的价是同一个。
+	// 响应里的 `store` 回显本次按哪家店算的。
+	//
+	// **刻意没有 default**：理由同 `GET /products`。
+	StoreId *CartStoreId `form:"store_id,omitempty" json:"store_id,omitempty"`
 }
 
 // GetCouponTemplatesParams defines parameters for GetCouponTemplates.
