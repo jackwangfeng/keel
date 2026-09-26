@@ -105,6 +105,14 @@ type IndexTx interface {
 	// ListProductsForIndex 按 id 游标翻页捞一批在架商品（全量）。
 	ListProductsForIndex(ctx context.Context, afterID int64, limit int32) ([]IndexCandidate, error)
 
+	// ListProductsForIndexByID 按 id 集合捞候选行（队列那条路：worker 出队之后
+	// 把 payload 里的 product_id 换回原料）。
+	//
+	// **返回的行数可以少于传进来的 id 数**，而那是正常路径：入队与出队之间
+	// 商品被下架或软删了。调用方据此把那些任务标成成功而不是失败 ——
+	// 没有东西可做不是故障（db/queries/semantic.sql 上有同一段话）。
+	ListProductsForIndexByID(ctx context.Context, ids []int64) ([]IndexCandidate, error)
+
 	// LockProductForIndex 锁住这一行并返回它当前的 updated_at。
 	// 商品已消失时返回 ErrProductGoneDuringIndex。
 	LockProductForIndex(ctx context.Context, productID int64) (time.Time, error)
@@ -157,10 +165,30 @@ func (t tenantTx) ListProductsForIndex(ctx context.Context, afterID int64, limit
 	return out, nil
 }
 
-// candidateFrom 是两条查询共用的那段转换。
+func (t tenantTx) ListProductsForIndexByID(ctx context.Context, ids []int64) ([]IndexCandidate, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	rows, err := t.q.ListProductsForIndexByIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]IndexCandidate, 0, len(rows))
+	for _, r := range rows {
+		c, err := candidateFrom(r.ID, r.Title, r.Subtitle, r.CategoryName, r.UpdatedAt,
+			r.SearchText, r.InputHashes, r.VectorModelName, r.VectorModelVersion)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, nil
+}
+
+// candidateFrom 是三条查询共用的那段转换。
 //
-// 两条查询的 Row 是两个不同的生成类型（字段完全一样），所以这里按位置收参数
-// 而不是收结构体。这也是一道缝：哪天两条查询的 SELECT 列表分了岔，
+// 三条查询的 Row 是三个不同的生成类型（字段完全一样），所以这里按位置收参数
+// 而不是收结构体。这也是一道缝：哪天它们的 SELECT 列表分了岔，
 // 这里的调用点会编译不过，而不是安静地少读一列。
 func candidateFrom(id int64, title string, subtitle *string, categoryName string,
 	updatedAt pgtype.Timestamptz, searchText *string, inputHashes []byte,

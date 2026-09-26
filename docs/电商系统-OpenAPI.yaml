@@ -713,6 +713,13 @@ paths:
         在架商品也能改——改标题不需要先下架。代价是前台会看到改动即时生效，
         这是刻意的：要求「先下架再改再上架」会让商家为一个错别字付出一次
         商品从搜索结果里消失的代价。
+
+        **在架商品（`status = 1`）的文案改动要过一次广告法违禁词检查**，
+        草稿与已下架的不过。判据是「这段文字会不会出现在买家面前」：
+        `publication` 是让它出现的入口，而在架状态下的 PATCH 是另一个入口，
+        两个都堵住，商品对外可见的文案才真的过过检查。草稿是商家还在写的
+        东西，拦它只会在写作过程中打断人，而它一个买家也看不到。
+        详见 `POST .../publication` 的描述。
       requestBody:
         required: true
         content:
@@ -737,7 +744,27 @@ paths:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
         '422':
-          description: '一个字段都没传（`minProperties: 1`），或字段取值非法'
+          description: |
+            按 Problem `type` 区分：
+
+            · 一个字段都没传（`minProperties: 1`），或字段取值非法——
+              `https://keel.dev/problems/invalid-request`
+            · 在架商品的新文案命中广告法违禁词——
+              `https://keel.dev/problems/compliance-rejected`。
+              `errors[]` 逐条给出 `field` / `offset` / `length`（见 `FieldError`），
+              改动**没有落库**。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '503':
+          description: |
+            合规检查没能在预算内给出结论，**保守拒绝**（改动没有落库）——
+            `type` 为 `https://keel.dev/problems/compliance-unavailable`。
+            只可能出现在改在架商品文案时。见 `POST .../publication` 的描述。
+          headers:
+            Retry-After:
+              description: 建议退避秒数
+              schema: { type: integer }
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
@@ -803,6 +830,28 @@ paths:
         闸门：**没有任何 SKU 的商品不能上架**（409）。上架意味着它会出现在
         前台列表与检索结果里，而一个没有 SKU 的商品点进去既没有价格也没有
         可加购的东西——`min_price_cents` 算出来会是 0，前台会把它渲染成免费。
+
+        ## 上架前的广告法违禁词检查（同步，预算 200 ms）
+
+        `publish` 会在**同一个事务里**扫一遍商品的 `title` / `subtitle` /
+        `description`，命中「最佳」「国家级」「全网第一」这类《广告法》
+        第九条的绝对化用语时**拒绝上架**（422，`type` 为
+        `https://keel.dev/problems/compliance-rejected`），并在 `errors[]` 里
+        逐条给出是哪个字段的第几个字（`FieldError` 的 `offset` / `length`）。
+        「拒绝」两个字不够——商家要知道改哪里。
+
+        **这一步是同步的，而且是全系统唯一一处「宁可误拒」。** 违禁词在中国是
+        硬约束，单次处罚起点二十万，所以它不能放异步；而检查本身回答不出来时
+        （超时），返回 503 拒绝上架，而不是放行（`compliance-unavailable`）。
+        其余所有 AI 能力的故障都不阻塞主链路，只有这一条相反
+        （见 `docs/ai-capabilities.md` 的「三条纪律」第三条）。
+
+        `unpublish` 不做这个检查：下架只会让文案从买家面前消失。
+
+        **本轮的检查只有规则词表，没有小模型兜底变体。** 「蕞」「No.1」
+        「巅峰之作」这三个是被**列进词表**的，拦得住；词表之外的新变体
+        （拆字、谐音、拼音）今天一个也拦不住。类目资质那一半也没有做——
+        库里没有任何一张表记录商家资质。
       parameters:
         - $ref: '#/components/parameters/ProductId'
         - $ref: '#/components/parameters/IdempotencyKey'
@@ -839,7 +888,34 @@ paths:
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
-        '422': { $ref: '#/components/responses/IdempotencyKeyReused' }
+        '422':
+          description: |
+            按 Problem `type` 区分：
+
+            · 商品文案命中广告法违禁词，拒绝上架——
+              `https://keel.dev/problems/compliance-rejected`。
+              `errors[]` 逐条给出 `field` / `offset` / `length`（见 `FieldError`），
+              商品**没有**被上架。
+            · `action` 不是 `publish` / `unpublish`——
+              `https://keel.dev/problems/invalid-request`
+            · 同一 Idempotency-Key 配了不同的请求体——
+              `https://keel.dev/problems/idempotency-key-reused`
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '503':
+          description: |
+            合规检查没能在预算内给出结论，**保守拒绝上架**——
+            `type` 为 `https://keel.dev/problems/compliance-unavailable`。
+            商品没有被上架；按 `Retry-After` 退避后可以重试。
+            这是全系统唯一一处宁可误拒的地方，理由见上面的描述。
+          headers:
+            Retry-After:
+              description: 建议退避秒数
+              schema: { type: integer }
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
         default: { $ref: '#/components/responses/Problem' }
 
   /admin/products/{product_id}/images:
@@ -2915,11 +2991,32 @@ components:
         errors:
           type: array
           description: 字段级校验错误
-          items:
-            type: object
-            properties:
-              field: { type: string }
-              message: { type: string }
+          items: { $ref: '#/components/schemas/FieldError' }
+
+    FieldError:
+      type: object
+      description: |
+        一条字段级错误。`field` 是请求体（或商品对象）里的字段名。
+
+        `offset` / `length` 只在错误**能定位到具体位置**时出现，眼下唯一的
+        生产者是发布时的广告法违禁词拦截（`compliance-rejected`）：
+        商家要知道是哪个字段的第几个字，「拒绝」这两个字不够他改。
+
+        **单位是 Unicode 码点，从 0 开始数**，不是字节，也不是「第几个字」
+        那种从 1 开始的说法。选码点是因为它是服务端与客户端唯一能对上的单位：
+        服务端按码点切，浏览器与 uni-app x 拿到的是 UTF-16 码元，
+        而商品文案里的字符几乎全在 BMP 内，两者逐字相等。
+        文案里出现 emoji（非 BMP）时 UTF-16 会多算一个码元，
+        高亮会偏一格——这条偏差写在这里，不假装它不存在。
+      properties:
+        field:   { type: string, examples: ['title'] }
+        message: { type: string }
+        offset:
+          type: integer
+          description: 命中位置（Unicode 码点下标，从 0 开始）
+        length:
+          type: integer
+          description: 命中长度（Unicode 码点数）
 
     PageMeta:
       type: object

@@ -1302,6 +1302,30 @@ type ChatReply struct {
 // ChatReplyActionType defines model for ChatReply.Action.Type.
 type ChatReplyActionType string
 
+// FieldError 一条字段级错误。`field` 是请求体（或商品对象）里的字段名。
+//
+// `offset` / `length` 只在错误**能定位到具体位置**时出现，眼下唯一的
+// 生产者是发布时的广告法违禁词拦截（`compliance-rejected`）：
+// 商家要知道是哪个字段的第几个字，「拒绝」这两个字不够他改。
+//
+// **单位是 Unicode 码点，从 0 开始数**，不是字节，也不是「第几个字」
+// 那种从 1 开始的说法。选码点是因为它是服务端与客户端唯一能对上的单位：
+// 服务端按码点切，浏览器与 uni-app x 拿到的是 UTF-16 码元，
+// 而商品文案里的字符几乎全在 BMP 内，两者逐字相等。
+// 文案里出现 emoji（非 BMP）时 UTF-16 会多算一个码元，
+// 高亮会偏一格——这条偏差写在这里，不假装它不存在。
+type FieldError struct {
+	// Field Examples: title
+	Field *string `json:"field,omitempty"`
+
+	// Length 命中长度（Unicode 码点数）
+	Length  *int    `json:"length,omitempty"`
+	Message *string `json:"message,omitempty"`
+
+	// Offset 命中位置（Unicode 码点下标，从 0 开始）
+	Offset *int `json:"offset,omitempty"`
+}
+
 // IdentityProvider 第三方身份来源，对应 `user_identities.provider`：
 // 1 微信小程序 / 2 微信公众号 / 3 微信开放平台 / 4 支付宝 / 5 Apple
 //
@@ -1315,11 +1339,8 @@ type InventoryConflict struct {
 	Detail  *string        `json:"detail,omitempty"`
 
 	// Errors 字段级校验错误
-	Errors *[]struct {
-		Field   *string `json:"field,omitempty"`
-		Message *string `json:"message,omitempty"`
-	} `json:"errors,omitempty"`
-	Instance *string `json:"instance,omitempty"`
+	Errors   *[]FieldError `json:"errors,omitempty"`
+	Instance *string       `json:"instance,omitempty"`
 
 	// Status Examples: 409
 	Status int `json:"status"`
@@ -1684,11 +1705,8 @@ type Problem struct {
 	Detail *string `json:"detail,omitempty"`
 
 	// Errors 字段级校验错误
-	Errors *[]struct {
-		Field   *string `json:"field,omitempty"`
-		Message *string `json:"message,omitempty"`
-	} `json:"errors,omitempty"`
-	Instance *string `json:"instance,omitempty"`
+	Errors   *[]FieldError `json:"errors,omitempty"`
+	Instance *string       `json:"instance,omitempty"`
 
 	// Status Examples: 409
 	Status int `json:"status"`

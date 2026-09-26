@@ -102,6 +102,18 @@
       "policy": "none",
       "unique_scoped": false,
       "grants": []
+    },
+    "cross-tenant-queue": {
+      "_": "jobs 一张表。它是**唯一**一类『有 merchant_id、那一列有真实语义、却刻意不挂租户策略』的表 —— 和 cross-tenant-infra 不是一回事（那一类压根没有租户维度），也和 shared-reference 不是一回事（那一类是全租户共用的静态数据、只读）。理由只有一条，但它是硬的：出队是**跨租户**的公平调度，一条查询要同时看见全部租户的待办（数据模型 §12 那两条出队语句：先按 merchant_id 分组排除在途已达上限的租户，兜底那一趟再去掉租户限制按 `ORDER BY priority DESC, id` 取全局最靠前的几条）。挂上 `merchant_id = current_merchant()` 之后 busy 那个 CTE 永远只看得见一家店，兜底与第一趟塌成同一条查询 —— 公平调度不是打折扣，是整个机制蒸发，而且不报任何错。更直接的一条：worker 跑在任何 HTTP 请求之外，事务里没有 app.merchant_id，而 current_merchant() 在未设置时是 RAISE（00002），挂上策略的结果是每一次出队 42501。unique_scoped 仍然是 true：规矩三对这张表照常适用，uk_jobs_pending 的首列就是 merchant_id，不需要任何豁免。merchant_id 记 required：那一列必须在，公平调度与唯一键都靠它。",
+      "merchant_id": "required",
+      "policy": "none",
+      "unique_scoped": true,
+      "grants": [
+        "SELECT",
+        "INSERT",
+        "UPDATE",
+        "DELETE"
+      ]
     }
   },
   "tables": {
@@ -148,6 +160,10 @@
       "class": "tenant-nullable",
       "reason": "全文唯一一张 merchant_id 可空的表：NULL 表示平台级操作员（数据模型 §14）。它不能吃默认的 tenant 类 —— 标准策略对 NULL 行恒为假，平台级操作员于是对所有人不可见，包括他自己，整条平台级路径是死的。类别的完整论证见 classes.tenant-nullable 与 db/migrations/00017_staff.sql 的文件头。",
       "policy_qual": "(NOT (merchant_id IS DISTINCT FROM staff_scope_merchant()))"
+    },
+    "jobs": {
+      "class": "cross-tenant-queue",
+      "reason": "任务队列表（数据模型 §12）。**它不是一张没有租户维度的表** —— merchant_id 有真实语义（公平调度按它分组、uk_jobs_pending 按它收口），所以它没有归进 cross-tenant-infra。它不挂租户策略的理由写在 classes.cross-tenant-queue 与 db/migrations/00022_jobs.sql 的文件头：出队是跨租户的公平调度，租户策略会让 §12 那两条出队语句失去意义，而 worker 事务里根本没有 app.merchant_id，策略谓词会 42501。\n这**不是**给应用一条绕过 RLS 的路：keel_app 仍然是 NOSUPERUSER NOBYPASSRLS，db.NewPool 的自检一个字不改，失效范围恰好是这一张表，其余 36 张照旧 —— 与 repository/sweep.go 拒绝掉的『平台身份』（一个 BYPASSRLS 角色，对全部表失效）差着一个量级。\n没有 RLS 之后，『入队写不出别人的租户』全靠 merchant_id 的 DEFAULT current_merchant()：入队那条 SQL 里没有 merchant_id 这个词，生成的 Go 函数签名里也没有那个参数，没有租户上下文时入队是当场 42501 而不是写进一行猜出来的值。internal/db/jobs_test.go 专门盯着这两条（TestEnqueueTakesItsTenantFromTheCurrentContext 判的是「同一条 INSERT 在两个租户上下文里落到两个不同的租户」—— 不是「落到了某一个租户」，后者一个写死的 DEFAULT 1 也满足；TestEnqueueOutsideATenantTransactionFails 判的是没有租户上下文时当场 42501，而且逐字判 SQLSTATE，因为被 NOT NULL 挡下来的 23502 是一条会随 DDL 消失的防线）。\nGRANT 面是四权，收不窄：worker 要 SELECT（出队扫描）、UPDATE（占位 / 退避 / 转死信）、DELETE（清理七天前的成功任务），入队要 INSERT。\nunique_global_ok 里**刻意没有它的条目**：uk_jobs_pending 是 (merchant_id, queue, job_key)，首列就是 merchant_id，照规矩三收进了租户内，不需要豁免。三个出队索引不以 merchant_id 打头，但规矩三只管唯一索引，它们不在这条检查的范围里 —— 索引前缀那条推论为什么在这张表上不成立，见 §2『三类例外』与 00022 的文件头第三节。"
     },
     "staff_tokens": {
       "class": "parent-scoped-nullable",

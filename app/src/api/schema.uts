@@ -245,13 +245,18 @@ export type ChatReply = {
   action? : ChatReplyAction
 }
 
-/** 第三方身份来源，对应 `user_identities.provider`： */
-export type IdentityProvider = number
-
-export type InventoryConflictErrorsItem = {
+/** 一条字段级错误。`field` 是请求体（或商品对象）里的字段名。 */
+export type FieldError = {
   field? : string
   message? : string
+  /** 命中位置（Unicode 码点下标，从 0 开始） */
+  offset? : number
+  /** 命中长度（Unicode 码点数） */
+  length? : number
 }
+
+/** 第三方身份来源，对应 `user_identities.provider`： */
+export type IdentityProvider = number
 
 export type InventoryConflict = {
   type : string
@@ -261,7 +266,7 @@ export type InventoryConflict = {
   instance? : string
   trace_id? : string
   /** 字段级校验错误 */
-  errors? : InventoryConflictErrorsItem[]
+  errors? : FieldError[]
   current : AdminInventory
 }
 
@@ -563,11 +568,6 @@ export type PaymentIntent = {
   payload? : UTSJSONObject
 }
 
-export type ProblemErrorsItem = {
-  field? : string
-  message? : string
-}
-
 /** RFC 9457 Problem Details */
 export type Problem = {
   type : string
@@ -577,7 +577,7 @@ export type Problem = {
   instance? : string
   trace_id? : string
   /** 字段级校验错误 */
-  errors? : ProblemErrorsItem[]
+  errors? : FieldError[]
 }
 
 /** **没有 `status` 也没有 `merchant_id`。** 前者因为创建与发布是两个动作， */

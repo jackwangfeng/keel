@@ -139,14 +139,19 @@ var tenantContextAllowed = map[string]string{
 		"枚举 merchants（tenant-root 类，没有 RLS）再逐家进 WithTenant —— " +
 		"论证写在 repository/sweep.go 与 service/sweep.go 的文件头。" +
 		"它不是 SAGA 分支，上面第 ② 道会把这一点钉住。",
-	"index.go": "派生数据入库（文本向量 + bigram 串）的定时任务，与 sweep.go 同一处境：" +
+	"index.go": "商品理解服务的慢路径（文本向量 + bigram 串），与 sweep.go 同一处境：" +
 		"它跑在任何 HTTP 请求之外，没有 Host（tenant.Resolver 用不上），" +
 		"也没有 gid（它加工的是商品，不属于任何一笔正在跑的全局事务）。" +
 		"拿租户的办法照抄 sweep：枚举 merchants（tenant-root 类，没有 RLS）" +
 		"再逐家进 WithTenant，公平调度也照那一套（每租户上限 + 每轮总预算 + 轮转起点 + 兜底）。" +
 		"论证写在 repository/sweep.go 与 service/sweep.go 的文件头，" +
-		"service/index.go 的文件头第二节只说了与它不同的那一处（上限的量级按一次 " +
-		"/v1/embeddings 的批大小定）。它不是 SAGA 分支，上面第 ② 道会把这一点钉住。",
+		"service/index.go 的文件头第二节只说了与它不同的那两处（其一：上限的量级" +
+		"按一次 /v1/embeddings 的批大小定）。" +
+		"M4 阶段 1 在中间插进了 jobs 表之后，**消费侧其实不再需要这条豁免**：" +
+		"出队拿到的每一行都带着 jobs.merchant_id，worker 按它进 WithTenant。" +
+		"生产侧仍然需要 —— 触发点扫描是按租户切的 N 条查询（products 有 RLS，" +
+		"没有一条能跨租户的 SELECT），所以「这一轮先扫谁」还得由应用层枚举 merchants 决定。" +
+		"它不是 SAGA 分支，上面第 ② 道会把这一点钉住。",
 }
 
 // mentions 判断这个文件里有没有出现某个标识符（作为选择器的字段名）。

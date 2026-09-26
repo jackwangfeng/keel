@@ -105,7 +105,39 @@ func bindJSON(c *gin.Context, dst any) bool {
 // 就只能自己再查一次 —— 那一跳正是这个字段存在要省掉的东西。
 func writeCatalogError(c *gin.Context, err error) {
 	var conflict *repository.InventoryConflict
+	var rejected *service.ComplianceRejection
 	switch {
+	// —— 合规检查那两条（M4 阶段 2）。它们排在最前面只是为了读起来成对，
+	// 与别的分支没有重叠。
+	case errors.As(err, &rejected):
+		// 422 + errors[]。**「拒绝」两个字不够** —— 商家要知道改哪里，
+		// 所以这里逐条给出 field / offset / length（契约的 FieldError）。
+		// 用生成类型而不是手拼 map：契约改字段名时这里当场编译失败。
+		items := make([]api.FieldError, 0, len(rejected.Violations))
+		for _, v := range rejected.Violations {
+			field, msg := v.Field, v.Message()
+			offset, length := v.Offset, v.Length
+			items = append(items, api.FieldError{
+				Field: &field, Message: &msg, Offset: &offset, Length: &length,
+			})
+		}
+		problem.WriteValue(c, http.StatusUnprocessableEntity, api.Problem{
+			Type:   problem.TypeComplianceRejected,
+			Title:  "商品文案命中《广告法》违禁词，拒绝发布",
+			Status: http.StatusUnprocessableEntity,
+			Errors: &items,
+		})
+
+	case errors.Is(err, service.ErrComplianceUnavailable):
+		// **503，而且商品没有被发布。** 这是全系统唯一一处宁可误拒的地方
+		// （§7 的降级表）。日志要留 —— 它是「检查器坏了」的唯一信号，
+		// 而商家那边看到的只是一句「稍后重试」。
+		_ = c.Error(err)
+		c.Header("Retry-After", service.ComplianceRetryAfter())
+		problem.Write(c, http.StatusServiceUnavailable,
+			problem.TypeComplianceUnavailable,
+			"合规检查暂时不可用，为避免放行违规文案，本次发布被拒绝，请稍后重试")
+
 	// —— 幂等那一组（M4 收尾）。契约给后台那 5 条 POST 声明的就是这三种。
 	case errors.Is(err, service.ErrIdempotencyKeyMissing):
 		// 契约把 Idempotency-Key 定成 required。422 而不是 400：

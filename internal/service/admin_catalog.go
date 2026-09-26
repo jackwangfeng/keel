@@ -9,11 +9,13 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/keel/keel/internal/auth"
 	"github.com/keel/keel/internal/repository"
 	"github.com/keel/keel/internal/tenant"
+	"github.com/keel/keel/internal/understanding"
 )
 
 // 商家自助发布那 16 条写接口的业务层（契约 Admin + Catalog 两个 tag）。M4 Task 3。
@@ -87,12 +89,36 @@ type AdminCatalogRepository interface {
 type AdminCatalogService struct {
 	repo  AdminCatalogRepository
 	store UploadStore
+
+	// Compliance 是快路径的广告法违禁词检查器，完整论证在 compliance.go 的文件头。
+	//
+	// **导出，而且可以被改掉** —— 这是一个刻意的形状，代价与收益都说清楚：
+	// 收益是「检查卡住会怎样」这件事可以被测试造出来（真实的检查器是纯计算，
+	// 快得没法超时，而「超时要拒绝」是 §7 里全系统唯一一处宁可误拒的规矩，
+	// 它必须有测试盯着）。代价是生产代码里有一个能被赋值的字段。
+	//
+	// 代价被这一条抵掉：**把它置成 nil 不是「关掉检查」，是「一律拒绝」**
+	// （checkCompliance 的第一段）。也就是说这个字段唯一能造成的破坏方向是
+	// 发不出商品，不是发出违规商品。
+	Compliance ComplianceChecker
+
+	// ComplianceBudget <= 0 时用 complianceBudget（200 ms，§2 给的数）。
+	// 同样只给测试调。
+	ComplianceBudget time.Duration
 }
 
 // NewAdminCatalogService 建一个。store 为 nil 时 POST /admin/uploads 会报错 ——
 // 不静默退化成「只登记元数据」，理由见 upload_store.go 的文件头。
+//
+// 合规检查器由这里填上真的那一个。它不是参数：生产路径上它只有一个取值，
+// 而多一个参数意味着多一处可以传 nil 的地方 —— 虽然传了 nil 的后果是
+// 一律拒绝（fail-closed），但那是一次谁都不想要的线上故障。
 func NewAdminCatalogService(r AdminCatalogRepository, store UploadStore) *AdminCatalogService {
-	return &AdminCatalogService{repo: r, store: store}
+	return &AdminCatalogService{
+		repo:       r,
+		store:      store,
+		Compliance: understanding.ComplianceCheck{},
+	}
 }
 
 // requireStaff 确认这个请求真的带着后台身份。
@@ -247,12 +273,40 @@ func (s *AdminCatalogService) UpdateProduct(ctx context.Context, id int64,
 	}
 	var out repository.AdminProduct
 	err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
-		var e error
-		out, e = tx.UpdateProduct(ctx, id, p)
-		return e
+		updated, e := tx.UpdateProduct(ctx, id, p)
+		if e != nil {
+			return e
+		}
+		// **在架商品的文案改动也要过合规检查**，草稿与已下架的不过。
+		//
+		// 这一条是补漏，不是加严：只拦上架的话，「先用干净标题上架，
+		// 再 PATCH 成违禁标题」是一条两步都返回 200 的完整绕过路径。
+		// 要守的不变量是「对外可见的文案没有违禁词」，
+		// 而在架状态下的 PATCH 是改变那段可见文案的第二个入口。
+		//
+		// 判断用的是**改完之后**那一行的 status，不是改之前的：
+		// 这个 PATCH 按契约不改状态，两者必然相同 —— 用改完之后的那个，
+		// 是因为它和被检查的文案来自同一行、同一个快照。
+		if updated.Status == productStatusPublished {
+			if e := s.checkCompliance(ctx, updated); e != nil {
+				return e
+			}
+		}
+		out = updated
+		return nil
 	})
-	return out, err
+	if err != nil {
+		return repository.AdminProduct{}, err
+	}
+	return out, nil
 }
+
+// productStatusPublished 是 products.status 的 1（上架）。
+//
+// 契约把这个枚举写在三处（ProductSummary.status、AdminProduct.status、
+// publication 端点的描述），数据模型 §3 也写了一遍。这里给它一个名字，
+// 是因为上面那个判断读作「== 1」时，没有人看得出它在问「买家看得见吗」。
+const productStatusPublished int16 = 1
 
 // DeleteProduct 实现 DELETE /admin/products/{product_id}。
 func (s *AdminCatalogService) DeleteProduct(ctx context.Context, id int64) error {
@@ -287,7 +341,29 @@ func (s *AdminCatalogService) SetPublication(ctx context.Context, id int64, publ
 	}
 	return idempotentWrite(ctx, s, scopeAdminProductPublish, idemKey, hash, archivedOK,
 		func(tx repository.Tx) (repository.AdminProduct, error) {
-			return tx.SetProductPublication(ctx, id, publish)
+			p, e := tx.SetProductPublication(ctx, id, publish)
+			if e != nil {
+				return repository.AdminProduct{}, e
+			}
+			// 广告法违禁词检查（商品理解服务设计 §2 的快路径）。
+			//
+			// **只查 publish，不查 unpublish**：下架只会让文案从买家面前消失。
+			// 检查拿上架之后那一行去做，命中就让整个事务回滚 —— 完整论证
+			// （为什么不是先查再写、为什么草稿不查、超时为什么是拒绝）
+			// 写在 compliance.go 的文件头。
+			//
+			// **它跑在 idempotentWrite 的回调里，也就是抢占幂等键的那同一个
+			// 事务里**，这一点是合并两条线时的一个真实取舍，不是顺手：
+			// 合规拒绝会把这次抢占一起回滚掉，于是商家改完标题**用同一把
+			// 钥匙重试**就能发出去。反过来（先提交抢占、再查合规）会把那把
+			// 钥匙钉在一个失败的存档上，改完标题再来是「同一把钥匙配不同
+			// 请求体」，回 422 —— 让人用一把新钥匙才能修好自己的错字。
+			if publish {
+				if e := s.checkCompliance(ctx, p); e != nil {
+					return repository.AdminProduct{}, e
+				}
+			}
+			return p, nil
 		})
 }
 

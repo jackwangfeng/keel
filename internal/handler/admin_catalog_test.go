@@ -310,8 +310,15 @@ func TestMerchantCanPublishAProductAndBuyersSeeIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// 两步：全量**入队**，再把队列抽干。M4 阶段 1 把这条路切成了生产者 +
+	// 消费者（jobs 表，数据模型 §12），Backfill 现在只负责前半段。
+	// 少了 Drain 这一步的症状正是下面那条断言：索引「跑完」了却搜不到 ——
+	// 因为活还躺在队列里。
 	if _, err := idx.Backfill(context.Background(), sh.MerchantID, false); err != nil {
-		t.Fatalf("派生数据入库失败: %v", err)
+		t.Fatalf("派生数据入队失败: %v", err)
+	}
+	if _, err := idx.Drain(context.Background()); err != nil {
+		t.Fatalf("抽干理解队列失败: %v", err)
 	}
 	_, hits := doSearch(t, sh.Host, `{"query":"咖啡壶"}`)
 	if !contains(titlesOf(hits), published.Title) {
@@ -884,4 +891,88 @@ func seedOneSKU(t *testing.T, sh adminShop, tag string, cents, qty int) int64 {
 			tag, sh.Suffix, cents, qty), sh.Token),
 		http.StatusCreated, tag+" 建 SKU", &sku)
 	return sku.Id
+}
+
+// ---------------------------------------------------------------------------
+// 合规检查：拒绝的响应里要带得走「哪个字段、第几个字」
+// ---------------------------------------------------------------------------
+
+// 上架一件标题违规的商品：422 + compliance-rejected + errors[] 里有位置。
+//
+// 这一条走的是**整条真实链路**（HTTP → handler → service → 真检查器 →
+// 事务回滚），它补的是 service/compliance_test.go 那一组补不上的一段：
+// 那一组用假仓储证明了「命中就回滚、拒绝带着位置」，但证明不了
+// handler 真的把 understanding.Violation 翻成了契约的 FieldError ——
+// 而那一步翻错的症状是商家收到一个 422，里面 errors 是空的，
+// 「拒绝」两个字又变回了不够用的那个样子。
+//
+// 同时它是「商品没有被上架」这件事在库里的唯一靶子：service 那一组断言的是
+// 「事务没提交」（假仓储上的一个布尔），这里断言的是**真的库里 status 还是 0**。
+func TestPublishingABannedTitleIsRejectedWithPositions(t *testing.T) {
+	sh := newAdminShop(t)
+
+	var cat api.AdminCategory
+	decodeInto(t, post(t, sh.Host, "/api/v1/admin/categories",
+		`{"name":"违禁词类目"}`, sh.Token), http.StatusCreated, "建类目", &cat)
+
+	// 标题里塞一处违规：「最佳」。前缀「本店」是为了让 offset 不是 0 ——
+	// offset 恒为 0 的实现（比如漏传那个字段）在 offset = 0 的用例上是绿的。
+	var p api.AdminProduct
+	decodeInto(t, post(t, sh.Host, "/api/v1/admin/products",
+		fmt.Sprintf(`{"category_id":%d,"title":"本店最佳咖啡壶 %s","subtitle":"600ml 玻璃"}`,
+			cat.Id, sh.Suffix), sh.Token),
+		http.StatusCreated, "建违规草稿", &p)
+	// **建草稿本身是 201**：草稿不查（compliance.go 文件头第一节）。
+	// 这半句同时是下面那个 422 的阳性对照 —— 一个「哪里都查」的实现
+	// 在上面这一步就会红。
+
+	decodeInto(t, post(t, sh.Host, fmt.Sprintf("/api/v1/admin/products/%d/skus", p.Id),
+		fmt.Sprintf(`{"sku_code":"BAN-%s","price_cents":9900,"available_qty":3}`, sh.Suffix),
+		sh.Token), http.StatusCreated, "建 SKU", &api.AdminSku{})
+
+	w := post(t, sh.Host, fmt.Sprintf("/api/v1/admin/products/%d/publication", p.Id),
+		`{"action":"publish"}`, sh.Token)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("上架一件标题含「最佳」的商品回了 %d，期望 422 —— "+
+			"设计 §2：命中违禁词时直接拒绝发布。响应体：%s", w.Code, w.Body.String())
+	}
+	if ct := w.Header().Get("Content-Type"); ct != "application/problem+json" {
+		t.Errorf("Content-Type 是 %q，期望 application/problem+json —— "+
+			"按契约生成的客户端会在它最需要读懂的那类响应上走错分支", ct)
+	}
+
+	var pb api.Problem
+	decodeInto(t, w, http.StatusUnprocessableEntity, "合规拒绝", &pb)
+	if pb.Type != problem.TypeComplianceRejected {
+		t.Fatalf("Problem type 是 %q，期望 %q —— 客户端按它分辨"+
+			"「改文案」与「退避重试」，而这两件事一个是死路一个是活路",
+			pb.Type, problem.TypeComplianceRejected)
+	}
+	if pb.Errors == nil || len(*pb.Errors) != 1 {
+		t.Fatalf("errors[] 是 %v，期望 1 条 —— 「拒绝」两个字不够，"+
+			"商家得知道是哪个字段的第几个字（设计 §2：返回具体位置）", pb.Errors)
+	}
+	fe := (*pb.Errors)[0]
+	if fe.Field == nil || *fe.Field != "title" {
+		t.Errorf("errors[0].field 是 %v，期望 \"title\"", fe.Field)
+	}
+	if fe.Offset == nil || fe.Length == nil {
+		t.Fatalf("errors[0] 缺 offset / length（%v / %v）—— "+
+			"没有位置的话客户端只能把整个标题标红，而那与「拒绝」两个字一样没用",
+			fe.Offset, fe.Length)
+	}
+	// 「本店最佳咖啡壶 …」：「最佳」在下标 2，长 2（Unicode 码点）。
+	if *fe.Offset != 2 || *fe.Length != 2 {
+		t.Errorf("errors[0] 的位置是 offset=%d length=%d，期望 2 / 2 —— "+
+			"位置错了比没有位置更坏：客户端会高亮到一段没有问题的文字上",
+			*fe.Offset, *fe.Length)
+	}
+
+	// **商品真的没有被上架。** 这一句是这条测试的另一半：一个「回了 422
+	// 但事务照样提交」的实现，上面每一条断言都是绿的。
+	if status := adminQueryInt64(t,
+		`SELECT status FROM products WHERE id = $1`, p.Id); status != 0 {
+		t.Fatalf("合规拒绝之后库里 products.status = %d，期望 0（还是草稿）—— "+
+			"响应是 422，但商品已经上架了，而买家现在就看得到那个违禁标题", status)
+	}
 }

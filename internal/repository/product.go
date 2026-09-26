@@ -59,6 +59,7 @@ type Tx interface {
 	SweepTx
 	PaymentTx
 	IndexTx
+	JobTx
 	SearchTx
 	StaffTx
 	AdminCatalogTx

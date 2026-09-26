@@ -143,6 +143,27 @@ const (
 	TypeUploadTooLarge         = "https://keel.dev/problems/upload-too-large"
 	TypeUploadUnsupportedMedia = "https://keel.dev/problems/upload-unsupported-media-type"
 
+	// 合规检查那两条（M4 阶段 2，商品理解服务设计 §2）。
+	//
+	// 它们分成两个 type，而且状态码也不同（422 / 503），因为商家要做的事
+	// 完全相反：
+	//
+	//   compliance-rejected    → 你的文案里有违禁词，**改了再来**。
+	//                            errors[] 里逐条写着哪个字段第几个字
+	//                            （契约的 FieldError）。重试原请求永远失败。
+	//   compliance-unavailable → 我们没查出来，**过一会儿原样再试一次**。
+	//                            你的文案可能一个字都不用改。
+	//
+	// 压成一个的话，客户端只能把「改文案」和「退避重试」写成同一段逻辑，
+	// 而它们一个是死路一个是活路。
+	//
+	// **unavailable 是 503 而不是 500**：这一条是全系统唯一一处「宁可误拒」
+	// （§7 的降级表 / docs/ai-capabilities.md 的三条纪律第三条）——
+	// 它不是服务端出 bug，是我们主动选择在答不出来时拒绝。503 + Retry-After
+	// 是这件事在 HTTP 上的准确说法，而 500 会让客户端以为有人写错了代码。
+	TypeComplianceRejected    = "https://keel.dev/problems/compliance-rejected"
+	TypeComplianceUnavailable = "https://keel.dev/problems/compliance-unavailable"
+
 	// 契约声明了、本轮刻意没有实现的路径。用一个**专门的** type 而不是复用
 	// internal：客户端能据此分辨「这个功能还没有」与「服务器炸了」，
 	// 而这两件事的重试策略完全相反。
