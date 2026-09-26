@@ -10,6 +10,12 @@ Kotlin / Swift，不走 webview；同一份代码也编 H5 与小程序。
 - 搜索走 `POST /search`（语义 + 关键词混合检索）。一期不翻页；服务端按相关度把召回到的都排出来、
   不设阈值，所以不相关的商品会排在后面而不是消失。点击回传 `POST /search/events` 还没接：
   服务端尚未实现（404），`/search` 的响应里也还没有用来串联的 `trace_id`。
+- 优惠券：「我的」→ 领券中心（`GET /coupon-templates`，领券 `POST …/claim` 带幂等键，同一张模板在
+  页面活着期间复用同一个键）/ 我的优惠券（`GET /coupons`，未使用 / 使用中 / 已使用 / 已过期四个 tab，
+  「使用中」是锁在待支付订单上的）。结算页用试算响应里的 `applicable_coupons`：第一次试算后自动选
+  最省的那张再算一次，之后以用户的选择为准（包括「不使用」）。券用不了（409 `coupon-not-applicable`）
+  时显示服务端给的原因并展开列表让用户换，**不**自动退回原价。列表上「省多少」用
+  `applicable_discount_cents`，不是券面额。订单详情显示用的哪张券、优惠多少。
 
 ---
 
@@ -318,6 +324,7 @@ H5 构建产物 + 一个把 `/api` 反代给 Keel 的静态服务器，用无头
 | 我的订单 | `GET /orders` | ✅ 分页列表，状态与售后状态组合渲染 |
 | 换服务地址 | — | ✅ 本地令牌当场清掉 |
 | 搜索 | `POST /search` | ✅ 首页入口 → 搜索页，按相关度排序；Android / iPhone 真机 e2e 覆盖（按首页一件商品的标题搜，它排第一，点进去是它的详情） |
+| 优惠券 | `GET /coupon-templates`、`POST /coupon-templates/{id}/claim`、`GET /coupons`、`POST /orders/preview` 的 `applicable_coupons` / `user_coupon_id` | ✅ 小米真机 e2e（`coupon.test.js`）：领「9 折」→ 我的优惠券四个 tab → 结算页自动用券、切「不使用」优惠归零。iOS 只验证了编译 |
 
 ### 只写了、没跑通的
 
@@ -383,7 +390,7 @@ app/
       view.uts          契约类型 -> 页面的 Row 类型（契约字段读取都收在这里）
     App.uvue            设计系统：色板与原子类（原生端没有 CSS 变量，改色只改这里）
     static/tabbar/      tabBar 图标 PNG（由 render-icons.sh 生成）
-    pages/…             8 个页面；首页 / 订单 / 我的 三个是 tabBar 页
+    pages/…             11 个页面；首页 / 订单 / 我的 三个是 tabBar 页
 ```
 
 ---

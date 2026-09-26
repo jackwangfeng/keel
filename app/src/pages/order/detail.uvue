@@ -44,7 +44,10 @@
           <view class="divider"></view>
           <view class="kv"><text class="t-sub">商品金额</text><text class="t-body">{{ view!.goodsAmountText }}</text></view>
           <view class="kv"><text class="t-sub">运费</text><text class="t-body">{{ view!.freightText }}</text></view>
-          <view class="kv"><text class="t-sub">优惠</text><text class="t-body">{{ view!.discountText }}</text></view>
+          <view class="kv">
+            <text class="t-sub">{{ view!.couponId > 0 ? '优惠券' : '优惠' }}</text>
+            <text class="t-body coupon-used">{{ view!.couponId > 0 ? (couponName != '' ? couponName + ' ' : '') + '-' + view!.discountText : view!.discountText }}</text>
+          </view>
           <view class="kv"><text class="t-sub">已付</text><text class="t-body">{{ view!.paidText }}</text></view>
           <view class="divider"></view>
           <view class="kv"><text class="t-section">应付</text><text class="t-price">{{ view!.head.payableText }}</text></view>
@@ -116,11 +119,12 @@ import {
   getOrder,
   sandboxPayloadOf,
   settleSandbox,
+  listCoupons,
   ApiFailure,
   SandboxSettle,
 } from '@/api/client.uts'
 import { newIdempotencyKey } from '@/api/idempotency.uts'
-import { orderDetailView, yuan, OrderDetailView } from '@/api/view.uts'
+import { couponListQuery, orderDetailView, yuan, OrderDetailView } from '@/api/view.uts'
 
 type Channel = {
   key : string
@@ -154,6 +158,10 @@ export default {
       settleMessage: '',
       settleFailed: false,
       safeBottom: 0,
+      // 这一单用的券的名字。订单详情只回 user_coupon_id，名字从「我的优惠券」里对出来；
+      // 对不出来就是空串，那一行只写「优惠券 -¥X」（金额来自订单自己的 discount_cents）。
+      couponName: '',
+      couponLooked: false,
     }
   },
   computed: {
@@ -178,6 +186,29 @@ export default {
     this.load()
   },
   methods: {
+    // 按「已使用 → 使用中（待支付订单锁着的）→ 未使用（订单取消后退回的）」依次找，每种只看第一页。
+    // GET /coupons 是分页的，也没有按 id 查单张券的接口：券多的买家，要找的那张可能不在第一页。
+    // 所以找不到、或者请求失败，都只是不显示券名，不报错 —— 优惠金额照样显示。
+    // （服务端那边记下了，下一版考虑在订单详情里直接带券名。）
+    findCoupon(id: number, step: number) {
+      const statuses = ['used', 'locked', 'available']
+      if (step >= statuses.length) return
+      listCoupons(
+        couponListQuery(statuses[step], 1, 100),
+        (page) => {
+          for (let i = 0; i < page.items.length; i++) {
+            if (page.items[i].id == id) {
+              this.couponName = page.items[i].name
+              return
+            }
+          }
+          this.findCoupon(id, step + 1)
+        },
+        (_f: ApiFailure) => {
+          // 同上：不显示券名，不报错。
+        }
+      )
+    },
     load() {
       if (this.orderNo == '') {
         this.error = '没有指定订单'
@@ -191,6 +222,10 @@ export default {
           this.payable = v.head.payable
           this.error = ''
           this.notImplemented = false
+          if (v.couponId > 0 && !this.couponLooked) {
+            this.couponLooked = true
+            this.findCoupon(v.couponId, 0)
+          }
         },
         (f: ApiFailure) => {
           this.notImplemented = f.notImplemented
@@ -343,5 +378,8 @@ export default {
 }
 .bar-btn {
   width: 160px;
+}
+.coupon-used {
+  color: #B4462E;
 }
 </style>

@@ -8,6 +8,8 @@
     { "path": "pages/order/list",     "style": { "navigationBarTitleText": "我的订单" } },
     { "path": "pages/order/detail",   "style": { "navigationBarTitleText": "订单详情" } },
     { "path": "pages/me/index",       "style": { "navigationStyle": "custom" } },
+    { "path": "pages/coupon/center",  "style": { "navigationBarTitleText": "领券中心" } },
+    { "path": "pages/coupon/mine",    "style": { "navigationBarTitleText": "我的优惠券" } },
     { "path": "pages/settings/base",  "style": { "navigationBarTitleText": "服务地址" } }
   ],
   "tabBar": {

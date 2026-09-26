@@ -67,6 +67,11 @@ OPERATIONS = [
     ('get', '/orders/{order_no}', 'GetOrder'),
     ('post', '/orders/{order_no}/payments', 'CreatePayment'),
     ('post', '/search', 'Search'),
+    # 优惠券（买家侧）。POST /coupons/applicable 不在表里：它的 200 是裸数组，而这里的
+    # 生成只处理对象；结算页用试算响应里的 applicable_coupons（同一份结果）就够了。
+    ('get', '/coupon-templates', 'ListCouponTemplates'),
+    ('post', '/coupon-templates/{template_id}/claim', 'ClaimCoupon'),
+    ('get', '/coupons', 'ListCoupons'),
 ]
 
 HEADER = '''// 由 scripts/gen_uts_schema.py 从 docs/电商系统-OpenAPI.yaml 生成。**请勿手改。**

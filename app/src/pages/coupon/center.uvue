@@ -1,0 +1,194 @@
+<template>
+  <view class="page">
+    <scroll-view class="scroll" direction="vertical">
+      <view class="body">
+        <view v-if="!loggedIn" class="empty">
+          <view class="empty-mark"><text class="empty-mark-text">券</text></view>
+          <text class="t-sub">登录后领取优惠券</text>
+          <view class="gap-m"></view>
+          <view class="btn cta" @click="goLogin"><text class="btn-text">登录</text></view>
+        </view>
+
+        <view v-if="message != ''" :class="['card', failed ? 'result-err' : 'result-ok']">
+          <text :class="failed ? 't-err' : 't-ok'">{{ message }}</text>
+        </view>
+
+        <view v-if="error != ''" class="card">
+          <text class="t-err">{{ error }}</text>
+          <view class="gap-m"></view>
+          <view class="btn-ghost" @click="load"><text class="btn-ghost-text">重新加载</text></view>
+        </view>
+
+        <view v-for="r in rows" :key="r.id" class="ticket">
+          <view class="ticket-value"><text class="ticket-value-text">{{ r.valueText }}</text></view>
+          <view class="ticket-body">
+            <text class="ticket-name">{{ r.name }}</text>
+            <text class="t-sub">{{ r.ruleText }}</text>
+            <text class="t-hint">{{ r.scopeText }} · {{ r.validText }}</text>
+            <view class="between claim-foot">
+              <text class="t-hint">{{ r.remainingText }}</text>
+              <view :class="['claim-btn', r.canClaim ? '' : 'claim-btn-off']" @click="claim(r.id)">
+                <text :class="r.canClaim ? 'claim-text' : 'claim-text-off'">{{ claiming == r.id ? '领取中…' : r.actionText }}</text>
+              </view>
+            </view>
+          </view>
+        </view>
+
+        <view v-if="loggedIn && loaded && rows.length == 0 && error == ''" class="empty">
+          <view class="empty-mark"><text class="empty-mark-text">券</text></view>
+          <text class="t-sub">暂时没有可以领的券</text>
+        </view>
+        <view v-if="loggedIn" class="foot">
+          <text class="t-link" @click="goMine">我的优惠券 ›</text>
+        </view>
+      </view>
+    </scroll-view>
+  </view>
+</template>
+
+<script>
+import {
+  claimCoupon,
+  listCouponTemplates,
+  ApiFailure,
+  PROBLEM_COUPON_CLAIM_ENDED,
+  PROBLEM_COUPON_CLAIM_LIMIT_REACHED,
+  PROBLEM_COUPON_SOLD_OUT,
+} from '@/api/client.uts'
+import { isLoggedIn } from '@/api/config.uts'
+import { newIdempotencyKey } from '@/api/idempotency.uts'
+import { claimRow, templateListQuery, ClaimRow } from '@/api/view.uts'
+
+export default {
+  data() {
+    return {
+      rows: [] as ClaimRow[],
+      loggedIn: false,
+      loaded: false,
+      error: '',
+      message: '',
+      failed: false,
+      // 正在领的那张模板，0 = 没有。领的时候按钮不响应第二下。
+      claiming: 0,
+      // 每张模板一个幂等键，这个页面活着期间不变（keyIds[i] 对应 keyVals[i]）。
+      // 网络超时后用户再点一次，发的是同一个键 —— 服务端当重放回 201，而不是再领一张、
+      // 或者因为每人限领回一个「已达上限」，把一次成功的领取说成失败。
+      keyIds: [] as number[],
+      keyVals: [] as string[],
+    }
+  },
+  onShow() {
+    this.loggedIn = isLoggedIn()
+    if (this.loggedIn) this.load()
+  },
+  methods: {
+    load() {
+      this.error = ''
+      listCouponTemplates(
+        templateListQuery(1, 50),
+        (page) => {
+          const rows: ClaimRow[] = []
+          for (let i = 0; i < page.items.length; i++) {
+            rows.push(claimRow(page.items[i]))
+          }
+          this.rows = rows
+          this.loaded = true
+        },
+        (f: ApiFailure) => {
+          this.error = f.message
+          this.loaded = true
+        }
+      )
+    },
+    keyFor(id: number): string {
+      for (let i = 0; i < this.keyIds.length; i++) {
+        if (this.keyIds[i] == id) return this.keyVals[i]
+      }
+      const k = newIdempotencyKey()
+      this.keyIds.push(id)
+      this.keyVals.push(k)
+      return k
+    },
+    claim(id: number) {
+      if (this.claiming > 0) return
+      let can = false
+      for (let i = 0; i < this.rows.length; i++) {
+        if (this.rows[i].id == id) can = this.rows[i].canClaim
+      }
+      if (!can) return
+      this.claiming = id
+      this.message = ''
+      claimCoupon(
+        id,
+        this.keyFor(id),
+        (coupon, replayed) => {
+          this.claiming = 0
+          this.failed = false
+          this.message = replayed ? '「' + coupon.name + '」刚才已经领到了' : '已领取「' + coupon.name + '」，下单时自动可用'
+          // 领到之后按钮要变成「已领取」、剩余张数要减一：这两个都是服务端算的，重新拉一次。
+          this.load()
+        },
+        (f: ApiFailure) => {
+          this.claiming = 0
+          this.failed = true
+          const t = f.problem != null ? f.problem!.type : ''
+          if (t == PROBLEM_COUPON_CLAIM_LIMIT_REACHED) {
+            this.message = '这张券你已经领过了'
+          } else if (t == PROBLEM_COUPON_SOLD_OUT) {
+            this.message = '来晚了，这张券已经领完'
+          } else if (t == PROBLEM_COUPON_CLAIM_ENDED) {
+            this.message = '这张券的领取时间已经结束'
+          } else if (f.status == 404) {
+            this.message = '这张券已经下架了'
+          } else {
+            this.message = f.message
+          }
+          // 列表上的状态已经过时（别人领完了 / 活动结束了），刷新一次让按钮对上。
+          this.load()
+        }
+      )
+    },
+    goLogin() {
+      uni.navigateTo({ url: '/pages/auth/login' })
+    },
+    goMine() {
+      uni.navigateTo({ url: '/pages/coupon/mine' })
+    },
+  },
+}
+</script>
+
+<style>
+.cta {
+  width: 160px;
+}
+.claim-foot {
+  margin-top: 10px;
+}
+.claim-btn {
+  padding: 6px 16px;
+  border-radius: 14px;
+  background-color: #3B2A20;
+}
+.claim-btn-off {
+  background-color: #EEE9E3;
+}
+.claim-text {
+  font-size: 13px;
+  color: #FFFDF9;
+}
+.claim-text-off {
+  font-size: 13px;
+  color: #7A6E64;
+}
+.result-ok {
+  background-color: #EEF3EB;
+}
+.result-err {
+  background-color: #F8EAE5;
+}
+.foot {
+  padding: 24px 0;
+  align-items: center;
+}
+</style>

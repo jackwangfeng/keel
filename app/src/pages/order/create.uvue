@@ -41,6 +41,34 @@
           </view>
         </view>
 
+        <!-- 优惠券。一单一张。第一次试算后自动选最省的那张（服务端排好序的第一张），
+             之后以用户的选择为准 —— 包括「不使用」，不会被下一次试算悄悄改回去。
+             用不了（409 coupon-not-applicable）时照实显示原因并展开列表让用户换，
+             **不**自动退回原价：那样应付金额会在用户眼皮底下变大而他不知道为什么。 -->
+        <view v-if="loggedIn && (coupons.length > 0 || couponId > 0)" class="card">
+          <view class="between" @click="couponOpen = !couponOpen">
+            <text class="t-overline">优惠券</text>
+            <view class="row">
+              <text :class="couponId > 0 ? 'coupon-on' : 't-hint'">{{ couponSummary }}</text>
+              <text class="chev">{{ couponOpen ? '⌃' : '›' }}</text>
+            </view>
+          </view>
+          <view v-if="couponOpen">
+            <view v-for="c in coupons" :key="c.id" class="coupon-opt row" @click="pickCoupon(c.id)">
+              <view class="fill">
+                <text class="t-body">{{ c.name }}</text>
+                <text class="t-hint">{{ c.ruleText }} · {{ c.validText }}</text>
+              </view>
+              <text class="coupon-save">{{ c.saveText }}</text>
+              <view :class="['radio', c.id == couponId ? 'radio-on' : '']"></view>
+            </view>
+            <view class="coupon-opt row" @click="pickCoupon(0)">
+              <text class="t-body fill">不使用优惠券</text>
+              <view :class="['radio', couponId == 0 ? 'radio-on' : '']"></view>
+            </view>
+          </view>
+        </view>
+
         <!-- 金额 -->
         <view class="card">
           <view v-if="!loggedIn" class="center">
@@ -102,10 +130,10 @@
 </template>
 
 <script>
-import { createOrder, getProduct, previewOrder, ApiFailure, PROBLEM_IDEMPOTENCY_KEY_IN_FLIGHT, PROBLEM_IDEMPOTENCY_KEY_REUSED } from '@/api/client.uts'
+import { createOrder, getProduct, previewOrder, ApiFailure, PROBLEM_COUPON_NOT_APPLICABLE, PROBLEM_IDEMPOTENCY_KEY_IN_FLIGHT, PROBLEM_IDEMPOTENCY_KEY_REUSED } from '@/api/client.uts'
 import { newIdempotencyKey } from '@/api/idempotency.uts'
 import { isLoggedIn, rememberOrder } from '@/api/config.uts'
-import { coverOf, orderRequest, previewView, productDetailView, PreviewView } from '@/api/view.uts'
+import { coverOf, orderRequest, previewView, productDetailView, CouponOption, PreviewView } from '@/api/view.uts'
 import { ensureStore, CurrentStore } from '@/api/store.uts'
 
 export default {
@@ -138,7 +166,26 @@ export default {
       // 试算成功的前提是它已经非 0，所以提交时（pv != null）可以直接用。
       storeId: 0,
       outOfRange: false,
+      // 选中的券（user_coupon_id），0 = 不用券。
+      couponId: 0,
+      // 还没替用户选过券：第一次试算回来时自动选最省的那张，选过一次（或用户自己选了）就关掉。
+      couponAuto: true,
+      couponOpen: false,
+      // 最近一次**成功**试算给出的可用券。单独存一份而不是只放在 pv 里：
+      // 选的券用不了时 pv 是 null，这时候列表恰恰最需要还在，好让用户换一张。
+      coupons: [] as CouponOption[],
     }
+  },
+  computed: {
+    couponSummary(): string {
+      if (this.couponId > 0) {
+        for (let i = 0; i < this.coupons.length; i++) {
+          if (this.coupons[i].id == this.couponId) return this.coupons[i].name + ' ' + this.coupons[i].saveText
+        }
+        return '已选 1 张'
+      }
+      return this.coupons.length > 0 ? this.coupons.length.toString() + ' 张可用' : '暂无可用'
+    },
   },
   onLoad(options: OnLoadOptions) {
     this.safeBottom = uni.getWindowInfo().safeAreaInsets.bottom
@@ -221,12 +268,13 @@ export default {
     //
     // 试算过才带 expected_payable_cents（防以旧价成交），没试算过不带。
     body(storeId: number) {
+      const coupon: number | null = this.couponId > 0 ? this.couponId : null
       if (this.pv != null) {
         return orderRequest(parseInt(this.skuIdText), this.quantity,
-          parseInt(this.addressIdText), storeId, this.pv!.payableCents)
+          parseInt(this.addressIdText), storeId, this.pv!.payableCents, coupon)
       }
       return orderRequest(parseInt(this.skuIdText), this.quantity,
-        parseInt(this.addressIdText), storeId, null)
+        parseInt(this.addressIdText), storeId, null, coupon)
     },
     // 改了订单内容就把试算结果作废。
     //
@@ -257,22 +305,50 @@ export default {
     },
     runPreview(storeId: number) {
       this.previewing = true
-      // 请求发出时的数量。连点 + 号时，只有最后一次的结果算数。
+      // 请求发出时的数量与券。连点 + 号、连着换券时，只有最后一次的结果算数。
       const qty = this.quantity
+      const coupon = this.couponId
       previewOrder(
         this.body(storeId),
         (p) => {
-          if (qty != this.quantity) return
+          if (qty != this.quantity || coupon != this.couponId) return
+          const v = previewView(p)
+          this.coupons = v.coupons
+          if (this.couponAuto) {
+            this.couponAuto = false
+            if (coupon == 0 && v.coupons.length > 0) {
+              // 先不带券算一次拿到可用列表，再带上最省的那张算一次。
+              // 中间这份不带券的结果不摆出来：应付金额闪一下大、再变小，没有意义。
+              this.couponId = v.coupons[0].id
+              this.runPreview(storeId)
+              return
+            }
+          }
           this.previewing = false
-          this.pv = previewView(p)
+          this.pv = v
         },
         (f: ApiFailure) => {
-          if (qty != this.quantity) return
+          if (qty != this.quantity || coupon != this.couponId) return
           this.previewing = false
           this.failed = true
+          // coupon-not-applicable 的 detail 就是原因（「未满 ¥50」之类），failureOf 已经把它
+          // 放进 message 了。展开券列表，让用户换一张或不用 —— 由他决定，不替他退回原价。
+          if (f.problem != null && f.problem!.type == PROBLEM_COUPON_NOT_APPLICABLE) {
+            this.couponOpen = true
+          }
           this.message = f.message
         }
       )
+    },
+    pickCoupon(id: number) {
+      this.couponAuto = false
+      this.couponOpen = false
+      if (id == this.couponId && this.pv != null) return
+      this.couponId = id
+      this.failed = false
+      this.message = ''
+      this.invalidate()
+      this.preview()
     },
     submit() {
       if (!isLoggedIn()) {
@@ -322,6 +398,16 @@ export default {
             // 并且把「换新键」做成一个要用户按的按钮，而不是偷偷换掉。
             this.needNewKey = true
             this.message = '订单内容和刚才提交的那笔不一样了。如果要按现在的内容再下一单，请作为新订单提交。'
+            return
+          }
+          if (t == PROBLEM_COUPON_NOT_APPLICABLE) {
+            // 试算时还能用，提交时被别的订单锁走了（或刚好过期）。这一单没建成，
+            // 所以换一个幂等键不会造成重复下单；不换的话，换了券再提交就是「同键异体」422。
+            // 不自动改成不用券：应付金额会变，得让用户重新看一眼再按提交。
+            this.idemKey = newIdempotencyKey()
+            this.pv = null
+            this.couponOpen = true
+            this.message = f.message + '。请换一张优惠券或选择不使用。'
             return
           }
           this.message = f.message
@@ -404,5 +490,39 @@ export default {
 }
 .bar-btn {
   width: 160px;
+}
+.coupon-on {
+  font-size: 14px;
+  color: #B4462E;
+}
+.chev {
+  margin-left: 6px;
+  font-size: 16px;
+  color: #A89C90;
+}
+.coupon-opt {
+  padding: 12px 0;
+  border-top-width: 1px;
+  border-top-style: solid;
+  border-top-color: #F0E8DE;
+  margin-top: 10px;
+}
+.coupon-save {
+  font-size: 14px;
+  font-weight: bold;
+  color: #B4462E;
+  margin: 0 12px;
+}
+.radio {
+  width: 18px;
+  height: 18px;
+  border-radius: 9px;
+  border-width: 1px;
+  border-style: solid;
+  border-color: #CFC3B5;
+}
+.radio-on {
+  border-width: 5px;
+  border-color: #3B2A20;
 }
 </style>

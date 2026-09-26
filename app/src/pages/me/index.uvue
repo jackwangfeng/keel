@@ -19,6 +19,16 @@
             <text class="chev">›</text>
           </view>
           <view class="line"></view>
+          <view class="item" @click="goCoupons">
+            <text class="t-body fill">我的优惠券</text>
+            <text class="chev">›</text>
+          </view>
+          <view class="line"></view>
+          <view class="item" @click="goCouponCenter">
+            <text class="t-body fill">领券中心</text>
+            <text class="chev">›</text>
+          </view>
+          <view class="line"></view>
           <view class="item" @click="goSettings">
             <text class="t-body fill">服务地址</text>
             <text class="t-hint">{{ host }}</text>
@@ -87,6 +97,13 @@ export default {
     },
     goOrders() {
       uni.switchTab({ url: '/pages/order/list' })
+    },
+    // 两个券页自己会在未登录时显示登录入口，这里不拦。
+    goCoupons() {
+      uni.navigateTo({ url: '/pages/coupon/mine' })
+    },
+    goCouponCenter() {
+      uni.navigateTo({ url: '/pages/coupon/center' })
     },
     goSettings() {
       uni.navigateTo({ url: '/pages/settings/base' })

@@ -73,7 +73,8 @@ IMPORT_RE = re.compile(r"""(from\s+|import\s*\(\s*)(['"])([^'"]+)\.uts\2""")
 
 # 收契约请求类型的接口函数（app/src/api/client.uts）。它们的第一个参数是一个
 # 契约 schema；页面必须传 view.uts 里某个构造函数的返回值，不许就地写字面量。
-REQUEST_FNS = ('listProducts', 'search', 'previewOrder', 'createOrder')
+REQUEST_FNS = ('listProducts', 'search', 'previewOrder', 'createOrder',
+               'listCouponTemplates', 'listCoupons')
 
 SCHEMA_IMPORT_RE = re.compile(r"""from\s+['"][^'"]*/schema\.uts['"]""")
 INLINE_LITERAL_RE = re.compile(r'\b(%s)\(\s*\{' % '|'.join(REQUEST_FNS))

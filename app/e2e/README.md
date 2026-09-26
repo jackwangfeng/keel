@@ -50,9 +50,15 @@ const orderNo = await page.data('orderNo')
 带「仅本次允许」标记、照样弹自己的权限框，靠 adb 走不通（实测），所以没留这段。
 真拿坐标解析那条路径目前没有自动化覆盖。
 
+`coupon.test.js`：演示买家的券状态跑一次变一次（「9 折」第一次领是 201，之后是 409 每人限领；
+结算用例会把自动选上的券真的用掉）。所以它断言的是**终态**：领完按钮是「已领取」、这张券在
+我的优惠券某个 tab 里；结算页那一步先从测试进程问服务端手上有没有未使用的券（`httpPost` 登录拿
+token、`httpGet` 带 token），有才断言「自动用上了最省的那张」，没有就断言「不带券照常算钱」。
+想走完整的「有券」路径，请服务端重置演示库。
+
 Android 的自动化运行时不支持经 `program.callUniMethod('request', …)` 调 `uni.request`
-（"uni.request not exists"）；要从用例里问服务端，用 `helpers.js` 的 `httpGet`（jest 27 的
-测试环境里没有全局 `fetch`）。
+（"uni.request not exists"）；要从用例里问服务端，用 `helpers.js` 的 `httpGet` / `httpPost`
+（jest 27 的测试环境里没有全局 `fetch`）。
 
 ## 它是怎么接上的
 

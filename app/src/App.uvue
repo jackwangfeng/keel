@@ -301,4 +301,39 @@ body {
   font-size: 26px;
   color: #B5733A;
 }
+
+/* ---------- 券 ----------
+   领券中心与我的优惠券共用：左边一块深色写面额，右边写规则 / 范围 / 有效期。 */
+.ticket {
+  flex-direction: row;
+  background-color: #FFFDF9;
+  border-radius: 14px;
+  overflow: hidden;
+  margin-top: 12px;
+}
+.ticket-off {
+  opacity: 0.55;
+}
+.ticket-value {
+  width: 96px;
+  background-color: #3B2A20;
+  align-items: center;
+  justify-content: center;
+  padding: 16px 6px;
+}
+.ticket-value-text {
+  font-size: 24px;
+  font-weight: bold;
+  color: #F3D9B1;
+}
+.ticket-body {
+  flex: 1;
+  padding: 14px 14px 14px 14px;
+}
+.ticket-name {
+  font-size: 15px;
+  font-weight: bold;
+  color: #2A211B;
+  margin-bottom: 4px;
+}
 </style>

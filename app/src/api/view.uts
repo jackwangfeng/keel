@@ -17,7 +17,12 @@
 //     不是第一道。）
 
 import {
+  ApplicableCoupon,
   Category,
+  ClaimableCouponTemplate,
+  CouponScope,
+  ListCouponTemplatesQuery,
+  ListCouponsQuery,
   ListProductsQuery,
   Money,
   Order,
@@ -32,6 +37,7 @@ import {
   SearchHit,
   SearchRequest,
   Sku,
+  UserCoupon,
 } from './schema.uts'
 
 // ---------------------------------------------------------------------------
@@ -367,6 +373,8 @@ export type OrderDetailView = {
   freightText : string
   discountText : string
   paidText : string
+  /** 这一单用的券（user_coupon_id），0 = 没用券。券名要另查（见订单详情页）。 */
+  couponId : number
   items : OrderItemRow[]
   payments : PaymentRow[]
 }
@@ -412,6 +420,7 @@ export function orderDetailView(o : OrderDetail) : OrderDetailView {
     freightText: yuan(o.freight_cents),
     discountText: yuan(o.discount_cents),
     paidText: yuan(o.paid_cents),
+    couponId: o.user_coupon_id != null ? o.user_coupon_id! : 0,
     items: rows,
   } as OrderDetailView
 }
@@ -427,16 +436,205 @@ export type PreviewView = {
   payableText : string
   /** 提交订单时要回填给服务端的 expected_payable_cents（契约：对不上回 409）。 */
   payableCents : number
+  /** 服务端认下的券（回显的 user_coupon_id），0 = 这次试算没用券。 */
+  couponId : number
+  /** 这一单能用的券，按优惠金额从大到小（服务端排好的，第一张就是最省的）。 */
+  coupons : CouponOption[]
 }
 
 export function previewView(p : OrderPreview) : PreviewView {
+  const options : CouponOption[] = []
+  const list = p.applicable_coupons
+  if (list != null) {
+    for (let i = 0; i < list!.length; i++) {
+      options.push(couponOption(list![i]))
+    }
+  }
   return {
     goodsAmountText: yuan(p.goods_amount_cents),
     freightText: yuan(p.freight_cents),
     discountText: yuan(p.discount_cents),
     payableText: yuan(p.payable_cents),
     payableCents: p.payable_cents,
+    couponId: p.user_coupon_id != null ? p.user_coupon_id! : 0,
+    coupons: options,
   } as PreviewView
+}
+
+// ---------------------------------------------------------------------------
+// 优惠券
+// ---------------------------------------------------------------------------
+//
+// 三种券的形状（可领的模板 / 我的券 / 这一单能用的券）字段大半重合，但在 UTS 里是
+// 三个互不相干的类（名义类型，理由同 orderDetailView 里那段），所以共用的文案函数
+// 只收原始字段，不收对象。
+
+/** 「¥50.00」->「¥50」，「¥9.90」照旧。券面上的整数金额带 .00 是噪音。 */
+function faceYuan(cents : number) : string {
+  const t = yuan(cents)
+  return t.endsWith('.00') ? t.substring(0, t.length - 3) : t
+}
+
+/** 折扣率（千分比，900 = 9 折）->「9折」「8.5折」。 */
+function rateText(rate : number) : string {
+  const tenth = Math.round(rate / 10)
+  const whole = Math.floor(tenth / 10)
+  const frac = tenth % 10
+  return (frac == 0 ? whole.toString() : whole.toString() + '.' + frac.toString()) + '折'
+}
+
+/** 券面上最大的那几个字：减多少 / 几折 / 包邮。 */
+export function couponValueText(couponType : number, discountCents : number, discountRate : number) : string {
+  if (couponType == 2) return rateText(discountRate)
+  if (couponType == 4) return '包邮'
+  return faceYuan(discountCents)
+}
+
+/** 使用规则：满 50 减 10 / 满 100 打 9 折，最高减 30 / 立减 5 / 满 99 包邮。 */
+export function couponRuleText(
+  couponType : number,
+  thresholdCents : number,
+  discountCents : number,
+  discountRate : number,
+  maxDiscountCents : number
+) : string {
+  const gate = thresholdCents > 0 ? '满' + faceYuan(thresholdCents) : ''
+  if (couponType == 1) {
+    return gate != '' ? gate + '减' + faceYuan(discountCents) : '无门槛减' + faceYuan(discountCents)
+  }
+  if (couponType == 2) {
+    let t = (gate != '' ? gate + '打' : '全场') + rateText(discountRate)
+    if (maxDiscountCents > 0) t += '，最高减' + faceYuan(maxDiscountCents)
+    return t
+  }
+  if (couponType == 3) return '立减' + faceYuan(discountCents)
+  if (couponType == 4) return gate != '' ? gate + '包邮' : '无门槛包邮'
+  return ''
+}
+
+/**
+ * 适用范围：「全场可用」/「限华北」/「限咖啡豆、挂耳；不含 xx 店」。
+ * 没有范围行、或只有全场那一行 = 全场。target_name 缺了（服务端查不到名字）就写编号，
+ * 不写一个空的「限」。
+ */
+export function couponScopeText(scopes : CouponScope[]) : string {
+  const inc : string[] = []
+  const exc : string[] = []
+  for (let i = 0; i < scopes.length; i++) {
+    const sc = scopes[i]
+    if (sc.scope_type == 1) continue
+    let name = sc.target_name != null ? sc.target_name! : ''
+    if (name == '') name = '#' + (sc.target_id != null ? sc.target_id!.toString() : '?')
+    if (sc.include) inc.push(name)
+    else exc.push(name)
+  }
+  let t = inc.length > 0 ? '限' + inc.join('、') : '全场可用'
+  if (exc.length > 0) t += '；不含' + exc.join('、')
+  return t
+}
+
+/** 「2026-10-26T…」->「2026-10-26」。 */
+function day(iso : string) : string {
+  return iso.length >= 10 ? iso.substring(0, 10) : iso
+}
+
+/** 领券中心的一行。 */
+export type ClaimRow = {
+  id : number
+  name : string
+  valueText : string
+  ruleText : string
+  scopeText : string
+  validText : string
+  canClaim : boolean
+  /** 按钮上的字：领取 / 已领取 / 已领完 / 不可领。 */
+  actionText : string
+  /** 「剩 12 张」；不限量（remaining 为 null）就是空串，不写「剩 ∞ 张」。 */
+  remainingText : string
+}
+
+export function claimRow(t : ClaimableCouponTemplate) : ClaimRow {
+  let valid = ''
+  if (t.valid_mode == 2) {
+    valid = '领取后 ' + t.valid_days.toString() + ' 天内有效'
+  } else {
+    const a = t.valid_start_at != null ? day(t.valid_start_at!) : ''
+    const b = t.valid_end_at != null ? day(t.valid_end_at!) : ''
+    valid = a + ' 至 ' + b
+  }
+  let action = '领取'
+  if (!t.can_claim) {
+    // 次序有讲究：领过又领完了的，对这个人来说是「已领取」—— 那是他关心的那件事。
+    if (t.claimed_count > 0) action = '已领取'
+    else if (t.remaining != null && t.remaining! <= 0) action = '已领完'
+    else action = '不可领'
+  }
+  return {
+    id: t.id,
+    name: t.name,
+    valueText: couponValueText(t.coupon_type, t.discount_cents, t.discount_rate),
+    ruleText: couponRuleText(t.coupon_type, t.threshold_cents, t.discount_cents, t.discount_rate, t.max_discount_cents),
+    scopeText: couponScopeText(t.scopes),
+    validText: valid,
+    canClaim: t.can_claim,
+    actionText: action,
+    remainingText: t.remaining != null ? '剩 ' + t.remaining!.toString() + ' 张' : '',
+  } as ClaimRow
+}
+
+/** 我的优惠券的一行。 */
+export type CouponRow = {
+  id : number
+  name : string
+  valueText : string
+  ruleText : string
+  scopeText : string
+  validText : string
+}
+
+export function couponRow(c : UserCoupon) : CouponRow {
+  const used = c.used_at
+  return {
+    id: c.id,
+    name: c.name,
+    valueText: couponValueText(c.coupon_type, c.discount_cents, c.discount_rate),
+    ruleText: couponRuleText(c.coupon_type, c.threshold_cents, c.discount_cents, c.discount_rate, c.max_discount_cents),
+    scopeText: couponScopeText(c.scopes),
+    validText: used != null ? '使用于 ' + shortTime(used!) : day(c.valid_start_at) + ' 至 ' + day(c.valid_end_at),
+  } as CouponRow
+}
+
+/** 结算页选券列表里的一项。 */
+export type CouponOption = {
+  id : number
+  name : string
+  ruleText : string
+  validText : string
+  /**
+   * 「-¥10」：**这一单**能省多少（applicable_discount_cents），不是券面额。
+   * 9 折券的面额字段是 0，用面额的话它在列表里显示「省 ¥0」。
+   */
+  saveText : string
+}
+
+export function couponOption(c : ApplicableCoupon) : CouponOption {
+  return {
+    id: c.id,
+    name: c.name,
+    ruleText: couponRuleText(c.coupon_type, c.threshold_cents, c.discount_cents, c.discount_rate, c.max_discount_cents),
+    validText: day(c.valid_end_at) + ' 到期',
+    saveText: '-' + yuan(c.applicable_discount_cents),
+  } as CouponOption
+}
+
+/** 领券中心的查询。 */
+export function templateListQuery(page : number, pageSize : number) : ListCouponTemplatesQuery {
+  return { page: page, page_size: pageSize } as ListCouponTemplatesQuery
+}
+
+/** 我的优惠券的查询。status：available / locked / used / expired。 */
+export function couponListQuery(status : string, page : number, pageSize : number) : ListCouponsQuery {
+  return { status: status, page: page, page_size: pageSize } as ListCouponsQuery
 }
 
 // ---------------------------------------------------------------------------
@@ -526,13 +724,16 @@ export function searchRequest(query : string, size : number, storeId : number | 
  * UTS 的可选参数落到 Kotlin 是 `Money?` 且**没有默认值**，调用处一省略就编不过
  * （"No value passed for parameter 'expectedPayableCents'"，make app-apk 实测；
  * tsc 与 uni build 都是绿的，因为 Kotlin 编译只在打 apk 时才发生）。
+ *
+ * userCouponId 同理写成必填的 `number | null`，null = 不用券。一单只能用一张。
  */
 export function orderRequest(
   skuId : number,
   quantity : number,
   addressId : number,
   storeId : number,
-  expectedPayableCents : Money | null
+  expectedPayableCents : Money | null,
+  userCouponId : number | null
 ) : OrderCreateRequest {
   const req : OrderCreateRequest = {
     items: [{ sku_id: skuId, quantity: quantity }],
@@ -541,6 +742,9 @@ export function orderRequest(
   }
   if (expectedPayableCents != null) {
     req.expected_payable_cents = expectedPayableCents!
+  }
+  if (userCouponId != null) {
+    req.user_coupon_id = userCouponId!
   }
   return req
 }

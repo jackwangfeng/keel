@@ -1349,3 +1349,32 @@ export type SearchResponse = {
   strategy : string
   trace_id? : string
 }
+
+/** GET /coupon-templates 的 query 参数 */
+export type ListCouponTemplatesQuery = {
+  page? : number
+  page_size? : number
+}
+
+/** GET /coupon-templates 的 200 响应体 */
+export type ListCouponTemplatesResponse = {
+  page : number
+  page_size : number
+  total : number
+  items : ClaimableCouponTemplate[]
+}
+
+/** GET /coupons 的 query 参数 */
+export type ListCouponsQuery = {
+  page? : number
+  page_size? : number
+  status? : string
+}
+
+/** GET /coupons 的 200 响应体 */
+export type ListCouponsResponse = {
+  page : number
+  page_size : number
+  total : number
+  items : UserCoupon[]
+}

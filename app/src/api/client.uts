@@ -21,6 +21,11 @@
 // 会一直编译得过 —— 直到线上。
 
 import {
+  ListCouponTemplatesQuery,
+  ListCouponTemplatesResponse,
+  ListCouponsQuery,
+  ListCouponsResponse,
+  UserCoupon,
   Category,
   PaymentCreateRequest,
   ListOrdersQuery,
@@ -58,6 +63,11 @@ export const PROBLEM_IDEMPOTENCY_KEY_IN_FLIGHT = 'https://keel.dev/problems/idem
 export const PROBLEM_IDEMPOTENCY_KEY_REUSED = 'https://keel.dev/problems/idempotency-key-reused'
 export const PROBLEM_INSUFFICIENT_STOCK = 'https://keel.dev/problems/insufficient-stock'
 export const PROBLEM_PRICE_CHANGED = 'https://keel.dev/problems/price-changed'
+// 优惠券（internal/problem/problem.go 那一节）。
+export const PROBLEM_COUPON_NOT_APPLICABLE = 'https://keel.dev/problems/coupon-not-applicable'
+export const PROBLEM_COUPON_SOLD_OUT = 'https://keel.dev/problems/coupon-sold-out'
+export const PROBLEM_COUPON_CLAIM_LIMIT_REACHED = 'https://keel.dev/problems/coupon-claim-limit-reached'
+export const PROBLEM_COUPON_CLAIM_ENDED = 'https://keel.dev/problems/coupon-claim-ended'
 
 /**
  * 一次失败的调用。
@@ -541,6 +551,79 @@ export function createPayment(
       }
       onOk(body!, replayed)
     }, onErr)
+}
+
+// ---------------------------------------------------------------------------
+// 优惠券
+// ---------------------------------------------------------------------------
+
+/** GET /coupon-templates：领券中心。要登录（can_claim / claimed_count 是按当前买家算的）。 */
+export function listCouponTemplates(
+  query : ListCouponTemplatesQuery,
+  onOk : (page : ListCouponTemplatesResponse) => void,
+  onErr : FailureHandler
+) {
+  const parts : string[] = []
+  pushIf(parts, param('page', query.page))
+  pushIf(parts, param('page_size', query.page_size))
+  send('GET', '/coupon-templates', queryString(parts), null, null,
+    (_s : number, text : string, _r : boolean) => {
+    const body = JSON.parse<ListCouponTemplatesResponse>(text)
+    if (body == null) {
+      onErr(decodeFailure(200))
+      return
+    }
+    onOk(body!)
+  }, onErr)
+}
+
+/**
+ * POST /coupon-templates/{id}/claim：领一张。**必须带 Idempotency-Key**，201 返回领到的券。
+ *
+ * 键由调用方给，同一张模板的重试要复用同一个键（见领券中心页）：手抖连点两下，第二下是重放，
+ * 不会多领一张 —— 何况每人限领，多出来的那下会被 409 coupon-claim-limit-reached 打回来，
+ * 页面就错误地说「已达上限」而其实是刚刚领成功了。
+ * 409 按 type 区分：领完了 / 达到每人限领 / 活动结束；404 是模板不存在、停用或不可领。
+ */
+export function claimCoupon(
+  templateId : number,
+  idempotencyKey : string,
+  onOk : (coupon : UserCoupon, replayed : boolean) => void,
+  onErr : FailureHandler
+) {
+  send('POST', '/coupon-templates/' + templateId.toString() + '/claim', '', null, idempotencyKey,
+    (_s : number, text : string, replayed : boolean) => {
+      const body = JSON.parse<UserCoupon>(text)
+      if (body == null) {
+        onErr(decodeFailure(201))
+        return
+      }
+      onOk(body!, replayed)
+    }, onErr)
+}
+
+/** GET /coupons：我的优惠券。status 取 available / locked / used / expired（过期是读时现算的）。 */
+export function listCoupons(
+  query : ListCouponsQuery,
+  onOk : (page : ListCouponsResponse) => void,
+  onErr : FailureHandler
+) {
+  const parts : string[] = []
+  pushIf(parts, param('page', query.page))
+  pushIf(parts, param('page_size', query.page_size))
+  const st = query.status
+  if (st != null && st! != '') {
+    parts.push('status=' + encodeURIComponent(st!))
+  }
+  send('GET', '/coupons', queryString(parts), null, null,
+    (_s : number, text : string, _r : boolean) => {
+    const body = JSON.parse<ListCouponsResponse>(text)
+    if (body == null) {
+      onErr(decodeFailure(200))
+      return
+    }
+    onOk(body!)
+  }, onErr)
 }
 
 // ---------------------------------------------------------------------------
