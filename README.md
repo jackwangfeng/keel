@@ -282,7 +282,7 @@ Keel ships with its clients, not just an API.
 
 | Client | Stack | Targets |
 |---|---|---|
-| **Storefront** | uni-app x (UTS compiled to native Kotlin / Swift) | Android · iOS · H5 — one codebase; WeChat Mini Program planned |
+| **Storefront** | uni-app x (UTS compiled to native Kotlin / Swift) | Android · iOS · H5 · WeChat Mini Program — one codebase (the Mini Program runs in the WeChat devtools simulator; not yet previewed on a device or published) |
 | **Admin console** | Vue 3 + Element Plus | Desktop web |
 
 Every client is generated from the same OpenAPI spec, so a contract change
@@ -296,8 +296,10 @@ happens inside WeChat, and no major open-source commerce platform targets it.
 If you are selling in that market, a web-only storefront is not a storefront.
 
 > v0.1.0 ships the admin console and the buyer app (an Android apk can be
-> built locally; the H5 build deploys as-is). The Mini Program form and a
-> desktop-optimized web storefront follow.
+> built locally; the H5 build deploys as-is). The WeChat Mini Program now builds
+> with `make app-build-mp-weixin` and runs browse, login, cart and checkout in
+> the WeChat devtools simulator; on-device preview and publishing need an HTTPS
+> domain. A desktop-optimized web storefront follows.
 
 ---
 
