@@ -112,6 +112,10 @@ type Order struct {
 	// UserCouponID 是这一单用的券（00026）。SAGA 的券分支从这里知道锁哪一张 ——
 	// 分支只拿到三个字符串，这件事推不出来，只能落在订单行上。
 	UserCouponID *int64
+
+	// CouponName 是下单时的券名快照（00029），与 UserCouponID 同进同出。
+	// 由 CreateOrderDraft 那条 INSERT ... SELECT 从券模板现读写入，之后模板改名不影响它。
+	CouponName *string
 }
 
 // optTime 把 pgtype.Timestamptz 收成 *time.Time：NULL → nil。
@@ -414,6 +418,7 @@ func (t tenantTx) CreateOrderDraft(ctx context.Context, d NewOrderDraft) (Order,
 		ExpireAt:         r.ExpireAt.Time,
 		CreatedAt:        r.CreatedAt.Time,
 		UserCouponID:     r.UserCouponID,
+		CouponName:       r.CouponName,
 	}, nil
 }
 
@@ -460,6 +465,7 @@ func (t tenantTx) FindOrderByNo(ctx context.Context, orderNo string) (Order, err
 		ShippedAt:        optTime(r.ShippedAt),
 		FinishedAt:       optTime(r.FinishedAt),
 		UserCouponID:     r.UserCouponID,
+		CouponName:       r.CouponName,
 	}, nil
 }
 

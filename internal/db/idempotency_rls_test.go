@@ -29,8 +29,9 @@ import (
 // WITH CHECK，商家员工就能往平台键空间里预埋一份存档 —— 平台管理员下一次拿那把
 // 钥匙重试时，会把一份伪造的响应当成重放收下。
 //
-// 变异验证（本轮实跑）：把 00028 的策略改成上面那种 OR 写法，
-// 「商家员工读不到平台存档」与「商家员工写不出平台存档」两条红。
+// 变异验证（本轮实跑）：把 00028 的策略改成 `... OR merchant_id IS NULL`，
+// 「读不到平台存档」「写不出平台存档」「改不动、删不掉平台存档」三条红
+// （migrate_test.go 的 policy_qual 逐字断言同时红）。
 func TestIdempotencyKeysIsolatePlatformFromTenants(t *testing.T) {
 	ctx := context.Background()
 	if _, err := migrate(t); err != nil {

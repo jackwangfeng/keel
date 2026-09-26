@@ -207,20 +207,24 @@ const createOrderDraft = `-- name: CreateOrderDraft :one
 INSERT INTO orders (order_no, user_id, store_id, region_id, store_snapshot,
                     status, goods_amount_cents, freight_cents,
                     discount_cents, payable_cents, receiver_snapshot, remark, expire_at,
-                    user_coupon_id)
+                    user_coupon_id, coupon_name)
 SELECT $1, $2, st.id, st.region_id,
        jsonb_build_object('store_name', st.name, 'region_name', r.name,
                           'address', st.address, 'phone', st.phone),
        0, $3, $4,
        $5, $6,
        $7, $8, $9,
-       $10
+       $10,
+       (SELECT ct.name
+          FROM user_coupons uc
+          JOIN coupon_templates ct ON ct.id = uc.template_id
+         WHERE uc.id = $10)
   FROM stores st
   JOIN regions r ON r.id = st.region_id
  WHERE st.id = $11 AND st.deleted_at IS NULL
 RETURNING id, order_no, store_id, region_id, status, goods_amount_cents, freight_cents,
           discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
-          expire_at, created_at, user_coupon_id
+          expire_at, created_at, user_coupon_id, coupon_name
 `
 
 type CreateOrderDraftParams struct {
@@ -253,6 +257,7 @@ type CreateOrderDraftRow struct {
 	ExpireAt         pgtype.Timestamptz
 	CreatedAt        pgtype.Timestamptz
 	UserCouponID     *int64
+	CouponName       *string
 }
 
 // 落一笔**创建中**的订单（status = 0），在提交 SAGA 之前。
@@ -283,6 +288,11 @@ type CreateOrderDraftRow struct {
 //
 // user_coupon_id（00026）也在这里落：SAGA 的券分支只拿到三个字符串，
 // 「这一单用哪张券」只能从订单行上读回来。
+//
+// coupon_name（00029）是券名快照，**与 store_snapshot 同一条道理、同一个写法**：
+// 从 user_coupons → coupon_templates 现读，和外键 user_coupon_id 落在同一条语句里。
+// 应用先查一次券名再传进来的话，两步之间模板可以改名。没带券时子查询是 NULL；
+// 带了券却匹配不上时 chk_coupon_name_with_coupon 与外键一起拒绝。
 func (q *Queries) CreateOrderDraft(ctx context.Context, arg CreateOrderDraftParams) (CreateOrderDraftRow, error) {
 	row := q.db.QueryRow(ctx, createOrderDraft,
 		arg.OrderNo,
@@ -314,6 +324,7 @@ func (q *Queries) CreateOrderDraft(ctx context.Context, arg CreateOrderDraftPara
 		&i.ExpireAt,
 		&i.CreatedAt,
 		&i.UserCouponID,
+		&i.CouponName,
 	)
 	return i, err
 }
@@ -429,7 +440,8 @@ const getOrderByNo = `-- name: GetOrderByNo :one
 SELECT id, order_no, user_id, store_id, region_id, status,
        goods_amount_cents, freight_cents,
        discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
-       expire_at, paid_at, shipped_at, finished_at, created_at, user_coupon_id
+       expire_at, paid_at, shipped_at, finished_at, created_at, user_coupon_id,
+       coupon_name
   FROM orders
  WHERE order_no = $1
 `
@@ -454,6 +466,7 @@ type GetOrderByNoRow struct {
 	FinishedAt       pgtype.Timestamptz
 	CreatedAt        pgtype.Timestamptz
 	UserCouponID     *int64
+	CouponName       *string
 }
 
 // 按对外编号取订单。SAGA 的两个分支都靠它把「自己要处理哪一单」找回来 ——
@@ -494,6 +507,7 @@ func (q *Queries) GetOrderByNo(ctx context.Context, orderNo string) (GetOrderByN
 		&i.FinishedAt,
 		&i.CreatedAt,
 		&i.UserCouponID,
+		&i.CouponName,
 	)
 	return i, err
 }
@@ -595,7 +609,8 @@ const getUserOrderByNo = `-- name: GetUserOrderByNo :one
 SELECT id, order_no, user_id, store_id, region_id, status,
        goods_amount_cents, freight_cents,
        discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
-       expire_at, paid_at, shipped_at, finished_at, created_at, user_coupon_id
+       expire_at, paid_at, shipped_at, finished_at, created_at, user_coupon_id,
+       coupon_name
   FROM orders
  WHERE order_no = $1
    AND user_id = $2
@@ -627,6 +642,7 @@ type GetUserOrderByNoRow struct {
 	FinishedAt       pgtype.Timestamptz
 	CreatedAt        pgtype.Timestamptz
 	UserCouponID     *int64
+	CouponName       *string
 }
 
 // 订单详情 / 发起支付共用：按单号取**当前买家自己**的订单。
@@ -660,6 +676,7 @@ func (q *Queries) GetUserOrderByNo(ctx context.Context, arg GetUserOrderByNoPara
 		&i.FinishedAt,
 		&i.CreatedAt,
 		&i.UserCouponID,
+		&i.CouponName,
 	)
 	return i, err
 }
@@ -1069,7 +1086,8 @@ const listUserOrders = `-- name: ListUserOrders :many
 SELECT id, order_no, user_id, store_id, region_id, status,
        goods_amount_cents, freight_cents,
        discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
-       expire_at, paid_at, shipped_at, finished_at, created_at, user_coupon_id
+       expire_at, paid_at, shipped_at, finished_at, created_at, user_coupon_id,
+       coupon_name
   FROM orders
  WHERE user_id = $1
    AND status <> 0
@@ -1108,6 +1126,7 @@ type ListUserOrdersRow struct {
 	FinishedAt       pgtype.Timestamptz
 	CreatedAt        pgtype.Timestamptz
 	UserCouponID     *int64
+	CouponName       *string
 }
 
 // ---------------------------------------------------------------------------
@@ -1172,6 +1191,7 @@ func (q *Queries) ListUserOrders(ctx context.Context, arg ListUserOrdersParams) 
 			&i.FinishedAt,
 			&i.CreatedAt,
 			&i.UserCouponID,
+			&i.CouponName,
 		); err != nil {
 			return nil, err
 		}

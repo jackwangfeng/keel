@@ -168,6 +168,7 @@ type Order struct {
 	RegionID         int64
 	StoreSnapshot    []byte
 	UserCouponID     *int64
+	CouponName       *string
 }
 
 type OrderItem struct {

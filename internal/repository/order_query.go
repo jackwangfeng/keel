@@ -142,6 +142,7 @@ func (t tenantTx) ListUserOrders(ctx context.Context, userID int64, f OrderFilte
 			ShippedAt:        optTime(r.ShippedAt),
 			FinishedAt:       optTime(r.FinishedAt),
 			UserCouponID:     r.UserCouponID,
+			CouponName:       r.CouponName,
 		})
 	}
 	return out, nil
@@ -185,6 +186,7 @@ func (t tenantTx) FindUserOrderByNo(ctx context.Context, orderNo string, userID 
 		ShippedAt:        optTime(r.ShippedAt),
 		FinishedAt:       optTime(r.FinishedAt),
 		UserCouponID:     r.UserCouponID,
+		CouponName:       r.CouponName,
 	}, nil
 }
 

@@ -2277,7 +2277,14 @@ type Money = int64
 
 // Order defines model for Order.
 type Order struct {
-	CreatedAt time.Time `json:"created_at"`
+	// CouponName 这一单用的券的名字，**下单时的快照**。没用券时不出现（与 `user_coupon_id` 同进同出）。
+	//
+	// 它存在订单上，不从券模板现读：模板后来改名，历史订单仍显示下单那一刻的名字 ——
+	// 与 `order_items.title_snapshot`、`OrderDetail.store` 是同一条道理。
+	// 客户端展示「已用：满 100 减 20」这类文案请用它，不要拿 `user_coupon_id`
+	// 再去查券（那张券的模板此刻可能已经叫别的名字了）。
+	CouponName *string   `json:"coupon_name,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
 
 	// DiscountCents 金额，单位「分」。禁止使用浮点。
 	DiscountCents *Money     `json:"discount_cents,omitempty"`
@@ -2374,7 +2381,14 @@ type OrderCreateRequest struct {
 
 // OrderDetail defines model for OrderDetail.
 type OrderDetail struct {
-	CreatedAt time.Time `json:"created_at"`
+	// CouponName 这一单用的券的名字，**下单时的快照**。没用券时不出现（与 `user_coupon_id` 同进同出）。
+	//
+	// 它存在订单上，不从券模板现读：模板后来改名，历史订单仍显示下单那一刻的名字 ——
+	// 与 `order_items.title_snapshot`、`OrderDetail.store` 是同一条道理。
+	// 客户端展示「已用：满 100 减 20」这类文案请用它，不要拿 `user_coupon_id`
+	// 再去查券（那张券的模板此刻可能已经叫别的名字了）。
+	CouponName *string   `json:"coupon_name,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
 
 	// DiscountCents 金额，单位「分」。禁止使用浮点。
 	DiscountCents *Money     `json:"discount_cents,omitempty"`

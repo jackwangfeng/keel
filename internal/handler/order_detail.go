@@ -78,7 +78,9 @@ func (h *OrderHandler) Detail(c *gin.Context) {
 		DiscountCents:    base.DiscountCents,
 		// 这一单用的券（00026）。优惠券那一棒给 apiOrder 加了它、这里漏搬了 ——
 		// 正是上面那段注释预言的症状：契约里可选，漏了 JSON 里就整个不出现。
-		UserCouponId:  base.UserCouponId,
+		UserCouponId: base.UserCouponId,
+		// 券名快照（00029）。与上面那一行同一个教训：apiOrder 里加了，这里就得搬。
+		CouponName:    base.CouponName,
 		PaidCents:     base.PaidCents,
 		RefundedCents: base.RefundedCents,
 		FreightCents:  base.FreightCents,

@@ -61,8 +61,9 @@ func newCouponShop(t *testing.T) couponShop {
 	t.Cleanup(func() {
 		for _, stmt := range []string{
 			// orders.user_coupon_id 与 user_coupons.order_id 互相引用；先把订单上的券摘掉
-			// （连同优惠，否则 chk_discount_needs_coupon 不让摘），环才解得开。
-			`UPDATE orders SET user_coupon_id = NULL, discount_cents = 0,
+			// （连同优惠与券名快照，否则 chk_discount_needs_coupon /
+			// chk_coupon_name_with_coupon 不让摘），环才解得开。
+			`UPDATE orders SET user_coupon_id = NULL, coupon_name = NULL, discount_cents = 0,
 			        payable_cents = goods_amount_cents + freight_cents WHERE merchant_id = $1`,
 			`DELETE FROM user_coupons WHERE merchant_id = $1`,
 			`DELETE FROM coupon_scopes WHERE merchant_id = $1`,
@@ -566,7 +567,7 @@ func TestCouponLockIsTheArbiter(t *testing.T) {
 	var second api.Order
 	decodeInto(t, createOrder(t, cs.Host, cs.orderJSON(b, cs.NorthStore, cs.ShirtSKU, 1, nil), b.Token,
 		"arb-"+uniqueKey()), http.StatusCreated, "第二单", &second)
-	adminExec(t, `UPDATE orders SET user_coupon_id = $1 WHERE order_no = $2`, c.Id, second.OrderNo)
+	adminExec(t, `UPDATE orders SET user_coupon_id = $1, coupon_name = '库里挂上的券' WHERE order_no = $2`, c.Id, second.OrderNo)
 
 	gid := gidFor(t, cs.MerchantID, second.OrderNo)
 	if got := branchOf(t, service.BranchOrderCoupon)(gid, "12", "action"); got != dtm.Failure {
@@ -806,7 +807,7 @@ func TestExpiredCouponIsNotUsable(t *testing.T) {
 	var order api.Order
 	decodeInto(t, createOrder(t, cs.Host, cs.orderJSON(b, cs.NorthStore, cs.ShirtSKU, 1, nil), b.Token,
 		"exp-"+uniqueKey()), http.StatusCreated, "不带券下单", &order)
-	adminExec(t, `UPDATE orders SET user_coupon_id = $1 WHERE order_no = $2`, id, order.OrderNo)
+	adminExec(t, `UPDATE orders SET user_coupon_id = $1, coupon_name = '库里挂上的券' WHERE order_no = $2`, id, order.OrderNo)
 	if got := branchOf(t, service.BranchOrderCoupon)(gidFor(t, cs.MerchantID, order.OrderNo), "12", "action"); got != dtm.Failure {
 		t.Fatalf("过期券的锁券分支应 Failure，实得 %d", got)
 	}
@@ -932,4 +933,72 @@ func TestAdminGrantCouponsByPhone(t *testing.T) {
 	// 定向发放的券也照常能下单。
 	w = previewOrder(t, cs.Host, cs.orderJSON(b2, cs.NorthStore, cs.DressSKU, 2, ptr64(res.Coupons[2].UserCouponId)), b2.Token)
 	wantStatus(t, w, http.StatusOK, "定向发放的券试算")
+}
+
+// 订单上的券名是**下单时的快照**（00029，契约 Order.coupon_name）。
+//
+// 下单 → 模板改名 → 订单详情与「我的订单」仍显示下单那一刻的名字；没用券的
+// 订单整个不出现这个字段。它守的是「现 JOIN 券模板」那种实现：那样写，下单当时
+// 的断言照样绿（名字还没改），改名之后才红 —— 所以改名这一步是这条测试的全部意义。
+func TestOrderKeepsTheCouponNameItWasPlacedWith(t *testing.T) {
+	cs := newCouponShop(t)
+	tpl := cs.createTemplate(t, `{"name":"国庆 85 折","coupon_type":2,"discount_rate":850,
+		"valid_mode":2,"valid_days":7}`)
+	wantStatus(t, cs.patchTemplate(t, tpl.Id, `{"claimable":true}`), http.StatusOK, "设为可领")
+	b := cs.newBuyer(t, "cname")
+	c := cs.mustClaim(t, b, tpl.Id)
+
+	var order api.Order
+	decodeInto(t, createOrder(t, cs.Host, cs.orderJSON(b, cs.NorthStore, cs.DressSKU, 1, &c.Id), b.Token,
+		"cname-"+uniqueKey()), http.StatusCreated, "带券下单", &order)
+	if order.CouponName == nil || *order.CouponName != "国庆 85 折" {
+		t.Fatalf("下单响应里的 coupon_name 是 %v，期望「国庆 85 折」", order.CouponName)
+	}
+
+	// 模板改名（发出之后名字照常能改，TestAdminCouponTemplateLockedAfterIssuance）。
+	wantStatus(t, cs.patchTemplate(t, tpl.Id, `{"name":"双十一 85 折"}`), http.StatusOK, "模板改名")
+	var renamed api.AdminCouponTemplate
+	decodeInto(t, getAs(t, cs.Host, fmt.Sprintf("/api/v1/admin/coupon-templates/%d", tpl.Id), cs.Token),
+		http.StatusOK, "改名后的模板", &renamed)
+	if renamed.Name != "双十一 85 折" {
+		t.Fatalf("模板名是 %q —— 改名没生效，下面的断言都在空转", renamed.Name)
+	}
+
+	var detail api.OrderDetail
+	decodeInto(t, getAs(t, cs.Host, "/api/v1/orders/"+order.OrderNo, b.Token),
+		http.StatusOK, "改名后的订单详情", &detail)
+	if detail.CouponName == nil || *detail.CouponName != "国庆 85 折" {
+		t.Fatalf("模板改名之后，订单详情的 coupon_name 是 %v，期望仍是下单时的「国庆 85 折」"+
+			"（显示成新名字说明它是现读模板，不是快照；不出现说明详情漏搬了这个字段）", detail.CouponName)
+	}
+	if detail.UserCouponId == nil || *detail.UserCouponId != c.Id {
+		t.Fatalf("详情的 user_coupon_id 是 %v，期望 %d", detail.UserCouponId, c.Id)
+	}
+
+	var list struct {
+		Items []api.Order `json:"items"`
+	}
+	decodeInto(t, getAs(t, cs.Host, "/api/v1/orders", b.Token), http.StatusOK, "我的订单", &list)
+	found := false
+	for _, it := range list.Items {
+		if it.OrderNo == order.OrderNo {
+			found = true
+			if it.CouponName == nil || *it.CouponName != "国庆 85 折" {
+				t.Errorf("「我的订单」里这一单的 coupon_name 是 %v，期望「国庆 85 折」", it.CouponName)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("「我的订单」里没有 %s", order.OrderNo)
+	}
+
+	// 没用券的订单：字段整个不出现（与 user_coupon_id 同进同出），不是空串。
+	var plain api.Order
+	decodeInto(t, createOrder(t, cs.Host, cs.orderJSON(b, cs.NorthStore, cs.ShirtSKU, 1, nil), b.Token,
+		"cname-"+uniqueKey()), http.StatusCreated, "不带券下单", &plain)
+	w := getAs(t, cs.Host, "/api/v1/orders/"+plain.OrderNo, b.Token)
+	wantStatus(t, w, http.StatusOK, "不带券订单的详情")
+	if strings.Contains(w.Body.String(), `"coupon_name"`) {
+		t.Errorf("没用券的订单详情里出现了 coupon_name：%s", w.Body.String())
+	}
 }

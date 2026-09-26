@@ -39,6 +39,19 @@ so "which one is running?" never depends on anyone's memory.
 
 ## [Unreleased]
 
+### Added
+
+- **Orders carry the name of the coupon they were placed with** (`coupon_name` on
+  `Order`, so on the order detail, the order list and the create response). It
+  is a snapshot taken by the same statement that writes `user_coupon_id`: renaming
+  the coupon template later does not change what past orders show, the same rule
+  as the item title and store snapshots. The field is absent when no coupon was
+  used; a `CHECK` keeps the two columns present or absent together. Migration
+  `00029` backfills existing orders from the template's name at migration time —
+  the name at order time was never recorded, so an order placed before a rename
+  that happened before this migration shows the newer name. Coupons shipped the
+  same day as 0.1.0, so that window is hours wide.
+
 ### Fixed
 
 - **Opening a shop (`POST /admin/merchants`) and adding staff (`POST /admin/staff`)
