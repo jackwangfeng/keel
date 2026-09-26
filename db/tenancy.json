@@ -26,7 +26,42 @@
     "PostgreSQL 的策略名以表为作用域，`inventories_tenant` 里的表名前缀是冗余的；",
     "而名字固定之后，「恰好一条、且叫 tenant」比「恰好一条、名字不限」严格：",
     "改名这个动作本身会变成一次显式的、要改这个文件的动作。",
-    "数据模型文档 §4 原先写的是 inventories_tenant，本轮统一成 tenant。"
+    "数据模型文档 §4 原先写的是 inventories_tenant，本轮统一成 tenant。",
+    "",
+    "### 本轮（多门店 + 电子围栏 + 大区）的一次类别迁移",
+    "",
+    "inventories 从 parent-scoped **改回 tenant**，条目整个从 tables 里删掉了",
+    "（tenant 是默认类别，登记一条 tenant 反而在邀请所有人都来登记）。",
+    "原因写在数据模型 §4：主键从 sku_id 变成 (sku_id, store_id) 之后，",
+    "原豁免的判据「租户归属由主键唯一决定，错挂之后没有第二个真相可以对不上」",
+    "**不再成立** —— 现在有两个父表（skus 与 stores），两条归属链可以对不上，",
+    "那正是规矩二为之存在的形状。补上 merchant_id 之后策略也从对父表的 EXISTS",
+    "子查询简化成直接的列比较，热点写路径上少两次 skus_pkey 查找。",
+    "",
+    "本轮新建的六张表（regions / stores / region_product_overrides /",
+    "store_product_overrides / region_sku_prices / store_sku_prices）全部是 tenant 类，",
+    "所以这里一条都不加 —— 只在下面三份豁免清单里各留了必要的条目。",
+    "",
+    "### 视图那个缺口本轮补上了",
+    "",
+    "Go 侧的租户检查全部写着 relkind = 'r'（实测七处），视图（relkind = 'v'）",
+    "一张都不在它们的视野里。而 PostgreSQL 的视图**默认以属主权限求值**，",
+    "底层表的 RLS 会按属主判定 —— 实测：两个商家各一家店各一个 SKU，",
+    "security_invoker = true 的视图给商家 1 返回 4 行（对），默认视图返回 5 行，",
+    "多出来的那一行是商家 2 的。sku_prices_by_store（迁移 00020）是本仓库第一张",
+    "视图，同一轮给 migrate_test.go 补上了 TestViewsEvaluateAsTheInvoker：",
+    "relkind = 'v' 的每张视图，reloptions 必须含 security_invoker=true。",
+    "",
+    "那条检查按 pg_depend.deptype = 'e' 排除**扩展自有的**视图，而不是维护一张",
+    "名字清单：postgis 会建出 geometry_columns / geography_columns 两张视图，",
+    "它们不由本项目定义、也不读本项目的表，用名字豁免等于下一个扩展再来一次。",
+    "",
+    "### 视图仍然不在 tables 里，这是刻意的",
+    "",
+    "下面 classes 的每一条都在说「这张表的租户列长什么样、策略是什么形状、",
+    "GRANT 面给几权」，而视图三样都不适用：它没有自己的行，RLS 挂不上去",
+    "（策略只对表生效），它的隔离完全由底表的策略 + security_invoker 决定。",
+    "给它编一个类别只会让那三个字段各写一个「不适用」。"
   ],
   "policy_name": "tenant",
   "classes": {
@@ -122,6 +157,14 @@
       "documented": false,
       "reason": "goose 自己的迁移记录表，不由本项目定义，也不在设计文档里。keel_app 一个权限都不该有。"
     },
+    "spatial_ref_sys": {
+      "class": "cross-tenant-infra",
+      "documented": false,
+      "grants": [
+        "SELECT"
+      ],
+      "reason": "PostGIS 自己的坐标系目录（EPSG 编号 → 投影定义），由 00020 的 CREATE EXTENSION postgis 建出来，不由本项目定义，也不该进设计文档 —— 把一张八千行的上游参考表抄进文档，下一次 PostGIS 升级它就成了一句过期的话。它没有租户维度可言：SRID 4326 对所有商家是同一个 4326。GRANT 面是 SELECT 而不是 cross-tenant-infra 默认的空集：ST_Transform 之类的函数要按 srid 查它，而本项目的读路径（ST_Intersects / ST_Distance 都带 4326）虽然今天走不到这条查表路径，keel_app 也确实拿得到 SELECT —— 00005 的 ALTER DEFAULT PRIVILEGES 让 keel 建出来的每一张新表自动可读，扩展建的表也不例外。写权限一权都没有，那是要紧的一半：任何租户都能改坐标系定义，比跨租户读取更难发现。"
+    },
     "barrier": {
       "class": "cross-tenant-infra",
       "grants": [
@@ -149,12 +192,6 @@
       "class": "shared-reference",
       "documented_only": true,
       "reason": "退款状态机（数据模型 §11），同上。"
-    },
-    "inventories": {
-      "class": "parent-scoped",
-      "parent": "skus",
-      "via": "sku_id",
-      "reason": "主键就是 sku_id，租户归属由 skus 决定；且它是下单 SAGA 的热点表，多一列索引成本不划算（数据模型 §4）。它**要**策略：实测无策略时商家 A 能往商家 B 的 SKU 上插库存行、能改对方水位。"
     },
     "staff": {
       "class": "tenant-nullable",
@@ -187,7 +224,9 @@
     ],
     "staff(created_by)": "staff 是全文唯一一张 merchant_id 可空的表（平台级操作员为 NULL）。复合外键要求父子两边 merchant_id 相等，而 NULL 下 MATCH SIMPLE 直接跳过检查，于是「平台管理员创建某家店的管理员」写不进去 —— 那正是认证流程 ② 的主路径（数据模型 §14）。",
     "shipments(created_by)": "同上，指向 staff。审计字段，不在资金与库存的主链路上。",
-    "uploads(staff_id)": "同上，指向 staff。归属字段；同表的 user_id 走的是复合外键，两者待遇不同不是笔误（数据模型 §14）。"
+    "uploads(staff_id)": "同上，指向 staff。归属字段；同表的 user_id 走的是复合外键，两者待遇不同不是笔误（数据模型 §14）。",
+    "store_product_overrides(updated_by)": "同上，指向 staff。审计字段：记「谁在什么时候把这件商品在这家店下架了」，不在资金与库存的主链路上（数据模型 §4）。",
+    "region_product_overrides(updated_by)": "同上，指向 staff。大区那一层的同一个字段。"
   },
   "unique_global_ok": {
     "_readme": [
@@ -226,6 +265,10 @@
     "product_image_vectors(product_id)": "③ 同上。",
     "product_understanding(product_id)": "③ 同上。",
     "product_clusters(product_id)": "③ 同上。",
-    "inventories(sku_id)": "③ 主键就是 sku_id，租户归属由 skus 决定（数据模型 §4）。"
+    "inventories(sku_id,store_id)": "③ 主键从 sku_id 变成 (sku_id, store_id)（数据模型 §4，§15 第 3 条本轮结清）。首列 sku_id 已蕴含租户（skus 自带 merchant_id），而本表现在也自带 merchant_id、并对 skus 与 stores 各有一条复合外键 —— 两条归属链由数据库钉死，不靠这条主键的列序。列序选 sku_id 打头是因为热路径（下单扣减、详情页算 in_stock）都按 sku_id 进入；后台的「这家店的库存清单」走 idx_inventories_store。",
+    "store_product_overrides(store_id,product_id)": "③ 首列 store_id 已蕴含租户（stores 自带 merchant_id）。这是一张排除表，「这家店不卖哪些商品」，缺一行即在售（数据模型 §4）。",
+    "region_product_overrides(region_id,product_id)": "③ 同上，大区那一层。首列 region_id 已蕴含租户。",
+    "store_sku_prices(store_id,sku_id)": "③ 首列 store_id 已蕴含租户。三层定价里最内的那一层覆盖，缺一行即沿用大区价 / 基准价（数据模型 §4）。",
+    "region_sku_prices(region_id,sku_id)": "③ 同上，大区那一层。"
   }
 }

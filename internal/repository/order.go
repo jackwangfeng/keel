@@ -79,9 +79,15 @@ type Address struct {
 // time.Time 表示「还没发生」会让 handler 分不清「没付款」与「在 0001-01-01
 // 付的款」，而契约里 paid_at 这类字段的缺席正是「这件事还没发生」的唯一表达。
 type Order struct {
-	ID               int64
-	OrderNo          string
-	UserID           int64
+	ID      int64
+	OrderNo string
+	UserID  int64
+	// StoreID / RegionID 是**履约门店**与下单时它所属的大区。两列都 NOT NULL
+	// （数据模型 §5）：SAGA 分支读回订单行拿到 NULL 时无路可走 —— 既不能猜
+	// 默认店（那会把单扣到另一家店去），也不能失败（订单已经落库了）。
+	// 库存分支的扣减与回补都按这个 StoreID 走。
+	StoreID          int64
+	RegionID         int64
 	Status           int16
 	GoodsAmountCents int64
 	FreightCents     int64
@@ -120,8 +126,13 @@ type OrderLine struct {
 // 没有 MerchantID：那一列的默认值是 current_merchant()（00013），
 // 调用方没有那个参数可以传错。
 type NewOrderDraft struct {
-	OrderNo          string
-	UserID           int64
+	OrderNo string
+	UserID  int64
+	// StoreID 是本次请求解析到的那家门店。region_id 与 store_snapshot 都由
+	// 那条 INSERT ... SELECT FROM stores 从**同一行**取，不从这里传：
+	// 应用先查一次门店再把字段拼进 INSERT，两步之间那家店可以改名，
+	// 于是外键指着 A、快照写着 A 的旧名字，而两者都「看起来正常」。
+	StoreID          int64
 	GoodsAmountCents int64
 	FreightCents     int64
 	DiscountCents    int64
@@ -225,7 +236,7 @@ func StaffSubject(staffID int64) IdempotencySubject {
 type OrderTx interface {
 	// ListSKUsForPricing 按一批 sku_id 取定价与快照素材。
 	// **试算与真下单共用它** —— 两条路算出不同的钱是这条链路最严重的一类 bug。
-	ListSKUsForPricing(ctx context.Context, skuIDs []int64) ([]PriceableSKU, error)
+	ListSKUsForPricing(ctx context.Context, sc StoreScope, skuIDs []int64) ([]PriceableSKU, error)
 
 	// FindAddress 取当前买家名下的一条收货地址。查不到返回 ErrAddressNotFound。
 	FindAddress(ctx context.Context, addressID, userID int64) (Address, error)
@@ -250,7 +261,12 @@ type OrderTx interface {
 	CloseOrder(ctx context.Context, orderNo string) (int64, error)
 
 	// AppendInventoryLog 记一行库存流水。
-	AppendInventoryLog(ctx context.Context, skuID int64, changeQty int32,
+	//
+	// storeID 本轮（00020）加进签名：对账口径从「这个商家这个 SKU 扣了多少」
+	// 变成「这家店这个 SKU 扣了多少」，而 before/after 记的正是某一家门店的
+	// 水位 —— 不写下是哪一家，同一个 SKU 在五家店的流水会交织成一条谁也
+	// 对不平的序列。
+	AppendInventoryLog(ctx context.Context, skuID, storeID int64, changeQty int32,
 		bizType int16, bizID string, before, after int32) error
 
 	// ClaimIdempotencyKey 抢占式插入。抢到返回 true；已存在返回 false。
@@ -276,13 +292,20 @@ type OrderTx interface {
 	ReleaseIdempotencyKey(ctx context.Context, scope string, subj IdempotencySubject, key string) (bool, error)
 }
 
-func (t tenantTx) ListSKUsForPricing(ctx context.Context, skuIDs []int64) ([]PriceableSKU, error) {
+func (t tenantTx) ListSKUsForPricing(ctx context.Context, sc StoreScope, skuIDs []int64) ([]PriceableSKU, error) {
 	if len(skuIDs) == 0 {
 		// 空数组交给 Postgres 是合法的（回 0 行），但让它走到这里意味着上游的
 		// 「至少一行」校验没生效。报错而不是回空：空结果会一路变成一笔 0 元订单。
 		return nil, errors.New("定价查询收到了空的 sku 列表")
 	}
-	rows, err := t.q.ListSKUsForPricing(ctx, skuIDs)
+	if sc.StoreID <= 0 {
+		// 没有门店就没有价：视图的键是 (store_id, sku_id)，store_id = 0 会让
+		// 这条查询安静地返回 0 行，而调用方会把它读成「这些 SKU 都不可售」。
+		return nil, errors.New("定价查询没有门店上下文")
+	}
+	rows, err := t.q.ListSKUsForPricing(ctx, db.ListSKUsForPricingParams{
+		StoreID: sc.StoreID, RegionID: sc.RegionID, SkuIds: skuIDs,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -326,6 +349,7 @@ func (t tenantTx) CreateOrderDraft(ctx context.Context, d NewOrderDraft) (Order,
 	r, err := t.q.CreateOrderDraft(ctx, db.CreateOrderDraftParams{
 		OrderNo:          d.OrderNo,
 		UserID:           d.UserID,
+		StoreID:          d.StoreID,
 		GoodsAmountCents: d.GoodsAmountCents,
 		FreightCents:     d.FreightCents,
 		DiscountCents:    d.DiscountCents,
@@ -334,6 +358,12 @@ func (t tenantTx) CreateOrderDraft(ctx context.Context, d NewOrderDraft) (Order,
 		Remark:           d.Remark,
 		ExpireAt:         pgtype.Timestamptz{Time: d.ExpireAt, Valid: true},
 	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		// 那条 INSERT ... SELECT FROM stores 插了 0 行：门店不存在、
+		// 不属于本租户、或已软删。契约的 422（store_id 在请求体里，
+		// 不在路径里 —— 数据模型 §4 那条分界线）。
+		return Order{}, fmt.Errorf("store %d: %w", d.StoreID, ErrCatalogBadReference)
+	}
 	if err != nil {
 		return Order{}, err
 	}
@@ -341,6 +371,8 @@ func (t tenantTx) CreateOrderDraft(ctx context.Context, d NewOrderDraft) (Order,
 		ID:               r.ID,
 		OrderNo:          r.OrderNo,
 		UserID:           d.UserID,
+		StoreID:          r.StoreID,
+		RegionID:         r.RegionID,
 		Status:           r.Status,
 		GoodsAmountCents: r.GoodsAmountCents,
 		FreightCents:     r.FreightCents,
@@ -381,6 +413,8 @@ func (t tenantTx) FindOrderByNo(ctx context.Context, orderNo string) (Order, err
 		ID:               r.ID,
 		OrderNo:          r.OrderNo,
 		UserID:           r.UserID,
+		StoreID:          r.StoreID,
+		RegionID:         r.RegionID,
 		Status:           r.Status,
 		GoodsAmountCents: r.GoodsAmountCents,
 		FreightCents:     r.FreightCents,
@@ -417,14 +451,20 @@ func (t tenantTx) CloseOrder(ctx context.Context, orderNo string) (int64, error)
 	return t.q.CloseOrder(ctx, orderNo)
 }
 
-func (t tenantTx) AppendInventoryLog(ctx context.Context, skuID int64, changeQty int32,
+func (t tenantTx) AppendInventoryLog(ctx context.Context, skuID, storeID int64, changeQty int32,
 	bizType int16, bizID string, before, after int32) error {
 	if changeQty == 0 {
 		// 0 的流水不是流水，是噪声。挡在这里，因为它只可能来自一次算错的差值。
 		return fmt.Errorf("sku %d 的库存流水 change_qty 是 0", skuID)
 	}
+	if storeID <= 0 {
+		// 与 DeductInventory 同一条：一行不写明门店的流水对不了账，
+		// 而它不会报错，只会在半年后的一次盘点里对不平。
+		return fmt.Errorf("sku %d 的库存流水没有门店", skuID)
+	}
 	return t.q.AppendInventoryLog(ctx, db.AppendInventoryLogParams{
 		SkuID:           skuID,
+		StoreID:         storeID,
 		ChangeQty:       changeQty,
 		BizType:         bizType,
 		BizID:           bizID,

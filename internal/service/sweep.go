@@ -360,11 +360,11 @@ func (s *SweepService) releasePending(ctx context.Context, log *slog.Logger,
 			return fmt.Errorf("订单 %s 是待支付状态却一行订单项都没有", o.OrderNo)
 		}
 		for _, ln := range lines {
-			after, err := tx.RestoreInventory(ctx, ln.SKUID, ln.Quantity)
+			after, err := tx.RestoreInventory(ctx, ln.SKUID, o.StoreID, ln.Quantity)
 			if err != nil {
 				return err
 			}
-			if err := tx.AppendInventoryLog(ctx, ln.SKUID, ln.Quantity,
+			if err := tx.AppendInventoryLog(ctx, ln.SKUID, o.StoreID, ln.Quantity,
 				repository.InventoryLogTimeoutRelease, o.OrderNo,
 				after-ln.Quantity, after); err != nil {
 				return err

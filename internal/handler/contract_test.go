@@ -177,6 +177,14 @@ var routes = []route{
 			"sort":            "排序策略，同上",
 			"min_price_cents": "价格区间下界，同上",
 			"max_price_cents": "价格区间上界，同上",
+			// store_id 与响应里那个 store 本轮（00020）落地了，两笔账一起划掉。
+			// 现在这条接口返回的是**门店级**目录：可见性过两层排除表，
+			// 价走 sku_prices_by_store 视图。
+			"in_stock_only": "只看当前门店有货的。库存本轮按门店分完了，" +
+				"所以这一条不再缺表 —— **缺的是过滤本身**：那条列表查询今天不 JOIN " +
+				"inventories。默认值与 SearchFilters 对齐成 false（M3 独立验收 I10），" +
+				"两边仍然都没有执行者。挂在这里而不是顺手实现，是因为它会改变" +
+				"「一页有几行」，而分页与筛选一起改要重新过一遍空页与总数那几条断言。",
 		},
 	},
 	{
@@ -238,8 +246,10 @@ var routes = []route{
 		ContractMethod: "get",
 		HTTPMethod:     http.MethodGet,
 		HandlerFile:    "product_detail.go",
-		NoQueryParams: "详情只吃路径参数 product_id；契约里这条接口一个 query 参数都没有" +
-			"（列表那些筛选条件属于 /products，不属于这里）",
+		// 唯一的 query 参数 store_id 本轮实现了，所以这里既不写 NoQueryParams
+		// 也不挂账 —— 对账测试会两个方向都核一遍。
+		// （这条接口原先登记的是 NoQueryParams「详情只吃路径参数」，
+		// 那句话从 00020 起不再成立：门店决定了 SKU 的价与水位。）
 		NotYetImplementedResponse: map[string]string{
 			"image_url": "商品主图。**缺的东西本轮（M4 任务 1）变了，理由要跟着改**：" +
 				"原先写的是「products 表上没有图片列，uploads 与商品没有任何关联」，" +
@@ -265,6 +275,8 @@ var routes = []route{
 		HandlerFile:    "order_detail.go",
 		NoQueryParams:  "详情只吃路径参数 order_no",
 		NotYetImplementedResponse: map[string]string{
+			// store_id / region_id / store 三笔本轮结清：orders 上三列都落了，
+			// 详情读的是**下单当时**那份快照而不是 JOIN stores。
 			"refunds": "退款域的三张表（refunds / refund_items / refund_logs）本轮没有建，" +
 				"所以这里不是「这一单没有退款」，而是**没查过**。回空数组会让详情页显示" +
 				"「无售后记录」—— 一句在退款上线之前都不会被纠正的假话。",
@@ -286,6 +298,8 @@ var routes = []route{
 		NoQueryParams: "检索的参数全在请求体里（query / filters / size / strategy / explain）；" +
 			"契约里这条接口一个 query 参数都没有",
 		NotYetImplementedResponse: map[string]string{
+			// store 本轮结清：检索结果按解析到的那家门店算，
+			// 响应里回的是真实的 StoreContext，不是一个假的 match_type。
 			"trace_id": "检索日志 search_logs 那张表本轮没有建，POST /search/events 也没有实现。" +
 				"trace_id 在契约里唯一的用处就是把一次检索与它后续的点击 / 加购 / 下单串起来" +
 				"（那条接口的描述原话），而串到的那一头不存在。回一个谁也存不进去的 id " +
@@ -566,6 +580,176 @@ var routes = []route{
 		HandlerFile:    "auth.go",
 		NoQueryParams:  "没有参数：吊销哪个会话由 access_token 里的 sid 决定",
 	},
+
+	// -----------------------------------------------------------------------
+	// 门店：买家侧两条（00020）
+	// -----------------------------------------------------------------------
+	//
+	// 两条在契约里都是 security: []（公开的），而且**分在两个文件里** ——
+	// 参数对账按文件做：这条读 {page, page_size}，resolve 读 {lat, lng, size}，
+	// 放一起的话两条会互相把对方的参数报成「契约里没有的参数」。
+	{
+		ContractPath:   "/stores",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "store.go",
+	},
+	{
+		ContractPath:   "/stores/resolve",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "store_resolve.go",
+	},
+
+	// -----------------------------------------------------------------------
+	// 门店 / 大区后台那 21 条（00020）
+	// -----------------------------------------------------------------------
+	//
+	// 五条带 query 参数的各自在自己的文件里（集合两两不同，除了两条
+	// products 列表），其余 16 条全登记 NoQueryParams —— 它们在
+	// admin_store.go 里，而那个文件一个 c.Query 都没有。
+	{
+		ContractPath:   "/admin/regions",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "admin_region_list.go",
+	},
+	{
+		ContractPath:   "/admin/regions",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "admin_store.go",
+		NoQueryParams:  "建大区的参数全在请求体里；幂等键在 Idempotency-Key 请求头",
+	},
+	{
+		ContractPath:   "/admin/regions/{region_id}",
+		ContractMethod: "patch",
+		HTTPMethod:     http.MethodPatch,
+		HandlerFile:    "admin_store.go",
+		NoQueryParams:  "改哪一个在路径上，改什么在请求体里",
+	},
+	{
+		ContractPath:   "/admin/regions/{region_id}",
+		ContractMethod: "delete",
+		HTTPMethod:     http.MethodDelete,
+		HandlerFile:    "admin_store.go",
+		NoQueryParams:  "软删只吃路径参数；「名下还有门店」那条 409 没有任何可以绕过它的参数",
+	},
+	{
+		ContractPath:   "/admin/regions/{region_id}/products",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "admin_scoped_products.go",
+	},
+	{
+		ContractPath:   "/admin/regions/{region_id}/products/{product_id}/listing",
+		ContractMethod: "put",
+		HTTPMethod:     http.MethodPut,
+		HandlerFile:    "admin_store.go",
+		NoQueryParams:  "两个 id 都在路径上，listed 在请求体里",
+	},
+	{
+		ContractPath:   "/admin/regions/{region_id}/skus/{sku_id}/price",
+		ContractMethod: "put",
+		HTTPMethod:     http.MethodPut,
+		HandlerFile:    "admin_store.go",
+		NoQueryParams:  "两个 id 在路径上，price_cents 在请求体里",
+	},
+	{
+		ContractPath:   "/admin/regions/{region_id}/skus/{sku_id}/price",
+		ContractMethod: "delete",
+		HTTPMethod:     http.MethodDelete,
+		HandlerFile:    "admin_store.go",
+		NoQueryParams:  "撤销覆盖只吃路径参数",
+	},
+	{
+		ContractPath:   "/admin/stores",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "admin_store_list.go",
+	},
+	{
+		ContractPath:   "/admin/stores",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "admin_store.go",
+		NoQueryParams:  "建店的参数全在请求体里；围栏不在这里传（先建店后画围栏，各有各的端点）",
+	},
+	{
+		ContractPath:   "/admin/stores/{store_id}",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "admin_store.go",
+		NoQueryParams:  "详情只吃路径参数 store_id；围栏随详情一起回，不用参数开关",
+	},
+	{
+		ContractPath:   "/admin/stores/{store_id}",
+		ContractMethod: "patch",
+		HTTPMethod:     http.MethodPatch,
+		HandlerFile:    "admin_store.go",
+		NoQueryParams:  "改哪一家在路径上，改什么在请求体里",
+	},
+	{
+		ContractPath:   "/admin/stores/{store_id}",
+		ContractMethod: "delete",
+		HTTPMethod:     http.MethodDelete,
+		HandlerFile:    "admin_store.go",
+		NoQueryParams:  "软删只吃路径参数",
+	},
+	{
+		ContractPath:   "/admin/stores/{store_id}/fence",
+		ContractMethod: "put",
+		HTTPMethod:     http.MethodPut,
+		HandlerFile:    "admin_store.go",
+		NoQueryParams:  "围栏是一整块 GeoJSON，在请求体里；传 null 即清空",
+	},
+	{
+		ContractPath:   "/admin/stores/{store_id}/default",
+		ContractMethod: "put",
+		HTTPMethod:     http.MethodPut,
+		HandlerFile:    "admin_store.go",
+		NoQueryParams:  "没有参数：设哪一家在路径上，「先清旧再置新」是服务端的事，不给开关",
+	},
+	{
+		ContractPath:   "/admin/stores/{store_id}/products",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "admin_scoped_products.go",
+	},
+	{
+		ContractPath:   "/admin/stores/{store_id}/products/{product_id}/listing",
+		ContractMethod: "put",
+		HTTPMethod:     http.MethodPut,
+		HandlerFile:    "admin_store.go",
+		NoQueryParams:  "两个 id 都在路径上，listed 在请求体里",
+	},
+	{
+		ContractPath:   "/admin/stores/{store_id}/skus/{sku_id}/price",
+		ContractMethod: "put",
+		HTTPMethod:     http.MethodPut,
+		HandlerFile:    "admin_store.go",
+		NoQueryParams:  "两个 id 在路径上，price_cents 在请求体里",
+	},
+	{
+		ContractPath:   "/admin/stores/{store_id}/skus/{sku_id}/price",
+		ContractMethod: "delete",
+		HTTPMethod:     http.MethodDelete,
+		HandlerFile:    "admin_store.go",
+		NoQueryParams:  "撤销覆盖只吃路径参数",
+	},
+	{
+		ContractPath:   "/admin/stores/{store_id}/inventories",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "admin_store_inventories.go",
+	},
+	{
+		ContractPath:   "/admin/stores/{store_id}/skus/{sku_id}/inventory",
+		ContractMethod: "put",
+		HTTPMethod:     http.MethodPut,
+		HandlerFile:    "admin_store.go",
+		NoQueryParams:  "两个 id 在路径上，三个数量在请求体里；CAS 的 expected 刻意不是 query —— 它是请求体的一部分，不是一个开关",
+	},
 }
 
 // routeOf 按方法与契约路径取出登记行。取不到就 Fatal —— 调用方（别的测试文件）
@@ -636,10 +820,17 @@ type pendingOp struct {
 // 以及 /admin/staff 的三个操作。它们是别的 19 条的前置，
 // 因为 26 条里没有一条不需要后台身份。
 //
-// M4 任务 3（商家自助发布）划掉了 16 条，剩下 3 条。
-// **M4 收尾这一轮又划掉了 POST /admin/merchants**（开店）：它缺的那样东西
-// —— repository 上「在指定租户里开一个事务」的入口 —— 本轮建出来了，
-// 叫 repository.WithNewTenant。剩下 2 条。
+// M4 任务 3（商家自助发布）划掉了 16 条。随后契约又补进来 21 条门店 / 大区
+// 的操作（多门店那一轮契约先行），这张表一度回到 24 条。
+//
+// 之后两条线各划掉了一批，**它们是并行做的，所以这段话是合并时才写全的**：
+//   · M4 收尾划掉 POST /admin/merchants（开店）—— 它缺的那样东西，
+//     repository 上「在指定租户里开一个事务」的入口，那一轮建出来了，
+//     叫 repository.WithNewTenant；
+//   · 多门店落地（00020）把那 21 条一条不剩地划掉。
+//
+// 于是剩下 2 条。两条剩下的理由不同，而且都不是「还没轮到」：
+// 它们各缺一样今天不存在的东西，逐条写在下面。
 var notYetRouted = []pendingOp{
 	// —— M1 就在契约里的 10 条，任务 2 划掉了其中 7 条。
 	//
@@ -650,6 +841,14 @@ var notYetRouted = []pendingOp{
 		"后台鉴权也已落地，缺的是 handler 与 §5 那三条发货规则。"},
 	{"/admin/refunds/{refund_no}/audit", "post", "退款审核。退款域的表已落地（§11），" +
 		"后台鉴权也已落地，缺的是 handler 与退款状态机那几条边。"},
+
+	// —— 多门店 + 电子围栏 + 大区那 21 条**本轮全部落地，一条不剩**。
+	//
+	// 它们曾经是这张表里最长的一段，欠的东西比商品域那 16 条又多一样：
+	// 数据库扩展（围栏是 GEOGRAPHY(POLYGON, 4326)，要 PostGIS）。顺序是
+	// 换镜像 → 迁移 → repository → service → handler，第一步动了 compose 与 CI。
+	//
+	// 删掉这一段就是这一轮的验收动作：这张表是「还没实现」的锁，不是文档。
 }
 
 // contractHTTPMethods 是 OpenAPI path item 里哪些键算一个操作。
@@ -868,9 +1067,23 @@ func TestContractQueryParamsAreHandledOrListed(t *testing.T) {
 				t.Fatalf("从契约里一个 query 参数都没解析出来 —— %s %s 还在吗？",
 					r.ContractMethod, r.ContractPath)
 			}
-			if len(handled) == 0 {
-				t.Fatalf("从 %s 里一个 c.Query 调用都没解析出来 —— 这条测试没在检查任何东西",
-					r.HandlerFile)
+			// 这一条本轮放宽了一次，理由要写清楚，因为放宽一个阳性对照是个
+			// 该被质疑的动作。
+			//
+			// 原先它是无条件的：handler 一个 c.Query 都没读就 Fatal。
+			// 那默认了「契约声明了 query 参数 ⇒ handler 至少实现了一个」，
+			// 而多门店这一轮出现了第三种状态：**契约声明了，但全部挂在
+			// NotYetImplemented 上**（GET /products/{product_id} 只有一个
+			// store_id，而门店表还没建）。此时 handled 合法地为空集。
+			//
+			// 放宽之后还剩什么在守：handler 文件改名或改坏时，
+			// queryParamsReadByHandler 里的 parser.ParseFile 会先 t.Fatal ——
+			// 「解析失败让整条测试恒绿」那个真正要防的失败模式由它挡住，
+			// 不靠这一条。所以这里只在「本该有人实现」时才要求非空。
+			if len(handled) == 0 && len(declared) > len(r.NotYetImplemented) {
+				t.Fatalf("从 %s 里一个 c.Query 调用都没解析出来，而契约声明了 %d 个参数、"+
+					"只有 %d 个挂了账 —— 这条测试没在检查任何东西",
+					r.HandlerFile, len(declared), len(r.NotYetImplemented))
 			}
 			t.Logf("契约声明 %v；handler 读取 %v", sorted(declared), sortedBool(handled))
 		})

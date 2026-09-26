@@ -15,9 +15,15 @@ import (
 )
 
 // inventoryFixture 是两家商家各一个 SKU、各一行库存（水位 10）。
+//
+// storeA / storeB 是 00020 之后多出来的一维：库存按门店分，
+// 扣减与回补都要指名是哪一家店，而「哪一家」不是夹具的实现细节 ——
+// 拿别家的 store_id 去扣自家的 SKU 正是那两条复合外键要挡的形状，
+// 所以门店 id 和 SKU id 一样要露在夹具外面。
 type inventoryFixture struct {
 	merchantA, merchantB int64
 	skuA, skuB           int64
+	storeA, storeB       int64
 }
 
 // seedInventories 用管理员连接（绕过 RLS）播夹具。
@@ -52,12 +58,18 @@ func seedInventories(t *testing.T) inventoryFixture {
 	t.Cleanup(func() {
 		c := context.Background()
 		ids := []int64{f.merchantA, f.merchantB}
+		// 顺序由外键定：inventories 指向 stores，stores 指向 regions，
+		// 两者都指向 merchants。删漏一张表不会让**这条**测试红，
+		// 会让下一轮的 `DELETE FROM merchants` 以 23503 失败 —— 那条错误
+		// 出现在别的测试里，指不回这里。
+		// inventories 现在自带 merchant_id（00020），不必再绕 skus 的子查询。
 		for _, stmt := range []string{
-			`DELETE FROM inventories WHERE sku_id IN
-			   (SELECT id FROM skus WHERE merchant_id = ANY($1))`,
+			`DELETE FROM inventories WHERE merchant_id = ANY($1)`,
 			`DELETE FROM skus       WHERE merchant_id = ANY($1)`,
 			`DELETE FROM products   WHERE merchant_id = ANY($1)`,
 			`DELETE FROM categories WHERE merchant_id = ANY($1)`,
+			`DELETE FROM stores     WHERE merchant_id = ANY($1)`,
+			`DELETE FROM regions    WHERE merchant_id = ANY($1)`,
 			`DELETE FROM merchants  WHERE id          = ANY($1)`,
 		} {
 			if _, err := admin.Exec(c, stmt, ids); err != nil {
@@ -67,7 +79,21 @@ func seedInventories(t *testing.T) inventoryFixture {
 	})
 
 	for i, m := range []int64{f.merchantA, f.merchantB} {
-		var catID, prodID, skuID int64
+		var catID, prodID, skuID, regionID, storeID int64
+		// 每家一个大区 + 一家默认门店。00020 的回填只覆盖迁移那一刻已有的
+		// 商家，这两家是之后插的，所以门店得自己建。
+		// is_default = TRUE：默认店靠「全国兜底」接单，不画围栏是正常形态；
+		// 这组测试一条都不碰地理围栏，画个假多边形只会让人以为它有意义。
+		if err := admin.QueryRow(ctx,
+			`INSERT INTO regions (merchant_id, code, name) VALUES ($1,'r','R')
+			 RETURNING id`, m).Scan(&regionID); err != nil {
+			t.Fatal(err)
+		}
+		if err := admin.QueryRow(ctx,
+			`INSERT INTO stores (merchant_id, region_id, code, name, is_default)
+			 VALUES ($1,$2,'s','S',TRUE) RETURNING id`, m, regionID).Scan(&storeID); err != nil {
+			t.Fatal(err)
+		}
 		if err := admin.QueryRow(ctx,
 			`INSERT INTO categories (merchant_id, name, path) VALUES ($1,'c','/c/')
 			 RETURNING id`, m).Scan(&catID); err != nil {
@@ -84,15 +110,17 @@ func seedInventories(t *testing.T) inventoryFixture {
 			m, prodID, fmt.Sprintf("%s-%d", suffix, m)).Scan(&skuID); err != nil {
 			t.Fatal(err)
 		}
+		// merchant_id 显式写：这是管理员连接，没有 app.merchant_id，
+		// 列默认值 current_merchant() 会 RAISE 而不是填一个空。
 		if _, err := admin.Exec(ctx,
-			`INSERT INTO inventories (sku_id, available_qty) VALUES ($1, 10)`,
-			skuID); err != nil {
+			`INSERT INTO inventories (sku_id, store_id, merchant_id, available_qty)
+			 VALUES ($1, $2, $3, 10)`, skuID, storeID, m); err != nil {
 			t.Fatal(err)
 		}
 		if i == 0 {
-			f.skuA = skuID
+			f.skuA, f.storeA = skuID, storeID
 		} else {
-			f.skuB = skuID
+			f.skuB, f.storeB = skuID, storeID
 		}
 	}
 	return f
@@ -139,7 +167,7 @@ func TestDeductInventoryTellsStarvationFromCrossTenant(t *testing.T) {
 		var after int32
 		err := r.WithTenant(asA, func(q repository.Tx) error {
 			var e error
-			after, e = q.DeductInventory(ctx, f.skuA, 3)
+			after, e = q.DeductInventory(ctx, f.skuA, f.storeA, 3)
 			return e
 		})
 		if err != nil {
@@ -156,7 +184,7 @@ func TestDeductInventoryTellsStarvationFromCrossTenant(t *testing.T) {
 	t.Run("自家_库存不足_是业务分支", func(t *testing.T) {
 		before := availableQty(t, f.skuA)
 		err := r.WithTenant(asA, func(q repository.Tx) error {
-			_, e := q.DeductInventory(ctx, f.skuA, before+1)
+			_, e := q.DeductInventory(ctx, f.skuA, f.storeA, before+1)
 			return e
 		})
 		if !errors.Is(err, repository.ErrInsufficientStock) {
@@ -181,7 +209,7 @@ func TestDeductInventoryTellsStarvationFromCrossTenant(t *testing.T) {
 			t.Fatalf("夹具坏了：商家 B 的水位是 %d，这次失败就分不清是缺货还是不可见", got)
 		}
 		err := r.WithTenant(asA, func(q repository.Tx) error {
-			_, e := q.DeductInventory(ctx, f.skuB, 1)
+			_, e := q.DeductInventory(ctx, f.skuB, f.storeB, 1)
 			return e
 		})
 		if !errors.Is(err, repository.ErrSKUNotInTenant) {
@@ -199,7 +227,7 @@ func TestDeductInventoryTellsStarvationFromCrossTenant(t *testing.T) {
 		// 补偿最容易直接攥着 sku_id 回滚（数据模型 §4 点名说了）。
 		// 回补别家的库存不是「补偿失败」，是往别人账上打钱。
 		err := r.WithTenant(asA, func(q repository.Tx) error {
-			_, e := q.RestoreInventory(ctx, f.skuB, 5)
+			_, e := q.RestoreInventory(ctx, f.skuB, f.storeB, 5)
 			return e
 		})
 		if !errors.Is(err, repository.ErrSKUNotInTenant) {
@@ -212,7 +240,7 @@ func TestDeductInventoryTellsStarvationFromCrossTenant(t *testing.T) {
 		var after int32
 		err = r.WithTenant(asA, func(q repository.Tx) error {
 			var e error
-			after, e = q.RestoreInventory(ctx, f.skuA, 3)
+			after, e = q.RestoreInventory(ctx, f.skuA, f.storeA, 3)
 			return e
 		})
 		if err != nil {
@@ -238,7 +266,7 @@ func TestDeductInventoryWithoutTenantIsNeitherBranch(t *testing.T) {
 	// WithTenant 在 Go 这一侧就会拒绝没有租户的 ctx，所以这条走不到数据库；
 	// 断言的是它**不**返回那两个 sentinel 中的任何一个。
 	err := r.WithTenant(ctx, func(q repository.Tx) error {
-		_, e := q.DeductInventory(ctx, f.skuA, 1)
+		_, e := q.DeductInventory(ctx, f.skuA, f.storeA, 1)
 		return e
 	})
 	if errors.Is(err, repository.ErrInsufficientStock) ||

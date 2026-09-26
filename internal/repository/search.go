@@ -58,7 +58,7 @@ type SearchTx interface {
 	//
 	// embedding 必须是 inference.Dim 维且 L2 归一化的，否则返回
 	// ErrVectorWrongDim / ErrVectorNotNormalized 且一条 SQL 都不发。
-	SearchProductsByVector(ctx context.Context, embedding []float32,
+	SearchProductsByVector(ctx context.Context, sc StoreScope, embedding []float32,
 		f SearchFilters, limit int32) ([]SearchHit, error)
 
 	// SearchProductsByKeyword 按 bigram tsquery 召回，ts_rank_cd 高的在前。
@@ -67,12 +67,12 @@ type SearchTx interface {
 	// 空串会让 to_tsquery 报语法错，所以调用方必须先判空 —— 这一层不替它
 	// 兜底：一个「查询切不出任何词」的请求走到这里已经是上面的逻辑错了，
 	// 悄悄返回空列表会把那个错藏起来。
-	SearchProductsByKeyword(ctx context.Context, tsquery string,
+	SearchProductsByKeyword(ctx context.Context, sc StoreScope, tsquery string,
 		f SearchFilters, limit int32) ([]SearchHit, error)
 }
 
-func (t tenantTx) SearchProductsByVector(ctx context.Context, embedding []float32,
-	f SearchFilters, limit int32) ([]SearchHit, error) {
+func (t tenantTx) SearchProductsByVector(ctx context.Context, sc StoreScope,
+	embedding []float32, f SearchFilters, limit int32) ([]SearchHit, error) {
 
 	// 查询向量过的是与入库同一道闸门。理由写在 vectorLiteral 上：
 	// `<=>` 对查询侧的模长同样敏感，而一个没归一化的查询向量不会报错。
@@ -82,6 +82,8 @@ func (t tenantTx) SearchProductsByVector(ctx context.Context, embedding []float3
 	}
 	rows, err := t.q.SearchProductsByVector(ctx, db.SearchProductsByVectorParams{
 		QueryEmbedding: lit,
+		StoreID:        sc.StoreID,
+		RegionID:       sc.RegionID,
 		CategoryID:     f.CategoryID,
 		MinPriceCents:  f.MinPriceCents,
 		MaxPriceCents:  f.MaxPriceCents,
@@ -103,11 +105,13 @@ func (t tenantTx) SearchProductsByVector(ctx context.Context, embedding []float3
 	return out, nil
 }
 
-func (t tenantTx) SearchProductsByKeyword(ctx context.Context, tsquery string,
-	f SearchFilters, limit int32) ([]SearchHit, error) {
+func (t tenantTx) SearchProductsByKeyword(ctx context.Context, sc StoreScope,
+	tsquery string, f SearchFilters, limit int32) ([]SearchHit, error) {
 
 	rows, err := t.q.SearchProductsByKeyword(ctx, db.SearchProductsByKeywordParams{
 		Tsquery:       tsquery,
+		StoreID:       sc.StoreID,
+		RegionID:      sc.RegionID,
 		CategoryID:    f.CategoryID,
 		MinPriceCents: f.MinPriceCents,
 		MaxPriceCents: f.MaxPriceCents,

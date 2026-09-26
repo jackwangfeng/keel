@@ -64,6 +64,10 @@ export type AdminCategory = {
 
 export type AdminInventory = {
   sku_id : number
+  sku_code? : string
+  /** 这一行库存属于哪家门店。**必返。** */
+  store_id : number
+  /** 这家门店的可售量。**这一行不存在时视同 0，不是「这家店不卖」**—— */
   available_qty : number
   warning_qty : number
   updated_at : string
@@ -164,6 +168,58 @@ export type AdminProductDetail = {
   images : ProductImage[]
 }
 
+/** 后台视角的大区。**没有几何**——大区是门店的分组， */
+export type AdminRegion = {
+  id : number
+  /** 租户内唯一（软删的不占用）。 */
+  code : string
+  name : string
+  /** 0 停用 / 1 启用。 */
+  status : number
+  /** 名下未软删的门店数。删大区时会因为它非零而被拒（409）， */
+  store_count : number
+  deleted_at? : string | null
+  created_at : string
+  updated_at? : string
+}
+
+/** 后台视角的门店，**含围栏**。与买家侧的 `Store` 分成两个 schema， */
+export type AdminStore = {
+  id : number
+  /** 所属大区，**必填且不可空**（`stores.region_id NOT NULL`）。 */
+  region_id : number
+  region_name? : string
+  /** 租户内唯一（软删的不占用）。 */
+  code : string
+  name : string
+  phone? : string
+  province? : string
+  city? : string
+  district? : string
+  address? : string
+  lat? : number | null
+  lng? : number | null
+  /** 电子围栏。**为 null 且 `is_default = false` 的门店是一家永远接不到单的店**—— */
+  fence? : any
+  /** 是否是「全国配送」的回落门店。每个商家**至多一个** */
+  is_default : boolean
+  /** 0 停业 / 1 营业。停业的门店不参与围栏判定，也不能下单。 */
+  status : number
+  deleted_at? : string | null
+  created_at : string
+  updated_at? : string
+}
+
+/** 门店列表。比一般的分页响应多一个 `has_default`—— */
+export type AdminStoreList = {
+  page : number
+  page_size : number
+  total : number
+  items : AdminStore[]
+  /** 这家商家有没有默认门店。**必返。** */
+  has_default : boolean
+}
+
 export type CartItem = {
   id : number
   sku_id : number
@@ -255,6 +311,13 @@ export type FieldError = {
   length? : number
 }
 
+/** GeoJSON Polygon，SRID 固定 4326。落库成 `GEOGRAPHY(POLYGON, 4326)`。 */
+export type GeoPolygon = {
+  type : string
+  /** 环的数组。第一个是外环。 */
+  coordinates : number[][][]
+}
+
 /** 第三方身份来源，对应 `user_identities.provider`： */
 export type IdentityProvider = number
 
@@ -333,6 +396,10 @@ export type OrderRefundStatus = number
 
 export type Order = {
   order_no : string
+  /** 履约门店。**必返**（DB 上是 `NOT NULL`）。 */
+  store_id : number
+  /** 下单时那家门店所属的大区。**冗余在订单上，不靠 `stores.region_id` 推**： */
+  region_id? : number
   /** **履约维度** —— 货走到哪儿了。资金维度另见 `Order.refund_status`。 */
   status : OrderStatus
   /** 售后状态，与 status 正交，必返字段（DB 上是 `NOT NULL DEFAULT 0`）。 */
@@ -364,6 +431,8 @@ export type OrderItemInput = {
 
 export type OrderCreateRequest = {
   items : OrderItemInput[]
+  /** 由哪家门店履约。**必填，服务端不替客户端猜。** */
+  store_id : number
   address_id : number
   /** 第一期仅支持单张券 */
   user_coupon_id? : number
@@ -383,6 +452,14 @@ export type ReceiverSnapshot = {
   detail : string
   region_code? : string
   postal_code? : string
+}
+
+/** 下单那一瞬间的门店与大区展示信息，取自 `orders.store_snapshot`。 */
+export type OrderStoreSnapshot = {
+  store_name : string
+  store_phone? : string
+  store_address? : string
+  region_name? : string
 }
 
 export type OrderItem = {
@@ -474,6 +551,10 @@ export type Refund = {
 
 export type OrderDetail = {
   order_no : string
+  /** 履约门店。**必返**（DB 上是 `NOT NULL`）。 */
+  store_id : number
+  /** 下单时那家门店所属的大区。**冗余在订单上，不靠 `stores.region_id` 推**： */
+  region_id? : number
   /** **履约维度** —— 货走到哪儿了。资金维度另见 `Order.refund_status`。 */
   status : OrderStatus
   /** 售后状态，与 status 正交，必返字段（DB 上是 `NOT NULL DEFAULT 0`）。 */
@@ -498,6 +579,8 @@ export type OrderDetail = {
   finished_at? : string
   /** 下单时的收货信息快照 */
   receiver? : ReceiverSnapshot
+  /** 下单时的门店与大区展示信息快照。 */
+  store? : OrderStoreSnapshot
   items? : OrderItem[]
   payments? : PaymentRecord[]
   /** 该订单下的全部退款单，按申请时间倒序。 */
@@ -534,6 +617,10 @@ export type UserCoupon = {
 }
 
 export type OrderPreview = {
+  /** 本次试算按哪家门店算的（回显请求里的 `store_id`）。 */
+  store_id : number
+  /** 那家门店所属大区。价格的中间一层按它算（数据模型 §4）。 */
+  region_id? : number
   /** 金额，单位「分」。禁止使用浮点。 */
   goods_amount_cents : Money
   /** 金额，单位「分」。禁止使用浮点。 */
@@ -542,7 +629,7 @@ export type OrderPreview = {
   discount_cents? : Money
   /** 金额，单位「分」。禁止使用浮点。 */
   payable_cents : Money
-  /** 含优惠分摊结果 */
+  /** 含优惠分摊结果。 */
   items : OrderPreviewItemsItem[]
   applicable_coupons? : UserCoupon[]
 }
@@ -629,6 +716,12 @@ export type ProductImagesReplaceRequest = {
   images : ProductImageInput[]
 }
 
+/** `listed = false` 写一行排除，`listed = true` 删掉那一行。 */
+export type ProductListingRequest = {
+  /** 这一层卖不卖它。注意这不保证买家看得见—— */
+  listed : boolean
+}
+
 export type ProductPublicationRequest = {
   /** `publish` → `status = 1`；`unpublish` → `status = 2`。 */
   action : string
@@ -661,12 +754,58 @@ export type RefundCreateRequest = {
   evidence_urls? : string[]
 }
 
+export type RegionCreateRequest = {
+  code : string
+  name : string
+}
+
+/** 只给要改的字段。`code` 改了要重查唯一性。 */
+export type RegionUpdateRequest = {
+  code? : string
+  name? : string
+  status? : number
+}
+
+/** 一件商品在某个作用域（大区或门店）下的可见性与生效价。 */
+export type ScopedProductListing = {
+  product_id : number
+  title : string
+  image_url? : string
+  /** 租户级的 `products.status`：0 草稿 / 1 上架 / 2 下架。 */
+  status? : number
+  /** **本作用域**有没有把它下架。`true` 表示这一层没有排除它—— */
+  listed : boolean
+  /** 两层都算完之后买家到底看不看得见。 */
+  effective_listed : boolean
+  /** 本作用域下这件商品各 SKU 生效价的最小值。 */
+  min_price_cents? : Money
+  /** 最大值。 */
+  max_price_cents? : Money
+  /** 这个价来自哪一层：**1 基准价 / 2 大区价 / 3 门店价**。 */
+  price_source : number
+}
+
+/** 一个 SKU 在某个作用域（大区或门店）下的价格覆盖与生效价。 */
+export type ScopedSkuPrice = {
+  sku_id : number
+  sku_code? : string
+  /** `skus.price_cents`，最外层的基准价。 */
+  base_price_cents? : Money
+  /** **本作用域**自己定的价。为 null 表示这一层没有覆盖， */
+  override_price_cents? : number | null
+  /** 三层 `COALESCE` 之后真正生效的价。 */
+  effective_price_cents : Money
+  /** 1 基准价 / 2 大区价 / 3 门店价。 */
+  price_source : number
+}
+
 export type SearchFilters = {
   category_id? : number
-  /** 金额，单位「分」。禁止使用浮点。 */
+  /** 按**当前门店的生效价**过滤（三层 `COALESCE` 之后的值）， */
   min_price_cents? : Money
-  /** 金额，单位「分」。禁止使用浮点。 */
+  /** 同上。 */
   max_price_cents? : Money
+  /** 只要当前门店有货的。**默认值本轮从 `true` 改成 `false`**， */
   in_stock_only? : boolean
 }
 
@@ -696,6 +835,19 @@ export type SearchHit = {
   scores? : SearchHitScores
   /** 该结果来自哪一路召回，`explain=true` 时返回。 */
   recall_source? : string
+}
+
+/** `POST /search` 的请求体。**本轮从内联 schema 提成具名的**—— */
+export type SearchRequest = {
+  query : string
+  /** 按哪家门店检索。与 `GET /products` 的同名查询参数逐字同义、 */
+  store_id? : number
+  filters? : SearchFilters
+  size? : number
+  /** 排序策略标识，用于 A/B 对比。记入检索日志后可按策略分组 */
+  strategy? : string
+  /** 返回各阶段得分，用于调试与效果评估 */
+  explain? : boolean
 }
 
 export type Shipment = {
@@ -730,6 +882,12 @@ export type SkuCreateRequest = {
   available_qty? : number
   /** 低库存预警线，省略即 0。 */
   warning_qty? : number
+}
+
+/** 设置本作用域的价格覆盖（upsert）。 */
+export type SkuPriceSetRequest = {
+  /** 本作用域的价，单位分，非负。 */
+  price_cents : Money
 }
 
 /** **刻意没有 `available_qty`**：库存有自己的端点，因为它要表达乐观并发。 */
@@ -778,6 +936,91 @@ export type StaffSession = {
   staff : Staff
 }
 
+/** 买家视角的门店。不含围栏——围栏是运营数据，不该发给客户端。 */
+export type Store = {
+  id : number
+  name : string
+  phone? : string
+  address? : string
+  lat? : number | null
+  lng? : number | null
+  /** 是否是这家商家的「全国配送」回落门店。 */
+  is_default : boolean
+}
+
+/** 「当前门店」是怎么定下来的。这三个值是产品规则的对外形状， */
+export type StoreMatchType = string
+
+/** 每一条会受门店影响的读接口都回显它。**没有它，客户端拿到的 */
+export type StoreContext = {
+  /** 本次响应是按哪家门店算的。`match_type = none` 时为 null。 */
+  store_id? : number | null
+  /** 那家门店所属大区。价格的中间一层按它算。 */
+  region_id? : number | null
+  /** 「当前门店」是怎么定下来的。这三个值是产品规则的对外形状， */
+  match_type : StoreMatchType
+}
+
+/** **围栏不在这里传**，走 `PUT /admin/stores/{store_id}/fence`。 */
+export type StoreCreateRequest = {
+  /** 必填。大区不存在或不属于当前租户时返回 422。 */
+  region_id : number
+  code : string
+  name : string
+  phone? : string
+  province? : string
+  city? : string
+  district? : string
+  address? : string
+  /** 门店自身坐标的纬度，`/stores/resolve` 的 `distance_m` 按它算。 */
+  lat? : number
+  /** 经度。与 `lat` 同时给或同时不给。 */
+  lng? : number
+  /** 建出来就是默认门店。已经有一家时返回 409——切换默认店请用 */
+  is_default? : boolean
+}
+
+/** 整体替换这家门店的围栏。 */
+export type StoreFenceRequest = {
+  /** 传 `null` 即清空围栏。**清空只对默认门店合法**—— */
+  fence : any
+}
+
+export type StoreMatch = {
+  id : number
+  name : string
+  phone? : string
+  address? : string
+  lat? : number | null
+  lng? : number | null
+  /** 是否是这家商家的「全国配送」回落门店。 */
+  is_default : boolean
+  /** 买家坐标到门店坐标的球面距离，**单位米**。 */
+  distance_m : number | null
+}
+
+export type StoreResolveResult = {
+  /** 「当前门店」是怎么定下来的。这三个值是产品规则的对外形状， */
+  match_type : StoreMatchType
+  /** `fence` 时是命中的全部门店按 `distance_m` 升序； */
+  stores : StoreMatch[]
+}
+
+/** 只给要改的字段。**改不了两样**：`fence` 走 `PUT .../fence`（要过 */
+export type StoreUpdateRequest = {
+  region_id? : number
+  code? : string
+  name? : string
+  phone? : string
+  province? : string
+  city? : string
+  district? : string
+  address? : string
+  lat? : number
+  lng? : number
+  status? : number
+}
+
 export type Upload = {
   id : number
   /** 可直接写入业务字段（如 `evidence_urls`、`avatar_url`）的访问地址， */
@@ -804,6 +1047,8 @@ export type UserIdentity = {
 export type ListProductsQuery = {
   page? : number
   page_size? : number
+  store_id? : number
+  in_stock_only? : boolean
   category_id? : number
   sort? : string
   min_price_cents? : number
@@ -816,6 +1061,13 @@ export type ListProductsResponse = {
   page_size : number
   total : number
   items : ProductSummary[]
+  /** 本次结果是按哪家门店算的。**必返。** */
+  store : StoreContext
+}
+
+/** GET /products/{product_id} 的 query 参数 */
+export type GetProductQuery = {
+  store_id? : number
 }
 
 /** POST /auth/login 的请求体 */
@@ -849,20 +1101,11 @@ export type ListOrdersResponse = {
   items : Order[]
 }
 
-/** POST /search 的请求体 */
-export type SearchRequest = {
-  query : string
-  filters? : SearchFilters
-  size? : number
-  /** 排序策略标识，用于 A/B 对比。记入检索日志后可按策略分组 */
-  strategy? : string
-  /** 返回各阶段得分，用于调试与效果评估 */
-  explain? : boolean
-}
-
 /** POST /search 的 200 响应体 */
 export type SearchResponse = {
   items : SearchHit[]
+  /** 本次检索是按哪家门店算的。**必返**，与 `GET /products` */
+  store : StoreContext
   latency_ms : number
   /** 本次召回并排序后的结果总数（上限即 `size`）。 */
   total? : number

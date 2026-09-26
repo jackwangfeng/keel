@@ -169,37 +169,74 @@ jobs:
     env:
       PGPORT: "15432"
     timeout-minutes: 20
-    services:
-      postgres:
-        # 和 compose.yaml 同一个镜像，理由完整写在那里：M3 的第一条迁移开头是
-        # `CREATE EXTENSION IF NOT EXISTS vector`，官方 postgres:16 里实测报
-        # `extension "vector" is not available`，于是整条迁移链在那里断掉 ——
-        # 而错误停在 goose 上，不指向真因。
-        #
-        # 两处必须一起换。只换一处的后果是最难查的那种：本地 compose 绿、CI 红
-        # （或反过来），而两边跑的是同一份迁移，谁都不会先怀疑镜像。
-        image: pgvector/pgvector:pg16
-        env:
-          # keel / keel / keel 与 internal/db.AdminDSN() 的默认值逐项对应，
-          # 迁移用的就是这个角色。对上之后这个 job 一个 PG* 环境变量都不用配，
-          # 少一处「Makefile、compose、workflow 三份连接串各说各话」的机会。
-          # 应用与测试连的是 keel_app，它由 00003_app_role.sql 在迁移里建出来。
-          POSTGRES_USER: keel
-          POSTGRES_PASSWORD: keel
-          POSTGRES_DB: keel
-        ports:
-          # 测试进程跑在 runner 宿主机上，不在容器网络里，所以必须映射出来。
-          # 原来映到 5432、让 internal/db 的默认 PGPORT 直接成立；自建 runner 上 5432
-          # 被同机的 quant_postgres 占着，改成 15432，job 级的 PGPORT 跟着改
-          # （internal/db/dsn.go 与 Makefile 的 GOOSE_DBSTRING 都读它）。
-          - 15432:5432
-        options: >-
-          --health-cmd "pg_isready -h 127.0.0.1 -U keel -d keel"
-          --health-interval 2s
-          --health-timeout 3s
-          --health-retries 30
+    # 没有 services.postgres 这一段了。**这不是疏忽，是没得选。**
+    #
+    # 00020 的电子围栏要 PostGIS，00016 的向量要 pgvector，而没有任何一个
+    # 官方镜像同时带这两样（完整论证在 compose.yaml 的 postgres 服务上方与
+    # 数据模型 §4）。仓库因此自建 docker/postgres/Dockerfile —— 而
+    # `services.<id>.image` **只吃一个能 pull 下来的标签，不接受 build**。
+    #
+    # 于是这个 job 自己起库：下面「数据库」那一步 docker build + docker run，
+    # 端口、环境变量与原来那段 services 逐项相同，健康检查用同一条 pg_isready。
+    # 对后面每一步来说，这与 services 那段是同一件事。
+    #
+    # **成本这一段跟着 runner 改了，别照抄托管 runner 时代的算法。**
+    # 托管 runner 每次都是新虚拟机，那时 docker build 是每次必付的 90 秒，
+    # 于是当时写了两段论证「为什么不推 GHCR、为什么不用 actions/cache」。
+    # 现在全部 job 跑在 lenserver 上，**镜像层留在这台机器的本地 image store 里**：
+    # 首次构建付一次全价，之后只要 docker/postgres 下面没动，每一步都是
+    # `CACHED`，实测整步在秒级。所以：
+    #   · 不推 GHCR —— 原来的理由（要一条发布 workflow、packages:write、一份
+    #     此刻不存在的凭据，换来让测试基建依赖仓库之外的可变产物）还成立，
+    #     而它原本要买的那点速度，本地层缓存已经白送了。
+    #   · 不用 actions/cache —— 在自建 runner 上它是**纯负收益**：docker
+    #     save/load 一个 794 MB 的镜像，再加一次缓存的上传下载，去替换一个
+    #     本来就在本地磁盘上的层缓存。
+    # 真要让它变慢只有一种情况：有人在这台机器上 docker system prune。
+    # 那时症状只是这一步慢回 90 秒，不会错。
     steps:
       - uses: actions/checkout@v4
+
+      # 数据库。与 compose.yaml 的 postgres 服务**同一个 Dockerfile** ——
+      # 两边只要有一处还指着旧镜像，症状就是最难查的那种：本地 compose 绿、
+      # CI 红（或反过来），而两边跑的是同一份迁移，谁都不会先怀疑镜像。
+      - name: 数据库（PostGIS + pgvector，自建镜像）
+        run: |
+          # 上一次的残留。自建 runner 不像托管 runner 那样每次给新机器，
+          # 上一跑要是没走到「收拾」那一步（job 被取消、runner 重启），
+          # 这里会因为重名直接失败，而那句报错完全不指向真因。
+          docker rm -f keelci-pg >/dev/null 2>&1 || true
+
+          docker build -t keel-postgres:16 docker/postgres
+          docker run -d --name keelci-pg \
+            -e POSTGRES_USER=keel -e POSTGRES_PASSWORD=keel -e POSTGRES_DB=keel \
+            -p 15432:5432 keel-postgres:16
+          # keel / keel / keel 与 internal/db.AdminDSN() 的默认值逐项对应，
+          # 迁移用的就是这个角色。对上之后这个 job 除了 PGPORT 一个 PG* 环境
+          # 变量都不用配，少一处「Makefile、compose、workflow 三份连接串各说
+          # 各话」的机会。应用与测试连的是 keel_app，它由 00003_app_role.sql
+          # 在迁移里建出来。
+          #
+          # 端口：托管 runner 时代映的是 5432，好让 internal/db 的默认 PGPORT
+          # 直接成立。这台机器上 5432 被 quant_postgres 占着，所以映 15432，
+          # job 级的 PGPORT 跟着改（internal/db/dsn.go 与 Makefile 的
+          # GOOSE_DBSTRING 都读它）。容器名同理带 keelci 前缀，和演示栈隔开。
+          #
+          # 等健康：原先那段 services 用 --health-cmd 让 runner 替我们等，
+          # 自己起容器就得自己等。判据用同一条 pg_isready，-h 127.0.0.1 同样
+          # 不能省（理由写在 compose.yaml 的 healthcheck 上：initdb 期间镜像会先
+          # 起一个只听 unix socket 的临时服务器，不带 -h 的 pg_isready 走的正是
+          # 那个 socket，于是它会在库还没真的可连时就报 ready）。
+          for i in $(seq 1 60); do
+            if docker exec keelci-pg pg_isready -h 127.0.0.1 -U keel -d keel >/dev/null 2>&1; then
+              echo "数据库就绪（第 ${i} 次探测）"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::数据库 120 秒内没有就绪"
+          docker logs keelci-pg
+          exit 1
 
       - uses: actions/setup-go@v5
         with:
@@ -267,6 +304,19 @@ jobs:
       # 这个 job 换成一个只在该报警时失灵的 job。
       - name: 数据库测试（每次都是冷库）
         run: make test-db
+
+      # 失败时把库的日志摊开。迁移在 TestMain 里跑，红了以后 Go 那侧只会说
+      # 某条 SQL 报了什么，而「为什么报」常常在 postgres 的日志里
+      # （扩展没装上、initdb 脚本半路失败）。
+      - name: 失败时打印数据库日志
+        if: failure()
+        run: docker logs --timestamps keelci-pg || true
+
+      # 自建 runner 不会替你删容器。不删的话下一跑在 docker run 那里重名失败。
+      # 卷是匿名的，跟着 -v 一起走 —— 这也是「每次都是冷库」赖以成立的前提。
+      - name: 收拾
+        if: always()
+        run: docker rm -f -v keelci-pg || true
 
   # ---------------------------------------------------------------------------
   # 端到端：起全栈，再从外面打进去

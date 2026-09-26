@@ -1026,8 +1026,10 @@ func (r keywordBrokenRepo) WithTenant(ctx context.Context, fn func(repository.Tx
 
 type brokenKeywordTx struct{ repository.Tx }
 
-func (brokenKeywordTx) SearchProductsByKeyword(ctx context.Context, tsquery string,
-	f repository.SearchFilters, limit int32) ([]repository.SearchHit, error) {
+// 签名跟着 repository.Tx 走：00020 给两路召回都加了 StoreScope。
+// 这里原样接下不用 —— 这个替身的全部职责是「让关键词那一路失败」。
+func (brokenKeywordTx) SearchProductsByKeyword(ctx context.Context, sc repository.StoreScope,
+	tsquery string, f repository.SearchFilters, limit int32) ([]repository.SearchHit, error) {
 	return nil, fmt.Errorf("注入的故障：关键词召回这一路挂了")
 }
 
@@ -1081,14 +1083,14 @@ func TestBothRecallPathsFilterIdentically(t *testing.T) {
 		t.Helper()
 		v, k := map[int64]bool{}, map[int64]bool{}
 		if err := repo.WithTenant(ctx, func(tx repository.Tx) error {
-			vh, err := tx.SearchProductsByVector(ctx, vec, f, limit)
+			vh, err := tx.SearchProductsByVector(ctx, fx.ScopeA(), vec, f, limit)
 			if err != nil {
 				return err
 			}
 			for _, h := range vh {
 				v[h.ID] = true
 			}
-			kh, err := tx.SearchProductsByKeyword(ctx, tsq, f, limit)
+			kh, err := tx.SearchProductsByKeyword(ctx, fx.ScopeA(), tsq, f, limit)
 			if err != nil {
 				return err
 			}

@@ -49,6 +49,35 @@ REQUIRED_PATHS = [
     ('/admin/categories', 'post'),
     ('/admin/categories/{category_id}', 'patch'),
     ('/admin/categories/{category_id}', 'delete'),
+    # 多门店 + 电子围栏 + 大区。登记在这里的理由与上面那 16 条一样：
+    # 让「哪天有人把这一段删了或改了名」当场红。
+    #
+    # 这一段还多锁一样东西：**大区与门店的端点是成对的**（上下架、定价各一对）。
+    # 少掉其中一半不会有任何别的检查发现——它只表现为「后台少了一个页面」，
+    # 而那看起来像是还没做。
+    ('/stores', 'get'),
+    ('/stores/resolve', 'get'),
+    ('/admin/regions', 'get'),
+    ('/admin/regions', 'post'),
+    ('/admin/regions/{region_id}', 'patch'),
+    ('/admin/regions/{region_id}', 'delete'),
+    ('/admin/regions/{region_id}/products', 'get'),
+    ('/admin/regions/{region_id}/products/{product_id}/listing', 'put'),
+    ('/admin/regions/{region_id}/skus/{sku_id}/price', 'put'),
+    ('/admin/regions/{region_id}/skus/{sku_id}/price', 'delete'),
+    ('/admin/stores', 'get'),
+    ('/admin/stores', 'post'),
+    ('/admin/stores/{store_id}', 'get'),
+    ('/admin/stores/{store_id}', 'patch'),
+    ('/admin/stores/{store_id}', 'delete'),
+    ('/admin/stores/{store_id}/fence', 'put'),
+    ('/admin/stores/{store_id}/default', 'put'),
+    ('/admin/stores/{store_id}/products', 'get'),
+    ('/admin/stores/{store_id}/products/{product_id}/listing', 'put'),
+    ('/admin/stores/{store_id}/skus/{sku_id}/price', 'put'),
+    ('/admin/stores/{store_id}/skus/{sku_id}/price', 'delete'),
+    ('/admin/stores/{store_id}/inventories', 'get'),
+    ('/admin/stores/{store_id}/skus/{sku_id}/inventory', 'put'),
 ]
 
 REQUIRED_SCHEMAS = ['UploadTarget', 'Upload',
@@ -61,7 +90,18 @@ REQUIRED_SCHEMAS = ['UploadTarget', 'Upload',
                     'ProductImage', 'ProductImageInput', 'ProductImagesReplaceRequest',
                     'AdminSku', 'SkuCreateRequest', 'SkuUpdateRequest',
                     'AdminInventory', 'InventorySetRequest', 'InventoryConflict',
-                    'AdminCategory', 'CategoryCreateRequest', 'CategoryUpdateRequest']
+                    'AdminCategory', 'CategoryCreateRequest', 'CategoryUpdateRequest',
+                    # 门店 / 大区 / 围栏
+                    'GeoPolygon', 'StoreMatchType', 'StoreContext',
+                    'Store', 'StoreMatch', 'StoreResolveResult',
+                    'AdminStore', 'AdminStoreList',
+                    'StoreCreateRequest', 'StoreUpdateRequest', 'StoreFenceRequest',
+                    'AdminRegion', 'RegionCreateRequest', 'RegionUpdateRequest',
+                    'ScopedProductListing', 'ProductListingRequest',
+                    'ScopedSkuPrice', 'SkuPriceSetRequest',
+                    'OrderStoreSnapshot',
+                    # 本轮从内联提出来的：内联的生成器不出类型，handler 只能手写绑定
+                    'SearchRequest']
 
 # (schema 名, 必须存在的属性名)
 REQUIRED_FIELDS = [
@@ -75,6 +115,34 @@ REQUIRED_FIELDS = [
     # 商品图这一路的落点。M2 验收记过 image_url / images「声明了但从不填」，
     # 原因是没有任何东西把 uploads 和商品连起来。
     ('ProductImageInput', 'upload_id'),
+
+    # —— 多门店的三条产品规则，各自在契约这一侧的落点。
+    #
+    # 「写在文档里而没有执行者的规则会漂」是这个仓库反复付过学费的一条，
+    # 下面每一行都对应数据模型 §4 那张「产品规则与它们各自的执行者」表里的一行。
+
+    # 「围栏重叠时按距离排」。字段没了，排序这条规则就没有对外的形状，
+    # 客户端也无从知道该按什么排——它会自己挑一家，而挑法各端不同。
+    ('StoreMatch', 'distance_m'),
+    # 「不在围栏内回落默认店」「没有默认店就报不在服务范围」。
+    # 这两条规则的全部对外形状就是这一个枚举字段：fence / fallback_default / none。
+    # 合并成「有没有结果」的布尔，第三种就消失了，而它要渲染的是另一个页面。
+    ('StoreResolveResult', 'match_type'),
+    # 「没配默认店的商家，店面对未授权定位的访客全是空的」。
+    # 这条代价必须有人告诉后台，否则症状（商品全空）和真因（没配默认店）
+    # 之间没有任何线索。
+    ('AdminStoreList', 'has_default'),
+    # 库存按门店分之后，一个水位不写明是谁的就没有意义。
+    ('AdminInventory', 'store_id'),
+    # 「在 A 店看的价，从 B 店发货」这类错没有任何东西会报出来，
+    # 所以下单必须显式指名门店，订单必须回显它。
+    ('OrderCreateRequest', 'store_id'),
+    ('Order', 'store_id'),
+    # 两层可见性是「与」不是「或」：大区排掉的，门店捞不回来。
+    # 合成一个字段的话后台会显示「已上架」而买家看不到。
+    ('ScopedProductListing', 'effective_listed'),
+    # 检索结果取决于哪家店服务你（M3 独立验收 I10 的放大版）。
+    ('SearchRequest', 'store_id'),
 ]
 
 # 有副作用的 POST 必须接受 Idempotency-Key（文件头约定 5）。

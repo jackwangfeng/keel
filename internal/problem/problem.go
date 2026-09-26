@@ -164,6 +164,43 @@ const (
 	TypeComplianceRejected    = "https://keel.dev/problems/compliance-rejected"
 	TypeComplianceUnavailable = "https://keel.dev/problems/compliance-unavailable"
 
+	// 门店 / 大区那一组（00020，契约 Store tag 的 23 条）。
+	//
+	// 和上面那一组同一条理由：状态码分不开它们，契约在每条端点上都写着
+	// 「按 type 区分」。这一组里有**三对**混掉之后会让客户端做错事：
+	//
+	//   store-code-conflict     → 换一个门店编号，重试**会**成功
+	//   default-store-conflict  → 已经有一家默认店了，要切换得换一条端点
+	//                             （PUT /admin/stores/{id}/default），
+	//                             在 POST 上重试**永远**不会成功
+	//
+	//   store-fence-required    → 这家店不是默认店，清空围栏会让它永远接不到单；
+	//                             调用方要做的是先把它设成默认店，或者别清
+	//   invalid-fence           → 多边形本身画错了（自交、未闭合、顶点不足）。
+	//                             detail 里转述 PostGIS 的 ST_IsValidReason，
+	//                             那句话是运营唯一能拿来定位自己画错在哪儿的东西
+	//
+	//   inventory-precondition-failed → 刷新那一格再试，**会**成功
+	//   store-ambiguous               → 本租户门店数不是 1，「这个 SKU 的库存」
+	//                                   没有唯一答案。重试没有用，
+	//                                   要换 /admin/stores/{id}/skus/{id}/inventory 那条路径。
+	//                                   **它和上一条共用 409 是契约刻意定的**：
+	//                                   两者都是「服务端现在的状态与你的假设不符」，
+	//                                   type 已经把差别说清楚，状态码不必再分一次。
+	//
+	// sku-not-sold-in-store 刻意是 422 而不是 409：409 在本契约里被客户端读成
+	// 「重读一次再试」（Retry-After、InventoryConflict.current 都在教它这么读），
+	// 而「这家店不卖这件商品」重试永远不会成功 —— 客户端该做的是换一家店。
+	TypeRegionCodeConflict   = "https://keel.dev/problems/region-code-conflict"
+	TypeRegionHasStores      = "https://keel.dev/problems/region-has-stores"
+	TypeStoreCodeConflict    = "https://keel.dev/problems/store-code-conflict"
+	TypeDefaultStoreConflict = "https://keel.dev/problems/default-store-conflict"
+	TypeStoreFenceRequired   = "https://keel.dev/problems/store-fence-required"
+	TypeStoreUnavailable     = "https://keel.dev/problems/store-unavailable"
+	TypeStoreAmbiguous       = "https://keel.dev/problems/store-ambiguous"
+	TypeInvalidFence         = "https://keel.dev/problems/invalid-fence"
+	TypeSKUNotSoldInStore    = "https://keel.dev/problems/sku-not-sold-in-store"
+
 	// 契约声明了、本轮刻意没有实现的路径。用一个**专门的** type 而不是复用
 	// internal：客户端能据此分辨「这个功能还没有」与「服务器炸了」，
 	// 而这两件事的重试策略完全相反。

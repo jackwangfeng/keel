@@ -96,6 +96,37 @@ becomes `0.1.0` when the remaining M4 work is in.
   publication, inventory compare-and-set, uploads.
 - **Build information**: `GET /version` and a startup log line reporting
   version, commit, build date and Go version.
+- **Stores, regions and geofencing** (migration 00020, 23 operations). A
+  merchant groups stores into regions; each store carries a
+  `GEOGRAPHY(POLYGON, 4326)` fence. `GET /stores/resolve` answers "which store
+  serves this buyer": inside a fence it returns every match ordered by spherical
+  distance, outside every fence — **or with no coordinate at all, which is the
+  same code path** — it falls back to the merchant's single default store, and a
+  merchant with no default store returns `match_type = none` with an empty array
+  and **HTTP 200**, because "we do not deliver there" is a normal query result
+  and not an error.
+- **Three-layer pricing**: SKU base price, region override, store override. The
+  `COALESCE` lives in exactly one place, the `sku_prices_by_store` view, and a
+  gate (`scripts/check_query_tenancy.py`) fails the build if any query in
+  `db/queries/` touches the two override tables directly. Product lists,
+  product detail, search results and order pricing all read through that one
+  view, so the price shown in a list cannot diverge from the price charged.
+- **Two-layer visibility**: `region_product_overrides` and
+  `store_product_overrides` are both **exclusion** tables — a missing row means
+  "on sale", so a newly opened store sells everything from day one. The two
+  layers combine with AND, not OR: what a region delists, a store cannot
+  relist.
+- **Inventory is per store.** `inventories` is keyed on `(sku_id, store_id)`;
+  `orders` carries `store_id`, `region_id` and a display snapshot of the store
+  taken at checkout. A missing inventory row means **zero available**, not
+  "this store does not sell it" — the distinction is what keeps a new store
+  from appearing to sell nothing.
+- **Views are `security_invoker`.** A new gate asserts it for every non-extension
+  view in `public`. PostgreSQL evaluates a view with the owner's privileges by
+  default, so the underlying RLS policies are checked against the owner:
+  measured with two merchants, one store and one SKU each, the correct answer is
+  4 rows and a default view returns 5. Not an error, not an empty set — one
+  extra row belonging to someone else.
 - **Advertising-law term screening before a product goes public.** Publishing
   (`POST /admin/products/{id}/publication`) and editing the copy of an
   already-published product both run a synchronous check over `title`,
@@ -126,8 +157,20 @@ Listed because a changelog that only lists wins is an advertisement.
 - **`trace_id` appears nowhere in business code**, despite structured logging
   being in place everywhere.
 - **The three inference acceptance criteria only run by hand.** They need a GPU,
-  and GitHub-hosted runners do not have one, so there is no CI job that would go
-  red if the engine integration broke.
+  and the CI runner now has one, so this is no longer "impossible" — it is
+  "not written yet". The reasoning and the constraint (the job must connect to
+  the engine already running on the host, never start a second copy) are in the
+  header of `.github/workflows/ci.yml`.
+- **Geofence overlap and gaps are not validated.** Two stores may have identical
+  fences (that is intentional — the nearest one wins) and nothing detects a
+  region of the map that no fence covers. Such a buyer silently falls back to
+  the default store, which is correct behaviour and also indistinguishable from
+  a misconfiguration.
+- **`GET /products?in_stock_only=` is still ignored.** Inventory is per store
+  now, but that list query does not join `inventories`. The debt is registered
+  in `internal/handler/contract_test.go`, which fails if the parameter
+  disappears from the contract or starts being read without the entry going
+  away.
 - **No hosted demo and no documentation site.**
 - **The advertising-law screen is a word list, with no model fallback for
   variants.** The design calls for "rule list plus a small model to catch

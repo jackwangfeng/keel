@@ -855,3 +855,85 @@ func TestEveryTableInTheDatabaseIsDocumented(t *testing.T) {
 		}
 	}
 }
+
+// 库里的每一张视图都必须带 WITH (security_invoker = true)。
+//
+// ===========================================================================
+// 为什么这条检查此前不存在，以及它挡的是什么
+// ===========================================================================
+//
+// 本包的七条租户检查（RLS 策略、复合外键、缺失外键、唯一索引、GRANT 面、
+// updated_at 触发器、文档覆盖）**全部写着 relkind = 'r'** —— 实测七处。
+// 也就是说视图一张都不在它们的视野里。在 00020 之前这不要紧，因为库里一张视图
+// 都没有；00020 建出了 sku_prices_by_store，那个盲区当场变成一个真的洞。
+//
+// 洞的形状：PostgreSQL 的视图**默认以视图属主的权限求值**，于是底层表的 RLS
+// 策略按属主判定，而迁移跑出来的属主通常就是应用自己。实测（PostgreSQL 16.15，
+// 两个商家、各一个大区一家店、各自的 SKU，keel_app 同款的受限角色，
+// SET LOCAL app.merchant_id = '1'）：
+//
+//	WITH (security_invoker = true) 的视图  → 商家 1 读到 4 行（对）
+//	默认（属主权限）的视图                 → 商家 1 读到 5 行
+//
+// 多出来的那一行是**商家 2 的店 × 商家 2 的 SKU**。一行。不是报错，不是空集，
+// 是安静地多出一行别人的价格 —— 只有两个商家、且刻意去数行数，才看得见。
+// 这与 §2 开头那句「这类 bug 在单租户测试数据下完全看不出来」是同一个形状，
+// 也是「默认值在多租户下是不安全的那一侧，而它不报错」的第三个实例
+// （前两个是 FORCE ROW LEVEL SECURITY 与 current_merchant() 返回 NULL）。
+//
+// ===========================================================================
+// 扩展自有的视图按 pg_depend 排除，不按名字排除
+// ===========================================================================
+//
+// postgis 会在 public 下建出 geometry_columns / geography_columns 两张视图。
+// 它们不由本项目定义，也不读本项目的任何一张表，谈不上跨租户泄露。
+//
+// 排除它们的判据是 pg_depend.deptype = 'e'（这个对象属于某个扩展），
+// **不是一张名字清单**：名字清单会在下一个扩展进来时再失效一次，而那一次
+// 的症状是一条本该守着东西的测试变成红的，于是下一个人往清单里再加两个名字 ——
+// 清单从此是噪音。结构性的判据不会有这个问题：凡是扩展自己带的对象，
+// 它的正确性由上游负责，不由本仓库的闸门负责。
+func TestViewsEvaluateAsTheInvoker(t *testing.T) {
+	conn := migratedConn(t)
+
+	rows, err := conn.Query(context.Background(), `
+		SELECT c.relname, coalesce(array_to_string(c.reloptions, ','), '')
+		  FROM pg_class c
+		  JOIN pg_namespace n ON n.oid = c.relnamespace
+		 WHERE n.nspname = 'public' AND c.relkind = 'v'
+		   AND NOT EXISTS (SELECT 1 FROM pg_depend d
+		                    WHERE d.objid = c.oid
+		                      AND d.classid = 'pg_class'::regclass
+		                      AND d.deptype = 'e')
+		 ORDER BY 1`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+
+	checked := 0
+	for rows.Next() {
+		var name, opts string
+		if err := rows.Scan(&name, &opts); err != nil {
+			t.Fatal(err)
+		}
+		checked++
+		if !slices.Contains(strings.Split(opts, ","), "security_invoker=true") {
+			t.Errorf("视图 %s 的 reloptions 是 %q，缺 security_invoker=true——"+
+				"它会以属主权限求值，底层表的 RLS 按属主判定，"+
+				"于是这张视图对每一个租户都吐出**全部**租户的行。"+
+				"实测两个商家时它多出的正好是别家那一行：不报错、不是空集，"+
+				"只是安静地多一行。改法是 CREATE VIEW %s WITH (security_invoker = true) AS ...",
+				name, opts, name)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	// 阳性对照。这条测试是「对每一张视图断言」的形状，而空集上它恒真——
+	// 视图被改名、被挪到别的 schema、或者查询里那个 relkind 打错一个字母，
+	// 症状都是「一张视图都没枚举到」，而那时它已经不在检查任何东西了。
+	if checked == 0 {
+		t.Fatal("一张（非扩展自有的）视图都没枚举到——这个检查本身失效了")
+	}
+}

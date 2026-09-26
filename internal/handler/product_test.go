@@ -208,13 +208,26 @@ func TestResponseShapeMatchesContract(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &raw); err != nil {
 		t.Fatalf("响应不是 JSON 对象: %v\n%s", err, w.Body.String())
 	}
-	for _, k := range []string{"page", "page_size", "total", "items"} {
+	// store 是 00020 加的第五个必填顶层字段：本次结果按哪家门店算的。
+	// 它**必返**，而不是「有门店时才有」—— 契约把 match_type = none
+	// （不在服务范围）也定义成一个正常结果，缺席会让客户端无法分辨
+	// 「这家店什么都不卖」与「我们不送到你那儿」。
+	for _, k := range []string{"page", "page_size", "total", "items", "store"} {
 		if _, ok := raw[k]; !ok {
 			t.Fatalf("响应缺少契约里的必填字段 %q：%s", k, w.Body.String())
 		}
 	}
-	if len(raw) != 4 {
+	if len(raw) != 5 {
 		t.Fatalf("响应多出了契约里没有的顶层字段：%s", w.Body.String())
+	}
+
+	// store 里 match_type 必返；store_id / region_id 在 none 那一支缺席。
+	var store map[string]json.RawMessage
+	if err := json.Unmarshal(raw["store"], &store); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := store["match_type"]; !ok {
+		t.Fatalf("store 里没有 match_type：%s", raw["store"])
 	}
 
 	var items []map[string]json.RawMessage

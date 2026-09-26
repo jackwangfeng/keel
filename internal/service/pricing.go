@@ -18,6 +18,13 @@ import (
 //
 // 这条性质由 order_test.go 的 TestPreviewAndCreateAgreeOnTheMoney 钉住：
 // 同一个请求先试算再下单，两次的应付金额必须逐分相等。
+//
+// **本轮（00020）这条纪律的边界变大了。** 三层定价之后「这件商品多少钱」
+// 取决于哪家店，所以 priceOrder 多了一个 StoreScope，而它的取价口从
+// skus.price_cents 换成了 sku_prices_by_store 视图 —— 那是全仓库唯一一处写
+// COALESCE(门店价, 大区价, 基准价) 的地方，商品列表、详情、检索结果
+// 也都经过它。四条读路径与这条写路径共用同一个公式，
+// 于是「列表价与下单价分叉」这件事没有发生的余地。
 
 // 请求规模的上限。
 //
@@ -103,7 +110,7 @@ var ErrSKUUnavailable = errors.New("请求里有不可售的 SKU")
 // 它刻意不看库存。试算是金额试算，不是可售性承诺 —— 把库存并进来会让试算
 // 看起来像一次预留，而 SAGA 的正向阶段才是真正的判定点（架构 §5 论证过：
 // 超卖为零、少卖存在，正是因为扣减发生在那里而不是这里）。
-func priceOrder(ctx context.Context, tx repository.OrderTx, items []LineInput) (Quote, error) {
+func priceOrder(ctx context.Context, tx repository.OrderTx, sc repository.StoreScope, items []LineInput) (Quote, error) {
 	if len(items) == 0 {
 		return Quote{}, fmt.Errorf("%w: 订单至少要有一行", ErrBadRequest)
 	}
@@ -134,7 +141,7 @@ func priceOrder(ctx context.Context, tx repository.OrderTx, items []LineInput) (
 		ids = append(ids, it.SKUID)
 	}
 
-	rows, err := tx.ListSKUsForPricing(ctx, ids)
+	rows, err := tx.ListSKUsForPricing(ctx, sc, ids)
 	if err != nil {
 		return Quote{}, err
 	}

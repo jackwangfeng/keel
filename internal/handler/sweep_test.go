@@ -53,7 +53,7 @@ func placeRealOrder(t *testing.T, host, merchantCode, addrName string, qty int) 
 	addr := addressIDOf(t, merchantCode, addrName)
 	skuID, beforeStock = anySKUWithStock(t, merchantCode, int32(qty)+1)
 
-	w := createOrder(t, host, orderBody(addr, skuID, qty, ""), tok, "sweep-"+uniqueKey())
+	w := createOrder(t, host, orderBody(t, merchantCode, addr, skuID, qty, ""), tok, "sweep-"+uniqueKey())
 	if w.Code != http.StatusCreated {
 		t.Fatalf("下单失败：%d %s", w.Code, w.Body.String())
 	}
@@ -228,10 +228,16 @@ func TestSweepRefusesToCloseADraftThatHasInventoryLogs(t *testing.T) {
 
 	// 手工伪造一行流水：模拟「编排顺序被改过，库存分支先跑了」。
 	// 走管理员连接直插，因为这个状态在正常代码路径上造不出来 —— 那正是重点。
+	// store_id 是 NOT NULL（00020）：before_available / after_available 记的
+	// 是**某一家门店**的水位，不写下是哪一家，同一个 SKU 在多家店的流水会
+	// 交织成一条对不平的序列。这一行要伪装成「库存分支真的跑过」，
+	// 所以它挂的门店必须就是上面那笔夹具订单的那一家 —— 取种子里那家默认店。
 	if _, err := admin(t).Exec(context.Background(), `
-		INSERT INTO inventory_logs (merchant_id, sku_id, change_qty, biz_type, biz_id,
-		                            before_available, after_available)
-		VALUES ($1, $2, -1, 1, $3, $4, $5)`,
+		INSERT INTO inventory_logs (merchant_id, sku_id, store_id, change_qty, biz_type,
+		                            biz_id, before_available, after_available)
+		SELECT $1, $2, st.id, -1, 1, $3, $4, $5
+		  FROM stores st
+		 WHERE st.merchant_id = $1 AND st.is_default AND st.deleted_at IS NULL`,
 		merchantID, sku, orderNo, before, before-1); err != nil {
 		t.Fatalf("造流水夹具失败: %v", err)
 	}

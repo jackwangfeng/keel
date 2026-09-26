@@ -120,6 +120,24 @@ func (e AdminProductDetailStatus) Valid() bool {
 	}
 }
 
+// Defines values for AdminRegionStatus.
+const (
+	AdminRegionStatusN0 AdminRegionStatus = 0
+	AdminRegionStatusN1 AdminRegionStatus = 1
+)
+
+// Valid indicates whether the value is a known member of the AdminRegionStatus enum.
+func (e AdminRegionStatus) Valid() bool {
+	switch e {
+	case AdminRegionStatusN0:
+		return true
+	case AdminRegionStatusN1:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AdminSkuStatus.
 const (
 	AdminSkuStatusN0 AdminSkuStatus = 0
@@ -132,6 +150,24 @@ func (e AdminSkuStatus) Valid() bool {
 	case AdminSkuStatusN0:
 		return true
 	case AdminSkuStatusN1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AdminStoreStatus.
+const (
+	AdminStoreStatusN0 AdminStoreStatus = 0
+	AdminStoreStatusN1 AdminStoreStatus = 1
+)
+
+// Valid indicates whether the value is a known member of the AdminStoreStatus enum.
+func (e AdminStoreStatus) Valid() bool {
+	switch e {
+	case AdminStoreStatusN0:
+		return true
+	case AdminStoreStatusN1:
 		return true
 	default:
 		return false
@@ -174,6 +210,21 @@ func (e ChatReplyActionType) Valid() bool {
 	case NavigateOrder:
 		return true
 	case NavigateRefund:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GeoPolygonType.
+const (
+	Polygon GeoPolygonType = "Polygon"
+)
+
+// Valid indicates whether the value is a known member of the GeoPolygonType enum.
+func (e GeoPolygonType) Valid() bool {
+	switch e {
+	case Polygon:
 		return true
 	default:
 		return false
@@ -519,6 +570,87 @@ func (e RefundType) Valid() bool {
 	}
 }
 
+// Defines values for RegionUpdateRequestStatus.
+const (
+	RegionUpdateRequestStatusN0 RegionUpdateRequestStatus = 0
+	RegionUpdateRequestStatusN1 RegionUpdateRequestStatus = 1
+)
+
+// Valid indicates whether the value is a known member of the RegionUpdateRequestStatus enum.
+func (e RegionUpdateRequestStatus) Valid() bool {
+	switch e {
+	case RegionUpdateRequestStatusN0:
+		return true
+	case RegionUpdateRequestStatusN1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ScopedProductListingPriceSource.
+const (
+	ScopedProductListingPriceSourceN1 ScopedProductListingPriceSource = 1
+	ScopedProductListingPriceSourceN2 ScopedProductListingPriceSource = 2
+	ScopedProductListingPriceSourceN3 ScopedProductListingPriceSource = 3
+)
+
+// Valid indicates whether the value is a known member of the ScopedProductListingPriceSource enum.
+func (e ScopedProductListingPriceSource) Valid() bool {
+	switch e {
+	case ScopedProductListingPriceSourceN1:
+		return true
+	case ScopedProductListingPriceSourceN2:
+		return true
+	case ScopedProductListingPriceSourceN3:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ScopedProductListingStatus.
+const (
+	ScopedProductListingStatusN0 ScopedProductListingStatus = 0
+	ScopedProductListingStatusN1 ScopedProductListingStatus = 1
+	ScopedProductListingStatusN2 ScopedProductListingStatus = 2
+)
+
+// Valid indicates whether the value is a known member of the ScopedProductListingStatus enum.
+func (e ScopedProductListingStatus) Valid() bool {
+	switch e {
+	case ScopedProductListingStatusN0:
+		return true
+	case ScopedProductListingStatusN1:
+		return true
+	case ScopedProductListingStatusN2:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ScopedSkuPricePriceSource.
+const (
+	ScopedSkuPricePriceSourceN1 ScopedSkuPricePriceSource = 1
+	ScopedSkuPricePriceSourceN2 ScopedSkuPricePriceSource = 2
+	ScopedSkuPricePriceSourceN3 ScopedSkuPricePriceSource = 3
+)
+
+// Valid indicates whether the value is a known member of the ScopedSkuPricePriceSource enum.
+func (e ScopedSkuPricePriceSource) Valid() bool {
+	switch e {
+	case ScopedSkuPricePriceSourceN1:
+		return true
+	case ScopedSkuPricePriceSourceN2:
+		return true
+	case ScopedSkuPricePriceSourceN3:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SearchHitRecallSource.
 const (
 	Both    SearchHitRecallSource = "both"
@@ -630,6 +762,45 @@ func (e StaffRole) Valid() bool {
 	case StaffRoleN1:
 		return true
 	case StaffRoleN2:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for StoreMatchType.
+const (
+	FallbackDefault StoreMatchType = "fallback_default"
+	Fence           StoreMatchType = "fence"
+	None            StoreMatchType = "none"
+)
+
+// Valid indicates whether the value is a known member of the StoreMatchType enum.
+func (e StoreMatchType) Valid() bool {
+	switch e {
+	case FallbackDefault:
+		return true
+	case Fence:
+		return true
+	case None:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for StoreUpdateRequestStatus.
+const (
+	StoreUpdateRequestStatusN0 StoreUpdateRequestStatus = 0
+	StoreUpdateRequestStatusN1 StoreUpdateRequestStatus = 1
+)
+
+// Valid indicates whether the value is a known member of the StoreUpdateRequestStatus enum.
+func (e StoreUpdateRequestStatus) Valid() bool {
+	switch e {
+	case StoreUpdateRequestStatusN0:
+		return true
+	case StoreUpdateRequestStatusN1:
 		return true
 	default:
 		return false
@@ -1071,10 +1242,22 @@ type AdminCategoryStatus int
 
 // AdminInventory defines model for AdminInventory.
 type AdminInventory struct {
-	AvailableQty int       `json:"available_qty"`
-	SkuId        int64     `json:"sku_id"`
-	UpdatedAt    time.Time `json:"updated_at"`
-	WarningQty   int       `json:"warning_qty"`
+	// AvailableQty 这家门店的可售量。**这一行不存在时视同 0，不是「这家店不卖」**——
+	// 两件事在库里长得很像（都是查不到行），但语义相反：
+	// 一家刚开的店在录库存之前每个 SKU 都缺行，
+	// 判成「不卖」会让新店什么都不卖，和「开店即营业」正面冲突
+	// （数据模型 §4）。「不卖」由 `*_product_overrides` 表达。
+	AvailableQty int     `json:"available_qty"`
+	SkuCode      *string `json:"sku_code,omitempty"`
+	SkuId        int64   `json:"sku_id"`
+
+	// StoreId 这一行库存属于哪家门店。**必返。**
+	// `inventories` 的主键本轮变成 `(sku_id, store_id)`（数据模型 §4），
+	// 少了这一列，一个库存水位就不知道是谁的——而按门店分之后，
+	// 同一个 SKU 会有好几行。
+	StoreId    int64     `json:"store_id"`
+	UpdatedAt  time.Time `json:"updated_at"`
+	WarningQty int       `json:"warning_qty"`
 }
 
 // AdminProduct 后台视角的商品。与 `ProductSummary` 的差别是状态面：
@@ -1168,6 +1351,28 @@ type AdminProductDetail struct {
 // 改它只能经 `POST /admin/products/{product_id}/publication`。
 type AdminProductDetailStatus int
 
+// AdminRegion 后台视角的大区。**没有几何**——大区是门店的分组，
+// 归属由 `stores.region_id` 决定（数据模型 §4 论证过为什么不给它画边界）。
+type AdminRegion struct {
+	// Code 租户内唯一（软删的不占用）。
+	Code      string     `json:"code"`
+	CreatedAt time.Time  `json:"created_at"`
+	DeletedAt *time.Time `json:"deleted_at,omitempty"`
+	Id        int64      `json:"id"`
+	Name      string     `json:"name"`
+
+	// Status 0 停用 / 1 启用。
+	Status AdminRegionStatus `json:"status"`
+
+	// StoreCount 名下未软删的门店数。删大区时会因为它非零而被拒（409），
+	// 所以列表里直接给出来，省掉「点了删除才知道删不掉」那一跳。
+	StoreCount int        `json:"store_count"`
+	UpdatedAt  *time.Time `json:"updated_at,omitempty"`
+}
+
+// AdminRegionStatus 0 停用 / 1 启用。
+type AdminRegionStatus int
+
 // AdminSku 后台视角的 SKU。比前台的 `Sku` 多出成本、重量、售卖开关与库存预警位——
 // `cost_cents` 尤其不能出现在任何前台响应里。
 type AdminSku struct {
@@ -1205,6 +1410,72 @@ type AdminSku struct {
 
 // AdminSkuStatus `skus.status`：0 停售 / 1 在售。停售的规格仍在规格矩阵里显示，但不可加购。
 type AdminSkuStatus int
+
+// AdminStore 后台视角的门店，**含围栏**。与买家侧的 `Store` 分成两个 schema，
+// 理由与 `AdminProduct` / `ProductSummary` 一样：围栏、停业状态、软删标记
+// 是运营要管的，把它们加进买家 schema 等于让生成出来的买家客户端
+// 带着一组它永远收不到、也不该收到的字段。
+type AdminStore struct {
+	Address *string `json:"address,omitempty"`
+	City    *string `json:"city,omitempty"`
+
+	// Code 租户内唯一（软删的不占用）。
+	Code      string     `json:"code"`
+	CreatedAt time.Time  `json:"created_at"`
+	DeletedAt *time.Time `json:"deleted_at,omitempty"`
+	District  *string    `json:"district,omitempty"`
+
+	// Fence 电子围栏。**为 null 且 `is_default = false` 的门店是一家永远接不到单的店**——
+	// 它不会被任何坐标命中，也不是回落目标。
+	// 这是一个**可达的中间态**：建店不传围栏（`POST /admin/stores`），
+	// 以及把默认位让给别家（`PUT .../default`），都会造出它。
+	// 后台列表应当据此挂「未完成」提示——那个提示是这个状态唯一的出口，
+	// 数据库不挡它（理由见迁移 00020 里 `stores` 的定义）。
+	Fence *GeoPolygon `json:"fence,omitempty"`
+	Id    int64       `json:"id"`
+
+	// IsDefault 是否是「全国配送」的回落门店。每个商家**至多一个**
+	// （`uk_stores_default` 部分唯一索引，与 §9 的默认地址同构）。
+	// 改它走 `PUT /admin/stores/{store_id}/default`——
+	// 要在同一个事务里先清旧再置新。
+	IsDefault bool     `json:"is_default"`
+	Lat       *float32 `json:"lat,omitempty"`
+	Lng       *float32 `json:"lng,omitempty"`
+	Name      string   `json:"name"`
+	Phone     *string  `json:"phone,omitempty"`
+	Province  *string  `json:"province,omitempty"`
+
+	// RegionId 所属大区，**必填且不可空**（`stores.region_id NOT NULL`）。
+	// 换大区会同时改变这家店的价格与可见性——大区是两层覆盖里的外层。
+	RegionId   int64   `json:"region_id"`
+	RegionName *string `json:"region_name,omitempty"`
+
+	// Status 0 停业 / 1 营业。停业的门店不参与围栏判定，也不能下单。
+	Status    AdminStoreStatus `json:"status"`
+	UpdatedAt *time.Time       `json:"updated_at,omitempty"`
+}
+
+// AdminStoreStatus 0 停业 / 1 营业。停业的门店不参与围栏判定，也不能下单。
+type AdminStoreStatus int
+
+// AdminStoreList 门店列表。比一般的分页响应多一个 `has_default`——
+// 它是「没配默认门店的商家，店面对未授权定位的访客全是空的」这条代价
+// 在契约上的出口（数据模型 §4）。
+type AdminStoreList struct {
+	// HasDefault 这家商家有没有默认门店。**必返。**
+	//
+	// 为 `false` 时后台首页必须挂提示：此时所有未授权定位的访客
+	// 都会拿到 `match_type = none`（不在服务范围），
+	// 而那看起来像「商品没上架」，和真因毫无关系。
+	//
+	// 做成响应字段而不是建店时的强制项，理由是建店与画围栏是
+	// 两个人在两个时刻做的事，强制会把第一步卡死在第二步上。
+	HasDefault bool         `json:"has_default"`
+	Items      []AdminStore `json:"items"`
+	Page       int          `json:"page"`
+	PageSize   int          `json:"page_size"`
+	Total      int          `json:"total"`
+}
 
 // Cart defines model for Cart.
 type Cart struct {
@@ -1326,6 +1597,28 @@ type FieldError struct {
 	Offset *int `json:"offset,omitempty"`
 }
 
+// GeoPolygon GeoJSON Polygon，SRID 固定 4326。落库成 `GEOGRAPHY(POLYGON, 4326)`。
+//
+// **坐标序是 `[经度, 纬度]`**，和中文口语里的「纬度、经度」相反。
+// 这是 GeoJSON 规范定的，不是本项目的选择。写反了不会报错——
+// 它会得到一个在地球另一侧的合法多边形，而所有判定都「正常工作」。
+// 服务端按经度 ∈ [-180,180]、纬度 ∈ [-90,90] 做范围校验，
+// 那是唯一能机械发现写反的办法。
+//
+// `coordinates` 的第一个环是外环，后续是内环（洞）。
+// 每个环必须**闭合**（首尾点相同），至少 4 个点，且**不自交**——
+// 自交多边形在 `ST_Intersects` 下的行为是未定义的，落库前过 `ST_IsValid`。
+type GeoPolygon struct {
+	// Coordinates 环的数组。第一个是外环。
+	//
+	// Examples: [[[116.3,39.85],[116.5,39.85],[116.5,39.95],[116.3,39.95],[116.3,39.85]]]
+	Coordinates [][][]float32  `json:"coordinates"`
+	Type        GeoPolygonType `json:"type"`
+}
+
+// GeoPolygonType defines model for GeoPolygon.Type.
+type GeoPolygonType string
+
 // IdentityProvider 第三方身份来源，对应 `user_identities.provider`：
 // 1 微信小程序 / 2 微信公众号 / 3 微信开放平台 / 4 支付宝 / 5 Apple
 //
@@ -1446,6 +1739,10 @@ type Order struct {
 	// RefundedCents 金额，单位「分」。禁止使用浮点。
 	RefundedCents *Money `json:"refunded_cents,omitempty"`
 
+	// RegionId 下单时那家门店所属的大区。**冗余在订单上，不靠 `stores.region_id` 推**：
+	// 门店可以被调到另一个大区去，而这一单的价格是按当时那个大区算的。
+	RegionId *int64 `json:"region_id,omitempty"`
+
 	// ShippedAt 发货时间。「发货后 N 天自动确认收货」的倒计时从这里算
 	ShippedAt *time.Time `json:"shipped_at,omitempty"`
 
@@ -1465,6 +1762,11 @@ type Order struct {
 	// 没有 `(30,50)` —— 已发货订单的退款走资金维度，
 	// 履约进度不该被售后流程抹掉。
 	Status OrderStatus `json:"status"`
+
+	// StoreId 履约门店。**必返**（DB 上是 `NOT NULL`）。
+	// 它是真正的外键列，报表按它聚合——门店名走 `OrderDetail.store`
+	// 那份快照，因为门店会改名（数据模型 §5）。
+	StoreId int64 `json:"store_id"`
 }
 
 // OrderCreateRequest defines model for OrderCreateRequest.
@@ -1476,6 +1778,19 @@ type OrderCreateRequest struct {
 	ExpectedPayableCents *Money           `json:"expected_payable_cents,omitempty"`
 	Items                []OrderItemInput `json:"items"`
 	Remark               *string          `json:"remark,omitempty"`
+
+	// StoreId 由哪家门店履约。**必填，服务端不替客户端猜。**
+	//
+	// 读接口（`/products`、`/search`）省略 `store_id` 时会走回落链，
+	// 这里刻意不走：买家在 A 店看到的价格与库存，下单时若被服务端
+	// 静默落到默认门店 B，结果是**在 A 店看的货从 B 店发出、按 B 店的价成交**。
+	// 那是一个没有任何东西会报出来的错——两家店都有这件商品、
+	// 两个价都是合法价。
+	//
+	// 所以这一列在 `orders` 上是 `NOT NULL`，在这里是 required。
+	// 客户端从 `GET /stores/resolve` 或任一读接口回显的 `store.store_id`
+	// 拿到它；单店商家同样拿得到。
+	StoreId int64 `json:"store_id"`
 
 	// UserCouponId 第一期仅支持单张券
 	UserCouponId *int64 `json:"user_coupon_id,omitempty"`
@@ -1523,6 +1838,10 @@ type OrderDetail struct {
 	// 否则客户端得再请求一次 `GET /orders/{order_no}/refunds`。
 	Refunds *[]Refund `json:"refunds,omitempty"`
 
+	// RegionId 下单时那家门店所属的大区。**冗余在订单上，不靠 `stores.region_id` 推**：
+	// 门店可以被调到另一个大区去，而这一单的价格是按当时那个大区算的。
+	RegionId *int64 `json:"region_id,omitempty"`
+
 	// ShippedAt 发货时间。「发货后 N 天自动确认收货」的倒计时从这里算
 	ShippedAt *time.Time `json:"shipped_at,omitempty"`
 
@@ -1542,6 +1861,16 @@ type OrderDetail struct {
 	// 没有 `(30,50)` —— 已发货订单的退款走资金维度，
 	// 履约进度不该被售后流程抹掉。
 	Status OrderStatus `json:"status"`
+
+	// Store 下单时的门店与大区展示信息快照。
+	// 门店改名、搬家、换大区之后，历史订单仍显示当时那一份——
+	// 与 `order_items` 存 `title_snapshot` 是同一条道理。
+	Store *OrderStoreSnapshot `json:"store,omitempty"`
+
+	// StoreId 履约门店。**必返**（DB 上是 `NOT NULL`）。
+	// 它是真正的外键列，报表按它聚合——门店名走 `OrderDetail.store`
+	// 那份快照，因为门店会改名（数据模型 §5）。
+	StoreId int64 `json:"store_id"`
 }
 
 // OrderItem defines model for OrderItem.
@@ -1598,7 +1927,28 @@ type OrderPreview struct {
 	// GoodsAmountCents 金额，单位「分」。禁止使用浮点。
 	GoodsAmountCents Money `json:"goods_amount_cents"`
 
-	// Items 含优惠分摊结果
+	// Items 含优惠分摊结果。
+	//
+	// > **这一段是内联 schema，而内联在这里已经是一笔债了。**
+	// > 本轮想给每一行加一个 `price_source`（这一行的单价来自基准价 /
+	// > 大区价 / 门店价的哪一层，与 `order_items.price_source` 同源），
+	// > **加不进去**：内联 schema 让 oapi-codegen 生成一个**匿名 struct**，
+	// > 而 `internal/handler/order.go` 里有一处按字段拼出来的
+	// > `[]struct{...}` 字面量 —— 匿名类型只要多一个字段就不再可赋值，
+	// > 实测报错：
+	// >
+	// > ```
+	// > internal/handler/order.go:92:21: cannot use items (variable of type
+	// >   []struct{AmountCents ...; DiscountCents ...; Quantity ...; SkuId ...})
+	// >   as []struct{AmountCents ...; DiscountCents ...;
+	// >               PriceSource *api.OrderPreviewItemsPriceSource; ...}
+	// > ```
+	// >
+	// > 这正是「请求体不要用内联 schema」那条规矩的**响应侧同一个毛病**：
+	// > 内联类型没有名字，于是它的每一次演进都是一次破坏性变更。
+	// > 提成具名的 `OrderPreviewItem` 会同样破坏那个字面量，
+	// > 所以这件事要和 handler 一起改，不能只改契约。
+	// > 记在数据模型 §15。
 	Items []struct {
 		// AmountCents 金额，单位「分」。禁止使用浮点。
 		AmountCents *Money `json:"amount_cents,omitempty"`
@@ -1611,6 +1961,13 @@ type OrderPreview struct {
 
 	// PayableCents 金额，单位「分」。禁止使用浮点。
 	PayableCents Money `json:"payable_cents"`
+
+	// RegionId 那家门店所属大区。价格的中间一层按它算（数据模型 §4）。
+	RegionId *int64 `json:"region_id,omitempty"`
+
+	// StoreId 本次试算按哪家门店算的（回显请求里的 `store_id`）。
+	// 必返：试算与下单必须是同一家店，回显是客户端唯一能核对这件事的办法。
+	StoreId int64 `json:"store_id"`
 }
 
 // OrderRefundStatus **资金维度** —— 钱退了多少，与 `status` 正交，由退款单驱动。
@@ -1646,6 +2003,19 @@ type OrderRefundStatus int
 // 没有 `(30,50)` —— 已发货订单的退款走资金维度，
 // 履约进度不该被售后流程抹掉。
 type OrderStatus int
+
+// OrderStoreSnapshot 下单那一瞬间的门店与大区展示信息，取自 `orders.store_snapshot`。
+//
+// **只有展示字段，没有 id。** id 在 `Order.store_id` / `Order.region_id`
+// 上，是真正的外键列，报表按它们聚合。快照这边刻意不放 id——
+// 放了就会有人去 `GROUP BY` 一个 JSONB 里的字符串，
+// 而门店改一次名那张报表就断了（数据模型 §5）。
+type OrderStoreSnapshot struct {
+	RegionName   *string `json:"region_name,omitempty"`
+	StoreAddress *string `json:"store_address,omitempty"`
+	StoreName    string  `json:"store_name"`
+	StorePhone   *string `json:"store_phone,omitempty"`
+}
 
 // PageMeta defines model for PageMeta.
 type PageMeta struct {
@@ -1790,6 +2160,14 @@ type ProductImagesReplaceRequest struct {
 	// Images **整组替换**，数组顺序即展示顺序，第 0 个是主图。
 	// 传空数组即清空。同一个 `upload_id` 不得出现两次（422）。
 	Images []ProductImageInput `json:"images"`
+}
+
+// ProductListingRequest `listed = false` 写一行排除，`listed = true` 删掉那一行。
+// **幂等**：重复设成同一个值不报错。
+type ProductListingRequest struct {
+	// Listed 这一层卖不卖它。注意这不保证买家看得见——
+	// 上一层（大区）排掉的，这一层捞不回来，见 `effective_listed`。
+	Listed bool `json:"listed"`
 }
 
 // ProductPublicationRequest defines model for ProductPublicationRequest.
@@ -2022,15 +2400,118 @@ type RefundStatus int
 // 所以必须由客户端显式传入，不能让服务端按订单状态猜。
 type RefundType int
 
-// SearchFilters defines model for SearchFilters.
-type SearchFilters struct {
-	CategoryId  *int64 `json:"category_id,omitempty"`
-	InStockOnly *bool  `json:"in_stock_only,omitempty"`
+// RegionCreateRequest defines model for RegionCreateRequest.
+type RegionCreateRequest struct {
+	Code string `json:"code"`
+	Name string `json:"name"`
+}
 
-	// MaxPriceCents 金额，单位「分」。禁止使用浮点。
+// RegionUpdateRequest 只给要改的字段。`code` 改了要重查唯一性。
+type RegionUpdateRequest struct {
+	Code   *string                    `json:"code,omitempty"`
+	Name   *string                    `json:"name,omitempty"`
+	Status *RegionUpdateRequestStatus `json:"status,omitempty"`
+}
+
+// RegionUpdateRequestStatus defines model for RegionUpdateRequest.Status.
+type RegionUpdateRequestStatus int
+
+// ScopedProductListing 一件商品在某个作用域（大区或门店）下的可见性与生效价。
+// `GET /admin/stores/{store_id}/products` 与
+// `GET /admin/regions/{region_id}/products` 共用这一个形状。
+type ScopedProductListing struct {
+	// EffectiveListed 两层都算完之后买家到底看不看得见。
+	//
+	// **与 `listed` 刻意分开**：一件被大区排掉的商品，门店这一层设成
+	// `listed = true` 也捞不回来（两层是**与**不是**或**）。
+	// 合成一个字段的话，后台会显示「已上架」而买家看不到，
+	// 而那种不一致没有任何东西会报出来。
+	EffectiveListed bool    `json:"effective_listed"`
+	ImageUrl        *string `json:"image_url,omitempty"`
+
+	// Listed **本作用域**有没有把它下架。`true` 表示这一层没有排除它——
+	// 也就是 `store_product_overrides` / `region_product_overrides`
+	// 里**没有**那一行（缺一行即在售，数据模型 §4）。
+	Listed bool `json:"listed"`
+
+	// MaxPriceCents 最大值。
 	MaxPriceCents *Money `json:"max_price_cents,omitempty"`
 
-	// MinPriceCents 金额，单位「分」。禁止使用浮点。
+	// MinPriceCents 本作用域下这件商品各 SKU 生效价的最小值。
+	MinPriceCents *Money `json:"min_price_cents,omitempty"`
+
+	// PriceSource 这个价来自哪一层：**1 基准价 / 2 大区价 / 3 门店价**。
+	// 取自 `sku_prices_by_store` 视图——全仓库唯一一处写
+	// `COALESCE(门店价, 大区价, 基准价)` 的地方（数据模型 §4）。
+	//
+	// 一件商品的多个 SKU 可能落在不同层上，此时取**最内的那一层**
+	// （有任何一个 SKU 用了门店价就是 3）——它回答的是
+	// 「这一行有没有被本地覆盖过」，运营要按它筛。
+	PriceSource ScopedProductListingPriceSource `json:"price_source"`
+	ProductId   int64                           `json:"product_id"`
+
+	// Status 租户级的 `products.status`：0 草稿 / 1 上架 / 2 下架。
+	Status *ScopedProductListingStatus `json:"status,omitempty"`
+	Title  string                      `json:"title"`
+}
+
+// ScopedProductListingPriceSource 这个价来自哪一层：**1 基准价 / 2 大区价 / 3 门店价**。
+// 取自 `sku_prices_by_store` 视图——全仓库唯一一处写
+// `COALESCE(门店价, 大区价, 基准价)` 的地方（数据模型 §4）。
+//
+// 一件商品的多个 SKU 可能落在不同层上，此时取**最内的那一层**
+// （有任何一个 SKU 用了门店价就是 3）——它回答的是
+// 「这一行有没有被本地覆盖过」，运营要按它筛。
+type ScopedProductListingPriceSource int
+
+// ScopedProductListingStatus 租户级的 `products.status`：0 草稿 / 1 上架 / 2 下架。
+type ScopedProductListingStatus int
+
+// ScopedSkuPrice 一个 SKU 在某个作用域（大区或门店）下的价格覆盖与生效价。
+type ScopedSkuPrice struct {
+	// BasePriceCents `skus.price_cents`，最外层的基准价。
+	BasePriceCents *Money `json:"base_price_cents,omitempty"`
+
+	// EffectivePriceCents 三层 `COALESCE` 之后真正生效的价。
+	EffectivePriceCents Money `json:"effective_price_cents"`
+
+	// OverridePriceCents **本作用域**自己定的价。为 null 表示这一层没有覆盖，
+	// 沿用上一层——那正是这两张表「缺一行即继承」的语义
+	// （数据模型 §4）。撤销覆盖走 `DELETE`，不是把它设成 null。
+	OverridePriceCents *int64 `json:"override_price_cents,omitempty"`
+
+	// PriceSource 1 基准价 / 2 大区价 / 3 门店价。
+	PriceSource ScopedSkuPricePriceSource `json:"price_source"`
+	SkuCode     *string                   `json:"sku_code,omitempty"`
+	SkuId       int64                     `json:"sku_id"`
+}
+
+// ScopedSkuPricePriceSource 1 基准价 / 2 大区价 / 3 门店价。
+type ScopedSkuPricePriceSource int
+
+// SearchFilters defines model for SearchFilters.
+type SearchFilters struct {
+	CategoryId *int64 `json:"category_id,omitempty"`
+
+	// InStockOnly 只要当前门店有货的。**默认值本轮从 `true` 改成 `false`**，
+	// 与 `GET /products?in_stock_only=` 对齐（M3 独立验收 I10）。
+	//
+	// 改的不只是为了一致：契约原先把同一件事写了两遍且互相矛盾——
+	// `/search` 的描述写着业务重排会把缺货商品**降权**，
+	// 而这个默认值说的是**删掉**。两者并存时默认值那一份赢，
+	// 于是「降权」那句话从来没被执行过。
+	//
+	// 注意这个开关**管不到「这家店卖不卖」**：门店与大区的上下架是
+	// 可见性本身，无条件生效、关不掉（数据模型 §4）。
+	InStockOnly *bool `json:"in_stock_only,omitempty"`
+
+	// MaxPriceCents 同上。
+	MaxPriceCents *Money `json:"max_price_cents,omitempty"`
+
+	// MinPriceCents 按**当前门店的生效价**过滤（三层 `COALESCE` 之后的值），
+	// 不是按基准价。`products.min_price_cents` / `max_price_cents`
+	// 两列本轮已从数据模型里删掉——三层定价之后它们不再是商品的属性
+	// （数据模型 §3 / §4）。
 	MinPriceCents *Money `json:"min_price_cents,omitempty"`
 }
 
@@ -2079,6 +2560,33 @@ type SearchHitRecallSource string
 // 前台列表与检索只返回 `1`；订单、购物车里引用的历史商品可能是 `2`，
 // 客户端据此展示「已下架」而不是让用户点进去才发现买不了。
 type SearchHitStatus int
+
+// SearchRequest `POST /search` 的请求体。**本轮从内联 schema 提成具名的**——
+// 内联的生成器不出类型，handler 只能手写绑定，这条刚在
+// `PaymentCreateRequest` 和这个 `/search` 上踩过两次。
+type SearchRequest struct {
+	// Explain 返回各阶段得分，用于调试与效果评估
+	Explain *bool          `json:"explain,omitempty"`
+	Filters *SearchFilters `json:"filters,omitempty"`
+	Query   string         `json:"query"`
+	Size    *int           `json:"size,omitempty"`
+
+	// StoreId 按哪家门店检索。与 `GET /products` 的同名查询参数逐字同义、
+	// 同回落链（不传即走「默认门店 → 不在服务范围」那条链，
+	// **不是**全租户并集）。
+	//
+	// 放在请求体顶层而不是 `filters` 里：`filters` 是**筛选条件**
+	// （买家自己勾的），门店是**上下文**（服务端解析出来的）。
+	// 混在一起会让「清空筛选」这个动作把门店也清掉。
+	StoreId *int64 `json:"store_id,omitempty"`
+
+	// Strategy 排序策略标识，用于 A/B 对比。记入检索日志后可按策略分组
+	// 对比 NDCG@10 / CTR@10 等在线指标。省略则用默认策略。
+	// 一期不做完整分流，但接口层先留出这个参数 ——
+	// 否则后续每次改排序都是不可逆的「拍脑袋上线」
+	// （语义检索层设计 §9.3）。
+	Strategy *string `json:"strategy,omitempty"`
+}
 
 // Shipment defines model for Shipment.
 type Shipment struct {
@@ -2139,6 +2647,14 @@ type SkuCreateRequest struct {
 	// WarningQty 低库存预警线，省略即 0。
 	WarningQty *int `json:"warning_qty,omitempty"`
 	WeightGram *int `json:"weight_gram,omitempty"`
+}
+
+// SkuPriceSetRequest 设置本作用域的价格覆盖（upsert）。
+// **不接受 `null`**——撤销覆盖走 `DELETE`，两个动作的语义不同：
+// 设成 0 是「这家店免费送」，删掉是「这家店不要自己的价」。
+type SkuPriceSetRequest struct {
+	// PriceCents 本作用域的价，单位分，非负。
+	PriceCents Money `json:"price_cents"`
 }
 
 // SkuUpdateRequest **刻意没有 `available_qty`**：库存有自己的端点，因为它要表达乐观并发。
@@ -2216,6 +2732,147 @@ type StaffSession struct {
 	// 它和支付密钥是同一个量级的东西。
 	Token string `json:"token"`
 }
+
+// Store 买家视角的门店。不含围栏——围栏是运营数据，不该发给客户端。
+type Store struct {
+	Address *string `json:"address,omitempty"`
+	Id      int64   `json:"id"`
+
+	// IsDefault 是否是这家商家的「全国配送」回落门店。
+	IsDefault bool     `json:"is_default"`
+	Lat       *float32 `json:"lat,omitempty"`
+	Lng       *float32 `json:"lng,omitempty"`
+	Name      string   `json:"name"`
+	Phone     *string  `json:"phone,omitempty"`
+}
+
+// StoreContext 每一条会受门店影响的读接口都回显它。**没有它，客户端拿到的
+// `in_stock` 与价格是不知道属于谁的**——按门店分之后，
+// 同一件商品对不同的人有不同的答案。
+type StoreContext struct {
+	// MatchType 「当前门店」是怎么定下来的。这三个值是产品规则的对外形状，
+	// 每一个都有机械执行者（数据模型 §4 那张表）：
+	//
+	// · `fence` —— 坐标落在一个或多个围栏内，按距离升序返回
+	// · `fallback_default` —— 不在任何围栏内，**或根本没有位置**，回落默认门店
+	// · `none` —— 连默认门店都没配，这个租户对这次请求**不在服务范围**
+	//
+	// `none` 不是错误，是一个正常的查询结果。
+	MatchType StoreMatchType `json:"match_type"`
+
+	// RegionId 那家门店所属大区。价格的中间一层按它算。
+	RegionId *int64 `json:"region_id,omitempty"`
+
+	// StoreId 本次响应是按哪家门店算的。`match_type = none` 时为 null。
+	StoreId *int64 `json:"store_id,omitempty"`
+}
+
+// StoreCreateRequest **围栏不在这里传**，走 `PUT /admin/stores/{store_id}/fence`。
+// 建店是表单、画围栏是地图，是后台的两个界面。
+type StoreCreateRequest struct {
+	Address  *string `json:"address,omitempty"`
+	City     *string `json:"city,omitempty"`
+	Code     string  `json:"code"`
+	District *string `json:"district,omitempty"`
+
+	// IsDefault 建出来就是默认门店。已经有一家时返回 409——切换默认店请用
+	// `PUT /admin/stores/{store_id}/default`，那条会先清旧再置新。
+	IsDefault *bool `json:"is_default,omitempty"`
+
+	// Lat 门店自身坐标的纬度，`/stores/resolve` 的 `distance_m` 按它算。
+	Lat *float32 `json:"lat,omitempty"`
+
+	// Lng 经度。与 `lat` 同时给或同时不给。
+	Lng      *float32 `json:"lng,omitempty"`
+	Name     string   `json:"name"`
+	Phone    *string  `json:"phone,omitempty"`
+	Province *string  `json:"province,omitempty"`
+
+	// RegionId 必填。大区不存在或不属于当前租户时返回 422。
+	RegionId int64 `json:"region_id"`
+}
+
+// StoreFenceRequest 整体替换这家门店的围栏。
+type StoreFenceRequest struct {
+	// Fence 传 `null` 即清空围栏。**清空只对默认门店合法**——
+	// 给一家非默认门店清空围栏会让它永远接不到单，返回 409
+	// （`https://keel.dev/problems/store-fence-required`）。
+	Fence *GeoPolygon `json:"fence"`
+}
+
+// StoreMatch defines model for StoreMatch.
+type StoreMatch struct {
+	Address *string `json:"address,omitempty"`
+
+	// DistanceM 买家坐标到门店坐标的球面距离，**单位米**。
+	// `/stores/resolve` 的排序键，升序。
+	//
+	// 为 null **当且仅当**本次请求没带坐标（`fallback_default`）——
+	// 那时没有起点，算不出距离。客户端据此决定显示不显示「距您 x 米」。
+	//
+	// 单位是米而不是「度」：`stores.location` 是
+	// `GEOGRAPHY(POINT, 4326)`，走球面计算。用 `GEOMETRY` 的话
+	// `ST_Distance` 返回度，而一度经度与一度纬度在中纬度差约 30%，
+	// 排序会在东西向与南北向上系统性偏斜——且看起来完全正常
+	// （数据模型 §4）。
+	DistanceM *float32 `json:"distance_m"`
+	Id        int64    `json:"id"`
+
+	// IsDefault 是否是这家商家的「全国配送」回落门店。
+	IsDefault bool     `json:"is_default"`
+	Lat       *float32 `json:"lat,omitempty"`
+	Lng       *float32 `json:"lng,omitempty"`
+	Name      string   `json:"name"`
+	Phone     *string  `json:"phone,omitempty"`
+}
+
+// StoreMatchType 「当前门店」是怎么定下来的。这三个值是产品规则的对外形状，
+// 每一个都有机械执行者（数据模型 §4 那张表）：
+//
+// · `fence` —— 坐标落在一个或多个围栏内，按距离升序返回
+// · `fallback_default` —— 不在任何围栏内，**或根本没有位置**，回落默认门店
+// · `none` —— 连默认门店都没配，这个租户对这次请求**不在服务范围**
+//
+// `none` 不是错误，是一个正常的查询结果。
+type StoreMatchType string
+
+// StoreResolveResult defines model for StoreResolveResult.
+type StoreResolveResult struct {
+	// MatchType 「当前门店」是怎么定下来的。这三个值是产品规则的对外形状，
+	// 每一个都有机械执行者（数据模型 §4 那张表）：
+	//
+	// · `fence` —— 坐标落在一个或多个围栏内，按距离升序返回
+	// · `fallback_default` —— 不在任何围栏内，**或根本没有位置**，回落默认门店
+	// · `none` —— 连默认门店都没配，这个租户对这次请求**不在服务范围**
+	//
+	// `none` 不是错误，是一个正常的查询结果。
+	MatchType StoreMatchType `json:"match_type"`
+
+	// Stores `fence` 时是命中的全部门店按 `distance_m` 升序；
+	// `fallback_default` 时恰好一家（默认门店）；
+	// `none` 时是**空数组**，不是 null。
+	Stores []StoreMatch `json:"stores"`
+}
+
+// StoreUpdateRequest 只给要改的字段。**改不了两样**：`fence` 走 `PUT .../fence`（要过
+// `ST_IsValid`），`is_default` 走 `PUT .../default`（要在同一事务里
+// 先清旧再置新）。
+type StoreUpdateRequest struct {
+	Address  *string                   `json:"address,omitempty"`
+	City     *string                   `json:"city,omitempty"`
+	Code     *string                   `json:"code,omitempty"`
+	District *string                   `json:"district,omitempty"`
+	Lat      *float32                  `json:"lat,omitempty"`
+	Lng      *float32                  `json:"lng,omitempty"`
+	Name     *string                   `json:"name,omitempty"`
+	Phone    *string                   `json:"phone,omitempty"`
+	Province *string                   `json:"province,omitempty"`
+	RegionId *int64                    `json:"region_id,omitempty"`
+	Status   *StoreUpdateRequestStatus `json:"status,omitempty"`
+}
+
+// StoreUpdateRequestStatus defines model for StoreUpdateRequest.Status.
+type StoreUpdateRequestStatus int
 
 // Upload defines model for Upload.
 type Upload struct {
@@ -2346,8 +3003,14 @@ type ProductId = int64
 // RefundNo defines model for RefundNo.
 type RefundNo = string
 
+// RegionId defines model for RegionId.
+type RegionId = int64
+
 // SkuId defines model for SkuId.
 type SkuId = int64
+
+// StoreId defines model for StoreId.
+type StoreId = int64
 
 // IdempotencyInFlight RFC 9457 Problem Details
 type IdempotencyInFlight = Problem
@@ -2561,6 +3224,43 @@ type PostAdminRefundsRefundNoAuditParams struct {
 // PostAdminRefundsRefundNoAuditJSONBodyAction defines parameters for PostAdminRefundsRefundNoAudit.
 type PostAdminRefundsRefundNoAuditJSONBodyAction string
 
+// GetAdminRegionsParams defines parameters for GetAdminRegions.
+type GetAdminRegionsParams struct {
+	Page     *Page     `form:"page,omitempty" json:"page,omitempty"`
+	PageSize *PageSize `form:"page_size,omitempty" json:"page_size,omitempty"`
+
+	// IncludeDeleted 是否包含已软删的大区。不传即只返回未删的。
+	IncludeDeleted *bool `form:"include_deleted,omitempty" json:"include_deleted,omitempty"`
+}
+
+// PostAdminRegionsParams defines parameters for PostAdminRegions.
+type PostAdminRegionsParams struct {
+	// IdempotencyKey 客户端生成的 UUID。幂等作用域为 `(接口 scope, user_id, key)`，
+	// 有效期 24h，过期后同一 key 可复用（见数据模型文档 §11）。
+	//
+	// · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
+	//   并带 `Idempotency-Replayed: true` 响应头
+	// · **同 key 正在处理中**：`409` + `Retry-After`，
+	//   type=https://keel.dev/problems/idempotency-key-in-flight，
+	//   客户端应退避重试，不要当成业务失败
+	// · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
+	//   type=https://keel.dev/problems/idempotency-key-reused。
+	//   宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
+	//   那会让用户以为下单成功了而实际什么都没发生
+	// · 首次执行失败（存档为失败态）时同样回放该失败响应；
+	//   确需重试的场景请换一个新 key
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// GetAdminRegionsRegionIdProductsParams defines parameters for GetAdminRegionsRegionIdProducts.
+type GetAdminRegionsRegionIdProductsParams struct {
+	Page     *Page     `form:"page,omitempty" json:"page,omitempty"`
+	PageSize *PageSize `form:"page_size,omitempty" json:"page_size,omitempty"`
+
+	// Listed 只看在售的（`true`）或只看本大区已下架的（`false`）。不传即两者都要。
+	Listed *bool `form:"listed,omitempty" json:"listed,omitempty"`
+}
+
 // GetAdminStaffParams defines parameters for GetAdminStaff.
 type GetAdminStaffParams struct {
 	Page     *Page     `form:"page,omitempty" json:"page,omitempty"`
@@ -2600,6 +3300,56 @@ type PatchAdminStaffStaffIdJSONBody struct {
 
 // PatchAdminStaffStaffIdJSONBodyStatus defines parameters for PatchAdminStaffStaffId.
 type PatchAdminStaffStaffIdJSONBodyStatus int
+
+// GetAdminStoresParams defines parameters for GetAdminStores.
+type GetAdminStoresParams struct {
+	Page     *Page     `form:"page,omitempty" json:"page,omitempty"`
+	PageSize *PageSize `form:"page_size,omitempty" json:"page_size,omitempty"`
+
+	// RegionId 只看某个大区下的门店。
+	RegionId *int64 `form:"region_id,omitempty" json:"region_id,omitempty"`
+
+	// IncludeDeleted 是否包含已软删的门店。不传即只返回未删的。
+	IncludeDeleted *bool `form:"include_deleted,omitempty" json:"include_deleted,omitempty"`
+}
+
+// PostAdminStoresParams defines parameters for PostAdminStores.
+type PostAdminStoresParams struct {
+	// IdempotencyKey 客户端生成的 UUID。幂等作用域为 `(接口 scope, user_id, key)`，
+	// 有效期 24h，过期后同一 key 可复用（见数据模型文档 §11）。
+	//
+	// · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
+	//   并带 `Idempotency-Replayed: true` 响应头
+	// · **同 key 正在处理中**：`409` + `Retry-After`，
+	//   type=https://keel.dev/problems/idempotency-key-in-flight，
+	//   客户端应退避重试，不要当成业务失败
+	// · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
+	//   type=https://keel.dev/problems/idempotency-key-reused。
+	//   宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
+	//   那会让用户以为下单成功了而实际什么都没发生
+	// · 首次执行失败（存档为失败态）时同样回放该失败响应；
+	//   确需重试的场景请换一个新 key
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// GetAdminStoresStoreIdInventoriesParams defines parameters for GetAdminStoresStoreIdInventories.
+type GetAdminStoresStoreIdInventoriesParams struct {
+	Page     *Page     `form:"page,omitempty" json:"page,omitempty"`
+	PageSize *PageSize `form:"page_size,omitempty" json:"page_size,omitempty"`
+
+	// LowStockOnly 只看水位 ≤ `warning_qty` 的。不传即全部。
+	LowStockOnly *bool `form:"low_stock_only,omitempty" json:"low_stock_only,omitempty"`
+}
+
+// GetAdminStoresStoreIdProductsParams defines parameters for GetAdminStoresStoreIdProducts.
+type GetAdminStoresStoreIdProductsParams struct {
+	Page     *Page     `form:"page,omitempty" json:"page,omitempty"`
+	PageSize *PageSize `form:"page_size,omitempty" json:"page_size,omitempty"`
+
+	// Listed 只看在售的（`true`）或只看本店已下架的（`false`）。
+	// **不传即两者都要**——刻意没有 default，缺省会静默改变筛选语义。
+	Listed *bool `form:"listed,omitempty" json:"listed,omitempty"`
+}
 
 // PostAdminUploadsMultipartBody defines parameters for PostAdminUploads.
 type PostAdminUploadsMultipartBody struct {
@@ -2952,9 +3702,28 @@ type PostOrdersOrderNoRefundsParams struct {
 
 // GetProductsParams defines parameters for GetProducts.
 type GetProductsParams struct {
-	Page       *Page     `form:"page,omitempty" json:"page,omitempty"`
-	PageSize   *PageSize `form:"page_size,omitempty" json:"page_size,omitempty"`
-	CategoryId *int64    `form:"category_id,omitempty" json:"category_id,omitempty"`
+	Page     *Page     `form:"page,omitempty" json:"page,omitempty"`
+	PageSize *PageSize `form:"page_size,omitempty" json:"page_size,omitempty"`
+
+	// StoreId 按哪家门店算「卖不卖」「多少钱」「有没有货」。
+	//
+	// **不传不是「全租户并集」，是走回落链**：
+	// 服务端按 `GET /stores/resolve` 的同一段逻辑解析出默认门店
+	// （数据模型 §4 与那条端点的描述：「没有位置」与「位置不在任何围栏内」
+	// 是同一条路径）。商家没配默认门店时，本接口返回**空列表**，
+	// 并在响应的 `store.match_type` 里给出 `none`——
+	// 那不是「这家店没有商品」，是「你不在服务范围」，
+	// 客户端要渲染的是完全不同的页面。
+	//
+	// **刻意没有 default**：查询参数带 default 会被静默代入，
+	// 而这个参数改变的正是「返回哪些行」。
+	StoreId *int64 `form:"store_id,omitempty" json:"store_id,omitempty"`
+
+	// InStockOnly 只看当前门店有货的。**不传即 `false`**（不按库存过滤，缺货商品照常
+	// 返回，由 `in_stock` 标出）。与 `SearchFilters.in_stock_only` 同义、
+	// 同默认值——见上方 I10 那一段。
+	InStockOnly *bool  `form:"in_stock_only,omitempty" json:"in_stock_only,omitempty"`
+	CategoryId  *int64 `form:"category_id,omitempty" json:"category_id,omitempty"`
 
 	// Sort 排序字段
 	Sort          *GetProductsParamsSort `form:"sort,omitempty" json:"sort,omitempty"`
@@ -2964,6 +3733,23 @@ type GetProductsParams struct {
 
 // GetProductsParamsSort defines parameters for GetProducts.
 type GetProductsParamsSort string
+
+// GetProductsProductIdParams defines parameters for GetProductsProductId.
+type GetProductsProductIdParams struct {
+	// StoreId 按哪家门店算「卖不卖」「多少钱」「有没有货」。
+	//
+	// **不传不是「全租户并集」，是走回落链**：
+	// 服务端按 `GET /stores/resolve` 的同一段逻辑解析出默认门店
+	// （数据模型 §4 与那条端点的描述：「没有位置」与「位置不在任何围栏内」
+	// 是同一条路径）。商家没配默认门店时，本接口返回**空列表**，
+	// 并在响应的 `store.match_type` 里给出 `none`——
+	// 那不是「这家店没有商品」，是「你不在服务范围」，
+	// 客户端要渲染的是完全不同的页面。
+	//
+	// **刻意没有 default**：查询参数带 default 会被静默代入，
+	// 而这个参数改变的正是「返回哪些行」。
+	StoreId *int64 `form:"store_id,omitempty" json:"store_id,omitempty"`
+}
 
 // GetRefundsParams defines parameters for GetRefunds.
 type GetRefundsParams struct {
@@ -2989,22 +3775,6 @@ type PostRefundsRefundNoCancelParams struct {
 	// · 首次执行失败（存档为失败态）时同样回放该失败响应；
 	//   确需重试的场景请换一个新 key
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
-}
-
-// PostSearchJSONBody defines parameters for PostSearch.
-type PostSearchJSONBody struct {
-	// Explain 返回各阶段得分，用于调试与效果评估
-	Explain *bool          `json:"explain,omitempty"`
-	Filters *SearchFilters `json:"filters,omitempty"`
-	Query   string         `json:"query"`
-	Size    *int           `json:"size,omitempty"`
-
-	// Strategy 排序策略标识，用于 A/B 对比。记入检索日志后可按策略分组
-	// 对比 NDCG@10 / CTR@10 等在线指标。省略则用默认策略。
-	// 一期不做完整分流，但接口层先留出这个参数 ——
-	// 否则后续每次改排序都是不可逆的「拍脑袋上线」
-	// （语义检索层设计 §9.3）。
-	Strategy *string `json:"strategy,omitempty"`
 }
 
 // PostSearchEventsJSONBody defines parameters for PostSearchEvents.
@@ -3035,6 +3805,24 @@ type PostSearchEventsParams struct {
 
 // PostSearchEventsJSONBodyEvent defines parameters for PostSearchEvents.
 type PostSearchEventsJSONBodyEvent string
+
+// GetStoresParams defines parameters for GetStores.
+type GetStoresParams struct {
+	Page     *Page     `form:"page,omitempty" json:"page,omitempty"`
+	PageSize *PageSize `form:"page_size,omitempty" json:"page_size,omitempty"`
+}
+
+// GetStoresResolveParams defines parameters for GetStoresResolve.
+type GetStoresResolveParams struct {
+	// Lat 纬度，WGS84。与 `lng` **同时给或同时不给**；只给一个返回 422。
+	Lat *float32 `form:"lat,omitempty" json:"lat,omitempty"`
+
+	// Lng 经度，WGS84。
+	Lng *float32 `form:"lng,omitempty" json:"lng,omitempty"`
+
+	// Size 围栏命中时最多返回几家，默认 10。
+	Size *int `form:"size,omitempty" json:"size,omitempty"`
+}
 
 // PostUploadsMultipartBody defines parameters for PostUploads.
 type PostUploadsMultipartBody struct {
@@ -3124,6 +3912,18 @@ type PostAdminProductsProductIdSkusJSONRequestBody = SkuCreateRequest
 // PostAdminRefundsRefundNoAuditJSONRequestBody defines body for PostAdminRefundsRefundNoAudit for application/json ContentType.
 type PostAdminRefundsRefundNoAuditJSONRequestBody PostAdminRefundsRefundNoAuditJSONBody
 
+// PostAdminRegionsJSONRequestBody defines body for PostAdminRegions for application/json ContentType.
+type PostAdminRegionsJSONRequestBody = RegionCreateRequest
+
+// PatchAdminRegionsRegionIdJSONRequestBody defines body for PatchAdminRegionsRegionId for application/json ContentType.
+type PatchAdminRegionsRegionIdJSONRequestBody = RegionUpdateRequest
+
+// PutAdminRegionsRegionIdProductsProductIdListingJSONRequestBody defines body for PutAdminRegionsRegionIdProductsProductIdListing for application/json ContentType.
+type PutAdminRegionsRegionIdProductsProductIdListingJSONRequestBody = ProductListingRequest
+
+// PutAdminRegionsRegionIdSkusSkuIdPriceJSONRequestBody defines body for PutAdminRegionsRegionIdSkusSkuIdPrice for application/json ContentType.
+type PutAdminRegionsRegionIdSkusSkuIdPriceJSONRequestBody = SkuPriceSetRequest
+
 // PatchAdminSkusSkuIdJSONRequestBody defines body for PatchAdminSkusSkuId for application/json ContentType.
 type PatchAdminSkusSkuIdJSONRequestBody = SkuUpdateRequest
 
@@ -3135,6 +3935,24 @@ type PostAdminStaffJSONRequestBody = StaffCreateRequest
 
 // PatchAdminStaffStaffIdJSONRequestBody defines body for PatchAdminStaffStaffId for application/json ContentType.
 type PatchAdminStaffStaffIdJSONRequestBody PatchAdminStaffStaffIdJSONBody
+
+// PostAdminStoresJSONRequestBody defines body for PostAdminStores for application/json ContentType.
+type PostAdminStoresJSONRequestBody = StoreCreateRequest
+
+// PatchAdminStoresStoreIdJSONRequestBody defines body for PatchAdminStoresStoreId for application/json ContentType.
+type PatchAdminStoresStoreIdJSONRequestBody = StoreUpdateRequest
+
+// PutAdminStoresStoreIdFenceJSONRequestBody defines body for PutAdminStoresStoreIdFence for application/json ContentType.
+type PutAdminStoresStoreIdFenceJSONRequestBody = StoreFenceRequest
+
+// PutAdminStoresStoreIdProductsProductIdListingJSONRequestBody defines body for PutAdminStoresStoreIdProductsProductIdListing for application/json ContentType.
+type PutAdminStoresStoreIdProductsProductIdListingJSONRequestBody = ProductListingRequest
+
+// PutAdminStoresStoreIdSkusSkuIdInventoryJSONRequestBody defines body for PutAdminStoresStoreIdSkusSkuIdInventory for application/json ContentType.
+type PutAdminStoresStoreIdSkusSkuIdInventoryJSONRequestBody = InventorySetRequest
+
+// PutAdminStoresStoreIdSkusSkuIdPriceJSONRequestBody defines body for PutAdminStoresStoreIdSkusSkuIdPrice for application/json ContentType.
+type PutAdminStoresStoreIdSkusSkuIdPriceJSONRequestBody = SkuPriceSetRequest
 
 // PostAdminUploadsMultipartRequestBody defines body for PostAdminUploads for multipart/form-data ContentType.
 type PostAdminUploadsMultipartRequestBody PostAdminUploadsMultipartBody
@@ -3191,7 +4009,7 @@ type PostOrdersOrderNoPaymentsJSONRequestBody = PaymentCreateRequest
 type PostOrdersOrderNoRefundsJSONRequestBody = RefundCreateRequest
 
 // PostSearchJSONRequestBody defines body for PostSearch for application/json ContentType.
-type PostSearchJSONRequestBody PostSearchJSONBody
+type PostSearchJSONRequestBody = SearchRequest
 
 // PostSearchEventsJSONRequestBody defines body for PostSearchEvents for application/json ContentType.
 type PostSearchEventsJSONRequestBody PostSearchEventsJSONBody

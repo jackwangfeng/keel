@@ -1,0 +1,75 @@
+-- 三层定价的**写面**：两张覆盖表的 upsert 与撤销。数据模型 §4。
+--
+-- ===========================================================================
+-- 这个文件是 check_query_tenancy.py 那条价格闸门的唯一豁免，理由写在这里
+-- ===========================================================================
+--
+-- 那条闸门禁止 db/queries/*.sql 里出现 store_sku_prices / region_sku_prices
+-- 两个表名：读价格一律走 sku_prices_by_store / sku_prices_by_region 两张视图，
+-- 那是全仓库仅有的写 COALESCE(门店价, 大区价, 基准价) 的地方。
+--
+-- 写不能走视图：视图是三层合并的**结果**，往它写没有意义 —— 而「往哪一层写」
+-- 恰恰是调用方的意图（大区价还是门店价）。所以这个文件按**文件名**豁免。
+--
+-- 按文件名而不是按查询名，是因为这条豁免的真正含义是「这个文件是价格的写面」。
+-- 按查询名豁免的话，往这个文件里加一条**读**查询就悄悄搭上了同一条豁免，
+-- 而那正是要挡的东西。所以这里只许有 upsert 与 delete，
+-- 每条的 RETURNING 只回它自己刚写进去的那一行，不回生效价 ——
+-- 生效价由调用方再查一次视图，那一次经过闸门守着的那条路。
+--
+-- 不带 WHERE merchant_id（RLS 过滤），注释里不许有反引号。
+
+-- name: UpsertRegionSkuPrice :one
+-- 大区价（中间层覆盖）。产品原话是「一个大区内的商品是一个价格，不同大区内
+-- 商品价格不一样」—— 这条查询就是那句话。门店可以再覆盖它。
+--
+-- ON CONFLICT 而不是「先查后插」：这条端点是 PUT，语义就是「不管原来有没有，
+-- 现在是这个价」，而先查后插之间的窗口会让两次并发改价互相覆盖成 23505。
+--
+-- 非负由 chk_region_price_nonneg 兜底，service 层也挡一道（契约的 422）。
+-- 两道都要：数据库那道挡的是任何路径，service 那道给的是一句能读懂的话。
+INSERT INTO region_sku_prices (region_id, sku_id, price_cents)
+VALUES (sqlc.arg(region_id), sqlc.arg(sku_id), sqlc.arg(price_cents))
+ON CONFLICT (region_id, sku_id)
+DO UPDATE SET price_cents = excluded.price_cents
+RETURNING region_id, sku_id, price_cents;
+
+-- name: DeleteRegionSkuPrice :exec
+-- 撤销大区价，回到基准价。
+--
+-- **本来就没有那一行时也返回 204，不是 404**：调用方的意图是「这个大区不要
+-- 自己的价」，那个意图在两种情况下都已经达成。所以这里是 :exec，
+-- rows_affected 刻意不看 —— 404 留给「大区或 SKU 根本不存在」，
+-- 而那一条由调用方在这条语句之前单独确认。
+--
+-- 这不会动门店价：门店那一层如果自己定了价，撤销大区价之后它仍然生效。
+-- 覆盖是逐层独立的。
+DELETE FROM region_sku_prices WHERE region_id = $1 AND sku_id = $2;
+
+-- name: UpsertStoreSkuPrice :one
+-- 门店价（最内层覆盖）。「大区价格统一，但是每个门店可以自己调整价格」
+-- 那句产品原话的后半句。
+INSERT INTO store_sku_prices (store_id, sku_id, price_cents)
+VALUES (sqlc.arg(store_id), sqlc.arg(sku_id), sqlc.arg(price_cents))
+ON CONFLICT (store_id, sku_id)
+DO UPDATE SET price_cents = excluded.price_cents
+RETURNING store_id, sku_id, price_cents;
+
+-- name: DeleteStoreSkuPrice :exec
+-- 撤销门店价，回到大区价（大区也没定就回到基准价）。理由同上。
+DELETE FROM store_sku_prices WHERE store_id = $1 AND sku_id = $2;
+
+-- name: GetRegionSkuPriceOverride :one
+-- **本作用域自己定的价**，契约 ScopedSkuPrice.override_price_cents。
+--
+-- 为什么这条读查询可以留在这个文件里，而别的读查询不行：它读的不是「生效价」，
+-- 是「这一层有没有覆盖、覆盖成多少」—— 那是覆盖表本身的事实，视图里没有
+-- （视图只吐合并之后的结果与它来自哪一层）。而契约把 override 与 effective
+-- 分成两个字段，正是因为后台要显示「这一层填了什么」与「最终是多少」两件事。
+--
+-- 它不会诱发「另写一套 COALESCE」：这条查询里一个 COALESCE 都没有。
+SELECT price_cents FROM region_sku_prices WHERE region_id = $1 AND sku_id = $2;
+
+-- name: GetStoreSkuPriceOverride :one
+-- 同上，门店那一层。
+SELECT price_cents FROM store_sku_prices WHERE store_id = $1 AND sku_id = $2;

@@ -234,6 +234,11 @@ type SearchRequest struct {
 	Strategy string
 	Explain  bool
 	Filters  SearchFilters
+
+	// StoreID 非 nil 表示客户端显式指名了一家门店；nil 走回落链。
+	// 解析规则与 GET /products 逐字一致 —— 两处写岔的症状是
+	// 「列表里有这件商品，搜不出来」，而那看起来像索引的问题。
+	StoreID *int64
 }
 
 // SearchHit 是交给 handler 的一条结果。
@@ -267,6 +272,11 @@ type SearchHit struct {
 // SearchResult 是一次检索的全部产出。
 type SearchResult struct {
 	Items []SearchHit
+
+	// Store 是「本次检索按哪家门店算的」，契约里**必返**（与 GET /products
+	// 的同名字段同义）。MatchType = none 时 Items 是空数组 ——
+	// 那是「你不在服务范围」，不是「没搜到」。
+	Store StoreContext
 
 	// Strategy 是**真的跑过的**那条流水线的标识，不是请求里那个字符串。
 	Strategy string
@@ -340,6 +350,34 @@ func (s *SearchService) Search(ctx context.Context, req SearchRequest) (SearchRe
 		return SearchResult{}, fmt.Errorf("%w: %q", ErrEmptyQuery, req.Query)
 	}
 
+	// 门店解析先跑一次，**在两路召回之前**，而且只跑一次。
+	//
+	// 它自己开一个事务，与下面两路各自的事务分开。这里不是「本该在同一个
+	// 事务里却图省事」：两路召回本来就跑在两个并行的事务里（§8 要它们同时
+	// 发起），所以「三者同一个快照」从一开始就不成立。要紧的是**两路拿到的
+	// 是同一个 StoreScope** —— 那决定了它们对「哪些商品存在」的意见一致，
+	// 而 RRF 只在两份列表谈论同一批商品时才有意义。
+	var (
+		scope    repository.StoreScope
+		matchTyp MatchType
+	)
+	if err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+		var err error
+		scope, matchTyp, err = scopeIn(ctx, tx, req.StoreID)
+		return err
+	}); err != nil {
+		if errors.Is(err, ErrOutOfServiceArea) {
+			// 不在服务范围：空结果 + match_type = none，仍然 200。
+			// 不去跑两路召回 —— 没有门店就没有「卖不卖 / 多少钱 / 有没有货」，
+			// 而一份按 store_id = 0 算出来的结果是三个都错的。
+			return SearchResult{
+				Items: []SearchHit{}, Strategy: req.Strategy,
+				Store: StoreContext{MatchType: MatchNone},
+			}, nil
+		}
+		return SearchResult{}, err
+	}
+
 	recall := int32(size * RecallMultiplier)
 
 	// 两路并行。§8：query embedding 与关键词召回同时发起，取 max 而非 sum。
@@ -351,13 +389,13 @@ func (s *SearchService) Search(ctx context.Context, req SearchRequest) (SearchRe
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		vecHits, vecErr = s.recallByVector(ctx, req.Query, req.Filters.toRepo(), recall)
+		vecHits, vecErr = s.recallByVector(ctx, scope, req.Query, req.Filters.toRepo(), recall)
 	}()
 	go func() {
 		defer wg.Done()
 		kwErr = s.repo.WithTenant(ctx, func(tx repository.Tx) error {
 			var err error
-			kwHits, err = tx.SearchProductsByKeyword(ctx, tsquery, req.Filters.toRepo(), recall)
+			kwHits, err = tx.SearchProductsByKeyword(ctx, scope, tsquery, req.Filters.toRepo(), recall)
 			return err
 		})
 	}()
@@ -429,6 +467,7 @@ func (s *SearchService) Search(ctx context.Context, req SearchRequest) (SearchRe
 		Items:    items,
 		Strategy: ResolveStrategy(req.Strategy),
 		Degraded: degraded,
+		Store:    storeContextOf(scope, matchTyp),
 	}, nil
 }
 
@@ -449,7 +488,7 @@ func vectorScoreOf(f search.Fused, row repository.SearchHit) float64 {
 // 没有引擎（emb == nil）或引擎出错时返回错误，由调用方走降级链。
 // **不返回一个空列表** —— 空列表会让「引擎挂了」和「这家店真的没有语义相近的
 // 商品」在上层长得一模一样。
-func (s *SearchService) recallByVector(ctx context.Context, query string,
+func (s *SearchService) recallByVector(ctx context.Context, scope repository.StoreScope, query string,
 	f repository.SearchFilters, limit int32) ([]repository.SearchHit, error) {
 
 	if s.emb == nil {
@@ -478,7 +517,7 @@ func (s *SearchService) recallByVector(ctx context.Context, query string,
 	var hits []repository.SearchHit
 	err = s.repo.WithTenant(ctx, func(tx repository.Tx) error {
 		var err error
-		hits, err = tx.SearchProductsByVector(ctx, out.Vectors[0], f, limit)
+		hits, err = tx.SearchProductsByVector(ctx, scope, out.Vectors[0], f, limit)
 		return err
 	})
 	if err != nil {

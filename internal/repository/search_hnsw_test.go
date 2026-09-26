@@ -96,6 +96,8 @@ func TestHNSWPostFilterTrapAndItsFix(t *testing.T) {
 
 	params := gendb.SearchProductsByVectorParams{
 		QueryEmbedding: fx.queryLiteral,
+		StoreID:        fx.victimStore,
+		RegionID:       fx.victimRegion,
 		InStockOnly:    false,
 		RowLimit:       hnswSearchSize,
 	}
@@ -143,7 +145,7 @@ func TestHNSWPostFilterTrapAndItsFix(t *testing.T) {
 	if err := repository.New(p).WithTenant(tenant.NewContext(ctx, fx.victim),
 		func(tx repository.Tx) error {
 			var err error
-			fixed, err = tx.SearchProductsByVector(ctx, fx.queryVector,
+			fixed, err = tx.SearchProductsByVector(ctx, fx.scope(), fx.queryVector,
 				repository.SearchFilters{}, hnswSearchSize)
 			return err
 		}); err != nil {
@@ -256,6 +258,18 @@ type hnswFixture struct {
 	total            int64
 	queryVector      []float32
 	queryLiteral     string
+
+	// 00020 之后检索按门店取价、按门店算 in_stock、按门店/大区排除不卖的款，
+	// 所以两路召回都要一个 StoreScope。这条测试不关心那三样（它测的是索引
+	// 扫描的机制），但**门店必须是真的那一家**：随手传 0 的话，
+	// 两条 NOT EXISTS 与那个 LEFT JOIN LATERAL 会退化成恒真/恒空，
+	// 于是将来任何一次把它们写坏的改动都不会在这条测试上留下痕迹。
+	victimStore, victimRegion int64
+}
+
+// scope 是被查商家那家默认门店的作用域。
+func (f hnswFixture) scope() repository.StoreScope {
+	return repository.StoreScope{StoreID: f.victimStore, RegionID: f.victimRegion}
 }
 
 // seedHNSWScaleFixture 造那个真实规模的库。
@@ -283,6 +297,13 @@ func seedHNSWScaleFixture(t *testing.T, ctx context.Context) hnswFixture {
 			   (SELECT id FROM merchants WHERE code LIKE $1)`,
 			`DELETE FROM categories WHERE merchant_id IN
 			   (SELECT id FROM merchants WHERE code LIKE $1)`,
+			// stores → regions 排在 merchants 之前（00020 加的两条外键）。
+			// 漏掉它们不会让这条测试红，会让下一轮那句
+			// `DELETE FROM merchants` 以 23503 失败，而报错出现在别处。
+			`DELETE FROM stores     WHERE merchant_id IN
+			   (SELECT id FROM merchants WHERE code LIKE $1)`,
+			`DELETE FROM regions    WHERE merchant_id IN
+			   (SELECT id FROM merchants WHERE code LIKE $1)`,
 			`DELETE FROM merchants  WHERE code LIKE $1`,
 		} {
 			if _, err := admin.Exec(c, stmt, tag+"%"); err != nil {
@@ -309,6 +330,17 @@ func seedHNSWScaleFixture(t *testing.T, ctx context.Context) hnswFixture {
 		tag+"-victim")
 	exec(`INSERT INTO categories (merchant_id, name, path, status)
 	      SELECT id, '默认', '/', 1 FROM merchants WHERE code LIKE $1`, tag+"%")
+	// 每家一个大区 + 一家默认门店。陪跑的那 40 家也建：这条测试要的是一个
+	// **形状真实**的库，而真实的库里每家店都有门店；只给被查那家建的话，
+	// 规划器面对的表大小和生产里不一样。
+	// is_default = TRUE，不画围栏（默认店靠「全国兜底」接单；「非默认 且
+	// 「非默认 且 无围栏」），这条测试不碰地理。
+	exec(`INSERT INTO regions (merchant_id, code, name)
+	      SELECT id, 'default', '默认大区' FROM merchants WHERE code LIKE $1`, tag+"%")
+	exec(`INSERT INTO stores (merchant_id, region_id, code, name, is_default)
+	      SELECT r.merchant_id, r.id, 'default', '默认门店', TRUE
+	        FROM regions r
+	        JOIN merchants m ON m.id = r.merchant_id AND m.code LIKE $1`, tag+"%")
 	exec(`INSERT INTO products (merchant_id, category_id, title, status, published_at)
 	      SELECT c.merchant_id, c.id, 'P' || c.merchant_id || '-' || g, 1, now()
 	        FROM categories c
@@ -384,6 +416,12 @@ func seedHNSWScaleFixture(t *testing.T, ctx context.Context) hnswFixture {
 		tag+"-victim").Scan(&victim); err != nil {
 		t.Fatal(err)
 	}
+	var victimStore, victimRegion int64
+	if err := admin.QueryRow(ctx,
+		`SELECT id, region_id FROM stores WHERE merchant_id = $1 AND is_default`,
+		victim).Scan(&victimStore, &victimRegion); err != nil {
+		t.Fatal(err)
+	}
 	ids := map[int64]bool{}
 	rows, err := admin.Query(ctx, `SELECT id FROM products WHERE merchant_id = $1`, victim)
 	if err != nil {
@@ -411,6 +449,8 @@ func seedHNSWScaleFixture(t *testing.T, ctx context.Context) hnswFixture {
 		total:            total,
 		queryVector:      qv,
 		queryLiteral:     "[" + strings.Join(lit, ",") + "]",
+		victimStore:      victimStore,
+		victimRegion:     victimRegion,
 	}
 }
 
@@ -540,6 +580,9 @@ func TestSearchRejectsBadQueryVectors(t *testing.T) {
 	ctx := context.Background()
 	idA, _ := seedTwoTenants(t)
 	r := repository.New(pool(t))
+	// 门店作用域取一次就够：这条测试要挡的是**查询向量**本身，
+	// 作用域只是让那条查询在阳性对照里能真的跑起来。
+	sc := defaultScope(t, idA)
 
 	unit := make([]float32, inference.Dim)
 	x := float32(1 / math.Sqrt(float64(inference.Dim)))
@@ -560,7 +603,7 @@ func TestSearchRejectsBadQueryVectors(t *testing.T) {
 		{"维度不对", wrongDim, repository.ErrVectorWrongDim},
 	} {
 		err := r.WithTenant(tenant.NewContext(ctx, idA), func(tx repository.Tx) error {
-			_, err := tx.SearchProductsByVector(ctx, c.vec, repository.SearchFilters{}, 10)
+			_, err := tx.SearchProductsByVector(ctx, sc, c.vec, repository.SearchFilters{}, 10)
 			return err
 		})
 		if !errors.Is(err, c.want) {
@@ -571,7 +614,7 @@ func TestSearchRejectsBadQueryVectors(t *testing.T) {
 
 	// 阳性对照。
 	if err := r.WithTenant(tenant.NewContext(ctx, idA), func(tx repository.Tx) error {
-		_, err := tx.SearchProductsByVector(ctx, unit, repository.SearchFilters{}, 10)
+		_, err := tx.SearchProductsByVector(ctx, sc, unit, repository.SearchFilters{}, 10)
 		return err
 	}); err != nil {
 		t.Fatalf("一条合格的查询向量也被拒了：%v —— 上面那两条断言因此说明不了什么", err)

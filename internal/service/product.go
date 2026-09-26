@@ -47,6 +47,35 @@ type ProductList struct {
 	Page     int
 	PageSize int
 	Total    int64
+
+	// Store 是「本次结果按哪家门店算的」，契约里**必返**。
+	//
+	// 没有它，客户端拿到的 in_stock 与价格是不知道属于谁的 —— 按门店分之后，
+	// 同一件商品对不同的人有不同的答案。MatchType = none 时 Items 是空数组，
+	// 那是「你不在服务范围」，不是「这家店没有商品」。
+	Store StoreContext
+}
+
+// StoreContext 是每一条受门店影响的读接口都要回显的那一小块（契约的
+// StoreContext）。StoreID / RegionID 在 MatchNone 时为 nil。
+type StoreContext struct {
+	MatchType MatchType
+	StoreID   *int64
+	RegionID  *int64
+}
+
+// storeContextOf 把一次解析的结果拍成 StoreContext。
+//
+// 一个函数而不是在四条读路径上各拼一遍：拼岔一处的症状是某一条接口的
+// match_type 与它实际用的门店对不上，而那看上去完全正常。
+func storeContextOf(sc repository.StoreScope, mt MatchType) StoreContext {
+	out := StoreContext{MatchType: mt}
+	if mt == MatchNone {
+		return out
+	}
+	storeID, regionID := sc.StoreID, sc.RegionID
+	out.StoreID, out.RegionID = &storeID, &regionID
+	return out
 }
 
 // ProductRepository 是本服务需要的仓储能力。
@@ -65,21 +94,38 @@ func NewProductService(r ProductRepository) *ProductService { return &ProductSer
 //
 // page / pageSize 在这里钳制，不在 handler：分页规则是业务规则，
 // 换一个 handler（比如将来的 gRPC）不该重写一遍。
-func (s *ProductService) List(ctx context.Context, page, pageSize int) (ProductList, error) {
+// storeID 非 nil 表示客户端显式指名了一家门店；nil 走回落链（数据模型 §4：
+// 「没有位置」与「位置不在任何围栏内」是同一条路径）。
+func (s *ProductService) List(ctx context.Context, storeID *int64, page, pageSize int) (ProductList, error) {
 	page, pageSize = clampPaging(page, pageSize)
 
 	out := ProductList{Items: []ProductSummary{}, Page: page, PageSize: pageSize}
 	err := s.repo.WithTenant(ctx, func(q repository.Tx) error {
+		// 门店解析与后面两条查询在**同一个事务**里：分成两次的话，
+		// 两者之间的一次门店软删会让「解析到了 A 店」与「按 A 店读商品」
+		// 看到不同的世界。
+		sc, mt, err := scopeIn(ctx, q, storeID)
+		if errors.Is(err, ErrOutOfServiceArea) {
+			// 不在服务范围：空列表 + match_type = none，**HTTP 200**。
+			// 那不是「这家店没有商品」，客户端要渲染的是完全不同的页面。
+			out.Store = StoreContext{MatchType: MatchNone}
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		out.Store = storeContextOf(sc, mt)
+
 		// 计数与取页在同一个事务里，所以 total 和 items 看到的是同一个快照。
 		// 分开两次访问的话，两者之间的一次上下架会让「total=21 但第二页是空的」
 		// 这种自相矛盾的响应偶发出现。
-		total, err := q.CountProducts(ctx)
+		total, err := q.CountProducts(ctx, sc)
 		if err != nil {
 			return err
 		}
 		out.Total = total
 
-		rows, err := q.ListProducts(ctx, int64(pageSize), offsetOf(page, pageSize))
+		rows, err := q.ListProducts(ctx, sc, int64(pageSize), offsetOf(page, pageSize))
 		if err != nil {
 			return err
 		}
@@ -176,6 +222,10 @@ type ProductDetail struct {
 	Description *string
 	SKUs        []SKU
 
+	// Store 同 ProductList.Store：SKU 的 price_cents 与 available_qty 都是
+	// **这家门店**的值，不写明是哪一家，它们就是三个不知道属于谁的数。
+	Store StoreContext
+
 	// InStock 是「这件商品现在还买得到吗」：任意一个在售 SKU 水位 > 0。
 	//
 	// 它是**算出来的**，不是 products.total_stock 那一列。那一列是冗余的汇总，
@@ -189,17 +239,29 @@ type ProductDetail struct {
 // 商品与 SKU 在**同一个事务**里读，理由与 List 里那对计数/取页一样：
 // 分两次访问的话，中间的一次下架会让「商品在架，但一个 SKU 都没有」这种
 // 自相矛盾的响应偶发出现。
-func (s *ProductService) Detail(ctx context.Context, id int64) (ProductDetail, error) {
+func (s *ProductService) Detail(ctx context.Context, storeID *int64, id int64) (ProductDetail, error) {
 	var out ProductDetail
 	err := s.repo.WithTenant(ctx, func(q repository.Tx) error {
-		p, err := q.FindProduct(ctx, id)
+		sc, mt, err := scopeIn(ctx, q, storeID)
+		if errors.Is(err, ErrOutOfServiceArea) {
+			// 不在服务范围时详情是 404，不是一个「空的详情页」：
+			// 这条路径要么给出一件能买的商品，要么说没有。
+			// 与列表那边的 200 + 空数组不同，因为列表的语义是「有哪些」，
+			// 详情的语义是「这一件」—— 而「这一件」在这里确实不存在。
+			return fmt.Errorf("%w: product_id=%d（不在服务范围）", ErrProductNotFound, id)
+		}
+		if err != nil {
+			return err
+		}
+		p, err := q.FindProduct(ctx, sc, id)
 		if errors.Is(err, repository.ErrProductNotFound) {
 			return fmt.Errorf("%w: product_id=%d", ErrProductNotFound, id)
 		}
 		if err != nil {
 			return err
 		}
-		rows, err := q.ListProductSKUs(ctx, p.ID)
+		out.Store = storeContextOf(sc, mt)
+		rows, err := q.ListProductSKUs(ctx, sc, p.ID)
 		if err != nil {
 			return err
 		}

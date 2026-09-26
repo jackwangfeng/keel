@@ -9,10 +9,17 @@
 -- 而 RRF 只看名次，它拿到的是两份对「哪些商品存在」意见不同的列表，
 -- 融合出来的排序没有意义，且没有任何东西会红。
 --
--- **M4 Task 3 起价格区间是现算的**（00019 删掉了 products 上那两列冗余价格）。
+-- **M4 Task 3 起价格区间是现算的**（00019 删掉了 products 上那两列冗余价格），
+-- **本轮（00020）它又跟着门店走了**：取价口从 skus.price_cents 换成
+-- sku_prices_by_store 视图，检索结果里的价格区间从此是「按当前门店算出来的」。
 -- 这条纪律因此多了一项：那个 LEFT JOIN LATERAL 与两处 COALESCE 也必须逐字
 -- 一致 —— 价格过滤现在读的是它算出来的值，两边的公式写岔一个字，
 -- 同一件商品就会在一路里落进价格区间、在另一路里落在外面。
+--
+-- 逐字一致这条纪律本轮又多了两项：两层可见性排除（region / store 各一条
+-- NOT EXISTS）与按门店取的 in_stock。in_stock 尤其容易漏 store_id ——
+-- 漏了它「有没有货」问的就是「全租户任何一家店有没有货」，
+-- 于是一件只在广州有货的商品会在北京的搜索结果里显示成有货。
 --
 -- COALESCE 到 0 不是随手写的：旧列 min/max_price_cents 的 DEFAULT 是 0，
 -- 于是「一个 SKU 都没有」的商品在旧的过滤里表现为 max=0（被 min_price 筛掉）
@@ -47,15 +54,16 @@ SELECT p.id, p.title, p.subtitle,
        COALESCE(agg.max_price, 0)::bigint AS max_price_cents,
        p.sales_count, p.status,
        (v.embedding <=> @query_embedding::vector)::float8 AS distance,
-       EXISTS (SELECT 1 FROM skus s JOIN inventories i ON i.sku_id = s.id
+       EXISTS (SELECT 1 FROM skus s JOIN inventories i
+                      ON i.sku_id = s.id AND i.store_id = sqlc.arg(store_id)
                 WHERE s.product_id = p.id AND s.status = 1
                   AND s.deleted_at IS NULL AND i.available_qty > 0) AS in_stock
   FROM product_text_vectors v
   JOIN products p ON p.id = v.product_id
   LEFT JOIN LATERAL (
-        SELECT min(s.price_cents) AS min_price, max(s.price_cents) AS max_price
-          FROM skus s
-         WHERE s.product_id = p.id AND s.deleted_at IS NULL
+        SELECT min(pv.price_cents) AS min_price, max(pv.price_cents) AS max_price
+          FROM sku_prices_by_store pv
+         WHERE pv.store_id = sqlc.arg(store_id) AND pv.product_id = p.id
        ) agg ON TRUE
  WHERE p.deleted_at IS NULL
    AND p.status = 1
@@ -66,9 +74,16 @@ SELECT p.id, p.title, p.subtitle,
    AND (sqlc.narg(max_price_cents)::bigint IS NULL
         OR COALESCE(agg.min_price, 0) <= sqlc.narg(max_price_cents)::bigint)
    AND (NOT @in_stock_only::boolean
-        OR EXISTS (SELECT 1 FROM skus s JOIN inventories i ON i.sku_id = s.id
+        OR EXISTS (SELECT 1 FROM skus s JOIN inventories i
+                          ON i.sku_id = s.id AND i.store_id = sqlc.arg(store_id)
                     WHERE s.product_id = p.id AND s.status = 1
                   AND s.deleted_at IS NULL AND i.available_qty > 0))
+   AND NOT EXISTS (SELECT 1 FROM region_product_overrides ro
+                    WHERE ro.region_id = sqlc.arg(region_id)
+                      AND ro.product_id = p.id AND ro.status = 0)
+   AND NOT EXISTS (SELECT 1 FROM store_product_overrides so
+                    WHERE so.store_id = sqlc.arg(store_id)
+                      AND so.product_id = p.id AND so.status = 0)
  ORDER BY v.embedding <=> @query_embedding::vector
  LIMIT @row_limit;
 
@@ -95,14 +110,15 @@ SELECT p.id, p.title, p.subtitle,
        COALESCE(agg.max_price, 0)::bigint AS max_price_cents,
        p.sales_count, p.status,
        ts_rank_cd(p.search_vector, to_tsquery('simple', @tsquery::text))::float8 AS rank,
-       EXISTS (SELECT 1 FROM skus s JOIN inventories i ON i.sku_id = s.id
+       EXISTS (SELECT 1 FROM skus s JOIN inventories i
+                      ON i.sku_id = s.id AND i.store_id = sqlc.arg(store_id)
                 WHERE s.product_id = p.id AND s.status = 1
                   AND s.deleted_at IS NULL AND i.available_qty > 0) AS in_stock
   FROM products p
   LEFT JOIN LATERAL (
-        SELECT min(s.price_cents) AS min_price, max(s.price_cents) AS max_price
-          FROM skus s
-         WHERE s.product_id = p.id AND s.deleted_at IS NULL
+        SELECT min(pv.price_cents) AS min_price, max(pv.price_cents) AS max_price
+          FROM sku_prices_by_store pv
+         WHERE pv.store_id = sqlc.arg(store_id) AND pv.product_id = p.id
        ) agg ON TRUE
  WHERE p.deleted_at IS NULL
    AND p.status = 1
@@ -114,8 +130,15 @@ SELECT p.id, p.title, p.subtitle,
    AND (sqlc.narg(max_price_cents)::bigint IS NULL
         OR COALESCE(agg.min_price, 0) <= sqlc.narg(max_price_cents)::bigint)
    AND (NOT @in_stock_only::boolean
-        OR EXISTS (SELECT 1 FROM skus s JOIN inventories i ON i.sku_id = s.id
+        OR EXISTS (SELECT 1 FROM skus s JOIN inventories i
+                          ON i.sku_id = s.id AND i.store_id = sqlc.arg(store_id)
                     WHERE s.product_id = p.id AND s.status = 1
                   AND s.deleted_at IS NULL AND i.available_qty > 0))
+   AND NOT EXISTS (SELECT 1 FROM region_product_overrides ro
+                    WHERE ro.region_id = sqlc.arg(region_id)
+                      AND ro.product_id = p.id AND ro.status = 0)
+   AND NOT EXISTS (SELECT 1 FROM store_product_overrides so
+                    WHERE so.store_id = sqlc.arg(store_id)
+                      AND so.product_id = p.id AND so.status = 0)
  ORDER BY ts_rank_cd(p.search_vector, to_tsquery('simple', @tsquery::text)) DESC, p.id
  LIMIT @row_limit;

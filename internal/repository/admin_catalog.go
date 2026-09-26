@@ -179,7 +179,17 @@ type AdminCategory struct {
 
 // Inventory 是一行库存（契约 AdminInventory）。
 type Inventory struct {
-	SKUID        int64
+	SKUID int64
+
+	// StoreID 这行水位属于哪家门店。00020 之后 inventories 的主键是
+	// (sku_id, store_id)，同一个 SKU 会有好几行 —— 契约把 AdminInventory.store_id
+	// 定成**必返**，正是因为一个不写明属于谁的水位在多门店之后没有意义。
+	//
+	// 这条路径（PUT /admin/skus/{sku_id}/inventory）自己不带 store_id，
+	// 它由「本租户恰好一家门店」推出来（SoleStore）—— 但推出来之后必须
+	// **原样回给调用方**：调用方据此知道自己刚改的是哪一家，
+	// 而它哪天开第二家店时，同一个请求会 409 store-ambiguous 而不是猜一家。
+	StoreID      int64
 	AvailableQty int32
 	WarningQty   int32
 	UpdatedAt    time.Time

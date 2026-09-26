@@ -256,11 +256,15 @@ func deductStock(ctx context.Context, tx repository.Tx, order repository.Order) 
 		return fmt.Errorf("%w: 订单 %s 一行都没有", errOrderNotDraft, order.OrderNo)
 	}
 	for _, ln := range lines {
-		after, err := tx.DeductInventory(ctx, ln.SKUID, ln.Quantity)
+		// order.StoreID 来自**这个屏障事务里刚读回来的那一行订单**
+		// （branch() 里的 FindOrderByNo），不是某个缓存下来的快照 ——
+		// 数据模型 §4：分支从 orders 读 store_id，不从 gid 解析，
+		// 因为 gid 是屏障幂等的键，改它的文法等于改那把钥匙的形状。
+		after, err := tx.DeductInventory(ctx, ln.SKUID, order.StoreID, ln.Quantity)
 		if err != nil {
 			return err
 		}
-		if err := tx.AppendInventoryLog(ctx, ln.SKUID, -ln.Quantity,
+		if err := tx.AppendInventoryLog(ctx, ln.SKUID, order.StoreID, -ln.Quantity,
 			repository.InventoryLogOrderDeduct, order.OrderNo, after+ln.Quantity, after); err != nil {
 			return err
 		}
@@ -278,11 +282,13 @@ func restoreStock(ctx context.Context, tx repository.Tx, order repository.Order)
 		return err
 	}
 	for _, ln := range lines {
-		after, err := tx.RestoreInventory(ctx, ln.SKUID, ln.Quantity)
+		// 回补一定回补到**当初扣减的那一家店**：补偿分支与正向分支读的是
+		// 同一行订单，所以 order.StoreID 逐字相同。
+		after, err := tx.RestoreInventory(ctx, ln.SKUID, order.StoreID, ln.Quantity)
 		if err != nil {
 			return err
 		}
-		if err := tx.AppendInventoryLog(ctx, ln.SKUID, ln.Quantity,
+		if err := tx.AppendInventoryLog(ctx, ln.SKUID, order.StoreID, ln.Quantity,
 			repository.InventoryLogSagaCompense, order.OrderNo, after-ln.Quantity, after); err != nil {
 			return err
 		}

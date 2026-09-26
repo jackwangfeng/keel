@@ -25,6 +25,8 @@ type catalogFixture struct {
 	catA, catB           int64
 	prodA, prodB         int64 // 都是 status = 1 在架
 	skuA, skuB           int64 // 都有库存行，水位都是 10
+	storeA, storeB       int64 // 各一家默认门店，库存行挂在它上面
+	regionA, regionB     int64 // 门店所属大区；买家侧读路径的 StoreScope 要它
 	staffA, staffB       int64
 	upA1, upA2, upA3     int64 // A 的三张商品图（purpose = 1）
 	upAEvidence          int64 // A 的一张退款凭证（purpose = 3）
@@ -59,14 +61,20 @@ func seedCatalog(t *testing.T) catalogFixture {
 	t.Cleanup(func() {
 		c := context.Background()
 		ids := []int64{f.merchantA, f.merchantB}
+		// stores 排在 inventories 之后、merchants 之前：inventories 指向
+		// stores，stores 指向 regions。漏掉哪一张都不会让**这条**测试红，
+		// 而是让下一轮的 `DELETE FROM merchants` 以 23503 失败 —— 那条错误
+		// 出现在别的测试里，指不回这里。
+		// inventories 自带 merchant_id 了（00020），不必再绕 skus 的子查询。
 		for _, stmt := range []string{
 			`DELETE FROM product_images WHERE merchant_id = ANY($1)`,
 			`DELETE FROM uploads        WHERE merchant_id = ANY($1)`,
-			`DELETE FROM inventories WHERE sku_id IN
-			   (SELECT id FROM skus WHERE merchant_id = ANY($1))`,
+			`DELETE FROM inventories WHERE merchant_id = ANY($1)`,
 			`DELETE FROM skus       WHERE merchant_id = ANY($1)`,
 			`DELETE FROM products   WHERE merchant_id = ANY($1)`,
 			`DELETE FROM categories WHERE merchant_id = ANY($1)`,
+			`DELETE FROM stores     WHERE merchant_id = ANY($1)`,
+			`DELETE FROM regions    WHERE merchant_id = ANY($1)`,
 			`DELETE FROM staff      WHERE merchant_id = ANY($1)`,
 			`DELETE FROM merchants  WHERE id          = ANY($1)`,
 		} {
@@ -77,7 +85,24 @@ func seedCatalog(t *testing.T) catalogFixture {
 	})
 
 	for i, m := range []int64{f.merchantA, f.merchantB} {
-		var catID, prodID, skuID, staffID int64
+		var catID, prodID, skuID, staffID, regionID, storeID int64
+		// 每家一个大区 + 一家默认门店。00020 的回填只覆盖迁移那一刻库里已有
+		// 的商家，这两家是之后插的。这不是样板代码：CreateSKU 建库存行那一步
+		// （CreateInventoryRow）挑的就是**默认门店**，没有它建出来的 SKU
+		// 一行库存都没有，而那正是 TestCreateSKUAlwaysCreatesInventoryRow
+		// 要证伪的状态。
+		// is_default = TRUE：默认店靠「全国兜底」接单，不画围栏是正常形态；
+		// 这一组测试一条都不碰地理围栏。
+		if err := admin.QueryRow(ctx,
+			`INSERT INTO regions (merchant_id, code, name) VALUES ($1,'r','R')
+			 RETURNING id`, m).Scan(&regionID); err != nil {
+			t.Fatal(err)
+		}
+		if err := admin.QueryRow(ctx,
+			`INSERT INTO stores (merchant_id, region_id, code, name, is_default)
+			 VALUES ($1,$2,'s','S',TRUE) RETURNING id`, m, regionID).Scan(&storeID); err != nil {
+			t.Fatal(err)
+		}
 		if err := admin.QueryRow(ctx,
 			`INSERT INTO categories (merchant_id, name, path) VALUES ($1,'c','/c/')
 			 RETURNING id`, m).Scan(&catID); err != nil {
@@ -94,9 +119,11 @@ func seedCatalog(t *testing.T) catalogFixture {
 			m, prodID, fmt.Sprintf("%s-seed-%d", f.suffix, m)).Scan(&skuID); err != nil {
 			t.Fatal(err)
 		}
+		// merchant_id 显式写：管理员连接上没有 app.merchant_id，
+		// 列默认值 current_merchant() 会 RAISE 而不是填空。
 		if _, err := admin.Exec(ctx,
-			`INSERT INTO inventories (sku_id, available_qty) VALUES ($1, 10)`,
-			skuID); err != nil {
+			`INSERT INTO inventories (sku_id, store_id, merchant_id, available_qty)
+			 VALUES ($1, $2, $3, 10)`, skuID, storeID, m); err != nil {
 			t.Fatal(err)
 		}
 		if err := admin.QueryRow(ctx,
@@ -106,8 +133,10 @@ func seedCatalog(t *testing.T) catalogFixture {
 		}
 		if i == 0 {
 			f.catA, f.prodA, f.skuA, f.staffA = catID, prodID, skuID, staffID
+			f.storeA, f.regionA = storeID, regionID
 		} else {
 			f.catB, f.prodB, f.skuB, f.staffB = catID, prodID, skuID, staffID
+			f.storeB, f.regionB = storeID, regionID
 		}
 	}
 
@@ -128,6 +157,19 @@ func seedCatalog(t *testing.T) catalogFixture {
 	f.upAEvidence = newUpload(f.merchantA, f.staffA, 3, "a-evidence")
 	f.upB1 = newUpload(f.merchantB, f.staffB, 1, "b1")
 	return f
+}
+
+// scopeA / scopeB 是买家侧读路径要的那个门店作用域（00020）。
+//
+// 写成方法而不是让每个调用点自己拼 StoreScope{...}：门店与大区必须是
+// **同一家店的那一对**，拼错了（A 的店配 B 的大区）查询不会报错，
+// 只会安静地按另一个大区取价。一处拼装，拼错了到处都红。
+func (f catalogFixture) scopeA() repository.StoreScope {
+	return repository.StoreScope{StoreID: f.storeA, RegionID: f.regionA}
+}
+
+func (f catalogFixture) scopeB() repository.StoreScope {
+	return repository.StoreScope{StoreID: f.storeB, RegionID: f.regionB}
 }
 
 // adminQuery 绕过 RLS 读真实状态，用来证明「失败的那次真的什么都没写」，
@@ -179,7 +221,7 @@ func TestSetInventoryTellsPreconditionFromCrossTenant(t *testing.T) {
 		var inv repository.Inventory
 		err := r.WithTenant(asA, func(q repository.Tx) error {
 			var e error
-			inv, e = q.SetInventory(ctx, f.skuA, 10, 25, nil)
+			inv, e = q.SetInventory(ctx, f.storeA, f.skuA, 10, 25, nil)
 			return e
 		})
 		if err != nil {
@@ -196,7 +238,7 @@ func TestSetInventoryTellsPreconditionFromCrossTenant(t *testing.T) {
 	t.Run("自家_CAS不匹配_是409且带当前真实值", func(t *testing.T) {
 		before := realQty(t, f.skuA) // 25
 		err := r.WithTenant(asA, func(q repository.Tx) error {
-			_, e := q.SetInventory(ctx, f.skuA, before+1, 999, nil)
+			_, e := q.SetInventory(ctx, f.storeA, f.skuA, before+1, 999, nil)
 			return e
 		})
 		if !errors.Is(err, repository.ErrInventoryPrecondition) {
@@ -225,12 +267,16 @@ func TestSetInventoryTellsPreconditionFromCrossTenant(t *testing.T) {
 		// **真实水位**，所以这次失败**只可能**是因为 RLS 把它挡在视野外 ——
 		// 如果实现退化成「rows_affected = 0 ⇒ CAS 不匹配」，这里会拿到
 		// ErrInventoryPrecondition，而 expected 明明是对的。
+		//
+		// store_id 也得是**商家 B 那一家**（00020 之后它进了主键）。
+		// 传 f.storeA 的话，(skuB, storeA) 这一行本来就不存在，这次失败
+		// 会退化成「查无此行」，而 RLS 拦没拦住就再也看不出来了。
 		realB := realQty(t, f.skuB)
 		if realB != 10 {
 			t.Fatalf("夹具坏了：商家 B 的水位是 %d，这次失败就分不清是 CAS 还是不可见", realB)
 		}
 		err := r.WithTenant(asA, func(q repository.Tx) error {
-			_, e := q.SetInventory(ctx, f.skuB, realB, 999, nil)
+			_, e := q.SetInventory(ctx, f.storeB, f.skuB, realB, 999, nil)
 			return e
 		})
 		if !errors.Is(err, repository.ErrSKUNotInTenant) {
@@ -256,12 +302,16 @@ func TestSetInventoryTellsPreconditionFromCrossTenant(t *testing.T) {
 			f.merchantA, f.prodA, f.suffix+"-dead").Scan(&deadSKU); err != nil {
 			t.Fatal(err)
 		}
+		// 挂在 A 的默认门店上：这一条要测的是 sk.deleted_at IS NULL 那道闸门，
+		// 所以除了「已软删」之外的每一维都得是合法的 —— 门店挂错会让语句
+		// 先撞上复合外键，断言就变成在测外键。
 		if _, err := adminExec(t,
-			`INSERT INTO inventories (sku_id, available_qty) VALUES ($1, 7)`, deadSKU); err != nil {
+			`INSERT INTO inventories (sku_id, store_id, merchant_id, available_qty)
+			 VALUES ($1, $2, $3, 7)`, deadSKU, f.storeA, f.merchantA); err != nil {
 			t.Fatal(err)
 		}
 		err := r.WithTenant(asA, func(q repository.Tx) error {
-			_, e := q.SetInventory(ctx, deadSKU, 7, 99, nil)
+			_, e := q.SetInventory(ctx, f.storeA, deadSKU, 7, 99, nil)
 			return e
 		})
 		if !errors.Is(err, repository.ErrSKUNotInTenant) {
@@ -424,7 +474,7 @@ func TestCreateSKUAlwaysCreatesInventoryRow(t *testing.T) {
 	var after int32
 	if err := r.WithTenant(asA, func(q repository.Tx) error {
 		var e error
-		after, e = q.DeductInventory(ctx, sku.ID, 5)
+		after, e = q.DeductInventory(ctx, sku.ID, f.storeA, 5)
 		return e
 	}); err != nil {
 		t.Fatalf("新建 SKU 扣不动库存: %v —— SAGA 会把它判成缺货", err)

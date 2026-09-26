@@ -157,8 +157,16 @@ func bindOrderRequest(c *gin.Context) (service.CreateRequest, bool) {
 		items = append(items, service.LineInput{SKUID: it.SkuId, Quantity: int32(q)})
 	}
 	return service.CreateRequest{
-		Items:                items,
-		AddressID:            raw.AddressId,
+		Items:     items,
+		AddressID: raw.AddressId,
+		// store_id 在契约里是 **required**，所以这里原样透传，**不填默认值**。
+		//
+		// 少了这一行（或者在这里补一个「没传就用默认店」）的后果不是 400，
+		// 是一笔按错误门店成交的订单：买家在 A 店看到的价与库存，
+		// 服务端按 B 店扣减、按 B 店的价记账，而两边都是合法数据，
+		// 没有任何东西会响。所以取值校验放在 service.orderScope 那一处，
+		// 它连「回落」那条路径都没有写。
+		StoreID:              raw.StoreId,
 		Remark:               raw.Remark,
 		ExpectedPayableCents: raw.ExpectedPayableCents,
 		UserCouponID:         raw.UserCouponId,
@@ -172,8 +180,14 @@ func apiOrder(o repository.Order) api.Order {
 	paid := api.Money(o.PaidCents)
 	refunded := api.Money(o.RefundedCents)
 	expire := o.ExpireAt
+	regionID := o.RegionID
 	return api.Order{
-		OrderNo:          o.OrderNo,
+		OrderNo: o.OrderNo,
+		// store_id 必返（库里 NOT NULL），region_id 可选但一起给：
+		// 这一单的价格是按**下单当时**那个大区算的，而门店可以被调到别的
+		// 大区去。要能事后回答「这个价是怎么来的」，就得把当时那一个留下来。
+		StoreId:          o.StoreID,
+		RegionId:         &regionID,
 		Status:           api.OrderStatus(o.Status),
 		RefundStatus:     api.OrderRefundStatus(o.RefundStatus),
 		PayableCents:     api.Money(o.PayableCents),
@@ -243,6 +257,26 @@ func writeOrderError(c *gin.Context, err error) {
 	case errors.Is(err, service.ErrSKUUnavailable):
 		problem.Write(c, http.StatusUnprocessableEntity,
 			problem.TypeInvalidRequest, "请求里有不可售的商品")
+
+	// 门店那两条（00020）。**两条都是 422，按 type 分**，契约在 POST /orders
+	// 与 POST /orders/preview 的 422 描述里逐条写着。
+	case errors.Is(err, repository.ErrSKUNotSoldInStore):
+		// 这家店（或它所在大区）把这件商品下架了。
+		//
+		// **刻意不是 409。** 409 在这份契约里被客户端读成「重读一次再试」——
+		// Retry-After 与 InventoryConflict.current 都在教它这么读，
+		// 而这一种重试永远不会成功：客户端该做的是换一家店。
+		// 也刻意不是 404：那条分界线是「路径里指名的资源不存在 → 404，
+		// 请求体里指名的东西不存在或不可用 → 422」，而这条路径是 /orders，
+		// 报 404 会被读成「下单接口不存在」。
+		problem.Write(c, http.StatusUnprocessableEntity,
+			problem.TypeSKUNotSoldInStore, "这家门店不卖请求里的某些商品，请换一家门店")
+
+	case errors.Is(err, service.ErrStoreNotFound):
+		// store_id 服务端不认识。与「不是你的 SKU」合用 invalid-request 是
+		// 契约定的：两者对客户端是同一件事 —— 请求体里指名了一个不存在的东西。
+		problem.Write(c, http.StatusUnprocessableEntity,
+			problem.TypeInvalidRequest, "store_id 指向的门店不存在或不属于当前店铺")
 
 	case errors.Is(err, service.ErrBadRequest):
 		problem.Write(c, http.StatusUnprocessableEntity,
