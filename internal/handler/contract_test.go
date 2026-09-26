@@ -173,8 +173,9 @@ var routes = []route{
 		HTTPMethod:     http.MethodGet,
 		HandlerFile:    "product.go",
 		NotYetImplemented: map[string]string{
-			"category_id":     "分类筛选，等 Catalog 那个任务",
-			"sort":            "排序策略，同上",
+			// category_id 本轮接上了（买家端要做类目浏览），含子孙，规则在
+			// db/queries/products.sql 的文件头。
+			"sort":            "排序策略，等 Catalog 那个任务",
 			"min_price_cents": "价格区间下界，同上",
 			"max_price_cents": "价格区间上界，同上",
 			// store_id 与响应里那个 store 本轮（00020）落地了，两笔账一起划掉。
@@ -186,6 +187,13 @@ var routes = []route{
 				"两边仍然都没有执行者。挂在这里而不是顺手实现，是因为它会改变" +
 				"「一页有几行」，而分页与筛选一起改要重新过一遍空页与总数那几条断言。",
 		},
+	},
+	{
+		ContractPath:   "/categories",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "category.go",
+		NoQueryParams:  "契约里这条接口一个参数都没有：返回整棵启用中的类目树，不分页",
 	},
 	{
 		ContractPath:   "/auth/login",
@@ -824,10 +832,11 @@ type pendingOp struct {
 // 的操作（多门店那一轮契约先行），这张表一度回到 24 条。
 //
 // 之后两条线各划掉了一批，**它们是并行做的，所以这段话是合并时才写全的**：
-//   · M4 收尾划掉 POST /admin/merchants（开店）—— 它缺的那样东西，
-//     repository 上「在指定租户里开一个事务」的入口，那一轮建出来了，
-//     叫 repository.WithNewTenant；
-//   · 多门店落地（00020）把那 21 条一条不剩地划掉。
+//
+//	· M4 收尾划掉 POST /admin/merchants（开店）—— 它缺的那样东西，
+//	  repository 上「在指定租户里开一个事务」的入口，那一轮建出来了，
+//	  叫 repository.WithNewTenant；
+//	· 多门店落地（00020）把那 21 条一条不剩地划掉。
 //
 // 于是剩下 2 条。两条剩下的理由不同，而且都不是「还没轮到」：
 // 它们各缺一样今天不存在的东西，逐条写在下面。

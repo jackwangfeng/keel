@@ -138,6 +138,38 @@ becomes `0.1.0` when the remaining M4 work is in.
   per-tenant in-flight cap, so one merchant importing a catalogue cannot occupy
   the whole worker pool. `priority` alone does not achieve this — it only
   orders jobs *within* a tenant.
+- **A merchant admin console** (`web/admin/`, Vue 3 + Vite + Element Plus) that
+  comes up with the same `docker compose up`, on port 8081, behind an nginx that
+  reverse-proxies `/api` to the API — same origin, no CORS. There is not one
+  hand-written request or response type in it: every shape comes from the
+  committed contract artifact `web/src/api/schema.d.ts`, and it reuses the
+  committed TypeScript SDK rather than growing a second client. A gate
+  (`make admin-type-check`, wired into `scripts/check-all.sh`) compiles every
+  `.ts` and `.vue` under `--strict` and asserts the contract artifact is really
+  in scope; renaming a contract field makes it fail immediately, which was
+  verified by mutation rather than assumed. The console surfaces the three
+  things the API deliberately designed for: the inventory compare-and-set `409`
+  shows the server's `current` and offers a one-click retry with it, the
+  advertising-law `422` highlights the offending characters in the copy using
+  the `errors[]` code-point offsets, and every idempotent POST carries an
+  `Idempotency-Key` that is held across a retry of the same submission and
+  rotated once the server has definitively rejected it. The orders page states
+  plainly that no admin order-list operation exists rather than drawing a fake
+  table.
+- **Regions and stores in the admin console** — all 21 admin operations of the
+  contract's Store tag. Delivery fences are drawn with Leaflet on OpenStreetMap
+  tiles, which are WGS-84 like the `GEOGRAPHY(POLYGON, 4326)` column, so the
+  vertices clicked are the vertices stored; coordinates pasted from Chinese map
+  providers (GCJ-02, BD-09) are converted only when the operator says that is
+  where they came from, and that conversion has tests (`make admin-test`, wired
+  into `scripts/check-all.sh`). A fence PostGIS rejects shows its
+  `ST_IsValidReason` verbatim and circles the reported point on the map. `409`s
+  are handled by `type`, not status: the old single-store inventory endpoint's
+  `store-ambiguous` now routes the operator to a per-store stock page instead
+  of reading as a compare-and-set conflict to retry. A missing default store is
+  flagged on every page, a non-default store without a fence is shown as
+  "incomplete", and a product a region has delisted says so on the store's
+  page instead of looking like a switch that does nothing.
 
 ### Changed
 

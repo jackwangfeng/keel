@@ -1,0 +1,73 @@
+{
+  // 商家后台的类型闸门。**与 ../tsconfig.json 是两份，刻意的。**
+  //
+  // ../tsconfig.json 守的是 web/src：契约产物（schema.d.ts）与零依赖 SDK，
+  // 它的全部价值在于「不需要 node_modules 就能跑」——`npx tsc` 拉一个钉死版本
+  // 的编译器，`types: []` 不去扫任何 @types，于是那道闸门不会因为某个 UI 框架
+  // 的类型定义在新版 TS 下报错而变红。把 Vue 应用塞进那个范围会把这条性质毁掉，
+  // 而且 `tsc` 根本读不了 `.vue`（SFC 不是 TypeScript）。
+  //
+  // 所以后台自带这一份，用 vue-tsc 编。**它没有放松任何东西**：
+  // web/src 的 include 与 scripts/check_ts_scope.py 的范围一个字节没动。
+  // 覆盖面的核对由 scripts/check_admin_types.py 做，判据与 check_ts_scope.py
+  // 一模一样——让 vue-tsc 自己用 --listFiles 报出它读了哪些文件，再和磁盘上的
+  // 清单对。那个脚本认 `.vue`，这正是「扩展闸门认识 .vue」那条路的落点，
+  // 只是落在后台这个项目上，而不是落在契约产物那道零依赖闸门上。
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    // bundler：由 Vite 解析模块，允许 `./schema.js` 落到 `schema.d.ts` 上——
+    // web/src/api/client.mts 里那一行 import 就是这么写的，而它是我们复用的
+    // 那份 SDK，不改它。
+    "moduleResolution": "bundler",
+    // 允许 `import ... from "../../src/api/client.mts"`。SDK 的后缀是 .mts
+    // （理由写在 web/tsconfig.json 里：没有 package.json 时 .ts 的模块类型
+    // 会一路往仓库外面找），这里要按真实文件名 import。noEmit 下是正规用法。
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "jsx": "preserve",
+
+    "strict": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+
+    // skipLibCheck: true —— 与 web/tsconfig.json 相反，这里要说清为什么不是放水。
+    //
+    // 那边 false 是因为 schema.d.ts **本身就是被检查的对象**，跳过 .d.ts 检查
+    // 等于把那道闸门关掉。这边 schema.d.ts 已经在那道闸门下编译过了，
+    // 这个项目要检查的是「读契约字段的那些 .vue / .ts 有没有跟上」——
+    // 而那件事不受 skipLibCheck 影响：它只跳过 .d.ts **内部**的错误，
+    // 类型仍然照常参与我们代码的检查。契约里改个字段名，这里照样当场变红
+    // （验证步骤写在 web/admin/README.md）。
+    // 开着它是为了不让 element-plus 那棵依赖树里某个 .d.ts 的内部问题
+    // 把后台的闸门变成一件与后台无关的事。
+    "skipLibCheck": true,
+
+    "types": ["vite/client"],
+
+    // 与 vite.config.ts 的 alias 一一对应。两处都要写是 Vite 的固有形状：
+    // 一份给类型检查，一份给打包器；对不上的症状是「类型过了但构建 404」。
+    "baseUrl": ".",
+    "paths": {
+      "@contract/*": ["../src/api/*"]
+    }
+  },
+  // 范围写成三条 glob 而不是一个目录。
+  //
+  // 实测（vue-tsc 3.3.11）：目录形式 `"src"` **是**收 `.vue` 的，
+  // 和 `tsc` 漏掉 `.mts` 那件事不一样 —— 这里不复述一句没验过的话。
+  // 写成 glob 是为了把「哪些后缀在范围里」摆在明处；代价是少写一条就漏一类。
+  //
+  // 而漏了之后会不会红，实测也分两种：被 import 到的文件，编译器顺着
+  // import 照样会读（于是漏 glob 不影响）；**没有任何人 import 的那些
+  // 不会** —— 比如刚加了一个页面还没接路由。那时 vue-tsc 编译剩下的部分
+  // 然后退出 0，一个字都不说。这两条组合起来的洞由
+  // scripts/check_admin_types.py 用 --listFiles 核住（那个脚本自己跑过一次
+  // 变异验证：去掉 .vue 那条 glob + 放一个没被引用的 .vue，它红）。
+  "include": ["src/**/*.ts", "src/**/*.d.ts", "src/**/*.vue", "vite.config.ts"]
+}

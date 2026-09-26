@@ -62,7 +62,7 @@ GOOSE := GOOSE_DRIVER=postgres GOOSE_DBSTRING="$(GOOSE_DBSTRING)" \
 	$(GORUN) github.com/pressly/goose/v3/cmd/goose
 
 .PHONY: help generate generate-go generate-ts generate-sql generate-uts tools-versions version \
-	contract-check schema-check app-type-check app-install app-build-h5 app-build-android app-apk app-apk-e2e app-e2e app-adb-wifi app-ios app-ios-e2e app-e2e-ios \
+	contract-check schema-check app-type-check admin-install admin-type-check admin-test admin-build app-install app-build-h5 app-build-android app-apk app-apk-e2e app-e2e app-adb-wifi app-ios app-ios-e2e app-e2e-ios \
 	sdk-smoke migrate migrate-down migrate-status test-db \
 	test-engine dtmrs-deps build
 
@@ -75,6 +75,10 @@ help:
 	@echo "make contract-check 校验 3.1 可空语义没有被生成器悄悄改掉"
 	@echo "make schema-check   用 tsc --strict 检查整个 web/src（含契约产物与 SDK）"
 	@echo "make app-type-check 用 tsc --strict 检查 app/src 下全部 .uts"
+	@echo "make admin-install  装商家后台（web/admin）的依赖（npm ci，版本由 lock 锁定）"
+	@echo "make admin-type-check 用 vue-tsc --strict 检查 web/admin/src 下全部 .ts 与 .vue"
+	@echo "make admin-test     跑商家后台的单元测试（围栏几何与坐标系换算）"
+	@echo "make admin-build    构建商家后台静态产物（compose 起栈时会自己构建，日常不用跑）"
 	@echo "make app-install    装客户端依赖（含 npm 跳过 uts 原生 binding 的绕法）"
 	@echo "make app-build-h5   用 DCloud 编译器真编一遍 H5（要先 app-install）"
 	@echo "make app-apk        本地打 Android apk（KEEL_API_BASE=http://host:port/api/v1 指定默认服务地址）"
@@ -146,6 +150,49 @@ generate-uts:
 # 和 check_ts_scope.py 挡的是同一个坑）。零 node_modules，只 npx 拉 tsc。
 app-type-check:
 	python3 $(ROOT)/scripts/check_app_types.py $(TSC)
+
+# ---------------------------------------------------------------------------
+# 商家后台（web/admin，Vue 3 + Vite + Element Plus）
+# ---------------------------------------------------------------------------
+#
+# **为什么它不在 web/src 下、不进 schema-check 的范围**，完整论证写在
+# scripts/check_admin_types.py 的文件头与 web/admin/tsconfig.json 的注释里。
+# 一句话：web/src 那道闸门的价值是「零 node_modules」，而 `tsc` 读不了 `.vue`；
+# 把 Vue 应用塞进去会让几十个文件静默掉出所有闸门，而闸门照样报绿。
+# **web/src 的覆盖范围一个字节没动** —— 这里是新增一道，不是把旧的那道改松。
+#
+# 版本钉死在 web/admin/package.json，且用 `npm ci` 按入库的 package-lock.json
+# 安装，理由与本文件头那条 @latest 禁令一样：CI 与本地装到不同版本是最难查
+# 的一类问题。后台的 typescript 也钉在 $(TSC) 的同一个版本上（5.9.2），
+# 免得两道 TS 闸门用两个编译器。
+admin-install:
+	cd $(ROOT)/web/admin && npm ci
+
+# web/admin/src 下全部 .ts 与 .vue 在 --strict 下能不能编译，
+# 以及编译范围有没有真的盖住它们（vue-tsc 对「范围里没有这个文件」同样静默）。
+# 还会断言类型真的来自入库的契约产物 web/src/api/schema.d.ts，而不是一份副本。
+#
+# 要先 make admin-install。没装依赖时它**失败**而不是跳过 ——
+# 跳过会让「后台的类型检查跑过了」这句话在没装依赖的机器上是假的。
+admin-type-check:
+	python3 $(ROOT)/scripts/check_admin_types.py
+
+# 后台的单元测试：目前是电子围栏的几何（坐标序、闭合、GCJ-02 / BD-09 → WGS-84）。
+#
+# 守的是「偏了不会报错」那一类错：经纬度写反、坐标系没换，服务端都会收下一个
+# **合法**的多边形，只是位置偏了几百米，买家被判进错的门店。
+#
+# `node --test` 直接跑 .ts（Node 24 的类型剥离），不引入测试框架：被测文件
+# （src/api/geo.ts）刻意只有 import type，没有运行时依赖，所以这一步**不需要**
+# node_modules。别往 geo.ts 里加运行时 import，否则这里会以
+# ERR_MODULE_NOT_FOUND 失败。
+admin-test:
+	cd $(ROOT)/web/admin && node --test src/api/geo.test.ts
+
+# 构建静态产物到 web/admin/dist。日常不用跑：compose 起栈时在
+# docker/Dockerfile.admin 的 node 阶段里构建，产物交给 nginx。
+admin-build:
+	cd $(ROOT)/web/admin && npm run build
 
 # 装客户端依赖。**不要直接 npm ci** —— 见脚本里那段：npm 11 会把
 # @dcloudio/uts-linux-x64-gnu 当成 libc 不匹配跳过，而少了它 uni 的编译器

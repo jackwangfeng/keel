@@ -59,9 +59,10 @@ func (h *ProductHandler) List(c *gin.Context) {
 	// 解析失败就当没传：page / page_size 是可选参数，`?page=abc` 与不带 page
 	// 对客户端是同一件事。越界值不在这里判 —— 钳制规则在 service。
 	//
-	// 契约里这个接口还有 category_id / sort / min_price_cents / max_price_cents
-	// 四个可选参数，眼下**没有实现**，传了会被忽略。它们不在这里读，也不该在这里
-	// 回 400 —— 对一份冻结的契约把 optional 参数判成错误是违约。
+	// 契约里这个接口还有 sort / min_price_cents / max_price_cents 三个可选参数，
+	// 眼下**没有实现**，传了会被忽略。它们不在这里读，也不该在这里回 400 ——
+	// 对一份冻结的契约把 optional 参数判成错误是违约。（category_id 原本也在这张
+	// 单子上，买家端要做类目浏览，本轮接上了，见下面。）
 	// contract_test.go 里那份 notYetImplemented 清单钉着这笔账：契约新增参数、
 	// 或者某个参数实现了却忘了从清单里划掉，那条测试都会红。
 	page, _ := strconv.Atoi(c.Query("page"))
@@ -83,7 +84,17 @@ func (h *ProductHandler) List(c *gin.Context) {
 		}
 	}
 
-	list, err := h.svc.List(c.Request.Context(), storeID, page, pageSize)
+	// category_id：按类目筛，**含子孙**。解析规则与 store_id 一致 ——
+	// 解析不出正整数按没传处理（契约在这条接口上没有 422）。传了一个不存在的
+	// 类目则是空列表而不是全部商品，那条规则在 SQL 里（products.sql 文件头）。
+	var categoryID *int64
+	if raw := c.Query("category_id"); raw != "" {
+		if v, err := strconv.ParseInt(raw, 10, 64); err == nil && v > 0 {
+			categoryID = &v
+		}
+	}
+
+	list, err := h.svc.List(c.Request.Context(), storeID, categoryID, page, pageSize)
 	switch {
 	case err == nil:
 	case errors.Is(err, service.ErrStoreNotFound):

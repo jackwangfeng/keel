@@ -113,6 +113,34 @@ curl "http://localhost:$KEEL_HTTP_PORT/api/v1/products"
 > 8080 被别的服务占着时，原样照抄的那条 `curl` 会从**那个服务**拿到 404，
 > 看起来像「Keel 起崩了」，其实是打到了别人身上。
 
+### 商家后台
+
+同一条 `docker compose up` 也把**商家后台界面**起起来了，在
+<http://localhost:8081>（Vue 3 + Element Plus，中文界面，nginx 托管、
+`/api` 同源反代到 API，所以不需要 CORS）。
+
+第一次进去要一串引导 token。它由进程在启动时生成并**明文打进日志**，
+24 小时有效、用掉即失效：
+
+```bash
+docker compose logs app | grep bootstrap_token
+```
+
+拿它在登录页的「首次进入」那一栏换一个会话，之后就能建类目、建商品、
+传图、加 SKU、改库存、上下架。8081 被占的话换端口：
+`KEEL_CONSOLE_PORT=18081 docker compose up -d --build`。
+
+> 后台**不是**一个独立部署的东西：它和 API 在同一个 compose 文件里，
+> 也在同一套契约上——界面里没有一个手写的请求 / 响应类型，全部来自
+> `web/src/api/schema.d.ts`。契约改个字段名，后台的类型检查当场变红
+> （`make admin-type-check`，已接进 `./scripts/check-all.sh`）。
+>
+> 今天的后台覆盖商品、SKU、库存、类目、上传、员工、开店，以及**大区与门店**：
+> 大区 / 门店维度的商品可见性与定价、门店库存，和在 OpenStreetMap 上画的
+> 电子围栏（WGS-84，与库里的 `GEOGRAPHY(POLYGON, 4326)` 和买家端定位同一个
+> 坐标系，不经任何换算）。订单这一页只有字：契约里没有「后台订单列表」
+> 这条接口，那一页写的是这件事本身。
+
 要多商家形态（由 `Host` 头决定是哪家店）：
 `docker compose -f compose.yaml -f compose.multi.yaml up -d --build`。
 

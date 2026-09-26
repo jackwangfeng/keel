@@ -221,6 +221,9 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 
 	v1 := r.Group("/api/v1", res.Middleware())
 	v1.GET("/products", ph.List)
+	// 类目树（契约 security: []）。买家端的类目浏览要它，而它在契约里声明了很久、
+	// 服务端一直没有 —— contract_test.go 的未实现清单只管 /admin/，买家侧的缺口没人登记。
+	v1.GET("/categories", ph.Categories)
 
 	// 混合检索。契约里它是 security: []（公开的）：还没登录的人也要搜得到东西，
 	// 否则小程序首页的搜索框要先弹登录。**这不等于它不校验租户** ——

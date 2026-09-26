@@ -30,6 +30,21 @@
 --       ->  Nested Loop Left Join  (actual rows=3)
 --             ->  Sort (products, 3 rows)
 --             ->  Aggregate (skus, 每行一次)
+--
+-- 类目筛选（category_id，可空）**含子孙**：点「服装」要看得到「连衣裙」里的
+-- 商品，不然买家点进一个有子类目的类目只会看到空页。子树按 path 前缀取 ——
+-- path 形如 /1/23/456/，含每一级祖先的 id，所以 /1/ 的前缀恰好是它的整棵子树
+-- （格式见 admin_categories.sql 的 CreateCategoryRow）。用 id 而不是名字，是为了
+-- 让前缀唯一：两个同名类目的 path 如果都是 /女装/，这里会把两棵子树并在一起。
+--
+-- 两条边界是刻意的：
+--   · 类目不存在或已软删 → 内层子查询为 NULL → LIKE NULL 恒为假 → **空列表**。
+--     不是 404（契约在这条接口上没有），也**不是**回退成全部商品 —— 后者会让
+--     一个过期的类目链接在买家面前显示成「这个类目里什么都有」。
+--   · 类目的 status（启停）**不参与**这里的筛选。启停管的是导航（GET /categories
+--     不返回停用的那一支），商品能不能被看到由 products.status 与两层排除决定。
+--     一件在架商品放在停用类目下，它在不筛选的列表里本来就看得见，
+--     在祖先类目的筛选里也看得见，两边一致。
 SELECT p.id, p.title, p.subtitle,
        COALESCE(agg.min_price, 0)::bigint AS min_price_cents,
        COALESCE(agg.max_price, 0)::bigint AS max_price_cents,
@@ -48,6 +63,13 @@ SELECT p.id, p.title, p.subtitle,
    AND NOT EXISTS (SELECT 1 FROM store_product_overrides so
                     WHERE so.store_id = sqlc.arg(store_id)
                       AND so.product_id = p.id AND so.status = 0)
+   AND (sqlc.narg(category_id)::bigint IS NULL
+        OR p.category_id IN (
+             SELECT c.id FROM categories c
+              WHERE c.deleted_at IS NULL
+                AND c.path LIKE (SELECT cc.path FROM categories cc
+                                  WHERE cc.id = sqlc.narg(category_id)::bigint
+                                    AND cc.deleted_at IS NULL) || '%'))
  ORDER BY p.published_at DESC NULLS LAST, p.id DESC
  LIMIT sqlc.arg(page_limit) OFFSET sqlc.arg(page_offset);
 
@@ -74,7 +96,14 @@ SELECT count(*)
                       AND ro.product_id = p.id AND ro.status = 0)
    AND NOT EXISTS (SELECT 1 FROM store_product_overrides so
                     WHERE so.store_id = sqlc.arg(store_id)
-                      AND so.product_id = p.id AND so.status = 0);
+                      AND so.product_id = p.id AND so.status = 0)
+   AND (sqlc.narg(category_id)::bigint IS NULL
+        OR p.category_id IN (
+             SELECT c.id FROM categories c
+              WHERE c.deleted_at IS NULL
+                AND c.path LIKE (SELECT cc.path FROM categories cc
+                                  WHERE cc.id = sqlc.narg(category_id)::bigint
+                                    AND cc.deleted_at IS NULL) || '%'));
 
 -- name: GetProduct :one
 -- 商品详情。谓词与 ListProducts 逐字一致（deleted_at IS NULL AND status = 1），

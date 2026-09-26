@@ -1,0 +1,41 @@
+:root {
+    font-family:
+        system-ui,
+        -apple-system,
+        "PingFang SC",
+        "Hiragino Sans GB",
+        "Microsoft YaHei",
+        sans-serif;
+}
+
+body {
+    margin: 0;
+}
+
+#app {
+    height: 100vh;
+}
+
+/* notifyError 用的那个类：type / trace_id 是要被复制走的，
+   默认宽度会把它们折成三行。 */
+.keel-error-notification {
+    width: 420px !important;
+}
+
+.page-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+}
+
+.page-toolbar .grow {
+    flex: 1;
+}
+
+.hint {
+    color: var(--el-text-color-secondary);
+    font-size: 12px;
+    line-height: 1.6;
+}

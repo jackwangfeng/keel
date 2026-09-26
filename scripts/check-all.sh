@@ -99,6 +99,28 @@ if ! make app-type-check; then
     fail=1
 fi
 
+# 商家后台（web/admin）读契约字段的每一处能不能编译。
+#
+# 与上面那条 schema-check **不重复**：那一条守的是 web/src（契约产物 +
+# 零依赖 SDK），范围里没有一个 .vue。后台是另一棵树、另一个 tsconfig、
+# 另一个编译器（vue-tsc 才认 SFC）。为什么不合成一条，完整论证在
+# scripts/check_admin_types.py 的文件头 —— 一句话：合成一条会把契约产物
+# 那道闸门的成败绑在一棵 UI 框架依赖树上。
+#
+# 它要 web/admin/node_modules（`make admin-install`）。没装时这一步**失败**，
+# 和上面 contract-check 没有 Node 时一样是诚实的失败：后台确实没被验证过。
+printf '\n=== admin-type-check ===\n'
+if ! make admin-type-check; then
+    fail=1
+fi
+
+# 后台的单元测试：电子围栏的坐标序与坐标系换算。它守的错在服务端不会红——
+# 写反的经纬度、没换算的 GCJ-02 都是合法多边形，只是位置偏了。见 Makefile。
+printf '\n=== admin-test ===\n'
+if ! make admin-test; then
+    fail=1
+fi
+
 if [ "$fail" -ne 0 ]; then
     echo ''
     echo '校验未通过。'

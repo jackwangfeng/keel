@@ -96,7 +96,11 @@ func NewProductService(r ProductRepository) *ProductService { return &ProductSer
 // 换一个 handler（比如将来的 gRPC）不该重写一遍。
 // storeID 非 nil 表示客户端显式指名了一家门店；nil 走回落链（数据模型 §4：
 // 「没有位置」与「位置不在任何围栏内」是同一条路径）。
-func (s *ProductService) List(ctx context.Context, storeID *int64, page, pageSize int) (ProductList, error) {
+//
+// categoryID 非 nil 时按类目筛，含子孙。它和 storeID 一样只是被透传 ——
+// 「含子孙」「不存在的类目给空列表」这两条规则在 SQL 里（products.sql 文件头），
+// 这里重复一遍就是两份会分叉的实现。
+func (s *ProductService) List(ctx context.Context, storeID, categoryID *int64, page, pageSize int) (ProductList, error) {
 	page, pageSize = clampPaging(page, pageSize)
 
 	out := ProductList{Items: []ProductSummary{}, Page: page, PageSize: pageSize}
@@ -119,13 +123,13 @@ func (s *ProductService) List(ctx context.Context, storeID *int64, page, pageSiz
 		// 计数与取页在同一个事务里，所以 total 和 items 看到的是同一个快照。
 		// 分开两次访问的话，两者之间的一次上下架会让「total=21 但第二页是空的」
 		// 这种自相矛盾的响应偶发出现。
-		total, err := q.CountProducts(ctx, sc)
+		total, err := q.CountProducts(ctx, sc, categoryID)
 		if err != nil {
 			return err
 		}
 		out.Total = total
 
-		rows, err := q.ListProducts(ctx, sc, int64(pageSize), offsetOf(page, pageSize))
+		rows, err := q.ListProducts(ctx, sc, categoryID, int64(pageSize), offsetOf(page, pageSize))
 		if err != nil {
 			return err
 		}
@@ -332,4 +336,73 @@ func DecodeSpecValues(raw []byte) (map[string]string, error) {
 		return map[string]string{}, nil
 	}
 	return m, nil
+}
+
+// Category 是买家侧类目树上的一个节点（契约 Category）。
+type Category struct {
+	ID       int64
+	Name     string
+	Level    int
+	Children []Category
+}
+
+// Categories 返回当前租户启用中的类目树（契约 GET /categories）。
+//
+// ## 父节点停用了，子节点怎么办
+//
+// **整棵子树都不显示。** 商家停用一个类目，意思是把它连同下面的东西从导航里
+// 收起来；把孤儿子类目提到顶层，等于「停用」只停了一半，而且买家会在首页看到
+// 一个莫名其妙冒出来的二级类目。
+//
+// 实现就是「只挂到在场的父节点上」：查询只返回启用的，父节点不在结果里的那个
+// 子节点就挂不上去，它的子孙也跟着挂不上去 —— 规则是传递的，不需要单独写。
+// 软删同理（查询本来就排除了软删）。
+//
+// 这条规则只管**导航**。停用类目下的在架商品照样能在列表里看到，见
+// products.sql 文件头关于 category_id 那一段。
+func (s *ProductService) Categories(ctx context.Context) ([]Category, error) {
+	var nodes []repository.CategoryNode
+	err := s.repo.WithTenant(ctx, func(q repository.Tx) error {
+		var e error
+		nodes, e = q.ListVisibleCategories(ctx)
+		return e
+	})
+	if err != nil {
+		return nil, err
+	}
+	return buildCategoryTree(nodes), nil
+}
+
+// buildCategoryTree 把扁平的节点拼成树。输入按 level 升序（SQL 保证），
+// 所以一趟就能挂完：处理到某个节点时，它的父节点要么已经在树上，要么永远不会来。
+//
+// 用 id → 路径下标 的方式挂，而不是 id → *Category：Children 是值切片，
+// append 会搬家，先拿到的指针会指向旧底层数组，后挂的子节点就丢了。
+func buildCategoryTree(nodes []repository.CategoryNode) []Category {
+	roots := []Category{}
+	// 每个已挂上的节点，从根到它的下标路径。
+	where := map[int64][]int{}
+	for _, n := range nodes {
+		c := Category{ID: n.ID, Name: n.Name, Level: int(n.Level), Children: []Category{}}
+		if n.ParentID == nil {
+			roots = append(roots, c)
+			where[n.ID] = []int{len(roots) - 1}
+			continue
+		}
+		path, ok := where[*n.ParentID]
+		if !ok {
+			// 父节点停用、软删，或者本来就不属于这棵树：整支不显示（见上）。
+			continue
+		}
+		parent := &roots[path[0]]
+		for _, i := range path[1:] {
+			parent = &parent.Children[i]
+		}
+		parent.Children = append(parent.Children, c)
+		child := make([]int, len(path)+1)
+		copy(child, path)
+		child[len(path)] = len(parent.Children) - 1
+		where[n.ID] = child
+	}
+	return roots
 }

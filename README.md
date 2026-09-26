@@ -122,6 +122,39 @@ curl "http://localhost:$KEEL_HTTP_PORT/api/v1/products"
 > **that** service. It reads like "Keel failed to start" when in fact the request
 > never reached Keel.
 
+### Merchant console
+
+The same `docker compose up` also brings up the **merchant admin console** at
+<http://localhost:8081> (Vue 3 + Element Plus, Chinese UI, served by nginx which
+reverse-proxies `/api` to the API — same origin, so no CORS).
+
+Getting in the first time needs a bootstrap token. The process mints one at
+startup and **prints it to the log in the clear**; it lasts 24 hours and is
+consumed on first use:
+
+```bash
+docker compose logs app | grep bootstrap_token
+```
+
+Exchange it under "first time in" on the login page and you can create
+categories and products, upload images, add SKUs, set stock and publish.
+If 8081 is taken: `KEEL_CONSOLE_PORT=18081 docker compose up -d --build`.
+
+> The console is **not** a separately deployed thing: it lives in the same
+> compose file as the API and on the same contract — there is not one
+> hand-written request/response type in it, they all come from
+> `web/src/api/schema.d.ts`. Rename a field in the contract and the console's
+> type check goes red on the spot (`make admin-type-check`, wired into
+> `./scripts/check-all.sh`).
+>
+> Today it covers products, SKUs, stock, categories, uploads, staff and
+> shop creation, plus **regions and stores**: per-region and per-store product
+> visibility and pricing, per-store stock, and delivery fences drawn on
+> OpenStreetMap (WGS-84 — the same datum as the `GEOGRAPHY(POLYGON, 4326)`
+> column and the buyer app's location, with no conversion on the way). The
+> orders page is text only: there is no "admin order list" operation in the
+> contract, and that page says exactly that.
+
 For the multi-merchant shape, where the `Host` header picks the shop:
 `docker compose -f compose.yaml -f compose.multi.yaml up -d --build`.
 

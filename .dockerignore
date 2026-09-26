@@ -4,6 +4,11 @@
 .superpowers
 node_modules
 web/node_modules
+# 后台的依赖树与本地产物。镜像里 `npm ci` 现装、`vite build` 现构建
+# （docker/Dockerfile.admin），把宿主机那一份带进上下文既慢又可能是
+# 另一个平台编出来的。
+web/admin/node_modules
+web/admin/dist
 
 # 本地构建产物（Rust / dtmrs 那边的，以及 Go 的测试二进制）。
 #
