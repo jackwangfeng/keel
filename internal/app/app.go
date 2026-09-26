@@ -8,6 +8,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -499,6 +500,21 @@ func Run(ctx context.Context, listen func(addr string, h http.Handler) error) er
 	// 代价说清楚，所以有这条 WARN：不启动它的后果是**新品与改过的商品搜不到**，
 	// 而且症状出现在几小时后 —— 索引是异步的，没有人在等它的返回码。
 	embedder, embErr := inference.FromEnv()
+	// **「地址配了、方言没配」是拒绝启动，不是降级。**
+	//
+	// 上面那段说的是「一个字都没配」那种部署：它是受支持的（/search 走 §8 的
+	// 纯关键词降级链），所以只 WARN。这里分出来的是另一件事 —— 有人把
+	// KEEL_EMBED_ENDPOINT 配上了，却没说清对面是 infero 还是 services/inference/。
+	// 那不对应任何一种部署形态：继续起的话，索引侧每一轮都打到一个 404
+	// （方言名拼错则是这样），而索引是异步的，没有人在等它的返回码。
+	// 所以它与 KEEL_DTM_DSN 同类，当场硬失败并把已知的方言名喊出来。
+	//
+	// 判据用 errors.Is 而不是「字符串里有没有 dialect」：那两个哨兵就是为了
+	// 让装配方能分开处置这两件事才存在的（见 internal/inference 的 ErrDialectUnset）。
+	if embErr != nil && !errors.Is(embErr, inference.ErrEndpointUnset) {
+		return fmt.Errorf("配了 %s 但引擎方言不对，拒绝启动：%w",
+			inference.EnvEndpoint, embErr)
+	}
 	if embErr != nil {
 		slog.WarnContext(ctx, "没有配置 "+inference.EnvEndpoint+
 			"，商品派生数据入库任务不启动：文本向量与 bigram 关键词串都不会被维护。"+
@@ -508,8 +524,11 @@ func Run(ctx context.Context, listen func(addr string, h http.Handler) error) er
 			"而关键词那一路依赖的 search_text 也由这个任务维护，所以新品两路都搜不到。"+
 			"要开起来（需要 NVIDIA GPU）：先在宿主机 ./scripts/infero-up.sh，"+
 			"再带上 compose.infero.yaml 这个叠加层起栈，它会把 "+inference.EnvEndpoint+
-			" 指到 http://host.docker.internal:18081。"+
-			"没有 GPU 的机器今天没有语义检索这条路 —— infero 只有 CUDA / Metal 后端",
+			" 指到 http://host.docker.internal:18081，并把 "+inference.EnvDialect+
+			" 设成 "+inference.DialectInfero+"。"+
+			"没有 GPU 的机器走另一条腿：-f compose.inference.yaml（Python + BGE-M3，"+
+			"CPU，"+inference.EnvDialect+"="+inference.DialectKeelPython+"）—— "+
+			"它慢得多（单条 62 ms，§8 的查询预算是 15 ms），但语义检索是活的",
 			"err", embErr)
 	} else {
 		indexer, err := service.NewIndexService(repository.New(pool), embedder,

@@ -86,9 +86,15 @@ func (conceptEmbedder) Embed(ctx context.Context, texts []string) (*inference.Re
 	}
 	return &inference.Result{
 		Vectors:      out,
-		Model:        inference.ModelName,
+		Model:        conceptEmbedder{}.ModelName(),
 		ModelVersion: "concept-fixture",
 	}, nil
+}
+
+// ModelName 实现 inference.Embedder。取 infero 那条腿的名字：这些用例里
+// 它唯一的去处是 product_text_vectors.model_name，而检索侧不比对它。
+func (conceptEmbedder) ModelName() string {
+	return inference.MustDialect(inference.DialectInfero).ModelName
 }
 
 // conceptVector 造一条 inference.Dim 维的单位向量。

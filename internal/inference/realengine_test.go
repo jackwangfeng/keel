@@ -1,23 +1,41 @@
 //go:build keel_real_engine
 
-// 这个文件要**真的**推理引擎跑着。跑法（见 Makefile 的 test-engine）：
+// 这个文件要**真的**推理引擎跑着，而且它对**两条腿都成立** ——
+// 这是「引擎方言」配置化之后这个文件最重要的一条性质。
 //
-//	KEEL_EMBED_ENDPOINT=http://127.0.0.1:18081 make test-engine
+//	# infero（GPU），起法见 scripts/infero-up.sh
+//	KEEL_EMBED_DIALECT=infero //	KEEL_EMBED_ENDPOINT=http://127.0.0.1:18081 make test-engine
 //
-// 引擎是 infero，起法在 scripts/infero-up.sh，**要 NVIDIA GPU**。
+//	# services/inference/（Python + BGE-M3，CPU，无 GPU 的机器走这条）
+//	KEEL_EMBED_DIALECT=keel-python //	KEEL_EMBED_ENDPOINT=http://127.0.0.1:8001 make test-engine
 //
-// 它不在 make test-db 里，理由是它要 1.2 GB 权重、一块显卡和一个另外起着的进程。
-// 但它**必须存在并且真的被跑过**：这个包别的所有测试用的都是假引擎，
-// 它们能证明客户端的判断力，证明不了「这套东西真的能算出语义相近」。
+// **为什么是同一组测试跑两遍，而不是给 Python 那条腿另写一份。**
+// 判据本来就与方言无关：向量要归一化、语义相近的要排在无关的前面、引擎挂了
+// 要报错、超批要拒。给第二条腿另写一份的话，两份会各自漂移，而漂移的方向是
+// 可预测的 —— 没人跑的那一份先烂掉。上一轮 services/inference/ 之所以变成
+// 「一次都没被跑过」，正是因为它一条执行者都没有。
 //
-// 刻意不 Skip：带上这个标签就是在声明「引擎在」。没配 KEEL_EMBED_ENDPOINT 时
-// 它 Fatal 而不是 Skip——一条会自己跳过的测试，在它该报警的时候是静默的。
+// 与方言有关的只有三样（路径、model 名、池化哨兵），它们从
+// inference.LookupDialect 里读，测试自己不复述 —— 复述一遍就又多了一份会漂移
+// 的真相。下面那条阳性对照尤其如此：它以前硬写 `"model":"x"`，那在 infero 上
+// 能过（infero 压根不读这个字段），在 Python 那条腿上是 400 —— 也就是说
+// 那一行本身就是一处方言假设。
+//
+// 它不在 make test-db 里，理由是它要 1.2 GB 以上的权重和一个另外起着的进程
+// （infero 还要一块显卡）。但它**必须存在并且真的被跑过**：这个包别的所有测试
+// 用的都是假引擎，它们能证明客户端的判断力，证明不了「这套东西真的能算出
+// 语义相近」。
+//
+// 刻意不 Skip：带上这个标签就是在声明「引擎在」。没配 KEEL_EMBED_ENDPOINT 或
+// KEEL_EMBED_DIALECT 时它 Fatal 而不是 Skip——一条会自己跳过的测试，
+// 在它该报警的时候是静默的。
 
 package inference_test
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"net"
@@ -30,7 +48,8 @@ import (
 	"github.com/keel/keel/internal/inference"
 )
 
-func realClient(t *testing.T) *inference.Client {
+// realEnv 取出这次跑对着的是哪个地址、哪条腿。两样都没有默认值。
+func realEnv(t *testing.T) (string, inference.Dialect) {
 	t.Helper()
 	ep := os.Getenv(inference.EnvEndpoint)
 	if ep == "" {
@@ -38,7 +57,21 @@ func realClient(t *testing.T) *inference.Client {
 			"这个标签的意思是「真引擎在」，没配就是这次跑没有验证任何东西——"+
 			"所以这里是 Fatal 而不是 Skip", inference.EnvEndpoint)
 	}
-	c, err := inference.New(inference.Config{Endpoint: ep, Timeout: 60 * time.Second})
+	d, err := inference.LookupDialect(os.Getenv(inference.EnvDialect))
+	if err != nil {
+		t.Fatalf("%v\n（这个文件对两条腿都成立，但它猜不出对面是哪一条："+
+			"路径、model 名、池化哨兵三样全靠它）", err)
+	}
+	t.Logf("方言 %s：path=%s model=%s sentinel=%q", d.Name, d.EmbedPath, d.ModelName,
+		d.PoolingSentinel)
+	return ep, d
+}
+
+func realClient(t *testing.T) *inference.Client {
+	t.Helper()
+	ep, d := realEnv(t)
+	c, err := inference.New(inference.Config{
+		Endpoint: ep, Dialect: d.Name, Timeout: 60 * time.Second})
 	if err != nil {
 		t.Fatalf("建客户端失败: %v", err)
 	}
@@ -110,7 +143,6 @@ func TestRealEngineRanksSemanticNeighborsAboveUnrelated(t *testing.T) {
 	}
 }
 
-
 // 引擎自己那几条「当场拒绝」必须真的在。
 //
 // 这一组守的是**引擎进程**的行为，不是 Go 客户端的判断力 —— 那两件事此前分得很
@@ -146,17 +178,14 @@ func TestRealEngineRanksSemanticNeighborsAboveUnrelated(t *testing.T) {
 //
 // 剩下的两条是真的、也真的被 infero 执行：超批要拒、空输入要拒。
 func TestRealEngineRefusesWhatTheProtocolSaysItShould(t *testing.T) {
-	ep := os.Getenv(inference.EnvEndpoint)
-	if ep == "" {
-		t.Fatalf("带了 keel_real_engine 标签却没配 %s", inference.EnvEndpoint)
-	}
+	ep, dialect := realEnv(t)
 
 	post := func(t *testing.T, body string) (int, string) {
 		t.Helper()
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-			strings.TrimRight(ep, "/")+inference.EmbedPath, strings.NewReader(body))
+			strings.TrimRight(ep, "/")+dialect.EmbedPath, strings.NewReader(body))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -173,7 +202,8 @@ func TestRealEngineRefusesWhatTheProtocolSaysItShould(t *testing.T) {
 	// 阳性对照。没有它，下面两条在「引擎对任何请求都回 400」时也是绿的，
 	// 而那是这个仓库反复抓到的那种假绿。
 	t.Run("合法请求确实被接受", func(t *testing.T) {
-		code, body := post(t, `{"model":"x","texts":["连衣裙"],"normalize":true}`)
+		code, body := post(t, fmt.Sprintf(
+			`{"model":%q,"texts":["连衣裙"],"normalize":true}`, dialect.ModelName))
 		if code != http.StatusOK {
 			t.Fatalf("一条合法请求回了 %d —— 下面两条拒绝断言因此没有区分力。响应:%s",
 				code, body)
@@ -195,8 +225,8 @@ func TestRealEngineRefusesWhatTheProtocolSaysItShould(t *testing.T) {
 		for i := 0; i < inference.DefaultBatchSize; i++ {
 			texts = append(texts, `"连衣裙"`)
 		}
-		code, body := post(t,
-			`{"model":"x","texts":[`+strings.Join(texts, ",")+`],"normalize":true}`)
+		code, body := post(t, fmt.Sprintf(`{"model":%q,"texts":[`,
+			dialect.ModelName)+strings.Join(texts, ",")+`],"normalize":true}`)
 		if code != http.StatusOK {
 			t.Errorf("正好 %d 条（DefaultBatchSize）回了 %d，期望 200 —— "+
 				"索引侧每一轮打的就是这个大小，它失败意味着整批商品都索引不上。"+
@@ -210,8 +240,8 @@ func TestRealEngineRefusesWhatTheProtocolSaysItShould(t *testing.T) {
 		for i := 0; i < inference.DefaultBatchSize+1; i++ {
 			texts = append(texts, `"x"`)
 		}
-		code, body := post(t,
-			`{"model":"x","texts":[`+strings.Join(texts, ",")+`],"normalize":true}`)
+		code, body := post(t, fmt.Sprintf(`{"model":%q,"texts":[`,
+			dialect.ModelName)+strings.Join(texts, ",")+`],"normalize":true}`)
 		if code != http.StatusBadRequest {
 			t.Errorf("%d 条（上限 %d）回了 %d，期望 400 —— 悄悄截断意味着调用方以为"+
 				"全部算过了，而少掉的那几条会永远停在旧向量上。响应:%s",
@@ -220,7 +250,8 @@ func TestRealEngineRefusesWhatTheProtocolSaysItShould(t *testing.T) {
 	})
 
 	t.Run("空输入要拒", func(t *testing.T) {
-		code, body := post(t, `{"model":"x","texts":[],"normalize":true}`)
+		code, body := post(t, fmt.Sprintf(
+			`{"model":%q,"texts":[],"normalize":true}`, dialect.ModelName))
 		if code != http.StatusBadRequest {
 			t.Errorf("空 texts 回了 %d，期望 400。响应:%s", code, body)
 		}
@@ -248,8 +279,10 @@ func TestRealEngineDownIsAnErrorNotAZeroVector(t *testing.T) {
 		t.Skipf("%s 上有人在听，这条测试需要一个确实关着的端口", deadPort)
 	}
 
+	_, dialect := realEnv(t)
 	c, err := inference.New(inference.Config{
 		Endpoint: "http://" + deadPort,
+		Dialect:  dialect.Name,
 		Timeout:  3 * time.Second,
 	})
 	if err != nil {

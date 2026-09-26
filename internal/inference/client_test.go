@@ -7,6 +7,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -15,6 +16,13 @@ import (
 
 	"github.com/keel/keel/internal/inference"
 )
+
+// 这一组测试说的是哪种方言。
+//
+// 绝大多数断言（归一化、批量、超时分类、条数对齐）与方言无关，它们守的是
+// 客户端的判断力。取 infero 只是因为那是今天的默认部署 —— 真正与方言有关的
+// 那几条各自显式建客户端，见文件末尾「两条腿」那一节。
+var testDialect = inference.MustDialect(inference.DialectInfero)
 
 // ---------------------------------------------------------------------------
 // 一个可编程的假引擎。它只负责**回什么**，不负责算什么——
@@ -46,8 +54,9 @@ func newStub(t *testing.T, respond func(w http.ResponseWriter, r *http.Request, 
 	t.Helper()
 	s := &stubEngine{respond: respond}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != inference.EmbedPath {
-			t.Errorf("客户端打的是 %s，引擎上的路径是 %s", r.URL.Path, inference.EmbedPath)
+		if r.URL.Path != testDialect.EmbedPath {
+			t.Errorf("客户端打的是 %s，%s 方言的路径是 %s",
+				r.URL.Path, testDialect.Name, testDialect.EmbedPath)
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
@@ -94,7 +103,7 @@ func writeVectors(w http.ResponseWriter, vecs [][]float32) {
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"embeddings":    vecs,
 		"dim":           inference.Dim,
-		"model":         inference.ModelName,
+		"model":         testDialect.ModelName,
 		"model_version": "stub-0001",
 	})
 }
@@ -132,7 +141,7 @@ func TestEmbedRejectsUnnormalizedVectors(t *testing.T) {
 		}
 		writeVectors(w, vecs)
 	})
-	c := mustClient(t, inference.Config{Endpoint: url})
+	c := mustClient(t, inference.Config{Endpoint: url, Dialect: testDialect.Name})
 
 	res, err := c.Embed(context.Background(), []string{"连衣裙"})
 	if err == nil {
@@ -161,7 +170,7 @@ func TestEmbedRejectsZeroVector(t *testing.T) {
 		}
 		writeVectors(w, vecs)
 	})
-	c := mustClient(t, inference.Config{Endpoint: url})
+	c := mustClient(t, inference.Config{Endpoint: url, Dialect: testDialect.Name})
 
 	if _, err := c.Embed(context.Background(), []string{"连衣裙"}); err == nil {
 		t.Fatal("零向量被收下了。它入库之后余弦距离恒等于 1，" +
@@ -175,7 +184,7 @@ func TestEmbedRejectsZeroVector(t *testing.T) {
 // 没有这一条的话，把 validate 改成「无条件报错」也能让上面两条绿。
 func TestEmbedAcceptsNormalizedVectors(t *testing.T) {
 	_, url := newStub(t, nil)
-	c := mustClient(t, inference.Config{Endpoint: url})
+	c := mustClient(t, inference.Config{Endpoint: url, Dialect: testDialect.Name})
 
 	res, err := c.Embed(context.Background(), []string{"连衣裙", "长裙"})
 	if err != nil {
@@ -195,7 +204,7 @@ func TestEmbedAcceptsNormalizedVectors(t *testing.T) {
 	}
 	// §10：模型名与版本随响应返回，它们的去处是
 	// product_text_vectors.model_name / model_version。
-	if res.Model != inference.ModelName || res.ModelVersion != "stub-0001" {
+	if res.Model != testDialect.ModelName || res.ModelVersion != "stub-0001" {
 		t.Fatalf("模型名/版本没有透出来: %q / %q", res.Model, res.ModelVersion)
 	}
 }
@@ -204,7 +213,7 @@ func TestEmbedAcceptsNormalizedVectors(t *testing.T) {
 // 不是替代品——第一道还是要让引擎知道该归一化。
 func TestEmbedAsksEngineToNormalize(t *testing.T) {
 	stub, url := newStub(t, nil)
-	c := mustClient(t, inference.Config{Endpoint: url})
+	c := mustClient(t, inference.Config{Endpoint: url, Dialect: testDialect.Name})
 	if _, err := c.Embed(context.Background(), []string{"连衣裙"}); err != nil {
 		t.Fatalf("Embed 失败: %v", err)
 	}
@@ -215,8 +224,8 @@ func TestEmbedAsksEngineToNormalize(t *testing.T) {
 	if !calls[0].Normalize {
 		t.Fatal("请求里 normalize 不是 true（语义检索层 §10 的报文）")
 	}
-	if calls[0].Model != inference.ModelName {
-		t.Fatalf("请求里 model 是 %q，要 %q", calls[0].Model, inference.ModelName)
+	if calls[0].Model != testDialect.ModelName {
+		t.Fatalf("请求里 model 是 %q，要 %q", calls[0].Model, testDialect.ModelName)
 	}
 }
 
@@ -231,7 +240,7 @@ func TestEmbedAsksEngineToNormalize(t *testing.T) {
 // 是为了排除「拼错位置」与「顺手改了正文」。
 func TestEmbedAppendsPoolingSentinelToEveryText(t *testing.T) {
 	stub, url := newStub(t, nil)
-	c := mustClient(t, inference.Config{Endpoint: url})
+	c := mustClient(t, inference.Config{Endpoint: url, Dialect: testDialect.Name})
 	want := []string{"红色碎花连衣裙 女装 夏季新款", "轮胎"}
 	if _, err := c.Embed(context.Background(), want); err != nil {
 		t.Fatalf("Embed 失败: %v", err)
@@ -241,13 +250,13 @@ func TestEmbedAppendsPoolingSentinelToEveryText(t *testing.T) {
 		t.Fatalf("送了 %d 条，引擎收到 %d 条", len(want), len(got))
 	}
 	for i, sent := range got {
-		stripped, ok := strings.CutSuffix(sent, inference.PoolingSentinel)
+		stripped, ok := strings.CutSuffix(sent, testDialect.PoolingSentinel)
 		if !ok {
 			t.Errorf("第 %d 条 %q 末尾没有池化哨兵 %q —— Qwen3-Embedding 取的是"+
 				"最后一个 token 的 hidden state，而 infero 不执行 checkpoint 自己的"+
 				"post_processor，少了这个哨兵池化就取到了正文末字（实测 margin "+
 				"从 +0.2917 塌到 +0.0960，低于 MinSemanticMargin）",
-				i, sent, inference.PoolingSentinel)
+				i, sent, testDialect.PoolingSentinel)
 			continue
 		}
 		if stripped != want[i] {
@@ -268,7 +277,7 @@ func TestEmbedTimesOutWithExplicitError(t *testing.T) {
 	_, url := newStub(t, func(w http.ResponseWriter, r *http.Request, texts []string) {
 		<-r.Context().Done() // 永远不回，直到客户端放弃
 	})
-	c := mustClient(t, inference.Config{Endpoint: url, Timeout: 80 * time.Millisecond})
+	c := mustClient(t, inference.Config{Endpoint: url, Dialect: testDialect.Name, Timeout: 80 * time.Millisecond})
 
 	start := time.Now()
 	res, err := c.Embed(context.Background(), []string{"连衣裙"})
@@ -303,7 +312,7 @@ func TestEmbedReportsConnectionRefused(t *testing.T) {
 	srv.Close()
 	_ = url
 
-	c := mustClient(t, inference.Config{Endpoint: dead, Timeout: time.Second})
+	c := mustClient(t, inference.Config{Endpoint: dead, Dialect: testDialect.Name, Timeout: time.Second})
 	res, err := c.Embed(context.Background(), []string{"连衣裙"})
 	if err == nil {
 		t.Fatalf("引擎没起来而 Embed 成功了: %+v", res)
@@ -325,7 +334,7 @@ func TestEmbedTreatsServerSideTimeoutAsUnavailable(t *testing.T) {
 		w.WriteHeader(http.StatusGatewayTimeout)
 		_, _ = w.Write([]byte(`{"error":"超过服务端预算 5000ms"}`))
 	})
-	c := mustClient(t, inference.Config{Endpoint: url})
+	c := mustClient(t, inference.Config{Endpoint: url, Dialect: testDialect.Name})
 	_, err := c.Embed(context.Background(), []string{"连衣裙"})
 	if !errors.Is(err, inference.ErrUnavailable) {
 		t.Fatalf("504 要按 ErrUnavailable 处理（§10：服务端超时后立刻返回，"+
@@ -339,7 +348,7 @@ func TestEmbedTreatsRejectionAsPermanent(t *testing.T) {
 		w.WriteHeader(http.StatusBadRequest)
 		_, _ = w.Write([]byte(`{"error":"一次最多 64 条"}`))
 	})
-	c := mustClient(t, inference.Config{Endpoint: url})
+	c := mustClient(t, inference.Config{Endpoint: url, Dialect: testDialect.Name})
 	_, err := c.Embed(context.Background(), []string{"连衣裙"})
 	if !errors.Is(err, inference.ErrRejected) {
 		t.Fatalf("4xx 要按 ErrRejected（重试没用）处理，拿到 %v", err)
@@ -359,7 +368,7 @@ func TestEmbedTreatsRejectionAsPermanent(t *testing.T) {
 // 循环单条也能拼出 100 个向量，而且全都合法。
 func TestEmbedSendsOneRequestPerBatch(t *testing.T) {
 	stub, url := newStub(t, nil)
-	c := mustClient(t, inference.Config{Endpoint: url})
+	c := mustClient(t, inference.Config{Endpoint: url, Dialect: testDialect.Name})
 
 	texts := make([]string, 100)
 	for i := range texts {
@@ -388,7 +397,7 @@ func TestEmbedSendsOneRequestPerBatch(t *testing.T) {
 // 一批之内不许拆。批大小 32 时 32 条文本必须是一次请求。
 func TestEmbedSendsExactlyOneRequestWhenBatchFits(t *testing.T) {
 	stub, url := newStub(t, nil)
-	c := mustClient(t, inference.Config{Endpoint: url, BatchSize: 32})
+	c := mustClient(t, inference.Config{Endpoint: url, Dialect: testDialect.Name, BatchSize: 32})
 
 	texts := make([]string, 32)
 	for i := range texts {
@@ -405,7 +414,8 @@ func TestEmbedSendsExactlyOneRequestWhenBatchFits(t *testing.T) {
 // 批大小不许超过 §10 的上限。
 func TestNewRejectsOversizedBatch(t *testing.T) {
 	if _, err := inference.New(inference.Config{
-		Endpoint: "http://x", BatchSize: inference.DefaultBatchSize + 1,
+		Endpoint: "http://x", Dialect: testDialect.Name,
+		BatchSize: inference.DefaultBatchSize + 1,
 	}); err == nil {
 		t.Fatal("批大小超过 64 被放行了（§10：索引侧批大小 32–64）")
 	}
@@ -426,10 +436,10 @@ func TestEmbedRejectsWrongDimension(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"embeddings": [][]float32{v}, "dim": 768,
-			"model": inference.ModelName, "model_version": "stub-0001",
+			"model": testDialect.ModelName, "model_version": "stub-0001",
 		})
 	})
-	c := mustClient(t, inference.Config{Endpoint: url})
+	c := mustClient(t, inference.Config{Endpoint: url, Dialect: testDialect.Name})
 	_, err := c.Embed(context.Background(), []string{"连衣裙"})
 	if !errors.Is(err, inference.ErrProtocol) {
 		t.Fatalf("768 维被放行了（product_text_vectors.embedding 是 vector(1024)）: %v", err)
@@ -440,7 +450,7 @@ func TestEmbedRejectsCountMismatch(t *testing.T) {
 	_, url := newStub(t, func(w http.ResponseWriter, _ *http.Request, texts []string) {
 		writeVectors(w, unitVectors(len(texts)-1)) // 少回一个
 	})
-	c := mustClient(t, inference.Config{Endpoint: url})
+	c := mustClient(t, inference.Config{Endpoint: url, Dialect: testDialect.Name})
 	_, err := c.Embed(context.Background(), []string{"连衣裙", "长裙"})
 	if !errors.Is(err, inference.ErrProtocol) {
 		t.Fatalf("条数对不上被放行了，按下标对齐就是一批张冠李戴的向量: %v", err)
@@ -452,10 +462,10 @@ func TestEmbedRejectsMissingModelVersion(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"embeddings": unitVectors(len(texts)), "dim": inference.Dim,
-			"model": inference.ModelName, // 没有 model_version
+			"model": testDialect.ModelName, // 没有 model_version
 		})
 	})
-	c := mustClient(t, inference.Config{Endpoint: url})
+	c := mustClient(t, inference.Config{Endpoint: url, Dialect: testDialect.Name})
 	_, err := c.Embed(context.Background(), []string{"连衣裙"})
 	if !errors.Is(err, inference.ErrProtocol) {
 		t.Fatalf("没有 model_version 被放行了。§10 要求模型名与版本随响应返回，"+
@@ -472,7 +482,7 @@ func TestEmbedRejectsWrongModelName(t *testing.T) {
 			"model": "text-embedding-3-small", "model_version": "x",
 		})
 	})
-	c := mustClient(t, inference.Config{Endpoint: url})
+	c := mustClient(t, inference.Config{Endpoint: url, Dialect: testDialect.Name})
 	_, err := c.Embed(context.Background(), []string{"连衣裙"})
 	if !errors.Is(err, inference.ErrProtocol) {
 		t.Fatalf("别的模型的 1024 维向量被放行了。它们混进同一张表之后余弦距离"+
@@ -495,10 +505,10 @@ func TestEmbedRejectsModelChangeBetweenBatches(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"embeddings": unitVectors(len(texts)), "dim": inference.Dim,
-			"model": inference.ModelName, "model_version": version,
+			"model": testDialect.ModelName, "model_version": version,
 		})
 	})
-	c := mustClient(t, inference.Config{Endpoint: url, BatchSize: 2})
+	c := mustClient(t, inference.Config{Endpoint: url, Dialect: testDialect.Name, BatchSize: 2})
 	_, err := c.Embed(context.Background(), []string{"a", "b", "c"})
 	if !errors.Is(err, inference.ErrProtocol) {
 		t.Fatalf("同一次调用里换了模型版本却放行了，"+
@@ -524,11 +534,13 @@ func TestNewRefusesEmptyEndpoint(t *testing.T) {
 }
 
 func TestFromEnvRefusesWhenUnset(t *testing.T) {
+	t.Setenv(inference.EnvDialect, inference.DialectInfero)
 	t.Setenv(inference.EnvEndpoint, "")
 	if _, err := inference.FromEnv(); err == nil {
 		t.Fatalf("%s 没配而 FromEnv 成功了", inference.EnvEndpoint)
 	}
 	t.Setenv(inference.EnvEndpoint, "http://inference:8000")
+	t.Setenv(inference.EnvDialect, inference.DialectInfero)
 	if _, err := inference.FromEnv(); err != nil {
 		t.Fatalf("配了 %s 反而失败: %v", inference.EnvEndpoint, err)
 	}
@@ -536,8 +548,263 @@ func TestFromEnvRefusesWhenUnset(t *testing.T) {
 
 func TestEmbedRejectsEmptyInput(t *testing.T) {
 	_, url := newStub(t, nil)
-	c := mustClient(t, inference.Config{Endpoint: url})
+	c := mustClient(t, inference.Config{Endpoint: url, Dialect: testDialect.Name})
 	if _, err := c.Embed(context.Background(), nil); !errors.Is(err, inference.ErrRejected) {
 		t.Fatalf("空输入应当直接拒绝而不是打一次空请求: %v", err)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// 两条腿：引擎方言是配置，不是常量
+// ---------------------------------------------------------------------------
+
+// newDialectStub 起一个**只认某一条方言**的假引擎：路径不对回 404，
+// model 不对回 400 —— 两条都照着 services/inference/app.py 的真实行为来。
+//
+// 「路径不对回 404」这一条是刻意的：它复现了方言配错时**生产上真正会发生的
+// 那件事**。上面那个 newStub 在路径不对时 t.Errorf，那是测试基建的自检；
+// 这里要的是引擎的回答，因为被测的正是「客户端有没有按配置去打对的地方」。
+func newDialectStub(t *testing.T, d inference.Dialect) (*stubEngine, string) {
+	t.Helper()
+	s := &stubEngine{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != d.EmbedPath {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"detail":"Not Found"}`))
+			return
+		}
+		var req struct {
+			Model     string   `json:"model"`
+			Texts     []string `json:"texts"`
+			Normalize bool     `json:"normalize"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		s.mu.Lock()
+		s.requests = append(s.requests, recordedRequest{
+			Texts: req.Texts, Normalize: req.Normalize, Model: req.Model})
+		s.mu.Unlock()
+		if req.Model != d.ModelName {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":"本服务只提供别的模型"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"embeddings":    unitVectors(len(req.Texts)),
+			"dim":           inference.Dim,
+			"model":         d.ModelName,
+			"model_version": "stub-0001",
+		})
+	}))
+	t.Cleanup(srv.Close)
+	return s, srv.URL
+}
+
+// 每一条已知方言，配上它自己那个引擎，都必须能算出向量。
+//
+// 这是 keel-python 那条腿在这个仓库里的**第一条执行者**：上一轮把客户端换成
+// 只会说 infero 的方言之后，services/inference/ 一个调用方、一条测试都没有了。
+// 这一条不需要模型（假引擎回的是形状合法的单位向量），所以它每个 PR 都跑；
+// 「那条腿真的能算出有语义的向量」由 realengine_test.go 对着真服务跑，
+// 两条一起才完整。
+func TestEveryDialectTalksToItsOwnEngine(t *testing.T) {
+	for _, name := range inference.DialectNames() {
+		t.Run(name, func(t *testing.T) {
+			d := inference.MustDialect(name)
+			stub, url := newDialectStub(t, d)
+			c := mustClient(t, inference.Config{Endpoint: url, Dialect: name})
+
+			res, err := c.Embed(context.Background(), []string{"红色碎花连衣裙"})
+			if err != nil {
+				t.Fatalf("%s 方言配着它自己的引擎却算不出向量: %v", name, err)
+			}
+			if len(res.Vectors) != 1 {
+				t.Fatalf("要 1 个向量，拿到 %d 个", len(res.Vectors))
+			}
+			if res.Model != d.ModelName {
+				t.Fatalf("model 是 %q，方言说是 %q", res.Model, d.ModelName)
+			}
+			if got := c.ModelName(); got != d.ModelName {
+				t.Fatalf("ModelName() 报 %q，而落库的是 %q —— "+
+					"重算判定（service/index.go 的 decide）用的是前者", got, d.ModelName)
+			}
+
+			// 送出去的正文：**只有方言说要补的时候才补**。
+			sent := stub.calls()[0].Texts[0]
+			want := "红色碎花连衣裙" + d.PoolingSentinel
+			if sent != want {
+				t.Fatalf("%s 方言送出去的是 %q，期望 %q", name, sent, want)
+			}
+		})
+	}
+}
+
+// 方言配错了要打不通，而不是「碰巧也能跑」。
+//
+// 这一条守的是方言这件事**真的在起作用**。没有它，把 EmbedPath / ModelName
+// 从方言表里读改回硬编码，上面那条参数化测试在 infero 那一格照样绿
+// （因为硬编码的就是 infero 的值），只有 keel-python 那一格会红 ——
+// 而那时最自然的「修法」是把 keel-python 从表里删掉。
+func TestWrongDialectDoesNotSilentlyWork(t *testing.T) {
+	names := inference.DialectNames()
+	for _, engine := range names {
+		for _, configured := range names {
+			if engine == configured {
+				continue
+			}
+			t.Run(engine+"/配成"+configured, func(t *testing.T) {
+				_, url := newDialectStub(t, inference.MustDialect(engine))
+				c := mustClient(t, inference.Config{Endpoint: url, Dialect: configured})
+				res, err := c.Embed(context.Background(), []string{"连衣裙"})
+				if err == nil {
+					t.Fatalf("对着 %s 的引擎配了 %s 的方言，却拿到了 %d 个向量 —— "+
+						"那批向量会被记成 %q 写进 product_text_vectors，"+
+						"而算它们的是另一个模型",
+						engine, configured, len(res.Vectors), c.ModelName())
+				}
+			})
+		}
+	}
+}
+
+// 方言表自己的一致性：Name 那一格必须等于它在表里的键。
+//
+// 它们对不上时不会有任何东西报错 —— 只是错误信息里会印出另一条腿的名字，
+// 而那是排查方言问题时唯一的线索。
+func TestDialectTableIsSelfConsistent(t *testing.T) {
+	for _, name := range inference.DialectNames() {
+		d := inference.MustDialect(name)
+		if d.Name != name {
+			t.Errorf("方言 %q 的 Name 那一格写的是 %q", name, d.Name)
+		}
+		if d.EmbedPath == "" || d.ModelName == "" {
+			t.Errorf("方言 %q 缺路径或模型名: %+v", name, d)
+		}
+		if d.EmbedPath[0] != '/' {
+			t.Errorf("方言 %q 的路径 %q 不是以 / 开头 —— 它是直接拼在 endpoint "+
+				"后面的", name, d.EmbedPath)
+		}
+	}
+	// 自证：表里至少有两条，而且 infero 与 keel-python 都在。
+	// 只剩一条时上面那个循环仍然全绿，而这个仓库刚刚才因为「只剩一条」
+	// 丢掉了无 GPU 部署的语义检索。
+	if n := len(inference.DialectNames()); n < 2 {
+		t.Fatalf("方言表里只有 %d 条。两条腿（GPU / 无 GPU）都要活着，"+
+			"这是架构 §6 形态 A 的承诺", n)
+	}
+	for _, want := range []string{inference.DialectInfero, inference.DialectKeelPython} {
+		if !slices.Contains(inference.DialectNames(), want) {
+			t.Fatalf("方言表里没有 %q。已知的：%v", want, inference.DialectNames())
+		}
+	}
+}
+
+// 两条腿的池化哨兵必须**不同**，而且 keel-python 那条必须是空的。
+//
+// 这条断言看起来很怪（为什么要求两个常量不相等？），但它守的正是
+// dialects 那张表里论证最长的那一格：`<|endoftext|>` 不在 XLM-R 的词表里，
+// 补给 BGE-M3 等于给每条商品文本尾部拼一段固定噪声 —— 维度对、范数是 1、
+// model 名对、HTTP 200，这个包的每一道闸门都绿，只有召回质量安静地掉一截。
+// 「顺手让两条腿共用一个哨兵」是一次非常自然的清理，而它不会被别的任何东西抓住。
+func TestPoolingSentinelIsPerDialect(t *testing.T) {
+	infero := inference.MustDialect(inference.DialectInfero)
+	python := inference.MustDialect(inference.DialectKeelPython)
+	if python.PoolingSentinel != "" {
+		t.Errorf("keel-python 那条腿的哨兵是 %q，应当是空串："+
+			"BGE-M3 用 CLS 池化（向量取自序列第一个位置），往尾巴上补什么都改变"+
+			"不了它取到的那一行，而 %q 不在 XLM-R 的词表里，会被切成几个普通 "+
+			"subword 跟在正文后面 —— 相当于给每条商品文本拼一段固定噪声",
+			python.PoolingSentinel, infero.PoolingSentinel)
+	}
+	if infero.PoolingSentinel == "" {
+		t.Errorf("infero 那条腿的哨兵是空的。Qwen3-Embedding 是 last-token 池化，"+
+			"而 infero 不执行 checkpoint 自己的 post_processor —— "+
+			"不补哨兵实测 margin 从 +0.2917 塌到 +0.0960，低于 %.2f 的下限",
+			inference.MinSemanticMargin)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 方言没有默认值
+// ---------------------------------------------------------------------------
+
+// 与 Endpoint 同一条纪律，而且理由更硬：地址配错是 connection refused（吵），
+// 方言**配漏**要是有默认值，症状会是「向量算出来了、入库了、检索照常返回
+// 结果，只是结果和搜的词无关」。
+func TestNewRefusesEmptyDialect(t *testing.T) {
+	c, err := inference.New(inference.Config{Endpoint: "http://engine:8000"})
+	if err == nil {
+		t.Fatalf("没配方言却建出了一个客户端 %+v —— "+
+			"那意味着某条腿正在被当成默认，而选错了不会报错", c)
+	}
+	if !errors.Is(err, inference.ErrDialectUnset) {
+		t.Fatalf("要 ErrDialectUnset（装配方靠它把「一个字都没配」和「配漏了」"+
+			"分开处置，见 internal/app 的 Run），拿到 %v", err)
+	}
+	if !strings.Contains(err.Error(), inference.EnvDialect) {
+		t.Fatalf("错误信息没提 %s，运维不知道该配什么: %v", inference.EnvDialect, err)
+	}
+	for _, name := range inference.DialectNames() {
+		if !strings.Contains(err.Error(), name) {
+			t.Fatalf("错误信息里没有已知方言 %q，运维不知道能填什么: %v", name, err)
+		}
+	}
+}
+
+func TestNewRefusesUnknownDialect(t *testing.T) {
+	_, err := inference.New(inference.Config{
+		Endpoint: "http://engine:8000", Dialect: "openai"})
+	if err == nil {
+		t.Fatal("不认识的方言被放行了 —— 那会在运行期变成一次 404，" +
+			"而索引是异步的，没有人在等它的返回码")
+	}
+	if !errors.Is(err, inference.ErrRejected) {
+		t.Fatalf("要 ErrRejected（是调用方写错了，重试没用），拿到 %v", err)
+	}
+	if !strings.Contains(err.Error(), inference.DialectKeelPython) {
+		t.Fatalf("错误信息没列出已知方言: %v", err)
+	}
+}
+
+// 「地址配了、方言没配」必须能被装配方单独认出来 —— 它与「一个字都没配」
+// 处置不同：前者拒绝启动，后者打一条 WARN 继续起（§8 的纯关键词降级链）。
+func TestFromEnvSeparatesMissingEndpointFromMissingDialect(t *testing.T) {
+	t.Run("一个字都没配", func(t *testing.T) {
+		t.Setenv(inference.EnvEndpoint, "")
+		t.Setenv(inference.EnvDialect, "")
+		_, err := inference.FromEnv()
+		if !errors.Is(err, inference.ErrEndpointUnset) {
+			t.Fatalf("要 ErrEndpointUnset，拿到 %v", err)
+		}
+		if errors.Is(err, inference.ErrDialectUnset) {
+			t.Fatal("同时被归成「方言没配」了 —— 装配方会因此拒绝启动，" +
+				"而「没有引擎」是一种受支持的部署（README「还没在盒子里的」）")
+		}
+	})
+	t.Run("地址配了方言没配", func(t *testing.T) {
+		t.Setenv(inference.EnvEndpoint, "http://engine:8000")
+		t.Setenv(inference.EnvDialect, "")
+		_, err := inference.FromEnv()
+		if !errors.Is(err, inference.ErrDialectUnset) {
+			t.Fatalf("要 ErrDialectUnset，拿到 %v", err)
+		}
+		if errors.Is(err, inference.ErrEndpointUnset) {
+			t.Fatal("被归成「地址没配」了 —— 装配方会只打一条 WARN 继续起，" +
+				"而这次部署明明想要语义检索")
+		}
+	})
+	t.Run("两样都配了", func(t *testing.T) {
+		t.Setenv(inference.EnvEndpoint, "http://engine:8000")
+		t.Setenv(inference.EnvDialect, inference.DialectKeelPython)
+		c, err := inference.FromEnv()
+		if err != nil {
+			t.Fatalf("两样都配了反而失败: %v", err)
+		}
+		if c.Dialect().Name != inference.DialectKeelPython {
+			t.Fatalf("FromEnv 建出来的客户端说的是 %q 方言", c.Dialect().Name)
+		}
+	})
 }
