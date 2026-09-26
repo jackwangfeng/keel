@@ -470,6 +470,15 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	v1.PATCH("/admin/categories/:category_id", staffAuth, cat.UpdateCategory)
 	v1.DELETE("/admin/categories/:category_id", staffAuth, cat.DeleteCategory)
 
+	// 商品批量导入（下载模板 → 预检 → 确认导入）。三条都挂 staffAuth，判权在
+	// service（与商品写接口同一行：管理员 / 操作员）。推理引擎交的是上面那个
+	// embedder —— 没配时是真的 nil 接口（Run 里 searchEmbedder 那一段），
+	// 类目推荐降级为「需手选」，导入本身不受影响。
+	imp := handler.NewProductImportHandler(service.NewProductImportService(repo, embedder))
+	v1.GET("/admin/product-imports/template", staffAuth, imp.Template)
+	v1.POST("/admin/product-imports/preview", staffAuth, imp.Preview)
+	v1.POST("/admin/product-imports", staffAuth, imp.Commit)
+
 	// -----------------------------------------------------------------------
 	// 读文件（M4 收尾）。**买家侧**，所以一道后台鉴权都没有。
 	// -----------------------------------------------------------------------

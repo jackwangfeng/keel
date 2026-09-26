@@ -43,7 +43,10 @@ const (
 type permReq struct {
 	Method, Path, Body string
 	Upload             bool
-	Host, Token        string
+	// Import 非空时发一个导入接口的 multipart（file = Import，categories = ImportCategories）。
+	Import           []byte
+	ImportCategories string
+	Host, Token      string
 	// OK 是放行时期望的状态码。
 	OK int
 }
@@ -229,6 +232,21 @@ var permMatrix = []permRoute{
 	}},
 	{"GET", v1 + "/admin/products", everyone, func(t *testing.T, fx *permFixture, c permCase) permReq {
 		return permGet(v1 + "/admin/products")
+	}},
+	// 商品批量导入：与商品写接口同一行（管理员 / 操作员）。模板与预检不写库也一样 ——
+	// 它们是导入这件事的一部分，而大区 / 门店管理员对商品目录只读。
+	// 确认导入每格一份**不同的**文件（编码带序号）：同一份文件第二次确认是「已导入过」，
+	// 仍然 201，但那样验不出这一格真的建了东西。
+	{"GET", v1 + "/admin/product-imports/template", merchantWide, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permGet(v1 + "/admin/product-imports/template?format=csv")
+	}},
+	{"POST", v1 + "/admin/product-imports/preview", merchantWide, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permReq{Method: "POST", Path: v1 + "/admin/product-imports/preview", OK: http.StatusOK,
+			Import: permImportCSV(fx)}
+	}},
+	{"POST", v1 + "/admin/product-imports", merchantWide, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permReq{Method: "POST", Path: v1 + "/admin/product-imports", OK: http.StatusCreated,
+			Import: permImportCSV(fx), ImportCategories: fmt.Sprintf(`[{"first_row":2,"category_id":%d}]`, fx.freshCategory(t))}
 	}},
 	{"POST", v1 + "/admin/products", merchantWide, func(t *testing.T, fx *permFixture, c permCase) permReq {
 		return permReq{Method: "POST", Path: v1 + "/admin/products", OK: http.StatusCreated,
@@ -429,6 +447,11 @@ var permMatrix = []permRoute{
 		return permReq{Method: http.MethodGet, OK: http.StatusFound,
 			Path: fmt.Sprintf(v1+"/admin/uploads/%d", permEvidence(t, fx, fx.store(c)))}
 	}},
+}
+
+// permImportCSV 造一份只有一件商品的导入 csv，编码带序号，每次都是一份新文件。
+func permImportCSV(fx *permFixture) []byte {
+	return []byte(importHeader + fmt.Sprintf("权限矩阵导入商品,,,,,PIMP-%s,1,1,,,\n", fx.next()))
 }
 
 // permEvidence 在 storeID 这家门店上造一张待审核退款单，给它挂一张退款凭证
