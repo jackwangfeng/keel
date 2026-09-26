@@ -61,6 +61,14 @@ export function problemHint(type: string): string {
             return "这家店（或它所在的大区）不卖这件商品。重试没有用，得换一家店，或者先在门店 / 大区的商品页把它上架。";
         case ProblemType.regionHasStores:
             return "这个大区下面还有门店。先把门店挪到别的大区或删掉，再删大区。";
+        case ProblemType.tenantSwitchForbidden:
+            return "商家级账号不能切换商家。这是后台的一个 bug（商家级会话不该带 X-Keel-Merchant 头），请刷新或重新登录。";
+        case ProblemType.unknownMerchant:
+            return "顶栏选中的那家店不存在了（可能已被删除）。服务端没有回落到别的店——在顶栏重新选一家，或切回「按当前域名」。";
+        case ProblemType.singleMerchantMode:
+            return "这是单商家部署：再开一家店（或启用另一家）会让它下次重启时启动自检失败。要开多家店，先切到多商家部署：清空 KEEL_DEFAULT_MERCHANT、配置 KEEL_BASE_DOMAIN。";
+        case ProblemType.platformOnly:
+            return "这件事只有平台级操作员（开店、停用启用要平台级管理员）能做。";
         case ProblemType.inventoryPrecondition:
             return "库存在你读到它之后被改过。用服务端回来的当前值刷新后重试就会成功。";
         default:

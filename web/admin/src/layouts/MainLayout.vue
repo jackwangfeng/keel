@@ -8,6 +8,9 @@ import { SwitchButton } from "@element-plus/icons-vue";
 import { currentSession, keel, setSession } from "../api/client.ts";
 import { notifyError } from "../ui/notify.ts";
 import { sections } from "../router/modules/index.ts";
+import MerchantSwitcher from "../components/MerchantSwitcher.vue";
+import MerchantScopeBanner from "../components/MerchantScopeBanner.vue";
+import { setMerchantScope } from "../api/merchantScope.ts";
 
 const route = useRoute();
 const router = useRouter();
@@ -72,6 +75,9 @@ async function logout(): Promise<void> {
     // 契约里**没有** `POST /admin/auth/logout`（买家侧有，后台侧没有）。
     // 所以这里只清本地会话——服务端那条 staff_tokens 会自己到期。
     // 不假装调用一个不存在的接口，也不在界面上说「已登出所有设备」。
+    // 先清「在管哪家店」再清会话：选择本来就绑在会话指纹上、不会带到下一个会话，
+    // 这里显式清一次是不让它在存储里多留一秒。
+    setMerchantScope(currentSession(), null);
     setSession(null);
     await router.push({ name: "login" });
 }
@@ -105,6 +111,7 @@ function copyToken(): void {
             <el-header class="header">
                 <div class="crumb">{{ route.meta.title ?? "" }}</div>
                 <div class="who">
+                    <MerchantSwitcher />
                     <el-tag v-if="isPlatform" type="warning" size="small" effect="dark">平台级</el-tag>
                     <span class="who-text">{{ session?.staff.email }}（{{ roleText }}）</span>
                     <el-button link size="small" @click="copyToken">复制会话 token</el-button>
@@ -112,6 +119,7 @@ function copyToken(): void {
                 </div>
             </el-header>
             <el-main class="main">
+                <MerchantScopeBanner />
                 <el-alert
                     v-if="hasDefaultStore === false && !route.path.startsWith('/stores')"
                     type="error"

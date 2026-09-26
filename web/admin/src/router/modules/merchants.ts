@@ -1,19 +1,20 @@
 import { Shop } from "@element-plus/icons-vue";
 import type { AdminSection } from "../section.ts";
 
+// 商家管理：列表（含停用）、开店、改名、停用启用、切过去管理。
+// 只对平台级会话出现在菜单里；服务端对商家级会话回 403 platform-only。
 const section: AdminSection = {
     key: "merchants",
-    title: "开店",
+    title: "商家管理",
     icon: Shop,
     order: 70,
-    // 契约写明：调用者必须是平台级（merchant_id 为空）且 role = 1，否则 403。
     platformOnly: true,
     routes: [
         {
             path: "merchants",
             name: "merchants",
-            component: () => import("../../views/MerchantCreateView.vue"),
-            meta: { title: "开店", menu: true },
+            component: () => import("../../views/MerchantListView.vue"),
+            meta: { title: "商家管理", menu: true },
         },
     ],
 };
