@@ -154,6 +154,15 @@ jobs:
       - name: 钉住的工具版本
         run: make tools-versions
 
+      # 商家后台那道类型闸门（admin-type-check）要 web/admin/node_modules：
+      # vue-tsc 才认 .vue，而 npx 拉不到一个能用的 vue-tsc + vue 组合。
+      # 约 130 个包、本机实测 5 秒；版本由入库的 package-lock.json 锁死。
+      #
+      # **不能改成「没装就跳过」**：那会让「后台的类型检查跑过了」这句话
+      # 在 CI 上是假的，而它看起来是真的。理由与上面 Node 那一步一字不差。
+      - name: 商家后台依赖
+        run: make admin-install
+
       # 六个 python 校验 + 契约产物漂移比对 + schema-check，一条命令。
       # 漂移比对是生成到临时目录再 diff，对工作区只读——CI 上不会出现
       # 「检查跑完工作区被改了」这种要额外一步 git diff --exit-code 去收尾的事。
@@ -333,6 +342,10 @@ jobs:
       # smoke.sh 与 web/src/api/smoke.mts 都读 KEEL_HTTP_PORT。
       COMPOSE_PROJECT_NAME: keelci
       KEEL_HTTP_PORT: "18180"
+      # 商家后台的宿主机端口。默认 8081 在这台自建 runner 上被别的东西占着
+      # （实测 127.0.0.1:8081 有监听），不换的话 console 容器会起不来，
+      # 而症状是 `docker compose up` 之后 smoke 照样绿、只有后台是死的。
+      KEEL_CONSOLE_PORT: "18181"
     # 比另外两个宽：这里要在 runner 上从零建两个镜像，Go 依赖在容器里重下一遍。
     #
     # M2 又加了一段：镜像里多一个 Rust 阶段（装 cargo/rustc、clone dtmrs、
@@ -374,6 +387,25 @@ jobs:
       # tsc 只知道服务端答应返回什么。
       - name: SDK 冒烟
         run: make sdk-smoke
+
+      # 商家后台跟着这一栈起来了没有。
+      #
+      # 两条都要：
+      #   · 首页是 200 —— nginx 托管的静态产物在（镜像的 vite build 真的产出了东西）；
+      #   · 经后台这个源打 /api 也是 200 —— 反代通了。**这一条才是关键**：
+      #     后台与 API 同源全靠它，而它坏掉的时候首页照样是 200，
+      #     界面打得开、一登录就全是网络错误。
+      #
+      # 不跑浏览器：那要 Chrome 与一棵 puppeteer 依赖树，而这一步要回答的
+      # 「后台在不在这一栈里」两条 curl 就答完了。界面本身的类型由
+      # gates job 的 admin-type-check 守着。
+      - name: 商家后台起来了没有
+        run: |
+          set -euo pipefail
+          code=$(curl -fsS -o /dev/null -w '%{http_code}' "http://localhost:${KEEL_CONSOLE_PORT}/")
+          echo "console 首页 $code"
+          code=$(curl -fsS -o /dev/null -w '%{http_code}' "http://localhost:${KEEL_CONSOLE_PORT}/api/v1/products")
+          echo "console 反代 /api $code"
 
       # 失败时把现场摊开。没有这一步，红了只能看到一句超时，而真因在某个
       # 已经退出的容器的日志里（compose 的依赖链是 postgres -> migrate -> seed -> app，

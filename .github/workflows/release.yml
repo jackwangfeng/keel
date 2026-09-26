@@ -86,6 +86,11 @@ jobs:
         with:
           node-version: '22'
 
+      # check-all.sh 里的 admin-type-check 要 web/admin/node_modules。
+      # 和 ci.yml 的 gates 一样：装上，而不是跳过。
+      - name: 商家后台依赖
+        run: make admin-install
+
       - name: 仓库自己的那套闸门
         run: ./scripts/check-all.sh
 

@@ -42,6 +42,13 @@ __pycache__/
 # settings.json 与 agent 定义，那些是该入库的。
 /.claude/worktrees/
 
+# 商家后台（web/admin）的 npm 依赖树与构建产物。
+# 依赖树约 130 个包、200 MB 上下，版本由入库的 package-lock.json 锁定，
+# `make admin-install` 随时能重建。dist/ 是 vite 的产物，镜像里现构建
+# （docker/Dockerfile.admin），不入库。
+/web/admin/node_modules/
+/web/admin/dist/
+
 # make build 的产物（-ldflags 注了版本号的那个二进制）。
 # 不入库：37 MB，且每次构建都不一样（构建时间在里面）。
 /build/

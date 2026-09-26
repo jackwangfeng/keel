@@ -1,0 +1,48 @@
+# 商家后台的镜像：两个阶段，一个产物（一堆静态文件 + 一个 nginx）。
+#
+# 为什么是「nginx 托管静态产物 + 反代 /api」而不是 `go:embed` 进二进制：
+#
+#   · embed 要往 Go 的路由表里加一条 catch-all，而这个仓库的路由表有两道锁
+#     （internal/app/run_test.go 的路由清单、internal/handler/contract_test.go
+#     的 nonContractRoutes）。两边都要登记一条「这条路由不在契约里」的例外 ——
+#     那两份清单存在的理由恰恰是「契约之外不该有路由」，为一个前端资源服务
+#     去开这个口子，代价和收益不成比例。
+#   · embed 还会把「改一行 CSS」变成「重编 Go 二进制、重跑 cgo 与 dtmrs」。
+#     本机实测 Go 那条链路是分钟级，这条是秒级。
+#   · 反代过来之后浏览器看到的是**同源**，不需要 CORS。后台 token 是个能改价、
+#     能退款的凭据，让它跨源飞来飞去要多配一层 Access-Control-Allow-Credentials，
+#     而那一层配错的后果比不配严重。
+#
+# 代价诚实说两条：多一个容器（nginx，alpine 约 50 MB），以及多一份 nginx 配置
+# 要维护（docker/admin-nginx.conf）。
+
+# ---------- 构建 ----------
+# Node 版本与 CONTRIBUTING 里记的已验证版本一致（24.10.0），不写 `node:24`：
+# major 标签会随上游漂，而「CI 与本地装到不同版本」是这个仓库 Makefile 文件头
+# 点名的那类最难查的问题。
+FROM node:24.10-alpine AS build
+
+WORKDIR /src
+
+# 先只拷依赖清单再 npm ci：改一行 .vue 时这一层还能复用。
+# **npm ci 不是 npm install** —— 它严格按入库的 package-lock.json 装，
+# 版本对不上就报错而不是悄悄升级。
+COPY web/admin/package.json web/admin/package-lock.json ./web/admin/
+RUN cd web/admin && npm ci
+
+# 契约产物与那份零依赖 SDK 在 web/src 下，后台 import 的就是它们
+# （tsconfig 的 @contract/* → ../src/api/*）。**不在这里复制成第二份** ——
+# 镜像里也只有那一份。
+COPY web/src ./web/src
+COPY web/admin ./web/admin
+
+RUN cd web/admin && npm run build
+
+# ---------- 托管 ----------
+FROM nginx:1.29-alpine AS console
+
+# 默认站点配置整个换掉，不是往里加一段：镜像自带的那份会抢 `location /`。
+COPY docker/admin-nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=build /src/web/admin/dist /usr/share/nginx/html
+
+EXPOSE 80

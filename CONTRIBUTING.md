@@ -215,10 +215,11 @@ KEEL_EMBED_ENDPOINT=http://127.0.0.1:8001 go run ./cmd/keel-index -force      # 
 ./scripts/check-all.sh
 ```
 
-**它需要 Node**（最后两步走 `npx`）。没有 Node 的环境里会失败，那是诚实的失败：
-契约产物确实没被验证过。
+**它需要 Node**（后面几步走 `npx`），而最后一步还需要 `make admin-install` 装过
+商家后台的依赖。没有它们的环境里会失败，那是诚实的失败：
+契约产物与后台确实没被验证过。
 
-八步，依次是：
+十步，依次是：
 
 1. 文档链接是否有效（含中文文件名的百分号编码与锚点）
 2. README 承诺的文件是否真实存在，以及快速开始里的端口是否真的在 compose 里映射
@@ -229,6 +230,15 @@ KEEL_EMBED_ENDPOINT=http://127.0.0.1:8001 go run ./cmd/keel-index -force      # 
    「RLS 到底有没有生效」就永远测不出来了）
 7. **契约产物漂移比对** —— 生成到临时目录再和入库产物比，对工作区只读
 8. `make schema-check` —— `web/src` 在 `--strict` 下编译得过，且编译范围真的覆盖到每个源文件
+9. `make app-type-check` —— `app/src` 下全部 `.uts` 在 `--strict` 下编译得过（客户端跟上了契约没有）
+10. `make admin-type-check` —— 商家后台 `web/admin/src` 下全部 `.ts` 与 `.vue` 在 `--strict`
+    下编译得过，编译范围真的覆盖到它们，且类型真的来自入库的契约产物。
+    **它要先 `make admin-install`**（`vue-tsc` 才认 `.vue`，npx 拉不到一个能用的组合）；
+    没装依赖时它失败而不是跳过——跳过会让「后台的类型检查跑过了」这句话变成假话
+
+第 8、9、10 三条不能合成一条，理由写在 `scripts/check_admin_types.py` 的文件头：
+第 8 条的全部价值是「零 node_modules」，把它换成 `vue-tsc` 等于让契约产物的闸门
+取决于一棵 UI 框架依赖树。
 
 改动文档或契约的 PR 必须先让它通过。
 
