@@ -153,7 +153,9 @@ If 8081 is taken: `KEEL_CONSOLE_PORT=18081 docker compose up -d --build`.
 > prohibited claim and suggests categories from title embeddings, then a
 > confirm step that creates drafts), **coupons**
 > (amount-off / percent-off / no-threshold, a claim center plus targeted grants,
-> scoped by category, product, region or store), **staff with tiered roles**
+> scoped by category, product, region or store), **promotions** (tiered
+> discounts, limited-time prices, flash-sale quotas with per-buyer limits,
+> new-buyer gifts, online / offline), **staff with tiered roles**
 > (admin, operator, region manager, store manager — the last two carry scopes,
 > checked by the server on every call), **merchant management** (platform-level: list, open, disable / enable, and a
 > "currently managing" switcher), plus **regions and stores**: per-region and per-store product
@@ -263,7 +265,9 @@ shipping · confirm receipt · after-sales refunds · coupons (amount-off /
 percent-off / no-threshold / free-shipping, claim center and targeted grants) ·
 shipping-fee templates (per piece or by weight, priced per province, free over
 an amount or a quantity after discounts, undeliverable regions, per store or
-shop-wide) · order state
+shop-wide) · promotions (tiered spend/quantity discounts, limited-time prices, flash
+sales, new-buyer gifts; allocated per line, coupons apply to the
+post-promotion amount) · order state
 machine · multi-store with delivery fences · tiered staff roles · in-app
 notifications (buyer message center and console to-do bell, written in the same
 transaction as the state change) · business reports (overview vs. previous
@@ -442,8 +446,8 @@ battle-tested at scale. What it has is a stronger core.
   payments, WeChat login and SMS codes need business qualifications and will
   be wired in once those are in hand
 - [ ] **M7 Ready to do business** — promotions (tiered discounts, flash
-  prices, new-buyer gifts), business reports, Excel bulk import with AI
-  category suggestions (in progress)
+  prices, new-buyer gifts) ✅ (group buying not done); business reports, Excel
+  bulk import with AI category suggestions (in progress)
 - [ ] **M8 Visual search** — image embeddings, a differentiator
 
 **Later, if real demand shows up:** conversational shopping, cross-supplier

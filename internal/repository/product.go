@@ -72,6 +72,7 @@ type Tx interface {
 	FulfillmentTx
 	RefundTx
 	AdminOrderTx
+	PromotionTx
 	ProductImportTx
 	ReportTx
 	NotificationTx

@@ -246,8 +246,8 @@ func TestFreeShippingCoupon(t *testing.T) {
 			pv.FreightCents, pv.FreightDiscountCents, *pv.DiscountCents, pv.PayableCents)
 	}
 	for _, it := range pv.Items {
-		if *it.DiscountCents != 0 {
-			t.Fatalf("包邮券不该分摊到行，sku %d 分到了 %d", *it.SkuId, *it.DiscountCents)
+		if it.DiscountCents != 0 {
+			t.Fatalf("包邮券不该分摊到行，sku %d 分到了 %d", it.SkuId, it.DiscountCents)
 		}
 	}
 	if int64(*pv.DiscountCents) != listed {

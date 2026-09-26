@@ -137,7 +137,7 @@ INSERT INTO orders (order_no, user_id, store_id, region_id, store_snapshot,
                     status, goods_amount_cents, freight_cents, freight_discount_cents,
                     freight_snapshot,
                     discount_cents, payable_cents, receiver_snapshot, remark, expire_at,
-                    user_coupon_id, coupon_name)
+                    user_coupon_id, coupon_name, promotion_discount_cents, promotions)
 SELECT sqlc.arg(order_no), sqlc.arg(user_id), st.id, st.region_id,
        jsonb_build_object('store_name', st.name, 'region_name', r.name,
                           'address', st.address, 'phone', st.phone),
@@ -149,20 +149,27 @@ SELECT sqlc.arg(order_no), sqlc.arg(user_id), st.id, st.region_id,
        (SELECT ct.name
           FROM user_coupons uc
           JOIN coupon_templates ct ON ct.id = uc.template_id
-         WHERE uc.id = sqlc.narg(user_coupon_id))
+         WHERE uc.id = sqlc.narg(user_coupon_id)),
+       sqlc.arg(promotion_discount_cents), sqlc.arg(promotions)
   FROM stores st
   JOIN regions r ON r.id = st.region_id
  WHERE st.id = sqlc.arg(store_id) AND st.deleted_at IS NULL
 RETURNING id, order_no, store_id, region_id, status, goods_amount_cents, freight_cents,
           freight_discount_cents,
           discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
-          expire_at, created_at, user_coupon_id, coupon_name;
+          expire_at, created_at, user_coupon_id, coupon_name, promotion_discount_cents,
+          promotions;
 
 -- name: CreateOrderItem :exec
 -- 订单项快照（数据模型 §5：下单即快照）。商品改价改名不影响历史订单。
+--
+-- 00058 起多三列：list_price_cents（门店价快照）、price_promotion_id（改了单价的
+-- 限时折扣 / 秒杀）、promotion_discount_cents（满减满折分摊到这一行的那一份，
+-- 已含在 discount_cents 里）。
 INSERT INTO order_items (order_id, sku_id, product_id, title_snapshot, spec_snapshot,
-                         image_snapshot, price_cents, quantity, amount_cents, discount_cents)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10);
+                         image_snapshot, price_cents, quantity, amount_cents, discount_cents,
+                         list_price_cents, price_promotion_id, promotion_discount_cents)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13);
 
 -- name: GetOrderByNo :one
 -- 按对外编号取订单。SAGA 的两个分支都靠它把「自己要处理哪一单」找回来 ——
@@ -184,7 +191,7 @@ SELECT id, order_no, user_id, store_id, region_id, status,
        goods_amount_cents, freight_cents, freight_discount_cents,
        discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
        expire_at, paid_at, shipped_at, finished_at, created_at, user_coupon_id,
-       coupon_name
+       coupon_name, promotion_discount_cents, promotions
   FROM orders
  WHERE order_no = $1;
 
@@ -194,7 +201,10 @@ SELECT id, order_no, user_id, store_id, region_id, status,
 -- 这条查询就是硬约束二的落点：分支拿不到业务载荷，扣减意图只能从库里读回来。
 -- 按 sku_id 排序而不是 id：两个分支（正向与补偿）必须按同一个顺序拿行锁，
 -- 否则两笔互相交叉的订单在高并发下能互相死锁。
-SELECT sku_id, quantity
+--
+-- price_promotion_id（00058）：这一行按限时折扣 / 秒杀价成交时，库存分支在同一个事务里
+-- 扣它的活动配额与每人限购，补偿与关单时放回 —— 与库存同进同出。
+SELECT sku_id, quantity, price_promotion_id
   FROM order_items
  WHERE order_id = $1
  ORDER BY sku_id;
@@ -289,7 +299,9 @@ UPDATE idempotency_keys
 -- 走 idx_orders_status_expire（00006，WHERE status = 10）。
 -- 按 expire_at 升序：过期最久的先处理，否则一个持续入单的租户能让最老的那批
 -- 永远排在后面。
-SELECT id, order_no, store_id
+--
+-- user_id（00058）：按活动价成交的行关单时要放回每人限购，那个计数按买家记。
+SELECT id, order_no, store_id, user_id
   FROM orders
  WHERE status = 10 AND expire_at < now()
  ORDER BY expire_at
@@ -300,7 +312,8 @@ SELECT id, order_no, store_id
 -- 一件库存都没扣，所以只关单、不回补。
 --
 -- 走 idx_orders_draft_expire（00015，WHERE status = 0）。
-SELECT id, order_no, store_id
+-- user_id 只是与上一条同形（两条共用 ExpiredOrder）；孤儿草稿不放回任何东西。
+SELECT id, order_no, store_id, user_id
   FROM orders
  WHERE status = 0 AND expire_at < now()
  ORDER BY expire_at
@@ -427,7 +440,7 @@ SELECT id, order_no, user_id, store_id, region_id, status,
        goods_amount_cents, freight_cents, freight_discount_cents,
        discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
        expire_at, paid_at, shipped_at, finished_at, created_at, user_coupon_id,
-       coupon_name
+       coupon_name, promotion_discount_cents, promotions
   FROM orders
  WHERE user_id = $1
    AND status <> 0
@@ -465,7 +478,7 @@ SELECT id, order_no, user_id, store_id, region_id, status,
        goods_amount_cents, freight_cents, freight_discount_cents,
        discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
        expire_at, paid_at, shipped_at, finished_at, created_at, user_coupon_id,
-       coupon_name
+       coupon_name, promotion_discount_cents, promotions
   FROM orders
  WHERE order_no = $1
    AND user_id = $2
@@ -477,7 +490,8 @@ SELECT id, order_no, user_id, store_id, region_id, status,
 -- 这一条取的是展示用的全部快照列，按 id 排序 —— 两者的排序有完全不同的理由，
 -- 合成一条之后改其中一个会静默改掉另一个。
 SELECT id, sku_id, product_id, title_snapshot, spec_snapshot, image_snapshot,
-       price_cents, quantity, amount_cents, discount_cents, refunded_qty
+       price_cents, quantity, amount_cents, discount_cents, refunded_qty,
+       list_price_cents, price_promotion_id, promotion_discount_cents
   FROM order_items
  WHERE order_id = $1
  ORDER BY id;

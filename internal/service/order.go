@@ -266,7 +266,11 @@ func (s *OrderService) Preview(ctx context.Context, req CreateRequest) (Quote, e
 		if err != nil {
 			return err
 		}
-		q.ApplicableCoupons, err = applicableCoupons(ctx, tx, sc, id.UserID, q.Lines, q.freightNoCoupon, now)
+		// 超出每人限购：试算就说出来（409），而不是等下单时才被库存分支拒掉。
+		if err := q.checkPromotionLimits(); err != nil {
+			return err
+		}
+		q.ApplicableCoupons, err = applicableCoupons(ctx, tx, sc, id.UserID, q, now)
 		return err
 	})
 	return q, err
@@ -475,6 +479,11 @@ func (s *OrderService) placeDraft(ctx context.Context, tx repository.Tx,
 	if err != nil {
 		return repository.Order{}, err
 	}
+	// 每人限购在这里是预告，库存分支（order_saga.go 的 deductStock）在行锁之下做最终判定：
+	// 同一个买家两笔并发订单都能过这一道，只有一笔扣得到限购额度。
+	if err := q.checkPromotionLimits(); err != nil {
+		return repository.Order{}, err
+	}
 
 	// 金额一致性（契约明写的 409）。
 	//
@@ -500,7 +509,11 @@ func (s *OrderService) placeDraft(ctx context.Context, tx repository.Tx,
 		return repository.Order{}, err
 	}
 
-	// 运费明细的快照（orders.freight_snapshot，00056）：下单那一刻用的哪个模板、
+	promoSnapshot, err := json.Marshal(orderPromotionSnapshots(q.Promotions))
+	if err != nil {
+		return repository.Order{}, err
+	}
+	// 运费明细的快照（orders.freight_snapshot）：下单那一刻用的哪个模板、
 	// 命中哪条规则、为什么包邮。之后改模板不影响它 —— 与 receiver_snapshot 同一条道理。
 	// priceOrder 拿到了地址就一定有明细，这里为 nil 只可能是那边被改坏了。
 	if q.Freight == nil {
@@ -530,6 +543,10 @@ func (s *OrderService) placeDraft(ctx context.Context, tx repository.Tx,
 		Remark:               req.Remark,
 		ExpireAt:             s.now().Add(orderExpireIn),
 		UserCouponID:         q.UserCouponID,
+
+		// 活动优惠合计与命中活动的快照。DiscountCents 已经是活动 + 券（含包邮券抵掉的运费）。
+		PromotionDiscountCents: q.PromotionDiscountCents,
+		Promotions:             promoSnapshot,
 	})
 	if err != nil {
 		return repository.Order{}, err
@@ -546,6 +563,10 @@ func (s *OrderService) placeDraft(ctx context.Context, tx repository.Tx,
 			Quantity:      ln.Quantity,
 			AmountCents:   ln.AmountCents,
 			DiscountCents: ln.DiscountCents,
+
+			ListPriceCents:         ln.ListPriceCents,
+			PricePromotionID:       ln.PricePromotionID,
+			PromotionDiscountCents: ln.PromotionDiscountCents,
 		}); err != nil {
 			return repository.Order{}, err
 		}
@@ -673,6 +694,45 @@ type receiverSnapshot struct {
 	Detail       string  `json:"detail"`
 	RegionCode   *string `json:"region_code,omitempty"`
 	PostalCode   *string `json:"postal_code,omitempty"`
+}
+
+// OrderPromotionSnapshot 是拍进 orders.promotions 的一项（契约的 OrderPromotion）。
+//
+// 与 receiverSnapshot 同一条道理：**快照的字段集一旦定下就不能再动**，所以它是一个
+// 手写的类型，不复用契约生成的类型，也不直接存 PromotionHit（那个类型会随试算的展示需求演进）。
+type OrderPromotionSnapshot struct {
+	PromotionID   int64   `json:"promotion_id"`
+	Name          string  `json:"name"`
+	Type          int16   `json:"promotion_type"`
+	DiscountCents int64   `json:"discount_cents"`
+	SKUIDs        []int64 `json:"sku_ids"`
+}
+
+// orderPromotionSnapshots 只留命中了的活动：「还差 50 元」是给试算看的，不是这一单的事实。
+func orderPromotionSnapshots(hits []PromotionHit) []OrderPromotionSnapshot {
+	out := []OrderPromotionSnapshot{}
+	for _, h := range hits {
+		if !h.Applied {
+			continue
+		}
+		out = append(out, OrderPromotionSnapshot{
+			PromotionID: h.PromotionID, Name: h.Name, Type: h.Type,
+			DiscountCents: h.DiscountCents, SKUIDs: h.SKUIDs,
+		})
+	}
+	return out
+}
+
+// DecodeOrderPromotions 把 orders.promotions 解回来。空字节（没取这一列的查询）当成空数组。
+func DecodeOrderPromotions(raw []byte) ([]OrderPromotionSnapshot, error) {
+	out := []OrderPromotionSnapshot{}
+	if len(raw) == 0 {
+		return out, nil
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, fmt.Errorf("订单的活动快照解不开: %w", err)
+	}
+	return out, nil
 }
 
 // requestHash 是 §12 那一列 request_hash。

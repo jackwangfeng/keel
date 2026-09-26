@@ -493,3 +493,53 @@ SELECT t.merchant_id, t.id, v.sort_order, v.region_codes, 1, v.first_fee, 1, v.a
  WHERE m.code = 'demo'
    AND t.name = '全国运费（满 99 包邮）'
    AND NOT EXISTS (SELECT 1 FROM freight_template_rules r WHERE r.template_id = t.id);
+
+-- ---------------------------------------------------------------------------
+-- 营销活动（数据模型 §7·二）：一个全场满减、一个限时特价
+-- ---------------------------------------------------------------------------
+--
+-- 演示两条最常见的活动，让结算页的「活动明细」「还差多少凑满」、商品卡上的标签、
+-- 购物车的划线价一打开就看得见：
+--
+--   · 全场满 199 减 20、满 399 减 50：与上面「满 50 减 10」的券同享（stack_with_coupon），
+--     券按活动之后的金额判门槛 —— 演示栈上能直接看到两者叠加的顺序；
+--   · 挂耳咖啡（DRIP-10，门店价 69 元）限时特价 49.9 元，每人限购 2 件。
+--
+-- 有效期用**相对时间**，理由同上面的券：写死一个截止日期，过了那天演示栈上的活动就全失效。
+-- 插入时是「一天前开始、30 天后结束」；compose 每次 `up` 都会重跑这个文件，于是下面那条
+-- UPDATE 把结束时间往后滚到「至少还剩 30 天」—— 常跑的演示栈上活动永远在进行中。
+-- 幂等靠 WHERE NOT EXISTS（按名字），与这份文件其余部分同一个写法。
+INSERT INTO promotions (merchant_id, name, promo_type, threshold_unit, stack_with_coupon,
+                        starts_at, ends_at, status)
+SELECT m.id, v.name, v.promo_type, v.threshold_unit, TRUE,
+       now() - interval '1 day', now() + interval '30 days', 1
+  FROM merchants m
+  CROSS JOIN (VALUES
+      ('全场满 199 减 20', 1::smallint, 1::smallint),
+      ('挂耳咖啡限时特价', 3::smallint, 0::smallint)
+  ) AS v(name, promo_type, threshold_unit)
+ WHERE m.code = 'demo'
+   AND NOT EXISTS (SELECT 1 FROM promotions p WHERE p.merchant_id = m.id AND p.name = v.name);
+
+UPDATE promotions p
+   SET ends_at = now() + interval '30 days'
+  FROM merchants m
+ WHERE m.id = p.merchant_id AND m.code = 'demo'
+   AND p.name IN ('全场满 199 减 20', '挂耳咖啡限时特价')
+   AND p.ends_at < now() + interval '30 days';
+
+INSERT INTO promotion_tiers (merchant_id, promotion_id, threshold, discount_cents)
+SELECT p.merchant_id, p.id, v.threshold, v.discount_cents
+  FROM promotions p
+  JOIN merchants m ON m.id = p.merchant_id
+  CROSS JOIN (VALUES (19900::bigint, 2000::bigint), (39900::bigint, 5000::bigint)) AS v(threshold, discount_cents)
+ WHERE m.code = 'demo' AND p.name = '全场满 199 减 20'
+   AND NOT EXISTS (SELECT 1 FROM promotion_tiers t WHERE t.promotion_id = p.id AND t.threshold = v.threshold);
+
+INSERT INTO promotion_skus (merchant_id, promotion_id, sku_id, promo_price_cents, per_user_limit)
+SELECT p.merchant_id, p.id, s.id, 4990, 2
+  FROM promotions p
+  JOIN merchants m ON m.id = p.merchant_id
+  JOIN skus s ON s.merchant_id = p.merchant_id AND s.sku_code = 'DRIP-10'
+ WHERE m.code = 'demo' AND p.name = '挂耳咖啡限时特价'
+   AND NOT EXISTS (SELECT 1 FROM promotion_skus ps WHERE ps.promotion_id = p.id AND ps.sku_id = s.id);

@@ -88,12 +88,14 @@ func (h *OrderHandler) Detail(c *gin.Context) {
 		// 包邮券抵掉的运费（00056）。与上面几行同一个教训：apiOrder 里加了，这里就得搬。
 		FreightDiscountCents: base.FreightDiscountCents,
 		// 下单那一刻的运费明细快照；00056 之前的订单没有，整个不出现。
-		Freight:    apiFreightBreakdownPtr(d.Freight),
-		ExpireAt:   base.ExpireAt,
-		CreatedAt:  base.CreatedAt,
-		PaidAt:     base.PaidAt,
-		ShippedAt:  base.ShippedAt,
-		FinishedAt: base.FinishedAt,
+		Freight:                apiFreightBreakdownPtr(d.Freight),
+		ExpireAt:               base.ExpireAt,
+		CreatedAt:              base.CreatedAt,
+		PaidAt:                 base.PaidAt,
+		ShippedAt:              base.ShippedAt,
+		FinishedAt:             base.FinishedAt,
+		PromotionDiscountCents: base.PromotionDiscountCents,
+		Promotions:             base.Promotions,
 
 		// 履约门店。**store_id 在契约里是必返**（库里 NOT NULL），
 		// region_id 与 store 都是可选。三个一起给：store_id 让客户端能拿它
@@ -118,6 +120,8 @@ func apiOrderItems(rows []repository.OrderItem) []api.OrderItem {
 	for _, it := range rows {
 		amount := api.Money(it.AmountCents)
 		discount := api.Money(it.DiscountCents)
+		listPrice := api.Money(it.ListPriceCents)
+		promoDiscount := api.Money(it.PromotionDiscountCents)
 		product := it.ProductID
 		refunded := int(it.RefundedQty)
 		refunding := int(it.RefundingQty)
@@ -145,6 +149,11 @@ func apiOrderItems(rows []repository.OrderItem) []api.OrderItem {
 			Quantity:      int(it.Quantity),
 			AmountCents:   &amount,
 			DiscountCents: &discount,
+
+			// 活动（00058）：门店价快照、改了单价的活动、满减满折分摊到这一行的那一份。
+			ListPriceCents:         &listPrice,
+			PricePromotionId:       it.PricePromotionID,
+			PromotionDiscountCents: &promoDiscount,
 
 			// RefundedQty 是 order_items 上一列真实存在的数（DDL 里
 			// NOT NULL DEFAULT 0），所以它填得出来，今天恒为 0 也照填。

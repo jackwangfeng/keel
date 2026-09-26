@@ -364,7 +364,7 @@ func (s *SweepService) releasePending(ctx context.Context, log *slog.Logger,
 			return err
 		}
 		var err error
-		qty, err = releaseClosedOrder(ctx, tx, o.ID, o.OrderNo, o.StoreID,
+		qty, err = releaseClosedOrder(ctx, tx, o.ID, o.OrderNo, o.StoreID, o.UserID,
 			repository.InventoryLogTimeoutRelease)
 		if err != nil {
 			return err
@@ -454,7 +454,7 @@ func (s *SweepService) closeDraft(ctx context.Context, log *slog.Logger,
 // ② 这一单进过 SAGA，库存真实扣减过。孤儿草稿（status 0）不满足 ②，
 // 走 closeDraft，不走这里。
 func releaseClosedOrder(ctx context.Context, tx repository.Tx, orderID int64,
-	orderNo string, storeID int64, bizType int16) (int, error) {
+	orderNo string, storeID, userID int64, bizType int16) (int, error) {
 	lines, err := tx.ListOrderLines(ctx, orderID)
 	if err != nil {
 		return 0, err
@@ -473,6 +473,10 @@ func releaseClosedOrder(ctx context.Context, tx repository.Tx, orderID int64,
 		}
 		if err := tx.AppendInventoryLog(ctx, ln.SKUID, storeID, ln.Quantity,
 			bizType, orderNo, after-ln.Quantity, after); err != nil {
+			return 0, err
+		}
+		// 按活动价成交的行：活动配额与每人限购一起放回（00058），与回补库存同一个事务。
+		if err := releasePromotionLine(ctx, tx, ln, userID, orderNo); err != nil {
 			return 0, err
 		}
 		qty += int(ln.Quantity)

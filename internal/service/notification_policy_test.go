@@ -35,12 +35,18 @@ import (
 
 // stateChangingQuery 判一条 sqlc 语句是不是「状态变化」：改订单履约状态、改退款单（任何列）、
 // 建退款单、改库存水位。
+//
+// 营销活动（00058）起「库存水位」多了一层：秒杀的活动配额（promotion_skus.sold_qty）与每人限购
+// （promotion_purchases）。它们与门店库存在同一个事务里扣、同一处放回，同样要决定发不发通知。
 var stateChangingQuery = regexp.MustCompile(
 	`(?i)\bUPDATE\s+orders\s+(?:\w+\s+)?SET\s+status\b` +
 		`|\bUPDATE\s+refunds\s+(?:\w+\s+)?SET\b` +
 		`|\bINSERT\s+INTO\s+refunds\s*\(` +
 		`|\bUPDATE\s+inventories\b` +
-		`|\bINSERT\s+INTO\s+inventories\b`)
+		`|\bINSERT\s+INTO\s+inventories\b` +
+		`|\bUPDATE\s+promotion_skus\b` +
+		`|\bUPDATE\s+promotion_purchases\b` +
+		`|\bINSERT\s+INTO\s+promotion_purchases\b`)
 
 var queryNameRE = regexp.MustCompile(`^-- name: (\w+) :\w+`)
 
@@ -100,9 +106,13 @@ func parseGoDir(t *testing.T, dir string) []*ast.File {
 }
 
 // repoMethodsCalling 把 sqlc 语句名映射到调它的 repository 方法名（t.q.<Query>(…) 所在的方法）。
-func repoMethodsCalling(t *testing.T, queries map[string]bool) map[string]string {
+//
+// 一个方法可以调不止一条状态语句（活动配额的 ReservePromotionQuota 先扣配额、再累计限购），
+// 所以另回一份「被调到过的语句」集合：方法 → 语句那张表只留得下其中一条。
+func repoMethodsCalling(t *testing.T, queries map[string]bool) (map[string]string, map[string]bool) {
 	t.Helper()
 	out := map[string]string{} // 方法名 → 语句名
+	called := map[string]bool{}
 	for _, f := range parseGoDir(t, filepath.Join("..", "repository")) {
 		for _, d := range f.Decls {
 			fn, ok := d.(*ast.FuncDecl)
@@ -117,12 +127,13 @@ func repoMethodsCalling(t *testing.T, queries map[string]bool) map[string]string
 				// t.q.<Query>
 				if inner, ok := sel.X.(*ast.SelectorExpr); ok && inner.Sel.Name == "q" {
 					out[fn.Name.Name] = sel.Sel.Name
+					called[sel.Sel.Name] = true
 				}
 				return true
 			})
 		}
 	}
-	return out
+	return out, called
 }
 
 func funcKey(fn *ast.FuncDecl) string {
@@ -159,13 +170,9 @@ func TestEveryStateTransitionNotifiesOrSaysWhyNot(t *testing.T) {
 		t.Fatalf("只从 db/queries 里识别出 %d 条状态变化语句 —— 正则失效了，这条测试没在检查它该检查的东西：%v",
 			len(queries), queries)
 	}
-	methods := repoMethodsCalling(t, queries)
+	methods, covered := repoMethodsCalling(t, queries)
 
 	// 每条状态语句都要有一个 repository 方法在调 —— 否则第 3 步对它是瞎的。
-	covered := map[string]bool{}
-	for _, q := range methods {
-		covered[q] = true
-	}
 	for q := range queries {
 		if !covered[q] {
 			t.Errorf("状态变化语句 %s 没有任何 repository 方法以 t.q.%s(…) 调它 —— "+

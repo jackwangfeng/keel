@@ -39,7 +39,7 @@ so "which one is running?" never depends on anyone's memory.
 
 ## [Unreleased]
 
-Migrations `00027`–`00038` and `00053`–`00057`.
+Migrations `00027`–`00038` and `00053`–`00058`.
 
 
 ### Added
@@ -79,7 +79,8 @@ Migrations `00027`–`00038` and `00053`–`00057`.
   `0.05`, which is small enough to sink the best out-of-stock candidate below
   the worst in-stock one across the whole recall window, while keeping relevance
   order among out-of-stock items. The promotion and quality factors have no data
-  to read (there is no promotions table and no reviews); freshness and sales are
+  to read (promotions landed later in this release but are not wired into
+  search yet, and there are no reviews); freshness and sales are
   deliberately left out until reranking gives scores a real dynamic range and an
   offline evaluation set exists; margin weighting is not implemented, per the
   design's own advice to keep it off.
@@ -200,6 +201,34 @@ Migrations `00027`–`00038` and `00053`–`00057`.
   or state why it deliberately does not (buyers' own actions, SAGA
   create/compensate, amount-mismatch callbacks, manual stock edits…). Every edge
   of both state machines must be accounted for too.
+- **Promotions** (data model §7·二): tiered spend or quantity
+  discounts (amount-off and percent-off), limited-time prices, flash sales and
+  new-buyer gifts. The pricing order is fixed and shared with the shipping-fee
+  work: store price → limited-time / flash price (`min(store price, special
+  price)`, so a special never costs more than the store's own price) → tiered
+  discounts, allocated per line with the coupon's remainder rule → coupon →
+  shipping. A line takes part in at most one tiered promotion; overlapping
+  promotions are resolved greedily, biggest discount first. One implementation
+  (`service/promotion_calc.go`) serves preview, checkout, the applicable-coupon
+  list, the cart and product tags, so they cannot disagree.
+- **Promotion details everywhere a buyer looks**: `promotion_tags` on products,
+  `promo_price_cents` on SKUs, activity prices, `promotion_discount_cents` and
+  `promotions` (applied discounts and "spend ¥X more" hints) on the cart,
+  `/orders/preview` and orders; orders keep a snapshot of the promotions they
+  hit. Order lines record the store price (`list_price_cents`), the promotion
+  that set the price, and the promotion share of the discount.
+- **Flash-sale quotas and per-buyer limits** are enforced with conditional
+  updates in the same transaction as the stock deduction (the SAGA stock
+  branch), released by compensation, timeout close and buyer cancel. A quota is
+  a cap on units sold at the flash price, not separate stock. `409
+  promotion-sold-out` and `409 promotion-limit-exceeded`.
+- **New-buyer gifts** grant a coupon from a chosen template when a buyer who has
+  never placed an order signs in (there is no sign-up endpoint), reusing
+  targeted grants; one per buyer per promotion. Such coupons have `source = 3`.
+- **Console promotions page and `/admin/promotions`** (list, create, detail,
+  PATCH, online/offline), same permission row as coupons. Promotions are created
+  offline; a live promotion can only be renamed or taken offline. The demo seed
+  ships a store-wide tiered discount and a limited-time price with rolling dates.
 
 - **Business reports** (`GET /admin/reports/overview`, `/trend`, `/products`,
   `/stores`, `/inventory-alerts`, `/search`; read-only, no AI). The overview
@@ -388,6 +417,20 @@ Migrations `00027`–`00038` and `00053`–`00057`.
 
 ### Changed
 
+- **Coupon thresholds and percentages now apply to the post-promotion amount**
+  of each line (`amount_cents − promotion_discount_cents`), not the store price.
+  Without promotions nothing changes. A promotion can be marked as not stackable
+  with coupons; orders hitting it get `409 coupon-not-applicable` when a coupon
+  is supplied, and an empty `applicable_coupons`.
+- **`discount_cents` on orders and order lines now means promotions + coupon.**
+  The promotion share is in `promotion_discount_cents`. Refunds keep using
+  `amount_cents − discount_cents`, so fully refunding a line still returns
+  exactly what was paid for it. The database constraint that tied any discount
+  to a coupon now requires a coupon-less order's discount to equal its promotion
+  discount.
+- **`OrderPreview.items` is a named schema (`OrderPreviewItem`)** with
+  `price_cents`, `list_price_cents`, `price_promotion_id` and
+  `promotion_discount_cents`; the fields it had are now required.
 - **Contract (breaking for generated clients):** `OrderPreview.freight_cents`,
   `freight_discount_cents` and `freight` are now required — freight used to be
   absent ("not computed"), it is now always computed, `0` with
@@ -492,6 +535,10 @@ Migrations `00027`–`00038` and `00053`–`00057`.
 
 ### Not yet
 
+- Group buying (needs its own state machine for forming groups and refunding
+  failed ones), repeating "every ¥100 off ¥10" discounts, and a promotion
+  performance report are not implemented. Flash-sale quotas and per-buyer
+  limits are not returned on refunds.
 - Shipping-fee regions stop at the province level (no city or county rules),
   and lines on different templates are summed rather than merged the way a
   single parcel would be. Who pays return freight is still decided by staff at

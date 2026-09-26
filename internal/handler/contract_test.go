@@ -473,9 +473,10 @@ var routes = []route{
 				"explain=true 时 scores.rerank **整个不出现**，而不是填 0。",
 			// 业务重排本身 M5 接上了（缺货降权，internal/search/business.go），
 			// 这里只挂它**没做**的那两个因子 —— 契约描述里点了名的那两个。
-			"活动失效": "业务重排的 w_promo（语义检索层 §6）。数据模型里没有活动表：" +
-				"券（00026）挂在买家身上、不挂在商品上，「这件商品有没有进行中 / 已结束的活动」" +
-				"无从回答。业务乘子目前只含 w_stock，explain 的 scores.business 就是它，" +
+			"活动失效": "业务重排的 w_promo（语义检索层 §6）。营销活动的表（00058）已经有了，" +
+				"「这件商品此刻有没有生效的活动」答得出来（商品标签用的就是它），但检索路径本轮没接：" +
+				"§6 的 w_promo 说的是「活动失效降权」，而「失效」要先定口径（活动结束的商品算失效，" +
+				"还是等同于从没参加过活动）。业务乘子目前只含 w_stock，explain 的 scores.business 就是它，" +
 				"不含任何没算的因子。",
 			"负毛利": "按毛利调权（语义检索层 §6「关于毛利权重的诚实建议」：默认应当关闭）。" +
 				"本轮照那条建议不做，连开关都没有 —— 一个默认关闭、没有调用方会打开的开关" +
@@ -883,6 +884,34 @@ var routes = []route{
 		HTTPMethod:     http.MethodPost,
 		HandlerFile:    "admin_coupon.go",
 		NoQueryParams:  "手机号在请求体里，幂等键在 Idempotency-Key 请求头",
+	},
+	// 营销活动（00058）。后台四条；带 query 参数的列表单独一个文件，理由同券模板列表。
+	{
+		ContractPath:   "/admin/promotions",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "admin_promotion_list.go",
+	},
+	{
+		ContractPath:   "/admin/promotions",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "admin_promotion.go",
+		NoQueryParams:  "建活动的参数全在请求体里；幂等键在 Idempotency-Key 请求头",
+	},
+	{
+		ContractPath:   "/admin/promotions/{promotion_id}",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "admin_promotion.go",
+		NoQueryParams:  "详情只吃路径参数",
+	},
+	{
+		ContractPath:   "/admin/promotions/{promotion_id}",
+		ContractMethod: "patch",
+		HTTPMethod:     http.MethodPatch,
+		HandlerFile:    "admin_promotion.go",
+		NoQueryParams:  "改哪一个在路径上，改什么在请求体里",
 	},
 	// 运费模板（00055）。列表读 query，单独一个文件（同 admin_coupon_list.go）。
 	{

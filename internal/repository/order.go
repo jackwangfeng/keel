@@ -119,6 +119,14 @@ type Order struct {
 	// CouponName 是下单时的券名快照（00029），与 UserCouponID 同进同出。
 	// 由 CreateOrderDraft 那条 INSERT ... SELECT 从券模板现读写入，之后模板改名不影响它。
 	CouponName *string
+
+	// PromotionDiscountCents 是满减满折的优惠合计（00058），已含在 DiscountCents 里：
+	// DiscountCents = 活动 + 券，chk_discount_sources 钉住「没挂券就恰好等于活动那一份」。
+	PromotionDiscountCents int64
+	// Promotions 是命中活动的快照（JSONB 原样，形状见 service.OrderPromotionSnapshot）。
+	// 存原始字节而不是解好的结构：快照的字段集由写它的那一侧（service）定义，
+	// repository 不该替它决定怎么解。
+	Promotions []byte
 }
 
 // FreightPaidCents 是这一单实收的运费：运费减去包邮券抵掉的部分（00056）。
@@ -142,6 +150,9 @@ func optTime(ts pgtype.Timestamptz) *time.Time {
 type OrderLine struct {
 	SKUID    int64
 	Quantity int32
+	// PricePromotionID 是这一行按哪个限时折扣 / 秒杀的活动价成交（00058）。非 nil 时库存分支
+	// 在同一个事务里扣它的活动配额与每人限购，补偿与关单时放回。
+	PricePromotionID *int64
 }
 
 // NewOrderDraft 是落一笔「创建中」订单要写的列。
@@ -168,6 +179,10 @@ type NewOrderDraft struct {
 	Remark           *string
 	ExpireAt         time.Time
 	UserCouponID     *int64
+
+	// PromotionDiscountCents / Promotions 见 Order 上同名字段（00058）。
+	PromotionDiscountCents int64
+	Promotions             []byte
 }
 
 // NewOrderItem 是一行订单项快照。
@@ -182,6 +197,11 @@ type NewOrderItem struct {
 	Quantity      int32
 	AmountCents   int64
 	DiscountCents int64
+
+	// 00058：门店价快照、改了单价的活动、满减满折分摊到这一行的那一份（已含在 DiscountCents 里）。
+	ListPriceCents         int64
+	PricePromotionID       *int64
+	PromotionDiscountCents int64
 }
 
 // 库存流水的 biz_type（数据模型 §4）。
@@ -414,19 +434,21 @@ func (t tenantTx) FindAddress(ctx context.Context, addressID, userID int64) (Add
 
 func (t tenantTx) CreateOrderDraft(ctx context.Context, d NewOrderDraft) (Order, error) {
 	r, err := t.q.CreateOrderDraft(ctx, db.CreateOrderDraftParams{
-		OrderNo:              d.OrderNo,
-		UserID:               d.UserID,
-		StoreID:              d.StoreID,
-		GoodsAmountCents:     d.GoodsAmountCents,
-		FreightCents:         d.FreightCents,
-		FreightDiscountCents: d.FreightDiscountCents,
-		FreightSnapshot:      d.FreightSnapshot,
-		DiscountCents:        d.DiscountCents,
-		PayableCents:         d.PayableCents,
-		ReceiverSnapshot:     d.ReceiverSnapshot,
-		Remark:               d.Remark,
-		ExpireAt:             pgtype.Timestamptz{Time: d.ExpireAt, Valid: true},
-		UserCouponID:         d.UserCouponID,
+		OrderNo:                d.OrderNo,
+		UserID:                 d.UserID,
+		StoreID:                d.StoreID,
+		GoodsAmountCents:       d.GoodsAmountCents,
+		FreightCents:           d.FreightCents,
+		FreightDiscountCents:   d.FreightDiscountCents,
+		FreightSnapshot:        d.FreightSnapshot,
+		DiscountCents:          d.DiscountCents,
+		PayableCents:           d.PayableCents,
+		ReceiverSnapshot:       d.ReceiverSnapshot,
+		Remark:                 d.Remark,
+		ExpireAt:               pgtype.Timestamptz{Time: d.ExpireAt, Valid: true},
+		UserCouponID:           d.UserCouponID,
+		PromotionDiscountCents: d.PromotionDiscountCents,
+		Promotions:             d.Promotions,
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		// 那条 INSERT ... SELECT FROM stores 插了 0 行：门店不存在、
@@ -438,39 +460,44 @@ func (t tenantTx) CreateOrderDraft(ctx context.Context, d NewOrderDraft) (Order,
 		return Order{}, err
 	}
 	return Order{
-		ID:                   r.ID,
-		OrderNo:              r.OrderNo,
-		UserID:               d.UserID,
-		StoreID:              r.StoreID,
-		RegionID:             r.RegionID,
-		Status:               r.Status,
-		GoodsAmountCents:     r.GoodsAmountCents,
-		FreightCents:         r.FreightCents,
-		FreightDiscountCents: r.FreightDiscountCents,
-		DiscountCents:        r.DiscountCents,
-		PayableCents:         r.PayableCents,
-		PaidCents:            r.PaidCents,
-		RefundedCents:        r.RefundedCents,
-		RefundStatus:         r.RefundStatus,
-		ExpireAt:             r.ExpireAt.Time,
-		CreatedAt:            r.CreatedAt.Time,
-		UserCouponID:         r.UserCouponID,
-		CouponName:           r.CouponName,
+		ID:                     r.ID,
+		OrderNo:                r.OrderNo,
+		UserID:                 d.UserID,
+		StoreID:                r.StoreID,
+		RegionID:               r.RegionID,
+		Status:                 r.Status,
+		GoodsAmountCents:       r.GoodsAmountCents,
+		FreightCents:           r.FreightCents,
+		FreightDiscountCents:   r.FreightDiscountCents,
+		DiscountCents:          r.DiscountCents,
+		PayableCents:           r.PayableCents,
+		PaidCents:              r.PaidCents,
+		RefundedCents:          r.RefundedCents,
+		RefundStatus:           r.RefundStatus,
+		ExpireAt:               r.ExpireAt.Time,
+		CreatedAt:              r.CreatedAt.Time,
+		UserCouponID:           r.UserCouponID,
+		CouponName:             r.CouponName,
+		PromotionDiscountCents: r.PromotionDiscountCents,
+		Promotions:             r.Promotions,
 	}, nil
 }
 
 func (t tenantTx) CreateOrderItem(ctx context.Context, it NewOrderItem) error {
 	return t.q.CreateOrderItem(ctx, db.CreateOrderItemParams{
-		OrderID:       it.OrderID,
-		SkuID:         it.SKUID,
-		ProductID:     it.ProductID,
-		TitleSnapshot: it.TitleSnapshot,
-		SpecSnapshot:  it.SpecSnapshot,
-		ImageSnapshot: it.ImageSnapshot,
-		PriceCents:    it.PriceCents,
-		Quantity:      it.Quantity,
-		AmountCents:   it.AmountCents,
-		DiscountCents: it.DiscountCents,
+		OrderID:                it.OrderID,
+		SkuID:                  it.SKUID,
+		ProductID:              it.ProductID,
+		TitleSnapshot:          it.TitleSnapshot,
+		SpecSnapshot:           it.SpecSnapshot,
+		ImageSnapshot:          it.ImageSnapshot,
+		PriceCents:             it.PriceCents,
+		Quantity:               it.Quantity,
+		AmountCents:            it.AmountCents,
+		DiscountCents:          it.DiscountCents,
+		ListPriceCents:         it.ListPriceCents,
+		PricePromotionID:       it.PricePromotionID,
+		PromotionDiscountCents: it.PromotionDiscountCents,
 	})
 }
 
@@ -483,27 +510,29 @@ func (t tenantTx) FindOrderByNo(ctx context.Context, orderNo string) (Order, err
 		return Order{}, err
 	}
 	return Order{
-		ID:                   r.ID,
-		OrderNo:              r.OrderNo,
-		UserID:               r.UserID,
-		StoreID:              r.StoreID,
-		RegionID:             r.RegionID,
-		Status:               r.Status,
-		GoodsAmountCents:     r.GoodsAmountCents,
-		FreightCents:         r.FreightCents,
-		FreightDiscountCents: r.FreightDiscountCents,
-		DiscountCents:        r.DiscountCents,
-		PayableCents:         r.PayableCents,
-		PaidCents:            r.PaidCents,
-		RefundedCents:        r.RefundedCents,
-		RefundStatus:         r.RefundStatus,
-		ExpireAt:             r.ExpireAt.Time,
-		CreatedAt:            r.CreatedAt.Time,
-		PaidAt:               optTime(r.PaidAt),
-		ShippedAt:            optTime(r.ShippedAt),
-		FinishedAt:           optTime(r.FinishedAt),
-		UserCouponID:         r.UserCouponID,
-		CouponName:           r.CouponName,
+		ID:                     r.ID,
+		OrderNo:                r.OrderNo,
+		UserID:                 r.UserID,
+		StoreID:                r.StoreID,
+		RegionID:               r.RegionID,
+		Status:                 r.Status,
+		GoodsAmountCents:       r.GoodsAmountCents,
+		FreightCents:           r.FreightCents,
+		FreightDiscountCents:   r.FreightDiscountCents,
+		DiscountCents:          r.DiscountCents,
+		PayableCents:           r.PayableCents,
+		PaidCents:              r.PaidCents,
+		RefundedCents:          r.RefundedCents,
+		RefundStatus:           r.RefundStatus,
+		ExpireAt:               r.ExpireAt.Time,
+		CreatedAt:              r.CreatedAt.Time,
+		PaidAt:                 optTime(r.PaidAt),
+		ShippedAt:              optTime(r.ShippedAt),
+		FinishedAt:             optTime(r.FinishedAt),
+		UserCouponID:           r.UserCouponID,
+		CouponName:             r.CouponName,
+		PromotionDiscountCents: r.PromotionDiscountCents,
+		Promotions:             r.Promotions,
 	}, nil
 }
 
@@ -514,7 +543,7 @@ func (t tenantTx) ListOrderLines(ctx context.Context, orderID int64) ([]OrderLin
 	}
 	out := make([]OrderLine, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, OrderLine{SKUID: r.SkuID, Quantity: r.Quantity})
+		out = append(out, OrderLine{SKUID: r.SkuID, Quantity: r.Quantity, PricePromotionID: r.PricePromotionID})
 	}
 	return out, nil
 }

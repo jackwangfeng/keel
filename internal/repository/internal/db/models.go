@@ -228,50 +228,55 @@ type NotificationRead struct {
 }
 
 type Order struct {
-	ID                   int64
-	MerchantID           int64
-	OrderNo              string
-	UserID               int64
-	Status               int16
-	RefundStatus         int16
-	GoodsAmountCents     int64
-	FreightCents         int64
-	DiscountCents        int64
-	PayableCents         int64
-	PaidCents            int64
-	RefundedCents        int64
-	ReceiverSnapshot     []byte
-	Remark               *string
-	ExpireAt             pgtype.Timestamptz
-	PaidAt               pgtype.Timestamptz
-	ShippedAt            pgtype.Timestamptz
-	FinishedAt           pgtype.Timestamptz
-	CreatedAt            pgtype.Timestamptz
-	UpdatedAt            pgtype.Timestamptz
-	StoreID              int64
-	RegionID             int64
-	StoreSnapshot        []byte
-	UserCouponID         *int64
-	CouponName           *string
-	FreightDiscountCents int64
-	FreightSnapshot      []byte
+	ID                     int64
+	MerchantID             int64
+	OrderNo                string
+	UserID                 int64
+	Status                 int16
+	RefundStatus           int16
+	GoodsAmountCents       int64
+	FreightCents           int64
+	DiscountCents          int64
+	PayableCents           int64
+	PaidCents              int64
+	RefundedCents          int64
+	ReceiverSnapshot       []byte
+	Remark                 *string
+	ExpireAt               pgtype.Timestamptz
+	PaidAt                 pgtype.Timestamptz
+	ShippedAt              pgtype.Timestamptz
+	FinishedAt             pgtype.Timestamptz
+	CreatedAt              pgtype.Timestamptz
+	UpdatedAt              pgtype.Timestamptz
+	StoreID                int64
+	RegionID               int64
+	StoreSnapshot          []byte
+	UserCouponID           *int64
+	CouponName             *string
+	FreightDiscountCents   int64
+	FreightSnapshot        []byte
+	PromotionDiscountCents int64
+	Promotions             []byte
 }
 
 type OrderItem struct {
-	ID            int64
-	MerchantID    int64
-	OrderID       int64
-	SkuID         int64
-	ProductID     int64
-	TitleSnapshot string
-	SpecSnapshot  []byte
-	ImageSnapshot *string
-	PriceCents    int64
-	Quantity      int32
-	AmountCents   int64
-	DiscountCents int64
-	RefundedQty   int32
-	RefundedCents int64
+	ID                     int64
+	MerchantID             int64
+	OrderID                int64
+	SkuID                  int64
+	ProductID              int64
+	TitleSnapshot          string
+	SpecSnapshot           []byte
+	ImageSnapshot          *string
+	PriceCents             int64
+	Quantity               int32
+	AmountCents            int64
+	DiscountCents          int64
+	RefundedQty            int32
+	RefundedCents          int64
+	ListPriceCents         int64
+	PricePromotionID       *int64
+	PromotionDiscountCents int64
 }
 
 type OrderStatusTransition struct {
@@ -378,6 +383,67 @@ type ProductUnderstanding struct {
 	LastError       *string
 	CreatedAt       pgtype.Timestamptz
 	UpdatedAt       pgtype.Timestamptz
+}
+
+type Promotion struct {
+	ID              int64
+	MerchantID      int64
+	Name            string
+	PromoType       int16
+	ThresholdUnit   int16
+	StackWithCoupon bool
+	GiftTemplateID  *int64
+	StartsAt        pgtype.Timestamptz
+	EndsAt          pgtype.Timestamptz
+	Status          int16
+	CreatedAt       pgtype.Timestamptz
+	UpdatedAt       pgtype.Timestamptz
+}
+
+type PromotionGiftGrant struct {
+	MerchantID   int64
+	PromotionID  int64
+	UserID       int64
+	UserCouponID int64
+	CreatedAt    pgtype.Timestamptz
+}
+
+type PromotionPurchase struct {
+	MerchantID  int64
+	PromotionID int64
+	SkuID       int64
+	UserID      int64
+	Qty         int32
+}
+
+type PromotionScope struct {
+	ID          int64
+	MerchantID  int64
+	PromotionID int64
+	ScopeType   int16
+	TargetID    *int64
+	Include     bool
+}
+
+type PromotionSku struct {
+	ID              int64
+	MerchantID      int64
+	PromotionID     int64
+	SkuID           int64
+	PromoPriceCents int64
+	DiscountRate    int16
+	PerUserLimit    int32
+	StockQty        int32
+	SoldQty         int32
+}
+
+type PromotionTier struct {
+	ID            int64
+	MerchantID    int64
+	PromotionID   int64
+	Threshold     int64
+	DiscountCents int64
+	DiscountRate  int16
 }
 
 type Refund struct {

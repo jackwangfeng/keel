@@ -150,6 +150,9 @@ func (s *AuthService) Login(ctx context.Context, req LoginRequest) (Session, err
 	if err != nil {
 		return Session{}, mapCredentialError(err)
 	}
+	// 新人礼（营销活动类型 5）：首单前的买家登录成功即补发。放在登录事务**之外**、
+	// 尽力而为 —— 发不出券不能让登录失败（promotion_gift.go 的文件头）。
+	GrantNewBuyerGifts(ctx, s.repo, out.User.ID, time.Now(), s.log)
 	return out, nil
 }
 

@@ -189,6 +189,20 @@ export type OrderStatus = number
 /** **资金维度** —— 钱退了多少，与 `status` 正交，由退款单驱动。 */
 export type OrderRefundStatus = number
 
+/** 1 满减 · 2 满折 · 3 限时折扣（特价） · 4 秒杀 · 5 新人礼。 */
+export type PromotionType = number
+
+/** 订单上命中的活动，**下单时的快照**（活动之后改名、改规则、下线都不影响它）。 */
+export type OrderPromotion = {
+  promotion_id : number
+  name : string
+  /** 1 满减 · 2 满折 · 3 限时折扣（特价） · 4 秒杀 · 5 新人礼。 */
+  promotion_type : PromotionType
+  /** 金额，单位「分」。禁止使用浮点。 */
+  discount_cents : Money
+  sku_ids : number[]
+}
+
 /** 下单瞬间从 `user_addresses` 拷贝的收货信息快照，落在 */
 export type ReceiverSnapshot = {
   receiver_name : string
@@ -253,11 +267,17 @@ export type OrderItem = {
   image_url? : string
   /** 金额，单位「分」。禁止使用浮点。 */
   price_cents : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  list_price_cents? : Money
+  /** 改了这一行单价的限时折扣 / 秒杀活动。没有就不出现。 */
+  price_promotion_id? : number
   quantity : number
   /** 金额，单位「分」。禁止使用浮点。 */
   amount_cents? : Money
   /** 金额，单位「分」。禁止使用浮点。 */
   discount_cents? : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  promotion_discount_cents? : Money
   /** 已退款完成的件数 */
   refunded_qty? : number
   /** 退款流程中（退款单尚未到达 `40 已退款` 或终态）占用的件数。 */
@@ -392,6 +412,10 @@ export type AdminOrderDetail = {
   /** 这一单用的券的名字，**下单时的快照**。没用券时不出现（与 `user_coupon_id` 同进同出）。 */
   coupon_name? : string
   /** 金额，单位「分」。禁止使用浮点。 */
+  promotion_discount_cents? : Money
+  /** 这一单命中的活动，**下单时的快照**。没命中任何活动时为空数组。 */
+  promotions? : OrderPromotion[]
+  /** 金额，单位「分」。禁止使用浮点。 */
   payable_cents : Money
   /** 金额，单位「分」。禁止使用浮点。 */
   paid_cents? : Money
@@ -443,6 +467,10 @@ export type AdminOrderSummary = {
   user_coupon_id? : number
   /** 这一单用的券的名字，**下单时的快照**。没用券时不出现（与 `user_coupon_id` 同进同出）。 */
   coupon_name? : string
+  /** 金额，单位「分」。禁止使用浮点。 */
+  promotion_discount_cents? : Money
+  /** 这一单命中的活动，**下单时的快照**。没命中任何活动时为空数组。 */
+  promotions? : OrderPromotion[]
   /** 金额，单位「分」。禁止使用浮点。 */
   payable_cents : Money
   /** 金额，单位「分」。禁止使用浮点。 */
@@ -558,6 +586,61 @@ export type AdminProductDetail = {
   skus : AdminSku[]
   /** 按展示顺序，`images[0]` 是主图。 */
   images : ProductImage[]
+}
+
+/** 满减 / 满折的一档。`threshold` 的单位由活动的 `threshold_unit` 决定（1 分 / 2 件）。 */
+export type PromotionTier = {
+  threshold : number
+  /** 金额，单位「分」。禁止使用浮点。 */
+  discount_cents : Money
+  discount_rate : number
+}
+
+/** 限时折扣 / 秒杀的一个 SKU。`promo_price_cents`（特价，分）与 `discount_rate`（千分比）二选一， */
+export type PromotionSku = {
+  sku_id : number
+  /** 金额，单位「分」。禁止使用浮点。 */
+  promo_price_cents : Money
+  discount_rate : number
+  /** 每人限购件数（同一活动、同一 SKU），0 = 不限。只计未关闭的订单。 */
+  per_user_limit : number
+  /** 秒杀配额（件）。**不是独立的实物库存**：秒杀成交的每一件仍然从门店库存扣， */
+  stock_qty : number
+  /** 已按活动价售出（含待支付）的件数，只读。关单与 SAGA 补偿会放回。 */
+  sold_qty : number
+  /** 商品标题（只读，展示用）。 */
+  title? : string
+  /** SKU 编码（只读，展示用）。 */
+  sku_code? : string
+}
+
+export type AdminPromotion = {
+  id : number
+  name : string
+  /** 1 满减 · 2 满折 · 3 限时折扣（特价） · 4 秒杀 · 5 新人礼。 */
+  promotion_type : PromotionType
+  /** 满减满折的门槛单位：1 金额（分）· 2 件数。其他类型为 0。 */
+  threshold_unit : number
+  /** 能否与优惠券同享。命中了一个 `false` 的活动，这一单就不能再用券 */
+  stack_with_coupon : boolean
+  starts_at : string
+  ends_at : string
+  /** 1 上线 · 0 下线。上线且在有效期内才生效（见 `phase`）。 */
+  status : number
+  /** 现算的阶段：`offline` 下线；`scheduled` 已上线、未开始；`running` 进行中；`ended` 已上线、已结束。 */
+  phase : string
+  /** 满减满折的阶梯，按门槛升序。其他类型为空数组。 */
+  tiers : PromotionTier[]
+  /** 适用范围（与券同一套语义）。空数组即全场、全店。 */
+  scopes : CouponScope[]
+  /** 限时折扣 / 秒杀的活动商品。其他类型为空数组。 */
+  skus : PromotionSku[]
+  /** 新人礼发哪一批券。其他类型不出现。 */
+  gift_coupon_template_id? : number
+  /** 新人礼已经发出的张数。其他类型不出现。 */
+  gift_granted_count? : number
+  created_at : string
+  updated_at : string
 }
 
 export type AdminRefundDetail = {
@@ -681,7 +764,7 @@ export type ApplicableCoupon = {
   max_discount_cents : Money
   /** 1 未使用 · 2 锁定 · 3 已使用 · 4 已过期 */
   status : number
-  /** 1 领券中心领取 · 2 商家定向发放 */
+  /** 1 领券中心领取 · 2 商家定向发放 · 3 新人礼（营销活动自动发放，数据模型 §7） */
   source : number
   valid_start_at : string
   valid_end_at : string
@@ -712,6 +795,10 @@ export type CartItem = {
   image_url? : string
   /** **实时价，不是加购时的快照。** 购物车刻意不存价格快照（见数据模型 §10）， */
   price_cents : number | null
+  /** 门店最终价。只有 `price_cents` 是活动价时才出现（用来划线展示原价）。 */
+  list_price_cents? : number | null
+  /** 给出活动价的那个限时折扣 / 秒杀活动。与 `list_price_cents` 同进同出。 */
+  price_promotion_id? : number
   quantity : number
   /** 是否勾选结算，对应 `cart_items.selected`。 */
   selected : boolean
@@ -736,6 +823,29 @@ export type StoreContext = {
   match_type : StoreMatchType
 }
 
+/** 一个活动在这一单（或购物车已勾选的行）上的结果。试算、购物车、下单用的是同一份计算 */
+export type PromotionHit = {
+  promotion_id : number
+  name : string
+  /** 1 满减 · 2 满折 · 3 限时折扣（特价） · 4 秒杀 · 5 新人礼。 */
+  promotion_type : PromotionType
+  applied : boolean
+  /** 金额，单位「分」。禁止使用浮点。 */
+  discount_cents : Money
+  stack_with_coupon? : boolean
+  threshold_unit? : number
+  /** 命中的那一档门槛。未命中不出现。 */
+  reached_threshold? : number
+  /** 下一档（未命中时即最低一档）的门槛。已是最高档不出现。 */
+  next_threshold? : number
+  /** 离 `next_threshold` 还差多少（分或件，见 `threshold_unit`）。 */
+  shortfall? : number
+  /** 参与这个活动的行（SKU）。 */
+  sku_ids : number[]
+  /** 给人看的一句话，例如「已减 10 元，再买 50 元可减 30 元」「还差 1 件享 9 折」。 */
+  message : string
+}
+
 export type Cart = {
   items : CartItem[]
   /** 本次的价格与可买状态是按哪家门店算的。**必返**，理由同 `GET /products`。 */
@@ -744,6 +854,10 @@ export type Cart = {
   total_cents : Money
   /** **仅已勾选**（`selected: true`）条目的金额合计，即点「去结算」时的预估金额。 */
   selected_total_cents : Money
+  /** 已勾选、可买的行命中满减满折的优惠合计（不含券）。把这些行送进 `/orders/preview`， */
+  promotion_discount_cents : Money
+  /** 已勾选、可买的行上各活动的结果：命中了哪些、各减多少、还差多少凑满（`PromotionHit`）。 */
+  promotions : PromotionHit[]
   /** 本次按哪个收货地址算的运费（回显 `address_id` 参数，或买家的默认地址）。没有地址时不出现。 */
   address_id? : number
   /** 已勾选、可买、送得到的那些行按 `address_id` 那个地址算出的**预估运费**。 */
@@ -775,6 +889,16 @@ export type CategoryUpdateRequest = {
   status? : number
 }
 
+/** 商品当前生效的活动标签（商品列表 / 详情）。按响应里 `store` 那家门店判： */
+export type PromotionTag = {
+  promotion_id : number
+  /** 1 满减 · 2 满折 · 3 限时折扣（特价） · 4 秒杀 · 5 新人礼。 */
+  promotion_type : PromotionType
+  /** 给人看的标签，例如「满100减10」「满2件9折」「限时特价 ¥39.90」「秒杀 ¥9.90」。 */
+  label : string
+  ends_at? : string
+}
+
 export type ProductSummary = {
   id : number
   title : string
@@ -788,6 +912,8 @@ export type ProductSummary = {
   sales_count? : number
   /** 对应 `products.status`：0 草稿 / 1 上架 / 2 下架。 */
   status : number
+  /** 这件商品在响应里 `store` 那家门店**此刻生效**的活动标签（满减满折、限时折扣、秒杀）。 */
+  promotion_tags? : PromotionTag[]
 }
 
 export type ChatReplyAction = {
@@ -1102,6 +1228,10 @@ export type Order = {
   /** 这一单用的券的名字，**下单时的快照**。没用券时不出现（与 `user_coupon_id` 同进同出）。 */
   coupon_name? : string
   /** 金额，单位「分」。禁止使用浮点。 */
+  promotion_discount_cents? : Money
+  /** 这一单命中的活动，**下单时的快照**。没命中任何活动时为空数组。 */
+  promotions? : OrderPromotion[]
+  /** 金额，单位「分」。禁止使用浮点。 */
   payable_cents : Money
   /** 金额，单位「分」。禁止使用浮点。 */
   paid_cents? : Money
@@ -1188,6 +1318,10 @@ export type OrderDetail = {
   /** 这一单用的券的名字，**下单时的快照**。没用券时不出现（与 `user_coupon_id` 同进同出）。 */
   coupon_name? : string
   /** 金额，单位「分」。禁止使用浮点。 */
+  promotion_discount_cents? : Money
+  /** 这一单命中的活动，**下单时的快照**。没命中任何活动时为空数组。 */
+  promotions? : OrderPromotion[]
+  /** 金额，单位「分」。禁止使用浮点。 */
   payable_cents : Money
   /** 金额，单位「分」。禁止使用浮点。 */
   paid_cents? : Money
@@ -1211,13 +1345,22 @@ export type OrderDetail = {
   refunds? : Refund[]
 }
 
-export type OrderPreviewItemsItem = {
-  sku_id? : number
-  quantity? : number
+/** 试算的一行。**本轮从内联 schema 提成了具名类型**（数据模型 §15 记过的那笔债）： */
+export type OrderPreviewItem = {
+  sku_id : number
+  quantity : number
   /** 金额，单位「分」。禁止使用浮点。 */
-  amount_cents? : Money
+  price_cents : Money
   /** 金额，单位「分」。禁止使用浮点。 */
-  discount_cents? : Money
+  list_price_cents : Money
+  /** 改了这一行单价的那个限时折扣 / 秒杀活动。没有就不出现。 */
+  price_promotion_id? : number
+  /** 金额，单位「分」。禁止使用浮点。 */
+  amount_cents : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  discount_cents : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  promotion_discount_cents : Money
 }
 
 export type OrderPreview = {
@@ -1237,8 +1380,14 @@ export type OrderPreview = {
   discount_cents? : Money
   /** 金额，单位「分」。禁止使用浮点。 */
   payable_cents : Money
-  /** 含优惠分摊结果。包邮券抵的是运费，不分摊到行（各行 `discount_cents` 为 0）。 */
-  items : OrderPreviewItemsItem[]
+  /** 金额，单位「分」。禁止使用浮点。 */
+  promotion_discount_cents : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  coupon_discount_cents : Money
+  /** 含单价类活动的活动价与优惠分摊结果（活动与券各自一份、合计一份）。 */
+  items : OrderPreviewItem[]
+  /** 本单各活动的结果（`PromotionHit`）：命中了哪些、各减多少、还差多少凑满。 */
+  promotions : PromotionHit[]
   /** 本次试算用上的券（回显请求里的 `user_coupon_id`）。没带券时不出现。 */
   user_coupon_id? : number
   /** 这个买家手里本单可用的全部券，按优惠额降序——与 `POST /coupons/applicable` */
@@ -1300,6 +1449,10 @@ export type Sku = {
   price_cents : Money
   available_qty : number
   image_url? : string
+  /** 金额，单位「分」。禁止使用浮点。 */
+  promo_price_cents? : Money
+  /** 给出 `promo_price_cents` 的那个活动。与 `promo_price_cents` 同进同出。 */
+  promotion_id? : number
 }
 
 export type ProductDetail = {
@@ -1315,6 +1468,8 @@ export type ProductDetail = {
   sales_count? : number
   /** 对应 `products.status`：0 草稿 / 1 上架 / 2 下架。 */
   status : number
+  /** 这件商品在响应里 `store` 那家门店**此刻生效**的活动标签（满减满折、限时折扣、秒杀）。 */
+  promotion_tags? : PromotionTag[]
   description? : string
   category_id? : number
   images? : string[]
@@ -1483,6 +1638,43 @@ export type ProductUpdateRequest = {
   brand_id? : number | null
   /** 改挂的运费模板（全店模板的 id）；传 null 解除单独挂的模板。 */
   freight_template_id? : number | null
+}
+
+export type PromotionSkuInput = {
+  sku_id : number
+  /** 金额，单位「分」。禁止使用浮点。 */
+  promo_price_cents? : Money
+  discount_rate? : number
+  per_user_limit? : number
+  stock_qty? : number
+}
+
+export type PromotionCreateRequest = {
+  name : string
+  /** 1 满减 · 2 满折 · 3 限时折扣（特价） · 4 秒杀 · 5 新人礼。 */
+  promotion_type : PromotionType
+  threshold_unit? : number
+  stack_with_coupon? : boolean
+  starts_at : string
+  ends_at : string
+  tiers? : PromotionTier[]
+  scopes? : CouponScopeInput[]
+  skus? : PromotionSkuInput[]
+  gift_coupon_template_id? : number
+}
+
+/** 只改传了的字段；`tiers` / `scopes` / `skus` 传了即整组替换。 */
+export type PromotionPatchRequest = {
+  name? : string
+  threshold_unit? : number
+  stack_with_coupon? : boolean
+  starts_at? : string
+  ends_at? : string
+  tiers? : PromotionTier[]
+  scopes? : CouponScopeInput[]
+  skus? : PromotionSkuInput[]
+  gift_coupon_template_id? : number
+  status? : number
 }
 
 export type RefundItemInput = {
@@ -1766,6 +1958,8 @@ export type SearchHit = {
   sales_count? : number
   /** 对应 `products.status`：0 草稿 / 1 上架 / 2 下架。 */
   status : number
+  /** 这件商品在响应里 `store` 那家门店**此刻生效**的活动标签（满减满折、限时折扣、秒杀）。 */
+  promotion_tags? : PromotionTag[]
   /** explain=true 时返回，用于效果调优 */
   scores? : SearchHitScores
   /** 该结果来自哪一路召回，`explain=true` 时返回。 */
@@ -1980,7 +2174,7 @@ export type UserCoupon = {
   max_discount_cents : Money
   /** 1 未使用 · 2 锁定 · 3 已使用 · 4 已过期 */
   status : number
-  /** 1 领券中心领取 · 2 商家定向发放 */
+  /** 1 领券中心领取 · 2 商家定向发放 · 3 新人礼（营销活动自动发放，数据模型 §7） */
   source : number
   valid_start_at : string
   valid_end_at : string

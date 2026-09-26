@@ -65,8 +65,20 @@ func newCouponShop(t *testing.T) couponShop {
 			// chk_coupon_name_with_coupon 不让摘），环才解得开。
 			// freight_discount_cents 一起清（00056 的 chk_freight_discount：抵运费不能超过优惠合计）。
 			`UPDATE orders SET user_coupon_id = NULL, coupon_name = NULL, discount_cents = 0,
+			        promotion_discount_cents = 0,
 			        freight_discount_cents = 0,
 			        payable_cents = goods_amount_cents + freight_cents WHERE merchant_id = $1`,
+			// 营销活动（00058）：订单行指向活动（price_promotion_id），新人礼的活动指向券模板、
+			// 发放记录指向券 —— 先把订单行上的活动摘掉（连同活动价，否则 chk_item_price_promotion
+			// 不让摘），再按引用方向删活动的几张表，都排在券与券模板之前。
+			`UPDATE order_items SET price_promotion_id = NULL, price_cents = list_price_cents
+			  WHERE merchant_id = $1`,
+			`DELETE FROM promotion_gift_grants WHERE merchant_id = $1`,
+			`DELETE FROM promotion_purchases WHERE merchant_id = $1`,
+			`DELETE FROM promotion_skus WHERE merchant_id = $1`,
+			`DELETE FROM promotion_tiers WHERE merchant_id = $1`,
+			`DELETE FROM promotion_scopes WHERE merchant_id = $1`,
+			`DELETE FROM promotions WHERE merchant_id = $1`,
 			`DELETE FROM user_coupons WHERE merchant_id = $1`,
 			`DELETE FROM coupon_scopes WHERE merchant_id = $1`,
 			`DELETE FROM coupon_templates WHERE merchant_id = $1`,
@@ -465,8 +477,8 @@ func TestCouponPreviewAndCreateAgree(t *testing.T) {
 		got[sku] = d
 	}
 	for _, it := range pv.Items {
-		if got[*it.SkuId] != int64(*it.DiscountCents) {
-			t.Fatalf("sku %d 的分摊：订单 %d，试算 %d", *it.SkuId, got[*it.SkuId], *it.DiscountCents)
+		if got[it.SkuId] != int64(it.DiscountCents) {
+			t.Fatalf("sku %d 的分摊：订单 %d，试算 %d", it.SkuId, got[it.SkuId], it.DiscountCents)
 		}
 	}
 }

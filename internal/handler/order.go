@@ -51,36 +51,21 @@ func (h *OrderHandler) Preview(c *gin.Context) {
 		return
 	}
 
-	// Items 的元素类型是契约生成出来的**匿名结构体**，所以这里要把它原样再写
-	// 一遍才能 make 出来。看着是重复，实际是本仓库要的那种重复：契约里
-	// OrderPreview.items 的字段名、类型或 json tag 改了一个字，这段就编译不过
-	// （匿名结构体的类型同一性要求字段、顺序、tag 全等），而不是等到线上客户端
-	// 解析失败。
-	items := make([]struct {
-		// AmountCents 金额，单位「分」。禁止使用浮点。
-		AmountCents *api.Money `json:"amount_cents,omitempty"`
-
-		// DiscountCents 该行分摊到的优惠。余数归金额最大行，保证求和恒等。
-		DiscountCents *api.Money `json:"discount_cents,omitempty"`
-		Quantity      *int       `json:"quantity,omitempty"`
-		SkuId         *int64     `json:"sku_id,omitempty"`
-	}, 0, len(q.Lines))
-
+	// Items 的元素类型本轮（00058）从契约里的内联 schema 提成了具名的 OrderPreviewItem。
+	// 此前这里要把匿名结构体原样再写一遍，而匿名类型多一个字段就不再可赋值 ——
+	// 给每一行加活动价与活动分摊时正是撞上了这个（数据模型 §15 记过的那笔债）。
+	// 具名之后字段照样由契约生成：契约改一个字，这段照样编译不过。
+	items := make([]api.OrderPreviewItem, 0, len(q.Lines))
 	for _, ln := range q.Lines {
-		amount := api.Money(ln.AmountCents)
-		discount := api.Money(ln.DiscountCents)
-		qty := int(ln.Quantity)
-		sku := ln.SKUID
-		items = append(items, struct {
-			AmountCents   *api.Money `json:"amount_cents,omitempty"`
-			DiscountCents *api.Money `json:"discount_cents,omitempty"`
-			Quantity      *int       `json:"quantity,omitempty"`
-			SkuId         *int64     `json:"sku_id,omitempty"`
-		}{
-			AmountCents:   &amount,
-			DiscountCents: &discount,
-			Quantity:      &qty,
-			SkuId:         &sku,
+		items = append(items, api.OrderPreviewItem{
+			SkuId:                  ln.SKUID,
+			Quantity:               int(ln.Quantity),
+			PriceCents:             api.Money(ln.PriceCents),
+			ListPriceCents:         api.Money(ln.ListPriceCents),
+			PricePromotionId:       ln.PricePromotionID,
+			AmountCents:            api.Money(ln.AmountCents),
+			DiscountCents:          api.Money(ln.DiscountCents),
+			PromotionDiscountCents: api.Money(ln.PromotionDiscountCents),
 		})
 	}
 
@@ -106,6 +91,12 @@ func (h *OrderHandler) Preview(c *gin.Context) {
 		// 查过了才给：空数组的意思就是「真的一张都没有」。
 		ApplicableCoupons: &applicable,
 		UserCouponId:      q.UserCouponID,
+
+		// 营销活动（00058）：DiscountCents = 活动 + 券，两个来源各给一份；
+		// promotions 是命中了哪些、各减多少、还差多少凑满（与购物车同一段渲染）。
+		PromotionDiscountCents: api.Money(q.PromotionDiscountCents),
+		CouponDiscountCents:    api.Money(q.CouponDiscountCents),
+		Promotions:             apiPromotionHits(q.Promotions),
 	})
 }
 
@@ -178,6 +169,8 @@ func apiOrder(o repository.Order) api.Order {
 	refunded := api.Money(o.RefundedCents)
 	expire := o.ExpireAt
 	regionID := o.RegionID
+	promoDiscount := api.Money(o.PromotionDiscountCents)
+	promotions := apiOrderPromotions(o.Promotions)
 	return api.Order{
 		OrderNo: o.OrderNo,
 		// store_id 必返（库里 NOT NULL），region_id 可选但一起给：
@@ -210,8 +203,10 @@ func apiOrder(o repository.Order) api.Order {
 
 		// 运费（00056）：下单时算好写进订单。00056 之前的订单是 0 —— 那时确实没收运费，
 		// 0 是账上的真值。实收运费 = freight_cents - freight_discount_cents。
-		FreightCents:         &freight,
-		FreightDiscountCents: &freightDiscount,
+		FreightCents:           &freight,
+		FreightDiscountCents:   &freightDiscount,
+		PromotionDiscountCents: &promoDiscount,
+		Promotions:             &promotions,
 	}
 }
 
@@ -226,6 +221,15 @@ func writeOrderError(c *gin.Context, err error) {
 		// （门槛差多少、范围不含这家店……），客户端换一张券或不用券。
 		// **绝不忽略这张券按原价继续**：那是用户以为用了券、实际按原价成交。
 		writeProblemDetail(c, http.StatusConflict, problem.TypeCouponNotApplicable, "这张优惠券本单不可用", err)
+
+	case errors.Is(err, service.ErrPromotionLimitExceeded):
+		// 契约：409 promotion-limit-exceeded。detail 说明限购几件、已买几件，客户端减数量。
+		// **不按门店价卖超出的那几件**：买家看到的是活动价，按另一个价成交是钱的问题。
+		writeProblemDetail(c, http.StatusConflict, problem.TypePromotionLimitExceeded, "超出活动每人限购", err)
+
+	case errors.Is(err, service.ErrPromotionSoldOut):
+		// 契约：409 promotion-sold-out。秒杀配额在试算之后被抢光了；重新试算会按门店价报价。
+		writeProblemDetail(c, http.StatusConflict, problem.TypePromotionSoldOut, "活动商品已抢光，请重新试算", err)
 
 	case errors.Is(err, service.ErrPriceChanged):
 		// 契约明写：「服务端试算不一致时返回 409，防止价格变动导致用户以旧价成交」。

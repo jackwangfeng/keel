@@ -6888,6 +6888,391 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/promotions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 营销活动列表
+         * @description 按创建时间倒序。每一项带规则（阶梯 / 范围 / 活动商品）与当前阶段（`phase`）。
+         *
+         *     **权限**：与券管理同一行——全店范围的员工（商家级管理员与操作员，平台级切到本店时同样算），
+         *     大区 / 门店管理员 403。活动直接决定订单实付，是资金面。
+         */
+        get: {
+            parameters: {
+                query?: {
+                    page?: components["parameters"]["Page"];
+                    page_size?: components["parameters"]["PageSize"];
+                    /** @description 按上下线筛选。不传即全部。 */
+                    status?: 0 | 1;
+                    /** @description 按活动类型筛选。不传即全部。 */
+                    promotion_type?: 1 | 2 | 3 | 4 | 5;
+                };
+                header?: {
+                    /**
+                     * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+                     *
+                     *     它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+                     *     而例外成立的前提是平台级鉴权：
+                     *
+                     *     · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+                     *       读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+                     *       行级安全落在这家店上。
+                     *     · **商家级员工带了这个头：403**
+                     *       （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+                     *       静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+                     *     · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+                     *       **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+                     *       实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+                     *       请求其余部分指名的东西不存在是 422。
+                     *     · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+                     *       买家侧对它照旧 404。
+                     *     · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+                     *       （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+                     *
+                     *     后台每一条挂后台会话的操作都声明了它（机械核对：
+                     *     `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+                     */
+                    "X-Keel-Merchant"?: components["parameters"]["KeelMerchant"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PageMeta"] & {
+                            items: components["schemas"]["AdminPromotion"][];
+                        };
+                    };
+                };
+                /** @description 不是全店范围的员工。 */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        put?: never;
+        /**
+         * 新建营销活动
+         * @description 新建的活动一律是**下线**（`status = 0`）：先把规则配完、核对无误，再 PATCH `status = 1` 上线。
+         *
+         *     按 `promotion_type` 填不同的部分（数据模型 §7「营销活动」）：
+         *
+         *     | 类型 | 必填 | 不许带 |
+         *     |---|---|---|
+         *     | 1 满减 | `threshold_unit`、`tiers`（每档 `threshold` + `discount_cents`） | `skus`、`gift_coupon_template_id` |
+         *     | 2 满折 | `threshold_unit`、`tiers`（每档 `threshold` + `discount_rate`） | `skus`、`gift_coupon_template_id` |
+         *     | 3 限时折扣 | `skus`（每个 SKU `promo_price_cents` 与 `discount_rate` 二选一，可带 `per_user_limit`） | `tiers`、`threshold_unit`、`gift_coupon_template_id`；`stock_qty` 必须为 0 |
+         *     | 4 秒杀 | `skus`，且每个 SKU `stock_qty > 0`（活动配额） | 同上（`stock_qty` 除外） |
+         *     | 5 新人礼 | `gift_coupon_template_id` | `tiers`、`skus`、`scopes` |
+         *
+         *     范围（`scopes`）与券的适用范围同一套语义（`CouponScope`）：1–4 决定哪几行参与满减满折，
+         *     5–6 决定在哪家店下单时活动生效。限时折扣 / 秒杀只认 5–6（商品已经由 `skus` 点名）。
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /**
+                     * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+                     *
+                     *     它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+                     *     而例外成立的前提是平台级鉴权：
+                     *
+                     *     · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+                     *       读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+                     *       行级安全落在这家店上。
+                     *     · **商家级员工带了这个头：403**
+                     *       （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+                     *       静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+                     *     · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+                     *       **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+                     *       实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+                     *       请求其余部分指名的东西不存在是 422。
+                     *     · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+                     *       买家侧对它照旧 404。
+                     *     · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+                     *       （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+                     *
+                     *     后台每一条挂后台会话的操作都声明了它（机械核对：
+                     *     `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+                     */
+                    "X-Keel-Merchant"?: components["parameters"]["KeelMerchant"];
+                    /**
+                     * @description 客户端生成的 UUID。幂等作用域为 `(接口 scope, user_id, key)`，
+                     *     有效期 24h，过期后同一 key 可复用（见数据模型文档 §11）。
+                     *
+                     *     · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
+                     *       并带 `Idempotency-Replayed: true` 响应头
+                     *     · **同 key 正在处理中**：`409` + `Retry-After`，
+                     *       type=https://keel.dev/problems/idempotency-key-in-flight，
+                     *       客户端应退避重试，不要当成业务失败
+                     *     · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
+                     *       type=https://keel.dev/problems/idempotency-key-reused。
+                     *       宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
+                     *       那会让用户以为下单成功了而实际什么都没发生
+                     *     · 首次执行失败（存档为失败态）时同样回放该失败响应；
+                     *       确需重试的场景请换一个新 key
+                     */
+                    "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["PromotionCreateRequest"];
+                };
+            };
+            responses: {
+                /** @description 已创建（下线状态） */
+                201: {
+                    headers: {
+                        "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AdminPromotion"];
+                    };
+                };
+                /** @description 不是全店范围的员工。 */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                409: components["responses"]["IdempotencyInFlight"];
+                /**
+                 * @description 规则不成立（满 100 减 200、阶梯门槛重复、特价为 0、秒杀没给配额、
+                 *     有效期倒挂、范围目标或 SKU 在本店查不到……）—— `https://keel.dev/problems/invalid-request`；
+                 *     或同一 Idempotency-Key 配了不同的请求体。
+                 */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/promotions/{promotion_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description `promotions.id`。查不到（含属于别家店）即 404。 */
+                promotion_id: components["parameters"]["PromotionId"];
+            };
+            cookie?: never;
+        };
+        /** 营销活动详情 */
+        get: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /**
+                     * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+                     *
+                     *     它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+                     *     而例外成立的前提是平台级鉴权：
+                     *
+                     *     · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+                     *       读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+                     *       行级安全落在这家店上。
+                     *     · **商家级员工带了这个头：403**
+                     *       （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+                     *       静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+                     *     · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+                     *       **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+                     *       实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+                     *       请求其余部分指名的东西不存在是 422。
+                     *     · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+                     *       买家侧对它照旧 404。
+                     *     · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+                     *       （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+                     *
+                     *     后台每一条挂后台会话的操作都声明了它（机械核对：
+                     *     `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+                     */
+                    "X-Keel-Merchant"?: components["parameters"]["KeelMerchant"];
+                };
+                path: {
+                    /** @description `promotions.id`。查不到（含属于别家店）即 404。 */
+                    promotion_id: components["parameters"]["PromotionId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AdminPromotion"];
+                    };
+                };
+                /** @description 不是全店范围的员工。 */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /** @description 活动不存在或不属于当前租户。 */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * 修改 / 上线 / 下线营销活动
+         * @description 只改传了的字段；`tiers`、`scopes`、`skus` 传了就是**整组替换**。
+         *
+         *     **上线中（`status = 1`）的活动只能改 `name` 与 `status`**：改规则先下线（409 `promotion-online`）。
+         *     上线中的活动随时可能正被一笔试算或下单读着，边读边改会让试算与下单按两套规则算钱。
+         *     已成交的订单不受影响——订单行快照了单价与分摊额，订单上快照了命中的活动（`Order.promotions`）。
+         *
+         *     **上线**（`status` 0 → 1）时再核一遍完整性：满减满折至少一档，限时折扣 / 秒杀至少一个 SKU，
+         *     新人礼要有券模板，且 `ends_at` 在未来——否则 422。
+         *
+         *     限时折扣 / 秒杀里已经卖出过的 SKU（`sold_qty > 0`）不能从活动里移除，配额（`stock_qty`）
+         *     也不能改到低于已售数（422）：那部分配额已经兑现给了买家。
+         */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /**
+                     * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+                     *
+                     *     它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+                     *     而例外成立的前提是平台级鉴权：
+                     *
+                     *     · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+                     *       读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+                     *       行级安全落在这家店上。
+                     *     · **商家级员工带了这个头：403**
+                     *       （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+                     *       静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+                     *     · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+                     *       **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+                     *       实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+                     *       请求其余部分指名的东西不存在是 422。
+                     *     · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+                     *       买家侧对它照旧 404。
+                     *     · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+                     *       （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+                     *
+                     *     后台每一条挂后台会话的操作都声明了它（机械核对：
+                     *     `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+                     */
+                    "X-Keel-Merchant"?: components["parameters"]["KeelMerchant"];
+                };
+                path: {
+                    /** @description `promotions.id`。查不到（含属于别家店）即 404。 */
+                    promotion_id: components["parameters"]["PromotionId"];
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["PromotionPatchRequest"];
+                };
+            };
+            responses: {
+                /** @description 已更新 */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AdminPromotion"];
+                    };
+                };
+                /** @description 不是全店范围的员工。 */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /** @description 活动不存在或不属于当前租户。 */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /** @description 活动上线中却想改规则 —— `https://keel.dev/problems/promotion-online`。 */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /** @description 改完之后规则不成立（同新建），或上线时规则不完整。 */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        trace?: never;
+    };
     "/uploads": {
         parameters: {
             query?: never;
@@ -9192,6 +9577,10 @@ export interface paths {
                  *     `detail` 说明原因（门槛不够、范围不含、已锁定 / 已使用 / 已过期、不是你的券）。
                  *     与 `POST /orders` 同一个 type：试算就是要在下单之前把它说出来。
                  *     **不会忽略这张券按原价试算**——用户正是照着试算结果决定要不要下单的。
+                 *     本单命中了不与券同享的活动时带券同样是这个 type。
+                 *
+                 *     限时折扣 / 秒杀超出每人限购 —— `https://keel.dev/problems/promotion-limit-exceeded`，
+                 *     `detail` 说明限购几件、已买几件。
                  */
                 409: {
                     headers: {
@@ -9286,9 +9675,9 @@ export interface paths {
          *
          *     | 分支 | 正向 | 补偿 |
          *     |---|---|---|
-         *     | 库存 | available_qty -= n | available_qty += n |
-         *     | 优惠券 | status 1 → 3 已使用 | status 3 → 1 |
          *     | 订单 | 建单 status=10 | status → 90 |
+         *     | 优惠券 | status 1 → 2 锁定（支付后 2 → 3） | status 2 → 1 |
+         *     | 库存 | available_qty -= n；活动行另扣活动配额与每人限购 | available_qty += n；配额与限购放回 |
          *
          *     **必须携带 `Idempotency-Key`**：同一 key 重复调用返回首次的存档响应，
          *     防止用户连点或网络重试造成重复下单。重放命中时响应带
@@ -9343,6 +9732,8 @@ export interface paths {
                  * @description 业务冲突，按 Problem `type` 区分：
                  *     · 库存不足 —— .../insufficient-stock
                  *     · 券不可用 —— .../coupon-not-applicable
+                 *     · 超出活动每人限购 —— .../promotion-limit-exceeded
+                 *     · 秒杀配额在试算之后被抢光 —— .../promotion-sold-out（重新试算会按门店价报价）
                  *     · 价格已变动（与 expected_payable_cents 不一致）—— .../price-changed
                  *     · **同一 Idempotency-Key 正在处理中** —— .../idempotency-key-in-flight，
                  *       响应带 `Retry-After`，客户端应退避重试而不是当成业务失败弹窗
@@ -12309,6 +12700,12 @@ export interface components {
              * @enum {integer}
              */
             status: 0 | 1 | 2;
+            /**
+             * @description 这件商品在响应里 `store` 那家门店**此刻生效**的活动标签（满减满折、限时折扣、秒杀）。
+             *     没有活动时为空数组。`min_price_cents` 仍是门店价，不是活动价——活动价看标签与
+             *     `Sku.promo_price_cents`，最终以 `/orders/preview` 为准。
+             */
+            promotion_tags?: components["schemas"]["PromotionTag"][];
         };
         ProductDetail: components["schemas"]["ProductSummary"] & {
             description?: string;
@@ -12333,6 +12730,16 @@ export interface components {
             price_cents: components["schemas"]["Money"];
             available_qty: number;
             image_url?: string;
+            /**
+             * @description 这家门店此刻的活动价（限时折扣 / 秒杀，取 min(门店价, 特价)）。没有单价类活动、
+             *     或特价不低于门店价时不出现。秒杀配额已售罄时不出现。
+             */
+            promo_price_cents?: components["schemas"]["Money"];
+            /**
+             * Format: int64
+             * @description 给出 `promo_price_cents` 的那个活动。与 `promo_price_cents` 同进同出。
+             */
+            promotion_id?: number;
         };
         /**
          * @description 后台视角的商品。与 `ProductSummary` 的差别是状态面：
@@ -13003,11 +13410,23 @@ export interface components {
              *     而「全选」复选框需要知道全车总数。只给一个的话客户端就得自己遍历累加，
              *     那等于把金额计算规则复制到每个端上。
              *
+             *     命中限时折扣 / 秒杀的行按**活动价**计（同 `CartItem.price_cents`），与试算一致。
+             *
              *     **送不到的行（`undeliverable` 非空）仍然算在里面**：它们在这家店是买得到的，
              *     只是送不到这个地址。带着它们去 `/orders/preview` 会收到 422
              *     `region-not-deliverable`——客户端应当在结算前提示用户取消勾选或换地址。
              */
             selected_total_cents: components["schemas"]["Money"];
+            /**
+             * @description 已勾选、可买的行命中满减满折的优惠合计（不含券）。把这些行送进 `/orders/preview`，
+             *     得到的 `promotion_discount_cents` 与它逐分相等——同一份计算。
+             */
+            promotion_discount_cents: components["schemas"]["Money"];
+            /**
+             * @description 已勾选、可买的行上各活动的结果：命中了哪些、各减多少、还差多少凑满（`PromotionHit`）。
+             *     没有任何活动时为空数组。
+             */
+            promotions: components["schemas"]["PromotionHit"][];
             /**
              * Format: int64
              * @description 本次按哪个收货地址算的运费（回显 `address_id` 参数，或买家的默认地址）。没有地址时不出现。
@@ -13015,7 +13434,7 @@ export interface components {
             address_id?: number;
             /**
              * @description 已勾选、可买、送得到的那些行按 `address_id` 那个地址算出的**预估运费**。
-             *     满额包邮按 `selected_total_cents`（去掉送不到的行）判——购物车不算券，
+             *     满额包邮按 `selected_total_cents` 减去满减满折（去掉送不到的行）判——购物车不算券，
              *     所以它是「用券之前」的运费；用了券可能因为不满额而不包邮，也可能用包邮券抵掉。
              *     最终以 `/orders/preview` 为准。没有地址时整个不出现。
              */
@@ -13043,8 +13462,20 @@ export interface components {
              *     **`status` 为 `not_sold_in_store` 或 `off_shelf` 时为 null**：这家店此刻
              *     不卖它，也就没有一个「它多少钱」的答案——给一个基准价会让用户以为
              *     还能按这个价买到。
+             *
+             *     命中限时折扣 / 秒杀时是**活动价**（min(门店价, 特价)），门店价在 `list_price_cents`。
              */
             price_cents: number | null;
+            /**
+             * Format: int64
+             * @description 门店最终价。只有 `price_cents` 是活动价时才出现（用来划线展示原价）。
+             */
+            list_price_cents?: number | null;
+            /**
+             * Format: int64
+             * @description 给出活动价的那个限时折扣 / 秒杀活动。与 `list_price_cents` 同进同出。
+             */
+            price_promotion_id?: number;
             quantity: number;
             /**
              * @description 是否勾选结算，对应 `cart_items.selected`。
@@ -13194,37 +13625,23 @@ export interface components {
             discount_cents?: components["schemas"]["Money"];
             payable_cents: components["schemas"]["Money"];
             /**
-             * @description 含优惠分摊结果。包邮券抵的是运费，不分摊到行（各行 `discount_cents` 为 0）。
-             *
-             *     > **这一段是内联 schema，而内联在这里已经是一笔债了。**
-             *     > 本轮想给每一行加一个 `price_source`（这一行的单价来自基准价 /
-             *     > 大区价 / 门店价的哪一层，与 `order_items.price_source` 同源），
-             *     > **加不进去**：内联 schema 让 oapi-codegen 生成一个**匿名 struct**，
-             *     > 而 `internal/handler/order.go` 里有一处按字段拼出来的
-             *     > `[]struct{...}` 字面量 —— 匿名类型只要多一个字段就不再可赋值，
-             *     > 实测报错：
-             *     >
-             *     > ```
-             *     > internal/handler/order.go:92:21: cannot use items (variable of type
-             *     >   []struct{AmountCents ...; DiscountCents ...; Quantity ...; SkuId ...})
-             *     >   as []struct{AmountCents ...; DiscountCents ...;
-             *     >               PriceSource *api.OrderPreviewItemsPriceSource; ...}
-             *     > ```
-             *     >
-             *     > 这正是「请求体不要用内联 schema」那条规矩的**响应侧同一个毛病**：
-             *     > 内联类型没有名字，于是它的每一次演进都是一次破坏性变更。
-             *     > 提成具名的 `OrderPreviewItem` 会同样破坏那个字面量，
-             *     > 所以这件事要和 handler 一起改，不能只改契约。
-             *     > 记在数据模型 §15。
+             * @description 满减满折的优惠合计，已含在 `discount_cents` 里（`discount_cents` = 活动 + 券，含包邮券抵的运费）。
+             *     限时折扣 / 秒杀不在这里——它们改的是单价，已经体现在 `goods_amount_cents` 里。
              */
-            items: {
-                /** Format: int64 */
-                sku_id?: number;
-                quantity?: number;
-                amount_cents?: components["schemas"]["Money"];
-                /** @description 该行分摊到的优惠。余数归金额最大行，保证求和恒等。 */
-                discount_cents?: components["schemas"]["Money"];
-            }[];
+            promotion_discount_cents: components["schemas"]["Money"];
+            /**
+             * @description 券对商品的减免（满减 / 折扣 / 立减券）。没带券、或带的是包邮券时为 0 ——
+             *     包邮券抵的运费在 `freight_discount_cents`。
+             *     `discount_cents = promotion_discount_cents + coupon_discount_cents + freight_discount_cents`。
+             */
+            coupon_discount_cents: components["schemas"]["Money"];
+            /** @description 含单价类活动的活动价与优惠分摊结果（活动与券各自一份、合计一份）。 */
+            items: components["schemas"]["OrderPreviewItem"][];
+            /**
+             * @description 本单各活动的结果（`PromotionHit`）：命中了哪些、各减多少、还差多少凑满。
+             *     没有任何活动时为空数组。
+             */
+            promotions: components["schemas"]["PromotionHit"][];
             /**
              * Format: int64
              * @description 本次试算用上的券（回显请求里的 `user_coupon_id`）。没带券时不出现。
@@ -13233,6 +13650,9 @@ export interface components {
             /**
              * @description 这个买家手里本单可用的全部券，按优惠额降序——与 `POST /coupons/applicable`
              *     同一份结果。客户端据此渲染「选券」，不必再单独请求一次。
+             *
+             *     券的门槛与计算基数是**活动后金额**（每行 `amount_cents − promotion_discount_cents`）。
+             *     本单命中了不与券同享的活动时为空数组。
              */
             applicable_coupons?: components["schemas"]["ApplicableCoupon"][];
         };
@@ -13284,6 +13704,10 @@ export interface components {
              *     再去查券（那张券的模板此刻可能已经叫别的名字了）。
              */
             coupon_name?: string;
+            /** @description 满减满折的优惠合计，已含在 `discount_cents` 里。 */
+            promotion_discount_cents?: components["schemas"]["Money"];
+            /** @description 这一单命中的活动，**下单时的快照**。没命中任何活动时为空数组。 */
+            promotions?: components["schemas"]["OrderPromotion"][];
             payable_cents: components["schemas"]["Money"];
             paid_cents?: components["schemas"]["Money"];
             refunded_cents?: components["schemas"]["Money"];
@@ -13337,10 +13761,24 @@ export interface components {
                 [key: string]: string;
             };
             image_url?: string;
+            /** @description 成交单价（快照）。命中限时折扣 / 秒杀时是活动价。 */
             price_cents: components["schemas"]["Money"];
+            /** @description 下单时的门店最终价（快照）。没有命中单价类活动时与 `price_cents` 相等。 */
+            list_price_cents?: components["schemas"]["Money"];
+            /**
+             * Format: int64
+             * @description 改了这一行单价的限时折扣 / 秒杀活动。没有就不出现。
+             */
+            price_promotion_id?: number;
             quantity: number;
             amount_cents?: components["schemas"]["Money"];
+            /**
+             * @description 该行分摊到的全部优惠（满减满折 + 券）。退款按 `amount_cents − discount_cents` 这份
+             *     实付净额退（数据模型 §11），所以一行退完恰好等于这一行的实付。
+             */
             discount_cents?: components["schemas"]["Money"];
+            /** @description 其中满减满折分摊到这一行的部分。 */
+            promotion_discount_cents?: components["schemas"]["Money"];
             /** @description 已退款完成的件数 */
             refunded_qty?: number;
             /**
@@ -14270,10 +14708,10 @@ export interface components {
              */
             status: 1 | 2 | 3 | 4;
             /**
-             * @description 1 领券中心领取 · 2 商家定向发放
+             * @description 1 领券中心领取 · 2 商家定向发放 · 3 新人礼（营销活动自动发放，数据模型 §7）
              * @enum {integer}
              */
-            source: 1 | 2;
+            source: 1 | 2 | 3;
             /** Format: date-time */
             valid_start_at: string;
             /** Format: date-time */
@@ -14651,6 +15089,232 @@ export interface components {
             reason_code: "region_excluded" | "province_unknown";
             /** @description 给人看的一句话，如「新疆维吾尔自治区不在「默认运费」的配送范围」 */
             reason: string;
+        };
+        /**
+         * @description 1 满减 · 2 满折 · 3 限时折扣（特价） · 4 秒杀 · 5 新人礼。
+         *
+         *     计价顺序（数据模型 §7「优惠计算顺序」）：门店最终价 → **3 / 4 改单价**
+         *     （活动价 = min(门店价, 特价)）→ **1 / 2 按行分摊**（每行至多参与一个满减满折）→
+         *     券（门槛与计算基数是活动后金额）→ 运费。5 不参与计价：它在买家首单前自动发一张券。
+         * @enum {integer}
+         */
+        PromotionType: 1 | 2 | 3 | 4 | 5;
+        /**
+         * @description 满减 / 满折的一档。`threshold` 的单位由活动的 `threshold_unit` 决定（1 分 / 2 件）。
+         *     满减填 `discount_cents`，满折填 `discount_rate`（千分比，900 = 9 折），另一个为 0。
+         */
+        PromotionTier: {
+            /** Format: int64 */
+            threshold: number;
+            discount_cents: components["schemas"]["Money"];
+            discount_rate: number;
+        };
+        /**
+         * @description 限时折扣 / 秒杀的一个 SKU。`promo_price_cents`（特价，分）与 `discount_rate`（千分比）二选一，
+         *     另一个为 0。折扣价 = ⌈门店价 × discount_rate / 1000⌉（向上取整到分，与券的「折扣向下取整」同一个方向：
+         *     误差对商家有利、每件不到 1 分）。
+         */
+        PromotionSku: {
+            /** Format: int64 */
+            sku_id: number;
+            promo_price_cents: components["schemas"]["Money"];
+            discount_rate: number;
+            /** @description 每人限购件数（同一活动、同一 SKU），0 = 不限。只计未关闭的订单。 */
+            per_user_limit: number;
+            /**
+             * @description 秒杀配额（件）。**不是独立的实物库存**：秒杀成交的每一件仍然从门店库存扣，
+             *     这里只限「按秒杀价最多卖多少件」。限时折扣为 0（不限）。
+             */
+            stock_qty: number;
+            /** @description 已按活动价售出（含待支付）的件数，只读。关单与 SAGA 补偿会放回。 */
+            sold_qty: number;
+            /** @description 商品标题（只读，展示用）。 */
+            title?: string;
+            /** @description SKU 编码（只读，展示用）。 */
+            sku_code?: string;
+        };
+        PromotionSkuInput: {
+            /** Format: int64 */
+            sku_id: number;
+            promo_price_cents?: components["schemas"]["Money"];
+            discount_rate?: number;
+            /** @default 0 */
+            per_user_limit: number;
+            /** @default 0 */
+            stock_qty: number;
+        };
+        AdminPromotion: {
+            /** Format: int64 */
+            id: number;
+            name: string;
+            promotion_type: components["schemas"]["PromotionType"];
+            /**
+             * @description 满减满折的门槛单位：1 金额（分）· 2 件数。其他类型为 0。
+             * @enum {integer}
+             */
+            threshold_unit: 0 | 1 | 2;
+            /**
+             * @description 能否与优惠券同享。命中了一个 `false` 的活动，这一单就不能再用券
+             *     （试算 / 下单带券返回 409 `coupon-not-applicable`，`applicable_coupons` 为空）。
+             */
+            stack_with_coupon: boolean;
+            /** Format: date-time */
+            starts_at: string;
+            /** Format: date-time */
+            ends_at: string;
+            /**
+             * @description 1 上线 · 0 下线。上线且在有效期内才生效（见 `phase`）。
+             * @enum {integer}
+             */
+            status: 0 | 1;
+            /**
+             * @description 现算的阶段：`offline` 下线；`scheduled` 已上线、未开始；`running` 进行中；`ended` 已上线、已结束。
+             * @enum {string}
+             */
+            phase: "offline" | "scheduled" | "running" | "ended";
+            /** @description 满减满折的阶梯，按门槛升序。其他类型为空数组。 */
+            tiers: components["schemas"]["PromotionTier"][];
+            /** @description 适用范围（与券同一套语义）。空数组即全场、全店。 */
+            scopes: components["schemas"]["CouponScope"][];
+            /** @description 限时折扣 / 秒杀的活动商品。其他类型为空数组。 */
+            skus: components["schemas"]["PromotionSku"][];
+            /**
+             * Format: int64
+             * @description 新人礼发哪一批券。其他类型不出现。
+             */
+            gift_coupon_template_id?: number;
+            /** @description 新人礼已经发出的张数。其他类型不出现。 */
+            gift_granted_count?: number;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        PromotionCreateRequest: {
+            name: string;
+            promotion_type: components["schemas"]["PromotionType"];
+            /** @enum {integer} */
+            threshold_unit?: 0 | 1 | 2;
+            /** @default true */
+            stack_with_coupon: boolean;
+            /** Format: date-time */
+            starts_at: string;
+            /** Format: date-time */
+            ends_at: string;
+            tiers?: components["schemas"]["PromotionTier"][];
+            scopes?: components["schemas"]["CouponScopeInput"][];
+            skus?: components["schemas"]["PromotionSkuInput"][];
+            /** Format: int64 */
+            gift_coupon_template_id?: number;
+        };
+        /** @description 只改传了的字段；`tiers` / `scopes` / `skus` 传了即整组替换。 */
+        PromotionPatchRequest: {
+            name?: string;
+            /** @enum {integer} */
+            threshold_unit?: 0 | 1 | 2;
+            stack_with_coupon?: boolean;
+            /** Format: date-time */
+            starts_at?: string;
+            /** Format: date-time */
+            ends_at?: string;
+            tiers?: components["schemas"]["PromotionTier"][];
+            scopes?: components["schemas"]["CouponScopeInput"][];
+            skus?: components["schemas"]["PromotionSkuInput"][];
+            /** Format: int64 */
+            gift_coupon_template_id?: number;
+            /** @enum {integer} */
+            status?: 0 | 1;
+        };
+        /**
+         * @description 商品当前生效的活动标签（商品列表 / 详情）。按响应里 `store` 那家门店判：
+         *     范围不含这家店、未上线、不在有效期内的活动不出标签。
+         */
+        PromotionTag: {
+            /** Format: int64 */
+            promotion_id: number;
+            promotion_type: components["schemas"]["PromotionType"];
+            /** @description 给人看的标签，例如「满100减10」「满2件9折」「限时特价 ¥39.90」「秒杀 ¥9.90」。 */
+            label: string;
+            /** Format: date-time */
+            ends_at?: string;
+        };
+        /**
+         * @description 一个活动在这一单（或购物车已勾选的行）上的结果。试算、购物车、下单用的是同一份计算
+         *     （service/promotion_calc.go）。
+         *
+         *     - 满减 / 满折：`applied = true` 时 `discount_cents` 是它减掉的钱，已计入
+         *       `promotion_discount_cents`，并按行分摊进每一行的 `promotion_discount_cents`；
+         *       `applied = false` 时 `shortfall` 是还差多少凑满最低一档（单位见 `threshold_unit`）。
+         *       命中了某一档时 `next_threshold` / `shortfall` 说的是离下一档还差多少（已是最高档则不出现）。
+         *     - 限时折扣 / 秒杀：`discount_cents` 是 (门店价 − 活动价) × 件数，**已经体现在单价里**，
+         *       不计入 `discount_cents` / `promotion_discount_cents`——只用来展示「活动省了多少」。
+         */
+        PromotionHit: {
+            /** Format: int64 */
+            promotion_id: number;
+            name: string;
+            promotion_type: components["schemas"]["PromotionType"];
+            applied: boolean;
+            discount_cents: components["schemas"]["Money"];
+            stack_with_coupon?: boolean;
+            /** @enum {integer} */
+            threshold_unit?: 0 | 1 | 2;
+            /**
+             * Format: int64
+             * @description 命中的那一档门槛。未命中不出现。
+             */
+            reached_threshold?: number;
+            /**
+             * Format: int64
+             * @description 下一档（未命中时即最低一档）的门槛。已是最高档不出现。
+             */
+            next_threshold?: number;
+            /**
+             * Format: int64
+             * @description 离 `next_threshold` 还差多少（分或件，见 `threshold_unit`）。
+             */
+            shortfall?: number;
+            /** @description 参与这个活动的行（SKU）。 */
+            sku_ids: number[];
+            /** @description 给人看的一句话，例如「已减 10 元，再买 50 元可减 30 元」「还差 1 件享 9 折」。 */
+            message: string;
+        };
+        /** @description 订单上命中的活动，**下单时的快照**（活动之后改名、改规则、下线都不影响它）。 */
+        OrderPromotion: {
+            /** Format: int64 */
+            promotion_id: number;
+            name: string;
+            promotion_type: components["schemas"]["PromotionType"];
+            /** @description 同 `PromotionHit.discount_cents`：满减满折计入订单优惠；限时折扣 / 秒杀已体现在单价里。 */
+            discount_cents: components["schemas"]["Money"];
+            sku_ids: number[];
+        };
+        /**
+         * @description 试算的一行。**本轮从内联 schema 提成了具名类型**（数据模型 §15 记过的那笔债）：
+         *     加 `list_price_cents` 这几个字段时，内联匿名 struct 会让 handler 里那处字面量编译失败。
+         */
+        OrderPreviewItem: {
+            /** Format: int64 */
+            sku_id: number;
+            quantity: number;
+            /** @description 成交单价：门店价，或命中限时折扣 / 秒杀时的活动价（二者取低）。 */
+            price_cents: components["schemas"]["Money"];
+            /** @description 门店最终价（三层定价的结果）。没有命中单价类活动时与 `price_cents` 相等。 */
+            list_price_cents: components["schemas"]["Money"];
+            /**
+             * Format: int64
+             * @description 改了这一行单价的那个限时折扣 / 秒杀活动。没有就不出现。
+             */
+            price_promotion_id?: number;
+            /** @description `price_cents × quantity`。 */
+            amount_cents: components["schemas"]["Money"];
+            /**
+             * @description 该行分摊到的全部商品优惠（满减满折 + 券）。余数归金额最大行，保证求和恒等。
+             *     包邮券抵的是运费，不分摊到行。
+             */
+            discount_cents: components["schemas"]["Money"];
+            /** @description 其中满减满折分摊到这一行的部分。券那一部分 = `discount_cents − promotion_discount_cents`。 */
+            promotion_discount_cents: components["schemas"]["Money"];
         };
         /**
          * @description GeoJSON Polygon，SRID 固定 4326。落库成 `GEOGRAPHY(POLYGON, 4326)`。
@@ -15109,6 +15773,8 @@ export interface components {
         StoreId: number;
         /** @description `coupon_templates.id`。查不到（含属于别家店）即 404。 */
         CouponTemplateId: number;
+        /** @description `promotions.id`。查不到（含属于别家店）即 404。 */
+        PromotionId: number;
         /** @description `freight_templates.id`。查不到（含已删除、属于别家店）即 404。 */
         FreightTemplateId: number;
         /** @description `regions.id`。同上，查不到即 404。 */

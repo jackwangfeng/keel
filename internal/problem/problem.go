@@ -267,6 +267,15 @@ const (
 	TypeCouponTemplateLocked    = "https://keel.dev/problems/coupon-template-locked"
 	TypeCouponTemplateDisabled  = "https://keel.dev/problems/coupon-template-disabled"
 
+	// 营销活动那一组（数据模型 §7「营销活动」，契约 Promotion tag）：
+	//
+	//   promotion-limit-exceeded  409  限时折扣 / 秒杀超出每人限购。客户端减数量
+	//   promotion-sold-out        409  秒杀配额在试算之后被抢光。客户端重新试算（会按门店价报价）
+	//   promotion-online          409  后台想改上线中活动的规则。先下线再改
+	TypePromotionLimitExceeded = "https://keel.dev/problems/promotion-limit-exceeded"
+	TypePromotionSoldOut       = "https://keel.dev/problems/promotion-sold-out"
+	TypePromotionOnline        = "https://keel.dev/problems/promotion-online"
+
 	// 运费那一组（数据模型 §7「运费模板」「运费怎么算」，00055 / 00056）：
 	//
 	//   region-not-deliverable     422  试算 / 下单时有商品送不到这个收货地址。响应体的

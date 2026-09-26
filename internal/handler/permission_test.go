@@ -226,6 +226,22 @@ var permMatrix = []permRoute{
 			Body: fmt.Sprintf(`{"phones":[%q]}`, permBuyerPhone(t, fx)), OK: http.StatusCreated}
 	}},
 
+	// —— 营销活动（00058）。与券同一行：活动直接决定实付，判据是全店范围。
+	// 每格现场建一个新活动（下线状态，规则还能改）。
+	{"GET", v1 + "/admin/promotions", merchantWide, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permGet(v1 + "/admin/promotions")
+	}},
+	{"POST", v1 + "/admin/promotions", merchantWide, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		permCleanupPromotions(t, fx)
+		return permReq{Method: "POST", Path: v1 + "/admin/promotions", Body: permPromotionBody(fx), OK: http.StatusCreated}
+	}},
+	{"GET", v1 + "/admin/promotions/:promotion_id", merchantWide, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permGet(fmt.Sprintf(v1+"/admin/promotions/%d", permPromotion(t, fx)))
+	}},
+	{"PATCH", v1 + "/admin/promotions/:promotion_id", merchantWide, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permReq{Method: "PATCH", Path: fmt.Sprintf(v1+"/admin/promotions/%d", permPromotion(t, fx)),
+			Body: `{"name":"改个名字"}`, OK: http.StatusOK}
+	}},
 	// —— 运费模板（00055）。契约 StaffRole 矩阵「运费模板」两行：读对四种角色放行；
 	// 门店模板的写同门店价（storeOperate）—— 矩阵里打的就是门店模板，范围内 N1、范围外 E1。
 	// 全店模板的写（merchantWide）由 freight_test.go 的
@@ -686,6 +702,45 @@ func permCouponTemplate(t *testing.T, fx *permFixture) int64 {
 	return tpl.ID
 }
 
+// permPromotionBody 是一个全店满 100 减 10 的活动（新建即下线）。
+func permPromotionBody(fx *permFixture) string {
+	return fmt.Sprintf(`{"name":"权限矩阵活动%d","promotion_type":1,"threshold_unit":1,`+
+		`"starts_at":"2020-01-01T00:00:00Z","ends_at":"2099-01-01T00:00:00Z",`+
+		`"tiers":[{"threshold":10000,"discount_cents":1000,"discount_rate":0}]}`, fx.seq.Add(1))
+}
+
+// permPromotion 用商家管理员的令牌建一个新活动，返回 id。
+func permPromotion(t *testing.T, fx *permFixture) int64 {
+	t.Helper()
+	permCleanupPromotions(t, fx)
+	w := reqAs(t, http.MethodPost, fx.sh.Host, v1+"/admin/promotions", permPromotionBody(fx), fx.sh.Token)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("夹具：建活动失败 %d %s", w.Code, w.Body.String())
+	}
+	var p struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &p); err != nil || p.ID == 0 {
+		t.Fatalf("夹具：活动响应解不出 id：%v %s", err, w.Body.String())
+	}
+	return p.ID
+}
+
+// permCleanupPromotions 同 permCleanupCoupons：活动挂着指向 merchants 的外键，
+// 要排在夹具清理之前删掉。
+func permCleanupPromotions(t *testing.T, fx *permFixture) {
+	t.Cleanup(func() {
+		for _, q := range []string{
+			`DELETE FROM promotion_tiers WHERE merchant_id = $1`,
+			`DELETE FROM promotion_scopes WHERE merchant_id = $1`,
+			`DELETE FROM promotion_skus WHERE merchant_id = $1`,
+			`DELETE FROM promotions WHERE merchant_id = $1`,
+		} {
+			adminExec(t, q, fx.sh.MerchantID)
+		}
+	})
+}
+
 // permBuyerPhone 在这家店建一个买家，返回手机号（定向发放按手机号找人）。
 func permBuyerPhone(t *testing.T, fx *permFixture) string {
 	t.Helper()
@@ -749,8 +804,8 @@ func permRefund(t *testing.T, fx *permFixture, storeID int64, status int) string
 	userID := adminQueryInt64(t, `SELECT user_id FROM orders WHERE order_no = $1`, orderNo)
 	itemID := adminQueryInt64(t, `
 		INSERT INTO order_items (merchant_id, order_id, sku_id, product_id, title_snapshot,
-		                         spec_snapshot, price_cents, quantity, amount_cents)
-		VALUES ($1, $2, $3, $4, '权限矩阵商品', '{}'::jsonb, 1000, 1, 1000) RETURNING id`,
+		                         spec_snapshot, price_cents, list_price_cents, quantity, amount_cents)
+		VALUES ($1, $2, $3, $4, '权限矩阵商品', '{}'::jsonb, 1000, 1000, 1, 1000) RETURNING id`,
 		fx.sh.MerchantID, orderID, fx.SKUID, fx.ProductID)
 	paymentID := adminQueryInt64(t, `
 		INSERT INTO payments (merchant_id, payment_no, order_id, channel, amount_cents, status,

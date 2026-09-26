@@ -58,6 +58,10 @@ type OrderItem struct {
 	AmountCents   int64
 	DiscountCents int64
 	RefundedQty   int32
+	// 00058：门店价快照、改了单价的活动、满减满折分摊到这一行的那一份。
+	ListPriceCents         int64
+	PricePromotionID       *int64
+	PromotionDiscountCents int64
 	// RefundingQty 是在途退款占用的件数（契约 OrderItem.refunding_qty）。
 	// 它不是持久化列（§11），ListOrderItems 不填它，由订单详情在同一个事务里
 	// 用 RefundingQtyByItem 补上。
@@ -131,27 +135,29 @@ func (t tenantTx) ListUserOrders(ctx context.Context, userID int64, f OrderFilte
 	out := make([]Order, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, Order{
-			ID:                   r.ID,
-			OrderNo:              r.OrderNo,
-			UserID:               r.UserID,
-			StoreID:              r.StoreID,
-			RegionID:             r.RegionID,
-			Status:               r.Status,
-			GoodsAmountCents:     r.GoodsAmountCents,
-			FreightCents:         r.FreightCents,
-			FreightDiscountCents: r.FreightDiscountCents,
-			DiscountCents:        r.DiscountCents,
-			PayableCents:         r.PayableCents,
-			PaidCents:            r.PaidCents,
-			RefundedCents:        r.RefundedCents,
-			RefundStatus:         r.RefundStatus,
-			ExpireAt:             r.ExpireAt.Time,
-			CreatedAt:            r.CreatedAt.Time,
-			PaidAt:               optTime(r.PaidAt),
-			ShippedAt:            optTime(r.ShippedAt),
-			FinishedAt:           optTime(r.FinishedAt),
-			UserCouponID:         r.UserCouponID,
-			CouponName:           r.CouponName,
+			ID:                     r.ID,
+			OrderNo:                r.OrderNo,
+			UserID:                 r.UserID,
+			StoreID:                r.StoreID,
+			RegionID:               r.RegionID,
+			Status:                 r.Status,
+			GoodsAmountCents:       r.GoodsAmountCents,
+			FreightCents:           r.FreightCents,
+			FreightDiscountCents:   r.FreightDiscountCents,
+			DiscountCents:          r.DiscountCents,
+			PayableCents:           r.PayableCents,
+			PaidCents:              r.PaidCents,
+			RefundedCents:          r.RefundedCents,
+			RefundStatus:           r.RefundStatus,
+			ExpireAt:               r.ExpireAt.Time,
+			CreatedAt:              r.CreatedAt.Time,
+			PaidAt:                 optTime(r.PaidAt),
+			ShippedAt:              optTime(r.ShippedAt),
+			FinishedAt:             optTime(r.FinishedAt),
+			UserCouponID:           r.UserCouponID,
+			CouponName:             r.CouponName,
+			PromotionDiscountCents: r.PromotionDiscountCents,
+			Promotions:             r.Promotions,
 		})
 	}
 	return out, nil
@@ -176,27 +182,29 @@ func (t tenantTx) FindUserOrderByNo(ctx context.Context, orderNo string, userID 
 		return Order{}, err
 	}
 	return Order{
-		ID:                   r.ID,
-		OrderNo:              r.OrderNo,
-		UserID:               r.UserID,
-		StoreID:              r.StoreID,
-		RegionID:             r.RegionID,
-		Status:               r.Status,
-		GoodsAmountCents:     r.GoodsAmountCents,
-		FreightCents:         r.FreightCents,
-		FreightDiscountCents: r.FreightDiscountCents,
-		DiscountCents:        r.DiscountCents,
-		PayableCents:         r.PayableCents,
-		PaidCents:            r.PaidCents,
-		RefundedCents:        r.RefundedCents,
-		RefundStatus:         r.RefundStatus,
-		ExpireAt:             r.ExpireAt.Time,
-		CreatedAt:            r.CreatedAt.Time,
-		PaidAt:               optTime(r.PaidAt),
-		ShippedAt:            optTime(r.ShippedAt),
-		FinishedAt:           optTime(r.FinishedAt),
-		UserCouponID:         r.UserCouponID,
-		CouponName:           r.CouponName,
+		ID:                     r.ID,
+		OrderNo:                r.OrderNo,
+		UserID:                 r.UserID,
+		StoreID:                r.StoreID,
+		RegionID:               r.RegionID,
+		Status:                 r.Status,
+		GoodsAmountCents:       r.GoodsAmountCents,
+		FreightCents:           r.FreightCents,
+		FreightDiscountCents:   r.FreightDiscountCents,
+		DiscountCents:          r.DiscountCents,
+		PayableCents:           r.PayableCents,
+		PaidCents:              r.PaidCents,
+		RefundedCents:          r.RefundedCents,
+		RefundStatus:           r.RefundStatus,
+		ExpireAt:               r.ExpireAt.Time,
+		CreatedAt:              r.CreatedAt.Time,
+		PaidAt:                 optTime(r.PaidAt),
+		ShippedAt:              optTime(r.ShippedAt),
+		FinishedAt:             optTime(r.FinishedAt),
+		UserCouponID:           r.UserCouponID,
+		CouponName:             r.CouponName,
+		PromotionDiscountCents: r.PromotionDiscountCents,
+		Promotions:             r.Promotions,
 	}, nil
 }
 
@@ -208,17 +216,20 @@ func (t tenantTx) ListOrderItems(ctx context.Context, orderID int64) ([]OrderIte
 	out := make([]OrderItem, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, OrderItem{
-			ID:            r.ID,
-			SKUID:         r.SkuID,
-			ProductID:     r.ProductID,
-			TitleSnapshot: r.TitleSnapshot,
-			SpecSnapshot:  r.SpecSnapshot,
-			ImageSnapshot: r.ImageSnapshot,
-			PriceCents:    r.PriceCents,
-			Quantity:      r.Quantity,
-			AmountCents:   r.AmountCents,
-			DiscountCents: r.DiscountCents,
-			RefundedQty:   r.RefundedQty,
+			ID:                     r.ID,
+			SKUID:                  r.SkuID,
+			ProductID:              r.ProductID,
+			TitleSnapshot:          r.TitleSnapshot,
+			SpecSnapshot:           r.SpecSnapshot,
+			ImageSnapshot:          r.ImageSnapshot,
+			PriceCents:             r.PriceCents,
+			Quantity:               r.Quantity,
+			AmountCents:            r.AmountCents,
+			DiscountCents:          r.DiscountCents,
+			RefundedQty:            r.RefundedQty,
+			ListPriceCents:         r.ListPriceCents,
+			PricePromotionID:       r.PricePromotionID,
+			PromotionDiscountCents: r.PromotionDiscountCents,
 		})
 	}
 	return out, nil

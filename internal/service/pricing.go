@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/keel/keel/internal/repository"
@@ -31,13 +32,16 @@ import (
 // 喂给它的正是这里按门店生效价算出来的每一行：券按「下单那家店的价」算，
 // 试算与下单用的是同一个函数、同一份输入，「试算减 20、下单减 19」没有发生的余地。
 //
-// **00056 起运费也在这里算**（freight.go / freight_calc.go，同样只有一份实现）。
-// 计价顺序固定为（数据模型 §7「优惠计算顺序」，与营销活动那一段约定好的）：
+// **营销活动与运费也在这里算**（promotion_calc.go / freight_calc.go，各只有一份实现）。
+// 计价顺序固定为（数据模型 §7「优惠计算顺序」）：
 //
-//	商品原价 → 营销活动优惠 → 优惠券（门槛按活动后金额判）→ 运费（满额包邮按
-//	优惠后应付商品金额判）→ 包邮券抵运费
+//	门店最终价 → 营销活动（限时折扣 / 秒杀改单价，满减满折按行分摊）
+//	→ 优惠券（门槛与计算基数是活动后金额）→ 运费（满额包邮按优惠后应付商品金额判）
+//	→ 包邮券抵运费
 //
-// 运费一段只看 FreightRequest 那四样输入，不关心前面的优惠是怎么减出来的。
+// 券按活动后金额算（couponLinesOf 喂的是 amount − 活动分摊）：一件已经打了 8 折的商品，
+// 不该再按原价去凑满减券的门槛。运费一段只看 FreightRequest 那四样输入，
+// 不关心前面的优惠是怎么减出来的。
 
 // 请求规模的上限。
 //
@@ -71,12 +75,23 @@ type PricedLine struct {
 	// AmountCents = PriceCents * Quantity。
 	AmountCents int64
 
-	// DiscountCents 是这一行分摊到的优惠（数据模型 §7「优惠分摊」）。
+	// DiscountCents 是这一行分摊到的全部优惠（数据模型 §7「优惠分摊」）：满减满折 + 券。
 	//
-	// 本期唯一的优惠来源是券：没带券时它是算出来的 0（与 freight 不同，它在响应里
-	// 就该是 0 而不是缺席）；带券时是 allocateDiscount 按金额比例分下来的那一份，
-	// 各行求和恒等于 Quote.DiscountCents。
+	// 两个来源各自按 allocateDiscount 分摊（同一份比例与余数规则），各行求和恒等于
+	// Quote.DiscountCents。没有任何优惠时它是算出来的 0（与 freight 不同，它在响应里
+	// 就该是 0 而不是缺席）。退款按 AmountCents − DiscountCents 这份净额退（§11），
+	// 两个来源合在一列里，「一行退完 = 这一行实付」才恒等。
 	DiscountCents int64
+
+	// PromotionDiscountCents 是其中满减满折分摊到这一行的那一份（00058）。
+	// 券那一份 = DiscountCents − PromotionDiscountCents。
+	PromotionDiscountCents int64
+
+	// ListPriceCents 是门店最终价（三层定价的结果）；PriceCents 是成交单价 ——
+	// 命中限时折扣 / 秒杀时是活动价（min(门店价, 特价)），否则两者相等。
+	ListPriceCents int64
+	// PricePromotionID 是改了这一行单价的活动；没有为 nil。库存分支据此扣活动配额。
+	PricePromotionID *int64
 
 	// 券挑行的素材（与价格同一条查询取来）。不进 order_items 快照。
 	brandID      *int64
@@ -103,6 +118,18 @@ type Quote struct {
 	DiscountCents int64
 	PayableCents  int64
 
+	// PromotionDiscountCents / CouponDiscountCents 是 DiscountCents 的两个来源（00058）。
+	PromotionDiscountCents int64
+	CouponDiscountCents    int64
+
+	// Promotions 是各活动在这一单上的结果（命中了哪些、各减多少、还差多少凑满）。
+	Promotions []PromotionHit
+
+	// couponBlockers 是命中了、且不与券同享的活动名；非空时这一单不能用券。
+	couponBlockers []string
+	// limitViolations 是超出每人限购的行。试算与下单据此报 409（checkPromotionLimits），
+	// 「本单可用券」不看它 —— 那条接口只回答券的问题。
+	limitViolations []promoLimitViolation
 	// freightNoCoupon 是「不用任何券」时的运费：本单可用券里包邮券能抵多少按它算 ——
 	// 带上那张包邮券去试算时，商品上没有券的减免，满额包邮按不用券的金额判。
 	// nil = 没有地址，包邮券判不了。
@@ -146,6 +173,16 @@ var ErrCouponNotApplicable = errors.New("这张优惠券本单不可用")
 // 或者干脆属于别的商家 —— RLS 让后者与「不存在」在这一层同形，这是对的：
 // 下单接口不该能被用来探测别家的 SKU 是否存在）。
 var ErrSKUUnavailable = errors.New("请求里有不可售的 SKU")
+
+// ErrPromotionLimitExceeded：限时折扣 / 秒杀超出每人限购。契约的 409 promotion-limit-exceeded。
+//
+// 试算就报、下单再报（库存分支在行锁之下做最终判定，两笔并发订单只有一笔过得去）。
+// 不静默按门店价卖超出的那几件：买家看到的是活动价，按另一个价成交是钱的问题。
+var ErrPromotionLimitExceeded = errors.New("超出活动每人限购")
+
+// ErrPromotionSoldOut：秒杀配额在试算之后被别人抢光了（库存分支的条件 UPDATE 受影响 0 行）。
+// 契约的 409 promotion-sold-out。重新试算会按门店价报价（pickPriceOffer 跳过配额不够的报价）。
+var ErrPromotionSoldOut = errors.New("活动配额已售罄")
 
 // priceOrder 按请求行算出金额明细。**无副作用**：只读 skus / products。
 //
@@ -210,35 +247,65 @@ func priceOrder(ctx context.Context, tx repository.Tx, sc repository.StoreScope,
 	}
 
 	q := Quote{
-		Lines: make([]PricedLine, 0, len(items)),
-		Store: sc,
+		Lines:      make([]PricedLine, 0, len(items)),
+		Store:      sc,
+		Promotions: []PromotionHit{},
 	}
+	promoIn := make([]promoLine, 0, len(items))
 	for _, it := range items {
 		sku := bySKU[it.SKUID]
-		amount := sku.PriceCents * int64(it.Quantity)
+		promoIn = append(promoIn, promoLine{
+			SKUID: sku.ID, ProductID: sku.ProductID, BrandID: sku.BrandID,
+			CategoryPath: sku.CategoryPath, ListPriceCents: sku.PriceCents, Quantity: it.Quantity,
+		})
+	}
+
+	// ---- 营销活动：单价类改单价，满减满折按行分摊（promotion_calc.go）----
+	lp, err := loadLivePromotions(ctx, tx, ids, coupon.Now)
+	if err != nil {
+		return Quote{}, err
+	}
+	var bought map[repository.PurchaseKey]int32
+	if coupon.UserID != 0 {
+		if bought, err = loadPurchases(ctx, tx, coupon.UserID, lp); err != nil {
+			return Quote{}, err
+		}
+	}
+	pr := computePromotions(promoIn, lp, sc, bought)
+
+	for i, it := range items {
+		sku := bySKU[it.SKUID]
+		price := pr.UnitPrices[i]
+		amount := price * int64(it.Quantity)
 		q.Lines = append(q.Lines, PricedLine{
 			SKUID:      sku.ID,
 			ProductID:  sku.ProductID,
 			Title:      sku.Title,
 			SpecValues: sku.SpecValues,
 			ImageURL:   sku.ImageURL,
-			PriceCents: sku.PriceCents,
+			PriceCents: price,
 			Quantity:   it.Quantity,
 
 			AmountCents: amount,
-			// 没带券时这个 0 是算出来的；带券时下面 applyCoupon 会写进分摊额。
-			DiscountCents: 0,
+			// 满减满折的分摊；带券时下面 applyCoupon 再把券那一份加上去。
+			DiscountCents:          pr.LineDiscounts[i],
+			PromotionDiscountCents: pr.LineDiscounts[i],
+			ListPriceCents:         sku.PriceCents,
+			PricePromotionID:       pr.PricePromotionIDs[i],
 
 			brandID:      sku.BrandID,
 			categoryPath: sku.CategoryPath,
 		})
 		q.GoodsAmountCents += amount
 	}
+	q.DiscountCents = pr.DiscountCents
+	q.PromotionDiscountCents = pr.DiscountCents
+	q.Promotions = pr.Hits
+	q.couponBlockers = pr.CouponBlockers
+	q.limitViolations = pr.Violations
 
-	// ---- 营销活动（另一段，接入点在这里：它减完之后，券的门槛按活动后金额判）----
-
-	// ---- 优惠券：满减 / 折扣 / 立减在这里分摊到行；包邮券只判门槛与范围，抵扣留到运费之后 ----
-	q.DiscountCents = 0
+	// ---- 优惠券：满减 / 折扣 / 立减在这里分摊到行（按活动后金额）；包邮券只判门槛与范围，
+	// 抵扣留到运费之后。q.DiscountCents 此刻是活动那一份，券的商品优惠加在它上面。----
 	var freeShipping *repository.UserCoupon
 	if coupon.ID != nil {
 		fs, err := applyCoupon(ctx, tx, sc, &q, coupon)
@@ -255,8 +322,8 @@ func priceOrder(ctx context.Context, tx repository.Tx, sc repository.StoreScope,
 			return Quote{}, err
 		}
 		fitems := freightItemsOf(q.Lines)
-		// goodsPayable：营销活动接入后，这里减的是「活动优惠 + 券的商品优惠」。
-		// 此刻 q.DiscountCents 里只有券的商品优惠（包邮券还没抵，见下）。
+		// goodsPayable = 商品金额（已是活动价）− 满减满折 − 券的商品优惠。
+		// 此刻 q.DiscountCents 正是「活动 + 券的商品优惠」（包邮券还没抵，见下）。
 		goodsPayable := q.GoodsAmountCents - q.DiscountCents
 		b, bad, err := fc.quote(dest.ProvinceCode, fitems, goodsPayable)
 		if err != nil {
@@ -268,10 +335,11 @@ func priceOrder(ctx context.Context, tx repository.Tx, sc repository.StoreScope,
 		q.Freight = &b
 		q.FreightCents = b.FreightCents
 
-		// 不用券时的运费（本单可用券里包邮券按它算）。没有商品优惠时就是上面这一个。
+		// 不用券时的运费（本单可用券里包邮券按它算）：活动优惠照减，只是不减券。
+		// 没有券的商品优惠时就是上面这一个。
 		noCoupon := b.FreightCents
-		if q.DiscountCents > 0 {
-			nb, _, err := fc.quote(dest.ProvinceCode, fitems, q.GoodsAmountCents)
+		if q.DiscountCents > q.PromotionDiscountCents {
+			nb, _, err := fc.quote(dest.ProvinceCode, fitems, q.GoodsAmountCents-q.PromotionDiscountCents)
 			if err != nil {
 				return Quote{}, err
 			}
@@ -307,7 +375,82 @@ func priceOrder(ctx context.Context, tx repository.Tx, sc repository.StoreScope,
 	return q, nil
 }
 
+// checkPromotionLimits 把「超出每人限购」翻成 ErrPromotionLimitExceeded。试算与下单共用。
+func (q Quote) checkPromotionLimits() error {
+	if len(q.limitViolations) == 0 {
+		return nil
+	}
+	v := q.limitViolations[0]
+	return fmt.Errorf("%w: sku %d 每人限购 %d 件，已买 %d 件，这一单要 %d 件",
+		ErrPromotionLimitExceeded, v.SKUID, v.Limit, v.Bought, v.Asked)
+}
+
+// loadLivePromotions 取「此刻生效」的活动素材。没有任何生效活动时只花一条查询。
+//
+// 新人礼（类型 5）不参与计价，在这里就滤掉。
+func loadLivePromotions(ctx context.Context, tx repository.Tx, skuIDs []int64,
+	now time.Time) (livePromotions, error) {
+	lp := livePromotions{Promos: map[int64]repository.Promotion{}}
+	live, err := tx.ListLivePromotions(ctx, now)
+	if err != nil {
+		return livePromotions{}, err
+	}
+	var ids []int64
+	for _, p := range live {
+		if p.Type == repository.PromoNewBuyerGift {
+			continue
+		}
+		lp.Promos[p.ID] = p
+		ids = append(ids, p.ID)
+	}
+	if len(ids) == 0 {
+		return lp, nil
+	}
+	if lp.Tiers, err = tx.ListPromotionTiers(ctx, ids); err != nil {
+		return livePromotions{}, err
+	}
+	if lp.Scopes, err = tx.ListPromotionScopes(ctx, ids); err != nil {
+		return livePromotions{}, err
+	}
+	lp.Offers = map[int64][]repository.PriceOffer{}
+	if len(skuIDs) > 0 {
+		offers, err := tx.ListLivePriceOffers(ctx, skuIDs, now)
+		if err != nil {
+			return livePromotions{}, err
+		}
+		for _, o := range offers {
+			if _, ok := lp.Promos[o.PromotionID]; ok {
+				lp.Offers[o.SKUID] = append(lp.Offers[o.SKUID], o)
+			}
+		}
+	}
+	return lp, nil
+}
+
+// loadPurchases 取这个买家在带限购的那些活动里已经买了几件。没有限购时不查。
+func loadPurchases(ctx context.Context, tx repository.Tx, userID int64,
+	lp livePromotions) (map[repository.PurchaseKey]int32, error) {
+	seen := map[int64]bool{}
+	var ids []int64
+	for _, os := range lp.Offers {
+		for _, o := range os {
+			if o.PerUserLimit > 0 && !seen[o.PromotionID] {
+				seen[o.PromotionID] = true
+				ids = append(ids, o.PromotionID)
+			}
+		}
+	}
+	if len(ids) == 0 {
+		return map[repository.PurchaseKey]int32{}, nil
+	}
+	return tx.ListUserPromotionPurchases(ctx, userID, ids)
+}
+
 // couponLinesOf 把定价结果变成券计算的输入。试算、下单、「本单可用券」共用。
+//
+// 金额是**活动后金额**：AmountCents − 满减满折分摊到这一行的那一份（单价类活动已经在
+// AmountCents 里）。券的门槛比的、折扣乘的、分摊按的都是它 —— 于是一行上活动与券的
+// 分摊之和不会超过这一行的金额，chk_item_promotion_discount 与 chk_item_refund 都成立。
 func couponLinesOf(lines []PricedLine) []couponLine {
 	out := make([]couponLine, len(lines))
 	for i, ln := range lines {
@@ -315,7 +458,7 @@ func couponLinesOf(lines []PricedLine) []couponLine {
 			ProductID:    ln.ProductID,
 			BrandID:      ln.brandID,
 			CategoryPath: ln.categoryPath,
-			AmountCents:  ln.AmountCents,
+			AmountCents:  ln.AmountCents - ln.PromotionDiscountCents,
 		}
 	}
 	return out
@@ -348,6 +491,12 @@ func applyCoupon(ctx context.Context, tx repository.Tx, sc repository.StoreScope
 	if err != nil {
 		return nil, err
 	}
+	if len(q.couponBlockers) > 0 {
+		// 放在找到券之后：先报「不是你的券」，再报「本单不能用券」—— 反过来的话，
+		// 命中互斥活动的单子就成了一个不报「券存不存在」的探测口，而别的单子报。
+		return nil, fmt.Errorf("%w: 本单命中的活动「%s」不与优惠券同享",
+			ErrCouponNotApplicable, strings.Join(q.couponBlockers, "」「"))
+	}
 	v := evaluateCoupon(c, scopes[c.Rule.TemplateID], sc, couponLinesOf(q.Lines), coupon.Now)
 	if !v.Applicable {
 		return nil, fmt.Errorf("%w: %s", ErrCouponNotApplicable, v.Reason)
@@ -356,9 +505,10 @@ func applyCoupon(ctx context.Context, tx repository.Tx, sc repository.StoreScope
 		return &c, nil
 	}
 	for i := range q.Lines {
-		q.Lines[i].DiscountCents = v.LineDiscounts[i]
+		q.Lines[i].DiscountCents += v.LineDiscounts[i]
 	}
-	q.DiscountCents = v.DiscountCents
+	q.DiscountCents += v.DiscountCents
+	q.CouponDiscountCents = v.DiscountCents
 	id := c.ID
 	q.UserCouponID = &id
 	return nil, nil
@@ -376,10 +526,15 @@ type ApplicableCoupon struct {
 // 逐张走的是 evaluateCoupon —— 与 applyCoupon 同一个函数、同一份行输入，所以这里说
 // 「能减 20」，带上这张券试算就是减 20（handler 的测试逐张核对这一条）。
 //
+// 本单命中了不与券同享的活动时直接回空：那时带哪一张券试算都是 409。
 // 包邮券按 freightNoCoupon（不用任何券时的运费）算能抵多少：带上它去试算时商品上
 // 没有券的减免，运费正是这一个数。nil（没有地址）时包邮券一张都不出现 —— 判不了。
 func applicableCoupons(ctx context.Context, tx repository.Tx, sc repository.StoreScope,
-	userID int64, lines []PricedLine, freightNoCoupon *int64, now time.Time) ([]ApplicableCoupon, error) {
+	userID int64, q Quote, now time.Time) ([]ApplicableCoupon, error) {
+	if len(q.couponBlockers) > 0 {
+		return []ApplicableCoupon{}, nil
+	}
+	lines, freightNoCoupon := q.Lines, q.freightNoCoupon
 	coupons, err := tx.ListUsableUserCoupons(ctx, userID, now)
 	if err != nil {
 		return nil, err

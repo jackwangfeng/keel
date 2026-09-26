@@ -66,9 +66,9 @@ func seedDraftOrder(t *testing.T, merchantCode string, skuID int64, qty int32) (
 	}
 	if _, err := conn.Exec(ctx, `
 		INSERT INTO order_items (merchant_id, order_id, sku_id, product_id, title_snapshot,
-		                         spec_snapshot, price_cents, quantity, amount_cents)
+		                         spec_snapshot, price_cents, list_price_cents, quantity, amount_cents)
 		SELECT $1, $2, s.id, s.product_id, '夹具商品', '{}'::jsonb,
-		       s.price_cents, $4::int, s.price_cents * $4::int
+		       s.price_cents, s.price_cents, $4::int, s.price_cents * $4::int
 		  FROM skus s WHERE s.id = $3`, merchantID, orderID, skuID, qty); err != nil {
 		t.Fatalf("造订单项夹具失败: %v", err)
 	}

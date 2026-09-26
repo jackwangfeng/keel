@@ -188,8 +188,9 @@ func (fx *reportFixture) item(t *testing.T, order string, productID, skuID int64
 	t.Helper()
 	adminExec(t, `
 		INSERT INTO order_items (merchant_id, order_id, sku_id, product_id, title_snapshot, spec_snapshot,
-		                         price_cents, quantity, amount_cents, discount_cents, refunded_qty, refunded_cents)
-		VALUES ($1, $2, $3, $4, '下单时的标题', '{}'::jsonb, $5, $6, $7, $8, $9, $10)`,
+		                         price_cents, list_price_cents, quantity, amount_cents, discount_cents,
+		                         refunded_qty, refunded_cents)
+		VALUES ($1, $2, $3, $4, '下单时的标题', '{}'::jsonb, $5, $5, $6, $7, $8, $9, $10)`,
 		fx.sh.MerchantID, fx.orders[order], skuID, productID, amount/int64(qty), qty, amount, discount,
 		refundedQty, refundedCents)
 }

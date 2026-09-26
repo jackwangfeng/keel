@@ -11,12 +11,13 @@ import coupons from "./coupons.ts";
 import freight from "./freight.ts";
 import orders from "./orders.ts";
 import overview from "./overview.ts";
+import promotions from "./promotions.ts";
 import refunds from "./refunds.ts";
 import regions from "./regions.ts";
 import staff from "./staff.ts";
 import stores from "./stores.ts";
 import merchants from "./merchants.ts";
 
-export const sections: AdminSection[] = [overview, catalog, categories, coupons, freight, orders, refunds, regions, stores, staff, merchants].sort(
+export const sections: AdminSection[] = [overview, catalog, categories, coupons, promotions, freight, orders, refunds, regions, stores, staff, merchants].sort(
     (a, b) => a.order - b.order,
 );

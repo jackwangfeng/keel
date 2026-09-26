@@ -107,7 +107,7 @@ func (s *OrderService) Cancel(ctx context.Context, orderNo, idemKey string) (rep
 					ErrOrderNotCancelable, orderNo, order.Status, orderStatusPending)
 			}
 			// 与超时关单同一份放回逻辑，只是流水记成「买家取消释放」（biz_type 6）。
-			if _, err := releaseClosedOrder(ctx, tx, order.ID, order.OrderNo, order.StoreID,
+			if _, err := releaseClosedOrder(ctx, tx, order.ID, order.OrderNo, order.StoreID, order.UserID,
 				repository.InventoryLogBuyerCancel); err != nil {
 				return repository.Order{}, err
 			}

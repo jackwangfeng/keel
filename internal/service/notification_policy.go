@@ -57,6 +57,13 @@ var notificationCallSites = map[string]notifyPolicy{
 		"改到预警线以下时他正看着那个数"},
 	"AdminCatalogService.CreateSKU/CreateSKU":               {Silent: "建 SKU 时写初始库存：商家自己做的，理由同 SetInventory"},
 	"AdminStoreService.SetStoreInventory/SetStoreInventory": {Silent: "后台按门店改库存：商家自己做的，理由同 SetInventory"},
+
+	// —— 营销活动的配额与每人限购（00058，与门店库存同一个事务）
+	"deductStock/ReservePromotionQuota": {Silent: "扣秒杀配额与每人限购：门店库存那条（同一个函数里的 DeductInventory）" +
+		"已经按预警线决定了发不发库存预警；配额抢光是活动的正常结局，不是要人处理的事 —— " +
+		"没抢到的买家由 POST /orders 同步收到 409 promotion-sold-out"},
+	"releasePromotionLine/ReleasePromotionQuota": {Silent: "SAGA 补偿、超时关单、买家取消时放回配额与限购（升高）；" +
+		"这几条路径的通知由各自的调用方决定（超时关单发 order_timeout_closed，另两条不发）"},
 	"ProductImportService.commitInTx/CreateSKU": {Silent: "批量导入时建 SKU 写初始库存：商家自己确认的导入，" +
 		"理由同 AdminCatalogService.CreateSKU；而且导入的商品是草稿，买家看不见，库存高低与任何人的订单无关"},
 }

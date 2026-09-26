@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/keel/keel/internal/auth"
 	"github.com/keel/keel/internal/repository"
@@ -28,6 +29,17 @@ import (
 // 「多少钱、有没有货、卖不卖」都按门店分，所以每一条返回 Cart 的接口都收 store_id，
 // 解析走 scopeIn —— 与 /products、/search 逐字同一段代码（不传走回落链，指名一家
 // 不存在的门店报 422）。
+//
+// # 营销活动：与试算同一份计算（00058）
+//
+// 命中限时折扣 / 秒杀的行，price_cents 是活动价（门店价另给 list_price_cents 划线），
+// 合计按活动价算 —— 于是 selected_total_cents 与同一批行的试算 goods_amount_cents 仍然
+// 逐分相等。满减满折只在**已勾选、可买**的行上算（那正是点「去结算」时会送进试算的那批），
+// 结果放在 promotion_discount_cents 与 promotions（命中了哪些、还差多少凑满）。
+// 两处都调 promotion_calc.go 的 computePromotions，与 priceOrder 同一个函数。
+//
+// 购物车不判每人限购（不传已购件数）：那是下单前的一道闸，试算会报 409；
+// 车里只负责把价与凑单提示说对。
 //
 // # 失效行不删
 //
@@ -90,13 +102,21 @@ const (
 type CartLineView struct {
 	repository.CartLine
 
-	// PriceCents 是这家店此刻的生效价；Status 为 off_shelf / not_sold_in_store 时为 nil。
+	// PriceCents 是这家店此刻的成交单价（命中限时折扣 / 秒杀时是活动价）；
+	// Status 为 off_shelf / not_sold_in_store 时为 nil。
 	PriceCents *int64
-	Status     CartLineStatus
+	// ListPriceCents 是门店价，只在 PriceCents 是活动价时给（划线展示用）。
+	ListPriceCents   *int64
+	PricePromotionID *int64
+	Status           CartLineStatus
 
-	// Undeliverable 非 nil 表示这一行送不到 CartView.AddressID 那个地址（00056）。
+	// Undeliverable 非 nil 表示这一行送不到 CartView.AddressID 那个地址。
 	// 只对 available 的行判：别的行此刻本来就买不了。
 	Undeliverable *FreightUndeliverable
+
+	// promoDiscount 是满减满折分摊到这一行的那一份（只有已勾选、可买的行有）。
+	// 预估运费的满额包邮按「活动后」的金额判，要把它减掉。不导出：它不在契约里。
+	promoDiscount int64
 }
 
 // CartView 是一整辆车（契约 Cart）。它也是幂等存档里存的东西，所以字段全部导出。
@@ -104,9 +124,12 @@ type CartView struct {
 	Lines              []CartLineView
 	TotalCents         int64
 	SelectedTotalCents int64
-	Store              StoreContext
+	// PromotionDiscountCents / Promotions：已勾选、可买的行上满减满折的结果。
+	PromotionDiscountCents int64
+	Promotions             []PromotionHit
+	Store                  StoreContext
 
-	// AddressID / Freight：按哪个收货地址算的预估运费（00056）。没有地址时都为 nil ——
+	// AddressID / Freight：按哪个收货地址算的预估运费。没有地址时都为 nil ——
 	// 没有地址就没有运费可算，那不是「包邮」。
 	AddressID *int64
 	Freight   *FreightBreakdown
@@ -152,7 +175,8 @@ func (cs cartScope) requireStore() error {
 
 // buildCart 读出整辆车并标注每一行。cartID 为 0 表示这个买家还没有车。
 func buildCart(ctx context.Context, tx repository.Tx, cartID int64, cs cartScope) (CartView, error) {
-	out := CartView{Lines: []CartLineView{}, Store: storeContextOf(cs.Scope, cs.Match)}
+	out := CartView{Lines: []CartLineView{}, Promotions: []PromotionHit{},
+		Store: storeContextOf(cs.Scope, cs.Match)}
 	if cartID == 0 {
 		return withCartFreight(ctx, tx, out, cs)
 	}
@@ -166,7 +190,8 @@ func buildCart(ctx context.Context, tx repository.Tx, cartID int64, cs cartScope
 
 	// 定价：与 priceOrder 同一条查询、同一家店。只问在架的那些 —— 失效行问了也是
 	// 白问（定价查询按同样的四个条件把它们滤掉）。
-	priced := map[int64]int64{}
+	priced := map[int64]repository.PriceableSKU{}
+	var lp livePromotions
 	if cs.Match != MatchNone {
 		ids := make([]int64, 0, len(lines))
 		for _, ln := range lines {
@@ -180,14 +205,40 @@ func buildCart(ctx context.Context, tx repository.Tx, cartID int64, cs cartScope
 				return CartView{}, err
 			}
 			for _, r := range rows {
-				priced[r.ID] = r.PriceCents
+				priced[r.ID] = r
+			}
+			// 「此刻」用墙上时钟：购物车是展示，它与随后那次试算之间本来就隔着一次点击。
+			if lp, err = loadLivePromotions(ctx, tx, ids, time.Now()); err != nil {
+				return CartView{}, err
 			}
 		}
 	}
 
+	// 单价：每一行各自挑活动价（与 priceOrder 同一个 computePromotions；单价只取决于行本身）。
+	unit := map[int64]int64{}
+	unitPromo := map[int64]*int64{}
+	if !lp.empty() {
+		var all []promoLine
+		for _, ln := range lines {
+			if r, ok := priced[ln.SKUID]; ok {
+				all = append(all, cartPromoLine(r, ln))
+			}
+		}
+		pr := computePromotions(all, lp, cs.Scope, nil)
+		for i, pl := range all {
+			unit[pl.SKUID] = pr.UnitPrices[i]
+			unitPromo[pl.SKUID] = pr.PricePromotionIDs[i]
+		}
+	}
+
+	var selected []promoLine
 	for _, ln := range lines {
 		v := CartLineView{CartLine: ln}
-		price, ok := priced[ln.SKUID]
+		sku, ok := priced[ln.SKUID]
+		price := sku.PriceCents
+		if p, hit := unit[ln.SKUID]; hit {
+			price = p
+		}
 		switch {
 		case !ln.OnShelf:
 			v.Status = CartLineOffShelf
@@ -204,15 +255,34 @@ func buildCart(ctx context.Context, tx repository.Tx, cartID int64, cs cartScope
 		if ok && v.Status != CartLineOffShelf {
 			p := price
 			v.PriceCents = &p
+			if promo := unitPromo[ln.SKUID]; promo != nil {
+				list := sku.PriceCents
+				v.ListPriceCents, v.PricePromotionID = &list, promo
+			}
 		}
 		if v.Status == CartLineAvailable {
 			amount := price * int64(ln.Quantity)
 			out.TotalCents += amount
 			if ln.Selected {
 				out.SelectedTotalCents += amount
+				selected = append(selected, cartPromoLine(sku, ln))
 			}
 		}
 		out.Lines = append(out.Lines, v)
+	}
+
+	// 满减满折：只在已勾选、可买的行上算 —— 与把这批行送进 /orders/preview 同一份输入。
+	if !lp.empty() && len(selected) > 0 {
+		pr := computePromotions(selected, lp, cs.Scope, nil)
+		out.PromotionDiscountCents = pr.DiscountCents
+		out.Promotions = pr.Hits
+		share := make(map[int64]int64, len(selected))
+		for k, pl := range selected {
+			share[pl.SKUID] = pr.LineDiscounts[k]
+		}
+		for k := range out.Lines {
+			out.Lines[k].promoDiscount = share[out.Lines[k].SKUID]
+		}
 	}
 	return withCartFreight(ctx, tx, out, cs)
 }
@@ -221,8 +291,9 @@ func buildCart(ctx context.Context, tx repository.Tx, cartID int64, cs cartScope
 //
 // 与试算走同一份实现（freightContext.quote），两遍：
 //  1. 全部可买的行过一遍，挑出送不到的、给行打标（不只看勾选的：用户要在勾选之前就看得到）；
-//  2. 已勾选、可买、送得到的行按它们的金额合计算运费 —— 购物车不算券，所以满额包邮比的是
-//     「用券之前」的金额，最终以 /orders/preview 为准（契约写明）。
+//  2. 已勾选、可买、送得到的行按它们的金额合计算运费 —— 金额是活动之后的（活动价，再减满减满折
+//     分摊到这些行的那一份）；购物车不算券，所以满额包邮比的是「用券之前」的金额，
+//     最终以 /orders/preview 为准（契约写明）。
 func withCartFreight(ctx context.Context, tx repository.Tx, out CartView, cs cartScope) (CartView, error) {
 	if cs.Dest == nil {
 		return out, nil
@@ -263,7 +334,7 @@ func withCartFreight(ctx context.Context, tx repository.Tx, out CartView, cs car
 		}
 		if ln.Selected && ln.PriceCents != nil {
 			sel = append(sel, FreightItem{SKUID: ln.SKUID, Quantity: ln.Quantity})
-			goods += *ln.PriceCents * int64(ln.Quantity)
+			goods += *ln.PriceCents*int64(ln.Quantity) - ln.promoDiscount
 		}
 	}
 	b, _, err := fc.quote(cs.Dest.ProvinceCode, sel, goods)
@@ -273,6 +344,14 @@ func withCartFreight(ctx context.Context, tx repository.Tx, out CartView, cs car
 	out.AddressID = cs.AddressID
 	out.Freight = &b
 	return out, nil
+}
+
+// cartPromoLine 把车里的一行变成活动计算的输入（门店价来自定价查询）。
+func cartPromoLine(r repository.PriceableSKU, ln repository.CartLine) promoLine {
+	return promoLine{
+		SKUID: r.ID, ProductID: r.ProductID, BrandID: r.BrandID, CategoryPath: r.CategoryPath,
+		ListPriceCents: r.PriceCents, Quantity: ln.Quantity,
+	}
 }
 
 // Get 实现 GET /cart。
