@@ -113,8 +113,13 @@ type route struct {
 // `/api/v1/webhooks/payments/:channel` 之间任何一个字母的出入都不会红 ——
 // 表里那一行只是永远配不上任何已注册路由，而那条对账测试会把它报成
 // 「登记了但没注册」，指向一个错的方向。
-func (r route) ginPath() string {
-	p := apiPrefix + r.ContractPath
+func (r route) ginPath() string { return ginPathOf(r.ContractPath) }
+
+// ginPathOf 是上面那段推理的实现，抽成自由函数是因为下面那张「契约里有、还没
+// 注册路由」的清单也要用同一个翻译规则 —— 两处各写一遍就是两份会各自跑偏的规则，
+// 而它们跑偏时的症状是「登记了但没注册」，指向一个错的方向。
+func ginPathOf(contractPath string) string {
+	p := apiPrefix + contractPath
 	p = strings.ReplaceAll(p, "{", ":")
 	return strings.ReplaceAll(p, "}", "")
 }
@@ -196,11 +201,13 @@ var routes = []route{
 		NoQueryParams: "详情只吃路径参数 product_id；契约里这条接口一个 query 参数都没有" +
 			"（列表那些筛选条件属于 /products，不属于这里）",
 		NotYetImplementedResponse: map[string]string{
-			"image_url": "商品主图。products 表上没有图片列，商品图在数据模型里还没有落地" +
-				"（uploads 那张表存的是上传件，没有与商品的关联）。回空串会让客户端渲染一个" +
-				"「加载失败」的占位图，缺席说的才是实话：这个字段还没有数据来源。",
-			"images": "商品图集，同 image_url。回空数组会让轮播图组件显示「无图」，" +
-				"而那与「这件商品确实没有配图」是两件事。",
+			"image_url": "商品主图。**缺的东西本轮（M4 任务 1）变了，理由要跟着改**：" +
+				"原先写的是「products 表上没有图片列，uploads 与商品没有任何关联」，" +
+				"那个缺口已经在数据模型 §3 补上了（product_images 关联表，sort_order 最小的即主图）。" +
+				"现在缺的是**迁移与 handler**，属于 M4 的下一个任务。" +
+				"在那之前仍然缺席而不是回空串：空串会让客户端渲染一个「加载失败」的占位图。",
+			"images": "商品图集，同 image_url —— 表设计好了，迁移与 handler 还没写。" +
+				"回空数组会让轮播图组件显示「无图」，而那与「这件商品确实没有配图」是两件事。",
 		},
 	},
 	{
@@ -291,6 +298,172 @@ func routeOf(t *testing.T, method, contractPath string) route {
 // 找不到它」，而契约是前后端唯一的约定。
 var nonContractRoutes = map[string]string{
 	"GET /healthz": "存活探针，给编排系统和 compose 用；契约描述的是业务接口",
+}
+
+// pendingOp 是契约里声明了、这个包**还没有注册任何路由**的一个操作。
+//
+// 上面那张 routes 表锁的是「注册了的路由都被覆盖到」，它对「契约里有一整段接口
+// 而服务端一行都没有」是全绿的 —— 那正是 M4 任务 1 之前的真实状态：
+// 契约里 9 条 /admin/ 路径，handler 里零条，没有任何东西会响。
+//
+// 所以缺口这一侧也要登记。三个方向都锁得住：
+//   - 契约里新增一条 /admin/ 操作而这里没挂账 → 红。逼人当场决定「实现它」
+//     还是「先记在这里」，默认行为是红，不是静默忽略。
+//   - 这里挂的操作契约里根本没有（改名、删了） → 红。清单不能烂掉。
+//   - 实现了、路由注册上了，却忘了从这里划掉 → 红。「实现完删掉一行」
+//     于是成了天然的验收动作。
+//
+// 范围**只到 /admin/ 前缀**，这是刻意的。买家侧那几十条未实现的接口不在这里，
+// 因为它们的缺口是「这个里程碑还没做到」，人人都知道；而后台侧的缺口是
+// 「设计阶段漏了一整块」——同一份契约里，商家能处理订单却没法上架商品，
+// 这种缺口只有机械检查发现得了。范围写小一点、锁得住一点，好过写大一点、
+// 挂一百行没人读的账。
+type pendingOp struct {
+	ContractPath   string // 契约里的路径
+	ContractMethod string // 契约里的方法，小写
+	Why            string // 为什么还没实现。空字符串会红。
+}
+
+// notYetRouted 是全部 /admin/ 操作里还没有落地的那些。
+//
+// **一条都没实现**是本轮的真实状态：M4 任务 1 只做契约与生成产物，
+// 不做 handler（理由是这个仓库的规矩——契约先行、产物入库、漂移有闸门，
+// 先写实现等于让那三样一起失效）。
+var notYetRouted = []pendingOp{
+	// —— M1 就在契约里的 10 条。后台身份、建店、员工、发货、退款审核。
+	{"/admin/auth/bootstrap", "post", "后台认证（数据模型 §14）。staff 那套鉴权中间件本身还没有落地。"},
+	{"/admin/auth/email-link", "post", "同上。还需要一个能发信的东西，本项目没有接邮件服务。"},
+	{"/admin/auth/session", "post", "同上，一次性 token 换会话。"},
+	{"/admin/me", "get", "同上，依赖 staff 会话中间件。"},
+	{"/admin/merchants", "post", "开店。依赖平台级鉴权，且要在同事务里建第一个商家管理员。"},
+	{"/admin/staff", "get", "员工列表，依赖 staff 会话中间件。"},
+	{"/admin/staff", "post", "加员工，依赖 staff 会话中间件与发信。"},
+	{"/admin/staff/{staff_id}", "patch", "改员工角色/状态，依赖 staff 会话中间件。"},
+	{"/admin/orders/{order_no}/shipments", "post", "发货。shipments 表已落地（数据模型 §5），缺的是后台鉴权与 handler。"},
+	{"/admin/refunds/{refund_no}/audit", "post", "退款审核。退款域的表已落地（§11），缺的是后台鉴权与 handler。"},
+
+	// —— M4 任务 1 本轮补进契约的 16 条：商家自助发布的写接口面。
+	//
+	// 它们比上面那 10 条多欠一样东西：**迁移**。契约里的
+	// product_images 与 skus.deleted_at 目前只存在于数据模型文档里，
+	// db/migrations 下还没有对应的那一版（那是 M4 的下一个任务）。
+	// 所以这 16 条不是「写个 handler 就能绿」，顺序是 迁移 → repository → handler。
+	{"/admin/uploads", "post", "商品图上传（purpose=1 走 staff_id）。要先有 staff 会话中间件与 Storage driver。"},
+	{"/admin/products", "get", "后台商品列表（含草稿与下架）。"},
+	{"/admin/products", "post", "创建商品（落地即草稿）。"},
+	{"/admin/products/{product_id}", "get", "后台商品详情（含成本、库存、图片）。"},
+	{"/admin/products/{product_id}", "patch", "改商品文案与归属。"},
+	{"/admin/products/{product_id}", "delete", "商品软删。"},
+	{"/admin/products/{product_id}/publication", "post", "上下架。published_at 只在首次上架置位，那条规则要在 repository 层落。"},
+	{"/admin/products/{product_id}/images", "put", "整组替换商品图。**依赖 product_images 表，迁移还没写**（数据模型 §3 本轮补的 DDL）。"},
+	{"/admin/products/{product_id}/skus", "post", "加 SKU，并在同事务里建出 inventories 行。"},
+	{"/admin/skus/{sku_id}", "patch", "改 SKU（含改价），要连带重算 products 的冗余价格区间。"},
+	{"/admin/skus/{sku_id}", "delete", "SKU 软删。**依赖 skus.deleted_at 与部分唯一索引 uk_skus_code，迁移还没写**。"},
+	{"/admin/skus/{sku_id}/inventory", "put", "库存的比较并设置。要在一条语句里把「CAS 不匹配」与「SKU 不在本租户」分别回传（数据模型 §4）。"},
+	{"/admin/categories", "get", "后台分类列表（扁平，含停用）。"},
+	{"/admin/categories", "post", "新建分类，path / level 由服务端算。"},
+	{"/admin/categories/{category_id}", "patch", "改分类，含移动子树时重写整棵子树的 path / level 并拒绝成环。"},
+	{"/admin/categories/{category_id}", "delete", "分类软删，有子分类或有商品时拒绝。"},
+}
+
+// contractHTTPMethods 是 OpenAPI path item 里哪些键算一个操作。
+// 其余的键（parameters、summary、servers…）不是操作，跳过。
+var contractHTTPMethods = map[string]bool{
+	"get": true, "put": true, "post": true, "delete": true,
+	"patch": true, "head": true, "options": true, "trace": true,
+}
+
+// 契约里每一条 /admin/ 操作，要么已经注册了路由（在 routes 表里），
+// 要么在 notYetRouted 里挂着一笔写明理由的欠账。两个方向都锁。
+//
+// 这条测试是 M4 任务 1 加的，起因很具体：契约里有 9 条 /admin/ 路径，
+// handler 里一条都没有，而当时仓库全绿。「设计阶段漏了一整块」这种缺口
+// 没有任何机械检查看得见 —— 只有人在查别的东西时偶然撞上。
+func TestAdminContractOperationsAreRoutedOrListed(t *testing.T) {
+	doc := loadContract(t)
+
+	registered := map[string]bool{}
+	for _, ri := range testEngine.Routes() {
+		registered[ri.Method+" "+ri.Path] = true
+	}
+	if len(registered) == 0 {
+		t.Fatal("gin 路由表是空的 —— 这条测试没在检查任何东西")
+	}
+
+	implemented := map[string]bool{}
+	for _, r := range routes {
+		implemented[strings.ToUpper(r.ContractMethod)+" "+r.ContractPath] = true
+	}
+
+	listed := map[string]bool{}
+	for _, op := range notYetRouted {
+		key := strings.ToUpper(op.ContractMethod) + " " + op.ContractPath
+		if listed[key] {
+			t.Errorf("notYetRouted 里 %s 挂了两次", key)
+		}
+		listed[key] = true
+		if strings.TrimSpace(op.Why) == "" {
+			t.Errorf("notYetRouted 里 %s 没写理由 —— 一笔不写理由的欠账，"+
+				"下一个人只会把它当成一行豁免", key)
+		}
+	}
+
+	// 方向一：契约 → 清单。漏登记就红。
+	seen, done := 0, 0
+	for path, item := range doc.Paths {
+		if !strings.HasPrefix(path, "/admin/") {
+			continue
+		}
+		for method := range item {
+			if !contractHTTPMethods[method] {
+				continue
+			}
+			seen++
+			key := strings.ToUpper(method) + " " + path
+			if implemented[key] {
+				done++
+				continue
+			}
+			if listed[key] {
+				continue
+			}
+			t.Errorf("契约里有 %s，但它既没有在 routes 表里（没实现），"+
+				"也没有在 notYetRouted 里挂账 —— 后台接口的缺口会这样静默地长出来，"+
+				"请二选一", key)
+		}
+	}
+	// 阳性对照：一条 /admin/ 操作都没解析出来，说明契约的形状变了或路径改了名，
+	// 上面那个循环一次也不执行，整条测试恒绿。
+	if seen == 0 {
+		t.Fatal("从契约里一条 /admin/ 操作都没解析出来 —— 这条测试没在检查任何东西")
+	}
+
+	for _, op := range notYetRouted {
+		key := strings.ToUpper(op.ContractMethod) + " " + op.ContractPath
+
+		// 方向二：清单 → 契约。清单不能描述一个不存在的东西。
+		item, ok := doc.Paths[op.ContractPath]
+		if !ok {
+			t.Errorf("notYetRouted 里挂着 %s（%s），但契约里已经没有这个路径了 —— "+
+				"清单烂了，请删掉这一行", key, op.Why)
+			continue
+		}
+		if _, ok := item[op.ContractMethod]; !ok {
+			t.Errorf("notYetRouted 里挂着 %s（%s），但契约里那个路径没有这个方法了 —— "+
+				"清单烂了，请删掉这一行", key, op.Why)
+			continue
+		}
+
+		// 方向三：实现了就必须从这里划掉。
+		if registered[strings.ToUpper(op.ContractMethod)+" "+ginPathOf(op.ContractPath)] {
+			t.Errorf("%s 已经注册了路由，但它还挂在 notYetRouted 里（%s）—— "+
+				"实现完请删掉这一行，并在 routes 表里加一行", key, op.Why)
+		}
+	}
+
+	// 「已实现」是数出来的，不是 seen - len(listed) 减出来的：清单出问题时
+	// 减法会打印出负数或虚高的「已实现」，而这行日志正是给排查的人看的。
+	t.Logf("契约里 %d 条 /admin/ 操作：已实现 %d，挂账 %d", seen, done, len(listed))
 }
 
 // 注册的路由与 routes 表必须一一对应。
