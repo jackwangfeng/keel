@@ -60,6 +60,7 @@ export const NOTIFICATION_TAG: Record<NotificationKind, "warning" | "danger" | "
     refund_approved: "success",
     refund_rejected: "danger",
     refund_succeeded: "success",
+    refund_return_expired: "info",
 };
 
 /** 轮询未读数的间隔（毫秒）。铃铛是提醒不是 IM，30 秒足够，也不给服务端添负担。 */

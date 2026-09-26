@@ -124,6 +124,8 @@ func newAdminShop(t *testing.T) adminShop {
 			// search_logs（00027）同理：买家侧那条「发布之后搜得到」每搜一次
 			// 就写一行检索日志，而它对 merchants 有外键。
 			`DELETE FROM search_logs WHERE merchant_id = $1`,
+			// 店铺设置（00059）：改过设置的店在这里有一行，它对 merchants 有外键。
+			`DELETE FROM shop_preferences WHERE merchant_id = $1`,
 			`DELETE FROM merchants WHERE id = $1`,
 		} {
 			if _, err := admin.Exec(c, stmt, merchantID); err != nil {

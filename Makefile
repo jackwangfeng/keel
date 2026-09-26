@@ -206,7 +206,7 @@ admin-type-check:
 # node_modules。别往 geo.ts 里加运行时 import，否则这里会以
 # ERR_MODULE_NOT_FOUND 失败。
 admin-test:
-	cd $(ROOT)/web/admin && node --test src/api/geo.test.ts src/api/money.test.ts src/api/orderRules.test.ts src/api/notifications.test.ts src/api/importRules.test.ts src/api/freightRules.test.ts src/api/reports.test.ts src/api/promotionRules.test.ts
+	cd $(ROOT)/web/admin && node --test src/api/geo.test.ts src/api/money.test.ts src/api/orderRules.test.ts src/api/notifications.test.ts src/api/importRules.test.ts src/api/freightRules.test.ts src/api/reports.test.ts src/api/promotionRules.test.ts src/api/shopSettings.test.ts
 
 # 构建静态产物到 web/admin/dist。日常不用跑：compose 起栈时在
 # docker/Dockerfile.admin 的 node 阶段里构建，产物交给 nginx。

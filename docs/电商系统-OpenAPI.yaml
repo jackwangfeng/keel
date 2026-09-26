@@ -101,6 +101,10 @@ tags:
     description: |
       运费模板（后台侧）。买家侧没有单独的接口：运费在 `POST /orders/preview`、
       `POST /orders`、`GET /cart` 里按收货地址算好返回。计算规则见数据模型 §7「运费怎么算」。
+  - name: Shop
+    description: |
+      店铺设置（后台）：时区、自动确认收货天数、退货寄回时限、客服电话。
+      自定义域名、支付密钥这些平台管的配置不在这里（数据模型 §2 为什么拆成两张表）。
   - name: Report
     description: |
       经营报表（后台只读）：经营概览、销售趋势、商品排行、门店 / 大区对比、库存预警、搜索概况。
@@ -3333,6 +3337,80 @@ paths:
               schema: { $ref: '#/components/schemas/Problem' }
         default: { $ref: '#/components/responses/Problem' }
 
+  /admin/shop-settings:
+    get:
+      tags: [Admin, Shop]
+      summary: 店铺设置
+      description: |
+        本店的可改设置，外加只读的店铺名称。从没改过设置的店返回各项的默认值
+        （时区 Asia/Shanghai、自动确认 7 天、退货寄回 7 天），`updated_at` 为 null。
+
+        **权限**：只有管理员（role 1，含经 `X-Keel-Merchant` 切进来的平台级管理员），
+        与「设默认门店」同一行（`StaffRole` 矩阵「店铺设置」）。操作员与大区 / 门店管理员 403
+        `role-forbidden` —— 这几项改的是全店每一单的时效（自动确认、退货关闭）与全部报表的
+        切天口径。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ShopSettings' }
+        '403':
+          description: 不是管理员 —— `https://keel.dev/problems/role-forbidden`。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+    put:
+      tags: [Admin, Shop]
+      summary: 修改店铺设置（整体替换）
+      description: |
+        **整体替换**：请求体就是全部可改设置。可选项（`service_phone`）不给即清空。
+        PUT 天然幂等（同一个请求体放几次结果都一样），不收 Idempotency-Key。
+
+        · `timezone`：IANA 时区名（如 `Asia/Shanghai`、`America/New_York`），服务端逐个校验
+          能否加载；`Local`、空串、缩写（`CST`）一律 422。**改了之后经营报表立即按新时区切
+          「今天」「按天」**，历史数据不需要重算（报表现场聚合）。
+        · `auto_confirm_days`：发货后多少天自动确认收货，1–365。**只影响之后的判断**：
+          定时任务每一轮按当时的值算截止时间，所以改短之后，已发货超过新天数的单会在下一轮
+          被确认；改长则顺延。
+        · `return_ship_days`：退货退款审核通过（退款单进入 20 待买家退货）后多少天没填寄回
+          物流就自动关闭（20 → 60），1–365，从审核通过的时间起算。已经填了寄回物流的不关。
+          同样按每一轮当时的值判断。
+        · `service_phone`：客服电话，展示用，至多 32 个字符。
+
+        店铺名称不在请求体里：它由平台改（`PATCH /admin/merchants/{merchant_id}`）。
+
+        **权限**同 `GET`。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ShopSettingsInput' }
+      responses:
+        '200':
+          description: 已替换
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ShopSettings' }
+        '403':
+          description: 不是管理员 —— `https://keel.dev/problems/role-forbidden`。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: |
+            时区不是能加载的 IANA 名字、天数越界、客服电话过长 ——
+            `https://keel.dev/problems/invalid-request`。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
   /admin/promotions:
     get:
       tags: [Admin, Promotion]
@@ -3658,6 +3736,18 @@ paths:
     patch:
       tags: [User]
       summary: 修改资料
+      description: |
+        三个字段都是「给了才改」，至少给一个。
+
+        **`avatar_url` 只收本人上传的头像**（破坏性变化，此前收任意地址）：
+        必须是 `POST /uploads`（`purpose=2` 头像）返回的 `url` 原样，形如 `/api/v1/uploads/{upload_id}`，
+        而且是**当前买家自己**传的。外链（包括微信头像地址）、别人的上传、退款凭证、带 query 的变体
+        一律 422（`errors` 点名 `avatar_url`），与退款申请的 `evidence_urls` 同一套核对。
+        空串 = 清掉头像。
+
+        设成功的头像在同一个事务里被标为「已引用」，不会被 24 小时的孤儿回收删掉；
+        **换掉（或清掉）之后旧头像取消引用**，24 小时后由回收任务删除 —— 所以不要缓存旧头像的地址
+        指望它一直能打开。此前存下的外链头像原样保留、照常返回，直到本人改掉它。
       requestBody:
         required: true
         content:
@@ -3667,7 +3757,11 @@ paths:
               minProperties: 1
               properties:
                 nickname:   { type: string, maxLength: 32 }
-                avatar_url: { type: string }
+                avatar_url:
+                  type: string
+                  description: |
+                    本人用 `POST /uploads`（`purpose=2`）传的头像的 `url`，形如 `/api/v1/uploads/{upload_id}`；
+                    空串清掉头像。其余一律 422。
                 gender:
                   type: integer
                   description: '0 未知 / 1 男 / 2 女'
@@ -3679,7 +3773,9 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/User' }
         '422':
-          description: 字段校验失败（见 Problem.errors）
+          description: |
+            字段校验失败（见 Problem.errors）。`avatar_url` 不是本人传的头像（外链、别人的、
+            退款凭证、不存在、已被回收）时 `errors` 点名 `avatar_url`。
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
@@ -5336,7 +5432,7 @@ paths:
           与确认收货那条一致，部分退款不该冻结整个履约流程。
         - **不查物流轨迹。** 只记承运商与运单号，前端自己拼查询链接。
 
-        发货后 `shop_settings.auto_confirm_days` 天由定时任务自动
+        发货后店铺设置的 `auto_confirm_days` 天（`GET /admin/shop-settings`）由定时任务自动
         `30 → 40`，买家也可以主动 `POST /orders/{order_no}/confirm`。
       parameters:
         - $ref: '#/components/parameters/KeelMerchant'
@@ -5783,6 +5879,45 @@ paths:
         '422': { $ref: '#/components/responses/ReportBadWindow' }
         default: { $ref: '#/components/responses/Problem' }
 
+  /admin/reports/products.csv:
+    get:
+      tags: [Admin, Report]
+      summary: 导出商品排行（CSV）
+      description: |
+        与 `GET /admin/reports/products` **同一份数据、同一组参数、同一个判权**，换成 CSV 文件下载
+        （`Content-Disposition: attachment`，文件名带窗口的起止日期）。导出的就是界面上那张表：
+        同样受 `limit`（Top N，至多 50）约束。
+
+        · 编码：**UTF-8 带 BOM**（不带 BOM 的话中文 Excel 双击打开是乱码），CRLF 换行，RFC 4180 引号规则。
+        · 列：排名、商品ID、商品标题、类目ID、销量、销售额（元）、支付订单数、已退件数、已退金额（元）。
+          金额按「元」写、两位小数（Excel 里直接能求和），口径与 JSON 版逐字一致。
+        · 以 `=` `+` `-` `@` 开头的文本单元格（商品标题）前面加一个单引号，防止在 Excel 里被当成公式执行。
+        · 窗口写错是 422（Problem JSON，不是 CSV）。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+        - $ref: '#/components/parameters/ReportPeriod'
+        - $ref: '#/components/parameters/ReportStartDate'
+        - $ref: '#/components/parameters/ReportEndDate'
+        - $ref: '#/components/parameters/ReportStoreId'
+        - $ref: '#/components/parameters/ReportRegionId'
+        - name: sort_by
+          in: query
+          description: 同 `GET /admin/reports/products`。
+          schema: { type: string, enum: [amount, quantity] }
+        - name: category_id
+          in: query
+          description: 同 `GET /admin/reports/products`。
+          schema: { type: integer, format: int64 }
+        - $ref: '#/components/parameters/ReportLimit'
+      responses:
+        '200':
+          description: 'CSV 文件（`Content-Disposition: attachment`）'
+          content:
+            text/csv:
+              schema: { type: string, format: binary }
+        '422': { $ref: '#/components/responses/ReportBadWindow' }
+        default: { $ref: '#/components/responses/Problem' }
+
   /admin/reports/stores:
     get:
       tags: [Admin, Report]
@@ -5811,6 +5946,32 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ReportStoreComparison' }
+        '422': { $ref: '#/components/responses/ReportBadWindow' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /admin/reports/stores.csv:
+    get:
+      tags: [Admin, Report]
+      summary: 导出门店 / 大区对比（CSV）
+      description: |
+        与 `GET /admin/reports/stores` **同一份数据、同一组参数、同一个判权**，换成 CSV 文件下载。
+        编码与引号规则同 `GET /admin/reports/products.csv`（UTF-8 带 BOM、CRLF、防公式注入）。
+
+        · 先列门店（顺序同 JSON 版：净销售额倒序），再列大区小计；第一列「类型」区分两者。
+        · 列：类型、大区ID、大区、门店ID、门店编码、门店、已删除、支付订单数、支付金额（元）、
+          退款金额（元）、净销售额（元）。大区小计那几行门店列留空。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+        - $ref: '#/components/parameters/ReportPeriod'
+        - $ref: '#/components/parameters/ReportStartDate'
+        - $ref: '#/components/parameters/ReportEndDate'
+        - $ref: '#/components/parameters/ReportRegionId'
+      responses:
+        '200':
+          description: 'CSV 文件（`Content-Disposition: attachment`）'
+          content:
+            text/csv:
+              schema: { type: string, format: binary }
         '422': { $ref: '#/components/responses/ReportBadWindow' }
         default: { $ref: '#/components/responses/Problem' }
 
@@ -7767,6 +7928,17 @@ components:
                 有 `payments` 却没有 `refunds` 是不对称的——订单详情页要展示售后进度，
                 否则客户端得再请求一次 `GET /orders/{order_no}/refunds`。
               items: { $ref: '#/components/schemas/Refund' }
+            auto_confirm_at:
+              type: string
+              format: date-time
+              description: |
+                自动确认收货的截止时间：只有 `30 已发货` 的订单才出现，
+                = 发货时间 + 店铺设置的 `auto_confirm_days` 天（默认 7）。过了这个时间，
+                定时任务替买家确认收货（最迟晚十分钟）。客户端据此显示「N 天后自动确认」，
+                不要自己按 7 天估。
+                按**此刻**的店铺设置算：商家改了天数，截止时间跟着变。
+                订单有在途售后（退款单 10 / 20 / 30）时自动确认**暂停**：截止时间照常返回，
+                但到点不确认，售后结束后的下一轮才确认（数据模型 §5）。
 
     OrderItem:
       type: object
@@ -7872,6 +8044,10 @@ components:
            ├─驳回──► 50 已拒绝
            └─撤销──► 60 已取消   （20 超时未寄回 / 买家撤销，同样进 60）
         ```
+
+        **20 超时未寄回**：退货退款审核通过后，从审核时间（`audited_at`）起超过店铺设置的
+        `return_ship_days` 天（默认 7）仍没填寄回物流，定时任务把它关到 60，并给买家发
+        `refund_return_expired`。截止时间在 `Refund.return_deadline_at`；填过寄回物流的不关。
 
         合法迁移（`refund_status_transitions`，由数据库触发器执行）：
         `(10,20) (10,30) (10,50) (10,60) (20,30) (20,60) (30,40)`。
@@ -8018,6 +8194,14 @@ components:
             没有这个字段，被驳回的用户只能看到一句「已拒绝」，
             既不知道为什么，也不知道改什么再申请。
         audited_at:   { type: string, format: date-time, description: 审核时间 }
+        return_deadline_at:
+          type: string
+          format: date-time
+          description: |
+            寄回截止时间：退货退款停在 `20 待买家退货`、且还没填寄回物流时才出现，
+            = `audited_at` + 店铺设置的 `return_ship_days` 天。过了这个时间仍没填，
+            定时任务会把售后单关到 `60 已取消`（最迟晚十分钟）。客户端据此提示「请在 X 前寄回」。
+            按**此刻**的店铺设置算：商家改了天数，截止时间跟着变。
         refunded_at:  { type: string, format: date-time, description: 到账时间 }
         created_at:   { type: string, format: date-time }
         updated_at:   { type: string, format: date-time }
@@ -8094,9 +8278,10 @@ components:
         | 门店：建、改、删、围栏 | ✅ | ✅ | 只限本大区的门店（换大区时新旧都得在范围内） | ❌ |
         | 门店价、门店上下架、门店库存 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
         | 订单与售后：订单 / 退款单的列表与详情、发货、退款审核、确认收到退货 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
-        | 经营报表：概览、趋势、商品排行、门店对比、库存预警 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
+        | 经营报表：概览、趋势、商品排行、门店对比、库存预警（含两份 CSV 导出） | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
         | 经营报表：搜索概况（检索日志没有门店维度） | ✅ | ✅ | ❌ | ❌ |
         | 设默认门店（含建店时 is_default） | ✅ | ❌ | ❌ | ❌ |
+        | 店铺设置（时区、自动确认天数、退货寄回时限、客服电话）的读与改 | ✅ | ❌ | ❌ | ❌ |
         | 员工管理 | ✅ | ❌ | 只能加、改本大区门店的门店管理员 | ❌ |
         | 开店 | 仅平台级管理员 | | | |
 
@@ -8147,7 +8332,7 @@ components:
       description: |
         一次报表查询的时间窗口。**六条报表共用这一份口径**：
 
-        **时区**：店铺时区 `shop_settings.timezone`；这家店没有那一行、或那一列不是合法的
+        **时区**：店铺时区（`GET /admin/shop-settings` 的 `timezone`）；这家店没改过、或那一列不是合法的
         IANA 时区名时按 **Asia/Shanghai**。回显在 `timezone` 里。「今天」「昨天」「按天」「按小时」
         全部按这个时区的自然日 / 整点切，不按服务器时区、也不按 UTC。
 
@@ -9042,6 +9227,8 @@ components:
         · `refund_approved` —— 售后审核通过（退货退款提示去填寄回物流）
         · `refund_rejected` —— 售后被驳回，正文带驳回理由
         · `refund_succeeded` —— 退款到账（退款单 `30 → 40`）
+        · `refund_return_expired` —— 退货退款审核通过后超过店铺设置的天数没填寄回物流，
+          售后单被系统关闭（`20 → 60`，定时任务）。买家自己撤回不发
 
         商家（`GET /admin/notifications`）：
         · `merchant_order_paid` —— 新的已支付待发货订单
@@ -9058,6 +9245,7 @@ components:
         - refund_approved
         - refund_rejected
         - refund_succeeded
+        - refund_return_expired
         - merchant_order_paid
         - merchant_refund_requested
         - merchant_return_shipped
@@ -9228,6 +9416,59 @@ components:
           description: 挂着这个模板的未删除商品数。大于 0 时不能删除
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+
+    ShopSettings:
+      type: object
+      required: [shop_name, service_phone, timezone, auto_confirm_days, return_ship_days, updated_at]
+      properties:
+        shop_name:
+          type: string
+          description: 店铺名称（只读，`merchants` 目录里的当前名称；由平台改）
+        service_phone:
+          type: [string, 'null']
+          description: 客服电话；没设为 null
+        timezone:
+          type: string
+          description: IANA 时区名。经营报表按它切自然日
+          examples: [Asia/Shanghai]
+        auto_confirm_days:
+          type: integer
+          minimum: 1
+          maximum: 365
+          description: 发货后多少天由系统自动确认收货
+        return_ship_days:
+          type: integer
+          minimum: 1
+          maximum: 365
+          description: 退货退款审核通过后多少天未填寄回物流即自动关闭
+        updated_at:
+          type: [string, 'null']
+          format: date-time
+          description: 最近一次修改的时间；从没改过（全是默认值）为 null
+
+    ShopSettingsInput:
+      type: object
+      required: [timezone, auto_confirm_days, return_ship_days]
+      additionalProperties: false
+      properties:
+        service_phone:
+          type: string
+          minLength: 1
+          maxLength: 32
+          description: 客服电话。不给即清空
+        timezone:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: IANA 时区名，如 `Asia/Shanghai`
+        auto_confirm_days:
+          type: integer
+          minimum: 1
+          maximum: 365
+        return_ship_days:
+          type: integer
+          minimum: 1
+          maximum: 365
 
     FreightFreeReason:
       type: string

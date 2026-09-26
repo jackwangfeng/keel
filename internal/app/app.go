@@ -590,7 +590,7 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	v1.POST("/admin/notifications/read-all", staffAuth, nh.MarkAllReadForStaff)
 	v1.POST("/admin/notifications/:notification_id/read", staffAuth, nh.MarkReadForStaff)
 
-	// 经营报表（契约 Report tag，迁移 00057 的索引）。六条都是只读聚合。
+	// 经营报表（契约 Report tag，迁移 00057 的索引）。八条都是只读聚合（六条 JSON + 两份 CSV 导出）。
 	// 范围与后台订单列表同一个判据（service/authz.go 的 orderListScope），
 	// 搜索概况只放全店范围的人（检索日志没有门店维度）。判据全在 service/report.go。
 	rpt := handler.NewAdminReportHandler(service.NewReportService(repo))
@@ -598,8 +598,16 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	v1.GET("/admin/reports/trend", staffAuth, rpt.Trend)
 	v1.GET("/admin/reports/products", staffAuth, rpt.Products)
 	v1.GET("/admin/reports/stores", staffAuth, rpt.Stores)
+	// 两份 CSV 导出：同一个 service 方法、同一个判权，只是写成文件（admin_report_csv.go）。
+	v1.GET("/admin/reports/products.csv", staffAuth, rpt.ProductsCSV)
+	v1.GET("/admin/reports/stores.csv", staffAuth, rpt.StoresCSV)
 	v1.GET("/admin/reports/inventory-alerts", staffAuth, rpt.InventoryAlerts)
 	v1.GET("/admin/reports/search", staffAuth, rpt.Search)
+
+	// 店铺设置（00059，契约 /admin/shop-settings）。只有管理员，判据在 service/shop_settings.go。
+	shs := handler.NewAdminShopSettingsHandler(service.NewShopSettingsService(repo))
+	v1.GET("/admin/shop-settings", staffAuth, shs.Get)
+	v1.PUT("/admin/shop-settings", staffAuth, shs.Replace)
 
 	cpa := handler.NewAdminCouponHandler(service.NewAdminCouponService(repo))
 	v1.GET("/admin/coupon-templates", staffAuth, cpa.List)
@@ -770,6 +778,16 @@ func Run(ctx context.Context, listen func(addr string, h http.Handler) error) er
 	// 所以不需要排在监听之前的那份讲究 —— 放在这里只是为了共用 bgCtx。
 	confirmer := service.NewAutoConfirmService(repository.New(pool), service.SweepConfig{}, nil)
 	go confirmer.Run(bgCtx)
+
+	// 退货超时未寄回自动关闭（数据模型 §11，00059）：退货退款审核通过后超过店铺设置的天数
+	// 还没填寄回物流的，20 → 60。与自动确认收货同一套机制、同一个生命周期。
+	returnTimeout := service.NewReturnTimeoutService(repository.New(pool), service.SweepConfig{}, nil)
+	go returnTimeout.Run(bgCtx)
+
+	// 孤儿上传文件回收（数据模型 §13 的 24 小时规则）：没被引用、创建超过 24 小时的文件，
+	// 删记录再删文件。存储与 Router 里写文件的是同一个 driver（同一个 KEEL_UPLOAD_ROOT）。
+	uploadGC := service.NewUploadGCService(repository.New(pool), uploadStoreFromEnv(), service.SweepConfig{}, nil)
+	go uploadGC.Run(bgCtx)
 
 	// 消息通知的外发投递与保留期清理（数据模型 §16）。站内消息不靠它 —— 通知行在业务事务里
 	// 就写好了；它只消费 outbox 里的 notification.deliver 任务，把每个外发渠道的结果记下来。

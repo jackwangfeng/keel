@@ -87,16 +87,17 @@ func requireMerchantWide(ctx context.Context) (auth.StaffIdentity, error) {
 
 // requireMerchantAdmin 只放行管理员（role 1，含平台级管理员）。
 //
-// 用在：设默认门店。默认门店是全国兜底 —— 所有不在任何围栏里、或者没授权定位
+// 用在：设默认门店、店铺设置。默认门店是全国兜底 —— 所有不在任何围栏里、或者没授权定位
 // 的访客都落到它 —— 换它等于换掉整个店面对大多数访客的样子，
-// 所以操作员也不行。
+// 所以操作员也不行。店铺设置同理：自动确认天数、退货寄回时限改的是全店每一单的时效，
+// 时区改的是全部报表的切天口径。
 func requireMerchantAdmin(ctx context.Context) (auth.StaffIdentity, error) {
 	id, err := requireStaff(ctx)
 	if err != nil {
 		return auth.StaffIdentity{}, err
 	}
 	if !id.IsAdmin() {
-		return auth.StaffIdentity{}, fmt.Errorf("%w: 只有管理员能设默认门店", ErrRoleForbidden)
+		return auth.StaffIdentity{}, fmt.Errorf("%w: 这件事只有管理员能做（设默认门店、店铺设置）", ErrRoleForbidden)
 	}
 	return id, nil
 }

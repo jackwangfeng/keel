@@ -556,15 +556,22 @@ type Shipment struct {
 	UpdatedAt   pgtype.Timestamptz
 }
 
-type ShopSetting struct {
+type ShopPreference struct {
 	MerchantID      int64
-	Domain          *string
-	LogoUrl         *string
-	Currency        string
+	ServicePhone    *string
 	Timezone        string
 	AutoConfirmDays int16
-	Extra           []byte
+	ReturnShipDays  int16
 	UpdatedAt       pgtype.Timestamptz
+}
+
+type ShopSetting struct {
+	MerchantID int64
+	Domain     *string
+	LogoUrl    *string
+	Currency   string
+	Extra      []byte
+	UpdatedAt  pgtype.Timestamptz
 }
 
 type Sku struct {

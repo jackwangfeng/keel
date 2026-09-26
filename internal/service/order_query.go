@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/keel/keel/internal/auth"
 	"github.com/keel/keel/internal/repository"
@@ -58,6 +59,9 @@ type OrderDetail struct {
 	Payments []repository.Payment
 	// Refunds 是这一单的全部退款单，按申请时间倒序（契约 OrderDetail.refunds）。
 	Refunds []repository.Refund
+	// AutoConfirmAt 是自动确认收货的截止时间（契约 OrderDetail.auto_confirm_at）：
+	// 只有 30 已发货的单才有，= 发货时间 + 店铺设置的天数。其余为 nil。
+	AutoConfirmAt *time.Time
 }
 
 // StoreSnapshot 是从 orders.store_snapshot 里读回来的门店 / 大区展示信息
@@ -186,8 +190,20 @@ func (s *OrderService) Detail(ctx context.Context, orderNo string) (OrderDetail,
 		for i := range out.Items {
 			out.Items[i].RefundingQty = inflight[out.Items[i].ID]
 		}
-		out.Refunds, err = tx.ListOrderRefunds(ctx, order.ID)
-		return err
+		if out.Refunds, err = tx.ListOrderRefunds(ctx, order.ID); err != nil {
+			return err
+		}
+		// 自动确认收货的截止（00059）：与定时任务同一个算式（auto_confirm.go 的 cutoff：
+		// 发货时间早于 now - N 天即到期），按此刻的店铺设置算。客户端不用再按 7 天估。
+		if order.Status == orderStatusShipped && order.ShippedAt != nil {
+			prefs, err := tx.ShopPreferences(ctx)
+			if err != nil {
+				return err
+			}
+			at := order.ShippedAt.Add(time.Duration(prefs.AutoConfirmDays) * 24 * time.Hour)
+			out.AutoConfirmAt = &at
+		}
+		return nil
 	})
 	if err != nil {
 		return OrderDetail{}, err

@@ -353,6 +353,21 @@ var routes = []route{
 		HandlerFile:    "admin_order_detail.go",
 		NoQueryParams:  "详情只吃路径参数 refund_no",
 	},
+	// —— 店铺设置（00059）。
+	{
+		ContractPath:   "/admin/shop-settings",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "admin_shop_settings.go",
+		NoQueryParams:  "一家店只有一份设置，租户由会话（或 X-Keel-Merchant）决定",
+	},
+	{
+		ContractPath:   "/admin/shop-settings",
+		ContractMethod: "put",
+		HTTPMethod:     http.MethodPut,
+		HandlerFile:    "admin_shop_settings.go",
+		NoQueryParams:  "整份设置在请求体里；PUT 天然幂等，不收 Idempotency-Key",
+	},
 	// —— 经营报表（契约 Report tag，00057）。参数集合不同的接口各自一个文件
 	// （对账按文件读 c.Query 的字面量）；概览与趋势参数一模一样，共用一个。
 	// 全部参数都实现了，既不写 NoQueryParams 也不挂账。
@@ -376,6 +391,19 @@ var routes = []route{
 	},
 	{
 		ContractPath:   "/admin/reports/stores",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "admin_report_stores.go",
+	},
+	// 两份 CSV 导出与各自的 JSON 版参数集合相同，放在同一个 handler 文件里（对账按文件读 c.Query）。
+	{
+		ContractPath:   "/admin/reports/products.csv",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "admin_report_products.go",
+	},
+	{
+		ContractPath:   "/admin/reports/stores.csv",
 		ContractMethod: "get",
 		HTTPMethod:     http.MethodGet,
 		HandlerFile:    "admin_report_stores.go",

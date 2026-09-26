@@ -371,6 +371,8 @@ export type AdminRefund = {
   reject_reason? : string
   /** 审核时间 */
   audited_at? : string
+  /** 寄回截止时间：退货退款停在 `20 待买家退货`、且还没填寄回物流时才出现， */
+  return_deadline_at? : string
   /** 到账时间 */
   refunded_at? : string
   created_at : string
@@ -675,6 +677,8 @@ export type AdminRefundDetail = {
   reject_reason? : string
   /** 审核时间 */
   audited_at? : string
+  /** 寄回截止时间：退货退款停在 `20 待买家退货`、且还没填寄回物流时才出现， */
+  return_deadline_at? : string
   /** 到账时间 */
   refunded_at? : string
   created_at : string
@@ -1289,6 +1293,8 @@ export type Refund = {
   reject_reason? : string
   /** 审核时间 */
   audited_at? : string
+  /** 寄回截止时间：退货退款停在 `20 待买家退货`、且还没填寄回物流时才出现， */
+  return_deadline_at? : string
   /** 到账时间 */
   refunded_at? : string
   created_at : string
@@ -1343,6 +1349,8 @@ export type OrderDetail = {
   payments? : PaymentRecord[]
   /** 该订单下的全部退款单，按申请时间倒序。 */
   refunds? : Refund[]
+  /** 自动确认收货的截止时间：只有 `30 已发货` 的订单才出现， */
+  auto_confirm_at? : string
 }
 
 /** 试算的一行。**本轮从内联 schema 提成了具名类型**（数据模型 §15 记过的那笔债）： */
@@ -1985,6 +1993,30 @@ export type ShipmentCreateRequest = {
   tracking_no : string
 }
 
+export type ShopSettings = {
+  /** 店铺名称（只读，`merchants` 目录里的当前名称；由平台改） */
+  shop_name : string
+  /** 客服电话；没设为 null */
+  service_phone : string | null
+  /** IANA 时区名。经营报表按它切自然日 */
+  timezone : string
+  /** 发货后多少天由系统自动确认收货 */
+  auto_confirm_days : number
+  /** 退货退款审核通过后多少天未填寄回物流即自动关闭 */
+  return_ship_days : number
+  /** 最近一次修改的时间；从没改过（全是默认值）为 null */
+  updated_at : string | null
+}
+
+export type ShopSettingsInput = {
+  /** 客服电话。不给即清空 */
+  service_phone? : string
+  /** IANA 时区名，如 `Asia/Shanghai` */
+  timezone : string
+  auto_confirm_days : number
+  return_ship_days : number
+}
+
 /** `available_qty` 在这里是**允许的**，而在 `SkuUpdateRequest` 里不允许： */
 export type SkuCreateRequest = {
   sku_code : string
@@ -2306,6 +2338,7 @@ export type ListCouponsResponse = {
 /** PATCH /me 的请求体 */
 export type UpdateMeRequest = {
   nickname? : string
+  /** 本人用 `POST /uploads`（`purpose=2`）传的头像的 `url`，形如 `/api/v1/uploads/{upload_id}`； */
   avatar_url? : string
   /** 0 未知 / 1 男 / 2 女 */
   gender? : number

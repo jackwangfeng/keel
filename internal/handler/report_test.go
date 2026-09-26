@@ -102,6 +102,7 @@ func newReportFixture(t *testing.T) *reportFixture {
 			`DELETE FROM orders WHERE merchant_id = $1`,
 			`DELETE FROM users WHERE merchant_id = $1 AND nickname = '报表下单人'`,
 			`DELETE FROM shop_settings WHERE merchant_id = $1`,
+			`DELETE FROM shop_preferences WHERE merchant_id = $1`,
 		} {
 			adminExec(t, q, mid)
 		}
@@ -309,7 +310,7 @@ func TestReportOverviewMetricDefinitions(t *testing.T) {
 
 	// 窗口回显：半开区间、UTC、店铺时区里的起止日期。
 	if o.Window.Timezone != "Asia/Shanghai" {
-		t.Errorf("没有 shop_settings 的店应当按 Asia/Shanghai，回显的是 %q", o.Window.Timezone)
+		t.Errorf("没有店铺设置的店应当按 Asia/Shanghai，回显的是 %q", o.Window.Timezone)
 	}
 	if !o.Window.Current.StartAt.Equal(sh(10, 0, 0, 0)) || !o.Window.Current.EndAt.Equal(sh(12, 0, 0, 0)) {
 		t.Errorf("本期窗口 = [%s, %s)，想要上海 03-10 0 点到 03-12 0 点", o.Window.Current.StartAt, o.Window.Current.EndAt)
@@ -381,7 +382,10 @@ func TestReportsCutDaysInTheShopTimezone(t *testing.T) {
 		t.Errorf("上海时区：03-10 ～ 03-11 应当只有 A（111），得到 %d", o.Current.PaidAmountCents)
 	}
 
-	adminExec(t, `INSERT INTO shop_settings (merchant_id, timezone) VALUES ($1, 'America/New_York')`, fx.sh.MerchantID)
+	// 走店铺设置接口改时区（00059）：改完的下一个报表请求就按新时区切天，没有缓存。
+	wantStatus(t, putAs(t, fx.sh.Host, "/api/v1/admin/shop-settings",
+		`{"timezone":"America/New_York","auto_confirm_days":7,"return_ship_days":7}`, fx.sh.Token),
+		http.StatusOK, "改店铺时区")
 	fx.get(t, roleAdmin, "overview?"+rptWin, &o)
 	if o.Window.Timezone != "America/New_York" {
 		t.Fatalf("配了店铺时区之后应当按它算，回显 %q", o.Window.Timezone)
@@ -395,14 +399,15 @@ func TestReportsCutDaysInTheShopTimezone(t *testing.T) {
 	}
 
 	// 写坏的时区名回落到 Asia/Shanghai，回显的也是它（界面上写的就是真正参与计算的）。
-	adminExec(t, `UPDATE shop_settings SET timezone = 'Mars/Olympus' WHERE merchant_id = $1`, fx.sh.MerchantID)
+	// 写入口挡得住（PUT 会 422），这里模拟的是手工改库。
+	adminExec(t, `UPDATE shop_preferences SET timezone = 'Mars/Olympus' WHERE merchant_id = $1`, fx.sh.MerchantID)
 	fx.get(t, roleAdmin, "overview?"+rptWin, &o)
 	if o.Window.Timezone != "Asia/Shanghai" || o.Current.PaidAmountCents != 111 {
 		t.Errorf("非法时区应当回落到 Asia/Shanghai：回显 %q、支付 %d", o.Window.Timezone, o.Current.PaidAmountCents)
 	}
 
 	// today：此刻付的一单算进今天，也算进趋势的当前这一小时。
-	adminExec(t, `UPDATE shop_settings SET timezone = 'Asia/Shanghai' WHERE merchant_id = $1`, fx.sh.MerchantID)
+	adminExec(t, `UPDATE shop_preferences SET timezone = 'Asia/Shanghai' WHERE merchant_id = $1`, fx.sh.MerchantID)
 	fx.order(t, rptOrder{Name: "NOW", Store: fx.N1, User: "U2", Status: 20, Paid: 333, PaidAt: time.Now()})
 	fx.get(t, roleAdmin, "overview?period=today", &o)
 	if o.Current.PaidAmountCents != 333 || o.Window.Period != "today" {

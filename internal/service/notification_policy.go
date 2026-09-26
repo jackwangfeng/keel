@@ -34,8 +34,10 @@ var notificationCallSites = map[string]notifyPolicy{
 	"RefundService.Audit/RejectRefund":           {Notify: "notifyRefundRejected"},
 	"RefundService.Cancel/CancelRefund": {Silent: "买家自己撤回（10/20 → 60）：动作是他做的。" +
 		"门店那条「新的售后待审核」不撤回 —— 点进去看到的是已取消，比一条凭空消失的提醒好懂"},
-	"RefundService.leaveRefunding/RevertWholeOrderRefund": {Silent: "订单 50 → 20 是驳回 / 撤回的附随动作，" +
-		"通知由那两条自己决定（驳回发 refund_rejected，撤回不发），这里再发就是同一件事说两遍"},
+	"leaveRefunding/RevertWholeOrderRefund": {Silent: "订单 50 → 20 是驳回 / 撤回 / 退货超时关闭的附随动作，" +
+		"通知由那三条自己决定（驳回发 refund_rejected，撤回不发，超时关闭发 refund_return_expired），" +
+		"这里再发就是同一件事说两遍"},
+	"ReturnTimeoutService.expireOne/ExpireReturnRefund":       {Notify: "notifyRefundReturnExpired"},
 	"RefundService.SubmitReturnShipment/SubmitReturnShipment": {Notify: "notifyReturnShipped"},
 	"RefundService.Receive/ReceiveRefundGoods": {Silent: "商家确认收到退货（20 → 30）：紧接着就是退款入账，" +
 		"沙箱在同一个事务里入到 40 并发 refund_succeeded；真渠道回调到达时同样会发。" +
@@ -86,7 +88,7 @@ var stateEdges = map[string][]string{
 	"refund:10->50": {"RejectRefund"},
 	"refund:10->60": {"CancelRefund"},
 	"refund:20->30": {"ReceiveRefundGoods"},
-	"refund:20->60": {"CancelRefund"},
+	"refund:20->60": {"CancelRefund", "ExpireReturnRefund"},
 	"refund:30->40": {"CompleteRefund"},
 }
 

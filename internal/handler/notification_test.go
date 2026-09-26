@@ -271,7 +271,7 @@ func TestNotificationsFollowTheRefundLifecycle(t *testing.T) {
 
 func TestTimeoutCloseAndAutoConfirmNotifyTheBuyer(t *testing.T) {
 	cs := newCouponShop(t)
-	adminExec(t, `UPDATE shop_settings SET auto_confirm_days = 3 WHERE merchant_id = $1`, cs.MerchantID)
+	setShopPreference(t, cs.MerchantID, "auto_confirm_days", 3)
 	b := cs.newBuyer(t, "notify-jobs")
 	ctx := context.Background()
 

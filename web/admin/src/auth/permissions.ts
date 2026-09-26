@@ -81,6 +81,8 @@ export const can = {
     editFreight: (store: StoreRef | null): boolean => (store === null ? merchantWide() : can.operateStore(store)),
     /** 设默认门店：只有管理员。 */
     setDefaultStore: (): boolean => role() === ROLE.admin,
+    /** 店铺设置（时区、自动确认天数、退货寄回时限、客服电话）的读与改：只有管理员，与设默认门店同一行。 */
+    manageShopSettings: (): boolean => role() === ROLE.admin,
     /** 加 / 改员工。 */
     manageStaff: (): boolean => role() === ROLE.admin || role() === ROLE.regionManager,
     /** 改这个员工：大区管理员只能改门店管理员；谁都不能改自己的角色（那一格在表单里单独锁）。 */
@@ -111,6 +113,8 @@ export function sectionVisible(key: string): boolean {
             return can.seeRegionsSection();
         case "staff":
             return can.seeStaffSection();
+        case "shop-settings":
+            return can.manageShopSettings();
         default:
             return true;
     }

@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/keel/keel/internal/repository/internal/db"
 )
@@ -48,6 +50,25 @@ type UploadTx interface {
 	//
 	// 幂等：已经是 TRUE 时再调一次什么也不改。
 	MarkUploadReferenced(ctx context.Context, id int64) error
+
+	// UnmarkUploadReferenced 取消引用：只动 userID 自己传的头像（purpose = 2）。
+	// 头像换掉之后旧头像走这里，之后由孤儿回收处理。不是这个买家的头像时什么也不改、不报错 ——
+	// 旧的 avatar_url 可能是这一版之前写进去的外链或别人的地址，那不是「取消引用」该管的事。
+	UnmarkUploadReferenced(ctx context.Context, id, userID int64) error
+
+	// ListOrphanUploads 孤儿回收的候选：没被引用、创建早于 cutoff、这个 driver 的文件，
+	// 按创建时间从早到晚，至多 limit 条。只是预筛。
+	ListOrphanUploads(ctx context.Context, driver int16, cutoff time.Time, limit int32) ([]OrphanUpload, error)
+
+	// DeleteOrphanUpload 删一条孤儿记录，返回它的 storage_key。谓词在行锁之下重判「没被引用、
+	// 早于 cutoff」，不再成立（刚被引用了）时返回 ok = false、什么也不删。
+	DeleteOrphanUpload(ctx context.Context, id int64, cutoff time.Time) (storageKey string, ok bool, err error)
+}
+
+// OrphanUpload 是孤儿回收扫到的一条文件记录。
+type OrphanUpload struct {
+	ID         int64
+	StorageKey string
 }
 
 // NewUpload 是登记一个上传的入参。
@@ -167,4 +188,37 @@ func (t tenantTx) MarkUploadReferenced(ctx context.Context, id int64) error {
 		return fmt.Errorf("upload %d: %w", id, ErrUploadNotFound)
 	}
 	return nil
+}
+
+func (t tenantTx) UnmarkUploadReferenced(ctx context.Context, id, userID int64) error {
+	_, err := t.q.UnmarkUploadReferenced(ctx, db.UnmarkUploadReferencedParams{ID: id, UserID: &userID})
+	return err
+}
+
+func (t tenantTx) ListOrphanUploads(ctx context.Context, driver int16, cutoff time.Time,
+	limit int32) ([]OrphanUpload, error) {
+	rows, err := t.q.ListOrphanUploads(ctx, db.ListOrphanUploadsParams{
+		Cutoff: pgtype.Timestamptz{Time: cutoff, Valid: true}, Driver: driver, PageLimit: limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]OrphanUpload, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, OrphanUpload{ID: r.ID, StorageKey: r.StorageKey})
+	}
+	return out, nil
+}
+
+func (t tenantTx) DeleteOrphanUpload(ctx context.Context, id int64, cutoff time.Time) (string, bool, error) {
+	key, err := t.q.DeleteOrphanUpload(ctx, db.DeleteOrphanUploadParams{
+		ID: id, Cutoff: pgtype.Timestamptz{Time: cutoff, Valid: true},
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return key, true, nil
 }

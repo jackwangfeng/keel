@@ -6888,6 +6888,178 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/shop-settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 店铺设置
+         * @description 本店的可改设置，外加只读的店铺名称。从没改过设置的店返回各项的默认值
+         *     （时区 Asia/Shanghai、自动确认 7 天、退货寄回 7 天），`updated_at` 为 null。
+         *
+         *     **权限**：只有管理员（role 1，含经 `X-Keel-Merchant` 切进来的平台级管理员），
+         *     与「设默认门店」同一行（`StaffRole` 矩阵「店铺设置」）。操作员与大区 / 门店管理员 403
+         *     `role-forbidden` —— 这几项改的是全店每一单的时效（自动确认、退货关闭）与全部报表的
+         *     切天口径。
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /**
+                     * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+                     *
+                     *     它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+                     *     而例外成立的前提是平台级鉴权：
+                     *
+                     *     · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+                     *       读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+                     *       行级安全落在这家店上。
+                     *     · **商家级员工带了这个头：403**
+                     *       （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+                     *       静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+                     *     · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+                     *       **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+                     *       实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+                     *       请求其余部分指名的东西不存在是 422。
+                     *     · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+                     *       买家侧对它照旧 404。
+                     *     · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+                     *       （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+                     *
+                     *     后台每一条挂后台会话的操作都声明了它（机械核对：
+                     *     `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+                     */
+                    "X-Keel-Merchant"?: components["parameters"]["KeelMerchant"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ShopSettings"];
+                    };
+                };
+                /** @description 不是管理员 —— `https://keel.dev/problems/role-forbidden`。 */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        /**
+         * 修改店铺设置（整体替换）
+         * @description **整体替换**：请求体就是全部可改设置。可选项（`service_phone`）不给即清空。
+         *     PUT 天然幂等（同一个请求体放几次结果都一样），不收 Idempotency-Key。
+         *
+         *     · `timezone`：IANA 时区名（如 `Asia/Shanghai`、`America/New_York`），服务端逐个校验
+         *       能否加载；`Local`、空串、缩写（`CST`）一律 422。**改了之后经营报表立即按新时区切
+         *       「今天」「按天」**，历史数据不需要重算（报表现场聚合）。
+         *     · `auto_confirm_days`：发货后多少天自动确认收货，1–365。**只影响之后的判断**：
+         *       定时任务每一轮按当时的值算截止时间，所以改短之后，已发货超过新天数的单会在下一轮
+         *       被确认；改长则顺延。
+         *     · `return_ship_days`：退货退款审核通过（退款单进入 20 待买家退货）后多少天没填寄回
+         *       物流就自动关闭（20 → 60），1–365，从审核通过的时间起算。已经填了寄回物流的不关。
+         *       同样按每一轮当时的值判断。
+         *     · `service_phone`：客服电话，展示用，至多 32 个字符。
+         *
+         *     店铺名称不在请求体里：它由平台改（`PATCH /admin/merchants/{merchant_id}`）。
+         *
+         *     **权限**同 `GET`。
+         */
+        put: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /**
+                     * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+                     *
+                     *     它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+                     *     而例外成立的前提是平台级鉴权：
+                     *
+                     *     · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+                     *       读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+                     *       行级安全落在这家店上。
+                     *     · **商家级员工带了这个头：403**
+                     *       （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+                     *       静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+                     *     · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+                     *       **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+                     *       实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+                     *       请求其余部分指名的东西不存在是 422。
+                     *     · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+                     *       买家侧对它照旧 404。
+                     *     · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+                     *       （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+                     *
+                     *     后台每一条挂后台会话的操作都声明了它（机械核对：
+                     *     `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+                     */
+                    "X-Keel-Merchant"?: components["parameters"]["KeelMerchant"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["ShopSettingsInput"];
+                };
+            };
+            responses: {
+                /** @description 已替换 */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ShopSettings"];
+                    };
+                };
+                /** @description 不是管理员 —— `https://keel.dev/problems/role-forbidden`。 */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /**
+                 * @description 时区不是能加载的 IANA 名字、天数越界、客服电话过长 ——
+                 *     `https://keel.dev/problems/invalid-request`。
+                 */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/promotions": {
         parameters: {
             query?: never;
@@ -7536,7 +7708,20 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** 修改资料 */
+        /**
+         * 修改资料
+         * @description 三个字段都是「给了才改」，至少给一个。
+         *
+         *     **`avatar_url` 只收本人上传的头像**（破坏性变化，此前收任意地址）：
+         *     必须是 `POST /uploads`（`purpose=2` 头像）返回的 `url` 原样，形如 `/api/v1/uploads/{upload_id}`，
+         *     而且是**当前买家自己**传的。外链（包括微信头像地址）、别人的上传、退款凭证、带 query 的变体
+         *     一律 422（`errors` 点名 `avatar_url`），与退款申请的 `evidence_urls` 同一套核对。
+         *     空串 = 清掉头像。
+         *
+         *     设成功的头像在同一个事务里被标为「已引用」，不会被 24 小时的孤儿回收删掉；
+         *     **换掉（或清掉）之后旧头像取消引用**，24 小时后由回收任务删除 —— 所以不要缓存旧头像的地址
+         *     指望它一直能打开。此前存下的外链头像原样保留、照常返回，直到本人改掉它。
+         */
         patch: {
             parameters: {
                 query?: never;
@@ -7548,6 +7733,10 @@ export interface paths {
                 content: {
                     "application/json": {
                         nickname?: string;
+                        /**
+                         * @description 本人用 `POST /uploads`（`purpose=2`）传的头像的 `url`，形如 `/api/v1/uploads/{upload_id}`；
+                         *     空串清掉头像。其余一律 422。
+                         */
                         avatar_url?: string;
                         /**
                          * @description 0 未知 / 1 男 / 2 女
@@ -7567,7 +7756,10 @@ export interface paths {
                         "application/json": components["schemas"]["User"];
                     };
                 };
-                /** @description 字段校验失败（见 Problem.errors） */
+                /**
+                 * @description 字段校验失败（见 Problem.errors）。`avatar_url` 不是本人传的头像（外链、别人的、
+                 *     退款凭证、不存在、已被回收）时 `errors` 点名 `avatar_url`。
+                 */
                 422: {
                     headers: {
                         [name: string]: unknown;
@@ -10640,7 +10832,7 @@ export interface paths {
          *       与确认收货那条一致，部分退款不该冻结整个履约流程。
          *     - **不查物流轨迹。** 只记承运商与运单号，前端自己拼查询链接。
          *
-         *     发货后 `shop_settings.auto_confirm_days` 天由定时任务自动
+         *     发货后店铺设置的 `auto_confirm_days` 天（`GET /admin/shop-settings`）由定时任务自动
          *     `30 → 40`，买家也可以主动 `POST /orders/{order_no}/confirm`。
          */
         post: {
@@ -11793,6 +11985,110 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/reports/products.csv": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 导出商品排行（CSV）
+         * @description 与 `GET /admin/reports/products` **同一份数据、同一组参数、同一个判权**，换成 CSV 文件下载
+         *     （`Content-Disposition: attachment`，文件名带窗口的起止日期）。导出的就是界面上那张表：
+         *     同样受 `limit`（Top N，至多 50）约束。
+         *
+         *     · 编码：**UTF-8 带 BOM**（不带 BOM 的话中文 Excel 双击打开是乱码），CRLF 换行，RFC 4180 引号规则。
+         *     · 列：排名、商品ID、商品标题、类目ID、销量、销售额（元）、支付订单数、已退件数、已退金额（元）。
+         *       金额按「元」写、两位小数（Excel 里直接能求和），口径与 JSON 版逐字一致。
+         *     · 以 `=` `+` `-` `@` 开头的文本单元格（商品标题）前面加一个单引号，防止在 Excel 里被当成公式执行。
+         *     · 窗口写错是 422（Problem JSON，不是 CSV）。
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /**
+                     * @description 时间窗口，按店铺时区的自然日切（口径见 `ReportWindow`）：
+                     *     `today` 今天 0 点到此刻 · `yesterday` 昨天 · `last_7_days` 最近 7 个完整自然日（不含今天）·
+                     *     `last_30_days` 最近 30 个完整自然日（不含今天）· `custom` 自定义（必须同时给
+                     *     `start_date` 与 `end_date`）。**不传即 `today`**（写在这里而不是 schema 的 `default` 上：
+                     *     查询参数的缺省值会被生成器代入，静默改变筛选语义，check_openapi.py 不许）。
+                     */
+                    period?: components["parameters"]["ReportPeriod"];
+                    /**
+                     * @description `period=custom` 时的起始日（含），店铺时区的日期，形如 `2026-09-01`。
+                     *     其它 period 下给了也不读。
+                     */
+                    start_date?: components["parameters"]["ReportStartDate"];
+                    /**
+                     * @description `period=custom` 时的结束日（**含**），店铺时区的日期。起止最多跨 **366 天**
+                     *     （含首尾，一整个闰年），超出 422 —— 理由见 `ReportWindow`。
+                     */
+                    end_date?: components["parameters"]["ReportEndDate"];
+                    /** @description 只看这一家门店（履约门店）。与调用者的范围取交集，范围外得到空结果而不是 403。 */
+                    store_id?: components["parameters"]["ReportStoreId"];
+                    /** @description 只看此刻挂在这个大区下的门店。与调用者的范围取交集。 */
+                    region_id?: components["parameters"]["ReportRegionId"];
+                    /** @description 同 `GET /admin/reports/products`。 */
+                    sort_by?: "amount" | "quantity";
+                    /** @description 同 `GET /admin/reports/products`。 */
+                    category_id?: number;
+                    /** @description Top N 的 N，不传即 10。超出范围按边界钳制。 */
+                    limit?: components["parameters"]["ReportLimit"];
+                };
+                header?: {
+                    /**
+                     * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+                     *
+                     *     它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+                     *     而例外成立的前提是平台级鉴权：
+                     *
+                     *     · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+                     *       读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+                     *       行级安全落在这家店上。
+                     *     · **商家级员工带了这个头：403**
+                     *       （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+                     *       静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+                     *     · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+                     *       **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+                     *       实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+                     *       请求其余部分指名的东西不存在是 422。
+                     *     · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+                     *       买家侧对它照旧 404。
+                     *     · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+                     *       （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+                     *
+                     *     后台每一条挂后台会话的操作都声明了它（机械核对：
+                     *     `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+                     */
+                    "X-Keel-Merchant"?: components["parameters"]["KeelMerchant"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description CSV 文件（`Content-Disposition: attachment`） */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "text/csv": string;
+                    };
+                };
+                422: components["responses"]["ReportBadWindow"];
+                default: components["responses"]["Problem"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/reports/stores": {
         parameters: {
             query?: never;
@@ -11877,6 +12173,99 @@ export interface paths {
                     };
                     content: {
                         "application/json": components["schemas"]["ReportStoreComparison"];
+                    };
+                };
+                422: components["responses"]["ReportBadWindow"];
+                default: components["responses"]["Problem"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/reports/stores.csv": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 导出门店 / 大区对比（CSV）
+         * @description 与 `GET /admin/reports/stores` **同一份数据、同一组参数、同一个判权**，换成 CSV 文件下载。
+         *     编码与引号规则同 `GET /admin/reports/products.csv`（UTF-8 带 BOM、CRLF、防公式注入）。
+         *
+         *     · 先列门店（顺序同 JSON 版：净销售额倒序），再列大区小计；第一列「类型」区分两者。
+         *     · 列：类型、大区ID、大区、门店ID、门店编码、门店、已删除、支付订单数、支付金额（元）、
+         *       退款金额（元）、净销售额（元）。大区小计那几行门店列留空。
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /**
+                     * @description 时间窗口，按店铺时区的自然日切（口径见 `ReportWindow`）：
+                     *     `today` 今天 0 点到此刻 · `yesterday` 昨天 · `last_7_days` 最近 7 个完整自然日（不含今天）·
+                     *     `last_30_days` 最近 30 个完整自然日（不含今天）· `custom` 自定义（必须同时给
+                     *     `start_date` 与 `end_date`）。**不传即 `today`**（写在这里而不是 schema 的 `default` 上：
+                     *     查询参数的缺省值会被生成器代入，静默改变筛选语义，check_openapi.py 不许）。
+                     */
+                    period?: components["parameters"]["ReportPeriod"];
+                    /**
+                     * @description `period=custom` 时的起始日（含），店铺时区的日期，形如 `2026-09-01`。
+                     *     其它 period 下给了也不读。
+                     */
+                    start_date?: components["parameters"]["ReportStartDate"];
+                    /**
+                     * @description `period=custom` 时的结束日（**含**），店铺时区的日期。起止最多跨 **366 天**
+                     *     （含首尾，一整个闰年），超出 422 —— 理由见 `ReportWindow`。
+                     */
+                    end_date?: components["parameters"]["ReportEndDate"];
+                    /** @description 只看此刻挂在这个大区下的门店。与调用者的范围取交集。 */
+                    region_id?: components["parameters"]["ReportRegionId"];
+                };
+                header?: {
+                    /**
+                     * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+                     *
+                     *     它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+                     *     而例外成立的前提是平台级鉴权：
+                     *
+                     *     · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+                     *       读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+                     *       行级安全落在这家店上。
+                     *     · **商家级员工带了这个头：403**
+                     *       （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+                     *       静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+                     *     · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+                     *       **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+                     *       实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+                     *       请求其余部分指名的东西不存在是 422。
+                     *     · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+                     *       买家侧对它照旧 404。
+                     *     · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+                     *       （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+                     *
+                     *     后台每一条挂后台会话的操作都声明了它（机械核对：
+                     *     `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+                     */
+                    "X-Keel-Merchant"?: components["parameters"]["KeelMerchant"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description CSV 文件（`Content-Disposition: attachment`） */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "text/csv": string;
                     };
                 };
                 422: components["responses"]["ReportBadWindow"];
@@ -13747,6 +14136,17 @@ export interface components {
              *     否则客户端得再请求一次 `GET /orders/{order_no}/refunds`。
              */
             refunds?: components["schemas"]["Refund"][];
+            /**
+             * Format: date-time
+             * @description 自动确认收货的截止时间：只有 `30 已发货` 的订单才出现，
+             *     = 发货时间 + 店铺设置的 `auto_confirm_days` 天（默认 7）。过了这个时间，
+             *     定时任务替买家确认收货（最迟晚十分钟）。客户端据此显示「N 天后自动确认」，
+             *     不要自己按 7 天估。
+             *     按**此刻**的店铺设置算：商家改了天数，截止时间跟着变。
+             *     订单有在途售后（退款单 10 / 20 / 30）时自动确认**暂停**：截止时间照常返回，
+             *     但到点不确认，售后结束后的下一轮才确认（数据模型 §5）。
+             */
+            auto_confirm_at?: string;
         };
         OrderItem: {
             /** Format: int64 */
@@ -13843,6 +14243,10 @@ export interface components {
          *        ├─驳回──► 50 已拒绝
          *        └─撤销──► 60 已取消   （20 超时未寄回 / 买家撤销，同样进 60）
          *     ```
+         *
+         *     **20 超时未寄回**：退货退款审核通过后，从审核时间（`audited_at`）起超过店铺设置的
+         *     `return_ship_days` 天（默认 7）仍没填寄回物流，定时任务把它关到 60，并给买家发
+         *     `refund_return_expired`。截止时间在 `Refund.return_deadline_at`；填过寄回物流的不关。
          *
          *     合法迁移（`refund_status_transitions`，由数据库触发器执行）：
          *     `(10,20) (10,30) (10,50) (10,60) (20,30) (20,60) (30,40)`。
@@ -13972,6 +14376,14 @@ export interface components {
             audited_at?: string;
             /**
              * Format: date-time
+             * @description 寄回截止时间：退货退款停在 `20 待买家退货`、且还没填寄回物流时才出现，
+             *     = `audited_at` + 店铺设置的 `return_ship_days` 天。过了这个时间仍没填，
+             *     定时任务会把售后单关到 `60 已取消`（最迟晚十分钟）。客户端据此提示「请在 X 前寄回」。
+             *     按**此刻**的店铺设置算：商家改了天数，截止时间跟着变。
+             */
+            return_deadline_at?: string;
+            /**
+             * Format: date-time
              * @description 到账时间
              */
             refunded_at?: string;
@@ -14040,9 +14452,10 @@ export interface components {
          *     | 门店：建、改、删、围栏 | ✅ | ✅ | 只限本大区的门店（换大区时新旧都得在范围内） | ❌ |
          *     | 门店价、门店上下架、门店库存 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
          *     | 订单与售后：订单 / 退款单的列表与详情、发货、退款审核、确认收到退货 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
-         *     | 经营报表：概览、趋势、商品排行、门店对比、库存预警 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
+         *     | 经营报表：概览、趋势、商品排行、门店对比、库存预警（含两份 CSV 导出） | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
          *     | 经营报表：搜索概况（检索日志没有门店维度） | ✅ | ✅ | ❌ | ❌ |
          *     | 设默认门店（含建店时 is_default） | ✅ | ❌ | ❌ | ❌ |
+         *     | 店铺设置（时区、自动确认天数、退货寄回时限、客服电话）的读与改 | ✅ | ❌ | ❌ | ❌ |
          *     | 员工管理 | ✅ | ❌ | 只能加、改本大区门店的门店管理员 | ❌ |
          *     | 开店 | 仅平台级管理员 | | | |
          *
@@ -14104,7 +14517,7 @@ export interface components {
         /**
          * @description 一次报表查询的时间窗口。**六条报表共用这一份口径**：
          *
-         *     **时区**：店铺时区 `shop_settings.timezone`；这家店没有那一行、或那一列不是合法的
+         *     **时区**：店铺时区（`GET /admin/shop-settings` 的 `timezone`）；这家店没改过、或那一列不是合法的
          *     IANA 时区名时按 **Asia/Shanghai**。回显在 `timezone` 里。「今天」「昨天」「按天」「按小时」
          *     全部按这个时区的自然日 / 整点切，不按服务器时区、也不按 UTC。
          *
@@ -14903,6 +15316,8 @@ export interface components {
          *     · `refund_approved` —— 售后审核通过（退货退款提示去填寄回物流）
          *     · `refund_rejected` —— 售后被驳回，正文带驳回理由
          *     · `refund_succeeded` —— 退款到账（退款单 `30 → 40`）
+         *     · `refund_return_expired` —— 退货退款审核通过后超过店铺设置的天数没填寄回物流，
+         *       售后单被系统关闭（`20 → 60`，定时任务）。买家自己撤回不发
          *
          *     商家（`GET /admin/notifications`）：
          *     · `merchant_order_paid` —— 新的已支付待发货订单
@@ -14912,7 +15327,7 @@ export interface components {
          *       扣到 0 时标题是「已售罄」
          * @enum {string}
          */
-        NotificationKind: "order_paid" | "order_shipped" | "order_auto_confirm_soon" | "order_finished" | "order_timeout_closed" | "refund_approved" | "refund_rejected" | "refund_succeeded" | "merchant_order_paid" | "merchant_refund_requested" | "merchant_return_shipped" | "merchant_inventory_low";
+        NotificationKind: "order_paid" | "order_shipped" | "order_auto_confirm_soon" | "order_finished" | "order_timeout_closed" | "refund_approved" | "refund_rejected" | "refund_succeeded" | "refund_return_expired" | "merchant_order_paid" | "merchant_refund_requested" | "merchant_return_shipped" | "merchant_inventory_low";
         /**
          * @description 点了这条通知跳到哪里。四个定位字段都一定出现，用不上的是 `null`：
          *     · `order` —— `order_no` 非空，跳订单详情；
@@ -15033,6 +15448,34 @@ export interface components {
             created_at: string;
             /** Format: date-time */
             updated_at: string;
+        };
+        ShopSettings: {
+            /** @description 店铺名称（只读，`merchants` 目录里的当前名称；由平台改） */
+            shop_name: string;
+            /** @description 客服电话；没设为 null */
+            service_phone: string | null;
+            /**
+             * @description IANA 时区名。经营报表按它切自然日
+             * @example Asia/Shanghai
+             */
+            timezone: string;
+            /** @description 发货后多少天由系统自动确认收货 */
+            auto_confirm_days: number;
+            /** @description 退货退款审核通过后多少天未填寄回物流即自动关闭 */
+            return_ship_days: number;
+            /**
+             * Format: date-time
+             * @description 最近一次修改的时间；从没改过（全是默认值）为 null
+             */
+            updated_at: string | null;
+        };
+        ShopSettingsInput: {
+            /** @description 客服电话。不给即清空 */
+            service_phone?: string;
+            /** @description IANA 时区名，如 `Asia/Shanghai` */
+            timezone: string;
+            auto_confirm_days: number;
+            return_ship_days: number;
         };
         /**
          * @description 这一组为什么免运费：`threshold` 满额包邮、`quantity` 满件包邮、

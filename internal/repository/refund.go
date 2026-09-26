@@ -89,6 +89,18 @@ type Refund struct {
 
 	// ReturnShipment 是买家填的寄回物流（00037）。只有退货退款、且买家填过时非 nil。
 	ReturnShipment *ReturnShipment
+
+	// ReturnDeadlineAt 是寄回截止时间（契约 Refund.return_deadline_at，00059）：
+	// 退货退款停在 20、还没填寄回物流时 = audited_at + 店铺设置的 return_ship_days 天，
+	// 过了它定时任务把这张单关到 60（service/return_timeout.go）。其余为 nil。
+	ReturnDeadlineAt *time.Time
+}
+
+// AwaitingReturn 判这张退款单是不是「等买家寄回、还没寄」：退货退款、停在 20、
+// 没填寄回物流。退货超时关闭与寄回截止时间都只对这种单成立。
+func (r Refund) AwaitingReturn() bool {
+	return r.RefundType == RefundTypeReturnGoods && r.Status == RefundAwaitingReturn &&
+		r.ReturnShipment == nil && r.AuditedAt != nil
 }
 
 // ReturnShipment 是退货寄回的物流（契约的 ReturnShipment）。
@@ -176,6 +188,12 @@ type RefundTx interface {
 	CountUserRefunds(ctx context.Context, userID int64, status *int16) (int64, error)
 
 	CancelRefund(ctx context.Context, refundID, userID int64) (bool, error)
+	// ListReturnOverdueRefunds 退货超时未寄回的候选：退货退款、停在 20、没填寄回物流、
+	// 审核时间早于 cutoff，按审核时间从早到晚，至多 limit 张（00059 / 00060）。只是预筛。
+	ListReturnOverdueRefunds(ctx context.Context, cutoff time.Time, limit int32) ([]ReturnOverdueRefund, error)
+	// ExpireReturnRefund 20 → 60（退货超时未寄回）。谓词重判「没填寄回物流、审核早于 cutoff」，
+	// 不再满足时返回 false —— 调用方要先锁订单、再锁退款单。
+	ExpireReturnRefund(ctx context.Context, refundID int64, cutoff time.Time) (bool, error)
 	// 审核与确认收到退货三条都记下是谁做的（staffID → audited_by / received_by，00035）。
 	RejectRefund(ctx context.Context, refundID int64, reason string, staffID int64) (bool, error)
 	ApproveRefund(ctx context.Context, refundID int64, next int16, freightCents int64, staffID int64) (bool, error)
@@ -391,10 +409,17 @@ func returnShipmentOf(carrier, tracking *string, at pgtype.Timestamptz) *ReturnS
 	return &ReturnShipment{CarrierCode: *carrier, TrackingNo: *tracking, SubmittedAt: at.Time}
 }
 
-// withItems 给一批退款单挂上明细（一次查询，不是 N 次）。
+// withItems 给一批退款单挂上明细（一次查询，不是 N 次），顺带填寄回截止时间。
+//
+// 寄回截止放在这里而不是各个 handler：退款单从五六条读路径出去（买家详情、列表、
+// 订单详情、后台详情、各个写接口的回显），在这一处算，就不会有哪条路径漏了它。
+// 只有这一批里真有「等买家寄回」的单时才读一次店铺设置。
 func (t tenantTx) withItems(ctx context.Context, refunds []Refund) ([]Refund, error) {
 	if len(refunds) == 0 {
 		return refunds, nil
+	}
+	if err := t.withReturnDeadlines(ctx, refunds); err != nil {
+		return nil, err
 	}
 	ids := make([]int64, 0, len(refunds))
 	idx := make(map[int64]int, len(refunds))
@@ -418,6 +443,27 @@ func (t tenantTx) withItems(ctx context.Context, refunds []Refund) ([]Refund, er
 		})
 	}
 	return refunds, nil
+}
+
+// withReturnDeadlines 给「等买家寄回」的退款单填 ReturnDeadlineAt（与 service/return_timeout.go
+// 的截止同一个算式：audited_at + N 天）。
+func (t tenantTx) withReturnDeadlines(ctx context.Context, refunds []Refund) error {
+	days := 0
+	for i := range refunds {
+		if !refunds[i].AwaitingReturn() {
+			continue
+		}
+		if days == 0 {
+			p, err := t.ShopPreferences(ctx)
+			if err != nil {
+				return err
+			}
+			days = p.ReturnShipDays
+		}
+		at := refunds[i].AuditedAt.Add(time.Duration(days) * 24 * time.Hour)
+		refunds[i].ReturnDeadlineAt = &at
+	}
+	return nil
 }
 
 func (t tenantTx) FindRefundByNo(ctx context.Context, refundNo string) (Refund, error) {
@@ -502,6 +548,34 @@ func rowsOrTransition(n int64, err error) (bool, error) {
 		return false, refundTransitionErr(err)
 	}
 	return n == 1, nil
+}
+
+// ReturnOverdueRefund 是退货超时扫描扫到的一张退款单。
+type ReturnOverdueRefund struct {
+	ID       int64
+	RefundNo string
+	OrderID  int64
+}
+
+func (t tenantTx) ListReturnOverdueRefunds(ctx context.Context, cutoff time.Time,
+	limit int32) ([]ReturnOverdueRefund, error) {
+	rows, err := t.q.ListReturnOverdueRefunds(ctx, db.ListReturnOverdueRefundsParams{
+		Cutoff: pgtype.Timestamptz{Time: cutoff, Valid: true}, PageLimit: limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ReturnOverdueRefund, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, ReturnOverdueRefund{ID: r.ID, RefundNo: r.RefundNo, OrderID: r.OrderID})
+	}
+	return out, nil
+}
+
+func (t tenantTx) ExpireReturnRefund(ctx context.Context, refundID int64, cutoff time.Time) (bool, error) {
+	return rowsOrTransition(t.q.ExpireReturnRefund(ctx, db.ExpireReturnRefundParams{
+		ID: refundID, Cutoff: pgtype.Timestamptz{Time: cutoff, Valid: true},
+	}))
 }
 
 func (t tenantTx) CancelRefund(ctx context.Context, refundID, userID int64) (bool, error) {

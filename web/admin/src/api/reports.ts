@@ -182,3 +182,41 @@ export function compactYuan(cents: number): string {
     if (Math.abs(yuan) >= 10_000) return `¥${(yuan / 10_000).toFixed(yuan % 10_000 === 0 ? 0 : 1)}万`;
     return `¥${Math.round(yuan)}`;
 }
+
+// ---------------------------------------------------------------------------
+// CSV 导出（契约 GET /admin/reports/products.csv、/admin/reports/stores.csv）
+// ---------------------------------------------------------------------------
+
+export type ReportCsvKind = "products" | "stores";
+
+/**
+ * 导出地址（相对 API_BASE）。参数与界面上那张表发出去的查询**逐字相同**：导出的就是你看到的那张表。
+ * undefined / null 的参数不带（与 KeelClient 的 query 序列化同一个规矩）。
+ */
+export function reportCsvPath(kind: ReportCsvKind, query: Record<string, string | number | undefined | null>): string {
+    const params = new URLSearchParams();
+    for (const [k, v] of Object.entries(query)) {
+        if (v === undefined || v === null) continue;
+        params.set(k, String(v));
+    }
+    const qs = params.toString();
+    return `/admin/reports/${kind}.csv${qs === "" ? "" : `?${qs}`}`;
+}
+
+/**
+ * 从 Content-Disposition 取文件名：优先 RFC 5987 的 filename*（中文名），其次 filename，
+ * 都没有时用 fallback。服务端的文件名带着窗口的起止日期。
+ */
+export function filenameFromDisposition(header: string | null, fallback: string): string {
+    if (header === null) return fallback;
+    const star = /filename\*\s*=\s*UTF-8''([^;]+)/i.exec(header);
+    if (star !== null) {
+        try {
+            return decodeURIComponent(star[1].trim());
+        } catch {
+            // 编码坏了：落到下面的 filename
+        }
+    }
+    const plain = /filename\s*=\s*"([^"]+)"/i.exec(header);
+    return plain !== null ? plain[1] : fallback;
+}

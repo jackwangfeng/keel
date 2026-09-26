@@ -172,6 +172,7 @@ func apiRefund(r repository.Refund) api.Refund {
 		EvidenceUrls:     &evidence,
 		RejectReason:     r.RejectReason,
 		AuditedAt:        r.AuditedAt,
+		ReturnDeadlineAt: r.ReturnDeadlineAt,
 		RefundedAt:       r.RefundedAt,
 		CreatedAt:        r.CreatedAt,
 		UpdatedAt:        &updated,

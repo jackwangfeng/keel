@@ -3,7 +3,6 @@ package handler_test
 import (
 	"context"
 	"net/http"
-	"strconv"
 	"testing"
 
 	"github.com/keel/keel/internal/repository"
@@ -40,7 +39,7 @@ func newConfirmer() *service.AutoConfirmService {
 // 有在途售后的暂停，售后结束后下一轮补上。
 func TestAutoConfirmFollowsTheShopSettingAndPausesForOpenRefunds(t *testing.T) {
 	cs := newCouponShop(t)
-	adminExec(t, `UPDATE shop_settings SET auto_confirm_days = 3 WHERE merchant_id = $1`, cs.MerchantID)
+	setShopPreference(t, cs.MerchantID, "auto_confirm_days", 3)
 	b := cs.newBuyer(t, "autoconfirm")
 
 	shipped := func() string {
@@ -95,20 +94,9 @@ func TestAutoConfirmFollowsTheShopSettingAndPausesForOpenRefunds(t *testing.T) {
 		http.StatusConflict, "对自动确认过的订单再确认收货")
 }
 
-// 没有 shop_settings 那一行的店（开店不写它）按列默认值 7 天走，而不是不确认。
-// 同时钉住 repository.DefaultAutoConfirmDays 与库里的列默认值是同一个数。
+// 没有店铺设置那一行的店（开店不写它、从没改过设置）按列默认值 7 天走，而不是不确认。
+// 列默认值与 repository 常量是同一个数，由 TestShopPreferenceDefaultsMatchTheColumnDefaults 钉住。
 func TestAutoConfirmDefaultsToTheColumnDefaultWithoutShopSettings(t *testing.T) {
-	var colDefault string
-	if err := admin(t).QueryRow(context.Background(), `
-		SELECT column_default FROM information_schema.columns
-		 WHERE table_name = 'shop_settings' AND column_name = 'auto_confirm_days'`).Scan(&colDefault); err != nil {
-		t.Fatal(err)
-	}
-	if colDefault != strconv.Itoa(repository.DefaultAutoConfirmDays) {
-		t.Fatalf("shop_settings.auto_confirm_days 的列默认值是 %q，repository.DefaultAutoConfirmDays 是 %d —— "+
-			"没配店铺设置的店与配过的店会按不同的默认天数确认", colDefault, repository.DefaultAutoConfirmDays)
-	}
-
 	cs := newCouponShop(t)
 	b := cs.newBuyer(t, "autoconfirm-default")
 	shipped := func() string {
@@ -117,8 +105,12 @@ func TestAutoConfirmDefaultsToTheColumnDefaultWithoutShopSettings(t *testing.T) 
 		return o.OrderNo
 	}
 	due, notYet := shipped(), shipped()
-	// 付款要回调密钥（在 shop_settings.extra 里），所以先下单付款发货，再把这一行删掉。
-	adminExec(t, `DELETE FROM shop_settings WHERE merchant_id = $1`, cs.MerchantID)
+	// 新店没有 shop_preferences 那一行（夹具不写它）；这里确认一下，免得夹具哪天顺手写了。
+	var n int
+	if err := admin(t).QueryRow(context.Background(),
+		`SELECT count(*) FROM shop_preferences WHERE merchant_id = $1`, cs.MerchantID).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("这家店已经有 %d 行店铺设置（err=%v）—— 这条用例要的是「没有那一行」", n, err)
+	}
 	shippedDaysAgo(t, due, repository.DefaultAutoConfirmDays)
 	shippedDaysAgo(t, notYet, repository.DefaultAutoConfirmDays-1)
 
@@ -133,11 +125,12 @@ func TestAutoConfirmDefaultsToTheColumnDefaultWithoutShopSettings(t *testing.T) 
 	}
 }
 
-// chk_auto_confirm_days（00036）：0 天意味着「一发货就自动确认」，库里写不进去。
+// chk_shop_pref_auto_confirm_days（00036 的那条，00059 随列搬到 shop_preferences）：
+// 0 天意味着「一发货就自动确认」，库里写不进去。
 func TestAutoConfirmDaysMustBePositive(t *testing.T) {
 	cs := newCouponShop(t)
 	_, err := admin(t).Exec(context.Background(),
-		`UPDATE shop_settings SET auto_confirm_days = 0 WHERE merchant_id = $1`, cs.MerchantID)
+		`INSERT INTO shop_preferences (merchant_id, auto_confirm_days) VALUES ($1, 0)`, cs.MerchantID)
 	if err == nil {
 		t.Fatal("auto_confirm_days = 0 写进去了 —— 那意味着发货即确认收货，买家没有售后窗口")
 	}
