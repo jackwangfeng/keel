@@ -13,7 +13,7 @@ import (
 	"github.com/keel/keel/internal/tenant"
 )
 
-// 下单 SAGA 的两个正向分支与它们的补偿。
+// 下单 SAGA 的三个正向分支与它们的补偿：建单、锁券、扣库存。
 //
 // # 这个文件里每一行都受制于同一句话：分支只拿到三个字符串
 //
@@ -24,7 +24,8 @@ import (
 //
 //   - **租户**从 gid 来（dtm.TenantContextFromGID），不从别处来；
 //   - **订单号**从 gid 来；
-//   - **扣哪些 SKU、各扣几件**从库里读（order_items），因为它们推不出来。
+//   - **扣哪些 SKU、各扣几件**从库里读（order_items），因为它们推不出来；
+//   - **锁哪张券**也从库里读（orders.user_coupon_id，00026），理由同上。
 //
 // 第三条正是「订单必须先落库再提交 SAGA」的全部理由，写在 order.go 的文件头。
 
@@ -37,6 +38,8 @@ const (
 	BranchOrderCreateUndo = "order_create_undo"
 	BranchOrderStock      = "order_stock"
 	BranchOrderStockUndo  = "order_stock_undo"
+	BranchOrderCoupon     = "order_coupon"
+	BranchOrderCouponUndo = "order_coupon_undo"
 )
 
 // dtmrs 的 BranchOp 里我们只用到的两个。见 repository/saga.go 的白名单。
@@ -49,11 +52,23 @@ const (
 // 补偿只对真的执行过的分支生效，库存排在前面时，一次库存失败会让建单分支的
 // 补偿变成一次空回滚，那笔 status = 0 的订单就永远没人关。
 //
+// **券夹在中间（00026）**，同一条理由推出来的：
+//   - 券在库存之前：库存失败时券分支已经执行过，它的补偿是一次**真**补偿，
+//     券回到「未使用」。券排在库存之后的话，库存失败时券分支从没跑过，倒也不用解锁 ——
+//     但券自己锁不上时，库存已经扣了，要多补偿一个分支，而且扣库存这一步白拿了行锁。
+//   - 券在建单之后：券锁不上（被别的单占了、刚好过期）时建单分支已经执行过，
+//     订单被补偿关到 90，而不是留下一行没人关的 status = 0。
+//
+// 没带券的订单同样经过券分支，两个方向都是空操作（lockCoupon / unlockCoupon
+// 看到 user_coupon_id 为空直接返回）。不按「带没带券」拼两份编排：一份常量编排
+// 意味着分支号（01/02/03）对每一单都一样，排障时不必先问「这单带券了吗」。
+//
 // 它是一个常量字符串而不是每次 Marshal 一个结构体：这段 JSON 里没有任何随请求
 // 变化的东西（steps 里只有地址，不带业务载荷），而一个每次都重新拼的常量
 // 只是多了一处可以拼错的地方。
 const sagaSteps = `[` +
 	`{"action":"local://order_create","compensate":"local://order_create_undo"},` +
+	`{"action":"local://order_coupon","compensate":"local://order_coupon_undo"},` +
 	`{"action":"local://order_stock","compensate":"local://order_stock_undo"}]`
 
 // 订单状态（数据模型 §5 + 00013）。
@@ -81,6 +96,8 @@ func (s *OrderService) Branches() map[string]dtm.BranchFunc {
 		BranchOrderCreateUndo: s.branch(BranchOrderCreateUndo, opCompensate, closeOrder),
 		BranchOrderStock:      s.branch(BranchOrderStock, opAction, deductStock),
 		BranchOrderStockUndo:  s.branch(BranchOrderStockUndo, opCompensate, restoreStock),
+		BranchOrderCoupon:     s.branch(BranchOrderCoupon, opAction, lockCoupon),
+		BranchOrderCouponUndo: s.branch(BranchOrderCouponUndo, opCompensate, unlockCoupon),
 	}
 }
 
@@ -165,6 +182,13 @@ func (s *OrderService) reportBranchFailure(log *slog.Logger, gid string, err err
 		s.notes.put(gid, fmt.Errorf("%w: %v", ErrCrossTenantSKU, err))
 		return dtm.Failure
 
+	case errors.Is(err, ErrCouponNotApplicable):
+		// 正常业务分支：券在试算之后、锁券之前被别的单占了或刚好过期。
+		// 触发全局补偿（建单被关掉），用户看到 409「券不可用」。
+		log.Info("券锁不上，触发全局补偿", "err", err)
+		s.notes.put(gid, err)
+		return dtm.Failure
+
 	case errors.Is(err, repository.ErrOrderNotFound), errors.Is(err, errOrderNotDraft):
 		log.Error("分支找不到它要处理的订单，或订单状态不对", "err", err)
 		s.notes.put(gid, fmt.Errorf("%w: %v", ErrOrderSagaFailed, err))
@@ -234,6 +258,58 @@ func closeOrder(ctx context.Context, tx repository.Tx, order repository.Order) e
 			"而它的库存从没扣过：需要人工退款。"+
 			"是不是有人让 POST /orders 在 SAGA 到终态之前就把订单号返回了？",
 			"order_no", order.OrderNo, "status", order.Status)
+	}
+	return nil
+}
+
+// lockCoupon 是券分支的正向：1 未使用 → 2 锁定，回填 order_id。
+//
+// **锁哪张券从订单行上读**（order.UserCouponID，00026），不从调用参数里拿 ——
+// 分支只拿到 (gid, branch_id, op) 三个字符串。order 是 branch() 在**这个屏障事务里**
+// 刚按 gid 里的订单号读回来的那一行。
+//
+// 锁不上（受影响 0 行）是一种正常的业务结果：这张券在试算之后被另一单占了、
+// 刚好过了有效期。返回 ErrCouponNotApplicable → reportBranchFailure 报 Failure →
+// 建单分支被补偿关单，而库存分支排在后面、从没跑过。
+func lockCoupon(ctx context.Context, tx repository.Tx, order repository.Order) error {
+	if order.UserCouponID == nil {
+		return nil
+	}
+	n, err := tx.LockUserCoupon(ctx, *order.UserCouponID, order.UserID, order.ID)
+	if err != nil {
+		return err
+	}
+	if n != 1 {
+		return fmt.Errorf("%w: 订单 %s 要用的券 %d 锁不上（已被占用、已使用或已过期）",
+			ErrCouponNotApplicable, order.OrderNo, *order.UserCouponID)
+	}
+	return nil
+}
+
+// unlockCoupon 是券分支的补偿：2 锁定 → 1 未使用，清空 order_id。
+//
+// 受影响 0 行与 closeOrder 同样有两种成因，也同样分开：
+//
+//	① 这张券本来就没被这一单锁住（空回滚已由屏障挡掉；走到这里多半是重放） —— 静默。
+//	② 这张券已经是 3 已使用：这一单在补偿跑到之前被付掉了。
+//
+// ② 与 closeOrder 那个窗口是同一个（「单号在终态前不外泄」这条不变量守着它），
+// 所以同样只出声、不报错：报错会让协调器无限重试一件改不了的事。
+func unlockCoupon(ctx context.Context, tx repository.Tx, order repository.Order) error {
+	if order.UserCouponID == nil {
+		return nil
+	}
+	n, err := tx.UnlockCouponForOrder(ctx, order.ID)
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		if _, status, err := tx.CouponStatusForOrder(ctx, order.ID); err == nil &&
+			status == repository.UserCouponUsed {
+			slog.ErrorContext(ctx, "券分支补偿解不开这张券，它已经被核销了 —— "+
+				"这一单在补偿跑到之前被支付了。需要人工处理。",
+				"order_no", order.OrderNo, "user_coupon_id", *order.UserCouponID)
+		}
 	}
 	return nil
 }
@@ -378,9 +454,10 @@ type archivedFailure struct {
 // 只有**业务**失败进这张表。基础设施失败（连不上库、屏障被拒）不该被存档回放：
 // 它们下一秒可能就好了，而回放会让客户端在 24 小时里一直看到同一个错误。
 var replayableFailures = map[string]error{
-	"insufficient_stock": ErrInsufficientStock,
-	"cross_tenant_sku":   ErrCrossTenantSKU,
-	"saga_failed":        ErrOrderSagaFailed,
+	"insufficient_stock":    ErrInsufficientStock,
+	"cross_tenant_sku":      ErrCrossTenantSKU,
+	"saga_failed":           ErrOrderSagaFailed,
+	"coupon_not_applicable": ErrCouponNotApplicable,
 }
 
 func encodeArchivedFailure(err error) archivedFailure {

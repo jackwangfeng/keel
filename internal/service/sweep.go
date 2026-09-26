@@ -371,6 +371,11 @@ func (s *SweepService) releasePending(ctx context.Context, log *slog.Logger,
 			}
 			qty += int(ln.Quantity)
 		}
+		// 这一单锁着的券退回「未使用」，与关单、回补库存同一个事务（数据模型 §7）。
+		// 没挂券的订单受影响 0 行，是正常路径。
+		if _, err := tx.UnlockCouponForOrder(ctx, o.ID); err != nil {
+			return err
+		}
 		return nil
 	})
 

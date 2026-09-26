@@ -206,19 +206,21 @@ func (q *Queries) CountUserOrders(ctx context.Context, arg CountUserOrdersParams
 const createOrderDraft = `-- name: CreateOrderDraft :one
 INSERT INTO orders (order_no, user_id, store_id, region_id, store_snapshot,
                     status, goods_amount_cents, freight_cents,
-                    discount_cents, payable_cents, receiver_snapshot, remark, expire_at)
+                    discount_cents, payable_cents, receiver_snapshot, remark, expire_at,
+                    user_coupon_id)
 SELECT $1, $2, st.id, st.region_id,
        jsonb_build_object('store_name', st.name, 'region_name', r.name,
                           'address', st.address, 'phone', st.phone),
        0, $3, $4,
        $5, $6,
-       $7, $8, $9
+       $7, $8, $9,
+       $10
   FROM stores st
   JOIN regions r ON r.id = st.region_id
- WHERE st.id = $10 AND st.deleted_at IS NULL
+ WHERE st.id = $11 AND st.deleted_at IS NULL
 RETURNING id, order_no, store_id, region_id, status, goods_amount_cents, freight_cents,
           discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
-          expire_at, created_at
+          expire_at, created_at, user_coupon_id
 `
 
 type CreateOrderDraftParams struct {
@@ -231,6 +233,7 @@ type CreateOrderDraftParams struct {
 	ReceiverSnapshot []byte
 	Remark           *string
 	ExpireAt         pgtype.Timestamptz
+	UserCouponID     *int64
 	StoreID          int64
 }
 
@@ -249,6 +252,7 @@ type CreateOrderDraftRow struct {
 	RefundStatus     int16
 	ExpireAt         pgtype.Timestamptz
 	CreatedAt        pgtype.Timestamptz
+	UserCouponID     *int64
 }
 
 // 落一笔**创建中**的订单（status = 0），在提交 SAGA 之前。
@@ -276,6 +280,9 @@ type CreateOrderDraftRow struct {
 // INSERT，两步之间那家店可以改名 —— 于是 store_id 指着 A，快照写着 A 的旧名字，
 // 而两者都「看起来正常」。门店不存在或已软删时这条语句插 0 行，
 // 由 :one 变成 pgx.ErrNoRows，调用方翻成 422。
+//
+// user_coupon_id（00026）也在这里落：SAGA 的券分支只拿到三个字符串，
+// 「这一单用哪张券」只能从订单行上读回来。
 func (q *Queries) CreateOrderDraft(ctx context.Context, arg CreateOrderDraftParams) (CreateOrderDraftRow, error) {
 	row := q.db.QueryRow(ctx, createOrderDraft,
 		arg.OrderNo,
@@ -287,6 +294,7 @@ func (q *Queries) CreateOrderDraft(ctx context.Context, arg CreateOrderDraftPara
 		arg.ReceiverSnapshot,
 		arg.Remark,
 		arg.ExpireAt,
+		arg.UserCouponID,
 		arg.StoreID,
 	)
 	var i CreateOrderDraftRow
@@ -305,6 +313,7 @@ func (q *Queries) CreateOrderDraft(ctx context.Context, arg CreateOrderDraftPara
 		&i.RefundStatus,
 		&i.ExpireAt,
 		&i.CreatedAt,
+		&i.UserCouponID,
 	)
 	return i, err
 }
@@ -420,7 +429,7 @@ const getOrderByNo = `-- name: GetOrderByNo :one
 SELECT id, order_no, user_id, store_id, region_id, status,
        goods_amount_cents, freight_cents,
        discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
-       expire_at, paid_at, shipped_at, finished_at, created_at
+       expire_at, paid_at, shipped_at, finished_at, created_at, user_coupon_id
   FROM orders
  WHERE order_no = $1
 `
@@ -444,6 +453,7 @@ type GetOrderByNoRow struct {
 	ShippedAt        pgtype.Timestamptz
 	FinishedAt       pgtype.Timestamptz
 	CreatedAt        pgtype.Timestamptz
+	UserCouponID     *int64
 }
 
 // 按对外编号取订单。SAGA 的两个分支都靠它把「自己要处理哪一单」找回来 ——
@@ -459,6 +469,8 @@ type GetOrderByNoRow struct {
 // 三列一起取而不是只取 paid_at：shipped_at 是「发货后 N 天自动确认收货」倒计时
 // 的起点（契约里明写），finished_at 同理属于同一张时间线，分两次加意味着
 // 这条查询与它的领域类型要被改两遍。
+//
+// user_coupon_id（00026）：SAGA 的券分支靠它知道这一单用的是哪张券。
 func (q *Queries) GetOrderByNo(ctx context.Context, orderNo string) (GetOrderByNoRow, error) {
 	row := q.db.QueryRow(ctx, getOrderByNo, orderNo)
 	var i GetOrderByNoRow
@@ -481,6 +493,7 @@ func (q *Queries) GetOrderByNo(ctx context.Context, orderNo string) (GetOrderByN
 		&i.ShippedAt,
 		&i.FinishedAt,
 		&i.CreatedAt,
+		&i.UserCouponID,
 	)
 	return i, err
 }
@@ -582,7 +595,7 @@ const getUserOrderByNo = `-- name: GetUserOrderByNo :one
 SELECT id, order_no, user_id, store_id, region_id, status,
        goods_amount_cents, freight_cents,
        discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
-       expire_at, paid_at, shipped_at, finished_at, created_at
+       expire_at, paid_at, shipped_at, finished_at, created_at, user_coupon_id
   FROM orders
  WHERE order_no = $1
    AND user_id = $2
@@ -613,6 +626,7 @@ type GetUserOrderByNoRow struct {
 	ShippedAt        pgtype.Timestamptz
 	FinishedAt       pgtype.Timestamptz
 	CreatedAt        pgtype.Timestamptz
+	UserCouponID     *int64
 }
 
 // 订单详情 / 发起支付共用：按单号取**当前买家自己**的订单。
@@ -645,6 +659,7 @@ func (q *Queries) GetUserOrderByNo(ctx context.Context, arg GetUserOrderByNoPara
 		&i.ShippedAt,
 		&i.FinishedAt,
 		&i.CreatedAt,
+		&i.UserCouponID,
 	)
 	return i, err
 }
@@ -929,10 +944,11 @@ func (q *Queries) ListPaymentsForOrder(ctx context.Context, orderID int64) ([]Li
 const listSKUsForPricing = `-- name: ListSKUsForPricing :many
 
 SELECT s.id, s.product_id, s.spec_values, v.price_cents, s.image_url,
-       p.title
+       p.title, p.brand_id, c.path AS category_path
   FROM skus s
   JOIN products p ON p.id = s.product_id
   JOIN sku_prices_by_store v ON v.sku_id = s.id AND v.store_id = $1
+  LEFT JOIN categories c ON c.id = p.category_id AND c.deleted_at IS NULL
  WHERE s.id = ANY($2::bigint[])
    AND s.status = 1
    AND s.deleted_at IS NULL
@@ -953,12 +969,14 @@ type ListSKUsForPricingParams struct {
 }
 
 type ListSKUsForPricingRow struct {
-	ID         int64
-	ProductID  int64
-	SpecValues []byte
-	PriceCents int64
-	ImageUrl   *string
-	Title      string
+	ID           int64
+	ProductID    int64
+	SpecValues   []byte
+	PriceCents   int64
+	ImageUrl     *string
+	Title        string
+	BrandID      *int64
+	CategoryPath *string
 }
 
 // 下单主链路的查询：试算、建单、SAGA 两个分支各自要读写的东西。
@@ -1008,6 +1026,15 @@ type ListSKUsForPricingRow struct {
 // JOIN 视图而不是 LEFT JOIN：视图对每一个 (未软删门店 × 未软删 SKU) 都恰好
 // 有一行，缺行意味着门店或 SKU 已经不在了，而那时这一行本来就不该可售 ——
 // 少掉的行会让调用方拿到「这些 SKU 不可售」，那正是对的答案。
+//
+// ### 00026 多取两列：brand_id 与所属分类的 path
+//
+// 券的适用范围按商品、分类（含子孙）、品牌挑行（数据模型 §7），挑行要的素材
+// 从**这一条**取，而不是另开一条查询：券的计算与定价共用同一份输入，
+// 试算与下单才不可能在「这一行算不算适用」上分叉。分类按 path 前缀判子孙，
+// 与 GET /products?category_id= 同一个语义（products.sql 文件头）。
+// LEFT JOIN 且只认未软删的分类：分类删了，category_path 为 NULL，
+// 分类范围的规则就命中不了这一行 —— 与列表页「分类已删就是空列表」一致。
 func (q *Queries) ListSKUsForPricing(ctx context.Context, arg ListSKUsForPricingParams) ([]ListSKUsForPricingRow, error) {
 	rows, err := q.db.Query(ctx, listSKUsForPricing, arg.StoreID, arg.SkuIds, arg.RegionID)
 	if err != nil {
@@ -1024,6 +1051,8 @@ func (q *Queries) ListSKUsForPricing(ctx context.Context, arg ListSKUsForPricing
 			&i.PriceCents,
 			&i.ImageUrl,
 			&i.Title,
+			&i.BrandID,
+			&i.CategoryPath,
 		); err != nil {
 			return nil, err
 		}
@@ -1040,7 +1069,7 @@ const listUserOrders = `-- name: ListUserOrders :many
 SELECT id, order_no, user_id, store_id, region_id, status,
        goods_amount_cents, freight_cents,
        discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
-       expire_at, paid_at, shipped_at, finished_at, created_at
+       expire_at, paid_at, shipped_at, finished_at, created_at, user_coupon_id
   FROM orders
  WHERE user_id = $1
    AND status <> 0
@@ -1078,6 +1107,7 @@ type ListUserOrdersRow struct {
 	ShippedAt        pgtype.Timestamptz
 	FinishedAt       pgtype.Timestamptz
 	CreatedAt        pgtype.Timestamptz
+	UserCouponID     *int64
 }
 
 // ---------------------------------------------------------------------------
@@ -1141,6 +1171,7 @@ func (q *Queries) ListUserOrders(ctx context.Context, arg ListUserOrdersParams) 
 			&i.ShippedAt,
 			&i.FinishedAt,
 			&i.CreatedAt,
+			&i.UserCouponID,
 		); err != nil {
 			return nil, err
 		}

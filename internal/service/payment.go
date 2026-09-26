@@ -308,6 +308,24 @@ func (s *PaymentService) settle(ctx context.Context, channel int16, n notificati
 			}
 			return err
 		}
+
+		// 券核销：2 锁定 → 3 已使用，与订单 10 → 20 **同一个事务**（数据模型 §7）。
+		// 「已使用」只描述一件事：有一笔真实到账的订单用了这张券。
+		//
+		// 走到这里说明 SettleOrder 刚把这一单从 10 推到 20，而订单到得了 10 就意味着
+		// SAGA 的券分支锁上了券（它排在建单之后、库存之前）。所以挂了券却核销 0 行
+		// 是一条被破坏的不变量 —— 但**不回滚**：钱已经到了，回滚会让这笔到账记不下来、
+		// 渠道一遍遍重推。留一条 Error 让人去对账，订单照常认账。
+		if order.UserCouponID != nil {
+			consumed, err := tx.ConsumeCouponForOrder(ctx, order.ID)
+			if err != nil {
+				return err
+			}
+			if consumed != 1 {
+				s.log.ErrorContext(ctx, "订单已支付，但它挂的券不在「锁定」状态，核销了 0 张 —— 需要人工对账",
+					"order_no", n.OrderNo, "user_coupon_id", *order.UserCouponID)
+			}
+		}
 		return nil
 	})
 

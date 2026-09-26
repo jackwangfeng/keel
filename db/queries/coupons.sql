@@ -1,0 +1,353 @@
+-- 营销域（优惠券）的查询：券实例的读、领取与定向发放的写、SAGA 券分支的三条条件更新、
+-- 后台券模板的读写。数据模型 §7。
+--
+-- 全文没有一处 WHERE 写租户，也没有一处 INSERT 写 merchant_id：租户由 RLS 过滤，
+-- 写入那一列由 DEFAULT current_merchant() 补（00026）。理由见 db/queries/products.sql
+-- 与 scripts/check_query_tenancy.py 的文件头。
+--
+-- user_id 出现在 WHERE 里的地方都是**越权过滤**，不是租户过滤：RLS 只保证这一行属于
+-- 本店，不保证它属于这个买家（与 orders.sql 的 GetUserAddress 同一条）。
+--
+-- 注释里一个反引号都不许有，理由见 db/queries/inventories.sql 的第三条说明。
+
+-- ---------------------------------------------------------------------------
+-- 计价要的券：实例 + 模板规则，一次取齐
+-- ---------------------------------------------------------------------------
+
+-- name: GetUserCouponWithRule :one
+-- 按 id 取当前买家的一张券连同模板上的规则。试算、下单共用。
+--
+-- 不在这里判「能不能用」：状态、有效期、门槛、范围的判定全在
+-- service/coupon_calc.go 的那一份实现里，这条查询只负责把素材取齐。
+-- 把一半条件写进 WHERE 的话，「查不到」就有了五种成因，而客户端需要知道是哪一种。
+SELECT uc.id, uc.coupon_code, uc.template_id, uc.user_id, uc.source, uc.status,
+       uc.valid_start_at, uc.valid_end_at, uc.used_at, uc.created_at,
+       t.name, t.coupon_type, t.threshold_cents, t.discount_cents,
+       t.discount_rate, t.max_discount_cents
+  FROM user_coupons uc
+  JOIN coupon_templates t ON t.id = uc.template_id
+ WHERE uc.id = sqlc.arg(id)
+   AND uc.user_id = sqlc.arg(user_id);
+
+-- name: ListUsableUserCoupons :many
+-- 当前买家此刻可用的全部券（未使用、在有效期内），连同模板规则。
+-- 「本单可用券」与试算里的 applicable_coupons 都从这里出发，再逐张过计算。
+--
+-- 有效期按调用方传进来的 now 判，而不是数据库的 now()：同一次试算里
+-- 「这张券算不算过期」必须与计价用的是同一个时刻，否则一张恰好在两者之间过期的券
+-- 会出现在列表里、却在带上它试算时被拒。锁券那一步（LockUserCoupon）用数据库的
+-- now()，那是最终的判定点。
+--
+-- 走 idx_user_coupons_avail（merchant_id, user_id, status, valid_end_at WHERE status = 1）。
+SELECT uc.id, uc.coupon_code, uc.template_id, uc.user_id, uc.source, uc.status,
+       uc.valid_start_at, uc.valid_end_at, uc.used_at, uc.created_at,
+       t.name, t.coupon_type, t.threshold_cents, t.discount_cents,
+       t.discount_rate, t.max_discount_cents
+  FROM user_coupons uc
+  JOIN coupon_templates t ON t.id = uc.template_id
+ WHERE uc.user_id = sqlc.arg(user_id)
+   AND uc.status = 1
+   AND uc.valid_start_at <= sqlc.arg(now)
+   AND uc.valid_end_at > sqlc.arg(now)
+ ORDER BY uc.valid_end_at, uc.id
+ LIMIT 200;
+
+-- name: ListCouponScopes :many
+-- 一批模板的全部范围规则，连同计算与展示要的素材。
+--
+-- category_path：分类规则按 path 前缀判子孙（与 GET /products?category_id= 同一语义）。
+-- 已软删的分类取不到 path —— 包含规则于是不给任何行折扣、排除规则于是不排除任何行，
+-- 与列表页「分类删了就是空列表」一致。
+--
+-- 四个名字列只是展示用（后台与买家端显示「限华北大区」），至多一个非空，目标已软删时全空。
+-- 品牌没有目录表，永远是 NULL。
+SELECT cs.template_id, cs.scope_type, cs.target_id, cs.include,
+       c.path AS category_path,
+       c.name AS category_name, p.title AS product_title, r.name AS region_name,
+       st.name AS store_name
+  FROM coupon_scopes cs
+  LEFT JOIN categories c ON cs.scope_type = 2 AND c.id = cs.target_id AND c.deleted_at IS NULL
+  LEFT JOIN products   p ON cs.scope_type = 3 AND p.id = cs.target_id AND p.deleted_at IS NULL
+  LEFT JOIN regions    r ON cs.scope_type = 5 AND r.id = cs.target_id AND r.deleted_at IS NULL
+  LEFT JOIN stores    st ON cs.scope_type = 6 AND st.id = cs.target_id AND st.deleted_at IS NULL
+ WHERE cs.template_id = ANY(sqlc.arg(template_ids)::bigint[])
+ ORDER BY cs.template_id, cs.id;
+
+-- ---------------------------------------------------------------------------
+-- 我的券（GET /coupons）
+-- ---------------------------------------------------------------------------
+
+-- name: ListUserCoupons :many
+-- 按领取时间倒序。status_filter 取值：空串（全部）/ available / locked / used / expired。
+--
+-- 「已过期」是现算的：status = 1 且已过 valid_end_at 的券归 expired，不归 available
+-- （数据模型 §7：判据在判定点上，不在一个异步的定时任务里）。
+SELECT uc.id, uc.coupon_code, uc.template_id, uc.user_id, uc.source, uc.status,
+       uc.valid_start_at, uc.valid_end_at, uc.used_at, uc.created_at,
+       t.name, t.coupon_type, t.threshold_cents, t.discount_cents,
+       t.discount_rate, t.max_discount_cents
+  FROM user_coupons uc
+  JOIN coupon_templates t ON t.id = uc.template_id
+ WHERE uc.user_id = sqlc.arg(user_id)
+   AND (sqlc.arg(status_filter)::text = ''
+        OR (sqlc.arg(status_filter)::text = 'available' AND uc.status = 1 AND uc.valid_end_at > sqlc.arg(now))
+        OR (sqlc.arg(status_filter)::text = 'locked'    AND uc.status = 2)
+        OR (sqlc.arg(status_filter)::text = 'used'      AND uc.status = 3)
+        OR (sqlc.arg(status_filter)::text = 'expired'
+            AND (uc.status = 4 OR (uc.status = 1 AND uc.valid_end_at <= sqlc.arg(now)))))
+ ORDER BY uc.id DESC
+ LIMIT sqlc.arg(page_limit) OFFSET sqlc.arg(page_offset);
+
+-- name: CountUserCoupons :one
+-- 谓词必须与 ListUserCoupons 逐字一致，理由同 CountUserOrders：少一个 user_id，
+-- total 数的就是全店发出去的券。
+SELECT count(*)
+  FROM user_coupons uc
+ WHERE uc.user_id = sqlc.arg(user_id)
+   AND (sqlc.arg(status_filter)::text = ''
+        OR (sqlc.arg(status_filter)::text = 'available' AND uc.status = 1 AND uc.valid_end_at > sqlc.arg(now))
+        OR (sqlc.arg(status_filter)::text = 'locked'    AND uc.status = 2)
+        OR (sqlc.arg(status_filter)::text = 'used'      AND uc.status = 3)
+        OR (sqlc.arg(status_filter)::text = 'expired'
+            AND (uc.status = 4 OR (uc.status = 1 AND uc.valid_end_at <= sqlc.arg(now)))));
+
+-- ---------------------------------------------------------------------------
+-- 领券中心（GET /coupon-templates、POST /coupon-templates/{id}/claim）
+-- ---------------------------------------------------------------------------
+
+-- name: ListClaimableTemplates :many
+-- 启用、可领、没领完、没结束的模板，连同当前买家已持有几张。
+--
+-- claimed_by_me 数的是这个买家持有该模板的**全部**券（含定向发放的），
+-- 与领取那一步判每人限领用的是同一个口径（CountUserTemplateCoupons）——
+-- 列表说能领、点了却说已达上限，是两处口径不一致最常见的症状。
+SELECT t.id, t.name, t.coupon_type, t.threshold_cents, t.discount_cents, t.discount_rate,
+       t.max_discount_cents, t.valid_mode, t.valid_start_at, t.valid_end_at, t.valid_days,
+       t.total_count, t.issued_count, t.per_user_limit,
+       (SELECT count(*) FROM user_coupons uc
+         WHERE uc.template_id = t.id AND uc.user_id = sqlc.arg(user_id))::int AS claimed_by_me
+  FROM coupon_templates t
+ WHERE t.status = 1 AND t.claimable
+   AND (t.total_count = 0 OR t.issued_count < t.total_count)
+   AND (t.valid_mode = 2 OR t.valid_end_at > sqlc.arg(now))
+ ORDER BY t.id DESC
+ LIMIT sqlc.arg(page_limit) OFFSET sqlc.arg(page_offset);
+
+-- name: CountClaimableTemplates :one
+-- 谓词与 ListClaimableTemplates 逐字一致。
+SELECT count(*)
+  FROM coupon_templates t
+ WHERE t.status = 1 AND t.claimable
+   AND (t.total_count = 0 OR t.issued_count < t.total_count)
+   AND (t.valid_mode = 2 OR t.valid_end_at > sqlc.arg(now));
+
+-- name: BumpTemplateForClaim :one
+-- 领取的第一步：占一个名额。**这条 UPDATE 就是「不超发」的全部实现。**
+--
+-- READ COMMITTED 下，并发的第二个 UPDATE 等第一个提交之后在最新版本上重评 WHERE，
+-- 所以抢最后一张时后到者受影响 0 行（:one 变成 pgx.ErrNoRows），而不是各自看着
+-- 旧快照都 +1。它同时拿到模板行的行锁，同一模板的领取从这里开始串行 ——
+-- 下一条 CountUserTemplateCoupons 因此看得见前一个领取者已提交的那一行，
+-- 每人限领搭的是同一把锁（00026 文件头）。
+--
+-- 受影响 0 行有四种成因（不存在 / 停用或不可领 / 领完 / 结束），由调用方回读
+-- GetTemplateForClaim 分出来，因为它们对应契约里不同的响应。
+UPDATE coupon_templates
+   SET issued_count = issued_count + 1
+ WHERE id = sqlc.arg(id)
+   AND status = 1 AND claimable
+   AND (total_count = 0 OR issued_count < total_count)
+   AND (valid_mode = 2 OR valid_end_at > sqlc.arg(now))
+RETURNING id, valid_mode, valid_start_at, valid_end_at, valid_days, per_user_limit;
+
+-- name: GetTemplateForClaim :one
+-- 领取失败之后回读，分出失败原因。只在失败路径上跑。
+SELECT id, status, claimable, total_count, issued_count, valid_mode, valid_end_at
+  FROM coupon_templates
+ WHERE id = $1;
+
+-- name: CountUserTemplateCoupons :one
+-- 这个买家持有该模板多少张（全部状态、全部来源）。每人限领的判据。
+-- 走 idx_user_coupons_tpl（merchant_id, template_id, user_id）。
+SELECT count(*)::int
+  FROM user_coupons
+ WHERE template_id = sqlc.arg(template_id) AND user_id = sqlc.arg(user_id);
+
+-- name: InsertUserCoupon :one
+-- 落一张券实例。有效期由调用方按模板的两种模式算好传进来：
+-- 绝对时间照抄模板，领取后 N 天从领取时刻起算。
+INSERT INTO user_coupons (coupon_code, template_id, user_id, source,
+                          valid_start_at, valid_end_at)
+VALUES (sqlc.arg(coupon_code), sqlc.arg(template_id), sqlc.arg(user_id), sqlc.arg(source),
+        sqlc.arg(valid_start_at), sqlc.arg(valid_end_at))
+RETURNING id, coupon_code, created_at;
+
+-- ---------------------------------------------------------------------------
+-- 定向发放（POST /admin/coupon-templates/{id}/grants）
+-- ---------------------------------------------------------------------------
+
+-- name: BumpTemplateForGrant :one
+-- 定向发放占名额：一次占 n 个，整批够才占（全有或全无）。
+-- 与 BumpTemplateForClaim 同一把行锁、同一个不超发的论证；
+-- 差别是不看 claimable（定向发放不经领券中心），也不看每人限领。
+UPDATE coupon_templates
+   SET issued_count = issued_count + sqlc.arg(n)::int
+ WHERE id = sqlc.arg(id)
+   AND status = 1
+   AND (total_count = 0 OR issued_count + sqlc.arg(n)::int <= total_count)
+   AND (valid_mode = 2 OR valid_end_at > sqlc.arg(now))
+RETURNING id, valid_mode, valid_start_at, valid_end_at, valid_days;
+
+-- name: FindUsersByPhones :many
+-- 按手机号找本店的买家。软删的不算（uk_users_phone 也只在未删的行里唯一）。
+SELECT id, phone::text AS phone
+  FROM users
+ WHERE phone = ANY(sqlc.arg(phones)::text[])
+   AND deleted_at IS NULL;
+
+-- ---------------------------------------------------------------------------
+-- SAGA 券分支与它的两个下游（支付回调、超时关单）。数据模型 §7 的状态机。
+-- ---------------------------------------------------------------------------
+
+-- name: LockUserCoupon :execrows
+-- 券分支正向：1 未使用 → 2 锁定，回填 order_id。**返回 1 才算锁上。**
+--
+-- 条件更新，与扣库存同构：抢不到说明已被别的单占用 / 已用掉 / 已过期 / 不是这个
+-- 买家的，四种都是「这张券本单用不了」，SAGA 据此失败并补偿掉前面的建单分支。
+-- 有效期在这里用数据库的 now() 判：这是最终的判定点，试算时判过的只是预告。
+-- uk_user_coupons_order 在背后兜着「一单至多一张券」。
+UPDATE user_coupons
+   SET status = 2, order_id = sqlc.arg(order_id), locked_at = now()
+ WHERE id = sqlc.arg(id)
+   AND user_id = sqlc.arg(user_id)
+   AND status = 1
+   AND valid_start_at <= now()
+   AND valid_end_at > now();
+
+-- name: UnlockCouponForOrder :execrows
+-- 2 锁定 → 1 未使用。SAGA 券分支的补偿与超时关单共用。
+--
+-- 按 order_id 找，不按券 id：两个调用方手里都只有订单，而「这张券现在被哪一单占着」
+-- 正是 order_id 这一列的语义。status = 2 在谓词里 —— 一张已经被付掉（3）的券
+-- 不该被一次迟到的补偿退回去，那时受影响 0 行，由调用方决定要不要出声。
+UPDATE user_coupons
+   SET status = 1, order_id = NULL, locked_at = NULL
+ WHERE order_id = sqlc.arg(order_id) AND status = 2;
+
+-- name: ConsumeCouponForOrder :execrows
+-- 2 锁定 → 3 已使用。支付回调里，与订单 10 → 20 同一个事务。
+UPDATE user_coupons
+   SET status = 3, used_at = now()
+ WHERE order_id = sqlc.arg(order_id) AND status = 2;
+
+-- name: GetCouponStatusForOrder :one
+-- 这一单占着的那张券现在是什么状态。只给测试与排障用的只读查询。
+SELECT id, status
+  FROM user_coupons
+ WHERE order_id = $1;
+
+-- ---------------------------------------------------------------------------
+-- 后台：券模板
+-- ---------------------------------------------------------------------------
+
+-- name: AdminListCouponTemplates :many
+SELECT id, name, coupon_type, threshold_cents, discount_cents, discount_rate,
+       max_discount_cents, valid_mode, valid_start_at, valid_end_at, valid_days,
+       total_count, issued_count, per_user_limit, claimable, status, created_at, updated_at
+  FROM coupon_templates
+ WHERE (sqlc.narg(status)::smallint IS NULL OR status = sqlc.narg(status)::smallint)
+ ORDER BY id DESC
+ LIMIT sqlc.arg(page_limit) OFFSET sqlc.arg(page_offset);
+
+-- name: AdminCountCouponTemplates :one
+SELECT count(*)
+  FROM coupon_templates
+ WHERE (sqlc.narg(status)::smallint IS NULL OR status = sqlc.narg(status)::smallint);
+
+-- name: AdminGetCouponTemplate :one
+SELECT id, name, coupon_type, threshold_cents, discount_cents, discount_rate,
+       max_discount_cents, valid_mode, valid_start_at, valid_end_at, valid_days,
+       total_count, issued_count, per_user_limit, claimable, status, created_at, updated_at
+  FROM coupon_templates
+ WHERE id = $1;
+
+-- name: AdminLockCouponTemplate :one
+-- 修改与换范围之前先锁住这一行：「已发出过券就不能改券面」这条判定与随后的写
+-- 必须看到同一个 issued_count。不锁的话，判定之后、写入之前恰好领走的那一张，
+-- 手里拿着的就是一张被悄悄改过面值的券。
+SELECT id, issued_count
+  FROM coupon_templates
+ WHERE id = $1
+   FOR UPDATE;
+
+-- name: AdminCreateCouponTemplate :one
+INSERT INTO coupon_templates (name, coupon_type, threshold_cents, discount_cents,
+                              discount_rate, max_discount_cents, valid_mode,
+                              valid_start_at, valid_end_at, valid_days,
+                              total_count, per_user_limit, claimable)
+VALUES (sqlc.arg(name), sqlc.arg(coupon_type), sqlc.arg(threshold_cents),
+        sqlc.arg(discount_cents), sqlc.arg(discount_rate), sqlc.arg(max_discount_cents),
+        sqlc.arg(valid_mode), sqlc.narg(valid_start_at), sqlc.narg(valid_end_at),
+        sqlc.arg(valid_days), sqlc.arg(total_count), sqlc.arg(per_user_limit),
+        sqlc.arg(claimable))
+RETURNING id;
+
+-- name: AdminUpdateCouponTemplate :execrows
+-- 整行写回。合并 PATCH 在 service 里做（先 AdminLockCouponTemplate 锁住再读），
+-- 这里不做 COALESCE 那一套：valid_start_at 这类可空列用 COALESCE 会把「清空」
+-- 悄悄变成「不动」（admin_products.sql 里 brand_id 那段写过同一个坑）。
+UPDATE coupon_templates
+   SET name = sqlc.arg(name),
+       coupon_type = sqlc.arg(coupon_type),
+       threshold_cents = sqlc.arg(threshold_cents),
+       discount_cents = sqlc.arg(discount_cents),
+       discount_rate = sqlc.arg(discount_rate),
+       max_discount_cents = sqlc.arg(max_discount_cents),
+       valid_mode = sqlc.arg(valid_mode),
+       valid_start_at = sqlc.narg(valid_start_at),
+       valid_end_at = sqlc.narg(valid_end_at),
+       valid_days = sqlc.arg(valid_days),
+       total_count = sqlc.arg(total_count),
+       per_user_limit = sqlc.arg(per_user_limit),
+       claimable = sqlc.arg(claimable),
+       status = sqlc.arg(status)
+ WHERE id = sqlc.arg(id);
+
+-- name: CouponTemplateStats :many
+-- 发放与核销统计，按模板分组。unused 与 expired 按 now 现算（与 GET /coupons 同一口径）。
+SELECT template_id,
+       count(*)::int                                                    AS issued,
+       (count(*) FILTER (WHERE source = 1))::int                        AS claimed,
+       (count(*) FILTER (WHERE source = 2))::int                        AS granted,
+       (count(*) FILTER (WHERE status = 1 AND valid_end_at > sqlc.arg(now)))::int AS unused,
+       (count(*) FILTER (WHERE status = 2))::int                        AS locked,
+       (count(*) FILTER (WHERE status = 3))::int                        AS used,
+       (count(*) FILTER (WHERE status = 4
+                            OR (status = 1 AND valid_end_at <= sqlc.arg(now))))::int AS expired
+  FROM user_coupons
+ WHERE template_id = ANY(sqlc.arg(template_ids)::bigint[])
+ GROUP BY template_id;
+
+-- name: DeleteCouponScopes :exec
+DELETE FROM coupon_scopes WHERE template_id = $1;
+
+-- name: InsertCouponScope :exec
+INSERT INTO coupon_scopes (template_id, scope_type, target_id, include)
+VALUES (sqlc.arg(template_id), sqlc.arg(scope_type), sqlc.narg(target_id), sqlc.arg(include));
+
+-- ---------------------------------------------------------------------------
+-- 范围目标的归属校验。target_id 是多态列，外键管不到（数据模型 §7），校验在这里。
+-- 四条都在 RLS 之下：别家的 id 与不存在的 id 同形，都查不到。
+-- ---------------------------------------------------------------------------
+
+-- name: LiveCategoryIDs :many
+SELECT id FROM categories WHERE id = ANY(sqlc.arg(ids)::bigint[]) AND deleted_at IS NULL;
+
+-- name: LiveProductIDs :many
+SELECT id FROM products WHERE id = ANY(sqlc.arg(ids)::bigint[]) AND deleted_at IS NULL;
+
+-- name: LiveRegionIDs :many
+SELECT id FROM regions WHERE id = ANY(sqlc.arg(ids)::bigint[]) AND deleted_at IS NULL;
+
+-- name: LiveStoreIDs :many
+SELECT id FROM stores WHERE id = ANY(sqlc.arg(ids)::bigint[]) AND deleted_at IS NULL;

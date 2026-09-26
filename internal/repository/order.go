@@ -53,6 +53,13 @@ type PriceableSKU struct {
 	SpecValues []byte // JSONB 原样带上来，快照要一字不差地拷进 order_items
 	ImageURL   *string
 	PriceCents int64
+
+	// BrandID 与 CategoryPath 是券挑行的素材（数据模型 §7）：适用范围按品牌、
+	// 分类（含子孙，按 path 前缀判）挑出参与计算的行。与价格从同一条查询取，
+	// 试算与下单才不可能在「这一行算不算适用」上分叉。
+	// CategoryPath 为 nil 表示商品所在分类已软删 —— 分类规则命中不了它。
+	BrandID      *int64
+	CategoryPath *string
 }
 
 // Address 是收货地址里会被拍进 orders.receiver_snapshot 的那几列。
@@ -101,6 +108,10 @@ type Order struct {
 	PaidAt           *time.Time
 	ShippedAt        *time.Time
 	FinishedAt       *time.Time
+
+	// UserCouponID 是这一单用的券（00026）。SAGA 的券分支从这里知道锁哪一张 ——
+	// 分支只拿到三个字符串，这件事推不出来，只能落在订单行上。
+	UserCouponID *int64
 }
 
 // optTime 把 pgtype.Timestamptz 收成 *time.Time：NULL → nil。
@@ -140,6 +151,7 @@ type NewOrderDraft struct {
 	ReceiverSnapshot []byte
 	Remark           *string
 	ExpireAt         time.Time
+	UserCouponID     *int64
 }
 
 // NewOrderItem 是一行订单项快照。
@@ -318,6 +330,9 @@ func (t tenantTx) ListSKUsForPricing(ctx context.Context, sc StoreScope, skuIDs 
 			SpecValues: r.SpecValues,
 			ImageURL:   r.ImageUrl,
 			PriceCents: r.PriceCents,
+
+			BrandID:      r.BrandID,
+			CategoryPath: r.CategoryPath,
 		})
 	}
 	return out, nil
@@ -357,6 +372,7 @@ func (t tenantTx) CreateOrderDraft(ctx context.Context, d NewOrderDraft) (Order,
 		ReceiverSnapshot: d.ReceiverSnapshot,
 		Remark:           d.Remark,
 		ExpireAt:         pgtype.Timestamptz{Time: d.ExpireAt, Valid: true},
+		UserCouponID:     d.UserCouponID,
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		// 那条 INSERT ... SELECT FROM stores 插了 0 行：门店不存在、
@@ -383,6 +399,7 @@ func (t tenantTx) CreateOrderDraft(ctx context.Context, d NewOrderDraft) (Order,
 		RefundStatus:     r.RefundStatus,
 		ExpireAt:         r.ExpireAt.Time,
 		CreatedAt:        r.CreatedAt.Time,
+		UserCouponID:     r.UserCouponID,
 	}, nil
 }
 
@@ -428,6 +445,7 @@ func (t tenantTx) FindOrderByNo(ctx context.Context, orderNo string) (Order, err
 		PaidAt:           optTime(r.PaidAt),
 		ShippedAt:        optTime(r.ShippedAt),
 		FinishedAt:       optTime(r.FinishedAt),
+		UserCouponID:     r.UserCouponID,
 	}, nil
 }
 
