@@ -306,6 +306,12 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	v1.POST("/admin/staff", staffAuth, adm.CreateStaff)
 	v1.PATCH("/admin/staff/:staff_id", staffAuth, adm.UpdateStaff)
 
+	// 开店（M4 收尾）。它挂同一道 staffAuth，而「只有平台级管理员能调」
+	// 是业务规则，在 service.StaffService.OpenShop 里 —— 不在这里再套一层
+	// 中间件：那会让同一个判据有两份实现，而中间件那一份没有任何测试盯着
+	// 「它到底挂没挂在这条路由上」。
+	v1.POST("/admin/merchants", staffAuth, adm.OpenShop)
+
 	// -----------------------------------------------------------------------
 	// 商家自助发布：商品 / SKU / 库存 / 类目 / 上传（M4 Task 3，契约 16 条）
 	// -----------------------------------------------------------------------

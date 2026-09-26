@@ -353,6 +353,30 @@ var routes = []route{
 		HandlerFile:    "admin_auth.go",
 		NoQueryParams:  "要改谁在路径上，改什么在请求体里",
 	},
+	{
+		// 开店（M4 收尾）。它单独占一个 handler 文件，理由写在
+		// admin_merchant.go 的头上。
+		ContractPath:   "/admin/merchants",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "admin_merchant.go",
+		NoQueryParams: "店名、code 与第一个管理员的邮箱都在请求体里，幂等键在 Idempotency-Key 请求头里；" +
+			"**租户不在任何一处，而这条比别的更彻底** —— 这条接口建的就是那个租户，" +
+			"它由 repository.WithNewTenant 在同一个事务里造出来再切进去，" +
+			"整条链路上没有一个 merchant_id 参数可以传错",
+		NotYetImplementedHeader: map[string]string{
+			"Idempotency-Key": "这条接口**用不了** idempotency_keys 那张表，而不是没轮到：" +
+				"那张表的 merchant_id 列默认值是 current_merchant()，而开店跑在平台作用域里 —— " +
+				"app.merchant_id 根本没设，current_merchant() 在那里是 RAISE（00002 那条会说人话的异常），" +
+				"不是 NULL。也就是说抢占插入那一句在这条路上会当场报错。" +
+				"要让它可用，得给幂等键一个「平台级」的落点（merchant_id 可空 + 策略跟着改），" +
+				"那是又一次 schema 决定，不该和本轮那次（00022，把主体列从 user_id 换成 " +
+				"(subject_kind, subject_id)）混在一起做。\n" +
+				"暴露面说清楚，而它比那 5 条轻得多：merchants.code 是全局唯一的，" +
+				"所以重发同一个请求**建不出第二家店** —— 第二次撞 merchants_code_key，返回 409。" +
+				"代价只是「重放本该回 201 存档，实际回 409」，客户端两种情况下都知道店已经开好了。",
+		},
+	},
 	// —— 商家自助发布（M4 Task 3）。契约 Admin + Catalog 两个 tag 的 16 条写接口。
 	//
 	// 它们分在四个 handler 文件里，而**分法是闸门定的**：下面那条 query 参数
@@ -556,19 +580,16 @@ type pendingOp struct {
 // 以及 /admin/staff 的三个操作。它们是别的 19 条的前置，
 // 因为 26 条里没有一条不需要后台身份。
 //
-// **本轮（M4 任务 3，商家自助发布）划掉了 16 条**，剩下 3 条。
-// 三条剩下的理由各不相同，而且没有一条是「还没轮到」：
-// 它们各缺一样今天不存在的东西，逐条写在下面。
+// M4 任务 3（商家自助发布）划掉了 16 条，剩下 3 条。
+// **M4 收尾这一轮又划掉了 POST /admin/merchants**（开店）：它缺的那样东西
+// —— repository 上「在指定租户里开一个事务」的入口 —— 本轮建出来了，
+// 叫 repository.WithNewTenant。剩下 2 条。
 var notYetRouted = []pendingOp{
 	// —— M1 就在契约里的 10 条，任务 2 划掉了其中 7 条。
 	//
-	// 剩下这 3 条**不再是「缺后台鉴权」**了 —— 那套中间件已经有了
+	// 剩下这 2 条**不再是「缺后台鉴权」**了 —— 那套中间件已经有了
 	// （auth.StaffBearer），它们缺的是各自的业务。理由要跟着改，
 	// 否则下一个人会照着一句过期的话去找一个已经存在的东西。
-	{"/admin/merchants", "post", "开店。鉴权已经有了（平台级会话 = auth.StaffIdentity.Platform()），" +
-		"缺的是业务：它要在一个事务里建 merchant，再在**新那家店的租户作用域**里建它的第一个管理员 —— " +
-		"两次作用域切换，而 repository 今天只有 WithTenant（从 ctx 取租户）与 WithPlatform 两个入口，" +
-		"没有「在指定租户里开一个事务」的那一个。M4 的下一个任务。"},
 	{"/admin/orders/{order_no}/shipments", "post", "发货。shipments 表已落地（数据模型 §5），" +
 		"后台鉴权也已落地，缺的是 handler 与 §5 那三条发货规则。"},
 	{"/admin/refunds/{refund_no}/audit", "post", "退款审核。退款域的表已落地（§11），" +

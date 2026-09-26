@@ -84,10 +84,19 @@ const (
 	//
 	// last-admin 与 staff-email-taken 都是 409 且都出现在同一条 PATCH /
 	// POST 上，压成一个之后前端只能把两句完全不同的话写成一句。
-	TypeBootstrapClosed = "https://keel.dev/problems/bootstrap-closed"
-	TypeStaffForbidden  = "https://keel.dev/problems/staff-forbidden"
-	TypeStaffEmailTaken = "https://keel.dev/problems/staff-email-taken"
-	TypeLastAdmin       = "https://keel.dev/problems/last-admin"
+	//   platform-only      → 你是某一家店的管理员，而这件事只有平台级能做。
+	//                        与 staff-forbidden 分开：那一个是「你不是管理员」，
+	//                        这一个是「你是管理员，但你是那一层的」。压成一个
+	//                        之后，商家老板调开店接口会收到「需要管理员权限」，
+	//                        一句让他去检查自己角色的假话。
+	//   merchant-code-taken→ 换一个 code。它是全局唯一的（tenancy.json 的
+	//                        unique_global_ok：它就是租户标识本身）。
+	TypeBootstrapClosed   = "https://keel.dev/problems/bootstrap-closed"
+	TypeStaffForbidden    = "https://keel.dev/problems/staff-forbidden"
+	TypeStaffEmailTaken   = "https://keel.dev/problems/staff-email-taken"
+	TypeLastAdmin         = "https://keel.dev/problems/last-admin"
+	TypePlatformOnly      = "https://keel.dev/problems/platform-only"
+	TypeMerchantCodeTaken = "https://keel.dev/problems/merchant-code-taken"
 
 	// 商家写路径那一组（M4，契约 Admin + Catalog 两个 tag 的 16 条）。
 	//

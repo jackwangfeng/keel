@@ -75,10 +75,14 @@ func mkStaff(t *testing.T, shopCode, email string, role, status int16) int64 {
 
 // mkEmailLink 给某个 staff 造一串 kind=2 的一次性登录链接 token，返回明文。
 //
-// 直接插库而不是走 POST /admin/staff，是因为「第一个管理员从哪来」这件事
-// 在本轮没有接口（商家级的第一个管理员由 POST /admin/merchants 建，那条还
-// 挂在 notYetRouted 上）。夹具造的是**库里那一行**，而换会话这一步走的是
-// 真实的 POST /admin/auth/session —— 被测的那一段没有被替换掉。
+// 直接插库而不是走接口，是因为这些测试要的是「某个已经存在的人手里有一串
+// 有效链接」，而接口那条路每次都会**多建一个人**。
+//
+// （「商家级的第一个管理员从哪来」这件事本轮有接口了：POST /admin/merchants
+// 会在新店的租户作用域里建他并签一串同样 kind=2 的 token —— 它的端到端路径
+// 由 admin_merchant_test.go 守着。这里仍然直接插库，理由见上一段。）
+// 夹具造的是**库里那一行**，而换会话这一步走的是真实的
+// POST /admin/auth/session —— 被测的那一段没有被替换掉。
 func mkEmailLink(t *testing.T, staffID int64, ttl time.Duration) string {
 	t.Helper()
 	token, err := auth.NewOpaqueToken()

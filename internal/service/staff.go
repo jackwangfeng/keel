@@ -64,9 +64,15 @@ const bootstrapPlaceholderEmail = "bootstrap@keel.invalid"
 // merchant_id 为 NULL，租户作用域看不见它们；而租户作用域下的那些行
 // 平台作用域也看不见（00017）。选哪一个由**调用者的身份**决定，
 // 不由请求里的任何东西决定。
+// 第三个入口 WithNewTenant 是开店专用的（merchant.go）：它建出那家店，
+// 再把作用域切到**这家新店**。它不能由前两个拼出来 —— WithTenant 取的是请求
+// Host 那家店，WithPlatform 里 staff_scope_merchant() 是 NULL（建出来的会是
+// 一个平台级管理员）。完整论证在 repository.WithNewTenant 上。
 type StaffRepository interface {
 	WithTenant(ctx context.Context, fn func(repository.Tx) error) error
 	WithPlatform(ctx context.Context, fn func(repository.StaffTx) error) error
+	WithNewTenant(ctx context.Context, code, name string,
+		fn func(repository.Merchant, repository.StaffTx) error) (repository.Merchant, error)
 }
 
 // StaffService 实现 /admin/auth/* 与 /admin/staff* 那几条接口。
