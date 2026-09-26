@@ -370,8 +370,24 @@ jobs:
       - name: 清掉上一次的残留
         run: docker compose down -v --remove-orphans || true
 
+      # 镜像构建里要 git clone GitHub（scripts/fetch-dtmrs.sh）、拉 Go 依赖。自建 runner 在国内，
+      # 直连 GitHub 常常断（实测："Error in the HTTP2 framing layer"，这一步 12 秒就红了）。
+      # runner 的 .env 里配了 KEEL_CI_BUILD_PROXY 就经它构建：只作为 --build-arg 传给构建阶段
+      # （HTTP_PROXY 这几个是 Docker 预定义的 ARG，不进镜像历史），跑起来的容器里没有代理 ——
+      # 不写进全局的 ~/.docker/config.json，那会给同机演示环境的每个容器都塞上代理。
+      # 构建容器里 127.0.0.1 是容器自己，所以那个地址是宿主机的局域网 IP。没配就照原样直连。
       - name: 起全栈
-        run: docker compose up -d --build
+        run: |
+          if [ -n "${KEEL_CI_BUILD_PROXY:-}" ]; then
+            p="$KEEL_CI_BUILD_PROXY"
+            docker compose build \
+              --build-arg HTTP_PROXY="$p" --build-arg HTTPS_PROXY="$p" \
+              --build-arg http_proxy="$p" --build-arg https_proxy="$p" \
+              --build-arg NO_PROXY=localhost,127.0.0.1 --build-arg no_proxy=localhost,127.0.0.1
+            docker compose up -d
+          else
+            docker compose up -d --build
+          fi
 
       # **判据在这一步，不在上一步。**
       #
