@@ -14,9 +14,13 @@ KEEL_IOS_TEAM=2Q89DQSSH6 KEEL_API_BASE=http://192.168.0.110:18099/api/v1 make ap
 make app-e2e-ios
 ```
 
-前置条件：Android 开了 USB 调试并已授权（`adb devices` 显示 `device`）；iPhone 已配对
+前置条件：Android 开了 USB 调试并已授权（`adb devices` 显示 `device`），想拔线的话插着线跑一次
+`make app-adb-wifi`（切到无线调试；手机重启后要重跑）；iPhone 已配对
 （`xcrun devicectl list devices` 显示 `paired`）、**不锁屏**（锁屏时系统拒绝远程启动 App，
-测试期间把「自动锁定」设成「永不」），并且和电脑在同一网段（见下）。只改用例不用重新打包。
+测试期间把「自动锁定」设成「永不」），并且和电脑在同一网段（见下）。iPhone 配对过一次之后
+Xcode 就能经 Wi-Fi 连它（`devicectl list devices` 里 transport 是 `localNetwork`），不用插线。
+同一台 Android 手机插着线又开了无线时 `adb devices` 里有两条，用例优先用无线那条，
+`ANDROID_SERIAL` 可指定。只改用例不用重新打包。
 
 ## 写用例
 

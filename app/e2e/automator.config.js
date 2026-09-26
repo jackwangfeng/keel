@@ -37,7 +37,24 @@ function adbPath() {
   return candidates.find((p) => fs.existsSync(p)) || 'adb'
 }
 const run = (cmd, args) => execFileSync(cmd, args, { stdio: ['ignore', 'pipe', 'inherit'] }).toString()
-const adb = (...args) => run(adbPath(), args)
+
+// 选定一台 Android 设备，adb 调用与官方 launcher（adbkit，默认取列表第一台）都用它。
+// 同一台手机开了无线调试又插着线时，adb devices 里是两条（USB 序列号 + ip:5555），
+// 不指定的话 adb 直接报 "more than one device"。规则：ANDROID_SERIAL 优先（adb 自己也认）；
+// 只有一台就用它；多台时优先无线那条（插线只是为了开无线调试，插着不该改变测的是谁）。
+function androidSerial() {
+  if (process.env.ANDROID_SERIAL) return process.env.ANDROID_SERIAL
+  const lines = run(adbPath(), ['devices']).split('\n').slice(1)
+  const online = lines.map((l) => l.trim().split(/\s+/)).filter((c) => c[1] === 'device').map((c) => c[0])
+  if (online.length === 0) throw new Error('没有在线的 Android 设备：USB 连上并授权，或 adb connect <ip>:5555')
+  if (online.length === 1) return online[0]
+  const wireless = online.find((id) => /:\d+$/.test(id))
+  const pick = wireless || online[0]
+  console.log(`[e2e] 有 ${online.length} 台 Android 设备在线，用 ${pick}（ANDROID_SERIAL 可指定）`)
+  return pick
+}
+const SERIAL = IOS ? '' : androidSerial()
+const adb = (...args) => run(adbPath(), ['-s', SERIAL, ...args])
 
 // iPhone：用 Xcode 的 devicectl（USB 连着、已配对）。KEEL_IOS_DEVICE 可指定设备，默认取第一台。
 function iosDevice() {
@@ -95,7 +112,7 @@ module.exports = {
     // 用例跑完 jest 不退出（实测）。close 会退出 App 并关掉服务。
     teardown: 'close',
     platform: IOS ? 'ios' : 'android',
-    android: { package: PKG, appid: APPID, executablePath: APK },
+    android: { id: SERIAL || undefined, package: PKG, appid: APPID, executablePath: APK },
     ios: { bundleId: PKG, appid: APPID, executablePath: IOS_APP },
   },
 }

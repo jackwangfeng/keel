@@ -62,7 +62,7 @@ GOOSE := GOOSE_DRIVER=postgres GOOSE_DBSTRING="$(GOOSE_DBSTRING)" \
 	$(GORUN) github.com/pressly/goose/v3/cmd/goose
 
 .PHONY: help generate generate-go generate-ts generate-sql generate-uts tools-versions \
-	contract-check schema-check app-type-check app-install app-build-h5 app-build-android app-apk app-apk-e2e app-e2e app-ios app-ios-e2e app-e2e-ios \
+	contract-check schema-check app-type-check app-install app-build-h5 app-build-android app-apk app-apk-e2e app-e2e app-adb-wifi app-ios app-ios-e2e app-e2e-ios \
 	sdk-smoke migrate migrate-down migrate-status test-db \
 	test-engine dtmrs-deps build
 
@@ -79,7 +79,8 @@ help:
 	@echo "make app-build-h5   用 DCloud 编译器真编一遍 H5（要先 app-install）"
 	@echo "make app-apk        本地打 Android apk（KEEL_API_BASE=http://host:port/api/v1 指定默认服务地址）"
 	@echo "make app-apk-e2e    打带自动化运行时的测试包（同样读 KEEL_API_BASE）"
-	@echo "make app-e2e        在 USB 连着的 Android 真机上跑 app/e2e 下的自动化用例"
+	@echo "make app-e2e        在 Android 真机上跑 app/e2e 下的自动化用例（USB 或无线）"
+	@echo "make app-adb-wifi   把 USB 连着的 Android 手机切到无线调试，之后可拔线"
 	@echo "make app-ios        本地打 iOS 真机包（KEEL_IOS_TEAM 指定签名团队，KEEL_API_BASE 同上）"
 	@echo "make app-ios-e2e    打带自动化运行时的 iOS 测试包"
 	@echo "make app-e2e-ios    在 USB 连着的 iPhone 上跑 app/e2e 下的自动化用例"
@@ -172,6 +173,10 @@ app-apk-e2e:
 
 app-e2e:
 	cd $(ROOT)/app && npm run test:e2e
+
+# 插着线跑一次，之后拔线也能 make app-e2e。手机重启后要重跑。
+app-adb-wifi:
+	bash $(ROOT)/app/scripts/adb-wifi.sh
 
 # iOS：页面逻辑编译成 JS 跑在 JavaScriptCore，界面原生渲染；本地用离线 SDK + XcodeGen + xcodebuild
 # 出真机包（没有模拟器版本，理由见 app/scripts/build-ios.sh 头）。
