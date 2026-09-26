@@ -188,7 +188,7 @@ type ShipRequest struct {
 //	二、有未完结的整单退款时拒绝 —— 订单停在 50 就是那个信号（整单退款申请把
 //	    订单推到 50，驳回 / 撤回把它推回 20）。部分退款不改 status，所以不阻断。
 //	三、自动确认收货 —— 不在这里，在定时任务里（auto_confirm.go）：发货满
-//	    shop_settings.auto_confirm_days 天（默认 7）由系统替买家确认收货。
+//	    店铺设置的 auto_confirm_days 天（shop_preferences，默认 7）由系统替买家确认收货。
 func (s *AdminOrderService) Ship(ctx context.Context, orderNo string, req ShipRequest,
 	idemKey string) (repository.Shipment, bool, error) {
 

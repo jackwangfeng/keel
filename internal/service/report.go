@@ -23,7 +23,7 @@ import (
 //
 // 契约 ReportWindow / ReportMetrics 的描述是唯一真相源，这里照做：
 //
-//   - 时区：shop_settings.timezone，没有那一行或不是合法的 IANA 名字时按 Asia/Shanghai；
+//   - 时区：店铺设置的 timezone（shop_preferences，00059），没有那一行或不是合法的 IANA 名字时按 Asia/Shanghai；
 //   - 窗口：today 是今天 0 点到此刻、yesterday 是昨天、last_7_days / last_30_days 是
 //     最近 7 / 30 个**完整**自然日（不含今天）、custom 是 [start_date 0 点, end_date 次日 0 点)；
 //   - 上一周期：紧挨着的等长一段；today 对比昨天的同一时段；

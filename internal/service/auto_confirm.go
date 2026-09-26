@@ -13,7 +13,7 @@ import (
 
 // 自动确认收货定时任务（数据模型 §5「发货的三条规则」之三）。
 //
-// 发货后 N 天（shop_settings.auto_confirm_days，默认 7，00001 的列默认值），
+// 发货后 N 天（店铺设置的 auto_confirm_days，默认 7；00059 起在 shop_preferences），
 // 仍停在 30 已发货的订单由系统推到 40 已完成。没有它，一个从不点「确认收货」
 // 的买家会让订单永远停在 30 —— 而「已完成」是结算、评价、售后时效这些下游
 // 事情的起点。
@@ -73,7 +73,7 @@ type AutoConfirmService struct {
 const DefaultAutoConfirmInterval = 10 * time.Minute
 
 // AutoConfirmRepository 是这个任务需要的仓储能力：租户事务、活跃商家清单、
-// 这家店的自动确认天数（shop_settings 是 tenant-root，不在 Tx 那一面）。
+// 这家店的自动确认天数（在 shop_preferences 里，自己开一个短的租户事务读，不占扫描的那个 Tx）。
 type AutoConfirmRepository interface {
 	WithTenant(ctx context.Context, fn func(repository.Tx) error) error
 	ActiveMerchants(ctx context.Context) ([]int64, error)
