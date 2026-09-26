@@ -94,6 +94,19 @@ row-level security underneath. All three are checked mechanically: the
 
 ---
 
+## Live demo
+
+**<https://eshop.zzss.fun>** — open to everyone, no sign-up or login needed.
+
+| Path | What you get |
+|---|---|
+| [`/`](https://eshop.zzss.fun/) | Buyer app (H5 build of `app/`) |
+| [`/admin/`](https://eshop.zzss.fun/admin/) | Merchant console, signed in as the demo merchant's admin |
+
+> This is a demo environment shared by all visitors. Data is reset from time to time without notice, and anything you enter may be seen by others — **do not enter real personal information** (names, phone numbers, addresses, payment details).
+
+---
+
 ## Quick start
 
 ```bash
