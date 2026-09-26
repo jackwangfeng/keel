@@ -413,6 +413,8 @@ const P = "https://keel.dev/problems/";
 
 export const ProblemType = {
     inventoryPrecondition: `${P}inventory-precondition-failed`,
+    // 相对调整扣完会变负（409，响应体同样带 current）。与上一条相反：原样重试不会成功。
+    inventoryInsufficient: `${P}inventory-insufficient`,
     complianceRejected: `${P}compliance-rejected`,
     complianceUnavailable: `${P}compliance-unavailable`,
     idempotencyInFlight: `${P}idempotency-key-in-flight`,
@@ -468,6 +470,21 @@ export function isProblemType(err: unknown, type: string): err is ProblemError {
 export function asInventoryConflict(err: unknown): InventoryConflict | null {
     if (!(err instanceof ProblemError)) return null;
     if (err.problem.type !== ProblemType.inventoryPrecondition) return null;
+    const candidate = err.problem as Problem & { current?: unknown };
+    const current = candidate.current;
+    if (typeof current !== "object" || current === null) return null;
+    if (typeof (current as { available_qty?: unknown }).available_qty !== "number") return null;
+    return candidate as InventoryConflict;
+}
+
+/**
+ * 相对调整扣完会变负（409 inventory-insufficient）。响应体与 CAS 冲突同形（带 current），
+ * 但 type 不同、处置相反：这一个原样重试不会成功。分成两个函数而不是让
+ * asInventoryConflict 两种都认，是为了让「重读重试」那段逻辑按构造碰不到这一种。
+ */
+export function asInventoryShortage(err: unknown): InventoryConflict | null {
+    if (!(err instanceof ProblemError)) return null;
+    if (err.problem.type !== ProblemType.inventoryInsufficient) return null;
     const candidate = err.problem as Problem & { current?: unknown };
     const current = candidate.current;
     if (typeof current !== "object" || current === null) return null;
