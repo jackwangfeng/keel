@@ -69,6 +69,16 @@ on:
 permissions:
   contents: read
 
+# ## 跑在哪
+#
+# 全部 job 跑在自建 runner 上（lenserver，192.168.0.110，label `keel`）：仓库是私有的，
+# GitHub 托管的 runner 按分钟计费，额度用完 job 直接不启动。自建 runner 不计费，
+# 但它是一台**长期运行、和别的服务共用**的机器 —— 托管 runner 每次都是新虚拟机，
+# 这里不是。所以下面凡是占宿主机端口、起具名容器、建 compose 项目的地方，都满足三条：
+#   · 不用宿主机上已被占的端口（5432 有 quant_postgres，8080 有别的服务）；
+#   · 名字带 keelci 前缀，和同机的演示环境（COMPOSE_PROJECT_NAME=keeldemo，18099）隔开；
+#   · 开始前、结束后都清理（结束后 if: always()），上一次残留不会让下一次重名失败。
+# 只有一个 keel runner，job 串行，所以固定名字就够；要并行得先把这些名字与端口参数化。
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   # 只在 PR 上取消。往 PR 连推三次，没必要让三个 e2e 同时建镜像——有意义的
@@ -82,7 +92,7 @@ jobs:
   # ---------------------------------------------------------------------------
   gates:
     name: 文档与契约闸门
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, keel]
     # 这一段本机 2.4 秒。给 15 分钟是留给 npx 首次下载与 Go 模块下载的，
     # 不是留给「卡住也没关系」——真卡住时，六小时的默认上限会把 runner 额度
     # 烧光，而失败信息还是那句超时。
@@ -127,7 +137,9 @@ jobs:
   # ---------------------------------------------------------------------------
   go:
     name: Go 构建与测试
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, keel]
+    env:
+      PGPORT: "15432"
     timeout-minutes: 20
     services:
       postgres:
@@ -149,8 +161,10 @@ jobs:
           POSTGRES_DB: keel
         ports:
           # 测试进程跑在 runner 宿主机上，不在容器网络里，所以必须映射出来。
-          # 映到 5432 是为了让 internal/db 的默认 PGPORT 直接成立。
-          - 5432:5432
+          # 原来映到 5432、让 internal/db 的默认 PGPORT 直接成立；自建 runner 上 5432
+          # 被同机的 quant_postgres 占着，改成 15432，job 级的 PGPORT 跟着改
+          # （internal/db/dsn.go 与 Makefile 的 GOOSE_DBSTRING 都读它）。
+          - 15432:5432
         options: >-
           --health-cmd "pg_isready -h 127.0.0.1 -U keel -d keel"
           --health-interval 2s
@@ -193,6 +207,11 @@ jobs:
       - name: Rust 工具链
         if: steps.libdtmrs.outputs.cache-hit != 'true'
         run: |
+          # runner 作为 systemd 服务跑，PATH 里没有 rustup 装的 ~/.cargo/bin。
+          if [ -x "$HOME/.cargo/bin/cargo" ]; then
+            export PATH="$HOME/.cargo/bin:$PATH"
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          fi
           command -v cargo >/dev/null || {
             echo "::error::runner 上没有 cargo。dtmrs 是 Rust 实现，Keel 自 M2 起经 cgo 嵌入它。修法：在这一步前面加 - uses: dtolnay/rust-toolchain@stable"
             exit 1
@@ -230,7 +249,12 @@ jobs:
   # 只有这条链路会红。
   e2e:
     name: 端到端（compose + smoke + SDK）
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, keel]
+    env:
+      # 和同机演示环境（keeldemo / 18099）隔开；宿主机 8080 被占。
+      # smoke.sh 与 web/src/api/smoke.mts 都读 KEEL_HTTP_PORT。
+      COMPOSE_PROJECT_NAME: keelci
+      KEEL_HTTP_PORT: "18180"
     # 比另外两个宽：这里要在 runner 上从零建两个镜像，Go 依赖在容器里重下一遍。
     #
     # M2 又加了一段：镜像里多一个 Rust 阶段（装 cargo/rustc、clone dtmrs、
@@ -252,6 +276,9 @@ jobs:
 
       # 端口刻意用默认的 8080，不换。这一整段就是 README 快速开始里那三行命令，
       # 一字不改地跑一遍——换了端口，CI 验证的就不再是 README 让读者跑的那件事。
+      - name: 清掉上一次的残留
+        run: docker compose down -v --remove-orphans || true
+
       - name: 起全栈
         run: docker compose up -d --build
 
@@ -279,6 +306,11 @@ jobs:
           docker compose ps --all
           docker compose logs --no-color --timestamps
 
+      # 自建 runner 不会替你删容器和卷。
+      - name: 收拾
+        if: always()
+        run: docker compose down -v --remove-orphans
+
   # ---------------------------------------------------------------------------
   # 客户端（app/，uni-app x）：用 DCloud 自己的编译器真编一遍
   # ---------------------------------------------------------------------------
@@ -296,7 +328,7 @@ jobs:
   # 所以契约漂移这件事的判据在 gates 那条，不在这里。
   client:
     name: 客户端（uni-app x 编译）
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, keel]
     # 本机实测：npm ci 约 30 秒（冷缓存），两次 uni build 各几秒。
     # 15 分钟给的是 runner 上下载 527 个包 + 那个 16MB 原生 binding 的余量。
     timeout-minutes: 15
@@ -352,8 +384,19 @@ jobs:
   # 但不该把一个改文档的 PR 卡在一次模型下载上。
   inference:
     name: 推理引擎（真模型，不挡 PR）
-    runs-on: ubuntu-latest
+    # PR 上不跑，只在 main 与手动触发（workflow_dispatch）时跑。
+    # continue-on-error 只是「红了不挡」，挡不住「整轮 CI 要等它跑完才算完」：
+    # 它要下 2.27 GB 权重，挂在每个 PR 上，PR 的结论就得多等十几二十分钟。
+    # 上面「为什么不挡 PR」那段说它是定期与按需的核对 —— 那就让它只在那两种时候跑。
+    if: github.event_name != 'pull_request'
+    runs-on: [self-hosted, keel]
     continue-on-error: true
+    env:
+      # 权重留在自建 runner 的磁盘上，下一次不用再下 2.27 GB（原来用 actions/cache
+      # 往 GitHub 传一遍又拉一遍，在自建 runner 上纯属浪费）。
+      HFCACHE: /home/jeffwang/.cache/keel-ci/hfcache
+      ENGINE: keelci-inference
+      ENGINE_PORT: "18001"
     # 本机实测：镜像建好后空卷冷启动 75 秒（下载 2.27 GB + 加载）。
     # 40 分钟给的是 runner 上从零拉 torch CPU 轮子 + 权重的余量。
     timeout-minutes: 40
@@ -370,41 +413,53 @@ jobs:
       # 权重缓存。键取 Dockerfile + requirements.txt：模型名与推理栈版本都钉在
       # 那两个文件里，它们不变则权重不变。缓存没命中时下面那步会多花几分钟，
       # 而不是失败。
-      - name: 缓存模型权重
-        uses: actions/cache@v4
-        with:
-          path: /tmp/hfcache
-          key: bge-m3-${{ hashFiles('services/inference/Dockerfile', 'services/inference/requirements.txt') }}
 
       - name: 建推理镜像
         run: docker build -t keel-inference services/inference
 
+      # 容器里是 uid 65532（services/inference/Dockerfile 的 USER），而 $HFCACHE 是
+      # runner 用户建的。不改属主的话引擎一启动就死在
+      # PermissionError: '/models/hub' —— c2238e6 加上这个 job 之后每一次都是这样。
       - name: 起引擎
         run: |
-          mkdir -p /tmp/hfcache
-          docker run -d --name inference -p 8001:8000 \
-            -v /tmp/hfcache:/models -e HF_HOME=/models keel-inference
+          docker rm -f "$ENGINE" >/dev/null 2>&1 || true
+          mkdir -p "$HFCACHE"
+          sudo chown -R 65532:65532 "$HFCACHE"
+          docker run -d --name "$ENGINE" -p "$ENGINE_PORT:8000" \
+            -v "$HFCACHE:/models" -e HF_HOME=/models keel-inference
 
       # 不用固定 sleep：冷启动时长取决于权重下没下过，差两个数量级。
       # /healthz 只在模型加载完之后才 200（app.py 把加载放在 lifespan 里，
       # 而 uvicorn 在 lifespan 跑完之前根本不开始监听）。
+      #
+      # 容器退出了就当场失败：原来只轮询 /healthz，引擎启动几秒就崩了也要白等满
+      # 30 分钟才红（上面那个权限问题就是这么把每轮 CI 拖成一小时的）。
       - name: 等引擎就绪
         run: |
           for i in $(seq 1 180); do
-            if curl -fsS http://127.0.0.1:8001/healthz >/dev/null 2>&1; then
-              curl -fsS http://127.0.0.1:8001/healthz; echo; exit 0
+            if curl -fsS "http://127.0.0.1:$ENGINE_PORT/healthz" >/dev/null 2>&1; then
+              curl -fsS "http://127.0.0.1:$ENGINE_PORT/healthz"; echo; exit 0
+            fi
+            if [ "$(docker inspect -f '{{.State.Running}}' "$ENGINE" 2>/dev/null)" != "true" ]; then
+              echo "引擎容器已经退出（第 ${i} 次检查时）：" >&2
+              docker logs "$ENGINE" >&2 || true
+              exit 1
             fi
             sleep 10
           done
           echo "引擎 30 分钟没就绪" >&2
-          docker logs inference >&2 || true
+          docker logs "$ENGINE" >&2 || true
           exit 1
 
       # 这一组里既有「真引擎算出来的向量有没有语义」（margin > 0.10），
       # 也有「app.py 那几条拒绝还在不在」。后者是协议层断言，不算向量，很快。
       - name: 真引擎测试
-        run: KEEL_EMBED_ENDPOINT=http://127.0.0.1:8001 make test-engine
+        run: KEEL_EMBED_ENDPOINT="http://127.0.0.1:$ENGINE_PORT" make test-engine
 
       - name: 失败时导出引擎日志
         if: failure()
-        run: docker logs inference || true
+        run: docker logs "$ENGINE" || true
+
+      - name: 收拾
+        if: always()
+        run: docker rm -f "$ENGINE" || true
