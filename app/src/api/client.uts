@@ -21,6 +21,7 @@
 // 会一直编译得过 —— 直到线上。
 
 import {
+  Category,
   PaymentCreateRequest,
   ListOrdersQuery,
   ListOrdersResponse,
@@ -326,6 +327,27 @@ export function listProducts(
   send('GET', '/products', queryString(parts), null, null,
     (_s : number, text : string, _r : boolean) => {
     const body = JSON.parse<ListProductsResponse>(text)
+    if (body == null) {
+      onErr(decodeFailure(200))
+      return
+    }
+    onOk(body!)
+  }, onErr)
+}
+
+/**
+ * GET /categories：买家侧分类树（只含启用的；契约里 security: []）。
+ *
+ * 顶层数组就是根分类，子分类在 children 里。**服务端这条路由还没实现**（404，落在
+ * failure.notImplemented）—— 调用方拿到失败就当「这家店没有分类」，把分类栏藏起来，
+ * 而不是把首页变成一个报错页：分类是浏览的捷径，不是浏览的前提。
+ */
+export function listCategories(
+  onOk : (tree : Category[]) => void,
+  onErr : FailureHandler
+) {
+  send('GET', '/categories', '', null, null, (_s : number, text : string, _r : boolean) => {
+    const body = JSON.parse<Category[]>(text)
     if (body == null) {
       onErr(decodeFailure(200))
       return

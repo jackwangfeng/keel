@@ -16,5 +16,23 @@
     "router": {
       "base": "./"
     }
+  },
+  "app-android": {
+    "distribute": {
+      "modules": {
+        "uni-location": {
+          "system": {}
+        }
+      }
+    }
+  },
+  "app-ios": {
+    "distribute": {
+      "modules": {
+        "uni-location": {
+          "system": {}
+        }
+      }
+    }
   }
 }

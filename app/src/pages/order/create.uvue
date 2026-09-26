@@ -226,7 +226,7 @@ export default {
           parseInt(this.addressIdText), storeId, this.pv!.payableCents)
       }
       return orderRequest(parseInt(this.skuIdText), this.quantity,
-        parseInt(this.addressIdText), storeId)
+        parseInt(this.addressIdText), storeId, null)
     },
     // 改了订单内容就把试算结果作废。
     //

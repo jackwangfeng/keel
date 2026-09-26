@@ -46,6 +46,9 @@ gradle.ext.uniAars = [
     'uni-createRequestPermissionListener', 'uni-requestSystemPermission',
     // 代码用到的模块（与 manifest.json 的 modules 对齐）
     'uni-storage', 'uni-getSystemInfo', 'uni-network',
+    // 当前门店（src/api/store.uts）要定位：uni-location 是 API，uni-location-system 是
+    // 「系统定位」那个实现（WGS-84、不要地图 SDK key）。provider 在 app/build.gradle 注册。
+    'uni-location', 'uni-location-system',
     // 自动化测试运行时（build-apk.sh --e2e）额外用到的模块。普通包里也带着：
     // 一共几百 KB，换来两种构建用同一份清单，不必在 Gradle 里分叉。
     'uni-websocket', 'uni-fileSystemManager', 'uni-actionSheet', 'uni-showLoading',
