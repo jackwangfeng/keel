@@ -149,7 +149,35 @@ read -r sku_id stock_before < <(python3 "$SCRIPT_DIR/smoke_pick_sku.py" "$detail
     || { echo "商品详情里挑不出有货的 SKU：" >&2; cat "$detail_file" >&2; echo >&2; exit 1; }
 echo "    sku=$sku_id 下单前水位=$stock_before"
 
-order_body="{\"items\":[{\"sku_id\":$sku_id,\"quantity\":1}],\"address_id\":$SMOKE_ADDRESS_ID}"
+# 多门店（00020）之后下单要回答「哪家店在服务你」：store_id 是
+# OrderCreateRequest 的必填字段，价格跟着那家店所在的大区走。
+#
+# 这里**不写死 store_id = 1**，而是走买家真实会走的那一跳 ——
+# GET /stores/resolve，不给坐标。那正是「拒绝授权定位」那条路径（用户定的：
+# 与「不在任何围栏内」同一条路径，回落全国配送的默认店）。写死一个 id 的话，
+# 「解析接口坏了」这件事冒烟里永远看不见，而它是买家打开 App 的第一跳。
+echo "==> GET $BASE/api/v1/stores/resolve 不给坐标，应回落默认店"
+resolve_file=$(mktemp)
+code=$(curl "${curl_args[@]}" -o "$resolve_file" -w '%{http_code}' "$BASE/api/v1/stores/resolve")
+if [ "$code" != "200" ]; then
+    echo "门店解析返回 $code，期望 200：" >&2; cat "$resolve_file" >&2; echo >&2
+    rm -f "$resolve_file"; exit 1
+fi
+read -r store_id match_type < <(python3 - "$resolve_file" <<'PYEOF'
+import json, sys
+d = json.load(open(sys.argv[1]))
+stores = d.get("stores") or []
+# 没坐标时唯一合法的答案是 fallback_default 且恰好一家；none 表示这个商家
+# 没配默认店 —— 种子里配了，所以这里出现 none 就是回填或种子出了问题。
+if d.get("match_type") != "fallback_default" or len(stores) != 1:
+    raise SystemExit(f"期望 fallback_default + 一家门店，实际 {d.get('match_type')} + {len(stores)} 家")
+print(stores[0]["id"], d["match_type"])
+PYEOF
+) || { echo "门店解析的响应不对：" >&2; cat "$resolve_file" >&2; echo >&2; rm -f "$resolve_file"; exit 1; }
+rm -f "$resolve_file"
+echo "    store=$store_id（$match_type）"
+
+order_body="{\"items\":[{\"sku_id\":$sku_id,\"quantity\":1}],\"address_id\":$SMOKE_ADDRESS_ID,\"store_id\":$store_id}"
 
 echo "==> POST $BASE/api/v1/orders/preview 试算"
 code=$(curl "${curl_args[@]}" "${AUTH[@]}" -o "$order_file" -w '%{http_code}' \
