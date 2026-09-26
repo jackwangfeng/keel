@@ -9,8 +9,11 @@ Kotlin / Swift，不走 webview；同一份代码也编 H5 与小程序。
   （接口挂了）就整排不显示，首页照常。
 - 搜索走 `POST /search`（语义 + 关键词混合检索）。一期不翻页；服务端按相关度把召回到的都排出来、
   不设阈值，所以不相关的商品会排在后面而不是消失。`in_stock_only` 默认 false：缺货商品也返回、
-  排在最后，搜索页给它挂「缺货」标并压暗。点击回传 `POST /search/events`（用 `/search` 响应里的
-  `trace_id` 串联）客户端还没接。
+  排在最后，搜索页给它挂「缺货」标并压暗。
+- 搜索效果回传（`POST /search/events`，公开接口、不带令牌和幂等键）：搜索页把 `trace_id` 和这批结果
+  存在一起；**从搜索结果点进去的**商品回传 `click`，之后这件商品被加购回传 `add_cart`、被下单回传
+  `order`（`src/api/search-trace.uts` 记 productId → traceId，只在内存里，最近一次为准）。
+  `trace_id` 缺席时这批结果什么都不报。回传发了就不管：所有错误忽略、不重试、不打断业务。
 - 收货地址：下单页用 `GET /addresses` 的默认地址（排第一且 `is_default`）；没有默认就让用户选，
   一条都没有就引导去新建。地址簿页：新建（`POST`，带幂等键）、编辑（`PUT`，**不**切默认）、
   删除、设默认（`PUT …/default`，专用接口）。422 按 `Problem.errors[].field` 标红对应输入框。
@@ -365,6 +368,7 @@ H5 构建产物 + 一个把 `/api` 反代给 Keel 的静态服务器，用无头
 | 搜索 | `POST /search` | ✅ 首页入口 → 搜索页，按相关度排序；Android / iPhone 真机 e2e 覆盖（按首页一件商品的标题搜，它排第一，点进去是它的详情） |
 | 收货地址 | `GET/POST/PUT/DELETE /addresses…`、`PUT …/default` | ✅ 小米真机 e2e（`address.test.js`）：列表与服务端一致、默认排第一；错的表单按 `errors[].field` 标红两项，改对后新建成功；结算页自动用默认地址 |
 | 购物车 | `GET /cart`、`POST /cart/items`、`PATCH /cart/items/{id}`、`POST …/batch-delete` | ✅ 小米真机 e2e（`cart.test.js`）：加购 → 调数量，合计与服务端 `selected_total_cents` 一致 → 去结算，试算商品金额 = 购物车合计 → 下单后这行从车里删掉。调大超库存时页面显示服务端 409 的原因（调试时实测） |
+| 搜索效果回传 | `POST /search` 的 `trace_id`、`POST /search/events` | ✅ iPhone 真机 e2e（`searchtrace.test.js`，这轮小米锁屏）：结果带 trace_id；点进商品后测试进程对同一对 trace_id + 商品重发 click 得 204（服务端认这对）；加购、购物车结算、下单照常成功。服务端是否记下三条事件由服务端按 trace_id 查日志核对 |
 | 取消 / 售后 | `POST /orders/{no}/cancel`、`POST /orders/{no}/refunds`、`GET /refunds/{no}`、`POST /refunds/{no}/cancel` | ✅ 小米真机 e2e（`aftersale.test.js`）：待支付单取消 → 已关闭；已支付单申请仅退款 → 待审核（页面金额 = 服务端算的 `amount_cents`）→ 撤回 → 已取消。驳回（显示 `reject_reason`、可重新申请）/ 同意仅退款（已退款，整单全退的订单走到 60 已退款、详情显示已退金额）/ 发货后确认收货 → 已完成：前置状态由服务端的后台会话代做，单号经 `KEEL_E2E_*` 环境变量交给用例 |
 | 个人资料 | `GET/PATCH /me`、`GET /me/identities` | ✅ 小米真机 e2e（`profile.test.js`）：回显昵称与脱敏手机号，改昵称后服务端是新值。解绑 / `last-credential` 没有自动化覆盖（演示买家没有第三方身份） |
 | 优惠券 | `GET /coupon-templates`、`POST /coupon-templates/{id}/claim`、`GET /coupons`、`POST /orders/preview` 的 `applicable_coupons` / `user_coupon_id` | ✅ 小米真机 e2e（`coupon.test.js`）：领「9 折」→ 我的优惠券四个 tab → 结算页自动用券、切「不使用」优惠归零。iOS 只验证了编译 |

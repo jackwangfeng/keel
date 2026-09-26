@@ -81,6 +81,7 @@ import { isLoggedIn } from '@/api/config.uts'
 import { newIdempotencyKey } from '@/api/idempotency.uts'
 import { ensureStore, CurrentStore } from '@/api/store.uts'
 import { addCartRequest, productDetailView, ProductDetailView } from '@/api/view.uts'
+import { searchConverted } from '@/api/search-trace.uts'
 
 export default {
   data() {
@@ -214,6 +215,8 @@ export default {
         (c) => {
           this.adding = false
           this.added = '已加入购物车（共 ' + c.items.length.toString() + ' 种）'
+          // 从搜索结果点进来的商品：回传 add_cart（不是就什么都不做）。
+          searchConverted('add_cart', this.productId)
         },
         (f: ApiFailure) => {
           this.adding = false

@@ -1564,6 +1564,15 @@ export type SearchResponse = {
   trace_id? : string
 }
 
+/** POST /search/events 的请求体 */
+export type ReportSearchEventRequest = {
+  /** `POST /search` 响应里的 `trace_id`，原样带回 */
+  trace_id : string
+  event : string
+  /** 被点击 / 加购 / 下单的商品。必须是这次检索返回的 `items[].id` 之一。 */
+  product_id : number
+}
+
 /** GET /coupon-templates 的 query 参数 */
 export type ListCouponTemplatesQuery = {
   page? : number

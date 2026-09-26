@@ -68,7 +68,8 @@
 
 <script>
 import { search, ApiFailure } from '@/api/client.uts'
-import { searchHitRow, searchRequest, ProductRow } from '@/api/view.uts'
+import { searchHitRow, searchRequest, searchTraceId, ProductRow } from '@/api/view.uts'
+import { searchClicked } from '@/api/search-trace.uts'
 import { ensureStore, CurrentStore } from '@/api/store.uts'
 
 export default {
@@ -82,6 +83,8 @@ export default {
       error: '',
       // 连着搜两次时，只认最后一次发出去的那个请求的结果。
       seq: 0,
+      // 这批结果的 trace_id（效果回传用）。和 rows 同时换，所以点到的一定是这批里的商品。
+      traceId: '',
     }
   },
   methods: {
@@ -118,6 +121,7 @@ export default {
             rows.push(searchHitRow(res.items[i]))
           }
           this.rows = rows
+          this.traceId = searchTraceId(res)
           this.state = 'done'
         },
         (f: ApiFailure) => {
@@ -128,6 +132,8 @@ export default {
       )
     },
     open(id: number) {
+      // 回传发了就不管，不等它、不因为它拦跳转。
+      searchClicked(this.traceId, id)
       uni.navigateTo({ url: '/pages/products/detail?id=' + id.toString() })
     },
   },

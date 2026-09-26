@@ -21,6 +21,7 @@
 // 会一直编译得过 —— 直到线上。
 
 import {
+  ReportSearchEventRequest,
   ListRefundsQuery,
   ListRefundsResponse,
   Refund,
@@ -416,6 +417,29 @@ export function search(
     }
     onOk(body!)
   }, onErr)
+}
+
+/**
+ * POST /search/events：搜索效果回传（点击 / 加购 / 下单）。**发了就不管**：
+ *
+ *   · 公开接口，不要令牌、不要 Idempotency-Key —— 所以不走 send（它会自作主张带上
+ *     Authorization；带着一个过期令牌去打公开接口，只会凭空多出一种失败）；
+ *   · 204 成功，重复上报也是 204（每列以首次为准），所以重复发没有害处；
+ *   · 404 / 422 / 413 / 429 一律忽略、不重试，也不回调页面 —— 回传丢了只是统计少一条，
+ *     绝不能因为它打断点击、加购、下单。
+ */
+export function reportSearchEvent(req : ReportSearchEventRequest) {
+  uni.request<string>({
+    url: getBaseUrl() + '/search/events',
+    method: 'POST',
+    dataType: 'text',
+    responseType: 'text',
+    header: { 'Content-Type': 'application/json' } as UTSJSONObject,
+    // 自己序列化，理由同 send（Android 不收类型化的对象）。
+    data: JSON.stringify(req),
+    success: (_res) => {},
+    fail: (_err) => {},
+  })
 }
 
 /**

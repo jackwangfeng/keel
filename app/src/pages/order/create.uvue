@@ -166,6 +166,7 @@ import { newIdempotencyKey } from '@/api/idempotency.uts'
 import { isLoggedIn, rememberOrder, takePickedAddress } from '@/api/config.uts'
 import { addressRow, cartDeleteRequest, cartView, checkoutLines, coverOf, orderRequest, previewView, productDetailView, AddressRow, CartRow, CouponOption, OrderLine, PreviewView } from '@/api/view.uts'
 import { ensureStore, CurrentStore } from '@/api/store.uts'
+import { searchConverted } from '@/api/search-trace.uts'
 
 export default {
   data() {
@@ -494,6 +495,7 @@ export default {
             ? '这笔订单之前已经提交过，本次没有重复下单。订单号 ' + order.order_no
             : '下单成功，订单号 ' + order.order_no
           rememberOrder(order.order_no)
+          this.reportSearchOrders()
           this.clearOrderedCartRows()
         },
         (f: ApiFailure) => {
@@ -531,6 +533,14 @@ export default {
           this.message = f.message
         }
       )
+    },
+    // 这一单里从搜索结果点进来过的商品，回传 order。重放命中也照发：服务端对重复上报回 204。
+    reportSearchOrders() {
+      if (this.fromCart) {
+        for (let i = 0; i < this.cartRows.length; i++) searchConverted('order', this.cartRows[i].productId)
+        return
+      }
+      searchConverted('order', this.productId)
     },
     // 下单成功后把这几行从购物车里删掉 —— 服务端下单**不碰**购物车（契约没这么写，
     // 服务端也确认过），不删的话买过的东西还躺在车里。

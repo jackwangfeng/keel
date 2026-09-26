@@ -17,6 +17,7 @@
 //     不是第一道。）
 
 import {
+  ReportSearchEventRequest,
   ListRefundsQuery,
   Refund,
   RefundCreateRequest,
@@ -53,6 +54,7 @@ import {
   ProductSummary,
   SearchHit,
   SearchRequest,
+  SearchResponse,
   Sku,
   UserCoupon,
 } from './schema.uts'
@@ -1297,4 +1299,18 @@ export function refundRequest(lines : RefundLine[], refundType : number, reasonC
 
 export function refundListQuery(page : number, pageSize : number) : ListRefundsQuery {
   return { page: page, page_size: pageSize } as ListRefundsQuery
+}
+
+// ---------------------------------------------------------------------------
+// 搜索效果回传
+// ---------------------------------------------------------------------------
+
+/** 这批搜索结果的 trace_id；服务端写日志失败时字段缺席，返回空串 —— 这批结果的回传全部跳过。 */
+export function searchTraceId(res : SearchResponse) : string {
+  return res.trace_id != null ? res.trace_id! : ''
+}
+
+/** event：click / add_cart / order。 */
+export function searchEventRequest(traceId : string, event : string, productId : number) : ReportSearchEventRequest {
+  return { trace_id: traceId, event: event, product_id: productId } as ReportSearchEventRequest
 }

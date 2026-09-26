@@ -1,0 +1,51 @@
+// 搜索效果回传的归因：哪件商品是从哪次搜索点进来的。
+//
+// 规则：**只有从搜索结果里点进去的商品**才算「来自这次搜索」。点击那一刻记下
+// productId -> traceId，之后这件商品被加购、被下单时，带着同一个 trace_id 回传。
+// 只是出现在结果里、但用户走首页进去买的，不算 —— 那不是搜索的功劳。
+//
+// 同一件商品被多次搜索点进去，以**最近一次**为准。只存在内存里：App 重启后归因丢掉，
+// 统计少几条，但不会把一次很久以前的搜索算成今天这单的来源。
+//
+// 服务端要求 product_id 必须在那次搜索的 items 里；点击时记的正是结果里的 id，所以成立。
+// trace_id 缺席（服务端写日志失败）时那批结果不记、不报 —— 见 search 页。
+
+import { reportSearchEvent } from './client.uts'
+import { searchEventRequest } from './view.uts'
+
+const MAX = 50
+let productIds : number[] = []
+let traceIds : string[] = []
+
+function remember(productId : number, traceId : string) {
+  const at = productIds.indexOf(productId)
+  if (at >= 0) {
+    productIds.splice(at, 1)
+    traceIds.splice(at, 1)
+  }
+  productIds.push(productId)
+  traceIds.push(traceId)
+  while (productIds.length > MAX) {
+    productIds.shift()
+    traceIds.shift()
+  }
+}
+
+function traceOf(productId : number) : string {
+  const at = productIds.indexOf(productId)
+  return at >= 0 ? traceIds[at] : ''
+}
+
+/** 从搜索结果点进商品：记下归因并回传 click。traceId 为空（服务端没给）就什么都不做。 */
+export function searchClicked(traceId : string, productId : number) {
+  if (traceId == '' || productId <= 0) return
+  remember(productId, traceId)
+  reportSearchEvent(searchEventRequest(traceId, 'click', productId))
+}
+
+/** 加购 / 下单：这件商品如果是从某次搜索点进来的，回传对应事件；否则什么都不做。 */
+export function searchConverted(event : string, productId : number) {
+  const t = traceOf(productId)
+  if (t == '') return
+  reportSearchEvent(searchEventRequest(t, event, productId))
+}
