@@ -592,10 +592,30 @@ func TestPurgeRemovesOldDoneJobsButKeepsDeadLetters(t *testing.T) {
 		}
 	}
 	// 把两条都做旧。
+	//
+	// **必须先把 touch_jobs_updated_at 关掉**，否则这一句什么也做不到：
+	// 00022 给这张表挂了 BEFORE UPDATE 触发器，**任何一次 UPDATE 都会把
+	// updated_at 推回 now()** —— 包括这一句自己。带着触发器跑的话
+	// `SET updated_at = now() - interval '30 days'` 的结果是 updated_at = now()，
+	// 两条任务都还在保留期里，PurgeFinishedJobs 清理 0 条，
+	// 而失败信息会指向清理逻辑，真因却在这三行里。
+	//
+	// 关触发器要表属主权限，所以走 f.admin 而不是 f.repo 那条 keel_app 连接。
+	// 这是测试夹具的特权，不是被测代码的 —— 生产路径上那个触发器一直开着，
+	// 而它开着正是对的：status = 2 那一行的 updated_at 就该是「做完的时刻」，
+	// 保留期从那时起算。
 	if _, err := f.admin.Exec(context.Background(),
-		`UPDATE jobs SET updated_at = now() - interval '30 days' WHERE queue = $1`,
-		q); err != nil {
+		`ALTER TABLE jobs DISABLE TRIGGER touch_jobs_updated_at`); err != nil {
 		t.Fatal(err)
+	}
+	_, ageErr := f.admin.Exec(context.Background(),
+		`UPDATE jobs SET updated_at = now() - interval '30 days' WHERE queue = $1`, q)
+	if _, err := f.admin.Exec(context.Background(),
+		`ALTER TABLE jobs ENABLE TRIGGER touch_jobs_updated_at`); err != nil {
+		t.Fatal(err)
+	}
+	if ageErr != nil {
+		t.Fatal(ageErr)
 	}
 
 	n, err := f.repo.PurgeFinishedJobs(context.Background(), q, 7*24*time.Hour, 100)

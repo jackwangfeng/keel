@@ -277,8 +277,13 @@ func normalize(s string) ([]rune, []int) {
 	norm := make([]rune, 0, len(rs))
 	idx := make([]int, 0, len(rs))
 	for i, r := range rs {
-		if unicode.IsSpace(r) || r == '　' {
-			continue // 全角空格不在 unicode.IsSpace 的 Latin-1 快路径里，显式列一个
+		// unicode.IsSpace 认全角空格 U+3000（它在 Unicode 的 White_Space
+		// 属性里，IsSpace 对 Latin-1 之外的码点走 isExcludingLatin，
+		// 那张表里有它）—— 实测 unicode.IsSpace('　') == true。
+		// 所以这里**不需要**再显式列一个 r == '　'：写了也永远不会被取到，
+		// 而一个永远为假的条件会让读者以为标准库漏了它。
+		if unicode.IsSpace(r) {
+			continue
 		}
 		norm = append(norm, foldRune(r))
 		idx = append(idx, i)
