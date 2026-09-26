@@ -5,6 +5,12 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
+    <!-- 定位：只在打开 App 时定一次位，决定由哪家门店服务（src/api/store.uts）。
+         精确 / 粗略两项由 uni-location-system 的 aar 带进来；它还顺带声明了后台定位与
+         前台服务，我们用不上，而后台定位是各应用商店重点审核的敏感权限 —— 显式移除。 -->
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" tools:node="remove" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" tools:node="remove" />
+
     <!-- usesCleartextTraffic：开发期的服务地址是局域网里的 http://192.168.x.x，
          Android 9 起默认拒绝明文 HTTP。上线换 HTTPS 后应去掉。 -->
     <application

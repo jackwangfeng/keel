@@ -18,9 +18,22 @@
         </view>
       </view>
 
+      <!-- 分类：拉不到（包括服务端还没实现 GET /categories 的 404）就整排不显示，
+           首页照常 —— 分类是浏览的捷径，不是浏览的前提。 -->
+      <scroll-view v-if="categories.length > 0" class="cat-row" direction="horizontal" :show-scrollbar="false">
+        <view class="cat-track row">
+          <view :class="['cat-chip', categoryId == 0 ? 'cat-chip-on' : '']" @click="pickCategory(0)">
+            <text :class="categoryId == 0 ? 'cat-text-on' : 'cat-text'">全部</text>
+          </view>
+          <view v-for="c in categories" :key="c.id" :class="['cat-chip', categoryId == c.id ? 'cat-chip-on' : '']" @click="pickCategory(c.id)">
+            <text :class="categoryId == c.id ? 'cat-text-on' : 'cat-text'">{{ c.name }}</text>
+          </view>
+        </view>
+      </scroll-view>
+
       <view class="section between">
-        <text class="t-section">全部商品</text>
-        <text v-if="total > 0" class="t-hint">共 {{ total }} 件</text>
+        <text class="t-section">{{ sectionTitle }}</text>
+        <text v-if="total > 0" class="t-hint list-count">共 {{ total }} 件</text>
       </view>
 
       <view v-if="error != ''" class="body">
@@ -64,8 +77,8 @@
 </template>
 
 <script>
-import { listProducts, ApiFailure } from '@/api/client.uts'
-import { productRow, productListQuery, ProductRow } from '@/api/view.uts'
+import { listCategories, listProducts, ApiFailure } from '@/api/client.uts'
+import { categoryChips, productRow, productListQuery, CategoryChip, ProductRow } from '@/api/view.uts'
 import { ensureStore, CurrentStore } from '@/api/store.uts'
 
 export default {
@@ -79,7 +92,19 @@ export default {
       statusBarHeight: 0,
       storeLine: '',
       outOfRange: false,
+      categories: [] as CategoryChip[],
+      // 0 = 全部。
+      categoryId: 0,
+      storeId: 0,
     }
+  },
+  computed: {
+    sectionTitle(): string {
+      for (let i = 0; i < this.categories.length; i++) {
+        if (this.categories[i].id == this.categoryId) return this.categories[i].name
+      }
+      return '全部商品'
+    },
   },
   onLoad() {
     this.statusBarHeight = uni.getWindowInfo().statusBarHeight
@@ -94,6 +119,7 @@ export default {
     load() {
       this.loading = true
       this.error = ''
+      this.loadCategories()
       // 先定门店，再拉列表：列表的价格与在售范围是按门店算的。
       // 定位被拒绝不会走到 onErr —— 那是回落默认店的正常路径（store.uts 文件头）。
       ensureStore(
@@ -109,7 +135,8 @@ export default {
             return
           }
           this.outOfRange = false
-          this.fetch(s.storeId!)
+          this.storeId = s.storeId!
+          this.fetch()
         },
         (f: ApiFailure) => {
           this.error = f.message
@@ -117,10 +144,38 @@ export default {
         }
       )
     },
-    fetch(storeId: number) {
+    loadCategories() {
+      listCategories(
+        (tree) => {
+          const chips = categoryChips(tree)
+          this.categories = chips
+          // 选中的分类被停用 / 删掉了就回到「全部」，不然标题和列表对不上。
+          let still = this.categoryId == 0
+          for (let i = 0; i < chips.length; i++) {
+            if (chips[i].id == this.categoryId) still = true
+          }
+          if (!still) this.categoryId = 0
+        },
+        (_f: ApiFailure) => {
+          // 包括服务端还没实现这条路由的 404：没有分类栏，首页照常。
+          this.categories = []
+          this.categoryId = 0
+        }
+      )
+    },
+    pickCategory(id: number) {
+      if (id == this.categoryId || this.storeId == 0) return
+      this.categoryId = id
+      this.loading = true
+      this.fetch()
+    },
+    fetch() {
+      // 连着点两个分类时只认最后一次：请求发出时的分类与返回时不同就丢掉结果。
+      const asked = this.categoryId
       listProducts(
-        productListQuery(1, 20, storeId),
+        productListQuery(1, 20, this.storeId, asked == 0 ? null : asked),
         (page) => {
+          if (asked != this.categoryId) return
           const rows: ProductRow[] = []
           for (let i = 0; i < page.items.length; i++) {
             rows.push(productRow(page.items[i]))
@@ -130,6 +185,7 @@ export default {
           this.loading = false
         },
         (f: ApiFailure) => {
+          if (asked != this.categoryId) return
           this.error = f.message
           this.loading = false
         }
@@ -146,6 +202,33 @@ export default {
 </script>
 
 <style>
+.cat-row {
+  margin-top: 16px;
+}
+.cat-track {
+  padding: 0 20px;
+}
+.cat-chip {
+  padding: 7px 16px;
+  border-radius: 17px;
+  border-width: 1px;
+  border-style: solid;
+  border-color: #E3D9CC;
+  background-color: #FFFDF9;
+  margin-right: 8px;
+}
+.cat-chip-on {
+  background-color: #3B2A20;
+  border-color: #3B2A20;
+}
+.cat-text {
+  font-size: 13px;
+  color: #2A211B;
+}
+.cat-text-on {
+  font-size: 13px;
+  color: #FFFDF9;
+}
 .store-line {
   margin-top: 6px;
 }

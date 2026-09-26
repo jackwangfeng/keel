@@ -39,6 +39,21 @@ const orderNo = await page.data('orderNo')
 
 `checkout.test.js` 每跑一次会在服务端真的建一笔订单并走沙箱入账（没有真实资金流动）。
 
+**跑用例时 `KEEL_API_BASE` 要和打测试包时一致**：`category.test.js` 从测试进程直接问服务端
+支不支持 `GET /categories`，问的就是这个地址。它先问、再按答案断言：服务端没有这条路由
+（今天的远端）→ 分类栏必须不出现；有 → 分类栏出现、点一个分类能切换。服务端补上路由那天
+这条用例不用改。本地想走「有分类」那条，可以起一个只替换 `/api/v1/categories`、其余转发
+的小代理，把测试包的 `KEEL_API_BASE` 指过去。
+
+`store.test.js`：首页显示「由「xx」为你配送」。两个平台上门店解析走的都是「定位拿不到 →
+回落默认店」那条路径：iOS 不能远程授予定位；Android 上试过 `pm grant` 预授，但 MIUI
+带「仅本次允许」标记、照样弹自己的权限框，靠 adb 走不通（实测），所以没留这段。
+真拿坐标解析那条路径目前没有自动化覆盖。
+
+Android 的自动化运行时不支持经 `program.callUniMethod('request', …)` 调 `uni.request`
+（"uni.request not exists"）；要从用例里问服务端，用 `helpers.js` 的 `httpGet`（jest 27 的
+测试环境里没有全局 `fetch`）。
+
 ## 它是怎么接上的
 
 官方流程是 HBuilderX 编译 → 装 HBuilderX 的标准基座（`io.dcloud.uniappx`）→ 用
