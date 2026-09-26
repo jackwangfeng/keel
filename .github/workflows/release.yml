@@ -138,13 +138,21 @@ jobs:
           V: ${{ needs.verify.outputs.version }}
         run: |
           set -euo pipefail
-          # 不连库，只看二进制自己怎么说。app 阶段的 ENTRYPOINT 是 /keel，
-          # 它没有 --version 子命令（cmd/keel 刻意只有一句调用），所以这里
-          # 覆写 entrypoint 直接问 Go 的构建信息。
-          got=$(docker run --rm --entrypoint sh "$IMAGE:$V" -c \
-                  'strings /keel | grep -m1 -F "$0"' "$V" || true)
+          # 不给数据库，直接起一次。internal/app.Run 的第一件事就是打
+          # "keel <版本> (<commit>, <日期>)"，排在建连接池之前，所以没有库
+          # 也会先打出这一行再失败退出。--network none 保证它连不到任何库、
+          # 也不会拖到超时。
+          #
+          # 第一版是 `docker run --entrypoint sh ... strings /keel`：运行时
+          # 镜像是精简的，没有 strings，v0.1.0 第一次发布就栽在
+          # `strings: not found`。在二进制里 grep 版本字符串也不行——依赖
+          # 模块的版本号同样嵌在二进制里，哪个依赖恰好是 v0.1.0 就会误报通过。
+          log=$(timeout 60 docker run --rm --network none \
+                  -e PGHOST=127.0.0.1 -e PGPORT=1 "$IMAGE:$V" 2>&1 || true)
+          got=$(printf '%s\n' "$log" | grep -m1 -F "keel $V (" || true)
           if [ -z "$got" ]; then
-            echo "::error::镜像里找不到版本字符串 '$V' —— ldflags 那条链子断了"
+            echo "::error::镜像启动日志里没有 'keel $V (' —— ldflags 那条链子断了"
+            printf '%s\n' "$log" | head -20
             exit 1
           fi
           echo "镜像自称：$got"
