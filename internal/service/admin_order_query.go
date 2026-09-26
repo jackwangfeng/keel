@@ -49,6 +49,8 @@ type AdminOrderPage struct {
 // AdminOrderDetail 是后台订单详情（契约 AdminOrderDetail）。
 type AdminOrderDetail struct {
 	AdminOrderSummary
+	// Freight 是下单那一刻的运费明细快照（00042）；那之前的订单为 nil。
+	Freight   *FreightBreakdown
 	Items     []repository.OrderItem
 	Payments  []repository.Payment
 	Shipments []repository.Shipment
@@ -127,6 +129,9 @@ func (s *AdminOrderService) OrderDetail(ctx context.Context, orderNo string) (Ad
 			return err
 		}
 		if out.AdminOrderSummary, err = summarizeOrder(o); err != nil {
+			return err
+		}
+		if out.Freight, err = loadFreightSnapshot(ctx, tx, o.ID, o.OrderNo); err != nil {
 			return err
 		}
 		if out.Items, err = tx.ListOrderItems(ctx, o.ID); err != nil {

@@ -67,6 +67,9 @@ type NewProduct struct {
 	Title       string
 	Subtitle    *string
 	Description *string
+	// FreightTemplateID 是单独挂的运费模板（全店模板），nil = 不单独挂。
+	// 「是不是未删除的全店模板」由 service 在同一个事务里先锁住模板行确认过。
+	FreightTemplateID *int64
 }
 
 // ProductPatch 是改商品的入参，每个字段 nil 表示「不动」。
@@ -82,6 +85,10 @@ type ProductPatch struct {
 
 	SetBrandID bool
 	BrandID    *int64
+
+	// 运费模板同品牌：null 是「解除单独挂的模板」，与「没传」是两件事。
+	SetFreightTemplateID bool
+	FreightTemplateID    *int64
 }
 
 func clampPage(limit, offset int64) (int32, int32, error) {
@@ -120,6 +127,7 @@ func (t tenantTx) AdminListProducts(ctx context.Context, f ProductFilter) ([]Adm
 			TotalStock: r.TotalStock, SalesCount: r.SalesCount, Status: r.Status,
 			PublishedAt: optTime(r.PublishedAt), DeletedAt: optTime(r.DeletedAt),
 			CreatedAt: r.CreatedAt.Time, UpdatedAt: r.UpdatedAt.Time,
+			FreightTemplateID: r.FreightTemplateID,
 		})
 	}
 	return out, nil
@@ -148,16 +156,18 @@ func (t tenantTx) AdminFindProduct(ctx context.Context, id int64) (AdminProduct,
 		TotalStock: r.TotalStock, SalesCount: r.SalesCount, Status: r.Status,
 		PublishedAt: optTime(r.PublishedAt), DeletedAt: optTime(r.DeletedAt),
 		CreatedAt: r.CreatedAt.Time, UpdatedAt: r.UpdatedAt.Time,
+		FreightTemplateID: r.FreightTemplateID,
 	}, nil
 }
 
 func (t tenantTx) CreateProduct(ctx context.Context, n NewProduct) (AdminProduct, error) {
 	id, err := t.q.CreateProduct(ctx, db.CreateProductParams{
-		CategoryID:  n.CategoryID,
-		BrandID:     n.BrandID,
-		Title:       n.Title,
-		Subtitle:    n.Subtitle,
-		Description: n.Description,
+		CategoryID:        n.CategoryID,
+		BrandID:           n.BrandID,
+		Title:             n.Title,
+		Subtitle:          n.Subtitle,
+		Description:       n.Description,
+		FreightTemplateID: n.FreightTemplateID,
 	})
 	if err != nil {
 		// category_id 不属于当前租户时，复合外键
@@ -183,13 +193,15 @@ func (t tenantTx) CreateProduct(ctx context.Context, n NewProduct) (AdminProduct
 
 func (t tenantTx) UpdateProduct(ctx context.Context, id int64, p ProductPatch) (AdminProduct, error) {
 	r, err := t.q.UpdateProduct(ctx, db.UpdateProductParams{
-		ID:          id,
-		Title:       p.Title,
-		Subtitle:    p.Subtitle,
-		Description: p.Description,
-		CategoryID:  p.CategoryID,
-		SetBrandID:  p.SetBrandID,
-		BrandID:     p.BrandID,
+		ID:                   id,
+		Title:                p.Title,
+		Subtitle:             p.Subtitle,
+		Description:          p.Description,
+		CategoryID:           p.CategoryID,
+		SetBrandID:           p.SetBrandID,
+		BrandID:              p.BrandID,
+		SetFreightTemplateID: p.SetFreightTemplateID,
+		FreightTemplateID:    p.FreightTemplateID,
 	})
 	if err != nil {
 		if isForeignKeyViolation(err) {

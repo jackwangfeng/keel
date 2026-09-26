@@ -252,11 +252,21 @@ func (s *OrderService) Preview(ctx context.Context, req CreateRequest) (Quote, e
 		if err != nil {
 			return err
 		}
-		q, err = priceOrder(ctx, tx, sc, req.Items, couponOf(id.UserID, req, now))
+		// 运费按收货地址算（00042）：试算与下单读的是同一个地址、归到同一个省。
+		// 此前试算不读 address_id，现在它和下单一样查不到就 422。
+		addr, err := tx.FindAddress(ctx, req.AddressID, id.UserID)
+		if errors.Is(err, repository.ErrAddressNotFound) {
+			return fmt.Errorf("%w: address_id=%d", ErrAddressNotFound, req.AddressID)
+		}
 		if err != nil {
 			return err
 		}
-		q.ApplicableCoupons, err = applicableCoupons(ctx, tx, sc, id.UserID, q.Lines, now)
+		dest := destinationOf(addr)
+		q, err = priceOrder(ctx, tx, sc, &dest, req.Items, couponOf(id.UserID, req, now))
+		if err != nil {
+			return err
+		}
+		q.ApplicableCoupons, err = applicableCoupons(ctx, tx, sc, id.UserID, q.Lines, q.freightNoCoupon, now)
 		return err
 	})
 	return q, err
@@ -460,7 +470,8 @@ func (s *OrderService) placeDraft(ctx context.Context, tx repository.Tx,
 	// 券分支（order_saga.go 的 lockCoupon），它按订单行上的 user_coupon_id 去做
 	// 条件更新 —— 这里算过的只是预告，那里才是判定点：两笔并发订单用同一张券，
 	// 两边都能算过，只有一边锁得上，另一边的 SAGA 失败并补偿掉建单。
-	q, err := priceOrder(ctx, tx, sc, req.Items, couponOf(userID, req, s.now()))
+	dest := destinationOf(addr)
+	q, err := priceOrder(ctx, tx, sc, &dest, req.Items, couponOf(userID, req, s.now()))
 	if err != nil {
 		return repository.Order{}, err
 	}
@@ -489,6 +500,17 @@ func (s *OrderService) placeDraft(ctx context.Context, tx repository.Tx,
 		return repository.Order{}, err
 	}
 
+	// 运费明细的快照（orders.freight_snapshot，00042）：下单那一刻用的哪个模板、
+	// 命中哪条规则、为什么包邮。之后改模板不影响它 —— 与 receiver_snapshot 同一条道理。
+	// priceOrder 拿到了地址就一定有明细，这里为 nil 只可能是那边被改坏了。
+	if q.Freight == nil {
+		return repository.Order{}, fmt.Errorf("下单时没有算出运费明细（priceOrder 拿到了地址却没算运费）")
+	}
+	freightSnapshot, err := json.Marshal(q.Freight)
+	if err != nil {
+		return repository.Order{}, err
+	}
+
 	orderNo, err := newOrderNo(s.now())
 	if err != nil {
 		return repository.Order{}, err
@@ -498,13 +520,16 @@ func (s *OrderService) placeDraft(ctx context.Context, tx repository.Tx,
 		UserID:           userID,
 		StoreID:          sc.StoreID,
 		GoodsAmountCents: q.GoodsAmountCents,
-		FreightCents:     freightForLedger,
-		DiscountCents:    q.DiscountCents,
-		PayableCents:     q.PayableCents,
-		ReceiverSnapshot: snapshot,
-		Remark:           req.Remark,
-		ExpireAt:         s.now().Add(orderExpireIn),
-		UserCouponID:     q.UserCouponID,
+		FreightCents:     q.FreightCents,
+		// 包邮券抵掉的运费已经在 DiscountCents 里；单列一份，售后退运费按实收算。
+		FreightDiscountCents: q.FreightDiscountCents,
+		FreightSnapshot:      freightSnapshot,
+		DiscountCents:        q.DiscountCents,
+		PayableCents:         q.PayableCents,
+		ReceiverSnapshot:     snapshot,
+		Remark:               req.Remark,
+		ExpireAt:             s.now().Add(orderExpireIn),
+		UserCouponID:         q.UserCouponID,
 	})
 	if err != nil {
 		return repository.Order{}, err

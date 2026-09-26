@@ -52,6 +52,8 @@ type OrderDetail struct {
 	Order    repository.Order
 	Receiver ReceiverSnapshot
 	Store    StoreSnapshot
+	// Freight 是下单那一刻的运费明细快照（00042）；那之前的订单为 nil。
+	Freight  *FreightBreakdown
 	Items    []repository.OrderItem
 	Payments []repository.Payment
 	// Refunds 是这一单的全部退款单，按申请时间倒序（契约 OrderDetail.refunds）。
@@ -164,6 +166,9 @@ func (s *OrderService) Detail(ctx context.Context, orderNo string) (OrderDetail,
 			// INSERT ... SELECT FROM stores 写，解不开是我们自己写坏了。
 			// 报出来，不要回一家没有名字的门店。
 			return fmt.Errorf("订单 %s 的门店快照解不开: %w", orderNo, err)
+		}
+		if out.Freight, err = loadFreightSnapshot(ctx, tx, order.ID, orderNo); err != nil {
+			return err
 		}
 
 		if out.Items, err = tx.ListOrderItems(ctx, order.ID); err != nil {

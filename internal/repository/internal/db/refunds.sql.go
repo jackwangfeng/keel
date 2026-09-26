@@ -700,7 +700,7 @@ func (q *Queries) ListUserRefunds(ctx context.Context, arg ListUserRefundsParams
 
 const lockOrderByID = `-- name: LockOrderByID :one
 SELECT id, order_no, user_id, store_id, region_id, status,
-       goods_amount_cents, freight_cents,
+       goods_amount_cents, freight_cents, freight_discount_cents,
        discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
        expire_at, paid_at, shipped_at, finished_at, created_at, user_coupon_id,
        coupon_name
@@ -710,26 +710,27 @@ SELECT id, order_no, user_id, store_id, region_id, status,
 `
 
 type LockOrderByIDRow struct {
-	ID               int64
-	OrderNo          string
-	UserID           int64
-	StoreID          int64
-	RegionID         int64
-	Status           int16
-	GoodsAmountCents int64
-	FreightCents     int64
-	DiscountCents    int64
-	PayableCents     int64
-	PaidCents        int64
-	RefundedCents    int64
-	RefundStatus     int16
-	ExpireAt         pgtype.Timestamptz
-	PaidAt           pgtype.Timestamptz
-	ShippedAt        pgtype.Timestamptz
-	FinishedAt       pgtype.Timestamptz
-	CreatedAt        pgtype.Timestamptz
-	UserCouponID     *int64
-	CouponName       *string
+	ID                   int64
+	OrderNo              string
+	UserID               int64
+	StoreID              int64
+	RegionID             int64
+	Status               int16
+	GoodsAmountCents     int64
+	FreightCents         int64
+	FreightDiscountCents int64
+	DiscountCents        int64
+	PayableCents         int64
+	PaidCents            int64
+	RefundedCents        int64
+	RefundStatus         int16
+	ExpireAt             pgtype.Timestamptz
+	PaidAt               pgtype.Timestamptz
+	ShippedAt            pgtype.Timestamptz
+	FinishedAt           pgtype.Timestamptz
+	CreatedAt            pgtype.Timestamptz
+	UserCouponID         *int64
+	CouponName           *string
 }
 
 // 审核、撤回、入账改订单之前先锁它（见文件头「锁的顺序」）。
@@ -745,6 +746,7 @@ func (q *Queries) LockOrderByID(ctx context.Context, id int64) (LockOrderByIDRow
 		&i.Status,
 		&i.GoodsAmountCents,
 		&i.FreightCents,
+		&i.FreightDiscountCents,
 		&i.DiscountCents,
 		&i.PayableCents,
 		&i.PaidCents,
@@ -777,7 +779,7 @@ const lockUserOrderByNo = `-- name: LockUserOrderByNo :one
 
 
 SELECT id, order_no, user_id, store_id, region_id, status,
-       goods_amount_cents, freight_cents,
+       goods_amount_cents, freight_cents, freight_discount_cents,
        discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
        expire_at, paid_at, shipped_at, finished_at, created_at, user_coupon_id,
        coupon_name
@@ -794,26 +796,27 @@ type LockUserOrderByNoParams struct {
 }
 
 type LockUserOrderByNoRow struct {
-	ID               int64
-	OrderNo          string
-	UserID           int64
-	StoreID          int64
-	RegionID         int64
-	Status           int16
-	GoodsAmountCents int64
-	FreightCents     int64
-	DiscountCents    int64
-	PayableCents     int64
-	PaidCents        int64
-	RefundedCents    int64
-	RefundStatus     int16
-	ExpireAt         pgtype.Timestamptz
-	PaidAt           pgtype.Timestamptz
-	ShippedAt        pgtype.Timestamptz
-	FinishedAt       pgtype.Timestamptz
-	CreatedAt        pgtype.Timestamptz
-	UserCouponID     *int64
-	CouponName       *string
+	ID                   int64
+	OrderNo              string
+	UserID               int64
+	StoreID              int64
+	RegionID             int64
+	Status               int16
+	GoodsAmountCents     int64
+	FreightCents         int64
+	FreightDiscountCents int64
+	DiscountCents        int64
+	PayableCents         int64
+	PaidCents            int64
+	RefundedCents        int64
+	RefundStatus         int16
+	ExpireAt             pgtype.Timestamptz
+	PaidAt               pgtype.Timestamptz
+	ShippedAt            pgtype.Timestamptz
+	FinishedAt           pgtype.Timestamptz
+	CreatedAt            pgtype.Timestamptz
+	UserCouponID         *int64
+	CouponName           *string
 }
 
 // 退款与售后（数据模型 §11）：申请、撤回、审核、确认收到退货、渠道回调入账，
@@ -850,6 +853,7 @@ func (q *Queries) LockUserOrderByNo(ctx context.Context, arg LockUserOrderByNoPa
 		&i.Status,
 		&i.GoodsAmountCents,
 		&i.FreightCents,
+		&i.FreightDiscountCents,
 		&i.DiscountCents,
 		&i.PayableCents,
 		&i.PaidCents,

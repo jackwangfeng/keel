@@ -35,6 +35,8 @@ type adminProductPatchRequest struct {
 	Description *string          `json:"description"`
 	CategoryID  *int64           `json:"category_id"`
 	BrandID     *json.RawMessage `json:"brand_id"`
+	// FreightTemplateID 同 brand_id：null 是「解除单独挂的模板」，与没传是两件事（00041）。
+	FreightTemplateID *json.RawMessage `json:"freight_template_id"`
 }
 
 // Create 实现 POST /api/v1/admin/products。
@@ -53,6 +55,8 @@ func (h *AdminCatalogHandler) Create(c *gin.Context) {
 		Title:       req.Title,
 		Subtitle:    req.Subtitle,
 		Description: req.Description,
+		// 单独挂的运费模板（00041）；null 与不传都是「不单独挂」。
+		FreightTemplateID: req.FreightTemplateId,
 	}, idemKeyOf(c))
 	if err != nil {
 		writeCatalogError(c, err)
@@ -89,8 +93,9 @@ func (h *AdminCatalogHandler) Detail(c *gin.Context) {
 		Status:      api.AdminProductDetailStatus(base.Status),
 		PublishedAt: base.PublishedAt, DeletedAt: base.DeletedAt,
 		CreatedAt: base.CreatedAt, UpdatedAt: base.UpdatedAt,
-		Skus:   skus,
-		Images: apiProductImages(d.Images),
+		FreightTemplateId: base.FreightTemplateId,
+		Skus:              skus,
+		Images:            apiProductImages(d.Images),
 	})
 }
 
@@ -100,9 +105,27 @@ func (h *AdminCatalogHandler) Update(c *gin.Context) {
 	if !ok {
 		return
 	}
-	var req adminProductPatchRequest
-	if !bindJSON(c, &req) {
+	// 读两遍：一遍进结构体，一遍进 map 看 brand_id / freight_template_id 这两个键**出现过没有**。
+	//
+	// 只靠 *json.RawMessage 判不出来：encoding/json 遇到 JSON null 时把指针置 nil
+	// （null 进指针一律如此，不调 RawMessage 的 UnmarshalJSON），于是「显式传 null 清空」
+	// 与「没传」又变回同一个 nil —— 运费模板那一轮（00041）写「解除挂靠」的测试时撞上的。
+	raw, err := c.GetRawData()
+	if err != nil {
+		problem.Write(c, http.StatusUnprocessableEntity, problem.TypeInvalidRequest, "请求体读不出来")
 		return
+	}
+	var req adminProductPatchRequest
+	var present map[string]json.RawMessage
+	if json.Unmarshal(raw, &req) != nil || json.Unmarshal(raw, &present) != nil {
+		problem.Write(c, http.StatusUnprocessableEntity, problem.TypeInvalidRequest, "请求体不是合法的 JSON")
+		return
+	}
+	if v, ok := present["brand_id"]; ok {
+		req.BrandID = &v
+	}
+	if v, ok := present["freight_template_id"]; ok {
+		req.FreightTemplateID = &v
 	}
 	p := repository.ProductPatch{
 		Title:       req.Title,
@@ -120,6 +143,16 @@ func (h *AdminCatalogHandler) Update(c *gin.Context) {
 			return
 		}
 		p.BrandID = bid
+	}
+	if req.FreightTemplateID != nil {
+		p.SetFreightTemplateID = true
+		var tid *int64
+		if err := json.Unmarshal(*req.FreightTemplateID, &tid); err != nil {
+			problem.Write(c, http.StatusUnprocessableEntity,
+				problem.TypeInvalidRequest, "freight_template_id 必须是整数或 null")
+			return
+		}
+		p.FreightTemplateID = tid
 	}
 	out, err := h.svc.UpdateProduct(c.Request.Context(), id, p)
 	if err != nil {

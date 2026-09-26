@@ -320,10 +320,12 @@ func (s *RefundService) Create(ctx context.Context, orderNo string, req RefundCr
 
 			// 运费（§11 一期规则）：未发货整单退全退；部分退款不退；
 			// 退货退款的运费由客服在审核时裁定（这里先记 0）。
+			// 「全退」退的是**实收运费**（00042）：包邮券抵掉的那部分买家没付过，
+			// 退了就是多退 —— 整单退的合计因此恰好等于实付（payable）。
 			whole := plan.CoversEverything && order.Status == orderStatusPaid
 			var freight int64
 			if whole {
-				freight = order.FreightCents
+				freight = order.FreightPaidCents()
 			}
 			if plan.Goods+freight <= 0 {
 				// 一行被券分摊到实付 0 元：没有钱可退，chk_refund_amount 也不收一张 0 元的单。
@@ -588,9 +590,10 @@ func (s *RefundService) Audit(ctx context.Context, refundNo string, req AuditReq
 				if err != nil {
 					return repository.Refund{}, err
 				}
-				if limit := order.FreightCents - other; *req.FreightCents > limit {
+				// 上限是**实收运费**（运费减去包邮券抵掉的部分，00042）减去别的退款单已占的。
+				if limit := order.FreightPaidCents() - other; *req.FreightCents > limit {
 					return repository.Refund{}, fmt.Errorf("%w: 订单实收运费 %d，别的退款单已占 %d，最多还能退 %d",
-						ErrRefundFreightExceeded, order.FreightCents, other, limit)
+						ErrRefundFreightExceeded, order.FreightPaidCents(), other, limit)
 				}
 				freight = *req.FreightCents
 			}

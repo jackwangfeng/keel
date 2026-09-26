@@ -99,6 +99,10 @@ type OrderQueryTx interface {
 	// JOIN 出来的是今天的名字，而那正是快照存在要避免的东西。
 	FindOrderStoreSnapshot(ctx context.Context, orderID int64) ([]byte, error)
 
+	// FindOrderFreightSnapshot 取下单那一刻的运费计算明细快照（00042）。
+	// 00042 之前的订单那一列是 NULL，返回 nil（不是错误）。
+	FindOrderFreightSnapshot(ctx context.Context, orderID int64) ([]byte, error)
+
 	// ListOrderPayments 取这一单的全部支付尝试。
 	ListOrderPayments(ctx context.Context, orderID int64) ([]Payment, error)
 }
@@ -127,26 +131,27 @@ func (t tenantTx) ListUserOrders(ctx context.Context, userID int64, f OrderFilte
 	out := make([]Order, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, Order{
-			ID:               r.ID,
-			OrderNo:          r.OrderNo,
-			UserID:           r.UserID,
-			StoreID:          r.StoreID,
-			RegionID:         r.RegionID,
-			Status:           r.Status,
-			GoodsAmountCents: r.GoodsAmountCents,
-			FreightCents:     r.FreightCents,
-			DiscountCents:    r.DiscountCents,
-			PayableCents:     r.PayableCents,
-			PaidCents:        r.PaidCents,
-			RefundedCents:    r.RefundedCents,
-			RefundStatus:     r.RefundStatus,
-			ExpireAt:         r.ExpireAt.Time,
-			CreatedAt:        r.CreatedAt.Time,
-			PaidAt:           optTime(r.PaidAt),
-			ShippedAt:        optTime(r.ShippedAt),
-			FinishedAt:       optTime(r.FinishedAt),
-			UserCouponID:     r.UserCouponID,
-			CouponName:       r.CouponName,
+			ID:                   r.ID,
+			OrderNo:              r.OrderNo,
+			UserID:               r.UserID,
+			StoreID:              r.StoreID,
+			RegionID:             r.RegionID,
+			Status:               r.Status,
+			GoodsAmountCents:     r.GoodsAmountCents,
+			FreightCents:         r.FreightCents,
+			FreightDiscountCents: r.FreightDiscountCents,
+			DiscountCents:        r.DiscountCents,
+			PayableCents:         r.PayableCents,
+			PaidCents:            r.PaidCents,
+			RefundedCents:        r.RefundedCents,
+			RefundStatus:         r.RefundStatus,
+			ExpireAt:             r.ExpireAt.Time,
+			CreatedAt:            r.CreatedAt.Time,
+			PaidAt:               optTime(r.PaidAt),
+			ShippedAt:            optTime(r.ShippedAt),
+			FinishedAt:           optTime(r.FinishedAt),
+			UserCouponID:         r.UserCouponID,
+			CouponName:           r.CouponName,
 		})
 	}
 	return out, nil
@@ -171,26 +176,27 @@ func (t tenantTx) FindUserOrderByNo(ctx context.Context, orderNo string, userID 
 		return Order{}, err
 	}
 	return Order{
-		ID:               r.ID,
-		OrderNo:          r.OrderNo,
-		UserID:           r.UserID,
-		StoreID:          r.StoreID,
-		RegionID:         r.RegionID,
-		Status:           r.Status,
-		GoodsAmountCents: r.GoodsAmountCents,
-		FreightCents:     r.FreightCents,
-		DiscountCents:    r.DiscountCents,
-		PayableCents:     r.PayableCents,
-		PaidCents:        r.PaidCents,
-		RefundedCents:    r.RefundedCents,
-		RefundStatus:     r.RefundStatus,
-		ExpireAt:         r.ExpireAt.Time,
-		CreatedAt:        r.CreatedAt.Time,
-		PaidAt:           optTime(r.PaidAt),
-		ShippedAt:        optTime(r.ShippedAt),
-		FinishedAt:       optTime(r.FinishedAt),
-		UserCouponID:     r.UserCouponID,
-		CouponName:       r.CouponName,
+		ID:                   r.ID,
+		OrderNo:              r.OrderNo,
+		UserID:               r.UserID,
+		StoreID:              r.StoreID,
+		RegionID:             r.RegionID,
+		Status:               r.Status,
+		GoodsAmountCents:     r.GoodsAmountCents,
+		FreightCents:         r.FreightCents,
+		FreightDiscountCents: r.FreightDiscountCents,
+		DiscountCents:        r.DiscountCents,
+		PayableCents:         r.PayableCents,
+		PaidCents:            r.PaidCents,
+		RefundedCents:        r.RefundedCents,
+		RefundStatus:         r.RefundStatus,
+		ExpireAt:             r.ExpireAt.Time,
+		CreatedAt:            r.CreatedAt.Time,
+		PaidAt:               optTime(r.PaidAt),
+		ShippedAt:            optTime(r.ShippedAt),
+		FinishedAt:           optTime(r.FinishedAt),
+		UserCouponID:         r.UserCouponID,
+		CouponName:           r.CouponName,
 	}, nil
 }
 
@@ -231,6 +237,17 @@ func (t tenantTx) FindOrderReceiver(ctx context.Context, orderID int64) ([]byte,
 
 func (t tenantTx) FindOrderStoreSnapshot(ctx context.Context, orderID int64) ([]byte, error) {
 	raw, err := t.q.GetOrderStoreSnapshot(ctx, orderID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, fmt.Errorf("order %d: %w", orderID, ErrOrderNotFound)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return raw, nil
+}
+
+func (t tenantTx) FindOrderFreightSnapshot(ctx context.Context, orderID int64) ([]byte, error) {
+	raw, err := t.q.GetOrderFreightSnapshot(ctx, orderID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, fmt.Errorf("order %d: %w", orderID, ErrOrderNotFound)
 	}

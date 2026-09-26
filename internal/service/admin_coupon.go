@@ -33,7 +33,7 @@ import (
 // 「这个角色能不能碰券」是业务规则。
 
 var (
-	// ErrCouponBadRequest：请求体本身不成立（满 100 减 200、包邮券、范围目标查不到……）。422。
+	// ErrCouponBadRequest：请求体本身不成立（满 100 减 200、包邮券带了减免额、范围目标查不到……）。422。
 	ErrCouponBadRequest = errors.New("券的配置不成立")
 
 	// ErrCouponTemplateLocked：已经发出过券，却想改券面字段或范围。409。
@@ -52,11 +52,6 @@ const (
 	maxCouponScopes    = 200
 	maxGrantPhones     = 200
 )
-
-// freeShippingRejected 是包邮券被拒时给运营看的那句话。写成常量，因为同一句理由要
-// 出现在新建与修改两条路上，而它必须说清楚「为什么」，不是一句「不支持」。
-const freeShippingRejected = "包邮券本期不可建：本系统不计运费（运费模板没有落地，" +
-	"orders.freight_cents 恒为 0），一张包邮券永远减 0，买家却会看到「已用包邮券」"
 
 // AdminCouponService 实现券管理的七条接口。
 type AdminCouponService struct {
@@ -396,9 +391,13 @@ func validateCouponTemplate(f repository.CouponTemplateFields, issued int32) err
 			return bad("立减券不带 discount_rate / max_discount_cents")
 		}
 	case couponTypeFreeShipping:
-		return bad("%s", freeShippingRejected)
+		// 00042 起可建：抵的是运费，最多抵 max_discount_cents（0 = 运费全免）。
+		// 门槛 threshold_cents 比适用商品小计，与满减券同一个口径，可以是 0。
+		if f.DiscountCents != 0 || f.DiscountRate != 0 {
+			return bad("包邮券抵的是运费，不带 discount_cents / discount_rate（最多抵多少用 max_discount_cents，0 = 全免）")
+		}
 	default:
-		return bad("coupon_type 只能是 1 满减 / 2 折扣 / 3 立减，实得 %d", f.CouponType)
+		return bad("coupon_type 只能是 1 满减 / 2 折扣 / 3 立减 / 4 包邮，实得 %d", f.CouponType)
 	}
 	switch f.ValidMode {
 	case 1:

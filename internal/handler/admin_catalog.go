@@ -300,17 +300,19 @@ func apiAdminInventory(inv repository.Inventory) api.AdminInventory {
 
 func apiAdminProduct(p repository.AdminProduct) api.AdminProduct {
 	out := api.AdminProduct{
-		Id:            p.ID,
-		CategoryId:    p.CategoryID,
-		BrandId:       p.BrandID,
-		Title:         p.Title,
-		Subtitle:      p.Subtitle,
-		Description:   p.Description,
-		MinPriceCents: api.Money(p.MinPriceCents),
-		MaxPriceCents: api.Money(p.MaxPriceCents),
-		TotalStock:    int(p.TotalStock),
-		SalesCount:    int(p.SalesCount),
-		Status:        api.AdminProductStatus(p.Status),
+		Id:         p.ID,
+		CategoryId: p.CategoryID,
+		BrandId:    p.BrandID,
+		// 单独挂的运费模板（00041）；nil 整个不出现 = 不单独挂。
+		FreightTemplateId: p.FreightTemplateID,
+		Title:             p.Title,
+		Subtitle:          p.Subtitle,
+		Description:       p.Description,
+		MinPriceCents:     api.Money(p.MinPriceCents),
+		MaxPriceCents:     api.Money(p.MaxPriceCents),
+		TotalStock:        int(p.TotalStock),
+		SalesCount:        int(p.SalesCount),
+		Status:            api.AdminProductStatus(p.Status),
 		// published_at / deleted_at 在契约里是 [string, 'null']：
 		// 原样传指针，nil 序列化成缺席。**这与 Staff.merchant_id 那一处不同**
 		// （那个是必填的可空字段，缺席与 null 是两件事），这两个不在 required

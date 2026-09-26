@@ -89,6 +89,33 @@ type CouponTemplate struct {
 	UpdatedAt        pgtype.Timestamptz
 }
 
+type FreightTemplate struct {
+	ID                       int64
+	MerchantID               int64
+	Name                     string
+	StoreID                  *int64
+	ChargeMode               int16
+	IsDefault                bool
+	UndeliverableRegionCodes []string
+	DeletedAt                pgtype.Timestamptz
+	CreatedAt                pgtype.Timestamptz
+	UpdatedAt                pgtype.Timestamptz
+}
+
+type FreightTemplateRule struct {
+	ID                 int64
+	MerchantID         int64
+	TemplateID         int64
+	SortOrder          int32
+	RegionCodes        []string
+	FirstUnit          int32
+	FirstFeeCents      int64
+	AdditionalUnit     int32
+	AdditionalFeeCents int64
+	FreeThresholdCents int64
+	FreeQuantity       int32
+}
+
 type IdempotencyKey struct {
 	Scope        string
 	MerchantID   *int64
@@ -164,31 +191,33 @@ type MerchantRevision struct {
 }
 
 type Order struct {
-	ID               int64
-	MerchantID       int64
-	OrderNo          string
-	UserID           int64
-	Status           int16
-	RefundStatus     int16
-	GoodsAmountCents int64
-	FreightCents     int64
-	DiscountCents    int64
-	PayableCents     int64
-	PaidCents        int64
-	RefundedCents    int64
-	ReceiverSnapshot []byte
-	Remark           *string
-	ExpireAt         pgtype.Timestamptz
-	PaidAt           pgtype.Timestamptz
-	ShippedAt        pgtype.Timestamptz
-	FinishedAt       pgtype.Timestamptz
-	CreatedAt        pgtype.Timestamptz
-	UpdatedAt        pgtype.Timestamptz
-	StoreID          int64
-	RegionID         int64
-	StoreSnapshot    []byte
-	UserCouponID     *int64
-	CouponName       *string
+	ID                   int64
+	MerchantID           int64
+	OrderNo              string
+	UserID               int64
+	Status               int16
+	RefundStatus         int16
+	GoodsAmountCents     int64
+	FreightCents         int64
+	DiscountCents        int64
+	PayableCents         int64
+	PaidCents            int64
+	RefundedCents        int64
+	ReceiverSnapshot     []byte
+	Remark               *string
+	ExpireAt             pgtype.Timestamptz
+	PaidAt               pgtype.Timestamptz
+	ShippedAt            pgtype.Timestamptz
+	FinishedAt           pgtype.Timestamptz
+	CreatedAt            pgtype.Timestamptz
+	UpdatedAt            pgtype.Timestamptz
+	StoreID              int64
+	RegionID             int64
+	StoreSnapshot        []byte
+	UserCouponID         *int64
+	CouponName           *string
+	FreightDiscountCents int64
+	FreightSnapshot      []byte
 }
 
 type OrderItem struct {
@@ -229,22 +258,23 @@ type Payment struct {
 }
 
 type Product struct {
-	ID           int64
-	MerchantID   int64
-	CategoryID   int64
-	BrandID      *int64
-	Title        string
-	Subtitle     *string
-	Description  *string
-	TotalStock   int32
-	SalesCount   int32
-	Status       int16
-	PublishedAt  pgtype.Timestamptz
-	DeletedAt    pgtype.Timestamptz
-	CreatedAt    pgtype.Timestamptz
-	UpdatedAt    pgtype.Timestamptz
-	SearchText   *string
-	SearchVector interface{}
+	ID                int64
+	MerchantID        int64
+	CategoryID        int64
+	BrandID           *int64
+	Title             string
+	Subtitle          *string
+	Description       *string
+	TotalStock        int32
+	SalesCount        int32
+	Status            int16
+	PublishedAt       pgtype.Timestamptz
+	DeletedAt         pgtype.Timestamptz
+	CreatedAt         pgtype.Timestamptz
+	UpdatedAt         pgtype.Timestamptz
+	SearchText        *string
+	SearchVector      interface{}
+	FreightTemplateID *int64
 }
 
 type ProductCluster struct {

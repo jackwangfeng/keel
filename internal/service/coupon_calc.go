@@ -26,7 +26,7 @@ const (
 	couponTypeFullReduction int16 = 1 // 满减
 	couponTypeRateDiscount  int16 = 2 // 折扣
 	couponTypeInstant       int16 = 3 // 立减
-	couponTypeFreeShipping  int16 = 4 // 包邮：本期不可建、不可用，见 CHECK 与 evaluateCoupon
+	couponTypeFreeShipping  int16 = 4 // 包邮：抵运费（00042），见 evaluateCoupon 与 pricing.go
 )
 
 // couponLine 是参与券计算的一行：金额与挑行的素材。
@@ -49,6 +49,12 @@ type couponVerdict struct {
 	DiscountCents int64
 	// LineDiscounts 与输入的 lines 一一对应：每一行分摊到的减免，求和恒等于 DiscountCents。
 	LineDiscounts []int64
+
+	// FreeShipping 为真表示这是一张包邮券，而且范围、门槛都满足：它不减商品的钱
+	// （DiscountCents 为 0、LineDiscounts 全 0），能抵多少运费要等运费算出来之后
+	// 由 freeShippingDeduction 定（计价顺序：券 → 运费 → 包邮券抵运费）。
+	// 运费为 0 时调用方仍要把它当成「本单不可用」。
+	FreeShipping bool
 }
 
 func notApplicable(format string, args ...any) couponVerdict {
@@ -116,9 +122,17 @@ func evaluateCoupon(c repository.UserCoupon, scopes []repository.CouponScope,
 	case couponTypeInstant:
 		off = r.DiscountCents
 	case couponTypeFreeShipping:
-		// CHECK 让这种模板建不出来（本系统没有运费，包邮券永远减 0）。走到这里说明
-		// 库里有一行绕过了 CHECK —— 拒绝，而不是让它以「减 0」的形式被「用掉」。
-		return notApplicable("包邮券本期不可用：本系统不计运费")
+		// 门槛比的是适用小计，与满减券同一个口径；抵多少运费不在这里定（见 FreeShipping）。
+		if subtotal < r.ThresholdCents {
+			return notApplicable("适用商品小计 %d 分，还差 %d 分满 %d 分",
+				subtotal, r.ThresholdCents-subtotal, r.ThresholdCents)
+		}
+		return couponVerdict{
+			Applicable:       true,
+			EligibleSubtotal: subtotal,
+			LineDiscounts:    make([]int64, len(lines)),
+			FreeShipping:     true,
+		}
 	default:
 		return notApplicable("券型 %d 无法识别", r.CouponType)
 	}

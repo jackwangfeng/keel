@@ -542,6 +542,16 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	v1.GET("/admin/stores/:store_id/inventories", staffAuth, st.ListStoreInventories)
 	v1.PUT("/admin/stores/:store_id/skus/:sku_id/inventory", staffAuth, st.SetStoreInventory)
 
+	// 运费模板（00041，契约 /admin/freight-templates 那一段）。每一条都挂 staffAuth；
+	// 角色检查在业务层（全店模板 requireMerchantWide、门店模板同门店价），
+	// 见 service/admin_freight.go 的文件头。
+	fr := handler.NewAdminFreightHandler(service.NewAdminFreightService(repo))
+	v1.GET("/admin/freight-templates", staffAuth, fr.List)
+	v1.POST("/admin/freight-templates", staffAuth, fr.Create)
+	v1.GET("/admin/freight-templates/:template_id", staffAuth, fr.Detail)
+	v1.PUT("/admin/freight-templates/:template_id", staffAuth, fr.Replace)
+	v1.DELETE("/admin/freight-templates/:template_id", staffAuth, fr.Delete)
+
 	// 券管理（契约 /admin/coupon-templates 那一段）。角色检查在业务层：
 	// 本期只放商家级的管理员与操作员（role 1、2），见 service/admin_coupon.go 的文件头。
 	// 订单后半程：发货（00033）、退款审核与确认收到退货（00034）。

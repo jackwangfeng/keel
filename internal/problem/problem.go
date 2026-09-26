@@ -267,6 +267,17 @@ const (
 	TypeCouponTemplateLocked    = "https://keel.dev/problems/coupon-template-locked"
 	TypeCouponTemplateDisabled  = "https://keel.dev/problems/coupon-template-disabled"
 
+	// 运费那一组（数据模型 §7「运费模板」「运费怎么算」，00041 / 00042）：
+	//
+	//   region-not-deliverable     422  试算 / 下单时有商品送不到这个收货地址。响应体的
+	//                                   undeliverable_items 逐行给出 SKU 与原因；**不是 409**：
+	//                                   重试不会成功，客户端该去掉那几行或换地址
+	//   freight-template-conflict  409  这家门店已经有门店模板（每店至多一个）
+	//   freight-template-in-use    409  还有商品挂着这个模板（删除、或改成门店模板时）
+	TypeRegionNotDeliverable    = "https://keel.dev/problems/region-not-deliverable"
+	TypeFreightTemplateConflict = "https://keel.dev/problems/freight-template-conflict"
+	TypeFreightTemplateInUse    = "https://keel.dev/problems/freight-template-in-use"
+
 	// 买家侧地址簿 / 购物车 / 个人信息那三组（契约 User 与 Cart tag）。
 	// 三个名字都是契约里早就写好的，这里只是第一次有人发它们：
 	//

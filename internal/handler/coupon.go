@@ -35,7 +35,8 @@ func (h *CouponHandler) Applicable(c *gin.Context) {
 	if !ok {
 		return
 	}
-	out, err := h.svc.Applicable(c.Request.Context(), items, raw.StoreId)
+	// address_id 可选（00042）：包邮券要它，没带时结果里没有包邮券。
+	out, err := h.svc.Applicable(c.Request.Context(), items, raw.StoreId, raw.AddressId)
 	if err != nil {
 		writeCouponError(c, err)
 		return
