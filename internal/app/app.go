@@ -346,6 +346,7 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	v1.GET("/admin/staff", staffAuth, adm.ListStaff)
 	v1.POST("/admin/staff", staffAuth, adm.CreateStaff)
 	v1.PATCH("/admin/staff/:staff_id", staffAuth, adm.UpdateStaff)
+	v1.POST("/admin/staff/:staff_id/login-token", staffAuth, adm.ReissueLoginToken)
 
 	// 开店（M4 收尾）。它挂同一道 staffAuth，而「只有平台级管理员能调」
 	// 是业务规则，在 service.StaffService.OpenShop 里 —— 不在这里再套一层

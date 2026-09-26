@@ -97,6 +97,9 @@ const (
 	TypeLastAdmin         = "https://keel.dev/problems/last-admin"
 	TypePlatformOnly      = "https://keel.dev/problems/platform-only"
 	TypeMerchantCodeTaken = "https://keel.dev/problems/merchant-code-taken"
+	// staff-disabled → 给一个停用的员工重签登录 token。先启用再签：签给他也
+	//                  换不出会话（停用账号的一次性 token 在兑换时被拒）。
+	TypeStaffDisabled = "https://keel.dev/problems/staff-disabled"
 
 	// 同一租户内的分级权限（v0.1.0，internal/service/authz.go）。两个 type
 	// 而不是一个，理由与 staff-forbidden / platform-only 分开报一样：

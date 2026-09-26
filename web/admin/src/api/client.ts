@@ -67,6 +67,7 @@ export type CategoryUpdateRequest = S["CategoryUpdateRequest"];
 export type InventorySetRequest = S["InventorySetRequest"];
 export type MerchantCreateRequest = S["MerchantCreateRequest"];
 export type StaffCreateRequest = S["StaffCreateRequest"];
+export type StaffLoginToken = S["StaffLoginToken"];
 
 // 多门店 + 大区（契约 Store tag）。
 export type AdminRegion = S["AdminRegion"];

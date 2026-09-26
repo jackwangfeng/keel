@@ -8,6 +8,10 @@
 //     而且不是「隐藏了」——契约生成的 StaffCreateRequest 根本没有这个字段。
 //   · **不设密码。** 建好后服务端生成一串一次性登录链接 token。本轮没有接
 //     邮件服务，它只进进程日志，所以这里把取它的办法写出来。
+//   · **会话 7 天过期后，回来的路只有「重签一次性登录 token」**（POST
+//     /admin/staff/{staff_id}/login-token）。它的 token 明文会回到签发人手里
+//     ——没有邮件服务时这是把它交给本人的唯一办法——所以弹窗里只显示一次，
+//     关掉就没了；再签一次会作废上一串。
 //
 // 分级权限（v0.1.0）：角色多了大区管理员（3）与门店管理员（4），各带管辖范围。
 // 能分配哪些角色、能选哪些大区 / 门店，由 src/auth/permissions.ts 与服务端的
@@ -24,6 +28,7 @@ import {
     type Staff,
     type StaffPage,
     type StaffCreateRequest,
+    type StaffLoginToken,
     type StaffRole,
 } from "../api/client.ts";
 import { assignableRoles, can, NO_PERMISSION, ROLE, ROLE_TEXT } from "../auth/permissions.ts";
@@ -178,6 +183,51 @@ async function submitEdit(): Promise<void> {
         saving.value = false;
     }
 }
+
+// ------------------------------------------------------------------ 重签登录 token
+
+const tokenVisible = ref(false);
+const tokenError = ref<unknown>(null);
+const reissuing = ref(false);
+const tokenTarget = ref<Staff | null>(null);
+/** 签出来的那一串。只在弹窗里显示这一次：关掉弹窗就清掉，不留在页面状态里。 */
+const issued = ref<StaffLoginToken | null>(null);
+
+function reissueDisabledReason(row: Staff): string {
+    if (!can.reissueLoginToken(row)) return NO_PERMISSION;
+    if (row.status !== 1) return "已停用的员工不能重签，先启用（服务端同样会拒绝）";
+    return "";
+}
+
+function openReissue(row: Staff): void {
+    tokenTarget.value = row;
+    issued.value = null;
+    tokenError.value = null;
+    tokenVisible.value = true;
+}
+
+function closeReissue(): void {
+    tokenVisible.value = false;
+    issued.value = null;
+}
+
+async function submitReissue(): Promise<void> {
+    const target = tokenTarget.value;
+    if (target === null) return;
+    reissuing.value = true;
+    tokenError.value = null;
+    try {
+        // 不带 Idempotency-Key：契约刻意不收它——服务端签新的同时作废旧的，
+        // 重复点击的结果是「只有最新那一串有效」。
+        issued.value = await keel.request("post", "/admin/staff/{staff_id}/login-token", {
+            path: { staff_id: target.id },
+        });
+    } catch (err) {
+        tokenError.value = err;
+    } finally {
+        reissuing.value = false;
+    }
+}
 </script>
 
 <template>
@@ -228,7 +278,7 @@ async function submitEdit(): Promise<void> {
             <el-table-column label="最近登录" width="180">
                 <template #default="{ row }: { row: Staff }">{{ datetime(row.last_login_at) }}</template>
             </el-table-column>
-            <el-table-column label="操作" width="100" fixed="right">
+            <el-table-column label="操作" width="200" fixed="right">
                 <template #default="{ row }: { row: Staff }">
                     <el-button
                         link
@@ -238,6 +288,15 @@ async function submitEdit(): Promise<void> {
                         @click="openEdit(row)"
                     >
                         编辑
+                    </el-button>
+                    <el-button
+                        link
+                        type="primary"
+                        :disabled="reissueDisabledReason(row) !== ''"
+                        :title="reissueDisabledReason(row)"
+                        @click="openReissue(row)"
+                    >
+                        重签登录 token
                     </el-button>
                 </template>
             </el-table-column>
@@ -340,6 +399,35 @@ async function submitEdit(): Promise<void> {
             <template #footer>
                 <el-button @click="editVisible = false">取消</el-button>
                 <el-button type="primary" :loading="saving" @click="submitEdit">保存</el-button>
+            </template>
+        </el-dialog>
+
+        <el-dialog
+            v-model="tokenVisible"
+            :title="`重签登录 token：${tokenTarget?.email ?? ''}`"
+            width="560px"
+            @closed="issued = null"
+        >
+            <ProblemAlert v-if="tokenError" :error="tokenError" />
+            <template v-if="issued === null">
+                <p class="hint">
+                    给这个人签一串新的一次性登录 token（15 分钟有效、用掉即失效），他拿去在登录页
+                    「已有登录 token」那一栏换会话。<strong>他此前还没用掉的登录 token 会同时作废。</strong>
+                </p>
+                <p class="hint">
+                    本轮没有接邮件服务，token 会显示在这里（只显示这一次），也照旧打进进程日志。
+                    请通过可信的渠道交给本人：拿着它的人能以他的身份登录一次。
+                </p>
+            </template>
+            <template v-else>
+                <p class="hint">已签发，{{ datetime(issued.expire_at) }} 之前有效。关掉这个窗口之后不会再显示。</p>
+                <el-input :model-value="issued.token" readonly type="textarea" :rows="2" />
+            </template>
+            <template #footer>
+                <el-button @click="closeReissue">{{ issued === null ? "取消" : "关闭" }}</el-button>
+                <el-button v-if="issued === null" type="primary" :loading="reissuing" @click="submitReissue">
+                    签发
+                </el-button>
             </template>
         </el-dialog>
     </div>

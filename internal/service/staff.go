@@ -39,6 +39,10 @@ var (
 	// ErrStaffEmailTaken：该作用域内邮箱已存在（契约里那个 409）。
 	ErrStaffEmailTaken = errors.New("该邮箱已经有人在用")
 
+	// ErrStaffDisabled：给一个停用的员工重签登录 token（契约 409 staff-disabled）。
+	// 签给他也换不出会话（exchangeIn 拒绝停用账号），所以在签之前就说清楚：先启用。
+	ErrStaffDisabled = errors.New("员工已停用")
+
 	// ErrLastAdmin：这一改会让该租户一个在岗管理员都不剩（契约里那个 409）。
 	// 数据模型 §14 那条「进不了数据库的约束」，只能在这一层拦。
 	ErrLastAdmin = errors.New("不能让该租户失去最后一个在岗管理员")
@@ -777,6 +781,99 @@ func (s *StaffService) UpdateStaff(ctx context.Context, staffID int64, role, sta
 	})
 	if err != nil {
 		return repository.Staff{}, err
+	}
+	return out, nil
+}
+
+// StaffLoginToken 是重签出来的一次性登录 token。
+type StaffLoginToken struct {
+	StaffID  int64
+	Token    string // 明文，只在这一次返回里存在；库里只有 sha256
+	ExpireAt time.Time
+}
+
+// ReissueLoginToken 实现 POST /admin/staff/{staff_id}/login-token：给一个已有的
+// 员工重签一串一次性登录 token（与新建时那一串同一种：kind 2 邮件登录链接、
+// StaffEmailLinkTTL、用掉即失效）。
+//
+// ===========================================================================
+// 为什么需要它
+// ===========================================================================
+//
+// 会话 7 天（auth.StaffSessionTTL）过期之后，重新登录只有「一次性 token 换会话」
+// 这一条路，而一次性 token 此前只在两处签：进程启动时的引导 token（每个部署一次）
+// 与新建员工时的那一串（15 分钟）。邮箱登录链接回 501（没接邮件服务）。
+// 于是一个员工过期之后，唯一的办法是删了重建 —— 丢掉他的 id、审计字段里的
+// created_by 引用，以及大区 / 门店范围。
+//
+// ===========================================================================
+// 权限：与 PATCH /admin/staff/{id} 同一个判据，一个字都不另写
+// ===========================================================================
+//
+// 「能给他签」= 「能改他」。走 authorizeStaffWrite，角色与范围都不变
+// （RoleChanged / ScopesChanged 为假）—— 于是：管理员能给本店任何人签（含自己）；
+// 大区管理员只能给归他管的门店管理员签（给管理员签是 role-forbidden，给自己签
+// 按那个函数的 4a 同样是 role-forbidden）；操作员与门店管理员 staff-forbidden；
+// 别的作用域的人在本作用域里查不出来，404。
+//
+// 签发的 token 会回到调用者手里（契约写明了为什么），所以这条判据同时是「谁能在
+// 15 分钟里以谁的身份登录一次」的判据 —— 它与「谁能改谁的角色和状态」是同一张表，
+// 而后者本来就是一种更强的控制。另起一套判据的话，两张表分叉的那天，
+// 某个大区管理员就能给管理员签 token，而没有任何东西会红。
+//
+// 判权排在「停用」检查之前：没有权限的人不该从 409 里得知这个人被停用了。
+//
+// ===========================================================================
+// 签新的同时作废旧的
+// ===========================================================================
+//
+// 同一个人此前还没用掉的登录链接 token 一并作废（RevokeLiveOneTimeTokens）。
+// 所以重复调用的结果是「只有最新那一串有效」—— 与只调一次等价，这条接口因此不
+// 需要 Idempotency-Key（存档重放会让 token 明文进库，那是更糟的事）。
+func (s *StaffService) ReissueLoginToken(ctx context.Context, staffID int64) (StaffLoginToken, error) {
+	id, err := auth.StaffFromContext(ctx)
+	if err != nil {
+		return StaffLoginToken{}, err
+	}
+	var out StaffLoginToken
+	err = s.inScope(ctx, id.Platform(), func(tx repository.StaffTx) error {
+		target, err := tx.FindStaff(ctx, staffID)
+		if errors.Is(err, repository.ErrStaffNotFound) {
+			return ErrStaffNotFound
+		}
+		if err != nil {
+			return err
+		}
+		scopes, err := loadStaffScopes(ctx, tx, id.Platform(), staffID)
+		if err != nil {
+			return err
+		}
+		if _, err := authorizeStaffWrite(ctx, tx, staffWrite{
+			Target: &target, TargetScopes: scopes,
+			NewRole: target.Role, NewScopes: scopes,
+		}); err != nil {
+			return err
+		}
+		if target.Status != auth.StaffStatusActive {
+			return fmt.Errorf("%w（staff_id=%d）", ErrStaffDisabled, staffID)
+		}
+		if _, err := tx.RevokeLiveOneTimeTokens(ctx, staffID, repository.StaffTokenEmailLink); err != nil {
+			return err
+		}
+		token, err := auth.NewOpaqueToken()
+		if err != nil {
+			return err
+		}
+		expireAt := s.now().UTC().Add(auth.StaffEmailLinkTTL)
+		if _, err := tx.CreateStaffToken(ctx, staffID, auth.HashStaffToken(token),
+			repository.StaffTokenEmailLink, expireAt); err != nil {
+			return err
+		}
+		out = StaffLoginToken{StaffID: staffID, Token: token, ExpireAt: expireAt}
+		return nil
+	})
+	if err != nil {
+		return StaffLoginToken{}, err
 	}
 	return out, nil
 }

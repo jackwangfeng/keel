@@ -194,16 +194,47 @@ func (h *AdminAuthHandler) UpdateStaff(c *gin.Context) {
 	c.JSON(http.StatusOK, apiStaff(st))
 }
 
+// ReissueLoginToken 实现 POST /api/v1/admin/staff/{staff_id}/login-token。
+//
+// 与 CreateStaff 的差别只有一处：token 明文**进响应体**（契约 StaffLoginToken）。
+// 理由写在契约的描述里 —— 没有邮件服务时，管理员拿到它才能交给本人；签发人
+// 本来就能改这个人的角色与状态（权限判据与 PATCH 同一个）。日志照旧打一份，
+// 让「谁在什么时候给谁签过」查得出来。
+func (h *AdminAuthHandler) ReissueLoginToken(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("staff_id"), 10, 64)
+	if err != nil || id <= 0 {
+		problem.Write(c, http.StatusUnprocessableEntity,
+			problem.TypeInvalidRequest, "staff_id 必须是正整数")
+		return
+	}
+	out, err := h.svc.ReissueLoginToken(c.Request.Context(), id)
+	if err != nil {
+		writeStaffError(c, err)
+		return
+	}
+	_ = c.Error(&staffLoginLinkNotice{StaffID: out.StaffID, Token: out.Token, Reissued: true})
+	c.JSON(http.StatusCreated, api.StaffLoginToken{
+		StaffId: out.StaffID, Token: out.Token, ExpireAt: out.ExpireAt,
+	})
+}
+
 // staffLoginLinkNotice 是「这串一次性登录链接 token 本轮只能进日志」这件事的
 // 载体。做成一个类型而不是一句 fmt.Sprintf，是为了让它在日志里认得出来 ——
 // 运维要能一眼找到它，而且要知道它为什么在那里。
 type staffLoginLinkNotice struct {
 	StaffID int64
 	Token   string
+	// Reissued 为 true 表示这是给已有员工重签的（POST /admin/staff/{id}/login-token），
+	// 不是新建时那一串。运维追查时这两件事要分得开。
+	Reissued bool
 }
 
 func (n *staffLoginLinkNotice) Error() string {
-	return "本项目没有接邮件服务，新员工的一次性登录链接 token 只能打进日志：" +
+	who := "新员工"
+	if n.Reissued {
+		who = "重签给已有员工"
+	}
+	return "本项目没有接邮件服务，" + who + "的一次性登录链接 token 只能打进日志：" +
 		"staff_id=" + strconv.FormatInt(n.StaffID, 10) + " token=" + n.Token +
 		"（15 分钟有效，用掉即失效；接上 SMTP 之后这条就该消失）"
 }
@@ -294,6 +325,10 @@ func writeStaffError(c *gin.Context, err error) {
 		// 分叉的那天某一条 409 会变成 404，而没有任何东西会红。
 		problem.Write(c, http.StatusConflict,
 			problem.TypeMerchantCodeTaken, "这个 code 已经有店在用了")
+	case errors.Is(err, service.ErrStaffDisabled):
+		// 契约 POST /admin/staff/{id}/login-token：409 staff-disabled。先启用再签。
+		problem.Write(c, http.StatusConflict,
+			problem.TypeStaffDisabled, "这个员工已停用，先启用再重签登录 token")
 	case errors.Is(err, service.ErrLastAdmin):
 		// 契约：409「会导致该租户没有在职管理员」。数据模型 §14 那条
 		// 进不了数据库的约束，只能在业务逻辑里拦。

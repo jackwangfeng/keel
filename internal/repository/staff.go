@@ -169,6 +169,10 @@ type StaffTx interface {
 	// tokenHash 是 sha256(明文) 的十六进制 —— 明文不进这一层。
 	CreateStaffToken(ctx context.Context, staffID int64, tokenHash string, kind int16, expireAt time.Time) (int64, error)
 
+	// RevokeLiveOneTimeTokens 作废某人还活着的某一种一次性 token，返回作废了几串。
+	// 重签登录 token 时先调它：新钥匙发出去，旧的同时失效（db/queries/staff.sql）。
+	RevokeLiveOneTimeTokens(ctx context.Context, staffID int64, kind int16) (int64, error)
+
 	// FindLiveOneTimeToken 按 hash 取一串还活着的一次性 token（kind 1/2）。
 	// 查不到返回 ErrStaffTokenNotFound。
 	FindLiveOneTimeToken(ctx context.Context, tokenHash string, kind int16) (StaffOneTimeToken, error)
@@ -379,6 +383,12 @@ func (t tenantTx) CreateStaffToken(ctx context.Context, staffID int64, tokenHash
 		TokenHash: tokenHash,
 		Kind:      kind,
 		ExpireAt:  pgtype.Timestamptz{Time: expireAt, Valid: true},
+	})
+}
+
+func (t tenantTx) RevokeLiveOneTimeTokens(ctx context.Context, staffID int64, kind int16) (int64, error) {
+	return t.q.RevokeLiveOneTimeStaffTokens(ctx, db.RevokeLiveOneTimeStaffTokensParams{
+		StaffID: staffID, Kind: kind,
 	})
 }
 

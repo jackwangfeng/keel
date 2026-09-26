@@ -1021,3 +1021,113 @@ func TestMerchantStaffCannotHitPlatformIdempotencyRecords(t *testing.T) {
 		t.Errorf("shop-a 名下有 %d 行这把钥匙，期望 1", n)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// 重签一次性登录 token（POST /admin/staff/{staff_id}/login-token）
+// ---------------------------------------------------------------------------
+
+// reissue 以 bearer 的身份给 staffID 重签一串登录 token。
+func reissue(t *testing.T, host string, staffID int64, bearer string) *httptest.ResponseRecorder {
+	t.Helper()
+	return post(t, host, fmt.Sprintf("/api/v1/admin/staff/%d/login-token", staffID), "", bearer)
+}
+
+// exchange 拿一串一次性 token 去换会话，返回状态码与（成功时的）会话。
+func exchange(t *testing.T, host, token string) (int, api.StaffSession) {
+	t.Helper()
+	w := post(t, host, "/api/v1/admin/auth/session", `{"token":"`+token+`"}`, "")
+	var out api.StaffSession
+	if w.Code == http.StatusOK {
+		if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return w.Code, out
+}
+
+// 员工会话过期之后，管理员给他重签一串，他拿着就能回来 —— 这条接口存在的全部理由。
+//
+// 连带三件事：
+//   - 签出来的与新建时那一串同一种（能换 POST /admin/auth/session，15 分钟有效）；
+//   - 重签作废此前没用掉的那一串（重复调用 = 只有最新一串有效，这条接口因此不要
+//     Idempotency-Key）；
+//   - 停用的人签不了（409 staff-disabled），别家店的人 404。
+//
+// 变异验证（本轮实跑）：去掉 ReissueLoginToken 里那句 RevokeLiveOneTimeTokens，
+// 「旧的那一串作废了」那条红；去掉停用检查，「停用的人签不了」那条红。
+func TestReissuedLoginTokenBringsAStaffMemberBack(t *testing.T) {
+	stamp := time.Now().UnixNano()
+	adminA := mkStaff(t, "shop-a", fmt.Sprintf("reissue-admin-%d@example.com", stamp), 1, 1)
+	target := mkStaff(t, "shop-a", fmt.Sprintf("reissue-op-%d@example.com", stamp), 2, 1)
+	sess := staffSession(t, hostA, adminA)
+
+	w := reissue(t, hostA, target, sess.Token)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("管理员给本店操作员重签失败：%d %s", w.Code, w.Body.String())
+	}
+	var first api.StaffLoginToken
+	if err := json.Unmarshal(w.Body.Bytes(), &first); err != nil {
+		t.Fatal(err)
+	}
+	if first.StaffId != target || first.Token == "" {
+		t.Fatalf("响应是 staff_id=%d token=%q，期望 %d 与一串非空 token", first.StaffId, first.Token, target)
+	}
+	if ttl := time.Until(first.ExpireAt); ttl < 10*time.Minute || ttl > 16*time.Minute {
+		t.Errorf("token 还剩 %v，期望约 15 分钟（与新建员工时那一串同一个 TTL）", ttl)
+	}
+	// 库里只有 hash，没有明文。
+	if n := adminQueryInt64(t, `SELECT count(*) FROM staff_tokens WHERE token_hash = $1`, first.Token); n != 0 {
+		t.Error("staff_tokens 里存着 token 明文")
+	}
+
+	// 再签一次：第一串作废，第二串能用。
+	var second api.StaffLoginToken
+	decodeInto(t, reissue(t, hostA, target, sess.Token), http.StatusCreated, "第二次重签", &second)
+	if code, _ := exchange(t, hostA, first.Token); code != http.StatusUnauthorized {
+		t.Errorf("重签之后旧的那一串还能换会话（%d）—— 旧的没有作废，"+
+			"重复调用这条接口就会在外面散落多把 15 分钟内都能用的钥匙", code)
+	}
+	code, got := exchange(t, hostA, second.Token)
+	if code != http.StatusOK || got.Staff.Id != target {
+		t.Fatalf("拿重签的 token 换会话：%d staff=%d，期望 200 / %d", code, got.Staff.Id, target)
+	}
+	// 一次性：同一串第二次换不出来。
+	if code, _ := exchange(t, hostA, second.Token); code != http.StatusUnauthorized {
+		t.Errorf("同一串 token 换了两次会话（第二次 %d）", code)
+	}
+
+	// 停用的人签不了。阳性对照就是上面那几次成功的签发（同一个人、同一个调用者）。
+	adminExec(t, `UPDATE staff SET status = 2 WHERE id = $1`, target)
+	p := problemOf(t, reissue(t, hostA, target, sess.Token), http.StatusConflict)
+	if p.Type != "https://keel.dev/problems/staff-disabled" {
+		t.Errorf("给停用的人重签，type 是 %q，期望 staff-disabled", p.Type)
+	}
+
+	// 别家店的人：404，不是 403（契约 /admin/ 那一段的约定 3）。
+	targetB := mkStaff(t, "shop-b", fmt.Sprintf("reissue-b-%d@example.com", stamp), 2, 1)
+	p = problemOf(t, reissue(t, hostA, targetB, sess.Token), http.StatusNotFound)
+	if p.Type != "https://keel.dev/problems/not-found" {
+		t.Errorf("给别家店的人重签，type 是 %q，期望 not-found", p.Type)
+	}
+}
+
+// 平台管理员给平台操作员重签；给商家员工签是 404（平台作用域里查不到他）。
+func TestPlatformAdminReissuesOnlyForPlatformStaff(t *testing.T) {
+	token := newPlatformAdmin(t)
+	stamp := time.Now().UnixNano()
+	platformOp := mkStaff(t, "", fmt.Sprintf("reissue-pop-%d@keel.test", stamp), 2, 1)
+	t.Cleanup(func() {
+		adminExec(t, `DELETE FROM staff_tokens WHERE staff_id = $1`, platformOp)
+		adminExec(t, `DELETE FROM staff WHERE id = $1`, platformOp)
+	})
+	var got api.StaffLoginToken
+	decodeInto(t, reissue(t, hostA, platformOp, token), http.StatusCreated, "平台管理员给平台操作员重签", &got)
+	if code, sess := exchange(t, hostA, got.Token); code != http.StatusOK || sess.Staff.MerchantId != nil {
+		t.Fatalf("平台操作员拿重签的 token 换会话：%d merchant_id=%v，期望 200 / null", code, sess.Staff.MerchantId)
+	}
+
+	shopStaff := mkStaff(t, "shop-a", fmt.Sprintf("reissue-shop-%d@example.com", stamp), 2, 1)
+	if w := reissue(t, hostA, shopStaff, token); w.Code != http.StatusNotFound {
+		t.Errorf("平台管理员给商家员工重签得到 %d，期望 404 —— 平台作用域不该看得见商家的人", w.Code)
+	}
+}

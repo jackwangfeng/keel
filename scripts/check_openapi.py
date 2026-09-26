@@ -168,6 +168,8 @@ IDEMPOTENCY_EXEMPT = {
     '/admin/auth/bootstrap':  '一次性 token 换会话，重放由 used_at 拦截',
     '/admin/auth/email-link': '重复请求只是多发一封信，且有频控',
     '/admin/auth/session':    '一次性 token 换会话，重放由 used_at 拦截',
+    '/admin/staff/{staff_id}/login-token': '每次签发作废此前没用掉的登录链接 token，'
+                                           '重复调用 = 只有最新一串有效；存档重放会让 token 明文进库',
     '/assistant/chat':    '无副作用；会话状态由 session_id 承载',
     '/orders/preview':    '无副作用；纯试算',
     '/coupons/applicable': '无副作用；纯查询',

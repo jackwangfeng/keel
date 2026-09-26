@@ -137,6 +137,26 @@ INSERT INTO staff_tokens (staff_id, token_hash, kind, expire_at)
 VALUES ($1, $2, $3, $4)
 RETURNING id;
 
+-- name: RevokeLiveOneTimeStaffTokens :execrows
+-- 作废某人还活着的某一种一次性 token（重签登录 token 时用：
+-- POST /admin/staff/{staff_id}/login-token）。
+--
+-- 为什么要作废旧的：重签是「给这个人一把新钥匙」，不是「再多给一把」。
+-- 不作废的话，每调一次就多一串 15 分钟内都能换会话的 token 散在日志与响应里，
+-- 而重复调用（界面连点两下、网络重试）的结果就不再与只调一次等价 ——
+-- 这条接口不接受 Idempotency-Key，靠的正是这一句让它天然幂等。
+--
+-- 用 revoked_at 而不是 DELETE：留着行，「谁在什么时候被重签过几次」查得出来。
+-- 作用域由 staff_tokens 的 parent-scope 策略管：别家店、平台级的 token 在这里
+-- 按构造碰不到。
+UPDATE staff_tokens
+   SET revoked_at = now()
+ WHERE staff_id = $1
+   AND kind = $2
+   AND used_at IS NULL
+   AND revoked_at IS NULL
+   AND expire_at > now();
+
 -- name: FindLiveOneTimeStaffToken :one
 -- 按 hash 取一串**还活着**的一次性 token（kind 1 引导 / 2 邮件链接），
 -- 连带取出它属于谁。

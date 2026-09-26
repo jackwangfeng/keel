@@ -350,6 +350,14 @@ var routes = []route{
 		NoQueryParams:  "要改谁在路径上，改什么在请求体里",
 	},
 	{
+		// 重签一次性登录 token。与 PATCH 同一个 handler 文件、同一个权限判据。
+		ContractPath:   "/admin/staff/{staff_id}/login-token",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "admin_auth.go",
+		NoQueryParams:  "给谁签在路径上，没有请求体，也不接受 Idempotency-Key（签新的同时作废旧的，天然幂等）",
+	},
+	{
 		// 开店（M4 收尾）。它单独占一个 handler 文件，理由写在
 		// admin_merchant.go 的头上。
 		ContractPath:   "/admin/merchants",

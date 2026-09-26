@@ -704,6 +704,65 @@ paths:
               schema: { $ref: '#/components/schemas/Problem' }
         default: { $ref: '#/components/responses/Problem' }
 
+  /admin/staff/{staff_id}/login-token:
+    post:
+      tags: [Admin]
+      summary: 给已有员工重签一次性登录 token（管理员；大区管理员只能给本大区的门店管理员签）
+      description: |
+        员工会话 7 天过期之后，唯一的重新登录办法是一串一次性登录 token 去换
+        `POST /admin/auth/session`。而邮箱登录链接（`POST /admin/auth/email-link`）
+        本轮没有邮件服务、回 501，新建员工时签的那一串 15 分钟就过期 —— 没有这条接口，
+        员工过期之后只能删了重建。
+
+        签出来的与新建员工时那一串**同一种**：一次性、15 分钟有效、用掉即失效，
+        拿去换 `POST /admin/auth/session`。签发时**作废这个人此前还没用掉的登录链接
+        token**，所以重复调用的结果是「只有最新那一串有效」，与只调一次等价 ——
+        这条接口因此不接受 `Idempotency-Key`（存档重放会让 token 明文进库）。
+
+        **谁能签谁，与 `PATCH /admin/staff/{staff_id}` 完全一致**：能改这个人的，
+        才能给他签。商家管理员能给本店任何人签（包括自己）；大区管理员只能给「只管
+        本大区门店」的门店管理员签，不能给自己、也不能给管理员 / 操作员 / 别的大区
+        管理员签；操作员与门店管理员不能签；平台管理员只能给平台级的人签。
+        别的租户的人一律 404（与 PATCH 同一条约定）。
+
+        **停用的员工不能签**（409 `staff-disabled`）：先启用，再签。
+
+        > **token 明文会出现在响应体里**，这是与新建员工那条的唯一差别，而且是刻意的：
+        > 没有邮件服务时，管理员拿到它才能通过别的渠道交给本人。代价是签发人在这
+        > 15 分钟里能以对方的身份登录一次 —— 而签发人本来就能改对方的角色与状态，
+        > 权限按构造不高于签发人。它同时照旧打进进程日志，方便运维追查是谁在什么时候
+        > 给谁签过。接上邮件服务之后，这条接口应当改成直接发信、不再回明文。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+        - name: staff_id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        '201':
+          description: 已签发（此前没用掉的登录链接 token 同时作废）
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StaffLoginToken' }
+        '403':
+          description: |
+            调用者不能给这个人签：不是管理员（staff-forbidden）、大区管理员想给门店管理员
+            之外的人或自己签（role-forbidden）、或目标不归他管（out-of-scope）
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: 员工不存在、已软删，或不在调用者的租户里
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '409':
+          description: 员工已停用 —— `https://keel.dev/problems/staff-disabled`
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
   # ======================================================= Admin · 商家自助发布
   #
   # 这一整段是 M4 补的。此前 /admin/ 下只有「店已经开起来之后的运营动作」——
@@ -5981,6 +6040,21 @@ components:
             它和支付密钥是同一个量级的东西。
         expire_at: { type: string, format: date-time }
         staff:     { $ref: '#/components/schemas/Staff' }
+
+    StaffLoginToken:
+      type: object
+      required: [staff_id, token, expire_at]
+      description: |
+        一串一次性登录 token，与新建员工时服务端签的那一串同一种（15 分钟、用掉即失效），
+        拿去换 `POST /admin/auth/session`。
+      properties:
+        staff_id: { type: integer, format: int64, description: 这串 token 属于谁 }
+        token:
+          type: string
+          description: |
+            一次性登录 token 明文。**服务端只存它的 sha256**，明文只在这一次响应
+            （和进程日志）里出现。
+        expire_at: { type: string, format: date-time }
 
     StaffCreateRequest:
       type: object

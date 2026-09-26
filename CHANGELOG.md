@@ -52,6 +52,22 @@ so "which one is running?" never depends on anyone's memory.
   that happened before this migration shows the newer name. Coupons shipped the
   same day as 0.1.0, so that window is hours wide.
 
+- **A staff member whose session expired can be let back in without being
+  deleted and re-created.** `POST /admin/staff/{staff_id}/login-token` issues a
+  fresh one-time login token — the same kind a new staff member gets (15 minutes,
+  single use, exchanged at `POST /admin/auth/session`) — and revokes that
+  person's earlier unused ones, so calling it twice leaves exactly one valid
+  token (which is why it takes no `Idempotency-Key`: replaying an archived
+  response would put the token in the database). Until now a 7-day session was
+  the end of the road: the e-mail link answers `501` because there is no mail
+  service, and the only other one-time token was the one printed when the account
+  was created. Who may issue for whom is exactly who may edit whom
+  (`PATCH /admin/staff/{staff_id}`); disabled staff get `409 staff-disabled`.
+  **The token is returned in the response body** as well as logged — without a
+  mail service the admin has to hand it over some other way. The issuer can
+  therefore log in once as that person; they could already change that person's
+  role and status. The back office's staff page has a button for it.
+
 ### Fixed
 
 - **Opening a shop (`POST /admin/merchants`) and adding staff (`POST /admin/staff`)

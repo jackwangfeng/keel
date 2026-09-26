@@ -1143,6 +1143,15 @@ export type StaffCreateRequest = {
   store_ids? : number[]
 }
 
+/** 一串一次性登录 token，与新建员工时服务端签的那一串同一种（15 分钟、用掉即失效）， */
+export type StaffLoginToken = {
+  /** 这串 token 属于谁 */
+  staff_id : number
+  /** 一次性登录 token 明文。**服务端只存它的 sha256**，明文只在这一次响应 */
+  token : string
+  expire_at : string
+}
+
 export type StaffSession = {
   /** 会话 token，放进 `Authorization: Bearer`。默认 7 天。 */
   token : string
