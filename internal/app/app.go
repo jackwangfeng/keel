@@ -212,7 +212,13 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	// 它走的是本仓库第一条**索引扫描**读路径（HNSW），与之前验过的顺序扫描
 	// 不是同一条 —— internal/handler/search_test.go 里有一条用真实数据跑的
 	// 跨租户断言专门盯这条路。
-	v1.POST("/search", handler.NewSearchHandler(
+	//
+	// 它是全仓库唯一一条**又公开、又每次请求都跑模型推理**的路由，所以也是
+	// 唯一一条挂限流的：验收实测 20 个并发的 198 字查询（契约允许的长度）
+	// 就能把整站压成纯关键词，而访客看不出任何异常。桶的形状、它挡得住什么、
+	// 挡不住什么，都写在 ratelimit.go 的文件头。请求体大小闸门在 handler 里
+	// （handler.MaxSearchBodyBytes），和 webhook 那处同一个顺序：先限大小再解析。
+	v1.POST("/search", rateLimitByIP(searchRateLimiterFromEnv()), handler.NewSearchHandler(
 		service.NewSearchService(repo, embedder, service.SearchConfig{}, nil)).Search)
 
 	// 商品详情与列表一样是 security: []（契约里两条都写着）：还没登录的人

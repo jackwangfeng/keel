@@ -74,6 +74,15 @@ const (
 	// internal：客户端能据此分辨「这个功能还没有」与「服务器炸了」，
 	// 而这两件事的重试策略完全相反。
 	TypeNotImplemented = "https://keel.dev/problems/not-implemented"
+
+	// 被限流挡住。契约里已经有这个 type（POST /auth/sms-code 的 429 描述
+	// 逐字写着它），所以这里复用，不新造一个 —— 同一件事两个 type，
+	// 客户端的退避逻辑就要写两遍。
+	//
+	// 429 配 Retry-After：契约在那条接口上把这个头写进了响应定义
+	// （「建议退避秒数」）。没有它的话，客户端能做的只有立刻重试，
+	// 而那正好是限流要挡的行为。
+	TypeRateLimited = "https://keel.dev/problems/rate-limited"
 )
 
 // Write 写一个 RFC 9457 响应并中止后续 handler。
