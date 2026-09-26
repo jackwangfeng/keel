@@ -104,6 +104,30 @@ type InventorySet struct {
 	AvailableQty         int32
 	ExpectedAvailableQty int32
 	WarningQty           *int32
+	// BizID 是这次覆盖在流水里的 biz_id（「set:<staff_id>:<随机串>」，service 拼好）。
+	// 数量真的变了才用得上，见 logInventorySet。
+	BizID string
+}
+
+// logInventorySet 给一次成功的比较并设置写一行 biz_type = 5 的流水。
+//
+// CAS 成功就证明写之前的值**恰好是 expected**（WHERE 里就是这个条件；缺行时 expected
+// 只能是 0，缺行 ≡ 可售 0），所以 before / change 不用再读一次就是精确的 ——
+// 多读一次才是多一个快照。数量没变（只改预警线，或设成原值）时不写：流水记的是
+// 库存变动，一行 +0 只会让对账多一行噪音。
+func (t tenantTx) logInventorySet(ctx context.Context, storeID, skuID int64,
+	expected, after int32, bizID string) error {
+	if after == expected {
+		return nil
+	}
+	if bizID == "" {
+		// 空 biz_id 的流水说不出是谁、哪一次改的 —— 那正是这一行存在的理由。
+		return fmt.Errorf("sku %d 的库存覆盖没有 biz_id，拒绝写一行说不清来源的流水", skuID)
+	}
+	return t.q.AppendManualInventoryLog(ctx, db.AppendManualInventoryLogParams{
+		SkuID: skuID, StoreID: storeID, ChangeQty: after - expected, BizID: bizID,
+		BeforeAvailable: expected, AfterAvailable: after,
+	})
 }
 
 // InventoryAdjust 是一次相对调整的全部输入。
@@ -448,6 +472,9 @@ func (t tenantTx) SetStoreInventory(ctx context.Context, storeID, skuID int64,
 	}
 	if row.NewUpdatedAt.Valid {
 		out.UpdatedAt = row.NewUpdatedAt.Time
+	}
+	if err := t.logInventorySet(ctx, storeID, skuID, in.ExpectedAvailableQty, out.AvailableQty, in.BizID); err != nil {
+		return StoreInventory{}, err
 	}
 	return out, nil
 }

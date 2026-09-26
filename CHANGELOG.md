@@ -481,6 +481,11 @@ Migrations `00027`–`00038`, `00053`–`00063`.
 
 ### Changed
 
+- **Setting inventory with `PUT .../inventory` now leaves an `inventory_logs` row**
+  (`biz_type = 5`, `biz_id = set:<staff_id>:<random>`) when the quantity actually changes,
+  so every manual stock change is traceable — not only relative adjustments. A successful
+  compare-and-set proves the old value was `expected_available_qty`, so no extra read is
+  needed. Changing only the warning threshold writes nothing.
 - **`products.total_stock` dropped** (migration `00062`). Nothing had written it since
   `00019`, so it was always 0; `AdminProduct.total_stock` in the API was already computed
   from `inventories` and is unchanged. Seeds or manual SQL that inserted the column must

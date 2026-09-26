@@ -400,3 +400,43 @@ func TestInventoryAdjustConcurrentDeltasAllApply(t *testing.T) {
 		}
 	}
 }
+
+// 比较并设置（PUT）也要留流水：CAS 成功就证明写之前恰好是 expected，
+// 所以 before / delta 不用再读一次就是精确的。只改预警线、数量没变的那一次不写。
+func TestInventorySetLeavesAManualLogToo(t *testing.T) {
+	sh := newAdminShop(t)
+	sku := seedOneSKU(t, sh, "SETLOG", 1000, 10)
+
+	storePath := fmt.Sprintf("/api/v1/admin/stores/%d/skus/%d/inventory", sh.StoreID, sku)
+	wantStatus(t, putAs(t, sh.Host, storePath,
+		`{"available_qty":25,"expected_available_qty":10}`, sh.Token), http.StatusOK, "按门店设为 25")
+	// 单店捷径那一条走的是另一段代码，同样要留。
+	wantStatus(t, putAs(t, sh.Host, fmt.Sprintf("/api/v1/admin/skus/%d/inventory", sku),
+		`{"available_qty":7,"expected_available_qty":25}`, sh.Token), http.StatusOK, "捷径设为 7")
+	// 数量不变、只改预警线：没有库存变动，不写。
+	wantStatus(t, putAs(t, sh.Host, storePath,
+		`{"available_qty":7,"expected_available_qty":7,"warning_qty":3}`, sh.Token), http.StatusOK, "只改预警线")
+	// CAS 对不上：什么都没写，也不该有流水。
+	_ = putAs(t, sh.Host, storePath, `{"available_qty":99,"expected_available_qty":1}`, sh.Token)
+
+	logs := manualLogsOf(t, sh.StoreID, sku)
+	want := []struct{ change, before, after int32 }{{15, 10, 25}, {-18, 25, 7}}
+	if len(logs) != len(want) {
+		t.Fatalf("手工流水有 %d 行，期望 %d 行（两次改了数量；只改预警线与 409 不留）：%+v", len(logs), len(want), logs)
+	}
+	for i, l := range logs {
+		if l.ChangeQty != want[i].change || l.Before != want[i].before || l.After != want[i].after {
+			t.Fatalf("第 %d 行流水是 %+d（%d → %d），期望 %+d（%d → %d）", i+1,
+				l.ChangeQty, l.Before, l.After, want[i].change, want[i].before, want[i].after)
+		}
+		if p := fmt.Sprintf("set:%d:", sh.StaffID); len(l.BizID) <= len(p) || l.BizID[:len(p)] != p {
+			t.Fatalf("第 %d 行流水的 biz_id 是 %q，期望以 %q 打头", i+1, l.BizID, p)
+		}
+		if l.Reason != nil {
+			t.Fatalf("PUT 没有 reason，流水里应为 NULL，实际是 %q", *l.Reason)
+		}
+	}
+	if logs[0].BizID == logs[1].BizID {
+		t.Fatalf("两次 PUT 的 biz_id 一样（%q）—— 流水里分不出是两次操作", logs[0].BizID)
+	}
+}

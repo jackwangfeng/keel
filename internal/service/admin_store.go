@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"unicode/utf8"
@@ -665,8 +667,13 @@ func (s *AdminStoreService) SetStoreInventory(ctx context.Context, storeID, skuI
 			return repository.StoreInventory{}, err
 		}
 	}
+	bizID, err := inventorySetBizID(ctx)
+	if err != nil {
+		return repository.StoreInventory{}, err
+	}
+	in.BizID = bizID
 	var out repository.StoreInventory
-	err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+	err = s.repo.WithTenant(ctx, func(tx repository.Tx) error {
 		if _, e := authorizeStore(ctx, tx, storeID, storeOperate); e != nil {
 			return e
 		}
@@ -863,4 +870,20 @@ func checkCoordPair(lat, lng *float64) error {
 		return fmt.Errorf("%w: lng 是 %v，超出 [-180, 180]", ErrCatalogBadRequest, *lng)
 	}
 	return nil
+}
+
+// inventorySetBizID 给一次比较并设置（PUT .../inventory）拼流水的 biz_id：
+// 「set:<staff_id>:<16 位随机十六进制>」。PUT 天然幂等、不收 Idempotency-Key，
+// 所以「哪一次」只能现取一个随机串 —— 它只需要让两次覆盖在流水里分得开；
+// 「谁」是员工 id，与相对调整的「adj:<staff_id>:<Idempotency-Key>」同一个形状。
+func inventorySetBizID(ctx context.Context) (string, error) {
+	staff, err := requireStaff(ctx)
+	if err != nil {
+		return "", err
+	}
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("取随机串失败: %w", err)
+	}
+	return fmt.Sprintf("set:%d:%s", staff.StaffID, hex.EncodeToString(b[:])), nil
 }

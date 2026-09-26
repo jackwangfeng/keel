@@ -3341,6 +3341,12 @@ export interface paths {
          *     请求体只有一个 `delta`，天然可组合，并在同一个事务里写一行
          *     `inventory_logs`（`biz_type = 5 手工调整`）。
          *     这条 PUT 留给「盘点得出现在就是 N 件」这种**绝对**结论，以及改预警线。
+         *
+         *     ### 流水
+         *
+         *     数量真的变了时，同一个事务里写一行 `inventory_logs`（`biz_type = 5`）：CAS 成功就证明
+         *     写之前恰好是 `expected_available_qty`，所以 `before_available` 就是它、`change_qty` 是
+         *     新值减它，不需要再读一次。只改预警线、或设成原值，不写。按门店那条 PUT 同样如此。
          */
         put: {
             parameters: {

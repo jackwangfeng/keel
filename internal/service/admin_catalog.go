@@ -620,8 +620,12 @@ func (s *AdminCatalogService) SetInventory(ctx context.Context, skuID int64,
 			return repository.Inventory{}, err
 		}
 	}
+	bizID, err := inventorySetBizID(ctx)
+	if err != nil {
+		return repository.Inventory{}, err
+	}
 	var out repository.Inventory
-	err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+	err = s.repo.WithTenant(ctx, func(tx repository.Tx) error {
 		// 00020 之后「这个 SKU 的库存」不再是一个有定义的东西：主键是
 		// (sku_id, store_id)。契约把这条路径的语义写死成
 		// 「**本租户恰好有一家未软删的门店时它就是那一家，否则 409
@@ -641,7 +645,7 @@ func (s *AdminCatalogService) SetInventory(ctx context.Context, skuID int64,
 		if _, e := authorizeStore(ctx, tx, storeID, storeOperate); e != nil {
 			return e
 		}
-		out, e = tx.SetInventory(ctx, storeID, skuID, expected, want, warning)
+		out, e = tx.SetInventory(ctx, storeID, skuID, expected, want, warning, bizID)
 		return e
 	})
 	return out, err

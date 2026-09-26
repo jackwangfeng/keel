@@ -69,6 +69,8 @@ func seedCatalog(t *testing.T) catalogFixture {
 		for _, stmt := range []string{
 			`DELETE FROM product_images WHERE merchant_id = ANY($1)`,
 			`DELETE FROM uploads        WHERE merchant_id = ANY($1)`,
+			// 比较并设置成功且数量变了会写一行手工流水（biz_type = 5），它挡着 skus / stores 的删除。
+			`DELETE FROM inventory_logs WHERE merchant_id = ANY($1)`,
 			`DELETE FROM inventories WHERE merchant_id = ANY($1)`,
 			`DELETE FROM skus       WHERE merchant_id = ANY($1)`,
 			`DELETE FROM products   WHERE merchant_id = ANY($1)`,
@@ -221,7 +223,7 @@ func TestSetInventoryTellsPreconditionFromCrossTenant(t *testing.T) {
 		var inv repository.Inventory
 		err := r.WithTenant(asA, func(q repository.Tx) error {
 			var e error
-			inv, e = q.SetInventory(ctx, f.storeA, f.skuA, 10, 25, nil)
+			inv, e = q.SetInventory(ctx, f.storeA, f.skuA, 10, 25, nil, "set:test")
 			return e
 		})
 		if err != nil {
@@ -238,7 +240,7 @@ func TestSetInventoryTellsPreconditionFromCrossTenant(t *testing.T) {
 	t.Run("自家_CAS不匹配_是409且带当前真实值", func(t *testing.T) {
 		before := realQty(t, f.skuA) // 25
 		err := r.WithTenant(asA, func(q repository.Tx) error {
-			_, e := q.SetInventory(ctx, f.storeA, f.skuA, before+1, 999, nil)
+			_, e := q.SetInventory(ctx, f.storeA, f.skuA, before+1, 999, nil, "set:test")
 			return e
 		})
 		if !errors.Is(err, repository.ErrInventoryPrecondition) {
@@ -276,7 +278,7 @@ func TestSetInventoryTellsPreconditionFromCrossTenant(t *testing.T) {
 			t.Fatalf("夹具坏了：商家 B 的水位是 %d，这次失败就分不清是 CAS 还是不可见", realB)
 		}
 		err := r.WithTenant(asA, func(q repository.Tx) error {
-			_, e := q.SetInventory(ctx, f.storeB, f.skuB, realB, 999, nil)
+			_, e := q.SetInventory(ctx, f.storeB, f.skuB, realB, 999, nil, "set:test")
 			return e
 		})
 		if !errors.Is(err, repository.ErrSKUNotInTenant) {
@@ -311,7 +313,7 @@ func TestSetInventoryTellsPreconditionFromCrossTenant(t *testing.T) {
 			t.Fatal(err)
 		}
 		err := r.WithTenant(asA, func(q repository.Tx) error {
-			_, e := q.SetInventory(ctx, f.storeA, deadSKU, 7, 99, nil)
+			_, e := q.SetInventory(ctx, f.storeA, deadSKU, 7, 99, nil, "set:test")
 			return e
 		})
 		if !errors.Is(err, repository.ErrSKUNotInTenant) {

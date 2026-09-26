@@ -46,7 +46,7 @@ type AdminSKUTx interface {
 	//	errors.Is(err, ErrInventoryPrecondition)   CAS 对不上 → 409，
 	//	                                           errors.As 取 *InventoryConflict
 	//	                                           拿当前真实值
-	SetInventory(ctx context.Context, storeID, skuID int64, expected, want int32, warning *int32) (Inventory, error)
+	SetInventory(ctx context.Context, storeID, skuID int64, expected, want int32, warning *int32, bizID string) (Inventory, error)
 }
 
 // NewSKU 是建 SKU 的入参。AvailableQty 在这里是**允许的**，而在 SKUPatch 里
@@ -306,7 +306,7 @@ func (t tenantTx) SoftDeleteSKU(ctx context.Context, id int64) (int64, error) {
 // store-ambiguous」，而那一步判断在 service 里用 SoleStore 做 —— 放在这里
 // 或放进 SQL，都等于在最热的写路径上默认一个猜测，而猜错的后果是把另一家店
 // 的水位覆盖掉，没有任何东西会响。
-func (t tenantTx) SetInventory(ctx context.Context, storeID, skuID int64, expected, want int32, warning *int32) (Inventory, error) {
+func (t tenantTx) SetInventory(ctx context.Context, storeID, skuID int64, expected, want int32, warning *int32, bizID string) (Inventory, error) {
 	if storeID <= 0 {
 		// 漏传 store_id 的症状最难查：params 里那个字段会取零值，
 		// 而 store_id = 0 匹配不上任何一行，于是 visible_rows = 0，
@@ -361,6 +361,9 @@ func (t tenantTx) SetInventory(ctx context.Context, storeID, skuID int64, expect
 		// 0 是一个合法的库存水位，它会一路写进后台页面。
 		return Inventory{}, fmt.Errorf(
 			"sku %d 写成功但没有回传水位——SetInventoryByCAS 的 SQL 被改坏了", skuID)
+	}
+	if err := t.logInventorySet(ctx, storeID, skuID, expected, *r.NewAvailableQty, bizID); err != nil {
+		return Inventory{}, err
 	}
 	return Inventory{
 		SKUID:        skuID,
