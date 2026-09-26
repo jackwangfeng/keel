@@ -17,6 +17,7 @@
 //     不是第一道。）
 
 import {
+  Category,
   ListProductsQuery,
   Money,
   Order,
@@ -464,12 +465,42 @@ export function previewView(p : OrderPreview) : PreviewView {
  * 商品列表的查询。storeId 来自 store.uts —— 与结算用的是同一家店，
  * 列表上的价格区间才和最后扣的钱对得上。null 表示还没解析出门店，服务端回落默认店。
  */
-export function productListQuery(page : number, pageSize : number, storeId : number | null) : ListProductsQuery {
+export function productListQuery(
+  page : number,
+  pageSize : number,
+  storeId : number | null,
+  categoryId : number | null
+) : ListProductsQuery {
   const q : ListProductsQuery = { page: page, page_size: pageSize }
   if (storeId != null) {
     q.store_id = storeId!
   }
+  // null = 「全部」，不带这个参数。
+  if (categoryId != null) {
+    q.category_id = categoryId!
+  }
   return q
+}
+
+// ---------------------------------------------------------------------------
+// 分类
+// ---------------------------------------------------------------------------
+
+export type CategoryChip = {
+  id : number
+  name : string
+}
+
+/**
+ * 分类树 -> 首页那一排 chip：只取根分类（契约里顶层数组就是根，子分类在 children）。
+ * 一排横向的 chip 放不下两层；有了多层的店再做分类页，那时 children 就用上了。
+ */
+export function categoryChips(tree : Category[]) : CategoryChip[] {
+  const out : CategoryChip[] = []
+  for (let i = 0; i < tree.length; i++) {
+    out.push({ id: tree[i].id, name: tree[i].name } as CategoryChip)
+  }
+  return out
 }
 
 /** 检索请求。store_id 与 GET /products 的同名参数逐字同义（契约原话）。 */
