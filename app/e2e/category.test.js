@@ -38,6 +38,12 @@ describe('商品分类', () => {
     expect(on.length).toBe(1)
     expect(await (await on[0].$('.cat-text-on')).text()).toBe(target.name)
 
+    // 真的筛了：首页的「共 N 件」等于服务端对这个分类给的总数。只比 chip 选中与否的话，
+    // 服务端忽略 category_id（它曾经就是这样）时这条照样绿。
+    const apiBase = process.env.KEEL_API_BASE
+    const want = (await httpGet(apiBase + '/products?page_size=1&category_id=' + target.id)).body.total
+    await waitFor(home, '.list-count', (t) => t === '共 ' + want + ' 件')
+
     // 回到「全部」。
     await chips[0].tap()
     await waitFor(home, '.t-section', (t) => t === '全部商品')

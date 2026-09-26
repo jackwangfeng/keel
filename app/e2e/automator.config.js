@@ -78,6 +78,28 @@ function launchAndroid() {
   adb('install', '-r', APK)
   adb('shell', 'am', 'force-stop', PKG)
   adb('shell', 'am', 'start', '-n', `${PKG}/io.dcloud.uniapp.UniAppActivity`)
+  dismissPermissionDialog()
+}
+
+// 首次启动时 App 要定位（src/api/store.uts），系统弹权限框；框挡在最上面的时候，
+// App 的自动化连接连不回电脑 —— "Failed to connect to runtime"，实测可稳定复现
+// （清掉 App 数据、让它一启动就弹框，再跑就红）。靠 adb 预先授权或预先拒绝都挡不住：
+// MIUI 有自己一层权限管理，pm grant 带「仅本次」标记、pm revoke + user-fixed 也照样弹。
+// 所以启动后看一眼：最上面是权限框（各家都叫 GrantPermissionsActivity）就按返回拒掉。
+// 用例因此走「定位拿不到 → 回落默认店」那条路径，和 iOS 上测的是同一条。
+function dismissPermissionDialog() {
+  const deadline = Date.now() + 8000
+  while (Date.now() < deadline) {
+    const top = adb('shell', 'dumpsys', 'activity', 'activities')
+      .split('\n').find((l) => l.includes('topResumedActivity')) || ''
+    if (top.includes('GrantPermissionsActivity')) {
+      adb('shell', 'input', 'keyevent', 'KEYCODE_BACK')
+      console.log('[e2e] 启动时弹了权限框，已按返回拒绝（走回落默认店那条路径）')
+      return
+    }
+    if (top.includes(PKG)) return
+    execFileSync('sleep', ['0.5'])
+  }
 }
 
 function launchIos() {

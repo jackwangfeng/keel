@@ -33,7 +33,7 @@
 
       <view class="section between">
         <text class="t-section">{{ sectionTitle }}</text>
-        <text v-if="total > 0" class="t-hint">共 {{ total }} 件</text>
+        <text v-if="total > 0" class="t-hint list-count">共 {{ total }} 件</text>
       </view>
 
       <view v-if="error != ''" class="body">
