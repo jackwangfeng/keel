@@ -312,3 +312,43 @@ func TestStaffRoleAndScopesMustMatch(t *testing.T) {
 		t.Fatalf("响应里的范围是 region=%v store=%v，期望 store=%v", st.RegionIds, st.StoreIds, want)
 	}
 }
+
+// 改门店所属大区时，新旧两个大区都得在范围内（authorizeStoreMove）。
+// 只判旧的不够：华北的大区管理员能把自己的店挪进华东，华东凭空多出一家店，
+// 而华北那位从此也管不着它了。
+func TestRegionManagerCannotMoveAStoreOutOfTheirRegion(t *testing.T) {
+	fx := newPermFixture(t)
+	tok := fx.tokens[roleRegion]
+
+	// 阳性对照：他能改本大区门店的别的字段。
+	wantStatus(t, patchAs(t, fx.sh.Host, fmt.Sprintf("/api/v1/admin/stores/%d", fx.N2),
+		`{"phone":"010-5678"}`, tok), http.StatusOK, "大区管理员改华北门店的电话")
+
+	wantForbidden(t, patchAs(t, fx.sh.Host, fmt.Sprintf("/api/v1/admin/stores/%d", fx.N2),
+		fmt.Sprintf(`{"region_id":%d}`, fx.East), tok), outOfScope, "大区管理员把华北门店挪进华东")
+	wantForbidden(t, patchAs(t, fx.sh.Host, fmt.Sprintf("/api/v1/admin/stores/%d", fx.E1),
+		fmt.Sprintf(`{"region_id":%d}`, fx.North), tok), outOfScope, "大区管理员把华东门店拉进华北")
+
+	if got := adminQueryInt64(t, `SELECT region_id FROM stores WHERE id = $1`, fx.N2); got != fx.North {
+		t.Fatalf("被拒之后华北二店的大区是 %d，期望还是华北 %d", got, fx.North)
+	}
+}
+
+// 建店时带 is_default: true 等于设默认门店，只有管理员能做
+// （否则 PUT .../default 那条限制从 POST 绕过去了）。
+func TestOnlyAdminCanCreateADefaultStore(t *testing.T) {
+	fx := newPermFixture(t)
+	body := func() string {
+		return fmt.Sprintf(`{"region_id":%d,"code":"d-%s","name":"默认店候选","is_default":true}`, fx.North, fx.next())
+	}
+	// 操作员与大区管理员（华北在他范围里）都不行。
+	wantForbidden(t, postIdem(t, fx.sh.Host, "/api/v1/admin/stores", body(), fx.tokens[roleOperator]),
+		roleForbidden, "操作员建默认门店")
+	wantForbidden(t, postIdem(t, fx.sh.Host, "/api/v1/admin/stores", body(), fx.tokens[roleRegion]),
+		roleForbidden, "大区管理员建默认门店")
+	// 阳性对照：管理员走到的是业务规则（已经有默认店了 → 409），不是 403。
+	w := postIdem(t, fx.sh.Host, "/api/v1/admin/stores", body(), fx.sh.Token)
+	if typ, _ := problemTypeOf(w); w.Code != http.StatusConflict || typ != "https://keel.dev/problems/default-store-conflict" {
+		t.Fatalf("管理员建第二家默认店：期望 409 default-store-conflict，实际 %d %s", w.Code, w.Body.String())
+	}
+}
