@@ -185,7 +185,7 @@ compose 里已经有一个 `KEEL_ADMIN_PASSWORD`，而那是数据库超级用�
 | 类目 | 真能用 | `GET/POST /admin/categories`、`PATCH/DELETE /admin/categories/{id}` |
 | 上传 | 真能用 | `POST /admin/uploads` |
 | 员工 | 真能用 | `GET/POST /admin/staff`、`PATCH /admin/staff/{id}` |
-| 开店 | 真能用（仅平台级） | `POST /admin/merchants` |
+| 商家管理 | 真能用（仅平台级） | `GET/POST /admin/merchants`、`GET/PATCH /admin/merchants/{id}`，顶栏切换器带 `X-Keel-Merchant` |
 | 订单 | **留位置** | 契约里**没有**后台订单列表；`POST /admin/orders/{order_no}/shipments` 与 `POST /admin/refunds/{refund_no}/audit` 契约里有但服务端还没 handler（挂在 `contract_test.go` 的 `notYetRouted`）。这一页把这三件事写出来，不画表格 |
 | 大区 | 真能用 | `GET/POST /admin/regions`、`PATCH/DELETE /admin/regions/{id}`、`GET /admin/regions/{id}/products`、`PUT .../products/{id}/listing`、`PUT/DELETE .../skus/{id}/price` |
 | 门店 | 真能用 | `GET/POST /admin/stores`、`GET/PATCH/DELETE /admin/stores/{id}`、`PUT .../fence`、`PUT .../default`、`GET .../products`、`PUT .../products/{id}/listing`、`PUT/DELETE .../skus/{id}/price`、`GET .../inventories`、`PUT .../skus/{id}/inventory` |
@@ -258,6 +258,77 @@ BD-09 往返约 5 厘米（它公开的那对公式本身不严格互逆，测�
 PUT 回来的结果。要逐 SKU 回显，契约得加一条读接口。
 
 ---
+
+## 五之三、商家管理与租户切换（平台级）
+
+### 请求头在哪一层生效
+
+`X-Keel-Merchant: <商家 code>`，只在 **`internal/auth/staff_tenant.go`** 里读，由
+`StaffBearer` 在验完签名、查完会话、确认在岗**之后**调用（StaffBearer 里只多了一次调用）。
+平台级会话带了它：按 code 查出商家（含停用、不含软删），**替换** ctx 里由 Host 解析出的
+租户，之后 `WithTenant` 的 `SET LOCAL app.merchant_id` 就落在这家店上，行级安全照旧兜底。
+
+放在 StaffBearer 里而不是一道单独的中间件：「商家级员工带头要 403」必须对**每一条**后台
+路由成立，单独的中间件漏挂一条，那条路由就会静默忽略这个头。租户解析器
+（`internal/tenant/resolver.go`）一个字没改，它照旧只看配置与 Host，从不读请求头；
+那句「刻意不支持用请求头指定租户」旁边补了一段为什么这个例外不违背它（前提是平台级鉴权）。
+
+| 谁带了头 | 结果 |
+| --- | --- |
+| 平台级会话 | 落在头指定的那家店（读写都是）；停用的店也能切进去 |
+| 商家级会话 | **403 `tenant-switch-forbidden`**，不生效，也不静默忽略 |
+| 买家接口 / 公开接口 / 未登录 | 根本不读；后台接口上未登录先是 401 |
+| code 不存在、已软删、空值、出现两次 | **422 `unknown-merchant`**，不回落到 Host 那家 |
+
+界面这一侧：头只从 `src/api/merchantScope.ts` 一处出来，判据是会话本身
+（`staff.merchant_id === null`），商家级员工的请求永远不带；选择绑在会话 token 的指纹上，
+登出、换人登录都读不到上一个会话选的店。
+
+### 写权限：不给 keel_app 加 UPDATE
+
+改名与停用 / 启用走迁移 00024 的 `merchant_revisions`：只追加，keel_app 只有
+SELECT + INSERT，INSERT 策略是 `WITH CHECK (platform_scope())`——租户作用域里插不进来，
+数据库层就是 42501。merchants 那一行一个字节不改（keel_app 在它上面仍然没有 UPDATE）。
+当前状态取最新一行修订，解析层、启动自检、定时任务与目录接口共用同一段 SQL
+（`tenant.EffectiveMerchantFrom`）。完整论证在 00024 的文件头。
+
+### 单商家部署
+
+`POST /admin/merchants` 在配了 `KEEL_DEFAULT_MERCHANT` 时回 409 `single-merchant-mode`；
+同一套部署里停用那唯一一家店、或启用另一家，也回 409——三者都会让下一次启动的自检失败。
+商家管理页据 `single_merchant_mode` 把开店按钮置灰并照服务端那句话说明原因。
+
+### 已知限制
+
+- **多商家部署里，后台必须从一个能解析到活跃商家的域名打开**（例如 `shop-a.<基础域名>`）：
+  租户中间件在鉴权之前就要一个租户，平台管理员的「入口店」由 Host 给出，头只是在那之后换掉它。
+  那家入口店本身被停用的话，要换一个域名打开后台。
+- 新开的店没有大区与门店（开店这条路不建），买家打开它会是「不在服务范围」，
+  要平台管理员切过去先建门店。
+- 平台管理员切到某家店之后「加员工」加的仍是平台操作员：员工的租户从会话继承，
+  切换只换数据的租户，不换身份。
+
+### 安全测试与变异结果
+
+测试在 `internal/handler/tenant_switch_test.go`。每一条都做过变异：改掉被守护的那一行、
+跑对应测试、用备份文件还原（不用 git checkout）。16 个变异全部让对应的测试变红：
+
+| 变异 | 红的测试 |
+| --- | --- |
+| 平台带头但不替换 ctx 里的租户 | TestPlatformSwitchLandsOnTheNamedMerchant |
+| 商家级带头照样生效 | TestMerchantStaffWithSwitchHeaderIsRejected、TestSwitchHeaderIsRefusedForMerchantStaffOnEveryStaffRoute |
+| 商家级带头静默忽略（200，落在自己店） | 同上 |
+| 买家侧解析器读这个头 | TestBuyerRequestIgnoresSwitchHeader |
+| 鉴权之前就读头（零值身份 = 平台级） | TestAnonymousRequestIgnoresSwitchHeader（得到 422 而不是 401） |
+| code 不存在时回落到 Host 那家 | TestUnknownMerchantCodeIsRejectedNotFallenBack |
+| 单商家部署照样开店 | TestSingleMerchantModeRefusesToOpenAShop（201，库里多一家） |
+| 单商家部署照样停用默认店 | TestSingleMerchantModeRefusesToDisableTheDefaultShop |
+| 平台切换只认营业中的店 | TestDisabledMerchantIs404ForBuyersButSwitchable（422） |
+| 买家侧解析忽略修订、直接读 m.status | 同上（停用后买家侧仍 200） |
+| 商家列表漏掉停用的店 | 同上 |
+| 修订表写策略放成 `WITH CHECK (true)` | TestTenantScopeCannotReviseTheMerchantDirectory；migrate_test 的 TestTenantPoliciesArePresentAndExact |
+| 有一条后台路由没挂 StaffBearer | TestSwitchHeaderIsRefusedForMerchantStaffOnEveryStaffRoute |
+| 契约里有一条后台操作漏声明 KeelMerchant | TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations |
 
 ## 六、本地开发
 
