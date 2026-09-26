@@ -158,7 +158,7 @@ const statusOptions = Object.entries(ORDER_STATUS).map(([k, v]) => ({ value: Num
                     <el-link type="primary">{{ row.order_no }}</el-link>
                 </template>
             </el-table-column>
-            <el-table-column label="状态" width="170">
+            <el-table-column label="状态" width="210">
                 <template #default="{ row }">
                     <el-tag size="small" :type="ORDER_STATUS[row.status as keyof typeof ORDER_STATUS].tag">
                         {{ ORDER_STATUS[row.status as keyof typeof ORDER_STATUS].text }}
