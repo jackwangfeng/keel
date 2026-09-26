@@ -1,24 +1,39 @@
 <template>
   <view class="page">
-    <view class="card">
-      <text class="title">手机号 + 口令登录</text>
-      <text class="muted">
-        契约里 code（短信验证码）与 password 二选一。后端这一版只有口令这条通了，
-        所以这里只放口令。
-      </text>
-      <input class="input" type="text" v-model="phone" placeholder="手机号" />
-      <input class="input" type="password" v-model="password" placeholder="口令" />
-      <button class="btn" :disabled="busy" @click="submit">登录</button>
-      <button v-if="loggedIn" class="btn-ghost" @click="doLogout">退出登录</button>
-      <text v-if="message != ''" class="err">{{ message }}</text>
-    </view>
+    <scroll-view class="scroll" direction="vertical">
+      <view class="wrap">
+        <view class="logo"><text class="logo-text">K</text></view>
+        <text class="t-display">欢迎回来</text>
+        <text class="t-sub hello">登录后即可下单、查看订单</text>
 
-    <view class="card">
-      <text class="muted">
-        令牌是按「这个服务地址」存的。换了服务地址（= 换了一家店），本地令牌当场作废 ——
-        服务端刻意让 A 店签发的令牌在 B 店被拒，留着它只会让用户撞上一个来路不明的 401。
-      </text>
-      <text class="muted">当前服务地址：{{ baseUrl }}</text>
+        <!-- 契约里 code（短信验证码）与 password 二选一。后端这一版只有口令这条通了，
+             所以这里只放口令。 -->
+        <view class="form">
+          <view class="field">
+            <text class="field-label">手机号</text>
+            <input class="field-input" type="number" v-model="phone" placeholder="请输入手机号" />
+          </view>
+          <view class="field">
+            <text class="field-label">密码</text>
+            <input class="field-input" type="password" v-model="password" placeholder="请输入密码" />
+          </view>
+        </view>
+
+        <view :class="['btn', busy ? 'btn-off' : '']" @click="submit">
+          <text class="btn-text">{{ busy ? '登录中…' : '登录' }}</text>
+        </view>
+        <text v-if="message != ''" :class="failed ? 't-err msg' : 't-ok msg'">{{ message }}</text>
+
+        <view v-if="loggedIn" class="logout">
+          <text class="t-link" @click="doLogout">退出当前账号</text>
+        </view>
+      </view>
+    </scroll-view>
+
+    <!-- 令牌是按「这个服务地址」存的：换了服务地址（= 换了一家店），本地令牌当场作废。
+         服务端刻意让 A 店签发的令牌在 B 店被拒。这里把当前是哪家店低调地写出来。 -->
+    <view v-if="baseUrl.indexOf('://') > 0" class="foot" :style="{ paddingBottom: (16 + safeBottom) + 'px' }">
+      <text class="t-hint">当前店铺 {{ baseUrl }}</text>
     </view>
   </view>
 </template>
@@ -33,10 +48,15 @@ export default {
       phone: '13800000000',
       password: 'keel-demo-2026',
       message: '',
+      failed: false,
       busy: false,
       loggedIn: false,
       baseUrl: '',
+      safeBottom: 0,
     }
+  },
+  onLoad() {
+    this.safeBottom = uni.getWindowInfo().safeAreaInsets.bottom
   },
   onShow() {
     this.baseUrl = getBaseUrl()
@@ -44,6 +64,7 @@ export default {
   },
   methods: {
     submit() {
+      if (this.busy) return
       this.busy = true
       this.message = ''
       login(
@@ -59,10 +80,18 @@ export default {
           saveSession(session)
           this.busy = false
           this.loggedIn = true
-          this.message = '登录成功：' + (session.nickname != '' ? session.nickname : this.phone)
+          this.failed = false
+          this.message = '登录成功，' + (session.nickname != '' ? session.nickname : this.phone)
+          // 从下单页、订单页跳过来的，登录完回去接着做；那些页面在 onShow 里会重新判断登录态。
+          if (getCurrentPages().length > 1) {
+            setTimeout(() => {
+              uni.navigateBack({})
+            }, 600)
+          }
         },
         (f: ApiFailure) => {
           this.busy = false
+          this.failed = true
           this.message = f.message
         }
       )
@@ -72,6 +101,7 @@ export default {
         () => {
           clearSession()
           this.loggedIn = false
+          this.failed = false
           this.message = '已退出'
         },
         (f: ApiFailure) => {
@@ -79,7 +109,8 @@ export default {
           // 只会让下一次请求变成一个莫名其妙的 401。
           clearSession()
           this.loggedIn = false
-          this.message = '本地已退出（服务端吊销失败：' + f.message + '）'
+          this.failed = true
+          this.message = '已在本机退出（服务端吊销失败：' + f.message + '）'
         }
       )
     },
@@ -88,18 +119,40 @@ export default {
 </script>
 
 <style>
-.title {
-  font-size: 15px;
-  font-weight: bold;
+.wrap {
+  padding: 32px 28px 24px 28px;
 }
-.input {
-  height: 38px;
-  margin-top: 10px;
-  padding-left: 8px;
-  border-width: 1px;
-  border-style: solid;
-  border-color: #dddddd;
-  border-radius: 4px;
-  font-size: 14px;
+.logo {
+  width: 56px;
+  height: 56px;
+  border-radius: 18px;
+  background-color: #3B2A20;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 28px;
+}
+.logo-text {
+  font-size: 26px;
+  font-weight: bold;
+  color: #F6F1EA;
+}
+.hello {
+  margin-top: 6px;
+}
+.form {
+  margin-top: 36px;
+  margin-bottom: 36px;
+}
+.msg {
+  margin-top: 14px;
+  text-align: center;
+}
+.logout {
+  margin-top: 24px;
+  align-items: center;
+}
+.foot {
+  align-items: center;
+  padding-top: 12px;
 }
 </style>

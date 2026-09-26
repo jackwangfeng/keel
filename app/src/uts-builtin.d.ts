@@ -27,3 +27,13 @@ declare interface UTSJSONObject {
 interface JSON {
   parse<T>(text: string): T | null
 }
+
+/**
+ * 编译期常量。vite.config.js 的 `define` 注入，DCloud 编译器在 Kotlin 与 JS 两边都替换成
+ * 字面量 —— 运行时并不存在一个 process 对象。只声明我们自己注入的那一项。
+ */
+declare const process: {
+  env: {
+    KEEL_API_BASE: string
+  }
+}

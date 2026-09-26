@@ -1,75 +1,111 @@
 <template>
   <view class="page">
-    <view class="card">
-      <text class="title">{{ orderNo }}</text>
-    </view>
+    <scroll-view class="scroll" direction="vertical">
+      <view class="body">
+        <!-- 状态 -->
+        <view class="status">
+          <view class="row">
+            <text class="t-display">{{ view != null ? view!.head.statusText : (notImplemented ? '待支付' : '') }}</text>
+            <view v-if="view != null && view!.head.refundText != ''" class="badge badge-refund refund">
+              <text class="badge-text badge-refund-text">{{ view!.head.refundText }}</text>
+            </view>
+          </view>
+          <text class="t-sub">{{ statusLine }}</text>
+        </view>
 
-    <!-- 只有服务端真的回了路由层 404/405 才显示。接口通了它自然不出现。 -->
-    <view v-if="notImplemented" class="card">
-      <text class="title">GET /orders/&#123;order_no&#125; 后端尚未接上</text>
-      <text class="muted">
-        下单本身是通的（POST /orders 返回了上面这个订单号），但详情这条路由打过去是
-        {{ error }}。页面按契约写好了，接口一通就有内容。
-      </text>
-    </view>
-    <text v-else-if="error != ''" class="err pad">{{ error }}</text>
+        <!-- 只有服务端真的回了路由层 404/405 才显示。接口通了它自然不出现。 -->
+        <view v-if="notImplemented" class="card">
+          <text class="t-section">订单详情暂时无法加载</text>
+          <text class="t-sub">
+            订单已经创建成功，但服务器还没有开放详情查询（{{ error }}）。你仍然可以在下面发起支付。
+          </text>
+        </view>
+        <view v-else-if="error != ''" class="card"><text class="t-err">{{ error }}</text></view>
 
-    <view v-if="view != null" class="card">
-      <view class="row">
-        <text class="muted">{{ view!.head.statusText }}</text>
-        <text v-if="view!.head.refundText != ''" class="muted refund">{{ view!.head.refundText }}</text>
-        <view class="spacer"></view>
-        <text class="price">{{ view!.head.payableText }}</text>
+        <view v-if="view != null && view!.receiver != ''" class="card">
+          <text class="t-overline">收货信息</text>
+          <view class="gap-s"></view>
+          <text class="t-body">{{ view!.receiver }}</text>
+        </view>
+
+        <view v-if="view != null && view!.items.length > 0" class="card">
+          <view v-for="(it, idx) in view!.items" :key="idx" :class="['row', idx > 0 ? 'item-next' : '']">
+            <view class="cover thumb" :style="{ backgroundColor: it.cover.color }">
+              <image v-if="it.cover.imageUrl != ''" class="cover-img" :src="it.cover.imageUrl" mode="aspectFill"></image>
+              <text v-else class="cover-glyph thumb-glyph">{{ it.cover.glyph }}</text>
+            </view>
+            <view class="fill item-info">
+              <text class="t-section">{{ it.title }}</text>
+              <text class="t-hint">{{ it.priceText }} × {{ it.quantity }}</text>
+            </view>
+            <text class="t-price">{{ it.amountText }}</text>
+          </view>
+
+          <view class="divider"></view>
+          <view class="kv"><text class="t-sub">商品金额</text><text class="t-body">{{ view!.goodsAmountText }}</text></view>
+          <view class="kv"><text class="t-sub">运费</text><text class="t-body">{{ view!.freightText }}</text></view>
+          <view class="kv"><text class="t-sub">优惠</text><text class="t-body">{{ view!.discountText }}</text></view>
+          <view class="kv"><text class="t-sub">已付</text><text class="t-body">{{ view!.paidText }}</text></view>
+          <view class="divider"></view>
+          <view class="kv"><text class="t-section">应付</text><text class="t-price">{{ view!.head.payableText }}</text></view>
+        </view>
+
+        <view v-if="view != null && view!.payments.length > 0" class="card">
+          <text class="t-overline">支付记录</text>
+          <view v-for="(p, idx) in view!.payments" :key="idx" class="kv">
+            <text class="t-body">{{ p.channelText }}</text>
+            <view class="row">
+              <text class="t-hint pay-state">{{ p.statusText }}</text>
+              <text class="t-body">{{ p.amountText }}</text>
+            </view>
+          </view>
+        </view>
+
+        <!-- 支付方式。契约：POST /orders/{order_no}/payments，同样要 Idempotency-Key。
+             这里的键是进这个页面时生成的那一个，重复点不会开出第二张支付调起。 -->
+        <view v-if="payable" class="card-flat">
+          <text class="t-overline pay-head">支付方式</text>
+          <view v-for="c in channels" :key="c.key" class="pay-row" @click="pick(c.key)">
+            <view class="pay-icon" :style="{ backgroundColor: c.color }"><text class="pay-icon-text">{{ c.glyph }}</text></view>
+            <text class="t-body fill">{{ c.name }}</text>
+            <view :class="['radio', channel == c.key ? 'radio-on' : '']">
+              <view v-if="channel == c.key" class="radio-dot"></view>
+            </view>
+          </view>
+        </view>
+        <view v-if="payMessage != ''" class="msg">
+          <text :class="payFailed ? 't-err' : 't-ok'">{{ payMessage }}</text>
+        </view>
+
+        <!-- 沙箱这件事必须写在脸上。截图里看不出「这是沙箱」的话，
+             它看起来就像接了真的微信支付 —— 那是在骗人。 -->
+        <view v-if="sandboxNotice != ''" class="notice">
+          <text class="notice-title">⚠ 沙箱支付，没有真实资金流动</text>
+          <text class="notice-text">{{ sandboxNotice }}</text>
+          <view v-if="canSettle">
+            <view class="gap-m"></view>
+            <view :class="['btn-ghost', 'settle', settling ? 'btn-off' : '']" @click="settle">
+              <text class="btn-ghost-text">模拟支付完成（投递沙箱回调）</text>
+            </view>
+          </view>
+          <text v-if="settleMessage != ''" :class="settleFailed ? 't-err' : 't-ok'">{{ settleMessage }}</text>
+        </view>
+
+        <view class="meta">
+          <view class="kv"><text class="t-hint">订单号</text><text class="t-mono">{{ orderNo }}</text></view>
+          <view v-if="view != null" class="kv"><text class="t-hint">下单时间</text><text class="t-hint">{{ view!.head.createdAt }}</text></view>
+        </view>
       </view>
-      <text v-if="view!.receiver != ''" class="muted">{{ view!.receiver }}</text>
-      <view class="row line"><text class="label">商品金额</text><text>{{ view!.goodsAmountText }}</text></view>
-      <view class="row line"><text class="label">运费</text><text>{{ view!.freightText }}</text></view>
-      <view class="row line"><text class="label">优惠</text><text>{{ view!.discountText }}</text></view>
-      <view class="row line"><text class="label">已付</text><text>{{ view!.paidText }}</text></view>
-    </view>
+    </scroll-view>
 
-    <view v-if="view != null && view!.items.length > 0" class="card">
-      <text class="title">商品</text>
-      <view v-for="(it, idx) in view!.items" :key="idx" class="row line">
-        <text class="flex1">{{ it.title }}</text>
-        <text class="muted">x{{ it.quantity }}</text>
-        <text class="price">{{ it.amountText }}</text>
+    <view v-if="payable" class="bar" :style="{ paddingBottom: (10 + safeBottom) + 'px' }">
+      <view class="fill">
+        <text class="t-hint">应付</text>
+        <text class="t-price-l">{{ view != null ? view!.head.payableText : '—' }}</text>
       </view>
-    </view>
-
-    <view v-if="view != null && view!.payments.length > 0" class="card">
-      <text class="title">支付记录</text>
-      <view v-for="(p, idx) in view!.payments" :key="idx" class="row line">
-        <text class="flex1">{{ p.channelText }}</text>
-        <text class="muted">{{ p.statusText }}</text>
-        <text class="price">{{ p.amountText }}</text>
+      <view :class="['btn', 'bar-btn', paying ? 'btn-off' : '']" @click="pay">
+        <text class="btn-text">{{ paying ? '处理中…' : '立即支付' }}</text>
       </view>
-    </view>
-
-    <view v-if="payable" class="card">
-      <text class="title">发起支付</text>
-      <text class="muted">
-        契约：POST /orders/&#123;order_no&#125;/payments，同样要 Idempotency-Key。
-        这里的键是进这个页面时生成的那一个，重复点不会开出第二张支付调起。
-      </text>
-      <view class="row line">
-        <text :class="channel == 'wechat' ? 'ch-on' : 'ch-off'" @click="pick('wechat')">微信</text>
-        <text :class="channel == 'alipay' ? 'ch-on' : 'ch-off'" @click="pick('alipay')">支付宝</text>
-        <text :class="channel == 'balance' ? 'ch-on' : 'ch-off'" @click="pick('balance')">余额</text>
-      </view>
-      <button class="btn" :disabled="paying" @click="pay">发起支付</button>
-      <text v-if="payMessage != ''" :class="payFailed ? 'err' : 'ok'">{{ payMessage }}</text>
-    </view>
-
-    <!-- 沙箱这件事必须写在脸上。截图里看不出「这是沙箱」的话，
-         它看起来就像接了真的微信支付 —— 那是在骗人。 -->
-    <view v-if="sandboxNotice != ''" class="card sandbox">
-      <text class="title">⚠ 沙箱支付，没有真实资金流动</text>
-      <text class="muted">{{ sandboxNotice }}</text>
-      <button v-if="canSettle" class="btn" :disabled="settling" @click="settle">
-        投递沙箱回调，把这一单推到已支付
-      </button>
-      <text v-if="settleMessage != ''" :class="settleFailed ? 'err' : 'ok'">{{ settleMessage }}</text>
     </view>
   </view>
 </template>
@@ -86,6 +122,13 @@ import {
 import { newIdempotencyKey } from '@/api/idempotency.uts'
 import { orderDetailView, yuan, OrderDetailView } from '@/api/view.uts'
 
+type Channel = {
+  key : string
+  name : string
+  glyph : string
+  color : string
+}
+
 export default {
   data() {
     return {
@@ -95,6 +138,11 @@ export default {
       error: '',
       notImplemented: false,
       channel: 'wechat',
+      channels: [
+        { key: 'wechat', name: '微信支付', glyph: '微', color: '#6F9A6A' },
+        { key: 'alipay', name: '支付宝', glyph: '支', color: '#6A8BB0' },
+        { key: 'balance', name: '余额', glyph: '余', color: '#B5733A' },
+      ] as Channel[],
       payKey: '',
       paying: false,
       payMessage: '',
@@ -105,9 +153,24 @@ export default {
       settling: false,
       settleMessage: '',
       settleFailed: false,
+      safeBottom: 0,
     }
   },
+  computed: {
+    statusLine(): string {
+      const v = this.view
+      if (v == null) return ''
+      const t = v.head.statusText
+      if (t == '待支付') return '订单已创建，完成支付后商家开始备货'
+      if (t == '已支付') return '支付成功，商家正在准备发货'
+      if (t == '已发货') return '包裹已在路上'
+      if (t == '已完成') return '订单已完成，感谢光临'
+      if (t == '已关闭') return '订单已关闭'
+      return ''
+    },
+  },
   onLoad(options: OnLoadOptions) {
+    this.safeBottom = uni.getWindowInfo().safeAreaInsets.bottom
     const raw = options['order_no']
     this.orderNo = raw != null ? '' + raw : ''
     // 支付的幂等键同样是「进页面生成一次」。
@@ -117,7 +180,7 @@ export default {
   methods: {
     load() {
       if (this.orderNo == '') {
-        this.error = '没有 order_no'
+        this.error = '没有指定订单'
         return
       }
       getOrder(
@@ -141,6 +204,7 @@ export default {
       this.channel = c
     },
     pay() {
+      if (this.paying) return
       this.paying = true
       this.payFailed = false
       this.payMessage = ''
@@ -151,7 +215,7 @@ export default {
         (intent, replayed) => {
           this.paying = false
           this.payMessage =
-            (replayed ? '这是上次那次调起（Idempotency-Replayed: true）：' : '支付调起已创建：') +
+            (replayed ? '这笔支付之前已经发起过，本次没有重复发起：' : '已发起支付：') +
             intent.payment_no + ' ' + yuan(intent.amount_cents)
           const payload = sandboxPayloadOf(intent)
           if (payload == null || payload!.sandbox != true) {
@@ -163,21 +227,21 @@ export default {
             this.settleEnvelope = envelope
             this.canSettle = true
           } else {
-            this.settleMessage = '这个渠道没给沙箱结算指令，只能等真实回调'
+            this.settleMessage = '这个渠道没有沙箱结算指令，只能等真实回调'
           }
         },
         (f: ApiFailure) => {
           this.paying = false
           this.payFailed = true
           this.payMessage = f.notImplemented
-            ? 'POST /orders/{order_no}/payments 后端尚未接上（' + f.status.toString() + '）'
+            ? '服务器还没有开放支付（' + f.status.toString() + '）'
             : f.message
         }
       )
     },
     settle() {
       const envelope = this.settleEnvelope
-      if (envelope == null) {
+      if (envelope == null || this.settling) {
         return
       }
       this.settling = true
@@ -188,7 +252,8 @@ export default {
         () => {
           this.settling = false
           this.canSettle = false
-          this.settleMessage = '回调已入账。刷新订单看状态。'
+          this.settleMessage = '回调已入账，订单状态已刷新。'
+          this.payMessage = ''
           this.load()
         },
         (f: ApiFailure) => {
@@ -203,52 +268,80 @@ export default {
 </script>
 
 <style>
-.title {
-  font-size: 15px;
-  font-weight: bold;
-}
-.line {
-  margin-top: 8px;
-}
-.label {
-  width: 90px;
-  font-size: 14px;
-  color: #666666;
-}
-.spacer {
-  flex: 1;
-}
-.flex1 {
-  flex: 1;
-  font-size: 14px;
+.status {
+  padding: 20px 4px 8px 4px;
 }
 .refund {
-  margin-left: 8px;
-  color: #d4380d;
+  margin-left: 10px;
 }
-.ch-on {
-  color: #1677ff;
+.thumb {
+  width: 56px;
+  height: 56px;
+  border-radius: 10px;
+}
+.thumb-glyph {
+  font-size: 22px;
+}
+.item-info {
+  margin-left: 12px;
+  margin-right: 8px;
+}
+.item-next {
+  margin-top: 14px;
+}
+.pay-state {
+  margin-right: 10px;
+}
+.pay-head {
+  padding: 18px 18px 6px 18px;
+}
+.pay-row {
+  flex-direction: row;
+  align-items: center;
+  padding: 12px 18px;
+}
+.pay-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  align-items: center;
+  justify-content: center;
+  margin-right: 12px;
+}
+.pay-icon-text {
+  font-size: 13px;
+  color: #FFFDF9;
   font-weight: bold;
-  font-size: 14px;
-  margin-right: 16px;
 }
-.ch-off {
-  color: #666666;
-  font-size: 14px;
-  margin-right: 16px;
-}
-.sandbox {
+.radio {
+  width: 20px;
+  height: 20px;
+  border-radius: 10px;
   border-width: 1px;
   border-style: solid;
-  border-color: #faad14;
-  background-color: #fffbe6;
+  border-color: #D3C8BA;
+  align-items: center;
+  justify-content: center;
 }
-.pad {
-  padding: 12px;
+.radio-on {
+  border-color: #3B2A20;
 }
-.ok {
-  color: #237804;
-  font-size: 13px;
-  margin-top: 8px;
+.radio-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 5px;
+  background-color: #3B2A20;
+}
+.msg {
+  padding: 12px 4px 0 4px;
+}
+.settle {
+  border-color: #B7791F;
+}
+.meta {
+  padding: 20px 4px 0 4px;
+}
+.bar-btn {
+  width: 160px;
 }
 </style>
