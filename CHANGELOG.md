@@ -185,6 +185,20 @@ becomes `0.1.0` when the remaining M4 work is in.
 
 Listed because a changelog that only lists wins is an advertisement.
 
+- **Two platform-level operations are not idempotent: opening a shop
+  (`POST /admin/merchants`) and adding staff (`POST /admin/staff`).** Every other
+  back-office write replays the first response when the same `Idempotency-Key` is
+  sent twice. These two answer the retry with `409` instead. Nothing is created
+  twice — unique constraints on the shop code and the e-mail hold — but a client
+  that retried after a dropped response sees a conflict where it should see the
+  original result. The cause is structural: idempotency records are keyed by
+  tenant, and a platform-level session has none. Fixing it means a nullable tenant
+  column plus a matching change to its row-level-security policy — the same shape
+  that, on the `staff` table, took deliberate care to keep from becoming a
+  privilege-escalation path — so it was deferred to M5 rather than rushed before
+  the first release. `TestPlatformScopedWritesAreNotYetIdempotent` asserts today's
+  `409` and will go red when the fix lands.
+
 - **No linter.** There is no golangci-lint configuration in the repository.
 - **`trace_id` appears nowhere in business code**, despite structured logging
   being in place everywhere.
