@@ -24,6 +24,9 @@ SELECT count(*)
 //
 // 条件必须与 ListProducts 逐字一致：两边只要有一处不同，total 数的就不是
 // 列表实际会分出来的那批行。
+//
+// 它**不需要**那个 LATERAL：价格区间是 SELECT 出来的东西，不是筛选条件，
+// 而这条查询一列都不返回。加上去只会让每一行多做一次聚合，且改不了 count。
 func (q *Queries) CountProducts(ctx context.Context) (int64, error) {
 	row := q.db.QueryRow(ctx, countProducts)
 	var count int64
@@ -32,12 +35,19 @@ func (q *Queries) CountProducts(ctx context.Context) (int64, error) {
 }
 
 const getProduct = `-- name: GetProduct :one
-SELECT id, category_id, title, subtitle, description, min_price_cents,
-       max_price_cents, sales_count, status
-  FROM products
- WHERE id = $1
-   AND deleted_at IS NULL
-   AND status = 1
+SELECT p.id, p.category_id, p.title, p.subtitle, p.description,
+       COALESCE(agg.min_price, 0)::bigint AS min_price_cents,
+       COALESCE(agg.max_price, 0)::bigint AS max_price_cents,
+       p.sales_count, p.status
+  FROM products p
+  LEFT JOIN LATERAL (
+        SELECT min(s.price_cents) AS min_price, max(s.price_cents) AS max_price
+          FROM skus s
+         WHERE s.product_id = p.id AND s.deleted_at IS NULL
+       ) agg ON TRUE
+ WHERE p.id = $1
+   AND p.deleted_at IS NULL
+   AND p.status = 1
 `
 
 type GetProductRow struct {
@@ -59,6 +69,9 @@ type GetProductRow struct {
 // 同样刻意不带 WHERE merchant_id：租户由 RLS 挡。拿别家店的 product_id 打过来，
 // 这条查询返回 0 行，服务层把它翻成 404 —— 与「这个 id 不存在」同一个响应，
 // 不给探测器留下区分两者的口子。
+//
+// 价格区间现算，公式与 ListProducts 逐字一致（00019）。两边写岔的症状是
+// 「列表上 129 元，点进去 159 元」，而那看起来像缓存问题。
 func (q *Queries) GetProduct(ctx context.Context, id int64) (GetProductRow, error) {
 	row := q.db.QueryRow(ctx, getProduct, id)
 	var i GetProductRow
@@ -141,12 +154,19 @@ func (q *Queries) ListProductSKUs(ctx context.Context, productID int64) ([]ListP
 }
 
 const listProducts = `-- name: ListProducts :many
-SELECT id, title, subtitle, min_price_cents, max_price_cents,
-       total_stock, sales_count, status
-  FROM products
- WHERE deleted_at IS NULL
-   AND status = 1
- ORDER BY published_at DESC NULLS LAST, id DESC
+SELECT p.id, p.title, p.subtitle,
+       COALESCE(agg.min_price, 0)::bigint AS min_price_cents,
+       COALESCE(agg.max_price, 0)::bigint AS max_price_cents,
+       p.total_stock, p.sales_count, p.status
+  FROM products p
+  LEFT JOIN LATERAL (
+        SELECT min(s.price_cents) AS min_price, max(s.price_cents) AS max_price
+          FROM skus s
+         WHERE s.product_id = p.id AND s.deleted_at IS NULL
+       ) agg ON TRUE
+ WHERE p.deleted_at IS NULL
+   AND p.status = 1
+ ORDER BY p.published_at DESC NULLS LAST, p.id DESC
  LIMIT $1 OFFSET $2
 `
 
@@ -174,6 +194,18 @@ type ListProductsRow struct {
 //
 // 进入这条查询的唯一入口是 repository.WithTenant，它保证事务里已经
 // SET LOCAL app.merchant_id；没设的话 current_merchant() 会抛 42501。
+//
+// 价格区间是**现算**的（00019 把 products 上那两列冗余价格删了，理由在那个
+// 迁移的文件头）。公式与别的三条读路径逐字一致：未软删的 SKU，COALESCE 到 0。
+//
+// 为什么 LATERAL 不会把这条查询变成一次全表聚合：ORDER BY 只引用 p 的列，
+// 所以规划器能先按 published_at 取出这一页的 LIMIT 行，再对这几行做嵌套循环 ——
+// 每行多一次 skus 上的索引查找，页大小是 20。本轮实测 EXPLAIN 见下：
+//
+//	Limit  (actual rows=3)
+//	  ->  Nested Loop Left Join  (actual rows=3)
+//	        ->  Sort (products, 3 rows)
+//	        ->  Aggregate (skus, 每行一次)
 func (q *Queries) ListProducts(ctx context.Context, arg ListProductsParams) ([]ListProductsRow, error) {
 	rows, err := q.db.Query(ctx, listProducts, arg.Limit, arg.Offset)
 	if err != nil {

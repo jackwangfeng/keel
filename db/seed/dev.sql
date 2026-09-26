@@ -115,10 +115,10 @@ SELECT m.id, '默认分类', '/', 1
 -- description 也播上：契约的 ProductDetail 里有它，而 products.description
 -- 在种子里一直是 NULL —— 那会让「详情把 description 填出来了」这句话没有靶子
 -- （字段是可选的，NULL 时它整个不出现，与「压根没实现」长得一模一样）。
-INSERT INTO products (merchant_id, category_id, title, description, min_price_cents,
-                      max_price_cents, total_stock, sales_count, status, published_at)
+INSERT INTO products (merchant_id, category_id, title, description,
+                      total_stock, sales_count, status, published_at)
 SELECT c.merchant_id, c.id, m.code || ' 的商品 ' || g,
-       m.code || ' 的商品 ' || g || ' 的详细描述', 1990, 4990, 100, 0, 1, now()
+       m.code || ' 的商品 ' || g || ' 的详细描述', 100, 0, 1, now()
   FROM merchants m
   JOIN categories c ON c.merchant_id = m.id AND c.name = '默认分类'
   CROSS JOIN generate_series(1, CASE m.code WHEN 'shop-a' THEN 3 ELSE 2 END) g
@@ -140,10 +140,10 @@ SELECT c.merchant_id, c.id, m.code || ' 的商品 ' || g,
 -- 件数刻意不进 shop-a 的那 3 件里：它们必须**不**出现在列表和 total 里，
 -- 所以 wantA 仍然是 3，而库里 shop-a 实际有 5 行。
 -- internal/handler 的 TestDraftAndDeletedProductsAreInvisible 拿这个差值做断言。
-INSERT INTO products (merchant_id, category_id, title, min_price_cents,
-                      max_price_cents, total_stock, sales_count, status,
+INSERT INTO products (merchant_id, category_id, title,
+                      total_stock, sales_count, status,
                       published_at, deleted_at)
-SELECT c.merchant_id, c.id, v.title, 1990, 4990, 100, 0, v.status, now(), v.deleted_at
+SELECT c.merchant_id, c.id, v.title, 100, 0, v.status, now(), v.deleted_at
   FROM merchants m
   JOIN categories c ON c.merchant_id = m.id AND c.name = '默认分类'
   CROSS JOIN (VALUES
@@ -162,8 +162,12 @@ SELECT c.merchant_id, c.id, v.title, 1990, 4990, 100, 0, v.status, now(), v.dele
 -- 而「下架商品的 SKU 还能不能被下单」正是需要能被证伪的那类问题）。
 --
 -- sku_code 由商品标题派生，保证重复执行时 NOT EXISTS 认得出来。
+--
+-- 价格是一个常量 1990。00019 之前它写的是 `p.min_price_cents`，
+-- 而那一列现在没有了 —— 它本来就是从 SKU 算回去的，拿它当 SKU 的价格
+-- 是一条循环定义（也正因为如此，「区间算得对不对」在这批数据上证伪不了）。
 INSERT INTO skus (merchant_id, product_id, sku_code, price_cents, status)
-SELECT p.merchant_id, p.id, 'SKU-' || p.id, p.min_price_cents, 1
+SELECT p.merchant_id, p.id, 'SKU-' || p.id, 1990, 1
   FROM products p
   JOIN merchants m ON m.id = p.merchant_id
  WHERE m.code IN ('shop-a', 'shop-b')

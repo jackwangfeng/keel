@@ -194,10 +194,10 @@ func (t tenantTx) CreateSKU(ctx context.Context, n NewSKU) (AdminSKU, error) {
 		return AdminSKU{}, fmt.Errorf("sku %d 建出来了但库存行没建成（这件商品会表现为永远缺货）: %w", s.ID, err)
 	}
 
-	if _, err := t.recalcProductAggregates(ctx, n.ProductID); err != nil {
-		return AdminSKU{}, err
-	}
-
+	// 这里**没有**「重算商品冗余价格」那一步了（00019 把那两列删了，
+	// RecalcProductAggregates 也一起删了）。价格区间与总库存现在由读路径上的
+	// LEFT JOIN LATERAL 现算 —— 建完 SKU 立刻去读商品，读到的就是含这个新
+	// SKU 的区间，不需要任何人记得调一个同步函数。
 	return AdminSKU{
 		ID: s.ID, ProductID: s.ProductID, SKUCode: s.SkuCode,
 		SpecValues: s.SpecValues, PriceCents: s.PriceCents, CostCents: s.CostCents,
@@ -232,12 +232,11 @@ func (t tenantTx) UpdateSKU(ctx context.Context, id int64, p SKUPatch) (AdminSKU
 		return AdminSKU{}, fmt.Errorf("sku %d 可见却没改成——UpdateSKU 的 SQL 被改坏了", id)
 	}
 
-	// 改价之后要重算商品的价格区间（契约明写）。放在这里而不是让调用方记得：
-	// 一个「改了价但列表页还是旧价」的 bug 看起来像缓存问题，
-	// 而它真正的成因是有人忘了调一个函数。
-	if _, err := t.recalcProductAggregates(ctx, *r.ProductID); err != nil {
-		return AdminSKU{}, err
-	}
+	// 改价之后**不需要**重算商品的价格区间：00019 起那两列不在表上了，
+	// 区间在读商品的时候从 skus 现算。契约里那句「改价后服务端重算
+	// products.min_price_cents / max_price_cents」因此变成了「下一次读就是新的」——
+	// 对调用方可观察的行为一模一样，少掉的是「有人忘了调一个函数」这种 bug，
+	// 而它的症状（改了价但列表页还是旧价）看起来像缓存问题。
 
 	// 回读整行。这条 UPDATE 不碰 inventories，所以它回传不了 available_qty /
 	// warning_qty，而契约的 AdminSku 里这两个字段是有的。
@@ -270,10 +269,9 @@ func (t tenantTx) SoftDeleteSKU(ctx context.Context, id int64) (int64, error) {
 	if r.ProductID == nil {
 		return 0, fmt.Errorf("sku %d 删成功但没有回传 product_id——SoftDeleteSKU 的 SQL 被改坏了", id)
 	}
-	// 软删掉一个规格会改变价格区间与总库存（数据模型 §3 的冗余字段）。
-	if _, err := t.recalcProductAggregates(ctx, *r.ProductID); err != nil {
-		return 0, err
-	}
+	// 软删掉一个规格会改变价格区间与总库存，而那两件事现在**不需要在这里做**：
+	// 00019 之后它们是读的时候现算的，而现算的取值范围正是
+	// 「deleted_at IS NULL 的 SKU」—— 这一行刚被排除出去。
 	return *r.ProductID, nil
 }
 

@@ -287,11 +287,14 @@ func newSearchFixture(t *testing.T) searchFixture {
 		cid := cats[catKey(pl.merchant, pl.category)]
 		var pid int64
 		if err := admin.QueryRow(ctx,
+			// 商品行上**没有价格**（00019 删掉了那两列冗余价格）。
+			// 价格区间由下面那条 SKU 现算出来，所以这个夹具从此是
+			// 「价格过滤读的是不是真的 SKU 价」这件事的靶子 ——
+			// 此前商品行与 SKU 行各写一份同样的数，把 LATERAL 写岔了也看不出来。
 			`INSERT INTO products (merchant_id, category_id, title, subtitle,
-			                       min_price_cents, max_price_cents, total_stock,
-			                       sales_count, status, published_at)
-			 VALUES ($1,$2,$3,$4,$5,$5,0,0,1,now()) RETURNING id`,
-			pl.merchant, cid, pl.p.Title, pl.p.Subtitle, pl.p.Cents).Scan(&pid); err != nil {
+			                       total_stock, sales_count, status, published_at)
+			 VALUES ($1,$2,$3,$4,0,0,1,now()) RETURNING id`,
+			pl.merchant, cid, pl.p.Title, pl.p.Subtitle).Scan(&pid); err != nil {
 			t.Fatal(err)
 		}
 		pl.ids[pl.p.Title] = pid

@@ -10,22 +10,29 @@ import (
 )
 
 const searchProductsByKeyword = `-- name: SearchProductsByKeyword :many
-SELECT p.id, p.title, p.subtitle, p.min_price_cents, p.max_price_cents,
+SELECT p.id, p.title, p.subtitle,
+       COALESCE(agg.min_price, 0)::bigint AS min_price_cents,
+       COALESCE(agg.max_price, 0)::bigint AS max_price_cents,
        p.sales_count, p.status,
        ts_rank_cd(p.search_vector, to_tsquery('simple', $1::text))::float8 AS rank,
        EXISTS (SELECT 1 FROM skus s JOIN inventories i ON i.sku_id = s.id
                 WHERE s.product_id = p.id AND s.status = 1
                   AND s.deleted_at IS NULL AND i.available_qty > 0) AS in_stock
   FROM products p
+  LEFT JOIN LATERAL (
+        SELECT min(s.price_cents) AS min_price, max(s.price_cents) AS max_price
+          FROM skus s
+         WHERE s.product_id = p.id AND s.deleted_at IS NULL
+       ) agg ON TRUE
  WHERE p.deleted_at IS NULL
    AND p.status = 1
    AND p.search_vector @@ to_tsquery('simple', $1::text)
    AND ($2::bigint IS NULL
         OR p.category_id = $2::bigint)
    AND ($3::bigint IS NULL
-        OR p.max_price_cents >= $3::bigint)
+        OR COALESCE(agg.max_price, 0) >= $3::bigint)
    AND ($4::bigint IS NULL
-        OR p.min_price_cents <= $4::bigint)
+        OR COALESCE(agg.min_price, 0) <= $4::bigint)
    AND (NOT $5::boolean
         OR EXISTS (SELECT 1 FROM skus s JOIN inventories i ON i.sku_id = s.id
                     WHERE s.product_id = p.id AND s.status = 1
@@ -111,7 +118,9 @@ func (q *Queries) SearchProductsByKeyword(ctx context.Context, arg SearchProduct
 
 const searchProductsByVector = `-- name: SearchProductsByVector :many
 
-SELECT p.id, p.title, p.subtitle, p.min_price_cents, p.max_price_cents,
+SELECT p.id, p.title, p.subtitle,
+       COALESCE(agg.min_price, 0)::bigint AS min_price_cents,
+       COALESCE(agg.max_price, 0)::bigint AS max_price_cents,
        p.sales_count, p.status,
        (v.embedding <=> $1::vector)::float8 AS distance,
        EXISTS (SELECT 1 FROM skus s JOIN inventories i ON i.sku_id = s.id
@@ -119,14 +128,19 @@ SELECT p.id, p.title, p.subtitle, p.min_price_cents, p.max_price_cents,
                   AND s.deleted_at IS NULL AND i.available_qty > 0) AS in_stock
   FROM product_text_vectors v
   JOIN products p ON p.id = v.product_id
+  LEFT JOIN LATERAL (
+        SELECT min(s.price_cents) AS min_price, max(s.price_cents) AS max_price
+          FROM skus s
+         WHERE s.product_id = p.id AND s.deleted_at IS NULL
+       ) agg ON TRUE
  WHERE p.deleted_at IS NULL
    AND p.status = 1
    AND ($2::bigint IS NULL
         OR p.category_id = $2::bigint)
    AND ($3::bigint IS NULL
-        OR p.max_price_cents >= $3::bigint)
+        OR COALESCE(agg.max_price, 0) >= $3::bigint)
    AND ($4::bigint IS NULL
-        OR p.min_price_cents <= $4::bigint)
+        OR COALESCE(agg.min_price, 0) <= $4::bigint)
    AND (NOT $5::boolean
         OR EXISTS (SELECT 1 FROM skus s JOIN inventories i ON i.sku_id = s.id
                     WHERE s.product_id = p.id AND s.status = 1
@@ -166,6 +180,17 @@ type SearchProductsByVectorRow struct {
 // 不一致的后果不是报错，是一件商品在一路里可见、在另一路里不可见 ——
 // 而 RRF 只看名次，它拿到的是两份对「哪些商品存在」意见不同的列表，
 // 融合出来的排序没有意义，且没有任何东西会红。
+//
+// **M4 Task 3 起价格区间是现算的**（00019 删掉了 products 上那两列冗余价格）。
+// 这条纪律因此多了一项：那个 LEFT JOIN LATERAL 与两处 COALESCE 也必须逐字
+// 一致 —— 价格过滤现在读的是它算出来的值，两边的公式写岔一个字，
+// 同一件商品就会在一路里落进价格区间、在另一路里落在外面。
+//
+// COALESCE 到 0 不是随手写的：旧列 min/max_price_cents 的 DEFAULT 是 0，
+// 于是「一个 SKU 都没有」的商品在旧的过滤里表现为 max=0（被 min_price 筛掉）
+// 与 min=0（**通过** max_price 筛选）。裸的 max()/min() 在那种情况下是 NULL，
+// 而 NULL 两个方向都不通过 —— 那就不是「换了个算法」，是悄悄改了一条筛选规则。
+// 留着 COALESCE，现算与旧列在全部取值上逐点相同。
 // 向量召回。余弦距离，配 idx_ptv_hnsw（vector_cosine_ops）。
 //
 // ## 这条查询就是语义检索层 §2.4 里那个「❌ 危险写法」，一字不差

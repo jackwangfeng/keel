@@ -76,16 +76,16 @@ SELECT m.id, '默认分类', '/', 1
 
 -- 三件在架商品。status = 1 且 published_at 非空，否则列表接口看不见它们
 -- （ListProducts 的谓词是 `deleted_at IS NULL AND status = 1`）。
-INSERT INTO products (merchant_id, category_id, title, subtitle, min_price_cents,
-                      max_price_cents, total_stock, sales_count, status, published_at)
-SELECT c.merchant_id, c.id, v.title, v.subtitle, v.min_cents, v.max_cents, 100, 0, 1, now()
+INSERT INTO products (merchant_id, category_id, title, subtitle,
+                      total_stock, sales_count, status, published_at)
+SELECT c.merchant_id, c.id, v.title, v.subtitle, 100, 0, 1, now()
   FROM merchants m
   JOIN categories c ON c.merchant_id = m.id AND c.name = '默认分类'
   CROSS JOIN (VALUES
-                ('手冲咖啡壶',   '600ml 玻璃',   12900::bigint, 15900::bigint),
-                ('陶瓷马克杯',   '两只装',        4900::bigint,  4900::bigint),
-                ('挂耳咖啡 10 包', '中度烘焙',     6900::bigint,  8900::bigint)
-             ) AS v(title, subtitle, min_cents, max_cents)
+                ('手冲咖啡壶',   '600ml 玻璃'),
+                ('陶瓷马克杯',   '两只装'),
+                ('挂耳咖啡 10 包', '中度烘焙')
+             ) AS v(title, subtitle)
  WHERE m.code = 'demo'
    AND NOT EXISTS (SELECT 1 FROM products p
                     WHERE p.merchant_id = c.merchant_id AND p.title = v.title);
@@ -97,9 +97,10 @@ SELECT c.merchant_id, c.id, v.title, v.subtitle, v.min_cents, v.max_cents, 100, 
 -- 下单链路（M2 Task 4/5）要的是 SKU 和库存行，而不是商品本身 —— products 上的
 -- total_stock 是给列表页看的汇总，真正被扣减的是 inventories.available_qty。
 --
--- 价格刻意和 products 的 min/max 对齐：手冲咖啡壶 12900–15900 就真的有两个
--- 分别是 12900 与 15900 的 SKU。不对齐的话，「min_price_cents 是不是真的等于
--- 最便宜那个 SKU」这类断言在种子数据上永远无法证伪。
+-- 同一件商品下的两个 SKU **刻意不同价**：手冲咖啡壶 12900 与 15900。
+-- 00019 之后价格区间是从这里现算出来的（products 上那两列已经删了），
+-- 所以「min_price_cents 是不是真的等于最便宜那个 SKU」这条断言的靶子
+-- 就是这两行 —— 两个 SKU 同价的话，把 min() 写成 max() 也不会红。
 INSERT INTO skus (merchant_id, product_id, sku_code, spec_values, price_cents, status)
 SELECT p.merchant_id, p.id, v.code, v.spec, v.cents, 1
   FROM products p
@@ -198,27 +199,30 @@ SELECT m.id, '女装', '/女装/', 1
    AND NOT EXISTS (SELECT 1 FROM categories c
                     WHERE c.merchant_id = m.id AND c.name = '女装');
 
-INSERT INTO products (merchant_id, category_id, title, subtitle, min_price_cents,
-                      max_price_cents, total_stock, sales_count, status, published_at)
-SELECT c.merchant_id, c.id, v.title, v.subtitle, v.cents, v.cents, 100, 0, 1, now()
+INSERT INTO products (merchant_id, category_id, title, subtitle,
+                      total_stock, sales_count, status, published_at)
+SELECT c.merchant_id, c.id, v.title, v.subtitle, 100, 0, 1, now()
   FROM merchants m
   JOIN categories c ON c.merchant_id = m.id AND c.name = '女装'
   CROSS JOIN (VALUES
-                ('雪纺碎花连衣裙', '夏季新款 显瘦', 19900::bigint),
-                ('真丝吊带长裙',   '法式复古',     45900::bigint)
-             ) AS v(title, subtitle, cents)
+                ('雪纺碎花连衣裙', '夏季新款 显瘦'),
+                ('真丝吊带长裙',   '法式复古')
+             ) AS v(title, subtitle)
  WHERE m.code = 'demo'
    AND NOT EXISTS (SELECT 1 FROM products p
                     WHERE p.merchant_id = c.merchant_id AND p.title = v.title);
 
+-- 价格直接写在这里。00019 之前它是 `p.min_price_cents` —— 从商品行上读回来，
+-- 于是「价格区间等于 SKU 的 min/max」在这批数据上是一条恒等式，证伪不了。
+-- 现在商品那一侧没有价格列了，价格只有这一个源头。
 INSERT INTO skus (merchant_id, product_id, sku_code, spec_values, price_cents, status)
-SELECT p.merchant_id, p.id, v.code, v.spec, p.min_price_cents, 1
+SELECT p.merchant_id, p.id, v.code, v.spec, v.cents, 1
   FROM products p
   JOIN merchants m ON m.id = p.merchant_id
   CROSS JOIN LATERAL (VALUES
-        ('雪纺碎花连衣裙', 'DRESS-M', '{"尺码":"M"}'::jsonb),
-        ('真丝吊带长裙',   'SKIRT-S', '{"尺码":"S"}'::jsonb)
-     ) AS v(title, code, spec)
+        ('雪纺碎花连衣裙', 'DRESS-M', '{"尺码":"M"}'::jsonb, 19900::bigint),
+        ('真丝吊带长裙',   'SKIRT-S', '{"尺码":"S"}'::jsonb, 45900::bigint)
+     ) AS v(title, code, spec, cents)
  WHERE m.code = 'demo'
    AND p.title = v.title
    AND NOT EXISTS (SELECT 1 FROM skus s

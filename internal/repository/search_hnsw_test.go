@@ -309,9 +309,8 @@ func seedHNSWScaleFixture(t *testing.T, ctx context.Context) hnswFixture {
 		tag+"-victim")
 	exec(`INSERT INTO categories (merchant_id, name, path, status)
 	      SELECT id, '默认', '/', 1 FROM merchants WHERE code LIKE $1`, tag+"%")
-	exec(`INSERT INTO products (merchant_id, category_id, title, min_price_cents,
-	                            max_price_cents, status, published_at)
-	      SELECT c.merchant_id, c.id, 'P' || c.merchant_id || '-' || g, 1000, 2000, 1, now()
+	exec(`INSERT INTO products (merchant_id, category_id, title, status, published_at)
+	      SELECT c.merchant_id, c.id, 'P' || c.merchant_id || '-' || g, 1, now()
 	        FROM categories c
 	        JOIN merchants m ON m.id = c.merchant_id AND m.code LIKE $1
 	        CROSS JOIN LATERAL generate_series(1,

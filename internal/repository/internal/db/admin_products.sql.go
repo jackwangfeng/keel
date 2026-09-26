@@ -28,6 +28,9 @@ type AdminCountProductsParams struct {
 
 // 条件必须与 AdminListProducts 逐字一致：两边只要有一处不同，total 数的就不是
 // 列表实际会分出来的那批行，而客户端据此算出的总页数会少，最后几页谁也翻不到。
+//
+// 它**不带**那个 LATERAL：价格与库存是 SELECT 出来的东西，不是筛选条件，
+// 而这条查询一列都不返回。「逐字一致」说的是 WHERE 子句，不是 FROM。
 func (q *Queries) AdminCountProducts(ctx context.Context, arg AdminCountProductsParams) (int64, error) {
 	row := q.db.QueryRow(ctx, adminCountProducts, arg.Status, arg.CategoryID, arg.IncludeDeleted)
 	var count int64
@@ -36,11 +39,21 @@ func (q *Queries) AdminCountProducts(ctx context.Context, arg AdminCountProducts
 }
 
 const adminGetProduct = `-- name: AdminGetProduct :one
-SELECT id, category_id, brand_id, title, subtitle, description,
-       min_price_cents, max_price_cents, total_stock, sales_count,
-       status, published_at, deleted_at, created_at, updated_at
-  FROM products
- WHERE id = $1
+SELECT p.id, p.category_id, p.brand_id, p.title, p.subtitle, p.description,
+       COALESCE(agg.min_price, 0)::bigint AS min_price_cents,
+       COALESCE(agg.max_price, 0)::bigint AS max_price_cents,
+       COALESCE(agg.stock, 0)::int        AS total_stock,
+       p.sales_count,
+       p.status, p.published_at, p.deleted_at, p.created_at, p.updated_at
+  FROM products p
+  LEFT JOIN LATERAL (
+        SELECT min(s.price_cents) AS min_price, max(s.price_cents) AS max_price,
+               COALESCE(sum(i.available_qty), 0)::int AS stock
+          FROM skus s
+          LEFT JOIN inventories i ON i.sku_id = s.id
+         WHERE s.product_id = p.id AND s.deleted_at IS NULL
+       ) agg ON TRUE
+ WHERE p.id = $1
 `
 
 type AdminGetProductRow struct {
@@ -65,6 +78,11 @@ type AdminGetProductRow struct {
 // 后台列表也有 include_deleted 参数 —— 软删商品在后台是看得见的一等公民。
 // 前台那条 GetProduct 的谓词（status = 1 AND deleted_at IS NULL）一个都不能少，
 // 两者的差别正是这一层存在的理由。
+//
+// 价格与库存现算，公式与 AdminListProducts 逐字一致（00019）。
+// 这条查询同时是后台**唯一**一处把一件商品完整读出来的地方：
+// CreateProduct / UpdateProduct / SetProductPublication 写完都回读它，
+// 于是「后台看到的商品长什么样」只有一个答案。
 func (q *Queries) AdminGetProduct(ctx context.Context, id int64) (AdminGetProductRow, error) {
 	row := q.db.QueryRow(ctx, adminGetProduct, id)
 	var i AdminGetProductRow
@@ -90,15 +108,25 @@ func (q *Queries) AdminGetProduct(ctx context.Context, id int64) (AdminGetProduc
 
 const adminListProducts = `-- name: AdminListProducts :many
 
-SELECT id, category_id, brand_id, title, subtitle, description,
-       min_price_cents, max_price_cents, total_stock, sales_count,
-       status, published_at, deleted_at, created_at, updated_at
-  FROM products
- WHERE ($1::smallint IS NULL OR status = $1::smallint)
+SELECT p.id, p.category_id, p.brand_id, p.title, p.subtitle, p.description,
+       COALESCE(agg.min_price, 0)::bigint AS min_price_cents,
+       COALESCE(agg.max_price, 0)::bigint AS max_price_cents,
+       COALESCE(agg.stock, 0)::int        AS total_stock,
+       p.sales_count,
+       p.status, p.published_at, p.deleted_at, p.created_at, p.updated_at
+  FROM products p
+  LEFT JOIN LATERAL (
+        SELECT min(s.price_cents) AS min_price, max(s.price_cents) AS max_price,
+               COALESCE(sum(i.available_qty), 0)::int AS stock
+          FROM skus s
+          LEFT JOIN inventories i ON i.sku_id = s.id
+         WHERE s.product_id = p.id AND s.deleted_at IS NULL
+       ) agg ON TRUE
+ WHERE ($1::smallint IS NULL OR p.status = $1::smallint)
    AND ($2::bigint IS NULL
-        OR category_id = $2::bigint)
-   AND ($3::boolean OR deleted_at IS NULL)
- ORDER BY id DESC
+        OR p.category_id = $2::bigint)
+   AND ($3::boolean OR p.deleted_at IS NULL)
+ ORDER BY p.id DESC
  LIMIT $5 OFFSET $4
 `
 
@@ -147,6 +175,16 @@ type AdminListProductsRow struct {
 //
 // 三个筛选都用 sqlc.narg + 「IS NULL OR」，缺省即不筛。契约刻意没给 status
 // 默认值，理由写在端点上：默认值被代入会静默改变「返回哪些行」。
+//
+// 价格区间与总库存都是**现算**的（00019 删掉了那两列冗余价格，
+// 并连带删掉了维护它们的 RecalcProductAggregates；total_stock 那一列还在，
+// 但从此没有任何一处写它，所以后台这三个数一律从 skus / inventories 现算）。
+// 公式与前台 ListProducts 那条逐字一致：未软删的 SKU，COALESCE 到 0。
+//
+// 为什么 total_stock 也跟着现算而不是继续读列：RecalcProductAggregates 一删，
+// 那一列就回到了 db/queries/search.sql 文件头点名的状态 ——
+// 「一句永远不会被纠正的谎」。后台那个数是商家用来决定要不要补货的，
+// 让它读一列没人维护的汇总比不显示更糟。
 func (q *Queries) AdminListProducts(ctx context.Context, arg AdminListProductsParams) ([]AdminListProductsRow, error) {
 	rows, err := q.db.Query(ctx, adminListProducts,
 		arg.Status,
@@ -191,9 +229,20 @@ func (q *Queries) AdminListProducts(ctx context.Context, arg AdminListProductsPa
 
 const clearProductImages = `-- name: ClearProductImages :execrows
 
+
 DELETE FROM product_images WHERE product_id = $1
 `
 
+// RecalcProductAggregates 在 M4 Task 3 被删掉了，这里留一句话说明去向 ——
+// 它在 git 历史里，而「为什么没有了」只在这里。
+//
+// 它重算的三个冗余字段中，min_price_cents / max_price_cents 两列已经由
+// 00019 从表上删掉（那个迁移的文件头写了完整理由）；total_stock 那一列还在，
+// 但从此没有任何一处写它。三个数现在都在读的时候现算，公式写在
+// AdminListProducts / AdminGetProduct 以及前台那两条读路径的 LATERAL 里。
+//
+// 删掉它同时删掉了一整类故障：一个同步器只要有一条写路径忘了调用，
+// 冗余列就开始撒谎，而撒谎不报错、不变慢、不留痕迹。
 // ---------------------------------------------------------------------------
 // 商品图：整组替换（契约 PUT /admin/products/{product_id}/images）
 // ---------------------------------------------------------------------------
@@ -212,9 +261,7 @@ const createProduct = `-- name: CreateProduct :one
 INSERT INTO products (category_id, brand_id, title, subtitle, description)
 VALUES ($1, $2, $3,
         $4, $5)
-RETURNING id, category_id, brand_id, title, subtitle, description,
-          min_price_cents, max_price_cents, total_stock, sales_count,
-          status, published_at, deleted_at, created_at, updated_at
+RETURNING id
 `
 
 type CreateProductParams struct {
@@ -225,28 +272,16 @@ type CreateProductParams struct {
 	Description *string
 }
 
-type CreateProductRow struct {
-	ID            int64
-	CategoryID    int64
-	BrandID       *int64
-	Title         string
-	Subtitle      *string
-	Description   *string
-	MinPriceCents int64
-	MaxPriceCents int64
-	TotalStock    int32
-	SalesCount    int32
-	Status        int16
-	PublishedAt   pgtype.Timestamptz
-	DeletedAt     pgtype.Timestamptz
-	CreatedAt     pgtype.Timestamptz
-	UpdatedAt     pgtype.Timestamptz
-}
-
 // 新建即草稿：status 走列默认值 0，published_at 保持 NULL。
 // **请求体里没有 status**（契约），所以这里也不给它参数位 ——
 // 一个能在创建时指定状态的入参，就是一条绕过 publication 端点的路。
-func (q *Queries) CreateProduct(ctx context.Context, arg CreateProductParams) (CreateProductRow, error) {
+//
+// **只 RETURNING id**，整行由 repository 紧接着用 AdminGetProduct 回读
+// （同一个事务，读到的就是刚写的）。这是 00019 之后的形状：价格与库存要
+// LEFT JOIN LATERAL 才算得出来，而 INSERT ... RETURNING 里没有那个 join 的
+// 位置。硬填两个 0 也能过 —— 新建的商品确实一个 SKU 都没有 —— 但那会让
+// 「价格区间怎么来的」在这个仓库里有两个答案，而第二个答案是一个常量。
+func (q *Queries) CreateProduct(ctx context.Context, arg CreateProductParams) (int64, error) {
 	row := q.db.QueryRow(ctx, createProduct,
 		arg.CategoryID,
 		arg.BrandID,
@@ -254,25 +289,9 @@ func (q *Queries) CreateProduct(ctx context.Context, arg CreateProductParams) (C
 		arg.Subtitle,
 		arg.Description,
 	)
-	var i CreateProductRow
-	err := row.Scan(
-		&i.ID,
-		&i.CategoryID,
-		&i.BrandID,
-		&i.Title,
-		&i.Subtitle,
-		&i.Description,
-		&i.MinPriceCents,
-		&i.MaxPriceCents,
-		&i.TotalStock,
-		&i.SalesCount,
-		&i.Status,
-		&i.PublishedAt,
-		&i.DeletedAt,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
+	var id int64
+	err := row.Scan(&id)
+	return id, err
 }
 
 const insertProductImage = `-- name: InsertProductImage :one
@@ -415,45 +434,6 @@ func (q *Queries) PublishProduct(ctx context.Context, id int64) (PublishProductR
 	return i, err
 }
 
-const recalcProductAggregates = `-- name: RecalcProductAggregates :one
-UPDATE products p
-   SET min_price_cents = COALESCE(agg.min_price, 0),
-       max_price_cents = COALESCE(agg.max_price, 0),
-       total_stock     = COALESCE(agg.stock, 0)
-  FROM (
-        SELECT min(s.price_cents) AS min_price,
-               max(s.price_cents) AS max_price,
-               COALESCE(sum(i.available_qty), 0)::int AS stock
-          FROM skus s
-          LEFT JOIN inventories i ON i.sku_id = s.id
-         WHERE s.product_id = $1 AND s.deleted_at IS NULL
-       ) agg
- WHERE p.id = $1
-RETURNING p.min_price_cents, p.max_price_cents, p.total_stock
-`
-
-type RecalcProductAggregatesRow struct {
-	MinPriceCents int64
-	MaxPriceCents int64
-	TotalStock    int32
-}
-
-// 重算 §3 的三个冗余字段。SKU 增 / 改价 / 软删之后都要跑一次。
-//
-// 取值范围是**未软删**的 SKU，不分在售与停售。停售的规格仍出现在商品详情的
-// 规格矩阵里（契约明写），它的价格也还在给买家看，所以把它排除掉会让展示的
-// 价格区间和矩阵里的价格对不上。
-//
-// 一个 SKU 都没有时三个数归 0，这与「新建的商品此刻是 0」一致；
-// 而「0 元商品出现在前台」这件事由上架闸门挡（没有 SKU 不能上架），
-// 不由这里挡 —— 这里只负责把冗余字段算对。
-func (q *Queries) RecalcProductAggregates(ctx context.Context, productID int64) (RecalcProductAggregatesRow, error) {
-	row := q.db.QueryRow(ctx, recalcProductAggregates, productID)
-	var i RecalcProductAggregatesRow
-	err := row.Scan(&i.MinPriceCents, &i.MaxPriceCents, &i.TotalStock)
-	return i, err
-}
-
 const softDeleteProduct = `-- name: SoftDeleteProduct :one
 WITH cur AS (
     SELECT p.id, p.status, p.deleted_at FROM products p WHERE p.id = $1
@@ -534,15 +514,11 @@ WITH cur AS (
            brand_id    = CASE WHEN $6::boolean
                               THEN $7::bigint ELSE u.brand_id END
      WHERE u.id = $1 AND u.deleted_at IS NULL
-    RETURNING u.id, u.category_id, u.brand_id, u.title, u.subtitle, u.description,
-              u.min_price_cents, u.max_price_cents, u.total_stock, u.sales_count,
-              u.status, u.published_at, u.deleted_at, u.created_at, u.updated_at
+    RETURNING u.id
 )
 SELECT (SELECT count(*) FROM cur) AS visible_rows,
        (SELECT count(*) FROM upd) AS updated_rows,
-       w.id, w.category_id, w.brand_id, w.title, w.subtitle, w.description,
-       w.min_price_cents, w.max_price_cents, w.total_stock, w.sales_count,
-       w.status, w.published_at, w.deleted_at, w.created_at, w.updated_at
+       w.id
   FROM (SELECT 1) anchor
   LEFT JOIN upd w ON true
 `
@@ -558,23 +534,9 @@ type UpdateProductParams struct {
 }
 
 type UpdateProductRow struct {
-	VisibleRows   int64
-	UpdatedRows   int64
-	ID            *int64
-	CategoryID    *int64
-	BrandID       *int64
-	Title         *string
-	Subtitle      *string
-	Description   *string
-	MinPriceCents *int64
-	MaxPriceCents *int64
-	TotalStock    *int32
-	SalesCount    *int32
-	Status        *int16
-	PublishedAt   pgtype.Timestamptz
-	DeletedAt     pgtype.Timestamptz
-	CreatedAt     pgtype.Timestamptz
-	UpdatedAt     pgtype.Timestamptz
+	VisibleRows int64
+	UpdatedRows int64
+	ID          *int64
 }
 
 // 部分更新，**一条语句同时回答两个问题**：这一行在本租户可见吗？改成功了吗？
@@ -595,6 +557,12 @@ type UpdateProductRow struct {
 //
 // 两个 CTE 里的 products 各带一个别名（cur / upd）。sqlc 的作用域解析把整条
 // 语句的关系拍平成一张表，同一张表出现两次就让每个裸列名都报 ambiguous。
+//
+// **回传的行只剩一个 id**，整行由 repository 紧接着用 AdminGetProduct 回读，
+// 理由同 CreateProduct（00019 之后价格与库存要 LATERAL 才算得出来）。
+// 那个 id 不是多余的：它把「改成功了」与「updated_rows 数对了但没有行」
+// 分开 —— 后者只可能是这条 SQL 被改坏了，而静默返回零值会让一件全零的商品
+// 被序列化出去。
 func (q *Queries) UpdateProduct(ctx context.Context, arg UpdateProductParams) (UpdateProductRow, error) {
 	row := q.db.QueryRow(ctx, updateProduct,
 		arg.ID,
@@ -606,24 +574,6 @@ func (q *Queries) UpdateProduct(ctx context.Context, arg UpdateProductParams) (U
 		arg.BrandID,
 	)
 	var i UpdateProductRow
-	err := row.Scan(
-		&i.VisibleRows,
-		&i.UpdatedRows,
-		&i.ID,
-		&i.CategoryID,
-		&i.BrandID,
-		&i.Title,
-		&i.Subtitle,
-		&i.Description,
-		&i.MinPriceCents,
-		&i.MaxPriceCents,
-		&i.TotalStock,
-		&i.SalesCount,
-		&i.Status,
-		&i.PublishedAt,
-		&i.DeletedAt,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
+	err := row.Scan(&i.VisibleRows, &i.UpdatedRows, &i.ID)
 	return i, err
 }

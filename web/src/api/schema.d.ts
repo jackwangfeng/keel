@@ -997,7 +997,8 @@ export interface paths {
          *     上架前至少要有一个 SKU，那条闸门在 `POST .../publication` 上。
          *
          *     响应里的 `min_price_cents` / `max_price_cents` / `total_stock` 此刻都是 0，
-         *     它们由 SKU 变更时同步（数据模型 §3），不是这里的入参。
+         *     因为这件商品还一个 SKU 都没有——这三个数是服务端按需现算的
+         *     （迁移 00019），不是入参，也不是一份等着被同步的冗余副本。
          */
         post: {
             parameters: {
@@ -1290,7 +1291,7 @@ export interface paths {
          *
          *     闸门：**没有任何 SKU 的商品不能上架**（409）。上架意味着它会出现在
          *     前台列表与检索结果里，而一个没有 SKU 的商品点进去既没有价格也没有
-         *     可加购的东西——`min_price_cents` 会是 0，前台会把它渲染成免费。
+         *     可加购的东西——`min_price_cents` 算出来会是 0，前台会把它渲染成免费。
          */
         post: {
             parameters: {
@@ -1503,8 +1504,10 @@ export interface paths {
          *     规格模板（「这个商品有颜色和尺码两个维度」）没有落地的表，
          *     在没有模板的前提下校验只能靠猜。
          *
-         *     写入后服务端重算 `products.min_price_cents` / `max_price_cents` /
-         *     `total_stock`（数据模型 §3 的冗余字段）。
+         *     写入后商品的 `min_price_cents` / `max_price_cents` / `total_stock`
+         *     自然跟着变：它们不是存下来的冗余字段，而是读商品时从 `skus` /
+         *     `inventories` 现算的（迁移 00019）。也就是说不存在「加了 SKU 但
+         *     商品上的价格区间还是旧的」这个中间态。
          */
         post: {
             parameters: {
@@ -1678,7 +1681,8 @@ export interface paths {
          *     真正的价格快照发生在下单那一刻（`order_items`，数据模型 §5）。
          *     所以改价不会改变任何一笔已成交订单的金额。
          *
-         *     改价后服务端重算 `products.min_price_cents` / `max_price_cents`。
+         *     改价后商品的 `min_price_cents` / `max_price_cents` 下一次读就是新的：
+         *     它们是从 `skus` 现算的，不是存下来的冗余字段（迁移 00019）。
          *
          *     `status` 是 SKU 自己的售卖开关：`0 停售` / `1 在售`。停售的 SKU 仍出现在
          *     商品详情的规格矩阵里（否则买家会以为规格表变了），但不可加购、不可下单。
@@ -5068,9 +5072,17 @@ export interface components {
              * @description 软删时间。非 null 时该商品只在 `include_deleted=true` 的后台列表里出现。
              */
             deleted_at?: string | null;
+            /**
+             * @description 未软删 SKU 的**基准价**下界，服务端按需现算（迁移 00019 之前它是
+             *     `products` 上的一列冗余字段）。一个 SKU 都没有时为 0。不接受写入。
+             */
             min_price_cents: components["schemas"]["Money"];
+            /** @description 同 `min_price_cents`，上界。 */
             max_price_cents: components["schemas"]["Money"];
-            /** @description 冗余字段，由 SKU 变更时同步（数据模型 §3）。不接受写入。 */
+            /**
+             * @description 未软删 SKU 的 `inventories.available_qty` 之和，服务端按需现算。
+             *     不接受写入。
+             */
             total_stock: number;
             /** @description 冗余字段，由订单变更时同步。不接受写入。 */
             sales_count: number;

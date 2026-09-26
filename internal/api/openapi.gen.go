@@ -1090,10 +1090,11 @@ type AdminProduct struct {
 	Description *string    `json:"description,omitempty"`
 	Id          int64      `json:"id"`
 
-	// MaxPriceCents 金额，单位「分」。禁止使用浮点。
+	// MaxPriceCents 同 `min_price_cents`，上界。
 	MaxPriceCents Money `json:"max_price_cents"`
 
-	// MinPriceCents 金额，单位「分」。禁止使用浮点。
+	// MinPriceCents 未软删 SKU 的**基准价**下界，服务端按需现算（迁移 00019 之前它是
+	// `products` 上的一列冗余字段）。一个 SKU 都没有时为 0。不接受写入。
 	MinPriceCents Money `json:"min_price_cents"`
 
 	// PublishedAt **首次**上架时间。为 null 表示从未上架过（即 `status` 一直是 0 草稿）。
@@ -1109,7 +1110,8 @@ type AdminProduct struct {
 	Subtitle *string            `json:"subtitle,omitempty"`
 	Title    string             `json:"title"`
 
-	// TotalStock 冗余字段，由 SKU 变更时同步（数据模型 §3）。不接受写入。
+	// TotalStock 未软删 SKU 的 `inventories.available_qty` 之和，服务端按需现算。
+	// 不接受写入。
 	TotalStock int        `json:"total_stock"`
 	UpdatedAt  *time.Time `json:"updated_at,omitempty"`
 }
@@ -1133,10 +1135,11 @@ type AdminProductDetail struct {
 	// Images 按展示顺序，`images[0]` 是主图。
 	Images []ProductImage `json:"images"`
 
-	// MaxPriceCents 金额，单位「分」。禁止使用浮点。
+	// MaxPriceCents 同 `min_price_cents`，上界。
 	MaxPriceCents Money `json:"max_price_cents"`
 
-	// MinPriceCents 金额，单位「分」。禁止使用浮点。
+	// MinPriceCents 未软删 SKU 的**基准价**下界，服务端按需现算（迁移 00019 之前它是
+	// `products` 上的一列冗余字段）。一个 SKU 都没有时为 0。不接受写入。
 	MinPriceCents Money `json:"min_price_cents"`
 
 	// PublishedAt **首次**上架时间。为 null 表示从未上架过（即 `status` 一直是 0 草稿）。
@@ -1155,7 +1158,8 @@ type AdminProductDetail struct {
 	Subtitle *string                  `json:"subtitle,omitempty"`
 	Title    string                   `json:"title"`
 
-	// TotalStock 冗余字段，由 SKU 变更时同步（数据模型 §3）。不接受写入。
+	// TotalStock 未软删 SKU 的 `inventories.available_qty` 之和，服务端按需现算。
+	// 不接受写入。
 	TotalStock int        `json:"total_stock"`
 	UpdatedAt  *time.Time `json:"updated_at,omitempty"`
 }

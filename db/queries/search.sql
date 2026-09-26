@@ -8,6 +8,17 @@
 -- 不一致的后果不是报错，是一件商品在一路里可见、在另一路里不可见 ——
 -- 而 RRF 只看名次，它拿到的是两份对「哪些商品存在」意见不同的列表，
 -- 融合出来的排序没有意义，且没有任何东西会红。
+--
+-- **M4 Task 3 起价格区间是现算的**（00019 删掉了 products 上那两列冗余价格）。
+-- 这条纪律因此多了一项：那个 LEFT JOIN LATERAL 与两处 COALESCE 也必须逐字
+-- 一致 —— 价格过滤现在读的是它算出来的值，两边的公式写岔一个字，
+-- 同一件商品就会在一路里落进价格区间、在另一路里落在外面。
+--
+-- COALESCE 到 0 不是随手写的：旧列 min/max_price_cents 的 DEFAULT 是 0，
+-- 于是「一个 SKU 都没有」的商品在旧的过滤里表现为 max=0（被 min_price 筛掉）
+-- 与 min=0（**通过** max_price 筛选）。裸的 max()/min() 在那种情况下是 NULL，
+-- 而 NULL 两个方向都不通过 —— 那就不是「换了个算法」，是悄悄改了一条筛选规则。
+-- 留着 COALESCE，现算与旧列在全部取值上逐点相同。
 
 -- name: SearchProductsByVector :many
 -- 向量召回。余弦距离，配 idx_ptv_hnsw（vector_cosine_ops）。
@@ -31,7 +42,9 @@
 -- 判据（service/product.go）—— 不用 products.total_stock：那一列是冗余汇总，
 -- 全仓库没有任何一处在维护它（grep 一下只剩建表与种子），
 -- 拿它当「有没有货」等于对用户撒一个永远不会被纠正的谎。
-SELECT p.id, p.title, p.subtitle, p.min_price_cents, p.max_price_cents,
+SELECT p.id, p.title, p.subtitle,
+       COALESCE(agg.min_price, 0)::bigint AS min_price_cents,
+       COALESCE(agg.max_price, 0)::bigint AS max_price_cents,
        p.sales_count, p.status,
        (v.embedding <=> @query_embedding::vector)::float8 AS distance,
        EXISTS (SELECT 1 FROM skus s JOIN inventories i ON i.sku_id = s.id
@@ -39,14 +52,19 @@ SELECT p.id, p.title, p.subtitle, p.min_price_cents, p.max_price_cents,
                   AND s.deleted_at IS NULL AND i.available_qty > 0) AS in_stock
   FROM product_text_vectors v
   JOIN products p ON p.id = v.product_id
+  LEFT JOIN LATERAL (
+        SELECT min(s.price_cents) AS min_price, max(s.price_cents) AS max_price
+          FROM skus s
+         WHERE s.product_id = p.id AND s.deleted_at IS NULL
+       ) agg ON TRUE
  WHERE p.deleted_at IS NULL
    AND p.status = 1
    AND (sqlc.narg(category_id)::bigint IS NULL
         OR p.category_id = sqlc.narg(category_id)::bigint)
    AND (sqlc.narg(min_price_cents)::bigint IS NULL
-        OR p.max_price_cents >= sqlc.narg(min_price_cents)::bigint)
+        OR COALESCE(agg.max_price, 0) >= sqlc.narg(min_price_cents)::bigint)
    AND (sqlc.narg(max_price_cents)::bigint IS NULL
-        OR p.min_price_cents <= sqlc.narg(max_price_cents)::bigint)
+        OR COALESCE(agg.min_price, 0) <= sqlc.narg(max_price_cents)::bigint)
    AND (NOT @in_stock_only::boolean
         OR EXISTS (SELECT 1 FROM skus s JOIN inventories i ON i.sku_id = s.id
                     WHERE s.product_id = p.id AND s.status = 1
@@ -72,22 +90,29 @@ SELECT p.id, p.title, p.subtitle, p.min_price_cents, p.max_price_cents,
 -- 各命中一次的商品更像是真的在说那个词。
 --
 -- 过滤条件与上面那条逐字一致，理由写在文件头。
-SELECT p.id, p.title, p.subtitle, p.min_price_cents, p.max_price_cents,
+SELECT p.id, p.title, p.subtitle,
+       COALESCE(agg.min_price, 0)::bigint AS min_price_cents,
+       COALESCE(agg.max_price, 0)::bigint AS max_price_cents,
        p.sales_count, p.status,
        ts_rank_cd(p.search_vector, to_tsquery('simple', @tsquery::text))::float8 AS rank,
        EXISTS (SELECT 1 FROM skus s JOIN inventories i ON i.sku_id = s.id
                 WHERE s.product_id = p.id AND s.status = 1
                   AND s.deleted_at IS NULL AND i.available_qty > 0) AS in_stock
   FROM products p
+  LEFT JOIN LATERAL (
+        SELECT min(s.price_cents) AS min_price, max(s.price_cents) AS max_price
+          FROM skus s
+         WHERE s.product_id = p.id AND s.deleted_at IS NULL
+       ) agg ON TRUE
  WHERE p.deleted_at IS NULL
    AND p.status = 1
    AND p.search_vector @@ to_tsquery('simple', @tsquery::text)
    AND (sqlc.narg(category_id)::bigint IS NULL
         OR p.category_id = sqlc.narg(category_id)::bigint)
    AND (sqlc.narg(min_price_cents)::bigint IS NULL
-        OR p.max_price_cents >= sqlc.narg(min_price_cents)::bigint)
+        OR COALESCE(agg.max_price, 0) >= sqlc.narg(min_price_cents)::bigint)
    AND (sqlc.narg(max_price_cents)::bigint IS NULL
-        OR p.min_price_cents <= sqlc.narg(max_price_cents)::bigint)
+        OR COALESCE(agg.min_price, 0) <= sqlc.narg(max_price_cents)::bigint)
    AND (NOT @in_stock_only::boolean
         OR EXISTS (SELECT 1 FROM skus s JOIN inventories i ON i.sku_id = s.id
                     WHERE s.product_id = p.id AND s.status = 1

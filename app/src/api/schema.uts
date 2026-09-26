@@ -91,7 +91,7 @@ export type AdminProduct = {
   min_price_cents : Money
   /** 金额，单位「分」。禁止使用浮点。 */
   max_price_cents : Money
-  /** 冗余字段，由 SKU 变更时同步（数据模型 §3）。不接受写入。 */
+  /** 未软删 SKU 的 `inventories.available_qty` 之和，服务端按需现算。 */
   total_stock : number
   /** 冗余字段，由订单变更时同步。不接受写入。 */
   sales_count : number
@@ -152,7 +152,7 @@ export type AdminProductDetail = {
   min_price_cents : Money
   /** 金额，单位「分」。禁止使用浮点。 */
   max_price_cents : Money
-  /** 冗余字段，由 SKU 变更时同步（数据模型 §3）。不接受写入。 */
+  /** 未软删 SKU 的 `inventories.available_qty` 之和，服务端按需现算。 */
   total_stock : number
   /** 冗余字段，由订单变更时同步。不接受写入。 */
   sales_count : number

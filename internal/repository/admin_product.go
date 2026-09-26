@@ -84,13 +84,6 @@ type ProductPatch struct {
 	BrandID    *int64
 }
 
-// ProductAggregates 是 §3 的三个冗余字段重算之后的值。
-type ProductAggregates struct {
-	MinPriceCents int64
-	MaxPriceCents int64
-	TotalStock    int32
-}
-
 func clampPage(limit, offset int64) (int32, int32, error) {
 	// 到这里还越界只可能是上游的钳制没生效。报错而不是截断：截断会把
 	// 「第 1 亿页」悄悄变成某一页真实数据，一个错误的结果比一个错误更难发现。
@@ -159,7 +152,7 @@ func (t tenantTx) AdminFindProduct(ctx context.Context, id int64) (AdminProduct,
 }
 
 func (t tenantTx) CreateProduct(ctx context.Context, n NewProduct) (AdminProduct, error) {
-	r, err := t.q.CreateProduct(ctx, db.CreateProductParams{
+	id, err := t.q.CreateProduct(ctx, db.CreateProductParams{
 		CategoryID:  n.CategoryID,
 		BrandID:     n.BrandID,
 		Title:       n.Title,
@@ -176,14 +169,16 @@ func (t tenantTx) CreateProduct(ctx context.Context, n NewProduct) (AdminProduct
 		}
 		return AdminProduct{}, err
 	}
-	return AdminProduct{
-		ID: r.ID, CategoryID: r.CategoryID, BrandID: r.BrandID,
-		Title: r.Title, Subtitle: r.Subtitle, Description: r.Description,
-		MinPriceCents: r.MinPriceCents, MaxPriceCents: r.MaxPriceCents,
-		TotalStock: r.TotalStock, SalesCount: r.SalesCount, Status: r.Status,
-		PublishedAt: optTime(r.PublishedAt), DeletedAt: optTime(r.DeletedAt),
-		CreatedAt: r.CreatedAt.Time, UpdatedAt: r.UpdatedAt.Time,
-	}, nil
+	// 回读整行。那条 INSERT 只回传 id —— 价格区间与总库存自 00019 起是
+	// 现算的，而 INSERT ... RETURNING 里没有那个 LEFT JOIN LATERAL 的位置。
+	//
+	// 不在这里硬填三个 0。新建的商品确实一个 SKU 都没有，所以 0 是对的，
+	// 但那会让「价格区间怎么来的」在这个仓库里有第二个答案，而第二个答案是
+	// 一个常量 —— 哪天现算的公式改了（比如把停售的 SKU 排除掉），
+	// 这一处不会跟着改，也不会红。
+	//
+	// 同一个事务里的回读，读到的就是刚写的值。
+	return t.AdminFindProduct(ctx, id)
 }
 
 func (t tenantTx) UpdateProduct(ctx context.Context, id int64, p ProductPatch) (AdminProduct, error) {
@@ -215,14 +210,8 @@ func (t tenantTx) UpdateProduct(ctx context.Context, id int64, p ProductPatch) (
 		// 一个全零的 AdminProduct 会被服务层当成一件真实商品序列化出去。
 		return AdminProduct{}, fmt.Errorf("product %d 改成功但没有回传行——UpdateProduct 的 SQL 被改坏了", id)
 	}
-	return AdminProduct{
-		ID: *r.ID, CategoryID: *r.CategoryID, BrandID: r.BrandID,
-		Title: *r.Title, Subtitle: r.Subtitle, Description: r.Description,
-		MinPriceCents: *r.MinPriceCents, MaxPriceCents: *r.MaxPriceCents,
-		TotalStock: *r.TotalStock, SalesCount: *r.SalesCount, Status: *r.Status,
-		PublishedAt: optTime(r.PublishedAt), DeletedAt: optTime(r.DeletedAt),
-		CreatedAt: r.CreatedAt.Time, UpdatedAt: r.UpdatedAt.Time,
-	}, nil
+	// 回读整行，理由同 CreateProduct（00019 之后价格与库存要 LATERAL 才算得出来）。
+	return t.AdminFindProduct(ctx, id)
 }
 
 func (t tenantTx) SoftDeleteProduct(ctx context.Context, id int64) error {
@@ -368,25 +357,4 @@ func (t tenantTx) ListProductImages(ctx context.Context, productID int64) ([]Pro
 		})
 	}
 	return out, nil
-}
-
-// recalcProductAggregates 重算 §3 的三个冗余字段。
-//
-// 它**不在 Tx 接口上**：调用方没有理由单独调它。SKU 的增 / 改 / 删各自在自己
-// 那个方法的末尾调它，于是「改了 SKU 却忘了同步冗余字段」这件事在这一层根本
-// 写不出来。冗余字段不同步的症状是前台列表上的价格区间与详情页对不上，
-// 而那看起来像缓存问题。
-func (t tenantTx) recalcProductAggregates(ctx context.Context, productID int64) (ProductAggregates, error) {
-	r, err := t.q.RecalcProductAggregates(ctx, productID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return ProductAggregates{}, fmt.Errorf("product %d: %w", productID, ErrCatalogNotFound)
-	}
-	if err != nil {
-		return ProductAggregates{}, err
-	}
-	return ProductAggregates{
-		MinPriceCents: r.MinPriceCents,
-		MaxPriceCents: r.MaxPriceCents,
-		TotalStock:    r.TotalStock,
-	}, nil
 }

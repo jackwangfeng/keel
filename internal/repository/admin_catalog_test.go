@@ -413,6 +413,12 @@ func TestCreateSKUAlwaysCreatesInventoryRow(t *testing.T) {
 		t.Fatalf("返回的水位是 %d，期望 12", sku.AvailableQty)
 	}
 
+	// 扣库存之前先记一次商品的总库存，下面要拿它做差。
+	before, err := findProduct(t, r, asA, f.prodA)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	// 真正要守的不是「有一行」，是「SAGA 扣得动」。直接用下单那条语句验一次：
 	// 漏建库存行时它返回的是 ErrInsufficientStock，而那正是最误导人的症状。
 	var after int32
@@ -427,14 +433,27 @@ func TestCreateSKUAlwaysCreatesInventoryRow(t *testing.T) {
 		t.Fatalf("扣减后水位 %d，期望 7", after)
 	}
 
-	// 冗余字段要跟着 SKU 一起动（数据模型 §3）。
+	// 价格区间与总库存要跟着 SKU 一起动。
+	//
+	// 00019 之前这句话的意思是「同步器跑过了」；现在它们是读的时候从
+	// skus / inventories 现算的，所以这条断言检查的是那个 LEFT JOIN LATERAL
+	// 真的接到了这件商品的 SKU 上 —— 把 LATERAL 的 WHERE 改成一个恒假条件，
+	// 两个数都会回到 0，这里就红。
 	p, err := findProduct(t, r, asA, f.prodA)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if p.TotalStock == 0 || p.MinPriceCents == 0 {
-		t.Fatalf("建完 SKU 之后商品的冗余字段还是 (min=%d, stock=%d) —— 没有重算",
+		t.Fatalf("建完 SKU 之后商品的价格区间与总库存还是 (min=%d, stock=%d) —— 现算没接上",
 			p.MinPriceCents, p.TotalStock)
+	}
+	// 现算比同步器多守住一件事：这个数是**当下**的水位，不是某一次写入时的快照。
+	// 上面那次 DeductInventory 扣掉了 5 件，而它不经过任何「重算冗余字段」的
+	// 代码路径 —— 同步器版本在这里会原样回 before.TotalStock。
+	if got := before.TotalStock - p.TotalStock; got != 5 {
+		t.Fatalf("扣掉 5 件之后商品的总库存从 %d 变成 %d（差 %d），期望差 5 —— "+
+			"这个数不是现算的，它停在某一次写入的快照上",
+			before.TotalStock, p.TotalStock, got)
 	}
 }
 

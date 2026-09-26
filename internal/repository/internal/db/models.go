@@ -139,24 +139,22 @@ type Payment struct {
 }
 
 type Product struct {
-	ID            int64
-	MerchantID    int64
-	CategoryID    int64
-	BrandID       *int64
-	Title         string
-	Subtitle      *string
-	Description   *string
-	MinPriceCents int64
-	MaxPriceCents int64
-	TotalStock    int32
-	SalesCount    int32
-	Status        int16
-	PublishedAt   pgtype.Timestamptz
-	DeletedAt     pgtype.Timestamptz
-	CreatedAt     pgtype.Timestamptz
-	UpdatedAt     pgtype.Timestamptz
-	SearchText    *string
-	SearchVector  interface{}
+	ID           int64
+	MerchantID   int64
+	CategoryID   int64
+	BrandID      *int64
+	Title        string
+	Subtitle     *string
+	Description  *string
+	TotalStock   int32
+	SalesCount   int32
+	Status       int16
+	PublishedAt  pgtype.Timestamptz
+	DeletedAt    pgtype.Timestamptz
+	CreatedAt    pgtype.Timestamptz
+	UpdatedAt    pgtype.Timestamptz
+	SearchText   *string
+	SearchVector interface{}
 }
 
 type ProductCluster struct {
