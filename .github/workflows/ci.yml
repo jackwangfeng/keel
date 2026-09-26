@@ -352,6 +352,11 @@ jobs:
   # 但不该把一个改文档的 PR 卡在一次模型下载上。
   inference:
     name: 推理引擎（真模型，不挡 PR）
+    # PR 上不跑，只在 main 与手动触发（workflow_dispatch）时跑。
+    # continue-on-error 只是「红了不挡」，挡不住「整轮 CI 要等它跑完才算完」：
+    # 它要下 2.27 GB 权重，挂在每个 PR 上，PR 的结论就得多等十几二十分钟。
+    # 上面「为什么不挡 PR」那段说它是定期与按需的核对 —— 那就让它只在那两种时候跑。
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     continue-on-error: true
     # 本机实测：镜像建好后空卷冷启动 75 秒（下载 2.27 GB + 加载）。
@@ -379,20 +384,32 @@ jobs:
       - name: 建推理镜像
         run: docker build -t keel-inference services/inference
 
+      # 容器里是 uid 65532（services/inference/Dockerfile 的 USER），而 /tmp/hfcache 是
+      # runner 用户建的（缓存恢复出来的文件也归 runner）。不改属主的话引擎一启动就死在
+      # PermissionError: '/models/hub' —— c2238e6 加上这个 job 之后每一次都是这样。
       - name: 起引擎
         run: |
           mkdir -p /tmp/hfcache
+          sudo chown -R 65532:65532 /tmp/hfcache
           docker run -d --name inference -p 8001:8000 \
             -v /tmp/hfcache:/models -e HF_HOME=/models keel-inference
 
       # 不用固定 sleep：冷启动时长取决于权重下没下过，差两个数量级。
       # /healthz 只在模型加载完之后才 200（app.py 把加载放在 lifespan 里，
       # 而 uvicorn 在 lifespan 跑完之前根本不开始监听）。
+      #
+      # 容器退出了就当场失败：原来只轮询 /healthz，引擎启动几秒就崩了也要白等满
+      # 30 分钟才红（上面那个权限问题就是这么把每轮 CI 拖成一小时的）。
       - name: 等引擎就绪
         run: |
           for i in $(seq 1 180); do
             if curl -fsS http://127.0.0.1:8001/healthz >/dev/null 2>&1; then
               curl -fsS http://127.0.0.1:8001/healthz; echo; exit 0
+            fi
+            if [ "$(docker inspect -f '{{.State.Running}}' inference 2>/dev/null)" != "true" ]; then
+              echo "引擎容器已经退出（第 ${i} 次检查时）：" >&2
+              docker logs inference >&2 || true
+              exit 1
             fi
             sleep 10
           done
