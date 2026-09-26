@@ -10,9 +10,14 @@
         <text class="t-overline">{{ detail!.offShelf ? '已下架' : 'KEEL 精选' }}</text>
         <text class="name">{{ detail!.title }}</text>
         <text v-if="detail!.subtitle != ''" class="t-sub">{{ detail!.subtitle }}</text>
+        <view v-if="detail!.promoTags.length > 0" class="tag-row">
+          <text v-for="(tag, ti) in detail!.promoTags" :key="ti" class="promo-tag">{{ tag }}</text>
+        </view>
         <view class="gap-m"></view>
         <view class="row">
           <text class="t-price-l">{{ selectedPrice }}</text>
+          <!-- 限时特价：划线显示门店价。 -->
+          <text v-if="selectedListPrice != ''" class="strike">{{ selectedListPrice }}</text>
           <text v-if="selectedStock >= 0" class="t-hint stock">库存 {{ selectedStock }}</text>
         </view>
 
@@ -114,6 +119,14 @@ export default {
         if (d.skus[i].id == this.skuId) return d.skus[i].priceText
       }
       return d.priceText
+    },
+    selectedListPrice(): string {
+      const d = this.detail
+      if (d == null) return ''
+      for (let i = 0; i < d.skus.length; i++) {
+        if (d.skus[i].id == this.skuId) return d.skus[i].listPriceText
+      }
+      return ''
     },
     selectedLabel(): string {
       const d = this.detail

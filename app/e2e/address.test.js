@@ -81,7 +81,7 @@ describe('收货地址', () => {
       expect(await page.data('addressId')).toBe(0)
       return
     }
-    const addr = await waitData(page, 'address', (a) => a !== null)
+    const addr = await waitData(page, 'address', (a) => a != null)
     expect(addr.id).toBe(def.id)
     await waitFor(page, '.t-price-l', (t) => t.startsWith('¥'))
   })

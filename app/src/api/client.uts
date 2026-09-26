@@ -106,6 +106,9 @@ export const PROBLEM_REFUND_ALREADY_IN_PROGRESS = 'https://keel.dev/problems/ref
 export const PROBLEM_REFUND_NOT_CANCELABLE = 'https://keel.dev/problems/refund-status-not-cancelable'
 // 不是退货退款，或当前不在 20 待买家退货：不能填 / 改寄回物流。
 // 试算 / 下单：有商品送不到这个收货地址。Problem.undeliverable_items 逐行给原因。
+// 营销活动：超过每人限购（提示减数量）；秒杀配额卖完（重新试算会按门店价报价）。
+export const PROBLEM_PROMOTION_LIMIT_EXCEEDED = 'https://keel.dev/problems/promotion-limit-exceeded'
+export const PROBLEM_PROMOTION_SOLD_OUT = 'https://keel.dev/problems/promotion-sold-out'
 export const PROBLEM_REGION_NOT_DELIVERABLE = 'https://keel.dev/problems/region-not-deliverable'
 export const PROBLEM_REFUND_NOT_RETURNABLE = 'https://keel.dev/problems/refund-status-not-returnable'
 

@@ -336,4 +336,34 @@ body {
   color: #2A211B;
   margin-bottom: 4px;
 }
+
+/* ---------- 活动 ----------
+   标签文字是服务端给的 label（「满199减20」「限时特价 ¥49.9」），原样放。 */
+.tag-row {
+  flex-direction: row;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+.promo-tag {
+  font-size: 11px;
+  color: #B4462E;
+  border-width: 1px;
+  border-style: solid;
+  border-color: #E8B4A6;
+  border-radius: 4px;
+  padding: 1px 5px;
+  margin-right: 4px;
+  margin-bottom: 2px;
+}
+.strike {
+  font-size: 12px;
+  color: #A89C90;
+  text-decoration-line: line-through;
+  margin-left: 6px;
+}
+.promo-note {
+  font-size: 12px;
+  color: #B4462E;
+  line-height: 18px;
+}
 </style>

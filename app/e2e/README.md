@@ -1,4 +1,9 @@
-# 真机自动化测试
+# 自动化测试
+
+**日常验收一律跑 H5 无头全量**（`make app-e2e-h5`，一分多钟、能进 CI、能重复跑、失败有日志）；
+Android / iOS / 小程序只验证编译。**真机只在发版前跑一次**：真机要解锁、要有人在场，无人值守会卡住，
+慢且结果不稳定（2026-09-27 实测 iPhone 半锁屏时全量大面积 Connection closed）。原生才有的东西
+（tab 角标、相册选择器、原生渲染）在提交说明里记「留待发版前真机验证」。
 
 用 DCloud 官方的 [uni-automator](https://uniapp.dcloud.net.cn/worktile/auto/quick-start.html)
 （jest + 选择器 API）驱动 USB 连着的手机上**我们自己打的包**，Android 与 iOS 同一套用例。

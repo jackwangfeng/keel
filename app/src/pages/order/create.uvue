@@ -118,8 +118,12 @@
                 <text class="t-body">{{ pv!.freightText }}</text>
               </view>
             </view>
+            <!-- 优惠拆开列：活动（满减）/ 券抵的商品金额 / 包邮券抵的运费。三样都没有时写一行「优惠 ¥0.00」。 -->
+            <view v-if="pv!.promotionDiscountText != ''" class="kv"><text class="t-sub">活动优惠</text><text class="t-body">{{ pv!.promotionDiscountText }}</text></view>
+            <view v-if="pv!.couponDiscountText != ''" class="kv"><text class="t-sub">优惠券</text><text class="t-body">{{ pv!.couponDiscountText }}</text></view>
             <view v-if="pv!.freightDiscountText != ''" class="kv"><text class="t-sub">运费抵扣</text><text class="t-body">{{ pv!.freightDiscountText }}</text></view>
-            <view class="kv"><text class="t-sub">优惠</text><text class="t-body">{{ pv!.discountText }}</text></view>
+            <view v-if="pv!.promotionDiscountText == '' && pv!.couponDiscountText == '' && pv!.freightDiscountText == ''" class="kv"><text class="t-sub">优惠</text><text class="t-body">{{ pv!.discountText }}</text></view>
+            <text v-for="(n, ni) in pv!.promotionNotes" :key="ni" class="promo-note">{{ n }}</text>
             <view class="divider"></view>
             <view class="kv"><text class="t-section">应付</text><text class="t-price">{{ pv!.payableText }}</text></view>
           </view>
@@ -175,7 +179,7 @@
 </template>
 
 <script>
-import { batchDeleteCartItems, createOrder, getCart, getProduct, listAddresses, previewOrder, ApiFailure, PROBLEM_REGION_NOT_DELIVERABLE, PROBLEM_COUPON_NOT_APPLICABLE, PROBLEM_IDEMPOTENCY_KEY_IN_FLIGHT, PROBLEM_IDEMPOTENCY_KEY_REUSED } from '@/api/client.uts'
+import { batchDeleteCartItems, createOrder, getCart, getProduct, listAddresses, previewOrder, ApiFailure, PROBLEM_PROMOTION_LIMIT_EXCEEDED, PROBLEM_PROMOTION_SOLD_OUT, PROBLEM_REGION_NOT_DELIVERABLE, PROBLEM_COUPON_NOT_APPLICABLE, PROBLEM_IDEMPOTENCY_KEY_IN_FLIGHT, PROBLEM_IDEMPOTENCY_KEY_REUSED } from '@/api/client.uts'
 import { newIdempotencyKey } from '@/api/idempotency.uts'
 import { isLoggedIn, rememberOrder, takePickedAddress } from '@/api/config.uts'
 import { undeliverableLines, UndeliverableLine, addressRow, cartDeleteRequest, cartView, checkoutLines, coverOf, orderRequest, previewView, productDetailView, AddressRow, CartRow, CouponOption, OrderLine, PreviewView } from '@/api/view.uts'
@@ -496,6 +500,10 @@ export default {
           this.previewing = false
           if (this.notDeliverable(f)) return
           this.failed = true
+          if (f.problem != null && f.problem!.type == PROBLEM_PROMOTION_LIMIT_EXCEEDED) {
+            this.message = '超出活动每人限购，请减少数量（' + f.message + '）'
+            return
+          }
           // coupon-not-applicable 的 detail 就是原因（「未满 ¥50」之类），failureOf 已经把它
           // 放进 message 了。展开券列表，让用户换一张或不用 —— 由他决定，不替他退回原价。
           if (f.problem != null && f.problem!.type == PROBLEM_COUPON_NOT_APPLICABLE) {
@@ -563,6 +571,17 @@ export default {
             // 这一单没建成；换了地址再提交是新请求，换个键免得撞「同键异体」。
             this.idemKey = newIdempotencyKey()
             this.pv = null
+            return
+          }
+          if (t == PROBLEM_PROMOTION_SOLD_OUT || t == PROBLEM_PROMOTION_LIMIT_EXCEEDED) {
+            // 秒杀配额卖完：重新试算会按门店价报价 —— 价格变了，必须让用户看见新应付再按提交，
+            // 所以作废试算、自动重算一次，**不**自动重新下单。限购超了同样重算，页面停在错误上。
+            this.idemKey = newIdempotencyKey()
+            this.pv = null
+            this.message = t == PROBLEM_PROMOTION_SOLD_OUT
+              ? '活动名额刚刚抢完，已按现价重新计算，请确认应付金额后再提交'
+              : '超出活动每人限购，请减少数量（' + f.message + '）'
+            if (t == PROBLEM_PROMOTION_SOLD_OUT) this.preview()
             return
           }
           if (t == PROBLEM_IDEMPOTENCY_KEY_REUSED) {

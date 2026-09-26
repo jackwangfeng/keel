@@ -50,10 +50,15 @@
               <text class="t-body">{{ view!.freightText }}</text>
             </view>
           </view>
+          <view v-if="view!.promotionDiscountText != ''" class="kv"><text class="t-sub">活动优惠</text><text class="t-body">{{ view!.promotionDiscountText }}</text></view>
+          <text v-for="(pl, pi) in view!.promotionLines" :key="pi" class="t-hint promo-line">{{ pl }}</text>
+          <!-- discount_cents 是合计（活动分摊 + 券 + 包邮券抵的运费）。订单上没有单独的「券抵了多少」，
+               所以这里不做减法去推它：列出活动与运费抵扣，用了券就注明哪张，最后是合计。 -->
           <view v-if="view!.freightDiscountText != ''" class="kv"><text class="t-sub">运费抵扣</text><text class="t-body">{{ view!.freightDiscountText }}</text></view>
+          <text v-if="view!.couponId > 0" class="t-hint promo-line coupon-used">用券：{{ view!.couponName != '' ? view!.couponName : '优惠券' }}</text>
           <view class="kv">
-            <text class="t-sub">{{ view!.couponId > 0 ? '优惠券' : '优惠' }}</text>
-            <text class="t-body coupon-used">{{ view!.couponId > 0 ? (view!.couponName != '' ? view!.couponName + ' ' : '') + '-' + view!.discountText : view!.discountText }}</text>
+            <text class="t-sub">优惠合计</text>
+            <text class="t-body">-{{ view!.discountText }}</text>
           </view>
           <view class="kv"><text class="t-sub">已付</text><text class="t-body">{{ view!.paidText }}</text></view>
           <view v-if="view!.refundedText != ''" class="kv"><text class="t-sub">已退</text><text class="t-body">{{ view!.refundedText }}</text></view>
@@ -484,5 +489,9 @@ export default {
 }
 .freight-note {
   margin-right: 8px;
+}
+.promo-line {
+  text-align: right;
+  margin-bottom: 4px;
 }
 </style>

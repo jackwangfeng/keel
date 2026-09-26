@@ -17,6 +17,8 @@
 //     不是第一道。）
 
 import {
+  PromotionHit,
+  PromotionTag,
   FreightBreakdown,
   ListNotificationsQuery,
   Notification,
@@ -124,6 +126,16 @@ export type ProductRow = {
   offShelf : boolean
   soldOut : boolean
   cover : Cover
+  /** 活动标签（服务端给的 label，如「满199减20」「限时特价 ¥49.9」），原样显示，最多两个。 */
+  promoTags : string[]
+}
+
+/** promotion_tags -> 标签文字，原样用 label（文案在服务端），最多取两个：卡片上放不下更多。 */
+export function promoTagLabels(tags ?: PromotionTag[]) : string[] {
+  const out : string[] = []
+  if (tags == null) return out
+  for (let i = 0; i < tags!.length && out.length < 2; i++) out.push(tags![i].label)
+  return out
 }
 
 export function productRow(p : ProductSummary) : ProductRow {
@@ -142,6 +154,7 @@ export function productRow(p : ProductSummary) : ProductRow {
     // in_stock 是可选字段：契约没保证一定返回。没返回时不敢说它没货。
     soldOut: p.in_stock != null && !p.in_stock!,
     cover: coverOf(p.id, p.title, p.image_url),
+    promoTags: promoTagLabels(p.promotion_tags),
   } as ProductRow
 }
 
@@ -167,6 +180,7 @@ export function searchHitRow(h : SearchHit) : ProductRow {
     offShelf: h.status == 2,
     soldOut: h.in_stock != null && !h.in_stock!,
     cover: coverOf(h.id, h.title, h.image_url),
+    promoTags: promoTagLabels(h.promotion_tags),
   } as ProductRow
 }
 
@@ -176,7 +190,10 @@ export type SkuRow = {
   label : string
   /** 规格名，例如「烘焙」「容量」；页面拿它当规格区的标题。 */
   specName : string
+  /** 实际成交的单价：有限时特价就是特价（promo_price_cents），否则门店价。 */
   priceText : string
+  /** 有特价时的门店价（划线用）；没有特价是空串。 */
+  listPriceText : string
   availableQty : number
   soldOut : boolean
 }
@@ -229,11 +246,14 @@ export function skuRow(s : Sku) : SkuRow {
       values.push(parts[k + 1])
     }
   }
+  const promo = s.promo_price_cents != null && s.promo_price_cents! < s.price_cents
   return {
     id: s.id,
     label: values.length > 0 ? values.join(' / ') : s.sku_code,
     specName: names.length > 0 ? names.join(' / ') : '规格',
-    priceText: yuan(s.price_cents),
+    // 限时特价：成交价 = min(门店价, 特价)（契约 PromotionType 3/4），划线显示门店价。
+    priceText: promo ? yuan(s.promo_price_cents!) : yuan(s.price_cents),
+    listPriceText: promo ? yuan(s.price_cents) : '',
     availableQty: s.available_qty,
     soldOut: s.available_qty <= 0,
   } as SkuRow
@@ -248,6 +268,7 @@ export type ProductDetailView = {
   offShelf : boolean
   skus : SkuRow[]
   cover : Cover
+  promoTags : string[]
 }
 
 export function productDetailView(p : ProductDetail) : ProductDetailView {
@@ -264,6 +285,7 @@ export function productDetailView(p : ProductDetail) : ProductDetailView {
     offShelf: p.status == 2,
     skus: rows,
     cover: coverOf(p.id, p.title, p.image_url),
+    promoTags: promoTagLabels(p.promotion_tags),
   } as ProductDetailView
 }
 
@@ -400,6 +422,10 @@ export type OrderDetailView = {
   refundedText : string
   /** 包邮券抵掉的运费；没有是空串。 */
   freightDiscountText : string
+  /** 活动优惠合计；没有是空串。 */
+  promotionDiscountText : string
+  /** 命中的活动快照：「全场满 199 减 20 -¥20.00」。 */
+  promotionLines : string[]
   /** 运费说明（下单时的 freight 快照）；老订单没有快照，空串。 */
   freightNote : string
   /** 待支付才能取消。 */
@@ -461,6 +487,8 @@ export function orderDetailView(o : OrderDetail) : OrderDetailView {
     refundedText: o.refunded_cents != null && o.refunded_cents! > 0 ? yuan(o.refunded_cents!) : '',
     freightDiscountText: o.freight_discount_cents != null && o.freight_discount_cents! > 0 ? '-' + yuan(o.freight_discount_cents!) : '',
     freightNote: o.freight != null ? freightNote(o.freight!) : '',
+    promotionDiscountText: o.promotion_discount_cents != null && o.promotion_discount_cents! > 0 ? '-' + yuan(o.promotion_discount_cents!) : '',
+    promotionLines: orderPromotionLines(o),
     canCancel: o.status == 10,
     canConfirm: o.status == 30,
     canRefund: (o.status == 20 || o.status == 30 || o.status == 40) && refundableItems(o).length > 0,
@@ -482,6 +510,12 @@ export type PreviewView = {
   payableText : string
   /** 提交订单时要回填给服务端的 expected_payable_cents（契约：对不上回 409）。 */
   payableCents : number
+  /** 满减 / 满折这类活动优惠（promotion_discount_cents）；为 0 是空串。 */
+  promotionDiscountText : string
+  /** 券抵的商品金额（coupon_discount_cents，不含包邮券抵的运费）；为 0 是空串。 */
+  couponDiscountText : string
+  /** 活动说明：服务端给的 message 原样（「已减 20 元，再买 161 元可减 50 元」「还差 143.2 元减 20 元」）。 */
+  promotionNotes : string[]
   /** 包邮券抵掉的运费；没有抵扣是空串（页面不显示那一行）。 */
   freightDiscountText : string
   /** 「满¥99 包邮」「已满¥99 包邮」这类说明，来自 freight.groups；没什么可说是空串。 */
@@ -508,6 +542,9 @@ export function previewView(p : OrderPreview) : PreviewView {
     payableCents: p.payable_cents,
     freightDiscountText: p.freight_discount_cents > 0 ? '-' + yuan(p.freight_discount_cents) : '',
     freightNote: freightNote(p.freight),
+    promotionDiscountText: p.promotion_discount_cents > 0 ? '-' + yuan(p.promotion_discount_cents) : '',
+    couponDiscountText: p.coupon_discount_cents > 0 ? '-' + yuan(p.coupon_discount_cents) : '',
+    promotionNotes: promotionNotes(p.promotions),
     couponId: p.user_coupon_id != null ? p.user_coupon_id! : 0,
     coupons: options,
   } as PreviewView
@@ -933,8 +970,10 @@ export type CartRow = {
   productId : number
   title : string
   specText : string
-  /** 失效 / 本店不售的行 price_cents 是 null：显示「—」，不显示 ¥0.00。 */
+  /** 失效 / 本店不售的行 price_cents 是 null：显示「—」，不显示 ¥0.00。**是活动价**（限时特价后）。 */
   priceText : string
+  /** 门店价比活动价高时的门店价（划线用）；否则空串。 */
+  listPriceText : string
   quantity : number
   selected : boolean
   /** 能按这个数量买下（status == available）。只有这种行能勾选、能结算。 */
@@ -974,6 +1013,7 @@ export function cartRow(it : CartItem) : CartRow {
     title: title,
     specText: values.join(' / '),
     priceText: it.price_cents != null ? yuan(it.price_cents!) : '—',
+    listPriceText: it.price_cents != null && it.list_price_cents != null && it.list_price_cents! > it.price_cents! ? yuan(it.list_price_cents!) : '',
     quantity: it.quantity,
     // 不能买的行，页面上不显示为勾选：服务端的 selected 可能还是 true（加购时勾上的），
     // 但合计不算它、结算也不带它 —— 显示成勾选会让人以为它在这一单里。
@@ -1003,6 +1043,10 @@ export type CartView = {
    */
   freightText : string
   freightNote : string
+  /** 满减 / 满折优惠（promotion_discount_cents）；为 0 是空串。 */
+  promotionDiscountText : string
+  /** 「再买 ¥xx 减 20」这类凑单提示，服务端的 message 原样。 */
+  promotionNotes : string[]
 }
 
 export function cartView(c : Cart) : CartView {
@@ -1026,6 +1070,8 @@ export function cartView(c : Cart) : CartView {
     storeId: sid != null ? sid! : 0,
     freightText: c.freight != null ? yuan(c.freight!.freight_cents) : '',
     freightNote: c.freight != null ? freightNote(c.freight!) : '',
+    promotionDiscountText: c.promotion_discount_cents > 0 ? '-' + yuan(c.promotion_discount_cents) : '',
+    promotionNotes: promotionNotes(c.promotions),
   } as CartView
 }
 
@@ -1481,6 +1527,33 @@ export function undeliverableLines(p : Problem | null) : UndeliverableLine[] {
       reason: items![i].reason,
       provinceUnknown: items![i].reason_code == 'province_unknown',
     } as UndeliverableLine)
+  }
+  return out
+}
+
+// ---------------------------------------------------------------------------
+// 营销活动
+// ---------------------------------------------------------------------------
+//
+// 计价全在服务端（门店价 → 限时特价 → 满减分摊 → 券 → 运费 → 包邮券），客户端只显示结果：
+// 金额用服务端的数，说明用服务端的 message / label，不在这里拼「再买多少减多少」。
+
+/** 命中 / 差一点命中的活动说明，原样用 message；没有 message 的跳过。 */
+export function promotionNotes(hits : PromotionHit[]) : string[] {
+  const out : string[] = []
+  for (let i = 0; i < hits.length; i++) {
+    if (hits[i].message != '') out.push(hits[i].message)
+  }
+  return out
+}
+
+function orderPromotionLines(o : OrderDetail) : string[] {
+  const out : string[] = []
+  const list = o.promotions
+  if (list == null) return out
+  for (let i = 0; i < list!.length; i++) {
+    const p = list![i]
+    out.push(p.discount_cents > 0 ? p.name + ' -' + yuan(p.discount_cents) : p.name)
   }
   return out
 }

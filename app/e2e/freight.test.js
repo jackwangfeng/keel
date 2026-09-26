@@ -62,17 +62,17 @@ describe('运费', () => {
 
   it('默认地址（杭州）：99 元以下运费 8 元并提示满 99 包邮，应付 = 商品 + 运费 − 优惠', async () => {
     const page = await checkoutWith(skus.cheap, null)
-    const pv = await waitData(page, 'pv', (p) => p !== null)
+    const pv = await waitData(page, 'pv', (p) => p != null)
     expect(pv.freightText).toBe('¥8.00')
     expect(pv.freightNote).toBe('满¥99 包邮')
-    // 演示买家没有包邮券，运费抵扣为 0：应付 = 商品 + 运费 − 优惠（这些数都是服务端给的，这里只核对它们自洽）。
-    expect(pv.freightDiscountText).toBe('')
+    // 应付 = 商品 + 运费 − 优惠。discount_cents 已含包邮券抵的运费（promotion.test.js 每跑一次会领一张包邮券，
+    // 这里可能被自动选上），freight_cents 是抵扣前的运费。这些数都是服务端给的，这里只核对它们自洽。
     expect(pv.payableCents).toBe(cents(pv.goodsAmountText) + cents(pv.freightText) - cents(pv.discountText))
   })
 
   it('默认地址：99 元以上包邮，说明写「已满¥99 包邮」', async () => {
     const page = await checkoutWith(skus.dear, null)
-    const pv = await waitData(page, 'pv', (p) => p !== null)
+    const pv = await waitData(page, 'pv', (p) => p != null)
     expect(pv.freightText).toBe('¥0.00')
     expect(pv.freightNote).toBe('已满¥99 包邮')
   })
@@ -81,7 +81,7 @@ describe('运费', () => {
     const id = await makeAddress(token, { province: '新疆维吾尔自治区', city: '乌鲁木齐市', district: '天山区', region_code: '650102' })
     const page = await checkoutWith(skus.dear, id)
     await waitData(page, 'addressId', (v) => v === id)
-    const pv = await waitData(page, 'pv', (p) => p !== null)
+    const pv = await waitData(page, 'pv', (p) => p != null)
     expect(pv.freightText).toBe('¥15.00')
     expect(pv.freightNote).toBe('首件¥15，续件¥5')
   })

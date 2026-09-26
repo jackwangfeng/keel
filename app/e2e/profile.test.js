@@ -19,7 +19,7 @@ describe('个人资料', () => {
   it('显示服务端的昵称与脱敏手机号；改昵称后服务端是新值', async () => {
     const me = (await httpGet(apiBase() + '/me', token)).body
     const page = await program.navigateTo('/pages/me/profile')
-    const view = await waitData(page, 'me', (m) => m !== null)
+    const view = await waitData(page, 'me', (m) => m != null)
     expect(view.nickname).toBe(me.nickname)
     expect(view.phone).toBe(me.phone || '')
 

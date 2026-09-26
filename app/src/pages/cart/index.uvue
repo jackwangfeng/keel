@@ -41,7 +41,10 @@
               <text v-if="r.undeliverableText != ''" class="t-err cart-status undeliverable">{{ r.undeliverableText }}</text>
               <view class="gap-s"></view>
               <view class="between">
-                <text class="t-price">{{ r.priceText }}</text>
+                <view class="row">
+                  <text class="t-price">{{ r.priceText }}</text>
+                  <text v-if="r.listPriceText != ''" class="strike">{{ r.listPriceText }}</text>
+                </view>
                 <view class="stepper row">
                   <view :class="['step', r.quantity <= 1 ? 'btn-off' : '']" @click="changeQty(r.id, r.quantity - 1)"><text class="step-text">−</text></view>
                   <text class="step-num">{{ r.quantity }}</text>
@@ -50,6 +53,11 @@
               </view>
             </view>
           </view>
+        </view>
+
+        <!-- 凑单提示：服务端给的 message 原样（「再买 161 元可减 50 元」），不自己算差额。 -->
+        <view v-if="promotionNotes.length > 0" class="card">
+          <text v-for="(n, ni) in promotionNotes" :key="ni" class="promo-note">{{ n }}</text>
         </view>
 
         <view v-if="loggedIn && loaded && rows.length == 0 && error == ''" class="empty">
@@ -76,6 +84,7 @@
         </view>
         <!-- 预估运费按默认地址算（结算页可换地址）。没有地址时服务端不给 freight：不显示，
              不能写成「包邮」。 -->
+        <text v-if="!editing && promotionDiscountText != ''" class="promo-note cart-freight">活动已减 {{ promotionDiscountText.substring(1) }}</text>
         <text v-if="!editing && freightText != ''" class="t-hint cart-freight">运费 {{ freightText }}{{ freightNote != '' ? '（' + freightNote + '）' : '' }}</text>
       </view>
       <view v-if="editing" :class="['btn', 'bar-btn', 'btn-danger', deletableCount == 0 ? 'btn-off' : '']" @click="removeSelected">
@@ -119,6 +128,8 @@ export default {
       availableCount: 0,
       freightText: '',
       freightNote: '',
+      promotionDiscountText: '',
+      promotionNotes: [] as string[],
       loggedIn: false,
       loaded: false,
       error: '',
@@ -176,6 +187,8 @@ export default {
       this.availableCount = v.availableCount
       this.freightText = v.freightText
       this.freightNote = v.freightNote
+      this.promotionDiscountText = v.promotionDiscountText
+      this.promotionNotes = v.promotionNotes
       this.loaded = true
       this.busy = false
     },

@@ -33,6 +33,11 @@ Kotlin / Swift，不走 webview；同一份代码也编 H5 与小程序。
   `uni.downloadFile` 带 Authorization 取成本地文件再显示。
 - 退货寄回物流：退货退款且 20 待买家退货时，售后详情里选承运商、填运单号
   （`POST /refunds/{no}/return-shipment`），20 期间可以改；填完仍是 20，商家确认收到才到 30。
+- 营销活动：列表 / 搜索 / 详情显示活动标签（服务端的 `label` 原样）；详情与购物车里限时特价按特价显示、
+  划线门店价。结算页优惠拆成活动优惠 / 优惠券 / 运费抵扣三行，下面列服务端给的活动说明（`message` 原样，
+  「已减 20 元，再买 161 元可减 50 元」），不自己算凑单差额；购物车显示已减金额与凑单说明。
+  409 `promotion-limit-exceeded` 提示减数量；`promotion-sold-out` 作废试算、自动按现价重算一次，要用户重新确认，
+  不自动重下。订单详情列出命中活动的快照，优惠写成「优惠合计」（订单上没有单独的券抵扣额，不做减法去推）。
 - 运费：结算页直接显示服务端的 `freight_cents`（不自己算），旁边一句来自 `freight.groups` 的说明
   （「满¥99 包邮」「已满¥99 包邮」「首件¥15，续件¥5」），用了包邮券时多一行运费抵扣，应付是 `payable_cents`。
   422 `region-not-deliverable` 按 `undeliverable_items` 逐行标在商品上；`province_unknown` 时给「去补全地址」。
@@ -384,6 +389,7 @@ H5 构建产物 + 一个把 `/api` 反代给 Keel 的静态服务器，用无头
 | 收货地址 | `GET/POST/PUT/DELETE /addresses…`、`PUT …/default` | ✅ 小米真机 e2e（`address.test.js`）：列表与服务端一致、默认排第一；错的表单按 `errors[].field` 标红两项，改对后新建成功；结算页自动用默认地址 |
 | 购物车 | `GET /cart`、`POST /cart/items`、`PATCH /cart/items/{id}`、`POST …/batch-delete` | ✅ 小米真机 e2e（`cart.test.js`）：加购 → 调数量，合计与服务端 `selected_total_cents` 一致 → 去结算，试算商品金额 = 购物车合计 → 下单后这行从车里删掉。调大超库存时页面显示服务端 409 的原因（调试时实测） |
 | 售后凭证 / 寄回物流 | `POST /uploads`、`GET /uploads/{id}`、`POST /refunds/{no}/return-shipment` | ✅ iPhone 真机 e2e（`aftersale.test.js`，这轮小米锁屏）：带凭证的售后单在详情里带令牌读出凭证图；待买家退货填物流（顺丰）→ 服务端一致、仍是 20 → 改成京东 → 服务端跟着变；未发货的单申请页不能选退货退款。**App 内从相册选图并上传没有自动化**（相册选择器无法由自动化驱动），凭证由测试进程上传 |
+| 营销活动 / 包邮券 | `promotion_tags`、`promo_price_cents`、试算与购物车的 `promotions` / `promotion_discount_cents`、409 `promotion-limit-exceeded`、包邮券（CouponType 4） | ✅ H5 无头 e2e（`promotion.test.js`）：标签、特价划线、限购 3 件被拒、满 199 减 20 与凑单说明、包邮券在 99 以下自动选上抵 8 元、已包邮的单不出现包邮券、选着包邮券加到满 99 时显示「包邮券抵不了钱」并展开券列表；购物车划线与已减金额。**原生渲染留待发版前真机验证**（这轮 iPhone 状态不稳，promotion 在 iPhone 上的结果不可信，见提交说明） |
 | 运费 | `/orders/preview` 的 `freight_cents` / `freight`、422 `region-not-deliverable`、`Cart.freight`（`address_id`） | ✅ iPhone 真机 e2e（`freight.test.js`）：杭州 99 以下 8 元「满¥99 包邮」、以上「已满¥99 包邮」0 元；新疆 15 元「首件¥15，续件¥5」；香港送不到、原因标在商品上；省份写错引导补全地址；购物车按默认地址显示预估运费。包邮券没有 e2e（演示买家没有包邮券） |
 | 消息中心 | `GET /me/notifications`、`unread-count`、`POST …/{id}/read`、`read-all` | ✅ H5 无头 e2e（`notifications.test.js`，这轮小米、iPhone 都锁屏）：付款后出现「支付成功」、标题正文原样、点进去是那笔订单且服务端标成已读；全部已读后未读 0。售后驳回的通知点进去是那张售后单（后台代审产生 refund_rejected）。**tab 角标是原生 API，H5 覆盖不到；Android / iOS 只验证了编译** |
 | 搜索效果回传 | `POST /search` 的 `trace_id`、`POST /search/events` | ✅ iPhone 真机 e2e（`searchtrace.test.js`，这轮小米锁屏）：结果带 trace_id；点进商品后测试进程对同一对 trace_id + 商品重发 click 得 204（服务端认这对）；加购、购物车结算、下单照常成功。服务端是否记下三条事件由服务端按 trace_id 查日志核对 |

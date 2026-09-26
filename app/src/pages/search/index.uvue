@@ -51,6 +51,9 @@
             <view class="fill hit-info">
               <text class="hit-title">{{ item.title }}</text>
               <text v-if="item.subtitle != ''" class="t-hint">{{ item.subtitle }}</text>
+              <view v-if="item.promoTags.length > 0" class="tag-row">
+                <text v-for="(tag, ti) in item.promoTags" :key="ti" class="promo-tag">{{ tag }}</text>
+              </view>
               <view class="gap-s"></view>
               <view class="row">
                 <text class="t-price">{{ item.priceText }}</text>
