@@ -8,12 +8,15 @@
 # 都要先花时间分辨是代码错了还是两份实现错开了。把判据留在仓库里那一份，
 # 贡献者在本地跑的和 CI 跑的就是同一段代码，对不上的时候只有一个嫌疑人。
 #
-# ## 为什么分成五个 job
+# ## 为什么分成四个 job
 #
 # 前置条件不相交：gates 只要 Go 工具链 + Node，go 要一个 PostgreSQL，
 # e2e 要 Docker，client 要 app/ 那棵 527 个包的 npm 依赖树（含一个 16MB 的
-# 原生 UTS 编译器），inference 要 2.27 GB 模型权重。串成一个 job 的话，最慢的那段（compose 建镜像，分钟级）会挡住
-# 最快的那段（文档校验，本机实测 2.4 秒），而 PR 上最常红的恰恰是最快那段。
+# 原生 UTS 编译器）。串成一个 job 的话，最慢的那段（compose 建镜像，分钟级）
+# 会挡住最快的那段（文档校验，本机实测 2.4 秒），而 PR 上最常红的恰恰是最快那段。
+#
+# （曾经有第五个 job：inference，跑真模型。M4 换引擎之后它没有执行者了，
+# 已经删掉 —— 理由与后果见下面「没有覆盖到的」第一条。）
 #
 # 代价是 Go 模块要各下一遍。可以接受：真正贵的是 docker build，而它只在 e2e 里。
 #
@@ -31,17 +34,36 @@
 #     详见 app/README.md，那里写了实测到哪一步、卡在哪。
 #   - 客户端跑起来之后的行为。client 只编译，不启动浏览器、不打真后端。
 #     H5 形态对着真后端跑通过一次（记录在 app/README.md），但那是人手动跑的。
-#   - **向量检索这条路的端到端。** inference 这个 job 单独验引擎（真模型、真
-#     margin、app.py 那几条拒绝），e2e 验的是不带引擎的默认栈 —— 那时 smoke 里
-#     的检索走的是纯关键词降级路径。也就是说「索引任务把真向量写进库、
-#     /search 用它召回」这条完整链路在 CI 里没有执行者，只有人手动跑过。
-#     要补的话是给 e2e 叠上 compose.inference.yaml，代价是那个 job 从 8 分钟
-#     涨到二十几分钟，而它是挡 PR 的。
-#   - **inference 这个 job 不挡 PR**（continue-on-error）。红了要有人主动去看；
-#     没人看的话它等于不存在。这是刻意的取舍，理由写在那个 job 的注释里。
-#   - services/inference/app.py **没有自己的单元测试**。它的行为只在 inference
-#     这个 job 里通过真实 HTTP 被验证。不给它加桩模型开关是刻意的：那等于在
-#     生产服务里开一个替身入口，而 Go 侧正是用构建标签把替身关在门外的。
+#   - **真引擎（`make test-engine`）在 CI 里没有任何执行者，一个都没有。**
+#     这一条从「不挡 PR 的 inference job」退成了「不存在」，因为 M4 把引擎从
+#     Python + BGE-M3 换成了自研的 infero，而 **infero 只有 CUDA / Metal 后端，
+#     没有 CPU 后端** —— GitHub 托管 runner 上没有 GPU，那个 job 再留着也只是
+#     一个永远跑不动的空壳。原来的 job 已经删掉，而不是改成 continue-on-error
+#     或者挂一个不存在的 self-hosted 标签：一个永远排队 / 永远跳过的 job，
+#     在列表里看着像还守着什么，那比明说没有更糟。
+#
+#     所以 keel-integration.md 那三条判据（归一化从库里读回来验、语义 margin
+#     > 0.10、引擎挂了要报错）现在**只有人手动跑**，在一台有 NVIDIA GPU 的机器上：
+#
+#         ./scripts/infero-up.sh
+#         KEEL_EMBED_ENDPOINT=http://127.0.0.1:18081 PGHOST=… PGPORT=… make test-engine
+#
+#     要把它接回 CI，唯一的路是一台自托管 GPU runner。在那之前这里是空的，
+#     并且这行字就是用来提醒「它是空的」。
+#   - **向量检索这条路的端到端。** e2e 验的是不带引擎的默认栈 —— 那时 smoke 里
+#     的检索走的是纯关键词降级路径。「索引任务把真向量写进库、/search 用它召回」
+#     这条完整链路在 CI 里同样没有执行者，只有人手动跑过（M4 这一轮真的跑过一次，
+#     输出记在那次的交付报告里）。
+#   - **`services/inference/`（Python + BGE-M3）现在没有任何东西在用它。**
+#     它没被删，因为它是无 GPU 部署唯一可能的选项；但它今天**也接不上**：
+#     internal/inference 的客户端把 infero 的路径（/v1/embeddings）、模型名
+#     （Qwen3-Embedding-0）和池化哨兵写成了常量，那三样对 Python 那条腿都不对。
+#     要让它重新可用，得先把「引擎方言」从常量变成一份显式配置（没有默认值，
+#     照 KEEL_EMBED_ENDPOINT 的纪律来）—— 那是一次设计改动，不是改三个字符串，
+#     所以这一轮没做。在它做完之前，**「无 GPU 也能跑语义检索」这句话不成立**，
+#     无 GPU 部署只有「不配 KEEL_EMBED_ENDPOINT、/search 走纯关键词降级」这一种形态。
+#   - services/inference/app.py **没有自己的单元测试**，而现在连那个通过真实
+#     HTTP 验证它的 job 也没有了 —— 它当前是完全没有执行者的代码。
 #
 # ## M2 起 Rust 进了关键路径
 #
@@ -329,82 +351,3 @@ jobs:
       - name: 失败时列出产物
         if: failure()
         run: ls -R app/dist || true
-
-  # M3 的验收标准本身此前不在任何闸门里。
-  #
-  # 独立验收实测过：整个 CI 从头到尾没有启动过推理引擎，也没有跑过一次
-  # make test-engine。e2e 跑的是裸 docker compose，而 KEEL_EMBED_ENDPOINT 只在
-  # compose.inference.yaml 里；internal/inference 的其余测试全部用 httptest 假
-  # 服务端，测的是客户端的判断力，不是 services/inference/app.py 的行为。
-  #
-  # 后果很具体：app.py 里那几条「当场拒绝」（model 名不符、normalize=false、
-  # 超批不截断）删掉任何一条都不会红，而 M3 的判据「搜『连衣裙』能返回相关商品」
-  # 在进程外没有任何执行者。
-  #
-  # ## 为什么不挡 PR
-  #
-  # continue-on-error。这个 job 要下 2.27 GB 权重、冷启动约 75 秒，挂在每个 PR
-  # 上代价与收益不成比例。而它守的那件事（模型退化成一个伪 embedding）不是一次
-  # 代码改动能悄悄引入的 —— 真要引入，internal/inference 的 nofake 那两条会先红，
-  # 它们在 gates 里、每个 PR 都跑。
-  #
-  # 所以这里的定位是「定期与按需的真相核对」，不是守门人。红了要有人看，
-  # 但不该把一个改文档的 PR 卡在一次模型下载上。
-  inference:
-    name: 推理引擎（真模型，不挡 PR）
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    # 本机实测：镜像建好后空卷冷启动 75 秒（下载 2.27 GB + 加载）。
-    # 40 分钟给的是 runner 上从零拉 torch CPU 轮子 + 权重的余量。
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: |
-            go.sum
-            tools/go.sum
-
-      # 权重缓存。键取 Dockerfile + requirements.txt：模型名与推理栈版本都钉在
-      # 那两个文件里，它们不变则权重不变。缓存没命中时下面那步会多花几分钟，
-      # 而不是失败。
-      - name: 缓存模型权重
-        uses: actions/cache@v4
-        with:
-          path: /tmp/hfcache
-          key: bge-m3-${{ hashFiles('services/inference/Dockerfile', 'services/inference/requirements.txt') }}
-
-      - name: 建推理镜像
-        run: docker build -t keel-inference services/inference
-
-      - name: 起引擎
-        run: |
-          mkdir -p /tmp/hfcache
-          docker run -d --name inference -p 8001:8000 \
-            -v /tmp/hfcache:/models -e HF_HOME=/models keel-inference
-
-      # 不用固定 sleep：冷启动时长取决于权重下没下过，差两个数量级。
-      # /healthz 只在模型加载完之后才 200（app.py 把加载放在 lifespan 里，
-      # 而 uvicorn 在 lifespan 跑完之前根本不开始监听）。
-      - name: 等引擎就绪
-        run: |
-          for i in $(seq 1 180); do
-            if curl -fsS http://127.0.0.1:8001/healthz >/dev/null 2>&1; then
-              curl -fsS http://127.0.0.1:8001/healthz; echo; exit 0
-            fi
-            sleep 10
-          done
-          echo "引擎 30 分钟没就绪" >&2
-          docker logs inference >&2 || true
-          exit 1
-
-      # 这一组里既有「真引擎算出来的向量有没有语义」（margin > 0.10），
-      # 也有「app.py 那几条拒绝还在不在」。后者是协议层断言，不算向量，很快。
-      - name: 真引擎测试
-        run: KEEL_EMBED_ENDPOINT=http://127.0.0.1:8001 make test-engine
-
-      - name: 失败时导出引擎日志
-        if: failure()
-        run: docker logs inference || true

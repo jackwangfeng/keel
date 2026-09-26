@@ -131,10 +131,23 @@ curl "http://localhost:$KEEL_HTTP_PORT/api/v1/products"
 - **cross-encoder 精排与业务重排。** 今天的 `POST /search` 是**两段**的——向量召回
   与关键词召回，用 RRF 融合。契约描述的是四段，后两段在 M5。`explain: true` 会
   列出这一次真正跑过的阶段，所以响应不会声称自己做了没做的事
-- **推理引擎是可选的叠加层，不在 `docker compose up` 里。** 用
-  `-f compose.inference.yaml` 起它，用 `cmd/keel-index` 建索引。不起它搜索照样
-  能用——会退化成纯关键词召回，那是一条**支持的路径**而不是故障。叠加层要拉
-  约 3.7 GB、冷启动约 75 秒，这正是它没有进那条一行命令的理由
+- **推理引擎不在 `docker compose up` 里，而且它要一块 NVIDIA GPU。**
+  M4 起引擎是自研的 [infero](https://github.com/jackwangfeng/infero)
+  （Qwen3-Embedding-0.6B，1024 维，正好对上库里的 `vector(1024)`）。
+  它跑在 **compose 之外的宿主机进程**里：
+
+      ./scripts/infero-up.sh                                       # 先起引擎
+      docker compose -f compose.yaml -f compose.infero.yaml up -d   # 再起栈
+
+  为什么不做成一个 compose 服务：infero 是 GPU-only，一块卡同时只装得下一份，
+  容器化换来的只有「一条命令起全栈」，代价是 2–3 GB 的 CUDA 基础镜像加 GPU 透传。
+  理由与实测数字写在 `scripts/infero-up.sh` 的文件头。
+
+  **不起它搜索照样能用**——会退化成纯关键词召回，那是一条**支持的路径**而不是故障。
+  但要注意这条路径今天比以前窄：`services/inference/`（Python + CPU + BGE-M3）
+  还在仓库里，可是 `internal/inference` 的客户端已经只会说 infero 的方言了
+  （路径、模型名、池化哨兵都是常量）。也就是说**没有 GPU 的机器今天没有语义检索**，
+  只有关键词那一路。要让两条腿都活，得先把「引擎方言」变成一份显式配置
 - **商家后台的写接口。** 契约里有，实现还没有——商家今天能处理订单，
   但还没法上架商品（M4）
 - 店铺前台与后台界面——3000 端口上目前没有任何页面

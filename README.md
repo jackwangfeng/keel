@@ -143,11 +143,27 @@ nothing above reads as if it already ships:
   two-stage — vector recall and keyword recall, fused with RRF. The contract
   describes four stages; the last two land in M5. `explain: true` names the
   stages that actually ran, so the response never claims more than it did
-- **the inference engine is an opt-in overlay, not part of `docker compose up`.**
-  Bring it up with `-f compose.inference.yaml` and index with `cmd/keel-index`.
-  Without it search still answers — it degrades to keyword-only recall, which is
-  a supported path, not a failure. The overlay pulls ~3.7 GB and needs ~75 s on
-  a cold start, which is why it is not in the default one-command stack
+- **the inference engine is not part of `docker compose up`, and it needs an
+  NVIDIA GPU.** Since M4 the engine is our own
+  [infero](https://github.com/jackwangfeng/infero) running
+  Qwen3-Embedding-0.6B (1024-dim, exactly the `vector(1024)` already in the
+  schema). It runs as a **host process outside compose**:
+
+      ./scripts/infero-up.sh                                       # engine first
+      docker compose -f compose.yaml -f compose.infero.yaml up -d   # then the stack
+
+  Why not a compose service: infero is GPU-only and one card holds exactly one
+  of them at a time, so containerising it buys only the single command and
+  costs a 2–3 GB CUDA base image plus GPU passthrough. The measured reasoning
+  is in the header of `scripts/infero-up.sh`.
+
+  **Search still answers without it** — it degrades to keyword-only recall,
+  which is a supported path, not a failure. Note that path is narrower than it
+  used to be: `services/inference/` (Python + CPU + BGE-M3) is still in the
+  repo, but `internal/inference`'s client now only speaks infero's dialect
+  (path, model name and pooling sentinel are all constants). So **a machine
+  without a GPU has no semantic search today**, only the keyword half. Making
+  both legs work again means turning that dialect into explicit configuration
 - the merchant admin surface. The contract has it; the implementation does not —
   a merchant can process orders but cannot list a product yet (M4)
 - the storefront and admin UI — there is no page on port 3000 yet
