@@ -6,7 +6,6 @@ package db
 
 import (
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/pgvector/pgvector-go"
 )
 
 // 子事务屏障（数据模型 §6）。形状照抄 dtmrs-barrier v0.11.0，别加列。
@@ -172,7 +171,7 @@ type ProductImageVector struct {
 	ProductID    int64
 	MerchantID   int64
 	ImageUrl     string
-	Embedding    *pgvector.Vector
+	Embedding    string
 	ModelName    string
 	ModelVersion string
 	UpdatedAt    pgtype.Timestamptz
@@ -182,7 +181,7 @@ type ProductTextVector struct {
 	ProductID    int64
 	MerchantID   int64
 	Content      string
-	Embedding    *pgvector.Vector
+	Embedding    string
 	ModelName    string
 	ModelVersion string
 	UpdatedAt    pgtype.Timestamptz
