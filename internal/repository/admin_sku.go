@@ -46,7 +46,7 @@ type AdminSKUTx interface {
 	//	errors.Is(err, ErrInventoryPrecondition)   CAS 对不上 → 409，
 	//	                                           errors.As 取 *InventoryConflict
 	//	                                           拿当前真实值
-	SetInventory(ctx context.Context, skuID int64, expected, want int32, warning *int32) (Inventory, error)
+	SetInventory(ctx context.Context, storeID, skuID int64, expected, want int32, warning *int32) (Inventory, error)
 }
 
 // NewSKU 是建 SKU 的入参。AvailableQty 在这里是**允许的**，而在 SKUPatch 里
@@ -300,7 +300,19 @@ func (t tenantTx) SoftDeleteSKU(ctx context.Context, id int64) (int64, error) {
 // SetInventoryByCAS 用两个 CTE 在同一个 MVCC 快照下分别回传 visible_rows 与
 // updated_rows。这一层只是把两个数翻成两个 sentinel —— 如果分辨发生在这里
 // （先 SELECT 再 UPDATE），那就是两次快照，中间的窗口正是这条接口要防的东西。
-func (t tenantTx) SetInventory(ctx context.Context, skuID int64, expected, want int32, warning *int32) (Inventory, error) {
+// **storeID 由调用方定，这一层不猜。** 00020 之后 inventories 的主键是
+// (sku_id, store_id)，一条只给 sku_id 的 CAS 没有唯一的目标行。契约把这条
+// 路径的语义写死成「本租户恰好一家未软删门店时它就是那一家，否则 409
+// store-ambiguous」，而那一步判断在 service 里用 SoleStore 做 —— 放在这里
+// 或放进 SQL，都等于在最热的写路径上默认一个猜测，而猜错的后果是把另一家店
+// 的水位覆盖掉，没有任何东西会响。
+func (t tenantTx) SetInventory(ctx context.Context, storeID, skuID int64, expected, want int32, warning *int32) (Inventory, error) {
+	if storeID <= 0 {
+		// 漏传 store_id 的症状最难查：params 里那个字段会取零值，
+		// 而 store_id = 0 匹配不上任何一行，于是 visible_rows = 0，
+		// 这条接口对**每一个** SKU 都回 404 —— 一个看起来像鉴权问题的 bug。
+		return Inventory{}, fmt.Errorf("sku %d 的库存 CAS 没有门店上下文", skuID)
+	}
 	if want < 0 || expected < 0 {
 		// chk_qty_nonneg 也会兜住负的新值，但它兜不住负的 expected ——
 		// 而一个负的 expected 永远匹配不上，症状是「怎么改都 409」。
@@ -312,6 +324,7 @@ func (t tenantTx) SetInventory(ctx context.Context, skuID int64, expected, want 
 
 	r, err := t.q.SetInventoryByCAS(ctx, db.SetInventoryByCASParams{
 		SkuID:                skuID,
+		StoreID:              storeID,
 		AvailableQty:         want,
 		WarningQty:           warning,
 		ExpectedAvailableQty: expected,
@@ -336,6 +349,7 @@ func (t tenantTx) SetInventory(ctx context.Context, skuID int64, expected, want 
 			Expected: expected,
 			Current: Inventory{
 				SKUID:        skuID,
+				StoreID:      storeID,
 				AvailableQty: *r.CurrentAvailableQty,
 				WarningQty:   *r.CurrentWarningQty,
 				UpdatedAt:    r.CurrentUpdatedAt.Time,
@@ -350,6 +364,7 @@ func (t tenantTx) SetInventory(ctx context.Context, skuID int64, expected, want 
 	}
 	return Inventory{
 		SKUID:        skuID,
+		StoreID:      storeID,
 		AvailableQty: *r.NewAvailableQty,
 		WarningQty:   *r.NewWarningQty,
 		UpdatedAt:    r.NewUpdatedAt.Time,

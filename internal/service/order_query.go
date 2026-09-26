@@ -51,8 +51,27 @@ type OrderList struct {
 type OrderDetail struct {
 	Order    repository.Order
 	Receiver ReceiverSnapshot
+	Store    StoreSnapshot
 	Items    []repository.OrderItem
 	Payments []repository.Payment
+}
+
+// StoreSnapshot 是从 orders.store_snapshot 里读回来的门店 / 大区展示信息
+// （契约的 OrderStoreSnapshot）。
+//
+// 字段的 json tag 逐字对着写快照那条 SQL 的 jsonb_build_object
+// （db/queries/orders.sql 的 CreateOrderDraft）。两边任何一处改名，
+// 结果都是这里静默地全是空值 —— 详情页显示一家没有名字的门店，
+// 而不是一次报错。钉住它的是 order_query_test.go 里那条「下单再读回来，
+// 门店名逐字相同」的断言。
+//
+// **快照里刻意没有 id**：放了就会有人去 GROUP BY 它，而聚合该走
+// orders.store_id 那一列（真外键、有索引）。
+type StoreSnapshot struct {
+	StoreName  string `json:"store_name"`
+	RegionName string `json:"region_name"`
+	Address    string `json:"address"`
+	Phone      string `json:"phone"`
 }
 
 // ReceiverSnapshot 是从 orders.receiver_snapshot 里读回来的收货信息。
@@ -132,6 +151,17 @@ func (s *OrderService) Detail(ctx context.Context, orderNo string) (OrderDetail,
 			// 格式由 receiverSnapshot 定）。报出来，不要回一个空收货人 ——
 			// 那会让详情页显示一张寄给「」的单。
 			return fmt.Errorf("订单 %s 的收货快照解不开: %w", orderNo, err)
+		}
+
+		rawStore, err := tx.FindOrderStoreSnapshot(ctx, order.ID)
+		if err != nil {
+			return err
+		}
+		if err := json.Unmarshal(rawStore, &out.Store); err != nil {
+			// 与收货快照同一条理由：这一列由 CreateOrderDraft 那条
+			// INSERT ... SELECT FROM stores 写，解不开是我们自己写坏了。
+			// 报出来，不要回一家没有名字的门店。
+			return fmt.Errorf("订单 %s 的门店快照解不开: %w", orderNo, err)
 		}
 
 		if out.Items, err = tx.ListOrderItems(ctx, order.ID); err != nil {

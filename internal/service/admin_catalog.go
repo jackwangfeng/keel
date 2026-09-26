@@ -488,8 +488,20 @@ func (s *AdminCatalogService) SetInventory(ctx context.Context, skuID int64,
 	}
 	var out repository.Inventory
 	err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
-		var e error
-		out, e = tx.SetInventory(ctx, skuID, expected, want, warning)
+		// 00020 之后「这个 SKU 的库存」不再是一个有定义的东西：主键是
+		// (sku_id, store_id)。契约把这条路径的语义写死成
+		// 「**本租户恰好有一家未软删的门店时它就是那一家，否则 409
+		// store-ambiguous**」，而不是「落到默认门店」—— 库存是唯一真相，
+		// 猜错一家店的后果是把另一家店的水位覆盖掉，而且没有任何东西会响。
+		//
+		// 解析与写在**同一个事务**里：分成两次的话，中间的一次开店会让
+		// 「解析到 A 店」与「写进 A 店」之间出现一个窗口，
+		// 而那时正确答案已经是 409 了。
+		storeID, e := tx.SoleStore(ctx)
+		if e != nil {
+			return e
+		}
+		out, e = tx.SetInventory(ctx, storeID, skuID, expected, want, warning)
 		return e
 	})
 	return out, err

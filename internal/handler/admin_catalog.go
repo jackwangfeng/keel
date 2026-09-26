@@ -126,12 +126,7 @@ func writeCatalogError(c *gin.Context, err error) {
 			Type:   problem.TypeInventoryPrecondition,
 			Title:  "库存的 expected_available_qty 与当前值不符",
 			Status: http.StatusConflict,
-			Current: api.AdminInventory{
-				SkuId:        conflict.Current.SKUID,
-				AvailableQty: int(conflict.Current.AvailableQty),
-				WarningQty:   int(conflict.Current.WarningQty),
-				UpdatedAt:    conflict.Current.UpdatedAt,
-			},
+			Current: apiAdminInventory(conflict.Current),
 		})
 
 	case errors.Is(err, repository.ErrProductDeleted):
@@ -166,6 +161,16 @@ func writeCatalogError(c *gin.Context, err error) {
 		problem.Write(c, http.StatusConflict,
 			problem.TypeCategoryCycle, "目标父节点是自己或自己的后代，移动会形成环")
 
+	case errors.Is(err, repository.ErrStoreAmbiguous):
+		// PUT /admin/skus/{sku_id}/inventory 在门店数不是 1 时。
+		//
+		// **409 而不是 422**，契约明写：它和上面那条 CAS 失败共用 409 是刻意的
+		// —— 两者都是「服务端现在的状态与你的假设不符」。差别由 type 说清楚：
+		// 那一条要刷新重试，这一条要换 /admin/stores/{store_id}/skus/{sku_id}/inventory。
+		problem.Write(c, http.StatusConflict, problem.TypeStoreAmbiguous,
+			"本租户的门店数不是 1，「这个 SKU 的库存」没有唯一答案；"+
+				"请改调 PUT /admin/stores/{store_id}/skus/{sku_id}/inventory")
+
 	// —— 422 这一组（商品图那三条，契约按 Problem type 区分）。
 	case errors.Is(err, repository.ErrUploadNotFound):
 		problem.Write(c, http.StatusUnprocessableEntity,
@@ -193,6 +198,22 @@ func writeCatalogError(c *gin.Context, err error) {
 // 一律用 internal/api 里生成的类型（CONTRIBUTING 硬规矩二 + product.go 的
 // 包注释）：契约里把某个字段改名或挪出 required，这里当场编译失败，
 // 而不是等线上客户端解析失败。
+
+// apiAdminInventory 是**唯一**一处把一行库存装成契约类型的地方。
+//
+// 抽出来不是为了省几行：契约把 AdminInventory.store_id 定成必返，而这个字段
+// 有两个出口（200 的响应体、409 里那个 current）。两处各拼一遍的话，
+// 漏掉 store_id 的那一处会安静地回一个 0 —— 而 0 是一个**看起来合法**的门店 id，
+// 后台会拿它去刷新页面，刷出一个空格子，然后无限重试。
+func apiAdminInventory(inv repository.Inventory) api.AdminInventory {
+	return api.AdminInventory{
+		SkuId:        inv.SKUID,
+		StoreId:      inv.StoreID,
+		AvailableQty: int(inv.AvailableQty),
+		WarningQty:   int(inv.WarningQty),
+		UpdatedAt:    inv.UpdatedAt,
+	}
+}
 
 func apiAdminProduct(p repository.AdminProduct) api.AdminProduct {
 	out := api.AdminProduct{

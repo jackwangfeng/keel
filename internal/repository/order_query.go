@@ -88,6 +88,13 @@ type OrderQueryTx interface {
 	// FindOrderReceiver 取下单时拍下的收货信息快照（JSONB 原样的字节）。
 	FindOrderReceiver(ctx context.Context, orderID int64) ([]byte, error)
 
+	// FindOrderStoreSnapshot 取下单时拍下的门店 / 大区展示快照。
+	//
+	// **读快照，不 JOIN stores**：门店会改名、会搬家、会被调到另一个大区，
+	// 而三个月前那一单的详情页要显示当时那个名字（数据模型 §5）。
+	// JOIN 出来的是今天的名字，而那正是快照存在要避免的东西。
+	FindOrderStoreSnapshot(ctx context.Context, orderID int64) ([]byte, error)
+
 	// ListOrderPayments 取这一单的全部支付尝试。
 	ListOrderPayments(ctx context.Context, orderID int64) ([]Payment, error)
 }
@@ -205,6 +212,17 @@ func (t tenantTx) ListOrderItems(ctx context.Context, orderID int64) ([]OrderIte
 
 func (t tenantTx) FindOrderReceiver(ctx context.Context, orderID int64) ([]byte, error) {
 	raw, err := t.q.GetOrderReceiver(ctx, orderID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, fmt.Errorf("order %d: %w", orderID, ErrOrderNotFound)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return raw, nil
+}
+
+func (t tenantTx) FindOrderStoreSnapshot(ctx context.Context, orderID int64) ([]byte, error) {
+	raw, err := t.q.GetOrderStoreSnapshot(ctx, orderID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, fmt.Errorf("order %d: %w", orderID, ErrOrderNotFound)
 	}

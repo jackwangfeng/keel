@@ -243,6 +243,20 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	// 也要看得到商品，否则小程序的首页到详情页这一跳就需要先登录。
 	v1.GET("/products/:product_id", ph.Detail)
 
+	// 门店解析。契约里两条都是 security: []（公开的）：还没登录的人要看得到
+	// 「谁服务你」，否则小程序首页在拿到门店之前什么都渲染不出来 ——
+	// 而**每一条读接口的答案都取决于哪家店**（价格走三层覆盖、库存按门店分）。
+	//
+	// **这不等于它们不校验租户**：租户由上面那道 res.Middleware() 从 Host 定
+	// 出来，挡住跨店结果的是 stores 表上的 RLS。
+	//
+	// 注册顺序要紧：`/stores/resolve` 在 `/stores` 后面是安全的（gin 的路由树
+	// 按静态段优先匹配，不是按注册顺序），但**不要**把 resolve 写成
+	// `/stores/:store_id` 那种形状 —— 那会让 `resolve` 变成一个门店 id。
+	sh := handler.NewStoreHandler(service.NewStoreService(repo))
+	v1.GET("/stores", sh.List)
+	v1.GET("/stores/resolve", sh.Resolve)
+
 	// /auth/login 与 /auth/refresh 在契约里是 security: []（公开的）：
 	// 一个还没有令牌的人要能打到它们。**这不等于它们不校验租户** ——
 	// 租户由上面那道 res.Middleware() 从 Host 定出来，而 refresh 自己会再核对
@@ -354,6 +368,49 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	v1.POST("/admin/categories", staffAuth, cat.CreateCategory)
 	v1.PATCH("/admin/categories/:category_id", staffAuth, cat.UpdateCategory)
 	v1.DELETE("/admin/categories/:category_id", staffAuth, cat.DeleteCategory)
+
+	// -----------------------------------------------------------------------
+	// 门店 / 大区 / 两层可见性 / 三层定价 / 按门店的库存（00020，契约 21 条）
+	// -----------------------------------------------------------------------
+	//
+	// **每一条都挂 staffAuth**，一条都不能漏 —— 与上面那 16 条同一条理由，
+	// 而这一组的后果更重：漏掉 PUT /admin/stores/{id}/skus/{id}/price
+	// 的鉴权，一个匿名请求就能把这家店的售价改成 0 并拿到 200。
+	// 租户中间件仍然会把 Host 解出来，WithTenant 照常开事务。
+	//
+	// 两道执行者与那 16 条共用：
+	//   · internal/app/run_test.go 的 TestRouterServesContractPaths 核路径；
+	//   · internal/handler 的 TestAdminStoreRoutesAllRequireStaffSession
+	//     **逐条**不带令牌打一次，断言它们全是 401。只核路径的话，
+	//     把这一行的 staffAuth 删掉，路由表一个字都不会变。
+	st := handler.NewAdminStoreHandler(service.NewAdminStoreService(repo))
+
+	v1.GET("/admin/regions", staffAuth, st.ListRegions)
+	v1.POST("/admin/regions", staffAuth, st.CreateRegion)
+	v1.PATCH("/admin/regions/:region_id", staffAuth, st.UpdateRegion)
+	v1.DELETE("/admin/regions/:region_id", staffAuth, st.DeleteRegion)
+	v1.GET("/admin/regions/:region_id/products", staffAuth, st.ListRegionProducts)
+	v1.PUT("/admin/regions/:region_id/products/:product_id/listing", staffAuth, st.SetRegionListing)
+	v1.PUT("/admin/regions/:region_id/skus/:sku_id/price", staffAuth, st.SetRegionPrice)
+	v1.DELETE("/admin/regions/:region_id/skus/:sku_id/price", staffAuth, st.ClearRegionPrice)
+
+	v1.GET("/admin/stores", staffAuth, st.ListStores)
+	v1.POST("/admin/stores", staffAuth, st.CreateStore)
+	v1.GET("/admin/stores/:store_id", staffAuth, st.Detail)
+	v1.PATCH("/admin/stores/:store_id", staffAuth, st.UpdateStore)
+	v1.DELETE("/admin/stores/:store_id", staffAuth, st.DeleteStore)
+	// 围栏与默认店各自一条端点，**不并进上面那条 PATCH**：一个要过
+	// ST_IsValid，另一个要在同一个事务里先清旧再置新（uk_stores_default 是
+	// 部分唯一索引，反过来会自己撞自己）。并进 PATCH 就等于给那两条纪律
+	// 留了第二条绕过去的路，而 repository.StorePatch 上刻意没有这两个字段。
+	v1.PUT("/admin/stores/:store_id/fence", staffAuth, st.SetFence)
+	v1.PUT("/admin/stores/:store_id/default", staffAuth, st.MakeDefault)
+	v1.GET("/admin/stores/:store_id/products", staffAuth, st.ListStoreProducts)
+	v1.PUT("/admin/stores/:store_id/products/:product_id/listing", staffAuth, st.SetStoreListing)
+	v1.PUT("/admin/stores/:store_id/skus/:sku_id/price", staffAuth, st.SetStorePrice)
+	v1.DELETE("/admin/stores/:store_id/skus/:sku_id/price", staffAuth, st.ClearStorePrice)
+	v1.GET("/admin/stores/:store_id/inventories", staffAuth, st.ListStoreInventories)
+	v1.PUT("/admin/stores/:store_id/skus/:sku_id/inventory", staffAuth, st.SetStoreInventory)
 	return r
 }
 

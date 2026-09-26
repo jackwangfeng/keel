@@ -61,6 +61,14 @@ func (h *OrderHandler) Detail(c *gin.Context) {
 	// JSON 里就整个不出现 —— 所以下面这段必须与 apiOrder 逐行对齐，
 	// 而 order_query_test.go 里那条「详情与列表对同一单给出同样的 Order 部分」
 	// 的断言就是钉这件事的。
+	regionID := d.Order.RegionID
+	store := api.OrderStoreSnapshot{
+		StoreName:    d.Store.StoreName,
+		RegionName:   optStr(d.Store.RegionName),
+		StoreAddress: optStr(d.Store.Address),
+		StorePhone:   optStr(d.Store.Phone),
+	}
+
 	c.JSON(http.StatusOK, api.OrderDetail{
 		OrderNo:          base.OrderNo,
 		Status:           base.Status,
@@ -76,6 +84,14 @@ func (h *OrderHandler) Detail(c *gin.Context) {
 		PaidAt:           base.PaidAt,
 		ShippedAt:        base.ShippedAt,
 		FinishedAt:       base.FinishedAt,
+
+		// 履约门店。**store_id 在契约里是必返**（库里 NOT NULL），
+		// region_id 与 store 都是可选。三个一起给：store_id 让客户端能拿它
+		// 去打 /admin 或再下一单，store 是**下单当时**的展示快照 ——
+		// 门店改名、搬家、换大区之后，这一单的详情页仍然显示当时那个名字。
+		StoreId:  d.Order.StoreID,
+		RegionId: &regionID,
+		Store:    &store,
 
 		Receiver: &receiver,
 		Items:    &items,

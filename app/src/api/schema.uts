@@ -1101,20 +1101,11 @@ export type ListOrdersResponse = {
   items : Order[]
 }
 
-/** POST /search 的请求体 */
-export type SearchRequest = {
-  query : string
-  filters? : SearchFilters
-  size? : number
-  /** 排序策略标识，用于 A/B 对比。记入检索日志后可按策略分组 */
-  strategy? : string
-  /** 返回各阶段得分，用于调试与效果评估 */
-  explain? : boolean
-}
-
 /** POST /search 的 200 响应体 */
 export type SearchResponse = {
   items : SearchHit[]
+  /** 本次检索是按哪家门店算的。**必返**，与 `GET /products` */
+  store : StoreContext
   latency_ms : number
   /** 本次召回并排序后的结果总数（上限即 `size`）。 */
   total? : number

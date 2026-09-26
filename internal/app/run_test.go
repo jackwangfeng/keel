@@ -298,6 +298,37 @@ func TestRouterServesContractPaths(t *testing.T) {
 		"POST /api/v1/admin/categories":                       false,
 		"PATCH /api/v1/admin/categories/:category_id":         false,
 		"DELETE /api/v1/admin/categories/:category_id":        false,
+
+		// 买家侧门店那两条（00020）。契约里它们是 security: []，
+		// 所以这里没有对应的「要不要令牌」断言 —— 那正是它们与下面 21 条的
+		// 唯一差别，而差别只写在 app.go 那两行有没有 staffAuth 上。
+		"GET /api/v1/stores":         false,
+		"GET /api/v1/stores/resolve": false,
+
+		// 门店 / 大区后台那 21 条（00020）。同样只核路径 ——
+		// 「每一条都挂了 staffAuth」由 internal/handler 的
+		// TestAdminStoreRoutesAllRequireStaffSession 逐条打一次来证明。
+		"GET /api/v1/admin/regions":                                         false,
+		"POST /api/v1/admin/regions":                                        false,
+		"PATCH /api/v1/admin/regions/:region_id":                            false,
+		"DELETE /api/v1/admin/regions/:region_id":                           false,
+		"GET /api/v1/admin/regions/:region_id/products":                     false,
+		"PUT /api/v1/admin/regions/:region_id/products/:product_id/listing": false,
+		"PUT /api/v1/admin/regions/:region_id/skus/:sku_id/price":           false,
+		"DELETE /api/v1/admin/regions/:region_id/skus/:sku_id/price":        false,
+		"GET /api/v1/admin/stores":                                          false,
+		"POST /api/v1/admin/stores":                                         false,
+		"GET /api/v1/admin/stores/:store_id":                                false,
+		"PATCH /api/v1/admin/stores/:store_id":                              false,
+		"DELETE /api/v1/admin/stores/:store_id":                             false,
+		"PUT /api/v1/admin/stores/:store_id/fence":                          false,
+		"PUT /api/v1/admin/stores/:store_id/default":                        false,
+		"GET /api/v1/admin/stores/:store_id/products":                       false,
+		"PUT /api/v1/admin/stores/:store_id/products/:product_id/listing":   false,
+		"PUT /api/v1/admin/stores/:store_id/skus/:sku_id/price":             false,
+		"DELETE /api/v1/admin/stores/:store_id/skus/:sku_id/price":          false,
+		"GET /api/v1/admin/stores/:store_id/inventories":                    false,
+		"PUT /api/v1/admin/stores/:store_id/skus/:sku_id/inventory":         false,
 	}
 	for _, ri := range r.Routes() {
 		key := ri.Method + " " + ri.Path

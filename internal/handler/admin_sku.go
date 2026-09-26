@@ -172,10 +172,8 @@ func (h *AdminCatalogHandler) SetInventory(c *gin.Context) {
 		writeCatalogError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, api.AdminInventory{
-		SkuId:        inv.SKUID,
-		AvailableQty: int(inv.AvailableQty),
-		WarningQty:   int(inv.WarningQty),
-		UpdatedAt:    inv.UpdatedAt,
-	})
+	// store_id 必返，即使这条路径的 URL 里没有它：它是服务端推出来的
+	// （本租户恰好一家门店），而调用方要知道自己刚改的是哪一家 ——
+	// 它哪天开第二家店时，同一个请求会 409 store-ambiguous 而不是猜一家。
+	c.JSON(http.StatusOK, apiAdminInventory(inv))
 }
