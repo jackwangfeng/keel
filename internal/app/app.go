@@ -19,6 +19,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/keel/keel/internal/auth"
+	"github.com/keel/keel/internal/buildinfo"
 	"github.com/keel/keel/internal/db"
 	"github.com/keel/keel/internal/dtm"
 	"github.com/keel/keel/internal/handler"
@@ -160,7 +161,9 @@ func sandboxEnabled(v string) bool {
 // embedder 与 orders 不同：**传 nil 是一个正常形态**，那时 /search 只跑关键词
 // 那一路，仍然返回结果。这正是语义检索层 §8 的降级链（「任何一环故障，
 // 搜索都必须仍能返回结果」），而 README 承诺的那条 `docker compose up`
-// 里本来就没有推理引擎 —— 引擎在 compose.inference.yaml 那个叠加层里。
+// 里本来就没有推理引擎 —— 引擎是 infero，GPU-only，跑在 compose 之外的宿主机
+// 进程里（scripts/infero-up.sh + compose.infero.yaml）。没有 NVIDIA GPU 的机器
+// 今天**只有**这个形态：栈起得来、搜索有结果，只是没有语义召回。
 // 它与「派生数据入库任务没有引擎就拒绝构造」刻意相反，两边的理由都写在
 // service/search.go 与 service/index.go 的文件头。
 func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
@@ -195,6 +198,16 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	// healthz 在租户中间件之外：它回答的是「这个进程还活着吗」，
 	// 挂在中间件后面的话，一个没配对的 Host 会让编排系统以为进程死了。
 	r.GET("/healthz", func(c *gin.Context) { c.String(http.StatusOK, "ok") })
+
+	// version 和 healthz 并排，理由是同一条：它们都不是业务接口，都不该经过
+	// 租户中间件。**但两者刻意分开，没有把版本号塞进 healthz 的响应体**——
+	// 存活探针的正文是编排系统在轮询的东西，往里加字段等于让每一次探活都多
+	// 传一点没人读的数据；更要紧的是 compose 与 k8s 的探针配置里常常写着
+	// 对正文的精确匹配，改它的形状是一次会在别人的部署里生效的破坏。
+	//
+	// 这条路由对外可见，而仓库本身是开源的 —— commit sha 不是秘密。
+	// 它换来的是 issue 里「你跑的是哪一版」有一个不靠人回忆的答案。
+	r.GET("/version", func(c *gin.Context) { c.JSON(http.StatusOK, buildinfo.Get()) })
 
 	repo := repository.New(pool)
 	ph := handler.NewProductHandler(service.NewProductService(repo))
@@ -451,6 +464,13 @@ func Listen(addr string, h http.Handler) error {
 // Preflight 是测不出来的：把那行删掉，所有测试照样绿，而 tenant 包里那四道检查
 // 会一声不响地变成死代码。协调器这一段同理。
 func Run(ctx context.Context, listen func(addr string, h http.Handler) error) error {
+	// 版本号排在所有事情之前，包括建连接池。
+	//
+	// 启动失败的日志才是最需要它的那一份：连不上库、自检不过、协调器起不来、
+	// 这三条都会让 Run 直接返回，而排查的第一个问题永远是「跑的是哪一版」。
+	// 放在成功路径上的话，恰恰是最该有版本号的那些日志里没有。
+	slog.InfoContext(ctx, "keel "+buildinfo.String())
+
 	cfg := ConfigFromEnv()
 
 	pool, err := db.NewPool(ctx)

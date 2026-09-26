@@ -8,11 +8,14 @@
 
 > 全部能力**本地推理**。零外部 API 调用，数据不出内网，无按量计费。
 >
-> 「跑在**自研**推理引擎上」是目标不是现状：今天跑的是 `services/inference/`
-> （Python + sentence-transformers + torch），自研的那个是
-> [infero](https://github.com/jackwangfeng/infero)，它从 M7 起接进来。
-> 为什么是 M7、以及它今天接不上的两个缺口，见
-> [总体架构](./电商系统-总体架构.md) §1 的注。
+> 「跑在**自研**推理引擎上」这句话，embedding 这一半从 M4 起是真的：索引侧与
+> 查询侧的向量都由 [infero](https://github.com/jackwangfeng/infero) 算
+> （Qwen3-Embedding-0.6B，1024 维）。rerank / generate / forecast 那三半还没接，
+> 各自的里程碑见下表。
+>
+> **infero 只有 CUDA / Metal 后端，今天没有 CPU 后端。** 所以没有 GPU 的部署
+> 不配 `KEEL_EMBED_ENDPOINT`，`/search` 走纯关键词降级链 —— 能跑，只是没有语义
+> 召回。完整的事实与后果见[总体架构](./电商系统-总体架构.md) §1 的注与 §6 形态 A。
 
 ---
 
@@ -27,7 +30,7 @@
 
 | 接口 | 用途 | 对应里程碑 |
 |---|---|---|
-| `POST /v1/embed` | 文本 / 图像向量 | M3 / M6 |
+| `POST /v1/embeddings` | 文本 / 图像向量 | M3 / M6（文本那一半 M4 起跑在 infero 上） |
 | `POST /v1/rerank` | cross-encoder 精排 | M5 |
 | `POST /v1/generate` | 带 schema 约束的结构化生成 | M9 |
 | `POST /v1/forecast` | 时序预测（Chronos-2） | M12 |

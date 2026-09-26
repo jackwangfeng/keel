@@ -258,6 +258,7 @@ func TestRouterServesContractPaths(t *testing.T) {
 		service.PaymentConfig{Sandbox: true}, nil)
 	want := map[string]bool{
 		"GET /healthz":                           false,
+		"GET /version":                           false,
 		"GET /api/v1/products":                   false,
 		"POST /api/v1/search":                    false,
 		"GET /api/v1/products/:product_id":       false,

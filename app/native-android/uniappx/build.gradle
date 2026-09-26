@@ -1,0 +1,62 @@
+plugins {
+    alias(libs.plugins.android.library)
+    alias(libs.plugins.jetbrains.kotlin.android)
+    id 'io.dcloud.uts.kotlin'
+}
+
+android {
+    namespace 'dev.keel.buyer.uniappx'
+    compileSdk 36
+
+    defaultConfig {
+        minSdk 21
+    }
+
+    aaptOptions {
+        additionalParameters '--auto-add-overlay'
+        ignoreAssetsPattern '!.svn:!.git:.*:!CVS:!thumbs.db:!picasa.ini:!*.scc:*~'
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+    kotlinOptions {
+        jvmTarget = '1.8'
+    }
+}
+
+// 下面的三方依赖照搬 SDK Demo 的 uniappx 模块（运行时核心 aar 依赖它们），去掉了
+// Demo 里演示用的地图 / 播放器 / 直播 / 泄漏检测那几项。
+//
+// 用 api 而不是 implementation：真正依赖它们的是 app 模块里的 SDK aar（比如
+// UniAppActivity 继承自 appcompat 的 AppCompatActivity）。implementation 不会把它们
+// 放上 app 的编译 classpath，lint 顺着继承链找不到 Activity，会把启动 Activity
+// 判成「不可实例化」并中断 release 构建。
+dependencies {
+    compileOnly files(gradle.ext.uniAars)
+    api "androidx.core:core-ktx:1.10.1"
+    api "androidx.recyclerview:recyclerview:1.3.2"
+    api "androidx.appcompat:appcompat:1.6.1"
+    api "androidx.exifinterface:exifinterface:1.3.6"
+    api "androidx.localbroadcastmanager:localbroadcastmanager:1.0.0@aar"
+    api "androidx.constraintlayout:constraintlayout:2.1.4"
+    api "androidx.webkit:webkit:1.6.0"
+    api "com.google.android.material:material:1.4.0"
+    api "androidx.viewpager2:viewpager2:1.1.0-beta02"
+    api "com.alibaba:fastjson:1.2.83"
+    api "com.facebook.fresco:fresco:3.4.0"
+    api "com.facebook.fresco:middleware:3.4.0"
+    api "com.facebook.fresco:animated-gif:3.4.0"
+    api "com.facebook.fresco:webpsupport:3.4.0"
+    api "com.facebook.fresco:animated-webp:3.4.0"
+    api "com.caverock:androidsvg:1.4"
+    api "com.github.bumptech.glide:glide:4.16.0"
+    api "org.jetbrains.kotlinx:kotlinx-coroutines-core:1.6.4"
+    api "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.6.4"
+    api "org.jetbrains.kotlin:kotlin-stdlib:2.2.0"
+    api "org.jetbrains.kotlin:kotlin-reflect:2.2.0"
+    api "org.jetbrains.kotlinx:kotlinx-serialization-json:1.4.1"
+    api "net.lingala.zip4j:zip4j:2.11.5"
+    api "com.squareup.okhttp3:okhttp:3.12.12"
+    api "com.github.getActivity:XXPermissions:18.63"
+}

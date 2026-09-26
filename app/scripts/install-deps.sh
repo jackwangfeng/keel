@@ -33,7 +33,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 APP_DIR=$(pwd)
 
-echo "==> npm install（$APP_DIR）"
+echo "==> npm install（${APP_DIR}）"
 if [ -f package-lock.json ]; then
     npm ci --no-audit --no-fund
 else
@@ -61,7 +61,7 @@ if [ -d "node_modules/@dcloudio/$binding" ]; then
 fi
 
 version=$(node -p "require('./node_modules/@dcloudio/uts/package.json').optionalDependencies['@dcloudio/$binding']")
-echo "==> npm 跳过了 @dcloudio/$binding（libc 元数据不匹配），手工取 $version"
+echo "==> npm 跳过了 @dcloudio/${binding}（libc 元数据不匹配），手工取 $version"
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT

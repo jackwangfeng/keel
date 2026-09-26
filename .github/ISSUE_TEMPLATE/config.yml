@@ -1,0 +1,7 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/jackwangfeng/keel/security/advisories/new
+    about: >-
+      Tenant isolation bypass, privilege escalation, auth flaws — report
+      privately, never as a public issue. See SECURITY.md for what counts.

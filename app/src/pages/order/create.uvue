@@ -1,84 +1,189 @@
 <template>
   <view class="page">
-    <view class="card">
-      <text class="title">下单</text>
-      <view class="row line">
-        <text class="label">sku_id</text>
-        <input class="input" type="number" v-model="skuIdText" @input="invalidate" />
-      </view>
-      <view class="row line">
-        <text class="label">数量</text>
-        <input class="input" type="number" v-model="quantityText" @input="invalidate" />
-      </view>
-      <view class="row line">
-        <text class="label">address_id</text>
-        <input class="input" type="number" v-model="addressIdText" @input="invalidate" />
-      </view>
-      <!-- 地址是手填的：契约里有 GET /addresses，后端这一版没有。
-           与其画一个假的地址簿，不如把这件事摆在页面上。 -->
-      <text class="muted">GET /addresses 后端尚未实现，地址先手填（种子买家名下是 1）。</text>
-      <button class="btn-ghost" @click="preview">试算</button>
-    </view>
+    <scroll-view class="scroll" direction="vertical">
+      <view class="body">
+        <!-- 收货地址。契约里有 GET /addresses，后端这一版没有 ——
+             与其画一个假的地址簿，不如写明「默认地址 #1」并允许改编号。 -->
+        <view class="card">
+          <view class="between">
+            <text class="t-overline">收货地址</text>
+            <text class="t-link" @click="editAddress = !editAddress">{{ editAddress ? '完成' : '修改' }}</text>
+          </view>
+          <view class="gap-s"></view>
+          <text class="t-section">默认地址 #{{ addressIdText }}</text>
+          <text class="t-hint">地址簿即将上线，目前按地址编号下单</text>
+          <view v-if="editAddress" class="field">
+            <text class="field-label">地址编号</text>
+            <input class="field-input" type="number" v-model="addressIdText" @input="invalidate" @blur="preview" />
+          </view>
+        </view>
 
-    <view v-if="pv != null" class="card">
-      <text class="title">试算结果</text>
-      <view class="row line"><text class="label">商品金额</text><text>{{ pv!.goodsAmountText }}</text></view>
-      <view class="row line"><text class="label">运费</text><text>{{ pv!.freightText }}</text></view>
-      <view class="row line"><text class="label">优惠</text><text>{{ pv!.discountText }}</text></view>
-      <view class="row line"><text class="label">应付</text><text class="price">{{ pv!.payableText }}</text></view>
-      <button class="btn" :disabled="busy" @click="submit">提交订单</button>
-    </view>
+        <!-- 商品 -->
+        <view class="card">
+          <view class="row">
+            <view class="cover thumb" :style="{ backgroundColor: coverColor }">
+              <image v-if="coverImage != ''" class="cover-img" :src="coverImage" mode="aspectFill"></image>
+              <text v-else class="cover-glyph thumb-glyph">{{ coverGlyph }}</text>
+            </view>
+            <view class="fill item-info">
+              <text class="t-section">{{ itemTitle }}</text>
+              <text class="t-hint">{{ itemSpec }}</text>
+              <view class="gap-s"></view>
+              <view class="between">
+                <text class="t-price">{{ unitPrice }}</text>
+                <view class="stepper row">
+                  <view :class="['step', quantity <= 1 ? 'btn-off' : '']" @click="changeQty(-1)"><text class="step-text">−</text></view>
+                  <text class="step-num">{{ quantity }}</text>
+                  <view class="step" @click="changeQty(1)"><text class="step-text">+</text></view>
+                </view>
+              </view>
+            </view>
+          </view>
+        </view>
 
-    <view class="card">
-      <text class="title">幂等键</text>
-      <text class="mono">{{ idemKey }}</text>
-      <text class="muted">
-        进这个页面时生成一次，之后每次提交都复用它。每次点击重新生成等于把幂等
-        整个废掉：用户手抖点两下就是两笔订单。服务端对重放返回 201 +
-        Idempotency-Replayed: true，对同键异体返回 422。
-      </text>
-      <button v-if="needNewKey" class="btn-ghost" @click="rotate">订单内容变了，换一个新键</button>
-    </view>
+        <!-- 金额 -->
+        <view class="card">
+          <view v-if="!loggedIn" class="center">
+            <text class="t-sub">登录后查看应付金额</text>
+            <view class="gap-m"></view>
+            <view class="btn-ghost login-btn" @click="goLogin"><text class="btn-ghost-text">去登录</text></view>
+          </view>
+          <view v-else-if="pv != null">
+            <view class="kv"><text class="t-sub">商品金额</text><text class="t-body">{{ pv!.goodsAmountText }}</text></view>
+            <view class="kv"><text class="t-sub">运费</text><text class="t-body">{{ pv!.freightText }}</text></view>
+            <view class="kv"><text class="t-sub">优惠</text><text class="t-body">{{ pv!.discountText }}</text></view>
+            <view class="divider"></view>
+            <view class="kv"><text class="t-section">应付</text><text class="t-price">{{ pv!.payableText }}</text></view>
+          </view>
+          <view v-else-if="previewing" class="center"><text class="t-hint">正在计算…</text></view>
+          <view v-else class="center">
+            <text class="t-hint">金额待计算</text>
+            <view class="gap-s"></view>
+            <text class="t-link" @click="preview">重新计算</text>
+          </view>
+        </view>
 
-    <text v-if="message != ''" :class="failed ? 'err pad' : 'ok pad'">{{ message }}</text>
-    <button v-if="orderNo != ''" class="btn-ghost" @click="openOrder">查看订单详情</button>
+        <!-- 结果 -->
+        <view v-if="message != ''" :class="['card', failed ? 'result-err' : 'result-ok']">
+          <text :class="failed ? 't-err' : 't-ok'">{{ message }}</text>
+          <view v-if="needNewKey">
+            <view class="gap-m"></view>
+            <view class="btn-ghost" @click="rotate"><text class="btn-ghost-text">作为新订单提交</text></view>
+          </view>
+        </view>
+
+        <!-- 技术信息：幂等键。进这个页面时生成一次，之后每次提交都复用它。
+             每次点击重新生成等于把幂等整个废掉：用户手抖点两下就是两笔订单。
+             服务端对重放返回 201 + Idempotency-Replayed: true，对同键异体返回 422。
+             对买家它不是主信息，收起来；但不藏掉 —— 排查「为什么没下成」时要看得到。 -->
+        <view class="tech">
+          <text class="t-hint" @click="showTech = !showTech">{{ showTech ? '收起技术信息' : '技术信息' }}</text>
+          <view v-if="showTech" class="tech-body">
+            <text class="t-hint">幂等键（重复提交不会重复下单）</text>
+            <text class="t-mono">{{ idemKey }}</text>
+          </view>
+        </view>
+      </view>
+    </scroll-view>
+
+    <view class="bar" :style="{ paddingBottom: (10 + safeBottom) + 'px' }">
+      <view class="fill">
+        <text class="t-hint">应付</text>
+        <text class="t-price-l">{{ pv != null ? pv!.payableText : '—' }}</text>
+      </view>
+      <view v-if="orderNo != '' && !needNewKey" class="btn bar-btn" @click="openOrder">
+        <text class="btn-text">查看订单</text>
+      </view>
+      <view v-else :class="['btn', 'bar-btn', pv == null || busy ? 'btn-off' : '']" @click="submit">
+        <text class="btn-text">{{ busy ? '提交中…' : '提交订单' }}</text>
+      </view>
+    </view>
   </view>
 </template>
 
 <script>
-import { createOrder, previewOrder, ApiFailure, PROBLEM_IDEMPOTENCY_KEY_IN_FLIGHT, PROBLEM_IDEMPOTENCY_KEY_REUSED } from '@/api/client.uts'
+import { createOrder, getProduct, previewOrder, ApiFailure, PROBLEM_IDEMPOTENCY_KEY_IN_FLIGHT, PROBLEM_IDEMPOTENCY_KEY_REUSED } from '@/api/client.uts'
 import { newIdempotencyKey } from '@/api/idempotency.uts'
 import { isLoggedIn, rememberOrder } from '@/api/config.uts'
 import { OrderCreateRequest } from '@/api/schema.uts'
-import { previewView, PreviewView } from '@/api/view.uts'
+import { coverOf, previewView, productDetailView, PreviewView } from '@/api/view.uts'
 
 export default {
   data() {
     return {
       skuIdText: '1',
-      quantityText: '1',
+      productId: 0,
+      quantity: 1,
       addressIdText: '1',
+      editAddress: false,
       idemKey: '',
       pv: null as PreviewView | null,
+      previewing: false,
+      loggedIn: false,
       message: '',
       failed: false,
       busy: false,
       needNewKey: false,
       orderNo: '',
+      showTech: false,
+      safeBottom: 0,
+      // 商品展示信息。只用于展示；下单只认 sku_id。
+      itemTitle: '',
+      itemSpec: '',
+      unitPrice: '',
+      coverColor: '#D4B896',
+      coverGlyph: '·',
+      coverImage: '',
     }
   },
   onLoad(options: OnLoadOptions) {
+    this.safeBottom = uni.getWindowInfo().safeAreaInsets.bottom
     const raw = options['sku_id']
     if (raw != null) {
       this.skuIdText = '' + raw
     }
-    // **这里，且只有这里。** 见模板里那段说明。
+    const pid = options['product_id']
+    this.productId = pid != null ? parseInt('' + pid) : 0
+    this.itemTitle = '规格 #' + this.skuIdText
+    // **这里，且只有这里。** 见模板里「技术信息」那段说明。
     this.idemKey = newIdempotencyKey()
+    this.loadItem()
+  },
+  onShow() {
+    // onShow：从登录页回来时要接着算。
+    this.loggedIn = isLoggedIn()
+    if (this.loggedIn && this.pv == null && this.orderNo == '') {
+      this.preview()
+    }
   },
   methods: {
+    loadItem() {
+      if (this.productId <= 0) return
+      getProduct(
+        this.productId,
+        (d) => {
+          const v = productDetailView(d)
+          const skuId = parseInt(this.skuIdText)
+          this.itemTitle = v.title
+          const c = coverOf(v.id, v.title, v.cover.imageUrl)
+          this.coverColor = c.color
+          this.coverGlyph = c.glyph
+          this.coverImage = c.imageUrl
+          for (let i = 0; i < v.skus.length; i++) {
+            if (v.skus[i].id == skuId) {
+              this.itemSpec = v.skus[i].specName + '：' + v.skus[i].label
+              this.unitPrice = v.skus[i].priceText
+            }
+          }
+        },
+        (_f: ApiFailure) => {
+          // 展示信息拿不到不影响下单：标题留着「规格 #N」。
+        }
+      )
+    },
     body(): OrderCreateRequest {
       const req: OrderCreateRequest = {
-        items: [{ sku_id: parseInt(this.skuIdText), quantity: parseInt(this.quantityText) }],
+        items: [{ sku_id: parseInt(this.skuIdText), quantity: this.quantity }],
         address_id: parseInt(this.addressIdText),
       }
       // 试算过就带上 expected_payable_cents：契约说服务端复算不一致时返回 409
@@ -96,22 +201,35 @@ export default {
     // (2) 契约里下单要用户先看见应付金额再确认，试算结果过期了就不该还摆在那儿。
     invalidate() {
       this.pv = null
-      this.message = ''
+      if (!this.needNewKey) {
+        this.message = ''
+      }
+    },
+    changeQty(delta: number) {
+      const next = this.quantity + delta
+      if (next < 1) return
+      this.quantity = next
+      this.invalidate()
+      this.preview()
     },
     preview() {
       if (!isLoggedIn()) {
-        this.failed = true
-        this.message = '下单接口要登录（契约里 /orders/preview 没有 security: []）'
+        this.loggedIn = false
         return
       }
-      this.failed = false
-      this.message = ''
+      this.previewing = true
+      // 请求发出时的数量。连点 + 号时，只有最后一次的结果算数。
+      const qty = this.quantity
       previewOrder(
         this.body(),
         (p) => {
+          if (qty != this.quantity) return
+          this.previewing = false
           this.pv = previewView(p)
         },
         (f: ApiFailure) => {
+          if (qty != this.quantity) return
+          this.previewing = false
           this.failed = true
           this.message = f.message
         }
@@ -119,10 +237,10 @@ export default {
     },
     submit() {
       if (!isLoggedIn()) {
-        this.failed = true
-        this.message = '先登录'
+        this.goLogin()
         return
       }
+      if (this.pv == null || this.busy) return
       this.busy = true
       this.failed = false
       this.message = ''
@@ -136,12 +254,13 @@ export default {
         (order, replayed) => {
           this.busy = false
           this.failed = false
+          this.needNewKey = false
           this.orderNo = order.order_no
           // 刻意**不**自动跳走：跳走的话「这次到底是真下了单还是重放」这句话
           // 用户根本来不及看见，而那正是 Idempotency-Replayed 存在的理由。
           this.message = replayed
-            ? '这是上次那单（Idempotency-Replayed: true），本次没有真的执行任何业务动作：' + order.order_no
-            : '下单成功：' + order.order_no
+            ? '这笔订单之前已经提交过，本次没有重复下单。订单号 ' + order.order_no
+            : '下单成功，订单号 ' + order.order_no
           rememberOrder(order.order_no)
         },
         (f: ApiFailure) => {
@@ -149,7 +268,7 @@ export default {
           if (t == PROBLEM_IDEMPOTENCY_KEY_IN_FLIGHT && attempt < 3) {
             // 契约：这不是业务失败，客户端应按 Retry-After 退避重试。
             // 弹窗说「下单失败」是错的 —— 那一单很可能正在成功。
-            this.message = '同一个幂等键正在处理中，' + f.retryAfter.toString() + ' 秒后重试…'
+            this.message = '订单正在处理中，' + f.retryAfter.toString() + ' 秒后自动重试…'
             const wait = (f.retryAfter > 0 ? f.retryAfter : 1) * 1000
             setTimeout(() => {
               this.send(attempt + 1)
@@ -163,13 +282,15 @@ export default {
             // 那会让用户以为下单成功而实际什么都没发生。这里照实说，
             // 并且把「换新键」做成一个要用户按的按钮，而不是偷偷换掉。
             this.needNewKey = true
-            this.message = '订单内容和这个幂等键第一次提交的那份不一样（422）。' +
-              '这是服务端在保护你：换一个新键再提交，才是一笔新订单。'
+            this.message = '订单内容和刚才提交的那笔不一样了。如果要按现在的内容再下一单，请作为新订单提交。'
             return
           }
           this.message = f.message
         }
       )
+    },
+    goLogin() {
+      uni.navigateTo({ url: '/pages/auth/login' })
     },
     openOrder() {
       uni.navigateTo({ url: '/pages/order/detail?order_no=' + this.orderNo })
@@ -177,46 +298,72 @@ export default {
     rotate() {
       this.idemKey = newIdempotencyKey()
       this.needNewKey = false
-      this.message = '已换新键'
+      this.orderNo = ''
       this.failed = false
+      this.message = ''
+      if (this.pv == null) {
+        this.preview()
+      }
     },
   },
 }
 </script>
 
 <style>
-.title {
-  font-size: 15px;
+.thumb {
+  width: 76px;
+  height: 76px;
+  border-radius: 12px;
+}
+.thumb-glyph {
+  font-size: 30px;
+}
+.item-info {
+  margin-left: 14px;
+}
+.stepper {
+  border-radius: 16px;
+  background-color: #F3ECE3;
+}
+.step {
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+}
+.step-text {
+  font-size: 18px;
+  color: #3B2A20;
+}
+.step-num {
+  min-width: 24px;
+  text-align: center;
+  font-size: 14px;
   font-weight: bold;
+  color: #2A211B;
 }
-.line {
+.center {
+  align-items: center;
+  padding: 8px 0;
+}
+.login-btn {
+  width: 160px;
+}
+.result-ok {
+  background-color: #EEF3EB;
+}
+.result-err {
+  background-color: #F8EAE5;
+}
+.tech {
+  padding: 20px 4px 0 4px;
+  align-items: center;
+}
+.tech-body {
   margin-top: 8px;
+  align-items: center;
 }
-.label {
-  width: 90px;
-  font-size: 14px;
-  color: #666666;
-}
-.input {
-  flex: 1;
-  height: 34px;
-  padding-left: 8px;
-  border-width: 1px;
-  border-style: solid;
-  border-color: #dddddd;
-  border-radius: 4px;
-  font-size: 14px;
-}
-.mono {
-  font-size: 12px;
-  color: #333333;
-  margin-top: 4px;
-}
-.pad {
-  padding: 12px;
-}
-.ok {
-  color: #237804;
-  font-size: 13px;
+.bar-btn {
+  width: 160px;
 }
 </style>

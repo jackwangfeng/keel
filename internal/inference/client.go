@@ -168,15 +168,16 @@ type Config struct {
 
 // DefaultTimeout 是单次请求的默认上限。
 //
-// 5 秒是**索引侧**的量级：批 64 条中文短文本在无 GPU 的机器上就是秒级
-// （实测数字记在 compose.inference.yaml 的文件头）。查询侧的预算是 15 ms（§8），
+// 5 秒是**索引侧**的量级，而且是按最坏情况留的：infero 在 RTX A4000 上批 64
+// 实测约 0.6 秒（1.56 ms/条），5 秒是它的八倍余量 —— 留这么多是因为这块卡是
+// 和别的进程共用的，排队时间也算在这一次请求里。查询侧的预算是 15 ms（§8），
 // 那条路径应当自己传一个更紧的 context——Embed 取 ctx 与这个值里更早的那个。
 const DefaultTimeout = 5 * time.Second
 
 // EmbedPath 是引擎上那条批量 embedding 接口的路径。
 //
-// 语义检索层 §10 原本把它写成 `/v1/embed`，那是 services/inference/ 那个
-// Python 服务的路径。infero 用的是 OpenAI 风格的 `/v1/embeddings` ——
+// 语义检索层 §10 原本把它写成 `/v1/embed`，那是 M3 那个 Python 服务的路径
+// （已退役）。infero 用的是 OpenAI 风格的 `/v1/embeddings` ——
 // keel-integration.md 早就写明「路径名可以谈，请求体形状不能谈」，
 // 而请求体（`{model, texts, normalize}` → `{embeddings, dim, model, model_version}`）
 // 两边逐字段一致，所以换引擎在这一层只是换一个字符串。
@@ -184,6 +185,15 @@ const DefaultTimeout = 5 * time.Second
 // 提成常量是为了让测试和实现共用同一份真相：此前 client_test.go 里
 // 硬写着 "/v1/embed"，改实现而忘了改测试的话，那条断言会继续对着一个
 // 已经不存在的路径点头。
+//
+// 它是常量而不是配置项，也是一个决定：这个系统只对着**一个**推理引擎说话。
+// 曾经短暂地考虑过把路径 / 模型名 / 池化哨兵做成一份「引擎方言」配置，好让
+// M3 那个 CPU 上的 Python 服务作为无 GPU 备胎继续活着 —— 否决了。那三样不是
+// 互相独立的旋钮（哨兵补不补，取决于「这个 checkpoint 怎么池化」撞上「这个
+// 引擎的 tokenizer 执不执行 post_processor」），配错的组合全都不报错；
+// 而维护两个引擎实现的长期代价，本仓库已经付过一次：那个 Python 服务在退役前
+// 有整整一轮既没有调用方也没有测试。无 GPU 那条路的正解是 infero 自己的
+// CPU 后端（今天还没有），不是在这一层留一个分叉。
 const EmbedPath = "/v1/embeddings"
 
 // Client 是 EmbedPath 的客户端。零值不可用，走 New。

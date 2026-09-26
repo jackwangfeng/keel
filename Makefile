@@ -61,8 +61,8 @@ GOOSE := GOOSE_DRIVER=postgres GOOSE_DBSTRING="$(GOOSE_DBSTRING)" \
 	GOOSE_MIGRATION_DIR=$(MIGRATIONS) \
 	$(GORUN) github.com/pressly/goose/v3/cmd/goose
 
-.PHONY: help generate generate-go generate-ts generate-sql generate-uts tools-versions \
-	contract-check schema-check app-type-check app-install app-build-h5 app-build-android \
+.PHONY: help generate generate-go generate-ts generate-sql generate-uts tools-versions version \
+	contract-check schema-check app-type-check app-install app-build-h5 app-build-android app-apk app-apk-e2e app-e2e app-adb-wifi app-ios app-ios-e2e app-e2e-ios \
 	sdk-smoke migrate migrate-down migrate-status test-db \
 	test-engine dtmrs-deps build
 
@@ -77,6 +77,13 @@ help:
 	@echo "make app-type-check 用 tsc --strict 检查 app/src 下全部 .uts"
 	@echo "make app-install    装客户端依赖（含 npm 跳过 uts 原生 binding 的绕法）"
 	@echo "make app-build-h5   用 DCloud 编译器真编一遍 H5（要先 app-install）"
+	@echo "make app-apk        本地打 Android apk（KEEL_API_BASE=http://host:port/api/v1 指定默认服务地址）"
+	@echo "make app-apk-e2e    打带自动化运行时的测试包（同样读 KEEL_API_BASE）"
+	@echo "make app-e2e        在 Android 真机上跑 app/e2e 下的自动化用例（USB 或无线）"
+	@echo "make app-adb-wifi   把 USB 连着的 Android 手机切到无线调试，之后可拔线"
+	@echo "make app-ios        本地打 iOS 真机包（KEEL_IOS_TEAM 指定签名团队，KEEL_API_BASE 同上）"
+	@echo "make app-ios-e2e    打带自动化运行时的 iOS 测试包"
+	@echo "make app-e2e-ios    在 USB 连着的 iPhone 上跑 app/e2e 下的自动化用例"
 	@echo "make sdk-smoke      用 TS SDK 对跑着的服务真打一次 GET /products"
 	@echo "make tools-versions 打印钉住的工具版本"
 	@echo "make migrate        把 db/migrations 迁到最新（GOOSE_DBSTRING 可覆盖）"
@@ -153,6 +160,34 @@ app-build-h5:
 
 app-build-android:
 	python3 $(ROOT)/scripts/check_app_build.py app-android
+
+# 本地打 apk：离线 SDK + Gradle，不经 HBuilderX、不上传。前置条件（JDK 17、Android SDK）
+# 与流程写在脚本头里。KEEL_API_BASE 是原生 App 的默认服务地址，不设就要在 App 里手填。
+app-apk:
+	bash $(ROOT)/app/scripts/build-apk.sh
+
+# 真机自动化测试（uni-automator）。app-apk-e2e 打测试包，app-e2e 装到手机上跑用例。
+# 两步分开：改用例不必重新打包。怎么接上官方自动化、为什么不走 HBuilderX，见 app/e2e/README.md。
+app-apk-e2e:
+	bash $(ROOT)/app/scripts/build-apk.sh --e2e
+
+app-e2e:
+	cd $(ROOT)/app && npm run test:e2e
+
+# 插着线跑一次，之后拔线也能 make app-e2e。手机重启后要重跑。
+app-adb-wifi:
+	bash $(ROOT)/app/scripts/adb-wifi.sh
+
+# iOS：页面逻辑编译成 JS 跑在 JavaScriptCore，界面原生渲染；本地用离线 SDK + XcodeGen + xcodebuild
+# 出真机包（没有模拟器版本，理由见 app/scripts/build-ios.sh 头）。
+app-ios:
+	bash $(ROOT)/app/scripts/build-ios.sh
+
+app-ios-e2e:
+	bash $(ROOT)/app/scripts/build-ios.sh --e2e
+
+app-e2e-ios:
+	cd $(ROOT)/app && npm run test:e2e:ios
 
 # 用 SDK 对**真的跑起来的**服务打一次 GET /products。
 #
@@ -316,5 +351,36 @@ $(DTMRS_LIB):
 	@echo "==> 没找到 $(DTMRS_LIB)，先建它（需要 Rust 1.88+，约 1 分钟）"
 	@$(MAKE) dtmrs-deps
 
+# ---------------------------------------------------------------------------
+# 版本号
+# ---------------------------------------------------------------------------
+#
+# 三个值经 -ldflags -X 注入 internal/buildinfo。为什么不靠 Go 自带的 VCS 烧录
+# （go 1.18 起 `go build` 会自动写 vcs.revision）：**镜像里拿不到**，
+# docker/Dockerfile 的构建上下文把 .git 排除在外（.dockerignore 第 3 行），
+# 而发布出去的恰恰是镜像。详见 internal/buildinfo/buildinfo.go 的包注释。
+#
+# VERSION 可以从外面覆盖（`make build VERSION=v0.1.0`）。默认值取 git describe：
+# 打过 tag 就是 tag 名，没打过是 `<最近的tag>-<距离>-g<sha>`，一个 tag 都没有时
+# 回落到 `dev-<sha>`。**不写死成某个版本号** —— 一个没被注入的构建应当说自己是
+# 开发构建，而不是冒充某一版。
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+COMMIT  ?= $(shell git rev-parse HEAD 2>/dev/null)
+# UTC + RFC3339。本地时区会让两台机器上同一次提交编出两个不同的「构建时间」。
+DATE    ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+
+BUILDINFO := github.com/keel/keel/internal/buildinfo
+LDFLAGS   := -X $(BUILDINFO).Version=$(VERSION)              -X $(BUILDINFO).Commit=$(COMMIT)              -X $(BUILDINFO).Date=$(DATE)
+
+# `go build ./...` 不落产物（除了缓存），所以这里同时编一份带版本号的二进制到
+# build/ —— 那才是 -ldflags 看得见效果的地方。两条都留着：前者是编译期检查
+# （所有包都要能编过，包括没有 main 的），后者是产物。
 build: $(DTMRS_LIB)
 	go build ./...
+	go build -trimpath -ldflags '$(LDFLAGS)' -o build/keel ./cmd/keel
+
+# 打印将要注入的版本，给 CI 和「这次到底编出的是什么」用。
+version:
+	@echo "VERSION=$(VERSION)"
+	@echo "COMMIT=$(COMMIT)"
+	@echo "DATE=$(DATE)"
