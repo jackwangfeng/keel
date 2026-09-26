@@ -357,6 +357,10 @@ func deductStock(ctx context.Context, tx repository.Tx, order repository.Order) 
 			repository.InventoryLogOrderDeduct, order.OrderNo, after+ln.Quantity, after); err != nil {
 			return err
 		}
+		// 跌破预警线的那一次给门店发库存预警，与扣减同一个屏障事务（数据模型 §16）。
+		if err := notifyLowStockIfCrossed(ctx, tx, order, ln.SKUID, ln.Quantity, after); err != nil {
+			return err
+		}
 		// 按活动价成交的行：同一个事务里扣活动配额（秒杀防超卖）与每人限购（00044）。
 		//
 		// 放在库存分支里而不是另起一个分支：配额与门店库存是「同一件货」的两道闸，

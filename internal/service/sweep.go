@@ -366,7 +366,11 @@ func (s *SweepService) releasePending(ctx context.Context, log *slog.Logger,
 		var err error
 		qty, err = releaseClosedOrder(ctx, tx, o.ID, o.OrderNo, o.StoreID, o.UserID,
 			repository.InventoryLogTimeoutRelease)
-		return err
+		if err != nil {
+			return err
+		}
+		// 通知与关单同一个事务（数据模型 §16）。
+		return notifyOrderTimeoutClosed(ctx, tx, o.OrderNo)
 	})
 
 	switch {

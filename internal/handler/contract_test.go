@@ -360,6 +360,62 @@ var routes = []route{
 		HandlerFile:    "admin_order_detail.go",
 		NoQueryParams:  "详情只吃路径参数 refund_no",
 	},
+	// —— 消息通知（00053，数据模型 §16）。两份列表各读 page / page_size / unread_only，
+	// 各自一个文件；其余六条一个 query 参数都没有，放在 notification.go。
+	{
+		ContractPath:   "/me/notifications",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "notification_list.go",
+	},
+	{
+		ContractPath:   "/me/notifications/unread-count",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "notification.go",
+		NoQueryParams:  "只回一个未读数，没有任何筛选",
+	},
+	{
+		ContractPath:   "/me/notifications/{notification_id}/read",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "notification.go",
+		NoQueryParams:  "要标哪一条在路径上，没有请求体",
+	},
+	{
+		ContractPath:   "/me/notifications/read-all",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "notification.go",
+		NoQueryParams:  "标的是调用者自己的全部未读，没有参数",
+	},
+	{
+		ContractPath:   "/admin/notifications",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "admin_notification_list.go",
+	},
+	{
+		ContractPath:   "/admin/notifications/unread-count",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "notification.go",
+		NoQueryParams:  "只回调用者范围内的未读数，没有任何筛选",
+	},
+	{
+		ContractPath:   "/admin/notifications/{notification_id}/read",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "notification.go",
+		NoQueryParams:  "要标哪一条在路径上，没有请求体",
+	},
+	{
+		ContractPath:   "/admin/notifications/read-all",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "notification.go",
+		NoQueryParams:  "标的是调用者范围内的全部未读，没有参数",
+	},
 	{
 		ContractPath:   "/webhooks/refunds/{channel}",
 		ContractMethod: "post",
@@ -1175,6 +1231,7 @@ type pendingOp struct {
 // 空表不是删掉这套机制的理由：它是「还没实现」的锁，下一次契约先行加进来一条
 // /admin/ 操作，这里就会重新长出一行，而不是让缺口静默地躺在契约里。
 // （后台订单 / 退款单的列表与详情那四条是契约与实现同一轮落地的，没在这里挂过账。）
+// （消息通知那一轮契约先行时这里挂过四条后台提醒接口，实现落地的同一轮划掉了。）
 var notYetRouted = []pendingOp{}
 
 // contractHTTPMethods 是 OpenAPI path item 里哪些键算一个操作。

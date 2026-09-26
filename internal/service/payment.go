@@ -341,7 +341,8 @@ func (s *PaymentService) settle(ctx context.Context, channel int16, n notificati
 					"order_no", n.OrderNo, "user_coupon_id", *order.UserCouponID)
 			}
 		}
-		return nil
+		// 通知（买家「支付成功」+ 门店「新订单待发货」）与 10 → 20 同一个事务（数据模型 §16）。
+		return notifyOrderPaid(ctx, tx, order)
 	})
 
 	switch {

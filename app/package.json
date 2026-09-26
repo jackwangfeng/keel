@@ -34,6 +34,7 @@
     "@dcloudio/uni-automator": "3.0.0-5020620260917001",
     "adbkit": "2.11.1",
     "jest": "27.0.4",
-    "jest-environment-node": "27.5.1"
+    "jest-environment-node": "27.5.1",
+    "playwright": "1.63.0"
   }
 }

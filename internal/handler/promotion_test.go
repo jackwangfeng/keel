@@ -557,12 +557,12 @@ func TestNewBuyerGiftIsGrantedOnceBeforeTheFirstOrder(t *testing.T) {
 func TestAdminPromotionRulesAndLifecycle(t *testing.T) {
 	cs := newCouponShop(t)
 	bad := []string{
-		`"promotion_type":1,"threshold_unit":1,"tiers":[{"threshold":10000,"discount_cents":20000,"discount_rate":0}]`, // 满 100 减 200
+		`"promotion_type":1,"threshold_unit":1,"tiers":[{"threshold":10000,"discount_cents":20000,"discount_rate":0}]`,                                                            // 满 100 减 200
 		`"promotion_type":1,"threshold_unit":1,"tiers":[{"threshold":10000,"discount_cents":2000,"discount_rate":0},{"threshold":20000,"discount_cents":1000,"discount_rate":0}]`, // 高档减得少
-		`"promotion_type":2,"threshold_unit":2,"tiers":[{"threshold":2,"discount_cents":0,"discount_rate":1000}]`,                                                                   // 折扣越界
-		fmt.Sprintf(`"promotion_type":4,"skus":[{"sku_id":%d,"promo_price_cents":990}]`, cs.ShirtSKU),                                                                              // 秒杀没配额
-		fmt.Sprintf(`"promotion_type":3,"skus":[{"sku_id":%d,"promo_price_cents":990,"discount_rate":800}]`, cs.ShirtSKU),                                                          // 二选一
-		`"promotion_type":3,"skus":[{"sku_id":999999999,"promo_price_cents":990}]`,                                                                                                  // SKU 查不到
+		`"promotion_type":2,"threshold_unit":2,"tiers":[{"threshold":2,"discount_cents":0,"discount_rate":1000}]`,                                                                 // 折扣越界
+		fmt.Sprintf(`"promotion_type":4,"skus":[{"sku_id":%d,"promo_price_cents":990}]`, cs.ShirtSKU),                                                                             // 秒杀没配额
+		fmt.Sprintf(`"promotion_type":3,"skus":[{"sku_id":%d,"promo_price_cents":990,"discount_rate":800}]`, cs.ShirtSKU),                                                         // 二选一
+		`"promotion_type":3,"skus":[{"sku_id":999999999,"promo_price_cents":990}]`,                                                                                                // SKU 查不到
 		`"promotion_type":5`, // 新人礼没券模板
 	}
 	for i, f := range bad {

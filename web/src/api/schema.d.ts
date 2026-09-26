@@ -6931,6 +6931,188 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/me/notifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 我的消息（站内通知）
+         * @description 订单与售后的关键状态变化产生的站内通知，按时间倒序（数据模型 §16）。
+         *     **标题与正文由服务端渲染好**（中文），客户端原样展示，不要按 `kind` 自己拼文案 ——
+         *     `kind` 只用来挑图标、决定点了跳哪里。点了跳哪里看 `target`。
+         *
+         *     只看得到**自己的**通知：同一家店里 A 买家读不到 B 买家的（按令牌里的 user_id 过滤）。
+         *
+         *     哪些状态变化会发通知、发给谁，见 `NotificationKind` 的描述。
+         *     通知保留 90 天，更早的会被清理。
+         */
+        get: {
+            parameters: {
+                query?: {
+                    page?: components["parameters"]["Page"];
+                    page_size?: components["parameters"]["PageSize"];
+                    /** @description 为 `true` 时只返回未读的。 */
+                    unread_only?: boolean;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["NotificationList"];
+                    };
+                };
+                401: components["responses"]["Problem"];
+                default: components["responses"]["Problem"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/notifications/unread-count": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 我的未读消息数
+         * @description 给「我的」页与底栏角标用的轻量接口，只回一个数。
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["NotificationUnreadCount"];
+                    };
+                };
+                401: components["responses"]["Problem"];
+                default: components["responses"]["Problem"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/notifications/{notification_id}/read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 标记一条消息已读
+         * @description 幂等：已经读过的再标一次照样 200，已读时间不变。
+         *     不是自己的通知（或不存在）一律 404，不区分两者。
+         *     响应是标完之后的未读数，客户端据此刷新角标，不必再调一次未读数接口。
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description `notifications.id`。按约定 4 用自增 id 对外，越权由服务端按收件人 / 员工范围过滤，查不到即 404。 */
+                    notification_id: components["parameters"]["NotificationId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["NotificationUnreadCount"];
+                    };
+                };
+                401: components["responses"]["Problem"];
+                404: components["responses"]["Problem"];
+                default: components["responses"]["Problem"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/notifications/read-all": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 全部标记已读
+         * @description 把自己的未读消息全部标成已读。响应是标完之后的未读数（正常为 0）。
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["NotificationUnreadCount"];
+                    };
+                };
+                401: components["responses"]["Problem"];
+                default: components["responses"]["Problem"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/addresses": {
         parameters: {
             query?: never;
@@ -10043,6 +10225,292 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/notifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 后台待办提醒（铃铛）
+         * @description 商家侧的站内通知：新的已支付待发货订单、新的待审核售后、买家填了寄回物流、
+         *     库存降到预警线（数据模型 §16）。按时间倒序，标题与正文由服务端渲染好。
+         *
+         *     **范围**与 `GET /admin/orders` 相同：每条通知都属于一家门店，
+         *     大区管理员看当前挂在他大区下的门店的，门店管理员看自己门店的，
+         *     管理员与操作员看全店的。
+         *
+         *     **已读是每个员工各自的**：一条「新订单待发货」是管这家店的所有员工共享的，
+         *     谁点开了只算谁读了（`read_at` 是调用者自己的已读时间）。
+         *
+         *     响应里带调用者范围内的未读数，铃铛角标与下拉列表一次取齐。
+         */
+        get: {
+            parameters: {
+                query?: {
+                    page?: components["parameters"]["Page"];
+                    page_size?: components["parameters"]["PageSize"];
+                    /** @description 为 `true` 时只返回调用者还没读的。 */
+                    unread_only?: boolean;
+                };
+                header?: {
+                    /**
+                     * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+                     *
+                     *     它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+                     *     而例外成立的前提是平台级鉴权：
+                     *
+                     *     · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+                     *       读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+                     *       行级安全落在这家店上。
+                     *     · **商家级员工带了这个头：403**
+                     *       （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+                     *       静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+                     *     · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+                     *       **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+                     *       实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+                     *       请求其余部分指名的东西不存在是 422。
+                     *     · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+                     *       买家侧对它照旧 404。
+                     *     · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+                     *       （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+                     *
+                     *     后台每一条挂后台会话的操作都声明了它（机械核对：
+                     *     `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+                     */
+                    "X-Keel-Merchant"?: components["parameters"]["KeelMerchant"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["NotificationList"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/notifications/unread-count": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 后台未读提醒数
+         * @description 顶栏铃铛轮询用。范围同 `GET /admin/notifications`。
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /**
+                     * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+                     *
+                     *     它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+                     *     而例外成立的前提是平台级鉴权：
+                     *
+                     *     · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+                     *       读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+                     *       行级安全落在这家店上。
+                     *     · **商家级员工带了这个头：403**
+                     *       （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+                     *       静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+                     *     · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+                     *       **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+                     *       实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+                     *       请求其余部分指名的东西不存在是 422。
+                     *     · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+                     *       买家侧对它照旧 404。
+                     *     · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+                     *       （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+                     *
+                     *     后台每一条挂后台会话的操作都声明了它（机械核对：
+                     *     `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+                     */
+                    "X-Keel-Merchant"?: components["parameters"]["KeelMerchant"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["NotificationUnreadCount"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/notifications/{notification_id}/read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 标记一条提醒已读（调用者自己的已读状态）
+         * @description 幂等：已经读过的再标一次照样 200。
+         *     不在调用者范围里（别的大区 / 别的门店的提醒）或不存在：404 —— 铃铛里看不见的，
+         *     也标不了；与「不存在」不作区分，理由同列表收窄（看不见的东西不承认它存在）。
+         *     响应是标完之后调用者范围内的未读数。
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /**
+                     * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+                     *
+                     *     它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+                     *     而例外成立的前提是平台级鉴权：
+                     *
+                     *     · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+                     *       读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+                     *       行级安全落在这家店上。
+                     *     · **商家级员工带了这个头：403**
+                     *       （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+                     *       静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+                     *     · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+                     *       **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+                     *       实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+                     *       请求其余部分指名的东西不存在是 422。
+                     *     · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+                     *       买家侧对它照旧 404。
+                     *     · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+                     *       （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+                     *
+                     *     后台每一条挂后台会话的操作都声明了它（机械核对：
+                     *     `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+                     */
+                    "X-Keel-Merchant"?: components["parameters"]["KeelMerchant"];
+                };
+                path: {
+                    /** @description `notifications.id`。按约定 4 用自增 id 对外，越权由服务端按收件人 / 员工范围过滤，查不到即 404。 */
+                    notification_id: components["parameters"]["NotificationId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["NotificationUnreadCount"];
+                    };
+                };
+                404: components["responses"]["Problem"];
+                default: components["responses"]["Problem"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/notifications/read-all": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 范围内的提醒全部标记已读
+         * @description 只标调用者范围内的；别人的已读状态不受影响。响应是标完之后的未读数。
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /**
+                     * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+                     *
+                     *     它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+                     *     而例外成立的前提是平台级鉴权：
+                     *
+                     *     · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+                     *       读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+                     *       行级安全落在这家店上。
+                     *     · **商家级员工带了这个头：403**
+                     *       （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+                     *       静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+                     *     · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+                     *       **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+                     *       实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+                     *       请求其余部分指名的东西不存在是 422。
+                     *     · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+                     *       买家侧对它照旧 404。
+                     *     · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+                     *       （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+                     *
+                     *     后台每一条挂后台会话的操作都声明了它（机械核对：
+                     *     `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+                     */
+                    "X-Keel-Merchant"?: components["parameters"]["KeelMerchant"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["NotificationUnreadCount"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/webhooks/refunds/{channel}": {
         parameters: {
             query?: never;
@@ -12320,6 +12788,72 @@ export interface components {
             coupon_code: string;
         };
         /**
+         * @description 通知的种类。**文案不要按它拼**（服务端已渲染好 `title` / `body`），
+         *     它只用来挑图标与分组。发给谁、由哪一次状态变化产生：
+         *
+         *     买家（`GET /me/notifications`）：
+         *     · `order_paid` —— 支付成功（订单 `10 → 20`，支付回调入账）
+         *     · `order_shipped` —— 已发货，正文带承运商与运单号（`20 → 30`）
+         *     · `order_auto_confirm_soon` —— 自动确认收货即将到期（到期前 1 天；有在途售后的单不提醒）
+         *     · `order_finished` —— 系统自动确认收货，订单完成（`30 → 40`，定时任务）。
+         *       买家**自己**点确认收货不发：动作是他做的，不需要再告诉他
+         *     · `order_timeout_closed` —— 超时未支付被系统关闭（`10 → 90`，超时补偿任务）。
+         *       买家自己取消不发，理由同上
+         *     · `refund_approved` —— 售后审核通过（退货退款提示去填寄回物流）
+         *     · `refund_rejected` —— 售后被驳回，正文带驳回理由
+         *     · `refund_succeeded` —— 退款到账（退款单 `30 → 40`）
+         *
+         *     商家（`GET /admin/notifications`）：
+         *     · `merchant_order_paid` —— 新的已支付待发货订单
+         *     · `merchant_refund_requested` —— 新的待审核售后
+         *     · `merchant_return_shipped` —— 买家填了（或改了）退货寄回物流
+         *     · `merchant_inventory_low` —— 下单扣减后门店库存降到预警线（`warning_qty`）或以下；
+         *       扣到 0 时标题是「已售罄」
+         * @enum {string}
+         */
+        NotificationKind: "order_paid" | "order_shipped" | "order_auto_confirm_soon" | "order_finished" | "order_timeout_closed" | "refund_approved" | "refund_rejected" | "refund_succeeded" | "merchant_order_paid" | "merchant_refund_requested" | "merchant_return_shipped" | "merchant_inventory_low";
+        /**
+         * @description 点了这条通知跳到哪里。四个定位字段都一定出现，用不上的是 `null`：
+         *     · `order` —— `order_no` 非空，跳订单详情；
+         *     · `refund` —— `refund_no` 非空（`order_no` 也给出所属订单），跳售后详情；
+         *     · `inventory` —— `store_id` 与 `sku_id` 非空，跳那家门店的库存（只出现在后台）。
+         */
+        NotificationTarget: {
+            /** @enum {string} */
+            type: "order" | "refund" | "inventory";
+            order_no: string | null;
+            refund_no: string | null;
+            /** Format: int64 */
+            store_id: number | null;
+            /** Format: int64 */
+            sku_id: number | null;
+        };
+        Notification: {
+            /** Format: int64 */
+            id: number;
+            kind: components["schemas"]["NotificationKind"];
+            /** @description 服务端渲染好的中文标题，原样展示 */
+            title: string;
+            /** @description 服务端渲染好的中文正文，原样展示 */
+            body: string;
+            target: components["schemas"]["NotificationTarget"];
+            /**
+             * Format: date-time
+             * @description 已读时间；`null` 即未读。后台是**调用者自己**的已读时间。
+             */
+            read_at: string | null;
+            /** Format: date-time */
+            created_at: string;
+        };
+        NotificationList: components["schemas"]["PageMeta"] & {
+            items: components["schemas"]["Notification"][];
+            /** @description 调用者的未读总数（与 `unread_only` 无关，也不受分页影响）。 */
+            unread_count: number;
+        };
+        NotificationUnreadCount: {
+            unread_count: number;
+        };
+        /**
          * @description 1 满减 · 2 满折 · 3 限时折扣（特价） · 4 秒杀 · 5 新人礼。
          *
          *     计价顺序（数据模型 §7「优惠计算顺序」）：门店最终价 → **3 / 4 改单价**
@@ -13030,6 +13564,8 @@ export interface components {
          *     `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
          */
         KeelMerchant: string;
+        /** @description `notifications.id`。按约定 4 用自增 id 对外，越权由服务端按收件人 / 员工范围过滤，查不到即 404。 */
+        NotificationId: number;
         /** @description `merchants.id`。软删的商家 404。 */
         MerchantId: number;
         /**

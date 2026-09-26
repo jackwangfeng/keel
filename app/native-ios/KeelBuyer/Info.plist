@@ -29,6 +29,8 @@
 	</dict>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>用于确定离你最近、能为你配送的门店。</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>申请售后时从相册选择凭证图片。</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

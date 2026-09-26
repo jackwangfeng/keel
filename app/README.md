@@ -25,9 +25,15 @@ Kotlin / Swift，不走 webview；同一份代码也编 H5 与小程序。
 - 订单后半程：待支付的单能取消（详情页与列表都有，「点两下」防误触），已发货的单能确认收货。
   申请售后：选哪几行、各退几件（可退 = 购买 − 已退 − 在途）、类型（仅退款 / 退货退款，**不给默认值**）、
   原因；不传金额，每行实退多少看售后单里服务端算好的 `items[].amount_cents`。售后详情：30「退款中」
-  写成「正在原路退回」而不是失败；50「已拒绝」显示 `reject_reason` 并可重新申请；20 待买家退货只写
-  「请寄回商品」（填物流单号的接口还没有）；10 / 20 可撤回。「我的」→ 售后 / 退款列表。
-  凭证图片（`evidence_urls`，要先走上传接口）没接。
+  写成「正在原路退回」而不是失败；50「已拒绝」显示 `reject_reason` 并可重新申请；10 / 20 可撤回。
+  「我的」→ 售后 / 退款列表。未发货的单只能申请仅退款（服务端约束），「退货退款」置灰并写明原因。
+- 售后凭证：申请页从相册选图（`uni.chooseImage`，只开相册，免相机权限），逐张 `POST /uploads`
+  （multipart，purpose=3，带令牌与幂等键），返回的 `/api/v1/uploads/{id}` 原样放进 `evidence_urls`。
+  读凭证要带令牌（本人 302 到限时地址，别人 403），`<image>` 带不了头，所以售后详情先
+  `uni.downloadFile` 带 Authorization 取成本地文件再显示。
+- 退货寄回物流：退货退款且 20 待买家退货时，售后详情里选承运商、填运单号
+  （`POST /refunds/{no}/return-shipment`），20 期间可以改；填完仍是 20，商家确认收到才到 30。
+- 自动确认收货：已发货 7 天系统自动推到已完成，订单详情的状态说明里写了（天数服务端不返回，按 7 天写）。
 - 个人资料：`GET/PATCH /me`（昵称、性别），第三方账号列表与解绑（409 `last-credential` 提示先设密码）。
   绑微信、换绑手机号服务端回 501，页面写「暂未开通」，不放必失败的按钮。
 - 优惠券：「我的」→ 领券中心（`GET /coupon-templates`，领券 `POST …/claim` 带幂等键，同一张模板在
@@ -368,6 +374,7 @@ H5 构建产物 + 一个把 `/api` 反代给 Keel 的静态服务器，用无头
 | 搜索 | `POST /search` | ✅ 首页入口 → 搜索页，按相关度排序；Android / iPhone 真机 e2e 覆盖（按首页一件商品的标题搜，它排第一，点进去是它的详情） |
 | 收货地址 | `GET/POST/PUT/DELETE /addresses…`、`PUT …/default` | ✅ 小米真机 e2e（`address.test.js`）：列表与服务端一致、默认排第一；错的表单按 `errors[].field` 标红两项，改对后新建成功；结算页自动用默认地址 |
 | 购物车 | `GET /cart`、`POST /cart/items`、`PATCH /cart/items/{id}`、`POST …/batch-delete` | ✅ 小米真机 e2e（`cart.test.js`）：加购 → 调数量，合计与服务端 `selected_total_cents` 一致 → 去结算，试算商品金额 = 购物车合计 → 下单后这行从车里删掉。调大超库存时页面显示服务端 409 的原因（调试时实测） |
+| 售后凭证 / 寄回物流 | `POST /uploads`、`GET /uploads/{id}`、`POST /refunds/{no}/return-shipment` | ✅ iPhone 真机 e2e（`aftersale.test.js`，这轮小米锁屏）：带凭证的售后单在详情里带令牌读出凭证图；待买家退货填物流（顺丰）→ 服务端一致、仍是 20 → 改成京东 → 服务端跟着变；未发货的单申请页不能选退货退款。**App 内从相册选图并上传没有自动化**（相册选择器无法由自动化驱动），凭证由测试进程上传 |
 | 搜索效果回传 | `POST /search` 的 `trace_id`、`POST /search/events` | ✅ iPhone 真机 e2e（`searchtrace.test.js`，这轮小米锁屏）：结果带 trace_id；点进商品后测试进程对同一对 trace_id + 商品重发 click 得 204（服务端认这对）；加购、购物车结算、下单照常成功。服务端是否记下三条事件由服务端按 trace_id 查日志核对 |
 | 取消 / 售后 | `POST /orders/{no}/cancel`、`POST /orders/{no}/refunds`、`GET /refunds/{no}`、`POST /refunds/{no}/cancel` | ✅ 小米真机 e2e（`aftersale.test.js`）：待支付单取消 → 已关闭；已支付单申请仅退款 → 待审核（页面金额 = 服务端算的 `amount_cents`）→ 撤回 → 已取消。驳回（显示 `reject_reason`、可重新申请）/ 同意仅退款（已退款，整单全退的订单走到 60 已退款、详情显示已退金额）/ 发货后确认收货 → 已完成：前置状态由服务端的后台会话代做，单号经 `KEEL_E2E_*` 环境变量交给用例 |
 | 个人资料 | `GET/PATCH /me`、`GET /me/identities` | ✅ 小米真机 e2e（`profile.test.js`）：回显昵称与脱敏手机号，改昵称后服务端是新值。解绑 / `last-credential` 没有自动化覆盖（演示买家没有第三方身份） |

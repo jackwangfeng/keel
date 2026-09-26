@@ -95,7 +95,7 @@ func TestFullReductionTiers(t *testing.T) {
 		applied   bool
 		shortfall *int64
 	}{
-		{9999, 0, false, i64(1)},       // 差 1 分满 100
+		{9999, 0, false, i64(1)},        // 差 1 分满 100
 		{10000, 1000, true, i64(10000)}, // 刚好满 100：命中第一档，离第二档还差 100 元
 		{19999, 1000, true, i64(1)},
 		{20000, 3000, true, nil}, // 最高档：没有下一档
