@@ -54,6 +54,8 @@ type Inventory struct {
 	AvailableQty int32
 	WarningQty   int32
 	UpdatedAt    pgtype.Timestamptz
+	MerchantID   int64
+	StoreID      int64
 }
 
 type InventoryLog struct {
@@ -66,6 +68,7 @@ type InventoryLog struct {
 	BeforeAvailable int32
 	AfterAvailable  int32
 	CreatedAt       pgtype.Timestamptz
+	StoreID         int64
 }
 
 type Merchant struct {
@@ -99,6 +102,9 @@ type Order struct {
 	FinishedAt       pgtype.Timestamptz
 	CreatedAt        pgtype.Timestamptz
 	UpdatedAt        pgtype.Timestamptz
+	StoreID          int64
+	RegionID         int64
+	StoreSnapshot    []byte
 }
 
 type OrderItem struct {
@@ -208,6 +214,36 @@ type ProductUnderstanding struct {
 	UpdatedAt       pgtype.Timestamptz
 }
 
+type Region struct {
+	ID         int64
+	MerchantID int64
+	Code       string
+	Name       string
+	Status     int16
+	DeletedAt  pgtype.Timestamptz
+	CreatedAt  pgtype.Timestamptz
+	UpdatedAt  pgtype.Timestamptz
+}
+
+type RegionProductOverride struct {
+	RegionID   int64
+	ProductID  int64
+	MerchantID int64
+	Status     int16
+	UpdatedBy  *int64
+	CreatedAt  pgtype.Timestamptz
+	UpdatedAt  pgtype.Timestamptz
+}
+
+type RegionSkuPrice struct {
+	RegionID   int64
+	SkuID      int64
+	MerchantID int64
+	PriceCents int64
+	CreatedAt  pgtype.Timestamptz
+	UpdatedAt  pgtype.Timestamptz
+}
+
 type ShopSetting struct {
 	MerchantID      int64
 	Domain          *string
@@ -235,6 +271,15 @@ type Sku struct {
 	DeletedAt  pgtype.Timestamptz
 }
 
+type SkuPricesByStore struct {
+	StoreID     int64
+	RegionID    int64
+	SkuID       int64
+	ProductID   int64
+	PriceCents  int64
+	PriceSource int32
+}
+
 type Staff struct {
 	ID          int64
 	MerchantID  *int64
@@ -260,6 +305,45 @@ type StaffToken struct {
 	LastSeenAt pgtype.Timestamptz
 	CreatedIp  *netip.Addr
 	CreatedAt  pgtype.Timestamptz
+}
+
+type Store struct {
+	ID         int64
+	MerchantID int64
+	RegionID   int64
+	Code       string
+	Name       string
+	Phone      string
+	Province   string
+	City       string
+	District   string
+	Address    string
+	Location   interface{}
+	Fence      interface{}
+	IsDefault  bool
+	Status     int16
+	DeletedAt  pgtype.Timestamptz
+	CreatedAt  pgtype.Timestamptz
+	UpdatedAt  pgtype.Timestamptz
+}
+
+type StoreProductOverride struct {
+	StoreID    int64
+	ProductID  int64
+	MerchantID int64
+	Status     int16
+	UpdatedBy  *int64
+	CreatedAt  pgtype.Timestamptz
+	UpdatedAt  pgtype.Timestamptz
+}
+
+type StoreSkuPrice struct {
+	StoreID    int64
+	SkuID      int64
+	MerchantID int64
+	PriceCents int64
+	CreatedAt  pgtype.Timestamptz
+	UpdatedAt  pgtype.Timestamptz
 }
 
 type Upload struct {

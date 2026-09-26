@@ -159,14 +159,17 @@ func TestAppRoleCannotBypassRLS(t *testing.T) {
 	t.Logf("应用角色 %q: rolsuper=%v rolbypassrls=%v", who, super, bypass)
 }
 
-// inventories 的策略是全库唯一一条**不是列比较**的租户策略：它没有 merchant_id
-// 列（按规矩一豁免，数据模型 §4），谓词是对 skus 的 EXISTS 子查询。
+// inventories 的策略本轮从 EXISTS 子查询变成了直接的列比较（迁移 00020）：
+// 主键从 sku_id 变成 (sku_id, store_id) 之后「租户归属由主键唯一决定」不再成立
+// （有两个父表，两条归属链可以对不上），于是这张表补上了 merchant_id，
+// 从 parent-scoped 变成 tenant 类。
 //
-// 上面 migrate_test.go 里那条 TestTenantPoliciesArePresentAndExact 只断言了
-// 谓词文本里出现过 skus / sku_id / current_merchant() 三个词。那是形状检查，
-// 不是行为检查：把子查询写成 `EXISTS (SELECT 1 FROM skus s WHERE s.id = s.id
-// AND s.merchant_id = current_merchant() OR true)` 照样含有这三个词，而它
-// 对所有人都是真。
+// **这条测试因此比以前更要紧，不是更不要紧。** migrate_test.go 里那条
+// TestTenantPoliciesArePresentAndExact 现在只逐字比对谓词文本
+// `(merchant_id = current_merchant())` —— 那是形状检查，不是行为检查，
+// 它对「策略挂在了一张列值全填错的表上」完全失明。而新策略的正确性恰恰依赖
+// 另一件事：merchant_id 这一列真的被填对了。填它的是列默认值
+// DEFAULT current_merchant() 与两条复合外键，而这三样都不在那条形状断言的视野里。
 //
 // 所以这里用**真实数据**把三个面各走一遍——读、改、插。数据模型 §4 的实测表
 // 就是这三行，本测试是那张表的可执行版本。
@@ -200,11 +203,12 @@ func TestInventoriesPolicyBlocksCrossTenantAccess(t *testing.T) {
 		c := context.Background()
 		ids := []int64{idA, idB}
 		for _, stmt := range []string{
-			`DELETE FROM inventories WHERE sku_id IN
-			   (SELECT id FROM skus WHERE merchant_id = ANY($1))`,
+			`DELETE FROM inventories WHERE merchant_id = ANY($1)`,
 			`DELETE FROM skus       WHERE merchant_id = ANY($1)`,
 			`DELETE FROM products   WHERE merchant_id = ANY($1)`,
 			`DELETE FROM categories WHERE merchant_id = ANY($1)`,
+			`DELETE FROM stores     WHERE merchant_id = ANY($1)`,
+			`DELETE FROM regions    WHERE merchant_id = ANY($1)`,
 			`DELETE FROM merchants  WHERE id          = ANY($1)`,
 		} {
 			if _, err := admin.Exec(c, stmt, ids); err != nil {
@@ -213,7 +217,26 @@ func TestInventoriesPolicyBlocksCrossTenantAccess(t *testing.T) {
 		}
 	})
 
+	// 每家一个大区 + 一家默认门店。**这是本轮新加的夹具，不是样板代码**：
+	// inventories 现在的主键是 (sku_id, store_id)，一行库存必须挂在一家真实的
+	// 门店上，而那家门店必须属于同一个商家（复合外键钉死）。
+	// 迁移里那段回填只覆盖迁移那一刻已经存在的商家，这两家是之后插的。
 	skuOf := map[int64]int64{}
+	storeOf := map[int64]int64{}
+	for _, m := range []int64{idA, idB} {
+		var regionID, storeID int64
+		if err := admin.QueryRow(ctx,
+			`INSERT INTO regions (merchant_id, code, name) VALUES ($1,'r','R')
+			 RETURNING id`, m).Scan(&regionID); err != nil {
+			t.Fatal(err)
+		}
+		if err := admin.QueryRow(ctx,
+			`INSERT INTO stores (merchant_id, region_id, code, name, is_default)
+			 VALUES ($1,$2,'s','S',TRUE) RETURNING id`, m, regionID).Scan(&storeID); err != nil {
+			t.Fatal(err)
+		}
+		storeOf[m] = storeID
+	}
 	for _, m := range []int64{idA, idB} {
 		var catID, prodID, skuID int64
 		if err := admin.QueryRow(ctx,
@@ -233,8 +256,8 @@ func TestInventoriesPolicyBlocksCrossTenantAccess(t *testing.T) {
 			t.Fatal(err)
 		}
 		if _, err := admin.Exec(ctx,
-			`INSERT INTO inventories (sku_id, available_qty) VALUES ($1, 50)`,
-			skuID); err != nil {
+			`INSERT INTO inventories (sku_id, store_id, merchant_id, available_qty)
+			 VALUES ($1, $2, $3, 50)`, skuID, storeOf[m], m); err != nil {
 			t.Fatal(err)
 		}
 		skuOf[m] = skuID
@@ -307,14 +330,20 @@ func TestInventoriesPolicyBlocksCrossTenantAccess(t *testing.T) {
 		}
 		t.Cleanup(func() {
 			if _, err := admin.Exec(context.Background(),
-				`INSERT INTO inventories (sku_id, available_qty) VALUES ($1, 50)
-				 ON CONFLICT (sku_id) DO NOTHING`, skuOf[idB]); err != nil {
+				`INSERT INTO inventories (sku_id, store_id, merchant_id, available_qty)
+				 VALUES ($1, $2, $3, 50)
+				 ON CONFLICT (sku_id, store_id) DO NOTHING`,
+				skuOf[idB], storeOf[idB], idB); err != nil {
 				t.Errorf("恢复夹具失败: %v", err)
 			}
 		})
 
+		// 显式写 merchant_id = B：不写的话列默认值会填成 A（当前上下文），
+		// 语句会挂在复合外键上而不是 RLS 上，这条断言就变成在测外键。
+		// 两道都在，而这里要测的是 WITH CHECK 那一道。
 		_, err := app.Exec(ctx,
-			`INSERT INTO inventories (sku_id, available_qty) VALUES ($1, 999)`, skuOf[idB])
+			`INSERT INTO inventories (sku_id, store_id, merchant_id, available_qty)
+			 VALUES ($1, $2, $3, 999)`, skuOf[idB], storeOf[idB], idB)
 		if err == nil {
 			t.Fatal("商家 A 往商家 B 的 SKU 上插进了库存行 —— WITH CHECK 没生效")
 		}

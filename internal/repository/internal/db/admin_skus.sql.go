@@ -149,11 +149,18 @@ type CreateInventoryRowParams struct {
 	WarningQty   int32
 }
 
+type CreateInventoryRowRow struct {
+	SkuID        int64
+	AvailableQty int32
+	WarningQty   int32
+	UpdatedAt    pgtype.Timestamptz
+}
+
 // 见 CreateSKU 的注释。它只在建 SKU 的那个事务里被调用，
 // 而 repository 那一层不给调用方单独调它的机会。
-func (q *Queries) CreateInventoryRow(ctx context.Context, arg CreateInventoryRowParams) (Inventory, error) {
+func (q *Queries) CreateInventoryRow(ctx context.Context, arg CreateInventoryRowParams) (CreateInventoryRowRow, error) {
 	row := q.db.QueryRow(ctx, createInventoryRow, arg.SkuID, arg.AvailableQty, arg.WarningQty)
-	var i Inventory
+	var i CreateInventoryRowRow
 	err := row.Scan(
 		&i.SkuID,
 		&i.AvailableQty,

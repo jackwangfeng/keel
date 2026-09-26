@@ -42,15 +42,26 @@
     "store_product_overrides / region_sku_prices / store_sku_prices）全部是 tenant 类，",
     "所以这里一条都不加 —— 只在下面三份豁免清单里各留了必要的条目。",
     "",
-    "### 视图不在任何一份清单里，这是一个已知缺口",
+    "### 视图那个缺口本轮补上了",
     "",
     "Go 侧的租户检查全部写着 relkind = 'r'（实测七处），视图（relkind = 'v'）",
     "一张都不在它们的视野里。而 PostgreSQL 的视图**默认以属主权限求值**，",
     "底层表的 RLS 会按属主判定 —— 实测：两个商家各一家店各一个 SKU，",
     "security_invoker = true 的视图给商家 1 返回 4 行（对），默认视图返回 5 行，",
-    "多出来的那一行是商家 2 的。数据模型 §4 的 sku_prices_by_store 是本仓库",
-    "第一张视图，落地时要同时给 migrate_test.go 补一条：relkind = 'v' 的每张视图，",
-    "reloptions 必须含 security_invoker=true。"
+    "多出来的那一行是商家 2 的。sku_prices_by_store（迁移 00020）是本仓库第一张",
+    "视图，同一轮给 migrate_test.go 补上了 TestViewsEvaluateAsTheInvoker：",
+    "relkind = 'v' 的每张视图，reloptions 必须含 security_invoker=true。",
+    "",
+    "那条检查按 pg_depend.deptype = 'e' 排除**扩展自有的**视图，而不是维护一张",
+    "名字清单：postgis 会建出 geometry_columns / geography_columns 两张视图，",
+    "它们不由本项目定义、也不读本项目的表，用名字豁免等于下一个扩展再来一次。",
+    "",
+    "### 视图仍然不在 tables 里，这是刻意的",
+    "",
+    "下面 classes 的每一条都在说「这张表的租户列长什么样、策略是什么形状、",
+    "GRANT 面给几权」，而视图三样都不适用：它没有自己的行，RLS 挂不上去",
+    "（策略只对表生效），它的隔离完全由底表的策略 + security_invoker 决定。",
+    "给它编一个类别只会让那三个字段各写一个「不适用」。"
   ],
   "policy_name": "tenant",
   "classes": {
@@ -133,6 +144,14 @@
       "class": "cross-tenant-infra",
       "documented": false,
       "reason": "goose 自己的迁移记录表，不由本项目定义，也不在设计文档里。keel_app 一个权限都不该有。"
+    },
+    "spatial_ref_sys": {
+      "class": "cross-tenant-infra",
+      "documented": false,
+      "grants": [
+        "SELECT"
+      ],
+      "reason": "PostGIS 自己的坐标系目录（EPSG 编号 → 投影定义），由 00020 的 CREATE EXTENSION postgis 建出来，不由本项目定义，也不该进设计文档 —— 把一张八千行的上游参考表抄进文档，下一次 PostGIS 升级它就成了一句过期的话。它没有租户维度可言：SRID 4326 对所有商家是同一个 4326。GRANT 面是 SELECT 而不是 cross-tenant-infra 默认的空集：ST_Transform 之类的函数要按 srid 查它，而本项目的读路径（ST_Intersects / ST_Distance 都带 4326）虽然今天走不到这条查表路径，keel_app 也确实拿得到 SELECT —— 00005 的 ALTER DEFAULT PRIVILEGES 让 keel 建出来的每一张新表自动可读，扩展建的表也不例外。写权限一权都没有，那是要紧的一半：任何租户都能改坐标系定义，比跨租户读取更难发现。"
     },
     "barrier": {
       "class": "cross-tenant-infra",
