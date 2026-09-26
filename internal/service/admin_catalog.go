@@ -244,6 +244,9 @@ func (s *AdminCatalogService) CreateProduct(ctx context.Context, n repository.Ne
 	}
 	return idempotentWrite(ctx, s, scopeAdminProductCreate, idemKey, hash, archivedCreated,
 		func(tx repository.Tx) (repository.AdminProduct, error) {
+			if err := lockFreightTemplateForLink(ctx, tx, n.FreightTemplateID); err != nil {
+				return repository.AdminProduct{}, err
+			}
 			return tx.CreateProduct(ctx, n)
 		})
 }
@@ -258,7 +261,7 @@ func (s *AdminCatalogService) UpdateProduct(ctx context.Context, id int64,
 	// 契约：minProperties: 1。一个字段都没传是 422，不是「什么也不改的 200」——
 	// 后者会让客户端以为自己那次编辑保存成功了。
 	if p.Title == nil && p.Subtitle == nil && p.Description == nil &&
-		p.CategoryID == nil && !p.SetBrandID {
+		p.CategoryID == nil && !p.SetBrandID && !p.SetFreightTemplateID {
 		return repository.AdminProduct{}, fmt.Errorf(
 			"%w: 一个字段都没传（契约 ProductUpdateRequest 是 minProperties: 1）", ErrCatalogBadRequest)
 	}
@@ -272,6 +275,11 @@ func (s *AdminCatalogService) UpdateProduct(ctx context.Context, id int64,
 	}
 	var out repository.AdminProduct
 	err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+		if p.SetFreightTemplateID {
+			if e := lockFreightTemplateForLink(ctx, tx, p.FreightTemplateID); e != nil {
+				return e
+			}
+		}
 		updated, e := tx.UpdateProduct(ctx, id, p)
 		if e != nil {
 			return e
@@ -298,6 +306,24 @@ func (s *AdminCatalogService) UpdateProduct(ctx context.Context, id int64,
 		return repository.AdminProduct{}, err
 	}
 	return out, nil
+}
+
+// lockFreightTemplateForLink 是「商品挂运费模板」的那道校验（00055）：只能挂一个
+// **未删除的全店模板**，并在这个事务里以共享锁钉住它，直到商品这一行写完 ——
+// 并发的「把它改成门店模板」或「删除它」要先拿同一行的排他锁再数挂着它的商品，
+// 于是两边串行，数完之后溜进来一件新挂上的商品这件事不会发生。
+//
+// id 为 nil（不挂 / 解除）时什么都不做。不成立时 422（请求体里指名的东西不可用）。
+func lockFreightTemplateForLink(ctx context.Context, tx repository.Tx, id *int64) error {
+	if id == nil {
+		return nil
+	}
+	err := tx.LockFreightTemplateForLink(ctx, *id)
+	if errors.Is(err, repository.ErrFreightTemplateNotFound) {
+		return fmt.Errorf("%w: freight_template_id=%d 不是本店一个未删除的全店运费模板"+
+			"（门店模板不能单独挂在商品上）", ErrCatalogBadRequest, *id)
+	}
+	return err
 }
 
 // productStatusPublished 是 products.status 的 1（上架）。

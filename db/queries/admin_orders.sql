@@ -26,7 +26,8 @@
 -- phone 同时认收货人手机号与买家账号手机号：后者先经 uk_users_phone 换成 user_id
 -- （标量子查询；那条唯一索引保证本租户内至多一行），再走 idx_orders_user。
 SELECT o.id, o.order_no, o.user_id, o.store_id, o.region_id, o.status,
-       o.goods_amount_cents, o.freight_cents, o.discount_cents, o.payable_cents,
+       o.goods_amount_cents, o.freight_cents, o.freight_discount_cents,
+       o.discount_cents, o.payable_cents,
        o.paid_cents, o.refunded_cents, o.refund_status, o.expire_at, o.paid_at,
        o.shipped_at, o.finished_at, o.created_at, o.user_coupon_id, o.coupon_name,
        o.promotion_discount_cents, o.promotions,
@@ -76,7 +77,8 @@ SELECT count(*)
 -- 后台按单号取一笔订单（没有买家过滤；租户由 RLS 管，门店范围由 service 判）。
 -- 列与 AdminListOrders 逐一对齐，行类型可以直接互转。
 SELECT o.id, o.order_no, o.user_id, o.store_id, o.region_id, o.status,
-       o.goods_amount_cents, o.freight_cents, o.discount_cents, o.payable_cents,
+       o.goods_amount_cents, o.freight_cents, o.freight_discount_cents,
+       o.discount_cents, o.payable_cents,
        o.paid_cents, o.refunded_cents, o.refund_status, o.expire_at, o.paid_at,
        o.shipped_at, o.finished_at, o.created_at, o.user_coupon_id, o.coupon_name,
        o.promotion_discount_cents, o.promotions,

@@ -24,7 +24,7 @@
 -- 否则两边各自读到「在途 0 件」，各自插一张退款单，合起来超退 ——
 -- 而那正是 chk_item_refund 拦不住的那一种（它只看已退，不看在途）。
 SELECT id, order_no, user_id, store_id, region_id, status,
-       goods_amount_cents, freight_cents,
+       goods_amount_cents, freight_cents, freight_discount_cents,
        discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
        expire_at, paid_at, shipped_at, finished_at, created_at, user_coupon_id,
        coupon_name, promotion_discount_cents, promotions
@@ -37,7 +37,7 @@ SELECT id, order_no, user_id, store_id, region_id, status,
 -- name: LockOrderByID :one
 -- 审核、撤回、入账改订单之前先锁它（见文件头「锁的顺序」）。
 SELECT id, order_no, user_id, store_id, region_id, status,
-       goods_amount_cents, freight_cents,
+       goods_amount_cents, freight_cents, freight_discount_cents,
        discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
        expire_at, paid_at, shipped_at, finished_at, created_at, user_coupon_id,
        coupon_name, promotion_discount_cents, promotions

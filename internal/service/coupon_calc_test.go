@@ -178,12 +178,47 @@ func TestInstantCapIsPerEligibleNotWholeOrder(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 4 包邮：本期拒绝
+// 4 包邮（00056）：只判范围与门槛，不减商品的钱；抵多少运费由 freeShippingDeduction 定
 // ---------------------------------------------------------------------------
 
-func TestFreeShippingIsNeverApplicable(t *testing.T) {
-	c := couponOfRule(repository.CouponRule{CouponType: couponTypeFreeShipping})
-	mustReject(t, evaluateCoupon(c, nil, anyStore, []couponLine{line(1, 10000)}, calcNow), "不计运费")
+func TestFreeShippingCouponJudgesThresholdButTakesNoGoodsMoney(t *testing.T) {
+	c := couponOfRule(repository.CouponRule{TemplateID: 9, CouponType: couponTypeFreeShipping,
+		ThresholdCents: 5000})
+	lines := []couponLine{line(1, 3000), line(2, 2000)}
+
+	v := evaluateCoupon(c, nil, anyStore, lines, calcNow)
+	if !v.Applicable || !v.FreeShipping {
+		t.Fatalf("刚好满门槛（5000 分）应可用且标成包邮券，实得 applicable=%v free=%v reason=%s",
+			v.Applicable, v.FreeShipping, v.Reason)
+	}
+	if v.DiscountCents != 0 || v.LineDiscounts[0] != 0 || v.LineDiscounts[1] != 0 {
+		t.Fatalf("包邮券不该减商品的钱，实得总 %d、各行 %v", v.DiscountCents, v.LineDiscounts)
+	}
+
+	// 差 1 分不满门槛：与满减券同一个比较（>=，不是 >）。
+	mustReject(t, evaluateCoupon(c, nil, anyStore, []couponLine{line(1, 4999)}, calcNow), "还差 1 分")
+
+	// 范围仍然生效：只限商品 7，本单没有商品 7。
+	scoped := []repository.CouponScope{{TemplateID: 9, ScopeType: repository.ScopeProduct, TargetID: i64(7), Include: true}}
+	mustReject(t, evaluateCoupon(c, scoped, anyStore, lines, calcNow), "没有适用")
+}
+
+func TestFreeShippingDeductionCapsAtFreightAndMax(t *testing.T) {
+	cases := []struct {
+		name         string
+		max, freight int64
+		want         int64
+	}{
+		{"不封顶：全免", 0, 800, 800},
+		{"封顶低于运费：只抵封顶", 500, 800, 500},
+		{"封顶高于运费：最多抵到 0", 1500, 800, 800},
+		{"运费为 0：抵不了（调用方据此判不可用）", 0, 0, 0},
+	}
+	for _, tc := range cases {
+		if got := freeShippingDeduction(tc.max, tc.freight); got != tc.want {
+			t.Errorf("%s：max=%d freight=%d 期望抵 %d，实得 %d", tc.name, tc.max, tc.freight, tc.want, got)
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------

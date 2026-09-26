@@ -8,7 +8,7 @@
 import { computed, ref, watch } from "vue";
 import { keel } from "../../api/client.ts";
 import {
-    FREE_SHIPPING_REASON,
+    FREE_SHIPPING_HINT,
     type AdminCouponTemplate,
     type CouponTemplateCreateRequest,
     type CouponTemplatePatchRequest,
@@ -29,7 +29,7 @@ const locked = computed(() => props.template?.locked === true);
 
 interface Form {
     name: string;
-    couponType: 1 | 2 | 3;
+    couponType: 1 | 2 | 3 | 4;
     threshold: string;
     discount: string;
     zhe: string;
@@ -62,7 +62,7 @@ function emptyForm(): Form {
 function formOf(t: AdminCouponTemplate): Form {
     return {
         name: t.name,
-        couponType: t.coupon_type === 4 ? 1 : t.coupon_type,
+        couponType: t.coupon_type,
         threshold: centsToYuanInput(t.threshold_cents),
         discount: centsToYuanInput(t.discount_cents),
         zhe: rateToZheInput(t.discount_rate),
@@ -127,11 +127,20 @@ function faceFields(): { ok: true; body: FaceBody } | { ok: false; msg: string }
         body.discount_rate = rate;
         body.threshold_cents = th;
         body.max_discount_cents = max;
-    } else {
+    } else if (f.couponType === 3) {
         const d = money("减免", f.discount, true);
         if (typeof d === "string") return { ok: false, msg: d };
         if (d <= 0) return { ok: false, msg: "减免必须大于 0" };
         body.discount_cents = d;
+    } else {
+        // 包邮券（00056）：门槛可选，「封顶」是最多抵多少运费，留空即全免。
+        // 不带减免额与折扣率（chk_coupon_rule 那一支）。
+        const th = money("门槛", f.threshold, false);
+        const max = money("封顶", f.maxDiscount, false);
+        if (typeof th === "string") return { ok: false, msg: th };
+        if (typeof max === "string") return { ok: false, msg: max };
+        body.threshold_cents = th;
+        body.max_discount_cents = max;
     }
     if (f.validMode === 1) {
         if (f.range === null) return { ok: false, msg: "请选择有效期起止时间" };
@@ -225,9 +234,7 @@ async function submit(): Promise<void> {
                     <el-radio :value="1">满减</el-radio>
                     <el-radio :value="2">折扣</el-radio>
                     <el-radio :value="3">立减</el-radio>
-                    <el-tooltip :content="FREE_SHIPPING_REASON">
-                        <el-radio :value="4" disabled>包邮（不可建）</el-radio>
-                    </el-tooltip>
+                    <el-radio :value="4">包邮</el-radio>
                 </el-radio-group>
             </el-form-item>
 
@@ -253,10 +260,19 @@ async function submit(): Promise<void> {
                 </el-form-item>
                 <p class="hint">折扣减免向下取整到分（对商家有利，每单至多少减不到 1 分）。</p>
             </template>
-            <template v-else>
+            <template v-else-if="form.couponType === 3">
                 <el-form-item label="减（元）" required>
                     <el-input v-model="form.discount" :disabled="locked" placeholder="无门槛立减" />
                 </el-form-item>
+            </template>
+            <template v-else>
+                <el-form-item label="门槛（元）">
+                    <el-input v-model="form.threshold" :disabled="locked" placeholder="留空即无门槛（比适用商品小计）" />
+                </el-form-item>
+                <el-form-item label="封顶（元）">
+                    <el-input v-model="form.maxDiscount" :disabled="locked" placeholder="最多抵多少运费，留空即运费全免" />
+                </el-form-item>
+                <p class="hint">{{ FREE_SHIPPING_HINT }}</p>
             </template>
 
             <el-form-item label="有效期" required>

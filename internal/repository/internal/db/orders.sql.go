@@ -205,7 +205,8 @@ func (q *Queries) CountUserOrders(ctx context.Context, arg CountUserOrdersParams
 
 const createOrderDraft = `-- name: CreateOrderDraft :one
 INSERT INTO orders (order_no, user_id, store_id, region_id, store_snapshot,
-                    status, goods_amount_cents, freight_cents,
+                    status, goods_amount_cents, freight_cents, freight_discount_cents,
+                    freight_snapshot,
                     discount_cents, payable_cents, receiver_snapshot, remark, expire_at,
                     user_coupon_id, coupon_name, promotion_discount_cents, promotions)
 SELECT $1, $2, st.id, st.region_id,
@@ -213,17 +214,19 @@ SELECT $1, $2, st.id, st.region_id,
                           'address', st.address, 'phone', st.phone),
        0, $3, $4,
        $5, $6,
-       $7, $8, $9,
-       $10,
+       $7, $8,
+       $9, $10, $11,
+       $12,
        (SELECT ct.name
           FROM user_coupons uc
           JOIN coupon_templates ct ON ct.id = uc.template_id
-         WHERE uc.id = $10),
-       $11, $12
+         WHERE uc.id = $12),
+       $13, $14
   FROM stores st
   JOIN regions r ON r.id = st.region_id
- WHERE st.id = $13 AND st.deleted_at IS NULL
+ WHERE st.id = $15 AND st.deleted_at IS NULL
 RETURNING id, order_no, store_id, region_id, status, goods_amount_cents, freight_cents,
+          freight_discount_cents,
           discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
           expire_at, created_at, user_coupon_id, coupon_name, promotion_discount_cents,
           promotions
@@ -234,6 +237,8 @@ type CreateOrderDraftParams struct {
 	UserID                 int64
 	GoodsAmountCents       int64
 	FreightCents           int64
+	FreightDiscountCents   int64
+	FreightSnapshot        []byte
 	DiscountCents          int64
 	PayableCents           int64
 	ReceiverSnapshot       []byte
@@ -253,6 +258,7 @@ type CreateOrderDraftRow struct {
 	Status                 int16
 	GoodsAmountCents       int64
 	FreightCents           int64
+	FreightDiscountCents   int64
 	DiscountCents          int64
 	PayableCents           int64
 	PaidCents              int64
@@ -305,6 +311,8 @@ func (q *Queries) CreateOrderDraft(ctx context.Context, arg CreateOrderDraftPara
 		arg.UserID,
 		arg.GoodsAmountCents,
 		arg.FreightCents,
+		arg.FreightDiscountCents,
+		arg.FreightSnapshot,
 		arg.DiscountCents,
 		arg.PayableCents,
 		arg.ReceiverSnapshot,
@@ -324,6 +332,7 @@ func (q *Queries) CreateOrderDraft(ctx context.Context, arg CreateOrderDraftPara
 		&i.Status,
 		&i.GoodsAmountCents,
 		&i.FreightCents,
+		&i.FreightDiscountCents,
 		&i.DiscountCents,
 		&i.PayableCents,
 		&i.PaidCents,
@@ -459,7 +468,7 @@ func (q *Queries) GetIdempotencyKey(ctx context.Context, arg GetIdempotencyKeyPa
 
 const getOrderByNo = `-- name: GetOrderByNo :one
 SELECT id, order_no, user_id, store_id, region_id, status,
-       goods_amount_cents, freight_cents,
+       goods_amount_cents, freight_cents, freight_discount_cents,
        discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
        expire_at, paid_at, shipped_at, finished_at, created_at, user_coupon_id,
        coupon_name, promotion_discount_cents, promotions
@@ -476,6 +485,7 @@ type GetOrderByNoRow struct {
 	Status                 int16
 	GoodsAmountCents       int64
 	FreightCents           int64
+	FreightDiscountCents   int64
 	DiscountCents          int64
 	PayableCents           int64
 	PaidCents              int64
@@ -519,6 +529,7 @@ func (q *Queries) GetOrderByNo(ctx context.Context, orderNo string) (GetOrderByN
 		&i.Status,
 		&i.GoodsAmountCents,
 		&i.FreightCents,
+		&i.FreightDiscountCents,
 		&i.DiscountCents,
 		&i.PayableCents,
 		&i.PaidCents,
@@ -535,6 +546,23 @@ func (q *Queries) GetOrderByNo(ctx context.Context, orderNo string) (GetOrderByN
 		&i.Promotions,
 	)
 	return i, err
+}
+
+const getOrderFreightSnapshot = `-- name: GetOrderFreightSnapshot :one
+SELECT freight_snapshot
+  FROM orders
+ WHERE id = $1
+`
+
+// 下单那一刻的运费计算明细快照（契约的 OrderDetail.freight / AdminOrderDetail.freight，00056）。
+//
+// 与 GetOrderStoreSnapshot 同一个理由单独成条：一整块 JSONB，列表用不着。
+// 00056 之前的订单是 NULL（那时不计运费），调用方让字段整个不出现。
+func (q *Queries) GetOrderFreightSnapshot(ctx context.Context, id int64) ([]byte, error) {
+	row := q.db.QueryRow(ctx, getOrderFreightSnapshot, id)
+	var freight_snapshot []byte
+	err := row.Scan(&freight_snapshot)
+	return freight_snapshot, err
 }
 
 const getOrderReceiver = `-- name: GetOrderReceiver :one
@@ -630,9 +658,51 @@ func (q *Queries) GetUserAddress(ctx context.Context, arg GetUserAddressParams) 
 	return i, err
 }
 
+const getUserDefaultAddress = `-- name: GetUserDefaultAddress :one
+SELECT id, receiver_name, phone, province, city, district, street, detail,
+       region_code, postal_code
+  FROM user_addresses
+ WHERE user_id = $1
+   AND is_default
+   AND deleted_at IS NULL
+`
+
+type GetUserDefaultAddressRow struct {
+	ID           int64
+	ReceiverName string
+	Phone        string
+	Province     string
+	City         string
+	District     string
+	Street       string
+	Detail       string
+	RegionCode   *string
+	PostalCode   *string
+}
+
+// 当前买家的默认收货地址（至多一条，uk_user_addresses_default）。购物车没指名地址时
+// 按它算运费（00056）。没有默认地址是合法状态（新用户零个地址），调用方当作「没有地址」。
+func (q *Queries) GetUserDefaultAddress(ctx context.Context, userID int64) (GetUserDefaultAddressRow, error) {
+	row := q.db.QueryRow(ctx, getUserDefaultAddress, userID)
+	var i GetUserDefaultAddressRow
+	err := row.Scan(
+		&i.ID,
+		&i.ReceiverName,
+		&i.Phone,
+		&i.Province,
+		&i.City,
+		&i.District,
+		&i.Street,
+		&i.Detail,
+		&i.RegionCode,
+		&i.PostalCode,
+	)
+	return i, err
+}
+
 const getUserOrderByNo = `-- name: GetUserOrderByNo :one
 SELECT id, order_no, user_id, store_id, region_id, status,
-       goods_amount_cents, freight_cents,
+       goods_amount_cents, freight_cents, freight_discount_cents,
        discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
        expire_at, paid_at, shipped_at, finished_at, created_at, user_coupon_id,
        coupon_name, promotion_discount_cents, promotions
@@ -656,6 +726,7 @@ type GetUserOrderByNoRow struct {
 	Status                 int16
 	GoodsAmountCents       int64
 	FreightCents           int64
+	FreightDiscountCents   int64
 	DiscountCents          int64
 	PayableCents           int64
 	PaidCents              int64
@@ -692,6 +763,7 @@ func (q *Queries) GetUserOrderByNo(ctx context.Context, arg GetUserOrderByNoPara
 		&i.Status,
 		&i.GoodsAmountCents,
 		&i.FreightCents,
+		&i.FreightDiscountCents,
 		&i.DiscountCents,
 		&i.PayableCents,
 		&i.PaidCents,
@@ -1139,7 +1211,7 @@ func (q *Queries) ListSKUsForPricing(ctx context.Context, arg ListSKUsForPricing
 const listUserOrders = `-- name: ListUserOrders :many
 
 SELECT id, order_no, user_id, store_id, region_id, status,
-       goods_amount_cents, freight_cents,
+       goods_amount_cents, freight_cents, freight_discount_cents,
        discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
        expire_at, paid_at, shipped_at, finished_at, created_at, user_coupon_id,
        coupon_name, promotion_discount_cents, promotions
@@ -1170,6 +1242,7 @@ type ListUserOrdersRow struct {
 	Status                 int16
 	GoodsAmountCents       int64
 	FreightCents           int64
+	FreightDiscountCents   int64
 	DiscountCents          int64
 	PayableCents           int64
 	PaidCents              int64
@@ -1237,6 +1310,7 @@ func (q *Queries) ListUserOrders(ctx context.Context, arg ListUserOrdersParams) 
 			&i.Status,
 			&i.GoodsAmountCents,
 			&i.FreightCents,
+			&i.FreightDiscountCents,
 			&i.DiscountCents,
 			&i.PayableCents,
 			&i.PaidCents,

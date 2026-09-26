@@ -82,16 +82,15 @@ type route struct {
 	// NotYetImplementedResponse 是**响应体**里契约声明了、这条 handler 刻意不
 	// 填的字段，与前两笔账是同一件事的第三种形状。
 	//
-	// 眼下只有一条：下单两条接口的 freight_cents。运费模板在数据模型里没有落地，
-	// 所以这条链路**没有算过运费** —— 而「算出来是 0」与「没算」对客户端是两件
-	// 不同的事（前者意味着包邮，后者意味着这个数还会变）。契约里它是可选字段，
-	// 所以「没算」的诚实形状是整个不出现，不是 0。
+	// 下单两条接口的 freight_cents 在这里挂过账（运费模板没有落地时，「没算」的诚实
+	// 形状是整个不出现，不是 0）。00056 运费落地之后两笔都划掉了，行为由
+	// freight_test.go 的 TestPreviewAndOrderCarryComputedFreight 盯着（没配模板时是
+	// 算出来的 0，而且字段必返）。眼下挂着的是商品详情的图片字段。
 	//
 	// 两个方向都锁得住：
 	//   - 契约把这个字段改名或删掉 → 下面那条对账测试红（清单在描述一个不存在
 	//     的东西）；
-	//   - 真的实现了运费、字段开始出现在响应里 → order_test.go 的
-	//     TestFreightIsAbsentNotZero 红，逼人回来删掉这一行。
+	//   - 真的实现了、字段开始出现在响应里 → 对应的行为测试红，逼人回来删掉这一行。
 	NotYetImplementedResponse map[string]string
 
 	// NotYetImplementedStage 是契约的 **description** 里写着、这条 handler
@@ -182,10 +181,7 @@ var routes = []route{
 		HTTPMethod:     http.MethodPost,
 		HandlerFile:    "order.go",
 		NoQueryParams:  "试算的入参全在请求体里（与 POST /orders 共用 OrderCreateRequest）",
-		NotYetImplementedResponse: map[string]string{
-			"freight_cents": "运费模板没有设计落地，这条链路没有算过运费。响应里整个不出现，" +
-				"而不是填 0：0 意味着包邮，缺席意味着这个数还会变。",
-		},
+		// freight_cents 的挂账 00056 划掉了：运费按收货地址算好返回（必返）。
 	},
 	{
 		ContractPath:   "/orders",
@@ -193,10 +189,7 @@ var routes = []route{
 		HTTPMethod:     http.MethodPost,
 		HandlerFile:    "order.go",
 		NoQueryParams:  "下单的参数在请求体与 Idempotency-Key 请求头里，没有 query 参数",
-		NotYetImplementedResponse: map[string]string{
-			"freight_cents": "同 /orders/preview。库里 orders.freight_cents 是 0（chk_amount " +
-				"的恒等式要它），但那是账，不是「算过了」。",
-		},
+		// freight_cents 的挂账 00056 划掉了：下单时算好写进订单。
 	},
 	{
 		ContractPath:   "/webhooks/payments/{channel}",
@@ -359,6 +352,45 @@ var routes = []route{
 		HTTPMethod:     http.MethodGet,
 		HandlerFile:    "admin_order_detail.go",
 		NoQueryParams:  "详情只吃路径参数 refund_no",
+	},
+	// —— 经营报表（契约 Report tag，00057）。参数集合不同的接口各自一个文件
+	// （对账按文件读 c.Query 的字面量）；概览与趋势参数一模一样，共用一个。
+	// 全部参数都实现了，既不写 NoQueryParams 也不挂账。
+	{
+		ContractPath:   "/admin/reports/overview",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "admin_report_overview.go",
+	},
+	{
+		ContractPath:   "/admin/reports/trend",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "admin_report_overview.go",
+	},
+	{
+		ContractPath:   "/admin/reports/products",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "admin_report_products.go",
+	},
+	{
+		ContractPath:   "/admin/reports/stores",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "admin_report_stores.go",
+	},
+	{
+		ContractPath:   "/admin/reports/inventory-alerts",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "admin_report_inventory.go",
+	},
+	{
+		ContractPath:   "/admin/reports/search",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "admin_report_search.go",
 	},
 	// —— 消息通知（00053，数据模型 §16）。两份列表各读 page / page_size / unread_only，
 	// 各自一个文件；其余六条一个 query 参数都没有，放在 notification.go。
@@ -880,6 +912,41 @@ var routes = []route{
 		HTTPMethod:     http.MethodPatch,
 		HandlerFile:    "admin_promotion.go",
 		NoQueryParams:  "改哪一个在路径上，改什么在请求体里",
+	},
+	// 运费模板（00055）。列表读 query，单独一个文件（同 admin_coupon_list.go）。
+	{
+		ContractPath:   "/admin/freight-templates",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "admin_freight_list.go",
+	},
+	{
+		ContractPath:   "/admin/freight-templates",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "admin_freight.go",
+		NoQueryParams:  "模板全在请求体里；幂等键在 Idempotency-Key 请求头",
+	},
+	{
+		ContractPath:   "/admin/freight-templates/{template_id}",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "admin_freight.go",
+		NoQueryParams:  "详情只吃路径参数",
+	},
+	{
+		ContractPath:   "/admin/freight-templates/{template_id}",
+		ContractMethod: "put",
+		HTTPMethod:     http.MethodPut,
+		HandlerFile:    "admin_freight.go",
+		NoQueryParams:  "改哪一个在路径上，整个模板在请求体里",
+	},
+	{
+		ContractPath:   "/admin/freight-templates/{template_id}",
+		ContractMethod: "delete",
+		HTTPMethod:     http.MethodDelete,
+		HandlerFile:    "admin_freight.go",
+		NoQueryParams:  "删哪一个在路径上",
 	},
 	{
 		ContractPath:   "/admin/regions",

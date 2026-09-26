@@ -39,7 +39,8 @@ so "which one is running?" never depends on anyone's memory.
 
 ## [Unreleased]
 
-Migrations `00027`–`00038`, `00044`, `00053` and `00054`.
+Migrations `00027`–`00038`, `00044` and `00053`–`00057`.
+
 
 ### Added
 
@@ -229,6 +230,78 @@ Migrations `00027`–`00038`, `00044`, `00053` and `00054`.
   offline; a live promotion can only be renamed or taken offline. The demo seed
   ships a store-wide tiered discount and a limited-time price with rolling dates.
 
+- **Business reports** (`GET /admin/reports/overview`, `/trend`, `/products`,
+  `/stores`, `/inventory-alerts`, `/search`; read-only, no AI). The overview
+  gives paid amount, refunds, net sales (paid minus refunded), paid orders,
+  paying buyers, average order value and refund rate for the window and for the
+  immediately preceding window of the same length (today compares with the same
+  hours of yesterday). Sales are attributed by payment time, refunds by the time
+  the money actually went back (status `40`); drafts, unpaid and closed orders
+  never count, fully refunded orders still count as paid. Days and hours are cut
+  in the shop's time zone (`shop_settings.timezone`, falling back to
+  `Asia/Shanghai`, echoed in the response); `last_7_days` / `last_30_days` are
+  complete days excluding today; a custom window is capped at 366 days, since
+  every report aggregates the raw rows on the spot. Scope follows the order list:
+  region and store managers only see their own stores' numbers; the search
+  summary (query counts, zero-result rate, top and zero-result queries) is for
+  admins and operators only, because search logs have no store dimension. Four
+  partial / covering indexes back the windows (migration `00057`); measured on
+  1.3M orders and 1M search logs, a 30-day overview is ~20 ms and a 366-day one
+  under 200 ms. No materialized views or rollup tables.
+- **The back office opens on a business-overview dashboard**: metric cards with
+  period-over-period change and the definition of each metric on hover, a trend
+  line (hourly for a single day, daily otherwise) with a crosshair tooltip, top
+  products by revenue or quantity with a category filter, store / region
+  comparison bars, low-stock alerts and the search summary. The charts are
+  hand-written SVG — no chart library, zero bundle-size increase.
+
+### Added — shipping fees and free-shipping coupons (migrations 00055–00056)
+
+- **Shipping-fee templates** (data model §7). A template is a charge mode (per
+  piece, or by weight using each SKU's `weight_gram`), a set of rules keyed by
+  province-level division code — first unit + fee, each additional unit + fee,
+  free over an amount and/or a quantity — plus a list of undeliverable
+  provinces. Exactly one rule is the "everywhere else" default; a province may
+  appear in only one rule. Templates are either shop-wide (products can be
+  pinned to one; one of them can be the shop default) or per store (at most one
+  per store). A line uses the product's pinned template, else its fulfilling
+  store's template, else the shop default, else ships free (`no_template`).
+  Lines on different templates are priced separately and summed.
+- **Admin API**: `GET/POST /admin/freight-templates`,
+  `GET/PUT/DELETE /admin/freight-templates/{template_id}` (`POST` needs an
+  `Idempotency-Key`; `PUT` replaces the whole template; `DELETE` is a soft
+  delete refused with `409 freight-template-in-use` while products are pinned to
+  it). Shop-wide templates are writable by admins and operators; store templates
+  follow the store-price rule (region managers for their regions, store managers
+  for their own store). `AdminProduct.freight_template_id` pins a product.
+- **Freight is priced by `POST /orders/preview` and written by `POST /orders`**,
+  always in this order: list price → promotions → coupon (threshold judged after
+  promotions) → shipping (free-over-amount judged on the goods total **after**
+  discounts) → free-shipping coupon. Orders store `freight_cents`, the new
+  `freight_discount_cents`, and a `freight` snapshot of the rules used, so later
+  template edits never rewrite history. The amount identity
+  `payable = goods + freight − discount` is unchanged (`discount` includes the
+  freight a coupon covered) and a new `chk_freight_discount` keeps the coupon
+  from covering more than the freight.
+- **Undeliverable addresses are refused per line**: preview and order return
+  `422 region-not-deliverable` with `undeliverable_items`
+  (`sku_id`, `reason_code`, `reason`).
+- **Free-shipping coupons (`coupon_type = 4`) can be created.** They cover the
+  freight, capped by `max_discount_cents` (0 means all of it), never below zero,
+  and are not applicable to an order whose freight is already zero.
+- **Cart shows estimated freight**: every cart operation returning a `Cart`
+  accepts an optional `address_id` (default: the buyer's default address) and
+  returns `freight`, `address_id` and a per-line `undeliverable` marker.
+- **After-sales refunds use the freight actually paid** (`freight_cents −
+  freight_discount_cents`) both for the full refund of an unshipped order and as
+  the cap for return-freight decided at audit.
+- **Console**: a new "运费模板" page (province picker, per-rule free-shipping
+  conditions, undeliverable provinces), a template picker on the product page,
+  and the free-shipping option in the coupon dialog.
+- **Demo seed** gives the `demo` shop a default template (¥8 first piece, ¥2 each
+  additional, free over ¥99; remote provinces ¥15 + ¥5 with no free shipping;
+  Hong Kong, Macao and Taiwan undeliverable).
+
 ### Added — order fulfillment (migration 00033)
 
 - **Buyer cancellation** (`POST /orders/{order_no}/cancel`): closes a pending
@@ -358,6 +431,16 @@ Migrations `00027`–`00038`, `00044`, `00053` and `00054`.
 - **`OrderPreview.items` is a named schema (`OrderPreviewItem`)** with
   `price_cents`, `list_price_cents`, `price_promotion_id` and
   `promotion_discount_cents`; the fields it had are now required.
+- **Contract (breaking for generated clients):** `OrderPreview.freight_cents`,
+  `freight_discount_cents` and `freight` are now required — freight used to be
+  absent ("not computed"), it is now always computed, `0` with
+  `free_reason = no_template` when the shop has no template. `Order` gains
+  `freight_discount_cents`; `OrderDetail` / `AdminOrderDetail` gain `freight`;
+  `Problem` gains `undeliverable_items`; the five `Cart` operations take
+  `address_id`; `CouponApplicableRequest` takes an optional `address_id`
+  (free-shipping coupons are only listed when it is given). `POST
+  /orders/preview` now looks up `address_id` and answers `422` for an unknown
+  address, as `POST /orders` always did. Regenerate your client.
 - **`explain: true` lists exactly the stages that ran.** `scores.business`
   appears when business re-ranking ran; `scores.vector` is absent when the
   vector route did not run (engine down or not configured); `scores.final` is
@@ -393,6 +476,11 @@ Migrations `00027`–`00038`, `00044`, `00053` and `00054`.
 
 ### Fixed
 
+- **`PATCH /admin/products/{product_id}` with `"brand_id": null` now clears the
+  brand.** `encoding/json` turns a JSON `null` into a nil pointer without calling
+  `UnmarshalJSON`, so an explicit `null` was indistinguishable from an omitted
+  field and was ignored. Presence is now read from the raw object (the same fix
+  covers the new `freight_template_id`).
 - **Referencing an upload a second time no longer fails.** `MarkUploadReferenced`
   only matched rows not yet referenced, so re-using an image (the same picture on
   a second SKU, the same evidence on a re-submitted refund) affected zero rows and
@@ -451,6 +539,10 @@ Migrations `00027`–`00038`, `00044`, `00053` and `00054`.
   failed ones), repeating "every ¥100 off ¥10" discounts, and a promotion
   performance report are not implemented. Flash-sale quotas and per-buyer
   limits are not returned on refunds.
+- Shipping-fee regions stop at the province level (no city or county rules),
+  and lines on different templates are summed rather than merged the way a
+  single parcel would be. Who pays return freight is still decided by staff at
+  audit.
 - No outbound notification channel is wired up (WeChat subscribe messages, SMS
   and e-mail all need credentials this project does not have); buyers have no
   notification preferences yet.

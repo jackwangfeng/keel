@@ -32,12 +32,16 @@ import (
 // 喂给它的正是这里按门店生效价算出来的每一行：券按「下单那家店的价」算，
 // 试算与下单用的是同一个函数、同一份输入，「试算减 20、下单减 19」没有发生的余地。
 //
-// **00044 起营销活动也在这里算**（promotion_calc.go 的 computePromotions），顺序写死：
+// **营销活动与运费也在这里算**（promotion_calc.go / freight_calc.go，各只有一份实现）。
+// 计价顺序固定为（数据模型 §7「优惠计算顺序」）：
 //
-//	门店最终价 → 限时折扣 / 秒杀改单价 → 满减满折按行分摊 → 券（按活动后金额） → 运费
+//	门店最终价 → 营销活动（限时折扣 / 秒杀改单价，满减满折按行分摊）
+//	→ 优惠券（门槛与计算基数是活动后金额）→ 运费（满额包邮按优惠后应付商品金额判）
+//	→ 包邮券抵运费
 //
-// 券的门槛与计算基数因此是**活动后金额**（couponLinesOf 喂的是 amount − 活动分摊），
-// 不是门店价：一件已经打了 8 折的商品，不该再按原价去凑满减券的门槛。
+// 券按活动后金额算（couponLinesOf 喂的是 amount − 活动分摊）：一件已经打了 8 折的商品，
+// 不该再按原价去凑满减券的门槛。运费一段只看 FreightRequest 那四样输入，
+// 不关心前面的优惠是怎么减出来的。
 
 // 请求规模的上限。
 //
@@ -51,26 +55,6 @@ const (
 	maxOrderLines   = 50
 	maxLineQuantity = 999
 )
-
-// freightNotBilledThisRelease 说的是「**本期不计运费**」，不是「算出来是 0」。
-//
-// 运费模板在数据模型里没有落地（没有这张表，也没有区划到费率的映射），
-// 所以这条链路**没有算过运费**。两者的差别对客户端是实打实的：
-// 「算出来是 0」意味着这单包邮，「没算」意味着这个数还会变。
-//
-// 落到响应上的形状是 nil 而不是 0 —— 契约里 freight_cents 是可选字段，
-// 没有就整个不出现（同 apiUser 里 last_login_at 的做法）。返回 0 的话，
-// 客户端没有任何办法把「包邮」和「还没算」分开。
-//
-// 落到库里的仍然是 0：orders.freight_cents 是 NOT NULL，而 chk_amount 要求
-// payable = goods + freight - discount 恒等。库里的 0 是一个占位，
-// 它与响应里的「字段不存在」不矛盾 —— 一个记的是账，一个说的是这笔账算没算过。
-//
-// 这笔账挂在 contract_test.go 的 NotYetImplementedResponse 里，两个方向都会红。
-var freightNotBilledThisRelease *int64 = nil
-
-// freightForLedger 是写进 orders.freight_cents 的值。见上。
-const freightForLedger int64 = 0
 
 // LineInput 是请求体里的一行（契约的 OrderItemInput）。
 type LineInput struct {
@@ -120,9 +104,17 @@ type Quote struct {
 
 	GoodsAmountCents int64
 
-	// FreightCents 是 nil：本期不计运费，见 freightNotBilledThisRelease。
-	FreightCents *int64
+	// FreightCents 是运费（包邮券抵扣之前），FreightDiscountCents 是包邮券抵掉的部分
+	// （已经算在 DiscountCents 里），Freight 是明细。
+	//
+	// 没有收货地址（POST /coupons/applicable 没带 address_id）时 Freight 为 nil、
+	// FreightCents 为 0：那不是「包邮」，是「没算」—— 那条接口不回任何金额，
+	// 只把包邮券从结果里拿掉（判不了它能不能用）。试算与下单一定有地址。
+	FreightCents         int64
+	FreightDiscountCents int64
+	Freight              *FreightBreakdown
 
+	// DiscountCents 是优惠合计 = 各行分摊的商品优惠之和 + FreightDiscountCents。
 	DiscountCents int64
 	PayableCents  int64
 
@@ -138,6 +130,10 @@ type Quote struct {
 	// limitViolations 是超出每人限购的行。试算与下单据此报 409（checkPromotionLimits），
 	// 「本单可用券」不看它 —— 那条接口只回答券的问题。
 	limitViolations []promoLimitViolation
+	// freightNoCoupon 是「不用任何券」时的运费：本单可用券里包邮券能抵多少按它算 ——
+	// 带上那张包邮券去试算时，商品上没有券的减免，满额包邮按不用券的金额判。
+	// nil = 没有地址，包邮券判不了。
+	freightNoCoupon *int64
 
 	// UserCouponID 是这次用上的券；没带券为 nil。
 	UserCouponID *int64
@@ -193,8 +189,11 @@ var ErrPromotionSoldOut = errors.New("活动配额已售罄")
 // 它刻意不看库存。试算是金额试算，不是可售性承诺 —— 把库存并进来会让试算
 // 看起来像一次预留，而 SAGA 的正向阶段才是真正的判定点（架构 §5 论证过：
 // 超卖为零、少卖存在，正是因为扣减发生在那里而不是这里）。
-func priceOrder(ctx context.Context, tx repository.Tx, sc repository.StoreScope, items []LineInput,
-	coupon couponRequest) (Quote, error) {
+//
+// dest 是收货地址归到的省；nil = 没有地址（只有 POST /coupons/applicable 会这样调），
+// 此时不算运费，带包邮券则报券不可用。
+func priceOrder(ctx context.Context, tx repository.Tx, sc repository.StoreScope,
+	dest *FreightDestination, items []LineInput, coupon couponRequest) (Quote, error) {
 	if len(items) == 0 {
 		return Quote{}, fmt.Errorf("%w: 订单至少要有一行", ErrBadRequest)
 	}
@@ -248,10 +247,9 @@ func priceOrder(ctx context.Context, tx repository.Tx, sc repository.StoreScope,
 	}
 
 	q := Quote{
-		Lines:        make([]PricedLine, 0, len(items)),
-		FreightCents: freightNotBilledThisRelease,
-		Store:        sc,
-		Promotions:   []PromotionHit{},
+		Lines:      make([]PricedLine, 0, len(items)),
+		Store:      sc,
+		Promotions: []PromotionHit{},
 	}
 	promoIn := make([]promoLine, 0, len(items))
 	for _, it := range items {
@@ -306,16 +304,69 @@ func priceOrder(ctx context.Context, tx repository.Tx, sc repository.StoreScope,
 	q.couponBlockers = pr.CouponBlockers
 	q.limitViolations = pr.Violations
 
+	// ---- 优惠券：满减 / 折扣 / 立减在这里分摊到行（按活动后金额）；包邮券只判门槛与范围，
+	// 抵扣留到运费之后。q.DiscountCents 此刻是活动那一份，券的商品优惠加在它上面。----
+	var freeShipping *repository.UserCoupon
 	if coupon.ID != nil {
-		if err := applyCoupon(ctx, tx, sc, &q, coupon); err != nil {
+		fs, err := applyCoupon(ctx, tx, sc, &q, coupon)
+		if err != nil {
 			return Quote{}, err
 		}
+		freeShipping = fs
+	}
+
+	// ---- 运费：满额包邮按「优惠后应付商品金额」判 ----
+	if dest != nil {
+		fc, err := loadFreightContext(ctx, tx, sc, skuIDsOf(q.Lines))
+		if err != nil {
+			return Quote{}, err
+		}
+		fitems := freightItemsOf(q.Lines)
+		// goodsPayable = 商品金额（已是活动价）− 满减满折 − 券的商品优惠。
+		// 此刻 q.DiscountCents 正是「活动 + 券的商品优惠」（包邮券还没抵，见下）。
+		goodsPayable := q.GoodsAmountCents - q.DiscountCents
+		b, bad, err := fc.quote(dest.ProvinceCode, fitems, goodsPayable)
+		if err != nil {
+			return Quote{}, err
+		}
+		if len(bad) > 0 {
+			return Quote{}, &UndeliverableError{Lines: bad}
+		}
+		q.Freight = &b
+		q.FreightCents = b.FreightCents
+
+		// 不用券时的运费（本单可用券里包邮券按它算）：活动优惠照减，只是不减券。
+		// 没有券的商品优惠时就是上面这一个。
+		noCoupon := b.FreightCents
+		if q.DiscountCents > q.PromotionDiscountCents {
+			nb, _, err := fc.quote(dest.ProvinceCode, fitems, q.GoodsAmountCents-q.PromotionDiscountCents)
+			if err != nil {
+				return Quote{}, err
+			}
+			noCoupon = nb.FreightCents
+		}
+		q.freightNoCoupon = &noCoupon
+	}
+
+	// ---- 包邮券抵运费：最多抵到 0；本单运费为 0 时这张券不可用 ----
+	if freeShipping != nil {
+		if q.Freight == nil {
+			return Quote{}, fmt.Errorf("%w: 包邮券要按收货地址算运费，这次请求没有地址", ErrCouponNotApplicable)
+		}
+		off := freeShippingDeduction(freeShipping.Rule.MaxDiscountCents, q.FreightCents)
+		if off <= 0 {
+			return Quote{}, fmt.Errorf("%w: 本单运费为 0（已包邮或不计运费），包邮券抵不了钱", ErrCouponNotApplicable)
+		}
+		q.FreightDiscountCents = off
+		q.Freight.FreightDiscountCents = off
+		q.DiscountCents += off
+		id := freeShipping.ID
+		q.UserCouponID = &id
 	}
 
 	// 应付 = 商品 + 运费 - 优惠（数据模型 §5 的 chk_amount 就是这条恒等式）。
-	// 运费这一项用的是**落账值** freightForLedger，不是响应里那个 nil ——
-	// 库里的恒等式必须成立，而「这笔运费算没算过」是另一件事。
-	q.PayableCents = q.GoodsAmountCents + freightForLedger - q.DiscountCents
+	// 优惠里含包邮券抵掉的运费，所以这条式子不用为运费另加一项。
+	q.PayableCents = q.GoodsAmountCents + q.FreightCents - q.DiscountCents
 	if q.PayableCents < 0 {
 		// evaluateCoupon 已经把减免封顶在适用小计上，这里按构造不可达。但破了之后
 		// chk_amount 仍然成立 —— 数据库拦不住一笔负数应付，所以这一道要留着。
@@ -413,29 +464,45 @@ func couponLinesOf(lines []PricedLine) []couponLine {
 	return out
 }
 
+// skuIDsOf 是定价结果里的 sku_id，按行序。
+func skuIDsOf(lines []PricedLine) []int64 {
+	out := make([]int64, len(lines))
+	for i, ln := range lines {
+		out[i] = ln.SKUID
+	}
+	return out
+}
+
 // applyCoupon 把请求里那张券算进 q：总减免、每行分摊、回显券 id。
+//
+// 包邮券（coupon_type = 4）在这里只判「能不能用」（状态、有效期、范围、门槛），
+// 不减商品的钱：它抵的是运费，而运费要等券之后才算得出来（计价顺序）。
+// 这种券原样返回，由 priceOrder 在运费之后抵扣。
 func applyCoupon(ctx context.Context, tx repository.Tx, sc repository.StoreScope,
-	q *Quote, coupon couponRequest) error {
+	q *Quote, coupon couponRequest) (*repository.UserCoupon, error) {
 	c, err := tx.FindUserCoupon(ctx, *coupon.ID, coupon.UserID)
 	if errors.Is(err, repository.ErrCouponNotFound) {
-		return fmt.Errorf("%w: user_coupon_id=%d 不存在或不属于你", ErrCouponNotApplicable, *coupon.ID)
+		return nil, fmt.Errorf("%w: user_coupon_id=%d 不存在或不属于你", ErrCouponNotApplicable, *coupon.ID)
 	}
 	if err != nil {
-		return err
+		return nil, err
 	}
 	scopes, err := tx.ListCouponScopes(ctx, []int64{c.Rule.TemplateID})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if len(q.couponBlockers) > 0 {
 		// 放在找到券之后：先报「不是你的券」，再报「本单不能用券」—— 反过来的话，
 		// 命中互斥活动的单子就成了一个不报「券存不存在」的探测口，而别的单子报。
-		return fmt.Errorf("%w: 本单命中的活动「%s」不与优惠券同享",
+		return nil, fmt.Errorf("%w: 本单命中的活动「%s」不与优惠券同享",
 			ErrCouponNotApplicable, strings.Join(q.couponBlockers, "」「"))
 	}
 	v := evaluateCoupon(c, scopes[c.Rule.TemplateID], sc, couponLinesOf(q.Lines), coupon.Now)
 	if !v.Applicable {
-		return fmt.Errorf("%w: %s", ErrCouponNotApplicable, v.Reason)
+		return nil, fmt.Errorf("%w: %s", ErrCouponNotApplicable, v.Reason)
+	}
+	if v.FreeShipping {
+		return &c, nil
 	}
 	for i := range q.Lines {
 		q.Lines[i].DiscountCents += v.LineDiscounts[i]
@@ -444,7 +511,7 @@ func applyCoupon(ctx context.Context, tx repository.Tx, sc repository.StoreScope
 	q.CouponDiscountCents = v.DiscountCents
 	id := c.ID
 	q.UserCouponID = &id
-	return nil
+	return nil, nil
 }
 
 // ApplicableCoupon 是「本单可用券」的一项：券、它的范围、用在本单上能减多少。
@@ -460,12 +527,14 @@ type ApplicableCoupon struct {
 // 「能减 20」，带上这张券试算就是减 20（handler 的测试逐张核对这一条）。
 //
 // 本单命中了不与券同享的活动时直接回空：那时带哪一张券试算都是 409。
+// 包邮券按 freightNoCoupon（不用任何券时的运费）算能抵多少：带上它去试算时商品上
+// 没有券的减免，运费正是这一个数。nil（没有地址）时包邮券一张都不出现 —— 判不了。
 func applicableCoupons(ctx context.Context, tx repository.Tx, sc repository.StoreScope,
 	userID int64, q Quote, now time.Time) ([]ApplicableCoupon, error) {
 	if len(q.couponBlockers) > 0 {
 		return []ApplicableCoupon{}, nil
 	}
-	lines := q.Lines
+	lines, freightNoCoupon := q.Lines, q.freightNoCoupon
 	coupons, err := tx.ListUsableUserCoupons(ctx, userID, now)
 	if err != nil {
 		return nil, err
@@ -492,8 +561,18 @@ func applicableCoupons(ctx context.Context, tx repository.Tx, sc repository.Stor
 		if !v.Applicable {
 			continue
 		}
+		off := v.DiscountCents
+		if v.FreeShipping {
+			if freightNoCoupon == nil {
+				continue
+			}
+			off = freeShippingDeduction(c.Rule.MaxDiscountCents, *freightNoCoupon)
+			if off <= 0 {
+				continue
+			}
+		}
 		out = append(out, ApplicableCoupon{
-			Coupon: c, Scopes: scopes[c.Rule.TemplateID], DiscountCents: v.DiscountCents,
+			Coupon: c, Scopes: scopes[c.Rule.TemplateID], DiscountCents: off,
 		})
 	}
 	sort.SliceStable(out, func(i, j int) bool {

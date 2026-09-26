@@ -48,13 +48,11 @@ func (h *AdminOrderHandler) RefundDetail(c *gin.Context) {
 // 漏搬一个字段的症状是 JSON 里整个不出现（契约里可选），钉住它的是
 // admin_order_test.go 里「后台摘要的 Order 部分与买家侧同一单逐键一致」那条断言。
 //
-// **运费照实给出**，与买家侧那几条接口刻意不同：买家侧的 freight_cents 整个缺席，
-// 是因为下单链路没有算过运费（contract_test.go 的 NotYetImplementedResponse）；
-// 而后台审核退货退款时裁定退运费，服务端的上限就是订单上这一列
-// （refund-freight-exceeded 的判据），审核人得看得到它。
+// 运费（00056 起买家侧也照实给出）：后台审核退货退款时裁定退运费，服务端的上限是
+// 实收运费 freight_cents - freight_discount_cents（refund-freight-exceeded 的判据），
+// 审核人得看得到这两个数。
 func apiAdminOrderSummary(s service.AdminOrderSummary) api.AdminOrderSummary {
 	base := apiOrder(s.Order.Order)
-	freight := api.Money(s.Order.FreightCents)
 	return api.AdminOrderSummary{
 		OrderNo:          base.OrderNo,
 		StoreId:          base.StoreId,
@@ -64,16 +62,18 @@ func apiAdminOrderSummary(s service.AdminOrderSummary) api.AdminOrderSummary {
 		PayableCents:     base.PayableCents,
 		GoodsAmountCents: base.GoodsAmountCents,
 		DiscountCents:    base.DiscountCents,
-		FreightCents:     &freight,
-		PaidCents:        base.PaidCents,
-		RefundedCents:    base.RefundedCents,
-		ExpireAt:         base.ExpireAt,
-		CreatedAt:        base.CreatedAt,
-		PaidAt:           base.PaidAt,
-		ShippedAt:        base.ShippedAt,
-		FinishedAt:       base.FinishedAt,
-		UserCouponId:     base.UserCouponId,
-		CouponName:       base.CouponName,
+		FreightCents:     base.FreightCents,
+		// 包邮券抵掉的运费（00056）。
+		FreightDiscountCents: base.FreightDiscountCents,
+		PaidCents:            base.PaidCents,
+		RefundedCents:        base.RefundedCents,
+		ExpireAt:             base.ExpireAt,
+		CreatedAt:            base.CreatedAt,
+		PaidAt:               base.PaidAt,
+		ShippedAt:            base.ShippedAt,
+		FinishedAt:           base.FinishedAt,
+		UserCouponId:         base.UserCouponId,
+		CouponName:           base.CouponName,
 
 		PromotionDiscountCents: base.PromotionDiscountCents,
 		Promotions:             base.Promotions,
@@ -95,15 +95,18 @@ func apiAdminOrderDetail(d service.AdminOrderDetail) api.AdminOrderDetail {
 		refunds = append(refunds, apiAdminRefund(r))
 	}
 	return api.AdminOrderDetail{
-		OrderNo:                s.OrderNo,
-		StoreId:                s.StoreId,
-		RegionId:               s.RegionId,
-		Status:                 s.Status,
-		RefundStatus:           s.RefundStatus,
-		PayableCents:           s.PayableCents,
-		GoodsAmountCents:       s.GoodsAmountCents,
-		DiscountCents:          s.DiscountCents,
-		FreightCents:           s.FreightCents,
+		OrderNo:              s.OrderNo,
+		StoreId:              s.StoreId,
+		RegionId:             s.RegionId,
+		Status:               s.Status,
+		RefundStatus:         s.RefundStatus,
+		PayableCents:         s.PayableCents,
+		GoodsAmountCents:     s.GoodsAmountCents,
+		DiscountCents:        s.DiscountCents,
+		FreightCents:         s.FreightCents,
+		FreightDiscountCents: s.FreightDiscountCents,
+		// 下单那一刻的运费明细快照；00056 之前的订单没有，整个不出现。
+		Freight:                apiFreightBreakdownPtr(d.Freight),
 		PaidCents:              s.PaidCents,
 		RefundedCents:          s.RefundedCents,
 		ExpireAt:               s.ExpireAt,
@@ -113,11 +116,11 @@ func apiAdminOrderDetail(d service.AdminOrderDetail) api.AdminOrderDetail {
 		FinishedAt:             s.FinishedAt,
 		UserCouponId:           s.UserCouponId,
 		CouponName:             s.CouponName,
-		PromotionDiscountCents: s.PromotionDiscountCents,
-		Promotions:             s.Promotions,
 		Receiver:               s.Receiver,
 		Store:                  s.Store,
 		HasOpenRefund:          s.HasOpenRefund,
+		PromotionDiscountCents: s.PromotionDiscountCents,
+		Promotions:             s.Promotions,
 
 		Items:     apiOrderItems(d.Items),
 		Payments:  apiPayments(d.Payments),

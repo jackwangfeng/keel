@@ -130,6 +130,48 @@ export type AdminCouponTemplate = {
   updated_at : string
 }
 
+/** 1 按件 · 2 按重量（单位克，取 SKU 的 `weight_gram`） */
+export type FreightChargeMode = number
+
+/** 省级行政区划码（GB/T 2260 的 6 位码，后四位为 0），如 `110000` 北京、`440000` 广东、 */
+export type ProvinceCode = string
+
+/** 一条计费规则：管哪些省、首件（首重）多少钱、续件（续重）多少钱、满什么条件包邮。 */
+export type FreightRule = {
+  /** 这条规则管哪些省。**空数组 = 默认规则**（其余地区），一个模板恰好一条。 */
+  region_codes : ProvinceCode[]
+  /** 首件件数（按件）或首重克数（按重量） */
+  first_unit : number
+  /** 金额，单位「分」。禁止使用浮点。 */
+  first_fee_cents : Money
+  /** 续件件数或续重克数：每超出这么多收一次续费，不足一个单位按一个算 */
+  additional_unit : number
+  /** 金额，单位「分」。禁止使用浮点。 */
+  additional_fee_cents : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  free_threshold_cents : Money
+  /** 满件包邮：整单件数 ≥ 它即这条规则免运费。0 = 不设 */
+  free_quantity : number
+}
+
+export type AdminFreightTemplate = {
+  id : number
+  name : string
+  /** null = 全店模板 */
+  store_id : number | null
+  /** 1 按件 · 2 按重量（单位克，取 SKU 的 `weight_gram`） */
+  charge_mode : FreightChargeMode
+  /** 是不是全店默认模板 */
+  is_default : boolean
+  /** 默认规则（`region_codes` 为空）排在最后，其余按录入顺序 */
+  rules : FreightRule[]
+  undeliverable_region_codes : ProvinceCode[]
+  /** 挂着这个模板的未删除商品数。大于 0 时不能删除 */
+  product_count : number
+  created_at : string
+  updated_at : string
+}
+
 export type AdminInventory = {
   sku_id : number
   sku_code? : string
@@ -180,6 +222,39 @@ export type OrderStoreSnapshot = {
   store_phone? : string
   store_address? : string
   region_name? : string
+}
+
+/** 这一组为什么免运费：`threshold` 满额包邮、`quantity` 满件包邮、 */
+export type FreightFreeReason = string
+
+/** 按运费模板分的一组商品及其运费。一单里的商品挂不同模板时分成几组， */
+export type FreightGroup = {
+  /** 用的是哪个模板；`free_reason = no_template` 时为 null */
+  template_id? : number | null
+  /** 模板名（订单上是下单那一刻的名字） */
+  template_name? : string
+  /** 1 按件 · 2 按重量（单位克，取 SKU 的 `weight_gram`） */
+  charge_mode? : FreightChargeMode
+  sku_ids : number[]
+  /** 计费量：按件是件数，按重量是克数 */
+  units : number
+  /** 命中的那一条规则（`region_codes` 为空即默认规则）。没有模板时不出现 */
+  rule? : FreightRule
+  /** 金额，单位「分」。禁止使用浮点。 */
+  fee_cents : Money
+  /** 这一组为什么免运费：`threshold` 满额包邮、`quantity` 满件包邮、 */
+  free_reason? : FreightFreeReason
+}
+
+/** 运费是怎么算出来的。试算与购物车里是**现算**的，订单上是**下单那一刻的快照** */
+export type FreightBreakdown = {
+  /** 收货地址归到的省。地址既没有可用的 `region_code` 也匹配不上省名时不出现（此时按各模板的默认规则算） */
+  province_code? : ProvinceCode
+  /** 金额，单位「分」。禁止使用浮点。 */
+  freight_cents : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  freight_discount_cents : Money
+  groups : FreightGroup[]
 }
 
 export type OrderItem = {
@@ -329,6 +404,8 @@ export type AdminOrderDetail = {
   /** 金额，单位「分」。禁止使用浮点。 */
   freight_cents? : Money
   /** 金额，单位「分」。禁止使用浮点。 */
+  freight_discount_cents? : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
   discount_cents? : Money
   /** 这一单用的券。没用券时不出现。 */
   user_coupon_id? : number
@@ -356,6 +433,8 @@ export type AdminOrderDetail = {
   store : OrderStoreSnapshot
   /** 有没有处于 10 待审核 / 20 待买家退货 / 30 退款中的退款单 */
   has_open_refund : boolean
+  /** 下单那一刻的运费计算明细快照，同买家侧 `OrderDetail.freight` */
+  freight? : FreightBreakdown
   /** 订单行，含优惠分摊（`discount_cents`）与已退 / 在途件数 */
   items : OrderItem[]
   payments : PaymentRecord[]
@@ -380,6 +459,8 @@ export type AdminOrderSummary = {
   goods_amount_cents? : Money
   /** 金额，单位「分」。禁止使用浮点。 */
   freight_cents? : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  freight_discount_cents? : Money
   /** 金额，单位「分」。禁止使用浮点。 */
   discount_cents? : Money
   /** 这一单用的券。没用券时不出现。 */
@@ -419,6 +500,8 @@ export type AdminProduct = {
   category_id : number
   /** 品牌，可空。一期没有品牌管理接口，只透传。 */
   brand_id? : number | null
+  /** 这件商品单独挂的运费模板（只能是全店模板）。null = 不单独挂：按履约门店的门店模板、 */
+  freight_template_id? : number | null
   /** `products.status`：0 草稿 / 1 上架 / 2 下架。 */
   status : number
   /** **首次**上架时间。为 null 表示从未上架过（即 `status` 一直是 0 草稿）。 */
@@ -449,6 +532,7 @@ export type AdminSku = {
   price_cents : Money
   /** 金额，单位「分」。禁止使用浮点。 */
   cost_cents? : Money
+  /** 重量（克）。按重量计费的运费模板按它算；0 表示没填，按重量计费时这一件按 0 克计（只收首重费） */
   weight_gram? : number
   /** 该规格的小图，形如 `/api/v1/uploads/{upload_id}`。 */
   image_url? : string
@@ -480,6 +564,8 @@ export type AdminProductDetail = {
   category_id : number
   /** 品牌，可空。一期没有品牌管理接口，只透传。 */
   brand_id? : number | null
+  /** 这件商品单独挂的运费模板（只能是全店模板）。null = 不单独挂：按履约门店的门店模板、 */
+  freight_template_id? : number | null
   /** `products.status`：0 草稿 / 1 上架 / 2 下架。 */
   status : number
   /** **首次**上架时间。为 null 表示从未上架过（即 `status` 一直是 0 草稿）。 */
@@ -605,7 +691,7 @@ export type AdminRefundDetail = {
   received_at? : string
   /** 确认收到退货的员工 */
   received_by? : StaffRef
-  /** 所属订单的摘要。审核退货退款时裁定运费要看 `freight_cents`（订单实收运费）； */
+  /** 所属订单的摘要。审核退货退款时裁定运费要看订单实收运费 */
   order : AdminOrderSummary
 }
 
@@ -692,6 +778,14 @@ export type ApplicableCoupon = {
 /** 这一行此刻能不能买，按响应里 `store` 那家门店判。判定顺序即下表顺序， */
 export type CartItemStatus = string
 
+export type FreightUndeliverableLine = {
+  sku_id : number
+  /** `region_excluded`：这件商品用的运费模板把收货地址所在的省列为不配送； */
+  reason_code : string
+  /** 给人看的一句话，如「新疆维吾尔自治区不在「默认运费」的配送范围」 */
+  reason : string
+}
+
 export type CartItem = {
   id : number
   sku_id : number
@@ -712,6 +806,8 @@ export type CartItem = {
   available : boolean
   /** 这一行此刻能不能买，按响应里 `store` 那家门店判。判定顺序即下表顺序， */
   status : CartItemStatus
+  /** 这一行送不到 `Cart.address_id` 那个地址（运费模板把那个省列为不配送，或地址归不到省）。 */
+  undeliverable? : FreightUndeliverableLine
 }
 
 /** 「当前门店」是怎么定下来的。这三个值是产品规则的对外形状， */
@@ -762,6 +858,10 @@ export type Cart = {
   promotion_discount_cents : Money
   /** 已勾选、可买的行上各活动的结果：命中了哪些、各减多少、还差多少凑满（`PromotionHit`）。 */
   promotions : PromotionHit[]
+  /** 本次按哪个收货地址算的运费（回显 `address_id` 参数，或买家的默认地址）。没有地址时不出现。 */
+  address_id? : number
+  /** 已勾选、可买、送得到的那些行按 `address_id` 那个地址算出的**预估运费**。 */
+  freight? : FreightBreakdown
 }
 
 export type Category = {
@@ -870,6 +970,8 @@ export type CouponApplicableRequest = {
   items : OrderItemInput[]
   /** 履约门店，必填。理由同 `OrderCreateRequest.store_id`。 */
   store_id : number
+  /** 收货地址，可选。**包邮券要它**：包邮券能抵多少取决于运费，运费取决于地址。 */
+  address_id? : number
 }
 
 export type CouponGrantItem = {
@@ -953,6 +1055,20 @@ export type FieldError = {
   length? : number
 }
 
+/** 新建与整体替换共用。字段含义见 `POST /admin/freight-templates`。 */
+export type FreightTemplateInput = {
+  name : string
+  /** null 或不填 = 全店模板；非 null = 这家门店的门店模板（每店至多一个）。 */
+  store_id? : number | null
+  /** 1 按件 · 2 按重量（单位克，取 SKU 的 `weight_gram`） */
+  charge_mode : FreightChargeMode
+  /** 设为全店默认模板（只有全店模板能设）。同一时刻至多一个：设了这一个， */
+  is_default? : boolean
+  rules : FreightRule[]
+  /** 不配送的省。不能与任何一条规则的 `region_codes` 重叠。 */
+  undeliverable_region_codes? : ProvinceCode[]
+}
+
 /** GeoJSON Polygon，SRID 固定 4326。落库成 `GEOGRAPHY(POLYGON, 4326)`。 */
 export type GeoPolygon = {
   type : string
@@ -972,6 +1088,8 @@ export type InventoryConflict = {
   trace_id? : string
   /** 字段级校验错误 */
   errors? : FieldError[]
+  /** 只在 `region-not-deliverable`（试算 / 下单时有商品送不到这个收货地址）时出现： */
+  undeliverable_items? : FreightUndeliverableLine[]
   current : AdminInventory
 }
 
@@ -1102,6 +1220,8 @@ export type Order = {
   /** 金额，单位「分」。禁止使用浮点。 */
   freight_cents? : Money
   /** 金额，单位「分」。禁止使用浮点。 */
+  freight_discount_cents? : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
   discount_cents? : Money
   /** 这一单用的券。没用券时不出现。 */
   user_coupon_id? : number
@@ -1190,6 +1310,8 @@ export type OrderDetail = {
   /** 金额，单位「分」。禁止使用浮点。 */
   freight_cents? : Money
   /** 金额，单位「分」。禁止使用浮点。 */
+  freight_discount_cents? : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
   discount_cents? : Money
   /** 这一单用的券。没用券时不出现。 */
   user_coupon_id? : number
@@ -1215,6 +1337,8 @@ export type OrderDetail = {
   receiver? : ReceiverSnapshot
   /** 下单时的门店与大区展示信息快照。 */
   store? : OrderStoreSnapshot
+  /** 下单那一刻的运费计算明细快照（`orders.freight_snapshot`）：用的哪个模板、 */
+  freight? : FreightBreakdown
   items? : OrderItem[]
   payments? : PaymentRecord[]
   /** 该订单下的全部退款单，按申请时间倒序。 */
@@ -1247,7 +1371,11 @@ export type OrderPreview = {
   /** 金额，单位「分」。禁止使用浮点。 */
   goods_amount_cents : Money
   /** 金额，单位「分」。禁止使用浮点。 */
-  freight_cents? : Money
+  freight_cents : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  freight_discount_cents : Money
+  /** 运费的明细：按模板分组、命中哪条规则、为什么包邮 */
+  freight : FreightBreakdown
   /** 金额，单位「分」。禁止使用浮点。 */
   discount_cents? : Money
   /** 金额，单位「分」。禁止使用浮点。 */
@@ -1297,6 +1425,8 @@ export type Problem = {
   trace_id? : string
   /** 字段级校验错误 */
   errors? : FieldError[]
+  /** 只在 `region-not-deliverable`（试算 / 下单时有商品送不到这个收货地址）时出现： */
+  undeliverable_items? : FreightUndeliverableLine[]
 }
 
 /** **没有 `status` 也没有 `merchant_id`。** 前者因为创建与发布是两个动作， */
@@ -1307,6 +1437,8 @@ export type ProductCreateRequest = {
   subtitle? : string
   description? : string
   brand_id? : number | null
+  /** 单独挂的运费模板（全店模板的 id）。不填或 null = 不单独挂。指向门店模板、不存在或已删除时 422。 */
+  freight_template_id? : number | null
 }
 
 export type Sku = {
@@ -1504,6 +1636,8 @@ export type ProductUpdateRequest = {
   description? : string
   category_id? : number
   brand_id? : number | null
+  /** 改挂的运费模板（全店模板的 id）；传 null 解除单独挂的模板。 */
+  freight_template_id? : number | null
 }
 
 export type PromotionSkuInput = {
@@ -1571,6 +1705,186 @@ export type RegionUpdateRequest = {
   code? : string
   name? : string
   status? : number
+}
+
+export type ReportInventoryAlert = {
+  store_id : number
+  store_name : string
+  region_id : number
+  sku_id : number
+  sku_code : string
+  /** SKU 的规格值，如 `{"颜色":"红","尺码":"M"}` */
+  spec_values : UTSJSONObject
+  product_id : number
+  product_title : string
+  available_qty : number
+  warning_qty : number
+}
+
+export type ReportInventoryAlerts = {
+  /** 符合条件的总条数（不受 limit 影响） */
+  total : number
+  items : ReportInventoryAlert[]
+}
+
+/** 一段窗口里的核心指标。**订单口径**：已支付的五种状态 */
+export type ReportMetrics = {
+  /** 金额，单位「分」。禁止使用浮点。 */
+  paid_amount_cents : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  refund_amount_cents : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  net_sales_cents : Money
+  /** 支付订单数：上述订单的笔数。 */
+  order_count : number
+  /** 支付买家数：上述订单的下单买家去重数。 */
+  buyer_count : number
+  /** 金额，单位「分」。禁止使用浮点。 */
+  avg_order_value_cents : Money
+  /** 退款笔数：窗口内到账的退款单张数。 */
+  refund_count : number
+  /** 退款率 = 退款金额 ÷ 支付金额（同一窗口），支付金额为 0 时为 `null`（不是 0）。 */
+  refund_rate : number | null
+}
+
+/** 一段半开区间 `[start_at, end_at)`，同时给出它在店铺时区里的起止日期（都含）。 */
+export type ReportRange = {
+  /** 区间起点（含），UTC */
+  start_at : string
+  /** 区间终点（**不含**），UTC */
+  end_at : string
+  /** 起点在店铺时区里的日期 */
+  start_date : string
+  /** 最后一个被覆盖的自然日（含），店铺时区 */
+  end_date : string
+}
+
+/** 一次报表查询的时间窗口。**六条报表共用这一份口径**： */
+export type ReportWindow = {
+  period : string
+  timezone : string
+  /** 一段半开区间 `[start_at, end_at)`，同时给出它在店铺时区里的起止日期（都含）。 */
+  current : ReportRange
+  /** 一段半开区间 `[start_at, end_at)`，同时给出它在店铺时区里的起止日期（都含）。 */
+  previous : ReportRange
+}
+
+export type ReportOverview = {
+  /** 一次报表查询的时间窗口。**六条报表共用这一份口径**： */
+  window : ReportWindow
+  /** 一段窗口里的核心指标。**订单口径**：已支付的五种状态 */
+  current : ReportMetrics
+  /** 一段窗口里的核心指标。**订单口径**：已支付的五种状态 */
+  previous : ReportMetrics
+}
+
+export type ReportProductRankItem = {
+  /** 名次，从 1 开始 */
+  rank : number
+  product_id : number
+  /** 商品当前的标题 */
+  title : string
+  category_id : number
+  /** 销量（件） */
+  quantity : number
+  /** 金额，单位「分」。禁止使用浮点。 */
+  amount_cents : Money
+  /** 含这件商品的支付订单数 */
+  order_count : number
+  /** 这些订单行截至查询时已退的件数。 */
+  refunded_quantity : number
+  /** 金额，单位「分」。禁止使用浮点。 */
+  refunded_amount_cents : Money
+}
+
+export type ReportProductRanking = {
+  /** 一次报表查询的时间窗口。**六条报表共用这一份口径**： */
+  window : ReportWindow
+  sort_by : string
+  items : ReportProductRankItem[]
+}
+
+export type ReportRegionRow = {
+  region_id : number
+  region_name : string
+  /** 这个大区在 stores 里出现的门店数 */
+  store_count : number
+  /** 金额，单位「分」。禁止使用浮点。 */
+  paid_amount_cents : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  refund_amount_cents : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  net_sales_cents : Money
+  order_count : number
+}
+
+export type ReportSearchTerm = {
+  /** 归并后的搜索词（去首尾空白、小写） */
+  query : string
+  search_count : number
+  zero_result_count : number
+}
+
+export type ReportSearchOverview = {
+  /** 一次报表查询的时间窗口。**六条报表共用这一份口径**： */
+  window : ReportWindow
+  search_count : number
+  zero_result_count : number
+  /** 无结果次数 ÷ 搜索次数；没有搜索时为 `null`。 */
+  zero_result_rate : number | null
+  click_count : number
+  /** 热门搜索词 Top N。 */
+  top_queries : ReportSearchTerm[]
+  /** 无结果搜索词 Top N（按无结果次数排）。 */
+  zero_result_queries : ReportSearchTerm[]
+}
+
+export type ReportStoreRow = {
+  store_id : number
+  store_name : string
+  store_code : string
+  /** 门店此刻所属的大区 */
+  region_id : number
+  region_name : string
+  /** 门店已删除（只在窗口内有成交或退款时出现） */
+  deleted : boolean
+  /** 金额，单位「分」。禁止使用浮点。 */
+  paid_amount_cents : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  refund_amount_cents : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  net_sales_cents : Money
+  order_count : number
+}
+
+export type ReportStoreComparison = {
+  /** 一次报表查询的时间窗口。**六条报表共用这一份口径**： */
+  window : ReportWindow
+  stores : ReportStoreRow[]
+  regions : ReportRegionRow[]
+}
+
+export type ReportTrendPoint = {
+  /** 桶的起点，UTC */
+  bucket_start_at : string
+  /** 桶在店铺时区里的显示名：按天是 `MM-DD`，按小时是 `HH:00`。 */
+  label : string
+  /** 金额，单位「分」。禁止使用浮点。 */
+  paid_amount_cents : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  refund_amount_cents : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  net_sales_cents : Money
+  order_count : number
+}
+
+export type ReportTrend = {
+  /** 一次报表查询的时间窗口。**六条报表共用这一份口径**： */
+  window : ReportWindow
+  /** 窗口只有一个自然日时按小时，否则按天。 */
+  granularity : string
+  /** 按时间升序，每个桶一个点，没有数据的桶是 0。 */
+  points : ReportTrendPoint[]
 }
 
 export type ReturnShipmentRequest = {
@@ -1679,6 +1993,7 @@ export type SkuCreateRequest = {
   price_cents : Money
   /** 金额，单位「分」。禁止使用浮点。 */
   cost_cents? : Money
+  /** 重量（克），按重量计费的运费模板用它。省略即 0 */
   weight_gram? : number
   /** 该规格小图的 `uploads.id`，服务端据此写出 `skus.image_url`。 */
   image_upload_id? : number | null
@@ -1702,6 +2017,7 @@ export type SkuUpdateRequest = {
   price_cents? : Money
   /** 金额，单位「分」。禁止使用浮点。 */
   cost_cents? : Money
+  /** 重量（克），按重量计费的运费模板用它 */
   weight_gram? : number
   image_upload_id? : number | null
   /** 0 停售 / 1 在售 */
@@ -1998,11 +2314,13 @@ export type UpdateMeRequest = {
 /** GET /cart 的 query 参数 */
 export type GetCartQuery = {
   store_id? : number
+  address_id? : number
 }
 
 /** POST /cart/items 的 query 参数 */
 export type AddCartItemQuery = {
   store_id? : number
+  address_id? : number
 }
 
 /** POST /cart/items 的请求体 */
@@ -2014,6 +2332,7 @@ export type AddCartItemRequest = {
 /** PATCH /cart/items/{item_id} 的 query 参数 */
 export type UpdateCartItemQuery = {
   store_id? : number
+  address_id? : number
 }
 
 /** PATCH /cart/items/{item_id} 的请求体 */
@@ -2025,6 +2344,7 @@ export type UpdateCartItemRequest = {
 /** PUT /cart/selection 的 query 参数 */
 export type SelectCartItemsQuery = {
   store_id? : number
+  address_id? : number
 }
 
 /** PUT /cart/selection 的请求体 */
@@ -2037,6 +2357,7 @@ export type SelectCartItemsRequest = {
 /** POST /cart/items/batch-delete 的 query 参数 */
 export type BatchDeleteCartItemsQuery = {
   store_id? : number
+  address_id? : number
 }
 
 /** POST /cart/items/batch-delete 的请求体 */

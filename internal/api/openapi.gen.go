@@ -585,6 +585,63 @@ func (e CouponType) Valid() bool {
 	}
 }
 
+// Defines values for FreightChargeMode.
+const (
+	FreightChargeModeN1 FreightChargeMode = 1
+	FreightChargeModeN2 FreightChargeMode = 2
+)
+
+// Valid indicates whether the value is a known member of the FreightChargeMode enum.
+func (e FreightChargeMode) Valid() bool {
+	switch e {
+	case FreightChargeModeN1:
+		return true
+	case FreightChargeModeN2:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for FreightFreeReason.
+const (
+	FreightFreeReasonNoTemplate FreightFreeReason = "no_template"
+	FreightFreeReasonQuantity   FreightFreeReason = "quantity"
+	FreightFreeReasonThreshold  FreightFreeReason = "threshold"
+)
+
+// Valid indicates whether the value is a known member of the FreightFreeReason enum.
+func (e FreightFreeReason) Valid() bool {
+	switch e {
+	case FreightFreeReasonNoTemplate:
+		return true
+	case FreightFreeReasonQuantity:
+		return true
+	case FreightFreeReasonThreshold:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for FreightUndeliverableLineReasonCode.
+const (
+	ProvinceUnknown FreightUndeliverableLineReasonCode = "province_unknown"
+	RegionExcluded  FreightUndeliverableLineReasonCode = "region_excluded"
+)
+
+// Valid indicates whether the value is a known member of the FreightUndeliverableLineReasonCode enum.
+func (e FreightUndeliverableLineReasonCode) Valid() bool {
+	switch e {
+	case ProvinceUnknown:
+		return true
+	case RegionExcluded:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for GeoPolygonType.
 const (
 	Polygon GeoPolygonType = "Polygon"
@@ -1233,6 +1290,69 @@ func (e RegionUpdateRequestStatus) Valid() bool {
 	}
 }
 
+// Defines values for ReportProductRankingSortBy.
+const (
+	ReportProductRankingSortByAmount   ReportProductRankingSortBy = "amount"
+	ReportProductRankingSortByQuantity ReportProductRankingSortBy = "quantity"
+)
+
+// Valid indicates whether the value is a known member of the ReportProductRankingSortBy enum.
+func (e ReportProductRankingSortBy) Valid() bool {
+	switch e {
+	case ReportProductRankingSortByAmount:
+		return true
+	case ReportProductRankingSortByQuantity:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ReportTrendGranularity.
+const (
+	Day  ReportTrendGranularity = "day"
+	Hour ReportTrendGranularity = "hour"
+)
+
+// Valid indicates whether the value is a known member of the ReportTrendGranularity enum.
+func (e ReportTrendGranularity) Valid() bool {
+	switch e {
+	case Day:
+		return true
+	case Hour:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ReportWindowPeriod.
+const (
+	ReportWindowPeriodCustom     ReportWindowPeriod = "custom"
+	ReportWindowPeriodLast30Days ReportWindowPeriod = "last_30_days"
+	ReportWindowPeriodLast7Days  ReportWindowPeriod = "last_7_days"
+	ReportWindowPeriodToday      ReportWindowPeriod = "today"
+	ReportWindowPeriodYesterday  ReportWindowPeriod = "yesterday"
+)
+
+// Valid indicates whether the value is a known member of the ReportWindowPeriod enum.
+func (e ReportWindowPeriod) Valid() bool {
+	switch e {
+	case ReportWindowPeriodCustom:
+		return true
+	case ReportWindowPeriodLast30Days:
+		return true
+	case ReportWindowPeriodLast7Days:
+		return true
+	case ReportWindowPeriodToday:
+		return true
+	case ReportWindowPeriodYesterday:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ScopedProductListingPriceSource.
 const (
 	ScopedProductListingPriceSourceN1 ScopedProductListingPriceSource = 1
@@ -1545,6 +1665,33 @@ func (e UserCouponStatus) Valid() bool {
 	}
 }
 
+// Defines values for ReportPeriod.
+const (
+	ReportPeriodCustom     ReportPeriod = "custom"
+	ReportPeriodLast30Days ReportPeriod = "last_30_days"
+	ReportPeriodLast7Days  ReportPeriod = "last_7_days"
+	ReportPeriodToday      ReportPeriod = "today"
+	ReportPeriodYesterday  ReportPeriod = "yesterday"
+)
+
+// Valid indicates whether the value is a known member of the ReportPeriod enum.
+func (e ReportPeriod) Valid() bool {
+	switch e {
+	case ReportPeriodCustom:
+		return true
+	case ReportPeriodLast30Days:
+		return true
+	case ReportPeriodLast7Days:
+		return true
+	case ReportPeriodToday:
+		return true
+	case ReportPeriodYesterday:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for GetAdminCouponTemplatesParamsStatus.
 const (
 	GetAdminCouponTemplatesParamsStatusN0 GetAdminCouponTemplatesParamsStatus = 0
@@ -1641,6 +1788,159 @@ func (e PostAdminRefundsRefundNoAuditJSONBodyAction) Valid() bool {
 	case Approve:
 		return true
 	case Reject:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GetAdminReportsOverviewParamsPeriod.
+const (
+	GetAdminReportsOverviewParamsPeriodCustom     GetAdminReportsOverviewParamsPeriod = "custom"
+	GetAdminReportsOverviewParamsPeriodLast30Days GetAdminReportsOverviewParamsPeriod = "last_30_days"
+	GetAdminReportsOverviewParamsPeriodLast7Days  GetAdminReportsOverviewParamsPeriod = "last_7_days"
+	GetAdminReportsOverviewParamsPeriodToday      GetAdminReportsOverviewParamsPeriod = "today"
+	GetAdminReportsOverviewParamsPeriodYesterday  GetAdminReportsOverviewParamsPeriod = "yesterday"
+)
+
+// Valid indicates whether the value is a known member of the GetAdminReportsOverviewParamsPeriod enum.
+func (e GetAdminReportsOverviewParamsPeriod) Valid() bool {
+	switch e {
+	case GetAdminReportsOverviewParamsPeriodCustom:
+		return true
+	case GetAdminReportsOverviewParamsPeriodLast30Days:
+		return true
+	case GetAdminReportsOverviewParamsPeriodLast7Days:
+		return true
+	case GetAdminReportsOverviewParamsPeriodToday:
+		return true
+	case GetAdminReportsOverviewParamsPeriodYesterday:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GetAdminReportsProductsParamsPeriod.
+const (
+	GetAdminReportsProductsParamsPeriodCustom     GetAdminReportsProductsParamsPeriod = "custom"
+	GetAdminReportsProductsParamsPeriodLast30Days GetAdminReportsProductsParamsPeriod = "last_30_days"
+	GetAdminReportsProductsParamsPeriodLast7Days  GetAdminReportsProductsParamsPeriod = "last_7_days"
+	GetAdminReportsProductsParamsPeriodToday      GetAdminReportsProductsParamsPeriod = "today"
+	GetAdminReportsProductsParamsPeriodYesterday  GetAdminReportsProductsParamsPeriod = "yesterday"
+)
+
+// Valid indicates whether the value is a known member of the GetAdminReportsProductsParamsPeriod enum.
+func (e GetAdminReportsProductsParamsPeriod) Valid() bool {
+	switch e {
+	case GetAdminReportsProductsParamsPeriodCustom:
+		return true
+	case GetAdminReportsProductsParamsPeriodLast30Days:
+		return true
+	case GetAdminReportsProductsParamsPeriodLast7Days:
+		return true
+	case GetAdminReportsProductsParamsPeriodToday:
+		return true
+	case GetAdminReportsProductsParamsPeriodYesterday:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GetAdminReportsProductsParamsSortBy.
+const (
+	GetAdminReportsProductsParamsSortByAmount   GetAdminReportsProductsParamsSortBy = "amount"
+	GetAdminReportsProductsParamsSortByQuantity GetAdminReportsProductsParamsSortBy = "quantity"
+)
+
+// Valid indicates whether the value is a known member of the GetAdminReportsProductsParamsSortBy enum.
+func (e GetAdminReportsProductsParamsSortBy) Valid() bool {
+	switch e {
+	case GetAdminReportsProductsParamsSortByAmount:
+		return true
+	case GetAdminReportsProductsParamsSortByQuantity:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GetAdminReportsSearchParamsPeriod.
+const (
+	GetAdminReportsSearchParamsPeriodCustom     GetAdminReportsSearchParamsPeriod = "custom"
+	GetAdminReportsSearchParamsPeriodLast30Days GetAdminReportsSearchParamsPeriod = "last_30_days"
+	GetAdminReportsSearchParamsPeriodLast7Days  GetAdminReportsSearchParamsPeriod = "last_7_days"
+	GetAdminReportsSearchParamsPeriodToday      GetAdminReportsSearchParamsPeriod = "today"
+	GetAdminReportsSearchParamsPeriodYesterday  GetAdminReportsSearchParamsPeriod = "yesterday"
+)
+
+// Valid indicates whether the value is a known member of the GetAdminReportsSearchParamsPeriod enum.
+func (e GetAdminReportsSearchParamsPeriod) Valid() bool {
+	switch e {
+	case GetAdminReportsSearchParamsPeriodCustom:
+		return true
+	case GetAdminReportsSearchParamsPeriodLast30Days:
+		return true
+	case GetAdminReportsSearchParamsPeriodLast7Days:
+		return true
+	case GetAdminReportsSearchParamsPeriodToday:
+		return true
+	case GetAdminReportsSearchParamsPeriodYesterday:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GetAdminReportsStoresParamsPeriod.
+const (
+	GetAdminReportsStoresParamsPeriodCustom     GetAdminReportsStoresParamsPeriod = "custom"
+	GetAdminReportsStoresParamsPeriodLast30Days GetAdminReportsStoresParamsPeriod = "last_30_days"
+	GetAdminReportsStoresParamsPeriodLast7Days  GetAdminReportsStoresParamsPeriod = "last_7_days"
+	GetAdminReportsStoresParamsPeriodToday      GetAdminReportsStoresParamsPeriod = "today"
+	GetAdminReportsStoresParamsPeriodYesterday  GetAdminReportsStoresParamsPeriod = "yesterday"
+)
+
+// Valid indicates whether the value is a known member of the GetAdminReportsStoresParamsPeriod enum.
+func (e GetAdminReportsStoresParamsPeriod) Valid() bool {
+	switch e {
+	case GetAdminReportsStoresParamsPeriodCustom:
+		return true
+	case GetAdminReportsStoresParamsPeriodLast30Days:
+		return true
+	case GetAdminReportsStoresParamsPeriodLast7Days:
+		return true
+	case GetAdminReportsStoresParamsPeriodToday:
+		return true
+	case GetAdminReportsStoresParamsPeriodYesterday:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GetAdminReportsTrendParamsPeriod.
+const (
+	GetAdminReportsTrendParamsPeriodCustom     GetAdminReportsTrendParamsPeriod = "custom"
+	GetAdminReportsTrendParamsPeriodLast30Days GetAdminReportsTrendParamsPeriod = "last_30_days"
+	GetAdminReportsTrendParamsPeriodLast7Days  GetAdminReportsTrendParamsPeriod = "last_7_days"
+	GetAdminReportsTrendParamsPeriodToday      GetAdminReportsTrendParamsPeriod = "today"
+	GetAdminReportsTrendParamsPeriodYesterday  GetAdminReportsTrendParamsPeriod = "yesterday"
+)
+
+// Valid indicates whether the value is a known member of the GetAdminReportsTrendParamsPeriod enum.
+func (e GetAdminReportsTrendParamsPeriod) Valid() bool {
+	switch e {
+	case GetAdminReportsTrendParamsPeriodCustom:
+		return true
+	case GetAdminReportsTrendParamsPeriodLast30Days:
+		return true
+	case GetAdminReportsTrendParamsPeriodLast7Days:
+		return true
+	case GetAdminReportsTrendParamsPeriodToday:
+		return true
+	case GetAdminReportsTrendParamsPeriodYesterday:
 		return true
 	default:
 		return false
@@ -1909,8 +2209,8 @@ type AdminCouponTemplate struct {
 
 	// CouponType 1 满减 · 2 折扣 · 3 立减 · 4 包邮。
 	//
-	// **4 包邮本期不可建**：本系统没有运费，包邮券永远减 0（数据模型 §7）。
-	// 枚举里留着它，是为了运费落地那一轮不必改契约的枚举。
+	// **4 包邮**抵的是运费（00056 运费模板落地之后可建）：`max_discount_cents` 是最多抵多少
+	// （0 = 运费全免），门槛与范围的判法与别的券相同。本单运费为 0 时不可用（数据模型 §7）。
 	CouponType CouponType `json:"coupon_type"`
 	CreatedAt  time.Time  `json:"created_at"`
 
@@ -1955,6 +2255,29 @@ type AdminCouponTemplateStatus int
 // AdminCouponTemplateValidMode defines model for AdminCouponTemplate.ValidMode.
 type AdminCouponTemplateValidMode int
 
+// AdminFreightTemplate defines model for AdminFreightTemplate.
+type AdminFreightTemplate struct {
+	// ChargeMode 1 按件 · 2 按重量（单位克，取 SKU 的 `weight_gram`）
+	ChargeMode FreightChargeMode `json:"charge_mode"`
+	CreatedAt  time.Time         `json:"created_at"`
+	Id         int64             `json:"id"`
+
+	// IsDefault 是不是全店默认模板
+	IsDefault bool   `json:"is_default"`
+	Name      string `json:"name"`
+
+	// ProductCount 挂着这个模板的未删除商品数。大于 0 时不能删除
+	ProductCount int `json:"product_count"`
+
+	// Rules 默认规则（`region_codes` 为空）排在最后，其余按录入顺序
+	Rules []FreightRule `json:"rules"`
+
+	// StoreId null = 全店模板
+	StoreId                  *int64         `json:"store_id"`
+	UndeliverableRegionCodes []ProvinceCode `json:"undeliverable_region_codes"`
+	UpdatedAt                time.Time      `json:"updated_at"`
+}
+
 // AdminInventory defines model for AdminInventory.
 type AdminInventory struct {
 	// AvailableQty 这家门店的可售量。**这一行不存在时视同 0，不是「这家店不卖」**——
@@ -1986,13 +2309,20 @@ type AdminOrderDetail struct {
 	CouponName *string   `json:"coupon_name,omitempty"`
 	CreatedAt  time.Time `json:"created_at"`
 
-	// DiscountCents 金额，单位「分」。禁止使用浮点。
+	// DiscountCents 优惠合计 = 各行分摊的商品优惠之和 + `freight_discount_cents`
 	DiscountCents *Money     `json:"discount_cents,omitempty"`
 	ExpireAt      *time.Time `json:"expire_at,omitempty"`
 	FinishedAt    *time.Time `json:"finished_at,omitempty"`
 
-	// FreightCents 金额，单位「分」。禁止使用浮点。
+	// Freight 下单那一刻的运费计算明细快照，同买家侧 `OrderDetail.freight`
+	Freight *FreightBreakdown `json:"freight,omitempty"`
+
+	// FreightCents 运费（包邮券抵扣之前），下单时算好写进订单（00056 之前的订单是 0：那时不计运费）。
+	// **实收运费 = `freight_cents − freight_discount_cents`**，售后退运费的上限按它算。
 	FreightCents *Money `json:"freight_cents,omitempty"`
+
+	// FreightDiscountCents 包邮券抵掉的运费，已经算在 `discount_cents` 里。没用包邮券为 0
+	FreightDiscountCents *Money `json:"freight_discount_cents,omitempty"`
 
 	// GoodsAmountCents 金额，单位「分」。禁止使用浮点。
 	GoodsAmountCents *Money `json:"goods_amount_cents,omitempty"`
@@ -2088,13 +2418,17 @@ type AdminOrderSummary struct {
 	CouponName *string   `json:"coupon_name,omitempty"`
 	CreatedAt  time.Time `json:"created_at"`
 
-	// DiscountCents 金额，单位「分」。禁止使用浮点。
+	// DiscountCents 优惠合计 = 各行分摊的商品优惠之和 + `freight_discount_cents`
 	DiscountCents *Money     `json:"discount_cents,omitempty"`
 	ExpireAt      *time.Time `json:"expire_at,omitempty"`
 	FinishedAt    *time.Time `json:"finished_at,omitempty"`
 
-	// FreightCents 金额，单位「分」。禁止使用浮点。
+	// FreightCents 运费（包邮券抵扣之前），下单时算好写进订单（00056 之前的订单是 0：那时不计运费）。
+	// **实收运费 = `freight_cents − freight_discount_cents`**，售后退运费的上限按它算。
 	FreightCents *Money `json:"freight_cents,omitempty"`
+
+	// FreightDiscountCents 包邮券抵掉的运费，已经算在 `discount_cents` 里。没用包邮券为 0
+	FreightDiscountCents *Money `json:"freight_discount_cents,omitempty"`
 
 	// GoodsAmountCents 金额，单位「分」。禁止使用浮点。
 	GoodsAmountCents *Money `json:"goods_amount_cents,omitempty"`
@@ -2175,7 +2509,11 @@ type AdminProduct struct {
 	// DeletedAt 软删时间。非 null 时该商品只在 `include_deleted=true` 的后台列表里出现。
 	DeletedAt   *time.Time `json:"deleted_at,omitempty"`
 	Description *string    `json:"description,omitempty"`
-	Id          int64      `json:"id"`
+
+	// FreightTemplateId 这件商品单独挂的运费模板（只能是全店模板）。null = 不单独挂：按履约门店的门店模板、
+	// 再按全店默认模板算（数据模型 §7「一行用哪个模板」）。
+	FreightTemplateId *int64 `json:"freight_template_id,omitempty"`
+	Id                int64  `json:"id"`
 
 	// MaxPriceCents 同 `min_price_cents`，上界。
 	MaxPriceCents Money `json:"max_price_cents"`
@@ -2217,7 +2555,11 @@ type AdminProductDetail struct {
 	// DeletedAt 软删时间。非 null 时该商品只在 `include_deleted=true` 的后台列表里出现。
 	DeletedAt   *time.Time `json:"deleted_at,omitempty"`
 	Description *string    `json:"description,omitempty"`
-	Id          int64      `json:"id"`
+
+	// FreightTemplateId 这件商品单独挂的运费模板（只能是全店模板）。null = 不单独挂：按履约门店的门店模板、
+	// 再按全店默认模板算（数据模型 §7「一行用哪个模板」）。
+	FreightTemplateId *int64 `json:"freight_template_id,omitempty"`
+	Id                int64  `json:"id"`
 
 	// Images 按展示顺序，`images[0]` 是主图。
 	Images []ProductImage `json:"images"`
@@ -2455,7 +2797,8 @@ type AdminRefundDetail struct {
 	// 否则用户点开退款详情看不到「退了哪一件、退了几件」。
 	Items []RefundItem `json:"items"`
 
-	// Order 所属订单的摘要。审核退货退款时裁定运费要看 `freight_cents`（订单实收运费）；
+	// Order 所属订单的摘要。审核退货退款时裁定运费要看订单实收运费
+	// （`freight_cents − freight_discount_cents`）；
 	// 服务端另外会扣掉这一单别的退款单已占的运费，超了回 422 refund-freight-exceeded。
 	Order   AdminOrderSummary `json:"order"`
 	OrderNo string            `json:"order_no"`
@@ -2592,6 +2935,8 @@ type AdminSku struct {
 
 	// WarningQty 低库存预警线。一期只是一个存着的数，没有接到任何告警。
 	WarningQty *int `json:"warning_qty,omitempty"`
+
+	// WeightGram 重量（克）。按重量计费的运费模板按它算；0 表示没填，按重量计费时这一件按 0 克计（只收首重费）
 	WeightGram *int `json:"weight_gram,omitempty"`
 }
 
@@ -2676,8 +3021,8 @@ type ApplicableCoupon struct {
 
 	// CouponType 1 满减 · 2 折扣 · 3 立减 · 4 包邮。
 	//
-	// **4 包邮本期不可建**：本系统没有运费，包邮券永远减 0（数据模型 §7）。
-	// 枚举里留着它，是为了运费落地那一轮不必改契约的枚举。
+	// **4 包邮**抵的是运费（00056 运费模板落地之后可建）：`max_discount_cents` 是最多抵多少
+	// （0 = 运费全免），门槛与范围的判法与别的券相同。本单运费为 0 时不可用（数据模型 §7）。
 	CouponType CouponType `json:"coupon_type"`
 
 	// DiscountCents 金额，单位「分」。禁止使用浮点。
@@ -2728,7 +3073,15 @@ type ApplicableCouponStatus int
 
 // Cart defines model for Cart.
 type Cart struct {
-	Items []CartItem `json:"items"`
+	// AddressId 本次按哪个收货地址算的运费（回显 `address_id` 参数，或买家的默认地址）。没有地址时不出现。
+	AddressId *int64 `json:"address_id,omitempty"`
+
+	// Freight 已勾选、可买、送得到的那些行按 `address_id` 那个地址算出的**预估运费**。
+	// 满额包邮按 `selected_total_cents` 减去满减满折（去掉送不到的行）判——购物车不算券，
+	// 所以它是「用券之前」的运费；用了券可能因为不满额而不包邮，也可能用包邮券抵掉。
+	// 最终以 `/orders/preview` 为准。没有地址时整个不出现。
+	Freight *FreightBreakdown `json:"freight,omitempty"`
+	Items   []CartItem        `json:"items"`
 
 	// PromotionDiscountCents 已勾选、可买的行命中满减满折的优惠合计（不含券）。把这些行送进 `/orders/preview`，
 	// 得到的 `promotion_discount_cents` 与它逐分相等——同一份计算。
@@ -2748,6 +3101,10 @@ type Cart struct {
 	// 那等于把金额计算规则复制到每个端上。
 	//
 	// 命中限时折扣 / 秒杀的行按**活动价**计（同 `CartItem.price_cents`），与试算一致。
+	//
+	// **送不到的行（`undeliverable` 非空）仍然算在里面**：它们在这家店是买得到的，
+	// 只是送不到这个地址。带着它们去 `/orders/preview` 会收到 422
+	// `region-not-deliverable`——客户端应当在结算前提示用户取消勾选或换地址。
 	SelectedTotalCents Money `json:"selected_total_cents"`
 
 	// Store 本次的价格与可买状态是按哪家门店算的。**必返**，理由同 `GET /products`。
@@ -2812,6 +3169,11 @@ type CartItem struct {
 	// 比让他看到一条划掉的商品更讨人嫌。
 	Status CartItemStatus `json:"status"`
 	Title  *string        `json:"title,omitempty"`
+
+	// Undeliverable 这一行送不到 `Cart.address_id` 那个地址（运费模板把那个省列为不配送，或地址归不到省）。
+	// 送得到、或没有地址时整个不出现。它与 `status` 正交：`status` 说的是
+	// 这家店卖不卖、有没有货，这个字段说的是能不能送到这个地址。
+	Undeliverable *FreightUndeliverableLine `json:"undeliverable,omitempty"`
 }
 
 // CartItemStatus 这一行此刻能不能买，按响应里 `store` 那家门店判。判定顺序即下表顺序，
@@ -2899,8 +3261,8 @@ type ClaimableCouponTemplate struct {
 
 	// CouponType 1 满减 · 2 折扣 · 3 立减 · 4 包邮。
 	//
-	// **4 包邮本期不可建**：本系统没有运费，包邮券永远减 0（数据模型 §7）。
-	// 枚举里留着它，是为了运费落地那一轮不必改契约的枚举。
+	// **4 包邮**抵的是运费（00056 运费模板落地之后可建）：`max_discount_cents` 是最多抵多少
+	// （0 = 运费全免），门槛与范围的判法与别的券相同。本单运费为 0 时不可用（数据模型 §7）。
 	CouponType CouponType `json:"coupon_type"`
 
 	// DiscountCents 金额，单位「分」。禁止使用浮点。
@@ -2934,7 +3296,11 @@ type ClaimableCouponTemplateValidMode int
 
 // CouponApplicableRequest defines model for CouponApplicableRequest.
 type CouponApplicableRequest struct {
-	Items []OrderItemInput `json:"items"`
+	// AddressId 收货地址，可选。**包邮券要它**：包邮券能抵多少取决于运费，运费取决于地址。
+	// 不传时结果里没有包邮券（判不了它能不能用），其余券型不受影响。
+	// 传了却不存在或不属于你：422。
+	AddressId *int64           `json:"address_id,omitempty"`
+	Items     []OrderItemInput `json:"items"`
 
 	// StoreId 履约门店，必填。理由同 `OrderCreateRequest.store_id`。
 	StoreId int64 `json:"store_id"`
@@ -3002,8 +3368,8 @@ type CouponTemplateCreateRequest struct {
 
 	// CouponType 1 满减 · 2 折扣 · 3 立减 · 4 包邮。
 	//
-	// **4 包邮本期不可建**：本系统没有运费，包邮券永远减 0（数据模型 §7）。
-	// 枚举里留着它，是为了运费落地那一轮不必改契约的枚举。
+	// **4 包邮**抵的是运费（00056 运费模板落地之后可建）：`max_discount_cents` 是最多抵多少
+	// （0 = 运费全免），门槛与范围的判法与别的券相同。本单运费为 0 时不可用（数据模型 §7）。
 	CouponType CouponType `json:"coupon_type"`
 
 	// DiscountCents 金额，单位「分」。禁止使用浮点。
@@ -3035,8 +3401,8 @@ type CouponTemplatePatchRequest struct {
 
 	// CouponType 1 满减 · 2 折扣 · 3 立减 · 4 包邮。
 	//
-	// **4 包邮本期不可建**：本系统没有运费，包邮券永远减 0（数据模型 §7）。
-	// 枚举里留着它，是为了运费落地那一轮不必改契约的枚举。
+	// **4 包邮**抵的是运费（00056 运费模板落地之后可建）：`max_discount_cents` 是最多抵多少
+	// （0 = 运费全免），门槛与范围的判法与别的券相同。本单运费为 0 时不可用（数据模型 §7）。
 	CouponType *CouponType `json:"coupon_type,omitempty"`
 
 	// DiscountCents 金额，单位「分」。禁止使用浮点。
@@ -3090,8 +3456,8 @@ type CouponTemplateStats struct {
 
 // CouponType 1 满减 · 2 折扣 · 3 立减 · 4 包邮。
 //
-// **4 包邮本期不可建**：本系统没有运费，包邮券永远减 0（数据模型 §7）。
-// 枚举里留着它，是为了运费落地那一轮不必改契约的枚举。
+// **4 包邮**抵的是运费（00056 运费模板落地之后可建）：`max_discount_cents` 是最多抵多少
+// （0 = 运费全免），门槛与范围的判法与别的券相同。本单运费为 0 时不可用（数据模型 §7）。
 type CouponType int
 
 // FieldError 一条字段级错误。`field` 是请求体（或商品对象）里的字段名。
@@ -3117,6 +3483,119 @@ type FieldError struct {
 	// Offset 命中位置（Unicode 码点下标，从 0 开始）
 	Offset *int `json:"offset,omitempty"`
 }
+
+// FreightBreakdown 运费是怎么算出来的。试算与购物车里是**现算**的，订单上是**下单那一刻的快照**
+// （`orders.freight_snapshot`），之后改模板不影响它。
+type FreightBreakdown struct {
+	// FreightCents 运费合计（包邮券抵扣之前），= 各组 `fee_cents` 之和
+	FreightCents Money `json:"freight_cents"`
+
+	// FreightDiscountCents 包邮券抵掉的运费，≤ `freight_cents`。没用包邮券为 0
+	FreightDiscountCents Money          `json:"freight_discount_cents"`
+	Groups               []FreightGroup `json:"groups"`
+
+	// ProvinceCode 收货地址归到的省。地址既没有可用的 `region_code` 也匹配不上省名时不出现（此时按各模板的默认规则算）
+	ProvinceCode *ProvinceCode `json:"province_code,omitempty"`
+}
+
+// FreightChargeMode 1 按件 · 2 按重量（单位克，取 SKU 的 `weight_gram`）
+type FreightChargeMode int
+
+// FreightFreeReason 这一组为什么免运费：`threshold` 满额包邮、`quantity` 满件包邮、
+// `no_template` 这些商品没有任何可用的运费模板（商家没配，不计运费）。
+// 照常计费时整个字段不出现。**包邮券抵掉的运费不算在这里**，那一笔看
+// `freight_discount_cents`。
+type FreightFreeReason string
+
+// FreightGroup 按运费模板分的一组商品及其运费。一单里的商品挂不同模板时分成几组，
+// 各组分别计费、**求和**（不做「首费取最大」那种跨模板合并，数据模型 §7 写了理由）。
+type FreightGroup struct {
+	// ChargeMode 1 按件 · 2 按重量（单位克，取 SKU 的 `weight_gram`）
+	ChargeMode *FreightChargeMode `json:"charge_mode,omitempty"`
+
+	// FeeCents 这一组的运费（包邮时为 0）
+	FeeCents Money `json:"fee_cents"`
+
+	// FreeReason 这一组为什么免运费：`threshold` 满额包邮、`quantity` 满件包邮、
+	// `no_template` 这些商品没有任何可用的运费模板（商家没配，不计运费）。
+	// 照常计费时整个字段不出现。**包邮券抵掉的运费不算在这里**，那一笔看
+	// `freight_discount_cents`。
+	FreeReason *FreightFreeReason `json:"free_reason,omitempty"`
+
+	// Rule 命中的那一条规则（`region_codes` 为空即默认规则）。没有模板时不出现
+	Rule   *FreightRule `json:"rule,omitempty"`
+	SkuIds []int64      `json:"sku_ids"`
+
+	// TemplateId 用的是哪个模板；`free_reason = no_template` 时为 null
+	TemplateId *int64 `json:"template_id,omitempty"`
+
+	// TemplateName 模板名（订单上是下单那一刻的名字）
+	TemplateName *string `json:"template_name,omitempty"`
+
+	// Units 计费量：按件是件数，按重量是克数
+	Units int `json:"units"`
+}
+
+// FreightRule 一条计费规则：管哪些省、首件（首重）多少钱、续件（续重）多少钱、满什么条件包邮。
+// 运费 = `first_fee_cents` + ⌈max(0, 件数或克数 − `first_unit`) ÷ `additional_unit`⌉ × `additional_fee_cents`。
+type FreightRule struct {
+	// AdditionalFeeCents 续件（续重）费，0～1000000 分
+	AdditionalFeeCents Money `json:"additional_fee_cents"`
+
+	// AdditionalUnit 续件件数或续重克数：每超出这么多收一次续费，不足一个单位按一个算
+	AdditionalUnit int `json:"additional_unit"`
+
+	// FirstFeeCents 首件（首重）费，0～1000000 分
+	FirstFeeCents Money `json:"first_fee_cents"`
+
+	// FirstUnit 首件件数（按件）或首重克数（按重量）
+	FirstUnit int `json:"first_unit"`
+
+	// FreeQuantity 满件包邮：整单件数 ≥ 它即这条规则免运费。0 = 不设
+	FreeQuantity int `json:"free_quantity"`
+
+	// FreeThresholdCents 满额包邮：**整单优惠后应付商品金额**（营销活动、优惠券都减完之后）≥ 它即这条规则免运费。
+	// 0 = 不设。
+	FreeThresholdCents Money `json:"free_threshold_cents"`
+
+	// RegionCodes 这条规则管哪些省。**空数组 = 默认规则**（其余地区），一个模板恰好一条。
+	RegionCodes []ProvinceCode `json:"region_codes"`
+}
+
+// FreightTemplateInput 新建与整体替换共用。字段含义见 `POST /admin/freight-templates`。
+type FreightTemplateInput struct {
+	// ChargeMode 1 按件 · 2 按重量（单位克，取 SKU 的 `weight_gram`）
+	ChargeMode FreightChargeMode `json:"charge_mode"`
+
+	// IsDefault 设为全店默认模板（只有全店模板能设）。同一时刻至多一个：设了这一个，
+	// 原来的默认在同一个事务里被取消。
+	IsDefault *bool         `json:"is_default,omitempty"`
+	Name      string        `json:"name"`
+	Rules     []FreightRule `json:"rules"`
+
+	// StoreId null 或不填 = 全店模板；非 null = 这家门店的门店模板（每店至多一个）。
+	StoreId *int64 `json:"store_id,omitempty"`
+
+	// UndeliverableRegionCodes 不配送的省。不能与任何一条规则的 `region_codes` 重叠。
+	UndeliverableRegionCodes *[]ProvinceCode `json:"undeliverable_region_codes,omitempty"`
+}
+
+// FreightUndeliverableLine defines model for FreightUndeliverableLine.
+type FreightUndeliverableLine struct {
+	// Reason 给人看的一句话，如「新疆维吾尔自治区不在「默认运费」的配送范围」
+	Reason string `json:"reason"`
+
+	// ReasonCode `region_excluded`：这件商品用的运费模板把收货地址所在的省列为不配送；
+	// `province_unknown`：收货地址归不到任何一个省（没有可用的 `region_code`，省名也匹配不上），
+	// 而这个模板设了不配送地区，判不了在不在配送范围——请买家补全地址。
+	ReasonCode FreightUndeliverableLineReasonCode `json:"reason_code"`
+	SkuId      int64                              `json:"sku_id"`
+}
+
+// FreightUndeliverableLineReasonCode `region_excluded`：这件商品用的运费模板把收货地址所在的省列为不配送；
+// `province_unknown`：收货地址归不到任何一个省（没有可用的 `region_code`，省名也匹配不上），
+// 而这个模板设了不配送地区，判不了在不在配送范围——请买家补全地址。
+type FreightUndeliverableLineReasonCode string
 
 // GeoPolygon GeoJSON Polygon，SRID 固定 4326。落库成 `GEOGRAPHY(POLYGON, 4326)`。
 //
@@ -3165,6 +3644,10 @@ type InventoryConflict struct {
 
 	// Type Examples: https://keel.dev/problems/insufficient-stock
 	Type string `json:"type"`
+
+	// UndeliverableItems 只在 `region-not-deliverable`（试算 / 下单时有商品送不到这个收货地址）时出现：
+	// 逐行列出送不到的 SKU 与原因，客户端据此把这几行标出来让用户去掉或换地址。
+	UndeliverableItems *[]FreightUndeliverableLine `json:"undeliverable_items,omitempty"`
 }
 
 // InventorySetRequest 比较并设置。两个数量都是必填，缺一不可——只给 `available_qty` 就退化成
@@ -3368,13 +3851,17 @@ type Order struct {
 	CouponName *string   `json:"coupon_name,omitempty"`
 	CreatedAt  time.Time `json:"created_at"`
 
-	// DiscountCents 金额，单位「分」。禁止使用浮点。
+	// DiscountCents 优惠合计 = 各行分摊的商品优惠之和 + `freight_discount_cents`
 	DiscountCents *Money     `json:"discount_cents,omitempty"`
 	ExpireAt      *time.Time `json:"expire_at,omitempty"`
 	FinishedAt    *time.Time `json:"finished_at,omitempty"`
 
-	// FreightCents 金额，单位「分」。禁止使用浮点。
+	// FreightCents 运费（包邮券抵扣之前），下单时算好写进订单（00056 之前的订单是 0：那时不计运费）。
+	// **实收运费 = `freight_cents − freight_discount_cents`**，售后退运费的上限按它算。
 	FreightCents *Money `json:"freight_cents,omitempty"`
+
+	// FreightDiscountCents 包邮券抵掉的运费，已经算在 `discount_cents` 里。没用包邮券为 0
+	FreightDiscountCents *Money `json:"freight_discount_cents,omitempty"`
 
 	// GoodsAmountCents 金额，单位「分」。禁止使用浮点。
 	GoodsAmountCents *Money     `json:"goods_amount_cents,omitempty"`
@@ -3461,6 +3948,7 @@ type OrderCreateRequest struct {
 	// UserCouponId 第一期仅支持单张券。
 	//
 	// 券按**这一单的门店**的生效价算，门槛比的是券适用范围内商品的小计。
+	// 包邮券（`coupon_type = 4`）抵的是运费，最多抵到 0；本单运费为 0 时它不可用（409）。
 	// 不可用（不是你的、已锁定 / 已使用 / 已过期、门槛不够、范围不含这些商品或这家店）
 	// 时试算与下单都返回 409 `coupon-not-applicable`，**不会静默按原价成交**。
 	// 下单成功后券进入「锁定」，付款成功变成「已使用」，取消或超时关单回到「未使用」。
@@ -3478,13 +3966,21 @@ type OrderDetail struct {
 	CouponName *string   `json:"coupon_name,omitempty"`
 	CreatedAt  time.Time `json:"created_at"`
 
-	// DiscountCents 金额，单位「分」。禁止使用浮点。
+	// DiscountCents 优惠合计 = 各行分摊的商品优惠之和 + `freight_discount_cents`
 	DiscountCents *Money     `json:"discount_cents,omitempty"`
 	ExpireAt      *time.Time `json:"expire_at,omitempty"`
 	FinishedAt    *time.Time `json:"finished_at,omitempty"`
 
-	// FreightCents 金额，单位「分」。禁止使用浮点。
+	// Freight 下单那一刻的运费计算明细快照（`orders.freight_snapshot`）：用的哪个模板、
+	// 命中哪条规则、为什么包邮。之后改模板不影响它。00056 之前的订单没有，整个不出现。
+	Freight *FreightBreakdown `json:"freight,omitempty"`
+
+	// FreightCents 运费（包邮券抵扣之前），下单时算好写进订单（00056 之前的订单是 0：那时不计运费）。
+	// **实收运费 = `freight_cents − freight_discount_cents`**，售后退运费的上限按它算。
 	FreightCents *Money `json:"freight_cents,omitempty"`
+
+	// FreightDiscountCents 包邮券抵掉的运费，已经算在 `discount_cents` 里。没用包邮券为 0
+	FreightDiscountCents *Money `json:"freight_discount_cents,omitempty"`
 
 	// GoodsAmountCents 金额，单位「分」。禁止使用浮点。
 	GoodsAmountCents *Money       `json:"goods_amount_cents,omitempty"`
@@ -3620,14 +4116,26 @@ type OrderPreview struct {
 	// 本单命中了不与券同享的活动时为空数组。
 	ApplicableCoupons *[]ApplicableCoupon `json:"applicable_coupons,omitempty"`
 
-	// CouponDiscountCents 券的减免（`discount_cents − promotion_discount_cents`）。没带券为 0。
+	// CouponDiscountCents 券对商品的减免（满减 / 折扣 / 立减券）。没带券、或带的是包邮券时为 0 ——
+	// 包邮券抵的运费在 `freight_discount_cents`。
+	// `discount_cents = promotion_discount_cents + coupon_discount_cents + freight_discount_cents`。
 	CouponDiscountCents Money `json:"coupon_discount_cents"`
 
-	// DiscountCents 金额，单位「分」。禁止使用浮点。
+	// DiscountCents 优惠合计 = 各行分摊的商品优惠之和 + `freight_discount_cents`。
+	// 应付 `payable_cents = goods_amount_cents + freight_cents − discount_cents`（与订单上的
+	// 金额恒等式同一条）。
 	DiscountCents *Money `json:"discount_cents,omitempty"`
 
-	// FreightCents 金额，单位「分」。禁止使用浮点。
-	FreightCents *Money `json:"freight_cents,omitempty"`
+	// Freight 运费的明细：按模板分组、命中哪条规则、为什么包邮
+	Freight FreightBreakdown `json:"freight"`
+
+	// FreightCents 运费（包邮券抵扣之前）。按 `address_id` 那个收货地址、履约门店、每行商品挂的
+	// 运费模板算（数据模型 §7「运费怎么算」）。**必返**：商家没配任何运费模板时是
+	// 算出来的 0（`freight.groups[].free_reason = no_template`），不是「没算」。
+	FreightCents Money `json:"freight_cents"`
+
+	// FreightDiscountCents 包邮券抵掉的运费，≤ `freight_cents`，已经算在 `discount_cents` 里。没用包邮券为 0
+	FreightDiscountCents Money `json:"freight_discount_cents"`
 
 	// GoodsAmountCents 金额，单位「分」。禁止使用浮点。
 	GoodsAmountCents Money `json:"goods_amount_cents"`
@@ -3638,7 +4146,7 @@ type OrderPreview struct {
 	// PayableCents 金额，单位「分」。禁止使用浮点。
 	PayableCents Money `json:"payable_cents"`
 
-	// PromotionDiscountCents 满减满折的优惠合计，已含在 `discount_cents` 里（`discount_cents` = 活动 + 券）。
+	// PromotionDiscountCents 满减满折的优惠合计，已含在 `discount_cents` 里（`discount_cents` = 活动 + 券，含包邮券抵的运费）。
 	// 限时折扣 / 秒杀不在这里——它们改的是单价，已经体现在 `goods_amount_cents` 里。
 	PromotionDiscountCents Money `json:"promotion_discount_cents"`
 
@@ -3663,7 +4171,8 @@ type OrderPreviewItem struct {
 	// AmountCents `price_cents × quantity`。
 	AmountCents Money `json:"amount_cents"`
 
-	// DiscountCents 该行分摊到的全部优惠（满减满折 + 券）。余数归金额最大行，保证求和恒等。
+	// DiscountCents 该行分摊到的全部商品优惠（满减满折 + 券）。余数归金额最大行，保证求和恒等。
+	// 包邮券抵的是运费，不分摊到行。
 	DiscountCents Money `json:"discount_cents"`
 
 	// ListPriceCents 门店最终价（三层定价的结果）。没有命中单价类活动时与 `price_cents` 相等。
@@ -3814,6 +4323,10 @@ type Problem struct {
 
 	// Type Examples: https://keel.dev/problems/insufficient-stock
 	Type string `json:"type"`
+
+	// UndeliverableItems 只在 `region-not-deliverable`（试算 / 下单时有商品送不到这个收货地址）时出现：
+	// 逐行列出送不到的 SKU 与原因，客户端据此把这几行标出来让用户去掉或换地址。
+	UndeliverableItems *[]FreightUndeliverableLine `json:"undeliverable_items,omitempty"`
 }
 
 // ProductCreateRequest **没有 `status` 也没有 `merchant_id`。** 前者因为创建与发布是两个动作，
@@ -3824,8 +4337,11 @@ type ProductCreateRequest struct {
 	// CategoryId 必填。`products.category_id` 是 NOT NULL 的复合外键，没有「未分类」这个态。
 	CategoryId  int64   `json:"category_id"`
 	Description *string `json:"description,omitempty"`
-	Subtitle    *string `json:"subtitle,omitempty"`
-	Title       string  `json:"title"`
+
+	// FreightTemplateId 单独挂的运费模板（全店模板的 id）。不填或 null = 不单独挂。指向门店模板、不存在或已删除时 422。
+	FreightTemplateId *int64  `json:"freight_template_id,omitempty"`
+	Subtitle          *string `json:"subtitle,omitempty"`
+	Title             string  `json:"title"`
 }
 
 // ProductDetail defines model for ProductDetail.
@@ -4170,8 +4686,12 @@ type ProductUpdateRequest struct {
 	BrandId     *int64  `json:"brand_id,omitempty"`
 	CategoryId  *int64  `json:"category_id,omitempty"`
 	Description *string `json:"description,omitempty"`
-	Subtitle    *string `json:"subtitle,omitempty"`
-	Title       *string `json:"title,omitempty"`
+
+	// FreightTemplateId 改挂的运费模板（全店模板的 id）；传 null 解除单独挂的模板。
+	// 指向门店模板、不存在或已删除时 422。只影响之后的试算与下单。
+	FreightTemplateId *int64  `json:"freight_template_id,omitempty"`
+	Subtitle          *string `json:"subtitle,omitempty"`
+	Title             *string `json:"title,omitempty"`
 }
 
 // PromotionCreateRequest defines model for PromotionCreateRequest.
@@ -4332,6 +4852,14 @@ type PromotionTier struct {
 // （活动价 = min(门店价, 特价)）→ **1 / 2 按行分摊**（每行至多参与一个满减满折）→
 // 券（门槛与计算基数是活动后金额）→ 运费。5 不参与计价：它在买家首单前自动发一张券。
 type PromotionType int
+
+// ProvinceCode 省级行政区划码（GB/T 2260 的 6 位码，后四位为 0），如 `110000` 北京、`440000` 广东、
+// `650000` 新疆。只收 34 个省级行政区的码（含港澳台），别的 422。
+// 收货地址按 `region_code` 的前两位归到省；地址没有 `region_code` 时按 `province`
+// 文字匹配（「内蒙古」与「内蒙古自治区」都认）。
+//
+// Examples: 110000
+type ProvinceCode = string
 
 // ReceiverSnapshot 下单瞬间从 `user_addresses` 拷贝的收货信息快照，落在
 // `orders.receiver_snapshot`。地址簿后来改了或删了，历史订单不受影响。
@@ -4549,6 +5077,420 @@ type RegionUpdateRequest struct {
 
 // RegionUpdateRequestStatus defines model for RegionUpdateRequest.Status.
 type RegionUpdateRequestStatus int
+
+// ReportInventoryAlert defines model for ReportInventoryAlert.
+type ReportInventoryAlert struct {
+	AvailableQty int    `json:"available_qty"`
+	ProductId    int64  `json:"product_id"`
+	ProductTitle string `json:"product_title"`
+	RegionId     int64  `json:"region_id"`
+	SkuCode      string `json:"sku_code"`
+	SkuId        int64  `json:"sku_id"`
+
+	// SpecValues SKU 的规格值，如 `{"颜色":"红","尺码":"M"}`
+	SpecValues map[string]string `json:"spec_values"`
+	StoreId    int64             `json:"store_id"`
+	StoreName  string            `json:"store_name"`
+	WarningQty int               `json:"warning_qty"`
+}
+
+// ReportInventoryAlerts defines model for ReportInventoryAlerts.
+type ReportInventoryAlerts struct {
+	Items []ReportInventoryAlert `json:"items"`
+
+	// Total 符合条件的总条数（不受 limit 影响）
+	Total int64 `json:"total"`
+}
+
+// ReportMetrics 一段窗口里的核心指标。**订单口径**：已支付的五种状态
+// （`20 待发货`、`30 已发货`、`40 已完成`、`50 退款中`、`60 已退款`）且支付时间落在窗口里；
+// 草稿（`0`）、待支付（`10`）、已关闭 / 取消（`90`）一律不计。整单退掉的单（`60`）
+// 仍然计入支付 —— 它确实付过钱，退掉的那部分由退款金额扣回。
+type ReportMetrics struct {
+	// AvgOrderValueCents 客单价 = 支付金额 ÷ 支付买家数，四舍五入到分；没有买家时为 0。
+	AvgOrderValueCents Money `json:"avg_order_value_cents"`
+
+	// BuyerCount 支付买家数：上述订单的下单买家去重数。
+	BuyerCount int64 `json:"buyer_count"`
+
+	// NetSalesCents 销售额（净）= 支付金额 − 退款金额。可以为负（这段时间退的比卖的多）。
+	NetSalesCents Money `json:"net_sales_cents"`
+
+	// OrderCount 支付订单数：上述订单的笔数。
+	OrderCount int64 `json:"order_count"`
+
+	// PaidAmountCents 支付金额：上述订单的实付 `paid_cents` 之和（含运费，已扣券）。
+	PaidAmountCents Money `json:"paid_amount_cents"`
+
+	// RefundAmountCents 退款金额：窗口内**到账**（退款单 `40 已退款`，按 `refunded_at`）的退款 `amount_cents` 之和。
+	// 审核中、退款中、已驳回、已撤回的不计。不论那一单是哪天付的款。
+	RefundAmountCents Money `json:"refund_amount_cents"`
+
+	// RefundCount 退款笔数：窗口内到账的退款单张数。
+	RefundCount int64 `json:"refund_count"`
+
+	// RefundRate 退款率 = 退款金额 ÷ 支付金额（同一窗口），支付金额为 0 时为 `null`（不是 0）。
+	// 因为两边按各自的时间归属，**它可以大于 1**（本期退的是上期卖的）。
+	RefundRate *float64 `json:"refund_rate"`
+}
+
+// ReportOverview defines model for ReportOverview.
+type ReportOverview struct {
+	// Current 一段窗口里的核心指标。**订单口径**：已支付的五种状态
+	// （`20 待发货`、`30 已发货`、`40 已完成`、`50 退款中`、`60 已退款`）且支付时间落在窗口里；
+	// 草稿（`0`）、待支付（`10`）、已关闭 / 取消（`90`）一律不计。整单退掉的单（`60`）
+	// 仍然计入支付 —— 它确实付过钱，退掉的那部分由退款金额扣回。
+	Current ReportMetrics `json:"current"`
+
+	// Previous 一段窗口里的核心指标。**订单口径**：已支付的五种状态
+	// （`20 待发货`、`30 已发货`、`40 已完成`、`50 退款中`、`60 已退款`）且支付时间落在窗口里；
+	// 草稿（`0`）、待支付（`10`）、已关闭 / 取消（`90`）一律不计。整单退掉的单（`60`）
+	// 仍然计入支付 —— 它确实付过钱，退掉的那部分由退款金额扣回。
+	Previous ReportMetrics `json:"previous"`
+
+	// Window 一次报表查询的时间窗口。**六条报表共用这一份口径**：
+	//
+	// **时区**：店铺时区 `shop_settings.timezone`；这家店没有那一行、或那一列不是合法的
+	// IANA 时区名时按 **Asia/Shanghai**。回显在 `timezone` 里。「今天」「昨天」「按天」「按小时」
+	// 全部按这个时区的自然日 / 整点切，不按服务器时区、也不按 UTC。
+	//
+	// **窗口**（`current`，半开区间 `[start_at, end_at)`）：
+	// · `today`：今天 0 点 → 此刻；
+	// · `yesterday`：昨天 0 点 → 今天 0 点；
+	// · `last_7_days` / `last_30_days`：最近 7 / 30 个**完整**自然日，**不含今天**
+	//   （今天还没过完，放进去会让每天早上的数字都偏低）；
+	// · `custom`：`start_date` 0 点 → `end_date` 次日 0 点。
+	//
+	// **上一周期**（`previous`）：紧挨在 `current` 之前、等长的一段 ——
+	// `today` 对比**昨天的同一时段**（昨天 0 点 → 昨天的此刻），其余对比前面同样天数的
+	// 自然日（`yesterday` 对前天，`last_7_days` 对再往前的 7 天，`custom` 同理）。
+	//
+	// **归属时间**：销售（支付金额、订单数、买家数、商品排行）按**支付时间**
+	// `orders.paid_at` 落窗口 —— 下单了没付钱不是销售；退款按**到账时间**
+	// `refunds.refunded_at` 落窗口 —— 申请了没退出去的钱仍然在店里。
+	// 于是一笔 9 月 30 日付款、10 月 2 日退款的单，9 月的销售里有它，10 月的退款里有它。
+	//
+	// **金额**一律整数分（`Money`），不做任何四舍五入以外的换算。
+	//
+	// **跨度上限 366 天**（`custom`）：每条报表都是对窗口内的订单 / 退款 / 检索日志
+	// 现场聚合（不预先汇总），扫描量与窗口长度成正比；366 天覆盖「今年以来」与
+	// 「同比去年」这两种最长的日常问法，再长的分析该去离线数仓，而不是压在交易库上。
+	Window ReportWindow `json:"window"`
+}
+
+// ReportProductRankItem defines model for ReportProductRankItem.
+type ReportProductRankItem struct {
+	// AmountCents 销售额：订单行实付分摊之和（不含运费）。
+	AmountCents Money `json:"amount_cents"`
+	CategoryId  int64 `json:"category_id"`
+
+	// OrderCount 含这件商品的支付订单数
+	OrderCount int64 `json:"order_count"`
+	ProductId  int64 `json:"product_id"`
+
+	// Quantity 销量（件）
+	Quantity int64 `json:"quantity"`
+
+	// Rank 名次，从 1 开始
+	Rank int `json:"rank"`
+
+	// RefundedAmountCents 这些订单行截至查询时已退的金额。
+	RefundedAmountCents Money `json:"refunded_amount_cents"`
+
+	// RefundedQuantity 这些订单行截至查询时已退的件数。
+	RefundedQuantity int64 `json:"refunded_quantity"`
+
+	// Title 商品当前的标题
+	Title string `json:"title"`
+}
+
+// ReportProductRanking defines model for ReportProductRanking.
+type ReportProductRanking struct {
+	Items  []ReportProductRankItem    `json:"items"`
+	SortBy ReportProductRankingSortBy `json:"sort_by"`
+
+	// Window 一次报表查询的时间窗口。**六条报表共用这一份口径**：
+	//
+	// **时区**：店铺时区 `shop_settings.timezone`；这家店没有那一行、或那一列不是合法的
+	// IANA 时区名时按 **Asia/Shanghai**。回显在 `timezone` 里。「今天」「昨天」「按天」「按小时」
+	// 全部按这个时区的自然日 / 整点切，不按服务器时区、也不按 UTC。
+	//
+	// **窗口**（`current`，半开区间 `[start_at, end_at)`）：
+	// · `today`：今天 0 点 → 此刻；
+	// · `yesterday`：昨天 0 点 → 今天 0 点；
+	// · `last_7_days` / `last_30_days`：最近 7 / 30 个**完整**自然日，**不含今天**
+	//   （今天还没过完，放进去会让每天早上的数字都偏低）；
+	// · `custom`：`start_date` 0 点 → `end_date` 次日 0 点。
+	//
+	// **上一周期**（`previous`）：紧挨在 `current` 之前、等长的一段 ——
+	// `today` 对比**昨天的同一时段**（昨天 0 点 → 昨天的此刻），其余对比前面同样天数的
+	// 自然日（`yesterday` 对前天，`last_7_days` 对再往前的 7 天，`custom` 同理）。
+	//
+	// **归属时间**：销售（支付金额、订单数、买家数、商品排行）按**支付时间**
+	// `orders.paid_at` 落窗口 —— 下单了没付钱不是销售；退款按**到账时间**
+	// `refunds.refunded_at` 落窗口 —— 申请了没退出去的钱仍然在店里。
+	// 于是一笔 9 月 30 日付款、10 月 2 日退款的单，9 月的销售里有它，10 月的退款里有它。
+	//
+	// **金额**一律整数分（`Money`），不做任何四舍五入以外的换算。
+	//
+	// **跨度上限 366 天**（`custom`）：每条报表都是对窗口内的订单 / 退款 / 检索日志
+	// 现场聚合（不预先汇总），扫描量与窗口长度成正比；366 天覆盖「今年以来」与
+	// 「同比去年」这两种最长的日常问法，再长的分析该去离线数仓，而不是压在交易库上。
+	Window ReportWindow `json:"window"`
+}
+
+// ReportProductRankingSortBy defines model for ReportProductRanking.SortBy.
+type ReportProductRankingSortBy string
+
+// ReportRange 一段半开区间 `[start_at, end_at)`，同时给出它在店铺时区里的起止日期（都含）。
+type ReportRange struct {
+	// EndAt 区间终点（**不含**），UTC
+	EndAt time.Time `json:"end_at"`
+
+	// EndDate 最后一个被覆盖的自然日（含），店铺时区
+	EndDate openapi_types.Date `json:"end_date"`
+
+	// StartAt 区间起点（含），UTC
+	StartAt time.Time `json:"start_at"`
+
+	// StartDate 起点在店铺时区里的日期
+	StartDate openapi_types.Date `json:"start_date"`
+}
+
+// ReportRegionRow defines model for ReportRegionRow.
+type ReportRegionRow struct {
+	// NetSalesCents 金额，单位「分」。禁止使用浮点。
+	NetSalesCents Money `json:"net_sales_cents"`
+	OrderCount    int64 `json:"order_count"`
+
+	// PaidAmountCents 金额，单位「分」。禁止使用浮点。
+	PaidAmountCents Money `json:"paid_amount_cents"`
+
+	// RefundAmountCents 金额，单位「分」。禁止使用浮点。
+	RefundAmountCents Money  `json:"refund_amount_cents"`
+	RegionId          int64  `json:"region_id"`
+	RegionName        string `json:"region_name"`
+
+	// StoreCount 这个大区在 stores 里出现的门店数
+	StoreCount int `json:"store_count"`
+}
+
+// ReportSearchOverview defines model for ReportSearchOverview.
+type ReportSearchOverview struct {
+	ClickCount  int64 `json:"click_count"`
+	SearchCount int64 `json:"search_count"`
+
+	// TopQueries 热门搜索词 Top N。
+	TopQueries []ReportSearchTerm `json:"top_queries"`
+
+	// Window 一次报表查询的时间窗口。**六条报表共用这一份口径**：
+	//
+	// **时区**：店铺时区 `shop_settings.timezone`；这家店没有那一行、或那一列不是合法的
+	// IANA 时区名时按 **Asia/Shanghai**。回显在 `timezone` 里。「今天」「昨天」「按天」「按小时」
+	// 全部按这个时区的自然日 / 整点切，不按服务器时区、也不按 UTC。
+	//
+	// **窗口**（`current`，半开区间 `[start_at, end_at)`）：
+	// · `today`：今天 0 点 → 此刻；
+	// · `yesterday`：昨天 0 点 → 今天 0 点；
+	// · `last_7_days` / `last_30_days`：最近 7 / 30 个**完整**自然日，**不含今天**
+	//   （今天还没过完，放进去会让每天早上的数字都偏低）；
+	// · `custom`：`start_date` 0 点 → `end_date` 次日 0 点。
+	//
+	// **上一周期**（`previous`）：紧挨在 `current` 之前、等长的一段 ——
+	// `today` 对比**昨天的同一时段**（昨天 0 点 → 昨天的此刻），其余对比前面同样天数的
+	// 自然日（`yesterday` 对前天，`last_7_days` 对再往前的 7 天，`custom` 同理）。
+	//
+	// **归属时间**：销售（支付金额、订单数、买家数、商品排行）按**支付时间**
+	// `orders.paid_at` 落窗口 —— 下单了没付钱不是销售；退款按**到账时间**
+	// `refunds.refunded_at` 落窗口 —— 申请了没退出去的钱仍然在店里。
+	// 于是一笔 9 月 30 日付款、10 月 2 日退款的单，9 月的销售里有它，10 月的退款里有它。
+	//
+	// **金额**一律整数分（`Money`），不做任何四舍五入以外的换算。
+	//
+	// **跨度上限 366 天**（`custom`）：每条报表都是对窗口内的订单 / 退款 / 检索日志
+	// 现场聚合（不预先汇总），扫描量与窗口长度成正比；366 天覆盖「今年以来」与
+	// 「同比去年」这两种最长的日常问法，再长的分析该去离线数仓，而不是压在交易库上。
+	Window          ReportWindow `json:"window"`
+	ZeroResultCount int64        `json:"zero_result_count"`
+
+	// ZeroResultQueries 无结果搜索词 Top N（按无结果次数排）。
+	ZeroResultQueries []ReportSearchTerm `json:"zero_result_queries"`
+
+	// ZeroResultRate 无结果次数 ÷ 搜索次数；没有搜索时为 `null`。
+	ZeroResultRate *float64 `json:"zero_result_rate"`
+}
+
+// ReportSearchTerm defines model for ReportSearchTerm.
+type ReportSearchTerm struct {
+	// Query 归并后的搜索词（去首尾空白、小写）
+	Query           string `json:"query"`
+	SearchCount     int64  `json:"search_count"`
+	ZeroResultCount int64  `json:"zero_result_count"`
+}
+
+// ReportStoreComparison defines model for ReportStoreComparison.
+type ReportStoreComparison struct {
+	Regions []ReportRegionRow `json:"regions"`
+	Stores  []ReportStoreRow  `json:"stores"`
+
+	// Window 一次报表查询的时间窗口。**六条报表共用这一份口径**：
+	//
+	// **时区**：店铺时区 `shop_settings.timezone`；这家店没有那一行、或那一列不是合法的
+	// IANA 时区名时按 **Asia/Shanghai**。回显在 `timezone` 里。「今天」「昨天」「按天」「按小时」
+	// 全部按这个时区的自然日 / 整点切，不按服务器时区、也不按 UTC。
+	//
+	// **窗口**（`current`，半开区间 `[start_at, end_at)`）：
+	// · `today`：今天 0 点 → 此刻；
+	// · `yesterday`：昨天 0 点 → 今天 0 点；
+	// · `last_7_days` / `last_30_days`：最近 7 / 30 个**完整**自然日，**不含今天**
+	//   （今天还没过完，放进去会让每天早上的数字都偏低）；
+	// · `custom`：`start_date` 0 点 → `end_date` 次日 0 点。
+	//
+	// **上一周期**（`previous`）：紧挨在 `current` 之前、等长的一段 ——
+	// `today` 对比**昨天的同一时段**（昨天 0 点 → 昨天的此刻），其余对比前面同样天数的
+	// 自然日（`yesterday` 对前天，`last_7_days` 对再往前的 7 天，`custom` 同理）。
+	//
+	// **归属时间**：销售（支付金额、订单数、买家数、商品排行）按**支付时间**
+	// `orders.paid_at` 落窗口 —— 下单了没付钱不是销售；退款按**到账时间**
+	// `refunds.refunded_at` 落窗口 —— 申请了没退出去的钱仍然在店里。
+	// 于是一笔 9 月 30 日付款、10 月 2 日退款的单，9 月的销售里有它，10 月的退款里有它。
+	//
+	// **金额**一律整数分（`Money`），不做任何四舍五入以外的换算。
+	//
+	// **跨度上限 366 天**（`custom`）：每条报表都是对窗口内的订单 / 退款 / 检索日志
+	// 现场聚合（不预先汇总），扫描量与窗口长度成正比；366 天覆盖「今年以来」与
+	// 「同比去年」这两种最长的日常问法，再长的分析该去离线数仓，而不是压在交易库上。
+	Window ReportWindow `json:"window"`
+}
+
+// ReportStoreRow defines model for ReportStoreRow.
+type ReportStoreRow struct {
+	// Deleted 门店已删除（只在窗口内有成交或退款时出现）
+	Deleted bool `json:"deleted"`
+
+	// NetSalesCents 金额，单位「分」。禁止使用浮点。
+	NetSalesCents Money `json:"net_sales_cents"`
+	OrderCount    int64 `json:"order_count"`
+
+	// PaidAmountCents 金额，单位「分」。禁止使用浮点。
+	PaidAmountCents Money `json:"paid_amount_cents"`
+
+	// RefundAmountCents 金额，单位「分」。禁止使用浮点。
+	RefundAmountCents Money `json:"refund_amount_cents"`
+
+	// RegionId 门店此刻所属的大区
+	RegionId   int64  `json:"region_id"`
+	RegionName string `json:"region_name"`
+	StoreCode  string `json:"store_code"`
+	StoreId    int64  `json:"store_id"`
+	StoreName  string `json:"store_name"`
+}
+
+// ReportTrend defines model for ReportTrend.
+type ReportTrend struct {
+	// Granularity 窗口只有一个自然日时按小时，否则按天。
+	Granularity ReportTrendGranularity `json:"granularity"`
+
+	// Points 按时间升序，每个桶一个点，没有数据的桶是 0。
+	Points []ReportTrendPoint `json:"points"`
+
+	// Window 一次报表查询的时间窗口。**六条报表共用这一份口径**：
+	//
+	// **时区**：店铺时区 `shop_settings.timezone`；这家店没有那一行、或那一列不是合法的
+	// IANA 时区名时按 **Asia/Shanghai**。回显在 `timezone` 里。「今天」「昨天」「按天」「按小时」
+	// 全部按这个时区的自然日 / 整点切，不按服务器时区、也不按 UTC。
+	//
+	// **窗口**（`current`，半开区间 `[start_at, end_at)`）：
+	// · `today`：今天 0 点 → 此刻；
+	// · `yesterday`：昨天 0 点 → 今天 0 点；
+	// · `last_7_days` / `last_30_days`：最近 7 / 30 个**完整**自然日，**不含今天**
+	//   （今天还没过完，放进去会让每天早上的数字都偏低）；
+	// · `custom`：`start_date` 0 点 → `end_date` 次日 0 点。
+	//
+	// **上一周期**（`previous`）：紧挨在 `current` 之前、等长的一段 ——
+	// `today` 对比**昨天的同一时段**（昨天 0 点 → 昨天的此刻），其余对比前面同样天数的
+	// 自然日（`yesterday` 对前天，`last_7_days` 对再往前的 7 天，`custom` 同理）。
+	//
+	// **归属时间**：销售（支付金额、订单数、买家数、商品排行）按**支付时间**
+	// `orders.paid_at` 落窗口 —— 下单了没付钱不是销售；退款按**到账时间**
+	// `refunds.refunded_at` 落窗口 —— 申请了没退出去的钱仍然在店里。
+	// 于是一笔 9 月 30 日付款、10 月 2 日退款的单，9 月的销售里有它，10 月的退款里有它。
+	//
+	// **金额**一律整数分（`Money`），不做任何四舍五入以外的换算。
+	//
+	// **跨度上限 366 天**（`custom`）：每条报表都是对窗口内的订单 / 退款 / 检索日志
+	// 现场聚合（不预先汇总），扫描量与窗口长度成正比；366 天覆盖「今年以来」与
+	// 「同比去年」这两种最长的日常问法，再长的分析该去离线数仓，而不是压在交易库上。
+	Window ReportWindow `json:"window"`
+}
+
+// ReportTrendGranularity 窗口只有一个自然日时按小时，否则按天。
+type ReportTrendGranularity string
+
+// ReportTrendPoint defines model for ReportTrendPoint.
+type ReportTrendPoint struct {
+	// BucketStartAt 桶的起点，UTC
+	BucketStartAt time.Time `json:"bucket_start_at"`
+
+	// Label 桶在店铺时区里的显示名：按天是 `MM-DD`，按小时是 `HH:00`。
+	//
+	// Examples: 09-26, 14:00
+	Label string `json:"label"`
+
+	// NetSalesCents 金额，单位「分」。禁止使用浮点。
+	NetSalesCents Money `json:"net_sales_cents"`
+	OrderCount    int64 `json:"order_count"`
+
+	// PaidAmountCents 金额，单位「分」。禁止使用浮点。
+	PaidAmountCents Money `json:"paid_amount_cents"`
+
+	// RefundAmountCents 金额，单位「分」。禁止使用浮点。
+	RefundAmountCents Money `json:"refund_amount_cents"`
+}
+
+// ReportWindow 一次报表查询的时间窗口。**六条报表共用这一份口径**：
+//
+// **时区**：店铺时区 `shop_settings.timezone`；这家店没有那一行、或那一列不是合法的
+// IANA 时区名时按 **Asia/Shanghai**。回显在 `timezone` 里。「今天」「昨天」「按天」「按小时」
+// 全部按这个时区的自然日 / 整点切，不按服务器时区、也不按 UTC。
+//
+// **窗口**（`current`，半开区间 `[start_at, end_at)`）：
+// · `today`：今天 0 点 → 此刻；
+// · `yesterday`：昨天 0 点 → 今天 0 点；
+// · `last_7_days` / `last_30_days`：最近 7 / 30 个**完整**自然日，**不含今天**
+//
+//	（今天还没过完，放进去会让每天早上的数字都偏低）；
+//
+// · `custom`：`start_date` 0 点 → `end_date` 次日 0 点。
+//
+// **上一周期**（`previous`）：紧挨在 `current` 之前、等长的一段 ——
+// `today` 对比**昨天的同一时段**（昨天 0 点 → 昨天的此刻），其余对比前面同样天数的
+// 自然日（`yesterday` 对前天，`last_7_days` 对再往前的 7 天，`custom` 同理）。
+//
+// **归属时间**：销售（支付金额、订单数、买家数、商品排行）按**支付时间**
+// `orders.paid_at` 落窗口 —— 下单了没付钱不是销售；退款按**到账时间**
+// `refunds.refunded_at` 落窗口 —— 申请了没退出去的钱仍然在店里。
+// 于是一笔 9 月 30 日付款、10 月 2 日退款的单，9 月的销售里有它，10 月的退款里有它。
+//
+// **金额**一律整数分（`Money`），不做任何四舍五入以外的换算。
+//
+// **跨度上限 366 天**（`custom`）：每条报表都是对窗口内的订单 / 退款 / 检索日志
+// 现场聚合（不预先汇总），扫描量与窗口长度成正比；366 天覆盖「今年以来」与
+// 「同比去年」这两种最长的日常问法，再长的分析该去离线数仓，而不是压在交易库上。
+type ReportWindow struct {
+	// Current 一段半开区间 `[start_at, end_at)`，同时给出它在店铺时区里的起止日期（都含）。
+	Current ReportRange        `json:"current"`
+	Period  ReportWindowPeriod `json:"period"`
+
+	// Previous 一段半开区间 `[start_at, end_at)`，同时给出它在店铺时区里的起止日期（都含）。
+	Previous ReportRange `json:"previous"`
+
+	// Timezone Examples: Asia/Shanghai
+	Timezone string `json:"timezone"`
+}
+
+// ReportWindowPeriod defines model for ReportWindow.Period.
+type ReportWindowPeriod string
 
 // ReturnShipment defines model for ReturnShipment.
 type ReturnShipment struct {
@@ -4814,6 +5756,8 @@ type SkuCreateRequest struct {
 
 	// WarningQty 低库存预警线，省略即 0。
 	WarningQty *int `json:"warning_qty,omitempty"`
+
+	// WeightGram 重量（克），按重量计费的运费模板用它。省略即 0
 	WeightGram *int `json:"weight_gram,omitempty"`
 }
 
@@ -4838,8 +5782,10 @@ type SkuUpdateRequest struct {
 	SpecValues *map[string]string `json:"spec_values,omitempty"`
 
 	// Status 0 停售 / 1 在售
-	Status     *SkuUpdateRequestStatus `json:"status,omitempty"`
-	WeightGram *int                    `json:"weight_gram,omitempty"`
+	Status *SkuUpdateRequestStatus `json:"status,omitempty"`
+
+	// WeightGram 重量（克），按重量计费的运费模板用它
+	WeightGram *int `json:"weight_gram,omitempty"`
 }
 
 // SkuUpdateRequestStatus 0 停售 / 1 在售
@@ -4871,11 +5817,15 @@ type Staff struct {
 	// | 能做什么 | 1 | 2 | 3 | 4 |
 	// |---|:-:|:-:|:-:|:-:|
 	// | 商品、SKU、基准价、类目、上传、批量导入 | ✅ | ✅ | 只读 | 只读 |
+	// | 运费模板：全店模板（建、改、删、设默认）；商品挂哪个模板随商品 | ✅ | ✅ | 只读 | 只读 |
+	// | 运费模板：门店模板（建、改、删） | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
 	// | 大区：改、删、大区价、大区上下架 | ✅ | ✅ | 只限自己的大区 | ❌ |
 	// | 大区：建 | ✅ | ✅ | ❌ | ❌ |
 	// | 门店：建、改、删、围栏 | ✅ | ✅ | 只限本大区的门店（换大区时新旧都得在范围内） | ❌ |
 	// | 门店价、门店上下架、门店库存 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
 	// | 订单与售后：订单 / 退款单的列表与详情、发货、退款审核、确认收到退货 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
+	// | 经营报表：概览、趋势、商品排行、门店对比、库存预警 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
+	// | 经营报表：搜索概况（检索日志没有门店维度） | ✅ | ✅ | ❌ | ❌ |
 	// | 设默认门店（含建店时 is_default） | ✅ | ❌ | ❌ | ❌ |
 	// | 员工管理 | ✅ | ❌ | 只能加、改本大区门店的门店管理员 | ❌ |
 	// | 开店 | 仅平台级管理员 | | | |
@@ -4916,11 +5866,15 @@ type StaffCreateRequest struct {
 	// | 能做什么 | 1 | 2 | 3 | 4 |
 	// |---|:-:|:-:|:-:|:-:|
 	// | 商品、SKU、基准价、类目、上传、批量导入 | ✅ | ✅ | 只读 | 只读 |
+	// | 运费模板：全店模板（建、改、删、设默认）；商品挂哪个模板随商品 | ✅ | ✅ | 只读 | 只读 |
+	// | 运费模板：门店模板（建、改、删） | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
 	// | 大区：改、删、大区价、大区上下架 | ✅ | ✅ | 只限自己的大区 | ❌ |
 	// | 大区：建 | ✅ | ✅ | ❌ | ❌ |
 	// | 门店：建、改、删、围栏 | ✅ | ✅ | 只限本大区的门店（换大区时新旧都得在范围内） | ❌ |
 	// | 门店价、门店上下架、门店库存 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
 	// | 订单与售后：订单 / 退款单的列表与详情、发货、退款审核、确认收到退货 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
+	// | 经营报表：概览、趋势、商品排行、门店对比、库存预警 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
+	// | 经营报表：搜索概况（检索日志没有门店维度） | ✅ | ✅ | ❌ | ❌ |
 	// | 设默认门店（含建店时 is_default） | ✅ | ❌ | ❌ | ❌ |
 	// | 员工管理 | ✅ | ❌ | 只能加、改本大区门店的门店管理员 | ❌ |
 	// | 开店 | 仅平台级管理员 | | | |
@@ -4967,11 +5921,15 @@ type StaffRef struct {
 // | 能做什么 | 1 | 2 | 3 | 4 |
 // |---|:-:|:-:|:-:|:-:|
 // | 商品、SKU、基准价、类目、上传、批量导入 | ✅ | ✅ | 只读 | 只读 |
+// | 运费模板：全店模板（建、改、删、设默认）；商品挂哪个模板随商品 | ✅ | ✅ | 只读 | 只读 |
+// | 运费模板：门店模板（建、改、删） | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
 // | 大区：改、删、大区价、大区上下架 | ✅ | ✅ | 只限自己的大区 | ❌ |
 // | 大区：建 | ✅ | ✅ | ❌ | ❌ |
 // | 门店：建、改、删、围栏 | ✅ | ✅ | 只限本大区的门店（换大区时新旧都得在范围内） | ❌ |
 // | 门店价、门店上下架、门店库存 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
 // | 订单与售后：订单 / 退款单的列表与详情、发货、退款审核、确认收到退货 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
+// | 经营报表：概览、趋势、商品排行、门店对比、库存预警 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
+// | 经营报表：搜索概况（检索日志没有门店维度） | ✅ | ✅ | ❌ | ❌ |
 // | 设默认门店（含建店时 is_default） | ✅ | ❌ | ❌ | ❌ |
 // | 员工管理 | ✅ | ❌ | 只能加、改本大区门店的门店管理员 | ❌ |
 // | 开店 | 仅平台级管理员 | | | |
@@ -5190,8 +6148,8 @@ type UserCoupon struct {
 
 	// CouponType 1 满减 · 2 折扣 · 3 立减 · 4 包邮。
 	//
-	// **4 包邮本期不可建**：本系统没有运费，包邮券永远减 0（数据模型 §7）。
-	// 枚举里留着它，是为了运费落地那一轮不必改契约的枚举。
+	// **4 包邮**抵的是运费（00056 运费模板落地之后可建）：`max_discount_cents` 是最多抵多少
+	// （0 = 运费全免），门槛与范围的判法与别的券相同。本单运费为 0 时不可用（数据模型 §7）。
 	CouponType CouponType `json:"coupon_type"`
 
 	// DiscountCents 金额，单位「分」。禁止使用浮点。
@@ -5260,6 +6218,9 @@ type UserIdentity struct {
 // AddressId defines model for AddressId.
 type AddressId = int64
 
+// CartAddressId defines model for CartAddressId.
+type CartAddressId = int64
+
 // CartStoreId defines model for CartStoreId.
 type CartStoreId = int64
 
@@ -5268,6 +6229,9 @@ type CategoryId = int64
 
 // CouponTemplateId defines model for CouponTemplateId.
 type CouponTemplateId = int64
+
+// FreightTemplateId defines model for FreightTemplateId.
+type FreightTemplateId = int64
 
 // IdempotencyKey defines model for IdempotencyKey.
 type IdempotencyKey = openapi_types.UUID
@@ -5302,6 +6266,24 @@ type RefundNo = string
 // RegionId defines model for RegionId.
 type RegionId = int64
 
+// ReportEndDate defines model for ReportEndDate.
+type ReportEndDate = openapi_types.Date
+
+// ReportLimit defines model for ReportLimit.
+type ReportLimit = int
+
+// ReportPeriod defines model for ReportPeriod.
+type ReportPeriod string
+
+// ReportRegionId defines model for ReportRegionId.
+type ReportRegionId = int64
+
+// ReportStartDate defines model for ReportStartDate.
+type ReportStartDate = openapi_types.Date
+
+// ReportStoreId defines model for ReportStoreId.
+type ReportStoreId = int64
+
 // SkuId defines model for SkuId.
 type SkuId = int64
 
@@ -5313,6 +6295,9 @@ type IdempotencyInFlight = Problem
 
 // IdempotencyKeyReused RFC 9457 Problem Details
 type IdempotencyKeyReused = Problem
+
+// ReportBadWindow RFC 9457 Problem Details
+type ReportBadWindow = Problem
 
 // PostAddressesParams defines parameters for PostAddresses.
 type PostAddressesParams struct {
@@ -5654,6 +6639,163 @@ type PostAdminCouponTemplatesTemplateIdGrantsParams struct {
 
 // PutAdminCouponTemplatesTemplateIdScopesParams defines parameters for PutAdminCouponTemplatesTemplateIdScopes.
 type PutAdminCouponTemplatesTemplateIdScopesParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// GetAdminFreightTemplatesParams defines parameters for GetAdminFreightTemplates.
+type GetAdminFreightTemplatesParams struct {
+	Page     *Page     `form:"page,omitempty" json:"page,omitempty"`
+	PageSize *PageSize `form:"page_size,omitempty" json:"page_size,omitempty"`
+
+	// StoreId 只看这家门店的门店模板。不传即全部（全店模板 + 各门店模板）。
+	StoreId *int64 `form:"store_id,omitempty" json:"store_id,omitempty"`
+
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// PostAdminFreightTemplatesParams defines parameters for PostAdminFreightTemplates.
+type PostAdminFreightTemplatesParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+
+	// IdempotencyKey 客户端生成的 UUID。幂等作用域为 `(接口 scope, user_id, key)`，
+	// 有效期 24h，过期后同一 key 可复用（见数据模型文档 §11）。
+	//
+	// · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
+	//   并带 `Idempotency-Replayed: true` 响应头
+	// · **同 key 正在处理中**：`409` + `Retry-After`，
+	//   type=https://keel.dev/problems/idempotency-key-in-flight，
+	//   客户端应退避重试，不要当成业务失败
+	// · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
+	//   type=https://keel.dev/problems/idempotency-key-reused。
+	//   宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
+	//   那会让用户以为下单成功了而实际什么都没发生
+	// · 首次执行失败（存档为失败态）时同样回放该失败响应；
+	//   确需重试的场景请换一个新 key
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// DeleteAdminFreightTemplatesTemplateIdParams defines parameters for DeleteAdminFreightTemplatesTemplateId.
+type DeleteAdminFreightTemplatesTemplateIdParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// GetAdminFreightTemplatesTemplateIdParams defines parameters for GetAdminFreightTemplatesTemplateId.
+type GetAdminFreightTemplatesTemplateIdParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// PutAdminFreightTemplatesTemplateIdParams defines parameters for PutAdminFreightTemplatesTemplateId.
+type PutAdminFreightTemplatesTemplateIdParams struct {
 	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
 	//
 	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
@@ -7015,6 +8157,303 @@ type PutAdminRegionsRegionIdSkusSkuIdPriceParams struct {
 	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
 }
 
+// GetAdminReportsInventoryAlertsParams defines parameters for GetAdminReportsInventoryAlerts.
+type GetAdminReportsInventoryAlertsParams struct {
+	// StoreId 只看这一家门店（履约门店）。与调用者的范围取交集，范围外得到空结果而不是 403。
+	StoreId *ReportStoreId `form:"store_id,omitempty" json:"store_id,omitempty"`
+
+	// RegionId 只看此刻挂在这个大区下的门店。与调用者的范围取交集。
+	RegionId *ReportRegionId `form:"region_id,omitempty" json:"region_id,omitempty"`
+
+	// Limit 最多返回几条，不传即 50。超出范围按边界钳制。
+	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// GetAdminReportsOverviewParams defines parameters for GetAdminReportsOverview.
+type GetAdminReportsOverviewParams struct {
+	// Period 时间窗口，按店铺时区的自然日切（口径见 `ReportWindow`）：
+	// `today` 今天 0 点到此刻 · `yesterday` 昨天 · `last_7_days` 最近 7 个完整自然日（不含今天）·
+	// `last_30_days` 最近 30 个完整自然日（不含今天）· `custom` 自定义（必须同时给
+	// `start_date` 与 `end_date`）。**不传即 `today`**（写在这里而不是 schema 的 `default` 上：
+	// 查询参数的缺省值会被生成器代入，静默改变筛选语义，check_openapi.py 不许）。
+	Period *GetAdminReportsOverviewParamsPeriod `form:"period,omitempty" json:"period,omitempty"`
+
+	// StartDate `period=custom` 时的起始日（含），店铺时区的日期，形如 `2026-09-01`。
+	// 其它 period 下给了也不读。
+	StartDate *ReportStartDate `form:"start_date,omitempty" json:"start_date,omitempty"`
+
+	// EndDate `period=custom` 时的结束日（**含**），店铺时区的日期。起止最多跨 **366 天**
+	// （含首尾，一整个闰年），超出 422 —— 理由见 `ReportWindow`。
+	EndDate *ReportEndDate `form:"end_date,omitempty" json:"end_date,omitempty"`
+
+	// StoreId 只看这一家门店（履约门店）。与调用者的范围取交集，范围外得到空结果而不是 403。
+	StoreId *ReportStoreId `form:"store_id,omitempty" json:"store_id,omitempty"`
+
+	// RegionId 只看此刻挂在这个大区下的门店。与调用者的范围取交集。
+	RegionId *ReportRegionId `form:"region_id,omitempty" json:"region_id,omitempty"`
+
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// GetAdminReportsOverviewParamsPeriod defines parameters for GetAdminReportsOverview.
+type GetAdminReportsOverviewParamsPeriod string
+
+// GetAdminReportsProductsParams defines parameters for GetAdminReportsProducts.
+type GetAdminReportsProductsParams struct {
+	// Period 时间窗口，按店铺时区的自然日切（口径见 `ReportWindow`）：
+	// `today` 今天 0 点到此刻 · `yesterday` 昨天 · `last_7_days` 最近 7 个完整自然日（不含今天）·
+	// `last_30_days` 最近 30 个完整自然日（不含今天）· `custom` 自定义（必须同时给
+	// `start_date` 与 `end_date`）。**不传即 `today`**（写在这里而不是 schema 的 `default` 上：
+	// 查询参数的缺省值会被生成器代入，静默改变筛选语义，check_openapi.py 不许）。
+	Period *GetAdminReportsProductsParamsPeriod `form:"period,omitempty" json:"period,omitempty"`
+
+	// StartDate `period=custom` 时的起始日（含），店铺时区的日期，形如 `2026-09-01`。
+	// 其它 period 下给了也不读。
+	StartDate *ReportStartDate `form:"start_date,omitempty" json:"start_date,omitempty"`
+
+	// EndDate `period=custom` 时的结束日（**含**），店铺时区的日期。起止最多跨 **366 天**
+	// （含首尾，一整个闰年），超出 422 —— 理由见 `ReportWindow`。
+	EndDate *ReportEndDate `form:"end_date,omitempty" json:"end_date,omitempty"`
+
+	// StoreId 只看这一家门店（履约门店）。与调用者的范围取交集，范围外得到空结果而不是 403。
+	StoreId *ReportStoreId `form:"store_id,omitempty" json:"store_id,omitempty"`
+
+	// RegionId 只看此刻挂在这个大区下的门店。与调用者的范围取交集。
+	RegionId *ReportRegionId `form:"region_id,omitempty" json:"region_id,omitempty"`
+
+	// SortBy 按什么排：`amount` 销售额、`quantity` 销量。不传或不认识的值按 `amount`。
+	SortBy *GetAdminReportsProductsParamsSortBy `form:"sort_by,omitempty" json:"sort_by,omitempty"`
+
+	// CategoryId 只看这个类目（含子孙类目）下的商品。类目不存在或已删除时结果为空。
+	CategoryId *int64 `form:"category_id,omitempty" json:"category_id,omitempty"`
+
+	// Limit Top N 的 N，不传即 10。超出范围按边界钳制。
+	Limit *ReportLimit `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// GetAdminReportsProductsParamsPeriod defines parameters for GetAdminReportsProducts.
+type GetAdminReportsProductsParamsPeriod string
+
+// GetAdminReportsProductsParamsSortBy defines parameters for GetAdminReportsProducts.
+type GetAdminReportsProductsParamsSortBy string
+
+// GetAdminReportsSearchParams defines parameters for GetAdminReportsSearch.
+type GetAdminReportsSearchParams struct {
+	// Period 时间窗口，按店铺时区的自然日切（口径见 `ReportWindow`）：
+	// `today` 今天 0 点到此刻 · `yesterday` 昨天 · `last_7_days` 最近 7 个完整自然日（不含今天）·
+	// `last_30_days` 最近 30 个完整自然日（不含今天）· `custom` 自定义（必须同时给
+	// `start_date` 与 `end_date`）。**不传即 `today`**（写在这里而不是 schema 的 `default` 上：
+	// 查询参数的缺省值会被生成器代入，静默改变筛选语义，check_openapi.py 不许）。
+	Period *GetAdminReportsSearchParamsPeriod `form:"period,omitempty" json:"period,omitempty"`
+
+	// StartDate `period=custom` 时的起始日（含），店铺时区的日期，形如 `2026-09-01`。
+	// 其它 period 下给了也不读。
+	StartDate *ReportStartDate `form:"start_date,omitempty" json:"start_date,omitempty"`
+
+	// EndDate `period=custom` 时的结束日（**含**），店铺时区的日期。起止最多跨 **366 天**
+	// （含首尾，一整个闰年），超出 422 —— 理由见 `ReportWindow`。
+	EndDate *ReportEndDate `form:"end_date,omitempty" json:"end_date,omitempty"`
+
+	// Limit Top N 的 N，不传即 10。超出范围按边界钳制。
+	Limit *ReportLimit `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// GetAdminReportsSearchParamsPeriod defines parameters for GetAdminReportsSearch.
+type GetAdminReportsSearchParamsPeriod string
+
+// GetAdminReportsStoresParams defines parameters for GetAdminReportsStores.
+type GetAdminReportsStoresParams struct {
+	// Period 时间窗口，按店铺时区的自然日切（口径见 `ReportWindow`）：
+	// `today` 今天 0 点到此刻 · `yesterday` 昨天 · `last_7_days` 最近 7 个完整自然日（不含今天）·
+	// `last_30_days` 最近 30 个完整自然日（不含今天）· `custom` 自定义（必须同时给
+	// `start_date` 与 `end_date`）。**不传即 `today`**（写在这里而不是 schema 的 `default` 上：
+	// 查询参数的缺省值会被生成器代入，静默改变筛选语义，check_openapi.py 不许）。
+	Period *GetAdminReportsStoresParamsPeriod `form:"period,omitempty" json:"period,omitempty"`
+
+	// StartDate `period=custom` 时的起始日（含），店铺时区的日期，形如 `2026-09-01`。
+	// 其它 period 下给了也不读。
+	StartDate *ReportStartDate `form:"start_date,omitempty" json:"start_date,omitempty"`
+
+	// EndDate `period=custom` 时的结束日（**含**），店铺时区的日期。起止最多跨 **366 天**
+	// （含首尾，一整个闰年），超出 422 —— 理由见 `ReportWindow`。
+	EndDate *ReportEndDate `form:"end_date,omitempty" json:"end_date,omitempty"`
+
+	// RegionId 只看此刻挂在这个大区下的门店。与调用者的范围取交集。
+	RegionId *ReportRegionId `form:"region_id,omitempty" json:"region_id,omitempty"`
+
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// GetAdminReportsStoresParamsPeriod defines parameters for GetAdminReportsStores.
+type GetAdminReportsStoresParamsPeriod string
+
+// GetAdminReportsTrendParams defines parameters for GetAdminReportsTrend.
+type GetAdminReportsTrendParams struct {
+	// Period 时间窗口，按店铺时区的自然日切（口径见 `ReportWindow`）：
+	// `today` 今天 0 点到此刻 · `yesterday` 昨天 · `last_7_days` 最近 7 个完整自然日（不含今天）·
+	// `last_30_days` 最近 30 个完整自然日（不含今天）· `custom` 自定义（必须同时给
+	// `start_date` 与 `end_date`）。**不传即 `today`**（写在这里而不是 schema 的 `default` 上：
+	// 查询参数的缺省值会被生成器代入，静默改变筛选语义，check_openapi.py 不许）。
+	Period *GetAdminReportsTrendParamsPeriod `form:"period,omitempty" json:"period,omitempty"`
+
+	// StartDate `period=custom` 时的起始日（含），店铺时区的日期，形如 `2026-09-01`。
+	// 其它 period 下给了也不读。
+	StartDate *ReportStartDate `form:"start_date,omitempty" json:"start_date,omitempty"`
+
+	// EndDate `period=custom` 时的结束日（**含**），店铺时区的日期。起止最多跨 **366 天**
+	// （含首尾，一整个闰年），超出 422 —— 理由见 `ReportWindow`。
+	EndDate *ReportEndDate `form:"end_date,omitempty" json:"end_date,omitempty"`
+
+	// StoreId 只看这一家门店（履约门店）。与调用者的范围取交集，范围外得到空结果而不是 403。
+	StoreId *ReportStoreId `form:"store_id,omitempty" json:"store_id,omitempty"`
+
+	// RegionId 只看此刻挂在这个大区下的门店。与调用者的范围取交集。
+	RegionId *ReportRegionId `form:"region_id,omitempty" json:"region_id,omitempty"`
+
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// GetAdminReportsTrendParamsPeriod defines parameters for GetAdminReportsTrend.
+type GetAdminReportsTrendParamsPeriod string
+
 // DeleteAdminSkusSkuIdParams defines parameters for DeleteAdminSkusSkuId.
 type DeleteAdminSkusSkuIdParams struct {
 	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
@@ -7185,11 +8624,15 @@ type PatchAdminStaffStaffIdJSONBody struct {
 	// | 能做什么 | 1 | 2 | 3 | 4 |
 	// |---|:-:|:-:|:-:|:-:|
 	// | 商品、SKU、基准价、类目、上传、批量导入 | ✅ | ✅ | 只读 | 只读 |
+	// | 运费模板：全店模板（建、改、删、设默认）；商品挂哪个模板随商品 | ✅ | ✅ | 只读 | 只读 |
+	// | 运费模板：门店模板（建、改、删） | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
 	// | 大区：改、删、大区价、大区上下架 | ✅ | ✅ | 只限自己的大区 | ❌ |
 	// | 大区：建 | ✅ | ✅ | ❌ | ❌ |
 	// | 门店：建、改、删、围栏 | ✅ | ✅ | 只限本大区的门店（换大区时新旧都得在范围内） | ❌ |
 	// | 门店价、门店上下架、门店库存 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
 	// | 订单与售后：订单 / 退款单的列表与详情、发货、退款审核、确认收到退货 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
+	// | 经营报表：概览、趋势、商品排行、门店对比、库存预警 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
+	// | 经营报表：搜索概况（检索日志没有门店维度） | ✅ | ✅ | ❌ | ❌ |
 	// | 设默认门店（含建店时 is_default） | ✅ | ❌ | ❌ | ❌ |
 	// | 员工管理 | ✅ | ❌ | 只能加、改本大区门店的门店管理员 | ❌ |
 	// | 开店 | 仅平台级管理员 | | | |
@@ -7801,6 +9244,15 @@ type GetCartParams struct {
 	//
 	// **刻意没有 default**：理由同 `GET /products`。
 	StoreId *CartStoreId `form:"store_id,omitempty" json:"store_id,omitempty"`
+
+	// AddressId 按哪个收货地址算运费（`Cart.freight`）与「送不送得到」（`CartItem.undeliverable`）。
+	// **每一条返回 `Cart` 的购物车接口都收它**，与 `store_id` 同一个道理：
+	// 客户端应当传结算页选中的那一个，于是购物车显示的运费与 `/orders/preview` 的一致。
+	//
+	// 不传时用这个买家的**默认地址**；也没有默认地址时 `freight` 与 `undeliverable`
+	// 整个不出现（没有地址就没有运费可算，不是「包邮」）。
+	// 指名一个不存在或不属于你的地址返回 422，不静默改用默认地址。
+	AddressId *CartAddressId `form:"address_id,omitempty" json:"address_id,omitempty"`
 }
 
 // PostCartItemsJSONBody defines parameters for PostCartItems.
@@ -7823,6 +9275,15 @@ type PostCartItemsParams struct {
 	//
 	// **刻意没有 default**：理由同 `GET /products`。
 	StoreId *CartStoreId `form:"store_id,omitempty" json:"store_id,omitempty"`
+
+	// AddressId 按哪个收货地址算运费（`Cart.freight`）与「送不送得到」（`CartItem.undeliverable`）。
+	// **每一条返回 `Cart` 的购物车接口都收它**，与 `store_id` 同一个道理：
+	// 客户端应当传结算页选中的那一个，于是购物车显示的运费与 `/orders/preview` 的一致。
+	//
+	// 不传时用这个买家的**默认地址**；也没有默认地址时 `freight` 与 `undeliverable`
+	// 整个不出现（没有地址就没有运费可算，不是「包邮」）。
+	// 指名一个不存在或不属于你的地址返回 422，不静默改用默认地址。
+	AddressId *CartAddressId `form:"address_id,omitempty" json:"address_id,omitempty"`
 
 	// IdempotencyKey 客户端生成的 UUID。幂等作用域为 `(接口 scope, user_id, key)`，
 	// 有效期 24h，过期后同一 key 可复用（见数据模型文档 §11）。
@@ -7864,6 +9325,15 @@ type PostCartItemsBatchDeleteParams struct {
 	// **刻意没有 default**：理由同 `GET /products`。
 	StoreId *CartStoreId `form:"store_id,omitempty" json:"store_id,omitempty"`
 
+	// AddressId 按哪个收货地址算运费（`Cart.freight`）与「送不送得到」（`CartItem.undeliverable`）。
+	// **每一条返回 `Cart` 的购物车接口都收它**，与 `store_id` 同一个道理：
+	// 客户端应当传结算页选中的那一个，于是购物车显示的运费与 `/orders/preview` 的一致。
+	//
+	// 不传时用这个买家的**默认地址**；也没有默认地址时 `freight` 与 `undeliverable`
+	// 整个不出现（没有地址就没有运费可算，不是「包邮」）。
+	// 指名一个不存在或不属于你的地址返回 422，不静默改用默认地址。
+	AddressId *CartAddressId `form:"address_id,omitempty" json:"address_id,omitempty"`
+
 	// IdempotencyKey 客户端生成的 UUID。幂等作用域为 `(接口 scope, user_id, key)`，
 	// 有效期 24h，过期后同一 key 可复用（见数据模型文档 §11）。
 	//
@@ -7901,6 +9371,15 @@ type PatchCartItemsItemIdParams struct {
 	//
 	// **刻意没有 default**：理由同 `GET /products`。
 	StoreId *CartStoreId `form:"store_id,omitempty" json:"store_id,omitempty"`
+
+	// AddressId 按哪个收货地址算运费（`Cart.freight`）与「送不送得到」（`CartItem.undeliverable`）。
+	// **每一条返回 `Cart` 的购物车接口都收它**，与 `store_id` 同一个道理：
+	// 客户端应当传结算页选中的那一个，于是购物车显示的运费与 `/orders/preview` 的一致。
+	//
+	// 不传时用这个买家的**默认地址**；也没有默认地址时 `freight` 与 `undeliverable`
+	// 整个不出现（没有地址就没有运费可算，不是「包邮」）。
+	// 指名一个不存在或不属于你的地址返回 422，不静默改用默认地址。
+	AddressId *CartAddressId `form:"address_id,omitempty" json:"address_id,omitempty"`
 }
 
 // PutCartSelectionJSONBody defines parameters for PutCartSelection.
@@ -7924,6 +9403,15 @@ type PutCartSelectionParams struct {
 	//
 	// **刻意没有 default**：理由同 `GET /products`。
 	StoreId *CartStoreId `form:"store_id,omitempty" json:"store_id,omitempty"`
+
+	// AddressId 按哪个收货地址算运费（`Cart.freight`）与「送不送得到」（`CartItem.undeliverable`）。
+	// **每一条返回 `Cart` 的购物车接口都收它**，与 `store_id` 同一个道理：
+	// 客户端应当传结算页选中的那一个，于是购物车显示的运费与 `/orders/preview` 的一致。
+	//
+	// 不传时用这个买家的**默认地址**；也没有默认地址时 `freight` 与 `undeliverable`
+	// 整个不出现（没有地址就没有运费可算，不是「包邮」）。
+	// 指名一个不存在或不属于你的地址返回 422，不静默改用默认地址。
+	AddressId *CartAddressId `form:"address_id,omitempty" json:"address_id,omitempty"`
 }
 
 // GetCouponTemplatesParams defines parameters for GetCouponTemplates.
@@ -8354,6 +9842,12 @@ type PostAdminCouponTemplatesTemplateIdGrantsJSONRequestBody = CouponGrantReques
 
 // PutAdminCouponTemplatesTemplateIdScopesJSONRequestBody defines body for PutAdminCouponTemplatesTemplateIdScopes for application/json ContentType.
 type PutAdminCouponTemplatesTemplateIdScopesJSONRequestBody = CouponScopesSetRequest
+
+// PostAdminFreightTemplatesJSONRequestBody defines body for PostAdminFreightTemplates for application/json ContentType.
+type PostAdminFreightTemplatesJSONRequestBody = FreightTemplateInput
+
+// PutAdminFreightTemplatesTemplateIdJSONRequestBody defines body for PutAdminFreightTemplatesTemplateId for application/json ContentType.
+type PutAdminFreightTemplatesTemplateIdJSONRequestBody = FreightTemplateInput
 
 // PostAdminMerchantsJSONRequestBody defines body for PostAdminMerchants for application/json ContentType.
 type PostAdminMerchantsJSONRequestBody = MerchantCreateRequest

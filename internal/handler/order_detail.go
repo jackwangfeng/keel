@@ -81,18 +81,21 @@ func (h *OrderHandler) Detail(c *gin.Context) {
 		// 正是上面那段注释预言的症状：契约里可选，漏了 JSON 里就整个不出现。
 		UserCouponId: base.UserCouponId,
 		// 券名快照（00029）。与上面那一行同一个教训：apiOrder 里加了，这里就得搬。
-		CouponName: base.CouponName,
-		// 活动（00044）。同上：apiOrder 里加了，这里就得搬。
-		PromotionDiscountCents: base.PromotionDiscountCents,
-		Promotions:             base.Promotions,
-		PaidCents:              base.PaidCents,
-		RefundedCents:          base.RefundedCents,
-		FreightCents:           base.FreightCents,
+		CouponName:    base.CouponName,
+		PaidCents:     base.PaidCents,
+		RefundedCents: base.RefundedCents,
+		FreightCents:  base.FreightCents,
+		// 包邮券抵掉的运费（00056）。与上面几行同一个教训：apiOrder 里加了，这里就得搬。
+		FreightDiscountCents: base.FreightDiscountCents,
+		// 下单那一刻的运费明细快照；00056 之前的订单没有，整个不出现。
+		Freight:                apiFreightBreakdownPtr(d.Freight),
 		ExpireAt:               base.ExpireAt,
 		CreatedAt:              base.CreatedAt,
 		PaidAt:                 base.PaidAt,
 		ShippedAt:              base.ShippedAt,
 		FinishedAt:             base.FinishedAt,
+		PromotionDiscountCents: base.PromotionDiscountCents,
+		Promotions:             base.Promotions,
 
 		// 履约门店。**store_id 在契约里是必返**（库里 NOT NULL），
 		// region_id 与 store 都是可选。三个一起给：store_id 让客户端能拿它

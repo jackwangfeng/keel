@@ -51,8 +51,12 @@ function faceText(t: AdminCouponTemplate): string {
         }
         case 3:
             return `立减 ${yuan(t.discount_cents)}`;
-        default:
-            return "包邮（本期不可用）";
+        default: {
+            // 包邮券（00056）：抵运费，封顶 0 = 运费全免。
+            const parts = [t.max_discount_cents > 0 ? `运费最多抵 ${yuan(t.max_discount_cents)}` : "包邮（运费全免）"];
+            if (t.threshold_cents > 0) parts.push(`满 ${yuan(t.threshold_cents)} 可用`);
+            return parts.join("，");
+        }
     }
 }
 

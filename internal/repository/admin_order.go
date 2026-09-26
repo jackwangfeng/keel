@@ -157,6 +157,7 @@ func adminOrderFromRow(r db.AdminGetOrderByNoRow) AdminOrder {
 			Status:                 r.Status,
 			GoodsAmountCents:       r.GoodsAmountCents,
 			FreightCents:           r.FreightCents,
+			FreightDiscountCents:   r.FreightDiscountCents,
 			DiscountCents:          r.DiscountCents,
 			PayableCents:           r.PayableCents,
 			PaidCents:              r.PaidCents,

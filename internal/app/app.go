@@ -559,6 +559,16 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	v1.GET("/admin/stores/:store_id/inventories", staffAuth, st.ListStoreInventories)
 	v1.PUT("/admin/stores/:store_id/skus/:sku_id/inventory", staffAuth, st.SetStoreInventory)
 
+	// 运费模板（00055，契约 /admin/freight-templates 那一段）。每一条都挂 staffAuth；
+	// 角色检查在业务层（全店模板 requireMerchantWide、门店模板同门店价），
+	// 见 service/admin_freight.go 的文件头。
+	fr := handler.NewAdminFreightHandler(service.NewAdminFreightService(repo))
+	v1.GET("/admin/freight-templates", staffAuth, fr.List)
+	v1.POST("/admin/freight-templates", staffAuth, fr.Create)
+	v1.GET("/admin/freight-templates/:template_id", staffAuth, fr.Detail)
+	v1.PUT("/admin/freight-templates/:template_id", staffAuth, fr.Replace)
+	v1.DELETE("/admin/freight-templates/:template_id", staffAuth, fr.Delete)
+
 	// 券管理（契约 /admin/coupon-templates 那一段）。角色检查在业务层：
 	// 本期只放商家级的管理员与操作员（role 1、2），见 service/admin_coupon.go 的文件头。
 	// 订单后半程：发货（00033）、退款审核与确认收到退货（00034）。
@@ -579,6 +589,17 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	v1.GET("/admin/notifications/unread-count", staffAuth, nh.UnreadForStaff)
 	v1.POST("/admin/notifications/read-all", staffAuth, nh.MarkAllReadForStaff)
 	v1.POST("/admin/notifications/:notification_id/read", staffAuth, nh.MarkReadForStaff)
+
+	// 经营报表（契约 Report tag，迁移 00057 的索引）。六条都是只读聚合。
+	// 范围与后台订单列表同一个判据（service/authz.go 的 orderListScope），
+	// 搜索概况只放全店范围的人（检索日志没有门店维度）。判据全在 service/report.go。
+	rpt := handler.NewAdminReportHandler(service.NewReportService(repo))
+	v1.GET("/admin/reports/overview", staffAuth, rpt.Overview)
+	v1.GET("/admin/reports/trend", staffAuth, rpt.Trend)
+	v1.GET("/admin/reports/products", staffAuth, rpt.Products)
+	v1.GET("/admin/reports/stores", staffAuth, rpt.Stores)
+	v1.GET("/admin/reports/inventory-alerts", staffAuth, rpt.InventoryAlerts)
+	v1.GET("/admin/reports/search", staffAuth, rpt.Search)
 
 	cpa := handler.NewAdminCouponHandler(service.NewAdminCouponService(repo))
 	v1.GET("/admin/coupon-templates", staffAuth, cpa.List)

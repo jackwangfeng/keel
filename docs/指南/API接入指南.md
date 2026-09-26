@@ -116,6 +116,7 @@ key 的有效期是 24 小时，作用域是「接口 + 用户 + key」。哪些
 | 409 | `idempotency-key-in-flight` | 同一个幂等 key 正在处理 |
 | 409 | `promotion-limit-exceeded` / `promotion-sold-out` | 超出活动每人限购 / 秒杀配额在试算之后被抢光 |
 | 422 | `idempotency-key-reused` / `compliance-rejected` | 幂等 key 被复用 / 商品文案命中违禁词 |
+| 422 | `region-not-deliverable` | 试算 / 下单时有商品送不到这个收货地址，`undeliverable_items` 逐行给出原因 |
 | 429 | — | 触发限流（目前只有 `/search` 按 IP 限流） |
 | 501 | — | 这条路依赖的外部服务没接（短信、微信、邮件），明确告诉你没开 |
 
@@ -127,7 +128,8 @@ key 的有效期是 24 小时，作用域是「接口 + 用户 + key」。哪些
 
 1. `GET /stores/resolve?lat=&lng=` —— 按买家位置解析服务门店。不带坐标时回落到默认门店。
    门店决定了价格和库存。
-2. `POST /orders/preview` —— 试算：价格、可用的券、优惠分摊。不落库，可以反复调。
+2. `POST /orders/preview` —— 试算：价格、运费、可用的券、优惠分摊。不落库，可以反复调。
+   运费按请求里的 `address_id` 算（见下面「运费」）。
 3. `POST /orders` —— 下单，**必须带 `Idempotency-Key`**。扣库存、锁券、建订单三步由分布式事务
    协调器（dtmrs 的 SAGA）编排，任何一步失败，已经执行的步骤都会被补偿回去。
 4. `POST /orders/{order_no}/payments` —— 发起支付，返回渠道需要的支付参数。
@@ -168,6 +170,31 @@ key 的有效期是 24 小时，作用域是「接口 + 用户 + key」。哪些
 
 购物车（`/cart`）按门店计价，请求时带上和商品页、下单页相同的 `store_id`。
 购物车金额和试算用的是同一条价格查询，两边逐分一致。
+
+### 运费
+
+运费由商家在后台配的**运费模板**决定（按件或按重量、按省设价、满额 / 满件包邮、指定地区不配送），
+服务端按收货地址算好返回，客户端**不要自己算**：
+
+- `POST /orders/preview` 必返 `freight_cents`（运费）、`freight_discount_cents`（包邮券抵掉的运费）
+  和 `freight` 明细（按模板分组：命中哪条规则、计费量、为什么包邮）。
+  **应付 = `goods_amount_cents` + `freight_cents` − `discount_cents`**，`discount_cents` 已经包含
+  包邮券抵掉的运费。商家没配任何模板时运费是 0，明细里 `free_reason = no_template`。
+- 计价顺序固定：商品原价 → 营销活动 → 优惠券（门槛按活动后金额判）→ 运费（**满额包邮按优惠后
+  应付商品金额判**）→ 包邮券抵运费。所以「满 99 包邮」的单用了一张满减券之后可能不再包邮，
+  试算会如实算出来 —— 结算页照着 `freight_cents` 显示即可。
+- **送不到**：收货省在模板的不配送地区里时，试算与下单都回 422 `region-not-deliverable`，
+  `undeliverable_items` 是 `[{sku_id, reason_code, reason}]`，把这几行标出来让买家去掉或换地址。
+  `reason_code = province_unknown` 表示地址归不到省（没有 `region_code`、省名也认不出），
+  请引导买家补全地址的省份。
+- **包邮券**（`coupon_type = 4`）抵运费、最多抵到 0；这一单运费为 0 时用不了（409 `coupon-not-applicable`）。
+  `POST /coupons/applicable` 要带 `address_id` 才会列出包邮券。
+- **购物车**：`GET /cart`（以及另外四条返回 `Cart` 的接口）收可选的 `address_id`，不传用买家的默认地址；
+  有地址时返回 `freight`（预估运费：按已勾选、送得到的行算，不含券）与 `address_id`，
+  送不到的行带 `undeliverable`。没有地址时这两个字段整个不出现（不是「包邮」）。最终以试算为准。
+- 订单上：`freight_cents` 是下单时算好的运费，`freight_discount_cents` 是包邮券抵掉的部分，
+  订单详情的 `freight` 是下单那一刻的规则快照（之后商家改模板不影响它）。
+  **实收运费 = `freight_cents − freight_discount_cents`**，售后退运费的上限按它算。
 
 ---
 
@@ -251,6 +278,45 @@ curl -s -H "Authorization: Bearer $STAFF_TOKEN" \
   `already_imported: true`。
 - 导入的商品一律是**草稿**（`status = 0`）；图片 URL 只出现在回执的 `image_urls` 里，不会下载。
 - 违禁词命中在 `rows[].violations`（与发布时拒绝的 `errors[]` 同一个形状），只提示不阻断。
+
+---
+
+## 经营报表
+
+六条只读接口，都在 `/admin/reports/` 下，要后台会话（`Authorization: Bearer <会话 token>`），
+平台级会话同样可以带 `X-Keel-Merchant` 切店。口径的唯一真相源是契约里的 `ReportWindow`
+与 `ReportMetrics`，这里只列要点：
+
+| 接口 | 用途 | 特有参数 |
+|---|---|---|
+| `GET /admin/reports/overview` | 指标卡：本期与上一周期的 `ReportMetrics` | — |
+| `GET /admin/reports/trend` | 按小时 / 按天的支付、退款、净销售额、订单数 | — |
+| `GET /admin/reports/products` | 商品排行 Top N | `sort_by`（`amount` / `quantity`）、`category_id`（含子孙）、`limit`（1–50） |
+| `GET /admin/reports/stores` | 门店与大区对比 | — |
+| `GET /admin/reports/inventory-alerts` | `available_qty <= warning_qty` 的门店 SKU | `limit`（1–200），没有时间参数 |
+| `GET /admin/reports/search` | 搜索次数、无结果率、热门词、无结果词 | `limit`（1–50） |
+
+**时间窗口**（前五条里除库存预警外都收）：`period` = `today`（默认）/ `yesterday` /
+`last_7_days` / `last_30_days` / `custom`；`custom` 必须同时给 `start_date` 与 `end_date`
+（`YYYY-MM-DD`，**都含**），最多跨 **366 天**。窗口写错（不认识的 `period`、缺日期、起晚于止、
+超过 366 天）一律 `422 invalid-request`，不会悄悄回退成今天。
+
+- **时区**：按店铺时区（`shop_settings.timezone`，没有就是 `Asia/Shanghai`）切自然日与整点，
+  响应的 `window.timezone` 回显实际用的那一个。`window.current` / `window.previous` 给出
+  半开区间 `[start_at, end_at)`（UTC）和店铺时区里的 `start_date` / `end_date`（都含）。
+- **`last_7_days` / `last_30_days` 不含今天**；`today` 的上一周期是**昨天的同一时段**。
+- **归属时间**：销售（支付金额、订单数、买家数、商品排行）按 `orders.paid_at`；退款按
+  `refunds.refunded_at`（只算已到账的 `40`）。已支付的订单指状态 `20/30/40/50/60`，
+  草稿 `0`、待支付 `10`、已关闭 `90` 不计。
+- **金额**一律整数分；`refund_rate`、`zero_result_rate` 在分母为 0 时是 `null`（不是 0）。
+- **范围**：与 `GET /admin/orders` 同一个判据，按订单的履约门店收窄；`store_id` / `region_id`
+  与范围取交集，越出范围得到全零而不是 403。搜索概况只放管理员、操作员，其他角色
+  `403 role-forbidden`（检索日志没有门店维度）。
+
+```bash
+curl -H "Authorization: Bearer $STAFF_TOKEN" \
+  "http://localhost:8080/api/v1/admin/reports/overview?period=custom&start_date=2026-09-01&end_date=2026-09-26"
+```
 
 ---
 

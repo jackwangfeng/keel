@@ -32,6 +32,18 @@ type CartHandler struct{ svc *service.CartService }
 
 func NewCartHandler(s *service.CartService) *CartHandler { return &CartHandler{svc: s} }
 
+// cartAddressID 读 address_id（契约 CartAddressId，00056）：按哪个收货地址算运费。
+// 解析不出正整数就按没传处理（用默认地址）；真传了一个不存在的地址由 service 报
+// ErrAddressNotFound（422），不静默改用默认地址。
+func cartAddressID(c *gin.Context) *int64 {
+	if raw := c.Query("address_id"); raw != "" {
+		if v, err := strconv.ParseInt(raw, 10, 64); err == nil && v > 0 {
+			return &v
+		}
+	}
+	return nil
+}
+
 // cartStoreID 读 store_id。解析规则与 GET /products 逐字一致：解析不出正整数就按
 // 没传处理（走回落链）；真传了一个不存在的门店由 service 报 ErrStoreNotFound（422）。
 func cartStoreID(c *gin.Context) *int64 {
@@ -45,7 +57,7 @@ func cartStoreID(c *gin.Context) *int64 {
 
 // Get 实现 GET /api/v1/cart。
 func (h *CartHandler) Get(c *gin.Context) {
-	out, err := h.svc.Get(c.Request.Context(), cartStoreID(c))
+	out, err := h.svc.Get(c.Request.Context(), cartStoreID(c), cartAddressID(c))
 	if err != nil {
 		writeCartError(c, err)
 		return
@@ -65,7 +77,7 @@ func (h *CartHandler) AddItem(c *gin.Context) {
 		return
 	}
 	out, replayed, err := h.svc.Add(c.Request.Context(), service.AddRequest{
-		StoreID: cartStoreID(c), SKUID: raw.SkuId, Quantity: int32(raw.Quantity),
+		StoreID: cartStoreID(c), AddressID: cartAddressID(c), SKUID: raw.SkuId, Quantity: int32(raw.Quantity),
 	}, idemKeyOf(c))
 	if err != nil {
 		writeCartError(c, err)
@@ -94,7 +106,7 @@ func (h *CartHandler) Select(c *gin.Context) {
 		problem.Write(c, http.StatusUnprocessableEntity, problem.TypeInvalidRequest, "selected 是必填字段")
 		return
 	}
-	out, err := h.svc.Select(c.Request.Context(), cartStoreID(c), raw.Selected, raw.ItemIds)
+	out, err := h.svc.Select(c.Request.Context(), cartStoreID(c), cartAddressID(c), raw.Selected, raw.ItemIds)
 	if err != nil {
 		writeCartError(c, err)
 		return
@@ -109,7 +121,7 @@ func (h *CartHandler) BatchDelete(c *gin.Context) {
 		return
 	}
 	out, replayed, err := h.svc.BatchDelete(c.Request.Context(), service.BatchDeleteRequest{
-		StoreID: cartStoreID(c), ItemIDs: raw.ItemIds, Selected: raw.Selected,
+		StoreID: cartStoreID(c), AddressID: cartAddressID(c), ItemIDs: raw.ItemIds, Selected: raw.Selected,
 	}, idemKeyOf(c))
 	if err != nil {
 		writeCartError(c, err)
@@ -129,7 +141,7 @@ func (h *CartHandler) PatchItem(c *gin.Context) {
 	if !bindJSON(c, &raw) {
 		return
 	}
-	req := service.PatchRequest{StoreID: cartStoreID(c), ItemID: itemID, Selected: raw.Selected}
+	req := service.PatchRequest{StoreID: cartStoreID(c), AddressID: cartAddressID(c), ItemID: itemID, Selected: raw.Selected}
 	if raw.Quantity != nil {
 		if *raw.Quantity < 1 || *raw.Quantity > 999 {
 			problem.Write(c, http.StatusUnprocessableEntity, problem.TypeInvalidRequest, "quantity 必须在 [1, 999] 内")
@@ -182,16 +194,22 @@ func apiCart(v service.CartView) api.Cart {
 		if spec, err := service.DecodeSpecValues(ln.SpecValues); err == nil && spec != nil {
 			it.SpecValues = &spec
 		}
+		if ln.Undeliverable != nil {
+			u := apiUndeliverable(*ln.Undeliverable)
+			it.Undeliverable = &u
+		}
 		items = append(items, it)
 	}
 	return api.Cart{
 		Items:              items,
 		TotalCents:         api.Money(v.TotalCents),
 		SelectedTotalCents: api.Money(v.SelectedTotalCents),
-		// 已勾选、可买的行上满减满折的结果（与试算同一份计算、同一段渲染）。
+		Store:              apiStoreContext(v.Store),
+		// 运费（00056）：没有地址时两者都是 nil，字段整个不出现 —— 那不是「包邮」。
+		AddressId:              v.AddressID,
+		Freight:                apiFreightBreakdownPtr(v.Freight),
 		PromotionDiscountCents: api.Money(v.PromotionDiscountCents),
 		Promotions:             apiPromotionHits(v.Promotions),
-		Store:                  apiStoreContext(v.Store),
 	}
 }
 

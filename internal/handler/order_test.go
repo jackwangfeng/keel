@@ -328,54 +328,6 @@ func TestCouponIsRejectedNotSilentlyIgnored(t *testing.T) {
 	}
 }
 
-// 运费字段**整个不出现**，而不是 0。
-//
-// 「算出来是 0」意味着这单包邮，「没算」意味着这个数还会变 —— 对客户端是两件
-// 不同的事，而契约里 freight_cents 是可选字段，所以「没算」的诚实形状就是缺席。
-//
-// 这条测试是 contract_test.go 里 NotYetImplementedResponse 那笔挂账的反方向：
-// 真的实现了运费，这里会红。
-func TestFreightIsAbsentNotZero(t *testing.T) {
-	tok := tokenA(t)
-	addr := addressIDOf(t, "shop-a", seedAddressA)
-	sku, _ := anySKUWithStock(t, "shop-a", 2)
-	body := orderBody(t, "shop-a", addr, sku, 1, "")
-
-	check := func(t *testing.T, contractPath string, raw []byte) {
-		t.Helper()
-		var m map[string]json.RawMessage
-		if err := json.Unmarshal(raw, &m); err != nil {
-			t.Fatalf("响应不是 JSON 对象: %v\n%s", err, raw)
-		}
-		if _, present := m["freight_cents"]; present {
-			t.Fatalf("响应里出现了 freight_cents（%s）—— 运费真的实现了？"+
-				"那就把 contract_test.go 里 %s 的 NotYetImplementedResponse 一行删掉",
-				m["freight_cents"], contractPath)
-		}
-		// 阳性对照：别的金额字段必须在。整个响应体是空对象的话，
-		// 「freight_cents 不在里面」是句废话。
-		if _, ok := m["payable_cents"]; !ok {
-			t.Fatalf("响应里连 payable_cents 都没有 —— 这条断言没有区分力：%s", raw)
-		}
-		r := routeOf(t, http.MethodPost, contractPath)
-		if _, listed := r.NotYetImplementedResponse["freight_cents"]; !listed {
-			t.Fatalf("%s 的 NotYetImplementedResponse 里没有 freight_cents", contractPath)
-		}
-	}
-
-	pw := previewOrder(t, hostA, body, tok)
-	if pw.Code != http.StatusOK {
-		t.Fatalf("试算失败：%d %s", pw.Code, pw.Body.String())
-	}
-	check(t, "/orders/preview", pw.Body.Bytes())
-
-	cw := createOrder(t, hostA, body, tok, "freight-"+uniqueKey())
-	if cw.Code != http.StatusCreated {
-		t.Fatalf("下单失败：%d %s", cw.Code, cw.Body.String())
-	}
-	check(t, "/orders", cw.Body.Bytes())
-}
-
 // 「这家店没有这一行库存」≡「可售 0」，报 409 缺货 —— 而**不是**「本店不卖」。
 //
 // ===========================================================================

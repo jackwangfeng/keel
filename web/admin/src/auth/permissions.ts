@@ -74,6 +74,11 @@ export const can = {
      * 门店调过大区的话会判错，但判错的后果只是按钮置灰与否，服务端会重新判。
      */
     handleOrder: (s: StoreRef): boolean => can.operateStore(s),
+    /**
+     * 运费模板（契约 StaffRole 矩阵「运费模板」两行）：全店模板同商品目录（全店范围），
+     * 门店模板同门店价（本大区 / 自己的店）。传 null 表示全店模板。
+     */
+    editFreight: (store: StoreRef | null): boolean => (store === null ? merchantWide() : can.operateStore(store)),
     /** 设默认门店：只有管理员。 */
     setDefaultStore: (): boolean => role() === ROLE.admin,
     /** 加 / 改员工。 */

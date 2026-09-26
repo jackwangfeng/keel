@@ -14,7 +14,8 @@ const routes: RouteRecordRaw[] = [
         path: "/",
         component: () => import("../layouts/MainLayout.vue"),
         children: [
-            { path: "", redirect: { name: "products" } },
+            // 首页是经营概览（src/router/modules/overview.ts）。
+            { path: "", redirect: { name: "overview" } },
             // 各分区的路由在这里汇总。加一块不需要动这个文件。
             ...sections.flatMap((s) => s.routes),
         ],

@@ -167,7 +167,12 @@ If 8081 is taken: `KEEL_CONSOLE_PORT=18081 docker compose up -d --build`.
 > and confirm returned goods, plus a **to-do bell** in the top bar (new paid
 > orders, refunds awaiting review, returns shipped back, low stock — narrowed to
 > the staff member's store scope, read state kept per person, each item jumps
-> straight to the order, refund or store stock it is about).
+> straight to the order, refund or store stock it is about), and the **business
+> overview** dashboard on the home page: net sales (paid minus refunded), orders,
+> paying buyers, average order value and refund rate against the previous period,
+> an hourly / daily trend line, top products, store and region comparison,
+> low-stock alerts and a search summary (top queries and zero-result queries) —
+> fixed definitions, days cut in the shop's time zone, scoped by role, no AI involved.
 
 For the multi-merchant shape, where the `Host` header picks the shop:
 `docker compose -f compose.yaml -f compose.multi.yaml up -d --build`.
@@ -245,8 +250,6 @@ are not there yet, and are listed so that nothing above reads as if it ships:
   outbound-channel interface and delivery log for WeChat subscribe messages,
   SMS and e-mail are in place, but no real channel is wired up — every
   delivery is recorded as "not configured, skipped"
-- **shipping fees.** There are none, which is why free-shipping coupons cannot
-  be created yet
 - **real payment channels.** Payments run in a sandbox whose callback path is
   the real one (signature check, amount check, de-duplication), but no WeChat
   Pay or Alipay merchant account is wired in
@@ -259,12 +262,16 @@ are not there yet, and are listed so that nothing above reads as if it ships:
 Products & SKUs · category tree · per-store inventory · three-tier pricing
 (base → region → store) · cart · address book · checkout · payments · cancel ·
 shipping · confirm receipt · after-sales refunds · coupons (amount-off /
-percent-off / no-threshold, claim center and targeted grants) · promotions
-(tiered spend/quantity discounts, limited-time prices, flash sales, new-buyer
-gifts; allocated per line, coupons apply to the post-promotion amount) · order state
+percent-off / no-threshold / free-shipping, claim center and targeted grants) ·
+shipping-fee templates (per piece or by weight, priced per province, free over
+an amount or a quantity after discounts, undeliverable regions, per store or
+shop-wide) · promotions (tiered spend/quantity discounts, limited-time prices, flash
+sales, new-buyer gifts; allocated per line, coupons apply to the
+post-promotion amount) · order state
 machine · multi-store with delivery fences · tiered staff roles · in-app
 notifications (buyer message center and console to-do bell, written in the same
-transaction as the state change)
+transaction as the state change) · business reports (overview vs. previous
+period, trend, top products, store comparison, low-stock alerts, search summary)
 
 Cart, address book, profile, cancel, confirm-receipt, shipping and after-sales
 refunds (partial refunds allocated to the cent, discounts included) are in;
@@ -435,7 +442,7 @@ battle-tested at scale. What it has is a stronger core.
   inference engine's rerank endpoint) and an offline evaluation set to do
 - [ ] **M6 Ready to open a shop** — in-app notifications and console to-dos ✅
   (written in the same transaction as the state change, outbound channels
-  pluggable); shipping-fee templates and free-shipping coupons (in progress); real
+  pluggable); shipping-fee templates and free-shipping coupons ✅; real
   payments, WeChat login and SMS codes need business qualifications and will
   be wired in once those are in hand
 - [ ] **M7 Ready to do business** — promotions (tiered discounts, flash

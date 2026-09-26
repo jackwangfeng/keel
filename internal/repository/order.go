@@ -98,16 +98,19 @@ type Order struct {
 	Status           int16
 	GoodsAmountCents int64
 	FreightCents     int64
-	DiscountCents    int64
-	PayableCents     int64
-	PaidCents        int64
-	RefundedCents    int64
-	RefundStatus     int16
-	ExpireAt         time.Time
-	CreatedAt        time.Time
-	PaidAt           *time.Time
-	ShippedAt        *time.Time
-	FinishedAt       *time.Time
+	// FreightDiscountCents 是包邮券抵掉的运费（00056），已经算在 DiscountCents 里。
+	// 实收运费 = FreightPaidCents()，售后退运费的上限按它算。
+	FreightDiscountCents int64
+	DiscountCents        int64
+	PayableCents         int64
+	PaidCents            int64
+	RefundedCents        int64
+	RefundStatus         int16
+	ExpireAt             time.Time
+	CreatedAt            time.Time
+	PaidAt               *time.Time
+	ShippedAt            *time.Time
+	FinishedAt           *time.Time
 
 	// UserCouponID 是这一单用的券（00026）。SAGA 的券分支从这里知道锁哪一张 ——
 	// 分支只拿到三个字符串，这件事推不出来，只能落在订单行上。
@@ -125,6 +128,11 @@ type Order struct {
 	// repository 不该替它决定怎么解。
 	Promotions []byte
 }
+
+// FreightPaidCents 是这一单实收的运费：运费减去包邮券抵掉的部分（00056）。
+// 售后「未发货整单退全退运费」退的是它，审核裁定退运费的上限也按它算 ——
+// 买家没付过的那部分运费，没有可退的。
+func (o Order) FreightPaidCents() int64 { return o.FreightCents - o.FreightDiscountCents }
 
 // optTime 把 pgtype.Timestamptz 收成 *time.Time：NULL → nil。
 //
@@ -161,6 +169,10 @@ type NewOrderDraft struct {
 	StoreID          int64
 	GoodsAmountCents int64
 	FreightCents     int64
+	// FreightDiscountCents 是包邮券抵掉的运费，已经算在 DiscountCents 里（00056）。
+	FreightDiscountCents int64
+	// FreightSnapshot 是下单那一刻的运费计算明细（契约 FreightBreakdown 的 JSON）。
+	FreightSnapshot  []byte
 	DiscountCents    int64
 	PayableCents     int64
 	ReceiverSnapshot []byte
@@ -285,6 +297,8 @@ type OrderTx interface {
 
 	// FindAddress 取当前买家名下的一条收货地址。查不到返回 ErrAddressNotFound。
 	FindAddress(ctx context.Context, addressID, userID int64) (Address, error)
+	// FindDefaultAddress 取当前买家的默认收货地址；没有默认地址时 ok 为 false（不是错误）。
+	FindDefaultAddress(ctx context.Context, userID int64) (a Address, ok bool, err error)
 
 	// CreateOrderDraft 落一笔 status = 0 创建中的订单，返回它。
 	CreateOrderDraft(ctx context.Context, d NewOrderDraft) (Order, error)
@@ -385,6 +399,17 @@ func (t tenantTx) ListSKUsForPricing(ctx context.Context, sc StoreScope, skuIDs 
 	return out, nil
 }
 
+func (t tenantTx) FindDefaultAddress(ctx context.Context, userID int64) (Address, bool, error) {
+	r, err := t.q.GetUserDefaultAddress(ctx, userID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Address{}, false, nil
+	}
+	if err != nil {
+		return Address{}, false, err
+	}
+	return Address(r), true, nil
+}
+
 func (t tenantTx) FindAddress(ctx context.Context, addressID, userID int64) (Address, error) {
 	r, err := t.q.GetUserAddress(ctx, db.GetUserAddressParams{ID: addressID, UserID: userID})
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -414,6 +439,8 @@ func (t tenantTx) CreateOrderDraft(ctx context.Context, d NewOrderDraft) (Order,
 		StoreID:                d.StoreID,
 		GoodsAmountCents:       d.GoodsAmountCents,
 		FreightCents:           d.FreightCents,
+		FreightDiscountCents:   d.FreightDiscountCents,
+		FreightSnapshot:        d.FreightSnapshot,
 		DiscountCents:          d.DiscountCents,
 		PayableCents:           d.PayableCents,
 		ReceiverSnapshot:       d.ReceiverSnapshot,
@@ -441,6 +468,7 @@ func (t tenantTx) CreateOrderDraft(ctx context.Context, d NewOrderDraft) (Order,
 		Status:                 r.Status,
 		GoodsAmountCents:       r.GoodsAmountCents,
 		FreightCents:           r.FreightCents,
+		FreightDiscountCents:   r.FreightDiscountCents,
 		DiscountCents:          r.DiscountCents,
 		PayableCents:           r.PayableCents,
 		PaidCents:              r.PaidCents,
@@ -490,6 +518,7 @@ func (t tenantTx) FindOrderByNo(ctx context.Context, orderNo string) (Order, err
 		Status:                 r.Status,
 		GoodsAmountCents:       r.GoodsAmountCents,
 		FreightCents:           r.FreightCents,
+		FreightDiscountCents:   r.FreightDiscountCents,
 		DiscountCents:          r.DiscountCents,
 		PayableCents:           r.PayableCents,
 		PaidCents:              r.PaidCents,
