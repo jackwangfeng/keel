@@ -67,6 +67,13 @@ export const can = {
         merchantWide() ||
         managesRegion(s.region_id) ||
         (role() === ROLE.storeManager && (me()?.store_ids ?? []).includes(s.id)),
+    /**
+     * 订单与售后（发货、退款审核、确认收到退货）：契约 StaffRole 矩阵「订单与售后」那一行，
+     * 判据与门店库存相同，按订单的**履约门店**判。传进来的 region_id 应当是门店**此刻**
+     * 所属的大区（从门店列表取），拿不到时退回订单上的 region_id —— 那是下单时的大区，
+     * 门店调过大区的话会判错，但判错的后果只是按钮置灰与否，服务端会重新判。
+     */
+    handleOrder: (s: StoreRef): boolean => can.operateStore(s),
     /** 设默认门店：只有管理员。 */
     setDefaultStore: (): boolean => role() === ROLE.admin,
     /** 加 / 改员工。 */

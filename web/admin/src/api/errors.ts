@@ -77,6 +77,18 @@ export function problemHint(type: string): string {
             return "只有管理员（以及只管门店管理员的大区管理员）能管员工。";
         case ProblemType.inventoryPrecondition:
             return "库存在你读到它之后被改过。用服务端回来的当前值刷新后重试就会成功。";
+        case ProblemType.orderStatusNotShippable:
+            return "这一单已经不是「已支付」了（可能刚被别人发过货，或买家申请了整单退款）。刷新订单看它现在的状态。";
+        case ProblemType.orderHasPendingFullRefund:
+            return "买家申请了整单退款，还没处理。先到「售后」里审那张退款单：驳回之后订单回到已支付，才能发货。";
+        case ProblemType.trackingNoDuplicated:
+            return "这个承运商的这个运单号已经登记过了。核对一下是不是录重了。";
+        case ProblemType.refundStatusNotAuditable:
+            return "这张退款单已经不是「待审核」了（可能刚被别人审过，或买家撤回了）。刷新看它现在的状态。";
+        case ProblemType.refundStatusNotReceivable:
+            return "这张退款单已经不是「待买家退货」了。刷新看它现在的状态。";
+        case ProblemType.refundFreightExceeded:
+            return "退运费超过了订单实收运费（扣掉别的退款单已占的部分）。改小一点，或者留空保持申请时的值。";
         default:
             return "";
     }

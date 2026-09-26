@@ -82,6 +82,15 @@ export type StoreCreateRequest = S["StoreCreateRequest"];
 export type StoreUpdateRequest = S["StoreUpdateRequest"];
 export type MerchantUpdateRequest = S["MerchantUpdateRequest"];
 
+// 订单与售后（后台视角，00035）。
+export type AdminOrderSummary = S["AdminOrderSummary"];
+export type AdminOrderDetail = S["AdminOrderDetail"];
+export type AdminRefund = S["AdminRefund"];
+export type AdminRefundDetail = S["AdminRefundDetail"];
+export type OrderItem = S["OrderItem"];
+export type Shipment = S["Shipment"];
+export type StaffRef = S["StaffRef"];
+
 /** `GET /admin/products` 的响应体（PageMeta 三个字段 + items）。 */
 export type AdminProductPage = ResponseBodyOf<"/admin/products", "get">;
 /** `GET /admin/staff` 的响应体。 */
@@ -92,6 +101,10 @@ export type RegionPage = ResponseBodyOf<"/admin/regions", "get">;
 export type ScopedProductPage = ResponseBodyOf<"/admin/stores/{store_id}/products", "get">;
 /** `GET /admin/stores/{store_id}/inventories` 的响应体。 */
 export type StoreInventoryPage = ResponseBodyOf<"/admin/stores/{store_id}/inventories", "get">;
+/** `GET /admin/orders` 的响应体。 */
+export type AdminOrderPage = ResponseBodyOf<"/admin/orders", "get">;
+/** `GET /admin/refunds` 的响应体。 */
+export type AdminRefundPage = ResponseBodyOf<"/admin/refunds", "get">;
 /** `GET /admin/merchants` 的响应体（含 single_merchant_mode）。 */
 export type MerchantList = ResponseBodyOf<"/admin/merchants", "get">;
 /** `POST /admin/uploads` 的响应体。 */
@@ -271,6 +284,13 @@ export const ProblemType = {
     roleForbidden: `${P}role-forbidden`,
     outOfScope: `${P}out-of-scope`,
     staffForbidden: `${P}staff-forbidden`,
+    // 订单与售后。
+    orderStatusNotShippable: `${P}order-status-not-shippable`,
+    orderHasPendingFullRefund: `${P}order-has-pending-full-refund`,
+    trackingNoDuplicated: `${P}tracking-no-duplicated`,
+    refundStatusNotAuditable: `${P}refund-status-not-auditable`,
+    refundStatusNotReceivable: `${P}refund-status-not-receivable`,
+    refundFreightExceeded: `${P}refund-freight-exceeded`,
 } as const;
 
 /** 这个错误是不是某个 type 的 Problem。 */
