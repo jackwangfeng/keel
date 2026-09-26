@@ -1,11 +1,12 @@
 //go:build keel_real_engine
 
-// 这个文件要**真的**推理引擎跑着。跑法：
+// 这个文件要**真的**推理引擎跑着。跑法（见 Makefile 的 test-engine）：
 //
-//	KEEL_EMBED_ENDPOINT=http://127.0.0.1:8081 \
-//	    go test -tags keel_real_engine -count=1 ./internal/inference/
+//	KEEL_EMBED_ENDPOINT=http://127.0.0.1:18081 make test-engine
 //
-// 它不在 make test-db 里，理由是它要 2.2 GB 权重与一个起了几十秒的进程。
+// 引擎是 infero，起法在 scripts/infero-up.sh，**要 NVIDIA GPU**。
+//
+// 它不在 make test-db 里，理由是它要 1.2 GB 权重、一块显卡和一个另外起着的进程。
 // 但它**必须存在并且真的被跑过**：这个包别的所有测试用的都是假引擎，
 // 它们能证明客户端的判断力，证明不了「这套东西真的能算出语义相近」。
 //
@@ -16,8 +17,10 @@ package inference_test
 
 import (
 	"context"
+	"errors"
 	"io"
 	"math"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -107,19 +110,41 @@ func TestRealEngineRanksSemanticNeighborsAboveUnrelated(t *testing.T) {
 	}
 }
 
+
 // 引擎自己那几条「当场拒绝」必须真的在。
 //
-// 这一组守的是 services/inference/app.py 的行为，而不是 Go 客户端的判断力 ——
-// 那两件事此前分得很清楚，唯独这一半从来没有执行者:M3 独立验收实测过,
-// 把 app.py 里任何一条拒绝删掉,整个仓库没有一个测试会红。
+// 这一组守的是**引擎进程**的行为，不是 Go 客户端的判断力 —— 那两件事此前分得很
+// 清楚，唯独这一半从来没有执行者：M3 独立验收实测过，把服务端里任何一条拒绝
+// 删掉，整个仓库没有一个测试会红。
 //
-// 为什么落在这个文件而不是写一组 Python 测试:那些拒绝要在**模型加载之后**
-// 才走得到(它们在 /v1/embed 的处理函数里),所以测它们本来就需要一个真的
-// 跑起来的引擎。而一个「带桩模型的 app.py」意味着要在生产服务里开一个替身开关,
-// 那正是这个仓库反复拒绝的形状——Go 侧用构建标签把替身关在门外,Python 侧
-// 没有等价物,开了就是一个能在生产路径上被选中的开关。
+// 为什么落在这个文件而不是写一组引擎侧的测试：这些拒绝要在**模型加载之后**
+// 才走得到（它们在 /v1/embeddings 的处理函数里），所以测它们本来就需要一个真的
+// 跑起来的引擎。
 //
-// 这几条都是**协议层**的断言,不需要算向量,所以即使模型很慢它们也很快。
+// ## 换到 infero 之后这一组改了什么，以及为什么
+//
+// 原来这里有三条：model 名不符要拒、normalize=false 要拒、超批要拒。
+// 前两条**在 infero 上不成立，而且不是 infero 的缺陷**，所以删掉而不是留着假绿：
+//
+//   - **model 名不符**：infero 的 EmbeddingsRequest 把 `model` 收成
+//     `Option<String>` 且标了 `#[allow(dead_code)]` —— 它压根不读这个字段，
+//     一个进程只加载一个模型，请求说自己想要哪个模型没有意义。
+//     Keel 这边真正需要的那道闸门因此挪到了**响应**上：client.validate 逐字比对
+//     resp.Model 与 ModelName，对不上就 ErrProtocol。守的是同一件事
+//     （落库的 model_name 必须真的是算这批向量的那个模型），而且守得更靠谱——
+//     它核的是引擎实际加载了什么，不是请求里写了什么。那条断言在
+//     client_test.go 的 TestEmbedRejectsWrongModelName，每个 PR 都跑。
+//   - **normalize=false**：infero 收下这个字段但**永远归一化**，没有开关。
+//     这是 keel-integration.md 明确要求的形状（「L2 normalization owned by the
+//     server」），理由和 Keel 自己的理由同构：BGE-M3 时代 normalize 这个参数
+//     其实一直是空转的（归一化藏在 modules.json 里），而一个「藏在上游配置里的
+//     保证」在换模型那天会悄悄失效。既然引擎不提供关掉的途径，「要求它对
+//     normalize=false 报 400」就是在要求一个没有意义的错误码。
+//     真正要守的是「回来的向量范数是 1」，那条在下面
+//     TestRealEngineReturnsNormalizedVectors，以及从数据库里读回来重算的那条
+//     （internal/repository 的 TestRealEngineVectorStaysNormalizedThroughPostgres）。
+//
+// 剩下的两条是真的、也真的被 infero 执行：超批要拒、空输入要拒。
 func TestRealEngineRefusesWhatTheProtocolSaysItShould(t *testing.T) {
 	ep := os.Getenv(inference.EnvEndpoint)
 	if ep == "" {
@@ -131,7 +156,7 @@ func TestRealEngineRefusesWhatTheProtocolSaysItShould(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-			strings.TrimRight(ep, "/")+"/v1/embed", strings.NewReader(body))
+			strings.TrimRight(ep, "/")+inference.EmbedPath, strings.NewReader(body))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -145,42 +170,110 @@ func TestRealEngineRefusesWhatTheProtocolSaysItShould(t *testing.T) {
 		return resp.StatusCode, string(out)
 	}
 
-	// 阳性对照。没有它,下面三条在「引擎对任何请求都回 400」时也是绿的,
+	// 阳性对照。没有它，下面两条在「引擎对任何请求都回 400」时也是绿的，
 	// 而那是这个仓库反复抓到的那种假绿。
 	t.Run("合法请求确实被接受", func(t *testing.T) {
-		code, body := post(t, `{"model":"bge-m3","texts":["连衣裙"],"normalize":true}`)
+		code, body := post(t, `{"model":"x","texts":["连衣裙"],"normalize":true}`)
 		if code != http.StatusOK {
-			t.Fatalf("一条合法请求回了 %d —— 下面三条拒绝断言因此没有区分力。响应:%s",
+			t.Fatalf("一条合法请求回了 %d —— 下面两条拒绝断言因此没有区分力。响应:%s",
 				code, body)
 		}
 	})
 
-	t.Run("model 名不符要拒", func(t *testing.T) {
-		code, body := post(t, `{"model":"not-the-model","texts":["x"],"normalize":true}`)
-		if code != http.StatusBadRequest {
-			t.Errorf("model 名不符回了 %d,期望 400 —— 服务端一旦接受任意 model 名,"+
-				"落库的 model_name 就不再能回答「这批向量要不要重算」。响应:%s", code, body)
+	// 正好压在上限上。这一条是上面那条阳性对照的**批量版**：没有它，
+	// 「65 条要拒」在一个「32 条以上就 500」的引擎上照样是绿的，
+	// 而那种引擎会让索引侧每一轮都整批失败（DefaultBatchSize 就是 64）。
+	//
+	// 这不是假想：infero 的 embedding 批受 --max-seqs 约束（实测上限是
+	// 2 × max-seqs），--max-seqs 8 起的进程在 32 条就回
+	// 「32 sequences want logits, the limit is 16」的 500。
+	// 也就是说 keel-integration.md 承诺的 64 条上限，只有在
+	// --max-seqs ≥ 32 时才真的兑现 —— compose.infero.yaml 里那个 --max-seqs 32
+	// 不是随手填的，就是这条断言在守。
+	t.Run("正好 64 条要能算完", func(t *testing.T) {
+		texts := make([]string, 0, inference.DefaultBatchSize)
+		for i := 0; i < inference.DefaultBatchSize; i++ {
+			texts = append(texts, `"连衣裙"`)
 		}
-	})
-
-	t.Run("normalize=false 要拒", func(t *testing.T) {
-		code, body := post(t, `{"model":"bge-m3","texts":["x"],"normalize":false}`)
-		if code != http.StatusBadRequest {
-			t.Errorf("normalize=false 回了 %d,期望 400 —— 语义检索层 §2.3:"+
-				"未归一化的向量入库**不会报错,只会悄悄拉低召回质量**。响应:%s", code, body)
+		code, body := post(t,
+			`{"model":"x","texts":[`+strings.Join(texts, ",")+`],"normalize":true}`)
+		if code != http.StatusOK {
+			t.Errorf("正好 %d 条（DefaultBatchSize）回了 %d，期望 200 —— "+
+				"索引侧每一轮打的就是这个大小，它失败意味着整批商品都索引不上。"+
+				"infero 上最可能的原因是 --max-seqs 配小了（实测批上限 = 2 × max-seqs）。响应:%s",
+				inference.DefaultBatchSize, code, body)
 		}
 	})
 
 	t.Run("超过批上限要拒而不是截断", func(t *testing.T) {
-		texts := make([]string, 0, 65)
-		for i := 0; i < 65; i++ {
+		texts := make([]string, 0, inference.DefaultBatchSize+1)
+		for i := 0; i < inference.DefaultBatchSize+1; i++ {
 			texts = append(texts, `"x"`)
 		}
 		code, body := post(t,
-			`{"model":"bge-m3","texts":[`+strings.Join(texts, ",")+`],"normalize":true}`)
+			`{"model":"x","texts":[`+strings.Join(texts, ",")+`],"normalize":true}`)
 		if code != http.StatusBadRequest {
-			t.Errorf("65 条(上限 64)回了 %d,期望 400 —— 悄悄截断意味着调用方以为"+
-				"全部算过了,而少掉的那几条会永远停在旧向量上。响应:%s", code, body)
+			t.Errorf("%d 条（上限 %d）回了 %d，期望 400 —— 悄悄截断意味着调用方以为"+
+				"全部算过了，而少掉的那几条会永远停在旧向量上。响应:%s",
+				inference.DefaultBatchSize+1, inference.DefaultBatchSize, code, body)
 		}
 	})
+
+	t.Run("空输入要拒", func(t *testing.T) {
+		code, body := post(t, `{"model":"x","texts":[],"normalize":true}`)
+		if code != http.StatusBadRequest {
+			t.Errorf("空 texts 回了 %d，期望 400。响应:%s", code, body)
+		}
+	})
+}
+
+// 判据三：**引擎挂了必须是一个明确的错误，不能是零向量。**
+//
+// keel-integration.md 把这一条的后果写得很直白：一个零向量过得了形状检查、
+// 进得了库，然后余弦距离对它恒等于 1 —— 它会出现在**每一次**检索的结果里，
+// 而没有任何东西会报错。
+//
+// client_test.go 里的 TestEmbedReportsConnectionRefused 用 httptest 守过同一件事，
+// 但那是对着一个「客户端自己关掉的端口」。这一条刻意放在真引擎这一组里，
+// 守的是**部署形态**下的同一件事：引擎地址配了、进程没起来（或者挂了、
+// 或者端口写错了），客户端必须当场报错。
+//
+// 端口取一个几乎不可能被占用的高位端口并先确认它真的没人听 —— 否则这条测试
+// 在那个端口恰好有人监听时会变成「打了一个陌生服务」，而不是它想测的那件事。
+func TestRealEngineDownIsAnErrorNotAZeroVector(t *testing.T) {
+	const deadPort = "127.0.0.1:59417"
+	// 先确认这个端口真的没人听。它是这条测试的前提，不是它的断言。
+	if conn, err := net.DialTimeout("tcp", deadPort, 2*time.Second); err == nil {
+		conn.Close()
+		t.Skipf("%s 上有人在听，这条测试需要一个确实关着的端口", deadPort)
+	}
+
+	c, err := inference.New(inference.Config{
+		Endpoint: "http://" + deadPort,
+		Timeout:  3 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("建客户端失败: %v", err)
+	}
+	res, err := c.Embed(context.Background(), inference.SemanticProbeTexts)
+
+	if err == nil {
+		t.Fatalf("引擎不在，Embed 却成功了，返回 %d 个向量 —— "+
+			"零向量或空结果写进 product_text_vectors 之后，"+
+			"余弦距离对它恒等于 1，它会出现在每一次检索里，而没有任何东西会报错",
+			len(res.Vectors))
+	}
+	// 必须是 ErrUnavailable：§8 的降级链（退回纯关键词召回）只认这一类。
+	// 归到 ErrProtocol 或 ErrRejected 的话，调用方会把它当成「重试没用」，
+	// 于是引擎重启之后索引也不会自己恢复。
+	if !errors.Is(err, inference.ErrUnavailable) {
+		t.Fatalf("引擎不在时拿到的错误是 %v，但它不是 ErrUnavailable —— "+
+			"§8 的降级链只认这一类，归错类的话调用方不会重试，"+
+			"引擎重启之后索引也不会自己恢复", err)
+	}
+	if res != nil {
+		t.Fatalf("出错时还返回了结果（%d 个向量）。半截结果的调用方要么按下标对齐"+
+			"——那是一批张冠李戴的向量，要么补零——那是每次检索都会命中的零向量",
+			len(res.Vectors))
+	}
 }

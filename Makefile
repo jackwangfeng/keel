@@ -83,7 +83,7 @@ help:
 	@echo "make migrate-down   回滚一个版本"
 	@echo "make migrate-status 打印各版本的应用状态"
 	@echo "make test-db      跑需要数据库的测试（强制不吃缓存，含替身那一组）"
-	@echo "make test-engine    对**真的跑着的**推理引擎跑一次（要 KEEL_EMBED_ENDPOINT）"
+	@echo "make test-engine    对真的跑着的 infero 跑三条判据（要 GPU + KEEL_EMBED_ENDPOINT + 数据库）"
 	@echo "make dtmrs-deps     取回 dtmrs 并编出 libdtmrs.so（需要 Rust 1.88+）"
 	@echo "make build          编译主模块（会先确保 libdtmrs.so 在）"
 
@@ -255,22 +255,37 @@ test-db: $(DTMRS_LIB)
 # 「替身跑不出真实语义相关性」那条测试默认也不会跑，于是它会慢慢烂掉。
 # 所以上面那行把它接回 test-db：一条不在闸门里的测试，等于没有。
 
-# 对**真的跑着的**推理引擎跑一次。
+# 对**真的跑着的**推理引擎（infero）跑一次 keel-integration.md 的三条判据。
 #
-# 它不在 test-db 里，因为它要 2.27 GB 权重和一个起了几十秒的进程。
+# 它不在 test-db 里，因为它要一块 NVIDIA GPU、1.2 GB 权重和一个另外起着的进程。
 # 但它必须存在：internal/inference 别的所有测试用的都是假引擎（httptest），
 # 它们能证明客户端的判断力，证明不了「这套东西真的能算出语义相近」——
 # 而那正是 M3 的验收标准（搜「连衣裙」能返回相关商品）。
 #
-# 起引擎：
-#     docker compose -f compose.yaml -f compose.inference.yaml up -d --build inference
-# 然后：
-#     KEEL_EMBED_ENDPOINT=http://127.0.0.1:8001 make test-engine
+# 起引擎（要 GPU；infero 只有 CUDA / Metal 后端，没有 CPU 后端）：
+#     ./scripts/infero-up.sh
+# 然后（**两样都要**：真引擎 + 真数据库，理由见下）：
+#     KEEL_EMBED_ENDPOINT=http://127.0.0.1:18081 make test-engine
+#
+# ## 为什么是两个包
+#
+# 三条判据落在两个包里，因为判据一（归一化要从 PostgreSQL 读回来验）需要数据库，
+# 而 internal/inference **不能**依赖 internal/repository —— 后者依赖前者
+# （要 inference.Dim），反过来 import 是一个环。
+#
+#   internal/inference  判据二（语义 margin）、判据三（引擎挂了要报错）+ 协议层拒绝
+#   internal/repository 判据一（向量写进库再读回来重算 L2 范数）
+#
+# 代价说明白：这条目标因此同时要 KEEL_EMBED_ENDPOINT 和一个迁好的数据库
+# （PGHOST/PGPORT，和 test-db 同一套）。少一样都会 Fatal，不会 Skip。
+#
+# 注意 -p 1：internal/repository 那一组和 test-db 一样共用同一个库，
+# 并行跑会互相踩（理由见 test-db 上面那段）。
 #
 # 刻意不 Skip：没配 KEEL_EMBED_ENDPOINT 时那些测试 Fatal 而不是 Skip。
 # 一条会自己跳过的测试，在它该报警的时候是静默的。
 test-engine:
-	go test -count=1 -v -tags keel_real_engine ./internal/inference/
+	go test -count=1 -v -p 1 -tags keel_real_engine ./internal/inference/ ./internal/repository/
 
 # ---------------------------------------------------------------------------
 # dtmrs：嵌入式事务协调器的 C ABI 动态库
