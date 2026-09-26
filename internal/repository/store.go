@@ -182,14 +182,14 @@ type StorePatch struct {
 // StoreTx 是门店与大区这一面。
 type StoreTx interface {
 	// —— 大区
-	AdminListRegions(ctx context.Context, includeDeleted bool, limit, offset int32) ([]Region, int64, error)
+	AdminListRegions(ctx context.Context, includeDeleted bool, only ScopeFilter, limit, offset int32) ([]Region, int64, error)
 	FindRegion(ctx context.Context, id int64) (Region, error)
 	CreateRegion(ctx context.Context, n NewRegion) (Region, error)
 	UpdateRegion(ctx context.Context, id int64, p RegionPatch) (Region, error)
 	SoftDeleteRegion(ctx context.Context, id int64) error
 
 	// —— 门店
-	AdminListStores(ctx context.Context, regionID *int64, includeDeleted bool, limit, offset int32) ([]Store, int64, bool, error)
+	AdminListStores(ctx context.Context, regionID *int64, includeDeleted bool, only ScopeFilter, limit, offset int32) ([]Store, int64, bool, error)
 	FindStore(ctx context.Context, id int64) (Store, error)
 	CreateStore(ctx context.Context, n NewStore) (Store, error)
 	UpdateStore(ctx context.Context, id int64, p StorePatch) (Store, error)
@@ -212,14 +212,18 @@ type StoreTx interface {
 
 const regionCodeIndex = "uk_regions_code"
 
-func (t tenantTx) AdminListRegions(ctx context.Context, includeDeleted bool, limit, offset int32) ([]Region, int64, error) {
+func (t tenantTx) AdminListRegions(ctx context.Context, includeDeleted bool, only ScopeFilter,
+	limit, offset int32) ([]Region, int64, error) {
 	rows, err := t.q.AdminListRegions(ctx, db.AdminListRegionsParams{
-		IncludeDeleted: includeDeleted, PageLimit: limit, PageOffset: offset,
+		IncludeDeleted: includeDeleted, OnlyIds: only.RegionIDs,
+		PageLimit: limit, PageOffset: offset,
 	})
 	if err != nil {
 		return nil, 0, err
 	}
-	total, err := t.q.AdminCountRegions(ctx, includeDeleted)
+	total, err := t.q.AdminCountRegions(ctx, db.AdminCountRegionsParams{
+		IncludeDeleted: includeDeleted, OnlyIds: only.RegionIDs,
+	})
 	if err != nil {
 		return nil, 0, err
 	}
@@ -346,9 +350,10 @@ func storeFromRow(id, regionID int64, regionName, code, name, phone, province,
 }
 
 func (t tenantTx) AdminListStores(ctx context.Context, regionID *int64, includeDeleted bool,
-	limit, offset int32) ([]Store, int64, bool, error) {
+	only ScopeFilter, limit, offset int32) ([]Store, int64, bool, error) {
 	rows, err := t.q.AdminListStores(ctx, db.AdminListStoresParams{
 		IncludeDeleted: includeDeleted, RegionID: regionID,
+		OnlyRegionIds: only.RegionIDs, OnlyStoreIds: only.StoreIDs,
 		PageLimit: limit, PageOffset: offset,
 	})
 	if err != nil {
@@ -356,6 +361,7 @@ func (t tenantTx) AdminListStores(ctx context.Context, regionID *int64, includeD
 	}
 	total, err := t.q.AdminCountStores(ctx, db.AdminCountStoresParams{
 		IncludeDeleted: includeDeleted, RegionID: regionID,
+		OnlyRegionIds: only.RegionIDs, OnlyStoreIds: only.StoreIDs,
 	})
 	if err != nil {
 		return nil, 0, false, err

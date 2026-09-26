@@ -7,6 +7,10 @@
 -- name: AdminListRegions :many
 -- 大区列表。store_count 是名下**未软删**的门店数。
 --
+-- only_ids 为空即不限；非空时只列这几个大区 —— 大区管理员 / 门店管理员只看得见
+-- 自己范围内的（00025）。它是**同一租户内**的权限过滤，不是租户过滤：
+-- 租户仍然只由 RLS 管，这里一个 merchant_id 都没有。
+--
 -- 它在列表里直接给出来，不是冗余：删大区时会因为它非零而被拒（409），
 -- 而「点了删除才知道删不掉」是一次本可以省掉的往返。
 --
@@ -18,13 +22,15 @@ SELECT r.id, r.code, r.name, r.status, r.deleted_at, r.created_at, r.updated_at,
          WHERE st.region_id = r.id AND st.deleted_at IS NULL)::int AS store_count
   FROM regions r
  WHERE (sqlc.arg(include_deleted)::boolean OR r.deleted_at IS NULL)
+   AND (sqlc.narg(only_ids)::bigint[] IS NULL OR r.id = ANY(sqlc.narg(only_ids)::bigint[]))
  ORDER BY r.id
  LIMIT sqlc.arg(page_limit) OFFSET sqlc.arg(page_offset);
 
 -- name: AdminCountRegions :one
 -- 条件必须与 AdminListRegions 逐字一致，否则 total 与 items 各说各话。
 SELECT count(*) FROM regions r
- WHERE (sqlc.arg(include_deleted)::boolean OR r.deleted_at IS NULL);
+ WHERE (sqlc.arg(include_deleted)::boolean OR r.deleted_at IS NULL)
+   AND (sqlc.narg(only_ids)::bigint[] IS NULL OR r.id = ANY(sqlc.narg(only_ids)::bigint[]));
 
 -- name: AdminGetRegion :one
 -- 单个大区。**含软删的**：contract 的 PATCH / DELETE 对软删的大区回 404，

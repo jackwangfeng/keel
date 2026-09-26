@@ -321,6 +321,15 @@ type Staff struct {
 	UpdatedAt   pgtype.Timestamptz
 }
 
+type StaffScope struct {
+	ID         int64
+	MerchantID int64
+	StaffID    int64
+	RegionID   *int64
+	StoreID    *int64
+	CreatedAt  pgtype.Timestamptz
+}
+
 type StaffToken struct {
 	ID         int64
 	StaffID    int64

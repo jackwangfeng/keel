@@ -42,6 +42,12 @@ type StaffIdentity struct {
 	MerchantID *int64
 	Role       int16
 	Status     int16
+
+	// RegionIDs / StoreIDs 是大区管理员 / 门店管理员的管辖范围（00025），
+	// 与 Role 同一条理由每个请求从库里重读。判据在 staff_scope.go 与
+	// internal/service/authz.go，这里只是载体。
+	RegionIDs []int64
+	StoreIDs  []int64
 }
 
 // Platform 回答这个操作员是不是平台级的。

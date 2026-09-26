@@ -98,6 +98,17 @@ const (
 	TypePlatformOnly      = "https://keel.dev/problems/platform-only"
 	TypeMerchantCodeTaken = "https://keel.dev/problems/merchant-code-taken"
 
+	// 同一租户内的分级权限（v0.1.0，internal/service/authz.go）。两个 type
+	// 而不是一个，理由与 staff-forbidden / platform-only 分开报一样：
+	//   role-forbidden → 你这个角色做不了这类事（门店管理员建员工、大区管理员
+	//                    建大区、操作员设默认门店、任何人改自己的角色）。
+	//                    该去找你的上级。
+	//   out-of-scope   → 这类事你能做，但这一个不归你管（华北的大区管理员改
+	//                    华东的门店）。该去找管那个大区 / 门店的人。
+	// 压成一个之后，界面只能说一句「没有权限」，而被拒的人不知道该找谁。
+	TypeRoleForbidden = "https://keel.dev/problems/role-forbidden"
+	TypeOutOfScope    = "https://keel.dev/problems/out-of-scope"
+
 	// 商家写路径那一组（M4，契约 Admin + Catalog 两个 tag 的 16 条）。
 	//
 	// 它们**全部是 404 或 409 或 422**，而只看状态码分不开 —— 契约在每一条

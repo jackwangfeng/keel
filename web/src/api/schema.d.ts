@@ -634,6 +634,10 @@ export interface paths {
         /**
          * 员工列表
          * @description 平台级看见平台操作员，商家级只看见自己店的。
+         *
+         *     同一租户内再按角色收窄：商家管理员与操作员看见本店全部员工；
+         *     **大区管理员**只看见自己，以及「只管本大区门店」的门店管理员；
+         *     **门店管理员**只看见自己。
          */
         get: {
             parameters: {
@@ -663,8 +667,17 @@ export interface paths {
         };
         put?: never;
         /**
-         * 加员工（仅管理员）
+         * 加员工（管理员；大区管理员只能加本大区门店的门店管理员）
          * @description 新员工的租户归属**从调用者的会话继承，不接受请求体传入**。
+         *
+         *     谁能加谁：商家管理员能加本店任何角色；**大区管理员只能加门店管理员
+         *     （role 4），且 `store_ids` 里每一家门店都必须在他的大区里**；
+         *     操作员与门店管理员不能加员工。平台管理员只能加平台级的管理员 / 操作员
+         *     （role 1 / 2，不带范围）。
+         *
+         *     角色与范围必须配套：role 3 必须带至少一个 `region_ids`、不带 `store_ids`；
+         *     role 4 必须带至少一个 `store_ids`、不带 `region_ids`；role 1 / 2 两者都不带。
+         *     不配套、或引用了不存在 / 已软删的大区门店，回 422。
          *
          *     > 允许前端指定 `merchant_id` 等于把越权做成了一个入参。
          *     > 这条是多租户系统里最容易出事的地方，所以写在契约里而不只写在代码里。
@@ -711,7 +724,11 @@ export interface paths {
                         "application/json": components["schemas"]["Staff"];
                     };
                 };
-                /** @description 调用者不是管理员 */
+                /**
+                 * @description 调用者不能加这个员工：不是管理员（staff-forbidden）、大区管理员想加
+                 *     门店管理员之外的角色（role-forbidden）、或分配了不在他大区里的门店
+                 *     （out-of-scope）
+                 */
                 403: {
                     headers: {
                         [name: string]: unknown;
@@ -752,9 +769,20 @@ export interface paths {
         options?: never;
         head?: never;
         /**
-         * 改员工角色或状态（仅管理员）
+         * 改员工角色、状态或管辖范围（管理员；大区管理员只能改本大区的门店管理员）
          * @description 只能改同租户内的人。**不能把最后一个在职管理员降级或停用**——
          *     那会让该租户失去全部管理能力，返回 409。
+         *
+         *     `region_ids` / `store_ids` 给了就是**整体替换**，不给就不动；把角色改成
+         *     1 / 2 时范围自动清空。改完之后角色与范围必须配套（规则同 `POST /admin/staff`），
+         *     否则 422。
+         *
+         *     **任何人都不能改自己的角色或范围**（403 role-forbidden）——
+         *     否则一个大区管理员能给自己加大区，一个管理员能在降级别人之前先把自己
+         *     换成一个没有人能再改回来的状态。
+         *
+         *     大区管理员只能改「只管本大区门店」的门店管理员：新角色只能是 4，
+         *     新的 `store_ids` 必须全在他的大区里；目标管着别的大区的门店时同样 403。
          */
         patch: {
             parameters: {
@@ -774,6 +802,10 @@ export interface paths {
                          * @enum {integer}
                          */
                         status?: 1 | 2;
+                        /** @description 大区管理员管的大区，整体替换 */
+                        region_ids?: number[];
+                        /** @description 门店管理员管的门店，整体替换 */
+                        store_ids?: number[];
                     };
                 };
             };
@@ -787,7 +819,11 @@ export interface paths {
                         "application/json": components["schemas"]["Staff"];
                     };
                 };
-                /** @description 调用者不是管理员，或目标不在同一租户 */
+                /**
+                 * @description 调用者不是管理员（staff-forbidden）、改的是自己的角色或范围 / 大区管理员
+                 *     想改出门店管理员之外的角色（role-forbidden）、或目标 / 新范围不在他的
+                 *     大区里（out-of-scope）
+                 */
                 403: {
                     headers: {
                         [name: string]: unknown;
@@ -7748,13 +7784,31 @@ export interface components {
             is_new_user: boolean;
         };
         /**
-         * @description 1 管理员 · 2 操作员
+         * @description 1 管理员 · 2 操作员 · 3 大区管理员 · 4 门店管理员
          *
          *     角色在各自层级内生效：平台级的管理员能加平台操作员、能开店；
-         *     商家级的管理员只能加自己店的员工。
+         *     商家级的管理员只能加自己店的员工。3 / 4 只存在于商家级，
+         *     各自带管辖范围（`Staff.region_ids` / `Staff.store_ids`，一个人可以管多个）。
+         *
+         *     同一租户内的权限矩阵（服务端逐条执行，界面上的置灰只是体验）：
+         *
+         *     | 能做什么 | 1 | 2 | 3 | 4 |
+         *     |---|:-:|:-:|:-:|:-:|
+         *     | 商品、SKU、基准价、类目、上传 | ✅ | ✅ | 只读 | 只读 |
+         *     | 大区：改、删、大区价、大区上下架 | ✅ | ✅ | 只限自己的大区 | ❌ |
+         *     | 大区：建 | ✅ | ✅ | ❌ | ❌ |
+         *     | 门店：建、改、删、围栏 | ✅ | ✅ | 只限本大区的门店（换大区时新旧都得在范围内） | ❌ |
+         *     | 门店价、门店上下架、门店库存 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
+         *     | 设默认门店（含建店时 is_default） | ✅ | ❌ | ❌ | ❌ |
+         *     | 员工管理 | ✅ | ❌ | 只能加、改本大区门店的门店管理员 | ❌ |
+         *     | 开店 | 仅平台级管理员 | | | |
+         *
+         *     `PUT /admin/skus/{sku_id}/inventory`（商家恰好一家门店时的捷径）对 3 / 4
+         *     只在那家店在范围内时放行。列表类接口对 3 / 4 只返回范围内的；
+         *     商品目录全量可读。被拒回 403，type 是 role-forbidden 或 out-of-scope。
          * @enum {integer}
          */
-        StaffRole: 1 | 2;
+        StaffRole: 1 | 2 | 3 | 4;
         Shipment: {
             /** Format: int64 */
             id: number;
@@ -7797,6 +7851,10 @@ export interface components {
              *     能建商家、做跨租户运维。
              */
             merchant_id: number | null;
+            /** @description 管辖的大区（仅 role 3 非空）。按 id 升序 */
+            region_ids: number[];
+            /** @description 管辖的门店（仅 role 4 非空）。按 id 升序 */
+            store_ids: number[];
             /** Format: date-time */
             last_login_at?: string;
             /** Format: date-time */
@@ -7821,6 +7879,10 @@ export interface components {
             email: string;
             name?: string;
             role: components["schemas"]["StaffRole"];
+            /** @description role 3 必填且至少一个；其余角色不带 */
+            region_ids?: number[];
+            /** @description role 4 必填且至少一个；其余角色不带 */
+            store_ids?: number[];
         };
         Merchant: {
             /** Format: int64 */
