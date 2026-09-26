@@ -81,7 +81,7 @@ type route struct {
 	// **它原先还挂在另外 5 条上**（/admin/uploads、/admin/products、
 	// .../publication、.../skus、/admin/categories），那 5 条在 M4 收尾这一轮
 	// 实现了幂等，挂账随之删掉 —— 挡着它们的是一次 schema 决定
-	// （00022：把 idempotency_keys 的主体列从 user_id 换成
+	// （00023：把 idempotency_keys 的主体列从 user_id 换成
 	// (subject_kind, subject_id)），而不是缺代码。
 	//
 	// 剩下这两条缺的是**另一件**东西，而且是同一件：它们可能跑在平台作用域里
@@ -401,7 +401,7 @@ var routes = []route{
 				"app.merchant_id 根本没设，current_merchant() 在那里是 RAISE（00002 那条会说人话的异常），" +
 				"不是 NULL。也就是说抢占插入那一句在这条路上会当场报错。" +
 				"要让它可用，得给幂等键一个「平台级」的落点（merchant_id 可空 + 策略跟着改），" +
-				"那是又一次 schema 决定，不该和本轮那次（00022，把主体列从 user_id 换成 " +
+				"那是又一次 schema 决定，不该和本轮那次（00023，把主体列从 user_id 换成 " +
 				"(subject_kind, subject_id)）混在一起做。\n" +
 				"暴露面说清楚，而它比那 5 条轻得多：merchants.code 是全局唯一的，" +
 				"所以重发同一个请求**建不出第二家店** —— 第二次撞 merchants_code_key，返回 409。" +

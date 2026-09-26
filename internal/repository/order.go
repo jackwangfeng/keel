@@ -179,7 +179,7 @@ const (
 	IdempotencyFailed    int16 = 2
 )
 
-// idempotency_keys.subject_kind 的取值，与 00022 里那条 CHECK 逐值一致。
+// idempotency_keys.subject_kind 的取值，与 00023 里那条 CHECK 逐值一致。
 const (
 	idempotencySubjectUser  int16 = 1 // 买家，subject_id 是 users.id
 	idempotencySubjectStaff int16 = 2 // 后台操作员，subject_id 是 staff.id
@@ -214,7 +214,7 @@ func BuyerSubject(userID int64) IdempotencySubject {
 
 // StaffSubject 是后台那一侧：subject_id 放 staff.id。
 //
-// **这就是那个曾经做不到的东西。** 00022 之前这张表的主键是
+// **这就是那个曾经做不到的东西。** 00023 之前这张表的主键是
 // (scope, user_id, idem_key)，后台要用它只能把 staff_id 塞进 user_id ——
 // 而那正是 auth/staff_middleware.go 与 §14 反复点名的那件事。
 func StaffSubject(staffID int64) IdempotencySubject {

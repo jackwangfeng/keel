@@ -677,7 +677,7 @@ func TestAdminCatalogIsTenantScoped(t *testing.T) {
 // 它原先叫 TestAdminWritesAreNotYetIdempotent，断言的是「同一把钥匙会建出两件
 // 商品」—— 那是 contract_test.go 里那 5 笔 NotYetImplementedHeader 挂账的反向
 // 执行者，也是那笔账的暴露面说明书。挡着实现的是一次 schema 决定
-// （00022：idempotency_keys 的主键里那个 user_id 在后台这条路上要放 staff_id，
+// （00023：idempotency_keys 的主键里那个 user_id 在后台这条路上要放 staff_id，
 // 而两张表的 id 来自同一种自增序列）。决定做完了，账销了，靶子就该跟着翻过来。
 //
 // 三条断言缺一不可，而第二条最容易被漏掉：

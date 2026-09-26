@@ -97,7 +97,7 @@ type ClaimIdempotencyKeyParams struct {
 //
 // 主体是 (subject_kind, subject_id)，不是 user_id：1 买家 users.id /
 // 2 后台 staff.id。两张表的 id 来自同一种自增序列，共用一列的话
-// staff_id = 7 与 user_id = 7 会撞在同一行上（00022 的文件头）。
+// staff_id = 7 与 user_id = 7 会撞在同一行上（00023 的文件头）。
 func (q *Queries) ClaimIdempotencyKey(ctx context.Context, arg ClaimIdempotencyKeyParams) (int64, error) {
 	result, err := q.db.Exec(ctx, claimIdempotencyKey,
 		arg.Scope,

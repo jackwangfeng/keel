@@ -21,7 +21,7 @@ import (
 // idempotency_keys 的主键原先是 (scope, user_id, idem_key)，而后台这条路上
 // 要往 user_id 里放 staff_id —— 那正是 auth/staff_middleware.go 与数据模型
 // §14 反复点名的那件事（两张表的 id 来自同一种自增序列）。
-// 00022 把主体列换成了 (subject_kind, subject_id)，repository 那一层因此有了
+// 00023 把主体列换成了 (subject_kind, subject_id)，repository 那一层因此有了
 // StaffSubject。这个文件是它上面那一层。
 //
 // ===========================================================================
@@ -113,7 +113,7 @@ func idempotentWrite[T any](ctx context.Context, s *AdminCatalogService,
 		return zero, false, ErrIdempotencyKeyMissing
 	}
 	// 这一句是整个改动的落点：主体是 staff，而且**它在类型上就说得出来**。
-	// 00022 之前这里只能写 id.StaffID，落进一个叫 user_id 的列。
+	// 00023 之前这里只能写 id.StaffID，落进一个叫 user_id 的列。
 	subj := repository.StaffSubject(id.StaffID)
 
 	var out T
