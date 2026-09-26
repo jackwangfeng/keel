@@ -300,6 +300,7 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	v1.GET("/refunds", auth.Bearer(signer, nil), rh.ListMine)
 	v1.GET("/refunds/:refund_no", auth.Bearer(signer, nil), rh.Detail)
 	v1.POST("/refunds/:refund_no/cancel", auth.Bearer(signer, nil), rh.Cancel)
+	v1.POST("/refunds/:refund_no/return-shipment", auth.Bearer(signer, nil), rh.ReturnShipment)
 
 	// 优惠券的买家侧四条（契约 Coupon tag）。四条都要令牌：我的券、本单可用券
 	// 读的是「我的」东西；领券中心要回「我已经领了几张」；领券写的是「我的」券包。

@@ -1942,6 +1942,10 @@ type AdminRefund struct {
 	// 既不知道为什么，也不知道改什么再申请。
 	RejectReason *string `json:"reject_reason,omitempty"`
 
+	// ReturnShipment 买家寄回退货的物流（`POST /refunds/{refund_no}/return-shipment` 填的那一份）。
+	// 只有退货退款、且买家填过时才出现；仅退款的单永远没有它。
+	ReturnShipment *ReturnShipment `json:"return_shipment,omitempty"`
+
 	// Status 退款单状态机，与 `refunds.status` 的 SMALLINT 取值逐值一致。
 	//
 	// 10 待审核 / 20 待买家退货 / 30 退款中 / 40 已退款
@@ -1960,6 +1964,7 @@ type AdminRefund struct {
 	// `(10,20) (10,30) (10,50) (10,60) (20,30) (20,60) (30,40)`。
 	// 每条边由谁走：`10→20/30/50` 审核（`/admin/refunds/{refund_no}/audit`）；
 	// `20→30` 商家确认收到退货（`/admin/refunds/{refund_no}/receipt`）；
+	// 停在 `20` 期间买家填寄回物流（`/refunds/{refund_no}/return-shipment`），状态不变；
 	// `10/20→60` 买家撤回；`30→40` 渠道回调（`/webhooks/refunds/{channel}`）。
 	//
 	// `50 已拒绝` 与 `30 退款中` 失败**不是一回事**，客户端要分开展示：
@@ -2052,6 +2057,10 @@ type AdminRefundDetail struct {
 	// 既不知道为什么，也不知道改什么再申请。
 	RejectReason *string `json:"reject_reason,omitempty"`
 
+	// ReturnShipment 买家寄回退货的物流（`POST /refunds/{refund_no}/return-shipment` 填的那一份）。
+	// 只有退货退款、且买家填过时才出现；仅退款的单永远没有它。
+	ReturnShipment *ReturnShipment `json:"return_shipment,omitempty"`
+
 	// Status 退款单状态机，与 `refunds.status` 的 SMALLINT 取值逐值一致。
 	//
 	// 10 待审核 / 20 待买家退货 / 30 退款中 / 40 已退款
@@ -2070,6 +2079,7 @@ type AdminRefundDetail struct {
 	// `(10,20) (10,30) (10,50) (10,60) (20,30) (20,60) (30,40)`。
 	// 每条边由谁走：`10→20/30/50` 审核（`/admin/refunds/{refund_no}/audit`）；
 	// `20→30` 商家确认收到退货（`/admin/refunds/{refund_no}/receipt`）；
+	// 停在 `20` 期间买家填寄回物流（`/refunds/{refund_no}/return-shipment`），状态不变；
 	// `10/20→60` 买家撤回；`30→40` 渠道回调（`/webhooks/refunds/{channel}`）。
 	//
 	// `50 已拒绝` 与 `30 退款中` 失败**不是一回事**，客户端要分开展示：
@@ -3403,6 +3413,10 @@ type Refund struct {
 	// 既不知道为什么，也不知道改什么再申请。
 	RejectReason *string `json:"reject_reason,omitempty"`
 
+	// ReturnShipment 买家寄回退货的物流（`POST /refunds/{refund_no}/return-shipment` 填的那一份）。
+	// 只有退货退款、且买家填过时才出现；仅退款的单永远没有它。
+	ReturnShipment *ReturnShipment `json:"return_shipment,omitempty"`
+
 	// Status 退款单状态机，与 `refunds.status` 的 SMALLINT 取值逐值一致。
 	//
 	// 10 待审核 / 20 待买家退货 / 30 退款中 / 40 已退款
@@ -3421,6 +3435,7 @@ type Refund struct {
 	// `(10,20) (10,30) (10,50) (10,60) (20,30) (20,60) (30,40)`。
 	// 每条边由谁走：`10→20/30/50` 审核（`/admin/refunds/{refund_no}/audit`）；
 	// `20→30` 商家确认收到退货（`/admin/refunds/{refund_no}/receipt`）；
+	// 停在 `20` 期间买家填寄回物流（`/refunds/{refund_no}/return-shipment`），状态不变；
 	// `10/20→60` 买家撤回；`30→40` 渠道回调（`/webhooks/refunds/{channel}`）。
 	//
 	// `50 已拒绝` 与 `30 退款中` 失败**不是一回事**，客户端要分开展示：
@@ -3504,6 +3519,7 @@ type RefundReasonCode int
 // `(10,20) (10,30) (10,50) (10,60) (20,30) (20,60) (30,40)`。
 // 每条边由谁走：`10→20/30/50` 审核（`/admin/refunds/{refund_no}/audit`）；
 // `20→30` 商家确认收到退货（`/admin/refunds/{refund_no}/receipt`）；
+// 停在 `20` 期间买家填寄回物流（`/refunds/{refund_no}/return-shipment`），状态不变；
 // `10/20→60` 买家撤回；`30→40` 渠道回调（`/webhooks/refunds/{channel}`）。
 //
 // `50 已拒绝` 与 `30 退款中` 失败**不是一回事**，客户端要分开展示：
@@ -3533,6 +3549,22 @@ type RegionUpdateRequest struct {
 
 // RegionUpdateRequestStatus defines model for RegionUpdateRequest.Status.
 type RegionUpdateRequestStatus int
+
+// ReturnShipment defines model for ReturnShipment.
+type ReturnShipment struct {
+	CarrierCode string `json:"carrier_code"`
+
+	// SubmittedAt 买家最近一次填写（或修改）的时间。不是承运商揽收时间 —— 那要查物流，一期不做
+	SubmittedAt time.Time `json:"submitted_at"`
+	TrackingNo  string    `json:"tracking_no"`
+}
+
+// ReturnShipmentRequest defines model for ReturnShipmentRequest.
+type ReturnShipmentRequest struct {
+	// CarrierCode 承运商标识，如 sf / jd / yto（与发货的 `Shipment.carrier_code` 同一套）
+	CarrierCode string `json:"carrier_code"`
+	TrackingNo  string `json:"tracking_no"`
+}
 
 // ScopedProductListing 一件商品在某个作用域（大区或门店）下的可见性与生效价。
 // `GET /admin/stores/{store_id}/products` 与
@@ -6774,6 +6806,25 @@ type PostRefundsRefundNoCancelParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
+// PostRefundsRefundNoReturnShipmentParams defines parameters for PostRefundsRefundNoReturnShipment.
+type PostRefundsRefundNoReturnShipmentParams struct {
+	// IdempotencyKey 客户端生成的 UUID。幂等作用域为 `(接口 scope, user_id, key)`，
+	// 有效期 24h，过期后同一 key 可复用（见数据模型文档 §11）。
+	//
+	// · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
+	//   并带 `Idempotency-Replayed: true` 响应头
+	// · **同 key 正在处理中**：`409` + `Retry-After`，
+	//   type=https://keel.dev/problems/idempotency-key-in-flight，
+	//   客户端应退避重试，不要当成业务失败
+	// · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
+	//   type=https://keel.dev/problems/idempotency-key-reused。
+	//   宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
+	//   那会让用户以为下单成功了而实际什么都没发生
+	// · 首次执行失败（存档为失败态）时同样回放该失败响应；
+	//   确需重试的场景请换一个新 key
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
 // PostSearchEventsJSONBody defines parameters for PostSearchEvents.
 type PostSearchEventsJSONBody struct {
 	Event     PostSearchEventsJSONBodyEvent `json:"event"`
@@ -7019,6 +7070,9 @@ type PostOrdersOrderNoPaymentsJSONRequestBody = PaymentCreateRequest
 
 // PostOrdersOrderNoRefundsJSONRequestBody defines body for PostOrdersOrderNoRefunds for application/json ContentType.
 type PostOrdersOrderNoRefundsJSONRequestBody = RefundCreateRequest
+
+// PostRefundsRefundNoReturnShipmentJSONRequestBody defines body for PostRefundsRefundNoReturnShipment for application/json ContentType.
+type PostRefundsRefundNoReturnShipmentJSONRequestBody = ReturnShipmentRequest
 
 // PostSearchJSONRequestBody defines body for PostSearch for application/json ContentType.
 type PostSearchJSONRequestBody = SearchRequest

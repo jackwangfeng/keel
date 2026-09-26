@@ -230,6 +230,13 @@ export type RefundItem = {
 /** 对应 `refunds.reason_code`： */
 export type RefundReasonCode = number
 
+export type ReturnShipment = {
+  carrier_code : string
+  tracking_no : string
+  /** 买家最近一次填写（或修改）的时间。不是承运商揽收时间 —— 那要查物流，一期不做 */
+  submitted_at : string
+}
+
 /** 审计字段里的「谁」。`name` 取员工此刻的名字；平台级员工（不属于这家店） */
 export type StaffRef = {
   id : number
@@ -263,6 +270,8 @@ export type AdminRefund = {
   reason_code? : RefundReasonCode
   reason_text? : string
   evidence_urls? : string[]
+  /** 买家寄回退货的物流（`POST /refunds/{refund_no}/return-shipment` 填的那一份）。 */
+  return_shipment? : ReturnShipment
   /** 审核驳回理由，`status=50 已拒绝` 时返回。 */
   reject_reason? : string
   /** 审核时间 */
@@ -491,6 +500,8 @@ export type AdminRefundDetail = {
   reason_code? : RefundReasonCode
   reason_text? : string
   evidence_urls? : string[]
+  /** 买家寄回退货的物流（`POST /refunds/{refund_no}/return-shipment` 填的那一份）。 */
+  return_shipment? : ReturnShipment
   /** 审核驳回理由，`status=50 已拒绝` 时返回。 */
   reject_reason? : string
   /** 审核时间 */
@@ -982,6 +993,8 @@ export type Refund = {
   reason_code? : RefundReasonCode
   reason_text? : string
   evidence_urls? : string[]
+  /** 买家寄回退货的物流（`POST /refunds/{refund_no}/return-shipment` 填的那一份）。 */
+  return_shipment? : ReturnShipment
   /** 审核驳回理由，`status=50 已拒绝` 时返回。 */
   reject_reason? : string
   /** 审核时间 */
@@ -1194,6 +1207,12 @@ export type RegionUpdateRequest = {
   code? : string
   name? : string
   status? : number
+}
+
+export type ReturnShipmentRequest = {
+  /** 承运商标识，如 sf / jd / yto（与发货的 `Shipment.carrier_code` 同一套） */
+  carrier_code : string
+  tracking_no : string
 }
 
 /** 一件商品在某个作用域（大区或门店）下的可见性与生效价。 */

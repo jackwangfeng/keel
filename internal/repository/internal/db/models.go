@@ -299,31 +299,34 @@ type ProductUnderstanding struct {
 }
 
 type Refund struct {
-	ID               int64
-	MerchantID       int64
-	RefundNo         string
-	OrderID          int64
-	PaymentID        int64
-	UserID           int64
-	RefundType       int16
-	ReasonCode       int16
-	ReasonText       *string
-	EvidenceUrls     []string
-	GoodsAmountCents int64
-	FreightCents     int64
-	AmountCents      int64
-	Status           int16
-	Channel          int16
-	ChannelRefundID  *string
-	NotifyPayload    []byte
-	RejectReason     *string
-	AuditedAt        pgtype.Timestamptz
-	RefundedAt       pgtype.Timestamptz
-	CreatedAt        pgtype.Timestamptz
-	UpdatedAt        pgtype.Timestamptz
-	AuditedBy        *int64
-	ReceivedAt       pgtype.Timestamptz
-	ReceivedBy       *int64
+	ID                int64
+	MerchantID        int64
+	RefundNo          string
+	OrderID           int64
+	PaymentID         int64
+	UserID            int64
+	RefundType        int16
+	ReasonCode        int16
+	ReasonText        *string
+	EvidenceUrls      []string
+	GoodsAmountCents  int64
+	FreightCents      int64
+	AmountCents       int64
+	Status            int16
+	Channel           int16
+	ChannelRefundID   *string
+	NotifyPayload     []byte
+	RejectReason      *string
+	AuditedAt         pgtype.Timestamptz
+	RefundedAt        pgtype.Timestamptz
+	CreatedAt         pgtype.Timestamptz
+	UpdatedAt         pgtype.Timestamptz
+	AuditedBy         *int64
+	ReceivedAt        pgtype.Timestamptz
+	ReceivedBy        *int64
+	ReturnCarrierCode *string
+	ReturnTrackingNo  *string
+	ReturnSubmittedAt pgtype.Timestamptz
 }
 
 type RefundItem struct {

@@ -259,6 +259,8 @@ func adminRefundFromRow(r db.AdminGetRefundByNoRow) AdminRefund {
 			Channel: r.Channel, ChannelRefundID: r.ChannelRefundID, RejectReason: r.RejectReason,
 			AuditedAt: r.AuditedAt, RefundedAt: r.RefundedAt,
 			CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
+			ReturnCarrierCode: r.ReturnCarrierCode, ReturnTrackingNo: r.ReturnTrackingNo,
+			ReturnSubmittedAt: r.ReturnSubmittedAt,
 		}),
 		OrderStatus:   r.OrderStatus,
 		StoreSnapshot: r.StoreSnapshot,

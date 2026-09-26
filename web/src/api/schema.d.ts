@@ -8550,6 +8550,118 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/refunds/{refund_no}/return-shipment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 填写退货寄回物流
+         * @description 退货退款（`refund_type=2`）审核通过后退款单停在 `20 待买家退货`，买家把货寄回，
+         *     在这里填承运商与运单号。商家据此查件、收货之后在后台
+         *     「确认收到退货」（`/admin/refunds/{refund_no}/receipt`，`20 → 30`）。
+         *
+         *     **状态不变**：填完仍是 `20`。「货寄出了」只是买家的一句声明，退款要等商家
+         *     真的收到、验过货才往下走 —— 所以这里不开一条 `20 → 25` 之类的新边。
+         *
+         *     **可以改**：`20` 期间再调一次会覆盖上一次填的（填错单号是常事），
+         *     `submitted_at` 跟着更新。离开 `20` 之后（商家已收货、买家已撤回）不能再改。
+         *
+         *     只存承运商与运单号，不查物流轨迹 —— 与发货同一个取舍（数据模型 §5）。
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /**
+                     * @description 客户端生成的 UUID。幂等作用域为 `(接口 scope, user_id, key)`，
+                     *     有效期 24h，过期后同一 key 可复用（见数据模型文档 §11）。
+                     *
+                     *     · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
+                     *       并带 `Idempotency-Replayed: true` 响应头
+                     *     · **同 key 正在处理中**：`409` + `Retry-After`，
+                     *       type=https://keel.dev/problems/idempotency-key-in-flight，
+                     *       客户端应退避重试，不要当成业务失败
+                     *     · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
+                     *       type=https://keel.dev/problems/idempotency-key-reused。
+                     *       宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
+                     *       那会让用户以为下单成功了而实际什么都没发生
+                     *     · 首次执行失败（存档为失败态）时同样回放该失败响应；
+                     *       确需重试的场景请换一个新 key
+                     */
+                    "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    /** @description 退款单对外编号，不可枚举 */
+                    refund_no: components["parameters"]["RefundNo"];
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["ReturnShipmentRequest"];
+                };
+            };
+            responses: {
+                /** @description OK。响应里的 `return_shipment` 是刚填的这一份 */
+                200: {
+                    headers: {
+                        "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Refund"];
+                    };
+                };
+                /** @description 退款单不存在或不属于当前用户 */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /**
+                 * @description · 这张单不是退货退款，或当前不在 `20 待买家退货` ——
+                 *       type=https://keel.dev/problems/refund-status-not-returnable
+                 *     · 同一 Idempotency-Key 正在处理中 —— .../idempotency-key-in-flight
+                 */
+                409: {
+                    headers: {
+                        /** @description 仅幂等键处理中时返回，建议退避秒数 */
+                        "Retry-After"?: number;
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /**
+                 * @description · `carrier_code` / `tracking_no` 为空或超过 64 个字符 —— .../invalid-request
+                 *     · 同一 Idempotency-Key 配了不同请求体 —— .../idempotency-key-reused
+                 */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/orders": {
         parameters: {
             query?: never;
@@ -9230,6 +9342,10 @@ export interface paths {
          *
          *     `RefundStatus` 的状态机里一直画着「商家收货」这条边，而此前没有任何一条
          *     接口走它——退货退款会永远停在 `20`。本接口补上这一步。
+         *
+         *     买家填过的寄回物流在退款单的 `return_shipment` 里（后台详情同样返回）。
+         *     **没填也可以确认**：货可能是当面退回、或者买家忘了填，商家手里有货就是事实；
+         *     反过来，填了单号不等于货到了，所以填单号也不会自动推进状态。
          *
          *     判权与审核相同（按订单的履约门店，「门店库存」那一行）。
          *     进入 `30` 之后的行为与审核通过（仅退款）一致：沙箱开着时同一事务里入账到 `40`。
@@ -10793,6 +10909,7 @@ export interface components {
          *     `(10,20) (10,30) (10,50) (10,60) (20,30) (20,60) (30,40)`。
          *     每条边由谁走：`10→20/30/50` 审核（`/admin/refunds/{refund_no}/audit`）；
          *     `20→30` 商家确认收到退货（`/admin/refunds/{refund_no}/receipt`）；
+         *     停在 `20` 期间买家填寄回物流（`/refunds/{refund_no}/return-shipment`），状态不变；
          *     `10/20→60` 买家撤回；`30→40` 渠道回调（`/webhooks/refunds/{channel}`）。
          *
          *     `50 已拒绝` 与 `30 退款中` 失败**不是一回事**，客户端要分开展示：
@@ -10891,6 +11008,11 @@ export interface components {
             reason_text?: string;
             evidence_urls?: string[];
             /**
+             * @description 买家寄回退货的物流（`POST /refunds/{refund_no}/return-shipment` 填的那一份）。
+             *     只有退货退款、且买家填过时才出现；仅退款的单永远没有它。
+             */
+            return_shipment?: components["schemas"]["ReturnShipment"];
+            /**
              * @description 审核驳回理由，`status=50 已拒绝` 时返回。
              *     没有这个字段，被驳回的用户只能看到一句「已拒绝」，
              *     既不知道为什么，也不知道改什么再申请。
@@ -10910,6 +11032,20 @@ export interface components {
             created_at: string;
             /** Format: date-time */
             updated_at?: string;
+        };
+        ReturnShipmentRequest: {
+            /** @description 承运商标识，如 sf / jd / yto（与发货的 `Shipment.carrier_code` 同一套） */
+            carrier_code: string;
+            tracking_no: string;
+        };
+        ReturnShipment: {
+            carrier_code: string;
+            tracking_no: string;
+            /**
+             * Format: date-time
+             * @description 买家最近一次填写（或修改）的时间。不是承运商揽收时间 —— 那要查物流，一期不做
+             */
+            submitted_at: string;
         };
         /**
          * @description 第三方身份来源，对应 `user_identities.provider`：

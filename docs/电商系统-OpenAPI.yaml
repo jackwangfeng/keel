@@ -4270,6 +4270,64 @@ paths:
         '422': { $ref: '#/components/responses/IdempotencyKeyReused' }
         default: { $ref: '#/components/responses/Problem' }
 
+  /refunds/{refund_no}/return-shipment:
+    post:
+      tags: [Refund]
+      summary: 填写退货寄回物流
+      description: |
+        退货退款（`refund_type=2`）审核通过后退款单停在 `20 待买家退货`，买家把货寄回，
+        在这里填承运商与运单号。商家据此查件、收货之后在后台
+        「确认收到退货」（`/admin/refunds/{refund_no}/receipt`，`20 → 30`）。
+
+        **状态不变**：填完仍是 `20`。「货寄出了」只是买家的一句声明，退款要等商家
+        真的收到、验过货才往下走 —— 所以这里不开一条 `20 → 25` 之类的新边。
+
+        **可以改**：`20` 期间再调一次会覆盖上一次填的（填错单号是常事），
+        `submitted_at` 跟着更新。离开 `20` 之后（商家已收货、买家已撤回）不能再改。
+
+        只存承运商与运单号，不查物流轨迹 —— 与发货同一个取舍（数据模型 §5）。
+      parameters:
+        - $ref: '#/components/parameters/RefundNo'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReturnShipmentRequest' }
+      responses:
+        '200':
+          description: OK。响应里的 `return_shipment` 是刚填的这一份
+          headers:
+            Idempotency-Replayed: { $ref: '#/components/headers/IdempotencyReplayed' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Refund' }
+        '404':
+          description: 退款单不存在或不属于当前用户
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '409':
+          description: |
+            · 这张单不是退货退款，或当前不在 `20 待买家退货` ——
+              type=https://keel.dev/problems/refund-status-not-returnable
+            · 同一 Idempotency-Key 正在处理中 —— .../idempotency-key-in-flight
+          headers:
+            Retry-After:
+              description: 仅幂等键处理中时返回，建议退避秒数
+              schema: { type: integer }
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: |
+            · `carrier_code` / `tracking_no` 为空或超过 64 个字符 —— .../invalid-request
+            · 同一 Idempotency-Key 配了不同请求体 —— .../idempotency-key-reused
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
   /admin/orders:
     get:
       tags: [Admin, Order]
@@ -4608,6 +4666,10 @@ paths:
 
         `RefundStatus` 的状态机里一直画着「商家收货」这条边，而此前没有任何一条
         接口走它——退货退款会永远停在 `20`。本接口补上这一步。
+
+        买家填过的寄回物流在退款单的 `return_shipment` 里（后台详情同样返回）。
+        **没填也可以确认**：货可能是当面退回、或者买家忘了填，商家手里有货就是事实；
+        反过来，填了单号不等于货到了，所以填单号也不会自动推进状态。
 
         判权与审核相同（按订单的履约门店，「门店库存」那一行）。
         进入 `30` 之后的行为与审核通过（仅退款）一致：沙箱开着时同一事务里入账到 `40`。
@@ -6178,6 +6240,7 @@ components:
         `(10,20) (10,30) (10,50) (10,60) (20,30) (20,60) (30,40)`。
         每条边由谁走：`10→20/30/50` 审核（`/admin/refunds/{refund_no}/audit`）；
         `20→30` 商家确认收到退货（`/admin/refunds/{refund_no}/receipt`）；
+        停在 `20` 期间买家填寄回物流（`/refunds/{refund_no}/return-shipment`），状态不变；
         `10/20→60` 买家撤回；`30→40` 渠道回调（`/webhooks/refunds/{channel}`）。
 
         `50 已拒绝` 与 `30 退款中` 失败**不是一回事**，客户端要分开展示：
@@ -6298,6 +6361,11 @@ components:
         evidence_urls:
           type: array
           items: { type: string }
+        return_shipment:
+          allOf: [{ $ref: '#/components/schemas/ReturnShipment' }]
+          description: |
+            买家寄回退货的物流（`POST /refunds/{refund_no}/return-shipment` 填的那一份）。
+            只有退货退款、且买家填过时才出现；仅退款的单永远没有它。
         reject_reason:
           type: string
           description: |
@@ -6308,6 +6376,31 @@ components:
         refunded_at:  { type: string, format: date-time, description: 到账时间 }
         created_at:   { type: string, format: date-time }
         updated_at:   { type: string, format: date-time }
+
+    ReturnShipmentRequest:
+      type: object
+      required: [carrier_code, tracking_no]
+      properties:
+        carrier_code:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: '承运商标识，如 sf / jd / yto（与发货的 `Shipment.carrier_code` 同一套）'
+        tracking_no:
+          type: string
+          minLength: 1
+          maxLength: 64
+
+    ReturnShipment:
+      type: object
+      required: [carrier_code, tracking_no, submitted_at]
+      properties:
+        carrier_code: { type: string }
+        tracking_no:  { type: string }
+        submitted_at:
+          type: string
+          format: date-time
+          description: 买家最近一次填写（或修改）的时间。不是承运商揽收时间 —— 那要查物流，一期不做
 
     # ---- 用户与地址 ----
     IdentityProvider:

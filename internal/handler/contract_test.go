@@ -310,6 +310,13 @@ var routes = []route{
 		NoQueryParams:  "要撤回哪一张在路径上，幂等键在请求头里；没有请求体",
 	},
 	{
+		ContractPath:   "/refunds/{refund_no}/return-shipment",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "refund.go",
+		NoQueryParams:  "承运商与运单号在请求体里，退款单号在路径上，幂等键在请求头里",
+	},
+	{
 		ContractPath:   "/admin/refunds/{refund_no}/audit",
 		ContractMethod: "post",
 		HTTPMethod:     http.MethodPost,

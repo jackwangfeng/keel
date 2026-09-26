@@ -176,6 +176,7 @@ SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, p.payment_no, r.us
        r.goods_amount_cents, r.freight_cents, r.amount_cents, r.status, r.channel,
        r.channel_refund_id, r.reject_reason, r.audited_at, r.refunded_at,
        r.created_at, r.updated_at,
+       r.return_carrier_code, r.return_tracking_no, r.return_submitted_at,
        o.status AS order_status, o.store_snapshot,
        r.audited_by, sa.name AS audited_by_name,
        r.received_at, r.received_by, sr.name AS received_by_name
@@ -188,35 +189,38 @@ SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, p.payment_no, r.us
 `
 
 type AdminGetRefundByNoRow struct {
-	ID               int64
-	RefundNo         string
-	OrderID          int64
-	OrderNo          string
-	StoreID          int64
-	PaymentNo        string
-	UserID           int64
-	RefundType       int16
-	ReasonCode       int16
-	ReasonText       *string
-	EvidenceUrls     []string
-	GoodsAmountCents int64
-	FreightCents     int64
-	AmountCents      int64
-	Status           int16
-	Channel          int16
-	ChannelRefundID  *string
-	RejectReason     *string
-	AuditedAt        pgtype.Timestamptz
-	RefundedAt       pgtype.Timestamptz
-	CreatedAt        pgtype.Timestamptz
-	UpdatedAt        pgtype.Timestamptz
-	OrderStatus      int16
-	StoreSnapshot    []byte
-	AuditedBy        *int64
-	AuditedByName    *string
-	ReceivedAt       pgtype.Timestamptz
-	ReceivedBy       *int64
-	ReceivedByName   *string
+	ID                int64
+	RefundNo          string
+	OrderID           int64
+	OrderNo           string
+	StoreID           int64
+	PaymentNo         string
+	UserID            int64
+	RefundType        int16
+	ReasonCode        int16
+	ReasonText        *string
+	EvidenceUrls      []string
+	GoodsAmountCents  int64
+	FreightCents      int64
+	AmountCents       int64
+	Status            int16
+	Channel           int16
+	ChannelRefundID   *string
+	RejectReason      *string
+	AuditedAt         pgtype.Timestamptz
+	RefundedAt        pgtype.Timestamptz
+	CreatedAt         pgtype.Timestamptz
+	UpdatedAt         pgtype.Timestamptz
+	ReturnCarrierCode *string
+	ReturnTrackingNo  *string
+	ReturnSubmittedAt pgtype.Timestamptz
+	OrderStatus       int16
+	StoreSnapshot     []byte
+	AuditedBy         *int64
+	AuditedByName     *string
+	ReceivedAt        pgtype.Timestamptz
+	ReceivedBy        *int64
+	ReceivedByName    *string
 }
 
 // 后台按编号取一张退款单。列与 AdminListRefunds 逐一对齐。
@@ -246,6 +250,9 @@ func (q *Queries) AdminGetRefundByNo(ctx context.Context, refundNo string) (Admi
 		&i.RefundedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ReturnCarrierCode,
+		&i.ReturnTrackingNo,
+		&i.ReturnSubmittedAt,
 		&i.OrderStatus,
 		&i.StoreSnapshot,
 		&i.AuditedBy,
@@ -263,6 +270,7 @@ SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, p.payment_no, r.us
        r.goods_amount_cents, r.freight_cents, r.amount_cents, r.status, r.channel,
        r.channel_refund_id, r.reject_reason, r.audited_at, r.refunded_at,
        r.created_at, r.updated_at,
+       r.return_carrier_code, r.return_tracking_no, r.return_submitted_at,
        o.status AS order_status, o.store_snapshot,
        r.audited_by, sa.name AS audited_by_name,
        r.received_at, r.received_by, sr.name AS received_by_name
@@ -276,35 +284,38 @@ SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, p.payment_no, r.us
 `
 
 type AdminListOrderRefundsRow struct {
-	ID               int64
-	RefundNo         string
-	OrderID          int64
-	OrderNo          string
-	StoreID          int64
-	PaymentNo        string
-	UserID           int64
-	RefundType       int16
-	ReasonCode       int16
-	ReasonText       *string
-	EvidenceUrls     []string
-	GoodsAmountCents int64
-	FreightCents     int64
-	AmountCents      int64
-	Status           int16
-	Channel          int16
-	ChannelRefundID  *string
-	RejectReason     *string
-	AuditedAt        pgtype.Timestamptz
-	RefundedAt       pgtype.Timestamptz
-	CreatedAt        pgtype.Timestamptz
-	UpdatedAt        pgtype.Timestamptz
-	OrderStatus      int16
-	StoreSnapshot    []byte
-	AuditedBy        *int64
-	AuditedByName    *string
-	ReceivedAt       pgtype.Timestamptz
-	ReceivedBy       *int64
-	ReceivedByName   *string
+	ID                int64
+	RefundNo          string
+	OrderID           int64
+	OrderNo           string
+	StoreID           int64
+	PaymentNo         string
+	UserID            int64
+	RefundType        int16
+	ReasonCode        int16
+	ReasonText        *string
+	EvidenceUrls      []string
+	GoodsAmountCents  int64
+	FreightCents      int64
+	AmountCents       int64
+	Status            int16
+	Channel           int16
+	ChannelRefundID   *string
+	RejectReason      *string
+	AuditedAt         pgtype.Timestamptz
+	RefundedAt        pgtype.Timestamptz
+	CreatedAt         pgtype.Timestamptz
+	UpdatedAt         pgtype.Timestamptz
+	ReturnCarrierCode *string
+	ReturnTrackingNo  *string
+	ReturnSubmittedAt pgtype.Timestamptz
+	OrderStatus       int16
+	StoreSnapshot     []byte
+	AuditedBy         *int64
+	AuditedByName     *string
+	ReceivedAt        pgtype.Timestamptz
+	ReceivedBy        *int64
+	ReceivedByName    *string
 }
 
 // 一个订单的全部退款单（后台视角，带审核记录），按申请时间倒序。
@@ -340,6 +351,9 @@ func (q *Queries) AdminListOrderRefunds(ctx context.Context, orderID int64) ([]A
 			&i.RefundedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ReturnCarrierCode,
+			&i.ReturnTrackingNo,
+			&i.ReturnSubmittedAt,
 			&i.OrderStatus,
 			&i.StoreSnapshot,
 			&i.AuditedBy,
@@ -513,6 +527,7 @@ SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, p.payment_no, r.us
        r.goods_amount_cents, r.freight_cents, r.amount_cents, r.status, r.channel,
        r.channel_refund_id, r.reject_reason, r.audited_at, r.refunded_at,
        r.created_at, r.updated_at,
+       r.return_carrier_code, r.return_tracking_no, r.return_submitted_at,
        o.status AS order_status, o.store_snapshot,
        r.audited_by, sa.name AS audited_by_name,
        r.received_at, r.received_by, sr.name AS received_by_name
@@ -546,35 +561,38 @@ type AdminListRefundsParams struct {
 }
 
 type AdminListRefundsRow struct {
-	ID               int64
-	RefundNo         string
-	OrderID          int64
-	OrderNo          string
-	StoreID          int64
-	PaymentNo        string
-	UserID           int64
-	RefundType       int16
-	ReasonCode       int16
-	ReasonText       *string
-	EvidenceUrls     []string
-	GoodsAmountCents int64
-	FreightCents     int64
-	AmountCents      int64
-	Status           int16
-	Channel          int16
-	ChannelRefundID  *string
-	RejectReason     *string
-	AuditedAt        pgtype.Timestamptz
-	RefundedAt       pgtype.Timestamptz
-	CreatedAt        pgtype.Timestamptz
-	UpdatedAt        pgtype.Timestamptz
-	OrderStatus      int16
-	StoreSnapshot    []byte
-	AuditedBy        *int64
-	AuditedByName    *string
-	ReceivedAt       pgtype.Timestamptz
-	ReceivedBy       *int64
-	ReceivedByName   *string
+	ID                int64
+	RefundNo          string
+	OrderID           int64
+	OrderNo           string
+	StoreID           int64
+	PaymentNo         string
+	UserID            int64
+	RefundType        int16
+	ReasonCode        int16
+	ReasonText        *string
+	EvidenceUrls      []string
+	GoodsAmountCents  int64
+	FreightCents      int64
+	AmountCents       int64
+	Status            int16
+	Channel           int16
+	ChannelRefundID   *string
+	RejectReason      *string
+	AuditedAt         pgtype.Timestamptz
+	RefundedAt        pgtype.Timestamptz
+	CreatedAt         pgtype.Timestamptz
+	UpdatedAt         pgtype.Timestamptz
+	ReturnCarrierCode *string
+	ReturnTrackingNo  *string
+	ReturnSubmittedAt pgtype.Timestamptz
+	OrderStatus       int16
+	StoreSnapshot     []byte
+	AuditedBy         *int64
+	AuditedByName     *string
+	ReceivedAt        pgtype.Timestamptz
+	ReceivedBy        *int64
+	ReceivedByName    *string
 }
 
 // 后台退款单列表，一页。门店、订单状态、门店快照从所属订单带出来；
@@ -621,6 +639,9 @@ func (q *Queries) AdminListRefunds(ctx context.Context, arg AdminListRefundsPara
 			&i.RefundedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ReturnCarrierCode,
+			&i.ReturnTrackingNo,
+			&i.ReturnSubmittedAt,
 			&i.OrderStatus,
 			&i.StoreSnapshot,
 			&i.AuditedBy,

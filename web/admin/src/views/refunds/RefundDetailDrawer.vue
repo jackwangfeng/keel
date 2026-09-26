@@ -247,6 +247,31 @@ async function submitReceive(): Promise<void> {
                     <el-descriptions-item label="订单已退">{{ yuan(refund.order.refunded_cents ?? 0) }}</el-descriptions-item>
                 </el-descriptions>
 
+                <template v-if="refund.refund_type === 2">
+                    <h4>寄回物流</h4>
+                    <el-descriptions
+                        v-if="refund.return_shipment"
+                        :column="3"
+                        border
+                        size="small"
+                        class="mb12"
+                        data-test="return-shipment"
+                    >
+                        <el-descriptions-item label="承运商">{{ refund.return_shipment.carrier_code }}</el-descriptions-item>
+                        <el-descriptions-item label="运单号">{{ refund.return_shipment.tracking_no }}</el-descriptions-item>
+                        <el-descriptions-item label="买家填写于">
+                            {{ datetime(refund.return_shipment.submitted_at) }}
+                        </el-descriptions-item>
+                    </el-descriptions>
+                    <p v-else class="hint mb12" data-test="return-shipment-missing">
+                        {{
+                            refund.status === 20
+                                ? "买家还没有填写寄回物流。没填也可以在收到货后确认收到退货。"
+                                : "买家没有填写寄回物流。"
+                        }}
+                    </p>
+                </template>
+
                 <template v-if="(refund.evidence_urls ?? []).length > 0">
                     <h4>凭证</h4>
                     <div class="evidence mb12">
@@ -275,6 +300,15 @@ async function submitReceive(): Promise<void> {
                         <div v-if="refund.refund_type === 2 && refund.status !== 50" class="hint">
                             裁定退运费：{{ yuan(refund.freight_cents ?? 0) }}
                         </div>
+                    </el-timeline-item>
+                    <el-timeline-item
+                        v-if="refund.return_shipment"
+                        :timestamp="datetime(refund.return_shipment.submitted_at)"
+                    >
+                        买家填写寄回物流
+                        <span class="hint">
+                            · {{ refund.return_shipment.carrier_code }} {{ refund.return_shipment.tracking_no }}
+                        </span>
                     </el-timeline-item>
                     <el-timeline-item v-if="refund.received_at" :timestamp="datetime(refund.received_at)" type="primary">
                         确认收到退货

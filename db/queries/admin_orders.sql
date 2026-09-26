@@ -100,6 +100,7 @@ SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, p.payment_no, r.us
        r.goods_amount_cents, r.freight_cents, r.amount_cents, r.status, r.channel,
        r.channel_refund_id, r.reject_reason, r.audited_at, r.refunded_at,
        r.created_at, r.updated_at,
+       r.return_carrier_code, r.return_tracking_no, r.return_submitted_at,
        o.status AS order_status, o.store_snapshot,
        r.audited_by, sa.name AS audited_by_name,
        r.received_at, r.received_by, sr.name AS received_by_name
@@ -142,6 +143,7 @@ SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, p.payment_no, r.us
        r.goods_amount_cents, r.freight_cents, r.amount_cents, r.status, r.channel,
        r.channel_refund_id, r.reject_reason, r.audited_at, r.refunded_at,
        r.created_at, r.updated_at,
+       r.return_carrier_code, r.return_tracking_no, r.return_submitted_at,
        o.status AS order_status, o.store_snapshot,
        r.audited_by, sa.name AS audited_by_name,
        r.received_at, r.received_by, sr.name AS received_by_name
@@ -159,6 +161,7 @@ SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, p.payment_no, r.us
        r.goods_amount_cents, r.freight_cents, r.amount_cents, r.status, r.channel,
        r.channel_refund_id, r.reject_reason, r.audited_at, r.refunded_at,
        r.created_at, r.updated_at,
+       r.return_carrier_code, r.return_tracking_no, r.return_submitted_at,
        o.status AS order_status, o.store_snapshot,
        r.audited_by, sa.name AS audited_by_name,
        r.received_at, r.received_by, sr.name AS received_by_name
