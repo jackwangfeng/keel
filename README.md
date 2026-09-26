@@ -186,10 +186,13 @@ products, run regions and stores, issue coupons, manage staff, ship orders and
 handle after-sales. These parts
 are not there yet, and are listed so that nothing above reads as if it ships:
 
-- **auto-confirm receipt and return tracking numbers.** The console's orders
-  and after-sales pages are there (find, ship, review, confirm returned goods),
-  but auto-confirming receipt N days after shipping and buyer-entered return
-  tracking numbers are not
+- **two after-sales timers and two buyer-app screens.** Auto-confirming receipt
+  N days after shipping, buyer-entered return tracking numbers and private refund
+  evidence uploads (visible only to the buyer and to staff) are there, but closing
+  a return-and-refund whose goods never come back, and cleaning up uploads left
+  unreferenced for 24 hours, have no background job yet; the buyer app has not
+  wired the evidence upload and return-shipment endpoints (the server and the
+  contract are ready)
 - **cross-encoder reranking.** `POST /search` today is three-stage — vector
   recall and keyword recall fused with RRF, then business re-ranking
   (out-of-stock products are demoted multiplicatively below everything in
