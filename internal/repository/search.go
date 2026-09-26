@@ -19,8 +19,8 @@ import (
 // SearchFilters 是契约 SearchFilters 在这一层的形状。
 //
 // 指针表示「没传」：category_id 传 0 与不传是两件事（前者会筛掉一切，
-// 后者不筛）。InStockOnly 不是指针 —— 契约给了它 default: true，
-// 「没传」在契约里就等于 true，service 负责把这件事落定，到这一层时它已经
+// 后者不筛）。InStockOnly 不是指针 —— 契约给了它 default（false），
+// 「没传」在契约里就等于 false，handler 负责把这件事落定，到这一层时它已经
 // 是一个确定的布尔值。
 type SearchFilters struct {
 	CategoryID    *int64
@@ -69,6 +69,49 @@ type SearchTx interface {
 	// 悄悄返回空列表会把那个错藏起来。
 	SearchProductsByKeyword(ctx context.Context, sc StoreScope, tsquery string,
 		f SearchFilters, limit int32) ([]SearchHit, error)
+
+	// InsertSearchLog 写一行检索日志（数据模型 §8，迁移 00027）。
+	InsertSearchLog(ctx context.Context, l SearchLog) error
+}
+
+// SearchLog 是一行检索日志在这一层的形状。
+//
+// 只收 POST /search 这一刻知道的那些列；user_id / session_id / parsed_intent
+// 与三个行为列不在这里 —— 见 db/queries/search_logs.sql。
+type SearchLog struct {
+	Query     string
+	RecallIDs []int64
+	RankedIDs []int64
+	LatencyMs int32
+	TraceID   string
+	Strategy  string
+	Stages    []string
+
+	// ModelName / ModelVersion 是**这一次**给查询做 embedding 的那个模型；
+	// 向量路没跑成时为 nil（不是空串 —— 空串会被读成「有个模型，名字是空的」）。
+	ModelName    *string
+	ModelVersion *string
+}
+
+func (t tenantTx) InsertSearchLog(ctx context.Context, l SearchLog) error {
+	// 两个数组列不收 nil：pgx 把 nil 切片编码成 NULL，而「召回了 0 条」与
+	// 「不知道召回了什么」是两件事，前者该是空数组。
+	recall, ranked, stages := l.RecallIDs, l.RankedIDs, l.Stages
+	if recall == nil {
+		recall = []int64{}
+	}
+	if ranked == nil {
+		ranked = []int64{}
+	}
+	if stages == nil {
+		stages = []string{}
+	}
+	lat := l.LatencyMs
+	return t.q.InsertSearchLog(ctx, db.InsertSearchLogParams{
+		Query: l.Query, RecallIds: recall, RankedIds: ranked,
+		LatencyMs: &lat, TraceID: l.TraceID, Strategy: l.Strategy,
+		Stages: stages, ModelName: l.ModelName, ModelVersion: l.ModelVersion,
+	})
 }
 
 func (t tenantTx) SearchProductsByVector(ctx context.Context, sc StoreScope,

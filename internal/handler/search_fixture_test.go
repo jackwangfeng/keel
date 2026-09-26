@@ -247,6 +247,9 @@ func newSearchFixture(t *testing.T) searchFixture {
 		c := context.Background()
 		ids := []int64{idA, idB}
 		for _, stmt := range []string{
+			// search_logs 对 merchants 有外键：每一次检索都写一行（M5），
+			// 漏掉这一条的症状是下面 DELETE FROM merchants 以 23503 失败。
+			`DELETE FROM search_logs WHERE merchant_id = ANY($1)`,
 			`DELETE FROM product_text_vectors  WHERE merchant_id = ANY($1)`,
 			`DELETE FROM product_understanding WHERE merchant_id = ANY($1)`,
 			// inventories 自带 merchant_id 了（00020），不必再绕 skus 的子查询。

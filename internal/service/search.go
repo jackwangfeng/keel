@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -14,34 +16,44 @@ import (
 	"github.com/keel/keel/internal/search"
 )
 
-// 混合检索（M3 Task 4）：双路召回 → RRF 融合。
+// 混合检索：双路召回 → RRF 融合 → 业务重排（M3 Task 4 + M5）。
 //
 // ===========================================================================
-// 一、契约写的是四层，这里只有两层 —— 而这件事必须从响应里看得出来
+// 一、契约写的是四层，这里有三层 —— 缺的那一层必须从响应里看得出来
 // ===========================================================================
 //
 // 契约 /search 的描述是「四层流水线：双路召回 → RRF 融合 → Reranker 精排 →
-// 业务重排」。后两层属于 M5（语义检索层 §11 阶段 3 / 架构路线图），本轮**没有**。
+// 业务重排」。M5 这一轮接上了**业务重排**（语义检索层 §6，逻辑在
+// internal/search/business.go），**cross-encoder 精排仍然没有**：推理引擎
+// infero 今天只有 /v1/embeddings，没有 /v1/rerank（§10 那条接口还只在纸上），
+// 这一层没有东西可调。
 //
 // 静默少做是这个仓库反复在消灭的东西（券那件事：传了 user_coupon_id 却被忽略
 // 等于让用户以为用了券）。检索这里没有「钱算错了」那么刺眼，但性质一样：
 // 调用方拿到一份排序，它有没有经过精排、有没有被业务规则降权，
 // 从响应里看不出来，而那正是它要据以判断「这个结果为什么长这样」的东西。
 //
-// 两个地方把这件事说出来，都不需要改契约：
+// 三个地方把这件事说出来：
 //
 //	· **strategy 回显的是真的跑过的那条流水线的名字**（DefaultStrategy =
-//	  "rrf-v1"），不是回显请求里那个字符串。语义检索层 §9.3 要的就是
+//	  "rrf-biz-v1"），不是回显请求里那个字符串。语义检索层 §9.3 要的就是
 //	  「strategy_id 写进检索日志、按策略分组对比线上指标」—— 回显请求值的话，
 //	  同一个 id 在精排上线前后指的是两条不同的流水线，那份对比就毁了。
-//	· **explain=true 时 scores 里只出现真的算过的那几项**：vector / keyword /
-//	  rrf / final 有，rerank / business **整个不出现**。契约里它们是可选字段，
-//	  「没算」的诚实形状是缺席，不是 0 —— 与下单那边 freight_cents 同一条纪律。
+//	  业务重排上线也是一次流水线变更，所以名字从 "rrf-v1" 换成了 "rrf-biz-v1"；
+//	  "rrf-v1" 仍然可以显式请求（不做业务重排），见 ResolveStrategy。
+//	· **explain=true 时 scores 里只出现真的算过的那几项**：vector（向量路跑成了
+//	  才有）/ keyword / rrf / business / final；rerank **整个不出现**。
+//	  契约里它们是可选字段，「没算」的诚实形状是缺席，不是 0 ——
+//	  与下单那边 freight_cents 同一条纪律。
+//	· **search_logs.stages 记的是这一次真正跑过的阶段**（迁移 00027 文件头 ①），
+//	  降级时少掉的 vector 在那里看得见。
 //
-// 两个方向都锁住了：handler/contract_test.go 的 NotYetImplementedStage 挂着这
-// 两笔账（契约里删掉「Reranker 精排」这几个字 → 红），
-// handler/search_test.go 的 TestExplainOmitsStagesThatDidNotRun 断言响应里
-// 真的没有这两个键（哪天精排上线开始填它们 → 红，逼人回来划掉挂账）。
+// 精排那一笔账仍然挂在 handler/contract_test.go 的 NotYetImplementedStage 上
+// （契约里删掉「Reranker 精排」这几个字 → 红），
+// handler/search_test.go 的 TestExplainListsExactlyTheStagesThatRan 断言响应里
+// 真的没有 rerank（哪天精排上线开始填它 → 红，逼人回来划掉挂账）。
+// 业务重排本身也只实现了 §6 的一部分（库存；活动 / 口碑 / 毛利缺席），
+// 缺的那几个因子为什么缺，写在 internal/search/business.go 的文件头第二节。
 //
 // ===========================================================================
 // 二、降级链是硬要求（§8：任何一环故障，搜索都必须仍能返回结果）
@@ -86,8 +98,10 @@ import (
 // 换一次 embedding 模型它就失效，却不会有任何东西报错，只会让某一类查询
 // 突然搜不到东西。
 //
-// 契约里精度那两层（Reranker 精排 / 业务重排）本来就排在召回之后，
-// 它们才是该做这件事的地方。handler/search_test.go 的
+// 契约里的 Reranker 精排本来就排在召回之后，它才是该做这件事的地方。
+// （M5 接上的业务重排**不是**：它只管「该不该卖」，不管「相关不相关」，
+// 一件相关度很低的有货商品在业务重排之后仍然是一件相关度很低的商品。）
+// handler/search_test.go 的
 // TestHybridRecallFindsBothLexicalAndSemanticMatches 把这个代价写成了断言
 // （它断言的是「裙子排在咖啡壶前面」，不是「咖啡壶不在结果里」），
 // 免得哪天有人把它当成 bug 顺手加一个阈值上去。
@@ -100,6 +114,32 @@ import (
 // M3 计划算过这笔账：本轮不含 Reranker（80 ms 的大头），总链路约 108 ms，
 // 目标 P95 < 300 ms，三倍余量。**所以这里不加 query 缓存、不换模型。**
 // 要重算这笔账的时点是 Reranker 落地那一轮。
+// M5 的业务重排是一次内存里的乘法加一次排序（几百条候选），不改变这笔账。
+//
+// ===========================================================================
+// 六、每次成功的检索写一行 search_logs，写失败不让检索失败
+// ===========================================================================
+//
+// 数据模型 §8「第一天就要埋」：没有这张表，§9 的离线评测集无从采样，
+// §9.3 的按策略对比无从谈起。写的是解析后的 strategy、真正跑过的 stages、
+// 这一次 query embedding 的模型名与版本、融合后的全部候选（recall_ids）与
+// 真正返回的那几条（ranked_ids）、服务端耗时。
+//
+// 它是**辅助数据**，所以：
+//
+//	· 写失败只记一条 ERROR（SearchLogFailed 那句），检索照样返回 ——
+//	  §8「任何一环故障，搜索都必须仍能返回结果」对日志比对推理引擎更该成立，
+//	  日志连结果质量都不影响。
+//	· 用自己的事务，不和召回共用：召回那两个事务早已提交，而日志写失败
+//	  也不该有机会回滚任何东西。
+//	· 上下文脱离请求的取消（context.WithoutCancel，保留租户），再套一个
+//	  SearchLogTimeout：客户端断开不该让一次已经算完的检索少一行日志，
+//	  而一个卡住的数据库也不该把检索拖过这条上限。
+//	· 同步写，不开 goroutine：一次单行 INSERT 在毫秒量级，而异步写意味着
+//	  进程退出时丢日志、测试里要等一个看不见的 goroutine。
+//
+// trace_id 由这里生成并落在这一行上，但本轮**不回给客户端** —— 它唯一的
+// 消费方 POST /search/events 还没实现（handler/contract_test.go 挂着这笔账）。
 
 // SearchRepository 是检索需要的仓储能力。
 type SearchRepository interface {
@@ -111,19 +151,48 @@ const (
 	DefaultSearchSize = 20
 	MaxSearchSize     = 100
 
-	// DefaultStrategy 是本轮真的跑得出来的那条流水线的名字：
-	// 双路召回 + RRF，没有精排、没有业务重排。
+	// DefaultStrategy 是默认跑的那条流水线的名字：
+	// 双路召回 + RRF + 业务重排，没有精排。
 	//
 	// 不叫 "default"：契约把请求里 strategy 的默认值定成了 "default"，
 	// 那是一个**别名**（「不指定就用当时的默认策略」），而回显要的是
 	// 「这一次到底跑了哪条」。两者同名的话，精排上线之后 search_logs 里
 	// 前后两个月的 "default" 指的是两条不同的流水线，而 §9.3 那张按策略
 	// 分组的对比表会把它们当成同一桶。
-	DefaultStrategy = "rrf-v1"
+	//
+	// 业务重排上线正是那样一次变更，所以这个名字从 "rrf-v1" 换成了
+	// "rrf-biz-v1"，而不是让 "rrf-v1" 从此悄悄多做一层。
+	DefaultStrategy = "rrf-biz-v1"
+
+	// StrategyRRFOnly 是 M3 那条流水线：双路召回 + RRF，不做业务重排。
+	//
+	// 它仍然可以被显式请求，而且**跑的就是它名字说的那条**。留着它是因为
+	// §9.3 要的「可切换、可对比」此刻有了第一对可比的东西：业务重排到底让
+	// CTR@10 / 搜索→加购率变好还是变坏，只有在两条流水线都还跑得出来时才能答。
+	StrategyRRFOnly = "rrf-v1"
 
 	// AliasStrategyDefault 是契约里 strategy 的默认值，解析成 DefaultStrategy。
 	AliasStrategyDefault = "default"
 )
+
+// 阶段名：search_logs.stages 里记的就是这几个字符串，按执行顺序。
+//
+// 与 explain 的 scores 键同名（vector / keyword / rrf / business）：
+// 同一件事在日志与响应里叫两个名字，按阶段分组查日志的人与读 explain 的人
+// 就要各自维护一张对照表。
+const (
+	StageVector   = "vector"
+	StageKeyword  = "keyword"
+	StageRRF      = "rrf"
+	StageBusiness = "business"
+)
+
+// SearchLogTimeout 是写一行检索日志的上限（文件头第六节）。
+//
+// 一次单行 INSERT 正常在毫秒量级；200 ms 是「数据库明显不对劲了」的线。
+// 超过它就放弃这一行、记 ERROR、照常返回 —— 检索结果已经算完了，
+// 让用户为一行辅助数据多等是本末倒置。
+const SearchLogTimeout = 200 * time.Millisecond
 
 // RecallMultiplier 是每一路要多召回几倍。
 //
@@ -208,7 +277,7 @@ const MaxQueryRunes = 200
 // 让 handler 直接拿 repository 的类型，等于让 HTTP 这一层 import 数据访问层，
 // 而 CONTRIBUTING 的硬规矩一说的正是那条边界。
 //
-// InStockOnly 不是指针：契约给了它 default: true，所以「没传」在契约里是一个
+// InStockOnly 不是指针：契约给了它 default（false），所以「没传」在契约里是一个
 // 有确定值的状态，而不是「未知」。把它做成指针会让每一个调用点都得再决定一次
 // 那个默认值是什么 —— 而那个决定只该有一处（handler 的 defaultSearchFilters）。
 type SearchFilters struct {
@@ -265,8 +334,16 @@ type SearchHit struct {
 	// KeywordScore 是 ts_rank_cd。只有 Source 含 keyword 时有意义。
 	KeywordScore float64
 
-	// RRFScore 是融合得分，也是本轮的 final —— 后面没有别的层了。
+	// RRFScore 是融合得分。
 	RRFScore float64
+
+	// BusinessScore 是业务重排的乘子（internal/search.BusinessFactor），
+	// 只有 SearchResult.Stages 含 StageBusiness 时有意义。
+	BusinessScore float64
+
+	// FinalScore 是排序真正依据的那个分：跑了业务重排时是 RRF × 业务乘子，
+	// 没跑（strategy = rrf-v1）时就是 RRF 分。
+	FinalScore float64
 }
 
 // SearchResult 是一次检索的全部产出。
@@ -280,6 +357,11 @@ type SearchResult struct {
 
 	// Strategy 是**真的跑过的**那条流水线的标识，不是请求里那个字符串。
 	Strategy string
+
+	// Stages 是这一次**真正跑过**的阶段，按执行顺序（Stage* 常量）。
+	// explain 据此决定 scores 里出现哪几个键，search_logs.stages 原样记它。
+	// 不在服务范围时是空切片 —— 那一次一个阶段都没跑。
+	Stages []string
 
 	// Degraded 为真表示向量那一路没跑成（引擎不可用 / 超时 / 没配引擎），
 	// 这一次是纯关键词结果。handler 不把它放进响应 —— 契约里没有这个字段，
@@ -335,7 +417,11 @@ var ErrQueryTooLong = errors.New("查询词超过长度上限")
 
 // Search 跑一次混合检索。
 func (s *SearchService) Search(ctx context.Context, req SearchRequest) (SearchResult, error) {
+	// 检索日志里的 latency_ms 从这里量起，到排序完成为止（不含写日志本身）。
+	// 与响应里的 latency_ms 不是同一个数：那个由 handler 从解请求体之前量起。
+	start := time.Now()
 	size := clampSearchSize(req.Size)
+	strategy := ResolveStrategy(req.Strategy)
 
 	// 长度先于一切：下面 recallByVector 给引擎的时间是按字数算的，
 	// 没有这道闸门它就没有上界。
@@ -370,10 +456,18 @@ func (s *SearchService) Search(ctx context.Context, req SearchRequest) (SearchRe
 			// 不在服务范围：空结果 + match_type = none，仍然 200。
 			// 不去跑两路召回 —— 没有门店就没有「卖不卖 / 多少钱 / 有没有货」，
 			// 而一份按 store_id = 0 算出来的结果是三个都错的。
-			return SearchResult{
-				Items: []SearchHit{}, Strategy: req.Strategy,
+			//
+			// strategy 回显解析后的值，不是请求原文：这一支此前回的是
+			// req.Strategy，于是「不在服务范围」的那一次会把客户端随手写的
+			// 字符串原样写进回显 —— 与本文件头第一节那条纪律相反。
+			res := SearchResult{
+				Items: []SearchHit{}, Strategy: strategy, Stages: []string{},
 				Store: StoreContext{MatchType: MatchNone},
-			}, nil
+			}
+			// 也记一行：stages 为空、ranked_ids 为空。「不在服务范围」的检索
+			// 有多少，本身就是一个该被看见的数（默认门店没配、围栏画漏了）。
+			s.recordSearchLog(ctx, req.Query, res, nil, embedModel{}, start)
+			return res, nil
 		}
 		return SearchResult{}, err
 	}
@@ -385,11 +479,12 @@ func (s *SearchService) Search(ctx context.Context, req SearchRequest) (SearchRe
 		wg              sync.WaitGroup
 		vecHits, kwHits []repository.SearchHit
 		vecErr, kwErr   error
+		model           embedModel
 	)
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		vecHits, vecErr = s.recallByVector(ctx, scope, req.Query, req.Filters.toRepo(), recall)
+		vecHits, model, vecErr = s.recallByVector(ctx, scope, req.Query, req.Filters.toRepo(), recall)
 	}()
 	go func() {
 		defer wg.Done()
@@ -443,32 +538,135 @@ func (s *SearchService) Search(ctx context.Context, req SearchRequest) (SearchRe
 	}
 
 	fused := search.FuseRRF(vecIDs, kwIDs)
-	if len(fused) > size {
-		fused = fused[:size]
+
+	// 这一次真正跑过的阶段。召回那两段按「跑成了」算，不按「发起了」算：
+	// 降级时 vector 不在这里，explain 里也就没有 scores.vector ——
+	// 一个没跑成的阶段在 explain 里给出 0 分，与「跑了、分数是 0」分不开。
+	stages := make([]string, 0, 4)
+	if vecErr == nil {
+		stages = append(stages, StageVector)
+	}
+	if kwErr == nil {
+		stages = append(stages, StageKeyword)
+	}
+	stages = append(stages, StageRRF)
+
+	// 业务重排（语义检索层 §6）。作用在融合出来的**全部**候选上、截断到 size
+	// **之前** —— 理由写在 internal/search/business.go 的文件头。
+	var ranked []search.Ranked
+	if strategy == StrategyRRFOnly {
+		ranked = make([]search.Ranked, 0, len(fused))
+		for _, f := range fused {
+			ranked = append(ranked, search.Ranked{Fused: f, Business: 1, Final: f.Score})
+		}
+	} else {
+		signals := make(map[int64]search.BusinessSignals, len(byID))
+		for id, row := range byID {
+			signals[id] = search.BusinessSignals{InStock: row.InStock}
+		}
+		var missing int
+		ranked, missing = search.RerankByBusiness(fused, signals)
+		if missing > 0 {
+			// 走不到：融合的 id 全部来自召回行。真走到了是这里的 bug，
+			// 按有货处理并记一条，而不是让整次检索失败。
+			s.log.ErrorContext(ctx, "业务重排有候选缺信号，已按有货处理", "missing", missing)
+		}
+		stages = append(stages, StageBusiness)
+	}
+	if len(ranked) > size {
+		ranked = ranked[:size]
 	}
 
-	items := make([]SearchHit, 0, len(fused))
-	for _, f := range fused {
-		row := byID[f.ID]
+	items := make([]SearchHit, 0, len(ranked))
+	for _, r := range ranked {
+		row := byID[r.ID]
 		items = append(items, SearchHit{
 			ID: row.ID, Title: row.Title, Subtitle: row.Subtitle,
 			MinPriceCents: row.MinPriceCents, MaxPriceCents: row.MaxPriceCents,
 			SalesCount: row.SalesCount, Status: row.Status, InStock: row.InStock,
-			Source: f.Source(),
+			Source: r.Source(),
 			// 1 - 余弦距离 = 余弦相似度。只有向量路捞到它时这个数才有意义，
 			// 没捞到时 Distance 是零值 0，而 1-0=1 会冒充「完美匹配」——
 			// 所以这里按名次判一次，而不是无条件算。
-			VectorScore:  vectorScoreOf(f, row),
-			KeywordScore: row.Rank,
-			RRFScore:     f.Score,
+			VectorScore:   vectorScoreOf(r.Fused, row),
+			KeywordScore:  row.Rank,
+			RRFScore:      r.Score,
+			BusinessScore: r.Business,
+			FinalScore:    r.Final,
 		})
 	}
-	return SearchResult{
+	res := SearchResult{
 		Items:    items,
-		Strategy: ResolveStrategy(req.Strategy),
+		Strategy: strategy,
+		Stages:   stages,
 		Degraded: degraded,
 		Store:    storeContextOf(scope, matchTyp),
-	}, nil
+	}
+	s.recordSearchLog(ctx, req.Query, res, fused, model, start)
+	return res, nil
+}
+
+// embedModel 是这一次给查询做 embedding 的模型（inference.Result 上的两个字段）。
+// 向量路没跑成时是零值，写进日志是两个 NULL。
+type embedModel struct{ Name, Version string }
+
+// SearchLogFailed 是写检索日志失败时那条 ERROR 的消息，导出给测试逐字匹配 ——
+// 它是「埋点断了」在系统里唯一的痕迹，没有断言盯着的话，哪天被人顺手删掉
+// 也不会有任何东西红。
+const SearchLogFailed = "检索日志没写进去（search_logs）。检索结果照常返回，但这一次检索在效果评测与策略对比里缺席"
+
+// recordSearchLog 写一行 search_logs。**不返回错误**：失败只记日志（文件头第六节）。
+func (s *SearchService) recordSearchLog(ctx context.Context, query string, res SearchResult,
+	fused []search.Fused, model embedModel, start time.Time) {
+
+	recallIDs := make([]int64, 0, len(fused))
+	for _, f := range fused {
+		recallIDs = append(recallIDs, f.ID)
+	}
+	rankedIDs := make([]int64, 0, len(res.Items))
+	for _, it := range res.Items {
+		rankedIDs = append(rankedIDs, it.ID)
+	}
+	entry := repository.SearchLog{
+		Query:     query,
+		RecallIDs: recallIDs,
+		RankedIDs: rankedIDs,
+		LatencyMs: int32(time.Since(start).Milliseconds()),
+		TraceID:   newTraceID(),
+		Strategy:  res.Strategy,
+		Stages:    res.Stages,
+	}
+	if model.Name != "" {
+		entry.ModelName = &model.Name
+	}
+	if model.Version != "" {
+		entry.ModelVersion = &model.Version
+	}
+
+	// 脱离请求的取消、保留租户（context 的值原样带过去），再套自己的上限。
+	lctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), SearchLogTimeout)
+	defer cancel()
+	if err := s.repo.WithTenant(lctx, func(tx repository.Tx) error {
+		return tx.InsertSearchLog(lctx, entry)
+	}); err != nil {
+		s.log.ErrorContext(ctx, SearchLogFailed,
+			"query", query, "strategy", res.Strategy, "trace_id", entry.TraceID, "err", err)
+	}
+}
+
+// newTraceID 生成一个 128 位随机的 trace_id（32 个十六进制字符）。
+//
+// 随机而不是自增：它是全局唯一索引上的键（uk_search_logs_trace），
+// 数据模型 §2 那条分界线把它归在「我们自己生成的不可枚举标识」一类 ——
+// 将来回给客户端之后，一个可枚举的 id 等于让人按序号去回传别人的检索行为。
+func newTraceID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// crypto/rand 在 Linux 上读的是 getrandom(2)，失败意味着内核熵源坏了。
+		// Go 1.24 起它本身就不返回错误（失败直接让进程崩溃），这里兜的是更早的版本。
+		panic(fmt.Sprintf("crypto/rand 失败：%v", err))
+	}
+	return hex.EncodeToString(b[:])
 }
 
 // vectorScoreOf 只在向量路真的命中时给出相似度，否则给 0。
@@ -489,10 +687,10 @@ func vectorScoreOf(f search.Fused, row repository.SearchHit) float64 {
 // **不返回一个空列表** —— 空列表会让「引擎挂了」和「这家店真的没有语义相近的
 // 商品」在上层长得一模一样。
 func (s *SearchService) recallByVector(ctx context.Context, scope repository.StoreScope, query string,
-	f repository.SearchFilters, limit int32) ([]repository.SearchHit, error) {
+	f repository.SearchFilters, limit int32) ([]repository.SearchHit, embedModel, error) {
 
 	if s.emb == nil {
-		return nil, fmt.Errorf("%w：没有配置 %s，本进程没有推理引擎客户端",
+		return nil, embedModel{}, fmt.Errorf("%w：没有配置 %s，本进程没有推理引擎客户端",
 			inference.ErrUnavailable, inference.EnvEndpoint)
 	}
 
@@ -507,10 +705,10 @@ func (s *SearchService) recallByVector(ctx context.Context, scope repository.Sto
 
 	out, err := s.emb.Embed(ectx, []string{query})
 	if err != nil {
-		return nil, err
+		return nil, embedModel{}, err
 	}
 	if len(out.Vectors) != 1 {
-		return nil, fmt.Errorf("%w：要 1 个向量，拿到 %d 个",
+		return nil, embedModel{}, fmt.Errorf("%w：要 1 个向量，拿到 %d 个",
 			inference.ErrProtocol, len(out.Vectors))
 	}
 
@@ -521,9 +719,9 @@ func (s *SearchService) recallByVector(ctx context.Context, scope repository.Sto
 		return err
 	})
 	if err != nil {
-		return nil, err
+		return nil, embedModel{}, err
 	}
-	return hits, nil
+	return hits, embedModel{Name: out.Model, Version: out.ModelVersion}, nil
 }
 
 // embedTimeoutFor 给这一条查询算出等引擎的上限。
@@ -555,17 +753,19 @@ func clampSearchSize(size int) int {
 
 // ResolveStrategy 把请求里的 strategy 解析成真的会跑的那一条。
 //
-// 眼下只有一条流水线，所以任何输入都落到 DefaultStrategy —— 包括一个
-// 拼错的、或者指向一条还不存在的策略的字符串。**不报 400**：契约里它是可选
-// 参数，而客户端能从回显里看出自己没落到想要的那一桶（§9.3 原话：
-// 「服务端做分流时，客户端必须知道自己落到了哪一桶，否则埋点对不上」）。
+// 认得的只有两条：StrategyRRFOnly（"rrf-v1"，不做业务重排）与
+// DefaultStrategy（"rrf-biz-v1"）。其余任何输入 —— 空串、别名 "default"、
+// 拼错的、指向一条还不存在的策略的（比如带精排的）—— 都落到 DefaultStrategy。
+// **不报 400**：契约里它是可选参数，而客户端能从回显里看出自己没落到想要的
+// 那一桶（§9.3 原话：「服务端做分流时，客户端必须知道自己落到了哪一桶，
+// 否则埋点对不上」）。
 //
 // 它导出是为了让这条规则有一个可以被直接测的落点：埋在 Search 里的话，
 // 「传了个没人认得的策略会怎样」只能从一次完整检索的响应里反推。
 func ResolveStrategy(requested string) string {
 	switch strings.TrimSpace(requested) {
-	case "", AliasStrategyDefault, DefaultStrategy:
-		return DefaultStrategy
+	case StrategyRRFOnly:
+		return StrategyRRFOnly
 	default:
 		return DefaultStrategy
 	}

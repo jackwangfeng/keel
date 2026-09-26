@@ -132,16 +132,17 @@ type route struct {
 	//
 	// 需要第四种形状，是因为前三种都够不着这一笔。/search 的响应形状是完整的
 	// （items / latency_ms / total / strategy 一个不少），请求参数也全实现了 ——
-	// 少做的是**流水线里的两层**，而那件事只写在 description 的一句话里：
+	// 少做的是**流水线里的某一层**（M3 时是精排与业务重排两层，M5 之后剩精排，
+	// 外加业务重排里的两个因子），而那件事只写在 description 的一句话里：
 	// 「四层流水线：双路召回 → RRF 融合 → Reranker 精排 → 业务重排」。
-	// 没有这笔账的话，「接口看上去全实现了，实际只跑了一半」在任何闸门里
+	// 没有这笔账的话，「接口看上去全实现了，实际只跑了一部分」在任何闸门里
 	// 都留不下痕迹。
 	//
 	// 键是**契约描述里那几个字**，逐字。两个方向都锁得住：
 	//   - 契约把这个阶段改名或删掉 → TestNotYetImplementedStagesAreNamedInContract
 	//     红（清单在描述一个契约里不存在的东西）；
 	//   - 真的实现了这一层、响应里开始出现它的得分 → search_test.go 的
-	//     TestExplainOmitsStagesThatDidNotRun 红，逼人回来删掉这一行。
+	//     TestExplainListsExactlyTheStagesThatRan 红，逼人回来删掉这一行。
 	NotYetImplementedStage map[string]string
 }
 
@@ -298,21 +299,27 @@ var routes = []route{
 		NotYetImplementedResponse: map[string]string{
 			// store 本轮结清：检索结果按解析到的那家门店算，
 			// 响应里回的是真实的 StoreContext，不是一个假的 match_type。
-			"trace_id": "检索日志 search_logs 那张表本轮没有建，POST /search/events 也没有实现。" +
-				"trace_id 在契约里唯一的用处就是把一次检索与它后续的点击 / 加购 / 下单串起来" +
-				"（那条接口的描述原话），而串到的那一头不存在。回一个谁也存不进去的 id " +
-				"不是「先占个位」，是让客户端以为它拿到的东西有下文。",
+			"trace_id": "M5 起 search_logs 建了，每次检索都生成一个 trace_id 写进那一行；" +
+				"但 POST /search/events 还没有实现。trace_id 在契约里唯一的用处就是把一次检索" +
+				"与它后续的点击 / 加购 / 下单串起来（那条接口的描述原话），而收它的那一头不存在。" +
+				"回一个没有任何接口收得下的 id 不是「先占个位」，是让客户端以为它拿到的东西有下文。" +
+				"/search/events 落地的那一轮把它回出去，并删掉这一行。",
 		},
 		NotYetImplementedStage: map[string]string{
 			"Reranker 精排": "cross-encoder 精排（语义检索层 §5 / §11 阶段 3，路线图 M5）。" +
 				"它是延迟大头（§8 给 80 ms），而本轮连离线评测集（§9.1）都还没有 —— " +
 				"没有评测集就上精排，等于把一层没人能判断好坏的东西放进排序里。" +
 				"explain=true 时 scores.rerank **整个不出现**，而不是填 0。",
-			"业务重排": "缺货 / 活动失效 / 负毛利降权（语义检索层 §6，路线图 M5）。" +
-				"它要的是活动与毛利数据，而 promotions 与成本价在数据模型里都还没有落地 —— " +
-				"眼下能做的只有「缺货降权」那一条，而那条已经由 filters.in_stock_only " +
-				"（默认 true）以过滤的形式做掉了。只做三分之一再叫「业务重排」，" +
-				"比不做更容易让人以为它在了。explain=true 时 scores.business 同样缺席。",
+			// 业务重排本身 M5 接上了（缺货降权，internal/search/business.go），
+			// 这里只挂它**没做**的那两个因子 —— 契约描述里点了名的那两个。
+			"活动失效": "业务重排的 w_promo（语义检索层 §6）。数据模型里没有活动表：" +
+				"券（00026）挂在买家身上、不挂在商品上，「这件商品有没有进行中 / 已结束的活动」" +
+				"无从回答。业务乘子目前只含 w_stock，explain 的 scores.business 就是它，" +
+				"不含任何没算的因子。",
+			"负毛利": "按毛利调权（语义检索层 §6「关于毛利权重的诚实建议」：默认应当关闭）。" +
+				"本轮照那条建议不做，连开关都没有 —— 一个默认关闭、没有调用方会打开的开关" +
+				"是一段没有执行者的代码。另：skus.cost_cents 默认 0，「成本未知」与「零成本」" +
+				"分不开，按它判负毛利会把所有没填成本的商品一并误判。",
 		},
 	},
 	// —— 后台身份（M4 本轮）。契约 AdminAuth 与 Admin 两个 tag 的 7 条。
@@ -1546,7 +1553,7 @@ func TestNotYetImplementedResponseFieldsExistInContract(t *testing.T) {
 // 与请求体那条同理，这里只做「清单 → 契约」这一个方向的机械对账：
 // 契约把某个阶段改名或删掉时这条会红，指出那一行清单已经在描述一个不存在的
 // 东西。反向（真的实现了却忘了划掉）由行为测试 search_test.go 的
-// TestExplainOmitsStagesThatDidNotRun 盯着。
+// TestExplainListsExactlyTheStagesThatRan 盯着。
 //
 // 为什么判据是「描述里出现过这几个字」而不是别的：因为那句描述**就是**契约对
 // 这条接口的全部承诺 —— 契约在响应形状上分不出「跑了四层」和「跑了两层」，

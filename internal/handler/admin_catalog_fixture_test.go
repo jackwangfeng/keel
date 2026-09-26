@@ -115,6 +115,9 @@ func newAdminShop(t *testing.T) adminShop {
 			// 留下几行 —— 不删的话下面那句 DELETE FROM merchants 会以 23503
 			// 失败，而那条错误会出现在**别的**测试里（清理是 t.Cleanup）。
 			`DELETE FROM idempotency_keys WHERE merchant_id = $1`,
+			// search_logs（00027）同理：买家侧那条「发布之后搜得到」每搜一次
+			// 就写一行检索日志，而它对 merchants 有外键。
+			`DELETE FROM search_logs WHERE merchant_id = $1`,
 			`DELETE FROM merchants WHERE id = $1`,
 		} {
 			if _, err := admin.Exec(c, stmt, merchantID); err != nil {
