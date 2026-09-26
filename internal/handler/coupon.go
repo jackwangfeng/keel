@@ -140,22 +140,22 @@ func apiApplicableCoupons(in []service.ApplicableCoupon) []api.ApplicableCoupon 
 func writeCouponError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, service.ErrCouponNotApplicable):
-		problem.Write(c, http.StatusConflict, problem.TypeCouponNotApplicable, err.Error())
+		writeProblemDetail(c, http.StatusConflict, problem.TypeCouponNotApplicable, "这张优惠券本单不可用", err)
 	case errors.Is(err, service.ErrCouponTemplateNotFound):
 		problem.Write(c, http.StatusNotFound, problem.TypeNotFound, "券模板不存在")
 	case errors.Is(err, service.ErrCouponSoldOut):
-		problem.Write(c, http.StatusConflict, problem.TypeCouponSoldOut, "券已经发完了")
+		writeProblemDetail(c, http.StatusConflict, problem.TypeCouponSoldOut, "券已经发完了", err)
 	case errors.Is(err, service.ErrCouponClaimLimitReached):
-		problem.Write(c, http.StatusConflict, problem.TypeCouponClaimLimitReached, err.Error())
+		writeProblemDetail(c, http.StatusConflict, problem.TypeCouponClaimLimitReached, "已达每人限领", err)
 	case errors.Is(err, service.ErrCouponClaimEnded):
-		problem.Write(c, http.StatusConflict, problem.TypeCouponClaimEnded, "这批券的活动已结束")
+		writeProblemDetail(c, http.StatusConflict, problem.TypeCouponClaimEnded, "这批券的活动已结束", err)
 	case errors.Is(err, service.ErrCouponTemplateLocked):
-		problem.Write(c, http.StatusConflict, problem.TypeCouponTemplateLocked, err.Error())
+		writeProblemDetail(c, http.StatusConflict, problem.TypeCouponTemplateLocked, "这批券已经发出过，券面与范围不能再改", err)
 	case errors.Is(err, service.ErrCouponTemplateDisabled):
 		problem.Write(c, http.StatusConflict, problem.TypeCouponTemplateDisabled, "券模板已停用")
 	case errors.Is(err, service.ErrCouponBadRequest):
 		// detail 原样给出：运营要知道是哪一条不成立（「满 100 减 200」、哪几个手机号查不到）。
-		problem.Write(c, http.StatusUnprocessableEntity, problem.TypeInvalidRequest, err.Error())
+		writeProblemDetail(c, http.StatusUnprocessableEntity, problem.TypeInvalidRequest, "券的配置不成立", err)
 	case errors.Is(err, service.ErrStaffForbidden):
 		problem.Write(c, http.StatusForbidden, problem.TypeStaffForbidden,
 			"券管理只对商家管理员与操作员开放")
@@ -165,4 +165,12 @@ func writeCouponError(c *gin.Context, err error) {
 	default:
 		writeOrderError(c, err)
 	}
+}
+
+// writeProblemDetail 写一个带 detail 的 problem：title 是固定的一句话（客户端可以直接显示），
+// detail 是这一次的具体原因（门槛差多少、哪几个手机号查不到）。
+// 原因放进 detail 而不是 title：title 按 RFC 9457 对同一个 type 应当不变。
+func writeProblemDetail(c *gin.Context, status int, kind, title string, err error) {
+	detail := err.Error()
+	problem.WriteValue(c, status, api.Problem{Type: kind, Title: title, Status: status, Detail: &detail})
 }

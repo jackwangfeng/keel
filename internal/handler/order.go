@@ -226,7 +226,7 @@ func writeOrderError(c *gin.Context, err error) {
 		// 契约：409 coupon-not-applicable，试算与下单同一个 type。detail 带原因
 		// （门槛差多少、范围不含这家店……），客户端换一张券或不用券。
 		// **绝不忽略这张券按原价继续**：那是用户以为用了券、实际按原价成交。
-		problem.Write(c, http.StatusConflict, problem.TypeCouponNotApplicable, err.Error())
+		writeProblemDetail(c, http.StatusConflict, problem.TypeCouponNotApplicable, "这张优惠券本单不可用", err)
 
 	case errors.Is(err, service.ErrPriceChanged):
 		// 契约明写：「服务端试算不一致时返回 409，防止价格变动导致用户以旧价成交」。

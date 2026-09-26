@@ -4130,6 +4130,7 @@ export interface paths {
                 /**
                  * @description 按 `type` 区分：剩余数量不够整批 —— `https://keel.dev/problems/coupon-sold-out`；
                  *     模板已停用 —— `https://keel.dev/problems/coupon-template-disabled`；
+                 *     绝对时间模式下已过 `valid_end_at` —— `https://keel.dev/problems/coupon-claim-ended`；
                  *     同一 Idempotency-Key 正在处理中 —— `https://keel.dev/problems/idempotency-key-in-flight`。
                  */
                 409: {

@@ -171,6 +171,26 @@ becomes `0.1.0` when the remaining M4 work is in.
   "incomplete", and a product a region has delisted says so on the store's
   page instead of looking like a switch that does nothing.
 
+- **Coupons** (migration 00026, data model §7). Fixed-amount-over-threshold,
+  percentage (with an optional cap) and no-threshold coupons, scoped by
+  category (descendants included, the same semantics as the product list's
+  `category_id` filter), product, brand, **region and store** — exclusions win
+  over inclusions. Buyers claim from a coupon centre (total and per-buyer limits
+  are enforced by a conditional `UPDATE` on the template row, so forty people
+  racing for the last five get exactly five — there is a test that does
+  exactly that); merchants grant by phone number, all-or-nothing per batch.
+  The calculation exists **once**, as a pure function fed the rows priced at the
+  ordering store's effective price, and quote, order and "coupons usable on this
+  cart" all call it. Percentage discounts round **down** to the cent, and
+  allocation onto order lines never gives a line more than its own amount.
+  Using a coupon is a branch of the order saga with a compensation: the coupon
+  is locked when the order is placed, marked used in the same transaction as the
+  payment callback, and released when stock deduction fails or the unpaid order
+  times out. A coupon the order cannot use is a `409`, never a silently ignored
+  field. The admin console has a coupon page (templates, a scope picker,
+  claim toggle, grant dialog, issuance and redemption counts); for now only
+  merchant admins and operators may use it.
+
 ### Changed
 
 - **Embeddings now run on [infero](https://github.com/jackwangfeng/infero)**, a
@@ -198,6 +218,14 @@ Listed because a changelog that only lists wins is an advertisement.
   privilege-escalation path — so it was deferred to M5 rather than rushed before
   the first release. `TestPlatformScopedWritesAreNotYetIdempotent` asserts today's
   `409` and will go red when the fix lands.
+
+- **Free-shipping coupons are rejected.** There is no freight in this system yet
+  (`orders.freight_cents` is always 0), so a free-shipping coupon would always
+  take off nothing while telling the buyer it had been applied. The type is
+  reserved in the enum; a `CHECK` constraint and the admin API refuse to create
+  one until freight exists. Coupon stacking (`stackable` / `priority`) is modelled
+  but not enabled — one coupon per order. A used coupon has no way back to
+  unused yet, because refunds have not landed.
 
 - **No linter.** There is no golangci-lint configuration in the repository.
 - **`trace_id` appears nowhere in business code**, despite structured logging
