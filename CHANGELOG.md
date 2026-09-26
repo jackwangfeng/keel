@@ -39,7 +39,7 @@ so "which one is running?" never depends on anyone's memory.
 
 ## [Unreleased]
 
-Migrations `00027`–`00034`.
+Migrations `00027`–`00035`.
 
 ### Added
 
@@ -172,6 +172,29 @@ Migrations `00027`–`00034`.
   `chk_refund_state` ties "refunded" to the channel refund id and timestamp.
 - Who may audit or confirm receipt follows the same store-scoped rule as
   shipping.
+- **Back-office order and refund lists** (migration 00035):
+  `GET /admin/orders` (status, store, created-at range, exact order number or
+  phone — receiver's or the buyer account's), `GET /admin/orders/{order_no}`
+  (lines with discount allocation and refunded / in-flight quantities, payments,
+  shipments, refunds), `GET /admin/refunds` (status, store, date range) and
+  `GET /admin/refunds/{refund_no}` (lines, evidence, audit trail, order summary).
+  Same store-scoped rule as shipping: lists only return what is in the caller's
+  scope (filters intersect with it, so an out-of-scope `store_id` is an empty
+  page), details outside it are `403 out-of-scope`. A region is resolved from the
+  store's *current* region, soft-deleted stores included. A malformed or inverted
+  date range is a `422`, not a silently unfiltered page. New indexes back the
+  merchant-wide, by-status and by-receiver-phone paths.
+- **Refund audit trail**: `refunds.audited_by`, `received_at` and `received_by`
+  record who approved / rejected a refund and who confirmed the returned goods
+  (single-column staff foreign keys, like `shipments.created_by`). Exposed on the
+  admin views only; refunds audited before 00035 show timestamps without a name.
+- **Console: orders and after-sales pages.** The orders page (previously a text
+  placeholder) lists orders with filters and pagination, opens a detail drawer
+  and ships paid orders with an `Idempotency-Key`. A new after-sales page lists
+  refunds and lets staff approve or reject pending ones (return freight editable
+  for return-and-refund only) and confirm returned goods. Per-line refund amounts
+  are shown as computed by the server and are never editable. Buttons are greyed
+  out by role; the server stays authoritative.
 
 ### Changed
 
@@ -199,6 +222,11 @@ Migrations `00027`–`00034`.
 
 ### Fixed
 
+- **Shipping, refund audit and "return received" no longer fail with a 500 for
+  a region manager when the order's store has been soft-deleted.** The store-scope
+  check looked the store up among live stores only and the resulting not-found
+  was never mapped; order operations now resolve the store's region including
+  soft-deleted stores, the same rule the new admin order lists use.
 - **The embedded coordinator's storage is fully closed when `Close` returns.**
   Bumped dtmrs to v0.11.1. Under v0.11.0, `dtmrs_close` dropped its runtime
   before its SQLite connection pool and never closed the pool, so SQLite's
