@@ -38,8 +38,12 @@ export const COUPON_TYPE: Record<CouponType, string> = {
     4: "包邮",
 };
 
-/** 包邮券为什么不能建。与服务端 422 的理由同一句话（service/admin_coupon.go）。 */
-export const FREE_SHIPPING_REASON = "本系统不计运费（运费模板没有落地，订单运费恒为 0），包邮券永远减 0，本期不可建";
+/**
+ * 包邮券怎么算（00042 起可建，数据模型 §7）。对话框与列表上给运营看的那句话。
+ * 与服务端的口径一致：抵的是运费、最多抵到 0，本单运费为 0 时买家用不了。
+ */
+export const FREE_SHIPPING_HINT =
+    "抵运费：最多抵「封顶」那么多（留空即运费全免），运费最多抵到 0。本单已包邮或商家没配运费模板时，买家用不了这张券。";
 
 export const SCOPE_TYPE: Record<CouponScope["scope_type"], string> = {
     1: "全场",
