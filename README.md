@@ -139,11 +139,17 @@ all `docker compose up` brings up today. The rest of this README describes the
 system being built; these parts are on the roadmap and are listed here so that
 nothing above reads as if it already ships:
 
-- semantic search itself. The `pgvector` extension and the four vector/understanding
-  tables are in the box now (the database image is `pgvector/pgvector:pg16`, and
-  `docker compose up` creates them), but vector recall, keyword recall and the
-  `/search` endpoint are not — what ships today is the substrate, not the search
-- the inference engine, and its fallback to small CPU models where there is no GPU
+- **cross-encoder reranking and business re-ranking.** `POST /search` today is
+  two-stage — vector recall and keyword recall, fused with RRF. The contract
+  describes four stages; the last two land in M5. `explain: true` names the
+  stages that actually ran, so the response never claims more than it did
+- **the inference engine is an opt-in overlay, not part of `docker compose up`.**
+  Bring it up with `-f compose.inference.yaml` and index with `cmd/keel-index`.
+  Without it search still answers — it degrades to keyword-only recall, which is
+  a supported path, not a failure. The overlay pulls ~3.7 GB and needs ~75 s on
+  a cold start, which is why it is not in the default one-command stack
+- the merchant admin surface. The contract has it; the implementation does not —
+  a merchant can process orders but cannot list a product yet (M4)
 - the storefront and admin UI — there is no page on port 3000 yet
 
 ---
@@ -155,9 +161,10 @@ Products & SKUs · inventory · cart · checkout · payments · refunds ·
 coupons · order state machine
 
 **AI-native capabilities**
-- **Semantic search** — hybrid vector + keyword retrieval, RRF fusion,
-  cross-encoder reranking, then *business re-ranking* (stock, promotions, quality).
-  Semantically relevant is not the same as worth selling.
+- **Semantic search** — hybrid vector + keyword retrieval fused with RRF.
+  Cross-encoder reranking and *business re-ranking* (stock, promotions, quality)
+  are designed and contracted, and land in M5 — semantically relevant is not the
+  same as worth selling, and that distinction is the point of the last two stages.
 - **Conversational shopping** — understands intent, never invents products.
   Every item shown comes from a real retrieval result.
 - **Visual search** — find the same product from a photo.
@@ -208,7 +215,7 @@ nothing above reads as if the rest already ships.
 [uni-app x](https://doc.dcloud.net.cn/uni-app-x/) (UTS compiled to native
 Kotlin/Swift — not a webview). Product list → product detail → login →
 checkout (preview then submit) → my orders → order detail → pay.
-Search is a disabled placeholder: `GET /search` lands in M3.
+Search is a disabled placeholder; the endpoint it needs is `POST /search`.
 
 **Its types are generated from the same OpenAPI spec, but not from the same
 artifact as `web/`.** UTS is not TypeScript — its type system has to land on
