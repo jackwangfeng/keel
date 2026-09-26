@@ -209,7 +209,11 @@ func (r *Repo) withTenantTx(ctx context.Context, fn func(pgx.Tx, Tx) error) erro
 		return err
 	}
 
-	if err := fn(tx, tenantTx{q: db.New(tx)}); err != nil {
+	// scope 取一份**副本**的地址而不是 &merchantID：同一个事务里造出来的
+	// 每一个领域对象都会拿到这个指针，共用一个局部变量的地址意味着谁改了它
+	// 就改了所有人的租户。它今天没人改，而这行代价是零。
+	scope := merchantID
+	if err := fn(tx, tenantTx{q: db.New(tx), scope: &scope}); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

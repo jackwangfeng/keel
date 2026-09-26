@@ -4,10 +4,22 @@
 -- 在数据库层过滤，应用层再加一遍条件之后「RLS 到底有没有生效」就再也测不出来了。
 --
 -- 这张表上这条规矩尤其不能破例，因为它的策略不是标准的列比较：
--- `merchant_id IS NOT DISTINCT FROM staff_scope_merchant()`（00017）。
+-- merchant_id IS NOT DISTINCT FROM staff_scope_merchant()（00017）。
 -- 那条谓词在两种作用域下给出两种完全不同的可见集合，而这里每一条查询都
 -- **不知道**自己跑在哪一种作用域里 —— 那正是想要的：作用域由
 -- repository.WithTenant / WithPlatform 决定，查询本身没有那个参数可以传错。
+--
+-- **SELECT 与 RETURNING 里也一个 merchant_id 都没有**，这不是为了迁就
+-- scripts/check_query_tenancy.py，而是因为那一列在这一层是**推得出来的**：
+-- 每一次读写都发生在一个设好作用域的事务里，所以查出来的行必然属于当前作用域
+-- —— 租户作用域里它就是当前租户，平台作用域里它按定义是 NULL。
+-- （internal/repository/user.go 的 User 上早就写着同一句话：「没有 MerchantID：
+-- 这一层每一次读写都发生在一个设好 app.merchant_id 的事务里……把它带上来
+-- 只会制造第二个可能与 ctx 对不上的真相」。）
+--
+-- 于是 repository 从作用域填这一列，而不是从行里读。少一个真相源，
+-- 也少一次「这一行的 merchant_id 和当前作用域不一致」的不可能状态 ——
+-- 真出现了那说明 RLS 已经失效，而那时读回来的那个值只会让上层安心。
 --
 -- 同理，INSERT 里一个 merchant_id 都没有：那一列的默认值是 staff_scope_merchant()，
 -- 也就是本事务的作用域（见 00017 与数据模型 §14 认证流程 ④「新员工的 merchant_id
@@ -43,18 +55,18 @@ SELECT
 -- NULL（平台级操作员），租户作用域里落成那家店。调用方没有那个参数可以传错。
 INSERT INTO staff (email, name, role, created_by)
 VALUES ($1, $2, $3, $4)
-RETURNING id, merchant_id, email, name, role, status, last_login_at, created_at;
+RETURNING id, email, name, role, status, last_login_at, created_at;
 
 -- name: GetStaffByID :one
 -- 按 id 取一个**没被软删**的操作员。查不到（包括「不在本作用域里」）返回 ErrNoRows。
-SELECT id, merchant_id, email, name, role, status, last_login_at, created_at
+SELECT id, email, name, role, status, last_login_at, created_at
   FROM staff
  WHERE id = $1 AND deleted_at IS NULL;
 
 -- name: ListStaff :many
 -- 员工列表。契约：平台级看见平台操作员，商家级只看见自己店的 —— 而这句话
 -- 在这条 SQL 里**一个字都没有**，它由作用域和 RLS 给出。
-SELECT id, merchant_id, email, name, role, status, last_login_at, created_at
+SELECT id, email, name, role, status, last_login_at, created_at
   FROM staff
  WHERE deleted_at IS NULL
  ORDER BY id
@@ -72,7 +84,7 @@ SELECT count(*) FROM staff WHERE deleted_at IS NULL;
 UPDATE staff
    SET email = $2
  WHERE id = $1 AND email = $3 AND deleted_at IS NULL
-RETURNING id, merchant_id, email, name, role, status, last_login_at, created_at;
+RETURNING id, email, name, role, status, last_login_at, created_at;
 
 -- name: UpdateStaffRoleStatus :one
 -- 改角色或状态。两个参数都是「给了就改，没给就保持」，用 coalesce 表达，
@@ -81,7 +93,7 @@ UPDATE staff
    SET role   = coalesce(sqlc.narg('role'),   role),
        status = coalesce(sqlc.narg('status'), status)
  WHERE id = sqlc.arg('id') AND deleted_at IS NULL
-RETURNING id, merchant_id, email, name, role, status, last_login_at, created_at;
+RETURNING id, email, name, role, status, last_login_at, created_at;
 
 -- name: CountOtherLiveAdmins :one
 -- 除了这一个人之外，本作用域里还有几个在岗管理员。
@@ -114,7 +126,7 @@ RETURNING id;
 -- 同一个快照里，否则「取出来 → 判断 → 用」中间那个窗口正是一串已经用过的
 -- 引导 token 还能再换一次会话的窗口。
 SELECT t.id, t.staff_id, t.kind,
-       s.merchant_id, s.email, s.name, s.role, s.status, s.last_login_at, s.created_at
+       s.email, s.name, s.role, s.status, s.last_login_at, s.created_at
   FROM staff_tokens t
   JOIN staff s ON s.id = t.staff_id
  WHERE t.token_hash = $1
@@ -161,4 +173,4 @@ UPDATE staff_tokens t
    AND t.expire_at > now()
    AND s.id = t.staff_id
    AND s.deleted_at IS NULL
-RETURNING t.id, s.id AS staff_id, s.merchant_id, s.role, s.status;
+RETURNING t.id, s.id AS staff_id, s.role, s.status;

@@ -32,10 +32,22 @@ type BootstrapChannelStateRow struct {
 // 在数据库层过滤，应用层再加一遍条件之后「RLS 到底有没有生效」就再也测不出来了。
 //
 // 这张表上这条规矩尤其不能破例，因为它的策略不是标准的列比较：
-// `merchant_id IS NOT DISTINCT FROM staff_scope_merchant()`（00017）。
+// merchant_id IS NOT DISTINCT FROM staff_scope_merchant()（00017）。
 // 那条谓词在两种作用域下给出两种完全不同的可见集合，而这里每一条查询都
 // **不知道**自己跑在哪一种作用域里 —— 那正是想要的：作用域由
 // repository.WithTenant / WithPlatform 决定，查询本身没有那个参数可以传错。
+//
+// **SELECT 与 RETURNING 里也一个 merchant_id 都没有**，这不是为了迁就
+// scripts/check_query_tenancy.py，而是因为那一列在这一层是**推得出来的**：
+// 每一次读写都发生在一个设好作用域的事务里，所以查出来的行必然属于当前作用域
+// —— 租户作用域里它就是当前租户，平台作用域里它按定义是 NULL。
+// （internal/repository/user.go 的 User 上早就写着同一句话：「没有 MerchantID：
+// 这一层每一次读写都发生在一个设好 app.merchant_id 的事务里……把它带上来
+// 只会制造第二个可能与 ctx 对不上的真相」。）
+//
+// 于是 repository 从作用域填这一列，而不是从行里读。少一个真相源，
+// 也少一次「这一行的 merchant_id 和当前作用域不一致」的不可能状态 ——
+// 真出现了那说明 RLS 已经失效，而那时读回来的那个值只会让上层安心。
 //
 // 同理，INSERT 里一个 merchant_id 都没有：那一列的默认值是 staff_scope_merchant()，
 // 也就是本事务的作用域（见 00017 与数据模型 §14 认证流程 ④「新员工的 merchant_id
@@ -117,7 +129,7 @@ func (q *Queries) CountStaff(ctx context.Context) (int64, error) {
 const createStaff = `-- name: CreateStaff :one
 INSERT INTO staff (email, name, role, created_by)
 VALUES ($1, $2, $3, $4)
-RETURNING id, merchant_id, email, name, role, status, last_login_at, created_at
+RETURNING id, email, name, role, status, last_login_at, created_at
 `
 
 type CreateStaffParams struct {
@@ -129,7 +141,6 @@ type CreateStaffParams struct {
 
 type CreateStaffRow struct {
 	ID          int64
-	MerchantID  *int64
 	Email       string
 	Name        string
 	Role        int16
@@ -151,7 +162,6 @@ func (q *Queries) CreateStaff(ctx context.Context, arg CreateStaffParams) (Creat
 	var i CreateStaffRow
 	err := row.Scan(
 		&i.ID,
-		&i.MerchantID,
 		&i.Email,
 		&i.Name,
 		&i.Role,
@@ -191,7 +201,7 @@ func (q *Queries) CreateStaffToken(ctx context.Context, arg CreateStaffTokenPara
 
 const findLiveOneTimeStaffToken = `-- name: FindLiveOneTimeStaffToken :one
 SELECT t.id, t.staff_id, t.kind,
-       s.merchant_id, s.email, s.name, s.role, s.status, s.last_login_at, s.created_at
+       s.email, s.name, s.role, s.status, s.last_login_at, s.created_at
   FROM staff_tokens t
   JOIN staff s ON s.id = t.staff_id
  WHERE t.token_hash = $1
@@ -211,7 +221,6 @@ type FindLiveOneTimeStaffTokenRow struct {
 	ID          int64
 	StaffID     int64
 	Kind        int16
-	MerchantID  *int64
 	Email       string
 	Name        string
 	Role        int16
@@ -234,7 +243,6 @@ func (q *Queries) FindLiveOneTimeStaffToken(ctx context.Context, arg FindLiveOne
 		&i.ID,
 		&i.StaffID,
 		&i.Kind,
-		&i.MerchantID,
 		&i.Email,
 		&i.Name,
 		&i.Role,
@@ -246,14 +254,13 @@ func (q *Queries) FindLiveOneTimeStaffToken(ctx context.Context, arg FindLiveOne
 }
 
 const getStaffByID = `-- name: GetStaffByID :one
-SELECT id, merchant_id, email, name, role, status, last_login_at, created_at
+SELECT id, email, name, role, status, last_login_at, created_at
   FROM staff
  WHERE id = $1 AND deleted_at IS NULL
 `
 
 type GetStaffByIDRow struct {
 	ID          int64
-	MerchantID  *int64
 	Email       string
 	Name        string
 	Role        int16
@@ -268,7 +275,6 @@ func (q *Queries) GetStaffByID(ctx context.Context, id int64) (GetStaffByIDRow, 
 	var i GetStaffByIDRow
 	err := row.Scan(
 		&i.ID,
-		&i.MerchantID,
 		&i.Email,
 		&i.Name,
 		&i.Role,
@@ -280,7 +286,7 @@ func (q *Queries) GetStaffByID(ctx context.Context, id int64) (GetStaffByIDRow, 
 }
 
 const listStaff = `-- name: ListStaff :many
-SELECT id, merchant_id, email, name, role, status, last_login_at, created_at
+SELECT id, email, name, role, status, last_login_at, created_at
   FROM staff
  WHERE deleted_at IS NULL
  ORDER BY id
@@ -294,7 +300,6 @@ type ListStaffParams struct {
 
 type ListStaffRow struct {
 	ID          int64
-	MerchantID  *int64
 	Email       string
 	Name        string
 	Role        int16
@@ -316,7 +321,6 @@ func (q *Queries) ListStaff(ctx context.Context, arg ListStaffParams) ([]ListSta
 		var i ListStaffRow
 		if err := rows.Scan(
 			&i.ID,
-			&i.MerchantID,
 			&i.Email,
 			&i.Name,
 			&i.Role,
@@ -338,7 +342,7 @@ const setStaffEmail = `-- name: SetStaffEmail :one
 UPDATE staff
    SET email = $2
  WHERE id = $1 AND email = $3 AND deleted_at IS NULL
-RETURNING id, merchant_id, email, name, role, status, last_login_at, created_at
+RETURNING id, email, name, role, status, last_login_at, created_at
 `
 
 type SetStaffEmailParams struct {
@@ -349,7 +353,6 @@ type SetStaffEmailParams struct {
 
 type SetStaffEmailRow struct {
 	ID          int64
-	MerchantID  *int64
 	Email       string
 	Name        string
 	Role        int16
@@ -368,7 +371,6 @@ func (q *Queries) SetStaffEmail(ctx context.Context, arg SetStaffEmailParams) (S
 	var i SetStaffEmailRow
 	err := row.Scan(
 		&i.ID,
-		&i.MerchantID,
 		&i.Email,
 		&i.Name,
 		&i.Role,
@@ -390,15 +392,14 @@ UPDATE staff_tokens t
    AND t.expire_at > now()
    AND s.id = t.staff_id
    AND s.deleted_at IS NULL
-RETURNING t.id, s.id AS staff_id, s.merchant_id, s.role, s.status
+RETURNING t.id, s.id AS staff_id, s.role, s.status
 `
 
 type TouchLiveStaffSessionRow struct {
-	ID         int64
-	StaffID    int64
-	MerchantID *int64
-	Role       int16
-	Status     int16
+	ID      int64
+	StaffID int64
+	Role    int16
+	Status  int16
 }
 
 // 会话校验：按 hash 取一条还活着的 kind=3 会话，顺手记一次 last_seen_at。
@@ -421,7 +422,6 @@ func (q *Queries) TouchLiveStaffSession(ctx context.Context, tokenHash string) (
 	err := row.Scan(
 		&i.ID,
 		&i.StaffID,
-		&i.MerchantID,
 		&i.Role,
 		&i.Status,
 	)
@@ -442,7 +442,7 @@ UPDATE staff
    SET role   = coalesce($1,   role),
        status = coalesce($2, status)
  WHERE id = $3 AND deleted_at IS NULL
-RETURNING id, merchant_id, email, name, role, status, last_login_at, created_at
+RETURNING id, email, name, role, status, last_login_at, created_at
 `
 
 type UpdateStaffRoleStatusParams struct {
@@ -453,7 +453,6 @@ type UpdateStaffRoleStatusParams struct {
 
 type UpdateStaffRoleStatusRow struct {
 	ID          int64
-	MerchantID  *int64
 	Email       string
 	Name        string
 	Role        int16
@@ -469,7 +468,6 @@ func (q *Queries) UpdateStaffRoleStatus(ctx context.Context, arg UpdateStaffRole
 	var i UpdateStaffRoleStatusRow
 	err := row.Scan(
 		&i.ID,
-		&i.MerchantID,
 		&i.Email,
 		&i.Name,
 		&i.Role,

@@ -213,7 +213,9 @@ func (r *Repo) WithPlatform(ctx context.Context, fn func(StaffTx) error) error {
 		return err
 	}
 
-	if err := fn(tenantTx{q: db.New(tx)}); err != nil {
+	// scope 传 nil：平台级作用域按定义不属于任何一家店（数据模型 §14），
+	// 而这一层交出去的 Staff.MerchantID 正是从它来的。
+	if err := fn(tenantTx{q: db.New(tx), scope: nil}); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -225,11 +227,17 @@ func (r *Repo) WithPlatform(ctx context.Context, fn func(StaffTx) error) error {
 // 那正是想要的：作用域没有任何一处可以被调用方传错。
 // ---------------------------------------------------------------------------
 
-func staffOf(id int64, merchantID *int64, email, name string, role, status int16,
+// staffOf 把一行 staff 装成领域类型。
+//
+// MerchantID **不来自那一行**，来自事务的作用域（见 tenantTx.scope）。
+// 查询里因此一个 merchant_id 都没有，而这不只是为了迁就
+// scripts/check_query_tenancy.py：RLS 保证查出来的行必然属于当前作用域，
+// 所以那一列在这一层是推得出来的，从行里再读一遍只会多一个真相源。
+func (t tenantTx) staffOf(id int64, email, name string, role, status int16,
 	lastLogin, created pgtype.Timestamptz) Staff {
 	return Staff{
 		ID:          id,
-		MerchantID:  merchantID,
+		MerchantID:  t.scope,
 		Email:       email,
 		Name:        name,
 		Role:        role,
@@ -254,7 +262,7 @@ func (t tenantTx) CreateStaff(ctx context.Context, email, name string, role int1
 	if err != nil {
 		return Staff{}, asEmailTaken(err)
 	}
-	return staffOf(row.ID, row.MerchantID, row.Email, row.Name, row.Role, row.Status,
+	return t.staffOf(row.ID, row.Email, row.Name, row.Role, row.Status,
 		row.LastLoginAt, row.CreatedAt), nil
 }
 
@@ -266,7 +274,7 @@ func (t tenantTx) FindStaff(ctx context.Context, id int64) (Staff, error) {
 	if err != nil {
 		return Staff{}, err
 	}
-	return staffOf(row.ID, row.MerchantID, row.Email, row.Name, row.Role, row.Status,
+	return t.staffOf(row.ID, row.Email, row.Name, row.Role, row.Status,
 		row.LastLoginAt, row.CreatedAt), nil
 }
 
@@ -286,7 +294,7 @@ func (t tenantTx) ListStaff(ctx context.Context, limit, offset int64) ([]Staff, 
 	}
 	out := make([]Staff, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, staffOf(row.ID, row.MerchantID, row.Email, row.Name,
+		out = append(out, t.staffOf(row.ID, row.Email, row.Name,
 			row.Role, row.Status, row.LastLoginAt, row.CreatedAt))
 	}
 	return out, nil
@@ -306,7 +314,7 @@ func (t tenantTx) SetStaffEmail(ctx context.Context, id int64, newEmail, oldEmai
 	if err != nil {
 		return Staff{}, asEmailTaken(err)
 	}
-	return staffOf(row.ID, row.MerchantID, row.Email, row.Name, row.Role, row.Status,
+	return t.staffOf(row.ID, row.Email, row.Name, row.Role, row.Status,
 		row.LastLoginAt, row.CreatedAt), nil
 }
 
@@ -320,7 +328,7 @@ func (t tenantTx) UpdateStaffRoleStatus(ctx context.Context, id int64, role, sta
 	if err != nil {
 		return Staff{}, err
 	}
-	return staffOf(row.ID, row.MerchantID, row.Email, row.Name, row.Role, row.Status,
+	return t.staffOf(row.ID, row.Email, row.Name, row.Role, row.Status,
 		row.LastLoginAt, row.CreatedAt), nil
 }
 
@@ -355,7 +363,7 @@ func (t tenantTx) FindLiveOneTimeToken(ctx context.Context, tokenHash string, ki
 	return StaffOneTimeToken{
 		TokenID: row.ID,
 		Kind:    row.Kind,
-		Staff: staffOf(row.StaffID, row.MerchantID, row.Email, row.Name,
+		Staff: t.staffOf(row.StaffID, row.Email, row.Name,
 			row.Role, row.Status, row.LastLoginAt, row.CreatedAt),
 	}, nil
 }
@@ -379,7 +387,7 @@ func (t tenantTx) TouchLiveStaffSession(ctx context.Context, tokenHash string) (
 	return StaffSession{
 		SessionID:  row.ID,
 		StaffID:    row.StaffID,
-		MerchantID: row.MerchantID,
+		MerchantID: t.scope,
 		Role:       row.Role,
 		Status:     row.Status,
 	}, nil
