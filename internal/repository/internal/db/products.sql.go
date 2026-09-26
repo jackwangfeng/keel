@@ -83,6 +83,7 @@ SELECT s.id, s.sku_code, s.spec_values, s.price_cents, s.image_url,
   LEFT JOIN inventories i ON i.sku_id = s.id
  WHERE s.product_id = $1
    AND s.status = 1
+   AND s.deleted_at IS NULL
  ORDER BY s.id
 `
 
@@ -108,6 +109,10 @@ type ListProductSKUsRow struct {
 //
 // inventories 没有 merchant_id 列（parent-scoped，00006），它的 RLS 谓词是对
 // skus 的 EXISTS 子查询，所以这条 JOIN 同样在 RLS 之下。
+//
+// s.deleted_at IS NULL 是 M4（00018 给 skus 补软删）时加上的。软删的规格要从
+// **所有**视图里消失，而这一条恰好是买家看到规格矩阵的那个视图 —— 漏掉它，
+// 一个被商家删掉的规格照样出现在详情页上，点进去才在下单时被拒。
 func (q *Queries) ListProductSKUs(ctx context.Context, productID int64) ([]ListProductSKUsRow, error) {
 	rows, err := q.db.Query(ctx, listProductSKUs, productID)
 	if err != nil {

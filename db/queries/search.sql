@@ -35,7 +35,8 @@ SELECT p.id, p.title, p.subtitle, p.min_price_cents, p.max_price_cents,
        p.sales_count, p.status,
        (v.embedding <=> @query_embedding::vector)::float8 AS distance,
        EXISTS (SELECT 1 FROM skus s JOIN inventories i ON i.sku_id = s.id
-                WHERE s.product_id = p.id AND s.status = 1 AND i.available_qty > 0) AS in_stock
+                WHERE s.product_id = p.id AND s.status = 1
+                  AND s.deleted_at IS NULL AND i.available_qty > 0) AS in_stock
   FROM product_text_vectors v
   JOIN products p ON p.id = v.product_id
  WHERE p.deleted_at IS NULL
@@ -48,7 +49,8 @@ SELECT p.id, p.title, p.subtitle, p.min_price_cents, p.max_price_cents,
         OR p.min_price_cents <= sqlc.narg(max_price_cents)::bigint)
    AND (NOT @in_stock_only::boolean
         OR EXISTS (SELECT 1 FROM skus s JOIN inventories i ON i.sku_id = s.id
-                    WHERE s.product_id = p.id AND s.status = 1 AND i.available_qty > 0))
+                    WHERE s.product_id = p.id AND s.status = 1
+                  AND s.deleted_at IS NULL AND i.available_qty > 0))
  ORDER BY v.embedding <=> @query_embedding::vector
  LIMIT @row_limit;
 
@@ -74,7 +76,8 @@ SELECT p.id, p.title, p.subtitle, p.min_price_cents, p.max_price_cents,
        p.sales_count, p.status,
        ts_rank_cd(p.search_vector, to_tsquery('simple', @tsquery::text))::float8 AS rank,
        EXISTS (SELECT 1 FROM skus s JOIN inventories i ON i.sku_id = s.id
-                WHERE s.product_id = p.id AND s.status = 1 AND i.available_qty > 0) AS in_stock
+                WHERE s.product_id = p.id AND s.status = 1
+                  AND s.deleted_at IS NULL AND i.available_qty > 0) AS in_stock
   FROM products p
  WHERE p.deleted_at IS NULL
    AND p.status = 1
@@ -87,6 +90,7 @@ SELECT p.id, p.title, p.subtitle, p.min_price_cents, p.max_price_cents,
         OR p.min_price_cents <= sqlc.narg(max_price_cents)::bigint)
    AND (NOT @in_stock_only::boolean
         OR EXISTS (SELECT 1 FROM skus s JOIN inventories i ON i.sku_id = s.id
-                    WHERE s.product_id = p.id AND s.status = 1 AND i.available_qty > 0))
+                    WHERE s.product_id = p.id AND s.status = 1
+                  AND s.deleted_at IS NULL AND i.available_qty > 0))
  ORDER BY ts_rank_cd(p.search_vector, to_tsquery('simple', @tsquery::text)) DESC, p.id
  LIMIT @row_limit;

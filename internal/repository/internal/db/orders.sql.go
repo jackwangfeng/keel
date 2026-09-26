@@ -842,6 +842,7 @@ SELECT s.id, s.product_id, s.spec_values, s.price_cents, s.image_url,
   JOIN products p ON p.id = s.product_id
  WHERE s.id = ANY($1::bigint[])
    AND s.status = 1
+   AND s.deleted_at IS NULL
    AND p.status = 1
    AND p.deleted_at IS NULL
 `
@@ -872,8 +873,12 @@ type ListSKUsForPricingRow struct {
 // 三个过滤条件决定了「什么叫可售」：
 //
 //	· s.status = 1     SKU 本身在售；
+//	· s.deleted_at IS NULL  SKU 没被软删（M4 补，00018 给 skus 加了这一列）；
 //	· p.status = 1     商品在架（草稿商品的 SKU 不可下单）；
 //	· p.deleted_at IS NULL  商品没被软删。
+//
+// 少了 s.deleted_at 那一条的后果很具体：商家删掉一个规格之后它仍然下得了单，
+// 而它已经不在任何一个后台视图里 —— 商家看不到这笔订单卖的是什么。
 //
 // 过滤掉的行不会出现在结果里，于是调用方拿到的行数少于请求的 sku 数 ——
 // 服务层据此报「这些 SKU 不可售」，而不是悄悄少算一行钱。
