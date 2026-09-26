@@ -490,13 +490,18 @@ export function searchRequest(query : string, size : number, storeId : number | 
  *
  * expectedPayableCents：试算过才带。契约说服务端复算不一致时回 409
  * price-changed，防止以旧价成交；没试算过就带一个瞎猜的值，只会把每一单都变成 409。
+ *
+ * 写成必填的 `Money | null`、没试算过就显式传 null，而**不是**可选参数 `?: Money`：
+ * UTS 的可选参数落到 Kotlin 是 `Money?` 且**没有默认值**，调用处一省略就编不过
+ * （"No value passed for parameter 'expectedPayableCents'"，make app-apk 实测；
+ * tsc 与 uni build 都是绿的，因为 Kotlin 编译只在打 apk 时才发生）。
  */
 export function orderRequest(
   skuId : number,
   quantity : number,
   addressId : number,
   storeId : number,
-  expectedPayableCents ?: Money
+  expectedPayableCents : Money | null
 ) : OrderCreateRequest {
   const req : OrderCreateRequest = {
     items: [{ sku_id: skuId, quantity: quantity }],
