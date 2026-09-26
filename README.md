@@ -15,7 +15,7 @@
 ![Go](https://img.shields.io/badge/Go-1.26+-00ADD8)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16+-336791)
 
-[Documentation](./docs) · [Changelog](./CHANGELOG.md) · [Security](./SECURITY.md) · [中文文档](./README.zh-CN.md)
+[Documentation](./docs/README.md) (Chinese) · [Changelog](./CHANGELOG.md) · [Security](./SECURITY.md) · [中文文档](./README.zh-CN.md)
 
 </div>
 
@@ -104,7 +104,7 @@ curl http://localhost:8080/api/v1/products
 ```
 
 One command brings up PostgreSQL, runs the migrations, loads a seed shop and
-starts the API. That `curl` comes back with the shop's products, and nothing in
+starts the API and the merchant console. That `curl` comes back with the shop's products, and nothing in
 it says which shop — the deployment has exactly one tenant, which is the
 small-shop shape promised above.
 
@@ -137,7 +137,8 @@ docker compose logs app | grep bootstrap_token
 ```
 
 Exchange it under "first time in" on the login page and you can create
-categories and products, upload images, add SKUs, set stock and publish.
+categories and products, upload images, add SKUs, set stock, publish, issue
+coupons and add staff.
 If 8081 is taken: `KEEL_CONSOLE_PORT=18081 docker compose up -d --build`.
 
 > The console is **not** a separately deployed thing: it lives in the same
@@ -147,8 +148,11 @@ If 8081 is taken: `KEEL_CONSOLE_PORT=18081 docker compose up -d --build`.
 > type check goes red on the spot (`make admin-type-check`, wired into
 > `./scripts/check-all.sh`).
 >
-> Today it covers products, SKUs, stock, categories, uploads, staff,
-> **merchant management** (platform-level: list, open, disable / enable, and a
+> Today it covers products, SKUs, stock, categories, uploads, **coupons**
+> (amount-off / percent-off / no-threshold, a claim center plus targeted grants,
+> scoped by category, product, region or store), **staff with tiered roles**
+> (admin, operator, region manager, store manager — the last two carry scopes,
+> checked by the server on every call), **merchant management** (platform-level: list, open, disable / enable, and a
 > "currently managing" switcher), plus **regions and stores**: per-region and per-store product
 > visibility and pricing, per-store stock, and delivery fences drawn on
 > OpenStreetMap (WGS-84 — the same datum as the `GEOGRAPHY(POLYGON, 4326)`
@@ -159,6 +163,12 @@ If 8081 is taken: `KEEL_CONSOLE_PORT=18081 docker compose up -d --build`.
 For the multi-merchant shape, where the `Host` header picks the shop:
 `docker compose -f compose.yaml -f compose.multi.yaml up -d --build`.
 
+The seed includes a buyer you can log in as: phone `13800000000`, password
+`keel-demo-2026` (a development seed for local demos). Step-by-step guides —
+quick start, deployment and configuration, the console manual, API conventions,
+FAQ — are in [`docs/`](./docs/README.md) (Chinese). Read the deployment guide's
+"must change before going live" list before serving real customers.
+
 No Elasticsearch. No MongoDB. No RabbitMQ. No Redis.
 **One database.** Vector search lives in `pgvector`, full-text in `tsvector`,
 the job queue in a table.
@@ -168,11 +178,16 @@ the job queue in a table.
 
 ### Not in the box yet
 
-The three services above — PostgreSQL, the migrations plus seed, the API — are
-all `docker compose up` brings up today. The rest of this README describes the
-system being built; these parts are on the roadmap and are listed here so that
-nothing above reads as if it already ships:
+What `docker compose up` brings up today is PostgreSQL, the migrations plus
+seed, the API and the merchant console. Buyers can browse, filter by category,
+search, claim coupons, check out and pay (sandbox); merchants can list
+products, run regions and stores, issue coupons and manage staff. These parts
+are not there yet, and are listed so that nothing above reads as if it ships:
 
+- **cart, address book, profile, order cancel / confirm-receipt, after-sales
+  refunds, and admin shipping / refund review.** They are in the contract but
+  not implemented (calls get a 404 "no such endpoint"); work is in progress.
+  Checkout today is "pick a SKU and order", using the address from the seed
 - **cross-encoder reranking and business re-ranking.** `POST /search` today is
   two-stage — vector recall and keyword recall, fused with RRF. The contract
   describes four stages; the last two land in M5. `explain: true` names the
@@ -205,18 +220,29 @@ nothing above reads as if it already ships:
   and Metal backends and no CPU backend yet, and this repo does not keep a
   second engine implementation around as a stand-in — the M3 Python service
   (BGE-M3 on CPU) has been retired. The fix is a CPU backend inside infero
-  itself; **it is not written yet**, so this is an intention, not a feature
-- the merchant admin surface. The contract has it; the implementation does not —
-  a merchant can process orders but cannot list a product yet (M4)
-- the storefront and admin UI — there is no page on port 3000 yet
+  itself, which is in progress there; until it lands this is an intention, not a feature
+- **SMS, WeChat and e-mail.** SMS-code login, WeChat login and the console's
+  e-mail login link all need an outside service that is not wired up; those
+  endpoints answer 501 on purpose. Buyers log in with phone + password; staff
+  get in with a one-time login token
+- **shipping fees.** There are none, which is why free-shipping coupons cannot
+  be created yet
+- **real payment channels.** Payments run in a sandbox whose callback path is
+  the real one (signature check, amount check, de-duplication), but no WeChat
+  Pay or Alipay merchant account is wired in
 
 ---
 
 ## What it does
 
 **Commerce core**
-Products & SKUs · inventory · cart · checkout · payments · refunds ·
-coupons · order state machine
+Products & SKUs · category tree · per-store inventory · three-tier pricing
+(base → region → store) · checkout · payments · coupons (amount-off /
+percent-off / no-threshold, claim center and targeted grants) · order state
+machine · multi-store with delivery fences · tiered staff roles
+
+Cart, after-sales refunds and shipping are in the contract and being
+implemented — see "Not in the box yet" above.
 
 **AI-native capabilities**
 - **Semantic search** — hybrid vector + keyword retrieval fused with RRF.
@@ -246,8 +272,8 @@ Keel ships with its clients, not just an API.
 
 | Client | Stack | Targets |
 |---|---|---|
-| **Storefront** | uni-app (Vue 3) | H5 · WeChat Mini Program · iOS · Android — one codebase |
-| **Admin console** | React + Tailwind + shadcn/ui | Desktop web |
+| **Storefront** | uni-app x (UTS compiled to native Kotlin / Swift) | Android · iOS · H5 — one codebase; WeChat Mini Program planned |
+| **Admin console** | Vue 3 + Element Plus | Desktop web |
 
 Every client is generated from the same OpenAPI spec, so a contract change
 breaks the build rather than silently breaking production.
@@ -259,8 +285,9 @@ what a browser can.
 happens inside WeChat, and no major open-source commerce platform targets it.
 If you are selling in that market, a web-only storefront is not a storefront.
 
-> First release ships the admin console and the H5 / Mini Program storefront.
-> Native app builds and a desktop-optimized web storefront follow.
+> v0.1.0 ships the admin console and the buyer app (an Android apk can be
+> built locally; the H5 build deploys as-is). The Mini Program form and a
+> desktop-optimized web storefront follow.
 
 ---
 
@@ -271,9 +298,10 @@ nothing above reads as if the rest already ships.
 
 [`app/`](./app) is the buyer storefront, written in
 [uni-app x](https://doc.dcloud.net.cn/uni-app-x/) (UTS compiled to native
-Kotlin/Swift — not a webview). Product list → product detail → login →
-checkout (preview then submit) → my orders → order detail → pay.
-Search is a disabled placeholder; the endpoint it needs is `POST /search`.
+Kotlin/Swift — not a webview). Product list (filterable by category) / search →
+product detail → login → checkout (preview, best coupon picked automatically,
+then submit) → my orders → order detail → pay; "Me" holds the coupon claim
+center and my coupons. Search uses `POST /search`, hybrid semantic + keyword.
 
 **Its types are generated from the same OpenAPI spec, but not from the same
 artifact as `web/`.** UTS is not TypeScript — its type system has to land on
@@ -286,13 +314,13 @@ and `scripts/check_app_types.py` (`tsc --strict` over every `.uts`).
 Rename a contract field and both go red — the mutation transcript is in
 [`app/README.md`](./app/README.md).
 
-**Command-line builds reach H5 and Kotlin, not an apk.**
+**Command-line builds reach H5, Kotlin, and a local apk.**
 `uni build --platform h5` produces a deployable web bundle;
-`uni build --platform app-android` produces Kotlin source and stops there —
-turning that into an installable app needs HBuilderX or DCloud's cloud build,
-and there is no CLI for it. CI runs exactly those two steps and says so.
-`app/README.md` records what was measured, including the five things that had
-to be worked around to get a CLI project to build at all.
+`uni build --platform app-android` produces Kotlin source;
+`make app-apk` turns that into an installable apk with the offline SDK and
+Gradle, no HBuilderX needed. CI runs the first two steps.
+`app/README.md` records what was measured at each step, including the things
+that had to be worked around to get a CLI project to build at all.
 
 Building and running it: see [`app/README.md`](./app/README.md).
 The H5 form needs to be served same-origin with the API (the server sends no
@@ -357,9 +385,13 @@ battle-tested at scale. What it has is a stronger core.
 ## Roadmap
 
 - [x] Data model, OpenAPI contract, architecture
-- [ ] **M2** — Catalog → cart → checkout → payment, orchestrated by dtmrs
-- [ ] **M3** — Text embeddings + hybrid search → *first public release*
-- [ ] **M4** — Compliance checks + product understanding service
+- [x] **M2** — Catalog → checkout → payment, orchestrated by dtmrs
+- [x] **M3** — Text embeddings + hybrid search
+- [x] **M4** — Merchant self-service + multi-store and regions + compliance
+  checks + product-understanding skeleton + coupons + tiered roles
+  → **v0.1.0, first public release**
+- [ ] **Cart, after-sales and shipping** — finish the buyer and admin
+  endpoints the contract already describes (in progress)
 - [ ] **M5** — Reranking + business re-ranking + search analytics
 - [ ] **M6** — Image embeddings → visual search
 - [ ] **M7** — Conversational shopping assistant
