@@ -114,6 +114,13 @@ if ! make admin-type-check; then
     fail=1
 fi
 
+# 后台的单元测试：电子围栏的坐标序与坐标系换算。它守的错在服务端不会红——
+# 写反的经纬度、没换算的 GCJ-02 都是合法多边形，只是位置偏了。见 Makefile。
+printf '\n=== admin-test ===\n'
+if ! make admin-test; then
+    fail=1
+fi
+
 if [ "$fail" -ne 0 ]; then
     echo ''
     echo '校验未通过。'

@@ -67,10 +67,28 @@ export type InventorySetRequest = S["InventorySetRequest"];
 export type MerchantCreateRequest = S["MerchantCreateRequest"];
 export type StaffCreateRequest = S["StaffCreateRequest"];
 
+// 多门店 + 大区（契约 Store tag）。
+export type AdminRegion = S["AdminRegion"];
+export type AdminStore = S["AdminStore"];
+export type AdminStoreList = S["AdminStoreList"];
+export type GeoPolygon = S["GeoPolygon"];
+export type ScopedProductListing = S["ScopedProductListing"];
+export type ScopedSkuPrice = S["ScopedSkuPrice"];
+export type RegionCreateRequest = S["RegionCreateRequest"];
+export type RegionUpdateRequest = S["RegionUpdateRequest"];
+export type StoreCreateRequest = S["StoreCreateRequest"];
+export type StoreUpdateRequest = S["StoreUpdateRequest"];
+
 /** `GET /admin/products` 的响应体（PageMeta 三个字段 + items）。 */
 export type AdminProductPage = ResponseBodyOf<"/admin/products", "get">;
 /** `GET /admin/staff` 的响应体。 */
 export type StaffPage = ResponseBodyOf<"/admin/staff", "get">;
+/** `GET /admin/regions` 的响应体。 */
+export type RegionPage = ResponseBodyOf<"/admin/regions", "get">;
+/** 门店 / 大区维度的商品列表（两条路径同一个形状）。 */
+export type ScopedProductPage = ResponseBodyOf<"/admin/stores/{store_id}/products", "get">;
+/** `GET /admin/stores/{store_id}/inventories` 的响应体。 */
+export type StoreInventoryPage = ResponseBodyOf<"/admin/stores/{store_id}/inventories", "get">;
 /** `POST /admin/uploads` 的响应体。 */
 export type UploadResponse = ResponseBodyOf<"/admin/uploads", "post">;
 
@@ -225,7 +243,23 @@ export const ProblemType = {
     idempotencyInFlight: `${P}idempotency-key-in-flight`,
     idempotencyKeyReused: `${P}idempotency-key-reused`,
     notImplemented: `${P}not-implemented`,
+    // 门店 / 大区那一组。每一种该怎么处理写在 internal/problem/problem.go 那段注释里，
+    // 界面上的处理在 api/errors.ts 的 problemHint。
+    regionCodeConflict: `${P}region-code-conflict`,
+    regionHasStores: `${P}region-has-stores`,
+    storeCodeConflict: `${P}store-code-conflict`,
+    defaultStoreConflict: `${P}default-store-conflict`,
+    storeFenceRequired: `${P}store-fence-required`,
+    storeUnavailable: `${P}store-unavailable`,
+    storeAmbiguous: `${P}store-ambiguous`,
+    invalidFence: `${P}invalid-fence`,
+    skuNotSoldInStore: `${P}sku-not-sold-in-store`,
 } as const;
+
+/** 这个错误是不是某个 type 的 Problem。 */
+export function isProblemType(err: unknown, type: string): err is ProblemError {
+    return err instanceof ProblemError && err.problem.type === type;
+}
 
 /**
  * 库存 CAS 冲突。

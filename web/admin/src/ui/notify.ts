@@ -16,6 +16,7 @@ export function notifyError(err: unknown): void {
         const pos = typeof f.offset === "number" ? `（第 ${f.offset + 1} 个字起，共 ${f.length ?? 0} 个字）` : "";
         rows.push(h("p", { style: "margin:2px 0;font-size:12px" }, `${f.field ?? ""} ${f.message ?? ""}${pos}`));
     }
+    if (info.hint !== "") rows.push(h("p", { style: "margin:6px 0;font-weight:500" }, `下一步：${info.hint}`));
     const meta = [info.status === null ? "" : `HTTP ${info.status}`, info.type, info.traceId]
         .filter((s) => s !== "")
         .join("  ·  ");

@@ -2,7 +2,7 @@
 // 左侧菜单 + 右侧内容。菜单项从 src/router/modules 的声明里来，
 // 不是另抄一份 —— 两份清单迟早对不上，而对不上的症状是「路由能到、
 // 菜单上没有」，一个没人会主动去看的状态。
-import { computed } from "vue";
+import { computed, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { SwitchButton } from "@element-plus/icons-vue";
 import { currentSession, keel, setSession } from "../api/client.ts";
@@ -13,6 +13,25 @@ const route = useRoute();
 const router = useRouter();
 
 const session = computed(() => currentSession());
+
+// ------------------------------------------------ 「没有默认门店」的全局提示
+//
+// 契约（AdminStoreList.has_default）原话：为 false 时后台首页必须挂提示——
+// 此时所有未授权定位、或不在任何围栏里的访客都会拿到「不在服务范围」，
+// 而那看起来像「商品没上架」，和真因毫无关系。商家不一定会去点「门店」，
+// 所以这条挂在框架上，每一页都看得见；每次切页重查一次（一个 page_size=1
+// 的请求），设完默认店回来就消失。
+const hasDefaultStore = ref<boolean | null>(null);
+async function checkDefaultStore(): Promise<void> {
+    try {
+        const res = await keel.get("/admin/stores", { query: { page: 1, page_size: 1 } });
+        hasDefaultStore.value = res.has_default;
+    } catch {
+        // 查不到就不挂：这条提示是锦上添花，不该因为它让页面报错。
+        hasDefaultStore.value = null;
+    }
+}
+watch(() => route.fullPath, () => void checkDefaultStore(), { immediate: true });
 
 /** 平台级操作员：`staff.merchant_id` 为 null（数据模型 §14 的两级身份）。 */
 const isPlatform = computed(() => session.value?.staff.merchant_id === null);
@@ -53,7 +72,6 @@ async function logout(): Promise<void> {
     // 契约里**没有** `POST /admin/auth/logout`（买家侧有，后台侧没有）。
     // 所以这里只清本地会话——服务端那条 staff_tokens 会自己到期。
     // 不假装调用一个不存在的接口，也不在界面上说「已登出所有设备」。
-    void keel;
     setSession(null);
     await router.push({ name: "login" });
 }
@@ -94,6 +112,18 @@ function copyToken(): void {
                 </div>
             </el-header>
             <el-main class="main">
+                <el-alert
+                    v-if="hasDefaultStore === false && !route.path.startsWith('/stores')"
+                    type="error"
+                    show-icon
+                    :closable="false"
+                    class="no-default"
+                >
+                    <template #title>
+                        还没有默认门店：不在任何门店围栏里的买家现在都会看到「不在服务范围」。
+                        <router-link to="/stores">去门店页设一家默认店</router-link>
+                    </template>
+                </el-alert>
                 <router-view />
             </el-main>
         </el-container>
@@ -152,6 +182,9 @@ function copyToken(): void {
     gap: 8px;
     font-size: 13px;
     color: var(--el-text-color-regular);
+}
+.no-default {
+    margin-bottom: 12px;
 }
 .main {
     background: var(--el-bg-color-page);

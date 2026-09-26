@@ -31,6 +31,8 @@ const severity = computed<"error" | "warning">(() =>
                 </li>
             </ul>
 
+            <p v-if="info.hint" class="problem-hint">下一步：{{ info.hint }}</p>
+
             <pre v-if="info.rawBody" class="problem-raw">{{ info.rawBody }}</pre>
 
             <p class="problem-meta">
@@ -66,6 +68,13 @@ const severity = computed<"error" | "warning">(() =>
 .problem-pos {
     margin-left: 6px;
     color: var(--el-color-warning);
+}
+.problem-hint {
+    margin: 6px 0;
+    padding: 6px 8px;
+    background: rgba(255, 255, 255, 0.6);
+    border-radius: 4px;
+    color: var(--el-text-color-primary);
 }
 .problem-raw {
     max-height: 160px;

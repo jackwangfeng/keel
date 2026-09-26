@@ -62,7 +62,7 @@ GOOSE := GOOSE_DRIVER=postgres GOOSE_DBSTRING="$(GOOSE_DBSTRING)" \
 	$(GORUN) github.com/pressly/goose/v3/cmd/goose
 
 .PHONY: help generate generate-go generate-ts generate-sql generate-uts tools-versions version \
-	contract-check schema-check app-type-check admin-install admin-type-check admin-build app-install app-build-h5 app-build-android app-apk app-apk-e2e app-e2e app-adb-wifi app-ios app-ios-e2e app-e2e-ios \
+	contract-check schema-check app-type-check admin-install admin-type-check admin-test admin-build app-install app-build-h5 app-build-android app-apk app-apk-e2e app-e2e app-adb-wifi app-ios app-ios-e2e app-e2e-ios \
 	sdk-smoke migrate migrate-down migrate-status test-db \
 	test-engine dtmrs-deps build
 
@@ -77,6 +77,7 @@ help:
 	@echo "make app-type-check 用 tsc --strict 检查 app/src 下全部 .uts"
 	@echo "make admin-install  装商家后台（web/admin）的依赖（npm ci，版本由 lock 锁定）"
 	@echo "make admin-type-check 用 vue-tsc --strict 检查 web/admin/src 下全部 .ts 与 .vue"
+	@echo "make admin-test     跑商家后台的单元测试（围栏几何与坐标系换算）"
 	@echo "make admin-build    构建商家后台静态产物（compose 起栈时会自己构建，日常不用跑）"
 	@echo "make app-install    装客户端依赖（含 npm 跳过 uts 原生 binding 的绕法）"
 	@echo "make app-build-h5   用 DCloud 编译器真编一遍 H5（要先 app-install）"
@@ -175,6 +176,18 @@ admin-install:
 # 跳过会让「后台的类型检查跑过了」这句话在没装依赖的机器上是假的。
 admin-type-check:
 	python3 $(ROOT)/scripts/check_admin_types.py
+
+# 后台的单元测试：目前是电子围栏的几何（坐标序、闭合、GCJ-02 / BD-09 → WGS-84）。
+#
+# 守的是「偏了不会报错」那一类错：经纬度写反、坐标系没换，服务端都会收下一个
+# **合法**的多边形，只是位置偏了几百米，买家被判进错的门店。
+#
+# `node --test` 直接跑 .ts（Node 24 的类型剥离），不引入测试框架：被测文件
+# （src/api/geo.ts）刻意只有 import type，没有运行时依赖，所以这一步**不需要**
+# node_modules。别往 geo.ts 里加运行时 import，否则这里会以
+# ERR_MODULE_NOT_FOUND 失败。
+admin-test:
+	cd $(ROOT)/web/admin && node --test src/api/geo.test.ts
 
 # 构建静态产物到 web/admin/dist。日常不用跑：compose 起栈时在
 # docker/Dockerfile.admin 的 node 阶段里构建，产物交给 nginx。

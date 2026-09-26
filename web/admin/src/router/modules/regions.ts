@@ -1,23 +1,26 @@
 import { MapLocation } from "@element-plus/icons-vue";
 import type { AdminSection } from "../section.ts";
 
-// 大区。理由与门店那一条一字不差，见 stores.ts。
+// 大区排在门店前面：门店必须属于一个大区（stores.region_id NOT NULL），
+// 操作顺序就是先建大区、再建门店。
 const section: AdminSection = {
     key: "regions",
     title: "大区",
     icon: MapLocation,
-    order: 50,
+    order: 40,
     routes: [
         {
             path: "regions",
             name: "regions",
-            component: () => import("../../views/PlaceholderView.vue"),
+            component: () => import("../../views/RegionListView.vue"),
             meta: { title: "大区", menu: true },
-            props: {
-                title: "大区这一块还没接上",
-                reason: "与门店同一条分支，契约还没合进 main。",
-                upcoming: ["大区树", "大区下的门店", "按大区看的经营数据"],
-            },
+        },
+        {
+            path: "regions/:regionId(\\d+)",
+            name: "region-detail",
+            component: () => import("../../views/RegionDetailView.vue"),
+            meta: { title: "大区商品与定价" },
+            props: true,
         },
     ],
 };

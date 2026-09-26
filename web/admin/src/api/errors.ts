@@ -9,7 +9,7 @@
 // 前端再写一套中文只会和服务端的说法分叉。前端只在服务端**说不出话**的时候
 // （网络断了、响应体根本不是 Problem）自己补一句。
 
-import { ProblemError, UnexpectedResponseError, type FieldError } from "./client.ts";
+import { ProblemError, ProblemType, UnexpectedResponseError, type FieldError } from "./client.ts";
 
 export type ErrorKind = "problem" | "unexpected" | "network";
 
@@ -26,6 +26,46 @@ export interface DisplayError {
     fields: FieldError[];
     /** 非 Problem 响应的原始体（已截断），出错时贴给运维用。 */
     rawBody: string;
+    /** 「接下来该做什么」。按 type 给，不按状态码给——见 problemHint。 */
+    hint: string;
+}
+
+/**
+ * 按 Problem 的 type 说「接下来该做什么」。
+ *
+ * **为什么按 type 不按状态码**：同一个 409 在门店这一组里有三对意思相反的
+ * 情况（internal/problem/problem.go 那段注释）——「换个编号重试会成功」
+ * 和「在这条接口上重试永远不会成功」都是 409。只看状态码的界面会教人
+ * 对着后一种一直点重试。
+ *
+ * 这里只写**动作**，不重复服务端的 title：title 说的是「发生了什么」，
+ * 那是服务端的话；这里补的是界面知道而服务端不知道的那一半——
+ * 「在这个后台里，下一步点哪儿」。
+ */
+export function problemHint(type: string): string {
+    switch (type) {
+        case ProblemType.storeCodeConflict:
+        case ProblemType.regionCodeConflict:
+            return "编号在本店内已被占用。换一个编号再提交就会成功。";
+        case ProblemType.defaultStoreConflict:
+            return "已经有一家默认门店了。在这里重试永远不会成功——先按「不设为默认」建出来，再到门店列表里对它点「设为默认」（那条接口会在同一个事务里先清旧再置新）。";
+        case ProblemType.storeFenceRequired:
+            return "这家店不是默认门店。清空它的围栏会让它永远接不到单（不被任何坐标命中，也不是回落目标）。要么别清，要么先把它设成默认门店。";
+        case ProblemType.invalidFence:
+            return "多边形本身画错了。上面的 detail 是 PostGIS 给的原话（ST_IsValidReason），方括号里是出错位置的 [经度 纬度]；地图上已用红圈标出。常见原因：边交叉（自交）、点太少。";
+        case ProblemType.storeUnavailable:
+            return "这家门店已停业或已删除，不能作为回落目标。先把它改回营业，或换一家设为默认。";
+        case ProblemType.storeAmbiguous:
+            return "这家商家不止一家门店，「这个 SKU 的库存」没有唯一答案，服务端不替你猜。重试没有用——到门店维度改（门店 → 某家店 → 库存）。";
+        case ProblemType.skuNotSoldInStore:
+            return "这家店（或它所在的大区）不卖这件商品。重试没有用，得换一家店，或者先在门店 / 大区的商品页把它上架。";
+        case ProblemType.regionHasStores:
+            return "这个大区下面还有门店。先把门店挪到别的大区或删掉，再删大区。";
+        case ProblemType.inventoryPrecondition:
+            return "库存在你读到它之后被改过。用服务端回来的当前值刷新后重试就会成功。";
+        default:
+            return "";
+    }
 }
 
 export function describeError(err: unknown): DisplayError {
@@ -39,6 +79,7 @@ export function describeError(err: unknown): DisplayError {
             traceId: err.problem.trace_id ?? "",
             fields: err.problem.errors ?? [],
             rawBody: "",
+            hint: problemHint(err.problem.type),
         };
     }
     if (err instanceof UnexpectedResponseError) {
@@ -54,6 +95,7 @@ export function describeError(err: unknown): DisplayError {
             traceId: "",
             fields: [],
             rawBody: err.bodyText,
+            hint: "",
         };
     }
     const message = err instanceof Error ? err.message : String(err);
@@ -66,7 +108,21 @@ export function describeError(err: unknown): DisplayError {
         traceId: "",
         fields: [],
         rawBody: "",
+        hint: "",
     };
+}
+
+/**
+ * PostGIS 的 ST_IsValidReason 形如 `Self-intersection[116.4 39.9]`——方括号里是
+ * 出错位置的 [经度 纬度]。取出来给地图标一个红圈。取不到就返回 null，
+ * 不猜：detail 的措辞是服务端的，这里只是顺手利用它。
+ */
+export function fenceErrorPoint(detail: string): [number, number] | null {
+    const m = /\[\s*(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s*\]/.exec(detail);
+    if (m === null) return null;
+    const lng = Number(m[1]);
+    const lat = Number(m[2]);
+    return Number.isFinite(lng) && Number.isFinite(lat) ? [lng, lat] : null;
 }
 
 // ---------------------------------------------------------------------------
