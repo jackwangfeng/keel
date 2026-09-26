@@ -263,6 +263,73 @@ var routes = []route{
 				"比不做更容易让人以为它在了。explain=true 时 scores.business 同样缺席。",
 		},
 	},
+	// —— 后台身份（M4 本轮）。契约 AdminAuth 与 Admin 两个 tag 的 7 条。
+	{
+		ContractPath:   "/admin/auth/bootstrap",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "admin_auth.go",
+		NoQueryParams: "引导 token 与邮箱都在请求体里；契约里这条接口一个 query 参数都没有。" +
+			"**token 尤其不能进 query** —— query 会进访问日志，而这一串换得出" +
+			"整个部署的后台全权（理由同 /webhooks/payments 那条里对签名的处理）",
+	},
+	{
+		ContractPath:   "/admin/auth/email-link",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "admin_auth.go",
+		NoQueryParams:  "邮箱在请求体里；契约里这条接口一个 query 参数都没有",
+		NotYetImplementedBody: map[string]string{
+			"email": "**本项目没有接邮件服务**，所以这条路返回 501，而不是契约里那个 202。" +
+				"202 的含义是「已受理」，而一封信都发不出去时它是一句在邮件服务上线之前" +
+				"都不会被纠正的假话：操作员去收件箱等一封永远不来的信，而服务端这一侧" +
+				"没有任何东西显示出问题 —— 没有失败的任务、没有错误日志、没有待发队列。" +
+				"契约那条「无论邮箱是否存在都返回 202，否则就是账号枚举接口」的推理没有被推翻：" +
+				"这条路**连查都不查**，不管邮箱是什么都走同一条路，枚举面依然是零。" +
+				"形状与 /auth/login 的 code 完全一样，两个方向都锁：" +
+				"admin_auth_test.go 的 TestAdminEmailLinkSaysItIsNotImplemented 断言" +
+				"那条路真的返回 501，并且断言这里真的挂着这一笔。",
+		},
+	},
+	{
+		ContractPath:   "/admin/auth/session",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "admin_auth.go",
+		NoQueryParams:  "一次性 token 在请求体里，理由同 bootstrap 那条",
+	},
+	{
+		ContractPath:   "/admin/me",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "admin_auth.go",
+		NoQueryParams:  "当前身份由 Authorization 头里那串会话 token 决定，没有任何参数",
+	},
+	{
+		ContractPath:   "/admin/staff",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "admin_staff_list.go",
+		// page / page_size 两个参数都实现了，所以这里既不写 NoQueryParams
+		// 也不挂账 —— 对账测试会两个方向都核一遍。
+	},
+	{
+		ContractPath:   "/admin/staff",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "admin_auth.go",
+		NoQueryParams: "新员工的字段在请求体里，幂等键在 Idempotency-Key 请求头里；" +
+			"**租户不在任何一处** —— 它从调用者的会话继承（契约与数据模型 §14 " +
+			"认证流程 ④ 都写着这一条），落地方式是 staff.merchant_id 的 " +
+			"DEFAULT staff_scope_merchant()，整条链路上没有一个 merchant_id 参数可以传错",
+	},
+	{
+		ContractPath:   "/admin/staff/{staff_id}",
+		ContractMethod: "patch",
+		HTTPMethod:     http.MethodPatch,
+		HandlerFile:    "admin_auth.go",
+		NoQueryParams:  "要改谁在路径上，改什么在请求体里",
+	},
 	{
 		ContractPath:   "/auth/refresh",
 		ContractMethod: "post",
@@ -326,21 +393,24 @@ type pendingOp struct {
 
 // notYetRouted 是全部 /admin/ 操作里还没有落地的那些。
 //
-// **一条都没实现**是本轮的真实状态：M4 任务 1 只做契约与生成产物，
-// 不做 handler（理由是这个仓库的规矩——契约先行、产物入库、漂移有闸门，
-// 先写实现等于让那三样一起失效）。
+// M4 任务 1 落地时这里有 26 条 —— 契约里每一条 /admin/ 操作都在。
+// 本轮（后台身份）划掉了 7 条：三条 /admin/auth/*、/admin/me，
+// 以及 /admin/staff 的三个操作。它们是别的 19 条的前置，
+// 因为 26 条里没有一条不需要后台身份。
 var notYetRouted = []pendingOp{
-	// —— M1 就在契约里的 10 条。后台身份、建店、员工、发货、退款审核。
-	{"/admin/auth/bootstrap", "post", "后台认证（数据模型 §14）。staff 那套鉴权中间件本身还没有落地。"},
-	{"/admin/auth/email-link", "post", "同上。还需要一个能发信的东西，本项目没有接邮件服务。"},
-	{"/admin/auth/session", "post", "同上，一次性 token 换会话。"},
-	{"/admin/me", "get", "同上，依赖 staff 会话中间件。"},
-	{"/admin/merchants", "post", "开店。依赖平台级鉴权，且要在同事务里建第一个商家管理员。"},
-	{"/admin/staff", "get", "员工列表，依赖 staff 会话中间件。"},
-	{"/admin/staff", "post", "加员工，依赖 staff 会话中间件与发信。"},
-	{"/admin/staff/{staff_id}", "patch", "改员工角色/状态，依赖 staff 会话中间件。"},
-	{"/admin/orders/{order_no}/shipments", "post", "发货。shipments 表已落地（数据模型 §5），缺的是后台鉴权与 handler。"},
-	{"/admin/refunds/{refund_no}/audit", "post", "退款审核。退款域的表已落地（§11），缺的是后台鉴权与 handler。"},
+	// —— M1 就在契约里的 10 条，本轮（M4 后台身份）划掉了其中 7 条。
+	//
+	// 剩下这 3 条**不再是「缺后台鉴权」**了 —— 那套中间件已经有了
+	// （auth.StaffBearer），它们缺的是各自的业务。理由要跟着改，
+	// 否则下一个人会照着一句过期的话去找一个已经存在的东西。
+	{"/admin/merchants", "post", "开店。鉴权已经有了（平台级会话 = auth.StaffIdentity.Platform()），" +
+		"缺的是业务：它要在一个事务里建 merchant，再在**新那家店的租户作用域**里建它的第一个管理员 —— " +
+		"两次作用域切换，而 repository 今天只有 WithTenant（从 ctx 取租户）与 WithPlatform 两个入口，" +
+		"没有「在指定租户里开一个事务」的那一个。M4 的下一个任务。"},
+	{"/admin/orders/{order_no}/shipments", "post", "发货。shipments 表已落地（数据模型 §5），" +
+		"后台鉴权也已落地，缺的是 handler 与 §5 那三条发货规则。"},
+	{"/admin/refunds/{refund_no}/audit", "post", "退款审核。退款域的表已落地（§11），" +
+		"后台鉴权也已落地，缺的是 handler 与退款状态机那几条边。"},
 
 	// —— M4 任务 1 本轮补进契约的 16 条：商家自助发布的写接口面。
 	//

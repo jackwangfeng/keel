@@ -60,6 +60,7 @@ type Tx interface {
 	PaymentTx
 	IndexTx
 	SearchTx
+	StaffTx
 }
 
 // ProductTx 是商品读取这一面。
