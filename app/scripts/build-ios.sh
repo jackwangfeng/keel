@@ -2,6 +2,12 @@
 # 本地打 iOS 包：不用 HBuilderX，不用云打包。
 #
 #   KEEL_IOS_TEAM=XXXXXXXXXX KEEL_API_BASE=http://192.168.0.110:18099/api/v1 ./app/scripts/build-ios.sh
+#   KEEL_IOS_TEAM=... KEEL_API_BASE=... ./app/scripts/build-ios.sh --e2e      # 自动化测试包
+#
+# --e2e：带上官方自动化运行时（@dcloudio/uni-automator 的 uni 插件在 --auto-port 时自动往
+# main 里 import，iOS 产物是 JS，不像 Android 需要额外搬源码）。和 Android 不同，iPhone
+# 没法把端口反向转回电脑（usbmuxd 只支持电脑连手机），所以 App 经局域网连
+# ws://<电脑的局域网 IP>:9520 —— 手机与电脑要在同一网段。IP 默认取 en0，KEEL_E2E_HOST 可改。
 #
 # 真机签名是 Automatic：Xcode 没登录 Apple ID 也行，只要本机已有这个团队覆盖该设备的
 # 描述文件（例如团队的通配描述文件 "iOS Team Provisioning Profile: *"）。实测
@@ -30,9 +36,11 @@
 # arch"，实测）。要模拟器，得用 SDK 里的 ExtApiSrc 源码自己编一份 arm64 模拟器版。
 set -euo pipefail
 
+E2E=0
 for arg in "$@"; do
     case "$arg" in
         --device) ;;   # 兼容：本来就只出真机包
+        --e2e) E2E=1 ;;
         *) echo "未知参数：$arg" >&2; exit 2 ;;
     esac
 done
@@ -90,8 +98,14 @@ if [ -n "${KEEL_API_BASE:-}" ]; then
 else
     echo "==> 没设 KEEL_API_BASE：App 装好后要先在「我的 → 服务地址」里填地址"
 fi
-echo "==> uni build --platform app-ios"
-python3 "$ROOT/scripts/check_app_build.py" app-ios
+AUTO_ARGS=()
+if [ "$E2E" = 1 ]; then
+    E2E_HOST=${KEEL_E2E_HOST:-$(ipconfig getifaddr en0 2>/dev/null || true)}
+    [ -n "$E2E_HOST" ] || die "取不到电脑的局域网 IP：用 KEEL_E2E_HOST 指定"
+    AUTO_ARGS=(--auto-host "$E2E_HOST" --auto-port "${KEEL_E2E_PORT:-9520}")
+fi
+echo "==> uni build --platform app-ios ${AUTO_ARGS[*]:-}"
+python3 "$ROOT/scripts/check_app_build.py" app-ios ${AUTO_ARGS[@]+"${AUTO_ARGS[@]}"}
 OUT=$APP/dist/build/app-ios
 [ -f "$OUT/app-service.js" ] || die "编译产物里没有 app-service.js：$OUT"
 
@@ -124,6 +138,7 @@ xcodebuild -quiet -project "$NATIVE/KeelBuyer.xcodeproj" -scheme KeelBuyer -conf
 BUILT=$DERIVED/Build/Products/Debug-iphoneos/KeelBuyer.app
 [ -d "$BUILT" ] || die "xcodebuild 说成功了，但没有 $BUILT"
 DEST=$APP/dist/ios-device
+[ "$E2E" = 1 ] && DEST=$DEST-e2e
 rm -rf "$DEST" && mkdir -p "$DEST"
 cp -R "$BUILT" "$DEST/"
 echo "==> $DEST/KeelBuyer.app（$(du -sh "$DEST/KeelBuyer.app" | awk '{print $1}')）"

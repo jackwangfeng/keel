@@ -23,6 +23,8 @@ const manifest = JSON.parse(fs.readFileSync(path.join(APP, 'src/manifest.json'),
 const APPID = manifest.appid
 const PKG = 'dev.keel.buyer' // 与 native-android/app/build.gradle 的 applicationId 一致
 const APK = path.join(APP, 'dist', `keel-buyer-${manifest.versionName}-e2e.apk`)
+const IOS = process.env.UNI_APP_PLATFORM === 'ios'
+const IOS_APP = path.join(APP, 'dist', 'ios-device-e2e', 'KeelBuyer.app')
 
 function adbPath() {
   if (process.env.ADB) return process.env.ADB
@@ -34,11 +36,38 @@ function adbPath() {
   ].filter(Boolean)
   return candidates.find((p) => fs.existsSync(p)) || 'adb'
 }
-const ADB = adbPath()
-const adb = (...args) => execFileSync(ADB, args, { stdio: ['ignore', 'pipe', 'inherit'] }).toString()
+const run = (cmd, args) => execFileSync(cmd, args, { stdio: ['ignore', 'pipe', 'inherit'] }).toString()
+const adb = (...args) => run(adbPath(), args)
 
-if (!fs.existsSync(APK)) {
-  throw new Error(`没有自动化测试包 ${APK}：先跑 make app-apk-e2e`)
+// iPhone：用 Xcode 的 devicectl（USB 连着、已配对）。KEEL_IOS_DEVICE 可指定设备，默认取第一台。
+function iosDevice() {
+  if (process.env.KEEL_IOS_DEVICE) return process.env.KEEL_IOS_DEVICE
+  const out = path.join(require('os').tmpdir(), `keel-devices-${process.pid}.json`)
+  run('xcrun', ['devicectl', 'list', 'devices', '--json-output', out])
+  const devices = JSON.parse(fs.readFileSync(out, 'utf8')).result.devices
+  const phone = devices.find((d) => d.hardwareProperties && d.hardwareProperties.platform === 'iOS'
+    && d.connectionProperties && d.connectionProperties.pairingState === 'paired')
+  if (!phone) throw new Error('没找到已配对的 iPhone：USB 连上、解锁、信任这台电脑')
+  return phone.identifier
+}
+
+if (!IOS && !fs.existsSync(APK)) throw new Error(`没有自动化测试包 ${APK}：先跑 make app-apk-e2e`)
+if (IOS && !fs.existsSync(IOS_APP)) throw new Error(`没有 iOS 自动化测试包 ${IOS_APP}：先跑 make app-ios-e2e`)
+
+function launchAndroid() {
+  // App 里编进去的地址是 ws://127.0.0.1:PORT；把手机上的这个端口转回电脑。
+  adb('reverse', `tcp:${PORT}`, `tcp:${PORT}`)
+  // 每次都装：保证测的是刚打出来的那个包，而不是手机上残留的旧包。
+  adb('install', '-r', APK)
+  adb('shell', 'am', 'force-stop', PKG)
+  adb('shell', 'am', 'start', '-n', `${PKG}/io.dcloud.uniapp.UniAppActivity`)
+}
+
+function launchIos() {
+  // iPhone 不能把端口反向转回电脑，App 里编的是电脑的局域网 IP（见 build-ios.sh --e2e）。
+  const dev = iosDevice()
+  run('xcrun', ['devicectl', 'device', 'install', 'app', '--device', dev, IOS_APP])
+  run('xcrun', ['devicectl', 'device', 'process', 'launch', '--device', dev, '--terminate-existing', PKG])
 }
 
 const puppet = Object.assign({}, official, {
@@ -46,13 +75,11 @@ const puppet = Object.assign({}, official, {
   devtools: Object.assign({}, official.devtools, {
     // 官方要求产物目录里有 app-service.js（那是给基座推的资源）。我们装的是整包，不需要。
     required: [],
+    // iOS：官方 validate 会建一个面向模拟器 / HBuilderX 推资源的 launcher，真机上用不上。
+    validate: IOS ? async (options) => options : official.devtools.validate,
     async create() {
-      // App 里编进去的地址是 ws://127.0.0.1:PORT；把手机上的这个端口转回电脑。
-      adb('reverse', `tcp:${PORT}`, `tcp:${PORT}`)
-      // 每次都装：保证测的是刚打出来的那个包，而不是手机上残留的旧包。
-      adb('install', '-r', APK)
-      adb('shell', 'am', 'force-stop', PKG)
-      adb('shell', 'am', 'start', '-n', `${PKG}/io.dcloud.uniapp.UniAppActivity`)
+      if (IOS) launchIos()
+      else launchAndroid()
     },
   }),
 })
@@ -67,7 +94,8 @@ module.exports = {
     // close 而不是默认的 disconnect：disconnect 只断连接，本机的 ws 服务与心跳定时器还开着，
     // 用例跑完 jest 不退出（实测）。close 会退出 App 并关掉服务。
     teardown: 'close',
-    platform: 'android',
+    platform: IOS ? 'ios' : 'android',
     android: { package: PKG, appid: APPID, executablePath: APK },
+    ios: { bundleId: PKG, appid: APPID, executablePath: IOS_APP },
   },
 }

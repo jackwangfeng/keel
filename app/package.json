@@ -8,7 +8,8 @@
     "dev:h5": "uni dev --platform h5",
     "build:app-android": "uni build --platform app-android",
     "build:mp-weixin": "uni build --platform mp-weixin",
-    "test:e2e": "UNI_PLATFORM=app-plus UNI_APP_PLATFORM=android UNI_OS_NAME=android UNI_APP_X=true UNI_AUTOMATOR_CONFIG=$PWD/e2e/automator.config.js jest -c e2e/jest.config.js -i --forceExit"
+    "test:e2e": "UNI_PLATFORM=app-plus UNI_APP_PLATFORM=android UNI_OS_NAME=android UNI_APP_X=true UNI_AUTOMATOR_CONFIG=$PWD/e2e/automator.config.js jest -c e2e/jest.config.js -i --forceExit",
+    "test:e2e:ios": "UNI_PLATFORM=app-plus UNI_APP_PLATFORM=ios UNI_OS_NAME=ios UNI_APP_X=true UNI_AUTOMATOR_CONFIG=$PWD/e2e/automator.config.js jest -c e2e/jest.config.js -i --forceExit"
   },
   "dependencies": {
     "@dcloudio/uni-app": "3.0.0-5020620260917001",
