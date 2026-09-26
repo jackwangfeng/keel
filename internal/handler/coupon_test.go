@@ -337,6 +337,15 @@ func TestCouponNorthRegionEndToEnd(t *testing.T) {
 	if order.UserCouponId == nil || *order.UserCouponId != coupon.Id {
 		t.Fatalf("订单上的 user_coupon_id 是 %v，期望 %d", order.UserCouponId, coupon.Id)
 	}
+	// 订单**详情**也要带着它：客户端的详情页要显示「用了哪张券」。详情在 handler 里
+	// 是逐字段从 apiOrder 搬过去的（生成器把 allOf 摊平了），第一版就漏搬了这一个，
+	// 而 order_query_test.go 那条对比测试没红 —— 它下的单不用券，两边都是空。
+	var detail api.OrderDetail
+	decodeInto(t, getAs(t, cs.Host, "/api/v1/orders/"+order.OrderNo, b.Token),
+		http.StatusOK, "带券订单的详情", &detail)
+	if detail.UserCouponId == nil || *detail.UserCouponId != coupon.Id {
+		t.Fatalf("订单详情里的 user_coupon_id 是 %v，期望 %d —— 详情漏搬了这个字段", detail.UserCouponId, coupon.Id)
+	}
 	if st, no := couponState(t, coupon.Id); st != 2 || no == nil || *no != order.OrderNo {
 		t.Fatalf("下单之后券应锁定在 %s 上，实际状态 %d 订单 %v", order.OrderNo, st, no)
 	}

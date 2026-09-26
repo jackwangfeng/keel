@@ -418,3 +418,34 @@ UPDATE products p
    AND p.title = v.title
    AND p.search_text IS DISTINCT FROM v.search_text;
 -- @keel:bigram-fixture:end
+
+-- ---------------------------------------------------------------------------
+-- 优惠券（领券中心里可以直接领的两张）
+-- ---------------------------------------------------------------------------
+--
+-- 两张而不是一张：结算页的「选券」要有得选才看得出它在做什么 —— 同一单
+-- 两张都能用时，本单可用券按能减的金额降序排，买家看得到哪张更划算。
+--
+--   · 满 50 减 10：演示商品大多几十元，一单一两件就过门槛；
+--   · 全场 9 折最高减 30：折扣券的取整与封顶在大单上看得见。
+--
+-- 都是「领取后 30 天有效」而不是绝对时间：种子是长期跑着的演示栈每次启动都会
+-- 灌的，写死一个截止日期，过了那天演示栈上的券就全部失效，而且没人会注意到。
+-- 不设适用范围行 = 全场、所有门店（某一类没有「包含」规则就等于这一类不限，
+-- 见数据模型 §7）。
+--
+-- merchant_id 显式写：种子以管理员身份跑，没有租户上下文，列默认值
+-- current_merchant() 在这里会抛 42501。
+INSERT INTO coupon_templates (merchant_id, name, coupon_type, threshold_cents, discount_cents,
+                              discount_rate, max_discount_cents, valid_mode, valid_days,
+                              total_count, per_user_limit, claimable)
+SELECT m.id, v.name, v.coupon_type, v.threshold_cents, v.discount_cents,
+       v.discount_rate, v.max_discount_cents, 2, 30, 0, 1, TRUE
+  FROM merchants m
+  CROSS JOIN (VALUES
+      ('满 50 减 10',        1::smallint, 5000::bigint, 1000::bigint, 0::smallint,   0::bigint),
+      ('全场 9 折最高减 30', 2::smallint,    0::bigint,    0::bigint, 900::smallint, 3000::bigint)
+  ) AS v(name, coupon_type, threshold_cents, discount_cents, discount_rate, max_discount_cents)
+ WHERE m.code = 'demo'
+   AND NOT EXISTS (SELECT 1 FROM coupon_templates c
+                    WHERE c.merchant_id = m.id AND c.name = v.name);

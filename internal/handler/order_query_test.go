@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	"github.com/keel/keel/internal/api"
@@ -416,12 +417,12 @@ func TestOrderDetailCarriesSnapshotAndItems(t *testing.T) {
 	// Order 那一部分必须与建单响应逐字段一致。详情自己抄一遍 apiOrder 的字段，
 	// 抄漏一个的症状是「列表里有 payable_cents、详情里没有」——
 	// 契约里它们都是可选字段，漏掉不会有任何编译错误。
-	if d.PayableCents != created.PayableCents || d.Status != created.Status ||
-		d.RefundStatus != created.RefundStatus {
-		t.Fatalf("详情的 Order 部分与建单响应对不上：详情 %d/%d/%d，建单 %d/%d/%d",
-			d.PayableCents, d.Status, d.RefundStatus,
-			created.PayableCents, created.Status, created.RefundStatus)
-	}
+	//
+	// **逐字段、用反射比**，而不是挑三个字段比。第一版只比了 payable_cents / status /
+	// refund_status，于是优惠券那一棒给 Order 加了 user_coupon_id、详情漏搬，这里是绿的。
+	// 反射版本对 api.Order 将来新增的任何字段自动生效。它的盲区是「两边都是零值」——
+	// 这一单不用券，所以 user_coupon_id 的漏搬由 coupon_test.go 那条带券下单的断言兜住。
+	assertOrderPartMatches(t, created, d)
 
 	if d.Receiver == nil {
 		t.Fatal("详情里没有 receiver —— 订单详情页要展示收货信息")
@@ -526,5 +527,29 @@ func TestOrderReadEndpointsNeedABearerToken(t *testing.T) {
 	w := getAuth(t, hostA, "/api/v1/orders", cross)
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("拿 shop-b 的令牌读 shop-a 的订单回了 %d，期望 401：%s", w.Code, w.Body.String())
+	}
+}
+
+// assertOrderPartMatches 核对 OrderDetail 里与 api.Order 同名的每一个字段都等于建单响应。
+//
+// api.OrderDetail 在契约里是 allOf: [Order, {...}]，生成器把它摊成了独立的扁平结构体，
+// handler 逐字段搬。这里按字段名对齐比较，api.Order 的每个字段都必须在 OrderDetail 里
+// 有同名字段（没有就是生成器或契约出了问题，也要红）。
+func assertOrderPartMatches(t *testing.T, created api.Order, detail api.OrderDetail) {
+	t.Helper()
+	ov := reflect.ValueOf(created)
+	dv := reflect.ValueOf(detail)
+	ot := ov.Type()
+	for i := 0; i < ot.NumField(); i++ {
+		name := ot.Field(i).Name
+		df := dv.FieldByName(name)
+		if !df.IsValid() {
+			t.Errorf("api.OrderDetail 里没有 api.Order 的字段 %s —— 契约的 allOf 与生成物对不上", name)
+			continue
+		}
+		if !reflect.DeepEqual(ov.Field(i).Interface(), df.Interface()) {
+			t.Errorf("详情的 %s 与建单响应不一致：详情 %v，建单 %v —— 多半是 order_detail.go 漏搬了这个字段",
+				name, df.Interface(), ov.Field(i).Interface())
+		}
 	}
 }
