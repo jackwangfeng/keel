@@ -1647,6 +1647,51 @@ func (e GetAdminReportsProductsParamsSortBy) Valid() bool {
 	}
 }
 
+// Defines values for GetAdminReportsProductsCsvParamsPeriod.
+const (
+	GetAdminReportsProductsCsvParamsPeriodCustom     GetAdminReportsProductsCsvParamsPeriod = "custom"
+	GetAdminReportsProductsCsvParamsPeriodLast30Days GetAdminReportsProductsCsvParamsPeriod = "last_30_days"
+	GetAdminReportsProductsCsvParamsPeriodLast7Days  GetAdminReportsProductsCsvParamsPeriod = "last_7_days"
+	GetAdminReportsProductsCsvParamsPeriodToday      GetAdminReportsProductsCsvParamsPeriod = "today"
+	GetAdminReportsProductsCsvParamsPeriodYesterday  GetAdminReportsProductsCsvParamsPeriod = "yesterday"
+)
+
+// Valid indicates whether the value is a known member of the GetAdminReportsProductsCsvParamsPeriod enum.
+func (e GetAdminReportsProductsCsvParamsPeriod) Valid() bool {
+	switch e {
+	case GetAdminReportsProductsCsvParamsPeriodCustom:
+		return true
+	case GetAdminReportsProductsCsvParamsPeriodLast30Days:
+		return true
+	case GetAdminReportsProductsCsvParamsPeriodLast7Days:
+		return true
+	case GetAdminReportsProductsCsvParamsPeriodToday:
+		return true
+	case GetAdminReportsProductsCsvParamsPeriodYesterday:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GetAdminReportsProductsCsvParamsSortBy.
+const (
+	GetAdminReportsProductsCsvParamsSortByAmount   GetAdminReportsProductsCsvParamsSortBy = "amount"
+	GetAdminReportsProductsCsvParamsSortByQuantity GetAdminReportsProductsCsvParamsSortBy = "quantity"
+)
+
+// Valid indicates whether the value is a known member of the GetAdminReportsProductsCsvParamsSortBy enum.
+func (e GetAdminReportsProductsCsvParamsSortBy) Valid() bool {
+	switch e {
+	case GetAdminReportsProductsCsvParamsSortByAmount:
+		return true
+	case GetAdminReportsProductsCsvParamsSortByQuantity:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for GetAdminReportsSearchParamsPeriod.
 const (
 	GetAdminReportsSearchParamsPeriodCustom     GetAdminReportsSearchParamsPeriod = "custom"
@@ -1695,6 +1740,33 @@ func (e GetAdminReportsStoresParamsPeriod) Valid() bool {
 	case GetAdminReportsStoresParamsPeriodToday:
 		return true
 	case GetAdminReportsStoresParamsPeriodYesterday:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GetAdminReportsStoresCsvParamsPeriod.
+const (
+	GetAdminReportsStoresCsvParamsPeriodCustom     GetAdminReportsStoresCsvParamsPeriod = "custom"
+	GetAdminReportsStoresCsvParamsPeriodLast30Days GetAdminReportsStoresCsvParamsPeriod = "last_30_days"
+	GetAdminReportsStoresCsvParamsPeriodLast7Days  GetAdminReportsStoresCsvParamsPeriod = "last_7_days"
+	GetAdminReportsStoresCsvParamsPeriodToday      GetAdminReportsStoresCsvParamsPeriod = "today"
+	GetAdminReportsStoresCsvParamsPeriodYesterday  GetAdminReportsStoresCsvParamsPeriod = "yesterday"
+)
+
+// Valid indicates whether the value is a known member of the GetAdminReportsStoresCsvParamsPeriod enum.
+func (e GetAdminReportsStoresCsvParamsPeriod) Valid() bool {
+	switch e {
+	case GetAdminReportsStoresCsvParamsPeriodCustom:
+		return true
+	case GetAdminReportsStoresCsvParamsPeriodLast30Days:
+		return true
+	case GetAdminReportsStoresCsvParamsPeriodLast7Days:
+		return true
+	case GetAdminReportsStoresCsvParamsPeriodToday:
+		return true
+	case GetAdminReportsStoresCsvParamsPeriodYesterday:
 		return true
 	default:
 		return false
@@ -5373,7 +5445,7 @@ type Staff struct {
 	// | 门店：建、改、删、围栏 | ✅ | ✅ | 只限本大区的门店（换大区时新旧都得在范围内） | ❌ |
 	// | 门店价、门店上下架、门店库存 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
 	// | 订单与售后：订单 / 退款单的列表与详情、发货、退款审核、确认收到退货 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
-	// | 经营报表：概览、趋势、商品排行、门店对比、库存预警 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
+	// | 经营报表：概览、趋势、商品排行、门店对比、库存预警（含两份 CSV 导出） | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
 	// | 经营报表：搜索概况（检索日志没有门店维度） | ✅ | ✅ | ❌ | ❌ |
 	// | 设默认门店（含建店时 is_default） | ✅ | ❌ | ❌ | ❌ |
 	// | 店铺设置（时区、自动确认天数、退货寄回时限、客服电话）的读与改 | ✅ | ❌ | ❌ | ❌ |
@@ -5423,7 +5495,7 @@ type StaffCreateRequest struct {
 	// | 门店：建、改、删、围栏 | ✅ | ✅ | 只限本大区的门店（换大区时新旧都得在范围内） | ❌ |
 	// | 门店价、门店上下架、门店库存 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
 	// | 订单与售后：订单 / 退款单的列表与详情、发货、退款审核、确认收到退货 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
-	// | 经营报表：概览、趋势、商品排行、门店对比、库存预警 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
+	// | 经营报表：概览、趋势、商品排行、门店对比、库存预警（含两份 CSV 导出） | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
 	// | 经营报表：搜索概况（检索日志没有门店维度） | ✅ | ✅ | ❌ | ❌ |
 	// | 设默认门店（含建店时 is_default） | ✅ | ❌ | ❌ | ❌ |
 	// | 店铺设置（时区、自动确认天数、退货寄回时限、客服电话）的读与改 | ✅ | ❌ | ❌ | ❌ |
@@ -5479,7 +5551,7 @@ type StaffRef struct {
 // | 门店：建、改、删、围栏 | ✅ | ✅ | 只限本大区的门店（换大区时新旧都得在范围内） | ❌ |
 // | 门店价、门店上下架、门店库存 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
 // | 订单与售后：订单 / 退款单的列表与详情、发货、退款审核、确认收到退货 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
-// | 经营报表：概览、趋势、商品排行、门店对比、库存预警 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
+// | 经营报表：概览、趋势、商品排行、门店对比、库存预警（含两份 CSV 导出） | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
 // | 经营报表：搜索概况（检索日志没有门店维度） | ✅ | ✅ | ❌ | ❌ |
 // | 设默认门店（含建店时 is_default） | ✅ | ❌ | ❌ | ❌ |
 // | 店铺设置（时区、自动确认天数、退货寄回时限、客服电话）的读与改 | ✅ | ❌ | ❌ | ❌ |
@@ -7717,6 +7789,69 @@ type GetAdminReportsProductsParamsPeriod string
 // GetAdminReportsProductsParamsSortBy defines parameters for GetAdminReportsProducts.
 type GetAdminReportsProductsParamsSortBy string
 
+// GetAdminReportsProductsCsvParams defines parameters for GetAdminReportsProductsCsv.
+type GetAdminReportsProductsCsvParams struct {
+	// Period 时间窗口，按店铺时区的自然日切（口径见 `ReportWindow`）：
+	// `today` 今天 0 点到此刻 · `yesterday` 昨天 · `last_7_days` 最近 7 个完整自然日（不含今天）·
+	// `last_30_days` 最近 30 个完整自然日（不含今天）· `custom` 自定义（必须同时给
+	// `start_date` 与 `end_date`）。**不传即 `today`**（写在这里而不是 schema 的 `default` 上：
+	// 查询参数的缺省值会被生成器代入，静默改变筛选语义，check_openapi.py 不许）。
+	Period *GetAdminReportsProductsCsvParamsPeriod `form:"period,omitempty" json:"period,omitempty"`
+
+	// StartDate `period=custom` 时的起始日（含），店铺时区的日期，形如 `2026-09-01`。
+	// 其它 period 下给了也不读。
+	StartDate *ReportStartDate `form:"start_date,omitempty" json:"start_date,omitempty"`
+
+	// EndDate `period=custom` 时的结束日（**含**），店铺时区的日期。起止最多跨 **366 天**
+	// （含首尾，一整个闰年），超出 422 —— 理由见 `ReportWindow`。
+	EndDate *ReportEndDate `form:"end_date,omitempty" json:"end_date,omitempty"`
+
+	// StoreId 只看这一家门店（履约门店）。与调用者的范围取交集，范围外得到空结果而不是 403。
+	StoreId *ReportStoreId `form:"store_id,omitempty" json:"store_id,omitempty"`
+
+	// RegionId 只看此刻挂在这个大区下的门店。与调用者的范围取交集。
+	RegionId *ReportRegionId `form:"region_id,omitempty" json:"region_id,omitempty"`
+
+	// SortBy 同 `GET /admin/reports/products`。
+	SortBy *GetAdminReportsProductsCsvParamsSortBy `form:"sort_by,omitempty" json:"sort_by,omitempty"`
+
+	// CategoryId 同 `GET /admin/reports/products`。
+	CategoryId *int64 `form:"category_id,omitempty" json:"category_id,omitempty"`
+
+	// Limit Top N 的 N，不传即 10。超出范围按边界钳制。
+	Limit *ReportLimit `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// GetAdminReportsProductsCsvParamsPeriod defines parameters for GetAdminReportsProductsCsv.
+type GetAdminReportsProductsCsvParamsPeriod string
+
+// GetAdminReportsProductsCsvParamsSortBy defines parameters for GetAdminReportsProductsCsv.
+type GetAdminReportsProductsCsvParamsSortBy string
+
 // GetAdminReportsSearchParams defines parameters for GetAdminReportsSearch.
 type GetAdminReportsSearchParams struct {
 	// Period 时间窗口，按店铺时区的自然日切（口径见 `ReportWindow`）：
@@ -7812,6 +7947,54 @@ type GetAdminReportsStoresParams struct {
 
 // GetAdminReportsStoresParamsPeriod defines parameters for GetAdminReportsStores.
 type GetAdminReportsStoresParamsPeriod string
+
+// GetAdminReportsStoresCsvParams defines parameters for GetAdminReportsStoresCsv.
+type GetAdminReportsStoresCsvParams struct {
+	// Period 时间窗口，按店铺时区的自然日切（口径见 `ReportWindow`）：
+	// `today` 今天 0 点到此刻 · `yesterday` 昨天 · `last_7_days` 最近 7 个完整自然日（不含今天）·
+	// `last_30_days` 最近 30 个完整自然日（不含今天）· `custom` 自定义（必须同时给
+	// `start_date` 与 `end_date`）。**不传即 `today`**（写在这里而不是 schema 的 `default` 上：
+	// 查询参数的缺省值会被生成器代入，静默改变筛选语义，check_openapi.py 不许）。
+	Period *GetAdminReportsStoresCsvParamsPeriod `form:"period,omitempty" json:"period,omitempty"`
+
+	// StartDate `period=custom` 时的起始日（含），店铺时区的日期，形如 `2026-09-01`。
+	// 其它 period 下给了也不读。
+	StartDate *ReportStartDate `form:"start_date,omitempty" json:"start_date,omitempty"`
+
+	// EndDate `period=custom` 时的结束日（**含**），店铺时区的日期。起止最多跨 **366 天**
+	// （含首尾，一整个闰年），超出 422 —— 理由见 `ReportWindow`。
+	EndDate *ReportEndDate `form:"end_date,omitempty" json:"end_date,omitempty"`
+
+	// RegionId 只看此刻挂在这个大区下的门店。与调用者的范围取交集。
+	RegionId *ReportRegionId `form:"region_id,omitempty" json:"region_id,omitempty"`
+
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// GetAdminReportsStoresCsvParamsPeriod defines parameters for GetAdminReportsStoresCsv.
+type GetAdminReportsStoresCsvParamsPeriod string
 
 // GetAdminReportsTrendParams defines parameters for GetAdminReportsTrend.
 type GetAdminReportsTrendParams struct {
@@ -8095,7 +8278,7 @@ type PatchAdminStaffStaffIdJSONBody struct {
 	// | 门店：建、改、删、围栏 | ✅ | ✅ | 只限本大区的门店（换大区时新旧都得在范围内） | ❌ |
 	// | 门店价、门店上下架、门店库存 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
 	// | 订单与售后：订单 / 退款单的列表与详情、发货、退款审核、确认收到退货 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
-	// | 经营报表：概览、趋势、商品排行、门店对比、库存预警 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
+	// | 经营报表：概览、趋势、商品排行、门店对比、库存预警（含两份 CSV 导出） | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
 	// | 经营报表：搜索概况（检索日志没有门店维度） | ✅ | ✅ | ❌ | ❌ |
 	// | 设默认门店（含建店时 is_default） | ✅ | ❌ | ❌ | ❌ |
 	// | 店铺设置（时区、自动确认天数、退货寄回时限、客服电话）的读与改 | ✅ | ❌ | ❌ | ❌ |

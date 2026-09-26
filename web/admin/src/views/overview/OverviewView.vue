@@ -11,8 +11,9 @@
 
 import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { QuestionFilled, Refresh } from "@element-plus/icons-vue";
+import { Download, QuestionFilled, Refresh } from "@element-plus/icons-vue";
 import {
+    downloadAuthedFile,
     keel,
     type AdminCategory,
     type AdminStore,
@@ -35,11 +36,14 @@ import {
     previousLabel,
     rateDeltaText,
     rateText,
+    reportCsvPath,
     reportQuery,
+    type ReportCsvKind,
     type ReportFilterForm,
 } from "../../api/reports.ts";
 import { merchantWide } from "../../auth/permissions.ts";
 import { yuan } from "../../ui/format.ts";
+import { notifyError } from "../../ui/notify.ts";
 import ProblemAlert from "../../components/ProblemAlert.vue";
 import TrendChart from "./TrendChart.vue";
 
@@ -99,14 +103,40 @@ function windowQuery() {
     return q;
 }
 
-function loadProducts(): void {
+/** 商品排行的查询。界面那张表与 CSV 导出共用这一份：导出的就是你看到的那张表。 */
+function productsQuery() {
     const q = windowQuery();
-    if (q === null) return;
-    void run(products, () =>
-        keel.get("/admin/reports/products", {
-            query: { ...q, sort_by: sortBy.value, limit: 10, ...(categoryId.value === null ? {} : { category_id: categoryId.value }) },
-        }),
-    );
+    if (q === null) return null;
+    return { ...q, sort_by: sortBy.value, limit: 10, ...(categoryId.value === null ? {} : { category_id: categoryId.value }) };
+}
+
+function loadProducts(): void {
+    const query = productsQuery();
+    if (query === null) return;
+    void run(products, () => keel.get("/admin/reports/products", { query }));
+}
+
+const exporting = ref<ReportCsvKind | null>(null);
+
+/** 导出 CSV（UTF-8 带 BOM，Excel 直接打开）。判权与范围同那张表，服务端再判一遍。 */
+async function exportCsv(kind: ReportCsvKind): Promise<void> {
+    let query: Record<string, string | number | undefined> | null;
+    if (kind === "products") {
+        query = productsQuery();
+    } else {
+        const q = windowQuery();
+        // 门店对比本来就按门店展开，不吃门店筛选（与上面那张表一致）。
+        query = q === null ? null : { period: q.period, start_date: q.start_date, end_date: q.end_date };
+    }
+    if (query === null) return;
+    exporting.value = kind;
+    try {
+        await downloadAuthedFile(reportCsvPath(kind, query), kind === "products" ? "商品排行.csv" : "门店对比.csv");
+    } catch (err) {
+        notifyError(err);
+    } finally {
+        exporting.value = null;
+    }
 }
 
 function loadAll(): void {
@@ -283,6 +313,8 @@ function openStore(id: number): void {
                                 <el-radio-button value="amount">销售额</el-radio-button>
                                 <el-radio-button value="quantity">销量</el-radio-button>
                             </el-radio-group>
+                            <el-button size="small" :icon="Download" :loading="exporting === 'products'"
+                                data-test="export-products" @click="exportCsv('products')">导出</el-button>
                         </div>
                     </div>
                 </template>
@@ -314,10 +346,14 @@ function openStore(id: number): void {
                 <template #header>
                     <div class="section-head">
                         <span>门店对比 · 净销售额</span>
-                        <el-radio-group v-model="storeView" size="small">
-                            <el-radio-button value="stores">按门店</el-radio-button>
-                            <el-radio-button value="regions">按大区</el-radio-button>
-                        </el-radio-group>
+                        <div class="section-tools">
+                            <el-radio-group v-model="storeView" size="small">
+                                <el-radio-button value="stores">按门店</el-radio-button>
+                                <el-radio-button value="regions">按大区</el-radio-button>
+                            </el-radio-group>
+                            <el-button size="small" :icon="Download" :loading="exporting === 'stores'"
+                                data-test="export-stores" @click="exportCsv('stores')">导出</el-button>
+                        </div>
                     </div>
                 </template>
                 <ProblemAlert v-if="storeCmp.error" :error="storeCmp.error" />

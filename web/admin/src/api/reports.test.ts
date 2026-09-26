@@ -8,6 +8,7 @@ import {
     compactYuan,
     delta,
     deltaText,
+    filenameFromDisposition,
     inclusiveDays,
     linePath,
     nearestIndex,
@@ -15,6 +16,7 @@ import {
     previousLabel,
     rateDeltaText,
     rateText,
+    reportCsvPath,
     reportQuery,
     xAt,
     yAt,
@@ -95,4 +97,21 @@ test("刻度上的金额简写", () => {
     assert.equal(compactYuan(35000), "¥350");
     assert.equal(compactYuan(1_000_000), "¥1万");
     assert.equal(compactYuan(1_250_000), "¥1.3万");
+});
+
+test("CSV 导出：地址与界面那张表的查询逐字相同，空参数不带", () => {
+    assert.equal(reportCsvPath("stores", { period: "today" }), "/admin/reports/stores.csv?period=today");
+    assert.equal(
+        reportCsvPath("products", { period: "custom", start_date: "2026-09-01", end_date: "2026-09-30", sort_by: "quantity", limit: 10, store_id: undefined }),
+        "/admin/reports/products.csv?period=custom&start_date=2026-09-01&end_date=2026-09-30&sort_by=quantity&limit=10",
+    );
+    assert.equal(reportCsvPath("products", {}), "/admin/reports/products.csv");
+});
+
+test("CSV 导出：文件名优先取 filename*（中文），其次 filename，都没有用兜底", () => {
+    const h = "attachment; filename=\"product-ranking-2026-09-01-2026-09-30.csv\"; filename*=UTF-8''%E5%95%86%E5%93%81%E6%8E%92%E8%A1%8C_2026-09-01_2026-09-30.csv";
+    assert.equal(filenameFromDisposition(h, "x.csv"), "商品排行_2026-09-01_2026-09-30.csv");
+    assert.equal(filenameFromDisposition('attachment; filename="a.csv"', "x.csv"), "a.csv");
+    assert.equal(filenameFromDisposition("attachment; filename*=UTF-8''%E0%A4%A", "x.csv"), "x.csv");
+    assert.equal(filenameFromDisposition(null, "x.csv"), "x.csv");
 });

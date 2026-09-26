@@ -517,6 +517,14 @@ var permMatrix = []permRoute{
 	{"GET", v1 + "/admin/reports/stores", everyone, func(t *testing.T, fx *permFixture, c permCase) permReq {
 		return permGet(fmt.Sprintf(v1+"/admin/reports/stores?region_id=%d", fx.region(c)))
 	}},
+	// 两份 CSV 导出：与对应的 JSON 报表同一行（范围外是收窄成空表，不是 403；范围收窄由
+	// report_csv_test.go 逐角色核对内容）。
+	{"GET", v1 + "/admin/reports/products.csv", everyone, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permGet(fmt.Sprintf(v1+"/admin/reports/products.csv?store_id=%d", fx.store(c)))
+	}},
+	{"GET", v1 + "/admin/reports/stores.csv", everyone, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permGet(fmt.Sprintf(v1+"/admin/reports/stores.csv?region_id=%d", fx.region(c)))
+	}},
 	{"GET", v1 + "/admin/reports/inventory-alerts", everyone, func(t *testing.T, fx *permFixture, c permCase) permReq {
 		return permGet(fmt.Sprintf(v1+"/admin/reports/inventory-alerts?store_id=%d", fx.store(c)))
 	}},

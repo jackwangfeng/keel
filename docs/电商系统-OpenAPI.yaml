@@ -5701,6 +5701,45 @@ paths:
         '422': { $ref: '#/components/responses/ReportBadWindow' }
         default: { $ref: '#/components/responses/Problem' }
 
+  /admin/reports/products.csv:
+    get:
+      tags: [Admin, Report]
+      summary: 导出商品排行（CSV）
+      description: |
+        与 `GET /admin/reports/products` **同一份数据、同一组参数、同一个判权**，换成 CSV 文件下载
+        （`Content-Disposition: attachment`，文件名带窗口的起止日期）。导出的就是界面上那张表：
+        同样受 `limit`（Top N，至多 50）约束。
+
+        · 编码：**UTF-8 带 BOM**（不带 BOM 的话中文 Excel 双击打开是乱码），CRLF 换行，RFC 4180 引号规则。
+        · 列：排名、商品ID、商品标题、类目ID、销量、销售额（元）、支付订单数、已退件数、已退金额（元）。
+          金额按「元」写、两位小数（Excel 里直接能求和），口径与 JSON 版逐字一致。
+        · 以 `=` `+` `-` `@` 开头的文本单元格（商品标题）前面加一个单引号，防止在 Excel 里被当成公式执行。
+        · 窗口写错是 422（Problem JSON，不是 CSV）。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+        - $ref: '#/components/parameters/ReportPeriod'
+        - $ref: '#/components/parameters/ReportStartDate'
+        - $ref: '#/components/parameters/ReportEndDate'
+        - $ref: '#/components/parameters/ReportStoreId'
+        - $ref: '#/components/parameters/ReportRegionId'
+        - name: sort_by
+          in: query
+          description: 同 `GET /admin/reports/products`。
+          schema: { type: string, enum: [amount, quantity] }
+        - name: category_id
+          in: query
+          description: 同 `GET /admin/reports/products`。
+          schema: { type: integer, format: int64 }
+        - $ref: '#/components/parameters/ReportLimit'
+      responses:
+        '200':
+          description: 'CSV 文件（`Content-Disposition: attachment`）'
+          content:
+            text/csv:
+              schema: { type: string, format: binary }
+        '422': { $ref: '#/components/responses/ReportBadWindow' }
+        default: { $ref: '#/components/responses/Problem' }
+
   /admin/reports/stores:
     get:
       tags: [Admin, Report]
@@ -5729,6 +5768,32 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ReportStoreComparison' }
+        '422': { $ref: '#/components/responses/ReportBadWindow' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /admin/reports/stores.csv:
+    get:
+      tags: [Admin, Report]
+      summary: 导出门店 / 大区对比（CSV）
+      description: |
+        与 `GET /admin/reports/stores` **同一份数据、同一组参数、同一个判权**，换成 CSV 文件下载。
+        编码与引号规则同 `GET /admin/reports/products.csv`（UTF-8 带 BOM、CRLF、防公式注入）。
+
+        · 先列门店（顺序同 JSON 版：净销售额倒序），再列大区小计；第一列「类型」区分两者。
+        · 列：类型、大区ID、大区、门店ID、门店编码、门店、已删除、支付订单数、支付金额（元）、
+          退款金额（元）、净销售额（元）。大区小计那几行门店列留空。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+        - $ref: '#/components/parameters/ReportPeriod'
+        - $ref: '#/components/parameters/ReportStartDate'
+        - $ref: '#/components/parameters/ReportEndDate'
+        - $ref: '#/components/parameters/ReportRegionId'
+      responses:
+        '200':
+          description: 'CSV 文件（`Content-Disposition: attachment`）'
+          content:
+            text/csv:
+              schema: { type: string, format: binary }
         '422': { $ref: '#/components/responses/ReportBadWindow' }
         default: { $ref: '#/components/responses/Problem' }
 
@@ -7975,7 +8040,7 @@ components:
         | 门店：建、改、删、围栏 | ✅ | ✅ | 只限本大区的门店（换大区时新旧都得在范围内） | ❌ |
         | 门店价、门店上下架、门店库存 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
         | 订单与售后：订单 / 退款单的列表与详情、发货、退款审核、确认收到退货 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
-        | 经营报表：概览、趋势、商品排行、门店对比、库存预警 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
+        | 经营报表：概览、趋势、商品排行、门店对比、库存预警（含两份 CSV 导出） | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
         | 经营报表：搜索概况（检索日志没有门店维度） | ✅ | ✅ | ❌ | ❌ |
         | 设默认门店（含建店时 is_default） | ✅ | ❌ | ❌ | ❌ |
         | 店铺设置（时区、自动确认天数、退货寄回时限、客服电话）的读与改 | ✅ | ❌ | ❌ | ❌ |

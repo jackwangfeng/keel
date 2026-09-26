@@ -395,6 +395,19 @@ var routes = []route{
 		HTTPMethod:     http.MethodGet,
 		HandlerFile:    "admin_report_stores.go",
 	},
+	// 两份 CSV 导出与各自的 JSON 版参数集合相同，放在同一个 handler 文件里（对账按文件读 c.Query）。
+	{
+		ContractPath:   "/admin/reports/products.csv",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "admin_report_products.go",
+	},
+	{
+		ContractPath:   "/admin/reports/stores.csv",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "admin_report_stores.go",
+	},
 	{
 		ContractPath:   "/admin/reports/inventory-alerts",
 		ContractMethod: "get",

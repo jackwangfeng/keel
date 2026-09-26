@@ -35,6 +35,7 @@ import {
 } from "@contract/client.mts";
 import type { components } from "@contract/schema.js";
 import { merchantScopeHeaders } from "./merchantScope.ts";
+import { filenameFromDisposition } from "./reports.ts";
 
 export { KeelError, ProblemError, UnexpectedResponseError, isProblem } from "@contract/client.mts";
 export type { Problem } from "@contract/client.mts";
@@ -333,7 +334,18 @@ export async function commitProductImport(
  * 触发一次下载，用完即还。
  */
 export async function downloadImportTemplate(format: ProductImportFormat): Promise<void> {
-    const url = `${API_BASE.replace(/\/+$/, "")}/admin/product-imports/template?format=${format}`;
+    await downloadAuthedFile(
+        `/admin/product-imports/template?format=${format}`,
+        format === "csv" ? "商品导入模板.csv" : "商品导入模板.xlsx",
+    );
+}
+
+/**
+ * 带会话取回一个文件并让浏览器存下来（模板、报表导出）。`path` 相对 API_BASE。
+ * 文件名优先用服务端 Content-Disposition 里的（报表导出的文件名带着窗口日期），没有时用 fallbackName。
+ */
+export async function downloadAuthedFile(path: string, fallbackName: string): Promise<void> {
+    const url = `${API_BASE.replace(/\/+$/, "")}${path}`;
     const headers = new Headers();
     for (const [k, v] of Object.entries(authHeaders())) headers.set(k, v);
     const response = await globalThis.fetch(url, { headers });
@@ -354,7 +366,7 @@ export async function downloadImportTemplate(format: ProductImportFormat): Promi
     try {
         const a = document.createElement("a");
         a.href = objectUrl;
-        a.download = format === "csv" ? "商品导入模板.csv" : "商品导入模板.xlsx";
+        a.download = filenameFromDisposition(response.headers.get("content-disposition"), fallbackName);
         document.body.appendChild(a);
         a.click();
         a.remove();
