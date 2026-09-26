@@ -5,8 +5,9 @@
 package db
 
 import (
+	"net/netip"
+
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/pgvector/pgvector-go"
 )
 
 // 子事务屏障（数据模型 §6）。形状照抄 dtmrs-barrier v0.11.0，别加列。
@@ -168,11 +169,20 @@ type ProductCluster struct {
 	UpdatedAt  pgtype.Timestamptz
 }
 
+type ProductImage struct {
+	ID         int64
+	MerchantID int64
+	ProductID  int64
+	UploadID   int64
+	SortOrder  int32
+	CreatedAt  pgtype.Timestamptz
+}
+
 type ProductImageVector struct {
 	ProductID    int64
 	MerchantID   int64
 	ImageUrl     string
-	Embedding    *pgvector.Vector
+	Embedding    string
 	ModelName    string
 	ModelVersion string
 	UpdatedAt    pgtype.Timestamptz
@@ -182,7 +192,7 @@ type ProductTextVector struct {
 	ProductID    int64
 	MerchantID   int64
 	Content      string
-	Embedding    *pgvector.Vector
+	Embedding    string
 	ModelName    string
 	ModelVersion string
 	UpdatedAt    pgtype.Timestamptz
@@ -224,6 +234,49 @@ type Sku struct {
 	Status     int16
 	CreatedAt  pgtype.Timestamptz
 	UpdatedAt  pgtype.Timestamptz
+	DeletedAt  pgtype.Timestamptz
+}
+
+type Staff struct {
+	ID          int64
+	MerchantID  *int64
+	Email       string
+	Name        string
+	Role        int16
+	Status      int16
+	CreatedBy   *int64
+	LastLoginAt pgtype.Timestamptz
+	DeletedAt   pgtype.Timestamptz
+	CreatedAt   pgtype.Timestamptz
+	UpdatedAt   pgtype.Timestamptz
+}
+
+type StaffToken struct {
+	ID         int64
+	StaffID    int64
+	TokenHash  string
+	Kind       int16
+	ExpireAt   pgtype.Timestamptz
+	UsedAt     pgtype.Timestamptz
+	RevokedAt  pgtype.Timestamptz
+	LastSeenAt pgtype.Timestamptz
+	CreatedIp  *netip.Addr
+	CreatedAt  pgtype.Timestamptz
+}
+
+type Upload struct {
+	ID          int64
+	MerchantID  int64
+	UserID      *int64
+	StaffID     *int64
+	Purpose     int16
+	Driver      int16
+	StorageKey  string
+	ContentType string
+	SizeBytes   int64
+	Sha256      string
+	Referenced  bool
+	CreatedAt   pgtype.Timestamptz
 }
 
 type User struct {

@@ -144,6 +144,26 @@ services:
       # 本地演示这两条都无所谓，真在服务客人的部署请显式配置：
       #   KEEL_AUTH_SECRET=$(openssl rand -base64 48) docker compose up -d
       KEEL_AUTH_SECRET: ${KEEL_AUTH_SECRET:-}
+
+      # /search 的按 IP 限流。它不是防 DDoS 的，是防「一条 for 循环把公开
+      # Demo 的语义搜索变成关键词搜索」——每个检索请求都要在 CPU 上跑一次模型
+      # 推理，实测 20 个并发的长查询就能让同时进来的正常查询全部降级。
+      #
+      # 默认值在 internal/app 里（不在这里写死，否则改默认值要改两处）。
+      # 调大它之前先想清楚：放行更多请求不会让它们更快，只会让更多人一起慢。
+      # 真正对症的是给引擎调用加全局并发上限，那条记在 ratelimit.go 的文件头。
+      KEEL_SEARCH_RATE_PER_SEC: ${KEEL_SEARCH_RATE_PER_SEC:-}
+      KEEL_SEARCH_RATE_BURST: ${KEEL_SEARCH_RATE_BURST:-}
+
+      # ⚠️ 限流按 `RemoteIP()` 计，不是 `ClientIP()`。gin 默认信任全部代理，
+      # 而 `ClientIP()` 读的是 X-Forwarded-For —— 裸跑时那等于「攻击者自己说
+      # 他是谁」，限流形同虚设。
+      #
+      # 代价是**部署在反向代理后面时，全部流量会算到代理那一个 IP 上**，
+      # 于是所有人共用一份配额。那种部署必须显式配 gin 的 TrustedProxies
+      # 并改用 ClientIP —— 这件事今天没有开关，要改代码。
+      # 在它有开关之前，反代后面的部署请把配额调大或在代理层限流。
+
       # 镜像是拿来跑的，不是拿来开发的：gin 的 debug 模式会在启动时打一屏
       # 「你没有设置 release」的警告，而 `docker compose up` 的头一屏正是
       # 新人对这个项目的第一印象。它不改变任何路由行为。

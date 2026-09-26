@@ -58,6 +58,10 @@ type Tx interface {
 	OrderQueryTx
 	SweepTx
 	PaymentTx
+	IndexTx
+	SearchTx
+	StaffTx
+	AdminCatalogTx
 }
 
 // ProductTx 是商品读取这一面。
@@ -84,7 +88,19 @@ type ProductTx interface {
 }
 
 // tenantTx 是 Tx 的唯一实现：一层薄薄的转换，把 sqlc 的行变成领域类型。
-type tenantTx struct{ q *db.Queries }
+//
+// scope 是这个事务的作用域租户：WithTenant 里是 ctx 里那一个，
+// WithPlatform 里是 nil（平台级，不属于任何一家店 —— 数据模型 §14）。
+//
+// 它在这里而不是从行里 SELECT 出来，理由与 User 上那句「没有 MerchantID」
+// 一字不差：每一次读写都发生在一个设好作用域的事务里，所以查出来的行必然
+// 属于当前作用域，再从行里读一遍只会制造第二个可能与它对不上的真相。
+// 眼下只有 staff 用得上它（那张表的租户列可空，所以它是响应的一部分），
+// 别的领域类型仍然完全不带租户。
+type tenantTx struct {
+	q     *db.Queries
+	scope *int64
+}
 
 func (t tenantTx) ListProducts(ctx context.Context, limit, offset int64) ([]Product, error) {
 	// 到这里还越界只可能是上游的钳制没生效。报错而不是截断：截断会把

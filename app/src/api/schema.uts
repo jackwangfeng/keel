@@ -44,8 +44,125 @@ export type AddressInput = {
   is_default? : boolean
 }
 
+/** 后台视角的分类，**扁平**。与前台的 `Category` 不同，它不嵌 `children`： */
+export type AdminCategory = {
+  id : number
+  /** 为 null 即根分类。 */
+  parent_id? : number | null
+  name : string
+  /** 物化路径，形如 `/1/23/456/`（数据模型 §3）。 */
+  path : string
+  /** 层级，根为 1。同样由服务端从 `parent_id` 算出。 */
+  level : number
+  sort_order : number
+  /** `categories.status`：0 停用 / 1 启用。 */
+  status : number
+  deleted_at? : string | null
+  created_at : string
+  updated_at? : string
+}
+
+export type AdminInventory = {
+  sku_id : number
+  available_qty : number
+  warning_qty : number
+  updated_at : string
+}
+
 /** 金额，单位「分」。禁止使用浮点。 */
 export type Money = number
+
+/** 后台视角的商品。与 `ProductSummary` 的差别是状态面： */
+export type AdminProduct = {
+  id : number
+  title : string
+  subtitle? : string
+  description? : string
+  category_id : number
+  /** 品牌，可空。一期没有品牌管理接口，只透传。 */
+  brand_id? : number | null
+  /** `products.status`：0 草稿 / 1 上架 / 2 下架。 */
+  status : number
+  /** **首次**上架时间。为 null 表示从未上架过（即 `status` 一直是 0 草稿）。 */
+  published_at? : string | null
+  /** 软删时间。非 null 时该商品只在 `include_deleted=true` 的后台列表里出现。 */
+  deleted_at? : string | null
+  /** 金额，单位「分」。禁止使用浮点。 */
+  min_price_cents : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  max_price_cents : Money
+  /** 冗余字段，由 SKU 变更时同步（数据模型 §3）。不接受写入。 */
+  total_stock : number
+  /** 冗余字段，由订单变更时同步。不接受写入。 */
+  sales_count : number
+  created_at : string
+  updated_at? : string
+}
+
+/** 后台视角的 SKU。比前台的 `Sku` 多出成本、重量、售卖开关与库存预警位—— */
+export type AdminSku = {
+  id : number
+  product_id : number
+  /** 商家自己的货号，租户内唯一（`uk_skus_code`），不是全局唯一。 */
+  sku_code : string
+  /** `skus.spec_values`（JSONB）。键名不由契约规定。 */
+  spec_values? : UTSJSONObject
+  /** 金额，单位「分」。禁止使用浮点。 */
+  price_cents : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  cost_cents? : Money
+  weight_gram? : number
+  /** 该规格的小图，形如 `/api/v1/uploads/{upload_id}`。 */
+  image_url? : string
+  /** `skus.status`：0 停售 / 1 在售。停售的规格仍在规格矩阵里显示，但不可加购。 */
+  status : number
+  /** 来自 `inventories.available_qty`。改它要走 `PUT /admin/skus/{sku_id}/inventory`。 */
+  available_qty : number
+  /** 低库存预警线。一期只是一个存着的数，没有接到任何告警。 */
+  warning_qty? : number
+  created_at? : string
+  updated_at? : string
+}
+
+/** 商品图与商品的关联。落地在数据模型 §3 的 `product_images` 表上—— */
+export type ProductImage = {
+  /** `uploads.id`。由 `POST /admin/uploads` 得到。 */
+  upload_id : number
+  /** 形如 `/api/v1/uploads/{upload_id}`，与 `Upload.url` 同一个形状： */
+  url : string
+  /** 展示顺序，从 0 起。**0 就是主图**，没有单独的 `is_primary`。 */
+  sort_order : number
+}
+
+export type AdminProductDetail = {
+  id : number
+  title : string
+  subtitle? : string
+  description? : string
+  category_id : number
+  /** 品牌，可空。一期没有品牌管理接口，只透传。 */
+  brand_id? : number | null
+  /** `products.status`：0 草稿 / 1 上架 / 2 下架。 */
+  status : number
+  /** **首次**上架时间。为 null 表示从未上架过（即 `status` 一直是 0 草稿）。 */
+  published_at? : string | null
+  /** 软删时间。非 null 时该商品只在 `include_deleted=true` 的后台列表里出现。 */
+  deleted_at? : string | null
+  /** 金额，单位「分」。禁止使用浮点。 */
+  min_price_cents : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  max_price_cents : Money
+  /** 冗余字段，由 SKU 变更时同步（数据模型 §3）。不接受写入。 */
+  total_stock : number
+  /** 冗余字段，由订单变更时同步。不接受写入。 */
+  sales_count : number
+  created_at : string
+  updated_at? : string
+  /** 含已软删的 SKU 吗——**不含**。软删的 SKU 不在任何视图里返回。 */
+  skus : AdminSku[]
+  /** 按展示顺序，`images[0]` 是主图。 */
+  images : ProductImage[]
+}
 
 export type CartItem = {
   id : number
@@ -76,6 +193,24 @@ export type Category = {
   name : string
   level : number
   children? : Category[]
+}
+
+/** **没有 `path` 与 `level`**，它们由服务端从 `parent_id` 算出。 */
+export type CategoryCreateRequest = {
+  name : string
+  /** 省略或为 null 即建根分类。必须属于当前租户。 */
+  parent_id? : number | null
+  sort_order? : number
+}
+
+/** 传 `parent_id` 就是**移动子树**，服务端会在同一事务里重写整棵子树的 */
+export type CategoryUpdateRequest = {
+  name? : string
+  /** 显式传 `null` 表示移到根。**不传这个字段则不动层级** —— */
+  parent_id? : number | null
+  sort_order? : number
+  /** 0 停用 / 1 启用 */
+  status? : number
 }
 
 export type ProductSummary = {
@@ -112,6 +247,33 @@ export type ChatReply = {
 
 /** 第三方身份来源，对应 `user_identities.provider`： */
 export type IdentityProvider = number
+
+export type InventoryConflictErrorsItem = {
+  field? : string
+  message? : string
+}
+
+export type InventoryConflict = {
+  type : string
+  title : string
+  status : number
+  detail? : string
+  instance? : string
+  trace_id? : string
+  /** 字段级校验错误 */
+  errors? : InventoryConflictErrorsItem[]
+  current : AdminInventory
+}
+
+/** 比较并设置。两个数量都是必填，缺一不可——只给 `available_qty` 就退化成 */
+export type InventorySetRequest = {
+  /** **我看到的那个值。** 服务端把它作为 UPDATE 的条件； */
+  expected_available_qty : number
+  /** 要写进去的新值（绝对值，不是增量）。 */
+  available_qty : number
+  /** 低库存预警线。省略则不动。 */
+  warning_qty? : number
+}
 
 export type User = {
   id : number
@@ -418,6 +580,16 @@ export type Problem = {
   errors? : ProblemErrorsItem[]
 }
 
+/** **没有 `status` 也没有 `merchant_id`。** 前者因为创建与发布是两个动作， */
+export type ProductCreateRequest = {
+  /** 必填。`products.category_id` 是 NOT NULL 的复合外键，没有「未分类」这个态。 */
+  category_id : number
+  title : string
+  subtitle? : string
+  description? : string
+  brand_id? : number | null
+}
+
 export type Sku = {
   id : number
   sku_code : string
@@ -445,6 +617,30 @@ export type ProductDetail = {
   category_id? : number
   images? : string[]
   skus : Sku[]
+}
+
+/** 只收 `upload_id`，不收 URL。收 URL 意味着客户端能往商品上挂任意地址， */
+export type ProductImageInput = {
+  upload_id : number
+}
+
+export type ProductImagesReplaceRequest = {
+  /** **整组替换**，数组顺序即展示顺序，第 0 个是主图。 */
+  images : ProductImageInput[]
+}
+
+export type ProductPublicationRequest = {
+  /** `publish` → `status = 1`；`unpublish` → `status = 2`。 */
+  action : string
+}
+
+/** 只改文案与归属。**不含 `status` / `published_at` / `deleted_at`**， */
+export type ProductUpdateRequest = {
+  title? : string
+  subtitle? : string
+  description? : string
+  category_id? : number
+  brand_id? : number | null
 }
 
 export type RefundItemInput = {
@@ -517,6 +713,37 @@ export type Shipment = {
 export type ShipmentCreateRequest = {
   carrier_code : string
   tracking_no : string
+}
+
+/** `available_qty` 在这里是**允许的**，而在 `SkuUpdateRequest` 里不允许： */
+export type SkuCreateRequest = {
+  sku_code : string
+  spec_values? : UTSJSONObject
+  /** 金额，单位「分」。禁止使用浮点。 */
+  price_cents : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  cost_cents? : Money
+  weight_gram? : number
+  /** 该规格小图的 `uploads.id`，服务端据此写出 `skus.image_url`。 */
+  image_upload_id? : number | null
+  /** 初始库存。服务端在同一事务里建出 `inventories` 行，省略即 0。 */
+  available_qty? : number
+  /** 低库存预警线，省略即 0。 */
+  warning_qty? : number
+}
+
+/** **刻意没有 `available_qty`**：库存有自己的端点，因为它要表达乐观并发。 */
+export type SkuUpdateRequest = {
+  sku_code? : string
+  spec_values? : UTSJSONObject
+  /** 金额，单位「分」。禁止使用浮点。 */
+  price_cents? : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  cost_cents? : Money
+  weight_gram? : number
+  image_upload_id? : number | null
+  /** 0 停售 / 1 在售 */
+  status? : number
 }
 
 /** 1 管理员 · 2 操作员 */

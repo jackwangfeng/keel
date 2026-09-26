@@ -21,6 +21,7 @@ import (
 	"github.com/keel/keel/internal/db"
 	"github.com/keel/keel/internal/dtm"
 	"github.com/keel/keel/internal/handler"
+	"github.com/keel/keel/internal/inference"
 	"github.com/keel/keel/internal/problem"
 	"github.com/keel/keel/internal/repository"
 	"github.com/keel/keel/internal/service"
@@ -150,8 +151,16 @@ func sandboxEnabled(v string) bool {
 //
 // 传 nil 会让 /orders 那两条路由挂上去却在第一次下单时报 500。Run 不会这么做；
 // 测试要这么做的话，那正是它想测的东西。
+//
+// embedder 与 orders 不同：**传 nil 是一个正常形态**，那时 /search 只跑关键词
+// 那一路，仍然返回结果。这正是语义检索层 §8 的降级链（「任何一环故障，
+// 搜索都必须仍能返回结果」），而 README 承诺的那条 `docker compose up`
+// 里本来就没有推理引擎 —— 引擎在 compose.inference.yaml 那个叠加层里。
+// 它与「派生数据入库任务没有引擎就拒绝构造」刻意相反，两边的理由都写在
+// service/search.go 与 service/index.go 的文件头。
 func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
-	orders *service.OrderService, payment service.PaymentConfig) *gin.Engine {
+	orders *service.OrderService, payment service.PaymentConfig,
+	embedder inference.Embedder) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery())
 
@@ -194,6 +203,23 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 
 	v1 := r.Group("/api/v1", res.Middleware())
 	v1.GET("/products", ph.List)
+
+	// 混合检索。契约里它是 security: []（公开的）：还没登录的人也要搜得到东西，
+	// 否则小程序首页的搜索框要先弹登录。**这不等于它不校验租户** ——
+	// 租户由上面那道 res.Middleware() 从 Host 定出来，而真正挡住跨店结果的是
+	// RLS：两条召回查询里一个 merchant_id 都没有（db/queries/search.sql）。
+	//
+	// 它走的是本仓库第一条**索引扫描**读路径（HNSW），与之前验过的顺序扫描
+	// 不是同一条 —— internal/handler/search_test.go 里有一条用真实数据跑的
+	// 跨租户断言专门盯这条路。
+	//
+	// 它是全仓库唯一一条**又公开、又每次请求都跑模型推理**的路由，所以也是
+	// 唯一一条挂限流的：验收实测 20 个并发的 198 字查询（契约允许的长度）
+	// 就能把整站压成纯关键词，而访客看不出任何异常。桶的形状、它挡得住什么、
+	// 挡不住什么，都写在 ratelimit.go 的文件头。请求体大小闸门在 handler 里
+	// （handler.MaxSearchBodyBytes），和 webhook 那处同一个顺序：先限大小再解析。
+	v1.POST("/search", rateLimitByIP(searchRateLimiterFromEnv()), handler.NewSearchHandler(
+		service.NewSearchService(repo, embedder, service.SearchConfig{}, nil)).Search)
 
 	// 商品详情与列表一样是 security: []（契约里两条都写着）：还没登录的人
 	// 也要看得到商品，否则小程序的首页到详情页这一跳就需要先登录。
@@ -244,6 +270,36 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	// 接口，差别只在这一行有没有 auth.Bearer —— 所以这一行是要盯着看的那一行。
 	v1.POST("/webhooks/payments/:channel",
 		handler.NewPaymentWebhookHandler(payments).Notify)
+
+	// -----------------------------------------------------------------------
+	// 后台（契约约定 6：后台接口一律挂在 /admin/ 前缀下，与前台分开鉴权）
+	// -----------------------------------------------------------------------
+	//
+	// 它们仍然在 v1 组里，也就仍然带着 res.Middleware()。**后台不需要买家的
+	// 令牌，但它一样需要租户**：一个商家级操作员打的是自己那家店的域名，
+	// 而 auth.StaffBearer 要拿那个租户去比对令牌里的那一个。
+	// internal/tenant/resolver.go 那句「刻意不支持用请求头指定租户」在这里
+	// 同样成立，理由还更硬 —— 后台 token 能读全部订单与客户手机号。
+	//
+	// 前三条是 security: []（未认证的），所以它们**不挂** auth.StaffBearer：
+	// 一个还没有会话的人要能打到它们。「不需要令牌」不等于「不需要租户」。
+	staffSvc := service.NewStaffService(repo, signer, nil)
+	adm := handler.NewAdminAuthHandler(staffSvc)
+	v1.POST("/admin/auth/bootstrap", adm.Bootstrap)
+	v1.POST("/admin/auth/email-link", adm.EmailLink)
+	v1.POST("/admin/auth/session", adm.Session)
+
+	// 其余的都要后台会话。中间件挂在租户中间件**之后**（v1 这个组已经带着
+	// 后者），顺序反了的话它取不到租户，也就没法校验令牌属不属于这家店。
+	//
+	// **它与买家那道 auth.Bearer 是两个不同的中间件、两个不同的 context key。**
+	// 共用一个的话，一条 /admin/ 路由会把 staff_id 当成 user_id 用，
+	// 而两张表的 id 来自同一种自增序列 —— 撞上不是小概率，是日常。
+	staffAuth := auth.StaffBearer(signer, staffSvc, nil)
+	v1.GET("/admin/me", staffAuth, adm.Me)
+	v1.GET("/admin/staff", staffAuth, adm.ListStaff)
+	v1.POST("/admin/staff", staffAuth, adm.CreateStaff)
+	v1.PATCH("/admin/staff/:staff_id", staffAuth, adm.UpdateStaff)
 	return r
 }
 
@@ -340,10 +396,47 @@ func Run(ctx context.Context, listen func(addr string, h http.Handler) error) er
 	// 用一个跟着 listen 的生命周期走的 ctx：listen 返回（进程要退了）时
 	// cancel，Run 里那个 select 会走 ctx.Done() 那一支干净退出，
 	// 而不是被进程退出从一次事务中间掐断。
-	sweepCtx, stopSweep := context.WithCancel(ctx)
-	defer stopSweep()
+	// 两个后台任务（超时补偿、派生数据入库）共用这一个 ctx：它们的生命周期是
+	// 同一条 —— 跟着 listen 走，进程要退时一起收到取消。
+	bgCtx, stopBackground := context.WithCancel(ctx)
+	defer stopBackground()
 	sweeper := service.NewSweepService(repository.New(pool), service.SweepConfig{}, nil)
-	go sweeper.Run(sweepCtx)
+	go sweeper.Run(bgCtx)
+
+	// 派生数据入库的增量任务（M3 Task 3）：商品变了就把文本向量与 bigram 串重算。
+	//
+	// **没配 KEEL_EMBED_ENDPOINT 时它不启动，而且要喊出来。**
+	//
+	// 这里与 KEEL_DTM_DSN 那条「空着就拒绝启动」不同类，理由与 KEEL_AUTH_SECRET
+	// 那一段同构 —— 看代价：协调器的存储丢了是不可恢复的数据损失，而没有推理引擎
+	// 只是**检索效果**降级（关键词召回那一半还在，因为 bigram 串不依赖引擎……
+	// 不，它也停了：没有引擎就没有这个任务，两份派生数据一起停）。
+	//
+	// 那为什么还不拒绝启动？因为 README 承诺的 `docker compose up` 里没有引擎 ——
+	// 它是 compose.inference.yaml 那个叠加层，2.27 GB 权重、冷启动约 75 秒。
+	// 让主 compose 因为缺它而起不来，等于把那条一行命令的 Demo 废掉。
+	//
+	// 代价说清楚，所以有这条 WARN：不启动它的后果是**新品与改过的商品搜不到**，
+	// 而且症状出现在几小时后 —— 索引是异步的，没有人在等它的返回码。
+	embedder, embErr := inference.FromEnv()
+	if embErr != nil {
+		slog.WarnContext(ctx, "没有配置 "+inference.EnvEndpoint+
+			"，商品派生数据入库任务不启动：文本向量与 bigram 关键词串都不会被维护。"+
+			"后果是新建与改过的商品搜不到（向量表没有它们的行，search_text 还是 NULL），"+
+			"而且不会有任何报错 —— 索引是异步的，没有人在等它的返回码。"+
+			"POST /search 仍然可用，但只剩关键词那一路（语义检索层 §8 的降级链）—— "+
+			"而关键词那一路依赖的 search_text 也由这个任务维护，所以新品两路都搜不到。"+
+			"要开起来：docker compose -f compose.yaml -f compose.inference.yaml up -d inference，"+
+			"然后配 "+inference.EnvEndpoint+"=http://inference:8000",
+			"err", embErr)
+	} else {
+		indexer, err := service.NewIndexService(repository.New(pool), embedder,
+			service.IndexConfig{}, nil)
+		if err != nil {
+			return fmt.Errorf("建派生数据入库任务失败: %w", err)
+		}
+		go indexer.Run(bgCtx)
+	}
 
 	if cfg.Payment.Sandbox {
 		// 这条 WARN 是那个默认值的另一半。没有它，一个忘了配
@@ -355,7 +448,67 @@ func Run(ctx context.Context, listen func(addr string, h http.Handler) error) er
 			"这不是真实支付，任何在收钱的部署都必须设 "+EnvPaymentSandbox+"=off")
 	}
 
-	return listen(cfg.Addr, Router(pool, res, signer, orders, cfg.Payment))
+	// 没配引擎时交给检索的必须是一个**真的 nil 接口**。
+	//
+	// 不能写成 `var e inference.Embedder = embedder`：embedder 的静态类型是
+	// *inference.Client，FromEnv 出错时它是一个 nil 指针，而一个装着 nil 指针的
+	// 接口值 `!= nil`。那样 NewSearchService 会以为自己拿到了引擎，
+	// 第一次检索在 s.emb.Embed 上 panic —— 一个只在「没配引擎的部署」上出现、
+	// 而且发生在请求处理中的 nil 解引用。降级链要挡的正是这种部署。
+	var searchEmbedder inference.Embedder
+	if embErr == nil {
+		searchEmbedder = embedder
+	}
+
+	// 后台引导（数据模型 §14 认证流程 ①）。**排在监听之前**，与 Preflight
+	// 同一个理由：它要在有人能打到 /admin/auth/bootstrap 之前就把那串
+	// 一次性 token 打进日志，否则第一个请求可能落在「账号已经建了、
+	// 而运维还没见过 token」的那一瞬间。
+	//
+	// 它不拒绝启动：引导失败（比如库里已经有平台管理员了，那是**正常**情况）
+	// 不该让一个能正常服务买家的进程起不来。
+	if err := bootstrapStaff(ctx, pool); err != nil {
+		return err
+	}
+
+	return listen(cfg.Addr, Router(pool, res, signer, orders, cfg.Payment, searchEmbedder))
+}
+
+// bootstrapStaff 在库里一个在岗平台级管理员都没有时，建一个并把那串一次性
+// 引导 token **明文打进日志**。
+//
+// 为什么是 stdout 而不是邮件，数据模型 §14 写过完整论证：全新部署时 SMTP
+// 大概率还没配，如果登录的唯一入口是邮件，操作员第一次就进不去后台 ——
+// 而本项目的卖点是 docker compose up 一条命令。Jupyter 与 Gitea 都这么做。
+//
+// 代价是容器日志里会短暂出现一个高权限凭据。所以它 24 小时过期、用掉即失效，
+// 并且只在没有在岗平台管理员时才生成（service.StaffService.EnsureBootstrapAdmin
+// 里写着这个判据为什么不是 §14 原话里的「库里一个 staff 都没有」）。
+//
+// **它在这里而不是在那条路由里**，这是「POST /admin/auth/bootstrap 凭什么能
+// 被调用」的全部答案：那条接口是未认证的，如果它自己能凭空建出一个管理员，
+// 任何能打到这个端口的人都能给自己开一个后台全权账号。账号只在进程启动时、
+// 在进程内部建出来，不接受任何外部输入；那条接口只做一件事 ——
+// 拿一串只有能读到日志的人才见过的一次性 token 换会话。
+//
+// signer 不传进来：引导只写库，不签会话令牌（会话是那条路由签的）。
+func bootstrapStaff(ctx context.Context, pool *pgxpool.Pool) error {
+	token, err := service.NewStaffService(repository.New(pool), nil, nil).
+		EnsureBootstrapAdmin(ctx)
+	if err != nil {
+		return fmt.Errorf("后台引导失败: %w", err)
+	}
+	if token == "" {
+		return nil
+	}
+	// 用 Warn 而不是 Info：这是一条**高权限凭据**，它出现在日志里这件事
+	// 本身就该被看见。level=info 在很多部署里是被过滤掉的，而这一行被过滤掉
+	// 意味着这个部署的后台从此谁也进不去（除非接上 SMTP）。
+	slog.WarnContext(ctx, "后台还没有平台级管理员，已创建一个并签发引导 token。"+
+		"用它换会话：POST /api/v1/admin/auth/bootstrap {\"token\":\"<下面这串>\","+
+		"\"email\":\"<你的邮箱>\"}。24 小时有效，用掉即失效，明文只出现这一次",
+		"bootstrap_token", token)
+	return nil
 }
 
 // authSigner 按配置建令牌签名器。没配 KEEL_AUTH_SECRET 时随机取一个并告警，

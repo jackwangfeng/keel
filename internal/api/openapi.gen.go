@@ -60,6 +60,102 @@ func (e AddressInputTag) Valid() bool {
 	}
 }
 
+// Defines values for AdminCategoryStatus.
+const (
+	AdminCategoryStatusN0 AdminCategoryStatus = 0
+	AdminCategoryStatusN1 AdminCategoryStatus = 1
+)
+
+// Valid indicates whether the value is a known member of the AdminCategoryStatus enum.
+func (e AdminCategoryStatus) Valid() bool {
+	switch e {
+	case AdminCategoryStatusN0:
+		return true
+	case AdminCategoryStatusN1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AdminProductStatus.
+const (
+	AdminProductStatusN0 AdminProductStatus = 0
+	AdminProductStatusN1 AdminProductStatus = 1
+	AdminProductStatusN2 AdminProductStatus = 2
+)
+
+// Valid indicates whether the value is a known member of the AdminProductStatus enum.
+func (e AdminProductStatus) Valid() bool {
+	switch e {
+	case AdminProductStatusN0:
+		return true
+	case AdminProductStatusN1:
+		return true
+	case AdminProductStatusN2:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AdminProductDetailStatus.
+const (
+	AdminProductDetailStatusN0 AdminProductDetailStatus = 0
+	AdminProductDetailStatusN1 AdminProductDetailStatus = 1
+	AdminProductDetailStatusN2 AdminProductDetailStatus = 2
+)
+
+// Valid indicates whether the value is a known member of the AdminProductDetailStatus enum.
+func (e AdminProductDetailStatus) Valid() bool {
+	switch e {
+	case AdminProductDetailStatusN0:
+		return true
+	case AdminProductDetailStatusN1:
+		return true
+	case AdminProductDetailStatusN2:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AdminSkuStatus.
+const (
+	AdminSkuStatusN0 AdminSkuStatus = 0
+	AdminSkuStatusN1 AdminSkuStatus = 1
+)
+
+// Valid indicates whether the value is a known member of the AdminSkuStatus enum.
+func (e AdminSkuStatus) Valid() bool {
+	switch e {
+	case AdminSkuStatusN0:
+		return true
+	case AdminSkuStatusN1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CategoryUpdateRequestStatus.
+const (
+	CategoryUpdateRequestStatusN0 CategoryUpdateRequestStatus = 0
+	CategoryUpdateRequestStatusN1 CategoryUpdateRequestStatus = 1
+)
+
+// Valid indicates whether the value is a known member of the CategoryUpdateRequestStatus enum.
+func (e CategoryUpdateRequestStatus) Valid() bool {
+	switch e {
+	case CategoryUpdateRequestStatusN0:
+		return true
+	case CategoryUpdateRequestStatusN1:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ChatReplyActionType.
 const (
 	NavigateAddress ChatReplyActionType = "navigate_address"
@@ -288,6 +384,24 @@ func (e ProductDetailStatus) Valid() bool {
 	}
 }
 
+// Defines values for ProductPublicationRequestAction.
+const (
+	Publish   ProductPublicationRequestAction = "publish"
+	Unpublish ProductPublicationRequestAction = "unpublish"
+)
+
+// Valid indicates whether the value is a known member of the ProductPublicationRequestAction enum.
+func (e ProductPublicationRequestAction) Valid() bool {
+	switch e {
+	case Publish:
+		return true
+	case Unpublish:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ProductSummaryStatus.
 const (
 	ProductSummaryStatusN0 ProductSummaryStatus = 0
@@ -468,6 +582,24 @@ func (e ShipmentStatus) Valid() bool {
 	}
 }
 
+// Defines values for SkuUpdateRequestStatus.
+const (
+	SkuUpdateRequestStatusN0 SkuUpdateRequestStatus = 0
+	SkuUpdateRequestStatusN1 SkuUpdateRequestStatus = 1
+)
+
+// Valid indicates whether the value is a known member of the SkuUpdateRequestStatus enum.
+func (e SkuUpdateRequestStatus) Valid() bool {
+	switch e {
+	case SkuUpdateRequestStatusN0:
+		return true
+	case SkuUpdateRequestStatusN1:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for StaffStatus.
 const (
 	StaffStatusN1 StaffStatus = 1
@@ -588,6 +720,27 @@ func (e UserCouponStatus) Valid() bool {
 	case UserCouponStatusN3:
 		return true
 	case UserCouponStatusN4:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GetAdminProductsParamsStatus.
+const (
+	GetAdminProductsParamsStatusN0 GetAdminProductsParamsStatus = 0
+	GetAdminProductsParamsStatusN1 GetAdminProductsParamsStatus = 1
+	GetAdminProductsParamsStatusN2 GetAdminProductsParamsStatus = 2
+)
+
+// Valid indicates whether the value is a known member of the GetAdminProductsParamsStatus enum.
+func (e GetAdminProductsParamsStatus) Valid() bool {
+	switch e {
+	case GetAdminProductsParamsStatusN0:
+		return true
+	case GetAdminProductsParamsStatusN1:
+		return true
+	case GetAdminProductsParamsStatusN2:
 		return true
 	default:
 		return false
@@ -884,6 +1037,171 @@ type AddressInput struct {
 // AddressInputTag 0 无 / 1 家 / 2 公司 / 3 学校
 type AddressInputTag int
 
+// AdminCategory 后台视角的分类，**扁平**。与前台的 `Category` 不同，它不嵌 `children`：
+// 后台管的是单个节点，而 `path` / `level` 足以让客户端自己拼出树。
+type AdminCategory struct {
+	CreatedAt time.Time  `json:"created_at"`
+	DeletedAt *time.Time `json:"deleted_at,omitempty"`
+	Id        int64      `json:"id"`
+
+	// Level 层级，根为 1。同样由服务端从 `parent_id` 算出。
+	Level int    `json:"level"`
+	Name  string `json:"name"`
+
+	// ParentId 为 null 即根分类。
+	ParentId *int64 `json:"parent_id,omitempty"`
+
+	// Path 物化路径，形如 `/1/23/456/`（数据模型 §3）。
+	// **服务端维护，不接受写入**——它是 `idx_categories_path` 的内容。
+	//
+	//
+	// Examples: /1/23/456/
+	Path      string `json:"path"`
+	SortOrder int    `json:"sort_order"`
+
+	// Status `categories.status`：0 停用 / 1 启用。
+	// 停用只让它从前台目录树里消失，**不影响挂在它下面的商品的在架状态**。
+	Status    AdminCategoryStatus `json:"status"`
+	UpdatedAt *time.Time          `json:"updated_at,omitempty"`
+}
+
+// AdminCategoryStatus `categories.status`：0 停用 / 1 启用。
+// 停用只让它从前台目录树里消失，**不影响挂在它下面的商品的在架状态**。
+type AdminCategoryStatus int
+
+// AdminInventory defines model for AdminInventory.
+type AdminInventory struct {
+	AvailableQty int       `json:"available_qty"`
+	SkuId        int64     `json:"sku_id"`
+	UpdatedAt    time.Time `json:"updated_at"`
+	WarningQty   int       `json:"warning_qty"`
+}
+
+// AdminProduct 后台视角的商品。与 `ProductSummary` 的差别是状态面：
+// 草稿与软删在这里是一等公民。
+type AdminProduct struct {
+	// BrandId 品牌，可空。一期没有品牌管理接口，只透传。
+	BrandId    *int64    `json:"brand_id,omitempty"`
+	CategoryId int64     `json:"category_id"`
+	CreatedAt  time.Time `json:"created_at"`
+
+	// DeletedAt 软删时间。非 null 时该商品只在 `include_deleted=true` 的后台列表里出现。
+	DeletedAt   *time.Time `json:"deleted_at,omitempty"`
+	Description *string    `json:"description,omitempty"`
+	Id          int64      `json:"id"`
+
+	// MaxPriceCents 金额，单位「分」。禁止使用浮点。
+	MaxPriceCents Money `json:"max_price_cents"`
+
+	// MinPriceCents 金额，单位「分」。禁止使用浮点。
+	MinPriceCents Money `json:"min_price_cents"`
+
+	// PublishedAt **首次**上架时间。为 null 表示从未上架过（即 `status` 一直是 0 草稿）。
+	// 再次上架不会覆盖它——理由见 publication 端点。
+	PublishedAt *time.Time `json:"published_at,omitempty"`
+
+	// SalesCount 冗余字段，由订单变更时同步。不接受写入。
+	SalesCount int `json:"sales_count"`
+
+	// Status `products.status`：0 草稿 / 1 上架 / 2 下架。
+	// 改它只能经 `POST /admin/products/{product_id}/publication`。
+	Status   AdminProductStatus `json:"status"`
+	Subtitle *string            `json:"subtitle,omitempty"`
+	Title    string             `json:"title"`
+
+	// TotalStock 冗余字段，由 SKU 变更时同步（数据模型 §3）。不接受写入。
+	TotalStock int        `json:"total_stock"`
+	UpdatedAt  *time.Time `json:"updated_at,omitempty"`
+}
+
+// AdminProductStatus `products.status`：0 草稿 / 1 上架 / 2 下架。
+// 改它只能经 `POST /admin/products/{product_id}/publication`。
+type AdminProductStatus int
+
+// AdminProductDetail defines model for AdminProductDetail.
+type AdminProductDetail struct {
+	// BrandId 品牌，可空。一期没有品牌管理接口，只透传。
+	BrandId    *int64    `json:"brand_id,omitempty"`
+	CategoryId int64     `json:"category_id"`
+	CreatedAt  time.Time `json:"created_at"`
+
+	// DeletedAt 软删时间。非 null 时该商品只在 `include_deleted=true` 的后台列表里出现。
+	DeletedAt   *time.Time `json:"deleted_at,omitempty"`
+	Description *string    `json:"description,omitempty"`
+	Id          int64      `json:"id"`
+
+	// Images 按展示顺序，`images[0]` 是主图。
+	Images []ProductImage `json:"images"`
+
+	// MaxPriceCents 金额，单位「分」。禁止使用浮点。
+	MaxPriceCents Money `json:"max_price_cents"`
+
+	// MinPriceCents 金额，单位「分」。禁止使用浮点。
+	MinPriceCents Money `json:"min_price_cents"`
+
+	// PublishedAt **首次**上架时间。为 null 表示从未上架过（即 `status` 一直是 0 草稿）。
+	// 再次上架不会覆盖它——理由见 publication 端点。
+	PublishedAt *time.Time `json:"published_at,omitempty"`
+
+	// SalesCount 冗余字段，由订单变更时同步。不接受写入。
+	SalesCount int `json:"sales_count"`
+
+	// Skus 含已软删的 SKU 吗——**不含**。软删的 SKU 不在任何视图里返回。
+	Skus []AdminSku `json:"skus"`
+
+	// Status `products.status`：0 草稿 / 1 上架 / 2 下架。
+	// 改它只能经 `POST /admin/products/{product_id}/publication`。
+	Status   AdminProductDetailStatus `json:"status"`
+	Subtitle *string                  `json:"subtitle,omitempty"`
+	Title    string                   `json:"title"`
+
+	// TotalStock 冗余字段，由 SKU 变更时同步（数据模型 §3）。不接受写入。
+	TotalStock int        `json:"total_stock"`
+	UpdatedAt  *time.Time `json:"updated_at,omitempty"`
+}
+
+// AdminProductDetailStatus `products.status`：0 草稿 / 1 上架 / 2 下架。
+// 改它只能经 `POST /admin/products/{product_id}/publication`。
+type AdminProductDetailStatus int
+
+// AdminSku 后台视角的 SKU。比前台的 `Sku` 多出成本、重量、售卖开关与库存预警位——
+// `cost_cents` 尤其不能出现在任何前台响应里。
+type AdminSku struct {
+	// AvailableQty 来自 `inventories.available_qty`。改它要走 `PUT /admin/skus/{sku_id}/inventory`。
+	AvailableQty int `json:"available_qty"`
+
+	// CostCents 成本。用于业务重排（数据模型 §3），**只在后台接口里出现**。
+	CostCents *Money     `json:"cost_cents,omitempty"`
+	CreatedAt *time.Time `json:"created_at,omitempty"`
+	Id        int64      `json:"id"`
+
+	// ImageUrl 该规格的小图，形如 `/api/v1/uploads/{upload_id}`。
+	ImageUrl *string `json:"image_url,omitempty"`
+
+	// PriceCents 金额，单位「分」。禁止使用浮点。
+	PriceCents Money `json:"price_cents"`
+	ProductId  int64 `json:"product_id"`
+
+	// SkuCode 商家自己的货号，租户内唯一（`uk_skus_code`），不是全局唯一。
+	SkuCode string `json:"sku_code"`
+
+	// SpecValues `skus.spec_values`（JSONB）。键名不由契约规定。
+	//
+	// Examples: {"尺码":"XL","颜色":"黑"}
+	SpecValues *map[string]string `json:"spec_values,omitempty"`
+
+	// Status `skus.status`：0 停售 / 1 在售。停售的规格仍在规格矩阵里显示，但不可加购。
+	Status    AdminSkuStatus `json:"status"`
+	UpdatedAt *time.Time     `json:"updated_at,omitempty"`
+
+	// WarningQty 低库存预警线。一期只是一个存着的数，没有接到任何告警。
+	WarningQty *int `json:"warning_qty,omitempty"`
+	WeightGram *int `json:"weight_gram,omitempty"`
+}
+
+// AdminSkuStatus `skus.status`：0 停售 / 1 在售。停售的规格仍在规格矩阵里显示，但不可加购。
+type AdminSkuStatus int
+
 // Cart defines model for Cart.
 type Cart struct {
 	Items []CartItem `json:"items"`
@@ -929,6 +1247,32 @@ type Category struct {
 	Name     string      `json:"name"`
 }
 
+// CategoryCreateRequest **没有 `path` 与 `level`**，它们由服务端从 `parent_id` 算出。
+type CategoryCreateRequest struct {
+	Name string `json:"name"`
+
+	// ParentId 省略或为 null 即建根分类。必须属于当前租户。
+	ParentId  *int64 `json:"parent_id,omitempty"`
+	SortOrder *int   `json:"sort_order,omitempty"`
+}
+
+// CategoryUpdateRequest 传 `parent_id` 就是**移动子树**，服务端会在同一事务里重写整棵子树的
+// `path` 与 `level`，并拒绝成环。详见端点描述。
+type CategoryUpdateRequest struct {
+	Name *string `json:"name,omitempty"`
+
+	// ParentId 显式传 `null` 表示移到根。**不传这个字段则不动层级** ——
+	// `null` 与「没传」在这里是两件事。
+	ParentId  *int64 `json:"parent_id,omitempty"`
+	SortOrder *int   `json:"sort_order,omitempty"`
+
+	// Status 0 停用 / 1 启用
+	Status *CategoryUpdateRequestStatus `json:"status,omitempty"`
+}
+
+// CategoryUpdateRequestStatus 0 停用 / 1 启用
+type CategoryUpdateRequestStatus int
+
 // ChatReply defines model for ChatReply.
 type ChatReply struct {
 	// Action 写操作路由指令。前端据此跳转到对应表单并预填参数，
@@ -960,6 +1304,43 @@ type ChatReplyActionType string
 // 微信 openid 按 appid 隔离 —— 同一个人在小程序、公众号、App 里
 // 拿到三个不同的 openid，只有 unionid 能认成一个人，所以身份是多条而非一列。
 type IdentityProvider int
+
+// InventoryConflict defines model for InventoryConflict.
+type InventoryConflict struct {
+	Current AdminInventory `json:"current"`
+	Detail  *string        `json:"detail,omitempty"`
+
+	// Errors 字段级校验错误
+	Errors *[]struct {
+		Field   *string `json:"field,omitempty"`
+		Message *string `json:"message,omitempty"`
+	} `json:"errors,omitempty"`
+	Instance *string `json:"instance,omitempty"`
+
+	// Status Examples: 409
+	Status int `json:"status"`
+
+	// Title Examples: Insufficient stock
+	Title   string  `json:"title"`
+	TraceId *string `json:"trace_id,omitempty"`
+
+	// Type Examples: https://keel.dev/problems/insufficient-stock
+	Type string `json:"type"`
+}
+
+// InventorySetRequest 比较并设置。两个数量都是必填，缺一不可——只给 `available_qty` 就退化成
+// 无条件覆盖，那正是这条接口存在的理由要防的东西。
+type InventorySetRequest struct {
+	// AvailableQty 要写进去的新值（绝对值，不是增量）。
+	AvailableQty int `json:"available_qty"`
+
+	// ExpectedAvailableQty **我看到的那个值。** 服务端把它作为 UPDATE 的条件；
+	// 对不上说明这行在你读到它之后被改过（多半是并发下单扣减），返回 409。
+	ExpectedAvailableQty int `json:"expected_available_qty"`
+
+	// WarningQty 低库存预警线。省略则不动。
+	WarningQty *int `json:"warning_qty,omitempty"`
+}
 
 // LoginResponse defines model for LoginResponse.
 type LoginResponse struct {
@@ -1316,6 +1697,18 @@ type Problem struct {
 	Type string `json:"type"`
 }
 
+// ProductCreateRequest **没有 `status` 也没有 `merchant_id`。** 前者因为创建与发布是两个动作，
+// 后者因为租户从会话继承（与 `StaffCreateRequest` 同理）。
+type ProductCreateRequest struct {
+	BrandId *int64 `json:"brand_id,omitempty"`
+
+	// CategoryId 必填。`products.category_id` 是 NOT NULL 的复合外键，没有「未分类」这个态。
+	CategoryId  int64   `json:"category_id"`
+	Description *string `json:"description,omitempty"`
+	Subtitle    *string `json:"subtitle,omitempty"`
+	Title       string  `json:"title"`
+}
+
 // ProductDetail defines model for ProductDetail.
 type ProductDetail struct {
 	CategoryId  *int64    `json:"category_id,omitempty"`
@@ -1346,6 +1739,48 @@ type ProductDetail struct {
 // 客户端据此展示「已下架」而不是让用户点进去才发现买不了。
 type ProductDetailStatus int
 
+// ProductImage 商品图与商品的关联。落地在数据模型 §3 的 `product_images` 表上——
+// M2 验收记过一笔账：`ProductSummary.image_url` 与 `ProductDetail.images`
+// 声明了但服务端从不填，因为 `products` 上根本没有图片列，
+// `uploads` 与商品也没有任何关联。本轮补的就是这个关联。
+type ProductImage struct {
+	// SortOrder 展示顺序，从 0 起。**0 就是主图**，没有单独的 `is_primary`。
+	// 它与数组下标一致，冗余返回是为了让单独拿到一个元素时也说得清位置。
+	SortOrder int `json:"sort_order"`
+
+	// UploadId `uploads.id`。由 `POST /admin/uploads` 得到。
+	UploadId int64 `json:"upload_id"`
+
+	// Url 形如 `/api/v1/uploads/{upload_id}`，与 `Upload.url` 同一个形状：
+	// 指向 `GET /uploads/{upload_id}`，不是裸的存储路径。客户端原样使用。
+	Url string `json:"url"`
+}
+
+// ProductImageInput 只收 `upload_id`，不收 URL。收 URL 意味着客户端能往商品上挂任意地址，
+// 而收 id 把取值域关死在自己的 `uploads` 表里，并让 `referenced` 能在
+// 同一个事务里置位（数据模型 §13）。
+type ProductImageInput struct {
+	UploadId int64 `json:"upload_id"`
+}
+
+// ProductImagesReplaceRequest defines model for ProductImagesReplaceRequest.
+type ProductImagesReplaceRequest struct {
+	// Images **整组替换**，数组顺序即展示顺序，第 0 个是主图。
+	// 传空数组即清空。同一个 `upload_id` 不得出现两次（422）。
+	Images []ProductImageInput `json:"images"`
+}
+
+// ProductPublicationRequest defines model for ProductPublicationRequest.
+type ProductPublicationRequest struct {
+	// Action `publish` → `status = 1`；`unpublish` → `status = 2`。
+	// 没有回到 `0 草稿` 的取值，理由见端点描述。
+	Action ProductPublicationRequestAction `json:"action"`
+}
+
+// ProductPublicationRequestAction `publish` → `status = 1`；`unpublish` → `status = 2`。
+// 没有回到 `0 草稿` 的取值，理由见端点描述。
+type ProductPublicationRequestAction string
+
 // ProductSummary defines model for ProductSummary.
 type ProductSummary struct {
 	Id       int64   `json:"id"`
@@ -1371,6 +1806,16 @@ type ProductSummary struct {
 // 前台列表与检索只返回 `1`；订单、购物车里引用的历史商品可能是 `2`，
 // 客户端据此展示「已下架」而不是让用户点进去才发现买不了。
 type ProductSummaryStatus int
+
+// ProductUpdateRequest 只改文案与归属。**不含 `status` / `published_at` / `deleted_at`**，
+// 也不含任何冗余字段——它们各有自己的入口，或者根本不该由客户端写。
+type ProductUpdateRequest struct {
+	BrandId     *int64  `json:"brand_id,omitempty"`
+	CategoryId  *int64  `json:"category_id,omitempty"`
+	Description *string `json:"description,omitempty"`
+	Subtitle    *string `json:"subtitle,omitempty"`
+	Title       *string `json:"title,omitempty"`
+}
 
 // ReceiverSnapshot 下单瞬间从 `user_addresses` 拷贝的收货信息快照，落在
 // `orders.receiver_snapshot`。地址簿后来改了或删了，历史订单不受影响。
@@ -1650,6 +2095,50 @@ type Sku struct {
 	SpecValues *map[string]string `json:"spec_values,omitempty"`
 }
 
+// SkuCreateRequest `available_qty` 在这里是**允许的**，而在 `SkuUpdateRequest` 里不允许：
+// 建行与改行是两件事——建的时候没有并发对手（这一行还不存在），
+// 改的时候有（下单 SAGA 正在扣它）。
+type SkuCreateRequest struct {
+	// AvailableQty 初始库存。服务端在同一事务里建出 `inventories` 行，省略即 0。
+	AvailableQty *int `json:"available_qty,omitempty"`
+
+	// CostCents 金额，单位「分」。禁止使用浮点。
+	CostCents *Money `json:"cost_cents,omitempty"`
+
+	// ImageUploadId 该规格小图的 `uploads.id`，服务端据此写出 `skus.image_url`。
+	// 与商品图同理：收 id 不收 URL。
+	ImageUploadId *int64 `json:"image_upload_id,omitempty"`
+
+	// PriceCents 金额，单位「分」。禁止使用浮点。
+	PriceCents Money              `json:"price_cents"`
+	SkuCode    string             `json:"sku_code"`
+	SpecValues *map[string]string `json:"spec_values,omitempty"`
+
+	// WarningQty 低库存预警线，省略即 0。
+	WarningQty *int `json:"warning_qty,omitempty"`
+	WeightGram *int `json:"weight_gram,omitempty"`
+}
+
+// SkuUpdateRequest **刻意没有 `available_qty`**：库存有自己的端点，因为它要表达乐观并发。
+// 见 `PUT /admin/skus/{sku_id}/inventory`。
+type SkuUpdateRequest struct {
+	// CostCents 金额，单位「分」。禁止使用浮点。
+	CostCents     *Money `json:"cost_cents,omitempty"`
+	ImageUploadId *int64 `json:"image_upload_id,omitempty"`
+
+	// PriceCents 金额，单位「分」。禁止使用浮点。
+	PriceCents *Money             `json:"price_cents,omitempty"`
+	SkuCode    *string            `json:"sku_code,omitempty"`
+	SpecValues *map[string]string `json:"spec_values,omitempty"`
+
+	// Status 0 停售 / 1 在售
+	Status     *SkuUpdateRequestStatus `json:"status,omitempty"`
+	WeightGram *int                    `json:"weight_gram,omitempty"`
+}
+
+// SkuUpdateRequestStatus 0 停售 / 1 在售
+type SkuUpdateRequestStatus int
+
 // Staff defines model for Staff.
 type Staff struct {
 	CreatedAt   time.Time           `json:"created_at"`
@@ -1814,6 +2303,9 @@ type UserIdentity struct {
 // AddressId defines model for AddressId.
 type AddressId = int64
 
+// CategoryId defines model for CategoryId.
+type CategoryId = int64
+
 // IdempotencyKey defines model for IdempotencyKey.
 type IdempotencyKey = openapi_types.UUID
 
@@ -1826,8 +2318,14 @@ type Page = int
 // PageSize defines model for PageSize.
 type PageSize = int
 
+// ProductId defines model for ProductId.
+type ProductId = int64
+
 // RefundNo defines model for RefundNo.
 type RefundNo = string
+
+// SkuId defines model for SkuId.
+type SkuId = int64
 
 // IdempotencyInFlight RFC 9457 Problem Details
 type IdempotencyInFlight = Problem
@@ -1873,6 +2371,25 @@ type PostAdminAuthSessionJSONBody struct {
 	Token string `json:"token"`
 }
 
+// PostAdminCategoriesParams defines parameters for PostAdminCategories.
+type PostAdminCategoriesParams struct {
+	// IdempotencyKey 客户端生成的 UUID。幂等作用域为 `(接口 scope, user_id, key)`，
+	// 有效期 24h，过期后同一 key 可复用（见数据模型文档 §11）。
+	//
+	// · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
+	//   并带 `Idempotency-Replayed: true` 响应头
+	// · **同 key 正在处理中**：`409` + `Retry-After`，
+	//   type=https://keel.dev/problems/idempotency-key-in-flight，
+	//   客户端应退避重试，不要当成业务失败
+	// · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
+	//   type=https://keel.dev/problems/idempotency-key-reused。
+	//   宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
+	//   那会让用户以为下单成功了而实际什么都没发生
+	// · 首次执行失败（存档为失败态）时同样回放该失败响应；
+	//   确需重试的场景请换一个新 key
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
 // PostAdminMerchantsParams defines parameters for PostAdminMerchants.
 type PostAdminMerchantsParams struct {
 	// IdempotencyKey 客户端生成的 UUID。幂等作用域为 `(接口 scope, user_id, key)`，
@@ -1894,6 +2411,84 @@ type PostAdminMerchantsParams struct {
 
 // PostAdminOrdersOrderNoShipmentsParams defines parameters for PostAdminOrdersOrderNoShipments.
 type PostAdminOrdersOrderNoShipmentsParams struct {
+	// IdempotencyKey 客户端生成的 UUID。幂等作用域为 `(接口 scope, user_id, key)`，
+	// 有效期 24h，过期后同一 key 可复用（见数据模型文档 §11）。
+	//
+	// · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
+	//   并带 `Idempotency-Replayed: true` 响应头
+	// · **同 key 正在处理中**：`409` + `Retry-After`，
+	//   type=https://keel.dev/problems/idempotency-key-in-flight，
+	//   客户端应退避重试，不要当成业务失败
+	// · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
+	//   type=https://keel.dev/problems/idempotency-key-reused。
+	//   宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
+	//   那会让用户以为下单成功了而实际什么都没发生
+	// · 首次执行失败（存档为失败态）时同样回放该失败响应；
+	//   确需重试的场景请换一个新 key
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// GetAdminProductsParams defines parameters for GetAdminProducts.
+type GetAdminProductsParams struct {
+	Page     *Page     `form:"page,omitempty" json:"page,omitempty"`
+	PageSize *PageSize `form:"page_size,omitempty" json:"page_size,omitempty"`
+
+	// Status 按 `products.status` 筛选：0 草稿 / 1 上架 / 2 下架。
+	// **刻意不给 default**——缺省被代入会静默改变「返回哪些行」，
+	// 而那正是本仓库那条契约检查要挡的东西。省略即不按状态筛。
+	Status *GetAdminProductsParamsStatus `form:"status,omitempty" json:"status,omitempty"`
+
+	// CategoryId 按类目筛选。只匹配直接挂在该类目下的商品，不含子类目。
+	CategoryId *int64 `form:"category_id,omitempty" json:"category_id,omitempty"`
+
+	// IncludeDeleted 传 `true` 时把软删（`deleted_at` 非空）的商品也带上，用于核对。
+	// 省略即不含——一期没有恢复接口，这个参数只为「看得见」存在。
+	IncludeDeleted *bool `form:"include_deleted,omitempty" json:"include_deleted,omitempty"`
+}
+
+// GetAdminProductsParamsStatus defines parameters for GetAdminProducts.
+type GetAdminProductsParamsStatus int
+
+// PostAdminProductsParams defines parameters for PostAdminProducts.
+type PostAdminProductsParams struct {
+	// IdempotencyKey 客户端生成的 UUID。幂等作用域为 `(接口 scope, user_id, key)`，
+	// 有效期 24h，过期后同一 key 可复用（见数据模型文档 §11）。
+	//
+	// · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
+	//   并带 `Idempotency-Replayed: true` 响应头
+	// · **同 key 正在处理中**：`409` + `Retry-After`，
+	//   type=https://keel.dev/problems/idempotency-key-in-flight，
+	//   客户端应退避重试，不要当成业务失败
+	// · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
+	//   type=https://keel.dev/problems/idempotency-key-reused。
+	//   宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
+	//   那会让用户以为下单成功了而实际什么都没发生
+	// · 首次执行失败（存档为失败态）时同样回放该失败响应；
+	//   确需重试的场景请换一个新 key
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// PostAdminProductsProductIdPublicationParams defines parameters for PostAdminProductsProductIdPublication.
+type PostAdminProductsProductIdPublicationParams struct {
+	// IdempotencyKey 客户端生成的 UUID。幂等作用域为 `(接口 scope, user_id, key)`，
+	// 有效期 24h，过期后同一 key 可复用（见数据模型文档 §11）。
+	//
+	// · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
+	//   并带 `Idempotency-Replayed: true` 响应头
+	// · **同 key 正在处理中**：`409` + `Retry-After`，
+	//   type=https://keel.dev/problems/idempotency-key-in-flight，
+	//   客户端应退避重试，不要当成业务失败
+	// · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
+	//   type=https://keel.dev/problems/idempotency-key-reused。
+	//   宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
+	//   那会让用户以为下单成功了而实际什么都没发生
+	// · 首次执行失败（存档为失败态）时同样回放该失败响应；
+	//   确需重试的场景请换一个新 key
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// PostAdminProductsProductIdSkusParams defines parameters for PostAdminProductsProductIdSkus.
+type PostAdminProductsProductIdSkusParams struct {
 	// IdempotencyKey 客户端生成的 UUID。幂等作用域为 `(接口 scope, user_id, key)`，
 	// 有效期 24h，过期后同一 key 可复用（见数据模型文档 §11）。
 	//
@@ -1983,6 +2578,31 @@ type PatchAdminStaffStaffIdJSONBody struct {
 
 // PatchAdminStaffStaffIdJSONBodyStatus defines parameters for PatchAdminStaffStaffId.
 type PatchAdminStaffStaffIdJSONBodyStatus int
+
+// PostAdminUploadsMultipartBody defines parameters for PostAdminUploads.
+type PostAdminUploadsMultipartBody struct {
+	// File 文件内容，不超过 10 MB
+	File openapi_types.File `json:"file"`
+}
+
+// PostAdminUploadsParams defines parameters for PostAdminUploads.
+type PostAdminUploadsParams struct {
+	// IdempotencyKey 客户端生成的 UUID。幂等作用域为 `(接口 scope, user_id, key)`，
+	// 有效期 24h，过期后同一 key 可复用（见数据模型文档 §11）。
+	//
+	// · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
+	//   并带 `Idempotency-Replayed: true` 响应头
+	// · **同 key 正在处理中**：`409` + `Retry-After`，
+	//   type=https://keel.dev/problems/idempotency-key-in-flight，
+	//   客户端应退避重试，不要当成业务失败
+	// · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
+	//   type=https://keel.dev/problems/idempotency-key-reused。
+	//   宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
+	//   那会让用户以为下单成功了而实际什么都没发生
+	// · 首次执行失败（存档为失败态）时同样回放该失败响应；
+	//   确需重试的场景请换一个新 key
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
 
 // PostAssistantChatJSONBody defines parameters for PostAssistantChat.
 type PostAssistantChatJSONBody struct {
@@ -2452,20 +3072,50 @@ type PostAdminAuthEmailLinkJSONRequestBody PostAdminAuthEmailLinkJSONBody
 // PostAdminAuthSessionJSONRequestBody defines body for PostAdminAuthSession for application/json ContentType.
 type PostAdminAuthSessionJSONRequestBody PostAdminAuthSessionJSONBody
 
+// PostAdminCategoriesJSONRequestBody defines body for PostAdminCategories for application/json ContentType.
+type PostAdminCategoriesJSONRequestBody = CategoryCreateRequest
+
+// PatchAdminCategoriesCategoryIdJSONRequestBody defines body for PatchAdminCategoriesCategoryId for application/json ContentType.
+type PatchAdminCategoriesCategoryIdJSONRequestBody = CategoryUpdateRequest
+
 // PostAdminMerchantsJSONRequestBody defines body for PostAdminMerchants for application/json ContentType.
 type PostAdminMerchantsJSONRequestBody = MerchantCreateRequest
 
 // PostAdminOrdersOrderNoShipmentsJSONRequestBody defines body for PostAdminOrdersOrderNoShipments for application/json ContentType.
 type PostAdminOrdersOrderNoShipmentsJSONRequestBody = ShipmentCreateRequest
 
+// PostAdminProductsJSONRequestBody defines body for PostAdminProducts for application/json ContentType.
+type PostAdminProductsJSONRequestBody = ProductCreateRequest
+
+// PatchAdminProductsProductIdJSONRequestBody defines body for PatchAdminProductsProductId for application/json ContentType.
+type PatchAdminProductsProductIdJSONRequestBody = ProductUpdateRequest
+
+// PutAdminProductsProductIdImagesJSONRequestBody defines body for PutAdminProductsProductIdImages for application/json ContentType.
+type PutAdminProductsProductIdImagesJSONRequestBody = ProductImagesReplaceRequest
+
+// PostAdminProductsProductIdPublicationJSONRequestBody defines body for PostAdminProductsProductIdPublication for application/json ContentType.
+type PostAdminProductsProductIdPublicationJSONRequestBody = ProductPublicationRequest
+
+// PostAdminProductsProductIdSkusJSONRequestBody defines body for PostAdminProductsProductIdSkus for application/json ContentType.
+type PostAdminProductsProductIdSkusJSONRequestBody = SkuCreateRequest
+
 // PostAdminRefundsRefundNoAuditJSONRequestBody defines body for PostAdminRefundsRefundNoAudit for application/json ContentType.
 type PostAdminRefundsRefundNoAuditJSONRequestBody PostAdminRefundsRefundNoAuditJSONBody
+
+// PatchAdminSkusSkuIdJSONRequestBody defines body for PatchAdminSkusSkuId for application/json ContentType.
+type PatchAdminSkusSkuIdJSONRequestBody = SkuUpdateRequest
+
+// PutAdminSkusSkuIdInventoryJSONRequestBody defines body for PutAdminSkusSkuIdInventory for application/json ContentType.
+type PutAdminSkusSkuIdInventoryJSONRequestBody = InventorySetRequest
 
 // PostAdminStaffJSONRequestBody defines body for PostAdminStaff for application/json ContentType.
 type PostAdminStaffJSONRequestBody = StaffCreateRequest
 
 // PatchAdminStaffStaffIdJSONRequestBody defines body for PatchAdminStaffStaffId for application/json ContentType.
 type PatchAdminStaffStaffIdJSONRequestBody PatchAdminStaffStaffIdJSONBody
+
+// PostAdminUploadsMultipartRequestBody defines body for PostAdminUploads for multipart/form-data ContentType.
+type PostAdminUploadsMultipartRequestBody PostAdminUploadsMultipartBody
 
 // PostAssistantChatJSONRequestBody defines body for PostAssistantChat for application/json ContentType.
 type PostAssistantChatJSONRequestBody PostAssistantChatJSONBody

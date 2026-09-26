@@ -252,16 +252,30 @@ func TestRouterServesContractPaths(t *testing.T) {
 	orders := service.NewOrderService(repository.New(pool), nil, nil)
 	r := app.Router(pool, tenant.NewResolver(pool, tenant.Config{BaseDomain: "example.com"}),
 		auth.NewSigner([]byte("keel-test-secret-key-32-bytes-long!!")), orders,
-		service.PaymentConfig{Sandbox: true})
+		// 引擎传 nil：这条测试只看路由表，而 /search 在没有引擎时照样挂得上去
+		// （退化成纯关键词召回，语义检索层 §8）。传 nil 同时是一次形状断言 ——
+		// 哪天 Router 变成「没有引擎就不挂这条路由」，下面那张表会红。
+		service.PaymentConfig{Sandbox: true}, nil)
 	want := map[string]bool{
 		"GET /healthz":                           false,
 		"GET /api/v1/products":                   false,
+		"POST /api/v1/search":                    false,
 		"GET /api/v1/products/:product_id":       false,
 		"POST /api/v1/orders":                    false,
 		"POST /api/v1/orders/preview":            false,
 		"GET /api/v1/orders":                     false,
 		"GET /api/v1/orders/:order_no":           false,
 		"POST /api/v1/orders/:order_no/payments": false,
+
+		// 后台那 7 条（M4 后台身份）。它们和上面那些一样只是在核路径 ——
+		// 「挂没挂对中间件」由 internal/handler 那一组行为测试守着。
+		"POST /api/v1/admin/auth/bootstrap":   false,
+		"POST /api/v1/admin/auth/email-link":  false,
+		"POST /api/v1/admin/auth/session":     false,
+		"GET /api/v1/admin/me":                false,
+		"GET /api/v1/admin/staff":             false,
+		"POST /api/v1/admin/staff":            false,
+		"PATCH /api/v1/admin/staff/:staff_id": false,
 	}
 	for _, ri := range r.Routes() {
 		key := ri.Method + " " + ri.Path

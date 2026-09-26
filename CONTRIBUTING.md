@@ -158,6 +158,36 @@ KEEL_HTTP_PORT=18080 ./scripts/smoke.sh
 为一个谁都不必用到的端口让 `docker compose up` 当场失败，代价和收益不成比例。
 要连进去看：`docker compose exec postgres psql -U keel keel`。
 
+### 派生数据入库：文本向量与 bigram 关键词串
+
+商品的两份派生数据（`product_text_vectors.embedding` 与 `products.search_text`）
+由 `internal/service` 的派生数据入库任务维护，它**要一个真的推理引擎**。
+
+引擎是叠加层（`compose.inference.yaml`，2.27 GB 权重、首次冷启动约 75 秒）：
+
+```bash
+docker compose -f compose.yaml -f compose.inference.yaml up -d --build
+```
+
+叠加层会给 `app` 配上 `KEEL_EMBED_ENDPOINT`，进程里的**增量**任务随之启动：
+30 秒一轮，商品改了就重算（触发点是 `products.updated_at`，判定只看
+`product_understanding.input_hashes` 的那一格，两段判据的论证写在
+`db/migrations/00016_semantic_layer.sql` 的文件头第四节与 `internal/service/index.go`）。
+
+**没配 `KEEL_EMBED_ENDPOINT` 时它不启动**，启动日志里有一条 WARN 说明后果
+（新品与改过的商品搜不到）。这是刻意的：默认那条 `docker compose up` 里没有引擎。
+
+**全量**走一条单独的命令，补两类增量看不见的东西：存量（00016 刚落地时全库
+`search_text` 都是 NULL，而没有任何 `updated_at` 因此前进），以及换模型 / 改拼接模板：
+
+```bash
+KEEL_EMBED_ENDPOINT=http://127.0.0.1:8001 go run ./cmd/keel-index            # 全部活跃商家
+KEEL_EMBED_ENDPOINT=http://127.0.0.1:8001 go run ./cmd/keel-index -merchant 3
+KEEL_EMBED_ENDPOINT=http://127.0.0.1:8001 go run ./cmd/keel-index -force      # 换模型之后，会真的花钱
+```
+
+不带 `-force` 的全量同样走判定，所以在已经索引过的库上跑它几乎不花钱。
+
 ## 提交前自查
 
 ```bash

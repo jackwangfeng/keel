@@ -70,10 +70,38 @@ const (
 	// 那两个要改购物车。只看状态码分不开。
 	TypeOrderStatusNotPayable = "https://keel.dev/problems/order-status-not-payable"
 
+	// 后台身份那四个（数据模型 §14 / 契约 AdminAuth 与 Admin 两个 tag）。
+	//
+	// 它们同样分得细，理由与上面那几组一字不差 —— 契约里这四种全都是
+	// 403 或 409，而只看状态码分不开，但客户端与运维对它们的处置完全不同：
+	//
+	//   bootstrap-closed   → 这个部署已经引导过了；别再拿引导 token 试，
+	//                        走邮箱链接。这是个**正常**状态，不是故障。
+	//   staff-forbidden    → 你是操作员不是管理员；换个人来做这件事。
+	//   staff-email-taken  → 换个邮箱（或者那个人已经在了）。
+	//   last-admin         → 先加一个管理员，再来降级 / 停用这一个。
+	//                        数据模型 §14 那条进不了数据库的约束。
+	//
+	// last-admin 与 staff-email-taken 都是 409 且都出现在同一条 PATCH /
+	// POST 上，压成一个之后前端只能把两句完全不同的话写成一句。
+	TypeBootstrapClosed = "https://keel.dev/problems/bootstrap-closed"
+	TypeStaffForbidden  = "https://keel.dev/problems/staff-forbidden"
+	TypeStaffEmailTaken = "https://keel.dev/problems/staff-email-taken"
+	TypeLastAdmin       = "https://keel.dev/problems/last-admin"
+
 	// 契约声明了、本轮刻意没有实现的路径。用一个**专门的** type 而不是复用
 	// internal：客户端能据此分辨「这个功能还没有」与「服务器炸了」，
 	// 而这两件事的重试策略完全相反。
 	TypeNotImplemented = "https://keel.dev/problems/not-implemented"
+
+	// 被限流挡住。契约里已经有这个 type（POST /auth/sms-code 的 429 描述
+	// 逐字写着它），所以这里复用，不新造一个 —— 同一件事两个 type，
+	// 客户端的退避逻辑就要写两遍。
+	//
+	// 429 配 Retry-After：契约在那条接口上把这个头写进了响应定义
+	// （「建议退避秒数」）。没有它的话，客户端能做的只有立刻重试，
+	// 而那正好是限流要挡的行为。
+	TypeRateLimited = "https://keel.dev/problems/rate-limited"
 )
 
 // Write 写一个 RFC 9457 响应并中止后续 handler。
