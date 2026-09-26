@@ -159,7 +159,12 @@ If 8081 is taken: `KEEL_CONSOLE_PORT=18081 docker compose up -d --build`.
 > column and the buyer app's location, with no conversion on the way), and
 > **orders and after-sales**: find orders by status, store, date, order number
 > or phone, ship them, review refunds (approve / reject, set the return freight)
-> and confirm returned goods.
+> and confirm returned goods, and the **business overview** dashboard on the home
+> page: net sales (paid minus refunded), orders, paying buyers, average order
+> value and refund rate against the previous period, an hourly / daily trend
+> line, top products, store and region comparison, low-stock alerts and a
+> search summary (top queries and zero-result queries) — fixed definitions,
+> days cut in the shop's time zone, scoped by role, no AI involved.
 
 For the multi-merchant shape, where the `Host` header picks the shop:
 `docker compose -f compose.yaml -f compose.multi.yaml up -d --build`.
@@ -248,7 +253,9 @@ Products & SKUs · category tree · per-store inventory · three-tier pricing
 (base → region → store) · cart · address book · checkout · payments · cancel ·
 shipping · confirm receipt · after-sales refunds · coupons (amount-off /
 percent-off / no-threshold, claim center and targeted grants) · order state
-machine · multi-store with delivery fences · tiered staff roles
+machine · multi-store with delivery fences · tiered staff roles · business
+reports (overview vs. previous period, trend, top products, store comparison,
+low-stock alerts, search summary)
 
 Cart, address book, profile, cancel, confirm-receipt, shipping and after-sales
 refunds (partial refunds allocated to the cent, discounts included) are in;

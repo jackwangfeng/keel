@@ -39,7 +39,7 @@ so "which one is running?" never depends on anyone's memory.
 
 ## [Unreleased]
 
-Migrations `00027`–`00038`.
+Migrations `00027`–`00038` and `00048`.
 
 ### Added
 
@@ -135,6 +135,31 @@ Migrations `00027`–`00038`.
 - Other buyers' addresses and cart lines are **404, not 403**, for every
   operation — within a shop and across shops — and every one of the 19 new
   routes requires a buyer token (both checked by tests).
+
+- **Business reports** (`GET /admin/reports/overview`, `/trend`, `/products`,
+  `/stores`, `/inventory-alerts`, `/search`; read-only, no AI). The overview
+  gives paid amount, refunds, net sales (paid minus refunded), paid orders,
+  paying buyers, average order value and refund rate for the window and for the
+  immediately preceding window of the same length (today compares with the same
+  hours of yesterday). Sales are attributed by payment time, refunds by the time
+  the money actually went back (status `40`); drafts, unpaid and closed orders
+  never count, fully refunded orders still count as paid. Days and hours are cut
+  in the shop's time zone (`shop_settings.timezone`, falling back to
+  `Asia/Shanghai`, echoed in the response); `last_7_days` / `last_30_days` are
+  complete days excluding today; a custom window is capped at 366 days, since
+  every report aggregates the raw rows on the spot. Scope follows the order list:
+  region and store managers only see their own stores' numbers; the search
+  summary (query counts, zero-result rate, top and zero-result queries) is for
+  admins and operators only, because search logs have no store dimension. Four
+  partial / covering indexes back the windows (migration `00048`); measured on
+  1.3M orders and 1M search logs, a 30-day overview is ~20 ms and a 366-day one
+  under 200 ms. No materialized views or rollup tables.
+- **The back office opens on a business-overview dashboard**: metric cards with
+  period-over-period change and the definition of each metric on hover, a trend
+  line (hourly for a single day, daily otherwise) with a crosshair tooltip, top
+  products by revenue or quantity with a category filter, store / region
+  comparison bars, low-stock alerts and the search summary. The charts are
+  hand-written SVG — no chart library, zero bundle-size increase.
 
 ### Added — order fulfillment (migration 00033)
 

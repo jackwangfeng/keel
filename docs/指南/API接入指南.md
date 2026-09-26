@@ -170,6 +170,45 @@ key 的有效期是 24 小时，作用域是「接口 + 用户 + key」。哪些
 
 ---
 
+## 经营报表
+
+六条只读接口，都在 `/admin/reports/` 下，要后台会话（`Authorization: Bearer <会话 token>`），
+平台级会话同样可以带 `X-Keel-Merchant` 切店。口径的唯一真相源是契约里的 `ReportWindow`
+与 `ReportMetrics`，这里只列要点：
+
+| 接口 | 用途 | 特有参数 |
+|---|---|---|
+| `GET /admin/reports/overview` | 指标卡：本期与上一周期的 `ReportMetrics` | — |
+| `GET /admin/reports/trend` | 按小时 / 按天的支付、退款、净销售额、订单数 | — |
+| `GET /admin/reports/products` | 商品排行 Top N | `sort_by`（`amount` / `quantity`）、`category_id`（含子孙）、`limit`（1–50） |
+| `GET /admin/reports/stores` | 门店与大区对比 | — |
+| `GET /admin/reports/inventory-alerts` | `available_qty <= warning_qty` 的门店 SKU | `limit`（1–200），没有时间参数 |
+| `GET /admin/reports/search` | 搜索次数、无结果率、热门词、无结果词 | `limit`（1–50） |
+
+**时间窗口**（前五条里除库存预警外都收）：`period` = `today`（默认）/ `yesterday` /
+`last_7_days` / `last_30_days` / `custom`；`custom` 必须同时给 `start_date` 与 `end_date`
+（`YYYY-MM-DD`，**都含**），最多跨 **366 天**。窗口写错（不认识的 `period`、缺日期、起晚于止、
+超过 366 天）一律 `422 invalid-request`，不会悄悄回退成今天。
+
+- **时区**：按店铺时区（`shop_settings.timezone`，没有就是 `Asia/Shanghai`）切自然日与整点，
+  响应的 `window.timezone` 回显实际用的那一个。`window.current` / `window.previous` 给出
+  半开区间 `[start_at, end_at)`（UTC）和店铺时区里的 `start_date` / `end_date`（都含）。
+- **`last_7_days` / `last_30_days` 不含今天**；`today` 的上一周期是**昨天的同一时段**。
+- **归属时间**：销售（支付金额、订单数、买家数、商品排行）按 `orders.paid_at`；退款按
+  `refunds.refunded_at`（只算已到账的 `40`）。已支付的订单指状态 `20/30/40/50/60`，
+  草稿 `0`、待支付 `10`、已关闭 `90` 不计。
+- **金额**一律整数分；`refund_rate`、`zero_result_rate` 在分母为 0 时是 `null`（不是 0）。
+- **范围**：与 `GET /admin/orders` 同一个判据，按订单的履约门店收窄；`store_id` / `region_id`
+  与范围取交集，越出范围得到全零而不是 403。搜索概况只放管理员、操作员，其他角色
+  `403 role-forbidden`（检索日志没有门店维度）。
+
+```bash
+curl -H "Authorization: Bearer $STAFF_TOKEN" \
+  "http://localhost:8080/api/v1/admin/reports/overview?period=custom&start_date=2026-09-01&end_date=2026-09-26"
+```
+
+---
+
 ## SDK 与代码生成
 
 | 语言 | 位置 | 说明 |
