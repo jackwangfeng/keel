@@ -290,6 +290,88 @@ func TestBootstrapTokenIsSingleUseAndThenTheChannelCloses(t *testing.T) {
 	}
 }
 
+// 引导 token 过期前没人用 → 下一次启动**给同一个占位账号补签一串**。
+//
+// 这是第一版漏掉的那条死路：判据是「在岗平台管理员 > 0」，占位账号自己就算
+// 一个，于是 token 一过期就再也不签了。邮件登录在没接 SMTP 时回 501，
+// 这个部署的后台就永久进不去 —— 而系统认为引导已经做完了。演示栈就是这样
+// 被锁住的：引导 token 印在了一个早就删掉的容器日志里。
+func TestExpiredUnredeemedBootstrapIsReissuedOnTheNextStart(t *testing.T) {
+	wipeStaff(t)
+	ctx := context.Background()
+
+	first, err := staffService().EnsureBootstrapAdmin(ctx)
+	if err != nil || first == "" {
+		t.Fatalf("第一次启动没签出引导 token：%v", err)
+	}
+	// 让它在没人用的情况下过期。
+	adminExec(t, `UPDATE staff_tokens SET expire_at = now() - interval '1 minute' WHERE kind = 1`)
+
+	// 过期没兑换的时候，拿那串旧 token 来换，回的是 401 而不是 409：
+	// 通道并没有「关闭」，下一次启动会补签。回 409 会让运维以为已经有管理员了，
+	// 去找一个根本不存在的人。
+	if w := post(t, hostA, "/api/v1/admin/auth/bootstrap",
+		`{"token":"`+first+`","email":"late@example.com"}`, ""); w.Code != http.StatusUnauthorized {
+		t.Errorf("用过期的引导 token 换会话回了 %d，期望 401 —— 通道没关，只是这串过期了：%s",
+			w.Code, w.Body.String())
+	}
+
+	second, err := staffService().EnsureBootstrapAdmin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second == "" {
+		t.Fatal("引导 token 过期前没人用，再启动一次却什么都没签 —— 这个部署的后台从此" +
+			"谁也进不去（占位账号被当成了「已经有人能登录」）")
+	}
+	if second == first {
+		t.Fatal("补签出来的还是过期的那一串")
+	}
+	// 补签挂在**原来那个**占位账号上，不是再建一个：平台级邮箱有唯一索引，
+	// 再建一个会撞；就算不撞，两个占位账号也说不清谁是谁。
+	if n := adminQueryInt64(t,
+		`SELECT count(*) FROM staff WHERE merchant_id IS NULL AND role = 1`); n != 1 {
+		t.Errorf("平台级管理员有 %d 个，期望 1 —— 补签应当复用原来的占位账号", n)
+	}
+
+	// 补签的那串真的能用。
+	w := post(t, hostA, "/api/v1/admin/auth/bootstrap",
+		`{"token":"`+second+`","email":"finally@example.com"}`, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("用补签的 token 换会话失败：%d %s", w.Code, w.Body.String())
+	}
+
+	// 兑换之后就有人能登录了，再启动一次不签 —— 原来那条规矩照旧。
+	if again, err := staffService().EnsureBootstrapAdmin(ctx); err != nil || again != "" {
+		t.Errorf("已经有人登录过后台了，启动又签了一串（err=%v）", err)
+	}
+}
+
+// 引导 token **还在有效期内**时重启，不签第二串。
+//
+// 这条是上一条的反面，两条合起来才钉住补签的边界：一个「只要没人兑换过就签」
+// 的实现能让上一条全绿，而它每重启一次就往日志里多丢一把后台全权的钥匙。
+func TestRestartInsideTheBootstrapWindowIssuesNoSecondToken(t *testing.T) {
+	wipeStaff(t)
+	ctx := context.Background()
+
+	first, err := staffService().EnsureBootstrapAdmin(ctx)
+	if err != nil || first == "" {
+		t.Fatalf("第一次启动没签出引导 token：%v", err)
+	}
+	again, err := staffService().EnsureBootstrapAdmin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again != "" {
+		t.Error("上一串引导 token 还没过期，重启又签了一串 —— 每次重启都多一把钥匙")
+	}
+	if n := adminQueryInt64(t,
+		`SELECT count(*) FROM staff_tokens WHERE kind = 1 AND used_at IS NULL AND expire_at > now()`); n != 1 {
+		t.Errorf("活着的引导 token 有 %d 串，期望 1", n)
+	}
+}
+
 // 引导窗口**还开着**的时候，一串错 token 是 401，不是 409。
 //
 // 这条和上面那条是同一个判据的两半。合成一条的话，一个「永远回 409」的

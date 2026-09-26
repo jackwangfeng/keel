@@ -15,15 +15,21 @@ const bootstrapChannelState = `-- name: BootstrapChannelState :one
 
 SELECT
   (SELECT count(*) FROM staff
-    WHERE role = 1 AND status = 1 AND deleted_at IS NULL)           AS admins,
+    WHERE role = 1 AND status = 1 AND deleted_at IS NULL
+      AND email <> $1::text)                AS admins,
+  COALESCE((SELECT id FROM staff
+             WHERE role = 1 AND status = 1 AND deleted_at IS NULL
+               AND email = $1::text
+             LIMIT 1), 0)::bigint                                   AS placeholder_id,
   (SELECT count(*) FROM staff_tokens
     WHERE kind = 1 AND used_at IS NULL AND revoked_at IS NULL
       AND expire_at > now())                                        AS live_tokens
 `
 
 type BootstrapChannelStateRow struct {
-	Admins     int64
-	LiveTokens int64
+	Admins        int64
+	PlaceholderID int64
+	LiveTokens    int64
 }
 
 // 后台身份：staff 与 staff_tokens（数据模型 §14）。
@@ -59,19 +65,34 @@ type BootstrapChannelStateRow struct {
 //
 // 两个数各自回答一件事，合在一条语句里是为了让它们来自同一个快照：
 //
-//	admins      有没有一个还在岗的平台级管理员。没有 = 这个部署还没人能进后台，
-//	            引导要开；有 = 引导已经做过了。
-//	live_tokens 有没有一串还没被用掉的引导 token。它决定
-//	            POST /admin/auth/bootstrap 在 token 对不上时回 401 还是 409：
-//	            窗口还开着的时候一串错 token 就是一串错 token（401），
-//	            窗口关了之后任何 token 都只说明「引导通道已关闭」（409）。
+//	admins         有没有一个**真正能登录**的平台级管理员。没有 = 这个部署还没人
+//	               能进后台，引导要开；有 = 引导已经做完了。
+//	placeholder_id 那个还没兑换过的引导占位账号（邮箱还是占位符），没有则为 0。
+//	live_tokens    有没有一串还没被用掉的引导 token。它决定
+//	               POST /admin/auth/bootstrap 在 token 对不上时回 401 还是 409：
+//	               窗口还开着的时候一串错 token 就是一串错 token（401），
+//	               窗口关了之后任何 token 都只说明「引导通道已关闭」（409）。
 //
-// 分两条语句查的话，两个数之间会隔着一次别的事务的提交，
-// 而这两个数正是用来判断「窗口开没开」的 —— 它们必须是同一时刻的。
-func (q *Queries) BootstrapChannelState(ctx context.Context) (BootstrapChannelStateRow, error) {
-	row := q.db.QueryRow(ctx, bootstrapChannelState)
+// ## admins 为什么要排除占位账号
+//
+// 第一版这里数的是全部在岗平台管理员，于是占位账号本身就算「引导已经做过了」。
+// 后果是一条死路：引导 token 24 小时有效，只在第一次启动的日志里出现一次；
+// 错过了、或者没用就过期了，占位账号还在，于是再也不签新的 —— 而邮件登录
+// 在没接 SMTP 时回 501，**这个部署的后台就永久进不去了**，系统却认为引导已完成。
+// 演示栈就是这样被锁住的；任何 clone 下来 docker compose up、隔天才去翻日志的人
+// 都会撞上同一件事。
+//
+// 占位账号的邮箱是 bootstrap@keel.invalid，兑换时第一件事就是换成真邮箱
+// （SetStaffEmail）。所以「邮箱还是占位符」正好等于「从没有人用它登录过」。
+// 占位符由调用方传进来（service 里的 bootstrapPlaceholderEmail），不在这里写死
+// 第二份。
+//
+// 三个数在一条语句里，理由同原来：分开查会隔着别的事务的提交，
+// 而它们正是用来判断「窗口开没开」的，必须是同一时刻的。
+func (q *Queries) BootstrapChannelState(ctx context.Context, placeholderEmail string) (BootstrapChannelStateRow, error) {
+	row := q.db.QueryRow(ctx, bootstrapChannelState, placeholderEmail)
 	var i BootstrapChannelStateRow
-	err := row.Scan(&i.Admins, &i.LiveTokens)
+	err := row.Scan(&i.Admins, &i.PlaceholderID, &i.LiveTokens)
 	return i, err
 }
 

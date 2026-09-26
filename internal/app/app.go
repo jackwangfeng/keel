@@ -697,7 +697,8 @@ func bootstrapStaff(ctx context.Context, pool *pgxpool.Pool) error {
 	// 用 Warn 而不是 Info：这是一条**高权限凭据**，它出现在日志里这件事
 	// 本身就该被看见。level=info 在很多部署里是被过滤掉的，而这一行被过滤掉
 	// 意味着这个部署的后台从此谁也进不去（除非接上 SMTP）。
-	slog.WarnContext(ctx, "后台还没有平台级管理员，已创建一个并签发引导 token。"+
+	slog.WarnContext(ctx, "后台还没有人完成引导（第一次启动，或者上一串引导 token 过期前"+
+		"没被用掉），已签发一串新的引导 token。"+
 		"用它换会话：POST /api/v1/admin/auth/bootstrap {\"token\":\"<下面这串>\","+
 		"\"email\":\"<你的邮箱>\"}。24 小时有效，用掉即失效，明文只出现这一次",
 		"bootstrap_token", token)

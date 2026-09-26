@@ -106,9 +106,12 @@ type StaffOneTimeToken struct {
 
 // BootstrapState 回答「引导通道开着没有」。两个数来自同一个快照，见 staff.sql。
 type BootstrapState struct {
-	// Admins 是本作用域里还在岗的管理员数。平台作用域里调用它，数的就是
-	// 平台级管理员 —— 引导要建的正是这个。
+	// Admins 是本作用域里**真正能登录**的在岗管理员数 —— 不含那个还没兑换过的
+	// 引导占位账号。平台作用域里调用它，数的就是平台级管理员。
+	// 为什么不含占位账号，见 db/queries/staff.sql 的 BootstrapChannelState。
 	Admins int64
+	// PlaceholderID 是还没兑换过的引导占位账号，没有则为 0。
+	PlaceholderID int64
 	// LiveTokens 是还没被用掉的引导 token 数。它决定 token 对不上时
 	// 回 401（窗口还开着，你这串是错的）还是 409（窗口关了）。
 	LiveTokens int64
@@ -125,7 +128,9 @@ type BootstrapState struct {
 // 而不是让它跑起来才报错。
 type StaffTx interface {
 	// BootstrapChannelState 读引导通道的状态。只在平台作用域里有意义。
-	BootstrapChannelState(ctx context.Context) (BootstrapState, error)
+	// placeholderEmail 是引导占位账号的邮箱（service 里那个常量），用来把它
+	// 从「能登录的管理员」里排除掉。
+	BootstrapChannelState(ctx context.Context, placeholderEmail string) (BootstrapState, error)
 
 	// CreateStaff 建一个操作员。**租户不在参数里** —— 那一列的默认值是
 	// staff_scope_merchant()，也就是本事务的作用域（00017）。
@@ -247,12 +252,14 @@ func (t tenantTx) staffOf(id int64, email, name string, role, status int16,
 	}
 }
 
-func (t tenantTx) BootstrapChannelState(ctx context.Context) (BootstrapState, error) {
-	row, err := t.q.BootstrapChannelState(ctx)
+func (t tenantTx) BootstrapChannelState(ctx context.Context, placeholderEmail string) (BootstrapState, error) {
+	row, err := t.q.BootstrapChannelState(ctx, placeholderEmail)
 	if err != nil {
 		return BootstrapState{}, err
 	}
-	return BootstrapState{Admins: row.Admins, LiveTokens: row.LiveTokens}, nil
+	return BootstrapState{
+		Admins: row.Admins, PlaceholderID: row.PlaceholderID, LiveTokens: row.LiveTokens,
+	}, nil
 }
 
 func (t tenantTx) CreateStaff(ctx context.Context, email, name string, role int16, createdBy *int64) (Staff, error) {

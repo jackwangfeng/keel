@@ -148,25 +148,44 @@ type StaffSessionResult struct {
 func (s *StaffService) EnsureBootstrapAdmin(ctx context.Context) (string, error) {
 	var plaintext string
 	err := s.repo.WithPlatform(ctx, func(tx repository.StaffTx) error {
-		state, err := tx.BootstrapChannelState(ctx)
+		state, err := tx.BootstrapChannelState(ctx, bootstrapPlaceholderEmail)
 		if err != nil {
 			return err
 		}
 		if state.Admins > 0 {
-			// 已经有人能进后台了。**不管有没有活着的引导 token** ——
+			// 已经有人真正登录过后台了。**不管有没有活着的引导 token** ——
 			// 这里再签一串等于每次重启都往日志里丢一把后台全权的钥匙。
 			return nil
 		}
+		if state.LiveTokens > 0 {
+			// 还没人登录过，但上一串引导 token 还在有效期内：窗口开着，
+			// 不签第二串。同一条理由 —— 重启一次多一把钥匙。
+			return nil
+		}
 
-		st, err := tx.CreateStaff(ctx, bootstrapPlaceholderEmail, "", auth.StaffRoleAdmin, nil)
-		if err != nil {
-			return err
+		// 走到这里只有两种情况，都等于「这个部署还没人进得了后台，也没有
+		// 任何办法进去」：
+		//   · 第一次启动，占位账号都还没有 —— 建一个；
+		//   · 占位账号在，但它的引导 token 过期前没人用 —— **给它补签一串**。
+		//
+		// 第二种是第一版漏掉的：那时判据是「在岗管理员 > 0」，占位账号自己就
+		// 算一个，于是 token 一过期这个部署的后台就永久锁死了（邮件登录在没接
+		// SMTP 时回 501）。补签不违背上面那两条「不签」的顾虑：从来没人兑换过、
+		// 也没有活着的 token，这个部署在鉴权上仍然是「刚装好」的状态，和第一次
+		// 启动一模一样。
+		staffID := state.PlaceholderID
+		if staffID == 0 {
+			st, err := tx.CreateStaff(ctx, bootstrapPlaceholderEmail, "", auth.StaffRoleAdmin, nil)
+			if err != nil {
+				return err
+			}
+			staffID = st.ID
 		}
 		token, err := auth.NewOpaqueToken()
 		if err != nil {
 			return err
 		}
-		if _, err := tx.CreateStaffToken(ctx, st.ID, auth.HashStaffToken(token),
+		if _, err := tx.CreateStaffToken(ctx, staffID, auth.HashStaffToken(token),
 			repository.StaffTokenBootstrap, s.now().UTC().Add(auth.StaffBootstrapTTL)); err != nil {
 			return err
 		}
@@ -212,7 +231,9 @@ func (s *StaffService) Bootstrap(ctx context.Context, token, email string) (Staf
 			// 窗口还开着的时候一串错 token 就只是一串错 token；
 			// 窗口关了之后任何 token 都只说明「引导通道已关闭」，
 			// 而那是契约里 409 的原话。
-			state, serr := tx.BootstrapChannelState(ctx)
+			// Admins 不含占位账号：占位账号在、token 过期了的时候，这里回的是 401
+			// 而不是 409「通道已关闭」—— 通道并没有关，重启一次就会补签。
+			state, serr := tx.BootstrapChannelState(ctx, bootstrapPlaceholderEmail)
 			if serr != nil {
 				return serr
 			}
