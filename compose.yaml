@@ -190,6 +190,11 @@ services:
       #   KEEL_AUTH_SECRET=$(openssl rand -base64 48) docker compose up -d
       KEEL_AUTH_SECRET: ${KEEL_AUTH_SECRET:-}
 
+      # 上传文件（商品图、头像、退款凭证）的本地磁盘根目录，挂在下面的 uploads 卷上。
+      # 不配的话应用会落到容器的临时目录并打 WARN —— 容器一重建，已上架商品的图
+      # 就全没了，而 uploads 表里的记录还指着它们。v0.1.0 的 compose 就漏了这一行。
+      KEEL_UPLOAD_ROOT: /var/lib/keel-uploads
+
       # /search 的按 IP 限流。它不是防 DDoS 的，是防「一条 for 循环把公开
       # Demo 的语义搜索变成关键词搜索」——每个检索请求都要跑一次模型推理，
       # 实测 20 个并发的长查询就能让同时进来的正常查询全部降级。M4 换成 GPU
@@ -221,6 +226,9 @@ services:
       # 镜像里 /var/lib/keel 已经建好并且属主是 65532，Docker 建新卷时会连属主
       # 一起复制过去；路径不存在的话卷是 root 所有的，应用写不进去。
       - dtmdata:/var/lib/keel
+      # 上传文件单独一个卷：它和协调器状态的生命周期、备份方式都不一样。
+      # 属主问题同上，镜像里 /var/lib/keel-uploads 已经建好并属于 65532。
+      - uploads:/var/lib/keel-uploads
     ports:
       # 宿主机端口可换（8080 在开发机上常被占）：`KEEL_HTTP_PORT=18080 docker compose up -d`。
       # scripts/smoke.sh 读的是同一个变量，两边不会各说各话。
@@ -272,3 +280,5 @@ volumes:
   # 协调器的 sqlite。和 pgdata 一样是有状态的东西，`docker compose down -v`
   # 会连它一起删掉 —— 那之后未完成的全局事务就真的没人推了。
   dtmdata:
+  # 上传的商品图等。`docker compose down -v` 同样会删掉它。
+  uploads:

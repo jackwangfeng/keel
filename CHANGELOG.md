@@ -39,7 +39,16 @@ so "which one is running?" never depends on anyone's memory.
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- **Uploaded files did not survive a container rebuild under the stock
+  `compose.yaml`.** `KEEL_UPLOAD_ROOT` was never set, so the API fell back to a
+  temporary directory inside the container (it logged a WARN saying exactly
+  that). Recreating the `app` container wiped every product image while the
+  `uploads` rows still pointed at them. Uploads now live on their own named
+  volume, `uploads`, mounted at `/var/lib/keel-uploads` (created and owned by
+  the non-root user in the image). Existing deployments: images uploaded before
+  this change are already gone after the next recreate and must be re-uploaded.
 
 ## [0.1.0] - 2026-09-26
 

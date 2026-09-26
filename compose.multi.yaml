@@ -44,3 +44,5 @@ volumes:
     name: keel_pgdata_multi
   dtmdata:
     name: keel_dtmdata_multi
+  uploads:
+    name: keel_uploads_multi

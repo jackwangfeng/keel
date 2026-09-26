@@ -166,10 +166,12 @@ COPY --from=build /out/keel /keel
 # compose 把一个具名卷挂到这个路径上。**属主必须在这里就设好** ——
 # Docker 建新卷时会把镜像里该路径的内容与属主一起复制过去，路径不存在的话
 # 卷是 root 所有的，应用写不进去，症状是启动时 `unable to open database file`。
+#
+# 上传文件（商品图、凭证）的目录同理，compose 给它单独挂一个卷。
 RUN groupadd -g 65532 nonroot \
     && useradd -u 65532 -g 65532 -M -s /usr/sbin/nologin nonroot \
-    && mkdir -p /var/lib/keel \
-    && chown 65532:65532 /var/lib/keel
+    && mkdir -p /var/lib/keel /var/lib/keel-uploads \
+    && chown 65532:65532 /var/lib/keel /var/lib/keel-uploads
 USER 65532:65532
 
 EXPOSE 8080
