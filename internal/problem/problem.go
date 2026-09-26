@@ -229,6 +229,19 @@ const (
 	TypeCouponTemplateLocked    = "https://keel.dev/problems/coupon-template-locked"
 	TypeCouponTemplateDisabled  = "https://keel.dev/problems/coupon-template-disabled"
 
+	// 买家侧地址簿 / 购物车 / 个人信息那三组（契约 User 与 Cart tag）。
+	// 三个名字都是契约里早就写好的，这里只是第一次有人发它们：
+	//
+	//   use-default-endpoint     422  想用 PUT /addresses/{id} 切换默认地址。客户端该改调
+	//                                 PUT /addresses/{id}/default，而不是改表单再提交
+	//   cart-quantity-exceeded   422  加购累加后超过 999。detail 给出当前数量与上限，
+	//                                 客户端据此提示「最多还能加几件」，**不静默截断**
+	//   last-credential          409  解绑之后账号就没有任何可登录的凭据了。客户端该先
+	//                                 引导用户设密码或绑别的身份
+	TypeUseDefaultEndpoint   = "https://keel.dev/problems/use-default-endpoint"
+	TypeCartQuantityExceeded = "https://keel.dev/problems/cart-quantity-exceeded"
+	TypeLastCredential       = "https://keel.dev/problems/last-credential"
+
 	// 契约声明了、本轮刻意没有实现的路径。用一个**专门的** type 而不是复用
 	// internal：客户端能据此分辨「这个功能还没有」与「服务器炸了」，
 	// 而这两件事的重试策略完全相反。

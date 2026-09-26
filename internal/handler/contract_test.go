@@ -840,6 +840,151 @@ var routes = []route{
 		HandlerFile:    "admin_store.go",
 		NoQueryParams:  "两个 id 在路径上，三个数量在请求体里；CAS 的 expected 刻意不是 query —— 它是请求体的一部分，不是一个开关",
 	},
+
+	// —— 买家自己的三组：个人信息 / 地址簿 / 购物车（契约 User 与 Cart tag）。
+	// 「每一条都要令牌」由 buyer_self_test.go 的 TestBuyerSelfRoutesRequireToken 逐条证明。
+	{
+		ContractPath:   "/me",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "me.go",
+		NoQueryParams:  "「我」由 Authorization 头里的令牌决定，没有任何参数",
+	},
+	{
+		ContractPath:   "/me",
+		ContractMethod: "patch",
+		HTTPMethod:     http.MethodPatch,
+		HandlerFile:    "me.go",
+		NoQueryParams:  "要改的字段在请求体里",
+	},
+	{
+		ContractPath:   "/me/identities",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "me.go",
+		NoQueryParams:  "列出全部绑定，不分页（一个人至多五种 provider）",
+	},
+	{
+		ContractPath:   "/me/identities/wechat",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "me.go",
+		NoQueryParams:  "code 在请求体里，幂等键在请求头里",
+		NotYetImplementedBody: map[string]string{
+			"code": "绑定微信要拿 code 去微信换 openid / unionid，本项目没有接微信开放平台，" +
+				"这条路返回 501（契约的 default: Problem 收得住），而不是假装绑定成功或回一个 4xx。" +
+				"形状与 /auth/login 的 code 一样，两个方向都锁：buyer_self_test.go 的 " +
+				"TestIdentityAndPhoneBindingSayNotImplemented 断言那条路真的返回 501，" +
+				"并且断言这里真的挂着这一笔。",
+		},
+	},
+	{
+		ContractPath:   "/me/identities/{provider}",
+		ContractMethod: "delete",
+		HTTPMethod:     http.MethodDelete,
+		HandlerFile:    "me.go",
+		NoQueryParams:  "provider 在路径上",
+	},
+	{
+		ContractPath:   "/me/phone",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "me.go",
+		NoQueryParams:  "新号码与验证码在请求体里，幂等键在请求头里",
+		NotYetImplementedBody: map[string]string{
+			"code": "绑定 / 换绑手机号要校验新号码收到的短信验证码，本项目没有短信服务" +
+				"（与 /auth/login 的 code 是同一个缺口），这条路返回 501。" +
+				"反向由 buyer_self_test.go 的 TestIdentityAndPhoneBindingSayNotImplemented 盯着。",
+		},
+	},
+	{
+		ContractPath:   "/addresses",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "address.go",
+		NoQueryParams:  "地址簿一次返回全部，不分页；契约里这条接口没有 query 参数",
+	},
+	{
+		ContractPath:   "/addresses",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "address.go",
+		NoQueryParams:  "地址字段在请求体里，幂等键在请求头里",
+	},
+	{
+		ContractPath:   "/addresses/{address_id}",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "address.go",
+		NoQueryParams:  "只吃路径参数 address_id",
+	},
+	{
+		ContractPath:   "/addresses/{address_id}",
+		ContractMethod: "put",
+		HTTPMethod:     http.MethodPut,
+		HandlerFile:    "address.go",
+		NoQueryParams:  "id 在路径上，整条地址在请求体里",
+	},
+	{
+		ContractPath:   "/addresses/{address_id}",
+		ContractMethod: "delete",
+		HTTPMethod:     http.MethodDelete,
+		HandlerFile:    "address.go",
+		NoQueryParams:  "只吃路径参数 address_id",
+	},
+	{
+		ContractPath:   "/addresses/{address_id}/default",
+		ContractMethod: "put",
+		HTTPMethod:     http.MethodPut,
+		HandlerFile:    "address.go",
+		NoQueryParams:  "只吃路径参数 address_id",
+	},
+	{
+		// 返回 Cart 的 5 条都读 store_id（契约 CartStoreId），所以在同一个文件；
+		// 两条回 204 的删除不读任何参数，在 cart_delete.go。
+		ContractPath:   "/cart",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "cart.go",
+	},
+	{
+		ContractPath:   "/cart",
+		ContractMethod: "delete",
+		HTTPMethod:     http.MethodDelete,
+		HandlerFile:    "cart_delete.go",
+		NoQueryParams:  "清空整辆车，回 204，不涉及门店",
+	},
+	{
+		ContractPath:   "/cart/items",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "cart.go",
+	},
+	{
+		ContractPath:   "/cart/selection",
+		ContractMethod: "put",
+		HTTPMethod:     http.MethodPut,
+		HandlerFile:    "cart.go",
+	},
+	{
+		ContractPath:   "/cart/items/batch-delete",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "cart.go",
+	},
+	{
+		ContractPath:   "/cart/items/{item_id}",
+		ContractMethod: "patch",
+		HTTPMethod:     http.MethodPatch,
+		HandlerFile:    "cart.go",
+	},
+	{
+		ContractPath:   "/cart/items/{item_id}",
+		ContractMethod: "delete",
+		HTTPMethod:     http.MethodDelete,
+		HandlerFile:    "cart_delete.go",
+		NoQueryParams:  "删一行，回 204，不涉及门店",
+	},
 }
 
 // routeOf 按方法与契约路径取出登记行。取不到就 Fatal —— 调用方（别的测试文件）
