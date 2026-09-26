@@ -17,8 +17,10 @@
 //     不是第一道。）
 
 import {
+  ListProductsQuery,
   Money,
   Order,
+  OrderCreateRequest,
   OrderDetail,
   OrderItem,
   OrderPreview,
@@ -27,6 +29,7 @@ import {
   ProductDetail,
   ProductSummary,
   SearchHit,
+  SearchRequest,
   Sku,
 } from './schema.uts'
 
@@ -433,4 +436,75 @@ export function previewView(p : OrderPreview) : PreviewView {
     payableText: yuan(p.payable_cents),
     payableCents: p.payable_cents,
   } as PreviewView
+}
+
+// ---------------------------------------------------------------------------
+// 请求那一侧：页面要发的东西 -> 契约类型
+// ---------------------------------------------------------------------------
+//
+// 文件头那条理由对**写**同样成立，而且这一侧出过一次真事故：多门店（00020）把
+// store_id 加进了 OrderCreateRequest 的 required，而结算页在 .uvue 里直接写着
+// `const req: OrderCreateRequest = { items, address_id }`。
+//
+//   · tsc 闸门看不见它 —— check_app_types.py 只编 .uts，不编 .uvue；
+//   · DCloud 那道闸门（check_app_build.py）**看得见也拦得住** —— 实测把旧写法
+//     塞回去，它 exit 1，报的正是 `Property 'store_id' is missing`。但它要
+//     500 多个 npm 包，只在 CI 的独立 client job 里跑，不在 check-all.sh 里。
+//
+// 所以合并时本地跑的那几道全绿，能抓住它的那一道没被跑到。列表页与搜索页
+// 当时也在 .uvue 里写着 `{ page: 1, page_size: 20 }` 这种字面量 —— 那两处没出事
+// 只是因为这一轮没改那两个类型的必填字段。
+//
+// 所以请求的构造也收进这里。页面只传「我们自己的」原始值，契约字段名一个都不写。
+// 这条约定现在有执行者：check_app_types.py 会拒绝 .uvue 里直接 import schema.uts，
+// 以及把字面量直接塞给那几个收契约请求的接口函数。它的价值是**把发现的时间提前**
+// —— 从「CI 里那个要装 500 个包的 job」挪进每个人本地都跑的 check-all.sh。
+
+/**
+ * 商品列表的查询。storeId 来自 store.uts —— 与结算用的是同一家店，
+ * 列表上的价格区间才和最后扣的钱对得上。null 表示还没解析出门店，服务端回落默认店。
+ */
+export function productListQuery(page : number, pageSize : number, storeId : number | null) : ListProductsQuery {
+  const q : ListProductsQuery = { page: page, page_size: pageSize }
+  if (storeId != null) {
+    q.store_id = storeId!
+  }
+  return q
+}
+
+/** 检索请求。store_id 与 GET /products 的同名参数逐字同义（契约原话）。 */
+export function searchRequest(query : string, size : number, storeId : number | null) : SearchRequest {
+  const r : SearchRequest = { query: query, size: size }
+  if (storeId != null) {
+    r.store_id = storeId!
+  }
+  return r
+}
+
+/**
+ * 结算 / 试算的请求体（两条接口共用一个 schema）。
+ *
+ * storeId 是 number 而不是 number | null：契约里它是必填，**服务端不替客户端猜**。
+ * 「不在服务范围」（store.uts 里 storeId 为 null）的时候页面根本不该走到这里 ——
+ * 让类型挡住这件事，比在这里塞一个 0 进去、再让服务端回 422 要早一步。
+ *
+ * expectedPayableCents：试算过才带。契约说服务端复算不一致时回 409
+ * price-changed，防止以旧价成交；没试算过就带一个瞎猜的值，只会把每一单都变成 409。
+ */
+export function orderRequest(
+  skuId : number,
+  quantity : number,
+  addressId : number,
+  storeId : number,
+  expectedPayableCents ?: Money
+) : OrderCreateRequest {
+  const req : OrderCreateRequest = {
+    items: [{ sku_id: skuId, quantity: quantity }],
+    store_id: storeId,
+    address_id: addressId,
+  }
+  if (expectedPayableCents != null) {
+    req.expected_payable_cents = expectedPayableCents!
+  }
+  return req
 }

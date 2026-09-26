@@ -48,9 +48,35 @@ type UniRequestOptions<T> = {
   complete?: (() => void) | null
 }
 
+// uni.getLocation 只声明 store.uts 用到的那几样。type 只放 wgs84 与 gcj02 两个值 ——
+// 写成 string 的话，把 'wgs84' 手滑成 'wgs-84' 这里不会红，而那一处拼错的后果是
+// 静默拿到另一个坐标系的坐标（见 store.uts 里 GCJ-02 那段）。
+type UniGetLocationSuccess = {
+  latitude: number
+  longitude: number
+}
+
+type UniGetLocationFail = {
+  errMsg: string
+  errCode: number
+}
+
+type UniGetLocationOptions = {
+  type?: 'wgs84' | 'gcj02' | null
+  success?: ((res: UniGetLocationSuccess) => void) | null
+  fail?: ((err: UniGetLocationFail) => void) | null
+}
+
+// 计时器。tsconfig 的 lib 只有 ES2020（刻意不带 DOM：UTS 在原生端没有 window），
+// 而 setTimeout 属于 DOM / Node，不在 ES 标准库里。UTS 运行时三端都提供它，
+// 返回值是一个数字句柄。
+declare function setTimeout(handler: () => void, timeout?: number): number
+declare function clearTimeout(id: number): void
+
 declare const uni: {
   request<T>(options: UniRequestOptions<T>): void
   getStorageSync(key: string): any
   setStorageSync(key: string, value: any): void
   removeStorageSync(key: string): void
+  getLocation(options: UniGetLocationOptions): void
 }

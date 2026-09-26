@@ -31,10 +31,31 @@ web 那边踩过一次假绿（tsconfig 的 include 写成 `src/**/*.ts` 就漏�
 
 ## 它**没有**覆盖什么（说出来，别让读者以为都盖住了）
 
-.uvue 里的模板表达式。tsc 不解析 SFC。客户端为此把契约字段的读取全部收进
-app/src/api/view.uts，模板只碰那里定义的 Row 类型 —— 但这是一条靠人守的约定，
-不是闸门。真的编 .uvue 的是 DCloud 自己的编译器，那道闸门在
-scripts/check_app_build.py（要 node_modules，跑在 CI 的独立 job 里）。
+.uvue 里的模板表达式与 <script> 块。tsc 不解析 SFC。客户端为此把契约字段的
+读取与**构造**全部收进 app/src/api/view.uts，页面只碰那里定义的类型与函数。
+真的编 .uvue 的是 DCloud 自己的编译器，由 scripts/check_app_build.py 包一层：
+裸的 `uni build` 把类型错误打成 warning 然后 exit 0，那一层把 warning 当失败。
+**它拦得住** —— 但要 500 多个 npm 包，只在 CI 的独立 client job 里跑。
+
+所以「页面不碰契约类型」在这一层原本是**一条靠人守的约定，不是闸门**。它被
+违反过一次：多门店（00020）把 store_id 加进了 OrderCreateRequest 的 required，
+结算页在 .uvue 里写着 `const req: OrderCreateRequest = { items, address_id }`。
+这里看不见 .uvue；check_app_build.py 看得见（实测把旧写法塞回去它 exit 1，
+报的正是 `Property 'store_id' is missing`），但合并时本地只跑了 check-all.sh
+与 make test-db，它没被跑到。结果是 App 对着新后端结算一律 422。
+
+下面的 check_pages() 不是替代那道闸门，是**把发现的时间提前**：从一个要装
+500 个包的 CI job，挪进每个人本地都跑、零 node_modules 的 check-all.sh。
+
+现在它有了一个执行者，check_pages()，查两件事：
+  1. .uvue 里**不许 import schema.uts**。页面要的类型从 view.uts 拿；
+  2. 收契约请求的那几个接口函数（REQUEST_FNS），**不许直接收一个对象字面量**。
+     字面量在 .uvue 里写，契约改了字段名它不会红；换成 view.uts 里的构造函数，
+     这里就看得见。
+
+**它的边界**：这是正则，不是类型检查。先把字面量赋给一个变量、再把变量传进去，
+它看不出来。它守的是「在页面里就地写契约请求」这个真实发生过的形状，
+不是所有可能的绕法。
 """
 import os
 import re
@@ -48,6 +69,44 @@ SRC = os.path.join(ROOT, 'app', 'src')
 TYPECHECK = os.path.join(ROOT, 'app', 'typecheck')
 
 IMPORT_RE = re.compile(r"""(from\s+|import\s*\(\s*)(['"])([^'"]+)\.uts\2""")
+
+
+# 收契约请求类型的接口函数（app/src/api/client.uts）。它们的第一个参数是一个
+# 契约 schema；页面必须传 view.uts 里某个构造函数的返回值，不许就地写字面量。
+REQUEST_FNS = ('listProducts', 'search', 'previewOrder', 'createOrder')
+
+SCHEMA_IMPORT_RE = re.compile(r"""from\s+['"][^'"]*/schema\.uts['"]""")
+INLINE_LITERAL_RE = re.compile(r'\b(%s)\(\s*\{' % '|'.join(REQUEST_FNS))
+
+
+def check_pages():
+    """.uvue 里不许直接碰契约类型。返回违规清单（空表示通过）。见模块文档第二节。"""
+    problems = []
+    for dirpath, _dirs, files in os.walk(SRC):
+        for name in files:
+            if not name.endswith('.uvue'):
+                continue
+            path = os.path.join(dirpath, name)
+            rel = os.path.relpath(path, ROOT)
+            with open(path, encoding='utf-8') as f:
+                text = f.read()
+            lines = text.splitlines()
+            # **对整个文件匹配，不逐行**。这个仓库的页面里调用几乎都是分行写的：
+            #     listProducts(
+            #       { page: 1, page_size: 20 },
+            # 逐行匹配的第一版在这个形状上是全绿的 —— 变异验证时把字面量写回列表页，
+            # 闸门照样 OK。INLINE_LITERAL_RE 里的 \s* 本来就能跨行，只是没给它机会。
+            for regex, what in ((SCHEMA_IMPORT_RE, None), (INLINE_LITERAL_RE, 'literal')):
+                for m in regex.finditer(text):
+                    lineno = text.count('\n', 0, m.start()) + 1
+                    src = lines[lineno - 1].strip()
+                    if what is None:
+                        problems.append('%s:%d  直接 import 了 schema.uts：%s'
+                                        % (rel, lineno, src))
+                    else:
+                        problems.append('%s:%d  %s() 直接收了一个对象字面量：%s'
+                                        % (rel, lineno, m.group(1), src))
+    return problems
 
 
 def collect():
@@ -66,6 +125,18 @@ def collect():
 
 
 def main():
+    page_problems = check_pages()
+    if page_problems:
+        print('FAIL: 页面（.uvue）里直接碰了契约类型：')
+        for p in page_problems:
+            print('  - ' + p)
+        print('')
+        print('.uvue 不在 tsc 的视野里，DCloud 编译器又只打 warning —— 契约改了')
+        print('这些地方不会红。把请求的构造挪进 app/src/api/view.uts（那里有')
+        print('productListQuery / searchRequest / orderRequest 可以照着写），')
+        print('页面只传原始值。理由见本脚本的模块文档。')
+        return 1
+
     if len(sys.argv) != 2:
         print('用法: check_app_types.py <typescript 的 npx 包名，例如 typescript@5.9.2>')
         return 2

@@ -6,6 +6,9 @@
         <view class="gap-s"></view>
         <text class="t-display">{{ greeting }}</text>
         <text class="t-sub head-sub">慢一点，好好喝一杯</text>
+        <!-- 「由哪家店服务你」要看得见：价格与在售范围都跟着它走（多门店，00020）。
+             不显示的话，用户换个地方打开 App、同一件商品价格变了，他不会知道为什么。 -->
+        <text v-if="storeLine != ''" class="t-hint store-line">{{ storeLine }}</text>
 
         <!-- 首页只放一个入口，真正的输入框在搜索页：首页的输入框一获得焦点就弹键盘、
              挡住商品，而搜索结果本来就要一整页来放。 -->
@@ -50,7 +53,7 @@
 
       <view v-if="!loading && rows.length == 0 && error == ''" class="empty">
         <view class="empty-mark"><text class="empty-mark-text">☕</text></view>
-        <text class="t-sub">店里还没有上架商品</text>
+        <text class="t-sub">{{ outOfRange ? '当前位置暂不在配送范围内' : '店里还没有上架商品' }}</text>
       </view>
       <view v-if="loading && rows.length == 0" class="empty">
         <text class="t-hint">正在加载…</text>
@@ -62,7 +65,8 @@
 
 <script>
 import { listProducts, ApiFailure } from '@/api/client.uts'
-import { productRow, ProductRow } from '@/api/view.uts'
+import { productRow, productListQuery, ProductRow } from '@/api/view.uts'
+import { ensureStore, CurrentStore } from '@/api/store.uts'
 
 export default {
   data() {
@@ -73,6 +77,8 @@ export default {
       error: '',
       greeting: '',
       statusBarHeight: 0,
+      storeLine: '',
+      outOfRange: false,
     }
   },
   onLoad() {
@@ -88,8 +94,32 @@ export default {
     load() {
       this.loading = true
       this.error = ''
+      // 先定门店，再拉列表：列表的价格与在售范围是按门店算的。
+      // 定位被拒绝不会走到 onErr —— 那是回落默认店的正常路径（store.uts 文件头）。
+      ensureStore(
+        (s: CurrentStore) => {
+          this.storeLine = s.storeId == null ? '' : ('由「' + s.name + '」为你配送')
+          if (s.storeId == null) {
+            // match_type = none：这家商家不送这里，也没配默认店。
+            // 这是一个成功的结果，不是错误 —— 不显示「重新加载」。
+            this.outOfRange = true
+            this.rows = []
+            this.total = 0
+            this.loading = false
+            return
+          }
+          this.outOfRange = false
+          this.fetch(s.storeId!)
+        },
+        (f: ApiFailure) => {
+          this.error = f.message
+          this.loading = false
+        }
+      )
+    },
+    fetch(storeId: number) {
       listProducts(
-        { page: 1, page_size: 20 },
+        productListQuery(1, 20, storeId),
         (page) => {
           const rows: ProductRow[] = []
           for (let i = 0; i < page.items.length; i++) {
@@ -116,6 +146,9 @@ export default {
 </script>
 
 <style>
+.store-line {
+  margin-top: 6px;
+}
 .head {
   padding-left: 20px;
   padding-right: 20px;

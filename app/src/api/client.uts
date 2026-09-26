@@ -38,6 +38,7 @@ import {
   RefreshTokenRequest,
   SearchRequest,
   SearchResponse,
+  StoreResolveResult,
 } from './schema.uts'
 import { getBaseUrl, loadSession } from './config.uts'
 
@@ -276,6 +277,39 @@ function decodeFailure(status : number) : ApiFailure {
 // 接口。一条一个函数，形状全部来自 schema.uts。
 // ---------------------------------------------------------------------------
 
+/**
+ * GET /stores/resolve：「哪家店在服务你」。契约里 security: []，不需要登录。
+ *
+ * lat / lng 要么都给要么都不给。**都不给是一条正常路径**，不是降级：用户定的
+ * 规则是「拒绝授权定位」与「不在任何围栏内」走同一条路 —— 回落全国配送的
+ * 默认店；商家没配默认店就是 match_type = none、stores 为空、**HTTP 200**
+ * （「我们不送那儿」是一个正常的查询结果，不是错误）。
+ *
+ * 坐标是 WGS-84（契约的 GEOGRAPHY(POLYGON, 4326)），调用方要按这个取，
+ * 见 store.uts 里那段 GCJ-02 的说明。
+ */
+export function resolveStore(
+  lat : number | null,
+  lng : number | null,
+  onOk : (res : StoreResolveResult) => void,
+  onErr : FailureHandler
+) {
+  const parts : string[] = []
+  if (lat != null && lng != null) {
+    pushIf(parts, param('lat', lat!))
+    pushIf(parts, param('lng', lng!))
+  }
+  send('GET', '/stores/resolve', queryString(parts), null, null,
+    (_s : number, text : string, _r : boolean) => {
+    const body = JSON.parse<StoreResolveResult>(text)
+    if (body == null) {
+      onErr(decodeFailure(200))
+      return
+    }
+    onOk(body!)
+  }, onErr)
+}
+
 export function listProducts(
   query : ListProductsQuery,
   onOk : (page : ListProductsResponse) => void,
@@ -285,6 +319,10 @@ export function listProducts(
   pushIf(parts, param('page', query.page))
   pushIf(parts, param('page_size', query.page_size))
   pushIf(parts, param('category_id', query.category_id))
+  // 多门店（00020）之后价格与可见性都按门店算。不带它服务端回落默认店 ——
+  // 能用，但浏览按默认店、结算按定位解析出来的店，两个价格就可能对不上。
+  // 所以调用方一律传 store.uts 里解析好的那一个，见 store.uts 文件头。
+  pushIf(parts, param('store_id', query.store_id))
   send('GET', '/products', queryString(parts), null, null,
     (_s : number, text : string, _r : boolean) => {
     const body = JSON.parse<ListProductsResponse>(text)
@@ -318,13 +356,23 @@ export function search(
   }, onErr)
 }
 
-/** GET /products/{product_id}。**后端尚未接上**，失败时 failure.notImplemented 为 true。 */
+/**
+ * GET /products/{product_id}。
+ *
+ * storeId 与列表页那个是同一个（store.uts 解析出来的）：详情页的 SKU 价格要和
+ * 列表上那个价格区间、和结算时扣的钱是同一家店算出来的。传 null 服务端回落默认店。
+ */
 export function getProduct(
   productId : number,
+  storeId : number | null,
   onOk : (detail : ProductDetail) => void,
   onErr : FailureHandler
 ) {
-  send('GET', '/products/' + productId.toString(), '', null, null,
+  const parts : string[] = []
+  if (storeId != null) {
+    pushIf(parts, param('store_id', storeId!))
+  }
+  send('GET', '/products/' + productId.toString(), queryString(parts), null, null,
     (_s : number, text : string, _r : boolean) => {
       const body = JSON.parse<ProductDetail>(text)
       if (body == null) {

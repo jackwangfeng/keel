@@ -64,7 +64,8 @@
 
 <script>
 import { search, ApiFailure } from '@/api/client.uts'
-import { searchHitRow, ProductRow } from '@/api/view.uts'
+import { searchHitRow, searchRequest, ProductRow } from '@/api/view.uts'
+import { ensureStore, CurrentStore } from '@/api/store.uts'
 
 export default {
   data() {
@@ -89,8 +90,23 @@ export default {
       const mine = this.seq
       this.state = 'loading'
       this.searched = query
+      // 检索结果的价格与在售范围同样按门店算（契约：store_id 与 GET /products
+      // 的同名参数逐字同义）。门店通常已经在首页解析过了，这里是同步回调。
+      ensureStore(
+        (s: CurrentStore) => {
+          if (mine != this.seq) return
+          this.run(query, s.storeId, mine)
+        },
+        (f: ApiFailure) => {
+          if (mine != this.seq) return
+          this.error = f.message
+          this.state = 'error'
+        }
+      )
+    },
+    run(query: string, storeId: number | null, mine: number) {
       search(
-        { query: query, size: 20 },
+        searchRequest(query, 20, storeId),
         (res) => {
           if (mine != this.seq) return
           const rows: ProductRow[] = []
