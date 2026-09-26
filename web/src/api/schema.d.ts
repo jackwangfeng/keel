@@ -8408,6 +8408,15 @@ export interface paths {
          *
          *     `freight_cents` 是退货退款场景下客服裁定的退运费金额 ——
          *     一期没有可自动判定的口径，故开放给审核人填写。
+         *
+         *     **谁能审**：与发货同一个判据（`StaffRole` 矩阵里「门店库存」那一行），
+         *     按订单的履约门店判——管理员与操作员全店可审，大区管理员限本大区门店，
+         *     门店管理员限自己门店。
+         *
+         *     **沙箱**：服务端开着沙箱支付（`KEEL_PAYMENT_SANDBOX`）时，退款单进入
+         *     `30 退款中` 的同一个事务里由沙箱渠道回调入账（与
+         *     `/webhooks/refunds/{channel}` 同一条验签、金额校验、幂等路径），
+         *     响应里看到的即 `40 已退款`。沙箱关闭时停在 `30`，等真实渠道回调。
          */
         post: {
             parameters: {
@@ -8469,7 +8478,11 @@ export interface paths {
                         action: "approve" | "reject";
                         /** @description action=reject 时必填 */
                         reject_reason?: string;
-                        /** @description 审核裁定的退运费金额，省略则为 0 */
+                        /**
+                         * @description 审核裁定的退运费金额，**只对退货退款（`refund_type=2`）生效**；
+                         *     省略则保持申请时的值（退货退款申请时为 0）。仅退款的运费按规则
+                         *     计算（未发货整单退全退，其余不退），传一个不同的值回 422。
+                         */
                         freight_cents?: components["schemas"]["Money"];
                     };
                 };
@@ -8524,6 +8537,121 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/refunds/{refund_no}/receipt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 确认收到退货（后台 API）
+         * @description 退货退款的第二步：商家收到买家寄回的货，退款单 `20 待买家退货 → 30 退款中`，
+         *     对应 `refund_status_transitions` 的 `(20,30)`。
+         *
+         *     `RefundStatus` 的状态机里一直画着「商家收货」这条边，而此前没有任何一条
+         *     接口走它——退货退款会永远停在 `20`。本接口补上这一步。
+         *
+         *     判权与审核相同（按订单的履约门店，「门店库存」那一行）。
+         *     进入 `30` 之后的行为与审核通过（仅退款）一致：沙箱开着时同一事务里入账到 `40`。
+         *
+         *     **不回补库存**：退回来的货成色未知，验货入库是商家的手工库存调整，
+         *     不自动加回可售（数据模型 §11）。
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /**
+                     * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+                     *
+                     *     它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+                     *     而例外成立的前提是平台级鉴权：
+                     *
+                     *     · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+                     *       读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+                     *       行级安全落在这家店上。
+                     *     · **商家级员工带了这个头：403**
+                     *       （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+                     *       静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+                     *     · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+                     *       **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+                     *       实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+                     *       请求其余部分指名的东西不存在是 422。
+                     *     · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+                     *       买家侧对它照旧 404。
+                     *     · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+                     *       （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+                     *
+                     *     后台每一条挂后台会话的操作都声明了它（机械核对：
+                     *     `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+                     */
+                    "X-Keel-Merchant"?: components["parameters"]["KeelMerchant"];
+                    /**
+                     * @description 客户端生成的 UUID。幂等作用域为 `(接口 scope, user_id, key)`，
+                     *     有效期 24h，过期后同一 key 可复用（见数据模型文档 §11）。
+                     *
+                     *     · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
+                     *       并带 `Idempotency-Replayed: true` 响应头
+                     *     · **同 key 正在处理中**：`409` + `Retry-After`，
+                     *       type=https://keel.dev/problems/idempotency-key-in-flight，
+                     *       客户端应退避重试，不要当成业务失败
+                     *     · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
+                     *       type=https://keel.dev/problems/idempotency-key-reused。
+                     *       宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
+                     *       那会让用户以为下单成功了而实际什么都没发生
+                     *     · 首次执行失败（存档为失败态）时同样回放该失败响应；
+                     *       确需重试的场景请换一个新 key
+                     */
+                    "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    /** @description 退款单对外编号，不可枚举 */
+                    refund_no: components["parameters"]["RefundNo"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Refund"];
+                    };
+                };
+                403: components["responses"]["Problem"];
+                404: components["responses"]["Problem"];
+                /**
+                 * @description · 当前状态不允许确认收货（仅 `20 待买家退货` 可调）——
+                 *       .../refund-status-not-receivable
+                 *     · 同一 Idempotency-Key 正在处理中 —— .../idempotency-key-in-flight
+                 */
+                409: {
+                    headers: {
+                        /** @description 仅幂等键处理中时返回，建议退避秒数 */
+                        "Retry-After"?: number;
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                422: components["responses"]["IdempotencyKeyReused"];
+                default: components["responses"]["Problem"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/webhooks/refunds/{channel}": {
         parameters: {
             query?: never;
@@ -8551,6 +8679,14 @@ export interface paths {
          *     因此本接口不接受「退款失败」的终局语义，失败只体现为「还没退到」。
          *
          *     签名验证失败返回 401，且不得泄露任何内部状态。
+         *
+         *     **报文与验签**与支付回调同构：本期实现的是 Keel 的规范报文
+         *     `{refund_no, channel_refund_id, amount_cents, refunded_at?}` 加
+         *     `X-Keel-Signature: hex(HMAC-SHA256(该店该渠道的回调密钥, 原始请求体))`，
+         *     没配密钥一律拒绝。真实渠道的报文与验签由适配器翻译，业务这一段不变。
+         *
+         *     入账同一事务里还按规则处理库存与券（数据模型 §11）：**未发货**的退款回补
+         *     库存到履约门店；整单的货全部退完才把券退回「未使用」（已过期不退）。
          */
         post: {
             parameters: {
@@ -9862,7 +9998,7 @@ export interface components {
              *     **本行还可退的件数 = `quantity - refunded_qty - refunding_qty`。**
              *
              *     这不是持久化列，是 `refund_items ⋈ refunds WHERE status IN (10,20,30)`
-             *     的聚合，定义式见数据模型 §10。**数据库的 CHECK 拦不住在途超退**，
+             *     的聚合，定义式见数据模型 §11。**数据库的 CHECK 拦不住在途超退**，
              *     服务端必须在同一事务内复算——不要以为提交上去有兜底。
              *     没有这个字段，客户端算不出可退数量，只能先提交再被 409
              *     `refund-quantity-exceeded` 打回——那是把校验规则藏在服务端错误里。
@@ -9919,8 +10055,11 @@ export interface components {
          *        └─撤销──► 60 已取消   （20 超时未寄回 / 买家撤销，同样进 60）
          *     ```
          *
-         *     合法迁移（`refund_status_transitions`）：
+         *     合法迁移（`refund_status_transitions`，由数据库触发器执行）：
          *     `(10,20) (10,30) (10,50) (10,60) (20,30) (20,60) (30,40)`。
+         *     每条边由谁走：`10→20/30/50` 审核（`/admin/refunds/{refund_no}/audit`）；
+         *     `20→30` 商家确认收到退货（`/admin/refunds/{refund_no}/receipt`）；
+         *     `10/20→60` 买家撤回；`30→40` 渠道回调（`/webhooks/refunds/{channel}`）。
          *
          *     `50 已拒绝` 与 `30 退款中` 失败**不是一回事**，客户端要分开展示：
          *     前者是商家驳回，要展示 `reject_reason` 并允许重新申请；

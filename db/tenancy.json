@@ -210,8 +210,7 @@
     },
     "refund_status_transitions": {
       "class": "shared-reference",
-      "documented_only": true,
-      "reason": "退款状态机（数据模型 §11），同上。"
+      "reason": "退款状态机（数据模型 §11），同上。00034 建出来之后由 refunds 上的触发器执行，keel_app 只读。"
     },
     "staff": {
       "class": "tenant-nullable",

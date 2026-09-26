@@ -22,10 +22,54 @@ import (
 // service/order_fulfillment.go 与 service/refund.go 里。
 
 // AdminOrderHandler 是后台订单与售后那几条接口。
-type AdminOrderHandler struct{ svc *service.AdminOrderService }
+type AdminOrderHandler struct {
+	svc     *service.AdminOrderService
+	refunds *service.RefundService
+}
 
-func NewAdminOrderHandler(s *service.AdminOrderService) *AdminOrderHandler {
-	return &AdminOrderHandler{svc: s}
+func NewAdminOrderHandler(s *service.AdminOrderService, r *service.RefundService) *AdminOrderHandler {
+	return &AdminOrderHandler{svc: s, refunds: r}
+}
+
+// Audit 实现 POST /api/v1/admin/refunds/:refund_no/audit。
+//
+// 请求体绑的是契约生成的匿名请求体类型：契约里改一个字段名，这里当场编译失败。
+func (h *AdminOrderHandler) Audit(c *gin.Context) {
+	var raw api.PostAdminRefundsRefundNoAuditJSONBody
+	if err := c.ShouldBindJSON(&raw); err != nil {
+		problem.Write(c, http.StatusUnprocessableEntity,
+			problem.TypeInvalidRequest, "请求体不是合法的 JSON")
+		return
+	}
+	req := service.AuditRequest{Action: string(raw.Action), RejectReason: raw.RejectReason}
+	if raw.FreightCents != nil {
+		f := int64(*raw.FreightCents)
+		req.FreightCents = &f
+	}
+	r, replayed, err := h.refunds.Audit(c.Request.Context(), c.Param("refund_no"), req,
+		c.GetHeader(idempotencyKeyHeader))
+	if err != nil {
+		writeRefundError(c, err)
+		return
+	}
+	if replayed {
+		c.Header(idempotencyReplayedHeader, "true")
+	}
+	c.JSON(http.StatusOK, apiRefund(r))
+}
+
+// Receive 实现 POST /api/v1/admin/refunds/:refund_no/receipt（确认收到退货）。
+func (h *AdminOrderHandler) Receive(c *gin.Context) {
+	r, replayed, err := h.refunds.Receive(c.Request.Context(), c.Param("refund_no"),
+		c.GetHeader(idempotencyKeyHeader))
+	if err != nil {
+		writeRefundError(c, err)
+		return
+	}
+	if replayed {
+		c.Header(idempotencyReplayedHeader, "true")
+	}
+	c.JSON(http.StatusOK, apiRefund(r))
 }
 
 // Ship 实现 POST /api/v1/admin/orders/:order_no/shipments。

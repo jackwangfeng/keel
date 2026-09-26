@@ -218,6 +218,9 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	// 认得的报文必须是同一个形状、同一把密钥、同一个签名算法。两个实例的话，
 	// 它们分叉时的症状是「沙箱支付 401」，看上去像密钥配错了。
 	payments := service.NewPaymentService(repo, payment, nil)
+	// 退款与支付共用同一份渠道配置（沙箱开关、回调密钥），见 service/refund.go 的文件头。
+	refunds := service.NewRefundService(repo, payment, nil)
+	rh := handler.NewRefundHandler(refunds)
 
 	v1 := r.Group("/api/v1", res.Middleware())
 	v1.GET("/products", ph.List)
@@ -291,6 +294,12 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	// 订单后半程（00033）：买家取消与确认收货。两条都是本地事务，幂等键必填。
 	v1.POST("/orders/:order_no/cancel", auth.Bearer(signer, nil), oh.Cancel)
 	v1.POST("/orders/:order_no/confirm", auth.Bearer(signer, nil), oh.Confirm)
+	// 售后（00034）。金额一律由服务端按优惠分摊倒算，请求体里没有金额。
+	v1.POST("/orders/:order_no/refunds", auth.Bearer(signer, nil), rh.Create)
+	v1.GET("/orders/:order_no/refunds", auth.Bearer(signer, nil), rh.ListForOrder)
+	v1.GET("/refunds", auth.Bearer(signer, nil), rh.ListMine)
+	v1.GET("/refunds/:refund_no", auth.Bearer(signer, nil), rh.Detail)
+	v1.POST("/refunds/:refund_no/cancel", auth.Bearer(signer, nil), rh.Cancel)
 
 	// 优惠券的买家侧四条（契约 Coupon tag）。四条都要令牌：我的券、本单可用券
 	// 读的是「我的」东西；领券中心要回「我已经领了几张」；领券写的是「我的」券包。
@@ -317,6 +326,9 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	// 接口，差别只在这一行有没有 auth.Bearer —— 所以这一行是要盯着看的那一行。
 	v1.POST("/webhooks/payments/:channel",
 		handler.NewPaymentWebhookHandler(payments).Notify)
+	// 退款回调：与支付回调同构（Host 定租户、HMAC 定真假、渠道流水号唯一）。
+	v1.POST("/webhooks/refunds/:channel",
+		handler.NewRefundWebhookHandler(refunds).Notify)
 
 	// -----------------------------------------------------------------------
 	// 后台（契约约定 6：后台接口一律挂在 /admin/ 前缀下，与前台分开鉴权）
@@ -471,9 +483,12 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 
 	// 券管理（契约 /admin/coupon-templates 那一段）。角色检查在业务层：
 	// 本期只放商家级的管理员与操作员（role 1、2），见 service/admin_coupon.go 的文件头。
-	// 订单后半程（00033）：发货。判权按门店库存那一行（service/order_fulfillment.go）。
-	aoh := handler.NewAdminOrderHandler(service.NewAdminOrderService(repo))
+	// 订单后半程：发货（00033）、退款审核与确认收到退货（00034）。
+	// 判权一律按订单的履约门店、取门店库存那一行（service/order_fulfillment.go 的 Ship 上）。
+	aoh := handler.NewAdminOrderHandler(service.NewAdminOrderService(repo), refunds)
 	v1.POST("/admin/orders/:order_no/shipments", staffAuth, aoh.Ship)
+	v1.POST("/admin/refunds/:refund_no/audit", staffAuth, aoh.Audit)
+	v1.POST("/admin/refunds/:refund_no/receipt", staffAuth, aoh.Receive)
 
 	cpa := handler.NewAdminCouponHandler(service.NewAdminCouponService(repo))
 	v1.GET("/admin/coupon-templates", staffAuth, cpa.List)

@@ -41,6 +41,7 @@ func (h *OrderHandler) Detail(c *gin.Context) {
 	base := apiOrder(d.Order)
 	items := apiOrderItems(d.Items)
 	payments := apiPayments(d.Payments)
+	refunds := apiRefunds(d.Refunds)
 	receiver := api.ReceiverSnapshot{
 		ReceiverName: d.Receiver.ReceiverName,
 		Phone:        d.Receiver.Phone,
@@ -100,11 +101,8 @@ func (h *OrderHandler) Detail(c *gin.Context) {
 		Items:    &items,
 		Payments: &payments,
 
-		// Refunds 刻意缺席：退款域的三张表（refunds / refund_items /
-		// refund_logs）本轮没有建，所以这里不是「这一单没有退款」，而是
-		// **没查过**。回一个空数组会让详情页显示「无售后记录」——
-		// 一句在退款上线之前都不会被纠正的假话。
-		// 这笔账挂在 contract_test.go 的 NotYetImplementedResponse 里。
+		// 退款域（00034）落地之后这是**查过的**：空数组的意思就是「这一单没有售后」。
+		Refunds: &refunds,
 	})
 }
 
@@ -116,6 +114,7 @@ func apiOrderItems(rows []repository.OrderItem) []api.OrderItem {
 		discount := api.Money(it.DiscountCents)
 		product := it.ProductID
 		refunded := int(it.RefundedQty)
+		refunding := int(it.RefundingQty)
 
 		// 规格快照解不开时给一个空 map，**不让整条请求失败**。
 		//
@@ -145,14 +144,10 @@ func apiOrderItems(rows []repository.OrderItem) []api.OrderItem {
 			// NOT NULL DEFAULT 0），所以它填得出来，今天恒为 0 也照填。
 			RefundedQty: &refunded,
 
-			// RefundingQty 刻意缺席：它不是持久化列，是
-			// `refund_items ⋈ refunds WHERE status IN (10,20,30)` 的聚合，
-			// 而那两张表本轮没建 —— 它是「没查过」，不是 0。
-			//
-			// 这一笔**挂不进** contract_test.go 的 NotYetImplementedResponse：
-			// 那套机制只对账成功响应的顶层属性，而这个字段在 OrderItem 里，
-			// 嵌了一层。所以它只能记在这里和报告里，这是那套清账机制当前的
-			// 一个边界，已列为 defer。
+			// RefundingQty 是 `refund_items ⋈ refunds WHERE status IN (10,20,30)`
+			// 的聚合（§11），由 service 在读订单的同一个事务里补上。
+			// 客户端据此算「还可退 = quantity - refunded_qty - refunding_qty」。
+			RefundingQty: &refunding,
 		})
 	}
 	return out

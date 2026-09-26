@@ -475,13 +475,16 @@ func TestOrderDetailCarriesSnapshotAndItems(t *testing.T) {
 	}
 }
 
-// 详情不声称自己知道退款。
+// 详情里的 refunds 是**查过的**：一张退款单都没有时是空数组，不是缺席。
 //
-// 退款域的三张表本轮没建，所以 refunds 是「没查过」，不是「没有退款」。
-// 这条同时是 contract_test.go 那份挂账的反向守卫。
-func TestOrderDetailDoesNotClaimRefundsItDoesNotHave(t *testing.T) {
+// 这条测试原先叫 TestOrderDetailDoesNotClaimRefundsItDoesNotHave，断言的是反面
+// （退款域没建，refunds 必须缺席，而且 contract_test.go 里挂着那一笔账）。
+// 退款域（00034）落地之后它翻了个面：挂账删掉了，缺席反而是 bug ——
+// 客户端会把「字段不在」读成「没查过」，详情页就不敢显示「无售后记录」。
+// 每一行的 refunding_qty 同理必须在（0 也要给），客户端靠它算还可退几件。
+func TestOrderDetailListsRefundsEvenWhenThereAreNone(t *testing.T) {
 	tok := tokenA(t)
-	no := placeOrderFor(t, tok, seedAddressA, "refundgap")
+	no := placeOrderFor(t, tok, seedAddressA, "refundlist")
 
 	w := getAuth(t, hostA, "/api/v1/orders/"+no, tok)
 	if w.Code != http.StatusOK {
@@ -491,19 +494,21 @@ func TestOrderDetailDoesNotClaimRefundsItDoesNotHave(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &m); err != nil {
 		t.Fatal(err)
 	}
-	if _, present := m["refunds"]; present {
-		t.Fatalf("响应里出现了 refunds（%s）—— 退款域真的实现了？"+
-			"那就把 contract_test.go 里 /orders/{order_no} 的 "+
-			"NotYetImplementedResponse 那一行删掉", m["refunds"])
+	if string(m["refunds"]) != "[]" {
+		t.Fatalf("没有退款的订单，详情里的 refunds 应是 []，实得 %q", m["refunds"])
 	}
 	r := routeOf(t, http.MethodGet, "/orders/{order_no}")
-	if _, listed := r.NotYetImplementedResponse["refunds"]; !listed {
-		t.Fatal("NotYetImplementedResponse 里没有 refunds —— 挂账清单烂了")
+	if _, listed := r.NotYetImplementedResponse["refunds"]; listed {
+		t.Fatal("refunds 已经实现了，NotYetImplementedResponse 里还挂着它 —— 挂账清单烂了")
 	}
-	// 阳性对照：payments 在（它是查过的），所以「refunds 不在」不是因为
-	// 整个响应体是空的。
-	if _, ok := m["payments"]; !ok {
-		t.Fatalf("响应里连 payments 都没有 —— 这条断言没有区分力：%s", w.Body.String())
+	var items []map[string]json.RawMessage
+	if err := json.Unmarshal(m["items"], &items); err != nil || len(items) == 0 {
+		t.Fatalf("详情里没有订单行：%v %s", err, m["items"])
+	}
+	for _, it := range items {
+		if string(it["refunding_qty"]) != "0" {
+			t.Fatalf("没有在途退款的行，refunding_qty 应是 0，实得 %q", it["refunding_qty"])
+		}
 	}
 }
 

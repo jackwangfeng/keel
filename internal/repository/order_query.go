@@ -58,6 +58,10 @@ type OrderItem struct {
 	AmountCents   int64
 	DiscountCents int64
 	RefundedQty   int32
+	// RefundingQty 是在途退款占用的件数（契约 OrderItem.refunding_qty）。
+	// 它不是持久化列（§11），ListOrderItems 不填它，由订单详情在同一个事务里
+	// 用 RefundingQtyByItem 补上。
+	RefundingQty int32
 }
 
 // Payment 是订单详情里的一笔支付记录（契约的 PaymentRecord）。

@@ -54,6 +54,8 @@ type OrderDetail struct {
 	Store    StoreSnapshot
 	Items    []repository.OrderItem
 	Payments []repository.Payment
+	// Refunds 是这一单的全部退款单，按申请时间倒序（契约 OrderDetail.refunds）。
+	Refunds []repository.Refund
 }
 
 // StoreSnapshot 是从 orders.store_snapshot 里读回来的门店 / 大区展示信息
@@ -167,7 +169,19 @@ func (s *OrderService) Detail(ctx context.Context, orderNo string) (OrderDetail,
 		if out.Items, err = tx.ListOrderItems(ctx, order.ID); err != nil {
 			return err
 		}
-		out.Payments, err = tx.ListOrderPayments(ctx, order.ID)
+		if out.Payments, err = tx.ListOrderPayments(ctx, order.ID); err != nil {
+			return err
+		}
+		// 售后（00034）：退款单与每一行的在途件数，与订单同一个事务、同一个快照 ——
+		// 分两次读的话，「还可退 = 购买 - 已退 - 在途」三个数可能来自两个时刻。
+		inflight, err := tx.RefundingQtyByItem(ctx, order.ID)
+		if err != nil {
+			return err
+		}
+		for i := range out.Items {
+			out.Items[i].RefundingQty = inflight[out.Items[i].ID]
+		}
+		out.Refunds, err = tx.ListOrderRefunds(ctx, order.ID)
 		return err
 	})
 	if err != nil {

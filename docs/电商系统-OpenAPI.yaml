@@ -4192,6 +4192,15 @@ paths:
 
         `freight_cents` 是退货退款场景下客服裁定的退运费金额 ——
         一期没有可自动判定的口径，故开放给审核人填写。
+
+        **谁能审**：与发货同一个判据（`StaffRole` 矩阵里「门店库存」那一行），
+        按订单的履约门店判——管理员与操作员全店可审，大区管理员限本大区门店，
+        门店管理员限自己门店。
+
+        **沙箱**：服务端开着沙箱支付（`KEEL_PAYMENT_SANDBOX`）时，退款单进入
+        `30 退款中` 的同一个事务里由沙箱渠道回调入账（与
+        `/webhooks/refunds/{channel}` 同一条验签、金额校验、幂等路径），
+        响应里看到的即 `40 已退款`。沙箱关闭时停在 `30`，等真实渠道回调。
       parameters:
         - $ref: '#/components/parameters/KeelMerchant'
         - $ref: '#/components/parameters/RefundNo'
@@ -4213,7 +4222,10 @@ paths:
                   description: action=reject 时必填
                 freight_cents:
                   $ref: '#/components/schemas/Money'
-                  description: 审核裁定的退运费金额，省略则为 0
+                  description: |
+                    审核裁定的退运费金额，**只对退货退款（`refund_type=2`）生效**；
+                    省略则保持申请时的值（退货退款申请时为 0）。仅退款的运费按规则
+                    计算（未发货整单退全退，其余不退），传一个不同的值回 422。
       responses:
         '200':
           description: OK
@@ -4246,6 +4258,51 @@ paths:
               schema: { $ref: '#/components/schemas/Problem' }
         default: { $ref: '#/components/responses/Problem' }
 
+  /admin/refunds/{refund_no}/receipt:
+    post:
+      tags: [Admin, Refund]
+      summary: 确认收到退货（后台 API）
+      description: |
+        退货退款的第二步：商家收到买家寄回的货，退款单 `20 待买家退货 → 30 退款中`，
+        对应 `refund_status_transitions` 的 `(20,30)`。
+
+        `RefundStatus` 的状态机里一直画着「商家收货」这条边，而此前没有任何一条
+        接口走它——退货退款会永远停在 `20`。本接口补上这一步。
+
+        判权与审核相同（按订单的履约门店，「门店库存」那一行）。
+        进入 `30` 之后的行为与审核通过（仅退款）一致：沙箱开着时同一事务里入账到 `40`。
+
+        **不回补库存**：退回来的货成色未知，验货入库是商家的手工库存调整，
+        不自动加回可售（数据模型 §11）。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+        - $ref: '#/components/parameters/RefundNo'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: OK
+          headers:
+            Idempotency-Replayed: { $ref: '#/components/headers/IdempotencyReplayed' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Refund' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409':
+          description: |
+            · 当前状态不允许确认收货（仅 `20 待买家退货` 可调）——
+              .../refund-status-not-receivable
+            · 同一 Idempotency-Key 正在处理中 —— .../idempotency-key-in-flight
+          headers:
+            Retry-After:
+              description: 仅幂等键处理中时返回，建议退避秒数
+              schema: { type: integer }
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422': { $ref: '#/components/responses/IdempotencyKeyReused' }
+        default: { $ref: '#/components/responses/Problem' }
+
   /webhooks/refunds/{channel}:
     post:
       tags: [Refund]
@@ -4267,6 +4324,14 @@ paths:
         因此本接口不接受「退款失败」的终局语义，失败只体现为「还没退到」。
 
         签名验证失败返回 401，且不得泄露任何内部状态。
+
+        **报文与验签**与支付回调同构：本期实现的是 Keel 的规范报文
+        `{refund_no, channel_refund_id, amount_cents, refunded_at?}` 加
+        `X-Keel-Signature: hex(HMAC-SHA256(该店该渠道的回调密钥, 原始请求体))`，
+        没配密钥一律拒绝。真实渠道的报文与验签由适配器翻译，业务这一段不变。
+
+        入账同一事务里还按规则处理库存与券（数据模型 §11）：**未发货**的退款回补
+        库存到履约门店；整单的货全部退完才把券退回「未使用」（已过期不退）。
       security: []
       parameters:
         - name: channel
@@ -5634,7 +5699,7 @@ components:
             **本行还可退的件数 = `quantity - refunded_qty - refunding_qty`。**
 
             这不是持久化列，是 `refund_items ⋈ refunds WHERE status IN (10,20,30)`
-            的聚合，定义式见数据模型 §10。**数据库的 CHECK 拦不住在途超退**，
+            的聚合，定义式见数据模型 §11。**数据库的 CHECK 拦不住在途超退**，
             服务端必须在同一事务内复算——不要以为提交上去有兜底。
             没有这个字段，客户端算不出可退数量，只能先提交再被 409
             `refund-quantity-exceeded` 打回——那是把校验规则藏在服务端错误里。
@@ -5696,8 +5761,11 @@ components:
            └─撤销──► 60 已取消   （20 超时未寄回 / 买家撤销，同样进 60）
         ```
 
-        合法迁移（`refund_status_transitions`）：
+        合法迁移（`refund_status_transitions`，由数据库触发器执行）：
         `(10,20) (10,30) (10,50) (10,60) (20,30) (20,60) (30,40)`。
+        每条边由谁走：`10→20/30/50` 审核（`/admin/refunds/{refund_no}/audit`）；
+        `20→30` 商家确认收到退货（`/admin/refunds/{refund_no}/receipt`）；
+        `10/20→60` 买家撤回；`30→40` 渠道回调（`/webhooks/refunds/{channel}`）。
 
         `50 已拒绝` 与 `30 退款中` 失败**不是一回事**，客户端要分开展示：
         前者是商家驳回，要展示 `reject_reason` 并允许重新申请；

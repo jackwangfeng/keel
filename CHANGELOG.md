@@ -62,6 +62,40 @@ so "which one is running?" never depends on anyone's memory.
 - All three write endpoints honour `Idempotency-Key` in a single transaction
   (claim → business → archive), shared with the admin write path.
 
+### Added — refunds and after-sales (migration 00034)
+
+- **Refund requests with partial refunds that add up to the cent**
+  (`POST /orders/{order_no}/refunds`). The client never sends an amount: each
+  line refunds `floor(net × k / quantity)` of its net amount — the line total
+  minus the coupon discount allocated to it at checkout — and the last unit takes
+  the remainder, so a fully refunded line always refunds exactly what was paid
+  for it. In-flight over-refunds (which no `CHECK` can catch) are prevented by
+  re-checking under an order row lock and allowing at most one in-flight refund
+  per order line.
+- **Refund lifecycle**: buyer withdrawal (`POST /refunds/{refund_no}/cancel`),
+  back-office audit (`POST /admin/refunds/{refund_no}/audit`) and a new
+  **confirm-returned-goods** step (`POST /admin/refunds/{refund_no}/receipt`) —
+  the contract's state machine always had the `20 → 30` edge but no endpoint
+  walked it. Buyer reads: `GET /refunds`, `GET /refunds/{refund_no}`,
+  `GET /orders/{order_no}/refunds`; order detail now carries `refunds` and
+  per-line `refunding_qty`.
+- **Refund webhook** (`POST /webhooks/refunds/{channel}`), isomorphic to the
+  payment webhook: per-tenant HMAC signature (a shop without a secret is always
+  rejected), amount check, and idempotency on the channel refund id via
+  `uk_refunds_channel_txn`. Settlement writes back order lines, order totals and
+  `refund_status` in one local transaction; an unshipped whole-order refund moves
+  the order `50 → 60`. Stock is restocked only if the order was never shipped;
+  the coupon is returned only once every line is fully refunded (and not expired).
+- **Sandbox refunds** follow the payment sandbox switch (`KEEL_PAYMENT_SANDBOX`):
+  when a refund enters "refunding", the server plays the channel inside the same
+  transaction — builds and signs a canonical callback and runs it through the
+  exact webhook settlement path.
+- The refund state machine is enforced by a trigger over
+  `refund_status_transitions` (`23514 refund_status_transition`), and
+  `chk_refund_state` ties "refunded" to the channel refund id and timestamp.
+- Who may audit or confirm receipt follows the same store-scoped rule as
+  shipping.
+
 ## [0.1.0] - 2026-09-26
 
 The first release. It closes milestone M4: a merchant can open a shop, publish

@@ -215,7 +215,22 @@ func (s *PaymentService) Notify(ctx context.Context, channel string, rawBody []b
 
 // verify 验签。**没配密钥 = 验签失败**，这一条是这个函数存在的主要理由。
 func (s *PaymentService) verify(ctx context.Context, channel string, rawBody []byte, signature string) error {
-	secret, err := s.repo.ChannelNotifySecret(ctx, channel)
+	return verifyChannelSignature(ctx, s.repo, s.log, channel, rawBody, signature)
+}
+
+// secretSource 是验签需要的全部仓储能力：取本租户在某个渠道上的回调密钥。
+type secretSource interface {
+	ChannelNotifySecret(ctx context.Context, channel string) (string, error)
+}
+
+// verifyChannelSignature 是支付回调与退款回调**共用**的验签。
+//
+// 退款回调（refund.go）与支付回调同构到底：同一把每租户每渠道的密钥、同一个
+// 签名算法、同一条「没配密钥就拒绝」。抽成一个函数而不是在退款那边再抄一份：
+// 两份验签各自演化，迟早有一份忘了常量时间比较，或者在没配密钥时「先放行」。
+func verifyChannelSignature(ctx context.Context, repo secretSource, log *slog.Logger,
+	channel string, rawBody []byte, signature string) error {
+	secret, err := repo.ChannelNotifySecret(ctx, channel)
 	if err != nil {
 		// 读密钥失败是服务端故障，不是验签失败。原样上浮 —— 把它也报成 401
 		// 的话，一次数据库抖动会表现为「渠道的回调全被拒了」，
@@ -231,7 +246,7 @@ func (s *PaymentService) verify(ctx context.Context, channel string, rawBody []b
 		//
 		// 日志是 Warn 不是 Error：一家还没接支付的店收到回调，最可能的成因是
 		// 有人在扫，而不是这家店坏了。
-		s.log.WarnContext(ctx, "收到支付回调，但这家店没有配这个渠道的回调密钥，一律拒绝",
+		log.WarnContext(ctx, "收到渠道回调，但这家店没有配这个渠道的回调密钥，一律拒绝",
 			"channel", channel)
 		return fmt.Errorf("%w: 本租户没有配置 %s 的回调密钥", ErrWebhookSignature, channel)
 	}
