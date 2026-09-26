@@ -302,6 +302,9 @@ func TestRouterServesContractPaths(t *testing.T) {
 		// 因为「挂没挂上」和「在不在契约里」是两件事。
 		"GET /api/v1/uploads/:upload_id":      false,
 		"GET /api/v1/uploads/:upload_id/blob": false,
+		// 买家上传与后台读文件（售后链路补齐那一轮）。
+		"POST /api/v1/uploads":                 false,
+		"GET /api/v1/admin/uploads/:upload_id": false,
 
 		// 买家侧门店那两条（00020）。契约里它们是 security: []，
 		// 所以这里没有对应的「要不要令牌」断言 —— 那正是它们与下面 21 条的

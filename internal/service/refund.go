@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -196,8 +197,62 @@ func (r RefundCreateRequest) validate() error {
 			return fmt.Errorf("%w: evidence_urls 里有空的或过长的地址", ErrRefundBadRequest)
 		}
 	}
+	if _, err := evidenceUploadIDs(r.EvidenceURLs); err != nil {
+		return err
+	}
 	if len(r.Items) == 0 {
 		return fmt.Errorf("%w: items 至少一行", ErrRefundBadRequest)
+	}
+	return nil
+}
+
+// evidenceUploadIDs 把 evidence_urls 逐个解成 upload id。
+//
+// 只收 Upload.url 那一个形状（/api/v1/uploads/{id}），逐字：外链图片没有归属校验，
+// 一个外链地址谁都能看，而退款凭证是隐私内容（契约 GET /uploads/{upload_id}）；
+// 带 query、带尾斜杠的变体也不收 —— 后台读凭证时按地址精确匹配引用它的退款单
+// （ListEvidenceRefundStores），变体会让一张真凭证在后台读不出来。
+// 同一张图填两次回 422（契约 uniqueItems）。
+func evidenceUploadIDs(urls []string) ([]int64, error) {
+	ids := make([]int64, 0, len(urls))
+	seen := make(map[int64]bool, len(urls))
+	for _, u := range urls {
+		id, err := strconv.ParseInt(strings.TrimPrefix(u, uploadURLPrefix), 10, 64)
+		if err != nil || id <= 0 || u != UploadURL(id) {
+			return nil, fmt.Errorf("%w: evidence_urls 里的 %q 不是 POST /uploads 返回的地址", ErrRefundBadRequest, u)
+		}
+		if seen[id] {
+			return nil, fmt.Errorf("%w: evidence_urls 里 %q 出现了两次", ErrRefundBadRequest, u)
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
+// claimEvidence 核对每一张凭证：在本店（RLS）、purpose = 3 退款凭证、是这个买家自己传的；
+// 然后标成已引用。任何一张不满足都回 422，而且**不区分**「不存在」「别人的」「用途不对」——
+// 分开报就是一个能探出别人传过哪些文件的预言机。
+func claimEvidence(ctx context.Context, tx repository.Tx, urls []string, userID int64) error {
+	ids, err := evidenceUploadIDs(urls)
+	if err != nil {
+		return err
+	}
+	for i, uid := range ids {
+		up, err := tx.FindUpload(ctx, uid)
+		if errors.Is(err, repository.ErrUploadNotFound) {
+			up = repository.Upload{}
+		} else if err != nil {
+			return err
+		}
+		if up.ID == 0 || up.Purpose != repository.UploadPurposeRefundProof ||
+			up.UserID == nil || *up.UserID != userID {
+			return fmt.Errorf("%w: evidence_urls 里的 %q 不是你用 purpose=3 传的退款凭证",
+				ErrRefundBadRequest, urls[i])
+		}
+		if err := tx.MarkUploadReferenced(ctx, uid); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -273,6 +328,12 @@ func (s *RefundService) Create(ctx context.Context, orderNo string, req RefundCr
 			if plan.Goods+freight <= 0 {
 				// 一行被券分摊到实付 0 元：没有钱可退，chk_refund_amount 也不收一张 0 元的单。
 				return repository.Refund{}, fmt.Errorf("%w: 这几行的实付净额是 0，没有可退的金额", ErrRefundBadRequest)
+			}
+
+			// 凭证逐个核对归属并标成已引用 —— 与退款单落库同一个事务（§13 孤儿回收的
+			// 安全条件：referenced 必须与引用它的业务对象同生同灭）。
+			if err := claimEvidence(ctx, tx, req.EvidenceURLs, id.UserID); err != nil {
+				return repository.Refund{}, err
 			}
 
 			pay, err := tx.FindSettledPayment(ctx, order.ID)

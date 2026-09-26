@@ -641,18 +641,24 @@ var routes = []route{
 			"而它因此单独占了 upload_blob.go —— 下面那条对账按 HandlerFile 解析" +
 			"**整份源码**里的 c.Query，两跳同文件会让这一行登记当场红。" +
 			"同一条纪律让 GET /admin/products 单独占了 admin_product_list.go",
-		NotYetImplementedStage: map[string]string{
-			"仅上传者本人与后台客服": "契约描述里那张 purpose 准入表的第三行（3 退款凭证）。" +
-				"本轮的处置是**一律 403**，而不是「认上传者」—— 判「是不是上传者本人」要一个" +
-				"可选鉴权中间件（这条路由是公开的，契约里没有 security），" +
-				"而那条中间件今天**没有任何可测的输入**：purpose=3 的行只能由 C 端的 " +
-				"POST /uploads 产生，而那条接口还没有实现。也就是说写出来的会是一段" +
-				"任何测试都够不着的鉴权代码，而鉴权代码恰恰是最不该没有执行者的那一类。\n" +
-				"失败方向是安全的那一边：所有人都读不到，而不是所有人都读得到。" +
-				"反向由 upload_test.go 的 TestRefundProofIsNotPubliclyReadable 盯着 —— " +
-				"它直接插一行 purpose=3 再打这条接口，断言 403。真的实现了「认上传者本人」，" +
-				"那条测试会红，逼人回来删掉这一行。",
-		},
+	},
+	// —— 买家上传与后台读文件（售后链路补齐那一轮）。契约 GET /uploads/{upload_id} 那张
+	// 可读者表的「仅上传者本人与后台客服」原先挂在上面那条的 NotYetImplementedStage 里，
+	// 本轮两半都实现了：本人带令牌走 GET /uploads/{id}（auth.OptionalBearer），
+	// 后台客服走 GET /admin/uploads/{id}。那笔挂账随之删掉。
+	{
+		ContractPath:   "/uploads",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "upload.go",
+		NoQueryParams:  "purpose 与 file 都在 multipart 请求体里，幂等键在请求头里",
+	},
+	{
+		ContractPath:   "/admin/uploads/{upload_id}",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "upload.go",
+		NoQueryParams:  "要读哪个文件在路径上；判权按引用它的退款单，没有任何参数可以绕过",
 	},
 	{
 		ContractPath:   "/auth/refresh",

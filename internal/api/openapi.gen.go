@@ -3452,7 +3452,13 @@ type RefundChannel string
 
 // RefundCreateRequest defines model for RefundCreateRequest.
 type RefundCreateRequest struct {
-	// EvidenceUrls 凭证图片，先走上传接口拿到 URL
+	// EvidenceUrls 凭证图片，先走 `POST /uploads`（`purpose=3 退款凭证`）拿到 `Upload.url`，原样填在这里。
+	//
+	// 服务端逐个核对：必须是形如 `/api/v1/uploads/{upload_id}` 的地址、那个文件在本店、
+	// `purpose = 3`、而且**是你自己传的** —— 任何一条不满足回 422 invalid-request。
+	// 外链图片、别人的凭证、商品图都不收：凭证要能被归属校验保护起来
+	// （见 `GET /uploads/{upload_id}`），一个外链地址谁都能看。
+	// 申请成功的同一个事务里，这些文件被标记为「已引用」，不会被 24 小时的孤儿回收清掉。
 	EvidenceUrls *[]string         `json:"evidence_urls,omitempty"`
 	Items        []RefundItemInput `json:"items"`
 
@@ -6315,6 +6321,33 @@ type PostAdminUploadsParams struct {
 	// · 首次执行失败（存档为失败态）时同样回放该失败响应；
 	//   确需重试的场景请换一个新 key
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// GetAdminUploadsUploadIdParams defines parameters for GetAdminUploadsUploadId.
+type GetAdminUploadsUploadIdParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
 }
 
 // PostAssistantChatJSONBody defines parameters for PostAssistantChat.

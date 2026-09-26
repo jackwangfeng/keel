@@ -12,8 +12,8 @@ import (
 
 // UploadTx 是文件元数据这一面（数据模型 §13）。
 //
-// 只有后台那条上传路径在这里。C 端的 POST /uploads 填的是 user_id，
-// 与这条填 staff_id 的是**两条路**，不是一条路的两种用法：哪一列被填上取决于
+// 后台那条上传路径（CreateStaffUpload，填 staff_id）与 C 端的 POST /uploads
+// （CreateUserUpload，填 user_id）是**两条路**，不是一条路的两种用法：哪一列被填上取决于
 // 这次调用带的是买家 token 还是 staff 会话 token，而 chk_upload_owner 这条
 // CHECK 约束把「二选一」钉死在库里。同一个入口同时接受两种身份，等于把
 // 「这次是谁传的」变成一个要靠 token 形状猜的东西。
@@ -21,6 +21,14 @@ type UploadTx interface {
 	// CreateStaffUpload 登记一个后台操作员上传的商品图。
 	// purpose 固定为 1 商品图，不是入参 —— 路径已经决定了它。
 	CreateStaffUpload(ctx context.Context, n NewUpload) (Upload, error)
+
+	// CreateUserUpload 登记一个 C 端买家上传的头像或退款凭证（契约 POST /uploads）。
+	// purpose 只收 2 / 3，其余返回错误 —— 商品图走 CreateStaffUpload。
+	CreateUserUpload(ctx context.Context, n NewUserUpload) (Upload, error)
+
+	// ListEvidenceRefundStores 引用了这个凭证地址的退款单各自所属订单的履约门店（去重）。
+	// 后台读退款凭证按它判权。
+	ListEvidenceRefundStores(ctx context.Context, url string) ([]int64, error)
 
 	// FindUpload 取一条文件元数据。查不到（不存在，或被 RLS 挡在租户外）
 	// 返回 ErrUploadNotFound。
@@ -80,6 +88,45 @@ func (t tenantTx) CreateStaffUpload(ctx context.Context, n NewUpload) (Upload, e
 	// Go 允许它们之间直接转换。哪天有人动了其中一边的 SELECT，这一行会**编译
 	// 失败** —— 那正是想要的：两条查询回传的形状不一样时，要有人来决定怎么办。
 	return uploadFrom(db.GetUploadRow(r)), nil
+}
+
+// NewUserUpload 是登记一个买家上传的入参。与 NewUpload 分开而不是加一个 UserID 字段：
+// 一个结构上同时有 StaffID 与 UserID 的入参，等于把 chk_upload_owner 那条「二选一」
+// 交给调用方去记得。
+type NewUserUpload struct {
+	UserID      int64
+	Purpose     int16
+	Driver      int16
+	StorageKey  string
+	ContentType string
+	SizeBytes   int64
+	SHA256      string
+}
+
+func (t tenantTx) CreateUserUpload(ctx context.Context, n NewUserUpload) (Upload, error) {
+	if n.Purpose != UploadPurposeAvatar && n.Purpose != UploadPurposeRefundProof {
+		return Upload{}, fmt.Errorf("买家上传的 purpose 只能是 2 头像或 3 退款凭证，得到 %d", n.Purpose)
+	}
+	if n.SizeBytes <= 0 {
+		return Upload{}, fmt.Errorf("文件大小 %d 必须为正", n.SizeBytes)
+	}
+	r, err := t.q.CreateUserUpload(ctx, db.CreateUserUploadParams{
+		UserID:      &n.UserID,
+		Purpose:     n.Purpose,
+		Driver:      n.Driver,
+		StorageKey:  n.StorageKey,
+		ContentType: n.ContentType,
+		SizeBytes:   n.SizeBytes,
+		Sha256:      n.SHA256,
+	})
+	if err != nil {
+		return Upload{}, err
+	}
+	return uploadFrom(db.GetUploadRow(r)), nil
+}
+
+func (t tenantTx) ListEvidenceRefundStores(ctx context.Context, url string) ([]int64, error) {
+	return t.q.ListEvidenceRefundStores(ctx, url)
 }
 
 func (t tenantTx) FindUpload(ctx context.Context, id int64) (Upload, error) {

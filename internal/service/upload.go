@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -14,7 +15,8 @@ import (
 	"github.com/keel/keel/internal/tenant"
 )
 
-// 读文件（契约 GET /uploads/{upload_id}）。M4 收尾。
+// 读文件（契约 GET /uploads/{upload_id}，M4 收尾）、买家上传（POST /uploads）、
+// 后台读文件（GET /admin/uploads/{upload_id}）。
 //
 // ===========================================================================
 // 为什么是两跳，而不是直接把字节吐出来
@@ -44,7 +46,9 @@ import (
 //
 //	1 商品图    所有人（上架商品的图本就公开）
 //	2 头像      所有人
-//	3 退款凭证  **仅上传者本人与后台客服** —— 不在这张表里
+//	3 退款凭证  **仅上传者本人与后台客服** —— 不在这张表里。上传者本人带着自己的
+//	            access_token 走 GET /uploads/{id}（ownerMayRead），后台客服走
+//	            GET /admin/uploads/{id}（AdminRedirectTarget，按引用它的退款单判权）
 //
 // **默认是拒绝**：表里没有的用途一律 403。反过来写（列出要拦的那些）的话，
 // 将来新增一个用途（比如「营业执照」）会默认公开，而那条改动看上去只是
@@ -76,6 +80,14 @@ const uploadBlobTTL = 5 * time.Minute
 
 // uploadBlobDomain 是分离签名的域（auth.Signer.SignDetached）。
 const uploadBlobDomain = "upload-blob"
+
+// uploadBlobPrivateDomain 是**非公开**文件（退款凭证）限时地址的签名域。
+//
+// 与公开的那个分开，而不是在签名消息里多带一个标记：第二跳要能回答「这个地址是
+// 按私有文件签出来的吗」，而这件事必须由签名本身证明。于是第二跳的规则是 ——
+// 公开文件两种签名都认；私有文件只认私有域的签名。一个用途从公开改成私有时，
+// 已经发出去的公开地址当场失效（原先那道「第二跳再查一次准入表」保护的正是这个）。
+const uploadBlobPrivateDomain = "upload-blob-private"
 
 // UploadBlob 是第二跳要交给 handler 的东西：一段字节和怎么把它写出去。
 type UploadBlob struct {
@@ -146,13 +158,86 @@ func (s *UploadService) RedirectTarget(ctx context.Context, uploadID int64) (str
 	}
 
 	if !publicPurposes[up.Purpose] {
-		return "", fmt.Errorf("%w: purpose=%d", ErrUploadForbidden, up.Purpose)
+		if !ownerMayRead(ctx, up) {
+			return "", fmt.Errorf("%w: purpose=%d", ErrUploadForbidden, up.Purpose)
+		}
+		return s.blobLink(merchantID, up.ID, uploadBlobPrivateDomain), nil
 	}
+	return s.blobLink(merchantID, up.ID, uploadBlobDomain), nil
+}
 
+// ownerMayRead：这个请求带着上传者本人的买家身份。
+//
+// 身份来自 auth.OptionalBearer —— 没带令牌就没有身份（匿名），带了无效令牌在中间件
+// 那一层已经 401 了，走不到这里。staff 上传的文件（user_id 为空）没有「本人」可言。
+func ownerMayRead(ctx context.Context, up repository.Upload) bool {
+	id, err := auth.FromContext(ctx)
+	if err != nil {
+		return false
+	}
+	return up.UserID != nil && *up.UserID == id.UserID
+}
+
+// blobLink 签出一个 5 分钟后失效的第二跳地址。domain 决定它是公开的还是私有的
+// （见 uploadBlobPrivateDomain）。
+func (s *UploadService) blobLink(merchantID, uploadID int64, domain string) string {
 	exp := s.now().UTC().Add(uploadBlobTTL).Unix()
-	msg := blobMessage(merchantID, up.ID, exp)
+	msg := blobMessage(merchantID, uploadID, exp)
 	return fmt.Sprintf("%s%d/blob?exp=%d&sig=%s",
-		uploadURLPrefix, up.ID, exp, s.signer.SignDetached(uploadBlobDomain, msg)), nil
+		uploadURLPrefix, uploadID, exp, s.signer.SignDetached(domain, msg))
+}
+
+// AdminRedirectTarget 是 GET /admin/uploads/{upload_id} 的第一跳：后台客服读文件。
+//
+// 商品图与头像本店员工都能读；退款凭证只认**被本店某张退款单引用了**的那些，
+// 而且调用者要能看那张退款单（authorizeOrderStore，与后台退款单详情同一个判据）。
+// 一张凭证被几张退款单引用（驳回后重新申请带着同一批图）时，能看其中任何一张就放行。
+//
+// 没被任何退款单引用的凭证（买家传了却没提交）一律 403：它与售后无关，
+// 没有哪个员工有正当理由去看。
+func (s *UploadService) AdminRedirectTarget(ctx context.Context, uploadID int64) (string, error) {
+	if uploadID <= 0 {
+		return "", fmt.Errorf("%w: upload_id 必须是正整数", ErrCatalogBadRequest)
+	}
+	if _, err := requireStaff(ctx); err != nil {
+		return "", err
+	}
+	merchantID, err := tenant.FromContext(ctx)
+	if err != nil {
+		return "", err
+	}
+	var up repository.Upload
+	if err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+		var e error
+		if up, e = tx.FindUpload(ctx, uploadID); e != nil {
+			return e
+		}
+		if publicPurposes[up.Purpose] {
+			return nil
+		}
+		stores, e := tx.ListEvidenceRefundStores(ctx, UploadURL(up.ID))
+		if e != nil {
+			return e
+		}
+		if len(stores) == 0 {
+			return fmt.Errorf("%w: upload %d 没有被本店任何一张退款单引用", ErrUploadForbidden, up.ID)
+		}
+		var lastErr error
+		for _, st := range stores {
+			if _, e := authorizeOrderStore(ctx, tx, st); e == nil {
+				return nil
+			} else {
+				lastErr = e
+			}
+		}
+		return lastErr
+	}); err != nil {
+		return "", err
+	}
+	if publicPurposes[up.Purpose] {
+		return s.blobLink(merchantID, up.ID, uploadBlobDomain), nil
+	}
+	return s.blobLink(merchantID, up.ID, uploadBlobPrivateDomain), nil
 }
 
 // BlobFor 是第二跳：只认签名与过期时间，然后把字节交出来。
@@ -181,8 +266,13 @@ func (s *UploadService) BlobFor(ctx context.Context, uploadID int64, exp, sig st
 	// 先验签再看过期：反过来的话，一个过期时间被改成很远的未来的地址会先
 	// 通过过期检查，然后才在验签上被拒 —— 结论一样，但「先证明这串东西是
 	// 我们签的」在读起来时才是对的顺序。
-	if !s.signer.VerifyDetached(uploadBlobDomain, blobMessage(merchantID, uploadID, expUnix), sig) {
-		return UploadBlob{}, fmt.Errorf("%w: 签名对不上", ErrUploadLinkInvalid)
+	msg := blobMessage(merchantID, uploadID, expUnix)
+	privateSig := false
+	if !s.signer.VerifyDetached(uploadBlobDomain, msg, sig) {
+		if !s.signer.VerifyDetached(uploadBlobPrivateDomain, msg, sig) {
+			return UploadBlob{}, fmt.Errorf("%w: 签名对不上", ErrUploadLinkInvalid)
+		}
+		privateSig = true
 	}
 	if s.now().UTC().Unix() > expUnix {
 		return UploadBlob{}, fmt.Errorf("%w: 地址已于 %s 过期", ErrUploadLinkInvalid,
@@ -197,11 +287,11 @@ func (s *UploadService) BlobFor(ctx context.Context, uploadID int64, exp, sig st
 	}); err != nil {
 		return UploadBlob{}, err
 	}
-	// 准入表在这一跳也查一遍。签名是第一跳签的，所以理论上走不到这里；
-	// 但「理论上走不到」的前提是签名那一段没被改过，而这一句的代价是一次
-	// map 查询。一个用途从公开改成非公开时，已经发出去的那些地址应当立刻
-	// 失效，而不是再活 5 分钟。
-	if !publicPurposes[up.Purpose] {
+	// 准入表在这一跳也查一遍：非公开的文件只认私有域的签名（第一跳判过归属才签得出来）。
+	// 签名是第一跳签的，所以理论上走不到这里；但「理论上走不到」的前提是签名那一段
+	// 没被改过，而这一句的代价是一次 map 查询。一个用途从公开改成非公开时，
+	// 已经发出去的那些公开地址应当立刻失效，而不是再活 5 分钟。
+	if !publicPurposes[up.Purpose] && !privateSig {
 		return UploadBlob{}, fmt.Errorf("%w: purpose=%d", ErrUploadForbidden, up.Purpose)
 	}
 
@@ -230,4 +320,107 @@ func blobMessage(merchantID, uploadID, exp int64) string {
 	return strconv.FormatInt(merchantID, 10) + ":" +
 		strconv.FormatInt(uploadID, 10) + ":" +
 		strconv.FormatInt(exp, 10)
+}
+
+// ---------------------------------------------------------------------------
+// 买家上传（契约 POST /uploads）
+// ---------------------------------------------------------------------------
+
+// scopeBuyerUploadCreate 是买家上传的幂等作用域。与后台那条（admin.uploads.create）
+// 分开：主体不同（BuyerSubject / StaffSubject），作用域也不该共用一个名字。
+const scopeBuyerUploadCreate = "uploads.create"
+
+// buyerUploadFingerprint 是买家上传的 request_hash 素材：比后台那条多一个 purpose ——
+// 同一张图先当头像传、再当退款凭证传，是两次不同的登记。
+type buyerUploadFingerprint struct {
+	Purpose   int16  `json:"purpose"`
+	Mime      string `json:"mime"`
+	SHA256    string `json:"sha256"`
+	SizeBytes int64  `json:"size_bytes"`
+}
+
+// CreateBuyerUpload 实现 POST /uploads：买家传头像（2）或退款凭证（3）。
+//
+// 存储、类型与大小限制、「先落盘再抢幂等键」、重放 / 失败时删掉刚落盘的文件，
+// 全部与后台那条（AdminCatalogService.CreateUpload）同一套 —— 同一个 UploadStore、
+// 同一个 uploadExtensionFor、同一个 MaxUploadBytes、同一个 discardStoredUpload。
+// 差别只有三处：上传者记 user_id；purpose 由请求给、只收 2 / 3；幂等主体是买家。
+func (s *UploadService) CreateBuyerUpload(ctx context.Context, purpose int16, contentType string,
+	body io.Reader, idemKey string) (repository.Upload, bool, error) {
+
+	id, err := auth.FromContext(ctx)
+	if err != nil {
+		return repository.Upload{}, false, err
+	}
+	if purpose != repository.UploadPurposeAvatar && purpose != repository.UploadPurposeRefundProof {
+		// 1 商品图是后台的事（POST /admin/uploads，上传者记 staff_id）；让买家传一张
+		// 「商品图」，等于让它能被挂到商品上 —— 挂接那一步只核 purpose。
+		return repository.Upload{}, false, fmt.Errorf("%w: purpose 只能是 2 头像或 3 退款凭证（商品图走后台上传）",
+			ErrCatalogBadRequest)
+	}
+	if s.store == nil {
+		return repository.Upload{}, false, errors.New("没有配置文件存储 driver，POST /uploads 不可用")
+	}
+	// 缺钥匙在读请求体之前就拒，理由同后台那条。
+	if idemKey == "" {
+		return repository.Upload{}, false, ErrIdempotencyKeyMissing
+	}
+	mime, ext, ok := uploadExtensionFor(contentType)
+	if !ok {
+		return repository.Upload{}, false, fmt.Errorf("%w: %q（只接受 image/jpeg、image/png、image/webp）",
+			ErrUploadMediaType, contentType)
+	}
+	merchantID, err := tenant.FromContext(ctx)
+	if err != nil {
+		return repository.Upload{}, false, err
+	}
+	key, size, sum, err := s.store.Put(merchantID, ext, body, MaxUploadBytes)
+	if err != nil {
+		return repository.Upload{}, false, err
+	}
+	hash, err := adminRequestHash(nil, buyerUploadFingerprint{Purpose: purpose, Mime: mime, SHA256: sum, SizeBytes: size})
+	if err != nil {
+		return repository.Upload{}, false, errors.Join(err, s.store.Remove(key))
+	}
+	out, replayed, err := idempotentTx(ctx, s.repo, repository.BuyerSubject(id.UserID),
+		scopeBuyerUploadCreate, idemKey, hash, archivedCreated,
+		func(tx repository.Tx) (repository.Upload, error) {
+			return tx.CreateUserUpload(ctx, repository.NewUserUpload{
+				UserID:      id.UserID,
+				Purpose:     purpose,
+				Driver:      s.store.Driver(),
+				StorageKey:  key,
+				ContentType: mime,
+				SizeBytes:   size,
+				SHA256:      sum,
+			})
+		})
+	err = discardStoredUpload(ctx, s.store, key, err, replayed)
+	return out, replayed, err
+}
+
+// discardStoredUpload 是「先落盘、再抢幂等键」那两条上传路径的善后：
+// 重放或失败时把刚落盘的那个文件删掉，返回调用方该报的错误。
+//
+//   - 重放 —— 库里那一行指向的是**上一次**的 storage_key，这次写的这个永远不会有行
+//     指向它，也就永远不会被孤儿回收看见（回收扫的是 uploads 表）。
+//   - 失败 —— 事务回滚了，同理。
+//
+// 删不掉时：本来就要报错的，把善后失败一起带上去；**重放这一路只记日志，不改变调用
+// 结果** —— 一个删不掉的残留文件不该让一次成功的重放变成 500，那会让客户端以为这次
+// 重试失败了，于是换一把新钥匙再传一遍，磁盘上再多一份。
+func discardStoredUpload(ctx context.Context, store UploadStore, key string, err error, replayed bool) error {
+	if err == nil && !replayed {
+		return nil
+	}
+	rmErr := store.Remove(key)
+	if rmErr == nil {
+		return err
+	}
+	if err != nil {
+		return errors.Join(err, fmt.Errorf("删除孤儿文件 %s 失败: %w", key, rmErr))
+	}
+	slog.ErrorContext(ctx, "幂等重放后删除孤儿文件失败，它不会被孤儿回收看见",
+		"storage_key", key, "err", rmErr)
+	return nil
 }

@@ -478,9 +478,19 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	// **这不等于它们不校验租户** —— 租户由 res.Middleware() 从 Host 定出来，
 	// 而挡住跨店读取的是 uploads 上那条 RLS 策略（db/queries/uploads.sql 里
 	// 一个 merchant_id 都没有）。
-	uh := handler.NewUploadHandler(service.NewUploadService(repo, store, signer))
-	v1.GET("/uploads/:upload_id", uh.Redirect)
+	//
+	// GET /uploads/:upload_id 挂的是 auth.OptionalBearer：没带令牌就是匿名（公开的两类照读），
+	// 带了就按买家令牌的全部规矩判 —— 退款凭证只有上传者本人带着自己的令牌才读得到
+	// （service/upload.go 的 ownerMayRead）。第二跳 /blob 不挂任何鉴权：它只认签名。
+	//
+	// POST /uploads（买家上传头像与退款凭证）挂 auth.Bearer，与别的买家写接口一样。
+	// GET /admin/uploads/:upload_id 是后台客服那一半，挂 staffAuth（在下面后台那一组里）。
+	uploads := service.NewUploadService(repo, store, signer)
+	uh := handler.NewUploadHandler(uploads)
+	v1.GET("/uploads/:upload_id", auth.OptionalBearer(signer, nil), uh.Redirect)
 	v1.GET("/uploads/:upload_id/blob", uh.Blob)
+	v1.POST("/uploads", auth.Bearer(signer, nil), uh.Create)
+	v1.GET("/admin/uploads/:upload_id", staffAuth, uh.AdminRedirect)
 
 	// 门店 / 大区 / 两层可见性 / 三层定价 / 按门店的库存（00020，契约 21 条）
 	// -----------------------------------------------------------------------

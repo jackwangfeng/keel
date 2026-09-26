@@ -81,6 +81,19 @@ export function carrierName(code: string): string {
     return CARRIERS.find((c) => c.code === code)?.name ?? code;
 }
 
+/**
+ * 退款凭证地址 → 后台读它要走的路径（相对 API_BASE）。
+ *
+ * 凭证是买家经 `POST /uploads` 传的，`evidence_urls` 里存的是 `Upload.url`
+ * （`/api/v1/uploads/{id}`）。那条买家路径只认**上传者本人**的令牌 —— 后台打过去是 403，
+ * 客服要走 `GET /admin/uploads/{id}`（按引用它的退款单判权）。形状不对的（老数据里的外链）
+ * 返回 null，界面原样显示那个地址。
+ */
+export function adminUploadPath(uploadUrl: string): string | null {
+    const m = /^\/api\/v1\/uploads\/([1-9][0-9]*)$/.exec(uploadUrl);
+    return m === null ? null : `/admin/uploads/${m[1]}`;
+}
+
 /** 一个按钮在界面上的样子：出不出现、能不能点、点不动时挂什么提示。 */
 export interface ActionState {
     visible: boolean;

@@ -1546,6 +1546,117 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/uploads/{upload_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 读取文件（后台）
+         * @description `GET /uploads/{upload_id}` 那张可读者表里「后台客服」那一半。响应形状相同：
+         *     判完权限 302 到同一种**限时**地址（默认 5 分钟）。
+         *
+         *     | purpose | 哪些员工可读 |
+         *     |---|---|
+         *     | 1 商品图 / 2 头像 | 本店全部员工 |
+         *     | 3 退款凭证 | 能看**引用了它的那张退款单**的员工：按退款单所属订单的履约门店判，与后台退款单详情同一个判据 |
+         *
+         *     退款凭证只认「被本店某张退款单的 `evidence_urls` 引用了」的那些：
+         *     买家传了却没提交申请的凭证与售后无关，任何员工都读不到（403 `upload-forbidden`）。
+         *     引用它的退款单不在调用者的门店范围里 → 403 `out-of-scope`。
+         *
+         *     后台界面的 `<img>` 带不了 `Authorization` 头，所以请用带令牌的请求取这里的 302
+         *     （`fetch` 在同源跳转时会自动跟过去拿到字节），再把字节交给图片控件。
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /**
+                     * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+                     *
+                     *     它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+                     *     而例外成立的前提是平台级鉴权：
+                     *
+                     *     · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+                     *       读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+                     *       行级安全落在这家店上。
+                     *     · **商家级员工带了这个头：403**
+                     *       （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+                     *       静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+                     *     · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+                     *       **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+                     *       实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+                     *       请求其余部分指名的东西不存在是 422。
+                     *     · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+                     *       买家侧对它照旧 404。
+                     *     · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+                     *       （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+                     *
+                     *     后台每一条挂后台会话的操作都声明了它（机械核对：
+                     *     `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+                     */
+                    "X-Keel-Merchant"?: components["parameters"]["KeelMerchant"];
+                };
+                path: {
+                    upload_id: number;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description 跳转到限时访问地址 */
+                302: {
+                    headers: {
+                        /** @description 限时地址，默认有效期 5 分钟 */
+                        Location?: string;
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description 未登录，或带的不是 staff 会话 token */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /**
+                 * @description · 退款凭证没有被本店任何一张退款单引用 —— .../upload-forbidden
+                 *     · 引用它的退款单不在你的门店范围里 —— .../out-of-scope
+                 */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /** @description 文件不存在、已被清理，或不属于当前租户 */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/products": {
         parameters: {
             query?: never;
@@ -5873,12 +5984,21 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * 上传文件
-         * @description 上传商品图、头像或退款凭证，返回可直接写入业务字段的 `url`。
+         * 上传文件（买家）
+         * @description 买家上传头像或退款凭证，返回可直接写入业务字段的 `url`。要登录（买家 access_token），
+         *     上传者记为当前买家（`uploads.user_id`）。
          *
-         *     **限制**（服务端强制，写在这里是为了让客户端不必靠试错发现）：
+         *     **`purpose` 只收 `2 头像` 与 `3 退款凭证`**；`1 商品图` 回 422 —— 商品图是后台操作员传的，
+         *     走 `POST /admin/uploads`（上传者记 `staff_id`，数据模型 §13 / §14 的「两条路」）。
+         *
+         *     **限制**（服务端强制，与 `POST /admin/uploads` 逐条一致，写在这里是为了让客户端不必靠试错发现）：
          *     - 单文件不超过 **10 MB**，超出返回 413
          *     - `content_type` 仅接受 `image/jpeg`、`image/png`、`image/webp`，其余返回 415
+         *     - `Idempotency-Key` 必填。请求哈希认的是**文件内容**（sha256）、声明的类型、大小与 `purpose`：
+         *       同一把钥匙重传同一个文件拿到首次的结果，换了文件回 422
+         *
+         *     **可见性**（见 `GET /uploads/{upload_id}`）：头像所有人可读；退款凭证只有上传者本人
+         *     （带自己的 access_token）与后台客服（`GET /admin/uploads/{upload_id}`）可读。
          *
          *     **文件的生命周期**：上传后文件处于「未被引用」状态。只有当它被写入某个业务
          *     对象（商品主图、`PATCH /me` 的 `avatar_url`、退款申请的 `evidence_urls`）
@@ -5943,10 +6063,7 @@ export interface paths {
                     };
                 };
                 409: components["responses"]["IdempotencyInFlight"];
-                /**
-                 * @description 文件超过 10 MB。Problem `type` 为 `upload-too-large`，
-                 *     `detail` 中给出实际大小与上限。
-                 */
+                /** @description 文件超过 10 MB。Problem `type` 为 `upload-too-large`。 */
                 413: {
                     headers: {
                         [name: string]: unknown;
@@ -5967,7 +6084,19 @@ export interface paths {
                         "application/problem+json": components["schemas"]["Problem"];
                     };
                 };
-                422: components["responses"]["IdempotencyKeyReused"];
+                /**
+                 * @description · `purpose` 缺失、不是 2 / 3（`1 商品图` 走 `POST /admin/uploads`），
+                 *       或请求体里没有 `file`、文件为空、缺 `Idempotency-Key` —— .../invalid-request
+                 *     · 同一 Idempotency-Key 配了不同的文件 —— .../idempotency-key-reused
+                 */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
                 default: components["responses"]["Problem"];
             };
         };
@@ -5999,6 +6128,15 @@ export interface paths {
          *     把它当静态文件发出去，等于任何拿到 URL 的人都能看别人的退货照片
          *     （见数据模型 §12）。
          *
+         *     **鉴权是可选的**：读公开的两类不用带令牌；读退款凭证时，上传者本人要带
+         *     自己的 access_token（`Authorization: Bearer`）—— 没带、或者带的是别人的，都是 403。
+         *     带了令牌但令牌无效 / 过期 / 不属于本店时回 401（与别的买家接口同一套判定），
+         *     不会悄悄当成匿名。后台客服读凭证走 `GET /admin/uploads/{upload_id}`，不走这里
+         *     （后台接口一律挂在 `/admin/` 前缀下，鉴权按路径前缀挂）。
+         *
+         *     小程序的 `<image>` 带不了请求头，所以读自己的凭证要先用带令牌的请求
+         *     （如 `uni.downloadFile` 的 `header`）拿到这里的 302，再用限时地址显示。
+         *
          *     响应为 302，跳转到 driver 生成的**限时**地址：本地磁盘 driver 跳到
          *     带签名与过期时间的站内地址，S3 driver 跳到预签名 URL。
          *     两种 driver 都不返回长期有效的裸路径。
@@ -6023,8 +6161,17 @@ export interface paths {
                     };
                     content?: never;
                 };
+                /** @description 带了令牌，但令牌无效、过期或不属于本店 */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
                 /**
-                 * @description 无权读取该文件（典型情况：他人的退款凭证）。
+                 * @description 无权读取该文件（典型情况：他人的退款凭证，或者读退款凭证却没带令牌）。
                  *     刻意返回 403 而非 404 —— 文件 id 是自增的，用 404 掩盖存在性
                  *     并不能阻止枚举，反而让合法用户分不清「没权限」和「传错了 id」。
                  */
@@ -10965,7 +11112,15 @@ export interface components {
             reason_code: components["schemas"]["RefundReasonCode"];
             /** @description 补充说明。reason_code=5（其他）时建议必填 */
             reason_text?: string;
-            /** @description 凭证图片，先走上传接口拿到 URL */
+            /**
+             * @description 凭证图片，先走 `POST /uploads`（`purpose=3 退款凭证`）拿到 `Upload.url`，原样填在这里。
+             *
+             *     服务端逐个核对：必须是形如 `/api/v1/uploads/{upload_id}` 的地址、那个文件在本店、
+             *     `purpose = 3`、而且**是你自己传的** —— 任何一条不满足回 422 invalid-request。
+             *     外链图片、别人的凭证、商品图都不收：凭证要能被归属校验保护起来
+             *     （见 `GET /uploads/{upload_id}`），一个外链地址谁都能看。
+             *     申请成功的同一个事务里，这些文件被标记为「已引用」，不会被 24 小时的孤儿回收清掉。
+             */
             evidence_urls?: string[];
         };
         Refund: {

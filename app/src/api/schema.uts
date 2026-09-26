@@ -1193,7 +1193,7 @@ export type RefundCreateRequest = {
   reason_code : RefundReasonCode
   /** 补充说明。reason_code=5（其他）时建议必填 */
   reason_text? : string
-  /** 凭证图片，先走上传接口拿到 URL */
+  /** 凭证图片，先走 `POST /uploads`（`purpose=3 退款凭证`）拿到 `Upload.url`，原样填在这里。 */
   evidence_urls? : string[]
 }
 

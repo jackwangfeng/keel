@@ -179,15 +179,13 @@ func TestUploadBlobAddressRejectsTamperingAndExpiry(t *testing.T) {
 	}
 }
 
-// 退款凭证（purpose = 3）不公开可读。
+// 退款凭证（purpose = 3）不公开可读：不带令牌打是 403（契约明写「刻意返回 403 而非 404」）。
 //
-// **这条测试是 contract_test.go 里那笔 NotYetImplementedStage 挂账的反向执行者**
-// （键是契约描述里那张表的「仅上传者本人与后台客服」）。本轮的处置是一律 403，
-// 而不是「认上传者本人」—— 理由写在那笔挂账上：判「是不是本人」要一个可选
-// 鉴权中间件，而 purpose = 3 的行只能由还没实现的 C 端 POST /uploads 产生，
-// 也就是说那段鉴权代码今天没有任何可测的输入。
+// 这一条原先是 contract_test.go 里一笔 NotYetImplementedStage 挂账的反向执行者（那时一律 403，
+// 「认上传者本人」还没有实现）。买家上传落地之后本人与后台客服两半都实现了，挂账已删；
+// 这条留下来钉住匿名那一格。本人能读、别人不能读、后台按退款单判权，在 buyer_upload_test.go。
 //
-// 真的实现了「认上传者本人」，这条会红，逼人回来删掉那一行挂账。
+// 这里插的是一行 staff 上传的 purpose = 3（user_id 为空）：没有「本人」可言，谁带令牌都不行。
 func TestRefundProofIsNotPubliclyReadable(t *testing.T) {
 	sh := newAdminShop(t)
 	// 直接插库：purpose = 3 没有任何接口产得出来，而这正是那笔挂账的内容。

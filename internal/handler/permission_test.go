@@ -422,6 +422,37 @@ var permMatrix = []permRoute{
 	{"GET", v1 + "/admin/refunds/:refund_no", storeOperate, func(t *testing.T, fx *permFixture, c permCase) permReq {
 		return permGet(v1 + "/admin/refunds/" + permRefund(t, fx, fx.store(c), 10))
 	}},
+	// 后台读文件（售后链路补齐那一轮）。退款凭证按**引用它的退款单**判权，与后台退款单
+	// 详情同一个判据；放行时是 302（跳限时地址），不是 200。商品图 / 头像对全体员工放行、
+	// 没被引用的凭证一律 403 upload-forbidden，这两条由 upload_test.go 单独钉住。
+	{"GET", v1 + "/admin/uploads/:upload_id", storeOperate, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permReq{Method: http.MethodGet, OK: http.StatusFound,
+			Path: fmt.Sprintf(v1+"/admin/uploads/%d", permEvidence(t, fx, fx.store(c)))}
+	}},
+}
+
+// permEvidence 在 storeID 这家门店上造一张待审核退款单，给它挂一张退款凭证
+// （purpose 3、上传者是退款单的买家），返回凭证的 upload id。直接插库，理由同 permRefund。
+// 字节不落盘：矩阵只打第一跳（判权 → 302），不跟到第二跳。
+func permEvidence(t *testing.T, fx *permFixture, storeID int64) int64 {
+	t.Helper()
+	refundNo := permRefund(t, fx, storeID, 10)
+	userID := adminQueryInt64(t, `SELECT user_id FROM refunds WHERE refund_no = $1`, refundNo)
+	uploadID := adminQueryInt64(t, `
+		INSERT INTO uploads (merchant_id, user_id, purpose, driver, storage_key,
+		                     content_type, size_bytes, sha256, referenced)
+		VALUES ($1, $2, 3, 1, $3, 'image/png', 3, 'perm', TRUE) RETURNING id`,
+		fx.sh.MerchantID, userID, fmt.Sprintf("%d/perm/evidence-%s.png", fx.sh.MerchantID, fx.next()))
+	// 排在 permCleanupOrders 之后注册，于是先于它执行（t.Cleanup 后进先出）：
+	// uploads.user_id 指向那个下单人，要先删凭证才删得掉人。删的是**这家店全部**矩阵凭证
+	// 而不只是这一张：同一个子测试里几格各注册一对清理，后一格的 permCleanupOrders 会
+	// 连前一格的下单人一起删，那时前一格的凭证必须已经没了。
+	t.Cleanup(func() {
+		adminExec(t, `DELETE FROM uploads WHERE merchant_id = $1 AND sha256 = 'perm'`, fx.sh.MerchantID)
+	})
+	adminExec(t, `UPDATE refunds SET evidence_urls = ARRAY[$2::text] WHERE refund_no = $1`,
+		refundNo, fmt.Sprintf("/api/v1/uploads/%d", uploadID))
+	return uploadID
 }
 
 // permExempt 是刻意不在矩阵里的 /admin/ 路由，每条写明理由。

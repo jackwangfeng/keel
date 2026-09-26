@@ -250,6 +250,34 @@ export async function uploadProductImage(file: File, idempotencyKey: string): Pr
 }
 
 // ---------------------------------------------------------------------------
+// 读需要鉴权的文件（退款凭证）
+// ---------------------------------------------------------------------------
+
+/**
+ * `GET /admin/uploads/{upload_id}` → 一个能塞进 `<img>` 的 object URL。
+ *
+ * 退款凭证不公开（契约 GET /uploads/{upload_id} 那张可读者表），而 `<img src>` 带不了
+ * `Authorization` 头。所以用带令牌的 fetch 打后台那条路径：它回 302 到一个同源的限时地址，
+ * fetch 自动跟过去拿到字节，这里再转成 object URL。**调用方负责在不用时
+ * `URL.revokeObjectURL`**，否则每打开一次详情就在内存里多留一份图片。
+ *
+ * `path` 由 orderRules.ts 的 adminUploadPath 算出（相对 API_BASE）。失败抛
+ * UnexpectedResponseError（403 / 404 的 Problem 也不在这里细分 —— 图片位上只显示「读不到」）。
+ */
+export async function fetchAdminUploadObjectUrl(path: string): Promise<string> {
+    const url = `${API_BASE.replace(/\/+$/, "")}${path}`;
+    const headers = new Headers();
+    for (const [k, v] of Object.entries(authHeaders())) headers.set(k, v);
+    const response = await globalThis.fetch(url, { headers, redirect: "follow" });
+    handleUnauthorized(response.status);
+    if (!response.ok) {
+        throw new UnexpectedResponseError(url, response.status, response.headers.get("content-type"),
+            await response.text());
+    }
+    return URL.createObjectURL(await response.blob());
+}
+
+// ---------------------------------------------------------------------------
 // Problem 的两个后台专用判据
 // ---------------------------------------------------------------------------
 

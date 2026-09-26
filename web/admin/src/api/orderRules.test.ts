@@ -7,6 +7,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
     ORDER_STATUS,
+    adminUploadPath,
     REFUND_STATUS,
     buildAudit,
     buildShipment,
@@ -118,4 +119,11 @@ test("还可退件数 = 购买 − 已退 − 在途，不为负", () => {
 test("状态表覆盖契约的全部取值（Record 的键就是枚举）", () => {
     assert.deepEqual(Object.keys(ORDER_STATUS).map(Number), [10, 20, 30, 40, 50, 60, 90]);
     assert.deepEqual(Object.keys(REFUND_STATUS).map(Number), [10, 20, 30, 40, 50, 60]);
+});
+
+test("退款凭证地址 → 后台读文件的路径；形状不对的原样放过（null）", () => {
+    assert.equal(adminUploadPath("/api/v1/uploads/42"), "/admin/uploads/42");
+    for (const bad of ["https://example.com/x.png", "/api/v1/uploads/42?x=1", "/api/v1/uploads/0", "/api/v1/uploads/", ""]) {
+        assert.equal(adminUploadPath(bad), null, bad);
+    }
 });

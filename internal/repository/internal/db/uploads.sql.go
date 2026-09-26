@@ -89,6 +89,71 @@ func (q *Queries) CreateStaffUpload(ctx context.Context, arg CreateStaffUploadPa
 	return i, err
 }
 
+const createUserUpload = `-- name: CreateUserUpload :one
+INSERT INTO uploads (user_id, purpose, driver, storage_key,
+                     content_type, size_bytes, sha256)
+VALUES ($1, $2, $3,
+        $4, $5, $6,
+        $7)
+RETURNING id, user_id, staff_id, purpose, driver, storage_key,
+          content_type, size_bytes, sha256, referenced, created_at
+`
+
+type CreateUserUploadParams struct {
+	UserID      *int64
+	Purpose     int16
+	Driver      int16
+	StorageKey  string
+	ContentType string
+	SizeBytes   int64
+	Sha256      string
+}
+
+type CreateUserUploadRow struct {
+	ID          int64
+	UserID      *int64
+	StaffID     *int64
+	Purpose     int16
+	Driver      int16
+	StorageKey  string
+	ContentType string
+	SizeBytes   int64
+	Sha256      string
+	Referenced  bool
+	CreatedAt   pgtype.Timestamptz
+}
+
+// C 端买家传的文件（契约 POST /uploads）：头像（2）或退款凭证（3）。
+// 填 user_id，不填 staff_id —— 与 CreateStaffUpload 是两条路，理由见那一条的注释；
+// chk_upload_owner 钉着二选一。purpose 是入参，但只收 2 / 3，由服务层判
+// （商品图是后台的事，走 CreateStaffUpload）。
+func (q *Queries) CreateUserUpload(ctx context.Context, arg CreateUserUploadParams) (CreateUserUploadRow, error) {
+	row := q.db.QueryRow(ctx, createUserUpload,
+		arg.UserID,
+		arg.Purpose,
+		arg.Driver,
+		arg.StorageKey,
+		arg.ContentType,
+		arg.SizeBytes,
+		arg.Sha256,
+	)
+	var i CreateUserUploadRow
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.StaffID,
+		&i.Purpose,
+		&i.Driver,
+		&i.StorageKey,
+		&i.ContentType,
+		&i.SizeBytes,
+		&i.Sha256,
+		&i.Referenced,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getUpload = `-- name: GetUpload :one
 SELECT id, user_id, staff_id, purpose, driver, storage_key,
        content_type, size_bytes, sha256, referenced, created_at
@@ -141,14 +206,54 @@ func (q *Queries) GetUpload(ctx context.Context, id int64) (GetUploadRow, error)
 	return i, err
 }
 
+const listEvidenceRefundStores = `-- name: ListEvidenceRefundStores :many
+SELECT DISTINCT o.store_id
+  FROM refunds r
+  JOIN orders o ON o.id = r.order_id
+ WHERE r.evidence_urls @> ARRAY[$1::text]
+ ORDER BY o.store_id
+`
+
+// 引用了这个凭证地址的退款单，各自所属订单的履约门店（去重）。
+// 后台读退款凭证（GET /admin/uploads/{upload_id}）按它判权：能看引用它的那张退款单，
+// 才能看这张凭证 —— 与后台退款单详情同一个判据。
+//
+// 按地址而不是按 upload id 找，是因为 evidence_urls 存的就是地址（契约 Upload.url）；
+// 申请时服务端已把每一项核成 /api/v1/uploads/{id} 这一个形状，所以精确匹配就够。
+// 包含运算走 00038 的 GIN 索引。
+func (q *Queries) ListEvidenceRefundStores(ctx context.Context, url string) ([]int64, error) {
+	rows, err := q.db.Query(ctx, listEvidenceRefundStores, url)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []int64
+	for rows.Next() {
+		var store_id int64
+		if err := rows.Scan(&store_id); err != nil {
+			return nil, err
+		}
+		items = append(items, store_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const markUploadReferenced = `-- name: MarkUploadReferenced :execrows
 UPDATE uploads SET referenced = TRUE
- WHERE id = $1 AND NOT referenced
+ WHERE id = $1
 `
 
 // 把 referenced 置为 TRUE。**必须与引用它的业务对象在同一个事务里**
 // （数据模型 §13 明写）：否则存在这样的窗口 —— 商品图刚提交、清理任务恰好
 // 扫到、文件被删，而商品详情页上那张图已经是 404。
+//
+// **不带 AND NOT referenced**：同一个文件被第二次引用是正常的（被驳回的退款重新申请时
+// 带着同一批凭证、同一张图挂到第二个规格上），而带着那个谓词时第二次影响 0 行，
+// 下面那条「0 行 = 不在视野内」的推论就成了假话 —— 症状是第二次引用回 404 / 422。
+// 再写一次 TRUE 没有任何副作用。
 //
 // rows_affected = 0 只可能是这条文件不在本租户视野内（RLS），
 // 而那一步在整组替换里已经由 GetUpload 挡过一次；这里返回行数是第二道 ——
