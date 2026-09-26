@@ -2,6 +2,7 @@
   "pages": [
     { "path": "pages/products/list",  "style": { "navigationStyle": "custom" } },
     { "path": "pages/products/detail","style": { "navigationBarTitleText": "" } },
+    { "path": "pages/search/index",   "style": { "navigationBarTitleText": "搜索" } },
     { "path": "pages/auth/login",     "style": { "navigationBarTitleText": "" } },
     { "path": "pages/order/create",   "style": { "navigationBarTitleText": "确认订单" } },
     { "path": "pages/order/list",     "style": { "navigationBarTitleText": "我的订单" } },

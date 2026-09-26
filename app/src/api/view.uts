@@ -26,6 +26,7 @@ import {
   PaymentRecord,
   ProductDetail,
   ProductSummary,
+  SearchHit,
   Sku,
 } from './schema.uts'
 
@@ -108,6 +109,31 @@ export function productRow(p : ProductSummary) : ProductRow {
     // in_stock 是可选字段：契约没保证一定返回。没返回时不敢说它没货。
     soldOut: p.in_stock != null && !p.in_stock!,
     cover: coverOf(p.id, p.title, p.image_url),
+  } as ProductRow
+}
+
+/**
+ * 搜索结果 -> 和商品列表同一种 Row，页面复用同一套卡片。
+ *
+ * 这里**不能**写 `productRow(hit)`：SearchHit 与 ProductSummary 在契约里是两个
+ * 独立的 schema，TS 的结构化类型下可以互相赋值，UTS 落到 Kotlin 就是两个无关的类
+ * （同 orderDetailView 那段注释的道理）。所以字段在这里重新取一遍。
+ */
+export function searchHitRow(h : SearchHit) : ProductRow {
+  const min = h.min_price_cents
+  const max = h.max_price_cents
+  let priceText = yuan(min)
+  if (max != null && max! > min) {
+    priceText = yuan(min) + ' ~ ' + yuan(max)
+  }
+  return {
+    id: h.id,
+    title: h.title,
+    subtitle: h.subtitle != null ? h.subtitle! : '',
+    priceText: priceText,
+    offShelf: h.status == 2,
+    soldOut: h.in_stock != null && !h.in_stock!,
+    cover: coverOf(h.id, h.title, h.image_url),
   } as ProductRow
 }
 

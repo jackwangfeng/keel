@@ -7,11 +7,11 @@
         <text class="t-display">{{ greeting }}</text>
         <text class="t-sub head-sub">慢一点，好好喝一杯</text>
 
-        <!-- 搜索框先占位：GET /search 是 M3 的东西，后端还没有。
-             做成一个明说「还没上线」的样子，而不是一个点了没反应的框。 -->
-        <view class="search row">
+        <!-- 首页只放一个入口，真正的输入框在搜索页：首页的输入框一获得焦点就弹键盘、
+             挡住商品，而搜索结果本来就要一整页来放。 -->
+        <view class="search row" @click="goSearch">
           <text class="search-icon">⌕</text>
-          <text class="t-hint">搜索即将上线</text>
+          <text class="t-hint">搜索商品</text>
         </view>
       </view>
 
@@ -104,6 +104,9 @@ export default {
           this.loading = false
         }
       )
+    },
+    goSearch() {
+      uni.navigateTo({ url: '/pages/search/index' })
     },
     openDetail(id: number) {
       uni.navigateTo({ url: '/pages/products/detail?id=' + id.toString() })

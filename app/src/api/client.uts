@@ -36,6 +36,8 @@ import {
   Problem,
   ProductDetail,
   RefreshTokenRequest,
+  SearchRequest,
+  SearchResponse,
 } from './schema.uts'
 import { getBaseUrl, loadSession } from './config.uts'
 
@@ -286,6 +288,28 @@ export function listProducts(
   send('GET', '/products', queryString(parts), null, null,
     (_s : number, text : string, _r : boolean) => {
     const body = JSON.parse<ListProductsResponse>(text)
+    if (body == null) {
+      onErr(decodeFailure(200))
+      return
+    }
+    onOk(body!)
+  }, onErr)
+}
+
+/**
+ * POST /search：语义 + 关键词混合检索（契约里 security: []，不需要登录）。
+ *
+ * 一期不翻页：结果上限就是 size（契约 SearchResponse.total 的注释）。
+ * 服务端会按相关度把召回到的都排出来，不做相关度阈值 —— 所以「搜不到」在这里
+ * 表现为结果排在后面，而不是空列表；空列表只在店里一件都召回不到时出现。
+ */
+export function search(
+  req : SearchRequest,
+  onOk : (res : SearchResponse) => void,
+  onErr : FailureHandler
+) {
+  send('POST', '/search', '', req, null, (_s : number, text : string, _r : boolean) => {
+    const body = JSON.parse<SearchResponse>(text)
     if (body == null) {
       onErr(decodeFailure(200))
       return
