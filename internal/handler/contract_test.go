@@ -360,6 +360,45 @@ var routes = []route{
 		HandlerFile:    "admin_order_detail.go",
 		NoQueryParams:  "详情只吃路径参数 refund_no",
 	},
+	// —— 经营报表（契约 Report tag，00048）。参数集合不同的接口各自一个文件
+	// （对账按文件读 c.Query 的字面量）；概览与趋势参数一模一样，共用一个。
+	// 全部参数都实现了，既不写 NoQueryParams 也不挂账。
+	{
+		ContractPath:   "/admin/reports/overview",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "admin_report_overview.go",
+	},
+	{
+		ContractPath:   "/admin/reports/trend",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "admin_report_overview.go",
+	},
+	{
+		ContractPath:   "/admin/reports/products",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "admin_report_products.go",
+	},
+	{
+		ContractPath:   "/admin/reports/stores",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "admin_report_stores.go",
+	},
+	{
+		ContractPath:   "/admin/reports/inventory-alerts",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "admin_report_inventory.go",
+	},
+	{
+		ContractPath:   "/admin/reports/search",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "admin_report_search.go",
+	},
 	{
 		ContractPath:   "/webhooks/refunds/{channel}",
 		ContractMethod: "post",

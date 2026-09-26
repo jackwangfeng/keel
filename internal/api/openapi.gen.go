@@ -909,6 +909,69 @@ func (e RegionUpdateRequestStatus) Valid() bool {
 	}
 }
 
+// Defines values for ReportProductRankingSortBy.
+const (
+	ReportProductRankingSortByAmount   ReportProductRankingSortBy = "amount"
+	ReportProductRankingSortByQuantity ReportProductRankingSortBy = "quantity"
+)
+
+// Valid indicates whether the value is a known member of the ReportProductRankingSortBy enum.
+func (e ReportProductRankingSortBy) Valid() bool {
+	switch e {
+	case ReportProductRankingSortByAmount:
+		return true
+	case ReportProductRankingSortByQuantity:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ReportTrendGranularity.
+const (
+	Day  ReportTrendGranularity = "day"
+	Hour ReportTrendGranularity = "hour"
+)
+
+// Valid indicates whether the value is a known member of the ReportTrendGranularity enum.
+func (e ReportTrendGranularity) Valid() bool {
+	switch e {
+	case Day:
+		return true
+	case Hour:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ReportWindowPeriod.
+const (
+	ReportWindowPeriodCustom     ReportWindowPeriod = "custom"
+	ReportWindowPeriodLast30Days ReportWindowPeriod = "last_30_days"
+	ReportWindowPeriodLast7Days  ReportWindowPeriod = "last_7_days"
+	ReportWindowPeriodToday      ReportWindowPeriod = "today"
+	ReportWindowPeriodYesterday  ReportWindowPeriod = "yesterday"
+)
+
+// Valid indicates whether the value is a known member of the ReportWindowPeriod enum.
+func (e ReportWindowPeriod) Valid() bool {
+	switch e {
+	case ReportWindowPeriodCustom:
+		return true
+	case ReportWindowPeriodLast30Days:
+		return true
+	case ReportWindowPeriodLast7Days:
+		return true
+	case ReportWindowPeriodToday:
+		return true
+	case ReportWindowPeriodYesterday:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ScopedProductListingPriceSource.
 const (
 	ScopedProductListingPriceSourceN1 ScopedProductListingPriceSource = 1
@@ -1218,6 +1281,33 @@ func (e UserCouponStatus) Valid() bool {
 	}
 }
 
+// Defines values for ReportPeriod.
+const (
+	ReportPeriodCustom     ReportPeriod = "custom"
+	ReportPeriodLast30Days ReportPeriod = "last_30_days"
+	ReportPeriodLast7Days  ReportPeriod = "last_7_days"
+	ReportPeriodToday      ReportPeriod = "today"
+	ReportPeriodYesterday  ReportPeriod = "yesterday"
+)
+
+// Valid indicates whether the value is a known member of the ReportPeriod enum.
+func (e ReportPeriod) Valid() bool {
+	switch e {
+	case ReportPeriodCustom:
+		return true
+	case ReportPeriodLast30Days:
+		return true
+	case ReportPeriodLast7Days:
+		return true
+	case ReportPeriodToday:
+		return true
+	case ReportPeriodYesterday:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for GetAdminCouponTemplatesParamsStatus.
 const (
 	GetAdminCouponTemplatesParamsStatusN0 GetAdminCouponTemplatesParamsStatus = 0
@@ -1269,6 +1359,159 @@ func (e PostAdminRefundsRefundNoAuditJSONBodyAction) Valid() bool {
 	case Approve:
 		return true
 	case Reject:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GetAdminReportsOverviewParamsPeriod.
+const (
+	GetAdminReportsOverviewParamsPeriodCustom     GetAdminReportsOverviewParamsPeriod = "custom"
+	GetAdminReportsOverviewParamsPeriodLast30Days GetAdminReportsOverviewParamsPeriod = "last_30_days"
+	GetAdminReportsOverviewParamsPeriodLast7Days  GetAdminReportsOverviewParamsPeriod = "last_7_days"
+	GetAdminReportsOverviewParamsPeriodToday      GetAdminReportsOverviewParamsPeriod = "today"
+	GetAdminReportsOverviewParamsPeriodYesterday  GetAdminReportsOverviewParamsPeriod = "yesterday"
+)
+
+// Valid indicates whether the value is a known member of the GetAdminReportsOverviewParamsPeriod enum.
+func (e GetAdminReportsOverviewParamsPeriod) Valid() bool {
+	switch e {
+	case GetAdminReportsOverviewParamsPeriodCustom:
+		return true
+	case GetAdminReportsOverviewParamsPeriodLast30Days:
+		return true
+	case GetAdminReportsOverviewParamsPeriodLast7Days:
+		return true
+	case GetAdminReportsOverviewParamsPeriodToday:
+		return true
+	case GetAdminReportsOverviewParamsPeriodYesterday:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GetAdminReportsProductsParamsPeriod.
+const (
+	GetAdminReportsProductsParamsPeriodCustom     GetAdminReportsProductsParamsPeriod = "custom"
+	GetAdminReportsProductsParamsPeriodLast30Days GetAdminReportsProductsParamsPeriod = "last_30_days"
+	GetAdminReportsProductsParamsPeriodLast7Days  GetAdminReportsProductsParamsPeriod = "last_7_days"
+	GetAdminReportsProductsParamsPeriodToday      GetAdminReportsProductsParamsPeriod = "today"
+	GetAdminReportsProductsParamsPeriodYesterday  GetAdminReportsProductsParamsPeriod = "yesterday"
+)
+
+// Valid indicates whether the value is a known member of the GetAdminReportsProductsParamsPeriod enum.
+func (e GetAdminReportsProductsParamsPeriod) Valid() bool {
+	switch e {
+	case GetAdminReportsProductsParamsPeriodCustom:
+		return true
+	case GetAdminReportsProductsParamsPeriodLast30Days:
+		return true
+	case GetAdminReportsProductsParamsPeriodLast7Days:
+		return true
+	case GetAdminReportsProductsParamsPeriodToday:
+		return true
+	case GetAdminReportsProductsParamsPeriodYesterday:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GetAdminReportsProductsParamsSortBy.
+const (
+	GetAdminReportsProductsParamsSortByAmount   GetAdminReportsProductsParamsSortBy = "amount"
+	GetAdminReportsProductsParamsSortByQuantity GetAdminReportsProductsParamsSortBy = "quantity"
+)
+
+// Valid indicates whether the value is a known member of the GetAdminReportsProductsParamsSortBy enum.
+func (e GetAdminReportsProductsParamsSortBy) Valid() bool {
+	switch e {
+	case GetAdminReportsProductsParamsSortByAmount:
+		return true
+	case GetAdminReportsProductsParamsSortByQuantity:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GetAdminReportsSearchParamsPeriod.
+const (
+	GetAdminReportsSearchParamsPeriodCustom     GetAdminReportsSearchParamsPeriod = "custom"
+	GetAdminReportsSearchParamsPeriodLast30Days GetAdminReportsSearchParamsPeriod = "last_30_days"
+	GetAdminReportsSearchParamsPeriodLast7Days  GetAdminReportsSearchParamsPeriod = "last_7_days"
+	GetAdminReportsSearchParamsPeriodToday      GetAdminReportsSearchParamsPeriod = "today"
+	GetAdminReportsSearchParamsPeriodYesterday  GetAdminReportsSearchParamsPeriod = "yesterday"
+)
+
+// Valid indicates whether the value is a known member of the GetAdminReportsSearchParamsPeriod enum.
+func (e GetAdminReportsSearchParamsPeriod) Valid() bool {
+	switch e {
+	case GetAdminReportsSearchParamsPeriodCustom:
+		return true
+	case GetAdminReportsSearchParamsPeriodLast30Days:
+		return true
+	case GetAdminReportsSearchParamsPeriodLast7Days:
+		return true
+	case GetAdminReportsSearchParamsPeriodToday:
+		return true
+	case GetAdminReportsSearchParamsPeriodYesterday:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GetAdminReportsStoresParamsPeriod.
+const (
+	GetAdminReportsStoresParamsPeriodCustom     GetAdminReportsStoresParamsPeriod = "custom"
+	GetAdminReportsStoresParamsPeriodLast30Days GetAdminReportsStoresParamsPeriod = "last_30_days"
+	GetAdminReportsStoresParamsPeriodLast7Days  GetAdminReportsStoresParamsPeriod = "last_7_days"
+	GetAdminReportsStoresParamsPeriodToday      GetAdminReportsStoresParamsPeriod = "today"
+	GetAdminReportsStoresParamsPeriodYesterday  GetAdminReportsStoresParamsPeriod = "yesterday"
+)
+
+// Valid indicates whether the value is a known member of the GetAdminReportsStoresParamsPeriod enum.
+func (e GetAdminReportsStoresParamsPeriod) Valid() bool {
+	switch e {
+	case GetAdminReportsStoresParamsPeriodCustom:
+		return true
+	case GetAdminReportsStoresParamsPeriodLast30Days:
+		return true
+	case GetAdminReportsStoresParamsPeriodLast7Days:
+		return true
+	case GetAdminReportsStoresParamsPeriodToday:
+		return true
+	case GetAdminReportsStoresParamsPeriodYesterday:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GetAdminReportsTrendParamsPeriod.
+const (
+	GetAdminReportsTrendParamsPeriodCustom     GetAdminReportsTrendParamsPeriod = "custom"
+	GetAdminReportsTrendParamsPeriodLast30Days GetAdminReportsTrendParamsPeriod = "last_30_days"
+	GetAdminReportsTrendParamsPeriodLast7Days  GetAdminReportsTrendParamsPeriod = "last_7_days"
+	GetAdminReportsTrendParamsPeriodToday      GetAdminReportsTrendParamsPeriod = "today"
+	GetAdminReportsTrendParamsPeriodYesterday  GetAdminReportsTrendParamsPeriod = "yesterday"
+)
+
+// Valid indicates whether the value is a known member of the GetAdminReportsTrendParamsPeriod enum.
+func (e GetAdminReportsTrendParamsPeriod) Valid() bool {
+	switch e {
+	case GetAdminReportsTrendParamsPeriodCustom:
+		return true
+	case GetAdminReportsTrendParamsPeriodLast30Days:
+		return true
+	case GetAdminReportsTrendParamsPeriodLast7Days:
+		return true
+	case GetAdminReportsTrendParamsPeriodToday:
+		return true
+	case GetAdminReportsTrendParamsPeriodYesterday:
 		return true
 	default:
 		return false
@@ -3556,6 +3799,420 @@ type RegionUpdateRequest struct {
 // RegionUpdateRequestStatus defines model for RegionUpdateRequest.Status.
 type RegionUpdateRequestStatus int
 
+// ReportInventoryAlert defines model for ReportInventoryAlert.
+type ReportInventoryAlert struct {
+	AvailableQty int    `json:"available_qty"`
+	ProductId    int64  `json:"product_id"`
+	ProductTitle string `json:"product_title"`
+	RegionId     int64  `json:"region_id"`
+	SkuCode      string `json:"sku_code"`
+	SkuId        int64  `json:"sku_id"`
+
+	// SpecValues SKU 的规格值，如 `{"颜色":"红","尺码":"M"}`
+	SpecValues map[string]string `json:"spec_values"`
+	StoreId    int64             `json:"store_id"`
+	StoreName  string            `json:"store_name"`
+	WarningQty int               `json:"warning_qty"`
+}
+
+// ReportInventoryAlerts defines model for ReportInventoryAlerts.
+type ReportInventoryAlerts struct {
+	Items []ReportInventoryAlert `json:"items"`
+
+	// Total 符合条件的总条数（不受 limit 影响）
+	Total int64 `json:"total"`
+}
+
+// ReportMetrics 一段窗口里的核心指标。**订单口径**：已支付的五种状态
+// （`20 待发货`、`30 已发货`、`40 已完成`、`50 退款中`、`60 已退款`）且支付时间落在窗口里；
+// 草稿（`0`）、待支付（`10`）、已关闭 / 取消（`90`）一律不计。整单退掉的单（`60`）
+// 仍然计入支付 —— 它确实付过钱，退掉的那部分由退款金额扣回。
+type ReportMetrics struct {
+	// AvgOrderValueCents 客单价 = 支付金额 ÷ 支付买家数，四舍五入到分；没有买家时为 0。
+	AvgOrderValueCents Money `json:"avg_order_value_cents"`
+
+	// BuyerCount 支付买家数：上述订单的下单买家去重数。
+	BuyerCount int64 `json:"buyer_count"`
+
+	// NetSalesCents 销售额（净）= 支付金额 − 退款金额。可以为负（这段时间退的比卖的多）。
+	NetSalesCents Money `json:"net_sales_cents"`
+
+	// OrderCount 支付订单数：上述订单的笔数。
+	OrderCount int64 `json:"order_count"`
+
+	// PaidAmountCents 支付金额：上述订单的实付 `paid_cents` 之和（含运费，已扣券）。
+	PaidAmountCents Money `json:"paid_amount_cents"`
+
+	// RefundAmountCents 退款金额：窗口内**到账**（退款单 `40 已退款`，按 `refunded_at`）的退款 `amount_cents` 之和。
+	// 审核中、退款中、已驳回、已撤回的不计。不论那一单是哪天付的款。
+	RefundAmountCents Money `json:"refund_amount_cents"`
+
+	// RefundCount 退款笔数：窗口内到账的退款单张数。
+	RefundCount int64 `json:"refund_count"`
+
+	// RefundRate 退款率 = 退款金额 ÷ 支付金额（同一窗口），支付金额为 0 时为 `null`（不是 0）。
+	// 因为两边按各自的时间归属，**它可以大于 1**（本期退的是上期卖的）。
+	RefundRate *float64 `json:"refund_rate"`
+}
+
+// ReportOverview defines model for ReportOverview.
+type ReportOverview struct {
+	// Current 一段窗口里的核心指标。**订单口径**：已支付的五种状态
+	// （`20 待发货`、`30 已发货`、`40 已完成`、`50 退款中`、`60 已退款`）且支付时间落在窗口里；
+	// 草稿（`0`）、待支付（`10`）、已关闭 / 取消（`90`）一律不计。整单退掉的单（`60`）
+	// 仍然计入支付 —— 它确实付过钱，退掉的那部分由退款金额扣回。
+	Current ReportMetrics `json:"current"`
+
+	// Previous 一段窗口里的核心指标。**订单口径**：已支付的五种状态
+	// （`20 待发货`、`30 已发货`、`40 已完成`、`50 退款中`、`60 已退款`）且支付时间落在窗口里；
+	// 草稿（`0`）、待支付（`10`）、已关闭 / 取消（`90`）一律不计。整单退掉的单（`60`）
+	// 仍然计入支付 —— 它确实付过钱，退掉的那部分由退款金额扣回。
+	Previous ReportMetrics `json:"previous"`
+
+	// Window 一次报表查询的时间窗口。**六条报表共用这一份口径**：
+	//
+	// **时区**：店铺时区 `shop_settings.timezone`；这家店没有那一行、或那一列不是合法的
+	// IANA 时区名时按 **Asia/Shanghai**。回显在 `timezone` 里。「今天」「昨天」「按天」「按小时」
+	// 全部按这个时区的自然日 / 整点切，不按服务器时区、也不按 UTC。
+	//
+	// **窗口**（`current`，半开区间 `[start_at, end_at)`）：
+	// · `today`：今天 0 点 → 此刻；
+	// · `yesterday`：昨天 0 点 → 今天 0 点；
+	// · `last_7_days` / `last_30_days`：最近 7 / 30 个**完整**自然日，**不含今天**
+	//   （今天还没过完，放进去会让每天早上的数字都偏低）；
+	// · `custom`：`start_date` 0 点 → `end_date` 次日 0 点。
+	//
+	// **上一周期**（`previous`）：紧挨在 `current` 之前、等长的一段 ——
+	// `today` 对比**昨天的同一时段**（昨天 0 点 → 昨天的此刻），其余对比前面同样天数的
+	// 自然日（`yesterday` 对前天，`last_7_days` 对再往前的 7 天，`custom` 同理）。
+	//
+	// **归属时间**：销售（支付金额、订单数、买家数、商品排行）按**支付时间**
+	// `orders.paid_at` 落窗口 —— 下单了没付钱不是销售；退款按**到账时间**
+	// `refunds.refunded_at` 落窗口 —— 申请了没退出去的钱仍然在店里。
+	// 于是一笔 9 月 30 日付款、10 月 2 日退款的单，9 月的销售里有它，10 月的退款里有它。
+	//
+	// **金额**一律整数分（`Money`），不做任何四舍五入以外的换算。
+	//
+	// **跨度上限 366 天**（`custom`）：每条报表都是对窗口内的订单 / 退款 / 检索日志
+	// 现场聚合（不预先汇总），扫描量与窗口长度成正比；366 天覆盖「今年以来」与
+	// 「同比去年」这两种最长的日常问法，再长的分析该去离线数仓，而不是压在交易库上。
+	Window ReportWindow `json:"window"`
+}
+
+// ReportProductRankItem defines model for ReportProductRankItem.
+type ReportProductRankItem struct {
+	// AmountCents 销售额：订单行实付分摊之和（不含运费）。
+	AmountCents Money `json:"amount_cents"`
+	CategoryId  int64 `json:"category_id"`
+
+	// OrderCount 含这件商品的支付订单数
+	OrderCount int64 `json:"order_count"`
+	ProductId  int64 `json:"product_id"`
+
+	// Quantity 销量（件）
+	Quantity int64 `json:"quantity"`
+
+	// Rank 名次，从 1 开始
+	Rank int `json:"rank"`
+
+	// RefundedAmountCents 这些订单行截至查询时已退的金额。
+	RefundedAmountCents Money `json:"refunded_amount_cents"`
+
+	// RefundedQuantity 这些订单行截至查询时已退的件数。
+	RefundedQuantity int64 `json:"refunded_quantity"`
+
+	// Title 商品当前的标题
+	Title string `json:"title"`
+}
+
+// ReportProductRanking defines model for ReportProductRanking.
+type ReportProductRanking struct {
+	Items  []ReportProductRankItem    `json:"items"`
+	SortBy ReportProductRankingSortBy `json:"sort_by"`
+
+	// Window 一次报表查询的时间窗口。**六条报表共用这一份口径**：
+	//
+	// **时区**：店铺时区 `shop_settings.timezone`；这家店没有那一行、或那一列不是合法的
+	// IANA 时区名时按 **Asia/Shanghai**。回显在 `timezone` 里。「今天」「昨天」「按天」「按小时」
+	// 全部按这个时区的自然日 / 整点切，不按服务器时区、也不按 UTC。
+	//
+	// **窗口**（`current`，半开区间 `[start_at, end_at)`）：
+	// · `today`：今天 0 点 → 此刻；
+	// · `yesterday`：昨天 0 点 → 今天 0 点；
+	// · `last_7_days` / `last_30_days`：最近 7 / 30 个**完整**自然日，**不含今天**
+	//   （今天还没过完，放进去会让每天早上的数字都偏低）；
+	// · `custom`：`start_date` 0 点 → `end_date` 次日 0 点。
+	//
+	// **上一周期**（`previous`）：紧挨在 `current` 之前、等长的一段 ——
+	// `today` 对比**昨天的同一时段**（昨天 0 点 → 昨天的此刻），其余对比前面同样天数的
+	// 自然日（`yesterday` 对前天，`last_7_days` 对再往前的 7 天，`custom` 同理）。
+	//
+	// **归属时间**：销售（支付金额、订单数、买家数、商品排行）按**支付时间**
+	// `orders.paid_at` 落窗口 —— 下单了没付钱不是销售；退款按**到账时间**
+	// `refunds.refunded_at` 落窗口 —— 申请了没退出去的钱仍然在店里。
+	// 于是一笔 9 月 30 日付款、10 月 2 日退款的单，9 月的销售里有它，10 月的退款里有它。
+	//
+	// **金额**一律整数分（`Money`），不做任何四舍五入以外的换算。
+	//
+	// **跨度上限 366 天**（`custom`）：每条报表都是对窗口内的订单 / 退款 / 检索日志
+	// 现场聚合（不预先汇总），扫描量与窗口长度成正比；366 天覆盖「今年以来」与
+	// 「同比去年」这两种最长的日常问法，再长的分析该去离线数仓，而不是压在交易库上。
+	Window ReportWindow `json:"window"`
+}
+
+// ReportProductRankingSortBy defines model for ReportProductRanking.SortBy.
+type ReportProductRankingSortBy string
+
+// ReportRange 一段半开区间 `[start_at, end_at)`，同时给出它在店铺时区里的起止日期（都含）。
+type ReportRange struct {
+	// EndAt 区间终点（**不含**），UTC
+	EndAt time.Time `json:"end_at"`
+
+	// EndDate 最后一个被覆盖的自然日（含），店铺时区
+	EndDate openapi_types.Date `json:"end_date"`
+
+	// StartAt 区间起点（含），UTC
+	StartAt time.Time `json:"start_at"`
+
+	// StartDate 起点在店铺时区里的日期
+	StartDate openapi_types.Date `json:"start_date"`
+}
+
+// ReportRegionRow defines model for ReportRegionRow.
+type ReportRegionRow struct {
+	// NetSalesCents 金额，单位「分」。禁止使用浮点。
+	NetSalesCents Money `json:"net_sales_cents"`
+	OrderCount    int64 `json:"order_count"`
+
+	// PaidAmountCents 金额，单位「分」。禁止使用浮点。
+	PaidAmountCents Money `json:"paid_amount_cents"`
+
+	// RefundAmountCents 金额，单位「分」。禁止使用浮点。
+	RefundAmountCents Money  `json:"refund_amount_cents"`
+	RegionId          int64  `json:"region_id"`
+	RegionName        string `json:"region_name"`
+
+	// StoreCount 这个大区在 stores 里出现的门店数
+	StoreCount int `json:"store_count"`
+}
+
+// ReportSearchOverview defines model for ReportSearchOverview.
+type ReportSearchOverview struct {
+	ClickCount  int64 `json:"click_count"`
+	SearchCount int64 `json:"search_count"`
+
+	// TopQueries 热门搜索词 Top N。
+	TopQueries []ReportSearchTerm `json:"top_queries"`
+
+	// Window 一次报表查询的时间窗口。**六条报表共用这一份口径**：
+	//
+	// **时区**：店铺时区 `shop_settings.timezone`；这家店没有那一行、或那一列不是合法的
+	// IANA 时区名时按 **Asia/Shanghai**。回显在 `timezone` 里。「今天」「昨天」「按天」「按小时」
+	// 全部按这个时区的自然日 / 整点切，不按服务器时区、也不按 UTC。
+	//
+	// **窗口**（`current`，半开区间 `[start_at, end_at)`）：
+	// · `today`：今天 0 点 → 此刻；
+	// · `yesterday`：昨天 0 点 → 今天 0 点；
+	// · `last_7_days` / `last_30_days`：最近 7 / 30 个**完整**自然日，**不含今天**
+	//   （今天还没过完，放进去会让每天早上的数字都偏低）；
+	// · `custom`：`start_date` 0 点 → `end_date` 次日 0 点。
+	//
+	// **上一周期**（`previous`）：紧挨在 `current` 之前、等长的一段 ——
+	// `today` 对比**昨天的同一时段**（昨天 0 点 → 昨天的此刻），其余对比前面同样天数的
+	// 自然日（`yesterday` 对前天，`last_7_days` 对再往前的 7 天，`custom` 同理）。
+	//
+	// **归属时间**：销售（支付金额、订单数、买家数、商品排行）按**支付时间**
+	// `orders.paid_at` 落窗口 —— 下单了没付钱不是销售；退款按**到账时间**
+	// `refunds.refunded_at` 落窗口 —— 申请了没退出去的钱仍然在店里。
+	// 于是一笔 9 月 30 日付款、10 月 2 日退款的单，9 月的销售里有它，10 月的退款里有它。
+	//
+	// **金额**一律整数分（`Money`），不做任何四舍五入以外的换算。
+	//
+	// **跨度上限 366 天**（`custom`）：每条报表都是对窗口内的订单 / 退款 / 检索日志
+	// 现场聚合（不预先汇总），扫描量与窗口长度成正比；366 天覆盖「今年以来」与
+	// 「同比去年」这两种最长的日常问法，再长的分析该去离线数仓，而不是压在交易库上。
+	Window          ReportWindow `json:"window"`
+	ZeroResultCount int64        `json:"zero_result_count"`
+
+	// ZeroResultQueries 无结果搜索词 Top N（按无结果次数排）。
+	ZeroResultQueries []ReportSearchTerm `json:"zero_result_queries"`
+
+	// ZeroResultRate 无结果次数 ÷ 搜索次数；没有搜索时为 `null`。
+	ZeroResultRate *float64 `json:"zero_result_rate"`
+}
+
+// ReportSearchTerm defines model for ReportSearchTerm.
+type ReportSearchTerm struct {
+	// Query 归并后的搜索词（去首尾空白、小写）
+	Query           string `json:"query"`
+	SearchCount     int64  `json:"search_count"`
+	ZeroResultCount int64  `json:"zero_result_count"`
+}
+
+// ReportStoreComparison defines model for ReportStoreComparison.
+type ReportStoreComparison struct {
+	Regions []ReportRegionRow `json:"regions"`
+	Stores  []ReportStoreRow  `json:"stores"`
+
+	// Window 一次报表查询的时间窗口。**六条报表共用这一份口径**：
+	//
+	// **时区**：店铺时区 `shop_settings.timezone`；这家店没有那一行、或那一列不是合法的
+	// IANA 时区名时按 **Asia/Shanghai**。回显在 `timezone` 里。「今天」「昨天」「按天」「按小时」
+	// 全部按这个时区的自然日 / 整点切，不按服务器时区、也不按 UTC。
+	//
+	// **窗口**（`current`，半开区间 `[start_at, end_at)`）：
+	// · `today`：今天 0 点 → 此刻；
+	// · `yesterday`：昨天 0 点 → 今天 0 点；
+	// · `last_7_days` / `last_30_days`：最近 7 / 30 个**完整**自然日，**不含今天**
+	//   （今天还没过完，放进去会让每天早上的数字都偏低）；
+	// · `custom`：`start_date` 0 点 → `end_date` 次日 0 点。
+	//
+	// **上一周期**（`previous`）：紧挨在 `current` 之前、等长的一段 ——
+	// `today` 对比**昨天的同一时段**（昨天 0 点 → 昨天的此刻），其余对比前面同样天数的
+	// 自然日（`yesterday` 对前天，`last_7_days` 对再往前的 7 天，`custom` 同理）。
+	//
+	// **归属时间**：销售（支付金额、订单数、买家数、商品排行）按**支付时间**
+	// `orders.paid_at` 落窗口 —— 下单了没付钱不是销售；退款按**到账时间**
+	// `refunds.refunded_at` 落窗口 —— 申请了没退出去的钱仍然在店里。
+	// 于是一笔 9 月 30 日付款、10 月 2 日退款的单，9 月的销售里有它，10 月的退款里有它。
+	//
+	// **金额**一律整数分（`Money`），不做任何四舍五入以外的换算。
+	//
+	// **跨度上限 366 天**（`custom`）：每条报表都是对窗口内的订单 / 退款 / 检索日志
+	// 现场聚合（不预先汇总），扫描量与窗口长度成正比；366 天覆盖「今年以来」与
+	// 「同比去年」这两种最长的日常问法，再长的分析该去离线数仓，而不是压在交易库上。
+	Window ReportWindow `json:"window"`
+}
+
+// ReportStoreRow defines model for ReportStoreRow.
+type ReportStoreRow struct {
+	// Deleted 门店已删除（只在窗口内有成交或退款时出现）
+	Deleted bool `json:"deleted"`
+
+	// NetSalesCents 金额，单位「分」。禁止使用浮点。
+	NetSalesCents Money `json:"net_sales_cents"`
+	OrderCount    int64 `json:"order_count"`
+
+	// PaidAmountCents 金额，单位「分」。禁止使用浮点。
+	PaidAmountCents Money `json:"paid_amount_cents"`
+
+	// RefundAmountCents 金额，单位「分」。禁止使用浮点。
+	RefundAmountCents Money `json:"refund_amount_cents"`
+
+	// RegionId 门店此刻所属的大区
+	RegionId   int64  `json:"region_id"`
+	RegionName string `json:"region_name"`
+	StoreCode  string `json:"store_code"`
+	StoreId    int64  `json:"store_id"`
+	StoreName  string `json:"store_name"`
+}
+
+// ReportTrend defines model for ReportTrend.
+type ReportTrend struct {
+	// Granularity 窗口只有一个自然日时按小时，否则按天。
+	Granularity ReportTrendGranularity `json:"granularity"`
+
+	// Points 按时间升序，每个桶一个点，没有数据的桶是 0。
+	Points []ReportTrendPoint `json:"points"`
+
+	// Window 一次报表查询的时间窗口。**六条报表共用这一份口径**：
+	//
+	// **时区**：店铺时区 `shop_settings.timezone`；这家店没有那一行、或那一列不是合法的
+	// IANA 时区名时按 **Asia/Shanghai**。回显在 `timezone` 里。「今天」「昨天」「按天」「按小时」
+	// 全部按这个时区的自然日 / 整点切，不按服务器时区、也不按 UTC。
+	//
+	// **窗口**（`current`，半开区间 `[start_at, end_at)`）：
+	// · `today`：今天 0 点 → 此刻；
+	// · `yesterday`：昨天 0 点 → 今天 0 点；
+	// · `last_7_days` / `last_30_days`：最近 7 / 30 个**完整**自然日，**不含今天**
+	//   （今天还没过完，放进去会让每天早上的数字都偏低）；
+	// · `custom`：`start_date` 0 点 → `end_date` 次日 0 点。
+	//
+	// **上一周期**（`previous`）：紧挨在 `current` 之前、等长的一段 ——
+	// `today` 对比**昨天的同一时段**（昨天 0 点 → 昨天的此刻），其余对比前面同样天数的
+	// 自然日（`yesterday` 对前天，`last_7_days` 对再往前的 7 天，`custom` 同理）。
+	//
+	// **归属时间**：销售（支付金额、订单数、买家数、商品排行）按**支付时间**
+	// `orders.paid_at` 落窗口 —— 下单了没付钱不是销售；退款按**到账时间**
+	// `refunds.refunded_at` 落窗口 —— 申请了没退出去的钱仍然在店里。
+	// 于是一笔 9 月 30 日付款、10 月 2 日退款的单，9 月的销售里有它，10 月的退款里有它。
+	//
+	// **金额**一律整数分（`Money`），不做任何四舍五入以外的换算。
+	//
+	// **跨度上限 366 天**（`custom`）：每条报表都是对窗口内的订单 / 退款 / 检索日志
+	// 现场聚合（不预先汇总），扫描量与窗口长度成正比；366 天覆盖「今年以来」与
+	// 「同比去年」这两种最长的日常问法，再长的分析该去离线数仓，而不是压在交易库上。
+	Window ReportWindow `json:"window"`
+}
+
+// ReportTrendGranularity 窗口只有一个自然日时按小时，否则按天。
+type ReportTrendGranularity string
+
+// ReportTrendPoint defines model for ReportTrendPoint.
+type ReportTrendPoint struct {
+	// BucketStartAt 桶的起点，UTC
+	BucketStartAt time.Time `json:"bucket_start_at"`
+
+	// Label 桶在店铺时区里的显示名：按天是 `MM-DD`，按小时是 `HH:00`。
+	//
+	// Examples: 09-26, 14:00
+	Label string `json:"label"`
+
+	// NetSalesCents 金额，单位「分」。禁止使用浮点。
+	NetSalesCents Money `json:"net_sales_cents"`
+	OrderCount    int64 `json:"order_count"`
+
+	// PaidAmountCents 金额，单位「分」。禁止使用浮点。
+	PaidAmountCents Money `json:"paid_amount_cents"`
+
+	// RefundAmountCents 金额，单位「分」。禁止使用浮点。
+	RefundAmountCents Money `json:"refund_amount_cents"`
+}
+
+// ReportWindow 一次报表查询的时间窗口。**六条报表共用这一份口径**：
+//
+// **时区**：店铺时区 `shop_settings.timezone`；这家店没有那一行、或那一列不是合法的
+// IANA 时区名时按 **Asia/Shanghai**。回显在 `timezone` 里。「今天」「昨天」「按天」「按小时」
+// 全部按这个时区的自然日 / 整点切，不按服务器时区、也不按 UTC。
+//
+// **窗口**（`current`，半开区间 `[start_at, end_at)`）：
+// · `today`：今天 0 点 → 此刻；
+// · `yesterday`：昨天 0 点 → 今天 0 点；
+// · `last_7_days` / `last_30_days`：最近 7 / 30 个**完整**自然日，**不含今天**
+//
+//	（今天还没过完，放进去会让每天早上的数字都偏低）；
+//
+// · `custom`：`start_date` 0 点 → `end_date` 次日 0 点。
+//
+// **上一周期**（`previous`）：紧挨在 `current` 之前、等长的一段 ——
+// `today` 对比**昨天的同一时段**（昨天 0 点 → 昨天的此刻），其余对比前面同样天数的
+// 自然日（`yesterday` 对前天，`last_7_days` 对再往前的 7 天，`custom` 同理）。
+//
+// **归属时间**：销售（支付金额、订单数、买家数、商品排行）按**支付时间**
+// `orders.paid_at` 落窗口 —— 下单了没付钱不是销售；退款按**到账时间**
+// `refunds.refunded_at` 落窗口 —— 申请了没退出去的钱仍然在店里。
+// 于是一笔 9 月 30 日付款、10 月 2 日退款的单，9 月的销售里有它，10 月的退款里有它。
+//
+// **金额**一律整数分（`Money`），不做任何四舍五入以外的换算。
+//
+// **跨度上限 366 天**（`custom`）：每条报表都是对窗口内的订单 / 退款 / 检索日志
+// 现场聚合（不预先汇总），扫描量与窗口长度成正比；366 天覆盖「今年以来」与
+// 「同比去年」这两种最长的日常问法，再长的分析该去离线数仓，而不是压在交易库上。
+type ReportWindow struct {
+	// Current 一段半开区间 `[start_at, end_at)`，同时给出它在店铺时区里的起止日期（都含）。
+	Current ReportRange        `json:"current"`
+	Period  ReportWindowPeriod `json:"period"`
+
+	// Previous 一段半开区间 `[start_at, end_at)`，同时给出它在店铺时区里的起止日期（都含）。
+	Previous ReportRange `json:"previous"`
+
+	// Timezone Examples: Asia/Shanghai
+	Timezone string `json:"timezone"`
+}
+
+// ReportWindowPeriod defines model for ReportWindow.Period.
+type ReportWindowPeriod string
+
 // ReturnShipment defines model for ReturnShipment.
 type ReturnShipment struct {
 	CarrierCode string `json:"carrier_code"`
@@ -3870,6 +4527,8 @@ type Staff struct {
 	// | 门店：建、改、删、围栏 | ✅ | ✅ | 只限本大区的门店（换大区时新旧都得在范围内） | ❌ |
 	// | 门店价、门店上下架、门店库存 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
 	// | 订单与售后：订单 / 退款单的列表与详情、发货、退款审核、确认收到退货 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
+	// | 经营报表：概览、趋势、商品排行、门店对比、库存预警 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
+	// | 经营报表：搜索概况（检索日志没有门店维度） | ✅ | ✅ | ❌ | ❌ |
 	// | 设默认门店（含建店时 is_default） | ✅ | ❌ | ❌ | ❌ |
 	// | 员工管理 | ✅ | ❌ | 只能加、改本大区门店的门店管理员 | ❌ |
 	// | 开店 | 仅平台级管理员 | | | |
@@ -3915,6 +4574,8 @@ type StaffCreateRequest struct {
 	// | 门店：建、改、删、围栏 | ✅ | ✅ | 只限本大区的门店（换大区时新旧都得在范围内） | ❌ |
 	// | 门店价、门店上下架、门店库存 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
 	// | 订单与售后：订单 / 退款单的列表与详情、发货、退款审核、确认收到退货 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
+	// | 经营报表：概览、趋势、商品排行、门店对比、库存预警 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
+	// | 经营报表：搜索概况（检索日志没有门店维度） | ✅ | ✅ | ❌ | ❌ |
 	// | 设默认门店（含建店时 is_default） | ✅ | ❌ | ❌ | ❌ |
 	// | 员工管理 | ✅ | ❌ | 只能加、改本大区门店的门店管理员 | ❌ |
 	// | 开店 | 仅平台级管理员 | | | |
@@ -3966,6 +4627,8 @@ type StaffRef struct {
 // | 门店：建、改、删、围栏 | ✅ | ✅ | 只限本大区的门店（换大区时新旧都得在范围内） | ❌ |
 // | 门店价、门店上下架、门店库存 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
 // | 订单与售后：订单 / 退款单的列表与详情、发货、退款审核、确认收到退货 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
+// | 经营报表：概览、趋势、商品排行、门店对比、库存预警 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
+// | 经营报表：搜索概况（检索日志没有门店维度） | ✅ | ✅ | ❌ | ❌ |
 // | 设默认门店（含建店时 is_default） | ✅ | ❌ | ❌ | ❌ |
 // | 员工管理 | ✅ | ❌ | 只能加、改本大区门店的门店管理员 | ❌ |
 // | 开店 | 仅平台级管理员 | | | |
@@ -4290,6 +4953,24 @@ type RefundNo = string
 // RegionId defines model for RegionId.
 type RegionId = int64
 
+// ReportEndDate defines model for ReportEndDate.
+type ReportEndDate = openapi_types.Date
+
+// ReportLimit defines model for ReportLimit.
+type ReportLimit = int
+
+// ReportPeriod defines model for ReportPeriod.
+type ReportPeriod string
+
+// ReportRegionId defines model for ReportRegionId.
+type ReportRegionId = int64
+
+// ReportStartDate defines model for ReportStartDate.
+type ReportStartDate = openapi_types.Date
+
+// ReportStoreId defines model for ReportStoreId.
+type ReportStoreId = int64
+
 // SkuId defines model for SkuId.
 type SkuId = int64
 
@@ -4301,6 +4982,9 @@ type IdempotencyInFlight = Problem
 
 // IdempotencyKeyReused RFC 9457 Problem Details
 type IdempotencyKeyReused = Problem
+
+// ReportBadWindow RFC 9457 Problem Details
+type ReportBadWindow = Problem
 
 // PostAddressesParams defines parameters for PostAddresses.
 type PostAddressesParams struct {
@@ -5635,6 +6319,298 @@ type PutAdminRegionsRegionIdSkusSkuIdPriceParams struct {
 	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
 }
 
+// GetAdminReportsInventoryAlertsParams defines parameters for GetAdminReportsInventoryAlerts.
+type GetAdminReportsInventoryAlertsParams struct {
+	// StoreId 只看这一家门店（履约门店）。与调用者的范围取交集，范围外得到空结果而不是 403。
+	StoreId *ReportStoreId `form:"store_id,omitempty" json:"store_id,omitempty"`
+
+	// RegionId 只看此刻挂在这个大区下的门店。与调用者的范围取交集。
+	RegionId *ReportRegionId `form:"region_id,omitempty" json:"region_id,omitempty"`
+
+	// Limit 最多返回几条。超出范围按边界钳制。
+	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// GetAdminReportsOverviewParams defines parameters for GetAdminReportsOverview.
+type GetAdminReportsOverviewParams struct {
+	// Period 时间窗口，按店铺时区的自然日切（口径见 `ReportWindow`）：
+	// `today` 今天 0 点到此刻 · `yesterday` 昨天 · `last_7_days` 最近 7 个完整自然日（不含今天）·
+	// `last_30_days` 最近 30 个完整自然日（不含今天）· `custom` 自定义（必须同时给
+	// `start_date` 与 `end_date`）。
+	Period *GetAdminReportsOverviewParamsPeriod `form:"period,omitempty" json:"period,omitempty"`
+
+	// StartDate `period=custom` 时的起始日（含），店铺时区的日期，形如 `2026-09-01`。
+	// 其它 period 下给了也不读。
+	StartDate *ReportStartDate `form:"start_date,omitempty" json:"start_date,omitempty"`
+
+	// EndDate `period=custom` 时的结束日（**含**），店铺时区的日期。起止最多跨 **366 天**
+	// （含首尾，一整个闰年），超出 422 —— 理由见 `ReportWindow`。
+	EndDate *ReportEndDate `form:"end_date,omitempty" json:"end_date,omitempty"`
+
+	// StoreId 只看这一家门店（履约门店）。与调用者的范围取交集，范围外得到空结果而不是 403。
+	StoreId *ReportStoreId `form:"store_id,omitempty" json:"store_id,omitempty"`
+
+	// RegionId 只看此刻挂在这个大区下的门店。与调用者的范围取交集。
+	RegionId *ReportRegionId `form:"region_id,omitempty" json:"region_id,omitempty"`
+
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// GetAdminReportsOverviewParamsPeriod defines parameters for GetAdminReportsOverview.
+type GetAdminReportsOverviewParamsPeriod string
+
+// GetAdminReportsProductsParams defines parameters for GetAdminReportsProducts.
+type GetAdminReportsProductsParams struct {
+	// Period 时间窗口，按店铺时区的自然日切（口径见 `ReportWindow`）：
+	// `today` 今天 0 点到此刻 · `yesterday` 昨天 · `last_7_days` 最近 7 个完整自然日（不含今天）·
+	// `last_30_days` 最近 30 个完整自然日（不含今天）· `custom` 自定义（必须同时给
+	// `start_date` 与 `end_date`）。
+	Period *GetAdminReportsProductsParamsPeriod `form:"period,omitempty" json:"period,omitempty"`
+
+	// StartDate `period=custom` 时的起始日（含），店铺时区的日期，形如 `2026-09-01`。
+	// 其它 period 下给了也不读。
+	StartDate *ReportStartDate `form:"start_date,omitempty" json:"start_date,omitempty"`
+
+	// EndDate `period=custom` 时的结束日（**含**），店铺时区的日期。起止最多跨 **366 天**
+	// （含首尾，一整个闰年），超出 422 —— 理由见 `ReportWindow`。
+	EndDate *ReportEndDate `form:"end_date,omitempty" json:"end_date,omitempty"`
+
+	// StoreId 只看这一家门店（履约门店）。与调用者的范围取交集，范围外得到空结果而不是 403。
+	StoreId *ReportStoreId `form:"store_id,omitempty" json:"store_id,omitempty"`
+
+	// RegionId 只看此刻挂在这个大区下的门店。与调用者的范围取交集。
+	RegionId *ReportRegionId `form:"region_id,omitempty" json:"region_id,omitempty"`
+
+	// SortBy 按什么排：`amount` 销售额（默认）、`quantity` 销量。不认识的值按默认。
+	SortBy *GetAdminReportsProductsParamsSortBy `form:"sort_by,omitempty" json:"sort_by,omitempty"`
+
+	// CategoryId 只看这个类目（含子孙类目）下的商品。类目不存在或已删除时结果为空。
+	CategoryId *int64 `form:"category_id,omitempty" json:"category_id,omitempty"`
+
+	// Limit Top N 的 N。超出范围按边界钳制。
+	Limit *ReportLimit `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// GetAdminReportsProductsParamsPeriod defines parameters for GetAdminReportsProducts.
+type GetAdminReportsProductsParamsPeriod string
+
+// GetAdminReportsProductsParamsSortBy defines parameters for GetAdminReportsProducts.
+type GetAdminReportsProductsParamsSortBy string
+
+// GetAdminReportsSearchParams defines parameters for GetAdminReportsSearch.
+type GetAdminReportsSearchParams struct {
+	// Period 时间窗口，按店铺时区的自然日切（口径见 `ReportWindow`）：
+	// `today` 今天 0 点到此刻 · `yesterday` 昨天 · `last_7_days` 最近 7 个完整自然日（不含今天）·
+	// `last_30_days` 最近 30 个完整自然日（不含今天）· `custom` 自定义（必须同时给
+	// `start_date` 与 `end_date`）。
+	Period *GetAdminReportsSearchParamsPeriod `form:"period,omitempty" json:"period,omitempty"`
+
+	// StartDate `period=custom` 时的起始日（含），店铺时区的日期，形如 `2026-09-01`。
+	// 其它 period 下给了也不读。
+	StartDate *ReportStartDate `form:"start_date,omitempty" json:"start_date,omitempty"`
+
+	// EndDate `period=custom` 时的结束日（**含**），店铺时区的日期。起止最多跨 **366 天**
+	// （含首尾，一整个闰年），超出 422 —— 理由见 `ReportWindow`。
+	EndDate *ReportEndDate `form:"end_date,omitempty" json:"end_date,omitempty"`
+
+	// Limit Top N 的 N。超出范围按边界钳制。
+	Limit *ReportLimit `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// GetAdminReportsSearchParamsPeriod defines parameters for GetAdminReportsSearch.
+type GetAdminReportsSearchParamsPeriod string
+
+// GetAdminReportsStoresParams defines parameters for GetAdminReportsStores.
+type GetAdminReportsStoresParams struct {
+	// Period 时间窗口，按店铺时区的自然日切（口径见 `ReportWindow`）：
+	// `today` 今天 0 点到此刻 · `yesterday` 昨天 · `last_7_days` 最近 7 个完整自然日（不含今天）·
+	// `last_30_days` 最近 30 个完整自然日（不含今天）· `custom` 自定义（必须同时给
+	// `start_date` 与 `end_date`）。
+	Period *GetAdminReportsStoresParamsPeriod `form:"period,omitempty" json:"period,omitempty"`
+
+	// StartDate `period=custom` 时的起始日（含），店铺时区的日期，形如 `2026-09-01`。
+	// 其它 period 下给了也不读。
+	StartDate *ReportStartDate `form:"start_date,omitempty" json:"start_date,omitempty"`
+
+	// EndDate `period=custom` 时的结束日（**含**），店铺时区的日期。起止最多跨 **366 天**
+	// （含首尾，一整个闰年），超出 422 —— 理由见 `ReportWindow`。
+	EndDate *ReportEndDate `form:"end_date,omitempty" json:"end_date,omitempty"`
+
+	// RegionId 只看此刻挂在这个大区下的门店。与调用者的范围取交集。
+	RegionId *ReportRegionId `form:"region_id,omitempty" json:"region_id,omitempty"`
+
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// GetAdminReportsStoresParamsPeriod defines parameters for GetAdminReportsStores.
+type GetAdminReportsStoresParamsPeriod string
+
+// GetAdminReportsTrendParams defines parameters for GetAdminReportsTrend.
+type GetAdminReportsTrendParams struct {
+	// Period 时间窗口，按店铺时区的自然日切（口径见 `ReportWindow`）：
+	// `today` 今天 0 点到此刻 · `yesterday` 昨天 · `last_7_days` 最近 7 个完整自然日（不含今天）·
+	// `last_30_days` 最近 30 个完整自然日（不含今天）· `custom` 自定义（必须同时给
+	// `start_date` 与 `end_date`）。
+	Period *GetAdminReportsTrendParamsPeriod `form:"period,omitempty" json:"period,omitempty"`
+
+	// StartDate `period=custom` 时的起始日（含），店铺时区的日期，形如 `2026-09-01`。
+	// 其它 period 下给了也不读。
+	StartDate *ReportStartDate `form:"start_date,omitempty" json:"start_date,omitempty"`
+
+	// EndDate `period=custom` 时的结束日（**含**），店铺时区的日期。起止最多跨 **366 天**
+	// （含首尾，一整个闰年），超出 422 —— 理由见 `ReportWindow`。
+	EndDate *ReportEndDate `form:"end_date,omitempty" json:"end_date,omitempty"`
+
+	// StoreId 只看这一家门店（履约门店）。与调用者的范围取交集，范围外得到空结果而不是 403。
+	StoreId *ReportStoreId `form:"store_id,omitempty" json:"store_id,omitempty"`
+
+	// RegionId 只看此刻挂在这个大区下的门店。与调用者的范围取交集。
+	RegionId *ReportRegionId `form:"region_id,omitempty" json:"region_id,omitempty"`
+
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// GetAdminReportsTrendParamsPeriod defines parameters for GetAdminReportsTrend.
+type GetAdminReportsTrendParamsPeriod string
+
 // DeleteAdminSkusSkuIdParams defines parameters for DeleteAdminSkusSkuId.
 type DeleteAdminSkusSkuIdParams struct {
 	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
@@ -5810,6 +6786,8 @@ type PatchAdminStaffStaffIdJSONBody struct {
 	// | 门店：建、改、删、围栏 | ✅ | ✅ | 只限本大区的门店（换大区时新旧都得在范围内） | ❌ |
 	// | 门店价、门店上下架、门店库存 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
 	// | 订单与售后：订单 / 退款单的列表与详情、发货、退款审核、确认收到退货 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
+	// | 经营报表：概览、趋势、商品排行、门店对比、库存预警 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
+	// | 经营报表：搜索概况（检索日志没有门店维度） | ✅ | ✅ | ❌ | ❌ |
 	// | 设默认门店（含建店时 is_default） | ✅ | ❌ | ❌ | ❌ |
 	// | 员工管理 | ✅ | ❌ | 只能加、改本大区门店的门店管理员 | ❌ |
 	// | 开店 | 仅平台级管理员 | | | |

@@ -557,6 +557,17 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	v1.GET("/admin/refunds", staffAuth, aoh.ListRefunds)
 	v1.GET("/admin/refunds/:refund_no", staffAuth, aoh.RefundDetail)
 
+	// 经营报表（契约 Report tag，迁移 00048 的索引）。六条都是只读聚合。
+	// 范围与后台订单列表同一个判据（service/authz.go 的 orderListScope），
+	// 搜索概况只放全店范围的人（检索日志没有门店维度）。判据全在 service/report.go。
+	rpt := handler.NewAdminReportHandler(service.NewReportService(repo))
+	v1.GET("/admin/reports/overview", staffAuth, rpt.Overview)
+	v1.GET("/admin/reports/trend", staffAuth, rpt.Trend)
+	v1.GET("/admin/reports/products", staffAuth, rpt.Products)
+	v1.GET("/admin/reports/stores", staffAuth, rpt.Stores)
+	v1.GET("/admin/reports/inventory-alerts", staffAuth, rpt.InventoryAlerts)
+	v1.GET("/admin/reports/search", staffAuth, rpt.Search)
+
 	cpa := handler.NewAdminCouponHandler(service.NewAdminCouponService(repo))
 	v1.GET("/admin/coupon-templates", staffAuth, cpa.List)
 	v1.POST("/admin/coupon-templates", staffAuth, cpa.Create)
