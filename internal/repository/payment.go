@@ -137,37 +137,6 @@ func (t tenantTx) SettleOrder(ctx context.Context, orderNo string, paidCents int
 	return nil
 }
 
-// DefaultAutoConfirmDays 是 shop_settings.auto_confirm_days 的列默认值（00001，数据模型 §2）。
-//
-// 一家店没有 shop_settings 那一行（开店不写它，00021）时按它算。
-// 它必须与列默认值是同一个数：两者分叉的后果是「配过店铺设置的店」与「没配过的店」
-// 在同一个默认之下按不同的天数自动确认，而谁都没改过这个配置。
-// internal/handler 的自动确认收货测试同时核对这两个数。
-const DefaultAutoConfirmDays = 7
-
-// AutoConfirmDays 取本租户的「发货后多少天自动确认收货」（数据模型 §5 发货第三条规则）。
-//
-// 与 ChannelNotifySecret 同一个惯例：shop_settings 是 tenant-root 类，没有 RLS，
-// 走裸 SQL，租户从 ctx 取 —— 调用方没有那个参数可以传错。
-// 没有那一行时返回 DefaultAutoConfirmDays，而不是「不自动确认」：
-// 后者的症状是一家新店的订单永远停在已发货，而表面上一切正常。
-func (r *Repo) AutoConfirmDays(ctx context.Context) (int, error) {
-	merchantID, err := tenant.FromContext(ctx)
-	if err != nil {
-		return 0, err
-	}
-	var days int16
-	err = r.pool.QueryRow(ctx,
-		`SELECT auto_confirm_days FROM shop_settings WHERE merchant_id = $1`, merchantID).Scan(&days)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return DefaultAutoConfirmDays, nil
-	}
-	if err != nil {
-		return 0, fmt.Errorf("读商家 %d 的自动确认收货天数失败: %w", merchantID, err)
-	}
-	return int(days), nil
-}
-
 // ChannelNotifySecret 取本租户在某个支付渠道上的回调验签密钥。
 //
 // 密钥存在 `shop_settings.extra`（00001 建的那一列，JSONB）里：

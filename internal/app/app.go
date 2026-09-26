@@ -601,6 +601,11 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	v1.GET("/admin/reports/inventory-alerts", staffAuth, rpt.InventoryAlerts)
 	v1.GET("/admin/reports/search", staffAuth, rpt.Search)
 
+	// 店铺设置（00059，契约 /admin/shop-settings）。只有管理员，判据在 service/shop_settings.go。
+	shs := handler.NewAdminShopSettingsHandler(service.NewShopSettingsService(repo))
+	v1.GET("/admin/shop-settings", staffAuth, shs.Get)
+	v1.PUT("/admin/shop-settings", staffAuth, shs.Replace)
+
 	cpa := handler.NewAdminCouponHandler(service.NewAdminCouponService(repo))
 	v1.GET("/admin/coupon-templates", staffAuth, cpa.List)
 	v1.POST("/admin/coupon-templates", staffAuth, cpa.Create)
@@ -762,6 +767,11 @@ func Run(ctx context.Context, listen func(addr string, h http.Handler) error) er
 	// 所以不需要排在监听之前的那份讲究 —— 放在这里只是为了共用 bgCtx。
 	confirmer := service.NewAutoConfirmService(repository.New(pool), service.SweepConfig{}, nil)
 	go confirmer.Run(bgCtx)
+
+	// 退货超时未寄回自动关闭（数据模型 §11，00059）：退货退款审核通过后超过店铺设置的天数
+	// 还没填寄回物流的，20 → 60。与自动确认收货同一套机制、同一个生命周期。
+	returnTimeout := service.NewReturnTimeoutService(repository.New(pool), service.SweepConfig{}, nil)
+	go returnTimeout.Run(bgCtx)
 
 	// 消息通知的外发投递与保留期清理（数据模型 §16）。站内消息不靠它 —— 通知行在业务事务里
 	// 就写好了；它只消费 outbox 里的 notification.deliver 任务，把每个外发渠道的结果记下来。

@@ -353,6 +353,21 @@ var routes = []route{
 		HandlerFile:    "admin_order_detail.go",
 		NoQueryParams:  "详情只吃路径参数 refund_no",
 	},
+	// —— 店铺设置（00059）。
+	{
+		ContractPath:   "/admin/shop-settings",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "admin_shop_settings.go",
+		NoQueryParams:  "一家店只有一份设置，租户由会话（或 X-Keel-Merchant）决定",
+	},
+	{
+		ContractPath:   "/admin/shop-settings",
+		ContractMethod: "put",
+		HTTPMethod:     http.MethodPut,
+		HandlerFile:    "admin_shop_settings.go",
+		NoQueryParams:  "整份设置在请求体里；PUT 天然幂等，不收 Idempotency-Key",
+	},
 	// —— 经营报表（契约 Report tag，00057）。参数集合不同的接口各自一个文件
 	// （对账按文件读 c.Query 的字面量）；概览与趋势参数一模一样，共用一个。
 	// 全部参数都实现了，既不写 NoQueryParams 也不挂账。

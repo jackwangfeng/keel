@@ -405,6 +405,15 @@ var permMatrix = []permRoute{
 		return permReq{Method: "PUT", Path: fmt.Sprintf(v1+"/admin/stores/%d/default", fx.sh.StoreID),
 			OK: http.StatusOK}
 	}},
+	// —— 店铺设置（00059）：与设默认门店同一行，只有管理员（含平台级经 X-Keel-Merchant 切进来的）。
+	// PUT 写的是列默认值，放几次都不改变这家店的行为（矩阵后面的格子不受影响）。
+	{"GET", v1 + "/admin/shop-settings", adminOnly, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permGet(v1 + "/admin/shop-settings")
+	}},
+	{"PUT", v1 + "/admin/shop-settings", adminOnly, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permReq{Method: "PUT", Path: v1 + "/admin/shop-settings", OK: http.StatusOK,
+			Body: `{"timezone":"Asia/Shanghai","auto_confirm_days":7,"return_ship_days":7}`}
+	}},
 	{"GET", v1 + "/admin/stores/:store_id/products", storeOperate, func(t *testing.T, fx *permFixture, c permCase) permReq {
 		return permGet(fmt.Sprintf(v1+"/admin/stores/%d/products", fx.store(c)))
 	}},

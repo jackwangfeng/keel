@@ -82,6 +82,7 @@ func newCouponShop(t *testing.T) couponShop {
 			`DELETE FROM user_tokens WHERE merchant_id = $1`,
 			`DELETE FROM users WHERE merchant_id = $1`,
 			`DELETE FROM shop_settings WHERE merchant_id = $1`,
+			`DELETE FROM shop_preferences WHERE merchant_id = $1`,
 		} {
 			if _, err := admin(t).Exec(context.Background(), stmt, sh.MerchantID); err != nil {
 				t.Errorf("清理失败 (%s): %v", stmt, err)

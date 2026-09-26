@@ -221,6 +221,28 @@ UPDATE refunds
 UPDATE refunds SET status = 60
  WHERE id = $1 AND user_id = $2 AND status IN (10, 20);
 
+-- name: ListReturnOverdueRefunds :many
+-- 退货超时未寄回的候选（service/return_timeout.go，00059）：退货退款、停在 20 待买家退货、
+-- 没填寄回物流、审核通过的时间早于截止（now() 减去这家店的 return_ship_days，由调用方算好）。
+-- 按审核时间从早到晚，最久的先关。部分索引 idx_refunds_return_due（00060）正好对上这条扫描。
+-- 这只是预筛；真正的判断在处置事务里、订单与退款单行锁之下由 ExpireReturnRefund 的谓词再做一次。
+SELECT r.id, r.refund_no, r.order_id
+  FROM refunds r
+ WHERE r.status = 20 AND r.refund_type = 2 AND r.return_submitted_at IS NULL
+   AND r.audited_at < sqlc.arg(cutoff)::timestamptz
+ ORDER BY r.audited_at, r.id
+ LIMIT sqlc.arg(page_limit);
+
+-- name: ExpireReturnRefund :execrows
+-- 退货超时未寄回：20 待买家退货 → 60 已取消（状态机里画着的那条 20 → 60，00034）。
+-- 谓词把预筛的每一条都重判一遍：仍在 20、是退货退款、**没有填寄回物流**、审核时间早于截止。
+-- 买家在预筛之后、处置之前填了物流，这条影响 0 行 —— 已经寄出的货不能被关单。
+-- 调用方先锁订单再锁退款单（与填寄回物流、撤回同一个顺序），所以这里读到的是最新版本。
+UPDATE refunds SET status = 60
+ WHERE id = sqlc.arg(id) AND status = 20 AND refund_type = 2
+   AND return_submitted_at IS NULL
+   AND audited_at < sqlc.arg(cutoff)::timestamptz;
+
 -- name: RejectRefund :execrows
 -- 审核驳回：10 → 50，必须带理由（chk_refund_state 也钉着这一条）。
 -- audited_by 记下是谁驳回的（00035 的审核记录）。

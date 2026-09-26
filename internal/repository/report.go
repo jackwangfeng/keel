@@ -3,16 +3,13 @@ package repository
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"math"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/keel/keel/internal/repository/internal/db"
-	"github.com/keel/keel/internal/tenant"
 )
 
 // 经营报表（GET /admin/reports/*，契约 Report tag）在 repository 边界上的那一面。
@@ -308,32 +305,4 @@ func (t tenantTx) ReportSearchTerms(ctx context.Context, f ReportFilter, onlyZer
 		out = append(out, ReportSearchTerm(r))
 	}
 	return out, nil
-}
-
-// DefaultShopTimezone 是 shop_settings.timezone 的列默认值（00001，数据模型 §2）。
-// 一家店没有那一行（开店不写它，00021）时按它算；理由同 DefaultAutoConfirmDays ——
-// 两者分叉的后果是配过店铺设置的店与没配过的店在同一个默认之下按不同的时区切「今天」。
-const DefaultShopTimezone = "Asia/Shanghai"
-
-// ShopTimezone 取本租户的店铺时区名（IANA，如 Asia/Shanghai）。经营报表按它切自然日。
-//
-// 与 AutoConfirmDays 同一个惯例：shop_settings 是 tenant-root 类，没有 RLS，
-// 走裸 SQL，租户从 ctx 取 —— 调用方没有那个参数可以传错。
-// 没有那一行时返回 DefaultShopTimezone。**不校验**它是不是合法的时区名：
-// 那是 service 的事（它要 time.LoadLocation，失败时同样回落到默认值）。
-func (r *Repo) ShopTimezone(ctx context.Context) (string, error) {
-	merchantID, err := tenant.FromContext(ctx)
-	if err != nil {
-		return "", err
-	}
-	var tz string
-	err = r.pool.QueryRow(ctx,
-		`SELECT timezone FROM shop_settings WHERE merchant_id = $1`, merchantID).Scan(&tz)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return DefaultShopTimezone, nil
-	}
-	if err != nil {
-		return "", fmt.Errorf("读商家 %d 的店铺时区失败: %w", merchantID, err)
-	}
-	return tz, nil
 }

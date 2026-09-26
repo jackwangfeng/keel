@@ -685,6 +685,7 @@ const (
 	OrderTimeoutClosed      NotificationKind = "order_timeout_closed"
 	RefundApproved          NotificationKind = "refund_approved"
 	RefundRejected          NotificationKind = "refund_rejected"
+	RefundReturnExpired     NotificationKind = "refund_return_expired"
 	RefundSucceeded         NotificationKind = "refund_succeeded"
 )
 
@@ -712,6 +713,8 @@ func (e NotificationKind) Valid() bool {
 	case RefundApproved:
 		return true
 	case RefundRejected:
+		return true
+	case RefundReturnExpired:
 		return true
 	case RefundSucceeded:
 		return true
@@ -2434,6 +2437,12 @@ type AdminRefund struct {
 	// 既不知道为什么，也不知道改什么再申请。
 	RejectReason *string `json:"reject_reason,omitempty"`
 
+	// ReturnDeadlineAt 寄回截止时间：退货退款停在 `20 待买家退货`、且还没填寄回物流时才出现，
+	// = `audited_at` + 店铺设置的 `return_ship_days` 天。过了这个时间仍没填，
+	// 定时任务会把售后单关到 `60 已取消`（最迟晚十分钟）。客户端据此提示「请在 X 前寄回」。
+	// 按**此刻**的店铺设置算：商家改了天数，截止时间跟着变。
+	ReturnDeadlineAt *time.Time `json:"return_deadline_at,omitempty"`
+
 	// ReturnShipment 买家寄回退货的物流（`POST /refunds/{refund_no}/return-shipment` 填的那一份）。
 	// 只有退货退款、且买家填过时才出现；仅退款的单永远没有它。
 	ReturnShipment *ReturnShipment `json:"return_shipment,omitempty"`
@@ -2451,6 +2460,10 @@ type AdminRefund struct {
 	//    ├─驳回──► 50 已拒绝
 	//    └─撤销──► 60 已取消   （20 超时未寄回 / 买家撤销，同样进 60）
 	// ```
+	//
+	// **20 超时未寄回**：退货退款审核通过后，从审核时间（`audited_at`）起超过店铺设置的
+	// `return_ship_days` 天（默认 7）仍没填寄回物流，定时任务把它关到 60，并给买家发
+	// `refund_return_expired`。截止时间在 `Refund.return_deadline_at`；填过寄回物流的不关。
 	//
 	// 合法迁移（`refund_status_transitions`，由数据库触发器执行）：
 	// `(10,20) (10,30) (10,50) (10,60) (20,30) (20,60) (30,40)`。
@@ -2550,6 +2563,12 @@ type AdminRefundDetail struct {
 	// 既不知道为什么，也不知道改什么再申请。
 	RejectReason *string `json:"reject_reason,omitempty"`
 
+	// ReturnDeadlineAt 寄回截止时间：退货退款停在 `20 待买家退货`、且还没填寄回物流时才出现，
+	// = `audited_at` + 店铺设置的 `return_ship_days` 天。过了这个时间仍没填，
+	// 定时任务会把售后单关到 `60 已取消`（最迟晚十分钟）。客户端据此提示「请在 X 前寄回」。
+	// 按**此刻**的店铺设置算：商家改了天数，截止时间跟着变。
+	ReturnDeadlineAt *time.Time `json:"return_deadline_at,omitempty"`
+
 	// ReturnShipment 买家寄回退货的物流（`POST /refunds/{refund_no}/return-shipment` 填的那一份）。
 	// 只有退货退款、且买家填过时才出现；仅退款的单永远没有它。
 	ReturnShipment *ReturnShipment `json:"return_shipment,omitempty"`
@@ -2567,6 +2586,10 @@ type AdminRefundDetail struct {
 	//    ├─驳回──► 50 已拒绝
 	//    └─撤销──► 60 已取消   （20 超时未寄回 / 买家撤销，同样进 60）
 	// ```
+	//
+	// **20 超时未寄回**：退货退款审核通过后，从审核时间（`audited_at`）起超过店铺设置的
+	// `return_ship_days` 天（默认 7）仍没填寄回物流，定时任务把它关到 60，并给买家发
+	// `refund_return_expired`。截止时间在 `Refund.return_deadline_at`；填过寄回物流的不关。
 	//
 	// 合法迁移（`refund_status_transitions`，由数据库触发器执行）：
 	// `(10,20) (10,30) (10,50) (10,60) (20,30) (20,60) (30,40)`。
@@ -3453,6 +3476,8 @@ type Notification struct {
 	// · `refund_approved` —— 售后审核通过（退货退款提示去填寄回物流）
 	// · `refund_rejected` —— 售后被驳回，正文带驳回理由
 	// · `refund_succeeded` —— 退款到账（退款单 `30 → 40`）
+	// · `refund_return_expired` —— 退货退款审核通过后超过店铺设置的天数没填寄回物流，
+	//   售后单被系统关闭（`20 → 60`，定时任务）。买家自己撤回不发
 	//
 	// 商家（`GET /admin/notifications`）：
 	// · `merchant_order_paid` —— 新的已支付待发货订单
@@ -3493,6 +3518,9 @@ type Notification struct {
 // · `refund_approved` —— 售后审核通过（退货退款提示去填寄回物流）
 // · `refund_rejected` —— 售后被驳回，正文带驳回理由
 // · `refund_succeeded` —— 退款到账（退款单 `30 → 40`）
+// · `refund_return_expired` —— 退货退款审核通过后超过店铺设置的天数没填寄回物流，
+//
+//	售后单被系统关闭（`20 → 60`，定时任务）。买家自己撤回不发
 //
 // 商家（`GET /admin/notifications`）：
 // · `merchant_order_paid` —— 新的已支付待发货订单
@@ -3645,6 +3673,15 @@ type OrderCreateRequest struct {
 
 // OrderDetail defines model for OrderDetail.
 type OrderDetail struct {
+	// AutoConfirmAt 自动确认收货的截止时间：只有 `30 已发货` 的订单才出现，
+	// = 发货时间 + 店铺设置的 `auto_confirm_days` 天（默认 7）。过了这个时间，
+	// 定时任务替买家确认收货（最迟晚十分钟）。客户端据此显示「N 天后自动确认」，
+	// 不要自己按 7 天估。
+	// 按**此刻**的店铺设置算：商家改了天数，截止时间跟着变。
+	// 订单有在途售后（退款单 10 / 20 / 30）时自动确认**暂停**：截止时间照常返回，
+	// 但到点不确认，售后结束后的下一轮才确认（数据模型 §5）。
+	AutoConfirmAt *time.Time `json:"auto_confirm_at,omitempty"`
+
 	// CouponName 这一单用的券的名字，**下单时的快照**。没用券时不出现（与 `user_coupon_id` 同进同出）。
 	//
 	// 它存在订单上，不从券模板现读：模板后来改名，历史订单仍显示下单那一刻的名字 ——
@@ -4410,6 +4447,12 @@ type Refund struct {
 	// 既不知道为什么，也不知道改什么再申请。
 	RejectReason *string `json:"reject_reason,omitempty"`
 
+	// ReturnDeadlineAt 寄回截止时间：退货退款停在 `20 待买家退货`、且还没填寄回物流时才出现，
+	// = `audited_at` + 店铺设置的 `return_ship_days` 天。过了这个时间仍没填，
+	// 定时任务会把售后单关到 `60 已取消`（最迟晚十分钟）。客户端据此提示「请在 X 前寄回」。
+	// 按**此刻**的店铺设置算：商家改了天数，截止时间跟着变。
+	ReturnDeadlineAt *time.Time `json:"return_deadline_at,omitempty"`
+
 	// ReturnShipment 买家寄回退货的物流（`POST /refunds/{refund_no}/return-shipment` 填的那一份）。
 	// 只有退货退款、且买家填过时才出现；仅退款的单永远没有它。
 	ReturnShipment *ReturnShipment `json:"return_shipment,omitempty"`
@@ -4427,6 +4470,10 @@ type Refund struct {
 	//    ├─驳回──► 50 已拒绝
 	//    └─撤销──► 60 已取消   （20 超时未寄回 / 买家撤销，同样进 60）
 	// ```
+	//
+	// **20 超时未寄回**：退货退款审核通过后，从审核时间（`audited_at`）起超过店铺设置的
+	// `return_ship_days` 天（默认 7）仍没填寄回物流，定时任务把它关到 60，并给买家发
+	// `refund_return_expired`。截止时间在 `Refund.return_deadline_at`；填过寄回物流的不关。
 	//
 	// 合法迁移（`refund_status_transitions`，由数据库触发器执行）：
 	// `(10,20) (10,30) (10,50) (10,60) (20,30) (20,60) (30,40)`。
@@ -4517,6 +4564,10 @@ type RefundReasonCode int
 //	└─撤销──► 60 已取消   （20 超时未寄回 / 买家撤销，同样进 60）
 //
 // ```
+//
+// **20 超时未寄回**：退货退款审核通过后，从审核时间（`audited_at`）起超过店铺设置的
+// `return_ship_days` 天（默认 7）仍没填寄回物流，定时任务把它关到 60，并给买家发
+// `refund_return_expired`。截止时间在 `Refund.return_deadline_at`；填过寄回物流的不关。
 //
 // 合法迁移（`refund_status_transitions`，由数据库触发器执行）：
 // `(10,20) (10,30) (10,50) (10,60) (20,30) (20,60) (30,40)`。
@@ -4625,7 +4676,7 @@ type ReportOverview struct {
 
 	// Window 一次报表查询的时间窗口。**六条报表共用这一份口径**：
 	//
-	// **时区**：店铺时区 `shop_settings.timezone`；这家店没有那一行、或那一列不是合法的
+	// **时区**：店铺时区（`GET /admin/shop-settings` 的 `timezone`）；这家店没改过、或那一列不是合法的
 	// IANA 时区名时按 **Asia/Shanghai**。回显在 `timezone` 里。「今天」「昨天」「按天」「按小时」
 	// 全部按这个时区的自然日 / 整点切，不按服务器时区、也不按 UTC。
 	//
@@ -4686,7 +4737,7 @@ type ReportProductRanking struct {
 
 	// Window 一次报表查询的时间窗口。**六条报表共用这一份口径**：
 	//
-	// **时区**：店铺时区 `shop_settings.timezone`；这家店没有那一行、或那一列不是合法的
+	// **时区**：店铺时区（`GET /admin/shop-settings` 的 `timezone`）；这家店没改过、或那一列不是合法的
 	// IANA 时区名时按 **Asia/Shanghai**。回显在 `timezone` 里。「今天」「昨天」「按天」「按小时」
 	// 全部按这个时区的自然日 / 整点切，不按服务器时区、也不按 UTC。
 	//
@@ -4760,7 +4811,7 @@ type ReportSearchOverview struct {
 
 	// Window 一次报表查询的时间窗口。**六条报表共用这一份口径**：
 	//
-	// **时区**：店铺时区 `shop_settings.timezone`；这家店没有那一行、或那一列不是合法的
+	// **时区**：店铺时区（`GET /admin/shop-settings` 的 `timezone`）；这家店没改过、或那一列不是合法的
 	// IANA 时区名时按 **Asia/Shanghai**。回显在 `timezone` 里。「今天」「昨天」「按天」「按小时」
 	// 全部按这个时区的自然日 / 整点切，不按服务器时区、也不按 UTC。
 	//
@@ -4810,7 +4861,7 @@ type ReportStoreComparison struct {
 
 	// Window 一次报表查询的时间窗口。**六条报表共用这一份口径**：
 	//
-	// **时区**：店铺时区 `shop_settings.timezone`；这家店没有那一行、或那一列不是合法的
+	// **时区**：店铺时区（`GET /admin/shop-settings` 的 `timezone`）；这家店没改过、或那一列不是合法的
 	// IANA 时区名时按 **Asia/Shanghai**。回显在 `timezone` 里。「今天」「昨天」「按天」「按小时」
 	// 全部按这个时区的自然日 / 整点切，不按服务器时区、也不按 UTC。
 	//
@@ -4871,7 +4922,7 @@ type ReportTrend struct {
 
 	// Window 一次报表查询的时间窗口。**六条报表共用这一份口径**：
 	//
-	// **时区**：店铺时区 `shop_settings.timezone`；这家店没有那一行、或那一列不是合法的
+	// **时区**：店铺时区（`GET /admin/shop-settings` 的 `timezone`）；这家店没改过、或那一列不是合法的
 	// IANA 时区名时按 **Asia/Shanghai**。回显在 `timezone` 里。「今天」「昨天」「按天」「按小时」
 	// 全部按这个时区的自然日 / 整点切，不按服务器时区、也不按 UTC。
 	//
@@ -4925,7 +4976,7 @@ type ReportTrendPoint struct {
 
 // ReportWindow 一次报表查询的时间窗口。**六条报表共用这一份口径**：
 //
-// **时区**：店铺时区 `shop_settings.timezone`；这家店没有那一行、或那一列不是合法的
+// **时区**：店铺时区（`GET /admin/shop-settings` 的 `timezone`）；这家店没改过、或那一列不是合法的
 // IANA 时区名时按 **Asia/Shanghai**。回显在 `timezone` 里。「今天」「昨天」「按天」「按小时」
 // 全部按这个时区的自然日 / 整点切，不按服务器时区、也不按 UTC。
 //
@@ -5184,6 +5235,41 @@ type ShipmentCreateRequest struct {
 	TrackingNo  string `json:"tracking_no"`
 }
 
+// ShopSettings defines model for ShopSettings.
+type ShopSettings struct {
+	// AutoConfirmDays 发货后多少天由系统自动确认收货
+	AutoConfirmDays int `json:"auto_confirm_days"`
+
+	// ReturnShipDays 退货退款审核通过后多少天未填寄回物流即自动关闭
+	ReturnShipDays int `json:"return_ship_days"`
+
+	// ServicePhone 客服电话；没设为 null
+	ServicePhone *string `json:"service_phone"`
+
+	// ShopName 店铺名称（只读，`merchants` 目录里的当前名称；由平台改）
+	ShopName string `json:"shop_name"`
+
+	// Timezone IANA 时区名。经营报表按它切自然日
+	//
+	// Examples: Asia/Shanghai
+	Timezone string `json:"timezone"`
+
+	// UpdatedAt 最近一次修改的时间；从没改过（全是默认值）为 null
+	UpdatedAt *time.Time `json:"updated_at"`
+}
+
+// ShopSettingsInput defines model for ShopSettingsInput.
+type ShopSettingsInput struct {
+	AutoConfirmDays int `json:"auto_confirm_days"`
+	ReturnShipDays  int `json:"return_ship_days"`
+
+	// ServicePhone 客服电话。不给即清空
+	ServicePhone *string `json:"service_phone,omitempty"`
+
+	// Timezone IANA 时区名，如 `Asia/Shanghai`
+	Timezone string `json:"timezone"`
+}
+
 // Sku defines model for Sku.
 type Sku struct {
 	AvailableQty int     `json:"available_qty"`
@@ -5290,6 +5376,7 @@ type Staff struct {
 	// | 经营报表：概览、趋势、商品排行、门店对比、库存预警 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
 	// | 经营报表：搜索概况（检索日志没有门店维度） | ✅ | ✅ | ❌ | ❌ |
 	// | 设默认门店（含建店时 is_default） | ✅ | ❌ | ❌ | ❌ |
+	// | 店铺设置（时区、自动确认天数、退货寄回时限、客服电话）的读与改 | ✅ | ❌ | ❌ | ❌ |
 	// | 员工管理 | ✅ | ❌ | 只能加、改本大区门店的门店管理员 | ❌ |
 	// | 开店 | 仅平台级管理员 | | | |
 	//
@@ -5339,6 +5426,7 @@ type StaffCreateRequest struct {
 	// | 经营报表：概览、趋势、商品排行、门店对比、库存预警 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
 	// | 经营报表：搜索概况（检索日志没有门店维度） | ✅ | ✅ | ❌ | ❌ |
 	// | 设默认门店（含建店时 is_default） | ✅ | ❌ | ❌ | ❌ |
+	// | 店铺设置（时区、自动确认天数、退货寄回时限、客服电话）的读与改 | ✅ | ❌ | ❌ | ❌ |
 	// | 员工管理 | ✅ | ❌ | 只能加、改本大区门店的门店管理员 | ❌ |
 	// | 开店 | 仅平台级管理员 | | | |
 	//
@@ -5394,6 +5482,7 @@ type StaffRef struct {
 // | 经营报表：概览、趋势、商品排行、门店对比、库存预警 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
 // | 经营报表：搜索概况（检索日志没有门店维度） | ✅ | ✅ | ❌ | ❌ |
 // | 设默认门店（含建店时 is_default） | ✅ | ❌ | ❌ | ❌ |
+// | 店铺设置（时区、自动确认天数、退货寄回时限、客服电话）的读与改 | ✅ | ❌ | ❌ | ❌ |
 // | 员工管理 | ✅ | ❌ | 只能加、改本大区门店的门店管理员 | ❌ |
 // | 开店 | 仅平台级管理员 | | | |
 //
@@ -7775,6 +7864,60 @@ type GetAdminReportsTrendParams struct {
 // GetAdminReportsTrendParamsPeriod defines parameters for GetAdminReportsTrend.
 type GetAdminReportsTrendParamsPeriod string
 
+// GetAdminShopSettingsParams defines parameters for GetAdminShopSettings.
+type GetAdminShopSettingsParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// PutAdminShopSettingsParams defines parameters for PutAdminShopSettings.
+type PutAdminShopSettingsParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
 // DeleteAdminSkusSkuIdParams defines parameters for DeleteAdminSkusSkuId.
 type DeleteAdminSkusSkuIdParams struct {
 	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
@@ -7955,6 +8098,7 @@ type PatchAdminStaffStaffIdJSONBody struct {
 	// | 经营报表：概览、趋势、商品排行、门店对比、库存预警 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
 	// | 经营报表：搜索概况（检索日志没有门店维度） | ✅ | ✅ | ❌ | ❌ |
 	// | 设默认门店（含建店时 is_default） | ✅ | ❌ | ❌ | ❌ |
+	// | 店铺设置（时区、自动确认天数、退货寄回时限、客服电话）的读与改 | ✅ | ❌ | ❌ | ❌ |
 	// | 员工管理 | ✅ | ❌ | 只能加、改本大区门店的门店管理员 | ❌ |
 	// | 开店 | 仅平台级管理员 | | | |
 	//
@@ -9214,6 +9358,9 @@ type PutAdminRegionsRegionIdProductsProductIdListingJSONRequestBody = ProductLis
 
 // PutAdminRegionsRegionIdSkusSkuIdPriceJSONRequestBody defines body for PutAdminRegionsRegionIdSkusSkuIdPrice for application/json ContentType.
 type PutAdminRegionsRegionIdSkusSkuIdPriceJSONRequestBody = SkuPriceSetRequest
+
+// PutAdminShopSettingsJSONRequestBody defines body for PutAdminShopSettings for application/json ContentType.
+type PutAdminShopSettingsJSONRequestBody = ShopSettingsInput
 
 // PatchAdminSkusSkuIdJSONRequestBody defines body for PatchAdminSkusSkuId for application/json ContentType.
 type PatchAdminSkusSkuIdJSONRequestBody = SkuUpdateRequest

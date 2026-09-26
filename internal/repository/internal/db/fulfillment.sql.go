@@ -143,7 +143,7 @@ type ListAutoConfirmableOrdersRow struct {
 // 发货满 N 天、仍停在 30 已发货、而且**没有在途售后**的订单，按发货时间从早到晚。
 //
 // 截止时间由调用方算好传进来（now() 减去这家店的 auto_confirm_days）：
-// N 是店铺配置，读它走 shop_settings（tenant-root，不在这一面），所以不在 SQL 里拼。
+// N 是店铺配置（shop_preferences.auto_confirm_days，00059），由调用方先读出来，不在 SQL 里拼。
 //
 // 在途售后（10 待审核 / 20 待买家退货 / 30 退款中）的单**暂停**自动确认：
 // 买家正在退货的时候替他点「确认收货」，等于替他说「货没问题」。

@@ -16,7 +16,8 @@ import regions from "./regions.ts";
 import staff from "./staff.ts";
 import stores from "./stores.ts";
 import merchants from "./merchants.ts";
+import shopSettings from "./shopSettings.ts";
 
-export const sections: AdminSection[] = [overview, catalog, categories, coupons, freight, orders, refunds, regions, stores, staff, merchants].sort(
+export const sections: AdminSection[] = [overview, catalog, categories, coupons, freight, orders, refunds, regions, stores, staff, shopSettings, merchants].sort(
     (a, b) => a.order - b.order,
 );

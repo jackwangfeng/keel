@@ -415,7 +415,7 @@ func (s *RefundService) Cancel(ctx context.Context, refundNo, idemKey string) (r
 				return repository.Refund{}, fmt.Errorf("%w: 退款单 %s 当前状态是 %d，只有 10 / 20 能撤回",
 					ErrRefundNotCancelable, refundNo, status)
 			}
-			if err := s.leaveRefunding(ctx, tx, order); err != nil {
+			if err := leaveRefunding(ctx, tx, order); err != nil {
 				return repository.Refund{}, err
 			}
 			return tx.FindUserRefundByNo(ctx, refundNo, id.UserID)
@@ -498,13 +498,16 @@ func lockRefund(ctx context.Context, tx repository.Tx, r repository.Refund) (rep
 	return order, status, nil
 }
 
-// leaveRefunding 是一张退款单**没有退成**（驳回 / 撤回）之后订单那一侧的收尾：
+// leaveRefunding 是一张退款单**没有退成**（驳回 / 撤回 / 退货超时关闭）之后订单那一侧的收尾：
 // 整单退款中的订单回到 20 已支付（§5 的 (50,20)），资金维度按事实重算。
 //
 // 50 退款中只可能是「一张覆盖了全部剩余件数、且当时没有别的在途单」的整单退款
 // （planRefund 的 CoversEverything），而订单停在 50 期间不能再申请新的售后 ——
 // 所以此刻离开的这张就是让它进 50 的那一张。
-func (s *RefundService) leaveRefunding(ctx context.Context, tx repository.Tx, order repository.Order) error {
+//
+// 是自由函数而不是 RefundService 的方法：退货超时的定时任务（return_timeout.go）也走它，
+// 「退款单没退成之后订单怎么收尾」只有这一份。
+func leaveRefunding(ctx context.Context, tx repository.Tx, order repository.Order) error {
 	if order.Status == orderStatusRefunding {
 		ok, err := tx.RevertWholeOrderRefund(ctx, order.ID)
 		if err != nil {
@@ -579,7 +582,7 @@ func (s *RefundService) Audit(ctx context.Context, refundNo string, req AuditReq
 				if err := notAuditable(ok, err, refundNo); err != nil {
 					return repository.Refund{}, err
 				}
-				if err := s.leaveRefunding(ctx, tx, order); err != nil {
+				if err := leaveRefunding(ctx, tx, order); err != nil {
 					return repository.Refund{}, err
 				}
 				if err := notifyRefundRejected(ctx, tx, refundNo); err != nil {

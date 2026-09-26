@@ -56,6 +56,7 @@ const (
 	KindRefundApproved          = "refund_approved"
 	KindRefundRejected          = "refund_rejected"
 	KindRefundSucceeded         = "refund_succeeded"
+	KindRefundReturnExpired     = "refund_return_expired"
 	KindMerchantOrderPaid       = "merchant_order_paid"
 	KindMerchantRefundRequest   = "merchant_refund_requested"
 	KindMerchantReturnShipped   = "merchant_return_shipped"
@@ -122,6 +123,10 @@ var notificationTemplates = map[string]notificationTemplate{
 	KindRefundSucceeded: {repository.NotificationAudienceBuyer, notificationTargetRefund,
 		"退款已到账",
 		"售后单 {{.RefundNo}} 的退款 {{yuan .AmountCents}} 已原路退回。"},
+	KindRefundReturnExpired: {repository.NotificationAudienceBuyer, notificationTargetRefund,
+		"售后已关闭",
+		"售后单 {{.RefundNo}} 审核通过后 {{.Days}} 天内没有填写退货寄回物流，已自动关闭。" +
+			"如仍需售后，可以重新申请。"},
 	KindMerchantOrderPaid: {repository.NotificationAudienceMerchant, notificationTargetOrder,
 		"新订单待发货",
 		"订单 {{.OrderNo}} 已支付 {{yuan .AmountCents}}，请及时发货。"},
@@ -355,6 +360,18 @@ func notifyReturnShipped(ctx context.Context, tx repository.Tx, refundNo, carrie
 	return emitNotification(ctx, tx, outgoing{Kind: KindMerchantReturnShipped, StoreID: r.StoreID,
 		Params: notifyParams{OrderNo: r.OrderNo, RefundNo: r.RefundNo, CarrierCode: carrier, TrackingNo: tracking},
 		Dedupe: r.RefundNo + ":" + carrier + ":" + tracking})
+}
+
+// notifyRefundReturnExpired 退货退款审核通过后超过店铺设置的天数没填寄回物流，
+// 售后单被定时任务关到 60（return_timeout.go）。一张单只会关一次，去重键就是售后单号。
+func notifyRefundReturnExpired(ctx context.Context, tx repository.Tx, refundNo string, days int) error {
+	r, err := tx.FindRefundByNo(ctx, refundNo)
+	if err != nil {
+		return err
+	}
+	return emitNotification(ctx, tx, outgoing{Kind: KindRefundReturnExpired, UserID: r.UserID,
+		Params: notifyParams{OrderNo: r.OrderNo, RefundNo: r.RefundNo, Days: days},
+		Dedupe: r.RefundNo})
 }
 
 // notifyRefundSucceeded 退款到账。
