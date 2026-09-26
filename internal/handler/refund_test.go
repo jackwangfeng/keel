@@ -681,3 +681,112 @@ func TestRefundStatusMachineIsEnforcedByTheDatabase(t *testing.T) {
 		t.Fatalf("非法跳转之后退款单是 %d，期望仍是 10", st)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// 退货寄回物流（00037）：只有退货退款停在 20 时能填，填完状态不变，20 期间能改，
+// 后台详情看得见，离开 20 之后不能再改。
+// ---------------------------------------------------------------------------
+
+func returnShipment(t *testing.T, cs couponShop, refundNo, token, body, key string) *httptest.ResponseRecorder {
+	t.Helper()
+	return postWithKey(t, cs.Host, "/api/v1/refunds/"+refundNo+"/return-shipment", body, token, key)
+}
+
+func TestBuyerFillsReturnShipmentWhileAwaitingReturn(t *testing.T) {
+	cs := newCouponShop(t)
+	b := cs.newBuyer(t, "rship")
+	other := cs.newBuyer(t, "rship-other")
+	o := cs.placePaid(t, b, cs.NorthStore, cs.DressSKU, 2, nil)
+	wantStatus(t, cs.ship(t, o.OrderNo, "sf", "SF"+uniqueKey()), http.StatusCreated, "发货")
+	_, lines := cs.lines(t, b, o.OrderNo)
+	r := cs.mustApply(t, b, o.OrderNo, refundBody(2, [2]int64{lines[cs.DressSKU].Id, 1}))
+	body := `{"carrier_code":"yto","tracking_no":"YT0001"}`
+
+	// 还在 10 待审核：商家还没同意退货，没有地方寄。
+	if p := problemOf(t, returnShipment(t, cs, r.RefundNo, b.Token, body, "rs-"+uniqueKey()),
+		http.StatusConflict); p.Type != problem.TypeRefundStatusNotReturnable {
+		t.Fatalf("待审核的单填寄回物流应 409 refund-status-not-returnable，实得 %+v", p)
+	}
+	if approved := cs.mustApprove(t, r.RefundNo); approved.Status != 20 {
+		t.Fatalf("退货退款审核通过应到 20，实得 %d", approved.Status)
+	}
+
+	// 别人的单：404，与「不存在」同一个响应。
+	if p := problemOf(t, returnShipment(t, cs, r.RefundNo, other.Token, body, "rs-"+uniqueKey()),
+		http.StatusNotFound); p.Type != problem.TypeNotFound {
+		t.Fatalf("给别人的退款单填物流应 404，实得 %+v", p)
+	}
+	// 空单号：422。
+	if p := problemOf(t, returnShipment(t, cs, r.RefundNo, b.Token, `{"carrier_code":"yto","tracking_no":"  "}`,
+		"rs-"+uniqueKey()), http.StatusUnprocessableEntity); p.Type != problem.TypeInvalidRequest {
+		t.Fatalf("空运单号应 422 invalid-request，实得 %+v", p)
+	}
+
+	key := "rs-" + uniqueKey()
+	var got api.Refund
+	decodeInto(t, returnShipment(t, cs, r.RefundNo, b.Token, body, key), http.StatusOK, "填寄回物流", &got)
+	if got.Status != 20 {
+		t.Fatalf("填完寄回物流状态变成了 %d —— 应仍是 20，等商家收货", got.Status)
+	}
+	if got.ReturnShipment == nil || got.ReturnShipment.CarrierCode != "yto" ||
+		got.ReturnShipment.TrackingNo != "YT0001" || got.ReturnShipment.SubmittedAt.IsZero() {
+		t.Fatalf("响应里的 return_shipment 是 %+v，期望 yto / YT0001 且有 submitted_at", got.ReturnShipment)
+	}
+	if st := refundStatusOf(t, r.RefundNo); st != 20 {
+		t.Fatalf("库里的退款单状态是 %d，期望仍是 20", st)
+	}
+	w := returnShipment(t, cs, r.RefundNo, b.Token, body, key)
+	wantStatus(t, w, http.StatusOK, "填寄回物流重放")
+	if w.Header().Get("Idempotency-Replayed") != "true" {
+		t.Fatal("同一把钥匙第二次填寄回物流没有带 Idempotency-Replayed")
+	}
+
+	// 20 期间可以改（填错单号是常事）。
+	decodeInto(t, returnShipment(t, cs, r.RefundNo, b.Token, `{"carrier_code":"sf","tracking_no":"SF0002"}`,
+		"rs-"+uniqueKey()), http.StatusOK, "改寄回物流", &got)
+	if got.ReturnShipment == nil || got.ReturnShipment.CarrierCode != "sf" || got.ReturnShipment.TrackingNo != "SF0002" {
+		t.Fatalf("改过之后的 return_shipment 是 %+v，期望 sf / SF0002", got.ReturnShipment)
+	}
+
+	// 后台详情看得见寄回物流（商家据此查件）。
+	var detail api.AdminRefundDetail
+	decodeInto(t, getAs(t, cs.Host, "/api/v1/admin/refunds/"+r.RefundNo, cs.Token), http.StatusOK, "后台退款详情", &detail)
+	if detail.ReturnShipment == nil || detail.ReturnShipment.TrackingNo != "SF0002" {
+		t.Fatalf("后台退款详情里的 return_shipment 是 %+v，期望 SF0002", detail.ReturnShipment)
+	}
+
+	// 商家确认收货之后（沙箱入账到 40）不能再改，已填的那份留着。
+	wantStatus(t, postIdem(t, cs.Host, "/api/v1/admin/refunds/"+r.RefundNo+"/receipt", "", cs.Token),
+		http.StatusOK, "确认收到退货")
+	if p := problemOf(t, returnShipment(t, cs, r.RefundNo, b.Token, body, "rs-"+uniqueKey()),
+		http.StatusConflict); p.Type != problem.TypeRefundStatusNotReturnable {
+		t.Fatalf("已收货的单再填寄回物流应 409，实得 %+v", p)
+	}
+	decodeInto(t, getAs(t, cs.Host, "/api/v1/refunds/"+r.RefundNo, b.Token), http.StatusOK, "退款详情", &got)
+	if got.ReturnShipment == nil || got.ReturnShipment.TrackingNo != "SF0002" {
+		t.Fatalf("退款完成之后寄回物流不见了：%+v", got.ReturnShipment)
+	}
+}
+
+// 仅退款的单挂不上寄回物流：服务层 409，库里 chk_refund_return_shipment 兜底。
+func TestMoneyOnlyRefundHasNoReturnShipment(t *testing.T) {
+	cs := newCouponShop(t)
+	b := cs.newBuyer(t, "rship-money")
+	o := cs.placePaid(t, b, cs.NorthStore, cs.DressSKU, 1, nil)
+	_, lines := cs.lines(t, b, o.OrderNo)
+	r := cs.mustApply(t, b, o.OrderNo, refundBody(1, [2]int64{lines[cs.DressSKU].Id, 1}))
+	if r.ReturnShipment != nil {
+		t.Fatalf("仅退款的单带着 return_shipment：%+v", r.ReturnShipment)
+	}
+	if p := problemOf(t, returnShipment(t, cs, r.RefundNo, b.Token, `{"carrier_code":"sf","tracking_no":"X1"}`,
+		"rs-"+uniqueKey()), http.StatusConflict); p.Type != problem.TypeRefundStatusNotReturnable {
+		t.Fatalf("仅退款的单填寄回物流应 409，实得 %+v", p)
+	}
+	_, err := admin(t).Exec(context.Background(), `
+		UPDATE refunds SET return_carrier_code = 'sf', return_tracking_no = 'X1', return_submitted_at = now()
+		 WHERE refund_no = $1`, r.RefundNo)
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.ConstraintName != "chk_refund_return_shipment" {
+		t.Fatalf("给仅退款的单直接写寄回物流应撞 chk_refund_return_shipment，实得 %v", err)
+	}
+}

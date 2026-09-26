@@ -114,6 +114,63 @@ func (q *Queries) InsertShipment(ctx context.Context, arg InsertShipmentParams) 
 	return i, err
 }
 
+const listAutoConfirmableOrders = `-- name: ListAutoConfirmableOrders :many
+
+SELECT o.id, o.order_no, o.user_id
+  FROM orders o
+ WHERE o.status = 30
+   AND o.shipped_at < $1::timestamptz
+   AND NOT EXISTS (SELECT 1 FROM refunds r
+                    WHERE r.order_id = o.id AND r.status IN (10, 20, 30))
+ ORDER BY o.shipped_at, o.id
+ LIMIT $2
+`
+
+type ListAutoConfirmableOrdersParams struct {
+	Cutoff    pgtype.Timestamptz
+	PageLimit int32
+}
+
+type ListAutoConfirmableOrdersRow struct {
+	ID      int64
+	OrderNo string
+	UserID  int64
+}
+
+// ---------------------------------------------------------------------------
+// 自动确认收货（数据模型 §5 发货第三条规则，00036）
+// ---------------------------------------------------------------------------
+// 发货满 N 天、仍停在 30 已发货、而且**没有在途售后**的订单，按发货时间从早到晚。
+//
+// 截止时间由调用方算好传进来（now() 减去这家店的 auto_confirm_days）：
+// N 是店铺配置，读它走 shop_settings（tenant-root，不在这一面），所以不在 SQL 里拼。
+//
+// 在途售后（10 待审核 / 20 待买家退货 / 30 退款中）的单**暂停**自动确认：
+// 买家正在退货的时候替他点「确认收货」，等于替他说「货没问题」。
+// 这里的 NOT EXISTS 只是扫描时的预筛，真正的判断在处置事务里、订单行锁之下
+// 再做一次（OrderHasOpenRefund），理由见 service/auto_confirm.go。
+//
+// 部分索引 idx_orders_auto_confirm（00036）正好对上这条扫描。
+func (q *Queries) ListAutoConfirmableOrders(ctx context.Context, arg ListAutoConfirmableOrdersParams) ([]ListAutoConfirmableOrdersRow, error) {
+	rows, err := q.db.Query(ctx, listAutoConfirmableOrders, arg.Cutoff, arg.PageLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListAutoConfirmableOrdersRow
+	for rows.Next() {
+		var i ListAutoConfirmableOrdersRow
+		if err := rows.Scan(&i.ID, &i.OrderNo, &i.UserID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listOrderShipments = `-- name: ListOrderShipments :many
 SELECT id, carrier_code, tracking_no, status, shipped_at, delivered_at
   FROM shipments
@@ -156,6 +213,20 @@ func (q *Queries) ListOrderShipments(ctx context.Context, orderID int64) ([]List
 		return nil, err
 	}
 	return items, nil
+}
+
+const orderHasOpenRefund = `-- name: OrderHasOpenRefund :one
+SELECT EXISTS (SELECT 1 FROM refunds r
+                WHERE r.order_id = $1 AND r.status IN (10, 20, 30))
+`
+
+// 这一单此刻有没有在途的退款单（10 / 20 / 30）。在订单行锁之下调用才有意义：
+// 申请退款也先锁订单行（LockUserOrderByNo），两边因此串行。
+func (q *Queries) OrderHasOpenRefund(ctx context.Context, orderID int64) (bool, error) {
+	row := q.db.QueryRow(ctx, orderHasOpenRefund, orderID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
 }
 
 const shipOrder = `-- name: ShipOrder :execrows

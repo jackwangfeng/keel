@@ -86,6 +86,17 @@ type Refund struct {
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
 	Items            []RefundItem
+
+	// ReturnShipment 是买家填的寄回物流（00037）。只有退货退款、且买家填过时非 nil。
+	ReturnShipment *ReturnShipment
+}
+
+// ReturnShipment 是退货寄回的物流（契约的 ReturnShipment）。
+type ReturnShipment struct {
+	CarrierCode string
+	TrackingNo  string
+	// SubmittedAt 是买家最近一次填写的时间，不是揽收时间。
+	SubmittedAt time.Time
 }
 
 // RefundItem 是退款单的一行明细。
@@ -169,6 +180,9 @@ type RefundTx interface {
 	RejectRefund(ctx context.Context, refundID int64, reason string, staffID int64) (bool, error)
 	ApproveRefund(ctx context.Context, refundID int64, next int16, freightCents int64, staffID int64) (bool, error)
 	ReceiveRefundGoods(ctx context.Context, refundID int64, staffID int64) (bool, error)
+	// SubmitReturnShipment 买家填寄回物流，状态不变（00037）。false 表示这张单不是
+	// 退货退款、不在 20，或者不是这个买家的。
+	SubmitReturnShipment(ctx context.Context, refundID, userID int64, carrierCode, trackingNo string) (bool, error)
 	// CompleteRefund 30 → 40。流水号重复返回 ErrDuplicateChannelRefund。
 	CompleteRefund(ctx context.Context, refundID int64, channelRefundID string, payload []byte, at time.Time) (bool, error)
 	RecordRefundNotify(ctx context.Context, refundID int64, payload []byte) error
@@ -359,7 +373,18 @@ func refundFromRow(r db.GetRefundByNoRow) Refund {
 		CreatedAt:        r.CreatedAt.Time,
 		UpdatedAt:        r.UpdatedAt.Time,
 		Items:            []RefundItem{},
+		ReturnShipment:   returnShipmentOf(r.ReturnCarrierCode, r.ReturnTrackingNo, r.ReturnSubmittedAt),
 	}
+}
+
+// returnShipmentOf 把三列收成一个可空的值。chk_refund_return_shipment 保证三列同生同灭，
+// 所以只看一列就够；仍然三列都判，是因为「半截的物流」一旦出现（约束被改坏），
+// 返回 nil 比返回一个空单号更不会误导人。
+func returnShipmentOf(carrier, tracking *string, at pgtype.Timestamptz) *ReturnShipment {
+	if carrier == nil || tracking == nil || !at.Valid {
+		return nil
+	}
+	return &ReturnShipment{CarrierCode: *carrier, TrackingNo: *tracking, SubmittedAt: at.Time}
 }
 
 // withItems 给一批退款单挂上明细（一次查询，不是 N 次）。
@@ -496,6 +521,17 @@ func (t tenantTx) ReceiveRefundGoods(ctx context.Context, refundID int64, staffI
 	return rowsOrTransition(t.q.ReceiveRefundGoods(ctx, db.ReceiveRefundGoodsParams{
 		ID: refundID, ReceivedBy: &staffID,
 	}))
+}
+
+func (t tenantTx) SubmitReturnShipment(ctx context.Context, refundID, userID int64,
+	carrierCode, trackingNo string) (bool, error) {
+	n, err := t.q.SubmitReturnShipment(ctx, db.SubmitReturnShipmentParams{
+		CarrierCode: &carrierCode, TrackingNo: &trackingNo, ID: refundID, UserID: userID,
+	})
+	if err != nil {
+		return false, err
+	}
+	return n == 1, nil
 }
 
 func (t tenantTx) CompleteRefund(ctx context.Context, refundID int64, channelRefundID string,

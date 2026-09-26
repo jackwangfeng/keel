@@ -308,6 +308,7 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	v1.GET("/refunds", auth.Bearer(signer, nil), rh.ListMine)
 	v1.GET("/refunds/:refund_no", auth.Bearer(signer, nil), rh.Detail)
 	v1.POST("/refunds/:refund_no/cancel", auth.Bearer(signer, nil), rh.Cancel)
+	v1.POST("/refunds/:refund_no/return-shipment", auth.Bearer(signer, nil), rh.ReturnShipment)
 
 	// 优惠券的买家侧四条（契约 Coupon tag）。四条都要令牌：我的券、本单可用券
 	// 读的是「我的」东西；领券中心要回「我已经领了几张」；领券写的是「我的」券包。
@@ -485,9 +486,19 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	// **这不等于它们不校验租户** —— 租户由 res.Middleware() 从 Host 定出来，
 	// 而挡住跨店读取的是 uploads 上那条 RLS 策略（db/queries/uploads.sql 里
 	// 一个 merchant_id 都没有）。
-	uh := handler.NewUploadHandler(service.NewUploadService(repo, store, signer))
-	v1.GET("/uploads/:upload_id", uh.Redirect)
+	//
+	// GET /uploads/:upload_id 挂的是 auth.OptionalBearer：没带令牌就是匿名（公开的两类照读），
+	// 带了就按买家令牌的全部规矩判 —— 退款凭证只有上传者本人带着自己的令牌才读得到
+	// （service/upload.go 的 ownerMayRead）。第二跳 /blob 不挂任何鉴权：它只认签名。
+	//
+	// POST /uploads（买家上传头像与退款凭证）挂 auth.Bearer，与别的买家写接口一样。
+	// GET /admin/uploads/:upload_id 是后台客服那一半，挂 staffAuth（在下面后台那一组里）。
+	uploads := service.NewUploadService(repo, store, signer)
+	uh := handler.NewUploadHandler(uploads)
+	v1.GET("/uploads/:upload_id", auth.OptionalBearer(signer, nil), uh.Redirect)
 	v1.GET("/uploads/:upload_id/blob", uh.Blob)
+	v1.POST("/uploads", auth.Bearer(signer, nil), uh.Create)
+	v1.GET("/admin/uploads/:upload_id", staffAuth, uh.AdminRedirect)
 
 	// 门店 / 大区 / 两层可见性 / 三层定价 / 按门店的库存（00020，契约 21 条）
 	// -----------------------------------------------------------------------
@@ -700,6 +711,13 @@ func Run(ctx context.Context, listen func(addr string, h http.Handler) error) er
 	defer stopBackground()
 	sweeper := service.NewSweepService(repository.New(pool), service.SweepConfig{}, nil)
 	go sweeper.Run(bgCtx)
+
+	// 自动确认收货（数据模型 §5 发货第三条规则）：发货满 shop_settings.auto_confirm_days
+	// 天的 30 已发货订单推到 40。与超时补偿同一套机制（按租户扫描、同一份公平调度），
+	// 同一个生命周期。它不像超时补偿那样卡着库存，晚起一轮不丢任何东西，
+	// 所以不需要排在监听之前的那份讲究 —— 放在这里只是为了共用 bgCtx。
+	confirmer := service.NewAutoConfirmService(repository.New(pool), service.SweepConfig{}, nil)
+	go confirmer.Run(bgCtx)
 
 	// 派生数据入库的增量任务（M3 Task 3）：商品变了就把文本向量与 bigram 串重算。
 	//

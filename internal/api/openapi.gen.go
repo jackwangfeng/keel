@@ -1942,6 +1942,10 @@ type AdminRefund struct {
 	// 既不知道为什么，也不知道改什么再申请。
 	RejectReason *string `json:"reject_reason,omitempty"`
 
+	// ReturnShipment 买家寄回退货的物流（`POST /refunds/{refund_no}/return-shipment` 填的那一份）。
+	// 只有退货退款、且买家填过时才出现；仅退款的单永远没有它。
+	ReturnShipment *ReturnShipment `json:"return_shipment,omitempty"`
+
 	// Status 退款单状态机，与 `refunds.status` 的 SMALLINT 取值逐值一致。
 	//
 	// 10 待审核 / 20 待买家退货 / 30 退款中 / 40 已退款
@@ -1960,6 +1964,7 @@ type AdminRefund struct {
 	// `(10,20) (10,30) (10,50) (10,60) (20,30) (20,60) (30,40)`。
 	// 每条边由谁走：`10→20/30/50` 审核（`/admin/refunds/{refund_no}/audit`）；
 	// `20→30` 商家确认收到退货（`/admin/refunds/{refund_no}/receipt`）；
+	// 停在 `20` 期间买家填寄回物流（`/refunds/{refund_no}/return-shipment`），状态不变；
 	// `10/20→60` 买家撤回；`30→40` 渠道回调（`/webhooks/refunds/{channel}`）。
 	//
 	// `50 已拒绝` 与 `30 退款中` 失败**不是一回事**，客户端要分开展示：
@@ -2052,6 +2057,10 @@ type AdminRefundDetail struct {
 	// 既不知道为什么，也不知道改什么再申请。
 	RejectReason *string `json:"reject_reason,omitempty"`
 
+	// ReturnShipment 买家寄回退货的物流（`POST /refunds/{refund_no}/return-shipment` 填的那一份）。
+	// 只有退货退款、且买家填过时才出现；仅退款的单永远没有它。
+	ReturnShipment *ReturnShipment `json:"return_shipment,omitempty"`
+
 	// Status 退款单状态机，与 `refunds.status` 的 SMALLINT 取值逐值一致。
 	//
 	// 10 待审核 / 20 待买家退货 / 30 退款中 / 40 已退款
@@ -2070,6 +2079,7 @@ type AdminRefundDetail struct {
 	// `(10,20) (10,30) (10,50) (10,60) (20,30) (20,60) (30,40)`。
 	// 每条边由谁走：`10→20/30/50` 审核（`/admin/refunds/{refund_no}/audit`）；
 	// `20→30` 商家确认收到退货（`/admin/refunds/{refund_no}/receipt`）；
+	// 停在 `20` 期间买家填寄回物流（`/refunds/{refund_no}/return-shipment`），状态不变；
 	// `10/20→60` 买家撤回；`30→40` 渠道回调（`/webhooks/refunds/{channel}`）。
 	//
 	// `50 已拒绝` 与 `30 退款中` 失败**不是一回事**，客户端要分开展示：
@@ -3403,6 +3413,10 @@ type Refund struct {
 	// 既不知道为什么，也不知道改什么再申请。
 	RejectReason *string `json:"reject_reason,omitempty"`
 
+	// ReturnShipment 买家寄回退货的物流（`POST /refunds/{refund_no}/return-shipment` 填的那一份）。
+	// 只有退货退款、且买家填过时才出现；仅退款的单永远没有它。
+	ReturnShipment *ReturnShipment `json:"return_shipment,omitempty"`
+
 	// Status 退款单状态机，与 `refunds.status` 的 SMALLINT 取值逐值一致。
 	//
 	// 10 待审核 / 20 待买家退货 / 30 退款中 / 40 已退款
@@ -3421,6 +3435,7 @@ type Refund struct {
 	// `(10,20) (10,30) (10,50) (10,60) (20,30) (20,60) (30,40)`。
 	// 每条边由谁走：`10→20/30/50` 审核（`/admin/refunds/{refund_no}/audit`）；
 	// `20→30` 商家确认收到退货（`/admin/refunds/{refund_no}/receipt`）；
+	// 停在 `20` 期间买家填寄回物流（`/refunds/{refund_no}/return-shipment`），状态不变；
 	// `10/20→60` 买家撤回；`30→40` 渠道回调（`/webhooks/refunds/{channel}`）。
 	//
 	// `50 已拒绝` 与 `30 退款中` 失败**不是一回事**，客户端要分开展示：
@@ -3437,7 +3452,13 @@ type RefundChannel string
 
 // RefundCreateRequest defines model for RefundCreateRequest.
 type RefundCreateRequest struct {
-	// EvidenceUrls 凭证图片，先走上传接口拿到 URL
+	// EvidenceUrls 凭证图片，先走 `POST /uploads`（`purpose=3 退款凭证`）拿到 `Upload.url`，原样填在这里。
+	//
+	// 服务端逐个核对：必须是形如 `/api/v1/uploads/{upload_id}` 的地址、那个文件在本店、
+	// `purpose = 3`、而且**是你自己传的** —— 任何一条不满足回 422 invalid-request。
+	// 外链图片、别人的凭证、商品图都不收：凭证要能被归属校验保护起来
+	// （见 `GET /uploads/{upload_id}`），一个外链地址谁都能看。
+	// 申请成功的同一个事务里，这些文件被标记为「已引用」，不会被 24 小时的孤儿回收清掉。
 	EvidenceUrls *[]string         `json:"evidence_urls,omitempty"`
 	Items        []RefundItemInput `json:"items"`
 
@@ -3504,6 +3525,7 @@ type RefundReasonCode int
 // `(10,20) (10,30) (10,50) (10,60) (20,30) (20,60) (30,40)`。
 // 每条边由谁走：`10→20/30/50` 审核（`/admin/refunds/{refund_no}/audit`）；
 // `20→30` 商家确认收到退货（`/admin/refunds/{refund_no}/receipt`）；
+// 停在 `20` 期间买家填寄回物流（`/refunds/{refund_no}/return-shipment`），状态不变；
 // `10/20→60` 买家撤回；`30→40` 渠道回调（`/webhooks/refunds/{channel}`）。
 //
 // `50 已拒绝` 与 `30 退款中` 失败**不是一回事**，客户端要分开展示：
@@ -3533,6 +3555,22 @@ type RegionUpdateRequest struct {
 
 // RegionUpdateRequestStatus defines model for RegionUpdateRequest.Status.
 type RegionUpdateRequestStatus int
+
+// ReturnShipment defines model for ReturnShipment.
+type ReturnShipment struct {
+	CarrierCode string `json:"carrier_code"`
+
+	// SubmittedAt 买家最近一次填写（或修改）的时间。不是承运商揽收时间 —— 那要查物流，一期不做
+	SubmittedAt time.Time `json:"submitted_at"`
+	TrackingNo  string    `json:"tracking_no"`
+}
+
+// ReturnShipmentRequest defines model for ReturnShipmentRequest.
+type ReturnShipmentRequest struct {
+	// CarrierCode 承运商标识，如 sf / jd / yto（与发货的 `Shipment.carrier_code` 同一套）
+	CarrierCode string `json:"carrier_code"`
+	TrackingNo  string `json:"tracking_no"`
+}
 
 // ScopedProductListing 一件商品在某个作用域（大区或门店）下的可见性与生效价。
 // `GET /admin/stores/{store_id}/products` 与
@@ -6285,6 +6323,33 @@ type PostAdminUploadsParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
+// GetAdminUploadsUploadIdParams defines parameters for GetAdminUploadsUploadId.
+type GetAdminUploadsUploadIdParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
 // PostAssistantChatJSONBody defines parameters for PostAssistantChat.
 type PostAssistantChatJSONBody struct {
 	Message string `json:"message"`
@@ -6774,6 +6839,25 @@ type PostRefundsRefundNoCancelParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
+// PostRefundsRefundNoReturnShipmentParams defines parameters for PostRefundsRefundNoReturnShipment.
+type PostRefundsRefundNoReturnShipmentParams struct {
+	// IdempotencyKey 客户端生成的 UUID。幂等作用域为 `(接口 scope, user_id, key)`，
+	// 有效期 24h，过期后同一 key 可复用（见数据模型文档 §11）。
+	//
+	// · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
+	//   并带 `Idempotency-Replayed: true` 响应头
+	// · **同 key 正在处理中**：`409` + `Retry-After`，
+	//   type=https://keel.dev/problems/idempotency-key-in-flight，
+	//   客户端应退避重试，不要当成业务失败
+	// · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
+	//   type=https://keel.dev/problems/idempotency-key-reused。
+	//   宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
+	//   那会让用户以为下单成功了而实际什么都没发生
+	// · 首次执行失败（存档为失败态）时同样回放该失败响应；
+	//   确需重试的场景请换一个新 key
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
 // PostSearchEventsJSONBody defines parameters for PostSearchEvents.
 type PostSearchEventsJSONBody struct {
 	Event PostSearchEventsJSONBodyEvent `json:"event"`
@@ -7004,6 +7088,9 @@ type PostOrdersOrderNoPaymentsJSONRequestBody = PaymentCreateRequest
 
 // PostOrdersOrderNoRefundsJSONRequestBody defines body for PostOrdersOrderNoRefunds for application/json ContentType.
 type PostOrdersOrderNoRefundsJSONRequestBody = RefundCreateRequest
+
+// PostRefundsRefundNoReturnShipmentJSONRequestBody defines body for PostRefundsRefundNoReturnShipment for application/json ContentType.
+type PostRefundsRefundNoReturnShipmentJSONRequestBody = ReturnShipmentRequest
 
 // PostSearchJSONRequestBody defines body for PostSearch for application/json ContentType.
 type PostSearchJSONRequestBody = SearchRequest

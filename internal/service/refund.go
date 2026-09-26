@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -22,6 +23,7 @@ import (
 //
 //	POST /orders/{order_no}/refunds        买家申请        → 10 待审核
 //	POST /refunds/{refund_no}/cancel       买家撤回        10 / 20 → 60
+//	POST /refunds/{refund_no}/return-shipment 买家填寄回物流 停在 20，状态不变
 //	POST /admin/refunds/{refund_no}/audit  后台审核        10 → 20 / 30 / 50
 //	POST /admin/refunds/{refund_no}/receipt 后台确认收到退货 20 → 30
 //	POST /webhooks/refunds/{channel}       渠道回调入账    30 → 40
@@ -89,6 +91,10 @@ var (
 	// ErrRefundNotReceivable：只有 20 待买家退货能确认收到退货。契约：409。
 	ErrRefundNotReceivable = errors.New("退款单当前状态不允许确认收货")
 
+	// ErrRefundNotReturnable：填寄回物流只对退货退款、且停在 20 待买家退货的单成立。
+	// 契约：409 refund-status-not-returnable。
+	ErrRefundNotReturnable = errors.New("退款单当前不能填写寄回物流")
+
 	// ErrRefundFreightExceeded：审核裁定的退运费超过订单实收运费（减去别的退款单
 	// 已占的）。契约：422 refund-freight-exceeded。
 	ErrRefundFreightExceeded = errors.New("退运费超过订单实收运费")
@@ -113,6 +119,7 @@ var (
 const (
 	idempotencyScopeRefundCreate  = "refunds.create"
 	idempotencyScopeRefundCancel  = "refunds.cancel"
+	idempotencyScopeRefundReturn  = "refunds.return_shipment"
 	idempotencyScopeRefundAudit   = "admin.refunds.audit"
 	idempotencyScopeRefundReceipt = "admin.refunds.receipt"
 
@@ -190,8 +197,62 @@ func (r RefundCreateRequest) validate() error {
 			return fmt.Errorf("%w: evidence_urls 里有空的或过长的地址", ErrRefundBadRequest)
 		}
 	}
+	if _, err := evidenceUploadIDs(r.EvidenceURLs); err != nil {
+		return err
+	}
 	if len(r.Items) == 0 {
 		return fmt.Errorf("%w: items 至少一行", ErrRefundBadRequest)
+	}
+	return nil
+}
+
+// evidenceUploadIDs 把 evidence_urls 逐个解成 upload id。
+//
+// 只收 Upload.url 那一个形状（/api/v1/uploads/{id}），逐字：外链图片没有归属校验，
+// 一个外链地址谁都能看，而退款凭证是隐私内容（契约 GET /uploads/{upload_id}）；
+// 带 query、带尾斜杠的变体也不收 —— 后台读凭证时按地址精确匹配引用它的退款单
+// （ListEvidenceRefundStores），变体会让一张真凭证在后台读不出来。
+// 同一张图填两次回 422（契约 uniqueItems）。
+func evidenceUploadIDs(urls []string) ([]int64, error) {
+	ids := make([]int64, 0, len(urls))
+	seen := make(map[int64]bool, len(urls))
+	for _, u := range urls {
+		id, err := strconv.ParseInt(strings.TrimPrefix(u, uploadURLPrefix), 10, 64)
+		if err != nil || id <= 0 || u != UploadURL(id) {
+			return nil, fmt.Errorf("%w: evidence_urls 里的 %q 不是 POST /uploads 返回的地址", ErrRefundBadRequest, u)
+		}
+		if seen[id] {
+			return nil, fmt.Errorf("%w: evidence_urls 里 %q 出现了两次", ErrRefundBadRequest, u)
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
+// claimEvidence 核对每一张凭证：在本店（RLS）、purpose = 3 退款凭证、是这个买家自己传的；
+// 然后标成已引用。任何一张不满足都回 422，而且**不区分**「不存在」「别人的」「用途不对」——
+// 分开报就是一个能探出别人传过哪些文件的预言机。
+func claimEvidence(ctx context.Context, tx repository.Tx, urls []string, userID int64) error {
+	ids, err := evidenceUploadIDs(urls)
+	if err != nil {
+		return err
+	}
+	for i, uid := range ids {
+		up, err := tx.FindUpload(ctx, uid)
+		if errors.Is(err, repository.ErrUploadNotFound) {
+			up = repository.Upload{}
+		} else if err != nil {
+			return err
+		}
+		if up.ID == 0 || up.Purpose != repository.UploadPurposeRefundProof ||
+			up.UserID == nil || *up.UserID != userID {
+			return fmt.Errorf("%w: evidence_urls 里的 %q 不是你用 purpose=3 传的退款凭证",
+				ErrRefundBadRequest, urls[i])
+		}
+		if err := tx.MarkUploadReferenced(ctx, uid); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -269,6 +330,12 @@ func (s *RefundService) Create(ctx context.Context, orderNo string, req RefundCr
 				return repository.Refund{}, fmt.Errorf("%w: 这几行的实付净额是 0，没有可退的金额", ErrRefundBadRequest)
 			}
 
+			// 凭证逐个核对归属并标成已引用 —— 与退款单落库同一个事务（§13 孤儿回收的
+			// 安全条件：referenced 必须与引用它的业务对象同生同灭）。
+			if err := claimEvidence(ctx, tx, req.EvidenceURLs, id.UserID); err != nil {
+				return repository.Refund{}, err
+			}
+
 			pay, err := tx.FindSettledPayment(ctx, order.ID)
 			if err != nil {
 				return repository.Refund{}, err
@@ -344,6 +411,65 @@ func (s *RefundService) Cancel(ctx context.Context, refundNo, idemKey string) (r
 			}
 			if err := s.leaveRefunding(ctx, tx, order); err != nil {
 				return repository.Refund{}, err
+			}
+			return tx.FindUserRefundByNo(ctx, refundNo, id.UserID)
+		})
+}
+
+// ReturnShipmentRequest 是填寄回物流的请求体。json tag 是 request_hash 的规范化形状。
+type ReturnShipmentRequest struct {
+	CarrierCode string `json:"carrier_code"`
+	TrackingNo  string `json:"tracking_no"`
+}
+
+// SubmitReturnShipment 实现 POST /refunds/{refund_no}/return-shipment（买家填寄回物流）。
+//
+// 状态不变（仍是 20）：「货寄出了」只是买家的声明，退款要等商家真的收到货
+// （/admin/refunds/{refund_no}/receipt）才往下走。20 期间可以覆盖上一次填的。
+//
+// 锁的顺序照文件头「先订单、后退款单」：这条只改退款单，但它与撤回、确认收到退货
+// 撞在同一张退款单上，而那两条都是先锁订单 —— 这里跳过订单直接锁退款单，
+// 就是一个交叉等待的开口。
+func (s *RefundService) SubmitReturnShipment(ctx context.Context, refundNo string, req ReturnShipmentRequest,
+	idemKey string) (repository.Refund, bool, error) {
+
+	id, err := auth.FromContext(ctx)
+	if err != nil {
+		return repository.Refund{}, false, err
+	}
+	req.CarrierCode = strings.TrimSpace(req.CarrierCode)
+	req.TrackingNo = strings.TrimSpace(req.TrackingNo)
+	for name, v := range map[string]string{"carrier_code": req.CarrierCode, "tracking_no": req.TrackingNo} {
+		if v == "" || utf8.RuneCountInString(v) > shipmentFieldMaxRunes {
+			return repository.Refund{}, false, fmt.Errorf("%w: %s 不能为空，也不能超过 %d 个字符",
+				ErrRefundBadRequest, name, shipmentFieldMaxRunes)
+		}
+	}
+	return idempotentTx(ctx, s.repo, repository.BuyerSubject(id.UserID),
+		idempotencyScopeRefundReturn, idemKey, pathHash(refundNo, req.CarrierCode, req.TrackingNo), archivedOK,
+		func(tx repository.Tx) (repository.Refund, error) {
+			r, err := tx.FindUserRefundByNo(ctx, refundNo, id.UserID)
+			if errors.Is(err, repository.ErrRefundNotFound) {
+				return repository.Refund{}, fmt.Errorf("%w: refund_no=%s", ErrRefundNotFound, refundNo)
+			}
+			if err != nil {
+				return repository.Refund{}, err
+			}
+			_, status, err := lockRefund(ctx, tx, r)
+			if err != nil {
+				return repository.Refund{}, err
+			}
+			if r.RefundType != repository.RefundTypeReturnGoods || status != repository.RefundAwaitingReturn {
+				return repository.Refund{}, fmt.Errorf("%w: 退款单 %s 类型 %d、状态 %d，只有退货退款停在 20 时能填",
+					ErrRefundNotReturnable, refundNo, r.RefundType, status)
+			}
+			ok, err := tx.SubmitReturnShipment(ctx, r.ID, id.UserID, req.CarrierCode, req.TrackingNo)
+			if err != nil {
+				return repository.Refund{}, err
+			}
+			if !ok {
+				// 行锁之下刚读到 20，UPDATE 却匹配 0 行：谓词被改坏了。
+				return repository.Refund{}, fmt.Errorf("退款单 %s 在行锁之下填寄回物流失败", refundNo)
 			}
 			return tx.FindUserRefundByNo(ctx, refundNo, id.UserID)
 		})

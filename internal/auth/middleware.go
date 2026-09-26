@@ -33,7 +33,18 @@ import (
 // B 店的租户上下文，随后每一条 SQL 都在 B 店的 RLS 之下按这个 id 查。
 // 两家店的 users.id 来自同一个序列，撞上是日常——于是「拿别人的令牌读到
 // 另一个人的订单」不需要任何额外条件。这条路径上没有任何一处会报错。
-func Bearer(s *Signer, log *slog.Logger) gin.HandlerFunc {
+func Bearer(s *Signer, log *slog.Logger) gin.HandlerFunc { return bearer(s, log, false) }
+
+// OptionalBearer 与 Bearer 只差一处：**请求里完全没有 Authorization 头时放行**，
+// ctx 里没有用户（匿名）。只给「公开可读、但某一类内容只有本人能读」的接口用 ——
+// 眼下只有 GET /uploads/{upload_id}（退款凭证只有上传者本人可读，商品图与头像公开）。
+//
+// **带了头就按 Bearer 的全部四步判**，无效、过期、别家店的令牌照样 401，
+// 不会悄悄降级成匿名。降级的话，一个令牌过期的买家读自己的凭证会拿到 403
+// 「无权读取」—— 他会以为那张图不是他的，而正确的动作是去刷新令牌。
+func OptionalBearer(s *Signer, log *slog.Logger) gin.HandlerFunc { return bearer(s, log, true) }
+
+func bearer(s *Signer, log *slog.Logger, optional bool) gin.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -50,7 +61,12 @@ func Bearer(s *Signer, log *slog.Logger) gin.HandlerFunc {
 			return
 		}
 
-		raw, ok := bearerToken(c.GetHeader("Authorization"))
+		header := c.GetHeader("Authorization")
+		if optional && strings.TrimSpace(header) == "" {
+			c.Next()
+			return
+		}
+		raw, ok := bearerToken(header)
 		if !ok {
 			problem.Write(c, http.StatusUnauthorized,
 				problem.TypeUnauthorized, "需要登录")

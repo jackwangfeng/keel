@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -845,27 +844,8 @@ func (s *AdminCatalogService) CreateUpload(ctx context.Context, contentType stri
 				SHA256:      sum,
 			})
 		})
-	if err != nil || replayed {
-		// 两条路都要把刚落盘的那个文件删掉：
-		//   · 重放 —— 库里那一行指向的是**上一次**的 storage_key，这次写的
-		//     这个永远不会有行指向它。
-		//   · 失败 —— 事务回滚了，同理。原先这一路是一次「一期接受的泄漏」
-		//     （见本函数上面那段注释），既然重放这条路非删不可，顺手把它一起
-		//     收掉：同一个善后，两个触发原因。
-		if rmErr := s.store.Remove(key); rmErr != nil {
-			if err != nil {
-				// 本来就要报错，把善后失败一起带上去，别让它消失。
-				err = errors.Join(err, fmt.Errorf("删除孤儿文件 %s 失败: %w", key, rmErr))
-			} else {
-				// **重放这一路只记日志，不改变调用结果。** 一个删不掉的残留
-				// 文件不该让一次成功的重放变成 500 —— 那会让客户端以为这次
-				// 重试失败了，于是换一把新钥匙再传一遍，磁盘上再多一份。
-				// 也就是说「把它变成错误」正好放大了它要报告的那个问题。
-				slog.ErrorContext(ctx, "幂等重放后删除孤儿文件失败，它不会被孤儿回收看见",
-					"storage_key", key, "err", rmErr)
-			}
-		}
-	}
+	// 两条路都要把刚落盘的那个文件删掉（重放 / 失败），理由写在 discardStoredUpload 上。
+	err = discardStoredUpload(ctx, s.store, key, err, replayed)
 	return out, replayed, err
 }
 

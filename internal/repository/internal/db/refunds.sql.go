@@ -59,7 +59,6 @@ func (q *Queries) ApproveRefund(ctx context.Context, arg ApproveRefundParams) (i
 }
 
 const cancelRefund = `-- name: CancelRefund :execrows
-
 UPDATE refunds SET status = 60
  WHERE id = $1 AND user_id = $2 AND status IN (10, 20)
 `
@@ -69,9 +68,6 @@ type CancelRefundParams struct {
 	UserID int64
 }
 
-// ---------------------------------------------------------------------------
-// 状态推进。每一条都带预期的起点状态，失配影响 0 行；00034 的触发器是第二道。
-// ---------------------------------------------------------------------------
 // 买家撤回：10 待审核 / 20 待买家退货 → 60 已取消。30 退款中撤不回来（钱在路上）。
 func (q *Queries) CancelRefund(ctx context.Context, arg CancelRefundParams) (int64, error) {
 	result, err := q.db.Exec(ctx, cancelRefund, arg.ID, arg.UserID)
@@ -188,7 +184,8 @@ SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, p.payment_no, r.us
        r.refund_type, r.reason_code, r.reason_text, r.evidence_urls,
        r.goods_amount_cents, r.freight_cents, r.amount_cents, r.status, r.channel,
        r.channel_refund_id, r.reject_reason, r.audited_at, r.refunded_at,
-       r.created_at, r.updated_at
+       r.created_at, r.updated_at,
+       r.return_carrier_code, r.return_tracking_no, r.return_submitted_at
   FROM refunds r
   JOIN orders o   ON o.id = r.order_id
   JOIN payments p ON p.id = r.payment_id
@@ -196,28 +193,31 @@ SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, p.payment_no, r.us
 `
 
 type GetRefundByNoRow struct {
-	ID               int64
-	RefundNo         string
-	OrderID          int64
-	OrderNo          string
-	StoreID          int64
-	PaymentNo        string
-	UserID           int64
-	RefundType       int16
-	ReasonCode       int16
-	ReasonText       *string
-	EvidenceUrls     []string
-	GoodsAmountCents int64
-	FreightCents     int64
-	AmountCents      int64
-	Status           int16
-	Channel          int16
-	ChannelRefundID  *string
-	RejectReason     *string
-	AuditedAt        pgtype.Timestamptz
-	RefundedAt       pgtype.Timestamptz
-	CreatedAt        pgtype.Timestamptz
-	UpdatedAt        pgtype.Timestamptz
+	ID                int64
+	RefundNo          string
+	OrderID           int64
+	OrderNo           string
+	StoreID           int64
+	PaymentNo         string
+	UserID            int64
+	RefundType        int16
+	ReasonCode        int16
+	ReasonText        *string
+	EvidenceUrls      []string
+	GoodsAmountCents  int64
+	FreightCents      int64
+	AmountCents       int64
+	Status            int16
+	Channel           int16
+	ChannelRefundID   *string
+	RejectReason      *string
+	AuditedAt         pgtype.Timestamptz
+	RefundedAt        pgtype.Timestamptz
+	CreatedAt         pgtype.Timestamptz
+	UpdatedAt         pgtype.Timestamptz
+	ReturnCarrierCode *string
+	ReturnTrackingNo  *string
+	ReturnSubmittedAt pgtype.Timestamptz
 }
 
 // ---------------------------------------------------------------------------
@@ -251,6 +251,9 @@ func (q *Queries) GetRefundByNo(ctx context.Context, refundNo string) (GetRefund
 		&i.RefundedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ReturnCarrierCode,
+		&i.ReturnTrackingNo,
+		&i.ReturnSubmittedAt,
 	)
 	return i, err
 }
@@ -260,7 +263,8 @@ SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, p.payment_no, r.us
        r.refund_type, r.reason_code, r.reason_text, r.evidence_urls,
        r.goods_amount_cents, r.freight_cents, r.amount_cents, r.status, r.channel,
        r.channel_refund_id, r.reject_reason, r.audited_at, r.refunded_at,
-       r.created_at, r.updated_at
+       r.created_at, r.updated_at,
+       r.return_carrier_code, r.return_tracking_no, r.return_submitted_at
   FROM refunds r
   JOIN orders o   ON o.id = r.order_id
   JOIN payments p ON p.id = r.payment_id
@@ -274,28 +278,31 @@ type GetUserRefundByNoParams struct {
 }
 
 type GetUserRefundByNoRow struct {
-	ID               int64
-	RefundNo         string
-	OrderID          int64
-	OrderNo          string
-	StoreID          int64
-	PaymentNo        string
-	UserID           int64
-	RefundType       int16
-	ReasonCode       int16
-	ReasonText       *string
-	EvidenceUrls     []string
-	GoodsAmountCents int64
-	FreightCents     int64
-	AmountCents      int64
-	Status           int16
-	Channel          int16
-	ChannelRefundID  *string
-	RejectReason     *string
-	AuditedAt        pgtype.Timestamptz
-	RefundedAt       pgtype.Timestamptz
-	CreatedAt        pgtype.Timestamptz
-	UpdatedAt        pgtype.Timestamptz
+	ID                int64
+	RefundNo          string
+	OrderID           int64
+	OrderNo           string
+	StoreID           int64
+	PaymentNo         string
+	UserID            int64
+	RefundType        int16
+	ReasonCode        int16
+	ReasonText        *string
+	EvidenceUrls      []string
+	GoodsAmountCents  int64
+	FreightCents      int64
+	AmountCents       int64
+	Status            int16
+	Channel           int16
+	ChannelRefundID   *string
+	RejectReason      *string
+	AuditedAt         pgtype.Timestamptz
+	RefundedAt        pgtype.Timestamptz
+	CreatedAt         pgtype.Timestamptz
+	UpdatedAt         pgtype.Timestamptz
+	ReturnCarrierCode *string
+	ReturnTrackingNo  *string
+	ReturnSubmittedAt pgtype.Timestamptz
 }
 
 // 买家读自己的退款单。查不到与「不是你的」回同一个 404（refund_no 不可枚举，
@@ -326,6 +333,9 @@ func (q *Queries) GetUserRefundByNo(ctx context.Context, arg GetUserRefundByNoPa
 		&i.RefundedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ReturnCarrierCode,
+		&i.ReturnTrackingNo,
+		&i.ReturnSubmittedAt,
 	)
 	return i, err
 }
@@ -451,7 +461,8 @@ SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, p.payment_no, r.us
        r.refund_type, r.reason_code, r.reason_text, r.evidence_urls,
        r.goods_amount_cents, r.freight_cents, r.amount_cents, r.status, r.channel,
        r.channel_refund_id, r.reject_reason, r.audited_at, r.refunded_at,
-       r.created_at, r.updated_at
+       r.created_at, r.updated_at,
+       r.return_carrier_code, r.return_tracking_no, r.return_submitted_at
   FROM refunds r
   JOIN orders o   ON o.id = r.order_id
   JOIN payments p ON p.id = r.payment_id
@@ -460,28 +471,31 @@ SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, p.payment_no, r.us
 `
 
 type ListOrderRefundsRow struct {
-	ID               int64
-	RefundNo         string
-	OrderID          int64
-	OrderNo          string
-	StoreID          int64
-	PaymentNo        string
-	UserID           int64
-	RefundType       int16
-	ReasonCode       int16
-	ReasonText       *string
-	EvidenceUrls     []string
-	GoodsAmountCents int64
-	FreightCents     int64
-	AmountCents      int64
-	Status           int16
-	Channel          int16
-	ChannelRefundID  *string
-	RejectReason     *string
-	AuditedAt        pgtype.Timestamptz
-	RefundedAt       pgtype.Timestamptz
-	CreatedAt        pgtype.Timestamptz
-	UpdatedAt        pgtype.Timestamptz
+	ID                int64
+	RefundNo          string
+	OrderID           int64
+	OrderNo           string
+	StoreID           int64
+	PaymentNo         string
+	UserID            int64
+	RefundType        int16
+	ReasonCode        int16
+	ReasonText        *string
+	EvidenceUrls      []string
+	GoodsAmountCents  int64
+	FreightCents      int64
+	AmountCents       int64
+	Status            int16
+	Channel           int16
+	ChannelRefundID   *string
+	RejectReason      *string
+	AuditedAt         pgtype.Timestamptz
+	RefundedAt        pgtype.Timestamptz
+	CreatedAt         pgtype.Timestamptz
+	UpdatedAt         pgtype.Timestamptz
+	ReturnCarrierCode *string
+	ReturnTrackingNo  *string
+	ReturnSubmittedAt pgtype.Timestamptz
 }
 
 // 一个订单的全部退款单，按申请时间倒序（契约 GET /orders/{order_no}/refunds
@@ -518,6 +532,9 @@ func (q *Queries) ListOrderRefunds(ctx context.Context, orderID int64) ([]ListOr
 			&i.RefundedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ReturnCarrierCode,
+			&i.ReturnTrackingNo,
+			&i.ReturnSubmittedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -582,7 +599,8 @@ SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, p.payment_no, r.us
        r.refund_type, r.reason_code, r.reason_text, r.evidence_urls,
        r.goods_amount_cents, r.freight_cents, r.amount_cents, r.status, r.channel,
        r.channel_refund_id, r.reject_reason, r.audited_at, r.refunded_at,
-       r.created_at, r.updated_at
+       r.created_at, r.updated_at,
+       r.return_carrier_code, r.return_tracking_no, r.return_submitted_at
   FROM refunds r
   JOIN orders o   ON o.id = r.order_id
   JOIN payments p ON p.id = r.payment_id
@@ -600,28 +618,31 @@ type ListUserRefundsParams struct {
 }
 
 type ListUserRefundsRow struct {
-	ID               int64
-	RefundNo         string
-	OrderID          int64
-	OrderNo          string
-	StoreID          int64
-	PaymentNo        string
-	UserID           int64
-	RefundType       int16
-	ReasonCode       int16
-	ReasonText       *string
-	EvidenceUrls     []string
-	GoodsAmountCents int64
-	FreightCents     int64
-	AmountCents      int64
-	Status           int16
-	Channel          int16
-	ChannelRefundID  *string
-	RejectReason     *string
-	AuditedAt        pgtype.Timestamptz
-	RefundedAt       pgtype.Timestamptz
-	CreatedAt        pgtype.Timestamptz
-	UpdatedAt        pgtype.Timestamptz
+	ID                int64
+	RefundNo          string
+	OrderID           int64
+	OrderNo           string
+	StoreID           int64
+	PaymentNo         string
+	UserID            int64
+	RefundType        int16
+	ReasonCode        int16
+	ReasonText        *string
+	EvidenceUrls      []string
+	GoodsAmountCents  int64
+	FreightCents      int64
+	AmountCents       int64
+	Status            int16
+	Channel           int16
+	ChannelRefundID   *string
+	RejectReason      *string
+	AuditedAt         pgtype.Timestamptz
+	RefundedAt        pgtype.Timestamptz
+	CreatedAt         pgtype.Timestamptz
+	UpdatedAt         pgtype.Timestamptz
+	ReturnCarrierCode *string
+	ReturnTrackingNo  *string
+	ReturnSubmittedAt pgtype.Timestamptz
 }
 
 // 我的退款单，一页。status 用可空参数：传 NULL 就是不筛，
@@ -663,6 +684,9 @@ func (q *Queries) ListUserRefunds(ctx context.Context, arg ListUserRefundsParams
 			&i.RefundedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ReturnCarrierCode,
+			&i.ReturnTrackingNo,
+			&i.ReturnSubmittedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -1022,6 +1046,44 @@ UPDATE orders SET status = 50 WHERE id = $1 AND status = 20
 // 未发货的整单退款申请：订单 20 已支付 → 50 退款中（§5 两维度那张表的第一行）。
 func (q *Queries) StartWholeOrderRefund(ctx context.Context, id int64) (int64, error) {
 	result, err := q.db.Exec(ctx, startWholeOrderRefund, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const submitReturnShipment = `-- name: SubmitReturnShipment :execrows
+
+UPDATE refunds
+   SET return_carrier_code = $1,
+       return_tracking_no  = $2,
+       return_submitted_at = now()
+ WHERE id = $3 AND user_id = $4
+   AND refund_type = 2 AND status = 20
+`
+
+type SubmitReturnShipmentParams struct {
+	CarrierCode *string
+	TrackingNo  *string
+	ID          int64
+	UserID      int64
+}
+
+// ---------------------------------------------------------------------------
+// 状态推进。每一条都带预期的起点状态，失配影响 0 行；00034 的触发器是第二道。
+// ---------------------------------------------------------------------------
+// 买家填寄回物流（契约 POST /refunds/{refund_no}/return-shipment，00037）。
+// **不改 status**：只有退货退款、只有停在 20 待买家退货时能填，20 期间可以覆盖
+// （填错单号是常事）。user_id 是越权过滤，理由见文件头。
+// 不经过状态机触发器（它挂在 UPDATE OF status 上），「只有 20 能填」由这里的谓词负责；
+// chk_refund_return_shipment 兜住「三列同生同灭、只能在退货退款上」。
+func (q *Queries) SubmitReturnShipment(ctx context.Context, arg SubmitReturnShipmentParams) (int64, error) {
+	result, err := q.db.Exec(ctx, submitReturnShipment,
+		arg.CarrierCode,
+		arg.TrackingNo,
+		arg.ID,
+		arg.UserID,
+	)
 	if err != nil {
 		return 0, err
 	}

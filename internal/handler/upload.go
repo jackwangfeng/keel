@@ -3,9 +3,12 @@ package handler
 import (
 	"errors"
 	"net/http"
+	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/keel/keel/internal/api"
 	"github.com/keel/keel/internal/problem"
 	"github.com/keel/keel/internal/repository"
 	"github.com/keel/keel/internal/service"
@@ -14,10 +17,23 @@ import (
 // GET /uploads/{upload_id} —— 读文件（契约 Upload tag）。M4 收尾。
 //
 // ===========================================================================
-// 它是**买家侧**接口，所以这个文件里一道后台鉴权都没有
+// 这个文件里的四条接口
 // ===========================================================================
 //
-// 路径上没有 /admin/ 前缀，契约里也没给它 security —— 商品图本就公开。
+//	GET  /uploads/{upload_id}         读文件，买家侧，鉴权可选（auth.OptionalBearer）
+//	POST /uploads                     买家上传头像 / 退款凭证（auth.Bearer）
+//	GET  /admin/uploads/{upload_id}   后台客服读文件（staffAuth）
+//	（GET /uploads/{upload_id}/blob 在 upload_blob.go，理由见下）
+//
+// 四条都没有契约里的 query 参数，所以可以同处一个文件（contract_test.go 按文件对账）。
+// 鉴权全在路由上（internal/app/app.go），这个文件里一行判权都没有 —— 判权在 service。
+//
+// ===========================================================================
+// GET /uploads/{upload_id} 是**买家侧**接口，鉴权是可选的
+// ===========================================================================
+//
+// 路径上没有 /admin/ 前缀，契约里给它的 security 是「匿名或买家令牌」——
+// 商品图与头像本就公开；退款凭证只有上传者本人（带自己的令牌）能读。
 // 「一个租户的人不能读到另一个租户的文件」不是靠鉴权给出的，是靠租户中间件
 // 解出来的那个 merchant_id 加 uploads 上那条 RLS 策略：别家店的那一行在这条
 // 连接上根本读不出来，于是它与「这个 id 不存在」是同一个 404。
@@ -68,6 +84,86 @@ func (h *UploadHandler) Redirect(c *gin.Context) {
 	// 同一条推理写在 service/payment_intent.go 的 settle.url 上。
 	c.Header("Cache-Control", "no-store")
 	c.Redirect(http.StatusFound, target)
+}
+
+// AdminRedirect 实现 GET /api/v1/admin/uploads/{upload_id}（后台客服读文件）。
+// 响应形状与 Redirect 相同：302 到同一种限时地址。判权在 service.AdminRedirectTarget。
+func (h *UploadHandler) AdminRedirect(c *gin.Context) {
+	id, ok := pathID(c, "upload_id")
+	if !ok {
+		return
+	}
+	target, err := h.svc.AdminRedirectTarget(c.Request.Context(), id)
+	if err != nil {
+		if writePermissionError(c, err) {
+			return
+		}
+		writeUploadError(c, err)
+		return
+	}
+	c.Header("Cache-Control", "no-store")
+	c.Redirect(http.StatusFound, target)
+}
+
+// Create 实现 POST /api/v1/uploads（买家上传头像或退款凭证）。
+//
+// 请求体的解析与 POST /admin/uploads 逐条相同（先限大小再解析、content_type 取 part 头
+// 上声明的那个、MaxBytesError 也落到 413），理由写在 admin_upload.go 上，这里不重复。
+// 多出来的只有 purpose 这一个表单字段。
+func (h *UploadHandler) Create(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body,
+		service.MaxUploadBytes+(1<<20))
+	if err := c.Request.ParseMultipartForm(maxUploadFormMemory); err != nil {
+		problem.Write(c, http.StatusRequestEntityTooLarge,
+			problem.TypeUploadTooLarge,
+			"请求体解析失败或超过上限（单文件不超过 10 MB）")
+		return
+	}
+	purpose, err := strconv.ParseInt(strings.TrimSpace(c.Request.FormValue("purpose")), 10, 16)
+	if err != nil {
+		problem.Write(c, http.StatusUnprocessableEntity,
+			problem.TypeInvalidRequest, "purpose 必填，取值 2 头像或 3 退款凭证")
+		return
+	}
+	file, header, err := c.Request.FormFile("file")
+	if err != nil {
+		problem.Write(c, http.StatusUnprocessableEntity,
+			problem.TypeInvalidRequest, "请求体里没有 file 这一项")
+		return
+	}
+	defer func() { _ = file.Close() }()
+
+	up, replayed, err := h.svc.CreateBuyerUpload(c.Request.Context(), int16(purpose),
+		header.Header.Get("Content-Type"), file, idemKeyOf(c))
+	if err != nil {
+		var tooBig *http.MaxBytesError
+		switch {
+		case errors.As(err, &tooBig), errors.Is(err, service.ErrUploadTooLarge):
+			problem.Write(c, http.StatusRequestEntityTooLarge,
+				problem.TypeUploadTooLarge, "文件超过 10 MB")
+		case errors.Is(err, service.ErrUploadMediaType):
+			problem.Write(c, http.StatusUnsupportedMediaType,
+				problem.TypeUploadUnsupportedMedia,
+				"只接受 image/jpeg、image/png、image/webp")
+		case writeAdminIdempotencyError(c, err):
+		case errors.Is(err, service.ErrCatalogBadRequest):
+			writeProblemDetail(c, http.StatusUnprocessableEntity, problem.TypeInvalidRequest,
+				"请求参数不合法", err)
+		default:
+			_ = c.Error(err)
+			problem.Write(c, http.StatusInternalServerError,
+				problem.TypeInternal, "服务内部错误")
+		}
+		return
+	}
+	markReplayed(c, replayed)
+	c.JSON(http.StatusCreated, api.Upload{
+		Id:          up.ID,
+		Url:         service.UploadURL(up.ID),
+		ContentType: up.ContentType,
+		SizeBytes:   up.SizeBytes,
+		CreatedAt:   up.CreatedAt,
+	})
 }
 
 // writeUploadError 把读文件那两跳的失败翻成契约里那几种响应。

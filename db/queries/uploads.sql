@@ -24,6 +24,33 @@ VALUES (sqlc.arg(staff_id), sqlc.arg(purpose), sqlc.arg(driver),
 RETURNING id, user_id, staff_id, purpose, driver, storage_key,
           content_type, size_bytes, sha256, referenced, created_at;
 
+-- name: CreateUserUpload :one
+-- C 端买家传的文件（契约 POST /uploads）：头像（2）或退款凭证（3）。
+-- 填 user_id，不填 staff_id —— 与 CreateStaffUpload 是两条路，理由见那一条的注释；
+-- chk_upload_owner 钉着二选一。purpose 是入参，但只收 2 / 3，由服务层判
+-- （商品图是后台的事，走 CreateStaffUpload）。
+INSERT INTO uploads (user_id, purpose, driver, storage_key,
+                     content_type, size_bytes, sha256)
+VALUES (sqlc.arg(user_id), sqlc.arg(purpose), sqlc.arg(driver),
+        sqlc.arg(storage_key), sqlc.arg(content_type), sqlc.arg(size_bytes),
+        sqlc.arg(sha256))
+RETURNING id, user_id, staff_id, purpose, driver, storage_key,
+          content_type, size_bytes, sha256, referenced, created_at;
+
+-- name: ListEvidenceRefundStores :many
+-- 引用了这个凭证地址的退款单，各自所属订单的履约门店（去重）。
+-- 后台读退款凭证（GET /admin/uploads/{upload_id}）按它判权：能看引用它的那张退款单，
+-- 才能看这张凭证 —— 与后台退款单详情同一个判据。
+--
+-- 按地址而不是按 upload id 找，是因为 evidence_urls 存的就是地址（契约 Upload.url）；
+-- 申请时服务端已把每一项核成 /api/v1/uploads/{id} 这一个形状，所以精确匹配就够。
+-- 包含运算走 00038 的 GIN 索引。
+SELECT DISTINCT o.store_id
+  FROM refunds r
+  JOIN orders o ON o.id = r.order_id
+ WHERE r.evidence_urls @> ARRAY[sqlc.arg(url)::text]
+ ORDER BY o.store_id;
+
 -- name: GetUpload :one
 -- 取一条文件元数据。跨租户的那一条在 RLS 之下返回 0 行，
 -- 服务层把它翻成契约的 422 upload-not-found —— 与「这个 id 不存在」同一个
@@ -47,8 +74,13 @@ SELECT id, user_id, staff_id, purpose, driver, storage_key,
 -- （数据模型 §13 明写）：否则存在这样的窗口 —— 商品图刚提交、清理任务恰好
 -- 扫到、文件被删，而商品详情页上那张图已经是 404。
 --
+-- **不带 AND NOT referenced**：同一个文件被第二次引用是正常的（被驳回的退款重新申请时
+-- 带着同一批凭证、同一张图挂到第二个规格上），而带着那个谓词时第二次影响 0 行，
+-- 下面那条「0 行 = 不在视野内」的推论就成了假话 —— 症状是第二次引用回 404 / 422。
+-- 再写一次 TRUE 没有任何副作用。
+--
 -- rows_affected = 0 只可能是这条文件不在本租户视野内（RLS），
 -- 而那一步在整组替换里已经由 GetUpload 挡过一次；这里返回行数是第二道 ——
 -- 一个静默的 0 行会让 referenced 永远停在 FALSE，然后 24 小时后被回收掉。
 UPDATE uploads SET referenced = TRUE
- WHERE id = $1 AND NOT referenced;
+ WHERE id = $1;

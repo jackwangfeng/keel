@@ -39,7 +39,7 @@ so "which one is running?" never depends on anyone's memory.
 
 ## [Unreleased]
 
-Migrations `00027`–`00035`.
+Migrations `00027`–`00038`.
 
 ### Added
 
@@ -158,6 +158,17 @@ Migrations `00027`–`00035`.
   line and map to the contract's `409`s.
 - All three write endpoints honour `Idempotency-Key` in a single transaction
   (claim → business → archive), shared with the admin write path.
+- **Automatic delivery confirmation** (migration 00036). A background job moves
+  orders that have been shipped for `shop_settings.auto_confirm_days` days
+  (default 7 — the column existed since 00001, now guarded by
+  `chk_auto_confirm_days`, 1–365) from `30` to `40`, through the very same
+  conditional update as the buyer's own confirmation. It runs like the order
+  timeout sweep — per tenant, with the same fairness scheduler, now shared as
+  `fairRound` — every ten minutes. Orders with an open refund (`10`/`20`/`30`)
+  are paused rather than confirmed, re-checked under the order row lock that
+  refund requests also take; once the refund ends they are confirmed on the
+  next round. A shop without a `shop_settings` row falls back to the column
+  default.
 
 ### Added — refunds and after-sales (migration 00034)
 
@@ -192,6 +203,28 @@ Migrations `00027`–`00035`.
   `chk_refund_state` ties "refunded" to the channel refund id and timestamp.
 - Who may audit or confirm receipt follows the same store-scoped rule as
   shipping.
+- **Return shipment** (`POST /refunds/{refund_no}/return-shipment`, migration
+  00037). While a return-and-refund waits for the goods (`20`), the buyer enters
+  the carrier and tracking number of the parcel sent back; the refund stays at
+  `20` until the merchant confirms receipt, and the entry can be corrected until
+  then. `Refund.return_shipment` carries it on buyer and admin views alike, and
+  the console's refund drawer shows it. `chk_refund_return_shipment` keeps the
+  three columns all-or-nothing and on return-and-refunds only. Receipt does not
+  require it (goods may come back in person).
+- **Buyer uploads** (`POST /uploads`) for avatars (`2`) and refund evidence
+  (`3`), with the same storage, size and media-type limits and the same
+  store-bytes-then-claim-key idempotency as `POST /admin/uploads`; product
+  images (`1`) are refused with a `422` and stay on the admin path.
+- **Refund evidence is private, as the contract always said.**
+  `GET /uploads/{upload_id}` now takes an optional buyer token: evidence is
+  readable only by its uploader with their own token (a bad token is a `401`,
+  never a silent downgrade to anonymous). Staff read files through the new
+  `GET /admin/uploads/{upload_id}`, where evidence is authorized through the
+  refunds that reference it (same store-scoped rule as the refund detail) and
+  evidence referenced by no refund is readable by nobody. Time-limited links
+  for private files are signed in a separate domain the second hop requires
+  (migration 00038 indexes `refunds.evidence_urls` for that lookup). The
+  console loads evidence images through the admin endpoint.
 - **Back-office order and refund lists** (migration 00035):
   `GET /admin/orders` (status, store, created-at range, exact order number or
   phone — receiver's or the buyer account's), `GET /admin/orders/{order_no}`
@@ -244,9 +277,19 @@ Migrations `00027`–`00035`.
   its shape (`^[0-9a-f]{32}$`) and when it is absent.
 - Migration 00030 gives `user_addresses.merchant_id` a
   `DEFAULT current_merchant()`, now that the application writes that table.
+- **Contract: `RefundCreateRequest.evidence_urls` only accepts the buyer's own
+  refund-evidence uploads** — each entry must be exactly an `Upload.url` from
+  `POST /uploads` with `purpose = 3` by the same buyer, no duplicates; anything
+  else (external links, someone else's file, product images) is a `422`. The
+  files are marked referenced in the refund's transaction, so orphan cleanup can
+  never delete them.
 
 ### Fixed
 
+- **Referencing an upload a second time no longer fails.** `MarkUploadReferenced`
+  only matched rows not yet referenced, so re-using an image (the same picture on
+  a second SKU, the same evidence on a re-submitted refund) affected zero rows and
+  was reported as "upload not found".
 - **Shipping, refund audit and "return received" no longer fail with a 500 for
   a region manager when the order's store has been soft-deleted.** The store-scope
   check looked the store up among live stores only and the resulting not-found

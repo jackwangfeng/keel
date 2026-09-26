@@ -11,11 +11,26 @@
 //
 // 三个动作各自一把幂等键：超时重发不会审两次；被拒之后改了再提交换新钥匙。
 
-import { computed, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
-import { keel, type AdminRefundDetail, type AdminStore, type StaffRef } from "../../api/client.ts";
+import {
+    fetchAdminUploadObjectUrl,
+    keel,
+    type AdminRefundDetail,
+    type AdminStore,
+    type StaffRef,
+} from "../../api/client.ts";
 import { IdempotentSubmission, withIdempotency } from "../../api/idempotency.ts";
-import { ORDER_STATUS, REFUND_REASON, REFUND_STATUS, REFUND_TYPE, buildAudit, refundActions } from "../../api/orderRules.ts";
+import {
+    ORDER_STATUS,
+    REFUND_REASON,
+    REFUND_STATUS,
+    REFUND_TYPE,
+    adminUploadPath,
+    buildAudit,
+    carrierName,
+    refundActions,
+} from "../../api/orderRules.ts";
 import { can } from "../../auth/permissions.ts";
 import { datetime, yuan } from "../../ui/format.ts";
 import { notifyOk } from "../../ui/notify.ts";
@@ -59,6 +74,40 @@ watch(
     },
     { immediate: true },
 );
+
+// ------------------------------------------------------------------ 凭证图
+//
+// 凭证是买家的隐私（契约：仅上传者本人与后台客服可读），`<img>` 直接用 evidence_urls 会 403。
+// 逐张经 GET /admin/uploads/{id} 取成 object URL（api/client.ts 的 fetchAdminUploadObjectUrl）；
+// 换单或关掉抽屉时全部 revoke。老数据里形状不对的地址原样显示。
+const evidenceSrc = ref<string[]>([]);
+let evidenceObjectUrls: string[] = [];
+
+function releaseEvidence(): void {
+    for (const u of evidenceObjectUrls) URL.revokeObjectURL(u);
+    evidenceObjectUrls = [];
+    evidenceSrc.value = [];
+}
+
+watch(refund, async (r) => {
+    releaseEvidence();
+    const urls = r?.evidence_urls ?? [];
+    const loaded = await Promise.all(
+        urls.map(async (u) => {
+            const path = adminUploadPath(u);
+            if (path === null) return u;
+            try {
+                const obj = await fetchAdminUploadObjectUrl(path);
+                evidenceObjectUrls.push(obj);
+                return obj;
+            } catch {
+                return ""; // 读不到（403 / 404）：el-image 显示加载失败的占位
+            }
+        }),
+    );
+    if (refund.value === r) evidenceSrc.value = loaded;
+});
+onBeforeUnmount(releaseEvidence);
 
 const canOperate = computed(() => {
     const r = refund.value;
@@ -247,14 +296,42 @@ async function submitReceive(): Promise<void> {
                     <el-descriptions-item label="订单已退">{{ yuan(refund.order.refunded_cents ?? 0) }}</el-descriptions-item>
                 </el-descriptions>
 
+                <template v-if="refund.refund_type === 2">
+                    <h4>寄回物流</h4>
+                    <el-descriptions
+                        v-if="refund.return_shipment"
+                        :column="3"
+                        border
+                        size="small"
+                        class="mb12"
+                        data-test="return-shipment"
+                    >
+                        <el-descriptions-item label="承运商">
+                            {{ carrierName(refund.return_shipment.carrier_code) }}
+                        </el-descriptions-item>
+                        <el-descriptions-item label="运单号">{{ refund.return_shipment.tracking_no }}</el-descriptions-item>
+                        <el-descriptions-item label="买家填写于">
+                            {{ datetime(refund.return_shipment.submitted_at) }}
+                        </el-descriptions-item>
+                    </el-descriptions>
+                    <p v-else class="hint mb12" data-test="return-shipment-missing">
+                        {{
+                            refund.status === 20
+                                ? "买家还没有填写寄回物流。没填也可以在收到货后确认收到退货。"
+                                : "买家没有填写寄回物流。"
+                        }}
+                    </p>
+                </template>
+
                 <template v-if="(refund.evidence_urls ?? []).length > 0">
                     <h4>凭证</h4>
                     <div class="evidence mb12">
                         <el-image
-                            v-for="u in refund.evidence_urls"
-                            :key="u"
+                            v-for="(u, i) in evidenceSrc"
+                            :key="i"
                             :src="u"
-                            :preview-src-list="refund.evidence_urls ?? []"
+                            :preview-src-list="evidenceSrc"
+                            :initial-index="i"
                             fit="cover"
                             class="evidence-img"
                         />
@@ -275,6 +352,15 @@ async function submitReceive(): Promise<void> {
                         <div v-if="refund.refund_type === 2 && refund.status !== 50" class="hint">
                             裁定退运费：{{ yuan(refund.freight_cents ?? 0) }}
                         </div>
+                    </el-timeline-item>
+                    <el-timeline-item
+                        v-if="refund.return_shipment"
+                        :timestamp="datetime(refund.return_shipment.submitted_at)"
+                    >
+                        买家填写寄回物流
+                        <span class="hint">
+                            · {{ carrierName(refund.return_shipment.carrier_code) }} {{ refund.return_shipment.tracking_no }}
+                        </span>
                     </el-timeline-item>
                     <el-timeline-item v-if="refund.received_at" :timestamp="datetime(refund.received_at)" type="primary">
                         确认收到退货

@@ -87,6 +87,7 @@ const (
 	//   refund-status-not-cancelable  409  只有待审核 / 待买家退货能撤回
 	//   refund-status-not-auditable   409  只有待审核能审
 	//   refund-status-not-receivable  409  只有待买家退货能确认收到退货
+	//   refund-status-not-returnable  409  买家填寄回物流：只有退货退款、且在待买家退货
 	//   refund-freight-exceeded       422  审核裁定的退运费超过订单实收运费
 	TypeOrderStatusNotCancelable  = "https://keel.dev/problems/order-status-not-cancelable"
 	TypeOrderStatusNotConfirmable = "https://keel.dev/problems/order-status-not-confirmable"
@@ -101,6 +102,7 @@ const (
 	TypeRefundStatusNotCancelable = "https://keel.dev/problems/refund-status-not-cancelable"
 	TypeRefundStatusNotAuditable  = "https://keel.dev/problems/refund-status-not-auditable"
 	TypeRefundStatusNotReceivable = "https://keel.dev/problems/refund-status-not-receivable"
+	TypeRefundStatusNotReturnable = "https://keel.dev/problems/refund-status-not-returnable"
 	TypeRefundFreightExceeded     = "https://keel.dev/problems/refund-freight-exceeded"
 
 	// 后台身份那四个（数据模型 §14 / 契约 AdminAuth 与 Admin 两个 tag）。

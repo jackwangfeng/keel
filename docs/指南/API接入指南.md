@@ -143,9 +143,27 @@ key 的有效期是 24 小时，作用域是「接口 + 用户 + key」。哪些
 | 确认收货 | `POST /orders/{order_no}/confirm` |
 | 申请售后（不传金额，按行和件数） | `POST /orders/{order_no}/refunds` |
 | 查看、撤回售后 | `GET /refunds`、`GET /refunds/{refund_no}`、`POST /refunds/{refund_no}/cancel` |
+| 上传退款凭证 / 头像 | `POST /uploads`（multipart：`purpose` = `3` 凭证 / `2` 头像，`file`） |
+| 退货退款：填寄回的物流 | `POST /refunds/{refund_no}/return-shipment`（`carrier_code`、`tracking_no`） |
 
 写操作都要带 `Idempotency-Key`。订单详情里每一行有 `refunded_qty` 和 `refunding_qty`，
 还可以退的件数 = `quantity − refunded_qty − refunding_qty`。
+
+**售后凭证**：先 `POST /uploads`（`purpose=3`，单文件 ≤ 10 MB，只收 jpeg / png / webp）拿到
+`url`（形如 `/api/v1/uploads/{id}`），再把它**原样**放进申请售后的 `evidence_urls`。服务端只收
+你自己用 `purpose=3` 传的地址，外链、别人的文件、商品图都回 422。凭证不公开：
+`GET /uploads/{id}` 读凭证要带**上传者本人**的 `Authorization: Bearer`，否则 403
+（商品图、头像不用带令牌）。小程序的 `<image>` 带不了请求头，先用 `uni.downloadFile`
+（带 `header`）取到文件再显示。
+
+**寄回物流**：退货退款审核通过后退款单是 `20 待买家退货`，买家寄出后调
+`return-shipment` 填物流公司代码（`sf` / `jd` / `yto`……）与运单号。状态不变，
+商家收到货确认后才进入退款；`20` 期间可以再调一次改掉填错的单号。
+填过的物流在退款单的 `return_shipment` 里。
+
+**自动确认收货**：发货后买家不点确认，满店铺设置的天数（默认 7 天）系统替他确认，
+订单到 `40 已完成`；这一单有进行中的售后时暂停，售后结束后再确认。
+客户端要展示倒计时的话按 `shipped_at` + 7 天估算（天数目前没有对外接口）。
 
 购物车（`/cart`）按门店计价，请求时带上和商品页、下单页相同的 `store_id`。
 购物车金额和试算用的是同一条价格查询，两边逐分一致。

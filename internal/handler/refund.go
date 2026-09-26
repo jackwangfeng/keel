@@ -19,8 +19,9 @@ import (
 //	GET  /orders/{order_no}/refunds    这一单的退款单
 //	GET  /refunds/{refund_no}          退款单详情
 //	POST /refunds/{refund_no}/cancel   撤回
+//	POST /refunds/{refund_no}/return-shipment  填退货寄回物流（00037）
 //
-// 这四条都没有 query 参数；带 page / page_size / status 的 GET /refunds 单独在
+// 这几条都没有 query 参数；带 page / page_size / status 的 GET /refunds 单独在
 // refund_list.go（contract_test.go 的 query 参数对账按文件解析）。
 //
 // 金额一律由服务端算（service/refund_calc.go），请求体里没有任何金额字段可以传。
@@ -102,6 +103,27 @@ func (h *RefundHandler) Cancel(c *gin.Context) {
 	c.JSON(http.StatusOK, apiRefund(r))
 }
 
+// ReturnShipment 实现 POST /api/v1/refunds/:refund_no/return-shipment。
+func (h *RefundHandler) ReturnShipment(c *gin.Context) {
+	var raw api.ReturnShipmentRequest
+	if err := c.ShouldBindJSON(&raw); err != nil {
+		problem.Write(c, http.StatusUnprocessableEntity,
+			problem.TypeInvalidRequest, "请求体不是合法的 JSON")
+		return
+	}
+	r, replayed, err := h.svc.SubmitReturnShipment(c.Request.Context(), c.Param("refund_no"),
+		service.ReturnShipmentRequest{CarrierCode: raw.CarrierCode, TrackingNo: raw.TrackingNo},
+		c.GetHeader(idempotencyKeyHeader))
+	if err != nil {
+		writeRefundError(c, err)
+		return
+	}
+	if replayed {
+		c.Header(idempotencyReplayedHeader, "true")
+	}
+	c.JSON(http.StatusOK, apiRefund(r))
+}
+
 // apiRefunds 把一批退款单装成契约的 Refund 数组。空的时候是 []，不是 null ——
 // 「这一单没有售后」与「没查过」是两件事。
 func apiRefunds(rows []repository.Refund) []api.Refund {
@@ -158,6 +180,11 @@ func apiRefund(r repository.Refund) api.Refund {
 		ch := api.RefundChannel(name)
 		out.Channel = &ch
 	}
+	if rs := r.ReturnShipment; rs != nil {
+		out.ReturnShipment = &api.ReturnShipment{
+			CarrierCode: rs.CarrierCode, TrackingNo: rs.TrackingNo, SubmittedAt: rs.SubmittedAt,
+		}
+	}
 	return out
 }
 
@@ -206,6 +233,10 @@ func writeRefundError(c *gin.Context, err error) {
 	case errors.Is(err, service.ErrRefundNotReceivable):
 		writeProblemDetail(c, http.StatusConflict, problem.TypeRefundStatusNotReceivable,
 			"这张退款单当前不能确认收到退货（只有待买家退货的可以）", err)
+
+	case errors.Is(err, service.ErrRefundNotReturnable):
+		writeProblemDetail(c, http.StatusConflict, problem.TypeRefundStatusNotReturnable,
+			"这张退款单当前不能填写寄回物流（只有待买家退货的退货退款可以）", err)
 
 	case errors.Is(err, service.ErrRefundFreightExceeded):
 		writeProblemDetail(c, http.StatusUnprocessableEntity, problem.TypeRefundFreightExceeded,
