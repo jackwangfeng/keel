@@ -39,7 +39,47 @@ so "which one is running?" never depends on anyone's memory.
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **Buyer address book** (`/addresses`, six operations). At most one default
+  address per buyer, enforced by the partial unique index *and* serialized on
+  the server (the buyer's `users` row is locked while the default is switched),
+  so two concurrent "set as default" taps never surface a 500. `PUT` replaces
+  every field except `is_default`; switching the default goes through
+  `PUT /addresses/{id}/default`, as the contract says. Deletion is a soft delete
+  and never touches existing orders, which hold a snapshot. `POST` is idempotent.
+- **Shopping cart** (`/cart`, seven operations) on two new tables
+  (`carts`, `cart_items`, migration 00031). Line prices come from the very same
+  query `/orders/preview` uses, so for a given store the cart's selected total
+  equals the preview's goods amount to the cent. Delisted, not-sold-here,
+  out-of-stock and short lines stay in the cart and are flagged with a `status`
+  instead of being dropped. Adding past 999 is a 422 `cart-quantity-exceeded`,
+  never a silent truncation. `POST /cart/items` and the batch delete are
+  idempotent.
+- **Profile** (`GET`/`PATCH /me`, `GET /me/identities`,
+  `DELETE /me/identities/{provider}` with the last-credential guard).
+  `POST /me/identities/wechat` and `POST /me/phone` answer **501** with an
+  explicit reason: they need WeChat Open Platform and an SMS provider, neither
+  of which this project integrates yet.
+- Other buyers' addresses and cart lines are **404, not 403**, for every
+  operation — within a shop and across shops — and every one of the 19 new
+  routes requires a buyer token (both checked by tests).
+
+### Changed
+
+- **Contract (breaking for generated clients):** every cart operation that
+  returns a `Cart` takes an optional `store_id` query parameter;
+  `Cart.store` (`StoreContext`) and `CartItem.status` (`CartItemStatus`) are
+  now required; `CartItem.price_cents` is nullable (null for lines that are
+  off the shelf or not sold at that store); `CartItem.available` is required
+  and always equals `status == available`. Regenerate your client.
+- Migration 00030 gives `user_addresses.merchant_id` a
+  `DEFAULT current_merchant()`, now that the application writes that table.
+
+### Fixed
+
+- The 0.1.0 notes list the cart among the M2 features, but the server never
+  routed any `/cart` operation (they returned 404 "接口不存在"). It does now.
 
 ## [0.1.0] - 2026-09-26
 
