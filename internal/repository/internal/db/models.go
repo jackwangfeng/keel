@@ -276,6 +276,21 @@ type ProductImageVector struct {
 	UpdatedAt    pgtype.Timestamptz
 }
 
+type ProductImportBatch struct {
+	ID              int64
+	MerchantID      int64
+	FileSha256      string
+	FileName        string
+	FileFormat      string
+	StaffID         int64
+	TotalRows       int32
+	CreatedProducts int32
+	CreatedSkus     int32
+	FailedRows      int32
+	Result          []byte
+	CreatedAt       pgtype.Timestamptz
+}
+
 type ProductTextVector struct {
 	ProductID    int64
 	MerchantID   int64
