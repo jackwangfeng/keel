@@ -76,17 +76,6 @@ import (
 
 // 下单相关的业务错误。handler 按它们映射契约里明写的响应码。
 var (
-	// ErrCouponNotImplemented：请求带了 user_coupon_id，而券的三张表
-	// （coupon_templates / user_coupons / coupon_scopes）本轮没有建（M2 计划
-	// 「券为什么从任务 5 里拆出来」）。
-	//
-	// **它必须是一个错误，不能是「忽略这个字段」。** 静默忽略的后果是：用户以为
-	// 用了券，实际按原价成交 —— 钱的问题，而且客户端没有任何办法发现。
-	// 一个明确的 501 让前端当场知道这条路还没通。
-	//
-	// 这笔账同时挂在 contract_test.go 的 NotYetImplementedBody 里，两个方向都会红。
-	ErrCouponNotImplemented = errors.New("优惠券尚未实现")
-
 	// ErrAddressNotFound：address_id 在本买家名下查不到。契约里这条接口没有
 	// 单独的 404，落到 422（请求里的 address_id 不成立）。
 	ErrAddressNotFound = errors.New("收货地址不存在")
@@ -242,30 +231,41 @@ type CreateResult struct {
 // 不同的钱是这条链路最严重的一类 bug，而共用一份实现是唯一能让它不可能发生的
 // 办法（见 pricing.go 的文件头）。
 //
-// 带券的请求在这里也要被拒。看上去试算「反正没有副作用，忽略券也不要紧」——
-// 恰恰相反：用户就是照着试算结果决定要不要下单的，一个忽略了券的试算会让他
+// 带了券就按券算，券用不了就报 409（ErrCouponNotApplicable），**绝不忽略这张券
+// 按原价试算**：用户就是照着试算结果决定要不要下单的，一个忽略了券的试算会让他
 // 以为这个价格就是用券之后的价格。
+//
+// 顺带回一份「本单可用券」（Quote.ApplicableCoupons），与 POST /coupons/applicable
+// 同一份实现，客户端据此渲染选券，不必再请求一次。
 func (s *OrderService) Preview(ctx context.Context, req CreateRequest) (Quote, error) {
-	if req.UserCouponID != nil {
-		return Quote{}, fmt.Errorf("%w: 请求里带了 user_coupon_id=%d",
-			ErrCouponNotImplemented, *req.UserCouponID)
-	}
-	if _, err := auth.FromContext(ctx); err != nil {
+	id, err := auth.FromContext(ctx)
+	if err != nil {
 		// 契约里 /orders/preview 继承全局 bearerAuth，所以到这里一定有身份。
 		// 取不到就是装配 bug（中间件没挂），不是客户端的错。
 		return Quote{}, err
 	}
+	now := s.now()
 
 	var q Quote
-	err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+	err = s.repo.WithTenant(ctx, func(tx repository.Tx) error {
 		sc, err := orderScope(ctx, tx, req.StoreID)
 		if err != nil {
 			return err
 		}
-		q, err = priceOrder(ctx, tx, sc, req.Items)
+		q, err = priceOrder(ctx, tx, sc, req.Items, couponOf(id.UserID, req, now))
+		if err != nil {
+			return err
+		}
+		q.ApplicableCoupons, err = applicableCoupons(ctx, tx, sc, id.UserID, q.Lines, now)
 		return err
 	})
 	return q, err
+}
+
+// couponOf 是试算与下单构造 couponRequest 的唯一方式：同一个买家、同一张券、
+// 同一个时钟来源。
+func couponOf(userID int64, req CreateRequest, now time.Time) couponRequest {
+	return couponRequest{UserID: userID, ID: req.UserCouponID, Now: now}
 }
 
 // orderScope 把请求里那个必填的 store_id 变成一个 StoreScope。
@@ -292,11 +292,6 @@ func orderScope(ctx context.Context, tx repository.Tx, storeID int64) (repositor
 
 // Create 实现 POST /orders。
 func (s *OrderService) Create(ctx context.Context, req CreateRequest, idemKey string) (CreateResult, error) {
-	if req.UserCouponID != nil {
-		// 在碰幂等键之前就拒：一个注定被拒的请求不该占掉客户端的那把钥匙。
-		return CreateResult{}, fmt.Errorf("%w: 请求里带了 user_coupon_id=%d",
-			ErrCouponNotImplemented, *req.UserCouponID)
-	}
 	if idemKey == "" {
 		return CreateResult{}, fmt.Errorf("%w: 缺少 Idempotency-Key 请求头", ErrBadRequest)
 	}
@@ -461,7 +456,11 @@ func (s *OrderService) placeDraft(ctx context.Context, tx repository.Tx,
 		return repository.Order{}, err
 	}
 
-	q, err := priceOrder(ctx, tx, sc, req.Items)
+	// 券在这里只是**算**（判能不能用、减多少、怎么分摊），不锁。锁券是 SAGA 的
+	// 券分支（order_saga.go 的 lockCoupon），它按订单行上的 user_coupon_id 去做
+	// 条件更新 —— 这里算过的只是预告，那里才是判定点：两笔并发订单用同一张券，
+	// 两边都能算过，只有一边锁得上，另一边的 SAGA 失败并补偿掉建单。
+	q, err := priceOrder(ctx, tx, sc, req.Items, couponOf(userID, req, s.now()))
 	if err != nil {
 		return repository.Order{}, err
 	}
@@ -505,6 +504,7 @@ func (s *OrderService) placeDraft(ctx context.Context, tx repository.Tx,
 		ReceiverSnapshot: snapshot,
 		Remark:           req.Remark,
 		ExpireAt:         s.now().Add(orderExpireIn),
+		UserCouponID:     q.UserCouponID,
 	})
 	if err != nil {
 		return repository.Order{}, err

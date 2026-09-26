@@ -77,7 +77,7 @@ help:
 	@echo "make app-type-check 用 tsc --strict 检查 app/src 下全部 .uts"
 	@echo "make admin-install  装商家后台（web/admin）的依赖（npm ci，版本由 lock 锁定）"
 	@echo "make admin-type-check 用 vue-tsc --strict 检查 web/admin/src 下全部 .ts 与 .vue"
-	@echo "make admin-test     跑商家后台的单元测试（围栏几何与坐标系换算）"
+	@echo "make admin-test     跑商家后台的单元测试（围栏几何与坐标系换算、券金额换算）"
 	@echo "make admin-build    构建商家后台静态产物（compose 起栈时会自己构建，日常不用跑）"
 	@echo "make app-install    装客户端依赖（含 npm 跳过 uts 原生 binding 的绕法）"
 	@echo "make app-build-h5   用 DCloud 编译器真编一遍 H5（要先 app-install）"
@@ -177,7 +177,9 @@ admin-install:
 admin-type-check:
 	python3 $(ROOT)/scripts/check_admin_types.py
 
-# 后台的单元测试：目前是电子围栏的几何（坐标序、闭合、GCJ-02 / BD-09 → WGS-84）。
+# 后台的单元测试：电子围栏的几何（坐标序、闭合、GCJ-02 / BD-09 → WGS-84），
+# 以及券管理里「元 ↔ 分」「折 ↔ 千分比」的换算（src/api/money.ts：只做字符串解析，
+# 不做一次浮点乘法 —— Number("0.29") * 100 是 28.999999999999996）。
 #
 # 守的是「偏了不会报错」那一类错：经纬度写反、坐标系没换，服务端都会收下一个
 # **合法**的多边形，只是位置偏了几百米，买家被判进错的门店。
@@ -187,7 +189,7 @@ admin-type-check:
 # node_modules。别往 geo.ts 里加运行时 import，否则这里会以
 # ERR_MODULE_NOT_FOUND 失败。
 admin-test:
-	cd $(ROOT)/web/admin && node --test src/api/geo.test.ts
+	cd $(ROOT)/web/admin && node --test src/api/geo.test.ts src/api/money.test.ts
 
 # 构建静态产物到 web/admin/dist。日常不用跑：compose 起栈时在
 # docker/Dockerfile.admin 的 node 阶段里构建，产物交给 nginx。

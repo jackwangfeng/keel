@@ -212,6 +212,23 @@ const (
 	TypeInvalidFence         = "https://keel.dev/problems/invalid-fence"
 	TypeSKUNotSoldInStore    = "https://keel.dev/problems/sku-not-sold-in-store"
 
+	// 优惠券那一组（数据模型 §7，契约 Coupon tag）。分得细的理由同上：
+	//
+	//   coupon-not-applicable     409  下单 / 试算带的券本单用不了。客户端换一张或不用券
+	//   coupon-sold-out           409  领完了（或定向发放剩余不够整批）。重试没有用
+	//   coupon-claim-limit-reached 409 这个买家已达每人限领。按钮该变灰
+	//   coupon-claim-ended        409  绝对时间模式下活动已结束
+	//   coupon-template-locked    409  已发出过券，券面与范围不能再改。后台该提示新建一批
+	//   coupon-template-disabled  409  定向发放时模板已停用
+	//
+	// 全是 409、处置各不相同，只看状态码分不开。
+	TypeCouponNotApplicable     = "https://keel.dev/problems/coupon-not-applicable"
+	TypeCouponSoldOut           = "https://keel.dev/problems/coupon-sold-out"
+	TypeCouponClaimLimitReached = "https://keel.dev/problems/coupon-claim-limit-reached"
+	TypeCouponClaimEnded        = "https://keel.dev/problems/coupon-claim-ended"
+	TypeCouponTemplateLocked    = "https://keel.dev/problems/coupon-template-locked"
+	TypeCouponTemplateDisabled  = "https://keel.dev/problems/coupon-template-disabled"
+
 	// 契约声明了、本轮刻意没有实现的路径。用一个**专门的** type 而不是复用
 	// internal：客户端能据此分辨「这个功能还没有」与「服务器炸了」，
 	// 而这两件事的重试策略完全相反。

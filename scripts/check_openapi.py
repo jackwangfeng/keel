@@ -78,6 +78,18 @@ REQUIRED_PATHS = [
     ('/admin/stores/{store_id}/skus/{sku_id}/price', 'delete'),
     ('/admin/stores/{store_id}/inventories', 'get'),
     ('/admin/stores/{store_id}/skus/{sku_id}/inventory', 'put'),
+    # 优惠券：两种发券方式（领券中心 + 定向发放）与后台的券管理面。
+    # 券按门店生效价算、可能限定大区或门店，所以「本单可用券」必须带门店。
+    ('/coupons', 'get'),
+    ('/coupons/applicable', 'post'),
+    ('/coupon-templates', 'get'),
+    ('/coupon-templates/{template_id}/claim', 'post'),
+    ('/admin/coupon-templates', 'get'),
+    ('/admin/coupon-templates', 'post'),
+    ('/admin/coupon-templates/{template_id}', 'get'),
+    ('/admin/coupon-templates/{template_id}', 'patch'),
+    ('/admin/coupon-templates/{template_id}/scopes', 'put'),
+    ('/admin/coupon-templates/{template_id}/grants', 'post'),
 ]
 
 REQUIRED_SCHEMAS = ['UploadTarget', 'Upload',
@@ -143,6 +155,10 @@ REQUIRED_FIELDS = [
     ('ScopedProductListing', 'effective_listed'),
     # 检索结果取决于哪家店服务你（M3 独立验收 I10 的放大版）。
     ('SearchRequest', 'store_id'),
+    # 优惠券：券按门店生效价算、可能限定大区或门店，所以「本单可用券」必须带门店；
+    # 后台要看得到发放与核销统计。
+    ('CouponApplicableRequest', 'store_id'),
+    ('AdminCouponTemplate', 'stats'),
 ]
 
 # 有副作用的 POST 必须接受 Idempotency-Key（文件头约定 5）。

@@ -1,6 +1,7 @@
 package handler_test
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"sort"
@@ -188,6 +189,31 @@ var permMatrix = []permRoute{
 	{"PATCH", v1 + "/admin/merchants/:merchant_id", platformOnlyRoute, func(t *testing.T, fx *permFixture, c permCase) permReq {
 		return permReq{Method: "PATCH", Path: fmt.Sprintf(v1+"/admin/merchants/%d", fx.sh.MerchantID),
 			Body: `{"name":"不该被改的店名"}`, OK: http.StatusOK}
+	}},
+
+	// —— 优惠券（合并时登记）。券直接决定实付，与商品、基准价同一个判据：全店范围。
+	// 大区 / 门店管理员不行：券的适用范围可以跨大区，一个只管华北的人不该能发一张
+	// 全国通用的券。每格现场建一张新模板（没发出过，券面与范围还能改）。
+	{"GET", v1 + "/admin/coupon-templates", merchantWide, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permGet(v1 + "/admin/coupon-templates")
+	}},
+	{"POST", v1 + "/admin/coupon-templates", merchantWide, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permReq{Method: "POST", Path: v1 + "/admin/coupon-templates", Body: permCouponBody(fx), OK: http.StatusCreated}
+	}},
+	{"GET", v1 + "/admin/coupon-templates/:template_id", merchantWide, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permGet(fmt.Sprintf(v1+"/admin/coupon-templates/%d", permCouponTemplate(t, fx)))
+	}},
+	{"PATCH", v1 + "/admin/coupon-templates/:template_id", merchantWide, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permReq{Method: "PATCH", Path: fmt.Sprintf(v1+"/admin/coupon-templates/%d", permCouponTemplate(t, fx)),
+			Body: `{"name":"改个名字"}`, OK: http.StatusOK}
+	}},
+	{"PUT", v1 + "/admin/coupon-templates/:template_id/scopes", merchantWide, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permReq{Method: "PUT", Path: fmt.Sprintf(v1+"/admin/coupon-templates/%d/scopes", permCouponTemplate(t, fx)),
+			Body: `{"scopes":[{"scope_type":1,"include":true}]}`, OK: http.StatusOK}
+	}},
+	{"POST", v1 + "/admin/coupon-templates/:template_id/grants", merchantWide, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permReq{Method: "POST", Path: fmt.Sprintf(v1+"/admin/coupon-templates/%d/grants", permCouponTemplate(t, fx)),
+			Body: fmt.Sprintf(`{"phones":[%q]}`, permBuyerPhone(t, fx)), OK: http.StatusCreated}
 	}},
 
 	// —— 上传与商品目录
@@ -455,4 +481,58 @@ func TestAdminPermissionMatrix(t *testing.T) {
 		})
 	}
 	t.Logf("权限矩阵：%d 条路由，%d 格", len(permMatrix), cells)
+}
+
+// permCouponBody 是一张满 100 减 20、领取后 7 天有效的券。
+func permCouponBody(fx *permFixture) string {
+	return fmt.Sprintf(`{"name":"权限矩阵券%d","coupon_type":1,"threshold_cents":10000,"discount_cents":2000,`+
+		`"valid_mode":2,"valid_days":7,"total_count":0,"per_user_limit":1}`, fx.seq.Add(1))
+}
+
+// permCouponTemplate 用商家管理员的令牌建一张新模板，返回 id。
+// 每格一张：发出过券的模板券面与范围不能再改（409），共用一张会让后面的格子
+// 因为前面格子的发放而失败，而那和权限毫无关系。
+func permCouponTemplate(t *testing.T, fx *permFixture) int64 {
+	t.Helper()
+	permCleanupCoupons(t, fx)
+	w := reqAs(t, http.MethodPost, fx.sh.Host, v1+"/admin/coupon-templates", permCouponBody(fx), fx.sh.Token)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("夹具：建券模板失败 %d %s", w.Code, w.Body.String())
+	}
+	var tpl struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &tpl); err != nil || tpl.ID == 0 {
+		t.Fatalf("夹具：券模板响应解不出 id：%v %s", err, w.Body.String())
+	}
+	return tpl.ID
+}
+
+// permBuyerPhone 在这家店建一个买家，返回手机号（定向发放按手机号找人）。
+func permBuyerPhone(t *testing.T, fx *permFixture) string {
+	t.Helper()
+	permCleanupCoupons(t, fx)
+	phone := fmt.Sprintf("137%08d", fx.seq.Add(1)%100_000_000)
+	adminExec(t, `INSERT INTO users (merchant_id, phone, nickname) VALUES ($1, $2, '权限矩阵买家')`,
+		fx.sh.MerchantID, phone)
+	return phone
+}
+
+// permCleanupCoupons 在这一格结束时删掉券与买家。
+//
+// 夹具本身的清理（newAdminShop 注册的那个）最后要删 merchants 行，而券模板、
+// 发出去的券、建出来的买家都挂着指向它的外键 —— 不先删它们，那一步会报 23503，
+// 而报错指向的是一个与权限毫无关系的地方。子测试的 Cleanup 先于父测试的执行，
+// 所以挂在这里正好排在夹具清理之前。DELETE 可重复执行，每格都挂一次没有代价。
+func permCleanupCoupons(t *testing.T, fx *permFixture) {
+	t.Cleanup(func() {
+		for _, q := range []string{
+			`DELETE FROM user_coupons WHERE merchant_id = $1`,
+			`DELETE FROM coupon_scopes WHERE merchant_id = $1`,
+			`DELETE FROM coupon_templates WHERE merchant_id = $1`,
+			`DELETE FROM users WHERE merchant_id = $1 AND nickname = '权限矩阵买家'`,
+		} {
+			adminExec(t, q, fx.sh.MerchantID)
+		}
+	})
 }

@@ -214,12 +214,6 @@ var routes = []route{
 		HTTPMethod:     http.MethodPost,
 		HandlerFile:    "order.go",
 		NoQueryParams:  "试算的入参全在请求体里（与 POST /orders 共用 OrderCreateRequest）",
-		NotYetImplementedBody: map[string]string{
-			"user_coupon_id": "券的三张表（coupon_templates / user_coupons / coupon_scopes）" +
-				"本轮没有建（M2 计划「券为什么从任务 5 里拆出来」）。传了它返回 501，" +
-				"**不是静默忽略** —— 忽略会让用户以为试算价是用券后的价，而他正是照着" +
-				"这个数决定要不要下单的。",
-		},
 		NotYetImplementedResponse: map[string]string{
 			"freight_cents": "运费模板没有设计落地，这条链路没有算过运费。响应里整个不出现，" +
 				"而不是填 0：0 意味着包邮，缺席意味着这个数还会变。",
@@ -231,10 +225,6 @@ var routes = []route{
 		HTTPMethod:     http.MethodPost,
 		HandlerFile:    "order.go",
 		NoQueryParams:  "下单的参数在请求体与 Idempotency-Key 请求头里，没有 query 参数",
-		NotYetImplementedBody: map[string]string{
-			"user_coupon_id": "同 /orders/preview。**传了券却被忽略 = 用户以为用了券、" +
-				"实际按原价成交**，那是钱的问题，所以这条路返回 501 而不是当作没看见。",
-		},
 		NotYetImplementedResponse: map[string]string{
 			"freight_cents": "同 /orders/preview。库里 orders.freight_cents 是 0（chk_amount " +
 				"的恒等式要它），但那是账，不是「算过了」。",
@@ -638,6 +628,76 @@ var routes = []route{
 	// 五条带 query 参数的各自在自己的文件里（集合两两不同，除了两条
 	// products 列表），其余 16 条全登记 NoQueryParams —— 它们在
 	// admin_store.go 里，而那个文件一个 c.Query 都没有。
+	// 优惠券（数据模型 §7）。买家侧四条、后台六条。两条带 query 参数的列表各自
+	// 一个文件（coupon_mine.go / coupon_center.go / admin_coupon_list.go），
+	// 理由同 admin_region_list.go：这张表按文件核对 query 参数。
+	{
+		ContractPath:   "/coupons",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "coupon_mine.go",
+	},
+	{
+		ContractPath:   "/coupons/applicable",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "coupon.go",
+		NoQueryParams:  "拟购商品与门店全在请求体里（CouponApplicableRequest）",
+	},
+	{
+		ContractPath:   "/coupon-templates",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "coupon_center.go",
+	},
+	{
+		ContractPath:   "/coupon-templates/{template_id}/claim",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "coupon.go",
+		NoQueryParams:  "领哪一批在路径上，幂等键在 Idempotency-Key 请求头",
+	},
+	{
+		ContractPath:   "/admin/coupon-templates",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "admin_coupon_list.go",
+	},
+	{
+		ContractPath:   "/admin/coupon-templates",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "admin_coupon.go",
+		NoQueryParams:  "建模板的参数全在请求体里；幂等键在 Idempotency-Key 请求头",
+	},
+	{
+		ContractPath:   "/admin/coupon-templates/{template_id}",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "admin_coupon.go",
+		NoQueryParams:  "详情只吃路径参数",
+	},
+	{
+		ContractPath:   "/admin/coupon-templates/{template_id}",
+		ContractMethod: "patch",
+		HTTPMethod:     http.MethodPatch,
+		HandlerFile:    "admin_coupon.go",
+		NoQueryParams:  "改哪一个在路径上，改什么在请求体里",
+	},
+	{
+		ContractPath:   "/admin/coupon-templates/{template_id}/scopes",
+		ContractMethod: "put",
+		HTTPMethod:     http.MethodPut,
+		HandlerFile:    "admin_coupon.go",
+		NoQueryParams:  "整组范围在请求体里",
+	},
+	{
+		ContractPath:   "/admin/coupon-templates/{template_id}/grants",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "admin_coupon.go",
+		NoQueryParams:  "手机号在请求体里，幂等键在 Idempotency-Key 请求头",
+	},
 	{
 		ContractPath:   "/admin/regions",
 		ContractMethod: "get",

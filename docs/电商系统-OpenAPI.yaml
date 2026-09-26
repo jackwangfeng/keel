@@ -80,13 +80,11 @@ tags:
       **「当前门店」在这个契约里永远有一个确定的值**，解析链是
       「客户端显式给的 `store_id` > 按位置解析出的门店 > 默认门店」，
       三级都落空才是「不在服务范围」。数据模型 §4 是它的真相源。
-# S13 不做（一期）：用户自助领券（GET /coupon-templates、POST .../claim）。
-# 一期只做后台定向发放 —— coupon_templates 的 total_count / per_user_limit
-# 这套发放控制是为「领券中心」准备的，而领券中心涉及活动页、分享裂变、
-# 限流防刷，是独立的产品面，不该夹在核心交易链路里顺手做。
-# 需要时再开，数据模型已经支持。
   - name: Coupon
-    description: 优惠券查询与试算。
+    description: |
+      优惠券：我的券、本单可用券、领券中心（买家侧）；券模板、适用范围、定向发放（后台侧）。
+      两种发券方式都有：买家在领券中心自己领（受总量与每人限领约束），
+      商家在后台按手机号定向发放。计算规则与状态机见数据模型 §7。
 
 # =============================================================================
 paths:
@@ -2440,6 +2438,288 @@ paths:
         default: { $ref: '#/components/responses/Problem' }
 
   # ---------------------------------------------------------------- Upload
+  /admin/coupon-templates:
+    get:
+      tags: [Admin, Coupon]
+      summary: 券模板列表（含发放与核销统计）
+      description: |
+        按创建时间倒序。每一项带发放与核销统计（`stats`）与适用范围（`scopes`）。
+
+        **权限**：本期只开放给商家级的管理员与操作员（`staff.role` 为 1 或 2），
+        平台级操作员与其他角色 403 `staff-forbidden`。券直接决定订单实付，是资金面。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - name: status
+          in: query
+          description: 按启停筛选。不传即全部。
+          schema: { type: integer, enum: [0, 1] }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PageMeta'
+                  - type: object
+                    required: [items]
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: '#/components/schemas/AdminCouponTemplate' }
+        '403':
+          description: 不是商家级管理员或操作员（`https://keel.dev/problems/staff-forbidden`）。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Admin, Coupon]
+      summary: 新建券模板
+      description: |
+        按 `coupon_type` 填不同的字段，其余字段不填或填 0（数据模型 §7 的 `chk_coupon_rule`
+        让每种券型只有一种写法）：
+
+        | 券型 | 必填 | 必须为 0 / 不填 |
+        |---|---|---|
+        | 1 满减 | `threshold_cents ≥ discount_cents > 0` | `discount_rate`、`max_discount_cents` |
+        | 2 折扣 | `discount_rate` ∈ [1, 999]（千分比，850 = 8.5 折）；`threshold_cents`、`max_discount_cents` 可选 | `discount_cents` |
+        | 3 立减 | `discount_cents > 0` | `threshold_cents`、`discount_rate`、`max_discount_cents` |
+        | 4 包邮 | **本期拒绝（422）** | — |
+
+        **包邮券为什么被拒绝**：本系统没有运费（`orders.freight_cents` 恒为 0，运费模板没有落地），
+        一张包邮券永远减 0，买家却会看到「已用包邮券」。运费落地的那一轮放开。
+
+        有效期二选一：`valid_mode = 1` 绝对时间（`valid_start_at` < `valid_end_at`），
+        `valid_mode = 2` 领取后 N 天（`valid_days > 0`）。
+
+        新建的模板是启用的、默认**不可领**（`claimable = false`）：先配范围，再打开领券中心。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CouponTemplateCreateRequest' }
+      responses:
+        '201':
+          description: 已创建
+          headers:
+            Idempotency-Replayed: { $ref: '#/components/headers/IdempotencyReplayed' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminCouponTemplate' }
+        '403':
+          description: 不是商家级管理员或操作员（`https://keel.dev/problems/staff-forbidden`）。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '409': { $ref: '#/components/responses/IdempotencyInFlight' }
+        '422':
+          description: |
+            字段组合不成立（满 100 减 200、折扣率越界、有效期倒挂、包邮券……）——
+            `https://keel.dev/problems/invalid-request`；或同一 Idempotency-Key 配了不同的请求体。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /admin/coupon-templates/{template_id}:
+    parameters:
+      - $ref: '#/components/parameters/CouponTemplateId'
+    get:
+      tags: [Admin, Coupon]
+      summary: 券模板详情（含统计与范围）
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminCouponTemplate' }
+        '403':
+          description: 不是商家级管理员或操作员。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: 模板不存在或不属于当前租户。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+    patch:
+      tags: [Admin, Coupon]
+      summary: 修改 / 启停券模板
+      description: |
+        只改传了的字段。**停用**就是 `status = 0`：停止领取与定向发放，
+        **不回收已发出的券**——它们照常可用到过期（已发出的券是对买家的承诺）。
+
+        **已经发出过券（`issued_count > 0`）之后，决定券面价值的字段不能再改**：
+        `coupon_type`、`threshold_cents`、`discount_cents`、`discount_rate`、
+        `max_discount_cents`、`valid_*`。券实例不快照规则，改模板等于悄悄改掉买家手里的券。
+        能改的是 `name`、`total_count`（不低于已发出数）、`per_user_limit`、`claimable`、`status`。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CouponTemplatePatchRequest' }
+      responses:
+        '200':
+          description: 已更新
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminCouponTemplate' }
+        '403':
+          description: 不是商家级管理员或操作员。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: 模板不存在或不属于当前租户。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '409':
+          description: |
+            已经发出过券，却想改券面字段 —— `https://keel.dev/problems/coupon-template-locked`。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: 改完之后字段组合不成立（同新建），或 `total_count` 低于已发出数。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /admin/coupon-templates/{template_id}/scopes:
+    parameters:
+      - $ref: '#/components/parameters/CouponTemplateId'
+    put:
+      tags: [Admin, Coupon]
+      summary: 设置适用范围（整组替换）
+      description: |
+        整组替换：请求里的就是这张券的全部范围，空数组即「全场、全店」。
+
+        | `scope_type` | 含义 | `target_id` |
+        |---|---|---|
+        | 1 | 全场 | 不填；不能是排除 |
+        | 2 | 分类（**含子孙**，与 `GET /products?category_id=` 同一语义） | `categories.id` |
+        | 3 | 商品 | `products.id` |
+        | 4 | 品牌 | `products.brand_id` 的取值（本仓库没有品牌目录，不校验存在性） |
+        | 5 | 大区（下单门店所属大区） | `regions.id` |
+        | 6 | 门店（下单门店） | `stores.id` |
+
+        `include = false` 是排除，**排除优先于包含**。1–4 决定订单里哪几行参与计算，
+        5–6 决定在哪家店下单时这张券可用；某个维度没有包含规则即该维度不限。
+
+        分类、商品、大区、门店四种的 `target_id` 在**当前租户**里逐条校验
+        （数据模型 §7：`target_id` 是多态列，外键管不到它，校验在这里）。
+        查不到、已软删、或属于别家店，整组 422，一条都不写。
+
+        已经发出过券之后不能再改（409 `coupon-template-locked`），理由同 PATCH。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CouponScopesSetRequest' }
+      responses:
+        '200':
+          description: 已替换
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminCouponTemplate' }
+        '403':
+          description: 不是商家级管理员或操作员。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: 模板不存在或不属于当前租户。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '409':
+          description: 已经发出过券 —— `https://keel.dev/problems/coupon-template-locked`。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: |
+            某条范围不成立：`target_id` 在本店查不到、全场规则带了 `target_id` 或设成排除、
+            同一目标出现两次 —— `https://keel.dev/problems/invalid-request`。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /admin/coupon-templates/{template_id}/grants:
+    parameters:
+      - $ref: '#/components/parameters/CouponTemplateId'
+    post:
+      tags: [Admin, Coupon]
+      summary: 按手机号定向发券
+      description: |
+        给每个手机号对应的买家发一张。**整批全有或全无**：有一个手机号在本店查不到买家，
+        整批 422 并在 `detail` 里列出是哪几个，一张都不发——部分成功的批次会让运营
+        分不清刚才发了谁，重试又会给已经发过的人再发一张。
+
+        受总量约束（整批计：剩余不够整批就 409 `coupon-sold-out`），**不受每人限领约束**
+        （那一条只管领券中心；定向发放是商家的明确意图）。模板已停用时 409 `coupon-template-disabled`。
+        同一个手机号在一批里出现两次按两张发。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CouponGrantRequest' }
+      responses:
+        '201':
+          description: 已发放
+          headers:
+            Idempotency-Replayed: { $ref: '#/components/headers/IdempotencyReplayed' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CouponGrantResult' }
+        '403':
+          description: 不是商家级管理员或操作员。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: 模板不存在或不属于当前租户。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '409':
+          description: |
+            按 `type` 区分：剩余数量不够整批 —— `https://keel.dev/problems/coupon-sold-out`；
+            模板已停用 —— `https://keel.dev/problems/coupon-template-disabled`；
+            绝对时间模式下已过 `valid_end_at` —— `https://keel.dev/problems/coupon-claim-ended`；
+            同一 Idempotency-Key 正在处理中 —— `https://keel.dev/problems/idempotency-key-in-flight`。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: |
+            有手机号在本店查不到买家（`https://keel.dev/problems/invalid-request`，`detail` 列出它们），
+            或同一 Idempotency-Key 配了不同的请求体。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
   /uploads:
     post:
       tags: [Upload]
@@ -3449,6 +3729,15 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/OrderPreview' }
+        '409':
+          description: |
+            带的 `user_coupon_id` 本单不可用 —— `https://keel.dev/problems/coupon-not-applicable`，
+            `detail` 说明原因（门槛不够、范围不含、已锁定 / 已使用 / 已过期、不是你的券）。
+            与 `POST /orders` 同一个 type：试算就是要在下单之前把它说出来。
+            **不会忽略这张券按原价试算**——用户正是照着试算结果决定要不要下单的。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
         '422':
           description: |
             与 `POST /orders` 的 422 逐条一致：这家店不卖其中某几件
@@ -4110,6 +4399,14 @@ paths:
     get:
       tags: [Coupon]
       summary: 我的优惠券
+      description: |
+        按领取时间倒序。`status` 不传即全部。
+
+        **「已过期」是现算的**：`user_coupons.status = 1` 但已过 `valid_end_at` 的券，
+        在这里以 `status = 4` 返回，也只会出现在 `status=expired` 的筛选里
+        （数据模型 §7：判据必须在判定点上，不在一个异步的定时任务里）。
+        `available` 同理只含还没过期的——包括尚未到 `valid_start_at` 的
+        （它们确实是「我的可用券」，只是还不能用；客户端按 `valid_start_at` 提示）。
       parameters:
         - $ref: '#/components/parameters/Page'
         - $ref: '#/components/parameters/PageSize'
@@ -4133,23 +4430,28 @@ paths:
                       items:
                         type: array
                         items: { $ref: '#/components/schemas/UserCoupon' }
+        default: { $ref: '#/components/responses/Problem' }
 
   /coupons/applicable:
     post:
       tags: [Coupon]
       summary: 查询本单可用券
-      description: 传入拟购商品，返回可用券及各自能减多少，按优惠额降序。
+      description: |
+        传入拟购商品与**履约门店**，返回这个买家手里本单可用的券及各自能减多少，
+        按优惠额降序（相同时按过期时间升序——快过期的先用）。
+
+        `store_id` 必填，理由与 `POST /orders` 一样：券按**那家门店的生效价**算
+        （三层定价），而且券可能限定大区或门店——同一车商品在 A 店可用的券，
+        在 B 店可能不可用。
+
+        计算与 `POST /orders/preview`、`POST /orders` 是**同一份实现**，
+        这里说能减多少，下单就减多少（数据模型 §7「券怎么算」）。
+        不可用的券（门槛不够、范围不含、已过期、已锁定）不出现在结果里。
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              type: object
-              required: [items]
-              properties:
-                items:
-                  type: array
-                  items: { $ref: '#/components/schemas/OrderItemInput' }
+            schema: { $ref: '#/components/schemas/CouponApplicableRequest' }
       responses:
         '200':
           description: OK
@@ -4157,15 +4459,91 @@ paths:
             application/json:
               schema:
                 type: array
-                items:
-                  allOf:
-                    - $ref: '#/components/schemas/UserCoupon'
-                    - type: object
-                      properties:
-                        discount_cents:
-                          type: integer
-                          format: int64
-                          description: 该券用于本单可减金额
+                items: { $ref: '#/components/schemas/ApplicableCoupon' }
+        '422':
+          description: |
+            与 `POST /orders/preview` 的 422 一致：这家店不卖其中某几件
+            （`https://keel.dev/problems/sku-not-sold-in-store`），或 `store_id` / `sku_id`
+            有一个服务端不认识（`https://keel.dev/problems/invalid-request`）。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /coupon-templates:
+    get:
+      tags: [Coupon]
+      summary: 领券中心：当前可领的券
+      description: |
+        列出本店**启用、设为可领、没领完、没结束**的券模板，按创建时间倒序。
+        每一项带上**当前买家**已领了几张（`claimed_count`）与还能不能领（`can_claim`），
+        所以要登录。
+
+        领完（`remaining = 0`）的模板不出现在这里；`remaining` 为 `null` 表示不限量。
+        范围（`scopes`）原样给出，客户端据此显示「限华北大区」「新店专享」之类——
+        「在哪家店能用」由买家自己判断，这条接口不按门店过滤。
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PageMeta'
+                  - type: object
+                    required: [items]
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: '#/components/schemas/ClaimableCouponTemplate' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /coupon-templates/{template_id}/claim:
+    post:
+      tags: [Coupon]
+      summary: 领券
+      description: |
+        领一张。受三条约束，**全部在数据库层原子地挡住**（数据模型 §7）：
+        总量（`total_count`）、每人限领（`per_user_limit`，数这个买家持有该模板的全部券，
+        含商家定向发给他的）、以及绝对时间模式下的结束时间。
+
+        几十个人同时抢最后一张时恰好一个人领到，其余拿到 409 `coupon-sold-out`。
+
+        要 `Idempotency-Key`：`per_user_limit` 大于 1 时，一次网络重试会实实在在地多领一张。
+        重放命中时返回首次领到的那一张，并带 `Idempotency-Replayed: true`。
+      parameters:
+        - $ref: '#/components/parameters/CouponTemplateId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '201':
+          description: 领到了
+          headers:
+            Idempotency-Replayed: { $ref: '#/components/headers/IdempotencyReplayed' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserCoupon' }
+        '404':
+          description: |
+            模板不存在、不属于本店、已停用、或没有设为可领。
+            四种合用一个 404：领券中心里本来就看不到它们。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '409':
+          description: |
+            按 `type` 区分：
+            · 领完了 —— `https://keel.dev/problems/coupon-sold-out`
+            · 这个买家已达每人限领 —— `https://keel.dev/problems/coupon-claim-limit-reached`
+            · 活动已结束（绝对时间模式下已过 `valid_end_at`）—— `https://keel.dev/problems/coupon-claim-ended`
+            · 同一 Idempotency-Key 正在处理中 —— `https://keel.dev/problems/idempotency-key-in-flight`
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422': { $ref: '#/components/responses/IdempotencyKeyReused' }
+        default: { $ref: '#/components/responses/Problem' }
 
 # =============================================================================
 components:
@@ -4224,6 +4602,12 @@ components:
       required: true
       description: |
         `stores.id`。同 ProductId，查不到即 404（含「不属于当前租户」与「已软删」）。
+      schema: { type: integer, format: int64 }
+    CouponTemplateId:
+      name: template_id
+      in: path
+      required: true
+      description: '`coupon_templates.id`。查不到（含属于别家店）即 404。'
       schema: { type: integer, format: int64 }
     RegionId:
       name: region_id
@@ -5068,7 +5452,13 @@ components:
         user_coupon_id:
           type: integer
           format: int64
-          description: 第一期仅支持单张券
+          description: |
+            第一期仅支持单张券。
+
+            券按**这一单的门店**的生效价算，门槛比的是券适用范围内商品的小计。
+            不可用（不是你的、已锁定 / 已使用 / 已过期、门槛不够、范围不含这些商品或这家店）
+            时试算与下单都返回 409 `coupon-not-applicable`，**不会静默按原价成交**。
+            下单成功后券进入「锁定」，付款成功变成「已使用」，取消或超时关单回到「未使用」。
         remark: { type: string, maxLength: 200 }
         expected_payable_cents:
           $ref: '#/components/schemas/Money'
@@ -5128,9 +5518,16 @@ components:
               discount_cents:
                 $ref: '#/components/schemas/Money'
                 description: 该行分摊到的优惠。余数归金额最大行，保证求和恒等。
+        user_coupon_id:
+          type: integer
+          format: int64
+          description: 本次试算用上的券（回显请求里的 `user_coupon_id`）。没带券时不出现。
         applicable_coupons:
           type: array
-          items: { $ref: '#/components/schemas/UserCoupon' }
+          description: |
+            这个买家手里本单可用的全部券，按优惠额降序——与 `POST /coupons/applicable`
+            同一份结果。客户端据此渲染「选券」，不必再单独请求一次。
+          items: { $ref: '#/components/schemas/ApplicableCoupon' }
 
     Order:
       type: object
@@ -5162,6 +5559,10 @@ components:
         goods_amount_cents: { $ref: '#/components/schemas/Money' }
         freight_cents:      { $ref: '#/components/schemas/Money' }
         discount_cents:     { $ref: '#/components/schemas/Money' }
+        user_coupon_id:
+          type: integer
+          format: int64
+          description: 这一单用的券。没用券时不出现。
         payable_cents:      { $ref: '#/components/schemas/Money' }
         paid_cents:         { $ref: '#/components/schemas/Money' }
         refunded_cents:     { $ref: '#/components/schemas/Money' }
@@ -5738,17 +6139,70 @@ components:
         postal_code:   { type: string }
 
     # ---- 优惠券 ----
+    CouponType:
+      type: integer
+      description: |
+        1 满减 · 2 折扣 · 3 立减 · 4 包邮。
+
+        **4 包邮本期不可建**：本系统没有运费，包邮券永远减 0（数据模型 §7）。
+        枚举里留着它，是为了运费落地那一轮不必改契约的枚举。
+      enum: [1, 2, 3, 4]
+
+    CouponScope:
+      type: object
+      description: |
+        一条适用范围规则（数据模型 §7 `coupon_scopes`）。1–4 决定哪几行商品参与计算，
+        5–6 决定在哪家店下单可用；`include = false` 是排除，排除优先。
+      required: [scope_type, target_id, include]
+      properties:
+        scope_type:
+          type: integer
+          enum: [1, 2, 3, 4, 5, 6]
+          description: 1全场 2分类（含子孙） 3商品 4品牌 5大区 6门店
+        target_id:
+          type: [integer, 'null']
+          format: int64
+          description: 全场为 null；其余按 `scope_type` 指向分类 / 商品 / 品牌 / 大区 / 门店的 id
+        include: { type: boolean }
+        target_name:
+          type: string
+          description: |
+            目标的展示名（分类名、商品标题、大区名、门店名），只读。品牌没有目录，不返回；
+            目标已软删时也不返回——客户端据此显示「已删除」。
+
+    CouponScopeInput:
+      type: object
+      required: [scope_type]
+      properties:
+        scope_type:
+          type: integer
+          enum: [1, 2, 3, 4, 5, 6]
+        target_id:
+          type: [integer, 'null']
+          format: int64
+        include:
+          type: boolean
+          default: true
+
+    CouponScopesSetRequest:
+      type: object
+      required: [scopes]
+      properties:
+        scopes:
+          type: array
+          maxItems: 200
+          items: { $ref: '#/components/schemas/CouponScopeInput' }
+
     UserCoupon:
       type: object
-      required: [id, coupon_code, coupon_type, status]
+      required: [id, coupon_code, template_id, name, coupon_type, threshold_cents, discount_cents,
+                 discount_rate, max_discount_cents, status, source, valid_start_at, valid_end_at, scopes]
       properties:
         id:          { type: integer, format: int64 }
         coupon_code: { type: string }
+        template_id: { type: integer, format: int64 }
         name:        { type: string }
-        coupon_type:
-          type: integer
-          description: '1满减 2折扣 3立减 4包邮'
-          enum: [1, 2, 3, 4]
+        coupon_type: { $ref: '#/components/schemas/CouponType' }
         threshold_cents: { $ref: '#/components/schemas/Money' }
         discount_cents:  { $ref: '#/components/schemas/Money' }
         discount_rate:
@@ -5762,10 +6216,197 @@ components:
             1 未使用 · 2 锁定 · 3 已使用 · 4 已过期
 
             **锁定**指下单流程中已占用但订单尚未支付。取消订单或超时关单后
-            由 SAGA 补偿回到「未使用」。这个态必须能被前端查到——否则用户
-            下单未支付时，券在「可用」和「已使用」里都找不到，像凭空消失。
+            回到「未使用」；支付成功后变成「已使用」。这个态必须能被前端查到——
+            否则用户下单未支付时，券在「可用」和「已使用」里都找不到，像凭空消失。
+
+            **已过期是现算的**：未使用且已过 `valid_end_at` 即返回 4。
+        source:
+          type: integer
+          enum: [1, 2]
+          description: 1 领券中心领取 · 2 商家定向发放
         valid_start_at: { type: string, format: date-time }
         valid_end_at:   { type: string, format: date-time }
+        used_at:        { type: string, format: date-time }
+        scopes:
+          type: array
+          description: 这张券的适用范围（来自模板）。空数组即全场、全店。
+          items: { $ref: '#/components/schemas/CouponScope' }
+
+    ApplicableCoupon:
+      allOf:
+        - $ref: '#/components/schemas/UserCoupon'
+        - type: object
+          required: [applicable_discount_cents]
+          properties:
+            applicable_discount_cents:
+              $ref: '#/components/schemas/Money'
+              description: |
+                这张券用在本单上能减多少。与带上这张券调 `POST /orders/preview` 得到的
+                `discount_cents` 逐分相等（同一份实现）。
+
+                不叫 `discount_cents`：`UserCoupon.discount_cents` 已经是「券面减免额」
+                （满 100 减 20 的那个 20），同名字段在 allOf 里会互相覆盖。
+
+    CouponApplicableRequest:
+      type: object
+      required: [items, store_id]
+      properties:
+        items:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/OrderItemInput' }
+        store_id:
+          type: integer
+          format: int64
+          description: 履约门店，必填。理由同 `OrderCreateRequest.store_id`。
+
+    ClaimableCouponTemplate:
+      type: object
+      required: [id, name, coupon_type, threshold_cents, discount_cents, discount_rate, max_discount_cents,
+                 valid_mode, valid_days, remaining, per_user_limit, claimed_count, can_claim, scopes]
+      properties:
+        id:   { type: integer, format: int64 }
+        name: { type: string }
+        coupon_type: { $ref: '#/components/schemas/CouponType' }
+        threshold_cents:    { $ref: '#/components/schemas/Money' }
+        discount_cents:     { $ref: '#/components/schemas/Money' }
+        discount_rate:      { type: integer, description: 千分比 }
+        max_discount_cents: { $ref: '#/components/schemas/Money' }
+        valid_mode:
+          type: integer
+          enum: [1, 2]
+          description: 1 绝对时间 · 2 领取后 N 天
+        valid_start_at: { type: string, format: date-time }
+        valid_end_at:   { type: string, format: date-time }
+        valid_days:     { type: integer }
+        remaining:
+          type: [integer, 'null']
+          description: 还剩多少张；`null` 表示不限量
+        per_user_limit: { type: integer }
+        claimed_count:
+          type: integer
+          description: 当前买家已持有这个模板的券数（含商家定向发放的）
+        can_claim:
+          type: boolean
+          description: 当前买家现在能不能领（没到每人限领）
+        scopes:
+          type: array
+          items: { $ref: '#/components/schemas/CouponScope' }
+
+    CouponTemplateStats:
+      type: object
+      description: 发放与核销统计。`issued = claimed + granted = unused + locked + used + expired`。
+      required: [issued, claimed, granted, unused, locked, used, expired]
+      properties:
+        issued:  { type: integer, description: 已发出（与 `issued_count` 相等） }
+        claimed: { type: integer, description: 其中买家在领券中心领的 }
+        granted: { type: integer, description: 其中商家定向发放的 }
+        unused:  { type: integer, description: 未使用且未过期 }
+        locked:  { type: integer, description: 被待支付订单占用中 }
+        used:    { type: integer, description: 已核销（订单已支付） }
+        expired: { type: integer, description: 未使用且已过期 }
+
+    AdminCouponTemplate:
+      type: object
+      required: [id, name, coupon_type, threshold_cents, discount_cents, discount_rate,
+                 max_discount_cents, valid_mode, valid_days, total_count, issued_count,
+                 per_user_limit, claimable, status, locked, scopes, stats, created_at, updated_at]
+      properties:
+        id:   { type: integer, format: int64 }
+        name: { type: string }
+        coupon_type: { $ref: '#/components/schemas/CouponType' }
+        threshold_cents:    { $ref: '#/components/schemas/Money' }
+        discount_cents:     { $ref: '#/components/schemas/Money' }
+        discount_rate:      { type: integer, description: 千分比 }
+        max_discount_cents: { $ref: '#/components/schemas/Money' }
+        valid_mode:     { type: integer, enum: [1, 2] }
+        valid_start_at: { type: string, format: date-time }
+        valid_end_at:   { type: string, format: date-time }
+        valid_days:     { type: integer }
+        total_count:    { type: integer, description: 总量，0 = 不限 }
+        issued_count:   { type: integer }
+        per_user_limit: { type: integer }
+        claimable:      { type: boolean }
+        status:
+          type: integer
+          enum: [0, 1]
+          description: 1 启用 · 0 停用（停止领取与发放，不回收已发出的券）
+        locked:
+          type: boolean
+          description: 已发出过券，券面字段与范围不能再改
+        scopes:
+          type: array
+          items: { $ref: '#/components/schemas/CouponScope' }
+        stats: { $ref: '#/components/schemas/CouponTemplateStats' }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    CouponTemplateCreateRequest:
+      type: object
+      required: [name, coupon_type, valid_mode]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 60 }
+        coupon_type: { $ref: '#/components/schemas/CouponType' }
+        threshold_cents:    { $ref: '#/components/schemas/Money' }
+        discount_cents:     { $ref: '#/components/schemas/Money' }
+        discount_rate:      { type: integer, minimum: 0, maximum: 999 }
+        max_discount_cents: { $ref: '#/components/schemas/Money' }
+        valid_mode:     { type: integer, enum: [1, 2] }
+        valid_start_at: { type: string, format: date-time }
+        valid_end_at:   { type: string, format: date-time }
+        valid_days:     { type: integer, minimum: 0, maximum: 3650 }
+        total_count:    { type: integer, minimum: 0, description: 0 = 不限 }
+        per_user_limit: { type: integer, minimum: 1, default: 1 }
+        claimable:      { type: boolean, default: false }
+
+    CouponTemplatePatchRequest:
+      type: object
+      description: 只改传了的字段。有效期整组替换：改 `valid_mode` 时要把那一模式的字段一起给。
+      properties:
+        name: { type: string, minLength: 1, maxLength: 60 }
+        coupon_type: { $ref: '#/components/schemas/CouponType' }
+        threshold_cents:    { $ref: '#/components/schemas/Money' }
+        discount_cents:     { $ref: '#/components/schemas/Money' }
+        discount_rate:      { type: integer, minimum: 0, maximum: 999 }
+        max_discount_cents: { $ref: '#/components/schemas/Money' }
+        valid_mode:     { type: integer, enum: [1, 2] }
+        valid_start_at: { type: string, format: date-time }
+        valid_end_at:   { type: string, format: date-time }
+        valid_days:     { type: integer, minimum: 0, maximum: 3650 }
+        total_count:    { type: integer, minimum: 0 }
+        per_user_limit: { type: integer, minimum: 1 }
+        claimable:      { type: boolean }
+        status:         { type: integer, enum: [0, 1] }
+
+    CouponGrantRequest:
+      type: object
+      required: [phones]
+      properties:
+        phones:
+          type: array
+          minItems: 1
+          maxItems: 200
+          items: { type: string, minLength: 1, maxLength: 32 }
+
+    CouponGrantResult:
+      type: object
+      required: [template_id, granted, coupons]
+      properties:
+        template_id: { type: integer, format: int64 }
+        granted:     { type: integer, description: 本次发出的张数 }
+        coupons:
+          type: array
+          items:
+            $ref: '#/components/schemas/CouponGrantItem'
+
+    CouponGrantItem:
+      type: object
+      required: [phone, user_id, user_coupon_id, coupon_code]
+      properties:
+        phone:          { type: string }
+        user_id:        { type: integer, format: int64 }
+        user_coupon_id: { type: integer, format: int64 }
+        coupon_code:    { type: string }
 
     # ---- 门店、大区与围栏（数据模型 §4）----
 

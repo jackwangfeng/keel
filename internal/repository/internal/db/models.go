@@ -35,6 +35,40 @@ type Category struct {
 	UpdatedAt  pgtype.Timestamptz
 }
 
+type CouponScope struct {
+	ID         int64
+	MerchantID int64
+	TemplateID int64
+	ScopeType  int16
+	TargetID   *int64
+	Include    bool
+}
+
+type CouponTemplate struct {
+	ID               int64
+	MerchantID       int64
+	Name             string
+	CouponType       int16
+	ThresholdCents   int64
+	DiscountCents    int64
+	DiscountRate     int16
+	MaxDiscountCents int64
+	ValidMode        int16
+	ValidStartAt     pgtype.Timestamptz
+	ValidEndAt       pgtype.Timestamptz
+	ValidDays        int32
+	TotalCount       int32
+	IssuedCount      int32
+	PerUserLimit     int32
+	Claimable        bool
+	Stackable        bool
+	Priority         int16
+	ExtraRules       []byte
+	Status           int16
+	CreatedAt        pgtype.Timestamptz
+	UpdatedAt        pgtype.Timestamptz
+}
+
 type IdempotencyKey struct {
 	Scope        string
 	MerchantID   int64
@@ -133,6 +167,7 @@ type Order struct {
 	StoreID          int64
 	RegionID         int64
 	StoreSnapshot    []byte
+	UserCouponID     *int64
 }
 
 type OrderItem struct {
@@ -440,6 +475,22 @@ type UserAddress struct {
 	DeletedAt    pgtype.Timestamptz
 	CreatedAt    pgtype.Timestamptz
 	UpdatedAt    pgtype.Timestamptz
+}
+
+type UserCoupon struct {
+	ID           int64
+	MerchantID   int64
+	CouponCode   string
+	TemplateID   int64
+	UserID       int64
+	Source       int16
+	Status       int16
+	OrderID      *int64
+	ValidStartAt pgtype.Timestamptz
+	ValidEndAt   pgtype.Timestamptz
+	LockedAt     pgtype.Timestamptz
+	UsedAt       pgtype.Timestamptz
+	CreatedAt    pgtype.Timestamptz
 }
 
 type UserIdentity struct {

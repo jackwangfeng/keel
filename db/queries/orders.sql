@@ -46,11 +46,21 @@
 -- JOIN 视图而不是 LEFT JOIN：视图对每一个 (未软删门店 × 未软删 SKU) 都恰好
 -- 有一行，缺行意味着门店或 SKU 已经不在了，而那时这一行本来就不该可售 ——
 -- 少掉的行会让调用方拿到「这些 SKU 不可售」，那正是对的答案。
+--
+-- ### 00026 多取两列：brand_id 与所属分类的 path
+--
+-- 券的适用范围按商品、分类（含子孙）、品牌挑行（数据模型 §7），挑行要的素材
+-- 从**这一条**取，而不是另开一条查询：券的计算与定价共用同一份输入，
+-- 试算与下单才不可能在「这一行算不算适用」上分叉。分类按 path 前缀判子孙，
+-- 与 GET /products?category_id= 同一个语义（products.sql 文件头）。
+-- LEFT JOIN 且只认未软删的分类：分类删了，category_path 为 NULL，
+-- 分类范围的规则就命中不了这一行 —— 与列表页「分类已删就是空列表」一致。
 SELECT s.id, s.product_id, s.spec_values, v.price_cents, s.image_url,
-       p.title
+       p.title, p.brand_id, c.path AS category_path
   FROM skus s
   JOIN products p ON p.id = s.product_id
   JOIN sku_prices_by_store v ON v.sku_id = s.id AND v.store_id = sqlc.arg(store_id)
+  LEFT JOIN categories c ON c.id = p.category_id AND c.deleted_at IS NULL
  WHERE s.id = ANY(sqlc.arg(sku_ids)::bigint[])
    AND s.status = 1
    AND s.deleted_at IS NULL
@@ -105,21 +115,26 @@ SELECT id, receiver_name, phone, province, city, district, street, detail,
 -- INSERT，两步之间那家店可以改名 —— 于是 store_id 指着 A，快照写着 A 的旧名字，
 -- 而两者都「看起来正常」。门店不存在或已软删时这条语句插 0 行，
 -- 由 :one 变成 pgx.ErrNoRows，调用方翻成 422。
+--
+-- user_coupon_id（00026）也在这里落：SAGA 的券分支只拿到三个字符串，
+-- 「这一单用哪张券」只能从订单行上读回来。
 INSERT INTO orders (order_no, user_id, store_id, region_id, store_snapshot,
                     status, goods_amount_cents, freight_cents,
-                    discount_cents, payable_cents, receiver_snapshot, remark, expire_at)
+                    discount_cents, payable_cents, receiver_snapshot, remark, expire_at,
+                    user_coupon_id)
 SELECT sqlc.arg(order_no), sqlc.arg(user_id), st.id, st.region_id,
        jsonb_build_object('store_name', st.name, 'region_name', r.name,
                           'address', st.address, 'phone', st.phone),
        0, sqlc.arg(goods_amount_cents), sqlc.arg(freight_cents),
        sqlc.arg(discount_cents), sqlc.arg(payable_cents),
-       sqlc.arg(receiver_snapshot), sqlc.narg(remark), sqlc.arg(expire_at)
+       sqlc.arg(receiver_snapshot), sqlc.narg(remark), sqlc.arg(expire_at),
+       sqlc.narg(user_coupon_id)
   FROM stores st
   JOIN regions r ON r.id = st.region_id
  WHERE st.id = sqlc.arg(store_id) AND st.deleted_at IS NULL
 RETURNING id, order_no, store_id, region_id, status, goods_amount_cents, freight_cents,
           discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
-          expire_at, created_at;
+          expire_at, created_at, user_coupon_id;
 
 -- name: CreateOrderItem :exec
 -- 订单项快照（数据模型 §5：下单即快照）。商品改价改名不影响历史订单。
@@ -141,10 +156,12 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10);
 -- 三列一起取而不是只取 paid_at：shipped_at 是「发货后 N 天自动确认收货」倒计时
 -- 的起点（契约里明写），finished_at 同理属于同一张时间线，分两次加意味着
 -- 这条查询与它的领域类型要被改两遍。
+--
+-- user_coupon_id（00026）：SAGA 的券分支靠它知道这一单用的是哪张券。
 SELECT id, order_no, user_id, store_id, region_id, status,
        goods_amount_cents, freight_cents,
        discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
-       expire_at, paid_at, shipped_at, finished_at, created_at
+       expire_at, paid_at, shipped_at, finished_at, created_at, user_coupon_id
   FROM orders
  WHERE order_no = $1;
 
@@ -386,7 +403,7 @@ RETURNING id, payment_no, status;
 SELECT id, order_no, user_id, store_id, region_id, status,
        goods_amount_cents, freight_cents,
        discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
-       expire_at, paid_at, shipped_at, finished_at, created_at
+       expire_at, paid_at, shipped_at, finished_at, created_at, user_coupon_id
   FROM orders
  WHERE user_id = $1
    AND status <> 0
@@ -423,7 +440,7 @@ SELECT count(*)
 SELECT id, order_no, user_id, store_id, region_id, status,
        goods_amount_cents, freight_cents,
        discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
-       expire_at, paid_at, shipped_at, finished_at, created_at
+       expire_at, paid_at, shipped_at, finished_at, created_at, user_coupon_id
   FROM orders
  WHERE order_no = $1
    AND user_id = $2

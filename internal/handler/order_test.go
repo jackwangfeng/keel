@@ -290,46 +290,38 @@ func TestOldQuoteIsRejectedAfterAPriceChange(t *testing.T) {
 	t.Logf("旧试算 %d 被拒（409 %s），新试算 %d 成交", preview.PayableCents, p.Type, fresh.PayableCents)
 }
 
-// 传了券**不会被静默忽略**：两条接口都返回一个明确的 501。
+// 带了一张用不了的券（这里是一个根本不存在的 id），试算与下单都必须 409
+// coupon-not-applicable，**绝不忽略这张券按原价继续**。
 //
 // 静默忽略 = 用户以为用了券、实际按原价成交。这是钱的问题，而且客户端没有
-// 任何办法发现。
-//
-// 这条测试同时守着 contract_test.go 里那笔挂账的**反方向**：券真的实现了之后，
-// 这里会红，逼人回去把 NotYetImplementedBody 那一行删掉（清单那侧只能做
-// 「清单 → 契约」一个方向的机械对账）。
+// 任何办法发现。这条测试原先守的是「券没实现时返回 501」；券接上之后同一条纪律
+// 换了一个形状：券用不了就明确报错。
 func TestCouponIsRejectedNotSilentlyIgnored(t *testing.T) {
 	tok := tokenA(t)
 	addr := addressIDOf(t, "shop-a", seedAddressA)
 	sku, _ := anySKUWithStock(t, "shop-a", 2)
-	withCoupon := orderBody(t, "shop-a", addr, sku, 1, `"user_coupon_id":123`)
+	withCoupon := orderBody(t, "shop-a", addr, sku, 1, `"user_coupon_id":987654321`)
 
 	for _, tc := range []struct {
-		name         string
-		contractPath string
-		send         func() *httptest.ResponseRecorder
+		name string
+		send func() *httptest.ResponseRecorder
 	}{
-		{"preview", "/orders/preview", func() *httptest.ResponseRecorder {
+		{"preview", func() *httptest.ResponseRecorder {
 			return previewOrder(t, hostA, withCoupon, tok)
 		}},
-		{"create", "/orders", func() *httptest.ResponseRecorder {
+		{"create", func() *httptest.ResponseRecorder {
 			return createOrder(t, hostA, withCoupon, tok, "coupon-"+uniqueKey())
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			p := problemOf(t, tc.send(), http.StatusNotImplemented)
-			if p.Type != problem.TypeNotImplemented {
-				t.Fatalf("problem type 是 %q，期望 %q", p.Type, problem.TypeNotImplemented)
-			}
-			r := routeOf(t, http.MethodPost, tc.contractPath)
-			if _, listed := r.NotYetImplementedBody["user_coupon_id"]; !listed {
-				t.Fatalf("%s 的 NotYetImplementedBody 里没有 user_coupon_id —— "+
-					"券实现了就把这条测试一起改掉，别让挂账烂在那里", tc.contractPath)
+			p := problemOf(t, tc.send(), http.StatusConflict)
+			if p.Type != problem.TypeCouponNotApplicable {
+				t.Fatalf("problem type 是 %q，期望 %q", p.Type, problem.TypeCouponNotApplicable)
 			}
 		})
 	}
 
-	// 阳性对照：同样的请求去掉券就能成功。否则上面的 501 也可能只是因为
+	// 阳性对照：同样的请求去掉券就能成功。否则上面的 409 也可能只是因为
 	// 这个请求体本身就是坏的。
 	if w := previewOrder(t, hostA, orderBody(t, "shop-a", addr, sku, 1, ""), tok); w.Code != http.StatusOK {
 		t.Fatalf("去掉券之后试算仍然失败：%d %s", w.Code, w.Body.String())

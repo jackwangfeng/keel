@@ -62,6 +62,74 @@ export type AdminCategory = {
   updated_at? : string
 }
 
+/** 1 满减 · 2 折扣 · 3 立减 · 4 包邮。 */
+export type CouponType = number
+
+/** 金额，单位「分」。禁止使用浮点。 */
+export type Money = number
+
+/** 一条适用范围规则（数据模型 §7 `coupon_scopes`）。1–4 决定哪几行商品参与计算， */
+export type CouponScope = {
+  /** 1全场 2分类（含子孙） 3商品 4品牌 5大区 6门店 */
+  scope_type : number
+  /** 全场为 null；其余按 `scope_type` 指向分类 / 商品 / 品牌 / 大区 / 门店的 id */
+  target_id : number | null
+  include : boolean
+  /** 目标的展示名（分类名、商品标题、大区名、门店名），只读。品牌没有目录，不返回； */
+  target_name? : string
+}
+
+/** 发放与核销统计。`issued = claimed + granted = unused + locked + used + expired`。 */
+export type CouponTemplateStats = {
+  /** 已发出（与 `issued_count` 相等） */
+  issued : number
+  /** 其中买家在领券中心领的 */
+  claimed : number
+  /** 其中商家定向发放的 */
+  granted : number
+  /** 未使用且未过期 */
+  unused : number
+  /** 被待支付订单占用中 */
+  locked : number
+  /** 已核销（订单已支付） */
+  used : number
+  /** 未使用且已过期 */
+  expired : number
+}
+
+export type AdminCouponTemplate = {
+  id : number
+  name : string
+  /** 1 满减 · 2 折扣 · 3 立减 · 4 包邮。 */
+  coupon_type : CouponType
+  /** 金额，单位「分」。禁止使用浮点。 */
+  threshold_cents : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  discount_cents : Money
+  /** 千分比 */
+  discount_rate : number
+  /** 金额，单位「分」。禁止使用浮点。 */
+  max_discount_cents : Money
+  valid_mode : number
+  valid_start_at? : string
+  valid_end_at? : string
+  valid_days : number
+  /** 总量，0 = 不限 */
+  total_count : number
+  issued_count : number
+  per_user_limit : number
+  claimable : boolean
+  /** 1 启用 · 0 停用（停止领取与发放，不回收已发出的券） */
+  status : number
+  /** 已发出过券，券面字段与范围不能再改 */
+  locked : boolean
+  scopes : CouponScope[]
+  /** 发放与核销统计。`issued = claimed + granted = unused + locked + used + expired`。 */
+  stats : CouponTemplateStats
+  created_at : string
+  updated_at : string
+}
+
 export type AdminInventory = {
   sku_id : number
   sku_code? : string
@@ -72,9 +140,6 @@ export type AdminInventory = {
   warning_qty : number
   updated_at : string
 }
-
-/** 金额，单位「分」。禁止使用浮点。 */
-export type Money = number
 
 /** 后台视角的商品。与 `ProductSummary` 的差别是状态面： */
 export type AdminProduct = {
@@ -220,6 +285,34 @@ export type AdminStoreList = {
   has_default : boolean
 }
 
+export type ApplicableCoupon = {
+  id : number
+  coupon_code : string
+  template_id : number
+  name : string
+  /** 1 满减 · 2 折扣 · 3 立减 · 4 包邮。 */
+  coupon_type : CouponType
+  /** 金额，单位「分」。禁止使用浮点。 */
+  threshold_cents : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  discount_cents : Money
+  /** 千分比，850 = 8.5 折 */
+  discount_rate : number
+  /** 金额，单位「分」。禁止使用浮点。 */
+  max_discount_cents : Money
+  /** 1 未使用 · 2 锁定 · 3 已使用 · 4 已过期 */
+  status : number
+  /** 1 领券中心领取 · 2 商家定向发放 */
+  source : number
+  valid_start_at : string
+  valid_end_at : string
+  used_at? : string
+  /** 这张券的适用范围（来自模板）。空数组即全场、全店。 */
+  scopes : CouponScope[]
+  /** 金额，单位「分」。禁止使用浮点。 */
+  applicable_discount_cents : Money
+}
+
 export type CartItem = {
   id : number
   sku_id : number
@@ -299,6 +392,116 @@ export type ChatReply = {
   intent? : UTSJSONObject
   /** 写操作路由指令。前端据此跳转到对应表单并预填参数， */
   action? : ChatReplyAction
+}
+
+export type ClaimableCouponTemplate = {
+  id : number
+  name : string
+  /** 1 满减 · 2 折扣 · 3 立减 · 4 包邮。 */
+  coupon_type : CouponType
+  /** 金额，单位「分」。禁止使用浮点。 */
+  threshold_cents : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  discount_cents : Money
+  /** 千分比 */
+  discount_rate : number
+  /** 金额，单位「分」。禁止使用浮点。 */
+  max_discount_cents : Money
+  /** 1 绝对时间 · 2 领取后 N 天 */
+  valid_mode : number
+  valid_start_at? : string
+  valid_end_at? : string
+  valid_days : number
+  /** 还剩多少张；`null` 表示不限量 */
+  remaining : number | null
+  per_user_limit : number
+  /** 当前买家已持有这个模板的券数（含商家定向发放的） */
+  claimed_count : number
+  /** 当前买家现在能不能领（没到每人限领） */
+  can_claim : boolean
+  scopes : CouponScope[]
+}
+
+export type OrderItemInput = {
+  sku_id : number
+  quantity : number
+}
+
+export type CouponApplicableRequest = {
+  items : OrderItemInput[]
+  /** 履约门店，必填。理由同 `OrderCreateRequest.store_id`。 */
+  store_id : number
+}
+
+export type CouponGrantItem = {
+  phone : string
+  user_id : number
+  user_coupon_id : number
+  coupon_code : string
+}
+
+export type CouponGrantRequest = {
+  phones : string[]
+}
+
+export type CouponGrantResult = {
+  template_id : number
+  /** 本次发出的张数 */
+  granted : number
+  coupons : CouponGrantItem[]
+}
+
+export type CouponScopeInput = {
+  scope_type : number
+  target_id? : number | null
+  include? : boolean
+}
+
+export type CouponScopesSetRequest = {
+  scopes : CouponScopeInput[]
+}
+
+export type CouponTemplateCreateRequest = {
+  name : string
+  /** 1 满减 · 2 折扣 · 3 立减 · 4 包邮。 */
+  coupon_type : CouponType
+  /** 金额，单位「分」。禁止使用浮点。 */
+  threshold_cents? : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  discount_cents? : Money
+  discount_rate? : number
+  /** 金额，单位「分」。禁止使用浮点。 */
+  max_discount_cents? : Money
+  valid_mode : number
+  valid_start_at? : string
+  valid_end_at? : string
+  valid_days? : number
+  /** 0 = 不限 */
+  total_count? : number
+  per_user_limit? : number
+  claimable? : boolean
+}
+
+/** 只改传了的字段。有效期整组替换：改 `valid_mode` 时要把那一模式的字段一起给。 */
+export type CouponTemplatePatchRequest = {
+  name? : string
+  /** 1 满减 · 2 折扣 · 3 立减 · 4 包邮。 */
+  coupon_type? : CouponType
+  /** 金额，单位「分」。禁止使用浮点。 */
+  threshold_cents? : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  discount_cents? : Money
+  discount_rate? : number
+  /** 金额，单位「分」。禁止使用浮点。 */
+  max_discount_cents? : Money
+  valid_mode? : number
+  valid_start_at? : string
+  valid_end_at? : string
+  valid_days? : number
+  total_count? : number
+  per_user_limit? : number
+  claimable? : boolean
+  status? : number
 }
 
 /** 一条字段级错误。`field` 是请求体（或商品对象）里的字段名。 */
@@ -427,6 +630,8 @@ export type Order = {
   freight_cents? : Money
   /** 金额，单位「分」。禁止使用浮点。 */
   discount_cents? : Money
+  /** 这一单用的券。没用券时不出现。 */
+  user_coupon_id? : number
   /** 金额，单位「分」。禁止使用浮点。 */
   payable_cents : Money
   /** 金额，单位「分」。禁止使用浮点。 */
@@ -441,17 +646,12 @@ export type Order = {
   finished_at? : string
 }
 
-export type OrderItemInput = {
-  sku_id : number
-  quantity : number
-}
-
 export type OrderCreateRequest = {
   items : OrderItemInput[]
   /** 由哪家门店履约。**必填，服务端不替客户端猜。** */
   store_id : number
   address_id : number
-  /** 第一期仅支持单张券 */
+  /** 第一期仅支持单张券。 */
   user_coupon_id? : number
   remark? : string
   /** 金额，单位「分」。禁止使用浮点。 */
@@ -582,6 +782,8 @@ export type OrderDetail = {
   freight_cents? : Money
   /** 金额，单位「分」。禁止使用浮点。 */
   discount_cents? : Money
+  /** 这一单用的券。没用券时不出现。 */
+  user_coupon_id? : number
   /** 金额，单位「分」。禁止使用浮点。 */
   payable_cents : Money
   /** 金额，单位「分」。禁止使用浮点。 */
@@ -613,26 +815,6 @@ export type OrderPreviewItemsItem = {
   discount_cents? : Money
 }
 
-export type UserCoupon = {
-  id : number
-  coupon_code : string
-  name? : string
-  /** 1满减 2折扣 3立减 4包邮 */
-  coupon_type : number
-  /** 金额，单位「分」。禁止使用浮点。 */
-  threshold_cents? : Money
-  /** 金额，单位「分」。禁止使用浮点。 */
-  discount_cents? : Money
-  /** 千分比，850 = 8.5 折 */
-  discount_rate? : number
-  /** 金额，单位「分」。禁止使用浮点。 */
-  max_discount_cents? : Money
-  /** 1 未使用 · 2 锁定 · 3 已使用 · 4 已过期 */
-  status : number
-  valid_start_at? : string
-  valid_end_at? : string
-}
-
 export type OrderPreview = {
   /** 本次试算按哪家门店算的（回显请求里的 `store_id`）。 */
   store_id : number
@@ -648,7 +830,10 @@ export type OrderPreview = {
   payable_cents : Money
   /** 含优惠分摊结果。 */
   items : OrderPreviewItemsItem[]
-  applicable_coupons? : UserCoupon[]
+  /** 本次试算用上的券（回显请求里的 `user_coupon_id`）。没带券时不出现。 */
+  user_coupon_id? : number
+  /** 这个买家手里本单可用的全部券，按优惠额降序——与 `POST /coupons/applicable` */
+  applicable_coupons? : ApplicableCoupon[]
 }
 
 export type PageMeta = {
@@ -1057,6 +1242,32 @@ export type Upload = {
 
 /** 文件用途，取值与 `uploads.purpose` 逐值一致： */
 export type UploadTarget = number
+
+export type UserCoupon = {
+  id : number
+  coupon_code : string
+  template_id : number
+  name : string
+  /** 1 满减 · 2 折扣 · 3 立减 · 4 包邮。 */
+  coupon_type : CouponType
+  /** 金额，单位「分」。禁止使用浮点。 */
+  threshold_cents : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  discount_cents : Money
+  /** 千分比，850 = 8.5 折 */
+  discount_rate : number
+  /** 金额，单位「分」。禁止使用浮点。 */
+  max_discount_cents : Money
+  /** 1 未使用 · 2 锁定 · 3 已使用 · 4 已过期 */
+  status : number
+  /** 1 领券中心领取 · 2 商家定向发放 */
+  source : number
+  valid_start_at : string
+  valid_end_at : string
+  used_at? : string
+  /** 这张券的适用范围（来自模板）。空数组即全场、全店。 */
+  scopes : CouponScope[]
+}
 
 export type UserIdentity = {
   id : number

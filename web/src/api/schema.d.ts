@@ -5058,6 +5058,664 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/coupon-templates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 券模板列表（含发放与核销统计）
+         * @description 按创建时间倒序。每一项带发放与核销统计（`stats`）与适用范围（`scopes`）。
+         *
+         *     **权限**：本期只开放给商家级的管理员与操作员（`staff.role` 为 1 或 2），
+         *     平台级操作员与其他角色 403 `staff-forbidden`。券直接决定订单实付，是资金面。
+         */
+        get: {
+            parameters: {
+                query?: {
+                    page?: components["parameters"]["Page"];
+                    page_size?: components["parameters"]["PageSize"];
+                    /** @description 按启停筛选。不传即全部。 */
+                    status?: 0 | 1;
+                };
+                header?: {
+                    /**
+                     * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+                     *
+                     *     它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+                     *     而例外成立的前提是平台级鉴权：
+                     *
+                     *     · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+                     *       读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+                     *       行级安全落在这家店上。
+                     *     · **商家级员工带了这个头：403**
+                     *       （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+                     *       静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+                     *     · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+                     *       **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+                     *       实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+                     *       请求其余部分指名的东西不存在是 422。
+                     *     · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+                     *       买家侧对它照旧 404。
+                     *     · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+                     *       （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+                     *
+                     *     后台每一条挂后台会话的操作都声明了它（机械核对：
+                     *     `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+                     */
+                    "X-Keel-Merchant"?: components["parameters"]["KeelMerchant"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PageMeta"] & {
+                            items: components["schemas"]["AdminCouponTemplate"][];
+                        };
+                    };
+                };
+                /** @description 不是商家级管理员或操作员（`https://keel.dev/problems/staff-forbidden`）。 */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        put?: never;
+        /**
+         * 新建券模板
+         * @description 按 `coupon_type` 填不同的字段，其余字段不填或填 0（数据模型 §7 的 `chk_coupon_rule`
+         *     让每种券型只有一种写法）：
+         *
+         *     | 券型 | 必填 | 必须为 0 / 不填 |
+         *     |---|---|---|
+         *     | 1 满减 | `threshold_cents ≥ discount_cents > 0` | `discount_rate`、`max_discount_cents` |
+         *     | 2 折扣 | `discount_rate` ∈ [1, 999]（千分比，850 = 8.5 折）；`threshold_cents`、`max_discount_cents` 可选 | `discount_cents` |
+         *     | 3 立减 | `discount_cents > 0` | `threshold_cents`、`discount_rate`、`max_discount_cents` |
+         *     | 4 包邮 | **本期拒绝（422）** | — |
+         *
+         *     **包邮券为什么被拒绝**：本系统没有运费（`orders.freight_cents` 恒为 0，运费模板没有落地），
+         *     一张包邮券永远减 0，买家却会看到「已用包邮券」。运费落地的那一轮放开。
+         *
+         *     有效期二选一：`valid_mode = 1` 绝对时间（`valid_start_at` < `valid_end_at`），
+         *     `valid_mode = 2` 领取后 N 天（`valid_days > 0`）。
+         *
+         *     新建的模板是启用的、默认**不可领**（`claimable = false`）：先配范围，再打开领券中心。
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /**
+                     * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+                     *
+                     *     它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+                     *     而例外成立的前提是平台级鉴权：
+                     *
+                     *     · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+                     *       读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+                     *       行级安全落在这家店上。
+                     *     · **商家级员工带了这个头：403**
+                     *       （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+                     *       静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+                     *     · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+                     *       **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+                     *       实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+                     *       请求其余部分指名的东西不存在是 422。
+                     *     · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+                     *       买家侧对它照旧 404。
+                     *     · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+                     *       （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+                     *
+                     *     后台每一条挂后台会话的操作都声明了它（机械核对：
+                     *     `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+                     */
+                    "X-Keel-Merchant"?: components["parameters"]["KeelMerchant"];
+                    /**
+                     * @description 客户端生成的 UUID。幂等作用域为 `(接口 scope, user_id, key)`，
+                     *     有效期 24h，过期后同一 key 可复用（见数据模型文档 §11）。
+                     *
+                     *     · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
+                     *       并带 `Idempotency-Replayed: true` 响应头
+                     *     · **同 key 正在处理中**：`409` + `Retry-After`，
+                     *       type=https://keel.dev/problems/idempotency-key-in-flight，
+                     *       客户端应退避重试，不要当成业务失败
+                     *     · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
+                     *       type=https://keel.dev/problems/idempotency-key-reused。
+                     *       宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
+                     *       那会让用户以为下单成功了而实际什么都没发生
+                     *     · 首次执行失败（存档为失败态）时同样回放该失败响应；
+                     *       确需重试的场景请换一个新 key
+                     */
+                    "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["CouponTemplateCreateRequest"];
+                };
+            };
+            responses: {
+                /** @description 已创建 */
+                201: {
+                    headers: {
+                        "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AdminCouponTemplate"];
+                    };
+                };
+                /** @description 不是商家级管理员或操作员（`https://keel.dev/problems/staff-forbidden`）。 */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                409: components["responses"]["IdempotencyInFlight"];
+                /**
+                 * @description 字段组合不成立（满 100 减 200、折扣率越界、有效期倒挂、包邮券……）——
+                 *     `https://keel.dev/problems/invalid-request`；或同一 Idempotency-Key 配了不同的请求体。
+                 */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/coupon-templates/{template_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description `coupon_templates.id`。查不到（含属于别家店）即 404。 */
+                template_id: components["parameters"]["CouponTemplateId"];
+            };
+            cookie?: never;
+        };
+        /** 券模板详情（含统计与范围） */
+        get: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /**
+                     * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+                     *
+                     *     它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+                     *     而例外成立的前提是平台级鉴权：
+                     *
+                     *     · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+                     *       读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+                     *       行级安全落在这家店上。
+                     *     · **商家级员工带了这个头：403**
+                     *       （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+                     *       静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+                     *     · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+                     *       **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+                     *       实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+                     *       请求其余部分指名的东西不存在是 422。
+                     *     · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+                     *       买家侧对它照旧 404。
+                     *     · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+                     *       （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+                     *
+                     *     后台每一条挂后台会话的操作都声明了它（机械核对：
+                     *     `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+                     */
+                    "X-Keel-Merchant"?: components["parameters"]["KeelMerchant"];
+                };
+                path: {
+                    /** @description `coupon_templates.id`。查不到（含属于别家店）即 404。 */
+                    template_id: components["parameters"]["CouponTemplateId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AdminCouponTemplate"];
+                    };
+                };
+                /** @description 不是商家级管理员或操作员。 */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /** @description 模板不存在或不属于当前租户。 */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * 修改 / 启停券模板
+         * @description 只改传了的字段。**停用**就是 `status = 0`：停止领取与定向发放，
+         *     **不回收已发出的券**——它们照常可用到过期（已发出的券是对买家的承诺）。
+         *
+         *     **已经发出过券（`issued_count > 0`）之后，决定券面价值的字段不能再改**：
+         *     `coupon_type`、`threshold_cents`、`discount_cents`、`discount_rate`、
+         *     `max_discount_cents`、`valid_*`。券实例不快照规则，改模板等于悄悄改掉买家手里的券。
+         *     能改的是 `name`、`total_count`（不低于已发出数）、`per_user_limit`、`claimable`、`status`。
+         */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /**
+                     * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+                     *
+                     *     它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+                     *     而例外成立的前提是平台级鉴权：
+                     *
+                     *     · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+                     *       读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+                     *       行级安全落在这家店上。
+                     *     · **商家级员工带了这个头：403**
+                     *       （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+                     *       静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+                     *     · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+                     *       **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+                     *       实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+                     *       请求其余部分指名的东西不存在是 422。
+                     *     · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+                     *       买家侧对它照旧 404。
+                     *     · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+                     *       （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+                     *
+                     *     后台每一条挂后台会话的操作都声明了它（机械核对：
+                     *     `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+                     */
+                    "X-Keel-Merchant"?: components["parameters"]["KeelMerchant"];
+                };
+                path: {
+                    /** @description `coupon_templates.id`。查不到（含属于别家店）即 404。 */
+                    template_id: components["parameters"]["CouponTemplateId"];
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["CouponTemplatePatchRequest"];
+                };
+            };
+            responses: {
+                /** @description 已更新 */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AdminCouponTemplate"];
+                    };
+                };
+                /** @description 不是商家级管理员或操作员。 */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /** @description 模板不存在或不属于当前租户。 */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /** @description 已经发出过券，却想改券面字段 —— `https://keel.dev/problems/coupon-template-locked`。 */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /** @description 改完之后字段组合不成立（同新建），或 `total_count` 低于已发出数。 */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        trace?: never;
+    };
+    "/admin/coupon-templates/{template_id}/scopes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description `coupon_templates.id`。查不到（含属于别家店）即 404。 */
+                template_id: components["parameters"]["CouponTemplateId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * 设置适用范围（整组替换）
+         * @description 整组替换：请求里的就是这张券的全部范围，空数组即「全场、全店」。
+         *
+         *     | `scope_type` | 含义 | `target_id` |
+         *     |---|---|---|
+         *     | 1 | 全场 | 不填；不能是排除 |
+         *     | 2 | 分类（**含子孙**，与 `GET /products?category_id=` 同一语义） | `categories.id` |
+         *     | 3 | 商品 | `products.id` |
+         *     | 4 | 品牌 | `products.brand_id` 的取值（本仓库没有品牌目录，不校验存在性） |
+         *     | 5 | 大区（下单门店所属大区） | `regions.id` |
+         *     | 6 | 门店（下单门店） | `stores.id` |
+         *
+         *     `include = false` 是排除，**排除优先于包含**。1–4 决定订单里哪几行参与计算，
+         *     5–6 决定在哪家店下单时这张券可用；某个维度没有包含规则即该维度不限。
+         *
+         *     分类、商品、大区、门店四种的 `target_id` 在**当前租户**里逐条校验
+         *     （数据模型 §7：`target_id` 是多态列，外键管不到它，校验在这里）。
+         *     查不到、已软删、或属于别家店，整组 422，一条都不写。
+         *
+         *     已经发出过券之后不能再改（409 `coupon-template-locked`），理由同 PATCH。
+         */
+        put: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /**
+                     * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+                     *
+                     *     它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+                     *     而例外成立的前提是平台级鉴权：
+                     *
+                     *     · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+                     *       读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+                     *       行级安全落在这家店上。
+                     *     · **商家级员工带了这个头：403**
+                     *       （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+                     *       静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+                     *     · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+                     *       **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+                     *       实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+                     *       请求其余部分指名的东西不存在是 422。
+                     *     · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+                     *       买家侧对它照旧 404。
+                     *     · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+                     *       （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+                     *
+                     *     后台每一条挂后台会话的操作都声明了它（机械核对：
+                     *     `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+                     */
+                    "X-Keel-Merchant"?: components["parameters"]["KeelMerchant"];
+                };
+                path: {
+                    /** @description `coupon_templates.id`。查不到（含属于别家店）即 404。 */
+                    template_id: components["parameters"]["CouponTemplateId"];
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["CouponScopesSetRequest"];
+                };
+            };
+            responses: {
+                /** @description 已替换 */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AdminCouponTemplate"];
+                    };
+                };
+                /** @description 不是商家级管理员或操作员。 */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /** @description 模板不存在或不属于当前租户。 */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /** @description 已经发出过券 —— `https://keel.dev/problems/coupon-template-locked`。 */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /**
+                 * @description 某条范围不成立：`target_id` 在本店查不到、全场规则带了 `target_id` 或设成排除、
+                 *     同一目标出现两次 —— `https://keel.dev/problems/invalid-request`。
+                 */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/coupon-templates/{template_id}/grants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description `coupon_templates.id`。查不到（含属于别家店）即 404。 */
+                template_id: components["parameters"]["CouponTemplateId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 按手机号定向发券
+         * @description 给每个手机号对应的买家发一张。**整批全有或全无**：有一个手机号在本店查不到买家，
+         *     整批 422 并在 `detail` 里列出是哪几个，一张都不发——部分成功的批次会让运营
+         *     分不清刚才发了谁，重试又会给已经发过的人再发一张。
+         *
+         *     受总量约束（整批计：剩余不够整批就 409 `coupon-sold-out`），**不受每人限领约束**
+         *     （那一条只管领券中心；定向发放是商家的明确意图）。模板已停用时 409 `coupon-template-disabled`。
+         *     同一个手机号在一批里出现两次按两张发。
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /**
+                     * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+                     *
+                     *     它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+                     *     而例外成立的前提是平台级鉴权：
+                     *
+                     *     · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+                     *       读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+                     *       行级安全落在这家店上。
+                     *     · **商家级员工带了这个头：403**
+                     *       （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+                     *       静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+                     *     · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+                     *       **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+                     *       实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+                     *       请求其余部分指名的东西不存在是 422。
+                     *     · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+                     *       买家侧对它照旧 404。
+                     *     · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+                     *       （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+                     *
+                     *     后台每一条挂后台会话的操作都声明了它（机械核对：
+                     *     `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+                     */
+                    "X-Keel-Merchant"?: components["parameters"]["KeelMerchant"];
+                    /**
+                     * @description 客户端生成的 UUID。幂等作用域为 `(接口 scope, user_id, key)`，
+                     *     有效期 24h，过期后同一 key 可复用（见数据模型文档 §11）。
+                     *
+                     *     · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
+                     *       并带 `Idempotency-Replayed: true` 响应头
+                     *     · **同 key 正在处理中**：`409` + `Retry-After`，
+                     *       type=https://keel.dev/problems/idempotency-key-in-flight，
+                     *       客户端应退避重试，不要当成业务失败
+                     *     · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
+                     *       type=https://keel.dev/problems/idempotency-key-reused。
+                     *       宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
+                     *       那会让用户以为下单成功了而实际什么都没发生
+                     *     · 首次执行失败（存档为失败态）时同样回放该失败响应；
+                     *       确需重试的场景请换一个新 key
+                     */
+                    "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    /** @description `coupon_templates.id`。查不到（含属于别家店）即 404。 */
+                    template_id: components["parameters"]["CouponTemplateId"];
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["CouponGrantRequest"];
+                };
+            };
+            responses: {
+                /** @description 已发放 */
+                201: {
+                    headers: {
+                        "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["CouponGrantResult"];
+                    };
+                };
+                /** @description 不是商家级管理员或操作员。 */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /** @description 模板不存在或不属于当前租户。 */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /**
+                 * @description 按 `type` 区分：剩余数量不够整批 —— `https://keel.dev/problems/coupon-sold-out`；
+                 *     模板已停用 —— `https://keel.dev/problems/coupon-template-disabled`；
+                 *     绝对时间模式下已过 `valid_end_at` —— `https://keel.dev/problems/coupon-claim-ended`；
+                 *     同一 Idempotency-Key 正在处理中 —— `https://keel.dev/problems/idempotency-key-in-flight`。
+                 */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /**
+                 * @description 有手机号在本店查不到买家（`https://keel.dev/problems/invalid-request`，`detail` 列出它们），
+                 *     或同一 Idempotency-Key 配了不同的请求体。
+                 */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/uploads": {
         parameters: {
             query?: never;
@@ -6869,6 +7527,20 @@ export interface paths {
                     };
                 };
                 /**
+                 * @description 带的 `user_coupon_id` 本单不可用 —— `https://keel.dev/problems/coupon-not-applicable`，
+                 *     `detail` 说明原因（门槛不够、范围不含、已锁定 / 已使用 / 已过期、不是你的券）。
+                 *     与 `POST /orders` 同一个 type：试算就是要在下单之前把它说出来。
+                 *     **不会忽略这张券按原价试算**——用户正是照着试算结果决定要不要下单的。
+                 */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /**
                  * @description 与 `POST /orders` 的 422 逐条一致：这家店不卖其中某几件
                  *     （`https://keel.dev/problems/sku-not-sold-in-store`），
                  *     或 `store_id` / `address_id` / `sku_id` 有一个服务端不认识
@@ -8113,7 +8785,16 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** 我的优惠券 */
+        /**
+         * 我的优惠券
+         * @description 按领取时间倒序。`status` 不传即全部。
+         *
+         *     **「已过期」是现算的**：`user_coupons.status = 1` 但已过 `valid_end_at` 的券，
+         *     在这里以 `status = 4` 返回，也只会出现在 `status=expired` 的筛选里
+         *     （数据模型 §7：判据必须在判定点上，不在一个异步的定时任务里）。
+         *     `available` 同理只含还没过期的——包括尚未到 `valid_start_at` 的
+         *     （它们确实是「我的可用券」，只是还不能用；客户端按 `valid_start_at` 提示）。
+         */
         get: {
             parameters: {
                 query?: {
@@ -8142,6 +8823,7 @@ export interface paths {
                         };
                     };
                 };
+                default: components["responses"]["Problem"];
             };
         };
         put?: never;
@@ -8163,7 +8845,16 @@ export interface paths {
         put?: never;
         /**
          * 查询本单可用券
-         * @description 传入拟购商品，返回可用券及各自能减多少，按优惠额降序。
+         * @description 传入拟购商品与**履约门店**，返回这个买家手里本单可用的券及各自能减多少，
+         *     按优惠额降序（相同时按过期时间升序——快过期的先用）。
+         *
+         *     `store_id` 必填，理由与 `POST /orders` 一样：券按**那家门店的生效价**算
+         *     （三层定价），而且券可能限定大区或门店——同一车商品在 A 店可用的券，
+         *     在 B 店可能不可用。
+         *
+         *     计算与 `POST /orders/preview`、`POST /orders` 是**同一份实现**，
+         *     这里说能减多少，下单就减多少（数据模型 §7「券怎么算」）。
+         *     不可用的券（门槛不够、范围不含、已过期、已锁定）不出现在结果里。
          */
         post: {
             parameters: {
@@ -8174,9 +8865,7 @@ export interface paths {
             };
             requestBody: {
                 content: {
-                    "application/json": {
-                        items: components["schemas"]["OrderItemInput"][];
-                    };
+                    "application/json": components["schemas"]["CouponApplicableRequest"];
                 };
             };
             responses: {
@@ -8186,15 +8875,171 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": (components["schemas"]["UserCoupon"] & {
-                            /**
-                             * Format: int64
-                             * @description 该券用于本单可减金额
-                             */
-                            discount_cents?: number;
-                        })[];
+                        "application/json": components["schemas"]["ApplicableCoupon"][];
                     };
                 };
+                /**
+                 * @description 与 `POST /orders/preview` 的 422 一致：这家店不卖其中某几件
+                 *     （`https://keel.dev/problems/sku-not-sold-in-store`），或 `store_id` / `sku_id`
+                 *     有一个服务端不认识（`https://keel.dev/problems/invalid-request`）。
+                 */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/coupon-templates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 领券中心：当前可领的券
+         * @description 列出本店**启用、设为可领、没领完、没结束**的券模板，按创建时间倒序。
+         *     每一项带上**当前买家**已领了几张（`claimed_count`）与还能不能领（`can_claim`），
+         *     所以要登录。
+         *
+         *     领完（`remaining = 0`）的模板不出现在这里；`remaining` 为 `null` 表示不限量。
+         *     范围（`scopes`）原样给出，客户端据此显示「限华北大区」「新店专享」之类——
+         *     「在哪家店能用」由买家自己判断，这条接口不按门店过滤。
+         */
+        get: {
+            parameters: {
+                query?: {
+                    page?: components["parameters"]["Page"];
+                    page_size?: components["parameters"]["PageSize"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PageMeta"] & {
+                            items: components["schemas"]["ClaimableCouponTemplate"][];
+                        };
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/coupon-templates/{template_id}/claim": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 领券
+         * @description 领一张。受三条约束，**全部在数据库层原子地挡住**（数据模型 §7）：
+         *     总量（`total_count`）、每人限领（`per_user_limit`，数这个买家持有该模板的全部券，
+         *     含商家定向发给他的）、以及绝对时间模式下的结束时间。
+         *
+         *     几十个人同时抢最后一张时恰好一个人领到，其余拿到 409 `coupon-sold-out`。
+         *
+         *     要 `Idempotency-Key`：`per_user_limit` 大于 1 时，一次网络重试会实实在在地多领一张。
+         *     重放命中时返回首次领到的那一张，并带 `Idempotency-Replayed: true`。
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /**
+                     * @description 客户端生成的 UUID。幂等作用域为 `(接口 scope, user_id, key)`，
+                     *     有效期 24h，过期后同一 key 可复用（见数据模型文档 §11）。
+                     *
+                     *     · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
+                     *       并带 `Idempotency-Replayed: true` 响应头
+                     *     · **同 key 正在处理中**：`409` + `Retry-After`，
+                     *       type=https://keel.dev/problems/idempotency-key-in-flight，
+                     *       客户端应退避重试，不要当成业务失败
+                     *     · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
+                     *       type=https://keel.dev/problems/idempotency-key-reused。
+                     *       宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
+                     *       那会让用户以为下单成功了而实际什么都没发生
+                     *     · 首次执行失败（存档为失败态）时同样回放该失败响应；
+                     *       确需重试的场景请换一个新 key
+                     */
+                    "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    /** @description `coupon_templates.id`。查不到（含属于别家店）即 404。 */
+                    template_id: components["parameters"]["CouponTemplateId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description 领到了 */
+                201: {
+                    headers: {
+                        "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["UserCoupon"];
+                    };
+                };
+                /**
+                 * @description 模板不存在、不属于本店、已停用、或没有设为可领。
+                 *     四种合用一个 404：领券中心里本来就看不到它们。
+                 */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /**
+                 * @description 按 `type` 区分：
+                 *     · 领完了 —— `https://keel.dev/problems/coupon-sold-out`
+                 *     · 这个买家已达每人限领 —— `https://keel.dev/problems/coupon-claim-limit-reached`
+                 *     · 活动已结束（绝对时间模式下已过 `valid_end_at`）—— `https://keel.dev/problems/coupon-claim-ended`
+                 *     · 同一 Idempotency-Key 正在处理中 —— `https://keel.dev/problems/idempotency-key-in-flight`
+                 */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                422: components["responses"]["IdempotencyKeyReused"];
+                default: components["responses"]["Problem"];
             };
         };
         delete?: never;
@@ -8847,7 +9692,12 @@ export interface components {
             address_id: number;
             /**
              * Format: int64
-             * @description 第一期仅支持单张券
+             * @description 第一期仅支持单张券。
+             *
+             *     券按**这一单的门店**的生效价算，门槛比的是券适用范围内商品的小计。
+             *     不可用（不是你的、已锁定 / 已使用 / 已过期、门槛不够、范围不含这些商品或这家店）
+             *     时试算与下单都返回 409 `coupon-not-applicable`，**不会静默按原价成交**。
+             *     下单成功后券进入「锁定」，付款成功变成「已使用」，取消或超时关单回到「未使用」。
              */
             user_coupon_id?: number;
             remark?: string;
@@ -8905,7 +9755,16 @@ export interface components {
                 /** @description 该行分摊到的优惠。余数归金额最大行，保证求和恒等。 */
                 discount_cents?: components["schemas"]["Money"];
             }[];
-            applicable_coupons?: components["schemas"]["UserCoupon"][];
+            /**
+             * Format: int64
+             * @description 本次试算用上的券（回显请求里的 `user_coupon_id`）。没带券时不出现。
+             */
+            user_coupon_id?: number;
+            /**
+             * @description 这个买家手里本单可用的全部券，按优惠额降序——与 `POST /coupons/applicable`
+             *     同一份结果。客户端据此渲染「选券」，不必再单独请求一次。
+             */
+            applicable_coupons?: components["schemas"]["ApplicableCoupon"][];
         };
         Order: {
             order_no: string;
@@ -8934,6 +9793,11 @@ export interface components {
             goods_amount_cents?: components["schemas"]["Money"];
             freight_cents?: components["schemas"]["Money"];
             discount_cents?: components["schemas"]["Money"];
+            /**
+             * Format: int64
+             * @description 这一单用的券。没用券时不出现。
+             */
+            user_coupon_id?: number;
             payable_cents: components["schemas"]["Money"];
             paid_cents?: components["schemas"]["Money"];
             refunded_cents?: components["schemas"]["Money"];
@@ -9466,34 +10330,244 @@ export interface components {
             region_code?: string;
             postal_code?: string;
         };
+        /**
+         * @description 1 满减 · 2 折扣 · 3 立减 · 4 包邮。
+         *
+         *     **4 包邮本期不可建**：本系统没有运费，包邮券永远减 0（数据模型 §7）。
+         *     枚举里留着它，是为了运费落地那一轮不必改契约的枚举。
+         * @enum {integer}
+         */
+        CouponType: 1 | 2 | 3 | 4;
+        /**
+         * @description 一条适用范围规则（数据模型 §7 `coupon_scopes`）。1–4 决定哪几行商品参与计算，
+         *     5–6 决定在哪家店下单可用；`include = false` 是排除，排除优先。
+         */
+        CouponScope: {
+            /**
+             * @description 1全场 2分类（含子孙） 3商品 4品牌 5大区 6门店
+             * @enum {integer}
+             */
+            scope_type: 1 | 2 | 3 | 4 | 5 | 6;
+            /**
+             * Format: int64
+             * @description 全场为 null；其余按 `scope_type` 指向分类 / 商品 / 品牌 / 大区 / 门店的 id
+             */
+            target_id: number | null;
+            include: boolean;
+            /**
+             * @description 目标的展示名（分类名、商品标题、大区名、门店名），只读。品牌没有目录，不返回；
+             *     目标已软删时也不返回——客户端据此显示「已删除」。
+             */
+            target_name?: string;
+        };
+        CouponScopeInput: {
+            /** @enum {integer} */
+            scope_type: 1 | 2 | 3 | 4 | 5 | 6;
+            /** Format: int64 */
+            target_id?: number | null;
+            /** @default true */
+            include: boolean;
+        };
+        CouponScopesSetRequest: {
+            scopes: components["schemas"]["CouponScopeInput"][];
+        };
         UserCoupon: {
             /** Format: int64 */
             id: number;
             coupon_code: string;
-            name?: string;
-            /**
-             * @description 1满减 2折扣 3立减 4包邮
-             * @enum {integer}
-             */
-            coupon_type: 1 | 2 | 3 | 4;
-            threshold_cents?: components["schemas"]["Money"];
-            discount_cents?: components["schemas"]["Money"];
+            /** Format: int64 */
+            template_id: number;
+            name: string;
+            coupon_type: components["schemas"]["CouponType"];
+            threshold_cents: components["schemas"]["Money"];
+            discount_cents: components["schemas"]["Money"];
             /** @description 千分比，850 = 8.5 折 */
-            discount_rate?: number;
-            max_discount_cents?: components["schemas"]["Money"];
+            discount_rate: number;
+            max_discount_cents: components["schemas"]["Money"];
             /**
              * @description 1 未使用 · 2 锁定 · 3 已使用 · 4 已过期
              *
              *     **锁定**指下单流程中已占用但订单尚未支付。取消订单或超时关单后
-             *     由 SAGA 补偿回到「未使用」。这个态必须能被前端查到——否则用户
-             *     下单未支付时，券在「可用」和「已使用」里都找不到，像凭空消失。
+             *     回到「未使用」；支付成功后变成「已使用」。这个态必须能被前端查到——
+             *     否则用户下单未支付时，券在「可用」和「已使用」里都找不到，像凭空消失。
+             *
+             *     **已过期是现算的**：未使用且已过 `valid_end_at` 即返回 4。
              * @enum {integer}
              */
             status: 1 | 2 | 3 | 4;
+            /**
+             * @description 1 领券中心领取 · 2 商家定向发放
+             * @enum {integer}
+             */
+            source: 1 | 2;
+            /** Format: date-time */
+            valid_start_at: string;
+            /** Format: date-time */
+            valid_end_at: string;
+            /** Format: date-time */
+            used_at?: string;
+            /** @description 这张券的适用范围（来自模板）。空数组即全场、全店。 */
+            scopes: components["schemas"]["CouponScope"][];
+        };
+        ApplicableCoupon: components["schemas"]["UserCoupon"] & {
+            /**
+             * @description 这张券用在本单上能减多少。与带上这张券调 `POST /orders/preview` 得到的
+             *     `discount_cents` 逐分相等（同一份实现）。
+             *
+             *     不叫 `discount_cents`：`UserCoupon.discount_cents` 已经是「券面减免额」
+             *     （满 100 减 20 的那个 20），同名字段在 allOf 里会互相覆盖。
+             */
+            applicable_discount_cents: components["schemas"]["Money"];
+        };
+        CouponApplicableRequest: {
+            items: components["schemas"]["OrderItemInput"][];
+            /**
+             * Format: int64
+             * @description 履约门店，必填。理由同 `OrderCreateRequest.store_id`。
+             */
+            store_id: number;
+        };
+        ClaimableCouponTemplate: {
+            /** Format: int64 */
+            id: number;
+            name: string;
+            coupon_type: components["schemas"]["CouponType"];
+            threshold_cents: components["schemas"]["Money"];
+            discount_cents: components["schemas"]["Money"];
+            /** @description 千分比 */
+            discount_rate: number;
+            max_discount_cents: components["schemas"]["Money"];
+            /**
+             * @description 1 绝对时间 · 2 领取后 N 天
+             * @enum {integer}
+             */
+            valid_mode: 1 | 2;
             /** Format: date-time */
             valid_start_at?: string;
             /** Format: date-time */
             valid_end_at?: string;
+            valid_days: number;
+            /** @description 还剩多少张；`null` 表示不限量 */
+            remaining: number | null;
+            per_user_limit: number;
+            /** @description 当前买家已持有这个模板的券数（含商家定向发放的） */
+            claimed_count: number;
+            /** @description 当前买家现在能不能领（没到每人限领） */
+            can_claim: boolean;
+            scopes: components["schemas"]["CouponScope"][];
+        };
+        /** @description 发放与核销统计。`issued = claimed + granted = unused + locked + used + expired`。 */
+        CouponTemplateStats: {
+            /** @description 已发出（与 `issued_count` 相等） */
+            issued: number;
+            /** @description 其中买家在领券中心领的 */
+            claimed: number;
+            /** @description 其中商家定向发放的 */
+            granted: number;
+            /** @description 未使用且未过期 */
+            unused: number;
+            /** @description 被待支付订单占用中 */
+            locked: number;
+            /** @description 已核销（订单已支付） */
+            used: number;
+            /** @description 未使用且已过期 */
+            expired: number;
+        };
+        AdminCouponTemplate: {
+            /** Format: int64 */
+            id: number;
+            name: string;
+            coupon_type: components["schemas"]["CouponType"];
+            threshold_cents: components["schemas"]["Money"];
+            discount_cents: components["schemas"]["Money"];
+            /** @description 千分比 */
+            discount_rate: number;
+            max_discount_cents: components["schemas"]["Money"];
+            /** @enum {integer} */
+            valid_mode: 1 | 2;
+            /** Format: date-time */
+            valid_start_at?: string;
+            /** Format: date-time */
+            valid_end_at?: string;
+            valid_days: number;
+            /** @description 总量，0 = 不限 */
+            total_count: number;
+            issued_count: number;
+            per_user_limit: number;
+            claimable: boolean;
+            /**
+             * @description 1 启用 · 0 停用（停止领取与发放，不回收已发出的券）
+             * @enum {integer}
+             */
+            status: 0 | 1;
+            /** @description 已发出过券，券面字段与范围不能再改 */
+            locked: boolean;
+            scopes: components["schemas"]["CouponScope"][];
+            stats: components["schemas"]["CouponTemplateStats"];
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        CouponTemplateCreateRequest: {
+            name: string;
+            coupon_type: components["schemas"]["CouponType"];
+            threshold_cents?: components["schemas"]["Money"];
+            discount_cents?: components["schemas"]["Money"];
+            discount_rate?: number;
+            max_discount_cents?: components["schemas"]["Money"];
+            /** @enum {integer} */
+            valid_mode: 1 | 2;
+            /** Format: date-time */
+            valid_start_at?: string;
+            /** Format: date-time */
+            valid_end_at?: string;
+            valid_days?: number;
+            /** @description 0 = 不限 */
+            total_count?: number;
+            /** @default 1 */
+            per_user_limit: number;
+            /** @default false */
+            claimable: boolean;
+        };
+        /** @description 只改传了的字段。有效期整组替换：改 `valid_mode` 时要把那一模式的字段一起给。 */
+        CouponTemplatePatchRequest: {
+            name?: string;
+            coupon_type?: components["schemas"]["CouponType"];
+            threshold_cents?: components["schemas"]["Money"];
+            discount_cents?: components["schemas"]["Money"];
+            discount_rate?: number;
+            max_discount_cents?: components["schemas"]["Money"];
+            /** @enum {integer} */
+            valid_mode?: 1 | 2;
+            /** Format: date-time */
+            valid_start_at?: string;
+            /** Format: date-time */
+            valid_end_at?: string;
+            valid_days?: number;
+            total_count?: number;
+            per_user_limit?: number;
+            claimable?: boolean;
+            /** @enum {integer} */
+            status?: 0 | 1;
+        };
+        CouponGrantRequest: {
+            phones: string[];
+        };
+        CouponGrantResult: {
+            /** Format: int64 */
+            template_id: number;
+            /** @description 本次发出的张数 */
+            granted: number;
+            coupons: components["schemas"]["CouponGrantItem"][];
+        };
+        CouponGrantItem: {
+            phone: string;
+            /** Format: int64 */
+            user_id: number;
+            /** Format: int64 */
+            user_coupon_id: number;
+            coupon_code: string;
         };
         /**
          * @description GeoJSON Polygon，SRID 固定 4326。落库成 `GEOGRAPHY(POLYGON, 4326)`。
@@ -9936,6 +11010,8 @@ export interface components {
         SkuId: number;
         /** @description `stores.id`。同 ProductId，查不到即 404（含「不属于当前租户」与「已软删」）。 */
         StoreId: number;
+        /** @description `coupon_templates.id`。查不到（含属于别家店）即 404。 */
+        CouponTemplateId: number;
         /** @description `regions.id`。同上，查不到即 404。 */
         RegionId: number;
         /** @description `categories.id`。同 ProductId，查不到即 404。 */

@@ -289,6 +289,15 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	v1.POST("/orders/:order_no/payments", auth.Bearer(signer, nil),
 		handler.NewPaymentHandler(payments).Create)
 
+	// 优惠券的买家侧四条（契约 Coupon tag）。四条都要令牌：我的券、本单可用券
+	// 读的是「我的」东西；领券中心要回「我已经领了几张」；领券写的是「我的」券包。
+	// 券的计算与试算、下单共用同一份实现（service/coupon_calc.go）。
+	cpn := handler.NewCouponHandler(service.NewCouponService(repo))
+	v1.GET("/coupons", auth.Bearer(signer, nil), cpn.ListMine)
+	v1.POST("/coupons/applicable", auth.Bearer(signer, nil), cpn.Applicable)
+	v1.GET("/coupon-templates", auth.Bearer(signer, nil), cpn.ListClaimable)
+	v1.POST("/coupon-templates/:template_id/claim", auth.Bearer(signer, nil), cpn.Claim)
+
 	// 支付渠道异步回调。契约里它是 security: []（调用方是渠道，它没有令牌），
 	// 所以**没有** auth.Bearer —— 但它仍然在 v1 组里，也就仍然带着上面那道
 	// res.Middleware()。
@@ -456,6 +465,16 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	v1.DELETE("/admin/stores/:store_id/skus/:sku_id/price", staffAuth, st.ClearStorePrice)
 	v1.GET("/admin/stores/:store_id/inventories", staffAuth, st.ListStoreInventories)
 	v1.PUT("/admin/stores/:store_id/skus/:sku_id/inventory", staffAuth, st.SetStoreInventory)
+
+	// 券管理（契约 /admin/coupon-templates 那一段）。角色检查在业务层：
+	// 本期只放商家级的管理员与操作员（role 1、2），见 service/admin_coupon.go 的文件头。
+	cpa := handler.NewAdminCouponHandler(service.NewAdminCouponService(repo))
+	v1.GET("/admin/coupon-templates", staffAuth, cpa.List)
+	v1.POST("/admin/coupon-templates", staffAuth, cpa.Create)
+	v1.GET("/admin/coupon-templates/:template_id", staffAuth, cpa.Detail)
+	v1.PATCH("/admin/coupon-templates/:template_id", staffAuth, cpa.Update)
+	v1.PUT("/admin/coupon-templates/:template_id/scopes", staffAuth, cpa.SetScopes)
+	v1.POST("/admin/coupon-templates/:template_id/grants", staffAuth, cpa.Grant)
 	return r
 }
 

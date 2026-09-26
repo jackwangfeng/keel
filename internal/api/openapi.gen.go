@@ -78,6 +78,42 @@ func (e AdminCategoryStatus) Valid() bool {
 	}
 }
 
+// Defines values for AdminCouponTemplateStatus.
+const (
+	AdminCouponTemplateStatusN0 AdminCouponTemplateStatus = 0
+	AdminCouponTemplateStatusN1 AdminCouponTemplateStatus = 1
+)
+
+// Valid indicates whether the value is a known member of the AdminCouponTemplateStatus enum.
+func (e AdminCouponTemplateStatus) Valid() bool {
+	switch e {
+	case AdminCouponTemplateStatusN0:
+		return true
+	case AdminCouponTemplateStatusN1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AdminCouponTemplateValidMode.
+const (
+	AdminCouponTemplateValidModeN1 AdminCouponTemplateValidMode = 1
+	AdminCouponTemplateValidModeN2 AdminCouponTemplateValidMode = 2
+)
+
+// Valid indicates whether the value is a known member of the AdminCouponTemplateValidMode enum.
+func (e AdminCouponTemplateValidMode) Valid() bool {
+	switch e {
+	case AdminCouponTemplateValidModeN1:
+		return true
+	case AdminCouponTemplateValidModeN2:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AdminProductStatus.
 const (
 	AdminProductStatusN0 AdminProductStatus = 0
@@ -174,6 +210,48 @@ func (e AdminStoreStatus) Valid() bool {
 	}
 }
 
+// Defines values for ApplicableCouponSource.
+const (
+	ApplicableCouponSourceN1 ApplicableCouponSource = 1
+	ApplicableCouponSourceN2 ApplicableCouponSource = 2
+)
+
+// Valid indicates whether the value is a known member of the ApplicableCouponSource enum.
+func (e ApplicableCouponSource) Valid() bool {
+	switch e {
+	case ApplicableCouponSourceN1:
+		return true
+	case ApplicableCouponSourceN2:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ApplicableCouponStatus.
+const (
+	ApplicableCouponStatusN1 ApplicableCouponStatus = 1
+	ApplicableCouponStatusN2 ApplicableCouponStatus = 2
+	ApplicableCouponStatusN3 ApplicableCouponStatus = 3
+	ApplicableCouponStatusN4 ApplicableCouponStatus = 4
+)
+
+// Valid indicates whether the value is a known member of the ApplicableCouponStatus enum.
+func (e ApplicableCouponStatus) Valid() bool {
+	switch e {
+	case ApplicableCouponStatusN1:
+		return true
+	case ApplicableCouponStatusN2:
+		return true
+	case ApplicableCouponStatusN3:
+		return true
+	case ApplicableCouponStatusN4:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for CategoryUpdateRequestStatus.
 const (
 	CategoryUpdateRequestStatusN0 CategoryUpdateRequestStatus = 0
@@ -210,6 +288,162 @@ func (e ChatReplyActionType) Valid() bool {
 	case NavigateOrder:
 		return true
 	case NavigateRefund:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ClaimableCouponTemplateValidMode.
+const (
+	ClaimableCouponTemplateValidModeN1 ClaimableCouponTemplateValidMode = 1
+	ClaimableCouponTemplateValidModeN2 ClaimableCouponTemplateValidMode = 2
+)
+
+// Valid indicates whether the value is a known member of the ClaimableCouponTemplateValidMode enum.
+func (e ClaimableCouponTemplateValidMode) Valid() bool {
+	switch e {
+	case ClaimableCouponTemplateValidModeN1:
+		return true
+	case ClaimableCouponTemplateValidModeN2:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CouponScopeScopeType.
+const (
+	CouponScopeScopeTypeN1 CouponScopeScopeType = 1
+	CouponScopeScopeTypeN2 CouponScopeScopeType = 2
+	CouponScopeScopeTypeN3 CouponScopeScopeType = 3
+	CouponScopeScopeTypeN4 CouponScopeScopeType = 4
+	CouponScopeScopeTypeN5 CouponScopeScopeType = 5
+	CouponScopeScopeTypeN6 CouponScopeScopeType = 6
+)
+
+// Valid indicates whether the value is a known member of the CouponScopeScopeType enum.
+func (e CouponScopeScopeType) Valid() bool {
+	switch e {
+	case CouponScopeScopeTypeN1:
+		return true
+	case CouponScopeScopeTypeN2:
+		return true
+	case CouponScopeScopeTypeN3:
+		return true
+	case CouponScopeScopeTypeN4:
+		return true
+	case CouponScopeScopeTypeN5:
+		return true
+	case CouponScopeScopeTypeN6:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CouponScopeInputScopeType.
+const (
+	CouponScopeInputScopeTypeN1 CouponScopeInputScopeType = 1
+	CouponScopeInputScopeTypeN2 CouponScopeInputScopeType = 2
+	CouponScopeInputScopeTypeN3 CouponScopeInputScopeType = 3
+	CouponScopeInputScopeTypeN4 CouponScopeInputScopeType = 4
+	CouponScopeInputScopeTypeN5 CouponScopeInputScopeType = 5
+	CouponScopeInputScopeTypeN6 CouponScopeInputScopeType = 6
+)
+
+// Valid indicates whether the value is a known member of the CouponScopeInputScopeType enum.
+func (e CouponScopeInputScopeType) Valid() bool {
+	switch e {
+	case CouponScopeInputScopeTypeN1:
+		return true
+	case CouponScopeInputScopeTypeN2:
+		return true
+	case CouponScopeInputScopeTypeN3:
+		return true
+	case CouponScopeInputScopeTypeN4:
+		return true
+	case CouponScopeInputScopeTypeN5:
+		return true
+	case CouponScopeInputScopeTypeN6:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CouponTemplateCreateRequestValidMode.
+const (
+	CouponTemplateCreateRequestValidModeN1 CouponTemplateCreateRequestValidMode = 1
+	CouponTemplateCreateRequestValidModeN2 CouponTemplateCreateRequestValidMode = 2
+)
+
+// Valid indicates whether the value is a known member of the CouponTemplateCreateRequestValidMode enum.
+func (e CouponTemplateCreateRequestValidMode) Valid() bool {
+	switch e {
+	case CouponTemplateCreateRequestValidModeN1:
+		return true
+	case CouponTemplateCreateRequestValidModeN2:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CouponTemplatePatchRequestStatus.
+const (
+	CouponTemplatePatchRequestStatusN0 CouponTemplatePatchRequestStatus = 0
+	CouponTemplatePatchRequestStatusN1 CouponTemplatePatchRequestStatus = 1
+)
+
+// Valid indicates whether the value is a known member of the CouponTemplatePatchRequestStatus enum.
+func (e CouponTemplatePatchRequestStatus) Valid() bool {
+	switch e {
+	case CouponTemplatePatchRequestStatusN0:
+		return true
+	case CouponTemplatePatchRequestStatusN1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CouponTemplatePatchRequestValidMode.
+const (
+	CouponTemplatePatchRequestValidModeN1 CouponTemplatePatchRequestValidMode = 1
+	CouponTemplatePatchRequestValidModeN2 CouponTemplatePatchRequestValidMode = 2
+)
+
+// Valid indicates whether the value is a known member of the CouponTemplatePatchRequestValidMode enum.
+func (e CouponTemplatePatchRequestValidMode) Valid() bool {
+	switch e {
+	case CouponTemplatePatchRequestValidModeN1:
+		return true
+	case CouponTemplatePatchRequestValidModeN2:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CouponType.
+const (
+	CouponTypeN1 CouponType = 1
+	CouponTypeN2 CouponType = 2
+	CouponTypeN3 CouponType = 3
+	CouponTypeN4 CouponType = 4
+)
+
+// Valid indicates whether the value is a known member of the CouponType enum.
+func (e CouponType) Valid() bool {
+	switch e {
+	case CouponTypeN1:
+		return true
+	case CouponTypeN2:
+		return true
+	case CouponTypeN3:
+		return true
+	case CouponTypeN4:
 		return true
 	default:
 		return false
@@ -873,24 +1107,18 @@ func (e UserGender) Valid() bool {
 	}
 }
 
-// Defines values for UserCouponCouponType.
+// Defines values for UserCouponSource.
 const (
-	UserCouponCouponTypeN1 UserCouponCouponType = 1
-	UserCouponCouponTypeN2 UserCouponCouponType = 2
-	UserCouponCouponTypeN3 UserCouponCouponType = 3
-	UserCouponCouponTypeN4 UserCouponCouponType = 4
+	UserCouponSourceN1 UserCouponSource = 1
+	UserCouponSourceN2 UserCouponSource = 2
 )
 
-// Valid indicates whether the value is a known member of the UserCouponCouponType enum.
-func (e UserCouponCouponType) Valid() bool {
+// Valid indicates whether the value is a known member of the UserCouponSource enum.
+func (e UserCouponSource) Valid() bool {
 	switch e {
-	case UserCouponCouponTypeN1:
+	case UserCouponSourceN1:
 		return true
-	case UserCouponCouponTypeN2:
-		return true
-	case UserCouponCouponTypeN3:
-		return true
-	case UserCouponCouponTypeN4:
+	case UserCouponSourceN2:
 		return true
 	default:
 		return false
@@ -915,6 +1143,24 @@ func (e UserCouponStatus) Valid() bool {
 	case UserCouponStatusN3:
 		return true
 	case UserCouponStatusN4:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GetAdminCouponTemplatesParamsStatus.
+const (
+	GetAdminCouponTemplatesParamsStatusN0 GetAdminCouponTemplatesParamsStatus = 0
+	GetAdminCouponTemplatesParamsStatusN1 GetAdminCouponTemplatesParamsStatus = 1
+)
+
+// Valid indicates whether the value is a known member of the GetAdminCouponTemplatesParamsStatus enum.
+func (e GetAdminCouponTemplatesParamsStatus) Valid() bool {
+	switch e {
+	case GetAdminCouponTemplatesParamsStatusN0:
+		return true
+	case GetAdminCouponTemplatesParamsStatusN1:
 		return true
 	default:
 		return false
@@ -1014,54 +1260,6 @@ func (e GetCouponsParamsStatus) Valid() bool {
 	case Locked:
 		return true
 	case Used:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for PostCouponsApplicable200JSONResponseBodyCouponType.
-const (
-	PostCouponsApplicable200JSONResponseBodyCouponTypeN1 PostCouponsApplicable200JSONResponseBodyCouponType = 1
-	PostCouponsApplicable200JSONResponseBodyCouponTypeN2 PostCouponsApplicable200JSONResponseBodyCouponType = 2
-	PostCouponsApplicable200JSONResponseBodyCouponTypeN3 PostCouponsApplicable200JSONResponseBodyCouponType = 3
-	PostCouponsApplicable200JSONResponseBodyCouponTypeN4 PostCouponsApplicable200JSONResponseBodyCouponType = 4
-)
-
-// Valid indicates whether the value is a known member of the PostCouponsApplicable200JSONResponseBodyCouponType enum.
-func (e PostCouponsApplicable200JSONResponseBodyCouponType) Valid() bool {
-	switch e {
-	case PostCouponsApplicable200JSONResponseBodyCouponTypeN1:
-		return true
-	case PostCouponsApplicable200JSONResponseBodyCouponTypeN2:
-		return true
-	case PostCouponsApplicable200JSONResponseBodyCouponTypeN3:
-		return true
-	case PostCouponsApplicable200JSONResponseBodyCouponTypeN4:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for PostCouponsApplicable200JSONResponseBodyStatus.
-const (
-	PostCouponsApplicable200JSONResponseBodyStatusN1 PostCouponsApplicable200JSONResponseBodyStatus = 1
-	PostCouponsApplicable200JSONResponseBodyStatusN2 PostCouponsApplicable200JSONResponseBodyStatus = 2
-	PostCouponsApplicable200JSONResponseBodyStatusN3 PostCouponsApplicable200JSONResponseBodyStatus = 3
-	PostCouponsApplicable200JSONResponseBodyStatusN4 PostCouponsApplicable200JSONResponseBodyStatus = 4
-)
-
-// Valid indicates whether the value is a known member of the PostCouponsApplicable200JSONResponseBodyStatus enum.
-func (e PostCouponsApplicable200JSONResponseBodyStatus) Valid() bool {
-	switch e {
-	case PostCouponsApplicable200JSONResponseBodyStatusN1:
-		return true
-	case PostCouponsApplicable200JSONResponseBodyStatusN2:
-		return true
-	case PostCouponsApplicable200JSONResponseBodyStatusN3:
-		return true
-	case PostCouponsApplicable200JSONResponseBodyStatusN4:
 		return true
 	default:
 		return false
@@ -1263,6 +1461,58 @@ type AdminCategory struct {
 // AdminCategoryStatus `categories.status`：0 停用 / 1 启用。
 // 停用只让它从前台目录树里消失，**不影响挂在它下面的商品的在架状态**。
 type AdminCategoryStatus int
+
+// AdminCouponTemplate defines model for AdminCouponTemplate.
+type AdminCouponTemplate struct {
+	Claimable bool `json:"claimable"`
+
+	// CouponType 1 满减 · 2 折扣 · 3 立减 · 4 包邮。
+	//
+	// **4 包邮本期不可建**：本系统没有运费，包邮券永远减 0（数据模型 §7）。
+	// 枚举里留着它，是为了运费落地那一轮不必改契约的枚举。
+	CouponType CouponType `json:"coupon_type"`
+	CreatedAt  time.Time  `json:"created_at"`
+
+	// DiscountCents 金额，单位「分」。禁止使用浮点。
+	DiscountCents Money `json:"discount_cents"`
+
+	// DiscountRate 千分比
+	DiscountRate int   `json:"discount_rate"`
+	Id           int64 `json:"id"`
+	IssuedCount  int   `json:"issued_count"`
+
+	// Locked 已发出过券，券面字段与范围不能再改
+	Locked bool `json:"locked"`
+
+	// MaxDiscountCents 金额，单位「分」。禁止使用浮点。
+	MaxDiscountCents Money         `json:"max_discount_cents"`
+	Name             string        `json:"name"`
+	PerUserLimit     int           `json:"per_user_limit"`
+	Scopes           []CouponScope `json:"scopes"`
+
+	// Stats 发放与核销统计。`issued = claimed + granted = unused + locked + used + expired`。
+	Stats CouponTemplateStats `json:"stats"`
+
+	// Status 1 启用 · 0 停用（停止领取与发放，不回收已发出的券）
+	Status AdminCouponTemplateStatus `json:"status"`
+
+	// ThresholdCents 金额，单位「分」。禁止使用浮点。
+	ThresholdCents Money `json:"threshold_cents"`
+
+	// TotalCount 总量，0 = 不限
+	TotalCount   int                          `json:"total_count"`
+	UpdatedAt    time.Time                    `json:"updated_at"`
+	ValidDays    int                          `json:"valid_days"`
+	ValidEndAt   *time.Time                   `json:"valid_end_at,omitempty"`
+	ValidMode    AdminCouponTemplateValidMode `json:"valid_mode"`
+	ValidStartAt *time.Time                   `json:"valid_start_at,omitempty"`
+}
+
+// AdminCouponTemplateStatus 1 启用 · 0 停用（停止领取与发放，不回收已发出的券）
+type AdminCouponTemplateStatus int
+
+// AdminCouponTemplateValidMode defines model for AdminCouponTemplate.ValidMode.
+type AdminCouponTemplateValidMode int
 
 // AdminInventory defines model for AdminInventory.
 type AdminInventory struct {
@@ -1501,6 +1751,68 @@ type AdminStoreList struct {
 	Total      int          `json:"total"`
 }
 
+// ApplicableCoupon defines model for ApplicableCoupon.
+type ApplicableCoupon struct {
+	// ApplicableDiscountCents 这张券用在本单上能减多少。与带上这张券调 `POST /orders/preview` 得到的
+	// `discount_cents` 逐分相等（同一份实现）。
+	//
+	// 不叫 `discount_cents`：`UserCoupon.discount_cents` 已经是「券面减免额」
+	// （满 100 减 20 的那个 20），同名字段在 allOf 里会互相覆盖。
+	ApplicableDiscountCents Money  `json:"applicable_discount_cents"`
+	CouponCode              string `json:"coupon_code"`
+
+	// CouponType 1 满减 · 2 折扣 · 3 立减 · 4 包邮。
+	//
+	// **4 包邮本期不可建**：本系统没有运费，包邮券永远减 0（数据模型 §7）。
+	// 枚举里留着它，是为了运费落地那一轮不必改契约的枚举。
+	CouponType CouponType `json:"coupon_type"`
+
+	// DiscountCents 金额，单位「分」。禁止使用浮点。
+	DiscountCents Money `json:"discount_cents"`
+
+	// DiscountRate 千分比，850 = 8.5 折
+	DiscountRate int   `json:"discount_rate"`
+	Id           int64 `json:"id"`
+
+	// MaxDiscountCents 金额，单位「分」。禁止使用浮点。
+	MaxDiscountCents Money  `json:"max_discount_cents"`
+	Name             string `json:"name"`
+
+	// Scopes 这张券的适用范围（来自模板）。空数组即全场、全店。
+	Scopes []CouponScope `json:"scopes"`
+
+	// Source 1 领券中心领取 · 2 商家定向发放
+	Source ApplicableCouponSource `json:"source"`
+
+	// Status 1 未使用 · 2 锁定 · 3 已使用 · 4 已过期
+	//
+	// **锁定**指下单流程中已占用但订单尚未支付。取消订单或超时关单后
+	// 回到「未使用」；支付成功后变成「已使用」。这个态必须能被前端查到——
+	// 否则用户下单未支付时，券在「可用」和「已使用」里都找不到，像凭空消失。
+	//
+	// **已过期是现算的**：未使用且已过 `valid_end_at` 即返回 4。
+	Status     ApplicableCouponStatus `json:"status"`
+	TemplateId int64                  `json:"template_id"`
+
+	// ThresholdCents 金额，单位「分」。禁止使用浮点。
+	ThresholdCents Money      `json:"threshold_cents"`
+	UsedAt         *time.Time `json:"used_at,omitempty"`
+	ValidEndAt     time.Time  `json:"valid_end_at"`
+	ValidStartAt   time.Time  `json:"valid_start_at"`
+}
+
+// ApplicableCouponSource 1 领券中心领取 · 2 商家定向发放
+type ApplicableCouponSource int
+
+// ApplicableCouponStatus 1 未使用 · 2 锁定 · 3 已使用 · 4 已过期
+//
+// **锁定**指下单流程中已占用但订单尚未支付。取消订单或超时关单后
+// 回到「未使用」；支付成功后变成「已使用」。这个态必须能被前端查到——
+// 否则用户下单未支付时，券在「可用」和「已使用」里都找不到，像凭空消失。
+//
+// **已过期是现算的**：未使用且已过 `valid_end_at` 即返回 4。
+type ApplicableCouponStatus int
+
 // Cart defines model for Cart.
 type Cart struct {
 	Items []CartItem `json:"items"`
@@ -1596,6 +1908,211 @@ type ChatReply struct {
 
 // ChatReplyActionType defines model for ChatReply.Action.Type.
 type ChatReplyActionType string
+
+// ClaimableCouponTemplate defines model for ClaimableCouponTemplate.
+type ClaimableCouponTemplate struct {
+	// CanClaim 当前买家现在能不能领（没到每人限领）
+	CanClaim bool `json:"can_claim"`
+
+	// ClaimedCount 当前买家已持有这个模板的券数（含商家定向发放的）
+	ClaimedCount int `json:"claimed_count"`
+
+	// CouponType 1 满减 · 2 折扣 · 3 立减 · 4 包邮。
+	//
+	// **4 包邮本期不可建**：本系统没有运费，包邮券永远减 0（数据模型 §7）。
+	// 枚举里留着它，是为了运费落地那一轮不必改契约的枚举。
+	CouponType CouponType `json:"coupon_type"`
+
+	// DiscountCents 金额，单位「分」。禁止使用浮点。
+	DiscountCents Money `json:"discount_cents"`
+
+	// DiscountRate 千分比
+	DiscountRate int   `json:"discount_rate"`
+	Id           int64 `json:"id"`
+
+	// MaxDiscountCents 金额，单位「分」。禁止使用浮点。
+	MaxDiscountCents Money  `json:"max_discount_cents"`
+	Name             string `json:"name"`
+	PerUserLimit     int    `json:"per_user_limit"`
+
+	// Remaining 还剩多少张；`null` 表示不限量
+	Remaining *int          `json:"remaining"`
+	Scopes    []CouponScope `json:"scopes"`
+
+	// ThresholdCents 金额，单位「分」。禁止使用浮点。
+	ThresholdCents Money      `json:"threshold_cents"`
+	ValidDays      int        `json:"valid_days"`
+	ValidEndAt     *time.Time `json:"valid_end_at,omitempty"`
+
+	// ValidMode 1 绝对时间 · 2 领取后 N 天
+	ValidMode    ClaimableCouponTemplateValidMode `json:"valid_mode"`
+	ValidStartAt *time.Time                       `json:"valid_start_at,omitempty"`
+}
+
+// ClaimableCouponTemplateValidMode 1 绝对时间 · 2 领取后 N 天
+type ClaimableCouponTemplateValidMode int
+
+// CouponApplicableRequest defines model for CouponApplicableRequest.
+type CouponApplicableRequest struct {
+	Items []OrderItemInput `json:"items"`
+
+	// StoreId 履约门店，必填。理由同 `OrderCreateRequest.store_id`。
+	StoreId int64 `json:"store_id"`
+}
+
+// CouponGrantItem defines model for CouponGrantItem.
+type CouponGrantItem struct {
+	CouponCode   string `json:"coupon_code"`
+	Phone        string `json:"phone"`
+	UserCouponId int64  `json:"user_coupon_id"`
+	UserId       int64  `json:"user_id"`
+}
+
+// CouponGrantRequest defines model for CouponGrantRequest.
+type CouponGrantRequest struct {
+	Phones []string `json:"phones"`
+}
+
+// CouponGrantResult defines model for CouponGrantResult.
+type CouponGrantResult struct {
+	Coupons []CouponGrantItem `json:"coupons"`
+
+	// Granted 本次发出的张数
+	Granted    int   `json:"granted"`
+	TemplateId int64 `json:"template_id"`
+}
+
+// CouponScope 一条适用范围规则（数据模型 §7 `coupon_scopes`）。1–4 决定哪几行商品参与计算，
+// 5–6 决定在哪家店下单可用；`include = false` 是排除，排除优先。
+type CouponScope struct {
+	Include bool `json:"include"`
+
+	// ScopeType 1全场 2分类（含子孙） 3商品 4品牌 5大区 6门店
+	ScopeType CouponScopeScopeType `json:"scope_type"`
+
+	// TargetId 全场为 null；其余按 `scope_type` 指向分类 / 商品 / 品牌 / 大区 / 门店的 id
+	TargetId *int64 `json:"target_id"`
+
+	// TargetName 目标的展示名（分类名、商品标题、大区名、门店名），只读。品牌没有目录，不返回；
+	// 目标已软删时也不返回——客户端据此显示「已删除」。
+	TargetName *string `json:"target_name,omitempty"`
+}
+
+// CouponScopeScopeType 1全场 2分类（含子孙） 3商品 4品牌 5大区 6门店
+type CouponScopeScopeType int
+
+// CouponScopeInput defines model for CouponScopeInput.
+type CouponScopeInput struct {
+	Include   *bool                     `json:"include,omitempty"`
+	ScopeType CouponScopeInputScopeType `json:"scope_type"`
+	TargetId  *int64                    `json:"target_id,omitempty"`
+}
+
+// CouponScopeInputScopeType defines model for CouponScopeInput.ScopeType.
+type CouponScopeInputScopeType int
+
+// CouponScopesSetRequest defines model for CouponScopesSetRequest.
+type CouponScopesSetRequest struct {
+	Scopes []CouponScopeInput `json:"scopes"`
+}
+
+// CouponTemplateCreateRequest defines model for CouponTemplateCreateRequest.
+type CouponTemplateCreateRequest struct {
+	Claimable *bool `json:"claimable,omitempty"`
+
+	// CouponType 1 满减 · 2 折扣 · 3 立减 · 4 包邮。
+	//
+	// **4 包邮本期不可建**：本系统没有运费，包邮券永远减 0（数据模型 §7）。
+	// 枚举里留着它，是为了运费落地那一轮不必改契约的枚举。
+	CouponType CouponType `json:"coupon_type"`
+
+	// DiscountCents 金额，单位「分」。禁止使用浮点。
+	DiscountCents *Money `json:"discount_cents,omitempty"`
+	DiscountRate  *int   `json:"discount_rate,omitempty"`
+
+	// MaxDiscountCents 金额，单位「分」。禁止使用浮点。
+	MaxDiscountCents *Money `json:"max_discount_cents,omitempty"`
+	Name             string `json:"name"`
+	PerUserLimit     *int   `json:"per_user_limit,omitempty"`
+
+	// ThresholdCents 金额，单位「分」。禁止使用浮点。
+	ThresholdCents *Money `json:"threshold_cents,omitempty"`
+
+	// TotalCount 0 = 不限
+	TotalCount   *int                                 `json:"total_count,omitempty"`
+	ValidDays    *int                                 `json:"valid_days,omitempty"`
+	ValidEndAt   *time.Time                           `json:"valid_end_at,omitempty"`
+	ValidMode    CouponTemplateCreateRequestValidMode `json:"valid_mode"`
+	ValidStartAt *time.Time                           `json:"valid_start_at,omitempty"`
+}
+
+// CouponTemplateCreateRequestValidMode defines model for CouponTemplateCreateRequest.ValidMode.
+type CouponTemplateCreateRequestValidMode int
+
+// CouponTemplatePatchRequest 只改传了的字段。有效期整组替换：改 `valid_mode` 时要把那一模式的字段一起给。
+type CouponTemplatePatchRequest struct {
+	Claimable *bool `json:"claimable,omitempty"`
+
+	// CouponType 1 满减 · 2 折扣 · 3 立减 · 4 包邮。
+	//
+	// **4 包邮本期不可建**：本系统没有运费，包邮券永远减 0（数据模型 §7）。
+	// 枚举里留着它，是为了运费落地那一轮不必改契约的枚举。
+	CouponType *CouponType `json:"coupon_type,omitempty"`
+
+	// DiscountCents 金额，单位「分」。禁止使用浮点。
+	DiscountCents *Money `json:"discount_cents,omitempty"`
+	DiscountRate  *int   `json:"discount_rate,omitempty"`
+
+	// MaxDiscountCents 金额，单位「分」。禁止使用浮点。
+	MaxDiscountCents *Money                            `json:"max_discount_cents,omitempty"`
+	Name             *string                           `json:"name,omitempty"`
+	PerUserLimit     *int                              `json:"per_user_limit,omitempty"`
+	Status           *CouponTemplatePatchRequestStatus `json:"status,omitempty"`
+
+	// ThresholdCents 金额，单位「分」。禁止使用浮点。
+	ThresholdCents *Money                               `json:"threshold_cents,omitempty"`
+	TotalCount     *int                                 `json:"total_count,omitempty"`
+	ValidDays      *int                                 `json:"valid_days,omitempty"`
+	ValidEndAt     *time.Time                           `json:"valid_end_at,omitempty"`
+	ValidMode      *CouponTemplatePatchRequestValidMode `json:"valid_mode,omitempty"`
+	ValidStartAt   *time.Time                           `json:"valid_start_at,omitempty"`
+}
+
+// CouponTemplatePatchRequestStatus defines model for CouponTemplatePatchRequest.Status.
+type CouponTemplatePatchRequestStatus int
+
+// CouponTemplatePatchRequestValidMode defines model for CouponTemplatePatchRequest.ValidMode.
+type CouponTemplatePatchRequestValidMode int
+
+// CouponTemplateStats 发放与核销统计。`issued = claimed + granted = unused + locked + used + expired`。
+type CouponTemplateStats struct {
+	// Claimed 其中买家在领券中心领的
+	Claimed int `json:"claimed"`
+
+	// Expired 未使用且已过期
+	Expired int `json:"expired"`
+
+	// Granted 其中商家定向发放的
+	Granted int `json:"granted"`
+
+	// Issued 已发出（与 `issued_count` 相等）
+	Issued int `json:"issued"`
+
+	// Locked 被待支付订单占用中
+	Locked int `json:"locked"`
+
+	// Unused 未使用且未过期
+	Unused int `json:"unused"`
+
+	// Used 已核销（订单已支付）
+	Used int `json:"used"`
+}
+
+// CouponType 1 满减 · 2 折扣 · 3 立减 · 4 包邮。
+//
+// **4 包邮本期不可建**：本系统没有运费，包邮券永远减 0（数据模型 §7）。
+// 枚举里留着它，是为了运费落地那一轮不必改契约的枚举。
+type CouponType int
 
 // FieldError 一条字段级错误。`field` 是请求体（或商品对象）里的字段名。
 //
@@ -1818,6 +2335,9 @@ type Order struct {
 	// 它是真正的外键列，报表按它聚合——门店名走 `OrderDetail.store`
 	// 那份快照，因为门店会改名（数据模型 §5）。
 	StoreId int64 `json:"store_id"`
+
+	// UserCouponId 这一单用的券。没用券时不出现。
+	UserCouponId *int64 `json:"user_coupon_id,omitempty"`
 }
 
 // OrderCreateRequest defines model for OrderCreateRequest.
@@ -1843,7 +2363,12 @@ type OrderCreateRequest struct {
 	// 拿到它；单店商家同样拿得到。
 	StoreId int64 `json:"store_id"`
 
-	// UserCouponId 第一期仅支持单张券
+	// UserCouponId 第一期仅支持单张券。
+	//
+	// 券按**这一单的门店**的生效价算，门槛比的是券适用范围内商品的小计。
+	// 不可用（不是你的、已锁定 / 已使用 / 已过期、门槛不够、范围不含这些商品或这家店）
+	// 时试算与下单都返回 409 `coupon-not-applicable`，**不会静默按原价成交**。
+	// 下单成功后券进入「锁定」，付款成功变成「已使用」，取消或超时关单回到「未使用」。
 	UserCouponId *int64 `json:"user_coupon_id,omitempty"`
 }
 
@@ -1922,6 +2447,9 @@ type OrderDetail struct {
 	// 它是真正的外键列，报表按它聚合——门店名走 `OrderDetail.store`
 	// 那份快照，因为门店会改名（数据模型 §5）。
 	StoreId int64 `json:"store_id"`
+
+	// UserCouponId 这一单用的券。没用券时不出现。
+	UserCouponId *int64 `json:"user_coupon_id,omitempty"`
 }
 
 // OrderItem defines model for OrderItem.
@@ -1967,7 +2495,9 @@ type OrderItemInput struct {
 
 // OrderPreview defines model for OrderPreview.
 type OrderPreview struct {
-	ApplicableCoupons *[]UserCoupon `json:"applicable_coupons,omitempty"`
+	// ApplicableCoupons 这个买家手里本单可用的全部券，按优惠额降序——与 `POST /coupons/applicable`
+	// 同一份结果。客户端据此渲染「选券」，不必再单独请求一次。
+	ApplicableCoupons *[]ApplicableCoupon `json:"applicable_coupons,omitempty"`
 
 	// DiscountCents 金额，单位「分」。禁止使用浮点。
 	DiscountCents *Money `json:"discount_cents,omitempty"`
@@ -2019,6 +2549,9 @@ type OrderPreview struct {
 	// StoreId 本次试算按哪家门店算的（回显请求里的 `store_id`）。
 	// 必返：试算与下单必须是同一家店，回显是客户端唯一能核对这件事的办法。
 	StoreId int64 `json:"store_id"`
+
+	// UserCouponId 本次试算用上的券（回显请求里的 `user_coupon_id`）。没带券时不出现。
+	UserCouponId *int64 `json:"user_coupon_id,omitempty"`
 }
 
 // OrderRefundStatus **资金维度** —— 钱退了多少，与 `status` 正交，由退款单驱动。
@@ -3042,41 +3575,56 @@ type UserGender int
 type UserCoupon struct {
 	CouponCode string `json:"coupon_code"`
 
-	// CouponType 1满减 2折扣 3立减 4包邮
-	CouponType UserCouponCouponType `json:"coupon_type"`
+	// CouponType 1 满减 · 2 折扣 · 3 立减 · 4 包邮。
+	//
+	// **4 包邮本期不可建**：本系统没有运费，包邮券永远减 0（数据模型 §7）。
+	// 枚举里留着它，是为了运费落地那一轮不必改契约的枚举。
+	CouponType CouponType `json:"coupon_type"`
 
 	// DiscountCents 金额，单位「分」。禁止使用浮点。
-	DiscountCents *Money `json:"discount_cents,omitempty"`
+	DiscountCents Money `json:"discount_cents"`
 
 	// DiscountRate 千分比，850 = 8.5 折
-	DiscountRate *int  `json:"discount_rate,omitempty"`
+	DiscountRate int   `json:"discount_rate"`
 	Id           int64 `json:"id"`
 
 	// MaxDiscountCents 金额，单位「分」。禁止使用浮点。
-	MaxDiscountCents *Money  `json:"max_discount_cents,omitempty"`
-	Name             *string `json:"name,omitempty"`
+	MaxDiscountCents Money  `json:"max_discount_cents"`
+	Name             string `json:"name"`
+
+	// Scopes 这张券的适用范围（来自模板）。空数组即全场、全店。
+	Scopes []CouponScope `json:"scopes"`
+
+	// Source 1 领券中心领取 · 2 商家定向发放
+	Source UserCouponSource `json:"source"`
 
 	// Status 1 未使用 · 2 锁定 · 3 已使用 · 4 已过期
 	//
 	// **锁定**指下单流程中已占用但订单尚未支付。取消订单或超时关单后
-	// 由 SAGA 补偿回到「未使用」。这个态必须能被前端查到——否则用户
-	// 下单未支付时，券在「可用」和「已使用」里都找不到，像凭空消失。
-	Status UserCouponStatus `json:"status"`
+	// 回到「未使用」；支付成功后变成「已使用」。这个态必须能被前端查到——
+	// 否则用户下单未支付时，券在「可用」和「已使用」里都找不到，像凭空消失。
+	//
+	// **已过期是现算的**：未使用且已过 `valid_end_at` 即返回 4。
+	Status     UserCouponStatus `json:"status"`
+	TemplateId int64            `json:"template_id"`
 
 	// ThresholdCents 金额，单位「分」。禁止使用浮点。
-	ThresholdCents *Money     `json:"threshold_cents,omitempty"`
-	ValidEndAt     *time.Time `json:"valid_end_at,omitempty"`
-	ValidStartAt   *time.Time `json:"valid_start_at,omitempty"`
+	ThresholdCents Money      `json:"threshold_cents"`
+	UsedAt         *time.Time `json:"used_at,omitempty"`
+	ValidEndAt     time.Time  `json:"valid_end_at"`
+	ValidStartAt   time.Time  `json:"valid_start_at"`
 }
 
-// UserCouponCouponType 1满减 2折扣 3立减 4包邮
-type UserCouponCouponType int
+// UserCouponSource 1 领券中心领取 · 2 商家定向发放
+type UserCouponSource int
 
 // UserCouponStatus 1 未使用 · 2 锁定 · 3 已使用 · 4 已过期
 //
 // **锁定**指下单流程中已占用但订单尚未支付。取消订单或超时关单后
-// 由 SAGA 补偿回到「未使用」。这个态必须能被前端查到——否则用户
-// 下单未支付时，券在「可用」和「已使用」里都找不到，像凭空消失。
+// 回到「未使用」；支付成功后变成「已使用」。这个态必须能被前端查到——
+// 否则用户下单未支付时，券在「可用」和「已使用」里都找不到，像凭空消失。
+//
+// **已过期是现算的**：未使用且已过 `valid_end_at` 即返回 4。
 type UserCouponStatus int
 
 // UserIdentity defines model for UserIdentity.
@@ -3101,6 +3649,9 @@ type AddressId = int64
 
 // CategoryId defines model for CategoryId.
 type CategoryId = int64
+
+// CouponTemplateId defines model for CouponTemplateId.
+type CouponTemplateId = int64
 
 // IdempotencyKey defines model for IdempotencyKey.
 type IdempotencyKey = openapi_types.UUID
@@ -3278,6 +3829,209 @@ type DeleteAdminCategoriesCategoryIdParams struct {
 
 // PatchAdminCategoriesCategoryIdParams defines parameters for PatchAdminCategoriesCategoryId.
 type PatchAdminCategoriesCategoryIdParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// GetAdminCouponTemplatesParams defines parameters for GetAdminCouponTemplates.
+type GetAdminCouponTemplatesParams struct {
+	Page     *Page     `form:"page,omitempty" json:"page,omitempty"`
+	PageSize *PageSize `form:"page_size,omitempty" json:"page_size,omitempty"`
+
+	// Status 按启停筛选。不传即全部。
+	Status *GetAdminCouponTemplatesParamsStatus `form:"status,omitempty" json:"status,omitempty"`
+
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// GetAdminCouponTemplatesParamsStatus defines parameters for GetAdminCouponTemplates.
+type GetAdminCouponTemplatesParamsStatus int
+
+// PostAdminCouponTemplatesParams defines parameters for PostAdminCouponTemplates.
+type PostAdminCouponTemplatesParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+
+	// IdempotencyKey 客户端生成的 UUID。幂等作用域为 `(接口 scope, user_id, key)`，
+	// 有效期 24h，过期后同一 key 可复用（见数据模型文档 §11）。
+	//
+	// · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
+	//   并带 `Idempotency-Replayed: true` 响应头
+	// · **同 key 正在处理中**：`409` + `Retry-After`，
+	//   type=https://keel.dev/problems/idempotency-key-in-flight，
+	//   客户端应退避重试，不要当成业务失败
+	// · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
+	//   type=https://keel.dev/problems/idempotency-key-reused。
+	//   宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
+	//   那会让用户以为下单成功了而实际什么都没发生
+	// · 首次执行失败（存档为失败态）时同样回放该失败响应；
+	//   确需重试的场景请换一个新 key
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// GetAdminCouponTemplatesTemplateIdParams defines parameters for GetAdminCouponTemplatesTemplateId.
+type GetAdminCouponTemplatesTemplateIdParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// PatchAdminCouponTemplatesTemplateIdParams defines parameters for PatchAdminCouponTemplatesTemplateId.
+type PatchAdminCouponTemplatesTemplateIdParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// PostAdminCouponTemplatesTemplateIdGrantsParams defines parameters for PostAdminCouponTemplatesTemplateIdGrants.
+type PostAdminCouponTemplatesTemplateIdGrantsParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+
+	// IdempotencyKey 客户端生成的 UUID。幂等作用域为 `(接口 scope, user_id, key)`，
+	// 有效期 24h，过期后同一 key 可复用（见数据模型文档 §11）。
+	//
+	// · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
+	//   并带 `Idempotency-Replayed: true` 响应头
+	// · **同 key 正在处理中**：`409` + `Retry-After`，
+	//   type=https://keel.dev/problems/idempotency-key-in-flight，
+	//   客户端应退避重试，不要当成业务失败
+	// · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
+	//   type=https://keel.dev/problems/idempotency-key-reused。
+	//   宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
+	//   那会让用户以为下单成功了而实际什么都没发生
+	// · 首次执行失败（存档为失败态）时同样回放该失败响应；
+	//   确需重试的场景请换一个新 key
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// PutAdminCouponTemplatesTemplateIdScopesParams defines parameters for PutAdminCouponTemplatesTemplateIdScopes.
+type PutAdminCouponTemplatesTemplateIdScopesParams struct {
 	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
 	//
 	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
@@ -4863,6 +5617,31 @@ type PutCartSelectionJSONBody struct {
 	Selected bool     `json:"selected"`
 }
 
+// GetCouponTemplatesParams defines parameters for GetCouponTemplates.
+type GetCouponTemplatesParams struct {
+	Page     *Page     `form:"page,omitempty" json:"page,omitempty"`
+	PageSize *PageSize `form:"page_size,omitempty" json:"page_size,omitempty"`
+}
+
+// PostCouponTemplatesTemplateIdClaimParams defines parameters for PostCouponTemplatesTemplateIdClaim.
+type PostCouponTemplatesTemplateIdClaimParams struct {
+	// IdempotencyKey 客户端生成的 UUID。幂等作用域为 `(接口 scope, user_id, key)`，
+	// 有效期 24h，过期后同一 key 可复用（见数据模型文档 §11）。
+	//
+	// · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
+	//   并带 `Idempotency-Replayed: true` 响应头
+	// · **同 key 正在处理中**：`409` + `Retry-After`，
+	//   type=https://keel.dev/problems/idempotency-key-in-flight，
+	//   客户端应退避重试，不要当成业务失败
+	// · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
+	//   type=https://keel.dev/problems/idempotency-key-reused。
+	//   宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
+	//   那会让用户以为下单成功了而实际什么都没发生
+	// · 首次执行失败（存档为失败态）时同样回放该失败响应；
+	//   确需重试的场景请换一个新 key
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
 // GetCouponsParams defines parameters for GetCoupons.
 type GetCouponsParams struct {
 	Page     *Page     `form:"page,omitempty" json:"page,omitempty"`
@@ -4875,17 +5654,6 @@ type GetCouponsParams struct {
 
 // GetCouponsParamsStatus defines parameters for GetCoupons.
 type GetCouponsParamsStatus string
-
-// PostCouponsApplicableJSONBody defines parameters for PostCouponsApplicable.
-type PostCouponsApplicableJSONBody struct {
-	Items []OrderItemInput `json:"items"`
-}
-
-// PostCouponsApplicable200JSONResponseBodyCouponType defines parameters for PostCouponsApplicable.
-type PostCouponsApplicable200JSONResponseBodyCouponType int
-
-// PostCouponsApplicable200JSONResponseBodyStatus defines parameters for PostCouponsApplicable.
-type PostCouponsApplicable200JSONResponseBodyStatus int
 
 // PatchMeJSONBody defines parameters for PatchMe.
 type PatchMeJSONBody struct {
@@ -5253,6 +6021,18 @@ type PostAdminCategoriesJSONRequestBody = CategoryCreateRequest
 // PatchAdminCategoriesCategoryIdJSONRequestBody defines body for PatchAdminCategoriesCategoryId for application/json ContentType.
 type PatchAdminCategoriesCategoryIdJSONRequestBody = CategoryUpdateRequest
 
+// PostAdminCouponTemplatesJSONRequestBody defines body for PostAdminCouponTemplates for application/json ContentType.
+type PostAdminCouponTemplatesJSONRequestBody = CouponTemplateCreateRequest
+
+// PatchAdminCouponTemplatesTemplateIdJSONRequestBody defines body for PatchAdminCouponTemplatesTemplateId for application/json ContentType.
+type PatchAdminCouponTemplatesTemplateIdJSONRequestBody = CouponTemplatePatchRequest
+
+// PostAdminCouponTemplatesTemplateIdGrantsJSONRequestBody defines body for PostAdminCouponTemplatesTemplateIdGrants for application/json ContentType.
+type PostAdminCouponTemplatesTemplateIdGrantsJSONRequestBody = CouponGrantRequest
+
+// PutAdminCouponTemplatesTemplateIdScopesJSONRequestBody defines body for PutAdminCouponTemplatesTemplateIdScopes for application/json ContentType.
+type PutAdminCouponTemplatesTemplateIdScopesJSONRequestBody = CouponScopesSetRequest
+
 // PostAdminMerchantsJSONRequestBody defines body for PostAdminMerchants for application/json ContentType.
 type PostAdminMerchantsJSONRequestBody = MerchantCreateRequest
 
@@ -5353,7 +6133,7 @@ type PatchCartItemsItemIdJSONRequestBody PatchCartItemsItemIdJSONBody
 type PutCartSelectionJSONRequestBody PutCartSelectionJSONBody
 
 // PostCouponsApplicableJSONRequestBody defines body for PostCouponsApplicable for application/json ContentType.
-type PostCouponsApplicableJSONRequestBody PostCouponsApplicableJSONBody
+type PostCouponsApplicableJSONRequestBody = CouponApplicableRequest
 
 // PatchMeJSONRequestBody defines body for PatchMe for application/json ContentType.
 type PatchMeJSONRequestBody PatchMeJSONBody

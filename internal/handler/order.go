@@ -85,7 +85,12 @@ func (h *OrderHandler) Preview(c *gin.Context) {
 	}
 
 	discount := api.Money(q.DiscountCents)
+	applicable := apiApplicableCoupons(q.ApplicableCoupons)
+	regionID := q.Store.RegionID
 	c.JSON(http.StatusOK, api.OrderPreview{
+		// 回显门店与大区：契约把 store_id 定成必返，客户端靠它核对试算与下单是同一家店。
+		StoreId:          q.Store.StoreID,
+		RegionId:         &regionID,
 		GoodsAmountCents: api.Money(q.GoodsAmountCents),
 		PayableCents:     api.Money(q.PayableCents),
 		DiscountCents:    &discount,
@@ -96,9 +101,10 @@ func (h *OrderHandler) Preview(c *gin.Context) {
 		// 这笔账挂在 contract_test.go 的 NotYetImplementedResponse 里。
 		FreightCents: freightNotBilledThisRelease(q),
 
-		// ApplicableCoupons 同样留 nil：券的三张表本轮没建，所以这里不是
-		// 「一张可用券都没有」，而是**没查过**。回一个空数组会让前端显示
-		// 「暂无可用优惠券」—— 一句在券上线之前都不会被纠正的假话。
+		// 这个买家手里本单可用的券（与 POST /coupons/applicable 同一份实现、同一段渲染）。
+		// 查过了才给：空数组的意思就是「真的一张都没有」。
+		ApplicableCoupons: &applicable,
+		UserCouponId:      q.UserCouponID,
 	})
 }
 
@@ -206,6 +212,9 @@ func apiOrder(o repository.Order) api.Order {
 		ShippedAt:  o.ShippedAt,
 		FinishedAt: o.FinishedAt,
 
+		// 这一单用的券；没用券时整个不出现。
+		UserCouponId: o.UserCouponID,
+
 		// FreightCents 同 preview：本期不计运费，字段整个不出现。
 		// 库里那一列是 0（chk_amount 的恒等式要它），但那是账，不是「算过了」。
 	}
@@ -217,18 +226,11 @@ func apiOrder(o repository.Order) api.Order {
 // 4xx，那会把服务端的 bug 报成客户端的错，而客户端会照着这个错重试。
 func writeOrderError(c *gin.Context, err error) {
 	switch {
-	case errors.Is(err, service.ErrCouponNotImplemented):
-		// 501 而不是静默忽略。**传了券却被忽略 = 用户以为用了券、实际按原价
-		// 成交**，那是钱的问题，而且客户端没有任何办法发现。
-		//
-		// 契约允许这个状态码吗：POST /orders 的响应集合里有 default（收其余
-		// 一切，体是 Problem），所以允许。**POST /orders/preview 的响应集合里
-		// 只有 200，没有 default** —— 那是契约自己的一处缺口（它连 404 都没法
-		// 表达），已在报告里列为 defer：给 /orders/preview 补 default: Problem。
-		// 本轮选择返回 501 而不是为了「契约合规」去假装试算成功。
-		_ = c.Error(err)
-		problem.Write(c, http.StatusNotImplemented, problem.TypeNotImplemented,
-			"优惠券尚未实现：券的三张表还没有建。请先不要传 user_coupon_id")
+	case errors.Is(err, service.ErrCouponNotApplicable):
+		// 契约：409 coupon-not-applicable，试算与下单同一个 type。detail 带原因
+		// （门槛差多少、范围不含这家店……），客户端换一张券或不用券。
+		// **绝不忽略这张券按原价继续**：那是用户以为用了券、实际按原价成交。
+		writeProblemDetail(c, http.StatusConflict, problem.TypeCouponNotApplicable, "这张优惠券本单不可用", err)
 
 	case errors.Is(err, service.ErrPriceChanged):
 		// 契约明写：「服务端试算不一致时返回 409，防止价格变动导致用户以旧价成交」。
