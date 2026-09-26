@@ -271,6 +271,14 @@ type Sku struct {
 	DeletedAt  pgtype.Timestamptz
 }
 
+type SkuPricesByRegion struct {
+	RegionID    int64
+	SkuID       int64
+	ProductID   int64
+	PriceCents  int64
+	PriceSource int32
+}
+
 type SkuPricesByStore struct {
 	StoreID     int64
 	RegionID    int64

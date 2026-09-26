@@ -405,6 +405,40 @@ CREATE INDEX idx_orders_store ON orders(merchant_id, store_id, created_at DESC);
 -- price_source 不是调试字段：后台价格页要显示「这个价来自哪一层」，
 -- order_items 要把它快照下来 —— 否则事后对账说不清「这个价是怎么来的」。
 -- ---------------------------------------------------------------------------
+-- 大区那一层也要一份「就近生效」，而上面那张视图给不了它。
+--
+-- 这是本文件相对数据模型 §4 唯一的一处**增加**（不是偏离：那一节写的 DDL
+-- 一个字都没改），理由要写清楚：
+--
+-- 契约里大区是一个**真实的作用域** —— GET /admin/regions/{id}/products 要回
+-- 「这个大区的可见性与生效价」，而它的 price_source 只会是 1 或 2。
+-- 用 sku_prices_by_store 表达不了：那张视图的最内一层恰恰是门店价，
+-- 而大区这一层必须**忽略**门店价。挑一家该大区下的门店去读也不行 ——
+-- 那家店可能自己定了价，而且「挑哪一家」本身就没有答案。
+--
+-- 那为什么不在 db/queries 里写一句 COALESCE(rsp.price_cents, s.price_cents)：
+-- 因为那正是 scripts/check_query_tenancy.py 本轮新加的那条闸门要挡的东西 ——
+-- 一旦 db/queries 里可以直接读价格底表，「就近生效只有一份实现」这条纪律
+-- 就只剩一句注释。放进视图之后，两层与三层的公式都在这一个文件里、
+-- 挨着写、同受 security_invoker 闸门管，而 db/queries 一次都碰不到那两张底表。
+--
+-- 两条 COALESCE 的一致性由它们**挨着**保证，不由机械检查保证。这一点诚实说：
+-- 三层那条是 COALESCE(门店, 大区, 基准)，两层这条是它去掉最内层，
+-- 改一条不改另一条会让后台的大区价页与买家看到的价对不上。
+-- 相邻的十行是这个仓库对这类耦合一贯的答案（见 00006 里 orders 的两条 CHECK）。
+CREATE VIEW sku_prices_by_region WITH (security_invoker = true) AS
+SELECT r.id         AS region_id,
+       s.id         AS sku_id,
+       s.product_id AS product_id,
+       COALESCE(rsp.price_cents, s.price_cents) AS price_cents,
+       CASE WHEN rsp.price_cents IS NOT NULL THEN 2   -- 大区价
+            ELSE 1 END                                 -- 基准价
+                    AS price_source
+  FROM regions r
+  JOIN skus   s   ON s.merchant_id = r.merchant_id
+  LEFT JOIN region_sku_prices rsp ON rsp.region_id = r.id AND rsp.sku_id = s.id
+ WHERE r.deleted_at IS NULL AND s.deleted_at IS NULL;
+
 CREATE VIEW sku_prices_by_store WITH (security_invoker = true) AS
 SELECT st.id        AS store_id,
        st.region_id AS region_id,
@@ -490,16 +524,17 @@ GRANT SELECT, INSERT, UPDATE, DELETE
     ON regions, stores,
        region_product_overrides, store_product_overrides,
        region_sku_prices, store_sku_prices TO keel_app;
-GRANT SELECT ON sku_prices_by_store TO keel_app;
+GRANT SELECT ON sku_prices_by_store, sku_prices_by_region TO keel_app;
 
 -- +goose Down
 
-REVOKE ALL ON sku_prices_by_store FROM keel_app;
+REVOKE ALL ON sku_prices_by_store, sku_prices_by_region FROM keel_app;
 REVOKE ALL ON regions, stores,
        region_product_overrides, store_product_overrides,
        region_sku_prices, store_sku_prices FROM keel_app;
 
 DROP VIEW sku_prices_by_store;
+DROP VIEW sku_prices_by_region;
 
 DROP INDEX idx_orders_store;
 ALTER TABLE orders DROP CONSTRAINT orders_region_fkey;

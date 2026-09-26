@@ -56,6 +56,11 @@ type searchResponse struct {
 	LatencyMs int             `json:"latency_ms"`
 	Total     int             `json:"total"`
 	Strategy  string          `json:"strategy"`
+
+	// Store 在契约里是**必返**的，与 GET /products 的同名字段同义：
+	// 检索结果里的价格区间、in_stock、以及「这家店卖不卖这件商品」
+	// 三样都按门店变化，不写明是哪一家，整份结果就是不知道属于谁的。
+	Store api.StoreContext `json:"store"`
 }
 
 // searchRequest 是契约里那个内联请求体。
@@ -65,6 +70,10 @@ type searchRequest struct {
 	Strategy *string            `json:"strategy"`
 	Explain  *bool              `json:"explain"`
 	Filters  *api.SearchFilters `json:"filters"`
+
+	// StoreID 与 GET /products?store_id= 同义、同解析规则（契约原话）。
+	// 不传走回落链，不是「全租户并集」。
+	StoreID *int64 `json:"store_id"`
 }
 
 // MaxSearchBodyBytes 是 /search 请求体的大小上限。
@@ -113,6 +122,7 @@ func (h *SearchHandler) Search(c *gin.Context) {
 	sr := service.SearchRequest{
 		Query:   req.Query,
 		Filters: defaultSearchFilters(),
+		StoreID: req.StoreID,
 	}
 	if req.Size != nil {
 		sr.Size = *req.Size
@@ -139,6 +149,12 @@ func (h *SearchHandler) Search(c *gin.Context) {
 		// 后者该提示这家店没有。回空列表会把前者伪装成后者。
 		problem.Write(c, http.StatusUnprocessableEntity,
 			problem.TypeInvalidRequest, "查询词里没有可检索的内容")
+		return
+	}
+	if errors.Is(err, service.ErrStoreNotFound) {
+		// 显式指名了一家不存在 / 不属于本租户的门店。与 GET /products 同一支。
+		problem.Write(c, http.StatusUnprocessableEntity,
+			problem.TypeInvalidRequest, "store_id 指向的门店不存在或不属于当前店铺")
 		return
 	}
 	if errors.Is(err, service.ErrQueryTooLong) {
@@ -190,6 +206,7 @@ func (h *SearchHandler) Search(c *gin.Context) {
 		Total:     len(items),
 		Strategy:  res.Strategy,
 		LatencyMs: int(time.Since(start).Milliseconds()),
+		Store:     apiStoreContext(res.Store),
 	})
 }
 

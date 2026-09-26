@@ -11,6 +11,7 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -35,6 +36,22 @@ func NewProductHandler(s *service.ProductService) *ProductHandler {
 type listResponse struct {
 	api.PageMeta
 	Items []api.ProductSummary `json:"items"`
+
+	// Store 在契约里是**必返**的（required: [items, store]）：
+	// 没有它，客户端拿到的 in_stock 与价格是不知道属于谁的。
+	Store api.StoreContext `json:"store"`
+}
+
+// apiStoreContext 把 service 的解析结果拍成契约类型。
+//
+// 一个函数而不是在三条读路径上各拼一遍：拼岔一处的症状是某一条接口的
+// match_type 与它实际用的门店对不上，而那看上去完全正常。
+func apiStoreContext(sc service.StoreContext) api.StoreContext {
+	return api.StoreContext{
+		MatchType: api.StoreMatchType(sc.MatchType),
+		StoreId:   sc.StoreID,
+		RegionId:  sc.RegionID,
+	}
 }
 
 // List 实现 GET /api/v1/products。
@@ -50,8 +67,32 @@ func (h *ProductHandler) List(c *gin.Context) {
 	page, _ := strconv.Atoi(c.Query("page"))
 	pageSize, _ := strconv.Atoi(c.Query("page_size"))
 
-	list, err := h.svc.List(c.Request.Context(), page, pageSize)
-	if err != nil {
+	// store_id：按哪家门店算「卖不卖 / 多少钱 / 有没有货」。
+	//
+	// **不传不是「全租户并集」，是走回落链**（契约原话）：service 按
+	// GET /stores/resolve 的同一段代码解析出默认门店。所以这里只把
+	// 「传了没有」传下去，回落规则一个字都不在 handler 里。
+	//
+	// 解析不出正整数就按没传处理，与 page 一致：`?store_id=abc` 是一次
+	// 客户端的笔误，而契约在这条接口上没有 422。真传了一个不存在的门店 id
+	// 则是另一回事 —— 那条由 service 报 ErrStoreNotFound，见下面 422 那一支。
+	var storeID *int64
+	if raw := c.Query("store_id"); raw != "" {
+		if v, err := strconv.ParseInt(raw, 10, 64); err == nil && v > 0 {
+			storeID = &v
+		}
+	}
+
+	list, err := h.svc.List(c.Request.Context(), storeID, page, pageSize)
+	switch {
+	case err == nil:
+	case errors.Is(err, service.ErrStoreNotFound):
+		// 显式指名了一家不存在 / 不属于本租户的门店。422 而不是静默回落：
+		// 静默回落会让客户端以为自己看的是 A 店的价，而实际上是 B 店的。
+		problem.Write(c, http.StatusUnprocessableEntity,
+			problem.TypeInvalidRequest, "store_id 指向的门店不存在或不属于当前店铺")
+		return
+	default:
 		_ = c.Error(err)
 		problem.Write(c, http.StatusInternalServerError,
 			problem.TypeInternal, "服务内部错误")
@@ -79,5 +120,6 @@ func (h *ProductHandler) List(c *gin.Context) {
 			Total:    int(list.Total),
 		},
 		Items: items,
+		Store: apiStoreContext(list.Store),
 	})
 }

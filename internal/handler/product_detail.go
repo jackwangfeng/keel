@@ -24,6 +24,11 @@ import (
 // 换句话说这不是审美上的拆分：把两条接口放进同一个文件会让那条对账测试
 // 失去区分力（要么红，要么得为它开一个口子，而口子一开，「路径改名之后测试
 // 恒绿」那类失效就回来了）。
+//
+// **本轮它自己也有了一个 query 参数**（store_id），于是上面那段话的前提
+// 「契约里一个 query 参数都没有」不再成立 —— 但拆分仍然要留着，
+// 因为 GET /products 声明的是五个参数，两条接口的参数集合不相同，
+// 而那条对账是按文件做的。
 func (h *ProductHandler) Detail(c *gin.Context) {
 	// 解析失败按 404 处理，不是 422。
 	//
@@ -37,9 +42,23 @@ func (h *ProductHandler) Detail(c *gin.Context) {
 		return
 	}
 
-	d, err := h.svc.Detail(c.Request.Context(), id)
+	// store_id：按哪家门店算这件商品的价格与库存。解析与 GET /products 逐字
+	// 一致（契约原话），所以这里的形状与那边一模一样 —— 两处写岔会让
+	// 「列表里 129 元，点进去 159 元」，而那看起来像缓存问题。
+	var storeID *int64
+	if raw := c.Query("store_id"); raw != "" {
+		if v, err := strconv.ParseInt(raw, 10, 64); err == nil && v > 0 {
+			storeID = &v
+		}
+	}
+
+	d, err := h.svc.Detail(c.Request.Context(), storeID, id)
 	switch {
 	case err == nil:
+	case errors.Is(err, service.ErrStoreNotFound):
+		problem.Write(c, http.StatusUnprocessableEntity,
+			problem.TypeInvalidRequest, "store_id 指向的门店不存在或不属于当前店铺")
+		return
 	case errors.Is(err, service.ErrProductNotFound):
 		// 「不存在」「是草稿」「已下架」「已软删」「是别家店的」都走这一支，
 		// 理由写在 repository.ErrProductNotFound 上：这条接口是 security: []，

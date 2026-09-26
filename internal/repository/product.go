@@ -62,25 +62,46 @@ type Tx interface {
 	SearchTx
 	StaffTx
 	AdminCatalogTx
+	StoreTx
+	ScopedCatalogTx
+}
+
+// StoreScope 是「本次请求按哪家门店算」——门店 id 与它所属的大区 id。
+//
+// 两个值一起传而不是只传 store_id 再让每条查询自己去 JOIN 一次 stores：
+// 三层定价与两层可见性排除各要用到其中一个，而它们出现在同一条 SQL 的
+// 四个不同位置（视图的 store_id、两条 NOT EXISTS 的 region_id / store_id）。
+// 让查询自己去推的话，那次 JOIN 会在每一条读路径上各写一遍。
+//
+// 它由 service 层的门店解析产出（坐标 → 围栏 → 门店 → 它的大区），
+// 那一次解析同时给出这两个值 —— 大区没有自己的几何，正是为了这一点
+// （数据模型 §4）。
+type StoreScope struct {
+	StoreID  int64
+	RegionID int64
 }
 
 // ProductTx 是商品读取这一面。
+//
+// **本轮（00020）每一条都多了一个 StoreScope。** 「这件商品多少钱、有没有货、
+// 卖不卖」在多门店之后都取决于哪一家店服务这次请求，而一个不带门店的读路径
+// 只能回一个租户级的答案 —— 那个答案对任何一个具体的买家都是错的。
 type ProductTx interface {
-	// ListProducts 返回当前租户的在架商品，按上架时间倒序。
+	// ListProducts 返回当前租户在这家门店可见的在架商品，按上架时间倒序。
 	//
 	// limit / offset 的钳制是业务规则，在 service 里做。这里只负责把它们安全地
 	// 送进 int32 的参数位 —— 越界的值到这一层还是要挡，因为 int32 溢出的后果是
 	// 一个负数 OFFSET，Postgres 会报错，而错误里没有任何东西指向「页码太大」。
-	ListProducts(ctx context.Context, limit, offset int64) ([]Product, error)
+	ListProducts(ctx context.Context, sc StoreScope, limit, offset int64) ([]Product, error)
 
 	// CountProducts 返回当前租户在架商品的总数，用于填契约里必填的 total。
-	CountProducts(ctx context.Context) (int64, error)
+	CountProducts(ctx context.Context, sc StoreScope) (int64, error)
 
 	// FindProduct 取一件**可见**商品（在架且未软删）。查不到返回 ErrProductNotFound。
-	FindProduct(ctx context.Context, id int64) (ProductDetail, error)
+	FindProduct(ctx context.Context, sc StoreScope, id int64) (ProductDetail, error)
 
 	// ListProductSKUs 取一件商品的全部在售 SKU，带上当前可售水位。
-	ListProductSKUs(ctx context.Context, productID int64) ([]SKU, error)
+	ListProductSKUs(ctx context.Context, sc StoreScope, productID int64) ([]SKU, error)
 
 	// 库存的两个方法搬去了 SagaTx（saga.go）：它们本来就是为 SAGA 分支存在的
 	// —— 正向扣减、补偿回补、超时关单释放。它们的三条出路是这一层唯一一处
@@ -102,7 +123,7 @@ type tenantTx struct {
 	scope *int64
 }
 
-func (t tenantTx) ListProducts(ctx context.Context, limit, offset int64) ([]Product, error) {
+func (t tenantTx) ListProducts(ctx context.Context, sc StoreScope, limit, offset int64) ([]Product, error) {
 	// 到这里还越界只可能是上游的钳制没生效。报错而不是截断：截断会把
 	// 「第 1 亿页」悄悄变成某一页真实数据，一个错误的结果比一个错误更难发现。
 	if limit < 0 || limit > math.MaxInt32 {
@@ -113,8 +134,10 @@ func (t tenantTx) ListProducts(ctx context.Context, limit, offset int64) ([]Prod
 	}
 
 	rows, err := t.q.ListProducts(ctx, db.ListProductsParams{
-		Limit:  int32(limit),
-		Offset: int32(offset),
+		StoreID:    sc.StoreID,
+		RegionID:   sc.RegionID,
+		PageLimit:  int32(limit),
+		PageOffset: int32(offset),
 	})
 	if err != nil {
 		return nil, err
@@ -135,8 +158,10 @@ func (t tenantTx) ListProducts(ctx context.Context, limit, offset int64) ([]Prod
 	return out, nil
 }
 
-func (t tenantTx) CountProducts(ctx context.Context) (int64, error) {
-	return t.q.CountProducts(ctx)
+func (t tenantTx) CountProducts(ctx context.Context, sc StoreScope) (int64, error) {
+	return t.q.CountProducts(ctx, db.CountProductsParams{
+		StoreID: sc.StoreID, RegionID: sc.RegionID,
+	})
 }
 
 // ProductDetail 是商品详情在 repository 边界上的形状（契约的 ProductDetail）。
@@ -178,8 +203,10 @@ type SKU struct {
 // 探测器 —— 而它是 security: [] 的，谁都打得到。
 var ErrProductNotFound = errors.New("商品不存在或不可见")
 
-func (t tenantTx) FindProduct(ctx context.Context, id int64) (ProductDetail, error) {
-	r, err := t.q.GetProduct(ctx, id)
+func (t tenantTx) FindProduct(ctx context.Context, sc StoreScope, id int64) (ProductDetail, error) {
+	r, err := t.q.GetProduct(ctx, db.GetProductParams{
+		StoreID: sc.StoreID, RegionID: sc.RegionID, ID: id,
+	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ProductDetail{}, fmt.Errorf("product %d: %w", id, ErrProductNotFound)
 	}
@@ -199,8 +226,10 @@ func (t tenantTx) FindProduct(ctx context.Context, id int64) (ProductDetail, err
 	}, nil
 }
 
-func (t tenantTx) ListProductSKUs(ctx context.Context, productID int64) ([]SKU, error) {
-	rows, err := t.q.ListProductSKUs(ctx, productID)
+func (t tenantTx) ListProductSKUs(ctx context.Context, sc StoreScope, productID int64) ([]SKU, error) {
+	rows, err := t.q.ListProductSKUs(ctx, db.ListProductSKUsParams{
+		StoreID: sc.StoreID, ProductID: productID,
+	})
 	if err != nil {
 		return nil, err
 	}

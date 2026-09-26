@@ -14,10 +14,13 @@ import (
 const adminGetSKU = `-- name: AdminGetSKU :one
 SELECT s.id, s.product_id, s.sku_code, s.spec_values, s.price_cents, s.cost_cents,
        s.weight_gram, s.image_url, s.status, s.created_at, s.updated_at,
-       COALESCE(i.available_qty, 0)::int AS available_qty,
-       COALESCE(i.warning_qty, 0)::int   AS warning_qty
+       COALESCE(agg.qty,  0)::int AS available_qty,
+       COALESCE(agg.warn, 0)::int AS warning_qty
   FROM skus s
-  LEFT JOIN inventories i ON i.sku_id = s.id
+  LEFT JOIN LATERAL (
+        SELECT sum(i.available_qty) AS qty, max(i.warning_qty) AS warn
+          FROM inventories i WHERE i.sku_id = s.id
+       ) agg ON TRUE
  WHERE s.id = $1
    AND s.deleted_at IS NULL
 `
@@ -64,10 +67,13 @@ const adminListProductSKUs = `-- name: AdminListProductSKUs :many
 
 SELECT s.id, s.product_id, s.sku_code, s.spec_values, s.price_cents, s.cost_cents,
        s.weight_gram, s.image_url, s.status, s.created_at, s.updated_at,
-       COALESCE(i.available_qty, 0)::int AS available_qty,
-       COALESCE(i.warning_qty, 0)::int   AS warning_qty
+       COALESCE(agg.qty,  0)::int AS available_qty,
+       COALESCE(agg.warn, 0)::int AS warning_qty
   FROM skus s
-  LEFT JOIN inventories i ON i.sku_id = s.id
+  LEFT JOIN LATERAL (
+        SELECT sum(i.available_qty) AS qty, max(i.warning_qty) AS warn
+          FROM inventories i WHERE i.sku_id = s.id
+       ) agg ON TRUE
  WHERE s.product_id = $1
    AND s.deleted_at IS NULL
  ORDER BY s.id
@@ -103,6 +109,18 @@ type AdminListProductSKUsRow struct {
 // LEFT JOIN 而不是 JOIN：一个没有库存行的 SKU 真实的样子是「在售、可售 0 件」，
 // 用 JOIN 它会整个从列表里消失，而那正是「这件商品永远缺货」那类故障最难查的
 // 部分 —— 症状里看不到那个 SKU。
+//
+// **本轮（00020）它变成了一次跨门店的聚合，理由要写下来。** 库存主键是
+// (sku_id, store_id)，直接 LEFT JOIN 会让一个 SKU 在五家店的五行把这条列表
+// 撑成五倍 —— 那不是「多了几行」，是同一个规格出现五次、每次一个不同的水位。
+//
+// 聚合口径选 **sum（全部门店合计）**，因为这里是**租户视角**：AdminProduct 上
+// 的价格区间同一轮定成了「基准价区间，不含任何覆盖」，理由一字不差 ——
+// 后台的商品页没有「当前门店」这个概念（契约在 AdminProduct 上明写了这一点）。
+// 按门店看库存有自己的端点（GET /admin/stores/{store_id}/inventories）。
+// 单店商家的两个数因此完全相同，多店商家看到的是一个对「这款还剩多少」
+// 有意义的答案。warning_qty 取 max：预警线是一个阈值不是一个总量，
+// 把五家店的阈值加起来没有任何含义。
 func (q *Queries) AdminListProductSKUs(ctx context.Context, productID int64) ([]AdminListProductSKUsRow, error) {
 	rows, err := q.db.Query(ctx, adminListProductSKUs, productID)
 	if err != nil {
@@ -137,10 +155,11 @@ func (q *Queries) AdminListProductSKUs(ctx context.Context, productID int64) ([]
 	return items, nil
 }
 
-const createInventoryRow = `-- name: CreateInventoryRow :one
-INSERT INTO inventories (sku_id, available_qty, warning_qty)
-VALUES ($1, $2, $3)
-RETURNING sku_id, available_qty, warning_qty, updated_at
+const createInventoryRow = `-- name: CreateInventoryRow :execrows
+INSERT INTO inventories (sku_id, store_id, available_qty, warning_qty)
+SELECT $1, st.id, $2, $3
+  FROM stores st
+ WHERE st.is_default AND st.deleted_at IS NULL
 `
 
 type CreateInventoryRowParams struct {
@@ -149,25 +168,26 @@ type CreateInventoryRowParams struct {
 	WarningQty   int32
 }
 
-type CreateInventoryRowRow struct {
-	SkuID        int64
-	AvailableQty int32
-	WarningQty   int32
-	UpdatedAt    pgtype.Timestamptz
-}
-
 // 见 CreateSKU 的注释。它只在建 SKU 的那个事务里被调用，
 // 而 repository 那一层不给调用方单独调它的机会。
-func (q *Queries) CreateInventoryRow(ctx context.Context, arg CreateInventoryRowParams) (CreateInventoryRowRow, error) {
-	row := q.db.QueryRow(ctx, createInventoryRow, arg.SkuID, arg.AvailableQty, arg.WarningQty)
-	var i CreateInventoryRowRow
-	err := row.Scan(
-		&i.SkuID,
-		&i.AvailableQty,
-		&i.WarningQty,
-		&i.UpdatedAt,
-	)
-	return i, err
+//
+// **本轮（00020）它只给默认门店建那一行，而且可能一行都不建。**
+//
+// 库存按门店分之后，「给这个新 SKU 建库存行」不再是一个有唯一答案的动作：
+// 给每一家店都建一行，就是把 inventories 变成 门店数 × SKU 数 的那张表 ——
+// 正是数据模型 §4 否掉「包含表」时算过的那个量级；而挑一家店建，
+// 那家店只能是默认店（回落目标，单店商家唯一的那一家）。
+//
+// 没有默认店时一行都不建，**这不是失败**：缺行 ≡ 可售 0（§4 把这条写死了），
+// 一家刚开的店在录库存之前每个 SKU 都缺行，那是产品要的形态。
+// 所以返回的是行数而不是行 —— 0 行是一个合法的结果，:one 会让它变成
+// pgx.ErrNoRows，而那会把一次正常的建 SKU 报成失败。
+func (q *Queries) CreateInventoryRow(ctx context.Context, arg CreateInventoryRowParams) (int64, error) {
+	result, err := q.db.Exec(ctx, createInventoryRow, arg.SkuID, arg.AvailableQty, arg.WarningQty)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const createSKU = `-- name: CreateSKU :one
@@ -253,14 +273,15 @@ WITH cur AS (
     SELECT inv.sku_id, inv.available_qty, inv.warning_qty, inv.updated_at
       FROM inventories inv
       JOIN skus sk ON sk.id = inv.sku_id
-     WHERE inv.sku_id = $1 AND sk.deleted_at IS NULL
+     WHERE inv.sku_id = $1 AND inv.store_id = $2
+       AND sk.deleted_at IS NULL
 ), upd AS (
     UPDATE inventories u
-       SET available_qty = $2,
-           warning_qty   = COALESCE($3, u.warning_qty),
+       SET available_qty = $3,
+           warning_qty   = COALESCE($4, u.warning_qty),
            updated_at    = now()
-     WHERE u.sku_id = $1
-       AND u.available_qty = $4
+     WHERE u.sku_id = $1 AND u.store_id = $2
+       AND u.available_qty = $5
        AND EXISTS (SELECT 1 FROM skus sk2
                     WHERE sk2.id = u.sku_id AND sk2.deleted_at IS NULL)
     RETURNING u.sku_id, u.available_qty, u.warning_qty, u.updated_at
@@ -280,6 +301,7 @@ SELECT (SELECT count(*) FROM cur) AS visible_rows,
 
 type SetInventoryByCASParams struct {
 	SkuID                int64
+	StoreID              int64
 	AvailableQty         int32
 	WarningQty           *int32
 	ExpectedAvailableQty int32
@@ -297,6 +319,18 @@ type SetInventoryByCASRow struct {
 }
 
 // 比较并设置（契约 PUT /admin/skus/{sku_id}/inventory）。
+//
+// ### 本轮（00020）多了一个 store_id 参数，而路径上没有它
+//
+// 库存主键变成 (sku_id, store_id) 之后，「这个 SKU 的库存」不再是一个有定义的
+// 东西。契约把这条路径的语义写死成「**本租户恰好有一家未软删的门店时，
+// 它就是那一家；否则 409 store-ambiguous**」，那一步判断在 repository 里做
+// （CountStoresForTenant），不在这条语句里 —— 让 SQL 自己挑一家，
+// 就等于在最热的写路径上默认了一个猜测，而猜错的后果是把另一家店的水位
+// 覆盖掉，没有任何东西会响。
+//
+// 为什么不让它「默认落到默认门店」：那正是这条接口最不该做的事（契约原话）。
+// 是「恰好一家才可用，否则显式报错」，不是「猜一家」。
 //
 // ### 这条接口和下单 SAGA 抢同一行
 //
@@ -348,6 +382,7 @@ type SetInventoryByCASRow struct {
 func (q *Queries) SetInventoryByCAS(ctx context.Context, arg SetInventoryByCASParams) (SetInventoryByCASRow, error) {
 	row := q.db.QueryRow(ctx, setInventoryByCAS,
 		arg.SkuID,
+		arg.StoreID,
 		arg.AvailableQty,
 		arg.WarningQty,
 		arg.ExpectedAvailableQty,

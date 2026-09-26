@@ -12,13 +12,14 @@ import (
 )
 
 const appendInventoryLog = `-- name: AppendInventoryLog :exec
-INSERT INTO inventory_logs (sku_id, change_qty, biz_type, biz_id,
+INSERT INTO inventory_logs (sku_id, store_id, change_qty, biz_type, biz_id,
                             before_available, after_available)
-VALUES ($1, $2, $3, $4, $5, $6)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 `
 
 type AppendInventoryLogParams struct {
 	SkuID           int64
+	StoreID         int64
 	ChangeQty       int32
 	BizType         int16
 	BizID           string
@@ -34,9 +35,15 @@ type AppendInventoryLogParams struct {
 //
 // biz_type：1 下单扣减 / 2 SAGA 补偿回补 / 3 超时关单释放 / 4 退款回补 / 5 手工调整。
 // biz_id 存订单号。
+//
+// **store_id 本轮（00020）补上，它不是可选的冗余。** 流水的唯一用途是对账，
+// 而对账口径从「这个商家这个 SKU 扣了多少」变成了「这家店这个 SKU 扣了多少」——
+// before_available / after_available 现在记的是某一家门店的水位，
+// 不写下是哪一家，同一个 SKU 在五家店的流水会交织成一条谁也对不平的序列。
 func (q *Queries) AppendInventoryLog(ctx context.Context, arg AppendInventoryLogParams) error {
 	_, err := q.db.Exec(ctx, appendInventoryLog,
 		arg.SkuID,
+		arg.StoreID,
 		arg.ChangeQty,
 		arg.BizType,
 		arg.BizID,
@@ -191,11 +198,21 @@ func (q *Queries) CountUserOrders(ctx context.Context, arg CountUserOrdersParams
 }
 
 const createOrderDraft = `-- name: CreateOrderDraft :one
-INSERT INTO orders (order_no, user_id, status, goods_amount_cents, freight_cents,
+INSERT INTO orders (order_no, user_id, store_id, region_id, store_snapshot,
+                    status, goods_amount_cents, freight_cents,
                     discount_cents, payable_cents, receiver_snapshot, remark, expire_at)
-VALUES ($1, $2, 0, $3, $4, $5, $6, $7, $8, $9)
-RETURNING id, order_no, status, goods_amount_cents, freight_cents, discount_cents,
-          payable_cents, paid_cents, refunded_cents, refund_status, expire_at, created_at
+SELECT $1, $2, st.id, st.region_id,
+       jsonb_build_object('store_name', st.name, 'region_name', r.name,
+                          'address', st.address, 'phone', st.phone),
+       0, $3, $4,
+       $5, $6,
+       $7, $8, $9
+  FROM stores st
+  JOIN regions r ON r.id = st.region_id
+ WHERE st.id = $10 AND st.deleted_at IS NULL
+RETURNING id, order_no, store_id, region_id, status, goods_amount_cents, freight_cents,
+          discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
+          expire_at, created_at
 `
 
 type CreateOrderDraftParams struct {
@@ -208,11 +225,14 @@ type CreateOrderDraftParams struct {
 	ReceiverSnapshot []byte
 	Remark           *string
 	ExpireAt         pgtype.Timestamptz
+	StoreID          int64
 }
 
 type CreateOrderDraftRow struct {
 	ID               int64
 	OrderNo          string
+	StoreID          int64
+	RegionID         int64
 	Status           int16
 	GoodsAmountCents int64
 	FreightCents     int64
@@ -232,6 +252,24 @@ type CreateOrderDraftRow struct {
 // 不等于「已成交」—— 状态 0 的订单永远不会出现在任何响应里。
 //
 // 租户列不出现在这条语句里（00013 的 DEFAULT current_merchant()）。
+//
+// **store_id / region_id / store_snapshot 本轮（00020）一起落下来。**
+// 三列都 NOT NULL，理由在数据模型 §4 末尾：SAGA 分支只拿到三个字符串，
+// 它读回订单行拿到一个 NULL 的 store_id 时无路可走 —— 既不能猜默认店
+// （会把单扣到另一家店去），也不能失败（订单已经落库了）。
+//
+// region_id 从 stores 现读一次，**存成订单自己的列，不靠 stores.region_id 推**：
+// 门店可以被调到另一个大区去，而这一单的价格是按当时那个大区算的。
+// 要能事后回答「这个价是怎么来的」，就不能让它取决于一张随后会变的表。
+//
+// store_snapshot 只放展示字段（门店名、大区名、地址、电话），**不放 id**——
+// 放了就会有人去 GROUP BY 它，而聚合该走 store_id 那一列（真外键、有索引）。
+//
+// 写成 INSERT ... SELECT FROM stores 而不是让应用把这几个值传进来：
+// 快照与外键必须来自**同一行**、同一个快照。应用先查一次门店再把字段拼进
+// INSERT，两步之间那家店可以改名 —— 于是 store_id 指着 A，快照写着 A 的旧名字，
+// 而两者都「看起来正常」。门店不存在或已软删时这条语句插 0 行，
+// 由 :one 变成 pgx.ErrNoRows，调用方翻成 422。
 func (q *Queries) CreateOrderDraft(ctx context.Context, arg CreateOrderDraftParams) (CreateOrderDraftRow, error) {
 	row := q.db.QueryRow(ctx, createOrderDraft,
 		arg.OrderNo,
@@ -243,11 +281,14 @@ func (q *Queries) CreateOrderDraft(ctx context.Context, arg CreateOrderDraftPara
 		arg.ReceiverSnapshot,
 		arg.Remark,
 		arg.ExpireAt,
+		arg.StoreID,
 	)
 	var i CreateOrderDraftRow
 	err := row.Scan(
 		&i.ID,
 		&i.OrderNo,
+		&i.StoreID,
+		&i.RegionID,
 		&i.Status,
 		&i.GoodsAmountCents,
 		&i.FreightCents,
@@ -362,7 +403,8 @@ func (q *Queries) GetIdempotencyKey(ctx context.Context, arg GetIdempotencyKeyPa
 }
 
 const getOrderByNo = `-- name: GetOrderByNo :one
-SELECT id, order_no, user_id, status, goods_amount_cents, freight_cents,
+SELECT id, order_no, user_id, store_id, region_id, status,
+       goods_amount_cents, freight_cents,
        discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
        expire_at, paid_at, shipped_at, finished_at, created_at
   FROM orders
@@ -373,6 +415,8 @@ type GetOrderByNoRow struct {
 	ID               int64
 	OrderNo          string
 	UserID           int64
+	StoreID          int64
+	RegionID         int64
 	Status           int16
 	GoodsAmountCents int64
 	FreightCents     int64
@@ -408,6 +452,8 @@ func (q *Queries) GetOrderByNo(ctx context.Context, orderNo string) (GetOrderByN
 		&i.ID,
 		&i.OrderNo,
 		&i.UserID,
+		&i.StoreID,
+		&i.RegionID,
 		&i.Status,
 		&i.GoodsAmountCents,
 		&i.FreightCents,
@@ -441,6 +487,28 @@ func (q *Queries) GetOrderReceiver(ctx context.Context, id int64) ([]byte, error
 	var receiver_snapshot []byte
 	err := row.Scan(&receiver_snapshot)
 	return receiver_snapshot, err
+}
+
+const getOrderStoreSnapshot = `-- name: GetOrderStoreSnapshot :one
+SELECT store_snapshot
+  FROM orders
+ WHERE id = $1
+`
+
+// 下单时拍下的门店 / 大区展示快照（契约的 OrderDetail.store）。
+//
+// 与 GetOrderReceiver 分开、也与 GetUserOrderByNo 分开，理由一字不差：
+// 它是一整块 JSONB，而订单列表逐行复用那条查询，列表里没有任何地方要展示
+// 门店地址与电话。
+//
+// **读快照而不是 JOIN stores**：门店会改名、会搬家、会换大区，
+// 三个月前那单的详情页要显示当时那个名字（数据模型 §5）。
+// JOIN 出来的是今天的名字，而那正是快照存在要避免的东西。
+func (q *Queries) GetOrderStoreSnapshot(ctx context.Context, id int64) ([]byte, error) {
+	row := q.db.QueryRow(ctx, getOrderStoreSnapshot, id)
+	var store_snapshot []byte
+	err := row.Scan(&store_snapshot)
+	return store_snapshot, err
 }
 
 const getUserAddress = `-- name: GetUserAddress :one
@@ -497,7 +565,8 @@ func (q *Queries) GetUserAddress(ctx context.Context, arg GetUserAddressParams) 
 }
 
 const getUserOrderByNo = `-- name: GetUserOrderByNo :one
-SELECT id, order_no, user_id, status, goods_amount_cents, freight_cents,
+SELECT id, order_no, user_id, store_id, region_id, status,
+       goods_amount_cents, freight_cents,
        discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
        expire_at, paid_at, shipped_at, finished_at, created_at
   FROM orders
@@ -515,6 +584,8 @@ type GetUserOrderByNoRow struct {
 	ID               int64
 	OrderNo          string
 	UserID           int64
+	StoreID          int64
+	RegionID         int64
 	Status           int16
 	GoodsAmountCents int64
 	FreightCents     int64
@@ -545,6 +616,8 @@ func (q *Queries) GetUserOrderByNo(ctx context.Context, arg GetUserOrderByNoPara
 		&i.ID,
 		&i.OrderNo,
 		&i.UserID,
+		&i.StoreID,
+		&i.RegionID,
 		&i.Status,
 		&i.GoodsAmountCents,
 		&i.FreightCents,
@@ -611,7 +684,7 @@ func (q *Queries) InsertPayment(ctx context.Context, arg InsertPaymentParams) (I
 }
 
 const listExpiredDraftOrders = `-- name: ListExpiredDraftOrders :many
-SELECT id, order_no
+SELECT id, order_no, store_id
   FROM orders
  WHERE status = 0 AND expire_at < now()
  ORDER BY expire_at
@@ -621,6 +694,7 @@ SELECT id, order_no
 type ListExpiredDraftOrdersRow struct {
 	ID      int64
 	OrderNo string
+	StoreID int64
 }
 
 // 第二类：孤儿草稿（00013 文件头那笔明写的欠账）。它们**没进过 SAGA**，
@@ -636,7 +710,7 @@ func (q *Queries) ListExpiredDraftOrders(ctx context.Context, limit int32) ([]Li
 	var items []ListExpiredDraftOrdersRow
 	for rows.Next() {
 		var i ListExpiredDraftOrdersRow
-		if err := rows.Scan(&i.ID, &i.OrderNo); err != nil {
+		if err := rows.Scan(&i.ID, &i.OrderNo, &i.StoreID); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -649,7 +723,7 @@ func (q *Queries) ListExpiredDraftOrders(ctx context.Context, limit int32) ([]Li
 
 const listExpiredPendingOrders = `-- name: ListExpiredPendingOrders :many
 
-SELECT id, order_no
+SELECT id, order_no, store_id
   FROM orders
  WHERE status = 10 AND expire_at < now()
  ORDER BY expire_at
@@ -659,6 +733,7 @@ SELECT id, order_no
 type ListExpiredPendingOrdersRow struct {
 	ID      int64
 	OrderNo string
+	StoreID int64
 }
 
 // ---------------------------------------------------------------------------
@@ -672,6 +747,9 @@ type ListExpiredPendingOrdersRow struct {
 // ---------------------------------------------------------------------------
 // 第一类：正常的超时未支付。它们进过 SAGA，库存已经真实扣减，要回补。
 //
+// store_id 一起取：回补要回补到**当初扣减的那一家店**，而这条清扫路径跑在
+// 任何请求之外（定时任务），它对那一单的记忆只有这几列。
+//
 // 走 idx_orders_status_expire（00006，WHERE status = 10）。
 // 按 expire_at 升序：过期最久的先处理，否则一个持续入单的租户能让最老的那批
 // 永远排在后面。
@@ -684,7 +762,7 @@ func (q *Queries) ListExpiredPendingOrders(ctx context.Context, limit int32) ([]
 	var items []ListExpiredPendingOrdersRow
 	for rows.Next() {
 		var i ListExpiredPendingOrdersRow
-		if err := rows.Scan(&i.ID, &i.OrderNo); err != nil {
+		if err := rows.Scan(&i.ID, &i.OrderNo, &i.StoreID); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -915,7 +993,8 @@ func (q *Queries) ListSKUsForPricing(ctx context.Context, skuIds []int64) ([]Lis
 
 const listUserOrders = `-- name: ListUserOrders :many
 
-SELECT id, order_no, user_id, status, goods_amount_cents, freight_cents,
+SELECT id, order_no, user_id, store_id, region_id, status,
+       goods_amount_cents, freight_cents,
        discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
        expire_at, paid_at, shipped_at, finished_at, created_at
   FROM orders
@@ -940,6 +1019,8 @@ type ListUserOrdersRow struct {
 	ID               int64
 	OrderNo          string
 	UserID           int64
+	StoreID          int64
+	RegionID         int64
 	Status           int16
 	GoodsAmountCents int64
 	FreightCents     int64
@@ -1001,6 +1082,8 @@ func (q *Queries) ListUserOrders(ctx context.Context, arg ListUserOrdersParams) 
 			&i.ID,
 			&i.OrderNo,
 			&i.UserID,
+			&i.StoreID,
+			&i.RegionID,
 			&i.Status,
 			&i.GoodsAmountCents,
 			&i.FreightCents,

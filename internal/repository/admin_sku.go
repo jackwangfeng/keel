@@ -185,7 +185,7 @@ func (t tenantTx) CreateSKU(ctx context.Context, n NewSKU) (AdminSKU, error) {
 		return AdminSKU{}, err
 	}
 
-	inv, err := t.q.CreateInventoryRow(ctx, db.CreateInventoryRowParams{
+	_, err = t.q.CreateInventoryRow(ctx, db.CreateInventoryRowParams{
 		SkuID:        s.ID,
 		AvailableQty: n.AvailableQty,
 		WarningQty:   n.WarningQty,
@@ -202,7 +202,12 @@ func (t tenantTx) CreateSKU(ctx context.Context, n NewSKU) (AdminSKU, error) {
 		ID: s.ID, ProductID: s.ProductID, SKUCode: s.SkuCode,
 		SpecValues: s.SpecValues, PriceCents: s.PriceCents, CostCents: s.CostCents,
 		WeightGram: s.WeightGram, ImageURL: s.ImageUrl, Status: s.Status,
-		AvailableQty: inv.AvailableQty, WarningQty: inv.WarningQty,
+		// 库存取入参而不是取那条 INSERT 的回显：本轮它变成了 :execrows
+		// （只给默认门店建行，没有默认门店时一行都不建，见那条查询的注释），
+		// 于是没有行可回。回显入参在两种情况下都是对的：建成了就是这个数，
+		// 没建成的话「这个 SKU 现在可售 0」也确实是 n.AvailableQty 之外
+		// 唯一诚实的答案 —— 而 rows 会告诉调用方到底是哪一种。
+		AvailableQty: n.AvailableQty, WarningQty: n.WarningQty,
 		CreatedAt: s.CreatedAt.Time, UpdatedAt: s.UpdatedAt.Time,
 	}, nil
 }

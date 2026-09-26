@@ -63,11 +63,39 @@ SELECT id, receiver_name, phone, province, city, district, street, detail,
 -- 不等于「已成交」—— 状态 0 的订单永远不会出现在任何响应里。
 --
 -- 租户列不出现在这条语句里（00013 的 DEFAULT current_merchant()）。
-INSERT INTO orders (order_no, user_id, status, goods_amount_cents, freight_cents,
+--
+-- **store_id / region_id / store_snapshot 本轮（00020）一起落下来。**
+-- 三列都 NOT NULL，理由在数据模型 §4 末尾：SAGA 分支只拿到三个字符串，
+-- 它读回订单行拿到一个 NULL 的 store_id 时无路可走 —— 既不能猜默认店
+-- （会把单扣到另一家店去），也不能失败（订单已经落库了）。
+--
+-- region_id 从 stores 现读一次，**存成订单自己的列，不靠 stores.region_id 推**：
+-- 门店可以被调到另一个大区去，而这一单的价格是按当时那个大区算的。
+-- 要能事后回答「这个价是怎么来的」，就不能让它取决于一张随后会变的表。
+--
+-- store_snapshot 只放展示字段（门店名、大区名、地址、电话），**不放 id**——
+-- 放了就会有人去 GROUP BY 它，而聚合该走 store_id 那一列（真外键、有索引）。
+--
+-- 写成 INSERT ... SELECT FROM stores 而不是让应用把这几个值传进来：
+-- 快照与外键必须来自**同一行**、同一个快照。应用先查一次门店再把字段拼进
+-- INSERT，两步之间那家店可以改名 —— 于是 store_id 指着 A，快照写着 A 的旧名字，
+-- 而两者都「看起来正常」。门店不存在或已软删时这条语句插 0 行，
+-- 由 :one 变成 pgx.ErrNoRows，调用方翻成 422。
+INSERT INTO orders (order_no, user_id, store_id, region_id, store_snapshot,
+                    status, goods_amount_cents, freight_cents,
                     discount_cents, payable_cents, receiver_snapshot, remark, expire_at)
-VALUES ($1, $2, 0, $3, $4, $5, $6, $7, $8, $9)
-RETURNING id, order_no, status, goods_amount_cents, freight_cents, discount_cents,
-          payable_cents, paid_cents, refunded_cents, refund_status, expire_at, created_at;
+SELECT sqlc.arg(order_no), sqlc.arg(user_id), st.id, st.region_id,
+       jsonb_build_object('store_name', st.name, 'region_name', r.name,
+                          'address', st.address, 'phone', st.phone),
+       0, sqlc.arg(goods_amount_cents), sqlc.arg(freight_cents),
+       sqlc.arg(discount_cents), sqlc.arg(payable_cents),
+       sqlc.arg(receiver_snapshot), sqlc.narg(remark), sqlc.arg(expire_at)
+  FROM stores st
+  JOIN regions r ON r.id = st.region_id
+ WHERE st.id = sqlc.arg(store_id) AND st.deleted_at IS NULL
+RETURNING id, order_no, store_id, region_id, status, goods_amount_cents, freight_cents,
+          discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
+          expire_at, created_at;
 
 -- name: CreateOrderItem :exec
 -- 订单项快照（数据模型 §5：下单即快照）。商品改价改名不影响历史订单。
@@ -89,7 +117,8 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10);
 -- 三列一起取而不是只取 paid_at：shipped_at 是「发货后 N 天自动确认收货」倒计时
 -- 的起点（契约里明写），finished_at 同理属于同一张时间线，分两次加意味着
 -- 这条查询与它的领域类型要被改两遍。
-SELECT id, order_no, user_id, status, goods_amount_cents, freight_cents,
+SELECT id, order_no, user_id, store_id, region_id, status,
+       goods_amount_cents, freight_cents,
        discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
        expire_at, paid_at, shipped_at, finished_at, created_at
   FROM orders
@@ -134,9 +163,14 @@ UPDATE orders SET status = 90 WHERE order_no = $1 AND status IN (0, 10);
 --
 -- biz_type：1 下单扣减 / 2 SAGA 补偿回补 / 3 超时关单释放 / 4 退款回补 / 5 手工调整。
 -- biz_id 存订单号。
-INSERT INTO inventory_logs (sku_id, change_qty, biz_type, biz_id,
+--
+-- **store_id 本轮（00020）补上，它不是可选的冗余。** 流水的唯一用途是对账，
+-- 而对账口径从「这个商家这个 SKU 扣了多少」变成了「这家店这个 SKU 扣了多少」——
+-- before_available / after_available 现在记的是某一家门店的水位，
+-- 不写下是哪一家，同一个 SKU 在五家店的流水会交织成一条谁也对不平的序列。
+INSERT INTO inventory_logs (sku_id, store_id, change_qty, biz_type, biz_id,
                             before_available, after_available)
-VALUES ($1, $2, $3, $4, $5, $6);
+VALUES ($1, $2, $3, $4, $5, $6, $7);
 
 -- name: ClaimIdempotencyKey :execrows
 -- 抢占式插入（数据模型 §12）。**主键就是那把锁。**
@@ -181,10 +215,13 @@ UPDATE idempotency_keys
 -- name: ListExpiredPendingOrders :many
 -- 第一类：正常的超时未支付。它们进过 SAGA，库存已经真实扣减，要回补。
 --
+-- store_id 一起取：回补要回补到**当初扣减的那一家店**，而这条清扫路径跑在
+-- 任何请求之外（定时任务），它对那一单的记忆只有这几列。
+--
 -- 走 idx_orders_status_expire（00006，WHERE status = 10）。
 -- 按 expire_at 升序：过期最久的先处理，否则一个持续入单的租户能让最老的那批
 -- 永远排在后面。
-SELECT id, order_no
+SELECT id, order_no, store_id
   FROM orders
  WHERE status = 10 AND expire_at < now()
  ORDER BY expire_at
@@ -195,7 +232,7 @@ SELECT id, order_no
 -- 一件库存都没扣，所以只关单、不回补。
 --
 -- 走 idx_orders_draft_expire（00015，WHERE status = 0）。
-SELECT id, order_no
+SELECT id, order_no, store_id
   FROM orders
  WHERE status = 0 AND expire_at < now()
  ORDER BY expire_at
@@ -318,7 +355,8 @@ RETURNING id, payment_no, status;
 -- 排序 created_at DESC 之后再按 id DESC：同一毫秒内建的两笔订单在只按时间排序时
 -- 顺序是不确定的，而不确定的顺序会让同一页在两次请求之间变样 —— 分页最经典的
 -- 那种「第二页又看到了第一页的那一单」。
-SELECT id, order_no, user_id, status, goods_amount_cents, freight_cents,
+SELECT id, order_no, user_id, store_id, region_id, status,
+       goods_amount_cents, freight_cents,
        discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
        expire_at, paid_at, shipped_at, finished_at, created_at
   FROM orders
@@ -354,7 +392,8 @@ SELECT count(*)
 --
 -- 查不到与「不是你的」回同一个 404：order_no 是 72 bit 随机不可枚举的，
 -- 分开报会把它变成一个「这个单号存不存在」的判定器。
-SELECT id, order_no, user_id, status, goods_amount_cents, freight_cents,
+SELECT id, order_no, user_id, store_id, region_id, status,
+       goods_amount_cents, freight_cents,
        discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
        expire_at, paid_at, shipped_at, finished_at, created_at
   FROM orders
@@ -380,6 +419,20 @@ SELECT id, sku_id, product_id, title_snapshot, spec_snapshot, image_snapshot,
 -- 而那条查询被订单列表**逐行**复用 —— 列表里没有任何地方要展示收货地址，
 -- 每页多搬 20 份快照是白搬的。
 SELECT receiver_snapshot
+  FROM orders
+ WHERE id = $1;
+
+-- name: GetOrderStoreSnapshot :one
+-- 下单时拍下的门店 / 大区展示快照（契约的 OrderDetail.store）。
+--
+-- 与 GetOrderReceiver 分开、也与 GetUserOrderByNo 分开，理由一字不差：
+-- 它是一整块 JSONB，而订单列表逐行复用那条查询，列表里没有任何地方要展示
+-- 门店地址与电话。
+--
+-- **读快照而不是 JOIN stores**：门店会改名、会搬家、会换大区，
+-- 三个月前那单的详情页要显示当时那个名字（数据模型 §5）。
+-- JOIN 出来的是今天的名字，而那正是快照存在要避免的东西。
+SELECT store_snapshot
   FROM orders
  WHERE id = $1;
 
