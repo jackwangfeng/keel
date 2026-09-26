@@ -114,6 +114,7 @@ key 的有效期是 24 小时，作用域是「接口 + 用户 + key」。哪些
 | 403 | `role-forbidden` / `out-of-scope` | 后台：角色不允许 / 超出管辖范围 |
 | 404 | `not-found` | 不存在、不属于你，或者**接口本身还没实现** |
 | 409 | `idempotency-key-in-flight` | 同一个幂等 key 正在处理 |
+| 409 | `promotion-limit-exceeded` / `promotion-sold-out` | 超出活动每人限购 / 秒杀配额在试算之后被抢光 |
 | 422 | `idempotency-key-reused` / `compliance-rejected` | 幂等 key 被复用 / 商品文案命中违禁词 |
 | 429 | — | 触发限流（目前只有 `/search` 按 IP 限流） |
 | 501 | — | 这条路依赖的外部服务没接（短信、微信、邮件），明确告诉你没开 |
@@ -167,6 +168,45 @@ key 的有效期是 24 小时，作用域是「接口 + 用户 + key」。哪些
 
 购物车（`/cart`）按门店计价，请求时带上和商品页、下单页相同的 `store_id`。
 购物车金额和试算用的是同一条价格查询，两边逐分一致。
+
+---
+
+## 营销活动在响应里长什么样
+
+买家侧**没有单独的活动接口**：满减、满折、限时折扣、秒杀的结果直接出现在商品、购物车、试算与订单里，
+而且四处用的是服务端同一份计算，试算说减多少，下单就减多少。计价顺序固定：
+
+```
+门店价 → 限时折扣 / 秒杀改单价（活动价 = min(门店价, 特价)）→ 满减满折按行分摊 → 券 → 运费
+```
+
+| 在哪 | 字段 | 怎么用 |
+|---|---|---|
+| `GET /products`、`GET /products/{id}` | `promotion_tags[]`（`label` 如「满199减20」「限时特价 ¥49.9」） | 商品卡上的角标。`min_price_cents` 仍是门店价 |
+| `GET /products/{id}` 的 `skus[]` | `promo_price_cents` | 这个 SKU 此刻的活动价；没有就不出现 |
+| `GET /cart` | `items[].price_cents` 是活动价，`list_price_cents` 是门店价（划线）；`promotion_discount_cents`、`promotions[]` | 已勾选的行命中了哪些满减、还差多少凑满 |
+| `POST /orders/preview` | `promotion_discount_cents`、`coupon_discount_cents`、`promotions[]`；`items[]` 每行 `price_cents` / `list_price_cents` / `promotion_discount_cents` / `discount_cents` | 结算页的「活动优惠」「券优惠」两行，和「再买 50 元可减 30 元」 |
+| `Order` / `OrderDetail` | `promotion_discount_cents`、`promotions[]`（下单时的快照）；`items[]` 同上 | 订单详情展示命中的活动 |
+
+几条接入时要注意的：
+
+- `discount_cents` 是**全部优惠**（活动 + 券）；`promotion_discount_cents` 是其中满减满折那一份，
+  券那一份在试算里是 `coupon_discount_cents`。限时折扣 / 秒杀**不在** `discount_cents` 里——
+  它们改的是单价，已经体现在 `goods_amount_cents` 里；`promotions[]` 里给出的 `discount_cents`
+  （省了多少）只用来展示。
+- `promotions[].applied = false` 的是「差一点就命中」的活动，`message` 是现成的一句提示
+  （「还差 1 件享 9 折」），`shortfall` + `threshold_unit` 是结构化的同一件事。
+- **券的门槛看活动之后的金额**。`applicable_coupons` 已经按这个口径算好；命中了不与券同享的活动时，
+  它是空数组，带券试算 / 下单返回 409 `coupon-not-applicable`（`detail` 写着是哪个活动）。
+- 限时折扣 / 秒杀超出**每人限购**时试算与下单都是 409 `promotion-limit-exceeded`，
+  请让买家减数量，而不是自动拆单。秒杀配额在试算之后被别人抢光时，下单返回 409
+  `promotion-sold-out`，重新试算会按门店价报价 —— 请把新的应付金额给买家确认后再下单
+  （`expected_payable_cents` 会替你拦住价格变化）。
+- **退款**不需要客户端算任何东西：每行的优惠（活动 + 券）已经按行分摊在 `discount_cents` 里，
+  服务端按 `amount_cents − discount_cents` 这份净额退，一行退完恰好是这一行的实付。
+- 新人礼（首单前的买家登录后自动发一张券）发出的券在 `GET /coupons` 里 `source = 3`。
+
+后台接口在 `/admin/promotions`（列表、新建、详情、PATCH 改规则与上下线），权限与优惠券相同。
 
 ---
 
