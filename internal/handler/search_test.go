@@ -511,6 +511,62 @@ func TestSearchFiltersApply(t *testing.T) {
 	}
 }
 
+// 草稿与软删除的商品，两路召回都不许交出来。
+//
+// db/queries/search.sql 的文件头写着「两条查询的过滤条件必须逐字一致……
+// 且没有任何东西会红」。这条测试就是来当那句话的执行者的 —— 对照
+// db/queries/products.sql 那条同名纪律，那边的执行者是
+// TestDraftAndDeletedProductsAreInvisible。
+//
+// 判据的三段，缺一段这条测试就会变成空转：
+//
+//	① 两件反例**带着完整的派生数据**（search_text + 向量），由夹具自证
+//	   （newSearchFixture 末尾那段）。没有派生数据的商品是被「没有数据」
+//	   挡住的，那时把 `AND p.status = 1` 整个删掉它照样不出现。
+//	② **阳性对照**：同一次查询里，一件字面几乎相同、只是 status = 1 的商品
+//	   必须出现。少了它，「反例没出现」也可能只是这个查询什么都没召回。
+//	③ **四种 filters 组合**都验。两路的过滤条件是分别写的，而 RRF 融合的是
+//	   两路的并集 —— 任何一路把草稿放进来，它就会出现在最终结果里。
+//	   组合刻意选成「除了 status / deleted_at 之外没有任何条件会挡住反例」：
+//	   反例是女装、有货、19900 分，四组条件对它全部成立。
+func TestDraftAndDeletedProductsAreInvisibleInSearch(t *testing.T) {
+	fx := newSearchFixture(t)
+
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"不带 filters（in_stock_only 默认 true）", `{"query":"连衣裙"}`},
+		{"in_stock_only=false", `{"query":"连衣裙","filters":{"in_stock_only":false}}`},
+		{"限定女装类目", fmt.Sprintf(`{"query":"连衣裙","filters":{"category_id":%d}}`, fx.CategoryDressA)},
+		{"价格区间 10000-30000", `{"query":"连衣裙","filters":{"min_price_cents":10000,"max_price_cents":30000}}`},
+	}
+
+	for _, c := range cases {
+		w, body := doSearch(t, fx.HostA, c.body)
+		if w.Code != http.StatusOK {
+			t.Fatalf("[%s] 检索返回 %d：%s", c.name, w.Code, w.Body.String())
+		}
+		titles := titlesOf(body)
+
+		// ② 阳性对照先跑：这一组条件下，在架的那件裙子必须在。
+		if !contains(titles, fxDress.Title) {
+			t.Fatalf("[%s] 阳性对照不成立：在架的 %q 都没搜到 —— "+
+				"下面那两条「草稿 / 已删除没出现」因此证明不了任何事，"+
+				"它们可能只是这一组条件把一切都筛掉了。结果：%v",
+				c.name, fxDress.Title, titles)
+		}
+		for _, bad := range []searchProduct{fxDraft, fxDeleted} {
+			if contains(titles, bad.Title) {
+				t.Errorf("[%s] 搜到了 %q（%s）—— 两路召回里的 "+
+					"`AND p.status = 1` / `AND p.deleted_at IS NULL` 有一路漏了。"+
+					"RRF 融合的是两路的并集，任何一路放它进来它就会出现在最终结果里。"+
+					"结果：%v", c.name, bad.Title, bad.Subtitle, titles)
+			}
+		}
+	}
+}
+
 // 查询词里切不出任何可检索的内容时回 422，不是 200 + 空列表。
 //
 // 「这串东西搜不了」与「这家店没有」对用户是两件事：前者该提示换个词，

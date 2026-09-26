@@ -136,6 +136,17 @@ type searchProduct struct {
 	Subtitle string
 	Cents    int64
 	Stock    int32
+
+	// Draft / Deleted 是**反例**：这两件商品要带着完整的派生数据
+	// （search_text + 向量）躺在库里，然后才被改成草稿 / 软删除。
+	//
+	// 顺序是刻意的。先写派生数据再翻状态，它们才真的进得了两路召回的
+	// 候选面 —— 一件从来没有 search_text、也没有向量行的商品，是被
+	// 「没有数据」挡在外面的，不是被 status / deleted_at 挡在外面的，
+	// 而那时「它没出现在结果里」这条断言就是空转的：把两条召回查询的
+	// `AND p.status = 1` 整个删掉，它照样绿。
+	Draft   bool
+	Deleted bool
 }
 
 // searchFixture 是一次检索测试要用的两家店。
@@ -158,6 +169,21 @@ var (
 	fxSkirt   = searchProduct{Title: "真丝吊带长裙", Subtitle: "法式复古", Cents: 45900, Stock: 4}
 	fxCoffee  = searchProduct{Title: "手冲咖啡壶", Subtitle: "600ml 玻璃", Cents: 12900, Stock: 9}
 	fxSoldOut = searchProduct{Title: "亚麻直筒连衣裙", Subtitle: "断货款", Cents: 22900, Stock: 0}
+
+	// 两件**反例**，A 店，女装类目，有货，价格与 fxDress 同档 ——
+	// 也就是说除了 status / deleted_at 之外，没有任何一个筛选条件会挡住它们。
+	//
+	// db/queries/search.sql 的文件头写着「两条查询的过滤条件必须逐字一致……
+	// 且没有任何东西会红」。那句自陈在此之前是准确的：夹具里五件商品
+	// 全是 status = 1、deleted_at 为 NULL，**一件反例都没有**，于是把
+	// SearchProductsByKeyword 的 `AND p.status = 1` 改成 `>= 0`（源与 sqlc
+	// 产物一起改，漂移闸门也不红）之后四个包全绿。
+	//
+	// 对照 db/queries/products.sql 那条同名纪律 —— 那边有
+	// TestDraftAndDeletedProductsAreInvisible 当执行者，注释里还写着
+	// 「这条测试是那句话唯一的执行者」。检索这边此前没有执行者。
+	fxDraft   = searchProduct{Title: "草稿款连衣裙", Subtitle: "还没上架", Cents: 19900, Stock: 5, Draft: true}
+	fxDeleted = searchProduct{Title: "已删除连衣裙", Subtitle: "软删待清理", Cents: 19900, Stock: 5, Deleted: true}
 )
 
 // newSearchFixture 播两家真实可解析的店，带商品、SKU、库存，
@@ -233,6 +259,8 @@ func newSearchFixture(t *testing.T) searchFixture {
 		{idA, "女装", fxDress, fx.IDsA},
 		{idA, "女装", fxSkirt, fx.IDsA},
 		{idA, "女装", fxSoldOut, fx.IDsA},
+		{idA, "女装", fxDraft, fx.IDsA},
+		{idA, "女装", fxDeleted, fx.IDsA},
 		{idA, "咖啡器具", fxCoffee, fx.IDsA},
 		{idB, "女装", fxDress, fx.IDsB},
 	}
@@ -310,6 +338,48 @@ func newSearchFixture(t *testing.T) searchFixture {
 			})
 		}); err != nil {
 			t.Fatalf("写派生数据失败（product %d）: %v", pid, err)
+		}
+	}
+
+	// 两件反例**先拿到派生数据，再被改成草稿 / 软删除**。理由写在
+	// searchProduct.Draft 上：顺序反过来的话它们根本进不了召回的候选面，
+	// 「它们没出现在结果里」就与 status / deleted_at 那两个过滤条件无关了。
+	for _, pl := range plans {
+		switch {
+		case pl.p.Draft:
+			if _, err := admin.Exec(ctx,
+				`UPDATE products SET status = 0, published_at = NULL WHERE id = $1`,
+				pl.ids[pl.p.Title]); err != nil {
+				t.Fatal(err)
+			}
+		case pl.p.Deleted:
+			if _, err := admin.Exec(ctx,
+				`UPDATE products SET deleted_at = now() WHERE id = $1`,
+				pl.ids[pl.p.Title]); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	// 自证：两件反例真的**带着两份派生数据**躺在库里。
+	//
+	// 少了这一段，夹具哪天把写派生数据的循环挪到翻状态之后（或者 RLS 让那两次
+	// 写入静默失败），反例就退化成「没有数据所以搜不到」，而依赖它们的断言
+	// 会在完全没有守护力的情况下继续全绿 —— 这正是这一整条要修的那个毛病。
+	for _, p := range []searchProduct{fxDraft, fxDeleted} {
+		pid := fx.IDsA[p.Title]
+		var hasText, hasVector bool
+		if err := admin.QueryRow(ctx, `
+			SELECT p.search_text IS NOT NULL,
+			       EXISTS (SELECT 1 FROM product_text_vectors v WHERE v.product_id = p.id)
+			  FROM products p WHERE p.id = $1`, pid).Scan(&hasText, &hasVector); err != nil {
+			t.Fatal(err)
+		}
+		if !hasText || !hasVector {
+			t.Fatalf("反例 %q（product %d）没有完整的派生数据"+
+				"（search_text=%v 向量=%v）—— 它被挡在结果外面是因为没有数据，"+
+				"不是因为 status / deleted_at，依赖它的断言因此是空转的",
+				p.Title, pid, hasText, hasVector)
 		}
 	}
 	return fx
