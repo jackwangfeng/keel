@@ -225,7 +225,6 @@ func TestCartFlagsUnavailableLinesInsteadOfDroppingThem(t *testing.T) {
 	}
 }
 
-
 // 加购时判「卖不卖」「够不够」，各有各的 type。
 func TestCartAddRejectsWhatCannotBeBought(t *testing.T) {
 	bs := newBuyerShop(t)
