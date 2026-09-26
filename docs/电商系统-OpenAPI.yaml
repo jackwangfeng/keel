@@ -69,6 +69,14 @@ tags:
       （只看得见自己那一份数据）。详见数据模型 §14。
   - name: Upload
     description: 文件上传（商品图 / 头像 / 退款凭证）
+  - name: Store
+    description: |
+      门店与电子围栏。买家侧只有「列出门店」与「按位置选店」两条；
+      后台侧在 `/admin/stores` 与 `/admin/regions` 下。
+
+      **「当前门店」在这个契约里永远有一个确定的值**，解析链是
+      「客户端显式给的 `store_id` > 按位置解析出的门店 > 默认门店」，
+      三级都落空才是「不在服务范围」。数据模型 §4 是它的真相源。
 # S13 不做（一期）：用户自助领券（GET /coupon-templates、POST .../claim）。
 # 一期只做后台定向发放 —— coupon_templates 的 total_count / per_user_limit
 # 这套发放控制是为「领券中心」准备的，而领券中心涉及活动页、分享裂变、
@@ -1061,8 +1069,29 @@ paths:
   /admin/skus/{sku_id}/inventory:
     put:
       tags: [Admin, Catalog]
-      summary: 改库存（比较并设置）
+      summary: 改库存（比较并设置，仅单门店商家）
       description: |
+        ### 这条路径本轮变成了「恰好一家门店」时的便捷写法
+
+        库存主键从 `sku_id` 变成 `(sku_id, store_id)` 之后（数据模型 §4，
+        §15 第 3 条结清），**「这个 SKU 的库存」不再是一个有定义的东西**。
+        一般形态是 `PUT /admin/stores/{store_id}/skus/{sku_id}/inventory`。
+
+        这条保留下来，语义写死：**本租户恰好有一家未软删的门店时，
+        它就是那一家；否则返回 409 `https://keel.dev/problems/store-ambiguous`。**
+
+        为什么不直接删掉它：架构 §3 的原话是「**多租户是能力不是要求**」——
+        小商家 `docker compose up` 起来就是租户数为 1 的部署，感知不到多租户。
+        多门店是同一条叙事的第二段：单店商家不该被逼着在每个 URL 里写一个
+        恒等于 1 的 `store_id`。
+
+        为什么不让它「默认落到默认门店」：那正是这条接口最不该做的事。
+        库存是唯一真相，猜错一家店的后果是**把另一家店的水位覆盖掉**，
+        而且没有任何东西会响。所以是「恰好一家才可用，否则显式报错」，
+        不是「猜一家」。
+
+        ---
+
         **这条接口和下单 SAGA 抢同一行。** `inventories` 是数据模型 §4 的热点表，
         下单正向分支是 `UPDATE inventories SET available_qty = available_qty - $2
         WHERE sku_id = $1 AND available_qty >= $2`。如果后台这里写的是一个
@@ -1134,10 +1163,19 @@ paths:
               schema: { $ref: '#/components/schemas/Problem' }
         '409':
           description: |
-            `expected_available_qty` 与当前值不符——库存在你读到它之后被改过
-            （多半是并发下单扣减）。`type` 为
-            `https://keel.dev/problems/inventory-precondition-failed`，
-            响应体里的 `current` 是当前的真实值，可直接用于刷新页面并重试。
+            两种，按 `type` 区分：
+
+            · `https://keel.dev/problems/inventory-precondition-failed` ——
+              `expected_available_qty` 与当前值不符，库存在你读到它之后被改过
+              （多半是并发下单扣减）。响应体里的 `current` 是当前的真实值，
+              可直接用于刷新页面并重试。
+            · `https://keel.dev/problems/store-ambiguous` ——
+              本租户的门店数不是 1，「这个 SKU 的库存」没有唯一答案。
+              改调 `PUT /admin/stores/{store_id}/skus/{sku_id}/inventory`。
+              **这一种重试没有用**，但它和上一种共用 409 是刻意的：
+              两者都是「服务端现在的状态与你的假设不符」，
+              而客户端对第二种要做的是换一条路径，不是换一个值——
+              `type` 把这件事说清楚了，状态码不必再分一次。
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/InventoryConflict' }
@@ -1305,6 +1343,784 @@ paths:
               schema: { $ref: '#/components/schemas/Problem' }
         '409':
           description: 该分类下还有子分类或商品，见 `type`
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  # ------------------------------------------------- Admin · 大区、门店与围栏
+  #
+  # 这一段是「多门店 + 电子围栏」的后台面，数据模型 §4 是它的真相源。
+  # 三件事在这里要说清楚，因为它们决定了下面每条路径的形状：
+  #
+  #  1. **可见性与价格都是两层覆盖，门店是最内层。**
+  #       可见性：租户目录 − 大区排除 − 门店排除
+  #       价格：  SKU 基准价 → 大区价 → 门店价（就近生效）
+  #     所以「上下架」与「定价」这两组端点在大区与门店下各有一份，形状一致。
+  #
+  #  2. **两组排除表都是「缺一行即在售」。** 上架 = 删掉那一行，
+  #     下架 = 写一行。端点做成 `PUT .../listing`，请求体 `{listed: bool}`，
+  #     而不是 POST/DELETE 两条——「上架」与「下架」是同一个开关的两个位置，
+  #     拆成两条路径会让客户端要先知道当前状态才知道该调哪条。
+  #
+  #  3. **两组价格覆盖都是「缺一行即沿用上一层」。** 定价 = upsert，
+  #     撤销 = DELETE（回到上一层），不是「把价格设成 null」。
+  /admin/regions:
+    get:
+      tags: [Admin, Store]
+      summary: 大区列表
+      description: |
+        大区是**门店的分组**，不是一块地——它没有自己的几何。
+        坐标解析出门店之后，门店的 `region_id` 就同时定下了大区
+        （数据模型 §4：两套几何要回答「围栏与大区边界不一致时听谁的」，而那没有好答案）。
+
+        大区决定两件事：这一层的商品可见性（`region_product_overrides`）
+        与这一层的价格（`region_sku_prices`）。
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - name: include_deleted
+          in: query
+          description: 是否包含已软删的大区。不传即只返回未删的。
+          schema: { type: boolean }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PageMeta'
+                  - type: object
+                    required: [items]
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: '#/components/schemas/AdminRegion' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Admin, Store]
+      summary: 新建大区
+      description: |
+        **建店之前必须先有大区**：`stores.region_id` 是 `NOT NULL`
+        （数据模型 §4 论证过为什么不可空——可空会让三层定价的 `COALESCE`
+        多一条只在「忘了配大区」时才走到的分支，而那条分支算的是钱）。
+
+        建商家（`POST /admin/merchants`）会在同一个事务里建出一个默认大区，
+        所以正常路径上不必先调这条。
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RegionCreateRequest' }
+      responses:
+        '201':
+          description: 已创建
+          headers:
+            Idempotency-Replayed: { $ref: '#/components/headers/IdempotencyReplayed' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminRegion' }
+        '409':
+          description: |
+            `code` 在本租户内已存在（`uk_regions_code`），或同一
+            Idempotency-Key 正在处理中。按 `type` 区分：
+            `https://keel.dev/problems/region-code-conflict`
+            与 `https://keel.dev/problems/idempotency-key-in-flight`。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422': { $ref: '#/components/responses/IdempotencyKeyReused' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /admin/regions/{region_id}:
+    parameters:
+      - $ref: '#/components/parameters/RegionId'
+    patch:
+      tags: [Admin, Store]
+      summary: 改大区
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RegionUpdateRequest' }
+      responses:
+        '200':
+          description: 已更新
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminRegion' }
+        '404':
+          description: 大区不存在或不属于当前租户。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+    delete:
+      tags: [Admin, Store]
+      summary: 软删大区
+      description: |
+        名下还有未软删的门店时拒绝（409）。**不做级联**：
+        级联软删一个大区会连带让它下面所有门店接不到单，而调用方在点下删除时
+        看到的只是一个大区名。
+      responses:
+        '204':
+          description: 已软删
+        '404':
+          description: 大区不存在或不属于当前租户。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '409':
+          description: |
+            名下还有门店。`type` 为
+            `https://keel.dev/problems/region-has-stores`，
+            `detail` 里给出门店数量。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /admin/stores:
+    get:
+      tags: [Admin, Store]
+      summary: 门店列表
+      description: |
+        响应带一个**必返**的 `has_default`。
+
+        它不是冗余：数据模型 §4 记下的那条代价是「没有默认门店时，
+        『不在任何围栏内』与『没有位置』两条路径都无处可落，
+        买家看到的是不在服务范围」——也就是说**一个没配默认店的商家，
+        它的店面对所有未授权定位的访客都是空的**。
+
+        这是规则的必然结果，不是 bug，但后台必须说出来。
+        放在列表响应里而不是做成建店时的强制项，理由是建店与画围栏是
+        两个人在两个时刻做的事，强制会把第一步卡死在第二步上。
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - name: region_id
+          in: query
+          description: 只看某个大区下的门店。
+          schema: { type: integer, format: int64 }
+        - name: include_deleted
+          in: query
+          description: 是否包含已软删的门店。不传即只返回未删的。
+          schema: { type: boolean }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminStoreList' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Admin, Store]
+      summary: 新建门店
+      description: |
+        **围栏不在这里传。** 建店与画围栏分成两步（`PUT .../fence`），
+        理由是它们在后台是两个界面：一个是表单，一个是地图。
+
+        但数据库上有一条 `CHECK (is_default OR fence IS NOT NULL)`：
+        **非默认门店没有围栏就是一家永远接不到单的店**，它不会被任何坐标命中，
+        也不是回落目标。所以这条端点建出来的非默认门店在配上围栏之前，
+        服务端要把它当成「未完成」——`AdminStore.fence` 为 `null` 即是那个状态，
+        后台列表按它挂提示。
+
+        建第一家门店时若还没有任何大区，返回 422（`region_id` 必填且必须存在）。
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/StoreCreateRequest' }
+      responses:
+        '201':
+          description: 已创建
+          headers:
+            Idempotency-Replayed: { $ref: '#/components/headers/IdempotencyReplayed' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminStore' }
+        '409':
+          description: |
+            按 `type` 区分：`code` 在本租户内已重复
+            （`https://keel.dev/problems/store-code-conflict`）；
+            `is_default = true` 但已经有一家默认门店
+            （`https://keel.dev/problems/default-store-conflict`，
+            对应 `uk_stores_default` 这条部分唯一索引——切换默认店请用
+            `PUT /admin/stores/{store_id}/default`，它会在同一个事务里先清旧再置新）；
+            同一 Idempotency-Key 正在处理中。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: |
+            `region_id` 不存在或不属于当前租户，或字段校验不过，
+            或同一 Idempotency-Key 配了不同的请求体
+            （`https://keel.dev/problems/idempotency-key-reused`）。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /admin/stores/{store_id}:
+    parameters:
+      - $ref: '#/components/parameters/StoreId'
+    get:
+      tags: [Admin, Store]
+      summary: 门店详情（含围栏）
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminStore' }
+        '404':
+          description: 门店不存在或不属于当前租户。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+    patch:
+      tags: [Admin, Store]
+      summary: 改门店
+      description: |
+        改不了两样：围栏走 `PUT .../fence`，默认店走 `PUT .../default`。
+        两样都不是普通字段——一个要过 `ST_IsValid` 校验，
+        另一个要在同一个事务里先清旧再置新。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/StoreUpdateRequest' }
+      responses:
+        '200':
+          description: 已更新
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminStore' }
+        '404':
+          description: 门店不存在或不属于当前租户。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '409':
+          description: |
+            `code` 重复。`type` 为 `https://keel.dev/problems/store-code-conflict`。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: |
+            `region_id` 不存在或不属于当前租户。
+            **换大区会改变这家店的价格与可见性**（大区是两层覆盖里的外层），
+            服务端不做任何提示性拦截，但后台界面应当二次确认。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+    delete:
+      tags: [Admin, Store]
+      summary: 软删门店
+      description: |
+        软删，不是硬删：`inventories` / `orders` / `inventory_logs` 三张表都对
+        `stores` 有外键，一家接过单的门店在数据库层面删不掉（与 §3 `skus`
+        那条软删论证同构）。
+
+        **软删掉默认门店是允许的**，后果要写明：`uk_stores_default` 的谓词是
+        `WHERE is_default AND deleted_at IS NULL`，所以删掉之后这家商家就
+        没有默认门店了，未授权定位的访客会看到「不在服务范围」。
+        这条不做拦截，因为「先删旧的默认店再建新的」是合法的运维顺序。
+      responses:
+        '204':
+          description: 已软删
+        '404':
+          description: 门店不存在或不属于当前租户。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /admin/stores/{store_id}/fence:
+    put:
+      tags: [Admin, Store]
+      summary: 配置电子围栏（整体替换）
+      description: |
+        围栏是 **GeoJSON Polygon**，落库成 `GEOGRAPHY(POLYGON, 4326)`。
+
+        ### 三条必须在服务端校验的事
+
+        1. **坐标序是 `[经度, 纬度]`**，和中文口语里的「纬度、经度」相反。
+           写反了不会报错——它会得到一个在地球另一侧的合法多边形，
+           而所有判定都「正常工作」。服务端要按经度 ∈ [-180,180]、
+           纬度 ∈ [-90,90] 做范围校验，这是唯一能机械发现写反的办法。
+        2. **环必须闭合**（首尾点相同）且**不自交**。自交多边形在
+           `ST_Intersects` 下的行为是未定义的——不是报错，是给一个谁也说不清的
+           答案。落库前过一次 `ST_IsValid`，假则 422，并把 PostGIS 给出的
+           `Self-intersection at or near point ...` 放进 Problem 的 `detail`。
+        3. **SRID 固定 4326**，不接受别的。
+
+        ### 整体替换，不做局部编辑
+
+        地图上画的是一个环，没有「改第三个顶点」这种操作。
+        `PUT` 一次覆盖，`fence` 传 `null` 即清空——清空只对默认门店合法
+        （`chk_store_fence_or_default`），对普通门店返回 409。
+      parameters:
+        - $ref: '#/components/parameters/StoreId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/StoreFenceRequest' }
+      responses:
+        '200':
+          description: 已更新
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminStore' }
+        '404':
+          description: 门店不存在或不属于当前租户。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '409':
+          description: |
+            给一家**非默认**门店清空围栏。`type` 为
+            `https://keel.dev/problems/store-fence-required`——
+            对应 `chk_store_fence_or_default` 这条 CHECK。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: |
+            多边形非法：环未闭合、自交、坐标越界、SRID 不对，或顶点数少于 4。
+            `type` 为 `https://keel.dev/problems/invalid-fence`，
+            `detail` 转述 PostGIS 的 `ST_IsValidReason`。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /admin/stores/{store_id}/default:
+    put:
+      tags: [Admin, Store]
+      summary: 设为默认门店（全国配送的回落目标）
+      description: |
+        **无请求体。** 调用即把这一家设成默认门店。
+
+        服务端必须在**同一个事务**里「先清旧、再置新」——
+        `uk_stores_default` 是一条部分唯一索引
+        （`ON stores(merchant_id) WHERE is_default AND deleted_at IS NULL`），
+        顺序反了会自己撞自己。这与 `PUT /addresses/{address_id}/default`
+        是同一个形状与同一段论证（数据模型 §9 / §4）。
+
+        没有「取消默认」这个动作：取消之后这家商家就没有回落目标了，
+        而那是一个应该由「把默认改成另一家」表达的意图。真要清空，
+        走 `DELETE /admin/stores/{store_id}`。
+      parameters:
+        - $ref: '#/components/parameters/StoreId'
+      responses:
+        '200':
+          description: 已设为默认门店
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminStore' }
+        '404':
+          description: 门店不存在或不属于当前租户。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '409':
+          description: |
+            这家门店已被软删或已停业，不能作为回落目标。`type` 为
+            `https://keel.dev/problems/store-unavailable`。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /admin/stores/{store_id}/products:
+    get:
+      tags: [Admin, Store, Catalog]
+      summary: 这家店的商品可见性与生效价
+      description: |
+        **默认全卖。** 数据模型 §4：`store_product_overrides` 是一张排除表，
+        缺一行即在售。所以这条列表是「租户目录左连两张排除表」，
+        不是「读这家店的上架清单」——后者那张表不存在，而且刻意不存在
+        （`CHECK (status = 0)` 让它在结构上表达不出「只卖这几件」）。
+
+        每一项同时带上**生效价**与它来自哪一层（`price_source`：
+        1 基准价 / 2 大区价 / 3 门店价），取自 `sku_prices_by_store` 视图——
+        全仓库唯一一处写 `COALESCE(门店价, 大区价, 基准价)` 的地方。
+      parameters:
+        - $ref: '#/components/parameters/StoreId'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - name: listed
+          in: query
+          description: |
+            只看在售的（`true`）或只看本店已下架的（`false`）。
+            **不传即两者都要**——刻意没有 default，缺省会静默改变筛选语义。
+          schema: { type: boolean }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PageMeta'
+                  - type: object
+                    required: [items]
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: '#/components/schemas/ScopedProductListing' }
+        '404':
+          description: 门店不存在或不属于当前租户。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /admin/stores/{store_id}/products/{product_id}/listing:
+    put:
+      tags: [Admin, Store, Catalog]
+      summary: 这家店卖不卖这件商品
+      description: |
+        `listed = false` 写一行 `store_product_overrides`，
+        `listed = true` 删掉那一行（回到「缺省即在售」）。
+
+        **幂等**：重复设成同一个值不报错，这也是为什么用 `PUT` 而不是
+        POST/DELETE 两条——客户端不必先知道当前状态。
+
+        **大区排除优先。** 一件被大区排掉的商品，门店这里设 `listed = true`
+        也捞不回来（两层是**与**不是**或**）。这种情况下响应里的
+        `effective_listed` 会是 `false` 而 `listed` 是 `true`，
+        两个字段刻意分开——否则后台会显示「已上架」而买家看不到。
+      parameters:
+        - $ref: '#/components/parameters/StoreId'
+        - $ref: '#/components/parameters/ProductId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProductListingRequest' }
+      responses:
+        '200':
+          description: 已更新
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ScopedProductListing' }
+        '404':
+          description: 门店或商品不存在、不属于当前租户，或商品已软删。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /admin/stores/{store_id}/skus/{sku_id}/price:
+    put:
+      tags: [Admin, Store, Catalog]
+      summary: 门店价（最内层覆盖）
+      description: |
+        写一行 `store_sku_prices`。**缺一行的意思是「沿用大区价 / 基准价」**，
+        所以这条端点不接受 `null`——撤销覆盖走 `DELETE`。
+
+        产品原话是「大区价格统一，但是每个门店可以自己调整价格」，
+        这条端点就是那句话的后半句。
+      parameters:
+        - $ref: '#/components/parameters/StoreId'
+        - $ref: '#/components/parameters/SkuId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SkuPriceSetRequest' }
+      responses:
+        '200':
+          description: 已设置
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ScopedSkuPrice' }
+        '404':
+          description: 门店或 SKU 不存在、不属于当前租户，或 SKU 已软删。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: |
+            `price_cents` 为负。非负同时由 `chk_store_price_nonneg` 兜底。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+    delete:
+      tags: [Admin, Store, Catalog]
+      summary: 撤销门店价，回到上一层
+      description: |
+        删掉 `store_sku_prices` 那一行。之后这个 SKU 在这家店的价回到大区价，
+        大区也没定就回到 `skus.price_cents`。
+
+        **本来就没有那一行时返回 204，不是 404**：调用方的意图是
+        「这家店不要自己的价」，那个意图在两种情况下都已经达成。
+        404 留给「门店或 SKU 根本不存在」——那是一个真的错。
+      parameters:
+        - $ref: '#/components/parameters/StoreId'
+        - $ref: '#/components/parameters/SkuId'
+      responses:
+        '204':
+          description: 已撤销（本来就没有覆盖时同样返回 204）
+        '404':
+          description: 门店或 SKU 不存在、不属于当前租户。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /admin/stores/{store_id}/inventories:
+    get:
+      tags: [Admin, Store, Catalog]
+      summary: 这家店的库存清单
+      description: |
+        `inventories` 的主键是 `(sku_id, store_id)`，列序是 `sku_id` 打头
+        （热路径按 SKU 进入）。这条后台列表走的是另一条索引
+        `idx_inventories_store ON inventories(merchant_id, store_id) WHERE available_qty > 0`。
+
+        **注意那条索引的部分谓词**：它只收 `available_qty > 0` 的行。
+        所以 `low_stock_only = true`（水位 ≤ `warning_qty`）走得到索引，
+        而「列出全部、含 0 的」要回表——后者是低频的盘点视图，可以接受。
+
+        **缺一行等于可售 0，不等于「这家店不卖」**（数据模型 §4 把这条写死了）。
+        一家刚开的店在录库存之前每个 SKU 都缺行，这条列表要把它们显示成
+        `available_qty = 0`，而不是漏掉。
+      parameters:
+        - $ref: '#/components/parameters/StoreId'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - name: low_stock_only
+          in: query
+          description: 只看水位 ≤ `warning_qty` 的。不传即全部。
+          schema: { type: boolean }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PageMeta'
+                  - type: object
+                    required: [items]
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: '#/components/schemas/AdminInventory' }
+        '404':
+          description: 门店不存在或不属于当前租户。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /admin/stores/{store_id}/skus/{sku_id}/inventory:
+    put:
+      tags: [Admin, Store, Catalog]
+      summary: 改这家店的库存（比较并设置）
+      description: |
+        **这是 `PUT /admin/skus/{sku_id}/inventory` 的一般形态。**
+        库存主键变成 `(sku_id, store_id)` 之后，「这个 SKU 的库存」不再是一个
+        有定义的东西，所以门店必须出现在路径里。那条不带门店的路径保留下来
+        是为了单店商家（见它自己的描述）。
+
+        语义与那条**逐字一致**：`expected_available_qty` 必填，
+        服务端执行一条比较并设置
+
+        ```sql
+        UPDATE inventories
+           SET available_qty = $new,
+               warning_qty   = COALESCE($warn, warning_qty)
+         WHERE sku_id = $sku AND store_id = $store AND available_qty = $expected;
+        ```
+
+        对不上就 409 并回传当前真实值。**`store_id` 这个条件不能漏**：
+        漏了它会匹配到该 SKU 在**所有**门店的行，一次后台改价把五家店的库存
+        一起覆盖掉，而且没有任何东西会响（数据模型 §4 把这条列为本轮
+        最容易漏、后果最重的一处）。
+
+        ### 这里的 404 覆盖三种情况，与下单路径上的分法不同
+
+        · 门店不存在 / 不属于本租户
+        · SKU 不存在 / 不属于本租户 / 已软删
+        · **这家店把这件商品下架了**（`store_product_overrides`，或它所在大区排除了它）
+
+        三种都是 404，因为这条路径上**两个 id 都在 URI 里**，
+        「这个 URI 下没有这个资源」是 404 的本义。
+        下单那条（`POST /orders`）把第三种报成 422，因为那里 id 在请求体里——
+        分界线写在数据模型 §4：**路径里指名的资源不存在 → 404；
+        请求体里指名的东西不存在或不可用 → 422**。两者的共同点才是要紧的：
+        都不是 409，因为 409 在本契约里被客户端读成「重读一次再试」。
+
+        **「这家店没有这一行库存」不在上面三种里**，它是一次正常的首次录入：
+        服务端 upsert，`expected_available_qty` 必须传 `0`。
+      parameters:
+        - $ref: '#/components/parameters/StoreId'
+        - $ref: '#/components/parameters/SkuId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/InventorySetRequest' }
+      responses:
+        '200':
+          description: 已更新
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminInventory' }
+        '404':
+          description: |
+            门店或 SKU 不存在 / 不属于当前租户 / 已软删，或这家店（或它所在大区）
+            已把这件商品下架。**刻意与 409 分开**：把这些也报成 409 会让调用方
+            以为重读一次再试就能成功，而那个循环永远不会结束。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '409':
+          description: |
+            `expected_available_qty` 与当前值不符——库存在你读到它之后被改过
+            （多半是并发下单扣减）。`type` 为
+            `https://keel.dev/problems/inventory-precondition-failed`，
+            响应体里的 `current` 是当前的真实值。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/InventoryConflict' }
+        '422':
+          description: |
+            `available_qty` 或 `expected_available_qty` 为负。
+            非负同时由 `chk_qty_nonneg` 兜底。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /admin/regions/{region_id}/products:
+    get:
+      tags: [Admin, Store, Catalog]
+      summary: 这个大区的商品可见性与生效价
+      description: |
+        与 `GET /admin/stores/{store_id}/products` 同构，少一层覆盖：
+        这里的 `price_cents` 是「基准价 → 大区价」两层之后的值，
+        `price_source` 只会是 1 或 2。
+      parameters:
+        - $ref: '#/components/parameters/RegionId'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - name: listed
+          in: query
+          description: 只看在售的（`true`）或只看本大区已下架的（`false`）。不传即两者都要。
+          schema: { type: boolean }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PageMeta'
+                  - type: object
+                    required: [items]
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: '#/components/schemas/ScopedProductListing' }
+        '404':
+          description: 大区不存在或不属于当前租户。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /admin/regions/{region_id}/products/{product_id}/listing:
+    put:
+      tags: [Admin, Store, Catalog]
+      summary: 这个大区卖不卖这件商品
+      description: |
+        与门店那条同构，作用在 `region_product_overrides` 上。
+        **这一层排掉的，下面的门店捞不回来。**
+      parameters:
+        - $ref: '#/components/parameters/RegionId'
+        - $ref: '#/components/parameters/ProductId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProductListingRequest' }
+      responses:
+        '200':
+          description: 已更新
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ScopedProductListing' }
+        '404':
+          description: 大区或商品不存在、不属于当前租户，或商品已软删。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /admin/regions/{region_id}/skus/{sku_id}/price:
+    put:
+      tags: [Admin, Store, Catalog]
+      summary: 大区价（中间层覆盖）
+      description: |
+        写一行 `region_sku_prices`。产品原话是「一个大区内的商品是一个价格，
+        不同大区内商品价格不一样」——这条端点就是那句话。
+        门店可以再覆盖它（`PUT /admin/stores/{store_id}/skus/{sku_id}/price`）。
+      parameters:
+        - $ref: '#/components/parameters/RegionId'
+        - $ref: '#/components/parameters/SkuId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SkuPriceSetRequest' }
+      responses:
+        '200':
+          description: 已设置
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ScopedSkuPrice' }
+        '404':
+          description: 大区或 SKU 不存在、不属于当前租户，或 SKU 已软删。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: '`price_cents` 为负。非负同时由 `chk_region_price_nonneg` 兜底。'
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+    delete:
+      tags: [Admin, Store, Catalog]
+      summary: 撤销大区价，回到基准价
+      description: |
+        删掉 `region_sku_prices` 那一行。本来就没有那一行时同样返回 204，
+        理由与门店那条一致。
+        **注意这不会动门店价**：门店那一层如果自己定了价，撤销大区价之后
+        它仍然生效——覆盖是逐层独立的。
+      parameters:
+        - $ref: '#/components/parameters/RegionId'
+        - $ref: '#/components/parameters/SkuId'
+      responses:
+        '204':
+          description: 已撤销（本来就没有覆盖时同样返回 204）
+        '404':
+          description: 大区或 SKU 不存在、不属于当前租户。
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
@@ -1709,15 +2525,177 @@ paths:
         '404': { $ref: '#/components/responses/Problem' }
         default: { $ref: '#/components/responses/Problem' }
 
+  # ---------------------------------------------------------------- Store
+  #
+  # 买家侧只有两条：列出门店、按位置选店。
+  #
+  # **「当前门店」在这个契约里永远有一个确定的值**，解析链是：
+  #   客户端显式给的 store_id  >  按位置解析出的门店  >  默认门店（全国配送）
+  # 三级都落空（商家没配默认门店）才是「不在服务范围」。
+  #
+  # 这条链的第二级与第三级**在实现上是同一条路径**：「没有位置」与
+  # 「位置不在任何围栏内」走同一段代码、给同一种答案。给「没有位置」单开一条
+  # 分支是这块最容易长出来的分歧——两条分支迟早只更新一条。
+  /stores:
+    get:
+      tags: [Store]
+      summary: 门店列表（手动选店用）
+      description: |
+        只返回 `status = 1 营业` 且未软删的门店。
+
+        这条端点的存在理由是 `/stores/resolve` 的回落：拒绝定位的买家会被落到
+        默认门店，而他应该能自己改。没有这条，「回落」就成了一个用户无法
+        纠正的结果。
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PageMeta'
+                  - type: object
+                    required: [items]
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: '#/components/schemas/Store' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /stores/resolve:
+    get:
+      tags: [Store]
+      summary: 按位置选店
+      description: |
+        ### 三种结果，由 `match_type` 区分，**不由 HTTP 状态码区分**
+
+        | `match_type` | 什么时候 | `stores` |
+        |---|---|---|
+        | `fence` | 坐标落在一个或多个门店的电子围栏内 | 命中的全部门店，**按距离升序** |
+        | `fallback_default` | 坐标不在任何围栏内，**或根本没传坐标** | 只有默认门店那一家 |
+        | `none` | 上面两条都落空——商家还没配默认门店 | 空数组 |
+
+        **三种都是 `200`。** 「不在服务范围」是一个正常的查询结果，不是错误；
+        用 404 表达它会让客户端的错误分支同时装着「网络失败」「鉴权失败」
+        和「这个地方我们不送」，而第三种要渲染的是一个完全不同的页面。
+
+        ### 不传 `lat` / `lng` 与「坐标在围栏外」是同一条路径
+
+        首次打开 App、拒绝授权定位、或者就是在浏览——一律走回落。
+        这不是两条相似的规则，是**一条规则**：服务端的实现要收敛到同一段代码，
+        而契约这边的约束是「两种输入的响应必须逐字段相同」。
+        这条有机械执行者（数据模型 §4 那张表）：一条 handler 测试，
+        拿不带坐标的请求与一个落在全部围栏外的坐标各调一次，断言两次响应的
+        `match_type` 与 `stores` 完全相等。
+
+        ### 围栏重叠时返回多家，由客户端处理
+
+        运营可以画出互相重叠的围栏，这是产品要的（商圈交叠）。
+        服务端**不替客户端挑**，只保证 `distance_m` 升序——
+        挑哪一家涉及配送时效、是否自提、用户上次选过谁，那些服务端不知道。
+        `distance_m` 是买家坐标到 `stores.location`（门店自身坐标）的球面距离，
+        单位米，由 PostGIS 的 `GEOGRAPHY` 算出（不是把经纬度当平面算的「度」，
+        理由见数据模型 §4）。
+
+        ### `size` 的含义
+
+        只在 `match_type = fence` 时有意义：重叠围栏最多返回这么多家。
+        `fallback_default` 恒为 1 家，`none` 恒为 0 家。
+      security: []
+      parameters:
+        - name: lat
+          in: query
+          description: |
+            纬度，WGS84。与 `lng` **同时给或同时不给**；只给一个返回 422。
+          schema: { type: number, minimum: -90, maximum: 90 }
+        - name: lng
+          in: query
+          description: 经度，WGS84。
+          schema: { type: number, minimum: -180, maximum: 180 }
+        - name: size
+          in: query
+          description: 围栏命中时最多返回几家，默认 10。
+          schema: { type: integer, minimum: 1, maximum: 50, default: 10 }
+      responses:
+        '200':
+          description: |
+            解析完成。**三种结果都走这里**，看 `match_type`，
+            包括「不在服务范围」（`none`）。
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StoreResolveResult' }
+        '422':
+          description: |
+            只给了 `lat` 与 `lng` 中的一个，或取值超出范围。
+            `type` 为 `https://keel.dev/problems/invalid-request`。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
   # ---------------------------------------------------------------- Catalog
   /products:
     get:
       tags: [Catalog]
       summary: 商品列表
+      description: |
+        ### 这条接口的结果取决于哪家门店服务你
+
+        多门店之后，「这家店卖哪些商品、各卖多少钱、有没有货」是三件都按门店
+        变化的事（数据模型 §4：可见性两层排除、价格三层覆盖、库存按门店）。
+        所以响应里必返一个 `store` 上下文——**没有它，客户端拿到的
+        `in_stock` 与价格是不知道属于谁的**。
+
+        ### 与 `POST /search` 的口径本轮对齐了（M3 独立验收 I10）
+
+        I10 记的是：`/products` 与 `/search` 对「这家店有哪些商品」给不同答案——
+        `SearchFilters.in_stock_only` 的默认值是 `true`（缺货的直接不返回），
+        而 `/products` 根本没有这个条件。按门店分之后这件事会放大成
+        「搜索结果取决于哪家店服务你」，再叠一层「还取决于你走的是列表还是搜索」。
+
+        本轮把两条拆成两个**互相独立**的维度，两边逐字一致：
+
+        | 维度 | 是硬过滤吗 | 可以关掉吗 |
+        |---|---|---|
+        | **门店/大区上下架**（`*_product_overrides`） | 是。这家店不卖就是不卖 | 不能。它是可见性本身 |
+        | **库存水位**（`available_qty > 0`） | 否，默认**不**过滤 | 可以，`in_stock_only = true` 打开 |
+
+        `in_stock_only` 的默认值因此从 `true` 改成 `false`，两条接口一致。
+        理由不只是「要一致」：契约原先把同一件事写了两遍且互相矛盾——
+        `/search` 的描述写着「业务重排会将缺货、活动失效、负毛利商品**降权**」，
+        而 `in_stock_only: true` 说的是**删掉**。两者并存时默认值那一份赢，
+        于是「降权」那句话从来没被执行过。
       security: []
       parameters:
         - $ref: '#/components/parameters/Page'
         - $ref: '#/components/parameters/PageSize'
+        - name: store_id
+          in: query
+          description: |
+            按哪家门店算「卖不卖」「多少钱」「有没有货」。
+
+            **不传不是「全租户并集」，是走回落链**：
+            服务端按 `GET /stores/resolve` 的同一段逻辑解析出默认门店
+            （数据模型 §4 与那条端点的描述：「没有位置」与「位置不在任何围栏内」
+            是同一条路径）。商家没配默认门店时，本接口返回**空列表**，
+            并在响应的 `store.match_type` 里给出 `none`——
+            那不是「这家店没有商品」，是「你不在服务范围」，
+            客户端要渲染的是完全不同的页面。
+
+            **刻意没有 default**：查询参数带 default 会被静默代入，
+            而这个参数改变的正是「返回哪些行」。
+          schema: { type: integer, format: int64 }
+        - name: in_stock_only
+          in: query
+          description: |
+            只看当前门店有货的。**不传即 `false`**（不按库存过滤，缺货商品照常
+            返回，由 `in_stock` 标出）。与 `SearchFilters.in_stock_only` 同义、
+            同默认值——见上方 I10 那一段。
+          schema: { type: boolean }
         - name: category_id
           in: query
           schema: { type: integer, format: int64 }
@@ -1743,22 +2721,51 @@ paths:
                 allOf:
                   - $ref: '#/components/schemas/PageMeta'
                   - type: object
-                    required: [items]
+                    required: [items, store]
                     properties:
                       items:
                         type: array
                         items: { $ref: '#/components/schemas/ProductSummary' }
+                      store:
+                        allOf: [{ $ref: '#/components/schemas/StoreContext' }]
+                        description: |
+                          本次结果是按哪家门店算的。**必返。**
+                          `match_type = none` 时 `items` 是空数组——
+                          那是「不在服务范围」，不是「没有商品」。
         default: { $ref: '#/components/responses/Problem' }
 
   /products/{product_id}:
     get:
       tags: [Catalog]
       summary: 商品详情（含全部 SKU）
+      description: |
+        `store_id` 的解析与 `GET /products` 逐字一致。
+        SKU 的 `price_cents` 与 `available_qty` 都是**这家门店**的值。
+
+        **这家店不卖这件商品时返回 404**，不是返回一个 `in_stock = false` 的详情页：
+        「不卖」与「缺货」是两件事，混在一起会让买家一直等一个不会来的补货
+        （数据模型 §4）。
       security: []
       parameters:
         - name: product_id
           in: path
           required: true
+          schema: { type: integer, format: int64 }
+        - name: store_id
+          in: query
+          description: |
+            按哪家门店算「卖不卖」「多少钱」「有没有货」。
+
+            **不传不是「全租户并集」，是走回落链**：
+            服务端按 `GET /stores/resolve` 的同一段逻辑解析出默认门店
+            （数据模型 §4 与那条端点的描述：「没有位置」与「位置不在任何围栏内」
+            是同一条路径）。商家没配默认门店时，本接口返回**空列表**，
+            并在响应的 `store.match_type` 里给出 `none`——
+            那不是「这家店没有商品」，是「你不在服务范围」，
+            客户端要渲染的是完全不同的页面。
+
+            **刻意没有 default**：查询参数带 default 会被静默代入，
+            而这个参数改变的正是「返回哪些行」。
           schema: { type: integer, format: int64 }
       responses:
         '200':
@@ -1766,7 +2773,14 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ProductDetail' }
-        '404': { $ref: '#/components/responses/Problem' }
+        '404':
+          description: |
+            商品不存在、不属于当前租户、已软删、未上架，**或当前门店（或它所在
+            大区）不卖这件商品**。四种合成一个 404，理由与 §2「查不到即 404，
+            不是 403」一致：分开告诉调用方等于替它做枚举。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
         default: { $ref: '#/components/responses/Problem' }
 
   /categories:
@@ -1797,32 +2811,25 @@ paths:
       description: |
         四层流水线：双路召回 → RRF 融合 → Reranker 精排 → 业务重排。
         业务重排会将缺货、活动失效、负毛利商品降权 —— 这是与通用向量检索的核心区别。
+
+        ### 检索结果取决于哪家门店服务你
+
+        `store_id` 与 `GET /products` 逐字同义、同回落链。两条召回查询
+        （`SearchProductsByVector` / `SearchProductsByKeyword`）的过滤条件
+        **必须逐字一致**，这是 `db/queries/search.sql` 文件头的老要求，
+        本轮多了两个 anti-join（大区排除、门店排除）与一次对
+        `sku_prices_by_store` 的价格联接，两条都要加，不能只加一条——
+        不一致的后果不是报错，是一件商品在一路里可见、在另一路里不可见，
+        而 RRF 只看名次。
+
+        `in_stock_only` 的默认值本轮从 `true` 改成 `false`，与 `/products` 对齐，
+        理由写在那条端点的描述里（M3 独立验收 I10）。
       security: []
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              type: object
-              required: [query]
-              properties:
-                query: { type: string, minLength: 1, maxLength: 200 }
-                filters:
-                  $ref: '#/components/schemas/SearchFilters'
-                size: { type: integer, default: 20, maximum: 100 }
-                strategy:
-                  type: string
-                  default: default
-                  description: |
-                    排序策略标识，用于 A/B 对比。记入检索日志后可按策略分组
-                    对比 NDCG@10 / CTR@10 等在线指标。省略则用默认策略。
-                    一期不做完整分流，但接口层先留出这个参数 ——
-                    否则后续每次改排序都是不可逆的「拍脑袋上线」
-                    （语义检索层设计 §9.3）。
-                explain:
-                  type: boolean
-                  default: false
-                  description: 返回各阶段得分，用于调试与效果评估
+            schema: { $ref: '#/components/schemas/SearchRequest' }
       responses:
         '200':
           description: OK
@@ -1830,11 +2837,17 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [items, latency_ms, strategy]
+                required: [items, latency_ms, strategy, store]
                 properties:
                   items:
                     type: array
                     items: { $ref: '#/components/schemas/SearchHit' }
+                  store:
+                    allOf: [{ $ref: '#/components/schemas/StoreContext' }]
+                    description: |
+                      本次检索是按哪家门店算的。**必返**，与 `GET /products`
+                      的 `store` 逐字同义。`match_type = none` 时 `items`
+                      是空数组——那是「不在服务范围」，不是「没搜到」。
                   latency_ms: { type: integer }
                   total:
                     type: integer
@@ -2103,6 +3116,15 @@ paths:
       description: |
         **不产生副作用**。返回试算后的金额明细与优惠分摊结果。
         前端据此展示「应付金额」，用户确认后再调 `POST /orders`。
+
+        `store_id` 与 `POST /orders` 一样**必填**：试算与下单必须是同一家店，
+        否则用户看到的是 A 店的价、成交的是 B 店的价。
+        请求体共用 `OrderCreateRequest`，这一点本轮没变。
+
+        试算会把「这家店（或它所在大区）不卖其中某几件」提前报出来（422），
+        所以正常路径上 `POST /orders` 不该再撞上它。
+        **但仍然会撞上**——运营随时可以在两次调用之间下架一件商品，
+        那是一次正常的竞态，不是 bug。两条端点因此都要能表达这种失败。
       requestBody:
         required: true
         content:
@@ -2114,6 +3136,16 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/OrderPreview' }
+        '422':
+          description: |
+            与 `POST /orders` 的 422 逐条一致：这家店不卖其中某几件
+            （`https://keel.dev/problems/sku-not-sold-in-store`），
+            或 `store_id` / `address_id` / `sku_id` 有一个服务端不认识
+            （`https://keel.dev/problems/invalid-request`）。
+            试算的全部意义就是在下单之前把这些说出来。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
         default: { $ref: '#/components/responses/Problem' }
 
   /orders:
@@ -2121,7 +3153,17 @@ paths:
       tags: [Order]
       summary: 创建订单
       description: |
-        触发 SAGA 全局事务（gid = `order-{order_no}`），三个分支：
+        触发 SAGA 全局事务（gid = `order-{merchant_id}-{order_no}`），三个分支：
+
+        **`store_id` 不进 gid，落在 `orders` 上。** 分支只拿到
+        `(gid, branchID, op)` 三个字符串，而订单本来就必须先落库再提交 SAGA
+        （这是被那个签名逼出来的顺序，`00013` 与 `internal/service/order.go`
+        的文件头都有论证），所以分支按 `order_no` 读回订单行就同时拿到
+        `store_id` 与全部明细，补偿分支走同一条路、回补到同一家店。
+        改 gid 的文法是要单独论证的动作——gid 是屏障幂等的键，
+        改它的形状会让部署切换瞬间在途的事务「旧文法写、新文法读」，
+        而屏障失效的表现是业务被执行两遍，不是报错（数据模型 §4）。
+
 
         | 分支 | 正向 | 补偿 |
         |---|---|---|
@@ -2165,7 +3207,34 @@ paths:
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
-        '422': { $ref: '#/components/responses/IdempotencyKeyReused' }
+        '422':
+          description: |
+            请求体里指名的东西不存在或不可用。按 `type` 区分：
+
+            · **这家店（或它所在大区）不卖其中某几件** ——
+              `https://keel.dev/problems/sku-not-sold-in-store`，
+              响应体带 `store_id` 与冲突的 `sku_id` 列表。
+              **刻意不是 409**：409 在本契约里被客户端读成「重读一次再试」
+              （`Retry-After`、`InventoryConflict.current` 都在教它这么读），
+              而这一种重试永远不会成功——客户端该做的是换一家店。
+              也**刻意不是 404**：那条分界线是「路径里指名的资源不存在 → 404，
+              请求体里指名的东西不存在或不可用 → 422」，
+              而这条路径是 `/orders`，报 404 会被读成「下单接口不存在」。
+            · **`store_id` / `address_id` / `sku_id` 有一个服务端不认识** ——
+              `https://keel.dev/problems/invalid-request`。
+              「不是你的门店」与「不是你的 SKU」合用一个 type：
+              分开告诉调用方等于替攻击者做区分（与 §2「查不到即 404，
+              不是 403」同一个路子）。它们在服务端是两个不同的 sentinel，
+              日志与告警分得开。
+            · **同一 Idempotency-Key 配了不同的请求体** ——
+              `https://keel.dev/problems/idempotency-key-reused`。
+
+            这三种在 SAGA 分支里都表现为 `rows_affected = 0`，
+            而它们与「库存不足」（409）的区别就是**重试有没有用**。
+            五种成因的完整清单与各自的 sentinel 在数据模型 §4。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
         default: { $ref: '#/components/responses/Problem' }
     get:
       tags: [Order]
@@ -2834,6 +3903,19 @@ components:
       required: true
       description: '`skus.id`。同 ProductId，查不到即 404。'
       schema: { type: integer, format: int64 }
+    StoreId:
+      name: store_id
+      in: path
+      required: true
+      description: |
+        `stores.id`。同 ProductId，查不到即 404（含「不属于当前租户」与「已软删」）。
+      schema: { type: integer, format: int64 }
+    RegionId:
+      name: region_id
+      in: path
+      required: true
+      description: '`regions.id`。同上，查不到即 404。'
+      schema: { type: integer, format: int64 }
     CategoryId:
       name: category_id
       in: path
@@ -3245,10 +4327,26 @@ components:
 
     AdminInventory:
       type: object
-      required: [sku_id, available_qty, warning_qty, updated_at]
+      required: [sku_id, store_id, available_qty, warning_qty, updated_at]
       properties:
         sku_id:        { type: integer, format: int64 }
-        available_qty: { type: integer }
+        sku_code:      { type: string }
+        store_id:
+          type: integer
+          format: int64
+          description: |
+            这一行库存属于哪家门店。**必返。**
+            `inventories` 的主键本轮变成 `(sku_id, store_id)`（数据模型 §4），
+            少了这一列，一个库存水位就不知道是谁的——而按门店分之后，
+            同一个 SKU 会有好几行。
+        available_qty:
+          type: integer
+          description: |
+            这家门店的可售量。**这一行不存在时视同 0，不是「这家店不卖」**——
+            两件事在库里长得很像（都是查不到行），但语义相反：
+            一家刚开的店在录库存之前每个 SKU 都缺行，
+            判成「不卖」会让新店什么都不卖，和「开店即营业」正面冲突
+            （数据模型 §4）。「不卖」由 `*_product_overrides` 表达。
         warning_qty:   { type: integer }
         updated_at:    { type: string, format: date-time }
 
@@ -3354,13 +4452,71 @@ components:
           description: '0 停用 / 1 启用'
 
     # ---- 检索 ----
+    SearchRequest:
+      type: object
+      required: [query]
+      description: |
+        `POST /search` 的请求体。**本轮从内联 schema 提成具名的**——
+        内联的生成器不出类型，handler 只能手写绑定，这条刚在
+        `PaymentCreateRequest` 和这个 `/search` 上踩过两次。
+      properties:
+        query: { type: string, minLength: 1, maxLength: 200 }
+        store_id:
+          type: integer
+          format: int64
+          description: |
+            按哪家门店检索。与 `GET /products` 的同名查询参数逐字同义、
+            同回落链（不传即走「默认门店 → 不在服务范围」那条链，
+            **不是**全租户并集）。
+
+            放在请求体顶层而不是 `filters` 里：`filters` 是**筛选条件**
+            （买家自己勾的），门店是**上下文**（服务端解析出来的）。
+            混在一起会让「清空筛选」这个动作把门店也清掉。
+        filters:
+          $ref: '#/components/schemas/SearchFilters'
+        size: { type: integer, default: 20, maximum: 100 }
+        strategy:
+          type: string
+          default: default
+          description: |
+            排序策略标识，用于 A/B 对比。记入检索日志后可按策略分组
+            对比 NDCG@10 / CTR@10 等在线指标。省略则用默认策略。
+            一期不做完整分流，但接口层先留出这个参数 ——
+            否则后续每次改排序都是不可逆的「拍脑袋上线」
+            （语义检索层设计 §9.3）。
+        explain:
+          type: boolean
+          default: false
+          description: 返回各阶段得分，用于调试与效果评估
+
     SearchFilters:
       type: object
       properties:
         category_id: { type: integer, format: int64 }
-        min_price_cents: { $ref: '#/components/schemas/Money' }
-        max_price_cents: { $ref: '#/components/schemas/Money' }
-        in_stock_only: { type: boolean, default: true }
+        min_price_cents:
+          allOf: [{ $ref: '#/components/schemas/Money' }]
+          description: |
+            按**当前门店的生效价**过滤（三层 `COALESCE` 之后的值），
+            不是按基准价。`products.min_price_cents` / `max_price_cents`
+            两列本轮已从数据模型里删掉——三层定价之后它们不再是商品的属性
+            （数据模型 §3 / §4）。
+        max_price_cents:
+          allOf: [{ $ref: '#/components/schemas/Money' }]
+          description: 同上。
+        in_stock_only:
+          type: boolean
+          default: false
+          description: |
+            只要当前门店有货的。**默认值本轮从 `true` 改成 `false`**，
+            与 `GET /products?in_stock_only=` 对齐（M3 独立验收 I10）。
+
+            改的不只是为了一致：契约原先把同一件事写了两遍且互相矛盾——
+            `/search` 的描述写着业务重排会把缺货商品**降权**，
+            而这个默认值说的是**删掉**。两者并存时默认值那一份赢，
+            于是「降权」那句话从来没被执行过。
+
+            注意这个开关**管不到「这家店卖不卖」**：门店与大区的上下架是
+            可见性本身，无条件生效、关不掉（数据模型 §4）。
 
     SearchHit:
       allOf:
@@ -3517,12 +4673,27 @@ components:
 
     OrderCreateRequest:
       type: object
-      required: [items, address_id]
+      required: [items, address_id, store_id]
       properties:
         items:
           type: array
           minItems: 1
           items: { $ref: '#/components/schemas/OrderItemInput' }
+        store_id:
+          type: integer
+          format: int64
+          description: |
+            由哪家门店履约。**必填，服务端不替客户端猜。**
+
+            读接口（`/products`、`/search`）省略 `store_id` 时会走回落链，
+            这里刻意不走：买家在 A 店看到的价格与库存，下单时若被服务端
+            静默落到默认门店 B，结果是**在 A 店看的货从 B 店发出、按 B 店的价成交**。
+            那是一个没有任何东西会报出来的错——两家店都有这件商品、
+            两个价都是合法价。
+
+            所以这一列在 `orders` 上是 `NOT NULL`，在这里是 required。
+            客户端从 `GET /stores/resolve` 或任一读接口回显的 `store.store_id`
+            拿到它；单店商家同样拿得到。
         address_id:     { type: integer, format: int64 }
         user_coupon_id:
           type: integer
@@ -3537,15 +4708,47 @@ components:
 
     OrderPreview:
       type: object
-      required: [goods_amount_cents, payable_cents, items]
+      required: [goods_amount_cents, payable_cents, items, store_id]
       properties:
+        store_id:
+          type: integer
+          format: int64
+          description: |
+            本次试算按哪家门店算的（回显请求里的 `store_id`）。
+            必返：试算与下单必须是同一家店，回显是客户端唯一能核对这件事的办法。
+        region_id:
+          type: integer
+          format: int64
+          description: 那家门店所属大区。价格的中间一层按它算（数据模型 §4）。
         goods_amount_cents: { $ref: '#/components/schemas/Money' }
         freight_cents:      { $ref: '#/components/schemas/Money' }
         discount_cents:     { $ref: '#/components/schemas/Money' }
         payable_cents:      { $ref: '#/components/schemas/Money' }
         items:
           type: array
-          description: 含优惠分摊结果
+          description: |
+            含优惠分摊结果。
+
+            > **这一段是内联 schema，而内联在这里已经是一笔债了。**
+            > 本轮想给每一行加一个 `price_source`（这一行的单价来自基准价 /
+            > 大区价 / 门店价的哪一层，与 `order_items.price_source` 同源），
+            > **加不进去**：内联 schema 让 oapi-codegen 生成一个**匿名 struct**，
+            > 而 `internal/handler/order.go` 里有一处按字段拼出来的
+            > `[]struct{...}` 字面量 —— 匿名类型只要多一个字段就不再可赋值，
+            > 实测报错：
+            >
+            > ```
+            > internal/handler/order.go:92:21: cannot use items (variable of type
+            >   []struct{AmountCents ...; DiscountCents ...; Quantity ...; SkuId ...})
+            >   as []struct{AmountCents ...; DiscountCents ...;
+            >               PriceSource *api.OrderPreviewItemsPriceSource; ...}
+            > ```
+            >
+            > 这正是「请求体不要用内联 schema」那条规矩的**响应侧同一个毛病**：
+            > 内联类型没有名字，于是它的每一次演进都是一次破坏性变更。
+            > 提成具名的 `OrderPreviewItem` 会同样破坏那个字面量，
+            > 所以这件事要和 handler 一起改，不能只改契约。
+            > 记在数据模型 §15。
           items:
             type: object
             properties:
@@ -3561,9 +4764,22 @@ components:
 
     Order:
       type: object
-      required: [order_no, status, refund_status, payable_cents, created_at]
+      required: [order_no, status, refund_status, payable_cents, created_at, store_id]
       properties:
         order_no: { type: string }
+        store_id:
+          type: integer
+          format: int64
+          description: |
+            履约门店。**必返**（DB 上是 `NOT NULL`）。
+            它是真正的外键列，报表按它聚合——门店名走 `OrderDetail.store`
+            那份快照，因为门店会改名（数据模型 §5）。
+        region_id:
+          type: integer
+          format: int64
+          description: |
+            下单时那家门店所属的大区。**冗余在订单上，不靠 `stores.region_id` 推**：
+            门店可以被调到另一个大区去，而这一单的价格是按当时那个大区算的。
         status:   { $ref: '#/components/schemas/OrderStatus' }
         refund_status:
           allOf: [{ $ref: '#/components/schemas/OrderRefundStatus' }]
@@ -3596,6 +4812,12 @@ components:
             receiver:
               allOf: [{ $ref: '#/components/schemas/ReceiverSnapshot' }]
               description: 下单时的收货信息快照
+            store:
+              allOf: [{ $ref: '#/components/schemas/OrderStoreSnapshot' }]
+              description: |
+                下单时的门店与大区展示信息快照。
+                门店改名、搬家、换大区之后，历史订单仍显示当时那一份——
+                与 `order_items` 存 `title_snapshot` 是同一条道理。
             items:
               type: array
               items: { $ref: '#/components/schemas/OrderItem' }
@@ -4110,3 +5332,422 @@ components:
             下单未支付时，券在「可用」和「已使用」里都找不到，像凭空消失。
         valid_start_at: { type: string, format: date-time }
         valid_end_at:   { type: string, format: date-time }
+
+    # ---- 门店、大区与围栏（数据模型 §4）----
+
+    GeoPolygon:
+      type: object
+      description: |
+        GeoJSON Polygon，SRID 固定 4326。落库成 `GEOGRAPHY(POLYGON, 4326)`。
+
+        **坐标序是 `[经度, 纬度]`**，和中文口语里的「纬度、经度」相反。
+        这是 GeoJSON 规范定的，不是本项目的选择。写反了不会报错——
+        它会得到一个在地球另一侧的合法多边形，而所有判定都「正常工作」。
+        服务端按经度 ∈ [-180,180]、纬度 ∈ [-90,90] 做范围校验，
+        那是唯一能机械发现写反的办法。
+
+        `coordinates` 的第一个环是外环，后续是内环（洞）。
+        每个环必须**闭合**（首尾点相同），至少 4 个点，且**不自交**——
+        自交多边形在 `ST_Intersects` 下的行为是未定义的，落库前过 `ST_IsValid`。
+      required: [type, coordinates]
+      properties:
+        type:
+          type: string
+          enum: [Polygon]
+        coordinates:
+          type: array
+          minItems: 1
+          description: 环的数组。第一个是外环。
+          items:
+            type: array
+            minItems: 4
+            description: 一个环，首尾点必须相同。
+            items:
+              type: array
+              minItems: 2
+              maxItems: 2
+              description: '`[经度, 纬度]`。'
+              items: { type: number }
+          examples:
+            - [[[116.30, 39.85], [116.50, 39.85], [116.50, 39.95], [116.30, 39.95], [116.30, 39.85]]]
+
+    StoreMatchType:
+      type: string
+      enum: [fence, fallback_default, none]
+      description: |
+        「当前门店」是怎么定下来的。这三个值是产品规则的对外形状，
+        每一个都有机械执行者（数据模型 §4 那张表）：
+
+        · `fence` —— 坐标落在一个或多个围栏内，按距离升序返回
+        · `fallback_default` —— 不在任何围栏内，**或根本没有位置**，回落默认门店
+        · `none` —— 连默认门店都没配，这个租户对这次请求**不在服务范围**
+
+        `none` 不是错误，是一个正常的查询结果。
+
+    StoreContext:
+      type: object
+      description: |
+        每一条会受门店影响的读接口都回显它。**没有它，客户端拿到的
+        `in_stock` 与价格是不知道属于谁的**——按门店分之后，
+        同一件商品对不同的人有不同的答案。
+      required: [match_type]
+      properties:
+        store_id:
+          type: [integer, 'null']
+          format: int64
+          description: 本次响应是按哪家门店算的。`match_type = none` 时为 null。
+        region_id:
+          type: [integer, 'null']
+          format: int64
+          description: 那家门店所属大区。价格的中间一层按它算。
+        match_type: { $ref: '#/components/schemas/StoreMatchType' }
+
+    Store:
+      type: object
+      description: 买家视角的门店。不含围栏——围栏是运营数据，不该发给客户端。
+      required: [id, name, is_default]
+      properties:
+        id:         { type: integer, format: int64 }
+        name:       { type: string }
+        phone:      { type: string }
+        address:    { type: string }
+        lat:        { type: [number, 'null'] }
+        lng:        { type: [number, 'null'] }
+        is_default:
+          type: boolean
+          description: 是否是这家商家的「全国配送」回落门店。
+
+    StoreMatch:
+      allOf:
+        - $ref: '#/components/schemas/Store'
+        - type: object
+          required: [distance_m]
+          properties:
+            distance_m:
+              type: [number, 'null']
+              description: |
+                买家坐标到门店坐标的球面距离，**单位米**。
+                `/stores/resolve` 的排序键，升序。
+
+                为 null **当且仅当**本次请求没带坐标（`fallback_default`）——
+                那时没有起点，算不出距离。客户端据此决定显示不显示「距您 x 米」。
+
+                单位是米而不是「度」：`stores.location` 是
+                `GEOGRAPHY(POINT, 4326)`，走球面计算。用 `GEOMETRY` 的话
+                `ST_Distance` 返回度，而一度经度与一度纬度在中纬度差约 30%，
+                排序会在东西向与南北向上系统性偏斜——且看起来完全正常
+                （数据模型 §4）。
+
+    StoreResolveResult:
+      type: object
+      required: [match_type, stores]
+      properties:
+        match_type: { $ref: '#/components/schemas/StoreMatchType' }
+        stores:
+          type: array
+          description: |
+            `fence` 时是命中的全部门店按 `distance_m` 升序；
+            `fallback_default` 时恰好一家（默认门店）；
+            `none` 时是**空数组**，不是 null。
+          items: { $ref: '#/components/schemas/StoreMatch' }
+
+    AdminRegion:
+      type: object
+      description: |
+        后台视角的大区。**没有几何**——大区是门店的分组，
+        归属由 `stores.region_id` 决定（数据模型 §4 论证过为什么不给它画边界）。
+      required: [id, code, name, status, store_count, created_at]
+      properties:
+        id:     { type: integer, format: int64 }
+        code:   { type: string, description: 租户内唯一（软删的不占用）。 }
+        name:   { type: string }
+        status:
+          type: integer
+          enum: [0, 1]
+          description: 0 停用 / 1 启用。
+        store_count:
+          type: integer
+          description: |
+            名下未软删的门店数。删大区时会因为它非零而被拒（409），
+            所以列表里直接给出来，省掉「点了删除才知道删不掉」那一跳。
+        deleted_at:
+          type: [string, 'null']
+          format: date-time
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    RegionCreateRequest:
+      type: object
+      required: [code, name]
+      properties:
+        code: { type: string, maxLength: 64 }
+        name: { type: string, maxLength: 100 }
+
+    RegionUpdateRequest:
+      type: object
+      description: 只给要改的字段。`code` 改了要重查唯一性。
+      properties:
+        code:   { type: string, maxLength: 64 }
+        name:   { type: string, maxLength: 100 }
+        status: { type: integer, enum: [0, 1] }
+
+    AdminStore:
+      type: object
+      description: |
+        后台视角的门店，**含围栏**。与买家侧的 `Store` 分成两个 schema，
+        理由与 `AdminProduct` / `ProductSummary` 一样：围栏、停业状态、软删标记
+        是运营要管的，把它们加进买家 schema 等于让生成出来的买家客户端
+        带着一组它永远收不到、也不该收到的字段。
+      required: [id, region_id, code, name, is_default, status, created_at]
+      properties:
+        id:        { type: integer, format: int64 }
+        region_id:
+          type: integer
+          format: int64
+          description: |
+            所属大区，**必填且不可空**（`stores.region_id NOT NULL`）。
+            换大区会同时改变这家店的价格与可见性——大区是两层覆盖里的外层。
+        region_name: { type: string }
+        code:      { type: string, description: 租户内唯一（软删的不占用）。 }
+        name:      { type: string }
+        phone:     { type: string }
+        province:  { type: string }
+        city:      { type: string }
+        district:  { type: string }
+        address:   { type: string }
+        lat:       { type: [number, 'null'] }
+        lng:       { type: [number, 'null'] }
+        fence:
+          oneOf:
+            - $ref: '#/components/schemas/GeoPolygon'
+            - type: 'null'
+          description: |
+            电子围栏。**为 null 且 `is_default = false` 的门店是一家永远接不到单的店**——
+            它不会被任何坐标命中，也不是回落目标。数据库上有
+            `CHECK (is_default OR fence IS NOT NULL)` 挡住这种组合，
+            但这条端点允许先建店后画围栏，所以这个字段在那个中间态是 null，
+            后台列表应当据此挂「未完成」提示。
+        is_default:
+          type: boolean
+          description: |
+            是否是「全国配送」的回落门店。每个商家**至多一个**
+            （`uk_stores_default` 部分唯一索引，与 §9 的默认地址同构）。
+            改它走 `PUT /admin/stores/{store_id}/default`——
+            要在同一个事务里先清旧再置新。
+        status:
+          type: integer
+          enum: [0, 1]
+          description: 0 停业 / 1 营业。停业的门店不参与围栏判定，也不能下单。
+        deleted_at:
+          type: [string, 'null']
+          format: date-time
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    AdminStoreList:
+      type: object
+      description: |
+        门店列表。比一般的分页响应多一个 `has_default`——
+        它是「没配默认门店的商家，店面对未授权定位的访客全是空的」这条代价
+        在契约上的出口（数据模型 §4）。
+      required: [page, page_size, total, items, has_default]
+      allOf:
+        - $ref: '#/components/schemas/PageMeta'
+        - type: object
+          required: [items, has_default]
+          properties:
+            items:
+              type: array
+              items: { $ref: '#/components/schemas/AdminStore' }
+            has_default:
+              type: boolean
+              description: |
+                这家商家有没有默认门店。**必返。**
+
+                为 `false` 时后台首页必须挂提示：此时所有未授权定位的访客
+                都会拿到 `match_type = none`（不在服务范围），
+                而那看起来像「商品没上架」，和真因毫无关系。
+
+                做成响应字段而不是建店时的强制项，理由是建店与画围栏是
+                两个人在两个时刻做的事，强制会把第一步卡死在第二步上。
+
+    StoreCreateRequest:
+      type: object
+      required: [region_id, code, name]
+      description: |
+        **围栏不在这里传**，走 `PUT /admin/stores/{store_id}/fence`。
+        建店是表单、画围栏是地图，是后台的两个界面。
+      properties:
+        region_id:
+          type: integer
+          format: int64
+          description: 必填。大区不存在或不属于当前租户时返回 422。
+        code:     { type: string, maxLength: 64 }
+        name:     { type: string, maxLength: 100 }
+        phone:    { type: string, maxLength: 32 }
+        province: { type: string, maxLength: 64 }
+        city:     { type: string, maxLength: 64 }
+        district: { type: string, maxLength: 64 }
+        address:  { type: string, maxLength: 200 }
+        lat:
+          type: number
+          minimum: -90
+          maximum: 90
+          description: 门店自身坐标的纬度，`/stores/resolve` 的 `distance_m` 按它算。
+        lng:
+          type: number
+          minimum: -180
+          maximum: 180
+          description: 经度。与 `lat` 同时给或同时不给。
+        is_default:
+          type: boolean
+          description: |
+            建出来就是默认门店。已经有一家时返回 409——切换默认店请用
+            `PUT /admin/stores/{store_id}/default`，那条会先清旧再置新。
+
+    StoreUpdateRequest:
+      type: object
+      description: |
+        只给要改的字段。**改不了两样**：`fence` 走 `PUT .../fence`（要过
+        `ST_IsValid`），`is_default` 走 `PUT .../default`（要在同一事务里
+        先清旧再置新）。
+      properties:
+        region_id: { type: integer, format: int64 }
+        code:      { type: string, maxLength: 64 }
+        name:      { type: string, maxLength: 100 }
+        phone:     { type: string, maxLength: 32 }
+        province:  { type: string, maxLength: 64 }
+        city:      { type: string, maxLength: 64 }
+        district:  { type: string, maxLength: 64 }
+        address:   { type: string, maxLength: 200 }
+        lat:       { type: number, minimum: -90,  maximum: 90 }
+        lng:       { type: number, minimum: -180, maximum: 180 }
+        status:    { type: integer, enum: [0, 1] }
+
+    StoreFenceRequest:
+      type: object
+      required: [fence]
+      description: 整体替换这家门店的围栏。
+      properties:
+        fence:
+          oneOf:
+            - $ref: '#/components/schemas/GeoPolygon'
+            - type: 'null'
+          description: |
+            传 `null` 即清空围栏。**清空只对默认门店合法**——
+            给一家非默认门店清空围栏会让它永远接不到单，返回 409
+            （对应 `chk_store_fence_or_default`）。
+
+    ScopedProductListing:
+      type: object
+      description: |
+        一件商品在某个作用域（大区或门店）下的可见性与生效价。
+        `GET /admin/stores/{store_id}/products` 与
+        `GET /admin/regions/{region_id}/products` 共用这一个形状。
+      required: [product_id, title, listed, effective_listed, price_source]
+      properties:
+        product_id: { type: integer, format: int64 }
+        title:      { type: string }
+        image_url:  { type: string }
+        status:
+          type: integer
+          enum: [0, 1, 2]
+          description: 租户级的 `products.status`：0 草稿 / 1 上架 / 2 下架。
+        listed:
+          type: boolean
+          description: |
+            **本作用域**有没有把它下架。`true` 表示这一层没有排除它——
+            也就是 `store_product_overrides` / `region_product_overrides`
+            里**没有**那一行（缺一行即在售，数据模型 §4）。
+        effective_listed:
+          type: boolean
+          description: |
+            两层都算完之后买家到底看不看得见。
+
+            **与 `listed` 刻意分开**：一件被大区排掉的商品，门店这一层设成
+            `listed = true` 也捞不回来（两层是**与**不是**或**）。
+            合成一个字段的话，后台会显示「已上架」而买家看不到，
+            而那种不一致没有任何东西会报出来。
+        min_price_cents:
+          allOf: [{ $ref: '#/components/schemas/Money' }]
+          description: 本作用域下这件商品各 SKU 生效价的最小值。
+        max_price_cents:
+          allOf: [{ $ref: '#/components/schemas/Money' }]
+          description: 最大值。
+        price_source:
+          type: integer
+          enum: [1, 2, 3]
+          description: |
+            这个价来自哪一层：**1 基准价 / 2 大区价 / 3 门店价**。
+            取自 `sku_prices_by_store` 视图——全仓库唯一一处写
+            `COALESCE(门店价, 大区价, 基准价)` 的地方（数据模型 §4）。
+
+            一件商品的多个 SKU 可能落在不同层上，此时取**最内的那一层**
+            （有任何一个 SKU 用了门店价就是 3）——它回答的是
+            「这一行有没有被本地覆盖过」，运营要按它筛。
+
+    ProductListingRequest:
+      type: object
+      required: [listed]
+      description: |
+        `listed = false` 写一行排除，`listed = true` 删掉那一行。
+        **幂等**：重复设成同一个值不报错。
+      properties:
+        listed:
+          type: boolean
+          description: |
+            这一层卖不卖它。注意这不保证买家看得见——
+            上一层（大区）排掉的，这一层捞不回来，见 `effective_listed`。
+
+    ScopedSkuPrice:
+      type: object
+      description: 一个 SKU 在某个作用域（大区或门店）下的价格覆盖与生效价。
+      required: [sku_id, effective_price_cents, price_source]
+      properties:
+        sku_id:   { type: integer, format: int64 }
+        sku_code: { type: string }
+        base_price_cents:
+          allOf: [{ $ref: '#/components/schemas/Money' }]
+          description: '`skus.price_cents`，最外层的基准价。'
+        override_price_cents:
+          type: [integer, 'null']
+          format: int64
+          description: |
+            **本作用域**自己定的价。为 null 表示这一层没有覆盖，
+            沿用上一层——那正是这两张表「缺一行即继承」的语义
+            （数据模型 §4）。撤销覆盖走 `DELETE`，不是把它设成 null。
+        effective_price_cents:
+          allOf: [{ $ref: '#/components/schemas/Money' }]
+          description: 三层 `COALESCE` 之后真正生效的价。
+        price_source:
+          type: integer
+          enum: [1, 2, 3]
+          description: 1 基准价 / 2 大区价 / 3 门店价。
+
+    SkuPriceSetRequest:
+      type: object
+      required: [price_cents]
+      description: |
+        设置本作用域的价格覆盖（upsert）。
+        **不接受 `null`**——撤销覆盖走 `DELETE`，两个动作的语义不同：
+        设成 0 是「这家店免费送」，删掉是「这家店不要自己的价」。
+      properties:
+        price_cents:
+          allOf: [{ $ref: '#/components/schemas/Money' }]
+          description: 本作用域的价，单位分，非负。
+
+    OrderStoreSnapshot:
+      type: object
+      description: |
+        下单那一瞬间的门店与大区展示信息，取自 `orders.store_snapshot`。
+
+        **只有展示字段，没有 id。** id 在 `Order.store_id` / `Order.region_id`
+        上，是真正的外键列，报表按它们聚合。快照这边刻意不放 id——
+        放了就会有人去 `GROUP BY` 一个 JSONB 里的字符串，
+        而门店改一次名那张报表就断了（数据模型 §5）。
+      required: [store_name]
+      properties:
+        store_name:   { type: string }
+        store_phone:  { type: string }
+        store_address: { type: string }
+        region_name:  { type: string }
