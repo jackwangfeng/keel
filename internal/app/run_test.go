@@ -266,6 +266,16 @@ func TestRouterServesContractPaths(t *testing.T) {
 		"GET /api/v1/orders":                     false,
 		"GET /api/v1/orders/:order_no":           false,
 		"POST /api/v1/orders/:order_no/payments": false,
+
+		// 后台那 7 条（M4 后台身份）。它们和上面那些一样只是在核路径 ——
+		// 「挂没挂对中间件」由 internal/handler 那一组行为测试守着。
+		"POST /api/v1/admin/auth/bootstrap":   false,
+		"POST /api/v1/admin/auth/email-link":  false,
+		"POST /api/v1/admin/auth/session":     false,
+		"GET /api/v1/admin/me":                false,
+		"GET /api/v1/admin/staff":             false,
+		"POST /api/v1/admin/staff":            false,
+		"PATCH /api/v1/admin/staff/:staff_id": false,
 	}
 	for _, ri := range r.Routes() {
 		key := ri.Method + " " + ri.Path

@@ -91,7 +91,32 @@ type Kind string
 const (
 	KindAccess  Kind = "access"
 	KindRefresh Kind = "refresh"
+
+	// KindStaff 是**后台**会话令牌（数据模型 §14）。
+	//
+	// 它与买家那两种共用同一个签名器、同一个线格式，但 typ 不同，
+	// 而 typ 进签名。于是一串买家的 access_token 拿去打 /admin/ 会在
+	// ParseStaff 里当场被拒，反过来也一样 —— 两套身份不共表（§14 开篇），
+	// 令牌也就不该能互相冒充。
+	//
+	// 没有「后台 refresh」：会话 7 天、可撤销、到期重新走邮箱链接（§14
+	// 「邮箱才是真正的信任根」那一段），轮换机制在这条链路上没有位置。
+	KindStaff Kind = "staff"
 )
+
+// StaffSessionTTL 是后台会话的寿命。§14 写死：会话默认 7 天，可撤销。
+//
+// 它比买家的 access_token（2 小时）长 84 倍，而买家那个之所以只有 2 小时，
+// 是因为它**不可吊销**。后台这一串是可吊销的：每个请求都拿它的 sha256 去
+// staff_tokens 点查一次（TouchLiveStaffSession），revoked_at 一置就当场失效。
+// 「寿命长」的代价由「可吊销」兜住 —— 这正是买家那边 refresh_token 的分工。
+const StaffSessionTTL = 7 * 24 * time.Hour
+
+// StaffEmailLinkTTL 是邮箱登录链接的寿命（§14：一次性链接 15 分钟）。
+const StaffEmailLinkTTL = 15 * time.Minute
+
+// StaffBootstrapTTL 是引导 token 的寿命（§14：明文打印到 stdout，24 小时有效）。
+const StaffBootstrapTTL = 24 * time.Hour
 
 // Claims 是令牌里的全部信息。
 //
@@ -139,6 +164,19 @@ type claimsJSON struct {
 	// 那是一个只在「同一秒、同一用户、两次登录」时出现的 500，
 	// 本地几乎复现不出来。
 	Nonce string `json:"jti"`
+
+	// Platform 表示这串令牌属于一个**平台级**操作员（staff.merchant_id 为
+	// NULL，数据模型 §14）。只有后台令牌用得上它。
+	//
+	// 它必须是一个**被签名覆盖的显式字段**，不能靠「mid 为 0 就是平台级」
+	// 去推：mid 为 0 在别的每一处都表示「没设」，而 Issue 恰好拒绝签发
+	// mid <= 0 的买家令牌（见下）。两种含义压在同一个零值上的后果是，
+	// 任何一处漏判都会把「忘了设租户」当成「这是平台管理员」——
+	// 那是这套两级身份里最贵的一次误判。
+	//
+	// omitempty：买家令牌里这个字段整个不出现，于是 M2 之后签出来的那些
+	// 令牌逐字节不变。
+	Platform bool `json:"plt,omitempty"`
 }
 
 // header 是固定的 JWT 头。
@@ -225,46 +263,20 @@ func (s *Signer) Issue(merchantID, userID, sessionID int64, kind Kind, ttl time.
 // 被解析、被用来查库，然后才发现签名不对——那条路径上任何一处的副作用
 // （一次错误日志里的注入、一次昂贵的查询）都成了不需要凭据就能触发的东西。
 func (s *Signer) Parse(token string) (Claims, error) {
-	parts := strings.Split(token, ".")
-	if len(parts) != 3 {
-		return Claims{}, ErrMalformedToken
-	}
-	sig, err := jwtB64.DecodeString(parts[2])
+	p, err := s.parseSigned(token)
 	if err != nil {
-		return Claims{}, ErrMalformedToken
-	}
-	// hmac.Equal 是常数时间的。用 bytes.Equal 的话，逐字节的返回时间差
-	// 理论上可以被用来一个字节一个字节地凑出签名。
-	if !hmac.Equal(sig, s.mac(parts[0]+"."+parts[1])) {
-		return Claims{}, ErrBadSignature
-	}
-
-	rawHeader, err := jwtB64.DecodeString(parts[0])
-	if err != nil {
-		return Claims{}, ErrMalformedToken
-	}
-	var hd header
-	if err := json.Unmarshal(rawHeader, &hd); err != nil {
-		return Claims{}, ErrMalformedToken
-	}
-	// 签名已经过了，所以这里的 alg 不可能是攻击者选的——但仍然要核对：
-	// 哪天签名算法换代，一串用旧算法签的令牌不该因为「签名恰好也对」而通过。
-	if hd.Alg != "HS256" {
-		return Claims{}, ErrBadSignature
-	}
-
-	rawPayload, err := jwtB64.DecodeString(parts[1])
-	if err != nil {
-		return Claims{}, ErrMalformedToken
-	}
-	var p claimsJSON
-	if err := json.Unmarshal(rawPayload, &p); err != nil {
-		return Claims{}, ErrMalformedToken
+		return Claims{}, err
 	}
 	if p.MerchantID <= 0 || p.UserID <= 0 {
 		// 签名对但字段缺失，说明签发侧有 bug。当成格式错拒掉，
 		// 而不是带着一个 0 继续往下走——0 会在 RLS 那一层变成一次 42501，
 		// 或者更糟，变成一次谁也没预期的匹配。
+		return Claims{}, ErrMalformedToken
+	}
+	if p.Platform {
+		// 买家没有「平台级」这回事。一串带 plt 的令牌走到这条路上，
+		// 要么是后台令牌被当成买家令牌用了（typ 会先挡住），
+		// 要么是签发侧把两种身份接串了。两种都不该放行。
 		return Claims{}, ErrMalformedToken
 	}
 
@@ -284,6 +296,53 @@ func (s *Signer) Parse(token string) (Claims, error) {
 		return claims, ErrTokenExpired
 	}
 	return claims, nil
+}
+
+// parseSigned 做三段 base64 的拆解、验签与头部核对，返回原始载荷。
+//
+// 抽出来是因为买家令牌与后台令牌**共用这一段**，而它们对载荷字段的要求不同
+// （买家要 mid > 0 且 uid > 0，后台要「mid > 0 与 plt 恰好一个成立」）。
+// 各写一遍的话，两份里先偏掉的那一份不会有任何编译错误，
+// 而这一段正是「先验签再读载荷」那条顺序活着的地方。
+func (s *Signer) parseSigned(token string) (claimsJSON, error) {
+	var zero claimsJSON
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return zero, ErrMalformedToken
+	}
+	sig, err := jwtB64.DecodeString(parts[2])
+	if err != nil {
+		return zero, ErrMalformedToken
+	}
+	// hmac.Equal 是常数时间的。用 bytes.Equal 的话，逐字节的返回时间差
+	// 理论上可以被用来一个字节一个字节地凑出签名。
+	if !hmac.Equal(sig, s.mac(parts[0]+"."+parts[1])) {
+		return zero, ErrBadSignature
+	}
+
+	rawHeader, err := jwtB64.DecodeString(parts[0])
+	if err != nil {
+		return zero, ErrMalformedToken
+	}
+	var hd header
+	if err := json.Unmarshal(rawHeader, &hd); err != nil {
+		return zero, ErrMalformedToken
+	}
+	// 签名已经过了，所以这里的 alg 不可能是攻击者选的——但仍然要核对：
+	// 哪天签名算法换代，一串用旧算法签的令牌不该因为「签名恰好也对」而通过。
+	if hd.Alg != "HS256" {
+		return zero, ErrBadSignature
+	}
+
+	rawPayload, err := jwtB64.DecodeString(parts[1])
+	if err != nil {
+		return zero, ErrMalformedToken
+	}
+	var p claimsJSON
+	if err := json.Unmarshal(rawPayload, &p); err != nil {
+		return zero, ErrMalformedToken
+	}
+	return p, nil
 }
 
 // ParseKind 在 Parse 之上多校验一条：这串令牌是不是要的那一种。

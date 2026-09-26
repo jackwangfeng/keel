@@ -270,6 +270,36 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	// 接口，差别只在这一行有没有 auth.Bearer —— 所以这一行是要盯着看的那一行。
 	v1.POST("/webhooks/payments/:channel",
 		handler.NewPaymentWebhookHandler(payments).Notify)
+
+	// -----------------------------------------------------------------------
+	// 后台（契约约定 6：后台接口一律挂在 /admin/ 前缀下，与前台分开鉴权）
+	// -----------------------------------------------------------------------
+	//
+	// 它们仍然在 v1 组里，也就仍然带着 res.Middleware()。**后台不需要买家的
+	// 令牌，但它一样需要租户**：一个商家级操作员打的是自己那家店的域名，
+	// 而 auth.StaffBearer 要拿那个租户去比对令牌里的那一个。
+	// internal/tenant/resolver.go 那句「刻意不支持用请求头指定租户」在这里
+	// 同样成立，理由还更硬 —— 后台 token 能读全部订单与客户手机号。
+	//
+	// 前三条是 security: []（未认证的），所以它们**不挂** auth.StaffBearer：
+	// 一个还没有会话的人要能打到它们。「不需要令牌」不等于「不需要租户」。
+	staffSvc := service.NewStaffService(repo, signer, nil)
+	adm := handler.NewAdminAuthHandler(staffSvc)
+	v1.POST("/admin/auth/bootstrap", adm.Bootstrap)
+	v1.POST("/admin/auth/email-link", adm.EmailLink)
+	v1.POST("/admin/auth/session", adm.Session)
+
+	// 其余的都要后台会话。中间件挂在租户中间件**之后**（v1 这个组已经带着
+	// 后者），顺序反了的话它取不到租户，也就没法校验令牌属不属于这家店。
+	//
+	// **它与买家那道 auth.Bearer 是两个不同的中间件、两个不同的 context key。**
+	// 共用一个的话，一条 /admin/ 路由会把 staff_id 当成 user_id 用，
+	// 而两张表的 id 来自同一种自增序列 —— 撞上不是小概率，是日常。
+	staffAuth := auth.StaffBearer(signer, staffSvc, nil)
+	v1.GET("/admin/me", staffAuth, adm.Me)
+	v1.GET("/admin/staff", staffAuth, adm.ListStaff)
+	v1.POST("/admin/staff", staffAuth, adm.CreateStaff)
+	v1.PATCH("/admin/staff/:staff_id", staffAuth, adm.UpdateStaff)
 	return r
 }
 
@@ -429,7 +459,56 @@ func Run(ctx context.Context, listen func(addr string, h http.Handler) error) er
 	if embErr == nil {
 		searchEmbedder = embedder
 	}
+
+	// 后台引导（数据模型 §14 认证流程 ①）。**排在监听之前**，与 Preflight
+	// 同一个理由：它要在有人能打到 /admin/auth/bootstrap 之前就把那串
+	// 一次性 token 打进日志，否则第一个请求可能落在「账号已经建了、
+	// 而运维还没见过 token」的那一瞬间。
+	//
+	// 它不拒绝启动：引导失败（比如库里已经有平台管理员了，那是**正常**情况）
+	// 不该让一个能正常服务买家的进程起不来。
+	if err := bootstrapStaff(ctx, pool); err != nil {
+		return err
+	}
+
 	return listen(cfg.Addr, Router(pool, res, signer, orders, cfg.Payment, searchEmbedder))
+}
+
+// bootstrapStaff 在库里一个在岗平台级管理员都没有时，建一个并把那串一次性
+// 引导 token **明文打进日志**。
+//
+// 为什么是 stdout 而不是邮件，数据模型 §14 写过完整论证：全新部署时 SMTP
+// 大概率还没配，如果登录的唯一入口是邮件，操作员第一次就进不去后台 ——
+// 而本项目的卖点是 docker compose up 一条命令。Jupyter 与 Gitea 都这么做。
+//
+// 代价是容器日志里会短暂出现一个高权限凭据。所以它 24 小时过期、用掉即失效，
+// 并且只在没有在岗平台管理员时才生成（service.StaffService.EnsureBootstrapAdmin
+// 里写着这个判据为什么不是 §14 原话里的「库里一个 staff 都没有」）。
+//
+// **它在这里而不是在那条路由里**，这是「POST /admin/auth/bootstrap 凭什么能
+// 被调用」的全部答案：那条接口是未认证的，如果它自己能凭空建出一个管理员，
+// 任何能打到这个端口的人都能给自己开一个后台全权账号。账号只在进程启动时、
+// 在进程内部建出来，不接受任何外部输入；那条接口只做一件事 ——
+// 拿一串只有能读到日志的人才见过的一次性 token 换会话。
+//
+// signer 不传进来：引导只写库，不签会话令牌（会话是那条路由签的）。
+func bootstrapStaff(ctx context.Context, pool *pgxpool.Pool) error {
+	token, err := service.NewStaffService(repository.New(pool), nil, nil).
+		EnsureBootstrapAdmin(ctx)
+	if err != nil {
+		return fmt.Errorf("后台引导失败: %w", err)
+	}
+	if token == "" {
+		return nil
+	}
+	// 用 Warn 而不是 Info：这是一条**高权限凭据**，它出现在日志里这件事
+	// 本身就该被看见。level=info 在很多部署里是被过滤掉的，而这一行被过滤掉
+	// 意味着这个部署的后台从此谁也进不去（除非接上 SMTP）。
+	slog.WarnContext(ctx, "后台还没有平台级管理员，已创建一个并签发引导 token。"+
+		"用它换会话：POST /api/v1/admin/auth/bootstrap {\"token\":\"<下面这串>\","+
+		"\"email\":\"<你的邮箱>\"}。24 小时有效，用掉即失效，明文只出现这一次",
+		"bootstrap_token", token)
+	return nil
 }
 
 // authSigner 按配置建令牌签名器。没配 KEEL_AUTH_SECRET 时随机取一个并告警，
