@@ -501,7 +501,12 @@ func TestExplainListsExactlyTheStagesThatRan(t *testing.T) {
 	sawSoldOut := false
 	for _, it := range items {
 		sc := it["scores"].(map[string]any)
-		rrf, biz, fin := sc["rrf"].(float64), sc["business"].(float64), sc["final"].(float64)
+		rrf, ok1 := sc["rrf"].(float64)
+		biz, ok2 := sc["business"].(float64)
+		fin, ok3 := sc["final"].(float64)
+		if !ok1 || !ok2 || !ok3 {
+			continue // 缺键上面已经报过了；这里只验数值
+		}
 		wantBiz := search.StockFactorInStock
 		if it["in_stock"] == false {
 			wantBiz = search.StockFactorOutOfStock
