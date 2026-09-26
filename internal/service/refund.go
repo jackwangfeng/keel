@@ -374,6 +374,10 @@ func (s *RefundService) Create(ctx context.Context, orderNo string, req RefundCr
 			if err := tx.RecomputeOrderRefundStatus(ctx, order.ID); err != nil {
 				return repository.Refund{}, err
 			}
+			// 门店的「新的售后待审核」与退款单落库同一个事务（数据模型 §16）。
+			if err := notifyRefundRequested(ctx, tx, refundNo); err != nil {
+				return repository.Refund{}, err
+			}
 			return tx.FindUserRefundByNo(ctx, refundNo, id.UserID)
 		})
 }
@@ -470,6 +474,9 @@ func (s *RefundService) SubmitReturnShipment(ctx context.Context, refundNo strin
 			if !ok {
 				// 行锁之下刚读到 20，UPDATE 却匹配 0 行：谓词被改坏了。
 				return repository.Refund{}, fmt.Errorf("退款单 %s 在行锁之下填寄回物流失败", refundNo)
+			}
+			if err := notifyReturnShipped(ctx, tx, refundNo, req.CarrierCode, req.TrackingNo); err != nil {
+				return repository.Refund{}, err
 			}
 			return tx.FindUserRefundByNo(ctx, refundNo, id.UserID)
 		})
@@ -573,6 +580,9 @@ func (s *RefundService) Audit(ctx context.Context, refundNo string, req AuditReq
 				if err := s.leaveRefunding(ctx, tx, order); err != nil {
 					return repository.Refund{}, err
 				}
+				if err := notifyRefundRejected(ctx, tx, refundNo); err != nil {
+					return repository.Refund{}, err
+				}
 				return tx.FindRefundByNo(ctx, refundNo)
 			}
 
@@ -600,6 +610,11 @@ func (s *RefundService) Audit(ctx context.Context, refundNo string, req AuditReq
 			}
 			ok, err := tx.ApproveRefund(ctx, r.ID, next, freight, staff.StaffID)
 			if err := notAuditable(ok, err, refundNo); err != nil {
+				return repository.Refund{}, err
+			}
+			// 排在 submitToChannel 之前：沙箱渠道会在同一个事务里接着入账，
+			// 买家先收到「审核通过」再收到「退款已到账」。
+			if err := notifyRefundApproved(ctx, tx, refundNo); err != nil {
 				return repository.Refund{}, err
 			}
 			if next == repository.RefundProcessing {
@@ -903,7 +918,8 @@ func (s *RefundService) settleTx(ctx context.Context, tx repository.Tx, channel 
 	if err := tx.RecomputeOrderRefundStatus(ctx, order.ID); err != nil {
 		return nil, err
 	}
-	return nil, nil
+	// 5. 通知买家退款到账，与 30 → 40 同一个事务（数据模型 §16）。
+	return nil, notifyRefundSucceeded(ctx, tx, r)
 }
 
 // ---------------------------------------------------------------------------

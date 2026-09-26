@@ -425,6 +425,23 @@ var permMatrix = []permRoute{
 	// 后台读文件（售后链路补齐那一轮）。退款凭证按**引用它的退款单**判权，与后台退款单
 	// 详情同一个判据；放行时是 302（跳限时地址），不是 200。商品图 / 头像对全体员工放行、
 	// 没被引用的凭证一律 403 upload-forbidden，这两条由 upload_test.go 单独钉住。
+	// 后台待办提醒（00053，数据模型 §16）。四条对谁都放行：列表与未读数只收窄、不拒绝；
+	// 标已读在范围外回的是 404（看不见的不承认它存在）而不是 403，所以这一格只造在
+	// 每个角色都管得着的 N1 上 —— 「范围外 404、每个人看到的是哪几条、已读各算各的」
+	// 由 notification_test.go 的 TestAdminNotificationsAreScopedAndReadPerStaff 逐角色钉住。
+	{"GET", v1 + "/admin/notifications", everyone, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permGet(v1 + "/admin/notifications")
+	}},
+	{"GET", v1 + "/admin/notifications/unread-count", everyone, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permGet(v1 + "/admin/notifications/unread-count")
+	}},
+	{"POST", v1 + "/admin/notifications/read-all", everyone, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permReq{Method: http.MethodPost, Path: v1 + "/admin/notifications/read-all", OK: http.StatusOK}
+	}},
+	{"POST", v1 + "/admin/notifications/:notification_id/read", everyone, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permReq{Method: http.MethodPost, OK: http.StatusOK,
+			Path: fmt.Sprintf(v1+"/admin/notifications/%d/read", permNotification(t, fx, fx.N1))}
+	}},
 	{"GET", v1 + "/admin/uploads/:upload_id", storeOperate, func(t *testing.T, fx *permFixture, c permCase) permReq {
 		return permReq{Method: http.MethodGet, OK: http.StatusFound,
 			Path: fmt.Sprintf(v1+"/admin/uploads/%d", permEvidence(t, fx, fx.store(c)))}
@@ -453,6 +470,19 @@ func permEvidence(t *testing.T, fx *permFixture, storeID int64) int64 {
 	adminExec(t, `UPDATE refunds SET evidence_urls = ARRAY[$2::text] WHERE refund_no = $1`,
 		refundNo, fmt.Sprintf("/api/v1/uploads/%d", uploadID))
 	return uploadID
+}
+
+// permNotification 在 storeID 这家门店上造一条商家通知（直接插库，理由同 permPaidOrder），返回 id。
+func permNotification(t *testing.T, fx *permFixture, storeID int64) int64 {
+	t.Helper()
+	t.Cleanup(func() {
+		adminExec(t, `DELETE FROM notifications WHERE merchant_id = $1 AND dedupe_key LIKE 'perm:%'`, fx.sh.MerchantID)
+	})
+	return adminQueryInt64(t, `
+		INSERT INTO notifications (merchant_id, audience, store_id, kind, title, body,
+		                           target_type, order_no, dedupe_key)
+		VALUES ($1, 2, $2, 'merchant_order_paid', '新订单待发货', '权限矩阵', 'order', $3, $4)
+		RETURNING id`, fx.sh.MerchantID, storeID, "PERM"+fx.next(), "perm:"+fx.next())
 }
 
 // permExempt 是刻意不在矩阵里的 /admin/ 路由，每条写明理由。
