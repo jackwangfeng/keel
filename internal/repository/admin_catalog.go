@@ -218,9 +218,18 @@ type Upload struct {
 	CreatedAt   time.Time
 }
 
-// UploadPurposeProductImage 是 purpose = 1 商品图（数据模型 §13）。
-// 头像（2）与退款凭证（3）走 C 端那条 POST /uploads，不经过本层的写入面。
-const UploadPurposeProductImage int16 = 1
+// uploads.purpose 的三个取值，与数据模型 §13 和契约的 UploadTarget 逐值一致。
+//
+// 写入面只用得上第一个：头像（2）与退款凭证（3）走 C 端那条 POST /uploads，
+// 而那条还没有实现。另外两个仍然定在这里，因为**读**那条路用得上它们 ——
+// GET /uploads/{upload_id} 要按 purpose 判谁可读（service/upload.go 的
+// publicPurposes），而一张用魔数 1/2/3 写的准入表，谁也没法在 review 里
+// 一眼看出它放行了什么。
+const (
+	UploadPurposeProductImage int16 = 1 // 商品图
+	UploadPurposeAvatar       int16 = 2 // 头像
+	UploadPurposeRefundProof  int16 = 3 // 退款凭证
+)
 
 // AdminCatalogTx 把商家写路径的四个面合成一个，嵌进 Tx（见 product.go）。
 //

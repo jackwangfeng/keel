@@ -149,15 +149,19 @@ VALUES ($1, $2, $3, $4, $5, $6);
 -- 而抢占插入唯一想沉默跳过的是主键撞车。
 --
 -- 24 小时足够覆盖客户端的重试窗口（§12）。
-INSERT INTO idempotency_keys (scope, user_id, idem_key, request_hash, expire_at)
-VALUES ($1, $2, $3, $4, now() + interval '24 hours')
-ON CONFLICT (scope, user_id, idem_key) DO NOTHING;
+--
+-- 主体是 (subject_kind, subject_id)，不是 user_id：1 买家 users.id /
+-- 2 后台 staff.id。两张表的 id 来自同一种自增序列，共用一列的话
+-- staff_id = 7 与 user_id = 7 会撞在同一行上（00023 的文件头）。
+INSERT INTO idempotency_keys (scope, subject_kind, subject_id, idem_key, request_hash, expire_at)
+VALUES ($1, $2, $3, $4, $5, now() + interval '24 hours')
+ON CONFLICT (scope, subject_kind, subject_id, idem_key) DO NOTHING;
 
 -- name: GetIdempotencyKey :one
 -- 读出已存在的那一行，用于判定重放 / 409 处理中 / 422 键被复用。
 SELECT request_hash, status, response_code, response_body
   FROM idempotency_keys
- WHERE scope = $1 AND user_id = $2 AND idem_key = $3;
+ WHERE scope = $1 AND subject_kind = $2 AND subject_id = $3 AND idem_key = $4;
 
 -- name: FinishIdempotencyKey :exec
 -- 把存档写回去。status：1 成功 / 2 失败。
@@ -165,8 +169,8 @@ SELECT request_hash, status, response_code, response_body
 -- 失败也存档并回放（§12 的边界选择：最保守，绝不会重复扣款）。
 -- 确需重试的场景让客户端换一个新键。
 UPDATE idempotency_keys
-   SET status = $4, response_code = $5, response_body = $6
- WHERE scope = $1 AND user_id = $2 AND idem_key = $3;
+   SET status = $5, response_code = $6, response_body = $7
+ WHERE scope = $1 AND subject_kind = $2 AND subject_id = $3 AND idem_key = $4;
 
 -- ---------------------------------------------------------------------------
 -- 超时补偿定时任务（Task 6）。
@@ -253,7 +257,7 @@ SELECT count(*) FROM inventory_logs WHERE biz_id = $1;
 -- 之间有窗口（虽然同一把钥匙上不该有两个并发请求），而删掉一条已成功的存档
 -- 等于把一笔已经建成的订单的幂等证据抹掉，下一次重试会建出第二笔订单。
 DELETE FROM idempotency_keys
- WHERE scope = $1 AND user_id = $2 AND idem_key = $3 AND status = 0;
+ WHERE scope = $1 AND subject_kind = $2 AND subject_id = $3 AND idem_key = $4 AND status = 0;
 
 -- ---------------------------------------------------------------------------
 -- 支付回调（Task 7）。

@@ -196,7 +196,7 @@ func (s *PaymentService) CreateIntent(ctx context.Context, orderNo, channel, ide
 		// 状态不对、熵源坏了，任何一个错误都让整个事务回滚，抢占那一行随之消失，
 		// 客户端拿同一把钥匙原样重试即可 —— 因为确实什么都没发生。
 		// （下单那条链路做不到这一点，它的 SAGA 跨了好几个事务。）
-		claimed, err := tx.ClaimIdempotencyKey(ctx, paymentIdempotencyScope, id.UserID, idemKey, hash)
+		claimed, err := tx.ClaimIdempotencyKey(ctx, paymentIdempotencyScope, repository.BuyerSubject(id.UserID), idemKey, hash)
 		if err != nil {
 			return err
 		}
@@ -233,7 +233,7 @@ func (s *PaymentService) CreateIntent(ctx context.Context, orderNo, channel, ide
 			return err
 		}
 		code := archivedIntentStatus
-		if err := tx.FinishIdempotencyKey(ctx, paymentIdempotencyScope, id.UserID, idemKey,
+		if err := tx.FinishIdempotencyKey(ctx, paymentIdempotencyScope, repository.BuyerSubject(id.UserID), idemKey,
 			repository.IdempotencySucceeded, &code, body); err != nil {
 			return err
 		}
@@ -316,7 +316,7 @@ func (s *PaymentService) sandboxIntent(order repository.Order, channel, secret s
 // 抢占那一行都不在），所以这里遇到 status = 2 失败态只可能是数据坏了。
 func replayIntent(ctx context.Context, tx repository.Tx, userID int64,
 	idemKey, hash string) (PaymentIntent, error) {
-	rec, err := tx.FindIdempotencyKey(ctx, paymentIdempotencyScope, userID, idemKey)
+	rec, err := tx.FindIdempotencyKey(ctx, paymentIdempotencyScope, repository.BuyerSubject(userID), idemKey)
 	if errors.Is(err, repository.ErrIdempotencyKeyNotFound) {
 		// 抢占说「已存在」，回头读却读不到：expire_at 到了、清理任务刚好把行删掉。
 		// 让它以「处理中」的形式回 409 + Retry-After —— 客户端退避重试时

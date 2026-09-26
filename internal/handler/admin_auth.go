@@ -255,6 +255,19 @@ func writeStaffError(c *gin.Context, err error) {
 	case errors.Is(err, service.ErrStaffEmailTaken):
 		problem.Write(c, http.StatusConflict,
 			problem.TypeStaffEmailTaken, "该邮箱在本租户内已经存在")
+	case errors.Is(err, service.ErrPlatformOnly):
+		// 契约 POST /admin/merchants：403「调用者不是平台级管理员」。
+		// 与上面那条 staff-forbidden 分开报，理由写在 problem.TypePlatformOnly 上。
+		problem.Write(c, http.StatusForbidden,
+			problem.TypePlatformOnly, "只有平台级管理员能开店")
+	case errors.Is(err, repository.ErrMerchantCodeTaken):
+		// 契约 POST /admin/merchants：409「code 已被占用」。
+		//
+		// 从 repository 的 sentinel 直接翻，不在 service 那一层再定义一个 ——
+		// 理由与 admin_catalog.go 头上那段一字不差：两张会分叉的映射表，
+		// 分叉的那天某一条 409 会变成 404，而没有任何东西会红。
+		problem.Write(c, http.StatusConflict,
+			problem.TypeMerchantCodeTaken, "这个 code 已经有店在用了")
 	case errors.Is(err, service.ErrLastAdmin):
 		// 契约：409「会导致该租户没有在职管理员」。数据模型 §14 那条
 		// 进不了数据库的约束，只能在业务逻辑里拦。

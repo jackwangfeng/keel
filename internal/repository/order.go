@@ -179,6 +179,48 @@ const (
 	IdempotencyFailed    int16 = 2
 )
 
+// idempotency_keys.subject_kind 的取值，与 00023 里那条 CHECK 逐值一致。
+const (
+	idempotencySubjectUser  int16 = 1 // 买家，subject_id 是 users.id
+	idempotencySubjectStaff int16 = 2 // 后台操作员，subject_id 是 staff.id
+)
+
+// IdempotencySubject 是「这把钥匙属于谁」：一个身份域加一个 id。
+//
+// ===========================================================================
+// 为什么它是一个类型，而不是两个参数
+// ===========================================================================
+//
+// 因为两个参数里的那个 int16 可以传错，而传错的症状是**没有症状**：
+// 一次把 staff_id 记成买家的调用会正常返回、正常存档、正常回放，
+// 只是它占的是买家 7 号的键空间。staff.id 与 users.id 来自同一种自增序列
+// （数据模型 §14），所以这不是理论上的碰撞。
+//
+// 做成一个只能由下面两个构造函数造出来的结构体之后，调用点上必须写出
+// BuyerSubject 或 StaffSubject 这个词 —— 也就是说「这把钥匙是谁的」
+// 变成一件在代码里读得出来、而且拼错就编译不过的事。
+//
+// 零值是无效的（Kind = 0 不在 CHECK 里），所以忘了构造会在数据库上当场
+// 23514 失败，而不是安静地落进某个键空间。
+type IdempotencySubject struct {
+	kind int16
+	id   int64
+}
+
+// BuyerSubject 是买家那一侧：subject_id 放 users.id。
+func BuyerSubject(userID int64) IdempotencySubject {
+	return IdempotencySubject{kind: idempotencySubjectUser, id: userID}
+}
+
+// StaffSubject 是后台那一侧：subject_id 放 staff.id。
+//
+// **这就是那个曾经做不到的东西。** 00023 之前这张表的主键是
+// (scope, user_id, idem_key)，后台要用它只能把 staff_id 塞进 user_id ——
+// 而那正是 auth/staff_middleware.go 与 §14 反复点名的那件事。
+func StaffSubject(staffID int64) IdempotencySubject {
+	return IdempotencySubject{kind: idempotencySubjectStaff, id: staffID}
+}
+
 // OrderTx 是下单主链路这一面。
 type OrderTx interface {
 	// ListSKUsForPricing 按一批 sku_id 取定价与快照素材。
@@ -212,11 +254,11 @@ type OrderTx interface {
 		bizType int16, bizID string, before, after int32) error
 
 	// ClaimIdempotencyKey 抢占式插入。抢到返回 true；已存在返回 false。
-	ClaimIdempotencyKey(ctx context.Context, scope string, userID int64,
+	ClaimIdempotencyKey(ctx context.Context, scope string, subj IdempotencySubject,
 		key, requestHash string) (bool, error)
 
 	// FindIdempotencyKey 读出已存在的那一行。查不到返回 ErrIdempotencyKeyNotFound。
-	FindIdempotencyKey(ctx context.Context, scope string, userID int64,
+	FindIdempotencyKey(ctx context.Context, scope string, subj IdempotencySubject,
 		key string) (IdempotencyRecord, error)
 
 	// FinishIdempotencyKey 把存档写回去（成功或失败都要写）。
@@ -224,14 +266,14 @@ type OrderTx interface {
 	// responseCode 可空：成功那一路存的是契约写明的 201；失败那一路存 nil ——
 	// 失败响应的状态码由 handler 按 sentinel 映射，在这里再存一份数字，
 	// 同一件事就有了两个可能对不上的真相（存档回放时按哪一个？）。
-	FinishIdempotencyKey(ctx context.Context, scope string, userID int64, key string,
+	FinishIdempotencyKey(ctx context.Context, scope string, subj IdempotencySubject, key string,
 		status int16, responseCode *int32, responseBody []byte) error
 
 	// ReleaseIdempotencyKey 撤销一次抢占，返回是否真的撤掉了一行。
 	//
 	// 它只对**处理中**的记录生效（status = 0）。返回 false 表示这把钥匙上的
 	// 记录已经不是「处理中」了 —— 那时撤销不该发生，也没有发生。
-	ReleaseIdempotencyKey(ctx context.Context, scope string, userID int64, key string) (bool, error)
+	ReleaseIdempotencyKey(ctx context.Context, scope string, subj IdempotencySubject, key string) (bool, error)
 }
 
 func (t tenantTx) ListSKUsForPricing(ctx context.Context, skuIDs []int64) ([]PriceableSKU, error) {
@@ -391,11 +433,12 @@ func (t tenantTx) AppendInventoryLog(ctx context.Context, skuID int64, changeQty
 	})
 }
 
-func (t tenantTx) ClaimIdempotencyKey(ctx context.Context, scope string, userID int64,
+func (t tenantTx) ClaimIdempotencyKey(ctx context.Context, scope string, subj IdempotencySubject,
 	key, requestHash string) (bool, error) {
 	n, err := t.q.ClaimIdempotencyKey(ctx, db.ClaimIdempotencyKeyParams{
 		Scope:       scope,
-		UserID:      userID,
+		SubjectKind: subj.kind,
+		SubjectID:   subj.id,
 		IdemKey:     key,
 		RequestHash: requestHash,
 	})
@@ -405,10 +448,10 @@ func (t tenantTx) ClaimIdempotencyKey(ctx context.Context, scope string, userID 
 	return n == 1, nil
 }
 
-func (t tenantTx) FindIdempotencyKey(ctx context.Context, scope string, userID int64,
+func (t tenantTx) FindIdempotencyKey(ctx context.Context, scope string, subj IdempotencySubject,
 	key string) (IdempotencyRecord, error) {
 	r, err := t.q.GetIdempotencyKey(ctx, db.GetIdempotencyKeyParams{
-		Scope: scope, UserID: userID, IdemKey: key,
+		Scope: scope, SubjectKind: subj.kind, SubjectID: subj.id, IdemKey: key,
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return IdempotencyRecord{}, ErrIdempotencyKeyNotFound
@@ -424,11 +467,12 @@ func (t tenantTx) FindIdempotencyKey(ctx context.Context, scope string, userID i
 	}, nil
 }
 
-func (t tenantTx) FinishIdempotencyKey(ctx context.Context, scope string, userID int64,
+func (t tenantTx) FinishIdempotencyKey(ctx context.Context, scope string, subj IdempotencySubject,
 	key string, status int16, responseCode *int32, responseBody []byte) error {
 	return t.q.FinishIdempotencyKey(ctx, db.FinishIdempotencyKeyParams{
 		Scope:        scope,
-		UserID:       userID,
+		SubjectKind:  subj.kind,
+		SubjectID:    subj.id,
 		IdemKey:      key,
 		Status:       status,
 		ResponseCode: responseCode,
@@ -436,10 +480,10 @@ func (t tenantTx) FinishIdempotencyKey(ctx context.Context, scope string, userID
 	})
 }
 
-func (t tenantTx) ReleaseIdempotencyKey(ctx context.Context, scope string, userID int64,
+func (t tenantTx) ReleaseIdempotencyKey(ctx context.Context, scope string, subj IdempotencySubject,
 	key string) (bool, error) {
 	n, err := t.q.ReleaseIdempotencyKey(ctx, db.ReleaseIdempotencyKeyParams{
-		Scope: scope, UserID: userID, IdemKey: key,
+		Scope: scope, SubjectKind: subj.kind, SubjectID: subj.id, IdemKey: key,
 	})
 	if err != nil {
 		return false, err

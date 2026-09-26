@@ -59,11 +59,12 @@ func (h *AdminCatalogHandler) CreateSKU(c *gin.Context) {
 		in.WarningQty = int32(*req.WarningQty)
 	}
 
-	sku, err := h.svc.CreateSKU(c.Request.Context(), productID, in)
+	sku, replayed, err := h.svc.CreateSKU(c.Request.Context(), productID, in, idemKeyOf(c))
 	if err != nil {
 		writeCatalogError(c, err)
 		return
 	}
+	markReplayed(c, replayed)
 	c.JSON(http.StatusCreated, apiAdminSKU(sku))
 }
 

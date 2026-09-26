@@ -119,7 +119,11 @@
     },
     "merchants": {
       "class": "tenant-root",
-      "reason": "租户表自身；租户解析要在确定租户之前读它。"
+      "grants": [
+        "SELECT",
+        "INSERT"
+      ],
+      "reason": "租户表自身；租户解析要在确定租户之前读它。GRANT 面比 tenant-root 的类别默认值（只读）多一条 INSERT，那是 00021 为 POST /admin/merchants（开店）加的，完整论证在那份迁移的文件头。一句话版本：00005 收掉三权时的威胁模型（改别家 domain 劫持域名、把别家店停用、无租户上下文改 merchants）**三条全部需要 UPDATE，一条都不需要 INSERT** —— INSERT 按定义碰不到任何一行已有数据。新增的暴露面到此为止：能插一行新店，插不出别人的行、改不了任何已有行、也没有拿到新的读权限；而新插的那一行在有人往它的作用域里建出第一个 staff 之前是惰性的（没有 staff 就没有后台会话，没有会话就没有任何写接口进得去）。UPDATE / DELETE 仍然属于管理员角色。"
     },
     "shop_settings": {
       "class": "tenant-root",
@@ -158,8 +162,7 @@
       "规矩二的**对偶**豁免：列名形如 <x>_id、能解析到一张同名父表、却没有任何外键引用它。",
       "键是 表名.列名。每一条都要说清为什么这里不该有外键 —— 默认答案是「补上外键」。"
     ],
-    "search_logs.user_id": "搜索日志要能记录未登录访客（该列可空），且日志表不该因为用户注销而卡住删除顺序（数据模型 §8）。",
-    "idempotency_keys.user_id": "纯基础设施表，随 expire_at 过期即删。挂外键会让清理任务和用户注销互相牵制（数据模型 §12）。"
+    "search_logs.user_id": "搜索日志要能记录未登录访客（该列可空），且日志表不该因为用户注销而卡住删除顺序（数据模型 §8）。"
   },
   "fk_single_column_ok": {
     "_readme": [
@@ -202,7 +205,7 @@
     "user_addresses(user_id)": "③ 同上，「每个用户至多一个默认地址」的部分唯一索引。",
     "cart_items(cart_id,sku_id)": "③ 首列 cart_id 已蕴含租户（数据模型 §10 明写）。",
     "refund_items(refund_id,order_item_id)": "③ 首列 refund_id 已蕴含租户。",
-    "idempotency_keys(scope,user_id,idem_key)": "③ user_id 已蕴含租户；幂等键由客户端生成，scope 打头是为了让抢占插入是一次点查（数据模型 §12 明写不加 merchant_id 的理由）。",
+    "idempotency_keys(scope,subject_kind,subject_id,idem_key)": "③ subject_id 已蕴含租户（买家是 users.id、后台操作员是 staff.id，两张表都自带 merchant_id）；幂等键由客户端生成，scope 打头是为了让抢占插入是一次点查（数据模型 §12 明写不加 merchant_id 的理由）。subject_kind 紧跟 scope 是 00023 加的：它把买家与后台切成两个键空间，否则 staff.id 与 users.id 来自同一种自增序列，7 号员工与 7 号买家会落在同一行上。",
     "product_text_vectors(product_id)": "③ 主键就是 product_id，一个商品一行；product_id 已蕴含租户（products 自带 merchant_id）。",
     "product_image_vectors(product_id)": "③ 同上。",
     "product_understanding(product_id)": "③ 同上。",

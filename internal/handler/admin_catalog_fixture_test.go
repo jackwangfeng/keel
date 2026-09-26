@@ -3,8 +3,11 @@ package handler_test
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -83,6 +86,11 @@ func newAdminShop(t *testing.T) adminShop {
 			`DELETE FROM categories WHERE merchant_id = $1`,
 			`DELETE FROM uploads WHERE merchant_id = $1`,
 			`DELETE FROM staff WHERE merchant_id = $1`,
+			// 幂等键那张表也指向 merchants（merchant_id 上有外键）。
+			// M4 收尾给后台写接口接上幂等之后，这一组测试每跑一次就会在这里
+			// 留下几行 —— 不删的话下面那句 DELETE FROM merchants 会以 23503
+			// 失败，而那条错误会出现在**别的**测试里（清理是 t.Cleanup）。
+			`DELETE FROM idempotency_keys WHERE merchant_id = $1`,
 			`DELETE FROM merchants WHERE id = $1`,
 		} {
 			if _, err := admin.Exec(c, stmt, merchantID); err != nil {
@@ -115,6 +123,17 @@ func reqAs(t *testing.T, method, host, path, body, bearer string) *httptest.Resp
 	if bearer != "" {
 		r.Header.Set("Authorization", "Bearer "+bearer)
 	}
+	// POST 一律带一把**新鲜**的 Idempotency-Key。
+	//
+	// 后台那几条 POST 在 M4 收尾之后把它当成必填（不带是 422），而这个工具是
+	// 表驱动测试的通用入口 —— 那张表里 POST 与 PATCH / DELETE 混在一起，
+	// 它们要断言的是同一件事（跨租户一律 404）。不带的话，表里那两行 POST
+	// 会在 422 上失败，而失败信息指向幂等键，与那条测试要验的东西毫无关系。
+	// 每次一把新钥匙：这个工具的调用之间没有任何幂等关系。
+	// 别的方法不带这个头 —— 契约只在 POST 上声明了它。
+	if method == http.MethodPost {
+		r.Header.Set("Idempotency-Key", freshIdemKey())
+	}
 	w := httptest.NewRecorder()
 	testEngine.ServeHTTP(w, r)
 	return w
@@ -137,6 +156,15 @@ func deleteAs(t *testing.T, host, path, bearer string) *httptest.ResponseRecorde
 // （判据是声明值，理由写在 admin_upload.go 上）。
 func uploadImage(t *testing.T, sh adminShop, contentType string, content []byte) *httptest.ResponseRecorder {
 	t.Helper()
+	// 每次一把新钥匙，理由同 postIdem：夹具造数据时两次上传之间没有任何
+	// 幂等关系。要复用同一把的那条测试走 uploadImageWithKey。
+	return uploadImageWithKey(t, sh, contentType, content, freshIdemKey())
+}
+
+// uploadImageWithKey 与上面一样，但钥匙由调用方给。
+func uploadImageWithKey(t *testing.T, sh adminShop, contentType string,
+	content []byte, idemKey string) *httptest.ResponseRecorder {
+	t.Helper()
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
 	h := make(textproto.MIMEHeader)
@@ -158,6 +186,9 @@ func uploadImage(t *testing.T, sh adminShop, contentType string, content []byte)
 	r.Host = sh.Host
 	r.Header.Set("Content-Type", mw.FormDataContentType())
 	r.Header.Set("Authorization", "Bearer "+sh.Token)
+	if idemKey != "" {
+		r.Header.Set("Idempotency-Key", idemKey)
+	}
 	w := httptest.NewRecorder()
 	testEngine.ServeHTTP(w, r)
 	return w
@@ -212,10 +243,33 @@ func decodeInto(t *testing.T, w *httptest.ResponseRecorder, wantCode int, what s
 	}
 }
 
-// postWithKey 发一个带 Idempotency-Key 请求头的 POST。
+// postIdem 发一个带**新鲜** Idempotency-Key 的 POST。
 //
-// 只有幂等那条测试用得上它：别处不带这个头，因为契约把它定成必填而服务端
-// 本轮不读它 —— 测试里到处带上它会让「它有没有被读」看起来像被覆盖过。
+// 后台那 5 条 POST 在 M4 收尾之后把这个头当成必填（不带是 422），所以这一组
+// 测试里凡是打那 5 条的地方都走它。每次一把新钥匙 —— 夹具造数据时两次调用
+// 之间没有任何幂等关系，共用一把钥匙会让第二次静默变成重放，
+// 而那时红的会是后面某条断言，真因在这里。
+//
+// 想复用同一把钥匙（那正是幂等要测的东西）用 postWithKey；
+// 想**不带**这个头（那是「必填」那条测试要的）用 post。
+func postIdem(t *testing.T, host, path, body, bearer string) *httptest.ResponseRecorder {
+	t.Helper()
+	return postWithKey(t, host, path, body, bearer, freshIdemKey())
+}
+
+// freshIdemKey 造一把没人用过的钥匙。形状随便，只要够长、够独特 ——
+// 服务端不解析它（契约说它是客户端生成的 UUID，而服务端把它当不透明串）。
+func freshIdemKey() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		panic(err)
+	}
+	return hex.EncodeToString(b[:])
+}
+
+// postWithKey 发一个带**指定** Idempotency-Key 的 POST。
+//
+// 幂等那一组测试用它：它们要的正是「同一把钥匙打两次」。
 func postWithKey(t *testing.T, host, path, body, bearer, key string) *httptest.ResponseRecorder {
 	t.Helper()
 	r := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
@@ -261,4 +315,27 @@ func assertUploadedFileMatches(t *testing.T, storageKey string, want []byte) {
 		t.Fatalf("storage_key %q 指向的文件有 %d 字节，期望 %d 字节且内容一致",
 			storageKey, len(got), len(want))
 	}
+}
+
+// countFilesUnder 数一棵目录树下有多少个普通文件。
+//
+// 上传那条幂等测试拿它证明「重放没有在磁盘上留下第二份字节」。数文件而不是
+// 比某个具体路径：重放那一路写出来的 key 是随机的（storage_key 刻意不是内容
+// 寻址，见 upload_store.go），测试事先不知道它叫什么 —— 而那正是问题所在：
+// 一个谁也不认识的文件。
+func countFilesUnder(t *testing.T, root string) int {
+	t.Helper()
+	n := 0
+	if err := filepath.WalkDir(root, func(_ string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() {
+			n++
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("数 %s 下的文件失败: %v", root, err)
+	}
+	return n
 }

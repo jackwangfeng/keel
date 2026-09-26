@@ -319,6 +319,12 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	v1.POST("/admin/staff", staffAuth, adm.CreateStaff)
 	v1.PATCH("/admin/staff/:staff_id", staffAuth, adm.UpdateStaff)
 
+	// 开店（M4 收尾）。它挂同一道 staffAuth，而「只有平台级管理员能调」
+	// 是业务规则，在 service.StaffService.OpenShop 里 —— 不在这里再套一层
+	// 中间件：那会让同一个判据有两份实现，而中间件那一份没有任何测试盯着
+	// 「它到底挂没挂在这条路由上」。
+	v1.POST("/admin/merchants", staffAuth, adm.OpenShop)
+
 	// -----------------------------------------------------------------------
 	// 商家自助发布：商品 / SKU / 库存 / 类目 / 上传（M4 Task 3，契约 16 条）
 	// -----------------------------------------------------------------------
@@ -332,8 +338,14 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	//   · internal/handler 的 TestAdminCatalogRoutesAllRequireStaffSession
 	//     **逐条**不带令牌打一次，断言它们全是 401。只核路径的话，
 	//     把这一行的 staffAuth 删掉，路由表一个字都不会变。
+	// **同一个 store 实例**交给写那一侧与读那一侧。建两个的话它们各自算一遍
+	// 根目录（uploadStoreFromEnv 没配环境变量时会落一个临时目录），
+	// 于是「写进 A 目录、从 B 目录读」—— 症状是每一张刚传上去的图都 500，
+	// 而两边的配置看上去都对。
+	store := uploadStoreFromEnv()
+
 	cat := handler.NewAdminCatalogHandler(
-		service.NewAdminCatalogService(repo, uploadStoreFromEnv()))
+		service.NewAdminCatalogService(repo, store))
 
 	v1.POST("/admin/uploads", staffAuth, cat.CreateUpload)
 
@@ -354,6 +366,26 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	v1.POST("/admin/categories", staffAuth, cat.CreateCategory)
 	v1.PATCH("/admin/categories/:category_id", staffAuth, cat.UpdateCategory)
 	v1.DELETE("/admin/categories/:category_id", staffAuth, cat.DeleteCategory)
+
+	// -----------------------------------------------------------------------
+	// 读文件（M4 收尾）。**买家侧**，所以一道后台鉴权都没有。
+	// -----------------------------------------------------------------------
+	//
+	// 上面那条 POST /admin/uploads 返回的 url 指的就是第一条。在它落地之前，
+	// 后台传完图拿到的地址打过去是 404。
+	//
+	// 两条路由：第一条判归属再 302，第二条是那个限时地址本身，只认签名与
+	// 过期时间。第二条**不在契约里**（契约描述的是「跳到 driver 生成的限时
+	// 地址」，形状随 driver 变），它在 contract_test.go 的 nonContractRoutes
+	// 里挂着账。两跳各自挡什么，写在 service/upload.go 的文件头。
+	//
+	// 它们不挂 auth.Bearer：契约里这条接口没有 security，商品图本就公开。
+	// **这不等于它们不校验租户** —— 租户由 res.Middleware() 从 Host 定出来，
+	// 而挡住跨店读取的是 uploads 上那条 RLS 策略（db/queries/uploads.sql 里
+	// 一个 merchant_id 都没有）。
+	uh := handler.NewUploadHandler(service.NewUploadService(repo, store, signer))
+	v1.GET("/uploads/:upload_id", uh.Redirect)
+	v1.GET("/uploads/:upload_id/blob", uh.Blob)
 	return r
 }
 

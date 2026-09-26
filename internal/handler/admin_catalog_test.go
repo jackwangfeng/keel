@@ -115,7 +115,7 @@ func TestMerchantCanPublishAProductAndBuyersSeeIt(t *testing.T) {
 
 	// ① 建类目。path / level 由服务端算 —— 请求体里没有它们。
 	var cat api.AdminCategory
-	decodeInto(t, post(t, sh.Host, "/api/v1/admin/categories",
+	decodeInto(t, postIdem(t, sh.Host, "/api/v1/admin/categories",
 		`{"name":"咖啡器具","sort_order":1}`, sh.Token),
 		http.StatusCreated, "建类目", &cat)
 	if cat.Level != 1 || cat.Path == "" {
@@ -129,7 +129,7 @@ func TestMerchantCanPublishAProductAndBuyersSeeIt(t *testing.T) {
 
 	// ② 建商品：落地即草稿。
 	var p api.AdminProduct
-	decodeInto(t, post(t, sh.Host, "/api/v1/admin/products",
+	decodeInto(t, postIdem(t, sh.Host, "/api/v1/admin/products",
 		fmt.Sprintf(`{"category_id":%d,"title":"手冲咖啡壶 %s","subtitle":"600ml 玻璃"}`,
 			cat.Id, sh.Suffix), sh.Token),
 		http.StatusCreated, "建商品", &p)
@@ -146,7 +146,7 @@ func TestMerchantCanPublishAProductAndBuyersSeeIt(t *testing.T) {
 
 	// ③ **闸门**：一个 SKU 都没有时不能上架。
 	// 这一条排在加 SKU 之前，因为加完就再也造不出这个状态了。
-	got := problemType(t, post(t, sh.Host,
+	got := problemType(t, postIdem(t, sh.Host,
 		fmt.Sprintf("/api/v1/admin/products/%d/publication", p.Id),
 		`{"action":"publish"}`, sh.Token), http.StatusConflict, "没有 SKU 就上架")
 	if got != problem.TypeProductHasNoSKU {
@@ -158,14 +158,14 @@ func TestMerchantCanPublishAProductAndBuyersSeeIt(t *testing.T) {
 	// ④ 加两个**不同价**的 SKU。价格不同是这条测试的判据之一：
 	// 两个同价的 SKU 下，把现算的 min() 写成 max() 不会红。
 	var sku1, sku2 api.AdminSku
-	decodeInto(t, post(t, sh.Host, fmt.Sprintf("/api/v1/admin/products/%d/skus", p.Id),
+	decodeInto(t, postIdem(t, sh.Host, fmt.Sprintf("/api/v1/admin/products/%d/skus", p.Id),
 		fmt.Sprintf(`{"sku_code":"HCP-600-%s","price_cents":12900,"cost_cents":7000,
 		              "spec_values":{"容量":"600ml"},"available_qty":9,"warning_qty":2}`, sh.Suffix),
 		sh.Token), http.StatusCreated, "建 SKU 1", &sku1)
 	if sku1.AvailableQty != 9 {
 		t.Fatalf("新建 SKU 的 available_qty 是 %d，期望 9", sku1.AvailableQty)
 	}
-	decodeInto(t, post(t, sh.Host, fmt.Sprintf("/api/v1/admin/products/%d/skus", p.Id),
+	decodeInto(t, postIdem(t, sh.Host, fmt.Sprintf("/api/v1/admin/products/%d/skus", p.Id),
 		fmt.Sprintf(`{"sku_code":"HCP-900-%s","price_cents":15900,"available_qty":4}`, sh.Suffix),
 		sh.Token), http.StatusCreated, "建 SKU 2", &sku2)
 
@@ -238,7 +238,7 @@ func TestMerchantCanPublishAProductAndBuyersSeeIt(t *testing.T) {
 
 	// ⑧ 上架。**这一步是第 ③ 步那个 409 的阳性对照。**
 	var published api.AdminProduct
-	decodeInto(t, post(t, sh.Host,
+	decodeInto(t, postIdem(t, sh.Host,
 		fmt.Sprintf("/api/v1/admin/products/%d/publication", p.Id),
 		`{"action":"publish"}`, sh.Token), http.StatusOK, "上架", &published)
 	if published.Status != 1 {
@@ -252,8 +252,12 @@ func TestMerchantCanPublishAProductAndBuyersSeeIt(t *testing.T) {
 	// 重复上架是幂等的（契约：返回 200 且什么都不改，不报 409），
 	// 而且 **published_at 不许被覆盖** —— 它是「首次发布时间」，
 	// 每次上架都覆盖的话，一次临时下架再上架就能把一件老商品顶到列表最前面。
+	//
+	// **这里要的是一把新钥匙**（postIdem 每次给一把新的）：被测的是状态机
+	// 天生的幂等（再上架一次什么都不改），不是幂等键的存档回放。复用上一把
+	// 的话回的是存档，于是这条断言验的就成了另一件事。
 	var again api.AdminProduct
-	decodeInto(t, post(t, sh.Host,
+	decodeInto(t, postIdem(t, sh.Host,
 		fmt.Sprintf("/api/v1/admin/products/%d/publication", p.Id),
 		`{"action":"publish"}`, sh.Token), http.StatusOK, "重复上架", &again)
 	if again.PublishedAt == nil || !again.PublishedAt.Equal(first) {
@@ -397,7 +401,7 @@ func TestDeletingAPublishedProductIsRefusedUntilItIsUnpublished(t *testing.T) {
 		t.Fatalf("删在架商品的 Problem type 是 %q，期望 %q", got, problem.TypeProductStillPublished)
 	}
 
-	wantStatus(t, post(t, sh.Host, fmt.Sprintf("/api/v1/admin/products/%d/publication", prod),
+	wantStatus(t, postIdem(t, sh.Host, fmt.Sprintf("/api/v1/admin/products/%d/publication", prod),
 		`{"action":"unpublish"}`, sh.Token), http.StatusOK, "下架")
 	wantStatus(t, deleteAs(t, sh.Host, fmt.Sprintf("/api/v1/admin/products/%d", prod), sh.Token),
 		http.StatusNoContent, "下架之后再删")
@@ -433,7 +437,7 @@ func TestDeletingTheLastSKUOfAPublishedProductIsRefused(t *testing.T) {
 
 	// 阳性对照：加一个兄弟规格之后，同一次删除必须成功。
 	var sibling api.AdminSku
-	decodeInto(t, post(t, sh.Host, fmt.Sprintf("/api/v1/admin/products/%d/skus", prod),
+	decodeInto(t, postIdem(t, sh.Host, fmt.Sprintf("/api/v1/admin/products/%d/skus", prod),
 		fmt.Sprintf(`{"sku_code":"LAST-2-%s","price_cents":2000}`, sh.Suffix), sh.Token),
 		http.StatusCreated, "加兄弟 SKU", &sibling)
 	wantStatus(t, deleteAs(t, sh.Host, fmt.Sprintf("/api/v1/admin/skus/%d", sku), sh.Token),
@@ -441,7 +445,7 @@ func TestDeletingTheLastSKUOfAPublishedProductIsRefused(t *testing.T) {
 
 	// 软删掉的规格不占货号了（uk_skus_code 是部分唯一索引）。
 	// 这一条顺带证明上面那次删真的落了 deleted_at，而不是只返回了 204。
-	wantStatus(t, post(t, sh.Host, fmt.Sprintf("/api/v1/admin/products/%d/skus", prod),
+	wantStatus(t, postIdem(t, sh.Host, fmt.Sprintf("/api/v1/admin/products/%d/skus", prod),
 		fmt.Sprintf(`{"sku_code":"LAST-%s","price_cents":3000}`, sh.Suffix), sh.Token),
 		http.StatusCreated, "复用被软删规格的货号")
 }
@@ -454,9 +458,12 @@ func TestDuplicateSKUCodeIsA409WithinTheTenantOnly(t *testing.T) {
 	prodB, _ := seedPublishedProduct(t, b, "DUP2", 1000, 5)
 
 	body := fmt.Sprintf(`{"sku_code":"SHARED-%s","price_cents":100}`, a.Suffix)
-	wantStatus(t, post(t, a.Host, fmt.Sprintf("/api/v1/admin/products/%d/skus", prodA), body, a.Token),
+	wantStatus(t, postIdem(t, a.Host, fmt.Sprintf("/api/v1/admin/products/%d/skus", prodA), body, a.Token),
 		http.StatusCreated, "A 店第一次用这个货号")
-	got := problemType(t, post(t, a.Host,
+	// **换一把新钥匙**：这里要的是「同一个货号第二次」撞 uk_skus_code，
+	// 不是「同一把幂等键第二次」撞存档。复用上一把的话回的会是 201 重放，
+	// 而那条 409 就再也测不到了。
+	got := problemType(t, postIdem(t, a.Host,
 		fmt.Sprintf("/api/v1/admin/products/%d/skus", prodA), body, a.Token),
 		http.StatusConflict, "A 店第二次用同一个货号")
 	if got != problem.TypeSKUCodeDuplicated {
@@ -465,7 +472,7 @@ func TestDuplicateSKUCodeIsA409WithinTheTenantOnly(t *testing.T) {
 	// 阳性对照：uk_skus_code 是 (merchant_id, sku_code)，不是全局唯一 ——
 	// 两家店各有一个 A001 是正常的。少了这一条，把索引改成全局唯一
 	// 也能让上面那个 409 照样出现。
-	wantStatus(t, post(t, b.Host, fmt.Sprintf("/api/v1/admin/products/%d/skus", prodB), body, b.Token),
+	wantStatus(t, postIdem(t, b.Host, fmt.Sprintf("/api/v1/admin/products/%d/skus", prodB), body, b.Token),
 		http.StatusCreated, "B 店用同一个货号")
 }
 
@@ -474,9 +481,9 @@ func TestCategoryGatesRefuseDeleteAndCycles(t *testing.T) {
 	sh := newAdminShop(t)
 
 	var root, child api.AdminCategory
-	decodeInto(t, post(t, sh.Host, "/api/v1/admin/categories", `{"name":"根"}`, sh.Token),
+	decodeInto(t, postIdem(t, sh.Host, "/api/v1/admin/categories", `{"name":"根"}`, sh.Token),
 		http.StatusCreated, "建根类目", &root)
-	decodeInto(t, post(t, sh.Host, "/api/v1/admin/categories",
+	decodeInto(t, postIdem(t, sh.Host, "/api/v1/admin/categories",
 		fmt.Sprintf(`{"name":"子","parent_id":%d}`, root.Id), sh.Token),
 		http.StatusCreated, "建子类目", &child)
 	if child.Level != 2 || child.Path != fmt.Sprintf("/%d/%d/", root.Id, child.Id) {
@@ -493,7 +500,7 @@ func TestCategoryGatesRefuseDeleteAndCycles(t *testing.T) {
 	}
 
 	// 有商品 → 409（挂在子类目下）。
-	wantStatus(t, post(t, sh.Host, "/api/v1/admin/products",
+	wantStatus(t, postIdem(t, sh.Host, "/api/v1/admin/products",
 		fmt.Sprintf(`{"category_id":%d,"title":"占位商品 %s"}`, child.Id, sh.Suffix), sh.Token),
 		http.StatusCreated, "往子类目下建商品")
 	got = problemType(t, deleteAs(t, sh.Host,
@@ -515,7 +522,7 @@ func TestCategoryGatesRefuseDeleteAndCycles(t *testing.T) {
 	// 阳性对照：一次**合法**的移动必须成功，而且整棵子树的 path 跟着走。
 	// 少了它，把 MoveCategory 写成恒 409 也能让上面那条绿。
 	var third api.AdminCategory
-	decodeInto(t, post(t, sh.Host, "/api/v1/admin/categories", `{"name":"另一棵根"}`, sh.Token),
+	decodeInto(t, postIdem(t, sh.Host, "/api/v1/admin/categories", `{"name":"另一棵根"}`, sh.Token),
 		http.StatusCreated, "建第二棵根", &third)
 	var moved api.AdminCategory
 	decodeInto(t, patchAs(t, sh.Host, fmt.Sprintf("/api/v1/admin/categories/%d", root.Id),
@@ -657,38 +664,141 @@ func TestAdminCatalogIsTenantScoped(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 挂着的账要有靶子
+// 幂等（M4 收尾）
 // ---------------------------------------------------------------------------
 
-// 这 5 条 POST **还没有实现幂等**，而契约里 Idempotency-Key 是必填请求头。
+// 那 5 条 POST 真的幂等了：同一把 Idempotency-Key 第二次拿到的是**首次那一件**，
+// 库里不多一行；同一把钥匙配不同的请求体回 422。
 //
-// 这条测试是 contract_test.go 那笔 NotYetImplementedHeader 的反向执行者：
-// 挂账只能做「清单 → 契约」一个方向的机械对账（AST 跟不过一个包级常量），
-// 所以「实现了却忘了划掉」由这里盯着 —— 真的做了幂等，它会红。
+// ===========================================================================
+// 这条测试本轮翻了个面
+// ===========================================================================
 //
-// 它同时是那笔账的**暴露面说明书**：重发一次真的会多建一件商品。
-func TestAdminWritesAreNotYetIdempotent(t *testing.T) {
+// 它原先叫 TestAdminWritesAreNotYetIdempotent，断言的是「同一把钥匙会建出两件
+// 商品」—— 那是 contract_test.go 里那 5 笔 NotYetImplementedHeader 挂账的反向
+// 执行者，也是那笔账的暴露面说明书。挡着实现的是一次 schema 决定
+// （00023：idempotency_keys 的主键里那个 user_id 在后台这条路上要放 staff_id，
+// 而两张表的 id 来自同一种自增序列）。决定做完了，账销了，靶子就该跟着翻过来。
+//
+// 三条断言缺一不可，而第二条最容易被漏掉：
+//
+//	① 第二次回的是同一件（id 相同）；
+//	② **库里真的只有一行** —— 只比 id 的话，一个「建两件、回第一件」的实现
+//	   也是绿的，而那正是幂等要防的那件事本身；
+//	③ Idempotency-Replayed: true —— 没有它，客户端把重放记成一次新建，
+//	   连点两下会被记成两次转化（契约明写它影响埋点与提示文案）。
+func TestAdminWritesAreIdempotent(t *testing.T) {
 	sh := newAdminShop(t)
 	var cat api.AdminCategory
-	decodeInto(t, post(t, sh.Host, "/api/v1/admin/categories", `{"name":"幂等靶子"}`, sh.Token),
+	decodeInto(t, postIdem(t, sh.Host, "/api/v1/admin/categories", `{"name":"幂等靶子"}`, sh.Token),
 		http.StatusCreated, "建类目", &cat)
 
 	key := "11111111-2222-3333-4444-555555555555"
-	body := fmt.Sprintf(`{"category_id":%d,"title":"重发会变两件 %s"}`, cat.Id, sh.Suffix)
+	title := "重发不该变两件 " + sh.Suffix
+	body := fmt.Sprintf(`{"category_id":%d,"title":%q}`, cat.Id, title)
 
 	var first, second api.AdminProduct
-	decodeInto(t, postWithKey(t, sh.Host, "/api/v1/admin/products", body, sh.Token, key),
-		http.StatusCreated, "第一次建", &first)
-	decodeInto(t, postWithKey(t, sh.Host, "/api/v1/admin/products", body, sh.Token, key),
-		http.StatusCreated, "带同一把 Idempotency-Key 再建一次", &second)
-
-	if first.Id == second.Id {
-		t.Fatalf("同一把 Idempotency-Key 打两次回了同一件商品（id=%d）—— "+
-			"幂等实现了。请把 contract_test.go 里那 5 条 NotYetImplementedHeader "+
-			"挂账删掉，并删掉这条测试", first.Id)
+	w1 := postWithKey(t, sh.Host, "/api/v1/admin/products", body, sh.Token, key)
+	decodeInto(t, w1, http.StatusCreated, "第一次建", &first)
+	if got := w1.Header().Get("Idempotency-Replayed"); got != "" {
+		t.Errorf("首次调用带上了 Idempotency-Replayed: %q —— 那是重放专用的头，"+
+			"首次带上它会让客户端把一次真的新建记成重放", got)
 	}
-	t.Logf("如期建出了两件商品（id=%d 与 %d）：这 5 条 POST 还没有实现幂等，"+
-		"挂账在 contract_test.go 的 NotYetImplementedHeader 里", first.Id, second.Id)
+
+	w2 := postWithKey(t, sh.Host, "/api/v1/admin/products", body, sh.Token, key)
+	decodeInto(t, w2, http.StatusCreated, "带同一把 Idempotency-Key 再建一次", &second)
+
+	// ① 同一件。
+	if first.Id != second.Id {
+		t.Fatalf("同一把 Idempotency-Key 打两次建出了两件商品（id=%d 与 %d）—— "+
+			"幂等没生效", first.Id, second.Id)
+	}
+	// ③ 重放头。
+	if got := w2.Header().Get("Idempotency-Replayed"); got != "true" {
+		t.Errorf("重放没有带 Idempotency-Replayed: true（实得 %q）—— "+
+			"客户端分不清「我真的建了」与「这是上次那件」", got)
+	}
+	// ② 库里只有一行。**这一条才是真正的判据。**
+	if n := adminQueryInt64(t,
+		`SELECT count(*) FROM products WHERE merchant_id = $1 AND title = $2`,
+		sh.MerchantID, title); n != 1 {
+		t.Fatalf("库里有 %d 行标题是 %q 的商品，期望 1 —— "+
+			"接口回的是同一个 id，但业务真的跑了两遍", n, title)
+	}
+
+	// 同一把钥匙配**不同**的请求体：422，而且绝不能被当成重放静默吞掉
+	// （数据模型 §12 原话：那会让用户以为第二个请求生效了）。
+	other := fmt.Sprintf(`{"category_id":%d,"title":"换了个标题 %s"}`, cat.Id, sh.Suffix)
+	got := problemType(t, postWithKey(t, sh.Host, "/api/v1/admin/products", other, sh.Token, key),
+		http.StatusUnprocessableEntity, "同一把钥匙配另一个请求体")
+	if got != problem.TypeIdempotencyKeyReused {
+		t.Errorf("Problem type 是 %q，期望 %q", got, problem.TypeIdempotencyKeyReused)
+	}
+	if n := adminQueryInt64(t,
+		`SELECT count(*) FROM products WHERE merchant_id = $1 AND title LIKE $2`,
+		sh.MerchantID, "换了个标题%"); n != 0 {
+		t.Fatalf("回了 422，库里却建出了 %d 行 —— 拒绝发生在写之后", n)
+	}
+}
+
+// 契约把 Idempotency-Key 定成**必填**，所以不带它是 422，不是「照常执行」。
+//
+// 它值得单独一条：把 service 那句 idemKey == "" 的检查删掉，上面那条测试
+// 一个字都不会变（它每次都带着钥匙），而这条接口会安静地退回到不幂等。
+func TestAdminWritesRequireAnIdempotencyKey(t *testing.T) {
+	sh := newAdminShop(t)
+	var cat api.AdminCategory
+	decodeInto(t, postIdem(t, sh.Host, "/api/v1/admin/categories", `{"name":"缺钥匙靶子"}`, sh.Token),
+		http.StatusCreated, "建类目", &cat)
+
+	title := "没带钥匙 " + sh.Suffix
+	// post 这个工具刻意不带 Idempotency-Key（见 postWithKey 上的注释）。
+	w := post(t, sh.Host, "/api/v1/admin/products",
+		fmt.Sprintf(`{"category_id":%d,"title":%q}`, cat.Id, title), sh.Token)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("不带 Idempotency-Key 回了 %d，期望 422（契约把它定成必填）：%s",
+			w.Code, w.Body.String())
+	}
+	if n := adminQueryInt64(t,
+		`SELECT count(*) FROM products WHERE merchant_id = $1 AND title = $2`,
+		sh.MerchantID, title); n != 0 {
+		t.Fatalf("回了 422，库里却建出了 %d 行", n)
+	}
+}
+
+// 上传那一条的幂等有它自己的一道坎：字节必须先落盘，幂等键才抢得了
+// （request_hash 要认「这次传的是不是同一个文件」）。于是重放那一路会多出一个
+// 刚落盘的文件，而它**不会**被孤儿回收看见 —— 回收扫的是 uploads 表，
+// 而这个文件没有对应的行。
+//
+// 这条测试盯的就是那句善后：删掉 service 里那句 store.Remove，
+// 上面 id 相同的断言照样绿，而每重试一次磁盘上多一份 10 MB。
+func TestUploadIdempotencyDoesNotLeakAnOrphanFile(t *testing.T) {
+	sh := newAdminShop(t)
+	content := []byte("同一张图重传不该多出一个文件 " + sh.Suffix)
+	key := "aaaaaaaa-bbbb-cccc-dddd-" + sh.Suffix + "0000"
+
+	var first, second api.Upload
+	decodeInto(t, uploadImageWithKey(t, sh, "image/webp", content, key),
+		http.StatusCreated, "第一次传", &first)
+	before := countFilesUnder(t, testUploadRoot)
+
+	w2 := uploadImageWithKey(t, sh, "image/webp", content, key)
+	decodeInto(t, w2, http.StatusCreated, "带同一把钥匙再传一次", &second)
+
+	if first.Id != second.Id {
+		t.Fatalf("同一把钥匙传两次登记了两条（id=%d 与 %d）", first.Id, second.Id)
+	}
+	if got := w2.Header().Get("Idempotency-Replayed"); got != "true" {
+		t.Errorf("重放没有带 Idempotency-Replayed: true（实得 %q）", got)
+	}
+	if after := countFilesUnder(t, testUploadRoot); after != before {
+		t.Fatalf("重放之后上传根目录下从 %d 个文件变成了 %d 个 —— "+
+			"多出来的那个既不在 uploads 表里、也就永远不会被孤儿回收看见", before, after)
+	}
+	// 第一次那个文件还在（重放删的必须是**这次**写的那个，不是上次那个）。
+	assertUploadedFileMatches(t,
+		adminQueryText(t, `SELECT storage_key FROM uploads WHERE id = $1`, first.Id), content)
 }
 
 // ---------------------------------------------------------------------------
@@ -736,22 +846,22 @@ func TestUploadChecksMediaTypeAndActuallyStoresTheBytes(t *testing.T) {
 func seedPublishedProduct(t *testing.T, sh adminShop, tag string, cents, qty int) (int64, int64) {
 	t.Helper()
 	var cat api.AdminCategory
-	decodeInto(t, post(t, sh.Host, "/api/v1/admin/categories",
+	decodeInto(t, postIdem(t, sh.Host, "/api/v1/admin/categories",
 		fmt.Sprintf(`{"name":"%s 类目"}`, tag), sh.Token),
 		http.StatusCreated, tag+" 建类目", &cat)
 
 	var p api.AdminProduct
-	decodeInto(t, post(t, sh.Host, "/api/v1/admin/products",
+	decodeInto(t, postIdem(t, sh.Host, "/api/v1/admin/products",
 		fmt.Sprintf(`{"category_id":%d,"title":"%s 商品 %s"}`, cat.Id, tag, sh.Suffix), sh.Token),
 		http.StatusCreated, tag+" 建商品", &p)
 
 	var sku api.AdminSku
-	decodeInto(t, post(t, sh.Host, fmt.Sprintf("/api/v1/admin/products/%d/skus", p.Id),
+	decodeInto(t, postIdem(t, sh.Host, fmt.Sprintf("/api/v1/admin/products/%d/skus", p.Id),
 		fmt.Sprintf(`{"sku_code":"%s-%s","price_cents":%d,"available_qty":%d}`,
 			tag, sh.Suffix, cents, qty), sh.Token),
 		http.StatusCreated, tag+" 建 SKU", &sku)
 
-	wantStatus(t, post(t, sh.Host, fmt.Sprintf("/api/v1/admin/products/%d/publication", p.Id),
+	wantStatus(t, postIdem(t, sh.Host, fmt.Sprintf("/api/v1/admin/products/%d/publication", p.Id),
 		`{"action":"publish"}`, sh.Token), http.StatusOK, tag+" 上架")
 	return p.Id, sku.Id
 }
@@ -761,15 +871,15 @@ func seedPublishedProduct(t *testing.T, sh adminShop, tag string, cents, qty int
 func seedOneSKU(t *testing.T, sh adminShop, tag string, cents, qty int) int64 {
 	t.Helper()
 	var cat api.AdminCategory
-	decodeInto(t, post(t, sh.Host, "/api/v1/admin/categories",
+	decodeInto(t, postIdem(t, sh.Host, "/api/v1/admin/categories",
 		fmt.Sprintf(`{"name":"%s 类目"}`, tag), sh.Token),
 		http.StatusCreated, tag+" 建类目", &cat)
 	var p api.AdminProduct
-	decodeInto(t, post(t, sh.Host, "/api/v1/admin/products",
+	decodeInto(t, postIdem(t, sh.Host, "/api/v1/admin/products",
 		fmt.Sprintf(`{"category_id":%d,"title":"%s 商品 %s"}`, cat.Id, tag, sh.Suffix), sh.Token),
 		http.StatusCreated, tag+" 建商品", &p)
 	var sku api.AdminSku
-	decodeInto(t, post(t, sh.Host, fmt.Sprintf("/api/v1/admin/products/%d/skus", p.Id),
+	decodeInto(t, postIdem(t, sh.Host, fmt.Sprintf("/api/v1/admin/products/%d/skus", p.Id),
 		fmt.Sprintf(`{"sku_code":"%s-%s","price_cents":%d,"available_qty":%d}`,
 			tag, sh.Suffix, cents, qty), sh.Token),
 		http.StatusCreated, tag+" 建 SKU", &sku)

@@ -68,6 +68,20 @@ func pathID(c *gin.Context, name string) (int64, bool) {
 	return id, true
 }
 
+// idemKeyOf 取那个必填的请求头。空串交给 service 去拒 —— 判据是业务规则
+// （哪些接口要幂等），而 handler 不该有第二份那张清单。
+func idemKeyOf(c *gin.Context) string { return c.GetHeader(idempotencyKeyHeader) }
+
+// markReplayed 在这是一次幂等重放时给响应加上契约那个头。
+//
+// 一个函数而不是五处 if：契约明写它影响埋点与提示文案，而漏掉其中一处的症状
+// 是「这条接口的重放被客户端记成一次新建」—— 没有任何东西会红。
+func markReplayed(c *gin.Context, replayed bool) {
+	if replayed {
+		c.Header(idempotencyReplayedHeader, "true")
+	}
+}
+
 // bindJSON 收请求体。解不开一律 422（契约里这几条都有 422）。
 func bindJSON(c *gin.Context, dst any) bool {
 	if err := c.ShouldBindJSON(dst); err != nil {
@@ -92,6 +106,26 @@ func bindJSON(c *gin.Context, dst any) bool {
 func writeCatalogError(c *gin.Context, err error) {
 	var conflict *repository.InventoryConflict
 	switch {
+	// —— 幂等那一组（M4 收尾）。契约给后台那 5 条 POST 声明的就是这三种。
+	case errors.Is(err, service.ErrIdempotencyKeyMissing):
+		// 契约把 Idempotency-Key 定成 required。422 而不是 400：
+		// 这几条接口的错误集合里有 422 没有 400，而「必填的东西没给」
+		// 正是 422 说的那件事。
+		problem.Write(c, http.StatusUnprocessableEntity,
+			problem.TypeInvalidRequest, "缺少必填的 Idempotency-Key 请求头")
+
+	case errors.Is(err, service.ErrIdempotencyInFlight):
+		// 契约：409 + Retry-After，客户端应退避重试，**不要当成业务失败弹窗**。
+		// Retry-After 在 problem.Write 之前设：那个函数会 Abort。
+		c.Header("Retry-After", strconv.Itoa(retryAfterSeconds))
+		problem.Write(c, http.StatusConflict, problem.TypeIdempotencyKeyInFlight,
+			"这个 Idempotency-Key 正在处理中，请稍后重试")
+
+	case errors.Is(err, service.ErrIdempotencyKeyReused):
+		// 契约那个 422。§12 原话：这类失败必须显式，不能被当成重放静默吞掉。
+		problem.Write(c, http.StatusUnprocessableEntity, problem.TypeIdempotencyKeyReused,
+			"同一个 Idempotency-Key 配了不同的请求体")
+
 	case errors.Is(err, service.ErrCatalogBadRequest):
 		problem.Write(c, http.StatusUnprocessableEntity,
 			problem.TypeInvalidRequest, "请求参数不合法")

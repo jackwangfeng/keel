@@ -71,14 +71,15 @@ func (q *Queries) ClaimExpiredPendingOrder(ctx context.Context, orderNo string) 
 }
 
 const claimIdempotencyKey = `-- name: ClaimIdempotencyKey :execrows
-INSERT INTO idempotency_keys (scope, user_id, idem_key, request_hash, expire_at)
-VALUES ($1, $2, $3, $4, now() + interval '24 hours')
-ON CONFLICT (scope, user_id, idem_key) DO NOTHING
+INSERT INTO idempotency_keys (scope, subject_kind, subject_id, idem_key, request_hash, expire_at)
+VALUES ($1, $2, $3, $4, $5, now() + interval '24 hours')
+ON CONFLICT (scope, subject_kind, subject_id, idem_key) DO NOTHING
 `
 
 type ClaimIdempotencyKeyParams struct {
 	Scope       string
-	UserID      int64
+	SubjectKind int16
+	SubjectID   int64
 	IdemKey     string
 	RequestHash string
 }
@@ -93,10 +94,15 @@ type ClaimIdempotencyKeyParams struct {
 // 而抢占插入唯一想沉默跳过的是主键撞车。
 //
 // 24 小时足够覆盖客户端的重试窗口（§12）。
+//
+// 主体是 (subject_kind, subject_id)，不是 user_id：1 买家 users.id /
+// 2 后台 staff.id。两张表的 id 来自同一种自增序列，共用一列的话
+// staff_id = 7 与 user_id = 7 会撞在同一行上（00023 的文件头）。
 func (q *Queries) ClaimIdempotencyKey(ctx context.Context, arg ClaimIdempotencyKeyParams) (int64, error) {
 	result, err := q.db.Exec(ctx, claimIdempotencyKey,
 		arg.Scope,
-		arg.UserID,
+		arg.SubjectKind,
+		arg.SubjectID,
 		arg.IdemKey,
 		arg.RequestHash,
 	)
@@ -300,13 +306,14 @@ func (q *Queries) CreateOrderItem(ctx context.Context, arg CreateOrderItemParams
 
 const finishIdempotencyKey = `-- name: FinishIdempotencyKey :exec
 UPDATE idempotency_keys
-   SET status = $4, response_code = $5, response_body = $6
- WHERE scope = $1 AND user_id = $2 AND idem_key = $3
+   SET status = $5, response_code = $6, response_body = $7
+ WHERE scope = $1 AND subject_kind = $2 AND subject_id = $3 AND idem_key = $4
 `
 
 type FinishIdempotencyKeyParams struct {
 	Scope        string
-	UserID       int64
+	SubjectKind  int16
+	SubjectID    int64
 	IdemKey      string
 	Status       int16
 	ResponseCode *int32
@@ -320,7 +327,8 @@ type FinishIdempotencyKeyParams struct {
 func (q *Queries) FinishIdempotencyKey(ctx context.Context, arg FinishIdempotencyKeyParams) error {
 	_, err := q.db.Exec(ctx, finishIdempotencyKey,
 		arg.Scope,
-		arg.UserID,
+		arg.SubjectKind,
+		arg.SubjectID,
 		arg.IdemKey,
 		arg.Status,
 		arg.ResponseCode,
@@ -332,13 +340,14 @@ func (q *Queries) FinishIdempotencyKey(ctx context.Context, arg FinishIdempotenc
 const getIdempotencyKey = `-- name: GetIdempotencyKey :one
 SELECT request_hash, status, response_code, response_body
   FROM idempotency_keys
- WHERE scope = $1 AND user_id = $2 AND idem_key = $3
+ WHERE scope = $1 AND subject_kind = $2 AND subject_id = $3 AND idem_key = $4
 `
 
 type GetIdempotencyKeyParams struct {
-	Scope   string
-	UserID  int64
-	IdemKey string
+	Scope       string
+	SubjectKind int16
+	SubjectID   int64
+	IdemKey     string
 }
 
 type GetIdempotencyKeyRow struct {
@@ -350,7 +359,12 @@ type GetIdempotencyKeyRow struct {
 
 // 读出已存在的那一行，用于判定重放 / 409 处理中 / 422 键被复用。
 func (q *Queries) GetIdempotencyKey(ctx context.Context, arg GetIdempotencyKeyParams) (GetIdempotencyKeyRow, error) {
-	row := q.db.QueryRow(ctx, getIdempotencyKey, arg.Scope, arg.UserID, arg.IdemKey)
+	row := q.db.QueryRow(ctx, getIdempotencyKey,
+		arg.Scope,
+		arg.SubjectKind,
+		arg.SubjectID,
+		arg.IdemKey,
+	)
 	var i GetIdempotencyKeyRow
 	err := row.Scan(
 		&i.RequestHash,
@@ -1047,13 +1061,14 @@ func (q *Queries) PromoteOrderDraft(ctx context.Context, orderNo string) (int64,
 
 const releaseIdempotencyKey = `-- name: ReleaseIdempotencyKey :execrows
 DELETE FROM idempotency_keys
- WHERE scope = $1 AND user_id = $2 AND idem_key = $3 AND status = 0
+ WHERE scope = $1 AND subject_kind = $2 AND subject_id = $3 AND idem_key = $4 AND status = 0
 `
 
 type ReleaseIdempotencyKeyParams struct {
-	Scope   string
-	UserID  int64
-	IdemKey string
+	Scope       string
+	SubjectKind int16
+	SubjectID   int64
+	IdemKey     string
 }
 
 // 撤销一次幂等键抢占。**只撤处理中的那些**（status = 0）。
@@ -1072,7 +1087,12 @@ type ReleaseIdempotencyKeyParams struct {
 // 之间有窗口（虽然同一把钥匙上不该有两个并发请求），而删掉一条已成功的存档
 // 等于把一笔已经建成的订单的幂等证据抹掉，下一次重试会建出第二笔订单。
 func (q *Queries) ReleaseIdempotencyKey(ctx context.Context, arg ReleaseIdempotencyKeyParams) (int64, error) {
-	result, err := q.db.Exec(ctx, releaseIdempotencyKey, arg.Scope, arg.UserID, arg.IdemKey)
+	result, err := q.db.Exec(ctx, releaseIdempotencyKey,
+		arg.Scope,
+		arg.SubjectKind,
+		arg.SubjectID,
+		arg.IdemKey,
+	)
 	if err != nil {
 		return 0, err
 	}

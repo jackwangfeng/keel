@@ -278,6 +278,11 @@ func TestRouterServesContractPaths(t *testing.T) {
 		"POST /api/v1/admin/staff":            false,
 		"PATCH /api/v1/admin/staff/:staff_id": false,
 
+		// 开店（M4 收尾）。它挂同一道 staffAuth，而「只有平台级管理员能调」
+		// 那一条是业务规则，由 internal/handler 的
+		// TestOpeningAShopIsPlatformOnly 打一次商家级会话来证明。
+		"POST /api/v1/admin/merchants": false,
+
 		// 商家自助发布那 16 条（M4 Task 3）。同样只核路径 ——
 		// 「每一条都挂了 staffAuth」由 internal/handler 的
 		// TestAdminCatalogRoutesAllRequireStaffSession 逐条打一次来证明，
@@ -298,6 +303,13 @@ func TestRouterServesContractPaths(t *testing.T) {
 		"POST /api/v1/admin/categories":                       false,
 		"PATCH /api/v1/admin/categories/:category_id":         false,
 		"DELETE /api/v1/admin/categories/:category_id":        false,
+
+		// 读文件那两跳（M4 收尾）。第二条**不在契约里**（它是第一跳签出来的
+		// 限时地址，形状随 driver 变），在 contract_test.go 的
+		// nonContractRoutes 里挂着账 —— 但它照样要在这张表里，
+		// 因为「挂没挂上」和「在不在契约里」是两件事。
+		"GET /api/v1/uploads/:upload_id":      false,
+		"GET /api/v1/uploads/:upload_id/blob": false,
 	}
 	for _, ri := range r.Routes() {
 		key := ri.Method + " " + ri.Path

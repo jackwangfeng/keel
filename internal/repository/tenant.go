@@ -197,15 +197,7 @@ func (r *Repo) withTenantTx(ctx context.Context, fn func(pgx.Tx, Tx) error) erro
 	// 它们补的正是这一句 set_config 带来的那个副作用。合成一条语句不是为了
 	// 省字，是为了省一次往返 —— 每个请求都要发的语句，多一次 RTT 就是每个
 	// 请求都多一次。
-	if _, err := tx.Exec(ctx,
-		`SELECT set_config('app.merchant_id', $1, true),
-		        set_config('hnsw.iterative_scan', $2, true),
-		        set_config('hnsw.max_scan_tuples', $3, true),
-		        set_config('hnsw.ef_search', $4, true)`,
-		strconv.FormatInt(merchantID, 10),
-		hnswIterativeScan,
-		strconv.Itoa(hnswMaxScanTuples),
-		strconv.Itoa(hnswEFSearch)); err != nil {
+	if err := enterTenantScope(ctx, tx, merchantID); err != nil {
 		return err
 	}
 
@@ -217,4 +209,33 @@ func (r *Repo) withTenantTx(ctx context.Context, fn func(pgx.Tx, Tx) error) erro
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// enterTenantScope 把当前事务切进**某一家店**的租户作用域。
+//
+// 它是那句 set_config 的**唯一**实现，被两个入口共用：withTenantTx（租户从
+// ctx 取）与 WithNewTenant（租户是这个事务刚刚建出来的那一家，merchant.go）。
+// 抽出来不是为了省行数 —— 这一句是整个租户隔离的落点，而它的两个调用点都
+// 不在同一个文件里。抄一份的后果与文件头那段写的一样：将来有人只改对其中
+// 一份，漏掉的那一份的症状是线上偶发 42501，或者（更糟）一个作用域不对却
+// 不报错的事务。
+//
+// **它同时把 app.platform_scope 显式关掉。** 这一句看上去多余（大多数事务
+// 从来没打开过它），它防的是一个具体的、会静默出错的路径：WithNewTenant 先
+// 以平台作用域建店，再切到新店的租户作用域。漏掉这一句的话
+// staff_scope_merchant() 仍然返回 NULL，于是「新店的第一个管理员」会被建成
+// 一个**平台级管理员** —— 一行 merchant_id 为 NULL 的 staff，拥有跨租户
+// 运维权。它不会报错，也不会有任何一条约束拦下来。
+func enterTenantScope(ctx context.Context, tx pgx.Tx, merchantID int64) error {
+	_, err := tx.Exec(ctx,
+		`SELECT set_config('app.merchant_id', $1, true),
+		        set_config('app.platform_scope', 'off', true),
+		        set_config('hnsw.iterative_scan', $2, true),
+		        set_config('hnsw.max_scan_tuples', $3, true),
+		        set_config('hnsw.ef_search', $4, true)`,
+		strconv.FormatInt(merchantID, 10),
+		hnswIterativeScan,
+		strconv.Itoa(hnswMaxScanTuples),
+		strconv.Itoa(hnswEFSearch))
+	return err
 }

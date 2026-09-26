@@ -75,10 +75,14 @@ func mkStaff(t *testing.T, shopCode, email string, role, status int16) int64 {
 
 // mkEmailLink 给某个 staff 造一串 kind=2 的一次性登录链接 token，返回明文。
 //
-// 直接插库而不是走 POST /admin/staff，是因为「第一个管理员从哪来」这件事
-// 在本轮没有接口（商家级的第一个管理员由 POST /admin/merchants 建，那条还
-// 挂在 notYetRouted 上）。夹具造的是**库里那一行**，而换会话这一步走的是
-// 真实的 POST /admin/auth/session —— 被测的那一段没有被替换掉。
+// 直接插库而不是走接口，是因为这些测试要的是「某个已经存在的人手里有一串
+// 有效链接」，而接口那条路每次都会**多建一个人**。
+//
+// （「商家级的第一个管理员从哪来」这件事本轮有接口了：POST /admin/merchants
+// 会在新店的租户作用域里建他并签一串同样 kind=2 的 token —— 它的端到端路径
+// 由 admin_merchant_test.go 守着。这里仍然直接插库，理由见上一段。）
+// 夹具造的是**库里那一行**，而换会话这一步走的是真实的
+// POST /admin/auth/session —— 被测的那一段没有被替换掉。
 func mkEmailLink(t *testing.T, staffID int64, ttl time.Duration) string {
 	t.Helper()
 	token, err := auth.NewOpaqueToken()
@@ -752,5 +756,65 @@ func TestAdminEmailLinkSaysItIsNotImplemented(t *testing.T) {
 		NotYetImplementedBody["email"]; !listed {
 		t.Error("邮箱登录链接还没实现，但 contract_test.go 的 NotYetImplementedBody 里" +
 			"没有 email 这一笔账 —— 清单与实现分叉了")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 挂着的账要有靶子
+// ---------------------------------------------------------------------------
+
+// POST /admin/staff 与 POST /admin/merchants **还没有实现幂等**，
+// 而契约里 Idempotency-Key 在这两条上都是必填请求头。
+//
+// 这条测试是 contract_test.go 那两笔 NotYetImplementedHeader 的反向执行者：
+// 挂账只能做「清单 → 契约」一个方向的机械对账（AST 跟不过一个包级常量），
+// 所以「实现了却忘了划掉」由这里盯着 —— 真的做了幂等，它会红。
+//
+// 它同时是那两笔账的**暴露面说明书**，而这份暴露面比另外 5 条轻：
+// 两条接口各自被一条唯一约束兜住，重发建不出第二个人、也建不出第二家店，
+// 第二次拿到的是 409 而不是一次重放的 201。
+//
+// 它们缺的是同一样东西：idempotency_keys.merchant_id 的默认值是
+// current_merchant()，而这两条都可能跑在平台作用域里 —— 那里
+// current_merchant() 是 RAISE，不是 NULL。
+func TestPlatformScopedWritesAreNotYetIdempotent(t *testing.T) {
+	token := newPlatformAdmin(t)
+	key := "cccccccc-dddd-eeee-ffff-" + fmt.Sprintf("%012d", time.Now().UnixNano()%1_000_000_000_000)
+
+	// —— 加平台操作员。
+	email := fmt.Sprintf("twice-%d@keel.test", time.Now().UnixNano())
+	t.Cleanup(func() { adminExec(t, `DELETE FROM staff WHERE email = $1`, email) })
+	body := fmt.Sprintf(`{"email":%q,"role":2}`, email)
+
+	if w := postWithKey(t, hostA, "/api/v1/admin/staff", body, token, key); w.Code != http.StatusCreated {
+		t.Fatalf("第一次加员工失败：%d %s", w.Code, w.Body.String())
+	}
+	w := postWithKey(t, hostA, "/api/v1/admin/staff", body, token, key)
+	if w.Code == http.StatusCreated && w.Header().Get("Idempotency-Replayed") == "true" {
+		t.Fatalf("同一把 Idempotency-Key 打两次 POST /admin/staff 拿到了重放 —— " +
+			"幂等实现了。请把 contract_test.go 里那笔 NotYetImplementedHeader 挂账删掉，" +
+			"并把这条测试改成断言真正的幂等")
+	}
+	if w.Code != http.StatusConflict {
+		t.Fatalf("第二次加同一个邮箱回了 %d，期望 409（邮箱唯一约束挡住了）：%s",
+			w.Code, w.Body.String())
+	}
+
+	// —— 开店。同一把钥匙，同一个 code。
+	code := fmt.Sprintf("twice%d", time.Now().UnixNano()%1_000_000_000)
+	dropShop(t, code)
+	shop := fmt.Sprintf(`{"code":%q,"name":"重发不会变两家","admin_email":%q}`,
+		code, code+"@keel.test")
+	if w := postWithKey(t, hostA, "/api/v1/admin/merchants", shop, token, key); w.Code != http.StatusCreated {
+		t.Fatalf("第一次开店失败：%d %s", w.Code, w.Body.String())
+	}
+	w2 := postWithKey(t, hostA, "/api/v1/admin/merchants", shop, token, key)
+	if w2.Code == http.StatusCreated && w2.Header().Get("Idempotency-Replayed") == "true" {
+		t.Fatalf("同一把 Idempotency-Key 打两次 POST /admin/merchants 拿到了重放 —— " +
+			"幂等实现了，请把那笔挂账删掉")
+	}
+	if w2.Code != http.StatusConflict {
+		t.Fatalf("第二次开同一个 code 回了 %d，期望 409（code 全局唯一挡住了）：%s",
+			w2.Code, w2.Body.String())
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -55,10 +56,12 @@ const maxProductImages = 20
 // 拼在这一层而不是 repository：那一层认得的是列，不是对外路由
 // （repository.ProductImage 上刻意没有 URL 字段，注释写着这条）。
 //
-// **它今天指向一条还没有实现的路由**（GET /uploads/{upload_id} 是买家侧接口，
-// 不在本轮那 16 条写接口里）。仍然照契约拼出来，而不是回空串：契约把这个字段
-// 定成必填，空串会让客户端渲染一个「加载失败」的占位图，
-// 而那与「这件商品确实没有配图」是两件事。
+// 它指向 GET /uploads/{upload_id}（买家侧接口，M4 收尾那一轮实现了，
+// 见 service/upload.go）：那一跳判完归属再 302 到一个限时地址。
+// 客户端不该解析这个串，原样回传即可 —— 契约在 Upload.url 上是这么写的。
+//
+// 这一段原先写的是「它今天指向一条还没有实现的路由」。那句话过期了，
+// 而留着一句过期的「还没实现」，下一个人会照着它去找一个已经存在的东西。
 const uploadURLPrefix = "/api/v1/uploads/"
 
 // UploadURL 按 upload id 拼出对外地址。导出给 handler 用（它要填三种响应）。
@@ -189,26 +192,35 @@ func (s *AdminCatalogService) FindProduct(ctx context.Context, id int64) (AdminP
 }
 
 // CreateProduct 实现 POST /admin/products。
-func (s *AdminCatalogService) CreateProduct(ctx context.Context, n repository.NewProduct) (repository.AdminProduct, error) {
+//
+// 返回的第二个值为 true 表示这是一次幂等重放（契约要求响应带
+// Idempotency-Replayed: true）。下面另外四条写接口同此。
+func (s *AdminCatalogService) CreateProduct(ctx context.Context, n repository.NewProduct,
+	idemKey string) (repository.AdminProduct, bool, error) {
+
 	if _, err := requireStaff(ctx); err != nil {
-		return repository.AdminProduct{}, err
+		return repository.AdminProduct{}, false, err
 	}
+	// 校验排在抢占幂等键**之前**：一个注定被拒的请求不该占掉客户端的那把
+	// 钥匙（同 OrderService.Create 里券那一支）。占掉的后果很具体 ——
+	// 客户端改对了请求体再用同一把钥匙重试，会撞上 422 键被复用。
 	if err := checkTitle(n.Title); err != nil {
-		return repository.AdminProduct{}, err
+		return repository.AdminProduct{}, false, err
 	}
 	if err := checkOptText("subtitle", n.Subtitle, 200); err != nil {
-		return repository.AdminProduct{}, err
+		return repository.AdminProduct{}, false, err
 	}
 	if n.CategoryID <= 0 {
-		return repository.AdminProduct{}, fmt.Errorf("%w: category_id 必须是正整数", ErrCatalogBadRequest)
+		return repository.AdminProduct{}, false, fmt.Errorf("%w: category_id 必须是正整数", ErrCatalogBadRequest)
 	}
-	var out repository.AdminProduct
-	err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
-		var e error
-		out, e = tx.CreateProduct(ctx, n)
-		return e
-	})
-	return out, err
+	hash, err := adminRequestHash(nil, n)
+	if err != nil {
+		return repository.AdminProduct{}, false, err
+	}
+	return idempotentWrite(ctx, s, scopeAdminProductCreate, idemKey, hash, archivedCreated,
+		func(tx repository.Tx) (repository.AdminProduct, error) {
+			return tx.CreateProduct(ctx, n)
+		})
 }
 
 // UpdateProduct 实现 PATCH /admin/products/{product_id}。
@@ -258,17 +270,25 @@ func (s *AdminCatalogService) DeleteProduct(ctx context.Context, id int64) error
 // PublishProduct 里，写进 UPDATE 的 WHERE 与同一个快照里算出来的 sku_count。
 // 在这一层再查一遍是两次快照 —— 中间那一瞬间最后一个 SKU 可能刚被删掉，
 // 而且两份实现一定会分叉。
-func (s *AdminCatalogService) SetPublication(ctx context.Context, id int64, publish bool) (repository.AdminProduct, error) {
+func (s *AdminCatalogService) SetPublication(ctx context.Context, id int64, publish bool,
+	idemKey string) (repository.AdminProduct, bool, error) {
+
 	if _, err := requireStaff(ctx); err != nil {
-		return repository.AdminProduct{}, err
+		return repository.AdminProduct{}, false, err
 	}
-	var out repository.AdminProduct
-	err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
-		var e error
-		out, e = tx.SetProductPublication(ctx, id, publish)
-		return e
-	})
-	return out, err
+	// 这一条**本来就天生幂等**（状态机终点相同），接上幂等键仍然有意义：
+	// 契约把它定成必填，而「服务端连看都没看」与「服务端看了但这次恰好
+	// 不需要它」是两件事 —— 前者会让「同一把钥匙配不同请求体」那条 422
+	// 在这条接口上不存在，于是一次 publish 与一次 unpublish 用同一把钥匙
+	// 会被当成两次独立调用。
+	hash, err := adminRequestHash([]int64{id}, publish)
+	if err != nil {
+		return repository.AdminProduct{}, false, err
+	}
+	return idempotentWrite(ctx, s, scopeAdminProductPublish, idemKey, hash, archivedOK,
+		func(tx repository.Tx) (repository.AdminProduct, error) {
+			return tx.SetProductPublication(ctx, id, publish)
+		})
 }
 
 // ReplaceImages 实现 PUT /admin/products/{product_id}/images。
@@ -314,58 +334,62 @@ type NewSKUInput struct {
 
 // CreateSKU 实现 POST /admin/products/{product_id}/skus。
 func (s *AdminCatalogService) CreateSKU(ctx context.Context, productID int64,
-	in NewSKUInput) (repository.AdminSKU, error) {
+	in NewSKUInput, idemKey string) (repository.AdminSKU, bool, error) {
 
 	if _, err := requireStaff(ctx); err != nil {
-		return repository.AdminSKU{}, err
+		return repository.AdminSKU{}, false, err
 	}
 	if err := checkSKUCode(in.SKUCode); err != nil {
-		return repository.AdminSKU{}, err
+		return repository.AdminSKU{}, false, err
 	}
 	if err := checkNonNeg("price_cents", in.PriceCents); err != nil {
-		return repository.AdminSKU{}, err
+		return repository.AdminSKU{}, false, err
 	}
 	if err := checkNonNeg("cost_cents", in.CostCents); err != nil {
-		return repository.AdminSKU{}, err
+		return repository.AdminSKU{}, false, err
 	}
 	if err := checkNonNeg("weight_gram", int64(in.WeightGram)); err != nil {
-		return repository.AdminSKU{}, err
+		return repository.AdminSKU{}, false, err
 	}
 	if err := checkNonNeg("available_qty", int64(in.AvailableQty)); err != nil {
-		return repository.AdminSKU{}, err
+		return repository.AdminSKU{}, false, err
 	}
 	if err := checkNonNeg("warning_qty", int64(in.WarningQty)); err != nil {
-		return repository.AdminSKU{}, err
+		return repository.AdminSKU{}, false, err
 	}
 	spec, err := encodeSpecValues(in.SpecValues)
 	if err != nil {
-		return repository.AdminSKU{}, err
+		return repository.AdminSKU{}, false, err
+	}
+	// product_id 进哈希：「给商品 7 建这个 SKU」与「给商品 9 建同样的 SKU」
+	// 请求体逐字相同，scope 也相同（adminRequestHash 的注释写了这条）。
+	hash, err := adminRequestHash([]int64{productID}, in)
+	if err != nil {
+		return repository.AdminSKU{}, false, err
 	}
 
-	var out repository.AdminSKU
-	err = s.repo.WithTenant(ctx, func(tx repository.Tx) error {
-		imageURL, err := s.resolveSKUImage(ctx, tx, in.ImageUploadID)
-		if err != nil {
-			return err
-		}
-		out, err = tx.CreateSKU(ctx, repository.NewSKU{
-			ProductID:  productID,
-			SKUCode:    in.SKUCode,
-			SpecValues: spec,
-			PriceCents: in.PriceCents,
-			CostCents:  in.CostCents,
-			WeightGram: in.WeightGram,
-			ImageURL:   imageURL,
-			// 契约的 SkuCreateRequest 里没有 status —— 新建的规格一律在售。
-			// 给它一个入参就等于让「建一个已经停售的规格」成为一个能表达的
-			// 动作，而那件事没有任何业务含义（停售走 PATCH）。
-			Status:       1,
-			AvailableQty: in.AvailableQty,
-			WarningQty:   in.WarningQty,
+	return idempotentWrite(ctx, s, scopeAdminSKUCreate, idemKey, hash, archivedCreated,
+		func(tx repository.Tx) (repository.AdminSKU, error) {
+			imageURL, err := s.resolveSKUImage(ctx, tx, in.ImageUploadID)
+			if err != nil {
+				return repository.AdminSKU{}, err
+			}
+			return tx.CreateSKU(ctx, repository.NewSKU{
+				ProductID:  productID,
+				SKUCode:    in.SKUCode,
+				SpecValues: spec,
+				PriceCents: in.PriceCents,
+				CostCents:  in.CostCents,
+				WeightGram: in.WeightGram,
+				ImageURL:   imageURL,
+				// 契约的 SkuCreateRequest 里没有 status —— 新建的规格一律在售。
+				// 给它一个入参就等于让「建一个已经停售的规格」成为一个能表达的
+				// 动作，而那件事没有任何业务含义（停售走 PATCH）。
+				Status:       1,
+				AvailableQty: in.AvailableQty,
+				WarningQty:   in.WarningQty,
+			})
 		})
-		return err
-	})
-	return out, err
 }
 
 // SKUPatchInput 是改 SKU 的入参。ImageUploadID 的三态与 repository.SKUPatch
@@ -551,20 +575,23 @@ func (s *AdminCatalogService) ListCategories(ctx context.Context) ([]repository.
 }
 
 // CreateCategory 实现 POST /admin/categories。
-func (s *AdminCatalogService) CreateCategory(ctx context.Context, n repository.NewCategory) (repository.AdminCategory, error) {
+func (s *AdminCatalogService) CreateCategory(ctx context.Context, n repository.NewCategory,
+	idemKey string) (repository.AdminCategory, bool, error) {
+
 	if _, err := requireStaff(ctx); err != nil {
-		return repository.AdminCategory{}, err
+		return repository.AdminCategory{}, false, err
 	}
 	if err := checkName(n.Name); err != nil {
-		return repository.AdminCategory{}, err
+		return repository.AdminCategory{}, false, err
 	}
-	var out repository.AdminCategory
-	err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
-		var e error
-		out, e = tx.CreateCategory(ctx, n)
-		return e
-	})
-	return out, err
+	hash, err := adminRequestHash(nil, n)
+	if err != nil {
+		return repository.AdminCategory{}, false, err
+	}
+	return idempotentWrite(ctx, s, scopeAdminCategoryCreate, idemKey, hash, archivedCreated,
+		func(tx repository.Tx) (repository.AdminCategory, error) {
+			return tx.CreateCategory(ctx, n)
+		})
 }
 
 // CategoryPatchInput 是改类目的入参。
@@ -667,44 +694,98 @@ func (s *AdminCatalogService) DeleteCategory(ctx context.Context, id int64) erro
 //
 // contentType 由调用方从 multipart part 的头上取，**不从文件名猜**。
 func (s *AdminCatalogService) CreateUpload(ctx context.Context, contentType string,
-	body io.Reader) (repository.Upload, error) {
+	body io.Reader, idemKey string) (repository.Upload, bool, error) {
 
 	id, err := requireStaff(ctx)
 	if err != nil {
-		return repository.Upload{}, err
+		return repository.Upload{}, false, err
 	}
 	if s.store == nil {
-		return repository.Upload{}, errors.New("没有配置文件存储 driver，POST /admin/uploads 不可用")
+		return repository.Upload{}, false, errors.New("没有配置文件存储 driver，POST /admin/uploads 不可用")
+	}
+	// 缺钥匙在**读请求体之前**就拒。这条接口的请求体最大 10 MB，
+	// 而一个注定被拒的请求不该先把它落一遍盘。
+	if idemKey == "" {
+		return repository.Upload{}, false, ErrIdempotencyKeyMissing
 	}
 	mime, ext, ok := uploadExtensionFor(contentType)
 	if !ok {
-		return repository.Upload{}, fmt.Errorf("%w: %q（只接受 image/jpeg、image/png、image/webp）",
+		return repository.Upload{}, false, fmt.Errorf("%w: %q（只接受 image/jpeg、image/png、image/webp）",
 			ErrUploadMediaType, contentType)
 	}
 	merchantID, err := tenant.FromContext(ctx)
 	if err != nil {
-		return repository.Upload{}, err
+		return repository.Upload{}, false, err
 	}
 
+	// ===================================================================
+	// 这一条与另外四条的差别：字节必须先落盘，幂等键才抢得了
+	// ===================================================================
+	//
+	// 因为 request_hash 要认的就是**这次传的是不是同一个文件**，而那要读完
+	// 整个请求体才知道（sha256 由 Put 一边写一边算）。反过来先抢键的话，
+	// 「同一把钥匙配了另一张图」这条 422 就判不出来 —— 而那正是 §12 说的
+	// 「最容易被省掉、也最不能省」的那一列。
+	//
+	// 代价是重放那一路会多出一个刚落盘的文件，而它**不会**被孤儿回收看见
+	// （回收扫的是 uploads 表，而这个文件没有对应的行）。所以下面重放分支里
+	// 那句 Remove 不是打扫，是这条路径正确性的一部分：少了它，客户端每重试
+	// 一次，磁盘上就多一份 10 MB。
 	key, size, sum, err := s.store.Put(merchantID, ext, body, MaxUploadBytes)
 	if err != nil {
-		return repository.Upload{}, err
+		return repository.Upload{}, false, err
+	}
+	// 哈希认三样：内容、声明的类型、大小。只认 sha256 的话，同一张图换一个
+	// content_type 重传会被当成重放 —— 而那两次登记出来的行是不同的
+	// （content_type 进库、也决定扩展名）。
+	hash, err := adminRequestHash(nil, uploadFingerprint{Mime: mime, SHA256: sum, SizeBytes: size})
+	if err != nil {
+		return repository.Upload{}, false, err
 	}
 
-	var out repository.Upload
-	err = s.repo.WithTenant(ctx, func(tx repository.Tx) error {
-		var e error
-		out, e = tx.CreateStaffUpload(ctx, repository.NewUpload{
-			StaffID:     id.StaffID,
-			Driver:      s.store.Driver(),
-			StorageKey:  key,
-			ContentType: mime,
-			SizeBytes:   size,
-			SHA256:      sum,
+	out, replayed, err := idempotentWrite(ctx, s, scopeAdminUploadCreate, idemKey, hash, archivedCreated,
+		func(tx repository.Tx) (repository.Upload, error) {
+			return tx.CreateStaffUpload(ctx, repository.NewUpload{
+				StaffID:     id.StaffID,
+				Driver:      s.store.Driver(),
+				StorageKey:  key,
+				ContentType: mime,
+				SizeBytes:   size,
+				SHA256:      sum,
+			})
 		})
-		return e
-	})
-	return out, err
+	if err != nil || replayed {
+		// 两条路都要把刚落盘的那个文件删掉：
+		//   · 重放 —— 库里那一行指向的是**上一次**的 storage_key，这次写的
+		//     这个永远不会有行指向它。
+		//   · 失败 —— 事务回滚了，同理。原先这一路是一次「一期接受的泄漏」
+		//     （见本函数上面那段注释），既然重放这条路非删不可，顺手把它一起
+		//     收掉：同一个善后，两个触发原因。
+		if rmErr := s.store.Remove(key); rmErr != nil {
+			if err != nil {
+				// 本来就要报错，把善后失败一起带上去，别让它消失。
+				err = errors.Join(err, fmt.Errorf("删除孤儿文件 %s 失败: %w", key, rmErr))
+			} else {
+				// **重放这一路只记日志，不改变调用结果。** 一个删不掉的残留
+				// 文件不该让一次成功的重放变成 500 —— 那会让客户端以为这次
+				// 重试失败了，于是换一把新钥匙再传一遍，磁盘上再多一份。
+				// 也就是说「把它变成错误」正好放大了它要报告的那个问题。
+				slog.ErrorContext(ctx, "幂等重放后删除孤儿文件失败，它不会被孤儿回收看见",
+					"storage_key", key, "err", rmErr)
+			}
+		}
+	}
+	return out, replayed, err
+}
+
+// uploadFingerprint 是上传那条路的 request_hash 素材。
+//
+// 一个具名结构体而不是一句字符串拼接：字段名进 JSON，于是「加一个维度」
+// 是一次显式的改动，而不是在某个 Sprintf 里多一个 %s。
+type uploadFingerprint struct {
+	Mime      string `json:"mime"`
+	SHA256    string `json:"sha256"`
+	SizeBytes int64  `json:"size_bytes"`
 }
 
 // ---------------------------------------------------------------------------
