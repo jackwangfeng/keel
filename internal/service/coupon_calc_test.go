@@ -17,7 +17,7 @@ import (
 
 var calcNow = time.Date(2026, 9, 26, 12, 0, 0, 0, time.UTC)
 
-func i64(v int64) *int64 { return &v }
+func i64(v int64) *int64   { return &v }
 func str(v string) *string { return &v }
 
 func couponOfRule(r repository.CouponRule) repository.UserCoupon {
