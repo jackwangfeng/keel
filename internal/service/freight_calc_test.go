@@ -267,7 +267,7 @@ func TestProvinceOf(t *testing.T) {
 // TestProvinceListMatchesMigration：Go 侧的 34 个省级区划码与 00055 两条 CHECK 里的
 // 数组必须是同一份（freight_region.go 文件头）。任何一边多一个少一个都红。
 func TestProvinceListMatchesMigration(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join("..", "..", "db", "migrations", "00041_freight_templates.sql"))
+	raw, err := os.ReadFile(filepath.Join("..", "..", "db", "migrations", "00055_freight_templates.sql"))
 	if err != nil {
 		t.Fatal(err)
 	}
