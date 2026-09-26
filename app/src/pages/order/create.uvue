@@ -2,24 +2,54 @@
   <view class="page">
     <scroll-view class="scroll" direction="vertical">
       <view class="body">
-        <!-- 收货地址。契约里有 GET /addresses，后端这一版没有 ——
-             与其画一个假的地址簿，不如写明「默认地址 #1」并允许改编号。 -->
-        <view class="card">
-          <view class="between">
-            <text class="t-overline">收货地址</text>
-            <text class="t-link" @click="editAddress = !editAddress">{{ editAddress ? '完成' : '修改' }}</text>
-          </view>
+        <!-- 收货地址：GET /addresses 的默认地址（排第一且 is_default）。没有默认就让用户选，
+             一条地址都没有就引导去新建 —— 不替用户挑一个「第一条」当默认。 -->
+        <view class="card addr-card" @click="pickAddress">
+          <text class="t-overline">收货地址</text>
           <view class="gap-s"></view>
-          <text class="t-section">默认地址 #{{ addressIdText }}</text>
-          <text class="t-hint">地址簿即将上线，目前按地址编号下单</text>
-          <view v-if="editAddress" class="field">
-            <text class="field-label">地址编号</text>
-            <input class="field-input" type="number" v-model="addressIdText" @input="invalidate" @blur="preview" />
+          <view v-if="address != null" class="row">
+            <view class="fill">
+              <view class="row">
+                <text class="t-section">{{ address!.name }}</text>
+                <text class="t-sub addr-phone">{{ address!.phone }}</text>
+              </view>
+              <text class="t-hint addr-line">{{ address!.fullText }}</text>
+            </view>
+            <text class="chev">›</text>
           </view>
+          <view v-else-if="!loggedIn" class="row">
+            <text class="t-hint fill">登录后选择收货地址</text>
+          </view>
+          <view v-else-if="addressError != ''" class="row">
+            <text class="t-err fill">{{ addressError }}</text>
+          </view>
+          <view v-else-if="addressLoaded" class="row">
+            <text class="t-link fill">{{ addressCount == 0 ? '还没有收货地址，去新建' : '请选择收货地址' }}</text>
+            <text class="chev">›</text>
+          </view>
+          <view v-else class="row"><text class="t-hint">正在读取地址…</text></view>
         </view>
 
-        <!-- 商品 -->
-        <view class="card">
+        <!-- 商品。从购物车来是勾选的那几行（只读，改数量回购物车改）；立即购买是一行，可以调数量。 -->
+        <view v-if="fromCart" class="card">
+          <view v-for="(it, idx) in cartRows" :key="it.id" :class="['row', idx > 0 ? 'line-next' : '']">
+            <view class="cover thumb" :style="{ backgroundColor: it.cover.color }">
+              <image v-if="it.cover.imageUrl != ''" class="cover-img" :src="it.cover.imageUrl" mode="aspectFill"></image>
+              <text v-else class="cover-glyph thumb-glyph">{{ it.cover.glyph }}</text>
+            </view>
+            <view class="fill item-info">
+              <text class="t-section">{{ it.title }}</text>
+              <text class="t-hint">{{ it.specText }}</text>
+              <view class="gap-s"></view>
+              <view class="between">
+                <text class="t-price">{{ it.priceText }}</text>
+                <text class="t-sub">× {{ it.quantity }}</text>
+              </view>
+            </view>
+          </view>
+          <text v-if="cartRows.length == 0 && cartLoaded" class="t-hint">购物车里没有勾选的商品</text>
+        </view>
+        <view v-else class="card">
           <view class="row">
             <view class="cover thumb" :style="{ backgroundColor: coverColor }">
               <image v-if="coverImage != ''" class="cover-img" :src="coverImage" mode="aspectFill"></image>
@@ -84,6 +114,7 @@
             <view class="kv"><text class="t-section">应付</text><text class="t-price">{{ pv!.payableText }}</text></view>
           </view>
           <view v-else-if="previewing" class="center"><text class="t-hint">正在计算…</text></view>
+          <view v-else-if="addressLoaded && addressId == 0" class="center"><text class="t-hint">选好收货地址后计算应付金额</text></view>
           <view v-else class="center">
             <text class="t-hint">金额待计算</text>
             <view class="gap-s"></view>
@@ -122,7 +153,7 @@
       <view v-if="orderNo != '' && !needNewKey" class="btn bar-btn" @click="openOrder">
         <text class="btn-text">查看订单</text>
       </view>
-      <view v-else :class="['btn', 'bar-btn', pv == null || busy ? 'btn-off' : '']" @click="submit">
+      <view v-else :class="['btn', 'bar-btn', pv == null || busy || addressId == 0 ? 'btn-off' : '']" @click="submit">
         <text class="btn-text">{{ busy ? '提交中…' : '提交订单' }}</text>
       </view>
     </view>
@@ -130,10 +161,10 @@
 </template>
 
 <script>
-import { createOrder, getProduct, previewOrder, ApiFailure, PROBLEM_COUPON_NOT_APPLICABLE, PROBLEM_IDEMPOTENCY_KEY_IN_FLIGHT, PROBLEM_IDEMPOTENCY_KEY_REUSED } from '@/api/client.uts'
+import { batchDeleteCartItems, createOrder, getCart, getProduct, listAddresses, previewOrder, ApiFailure, PROBLEM_COUPON_NOT_APPLICABLE, PROBLEM_IDEMPOTENCY_KEY_IN_FLIGHT, PROBLEM_IDEMPOTENCY_KEY_REUSED } from '@/api/client.uts'
 import { newIdempotencyKey } from '@/api/idempotency.uts'
-import { isLoggedIn, rememberOrder } from '@/api/config.uts'
-import { coverOf, orderRequest, previewView, productDetailView, CouponOption, PreviewView } from '@/api/view.uts'
+import { isLoggedIn, rememberOrder, takePickedAddress } from '@/api/config.uts'
+import { addressRow, cartDeleteRequest, cartView, checkoutLines, coverOf, orderRequest, previewView, productDetailView, AddressRow, CartRow, CouponOption, OrderLine, PreviewView } from '@/api/view.uts'
 import { ensureStore, CurrentStore } from '@/api/store.uts'
 
 export default {
@@ -142,8 +173,16 @@ export default {
       skuIdText: '1',
       productId: 0,
       quantity: 1,
-      addressIdText: '1',
-      editAddress: false,
+      // 收货地址。0 = 还没定（没有默认地址 / 一条都没有）。
+      addressId: 0,
+      address: null as AddressRow | null,
+      addressLoaded: false,
+      addressCount: 0,
+      addressError: '',
+      // 从购物车来（?from=cart）：结算的是车里「能买且勾选」的那几行。
+      fromCart: false,
+      cartRows: [] as CartRow[],
+      cartLoaded: false,
       idemKey: '',
       pv: null as PreviewView | null,
       previewing: false,
@@ -195,17 +234,23 @@ export default {
     }
     const pid = options['product_id']
     this.productId = pid != null ? parseInt('' + pid) : 0
+    this.fromCart = options['from'] == 'cart'
     this.itemTitle = '规格 #' + this.skuIdText
     // **这里，且只有这里。** 见模板里「技术信息」那段说明。
     this.idemKey = newIdempotencyKey()
-    this.loadItem()
+    if (!this.fromCart) this.loadItem()
   },
   onShow() {
-    // onShow：从登录页回来时要接着算。
+    // onShow：从登录页、地址页回来时要接着算。
     this.loggedIn = isLoggedIn()
-    if (this.loggedIn && this.pv == null && this.orderNo == '') {
-      this.preview()
+    if (!this.loggedIn || this.orderNo != '') return
+    const picked = takePickedAddress()
+    if (picked > 0 && picked != this.addressId) {
+      this.addressId = picked
+      this.invalidate()
     }
+    // 每次回来都重读地址簿：在地址页里可能新建、改了、删了。
+    this.loadAddresses()
   },
   methods: {
     // 先定门店再做事。价格跟着门店所在的大区走（多门店，00020），而下单的
@@ -267,14 +312,58 @@ export default {
     // 而 store_id 变成必填那一次，这里写着的字面量两道检查都没拦住。
     //
     // 试算过才带 expected_payable_cents（防以旧价成交），没试算过不带。
+    lines(): OrderLine[] {
+      if (this.fromCart) return checkoutLines(this.cartRows)
+      return [{ skuId: parseInt(this.skuIdText), quantity: this.quantity } as OrderLine]
+    },
     body(storeId: number) {
       const coupon: number | null = this.couponId > 0 ? this.couponId : null
       if (this.pv != null) {
-        return orderRequest(parseInt(this.skuIdText), this.quantity,
-          parseInt(this.addressIdText), storeId, this.pv!.payableCents, coupon)
+        return orderRequest(this.lines(), this.addressId, storeId, this.pv!.payableCents, coupon)
       }
-      return orderRequest(parseInt(this.skuIdText), this.quantity,
-        parseInt(this.addressIdText), storeId, null, coupon)
+      return orderRequest(this.lines(), this.addressId, storeId, null, coupon)
+    },
+    loadAddresses() {
+      listAddresses(
+        (list) => {
+          this.addressLoaded = true
+          this.addressError = ''
+          this.addressCount = list.length
+          let found: AddressRow | null = null
+          for (let i = 0; i < list.length; i++) {
+            if (list[i].id == this.addressId) found = addressRow(list[i])
+          }
+          // 还没选过（或选的那条被删了）：用默认地址。契约：默认地址排第一。
+          // 第一条不是默认（删掉默认之后服务端不会补一个）就不替用户挑，让他选。
+          if (found == null && list.length > 0 && list[0].is_default) {
+            found = addressRow(list[0])
+          }
+          const nextId = found != null ? found!.id : 0
+          this.address = found
+          if (nextId != this.addressId) {
+            this.addressId = nextId
+            this.invalidate()
+          }
+          if (this.addressId > 0 && this.pv == null && !this.previewing) {
+            this.preview()
+          }
+        },
+        (f: ApiFailure) => {
+          this.addressLoaded = true
+          this.addressError = '读取收货地址失败：' + f.message
+        }
+      )
+    },
+    pickAddress() {
+      if (!this.loggedIn) {
+        this.goLogin()
+        return
+      }
+      if (this.addressLoaded && this.addressCount == 0) {
+        uni.navigateTo({ url: '/pages/address/edit' })
+        return
+      }
+      uni.navigateTo({ url: '/pages/address/list?select=1' })
     },
     // 改了订单内容就把试算结果作废。
     //
@@ -299,9 +388,37 @@ export default {
         this.loggedIn = false
         return
       }
+      // 试算与下单共用一个请求体，address_id 必填：没有地址就不算，页面提示去选。
+      if (this.addressId == 0) return
       this.withStore((storeId: number) => {
+        if (this.fromCart && !this.cartLoaded) {
+          this.loadCart(storeId)
+          return
+        }
+        if (this.lines().length == 0) return
         this.runPreview(storeId)
       })
+    },
+    // 从购物车来：按**同一家门店**重读一次车，取能买且勾选的行。不从上一页带数据过来 ——
+    // 车在服务端，上一页那份到这里可能已经过时（别的设备改过、库存变了）。
+    loadCart(storeId: number) {
+      getCart(
+        storeId,
+        (c) => {
+          const v = cartView(c)
+          const rows: CartRow[] = []
+          for (let i = 0; i < v.rows.length; i++) {
+            if (v.rows[i].available && v.rows[i].selected) rows.push(v.rows[i])
+          }
+          this.cartRows = rows
+          this.cartLoaded = true
+          if (rows.length > 0) this.runPreview(storeId)
+        },
+        (f: ApiFailure) => {
+          this.failed = true
+          this.message = '读取购物车失败：' + f.message
+        }
+      )
     },
     runPreview(storeId: number) {
       this.previewing = true
@@ -355,7 +472,7 @@ export default {
         this.goLogin()
         return
       }
-      if (this.pv == null || this.busy) return
+      if (this.pv == null || this.busy || this.addressId == 0) return
       this.busy = true
       this.failed = false
       this.message = ''
@@ -377,6 +494,7 @@ export default {
             ? '这笔订单之前已经提交过，本次没有重复下单。订单号 ' + order.order_no
             : '下单成功，订单号 ' + order.order_no
           rememberOrder(order.order_no)
+          this.clearOrderedCartRows()
         },
         (f: ApiFailure) => {
           const t = f.problem != null ? f.problem!.type : ''
@@ -414,6 +532,30 @@ export default {
         }
       )
     },
+    // 下单成功后把这几行从购物车里删掉 —— 服务端下单**不碰**购物车（契约没这么写，
+    // 服务端也确认过），不删的话买过的东西还躺在车里。
+    //
+    // 失败不打扰用户：订单已经成了，车里多留几行最多让他自己删，不值得在「下单成功」
+    // 旁边再弹一个错。静默重试一次，用**同一个**幂等键 —— 第一次其实删成了、只是响应丢了的话，
+    // 第二次是重放，而不是对已经不在车里的行再删一遍（那会 404）。
+    clearOrderedCartRows() {
+      if (!this.fromCart || this.cartRows.length == 0) return
+      const ids: number[] = []
+      for (let i = 0; i < this.cartRows.length; i++) ids.push(this.cartRows[i].id)
+      const key = newIdempotencyKey()
+      this.deleteCartRows(ids, key, 0)
+    },
+    deleteCartRows(ids: number[], key: string, attempt: number) {
+      batchDeleteCartItems(cartDeleteRequest(ids), this.storeId, key,
+        (_c) => {},
+        (_f: ApiFailure) => {
+          if (attempt == 0) {
+            setTimeout(() => {
+              this.deleteCartRows(ids, key, 1)
+            }, 1000)
+          }
+        })
+    },
     goLogin() {
       uni.navigateTo({ url: '/pages/auth/login' })
     },
@@ -445,6 +587,15 @@ export default {
 }
 .item-info {
   margin-left: 14px;
+}
+.line-next {
+  margin-top: 14px;
+}
+.addr-phone {
+  margin-left: 10px;
+}
+.addr-line {
+  margin-top: 4px;
 }
 .stepper {
   border-radius: 16px;

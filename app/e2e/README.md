@@ -32,10 +32,17 @@ await (await page.$('.bar-btn')).tap()
 const orderNo = await page.data('orderNo')
 ```
 
-两条实测出来的规矩：
+实测出来的规矩：
 
 - **选择器只写单个类**（`.t-price-l`）。原生端不认后代选择器，`.bar .t-price-l` 返回 null。
-- **等条件，不要 sleep**。接口有网络延迟，用 `helpers.js` 的 `waitFor(page, selector, predicate)`。
+- **等条件，不要 sleep**。接口有网络延迟，用 `helpers.js` 的 `waitFor(page, selector, predicate)`、
+  `waitData(page, key, predicate)`、`waitEl(page, selector)`。刚 `navigateTo` 过去的页面 500ms 内
+  `$` 可能还是 null（实测）。
+- **表单用 `el.input(v)` 填，不要 `page.setData` 整个替换对象字段**。页面 data 里的对象在 Android 上是
+  具名类（如 `AddressForm`），拿普通对象整个换掉它，页面当场渲染不出来、之后 `$` 全返回 null（实测）。
+  字符串 / 数字字段 `setData` 没问题。
+- **不要写死 sku_id**。演示库的库存是真扣的，结算用例每跑一次付掉一件；用 `pickSku(minQty)` 现挑一个
+  库存够的规格（问的是不带 store_id 的默认门店，与 App 拿不到定位时回落的同一家）。
 
 `checkout.test.js` 每跑一次会在服务端真的建一笔订单并走沙箱入账（没有真实资金流动）。
 
@@ -49,6 +56,11 @@ const orderNo = await page.data('orderNo')
 回落默认店」那条路径：iOS 不能远程授予定位；Android 上试过 `pm grant` 预授，但 MIUI
 带「仅本次允许」标记、照样弹自己的权限框，靠 adb 走不通（实测），所以没留这段。
 真拿坐标解析那条路径目前没有自动化覆盖。
+
+`address.test.js`：新建的是**非默认**地址（名字 `e2e 收件人`），前后都从测试进程删掉，不动种子里的
+默认地址 —— 删了默认服务端不会补回，结算用例就没地址了。`cart.test.js`：开始前 `DELETE /cart` 清空；
+每跑一次下一笔**不付款**的单（可能顺带锁住演示买家手上的券，待支付单超时关闭后退回）。
+`profile.test.js`：改完昵称在 afterAll 里改回原值。
 
 `coupon.test.js`：演示买家的券状态跑一次变一次（「9 折」第一次领是 201，之后是 409 每人限领；
 结算用例会把自动选上的券真的用掉）。所以它断言的是**终态**：领完按钮是「已领取」、这张券在

@@ -1,0 +1,233 @@
+<template>
+  <view class="page">
+    <scroll-view class="scroll" direction="vertical">
+      <view class="body">
+        <view v-if="error != ''" class="card">
+          <text class="t-err">{{ error }}</text>
+          <view class="gap-m"></view>
+          <view class="btn-ghost" @click="load"><text class="btn-ghost-text">重新加载</text></view>
+        </view>
+
+        <view v-if="me != null" class="card-flat form">
+          <view :class="['field', nicknameErr != '' ? 'field-bad' : '']">
+            <text class="field-label">昵称</text>
+            <input class="field-input f-nickname" v-model="nickname" maxlength="32" placeholder="最多 32 个字" />
+          </view>
+          <text v-if="nicknameErr != ''" class="t-err field-msg">{{ nicknameErr }}</text>
+          <view class="field">
+            <text class="field-label">性别</text>
+            <view class="row fill">
+              <view v-for="g in genders" :key="g.value" :class="['chip', gender == g.value ? 'chip-on' : '']" @click="gender = g.value">
+                <text :class="gender == g.value ? 'chip-text-on' : 'chip-text'">{{ g.label }}</text>
+              </view>
+            </view>
+          </view>
+          <view class="field">
+            <text class="field-label">手机号</text>
+            <text class="t-body fill">{{ me!.phone != '' ? me!.phone : '未绑定' }}</text>
+            <!-- POST /me/phone 服务端回 501（短信没接）：不放一个点了必失败的按钮。 -->
+            <text class="t-hint">换绑暂未开通</text>
+          </view>
+        </view>
+
+        <view v-if="message != ''" class="card">
+          <text :class="failed ? 't-err' : 't-ok'">{{ message }}</text>
+        </view>
+
+        <view v-if="me != null">
+          <text class="t-overline section-head">第三方账号</text>
+          <view class="card-flat form">
+            <view v-for="i in identities" :key="i.provider" class="field between">
+              <view>
+                <text class="t-body">{{ i.name }}</text>
+                <text class="t-hint">绑定于 {{ i.boundAt }}</text>
+              </view>
+              <text class="t-link unbind" @click="unbind(i.provider, i.name)">解绑</text>
+            </view>
+            <!-- POST /me/identities/wechat 服务端回 501（微信没接），同上。 -->
+            <view class="field between">
+              <text class="t-body">绑定微信</text>
+              <text class="t-hint">暂未开通</text>
+            </view>
+          </view>
+        </view>
+      </view>
+    </scroll-view>
+    <view v-if="me != null" class="bar" :style="{ paddingBottom: (10 + safeBottom) + 'px' }">
+      <view :class="['btn', 'fill', 'save-btn', busy || !dirty ? 'btn-off' : '']" @click="save">
+        <text class="btn-text">{{ busy ? '保存中…' : '保存' }}</text>
+      </view>
+    </view>
+  </view>
+</template>
+
+<script>
+import { getMe, listIdentities, unbindIdentity, updateMe, ApiFailure, PROBLEM_LAST_CREDENTIAL } from '@/api/client.uts'
+import { loadSession, saveSession } from '@/api/config.uts'
+import { fieldErrors, identityRow, meUpdateRequest, meView, IdentityRow, MeView } from '@/api/view.uts'
+
+type GenderOption = {
+  value : number
+  label : string
+}
+
+export default {
+  data() {
+    return {
+      me: null as MeView | null,
+      nickname: '',
+      gender: 0,
+      genders: [
+        { value: 0, label: '不设置' },
+        { value: 1, label: '男' },
+        { value: 2, label: '女' },
+      ] as GenderOption[],
+      identities: [] as IdentityRow[],
+      error: '',
+      message: '',
+      failed: false,
+      nicknameErr: '',
+      busy: false,
+      safeBottom: 0,
+    }
+  },
+  computed: {
+    dirty(): boolean {
+      const m = this.me
+      if (m == null) return false
+      return this.nickname != m.nickname || this.gender != m.gender
+    },
+  },
+  onLoad() {
+    this.safeBottom = uni.getWindowInfo().safeAreaInsets.bottom
+    this.load()
+  },
+  methods: {
+    load() {
+      this.error = ''
+      getMe(
+        (u) => {
+          const v = meView(u)
+          this.me = v
+          this.nickname = v.nickname
+          this.gender = v.gender
+        },
+        (f: ApiFailure) => {
+          this.error = f.message
+        }
+      )
+      listIdentities(
+        (list) => {
+          const rows: IdentityRow[] = []
+          for (let i = 0; i < list.length; i++) rows.push(identityRow(list[i]))
+          this.identities = rows
+        },
+        (_f: ApiFailure) => {
+          this.identities = []
+        }
+      )
+    },
+    save() {
+      const m = this.me
+      if (m == null || this.busy || !this.dirty) return
+      this.busy = true
+      this.message = ''
+      this.nicknameErr = ''
+      // 只带改了的字段（契约 minProperties: 1）。
+      const nick: string | null = this.nickname != m.nickname ? this.nickname : null
+      const g: number | null = this.gender != m.gender ? this.gender : null
+      updateMe(meUpdateRequest(nick, g),
+        (u) => {
+          this.busy = false
+          const v = meView(u)
+          this.me = v
+          this.nickname = v.nickname
+          this.gender = v.gender
+          this.failed = false
+          this.message = '已保存'
+          // 「我的」页头像旁的名字读的是本机会话里的昵称：跟着改，不然回去还是旧名字。
+          const s = loadSession()
+          if (s != null) {
+            s!.nickname = v.nickname
+            saveSession(s!)
+          }
+        },
+        (f: ApiFailure) => {
+          this.busy = false
+          this.failed = true
+          const errs = fieldErrors(f.problem)
+          for (let i = 0; i < errs.length; i++) {
+            if (errs[i].field == 'nickname') this.nicknameErr = errs[i].message != '' ? errs[i].message : '昵称不合要求'
+          }
+          this.message = this.nicknameErr != '' ? '请检查标红的一项' : f.message
+        })
+    },
+    unbind(provider: number, name: string) {
+      uni.showModal({
+        title: '解绑' + name + '？',
+        content: '解绑后不能再用它登录这个账号。',
+        success: (res) => {
+          if (!res.confirm) return
+          unbindIdentity(provider,
+            () => {
+              this.failed = false
+              this.message = '已解绑' + name
+              this.load()
+            },
+            (f: ApiFailure) => {
+              this.failed = true
+              const t = f.problem != null ? f.problem!.type : ''
+              this.message = t == PROBLEM_LAST_CREDENTIAL
+                ? '这是账号最后一个能登录的方式，先设置登录密码再解绑'
+                : f.message
+            })
+        },
+      })
+    },
+  },
+}
+</script>
+
+<style>
+.form {
+  margin-top: 12px;
+  padding: 0 16px;
+}
+.field-bad {
+  border-bottom-color: #B4462E;
+}
+.field-msg {
+  margin-top: 4px;
+  margin-bottom: 4px;
+}
+.chip {
+  padding: 5px 14px;
+  border-radius: 15px;
+  border-width: 1px;
+  border-style: solid;
+  border-color: #E3D9CC;
+  margin-right: 8px;
+}
+.chip-on {
+  background-color: #3B2A20;
+  border-color: #3B2A20;
+}
+.chip-text {
+  font-size: 13px;
+  color: #2A211B;
+}
+.chip-text-on {
+  font-size: 13px;
+  color: #FFFDF9;
+}
+.section-head {
+  margin-top: 24px;
+  margin-left: 4px;
+}
+.unbind {
+  color: #B4462E;
+}
+.save-btn {
+  flex: 1;
+}
+</style>

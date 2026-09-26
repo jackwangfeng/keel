@@ -138,3 +138,27 @@ export function localOrders(): string[] {
   const list = JSON.parse<string[]>(raw as string)
   return list != null ? list! : ([] as string[])
 }
+
+// ---------------------------------------------------------------------------
+// 地址选择的回传
+// ---------------------------------------------------------------------------
+//
+// 结算页 → 地址列表（选择模式）→ 点一条 → 返回结算页。navigateBack 带不了返回值，
+// 所以选中的 id 放进存储，结算页 onShow 时取走（取一次就清掉，下次进来不串）。
+
+const KEY_PICKED_ADDRESS = 'keel.pickedAddress'
+
+export function setPickedAddress(id: number) {
+  uni.setStorageSync(KEY_PICKED_ADDRESS, id.toString())
+}
+
+/** 取走选中的地址 id；没有就是 0。 */
+export function takePickedAddress(): number {
+  const raw = uni.getStorageSync(KEY_PICKED_ADDRESS)
+  uni.removeStorageSync(KEY_PICKED_ADDRESS)
+  if (typeof raw != 'string' || (raw as string).length == 0) {
+    return 0
+  }
+  const n = parseInt(raw as string)
+  return isNaN(n) ? 0 : n
+}

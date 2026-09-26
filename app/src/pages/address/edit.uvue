@@ -1,0 +1,270 @@
+<template>
+  <view class="page">
+    <scroll-view class="scroll" direction="vertical">
+      <view class="body">
+        <view class="card-flat form">
+          <!-- 422 时按 Problem.errors[].field 标红对应的那一格，错误原文写在格子下面。 -->
+          <view :class="['field', errOf('receiverName') != '' ? 'field-bad' : '']">
+            <text class="field-label">收货人</text>
+            <input class="field-input f-name" v-model="form.receiverName" placeholder="姓名" />
+          </view>
+          <text v-if="errOf('receiverName') != ''" class="t-err field-msg">{{ errOf('receiverName') }}</text>
+          <view :class="['field', errOf('phone') != '' ? 'field-bad' : '']">
+            <text class="field-label">手机号</text>
+            <input class="field-input f-phone" type="number" v-model="form.phone" placeholder="11 位手机号" />
+          </view>
+          <text v-if="errOf('phone') != ''" class="t-err field-msg">{{ errOf('phone') }}</text>
+          <view :class="['field', errOf('province') != '' ? 'field-bad' : '']">
+            <text class="field-label">省份</text>
+            <input class="field-input f-province" v-model="form.province" placeholder="如 上海市" />
+          </view>
+          <text v-if="errOf('province') != ''" class="t-err field-msg">{{ errOf('province') }}</text>
+          <view :class="['field', errOf('city') != '' ? 'field-bad' : '']">
+            <text class="field-label">城市</text>
+            <input class="field-input f-city" v-model="form.city" placeholder="如 上海市" />
+          </view>
+          <text v-if="errOf('city') != ''" class="t-err field-msg">{{ errOf('city') }}</text>
+          <view :class="['field', errOf('district') != '' ? 'field-bad' : '']">
+            <text class="field-label">区县</text>
+            <input class="field-input f-district" v-model="form.district" placeholder="如 徐汇区" />
+          </view>
+          <text v-if="errOf('district') != ''" class="t-err field-msg">{{ errOf('district') }}</text>
+          <view :class="['field', errOf('detail') != '' ? 'field-bad' : '']">
+            <text class="field-label">详细地址</text>
+            <input class="field-input f-detail" v-model="form.detail" placeholder="街道、门牌号" />
+          </view>
+          <text v-if="errOf('detail') != ''" class="t-err field-msg">{{ errOf('detail') }}</text>
+          <view class="field between" @click="toggleDefault">
+            <text class="t-body">设为默认地址</text>
+            <view :class="['switch', wantDefault ? 'switch-on' : '']"><view class="switch-knob"></view></view>
+          </view>
+        </view>
+
+        <view v-if="message != ''" class="card">
+          <text :class="failed ? 't-err' : 't-ok'">{{ message }}</text>
+        </view>
+        <view v-if="addressId > 0" class="del">
+          <text class="t-link del-text" @click="remove">删除这条地址</text>
+        </view>
+      </view>
+    </scroll-view>
+    <view class="bar" :style="{ paddingBottom: (10 + safeBottom) + 'px' }">
+      <view :class="['btn', 'fill', 'save-btn', busy ? 'btn-off' : '']" @click="save">
+        <text class="btn-text">{{ busy ? '保存中…' : '保存' }}</text>
+      </view>
+    </view>
+  </view>
+</template>
+
+<script>
+import {
+  createAddress,
+  deleteAddress,
+  listAddresses,
+  setDefaultAddress,
+  updateAddress,
+  ApiFailure,
+  PROBLEM_USE_DEFAULT_ENDPOINT,
+} from '@/api/client.uts'
+import { newIdempotencyKey } from '@/api/idempotency.uts'
+import { addressForm, addressFormField, addressRequest, fieldErrors, AddressForm, FieldErr } from '@/api/view.uts'
+
+export default {
+  data() {
+    return {
+      // 0 = 新建。
+      addressId: 0,
+      form: {
+        receiverName: '',
+        phone: '',
+        province: '',
+        city: '',
+        district: '',
+        detail: '',
+        isDefault: false,
+      } as AddressForm,
+      // 用户想要的默认状态。编辑时和 form.isDefault（服务端当前值）分开存：
+      // PUT 只能带当前值，想改成默认要另调 PUT /addresses/{id}/default。
+      wantDefault: false,
+      errors: [] as FieldErr[],
+      message: '',
+      failed: false,
+      busy: false,
+      // 新建地址的幂等键：这张表单活着期间不变。网络超时后再点「保存」是重放，
+      // 不会建出两条一模一样的地址。改了内容再保存会是「同键异体」422，那时换一个键。
+      idemKey: '',
+      safeBottom: 0,
+    }
+  },
+  onLoad(options: OnLoadOptions) {
+    this.safeBottom = uni.getWindowInfo().safeAreaInsets.bottom
+    const raw = options['id']
+    this.addressId = raw != null ? parseInt('' + raw) : 0
+    this.idemKey = newIdempotencyKey()
+    uni.setNavigationBarTitle({ title: this.addressId > 0 ? '编辑地址' : '新建地址' })
+    if (this.addressId > 0) this.load()
+  },
+  methods: {
+    // 没有 GET /addresses/{id} 的客户端函数：列表本来就要拉，从列表里取这一条。
+    load() {
+      listAddresses(
+        (list) => {
+          for (let i = 0; i < list.length; i++) {
+            if (list[i].id == this.addressId) {
+              this.form = addressForm(list[i])
+              this.wantDefault = this.form.isDefault
+              return
+            }
+          }
+          this.failed = true
+          this.message = '这条地址已经不存在了'
+        },
+        (f: ApiFailure) => {
+          this.failed = true
+          this.message = f.message
+        }
+      )
+    },
+    errOf(field: string): string {
+      for (let i = 0; i < this.errors.length; i++) {
+        if (addressFormField(this.errors[i].field) == field) {
+          return this.errors[i].message != '' ? this.errors[i].message : '这一项不正确'
+        }
+      }
+      return ''
+    },
+    toggleDefault() {
+      this.wantDefault = !this.wantDefault
+    },
+    save() {
+      if (this.busy) return
+      this.busy = true
+      this.errors = []
+      this.message = ''
+      if (this.addressId == 0) {
+        this.create()
+      } else {
+        this.update()
+      }
+    },
+    create() {
+      createAddress(
+        addressRequest(this.form, this.wantDefault),
+        this.idemKey,
+        (_a, _replayed) => {
+          this.busy = false
+          uni.navigateBack({})
+        },
+        (f: ApiFailure) => this.fail(f)
+      )
+    },
+    update() {
+      // 带服务端当前的 is_default：PUT 不负责切默认（见 view.uts addressRequest）。
+      updateAddress(
+        addressRequest(this.form, this.form.isDefault),
+        this.addressId,
+        (_a, _r) => {
+          if (this.wantDefault && !this.form.isDefault) {
+            this.makeDefault()
+            return
+          }
+          this.busy = false
+          uni.navigateBack({})
+        },
+        (f: ApiFailure) => {
+          const t = f.problem != null ? f.problem!.type : ''
+          if (t == PROBLEM_USE_DEFAULT_ENDPOINT) {
+            // 按理不会走到（上面带的是当前值）；真走到了就照契约改调专用接口。
+            this.makeDefault()
+            return
+          }
+          this.fail(f)
+        }
+      )
+    },
+    makeDefault() {
+      setDefaultAddress(
+        this.addressId,
+        (_a, _r) => {
+          this.busy = false
+          uni.navigateBack({})
+        },
+        (f: ApiFailure) => {
+          // 地址已经存上了，只是没设成默认：照实说，不回退已保存的修改。
+          this.busy = false
+          this.failed = true
+          this.message = '地址已保存，但设为默认失败：' + f.message
+        }
+      )
+    },
+    fail(f: ApiFailure) {
+      this.busy = false
+      this.failed = true
+      this.errors = fieldErrors(f.problem)
+      this.message = this.errors.length > 0 ? '请检查标红的几项' : f.message
+      // 同键异体：表单改过了。这次没建成，换一个键下次保存就是一次新请求。
+      if (f.status == 422 && this.errors.length == 0) this.idemKey = newIdempotencyKey()
+    },
+    remove() {
+      uni.showModal({
+        title: '删除这条地址？',
+        content: '已下的订单不受影响。',
+        success: (res) => {
+          if (!res.confirm) return
+          deleteAddress(
+            this.addressId,
+            () => {
+              uni.navigateBack({})
+            },
+            (f: ApiFailure) => {
+              this.failed = true
+              this.message = f.message
+            }
+          )
+        },
+      })
+    },
+  },
+}
+</script>
+
+<style>
+.form {
+  margin-top: 12px;
+  padding: 0 16px;
+}
+.field-bad {
+  border-bottom-color: #B4462E;
+}
+.field-msg {
+  margin-top: 4px;
+  margin-bottom: 4px;
+}
+.switch {
+  width: 44px;
+  height: 26px;
+  border-radius: 13px;
+  background-color: #E3D9CC;
+  padding: 3px;
+}
+.switch-on {
+  background-color: #3B2A20;
+  align-items: flex-end;
+}
+.switch-knob {
+  width: 20px;
+  height: 20px;
+  border-radius: 10px;
+  background-color: #FFFDF9;
+}
+.del {
+  align-items: center;
+  padding: 24px 0;
+}
+.del-text {
+  color: #B4462E;
+}
+.save-btn {
+  flex: 1;
+}
+</style>

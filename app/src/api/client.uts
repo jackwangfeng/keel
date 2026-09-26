@@ -21,6 +21,16 @@
 // 会一直编译得过 —— 直到线上。
 
 import {
+  AddCartItemRequest,
+  Address,
+  AddressInput,
+  BatchDeleteCartItemsRequest,
+  Cart,
+  SelectCartItemsRequest,
+  UpdateCartItemRequest,
+  UpdateMeRequest,
+  User,
+  UserIdentity,
   ListCouponTemplatesQuery,
   ListCouponTemplatesResponse,
   ListCouponsQuery,
@@ -68,6 +78,14 @@ export const PROBLEM_COUPON_NOT_APPLICABLE = 'https://keel.dev/problems/coupon-n
 export const PROBLEM_COUPON_SOLD_OUT = 'https://keel.dev/problems/coupon-sold-out'
 export const PROBLEM_COUPON_CLAIM_LIMIT_REACHED = 'https://keel.dev/problems/coupon-claim-limit-reached'
 export const PROBLEM_COUPON_CLAIM_ENDED = 'https://keel.dev/problems/coupon-claim-ended'
+export const PROBLEM_INVALID_REQUEST = 'https://keel.dev/problems/invalid-request'
+// 地址簿：PUT 不负责切默认地址，要改调 PUT /addresses/{id}/default。
+export const PROBLEM_USE_DEFAULT_ENDPOINT = 'https://keel.dev/problems/use-default-endpoint'
+// 购物车。
+export const PROBLEM_SKU_NOT_SOLD_IN_STORE = 'https://keel.dev/problems/sku-not-sold-in-store'
+export const PROBLEM_CART_QUANTITY_EXCEEDED = 'https://keel.dev/problems/cart-quantity-exceeded'
+// 个人信息：解绑后账号没有任何可登录凭据。
+export const PROBLEM_LAST_CREDENTIAL = 'https://keel.dev/problems/last-credential'
 
 /**
  * 一次失败的调用。
@@ -155,9 +173,9 @@ function headerValue(header : UTSJSONObject | null, name : string) : string | nu
   return null
 }
 
-/** 这一层只用得到这两个方法。写成字面量联合而不是 string：uni.request 的
+/** 这一层用得到的方法。写成字面量联合而不是 string：uni.request 的
  *  method 就是一个字面量联合（RequestMethod），传 string 过去在 UTS 下不合法。 */
-export type HttpMethod = 'GET' | 'POST'
+export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
 
 /**
  * 把 uni.request 的 res.data 统一成文本。
@@ -623,6 +641,211 @@ export function listCoupons(
       return
     }
     onOk(body!)
+  }, onErr)
+}
+
+// ---------------------------------------------------------------------------
+// 个人信息
+// ---------------------------------------------------------------------------
+
+/** 成功回调里要一个 User 的几条接口共用。 */
+function userOk(onOk : (u : User) => void, onErr : FailureHandler) : RawOk {
+  return (s : number, text : string, _r : boolean) => {
+    const body = JSON.parse<User>(text)
+    if (body == null) {
+      onErr(decodeFailure(s))
+      return
+    }
+    onOk(body!)
+  }
+}
+
+export function getMe(onOk : (u : User) => void, onErr : FailureHandler) {
+  send('GET', '/me', '', null, null, userOk(onOk, onErr), onErr)
+}
+
+/** PATCH /me：nickname / avatar_url / gender 至少一个。422 带 Problem.errors。 */
+export function updateMe(req : UpdateMeRequest, onOk : (u : User) => void, onErr : FailureHandler) {
+  send('PATCH', '/me', '', req, null, userOk(onOk, onErr), onErr)
+}
+
+/** GET /me/identities：200 是裸数组。 */
+export function listIdentities(onOk : (list : UserIdentity[]) => void, onErr : FailureHandler) {
+  send('GET', '/me/identities', '', null, null, (_s : number, text : string, _r : boolean) => {
+    const body = JSON.parse<UserIdentity[]>(text)
+    if (body == null) {
+      onErr(decodeFailure(200))
+      return
+    }
+    onOk(body!)
+  }, onErr)
+}
+
+/** DELETE /me/identities/{provider}。409 last-credential：这是最后一个能登录的凭据。 */
+export function unbindIdentity(provider : number, onOk : () => void, onErr : FailureHandler) {
+  send('DELETE', '/me/identities/' + provider.toString(), '', null, null,
+    (_s : number, _t : string, _r : boolean) => {
+      onOk()
+    }, onErr)
+}
+
+// ---------------------------------------------------------------------------
+// 地址簿
+// ---------------------------------------------------------------------------
+
+function addressOk(onOk : (a : Address, replayed : boolean) => void, onErr : FailureHandler) : RawOk {
+  return (s : number, text : string, replayed : boolean) => {
+    const body = JSON.parse<Address>(text)
+    if (body == null) {
+      onErr(decodeFailure(s))
+      return
+    }
+    onOk(body!, replayed)
+  }
+}
+
+/** GET /addresses：默认地址排第一，其余按更新时间倒序。200 是裸数组。 */
+export function listAddresses(onOk : (list : Address[]) => void, onErr : FailureHandler) {
+  send('GET', '/addresses', '', null, null, (_s : number, text : string, _r : boolean) => {
+    const body = JSON.parse<Address[]>(text)
+    if (body == null) {
+      onErr(decodeFailure(200))
+      return
+    }
+    onOk(body!)
+  }, onErr)
+}
+
+/** POST /addresses：**必带 Idempotency-Key**。同一张表单的重试复用同一个键（见地址编辑页）。 */
+export function createAddress(
+  req : AddressInput,
+  idempotencyKey : string,
+  onOk : (a : Address, replayed : boolean) => void,
+  onErr : FailureHandler
+) {
+  send('POST', '/addresses', '', req, idempotencyKey, addressOk(onOk, onErr), onErr)
+}
+
+/**
+ * PUT /addresses/{id}：整体替换。**不切默认地址** —— is_default 从 false 改 true
+ * 会被 422 use-default-endpoint 打回，切默认走 setDefaultAddress。
+ */
+export function updateAddress(
+  req : AddressInput,
+  addressId : number,
+  onOk : (a : Address, replayed : boolean) => void,
+  onErr : FailureHandler
+) {
+  send('PUT', '/addresses/' + addressId.toString(), '', req, null, addressOk(onOk, onErr), onErr)
+}
+
+/** DELETE /addresses/{id}：软删。删的是默认地址时，服务端**不会**自动指定新的默认。 */
+export function deleteAddress(addressId : number, onOk : () => void, onErr : FailureHandler) {
+  send('DELETE', '/addresses/' + addressId.toString(), '', null, null,
+    (_s : number, _t : string, _r : boolean) => {
+      onOk()
+    }, onErr)
+}
+
+/** PUT /addresses/{id}/default：互斥切换，对已是默认的地址重复调用也是 200。 */
+export function setDefaultAddress(
+  addressId : number,
+  onOk : (a : Address, replayed : boolean) => void,
+  onErr : FailureHandler
+) {
+  send('PUT', '/addresses/' + addressId.toString() + '/default', '', null, null,
+    addressOk(onOk, onErr), onErr)
+}
+
+// ---------------------------------------------------------------------------
+// 购物车
+// ---------------------------------------------------------------------------
+//
+// **每一条都带 store_id**，而且是商品页 / 下单页用的同一个（store.uts）：车里只存
+// sku_id 与数量，「多少钱」「卖不卖」「有没有货」都要定下门店才有答案。
+// 换一家店算，购物车上的合计就和结算页试算出来的对不上。
+// 请求体参数放在第一位：check_app_types.py 的字面量检查只看第一个参数。
+
+function storeQuery(storeId : number | null) : string {
+  return storeId != null ? '?store_id=' + storeId!.toString() : ''
+}
+
+function cartOk(onOk : (c : Cart) => void, onErr : FailureHandler) : RawOk {
+  return (s : number, text : string, _r : boolean) => {
+    const body = JSON.parse<Cart>(text)
+    if (body == null) {
+      onErr(decodeFailure(s))
+      return
+    }
+    onOk(body!)
+  }
+}
+
+export function getCart(storeId : number | null, onOk : (c : Cart) => void, onErr : FailureHandler) {
+  send('GET', '/cart', storeQuery(storeId), null, null, cartOk(onOk, onErr), onErr)
+}
+
+/**
+ * POST /cart/items：**必带 Idempotency-Key**。同一 sku 已在车里时数量累加。
+ * 422 sku-not-sold-in-store / cart-quantity-exceeded（累计超 999）/ invalid-request（满 100 种等）；
+ * 409 insufficient-stock。
+ */
+export function addCartItem(
+  req : AddCartItemRequest,
+  storeId : number | null,
+  idempotencyKey : string,
+  onOk : (c : Cart) => void,
+  onErr : FailureHandler
+) {
+  send('POST', '/cart/items', storeQuery(storeId), req, idempotencyKey, cartOk(onOk, onErr), onErr)
+}
+
+/** PATCH /cart/items/{id}：改数量 / 勾选。调大数量超过可售量回 409，调小永远放行。 */
+export function updateCartItem(
+  req : UpdateCartItemRequest,
+  itemId : number,
+  storeId : number | null,
+  onOk : (c : Cart) => void,
+  onErr : FailureHandler
+) {
+  send('PATCH', '/cart/items/' + itemId.toString(), storeQuery(storeId), req, null,
+    cartOk(onOk, onErr), onErr)
+}
+
+/** PUT /cart/selection：批量勾选；item_ids 省略即全车。 */
+export function selectCartItems(
+  req : SelectCartItemsRequest,
+  storeId : number | null,
+  onOk : (c : Cart) => void,
+  onErr : FailureHandler
+) {
+  send('PUT', '/cart/selection', storeQuery(storeId), req, null, cartOk(onOk, onErr), onErr)
+}
+
+/** POST /cart/items/batch-delete：**必带 Idempotency-Key**。item_ids 与 selected:true 二选一。 */
+export function batchDeleteCartItems(
+  req : BatchDeleteCartItemsRequest,
+  storeId : number | null,
+  idempotencyKey : string,
+  onOk : (c : Cart) => void,
+  onErr : FailureHandler
+) {
+  send('POST', '/cart/items/batch-delete', storeQuery(storeId), req, idempotencyKey,
+    cartOk(onOk, onErr), onErr)
+}
+
+/** DELETE /cart/items/{id}：204，没有响应体。删完要重新 getCart 拿合计。 */
+export function deleteCartItem(itemId : number, onOk : () => void, onErr : FailureHandler) {
+  send('DELETE', '/cart/items/' + itemId.toString(), '', null, null,
+    (_s : number, _t : string, _r : boolean) => {
+      onOk()
+    }, onErr)
+}
+
+/** DELETE /cart：清空，204。 */
+export function clearCart(onOk : () => void, onErr : FailureHandler) {
+  send('DELETE', '/cart', '', null, null, (_s : number, _t : string, _r : boolean) => {
+    onOk()
   }, onErr)
 }
 

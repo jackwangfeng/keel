@@ -5,9 +5,13 @@
     { "path": "pages/search/index",   "style": { "navigationBarTitleText": "搜索" } },
     { "path": "pages/auth/login",     "style": { "navigationBarTitleText": "" } },
     { "path": "pages/order/create",   "style": { "navigationBarTitleText": "确认订单" } },
+    { "path": "pages/cart/index",     "style": { "navigationBarTitleText": "购物车" } },
     { "path": "pages/order/list",     "style": { "navigationBarTitleText": "我的订单" } },
     { "path": "pages/order/detail",   "style": { "navigationBarTitleText": "订单详情" } },
     { "path": "pages/me/index",       "style": { "navigationStyle": "custom" } },
+    { "path": "pages/me/profile",     "style": { "navigationBarTitleText": "个人资料" } },
+    { "path": "pages/address/list",   "style": { "navigationBarTitleText": "收货地址" } },
+    { "path": "pages/address/edit",   "style": { "navigationBarTitleText": "编辑地址" } },
     { "path": "pages/coupon/center",  "style": { "navigationBarTitleText": "领券中心" } },
     { "path": "pages/coupon/mine",    "style": { "navigationBarTitleText": "我的优惠券" } },
     { "path": "pages/settings/base",  "style": { "navigationBarTitleText": "服务地址" } }
@@ -23,6 +27,12 @@
         "text": "首页",
         "iconPath": "static/tabbar/home.png",
         "selectedIconPath": "static/tabbar/home-on.png"
+      },
+      {
+        "pagePath": "pages/cart/index",
+        "text": "购物车",
+        "iconPath": "static/tabbar/cart.png",
+        "selectedIconPath": "static/tabbar/cart-on.png"
       },
       {
         "pagePath": "pages/order/list",

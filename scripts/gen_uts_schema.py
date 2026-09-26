@@ -72,6 +72,16 @@ OPERATIONS = [
     ('get', '/coupon-templates', 'ListCouponTemplates'),
     ('post', '/coupon-templates/{template_id}/claim', 'ClaimCoupon'),
     ('get', '/coupons', 'ListCoupons'),
+    # 个人信息 / 地址簿 / 购物车。GET /addresses 与 GET /me/identities 不在表里：
+    # 200 是裸数组（同 applicable 那条），客户端直接 JSON.parse<Address[]>。
+    ('get', '/me', 'GetMe'),
+    ('patch', '/me', 'UpdateMe'),
+    ('post', '/addresses', 'CreateAddress'),
+    ('get', '/cart', 'GetCart'),
+    ('post', '/cart/items', 'AddCartItem'),
+    ('patch', '/cart/items/{item_id}', 'UpdateCartItem'),
+    ('put', '/cart/selection', 'SelectCartItems'),
+    ('post', '/cart/items/batch-delete', 'BatchDeleteCartItems'),
 ]
 
 HEADER = '''// 由 scripts/gen_uts_schema.py 从 docs/电商系统-OpenAPI.yaml 生成。**请勿手改。**

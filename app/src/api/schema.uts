@@ -1398,3 +1398,62 @@ export type ListCouponsResponse = {
   total : number
   items : UserCoupon[]
 }
+
+/** PATCH /me 的请求体 */
+export type UpdateMeRequest = {
+  nickname? : string
+  avatar_url? : string
+  /** 0 未知 / 1 男 / 2 女 */
+  gender? : number
+}
+
+/** GET /cart 的 query 参数 */
+export type GetCartQuery = {
+  store_id? : number
+}
+
+/** POST /cart/items 的 query 参数 */
+export type AddCartItemQuery = {
+  store_id? : number
+}
+
+/** POST /cart/items 的请求体 */
+export type AddCartItemRequest = {
+  sku_id : number
+  quantity : number
+}
+
+/** PATCH /cart/items/{item_id} 的 query 参数 */
+export type UpdateCartItemQuery = {
+  store_id? : number
+}
+
+/** PATCH /cart/items/{item_id} 的请求体 */
+export type UpdateCartItemRequest = {
+  quantity? : number
+  selected? : boolean
+}
+
+/** PUT /cart/selection 的 query 参数 */
+export type SelectCartItemsQuery = {
+  store_id? : number
+}
+
+/** PUT /cart/selection 的请求体 */
+export type SelectCartItemsRequest = {
+  selected : boolean
+  /** 省略则作用于全部条目 */
+  item_ids? : number[]
+}
+
+/** POST /cart/items/batch-delete 的 query 参数 */
+export type BatchDeleteCartItemsQuery = {
+  store_id? : number
+}
+
+/** POST /cart/items/batch-delete 的请求体 */
+export type BatchDeleteCartItemsRequest = {
+  item_ids? : number[]
+  /** 为 true 时删除全部已勾选条目，与 `item_ids` 互斥 */
+  selected? : boolean
+}

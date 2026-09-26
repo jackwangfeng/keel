@@ -1,0 +1,349 @@
+<template>
+  <view class="page">
+    <scroll-view class="scroll" direction="vertical">
+      <view class="body">
+        <view v-if="!loggedIn" class="empty">
+          <view class="empty-mark"><text class="empty-mark-text">⌂</text></view>
+          <text class="t-sub">登录后查看购物车</text>
+          <view class="gap-m"></view>
+          <view class="btn cta" @click="goLogin"><text class="btn-text">登录</text></view>
+        </view>
+
+        <view v-if="error != ''" class="card">
+          <text class="t-err">{{ error }}</text>
+          <view class="gap-m"></view>
+          <view class="btn-ghost" @click="load"><text class="btn-ghost-text">重新加载</text></view>
+        </view>
+        <view v-if="message != ''" class="card result-err">
+          <text class="t-err">{{ message }}</text>
+        </view>
+
+        <view v-if="rows.length > 0" class="between cart-head">
+          <text class="t-hint">{{ storeLine }}</text>
+          <text class="t-link" @click="editing = !editing">{{ editing ? '完成' : '管理' }}</text>
+        </view>
+
+        <!-- 不能买的行（下架 / 本店不售 / 无货 / 库存不足）照样列出来、写明原因，
+             但不能勾选、不进合计、不去结算。服务端不替用户删，客户端也不。 -->
+        <view v-for="r in rows" :key="r.id" :class="['card', 'cart-row', r.available ? '' : 'cart-row-off']">
+          <view class="row">
+            <view :class="['check', r.selected ? 'check-on' : '', r.available ? '' : 'check-off']" @click="toggle(r.id)">
+              <text v-if="r.selected" class="check-mark">✓</text>
+            </view>
+            <view class="cover thumb" :style="{ backgroundColor: r.cover.color }" @click="openProduct(r.productId)">
+              <image v-if="r.cover.imageUrl != ''" class="cover-img" :src="r.cover.imageUrl" mode="aspectFill"></image>
+              <text v-else class="cover-glyph thumb-glyph">{{ r.cover.glyph }}</text>
+            </view>
+            <view class="fill item-info">
+              <text class="t-section cart-title">{{ r.title }}</text>
+              <text v-if="r.specText != ''" class="t-hint">{{ r.specText }}</text>
+              <text v-if="r.statusText != ''" class="t-err cart-status">{{ r.statusText }}</text>
+              <view class="gap-s"></view>
+              <view class="between">
+                <text class="t-price">{{ r.priceText }}</text>
+                <view class="stepper row">
+                  <view :class="['step', r.quantity <= 1 ? 'btn-off' : '']" @click="changeQty(r.id, r.quantity - 1)"><text class="step-text">−</text></view>
+                  <text class="step-num">{{ r.quantity }}</text>
+                  <view class="step step-plus" @click="changeQty(r.id, r.quantity + 1)"><text class="step-text">+</text></view>
+                </view>
+              </view>
+            </view>
+          </view>
+        </view>
+
+        <view v-if="loggedIn && loaded && rows.length == 0 && error == ''" class="empty">
+          <view class="empty-mark"><text class="empty-mark-text">☕</text></view>
+          <text class="t-sub">购物车是空的</text>
+          <view class="gap-m"></view>
+          <view class="btn-ghost cta" @click="goHome"><text class="btn-ghost-text">去逛逛</text></view>
+        </view>
+        <view class="gap-l"></view>
+      </view>
+    </scroll-view>
+
+    <view v-if="rows.length > 0" class="bar">
+      <view class="row all" @click="toggleAll">
+        <view :class="['check', allSelected ? 'check-on' : '', availableCount == 0 ? 'check-off' : '']">
+          <text v-if="allSelected" class="check-mark">✓</text>
+        </view>
+        <text class="t-sub all-text">全选</text>
+      </view>
+      <view class="fill">
+        <view v-if="!editing" class="total">
+          <text class="t-hint">合计</text>
+          <text class="t-price-l cart-total">{{ selectedText }}</text>
+        </view>
+      </view>
+      <view v-if="editing" :class="['btn', 'bar-btn', 'btn-danger', deletableCount == 0 ? 'btn-off' : '']" @click="removeSelected">
+        <text class="btn-text">删除({{ deletableCount }})</text>
+      </view>
+      <view v-else :class="['btn', 'bar-btn', selectedCount == 0 ? 'btn-off' : '']" @click="checkout">
+        <text class="btn-text">去结算({{ selectedCount }})</text>
+      </view>
+    </view>
+  </view>
+</template>
+
+<script>
+import {
+  batchDeleteCartItems,
+  getCart,
+  selectCartItems,
+  updateCartItem,
+  ApiFailure,
+} from '@/api/client.uts'
+import { isLoggedIn } from '@/api/config.uts'
+import { newIdempotencyKey } from '@/api/idempotency.uts'
+import { ensureStore, CurrentStore } from '@/api/store.uts'
+import {
+  cartCheckRequest,
+  cartDeleteRequest,
+  cartQuantityRequest,
+  cartSelectAllRequest,
+  cartView,
+  CartRow,
+  CartView,
+} from '@/api/view.uts'
+
+export default {
+  data() {
+    return {
+      rows: [] as CartRow[],
+      selectedText: '¥0.00',
+      selectedCount: 0,
+      allSelected: false,
+      availableCount: 0,
+      loggedIn: false,
+      loaded: false,
+      error: '',
+      message: '',
+      storeId: 0,
+      storeLine: '',
+      editing: false,
+      // 管理模式下「删除」勾的是哪些行：和结算的勾选分开 —— 不能买的行也要能删。
+      removeIds: [] as number[],
+      // 有请求在飞时不接下一次点击：每个请求都返回整辆车，两个交错回来会互相覆盖。
+      busy: false,
+    }
+  },
+  computed: {
+    deletableCount(): number {
+      let n = 0
+      for (let i = 0; i < this.rows.length; i++) {
+        if (this.rows[i].selected || this.removeIds.indexOf(this.rows[i].id) >= 0) n++
+      }
+      return n
+    },
+  },
+  onShow() {
+    this.loggedIn = isLoggedIn()
+    this.message = ''
+    if (this.loggedIn) this.load()
+  },
+  methods: {
+    // 和商品页、结算页同一家门店（store.uts），购物车的价才和试算的价对得上。
+    load() {
+      this.error = ''
+      ensureStore(
+        (s: CurrentStore) => {
+          this.storeId = s.storeId != null ? s.storeId! : 0
+          this.storeLine = s.storeId != null ? '按「' + s.name + '」的价格与库存' : '当前位置暂不在配送范围内'
+          getCart(this.sid(), (c) => this.apply(cartView(c)), (f: ApiFailure) => {
+            this.error = f.message
+            this.loaded = true
+          })
+        },
+        (f: ApiFailure) => {
+          this.error = f.message
+          this.loaded = true
+        }
+      )
+    },
+    sid(): number | null {
+      return this.storeId > 0 ? this.storeId : null
+    },
+    apply(v: CartView) {
+      this.rows = v.rows
+      this.selectedText = v.selectedText
+      this.selectedCount = v.selectedCount
+      this.allSelected = v.allSelected
+      this.availableCount = v.availableCount
+      this.loaded = true
+      this.busy = false
+    },
+    failed(f: ApiFailure) {
+      this.busy = false
+      this.message = f.message
+      // 失败时服务端那辆车没变，但页面可能已经过时（别处改过）：重读一次对齐。
+      this.load()
+    },
+    rowOf(id: number): CartRow | null {
+      for (let i = 0; i < this.rows.length; i++) {
+        if (this.rows[i].id == id) return this.rows[i]
+      }
+      return null
+    },
+    toggle(id: number) {
+      const r = this.rowOf(id)
+      if (r == null) return
+      if (this.editing && !r.available) {
+        // 管理模式：不能买的行也能勾上删除。
+        const at = this.removeIds.indexOf(id)
+        if (at >= 0) this.removeIds.splice(at, 1)
+        else this.removeIds.push(id)
+        return
+      }
+      if (!r.available || this.busy) return
+      this.busy = true
+      this.message = ''
+      updateCartItem(cartCheckRequest(!r.selected), id, this.sid(),
+        (c) => this.apply(cartView(c)), (f: ApiFailure) => this.failed(f))
+    },
+    toggleAll() {
+      if (this.availableCount == 0 || this.busy) return
+      this.busy = true
+      this.message = ''
+      selectCartItems(cartSelectAllRequest(!this.allSelected), this.sid(),
+        (c) => this.apply(cartView(c)), (f: ApiFailure) => this.failed(f))
+    },
+    changeQty(id: number, next: number) {
+      if (next < 1 || next > 999 || this.busy) return
+      this.busy = true
+      this.message = ''
+      // 调大超过可售量是 409，detail 写了原因；调小永远放行（契约）。
+      updateCartItem(cartQuantityRequest(next), id, this.sid(),
+        (c) => this.apply(cartView(c)), (f: ApiFailure) => this.failed(f))
+    },
+    removeSelected() {
+      const ids: number[] = []
+      for (let i = 0; i < this.rows.length; i++) {
+        const r = this.rows[i]
+        if (r.selected || this.removeIds.indexOf(r.id) >= 0) ids.push(r.id)
+      }
+      if (ids.length == 0 || this.busy) return
+      uni.showModal({
+        title: '删除 ' + ids.length.toString() + ' 件商品？',
+        content: '',
+        success: (res) => {
+          if (!res.confirm) return
+          this.busy = true
+          batchDeleteCartItems(cartDeleteRequest(ids), this.sid(), newIdempotencyKey(),
+            (c) => {
+              this.removeIds = []
+              this.editing = false
+              this.apply(cartView(c))
+            },
+            (f: ApiFailure) => this.failed(f))
+        },
+      })
+    },
+    checkout() {
+      if (this.selectedCount == 0) return
+      uni.navigateTo({ url: '/pages/order/create?from=cart' })
+    },
+    openProduct(pid: number) {
+      if (pid > 0) uni.navigateTo({ url: '/pages/products/detail?id=' + pid.toString() })
+    },
+    goLogin() {
+      uni.navigateTo({ url: '/pages/auth/login' })
+    },
+    goHome() {
+      uni.switchTab({ url: '/pages/products/list' })
+    },
+  },
+}
+</script>
+
+<style>
+.cta {
+  width: 160px;
+}
+.cart-head {
+  padding: 12px 4px 0 4px;
+}
+.cart-row-off {
+  opacity: 0.7;
+}
+.check {
+  width: 22px;
+  height: 22px;
+  border-radius: 11px;
+  border-width: 1px;
+  border-style: solid;
+  border-color: #CFC3B5;
+  align-items: center;
+  justify-content: center;
+  margin-right: 12px;
+}
+.check-on {
+  background-color: #3B2A20;
+  border-color: #3B2A20;
+}
+.check-off {
+  background-color: #EEE9E3;
+  border-color: #E3D9CC;
+}
+.check-mark {
+  font-size: 13px;
+  color: #FFFDF9;
+}
+.thumb {
+  width: 76px;
+  height: 76px;
+  border-radius: 12px;
+}
+.thumb-glyph {
+  font-size: 30px;
+}
+.item-info {
+  margin-left: 12px;
+}
+.cart-status {
+  margin-top: 2px;
+}
+.stepper {
+  border-radius: 16px;
+  background-color: #F3ECE3;
+}
+.step {
+  width: 30px;
+  height: 30px;
+  align-items: center;
+  justify-content: center;
+}
+.step-text {
+  font-size: 18px;
+  color: #3B2A20;
+}
+.step-num {
+  min-width: 24px;
+  text-align: center;
+  font-size: 14px;
+  font-weight: bold;
+  color: #2A211B;
+}
+.all {
+  margin-right: 12px;
+}
+.all-text {
+  margin-left: -4px;
+}
+.total {
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-end;
+  padding-right: 12px;
+}
+.cart-total {
+  margin-left: 6px;
+}
+.bar-btn {
+  width: 132px;
+}
+.btn-danger {
+  background-color: #B4462E;
+}
+.result-err {
+  background-color: #F8EAE5;
+}
+</style>

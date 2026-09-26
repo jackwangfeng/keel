@@ -17,6 +17,18 @@
 //     不是第一道。）
 
 import {
+  AddCartItemRequest,
+  Address,
+  AddressInput,
+  BatchDeleteCartItemsRequest,
+  Cart,
+  CartItem,
+  Problem,
+  SelectCartItemsRequest,
+  UpdateCartItemRequest,
+  UpdateMeRequest,
+  User,
+  UserIdentity,
   ApplicableCoupon,
   Category,
   ClaimableCouponTemplate,
@@ -29,6 +41,7 @@ import {
   OrderCreateRequest,
   OrderDetail,
   OrderItem,
+  OrderItemInput,
   OrderPreview,
   OrderStatus,
   PaymentRecord,
@@ -373,8 +386,10 @@ export type OrderDetailView = {
   freightText : string
   discountText : string
   paidText : string
-  /** 这一单用的券（user_coupon_id），0 = 没用券。券名要另查（见订单详情页）。 */
+  /** 这一单用的券（user_coupon_id），0 = 没用券。 */
   couponId : number
+  /** 券名，**下单时的快照**（Order.coupon_name）；没用券是空串。 */
+  couponName : string
   items : OrderItemRow[]
   payments : PaymentRow[]
 }
@@ -421,6 +436,7 @@ export function orderDetailView(o : OrderDetail) : OrderDetailView {
     discountText: yuan(o.discount_cents),
     paidText: yuan(o.paid_cents),
     couponId: o.user_coupon_id != null ? o.user_coupon_id! : 0,
+    couponName: o.coupon_name != null ? o.coupon_name! : '',
     items: rows,
   } as OrderDetailView
 }
@@ -710,6 +726,12 @@ export function searchRequest(query : string, size : number, storeId : number | 
   return r
 }
 
+/** 结算的一行：哪个规格、几件。单品直购是一行，从购物车来是勾选的那几行。 */
+export type OrderLine = {
+  skuId : number
+  quantity : number
+}
+
 /**
  * 结算 / 试算的请求体（两条接口共用一个 schema）。
  *
@@ -728,15 +750,18 @@ export function searchRequest(query : string, size : number, storeId : number | 
  * userCouponId 同理写成必填的 `number | null`，null = 不用券。一单只能用一张。
  */
 export function orderRequest(
-  skuId : number,
-  quantity : number,
+  lines : OrderLine[],
   addressId : number,
   storeId : number,
   expectedPayableCents : Money | null,
   userCouponId : number | null
 ) : OrderCreateRequest {
+  const items : OrderItemInput[] = []
+  for (let i = 0; i < lines.length; i++) {
+    items.push({ sku_id: lines[i].skuId, quantity: lines[i].quantity } as OrderItemInput)
+  }
   const req : OrderCreateRequest = {
-    items: [{ sku_id: skuId, quantity: quantity }],
+    items: items,
     store_id: storeId,
     address_id: addressId,
   }
@@ -747,4 +772,305 @@ export function orderRequest(
     req.user_coupon_id = userCouponId!
   }
   return req
+}
+
+// ---------------------------------------------------------------------------
+// 字段级错误（422 的 Problem.errors）
+// ---------------------------------------------------------------------------
+
+export type FieldErr = {
+  field : string
+  message : string
+}
+
+/** Problem.errors -> 页面按 field 标红对应输入框。没有 errors 就是空数组。 */
+export function fieldErrors(p : Problem | null) : FieldErr[] {
+  const out : FieldErr[] = []
+  if (p == null) return out
+  const errs = p!.errors
+  if (errs == null) return out
+  for (let i = 0; i < errs!.length; i++) {
+    const e = errs![i]
+    out.push({
+      field: e.field != null ? e.field! : '',
+      message: e.message != null ? e.message! : '',
+    } as FieldErr)
+  }
+  return out
+}
+
+// ---------------------------------------------------------------------------
+// 地址簿
+// ---------------------------------------------------------------------------
+
+export type AddressRow = {
+  id : number
+  name : string
+  phone : string
+  /** 「上海市 上海市 徐汇区」 */
+  regionText : string
+  detail : string
+  /** 一行写完：地区 + 街道 + 门牌。结算页与列表的副标题用它。 */
+  fullText : string
+  isDefault : boolean
+  /** 家 / 公司 / 学校；没有标签是空串。 */
+  tagText : string
+}
+
+function tagText(tag ?: number) : string {
+  if (tag == 1) return '家'
+  if (tag == 2) return '公司'
+  if (tag == 3) return '学校'
+  return ''
+}
+
+export function addressRow(a : Address) : AddressRow {
+  const region = a.province + ' ' + a.city + ' ' + a.district
+  const street = a.street != null ? a.street! : ''
+  return {
+    id: a.id,
+    name: a.receiver_name,
+    phone: a.phone,
+    regionText: region,
+    detail: a.detail,
+    fullText: region + ' ' + (street != '' ? street + ' ' : '') + a.detail,
+    isDefault: a.is_default,
+    tagText: tagText(a.tag),
+  } as AddressRow
+}
+
+/** 编辑页的表单：全是页面自己的字段名，契约字段名只在这里和 addressRequest 里出现。 */
+export type AddressForm = {
+  receiverName : string
+  phone : string
+  province : string
+  city : string
+  district : string
+  detail : string
+  isDefault : boolean
+}
+
+export function addressForm(a : Address) : AddressForm {
+  return {
+    receiverName: a.receiver_name,
+    phone: a.phone,
+    province: a.province,
+    city: a.city,
+    district: a.district,
+    detail: a.detail,
+    isDefault: a.is_default,
+  } as AddressForm
+}
+
+/** 表单字段 -> 契约字段名（422 的 errors[].field 是契约名，标红要映射回表单）。 */
+export function addressFormField(contractField : string) : string {
+  if (contractField == 'receiver_name') return 'receiverName'
+  if (contractField == 'is_default') return 'isDefault'
+  return contractField
+}
+
+/**
+ * AddressInput。isDefault 的含义取决于用在哪：
+ *   · 新增：true = 设为默认（服务端同事务先清旧默认）；
+ *   · 修改：**只能传这条地址当前的值**。PUT 不负责切默认，false 改 true 会被 422
+ *     use-default-endpoint 打回 —— 页面要切默认，PUT 之后另调 setDefaultAddress。
+ */
+export function addressRequest(f : AddressForm, isDefault : boolean) : AddressInput {
+  return {
+    receiver_name: f.receiverName,
+    phone: f.phone,
+    province: f.province,
+    city: f.city,
+    district: f.district,
+    detail: f.detail,
+    is_default: isDefault,
+  } as AddressInput
+}
+
+// ---------------------------------------------------------------------------
+// 购物车
+// ---------------------------------------------------------------------------
+
+export type CartRow = {
+  id : number
+  skuId : number
+  productId : number
+  title : string
+  specText : string
+  /** 失效 / 本店不售的行 price_cents 是 null：显示「—」，不显示 ¥0.00。 */
+  priceText : string
+  quantity : number
+  selected : boolean
+  /** 能按这个数量买下（status == available）。只有这种行能勾选、能结算。 */
+  available : boolean
+  /** 不能买的原因；available 的行是空串。 */
+  statusText : string
+  cover : Cover
+}
+
+/** CartItem.status -> 给买家看的原因。 */
+export function cartStatusText(status : string) : string {
+  if (status == 'off_shelf') return '已失效'
+  if (status == 'not_sold_in_store') return '当前门店不售'
+  if (status == 'out_of_stock') return '暂时无货'
+  if (status == 'insufficient_stock') return '库存不足'
+  return ''
+}
+
+export function cartRow(it : CartItem) : CartRow {
+  const values : string[] = []
+  const sv = it.spec_values
+  if (sv != null) {
+    const parts = jsonStrings(JSON.stringify(sv))
+    for (let k = 0; k + 1 < parts.length; k += 2) {
+      values.push(parts[k + 1])
+    }
+  }
+  const title = it.title != null ? it.title! : '规格 #' + it.sku_id.toString()
+  const pid = it.product_id != null ? it.product_id! : 0
+  const available = it.status == 'available'
+  return {
+    id: it.id,
+    skuId: it.sku_id,
+    productId: pid,
+    title: title,
+    specText: values.join(' / '),
+    priceText: it.price_cents != null ? yuan(it.price_cents!) : '—',
+    quantity: it.quantity,
+    // 不能买的行，页面上不显示为勾选：服务端的 selected 可能还是 true（加购时勾上的），
+    // 但合计不算它、结算也不带它 —— 显示成勾选会让人以为它在这一单里。
+    selected: it.selected && available,
+    available: available,
+    statusText: cartStatusText(it.status),
+    cover: coverOf(pid > 0 ? pid : it.sku_id, title, it.image_url),
+  } as CartRow
+}
+
+export type CartView = {
+  rows : CartRow[]
+  /** 已勾选且能买的那几行的合计（服务端算的 selected_total_cents）。 */
+  selectedText : string
+  selectedCents : number
+  /** 勾选且能买的行数。结算按钮上写「去结算(2)」。 */
+  selectedCount : number
+  /** 能买的行都勾上了（且至少有一行能买）：全选框显示为勾选。 */
+  allSelected : boolean
+  availableCount : number
+  /** 这次按哪家门店算的（服务端回显）；0 = 没有门店（match_type = none）。 */
+  storeId : number
+}
+
+export function cartView(c : Cart) : CartView {
+  const rows : CartRow[] = []
+  let selected = 0
+  let avail = 0
+  for (let i = 0; i < c.items.length; i++) {
+    const r = cartRow(c.items[i])
+    rows.push(r)
+    if (r.available) avail++
+    if (r.selected) selected++
+  }
+  const sid = c.store.store_id
+  return {
+    rows: rows,
+    selectedText: yuan(c.selected_total_cents),
+    selectedCents: c.selected_total_cents,
+    selectedCount: selected,
+    allSelected: avail > 0 && selected == avail,
+    availableCount: avail,
+    storeId: sid != null ? sid! : 0,
+  } as CartView
+}
+
+/** 去结算带哪些行：能买且勾选的。与服务端 selected_total_cents 的口径一致。 */
+export function checkoutLines(rows : CartRow[]) : OrderLine[] {
+  const out : OrderLine[] = []
+  for (let i = 0; i < rows.length; i++) {
+    if (rows[i].available && rows[i].selected) {
+      out.push({ skuId: rows[i].skuId, quantity: rows[i].quantity } as OrderLine)
+    }
+  }
+  return out
+}
+
+export function addCartRequest(skuId : number, quantity : number) : AddCartItemRequest {
+  return { sku_id: skuId, quantity: quantity } as AddCartItemRequest
+}
+
+export function cartQuantityRequest(quantity : number) : UpdateCartItemRequest {
+  return { quantity: quantity } as UpdateCartItemRequest
+}
+
+export function cartCheckRequest(selected : boolean) : UpdateCartItemRequest {
+  return { selected: selected } as UpdateCartItemRequest
+}
+
+/** 全选 / 全不选：item_ids 省略即全车。 */
+export function cartSelectAllRequest(selected : boolean) : SelectCartItemsRequest {
+  return { selected: selected } as SelectCartItemsRequest
+}
+
+export function cartDeleteRequest(itemIds : number[]) : BatchDeleteCartItemsRequest {
+  return { item_ids: itemIds } as BatchDeleteCartItemsRequest
+}
+
+// ---------------------------------------------------------------------------
+// 个人信息
+// ---------------------------------------------------------------------------
+
+export type MeView = {
+  nickname : string
+  /** 脱敏的手机号（138****8000）；没绑是空串。 */
+  phone : string
+  gender : number
+  genderText : string
+  hasPassword : boolean
+}
+
+export function genderText(g : number) : string {
+  if (g == 1) return '男'
+  if (g == 2) return '女'
+  return '未设置'
+}
+
+export function meView(u : User) : MeView {
+  const g = u.gender != null ? u.gender! : 0
+  return {
+    nickname: u.nickname,
+    phone: u.phone != null ? u.phone! : '',
+    gender: g,
+    genderText: genderText(g),
+    hasPassword: u.has_password == true,
+  } as MeView
+}
+
+/** PATCH /me 的请求体。只带改了的字段（契约 minProperties: 1）。 */
+export function meUpdateRequest(nickname : string | null, gender : number | null) : UpdateMeRequest {
+  const r : UpdateMeRequest = {}
+  if (nickname != null) r.nickname = nickname!
+  if (gender != null) r.gender = gender!
+  return r
+}
+
+export type IdentityRow = {
+  provider : number
+  name : string
+  boundAt : string
+}
+
+export function identityName(provider : number) : string {
+  if (provider == 1) return '微信小程序'
+  if (provider == 2) return '微信公众号'
+  if (provider == 3) return '微信开放平台'
+  if (provider == 4) return '支付宝'
+  if (provider == 5) return 'Apple'
+  return '第三方账号 #' + provider.toString()
+}
+
+export function identityRow(i : UserIdentity) : IdentityRow {
+  return {
+    provider: i.provider,
+    name: identityName(i.provider),
+    boundAt: shortTime(i.created_at),
+  } as IdentityRow
 }

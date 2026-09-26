@@ -41,7 +41,9 @@
 
         <view v-else>
           <text class="t-hint count">「{{ searched }}」共 {{ rows.length }} 件，按相关度排序</text>
-          <view v-for="item in rows" :key="item.id" class="card-flat hit row" @click="open(item.id)">
+          <!-- 缺货的商品服务端也返回（排在最后，in_stock: false，契约 M3 起如此）：标出来、压暗，
+               而不是藏掉 —— 用户搜的就是它时，「有这东西但暂时没货」比「搜不到」有用。 -->
+          <view v-for="item in rows" :key="item.id" :class="['card-flat', 'hit', 'row', item.offShelf || item.soldOut ? 'hit-off' : '']" @click="open(item.id)">
             <view class="cover thumb" :style="{ backgroundColor: item.cover.color }">
               <image v-if="item.cover.imageUrl != ''" class="cover-img" :src="item.cover.imageUrl" mode="aspectFill"></image>
               <text v-else class="cover-glyph thumb-glyph">{{ item.cover.glyph }}</text>
@@ -52,7 +54,9 @@
               <view class="gap-s"></view>
               <view class="row">
                 <text class="t-price">{{ item.priceText }}</text>
-                <text v-if="item.offShelf || item.soldOut" class="t-hint flag">{{ item.offShelf ? '已下架' : '暂时无货' }}</text>
+                <view v-if="item.offShelf || item.soldOut" class="badge badge-muted flag">
+                  <text class="badge-text badge-muted-text soldout">{{ item.offShelf ? '已下架' : '缺货' }}</text>
+                </view>
               </view>
             </view>
           </view>
@@ -183,5 +187,8 @@ export default {
 }
 .flag {
   margin-left: 10px;
+}
+.hit-off {
+  opacity: 0.6;
 }
 </style>

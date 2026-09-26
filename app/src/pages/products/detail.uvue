@@ -62,7 +62,11 @@
     <view class="bar" :style="{ paddingBottom: (10 + safeBottom) + 'px' }">
       <view class="bar-info">
         <text v-if="hint != ''" class="t-err">{{ hint }}</text>
+        <text v-else-if="added != ''" class="t-ok">{{ added }}</text>
         <text v-else class="t-hint">{{ detail != null ? '已选 ' + selectedLabel : '' }}</text>
+      </view>
+      <view :class="['btn-ghost', 'cart-btn', canCart && !adding ? '' : 'btn-off']" @click="addToCart">
+        <text class="btn-ghost-text">{{ adding ? '加入中…' : '加入购物车' }}</text>
       </view>
       <view :class="['btn', 'bar-btn', canBuy ? '' : 'btn-off']" @click="buy">
         <text class="btn-text">立即购买</text>
@@ -72,9 +76,11 @@
 </template>
 
 <script>
-import { getProduct, ApiFailure } from '@/api/client.uts'
+import { addCartItem, getProduct, ApiFailure, PROBLEM_CART_QUANTITY_EXCEEDED, PROBLEM_INSUFFICIENT_STOCK, PROBLEM_SKU_NOT_SOLD_IN_STORE } from '@/api/client.uts'
+import { isLoggedIn } from '@/api/config.uts'
+import { newIdempotencyKey } from '@/api/idempotency.uts'
 import { ensureStore, CurrentStore } from '@/api/store.uts'
-import { productDetailView, ProductDetailView } from '@/api/view.uts'
+import { addCartRequest, productDetailView, ProductDetailView } from '@/api/view.uts'
 
 export default {
   data() {
@@ -88,6 +94,10 @@ export default {
       hint: '',
       notImplemented: false,
       safeBottom: 0,
+      // 加购用的门店：与列表、结算同一家（store.uts）。0 = 还没解析 / 不在服务范围。
+      storeId: 0,
+      adding: false,
+      added: '',
     }
   },
   computed: {
@@ -120,6 +130,10 @@ export default {
       }
       return -1
     },
+    canCart(): boolean {
+      const d = this.detail
+      return d != null && !d.offShelf && this.skuId > 0 && this.storeId > 0
+    },
     canBuy(): boolean {
       if (this.notImplemented) return this.skuIdText != ''
       const d = this.detail
@@ -144,6 +158,7 @@ export default {
       // 这里才会真的去定位一次。
       ensureStore(
         (s: CurrentStore) => {
+          this.storeId = s.storeId != null ? s.storeId! : 0
           this.fetch(s.storeId)
         },
         (f: ApiFailure) => {
@@ -181,7 +196,33 @@ export default {
         return
       }
       this.hint = ''
+      this.added = ''
       this.skuId = id
+    },
+    addToCart() {
+      if (!isLoggedIn()) {
+        uni.navigateTo({ url: '/pages/auth/login' })
+        return
+      }
+      if (!this.canCart || this.adding) return
+      this.adding = true
+      this.hint = ''
+      this.added = ''
+      // 每次点击一个新的幂等键：同一个 sku 再点一次**就是**想再加一件（服务端累加），
+      // 不能当重放吞掉。手抖连点由 adding 挡住 —— 请求在飞时第二下不发。
+      addCartItem(addCartRequest(this.skuId, 1), this.storeId, newIdempotencyKey(),
+        (c) => {
+          this.adding = false
+          this.added = '已加入购物车（共 ' + c.items.length.toString() + ' 种）'
+        },
+        (f: ApiFailure) => {
+          this.adding = false
+          const t = f.problem != null ? f.problem!.type : ''
+          if (t == PROBLEM_SKU_NOT_SOLD_IN_STORE) this.hint = '当前门店不卖这个规格'
+          else if (t == PROBLEM_CART_QUANTITY_EXCEEDED) this.hint = '购物车里这个规格已经到上限了（' + f.message + '）'
+          else if (t == PROBLEM_INSUFFICIENT_STOCK) this.hint = '库存不够了'
+          else this.hint = f.message
+        })
     },
     buy() {
       let sku = this.skuId
@@ -263,6 +304,11 @@ export default {
   padding-right: 12px;
 }
 .bar-btn {
-  width: 160px;
+  width: 120px;
+}
+.cart-btn {
+  width: 120px;
+  height: 48px;
+  margin-right: 10px;
 }
 </style>

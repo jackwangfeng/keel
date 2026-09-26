@@ -3,13 +3,24 @@
 用 [uni-app x](https://doc.dcloud.net.cn/uni-app-x/) 写的买家端：UTS 编译成原生
 Kotlin / Swift，不走 webview；同一份代码也编 H5 与小程序。
 
-- 页面流：商品列表 / 搜索 → 商品详情 → 登录 → 下单（试算 → 提交）→ 我的订单 → 订单详情 → 发起支付
-- 首页有一排分类 chip（`GET /categories` 的根分类，点了按 `category_id` 重拉列表）。**服务端两样都
-  还没有**：`GET /categories` 是 404，`/products` 的 `category_id` 传了也被忽略。客户端按契约写好了：
-  拉不到分类就整排不显示，首页照常；服务端补上之后不用改客户端。
+- 页面流：商品列表 / 搜索 → 商品详情 →（加入购物车 → 购物车）→ 下单（选地址 → 试算 → 提交）
+  → 我的订单 → 订单详情 → 发起支付。tabBar：首页 / 购物车 / 订单 / 我的。
+- 首页有一排分类 chip（`GET /categories` 的根分类，点了按 `category_id` 重拉列表）。拉不到分类
+  （接口挂了）就整排不显示，首页照常。
 - 搜索走 `POST /search`（语义 + 关键词混合检索）。一期不翻页；服务端按相关度把召回到的都排出来、
-  不设阈值，所以不相关的商品会排在后面而不是消失。点击回传 `POST /search/events` 还没接：
-  服务端尚未实现（404），`/search` 的响应里也还没有用来串联的 `trace_id`。
+  不设阈值，所以不相关的商品会排在后面而不是消失。`in_stock_only` 默认 false：缺货商品也返回、
+  排在最后，搜索页给它挂「缺货」标并压暗。点击回传 `POST /search/events`（用 `/search` 响应里的
+  `trace_id` 串联）客户端还没接。
+- 收货地址：下单页用 `GET /addresses` 的默认地址（排第一且 `is_default`）；没有默认就让用户选，
+  一条都没有就引导去新建。地址簿页：新建（`POST`，带幂等键）、编辑（`PUT`，**不**切默认）、
+  删除、设默认（`PUT …/default`，专用接口）。422 按 `Problem.errors[].field` 标红对应输入框。
+  删掉默认地址后服务端不自动补一个默认，页面照实提示。
+- 购物车：每条请求都带与商品页 / 下单页同一个 `store_id`。不能买的行（`off_shelf` /
+  `not_sold_in_store` / `out_of_stock` / `insufficient_stock`）列出原因、不能勾选、不进合计。
+  合计用服务端的 `selected_total_cents`；去结算时结算页按同一家店重读购物车，把能买且勾选的行
+  送 `/orders/preview`，下单成功后把这几行从车里删掉。
+- 个人资料：`GET/PATCH /me`（昵称、性别），第三方账号列表与解绑（409 `last-credential` 提示先设密码）。
+  绑微信、换绑手机号服务端回 501，页面写「暂未开通」，不放必失败的按钮。
 - 优惠券：「我的」→ 领券中心（`GET /coupon-templates`，领券 `POST …/claim` 带幂等键，同一张模板在
   页面活着期间复用同一个键）/ 我的优惠券（`GET /coupons`，未使用 / 使用中 / 已使用 / 已过期四个 tab，
   「使用中」是锁在待支付订单上的）。结算页用试算响应里的 `applicable_coupons`：第一次试算后自动选
@@ -324,21 +335,21 @@ H5 构建产物 + 一个把 `/api` 反代给 Keel 的静态服务器，用无头
 | 我的订单 | `GET /orders` | ✅ 分页列表，状态与售后状态组合渲染 |
 | 换服务地址 | — | ✅ 本地令牌当场清掉 |
 | 搜索 | `POST /search` | ✅ 首页入口 → 搜索页，按相关度排序；Android / iPhone 真机 e2e 覆盖（按首页一件商品的标题搜，它排第一，点进去是它的详情） |
+| 收货地址 | `GET/POST/PUT/DELETE /addresses…`、`PUT …/default` | ✅ 小米真机 e2e（`address.test.js`）：列表与服务端一致、默认排第一；错的表单按 `errors[].field` 标红两项，改对后新建成功；结算页自动用默认地址 |
+| 购物车 | `GET /cart`、`POST /cart/items`、`PATCH /cart/items/{id}`、`POST …/batch-delete` | ✅ 小米真机 e2e（`cart.test.js`）：加购 → 调数量，合计与服务端 `selected_total_cents` 一致 → 去结算，试算商品金额 = 购物车合计 → 下单后这行从车里删掉。调大超库存时页面显示服务端 409 的原因（调试时实测） |
+| 个人资料 | `GET/PATCH /me`、`GET /me/identities` | ✅ 小米真机 e2e（`profile.test.js`）：回显昵称与脱敏手机号，改昵称后服务端是新值。解绑 / `last-credential` 没有自动化覆盖（演示买家没有第三方身份） |
 | 优惠券 | `GET /coupon-templates`、`POST /coupon-templates/{id}/claim`、`GET /coupons`、`POST /orders/preview` 的 `applicable_coupons` / `user_coupon_id` | ✅ 小米真机 e2e（`coupon.test.js`）：领「9 折」→ 我的优惠券四个 tab → 结算页自动用券、切「不使用」优惠归零。iOS 只验证了编译 |
 
 ### 只写了、没跑通的
 
-- **收货地址**。契约里有 `GET /addresses`，后端没有，所以下单页的 address_id 是
-  手填的（种子买家名下是 1），页面上写明了这件事。
 - **降级分支**。四条读接口的 `notImplemented` 分支（页面说「这条接口打过去是
   {404/405}，后端还没接上」）在后端补齐**之前**逐条验过；补齐之后它们不再触发。
   代码留着：接口会挂，而「这条没接上」和「这件东西不存在」对用户是两回事。
 - **`image_url` / `OrderItem.refunding_qty`**。契约声明了，服务端目前从不填
   （商品图的列与退款域的表都还没建）。客户端按可选处理，但没有「它有值」
   这条路径的实证。
-- **`in_stock`** 这条**已经不成立了**：`POST /search` 的每一条结果都带它
-  （`in_stock_only` 契约默认 true，是一条对 skus/inventories 的 EXISTS）。
-  `GET /products` 那一侧仍然不填。
+- **`in_stock`**：`POST /search` 的每一条结果都带它，`in_stock_only` 默认 false（缺货的也返回，
+  排在最后）。
 
 ### 完全没有验证的
 
@@ -390,7 +401,7 @@ app/
       view.uts          契约类型 -> 页面的 Row 类型（契约字段读取都收在这里）
     App.uvue            设计系统：色板与原子类（原生端没有 CSS 变量，改色只改这里）
     static/tabbar/      tabBar 图标 PNG（由 render-icons.sh 生成）
-    pages/…             11 个页面；首页 / 订单 / 我的 三个是 tabBar 页
+    pages/…             15 个页面；首页 / 购物车 / 订单 / 我的 四个是 tabBar 页
 ```
 
 ---

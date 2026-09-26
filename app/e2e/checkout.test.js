@@ -2,7 +2,7 @@
 //
 // 打的是 apk 里编进去的真实服务端（KEEL_API_BASE），每跑一次会真的建一笔订单并走沙箱入账。
 // 沙箱没有真实资金流动（见 app/README.md「沙箱支付」）。
-const { waitFor } = require('./helpers')
+const { waitFor, pickSku } = require('./helpers')
 
 describe('下单主链路', () => {
   let orderNo = ''
@@ -20,7 +20,8 @@ describe('下单主链路', () => {
   })
 
   it('试算出应付金额并下单', async () => {
-    const page = await program.navigateTo('/pages/order/create?sku_id=1&product_id=1')
+    const sku = await pickSku(1)
+    const page = await program.navigateTo('/pages/order/create?sku_id=' + sku.skuId + '&product_id=' + sku.productId)
     // 登录后进页面会自动试算；底部栏的应付金额从 — 变成具体金额。
     // 选择器只写单个类：原生端的选择器引擎不认后代选择器（`.bar .t-price-l` 返回 null，实测）。
     // 这一页上 .t-price-l 只有底部栏那一个。

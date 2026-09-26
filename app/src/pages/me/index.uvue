@@ -8,12 +8,22 @@
             <text class="t-title">{{ loggedIn ? displayName : '登录 / 注册' }}</text>
             <text class="t-sub">{{ loggedIn ? '欢迎回来' : '登录后可以下单、查看订单' }}</text>
           </view>
-          <text v-if="!loggedIn" class="chev">›</text>
+          <text class="chev">›</text>
         </view>
       </view>
 
       <view class="body">
         <view class="card-flat">
+          <view v-if="loggedIn" class="item" @click="goProfile">
+            <text class="t-body fill">个人资料</text>
+            <text class="chev">›</text>
+          </view>
+          <view v-if="loggedIn" class="line"></view>
+          <view class="item" @click="goAddresses">
+            <text class="t-body fill">收货地址</text>
+            <text class="chev">›</text>
+          </view>
+          <view class="line"></view>
           <view class="item" @click="goOrders">
             <text class="t-body fill">我的订单</text>
             <text class="chev">›</text>
@@ -93,10 +103,22 @@ export default {
     onProfile() {
       if (!this.loggedIn) {
         uni.navigateTo({ url: '/pages/auth/login' })
+        return
       }
+      this.goProfile()
     },
     goOrders() {
       uni.switchTab({ url: '/pages/order/list' })
+    },
+    goProfile() {
+      uni.navigateTo({ url: '/pages/me/profile' })
+    },
+    goAddresses() {
+      if (!this.loggedIn) {
+        uni.navigateTo({ url: '/pages/auth/login' })
+        return
+      }
+      uni.navigateTo({ url: '/pages/address/list' })
     },
     // 两个券页自己会在未登录时显示登录入口，这里不拦。
     goCoupons() {

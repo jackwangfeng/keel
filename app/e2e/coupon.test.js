@@ -5,18 +5,9 @@
 // 「领完之后按钮是『已领取』、这张券在我的优惠券里」，而不是「这一次一定是新领的」。
 // 结算那一步同理：手上有未使用的券才断言「自动用上了」，没有就断言「没有券也能正常算钱」。
 // 想从头跑一遍可以请服务端那边重置演示库。
-const { waitFor, httpGet, httpPost, apiBase } = require('./helpers')
+const { waitFor, pickSku, httpGet, apiBase, serverToken, loginInApp } = require('./helpers')
 
-const DEMO_PHONE = '13800000000'
-const DEMO_PASSWORD = 'keel-demo-2026'
 const NINE_OFF = '全场 9 折最高减 30'
-
-// 测试进程自己登录一次，拿 token 问服务端「现在手上有哪些券」。App 里的会话是另一份。
-async function serverToken() {
-  const res = await httpPost(apiBase() + '/auth/login', { phone: DEMO_PHONE, password: DEMO_PASSWORD })
-  if (res.status !== 200) throw new Error('测试进程登录失败：' + res.status + ' ' + JSON.stringify(res.body))
-  return res.body.access_token
-}
 
 async function serverCoupons(token, status) {
   const res = await httpGet(apiBase() + '/coupons?status=' + status + '&page_size=50', token)
@@ -25,13 +16,7 @@ async function serverCoupons(token, status) {
 }
 
 describe('优惠券', () => {
-  beforeAll(async () => {
-    await program.callUniMethod('clearStorageSync')
-    const page = await program.reLaunch('/pages/auth/login')
-    await page.waitFor(1000)
-    await (await page.$('.btn')).tap()
-    await waitFor(page, '.msg', (t) => t.includes('登录成功'))
-  })
+  beforeAll(loginInApp)
 
   it('领券中心领「9 折」：领到或已领过，最后按钮都是「已领取」', async () => {
     const page = await program.navigateTo('/pages/coupon/center')
@@ -86,7 +71,8 @@ describe('优惠券', () => {
     const token = await serverToken()
     const available = await serverCoupons(token, 'available')
 
-    const page = await program.navigateTo('/pages/order/create?sku_id=1&product_id=1')
+    const sku = await pickSku(1)
+    const page = await program.navigateTo('/pages/order/create?sku_id=' + sku.skuId + '&product_id=' + sku.productId)
     await waitFor(page, '.t-price-l', (t) => t.startsWith('¥'))
     const pv = await page.data('pv')
 
