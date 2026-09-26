@@ -264,7 +264,8 @@
     "refunds(received_by)": "同上，指向 staff。审核记录（00035）：谁确认收到了退货。",
     "uploads(staff_id)": "同上，指向 staff。归属字段；同表的 user_id 走的是复合外键，两者待遇不同不是笔误（数据模型 §14）。",
     "store_product_overrides(updated_by)": "同上，指向 staff。审计字段：记「谁在什么时候把这件商品在这家店下架了」，不在资金与库存的主链路上（数据模型 §4）。",
-    "region_product_overrides(updated_by)": "同上，指向 staff。大区那一层的同一个字段。"
+    "region_product_overrides(updated_by)": "同上，指向 staff。大区那一层的同一个字段。",
+    "notification_reads(staff_id)": "同上，指向 staff。后台铃铛的每员工已读状态（00053）：平台级员工用 X-Keel-Merchant 切进一家店读提醒时 merchant_id 为 NULL，复合外键写不进去；而他的已读状态同样要记。"
   },
   "unique_global_ok": {
     "_readme": [

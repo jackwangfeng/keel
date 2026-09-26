@@ -18,6 +18,7 @@
 
 import {
   ReportSearchEventRequest,
+  ReturnShipmentRequest,
   ListRefundsQuery,
   Refund,
   RefundCreateRequest,
@@ -1206,6 +1207,15 @@ export type RefundDetailView = {
   channelRefundId : string
   goodsText : string
   freightText : string
+  /** 凭证图的地址（/api/v1/uploads/{id}），要带令牌读，页面用 fetchUpload 取成本地文件再显示。 */
+  evidenceUrls : string[]
+  /** 退货退款且 20 待买家退货：可以填 / 改寄回物流。 */
+  canFillReturn : boolean
+  /** 已填的寄回物流；没填是空串。 */
+  returnCarrierCode : string
+  returnCarrierText : string
+  returnTrackingNo : string
+  returnSubmittedAt : string
 }
 
 export function refundDetailView(r : Refund) : RefundDetailView {
@@ -1223,6 +1233,7 @@ export function refundDetailView(r : Refund) : RefundDetailView {
   const code = r.reason_code != null ? r.reason_code! : 0
   const text = r.reason_text != null ? r.reason_text! : ''
   const reason = refundReasonText(code)
+  const rs = r.return_shipment
   return {
     head: refundRow(r),
     items: items,
@@ -1236,6 +1247,12 @@ export function refundDetailView(r : Refund) : RefundDetailView {
     channelRefundId: r.channel_refund_id != null ? r.channel_refund_id! : '',
     goodsText: yuan(r.goods_amount_cents),
     freightText: yuan(r.freight_cents),
+    evidenceUrls: r.evidence_urls != null ? r.evidence_urls! : ([] as string[]),
+    canFillReturn: r.refund_type == 2 && r.status == 20,
+    returnCarrierCode: rs != null ? rs!.carrier_code : '',
+    returnCarrierText: rs != null ? carrierName(rs!.carrier_code) : '',
+    returnTrackingNo: rs != null ? rs!.tracking_no : '',
+    returnSubmittedAt: rs != null ? shortTime(rs!.submitted_at) : '',
   } as RefundDetailView
 }
 
@@ -1287,14 +1304,55 @@ export type RefundLine = {
  * 售后申请的请求体。**不带金额**：每行实退多少由服务端按优惠分摊算。
  * refundType 由用户选（1 仅退款 / 2 退货退款），页面不给默认值 —— 服务端不猜，客户端也不猜。
  */
-export function refundRequest(lines : RefundLine[], refundType : number, reasonCode : number, reasonText : string) : RefundCreateRequest {
+export function refundRequest(lines : RefundLine[], refundType : number, reasonCode : number, reasonText : string, evidenceUrls : string[]) : RefundCreateRequest {
   const items : RefundItemInput[] = []
   for (let i = 0; i < lines.length; i++) {
     items.push({ order_item_id: lines[i].orderItemId, quantity: lines[i].quantity } as RefundItemInput)
   }
   const r : RefundCreateRequest = { items: items, refund_type: refundType, reason_code: reasonCode }
   if (reasonText != '') r.reason_text = reasonText
+  // 只放本人刚用 purpose=3 传的 /api/v1/uploads/{id}，原样回传（外链服务端一律 422）。
+  if (evidenceUrls.length > 0) r.evidence_urls = evidenceUrls
   return r
+}
+
+/**
+ * 能不能申请「退货退款」：货发出去了才有货可退。未发货的单服务端只收仅退款（否则 422），
+ * 申请页据此只给「仅退款」一个选项。
+ */
+export function refundReturnAllowed(o : OrderDetail) : boolean {
+  return o.status == 30 || o.status == 40
+}
+
+/** 承运商。code 与发货的 Shipment.carrier_code 同一套（契约举例 sf / jd / yto）。 */
+export type Carrier = {
+  code : string
+  name : string
+}
+
+export function carriers() : Carrier[] {
+  return [
+    { code: 'sf', name: '顺丰' } as Carrier,
+    { code: 'jd', name: '京东' } as Carrier,
+    { code: 'yto', name: '圆通' } as Carrier,
+    { code: 'zto', name: '中通' } as Carrier,
+    { code: 'sto', name: '申通' } as Carrier,
+    { code: 'yd', name: '韵达' } as Carrier,
+    { code: 'ems', name: 'EMS' } as Carrier,
+  ]
+}
+
+/** code -> 名字；不认识的 code（商家后台录的别家）原样显示。 */
+export function carrierName(code : string) : string {
+  const list = carriers()
+  for (let i = 0; i < list.length; i++) {
+    if (list[i].code == code.toLowerCase()) return list[i].name
+  }
+  return code
+}
+
+export function returnShipmentRequest(carrierCode : string, trackingNo : string) : ReturnShipmentRequest {
+  return { carrier_code: carrierCode, tracking_no: trackingNo } as ReturnShipmentRequest
 }
 
 export function refundListQuery(page : number, pageSize : number) : ListRefundsQuery {

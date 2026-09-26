@@ -10,6 +10,7 @@ import { notifyError } from "../ui/notify.ts";
 import { sections } from "../router/modules/index.ts";
 import MerchantSwitcher from "../components/MerchantSwitcher.vue";
 import MerchantScopeBanner from "../components/MerchantScopeBanner.vue";
+import NotificationBell from "../components/NotificationBell.vue";
 import { setMerchantScope } from "../api/merchantScope.ts";
 // 按角色的显示 / 置灰全在这个模块里，布局只调它（分级权限，v0.1.0）。
 import { roleLabel, sectionVisible } from "../auth/permissions.ts";
@@ -108,6 +109,7 @@ function copyToken(): void {
             <el-header class="header">
                 <div class="crumb">{{ route.meta.title ?? "" }}</div>
                 <div class="who">
+                    <NotificationBell />
                     <MerchantSwitcher />
                     <el-tag v-if="isPlatform" type="warning" size="small" effect="dark">平台级</el-tag>
                     <span class="who-text">{{ session?.staff.email }}（{{ roleText }}）</span>

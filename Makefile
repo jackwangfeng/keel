@@ -71,7 +71,7 @@ GOOSE := GOOSE_DRIVER=postgres GOOSE_DBSTRING="$(GOOSE_DBSTRING)" \
 	$(GOOSE_BIN)
 
 .PHONY: help generate generate-go generate-ts generate-sql generate-uts tools-versions version search-metrics \
-	contract-check schema-check app-type-check admin-install admin-type-check admin-test admin-build app-install app-build-h5 app-build-android app-build-mp-weixin app-apk app-apk-e2e app-e2e app-adb-wifi app-ios app-ios-e2e app-e2e-ios \
+	contract-check schema-check app-type-check admin-install admin-type-check admin-test admin-build app-install app-build-h5 app-build-android app-build-mp-weixin app-apk app-apk-e2e app-e2e app-e2e-h5 app-adb-wifi app-ios app-ios-e2e app-e2e-ios \
 	sdk-smoke goose-bin migrate migrate-down migrate-status test-db \
 	test-engine dtmrs-deps build
 
@@ -86,7 +86,7 @@ help:
 	@echo "make app-type-check 用 tsc --strict 检查 app/src 下全部 .uts"
 	@echo "make admin-install  装商家后台（web/admin）的依赖（npm ci，版本由 lock 锁定）"
 	@echo "make admin-type-check 用 vue-tsc --strict 检查 web/admin/src 下全部 .ts 与 .vue"
-	@echo "make admin-test     跑商家后台的单元测试（围栏几何与坐标系换算、券金额换算、订单与售后的按钮与请求体、运费模板校验）"
+	@echo "make admin-test     跑商家后台的单元测试（围栏几何与坐标系换算、券金额换算、订单与售后的按钮与请求体、铃铛的跳转、运费模板校验）"
 	@echo "make admin-build    构建商家后台静态产物（compose 起栈时会自己构建，日常不用跑）"
 	@echo "make app-install    装客户端依赖（含 npm 跳过 uts 原生 binding 的绕法）"
 	@echo "make app-build-h5   用 DCloud 编译器真编一遍 H5（要先 app-install）"
@@ -203,7 +203,7 @@ admin-type-check:
 # node_modules。别往 geo.ts 里加运行时 import，否则这里会以
 # ERR_MODULE_NOT_FOUND 失败。
 admin-test:
-	cd $(ROOT)/web/admin && node --test src/api/geo.test.ts src/api/money.test.ts src/api/orderRules.test.ts src/api/freightRules.test.ts
+	cd $(ROOT)/web/admin && node --test src/api/geo.test.ts src/api/money.test.ts src/api/orderRules.test.ts src/api/notifications.test.ts src/api/freightRules.test.ts
 
 # 构建静态产物到 web/admin/dist。日常不用跑：compose 起栈时在
 # docker/Dockerfile.admin 的 node 阶段里构建，产物交给 nginx。
@@ -241,6 +241,11 @@ app-apk-e2e:
 
 app-e2e:
 	cd $(ROOT)/app && npm run test:e2e
+
+# 同一套用例在本机 Chrome 无头里跑（带自动化运行时编 H5 → 同源反代 → playwright）。
+# 真机都锁屏时的兜底，一轮不到一分钟；只覆盖 JS / H5 那一层。要 KEEL_API_BASE。
+app-e2e-h5:
+	bash $(ROOT)/app/scripts/e2e-h5.sh
 
 # 插着线跑一次，之后拔线也能 make app-e2e。手机重启后要重跑。
 app-adb-wifi:

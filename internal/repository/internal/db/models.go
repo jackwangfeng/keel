@@ -190,6 +190,43 @@ type MerchantRevision struct {
 	CreatedAt  pgtype.Timestamptz
 }
 
+type Notification struct {
+	ID         int64
+	MerchantID int64
+	Audience   int16
+	UserID     *int64
+	StoreID    *int64
+	Kind       string
+	Title      string
+	Body       string
+	TargetType string
+	OrderNo    *string
+	RefundNo   *string
+	SkuID      *int64
+	DedupeKey  string
+	ReadAt     pgtype.Timestamptz
+	CreatedAt  pgtype.Timestamptz
+}
+
+type NotificationDelivery struct {
+	ID             int64
+	MerchantID     int64
+	NotificationID int64
+	Channel        string
+	Status         int16
+	Attempt        int32
+	Detail         *string
+	CreatedAt      pgtype.Timestamptz
+}
+
+type NotificationRead struct {
+	ID             int64
+	MerchantID     int64
+	NotificationID int64
+	StaffID        int64
+	ReadAt         pgtype.Timestamptz
+}
+
 type Order struct {
 	ID                   int64
 	MerchantID           int64

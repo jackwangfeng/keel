@@ -170,6 +170,44 @@ key 的有效期是 24 小时，作用域是「接口 + 用户 + key」。哪些
 
 ---
 
+## 消息中心（站内通知）
+
+订单与售后的关键状态变化会给买家发一条站内消息：支付成功、已发货（带物流）、
+自动确认收货即将到期（到期前一天）、系统自动确认收货、超时未支付被关闭、
+售后审核通过 / 驳回（带理由）、退款到账。买家**自己**做的动作（取消、确认收货、撤回售后）不发。
+通知与状态变化在同一个数据库事务里写入：状态改了消息一定在，回滚了消息一定不在。
+
+| 买家 | 接口 |
+|---|---|
+| 消息列表（分页，`unread_only=true` 只看未读；响应里带 `unread_count`） | `GET /me/notifications` |
+| 未读数（角标用） | `GET /me/notifications/unread-count` |
+| 标一条已读 | `POST /me/notifications/{notification_id}/read` |
+| 全部已读 | `POST /me/notifications/read-all` |
+
+两条标已读的接口**不需要** `Idempotency-Key`：已读是一次设置，重复调用结果不变；
+响应是标完之后的未读数，直接拿来刷新角标。不是自己的通知（或不存在）一律 404。
+
+每一条 `Notification`：
+
+| 字段 | 说明 |
+|---|---|
+| `kind` | 种类（`order_paid`、`order_shipped`、`refund_rejected`……，完整枚举见契约 `NotificationKind`）。**只用来挑图标**，不要按它拼文案 |
+| `title` / `body` | 服务端渲染好的中文标题与正文，**原样展示** |
+| `target` | 点了跳哪里：`type` 为 `order`（看 `order_no`）/ `refund`（看 `refund_no`，`order_no` 是所属订单）/ `inventory`（只在后台出现，`store_id` + `sku_id`）。四个定位字段都一定出现，用不上的是 `null` |
+| `read_at` | 已读时间，`null` 即未读 |
+| `created_at` | 产生时间，列表按它倒序 |
+
+客户端没有推送通道（本期没接微信订阅消息、短信），在「我的」页或底栏角标上
+**打开页面时拉一次未读数**、前台停留时每 30～60 秒轮询一次就够了。通知保留 90 天。
+
+后台员工有同构的四条：`GET /admin/notifications`、`GET /admin/notifications/unread-count`、
+`POST /admin/notifications/{notification_id}/read`、`POST /admin/notifications/read-all`。
+内容是商家侧的待办（新订单待发货、新的待审核售后、买家已寄回退货、库存预警），
+按员工的门店范围收窄（与 `GET /admin/orders` 同一个判据），已读状态每个员工各一份，
+范围外的通知标已读回 404。平台级会话同样可以用 `X-Keel-Merchant` 切到某家店读它的提醒。
+
+---
+
 ## SDK 与代码生成
 
 | 语言 | 位置 | 说明 |
