@@ -256,7 +256,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7);
 --
 -- biz_type 写死在语句里，不是参数：这条语句只为手工调整存在。
 -- biz_id 由调用方拼成 「adj:<staff_id>:<Idempotency-Key>」—— 谁、哪一次请求；
--- 「为什么」在 reason（00070）。
+-- 「为什么」在 reason（00063）。
 INSERT INTO inventory_logs (sku_id, store_id, change_qty, biz_type, biz_id,
                             before_available, after_available, reason)
 VALUES (sqlc.arg(sku_id), sqlc.arg(store_id), sqlc.arg(change_qty), 5, sqlc.arg(biz_id),

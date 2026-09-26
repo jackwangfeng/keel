@@ -39,14 +39,14 @@ so "which one is running?" never depends on anyone's memory.
 
 ## [Unreleased]
 
-Migrations `00027`–`00038`, `00053`–`00062` and `00070`.
+Migrations `00027`–`00038`, `00053`–`00063`.
 
 
 ### Added
 
 - **Relative inventory adjustments** (`POST /admin/stores/{store_id}/skus/{sku_id}/inventory/adjustments`,
   plus the single-store shortcut `POST /admin/skus/{sku_id}/inventory/adjustments`;
-  migration `00070`). The body is just `delta` (non-zero, |delta| ≤ 1,000,000) and an
+  migration `00063`). The body is just `delta` (non-zero, |delta| ≤ 1,000,000) and an
   optional `reason` (≤ 200 characters). Restocking 100 units no longer means
   read-then-compare-and-set-then-retry-on-409: the server adds the delta to the live
   value in one conditional statement, so concurrent restocks and concurrent order

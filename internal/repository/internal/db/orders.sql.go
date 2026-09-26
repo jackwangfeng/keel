@@ -79,7 +79,7 @@ type AppendManualInventoryLogParams struct {
 //
 // biz_type 写死在语句里，不是参数：这条语句只为手工调整存在。
 // biz_id 由调用方拼成 「adj:<staff_id>:<Idempotency-Key>」—— 谁、哪一次请求；
-// 「为什么」在 reason（00070）。
+// 「为什么」在 reason（00063）。
 func (q *Queries) AppendManualInventoryLog(ctx context.Context, arg AppendManualInventoryLogParams) error {
 	_, err := q.db.Exec(ctx, appendManualInventoryLog,
 		arg.SkuID,
