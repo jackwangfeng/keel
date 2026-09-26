@@ -240,8 +240,6 @@ are not there yet, and are listed so that nothing above reads as if it ships:
   outbound-channel interface and delivery log for WeChat subscribe messages,
   SMS and e-mail are in place, but no real channel is wired up — every
   delivery is recorded as "not configured, skipped"
-- **shipping fees.** There are none, which is why free-shipping coupons cannot
-  be created yet
 - **real payment channels.** Payments run in a sandbox whose callback path is
   the real one (signature check, amount check, de-duplication), but no WeChat
   Pay or Alipay merchant account is wired in
@@ -254,7 +252,10 @@ are not there yet, and are listed so that nothing above reads as if it ships:
 Products & SKUs · category tree · per-store inventory · three-tier pricing
 (base → region → store) · cart · address book · checkout · payments · cancel ·
 shipping · confirm receipt · after-sales refunds · coupons (amount-off /
-percent-off / no-threshold, claim center and targeted grants) · order state
+percent-off / no-threshold / free-shipping, claim center and targeted grants) ·
+shipping-fee templates (per piece or by weight, priced per province, free over
+an amount or a quantity after discounts, undeliverable regions, per store or
+shop-wide) · order state
 machine · multi-store with delivery fences · tiered staff roles · in-app
 notifications (buyer message center and console to-do bell, written in the same
 transaction as the state change)
@@ -424,7 +425,7 @@ battle-tested at scale. What it has is a stronger core.
   inference engine's rerank endpoint) and an offline evaluation set to do
 - [ ] **M6 Ready to open a shop** — in-app notifications and console to-dos ✅
   (written in the same transaction as the state change, outbound channels
-  pluggable); shipping-fee templates and free-shipping coupons (in progress); real
+  pluggable); shipping-fee templates and free-shipping coupons ✅; real
   payments, WeChat login and SMS codes need business qualifications and will
   be wired in once those are in hand
 - [ ] **M7 Ready to do business** — promotions (tiered discounts, flash

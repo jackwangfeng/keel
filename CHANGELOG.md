@@ -39,7 +39,7 @@ so "which one is running?" never depends on anyone's memory.
 
 ## [Unreleased]
 
-Migrations `00027`–`00038` and `00053`.
+Migrations `00027`–`00038`, `00041`–`00042` and `00053`.
 
 ### Added
 
@@ -172,6 +172,53 @@ Migrations `00027`–`00038` and `00053`.
   create/compensate, amount-mismatch callbacks, manual stock edits…). Every edge
   of both state machines must be accounted for too.
 
+### Added — shipping fees and free-shipping coupons (migrations 00041–00042)
+
+- **Shipping-fee templates** (data model §7). A template is a charge mode (per
+  piece, or by weight using each SKU's `weight_gram`), a set of rules keyed by
+  province-level division code — first unit + fee, each additional unit + fee,
+  free over an amount and/or a quantity — plus a list of undeliverable
+  provinces. Exactly one rule is the "everywhere else" default; a province may
+  appear in only one rule. Templates are either shop-wide (products can be
+  pinned to one; one of them can be the shop default) or per store (at most one
+  per store). A line uses the product's pinned template, else its fulfilling
+  store's template, else the shop default, else ships free (`no_template`).
+  Lines on different templates are priced separately and summed.
+- **Admin API**: `GET/POST /admin/freight-templates`,
+  `GET/PUT/DELETE /admin/freight-templates/{template_id}` (`POST` needs an
+  `Idempotency-Key`; `PUT` replaces the whole template; `DELETE` is a soft
+  delete refused with `409 freight-template-in-use` while products are pinned to
+  it). Shop-wide templates are writable by admins and operators; store templates
+  follow the store-price rule (region managers for their regions, store managers
+  for their own store). `AdminProduct.freight_template_id` pins a product.
+- **Freight is priced by `POST /orders/preview` and written by `POST /orders`**,
+  always in this order: list price → promotions → coupon (threshold judged after
+  promotions) → shipping (free-over-amount judged on the goods total **after**
+  discounts) → free-shipping coupon. Orders store `freight_cents`, the new
+  `freight_discount_cents`, and a `freight` snapshot of the rules used, so later
+  template edits never rewrite history. The amount identity
+  `payable = goods + freight − discount` is unchanged (`discount` includes the
+  freight a coupon covered) and a new `chk_freight_discount` keeps the coupon
+  from covering more than the freight.
+- **Undeliverable addresses are refused per line**: preview and order return
+  `422 region-not-deliverable` with `undeliverable_items`
+  (`sku_id`, `reason_code`, `reason`).
+- **Free-shipping coupons (`coupon_type = 4`) can be created.** They cover the
+  freight, capped by `max_discount_cents` (0 means all of it), never below zero,
+  and are not applicable to an order whose freight is already zero.
+- **Cart shows estimated freight**: every cart operation returning a `Cart`
+  accepts an optional `address_id` (default: the buyer's default address) and
+  returns `freight`, `address_id` and a per-line `undeliverable` marker.
+- **After-sales refunds use the freight actually paid** (`freight_cents −
+  freight_discount_cents`) both for the full refund of an unshipped order and as
+  the cap for return-freight decided at audit.
+- **Console**: a new "运费模板" page (province picker, per-rule free-shipping
+  conditions, undeliverable provinces), a template picker on the product page,
+  and the free-shipping option in the coupon dialog.
+- **Demo seed** gives the `demo` shop a default template (¥8 first piece, ¥2 each
+  additional, free over ¥99; remote provinces ¥15 + ¥5 with no free shipping;
+  Hong Kong, Macao and Taiwan undeliverable).
+
 ### Added — order fulfillment (migration 00033)
 
 - **Buyer cancellation** (`POST /orders/{order_no}/cancel`): closes a pending
@@ -287,6 +334,16 @@ Migrations `00027`–`00038` and `00053`.
 
 ### Changed
 
+- **Contract (breaking for generated clients):** `OrderPreview.freight_cents`,
+  `freight_discount_cents` and `freight` are now required — freight used to be
+  absent ("not computed"), it is now always computed, `0` with
+  `free_reason = no_template` when the shop has no template. `Order` gains
+  `freight_discount_cents`; `OrderDetail` / `AdminOrderDetail` gain `freight`;
+  `Problem` gains `undeliverable_items`; the five `Cart` operations take
+  `address_id`; `CouponApplicableRequest` takes an optional `address_id`
+  (free-shipping coupons are only listed when it is given). `POST
+  /orders/preview` now looks up `address_id` and answers `422` for an unknown
+  address, as `POST /orders` always did. Regenerate your client.
 - **`explain: true` lists exactly the stages that ran.** `scores.business`
   appears when business re-ranking ran; `scores.vector` is absent when the
   vector route did not run (engine down or not configured); `scores.final` is
@@ -322,6 +379,11 @@ Migrations `00027`–`00038` and `00053`.
 
 ### Fixed
 
+- **`PATCH /admin/products/{product_id}` with `"brand_id": null` now clears the
+  brand.** `encoding/json` turns a JSON `null` into a nil pointer without calling
+  `UnmarshalJSON`, so an explicit `null` was indistinguishable from an omitted
+  field and was ignored. Presence is now read from the raw object (the same fix
+  covers the new `freight_template_id`).
 - **Referencing an upload a second time no longer fails.** `MarkUploadReferenced`
   only matched rows not yet referenced, so re-using an image (the same picture on
   a second SKU, the same evidence on a re-submitted refund) affected zero rows and
@@ -376,6 +438,10 @@ Migrations `00027`–`00038` and `00053`.
 
 ### Not yet
 
+- Shipping-fee regions stop at the province level (no city or county rules),
+  and lines on different templates are summed rather than merged the way a
+  single parcel would be. Who pays return freight is still decided by staff at
+  audit.
 - No outbound notification channel is wired up (WeChat subscribe messages, SMS
   and e-mail all need credentials this project does not have); buyers have no
   notification preferences yet.

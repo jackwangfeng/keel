@@ -190,6 +190,7 @@ compose 里已经有一个 `KEEL_ADMIN_PASSWORD`，而那是数据库超级用�
 | 售后 | 真能用 | `GET /admin/refunds`（默认筛待审核 `status=10`）、`GET /admin/refunds/{refund_no}`、`POST .../audit`（同意 / 驳回，退货退款可裁定运费）、`POST .../receipt`（确认收到退货）。每行退款金额只展示服务端算好的数 |
 | 大区 | 真能用 | `GET/POST /admin/regions`、`PATCH/DELETE /admin/regions/{id}`、`GET /admin/regions/{id}/products`、`PUT .../products/{id}/listing`、`PUT/DELETE .../skus/{id}/price` |
 | 门店 | 真能用 | `GET/POST /admin/stores`、`GET/PATCH/DELETE /admin/stores/{id}`、`PUT .../fence`、`PUT .../default`、`GET .../products`、`PUT .../products/{id}/listing`、`PUT/DELETE .../skus/{id}/price`、`GET .../inventories`、`PUT .../skus/{id}/inventory` |
+| 运费模板 | 真能用 | `GET/POST /admin/freight-templates`、`GET/PUT/DELETE /admin/freight-templates/{id}`（新建带 Idempotency-Key，编辑整体替换）；商品详情「运费模板」下拉走 `PATCH /admin/products/{id}` 的 `freight_template_id`。按省多选与提交前校验是 `src/api/freightRules.ts` 的纯函数（`make admin-test`），运费金额不在前端算 |
 | 顶栏铃铛（待办提醒） | 真能用 | `GET /admin/notifications`（下拉最近 20 条，响应带未读数）、`GET /admin/notifications/unread-count`（30 秒轮询、切页刷新）、`POST /admin/notifications/{id}/read`（点一条先标已读再跳订单 / 售后 / 门店库存页签）、`POST /admin/notifications/read-all`。范围与已读都是**调用者自己的**，跳转规则是 `src/api/notifications.ts` 的纯函数（`make admin-test`） |
 
 门店与大区当初是占位页，接上时改的正是这里原先写的两步：换掉
