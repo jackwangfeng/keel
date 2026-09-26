@@ -6615,7 +6615,7 @@ type GetAdminReportsInventoryAlertsParams struct {
 	// RegionId 只看此刻挂在这个大区下的门店。与调用者的范围取交集。
 	RegionId *ReportRegionId `form:"region_id,omitempty" json:"region_id,omitempty"`
 
-	// Limit 最多返回几条。超出范围按边界钳制。
+	// Limit 最多返回几条，不传即 50。超出范围按边界钳制。
 	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
 
 	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
@@ -6648,7 +6648,8 @@ type GetAdminReportsOverviewParams struct {
 	// Period 时间窗口，按店铺时区的自然日切（口径见 `ReportWindow`）：
 	// `today` 今天 0 点到此刻 · `yesterday` 昨天 · `last_7_days` 最近 7 个完整自然日（不含今天）·
 	// `last_30_days` 最近 30 个完整自然日（不含今天）· `custom` 自定义（必须同时给
-	// `start_date` 与 `end_date`）。
+	// `start_date` 与 `end_date`）。**不传即 `today`**（写在这里而不是 schema 的 `default` 上：
+	// 查询参数的缺省值会被生成器代入，静默改变筛选语义，check_openapi.py 不许）。
 	Period *GetAdminReportsOverviewParamsPeriod `form:"period,omitempty" json:"period,omitempty"`
 
 	// StartDate `period=custom` 时的起始日（含），店铺时区的日期，形如 `2026-09-01`。
@@ -6698,7 +6699,8 @@ type GetAdminReportsProductsParams struct {
 	// Period 时间窗口，按店铺时区的自然日切（口径见 `ReportWindow`）：
 	// `today` 今天 0 点到此刻 · `yesterday` 昨天 · `last_7_days` 最近 7 个完整自然日（不含今天）·
 	// `last_30_days` 最近 30 个完整自然日（不含今天）· `custom` 自定义（必须同时给
-	// `start_date` 与 `end_date`）。
+	// `start_date` 与 `end_date`）。**不传即 `today`**（写在这里而不是 schema 的 `default` 上：
+	// 查询参数的缺省值会被生成器代入，静默改变筛选语义，check_openapi.py 不许）。
 	Period *GetAdminReportsProductsParamsPeriod `form:"period,omitempty" json:"period,omitempty"`
 
 	// StartDate `period=custom` 时的起始日（含），店铺时区的日期，形如 `2026-09-01`。
@@ -6715,13 +6717,13 @@ type GetAdminReportsProductsParams struct {
 	// RegionId 只看此刻挂在这个大区下的门店。与调用者的范围取交集。
 	RegionId *ReportRegionId `form:"region_id,omitempty" json:"region_id,omitempty"`
 
-	// SortBy 按什么排：`amount` 销售额（默认）、`quantity` 销量。不认识的值按默认。
+	// SortBy 按什么排：`amount` 销售额、`quantity` 销量。不传或不认识的值按 `amount`。
 	SortBy *GetAdminReportsProductsParamsSortBy `form:"sort_by,omitempty" json:"sort_by,omitempty"`
 
 	// CategoryId 只看这个类目（含子孙类目）下的商品。类目不存在或已删除时结果为空。
 	CategoryId *int64 `form:"category_id,omitempty" json:"category_id,omitempty"`
 
-	// Limit Top N 的 N。超出范围按边界钳制。
+	// Limit Top N 的 N，不传即 10。超出范围按边界钳制。
 	Limit *ReportLimit `form:"limit,omitempty" json:"limit,omitempty"`
 
 	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
@@ -6760,7 +6762,8 @@ type GetAdminReportsSearchParams struct {
 	// Period 时间窗口，按店铺时区的自然日切（口径见 `ReportWindow`）：
 	// `today` 今天 0 点到此刻 · `yesterday` 昨天 · `last_7_days` 最近 7 个完整自然日（不含今天）·
 	// `last_30_days` 最近 30 个完整自然日（不含今天）· `custom` 自定义（必须同时给
-	// `start_date` 与 `end_date`）。
+	// `start_date` 与 `end_date`）。**不传即 `today`**（写在这里而不是 schema 的 `default` 上：
+	// 查询参数的缺省值会被生成器代入，静默改变筛选语义，check_openapi.py 不许）。
 	Period *GetAdminReportsSearchParamsPeriod `form:"period,omitempty" json:"period,omitempty"`
 
 	// StartDate `period=custom` 时的起始日（含），店铺时区的日期，形如 `2026-09-01`。
@@ -6771,7 +6774,7 @@ type GetAdminReportsSearchParams struct {
 	// （含首尾，一整个闰年），超出 422 —— 理由见 `ReportWindow`。
 	EndDate *ReportEndDate `form:"end_date,omitempty" json:"end_date,omitempty"`
 
-	// Limit Top N 的 N。超出范围按边界钳制。
+	// Limit Top N 的 N，不传即 10。超出范围按边界钳制。
 	Limit *ReportLimit `form:"limit,omitempty" json:"limit,omitempty"`
 
 	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
@@ -6807,7 +6810,8 @@ type GetAdminReportsStoresParams struct {
 	// Period 时间窗口，按店铺时区的自然日切（口径见 `ReportWindow`）：
 	// `today` 今天 0 点到此刻 · `yesterday` 昨天 · `last_7_days` 最近 7 个完整自然日（不含今天）·
 	// `last_30_days` 最近 30 个完整自然日（不含今天）· `custom` 自定义（必须同时给
-	// `start_date` 与 `end_date`）。
+	// `start_date` 与 `end_date`）。**不传即 `today`**（写在这里而不是 schema 的 `default` 上：
+	// 查询参数的缺省值会被生成器代入，静默改变筛选语义，check_openapi.py 不许）。
 	Period *GetAdminReportsStoresParamsPeriod `form:"period,omitempty" json:"period,omitempty"`
 
 	// StartDate `period=custom` 时的起始日（含），店铺时区的日期，形如 `2026-09-01`。
@@ -6854,7 +6858,8 @@ type GetAdminReportsTrendParams struct {
 	// Period 时间窗口，按店铺时区的自然日切（口径见 `ReportWindow`）：
 	// `today` 今天 0 点到此刻 · `yesterday` 昨天 · `last_7_days` 最近 7 个完整自然日（不含今天）·
 	// `last_30_days` 最近 30 个完整自然日（不含今天）· `custom` 自定义（必须同时给
-	// `start_date` 与 `end_date`）。
+	// `start_date` 与 `end_date`）。**不传即 `today`**（写在这里而不是 schema 的 `default` 上：
+	// 查询参数的缺省值会被生成器代入，静默改变筛选语义，check_openapi.py 不许）。
 	Period *GetAdminReportsTrendParamsPeriod `form:"period,omitempty" json:"period,omitempty"`
 
 	// StartDate `period=custom` 时的起始日（含），店铺时区的日期，形如 `2026-09-01`。

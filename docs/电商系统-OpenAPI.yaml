@@ -5117,8 +5117,8 @@ paths:
         - $ref: '#/components/parameters/ReportRegionId'
         - name: sort_by
           in: query
-          description: 按什么排：`amount` 销售额（默认）、`quantity` 销量。不认识的值按默认。
-          schema: { type: string, enum: [amount, quantity], default: amount }
+          description: 按什么排：`amount` 销售额、`quantity` 销量。不传或不认识的值按 `amount`。
+          schema: { type: string, enum: [amount, quantity] }
         - name: category_id
           in: query
           description: 只看这个类目（含子孙类目）下的商品。类目不存在或已删除时结果为空。
@@ -5185,8 +5185,8 @@ paths:
         - $ref: '#/components/parameters/ReportRegionId'
         - name: limit
           in: query
-          description: 最多返回几条。超出范围按边界钳制。
-          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+          description: 最多返回几条，不传即 50。超出范围按边界钳制。
+          schema: { type: integer, minimum: 1, maximum: 200 }
       responses:
         '200':
           description: OK
@@ -5641,8 +5641,9 @@ components:
         时间窗口，按店铺时区的自然日切（口径见 `ReportWindow`）：
         `today` 今天 0 点到此刻 · `yesterday` 昨天 · `last_7_days` 最近 7 个完整自然日（不含今天）·
         `last_30_days` 最近 30 个完整自然日（不含今天）· `custom` 自定义（必须同时给
-        `start_date` 与 `end_date`）。
-      schema: { type: string, enum: [today, yesterday, last_7_days, last_30_days, custom], default: today }
+        `start_date` 与 `end_date`）。**不传即 `today`**（写在这里而不是 schema 的 `default` 上：
+        查询参数的缺省值会被生成器代入，静默改变筛选语义，check_openapi.py 不许）。
+      schema: { type: string, enum: [today, yesterday, last_7_days, last_30_days, custom] }
     ReportStartDate:
       name: start_date
       in: query
@@ -5670,8 +5671,8 @@ components:
     ReportLimit:
       name: limit
       in: query
-      description: Top N 的 N。超出范围按边界钳制。
-      schema: { type: integer, minimum: 1, maximum: 50, default: 10 }
+      description: Top N 的 N，不传即 10。超出范围按边界钳制。
+      schema: { type: integer, minimum: 1, maximum: 50 }
     KeelMerchant:
       name: X-Keel-Merchant
       in: header

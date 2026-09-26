@@ -10146,7 +10146,8 @@ export interface paths {
                      * @description 时间窗口，按店铺时区的自然日切（口径见 `ReportWindow`）：
                      *     `today` 今天 0 点到此刻 · `yesterday` 昨天 · `last_7_days` 最近 7 个完整自然日（不含今天）·
                      *     `last_30_days` 最近 30 个完整自然日（不含今天）· `custom` 自定义（必须同时给
-                     *     `start_date` 与 `end_date`）。
+                     *     `start_date` 与 `end_date`）。**不传即 `today`**（写在这里而不是 schema 的 `default` 上：
+                     *     查询参数的缺省值会被生成器代入，静默改变筛选语义，check_openapi.py 不许）。
                      */
                     period?: components["parameters"]["ReportPeriod"];
                     /**
@@ -10242,7 +10243,8 @@ export interface paths {
                      * @description 时间窗口，按店铺时区的自然日切（口径见 `ReportWindow`）：
                      *     `today` 今天 0 点到此刻 · `yesterday` 昨天 · `last_7_days` 最近 7 个完整自然日（不含今天）·
                      *     `last_30_days` 最近 30 个完整自然日（不含今天）· `custom` 自定义（必须同时给
-                     *     `start_date` 与 `end_date`）。
+                     *     `start_date` 与 `end_date`）。**不传即 `today`**（写在这里而不是 schema 的 `default` 上：
+                     *     查询参数的缺省值会被生成器代入，静默改变筛选语义，check_openapi.py 不许）。
                      */
                     period?: components["parameters"]["ReportPeriod"];
                     /**
@@ -10345,7 +10347,8 @@ export interface paths {
                      * @description 时间窗口，按店铺时区的自然日切（口径见 `ReportWindow`）：
                      *     `today` 今天 0 点到此刻 · `yesterday` 昨天 · `last_7_days` 最近 7 个完整自然日（不含今天）·
                      *     `last_30_days` 最近 30 个完整自然日（不含今天）· `custom` 自定义（必须同时给
-                     *     `start_date` 与 `end_date`）。
+                     *     `start_date` 与 `end_date`）。**不传即 `today`**（写在这里而不是 schema 的 `default` 上：
+                     *     查询参数的缺省值会被生成器代入，静默改变筛选语义，check_openapi.py 不许）。
                      */
                     period?: components["parameters"]["ReportPeriod"];
                     /**
@@ -10362,11 +10365,11 @@ export interface paths {
                     store_id?: components["parameters"]["ReportStoreId"];
                     /** @description 只看此刻挂在这个大区下的门店。与调用者的范围取交集。 */
                     region_id?: components["parameters"]["ReportRegionId"];
-                    /** @description 按什么排：`amount` 销售额（默认）、`quantity` 销量。不认识的值按默认。 */
+                    /** @description 按什么排：`amount` 销售额、`quantity` 销量。不传或不认识的值按 `amount`。 */
                     sort_by?: "amount" | "quantity";
                     /** @description 只看这个类目（含子孙类目）下的商品。类目不存在或已删除时结果为空。 */
                     category_id?: number;
-                    /** @description Top N 的 N。超出范围按边界钳制。 */
+                    /** @description Top N 的 N，不传即 10。超出范围按边界钳制。 */
                     limit?: components["parameters"]["ReportLimit"];
                 };
                 header?: {
@@ -10450,7 +10453,8 @@ export interface paths {
                      * @description 时间窗口，按店铺时区的自然日切（口径见 `ReportWindow`）：
                      *     `today` 今天 0 点到此刻 · `yesterday` 昨天 · `last_7_days` 最近 7 个完整自然日（不含今天）·
                      *     `last_30_days` 最近 30 个完整自然日（不含今天）· `custom` 自定义（必须同时给
-                     *     `start_date` 与 `end_date`）。
+                     *     `start_date` 与 `end_date`）。**不传即 `today`**（写在这里而不是 schema 的 `default` 上：
+                     *     查询参数的缺省值会被生成器代入，静默改变筛选语义，check_openapi.py 不许）。
                      */
                     period?: components["parameters"]["ReportPeriod"];
                     /**
@@ -10546,7 +10550,7 @@ export interface paths {
                     store_id?: components["parameters"]["ReportStoreId"];
                     /** @description 只看此刻挂在这个大区下的门店。与调用者的范围取交集。 */
                     region_id?: components["parameters"]["ReportRegionId"];
-                    /** @description 最多返回几条。超出范围按边界钳制。 */
+                    /** @description 最多返回几条，不传即 50。超出范围按边界钳制。 */
                     limit?: number;
                 };
                 header?: {
@@ -10633,7 +10637,8 @@ export interface paths {
                      * @description 时间窗口，按店铺时区的自然日切（口径见 `ReportWindow`）：
                      *     `today` 今天 0 点到此刻 · `yesterday` 昨天 · `last_7_days` 最近 7 个完整自然日（不含今天）·
                      *     `last_30_days` 最近 30 个完整自然日（不含今天）· `custom` 自定义（必须同时给
-                     *     `start_date` 与 `end_date`）。
+                     *     `start_date` 与 `end_date`）。**不传即 `today`**（写在这里而不是 schema 的 `default` 上：
+                     *     查询参数的缺省值会被生成器代入，静默改变筛选语义，check_openapi.py 不许）。
                      */
                     period?: components["parameters"]["ReportPeriod"];
                     /**
@@ -10646,7 +10651,7 @@ export interface paths {
                      *     （含首尾，一整个闰年），超出 422 —— 理由见 `ReportWindow`。
                      */
                     end_date?: components["parameters"]["ReportEndDate"];
-                    /** @description Top N 的 N。超出范围按边界钳制。 */
+                    /** @description Top N 的 N，不传即 10。超出范围按边界钳制。 */
                     limit?: components["parameters"]["ReportLimit"];
                 };
                 header?: {
@@ -13740,7 +13745,8 @@ export interface components {
          * @description 时间窗口，按店铺时区的自然日切（口径见 `ReportWindow`）：
          *     `today` 今天 0 点到此刻 · `yesterday` 昨天 · `last_7_days` 最近 7 个完整自然日（不含今天）·
          *     `last_30_days` 最近 30 个完整自然日（不含今天）· `custom` 自定义（必须同时给
-         *     `start_date` 与 `end_date`）。
+         *     `start_date` 与 `end_date`）。**不传即 `today`**（写在这里而不是 schema 的 `default` 上：
+         *     查询参数的缺省值会被生成器代入，静默改变筛选语义，check_openapi.py 不许）。
          */
         ReportPeriod: "today" | "yesterday" | "last_7_days" | "last_30_days" | "custom";
         /**
@@ -13757,7 +13763,7 @@ export interface components {
         ReportStoreId: number;
         /** @description 只看此刻挂在这个大区下的门店。与调用者的范围取交集。 */
         ReportRegionId: number;
-        /** @description Top N 的 N。超出范围按边界钳制。 */
+        /** @description Top N 的 N，不传即 10。超出范围按边界钳制。 */
         ReportLimit: number;
         /**
          * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
