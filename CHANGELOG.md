@@ -39,9 +39,14 @@ so "which one is running?" never depends on anyone's memory.
 
 ## [Unreleased]
 
-First release will be cut at the end of M4. Everything below has landed on
-`main` and is covered by the gates described in `CONTRIBUTING.md`; this section
-becomes `0.1.0` when the remaining M4 work is in.
+Nothing yet.
+
+## [0.1.0] - 2026-09-26
+
+The first release. It closes milestone M4: a merchant can open a shop, publish
+products, run it as a chain of regions and stores with their own prices and
+stock, and sell with coupons — from a back office, not just from `curl`.
+Everything below is covered by the gates described in `CONTRIBUTING.md`.
 
 ### Added — foundation (M1)
 
@@ -329,4 +334,5 @@ Listed because a changelog that only lists wins is an advertisement.
   show why a product was rejected last time; the merchant only ever saw it in
   that one response.
 
-[Unreleased]: https://github.com/jackwangfeng/keel/commits/main
+[Unreleased]: https://github.com/jackwangfeng/keel/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/jackwangfeng/keel/releases/tag/v0.1.0

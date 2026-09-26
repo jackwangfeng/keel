@@ -84,7 +84,8 @@ jobs:
           go-version-file: go.mod
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          # 与 ci.yml 的 gates 同一个版本：两处不一致时，「CI 绿、发布红」是最难查的那种。
+          node-version: '24'
 
       # check-all.sh 里的 admin-type-check 要 web/admin/node_modules。
       # 和 ci.yml 的 gates 一样：装上，而不是跳过。

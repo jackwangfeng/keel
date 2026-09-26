@@ -6,6 +6,9 @@
 the **Security** tab → **Report a vulnerability**. That opens a draft advisory
 visible only to you and the maintainers.
 
+If you cannot use GitHub's reporting, e-mail **jackwangfeng163@gmail.com**
+instead. Put `[keel security]` in the subject so it is not lost among other mail.
+
 There is no response-time commitment here, because one that nobody measures is
 worth nothing. This is a small project; reports are read.
 
