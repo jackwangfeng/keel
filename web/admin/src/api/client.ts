@@ -91,6 +91,16 @@ export type OrderItem = S["OrderItem"];
 export type Shipment = S["Shipment"];
 export type StaffRef = S["StaffRef"];
 
+// 经营报表（契约 Report tag，00048）。
+export type ReportOverview = S["ReportOverview"];
+export type ReportMetrics = S["ReportMetrics"];
+export type ReportTrend = S["ReportTrend"];
+export type ReportTrendPoint = S["ReportTrendPoint"];
+export type ReportProductRanking = S["ReportProductRanking"];
+export type ReportStoreComparison = S["ReportStoreComparison"];
+export type ReportInventoryAlerts = S["ReportInventoryAlerts"];
+export type ReportSearchOverview = S["ReportSearchOverview"];
+
 /** `GET /admin/products` 的响应体（PageMeta 三个字段 + items）。 */
 export type AdminProductPage = ResponseBodyOf<"/admin/products", "get">;
 /** `GET /admin/staff` 的响应体。 */
