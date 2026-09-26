@@ -39,7 +39,7 @@ so "which one is running?" never depends on anyone's memory.
 
 ## [Unreleased]
 
-Migrations `00027`–`00038` and `00053`–`00061`.
+Migrations `00027`–`00038` and `00053`–`00062`.
 
 
 ### Added
@@ -465,6 +465,10 @@ Migrations `00027`–`00038` and `00053`–`00061`.
 
 ### Changed
 
+- **`products.total_stock` dropped** (migration `00062`). Nothing had written it since
+  `00019`, so it was always 0; `AdminProduct.total_stock` in the API was already computed
+  from `inventories` and is unchanged. Seeds or manual SQL that inserted the column must
+  drop it.
 - **Coupon thresholds and percentages now apply to the post-promotion amount**
   of each line (`amount_cents − promotion_discount_cents`), not the store price.
   Without promotions nothing changes. A promotion can be marked as not stackable

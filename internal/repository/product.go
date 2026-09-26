@@ -27,7 +27,6 @@ type Product struct {
 	Subtitle      *string
 	MinPriceCents int64
 	MaxPriceCents int64
-	TotalStock    int32
 	SalesCount    int32
 	Status        int16
 }
@@ -174,7 +173,6 @@ func (t tenantTx) ListProducts(ctx context.Context, sc StoreScope, categoryID *i
 			Subtitle:      r.Subtitle,
 			MinPriceCents: r.MinPriceCents,
 			MaxPriceCents: r.MaxPriceCents,
-			TotalStock:    r.TotalStock,
 			SalesCount:    r.SalesCount,
 			Status:        r.Status,
 		})

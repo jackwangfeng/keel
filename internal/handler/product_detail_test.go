@@ -118,7 +118,7 @@ func TestProductDetailCarriesEverySellableSKUWithItsRealStock(t *testing.T) {
 		}
 	}
 
-	// in_stock 是算出来的，不是 products.total_stock 那一列。这件商品里
+	// in_stock 是按 SKU 水位现算的（不读任何汇总列）。这件商品里
 	// 至少有一个 SKU 有货，所以它必须是 true，而且必须**出现**在响应里。
 	if d.InStock == nil {
 		t.Fatal("响应里没有 in_stock —— 契约里它是可选字段，" +

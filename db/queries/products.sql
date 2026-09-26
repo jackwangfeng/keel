@@ -48,7 +48,7 @@
 SELECT p.id, p.title, p.subtitle,
        COALESCE(agg.min_price, 0)::bigint AS min_price_cents,
        COALESCE(agg.max_price, 0)::bigint AS max_price_cents,
-       p.total_stock, p.sales_count, p.status
+       p.sales_count, p.status
   FROM products p
   LEFT JOIN LATERAL (
         SELECT min(v.price_cents) AS min_price, max(v.price_cents) AS max_price

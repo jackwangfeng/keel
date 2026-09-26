@@ -238,9 +238,8 @@ type SearchProductsByVectorRow struct {
 // repository.withTenantTx 设的那三个 hnsw.* GUC 兜住。完整实测见那里。
 //
 // in_stock 用「任意一个在售 SKU 水位 > 0」算，与 ProductDetail.InStock 同一个
-// 判据（service/product.go）—— 不用 products.total_stock：那一列是冗余汇总，
-// 全仓库没有任何一处在维护它（grep 一下只剩建表与种子），
-// 拿它当「有没有货」等于对用户撒一个永远不会被纠正的谎。
+// 判据（service/product.go）—— 不读汇总列：曾经的 products.total_stock 没有任何一处
+// 在维护，拿它当「有没有货」等于对用户撒一个永远不会被纠正的谎（00062 已删）。
 func (q *Queries) SearchProductsByVector(ctx context.Context, arg SearchProductsByVectorParams) ([]SearchProductsByVectorRow, error) {
 	rows, err := q.db.Query(ctx, searchProductsByVector,
 		arg.QueryEmbedding,

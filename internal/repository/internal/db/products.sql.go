@@ -207,7 +207,7 @@ const listProducts = `-- name: ListProducts :many
 SELECT p.id, p.title, p.subtitle,
        COALESCE(agg.min_price, 0)::bigint AS min_price_cents,
        COALESCE(agg.max_price, 0)::bigint AS max_price_cents,
-       p.total_stock, p.sales_count, p.status
+       p.sales_count, p.status
   FROM products p
   LEFT JOIN LATERAL (
         SELECT min(v.price_cents) AS min_price, max(v.price_cents) AS max_price
@@ -247,7 +247,6 @@ type ListProductsRow struct {
 	Subtitle      *string
 	MinPriceCents int64
 	MaxPriceCents int64
-	TotalStock    int32
 	SalesCount    int32
 	Status        int16
 }
@@ -320,7 +319,6 @@ func (q *Queries) ListProducts(ctx context.Context, arg ListProductsParams) ([]L
 			&i.Subtitle,
 			&i.MinPriceCents,
 			&i.MaxPriceCents,
-			&i.TotalStock,
 			&i.SalesCount,
 			&i.Status,
 		); err != nil {

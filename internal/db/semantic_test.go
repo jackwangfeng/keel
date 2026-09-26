@@ -566,7 +566,7 @@ func TestSearchVectorIsGeneratedFromSearchText(t *testing.T) {
 //
 // ② 是这条测试真正的产出：计划里那句「updated_at 的先后关系是一个现成的、
 // 可机械检查的判据」只对了一半。touch_updated_at 挂在整张 products 上，
-// 一次下单（sales_count / total_stock）就会把全店商品判成向量过期 ——
+// 一次下单（sales_count）就会把全店商品判成向量过期 ——
 // 而重算 embedding 的钱是真花出去的。所以判定那一半必须落在
 // product_understanding.input_hashes 上（数据模型 §8「只认一处」）。
 func TestStalenessCriterionRawMaterial(t *testing.T) {

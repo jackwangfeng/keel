@@ -178,10 +178,8 @@ UPDATE categories c
 --     items[0]（按 published_at 倒序，也就是最后插入的那件）去下单，
 --     挑不出有货 SKU 时会失败。
 --
--- **total_stock 不在这条 INSERT 里**（走列默认值 0）。00019 删掉
--- RecalcProductAggregates 之后，全仓库没有任何一处写那一列 —— 后台读到的
--- 总库存是从 inventories 现算的。种子往它里面填一个数，只会造出一个
--- 与真实水位对不上的假象。
+-- 商品行上没有库存汇总（00062 删掉了 total_stock）：后台读到的总库存是从
+-- inventories 现算的，库存只播在下面的 inventories 里。
 INSERT INTO products (merchant_id, category_id, title, subtitle,
                       sales_count, status, published_at)
 SELECT c.merchant_id, c.id, v.title, v.subtitle, 0, 1, now()

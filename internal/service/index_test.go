@@ -574,7 +574,7 @@ func TestSalesCountChangeDoesNotRecompute(t *testing.T) {
 	}
 	// ② 判定的结论：不用算。
 	if rep.Embedded != 0 {
-		t.Errorf("重算了 %d 条向量 —— 一次下单（sales_count / total_stock）就会把"+
+		t.Errorf("重算了 %d 条向量 —— 一次下单（sales_count）就会把"+
 			"全店商品重算一遍，而重算 embedding 的钱是真花出去的（00016 文件头第四节）",
 			rep.Embedded)
 	}
