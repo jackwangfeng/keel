@@ -7323,7 +7323,20 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** 修改资料 */
+        /**
+         * 修改资料
+         * @description 三个字段都是「给了才改」，至少给一个。
+         *
+         *     **`avatar_url` 只收本人上传的头像**（破坏性变化，此前收任意地址）：
+         *     必须是 `POST /uploads`（`purpose=2` 头像）返回的 `url` 原样，形如 `/api/v1/uploads/{upload_id}`，
+         *     而且是**当前买家自己**传的。外链（包括微信头像地址）、别人的上传、退款凭证、带 query 的变体
+         *     一律 422（`errors` 点名 `avatar_url`），与退款申请的 `evidence_urls` 同一套核对。
+         *     空串 = 清掉头像。
+         *
+         *     设成功的头像在同一个事务里被标为「已引用」，不会被 24 小时的孤儿回收删掉；
+         *     **换掉（或清掉）之后旧头像取消引用**，24 小时后由回收任务删除 —— 所以不要缓存旧头像的地址
+         *     指望它一直能打开。此前存下的外链头像原样保留、照常返回，直到本人改掉它。
+         */
         patch: {
             parameters: {
                 query?: never;
@@ -7335,6 +7348,10 @@ export interface paths {
                 content: {
                     "application/json": {
                         nickname?: string;
+                        /**
+                         * @description 本人用 `POST /uploads`（`purpose=2`）传的头像的 `url`，形如 `/api/v1/uploads/{upload_id}`；
+                         *     空串清掉头像。其余一律 422。
+                         */
                         avatar_url?: string;
                         /**
                          * @description 0 未知 / 1 男 / 2 女
@@ -7354,7 +7371,10 @@ export interface paths {
                         "application/json": components["schemas"]["User"];
                     };
                 };
-                /** @description 字段校验失败（见 Problem.errors） */
+                /**
+                 * @description 字段校验失败（见 Problem.errors）。`avatar_url` 不是本人传的头像（外链、别人的、
+                 *     退款凭证、不存在、已被回收）时 `errors` 点名 `avatar_url`。
+                 */
                 422: {
                     headers: {
                         [name: string]: unknown;

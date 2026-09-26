@@ -68,6 +68,18 @@ const uploadURLPrefix = "/api/v1/uploads/"
 // UploadURL 按 upload id 拼出对外地址。导出给 handler 用（它要填三种响应）。
 func UploadURL(id int64) string { return uploadURLPrefix + strconv.FormatInt(id, 10) }
 
+// uploadIDFromURL 把一个 Upload.url 解回 upload id。只认 UploadURL 拼出来的那一个形状，逐字：
+// 带 query、带尾斜杠、前导零、外链一律不认（ok = false）。退款凭证与头像共用这一个判据 ——
+// 后台按地址精确匹配引用它的退款单，变体会让一张真凭证在后台读不出来；头像换掉时按地址
+// 找回旧的那一个取消引用，变体会让它永远停在已引用。
+func uploadIDFromURL(u string) (int64, bool) {
+	id, err := strconv.ParseInt(strings.TrimPrefix(u, uploadURLPrefix), 10, 64)
+	if err != nil || id <= 0 || u != UploadURL(id) {
+		return 0, false
+	}
+	return id, true
+}
+
 // AdminCatalogRepository 是本服务需要的仓储能力。
 //
 // **只有 WithTenant，没有 WithPlatform。** 这 16 条全是商家级路径：

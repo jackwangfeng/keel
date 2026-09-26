@@ -68,11 +68,12 @@ func TestMeReadAndPatch(t *testing.T) {
 		t.Fatalf("夹具买家没有密码，has_password 应为 false：%v", u.HasPassword)
 	}
 
+	avatar := mustBuyerUpload(t, bs.couponShop, b, 2, []byte("头像 "+bs.Suffix))
 	decodeInto(t, bs.call(t, http.MethodPatch, "/api/v1/me",
-		`{"nickname":"  新昵称  ","gender":2,"avatar_url":"https://img.example.com/a.png"}`, b),
+		fmt.Sprintf(`{"nickname":"  新昵称  ","gender":2,"avatar_url":%q}`, avatar.Url), b),
 		http.StatusOK, "改资料", &u)
 	if u.Nickname != "新昵称" || u.Gender == nil || *u.Gender != 2 ||
-		u.AvatarUrl == nil || *u.AvatarUrl != "https://img.example.com/a.png" {
+		u.AvatarUrl == nil || *u.AvatarUrl != avatar.Url {
 		t.Fatalf("改资料的结果不对：%+v", u)
 	}
 	// 只改一个字段，别的不动；avatar_url 给空串即清掉。
@@ -94,6 +95,7 @@ func TestMeReadAndPatch(t *testing.T) {
 		`{"nickname":"   "}`,
 		fmt.Sprintf(`{"nickname":%q}`, strings.Repeat("字", 33)),
 		`{"gender":3}`,
+		`{"avatar_url":"https://img.example.com/a.png"}`,
 	} {
 		if typ := problemType(t, bs.call(t, http.MethodPatch, "/api/v1/me", body, b),
 			http.StatusUnprocessableEntity, "非法资料 "+body); typ != problem.TypeInvalidRequest {

@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -217,8 +216,8 @@ func evidenceUploadIDs(urls []string) ([]int64, error) {
 	ids := make([]int64, 0, len(urls))
 	seen := make(map[int64]bool, len(urls))
 	for _, u := range urls {
-		id, err := strconv.ParseInt(strings.TrimPrefix(u, uploadURLPrefix), 10, 64)
-		if err != nil || id <= 0 || u != UploadURL(id) {
+		id, ok := uploadIDFromURL(u)
+		if !ok {
 			return nil, fmt.Errorf("%w: evidence_urls 里的 %q 不是 POST /uploads 返回的地址", ErrRefundBadRequest, u)
 		}
 		if seen[id] {

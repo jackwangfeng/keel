@@ -50,7 +50,7 @@ var (
 )
 
 // maxNickname 来自契约（PATCH /me 的 nickname maxLength: 32）。
-// maxAvatarURL 契约没写；给一个宽松上限，理由同地址簿那几个。
+// maxAvatarURL 契约没写；给一个宽松上限（合格的头像地址是 /api/v1/uploads/{id}，远到不了它）。
 const (
 	maxNickname  = 32
 	maxAvatarURL = 1024
@@ -107,13 +107,20 @@ func (s *ProfileService) Update(ctx context.Context, in ProfilePatch) (repositor
 		n := c.text("nickname", *in.Nickname, true, maxNickname)
 		p.Nickname = &n
 	}
+	var newAvatar int64
 	if in.AvatarURL != nil {
-		// 空串即清掉头像。不校验它是不是一个我们自己的上传地址：契约里它就是一个
-		// string，而客户端可能用微信头像的外链。它只会被原样回显给本人。
+		// 空串即清掉头像；否则只收本人用 POST /uploads（purpose=2）传的那一个地址，
+		// 与退款凭证同一套核对（claimAvatar）。外链不收：头像是所有人可读的，
+		// 一个指向外站的头像等于让我们替任意地址做展示，而且没有归属可查、没有回收可言。
 		p.SetAvatar = true
-		p.AvatarURL = c.optText("avatar_url", in.AvatarURL, maxAvatarURL, nil)
-		if p.AvatarURL != nil && strings.ContainsAny(*p.AvatarURL, " \t\r\n") {
-			c.add("avatar_url", "不能包含空白字符")
+		if v := strings.TrimSpace(*in.AvatarURL); v != "" {
+			id, ok := uploadIDFromURL(v)
+			if !ok || len(v) > maxAvatarURL {
+				c.add("avatar_url", errAvatarNotOwned)
+			} else {
+				newAvatar = id
+				p.AvatarURL = &v
+			}
 		}
 	}
 	if in.Gender != nil {
@@ -129,10 +136,63 @@ func (s *ProfileService) Update(ctx context.Context, in ProfilePatch) (repositor
 	}
 	var u repository.User
 	err = s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+		if p.SetAvatar {
+			if err := swapAvatar(ctx, tx, id.UserID, newAvatar, p.AvatarURL); err != nil {
+				return err
+			}
+		}
 		u, err = tx.UpdateProfile(ctx, id.UserID, p)
 		return err
 	})
 	return u, err
+}
+
+// errAvatarNotOwned 是 avatar_url 不合格时点名那个字段的说明。「不存在」「别人的」「用途不对」
+// 「已被回收」一律这一句 —— 分开报就是一个能探出别人传过哪些文件的预言机（与退款凭证同理）。
+const errAvatarNotOwned = "只收你用 POST /uploads（purpose=2 头像）传的头像地址，形如 /api/v1/uploads/{upload_id}"
+
+// swapAvatar 换头像的那一半引用账：核对新头像是本人的 purpose=2 上传并标成已引用，
+// 旧头像（如果是本人的上传）取消引用、交给孤儿回收（upload_gc.go）。
+// 与改 users.avatar_url 同一个事务（数据模型 §13「孤儿回收的安全条件」）。
+//
+// 先锁买家行：两个并发的换头像各读各的「旧头像」，会把对方刚设上的那一个取消引用，
+// 于是一个正在用的头像 24 小时后被删掉。锁住之后两次换头像串行，后一次读到的旧头像
+// 就是前一次设上的那一个。
+func swapAvatar(ctx context.Context, tx repository.Tx, userID, newID int64, newURL *string) error {
+	if err := tx.LockUser(ctx, userID); err != nil {
+		return err
+	}
+	cur, err := tx.FindUserByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if newID != 0 {
+		up, err := tx.FindUpload(ctx, newID)
+		if errors.Is(err, repository.ErrUploadNotFound) {
+			up = repository.Upload{}
+		} else if err != nil {
+			return err
+		}
+		if up.ID == 0 || up.Purpose != repository.UploadPurposeAvatar || up.UserID == nil || *up.UserID != userID {
+			return &InvalidFieldsError{Fields: []FieldProblem{{Field: "avatar_url", Message: errAvatarNotOwned}}}
+		}
+		if err := tx.MarkUploadReferenced(ctx, newID); err != nil {
+			if errors.Is(err, repository.ErrUploadNotFound) {
+				// 读到之后、标引用之前被孤儿回收删掉了（它的条件删除先拿到了行锁）。
+				return &InvalidFieldsError{Fields: []FieldProblem{{Field: "avatar_url", Message: errAvatarNotOwned}}}
+			}
+			return err
+		}
+	}
+	if cur.AvatarURL == nil || (newURL != nil && *newURL == *cur.AvatarURL) {
+		return nil
+	}
+	// 旧头像是本人的上传才取消引用；这一版之前存下的外链不是上传，什么也不做。
+	// UnmarkUploadReferenced 自己只动「这个买家的 purpose=2」，所以就算旧地址指着别人的文件也碰不到。
+	if oldID, ok := uploadIDFromURL(*cur.AvatarURL); ok {
+		return tx.UnmarkUploadReferenced(ctx, oldID, userID)
+	}
+	return nil
 }
 
 // Identities 实现 GET /me/identities。

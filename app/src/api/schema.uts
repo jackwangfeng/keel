@@ -2144,6 +2144,7 @@ export type ListCouponsResponse = {
 /** PATCH /me 的请求体 */
 export type UpdateMeRequest = {
   nickname? : string
+  /** 本人用 `POST /uploads`（`purpose=2`）传的头像的 `url`，形如 `/api/v1/uploads/{upload_id}`； */
   avatar_url? : string
   /** 0 未知 / 1 男 / 2 女 */
   gender? : number

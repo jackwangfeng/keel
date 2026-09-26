@@ -8919,6 +8919,8 @@ type GetCouponsParamsStatus string
 
 // PatchMeJSONBody defines parameters for PatchMe.
 type PatchMeJSONBody struct {
+	// AvatarUrl 本人用 `POST /uploads`（`purpose=2`）传的头像的 `url`，形如 `/api/v1/uploads/{upload_id}`；
+	// 空串清掉头像。其余一律 422。
 	AvatarUrl *string `json:"avatar_url,omitempty"`
 
 	// Gender 0 未知 / 1 男 / 2 女

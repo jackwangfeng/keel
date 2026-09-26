@@ -35,6 +35,8 @@ func newBuyerShop(t *testing.T) buyerShop {
 			`DELETE FROM carts WHERE merchant_id = $1`,
 			`DELETE FROM user_identities WHERE merchant_id = $1`,
 			`DELETE FROM idempotency_keys WHERE merchant_id = $1`,
+			// 头像（PATCH /me 只收本人上传的头像之后，资料那组测试要先传一张）。
+			`DELETE FROM uploads WHERE merchant_id = $1`,
 		} {
 			if _, err := admin(t).Exec(context.Background(), stmt, cs.MerchantID); err != nil {
 				t.Errorf("清理失败 (%s): %v", stmt, err)
