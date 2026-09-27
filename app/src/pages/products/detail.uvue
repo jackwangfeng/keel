@@ -64,24 +64,32 @@
       </view>
     </scroll-view>
 
-    <view class="bar" :style="{ paddingBottom: (10 + safeBottom) + 'px' }">
-      <!-- 购物车入口一直在：加完想看看车里、或者本来就是来凑单的，都不用先退回去。 -->
-      <view class="bar-cart" @click="goCart">
-        <text class="bar-cart-text">购物车</text>
-        <view v-if="cartCount > 0" class="bar-cart-badge">
-          <text class="bar-cart-badge-text">{{ cartCount > 99 ? '99+' : cartCount.toString() }}</text>
-        </view>
-      </view>
-      <view class="bar-info">
+    <view class="bar bar-col" :style="{ paddingBottom: (10 + safeBottom) + 'px' }">
+      <!-- 提示单独占一行（真机实测：原来夹在两个按钮中间，iPhone 上只剩两三个字宽，
+           「已加入购物车，去结算 ›」折成四行）。 -->
+      <view v-if="hint != '' || added != '' || detail != null" class="bar-msg">
         <text v-if="hint != ''" class="t-err">{{ hint }}</text>
         <text v-else-if="added != ''" class="t-ok bar-go-cart" @click="goCart">{{ added }}</text>
-        <text v-else class="t-hint">{{ detail != null ? '已选 ' + selectedLabel : '' }}</text>
+        <text v-else class="t-hint">{{ '已选 ' + selectedLabel }}</text>
       </view>
-      <view :class="['btn-ghost', 'cart-btn', canCart && !adding ? '' : 'btn-off']" @click="addToCart">
-        <text class="btn-ghost-text">{{ adding ? '加入中…' : '加入购物车' }}</text>
-      </view>
-      <view :class="['btn', 'bar-btn', canBuy ? '' : 'btn-off']" @click="buy">
-        <text class="btn-text">立即购买</text>
+      <view class="bar-row">
+        <!-- 购物车入口一直在：加完想看看车里、或者本来就是来凑单的，都不用先退回去。
+             角标挂在图标右上角，文字在图标下面 —— 两者不会叠在一起（真机上角标压住过「车」字）。 -->
+        <view class="bar-cart" @click="goCart">
+          <image class="bar-cart-icon" src="/static/tabbar/cart.png" mode="aspectFit"></image>
+          <text class="bar-cart-text">购物车</text>
+          <!-- 角标挂在按钮这一层（48×48）而不是图标那一层：uvue 的 view 默认 overflow: hidden，
+               挂在 24px 的图标盒子上会被裁掉一半。 -->
+          <view v-if="cartCount > 0" class="bar-cart-badge">
+            <text class="bar-cart-badge-text">{{ cartCount > 99 ? '99+' : cartCount.toString() }}</text>
+          </view>
+        </view>
+        <view :class="['btn-ghost', 'cart-btn', canCart && !adding ? '' : 'btn-off']" @click="addToCart">
+          <text class="btn-ghost-text">{{ adding ? '加入中…' : '加入购物车' }}</text>
+        </view>
+        <view :class="['btn', 'bar-btn', canBuy ? '' : 'btn-off']" @click="buy">
+          <text class="btn-text">立即购买</text>
+        </view>
       </view>
     </view>
   </view>
@@ -335,46 +343,59 @@ export default {
   font-size: 14px;
   color: #FFFDF9;
 }
-.bar-info {
-  flex: 1;
-  padding-right: 12px;
+.bar-col {
+  flex-direction: column;
+  align-items: stretch;
 }
-.bar-btn {
-  width: 120px;
+.bar-msg {
+  padding-bottom: 8px;
+}
+.bar-row {
+  flex-direction: row;
+  align-items: center;
 }
 .bar-cart {
-  width: 52px;
+  width: 48px;
   height: 48px;
   margin-right: 8px;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
 }
-.bar-cart-text {
-  font-size: 13px;
-  color: #2A211B;
+.bar-cart-icon {
+  width: 24px;
+  height: 24px;
 }
 .bar-cart-badge {
   position: absolute;
   top: 2px;
-  right: 0px;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 5px;
-  border-radius: 9px;
+  left: 26px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
   background-color: #C8462D;
   align-items: center;
   justify-content: center;
 }
 .bar-cart-badge-text {
-  font-size: 11px;
+  font-size: 10px;
   color: #FFFFFF;
 }
+.bar-cart-text {
+  font-size: 11px;
+  color: #2A211B;
+  margin-top: 2px;
+}
 .bar-go-cart {
-  text-decoration: underline;
+  color: #3B7A3E;
 }
 .cart-btn {
-  width: 120px;
+  flex: 1;
   height: 48px;
   margin-right: 10px;
+}
+.bar-btn {
+  flex: 1;
 }
 </style>
