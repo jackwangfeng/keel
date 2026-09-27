@@ -1,3 +1,4 @@
+import 'dart:math';
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -123,5 +124,14 @@ void main() {
     final a = newIdempotencyKey(), b = newIdempotencyKey();
     expect(a, matches(RegExp(r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$')));
     expect(a, isNot(b));
+  });
+
+  test('没有安全随机数源（小程序实测）：退回普通随机数，照样是 UUID v4、每次不同', () {
+    Random broken() => throw UnsupportedError('No source of cryptographically secure random numbers available.');
+    final keys = {for (var i = 0; i < 50; i++) newIdempotencyKey(secure: broken)};
+    expect(keys.length, 50);
+    for (final k in keys) {
+      expect(k, matches(RegExp(r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$')));
+    }
   });
 }

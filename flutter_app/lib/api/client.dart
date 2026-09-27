@@ -41,8 +41,17 @@ class ApiResult<T> {
 }
 
 /// 随机 UUID v4。幂等键由页面生成并持有：同一次操作重试复用，内容变了换键。
-String newIdempotencyKey() {
-  final r = Random.secure();
+///
+/// 优先用安全随机数；拿不到（mp-flutter 编的小程序里实测没有 crypto 源：`Random.secure()` 直接抛
+/// UnsupportedError，结算 / 订单详情一打开就崩）就退回普通随机数 —— 幂等键要的是不撞，不是防猜：
+/// 用微秒时间 + 自增序号做种子，两次调用不会拿到同一个序列。
+String newIdempotencyKey({Random Function() secure = Random.secure}) {
+  Random r;
+  try {
+    r = secure();
+  } on UnsupportedError {
+    r = Random(DateTime.now().microsecondsSinceEpoch ^ (++_keySeq * 0x9E3779B1));
+  }
   final b = List<int>.generate(16, (_) => r.nextInt(256));
   b[6] = (b[6] & 0x0f) | 0x40;
   b[8] = (b[8] & 0x3f) | 0x80;
@@ -50,6 +59,8 @@ String newIdempotencyKey() {
   final s = List.generate(16, h).join();
   return '${s.substring(0, 8)}-${s.substring(8, 12)}-${s.substring(12, 16)}-${s.substring(16, 20)}-${s.substring(20)}';
 }
+
+int _keySeq = 0;
 
 /// 唯一的网络出口。
 class ApiClient {

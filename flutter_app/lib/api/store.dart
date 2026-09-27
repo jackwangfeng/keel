@@ -27,8 +27,16 @@ class StoreService extends ChangeNotifier {
     try {
       // 先 then 成可空的 Future 再 timeout：传进来的函数运行时可能是 Future<坐标>（不可空），
       // 直接 timeout(onTimeout: () => null) 会因为泛型协变当场抛 TypeError，坐标就这么被吞了。
-      return await _locate().then<({double lat, double lng})?>((v) => v).timeout(locateTimeout, onTimeout: () => null);
-    } catch (_) {
+      var timedOut = false;
+      final v = await _locate().then<({double lat, double lng})?>((v) => v).timeout(locateTimeout, onTimeout: () {
+        timedOut = true;
+        return null;
+      });
+      // 一行诊断（小程序 / 真机上看控制台就知道这次是按坐标还是回落默认店解析的）。
+      debugPrint(v != null ? 'keel.store: 定位成功，按坐标解析门店' : 'keel.store: ${timedOut ? '定位超时' : '没有坐标'}，回落默认店');
+      return v;
+    } catch (e) {
+      debugPrint('keel.store: 定位出错（$e），回落默认店');
       return null;
     }
   }
