@@ -8,6 +8,13 @@
 - 演示栈（2026-09-27 晚起 **C 档**：core + inventory 两个进程、两个库，40c23da）：环境与 compose 文件清单统一在 `~/.local/share/keel-eshop/demo-env.sh`（`source` 后用 `"${DC[@]}"`），叠加层 `compose.demo-split.yaml` 把卷名换回 keeldemo_*（原地迁移，迁移前备份 `backup-pre-split-202609271854.dump`）；内网密钥 `~/.config/keel/demo-internal-secret`；keeldemo.service 已改为 source demo-env.sh（含登录锁定豁免，重启不再丢）；reset-demo.sh 已适配 C 档（两个库一起重建 + split-data）。**库存在库存库 keeldemo-postgres-inventory-1 / keel_inventory 里**，补库存要改那边。外部验证通过。
 - 已发布：**v0.2.0**（2026-09-27，tag 指向 d530fd7，库落在 00065）；ghcr 四个镜像 keel / keel-migrate / keel-postgres / keel-console 均可匿名拉取。iPhone 15 真机验证通过；Android 真机、小程序真机、tab 角标、长标题两行省略未验证。
 
+## Flutter 买家端（flutter_app/，2026-09-28 起主要维护的客户端）
+
+- **状态**：对齐 uni-app x 全部页面（第一阶段购物主链路 + 第二阶段券 / 消息 / 资料 / 服务地址 / 售后），main `fce951c` 起。uni-app x（`app/`）冻结，只修 bug。
+- **验收**：`make flutter-analyze flutter-test`（91 条单测）· `KEEL_API_BASE=http://192.168.0.110:18099/api/v1 make flutter-e2e-web`（Web 无头 30 条，带前置状态的 4 条读 `KEEL_E2E_*`，没设跳过）· `make flutter-build`（web / apk / ios）· `make flutter-build-mp`（mp-flutter phase6 `b391ea4`）· `make flutter-ios-install KEEL_IOS_TEAM=2Q89DQSSH6`。
+- **小程序**：开发者工具与 mp-flutter 会话共用，用前打招呼；`flutter_app/tool/mp_walk.js` 冒烟（复用 mp-flutter 的 drive.js）。报给 mp-flutter 的：安全区 / 胶囊（viewPadding 恒 0）、冷启动首页滚动位置、webgl2 日志 —— 在修。凭证上传（chooseMedia → uploadFile）、定位（getLocation wgs84）、image_picker / geolocator 的 Web 注册在小程序里还没实测。
+- **踩过的坑**：`go('/login')` 再 `go` 回来会在转场中重建外壳（Duplicate GlobalKey）→ 登录页一律 push / pop；主题按钮最小宽度无穷大放进 Row 布局失败 → 页面测试必须用 `keelTheme()`；Web e2e 同一输入框第二次 `enterText` 收不到；`timeout(onTimeout: () => null)` 遇到运行时不可空的 Future 会因协变当场抛错（坐标被吞）；本机真实位置会被围栏解析到别的店 → e2e 用 `KEEL_LOCATE=off`；Gradle 不读 http_proxy → android 仓库走阿里云镜像。
+
 ## 里程碑
 
 | 阶段 | 状态 |
