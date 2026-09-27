@@ -99,6 +99,17 @@ void phase2Tests() {
         final items = (((await Api.get('/me/notifications?page_size=50')) as Map)['items'] as List).cast<Map>();
         final note = items.firstWhere((x) => x['kind'] == 'refund_rejected' && (x['target'] as Map)['refund_no'] == fixtureRejectedRefund);
         await tapKey(t, 'me.notifications');
+        await waitFor(t, byKey('notes.unread'));
+        // 它可能不在第一页（后面的用例又产生了新通知）：一页页往下翻。
+        for (var i = 0; i < 10 && byKey('notes.row.${note['id']}').evaluate().isEmpty; i++) {
+          if (byKey('notes.more').evaluate().isNotEmpty) {
+            await tapKey(t, 'notes.more');
+            await t.pump(const Duration(seconds: 1));
+          } else {
+            await t.drag(find.byType(Scrollable).first, const Offset(0, -600));
+            await t.pump(const Duration(milliseconds: 300));
+          }
+        }
         await tapKey(t, 'notes.row.${note['id']}');
         await waitFor(t, keyedText('refund.status', '已拒绝'));
       });
@@ -157,16 +168,24 @@ void phase2Tests() {
         if (before['return_shipment'] == null) expect(byKey('refund.deadline'), findsOneWidget);
         final no1 = 'E2E${DateTime.now().millisecondsSinceEpoch}';
         await tapKey(t, 'refund.carrier.sf');
-        await t.enterText(byKey('refund.tracking'), no1);
+        await typeInto(t, 'refund.tracking', no1);
         await tapKey(t, 'refund.ship');
-        await waitFor(t, find.textContaining(no1));
+        await waitFor(t, keyedTextContaining('refund.returnFilled', no1));
         var server = (await Api.get('/refunds/$fixtureReturnRefund')) as Map;
         expect(server['status'], 20);
         expect((server['return_shipment'] as Map)['tracking_no'], no1);
+        // 回来再改一次（重新打开这一页：表单按服务端已填的那一份预填）。
+        // 不在同一页里接着改：Web 上同一个输入框第二次 enterText 收不到（测试输入的连接只接第一次），不是页面的问题 ——
+        // 同一流程的页面测试（refund_page_test）里连改两次是好的。
+        await open(t, '/refunds/$fixtureReturnRefund');
+        await waitFor(t, keyedTextContaining('refund.returnFilled', no1));
+        String ctl() => t.widget<EditableText>(find.descendant(of: byKey('refund.tracking').last, matching: find.byType(EditableText))).controller.text;
+        expect(ctl(), no1, reason: '表单预填已提交的单号');
         await tapKey(t, 'refund.carrier.jd');
-        await t.enterText(byKey('refund.tracking'), '${no1}B');
+        await typeInto(t, 'refund.tracking', '${no1}B');
+        expect(ctl(), '${no1}B', reason: '打完字控制器里的值');
         await tapKey(t, 'refund.ship');
-        await waitFor(t, find.textContaining('${no1}B'));
+        await waitFor(t, keyedTextContaining('refund.returnFilled', '${no1}B'));
         server = (await Api.get('/refunds/$fixtureReturnRefund')) as Map;
         expect(server['status'], 20);
         expect((server['return_shipment'] as Map)['carrier_code'], 'jd');

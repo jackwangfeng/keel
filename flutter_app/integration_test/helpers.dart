@@ -85,6 +85,22 @@ Future<void> tapKey(WidgetTester t, String k) async {
 Finder keyedText(String key, String text) =>
     find.byWidgetPredicate((w) => w is Text && w.key == Key(key) && w.data == text, description: '$key = 「$text」');
 
+/// 往输入框里打字：先滚到它、点一下拿焦点（它在首屏以外时 enterText 的那一下点击会落空，字打不进去）。
+Future<void> typeInto(WidgetTester t, String key, String text) async {
+  await waitFor(t, byKey(key));
+  await t.ensureVisible(byKey(key));
+  // Web 上：点过按钮之后框架还当这一格有焦点，但浏览器那边的输入连接已经断了 —— enterText 就不再点它、
+  // 字发到一个过期的连接上被丢掉（实测第二次改运单号发出去的还是旧值）。先收掉焦点再来。
+  FocusManager.instance.primaryFocus?.unfocus();
+  await t.pumpAndSettle();
+  await t.enterText(byKey(key), text);
+  await t.pump();
+}
+
+/// 带这个 Key 的 Text，内容包含 part。
+Finder keyedTextContaining(String key, String part) =>
+    find.byWidgetPredicate((w) => w is Text && w.key == Key(key) && (w.data ?? '').contains(part), description: '$key ∋ 「$part」');
+
 String textOf(String key) => (byKey(key).evaluate().first.widget as Text).data ?? '';
 
 /// 起 App 并等首页的门店行出来。

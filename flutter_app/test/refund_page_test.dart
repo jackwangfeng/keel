@@ -23,6 +23,7 @@ class Fake {
   int refundStatus = 10;
   int refundType = 1;
   Map? created;
+  final shipments = <Map>[];
   final calls = <String>[];
   Map<String, dynamic> refund() => {
         'refund_no': 'R9', 'order_no': 'N1', 'refund_type': refundType, 'status': refundStatus, 'amount_cents': 5600,
@@ -46,6 +47,7 @@ class Fake {
       refundStatus = 60;
       return j(refund());
     }
+    if (p == '/refunds/R9/return-shipment') shipments.add(jsonDecode(r.body) as Map);
     if (p == '/refunds/R9/return-shipment') return j({...refund(), 'return_shipment': {...(jsonDecode(r.body) as Map), 'submitted_at': '2026-09-26T01:00:00Z'}});
     return j({'type': 'x', 'title': 'nope $p', 'status': 404}, 404);
   });
@@ -103,6 +105,14 @@ void main() {
     await t.pumpAndSettle();
     expect(find.byKey(const Key('refund.returnFilled')), findsOneWidget);
     expect(find.text('修改物流信息'), findsOneWidget);
+    // 再改一次：换承运商与单号，发出去的是新的。
+    await t.tap(find.byKey(const Key('refund.carrier.jd')));
+    await t.enterText(find.byKey(const Key('refund.tracking')), 'JD456');
+    await t.pump();
+    await t.tap(find.byKey(const Key('refund.ship')));
+    await t.pumpAndSettle();
+    expect(f.shipments.last, {'carrier_code': 'jd', 'tracking_no': 'JD456'});
+    expect(find.textContaining('JD456'), findsWidgets);
     await t.scrollUntilVisible(find.byKey(const Key('refund.cancel')), 200, scrollable: find.byType(Scrollable).first);
     await t.tap(find.byKey(const Key('refund.cancel')));
     await t.pump();
