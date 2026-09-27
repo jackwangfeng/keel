@@ -633,11 +633,11 @@ class _CheckoutPageState extends State<CheckoutPage> {
         ]),
       ]);
     }
-    if (_previewing) return const Center(child: Text('正在计算…', style: KeelText.hint));
+    if (_previewing) return const Center(child: Text('正在计算…', key: Key('checkout.computing'), style: KeelText.hint));
     if (_addressLoaded && _addressId == 0) return const Center(child: Text('选好收货地址后计算应付金额', style: KeelText.hint));
     return Center(
       child: Column(children: [
-        const Text('金额待计算', style: KeelText.hint),
+        const Text('金额待计算', key: Key('checkout.pending'), style: KeelText.hint),
         TextButton(key: const Key('checkout.recalc'), onPressed: _preview, child: const Text('重新计算')),
       ]),
     );

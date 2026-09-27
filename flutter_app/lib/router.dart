@@ -36,15 +36,16 @@ GoRouter buildRouter(Session session) => GoRouter(
             WidgetsBinding.instance.addPostFrameCallback((_) => Tabs.current.value = shell.currentIndex);
             return Scaffold(
               body: shell,
-              bottomNavigationBar: NavigationBar(
-                backgroundColor: KeelColors.card,
-                selectedIndex: shell.currentIndex,
-                onDestinationSelected: shell.goBranch,
-                destinations: [
-                  const NavigationDestination(key: Key('tab.home'), icon: Icon(Icons.home_outlined), label: '首页'),
-                  NavigationDestination(key: const Key('tab.cart'), icon: _CartIcon(count: Services.of(context).cart), label: '购物车'),
-                  const NavigationDestination(key: Key('tab.orders'), icon: Icon(Icons.receipt_long_outlined), label: '订单'),
-                  NavigationDestination(key: const Key('tab.me'), icon: _MeIcon(unread: Services.of(context).unread), label: '我的'),
+              bottomNavigationBar: _TabBar(
+                current: shell.currentIndex,
+                onTap: shell.goBranch,
+                items: [
+                  (key: 'tab.home', label: '首页', icon: const Icon(Icons.home_outlined), on: const Icon(Icons.home)),
+                  (key: 'tab.cart', label: '购物车', icon: _CartIcon(count: Services.of(context).cart, on: false),
+                      on: _CartIcon(count: Services.of(context).cart, on: true)),
+                  (key: 'tab.orders', label: '订单', icon: const Icon(Icons.receipt_long_outlined), on: const Icon(Icons.receipt_long)),
+                  (key: 'tab.me', label: '我的', icon: _MeIcon(unread: Services.of(context).unread, on: false),
+                      on: _MeIcon(unread: Services.of(context).unread, on: true)),
                 ],
               ),
             );
@@ -84,30 +85,70 @@ GoRouter buildRouter(Session session) => GoRouter(
       ],
     );
 
+/// 底部 tab 栏：与 uni-app x 的 tabBar 同一套样子（米白底、选中深咖、未选中灰，没有胶囊底）。
+class _TabBar extends StatelessWidget {
+  const _TabBar({required this.current, required this.onTap, required this.items});
+  final int current;
+  final void Function(int) onTap;
+  final List<({String key, String label, Widget icon, Widget on})> items;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        decoration: const BoxDecoration(color: KeelColors.card, border: Border(top: BorderSide(color: KeelColors.line, width: 0.5))),
+        child: SafeArea(
+          top: false,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: 50),
+            child: Row(children: [
+              for (final (i, it) in items.indexed)
+                Expanded(
+                  child: InkResponse(
+                    key: Key(it.key),
+                    onTap: () => onTap(i),
+                    child: IconTheme(
+                      data: IconThemeData(size: 24, color: i == current ? KeelColors.primary : KeelColors.textHint),
+                      child: Column(mainAxisSize: MainAxisSize.min, mainAxisAlignment: MainAxisAlignment.center, children: [
+                        const SizedBox(height: 5),
+                        i == current ? it.on : it.icon,
+                        const SizedBox(height: 2),
+                        Text(it.label, style: TextStyle(fontSize: 10, color: i == current ? KeelColors.primary : KeelColors.textHint)),
+                        const SizedBox(height: 5),
+                      ]),
+                    ),
+                  ),
+                ),
+            ]),
+          ),
+        ),
+      );
+}
+
 class _CartIcon extends StatelessWidget {
-  const _CartIcon({required this.count});
+  const _CartIcon({required this.count, required this.on});
   final CartCount count;
+  final bool on;
   @override
   Widget build(BuildContext context) => ListenableBuilder(
         listenable: count,
         builder: (_, _) => Badge(
           isLabelVisible: count.n > 0,
           label: Text(count.n > 99 ? '99+' : '${count.n}', key: const Key('tab.cartBadge')),
-          child: const Icon(Icons.shopping_cart_outlined),
+          child: Icon(on ? Icons.shopping_cart : Icons.shopping_cart_outlined),
         ),
       );
 }
 
 class _MeIcon extends StatelessWidget {
-  const _MeIcon({required this.unread});
+  const _MeIcon({required this.unread, required this.on});
   final UnreadCount unread;
+  final bool on;
   @override
   Widget build(BuildContext context) => ListenableBuilder(
         listenable: unread,
         builder: (_, _) => Badge(
           isLabelVisible: unread.n > 0,
           label: Text(unread.n > 99 ? '99+' : '${unread.n}', key: const Key('tab.meBadge')),
-          child: const Icon(Icons.person_outline),
+          child: Icon(on ? Icons.person : Icons.person_outline),
         ),
       );
 }

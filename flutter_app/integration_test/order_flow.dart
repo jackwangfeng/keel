@@ -224,7 +224,9 @@ void orderTests() {
 
       // 选着包邮券把数量加到满 99：包邮券抵不了钱，照实说并展开券列表，不悄悄换掉。
       await tapKey(t, 'checkout.plus');
-      await waitFor(t, byKey('checkout.message'));
+      // 券列表展开后提示在列表下面（每跑一轮多领一张包邮券，列表越来越长）：滚过去再看。
+      await waitFor(t, find.byKey(const Key('checkout.coupon.none')));
+      await scrollTo(t, 'checkout.message');
       expect(textOf('checkout.message'), contains('包邮券'));
       expect(byKey('checkout.coupon.none'), findsOneWidget);
       expect(textOf('checkout.payable'), '—');

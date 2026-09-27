@@ -51,6 +51,10 @@ class Fake {
       final b = jsonDecode(r.body) as Map;
       previews.add(b);
       if (slowAddr1 && b['address_id'] == 1) await Future<void>.delayed(const Duration(seconds: 2));
+      if (((b['items'] as List).first as Map)['quantity'] == 2 && b['user_coupon_id'] == 3) {
+        return j({'type': 'https://keel.dev/problems/coupon-not-applicable', 'title': '这张优惠券本单不可用', 'status': 409,
+          'detail': '这张优惠券本单不可用: 包邮券抵不了钱'}, 409);
+      }
       final freight = b['address_id'] == 2 ? 1500 : 0;
       final c = b['user_coupon_id'] as int?;
       final off = c == 3 ? 1000 : (c == 4 ? 500 : 0);
@@ -168,5 +172,18 @@ void main() {
     expect(f.previews.last['address_id'], 2);
     expect(t.widget<Text>(find.byKey(const Key('checkout.freight'))).data, '¥15.00');
     expect(find.byKey(const Key('checkout.address.2')), findsOneWidget);
+  });
+
+  testWidgets('选着的券数量加了之后用不了：照实说原因、展开券列表、不给应付', (t) async {
+    phone(t);
+    final f = Fake();
+    await t.pumpWidget(await app(f));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('checkout.plus')));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('checkout.message')), findsOneWidget);
+    expect(find.textContaining('包邮券抵不了钱'), findsOneWidget);
+    expect(find.byKey(const Key('checkout.coupon.none')), findsOneWidget);
+    expect(t.widget<Text>(find.byKey(const Key('checkout.payable'))).data, '—');
   });
 }

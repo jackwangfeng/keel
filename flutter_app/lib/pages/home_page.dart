@@ -162,24 +162,25 @@ class _HomePageState extends State<HomePage> {
                   const Text('KEEL · 精选好物', style: KeelText.overline),
                   const SizedBox(height: 8),
                   Text(_greeting, style: KeelText.display),
+                  const SizedBox(height: 4),
                   const Text('慢一点，好好喝一杯', style: KeelText.sub),
                   if (_storeLine.isNotEmpty)
                     Padding(
                       padding: const EdgeInsets.only(top: 6),
                       child: Text(_storeLine, key: const Key('home.store'), style: KeelText.hint),
                     ),
-                  const SizedBox(height: 14),
+                  const SizedBox(height: 20),
                   // 首页只放一个入口，真正的输入框在搜索页（首页一聚焦就弹键盘挡住商品）。
                   GestureDetector(
                     key: const Key('home.search'),
                     onTap: () => context.push('/search'),
                     child: Container(
-                      height: 40,
-                      padding: const EdgeInsets.symmetric(horizontal: 14),
-                      decoration: BoxDecoration(color: KeelColors.searchBox, borderRadius: BorderRadius.circular(20)),
+                      height: 44,
+                      padding: const EdgeInsets.symmetric(horizontal: 18),
+                      decoration: BoxDecoration(color: KeelColors.searchBox, borderRadius: BorderRadius.circular(22)),
                       child: const Row(children: [
                         Icon(Icons.search, size: 18, color: KeelColors.textHint),
-                        SizedBox(width: 6),
+                        SizedBox(width: 8),
                         Text('搜索商品', style: KeelText.hint),
                       ]),
                     ),
@@ -194,7 +195,7 @@ class _HomePageState extends State<HomePage> {
                   height: 50,
                   child: ListView(
                     scrollDirection: Axis.horizontal,
-                    padding: const EdgeInsets.fromLTRB(20, 8, 20, 8),
+                    padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
                     children: [
                       _chip('home.cat.all', '全部', 0),
                       for (final c in _categories) _chip('home.cat.${c.id}', c.name, c.id),
@@ -204,7 +205,7 @@ class _HomePageState extends State<HomePage> {
               ),
             SliverToBoxAdapter(
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(20, 8, 20, 10),
+                padding: const EdgeInsets.fromLTRB(20, 24, 20, 4),
                 child: Row(children: [
                   Text(_sectionTitle, key: const Key('home.section'), style: KeelText.section),
                   const Spacer(),
@@ -217,19 +218,32 @@ class _HomePageState extends State<HomePage> {
             if (!_loading && !_outOfRange && _error.isEmpty && _rows.isEmpty)
               const SliverToBoxAdapter(child: EmptyState(text: '店里还没有上架商品')),
             if (_loading && _rows.isEmpty) const SliverToBoxAdapter(child: EmptyState(text: '正在加载…')),
+            // 两列：同一行两张卡片等高（行高由较高的那张决定），价格行贴底对齐。边距 16、卡片间距 12。
             SliverPadding(
+              key: const Key('home.grid'),
               padding: const EdgeInsets.symmetric(horizontal: 10),
-              sliver: SliverGrid(
-                key: const Key('home.grid'),
-                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 2, mainAxisSpacing: 12, crossAxisSpacing: 12, childAspectRatio: 0.62),
+              sliver: SliverList(
                 delegate: SliverChildBuilderDelegate(
-                  (_, i) => ProductCard(
-                    row: _rows[i],
-                    onTap: () => context.push('/product/${_rows[i].id}'),
-                    onAdd: () => quickAdd(context, _rows[i].id),
+                  (_, r) => Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+                    child: IntrinsicHeight(
+                      child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                        for (final i in [r * 2, r * 2 + 1]) ...[
+                          if (i == r * 2 + 1) const SizedBox(width: 12),
+                          Expanded(
+                            child: i < _rows.length
+                                ? ProductCard(
+                                    row: _rows[i],
+                                    onTap: () => context.push('/product/${_rows[i].id}'),
+                                    onAdd: () => quickAdd(context, _rows[i].id),
+                                  )
+                                : const SizedBox(),
+                          ),
+                        ],
+                      ]),
+                    ),
                   ),
-                  childCount: _rows.length,
+                  childCount: (_rows.length + 1) ~/ 2,
                 ),
               ),
             ),
@@ -253,7 +267,7 @@ extension on _HomePageState {
           padding: const EdgeInsets.symmetric(horizontal: 16),
           alignment: Alignment.center,
           decoration: BoxDecoration(
-            color: on ? KeelColors.primary : null,
+            color: on ? KeelColors.primary : KeelColors.card,
             border: Border.all(color: on ? KeelColors.primary : KeelColors.chipBorder),
             borderRadius: BorderRadius.circular(17),
           ),

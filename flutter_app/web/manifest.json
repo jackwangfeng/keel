@@ -1,11 +1,11 @@
 {
-    "name": "keel_buyer",
-    "short_name": "keel_buyer",
+    "name": "Keel",
+    "short_name": "Keel",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
     "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "description": "Keel 买家端",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

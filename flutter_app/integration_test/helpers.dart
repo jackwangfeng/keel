@@ -46,13 +46,23 @@ Future<T> waitUntil<T>(WidgetTester t, Future<T?> Function() probe, String what,
 final seen = <String>[];
 
 /// 用它代替 testWidgets。
+/// 排查时只跑名字里含这段的用例：tool/e2e_web.sh 读 KEEL_E2E_ONLY。
+const _only = String.fromEnvironment('KEEL_E2E_ONLY');
+
 void e2e(String name, Future<void> Function(WidgetTester t) body) {
-  testWidgets(name, (t) async {
+  testWidgets(name, skip: _only.isNotEmpty && !name.contains(_only), (t) async {
     seen.clear();
     try {
       await body(t);
+      // 用例体跑完后还挂着的异常（布局溢出之类）框架只报个数：取出来带进失败信息。
+      await t.pump();
+      final pending = t.takeException();
+      if (pending != null) throw TestFailure('用例结束时有未处理的异常：$pending');
     } catch (e) {
-      fail('${'$e'.split('\n').take(8).join(' / ')}${seen.isEmpty ? '' : ' || FlutterError: ${seen.join(' || ')}'}');
+      // 失败时屏幕上带 Key 的文字（排查「等不到某个东西」时看当时页面是什么样）。
+      final screen = find.byWidgetPredicate((w) => w is Text && w.key is ValueKey<String>).evaluate()
+          .map((el) => '${((el.widget as Text).key! as ValueKey).value}=${(el.widget as Text).data}').take(30).join(', ');
+      fail('${'$e'.split('\n').take(8).join(' / ')}${seen.isEmpty ? '' : ' || FlutterError: ${seen.join(' || ')}'} || 屏幕: $screen');
     }
   });
 }
@@ -267,6 +277,18 @@ class Api {
     final res = await http.Response.fromStream(await req.send());
     if (res.statusCode != 201) fail('传凭证失败：${res.statusCode} ${res.body}');
     return (jsonDecode(res.body) as Map)['url'] as String;
+  }
+
+  /// 翻页找一条通知（通知越来越多，不一定在第一页）。
+  static Future<Map?> findNotification(bool Function(Map n) match) async {
+    for (var page = 1; page <= 20; page++) {
+      final r = (await get('/me/notifications?page=$page&page_size=50')) as Map;
+      final items = (r['items'] as List).cast<Map>();
+      final hit = items.where(match).firstOrNull;
+      if (hit != null) return hit;
+      if (items.length < 50) return null;
+    }
+    return null;
   }
 
   static Future<List<dynamic>> cartItems() async => ((await get('/cart')) as Map)['items'] as List;

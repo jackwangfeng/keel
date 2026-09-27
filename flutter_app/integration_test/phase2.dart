@@ -40,7 +40,13 @@ void phase2Tests() {
         await tapKey(t, 'coupons.tab.$s');
         await t.pump(const Duration(milliseconds: 800));
         await waitUntil(t, () async => find.byWidgetPredicate((w) => '${w.key}'.contains('coupons.row.') || '${w.key}'.contains('coupons.empty')).evaluate().isNotEmpty ? true : null, 'tab $s 加载出来');
-        if (find.text(nineOff).evaluate().isNotEmpty) found = true;
+        // 列表是懒构建的：这张券可能在首屏以外，往下滚着找。
+        if (!found && find.byWidgetPredicate((w) => '${w.key}'.contains('coupons.row.')).evaluate().isNotEmpty) {
+          try {
+            await t.scrollUntilVisible(find.text(nineOff), 200, scrollable: find.byType(Scrollable).last, maxScrolls: 30);
+            found = true;
+          } catch (_) {}
+        }
       }
       expect(found, isTrue);
     });
@@ -96,20 +102,24 @@ void phase2Tests() {
       e2e('售后驳回的通知点进去是那张售后单', (t) async {
         await startApp(t);
         await loginInApp(t);
-        final items = (((await Api.get('/me/notifications?page_size=50')) as Map)['items'] as List).cast<Map>();
-        final note = items.firstWhere((x) => x['kind'] == 'refund_rejected' && (x['target'] as Map)['refund_no'] == fixtureRejectedRefund);
+        final note = await Api.findNotification((x) => x['kind'] == 'refund_rejected' && (x['target'] as Map)['refund_no'] == fixtureRejectedRefund);
+        if (note == null) fail('没找到售后单 $fixtureRejectedRefund 的驳回通知');
         await tapKey(t, 'me.notifications');
         await waitFor(t, byKey('notes.unread'));
         // 它可能不在第一页（后面的用例又产生了新通知）：一页页往下翻。
-        for (var i = 0; i < 10 && byKey('notes.row.${note['id']}').evaluate().isEmpty; i++) {
+        for (var i = 0; i < 60 && byKey('notes.row.${note['id']}').evaluate().isEmpty; i++) {
           if (byKey('notes.more').evaluate().isNotEmpty) {
-            await tapKey(t, 'notes.more');
+            await t.ensureVisible(byKey('notes.more'));
+            await t.pump();
+            await t.tap(byKey('notes.more'));
             await t.pump(const Duration(seconds: 1));
           } else {
-            await t.drag(find.byType(Scrollable).first, const Offset(0, -600));
+            await t.drag(find.byType(Scrollable).first, const Offset(0, -800));
             await t.pump(const Duration(milliseconds: 300));
           }
         }
+        await t.ensureVisible(byKey('notes.row.${note['id']}'));
+        await t.pump();
         await tapKey(t, 'notes.row.${note['id']}');
         await waitFor(t, keyedText('refund.status', '已拒绝'));
       });
