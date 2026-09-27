@@ -67,23 +67,29 @@ class _MyCouponsPageState extends State<MyCouponsPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('我的优惠券', style: KeelText.title),
+        title: const Text('我的优惠券'),
         backgroundColor: KeelColors.bg,
         surfaceTintColor: KeelColors.bg,
-        actions: [TextButton(key: const Key('coupons.center'), onPressed: () => context.push('/coupon-center'), child: const Text('领券中心'))],
       ),
       body: Column(children: [
-        SizedBox(
-          height: 48,
+        // 白底 tab 栏，选中的下面一条 2 像素深咖线（uni-app x 的 .tabs / .tab-on）。
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          decoration: const BoxDecoration(color: KeelColors.card, border: Border(bottom: BorderSide(color: KeelColors.line))),
           child: Row(children: [
             for (final (i, t) in couponTabs.indexed)
               Expanded(
                 child: InkWell(
                   key: Key('coupons.tab.${t.$1}'),
                   onTap: () => _pick(i),
-                  child: Center(
-                    child: Text(t.$2, style: TextStyle(fontSize: 14, fontWeight: i == _tab ? FontWeight.w700 : FontWeight.w400,
-                        color: i == _tab ? KeelColors.primary : KeelColors.textSub)),
+                  child: Container(
+                    padding: const EdgeInsets.fromLTRB(0, 12, 0, 10),
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                        border: Border(bottom: BorderSide(width: 2, color: i == _tab ? KeelColors.primary : KeelColors.card))),
+                    child: Text(t.$2,
+                        style: TextStyle(fontSize: 14, fontWeight: i == _tab ? FontWeight.w700 : FontWeight.w400,
+                            color: i == _tab ? KeelColors.text : KeelColors.textSub)),
                   ),
                 ),
               ),
@@ -92,10 +98,18 @@ class _MyCouponsPageState extends State<MyCouponsPage> {
         Expanded(
           child: ListView(padding: const EdgeInsets.fromLTRB(16, 4, 16, 24), children: [
             if (_error.isNotEmpty) ErrorCard(message: _error, onRetry: _load),
+            if (_tab == 1 && _rows.isNotEmpty)
+              const Padding(padding: EdgeInsets.only(top: 12), child: Text('这些券已用在待支付的订单上，订单取消后会退回', style: KeelText.hint)),
             for (final r in _rows)
               Ticket(key: Key('coupons.row.${r.id}'), value: r.valueText, name: r.name, rule: r.ruleText,
-                  meta: '${r.scopeText} · ${r.validText}', dim: _tab >= 2),
+                  meta: r.scopeText, meta2: r.validText, dim: _tab >= 2),
             if (_loaded && _rows.isEmpty && _error.isEmpty) EmptyState(key: const Key('coupons.empty'), text: _empty[_tab]),
+            if (_loaded)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 24),
+                child: Center(child: GestureDetector(key: const Key('coupons.center'), onTap: () => context.push('/coupon-center'),
+                    child: const Text('领券中心 ›', style: KeelText.link))),
+              ),
           ]),
         ),
       ]),

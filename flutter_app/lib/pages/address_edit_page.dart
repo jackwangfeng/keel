@@ -177,7 +177,7 @@ class _AddressEditPageState extends State<AddressEditPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(widget.addressId > 0 ? '编辑地址' : '新建地址', style: KeelText.title),
+      appBar: AppBar(title: Text(widget.addressId > 0 ? '编辑地址' : '新建地址'),
           backgroundColor: KeelColors.bg, surfaceTintColor: KeelColors.bg),
       body: _loading
           ? const Center(child: Text('正在加载…', style: KeelText.hint))

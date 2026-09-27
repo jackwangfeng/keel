@@ -6,6 +6,7 @@ import '../api/order.dart';
 import '../api/services.dart';
 import '../theme.dart';
 import '../widgets/badge.dart';
+import '../widgets/pay_bar.dart';
 import '../widgets/states.dart';
 import 'refunds_page.dart';
 
@@ -168,7 +169,7 @@ class _OrderPageState extends State<OrderPage> {
     final v = _v;
     final payable = v?.head.payable ?? false;
     return Scaffold(
-      appBar: AppBar(title: const Text('订单详情', style: KeelText.title), backgroundColor: KeelColors.bg, surfaceTintColor: KeelColors.bg),
+      appBar: AppBar(title: const Text('订单详情'), backgroundColor: KeelColors.bg, surfaceTintColor: KeelColors.bg),
       body: v == null
           ? (_error.isNotEmpty ? ErrorCard(message: _error, onRetry: _load) : const EmptyState(text: '正在加载…'))
           : ListView(padding: const EdgeInsets.fromLTRB(16, 4, 16, 24), children: [
@@ -213,7 +214,7 @@ class _OrderPageState extends State<OrderPage> {
                       Text(it.amountText, style: KeelText.price),
                     ]),
                   ),
-                const Divider(color: KeelColors.line),
+                const Divider(height: 29, color: KeelColors.line),
                 _kv('商品金额', v.goodsAmountText),
                 _kv('运费', v.freightText, note: v.freightNote),
                 if (v.promotionDiscountText.isNotEmpty) _kv('活动优惠', v.promotionDiscountText),
@@ -225,7 +226,7 @@ class _OrderPageState extends State<OrderPage> {
                 if (v.hasDiscount) _kv('优惠合计', '-${v.discountText}'),
                 if (v.hasPaid) _kv('已付', v.paidText, key: 'order.paid'),
                 if (v.refundedText.isNotEmpty) _kv('已退', v.refundedText),
-                const Divider(color: KeelColors.line),
+                const Divider(height: 29, color: KeelColors.line),
                 Row(children: [
                   const Text('应付', style: KeelText.section),
                   const Spacer(),
@@ -244,10 +245,13 @@ class _OrderPageState extends State<OrderPage> {
                     ListTile(
                       key: Key('order.channel.${c.key}'),
                       contentPadding: EdgeInsets.zero,
-                      leading: CircleAvatar(radius: 14, backgroundColor: c.color,
-                          child: Text(c.glyph, style: const TextStyle(fontSize: 12, color: KeelColors.card))),
+                      leading: Container(
+                        width: 28, height: 28, alignment: Alignment.center,
+                        decoration: BoxDecoration(color: c.color, borderRadius: BorderRadius.circular(8)),
+                        child: Text(c.glyph, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: KeelColors.card)),
+                      ),
                       title: Text(c.name, style: KeelText.body),
-                      trailing: Icon(_channel == c.key ? Icons.radio_button_checked : Icons.radio_button_off, color: KeelColors.primary),
+                      trailing: KeelRadio(on: _channel == c.key),
                       onTap: () => setState(() => _channel = c.key),
                     ),
                 ])),
@@ -257,9 +261,9 @@ class _OrderPageState extends State<OrderPage> {
               if (_sandboxNotice.isNotEmpty)
                 Container(
                   key: const Key('order.sandbox'),
-                  margin: const EdgeInsets.only(bottom: 12),
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(color: const Color(0xFFF6EAD3), borderRadius: BorderRadius.circular(14)),
+                  margin: const EdgeInsets.only(top: 12),
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                  decoration: BoxDecoration(color: const Color(0xFFFBF1DF), borderRadius: BorderRadius.circular(12)),
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     const Text('⚠ 沙箱支付，没有真实资金流动', style: TextStyle(fontWeight: FontWeight.w700, color: KeelColors.warn)),
                     Text(_sandboxNotice, style: KeelText.sub),
@@ -297,34 +301,26 @@ class _OrderPageState extends State<OrderPage> {
       // 发起支付后底栏直接变「模拟支付完成（沙箱）」：第二个按钮放在首屏以外的话，点完「立即支付」什么都没变。
       bottomNavigationBar: !payable
           ? null
-          : SafeArea(
-              child: Container(
-                color: KeelColors.card,
-                padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
-                child: Row(children: [
-                  const Text('应付 ', style: KeelText.hint),
-                  Text(v?.head.payableText ?? '—', style: KeelText.price.copyWith(fontSize: 20)),
-                  const Spacer(),
-                  if (_settle != null)
-                    FilledButton(key: const Key('order.settle'), onPressed: _settling ? null : _doSettle,
-                        child: Text(_settling ? '入账中…' : '模拟支付完成（沙箱）'))
-                  else
-                    FilledButton(key: const Key('order.pay'), onPressed: _paying ? null : _pay, child: Text(_paying ? '处理中…' : '立即支付')),
-                ]),
-              ),
+          : PayBar(
+              amount: v?.head.payableText ?? '—',
+              buttonWidth: 184,
+              button: _settle != null
+                  ? FilledButton(key: const Key('order.settle'), onPressed: _settling ? null : _doSettle,
+                      child: Text(_settling ? '入账中…' : '模拟支付完成（沙箱）', maxLines: 1, overflow: TextOverflow.ellipsis))
+                  : FilledButton(key: const Key('order.pay'), onPressed: _paying ? null : _pay, child: Text(_paying ? '处理中…' : '立即支付')),
             ),
     );
   }
 
   Widget _card(Widget child) => Container(
-        margin: const EdgeInsets.only(bottom: 12),
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(color: KeelColors.card, borderRadius: BorderRadius.circular(14)),
+        margin: const EdgeInsets.only(top: 12),
+        padding: const EdgeInsets.all(18),
+        decoration: BoxDecoration(color: KeelColors.card, borderRadius: BorderRadius.circular(16)),
         child: child,
       );
 
   Widget _kv(String k, String v, {String? key, String note = ''}) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 3),
+        padding: const EdgeInsets.symmetric(vertical: 6),
         child: Row(children: [
           Text(k, style: KeelText.sub),
           const Spacer(),

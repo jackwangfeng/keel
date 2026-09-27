@@ -38,7 +38,7 @@ class _SettingsPageState extends State<SettingsPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('服务地址', style: KeelText.title), backgroundColor: KeelColors.bg, surfaceTintColor: KeelColors.bg),
+      appBar: AppBar(title: const Text('服务地址'), backgroundColor: KeelColors.bg, surfaceTintColor: KeelColors.bg),
       body: ListView(padding: const EdgeInsets.all(16), children: [
         TextField(
           key: const Key('settings.url'),

@@ -73,19 +73,21 @@ class RefundTile extends StatelessWidget {
         key: Key('refunds.row.${row.refundNo}'),
         onTap: onTap,
         child: Container(
-          margin: const EdgeInsets.only(bottom: 10),
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(color: KeelColors.card, borderRadius: BorderRadius.circular(14)),
-          child: Row(children: [
-            Expanded(
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text('${row.typeText} · ${row.itemsText}', style: KeelText.body),
-                Text(row.createdAt, style: KeelText.hint),
-              ]),
-            ),
-            Text(row.amountText, style: KeelText.price),
-            const SizedBox(width: 8),
-            ToneBadge(key: Key('refunds.status.${row.refundNo}'), text: row.statusText, tone: row.statusTone),
+          margin: const EdgeInsets.only(top: 12),
+          padding: const EdgeInsets.all(18),
+          decoration: BoxDecoration(color: KeelColors.card, borderRadius: BorderRadius.circular(16)),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              Expanded(child: Text(row.typeText, style: KeelText.body)),
+              ToneBadge(key: Key('refunds.status.${row.refundNo}'), text: row.statusText, tone: row.statusTone),
+            ]),
+            const SizedBox(height: 6),
+            Text(row.itemsText, style: KeelText.sub),
+            const SizedBox(height: 6),
+            Row(children: [
+              Expanded(child: Text(row.createdAt, style: KeelText.hint)),
+              Text(row.amountText, style: KeelText.price),
+            ]),
           ]),
         ),
       );

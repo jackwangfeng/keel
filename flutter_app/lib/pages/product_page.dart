@@ -67,7 +67,8 @@ class _ProductPageState extends State<ProductPage> {
   }
 
   SkuRow? get _picked => _d?.sku(_skuId);
-  bool get _canCart => _d != null && !_d!.offShelf && _skuId > 0 && _storeId != null;
+  bool get _canCart =>
+      _d != null && !_d!.offShelf && _skuId > 0 && _storeId != null;
   bool get _canBuy => _d != null && !_d!.offShelf && _skuId > 0;
 
   void _pick(SkuRow r) {
@@ -96,7 +97,12 @@ class _ProductPageState extends State<ProductPage> {
     });
     try {
       // 每次点击一个新的幂等键（addToCart 里）：再点一次就是想再加一件。手抖连点由 _adding 挡住。
-      final n = await addToCart(s.client, skuId: _skuId, quantity: 1, storeId: _storeId);
+      final n = await addToCart(
+        s.client,
+        skuId: _skuId,
+        quantity: 1,
+        storeId: _storeId,
+      );
       s.cart.set(n);
       // 从搜索结果点进来的商品回传 add_cart（不是就什么都不做）。
       s.trace.converted('add_cart', widget.productId);
@@ -128,50 +134,120 @@ class _ProductPageState extends State<ProductPage> {
     final d = _d;
     final p = _picked;
     return Scaffold(
-      appBar: AppBar(backgroundColor: KeelColors.bg, surfaceTintColor: KeelColors.bg),
+      appBar: AppBar(
+        backgroundColor: KeelColors.bg,
+        surfaceTintColor: KeelColors.bg,
+      ),
       body: d == null
-          ? (_loading ? const EmptyState(text: '正在加载…') : ErrorCard(message: _error, onRetry: _load))
-          : ListView(children: [
-              _Gallery(detail: d),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(d.offShelf ? '已下架' : 'KEEL 精选', key: const Key('detail.overline'), style: KeelText.overline),
-                  const SizedBox(height: 6),
-                  Text(d.title, key: const Key('detail.title'), style: KeelText.title),
-                  if (d.subtitle.isNotEmpty) Text(d.subtitle, style: KeelText.sub),
-                  if (d.promoTags.isNotEmpty)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 8),
-                      child: Wrap(spacing: 6, children: [for (final t in d.promoTags) PromoTag(text: t)]),
+          ? (_loading
+                ? const EmptyState(text: '正在加载…')
+                : ErrorCard(message: _error, onRetry: _load))
+          : ListView(
+              children: [
+                // 白色的信息面板往上压住图片 24（圆角 24），与 uni-app x 的 .sheet 一样。
+                Stack(
+                  children: [
+                    _Gallery(detail: d),
+                    Container(
+                      margin: const EdgeInsets.only(top: _Gallery.height - 24),
+                      padding: const EdgeInsets.fromLTRB(20, 24, 20, 28),
+                      decoration: const BoxDecoration(
+                        color: KeelColors.card,
+                        borderRadius: BorderRadius.vertical(
+                          top: Radius.circular(24),
+                        ),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            d.offShelf ? '已下架' : 'KEEL 精选',
+                            key: const Key('detail.overline'),
+                            style: KeelText.overline,
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            d.title,
+                            key: const Key('detail.title'),
+                            style: const TextStyle(
+                              fontSize: 22,
+                              fontWeight: FontWeight.w700,
+                              color: KeelColors.text,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          if (d.subtitle.isNotEmpty)
+                            Text(d.subtitle, style: KeelText.sub),
+                          if (d.promoTags.isNotEmpty)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 8),
+                              child: Wrap(
+                                spacing: 6,
+                                children: [
+                                  for (final t in d.promoTags)
+                                    PromoTag(text: t),
+                                ],
+                              ),
+                            ),
+                          const SizedBox(height: 12),
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            children: [
+                              Text(
+                                p?.priceText ?? d.priceText,
+                                key: const Key('detail.price'),
+                                style: KeelText.priceL,
+                              ),
+                              if (p != null && p.listPriceText.isNotEmpty) ...[
+                                const SizedBox(width: 6),
+                                Text(
+                                  p.listPriceText,
+                                  key: const Key('detail.listPrice'),
+                                  style: KeelText.hint.copyWith(
+                                    decoration: TextDecoration.lineThrough,
+                                  ),
+                                ),
+                              ],
+                              if (p != null)
+                                Padding(
+                                  padding: const EdgeInsets.only(left: 12),
+                                  child: Text(
+                                    '库存 ${p.availableQty}',
+                                    style: KeelText.hint,
+                                  ),
+                                ),
+                            ],
+                          ),
+                          const Divider(height: 29, color: KeelColors.line),
+                          if (d.skus.isNotEmpty) ...[
+                            Text(
+                              d.skus.first.specName,
+                              style: KeelText.section,
+                            ),
+                            const SizedBox(height: 12),
+                            SkuChips(
+                              skus: d.skus,
+                              selected: _skuId,
+                              onPick: _pick,
+                              keyPrefix: 'detail.sku',
+                            ),
+                          ],
+                          if (d.description.isNotEmpty) ...[
+                            const Divider(height: 32, color: KeelColors.line),
+                            const Text('商品介绍', style: KeelText.section),
+                            const SizedBox(height: 8),
+                            Text(
+                              d.description,
+                              style: KeelText.body.copyWith(height: 1.6),
+                            ),
+                          ],
+                        ],
+                      ),
                     ),
-                  const SizedBox(height: 12),
-                  Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
-                    Text(p?.priceText ?? d.priceText, key: const Key('detail.price'),
-                        style: KeelText.price.copyWith(fontSize: 22)),
-                    if (p != null && p.listPriceText.isNotEmpty) ...[
-                      const SizedBox(width: 8),
-                      Text(p.listPriceText, key: const Key('detail.listPrice'),
-                          style: KeelText.hint.copyWith(decoration: TextDecoration.lineThrough)),
-                    ],
-                    const Spacer(),
-                    if (p != null) Text('库存 ${p.availableQty}', style: KeelText.hint),
-                  ]),
-                  const Divider(height: 32, color: KeelColors.line),
-                  if (d.skus.isNotEmpty) ...[
-                    Text(d.skus.first.specName, style: KeelText.section),
-                    const SizedBox(height: 10),
-                    SkuChips(skus: d.skus, selected: _skuId, onPick: _pick, keyPrefix: 'detail.sku'),
                   ],
-                  if (d.description.isNotEmpty) ...[
-                    const Divider(height: 32, color: KeelColors.line),
-                    const Text('商品介绍', style: KeelText.section),
-                    const SizedBox(height: 8),
-                    Text(d.description, style: KeelText.body.copyWith(height: 1.6)),
-                  ],
-                ]),
-              ),
-            ]),
+                ),
+              ],
+            ),
       bottomNavigationBar: d == null ? null : _bar(p),
     );
   }
@@ -180,49 +256,91 @@ class _ProductPageState extends State<ProductPage> {
     final count = Services.of(context).cart;
     return SafeArea(
       child: Container(
-        color: KeelColors.card,
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 10),
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Align(
-            alignment: Alignment.centerLeft,
-            child: _hint.isNotEmpty
-                ? Text(_hint, key: const Key('detail.hint'), style: KeelText.err)
-                : _added
-                    ? GestureDetector(key: const Key('detail.added'), onTap: () => context.go('/cart'),
-                        child: const Text('已加入购物车，去结算 ›', style: KeelText.ok))
-                    : Text('已选 ${p?.label ?? '—'}', key: const Key('detail.selected'), style: KeelText.hint),
-          ),
-          const SizedBox(height: 8),
-          Row(children: [
-            GestureDetector(
-              key: const Key('detail.cart'),
-              onTap: () => context.go('/cart'),
-              child: ListenableBuilder(
-                listenable: count,
-                builder: (_, _) => Badge(
-                  isLabelVisible: count.n > 0,
-                  label: Text(count.n > 99 ? '99+' : '${count.n}', key: const Key('detail.cartBadge')),
-                  child: const Column(mainAxisSize: MainAxisSize.min, children: [
-                    Icon(Icons.shopping_cart_outlined, color: KeelColors.primary),
-                    Text('购物车', style: TextStyle(fontSize: 10, color: KeelColors.textSub)),
-                  ]),
+        decoration: const BoxDecoration(
+          color: KeelColors.card,
+          border: Border(top: BorderSide(color: KeelColors.line)),
+        ),
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Align(
+              alignment: Alignment.centerLeft,
+              child: _hint.isNotEmpty
+                  ? Text(
+                      _hint,
+                      key: const Key('detail.hint'),
+                      style: KeelText.err,
+                    )
+                  : _added
+                  ? GestureDetector(
+                      key: const Key('detail.added'),
+                      onTap: () => context.go('/cart'),
+                      child: const Text('已加入购物车，去结算 ›', style: KeelText.ok),
+                    )
+                  : Text(
+                      '已选 ${p?.label ?? '—'}',
+                      key: const Key('detail.selected'),
+                      style: KeelText.hint,
+                    ),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                GestureDetector(
+                  key: const Key('detail.cart'),
+                  onTap: () => context.go('/cart'),
+                  child: ListenableBuilder(
+                    listenable: count,
+                    builder: (_, _) => Badge(
+                      isLabelVisible: count.n > 0,
+                      label: Text(
+                        count.n > 99 ? '99+' : '${count.n}',
+                        key: const Key('detail.cartBadge'),
+                      ),
+                      child: const Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.shopping_cart_outlined,
+                            color: KeelColors.primary,
+                          ),
+                          Text(
+                            '购物车',
+                            style: TextStyle(
+                              fontSize: 10,
+                              color: KeelColors.textSub,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
                 ),
-              ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: OutlinedButton(
+                    key: const Key('detail.add'),
+                    style: OutlinedButton.styleFrom(
+                      minimumSize: const Size(0, 48),
+                      shape: const StadiumBorder(),
+                    ),
+                    onPressed: _canCart && !_adding ? _addToCart : null,
+                    child: Text(_adding ? '加入中…' : '加入购物车'),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: FilledButton(
+                    key: const Key('detail.buy'),
+                    onPressed: _canBuy ? _buy : null,
+                    child: const Text('立即购买'),
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: OutlinedButton(
-                key: const Key('detail.add'),
-                onPressed: _canCart && !_adding ? _addToCart : null,
-                child: Text(_adding ? '加入中…' : '加入购物车'),
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: FilledButton(key: const Key('detail.buy'), onPressed: _canBuy ? _buy : null, child: const Text('立即购买')),
-            ),
-          ]),
-        ]),
+          ],
+        ),
       ),
     );
   }
@@ -230,22 +348,41 @@ class _ProductPageState extends State<ProductPage> {
 
 class _Gallery extends StatelessWidget {
   const _Gallery({required this.detail});
+
+  /// 与 uni-app x 的 .hero 同高（固定 340，宽屏也不会一张图占满一屏）。
+  static const height = 340.0;
   final ProductDetailView detail;
   @override
   Widget build(BuildContext context) {
     final c = detail.cover;
     final glyph = ColoredBox(
       color: c.color,
-      child: Center(child: Text(c.glyph, style: const TextStyle(fontSize: 72, fontWeight: FontWeight.w700, color: KeelColors.card))),
+      child: Center(
+        child: Text(
+          c.glyph,
+          style: const TextStyle(
+            fontSize: 72,
+            fontWeight: FontWeight.w700,
+            color: KeelColors.card,
+          ),
+        ),
+      ),
     );
-    // 手机上是正方形；宽屏（Web）封顶 420 高，不然一张图就占满一屏、标题和价格都看不到。
     return SizedBox(
-      height: (MediaQuery.sizeOf(context).width).clamp(0, 420).toDouble(),
+      height: height,
       child: detail.images.isEmpty
           ? glyph
-          : PageView(key: const Key('detail.gallery'), children: [
-              for (final u in detail.images) Image.network(u, fit: BoxFit.cover, errorBuilder: (_, _, _) => glyph),
-            ]),
+          : PageView(
+              key: const Key('detail.gallery'),
+              children: [
+                for (final u in detail.images)
+                  Image.network(
+                    u,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, _, _) => glyph,
+                  ),
+              ],
+            ),
     );
   }
 }
@@ -255,8 +392,14 @@ class PromoTag extends StatelessWidget {
   final String text;
   @override
   Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-        decoration: BoxDecoration(border: Border.all(color: const Color(0xFFE8B4A6)), borderRadius: BorderRadius.circular(4)),
-        child: Text(text, style: const TextStyle(fontSize: 11, color: KeelColors.err)),
-      );
+    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+    decoration: BoxDecoration(
+      border: Border.all(color: const Color(0xFFE8B4A6)),
+      borderRadius: BorderRadius.circular(4),
+    ),
+    child: Text(
+      text,
+      style: const TextStyle(fontSize: 11, color: KeelColors.err),
+    ),
+  );
 }

@@ -165,7 +165,7 @@ class _RefundApplyPageState extends State<RefundApplyPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('申请售后', style: KeelText.title), backgroundColor: KeelColors.bg, surfaceTintColor: KeelColors.bg),
+      appBar: AppBar(title: const Text('申请售后'), backgroundColor: KeelColors.bg, surfaceTintColor: KeelColors.bg),
       body: !_loaded
           ? const EmptyState(text: '正在加载…')
           : _error.isNotEmpty

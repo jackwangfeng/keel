@@ -10,6 +10,7 @@ import '../api/order.dart';
 import '../api/services.dart';
 import '../api/view.dart';
 import '../theme.dart';
+import '../widgets/pay_bar.dart';
 import '../widgets/quick_cart.dart';
 
 /// 结算：地址（默认地址；没有默认让用户选；一条都没有引导新建）→ 商品行 → 选券 → 金额拆行 → 提交。
@@ -60,6 +61,7 @@ class _CheckoutPageState extends State<CheckoutPage> {
   // 最近一次成功试算给出的可用券：选的券用不了时 _pv 是 null，这时候列表恰恰最需要还在。
   List<CouponOption> _coupons = const [];
   bool _started = false;
+  bool _showTech = false;
 
   @override
   void didChangeDependencies() {
@@ -409,7 +411,7 @@ class _CheckoutPageState extends State<CheckoutPage> {
     final loggedIn = _s.session.loggedIn;
     final pv = _pv;
     return Scaffold(
-      appBar: AppBar(title: const Text('确认订单', style: KeelText.title), backgroundColor: KeelColors.bg, surfaceTintColor: KeelColors.bg),
+      appBar: AppBar(title: const Text('确认订单'), backgroundColor: KeelColors.bg, surfaceTintColor: KeelColors.bg),
       body: ListView(padding: const EdgeInsets.fromLTRB(16, 4, 16, 24), children: [
         _card(GestureDetector(
           key: const Key('checkout.address'),
@@ -429,10 +431,10 @@ class _CheckoutPageState extends State<CheckoutPage> {
         _card(_amounts(loggedIn, pv)),
         if (_message.isNotEmpty)
           Container(
-            margin: const EdgeInsets.only(bottom: 12),
-            padding: const EdgeInsets.all(14),
+            margin: const EdgeInsets.only(top: 12),
+            padding: const EdgeInsets.all(18),
             decoration: BoxDecoration(
-                color: _failed ? const Color(0xFFF8EAE5) : const Color(0xFFEAF0E6), borderRadius: BorderRadius.circular(14)),
+                color: _failed ? const Color(0xFFF8EAE5) : const Color(0xFFEAF0E6), borderRadius: BorderRadius.circular(16)),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text(_message, key: const Key('checkout.message'), style: _failed ? KeelText.err : KeelText.ok),
               if (_provinceUnknown)
@@ -449,34 +451,44 @@ class _CheckoutPageState extends State<CheckoutPage> {
                 ),
             ]),
           ),
+        // 幂等键：进页面生成一次，重复点提交不会重复下单（服务端对重放回 201 + Idempotency-Replayed，同键异体回 422）。
+        // 对买家不是主信息，收起来；但不藏掉 —— 排查「为什么没下成」时要看得到。
+        Padding(
+          padding: const EdgeInsets.fromLTRB(4, 20, 4, 0),
+          child: Column(children: [
+            GestureDetector(
+              key: const Key('checkout.tech'),
+              onTap: () => setState(() => _showTech = !_showTech),
+              child: Text(_showTech ? '收起技术信息' : '技术信息', style: KeelText.hint),
+            ),
+            if (_showTech) ...[
+              const SizedBox(height: 8),
+              const Text('幂等键（重复提交不会重复下单）', style: KeelText.hint),
+              SelectableText(_key, key: const Key('checkout.key'),
+                  style: const TextStyle(fontSize: 12, color: KeelColors.textSub, fontFamily: 'monospace')),
+            ],
+          ]),
+        ),
       ]),
-      bottomNavigationBar: SafeArea(
-        child: Container(
-          color: KeelColors.card,
-          padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
-          child: Row(children: [
-            const Text('应付 ', style: KeelText.hint),
-            Text(pv?.payableText ?? '—', key: const Key('checkout.payable'), style: KeelText.price.copyWith(fontSize: 20)),
-            const Spacer(),
-            if (_orderNo.isNotEmpty && !_needNewKey)
-              FilledButton(key: const Key('checkout.viewOrder'),
-                  onPressed: () => context.pushReplacement('/orders/${Uri.encodeComponent(_orderNo)}'), child: const Text('查看订单'))
-            else
-              FilledButton(
+      bottomNavigationBar: PayBar(
+        amount: pv?.payableText ?? '—',
+        amountKey: const Key('checkout.payable'),
+        button: _orderNo.isNotEmpty && !_needNewKey
+            ? FilledButton(key: const Key('checkout.viewOrder'),
+                onPressed: () => context.pushReplacement('/orders/${Uri.encodeComponent(_orderNo)}'), child: const Text('查看订单'))
+            : FilledButton(
                 key: const Key('checkout.submit'),
                 onPressed: pv == null || _busy || _addressId == 0 || _outOfRange ? null : _submit,
                 child: Text(_busy ? '提交中…' : '提交订单'),
               ),
-          ]),
-        ),
       ),
     );
   }
 
   Widget _card(Widget child) => Container(
-        margin: const EdgeInsets.only(bottom: 12),
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(color: KeelColors.card, borderRadius: BorderRadius.circular(14)),
+        margin: const EdgeInsets.only(top: 12),
+        padding: const EdgeInsets.all(18),
+        decoration: BoxDecoration(color: KeelColors.card, borderRadius: BorderRadius.circular(16)),
         child: child,
       );
 
@@ -502,9 +514,9 @@ class _CheckoutPageState extends State<CheckoutPage> {
   }
 
   Widget _thumb(Cover? c) => ClipRRect(
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(12),
         child: SizedBox(
-          width: 56, height: 56,
+          width: 76, height: 76,
           child: c == null
               ? const ColoredBox(color: Color(0xFFD4B896))
               : c.imageUrl.isNotEmpty
@@ -519,10 +531,10 @@ class _CheckoutPageState extends State<CheckoutPage> {
             padding: const EdgeInsets.symmetric(vertical: 6),
             child: Row(children: [
               _thumb(r.cover),
-              const SizedBox(width: 12),
+              const SizedBox(width: 14),
               Expanded(
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(r.title, style: KeelText.body.copyWith(fontWeight: FontWeight.w700)),
+                  Text(r.title, style: KeelText.section),
                   if (r.specText.isNotEmpty) Text(r.specText, style: KeelText.hint),
                   if (_undeliverableOf(r.skuId).isNotEmpty)
                     Text(_undeliverableOf(r.skuId), key: Key('checkout.undeliverable.${r.skuId}'), style: KeelText.err),
@@ -536,10 +548,10 @@ class _CheckoutPageState extends State<CheckoutPage> {
 
   Widget _singleLine() => Row(children: [
         _thumb(_cover),
-        const SizedBox(width: 12),
+        const SizedBox(width: 14),
         Expanded(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(_itemTitle, style: KeelText.body.copyWith(fontWeight: FontWeight.w700)),
+            Text(_itemTitle, style: KeelText.section),
             if (_itemSpec.isNotEmpty) Text(_itemSpec, style: KeelText.hint),
             if (_undeliverableOf(widget.skuId).isNotEmpty)
               Text(_undeliverableOf(widget.skuId), key: Key('checkout.undeliverable.${widget.skuId}'), style: KeelText.err),
@@ -568,7 +580,7 @@ class _CheckoutPageState extends State<CheckoutPage> {
           const Text('优惠券', style: KeelText.overline),
           const Spacer(),
           Text(summary, key: const Key('checkout.couponSummary'),
-              style: TextStyle(fontSize: 13, color: _couponId > 0 ? KeelColors.err : KeelColors.textHint)),
+              style: _couponId > 0 ? const TextStyle(fontSize: 14, color: KeelColors.err) : KeelText.hint),
           Icon(_couponOpen ? Icons.expand_less : Icons.chevron_right, color: KeelColors.textHint),
         ]),
       ),
@@ -580,8 +592,9 @@ class _CheckoutPageState extends State<CheckoutPage> {
             title: Text(c.name, style: KeelText.body),
             subtitle: Text('${c.ruleText} · ${c.validText}', style: KeelText.hint),
             trailing: Row(mainAxisSize: MainAxisSize.min, children: [
-              Text(c.saveText, style: const TextStyle(color: KeelColors.err)),
-              Icon(c.id == _couponId ? Icons.radio_button_checked : Icons.radio_button_off, color: KeelColors.primary),
+              Text(c.saveText, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: KeelColors.err)),
+              const SizedBox(width: 12),
+              KeelRadio(on: c.id == _couponId),
             ]),
             onTap: () => _pickCoupon(c.id),
           ),
@@ -589,7 +602,7 @@ class _CheckoutPageState extends State<CheckoutPage> {
           key: const Key('checkout.coupon.none'),
           contentPadding: EdgeInsets.zero,
           title: const Text('不使用优惠券', style: KeelText.body),
-          trailing: Icon(_couponId == 0 ? Icons.radio_button_checked : Icons.radio_button_off, color: KeelColors.primary),
+          trailing: KeelRadio(on: _couponId == 0),
           onTap: () => _pickCoupon(0),
         ),
       ],
@@ -597,7 +610,7 @@ class _CheckoutPageState extends State<CheckoutPage> {
   }
 
   Widget _kv(String k, String v, {String? key, String note = ''}) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 4),
+        padding: const EdgeInsets.symmetric(vertical: 6),
         child: Row(children: [
           Text(k, style: KeelText.sub),
           const Spacer(),
@@ -625,7 +638,7 @@ class _CheckoutPageState extends State<CheckoutPage> {
         if (pv.noDiscountLines) _kv('优惠', pv.discountText, key: 'checkout.discount'),
         for (final (i, n) in pv.promotionNotes.indexed)
           Text(n, key: Key('checkout.note.$i'), style: const TextStyle(fontSize: 12, color: KeelColors.accent)),
-        const Divider(color: KeelColors.line),
+        const Divider(height: 29, color: KeelColors.line),
         Row(children: [
           const Text('应付', style: KeelText.section),
           const Spacer(),

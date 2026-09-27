@@ -70,15 +70,28 @@ class _MePageState extends State<MePage> {
         final loggedIn = s.session.loggedIn;
         final name = s.session.nickname.isEmpty ? '买家' : s.session.nickname;
         final unread = s.unread.n;
-        Widget item(String key, String title, VoidCallback onTap, {Widget? trailing}) => ListTile(
+        // 一行 56 高、左右 18，行间一条从 18 开始的细线，右边浅色的「›」（uni-app x 的 .item / .line / .chev）。
+        Widget item(String key, String title, VoidCallback onTap, {Widget? trailing}) => InkWell(
               key: Key(key),
-              title: Text(title, style: KeelText.body),
-              trailing: Row(mainAxisSize: MainAxisSize.min, children: [
-                ?trailing,
-                const Icon(Icons.chevron_right, color: KeelColors.textHint),
-              ]),
               onTap: onTap,
+              child: SizedBox(
+                height: 56,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 18),
+                  child: Row(children: [
+                    Expanded(child: Text(title, style: KeelText.body)),
+                    ?trailing,
+                    const Padding(padding: EdgeInsets.only(left: 8), child: Text('›', style: TextStyle(fontSize: 20, color: Color(0xFFC4B8AA)))),
+                  ]),
+                ),
+              ),
             );
+        Widget lines(List<Widget> rows) => Column(children: [
+              for (final (i, r) in rows.indexed) ...[
+                if (i > 0) const Divider(height: 1, thickness: 1, indent: 18, color: KeelColors.line),
+                r,
+              ],
+            ]);
         return Scaffold(
           body: SafeArea(
             child: ListView(padding: const EdgeInsets.all(16), children: [
@@ -89,12 +102,12 @@ class _MePageState extends State<MePage> {
                   padding: const EdgeInsets.symmetric(vertical: 16),
                   child: Row(children: [
                     CircleAvatar(
-                      radius: 28,
+                      radius: 30,
                       backgroundColor: KeelColors.primary,
                       child: Text(loggedIn ? name.substring(0, 1) : '客',
-                          style: const TextStyle(fontSize: 22, color: KeelColors.card, fontWeight: FontWeight.w700)),
+                          style: const TextStyle(fontSize: 24, color: KeelColors.bg, fontWeight: FontWeight.w700)),
                     ),
-                    const SizedBox(width: 14),
+                    const SizedBox(width: 16),
                     Expanded(
                       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                         loggedIn
@@ -103,22 +116,24 @@ class _MePageState extends State<MePage> {
                         Text(loggedIn ? '欢迎回来' : '登录后可以下单、查看订单', style: KeelText.sub),
                       ]),
                     ),
-                    const Icon(Icons.chevron_right, color: KeelColors.textHint),
+                    const Text('›', style: TextStyle(fontSize: 20, color: Color(0xFFC4B8AA))),
                   ]),
                 ),
               ),
-              Card(
-                child: Column(children: [
+              Container(
+                margin: const EdgeInsets.only(top: 12),
+                clipBehavior: Clip.antiAlias,
+                decoration: BoxDecoration(color: KeelColors.card, borderRadius: BorderRadius.circular(16)),
+                child: lines([
                   if (loggedIn) item('me.profile', '个人资料', () => context.push('/profile')),
                   if (loggedIn)
                     item('me.notifications', '消息', () => context.push('/notifications'),
                         trailing: unread > 0
                             ? Container(
                                 key: const Key('me.unread'),
-                                margin: const EdgeInsets.only(right: 4),
-                                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 1),
-                                decoration: BoxDecoration(color: KeelColors.err, borderRadius: BorderRadius.circular(10)),
-                                child: Text(unread > 99 ? '99+' : '$unread', style: const TextStyle(fontSize: 11, color: KeelColors.card)),
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+                                decoration: BoxDecoration(color: const Color(0xFFF3DDD5), borderRadius: BorderRadius.circular(10)),
+                                child: Text(unread > 99 ? '99+' : '$unread', style: const TextStyle(fontSize: 12, color: Color(0xFF9C3F28))),
                               )
                             : null),
                   item('me.addresses', '收货地址', () => _go('/addresses')),
@@ -132,15 +147,18 @@ class _MePageState extends State<MePage> {
                 ]),
               ),
               if (loggedIn)
-                Card(
-                  child: ListTile(
+                Container(
+                  margin: const EdgeInsets.only(top: 12),
+                  clipBehavior: Clip.antiAlias,
+                  decoration: BoxDecoration(color: KeelColors.card, borderRadius: BorderRadius.circular(16)),
+                  child: InkWell(
                     key: const Key('me.logout'),
-                    title: const Center(child: Text('退出登录', style: TextStyle(color: KeelColors.accent))),
                     onTap: _logout,
+                    child: const SizedBox(height: 56, child: Center(child: Text('退出登录', style: KeelText.link))),
                   ),
                 ),
               if (_message.isNotEmpty) Center(child: Text(_message, key: const Key('me.message'), style: KeelText.hint)),
-              const SizedBox(height: 24),
+              const SizedBox(height: 40),
               const Center(child: Text('Keel 买家端 · Flutter', style: KeelText.hint)),
             ]),
           ),

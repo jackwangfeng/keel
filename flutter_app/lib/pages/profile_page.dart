@@ -132,7 +132,7 @@ class _ProfilePageState extends State<ProfilePage> {
   Widget build(BuildContext context) {
     final m = _me;
     return Scaffold(
-      appBar: AppBar(title: const Text('个人资料', style: KeelText.title), backgroundColor: KeelColors.bg, surfaceTintColor: KeelColors.bg),
+      appBar: AppBar(title: const Text('个人资料'), backgroundColor: KeelColors.bg, surfaceTintColor: KeelColors.bg),
       body: m == null
           ? (_error.isNotEmpty ? ErrorCard(message: _error, onRetry: _load) : const EmptyState(text: '正在加载…'))
           : ListView(padding: const EdgeInsets.fromLTRB(16, 8, 16, 24), children: [

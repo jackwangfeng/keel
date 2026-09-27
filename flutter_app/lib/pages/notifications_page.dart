@@ -103,7 +103,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('消息', style: KeelText.title), backgroundColor: KeelColors.bg, surfaceTintColor: KeelColors.bg),
+      appBar: AppBar(title: const Text('消息'), backgroundColor: KeelColors.bg, surfaceTintColor: KeelColors.bg),
       body: RefreshIndicator(
         onRefresh: () => _fetch(1),
         child: ListView(padding: const EdgeInsets.fromLTRB(16, 4, 16, 24), children: [
@@ -119,9 +119,9 @@ class _NotificationsPageState extends State<NotificationsPage> {
               key: Key('notes.row.${r.id}'),
               onTap: () => _open(r),
               child: Container(
-                margin: const EdgeInsets.only(bottom: 10),
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(color: r.unread ? const Color(0xFFFFF8EE) : KeelColors.card, borderRadius: BorderRadius.circular(14)),
+                margin: const EdgeInsets.only(top: 12),
+                padding: const EdgeInsets.all(18),
+                decoration: BoxDecoration(color: r.unread ? const Color(0xFFFFF8EE) : KeelColors.card, borderRadius: BorderRadius.circular(16)),
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Row(children: [
                     if (r.unread)

@@ -93,7 +93,7 @@ class _CouponCenterPageState extends State<CouponCenterPage> {
   Widget build(BuildContext context) {
     final loggedIn = Services.of(context).session.loggedIn;
     return Scaffold(
-      appBar: AppBar(title: const Text('领券中心', style: KeelText.title), backgroundColor: KeelColors.bg, surfaceTintColor: KeelColors.bg),
+      appBar: AppBar(title: const Text('领券中心'), backgroundColor: KeelColors.bg, surfaceTintColor: KeelColors.bg),
       body: !loggedIn
           ? Center(
               child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -117,19 +117,28 @@ class _CouponCenterPageState extends State<CouponCenterPage> {
                   foot: Row(children: [
                     Text(r.remainingText, style: KeelText.hint),
                     const Spacer(),
-                    SizedBox(
-                      height: 32,
-                      child: FilledButton(
-                        key: Key('center.claim.${r.id}'),
-                        style: FilledButton.styleFrom(minimumSize: const Size(72, 32), padding: const EdgeInsets.symmetric(horizontal: 14)),
-                        onPressed: r.canClaim && _claiming == 0 ? () => _claim(r) : null,
-                        child: Text(_claiming == r.id ? '领取中…' : r.actionText, key: Key('center.action.${r.id}')),
+                    // 小胶囊按钮（uni-app x 的 .claim-btn）：能领深咖底白字，不能领浅灰底灰字。
+                    GestureDetector(
+                      key: Key('center.claim.${r.id}'),
+                      onTap: r.canClaim && _claiming == 0 ? () => _claim(r) : null,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: r.canClaim ? KeelColors.primary : const Color(0xFFEEE9E3),
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        child: Text(_claiming == r.id ? '领取中…' : r.actionText, key: Key('center.action.${r.id}'),
+                            style: TextStyle(fontSize: 13, color: r.canClaim ? KeelColors.card : KeelColors.textSub)),
                       ),
                     ),
                   ]),
                 ),
               if (_loaded && _rows.isEmpty && _error.isEmpty) const EmptyState(text: '暂时没有可以领的券'),
-              Center(child: TextButton(key: const Key('center.mine'), onPressed: () => context.push('/coupons'), child: const Text('我的优惠券 ›'))),
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 24),
+                child: Center(child: GestureDetector(key: const Key('center.mine'), onTap: () => context.push('/coupons'),
+                    child: const Text('我的优惠券 ›', style: KeelText.link))),
+              ),
             ]),
     );
   }

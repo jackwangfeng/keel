@@ -117,7 +117,7 @@ class _OrdersPageState extends State<OrdersPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('我的订单', style: KeelText.title), backgroundColor: KeelColors.bg, surfaceTintColor: KeelColors.bg),
+      appBar: AppBar(title: const Text('我的订单'), backgroundColor: KeelColors.bg, surfaceTintColor: KeelColors.bg),
       body: !_session.loggedIn
           ? Center(
               child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -152,9 +152,9 @@ class _OrdersPageState extends State<OrdersPage> {
         key: Key('orders.row.${r.orderNo}'),
         onTap: () => _open(r.orderNo),
         child: Container(
-          margin: const EdgeInsets.only(bottom: 10),
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(color: KeelColors.card, borderRadius: BorderRadius.circular(14)),
+          margin: const EdgeInsets.only(top: 12),
+          padding: const EdgeInsets.all(18),
+          decoration: BoxDecoration(color: KeelColors.card, borderRadius: BorderRadius.circular(16)),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Row(children: [
               ToneBadge(key: Key('orders.status.${r.orderNo}'), text: r.statusText, tone: r.statusTone),
@@ -162,7 +162,7 @@ class _OrdersPageState extends State<OrdersPage> {
               const Spacer(),
               Text(r.createdAt, style: KeelText.hint),
             ]),
-            const SizedBox(height: 10),
+            const SizedBox(height: 12),
             Row(children: [
               Expanded(
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [

@@ -132,7 +132,7 @@ class _RefundPageState extends State<RefundPage> {
   Widget build(BuildContext context) {
     final v = _v;
     return Scaffold(
-      appBar: AppBar(title: const Text('售后详情', style: KeelText.title), backgroundColor: KeelColors.bg, surfaceTintColor: KeelColors.bg),
+      appBar: AppBar(title: const Text('售后详情'), backgroundColor: KeelColors.bg, surfaceTintColor: KeelColors.bg),
       body: v == null
           ? (_error.isNotEmpty ? ErrorCard(message: _error, onRetry: _load) : const EmptyState(text: '正在加载…'))
           : ListView(padding: const EdgeInsets.fromLTRB(16, 4, 16, 24), children: [
@@ -193,7 +193,7 @@ class _RefundPageState extends State<RefundPage> {
                       Text(it.amountText, style: KeelText.price),
                     ]),
                   ),
-                const Divider(color: KeelColors.line),
+                const Divider(height: 29, color: KeelColors.line),
                 _kv('退款金额', v.head.amountText, key: 'refund.amount'),
                 _kv('售后类型', v.head.typeText),
                 if (v.reasonText.isNotEmpty) _kv('原因', v.reasonText),
@@ -229,14 +229,14 @@ class _RefundPageState extends State<RefundPage> {
   }
 
   Widget _card(Widget child, {Color color = KeelColors.card}) => Container(
-        margin: const EdgeInsets.only(bottom: 12),
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(14)),
+        margin: const EdgeInsets.only(top: 12),
+        padding: const EdgeInsets.all(18),
+        decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(16)),
         child: child,
       );
 
   Widget _kv(String k, String v, {String? key}) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 3),
+        padding: const EdgeInsets.symmetric(vertical: 6),
         child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text(k, style: KeelText.sub),
           const SizedBox(width: 16),
