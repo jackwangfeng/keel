@@ -299,7 +299,7 @@ func classifyClaimFailure(ctx context.Context, tx repository.Tx, templateID int6
 	case !forClaim && st.Status != 1:
 		return fmt.Errorf("%w: template_id=%d", ErrCouponTemplateDisabled, templateID)
 	case st.ValidMode == 1 && st.ValidEndAt != nil && !now.Before(*st.ValidEndAt):
-		return fmt.Errorf("%w: 已于 %s 结束", ErrCouponClaimEnded, st.ValidEndAt.UTC().Format(time.RFC3339))
+		return fmt.Errorf("%w: 已于 %s 结束", ErrCouponClaimEnded, buyerClock(*st.ValidEndAt))
 	default:
 		return fmt.Errorf("%w: 总量 %d，已发出 %d", ErrCouponSoldOut, st.TotalCount, st.IssuedCount)
 	}

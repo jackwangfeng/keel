@@ -3,6 +3,7 @@ package handler
 import (
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -149,6 +150,13 @@ func maskPhone(phone string) string {
 // 每一条都对应契约里明写的一个状态码；没对上的一律 500 —— 兜底分支不该
 // 猜一个 4xx，那会把服务端的 bug 报成客户端的错，而客户端会照着这个错重试。
 func writeAuthError(c *gin.Context, err error) {
+	var locked *service.ErrLoginLocked
+	if errors.As(err, &locked) {
+		// Retry-After 在 problem.Write 之前设：那个函数会 Abort。
+		c.Header("Retry-After", strconv.Itoa(int(locked.RetryAfter.Seconds())+1))
+		problem.Write(c, http.StatusTooManyRequests, problem.TypeRateLimited, locked.Error())
+		return
+	}
 	switch {
 	case errors.Is(err, service.ErrBadRequest):
 		problem.Write(c, http.StatusUnprocessableEntity,

@@ -467,12 +467,31 @@ func releaseClosedOrder(ctx context.Context, tx repository.Tx, orderID int64,
 	}
 	qty := 0
 	for _, ln := range lines {
-		after, err := tx.RestoreInventory(ctx, ln.SKUID, storeID, ln.Quantity)
+		// 只回补**真的扣了、还没补回来**的那部分。「status = 10 ⇒ 库存已扣」在 SAGA 的
+		// 窗口里不成立：建单分支已经把订单推到 10，库存分支还在重试（审查发现）。那时
+		// 无条件回补就是凭空加库存 —— 库存分支之后若因缺货失败，它的补偿被屏障判成空回滚，
+		// 多出来的库存永远留着，下一个人就超卖了。流水净值是唯一可信的「扣没扣」。
+		net, err := tx.OrderSkuNetInventoryChange(ctx, orderNo, ln.SKUID, storeID)
 		if err != nil {
 			return 0, err
 		}
-		if err := tx.AppendInventoryLog(ctx, ln.SKUID, storeID, ln.Quantity,
-			bizType, orderNo, after-ln.Quantity, after); err != nil {
+		outstanding := -net
+		if outstanding <= 0 {
+			slog.WarnContext(ctx, "关单时这一行没有未回补的扣减，跳过回补（库存分支没扣或已补偿）",
+				"order_no", orderNo, "sku_id", ln.SKUID, "net", net)
+			continue
+		}
+		if outstanding > ln.Quantity {
+			// 流水说扣得比下单数量还多：数据已经不对了，不要再按错的数加回去。
+			return 0, fmt.Errorf("订单 %s sku %d 的扣减流水净值 %d 超过下单数量 %d",
+				orderNo, ln.SKUID, outstanding, ln.Quantity)
+		}
+		after, err := tx.RestoreInventory(ctx, ln.SKUID, storeID, outstanding)
+		if err != nil {
+			return 0, err
+		}
+		if err := tx.AppendInventoryLog(ctx, ln.SKUID, storeID, outstanding,
+			bizType, orderNo, after-outstanding, after); err != nil {
 			return 0, err
 		}
 		// 按活动价成交的行：活动配额与每人限购一起放回（00058），与回补库存同一个事务。

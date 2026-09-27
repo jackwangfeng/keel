@@ -39,11 +39,23 @@ so "which one is running?" never depends on anyone's memory.
 
 ## [Unreleased]
 
-Migrations `00027`–`00038`, `00053`–`00063`.
+Migrations `00027`–`00038`, `00053`–`00064`.
 
 
 ### Added
 
+- **Buyer app: adding to cart from product lists.** Product cards on the home list and
+  in search results have a "+" button: single-spec products go straight into the cart,
+  multi-spec products open a spec/quantity sheet; either way the list stays put, a toast
+  confirms, and the cart tab badge updates (it counts items, not lines). The product
+  detail page gains a cart button with a badge, and "已加入购物车，去结算 ›" is tappable.
+- **Buyer app: sessions renew themselves.** A 401 while logged in triggers one shared
+  `POST /auth/refresh` (single-flight, because refresh tokens rotate) and replays the
+  waiting requests; only when refresh fails is the session cleared and the login page
+  opened ("登录已过期，请重新登录"), returning to the previous page after login.
+- **Password login lockout**: five wrong passwords for the same phone in one shop within
+  15 minutes lock that phone for 15 minutes (`429 rate-limited` with `Retry-After`),
+  counted per phone rather than per IP; unknown phones are locked the same way.
 - **Relative inventory adjustments** (`POST /admin/stores/{store_id}/skus/{sku_id}/inventory/adjustments`,
   plus the single-store shortcut `POST /admin/skus/{sku_id}/inventory/adjustments`;
   migration `00063`). The body is just `delta` (non-zero, |delta| ≤ 1,000,000) and an
@@ -486,10 +498,11 @@ Migrations `00027`–`00038`, `00053`–`00063`.
   so every manual stock change is traceable — not only relative adjustments. A successful
   compare-and-set proves the old value was `expected_available_qty`, so no extra read is
   needed. Changing only the warning threshold writes nothing.
-- **`products.total_stock` dropped** (migration `00062`). Nothing had written it since
-  `00019`, so it was always 0; `AdminProduct.total_stock` in the API was already computed
-  from `inventories` and is unchanged. Seeds or manual SQL that inserted the column must
-  drop it.
+- **`products.total_stock` is no longer read or written by any code** (it had been
+  always 0 since `00019`); `AdminProduct.total_stock` in the API was already computed from
+  `inventories` and is unchanged. The column itself stays for one release (migration
+  `00062` is intentionally a no-op) so that old app instances still running during a rolling
+  deploy keep working; it will be dropped in a later migration.
 - **Coupon thresholds and percentages now apply to the post-promotion amount**
   of each line (`amount_cents − promotion_discount_cents`), not the store price.
   Without promotions nothing changes. A promotion can be marked as not stackable
@@ -570,6 +583,33 @@ Migrations `00027`–`00038`, `00053`–`00063`.
 
 ### Fixed
 
+- **Product list and search were unusably slow on large catalogs**: `skus` had no index on
+  `product_id` (the data model declared `idx_skus_product`, no migration created it), so
+  every per-product price/stock lookup scanned all of a shop's SKUs — about 55 s per page
+  at 20k products. Migration `00064` adds it, a listing index matching the list's sort
+  (104 ms → 0.15 ms), and the two category indexes the data model also declared.
+- **Closing an order could restore stock that was never deducted.** Between the order
+  being moved to "pending payment" and the stock branch finishing (a retried branch),
+  a buyer cancel or timeout close restored every line unconditionally. Closing now restores
+  only what the order's inventory log shows as still deducted, and the stock branch locks
+  the order row and refuses an order that is already closed.
+- Refund restocking takes inventory row locks in `sku_id` order, like every other stock
+  path, so it can no longer deadlock against an order deduction.
+- Migration `00063` adds its CHECK as `NOT VALID` (no full scan of `inventory_logs` under
+  an exclusive lock), and `00062` no longer drops `products.total_stock` in this release
+  (old app instances still read it during a rolling deploy).
+- Coupon "not applicable" reasons shown to buyers used fen and UTC timestamps
+  ("还差 1000 分", "2026-09-30T16:00:00Z 才开始可用"); they now read "还差 ¥10" and
+  Beijing time.
+- Buyer app: coupon end dates showed the exclusive end instant's date (a coupon ending
+  "10-07 00:00" read "至 10-07"); discount rates were rounded to one decimal ("9.95折"
+  showed as "10折"); the order detail address dropped the street; zero "已付" / "优惠合计"
+  rows were shown on unpaid orders.
+- Buyer app: placing an order now opens the order for payment directly, and in sandbox
+  mode the bottom button becomes "模拟支付完成（沙箱）" after starting payment — before, the
+  result and the settle button were below the fold and nothing visibly happened.
+- Back office: coupon validity and promotion date ranges picked by day now end at
+  23:59:59 on the last day instead of 00:00 (which silently dropped that day).
 - **Buyer app times were 8 hours early** (order, payment, refund, coupon, notification
   times and the new auto-confirm / return deadlines). The API sends UTC RFC3339 as the
   contract says; the app sliced the string instead of parsing it, so a Beijing buyer saw

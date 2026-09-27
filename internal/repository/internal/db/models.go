@@ -308,6 +308,7 @@ type Product struct {
 	Title             string
 	Subtitle          *string
 	Description       *string
+	TotalStock        int32
 	SalesCount        int32
 	Status            int16
 	PublishedAt       pgtype.Timestamptz

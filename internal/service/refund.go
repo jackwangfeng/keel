@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -897,7 +898,13 @@ func (s *RefundService) settleTx(ctx context.Context, tx repository.Tx, channel 
 	// 库存：只有没发过货才回补（文件头的保守规则）。流水 biz_id 记退款单号 ——
 	// 一单可以有几张退款单，记订单号的话分不清是哪一张放回来的。
 	if order.ShippedAt == nil {
-		for _, it := range r.Items {
+		// 按 sku_id 升序拿库存行锁 —— 与下单扣减、补偿、关单同一个全局顺序（orders.sql 那条
+		// ORDER BY sku_id 的注释）。按退款行的顺序（= 下单时请求里的顺序）拿锁，
+		// 两张共享 SKU 的单一个扣一个回补就可能互相等成死锁；扣减那一侧成了牺牲者时
+		// 会被当成 Unknown 重试，正好撞进库存分支的重试窗口。
+		items := append([]repository.RefundItem(nil), r.Items...)
+		sort.Slice(items, func(i, j int) bool { return items[i].SKUID < items[j].SKUID })
+		for _, it := range items {
 			after, err := tx.RestoreInventory(ctx, it.SKUID, order.StoreID, it.Quantity)
 			if err != nil {
 				return nil, err

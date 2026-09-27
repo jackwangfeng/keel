@@ -312,6 +312,10 @@ type OrderTx interface {
 	// ListOrderLines 取一笔订单的全部行（sku_id + 数量），按 sku_id 排序。
 	// 这是 SAGA 库存分支重建扣减意图的唯一来源。
 	ListOrderLines(ctx context.Context, orderID int64) ([]OrderLine, error)
+	// LockOrderStatus 锁住订单行（FOR UPDATE）并返回它此刻的状态。库存分支用它与取消 / 关单串行。
+	LockOrderStatus(ctx context.Context, orderID int64) (int16, error)
+	// OrderSkuNetInventoryChange 是这一单在某店某 SKU 上的库存流水净变化（扣减为负）。
+	OrderSkuNetInventoryChange(ctx context.Context, orderNo string, skuID, storeID int64) (int32, error)
 
 	// PromoteOrderDraft 把订单从 0 创建中推到 10 待支付，返回受影响行数。
 	PromoteOrderDraft(ctx context.Context, orderNo string) (int64, error)
@@ -634,4 +638,18 @@ func (t tenantTx) ReleaseIdempotencyKey(ctx context.Context, scope string, subj 
 		return false, err
 	}
 	return n == 1, nil
+}
+
+func (t tenantTx) LockOrderStatus(ctx context.Context, orderID int64) (int16, error) {
+	st, err := t.q.LockOrderStatus(ctx, orderID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, fmt.Errorf("订单 %d: %w", orderID, ErrOrderNotFound)
+	}
+	return st, err
+}
+
+func (t tenantTx) OrderSkuNetInventoryChange(ctx context.Context, orderNo string, skuID, storeID int64) (int32, error) {
+	return t.q.OrderSkuNetInventoryChange(ctx, db.OrderSkuNetInventoryChangeParams{
+		OrderNo: orderNo, SkuID: skuID, StoreID: storeID,
+	})
 }

@@ -86,6 +86,10 @@ const (
 // 所以它是一个 sentinel 而不是一句普通的 fmt.Errorf。
 var errOrderNotDraft = errors.New("订单不在「创建中」状态")
 
+// errOrderNotPending：库存分支要扣库存时，订单已经不在 10 待支付（被买家取消或超时关单）。
+// 确定性失败：重试也改变不了，触发全局补偿；库存分支自己的补偿会被屏障判成空回滚。
+var errOrderNotPending = errors.New("订单不在「待支付」状态")
+
 // Branches 返回要注册到协调器上的全部进程内分支，键就是编排里 "local://"
 // 后面那个名字。
 //
@@ -202,7 +206,8 @@ func (s *OrderService) reportBranchFailure(log *slog.Logger, gid string, err err
 		s.notes.put(gid, err)
 		return dtm.Failure
 
-	case errors.Is(err, repository.ErrOrderNotFound), errors.Is(err, errOrderNotDraft):
+	case errors.Is(err, repository.ErrOrderNotFound), errors.Is(err, errOrderNotDraft),
+		errors.Is(err, errOrderNotPending):
 		log.Error("分支找不到它要处理的订单，或订单状态不对", "err", err)
 		s.notes.put(gid, fmt.Errorf("%w: %v", ErrOrderSagaFailed, err))
 		return dtm.Failure
@@ -335,6 +340,17 @@ func unlockCoupon(ctx context.Context, tx repository.Tx, order repository.Order)
 // 「从来没扣过」一模一样。只有这两行流水能把两者分开，而「补偿到底跑没跑」
 // 正是 SAGA 最需要能被证伪的那件事。
 func deductStock(ctx context.Context, tx repository.Tx, order repository.Order) error {
+	// 先锁订单行、确认它还没被关掉（LockOrderStatus 的注释写了那个窗口）。
+	// 正常编排下这里看到的是 10（建单分支已推过）；0 只在直接调分支的测试里出现，
+	// 而 0 的订单只会被孤儿清理关掉，那一侧另有「一行流水都没有」的断言守着。
+	// 其余状态（90 已关闭等）是确定性失败：买家已经取消 / 超时关单了，这时再扣就是给一笔关掉的单扣货。
+	st, err := tx.LockOrderStatus(ctx, order.ID)
+	if err != nil {
+		return err
+	}
+	if st != orderStatusPending && st != orderStatusDraft {
+		return fmt.Errorf("%w: 订单 %s 已经是 %d，不再扣库存", errOrderNotPending, order.OrderNo, st)
+	}
 	lines, err := tx.ListOrderLines(ctx, order.ID)
 	if err != nil {
 		return err

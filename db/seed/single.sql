@@ -178,7 +178,7 @@ UPDATE categories c
 --     items[0]（按 published_at 倒序，也就是最后插入的那件）去下单，
 --     挑不出有货 SKU 时会失败。
 --
--- 商品行上没有库存汇总（00062 删掉了 total_stock）：后台读到的总库存是从
+-- 不写 products.total_stock（已停用、恒为 0，下一版删列，见 00062）：后台读到的总库存是从
 -- inventories 现算的，库存只播在下面的 inventories 里。
 INSERT INTO products (merchant_id, category_id, title, subtitle,
                       sales_count, status, published_at)

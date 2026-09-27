@@ -15,10 +15,18 @@
 --
 -- 纯加一列可空、无默认值：PG 只改目录，不重写表，也不挡下单扣减的写。
 
+--
+-- CHECK 用 NOT VALID：inventory_logs 只增不减、每一笔下单都往里写，是热表。
+-- 不加 NOT VALID 的 ADD CONSTRAINT 会在 ACCESS EXCLUSIVE 锁下全表扫一遍校验存量行
+-- （审查实测 500 万行 318 ms，冷缓存更久，期间所有下单扣减都被挡住）。新加的列存量全是
+-- NULL，没有什么可校验的；NOT VALID 的约束对之后写入的每一行照样生效。
+-- lock_timeout：拿不到锁就失败，而不是排在长查询后面、同时挡住后面所有写。
+
 -- +goose Up
+SET LOCAL lock_timeout = '5s';
 ALTER TABLE inventory_logs ADD COLUMN reason TEXT;
 ALTER TABLE inventory_logs ADD CONSTRAINT chk_inv_logs_reason_len
-    CHECK (reason IS NULL OR char_length(reason) <= 200);
+    CHECK (reason IS NULL OR char_length(reason) <= 200) NOT VALID;
 
 -- +goose Down
 ALTER TABLE inventory_logs DROP CONSTRAINT chk_inv_logs_reason_len;

@@ -59,13 +59,14 @@ type AuthService struct {
 	repo   AuthRepository
 	signer *auth.Signer
 	log    *slog.Logger
+	guard  *loginGuard
 }
 
 func NewAuthService(r AuthRepository, s *auth.Signer, log *slog.Logger) *AuthService {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &AuthService{repo: r, signer: s, log: log}
+	return &AuthService{repo: r, signer: s, log: log, guard: newLoginGuard()}
 }
 
 // LoginRequest 是 /auth/login 的入参。code 与 password 二选一（契约的 oneOf）。
@@ -113,8 +114,17 @@ func (s *AuthService) Login(ctx context.Context, req LoginRequest) (Session, err
 		return Session{}, ErrSMSLoginUnavailable
 	}
 
+	merchantID, err := tenant.FromContext(ctx)
+	if err != nil {
+		return Session{}, err
+	}
+	key := loginGuardKey(merchantID, phone)
+	if err := s.guard.check(key); err != nil {
+		return Session{}, err
+	}
+
 	var out Session
-	err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+	err = s.repo.WithTenant(ctx, func(tx repository.Tx) error {
 		user, err := tx.FindUserByPhone(ctx, phone)
 		switch {
 		case errors.Is(err, repository.ErrUserNotFound):
@@ -148,8 +158,13 @@ func (s *AuthService) Login(ctx context.Context, req LoginRequest) (Session, err
 		return err
 	})
 	if err != nil {
-		return Session{}, mapCredentialError(err)
+		err = mapCredentialError(err)
+		if errors.Is(err, ErrInvalidCredentials) {
+			s.guard.fail(key)
+		}
+		return Session{}, err
 	}
+	s.guard.succeed(key)
 	// 新人礼（营销活动类型 5）：首单前的买家登录成功即补发。放在登录事务**之外**、
 	// 尽力而为 —— 发不出券不能让登录失败（promotion_gift.go 的文件头）。
 	GrantNewBuyerGifts(ctx, s.repo, out.User.ID, time.Now(), s.log)

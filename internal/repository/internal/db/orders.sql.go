@@ -1376,6 +1376,47 @@ func (q *Queries) ListUserOrders(ctx context.Context, arg ListUserOrdersParams) 
 	return items, nil
 }
 
+const lockOrderStatus = `-- name: LockOrderStatus :one
+SELECT status FROM orders WHERE id = $1 FOR UPDATE
+`
+
+// 库存分支正向开头用：锁住订单行再看它还是不是 10 待支付。
+//
+// 审查发现的窗口：建单分支先把订单推到 10，库存分支才扣。库存分支一次说不清的失败
+// （死锁、断连）会被协调器重试，而重试之前订单已经是 10、单号可能已经外泄（WaitFinal
+// 超时回 409 in-flight）—— 买家这时取消、或超时任务关单，就会「回补」一笔还没扣的库存。
+// 锁住订单行让「取消 / 关单」与「扣减」串行：取消先提交，扣减这里看到 90 就拒绝
+// （返回确定性失败，全局补偿，库存分支的补偿被屏障判成空回滚）；扣减先拿到锁，
+// 取消等它提交后再看流水，回补的正好是扣掉的那些。
+func (q *Queries) LockOrderStatus(ctx context.Context, id int64) (int16, error) {
+	row := q.db.QueryRow(ctx, lockOrderStatus, id)
+	var status int16
+	err := row.Scan(&status)
+	return status, err
+}
+
+const orderSkuNetInventoryChange = `-- name: OrderSkuNetInventoryChange :one
+SELECT COALESCE(sum(change_qty), 0)::int AS net
+  FROM inventory_logs
+ WHERE biz_id = $1 AND sku_id = $2 AND store_id = $3
+`
+
+type OrderSkuNetInventoryChangeParams struct {
+	OrderNo string
+	SkuID   int64
+	StoreID int64
+}
+
+// 这一单在这家店这个 SKU 上的库存流水净变化（扣减记负、回补记正）。
+// 关单 / 取消回补之前用它核对「真的扣过、还没补回来」：净值为 0 说明库存分支
+// 根本没扣（或已经被补偿），那时回补就是凭空加库存。走 idx_inv_logs_biz。
+func (q *Queries) OrderSkuNetInventoryChange(ctx context.Context, arg OrderSkuNetInventoryChangeParams) (int32, error) {
+	row := q.db.QueryRow(ctx, orderSkuNetInventoryChange, arg.OrderNo, arg.SkuID, arg.StoreID)
+	var net int32
+	err := row.Scan(&net)
+	return net, err
+}
+
 const promoteOrderDraft = `-- name: PromoteOrderDraft :execrows
 UPDATE orders SET status = 10 WHERE order_no = $1 AND status = 0
 `

@@ -400,7 +400,7 @@ func TestCouponThresholdUsesPostPromotionAmount(t *testing.T) {
 	if in[0].AmountCents != 9000 {
 		t.Fatalf("券的计算基数应当是活动后金额 9000，实得 %d", in[0].AmountCents)
 	}
-	mustReject(t, evaluateCoupon(fullReduction(10000, 2000), nil, anyStore, in, calcNow), "还差 1000 分")
+	mustReject(t, evaluateCoupon(fullReduction(10000, 2000), nil, anyStore, in, calcNow), "还差 ¥10（")
 
 	// 一张立减 95 元的券：封顶在活动后金额 90 元上，于是这一行「活动 10 + 券 90」= 行金额 100，
 	// 不会超过（chk_item_promotion_discount / chk_item_refund 都成立）。

@@ -47,7 +47,7 @@
 --
 -- in_stock 用「任意一个在售 SKU 水位 > 0」算，与 ProductDetail.InStock 同一个
 -- 判据（service/product.go）—— 不读汇总列：曾经的 products.total_stock 没有任何一处
--- 在维护，拿它当「有没有货」等于对用户撒一个永远不会被纠正的谎（00062 已删）。
+-- 在维护，拿它当「有没有货」等于对用户撒一个永远不会被纠正的谎（已停用，见 00062）。
 SELECT p.id, p.title, p.subtitle,
        COALESCE(agg.min_price, 0)::bigint AS min_price_cents,
        COALESCE(agg.max_price, 0)::bigint AS max_price_cents,

@@ -220,6 +220,21 @@ export interface paths {
                         "application/problem+json": components["schemas"]["Problem"];
                     };
                 };
+                /**
+                 * @description 这个手机号（本店内）口令连续错 5 次，锁定 15 分钟；锁定期间口令对了也拒绝。
+                 *     不存在的手机号同样计数、同样锁（否则可以拿锁定与否枚举账号）。
+                 *     type=https://keel.dev/problems/rate-limited
+                 */
+                429: {
+                    headers: {
+                        /** @description 还要等多少秒 */
+                        "Retry-After"?: number;
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
                 default: components["responses"]["Problem"];
             };
         };

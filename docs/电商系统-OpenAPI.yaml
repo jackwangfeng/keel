@@ -248,6 +248,18 @@ paths:
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
+        '429':
+          description: |
+            这个手机号（本店内）口令连续错 5 次，锁定 15 分钟；锁定期间口令对了也拒绝。
+            不存在的手机号同样计数、同样锁（否则可以拿锁定与否枚举账号）。
+            type=https://keel.dev/problems/rate-limited
+          headers:
+            Retry-After:
+              description: 还要等多少秒
+              schema: { type: integer }
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
         default: { $ref: '#/components/responses/Problem' }
 
   /auth/refresh:

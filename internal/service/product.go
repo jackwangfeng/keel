@@ -251,7 +251,7 @@ type ProductDetail struct {
 
 	// InStock 是「这件商品现在还买得到吗」：任意一个在售 SKU 水位 > 0。
 	//
-	// 它是**算出来的**，不读任何汇总列（曾经的 products.total_stock 没人维护，00062 已删）：
+	// 它是**算出来的**，不读任何汇总列（products.total_stock 没人维护，已停用，见 00062）：
 	// 详情页正下方就列着每个 SKU 的真实水位 —— 汇总与它对不上时，
 	// 用户看到的是「有货」配一排全是 0 的规格。
 	InStock bool

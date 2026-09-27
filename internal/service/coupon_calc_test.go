@@ -87,14 +87,14 @@ func TestFullReductionExactlyAtThreshold(t *testing.T) {
 
 func TestFullReductionOneCentShort(t *testing.T) {
 	mustReject(t, evaluateCoupon(fullReduction(10000, 2000), nil, anyStore,
-		[]couponLine{line(1, 9999)}, calcNow), "还差 1 分")
+		[]couponLine{line(1, 9999)}, calcNow), "还差 ¥0.01（")
 }
 
 func TestFullReductionComparesEligibleSubtotalNotWholeOrder(t *testing.T) {
 	// 整单 150 元，但只有 60 元在范围内：满 100 不成立。
 	scopes := []repository.CouponScope{{ScopeType: repository.ScopeProduct, TargetID: i64(1), Include: true}}
 	mustReject(t, evaluateCoupon(fullReduction(10000, 2000), scopes, anyStore,
-		[]couponLine{line(1, 6000), line(2, 9000)}, calcNow), "还差 4000 分")
+		[]couponLine{line(1, 6000), line(2, 9000)}, calcNow), "还差 ¥40（")
 }
 
 // ---------------------------------------------------------------------------
@@ -127,7 +127,7 @@ func TestRateDiscountCap(t *testing.T) {
 
 func TestRateDiscountThreshold(t *testing.T) {
 	mustReject(t, evaluateCoupon(rateCoupon(900, 5000, 0), nil, anyStore,
-		[]couponLine{line(1, 4999)}, calcNow), "还差 1 分")
+		[]couponLine{line(1, 4999)}, calcNow), "还差 ¥0.01（")
 	v := mustApply(t, evaluateCoupon(rateCoupon(900, 5000, 0), nil, anyStore,
 		[]couponLine{line(1, 5000)}, calcNow))
 	if v.DiscountCents != 500 {
@@ -196,7 +196,7 @@ func TestFreeShippingCouponJudgesThresholdButTakesNoGoodsMoney(t *testing.T) {
 	}
 
 	// 差 1 分不满门槛：与满减券同一个比较（>=，不是 >）。
-	mustReject(t, evaluateCoupon(c, nil, anyStore, []couponLine{line(1, 4999)}, calcNow), "还差 1 分")
+	mustReject(t, evaluateCoupon(c, nil, anyStore, []couponLine{line(1, 4999)}, calcNow), "还差 ¥0.01（")
 
 	// 范围仍然生效：只限商品 7，本单没有商品 7。
 	scoped := []repository.CouponScope{{TemplateID: 9, ScopeType: repository.ScopeProduct, TargetID: i64(7), Include: true}}
@@ -234,7 +234,7 @@ func TestExpiredAndNotYetValidAndNonUnusedCoupons(t *testing.T) {
 
 	c = instant(100)
 	c.ValidStartAt = calcNow.Add(time.Minute)
-	mustReject(t, evaluateCoupon(c, nil, anyStore, lines, calcNow), "才开始可用")
+	mustReject(t, evaluateCoupon(c, nil, anyStore, lines, calcNow), "起才可用")
 
 	c = instant(100)
 	c.Status = repository.UserCouponLocked

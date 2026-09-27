@@ -310,3 +310,26 @@ func TestBranchRefusesAMismatchedOp(t *testing.T) {
 		t.Fatalf("它把库存补出来了：%d → %d", before, after)
 	}
 }
+
+// 审查发现的窗口：订单已经被关掉（买家取消 / 超时关单）之后，库存分支的一次迟到重试
+// 不能再扣货。扣了就是给一笔关掉的单扣库存；而关单那一侧回补过的话，就是凭空多出一份。
+// 这里直接把订单推到 90 再调正向：必须是确定性失败（触发全局补偿），水位不动、一行流水都没有。
+func TestStockBranchRefusesAnOrderThatWasAlreadyClosed(t *testing.T) {
+	sku, before := anySKUWithStock(t, "shop-a", 3)
+	orderNo, merchantID := seedDraftOrder(t, "shop-a", sku, 2)
+	if _, err := admin(t).Exec(context.Background(),
+		`UPDATE orders SET status = 90 WHERE order_no = $1`, orderNo); err != nil {
+		t.Fatal(err)
+	}
+	gid := gidFor(t, merchantID, orderNo)
+	if got := branchOf(t, service.BranchOrderStock)(gid, "01", "action"); got != dtm.Failure {
+		t.Fatalf("对已关闭订单的库存正向返回 %d，期望 Failure(%d) —— 重试也改变不了，应当触发补偿",
+			got, dtm.Failure)
+	}
+	if after := availableOf(t, sku); after != before {
+		t.Fatalf("已关闭的订单被扣了库存：%d → %d", before, after)
+	}
+	if logs := inventoryLogsOf(t, orderNo); len(logs) != 0 {
+		t.Fatalf("留下了 %d 行流水：%+v —— 应该一行都没有", len(logs), logs)
+	}
+}

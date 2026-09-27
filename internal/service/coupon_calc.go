@@ -76,7 +76,7 @@ func evaluateCoupon(c repository.UserCoupon, scopes []repository.CouponScope,
 		return notApplicable("这张券已过期")
 	}
 	if now.Before(c.ValidStartAt) {
-		return notApplicable("这张券 %s 才开始可用", c.ValidStartAt.UTC().Format(time.RFC3339))
+		return notApplicable("这张券 %s 起才可用", buyerClock(c.ValidStartAt))
 	}
 	if !now.Before(c.ValidEndAt) {
 		return notApplicable("这张券已过期")
@@ -106,14 +106,14 @@ func evaluateCoupon(c repository.UserCoupon, scopes []repository.CouponScope,
 	switch r.CouponType {
 	case couponTypeFullReduction:
 		if subtotal < r.ThresholdCents {
-			return notApplicable("适用商品小计 %d 分，还差 %d 分满 %d 分",
-				subtotal, r.ThresholdCents-subtotal, r.ThresholdCents)
+			return notApplicable("适用商品小计 ¥%s，还差 ¥%s（满 ¥%s 可用）",
+				yuan(subtotal), yuan(r.ThresholdCents-subtotal), yuan(r.ThresholdCents))
 		}
 		off = r.DiscountCents
 	case couponTypeRateDiscount:
 		if subtotal < r.ThresholdCents {
-			return notApplicable("适用商品小计 %d 分，还差 %d 分满 %d 分",
-				subtotal, r.ThresholdCents-subtotal, r.ThresholdCents)
+			return notApplicable("适用商品小计 ¥%s，还差 ¥%s（满 ¥%s 可用）",
+				yuan(subtotal), yuan(r.ThresholdCents-subtotal), yuan(r.ThresholdCents))
 		}
 		off = rateDiscount(subtotal, r.DiscountRate)
 		if r.MaxDiscountCents > 0 && off > r.MaxDiscountCents {
@@ -124,8 +124,8 @@ func evaluateCoupon(c repository.UserCoupon, scopes []repository.CouponScope,
 	case couponTypeFreeShipping:
 		// 门槛比的是适用小计，与满减券同一个口径；抵多少运费不在这里定（见 FreeShipping）。
 		if subtotal < r.ThresholdCents {
-			return notApplicable("适用商品小计 %d 分，还差 %d 分满 %d 分",
-				subtotal, r.ThresholdCents-subtotal, r.ThresholdCents)
+			return notApplicable("适用商品小计 ¥%s，还差 ¥%s（满 ¥%s 可用）",
+				yuan(subtotal), yuan(r.ThresholdCents-subtotal), yuan(r.ThresholdCents))
 		}
 		return couponVerdict{
 			Applicable:       true,
@@ -278,4 +278,15 @@ func allocateDiscount(lines []couponLine, eligible []bool, subtotal, off int64) 
 		rest -= room
 	}
 	return out
+}
+
+// buyerClock 把一个时刻写成买家看得懂的「2026-10-01 00:00」。
+//
+// 这些文字会原样出现在买家端（Problem.detail），之前写的是 UTC 的 RFC3339，
+// 北京时间的买家看到的是早 8 小时的钟点 —— 与买家端时间那个 bug 同一类。
+// 这里是纯函数、拿不到这家店的时区设置，按默认店铺时区（Asia/Shanghai）写；
+// 改过时区的店会有偏差，但不会再是 UTC。
+func buyerClock(t time.Time) string {
+	_, loc := reportLocation("")
+	return t.In(loc).Format("2006-01-02 15:04")
 }
