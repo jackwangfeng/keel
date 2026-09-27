@@ -86,7 +86,7 @@ GOOSE_INVENTORY := GOOSE_DRIVER=postgres GOOSE_DBSTRING="$(INVENTORY_GOOSE_DBSTR
 	$(GOOSE_BIN) -table goose_db_version_inventory
 
 .PHONY: help generate generate-go generate-ts generate-sql generate-uts tools-versions version search-metrics \
-	contract-check schema-check app-type-check admin-install admin-type-check admin-test admin-build app-install app-build-h5 app-build-android app-build-mp-weixin app-apk app-apk-e2e app-e2e app-e2e-h5 app-adb-wifi app-ios app-ios-e2e app-e2e-ios \
+	contract-check schema-check app-type-check admin-install admin-type-check admin-test admin-build app-install app-build-h5 app-build-android app-build-mp-weixin app-apk app-apk-e2e app-e2e app-e2e-h5 flutter-get flutter-analyze flutter-test app-adb-wifi app-ios app-ios-e2e app-e2e-ios \
 	sdk-smoke goose-bin migrate migrate-down migrate-status migrate-inventory migrate-inventory-status test-db \
 	test-engine category-eval dtmrs-deps build
 
@@ -531,3 +531,22 @@ version:
 	@echo "VERSION=$(VERSION)"
 	@echo "COMMIT=$(COMMIT)"
 	@echo "DATE=$(DATE)"
+
+# Flutter 买家端（flutter_app/）。用官方 stable：PATH 上默认的是 flutter_ohos。
+FLUTTER ?= $(HOME)/development/flutter/bin/flutter
+FLUTTER_APP := $(ROOT)/flutter_app
+# flutter 工具链内部还会调 PATH 上的 dart（analysis server 等）。PATH 上默认是 flutter_ohos 的 dart，
+# 版本对不上会崩（实测 flutter analyze 报 analysis server exited with code 64），所以把这个 SDK 的 bin 放最前。
+# FLUTTER_GIT_URL 指向 ohos 的镜像时，官方 SDK 会一直警告「上游不一致」，这里也清掉。
+FLUTTER_ENV := PATH=$(dir $(FLUTTER)):$$PATH FLUTTER_GIT_URL=
+
+flutter-get:
+	cd $(FLUTTER_APP) && $(FLUTTER_ENV) $(FLUTTER) pub get
+
+flutter-analyze:
+	# 用 dart analyze 而不是 flutter analyze：后者在这台机器上启动 analysis server 时崩（exit 64，
+	# 实测），dart analyze 读同一份 analysis_options.yaml（含 flutter_lints），检查范围相同。
+	cd $(FLUTTER_APP) && $(FLUTTER_ENV) $(dir $(FLUTTER))dart analyze --fatal-infos
+
+flutter-test:
+	cd $(FLUTTER_APP) && $(FLUTTER_ENV) $(FLUTTER) test
