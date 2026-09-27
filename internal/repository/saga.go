@@ -138,21 +138,11 @@ var knownOps = map[string]bool{
 	"commit": true, "rollback": true,
 }
 
-// SagaTx 是 SAGA 分支在一次屏障事务里能做的写操作。
-//
-// 它与 ProductTx 一起组成 Tx（见 product.go）。拆成两个接口是为了让并发推进的
-// 任务各自往自己的文件里加方法，而不是所有人去改同一处声明。
-//
-// 这两个方法本来就是为 SAGA 存在的：正向分支扣减、补偿分支回补、超时关单释放。
-// 它们的五条出路（成功 / SKU 不可见 / 门店不可见 / 这家店不卖它 / 库存不足）
-// 写在 inventory.go。**store_id 本轮（00020）加进签名**：库存主键变成
-// (sku_id, store_id) 之后，不带门店的那条 UPDATE 会匹配到该 SKU 在所有门店的
-// 行 —— 那不是报错，是扣到别的门店头上（数据模型 §4 点名说这是本轮最容易漏、
-// 后果最重的一处）。分支从 orders 那一行读回 store_id，不从 gid 解析。
-type SagaTx interface {
-	DeductInventory(ctx context.Context, skuID, storeID int64, qty int32) (int32, error)
-	RestoreInventory(ctx context.Context, skuID, storeID int64, qty int32) (int32, error)
-}
+// 拆分前这里还有一个 SagaTx 接口（DeductInventory / RestoreInventory），嵌在 core 的 Tx 里。
+// 微服务拆分阶段 1b 起扣减与回补归库存服务：屏障照旧由这一个文件实现，但有两个入口 ——
+// core 的分支走 Repo.WithSagaBranch（业务池，屏障在 core 库），库存的分支走
+// InventoryStore.WithSagaBranch（库存池，屏障在库存库，inventory_svc.go）。两个入口共用
+// 下面同一个 decideBarrier：屏障记录必须与业务变更同事务提交，所以它住在业务变更所在的那个库里。
 
 // WithSagaBranch 在一个「设好租户 + 过了屏障」的事务里执行一个 SAGA 分支。
 //

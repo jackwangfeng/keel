@@ -10,6 +10,16 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+// 活动配额与已售（库存服务独有，微服务拆分阶段 1b，00075）。不带外键，理由见 00075 文件头。
+type ActivityStock struct {
+	MerchantID  int64
+	PromotionID int64
+	SkuID       int64
+	Quota       int32
+	Sold        int32
+	UpdatedAt   pgtype.Timestamptz
+}
+
 // 子事务屏障（数据模型 §6）。形状照抄 dtmrs-barrier v0.11.0，别加列。
 type Barrier struct {
 	TransType  string
@@ -443,8 +453,10 @@ type PromotionSku struct {
 	PromoPriceCents int64
 	DiscountRate    int16
 	PerUserLimit    int32
-	StockQty        int32
-	SoldQty         int32
+	// 已停用（00075）：配额搬到 activity_stocks.quota，代码不再读写；下一版删列。
+	StockQty int32
+	// 已停用（00075）：已售搬到 activity_stocks.sold，代码不再读写；下一版删列。
+	SoldQty int32
 }
 
 type PromotionTier struct {

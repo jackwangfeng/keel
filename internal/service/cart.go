@@ -126,8 +126,9 @@ type cartStock map[int64]inventory.Level
 func (s *CartService) prepare(ctx context.Context, userID int64, storeID, addressID *int64,
 	extra ...int64) (cartScope, cartStock, error) {
 	var (
-		cs  cartScope
-		ids []int64
+		cs        cartScope
+		ids       []int64
+		offerSKUs []int64
 	)
 	err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
 		var err error
@@ -136,16 +137,36 @@ func (s *CartService) prepare(ctx context.Context, userID int64, storeID, addres
 		}
 		cartID, err := tx.FindCart(ctx, userID)
 		if errors.Is(err, repository.ErrCartNotFound) {
+			err = nil
+		} else if err != nil {
+			return err
+		} else if ids, err = tx.CartSKUIDs(ctx, cartID); err != nil {
+			return err
+		}
+		// 车里（加上加购的那一个）有没有此刻生效的单价类报价：有才向库存服务问配额。
+		all := append(append([]int64(nil), ids...), extra...)
+		if len(all) == 0 {
 			return nil
 		}
+		offers, err := tx.ListLivePriceOffers(ctx, all, time.Now())
 		if err != nil {
 			return err
 		}
-		ids, err = tx.CartSKUIDs(ctx, cartID)
-		return err
+		for _, o := range offers {
+			offerSKUs = append(offerSKUs, o.SKUID)
+		}
+		return nil
 	})
 	if err != nil {
 		return cartScope{}, nil, err
+	}
+	cs.Quotas = &activityQuotas{asked: true, m: map[inventory.ActivityKey]inventory.Activity{}}
+	if len(offerSKUs) > 0 {
+		m, err := s.inv.ActivityStock(ctx, inventory.ActivityQuery{SKUIDs: offerSKUs})
+		if err != nil {
+			return cartScope{}, nil, err
+		}
+		cs.Quotas.m = m
 	}
 	stock := cartStock{}
 	if cs.Match == MatchNone {
@@ -212,6 +233,10 @@ type CartView struct {
 type cartScope struct {
 	Scope repository.StoreScope
 	Match MatchType
+
+	// Quotas 是 prepare 在事务之外问好的活动配额（00075 起在库存服务）。车里没有任何活动报价时
+	// 是一份「问过、空的」—— prepare 的短事务里先看一眼有没有报价，没有就不问库存服务。
+	Quotas *activityQuotas
 
 	AddressID *int64
 	Dest      *FreightDestination
@@ -286,7 +311,7 @@ func buildCart(ctx context.Context, tx repository.Tx, cartID int64, cs cartScope
 				priced[r.ID] = r
 			}
 			// 「此刻」用墙上时钟：购物车是展示，它与随后那次试算之间本来就隔着一次点击。
-			if lp, err = loadLivePromotions(ctx, tx, ids, time.Now()); err != nil {
+			if lp, err = loadLivePromotions(ctx, tx, ids, time.Now(), cs.Quotas); err != nil {
 				return CartView{}, err
 			}
 		}

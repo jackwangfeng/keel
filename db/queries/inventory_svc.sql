@@ -1,20 +1,26 @@
 -- 库存服务自己的查询（微服务拆分阶段 1a，docs/电商系统-微服务拆分方案.md）。
 --
 -- 这个文件是库存服务仓储（internal/repository/inventory_svc.go 的 InventoryStore）
--- 唯一的 SQL 来源，守一条硬规矩：**只碰 inventories 与 inventory_logs 两张表**。
+-- 唯一的 SQL 来源，守一条硬规矩：**只碰 inventories、inventory_logs、activity_stocks 三张表**
+-- （外加屏障表 barrier，那条语句在 repository/saga.go，两个库各一张）。
+-- 反过来，core 的查询一条都不碰这三张表 —— internal/repository 的 TestQueryFilesStayOnTheirSideOfTheSplit
+-- 从 db/queries 源头核对这两个方向。
 -- 不 JOIN skus / products / stores / 两张上下架覆盖表 / 价格视图 —— 拆分部署下库存库里
 -- 根本没有那些表。凡是要 core 数据才能下的判断（SKU 在不在、软删了没有、这家店卖不卖、
 -- 门店是否软删、商品名门店名），一律由 core 先判完、或者拿 id 回来自己补，再调这里。
 --
--- 和这个目录里别的文件一样，**一个 merchant_id 都没有**：两张表都带 merchant_id 列、
+-- 和这个目录里别的文件一样，**一个 merchant_id 都没有**：三张表都带 merchant_id 列、
 -- 走 merchant_id = current_merchant() 的 RLS（00020），租户由库存服务按请求头
 -- X-Keel-Merchant-ID 开事务时设进去（rpc.RequireTenant → repository.WithTenant）。
 --
 -- 注释里一个反引号都不许有，理由见 db/queries/inventories.sql 的第三条说明。
 --
--- 下单扣减 / 回补（inventories.sql）、关单与退款的流水核对（orders.sql 的
--- OrderSkuNetInventoryChange、CountInventoryLogsForOrder）、预警通知的上下文
--- （notifications.sql 的 GetInventoryAlert）是阶段 1b 的事，仍在原处。
+-- 阶段 1b 搬过来的：下单 SAGA 的扣减与补偿（拆分前 inventories.sql 的 DeductInventory /
+-- RestoreInventory 与 orders.sql 的 AppendInventoryLog）、关单与退款回补的流水核对
+-- （拆分前 orders.sql 的 OrderSkuNetInventoryChange / CountInventoryLogsForOrder）、
+-- 活动配额（拆分前 promotions.sql 对 promotion_skus.sold_qty 的扣与放）。
+-- 预警通知的上下文不搬：商品名、门店名是 core 的数据，由 core 自己查（notifications.sql 的
+-- GetLowStockContext），库存服务只回 id 与数。
 
 -- name: InvStoreStock :many
 -- 一家门店、一批 SKU 的水位（详情页 SKU、购物车行、检索的 in_stock、门店库存清单）。
@@ -160,7 +166,10 @@ SELECT (SELECT count(*) FROM wrote) AS written_rows,
   LEFT JOIN wrote w ON true;
 
 -- name: InvLockBizID :exec
--- 按 biz_id 串行化手工调整（事务级 advisory lock，提交或回滚即释放）。
+-- 按 biz_id 串行化（事务级 advisory lock，提交或回滚即释放）。手工调整按「adj:员工:幂等键」锁；
+-- 阶段 1b 起下单扣减、SAGA 补偿、关单释放按订单号锁，退款回补按退款单号锁 —— 那几条路径都是
+-- 「先看这张单的流水、再决定写什么」，两步之间必须没有同一张单的另一次写插进来（见 inventory
+-- 包 saga.go 的文件头）。键空间不会撞：订单号、退款单号、「adj:」前缀互不相同。
 --
 -- 相对调整的幂等落在库存服务这一侧（「同一个 biz_id 只生效一次」）：core 在结果未知时
 -- 会拿同一把 Idempotency-Key、也就是同一个 biz_id 再调一次。两次调用可能并发到达
@@ -206,3 +215,139 @@ INSERT INTO inventories (sku_id, store_id, available_qty, warning_qty)
 SELECT sqlc.arg(sku_id), sqlc.arg(store_id), sqlc.arg(available_qty), sqlc.arg(warning_qty)
  WHERE NOT EXISTS (SELECT 1 FROM inventories ex WHERE ex.sku_id = sqlc.arg(sku_id))
 ON CONFLICT (sku_id, store_id) DO NOTHING;
+
+-- ---------------------------------------------------------------------------
+-- 阶段 1b：下单扣减 / 补偿 / 关单释放 / 退款回补（全部按单号幂等，见 inventory 包 saga.go）
+-- ---------------------------------------------------------------------------
+
+-- name: InvLockStoreStock :many
+-- 下单扣减的第一步：按 sku_id 升序锁住这家店这批 SKU 的库存行，并读出水位。
+--
+-- 先锁、再判、最后写，而不是逐行「条件 UPDATE、0 行即缺货」：一单多行时，第三行缺货的话前两行
+-- 已经扣了，要么靠保存点回滚，要么让整个事务失败 —— 而扣减被拒要**提交**一行拒绝流水
+-- （saga.go 的「扣减被拒为什么是成功」）。锁住之后判定与写入之间没有别人能改这几行，
+-- 判过了就一定扣得成。缺行不回（缺行 ≡ 可售 0，调用方判成不足）。
+--
+-- 按 sku_id 升序拿锁：与补偿、关单释放、退款回补同一个全局顺序，两张共享 SKU 的单
+-- 一个扣一个补不会互相等成死锁。库存行一律先于活动配额行加锁（InvLockActivity 在其后）。
+SELECT inv.sku_id, inv.available_qty, inv.warning_qty
+  FROM inventories inv
+ WHERE inv.store_id = sqlc.arg(store_id)
+   AND inv.sku_id = ANY(sqlc.arg(sku_ids)::bigint[])
+ ORDER BY inv.sku_id
+   FOR UPDATE;
+
+-- name: InvLockActivity :one
+-- 锁住一行活动配额并读出配额与已售。查不到即「还没同步配额」—— 调用方按配额不足拒绝
+-- （宁可少卖，不超卖；00075 文件头）。
+SELECT a.quota, a.sold
+  FROM activity_stocks a
+ WHERE a.promotion_id = sqlc.arg(promotion_id) AND a.sku_id = sqlc.arg(sku_id)
+   FOR UPDATE;
+
+-- name: InvDeductLocked :one
+-- 扣门店库存。只在 InvLockStoreStock 锁住并判过「够」之后调，所以 WHERE 里的
+-- available_qty >= qty 是第二道（chk_qty_nonneg 是第三道），正常路径上恒命中一行。
+-- :one 让「0 行」变成 pgx.ErrNoRows：那意味着前面的判定与这里不一致，是 bug，不是缺货。
+UPDATE inventories
+   SET available_qty = available_qty - sqlc.arg(qty)::int,
+       updated_at    = now()
+ WHERE sku_id = sqlc.arg(sku_id) AND store_id = sqlc.arg(store_id)
+   AND available_qty >= sqlc.arg(qty)::int
+RETURNING available_qty;
+
+-- name: InvAddStock :one
+-- 加回门店库存（SAGA 补偿、关单释放、退款回补）。写成 upsert 而不是纯 UPDATE：
+-- 这几条路径加回的都是「已经扣掉的货」，行不在（理论上不会：行从不删除）时凭空报错会让
+-- 补偿无限重试、关单任务进死信，而正确的结果就是那一行现在有 qty 件。
+-- 插入值是 qty（缺行 ≡ 0，0 + qty）。
+INSERT INTO inventories (sku_id, store_id, available_qty, warning_qty)
+VALUES (sqlc.arg(sku_id), sqlc.arg(store_id), sqlc.arg(qty)::int, 0)
+ON CONFLICT (sku_id, store_id) DO UPDATE
+   SET available_qty = inventories.available_qty + sqlc.arg(qty)::int,
+       updated_at    = now()
+RETURNING available_qty;
+
+-- name: InvAddActivitySold :exec
+-- 扣活动配额（已售 + qty）。只在 InvLockActivity 锁住并判过配额之后调。
+UPDATE activity_stocks
+   SET sold = sold + sqlc.arg(qty)::int
+ WHERE promotion_id = sqlc.arg(promotion_id) AND sku_id = sqlc.arg(sku_id);
+
+-- name: InvReleaseActivitySold :execrows
+-- 放回活动配额（SAGA 补偿、关单释放）。带 sold >= qty：放回不该把计数放成负数；
+-- 0 行由调用方记日志（这个 SKU 已被移出活动之类，正常路径上走不到 —— 卖出过的不能移除）。
+UPDATE activity_stocks
+   SET sold = sold - sqlc.arg(qty)::int
+ WHERE promotion_id = sqlc.arg(promotion_id) AND sku_id = sqlc.arg(sku_id)
+   AND sold >= sqlc.arg(qty)::int;
+
+-- name: InvAppendBizLog :exec
+-- 下单扣减（1）、SAGA 补偿（2）、超时关单释放（3）、退款回补（4）、买家取消释放（6）、
+-- 扣减被拒（7）的流水。biz_id 是订单号（退款回补是退款单号）。reason 只有扣减被拒写（拒绝码）。
+-- 手工调整（5）走 InvAppendManualLog，那条把 biz_type 写死在语句里。
+INSERT INTO inventory_logs (sku_id, store_id, change_qty, biz_type, biz_id,
+                            before_available, after_available, reason)
+VALUES (sqlc.arg(sku_id), sqlc.arg(store_id), sqlc.arg(change_qty), sqlc.arg(biz_type),
+        sqlc.arg(biz_id), sqlc.arg(before_available), sqlc.arg(after_available), sqlc.narg(reason));
+
+-- name: InvBizTrail :many
+-- 一张单（订单号或退款单号）的全部流水，连同那一行库存**此刻**的预警线。
+--
+-- 三个用途，都是「按流水判」：关单释放与 SAGA 补偿算每个 SKU 还有多少没补回来（净值），
+-- 扣减判「这一单已经被关单释放过了没有」（有释放流水就拒绝），core 的收尾分支判扣减被拒与
+-- 跌破预警线（拆分前在扣减的同一个事务里判，拆分后 core 在库存分支之后来问，见
+-- service/order_saga.go 的收尾分支）。孤儿草稿关单前的核对也用它（有没有任何一行）。
+-- 预警线取此刻的值：它只在后台改库存时变，扣减到收尾之间那几毫秒里变过的概率可以忽略。
+-- 走 idx_inv_logs_biz。
+SELECT l.sku_id, l.store_id, l.biz_type, l.change_qty, l.before_available, l.after_available,
+       l.reason, COALESCE(i.warning_qty, 0)::int AS warning_qty
+  FROM inventory_logs l
+  LEFT JOIN inventories i ON i.sku_id = l.sku_id AND i.store_id = l.store_id
+ WHERE l.biz_id = sqlc.arg(biz_id)
+ ORDER BY l.id;
+
+-- ---------------------------------------------------------------------------
+-- 阶段 1b：活动配额（activity_stocks，00075）
+-- ---------------------------------------------------------------------------
+
+-- name: InvActivityBySKUs :many
+-- 一批 SKU 身上的活动配额（计价、商品标签、购物车）。一个 SKU 可以在几个活动里，全回。
+-- 走 idx_activity_stocks_sku。
+SELECT a.promotion_id, a.sku_id, a.quota, a.sold
+  FROM activity_stocks a
+ WHERE a.sku_id = ANY(sqlc.arg(sku_ids)::bigint[])
+ ORDER BY a.promotion_id, a.sku_id;
+
+-- name: InvActivityByPromotions :many
+-- 一批活动的全部配额（后台活动列表 / 详情）。走主键前缀（租户之后是 promotion_id）。
+SELECT a.promotion_id, a.sku_id, a.quota, a.sold
+  FROM activity_stocks a
+ WHERE a.promotion_id = ANY(sqlc.arg(promotion_ids)::bigint[])
+ ORDER BY a.promotion_id, a.sku_id;
+
+-- name: InvLockPromotionActivity :many
+-- 整组设配额的第一步：锁住这个活动现有的全部配额行。「卖出过的 SKU 不能移出活动 /
+-- 配额不能低于已售」在这把锁之下判，判与写同一个快照 —— 与之竞争的是下单扣减
+-- （InvLockActivity 锁同一批行），扣减要么排在判定之前（判定看到新的已售），要么之后。
+SELECT a.sku_id, a.quota, a.sold
+  FROM activity_stocks a
+ WHERE a.promotion_id = sqlc.arg(promotion_id)
+ ORDER BY a.sku_id
+   FOR UPDATE;
+
+-- name: InvUpsertActivityQuota :exec
+-- 设一个 SKU 的活动配额；已售不动（已兑现的配额不清零）。
+-- 冲突目标写约束名而不是列：列里有 merchant_id，这个目录里不许出现那个词。
+-- chk_activity_stock_qty 兜底「配额低于已售」（调用方已经先判过、报了人话）。
+INSERT INTO activity_stocks (promotion_id, sku_id, quota)
+VALUES (sqlc.arg(promotion_id), sqlc.arg(sku_id), sqlc.arg(quota))
+    ON CONFLICT ON CONSTRAINT activity_stocks_pkey
+    DO UPDATE SET quota = EXCLUDED.quota, updated_at = now();
+
+-- name: InvDeleteActivityExcept :execrows
+-- 删掉不在新名单里的 SKU。卖出过的（sold > 0）不删：调用方已经先拒过一次，这里的条件是第二道。
+DELETE FROM activity_stocks
+ WHERE promotion_id = sqlc.arg(promotion_id)
+   AND sku_id <> ALL(sqlc.arg(keep_sku_ids)::bigint[])
+   AND sold = 0;

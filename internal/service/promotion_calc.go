@@ -190,7 +190,8 @@ func pickPriceOffer(ln promoLine, lp livePromotions, store repository.StoreScope
 		if !storeAllowed(lp.Scopes[o.PromotionID], store) {
 			continue
 		}
-		if o.StockQty > 0 && o.SoldQty+ln.Quantity > o.StockQty {
+		if o.QuotaUnsynced || (o.StockQty > 0 && o.SoldQty+ln.Quantity > o.StockQty) {
+			// 配额还没同步到库存服务（没有那一行）也按「配额不够」处理：库存服务会拒绝扣减。
 			continue
 		}
 		price := offerPrice(*o, ln.ListPriceCents)

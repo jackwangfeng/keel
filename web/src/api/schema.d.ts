@@ -7511,6 +7511,7 @@ export interface paths {
                         "application/problem+json": components["schemas"]["Problem"];
                     };
                 };
+                503: components["responses"]["InventoryUnavailable"];
                 default: components["responses"]["Problem"];
             };
         };
@@ -7621,6 +7622,7 @@ export interface paths {
                         "application/problem+json": components["schemas"]["Problem"];
                     };
                 };
+                503: components["responses"]["InventoryUnavailable"];
                 default: components["responses"]["Problem"];
             };
         };
@@ -7706,6 +7708,7 @@ export interface paths {
                         "application/problem+json": components["schemas"]["Problem"];
                     };
                 };
+                503: components["responses"]["InventoryUnavailable"];
                 default: components["responses"]["Problem"];
             };
         };
@@ -7815,6 +7818,7 @@ export interface paths {
                         "application/problem+json": components["schemas"]["Problem"];
                     };
                 };
+                503: components["responses"]["InventoryUnavailable"];
                 default: components["responses"]["Problem"];
             };
         };
@@ -10177,6 +10181,7 @@ export interface paths {
                         "application/problem+json": components["schemas"]["Problem"];
                     };
                 };
+                503: components["responses"]["InventoryUnavailable"];
                 default: components["responses"]["Problem"];
             };
         };
@@ -10355,6 +10360,7 @@ export interface paths {
                         "application/problem+json": components["schemas"]["Problem"];
                     };
                 };
+                503: components["responses"]["InventoryUnavailable"];
                 default: components["responses"]["Problem"];
             };
         };
@@ -13227,6 +13233,7 @@ export interface paths {
                         "application/problem+json": components["schemas"]["Problem"];
                     };
                 };
+                503: components["responses"]["InventoryUnavailable"];
                 default: components["responses"]["Problem"];
             };
         };

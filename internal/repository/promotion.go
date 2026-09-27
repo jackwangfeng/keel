@@ -21,11 +21,8 @@ var (
 	// ErrPromotionNotFound：活动在本租户查不到（RLS 之下，别家的与不存在的同形）。
 	ErrPromotionNotFound = errors.New("营销活动不存在")
 
-	// ErrPromotionQuotaExhausted：活动配额的条件 UPDATE 受影响 0 行 —— 秒杀配额不够这一单，
-	// 或这个 SKU 在建单之后被移出了活动。
-	ErrPromotionQuotaExhausted = errors.New("活动配额不足")
-
 	// ErrPromotionLimitReached：每人限购的累计 upsert 受影响 0 行。
+	// （活动配额不足 00075 起由库存服务判，见 inventory.RejectSoldOut。）
 	ErrPromotionLimitReached = errors.New("超出活动每人限购")
 
 	// ErrPromotionRuleViolation：写活动时撞上了 chk_promotion_* 约束或子表的唯一约束。
@@ -75,6 +72,12 @@ type PromotionTier struct {
 }
 
 // PriceOffer 是一个 SKU 在一个限时折扣 / 秒杀里的报价与配额。
+//
+// 报价（价、折扣、每人限购）来自 core 的 promotion_skus；**配额与已售不来自这一层**：
+// 00075 起它们在库存服务的 activity_stocks，由 service 向库存服务批量问过之后填进
+// StockQty / SoldQty（service/pricing.go 的 activityQuotas）。这一层读出来的报价里
+// 这两个字段恒为 0。QuotaUnsynced 为真表示库存服务那边没有这一行（配额还没同步），
+// 计价按「这个报价不生效」处理 —— 宁可按门店价卖，不按一个扣不到配额的价报。
 type PriceOffer struct {
 	PromotionID     int64
 	SKUID           int64
@@ -83,6 +86,7 @@ type PriceOffer struct {
 	PerUserLimit    int32
 	StockQty        int32
 	SoldQty         int32
+	QuotaUnsynced   bool
 
 	// 以下两列只有 ListLivePriceOffersForProducts 填（商品标签要按门店价算折扣类的特价）。
 	ProductID       int64
@@ -96,7 +100,8 @@ type PromotionSku struct {
 	Title   string
 }
 
-// PromotionSkuInput 是后台写活动商品的一条。
+// PromotionSkuInput 是后台写活动商品的一条。StockQty 是活动配额：它不写进 promotion_skus
+// （00075 起停用），由 service 整组交给库存服务（inventory.SetActivityQuotas）。
 type PromotionSkuInput struct {
 	SKUID           int64
 	PromoPriceCents int64
@@ -149,12 +154,11 @@ type PromotionTx interface {
 	// ListUserPromotionPurchases 这个买家在这些活动里各 SKU 已买的件数。
 	ListUserPromotionPurchases(ctx context.Context, userID int64, promotionIDs []int64) (map[PurchaseKey]int32, error)
 
-	// ReservePromotionQuota 库存分支正向：扣活动配额，并在同一把行锁之下累计每人限购。
-	// 配额不够返回 ErrPromotionQuotaExhausted，超限返回 ErrPromotionLimitReached。
-	ReservePromotionQuota(ctx context.Context, promotionID, skuID, userID int64, qty int32) error
-	// ReleasePromotionQuota 补偿 / 超时关单 / 买家取消：把配额与限购放回。
-	// 返回是否真的放回了配额（假：这个 SKU 已被移出活动，或计数已经不够减）。
-	ReleasePromotionQuota(ctx context.Context, promotionID, skuID, userID int64, qty int32) (bool, error)
+	// ReservePromotionLimit 下单 SAGA 建单分支：累计每人限购（活动商品不限购时什么都不做）。
+	// 超限返回 ErrPromotionLimitReached。活动配额不在这里（00075 起归库存服务）。
+	ReservePromotionLimit(ctx context.Context, promotionID, skuID, userID int64, qty int32) error
+	// ReleasePromotionLimit 建单补偿 / 超时关单 / 买家取消：把限购额度放回。
+	ReleasePromotionLimit(ctx context.Context, promotionID, skuID, userID int64, qty int32) error
 
 	// 新人礼。
 	UserHasPlacedOrder(ctx context.Context, userID int64) (bool, error)
@@ -171,7 +175,8 @@ type PromotionTx interface {
 	AdminUpdatePromotion(ctx context.Context, id int64, f PromotionFields) error
 	ReplacePromotionTiers(ctx context.Context, promotionID int64, tiers []PromotionTier) error
 	ReplacePromotionScopes(ctx context.Context, promotionID int64, scopes []CouponScopeInput) error
-	// ReplacePromotionSkus 整组替换活动商品：逐条 upsert（保留 sold_qty），删掉不在名单里且没卖过的。
+	// ReplacePromotionSkus 整组替换活动商品：逐条 upsert 价格配置与限购，删掉不在名单里的。
+	// 「卖出过的不能移除」由库存服务判（service 先调它，被拒就不走到这里）。
 	ReplacePromotionSkus(ctx context.Context, promotionID int64, skus []PromotionSkuInput) error
 	ListPromotionSkus(ctx context.Context, promotionIDs []int64) (map[int64][]PromotionSku, error)
 	CountGiftGrants(ctx context.Context, promotionIDs []int64) (map[int64]int32, error)
@@ -272,8 +277,7 @@ func (t tenantTx) ListLivePriceOffers(ctx context.Context, skuIDs []int64, now t
 	for _, r := range rows {
 		out = append(out, PriceOffer{
 			PromotionID: r.PromotionID, SKUID: r.SkuID, PromoPriceCents: r.PromoPriceCents,
-			DiscountRate: r.DiscountRate, PerUserLimit: r.PerUserLimit, StockQty: r.StockQty,
-			SoldQty: r.SoldQty,
+			DiscountRate: r.DiscountRate, PerUserLimit: r.PerUserLimit,
 		})
 	}
 	return out, nil
@@ -294,8 +298,8 @@ func (t tenantTx) ListLivePriceOffersForProducts(ctx context.Context, storeID in
 	for _, r := range rows {
 		out = append(out, PriceOffer{
 			PromotionID: r.PromotionID, SKUID: r.SkuID, PromoPriceCents: r.PromoPriceCents,
-			DiscountRate: r.DiscountRate, PerUserLimit: r.PerUserLimit, StockQty: r.StockQty,
-			SoldQty: r.SoldQty, ProductID: r.ProductID, StorePriceCents: r.StorePriceCents,
+			DiscountRate: r.DiscountRate, PerUserLimit: r.PerUserLimit,
+			ProductID: r.ProductID, StorePriceCents: r.StorePriceCents,
 		})
 	}
 	return out, nil
@@ -334,15 +338,18 @@ func (t tenantTx) ListUserPromotionPurchases(ctx context.Context, userID int64,
 	return out, nil
 }
 
-// ReservePromotionQuota 见接口上的注释。两条语句的顺序是论证的一部分：
-// 先拿 promotion_skus 那一行的行锁（条件 UPDATE），再在锁之下累计每人限购 ——
-// 同一个买家的两笔并发订单因此在那把锁上排队，后到者的 upsert 看得见前者已提交的件数。
-func (t tenantTx) ReservePromotionQuota(ctx context.Context, promotionID, skuID, userID int64, qty int32) error {
-	limit, err := t.q.ReservePromotionSku(ctx, db.ReservePromotionSkuParams{
-		Qty: qty, PromotionID: promotionID, SkuID: skuID,
+// ReservePromotionLimit 见接口上的注释。拆分前它借 promotion_skus 那一行的行锁（扣配额的条件
+// UPDATE）来串行化同一买家的并发订单；配额搬走之后不需要那把锁了：AddPromotionPurchase 是一条
+// INSERT ... ON CONFLICT DO UPDATE ... WHERE，同一个键上的两次并发写由 ON CONFLICT 排队，
+// 后到者在最新版本上重评 WHERE（见那条语句的注释）。
+func (t tenantTx) ReservePromotionLimit(ctx context.Context, promotionID, skuID, userID int64, qty int32) error {
+	limit, err := t.q.PromotionSkuPerUserLimit(ctx, db.PromotionSkuPerUserLimitParams{
+		PromotionID: promotionID, SkuID: skuID,
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
-		return fmt.Errorf("promotion %d sku %d 要 %d 件: %w", promotionID, skuID, qty, ErrPromotionQuotaExhausted)
+		// 这个 SKU 在下单之后被移出了活动：没有限购可累计。它的配额行也不在了，
+		// 库存分支会按「配额不足」拒绝整单（PromotionSkuPerUserLimit 的注释）。
+		return nil
 	}
 	if err != nil {
 		return err
@@ -363,20 +370,12 @@ func (t tenantTx) ReservePromotionQuota(ctx context.Context, promotionID, skuID,
 	return nil
 }
 
-func (t tenantTx) ReleasePromotionQuota(ctx context.Context, promotionID, skuID, userID int64, qty int32) (bool, error) {
-	n, err := t.q.ReleasePromotionSku(ctx, db.ReleasePromotionSkuParams{
-		Qty: qty, PromotionID: promotionID, SkuID: skuID,
-	})
-	if err != nil {
-		return false, err
-	}
+func (t tenantTx) ReleasePromotionLimit(ctx context.Context, promotionID, skuID, userID int64, qty int32) error {
 	// 限购那一行只有 per_user_limit > 0 时才存在；不存在时受影响 0 行是正常路径。
-	if _, err := t.q.ReleasePromotionPurchase(ctx, db.ReleasePromotionPurchaseParams{
+	_, err := t.q.ReleasePromotionPurchase(ctx, db.ReleasePromotionPurchaseParams{
 		Qty: qty, PromotionID: promotionID, SkuID: skuID, UserID: userID,
-	}); err != nil {
-		return false, err
-	}
-	return n == 1, nil
+	})
+	return err
 }
 
 func (t tenantTx) UserHasPlacedOrder(ctx context.Context, userID int64) (bool, error) {
@@ -523,7 +522,7 @@ func (t tenantTx) ReplacePromotionSkus(ctx context.Context, promotionID int64, s
 	for _, s := range skus {
 		if err := t.q.UpsertPromotionSku(ctx, db.UpsertPromotionSkuParams{
 			PromotionID: promotionID, SkuID: s.SKUID, PromoPriceCents: s.PromoPriceCents,
-			DiscountRate: s.DiscountRate, PerUserLimit: s.PerUserLimit, StockQty: s.StockQty,
+			DiscountRate: s.DiscountRate, PerUserLimit: s.PerUserLimit,
 		}); err != nil {
 			return promotionViolation(err)
 		}
@@ -547,8 +546,7 @@ func (t tenantTx) ListPromotionSkus(ctx context.Context, promotionIDs []int64) (
 		out[r.PromotionID] = append(out[r.PromotionID], PromotionSku{
 			PriceOffer: PriceOffer{
 				PromotionID: r.PromotionID, SKUID: r.SkuID, PromoPriceCents: r.PromoPriceCents,
-				DiscountRate: r.DiscountRate, PerUserLimit: r.PerUserLimit, StockQty: r.StockQty,
-				SoldQty: r.SoldQty,
+				DiscountRate: r.DiscountRate, PerUserLimit: r.PerUserLimit,
 			},
 			SKUCode: r.SkuCode, Title: r.Title,
 		})

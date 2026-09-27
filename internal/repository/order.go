@@ -217,6 +217,7 @@ const (
 	InventoryLogTimeoutRelease int16 = 3 // 超时关单释放
 	InventoryLogRefundRestock  int16 = 4 // 退款回补（未发货的退款到账时，§11）
 	InventoryLogBuyerCancel    int16 = 6 // 买家取消释放（00033 这一轮新增，§4）
+	InventoryLogOrderRejected  int16 = 7 // 下单扣减被拒（微服务拆分阶段 1b，拒绝码在 reason）
 )
 
 // 6 与 3 同理要分开：两者都是「订单关了、货放回去」，差别是**谁关的** ——
@@ -312,28 +313,18 @@ type OrderTx interface {
 	// FindOrderByNo 按对外编号取订单。查不到返回 ErrOrderNotFound。
 	FindOrderByNo(ctx context.Context, orderNo string) (Order, error)
 
-	// ListOrderLines 取一笔订单的全部行（sku_id + 数量），按 sku_id 排序。
-	// 这是 SAGA 库存分支重建扣减意图的唯一来源。
+	// ListOrderLines 取一笔订单的全部行（sku_id + 数量 + 活动），按 sku_id 排序。
+	// 下单时拼库存分支的载荷、关单 / 取消时拼放回任务、建单分支累计限购，都从这里读。
 	ListOrderLines(ctx context.Context, orderID int64) ([]OrderLine, error)
-	// LockOrderStatus 锁住订单行（FOR UPDATE）并返回它此刻的状态。库存分支用它与取消 / 关单串行。
+	// LockOrderStatus 锁住订单行（FOR UPDATE）并返回它此刻的状态。下单 SAGA 的收尾分支
+	// 用它确认「扣完库存时这一单还没被关掉」（service/order_saga.go）。
 	LockOrderStatus(ctx context.Context, orderID int64) (int16, error)
-	// OrderSkuNetInventoryChange 是这一单在某店某 SKU 上的库存流水净变化（扣减为负）。
-	OrderSkuNetInventoryChange(ctx context.Context, orderNo string, skuID, storeID int64) (int32, error)
 
 	// PromoteOrderDraft 把订单从 0 创建中推到 10 待支付，返回受影响行数。
 	PromoteOrderDraft(ctx context.Context, orderNo string) (int64, error)
 
 	// CloseOrder 把订单关到 90（只从 0 或 10 进来），返回受影响行数。
 	CloseOrder(ctx context.Context, orderNo string) (int64, error)
-
-	// AppendInventoryLog 记一行库存流水。
-	//
-	// storeID 本轮（00020）加进签名：对账口径从「这个商家这个 SKU 扣了多少」
-	// 变成「这家店这个 SKU 扣了多少」，而 before/after 记的正是某一家门店的
-	// 水位 —— 不写下是哪一家，同一个 SKU 在五家店的流水会交织成一条谁也
-	// 对不平的序列。
-	AppendInventoryLog(ctx context.Context, skuID, storeID int64, changeQty int32,
-		bizType int16, bizID string, before, after int32) error
 
 	IdempotencyTx
 
@@ -565,28 +556,6 @@ func (t tenantTx) CloseOrder(ctx context.Context, orderNo string) (int64, error)
 	return t.q.CloseOrder(ctx, orderNo)
 }
 
-func (t tenantTx) AppendInventoryLog(ctx context.Context, skuID, storeID int64, changeQty int32,
-	bizType int16, bizID string, before, after int32) error {
-	if changeQty == 0 {
-		// 0 的流水不是流水，是噪声。挡在这里，因为它只可能来自一次算错的差值。
-		return fmt.Errorf("sku %d 的库存流水 change_qty 是 0", skuID)
-	}
-	if storeID <= 0 {
-		// 与 DeductInventory 同一条：一行不写明门店的流水对不了账，
-		// 而它不会报错，只会在半年后的一次盘点里对不平。
-		return fmt.Errorf("sku %d 的库存流水没有门店", skuID)
-	}
-	return t.q.AppendInventoryLog(ctx, db.AppendInventoryLogParams{
-		SkuID:           skuID,
-		StoreID:         storeID,
-		ChangeQty:       changeQty,
-		BizType:         bizType,
-		BizID:           bizID,
-		BeforeAvailable: before,
-		AfterAvailable:  after,
-	})
-}
-
 func (t tenantTx) ClaimIdempotencyKey(ctx context.Context, scope string, subj IdempotencySubject,
 	key, requestHash string) (bool, error) {
 	n, err := t.q.ClaimIdempotencyKey(ctx, db.ClaimIdempotencyKeyParams{
@@ -651,10 +620,4 @@ func (t tenantTx) LockOrderStatus(ctx context.Context, orderID int64) (int16, er
 		return 0, fmt.Errorf("订单 %d: %w", orderID, ErrOrderNotFound)
 	}
 	return st, err
-}
-
-func (t tenantTx) OrderSkuNetInventoryChange(ctx context.Context, orderNo string, skuID, storeID int64) (int32, error) {
-	return t.q.OrderSkuNetInventoryChange(ctx, db.OrderSkuNetInventoryChangeParams{
-		OrderNo: orderNo, SkuID: skuID, StoreID: storeID,
-	})
 }

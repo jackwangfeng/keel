@@ -70,7 +70,6 @@ func mainImageOf(uploadID int64) *int64 {
 // 同一批行。拆开之后每条任务加自己那个文件里的方法，这里只多一行嵌入。
 type Tx interface {
 	ProductTx
-	SagaTx
 	UserTx
 	OrderTx
 	OrderQueryTx
@@ -144,9 +143,8 @@ type ProductTx interface {
 	// ListProductSKUs 取一件商品的全部在售 SKU，带上当前可售水位。
 	ListProductSKUs(ctx context.Context, sc StoreScope, productID int64) ([]SKU, error)
 
-	// 库存的两个方法搬去了 SagaTx（saga.go）：它们本来就是为 SAGA 分支存在的
-	// —— 正向扣减、补偿回补、超时关单释放。它们的三条出路是这一层唯一一处
-	// 「用返回值的形状去挡一类误用」的设计，注释仍在 inventory.go。
+	// 库存的扣减与回补不在 core 的 Tx 上（微服务拆分阶段 1b）：它们归库存服务，
+	// 仓储是 inventory_svc.go 的 InventoryStore（库存池、只碰库存的表）。
 }
 
 // tenantTx 是 Tx 的唯一实现：一层薄薄的转换，把 sqlc 的行变成领域类型。

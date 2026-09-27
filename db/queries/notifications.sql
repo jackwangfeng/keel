@@ -183,12 +183,13 @@ SELECT o.id, o.order_no, o.user_id, o.shipped_at
  ORDER BY o.shipped_at
  LIMIT sqlc.arg(batch);
 
--- name: GetInventoryAlert :one
--- 库存预警要的上下文：预警线、商品名、门店名。在扣库存的那个事务里读。
-SELECT i.warning_qty, p.title AS product_title, s.spec_values::text AS spec_values,
-       st.name AS store_name
-  FROM inventories i
-  JOIN skus s      ON s.id = i.sku_id
-  JOIN products p  ON p.id = s.product_id
-  JOIN stores st   ON st.id = i.store_id
- WHERE i.sku_id = sqlc.arg(sku_id) AND i.store_id = sqlc.arg(store_id);
+-- name: GetLowStockContext :one
+-- 库存预警要的展示上下文：商品名、规格、门店名。预警线与水位是库存服务的数（下单 SAGA 的
+-- 收尾分支从库存服务的流水里取，service/order_saga.go），这里只补 core 自己的名字 ——
+-- 拆分前这条语句 JOIN 了 inventories，库存搬走之后它只碰 core 的表（微服务拆分阶段 1b）。
+-- 查不到（SKU 或门店被硬删，正常路径上没有硬删）即 ErrNotificationNotFound。
+SELECT p.title AS product_title, s.spec_values::text AS spec_values, st.name AS store_name
+  FROM skus s
+  JOIN products p ON p.id = s.product_id
+  JOIN stores st  ON st.id = sqlc.arg(store_id)
+ WHERE s.id = sqlc.arg(sku_id);

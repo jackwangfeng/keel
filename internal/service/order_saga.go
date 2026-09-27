@@ -9,13 +9,19 @@ import (
 	"sync"
 
 	"github.com/keel/keel/internal/dtm"
+	"github.com/keel/keel/internal/inventory"
 	"github.com/keel/keel/internal/repository"
 	"github.com/keel/keel/internal/tenant"
 )
 
-// 下单 SAGA 的三个正向分支与它们的补偿：建单、锁券、扣库存。
+// 下单 SAGA 的四步（微服务拆分阶段 1b 起）：
 //
-// # 这个文件里每一行都受制于同一句话：分支只拿到三个字符串
+//	01 order_create      core   0 → 10，并累计每人限购（补偿：关单、放回限购）
+//	02 order_coupon      core   锁券（补偿：解锁）
+//	03 inventory_deduct  库存   扣门店库存 + 活动配额 + 流水，屏障在库存库（补偿：inventory_restore，按流水放回）
+//	04 order_finish      core   关单守卫 + 扣减被拒的原因 + 库存预警（没有补偿）
+//
+// # core 的分支只拿到三个字符串
 //
 //	BranchFunc func(gid, branchID, op string) int
 //
@@ -24,10 +30,26 @@ import (
 //
 //   - **租户**从 gid 来（dtm.TenantContextFromGID），不从别处来；
 //   - **订单号**从 gid 来；
-//   - **扣哪些 SKU、各扣几件**从库里读（order_items），因为它们推不出来；
-//   - **锁哪张券**也从库里读（orders.user_coupon_id，00026），理由同上。
+//   - **锁哪张券**从库里读（orders.user_coupon_id，00026），限购按哪几行累计从 order_items 读。
 //
-// 第三条正是「订单必须先落库再提交 SAGA」的全部理由，写在 order.go 的文件头。
+// 库存分支（03）不同：它在库存服务里，那个库里没有订单表，扣什么随步骤的载荷带过去
+// （inventory.DeductPayload，order.go 的 Create 拼），载荷与步骤一起落进协调器的存储。
+// 它的地址由 BranchResolver 决定：单体 local://inventory_deduct，拆分 http://…/saga/inventory_deduct。
+//
+// # 每人限购为什么在建单分支里，而不是方案文档写的「库存分支之后的 core 分支」
+//
+// 关单（超时 / 取消）要放回限购，就得知道「这一单的限购累计过没有」。限购与 0 → 10 同一个事务累计，
+// 于是「status = 10 ⇒ 限购已累计」按构造成立，关单放回不必再问任何人；放在库存分支之后的话，
+// 一笔 10 的订单可能累计过也可能没有（收尾分支还在重试），要么给订单加一列记它，要么放错别人的额度。
+// 代价：限购超了时建单分支失败，订单停在 0（孤儿，30 分钟后被超时补偿关掉，它从没对买家「存在」过）；
+// HTTP 那一侧照旧是 409 promotion-limit-exceeded。
+//
+// # 关单守卫与预警为什么在库存分支之后
+//
+// 见 inventory 包 saga.go 的文件头：库存服务看不见订单，守卫分成两半 —— 库存服务在它的库里按流水拒绝
+// 「已经被关单释放过」的订单，core 在扣减之后锁订单行再看一眼（04）。预警要知道「这一次扣减跨没跨过
+// 预警线」，扣减前后的水位只在库存服务的流水里，04 去问（OrderTrail）；dtmrs 不把分支的响应带回给
+// 提交方，所以只能是「之后去问」，不能是「分支回给我」。
 
 // 分支名。它们同时出现在两处：注册表（Branches）与编排 JSON（sagaSteps）。
 //
@@ -36,10 +58,12 @@ import (
 const (
 	BranchOrderCreate     = "order_create"
 	BranchOrderCreateUndo = "order_create_undo"
-	BranchOrderStock      = "order_stock"
-	BranchOrderStockUndo  = "order_stock_undo"
 	BranchOrderCoupon     = "order_coupon"
 	BranchOrderCouponUndo = "order_coupon_undo"
+	BranchOrderFinish     = "order_finish"
+	// BranchOrderFinishUndo 是收尾分支的「补偿」：什么都不做。收尾分支自己不写要撤回的东西，
+	// 但 dtmrs 的步骤要求每一步都有 compensate 地址（steps_json 缺了会拒绝提交）。
+	BranchOrderFinishUndo = "order_finish_undo"
 )
 
 // dtmrs 的 BranchOp 里我们只用到的两个。见 repository/saga.go 的白名单。
@@ -48,28 +72,36 @@ const (
 	opCompensate = "compensate"
 )
 
-// sagaSteps 是编排。**建单在前，库存在后**，理由写在 order.go 的文件头：
+// sagaStepsFor 是编排。**建单在前，库存在后**，理由写在 order.go 的文件头：
 // 补偿只对真的执行过的分支生效，库存排在前面时，一次库存失败会让建单分支的
 // 补偿变成一次空回滚，那笔 status = 0 的订单就永远没人关。
 //
 // **券夹在中间（00026）**，同一条理由推出来的：
-//   - 券在库存之前：库存失败时券分支已经执行过，它的补偿是一次**真**补偿，
-//     券回到「未使用」。券排在库存之后的话，库存失败时券分支从没跑过，倒也不用解锁 ——
-//     但券自己锁不上时，库存已经扣了，要多补偿一个分支，而且扣库存这一步白拿了行锁。
+//   - 券在库存之前：库存失败时券分支已经执行过，它的补偿是一次**真**补偿，券回到「未使用」。
 //   - 券在建单之后：券锁不上（被别的单占了、刚好过期）时建单分支已经执行过，
 //     订单被补偿关到 90，而不是留下一行没人关的 status = 0。
 //
-// 没带券的订单同样经过券分支，两个方向都是空操作（lockCoupon / unlockCoupon
-// 看到 user_coupon_id 为空直接返回）。不按「带没带券」拼两份编排：一份常量编排
-// 意味着分支号（01/02/03）对每一单都一样，排障时不必先问「这单带券了吗」。
+// **收尾在最后**（阶段 1b）：它是库存分支的关单守卫的另一半，也是扣减被拒的原因回到 core 的地方。
+// 它的补偿是空操作（order_finish_undo）：它自己不写任何要撤回的东西（预警通知不撤回，理由见
+// notifyLowStockIfCrossed）；写一个空补偿只因为 dtmrs 要求每一步都有 compensate 地址。
 //
-// 它是一个常量字符串而不是每次 Marshal 一个结构体：这段 JSON 里没有任何随请求
-// 变化的东西（steps 里只有地址，不带业务载荷），而一个每次都重新拼的常量
-// 只是多了一处可以拼错的地方。
-const sagaSteps = `[` +
-	`{"action":"local://order_create","compensate":"local://order_create_undo"},` +
-	`{"action":"local://order_coupon","compensate":"local://order_coupon_undo"},` +
-	`{"action":"local://order_stock","compensate":"local://order_stock_undo"}]`
+// 没带券的订单同样经过券分支，两个方向都是空操作。步骤形状对每一单都一样（分支号 01–04），
+// 排障时不必先问「这单带券了吗」；只有库存分支的载荷随订单变化。
+func (s *OrderService) sagaStepsFor(orderNo string, storeID int64, lines []inventory.OrderLine) (string, error) {
+	payload, err := inventory.EncodeDeductPayload(inventory.DeductPayload{
+		OrderNo: orderNo, StoreID: storeID, Lines: lines,
+	})
+	if err != nil {
+		return "", err
+	}
+	return dtm.StepsJSON(
+		dtm.Step{Action: "local://" + BranchOrderCreate, Compensate: "local://" + BranchOrderCreateUndo},
+		dtm.Step{Action: "local://" + BranchOrderCoupon, Compensate: "local://" + BranchOrderCouponUndo},
+		dtm.Step{Action: s.res.BranchURL(inventory.BranchDeduct), Compensate: s.res.BranchURL(inventory.BranchRestore),
+			Payload: payload},
+		dtm.Step{Action: "local://" + BranchOrderFinish, Compensate: "local://" + BranchOrderFinishUndo},
+	)
+}
 
 // 订单状态（数据模型 §5 + 00013）。
 const (
@@ -86,8 +118,8 @@ const (
 // 所以它是一个 sentinel 而不是一句普通的 fmt.Errorf。
 var errOrderNotDraft = errors.New("订单不在「创建中」状态")
 
-// errOrderNotPending：库存分支要扣库存时，订单已经不在 10 待支付（被买家取消或超时关单）。
-// 确定性失败：重试也改变不了，触发全局补偿；库存分支自己的补偿会被屏障判成空回滚。
+// errOrderNotPending：收尾分支看到订单已经不在 10 待支付（被买家取消或超时关单）。
+// 确定性失败：重试也改变不了，触发全局补偿；库存分支的补偿按流水把刚扣的放回去。
 var errOrderNotPending = errors.New("订单不在「待支付」状态")
 
 // Branches 返回要注册到协调器上的全部进程内分支，键就是编排里 "local://"
@@ -98,10 +130,10 @@ func (s *OrderService) Branches() map[string]dtm.BranchFunc {
 	return map[string]dtm.BranchFunc{
 		BranchOrderCreate:     s.branch(BranchOrderCreate, opAction, promoteOrder),
 		BranchOrderCreateUndo: s.branch(BranchOrderCreateUndo, opCompensate, closeOrder),
-		BranchOrderStock:      s.branch(BranchOrderStock, opAction, deductStock),
-		BranchOrderStockUndo:  s.branch(BranchOrderStockUndo, opCompensate, restoreStock),
 		BranchOrderCoupon:     s.branch(BranchOrderCoupon, opAction, lockCoupon),
 		BranchOrderCouponUndo: s.branch(BranchOrderCouponUndo, opCompensate, unlockCoupon),
+		BranchOrderFinish:     s.finishBranch(),
+		BranchOrderFinishUndo: func(string, string, string) int { return dtm.Success },
 	}
 }
 
@@ -171,26 +203,17 @@ func (s *OrderService) branch(name, wantOp string, body branchBody) dtm.BranchFu
 // reportBranchFailure 把分支错误分类，并把真正的原因留给还在等着的 HTTP 请求。
 func (s *OrderService) reportBranchFailure(log *slog.Logger, gid string, err error) int {
 	switch {
-	case errors.Is(err, repository.ErrInsufficientStock):
-		// 正常业务分支：触发全局补偿，用户看到 409「库存不足」。
+	case errors.Is(err, ErrInsufficientStock):
+		// 正常业务分支（库存服务拒绝扣减，收尾分支读到拒绝码）：触发全局补偿，用户看到 409「库存不足」。
 		log.Info("库存不足，触发全局补偿", "err", err)
-		s.notes.put(gid, fmt.Errorf("%w: %v", ErrInsufficientStock, err))
+		s.notes.put(gid, err)
 		return dtm.Failure
 
-	case errors.Is(err, repository.ErrSKUNotInTenant):
-		// **不是业务分支。** 翻译成「库存不足」会把一次跨租户访问伪装成一次
-		// 正常的缺货：补偿是幂等的、日志是正常的，于是它在监控上只表现为
-		// 库存波动。这里留一条 Error 级日志，并把一个**不同的** sentinel
-		// 交给 HTTP 那一侧，它会变成 500 而不是 409。
-		log.Error("扣减时发现 SKU 在本租户不可见 —— 这是 bug 或攻击，不是缺货", "err", err)
-		s.notes.put(gid, fmt.Errorf("%w: %v", ErrCrossTenantSKU, err))
-		return dtm.Failure
-
-	case errors.Is(err, repository.ErrPromotionQuotaExhausted):
-		// 正常业务分支：秒杀配额在试算之后被别人抢光了。整个库存分支回滚（门店库存
-		// 与配额同一个事务），触发全局补偿；用户看到 409 promotion-sold-out，重新试算会按门店价报价。
+	case errors.Is(err, ErrPromotionSoldOut):
+		// 正常业务分支：秒杀配额在试算之后被别人抢光了（库存服务拒绝扣减，收尾分支读到拒绝码）。
+		// 用户看到 409 promotion-sold-out，重新试算会按门店价报价。
 		log.Info("活动配额不足，触发全局补偿", "err", err)
-		s.notes.put(gid, fmt.Errorf("%w: %v", ErrPromotionSoldOut, err))
+		s.notes.put(gid, err)
 		return dtm.Failure
 
 	case errors.Is(err, repository.ErrPromotionLimitReached):
@@ -222,7 +245,7 @@ func (s *OrderService) reportBranchFailure(log *slog.Logger, gid string, err err
 	}
 }
 
-// promoteOrder 是建单分支的正向：0 创建中 → 10 待支付。
+// promoteOrder 是建单分支的正向：0 创建中 → 10 待支付，同一个事务里累计每人限购（文件头）。
 func promoteOrder(ctx context.Context, tx repository.Tx, order repository.Order) error {
 	n, err := tx.PromoteOrderDraft(ctx, order.OrderNo)
 	if err != nil {
@@ -231,6 +254,33 @@ func promoteOrder(ctx context.Context, tx repository.Tx, order repository.Order)
 	if n != 1 {
 		return fmt.Errorf("%w: %s 当前是 %d，受影响 %d 行",
 			errOrderNotDraft, order.OrderNo, order.Status, n)
+	}
+	lines, err := tx.ListOrderLines(ctx, order.ID)
+	if err != nil {
+		return err
+	}
+	for _, ln := range lines {
+		if ln.PricePromotionID == nil {
+			continue
+		}
+		// 超限返回 ErrPromotionLimitReached → Failure；整个事务回滚，订单留在 0（文件头的代价）。
+		if err := tx.ReservePromotionLimit(ctx, *ln.PricePromotionID, ln.SKUID, order.UserID, ln.Quantity); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// releasePromotionLimits 把一单累计的每人限购放回（建单补偿、超时关单、买家取消）。
+// 调用方保证这一单的限购确实累计过（它是 10，或刚从 10 被关掉）。
+func releasePromotionLimits(ctx context.Context, tx repository.Tx, lines []repository.OrderLine, userID int64) error {
+	for _, ln := range lines {
+		if ln.PricePromotionID == nil {
+			continue
+		}
+		if err := tx.ReleasePromotionLimit(ctx, *ln.PricePromotionID, ln.SKUID, userID, ln.Quantity); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -266,6 +316,17 @@ func closeOrder(ctx context.Context, tx repository.Tx, order repository.Order) e
 	n, err := tx.CloseOrder(ctx, order.OrderNo)
 	if err != nil {
 		return err
+	}
+	if n == 1 && order.Status == orderStatusPending {
+		// 从 10 关掉的：建单分支累计过限购，放回（从 0 关掉的从没累计过）。
+		// 已经是 90 的（买家先取消了）不走这里 —— 取消那一侧已经放回过。
+		lines, err := tx.ListOrderLines(ctx, order.ID)
+		if err != nil {
+			return err
+		}
+		if err := releasePromotionLimits(ctx, tx, lines, order.UserID); err != nil {
+			return err
+		}
 	}
 	if n == 0 && order.Status != orderStatusClosed {
 		// order.Status 是**这个屏障事务里刚读出来的**那一个（branch() 里的
@@ -332,110 +393,102 @@ func unlockCoupon(ctx context.Context, tx repository.Tx, order repository.Order)
 	return nil
 }
 
-// deductStock 是库存分支的正向：逐行扣减，并记流水。
+// finishBranch 是收尾分支（04，只有正向）：库存分支之后，在 core 这一侧收三件事。
 //
-// 扣减意图从 order_items 读回来 —— 这是硬约束二的落点，分支手里没有任何载荷。
+//  1. **扣减被拒的原因**：库存服务拒绝扣减时提交一行拒绝流水、返回成功（inventory 包 saga.go
+//     「扣减被拒为什么是成功」）。这里问库存服务这一单的流水，看到拒绝码就把原因记进 notes、
+//     返回 Failure 触发全局补偿 —— HTTP 那一侧的 409 与拆分前逐字相同。
+//  2. **关单守卫的另一半**：锁订单行，已经不是 10（买家取消 / 超时关单抢在了扣减之后）就确定性
+//     失败，全局补偿按流水把刚扣的放回去（与关单那一侧的释放在库存服务里按同一把锁串行，只放一次）。
+//  3. **库存预警**：流水里的扣减行有扣减前后的水位与此刻的预警线，跨线的那一次发（notification.go）。
 //
-// 流水不是装饰：正向扣减与补偿回补跑完之后，available_qty 回到原值，和
-// 「从来没扣过」一模一样。只有这两行流水能把两者分开，而「补偿到底跑没跑」
-// 正是 SAGA 最需要能被证伪的那件事。
-func deductStock(ctx context.Context, tx repository.Tx, order repository.Order) error {
-	// 先锁订单行、确认它还没被关掉（LockOrderStatus 的注释写了那个窗口）。
-	// 正常编排下这里看到的是 10（建单分支已推过）；0 只在直接调分支的测试里出现，
-	// 而 0 的订单只会被孤儿清理关掉，那一侧另有「一行流水都没有」的断言守着。
-	// 其余状态（90 已关闭等）是确定性失败：买家已经取消 / 超时关单了，这时再扣就是给一笔关掉的单扣货。
-	st, err := tx.LockOrderStatus(ctx, order.ID)
-	if err != nil {
-		return err
-	}
-	if st != orderStatusPending && st != orderStatusDraft {
-		return fmt.Errorf("%w: 订单 %s 已经是 %d，不再扣库存", errOrderNotPending, order.OrderNo, st)
-	}
-	lines, err := tx.ListOrderLines(ctx, order.ID)
-	if err != nil {
-		return err
-	}
-	if len(lines) == 0 {
-		// 一笔没有行的订单扣不了任何东西。返回成功会让这单白拿货，
-		// 所以它必须是一个错误 —— 而且是确定性的，不该被重试。
-		return fmt.Errorf("%w: 订单 %s 一行都没有", errOrderNotDraft, order.OrderNo)
-	}
-	for _, ln := range lines {
-		// order.StoreID 来自**这个屏障事务里刚读回来的那一行订单**
-		// （branch() 里的 FindOrderByNo），不是某个缓存下来的快照 ——
-		// 数据模型 §4：分支从 orders 读 store_id，不从 gid 解析，
-		// 因为 gid 是屏障幂等的键，改它的文法等于改那把钥匙的形状。
-		after, err := tx.DeductInventory(ctx, ln.SKUID, order.StoreID, ln.Quantity)
+// 问库存服务在屏障事务**之外**（单体下库存池就是业务池，事务内再要连接会整池互等；拆分下是一次网络
+// 往返）。问不到（库存服务不在）返回 Unknown，协调器重试 —— 这时库存已经扣了，订单停在 10，
+// 与拆分前「库存分支在重试」是同一种状态。
+func (s *OrderService) finishBranch() dtm.BranchFunc {
+	name := BranchOrderFinish
+	return func(gid, branchID, op string) int {
+		log := s.log.With("gid", gid, "branch_id", branchID, "op", op, "branch", name)
+		if op != opAction {
+			log.Error("收尾分支收到的 op 不是 action，编排写错了？")
+			return dtm.Unknown
+		}
+		ctx, merchantID, orderNo, err := dtm.TenantContextFromGID(context.Background(), gid)
 		if err != nil {
-			return err
+			log.Error("分支拿到的 gid 解析不出租户，拒绝执行", "err", err)
+			return dtm.Failure
 		}
-		if err := tx.AppendInventoryLog(ctx, ln.SKUID, order.StoreID, -ln.Quantity,
-			repository.InventoryLogOrderDeduct, order.OrderNo, after+ln.Quantity, after); err != nil {
-			return err
+		log = log.With("merchant_id", merchantID, "order_no", orderNo)
+		if s.inv == nil {
+			log.Error("下单服务没有接上库存服务，收尾分支问不了流水")
+			return dtm.Unknown
 		}
-		// 跌破预警线的那一次给门店发库存预警，与扣减同一个屏障事务（数据模型 §16）。
-		if err := notifyLowStockIfCrossed(ctx, tx, order, ln.SKUID, ln.Quantity, after); err != nil {
-			return err
+		trail, err := s.inv.OrderTrail(ctx, orderNo)
+		if err != nil {
+			log.Warn("收尾分支问不到库存流水，按 Unknown 上报以便协调器重试", "err", err)
+			return dtm.Unknown
 		}
-		// 按活动价成交的行：同一个事务里扣活动配额（秒杀防超卖）与每人限购（00058）。
-		//
-		// 放在库存分支里而不是另起一个分支：配额与门店库存是「同一件货」的两道闸，
-		// 必须同生共死 —— 配额扣到了、库存没扣到（或反过来）都是错账。同一个事务之后，
-		// 任一道不过整个分支回滚，补偿是一次空回滚（屏障挡住），编排也不必改。
-		if ln.PricePromotionID != nil {
-			if err := tx.ReservePromotionQuota(ctx, *ln.PricePromotionID, ln.SKUID,
-				order.UserID, ln.Quantity); err != nil {
-				return err
+		if rej := rejectionOf(trail); rej != nil {
+			return s.reportBranchFailure(log, gid, rej)
+		}
+		deducted := false
+		for _, e := range trail {
+			if e.BizType == inventory.BizOrderDeduct {
+				deducted = true
 			}
 		}
-	}
-	return nil
-}
-
-// restoreStock 是库存分支的补偿：逐行回补，并记流水。
-//
-// 它与 deductStock 读的是同一份 order_items、同样按 sku_id 排序 ——
-// 两个方向按同一个顺序拿行锁，否则两笔互相交叉的订单在高并发下能互相死锁。
-func restoreStock(ctx context.Context, tx repository.Tx, order repository.Order) error {
-	lines, err := tx.ListOrderLines(ctx, order.ID)
-	if err != nil {
-		return err
-	}
-	for _, ln := range lines {
-		// 回补一定回补到**当初扣减的那一家店**：补偿分支与正向分支读的是
-		// 同一行订单，所以 order.StoreID 逐字相同。
-		after, err := tx.RestoreInventory(ctx, ln.SKUID, order.StoreID, ln.Quantity)
+		if !deducted {
+			// 库存分支报了成功，流水里却既没有扣减也没有拒绝：只可能是它跑在了别的租户下
+			// （gid 与订单对不上），或者流水被人动过。不能当成扣过了 —— 那是白拿货。
+			return s.reportBranchFailure(log, gid,
+				fmt.Errorf("%w: 订单 %s 在库存服务里既没有扣减也没有拒绝流水", errOrderNotPending, orderNo))
+		}
+		decision, err := s.repo.WithSagaBranch(ctx, gid, branchID, op, func(tx repository.Tx) error {
+			order, err := tx.FindOrderByNo(ctx, orderNo)
+			if err != nil {
+				return err
+			}
+			st, err := tx.LockOrderStatus(ctx, order.ID)
+			if err != nil {
+				return err
+			}
+			if st != orderStatusPending && st != orderStatusDraft {
+				return fmt.Errorf("%w: 订单 %s 已经是 %d，扣下的库存要放回", errOrderNotPending, orderNo, st)
+			}
+			for _, e := range trail {
+				if e.BizType != inventory.BizOrderDeduct {
+					continue
+				}
+				if err := notifyLowStockIfCrossed(ctx, tx, order, e); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
 		if err != nil {
-			return err
+			return s.reportBranchFailure(log, gid, err)
 		}
-		if err := tx.AppendInventoryLog(ctx, ln.SKUID, order.StoreID, ln.Quantity,
-			repository.InventoryLogSagaCompense, order.OrderNo, after-ln.Quantity, after); err != nil {
-			return err
-		}
-		if err := releasePromotionLine(ctx, tx, ln, order.UserID, order.OrderNo); err != nil {
-			return err
-		}
+		log.Debug("分支完成", "decision", decision.String())
+		return dtm.Success
 	}
-	return nil
 }
 
-// releasePromotionLine 把一行占的活动配额与每人限购放回。SAGA 补偿、超时关单、买家取消共用。
-//
-// 放不回（受影响 0 行）只出声不报错：那意味着这个 SKU 在下单之后被移出了活动
-// （后台只允许移除 sold_qty = 0 的 SKU，所以正常路径上走不到），报错会让补偿无限重试、
-// 让关单整体回滚 —— 为了一个计数把库存也锁在这一单上，代价比少放回几件配额大。
-func releasePromotionLine(ctx context.Context, tx repository.Tx, ln repository.OrderLine,
-	userID int64, orderNo string) error {
-	if ln.PricePromotionID == nil {
-		return nil
-	}
-	ok, err := tx.ReleasePromotionQuota(ctx, *ln.PricePromotionID, ln.SKUID, userID, ln.Quantity)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		slog.WarnContext(ctx, "放回活动配额时受影响 0 行：这个 SKU 已不在活动里，或计数不够减",
-			"order_no", orderNo, "promotion_id", *ln.PricePromotionID, "sku_id", ln.SKUID)
+// rejectionOf 把流水里的扣减被拒翻译成 HTTP 那一侧认得的 sentinel；没有被拒返回 nil。
+func rejectionOf(trail []inventory.TrailEntry) error {
+	for _, e := range trail {
+		if e.BizType != inventory.BizOrderRejected {
+			continue
+		}
+		switch e.Reason {
+		case inventory.RejectInsufficient:
+			return fmt.Errorf("%w: sku %d 在门店 %d 可售 %d", ErrInsufficientStock, e.SKUID, e.StoreID, e.Before)
+		case inventory.RejectSoldOut:
+			return fmt.Errorf("%w: sku %d 的活动配额不够", ErrPromotionSoldOut, e.SKUID)
+		case inventory.RejectReleased:
+			return fmt.Errorf("%w: 这一单在扣减之前已经被关单释放了", errOrderNotPending)
+		default:
+			return fmt.Errorf("%w: 库存服务拒绝了扣减，拒绝码 %q 不认识", ErrOrderSagaFailed, e.Reason)
+		}
 	}
 	return nil
 }

@@ -80,9 +80,9 @@ type AutoConfirmReminder struct {
 	ShippedAt time.Time
 }
 
-// InventoryAlert 是库存预警要的上下文。
-type InventoryAlert struct {
-	WarningQty   int32
+// LowStockContext 是库存预警要的展示上下文（core 自己的名字）。预警线与水位是库存服务的数，
+// 不在这里（微服务拆分阶段 1b：拆分前那条语句 JOIN 了 inventories）。
+type LowStockContext struct {
 	ProductTitle string
 	SpecValues   string
 	StoreName    string
@@ -120,8 +120,8 @@ type NotificationTx interface {
 
 	// ListAutoConfirmReminders 「自动确认收货即将到期」的候选（还没提醒过的）。
 	ListAutoConfirmReminders(ctx context.Context, remindBefore time.Time, batch int32) ([]AutoConfirmReminder, error)
-	// InventoryAlert 库存预警的上下文；这一行库存不存在返回 ErrNotificationNotFound。
-	InventoryAlert(ctx context.Context, skuID, storeID int64) (InventoryAlert, error)
+	// LowStockContext 库存预警的展示上下文；SKU 或门店查不到返回 ErrNotificationNotFound。
+	LowStockContext(ctx context.Context, skuID, storeID int64) (LowStockContext, error)
 }
 
 // ErrNotificationNotFound：要读的那一行不存在（或不在本租户）。
@@ -292,14 +292,13 @@ func (t tenantTx) ListAutoConfirmReminders(ctx context.Context, remindBefore tim
 	return out, nil
 }
 
-func (t tenantTx) InventoryAlert(ctx context.Context, skuID, storeID int64) (InventoryAlert, error) {
-	r, err := t.q.GetInventoryAlert(ctx, db.GetInventoryAlertParams{SkuID: skuID, StoreID: storeID})
+func (t tenantTx) LowStockContext(ctx context.Context, skuID, storeID int64) (LowStockContext, error) {
+	r, err := t.q.GetLowStockContext(ctx, db.GetLowStockContextParams{SkuID: skuID, StoreID: storeID})
 	if errors.Is(err, pgx.ErrNoRows) {
-		return InventoryAlert{}, ErrNotificationNotFound
+		return LowStockContext{}, ErrNotificationNotFound
 	}
 	if err != nil {
-		return InventoryAlert{}, err
+		return LowStockContext{}, err
 	}
-	return InventoryAlert{WarningQty: r.WarningQty, ProductTitle: r.ProductTitle,
-		SpecValues: r.SpecValues, StoreName: r.StoreName}, nil
+	return LowStockContext{ProductTitle: r.ProductTitle, SpecValues: r.SpecValues, StoreName: r.StoreName}, nil
 }

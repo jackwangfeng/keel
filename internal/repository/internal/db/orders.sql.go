@@ -11,48 +11,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const appendInventoryLog = `-- name: AppendInventoryLog :exec
-INSERT INTO inventory_logs (sku_id, store_id, change_qty, biz_type, biz_id,
-                            before_available, after_available)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
-`
-
-type AppendInventoryLogParams struct {
-	SkuID           int64
-	StoreID         int64
-	ChangeQty       int32
-	BizType         int16
-	BizID           string
-	BeforeAvailable int32
-	AfterAvailable  int32
-}
-
-// 库存流水（数据模型 §4，对账用）。
-//
-// 它不是可选的装饰：正向扣减与补偿回补跑完之后，available_qty 回到了原值，
-// 和「从来没扣过」一模一样。只有这两行流水能把这两种情形分开 ——
-// 而「补偿到底跑没跑」正是 SAGA 最需要能被证伪的那件事。
-//
-// biz_type：1 下单扣减 / 2 SAGA 补偿回补 / 3 超时关单释放 / 4 退款回补 / 5 手工调整。
-// biz_id 存订单号。
-//
-// **store_id 本轮（00020）补上，它不是可选的冗余。** 流水的唯一用途是对账，
-// 而对账口径从「这个商家这个 SKU 扣了多少」变成了「这家店这个 SKU 扣了多少」——
-// before_available / after_available 现在记的是某一家门店的水位，
-// 不写下是哪一家，同一个 SKU 在五家店的流水会交织成一条谁也对不平的序列。
-func (q *Queries) AppendInventoryLog(ctx context.Context, arg AppendInventoryLogParams) error {
-	_, err := q.db.Exec(ctx, appendInventoryLog,
-		arg.SkuID,
-		arg.StoreID,
-		arg.ChangeQty,
-		arg.BizType,
-		arg.BizID,
-		arg.BeforeAvailable,
-		arg.AfterAvailable,
-	)
-	return err
-}
-
 const claimExpiredPendingOrder = `-- name: ClaimExpiredPendingOrder :execrows
 UPDATE orders SET status = 90
  WHERE order_no = $1 AND status = 10 AND expire_at < now()
@@ -151,27 +109,6 @@ func (q *Queries) CloseOrder(ctx context.Context, orderNo string) (int64, error)
 		return 0, err
 	}
 	return result.RowsAffected(), nil
-}
-
-const countInventoryLogsForOrder = `-- name: CountInventoryLogsForOrder :one
-SELECT count(*) FROM inventory_logs WHERE biz_id = $1
-`
-
-// 这一单在库存流水上留下过几行。
-//
-// 它只有一个用途，而且是**不变量的守卫**，不是业务查询：关闭孤儿草稿之前，
-// 核对一下这一单真的一件库存都没扣过。
-//
-// 那条不变量今天由编排顺序保证（建单在前、库存在后，见 service/order.go 的
-// 文件头）：订单还停在 0，说明建单分支的正向没成功，而库存分支排在它后面，
-// 连开始都没开始。**但这是一条靠「另一个文件里的常量」维持的不变量** ——
-// 哪天有人把 sagaSteps 的两行对调，孤儿清理就会开始静默地漏掉库存回补，
-// 而水位、订单状态、日志全都正常。所以这里花一次点查把它变成一次响亮的失败。
-func (q *Queries) CountInventoryLogsForOrder(ctx context.Context, bizID string) (int64, error) {
-	row := q.db.QueryRow(ctx, countInventoryLogsForOrder, bizID)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
 }
 
 const countUserOrders = `-- name: CountUserOrders :one
@@ -1351,41 +1288,19 @@ const lockOrderStatus = `-- name: LockOrderStatus :one
 SELECT status FROM orders WHERE id = $1 FOR UPDATE
 `
 
-// 库存分支正向开头用：锁住订单行再看它还是不是 10 待支付。
+// 下单 SAGA 收尾分支（库存分支之后）开头用：锁住订单行再看它还是不是 10 待支付。
 //
 // 审查发现的窗口：建单分支先把订单推到 10，库存分支才扣。库存分支一次说不清的失败
-// （死锁、断连）会被协调器重试，而重试之前订单已经是 10、单号可能已经外泄（WaitFinal
-// 超时回 409 in-flight）—— 买家这时取消、或超时任务关单，就会「回补」一笔还没扣的库存。
-// 锁住订单行让「取消 / 关单」与「扣减」串行：取消先提交，扣减这里看到 90 就拒绝
-// （返回确定性失败，全局补偿，库存分支的补偿被屏障判成空回滚）；扣减先拿到锁，
-// 取消等它提交后再看流水，回补的正好是扣掉的那些。
+// （死锁、断连、库存服务不在）会被协调器重试，而重试之前订单已经是 10、单号可能已经外泄
+// （WaitFinal 超时回 409 in-flight）—— 买家这时取消、或超时任务关单。拆分前这把锁在库存分支里，
+// 让「取消」与「扣减」串行；拆分后库存分支在另一个库里，看不见订单，守卫分成两半
+// （service/order_saga.go 的文件头）：库存服务按流水拒绝「已经被关单释放过」的订单，
+// 这里在扣减之后再看一眼订单 —— 已经关掉了就确定性失败，全局补偿按流水把刚扣的放回去。
 func (q *Queries) LockOrderStatus(ctx context.Context, id int64) (int16, error) {
 	row := q.db.QueryRow(ctx, lockOrderStatus, id)
 	var status int16
 	err := row.Scan(&status)
 	return status, err
-}
-
-const orderSkuNetInventoryChange = `-- name: OrderSkuNetInventoryChange :one
-SELECT COALESCE(sum(change_qty), 0)::int AS net
-  FROM inventory_logs
- WHERE biz_id = $1 AND sku_id = $2 AND store_id = $3
-`
-
-type OrderSkuNetInventoryChangeParams struct {
-	OrderNo string
-	SkuID   int64
-	StoreID int64
-}
-
-// 这一单在这家店这个 SKU 上的库存流水净变化（扣减记负、回补记正）。
-// 关单 / 取消回补之前用它核对「真的扣过、还没补回来」：净值为 0 说明库存分支
-// 根本没扣（或已经被补偿），那时回补就是凭空加库存。走 idx_inv_logs_biz。
-func (q *Queries) OrderSkuNetInventoryChange(ctx context.Context, arg OrderSkuNetInventoryChangeParams) (int32, error) {
-	row := q.db.QueryRow(ctx, orderSkuNetInventoryChange, arg.OrderNo, arg.SkuID, arg.StoreID)
-	var net int32
-	err := row.Scan(&net)
-	return net, err
 }
 
 const promoteOrderDraft = `-- name: PromoteOrderDraft :execrows

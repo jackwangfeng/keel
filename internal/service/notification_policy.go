@@ -46,15 +46,15 @@ var notificationCallSites = map[string]notifyPolicy{
 	"RefundService.settleTx/FinishWholeOrderRefund": {Notify: "notifyRefundSucceeded"},
 	"RefundService.settleTx/RecordRefundNotify": {Silent: "退款回调金额对不上：状态不动，只留原始报文，" +
 		"是要人对账的异常，不是买家该收到的消息（日志里有 Error）"},
-	"RefundService.settleTx/RestoreInventory": {Silent: "退款到账后回补未发货的库存（库存升高，不会跌破预警线）；" +
-		"这一次状态变化的通知是同一个函数里的 refund_succeeded"},
 
 	// —— 库存水位
-	"deductStock/DeductInventory": {Notify: "notifyLowStockIfCrossed"},
-	"restoreStock/RestoreInventory": {Silent: "SAGA 补偿回补库存（升高，不会跌破预警线）；" +
-		"那一单的失败由 POST /orders 同步告诉买家"},
-	"releaseClosedOrder/RestoreInventory": {Silent: "关单回补库存（升高）。超时关单那条路的通知在调用方 " +
-		"releasePending 里（order_timeout_closed），买家取消那条路不发（理由见 OrderService.Cancel）"},
+	// 下单扣减与补偿是库存服务的 SAGA 分支（inventory 包 saga.go，由协调器调用，service 里没有调用点）；
+	// 扣减的库存预警由 core 的收尾分支 OrderService.finishBranch 按库存流水发（notifyLowStockIfCrossed，
+	// notification_policy_test.go 单独核对它真的调了）。
+	"inventoryOutbox.run/ReleaseForOrder": {Silent: "关单 / 取消之后的 outbox 任务放回库存与活动配额（升高，不会跌破预警线）。" +
+		"超时关单那条路的通知在 releasePending 里（order_timeout_closed，与关单同一个事务），买家取消那条路不发"},
+	"inventoryOutbox.run/RestockForRefund": {Silent: "退款到账后的 outbox 任务把未发货的货加回门店库存（升高）；" +
+		"这一次状态变化的通知是 settleTx 里的 refund_succeeded（与退款到账同一个事务）"},
 	// 后台改库存四处（微服务拆分阶段 1a 起经库存服务 inventory.Service 写，登记的是 service 里
 	// 调 inv.Set / inv.Adjust / inv.InitSKUs 的那一处，见 notification_policy_test.go）。
 	"setStockSole/Set": {Silent: "后台手工改库存（单店捷径）：动作是商家自己做的，" +
@@ -64,12 +64,13 @@ var notificationCallSites = map[string]notifyPolicy{
 	"adjustInventory/Adjust": {Silent: "后台相对调整库存（进货 / 盘亏 / 验货入库，两条路径共用）：" +
 		"商家自己做的，理由同 setStockSole —— 扣到预警线以下时他正看着那个数"},
 
-	// —— 营销活动的配额与每人限购（00058，与门店库存同一个事务）
-	"deductStock/ReservePromotionQuota": {Silent: "扣秒杀配额与每人限购：门店库存那条（同一个函数里的 DeductInventory）" +
-		"已经按预警线决定了发不发库存预警；配额抢光是活动的正常结局，不是要人处理的事 —— " +
-		"没抢到的买家由 POST /orders 同步收到 409 promotion-sold-out"},
-	"releasePromotionLine/ReleasePromotionQuota": {Silent: "SAGA 补偿、超时关单、买家取消时放回配额与限购（升高）；" +
+	// —— 营销活动的配额（00075 起在库存服务）与每人限购（core）
+	"promoteOrder/ReservePromotionLimit": {Silent: "建单分支累计每人限购：超限是正常的业务结局，" +
+		"买家由 POST /orders 同步收到 409 promotion-limit-exceeded，不是要人处理的事"},
+	"releasePromotionLimits/ReleasePromotionLimit": {Silent: "建单补偿、超时关单、买家取消时放回每人限购（升高）；" +
 		"这几条路径的通知由各自的调用方决定（超时关单发 order_timeout_closed，另两条不发）"},
+	"AdminPromotionService.syncQuotas/SetActivityQuotas": {Silent: "后台改活动商品时整组设配额：商家自己做的，" +
+		"理由同 setStockSole；秒杀抢光由下单时的 409 promotion-sold-out 告诉买家"},
 	"ProductImportService.initImportStock/InitSKUs": {Silent: "批量导入时建 SKU 写初始库存：商家自己确认的导入，" +
 		"理由同 initSKUStock；而且导入的商品是草稿，买家看不见，库存高低与任何人的订单无关"},
 }

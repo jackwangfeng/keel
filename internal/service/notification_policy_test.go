@@ -48,6 +48,8 @@ var stateChangingQuery = regexp.MustCompile(
 		`|\bUPDATE\s+inventories\b` +
 		`|\bINSERT\s+INTO\s+inventories\b` +
 		`|\bUPDATE\s+promotion_skus\b` +
+		`|\bUPDATE\s+activity_stocks\b` +
+		`|\bINSERT\s+INTO\s+activity_stocks\b` +
 		`|\bUPDATE\s+promotion_purchases\b` +
 		`|\bINSERT\s+INTO\s+promotion_purchases\b`)
 
@@ -257,6 +259,28 @@ var inventoryWrites = map[string]string{
 	"Set":      "InvSetStock",
 	"Adjust":   "InvAdjustStock",
 	"InitSKUs": "InvInitSKU",
+	// 阶段 1b
+	"ReleaseForOrder":   "InvAddStock",
+	"RestockForRefund":  "InvAddStock",
+	"SetActivityQuotas": "InvUpsertActivityQuota",
+}
+
+// 下单扣减是库存服务的 SAGA 分支（协调器调用），service 里没有它的调用点，上面那张表看不见它；
+// 它的库存预警由 core 的收尾分支按流水发。这里钉住那一处：把 notifyLowStockIfCrossed 从收尾分支里删掉，
+// 跌破预警线就再也没有通知了，而上面那条测试照样绿。
+func TestInventoryDeductNotifiesFromTheFinishBranch(t *testing.T) {
+	for _, f := range parseGoDir(t, ".") {
+		for _, d := range f.Decls {
+			fn, ok := d.(*ast.FuncDecl)
+			if ok && fn.Body != nil && funcKey(fn) == "OrderService.finishBranch" {
+				if !callsIdent(fn, "notifyLowStockIfCrossed") {
+					t.Fatal("OrderService.finishBranch 不再调 notifyLowStockIfCrossed —— 下单扣减跌破预警线没人发通知了")
+				}
+				return
+			}
+		}
+	}
+	t.Fatal("找不到 OrderService.finishBranch —— 收尾分支改名了而这条测试没跟上")
 }
 
 // isInventoryReceiver 判调用的接收者是不是库存服务：一个叫 inv 的标识符，或者 x.inv。

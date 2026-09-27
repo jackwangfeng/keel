@@ -238,7 +238,7 @@ func TestRouterServesContractPaths(t *testing.T) {
 
 	// 协调器传 nil：这条测试只看路由表，而挂路由不需要协调器。
 	// 真要下单时 Create 会当场报「协调器没有接上」—— 那是刻意的失败方向。
-	orders := service.NewOrderService(repository.New(pool), nil, nil)
+	orders := service.NewOrderService(repository.New(pool), nil, nil, nil)
 	r := app.Router(pool, tenant.NewResolver(pool, tenant.Config{BaseDomain: "example.com"}),
 		auth.NewSigner([]byte("keel-test-secret-key-32-bytes-long!!")), orders,
 		// 引擎传 nil：这条测试只看路由表，而 /search 在没有引擎时照样挂得上去

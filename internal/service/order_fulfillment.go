@@ -85,7 +85,7 @@ func (s *OrderService) Cancel(ctx context.Context, orderNo, idemKey string) (rep
 	if err != nil {
 		return repository.Order{}, false, err
 	}
-	return idempotentTx(ctx, s.repo, repository.BuyerSubject(id.UserID),
+	out, replayed, err := idempotentTx(ctx, s.repo, repository.BuyerSubject(id.UserID),
 		idempotencyScopeCancel, idemKey, pathHash(orderNo), archivedOK,
 		func(tx repository.Tx) (repository.Order, error) {
 			order, err := findBuyerOrder(ctx, tx, orderNo, id.UserID)
@@ -107,12 +107,19 @@ func (s *OrderService) Cancel(ctx context.Context, orderNo, idemKey string) (rep
 					ErrOrderNotCancelable, orderNo, order.Status, orderStatusPending)
 			}
 			// 与超时关单同一份放回逻辑，只是流水记成「买家取消释放」（biz_type 6）。
-			if _, err := releaseClosedOrder(ctx, tx, order.ID, order.OrderNo, order.StoreID, order.UserID,
+			if err := releaseClosedOrder(ctx, tx, order.ID, order.OrderNo, order.UserID,
 				repository.InventoryLogBuyerCancel); err != nil {
 				return repository.Order{}, err
 			}
 			return findBuyerOrder(ctx, tx, orderNo, id.UserID)
 		})
+	if err != nil {
+		return out, replayed, err
+	}
+	// 库存与活动配额的放回：提交之后就地跑一次 outbox 任务，库存服务不在时留给 worker
+	// （inventory_outbox.go）。重放（replayed）时任务早已做完或还在队列里，kick 什么都不做或接着做。
+	s.ob.kick(ctx, releaseJobKey(orderNo))
+	return out, replayed, nil
 }
 
 // Confirm 实现 POST /orders/{order_no}/confirm。

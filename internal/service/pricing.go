@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/keel/keel/internal/inventory"
 	"github.com/keel/keel/internal/repository"
 )
 
@@ -155,6 +156,74 @@ type couponRequest struct {
 	UserID int64
 	ID     *int64
 	Now    time.Time
+
+	// Quotas 是活动配额（00075 起在库存服务）。计价撞上单价类报价而它还没问过时，
+	// loadLivePromotions 返回 errNeedActivity，调用方经 withActivityQuotas 问一次库存服务再重来。
+	Quotas *activityQuotas
+}
+
+// activityQuotas 是向库存服务问来的活动配额与已售（微服务拆分阶段 1b）。
+//
+// asked 为假表示还没问过：计价只要撞上一个单价类报价，就停下来要配额（errNeedActivity）。
+// 为什么不在事务之前无条件问一次：绝大多数订单与购物车没有任何活动报价，无条件问就是每一单多一次
+// 库存服务调用（拆分形态下是一次网络往返，库存服务不在时连没有活动的试算也会失败）。
+// 撞上了再问，代价是有活动的那一单把事务重跑一遍 —— 只读的定价事务，重跑是安全的。
+type activityQuotas struct {
+	asked bool
+	m     map[inventory.ActivityKey]inventory.Activity
+}
+
+// errNeedActivity：计价需要这些 SKU 的活动配额而还没问过。不是失败，是「问完再来」。
+type errNeedActivity struct{ skuIDs []int64 }
+
+func (e *errNeedActivity) Error() string {
+	return fmt.Sprintf("计价需要 %d 个 SKU 的活动配额（还没向库存服务问过）", len(e.skuIDs))
+}
+
+// withActivityQuotas 跑 fn（一个定价事务）；fn 撞上 errNeedActivity 时在事务之外向库存服务
+// 批量问一次配额，再把 fn 重跑一遍。问库存服务必须在事务之外（inventory_outbox.go 的文件头最后一段）。
+func withActivityQuotas(ctx context.Context, inv inventory.Service, fn func(q *activityQuotas) error) error {
+	err := fn(&activityQuotas{})
+	var need *errNeedActivity
+	if !errors.As(err, &need) {
+		return err
+	}
+	if inv == nil {
+		return errors.New("计价需要活动配额，而这个服务没有接上库存服务")
+	}
+	m, err := inv.ActivityStock(ctx, inventory.ActivityQuery{SKUIDs: need.skuIDs})
+	if err != nil {
+		return err
+	}
+	return fn(&activityQuotas{asked: true, m: m})
+}
+
+// apply 把配额填进报价。没问过就要配额（errNeedActivity）；问过而没有这一行的标成 QuotaUnsynced
+// （计价按报价不生效处理，pickPriceOffer）。
+func (q *activityQuotas) apply(offers []repository.PriceOffer) error {
+	if len(offers) == 0 {
+		return nil
+	}
+	if q == nil || !q.asked {
+		seen := map[int64]bool{}
+		var ids []int64
+		for _, o := range offers {
+			if !seen[o.SKUID] {
+				seen[o.SKUID] = true
+				ids = append(ids, o.SKUID)
+			}
+		}
+		return &errNeedActivity{skuIDs: ids}
+	}
+	for i := range offers {
+		a, ok := q.m[inventory.ActivityKey{PromotionID: offers[i].PromotionID, SKUID: offers[i].SKUID}]
+		if !ok {
+			offers[i].QuotaUnsynced = true
+			continue
+		}
+		offers[i].StockQty, offers[i].SoldQty = a.Quota, a.Sold
+	}
+	return nil
 }
 
 // ErrCouponNotApplicable：带的券本单用不了。契约的 409 coupon-not-applicable。
@@ -261,7 +330,7 @@ func priceOrder(ctx context.Context, tx repository.Tx, sc repository.StoreScope,
 	}
 
 	// ---- 营销活动：单价类改单价，满减满折按行分摊（promotion_calc.go）----
-	lp, err := loadLivePromotions(ctx, tx, ids, coupon.Now)
+	lp, err := loadLivePromotions(ctx, tx, ids, coupon.Now, coupon.Quotas)
 	if err != nil {
 		return Quote{}, err
 	}
@@ -388,8 +457,11 @@ func (q Quote) checkPromotionLimits() error {
 // loadLivePromotions 取「此刻生效」的活动素材。没有任何生效活动时只花一条查询。
 //
 // 新人礼（类型 5）不参与计价，在这里就滤掉。
+//
+// 单价类报价的配额与已售由 quotas 填（00075 起在库存服务，activityQuotas 的注释）；有报价而
+// quotas 还没问过时返回 errNeedActivity。
 func loadLivePromotions(ctx context.Context, tx repository.Tx, skuIDs []int64,
-	now time.Time) (livePromotions, error) {
+	now time.Time, quotas *activityQuotas) (livePromotions, error) {
 	lp := livePromotions{Promos: map[int64]repository.Promotion{}}
 	live, err := tx.ListLivePromotions(ctx, now)
 	if err != nil {
@@ -418,7 +490,16 @@ func loadLivePromotions(ctx context.Context, tx repository.Tx, skuIDs []int64,
 		if err != nil {
 			return livePromotions{}, err
 		}
+		var live []repository.PriceOffer
 		for _, o := range offers {
+			if _, ok := lp.Promos[o.PromotionID]; ok {
+				live = append(live, o)
+			}
+		}
+		if err := quotas.apply(live); err != nil {
+			return livePromotions{}, err
+		}
+		for _, o := range live {
 			if _, ok := lp.Promos[o.PromotionID]; ok {
 				lp.Offers[o.SKUID] = append(lp.Offers[o.SKUID], o)
 			}

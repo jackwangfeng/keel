@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/keel/keel/internal/auth"
+	"github.com/keel/keel/internal/dtm"
+	"github.com/keel/keel/internal/inventory"
 	"github.com/keel/keel/internal/repository"
 )
 
@@ -165,6 +167,12 @@ type OrderService struct {
 	log   *slog.Logger
 	notes *branchNotes
 
+	// inv 是这个进程的库存服务（微服务拆分阶段 1b）：计价问活动配额、收尾分支问流水、
+	// 取消之后就地放回库存（ob）。res 决定库存分支的地址（单体 local://，拆分 http://）。
+	inv inventory.Service
+	res dtm.BranchResolver
+	ob  *inventoryOutbox
+
 	// now 可替换，好让测试构造「已过期」这类时间相关的场景。
 	now func() time.Time
 }
@@ -181,7 +189,9 @@ type OrderService struct {
 // 才被拒，而那时错误指向的是业务代码。
 func (s *OrderService) AttachCoordinator(tc Coordinator) { s.tc = tc }
 
-func NewOrderService(r OrderRepository, tc Coordinator, log *slog.Logger) *OrderService {
+// inv 是这个进程的库存服务：单体是进程内实现，KEEL_ROLE=core 是 HTTP 实现（它与 Router 的
+// WithInventory 是同一个）。库存分支的地址默认进程内（local://），拆分部署用 UseBranchResolver 改。
+func NewOrderService(r OrderRepository, inv inventory.Service, tc Coordinator, log *slog.Logger) *OrderService {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -191,8 +201,14 @@ func NewOrderService(r OrderRepository, tc Coordinator, log *slog.Logger) *Order
 		log:   log,
 		notes: newBranchNotes(),
 		now:   time.Now,
+		inv:   inv,
+		ob:    newInventoryOutbox(r, inv, log),
 	}
 }
+
+// UseBranchResolver 决定库存分支的地址（dtm.NewBranchResolver(KEEL_INVENTORY_URL, secret)）。
+// 必须在第一次下单之前调；零值是全部进程内。
+func (s *OrderService) UseBranchResolver(res dtm.BranchResolver) { s.res = res }
 
 // CreateRequest 是 OrderCreateRequest 在 service 边界上的形状。
 //
@@ -247,39 +263,41 @@ func (s *OrderService) Preview(ctx context.Context, req CreateRequest) (Quote, e
 	now := s.now()
 
 	var q Quote
-	err = s.repo.WithTenant(ctx, func(tx repository.Tx) error {
-		sc, err := orderScope(ctx, tx, req.StoreID)
-		if err != nil {
+	err = withActivityQuotas(ctx, s.inv, func(quotas *activityQuotas) error {
+		return s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+			sc, err := orderScope(ctx, tx, req.StoreID)
+			if err != nil {
+				return err
+			}
+			// 运费按收货地址算（00056）：试算与下单读的是同一个地址、归到同一个省。
+			// 此前试算不读 address_id，现在它和下单一样查不到就 422。
+			addr, err := tx.FindAddress(ctx, req.AddressID, id.UserID)
+			if errors.Is(err, repository.ErrAddressNotFound) {
+				return fmt.Errorf("%w: address_id=%d", ErrAddressNotFound, req.AddressID)
+			}
+			if err != nil {
+				return err
+			}
+			dest := destinationOf(addr)
+			q, err = priceOrder(ctx, tx, sc, &dest, req.Items, couponOf(id.UserID, req, now, quotas))
+			if err != nil {
+				return err
+			}
+			// 超出每人限购：试算就说出来（409），而不是等下单时才被建单分支拒掉。
+			if err := q.checkPromotionLimits(); err != nil {
+				return err
+			}
+			q.ApplicableCoupons, err = applicableCoupons(ctx, tx, sc, id.UserID, q, now)
 			return err
-		}
-		// 运费按收货地址算（00056）：试算与下单读的是同一个地址、归到同一个省。
-		// 此前试算不读 address_id，现在它和下单一样查不到就 422。
-		addr, err := tx.FindAddress(ctx, req.AddressID, id.UserID)
-		if errors.Is(err, repository.ErrAddressNotFound) {
-			return fmt.Errorf("%w: address_id=%d", ErrAddressNotFound, req.AddressID)
-		}
-		if err != nil {
-			return err
-		}
-		dest := destinationOf(addr)
-		q, err = priceOrder(ctx, tx, sc, &dest, req.Items, couponOf(id.UserID, req, now))
-		if err != nil {
-			return err
-		}
-		// 超出每人限购：试算就说出来（409），而不是等下单时才被库存分支拒掉。
-		if err := q.checkPromotionLimits(); err != nil {
-			return err
-		}
-		q.ApplicableCoupons, err = applicableCoupons(ctx, tx, sc, id.UserID, q, now)
-		return err
+		})
 	})
 	return q, err
 }
 
 // couponOf 是试算与下单构造 couponRequest 的唯一方式：同一个买家、同一张券、
 // 同一个时钟来源。
-func couponOf(userID int64, req CreateRequest, now time.Time) couponRequest {
-	return couponRequest{UserID: userID, ID: req.UserCouponID, Now: now}
+func couponOf(userID int64, req CreateRequest, now time.Time, quotas *activityQuotas) couponRequest {
+	return couponRequest{UserID: userID, ID: req.UserCouponID, Now: now, Quotas: quotas}
 }
 
 // orderScope 把请求里那个必填的 store_id 变成一个 StoreScope。
@@ -330,20 +348,25 @@ func (s *OrderService) Create(ctx context.Context, req CreateRequest, idemKey st
 	// （SAGA 跑完了但没成功），见下面第三段。校验期的失败没有任何副作用可言。
 	var (
 		draft     repository.Order
+		lines     []inventory.OrderLine
 		replayed  *CreateResult
 		replayErr error
 	)
-	err = s.repo.WithTenant(ctx, func(tx repository.Tx) error {
-		claimed, err := tx.ClaimIdempotencyKey(ctx, idempotencyScope, repository.BuyerSubject(id.UserID), idemKey, hash)
-		if err != nil {
+	// 撞上活动报价时这个事务会整个重跑一次（withActivityQuotas）：抢幂等键、落草稿都随第一次回滚了，
+	// 第二次是一次全新的尝试 —— 与「校验期的失败没有任何副作用」同一个道理。
+	err = withActivityQuotas(ctx, s.inv, func(quotas *activityQuotas) error {
+		return s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+			claimed, err := tx.ClaimIdempotencyKey(ctx, idempotencyScope, repository.BuyerSubject(id.UserID), idemKey, hash)
+			if err != nil {
+				return err
+			}
+			if !claimed {
+				replayed, replayErr, err = s.replay(ctx, tx, id.UserID, idemKey, hash)
+				return err
+			}
+			draft, lines, err = s.placeDraft(ctx, tx, id.UserID, req, quotas)
 			return err
-		}
-		if !claimed {
-			replayed, replayErr, err = s.replay(ctx, tx, id.UserID, idemKey, hash)
-			return err
-		}
-		draft, err = s.placeDraft(ctx, tx, id.UserID, req)
-		return err
+		})
 	})
 	if err != nil {
 		return CreateResult{}, err
@@ -365,7 +388,11 @@ func (s *OrderService) Create(ctx context.Context, req CreateRequest, idemKey st
 	}
 	defer s.notes.drop(gid)
 
-	if err := s.tc.SubmitSaga(gid, sagaSteps); err != nil {
+	steps, err := s.sagaStepsFor(draft.OrderNo, draft.StoreID, lines)
+	if err != nil {
+		return CreateResult{}, err
+	}
+	if err := s.tc.SubmitSaga(gid, steps); err != nil {
 		// 提交都没成功：分支一个都没跑过，订单还停在 status = 0。
 		//
 		// **把抢占记录撤掉**，这是上一轮记下的那笔账。不撤的话，客户端拿同一把
@@ -454,20 +481,21 @@ func (s *OrderService) Create(ctx context.Context, req CreateRequest, idemKey st
 	return CreateResult{Order: final}, nil
 }
 
-// placeDraft 校验、定价、把 status = 0 的订单与订单项写进库。
+// placeDraft 校验、定价、把 status = 0 的订单与订单项写进库。另回一份库存分支的载荷行
+// （sku、件数、按哪个活动价成交）—— 库存服务的库里没有 order_items，扣什么随载荷带过去。
 func (s *OrderService) placeDraft(ctx context.Context, tx repository.Tx,
-	userID int64, req CreateRequest) (repository.Order, error) {
+	userID int64, req CreateRequest, quotas *activityQuotas) (repository.Order, []inventory.OrderLine, error) {
 	addr, err := tx.FindAddress(ctx, req.AddressID, userID)
 	if errors.Is(err, repository.ErrAddressNotFound) {
-		return repository.Order{}, fmt.Errorf("%w: address_id=%d", ErrAddressNotFound, req.AddressID)
+		return repository.Order{}, nil, fmt.Errorf("%w: address_id=%d", ErrAddressNotFound, req.AddressID)
 	}
 	if err != nil {
-		return repository.Order{}, err
+		return repository.Order{}, nil, err
 	}
 
 	sc, err := orderScope(ctx, tx, req.StoreID)
 	if err != nil {
-		return repository.Order{}, err
+		return repository.Order{}, nil, err
 	}
 
 	// 券在这里只是**算**（判能不能用、减多少、怎么分摊），不锁。锁券是 SAGA 的
@@ -475,14 +503,14 @@ func (s *OrderService) placeDraft(ctx context.Context, tx repository.Tx,
 	// 条件更新 —— 这里算过的只是预告，那里才是判定点：两笔并发订单用同一张券，
 	// 两边都能算过，只有一边锁得上，另一边的 SAGA 失败并补偿掉建单。
 	dest := destinationOf(addr)
-	q, err := priceOrder(ctx, tx, sc, &dest, req.Items, couponOf(userID, req, s.now()))
+	q, err := priceOrder(ctx, tx, sc, &dest, req.Items, couponOf(userID, req, s.now(), quotas))
 	if err != nil {
-		return repository.Order{}, err
+		return repository.Order{}, nil, err
 	}
-	// 每人限购在这里是预告，库存分支（order_saga.go 的 deductStock）在行锁之下做最终判定：
+	// 每人限购在这里是预告，建单分支（order_saga.go 的 promoteOrder）做最终判定：
 	// 同一个买家两笔并发订单都能过这一道，只有一笔扣得到限购额度。
 	if err := q.checkPromotionLimits(); err != nil {
-		return repository.Order{}, err
+		return repository.Order{}, nil, err
 	}
 
 	// 金额一致性（契约明写的 409）。
@@ -490,7 +518,7 @@ func (s *OrderService) placeDraft(ctx context.Context, tx repository.Tx,
 	// 它必须在**这一次**试算的结果上比，而不是信客户端上一次拿到的那个数：
 	// 这条检查的全部意义就是「价格在两次之间变过没有」。
 	if req.ExpectedPayableCents != nil && *req.ExpectedPayableCents != q.PayableCents {
-		return repository.Order{}, fmt.Errorf("%w: 前端拿的是 %d，服务端现在算出来是 %d",
+		return repository.Order{}, nil, fmt.Errorf("%w: 前端拿的是 %d，服务端现在算出来是 %d",
 			ErrPriceChanged, *req.ExpectedPayableCents, q.PayableCents)
 	}
 
@@ -506,27 +534,27 @@ func (s *OrderService) placeDraft(ctx context.Context, tx repository.Tx,
 		PostalCode:   addr.PostalCode,
 	})
 	if err != nil {
-		return repository.Order{}, err
+		return repository.Order{}, nil, err
 	}
 
 	promoSnapshot, err := json.Marshal(orderPromotionSnapshots(q.Promotions))
 	if err != nil {
-		return repository.Order{}, err
+		return repository.Order{}, nil, err
 	}
 	// 运费明细的快照（orders.freight_snapshot）：下单那一刻用的哪个模板、
 	// 命中哪条规则、为什么包邮。之后改模板不影响它 —— 与 receiver_snapshot 同一条道理。
 	// priceOrder 拿到了地址就一定有明细，这里为 nil 只可能是那边被改坏了。
 	if q.Freight == nil {
-		return repository.Order{}, fmt.Errorf("下单时没有算出运费明细（priceOrder 拿到了地址却没算运费）")
+		return repository.Order{}, nil, fmt.Errorf("下单时没有算出运费明细（priceOrder 拿到了地址却没算运费）")
 	}
 	freightSnapshot, err := json.Marshal(q.Freight)
 	if err != nil {
-		return repository.Order{}, err
+		return repository.Order{}, nil, err
 	}
 
 	orderNo, err := newOrderNo(s.now())
 	if err != nil {
-		return repository.Order{}, err
+		return repository.Order{}, nil, err
 	}
 	draft, err := tx.CreateOrderDraft(ctx, repository.NewOrderDraft{
 		OrderNo:          orderNo,
@@ -549,8 +577,9 @@ func (s *OrderService) placeDraft(ctx context.Context, tx repository.Tx,
 		Promotions:             promoSnapshot,
 	})
 	if err != nil {
-		return repository.Order{}, err
+		return repository.Order{}, nil, err
 	}
+	lines := make([]inventory.OrderLine, 0, len(q.Lines))
 	for _, ln := range q.Lines {
 		if err := tx.CreateOrderItem(ctx, repository.NewOrderItem{
 			OrderID:       draft.ID,
@@ -568,10 +597,11 @@ func (s *OrderService) placeDraft(ctx context.Context, tx repository.Tx,
 			PricePromotionID:       ln.PricePromotionID,
 			PromotionDiscountCents: ln.PromotionDiscountCents,
 		}); err != nil {
-			return repository.Order{}, err
+			return repository.Order{}, nil, err
 		}
+		lines = append(lines, inventory.OrderLine{SKUID: ln.SKUID, Qty: ln.Quantity, PromotionID: ln.PricePromotionID})
 	}
-	return draft, nil
+	return draft, lines, nil
 }
 
 // replay 处理「这个幂等键已经存在」那一支（数据模型 §12 的三态表）。

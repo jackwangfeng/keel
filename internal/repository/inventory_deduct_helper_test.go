@@ -1,4 +1,4 @@
-package handler_test
+package repository_test
 
 import (
 	"context"
@@ -6,26 +6,22 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/keel/keel/internal/dtm"
 	"github.com/keel/keel/internal/inventory"
 	"github.com/keel/keel/internal/repository"
 	"github.com/keel/keel/internal/tenant"
 )
 
-// localInventory 是建在测试池上的进程内库存服务 —— 与 app.Router 不给 WithInventory 时
-// 装的是同一个东西（微服务拆分阶段 1a）。直接构造 service 的测试用它。
-func localInventory() inventory.Service {
-	return inventory.NewLocal(repository.NewInventoryStore(testPool))
-}
-
 // deductViaSaga 用下单 SAGA 真正的库存分支（inventory 包 saga.go）扣一次，返回扣减后的水位。
 //
 // 微服务拆分阶段 1b 之后扣减不在 core 的 Tx 上了；「新建的 SKU 扣得动」这类断言要守的正是
 // 「下单那条路扣得动」，所以直接调注册在协调器上的那个分支函数，而不是另写一条扣减语句。
 // 被拒（缺行、不够）时 Fatal，并把拒绝码带出来。
-func deductViaSaga(t *testing.T, merchantID, storeID, skuID int64, qty int32) int32 {
+func deductViaSaga(t *testing.T, pool *pgxpool.Pool, merchantID, storeID, skuID int64, qty int32) int32 {
 	t.Helper()
-	local := inventory.NewLocal(repository.NewInventoryStore(testPool))
+	local := inventory.NewLocal(repository.NewInventoryStore(pool))
 	orderNo := fmt.Sprintf("tdeduct%d", time.Now().UnixNano())
 	gid, err := dtm.OrderGID(merchantID, orderNo)
 	if err != nil {

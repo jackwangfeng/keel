@@ -79,7 +79,7 @@ func TestSubmitSagaFailureReleasesTheIdempotencyKey(t *testing.T) {
 	ctx := tenant.NewContext(context.Background(), merchantID)
 	ctx = auth.NewContext(ctx, auth.Identity{UserID: seedUserID(t, "shop-a"), SessionID: 1})
 
-	svc := service.NewOrderService(repository.New(testPool), failingCoordinator{}, nil)
+	svc := service.NewOrderService(repository.New(testPool), localInventory(), failingCoordinator{}, nil)
 	_, err := svc.Create(ctx, service.CreateRequest{
 		Items:     []service.LineInput{{SKUID: sku, Quantity: 1}},
 		AddressID: addr,

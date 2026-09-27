@@ -10,12 +10,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/keel/keel/internal/auth"
+	"github.com/keel/keel/internal/inventory"
 	"github.com/keel/keel/internal/repository"
 )
 
@@ -160,6 +160,22 @@ type RefundService struct {
 	cfg  PaymentConfig
 	log  *slog.Logger
 	now  func() time.Time
+
+	// ob 在退款到账（事务提交）之后就地把库存回补任务跑一次（微服务拆分阶段 1b）；
+	// 没接库存服务时为 nil，任务照样在队列里等 worker。
+	ob *inventoryOutbox
+}
+
+// WithInventory 接上这个进程的库存服务（单体进程内、core 远端），用于提交之后就地回补库存。
+func (s *RefundService) WithInventory(inv inventory.Service) *RefundService {
+	s.ob = newInventoryOutbox(s.repo, inv, s.log)
+	return s
+}
+
+// kickRestock 在退款到账的事务提交之后就地跑一次库存回补任务（没有这条任务 —— 已发货、
+// 或还没到账 —— 时什么都不做）。
+func (s *RefundService) kickRestock(ctx context.Context, refundNo string) {
+	s.ob.kick(ctx, restockJobKey(refundNo))
 }
 
 func NewRefundService(r RefundRepository, cfg PaymentConfig, log *slog.Logger) *RefundService {
@@ -571,7 +587,7 @@ func (s *RefundService) Audit(ctx context.Context, refundNo string, req AuditReq
 		return repository.Refund{}, false, err
 	}
 
-	return idempotentTx(ctx, s.repo, repository.StaffSubject(staff.StaffID),
+	out, replayed, err := idempotentTx(ctx, s.repo, repository.StaffSubject(staff.StaffID),
 		idempotencyScopeRefundAudit, idemKey, pathHash(refundNo, string(canon)), archivedOK,
 		func(tx repository.Tx) (repository.Refund, error) {
 			r, order, status, err := s.adminLockRefund(ctx, tx, refundNo)
@@ -636,6 +652,11 @@ func (s *RefundService) Audit(ctx context.Context, refundNo string, req AuditReq
 			}
 			return tx.FindRefundByNo(ctx, refundNo)
 		})
+	if err == nil {
+		// 沙箱渠道在同一个事务里入账（30 → 40）时入队了库存回补，提交之后就地跑一次。
+		s.kickRestock(ctx, refundNo)
+	}
+	return out, replayed, err
 }
 
 func notAuditable(ok bool, err error, refundNo string) error {
@@ -660,7 +681,7 @@ func (s *RefundService) Receive(ctx context.Context, refundNo, idemKey string) (
 	if err != nil {
 		return repository.Refund{}, false, err
 	}
-	return idempotentTx(ctx, s.repo, repository.StaffSubject(staff.StaffID),
+	out, replayed, err := idempotentTx(ctx, s.repo, repository.StaffSubject(staff.StaffID),
 		idempotencyScopeRefundReceipt, idemKey, pathHash(refundNo), archivedOK,
 		func(tx repository.Tx) (repository.Refund, error) {
 			r, _, status, err := s.adminLockRefund(ctx, tx, refundNo)
@@ -687,6 +708,11 @@ func (s *RefundService) Receive(ctx context.Context, refundNo, idemKey string) (
 			}
 			return tx.FindRefundByNo(ctx, refundNo)
 		})
+	if err == nil {
+		// 沙箱渠道在同一个事务里入账（30 → 40）时入队了库存回补，提交之后就地跑一次。
+		s.kickRestock(ctx, refundNo)
+	}
+	return out, replayed, err
 }
 
 // adminLockRefund 取退款单、锁订单与退款单、按订单的履约门店判权。
@@ -814,6 +840,7 @@ func (s *RefundService) Notify(ctx context.Context, channel string, rawBody []by
 	if err != nil {
 		return err
 	}
+	s.kickRestock(ctx, n.RefundNo)
 	return outcome
 }
 
@@ -897,22 +924,13 @@ func (s *RefundService) settleTx(ctx context.Context, tx repository.Tx, channel 
 	}
 	// 库存：只有没发过货才回补（文件头的保守规则）。流水 biz_id 记退款单号 ——
 	// 一单可以有几张退款单，记订单号的话分不清是哪一张放回来的。
+	//
+	// 微服务拆分阶段 1b：库存在库存服务里，这里在本事务里入队一条 outbox 任务
+	// （restock:<退款单号>），由库存服务按退款单号幂等地加回（inventory_outbox.go）；
+	// 调用方在提交之后就地跑一次（kickRestock）。
 	if order.ShippedAt == nil {
-		// 按 sku_id 升序拿库存行锁 —— 与下单扣减、补偿、关单同一个全局顺序（orders.sql 那条
-		// ORDER BY sku_id 的注释）。按退款行的顺序（= 下单时请求里的顺序）拿锁，
-		// 两张共享 SKU 的单一个扣一个回补就可能互相等成死锁；扣减那一侧成了牺牲者时
-		// 会被当成 Unknown 重试，正好撞进库存分支的重试窗口。
-		items := append([]repository.RefundItem(nil), r.Items...)
-		sort.Slice(items, func(i, j int) bool { return items[i].SKUID < items[j].SKUID })
-		for _, it := range items {
-			after, err := tx.RestoreInventory(ctx, it.SKUID, order.StoreID, it.Quantity)
-			if err != nil {
-				return nil, err
-			}
-			if err := tx.AppendInventoryLog(ctx, it.SKUID, order.StoreID, it.Quantity,
-				repository.InventoryLogRefundRestock, r.RefundNo, after-it.Quantity, after); err != nil {
-				return nil, err
-			}
+		if err := enqueueRefundRestock(ctx, tx, r.RefundNo); err != nil {
+			return nil, err
 		}
 	}
 	// 券：整单的货都退完了才退回（§11 末段）。

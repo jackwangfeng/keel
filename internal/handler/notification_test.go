@@ -278,7 +278,7 @@ func TestTimeoutCloseAndAutoConfirmNotifyTheBuyer(t *testing.T) {
 	// 超时关单。
 	pending := cs.placeOrder(t, b, cs.NorthStore, cs.DressSKU, 1, nil)
 	expire(t, pending.OrderNo)
-	if _, err := service.NewSweepService(repository.New(testPool), service.SweepConfig{}, nil).SweepOnce(ctx); err != nil {
+	if _, err := service.NewSweepService(repository.New(testPool), localInventory(), service.SweepConfig{}, nil).SweepOnce(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if orderStatusOf(t, pending.OrderNo) != 90 {

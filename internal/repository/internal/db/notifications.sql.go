@@ -79,38 +79,33 @@ func (q *Queries) CountUserUnreadNotifications(ctx context.Context, userID *int6
 	return count, err
 }
 
-const getInventoryAlert = `-- name: GetInventoryAlert :one
-SELECT i.warning_qty, p.title AS product_title, s.spec_values::text AS spec_values,
-       st.name AS store_name
-  FROM inventories i
-  JOIN skus s      ON s.id = i.sku_id
-  JOIN products p  ON p.id = s.product_id
-  JOIN stores st   ON st.id = i.store_id
- WHERE i.sku_id = $1 AND i.store_id = $2
+const getLowStockContext = `-- name: GetLowStockContext :one
+SELECT p.title AS product_title, s.spec_values::text AS spec_values, st.name AS store_name
+  FROM skus s
+  JOIN products p ON p.id = s.product_id
+  JOIN stores st  ON st.id = $1
+ WHERE s.id = $2
 `
 
-type GetInventoryAlertParams struct {
-	SkuID   int64
+type GetLowStockContextParams struct {
 	StoreID int64
+	SkuID   int64
 }
 
-type GetInventoryAlertRow struct {
-	WarningQty   int32
+type GetLowStockContextRow struct {
 	ProductTitle string
 	SpecValues   string
 	StoreName    string
 }
 
-// 库存预警要的上下文：预警线、商品名、门店名。在扣库存的那个事务里读。
-func (q *Queries) GetInventoryAlert(ctx context.Context, arg GetInventoryAlertParams) (GetInventoryAlertRow, error) {
-	row := q.db.QueryRow(ctx, getInventoryAlert, arg.SkuID, arg.StoreID)
-	var i GetInventoryAlertRow
-	err := row.Scan(
-		&i.WarningQty,
-		&i.ProductTitle,
-		&i.SpecValues,
-		&i.StoreName,
-	)
+// 库存预警要的展示上下文：商品名、规格、门店名。预警线与水位是库存服务的数（下单 SAGA 的
+// 收尾分支从库存服务的流水里取，service/order_saga.go），这里只补 core 自己的名字 ——
+// 拆分前这条语句 JOIN 了 inventories，库存搬走之后它只碰 core 的表（微服务拆分阶段 1b）。
+// 查不到（SKU 或门店被硬删，正常路径上没有硬删）即 ErrNotificationNotFound。
+func (q *Queries) GetLowStockContext(ctx context.Context, arg GetLowStockContextParams) (GetLowStockContextRow, error) {
+	row := q.db.QueryRow(ctx, getLowStockContext, arg.StoreID, arg.SkuID)
+	var i GetLowStockContextRow
+	err := row.Scan(&i.ProductTitle, &i.SpecValues, &i.StoreName)
 	return i, err
 }
 

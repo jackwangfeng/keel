@@ -70,9 +70,24 @@ GOOSE := GOOSE_DRIVER=postgres GOOSE_DBSTRING="$(GOOSE_DBSTRING)" \
 	GOOSE_MIGRATION_DIR=$(MIGRATIONS) \
 	$(GOOSE_BIN)
 
+# 库存服务自己的迁移目录（微服务拆分阶段 1b，docs/电商系统-微服务拆分方案.md「数据库与迁移」）。
+#
+# 版本表是 goose_db_version_inventory，不是 goose 默认的 goose_db_version：两个目录可以指向
+# 同一个库（单体，库存表早由 core 迁移建好，这边是空操作）也可以指向两个库（拆分），
+# 共用一张版本表的话，core 的 00075 与库存的 00001 会被当成同一条时间线上的两个版本。
+#
+# 连接串默认与 GOOSE_DBSTRING 相同（单体）；拆分部署指向库存库：
+#   make migrate-inventory INVENTORY_GOOSE_DBSTRING=postgres://keel:...@inventory-db:5432/keel_inventory?sslmode=disable
+# 单体库上要跑它，必须排在 make migrate 之后（00001 里的 IF NOT EXISTS 靠 core 先建好那几张表）。
+MIGRATIONS_INVENTORY := $(ROOT)/db/migrations-inventory
+INVENTORY_GOOSE_DBSTRING ?= $(GOOSE_DBSTRING)
+GOOSE_INVENTORY := GOOSE_DRIVER=postgres GOOSE_DBSTRING="$(INVENTORY_GOOSE_DBSTRING)" \
+	GOOSE_MIGRATION_DIR=$(MIGRATIONS_INVENTORY) \
+	$(GOOSE_BIN) -table goose_db_version_inventory
+
 .PHONY: help generate generate-go generate-ts generate-sql generate-uts tools-versions version search-metrics \
 	contract-check schema-check app-type-check admin-install admin-type-check admin-test admin-build app-install app-build-h5 app-build-android app-build-mp-weixin app-apk app-apk-e2e app-e2e app-e2e-h5 app-adb-wifi app-ios app-ios-e2e app-e2e-ios \
-	sdk-smoke goose-bin migrate migrate-down migrate-status test-db \
+	sdk-smoke goose-bin migrate migrate-down migrate-status migrate-inventory migrate-inventory-status test-db \
 	test-engine category-eval dtmrs-deps build
 
 help:
@@ -104,6 +119,8 @@ help:
 	@echo "make migrate        把 db/migrations 迁到最新（GOOSE_DBSTRING 可覆盖）"
 	@echo "make migrate-down   回滚一个版本"
 	@echo "make migrate-status 打印各版本的应用状态"
+	@echo "make migrate-inventory 把 db/migrations-inventory 迁到最新（INVENTORY_GOOSE_DBSTRING 可覆盖，默认同 GOOSE_DBSTRING）"
+	@echo "make migrate-inventory-status 打印库存库各版本的应用状态"
 	@echo "make search-metrics 按店铺 × 策略统计搜索效果（PERIOD 默认 7 days，要管理员连接）"
 	@echo "make test-db      跑需要数据库的测试（强制不吃缓存，含替身那一组）"
 	@echo "make test-engine    对真的跑着的 infero 跑三条判据（要 GPU + KEEL_EMBED_ENDPOINT + 数据库）"
@@ -344,6 +361,13 @@ migrate-down: goose-bin
 
 migrate-status: goose-bin
 	$(GOOSE) status
+
+# 库存库只往前迁：00001 的 Down 是空操作（单体库里那些表归 core 迁移所有），所以不提供 migrate-inventory-down。
+migrate-inventory: goose-bin
+	$(GOOSE_INVENTORY) up
+
+migrate-inventory-status: goose-bin
+	$(GOOSE_INVENTORY) status
 
 # 搜索效果的离线统计（语义检索层 §9.2）：无结果率、CTR@10、搜索→加购率、
 # 搜索→下单转化率、首次点击名次倒数，按店铺 × 策略 × 实际跑过的阶段分组。
