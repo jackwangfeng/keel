@@ -63,6 +63,9 @@ const orderNo = await page.data('orderNo')
 指定一个专供 e2e 的买家（名下要有一条杭州的默认地址：运费用例按它断言 8 元）。演示库随时可能被重置，
 用例不依赖上一轮留下的数据，每轮自己造。
 
+下单成功后 App 会弹「下单成功」并在约 0.5 秒后 redirectTo 订单详情（重放不跳）：用例用 `helpers.waitOrderPlaced`
+等页面到订单详情再取订单号，不要在确认页上等「下单成功」那行字（会和跳转赛跑）。
+
 `checkout.test.js` 每跑一次会在服务端真的建一笔订单并走沙箱入账（没有真实资金流动）。
 
 **跑用例时 `KEEL_API_BASE` 要和打测试包时一致**：`category.test.js` 从测试进程直接问服务端

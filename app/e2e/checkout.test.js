@@ -2,7 +2,7 @@
 //
 // 打的是 apk 里编进去的真实服务端（KEEL_API_BASE），每跑一次会真的建一笔订单并走沙箱入账。
 // 沙箱没有真实资金流动（见 app/README.md「沙箱支付」）。
-const { waitFor, pickSku } = require('./helpers')
+const { waitFor, pickSku, waitOrderPlaced } = require('./helpers')
 
 describe('下单主链路', () => {
   let orderNo = ''
@@ -27,18 +27,22 @@ describe('下单主链路', () => {
     // 这一页上 .t-price-l 只有底部栏那一个。
     await waitFor(page, '.t-price-l', (t) => t.startsWith('¥'))
     await (await page.$('.bar-btn')).tap()
-    await waitFor(page, '.result-ok', (t) => t.includes('下单成功'))
-    orderNo = await page.data('orderNo')
+    // 新下的单直接跳到订单详情去付款（不再停在确认页、没有「查看订单」）。
+    orderNo = (await waitOrderPlaced(page)).orderNo
     expect(orderNo).toMatch(/^\d{14}/)
   })
 
   it('支付并入账后订单变成已支付', async () => {
-    const page = await program.navigateTo('/pages/order/detail?order_no=' + orderNo)
+    // 下单后已经在这笔的订单详情上。沙箱下：点底栏「立即支付」发起支付，底栏按钮随即变成
+    // 「模拟支付完成（沙箱）」，再点它投递回调。页面下方的沙箱说明（没有真实资金流动）照样要在。
+    const page = await program.currentPage()
+    expect(page.path).toBe('pages/order/detail')
+    expect(await page.data('orderNo')).toBe(orderNo)
     await waitFor(page, '.t-display', (t) => t === '待支付')
     await (await page.$('.bar-btn')).tap()
-    // 沙箱必须在页面上写明「没有真实资金流动」。
     await waitFor(page, '.notice-title', (t) => t.includes('沙箱支付'))
-    await (await page.$('.settle')).tap()
+    await waitFor(page, '.bar-btn', (t) => t.includes('模拟支付完成（沙箱）'))
+    await (await page.$('.bar-btn')).tap()
     await waitFor(page, '.t-display', (t) => t === '已支付')
   })
 })

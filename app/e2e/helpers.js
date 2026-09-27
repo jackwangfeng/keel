@@ -198,4 +198,25 @@ async function uploadEvidenceFromTest(token) {
   })
 }
 
-module.exports = { uploadEvidenceFromTest, placeOrder, staffToken, staffPost, waitFor, waitData, waitEl, pickSku, httpGet, httpPost, httpRequest, apiBase, serverToken, loginInApp }
+// 结算页点了「提交订单」之后：新下的单会弹「下单成功」并在约 0.5 秒后 redirectTo 订单详情（去付款）。
+// 等页面真的到了订单详情，返回那一页和它的订单号。重放（Idempotency-Replayed）不跳，不走这里。
+async function waitOrderPlaced(fromPage, timeout = 15000) {
+  const start = Date.now()
+  let cur = await program.currentPage()
+  while (cur.path !== 'pages/order/detail') {
+    if (Date.now() - start > timeout) {
+      const err = await fromPage.$('.result-err')
+      throw new Error('下单后没有跳到订单详情，当前 ' + cur.path + (err ? '，页面提示：' + (await err.text()) : ''))
+    }
+    await fromPage.waitFor(300)
+    cur = await program.currentPage()
+  }
+  let orderNo = ''
+  for (let i = 0; i < 30 && !orderNo; i++) {
+    orderNo = await cur.data('orderNo')
+    if (!orderNo) await cur.waitFor(200)
+  }
+  return { page: cur, orderNo }
+}
+
+module.exports = { waitOrderPlaced, uploadEvidenceFromTest, placeOrder, staffToken, staffPost, waitFor, waitData, waitEl, pickSku, httpGet, httpPost, httpRequest, apiBase, serverToken, loginInApp }

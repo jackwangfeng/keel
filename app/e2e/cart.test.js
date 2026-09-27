@@ -2,7 +2,7 @@
 // 试算的商品金额与购物车合计逐分一致 → 下单成功后这几行从车里删掉。
 //
 // 每跑一次会真的下一单（不付款，待支付的单超时会被服务端关掉）。
-const { waitFor, waitData, waitEl, pickSku, httpGet, httpRequest, apiBase, serverToken, loginInApp } = require('./helpers')
+const { waitFor, waitData, waitEl, pickSku, httpGet, httpRequest, apiBase, serverToken, loginInApp, waitOrderPlaced } = require('./helpers')
 
 describe('购物车', () => {
   let token = ''
@@ -61,7 +61,7 @@ describe('购物车', () => {
     expect((await page.data('cartRows')).length).toBe(1)
 
     await (await page.$('.bar-btn')).tap()
-    await waitFor(page, '.result-ok', (t) => t.includes('下单成功'))
+    await waitOrderPlaced(page)
     const deadline = Date.now() + 15000
     for (;;) {
       const c = (await httpGet(apiBase() + '/cart', token)).body

@@ -9,7 +9,7 @@
 // 请服务端那边按它查日志核对。
 //
 // 每跑一次会下一笔不付款的单。
-const { waitFor, waitData, waitEl, pickSku, httpGet, httpRequest, apiBase, serverToken, loginInApp } = require('./helpers')
+const { waitFor, waitData, waitEl, pickSku, httpGet, httpRequest, apiBase, serverToken, loginInApp, waitOrderPlaced } = require('./helpers')
 
 describe('搜索效果回传', () => {
   let token = ''
@@ -73,7 +73,6 @@ describe('搜索效果回传', () => {
     for (let i = 0; page.path !== 'pages/order/create' && i < 30; i++) { await cart.waitFor(300); page = await program.currentPage() }
     await waitFor(page, '.t-price-l', (t) => t.startsWith('¥'))
     await (await page.$('.bar-btn')).tap()
-    await waitFor(page, '.result-ok', (t) => t.includes('下单成功'))
-    console.log('searchtrace: order_no=' + (await page.data('orderNo')))
+    console.log('searchtrace: order_no=' + (await waitOrderPlaced(page)).orderNo)
   })
 })
