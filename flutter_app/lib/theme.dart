@@ -31,7 +31,8 @@ class KeelText {
   static const ok = TextStyle(fontSize: 13, color: KeelColors.ok, height: 1.5);
 }
 
-ThemeData keelTheme() {
+/// actionsRight：顶栏右侧按钮要让出的宽度（小程序的胶囊按钮，见 capsule.dart）。
+ThemeData keelTheme({double actionsRight = 0}) {
   return ThemeData(
     useMaterial3: true,
     scaffoldBackgroundColor: KeelColors.bg,
@@ -40,11 +41,12 @@ ThemeData keelTheme() {
       primary: KeelColors.primary,
       surface: KeelColors.card,
     ),
-    appBarTheme: const AppBarTheme(
+    appBarTheme: AppBarTheme(
       backgroundColor: KeelColors.bg,
       foregroundColor: KeelColors.text,
       elevation: 0,
       centerTitle: true,
+      actionsPadding: actionsRight > 0 ? EdgeInsets.only(right: actionsRight) : null,
     ),
     cardTheme: CardThemeData(
       color: KeelColors.card,

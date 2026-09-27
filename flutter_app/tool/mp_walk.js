@@ -47,6 +47,14 @@ runE2E({
     await sleep(3000);
     await shot('0-home-top.png');
     const names = ['1-home', '2-cart', '3-orders', '4-me'];
+    // 首页的搜索框（390 宽时大约在 y=200）：进搜索页，看顶栏右侧的「搜索」有没有被胶囊盖住。
+    const tapAt = async (x, y) => {
+      await canvas.touchstart({ touches: [T(x, y)], changedTouches: [T(x, y)] });
+      await canvas.touchend({ touches: [], changedTouches: [T(x, y)] });
+      await sleep(4000);
+    };
+    await tapAt(size.width / 2, 200);
+    await shot('5-search.png');
     for (const i of [1, 2, 3, 0]) {
       const x = size.width * (i + 0.5) / 4;
       const y = size.height - 40;

@@ -24,6 +24,8 @@ class FakeMp implements MpWechatChannel {
   @override
   void setShareInfo(String json) {}
   @override
+  Future<String?> menuButtonRect() async => null;
+  @override
   Future<String> call(String api, String paramsJson) async {
     final p = jsonDecode(paramsJson) as Map;
     uploads.add(p);
