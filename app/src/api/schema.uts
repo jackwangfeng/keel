@@ -540,7 +540,7 @@ export type AdminSku = {
   image_url? : string
   /** `skus.status`：0 停售 / 1 在售。停售的规格仍在规格矩阵里显示，但不可加购。 */
   status : number
-  /** 来自 `inventories.available_qty`。改它要走 `PUT /admin/skus/{sku_id}/inventory`。 */
+  /** 来自 `inventories.available_qty`。改它要走 `PUT /admin/skus/{sku_id}/inventory`。拆分部署下库存服务不可用时，`PATCH /admin/skus/{sku_id}` 回显里的这个数按 0 给出（以随后的 GET 为准）。 */
   available_qty : number
   /** 低库存预警线。一期只是一个存着的数，没有接到任何告警。 */
   warning_qty? : number

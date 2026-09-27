@@ -2611,7 +2611,8 @@ type AdminProduct struct {
 	Title    string             `json:"title"`
 
 	// TotalStock 未软删 SKU 的 `inventories.available_qty` 之和，服务端按需现算。
-	// 不接受写入。
+	// 不接受写入。拆分部署下库存服务不可用时，写接口回显里的这个数按 0 给出
+	// （读接口回 503），以随后的 GET 为准——见 `info.description`。
 	TotalStock int        `json:"total_stock"`
 	UpdatedAt  *time.Time `json:"updated_at,omitempty"`
 }
@@ -2663,7 +2664,8 @@ type AdminProductDetail struct {
 	Title    string                   `json:"title"`
 
 	// TotalStock 未软删 SKU 的 `inventories.available_qty` 之和，服务端按需现算。
-	// 不接受写入。
+	// 不接受写入。拆分部署下库存服务不可用时，写接口回显里的这个数按 0 给出
+	// （读接口回 503），以随后的 GET 为准——见 `info.description`。
 	TotalStock int        `json:"total_stock"`
 	UpdatedAt  *time.Time `json:"updated_at,omitempty"`
 }
@@ -3001,7 +3003,7 @@ type AdminRegionStatus int
 // AdminSku 后台视角的 SKU。比前台的 `Sku` 多出成本、重量、售卖开关与库存预警位——
 // `cost_cents` 尤其不能出现在任何前台响应里。
 type AdminSku struct {
-	// AvailableQty 来自 `inventories.available_qty`。改它要走 `PUT /admin/skus/{sku_id}/inventory`。
+	// AvailableQty 来自 `inventories.available_qty`。改它要走 `PUT /admin/skus/{sku_id}/inventory`。拆分部署下库存服务不可用时，`PATCH /admin/skus/{sku_id}` 回显里的这个数按 0 给出（以随后的 GET 为准）。
 	AvailableQty int `json:"available_qty"`
 
 	// CostCents 成本。用于业务重排（数据模型 §3），**只在后台接口里出现**。
@@ -6471,6 +6473,9 @@ type IdempotencyInFlight = Problem
 
 // IdempotencyKeyReused RFC 9457 Problem Details
 type IdempotencyKeyReused = Problem
+
+// InventoryUnavailable RFC 9457 Problem Details
+type InventoryUnavailable = Problem
 
 // ReportBadWindow RFC 9457 Problem Details
 type ReportBadWindow = Problem

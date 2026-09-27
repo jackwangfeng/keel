@@ -52,6 +52,23 @@ so "which one is running?" never depends on anyone's memory.
   Internally: a signed service-to-service client that separates "definitely failed" from
   "outcome unknown", SAGA steps with per-step payloads, and an HTTP adapter so a saga
   branch can run in another process. No migration.
+- **Inventory reads and back-office inventory writes go through an inventory service
+  interface (phase 1a).** Internal change; the default single-process deployment behaves
+  as before, except where noted below. Everything that reads or writes store stock
+  (product detail, cart, search `in_stock`, back-office product / SKU / store-inventory
+  pages, the low-stock report, back-office stock edits, initial stock of new SKUs and
+  imports) now asks an `inventory.Service` — in-process by default, over the internal
+  HTTP API when `KEEL_ROLE=core`. **`KEEL_ROLE=core` now requires `KEEL_INVENTORY_URL`**
+  (it refuses to start without it); `KEEL_ROLE=inventory` serves the inventory API under
+  `/internal/v1/inventory/`. Order stock deduction, close/cancel release and refund restock
+  still run in-process until phase 1b. No migration.
+  Behaviour differences: `POST /search` with `in_stock_only: true` now filters after recall
+  (the recall window is doubled for it), so a page can come back shorter than `size` when
+  many recalled products are out of stock. When the inventory service is unreachable
+  (split deployment only): browsing and search keep working with `in_stock` omitted; product
+  detail, cart, back-office stock pages/edits and the low-stock report return
+  `503 inventory-unavailable` with `Retry-After` (additive contract change); a retried
+  back-office stock adjustment with the same `Idempotency-Key` never applies twice.
 
 ### Fixed
 
