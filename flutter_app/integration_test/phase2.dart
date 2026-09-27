@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:keel_buyer/widgets/form_bits.dart';
 
 import 'e2e_env.dart';
 import 'helpers.dart';
@@ -135,7 +136,7 @@ void phase2Tests() {
       await waitFor(t, keyedText('order.status', '已支付'));
       await tapKey(t, 'order.refund');
       await waitFor(t, byKey('apply.submit'));
-      expect(t.widget<ChoiceChip>(byKey('apply.type.2')).onSelected, isNull);
+      expect(t.widget<OptChip>(byKey('apply.type.2')).onTap, isNull);
       await tapKey(t, 'apply.type.1');
       await tapKey(t, 'apply.reason.1');
       await tapKey(t, 'apply.submit');

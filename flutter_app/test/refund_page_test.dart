@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:keel_buyer/widgets/form_bits.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:keel_buyer/api/cart_count.dart';
@@ -84,7 +85,7 @@ void main() {
     final f = Fake();
     await t.pumpWidget(await app(f, '/orders/N1/refund'));
     await t.pumpAndSettle();
-    expect(t.widget<ChoiceChip>(find.byKey(const Key('apply.type.2'))).onSelected, isNull);
+    expect(t.widget<OptChip>(find.byKey(const Key('apply.type.2'))).onTap, isNull);
     expect(t.widget<FilledButton>(find.byKey(const Key('apply.submit'))).onPressed, isNull);
     await t.tap(find.byKey(const Key('apply.type.1')));
     await t.tap(find.byKey(const Key('apply.reason.5')));

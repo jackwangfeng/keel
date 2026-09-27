@@ -7,6 +7,7 @@ import '../api/order.dart';
 import '../api/refund.dart';
 import '../api/services.dart';
 import '../theme.dart';
+import '../widgets/form_bits.dart';
 import '../widgets/quick_cart.dart';
 import '../widgets/states.dart';
 
@@ -155,12 +156,6 @@ class _RefundApplyPageState extends State<RefundApplyPage> {
     }
   }
 
-  Widget _chip(String key, String label, bool on, VoidCallback? onTap) => ChoiceChip(
-        key: Key(key),
-        label: Text(label),
-        selected: on,
-        onSelected: onTap == null ? null : (_) => onTap(),
-      );
 
   @override
   Widget build(BuildContext context) {
@@ -170,81 +165,147 @@ class _RefundApplyPageState extends State<RefundApplyPage> {
           ? const EmptyState(text: '正在加载…')
           : _error.isNotEmpty
               ? ErrorCard(message: _error, onRetry: _load)
-              : ListView(padding: const EdgeInsets.fromLTRB(16, 4, 16, 24), children: [
+              : ListView(padding: const EdgeInsets.fromLTRB(16, 0, 16, 24), children: [
                   if (_items.isEmpty) const EmptyState(key: Key('apply.nothing'), text: '这一单没有可以申请售后的商品了'),
-                  for (final (i, it) in _items.indexed)
-                    Container(
-                      margin: const EdgeInsets.only(bottom: 10),
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(color: KeelColors.card, borderRadius: BorderRadius.circular(14)),
-                      child: Row(children: [
-                        Checkbox(key: Key('apply.item.${it.orderItemId}'), value: _qty[i] > 0,
-                            onChanged: (_) => setState(() => _qty = [..._qty]..[i] = _qty[i] > 0 ? 0 : it.maxQty)),
-                        Expanded(
-                          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                            Text(it.title, style: KeelText.body.copyWith(fontWeight: FontWeight.w700)),
-                            if (it.specText.isNotEmpty) Text(it.specText, style: KeelText.hint),
-                            Text('${it.priceText} · 最多可退 ${it.maxQty} 件', style: KeelText.hint),
-                          ]),
-                        ),
-                        if (_qty[i] > 0)
-                          QtyStepper(value: _qty[i], canMinus: _qty[i] > 1, canPlus: _qty[i] < it.maxQty, keyPrefix: 'apply.${it.orderItemId}',
-                              onMinus: () => setState(() => _qty = [..._qty]..[i] -= 1),
-                              onPlus: () => setState(() => _qty = [..._qty]..[i] += 1)),
+                  if (_items.isNotEmpty)
+                    KeelCard(
+                      title: '退哪几件',
+                      child: Column(children: [
+                        for (final (i, it) in _items.indexed)
+                          Padding(
+                            padding: EdgeInsets.only(top: i == 0 ? 0 : 14),
+                            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                              GestureDetector(
+                                key: Key('apply.item.${it.orderItemId}'),
+                                onTap: () => setState(() => _qty = [..._qty]..[i] = _qty[i] > 0 ? 0 : it.maxQty),
+                                child: Padding(
+                                  padding: const EdgeInsets.only(top: 19, right: 12),
+                                  child: _check(_qty[i] > 0),
+                                ),
+                              ),
+                              ClipRRect(
+                                borderRadius: BorderRadius.circular(10),
+                                child: SizedBox(
+                                  width: 60, height: 60,
+                                  child: it.cover.imageUrl.isNotEmpty
+                                      ? Image.network(it.cover.imageUrl, fit: BoxFit.cover, errorBuilder: (_, _, _) => ColoredBox(color: it.cover.color))
+                                      : ColoredBox(color: it.cover.color,
+                                          child: Center(child: Text(it.cover.glyph, style: const TextStyle(fontSize: 24, color: KeelColors.card)))),
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                  Text(it.title, style: KeelText.body),
+                                  Text('${it.specText.isEmpty ? '' : '${it.specText} · '}${it.priceText} · 可退 ${it.maxQty} 件', style: KeelText.hint),
+                                  if (_qty[i] > 0)
+                                    Padding(
+                                      padding: const EdgeInsets.only(top: 8),
+                                      child: QtyStepper(value: _qty[i], canMinus: _qty[i] > 1, canPlus: _qty[i] < it.maxQty,
+                                          keyPrefix: 'apply.${it.orderItemId}',
+                                          onMinus: () => setState(() => _qty = [..._qty]..[i] -= 1),
+                                          onPlus: () => setState(() => _qty = [..._qty]..[i] += 1)),
+                                    ),
+                                ]),
+                              ),
+                            ]),
+                          ),
                       ]),
                     ),
                   if (_items.isNotEmpty) ...[
-                    const Text('售后类型', style: KeelText.section),
-                    const SizedBox(height: 6),
-                    Wrap(spacing: 8, children: [
-                      _chip('apply.type.1', '仅退款', _type == 1, () => setState(() => _type = 1)),
-                      _chip('apply.type.2', '退货退款', _type == 2, _returnAllowed ? () => setState(() => _type = 2) : null),
-                    ]),
-                    if (!_returnAllowed) const Text('还没发货的订单只能申请仅退款', style: KeelText.hint),
-                    const SizedBox(height: 14),
-                    const Text('原因', style: KeelText.section),
-                    const SizedBox(height: 6),
-                    Wrap(spacing: 8, runSpacing: 4, children: [
-                      for (var c = 1; c <= 5; c++) _chip('apply.reason.$c', refundReasonText(c), _reason == c, () => setState(() => _reason = c)),
-                    ]),
-                    TextField(
-                      key: const Key('apply.text'),
-                      controller: _text,
-                      maxLength: 200,
-                      maxLines: 3,
-                      onChanged: (_) => setState(() {}),
-                      decoration: InputDecoration(hintText: _reason == 5 ? '请写明原因（必填）' : '补充说明（选填）'),
+                    KeelCard(
+                      title: '售后类型',
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Wrap(spacing: 10, runSpacing: 10, children: [
+                          OptChip(key: const Key('apply.type.1'), label: '仅退款', on: _type == 1, onTap: () => setState(() => _type = 1)),
+                          OptChip(key: const Key('apply.type.2'), label: '退货退款', on: _type == 2,
+                              onTap: _returnAllowed ? () => setState(() => _type = 2) : null),
+                        ]),
+                        if (!_returnAllowed)
+                          const Padding(padding: EdgeInsets.only(top: 10), child: Text('订单还没发货，只能申请仅退款', style: KeelText.hint)),
+                      ]),
                     ),
-                    const Text('凭证图片（最多 9 张）', style: KeelText.section),
-                    const SizedBox(height: 8),
-                    Wrap(spacing: 10, runSpacing: 10, children: [
-                      for (final e in _evidence) _evidenceTile(e),
-                      if (_evidence.length < 9)
-                        GestureDetector(
-                          key: const Key('apply.addImage'),
-                          onTap: _pick,
-                          child: Container(
-                            width: 72, height: 72,
-                            decoration: BoxDecoration(border: Border.all(color: KeelColors.chipBorder), borderRadius: BorderRadius.circular(10)),
-                            child: const Icon(Icons.add_photo_alternate_outlined, color: KeelColors.textHint),
+                    KeelCard(
+                      title: '原因',
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Wrap(spacing: 10, runSpacing: 10, children: [
+                          for (var c = 1; c <= 5; c++)
+                            OptChip(key: Key('apply.reason.$c'), label: refundReasonText(c), on: _reason == c, onTap: () => setState(() => _reason = c)),
+                        ]),
+                        const SizedBox(height: 8),
+                        TextField(
+                          key: const Key('apply.text'),
+                          controller: _text,
+                          maxLength: 200,
+                          onChanged: (_) => setState(() {}),
+                          style: inlineInputStyle,
+                          decoration: InputDecoration(
+                            hintText: _reason == 5 ? '补充说明（选「其他」时必填）' : '补充说明（选填）',
+                            hintStyle: KeelText.hint.copyWith(fontSize: 15),
+                            counterText: '',
+                            enabledBorder: const UnderlineInputBorder(borderSide: BorderSide(color: KeelColors.line)),
+                            focusedBorder: const UnderlineInputBorder(borderSide: BorderSide(color: KeelColors.primary)),
                           ),
                         ),
-                    ]),
+                      ]),
+                    ),
+                    KeelCard(
+                      title: '凭证图片（选填，最多 9 张）',
+                      trailing: Text('${_evidence.length}/9', style: KeelText.hint),
+                      child: Wrap(spacing: 10, runSpacing: 10, children: [
+                        for (final e in _evidence) _evidenceTile(e),
+                        if (_evidence.length < 9)
+                          GestureDetector(
+                            key: const Key('apply.addImage'),
+                            onTap: _pick,
+                            child: CustomPaint(
+                              painter: _Dashed(),
+                              child: Container(
+                                width: 72, height: 72,
+                                alignment: Alignment.center,
+                                decoration: BoxDecoration(color: const Color(0xFFF3ECE3), borderRadius: BorderRadius.circular(10)),
+                                child: const Text('+', style: TextStyle(fontSize: 26, color: KeelColors.textHint)),
+                              ),
+                            ),
+                          ),
+                      ]),
+                    ),
                   ],
                   if (_message.isNotEmpty)
-                    Padding(padding: const EdgeInsets.only(top: 12), child: Text(_message, key: const Key('apply.message'), style: KeelText.err)),
+                    KeelCard(color: const Color(0xFFF8EAE5), child: Text(_message, key: const Key('apply.message'), style: KeelText.err)),
                 ]),
       bottomNavigationBar: _items.isEmpty
           ? null
-          : SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 10),
-                child: FilledButton(key: const Key('apply.submit'), onPressed: _canSubmit && !_busy ? _submit : null,
-                    child: Text(_busy ? '提交中…' : '提交申请')),
+          : Container(
+              decoration: const BoxDecoration(color: KeelColors.card, border: Border(top: BorderSide(color: KeelColors.line))),
+              child: SafeArea(
+                top: false,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+                  child: Row(children: [
+                    // 请求体不带金额：每行实退多少由服务端按优惠分摊算。
+                    const Expanded(child: Text('退款金额以审核结果为准', style: KeelText.hint)),
+                    SizedBox(
+                      width: 140,
+                      child: FilledButton(key: const Key('apply.submit'), onPressed: _canSubmit && !_busy ? _submit : null,
+                          child: Text(_busy ? '提交中…' : '提交申请')),
+                    ),
+                  ]),
+                ),
               ),
             ),
     );
   }
+
+  Widget _check(bool on) => Container(
+        width: 22, height: 22,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: on ? KeelColors.primary : null,
+          border: Border.all(color: on ? KeelColors.primary : const Color(0xFFCFC3B5)),
+        ),
+        child: on ? const Icon(Icons.check, size: 14, color: KeelColors.card) : null,
+      );
 
   Widget _evidenceTile(_Evidence e) {
     final b = e.img.bytes;
@@ -277,4 +338,24 @@ class _RefundApplyPageState extends State<RefundApplyPage> {
       ),
     ]);
   }
+}
+
+/// 加图格子的虚线框（uni-app x 的 .ev-add：1 像素虚线）。
+class _Dashed extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final p = Paint()
+      ..color = const Color(0xFFCFC3B5)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1;
+    final path = Path()..addRRect(RRect.fromRectAndRadius(Offset.zero & size, const Radius.circular(10)));
+    for (final m in path.computeMetrics()) {
+      for (var d = 0.0; d < m.length; d += 7) {
+        canvas.drawPath(m.extractPath(d, d + 4), p);
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }

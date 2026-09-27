@@ -5,6 +5,7 @@ import '../api/address.dart';
 import '../api/client.dart';
 import '../api/services.dart';
 import '../theme.dart';
+import '../widgets/form_bits.dart';
 
 /// 新建 / 编辑地址。422 按 errors[].field 标红对应的那一格；PUT 不切默认，想切默认 PUT 之后另调专用接口。
 class AddressEditPage extends StatefulWidget {
@@ -181,47 +182,59 @@ class _AddressEditPageState extends State<AddressEditPage> {
           backgroundColor: KeelColors.bg, surfaceTintColor: KeelColors.bg),
       body: _loading
           ? const Center(child: Text('正在加载…', style: KeelText.hint))
-          : ListView(padding: const EdgeInsets.fromLTRB(16, 8, 16, 24), children: [
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
-                decoration: BoxDecoration(color: KeelColors.card, borderRadius: BorderRadius.circular(14)),
-                child: Column(children: [
-                  for (final e in _fields.entries)
-                    TextField(
-                      key: Key('address.field.${e.key}'),
-                      controller: _c[e.key],
-                      keyboardType: e.key == 'phone' ? TextInputType.phone : TextInputType.text,
-                      decoration: InputDecoration(
-                        labelText: e.value.$1,
-                        hintText: e.value.$2,
-                        errorText: _errors[e.key],
-                        border: InputBorder.none,
+          : ListView(padding: const EdgeInsets.fromLTRB(16, 0, 16, 24), children: [
+              // 422 时按 errors[].field 标红对应的那一格，错误原文写在格子下面。
+              KeelCard(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  for (final e in _fields.entries) ...[
+                    FieldRow(
+                      label: e.value.$1,
+                      bad: _errors[e.key] != null,
+                      child: TextField(
+                        key: Key('address.field.${e.key}'),
+                        controller: _c[e.key],
+                        keyboardType: e.key == 'phone' ? TextInputType.phone : TextInputType.text,
+                        style: inlineInputStyle,
+                        decoration: inlineInput(e.value.$2),
                       ),
                     ),
-                  SwitchListTile(
+                    if (_errors[e.key] != null)
+                      Padding(padding: const EdgeInsets.symmetric(vertical: 4), child: Text(_errors[e.key]!, style: KeelText.err)),
+                  ],
+                  GestureDetector(
                     key: const Key('address.default'),
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('设为默认地址', style: KeelText.body),
-                    value: _wantDefault,
-                    onChanged: (v) => setState(() => _wantDefault = v),
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () => setState(() => _wantDefault = !_wantDefault),
+                    child: SizedBox(
+                      height: 52,
+                      child: Row(children: [
+                        const Expanded(child: Text('设为默认地址', style: KeelText.body)),
+                        KeelSwitch(value: _wantDefault, onChanged: (v) => setState(() => _wantDefault = v)),
+                      ]),
+                    ),
                   ),
                 ]),
               ),
               if (_message.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(top: 12),
-                  child: Text(_message, key: const Key('address.message'), style: _failed ? KeelText.err : KeelText.ok),
-                ),
+                KeelCard(child: Text(_message, key: const Key('address.message'), style: _failed ? KeelText.err : KeelText.ok)),
               if (widget.addressId > 0)
                 Padding(
-                  padding: const EdgeInsets.only(top: 20),
-                  child: Center(child: TextButton(key: const Key('address.delete'), onPressed: _remove, child: const Text('删除这条地址'))),
+                  padding: const EdgeInsets.symmetric(vertical: 24),
+                  child: Center(
+                    child: GestureDetector(key: const Key('address.delete'), onTap: _remove,
+                        child: const Text('删除这条地址', style: TextStyle(fontSize: 13, color: KeelColors.err))),
+                  ),
                 ),
             ]),
-      bottomNavigationBar: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 10),
-          child: FilledButton(key: const Key('address.save'), onPressed: _busy ? null : _save, child: Text(_busy ? '保存中…' : '保存')),
+      bottomNavigationBar: Container(
+        decoration: const BoxDecoration(color: KeelColors.card, border: Border(top: BorderSide(color: KeelColors.line))),
+        child: SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+            child: FilledButton(key: const Key('address.save'), onPressed: _busy ? null : _save, child: Text(_busy ? '保存中…' : '保存')),
+          ),
         ),
       ),
     );

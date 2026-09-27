@@ -4,6 +4,7 @@ import '../api/client.dart';
 import '../api/profile.dart';
 import '../api/services.dart';
 import '../theme.dart';
+import '../widgets/form_bits.dart';
 import '../widgets/states.dart';
 
 /// 个人资料：昵称、性别（只带改了的字段）、第三方账号绑定（解绑）。
@@ -135,53 +136,84 @@ class _ProfilePageState extends State<ProfilePage> {
       appBar: AppBar(title: const Text('个人资料'), backgroundColor: KeelColors.bg, surfaceTintColor: KeelColors.bg),
       body: m == null
           ? (_error.isNotEmpty ? ErrorCard(message: _error, onRetry: _load) : const EmptyState(text: '正在加载…'))
-          : ListView(padding: const EdgeInsets.fromLTRB(16, 8, 16, 24), children: [
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(14),
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    TextField(
+          : ListView(padding: const EdgeInsets.fromLTRB(16, 0, 16, 24), children: [
+              KeelCard(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  FieldRow(
+                    label: '昵称',
+                    bad: _nickErr.isNotEmpty,
+                    child: TextField(
                       key: const Key('profile.nickname'),
                       controller: _nick,
                       maxLength: 32,
                       onChanged: (_) => setState(() {}),
-                      decoration: InputDecoration(labelText: '昵称', errorText: _nickErr.isEmpty ? null : _nickErr),
+                      style: inlineInputStyle,
+                      decoration: inlineInput('最多 32 个字'),
                     ),
-                    const SizedBox(height: 8),
-                    const Text('性别', style: KeelText.sub),
-                    Wrap(spacing: 8, children: [
+                  ),
+                  if (_nickErr.isNotEmpty) Padding(padding: const EdgeInsets.symmetric(vertical: 4), child: Text(_nickErr, style: KeelText.err)),
+                  FieldRow(
+                    label: '性别',
+                    child: Row(children: [
                       for (final (v, l) in [(0, '不设置'), (1, '男'), (2, '女')])
-                        ChoiceChip(key: Key('profile.gender.$v'), label: Text(l), selected: _gender == v,
-                            onSelected: (_) => setState(() => _gender = v)),
+                        Padding(
+                          padding: const EdgeInsets.only(right: 8),
+                          child: OptChip(key: Key('profile.gender.$v'), label: l, on: _gender == v, small: true,
+                              onTap: () => setState(() => _gender = v)),
+                        ),
                     ]),
-                    const SizedBox(height: 10),
-                    if (m.phone.isNotEmpty) Text('手机号 ${m.phone}', style: KeelText.hint),
-                    Text(m.hasPassword ? '已设置登录密码' : '未设置登录密码', style: KeelText.hint),
-                  ]),
-                ),
+                  ),
+                  FieldRow(
+                    label: '手机号',
+                    last: true,
+                    child: Row(children: [
+                      Expanded(child: Text(m.phone.isNotEmpty ? m.phone : '未绑定', style: KeelText.body)),
+                      const Text('换绑暂未开通', style: KeelText.hint),
+                    ]),
+                  ),
+                ]),
               ),
-              if (_ids.isNotEmpty)
-                Card(
-                  child: Column(children: [
-                    const ListTile(title: Text('第三方账号', style: KeelText.overline)),
-                    for (final r in _ids)
-                      ListTile(
-                        key: Key('profile.identity.${r.provider}'),
-                        title: Text(r.name, style: KeelText.body),
-                        subtitle: Text('绑定于 ${r.boundAt}', style: KeelText.hint),
-                        trailing: TextButton(onPressed: () => _unbind(r), child: const Text('解绑')),
-                      ),
-                  ]),
-                ),
               if (_message.isNotEmpty)
-                Padding(padding: const EdgeInsets.only(top: 8),
-                    child: Text(_message, key: const Key('profile.message'), style: _failed ? KeelText.err : KeelText.ok)),
+                KeelCard(child: Text(_message, key: const Key('profile.message'), style: _failed ? KeelText.err : KeelText.ok)),
+              const Padding(padding: EdgeInsets.fromLTRB(4, 24, 4, 0), child: Text('第三方账号', style: KeelText.overline)),
+              KeelCard(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Column(children: [
+                  for (final r in _ids)
+                    Container(
+                      key: Key('profile.identity.${r.provider}'),
+                      constraints: const BoxConstraints(minHeight: 52),
+                      decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: KeelColors.line))),
+                      child: Row(children: [
+                        Expanded(
+                          child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+                            Text(r.name, style: KeelText.body),
+                            Text('绑定于 ${r.boundAt}', style: KeelText.hint),
+                          ]),
+                        ),
+                        GestureDetector(onTap: () => _unbind(r), child: const Text('解绑', style: TextStyle(fontSize: 13, color: KeelColors.err))),
+                      ]),
+                    ),
+                  const SizedBox(
+                    height: 52,
+                    child: Row(children: [
+                      Expanded(child: Text('绑定微信', style: KeelText.body)),
+                      Text('暂未开通', style: KeelText.hint),
+                    ]),
+                  ),
+                ]),
+              ),
             ]),
-      bottomNavigationBar: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 10),
+      bottomNavigationBar: Container(
+        decoration: const BoxDecoration(color: KeelColors.card, border: Border(top: BorderSide(color: KeelColors.line))),
+        child: SafeArea(
+          top: false,
+          child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
           child: FilledButton(key: const Key('profile.save'), onPressed: _dirty && !_busy ? _save : null,
               child: Text(_busy ? '保存中…' : '保存')),
+        ),
         ),
       ),
     );

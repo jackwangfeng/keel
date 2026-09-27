@@ -7,6 +7,7 @@ import '../api/services.dart';
 import '../theme.dart';
 import '../widgets/badge.dart';
 import '../widgets/evidence_image.dart';
+import '../widgets/form_bits.dart';
 import '../widgets/states.dart';
 
 /// 售后详情：状态说明、驳回理由（可重新申请）、寄回物流（退货退款 + 待买家退货时可填可改）、
@@ -171,10 +172,10 @@ class _RefundPageState extends State<RefundPage> {
                     Text('${v.returnCarrierText} ${v.returnTrackingNo}（${v.returnSubmittedAt} 提交）', key: const Key('refund.returnFilled'),
                         style: KeelText.body),
                   const SizedBox(height: 8),
-                  Wrap(spacing: 8, runSpacing: 4, children: [
+                  Wrap(spacing: 8, runSpacing: 8, children: [
                     for (final c in carriers)
-                      ChoiceChip(key: Key('refund.carrier.${c.code}'), label: Text(c.name), selected: _carrier == c.code,
-                          onSelected: (_) => setState(() => _carrier = c.code)),
+                      OptChip(key: Key('refund.carrier.${c.code}'), label: c.name, on: _carrier == c.code, small: true,
+                          onTap: () => setState(() => _carrier = c.code)),
                   ]),
                   TextField(key: const Key('refund.tracking'), controller: _tracking, maxLength: 64, onChanged: (_) => setState(() {}),
                       decoration: const InputDecoration(labelText: '运单号', hintText: '快递单上的单号')),
@@ -185,11 +186,27 @@ class _RefundPageState extends State<RefundPage> {
                   ),
                 ])),
               _card(Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                for (final it in v.items)
+                for (final (i, it) in v.items.indexed)
                   Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    padding: EdgeInsets.only(top: i == 0 ? 0 : 12),
                     child: Row(children: [
-                      Expanded(child: Text('${it.title} × ${it.quantity}', style: KeelText.body)),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(10),
+                        child: SizedBox(
+                          width: 56, height: 56,
+                          child: it.cover.imageUrl.isNotEmpty
+                              ? Image.network(it.cover.imageUrl, fit: BoxFit.cover, errorBuilder: (_, _, _) => ColoredBox(color: it.cover.color))
+                              : ColoredBox(color: it.cover.color,
+                                  child: Center(child: Text(it.cover.glyph, style: const TextStyle(fontSize: 22, color: KeelColors.card)))),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Text(it.title, style: KeelText.body),
+                          Text('× ${it.quantity}', style: KeelText.hint),
+                        ]),
+                      ),
                       Text(it.amountText, style: KeelText.price),
                     ]),
                   ),
