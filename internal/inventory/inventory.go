@@ -202,7 +202,30 @@ type Service interface {
 	// OrderTrail 一张单（订单号或退款单号）在库存服务里的全部流水，按写入顺序，
 	// 每一行带着那一行库存此刻的预警线。
 	OrderTrail(ctx context.Context, bizID string) ([]TrailEntry, error)
+
+	// —— 阶段 2 ——
+
+	// StockKeys 按 (sku_id, store_id) 升序分页列出本租户库存行的键：严格排在 q.After 之后的
+	// 至多 q.Limit 行（<= 0 取 DefaultKeysPage，上限 maxBatch）。回来不足一页即到底。
+	// 只给 core 的对账用（service/inventory_reconcile.go）：拆分之后两边没有外键，
+	// SKU / 门店在 core 里不在了，库存行不会跟着走，要由 core 拿着键回自己的库里比。
+	StockKeys(ctx context.Context, q KeysQuery) ([]StockKey, error)
 }
+
+// StockKey 是一行库存的键。
+type StockKey struct {
+	SKUID   int64
+	StoreID int64
+}
+
+// KeysQuery 是 StockKeys 的入参。After 的零值即「从头开始」（id 都是正数）。
+type KeysQuery struct {
+	After StockKey
+	Limit int
+}
+
+// DefaultKeysPage 是 StockKeys 不给 Limit 时的页大小。
+const DefaultKeysPage = 1000
 
 // ActivityKey 是一行活动配额的键。
 type ActivityKey struct {

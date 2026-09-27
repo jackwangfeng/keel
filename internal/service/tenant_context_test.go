@@ -150,6 +150,9 @@ var tenantContextAllowed = map[string]string{
 		"没有 Host 也没有 gid（它关的是停在 20 的售后单，不属于任何一笔正在跑的全局事务）。" +
 		"拿租户的办法照抄 sweep：枚举 merchants 再逐家进 WithTenant，公平调度共用 fairRound。" +
 		"它不是 SAGA 分支，上面第 ② 道会把这一点钉住。",
+	"inventory_reconcile.go": "库存对账（微服务拆分阶段 2），与 auto_confirm.go 同一处境：跑在任何 HTTP 请求之外，" +
+		"没有 Host 也没有 gid。只读：枚举 merchants 再逐家进 WithTenant 读 core 的 skus / stores / promotion_skus，" +
+		"并带着同一个租户上下文调库存服务（租户头由它给出）。它不是 SAGA 分支，上面第 ② 道会把这一点钉住。",
 	"upload_gc.go": "孤儿上传文件回收，与 auto_confirm.go 同一处境：跑在任何 HTTP 请求之外，" +
 		"没有 Host 也没有 gid。uploads 有 RLS，没有能跨租户的 DELETE，所以枚举 merchants 再逐家进，" +
 		"公平调度共用 fairRound。它不是 SAGA 分支，上面第 ② 道会把这一点钉住。",
