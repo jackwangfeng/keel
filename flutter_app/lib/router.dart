@@ -9,7 +9,6 @@ import 'theme.dart';
 
 /// 底部 tab：第 1 步只有 首页 / 我的；购物车、订单在第 3、4 步加进来。
 GoRouter buildRouter(Session session) => GoRouter(
-      refreshListenable: session,
       routes: [
         StatefulShellRoute.indexedStack(
           builder: (context, state, shell) => Scaffold(

@@ -26,7 +26,7 @@ class MePage extends StatelessWidget {
               const Text('登录 / 注册', style: KeelText.title),
               const Text('登录后可以下单、查看订单', style: KeelText.sub),
               const SizedBox(height: 24),
-              FilledButton(key: const Key('me.login'), onPressed: () => context.go('/login?from=/me'),
+              FilledButton(key: const Key('me.login'), onPressed: () => context.push('/login?from=/me'),
                   child: const Text('登录')),
             ],
             const SizedBox(height: 40),

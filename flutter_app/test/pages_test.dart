@@ -72,4 +72,20 @@ void main() {
     await t.pumpAndSettle();
     expect(find.byKey(const Key('me.login')), findsOneWidget);
   });
+
+  testWidgets('登录页还在转场时就登录成功：外壳不重复（不报 Duplicate GlobalKey）', (t) async {
+    await t.pumpWidget(await app(server()));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('tab.me')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('me.login')));
+    await t.pump();
+    await t.pump(const Duration(milliseconds: 50));
+    await t.enterText(find.byKey(const Key('login.phone')), '13800000001');
+    await t.enterText(find.byKey(const Key('login.password')), 'pw');
+    await t.tap(find.byKey(const Key('login.submit')));
+    await t.pumpAndSettle();
+    expect(t.takeException(), isNull);
+    expect(find.byKey(const Key('me.nickname')), findsOneWidget);
+  });
 }

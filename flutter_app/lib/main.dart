@@ -14,7 +14,7 @@ Future<void> main() async {
   await session.load();
   final router = buildRouter(session);
   final client = ApiClient(base: apiBase(), session: session,
-      onSessionExpired: () => router.go('/login?from=${Uri.encodeComponent(router.state.uri.toString())}'));
+      onSessionExpired: () => router.push('/login?from=${Uri.encodeComponent(router.state.uri.toString())}'));
   runApp(Services(
     client: client,
     session: session,

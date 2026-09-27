@@ -29,7 +29,13 @@ class _LoginPageState extends State<LoginPage> {
     try {
       await login(s.client, s.session, _phone.text.trim(), _password.text);
       if (!mounted) return;
-      context.go(widget.from.isEmpty ? '/me' : widget.from);
+      // 登录页是压在外壳上面的（push），成功就退回去：外壳一直在，不会重建出第二个。
+      // 直接打开 /login 的（刷新、深链）没有可退的，才按 from 跳。
+      if (context.canPop()) {
+        context.pop();
+      } else {
+        context.go(widget.from.isEmpty ? '/me' : widget.from);
+      }
     } on ApiFailure catch (f) {
       if (!mounted) return;
       setState(() => _message = f.message);
