@@ -471,14 +471,18 @@ deployment.
 # Monolith (tier A)
 docker compose up -d
 
+# Split, one Postgres: inventory in its own schema under its own role (tier B)
+docker compose -f compose.yaml -f compose.split-b.yaml up -d --build
+
 # Split, two processes and two databases (tier C)
 export KEEL_INTERNAL_SECRET=$(openssl rand -base64 48)
 docker compose -f compose.yaml -f compose.split.yaml up -d --build
+
 ./scripts/smoke.sh
 ```
 
-There is a middle tier (B): one Postgres, with inventory in its own schema under its own
-role, which core's role cannot read. Moving an existing monolith to B or C means
+In tier B, core's database role cannot even see the `inventory` schema, so a cross-module
+JOIN fails at the permission check. Moving an existing monolith to B or C means
 `scripts/split-migrate.sh` (`copy` → `verify` → `cutover`, re-runnable, with `rollback`) plus
 changing environment variables. No code changes. Step by step:
 [deployment guide](./docs/指南/部署与配置.md).

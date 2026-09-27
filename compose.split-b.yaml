@@ -1,0 +1,86 @@
+# B 档：同一个 Postgres，库存放进独立的 inventory schema、用独立的账号 keel_inventory
+# （docs/电商系统-微服务拆分方案.md「部署档位」）。用法：
+#     docker compose -f compose.yaml -f compose.split-b.yaml up -d --build
+#     ./scripts/smoke.sh
+#
+# 与单体相比只多了隔离，进程还是一个（KEEL_ROLE=all）：库存池换成 keel_inventory 连
+# inventory schema，core 的 keel_app 对这个 schema 连 USAGE 都没有 —— 跨模块 join 在
+# 数据库的权限检查这一步就过不去。不需要内网端口，也不需要 KEEL_INTERNAL_SECRET。
+#
+# 启动顺序：migrate（core）→ prepare-b（建 schema 与账号）→ migrate-inventory（按 search_path
+# 建进 inventory schema）→ seed → split-data（用 scripts/split-migrate.sh 把种子里的库存从 public
+# 搬进 inventory 并 cutover，也就是从单体迁到 B 档用的同一个脚本）→ app。每一步都可重复执行，
+# 已经切过的库 split-data 直接跳过。
+#
+# 用自己的一套卷，理由同 compose.split.yaml：cutover 收回了 keel_app 对 public 里库存表的权限，
+# 共用单体的卷的话，切回单体形态时下单当场 42501。把一个真实的单体库迁到 B 档照部署指南手工跑。
+#
+# 想要两个进程（仍是同一个库）：再起一个 KEEL_ROLE=inventory 的实例用同一个 KEEL_INVENTORY_DSN，
+# app 改 KEEL_ROLE=core + KEEL_INVENTORY_URL —— 写法参照 compose.split.yaml 的 inventory / app 两段。
+x-inventory-dsn: &inventory-dsn
+  postgres://keel_inventory:${KEEL_INVENTORY_PASSWORD:-keel_inventory}@postgres:5432/keel?sslmode=disable&options=-csearch_path%3Dinventory
+
+services:
+  # 建 inventory schema 与 keel_inventory 账号（split-migrate.sh prepare-b）。
+  prepare-b:
+    image: keel-postgres:16
+    environment:
+      SRC_DSN: postgres://keel:${KEEL_ADMIN_PASSWORD:-keel}@postgres:5432/keel?sslmode=disable
+      KEEL_INVENTORY_PASSWORD: ${KEEL_INVENTORY_PASSWORD:-keel_inventory}
+    volumes:
+      - ./scripts/split-migrate.sh:/split-migrate.sh:ro
+    command: ["sh", "/split-migrate.sh", "prepare-b"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  # 库存目录的迁移，连接串带 search_path=inventory：表、函数、策略全部建进 inventory schema。
+  migrate-inventory:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: migrate
+      args:
+        GOPROXY: ${GOPROXY:-}
+    environment:
+      GOOSE_DBSTRING: postgres://keel:${KEEL_ADMIN_PASSWORD:-keel}@postgres:5432/keel?sslmode=disable&options=-csearch_path%3Dinventory
+      GOOSE_MIGRATION_DIR: /db/migrations-inventory
+      KEEL_INVENTORY_ROLE: keel_inventory
+      KEEL_INVENTORY_PASSWORD: ${KEEL_INVENTORY_PASSWORD:-keel_inventory}
+    command: ["-table", "goose_db_version_inventory", "up"]
+    depends_on:
+      prepare-b:
+        condition: service_completed_successfully
+
+  seed:
+    depends_on:
+      migrate-inventory:
+        condition: service_completed_successfully
+
+  # 把种子里的库存从 public 搬进 inventory schema 并 cutover。
+  split-data:
+    image: keel-postgres:16
+    environment:
+      SRC_DSN: postgres://keel:${KEEL_ADMIN_PASSWORD:-keel}@postgres:5432/keel?sslmode=disable
+      DST_DSN: postgres://keel:${KEEL_ADMIN_PASSWORD:-keel}@postgres:5432/keel?sslmode=disable&options=-csearch_path%3Dinventory
+    volumes:
+      - ./scripts/split-migrate.sh:/split-migrate.sh:ro
+    command: ["sh", "-c", "sh /split-migrate.sh copy && sh /split-migrate.sh cutover"]
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+
+  app:
+    environment:
+      KEEL_INVENTORY_DSN: *inventory-dsn
+    depends_on:
+      split-data:
+        condition: service_completed_successfully
+
+volumes:
+  pgdata:
+    name: keel_pgdata_split_b
+  dtmdata:
+    name: keel_dtmdata_split_b
+  uploads:
+    name: keel_uploads_split_b

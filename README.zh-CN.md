@@ -393,13 +393,17 @@ CI 跑的是前两步。`app/README.md` 记了每一步实测到哪里，
 # 单体（A 档）
 docker compose up -d
 
+# 拆分：同一个 Postgres，库存用独立的 schema 与账号（B 档）
+docker compose -f compose.yaml -f compose.split-b.yaml up -d --build
+
 # 拆分：两个进程、两个库（C 档）
 export KEEL_INTERNAL_SECRET=$(openssl rand -base64 48)
 docker compose -f compose.yaml -f compose.split.yaml up -d --build
+
 ./scripts/smoke.sh
 ```
 
-中间还有 B 档：同一个 Postgres，库存放进独立的 schema、用独立的账号，core 的账号读不到它。
+B 档下 core 的数据库账号连 `inventory` schema 都看不见，跨模块 JOIN 在权限检查这一步就过不去。
 把现有的单体迁到 B 或 C，是 `scripts/split-migrate.sh`（`copy` → `verify` → `cutover`，可重复执行，
 有 `rollback`）加改环境变量，代码不改。逐步操作见[部署指南](./docs/指南/部署与配置.md)。
 
