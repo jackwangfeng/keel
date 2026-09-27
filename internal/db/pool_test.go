@@ -24,10 +24,10 @@ import (
 // 这里正面构造那个场景：把连接参数指向管理员角色（它是超级用户，无条件绕过
 // 行级安全），要求 NewPool 拒绝建池。
 //
-// 为什么改环境变量而不是给 NewPool 加一个 DSN 参数：加参数等于在生产代码里
-// 开一个「用别的连接串建池」的口子，而 DSN() 刻意不接受调用方指定连接串
-// （见 dsn.go）。测试自己改 PGUSER/PGPASSWORD 是唯一不动生产签名的做法，
-// 也正好覆盖了「有人在部署环境里把 PGUSER 填成了建库那个角色」这个真实误配。
+// 为什么改环境变量而不是直接调 NewPoolFromDSN(AdminDSN())：这条要覆盖的是
+// 「有人在部署环境里把 PGUSER 填成了建库那个角色」这个真实误配，走的是
+// NewPool → DSN() 那条路径。NewPoolFromDSN（拆分部署给库存库开的口子）
+// 由下面的 TestNewPoolFromDSNKeepsTheGuard 单独守。
 func TestNewPoolRejectsRLSBypassingRole(t *testing.T) {
 	ctx := context.Background()
 	if _, err := migrate(t); err != nil {
@@ -72,6 +72,49 @@ func TestNewPoolRejectsRLSBypassingRole(t *testing.T) {
 	if !strings.Contains(err.Error(), "绕过行级安全") {
 		t.Fatalf("NewPool 确实失败了，但错误看起来不是 Guard 报的，"+
 			"也就证明不了自检生效: %v", err)
+	}
+}
+
+// NewPoolFromDSN 是给库存库（KEEL_INVENTORY_DSN）开的口子，它必须和 NewPool
+// 挂着同一道 Guard —— 否则「连接串由调用方给」就真成了洞：把库存库的 DSN
+// 配成建库用的超级用户，库存那一侧的 RLS 就是一张废纸。
+//
+// 阳性对照在同一条里：同一个函数拿 keel_app 的 DSN 必须建得出池，
+// 否则「管理员被拒」可能只是因为这个函数什么都建不出来。
+func TestNewPoolFromDSNKeepsTheGuard(t *testing.T) {
+	ctx := context.Background()
+	if _, err := migrate(t); err != nil {
+		t.Fatalf("迁移失败: %v", err)
+	}
+
+	ok, err := db.NewPoolFromDSN(ctx, db.DSN())
+	if err != nil {
+		t.Fatalf("用 keel_app 的 DSN 建池失败，这条测试无从对照: %v", err)
+	}
+	ok.Close()
+
+	admin, err := pgx.Connect(ctx, db.AdminDSN())
+	if err != nil {
+		t.Fatalf("管理员连接建不起来: %v", err)
+	}
+	var super, bypass bool
+	if err := admin.QueryRow(ctx,
+		`SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user`).
+		Scan(&super, &bypass); err != nil {
+		t.Fatal(err)
+	}
+	admin.Close(ctx)
+	if !super && !bypass {
+		t.Skip("管理员角色既不是超级用户也不带 BYPASSRLS，这个环境构造不出被测场景")
+	}
+
+	pool, err := db.NewPoolFromDSN(ctx, db.AdminDSN())
+	if err == nil {
+		pool.Close()
+		t.Fatal("NewPoolFromDSN 在一条能绕过 RLS 的连接上建池成功了 —— 它没有挂 Guard")
+	}
+	if !strings.Contains(err.Error(), "绕过行级安全") {
+		t.Fatalf("确实失败了，但错误不是 Guard 报的，证明不了自检生效: %v", err)
 	}
 }
 
