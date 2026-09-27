@@ -47,6 +47,8 @@ so "which one is running?" never depends on anyone's memory.
   keel processes (`core` + `inventory`) and two Postgres instances. The inventory migration
   directory now builds into whatever schema the connection's `search_path` points at, and
   grants to `KEEL_INVENTORY_ROLE` (default `keel_app`, so the single database is unchanged).
+  Tier B also starts with a single command: `compose.split-b.yaml` runs one process, with
+  schema, role, migration and data move all done by the stack.
   `scripts/split-migrate.sh` moves a monolith's inventory tables across
   (`prepare-b` / `copy` / `verify` / `cutover` / `rollback`). All steps can be re-run, and
   `cutover` revokes `keel_app` on the old copies so a process still on the monolith
