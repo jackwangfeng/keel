@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-- main：`7200942`（已 push，2026-09-27 晚；含商品列表 in_stock 与无货卡片、选点围栏配色；含单字搜索 00086、0 元单自动入账、门店坐标必填 + 地图选点 + 须在围栏内、无货 SKU 排后、围栏编辑器两态、大区停用生效）；演示站 API `33b23b5`、后台 `33b23b5`、H5 `7200942`（华南大区当前是停用状态，gaoerfu 因此不在买家端）（gaoerfu 坐标已设为围栏中心，默认门店仍未定位；部署前备份 backup-pre-storeloc-*.dump；库 00086，部署前备份 `backup-pre-00086-202609271948.dump`；公网搜「杯」「咖」「茶」关键词路均命中），23 个种子商品有图（db/seed/images，CC0）。收尾分支已合并（`8a826db`），worktree 与分支已删。
+- main：`4ca6b4e`（已 push，2026-09-27 晚；含商品列表有货在前（00087 product_store_stock，每分钟全量刷新）；含商品列表 in_stock 与无货卡片、选点围栏配色；含单字搜索 00086、0 元单自动入账、门店坐标必填 + 地图选点 + 须在围栏内、无货 SKU 排后、围栏编辑器两态、大区停用生效）；演示站 API `4ca6b4e`（库 00087，部署前备份 backup-pre-00087-*.dump）、后台 `33b23b5`、H5 `7200942`（华南大区当前是停用状态，gaoerfu 因此不在买家端）（gaoerfu 坐标已设为围栏中心，默认门店仍未定位；部署前备份 backup-pre-storeloc-*.dump；库 00086，部署前备份 `backup-pre-00086-202609271948.dump`；公网搜「杯」「咖」「茶」关键词路均命中），23 个种子商品有图（db/seed/images，CC0）。收尾分支已合并（`8a826db`），worktree 与分支已删。
 - 演示栈（2026-09-27 晚起 **C 档**：core + inventory 两个进程、两个库，40c23da）：环境与 compose 文件清单统一在 `~/.local/share/keel-eshop/demo-env.sh`（`source` 后用 `"${DC[@]}"`），叠加层 `compose.demo-split.yaml` 把卷名换回 keeldemo_*（原地迁移，迁移前备份 `backup-pre-split-202609271854.dump`）；内网密钥 `~/.config/keel/demo-internal-secret`；keeldemo.service 已改为 source demo-env.sh（含登录锁定豁免，重启不再丢）；reset-demo.sh 已适配 C 档（两个库一起重建 + split-data）。**库存在库存库 keeldemo-postgres-inventory-1 / keel_inventory 里**，补库存要改那边。外部验证通过。
 - 已发布：**v0.2.0**（2026-09-27，tag 指向 d530fd7，库落在 00065）；ghcr 四个镜像 keel / keel-migrate / keel-postgres / keel-console 均可匿名拉取。iPhone 15 真机验证通过；Android 真机、小程序真机、tab 角标、长标题两行省略未验证。
 
