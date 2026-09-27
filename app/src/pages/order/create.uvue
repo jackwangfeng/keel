@@ -168,7 +168,7 @@
         <text class="t-hint">应付</text>
         <text class="t-price-l">{{ pv != null ? pv!.payableText : '—' }}</text>
       </view>
-      <view v-if="orderNo != '' && !needNewKey" class="btn bar-btn" @click="openOrder">
+      <view v-if="orderNo != '' && !needNewKey" class="btn bar-btn" @click="openOrder(false)">
         <text class="btn-text">查看订单</text>
       </view>
       <view v-else :class="['btn', 'bar-btn', pv == null || busy || addressId == 0 ? 'btn-off' : '']" @click="submit">
@@ -544,14 +544,19 @@ export default {
           this.failed = false
           this.needNewKey = false
           this.orderNo = order.order_no
-          // 刻意**不**自动跳走：跳走的话「这次到底是真下了单还是重放」这句话
-          // 用户根本来不及看见，而那正是 Idempotency-Replayed 存在的理由。
           this.message = replayed
             ? '这笔订单之前已经提交过，本次没有重复下单。订单号 ' + order.order_no
             : '下单成功，订单号 ' + order.order_no
           rememberOrder(order.order_no)
           this.reportSearchOrders()
           this.clearOrderedCartRows()
+          // 新下的单直接去订单详情付款：下单的下一步永远是付款，停在这里等用户再点
+          // 「查看订单」是白多一步。重放（Idempotency-Replayed）**不**跳：
+          // 「这笔之前已经提交过、没有重复下单」这句话必须让用户看见。
+          if (!replayed) {
+            uni.showToast({ title: '下单成功', icon: 'success' })
+            setTimeout(() => { this.openOrder(true) }, 500)
+          }
         },
         (f: ApiFailure) => {
           const t = f.problem != null ? f.problem!.type : ''
@@ -641,8 +646,12 @@ export default {
     goLogin() {
       uni.navigateTo({ url: '/pages/auth/login' })
     },
-    openOrder() {
-      uni.navigateTo({ url: '/pages/order/detail?order_no=' + this.orderNo })
+    openOrder(replace: boolean = false) {
+      const url = '/pages/order/detail?order_no=' + this.orderNo
+      // 下单成功后自动跳：用 redirectTo 替掉确认页，返回键回到购物车 / 详情，
+      // 而不是回到一张已经提交过的确认单。
+      if (replace) uni.redirectTo({ url: url })
+      else uni.navigateTo({ url: url })
     },
     rotate() {
       this.idemKey = newIdempotencyKey()

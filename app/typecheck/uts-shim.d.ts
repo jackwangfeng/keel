@@ -107,7 +107,23 @@ type UniTabBarBadgeOptions = {
   fail?: ((err: any) => void) | null
 }
 
+type UniShowToastOptions = {
+  title: string
+  icon?: string | null
+  duration?: number | null
+}
+
+type UniNavigateToOptions = {
+  url: string
+  complete?: ((res: any) => void) | null
+}
+
+// api/client.uts 的登录过期处理要知道当前在哪一页（已经在登录页就不再跳）。
+declare function getCurrentPages(): { route: string }[]
+
 declare const uni: {
+  showToast(options: UniShowToastOptions): void
+  navigateTo(options: UniNavigateToOptions): void
   setTabBarBadge(options: UniTabBarBadgeOptions): void
   removeTabBarBadge(options: UniTabBarBadgeOptions): void
   request<T>(options: UniRequestOptions<T>): void

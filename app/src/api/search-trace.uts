@@ -49,3 +49,14 @@ export function searchConverted(event : string, productId : number) {
   if (t == '') return
   reportSearchEvent(searchEventRequest(t, event, productId))
 }
+
+/**
+ * 在搜索结果列表上原地加购（没点进详情）：直接回传 add_cart，并记住这次搜索，
+ * 之后下单时 searchConverted('order', …) 仍然归到这一次搜索上。不发 click ——
+ * 用户没有点开它，凭空补一个 click 会把点击率算高。
+ */
+export function searchAddedFromList(traceId : string, productId : number) {
+  if (traceId == '' || productId <= 0) return
+  remember(productId, traceId)
+  reportSearchEvent(searchEventRequest(traceId, 'add_cart', productId))
+}

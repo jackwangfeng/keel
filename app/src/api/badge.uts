@@ -3,7 +3,8 @@
 // 放在一处，是因为有好几个地方会让未读数变化或需要刷新：进首页 / 我的页（切回前台、从别处回来）、
 // 在消息页标已读 / 全部已读。每处都自己拼一遍 setTabBarBadge，迟早有一处忘了 remove。
 
-import { unreadNotificationCount } from './client.uts'
+import { unreadNotificationCount, getCart } from './client.uts'
+import type { Cart } from './schema.uts'
 import { isLoggedIn } from './config.uts'
 
 // tabBar 顺序见 pages.json：首页 / 购物车 / 订单 / 我的。
@@ -28,6 +29,50 @@ export function refreshUnreadBadge(onCount : ((unread : number) => void) | null)
   unreadNotificationCount(
     (n : number) => {
       showUnreadBadge(n)
+      if (onCount != null) onCount!(n)
+    },
+    (_f) => {})
+}
+
+// ---------------------------------------------------------------------------
+// 购物车角标：tab 栏第二格。数的是**件数**（各行 quantity 之和），不是种数 ——
+// 在列表上连点两下同一件商品，角标应该从 1 变 2，否则用户会以为第二下没点上。
+// ---------------------------------------------------------------------------
+
+const CART_TAB = 1
+
+export function cartQuantity(c : Cart) : number {
+  let n = 0
+  for (let i = 0; i < c.items.length; i++) {
+    n += c.items[i].quantity
+  }
+  return n
+}
+
+/** 按一份已知的购物车更新角标（加购 / 改数量的响应里就带着整车，不必再查一次）。 */
+export function showCartBadge(c : Cart) {
+  showCartCount(cartQuantity(c))
+}
+
+export function showCartCount(n : number) {
+  if (n > 0) {
+    uni.setTabBarBadge({ index: CART_TAB, text: n > 99 ? '99+' : n.toString(), fail: (_e) => {} })
+  } else {
+    uni.removeTabBarBadge({ index: CART_TAB, fail: (_e) => {} })
+  }
+}
+
+/** 查一次购物车并更新角标。没登录就清掉；查失败不打扰。 */
+export function refreshCartBadge(onCount : ((n : number) => void) | null) {
+  if (!isLoggedIn()) {
+    showCartCount(0)
+    if (onCount != null) onCount!(0)
+    return
+  }
+  getCart(null, null,
+    (c : Cart) => {
+      const n = cartQuantity(c)
+      showCartCount(n)
       if (onCount != null) onCount!(n)
     },
     (_f) => {})

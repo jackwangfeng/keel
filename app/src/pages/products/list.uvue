@@ -61,7 +61,13 @@
                 <text v-for="(tag, ti) in item.promoTags" :key="ti" class="promo-tag">{{ tag }}</text>
               </view>
               <view class="gap-s"></view>
-              <text class="t-price">{{ item.priceText }}</text>
+              <view class="price-row">
+                <text class="t-price">{{ item.priceText }}</text>
+                <!-- 原地加购：不进详情。.stop 挡住卡片本身的「打开详情」。 -->
+                <view v-if="!item.offShelf && !item.soldOut" class="add-btn" @click.stop="quickAdd(item.id)">
+                  <text class="add-btn-text">＋</text>
+                </view>
+              </view>
             </view>
           </view>
         </view>
@@ -76,6 +82,7 @@
       </view>
       <view class="gap-l"></view>
     </scroll-view>
+    <quick-cart :product-id="quickProductId" @close="quickProductId = 0"></quick-cart>
   </view>
 </template>
 
@@ -83,7 +90,7 @@
 import { listCategories, listProducts, ApiFailure } from '@/api/client.uts'
 import { categoryChips, productRow, productListQuery, CategoryChip, ProductRow } from '@/api/view.uts'
 import { ensureStore, CurrentStore } from '@/api/store.uts'
-import { refreshUnreadBadge } from '@/api/badge.uts'
+import { refreshUnreadBadge, refreshCartBadge } from '@/api/badge.uts'
 
 export default {
   data() {
@@ -100,6 +107,7 @@ export default {
       // 0 = 全部。
       categoryId: 0,
       storeId: 0,
+      quickProductId: 0,
     }
   },
   computed: {
@@ -120,6 +128,7 @@ export default {
     this.load()
     // 进 App 第一个看到的是首页：在这里就把「我的」上的未读角标挂上。
     refreshUnreadBadge(null)
+    refreshCartBadge(null)
   },
   methods: {
     load() {
@@ -199,6 +208,9 @@ export default {
     },
     goSearch() {
       uni.navigateTo({ url: '/pages/search/index' })
+    },
+    quickAdd(id: number) {
+      this.quickProductId = id
     },
     openDetail(id: number) {
       uni.navigateTo({ url: '/pages/products/detail?id=' + id.toString() })
@@ -296,6 +308,24 @@ export default {
 }
 .tile-info {
   padding: 12px 12px 14px 12px;
+}
+.price-row {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+}
+.add-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 14px;
+  background-color: #3B2A20;
+  align-items: center;
+  justify-content: center;
+}
+.add-btn-text {
+  font-size: 18px;
+  line-height: 20px;
+  color: #FFFDF9;
 }
 .tile-title {
   font-size: 14px;

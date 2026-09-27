@@ -65,9 +65,16 @@
     </scroll-view>
 
     <view class="bar" :style="{ paddingBottom: (10 + safeBottom) + 'px' }">
+      <!-- 购物车入口一直在：加完想看看车里、或者本来就是来凑单的，都不用先退回去。 -->
+      <view class="bar-cart" @click="goCart">
+        <text class="bar-cart-text">购物车</text>
+        <view v-if="cartCount > 0" class="bar-cart-badge">
+          <text class="bar-cart-badge-text">{{ cartCount > 99 ? '99+' : cartCount.toString() }}</text>
+        </view>
+      </view>
       <view class="bar-info">
         <text v-if="hint != ''" class="t-err">{{ hint }}</text>
-        <text v-else-if="added != ''" class="t-ok">{{ added }}</text>
+        <text v-else-if="added != ''" class="t-ok bar-go-cart" @click="goCart">{{ added }}</text>
         <text v-else class="t-hint">{{ detail != null ? '已选 ' + selectedLabel : '' }}</text>
       </view>
       <view :class="['btn-ghost', 'cart-btn', canCart && !adding ? '' : 'btn-off']" @click="addToCart">
@@ -87,6 +94,7 @@ import { newIdempotencyKey } from '@/api/idempotency.uts'
 import { ensureStore, CurrentStore } from '@/api/store.uts'
 import { addCartRequest, productDetailView, ProductDetailView } from '@/api/view.uts'
 import { searchConverted } from '@/api/search-trace.uts'
+import { cartQuantity, refreshCartBadge, showCartBadge } from '@/api/badge.uts'
 
 export default {
   data() {
@@ -104,6 +112,7 @@ export default {
       storeId: 0,
       adding: false,
       added: '',
+      cartCount: 0,
     }
   },
   computed: {
@@ -153,6 +162,10 @@ export default {
       const d = this.detail
       return d != null && !d.offShelf && this.skuId > 0
     },
+  },
+  onShow() {
+    // 从购物车回来（删了、改了数量）角标要跟着变。
+    refreshCartBadge((n : number) => { this.cartCount = n })
   },
   onLoad(options: OnLoadOptions) {
     this.safeBottom = uni.getWindowInfo().safeAreaInsets.bottom
@@ -227,7 +240,10 @@ export default {
       addCartItem(addCartRequest(this.skuId, 1), this.storeId, null, newIdempotencyKey(),
         (c) => {
           this.adding = false
-          this.added = '已加入购物车（共 ' + c.items.length.toString() + ' 种）'
+          this.added = '已加入购物车，去结算 ›'
+          this.cartCount = cartQuantity(c)
+          showCartBadge(c)
+          uni.showToast({ title: '已加入购物车', icon: 'success' })
           // 从搜索结果点进来的商品：回传 add_cart（不是就什么都不做）。
           searchConverted('add_cart', this.productId)
         },
@@ -239,6 +255,10 @@ export default {
           else if (t == PROBLEM_INSUFFICIENT_STOCK) this.hint = '库存不够了'
           else this.hint = f.message
         })
+    },
+    goCart() {
+      // 购物车是 tab 页，只能 switchTab（navigateTo 到 tab 页会直接失败）。
+      uni.switchTab({ url: '/pages/cart/index' })
     },
     buy() {
       let sku = this.skuId
@@ -321,6 +341,36 @@ export default {
 }
 .bar-btn {
   width: 120px;
+}
+.bar-cart {
+  width: 52px;
+  height: 48px;
+  margin-right: 8px;
+  align-items: center;
+  justify-content: center;
+}
+.bar-cart-text {
+  font-size: 13px;
+  color: #2A211B;
+}
+.bar-cart-badge {
+  position: absolute;
+  top: 2px;
+  right: 0px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background-color: #C8462D;
+  align-items: center;
+  justify-content: center;
+}
+.bar-cart-badge-text {
+  font-size: 11px;
+  color: #FFFFFF;
+}
+.bar-go-cart {
+  text-decoration: underline;
 }
 .cart-btn {
   width: 120px;

@@ -56,11 +56,11 @@
                所以这里不做减法去推它：列出活动与运费抵扣，用了券就注明哪张，最后是合计。 -->
           <view v-if="view!.freightDiscountText != ''" class="kv"><text class="t-sub">运费抵扣</text><text class="t-body">{{ view!.freightDiscountText }}</text></view>
           <text v-if="view!.couponId > 0" class="t-hint promo-line coupon-used">用券：{{ view!.couponName != '' ? view!.couponName : '优惠券' }}</text>
-          <view class="kv">
+          <view v-if="view!.hasDiscount" class="kv">
             <text class="t-sub">优惠合计</text>
             <text class="t-body">-{{ view!.discountText }}</text>
           </view>
-          <view class="kv"><text class="t-sub">已付</text><text class="t-body">{{ view!.paidText }}</text></view>
+          <view v-if="view!.hasPaid" class="kv"><text class="t-sub">已付</text><text class="t-body">{{ view!.paidText }}</text></view>
           <view v-if="view!.refundedText != ''" class="kv"><text class="t-sub">已退</text><text class="t-body">{{ view!.refundedText }}</text></view>
           <view class="divider"></view>
           <view class="kv"><text class="t-section">应付</text><text class="t-price">{{ view!.head.payableText }}</text></view>
@@ -151,7 +151,13 @@
         <text class="t-hint">应付</text>
         <text class="t-price-l">{{ view != null ? view!.head.payableText : '—' }}</text>
       </view>
-      <view :class="['btn', 'bar-btn', paying ? 'btn-off' : '']" @click="pay">
+      <!-- 沙箱：发起支付之后，下一步就是「模拟支付完成」。把它放到底栏这个按钮上，
+           而不是只放在页面下方的沙箱说明里 —— 那里在首屏之外，点完「立即支付」
+           用户看到的是什么都没变，得往下翻才找得到第二个按钮。沙箱字样照样写在按钮上。 -->
+      <view v-if="canSettle" :class="['btn', 'bar-btn', settling ? 'btn-off' : '']" @click="settle">
+        <text class="btn-text">{{ settling ? '入账中…' : '模拟支付完成（沙箱）' }}</text>
+      </view>
+      <view v-else :class="['btn', 'bar-btn', paying ? 'btn-off' : '']" @click="pay">
         <text class="btn-text">{{ paying ? '处理中…' : '立即支付' }}</text>
       </view>
     </view>
@@ -471,7 +477,7 @@ export default {
   padding: 20px 4px 0 4px;
 }
 .bar-btn {
-  width: 160px;
+  width: 184px;
 }
 .coupon-used {
   color: #B4462E;

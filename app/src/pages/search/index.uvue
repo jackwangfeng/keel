@@ -60,24 +60,31 @@
                 <view v-if="item.offShelf || item.soldOut" class="badge badge-muted flag">
                   <text class="badge-text badge-muted-text soldout">{{ item.offShelf ? '已下架' : '缺货' }}</text>
                 </view>
+                <view class="fill"></view>
+                <view v-if="!item.offShelf && !item.soldOut" class="add-btn" @click.stop="quickAdd(item.id)">
+                  <text class="add-btn-text">＋</text>
+                </view>
               </view>
             </view>
           </view>
         </view>
       </view>
     </scroll-view>
+    <quick-cart :product-id="quickProductId" @close="quickProductId = 0" @added="onQuickAdded"></quick-cart>
   </view>
 </template>
 
 <script>
 import { search, ApiFailure } from '@/api/client.uts'
 import { searchHitRow, searchRequest, searchTraceId, ProductRow } from '@/api/view.uts'
-import { searchClicked } from '@/api/search-trace.uts'
+import { searchClicked, searchAddedFromList } from '@/api/search-trace.uts'
 import { ensureStore, CurrentStore } from '@/api/store.uts'
 
 export default {
   data() {
     return {
+      quickProductId: 0,
+      quickAddedId: 0,
       keyword: '',
       // idle 还没搜 / loading / done / error
       state: 'idle',
@@ -133,6 +140,13 @@ export default {
           this.state = 'error'
         }
       )
+    },
+    quickAdd(id: number) {
+      this.quickAddedId = id
+      this.quickProductId = id
+    },
+    onQuickAdded() {
+      searchAddedFromList(this.traceId, this.quickAddedId)
     },
     open(id: number) {
       // 回传发了就不管，不等它、不因为它拦跳转。
@@ -199,5 +213,18 @@ export default {
 }
 .hit-off {
   opacity: 0.6;
+}
+.add-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 14px;
+  background-color: #3B2A20;
+  align-items: center;
+  justify-content: center;
+}
+.add-btn-text {
+  font-size: 18px;
+  line-height: 20px;
+  color: #FFFDF9;
 }
 </style>

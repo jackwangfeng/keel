@@ -66,7 +66,8 @@ import {
   SearchResponse,
   StoreResolveResult,
 } from './schema.uts'
-import { getBaseUrl, loadSession } from './config.uts'
+import { getBaseUrl, loadSession, saveSession, clearSession } from './config.uts'
+import type { Session } from './config.uts'
 
 // ---------------------------------------------------------------------------
 // 契约里的 Problem type。**不要在别处再抄一遍字符串。**
@@ -236,6 +237,120 @@ function send(
   onOk : RawOk,
   onErr : FailureHandler
 ) {
+  sendRaw(method, path, query, body, idempotencyKey, true, onOk, onErr)
+}
+
+// ---------------------------------------------------------------------------
+// 登录态：access_token 过期（2 小时）时自动用 refresh_token（30 天）换一把新的，
+// 换不出来再统一跳登录页。
+//
+// 之前没有这一层：access_token 一过期，每个请求都回 401，页面把「令牌已过期」
+// 原样弹给用户，而用户能做的只有自己去「我的」里退出再登录 —— 手里那串 30 天的
+// refresh_token 从来没被用过。
+//
+// **刷新是单飞的**：服务端每次刷新都轮换 refresh_token（旧的立即作废）。
+// 一个页面同时发出的三个请求一起 401 时，如果各自去刷新，第二个拿着已经作废的
+// 旧 refresh_token 必然失败，然后把刚刷出来的会话清掉 —— 用户被莫名其妙登出。
+// 所以只刷一次，其余请求排队，刷完一起重放。
+// ---------------------------------------------------------------------------
+
+type PendingRetry = {
+  retry : () => void
+  fail : () => void
+}
+
+let refreshing = false
+let pendingRetries : PendingRetry[] = []
+let loginRedirecting = false
+
+/** 登录已失效（刷新也救不回来）时的统一出口：提示一句、跳登录页；登录成功后登录页会 navigateBack 回来。 */
+function redirectToLogin() {
+  if (loginRedirecting) return
+  const pages = getCurrentPages()
+  if (pages.length > 0 && pages[pages.length - 1].route == 'pages/auth/login') return
+  loginRedirecting = true
+  uni.showToast({ title: '登录已过期，请重新登录', icon: 'none' })
+  uni.navigateTo({
+    url: '/pages/auth/login',
+    complete: (_r : any) => { loginRedirecting = false },
+  })
+}
+
+function sessionExpiredFailure() : ApiFailure {
+  return {
+    status: 401,
+    problem: null,
+    message: '登录已过期，请重新登录',
+    retryAfter: 0,
+    notImplemented: false,
+  } as ApiFailure
+}
+
+function finishRefresh(ok : boolean) {
+  refreshing = false
+  const list = pendingRetries
+  pendingRetries = []
+  if (!ok) {
+    clearSession()
+    redirectToLogin()
+  }
+  for (let i = 0; i < list.length; i++) {
+    if (ok) {
+      list[i].retry()
+    } else {
+      list[i].fail()
+    }
+  }
+}
+
+/** 排进队列；没有刷新在跑就发起一次。 */
+function refreshThen(retry : () => void, fail : () => void) {
+  pendingRetries.push({ retry: retry, fail: fail } as PendingRetry)
+  if (refreshing) return
+  const s = loadSession()
+  if (s == null || s!.refreshToken == '') {
+    finishRefresh(false)
+    return
+  }
+  refreshing = true
+  const req = { refresh_token: s!.refreshToken } as RefreshTokenRequest
+  sendRaw('POST', '/auth/refresh', '', req, null, false, (_st : number, text : string, _r : boolean) => {
+    const body = JSON.parse<LoginResponse>(text)
+    if (body == null) {
+      finishRefresh(false)
+      return
+    }
+    const next : Session = {
+      baseUrl: s!.baseUrl,
+      accessToken: body!.access_token,
+      refreshToken: body!.refresh_token != null ? body!.refresh_token! : s!.refreshToken,
+      nickname: body!.user.nickname != null ? body!.user.nickname! : s!.nickname,
+    }
+    saveSession(next)
+    finishRefresh(true)
+  }, (_f : ApiFailure) => {
+    finishRefresh(false)
+  })
+}
+
+/**
+ * 401 该不该走刷新：手里有会话（没登录过的 401 由页面自己提示「登录后查看」），
+ * 且不是 /auth/ 自己（登录失败、刷新失败本身就是 401，拿它们去刷新是死循环）。
+ */
+function isExpiredSession(status : number, path : string) : boolean {
+  return status == 401 && !path.startsWith('/auth/') && loadSession() != null
+}
+
+function sendRaw(
+  method : HttpMethod,
+  path : string,
+  query : string,
+  body : any | null,
+  idempotencyKey : string | null,
+  allowRefresh : boolean,
+  onOk : RawOk,
+  onErr : FailureHandler
+) {
   const header = {
     'Accept': 'application/json, application/problem+json',
   } as UTSJSONObject
@@ -272,6 +387,22 @@ function send(
       if (status >= 200 && status < 300) {
         const replayed = headerValue(rawHeader, 'Idempotency-Replayed') == 'true'
         onOk(status, text, replayed)
+        return
+      }
+      if (isExpiredSession(status, path)) {
+        if (allowRefresh) {
+          // 重放用同一个 Idempotency-Key：第一次既然是 401，服务端什么都没做。
+          refreshThen(() => {
+            sendRaw(method, path, query, body, idempotencyKey, false, onOk, onErr)
+          }, () => {
+            onErr(sessionExpiredFailure())
+          })
+        } else {
+          // 刚刷出来的令牌仍然 401（会话被吊销、账号被封）：不再刷，直接回登录。
+          clearSession()
+          redirectToLogin()
+          onErr(sessionExpiredFailure())
+        }
         return
       }
       const retryAfterText = headerValue(rawHeader, 'Retry-After')
@@ -1020,6 +1151,16 @@ export function uploadEvidence(
   onOk : (u : Upload) => void,
   onErr : FailureHandler
 ) {
+  uploadEvidenceRaw(filePath, idempotencyKey, true, onOk, onErr)
+}
+
+function uploadEvidenceRaw(
+  filePath : string,
+  idempotencyKey : string,
+  allowRefresh : boolean,
+  onOk : (u : Upload) => void,
+  onErr : FailureHandler
+) {
   const header = {
     'Accept': 'application/json, application/problem+json',
     'Idempotency-Key': idempotencyKey,
@@ -1044,6 +1185,21 @@ export function uploadEvidence(
           return
         }
         onOk(body!)
+        return
+      }
+      // 选完图才发现登录过期：与 send 同一套单飞刷新，刷完重传一次。
+      if (isExpiredSession(status, '/uploads')) {
+        if (allowRefresh) {
+          refreshThen(() => {
+            uploadEvidenceRaw(filePath, idempotencyKey, false, onOk, onErr)
+          }, () => {
+            onErr(sessionExpiredFailure())
+          })
+        } else {
+          clearSession()
+          redirectToLogin()
+          onErr(sessionExpiredFailure())
+        }
         return
       }
       onErr(failureOf(status, text != '' ? JSON.parse<Problem>(text) : null, 0))

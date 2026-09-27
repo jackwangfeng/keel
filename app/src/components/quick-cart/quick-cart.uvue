@@ -1,0 +1,330 @@
+<template>
+  <!-- 列表页（首页 / 搜索结果）的「原地加购」。
+       父页面把 product-id 设成一个商品 id 就开始：只有一个能买的规格时直接加、弹一句轻提示；
+       多个规格时从底部弹出规格浮层，在浮层里选完、加完，全程不离开列表页。
+       结束（加成功、取消、出错）时 emit close，父页面把 product-id 复位成 0。 -->
+  <view v-if="visible" class="mask" @click="cancel">
+    <view class="sheet" :style="{ paddingBottom: (16 + safeBottom) + 'px' }" @click.stop="noop">
+      <view class="head row">
+        <view class="head-info">
+          <text class="title">{{ title }}</text>
+          <text class="price">{{ picked != null ? picked!.priceText : '' }}</text>
+          <text v-if="picked != null && picked!.listPriceText != ''" class="list-price">{{ picked!.listPriceText }}</text>
+        </view>
+        <text class="close" @click="cancel">✕</text>
+      </view>
+
+      <text class="spec-name">{{ specName }}</text>
+      <view class="chips">
+        <view v-for="s in skus" :key="s.id"
+              :class="['chip', s.id == skuId ? 'chip-on' : '', s.soldOut ? 'chip-off' : '']"
+              @click="pick(s.id)">
+          <text :class="[s.id == skuId ? 'chip-text-on' : 'chip-text']">{{ s.label }}{{ s.soldOut ? '（无货）' : '' }}</text>
+        </view>
+      </view>
+
+      <view class="qty-row row">
+        <text class="spec-name">数量</text>
+        <view class="stepper row">
+          <view :class="['step', quantity <= 1 ? 'step-off' : '']" @click="minus"><text class="step-text">－</text></view>
+          <text class="qty">{{ quantity.toString() }}</text>
+          <view :class="['step', canPlus ? '' : 'step-off']" @click="plus"><text class="step-text">＋</text></view>
+        </view>
+      </view>
+
+      <text v-if="hint != ''" class="hint">{{ hint }}</text>
+      <view :class="['confirm', canConfirm ? '' : 'confirm-off']" @click="confirm">
+        <text class="confirm-text">{{ adding ? '加入中…' : '加入购物车' }}</text>
+      </view>
+    </view>
+  </view>
+</template>
+
+<script lang="uts">
+import { addCartItem, getProduct, ApiFailure, PROBLEM_CART_QUANTITY_EXCEEDED, PROBLEM_INSUFFICIENT_STOCK, PROBLEM_SKU_NOT_SOLD_IN_STORE } from '@/api/client.uts'
+import { isLoggedIn } from '@/api/config.uts'
+import { newIdempotencyKey } from '@/api/idempotency.uts'
+import { ensureStore, CurrentStore } from '@/api/store.uts'
+import { addCartRequest, productDetailView, SkuRow } from '@/api/view.uts'
+import { showCartBadge } from '@/api/badge.uts'
+
+export default {
+  props: {
+    productId: { type: Number, default: 0 },
+  },
+  emits: ['close', 'added'],
+  data() {
+    return {
+      visible: false,
+      title: '',
+      specName: '规格',
+      skus: [] as SkuRow[],
+      skuId: 0,
+      quantity: 1,
+      storeId: 0,
+      adding: false,
+      hint: '',
+      safeBottom: 0,
+    }
+  },
+  computed: {
+    picked(): SkuRow | null {
+      for (let i = 0; i < this.skus.length; i++) {
+        if (this.skus[i].id == this.skuId) return this.skus[i]
+      }
+      return null
+    },
+    canPlus(): boolean {
+      const p = this.picked
+      return p != null && this.quantity < p.availableQty && this.quantity < 999
+    },
+    canConfirm(): boolean {
+      const p = this.picked
+      return !this.adding && p != null && !p.soldOut
+    },
+  },
+  watch: {
+    productId(id: number) {
+      if (id > 0) this.start(id)
+    },
+  },
+  methods: {
+    noop() {},
+    start(id: number) {
+      if (!isLoggedIn()) {
+        this.$emit('close')
+        uni.navigateTo({ url: '/pages/auth/login' })
+        return
+      }
+      // H5 的 tab 页上，tab 栏盖在页面最底下（windowBottom 就是它的高度）：
+      // 不把它算进来，浮层底部的「加入购物车」会被 tab 栏挡住、点不到。
+      const w = uni.getWindowInfo()
+      this.safeBottom = w.safeAreaInsets.bottom + w.windowBottom
+      this.hint = ''
+      this.quantity = 1
+      this.skuId = 0
+      ensureStore(
+        (s: CurrentStore) => {
+          this.storeId = s.storeId != null ? s.storeId! : 0
+          getProduct(id, s.storeId,
+            (d) => {
+              const view = productDetailView(d)
+              if (view.offShelf) {
+                this.finish('这件商品已下架', false)
+                return
+              }
+              const buyable: SkuRow[] = []
+              for (let i = 0; i < view.skus.length; i++) {
+                if (!view.skus[i].soldOut) buyable.push(view.skus[i])
+              }
+              if (buyable.length == 0) {
+                this.finish('暂时无货', false)
+                return
+              }
+              this.title = view.title
+              this.skus = view.skus
+              this.specName = view.skus[0].specName
+              // 只有一个规格：不弹浮层，直接加一件 —— 多一步选择就是多一次点击。
+              if (view.skus.length == 1) {
+                this.skuId = buyable[0].id
+                this.add()
+                return
+              }
+              this.skuId = buyable[0].id
+              this.visible = true
+            },
+            (f: ApiFailure) => { this.finish(f.message, false) })
+        },
+        (f: ApiFailure) => { this.finish(f.message, false) })
+    },
+    pick(id: number) {
+      for (let i = 0; i < this.skus.length; i++) {
+        if (this.skus[i].id == id && this.skus[i].soldOut) return
+      }
+      this.skuId = id
+      this.hint = ''
+      const p = this.picked
+      if (p != null && this.quantity > p.availableQty) this.quantity = Math.max(1, p.availableQty)
+    },
+    minus() {
+      if (this.quantity > 1) this.quantity--
+    },
+    plus() {
+      if (this.canPlus) this.quantity++
+    },
+    confirm() {
+      if (!this.canConfirm) return
+      this.add()
+    },
+    add() {
+      this.adding = true
+      this.hint = ''
+      addCartItem(addCartRequest(this.skuId, this.quantity), this.storeId > 0 ? this.storeId : null, null, newIdempotencyKey(),
+        (c) => {
+          this.adding = false
+          showCartBadge(c)
+          this.$emit('added')
+          this.finish('已加入购物车', true)
+        },
+        (f: ApiFailure) => {
+          this.adding = false
+          const t = f.problem != null ? f.problem!.type : ''
+          let msg = f.message
+          if (t == PROBLEM_SKU_NOT_SOLD_IN_STORE) msg = '当前门店不卖这个规格'
+          else if (t == PROBLEM_CART_QUANTITY_EXCEEDED) msg = '购物车里这个规格已经到上限了'
+          else if (t == PROBLEM_INSUFFICIENT_STOCK) msg = '库存不够了'
+          if (this.visible) {
+            // 浮层开着：错误留在浮层里，让人换个规格或改数量再试。
+            this.hint = msg
+          } else {
+            this.finish(msg, false)
+          }
+        })
+    },
+    cancel() {
+      if (this.adding) return
+      this.visible = false
+      this.$emit('close')
+    },
+    finish(message: string, ok: boolean) {
+      this.visible = false
+      uni.showToast({ title: message, icon: ok ? 'success' : 'none' })
+      this.$emit('close')
+    },
+  },
+}
+</script>
+
+<style>
+.mask {
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.45);
+  justify-content: flex-end;
+  z-index: 100;
+}
+.sheet {
+  background-color: #FFFDF9;
+  border-top-left-radius: 16px;
+  border-top-right-radius: 16px;
+  padding: 18px 16px 16px 16px;
+}
+.row {
+  flex-direction: row;
+  align-items: center;
+}
+.head {
+  align-items: flex-start;
+  margin-bottom: 14px;
+}
+.head-info {
+  flex: 1;
+}
+.title {
+  font-size: 16px;
+  color: #2A211B;
+  font-weight: bold;
+}
+.price {
+  font-size: 18px;
+  color: #C8462D;
+  margin-top: 6px;
+}
+.list-price {
+  font-size: 12px;
+  color: #A39584;
+  text-decoration: line-through;
+}
+.close {
+  font-size: 18px;
+  color: #A39584;
+  padding: 0 4px 8px 12px;
+}
+.spec-name {
+  font-size: 14px;
+  color: #6B5B4D;
+}
+.chips {
+  flex-direction: row;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  margin-bottom: 6px;
+}
+.chip {
+  padding: 8px 16px;
+  border-radius: 18px;
+  border-width: 1px;
+  border-style: solid;
+  border-color: #E3D9CC;
+  background-color: #FFFDF9;
+  margin-right: 10px;
+  margin-bottom: 10px;
+}
+.chip-on {
+  background-color: #3B2A20;
+  border-color: #3B2A20;
+}
+.chip-off {
+  opacity: 0.45;
+}
+.chip-text {
+  font-size: 14px;
+  color: #2A211B;
+}
+.chip-text-on {
+  font-size: 14px;
+  color: #FFFDF9;
+}
+.qty-row {
+  justify-content: space-between;
+  margin-top: 6px;
+  margin-bottom: 14px;
+}
+.stepper {
+  border-width: 1px;
+  border-style: solid;
+  border-color: #E3D9CC;
+  border-radius: 6px;
+}
+.step {
+  width: 36px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+}
+.step-off {
+  opacity: 0.35;
+}
+.step-text {
+  font-size: 16px;
+  color: #2A211B;
+}
+.qty {
+  width: 44px;
+  text-align: center;
+  font-size: 15px;
+  color: #2A211B;
+}
+.hint {
+  font-size: 13px;
+  color: #C8462D;
+  margin-bottom: 10px;
+}
+.confirm {
+  height: 46px;
+  border-radius: 23px;
+  background-color: #3B2A20;
+  align-items: center;
+  justify-content: center;
+}
+.confirm-off {
+  opacity: 0.4;
+}
+.confirm-text {
+  font-size: 16px;
+  color: #FFFDF9;
+}
+</style>

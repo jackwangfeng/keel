@@ -448,6 +448,9 @@ export type OrderDetailView = {
   freightText : string
   discountText : string
   paidText : string
+  /** 有优惠 / 已付过款才显示那一行：待支付的单上「已付 ¥0.00」「优惠合计 -¥0.00」只是噪音。 */
+  hasDiscount : boolean
+  hasPaid : boolean
   /** 已退金额（refunded_cents）；没退过是空串，页面不显示那一行。 */
   refundedText : string
   /** 包邮券抵掉的运费；没有是空串。 */
@@ -486,7 +489,11 @@ export function orderDetailView(o : OrderDetail) : OrderDetailView {
   let receiver = ''
   const r = o.receiver
   if (r != null) {
-    receiver = r!.receiver_name + ' ' + r!.phone + ' ' + r!.province + r!.city + r!.district + r!.detail
+    // 与地址簿（addressRow）同一个写法：省市区之间留空格，街道不能丢 ——
+    // 原来这里漏了 street，「文三路 1 号楼」显示成「西湖区1 号楼」，快递员看了也找不到。
+    const street = r!.street != null ? r!.street! : ''
+    receiver = r!.receiver_name + ' ' + r!.phone + ' ' + r!.province + ' ' + r!.city + ' ' + r!.district + ' ' +
+      (street != '' ? street + ' ' : '') + r!.detail
   }
   // 这里**不能**写 `orderRow(o)`：OrderDetail 在契约里是 `allOf: [Order, {...}]`，
   // 生成到 UTS 之后是一个展平出来的独立类型。TS 的结构化类型下它可以直接当 Order 用，
@@ -516,6 +523,8 @@ export function orderDetailView(o : OrderDetail) : OrderDetailView {
     freightText: yuan(o.freight_cents),
     discountText: yuan(o.discount_cents),
     paidText: yuan(o.paid_cents),
+    hasDiscount: o.discount_cents != null && o.discount_cents! > 0,
+    hasPaid: o.paid_cents != null && o.paid_cents! > 0,
     refundedText: o.refunded_cents != null && o.refunded_cents! > 0 ? yuan(o.refunded_cents!) : '',
     freightDiscountText: o.freight_discount_cents != null && o.freight_discount_cents! > 0 ? '-' + yuan(o.freight_discount_cents!) : '',
     freightNote: o.freight != null ? freightNote(o.freight!) : '',
@@ -597,12 +606,18 @@ function faceYuan(cents : number) : string {
   return t.endsWith('.00') ? t.substring(0, t.length - 3) : t
 }
 
-/** 折扣率（千分比，900 = 9 折）->「9折」「8.5折」。 */
+/**
+ * 折扣率（千分比，900 = 9 折）->「9折」「8.5折」「9.95折」。
+ * 与后台、服务端同一个精度（两位小数，去掉末尾的 0）：之前按一位四舍五入，
+ * 995 显示成「10折」—— 一张打折券写着不打折。
+ */
 function rateText(rate : number) : string {
-  const tenth = Math.round(rate / 10)
-  const whole = Math.floor(tenth / 10)
-  const frac = tenth % 10
-  return (frac == 0 ? whole.toString() : whole.toString() + '.' + frac.toString()) + '折'
+  const whole = Math.floor(rate / 100)
+  const rest = rate % 100
+  if (rest == 0) return whole.toString() + '折'
+  const frac = rest < 10 ? '0' + rest.toString() : rest.toString()
+  const trimmed = frac.endsWith('0') ? frac.substring(0, 1) : frac
+  return whole.toString() + '.' + trimmed + '折'
 }
 
 /** 券面上最大的那几个字：减多少 / 几折 / 包邮。 */
@@ -655,6 +670,18 @@ export function couponScopeText(scopes : CouponScope[]) : string {
   return t
 }
 
+/**
+ * 有效期的**截止**日期。契约里 valid_end_at 是开区间的截止时刻（到那一刻就过期），
+ * 后台用日期选的截止是「那天 0 点」—— 直接取日期会把「10-07 0 点过期」写成「至 10-07」，
+ * 而 10-07 全天其实已经不能用了。往前退 1 毫秒再取日期，写出来的是最后能用的那一天。
+ */
+function endDay(iso : string) : string {
+  const d = parseInstant(iso)
+  if (d == null) return day(iso)
+  const last = new Date(d!.getTime() - 1)
+  return last.getFullYear().toString() + '-' + pad2(last.getMonth() + 1) + '-' + pad2(last.getDate())
+}
+
 /** 「2026-09-30T16:00:00Z」->「2026-10-01」：同样按设备本地时区取日期，不截 UTC 的那一天。 */
 function day(iso : string) : string {
   const d = parseInstant(iso)
@@ -683,7 +710,7 @@ export function claimRow(t : ClaimableCouponTemplate) : ClaimRow {
     valid = '领取后 ' + t.valid_days.toString() + ' 天内有效'
   } else {
     const a = t.valid_start_at != null ? day(t.valid_start_at!) : ''
-    const b = t.valid_end_at != null ? day(t.valid_end_at!) : ''
+    const b = t.valid_end_at != null ? endDay(t.valid_end_at!) : ''
     valid = a + ' 至 ' + b
   }
   let action = '领取'
@@ -724,7 +751,7 @@ export function couponRow(c : UserCoupon) : CouponRow {
     valueText: couponValueText(c.coupon_type, c.discount_cents, c.discount_rate),
     ruleText: couponRuleText(c.coupon_type, c.threshold_cents, c.discount_cents, c.discount_rate, c.max_discount_cents),
     scopeText: couponScopeText(c.scopes),
-    validText: used != null ? '使用于 ' + shortTime(used!) : day(c.valid_start_at) + ' 至 ' + day(c.valid_end_at),
+    validText: used != null ? '使用于 ' + shortTime(used!) : day(c.valid_start_at) + ' 至 ' + endDay(c.valid_end_at),
   } as CouponRow
 }
 
@@ -746,7 +773,7 @@ export function couponOption(c : ApplicableCoupon) : CouponOption {
     id: c.id,
     name: c.name,
     ruleText: couponRuleText(c.coupon_type, c.threshold_cents, c.discount_cents, c.discount_rate, c.max_discount_cents),
-    validText: day(c.valid_end_at) + ' 到期',
+    validText: endDay(c.valid_end_at) + ' 到期',
     saveText: '-' + yuan(c.applicable_discount_cents),
   } as CouponOption
 }
