@@ -24,6 +24,8 @@ class Fake {
   int refundType = 1;
   Map? created;
   final shipments = <Map>[];
+  final applyKeys = <String?>[];
+  bool inFlightOnce = false;
   final calls = <String>[];
   Map<String, dynamic> refund() => {
         'refund_no': 'R9', 'order_no': 'N1', 'refund_type': refundType, 'status': refundStatus, 'amount_cents': 5600,
@@ -39,6 +41,11 @@ class Fake {
         'items': [{'id': 7, 'sku_id': 1, 'title': '亚麻四件套', 'price_cents': 5600, 'quantity': 1, 'amount_cents': 5600}]});
     }
     if (p == '/orders/N1/refunds' && r.method == 'POST') {
+      applyKeys.add(r.headers['Idempotency-Key']);
+      if (inFlightOnce) {
+        inFlightOnce = false;
+        return j({'type': 'https://keel.dev/problems/idempotency-key-in-flight', 'title': '处理中', 'status': 409}, 409);
+      }
       created = jsonDecode(r.body) as Map;
       return j(refund(), 201);
     }
@@ -120,5 +127,22 @@ void main() {
     await t.tap(find.byKey(const Key('refund.cancel')));
     await t.pumpAndSettle();
     expect(t.widget<Text>(find.byKey(const Key('refund.status'))).data, '已取消');
+  });
+
+  testWidgets('#8 申请遇到 in-flight：再点提交用同一个幂等键（第一张可能正在建）', (t) async {
+    phone(t);
+    final f = Fake()..inFlightOnce = true;
+    await t.pumpWidget(await app(f, '/orders/N1/refund'));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('apply.type.1')));
+    await t.tap(find.byKey(const Key('apply.reason.1')));
+    await t.pump();
+    await t.tap(find.byKey(const Key('apply.submit')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('apply.submit')));
+    await t.pumpAndSettle();
+    expect(f.applyKeys.length, 2);
+    expect(f.applyKeys.toSet().length, 1);
+    expect(t.widget<Text>(find.byKey(const Key('refund.status'))).data, '待审核');
   });
 }

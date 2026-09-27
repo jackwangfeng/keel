@@ -119,6 +119,13 @@ class _CartPageState extends State<CartPage> {
     }
   }
 
+  /// 从购物车压出去的页（商品、结算）回来时重读：那边可能加购了、下单删掉了几行。
+  /// tab 下标没变，Tabs.current 不会通知。
+  Future<void> _pushThenReload(String route) async {
+    await context.push(route);
+    if (mounted) _load();
+  }
+
   void _toggle(CartRow r) {
     final c = Services.of(context).client;
     if (_editing && !r.available) {
@@ -255,7 +262,8 @@ class _CartPageState extends State<CartPage> {
             child: Padding(padding: const EdgeInsets.only(right: 10), child: _check(marked, r.available || _editing)),
           ),
           GestureDetector(
-            onTap: r.productId > 0 ? () => context.push('/product/${r.productId}') : null,
+            key: Key('cart.cover.${r.id}'),
+            onTap: r.productId > 0 ? () => _pushThenReload('/product/${r.productId}') : null,
             child: ClipRRect(
               borderRadius: BorderRadius.circular(10),
               child: SizedBox(
@@ -329,7 +337,7 @@ class _CartPageState extends State<CartPage> {
                   )
                 : FilledButton(
                     key: const Key('cart.checkout'),
-                    onPressed: v.selectedCount == 0 ? null : () => context.push('/checkout?from=cart'),
+                    onPressed: v.selectedCount == 0 ? null : () => _pushThenReload('/checkout?from=cart'),
                     child: Text('去结算(${v.selectedCount})'),
                   ),
           ]),

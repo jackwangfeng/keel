@@ -73,6 +73,8 @@ void phone(WidgetTester t) {
   addTearDown(t.view.reset);
 }
 
+late StoreService lastStore;
+
 Future<(Widget, CartCount)> app(Fake f, {bool loggedIn = true}) async {
   SharedPreferences.setMockInitialValues(loggedIn
       ? {'keel.access': 'a', 'keel.refresh': 'r', 'keel.nickname': 'e2e'}
@@ -82,7 +84,7 @@ Future<(Widget, CartCount)> app(Fake f, {bool loggedIn = true}) async {
   final client = ApiClient(base: 'http://h/api/v1', session: session, http: f.client);
   final count = CartCount(client, session);
   return (
-    Services(client: client, session: session, store: StoreService(client, locate: () async => null), cart: count, trace: SearchTrace(client), unread: UnreadCount(client, session),
+    Services(client: client, session: session, store: lastStore = StoreService(client, locate: () async => null), cart: count, trace: SearchTrace(client), unread: UnreadCount(client, session),
         child: MaterialApp.router(theme: keelTheme(), routerConfig: buildRouter(session))),
     count
   );
@@ -178,5 +180,17 @@ void main() {
     await t.pumpAndSettle();
     expect(jsonDecode(f.to('/search/events').single.body), {'trace_id': 'tr-1', 'event': 'click', 'product_id': 22});
     expect(find.byKey(const Key('detail.title')), findsOneWidget);
+  });
+
+  testWidgets('#4 换了服务地址（门店作废）：首页重新解析门店、重拉商品', (t) async {
+    phone(t);
+    final f = Fake();
+    await t.pumpWidget((await app(f)).$1);
+    await t.pumpAndSettle();
+    final before = f.to('/products').length;
+    lastStore.reset();
+    await t.pumpAndSettle();
+    expect(f.to('/stores/resolve').length, 2);
+    expect(f.to('/products').length, greaterThan(before));
   });
 }

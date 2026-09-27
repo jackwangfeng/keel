@@ -138,7 +138,8 @@ class _CheckoutPageState extends State<CheckoutPage> {
           _invalidate();
         }
       });
-      if (_addressId > 0 && _pv == null && !_previewing) _preview();
+      // 在飞的那份试算要是给旧地址算的，回来时会被丢掉（见 _runPreview）：这里照样发一份新的。
+      if (_addressId > 0 && _pv == null) _preview();
     } on ApiFailure catch (f) {
       if (mounted) {
         setState(() {
@@ -217,13 +218,15 @@ class _CheckoutPageState extends State<CheckoutPage> {
 
   Future<void> _runPreview() async {
     setState(() => _previewing = true);
-    // 连点 + 号、连着换券时，只有最后一次的结果算数。
+    // 连点 + 号、连着换券、换地址时，只有最后一次的结果算数。
     final qty = _qty;
     final coupon = _couponId;
+    final addr = _addressId;
+    bool stale() => !mounted || qty != _qty || coupon != _couponId || addr != _addressId;
     try {
       final v = await previewOrder(_s.client, lines: _lines, addressId: _addressId, storeId: _storeId!,
           couponId: coupon > 0 ? coupon : null);
-      if (!mounted || qty != _qty || coupon != _couponId) return;
+      if (stale()) return;
       _coupons = v.coupons;
       if (_couponAuto) {
         _couponAuto = false;
@@ -240,7 +243,7 @@ class _CheckoutPageState extends State<CheckoutPage> {
         _provinceUnknown = false;
       });
     } on ApiFailure catch (f) {
-      if (!mounted || qty != _qty || coupon != _couponId) return;
+      if (stale()) return;
       setState(() {
         _previewing = false;
         if (_notDeliverable(f)) return;

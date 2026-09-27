@@ -145,10 +145,13 @@ class _RefundApplyPageState extends State<RefundApplyPage> {
       setState(() {
         _busy = false;
         _message = f.message;
-        if (f.status == 409 || f.status == 422) _key = newIdempotencyKey();
+        // in-flight：上一次可能正在建这张售后单 —— 键不换，再点就是重放。其余 409 / 422 都是没建成，换键。
+        final inFlight = f.isType('idempotency-key-in-flight');
+        if (inFlight) _message = '申请正在处理中，稍等几秒再点一次提交';
+        if (!inFlight && (f.status == 409 || f.status == 422)) _key = newIdempotencyKey();
       });
       // 409（件数超了 / 已有在途售后 / 订单状态不能退）：可退件数变了，重读一次。
-      if (f.status == 409) _load();
+      if (f.status == 409 && !f.isType('idempotency-key-in-flight')) _load();
     }
   }
 

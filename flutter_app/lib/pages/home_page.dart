@@ -5,6 +5,7 @@ import '../api/catalog.dart';
 
 import '../api/client.dart';
 import '../api/services.dart';
+import '../api/store.dart';
 import '../api/view.dart';
 import '../theme.dart';
 import '../widgets/product_card.dart';
@@ -29,10 +30,34 @@ class _HomePageState extends State<HomePage> {
   int _categoryId = 0;
   int? _storeId;
 
+  StoreService? _store;
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    if (_loading && _rows.isEmpty && _error.isEmpty) _load();
+    if (_store == null) {
+      _store = Services.of(context).store..addListener(_onStore);
+      _load();
+    }
+  }
+
+  @override
+  void dispose() {
+    _store?.removeListener(_onStore);
+    super.dispose();
+  }
+
+  /// 门店作废了（换了服务地址 = 换了一家店）：重新解析、重拉 —— 不然首页还摆着上一家店的商品。
+  void _onStore() {
+    if (mounted && _store!.current == null && !_loading) {
+      setState(() {
+        _rows = const [];
+        _categories = const [];
+        _categoryId = 0;
+        _storeLine = '';
+      });
+      _load();
+    }
   }
 
   Future<void> _load() async {

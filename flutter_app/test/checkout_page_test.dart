@@ -28,6 +28,8 @@ class Fake {
   final previews = <Map>[];
   final orders = <http.Request>[];
   bool replay = false;
+  bool slowAddr1 = false;
+  bool noCoupons = false;
   String status = '10';
   late final client = MockClient((r) async {
     final p = r.url.path.replaceFirst('/api/v1', '');
@@ -40,17 +42,22 @@ class Fake {
         'skus': [{'id': 91, 'sku_code': 'S', 'price_cents': 5000, 'available_qty': 9, 'spec_values': {'规格': '10 包'}}]});
     }
     if (p == '/addresses') {
-      return j([{'id': 1, 'receiver_name': '张三', 'phone': '139', 'province': '浙江省', 'city': '杭州市', 'district': '西湖区', 'detail': '1 号', 'is_default': true}]);
+      return j([
+        {'id': 1, 'receiver_name': '张三', 'phone': '139', 'province': '浙江省', 'city': '杭州市', 'district': '西湖区', 'detail': '1 号', 'is_default': true},
+        {'id': 2, 'receiver_name': '李四', 'phone': '138', 'province': '新疆维吾尔自治区', 'city': '乌鲁木齐市', 'district': '天山区', 'detail': '2 号', 'is_default': false},
+      ]);
     }
     if (p == '/orders/preview') {
       final b = jsonDecode(r.body) as Map;
       previews.add(b);
+      if (slowAddr1 && b['address_id'] == 1) await Future<void>.delayed(const Duration(seconds: 2));
+      final freight = b['address_id'] == 2 ? 1500 : 0;
       final c = b['user_coupon_id'] as int?;
       final off = c == 3 ? 1000 : (c == 4 ? 500 : 0);
-      return j({'store_id': 1, 'goods_amount_cents': 5000, 'freight_cents': 0, 'freight_discount_cents': 0,
-        'freight': {'freight_cents': 0, 'freight_discount_cents': 0, 'groups': []}, 'payable_cents': 5000 - off,
+      return j({'store_id': 1, 'goods_amount_cents': 5000, 'freight_cents': freight, 'freight_discount_cents': 0,
+        'freight': {'freight_cents': freight, 'freight_discount_cents': 0, 'groups': []}, 'payable_cents': 5000 - off,
         'promotion_discount_cents': 0, 'coupon_discount_cents': off, 'items': [], 'promotions': [],
-        'user_coupon_id': ?c, 'applicable_coupons': [coupon(3, 1000), coupon(4, 500)]});
+        'user_coupon_id': ?c, 'applicable_coupons': noCoupons ? [] : [coupon(3, 1000), coupon(4, 500)]});
     }
     if (p == '/orders') {
       orders.add(r);
@@ -142,5 +149,24 @@ void main() {
     expect(find.byKey(const Key('order.status')), findsNothing);
     expect(find.textContaining('之前已经提交过'), findsOneWidget);
     expect(find.byKey(const Key('checkout.viewOrder')), findsOneWidget);
+  });
+
+  testWidgets('#5 地址 1 的试算还在路上时换成地址 2：只认地址 2 的结果', (t) async {
+    phone(t);
+    final f = Fake()
+      ..slowAddr1 = true
+      ..noCoupons = true;
+    await t.pumpWidget(await app(f));
+    await t.pump();
+    await t.pump(const Duration(milliseconds: 100));
+    await t.tap(find.byKey(const Key('checkout.address')));
+    await t.pumpAndSettle(const Duration(milliseconds: 50), EnginePhase.sendSemanticsUpdate, const Duration(seconds: 1));
+    await t.tap(find.byKey(const Key('address.row.2')));
+    await t.pumpAndSettle();
+    await t.pump(const Duration(seconds: 3));
+    await t.pumpAndSettle();
+    expect(f.previews.last['address_id'], 2);
+    expect(t.widget<Text>(find.byKey(const Key('checkout.freight'))).data, '¥15.00');
+    expect(find.byKey(const Key('checkout.address.2')), findsOneWidget);
   });
 }

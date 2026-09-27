@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import 'package:mp_flutter_wechat/mp_flutter_wechat.dart';
 
@@ -62,21 +63,27 @@ Future<List<PickedImage>> pickImages(int max) async {
 /// 上传一张，返回 /api/v1/uploads/{id}。
 Future<String> uploadEvidence(ApiClient c, PickedImage img, String idempotencyKey) async {
   if (img.mpPath != null) {
-    final r = await MpWechat.call('uploadFile', {
-      'url': '${c.base}/uploads',
-      'filePath': img.mpPath,
-      'name': 'file',
-      'header': {
-        'Accept': 'application/json, application/problem+json',
-        'Idempotency-Key': idempotencyKey,
-        if ((c.accessToken ?? '').isNotEmpty) 'Authorization': 'Bearer ${c.accessToken}',
-      },
-      'formData': {'purpose': '3'},
-    });
-    final status = (r['statusCode'] as num?)?.toInt() ?? 0;
-    final text = '${r['data'] ?? ''}';
-    if (status >= 200 && status < 300) return Upload.fromJson(jsonDecode(text) as Map<String, dynamic>).url;
-    throw c.failureOf(status, text);
+    // 临时文件路径直接交给 wx.uploadFile（不在 Dart 侧读成字节，走小程序自己的文件通道）。
+    // 与 send 同一套 401 单飞续期：每次重传现取令牌，幂等键不变。
+    Future<http.Response> attempt() async {
+      final r = await MpWechat.call('uploadFile', {
+        'url': '${c.base}/uploads',
+        'filePath': img.mpPath,
+        'name': 'file',
+        'header': {
+          'Accept': 'application/json, application/problem+json',
+          'Idempotency-Key': idempotencyKey,
+          if ((c.accessToken ?? '').isNotEmpty) 'Authorization': 'Bearer ${c.accessToken}',
+        },
+        'formData': {'purpose': '3'},
+      });
+      return http.Response.bytes(utf8.encode('${r['data'] ?? ''}'), (r['statusCode'] as num?)?.toInt() ?? 0);
+    }
+
+    final res = await c.withRefresh('/uploads', attempt);
+    final text = utf8.decode(res.bodyBytes);
+    if (res.statusCode >= 200 && res.statusCode < 300) return Upload.fromJson(jsonDecode(text) as Map<String, dynamic>).url;
+    throw c.failureOf(res.statusCode, text);
   }
   final res = await c.upload('/uploads', bytes: img.bytes!, filename: img.name, contentType: img.contentType,
       fields: {'purpose': '3'}, idempotencyKey: idempotencyKey, decode: (j) => Upload.fromJson(j as Map<String, dynamic>));

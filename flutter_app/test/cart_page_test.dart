@@ -138,4 +138,16 @@ void main() {
     expect(find.byKey(const Key('cart.row.3')), findsNothing);
     expect(find.text('去结算(0)'), findsOneWidget);
   });
+
+  testWidgets('#3 从购物车点进商品再返回：购物车重读（别处可能改过车）', (t) async {
+    final f = FakeCart();
+    await openCart(t, (await app(f)).$1);
+    await t.tap(find.byKey(const Key('cart.cover.1')));
+    await t.pumpAndSettle();
+    // 商品页自己也会 GET /cart（刷角标），所以从返回那一刻开始数。
+    final before = f.calls.where((c) => c == 'GET /cart').length;
+    await t.pageBack();
+    await t.pumpAndSettle();
+    expect(f.calls.where((c) => c == 'GET /cart').length, greaterThan(before));
+  });
 }

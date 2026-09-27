@@ -53,8 +53,12 @@ String newIdempotencyKey() {
 
 /// 唯一的网络出口。
 class ApiClient {
-  ApiClient({required this.base, required this.session, http.Client? http, this.onSessionExpired})
+  ApiClient({required this.base, required this.session, http.Client? http, this.onSessionExpired,
+      this.timeout = const Duration(seconds: 30)})
       : _http = http ?? _defaultClient();
+
+  /// 单个请求最多等多久：连接挂着不回时，页面要能停下「提交中…」、让人用同一个幂等键重试。
+  final Duration timeout;
 
   /// 服务地址。「服务地址」页可以换（换了就是换一家店）。
   String base;
@@ -72,8 +76,26 @@ class ApiClient {
       {Map<String, String>? query, Object? body, String? idempotencyKey, required T Function(dynamic json) decode}) async =>
       _finish(await _withRefresh(path, () => _raw(method, path, query, body, idempotencyKey)), decode);
 
+  /// 网络层的失败（断网、DNS、连接被拒、超时、小程序 wx.request fail）一律变成 status 0 的 ApiFailure：
+  /// 页面只接 ApiFailure，漏出去的原始异常会让页面停在「提交中…」「正在加载…」。
+  Future<http.Response> _net(Future<http.Response> Function() attempt) async {
+    try {
+      return await attempt().timeout(timeout);
+    } on TimeoutException {
+      throw const ApiFailure(0, null, '网络超时，请检查网络后重试');
+    } on ApiFailure {
+      rethrow;
+    } catch (e) {
+      throw ApiFailure(0, null, '网络异常，请检查网络后重试（$e）');
+    }
+  }
+
+  /// 给自己发请求的调用方（小程序的 wx.uploadFile）用：同一套 401 单飞续期 + 同键重放。
+  Future<http.Response> withRefresh(String path, Future<http.Response> Function() attempt) => _withRefresh(path, attempt);
+
   /// 401 且登着录：单飞刷新一次，再用同一个请求（同一个幂等键 —— 第一次既然是 401，服务端什么都没做）重放。
-  Future<http.Response> _withRefresh(String path, Future<http.Response> Function() attempt) async {
+  Future<http.Response> _withRefresh(String path, Future<http.Response> Function() raw) async {
+    Future<http.Response> attempt() => _net(raw);
     final res = await attempt();
     if (res.statusCode != 401 || !session.loggedIn || path.startsWith('/auth/')) return res;
     if (!await _refresh()) throw _expired();
@@ -162,7 +184,12 @@ class ApiClient {
     final text = utf8.decode(res.bodyBytes);
     if (res.statusCode >= 200 && res.statusCode < 300) {
       final replayed = res.headers['idempotency-replayed'] == 'true';
-      return ApiResult(decode(text.isEmpty ? null : jsonDecode(text)), replayed);
+      try {
+        return ApiResult(decode(text.isEmpty ? null : jsonDecode(text)), replayed);
+      } catch (e) {
+        // 2xx 但响应体不是契约里的形状（网关错页、半截响应）：照实说，不让解析异常漏出去。
+        throw ApiFailure(0, null, '服务器返回的内容读不懂（HTTP ${res.statusCode}）');
+      }
     }
     throw _failure(res.statusCode, text, res.headers['retry-after']);
   }
