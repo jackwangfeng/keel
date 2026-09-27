@@ -76,6 +76,9 @@ Thanks to dtmrs's embeddable coordinator, transaction orchestration code is
 Traditional systems force a choice: a monolith that's easy to deploy but hard to scale,
 or microservices that scale but are a deployment nightmare. Keel doesn't require choosing.
 
+This is running code, not a slogan: inventory already ships as a separate service. See
+[Deployment shapes](#deployment-shapes-monolith-and-microservices).
+
 ### Four — one deployment, many merchants
 
 Each merchant gets their own storefront, and orders never span merchants.
@@ -418,6 +421,100 @@ Full details: [Architecture](./docs/电商系统-总体架构.md) ·
 [Data model](./docs/电商系统-数据模型设计.md) ·
 [Search layer](./docs/电商系统-语义检索层设计.md) ·
 [Product understanding](./docs/电商系统-商品理解服务设计.md)
+
+---
+
+## Deployment shapes: monolith and microservices
+
+**One codebase, two ways to deploy it.** `KEEL_ROLE` decides which service a process
+plays: `all` (the default, today's `docker compose up`), `core`, or `inventory`. The
+monolith is not a degraded mode of the split. In both shapes inventory is read and written
+only through the inventory service's interface and only touches inventory's own tables. The
+interface is an in-process Go call in one shape and signed internal HTTP in the other. The
+consistency protocol is the same, so the full test suite on the monolith also covers the
+split's business logic. A separate two-database test suite covers the transport.
+
+**What is split today, and why only that.** Inventory (per-store stock plus flash-sale and
+limited-offer quotas) is its own service. Everything else stays in `core`:
+
+| Candidate | Decision | Why |
+|---|---|---|
+| Inventory | **Split** | Clear boundary (quantities per SKU × store). Order placement's hottest write lands here, and flash sales pile onto single rows. |
+| Coupons | Keep in core | Thresholds, scopes and stacking are all computed in core's pricing. A coupon service would be storage plus six cross-service calls per order, for very little load. |
+| Orders / payments / refunds | Keep in core | They share one money state machine. Splitting them would only create distributed transactions. |
+| Catalog and search (read-only) | Next candidate | The measured pressure is on reads: listing at 6,300 req/s used about 10 Postgres cores, versus about 5.5 cores for placing 650 orders/s (all on one 20-core box). |
+
+**Clients don't change.** There is one public entry point and one contract (OpenAPI).
+How the backend is split is invisible behind it. When a split needs the contract to say
+something new, it only adds. The only addition so far is a `503 inventory-unavailable` on
+the few endpoints that can't answer without stock levels. Those can only happen in a split
+deployment.
+
+**How consistency holds across the split.**
+
+- **Placing an order** is a SAGA in core's embedded coordinator. The inventory step's address
+  is `local://inventory_deduct` in the monolith and
+  `http://inventory:8090/internal/v1/saga/inventory_deduct` when split. The step body is the
+  same function, and a subtransaction barrier in inventory's own database makes retries and
+  compensations safe.
+- **Closing an order, a buyer cancelling, or a refund landing** commits core's part together with an
+  outbox job (`inventory.release`), and a worker calls inventory, which is idempotent by
+  order or refund number.
+- **The trade-off is "under-sell, never over-sell".** After an order closes, stock looks held
+  until the release lands: milliseconds normally, longer while inventory is down.
+- **An order can't be paid until its SAGA has finished.** While inventory is down it waits in
+  your order list, and payment answers 409 until the stock is actually deducted.
+
+**How to run it.**
+
+```bash
+# Monolith (tier A)
+docker compose up -d
+
+# Split, two processes and two databases (tier C)
+export KEEL_INTERNAL_SECRET=$(openssl rand -base64 48)
+docker compose -f compose.yaml -f compose.split.yaml up -d --build
+./scripts/smoke.sh
+```
+
+There is a middle tier (B): one Postgres, with inventory in its own schema under its own
+role, which core's role cannot read. Moving an existing monolith to B or C means
+`scripts/split-migrate.sh` (`copy` → `verify` → `cutover`, re-runnable, with `rollback`) plus
+changing environment variables. No code changes. Step by step:
+[deployment guide](./docs/指南/部署与配置.md).
+
+**Availability.**
+
+- Every role can run several instances behind one address. All state lives in the database:
+  row locks, advisory locks and outbox jobs. Health checks are `/healthz` and `/readyz` on the
+  internal port. Several `core` instances also need the coordinator on Postgres instead of
+  the default SQLite (see the deployment guide).
+- When inventory is down:
+  - browsing and search still work (the in-stock flag is omitted);
+  - stock-dependent endpoints return 503;
+  - an order placed in the meantime finishes on the coordinator's next retry after inventory
+    returns (backoff caps at 5 minutes);
+  - release jobs retry until it's back.
+- You don't need service discovery or a config center to start. `KEEL_INVENTORY_URL` should
+  be a stable name (a DNS name, Kubernetes Service or load balancer), not an instance address,
+  because in-flight SAGAs have their branch addresses persisted.
+- Add discovery once you're running many services whose addresses change dynamically. The
+  change is small because every address is resolved in one place (`dtm.BranchResolver` and
+  `rpc.Client`), and configuration is read once at startup.
+- The internal secret rotates without draining (`KEEL_INTERNAL_SECRET_PREVIOUS`).
+
+**Splitting the next service** reuses the same machinery: roles, the signed internal client,
+configurable branch addresses, the outbox, a per-service migration directory and the
+two-database test harness. The work is in the boundary:
+
+1. List every JOIN that crosses it and every local transaction that writes both sides.
+2. Replace each JOIN with "fetch your own rows, batch-ask the other service, merge in Go".
+3. Replace each transaction with a SAGA branch or an outbox job.
+4. Drop the cross-boundary foreign keys, and let reconciliation report orphans.
+5. Add a test that the two sides' query files never touch each other's tables.
+
+The inventory split is the worked example:
+[microservice split plan](./docs/电商系统-微服务拆分方案.md).
 
 ---
 
