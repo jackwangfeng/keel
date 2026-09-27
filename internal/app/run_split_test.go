@@ -142,6 +142,9 @@ func TestRunRefusesBadSplitConfig(t *testing.T) {
 			[]string{app.EnvInternalSecret}},
 		{"远端地址格式不对", map[string]string{app.EnvInventoryURL: "inventory:8090", app.EnvInternalSecret: internalSecret},
 			[]string{"inventory:8090"}},
+		// 阶段 1a 的决定：core 的库存调用只走远端，没配地址就不起来（见 split.go 的 validate）。
+		{"core 没有远端地址", map[string]string{app.EnvRole: "core"},
+			[]string{app.EnvInventoryURL}},
 		{"inventory 配了远端地址", map[string]string{app.EnvRole: "inventory", app.EnvInternalAddr: "127.0.0.1:18092",
 			app.EnvInternalSecret: internalSecret, app.EnvInventoryURL: "http://inventory:8090"},
 			[]string{app.EnvInventoryURL}},

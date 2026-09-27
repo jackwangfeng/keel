@@ -422,7 +422,7 @@ func searchCapturingLog(t *testing.T, emb inference.Embedder, ctx context.Contex
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
 	defer slog.SetDefault(prev)
 
-	svc := service.NewSearchService(repository.New(testPool), emb, service.SearchConfig{}, nil)
+	svc := service.NewSearchService(repository.New(testPool), localInventory(), emb, service.SearchConfig{}, nil)
 	res, err := svc.Search(ctx, req)
 	if err != nil {
 		t.Fatalf("检索报错：%v", err)
@@ -832,7 +832,7 @@ func TestEmbedTimeoutGrowsWithQueryLength(t *testing.T) {
 	// 而不是「把常数调大了」。
 	for _, n := range []int{60, service.MaxQueryRunes} {
 		query := strings.Repeat("连衣裙", n/3)[:0] + strings.Repeat("裙", n)
-		svc := service.NewSearchService(repository.New(testPool),
+		svc := service.NewSearchService(repository.New(testPool), localInventory(),
 			slowByLengthEmbedder{perRune: 2 * time.Millisecond}, service.SearchConfig{}, nil)
 		res, err := svc.Search(ctx, service.SearchRequest{
 			Query:   query,
@@ -851,7 +851,7 @@ func TestEmbedTimeoutGrowsWithQueryLength(t *testing.T) {
 
 	// 阴性对照：慢到超出上限时仍然要降级（而不是变成无限等待）。
 	// 少了它，「不降级」也可能只是因为超时被取消掉了。
-	svc := service.NewSearchService(repository.New(testPool),
+	svc := service.NewSearchService(repository.New(testPool), localInventory(),
 		slowByLengthEmbedder{perRune: 40 * time.Millisecond}, service.SearchConfig{}, nil)
 	res, err := svc.Search(ctx, service.SearchRequest{
 		Query:   strings.Repeat("裙", 60),
@@ -1079,7 +1079,7 @@ func TestSearchStillReturnsWhenKeywordRouteFails(t *testing.T) {
 	fx := newSearchFixture(t)
 
 	svc := service.NewSearchService(
-		keywordBrokenRepo{inner: repository.New(testPool)}, conceptEmbedder{},
+		keywordBrokenRepo{inner: repository.New(testPool)}, localInventory(), conceptEmbedder{},
 		service.SearchConfig{}, nil)
 	res, err := svc.Search(tenant.NewContext(t.Context(), fx.MerchantA),
 		service.SearchRequest{Query: "连衣裙", Filters: service.SearchFilters{InStockOnly: true}})
@@ -1187,7 +1187,7 @@ func TestBothRecallPathsFilterIdentically(t *testing.T) {
 		return v, k
 	}
 
-	baseVec, baseKw := recall(repository.SearchFilters{InStockOnly: false})
+	baseVec, baseKw := recall(repository.SearchFilters{})
 	common := map[int64]bool{}
 	for id := range baseVec {
 		if baseKw[id] {
@@ -1212,7 +1212,9 @@ func TestBothRecallPathsFilterIdentically(t *testing.T) {
 		{"价格下界 20000", repository.SearchFilters{MinPriceCents: &minC}},
 		{"价格上界 20000", repository.SearchFilters{MaxPriceCents: &maxC}},
 		{"限定女装类目", repository.SearchFilters{CategoryID: &dressCat}},
-		{"只看有货", repository.SearchFilters{InStockOnly: true}},
+		// 「只看有货」不在这张表里了（微服务拆分阶段 1a）：它不再是两条召回 SQL 各写一遍的
+		// 过滤，而是 service 在召回之后的**一处**过滤（service/search.go 的 applyStock），
+		// 两路「逐字一致」的风险随之消失。它的行为由服务层那几条 in_stock_only 的测试验。
 	}
 	for _, c := range cases {
 		gotVec, gotKw := recall(c.f)

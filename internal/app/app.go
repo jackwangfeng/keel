@@ -24,6 +24,7 @@ import (
 	"github.com/keel/keel/internal/dtm"
 	"github.com/keel/keel/internal/handler"
 	"github.com/keel/keel/internal/inference"
+	"github.com/keel/keel/internal/inventory"
 	"github.com/keel/keel/internal/problem"
 	"github.com/keel/keel/internal/repository"
 	"github.com/keel/keel/internal/service"
@@ -169,9 +170,21 @@ func sandboxEnabled(v string) bool {
 // 今天**只有**这个形态：栈起得来、搜索有结果，只是没有语义召回。
 // 它与「派生数据入库任务没有引擎就拒绝构造」刻意相反，两边的理由都写在
 // service/search.go 与 service/index.go 的文件头。
+//
+// opts 目前只有 WithInventory（微服务拆分阶段 1a）：不给时库存服务是建在 pool 上的
+// 进程内实现 —— 单体形态，也是全部既有测试走的那一条。Run 在 KEEL_ROLE=core 时给的是
+// HTTP 实现，库存在进程内时给的是建在库存池上的进程内实现。
 func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	orders *service.OrderService, payment service.PaymentConfig,
-	embedder inference.Embedder) *gin.Engine {
+	embedder inference.Embedder, opts ...RouterOption) *gin.Engine {
+	ro := routerOptions{}
+	for _, o := range opts {
+		o(&ro)
+	}
+	inv := ro.inventory
+	if inv == nil {
+		inv = inventory.NewLocal(repository.NewInventoryStore(pool))
+	}
 	r := gin.New()
 	// Run 在建连接池之前已经校验过这份名单，这里再出错只可能是测试直接调 Router 时配错了。
 	if err := trustProxies(r, os.Getenv(EnvTrustedProxies)); err != nil {
@@ -217,7 +230,7 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	r.GET("/version", func(c *gin.Context) { c.JSON(http.StatusOK, buildinfo.Get()) })
 
 	repo := repository.New(pool)
-	ph := handler.NewProductHandler(service.NewProductService(repo))
+	ph := handler.NewProductHandler(service.NewProductService(repo, inv))
 	ah := handler.NewAuthHandler(service.NewAuthService(repo, signer, nil))
 	oh := handler.NewOrderHandler(orders)
 
@@ -250,7 +263,7 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	// 挡不住什么，都写在 ratelimit.go 的文件头。请求体大小闸门在 handler 里
 	// （handler.MaxSearchBodyBytes），和 webhook 那处同一个顺序：先限大小再解析。
 	srh := handler.NewSearchHandler(
-		service.NewSearchService(repo, embedder, service.SearchConfig{}, nil))
+		service.NewSearchService(repo, inv, embedder, service.SearchConfig{}, nil))
 	v1.POST("/search", rateLimitByIP(searchRateLimiterFromEnv()), srh.Search)
 
 	// 搜索行为回传（契约 security: []，与 /search 一样公开：没登录的访客也在点）。
@@ -366,7 +379,7 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	v1.DELETE("/addresses/:address_id", auth.Bearer(signer, nil), addr.Delete)
 	v1.PUT("/addresses/:address_id/default", auth.Bearer(signer, nil), addr.SetDefault)
 
-	cart := handler.NewCartHandler(service.NewCartService(repo))
+	cart := handler.NewCartHandler(service.NewCartService(repo, inv))
 	v1.GET("/cart", auth.Bearer(signer, nil), cart.Get)
 	v1.DELETE("/cart", auth.Bearer(signer, nil), cart.Clear)
 	v1.POST("/cart/items", auth.Bearer(signer, nil), cart.AddItem)
@@ -463,7 +476,7 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	store := uploadStoreFromEnv()
 
 	cat := handler.NewAdminCatalogHandler(
-		service.NewAdminCatalogService(repo, store))
+		service.NewAdminCatalogService(repo, store, inv))
 
 	v1.POST("/admin/uploads", staffAuth, cat.CreateUpload)
 
@@ -490,7 +503,7 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	// service（与商品写接口同一行：管理员 / 操作员）。推理引擎交的是上面那个
 	// embedder —— 没配时是真的 nil 接口（Run 里 searchEmbedder 那一段），
 	// 类目推荐降级为「需手选」，导入本身不受影响。
-	imp := handler.NewProductImportHandler(service.NewProductImportService(repo, embedder))
+	imp := handler.NewProductImportHandler(service.NewProductImportService(repo, embedder, inv))
 	v1.GET("/admin/product-imports/template", staffAuth, imp.Template)
 	v1.POST("/admin/product-imports/preview", staffAuth, imp.Preview)
 	v1.POST("/admin/product-imports", staffAuth, imp.Commit)
@@ -538,7 +551,7 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	//   · internal/handler 的 TestAdminStoreRoutesAllRequireStaffSession
 	//     **逐条**不带令牌打一次，断言它们全是 401。只核路径的话，
 	//     把这一行的 staffAuth 删掉，路由表一个字都不会变。
-	st := handler.NewAdminStoreHandler(service.NewAdminStoreService(repo))
+	st := handler.NewAdminStoreHandler(service.NewAdminStoreService(repo, inv))
 
 	v1.GET("/admin/regions", staffAuth, st.ListRegions)
 	v1.POST("/admin/regions", staffAuth, st.CreateRegion)
@@ -602,7 +615,7 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	// 经营报表（契约 Report tag，迁移 00057 的索引）。八条都是只读聚合（六条 JSON + 两份 CSV 导出）。
 	// 范围与后台订单列表同一个判据（service/authz.go 的 orderListScope），
 	// 搜索概况只放全店范围的人（检索日志没有门店维度）。判据全在 service/report.go。
-	rpt := handler.NewAdminReportHandler(service.NewReportService(repo))
+	rpt := handler.NewAdminReportHandler(service.NewReportService(repo, inv))
 	v1.GET("/admin/reports/overview", staffAuth, rpt.Overview)
 	v1.GET("/admin/reports/trend", staffAuth, rpt.Trend)
 	v1.GET("/admin/reports/products", staffAuth, rpt.Products)
@@ -733,10 +746,10 @@ func Run(ctx context.Context, listen func(addr string, h http.Handler) error) er
 	if cfg.Split.Role == RoleInventory {
 		return runInventory(ctx, cfg.Split, listen)
 	}
-	if cfg.Split.InventoryURL != "" {
-		// 阶段 0：地址与密钥已经校验过，但还没有任何调用走它 —— 库存仍在进程内。
-		// 不喊的话，配了它的人会以为库存已经拆出去了。
-		slog.WarnContext(ctx, EnvInventoryURL+" 已配置，但本版本的库存调用仍在进程内（拆分部署阶段 1 起生效）")
+	if cfg.Split.Role == RoleAll && cfg.Split.InventoryURL != "" {
+		// 单体的库存就在进程内，这个地址没有人用。不喊的话，配了它的人会以为库存已经拆出去了。
+		slog.WarnContext(ctx, EnvInventoryURL+" 已配置，但 "+EnvRole+"=all 是单体、库存调用在进程内，"+
+			"这个地址被忽略；要让库存走远端请用 "+EnvRole+"=core")
 	}
 
 	pool, err := db.NewPool(ctx)
@@ -745,8 +758,9 @@ func Run(ctx context.Context, listen func(addr string, h http.Handler) error) er
 	}
 	defer pool.Close()
 
-	// 库存池：没配 KEEL_INVENTORY_DSN 时就是上面这个池。阶段 0 里只有内网服务的
-	// /readyz 用它；阶段 1 起库存仓储只用它。
+	// 库存池：没配 KEEL_INVENTORY_DSN 时就是上面这个池。库存服务的仓储
+	// （repository.InventoryStore）只用它，内网服务的 /readyz 查的也是它。
+	// 阶段 1b 之前，下单扣减与关单 / 退款回补仍走业务池（见 inventory 包的文件头）。
 	invPool, closeInv, err := inventoryPool(ctx, cfg.Split, pool)
 	if err != nil {
 		return err
@@ -904,7 +918,11 @@ func Run(ctx context.Context, listen func(addr string, h http.Handler) error) er
 		return err
 	}
 
-	public := Router(pool, res, signer, orders, cfg.Payment, searchEmbedder)
+	inv, err := inventoryService(cfg.Split, invPool)
+	if err != nil {
+		return err
+	}
+	public := Router(pool, res, signer, orders, cfg.Payment, searchEmbedder, WithInventory(inv))
 	if cfg.Split.InternalAddr == "" {
 		return listen(cfg.Addr, public)
 	}

@@ -74,6 +74,14 @@ type StoreInventory struct {
 	UpdatedAt    time.Time
 }
 
+// StoreInventorySKU 是门店库存清单里 SKU 那一半：水位由库存服务补。
+// UpdatedAt 是 SKU 自己的更新时间 —— 这家店缺行时清单回落到它（拆分前的 COALESCE）。
+type StoreInventorySKU struct {
+	SKUID     int64
+	SKUCode   string
+	UpdatedAt time.Time
+}
+
 // ScopedCatalogTx 是这一块的接口面。
 type ScopedCatalogTx interface {
 	ListStoreProducts(ctx context.Context, storeID, regionID int64, listed *bool, limit, offset int32) ([]ScopedListing, int64, error)
@@ -86,11 +94,15 @@ type ScopedCatalogTx interface {
 	SetRegionPrice(ctx context.Context, regionID, skuID, priceCents int64) (ScopedPrice, error)
 	ClearRegionPrice(ctx context.Context, regionID, skuID int64) error
 
-	ListStoreInventories(ctx context.Context, storeID int64, lowStockOnly bool, limit, offset int32) ([]StoreInventory, int64, error)
-	SetStoreInventory(ctx context.Context, storeID, skuID int64, in InventorySet) (StoreInventory, error)
-	// AdjustStoreInventory 是按门店的相对调整（available_qty += delta，结果不得为负），
-	// 并在同一个事务里写一行 biz_type = 5 的流水。三条出路见实现上的注释。
-	AdjustStoreInventory(ctx context.Context, storeID, skuID int64, in InventoryAdjust) (StoreInventory, error)
+	// 门店库存的 core 那一半（微服务拆分阶段 1a）。水位的读写归库存服务
+	// （inventory.Service），这里只剩要 JOIN skus / stores / 覆盖表才答得出的两件事。
+	//
+	// ListStoreInventorySKUs 是门店库存清单的 SKU 一页（未软删、按 id 升序），
+	// excludeSKUIDs 里的不算（low_stock_only 时是这家店水位高于预警线的那批）。
+	ListStoreInventorySKUs(ctx context.Context, excludeSKUIDs []int64, limit, offset int32) ([]StoreInventorySKU, int64, error)
+	// SKUSellableInStore 是改库存之前的可售判定：SKU 与门店都可见且未软删、
+	// 这家店与它所在大区都没有下架这件商品。
+	SKUSellableInStore(ctx context.Context, storeID, skuID int64) (bool, error)
 
 	// SoleStore 返回本租户唯一那家未软删门店的 id。
 	// 有零家或多家时返回 ErrStoreAmbiguous —— 契约把那条不带门店的库存路径
@@ -105,39 +117,8 @@ type InventorySet struct {
 	ExpectedAvailableQty int32
 	WarningQty           *int32
 	// BizID 是这次覆盖在流水里的 biz_id（「set:<staff_id>:<随机串>」，service 拼好）。
-	// 数量真的变了才用得上，见 logInventorySet。
+	// 数量真的变了才用得上 —— 流水由库存服务写（inventory.Local.Set）。
 	BizID string
-}
-
-// logInventorySet 给一次成功的比较并设置写一行 biz_type = 5 的流水。
-//
-// CAS 成功就证明写之前的值**恰好是 expected**（WHERE 里就是这个条件；缺行时 expected
-// 只能是 0，缺行 ≡ 可售 0），所以 before / change 不用再读一次就是精确的 ——
-// 多读一次才是多一个快照。数量没变（只改预警线，或设成原值）时不写：流水记的是
-// 库存变动，一行 +0 只会让对账多一行噪音。
-func (t tenantTx) logInventorySet(ctx context.Context, storeID, skuID int64,
-	expected, after int32, bizID string) error {
-	if after == expected {
-		return nil
-	}
-	if bizID == "" {
-		// 空 biz_id 的流水说不出是谁、哪一次改的 —— 那正是这一行存在的理由。
-		return fmt.Errorf("sku %d 的库存覆盖没有 biz_id，拒绝写一行说不清来源的流水", skuID)
-	}
-	return t.q.AppendManualInventoryLog(ctx, db.AppendManualInventoryLogParams{
-		SkuID: skuID, StoreID: storeID, ChangeQty: after - expected, BizID: bizID,
-		BeforeAvailable: expected, AfterAvailable: after,
-	})
-}
-
-// InventoryAdjust 是一次相对调整的全部输入。
-//
-// BizID 由 service 拼好递下来（「adj:<staff_id>:<Idempotency-Key>」），不在这一层现编：
-// 这一层不认识员工，也不认识幂等键，而流水的 biz_id 要能顺着它找回那一次请求。
-type InventoryAdjust struct {
-	Delta  int32
-	Reason *string
-	BizID  string
 }
 
 // ---------------------------------------------------------------------------
@@ -394,89 +375,36 @@ func (t tenantTx) regionPrice(ctx context.Context, regionID, skuID int64) (Scope
 // 按门店的库存
 // ---------------------------------------------------------------------------
 
-func (t tenantTx) ListStoreInventories(ctx context.Context, storeID int64, lowStockOnly bool,
-	limit, offset int32) ([]StoreInventory, int64, error) {
-	rows, err := t.q.AdminListStoreInventories(ctx, db.AdminListStoreInventoriesParams{
-		StoreID: storeID, LowStockOnly: lowStockOnly, PageLimit: limit, PageOffset: offset,
+func (t tenantTx) ListStoreInventorySKUs(ctx context.Context, excludeSKUIDs []int64,
+	limit, offset int32) ([]StoreInventorySKU, int64, error) {
+	if excludeSKUIDs == nil {
+		// nil 会被编码成 SQL NULL，而 NOT (x = ANY(NULL)) 是 NULL —— 每一行都被滤掉，
+		// 症状是「这家店一个 SKU 都没有」。
+		excludeSKUIDs = []int64{}
+	}
+	rows, err := t.q.AdminListStoreInventorySKUs(ctx, db.AdminListStoreInventorySKUsParams{
+		ExcludeSkuIds: excludeSKUIDs, PageLimit: limit, PageOffset: offset,
 	})
 	if err != nil {
 		return nil, 0, err
 	}
-	total, err := t.q.AdminCountStoreInventories(ctx, db.AdminCountStoreInventoriesParams{
-		StoreID: storeID, LowStockOnly: lowStockOnly,
-	})
+	total, err := t.q.AdminCountStoreInventorySKUs(ctx, excludeSKUIDs)
 	if err != nil {
 		return nil, 0, err
 	}
-	out := make([]StoreInventory, 0, len(rows))
+	out := make([]StoreInventorySKU, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, StoreInventory{
-			SKUID: r.SkuID, StoreID: storeID, SKUCode: r.SkuCode,
-			AvailableQty: r.AvailableQty, WarningQty: r.WarningQty,
-			UpdatedAt: r.UpdatedAt.Time,
-		})
+		out = append(out, StoreInventorySKU{SKUID: r.SkuID, SKUCode: r.SkuCode, UpdatedAt: r.UpdatedAt.Time})
 	}
 	return out, total, nil
 }
 
-// SetStoreInventory 是按门店的比较并设置。三条出路：
-//
-//	err == nil                                成功
-//	errors.Is(err, ErrCatalogNotFound)        门店 / SKU 不可见，或这家店不卖它
-//	*InventoryConflict（errors.As）            CAS 对不上，带当前真实值
-//
-// 三种 404 合成一个 sentinel，因为契约把它们合成了一个响应：两个 id 都在
-// 路径里，「这个 URI 下没有这个资源」是 404 的本义。而 409 必须分得开 ——
-// 把「不是你的 SKU」报成 409 会让调用方以为重读一次再试就能成功，
-// 而那个循环永远不会结束。
-func (t tenantTx) SetStoreInventory(ctx context.Context, storeID, skuID int64,
-	in InventorySet) (StoreInventory, error) {
-	row, err := t.q.SetStoreInventoryByCAS(ctx, db.SetStoreInventoryByCASParams{
-		StoreID: storeID, SkuID: skuID,
-		AvailableQty:         in.AvailableQty,
-		ExpectedAvailableQty: in.ExpectedAvailableQty,
-		WarningQty:           in.WarningQty,
-	})
-	if err != nil {
-		return StoreInventory{}, err
+func (t tenantTx) SKUSellableInStore(ctx context.Context, storeID, skuID int64) (bool, error) {
+	if storeID <= 0 {
+		// 漏传 store_id 的症状是「每一个 SKU 都 404」，一个看起来像鉴权问题的 bug。
+		return false, fmt.Errorf("sku %d 的可售判定没有门店上下文", skuID)
 	}
-	if row.SellableRows == 0 {
-		return StoreInventory{}, fmt.Errorf(
-			"sku %d 在门店 %d 不可见或已下架: %w", skuID, storeID, ErrCatalogNotFound)
-	}
-	if row.WrittenRows == 0 {
-		// CAS 对不上。当前值一起回传 —— 契约把它定成必填（InventoryConflict），
-		// 拿不到的话后台只能自己再查一次，而那一跳正是这个字段要省掉的。
-		//
-		// current_rows = 0 时（这家店根本没这一行，而 expected 不是 0）
-		// 当前值就是「可售 0」：缺行 ≡ 可售 0，这里把那条语义兑现成一个
-		// 调用方能直接照着重试的数。
-		cur := StoreInventory{SKUID: skuID, StoreID: storeID}
-		if row.CurrentAvailableQty != nil {
-			cur.AvailableQty = *row.CurrentAvailableQty
-		}
-		if row.CurrentWarningQty != nil {
-			cur.WarningQty = *row.CurrentWarningQty
-		}
-		if row.CurrentUpdatedAt.Valid {
-			cur.UpdatedAt = row.CurrentUpdatedAt.Time
-		}
-		return StoreInventory{}, &StoreInventoryConflict{Current: cur}
-	}
-	out := StoreInventory{SKUID: skuID, StoreID: storeID}
-	if row.NewAvailableQty != nil {
-		out.AvailableQty = *row.NewAvailableQty
-	}
-	if row.NewWarningQty != nil {
-		out.WarningQty = *row.NewWarningQty
-	}
-	if row.NewUpdatedAt.Valid {
-		out.UpdatedAt = row.NewUpdatedAt.Time
-	}
-	if err := t.logInventorySet(ctx, storeID, skuID, in.ExpectedAvailableQty, out.AvailableQty, in.BizID); err != nil {
-		return StoreInventory{}, err
-	}
-	return out, nil
+	return t.q.SKUSellableInStore(ctx, db.SKUSellableInStoreParams{StoreID: storeID, SkuID: skuID})
 }
 
 // StoreInventoryConflict 是按门店那条 CAS 的 409，带当前真实值。
@@ -517,81 +445,6 @@ func (e *InventoryInsufficient) Error() string {
 
 // Unwrap 让 errors.Is(err, ErrInventoryInsufficient) 成立。
 func (e *InventoryInsufficient) Unwrap() error { return ErrInventoryInsufficient }
-
-// AdjustStoreInventory 是按门店的相对调整。三条出路：
-//
-//	err == nil                                 成功（流水已在同一个事务里写好）
-//	errors.Is(err, ErrCatalogNotFound)         门店 / SKU 不可见，或这家店不卖它
-//	*InventoryInsufficient（errors.As）         扣完会变负，带当前水位
-//
-// 404 与 409 的分辨发生在 SQL 里（AdjustStoreInventory 的 sellable / wrote 两个 CTE，
-// 同一个 MVCC 快照），这一层只把两个计数翻成两种错误 —— 与 SetStoreInventory 同构。
-//
-// **流水排在写库存之后、同一个事务里**，这一层不开事务：调用方（service）已经在
-// WithTenant 里，幂等存档也在那同一个事务里。流水写失败，整个事务回滚，
-// 库存那一笔随之消失 —— 不会出现「库存加了、流水没有」的对不平。
-func (t tenantTx) AdjustStoreInventory(ctx context.Context, storeID, skuID int64,
-	in InventoryAdjust) (StoreInventory, error) {
-	if storeID <= 0 {
-		// 漏传 store_id 的症状是「每一个 SKU 都 404」，一个看起来像鉴权问题的 bug
-		// （SetInventory 上那段注释的同一条）。
-		return StoreInventory{}, fmt.Errorf("sku %d 的相对调整没有门店上下文", skuID)
-	}
-	if in.Delta == 0 {
-		// service 已经按契约拒过（422）。这里再挡一道是因为 0 会在流水里留一行
-		// before = after 的噪声，而这一层看不见调用方是谁。
-		return StoreInventory{}, fmt.Errorf("sku %d 的相对调整 delta 为 0", skuID)
-	}
-	if in.BizID == "" {
-		return StoreInventory{}, fmt.Errorf("sku %d 的相对调整没有 biz_id —— 流水会追不回那一次请求", skuID)
-	}
-	row, err := t.q.AdjustStoreInventory(ctx, db.AdjustStoreInventoryParams{
-		StoreID: storeID, SkuID: skuID, Delta: in.Delta,
-	})
-	if err != nil {
-		return StoreInventory{}, err
-	}
-	if row.SellableRows == 0 {
-		return StoreInventory{}, fmt.Errorf(
-			"sku %d 在门店 %d 不可见或已下架: %w", skuID, storeID, ErrCatalogNotFound)
-	}
-	if row.WrittenRows == 0 {
-		// 扣完会变负。缺行（current 全为 NULL）时当前值就是「可售 0」——
-		// 缺行 ≡ 可售 0，这里把那条语义兑现成一个调用方能直接看懂的数。
-		cur := StoreInventory{SKUID: skuID, StoreID: storeID}
-		if row.CurrentAvailableQty != nil {
-			cur.AvailableQty = *row.CurrentAvailableQty
-		}
-		if row.CurrentWarningQty != nil {
-			cur.WarningQty = *row.CurrentWarningQty
-		}
-		if row.CurrentUpdatedAt.Valid {
-			cur.UpdatedAt = row.CurrentUpdatedAt.Time
-		}
-		return StoreInventory{}, &InventoryInsufficient{Delta: in.Delta, Current: cur}
-	}
-	if row.NewAvailableQty == nil || row.NewWarningQty == nil {
-		// 写成功却没回传水位，只可能是那条 SQL 被改坏了。不要静默返回 0：
-		// 0 是一个合法的库存水位，而且它会被拿去算流水的 before。
-		return StoreInventory{}, fmt.Errorf(
-			"sku %d 调整成功但没有回传水位——AdjustStoreInventory 的 SQL 被改坏了", skuID)
-	}
-	after := *row.NewAvailableQty
-	// before = after - delta 是精确的：那条语句写的就是 「+ delta」，
-	// 插入那一支（缺行）也是 0 + delta。不再读一次 —— 多读一次就是多一个快照。
-	if err := t.q.AppendManualInventoryLog(ctx, db.AppendManualInventoryLogParams{
-		SkuID: skuID, StoreID: storeID, ChangeQty: in.Delta, BizID: in.BizID,
-		BeforeAvailable: after - in.Delta, AfterAvailable: after, Reason: in.Reason,
-	}); err != nil {
-		return StoreInventory{}, err
-	}
-	out := StoreInventory{SKUID: skuID, StoreID: storeID,
-		AvailableQty: after, WarningQty: *row.NewWarningQty}
-	if row.NewUpdatedAt.Valid {
-		out.UpdatedAt = row.NewUpdatedAt.Time
-	}
-	return out, nil
-}
 
 func (t tenantTx) SoleStore(ctx context.Context) (int64, error) {
 	r, err := t.q.CountStoresForTenant(ctx)

@@ -23,18 +23,17 @@
 -- 的价格区间同一轮定成了「基准价区间，不含任何覆盖」，理由一字不差 ——
 -- 后台的商品页没有「当前门店」这个概念（契约在 AdminProduct 上明写了这一点）。
 -- 按门店看库存有自己的端点（GET /admin/stores/{store_id}/inventories）。
+--
+-- **本轮（微服务拆分阶段 1a）这次聚合搬出了 SQL**：inventories 归库存服务，
+-- 这条查询只取 SKU 本身，available_qty（sum）与 warning_qty（max）由 service 向库存服务
+-- 批量要回来再合并（InvSKUTotals，口径逐字相同）。上面讲 LEFT JOIN 与聚合口径的几段
+-- 仍然成立，只是执行的地方换了。
 -- 单店商家的两个数因此完全相同，多店商家看到的是一个对「这款还剩多少」
 -- 有意义的答案。warning_qty 取 max：预警线是一个阈值不是一个总量，
 -- 把五家店的阈值加起来没有任何含义。
 SELECT s.id, s.product_id, s.sku_code, s.spec_values, s.price_cents, s.cost_cents,
-       s.weight_gram, s.image_url, s.status, s.created_at, s.updated_at,
-       COALESCE(agg.qty,  0)::int AS available_qty,
-       COALESCE(agg.warn, 0)::int AS warning_qty
+       s.weight_gram, s.image_url, s.status, s.created_at, s.updated_at
   FROM skus s
-  LEFT JOIN LATERAL (
-        SELECT sum(i.available_qty) AS qty, max(i.warning_qty) AS warn
-          FROM inventories i WHERE i.sku_id = s.id
-       ) agg ON TRUE
  WHERE s.product_id = $1
    AND s.deleted_at IS NULL
  ORDER BY s.id;
@@ -42,20 +41,19 @@ SELECT s.id, s.product_id, s.sku_code, s.spec_values, s.price_cents, s.cost_cent
 -- name: AdminGetSKU :one
 -- 单个 SKU，软删的不返回（契约：软删之后一律 404）。
 SELECT s.id, s.product_id, s.sku_code, s.spec_values, s.price_cents, s.cost_cents,
-       s.weight_gram, s.image_url, s.status, s.created_at, s.updated_at,
-       COALESCE(agg.qty,  0)::int AS available_qty,
-       COALESCE(agg.warn, 0)::int AS warning_qty
+       s.weight_gram, s.image_url, s.status, s.created_at, s.updated_at
   FROM skus s
-  LEFT JOIN LATERAL (
-        SELECT sum(i.available_qty) AS qty, max(i.warning_qty) AS warn
-          FROM inventories i WHERE i.sku_id = s.id
-       ) agg ON TRUE
  WHERE s.id = $1
    AND s.deleted_at IS NULL;
 
 -- name: CreateSKU :one
--- 建 SKU。**库存行由 CreateInventoryRow 在同一个事务里紧接着建出来**，
--- 契约在这条端点上明写了这一条，理由值得抄在这里：
+-- 建 SKU。
+--
+-- **本轮（微服务拆分阶段 1a）库存行不再在同一个事务里建**：inventories 归库存服务，
+-- service 在这一行提交之后调库存服务的 InitSKU（门店取 DefaultStoreForNewSKU）。
+-- 下面这段是拆分前「同事务建行」的理由，留着是因为它说的风险（漏建库存行 ⇒ 永远缺货）
+-- 仍然是真的 —— 拆分后这个风险由「建行失败回 503、同一把幂等键重试会补建」兜住，
+-- 见 service/inventory_admin.go。
 --
 --   inventories.sku_id 是主键，而下单 SAGA 的正向分支是
 --   「UPDATE ... WHERE sku_id = $1 AND available_qty >= $2」。
@@ -77,25 +75,15 @@ VALUES (sqlc.arg(product_id), sqlc.arg(sku_code), sqlc.arg(spec_values),
 RETURNING id, product_id, sku_code, spec_values, price_cents, cost_cents,
           weight_gram, image_url, status, created_at, updated_at;
 
--- name: CreateInventoryRow :execrows
--- 见 CreateSKU 的注释。它只在建 SKU 的那个事务里被调用，
--- 而 repository 那一层不给调用方单独调它的机会。
+-- name: DefaultStoreForNewSKU :many
+-- 新 SKU 的第一行库存建在哪家店：默认门店（未软删；不看营业状态 —— 与拆分前
+-- CreateInventoryRow 的判据逐字一致）。没有默认门店时零行，那时一行库存都不建，
+-- **这不是失败**：缺行 ≡ 可售 0，一家刚开的店在录库存之前每个 SKU 都缺行。
+-- :many 而不是 :one，理由同拆分前那条：零行是合法结果，不该变成 ErrNoRows。
 --
--- **本轮（00020）它只给默认门店建那一行，而且可能一行都不建。**
---
--- 库存按门店分之后，「给这个新 SKU 建库存行」不再是一个有唯一答案的动作：
--- 给每一家店都建一行，就是把 inventories 变成 门店数 × SKU 数 的那张表 ——
--- 正是数据模型 §4 否掉「包含表」时算过的那个量级；而挑一家店建，
--- 那家店只能是默认店（回落目标，单店商家唯一的那一家）。
---
--- 没有默认店时一行都不建，**这不是失败**：缺行 ≡ 可售 0（§4 把这条写死了），
--- 一家刚开的店在录库存之前每个 SKU 都缺行，那是产品要的形态。
--- 所以返回的是行数而不是行 —— 0 行是一个合法的结果，:one 会让它变成
--- pgx.ErrNoRows，而那会把一次正常的建 SKU 报成失败。
-INSERT INTO inventories (sku_id, store_id, available_qty, warning_qty)
-SELECT sqlc.arg(sku_id), st.id, sqlc.arg(available_qty), sqlc.arg(warning_qty)
-  FROM stores st
- WHERE st.is_default AND st.deleted_at IS NULL;
+-- 建行本身（InvInitSKU）归库存服务，由 service 在 SKU 那一行提交之后调用；
+-- 顺序为什么是「先 SKU 后库存行」写在 service/inventory_admin.go。
+SELECT st.id FROM stores st WHERE st.is_default AND st.deleted_at IS NULL;
 
 -- name: UpdateSKU :one
 -- 部分更新，含改价。**没有 available_qty** —— 库存走 SetInventoryByCAS，
@@ -176,91 +164,3 @@ SELECT (SELECT count(*) FROM cur) AS visible_rows,
   FROM (SELECT 1) anchor
   LEFT JOIN cur  c  ON true
   LEFT JOIN prod pr ON true;
-
--- name: SetInventoryByCAS :one
--- 比较并设置（契约 PUT /admin/skus/{sku_id}/inventory）。
---
--- ### 本轮（00020）多了一个 store_id 参数，而路径上没有它
---
--- 库存主键变成 (sku_id, store_id) 之后，「这个 SKU 的库存」不再是一个有定义的
--- 东西。契约把这条路径的语义写死成「**本租户恰好有一家未软删的门店时，
--- 它就是那一家；否则 409 store-ambiguous**」，那一步判断在 repository 里做
--- （CountStoresForTenant），不在这条语句里 —— 让 SQL 自己挑一家，
--- 就等于在最热的写路径上默认了一个猜测，而猜错的后果是把另一家店的水位
--- 覆盖掉，没有任何东西会响。
---
--- 为什么不让它「默认落到默认门店」：那正是这条接口最不该做的事（契约原话）。
--- 是「恰好一家才可用，否则显式报错」，不是「猜一家」。
---
--- ### 这条接口和下单 SAGA 抢同一行
---
--- 下单正向分支是「UPDATE inventories SET available_qty = available_qty - $2
--- WHERE sku_id = $1 AND available_qty >= $2」。如果后台这里写一个无条件的
--- 绝对值覆盖，那么「商家看到 10、页面停了三分钟、期间卖掉 4 件、商家把它改成
--- 20」的结果是 20，而正确答案是 16 —— 并发下单扣掉的 4 件被一次后台覆盖抹掉了，
--- 而且没有任何东西会响。所以条件是 「available_qty = $expected」。
---
--- 不需要给 inventories 加 version 列：数据模型 §4 已经论证过这张表用的是
--- **条件原子更新**，这里只是把条件从 「>= $n」 换成 「= $expected」。
---
--- ### 两种 rows_affected = 0 必须在同一条语句里分开
---
---   ① CAS 不匹配              → 409 inventory-precondition-failed，
---                               并把**当前真实值**放进 Problem 的 current；
---   ② 这个 SKU 不在本租户 / 不存在 / 已软删 → 404。
---
--- 契约把这两条刻意分开，并写明了理由：把「不是你的 SKU」也报成 409 会让
--- 调用方以为重读一次再试就能成功，而那个循环永远不会结束。
---
--- 做法与 db/queries/inventories.sql 的 DeductInventory 同构：两个 CTE 看到的是
--- **同一个 MVCC 快照**，中间没有别的事务能把行删掉或改掉租户归属，于是
--- 「可见但没改成」与「根本不可见」不会因为竞态互换。拆成「先 SELECT 确认可见、
--- 再 UPDATE」是两次快照，而那个窗口正是这条接口存在的全部理由。
---
--- ### 第三种失败不在返回值里
---
--- 完全没设租户上下文时 current_merchant() 直接 RAISE，整条语句以 42501 失败，
--- 根本走不到返回值。它是配置错误，不是库存的任何一种状态。
---
--- ### 可见性为什么要 JOIN skus
---
--- inventories 是 parent-scoped 表，RLS 已经按 skus.merchant_id 挡住了别家的行。
--- 但 skus.deleted_at 是本轮（00018）新加的，RLS 不看它 —— 一个软删掉的 SKU
--- 的库存行仍在 RLS 视野内。契约说软删的 SKU 一律 404，所以这里显式加上。
--- 不加的话，后台能给一个「已经不存在」的规格改库存，而前台永远看不到它。
---
--- ### 两处 sqlc 逼出来的写法
---
--- 一、每个 CTE 里的表都带别名（inv / upd / sk / sk2）：sqlc 把整条语句的关系
---     拍平成一张表，同一张表出现两次就让每个裸列名都报 ambiguous。
--- 二、末尾那个 「FROM (SELECT 1) anchor LEFT JOIN ...」：换成标量子查询的话
---     sqlc 会把它推断成非空，而它在 CAS 失败那一支恰恰是 NULL，
---     于是 Scan 会在最该被区分开的那条路径上直接报错。
-WITH cur AS (
-    SELECT inv.sku_id, inv.available_qty, inv.warning_qty, inv.updated_at
-      FROM inventories inv
-      JOIN skus sk ON sk.id = inv.sku_id
-     WHERE inv.sku_id = sqlc.arg(sku_id) AND inv.store_id = sqlc.arg(store_id)
-       AND sk.deleted_at IS NULL
-), upd AS (
-    UPDATE inventories u
-       SET available_qty = sqlc.arg(available_qty),
-           warning_qty   = COALESCE(sqlc.narg(warning_qty), u.warning_qty),
-           updated_at    = now()
-     WHERE u.sku_id = sqlc.arg(sku_id) AND u.store_id = sqlc.arg(store_id)
-       AND u.available_qty = sqlc.arg(expected_available_qty)
-       AND EXISTS (SELECT 1 FROM skus sk2
-                    WHERE sk2.id = u.sku_id AND sk2.deleted_at IS NULL)
-    RETURNING u.sku_id, u.available_qty, u.warning_qty, u.updated_at
-)
-SELECT (SELECT count(*) FROM cur) AS visible_rows,
-       (SELECT count(*) FROM upd) AS updated_rows,
-       w.available_qty AS new_available_qty,
-       w.warning_qty   AS new_warning_qty,
-       w.updated_at    AS new_updated_at,
-       c.available_qty AS current_available_qty,
-       c.warning_qty   AS current_warning_qty,
-       c.updated_at    AS current_updated_at
-  FROM (SELECT 1) anchor
-  LEFT JOIN cur c ON true
-  LEFT JOIN upd w ON true;

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/keel/keel/internal/inventory"
 	"github.com/keel/keel/internal/repository"
 )
 
@@ -97,9 +98,15 @@ type ProductRepository interface {
 	WithTenant(ctx context.Context, fn func(repository.Tx) error) error
 }
 
-type ProductService struct{ repo ProductRepository }
+type ProductService struct {
+	repo ProductRepository
+	// inv 是库存服务（微服务拆分阶段 1a）：详情页的 SKU 水位与 in_stock 经它。
+	inv inventory.Service
+}
 
-func NewProductService(r ProductRepository) *ProductService { return &ProductService{repo: r} }
+func NewProductService(r ProductRepository, inv inventory.Service) *ProductService {
+	return &ProductService{repo: r, inv: inv}
+}
 
 // List 返回当前租户的在架商品。
 //
@@ -291,8 +298,20 @@ type ProductDetail struct {
 // 商品与 SKU 在**同一个事务**里读，理由与 List 里那对计数/取页一样：
 // 分两次访问的话，中间的一次下架会让「商品在架，但一个 SKU 都没有」这种
 // 自相矛盾的响应偶发出现。
+//
+// **水位在事务之后向库存服务批量问一次**（微服务拆分阶段 1a），按这家门店、这批 SKU，
+// 没问到的记可售 0（缺行 ≡ 可售 0）。在事务之外问，是为了不在攥着一条业务连接时
+// 等下游（单体形态下库存池就是业务池，那是整池互等；见 inventory_admin.go 的文件头）。
+//
+// 库存服务不可用（只在拆分形态出现）时整个详情回 503，而不是给一排 0：
+// Sku.available_qty 在契约里是必填的，编一个 0 会把每个规格渲染成售罄，
+// 而详情页存在的全部理由就是让用户挑一个有货的规格去买。列表与检索不受影响
+// （它们的 in_stock 是可选字段，照常返回）。
 func (s *ProductService) Detail(ctx context.Context, storeID *int64, id int64) (ProductDetail, error) {
-	var out ProductDetail
+	var (
+		out     ProductDetail
+		stockAt int64
+	)
 	err := s.repo.WithTenant(ctx, func(q repository.Tx) error {
 		sc, mt, err := scopeIn(ctx, q, storeID)
 		if errors.Is(err, ErrOutOfServiceArea) {
@@ -313,6 +332,7 @@ func (s *ProductService) Detail(ctx context.Context, storeID *int64, id int64) (
 			return err
 		}
 		out.Store = storeContextOf(sc, mt)
+		stockAt = sc.StoreID
 		rows, err := q.ListProductSKUs(ctx, sc, p.ID)
 		if err != nil {
 			return err
@@ -340,22 +360,17 @@ func (s *ProductService) Detail(ctx context.Context, storeID *int64, id int64) (
 		}
 
 		skus := make([]SKU, 0, len(rows))
-		inStock := false
 		for _, r := range rows {
 			spec, err := DecodeSpecValues(r.SpecValues)
 			if err != nil {
 				return fmt.Errorf("sku %d 的 spec_values 解不开: %w", r.ID, err)
 			}
-			if r.AvailableQty > 0 {
-				inStock = true
-			}
 			sku := SKU{
-				ID:           r.ID,
-				SKUCode:      r.SKUCode,
-				SpecValues:   spec,
-				PriceCents:   r.PriceCents,
-				ImageURL:     r.ImageURL,
-				AvailableQty: r.AvailableQty,
+				ID:         r.ID,
+				SKUCode:    r.SKUCode,
+				SpecValues: spec,
+				PriceCents: r.PriceCents,
+				ImageURL:   r.ImageURL,
 			}
 			if pp, ok := promoPrices[r.ID]; ok {
 				price, promo := pp.PriceCents, pp.PromotionID
@@ -379,12 +394,26 @@ func (s *ProductService) Detail(ctx context.Context, storeID *int64, id int64) (
 			Description: p.Description,
 			SKUs:        skus,
 			Images:      images,
-			InStock:     inStock,
 		}
 		return nil
 	})
 	if err != nil {
 		return ProductDetail{}, err
+	}
+
+	ids := make([]int64, 0, len(out.SKUs))
+	for _, sk := range out.SKUs {
+		ids = append(ids, sk.ID)
+	}
+	levels, err := s.inv.StoreStock(ctx, stockAt, ids)
+	if err != nil {
+		return ProductDetail{}, err
+	}
+	for i := range out.SKUs {
+		out.SKUs[i].AvailableQty = levels[out.SKUs[i].ID].Available
+		if out.SKUs[i].AvailableQty > 0 {
+			out.InStock = true
+		}
 	}
 	return out, nil
 }

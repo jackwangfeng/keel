@@ -211,7 +211,7 @@ func TestSearchLogFailureDoesNotFailTheSearch(t *testing.T) {
 	defer slog.SetDefault(prev)
 
 	svc := service.NewSearchService(logBrokenRepo{inner: repository.New(testPool)},
-		conceptEmbedder{}, service.SearchConfig{}, nil)
+		localInventory(), conceptEmbedder{}, service.SearchConfig{}, nil)
 	res, err := svc.Search(tenant.NewContext(t.Context(), fx.MerchantA),
 		service.SearchRequest{Query: "连衣裙"})
 	if err != nil {

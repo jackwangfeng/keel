@@ -55,12 +55,14 @@ var notificationCallSites = map[string]notifyPolicy{
 		"那一单的失败由 POST /orders 同步告诉买家"},
 	"releaseClosedOrder/RestoreInventory": {Silent: "关单回补库存（升高）。超时关单那条路的通知在调用方 " +
 		"releasePending 里（order_timeout_closed），买家取消那条路不发（理由见 OrderService.Cancel）"},
-	"AdminCatalogService.SetInventory/SetInventory": {Silent: "后台手工改库存：动作是商家自己做的，" +
+	// 后台改库存四处（微服务拆分阶段 1a 起经库存服务 inventory.Service 写，登记的是 service 里
+	// 调 inv.Set / inv.Adjust / inv.InitSKUs 的那一处，见 notification_policy_test.go）。
+	"setStockSole/Set": {Silent: "后台手工改库存（单店捷径）：动作是商家自己做的，" +
 		"改到预警线以下时他正看着那个数"},
-	"AdminCatalogService.CreateSKU/CreateSKU":               {Silent: "建 SKU 时写初始库存：商家自己做的，理由同 SetInventory"},
-	"AdminStoreService.SetStoreInventory/SetStoreInventory": {Silent: "后台按门店改库存：商家自己做的，理由同 SetInventory"},
-	"adjustInventory/AdjustStoreInventory": {Silent: "后台相对调整库存（进货 / 盘亏 / 验货入库，两条路径共用）：" +
-		"商家自己做的，理由同 SetInventory —— 扣到预警线以下时他正看着那个数"},
+	"setStockInStore/Set":   {Silent: "后台按门店改库存：商家自己做的，理由同 setStockSole"},
+	"initSKUStock/InitSKUs": {Silent: "建 SKU 时写初始库存：商家自己做的，理由同 setStockSole"},
+	"adjustInventory/Adjust": {Silent: "后台相对调整库存（进货 / 盘亏 / 验货入库，两条路径共用）：" +
+		"商家自己做的，理由同 setStockSole —— 扣到预警线以下时他正看着那个数"},
 
 	// —— 营销活动的配额与每人限购（00058，与门店库存同一个事务）
 	"deductStock/ReservePromotionQuota": {Silent: "扣秒杀配额与每人限购：门店库存那条（同一个函数里的 DeductInventory）" +
@@ -68,8 +70,8 @@ var notificationCallSites = map[string]notifyPolicy{
 		"没抢到的买家由 POST /orders 同步收到 409 promotion-sold-out"},
 	"releasePromotionLine/ReleasePromotionQuota": {Silent: "SAGA 补偿、超时关单、买家取消时放回配额与限购（升高）；" +
 		"这几条路径的通知由各自的调用方决定（超时关单发 order_timeout_closed，另两条不发）"},
-	"ProductImportService.commitInTx/CreateSKU": {Silent: "批量导入时建 SKU 写初始库存：商家自己确认的导入，" +
-		"理由同 AdminCatalogService.CreateSKU；而且导入的商品是草稿，买家看不见，库存高低与任何人的订单无关"},
+	"ProductImportService.initImportStock/InitSKUs": {Silent: "批量导入时建 SKU 写初始库存：商家自己确认的导入，" +
+		"理由同 initSKUStock；而且导入的商品是草稿，买家看不见，库存高低与任何人的订单无关"},
 }
 
 // stateEdges 登记状态机的每一条边由哪条语句走（order:/refund: 前缀，与迁移里的

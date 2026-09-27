@@ -118,7 +118,7 @@ func TestSearchReturnsTheTraceIDOfItsLogRow(t *testing.T) {
 func TestSearchWithoutALogRowReturnsNoTraceID(t *testing.T) {
 	fx := newSearchFixture(t)
 	svc := service.NewSearchService(logBrokenRepo{inner: repository.New(testPool)},
-		conceptEmbedder{}, service.SearchConfig{}, nil)
+		localInventory(), conceptEmbedder{}, service.SearchConfig{}, nil)
 	res, err := svc.Search(tenant.NewContext(t.Context(), fx.MerchantA),
 		service.SearchRequest{Query: "连衣裙"})
 	if err != nil {
@@ -132,7 +132,7 @@ func TestSearchWithoutALogRowReturnsNoTraceID(t *testing.T) {
 	}
 
 	// 对照：日志写得进去时它有值（否则上面那条可能只是 TraceID 从来没被赋过）。
-	ok := service.NewSearchService(repository.New(testPool), conceptEmbedder{}, service.SearchConfig{}, nil)
+	ok := service.NewSearchService(repository.New(testPool), localInventory(), conceptEmbedder{}, service.SearchConfig{}, nil)
 	res, err = ok.Search(tenant.NewContext(t.Context(), fx.MerchantA), service.SearchRequest{Query: "连衣裙"})
 	if err != nil {
 		t.Fatal(err)

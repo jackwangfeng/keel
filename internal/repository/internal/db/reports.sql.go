@@ -11,123 +11,125 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const reportCountInventoryAlerts = `-- name: ReportCountInventoryAlerts :one
-SELECT count(*)::bigint
-  FROM inventories i
-  JOIN stores st  ON st.id = i.store_id
-  JOIN skus s     ON s.id = i.sku_id
+const reportAlertExcludedSKUs = `-- name: ReportAlertExcludedSKUs :many
+SELECT s.id
+  FROM skus s
   JOIN products p ON p.id = s.product_id
- WHERE i.available_qty <= i.warning_qty
-   AND st.deleted_at IS NULL
-   AND s.deleted_at IS NULL
-   AND p.deleted_at IS NULL
-   AND ($1::bigint IS NULL OR i.store_id = $1::bigint)
-   AND ($2::bigint IS NULL OR st.region_id = $2::bigint)
-   AND ($3::bigint[] IS NULL
-        OR st.region_id = ANY($3::bigint[]))
-   AND ($4::bigint[] IS NULL
-        OR i.store_id = ANY($4::bigint[]))
+ WHERE s.deleted_at IS NOT NULL OR p.deleted_at IS NOT NULL
 `
 
-type ReportCountInventoryAlertsParams struct {
-	StoreID       *int64
-	RegionID      *int64
-	OnlyRegionIds []int64
-	OnlyStoreIds  []int64
+// 不该出现在库存预警里的 SKU：软删的 SKU，与软删商品下的 SKU。
+// 拆分前是 ReportInventoryAlerts 里 s.deleted_at IS NULL 与 p.deleted_at IS NULL 两个条件；
+// 本轮作为排除列表递给库存服务（软删是少数，这个列表通常很短）。
+func (q *Queries) ReportAlertExcludedSKUs(ctx context.Context) ([]int64, error) {
+	rows, err := q.db.Query(ctx, reportAlertExcludedSKUs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
-// 条件必须与 ReportInventoryAlerts 逐字一致。
-func (q *Queries) ReportCountInventoryAlerts(ctx context.Context, arg ReportCountInventoryAlertsParams) (int64, error) {
-	row := q.db.QueryRow(ctx, reportCountInventoryAlerts,
-		arg.StoreID,
-		arg.RegionID,
-		arg.OnlyRegionIds,
-		arg.OnlyStoreIds,
-	)
-	var column_1 int64
-	err := row.Scan(&column_1)
-	return column_1, err
-}
-
-const reportInventoryAlerts = `-- name: ReportInventoryAlerts :many
-SELECT i.store_id,
-       st.name       AS store_name,
-       st.region_id,
-       i.sku_id,
-       s.sku_code,
-       s.spec_values,
-       s.product_id,
-       p.title       AS product_title,
-       i.available_qty,
-       i.warning_qty
-  FROM inventories i
-  JOIN stores st  ON st.id = i.store_id
-  JOIN skus s     ON s.id = i.sku_id
+const reportAlertSKUInfo = `-- name: ReportAlertSKUInfo :many
+SELECT s.id, s.sku_code, s.spec_values, s.product_id, p.title AS product_title
+  FROM skus s
   JOIN products p ON p.id = s.product_id
- WHERE i.available_qty <= i.warning_qty
-   AND st.deleted_at IS NULL
-   AND s.deleted_at IS NULL
-   AND p.deleted_at IS NULL
-   AND ($1::bigint IS NULL OR i.store_id = $1::bigint)
-   AND ($2::bigint IS NULL OR st.region_id = $2::bigint)
-   AND ($3::bigint[] IS NULL
-        OR st.region_id = ANY($3::bigint[]))
-   AND ($4::bigint[] IS NULL
-        OR i.store_id = ANY($4::bigint[]))
- ORDER BY i.available_qty - i.warning_qty, i.available_qty, i.store_id, i.sku_id
- LIMIT $5
+ WHERE s.id = ANY($1::bigint[])
 `
 
-type ReportInventoryAlertsParams struct {
-	StoreID       *int64
-	RegionID      *int64
-	OnlyRegionIds []int64
-	OnlyStoreIds  []int64
-	RowLimit      int32
-}
-
-type ReportInventoryAlertsRow struct {
-	StoreID      int64
-	StoreName    string
-	RegionID     int64
-	SkuID        int64
+type ReportAlertSKUInfoRow struct {
+	ID           int64
 	SkuCode      string
 	SpecValues   []byte
 	ProductID    int64
 	ProductTitle string
-	AvailableQty int32
-	WarningQty   int32
 }
 
-// 库存预警：可售不高于预警线的门店 SKU。i.available_qty <= i.warning_qty 这一句必须与
-// idx_inventories_warning 的谓词逐字一致，规划器才认得出那条部分索引。
-func (q *Queries) ReportInventoryAlerts(ctx context.Context, arg ReportInventoryAlertsParams) ([]ReportInventoryAlertsRow, error) {
-	rows, err := q.db.Query(ctx, reportInventoryAlerts,
+// 给库存预警补名字：货号、规格、所属商品与商品名。只查这一页的 SKU。
+func (q *Queries) ReportAlertSKUInfo(ctx context.Context, skuIds []int64) ([]ReportAlertSKUInfoRow, error) {
+	rows, err := q.db.Query(ctx, reportAlertSKUInfo, skuIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ReportAlertSKUInfoRow
+	for rows.Next() {
+		var i ReportAlertSKUInfoRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.SkuCode,
+			&i.SpecValues,
+			&i.ProductID,
+			&i.ProductTitle,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const reportAlertStores = `-- name: ReportAlertStores :many
+SELECT st.id, st.name, st.region_id
+  FROM stores st
+ WHERE st.deleted_at IS NULL
+   AND ($1::bigint IS NULL OR st.id = $1::bigint)
+   AND ($2::bigint IS NULL OR st.region_id = $2::bigint)
+   AND ($3::bigint[] IS NULL
+        OR st.region_id = ANY($3::bigint[]))
+   AND ($4::bigint[] IS NULL
+        OR st.id = ANY($4::bigint[]))
+ ORDER BY st.id
+`
+
+type ReportAlertStoresParams struct {
+	StoreID       *int64
+	RegionID      *int64
+	OnlyRegionIds []int64
+	OnlyStoreIds  []int64
+}
+
+type ReportAlertStoresRow struct {
+	ID       int64
+	Name     string
+	RegionID int64
+}
+
+// 库存预警的门店范围：未软删、落在筛选（store_id / region_id）与员工范围
+// （only_region_ids / only_store_ids）里的门店，带上补名字要用的店名与大区。
+//
+// 拆分前这些条件写在 ReportInventoryAlerts 的 JOIN stores 上。本轮（微服务拆分阶段 1a）
+// 预警行由库存服务按「显式的门店 id 列表」取（inventory_svc.sql 的 InvLowStock），
+// 门店那一半的判断留在 core：条件与拆分前逐字一致。
+func (q *Queries) ReportAlertStores(ctx context.Context, arg ReportAlertStoresParams) ([]ReportAlertStoresRow, error) {
+	rows, err := q.db.Query(ctx, reportAlertStores,
 		arg.StoreID,
 		arg.RegionID,
 		arg.OnlyRegionIds,
 		arg.OnlyStoreIds,
-		arg.RowLimit,
 	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ReportInventoryAlertsRow
+	var items []ReportAlertStoresRow
 	for rows.Next() {
-		var i ReportInventoryAlertsRow
-		if err := rows.Scan(
-			&i.StoreID,
-			&i.StoreName,
-			&i.RegionID,
-			&i.SkuID,
-			&i.SkuCode,
-			&i.SpecValues,
-			&i.ProductID,
-			&i.ProductTitle,
-			&i.AvailableQty,
-			&i.WarningQty,
-		); err != nil {
+		var i ReportAlertStoresRow
+		if err := rows.Scan(&i.ID, &i.Name, &i.RegionID); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

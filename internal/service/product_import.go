@@ -12,6 +12,7 @@ import (
 
 	"github.com/keel/keel/internal/catalogimport"
 	"github.com/keel/keel/internal/inference"
+	"github.com/keel/keel/internal/inventory"
 	"github.com/keel/keel/internal/repository"
 	"github.com/keel/keel/internal/understanding"
 )
@@ -106,6 +107,9 @@ type ProductImportService struct {
 	Gate understanding.CategoryGate
 	// RecommendBudget <= 0 时用 defaultRecommendBudget。给测试调短。
 	RecommendBudget time.Duration
+
+	// inv 是库存服务（微服务拆分阶段 1a）：导入建出来的 SKU 的初始库存经它建行。
+	inv inventory.Service
 }
 
 // NewProductImportService 建一个。emb 为 nil 是正常形态（没配 KEEL_EMBED_ENDPOINT
@@ -113,9 +117,10 @@ type ProductImportService struct {
 //
 // 传进来的必须是**真的 nil 接口**，不是装着 nil 指针的接口 —— 理由写在
 // app.Run 里 searchEmbedder 那一段。
-func NewProductImportService(r ProductImportRepository, emb inference.Embedder) *ProductImportService {
+func NewProductImportService(r ProductImportRepository, emb inference.Embedder, inv inventory.Service) *ProductImportService {
 	return &ProductImportService{
 		repo:        r,
+		inv:         inv,
 		recommender: understanding.NewCategoryRecommender(emb),
 		hasEngine:   emb != nil,
 		Compliance:  understanding.ComplianceCheck{},
@@ -623,10 +628,77 @@ func (s *ProductImportService) Commit(ctx context.Context, data []byte, fileName
 		fileName = string([]rune(fileName)[:maxImportFileName])
 	}
 
-	return idempotentTx(ctx, s.repo, repository.StaffSubject(id.StaffID), scopeAdminProductImport,
+	res, replayed, err := idempotentTx(ctx, s.repo, repository.StaffSubject(id.StaffID), scopeAdminProductImport,
 		idemKey, hash, archivedCreated, func(tx repository.Tx) (ImportResult, error) {
 			return s.commitInTx(ctx, tx, parsed, fileName, chosen, id.StaffID)
 		})
+	if err != nil {
+		return ImportResult{}, false, err
+	}
+	// 初始库存：导入事务提交之后建（阶段 1a，与单个建 SKU 同一个理由，见 initSKUStock）。
+	// 重放与「这份文件早就导过」两支也走这里 —— 建行可以放心重复，于是「重试」就是「补建」。
+	if err := s.initImportStock(ctx, res, parsed); err != nil {
+		return ImportResult{}, false, err
+	}
+	return res, replayed, nil
+}
+
+// initImportStock 给这次导入建出来的 SKU 建第一行库存（默认门店，初始量取文件里的库存列）。
+//
+// 不在导入事务里记下「建了哪些 SKU」，而是事后按回执里的 product_id 重新列一遍：
+// 回执会被存档、会被重放，而它里面没有 SKU id；重新列一遍让首次提交、Idempotency-Key 重放、
+// 同一份文件换一把钥匙再交（AlreadyImported）三条路走同一段代码。只认文件里出现过的货号 ——
+// 商家之后手工加的规格不归这里管。已经有库存行的 SKU（上一次其实建成了，或者之后被改过）
+// 由库存服务那一侧的守卫跳过，不会被初始值覆盖。
+//
+// 失败时（拆分形态下库存服务不可用）回错误：商品与 SKU 已经导进去了，用同一个
+// Idempotency-Key 重试即可补上初始库存。
+func (s *ProductImportService) initImportStock(ctx context.Context, res ImportResult,
+	parsed *catalogimport.Parsed) error {
+	stockByCode := make(map[string]int32, len(parsed.Rows))
+	for _, r := range parsed.Rows {
+		if r.Stock != nil {
+			stockByCode[r.SKUCode] = *r.Stock
+		}
+	}
+	var productIDs []int64
+	for _, o := range res.Products {
+		if o.Status == OutcomeCreated && o.ProductID != nil {
+			productIDs = append(productIDs, *o.ProductID)
+		}
+	}
+	if len(productIDs) == 0 {
+		return nil
+	}
+	var rows []inventory.InitRow
+	err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+		storeID, ok, err := tx.DefaultStoreForNewSKU(ctx)
+		if err != nil || !ok {
+			// 没有默认门店：一行都不建，不是失败（缺行 ≡ 可售 0）。
+			return err
+		}
+		for _, pid := range productIDs {
+			skus, err := tx.AdminListProductSKUs(ctx, pid)
+			if err != nil {
+				return err
+			}
+			for _, sk := range skus {
+				qty, ok := stockByCode[sk.SKUCode]
+				if !ok {
+					continue
+				}
+				rows = append(rows, inventory.InitRow{SKUID: sk.ID, StoreID: storeID, Available: qty})
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if err := s.inv.InitSKUs(ctx, rows); err != nil {
+		return fmt.Errorf("商品已导入，初始库存还没写进库存服务（用同一个 Idempotency-Key 重试即可补上）: %w", err)
+	}
+	return nil
 }
 
 func (s *ProductImportService) commitInTx(ctx context.Context, tx repository.Tx,

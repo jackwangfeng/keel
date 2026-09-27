@@ -17,6 +17,10 @@ type AdminProductTx interface {
 	// 但**不含软删** —— 那要 Filter.IncludeDeleted 显式打开。
 	AdminListProducts(ctx context.Context, f ProductFilter) ([]AdminProduct, error)
 
+	// AdminLiveSKUsOfProducts 返回这批商品各自的未软删 SKU（含停售），键是 product_id。
+	// 后台算 total_stock 用（微服务拆分阶段 1a：合计由库存服务给，按商品加总在 service）。
+	AdminLiveSKUsOfProducts(ctx context.Context, productIDs []int64) (map[int64][]int64, error)
+
 	// AdminCountProducts 用同一组筛选条件数总数，填契约里必填的 total。
 	AdminCountProducts(ctx context.Context, f ProductFilter) (int64, error)
 
@@ -124,7 +128,7 @@ func (t tenantTx) AdminListProducts(ctx context.Context, f ProductFilter) ([]Adm
 			ID: r.ID, CategoryID: r.CategoryID, BrandID: r.BrandID,
 			Title: r.Title, Subtitle: r.Subtitle, Description: r.Description,
 			MinPriceCents: r.MinPriceCents, MaxPriceCents: r.MaxPriceCents,
-			TotalStock: r.TotalStock, SalesCount: r.SalesCount, Status: r.Status,
+			SalesCount: r.SalesCount, Status: r.Status,
 			PublishedAt: optTime(r.PublishedAt), DeletedAt: optTime(r.DeletedAt),
 			CreatedAt: r.CreatedAt.Time, UpdatedAt: r.UpdatedAt.Time,
 			FreightTemplateID: r.FreightTemplateID,
@@ -153,7 +157,7 @@ func (t tenantTx) AdminFindProduct(ctx context.Context, id int64) (AdminProduct,
 		ID: r.ID, CategoryID: r.CategoryID, BrandID: r.BrandID,
 		Title: r.Title, Subtitle: r.Subtitle, Description: r.Description,
 		MinPriceCents: r.MinPriceCents, MaxPriceCents: r.MaxPriceCents,
-		TotalStock: r.TotalStock, SalesCount: r.SalesCount, Status: r.Status,
+		SalesCount: r.SalesCount, Status: r.Status,
 		PublishedAt: optTime(r.PublishedAt), DeletedAt: optTime(r.DeletedAt),
 		CreatedAt: r.CreatedAt.Time, UpdatedAt: r.UpdatedAt.Time,
 		FreightTemplateID: r.FreightTemplateID,
@@ -367,6 +371,21 @@ func (t tenantTx) ListProductImages(ctx context.Context, productID int64) ([]Pro
 		out = append(out, ProductImage{
 			ID: r.ID, ProductID: r.ProductID, UploadID: r.UploadID, SortOrder: r.SortOrder,
 		})
+	}
+	return out, nil
+}
+
+func (t tenantTx) AdminLiveSKUsOfProducts(ctx context.Context, productIDs []int64) (map[int64][]int64, error) {
+	out := make(map[int64][]int64, len(productIDs))
+	if len(productIDs) == 0 {
+		return out, nil
+	}
+	rows, err := t.q.AdminListLiveSKUsOfProducts(ctx, productIDs)
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range rows {
+		out[r.ProductID] = append(out[r.ProductID], r.ID)
 	}
 	return out, nil
 }

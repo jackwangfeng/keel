@@ -22,6 +22,22 @@ info:
     Open-source commerce platform API.
     AI-native: semantic search & conversational shopping assistant run on
     a self-hosted inference engine — no external API calls, no data egress.
+
+    **库存服务不可用时（只在拆分部署下出现）**。库存可以部署成单独的服务
+    （docs/电商系统-微服务拆分方案.md）；它暂时不在时，契约的行为如下，单体部署不受影响：
+
+    · 浏览照常：`GET /products` 不读库存；`POST /search` 照常返回，每条结果的
+      `in_stock` **缺席**（它是可选字段——缺席即「这次不知道」），`in_stock_only`
+      此时不生效。
+    · 取决于水位的接口回 503 `https://keel.dev/problems/inventory-unavailable`
+      （带 `Retry-After`）：商品详情（`Sku.available_qty` 是必填的，不编一个 0）、
+      购物车的读写（行的 `status` / `available` 全取决于水位）、后台商品 / SKU /
+      门店库存页、库存预警、后台改库存（`PUT .../inventory` 与相对调整）、建 SKU 与
+      批量导入的初始库存。写接口回 503 时**库存那一笔可能已经生效**：带同一个
+      `Idempotency-Key` 原样重试即可，服务端保证不会重复生效。
+    · 后台写接口的回显（`PATCH /admin/products/{id}`、上下架、`PATCH /admin/skus/{id}`）
+      里的库存数（`total_stock` / `available_qty` / `warning_qty`）取不到时按 0 回显——
+      写已经提交，不能回 503 让客户端以为没改成；以随后的 GET 为准。
   license:
     name: Apache-2.0
 servers:
@@ -4567,6 +4583,7 @@ paths:
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
+        '503': { $ref: '#/components/responses/InventoryUnavailable' }
         default: { $ref: '#/components/responses/Problem' }
 
   /categories:
@@ -4804,6 +4821,7 @@ paths:
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
+        '503': { $ref: '#/components/responses/InventoryUnavailable' }
         default: { $ref: '#/components/responses/Problem' }
     delete:
       tags: [Cart]
@@ -4868,6 +4886,7 @@ paths:
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
+        '503': { $ref: '#/components/responses/InventoryUnavailable' }
         default: { $ref: '#/components/responses/Problem' }
 
   /cart/selection:
@@ -6797,6 +6816,19 @@ components:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
 
+    InventoryUnavailable:
+      description: |
+        库存服务暂时不可用——`type` 为 `https://keel.dev/problems/inventory-unavailable`。
+        **只在拆分部署下出现**（库存是单独的服务、而它此刻没有回答），单体部署不会返回它。
+        退避之后原样重试（写接口带同一个 `Idempotency-Key`，不会重复生效）。见 `info.description`。
+      headers:
+        Retry-After:
+          description: 建议退避秒数
+          schema: { type: integer }
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+
     ReportBadWindow:
       description: |
         时间窗口不合法（type=https://keel.dev/problems/invalid-request）：
@@ -7027,7 +7059,8 @@ components:
           type: integer
           description: |
             未软删 SKU 的 `inventories.available_qty` 之和，服务端按需现算。
-            不接受写入。
+            不接受写入。拆分部署下库存服务不可用时，写接口回显里的这个数按 0 给出
+            （读接口回 503），以随后的 GET 为准——见 `info.description`。
         sales_count:
           type: integer
           description: 冗余字段，由订单变更时同步。不接受写入。
@@ -7416,7 +7449,7 @@ components:
           description: '`skus.status`：0 停售 / 1 在售。停售的规格仍在规格矩阵里显示，但不可加购。'
         available_qty:
           type: integer
-          description: '来自 `inventories.available_qty`。改它要走 `PUT /admin/skus/{sku_id}/inventory`。'
+          description: '来自 `inventories.available_qty`。改它要走 `PUT /admin/skus/{sku_id}/inventory`。拆分部署下库存服务不可用时，`PATCH /admin/skus/{sku_id}` 回显里的这个数按 0 给出（以随后的 GET 为准）。'
         warning_qty:
           type: integer
           description: 低库存预警线。一期只是一个存着的数，没有接到任何告警。

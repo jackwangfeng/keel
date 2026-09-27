@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/keel/keel/internal/inference"
+	"github.com/keel/keel/internal/inventory"
 	"github.com/keel/keel/internal/repository"
 	"github.com/keel/keel/internal/search"
 )
@@ -273,7 +274,8 @@ const MaxQueryRunes = 200
 
 // SearchFilters 是契约 SearchFilters 在业务层的形状。
 //
-// 它与 repository.SearchFilters 眼下字段完全一样，仍然分成两个类型 ——
+// 它比 repository.SearchFilters 多一个 InStockOnly（阶段 1a 起「只看有货」在召回之后由
+// 这一层过滤，数据访问层不再收它），仍然分成两个类型 ——
 // 理由与 ProductSummary / repository.Product 那一对相同（见 product.go）：
 // 这一个描述「接口答应支持哪些筛选」，那一个描述「数据访问层收什么参数」。
 // 让 handler 直接拿 repository 的类型，等于让 HTTP 这一层 import 数据访问层，
@@ -294,7 +296,6 @@ func (f SearchFilters) toRepo() repository.SearchFilters {
 		CategoryID:    f.CategoryID,
 		MinPriceCents: f.MinPriceCents,
 		MaxPriceCents: f.MaxPriceCents,
-		InStockOnly:   f.InStockOnly,
 	}
 }
 
@@ -322,6 +323,9 @@ type SearchHit struct {
 	SalesCount    int32
 	Status        int16
 	InStock       bool
+	// StockUnknown 为真表示这一次没拿到库存（拆分形态下库存服务不可用）：InStock 没有意义，
+	// handler 让 in_stock 字段缺席（契约里它是可选的）。
+	StockUnknown bool
 
 	// ImageURL 同 ProductSummary.ImageURL：主图地址，没有图为 nil（字段缺席）。
 	ImageURL *string
@@ -393,6 +397,9 @@ type SearchResult struct {
 
 // SearchService 是混合检索。
 type SearchService struct {
+	// inv 是库存服务（微服务拆分阶段 1a）：召回之后按这家店批量问一次水位，算 in_stock、
+	// 执行 in_stock_only。
+	inv  inventory.Service
 	repo SearchRepository
 	emb  inference.Embedder
 	log  *slog.Logger
@@ -403,7 +410,7 @@ type SearchService struct {
 //
 // **emb 为 nil 是合法的**，那时这个服务只跑关键词那一路。理由写在文件头第二节：
 // 与 NewIndexService 拒绝 nil 刻意相反。
-func NewSearchService(r SearchRepository, emb inference.Embedder,
+func NewSearchService(r SearchRepository, inv inventory.Service, emb inference.Embedder,
 	cfg SearchConfig, log *slog.Logger) *SearchService {
 	if log == nil {
 		log = slog.Default()
@@ -411,7 +418,7 @@ func NewSearchService(r SearchRepository, emb inference.Embedder,
 	if cfg.EmbedTimeout <= 0 {
 		cfg.EmbedTimeout = DefaultQueryEmbedTimeout
 	}
-	return &SearchService{repo: r, emb: emb, log: log, cfg: cfg}
+	return &SearchService{repo: r, inv: inv, emb: emb, log: log, cfg: cfg}
 }
 
 // ErrEmptyQuery：查询串里切不出任何可检索的词（空串、纯标点、纯空白）。
@@ -483,6 +490,12 @@ func (s *SearchService) Search(ctx context.Context, req SearchRequest) (SearchRe
 	}
 
 	recall := int32(size * RecallMultiplier)
+	if req.Filters.InStockOnly {
+		// in_stock_only 从 SQL 里的过滤变成了召回之后的过滤（阶段 1a，见 applyStock）：
+		// 召回窗口里缺货的那些会在过滤时掉出去。窗口放大一倍，让「返回的条数少于 size」
+		// 只在缺货比例真的很高时才发生。
+		recall *= inStockOnlyRecallBoost
+	}
 
 	// 两路并行。§8：query embedding 与关键词召回同时发起，取 max 而非 sum。
 	var (
@@ -530,6 +543,11 @@ func (s *SearchService) Search(ctx context.Context, req SearchRequest) (SearchRe
 			vecErr, kwErr)
 	}
 
+	// 库存：两路的候选合在一起，按这家店批量问一次（阶段 1a）。in_stock_only 在这里过滤，
+	// 排在融合之前 —— 与拆分前「缺货的根本进不了召回」同一个效果：RRF 只在留下来的那批里排名次。
+	var stockKnown bool
+	vecHits, kwHits, stockKnown = s.applyStock(ctx, scope, vecHits, kwHits, req.Filters.InStockOnly)
+
 	byID := make(map[int64]repository.SearchHit, len(vecHits)+len(kwHits))
 	vecIDs := make([]int64, 0, len(vecHits))
 	for _, h := range vecHits {
@@ -572,7 +590,9 @@ func (s *SearchService) Search(ctx context.Context, req SearchRequest) (SearchRe
 	} else {
 		signals := make(map[int64]search.BusinessSignals, len(byID))
 		for id, row := range byID {
-			signals[id] = search.BusinessSignals{InStock: row.InStock}
+			// 没拿到库存时一律按有货排：缺货下沉是一个乘性惩罚，按「不知道」去罚
+			// 等于把整页随机打乱成全员缺货 —— 那不是降级，是瞎排。
+			signals[id] = search.BusinessSignals{InStock: row.InStock || !stockKnown}
 		}
 		var missing int
 		ranked, missing = search.RerankByBusiness(fused, signals)
@@ -594,8 +614,9 @@ func (s *SearchService) Search(ctx context.Context, req SearchRequest) (SearchRe
 			ID: row.ID, Title: row.Title, Subtitle: row.Subtitle,
 			MinPriceCents: row.MinPriceCents, MaxPriceCents: row.MaxPriceCents,
 			SalesCount: row.SalesCount, Status: row.Status, InStock: row.InStock,
-			ImageURL: imageURLOf(row.MainImageUploadID),
-			Source:   r.Source(),
+			StockUnknown: !stockKnown,
+			ImageURL:     imageURLOf(row.MainImageUploadID),
+			Source:       r.Source(),
 			// 1 - 余弦距离 = 余弦相似度。只有向量路捞到它时这个数才有意义，
 			// 没捞到时 Distance 是零值 0，而 1-0=1 会冒充「完美匹配」——
 			// 所以这里按名次判一次，而不是无条件算。
@@ -615,6 +636,97 @@ func (s *SearchService) Search(ctx context.Context, req SearchRequest) (SearchRe
 	}
 	res.TraceID = s.recordSearchLog(ctx, req.Query, res, fused, model, start)
 	return res, nil
+}
+
+// inStockOnlyRecallBoost 是 in_stock_only 时召回窗口的放大倍数，见 Search 里那一段。
+const inStockOnlyRecallBoost = 2
+
+// applyStock 给两路召回的每一条填 InStock，in_stock_only 时滤掉缺货的（微服务拆分阶段 1a）。
+//
+// in_stock 的判据不变：这件商品任意一个在售 SKU（未软删、status = 1）在**这家门店**的水位 > 0。
+// 拆分前它是两条召回查询里各写一遍的 EXISTS（「逐字一致」那条纪律），现在只有这一处实现：
+// 先取候选商品的在售 SKU（core），再向库存服务按这家店问一次水位。
+//
+// ===========================================================================
+// in_stock_only 变成召回之后的过滤：代价说清楚
+// ===========================================================================
+//
+// 拆分前缺货的商品根本进不了召回（过滤在 SQL 里，LIMIT 数的是有货的）；现在召回窗口数的
+// 是全部，过滤在后。召回窗口里缺货的比例高时，一次检索返回的条数会少于 size ——
+// 窗口已经放大了一倍（inStockOnlyRecallBoost），但它不是保证。检索没有分页（只有 size），
+// 所以不会出现「第二页重复 / 跳条」，只会是这一页短一些。
+//
+// ===========================================================================
+// 库存服务不可用（只在拆分形态出现）
+// ===========================================================================
+//
+// 检索照常返回：in_stock 是契约里的可选字段，每一条都让它缺席（StockUnknown），业务重排
+// 按有货处理；in_stock_only **不过滤**（过滤不了），并记一条 WARN。选「不过滤」而不是
+// 「返回空」：空结果会被读成「没有这类商品」，而缺席的 in_stock 至少如实说了「这次不知道」。
+// 返回的第三个值为 false 即这种情况。
+func (s *SearchService) applyStock(ctx context.Context, scope repository.StoreScope,
+	vecHits, kwHits []repository.SearchHit, inStockOnly bool) ([]repository.SearchHit, []repository.SearchHit, bool) {
+
+	ids := make([]int64, 0, len(vecHits)+len(kwHits))
+	for _, h := range vecHits {
+		ids = append(ids, h.ID)
+	}
+	for _, h := range kwHits {
+		ids = append(ids, h.ID)
+	}
+	if len(ids) == 0 {
+		return vecHits, kwHits, true
+	}
+	inStock, err := s.productsInStock(ctx, scope, ids)
+	if err != nil {
+		s.log.WarnContext(ctx, "检索没拿到库存：in_stock 缺席、in_stock_only 不生效，结果照常返回",
+			"err", err, "in_stock_only", inStockOnly)
+		return vecHits, kwHits, false
+	}
+	mark := func(hits []repository.SearchHit) []repository.SearchHit {
+		out := hits[:0]
+		for _, h := range hits {
+			h.InStock = inStock[h.ID]
+			if inStockOnly && !h.InStock {
+				continue
+			}
+			out = append(out, h)
+		}
+		return out
+	}
+	return mark(vecHits), mark(kwHits), true
+}
+
+// productsInStock 回答「这批商品在这家店有没有货」。数据库错误与库存服务错误都原样返回，
+// 由 applyStock 统一降级 —— 检索的纪律是「任何一环故障都必须仍能返回结果」（§8）。
+func (s *SearchService) productsInStock(ctx context.Context, scope repository.StoreScope,
+	productIDs []int64) (map[int64]bool, error) {
+	var skus map[int64][]int64
+	if err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+		var err error
+		skus, err = tx.OnSaleSKUsOfProducts(ctx, productIDs)
+		return err
+	}); err != nil {
+		return nil, err
+	}
+	var all []int64
+	for _, s := range skus {
+		all = append(all, s...)
+	}
+	levels, err := s.inv.StoreStock(ctx, scope.StoreID, all)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[int64]bool, len(productIDs))
+	for pid, list := range skus {
+		for _, id := range list {
+			if levels[id].Available > 0 {
+				out[pid] = true
+				break
+			}
+		}
+	}
+	return out, nil
 }
 
 // embedModel 是这一次给查询做 embedding 的模型（inference.Result 上的两个字段）。

@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/keel/keel/internal/auth"
+	"github.com/keel/keel/internal/inventory"
 	"github.com/keel/keel/internal/repository"
 	"github.com/keel/keel/internal/tenant"
 	"github.com/keel/keel/internal/understanding"
@@ -101,6 +102,10 @@ type AdminCatalogService struct {
 	repo  AdminCatalogRepository
 	store UploadStore
 
+	// inv 是库存服务（微服务拆分阶段 1a）：后台商品 / SKU 页的库存数、单店捷径的两条
+	// 改库存、建 SKU 的初始库存都经它。
+	inv inventory.Service
+
 	// Compliance 是快路径的广告法违禁词检查器，完整论证在 compliance.go 的文件头。
 	//
 	// **导出，而且可以被改掉** —— 这是一个刻意的形状，代价与收益都说清楚：
@@ -124,10 +129,11 @@ type AdminCatalogService struct {
 // 合规检查器由这里填上真的那一个。它不是参数：生产路径上它只有一个取值，
 // 而多一个参数意味着多一处可以传 nil 的地方 —— 虽然传了 nil 的后果是
 // 一律拒绝（fail-closed），但那是一次谁都不想要的线上故障。
-func NewAdminCatalogService(r AdminCatalogRepository, store UploadStore) *AdminCatalogService {
+func NewAdminCatalogService(r AdminCatalogRepository, store UploadStore, inv inventory.Service) *AdminCatalogService {
 	return &AdminCatalogService{
 		repo:       r,
 		store:      store,
+		inv:        inv,
 		Compliance: understanding.ComplianceCheck{},
 	}
 }
@@ -188,6 +194,11 @@ func (s *AdminCatalogService) ListProducts(ctx context.Context, page, pageSize i
 	if err != nil {
 		return AdminProductPage{}, err
 	}
+	// total_stock 由库存服务的合计加总（阶段 1a），在事务之外问 —— 理由见
+	// inventory_admin.go 的文件头。库存服务不可用时整页 503，不编一个 0。
+	if err := fillProductStock(ctx, s.repo, s.inv, out.Items); err != nil {
+		return AdminProductPage{}, err
+	}
 	return out, nil
 }
 
@@ -225,6 +236,18 @@ func (s *AdminCatalogService) FindProduct(ctx context.Context, id int64) (AdminP
 	if err != nil {
 		return AdminProductDetail{}, err
 	}
+	// 商品的 total_stock 与每个 SKU 的水位都来自库存服务，而且要对得上：
+	// total_stock 就是下面这些 SKU 的 available_qty 之和（未软删的那些）。
+	// 所以只问一次 SKU 合计，商品的数在这里加出来，不再单独问一次 —— 两次问
+	// 之间的一次下单就会让两个数对不上。
+	if err := fillSKUStock(ctx, s.inv, out.SKUs); err != nil {
+		return AdminProductDetail{}, err
+	}
+	var total int32
+	for _, sk := range out.SKUs {
+		total += sk.AvailableQty
+	}
+	out.Product.TotalStock = total
 	return out, nil
 }
 
@@ -317,7 +340,7 @@ func (s *AdminCatalogService) UpdateProduct(ctx context.Context, id int64,
 	if err != nil {
 		return repository.AdminProduct{}, err
 	}
-	return out, nil
+	return s.withProductStock(ctx, "PATCH /admin/products/{id}", out), nil
 }
 
 // lockFreightTemplateForLink 是「商品挂运费模板」的那道校验（00055）：只能挂一个
@@ -376,7 +399,7 @@ func (s *AdminCatalogService) SetPublication(ctx context.Context, id int64, publ
 	if err != nil {
 		return repository.AdminProduct{}, false, err
 	}
-	return idempotentWrite(ctx, s, scopeAdminProductPublish, idemKey, hash, archivedOK,
+	p, replayed, err := idempotentWrite(ctx, s, scopeAdminProductPublish, idemKey, hash, archivedOK,
 		func(tx repository.Tx) (repository.AdminProduct, error) {
 			p, e := tx.SetProductPublication(ctx, id, publish)
 			if e != nil {
@@ -402,6 +425,20 @@ func (s *AdminCatalogService) SetPublication(ctx context.Context, id int64, publ
 			}
 			return p, nil
 		})
+	if err != nil {
+		return repository.AdminProduct{}, false, err
+	}
+	// total_stock 在存档**之外**现取：存档里的是写那一刻的商品，库存数每次重放都按
+	// 当前值回（存档里本来也没有它 —— 它不在写事务里算）。
+	return s.withProductStock(ctx, "POST /admin/products/{id}/publication", p), replayed, nil
+}
+
+// withProductStock 给写接口回显的商品填 total_stock，库存服务不可用时按 0 回显并喊 WARN
+// （写已经提交，不能回 503 让客户端以为没改成）。见 inventory_admin.go 的 echoStockBestEffort。
+func (s *AdminCatalogService) withProductStock(ctx context.Context, what string, p repository.AdminProduct) repository.AdminProduct {
+	items := []repository.AdminProduct{p}
+	echoStockBestEffort(ctx, what, fillProductStock(ctx, s.repo, s.inv, items))
+	return items[0]
 }
 
 // ReplaceImages 实现 PUT /admin/products/{product_id}/images。
@@ -481,7 +518,7 @@ func (s *AdminCatalogService) CreateSKU(ctx context.Context, productID int64,
 		return repository.AdminSKU{}, false, err
 	}
 
-	return idempotentWrite(ctx, s, scopeAdminSKUCreate, idemKey, hash, archivedCreated,
+	sku, replayed, err := idempotentWrite(ctx, s, scopeAdminSKUCreate, idemKey, hash, archivedCreated,
 		func(tx repository.Tx) (repository.AdminSKU, error) {
 			imageURL, err := s.resolveSKUImage(ctx, tx, in.ImageUploadID)
 			if err != nil {
@@ -503,6 +540,15 @@ func (s *AdminCatalogService) CreateSKU(ctx context.Context, productID int64,
 				WarningQty:   in.WarningQty,
 			})
 		})
+	if err != nil {
+		return repository.AdminSKU{}, false, err
+	}
+	// 初始库存行：SKU 提交之后建，重放那一支也建（幂等），理由见 initSKUStock。
+	// 失败时回错误（拆分形态下是 503）：SKU 已经建好并存了档，同一把钥匙重试就会补上。
+	if err := initSKUStock(ctx, s.repo, s.inv, sku); err != nil {
+		return repository.AdminSKU{}, false, err
+	}
+	return sku, replayed, nil
 }
 
 // SKUPatchInput 是改 SKU 的入参。ImageUploadID 的三态与 repository.SKUPatch
@@ -583,7 +629,13 @@ func (s *AdminCatalogService) UpdateSKU(ctx context.Context, skuID int64,
 		out, e = tx.UpdateSKU(ctx, skuID, p)
 		return e
 	})
-	return out, err
+	if err != nil {
+		return repository.AdminSKU{}, err
+	}
+	// 回显里的库存数（跨门店合计）由库存服务给；写已提交，取不到按 0 回显并喊 WARN。
+	skus := []repository.AdminSKU{out}
+	echoStockBestEffort(ctx, "PATCH /admin/skus/{id}", fillSKUStock(ctx, s.inv, skus))
+	return skus[0], nil
 }
 
 // DeleteSKU 实现 DELETE /admin/skus/{sku_id}。
@@ -624,31 +676,12 @@ func (s *AdminCatalogService) SetInventory(ctx context.Context, skuID int64,
 	if err != nil {
 		return repository.Inventory{}, err
 	}
-	var out repository.Inventory
-	err = s.repo.WithTenant(ctx, func(tx repository.Tx) error {
-		// 00020 之后「这个 SKU 的库存」不再是一个有定义的东西：主键是
-		// (sku_id, store_id)。契约把这条路径的语义写死成
-		// 「**本租户恰好有一家未软删的门店时它就是那一家，否则 409
-		// store-ambiguous**」，而不是「落到默认门店」—— 库存是唯一真相，
-		// 猜错一家店的后果是把另一家店的水位覆盖掉，而且没有任何东西会响。
-		//
-		// 解析与写在**同一个事务**里：分成两次的话，中间的一次开店会让
-		// 「解析到 A 店」与「写进 A 店」之间出现一个窗口，
-		// 而那时正确答案已经是 409 了。
-		storeID, e := tx.SoleStore(ctx)
-		if e != nil {
-			return e
-		}
-		// 判权排在解析**之后**：这条捷径改的是「那唯一一家店」的库存，
-		// 大区 / 门店管理员只有那家店在范围内时才放行 —— 与按门店那条
-		// PUT /admin/stores/{id}/skus/{id}/inventory 同一个判据、同一个事务。
-		if _, e := authorizeStore(ctx, tx, storeID, storeOperate); e != nil {
-			return e
-		}
-		out, e = tx.SetInventory(ctx, storeID, skuID, expected, want, warning, bizID)
-		return e
-	})
-	return out, err
+	// 00020 之后「这个 SKU 的库存」不再是一个有定义的东西：主键是 (sku_id, store_id)。
+	// 契约把这条路径的语义写死成「**本租户恰好有一家未软删的门店时它就是那一家，否则 409
+	// store-ambiguous**」，而不是「落到默认门店」—— 库存是唯一真相，猜错一家店的后果是
+	// 把另一家店的水位覆盖掉，而且没有任何东西会响。解析、判权、判 SKU 可见在同一个
+	// core 事务里；写在库存服务（阶段 1a），见 inventory_admin.go 的 setStockSole。
+	return setStockSole(ctx, s.repo, s.inv, skuID, expected, want, warning, bizID)
 }
 
 // AdjustInventory 实现 POST /admin/skus/{sku_id}/inventory/adjustments
@@ -657,7 +690,7 @@ func (s *AdminCatalogService) SetInventory(ctx context.Context, skuID int64,
 // 幂等、判权、流水任何一处只在一边改了，两条路径就会对同一个请求给出两种结果。
 func (s *AdminCatalogService) AdjustInventory(ctx context.Context, skuID int64,
 	in InventoryAdjustInput, idemKey string) (repository.StoreInventory, bool, error) {
-	return adjustInventory(ctx, s.repo, 0, skuID, in, idemKey)
+	return adjustInventory(ctx, s.repo, s.inv, 0, skuID, in, idemKey)
 }
 
 // resolveSKUImage 把 image_upload_id 翻成 skus.image_url，并在同一个事务里

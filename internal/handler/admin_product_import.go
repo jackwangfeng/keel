@@ -77,6 +77,7 @@ func writeImportTooLarge(c *gin.Context) {
 func writeImportError(c *gin.Context, err error) {
 	var fe *catalogimport.FileError
 	switch {
+	case writeInventoryUnavailable(c, err):
 	case errors.Is(err, catalogimport.ErrTooLarge):
 		writeImportTooLarge(c)
 	case errors.Is(err, catalogimport.ErrUnsupportedFormat):

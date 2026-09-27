@@ -9,17 +9,49 @@ import (
 	"context"
 )
 
+const listOnSaleSKUsOfProducts = `-- name: ListOnSaleSKUsOfProducts :many
+SELECT s.product_id, s.id
+  FROM skus s
+ WHERE s.product_id = ANY($1::bigint[])
+   AND s.status = 1
+   AND s.deleted_at IS NULL
+`
+
+type ListOnSaleSKUsOfProductsRow struct {
+	ProductID int64
+	ID        int64
+}
+
+// 一批商品的在售 SKU（未软删、status = 1）。检索算 in_stock 用：拿这批 sku_id 向库存服务
+// 问一次这家店的水位，「任意一个在售 SKU 水位 > 0」即有货。条件与拆分前那条 EXISTS 里的
+// s.status = 1 AND s.deleted_at IS NULL 逐字一致。
+func (q *Queries) ListOnSaleSKUsOfProducts(ctx context.Context, productIds []int64) ([]ListOnSaleSKUsOfProductsRow, error) {
+	rows, err := q.db.Query(ctx, listOnSaleSKUsOfProducts, productIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListOnSaleSKUsOfProductsRow
+	for rows.Next() {
+		var i ListOnSaleSKUsOfProductsRow
+		if err := rows.Scan(&i.ProductID, &i.ID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const searchProductsByKeyword = `-- name: SearchProductsByKeyword :many
 SELECT p.id, p.title, p.subtitle,
        COALESCE(agg.min_price, 0)::bigint AS min_price_cents,
        COALESCE(agg.max_price, 0)::bigint AS max_price_cents,
        p.sales_count, p.status,
        COALESCE(img.upload_id, 0)::bigint AS main_image_upload_id,
-       ts_rank_cd(p.search_vector, to_tsquery('simple', $1::text))::float8 AS rank,
-       EXISTS (SELECT 1 FROM skus s JOIN inventories i
-                      ON i.sku_id = s.id AND i.store_id = $2
-                WHERE s.product_id = p.id AND s.status = 1
-                  AND s.deleted_at IS NULL AND i.available_qty > 0) AS in_stock
+       ts_rank_cd(p.search_vector, to_tsquery('simple', $1::text))::float8 AS rank
   FROM products p
   LEFT JOIN LATERAL (
         SELECT min(pv.price_cents) AS min_price, max(pv.price_cents) AS max_price
@@ -42,19 +74,14 @@ SELECT p.id, p.title, p.subtitle,
         OR COALESCE(agg.max_price, 0) >= $4::bigint)
    AND ($5::bigint IS NULL
         OR COALESCE(agg.min_price, 0) <= $5::bigint)
-   AND (NOT $6::boolean
-        OR EXISTS (SELECT 1 FROM skus s JOIN inventories i
-                          ON i.sku_id = s.id AND i.store_id = $2
-                    WHERE s.product_id = p.id AND s.status = 1
-                  AND s.deleted_at IS NULL AND i.available_qty > 0))
    AND NOT EXISTS (SELECT 1 FROM region_product_overrides ro
-                    WHERE ro.region_id = $7
+                    WHERE ro.region_id = $6
                       AND ro.product_id = p.id AND ro.status = 0)
    AND NOT EXISTS (SELECT 1 FROM store_product_overrides so
                     WHERE so.store_id = $2
                       AND so.product_id = p.id AND so.status = 0)
  ORDER BY ts_rank_cd(p.search_vector, to_tsquery('simple', $1::text)) DESC, p.id
- LIMIT $8
+ LIMIT $7
 `
 
 type SearchProductsByKeywordParams struct {
@@ -63,7 +90,6 @@ type SearchProductsByKeywordParams struct {
 	CategoryID    *int64
 	MinPriceCents *int64
 	MaxPriceCents *int64
-	InStockOnly   bool
 	RegionID      int64
 	RowLimit      int32
 }
@@ -78,7 +104,6 @@ type SearchProductsByKeywordRow struct {
 	Status            int16
 	MainImageUploadID int64
 	Rank              float64
-	InStock           bool
 }
 
 // bigram 关键词召回（语义检索层 §3）。
@@ -105,7 +130,6 @@ func (q *Queries) SearchProductsByKeyword(ctx context.Context, arg SearchProduct
 		arg.CategoryID,
 		arg.MinPriceCents,
 		arg.MaxPriceCents,
-		arg.InStockOnly,
 		arg.RegionID,
 		arg.RowLimit,
 	)
@@ -126,7 +150,6 @@ func (q *Queries) SearchProductsByKeyword(ctx context.Context, arg SearchProduct
 			&i.Status,
 			&i.MainImageUploadID,
 			&i.Rank,
-			&i.InStock,
 		); err != nil {
 			return nil, err
 		}
@@ -145,11 +168,7 @@ SELECT p.id, p.title, p.subtitle,
        COALESCE(agg.max_price, 0)::bigint AS max_price_cents,
        p.sales_count, p.status,
        COALESCE(img.upload_id, 0)::bigint AS main_image_upload_id,
-       (v.embedding <=> $1::vector)::float8 AS distance,
-       EXISTS (SELECT 1 FROM skus s JOIN inventories i
-                      ON i.sku_id = s.id AND i.store_id = $2
-                WHERE s.product_id = p.id AND s.status = 1
-                  AND s.deleted_at IS NULL AND i.available_qty > 0) AS in_stock
+       (v.embedding <=> $1::vector)::float8 AS distance
   FROM product_text_vectors v
   JOIN products p ON p.id = v.product_id
   LEFT JOIN LATERAL (
@@ -172,19 +191,14 @@ SELECT p.id, p.title, p.subtitle,
         OR COALESCE(agg.max_price, 0) >= $4::bigint)
    AND ($5::bigint IS NULL
         OR COALESCE(agg.min_price, 0) <= $5::bigint)
-   AND (NOT $6::boolean
-        OR EXISTS (SELECT 1 FROM skus s JOIN inventories i
-                          ON i.sku_id = s.id AND i.store_id = $2
-                    WHERE s.product_id = p.id AND s.status = 1
-                  AND s.deleted_at IS NULL AND i.available_qty > 0))
    AND NOT EXISTS (SELECT 1 FROM region_product_overrides ro
-                    WHERE ro.region_id = $7
+                    WHERE ro.region_id = $6
                       AND ro.product_id = p.id AND ro.status = 0)
    AND NOT EXISTS (SELECT 1 FROM store_product_overrides so
                     WHERE so.store_id = $2
                       AND so.product_id = p.id AND so.status = 0)
  ORDER BY v.embedding <=> $1::vector
- LIMIT $8
+ LIMIT $7
 `
 
 type SearchProductsByVectorParams struct {
@@ -193,7 +207,6 @@ type SearchProductsByVectorParams struct {
 	CategoryID     *int64
 	MinPriceCents  *int64
 	MaxPriceCents  *int64
-	InStockOnly    bool
 	RegionID       int64
 	RowLimit       int32
 }
@@ -208,7 +221,6 @@ type SearchProductsByVectorRow struct {
 	Status            int16
 	MainImageUploadID int64
 	Distance          float64
-	InStock           bool
 }
 
 // 混合检索的两路召回（M3 Task 4）。向量一路、bigram 关键词一路，
@@ -229,10 +241,14 @@ type SearchProductsByVectorRow struct {
 // 一致 —— 价格过滤现在读的是它算出来的值，两边的公式写岔一个字，
 // 同一件商品就会在一路里落进价格区间、在另一路里落在外面。
 //
-// 逐字一致这条纪律本轮又多了两项：两层可见性排除（region / store 各一条
-// NOT EXISTS）与按门店取的 in_stock。in_stock 尤其容易漏 store_id ——
-// 漏了它「有没有货」问的就是「全租户任何一家店有没有货」，
-// 于是一件只在广州有货的商品会在北京的搜索结果里显示成有货。
+// 逐字一致这条纪律本轮又多了一项：两层可见性排除（region / store 各一条
+// NOT EXISTS）。
+//
+// **in_stock 与 in_stock_only 不在这两条里了**（微服务拆分阶段 1a）：inventories 归库存
+// 服务，召回查询不再 JOIN 它。service/search.go 在两路召回之后，用 ListOnSaleSKUsOfProducts
+// 取候选商品的在售 SKU、向库存服务按**这家门店**批量问一次水位，在 Go 里算 in_stock
+// （任意一个在售 SKU 水位 > 0，判据不变）；in_stock_only 从 SQL 里的过滤变成召回之后的
+// 过滤 —— 代价是一次检索返回的条数可能少于 size（召回窗口里缺货的多时），写在那个文件里。
 //
 // COALESCE 到 0 不是随手写的：旧列 min/max_price_cents 的 DEFAULT 是 0，
 // 于是「一个 SKU 都没有」的商品在旧的过滤里表现为 max=0（被 min_price 筛掉）
@@ -264,9 +280,9 @@ type SearchProductsByVectorRow struct {
 // 大租户它会选 HNSW，而 HNSW 被选中时的正确性由
 // repository.withTenantTx 设的那三个 hnsw.* GUC 兜住。完整实测见那里。
 //
-// in_stock 用「任意一个在售 SKU 水位 > 0」算，与 ProductDetail.InStock 同一个
-// 判据（service/product.go）—— 不读汇总列：曾经的 products.total_stock 没有任何一处
-// 在维护，拿它当「有没有货」等于对用户撒一个永远不会被纠正的谎（已停用，见 00062）。
+// in_stock 在 service 里算（见文件头），判据是「任意一个在售 SKU 水位 > 0」，与
+// ProductDetail.InStock 同一个（service/product.go）—— 不读汇总列：曾经的
+// products.total_stock 没有任何一处在维护（已停用，见 00062）。
 func (q *Queries) SearchProductsByVector(ctx context.Context, arg SearchProductsByVectorParams) ([]SearchProductsByVectorRow, error) {
 	rows, err := q.db.Query(ctx, searchProductsByVector,
 		arg.QueryEmbedding,
@@ -274,7 +290,6 @@ func (q *Queries) SearchProductsByVector(ctx context.Context, arg SearchProducts
 		arg.CategoryID,
 		arg.MinPriceCents,
 		arg.MaxPriceCents,
-		arg.InStockOnly,
 		arg.RegionID,
 		arg.RowLimit,
 	)
@@ -295,7 +310,6 @@ func (q *Queries) SearchProductsByVector(ctx context.Context, arg SearchProducts
 			&i.Status,
 			&i.MainImageUploadID,
 			&i.Distance,
-			&i.InStock,
 		); err != nil {
 			return nil, err
 		}

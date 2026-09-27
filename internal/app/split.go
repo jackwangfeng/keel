@@ -2,8 +2,8 @@ package app
 
 // 拆分部署的配置与装配（docs/电商系统-微服务拆分方案.md 阶段 0）。
 //
-// 单独一个文件，是因为这一块在阶段 1 会长：库存服务的路由、core 侧的远端客户端、
-// SAGA 分支地址都从这里接进去。app.go 里的 Run 只多了几行调用。
+// 单独一个文件，是因为这一块随拆分的阶段长：阶段 1a 接进了库存服务的内网路由与 core 侧的
+// 远端客户端，SAGA 分支地址在阶段 1b 接进来。app.go 里的 Run 只多了几行调用。
 
 import (
 	"context"
@@ -19,6 +19,8 @@ import (
 	"github.com/keel/keel/internal/buildinfo"
 	"github.com/keel/keel/internal/db"
 	"github.com/keel/keel/internal/dtm"
+	"github.com/keel/keel/internal/inventory"
+	"github.com/keel/keel/internal/repository"
 	"github.com/keel/keel/internal/rpc"
 )
 
@@ -37,13 +39,15 @@ const (
 // Role 是本进程在部署里扮演的角色。**同一个二进制**，靠它决定起哪些东西。
 //
 //	all（默认）  单体：公网 API + 全部后台任务 + 协调器，库存在进程内。今天的形态。
-//	core         拆分形态里的主服务。阶段 0 与 all 完全相同；阶段 1 起库存调用改走
-//	             KEEL_INVENTORY_URL，那时它会要求配这个地址。
+//	core         拆分形态里的主服务。库存的读与后台写经 KEEL_INVENTORY_URL 调库存服务
+//	             （阶段 1a 起；**必须配这个地址**，见 validate）。下单扣减、关单 / 退款回补
+//	             在阶段 1b 之前仍在进程内。
 //	inventory    拆分形态里的库存服务。只起内网服务（KEEL_INTERNAL_ADDR）：
 //	             /healthz、/version、/readyz 与 /internal/v1/...；
 //	             不挂任何公网业务路由，不跑任何后台任务，也不起事务协调器
 //	             （协调器在 core，库存分支是被它远程调用的一方）。
-//	             **阶段 0 里它的 /internal/v1 下还是空的**，库存接口与分支在阶段 1 挂上。
+//	             阶段 1a 起 /internal/v1/inventory/... 挂着库存服务的读与后台写；
+//	             SAGA 库存分支在阶段 1b 挂上。
 //
 // 不认识的值拒绝启动，而不是回落到 all：把 "inventroy" 拼错的库存容器若回落成
 // 单体，会带着一整套后台任务连上库存库，而编排系统看到的是一个健康的进程。
@@ -89,6 +93,13 @@ func (s SplitConfig) validate() error {
 	case RoleAll, RoleCore, RoleInventory:
 	default:
 		return fmt.Errorf("%s=%q 不认识，只能是 all（默认）/ core / inventory", EnvRole, string(s.Role))
+	}
+	if s.Role == RoleCore && s.InventoryURL == "" {
+		// 决定（阶段 1a）：core 不回落到进程内库存。core 形态存在的全部理由是「库存在另一个
+		// 进程里」，没配地址还照常起来，就是一个以为自己拆了、其实在读写本地库存表的 core ——
+		// 拆分部署下那是另一个库里一份没人维护的旧数据，而页面上一切正常。
+		return fmt.Errorf("%s=core 时必须配 %s（如 http://inventory:8090）：core 的库存调用只走远端；"+
+			"单体请用 %s=all", EnvRole, EnvInventoryURL, EnvRole)
 	}
 	if s.Role == RoleInventory {
 		if s.InternalAddr == "" {
@@ -137,12 +148,43 @@ func inventoryPool(ctx context.Context, s SplitConfig, main *pgxpool.Pool) (*pgx
 	return p, p.Close, nil
 }
 
-// internalRouter 建内网引擎。阶段 0 只有探针；/readyz 查的是库存池 ——
-// 这是阶段 0 里库存池唯一的用户。阶段 1 在这里把库存接口挂到 routes.Tenant、
-// 把库存分支经 dtm.MountBranches 挂到 routes.Saga。
+// internalRouter 建内网引擎：探针（/readyz 查库存池）+ 本进程拥有的服务间接口。
+//
+// 库存接口（/internal/v1/inventory/...）只挂在**拥有库存**的进程上：inventory 与 all。
+// core 不挂 —— 它是库存服务的调用方，挂上就成了第二个库存服务入口，而且读写的是它自己
+// 那个库里的库存表。SAGA 库存分支（dtm.MountBranches 到 routes.Saga）在阶段 1b 挂。
 func internalRouter(s SplitConfig, inv *pgxpool.Pool) *gin.Engine {
-	r, _ := rpc.NewRouter(rpc.ServerConfig{Secret: s.InternalSecret, Ready: inv.Ping})
+	r, routes := rpc.NewRouter(rpc.ServerConfig{Secret: s.InternalSecret, Ready: inv.Ping})
+	if s.Role == RoleInventory || s.Role == RoleAll {
+		inventory.Mount(routes.Tenant, inventory.NewLocal(repository.NewInventoryStore(inv)))
+	}
 	return r
+}
+
+// inventoryService 按角色选库存服务的实现：core 走 HTTP（KEEL_INVENTORY_URL，validate 已经
+// 保证配了），其余走建在库存池上的进程内实现（单体时库存池就是业务池）。
+func inventoryService(s SplitConfig, invPool *pgxpool.Pool) (inventory.Service, error) {
+	if s.Role == RoleCore {
+		c, err := rpc.NewClient(s.InventoryURL, s.InternalSecret, 0)
+		if err != nil {
+			return nil, err
+		}
+		return inventory.NewRemote(c), nil
+	}
+	return inventory.NewLocal(repository.NewInventoryStore(invPool)), nil
+}
+
+// RouterOption 是 Router 的可选项。
+type RouterOption func(*routerOptions)
+
+type routerOptions struct {
+	inventory inventory.Service
+}
+
+// WithInventory 指定公网路由用的库存服务实现。不给时是建在业务池上的进程内实现。
+// 跨进程测试用它把 core 的路由接到一个指向 httptest 库存服务的 HTTP 实现上。
+func WithInventory(inv inventory.Service) RouterOption {
+	return func(o *routerOptions) { o.inventory = inv }
 }
 
 // runInventory 是 KEEL_ROLE=inventory 的整条启动路径。

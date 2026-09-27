@@ -9196,6 +9196,7 @@ export interface paths {
                         "application/problem+json": components["schemas"]["Problem"];
                     };
                 };
+                503: components["responses"]["InventoryUnavailable"];
                 default: components["responses"]["Problem"];
             };
         };
@@ -9581,6 +9582,7 @@ export interface paths {
                         "application/problem+json": components["schemas"]["Problem"];
                     };
                 };
+                503: components["responses"]["InventoryUnavailable"];
                 default: components["responses"]["Problem"];
             };
         };
@@ -9733,6 +9735,7 @@ export interface paths {
                         "application/problem+json": components["schemas"]["Problem"];
                     };
                 };
+                503: components["responses"]["InventoryUnavailable"];
                 default: components["responses"]["Problem"];
             };
         };
@@ -13554,7 +13557,8 @@ export interface components {
             max_price_cents: components["schemas"]["Money"];
             /**
              * @description 未软删 SKU 的 `inventories.available_qty` 之和，服务端按需现算。
-             *     不接受写入。
+             *     不接受写入。拆分部署下库存服务不可用时，写接口回显里的这个数按 0 给出
+             *     （读接口回 503），以随后的 GET 为准——见 `info.description`。
              */
             total_stock: number;
             /** @description 冗余字段，由订单变更时同步。不接受写入。 */
@@ -13872,7 +13876,7 @@ export interface components {
              * @enum {integer}
              */
             status: 0 | 1;
-            /** @description 来自 `inventories.available_qty`。改它要走 `PUT /admin/skus/{sku_id}/inventory`。 */
+            /** @description 来自 `inventories.available_qty`。改它要走 `PUT /admin/skus/{sku_id}/inventory`。拆分部署下库存服务不可用时，`PATCH /admin/skus/{sku_id}` 回显里的这个数按 0 给出（以随后的 GET 为准）。 */
             available_qty: number;
             /** @description 低库存预警线。一期只是一个存着的数，没有接到任何告警。 */
             warning_qty?: number;
@@ -16540,6 +16544,21 @@ export interface components {
         /** @description 错误 */
         Problem: {
             headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /**
+         * @description 库存服务暂时不可用——`type` 为 `https://keel.dev/problems/inventory-unavailable`。
+         *     **只在拆分部署下出现**（库存是单独的服务、而它此刻没有回答），单体部署不会返回它。
+         *     退避之后原样重试（写接口带同一个 `Idempotency-Key`，不会重复生效）。见 `info.description`。
+         */
+        InventoryUnavailable: {
+            headers: {
+                /** @description 建议退避秒数 */
+                "Retry-After"?: number;
                 [name: string]: unknown;
             };
             content: {
