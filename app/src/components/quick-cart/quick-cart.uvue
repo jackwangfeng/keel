@@ -19,7 +19,8 @@
         <view v-for="s in skus" :key="s.id"
               :class="['chip', s.id == skuId ? 'chip-on' : '', s.soldOut ? 'chip-off' : '']"
               @click="pick(s.id)">
-          <text :class="[s.id == skuId ? 'chip-text-on' : 'chip-text']">{{ s.label }}{{ s.soldOut ? '（无货）' : '' }}</text>
+          <text :class="[s.id == skuId ? 'chip-text-on' : (s.soldOut ? 'chip-text-sold' : 'chip-text')]">{{ s.label }}</text>
+          <text v-if="s.soldOut" class="sold-tag">无货</text>
         </view>
       </view>
 
@@ -267,8 +268,26 @@ export default {
   background-color: #3B2A20;
   border-color: #3B2A20;
 }
+/* 与详情页同一套无货样式（pages/products/detail.uvue）。 */
 .chip-off {
-  opacity: 0.45;
+  flex-direction: row;
+  align-items: center;
+  border-style: dashed;
+  border-color: #D6CCC0;
+  background-color: #F3EEE8;
+}
+.chip-text-sold {
+  font-size: 14px;
+  color: #A89B8C;
+  text-decoration-line: line-through;
+}
+.sold-tag {
+  margin-left: 6px;
+  font-size: 11px;
+  color: #FFFDF9;
+  background-color: #B5A898;
+  padding: 1px 5px;
+  border-radius: 4px;
 }
 .chip-text {
   font-size: 14px;

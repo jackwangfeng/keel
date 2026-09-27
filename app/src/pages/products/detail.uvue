@@ -28,10 +28,11 @@
           <view
             v-for="sku in detail!.skus"
             :key="sku.id"
-            :class="['chip', sku.id == skuId ? 'chip-on' : '', sku.soldOut ? 'btn-off' : '']"
+            :class="['chip', sku.id == skuId ? 'chip-on' : '', sku.soldOut ? 'chip-sold' : '']"
             @click="pick(sku.id, sku.soldOut)"
           >
-            <text :class="sku.id == skuId ? 'chip-text-on' : 'chip-text'">{{ sku.label }}</text>
+            <text :class="sku.id == skuId ? 'chip-text-on' : (sku.soldOut ? 'chip-text-sold' : 'chip-text')">{{ sku.label }}</text>
+            <text v-if="sku.soldOut" class="sold-tag">无货</text>
           </view>
         </view>
 
@@ -342,6 +343,27 @@ export default {
 .chip-text-on {
   font-size: 14px;
   color: #FFFDF9;
+}
+/* 无货：虚线框、灰底、划线字，再挂一个「无货」小字 —— 一眼能看出来，而不只是淡一点。 */
+.chip-sold {
+  flex-direction: row;
+  align-items: center;
+  border-style: dashed;
+  border-color: #D6CCC0;
+  background-color: #F3EEE8;
+}
+.chip-text-sold {
+  font-size: 14px;
+  color: #A89B8C;
+  text-decoration-line: line-through;
+}
+.sold-tag {
+  margin-left: 6px;
+  font-size: 11px;
+  color: #FFFDF9;
+  background-color: #B5A898;
+  padding: 1px 5px;
+  border-radius: 4px;
 }
 .bar-col {
   flex-direction: column;

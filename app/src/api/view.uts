@@ -282,9 +282,20 @@ export type ProductDetailView = {
 }
 
 export function productDetailView(p : ProductDetail) : ProductDetailView {
+  // 有货的在前、无货的排到最后，各自保持服务端给的顺序（稳定分区，不是排序）：
+  // 买家先看到能买的，无货的仍然列着、明确标「无货」，而不是藏掉 —— 藏掉的话
+  // 「这件是不是本来就没有 XL」和「XL 卖完了」就分不清了。
+  // 两趟循环而不是 sort(比较函数)：UTS 编到 Kotlin / Swift 时比较函数的写法各端不一，
+  // 这里只需要分两堆。
   const rows : SkuRow[] = []
+  const soldOut : SkuRow[] = []
   for (let i = 0; i < p.skus.length; i++) {
-    rows.push(skuRow(p.skus[i]))
+    const r = skuRow(p.skus[i])
+    if (r.soldOut) soldOut.push(r)
+    else rows.push(r)
+  }
+  for (let i = 0; i < soldOut.length; i++) {
+    rows.push(soldOut[i])
   }
   return {
     id: p.id,

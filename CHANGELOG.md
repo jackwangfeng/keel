@@ -41,6 +41,10 @@ so "which one is running?" never depends on anyone's memory.
 
 ### Added
 
+- **Out-of-stock SKUs sort last and are clearly marked.** On the product page and in the
+  quick-add sheet, SKUs with no stock move after the in-stock ones (stable partition, server
+  order kept within each group) and render with a dashed grey chip, struck-through label and a
+  「无货」 tag instead of just being faded.
 - **Stores must have a location, picked on a map, and sit inside their own fence.**
   `POST /admin/stores` now requires `lat` / `lng` (422 without them); `PATCH` can move a store
   but not clear its location. Setting a fence, or moving a store that has one, checks
