@@ -1,0 +1,208 @@
+-- 库存服务自己的查询（微服务拆分阶段 1a，docs/电商系统-微服务拆分方案.md）。
+--
+-- 这个文件是库存服务仓储（internal/repository/inventory_svc.go 的 InventoryStore）
+-- 唯一的 SQL 来源，守一条硬规矩：**只碰 inventories 与 inventory_logs 两张表**。
+-- 不 JOIN skus / products / stores / 两张上下架覆盖表 / 价格视图 —— 拆分部署下库存库里
+-- 根本没有那些表。凡是要 core 数据才能下的判断（SKU 在不在、软删了没有、这家店卖不卖、
+-- 门店是否软删、商品名门店名），一律由 core 先判完、或者拿 id 回来自己补，再调这里。
+--
+-- 和这个目录里别的文件一样，**一个 merchant_id 都没有**：两张表都带 merchant_id 列、
+-- 走 merchant_id = current_merchant() 的 RLS（00020），租户由库存服务按请求头
+-- X-Keel-Merchant-ID 开事务时设进去（rpc.RequireTenant → repository.WithTenant）。
+--
+-- 注释里一个反引号都不许有，理由见 db/queries/inventories.sql 的第三条说明。
+--
+-- 下单扣减 / 回补（inventories.sql）、关单与退款的流水核对（orders.sql 的
+-- OrderSkuNetInventoryChange、CountInventoryLogsForOrder）、预警通知的上下文
+-- （notifications.sql 的 GetInventoryAlert）是阶段 1b 的事，仍在原处。
+
+-- name: InvStoreStock :many
+-- 一家门店、一批 SKU 的水位（详情页 SKU、购物车行、检索的 in_stock、门店库存清单）。
+-- **缺行不回**：调用方把「没回来的 sku_id」读成可售 0（数据模型 §4：缺行 ≡ 可售 0），
+-- 这里不替它补零行 —— 补了就分不出「录过、是 0」与「从没录过」，而门店库存清单的
+-- updated_at 恰恰要靠这一点回落到 SKU 自己的时间。走主键 (sku_id, store_id)。
+SELECT inv.sku_id, inv.available_qty, inv.warning_qty, inv.updated_at
+  FROM inventories inv
+ WHERE inv.store_id = sqlc.arg(store_id)
+   AND inv.sku_id = ANY(sqlc.arg(sku_ids)::bigint[]);
+
+-- name: InvSKUTotals :many
+-- 一批 SKU 跨全部门店的合计（后台商品 / SKU 页，租户视角）。口径与拆分前
+-- admin_skus.sql 的 LATERAL 逐字一致：可售取 sum，预警线取 max（阈值不是总量）。
+-- 缺行（一家店都没录过）不回，调用方记 0 / 0。
+SELECT inv.sku_id,
+       sum(inv.available_qty)::int AS available_qty,
+       max(inv.warning_qty)::int   AS warning_qty
+  FROM inventories inv
+ WHERE inv.sku_id = ANY(sqlc.arg(sku_ids)::bigint[])
+ GROUP BY inv.sku_id;
+
+-- name: InvHealthySKUIDs :many
+-- 这家店里水位**高于**预警线的 SKU。门店库存清单的 low_stock_only 用它的补集：
+-- 「低库存」= 未软删 SKU 里除掉这批的全部 —— 缺行的 SKU 是 0 ≤ 0，算低库存，
+-- 与拆分前那条 LEFT JOIN 的判据逐点相同。取补集而不是直接列「低库存的行」，
+-- 是因为缺行的那些在这张表里根本没有行可列。
+SELECT inv.sku_id
+  FROM inventories inv
+ WHERE inv.store_id = sqlc.arg(store_id)
+   AND inv.available_qty > inv.warning_qty;
+
+-- name: InvLowStock :many
+-- 库存预警（报表）。i.available_qty <= i.warning_qty 必须与 idx_inventories_warning
+-- 的谓词逐字一致，规划器才认得出那条部分索引。
+--
+-- 门店范围由 core 给成**显式的 id 列表**（未软删、落在筛选与员工范围内的门店），
+-- 软删 SKU / 软删商品下的 SKU 由 core 给成排除列表 —— 拆分前那三个 JOIN 做的判断
+-- 就是这两件，库存库里没有那几张表，只能由 core 判完把结果递过来。
+-- 排除列表通常很短（软删是少数），门店列表是门店数量级。
+SELECT i.store_id, i.sku_id, i.available_qty, i.warning_qty
+  FROM inventories i
+ WHERE i.available_qty <= i.warning_qty
+   AND i.store_id = ANY(sqlc.arg(store_ids)::bigint[])
+   AND NOT (i.sku_id = ANY(sqlc.arg(exclude_sku_ids)::bigint[]))
+ ORDER BY i.available_qty - i.warning_qty, i.available_qty, i.store_id, i.sku_id
+ LIMIT sqlc.arg(row_limit);
+
+-- name: InvCountLowStock :one
+-- 条件必须与 InvLowStock 逐字一致。
+SELECT count(*)::bigint
+  FROM inventories i
+ WHERE i.available_qty <= i.warning_qty
+   AND i.store_id = ANY(sqlc.arg(store_ids)::bigint[])
+   AND NOT (i.sku_id = ANY(sqlc.arg(exclude_sku_ids)::bigint[]));
+
+-- name: InvSetStock :one
+-- 比较并设置（后台 PUT .../inventory 两条）。拆分前是两条语句：
+-- admin_skus.sql 的 SetInventoryByCAS（纯 UPDATE，缺行 404）与
+-- scoped_catalog.sql 的 SetStoreInventoryByCAS（upsert，缺行且 expected = 0 时首次录入）。
+-- 合成一条，差别收进 allow_insert 一个开关：
+--
+--   allow_insert = false  单店捷径那条的语义：缺行 → current_rows = 0，调用方报 404。
+--   allow_insert = true   按门店那条的语义：缺行且 expected = 0 → 插入；
+--                         缺行且 expected 不为 0 → written_rows = 0，调用方报 409，current 为 0。
+--
+-- 两条原先各自带的「SKU 可见且未软删」「这家店卖这件商品」判定**不在这里了**：
+-- 那要 JOIN skus / stores / 覆盖表，由 core 在调这条之前判完（404）。判与写之间于是
+-- 隔着一次服务调用，而不是同一个快照 —— 窗口里被下架的商品会多录一次库存，
+-- 那是一个无害的方向（没有地方会用到它），代价写在 service/inventory_admin.go。
+--
+-- 骨架与拆分前那条 upsert 相同：一条 INSERT ... ON CONFLICT DO UPDATE ... WHERE，
+-- 判定与写落在唯一索引的同一个点上；cur 与 wrote 看到的是同一个快照；CTE 里的表带别名、
+-- RETURNING 列加 w_ 前缀、末尾 FROM (SELECT 1) anchor LEFT JOIN，都是 sqlc 逼出来的写法
+-- （标量子查询会被推断成非空，而它在 CAS 失败那一支恰恰是 NULL）。
+WITH cur AS (
+    SELECT inv.available_qty, inv.warning_qty, inv.updated_at
+      FROM inventories inv
+     WHERE inv.sku_id = sqlc.arg(sku_id) AND inv.store_id = sqlc.arg(store_id)
+), wrote AS (
+    INSERT INTO inventories (sku_id, store_id, available_qty, warning_qty)
+    SELECT sqlc.arg(sku_id), sqlc.arg(store_id), sqlc.arg(available_qty),
+           COALESCE(sqlc.narg(warning_qty)::int, 0)
+     WHERE EXISTS (SELECT 1 FROM cur)
+        OR (sqlc.arg(allow_insert)::boolean AND sqlc.arg(expected_available_qty)::int = 0)
+    ON CONFLICT (sku_id, store_id) DO UPDATE
+       SET available_qty = excluded.available_qty,
+           warning_qty   = COALESCE(sqlc.narg(warning_qty)::int, inventories.warning_qty),
+           updated_at    = now()
+     WHERE inventories.available_qty = sqlc.arg(expected_available_qty)::int
+    RETURNING available_qty AS w_available_qty,
+              warning_qty   AS w_warning_qty,
+              updated_at    AS w_updated_at
+)
+SELECT (SELECT count(*) FROM cur)   AS current_rows,
+       (SELECT count(*) FROM wrote) AS written_rows,
+       c.available_qty   AS current_available_qty,
+       c.warning_qty     AS current_warning_qty,
+       c.updated_at      AS current_updated_at,
+       w.w_available_qty AS new_available_qty,
+       w.w_warning_qty   AS new_warning_qty,
+       w.w_updated_at    AS new_updated_at
+  FROM (SELECT 1) anchor
+  LEFT JOIN cur   c ON true
+  LEFT JOIN wrote w ON true;
+
+-- name: InvAdjustStock :one
+-- 相对调整（后台 POST .../inventory/adjustments 两条）：available_qty += delta，结果不得为负。
+-- 与拆分前 scoped_catalog.sql 的 AdjustStoreInventory 同一个骨架，去掉了 sellable 那个 CTE
+-- （判定挪到 core，理由同 InvSetStock）。三处逼出来的写法照旧：
+-- 插入值是 GREATEST(delta, 0)（提议行先过 chk_qty_nonneg，早于冲突判定）；插入的前提是
+-- 「快照里有这一行，或者 delta > 0」（缺行扣减一行都不写，不把「从没录过」变成「录过、是 0」）；
+-- DO UPDATE 里加的是 inventories.available_qty + delta，WHERE 里的非负判定看的是冲突那一行的
+-- 最新提交版本（READ COMMITTED 下 ON CONFLICT 会锁住并重读它）。
+--
+-- written_rows = 0 → 扣完会变负（409 inventory-insufficient），current 是快照里的水位（缺行为 0）。
+-- 流水由仓储在同一个事务里紧接着写（InvAppendManualLog）。
+WITH cur AS (
+    SELECT inv.available_qty, inv.warning_qty, inv.updated_at
+      FROM inventories inv
+     WHERE inv.sku_id = sqlc.arg(sku_id) AND inv.store_id = sqlc.arg(store_id)
+), wrote AS (
+    INSERT INTO inventories (sku_id, store_id, available_qty, warning_qty)
+    SELECT sqlc.arg(sku_id), sqlc.arg(store_id), GREATEST(sqlc.arg(delta)::int, 0), 0
+     WHERE EXISTS (SELECT 1 FROM cur) OR sqlc.arg(delta)::int > 0
+    ON CONFLICT (sku_id, store_id) DO UPDATE
+       SET available_qty = inventories.available_qty + sqlc.arg(delta)::int,
+           updated_at    = now()
+     WHERE inventories.available_qty + sqlc.arg(delta)::int >= 0
+    RETURNING available_qty AS w_available_qty,
+              warning_qty   AS w_warning_qty,
+              updated_at    AS w_updated_at
+)
+SELECT (SELECT count(*) FROM wrote) AS written_rows,
+       c.available_qty   AS current_available_qty,
+       c.warning_qty     AS current_warning_qty,
+       c.updated_at      AS current_updated_at,
+       w.w_available_qty AS new_available_qty,
+       w.w_warning_qty   AS new_warning_qty,
+       w.w_updated_at    AS new_updated_at
+  FROM (SELECT 1) anchor
+  LEFT JOIN cur   c ON true
+  LEFT JOIN wrote w ON true;
+
+-- name: InvLockBizID :exec
+-- 按 biz_id 串行化手工调整（事务级 advisory lock，提交或回滚即释放）。
+--
+-- 相对调整的幂等落在库存服务这一侧（「同一个 biz_id 只生效一次」）：core 在结果未知时
+-- 会拿同一把 Idempotency-Key、也就是同一个 biz_id 再调一次。两次调用可能并发到达
+-- （第一次还在路上、第二次已经发出），「先查流水有没有这个 biz_id、没有再写」是两步，
+-- 不锁的话两次都会查到「没有」然后各加一遍。
+--
+-- 不用唯一索引挡：biz_id 在下单那几类流水里本来就不唯一（一单多行），
+-- 给手工调整单开一条部分唯一索引要一条迁移，而这把锁只在手工调整这条低频路径上出现。
+-- 键是 biz_id 的 64 位哈希：不同租户、不同 biz_id 撞到同一个键只会让两次调整短暂排队。
+SELECT pg_advisory_xact_lock(hashtextextended(sqlc.arg(biz_id)::text, 0));
+
+-- name: InvFindManualLog :one
+-- 这个 biz_id 的手工流水（biz_type = 5）。相对调整的重放判定用：有就按它回原结果，
+-- 不再加一遍。走 idx_inv_logs_biz。
+SELECT l.sku_id, l.store_id, l.change_qty, l.after_available, l.created_at
+  FROM inventory_logs l
+ WHERE l.biz_id = sqlc.arg(biz_id) AND l.biz_type = 5
+ ORDER BY l.id
+ LIMIT 1;
+
+-- name: InvAppendManualLog :exec
+-- 手工调整那一行流水（biz_type = 5）。拆分前在 orders.sql（AppendManualInventoryLog），
+-- 随手工改库存一起搬到库存服务。biz_type 写死在语句里：这条语句只为手工调整存在。
+-- biz_id 由 core 拼好（相对调整「adj:员工:幂等键」，覆盖「set:员工:随机串」）。
+INSERT INTO inventory_logs (sku_id, store_id, change_qty, biz_type, biz_id,
+                            before_available, after_available, reason)
+VALUES (sqlc.arg(sku_id), sqlc.arg(store_id), sqlc.arg(change_qty), 5, sqlc.arg(biz_id),
+        sqlc.arg(before_available), sqlc.arg(after_available), sqlc.narg(reason));
+
+-- name: InvInitSKU :execrows
+-- 给一个新 SKU 建它的第一行库存（拆分前是 admin_skus.sql 的 CreateInventoryRow，
+-- 在建 SKU 的同一个事务里）。core 在 SKU 那一行**提交之后**调它，门店由 core 定
+-- （默认门店；没有默认门店就不调）。
+--
+-- 两个守卫，都是为了让它可以被放心地重复调用（core 在结果未知、或幂等重放时会再调）：
+--
+--   ON CONFLICT DO NOTHING   同一家店已经有这一行了（上一次其实成功了）→ 不覆盖。
+--                            覆盖的话，第一次建行之后卖掉的那几件会被初始值抹掉。
+--   NOT EXISTS 任何一家店     这个 SKU 在**别的**店已经有库存行了 → 不建。防的是
+--                            「第一次建在旧默认店、之后换了默认店、再重放」时
+--                            在新默认店凭空多出一份初始库存。
+INSERT INTO inventories (sku_id, store_id, available_qty, warning_qty)
+SELECT sqlc.arg(sku_id), sqlc.arg(store_id), sqlc.arg(available_qty), sqlc.arg(warning_qty)
+ WHERE NOT EXISTS (SELECT 1 FROM inventories ex WHERE ex.sku_id = sqlc.arg(sku_id))
+ON CONFLICT (sku_id, store_id) DO NOTHING;
