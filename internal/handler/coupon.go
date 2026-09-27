@@ -141,7 +141,7 @@ func apiApplicableCoupons(in []service.ApplicableCoupon) []api.ApplicableCoupon 
 func writeCouponError(c *gin.Context, err error) {
 	// 分级权限的两种 403（role-forbidden / out-of-scope）走统一的翻译，与商品、门店那些
 	// 后台接口同一个出口 —— 同一件事只有一种拒绝类型（见 admin_coupon.go 文件头）。
-	if writePermissionError(c, err) {
+	if writePermissionError(c, err) || writeInventoryUnavailable(c, err) {
 		return
 	}
 	switch {

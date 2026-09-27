@@ -69,6 +69,32 @@ so "which one is running?" never depends on anyone's memory.
   detail, cart, back-office stock pages/edits and the low-stock report return
   `503 inventory-unavailable` with `Retry-After` (additive contract change); a retried
   back-office stock adjustment with the same `Idempotency-Key` never applies twice.
+- **Core and inventory can run on two databases (phase 1b).** Core code no longer touches
+  the inventory tables and the inventory service no longer touches core tables.
+  Migrations **00075–00076** (core) and a new directory **`db/migrations-inventory`**
+  (`make migrate-inventory`, own version table `goose_db_version_inventory`; a no-op on a
+  single database that already ran `make migrate`, a full build on an empty one).
+  00075 moves flash-sale / limited-price quota and sold counts to a new inventory-owned
+  table `activity_stocks` (backfilled; `promotion_skus.stock_qty` / `sold_qty` are no
+  longer read or written and will be dropped next release); 00076 drops the foreign keys
+  from `inventories` / `inventory_logs` to `skus`, `stores` and `merchants`.
+  The order saga is now four steps: create (+ per-user limit), coupon, **inventory**
+  (store stock + campaign quota + stock log in one inventory-local transaction, barrier in
+  the inventory database, addressed `local://` in one process or `http://` to the
+  inventory service when `KEEL_ROLE=core`), and a core **finish** step (refuses an order
+  that was cancelled meanwhile, maps an inventory rejection to the usual 409, emits the
+  low-stock alert from the inventory log). Buyer cancel, timeout close and refund restock
+  commit the core side and enqueue an outbox job (`inventory.release`) in the same
+  transaction; it runs right after commit and a worker retries it until the inventory
+  service answers. Contract: `503 inventory-unavailable` added (additive) to order
+  preview/create, `POST /coupons/applicable` and the back-office promotion endpoints,
+  for split deployments only.
+  Behaviour differences: a per-user-limit violation now leaves the draft order in status 0
+  (it is invisible and closed by the orphan sweep) instead of closing it immediately;
+  a rejected stock deduction leaves one zero-quantity log row (`biz_type = 7`); closing an
+  order writes a zero-quantity "checked" row for lines that had nothing to release;
+  when the inventory service is down (split only), product lists omit flash-sale /
+  limited-price tags and stock released by cancel/timeout/refund comes back once it is up.
 
 ### Fixed
 

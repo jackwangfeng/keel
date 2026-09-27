@@ -26,18 +26,22 @@ info:
     **库存服务不可用时（只在拆分部署下出现）**。库存可以部署成单独的服务
     （docs/电商系统-微服务拆分方案.md）；它暂时不在时，契约的行为如下，单体部署不受影响：
 
-    · 浏览照常：`GET /products` 不读库存；`POST /search` 照常返回，每条结果的
+    · 浏览照常：`GET /products` 不读库存（限时折扣 / 秒杀的活动标签此时缺席，满减满折照常）；`POST /search` 照常返回，每条结果的
       `in_stock` **缺席**（它是可选字段——缺席即「这次不知道」），`in_stock_only`
       此时不生效。
     · 取决于水位的接口回 503 `https://keel.dev/problems/inventory-unavailable`
       （带 `Retry-After`）：商品详情（`Sku.available_qty` 是必填的，不编一个 0）、
       购物车的读写（行的 `status` / `available` 全取决于水位）、后台商品 / SKU /
       门店库存页、库存预警、后台改库存（`PUT .../inventory` 与相对调整）、建 SKU 与
-      批量导入的初始库存。写接口回 503 时**库存那一笔可能已经生效**：带同一个
+      批量导入的初始库存；以及（活动配额也在库存服务里之后）试算与下单、`POST /coupons/applicable`
+      在商品身上有限时折扣 / 秒杀报价时（要问活动余量），后台营销活动的列表、详情、新建与修改。写接口回 503 时**库存那一笔可能已经生效**：带同一个
       `Idempotency-Key` 原样重试即可，服务端保证不会重复生效。
     · 后台写接口的回显（`PATCH /admin/products/{id}`、上下架、`PATCH /admin/skus/{id}`）
       里的库存数（`total_stock` / `available_qty` / `warning_qty`）取不到时按 0 回显——
       写已经提交，不能回 503 让客户端以为没改成；以随后的 GET 为准。
+    · 买家取消、超时关单、退款到账照常成功：放回库存是异步任务，库存服务回来之后补上
+      （那段时间里库存看起来仍被占着——少卖，不会超卖）。下单时库存服务不在，
+      `POST /orders` 可能回 409 `idempotency-in-flight`：事务仍在推进，带同一个 Idempotency-Key 重试即可。
   license:
     name: Apache-2.0
 servers:
@@ -3675,6 +3679,7 @@ paths:
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
+        '503': { $ref: '#/components/responses/InventoryUnavailable' }
         default: { $ref: '#/components/responses/Problem' }
     post:
       tags: [Admin, Promotion]
@@ -3724,6 +3729,7 @@ paths:
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
+        '503': { $ref: '#/components/responses/InventoryUnavailable' }
         default: { $ref: '#/components/responses/Problem' }
 
   /admin/promotions/{promotion_id}:
@@ -3750,6 +3756,7 @@ paths:
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
+        '503': { $ref: '#/components/responses/InventoryUnavailable' }
         default: { $ref: '#/components/responses/Problem' }
     patch:
       tags: [Admin, Promotion]
@@ -3799,6 +3806,7 @@ paths:
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
+        '503': { $ref: '#/components/responses/InventoryUnavailable' }
         default: { $ref: '#/components/responses/Problem' }
 
   /uploads:
@@ -5108,6 +5116,7 @@ paths:
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
+        '503': { $ref: '#/components/responses/InventoryUnavailable' }
         default: { $ref: '#/components/responses/Problem' }
 
   /orders:
@@ -5203,6 +5212,7 @@ paths:
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
+        '503': { $ref: '#/components/responses/InventoryUnavailable' }
         default: { $ref: '#/components/responses/Problem' }
     get:
       tags: [Order]
@@ -6508,6 +6518,7 @@ paths:
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
+        '503': { $ref: '#/components/responses/InventoryUnavailable' }
         default: { $ref: '#/components/responses/Problem' }
 
   /coupon-templates:

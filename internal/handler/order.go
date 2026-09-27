@@ -215,6 +215,11 @@ func apiOrder(o repository.Order) api.Order {
 // 每一条都对应契约里明写的一个状态码。没对上的一律 500 —— 兜底分支不该猜一个
 // 4xx，那会把服务端的 bug 报成客户端的错，而客户端会照着这个错重试。
 func writeOrderError(c *gin.Context, err error) {
+	// 拆分部署下试算 / 下单撞上活动报价要问库存服务的活动配额（微服务拆分阶段 1b），
+	// 它不在时 503 inventory-unavailable（契约 info.description），单体不会走到这里。
+	if writeInventoryUnavailable(c, err) {
+		return
+	}
 	switch {
 	case errors.Is(err, service.ErrCouponNotApplicable):
 		// 契约：409 coupon-not-applicable，试算与下单同一个 type。detail 带原因
