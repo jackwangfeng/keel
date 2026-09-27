@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../api/view.dart';
 import '../theme.dart';
+import 'net_image.dart';
 
 /// 首页网格的商品卡：封面（真图 / 首字色块）、标题两行省略、活动标签、价格（多规格加「起」）。
 class ProductCard extends StatelessWidget {
@@ -41,11 +42,7 @@ class ProductCard extends StatelessWidget {
                 fit: StackFit.expand,
                 children: [
                   c.imageUrl.isNotEmpty
-                      ? Image.network(
-                          c.imageUrl,
-                          fit: BoxFit.cover,
-                          errorBuilder: (_, _, _) => _Glyph(cover: c),
-                        )
+                      ? NetImage(url: c.imageUrl, fallback: _Glyph(cover: c))
                       : _Glyph(cover: c),
                   // 无货 / 下架：整张封面压一层灰，正中写字 —— 角落一个小标签在两列网格里太容易看漏。
                   if (_off)
@@ -279,7 +276,7 @@ class ProductTile extends StatelessWidget {
               child: SizedBox(
                 width: 72, height: 72,
                 child: c.imageUrl.isNotEmpty
-                    ? Image.network(c.imageUrl, fit: BoxFit.cover, errorBuilder: (_, _, _) => _Glyph(cover: c))
+                    ? NetImage(url: c.imageUrl, fallback: _Glyph(cover: c))
                     : _Glyph(cover: c),
               ),
             ),

@@ -10,6 +10,7 @@ import '../api/order.dart';
 import '../api/services.dart';
 import '../api/view.dart';
 import '../theme.dart';
+import '../widgets/net_image.dart';
 import '../widgets/pay_bar.dart';
 import '../widgets/quick_cart.dart';
 
@@ -520,7 +521,7 @@ class _CheckoutPageState extends State<CheckoutPage> {
           child: c == null
               ? const ColoredBox(color: Color(0xFFD4B896))
               : c.imageUrl.isNotEmpty
-                  ? Image.network(c.imageUrl, fit: BoxFit.cover, errorBuilder: (_, _, _) => ColoredBox(color: c.color))
+                  ? NetImage(url: c.imageUrl, fallback: ColoredBox(color: c.color))
                   : ColoredBox(color: c.color, child: Center(child: Text(c.glyph, style: const TextStyle(fontSize: 20, color: KeelColors.card)))),
         ),
       );

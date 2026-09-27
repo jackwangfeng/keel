@@ -5,6 +5,7 @@ import '../api/catalog.dart';
 import '../api/client.dart';
 import '../api/services.dart';
 import '../theme.dart';
+import '../widgets/net_image.dart';
 import '../widgets/quick_cart.dart';
 import '../widgets/states.dart';
 
@@ -376,11 +377,7 @@ class _Gallery extends StatelessWidget {
               key: const Key('detail.gallery'),
               children: [
                 for (final u in detail.images)
-                  Image.network(
-                    u,
-                    fit: BoxFit.cover,
-                    errorBuilder: (_, _, _) => glyph,
-                  ),
+                  NetImage(url: u, fallback: glyph),
               ],
             ),
     );

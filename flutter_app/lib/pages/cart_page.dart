@@ -6,6 +6,7 @@ import '../api/client.dart';
 import '../api/services.dart';
 import '../tabs.dart';
 import '../theme.dart';
+import '../widgets/net_image.dart';
 import '../widgets/quick_cart.dart';
 import '../widgets/states.dart';
 
@@ -376,11 +377,7 @@ class _CartPageState extends State<CartPage> {
                   width: 76,
                   height: 76,
                   child: r.cover.imageUrl.isNotEmpty
-                      ? Image.network(
-                          r.cover.imageUrl,
-                          fit: BoxFit.cover,
-                          errorBuilder: (_, _, _) => _glyph(r),
-                        )
+                      ? NetImage(url: r.cover.imageUrl, fallback: _glyph(r))
                       : _glyph(r),
                 ),
               ),

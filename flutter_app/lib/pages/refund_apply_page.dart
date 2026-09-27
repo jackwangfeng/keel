@@ -7,6 +7,7 @@ import '../api/order.dart';
 import '../api/refund.dart';
 import '../api/services.dart';
 import '../theme.dart';
+import '../widgets/net_image.dart';
 import '../widgets/form_bits.dart';
 import '../widgets/quick_cart.dart';
 import '../widgets/states.dart';
@@ -188,7 +189,7 @@ class _RefundApplyPageState extends State<RefundApplyPage> {
                                 child: SizedBox(
                                   width: 60, height: 60,
                                   child: it.cover.imageUrl.isNotEmpty
-                                      ? Image.network(it.cover.imageUrl, fit: BoxFit.cover, errorBuilder: (_, _, _) => ColoredBox(color: it.cover.color))
+                                      ? NetImage(url: it.cover.imageUrl, fallback: ColoredBox(color: it.cover.color))
                                       : ColoredBox(color: it.cover.color,
                                           child: Center(child: Text(it.cover.glyph, style: const TextStyle(fontSize: 24, color: KeelColors.card)))),
                                 ),

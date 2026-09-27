@@ -5,6 +5,7 @@ import '../api/client.dart';
 import '../api/order.dart';
 import '../api/services.dart';
 import '../theme.dart';
+import '../widgets/net_image.dart';
 import '../widgets/badge.dart';
 import '../widgets/pay_bar.dart';
 import '../widgets/states.dart';
@@ -199,7 +200,7 @@ class _OrderPageState extends State<OrderPage> {
                         child: SizedBox(
                           width: 56, height: 56,
                           child: it.cover.imageUrl.isNotEmpty
-                              ? Image.network(it.cover.imageUrl, fit: BoxFit.cover, errorBuilder: (_, _, _) => ColoredBox(color: it.cover.color))
+                              ? NetImage(url: it.cover.imageUrl, fallback: ColoredBox(color: it.cover.color))
                               : ColoredBox(color: it.cover.color,
                                   child: Center(child: Text(it.cover.glyph, style: const TextStyle(fontSize: 20, color: KeelColors.card)))),
                         ),

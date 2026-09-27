@@ -11,10 +11,10 @@
 ## Flutter 买家端（flutter_app/，2026-09-28 起主要维护的客户端）
 
 - **状态**：对齐 uni-app x 全部页面（第一阶段购物主链路 + 第二阶段券 / 消息 / 资料 / 服务地址 / 售后），main `fce951c` 起。uni-app x（`app/`）冻结，只修 bug。
-- **验收**：`make flutter-analyze flutter-test`（106 条单测）· `KEEL_API_BASE=http://192.168.0.110:18099/api/v1 make flutter-e2e-web`（Web 无头 25 条，带前置状态的 5 条读 `KEEL_E2E_*`，没设跳过）· `make flutter-build`（web / apk / ios）· `make flutter-build-mp`（mp-flutter main `8dff7fe`）· `make flutter-ios-install KEEL_IOS_TEAM=2Q89DQSSH6`。
+- **验收**：`make flutter-analyze flutter-test`（107 条单测）· `KEEL_API_BASE=http://192.168.0.110:18099/api/v1 make flutter-e2e-web`（Web 无头 25 条，带前置状态的 5 条读 `KEEL_E2E_*`，没设跳过）· `make flutter-build`（web / apk / ios）· `make flutter-build-mp`（mp-flutter main `bc76bf5`）· `make flutter-ios-install KEEL_IOS_TEAM=2Q89DQSSH6`。
 - **小程序**：开发者工具与 mp-flutter 会话共用，用前打招呼；`flutter_app/tool/mp_walk.js` 冒烟（复用 mp-flutter 的 drive.js）。报给 mp-flutter 的：安全区 / 胶囊（viewPadding 恒 0）、冷启动首页滚动位置、webgl2 日志 —— 在修。凭证上传（chooseMedia → uploadFile）、定位（getLocation wgs84）、image_picker / geolocator 的 Web 注册在小程序里还没实测。
 - **样式**：2026-09-28 逐页（首页、搜索、详情、购物车、结算、订单列表 / 详情、我的、券两页、消息、地址列表 / 编辑、资料、服务地址、售后列表 / 详情 / 申请、登录）与 uni-app x 的 H5 同尺寸截图对照并对齐（`app/dist/build/h5` 与 `flutter_app/build/web` 各起一个带 /api 反代的静态服务，playwright 用本机 Chrome 截图，e2e 买家的令牌直接写进两边的 localStorage）。Web 上字体不同（Roboto vs 苹方），真机上都是系统字体。
-- **小程序**：安全区（mp-flutter main 8dff7fe）、冷启动在顶部、启动无 error、顶栏右侧按钮让出胶囊（`MpWechat.menuButtonRect`）已在开发者工具验过；凭证上传与定位也在开发者工具实测过（mock chooseMedia 返回真文件、wx.uploadFile 真传，售后单带上凭证；getLocation 成功按坐标解析）。实测抓到小程序里 `Random.secure()` 不可用（App 侧已兜底，mp-flutter 在补 crypto.getRandomValues）；订单 → 申请售后 → 提交那段有 cullRect / Null check 的控制台报错（mp-flutter 已知、在修，页面正常）。
+- **小程序**：安全区（mp-flutter main bc76bf5）、冷启动在顶部、启动无 error、顶栏右侧按钮让出胶囊（`MpWechat.menuButtonRect`）已在开发者工具验过；凭证上传与定位也在开发者工具实测过（mock chooseMedia 返回真文件、wx.uploadFile 真传，售后单带上凭证；getLocation 成功按坐标解析）。实测抓到的 `Random.secure()` 不可用（K4）与 cullRect / Null check 控制台报错（K5）mp-flutter 已在 bc76bf5 修好并复验通过；App 侧的随机数兜底保留（mp-flutter 取不到种子时仍不提供 crypto）。列表图用 `NetImage` 按显示尺寸解码（cacheWidth）。
 - **踩过的坑**：`go('/login')` 再 `go` 回来会在转场中重建外壳（Duplicate GlobalKey）→ 登录页一律 push / pop；主题按钮最小宽度无穷大放进 Row 布局失败 → 页面测试必须用 `keelTheme()`；Web e2e 同一输入框第二次 `enterText` 收不到；`timeout(onTimeout: () => null)` 遇到运行时不可空的 Future 会因协变当场抛错（坐标被吞）；本机真实位置会被围栏解析到别的店 → e2e 用 `KEEL_LOCATE=off`；Gradle 不读 http_proxy → android 仓库走阿里云镜像。
 
 ## 里程碑
