@@ -11,6 +11,7 @@ import 'package:keel_buyer/api/services.dart';
 import 'package:keel_buyer/api/session.dart';
 import 'package:keel_buyer/api/store.dart';
 import 'package:keel_buyer/router.dart';
+import 'package:keel_buyer/theme.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 http.Response j(Object body, [int status = 200]) => http.Response(jsonEncode(body), status,
@@ -23,7 +24,7 @@ Future<Widget> app(MockClient fake) async {
   final client = ApiClient(base: 'http://h/api/v1', session: session, http: fake);
   return Services(client: client, session: session, store: StoreService(client),
       cart: CartCount(client, session), trace: SearchTrace(client),
-      child: MaterialApp.router(routerConfig: buildRouter(session)));
+      child: MaterialApp.router(theme: keelTheme(), routerConfig: buildRouter(session)));
 }
 
 MockClient server() => MockClient((r) async {

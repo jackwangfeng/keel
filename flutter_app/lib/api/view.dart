@@ -13,6 +13,12 @@ String yuan(int? cents) {
   return '${neg ? '-' : ''}¥${a ~/ 100}.${(a % 100).toString().padLeft(2, '0')}';
 }
 
+/// 面额：整元不带「.00」（「¥99」），用在说明文字里。
+String faceYuan(int cents) {
+  final t = yuan(cents);
+  return t.endsWith('.00') ? t.substring(0, t.length - 3) : t;
+}
+
 /// 「2026-09-26T22:55:37.188864Z」-> 本地时区「09-27 06:55」。解析不了就原样返回。
 String shortTime(String iso) {
   final d = DateTime.tryParse(iso);

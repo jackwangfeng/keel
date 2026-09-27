@@ -6,7 +6,7 @@ import 'e2e_env.dart';
 import 'helpers.dart';
 
 void smokeTests() {
-  testWidgets('冒烟：首页显示门店与服务端的商品；登录后「我的」显示昵称；退出', (t) async {
+  e2e('冒烟：首页显示门店与服务端的商品；登录后「我的」显示昵称；退出', (t) async {
     requireAccount();
     await app.main();
     await waitFor(t, find.byKey(const Key('home.store')));

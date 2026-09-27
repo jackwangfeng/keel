@@ -20,6 +20,13 @@ class MePage extends StatelessWidget {
               Text(s.session.nickname.isEmpty ? '买家' : s.session.nickname, key: const Key('me.nickname'), style: KeelText.title),
               const Text('欢迎回来', style: KeelText.sub),
               const SizedBox(height: 24),
+              Card(
+                child: Column(children: [
+                  ListTile(key: const Key('me.addresses'), leading: const Icon(Icons.location_on_outlined),
+                      title: const Text('收货地址'), trailing: const Icon(Icons.chevron_right), onTap: () => context.push('/addresses')),
+                ]),
+              ),
+              const SizedBox(height: 24),
               OutlinedButton(key: const Key('me.logout'), onPressed: () => logout(s.client, s.session),
                   child: const Text('退出登录')),
             ] else ...[

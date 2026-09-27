@@ -13,7 +13,7 @@ Future<Map<String, dynamic>?> waitCartHas(int skuId) async {
 }
 
 void browseTests() {
-  testWidgets('分类：分类栏与服务端一致；切换后标题与件数跟着变，点回「全部」', (t) async {
+  e2e('分类：分类栏与服务端一致；切换后标题与件数跟着变，点回「全部」', (t) async {
     await startApp(t);
     final tree = await Api.get('/categories', auth: false);
     if (tree is! List) {
@@ -34,7 +34,7 @@ void browseTests() {
     await waitFor(t, keyedText('home.section', '全部商品'));
   });
 
-  testWidgets('首页原地加购：单规格直接加；多规格弹浮层选第二个规格', (t) async {
+  e2e('首页原地加购：单规格直接加；多规格弹浮层选第二个规格', (t) async {
     await startApp(t);
     await loginInApp(t);
     await Api.clearCart();
@@ -59,7 +59,7 @@ void browseTests() {
     await Api.clearCart();
   });
 
-  testWidgets('搜索：按商品标题搜，这件排第一；点进去是它的详情；详情里加购成功', (t) async {
+  e2e('搜索：按商品标题搜，这件排第一；点进去是它的详情；详情里加购成功', (t) async {
     await startApp(t);
     await loginInApp(t);
     await Api.clearCart();

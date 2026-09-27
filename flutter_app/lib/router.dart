@@ -1,38 +1,67 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import 'api/cart_count.dart';
+import 'api/services.dart';
 import 'api/session.dart';
+import 'pages/address_edit_page.dart';
+import 'pages/address_list_page.dart';
+import 'pages/cart_page.dart';
 import 'pages/home_page.dart';
 import 'pages/login_page.dart';
 import 'pages/me_page.dart';
 import 'pages/product_page.dart';
 import 'pages/search_page.dart';
+import 'tabs.dart';
 import 'theme.dart';
 
-/// 底部 tab：第 1 步只有 首页 / 我的；购物车、订单在第 3、4 步加进来。
+/// 底部 tab：首页 / 购物车 / 我的（订单在第 4 步加进来）。
 GoRouter buildRouter(Session session) => GoRouter(
       routes: [
         StatefulShellRoute.indexedStack(
-          builder: (context, state, shell) => Scaffold(
-            body: shell,
-            bottomNavigationBar: NavigationBar(
-              backgroundColor: KeelColors.card,
-              selectedIndex: shell.currentIndex,
-              onDestinationSelected: shell.goBranch,
-              destinations: const [
-                NavigationDestination(key: Key('tab.home'), icon: Icon(Icons.home_outlined), label: '首页'),
-                NavigationDestination(key: Key('tab.me'), icon: Icon(Icons.person_outline), label: '我的'),
-              ],
-            ),
-          ),
+          builder: (context, state, shell) {
+            // 切 tab（包括 context.go('/cart') 这类跳转）时通知 tab 页刷新。
+            WidgetsBinding.instance.addPostFrameCallback((_) => Tabs.current.value = shell.currentIndex);
+            return Scaffold(
+              body: shell,
+              bottomNavigationBar: NavigationBar(
+                backgroundColor: KeelColors.card,
+                selectedIndex: shell.currentIndex,
+                onDestinationSelected: shell.goBranch,
+                destinations: [
+                  const NavigationDestination(key: Key('tab.home'), icon: Icon(Icons.home_outlined), label: '首页'),
+                  NavigationDestination(key: const Key('tab.cart'), icon: _CartIcon(count: Services.of(context).cart), label: '购物车'),
+                  const NavigationDestination(key: Key('tab.me'), icon: Icon(Icons.person_outline), label: '我的'),
+                ],
+              ),
+            );
+          },
           branches: [
             StatefulShellBranch(routes: [GoRoute(path: '/', builder: (_, _) => const HomePage())]),
+            StatefulShellBranch(routes: [GoRoute(path: '/cart', builder: (_, _) => const CartPage())]),
             StatefulShellBranch(routes: [GoRoute(path: '/me', builder: (_, _) => const MePage())]),
           ],
         ),
         // 外壳之上的页（push 进来，返回回到原 tab）。
         GoRoute(path: '/search', builder: (_, _) => const SearchPage()),
         GoRoute(path: '/product/:id', builder: (_, st) => ProductPage(productId: int.tryParse(st.pathParameters['id'] ?? '') ?? 0)),
+        GoRoute(path: '/addresses', builder: (_, st) => AddressListPage(select: st.uri.queryParameters['select'] == '1')),
+        GoRoute(path: '/addresses/new', builder: (_, _) => const AddressEditPage()),
+        GoRoute(path: '/addresses/:id', builder: (_, st) => AddressEditPage(addressId: int.tryParse(st.pathParameters['id'] ?? '') ?? 0)),
         GoRoute(path: '/login', builder: (_, st) => LoginPage(from: st.uri.queryParameters['from'] ?? '')),
       ],
     );
+
+class _CartIcon extends StatelessWidget {
+  const _CartIcon({required this.count});
+  final CartCount count;
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+        listenable: count,
+        builder: (_, _) => Badge(
+          isLabelVisible: count.n > 0,
+          label: Text(count.n > 99 ? '99+' : '${count.n}', key: const Key('tab.cartBadge')),
+          child: const Icon(Icons.shopping_cart_outlined),
+        ),
+      );
+}

@@ -11,6 +11,7 @@ import 'package:keel_buyer/api/services.dart';
 import 'package:keel_buyer/api/session.dart';
 import 'package:keel_buyer/api/store.dart';
 import 'package:keel_buyer/router.dart';
+import 'package:keel_buyer/theme.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 http.Response j(Object body, [int status = 200]) => http.Response(jsonEncode(body), status,
@@ -81,7 +82,7 @@ Future<(Widget, CartCount)> app(Fake f, {bool loggedIn = true}) async {
   final count = CartCount(client, session);
   return (
     Services(client: client, session: session, store: StoreService(client), cart: count, trace: SearchTrace(client),
-        child: MaterialApp.router(routerConfig: buildRouter(session))),
+        child: MaterialApp.router(theme: keelTheme(), routerConfig: buildRouter(session))),
     count
   );
 }
@@ -152,6 +153,11 @@ void main() {
     await t.tap(find.byKey(const Key('detail.add')));
     await t.pumpAndSettle();
     expect(find.byKey(const Key('detail.added')), findsOneWidget);
+    // 「去结算 ›」切到购物车 tab。
+    await t.tap(find.byKey(const Key('detail.added')));
+    await t.pumpAndSettle();
+    expect(t.takeException(), isNull);
+    expect(find.byKey(const Key('cart.row.1')), findsOneWidget);
   });
 
   testWidgets('搜索：缺货标出来；点进去回传 click（带 trace_id）', (t) async {

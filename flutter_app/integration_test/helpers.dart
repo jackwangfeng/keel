@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:keel_buyer/main.dart' as app;
+import 'package:keel_buyer/main.dart' show appRouter;
 
 import 'e2e_env.dart';
 
@@ -39,6 +40,22 @@ Future<T> waitUntil<T>(WidgetTester t, Future<T?> Function() probe, String what,
   throw TestFailure('等 $what 超时');
 }
 
+/// Web 上 flutter drive 只报「有 N 个异常」，不打印内容：startApp 把 FlutterError 记在这里，
+/// 用例失败时连同第一个异常一起写进失败信息。
+final seen = <String>[];
+
+/// 用它代替 testWidgets。
+void e2e(String name, Future<void> Function(WidgetTester t) body) {
+  testWidgets(name, (t) async {
+    seen.clear();
+    try {
+      await body(t);
+    } catch (e) {
+      fail('${'$e'.split('\n').take(8).join(' / ')}${seen.isEmpty ? '' : ' || FlutterError: ${seen.join(' || ')}'}');
+    }
+  });
+}
+
 Finder byKey(String k) => find.byKey(Key(k));
 
 /// 列表是懒构建的：远处的元素要滚过去才会出现在树里。
@@ -64,6 +81,12 @@ String textOf(String key) => (byKey(key).evaluate().first.widget as Text).data ?
 
 /// 起 App 并等首页的门店行出来。
 Future<void> startApp(WidgetTester t) async {
+  // 测试框架只报「有 N 个异常」，不打印内容：先把每个异常打出来，再交给框架。
+  final prev = FlutterError.onError;
+  FlutterError.onError = (d) {
+    if (seen.length < 4) seen.add('onError: ${d.exceptionAsString().split('\n').take(4).join(' / ')} | ${d.context} | ${d.library}');
+    prev?.call(d);
+  };
   await app.main();
   await waitFor(t, byKey('home.store'));
 }
@@ -72,6 +95,13 @@ void requireAccount() {
   if (e2ePhone.isEmpty || e2ePassword.isEmpty) {
     fail('没有 e2e 账号：用 tool/e2e_web.sh 跑（读 ~/.config/keel/e2e.env），或传 --dart-define=KEEL_E2E_PHONE/KEEL_E2E_PASSWORD');
   }
+}
+
+/// 直接打开某一页（深链），压在当前页上。
+Future<void> open(WidgetTester t, String location) async {
+  appRouter.push(location);
+  await t.pump();
+  await t.pump(const Duration(milliseconds: 400));
 }
 
 /// 在 App 里登录 e2e 专用买家（已登录就不动）。结束时停在「我的」。
@@ -118,6 +148,21 @@ class Api {
   static Future<dynamic> get(String path, {bool auth = true}) => call('GET', path, auth: auth);
 
   static Future<void> clearCart() => call('DELETE', '/cart');
+
+  /// 挑一个库存够的规格；跳过限时特价 / 秒杀的（有每人限购，反复买会把额度用光）。
+  static Future<({int productId, int skuId, int qty})> pickSku([int minQty = 5]) async {
+    ({int productId, int skuId, int qty})? best;
+    for (final p in ((await get('/products?page_size=50', auth: false)) as Map)['items'] as List) {
+      if (p['status'] != 1) continue;
+      final d = await get('/products/${p['id']}', auth: false) as Map;
+      final first = (d['skus'] as List).cast<Map>().where((s) => (s['available_qty'] as int) > 0 && s['promo_price_cents'] == null).firstOrNull;
+      if (first == null) continue;
+      final q = first['available_qty'] as int;
+      if (best == null || q > best.qty) best = (productId: p['id'] as int, skuId: first['id'] as int, qty: q);
+    }
+    if (best == null || best.qty < minQty) fail('演示库里没有库存 ≥ $minQty 的规格了，请重置演示库：$best');
+    return best;
+  }
 
   static Future<List<dynamic>> cartItems() async => ((await get('/cart')) as Map)['items'] as List;
 }
