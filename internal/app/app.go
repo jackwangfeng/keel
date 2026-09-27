@@ -113,6 +113,8 @@ type Config struct {
 	AuthSecret string
 	Tenant     tenant.Config
 	Payment    service.PaymentConfig
+	// Split 是拆分部署的那几项（KEEL_ROLE 等，见 split.go）。全空 = 单体。
+	Split SplitConfig
 }
 
 // ConfigFromEnv 从环境变量读配置。
@@ -130,6 +132,7 @@ func ConfigFromEnv() Config {
 			BaseDomain:  os.Getenv(EnvBaseDomain),
 		},
 		Payment: service.PaymentConfig{Sandbox: sandboxEnabled(os.Getenv(EnvPaymentSandbox))},
+		Split:   splitConfigFromEnv(),
 	}
 }
 
@@ -717,8 +720,23 @@ func Run(ctx context.Context, listen func(addr string, h http.Handler) error) er
 
 	cfg := ConfigFromEnv()
 
+	// 拆分部署的配置排在一切之前：它只查配置本身，而一个拼错的 KEEL_ROLE
+	// 决定的是「这个进程该起哪些东西」—— 不能先按单体起一半再发现。
+	if err := cfg.Split.validate(); err != nil {
+		return fmt.Errorf("拒绝启动: %w", err)
+	}
+
 	if err := trustProxies(gin.New(), os.Getenv(EnvTrustedProxies)); err != nil {
 		return fmt.Errorf("拒绝启动: %w", err)
+	}
+
+	if cfg.Split.Role == RoleInventory {
+		return runInventory(ctx, cfg.Split, listen)
+	}
+	if cfg.Split.InventoryURL != "" {
+		// 阶段 0：地址与密钥已经校验过，但还没有任何调用走它 —— 库存仍在进程内。
+		// 不喊的话，配了它的人会以为库存已经拆出去了。
+		slog.WarnContext(ctx, EnvInventoryURL+" 已配置，但本版本的库存调用仍在进程内（拆分部署阶段 1 起生效）")
 	}
 
 	pool, err := db.NewPool(ctx)
@@ -726,6 +744,14 @@ func Run(ctx context.Context, listen func(addr string, h http.Handler) error) er
 		return fmt.Errorf("建连接池失败: %w", err)
 	}
 	defer pool.Close()
+
+	// 库存池：没配 KEEL_INVENTORY_DSN 时就是上面这个池。阶段 0 里只有内网服务的
+	// /readyz 用它；阶段 1 起库存仓储只用它。
+	invPool, closeInv, err := inventoryPool(ctx, cfg.Split, pool)
+	if err != nil {
+		return err
+	}
+	defer closeInv()
 
 	res := tenant.NewResolver(pool, cfg.Tenant)
 	if err := res.Preflight(ctx); err != nil {
@@ -878,7 +904,11 @@ func Run(ctx context.Context, listen func(addr string, h http.Handler) error) er
 		return err
 	}
 
-	return listen(cfg.Addr, Router(pool, res, signer, orders, cfg.Payment, searchEmbedder))
+	public := Router(pool, res, signer, orders, cfg.Payment, searchEmbedder)
+	if cfg.Split.InternalAddr == "" {
+		return listen(cfg.Addr, public)
+	}
+	return serveBoth(listen, cfg.Addr, public, cfg.Split.InternalAddr, internalRouter(cfg.Split, invPool))
 }
 
 // bootstrapStaff 在库里一个在岗平台级管理员都没有时，建一个并把那串一次性

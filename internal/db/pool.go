@@ -24,8 +24,32 @@ import (
 // EnvDBMaxConns 是业务连接池的上限；不配或配非正数时用 pgxpool 的默认值（max(4, CPU 核数)）。
 const EnvDBMaxConns = "KEEL_DB_MAX_CONNS"
 
+// EnvInventoryDSN 是库存库的完整连接串（拆分部署用，阶段 1 起生效；
+// 见 docs/电商系统-微服务拆分方案.md）。空 = 库存与业务同一个库、同一个池。
+//
+// 它是一整串 DSN 而不是再来一组 PGHOST / PGUSER 分量：拆分形态下库存库是
+// 另一个实例，两组分量变量交叉着配，漏掉一个就会安静地连回业务库 ——
+// 那时两个服务写的是同一张表，什么都测不出来，直到有人去停业务库。
+const EnvInventoryDSN = "KEEL_INVENTORY_DSN"
+
 func NewPool(ctx context.Context) (*pgxpool.Pool, error) {
-	cfg, err := pgxpool.ParseConfig(DSN())
+	return NewPoolFromDSN(ctx, DSN())
+}
+
+// NewPoolFromDSN 与 NewPool 相同，只是连接串由调用方给：同一道 Guard、
+// 同一个 KEEL_DB_MAX_CONNS、同样建池即 Ping。
+//
+// 它为拆分部署的库存库而存在（KEEL_INVENTORY_DSN）。开这个口子不会把
+// 「用一条能绕过 RLS 的连接跑应用」这个洞带回来：那个洞的闸门从来不是
+// 「连接串由谁拼」，而是挂在 AfterConnect 上的 Guard —— 连接串指向哪个库、
+// 用哪个角色都行，只要那个角色能绕过 RLS，这里一条物理连接都建不出来。
+// pool_test.go 对这个函数单独钉了同样的断言。
+//
+// KEEL_DB_MAX_CONNS 两个池共用一个值：单体形态下库存池就是业务池（同一个
+// *pgxpool.Pool），不存在第二份；拆分形态下两个池在两个进程里、连两个库，
+// 各自按同一个上限算连接数，部署指南里那条公式不用改。
+func NewPoolFromDSN(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
+	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		return nil, err
 	}

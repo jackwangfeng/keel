@@ -39,6 +39,20 @@ so "which one is running?" never depends on anyone's memory.
 
 ## [Unreleased]
 
+### Added
+
+- **Groundwork for splitting inventory into its own service (phase 0 of
+  `docs/电商系统-微服务拆分方案.md`).** No behaviour change in the default deployment.
+  New, all optional: `KEEL_ROLE` (`all` default / `core` / `inventory`; unknown values
+  refuse to start), `KEEL_INVENTORY_DSN` (inventory database, defaults to the main pool),
+  `KEEL_INTERNAL_ADDR` + `KEEL_INTERNAL_SECRET` (a separate internal HTTP listener under
+  `/internal/v1`, HMAC-signed with the tenant header covered by the signature), and
+  `KEEL_INVENTORY_URL` (validated but not used until phase 1). `KEEL_ROLE=inventory`
+  currently serves only `/healthz`, `/version` and `/readyz` on the internal port.
+  Internally: a signed service-to-service client that separates "definitely failed" from
+  "outcome unknown", SAGA steps with per-step payloads, and an HTTP adapter so a saga
+  branch can run in another process. No migration.
+
 ### Fixed
 
 - **Cart lines and order lines show the product image.** When a SKU has no image of its own,

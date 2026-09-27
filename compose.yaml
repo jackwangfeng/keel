@@ -222,6 +222,13 @@ services:
       # 多实例共用一个 Postgres 时按「实例数 × 两者之和 + 余量 < max_connections」配，见部署指南。
       KEEL_DB_MAX_CONNS: ${KEEL_DB_MAX_CONNS:-}
       DTMRS_DB_POOL: ${DTMRS_DB_POOL:-}
+      # 拆分部署（docs/电商系统-微服务拆分方案.md）。全空 = 今天的单体，本文件不需要它们；
+      # 透传只是为了让同一份 compose 能试跑拆分形态的配置。含义见部署指南的环境变量表。
+      KEEL_ROLE: ${KEEL_ROLE:-}
+      KEEL_INVENTORY_DSN: ${KEEL_INVENTORY_DSN:-}
+      KEEL_INTERNAL_ADDR: ${KEEL_INTERNAL_ADDR:-}
+      KEEL_INTERNAL_SECRET: ${KEEL_INTERNAL_SECRET:-}
+      KEEL_INVENTORY_URL: ${KEEL_INVENTORY_URL:-}
 
       # 镜像是拿来跑的，不是拿来开发的：gin 的 debug 模式会在启动时打一屏
       # 「你没有设置 release」的警告，而 `docker compose up` 的头一屏正是
