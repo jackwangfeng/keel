@@ -4,7 +4,9 @@
 // 删掉，不动种子那条 —— 删了默认地址服务端不会自动补回，后面的结算用例就没有地址了。
 const { waitFor, waitData, waitEl, pickSku, httpGet, httpRequest, apiBase, serverToken, loginInApp } = require('./helpers')
 
-const NAME = 'e2e 收件人'
+// 用一个不会和种子撞名的收件人：e2e 专用买家的种子默认地址就叫「e2e 收件人」，
+// 原来按这个名字清理，把种子地址也删了（实测），后面的结算用例全没地址。
+const NAME = 'e2e 临时收件人'
 
 async function serverAddresses(token) {
   const res = await httpGet(apiBase() + '/addresses', token)
@@ -20,13 +22,13 @@ describe('收货地址', () => {
     token = await serverToken()
     // 上一次跑挂在半路留下的 e2e 地址先清掉，免得列表里越积越多。
     for (const a of await serverAddresses(token)) {
-      if (a.receiver_name === NAME) await httpRequest('DELETE', apiBase() + '/addresses/' + a.id, null, token)
+      if (a.receiver_name === NAME && !a.is_default && a.region_code !== '330106') await httpRequest('DELETE', apiBase() + '/addresses/' + a.id, null, token)
     }
   })
 
   afterAll(async () => {
     for (const a of await serverAddresses(token)) {
-      if (a.receiver_name === NAME) await httpRequest('DELETE', apiBase() + '/addresses/' + a.id, null, token)
+      if (a.receiver_name === NAME && !a.is_default && a.region_code !== '330106') await httpRequest('DELETE', apiBase() + '/addresses/' + a.id, null, token)
     }
   })
 
