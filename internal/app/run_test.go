@@ -79,6 +79,12 @@ func env(t *testing.T, defaultMerchant, baseDomain string) {
 	t.Setenv(app.EnvDefaultMerchant, defaultMerchant)
 	t.Setenv(app.EnvBaseDomain, baseDomain)
 	t.Setenv(app.EnvAddr, "127.0.0.1:0")
+	// 拆分部署那几个一律清空：开发机上若留着 KEEL_ROLE=inventory，
+	// 下面每一条都会走到另一条启动路径上。
+	for _, k := range []string{app.EnvRole, app.EnvInventoryDSN, app.EnvInternalAddr,
+		app.EnvInternalSecret, app.EnvInventoryURL} {
+		t.Setenv(k, "")
+	}
 	// 走 dtmtest：它断言 Run 返回（协调器已 Close）时 sqlite 存储已经关干净。见 dtmtest 包注释。
 	t.Setenv(app.EnvDTMDSN, dtmtest.SQLiteDSN(t))
 }
