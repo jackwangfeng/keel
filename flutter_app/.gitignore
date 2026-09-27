@@ -48,3 +48,6 @@ web_dev_config.yaml
 .tools/
 build/
 flutter_*.log
+
+# 小程序冒烟脚本的依赖
+/tool/node_modules/

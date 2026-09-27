@@ -1,0 +1,6 @@
+{
+  "name": "keel-buyer-mp-walk",
+  "private": true,
+  "description": "小程序冒烟（tool/mp_walk.js）的依赖",
+  "dependencies": { "miniprogram-automator": "^0.12.1" }
+}

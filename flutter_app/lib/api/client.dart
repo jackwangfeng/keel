@@ -91,6 +91,14 @@ class ApiClient {
     } catch (_) {}
   }
 
+  /// 原样 POST（沙箱回调）：头与报文体由调用方给，不加令牌、不加 Accept。
+  Future<({int status, String text})> postRaw(String url, Map<String, String> headers, String body) async {
+    final res = await _http.post(Uri.parse(url), headers: headers, body: body);
+    return (status: res.statusCode, text: utf8.decode(res.bodyBytes));
+  }
+
+  ApiFailure failureOf(int status, String text) => _failure(status, text, null);
+
   /// 服务端给的资源地址是相对路径（/api/v1/uploads/..）：补上服务地址的 origin。
   /// base 本身是相对的（Web 同源）或资源已是绝对地址时原样返回。
   String assetUrl(String path) {

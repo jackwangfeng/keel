@@ -149,7 +149,7 @@ Future<CartView> setCartQuantity(ApiClient c, int itemId, int quantity, {require
 Future<CartView> selectAllCart(ApiClient c, bool selected, {required int? storeId}) =>
     _cart(c, 'PUT', '/cart/selection', storeId, body: SelectCartItemsRequest(selected: selected).toJson());
 
-/// 批量删除（必带幂等键）。
-Future<CartView> deleteCartItems(ApiClient c, List<int> itemIds, {required int? storeId}) =>
+/// 批量删除（必带幂等键）。重试时传同一个键：第一次其实删成了、只是响应丢了的话，第二次是重放。
+Future<CartView> deleteCartItems(ApiClient c, List<int> itemIds, {required int? storeId, String? idempotencyKey}) =>
     _cart(c, 'POST', '/cart/items/batch-delete', storeId,
-        body: BatchDeleteCartItemsRequest(itemIds: itemIds).toJson(), key: newIdempotencyKey());
+        body: BatchDeleteCartItemsRequest(itemIds: itemIds).toJson(), key: idempotencyKey ?? newIdempotencyKey());

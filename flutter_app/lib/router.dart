@@ -7,6 +7,9 @@ import 'api/session.dart';
 import 'pages/address_edit_page.dart';
 import 'pages/address_list_page.dart';
 import 'pages/cart_page.dart';
+import 'pages/checkout_page.dart';
+import 'pages/order_page.dart';
+import 'pages/orders_page.dart';
 import 'pages/home_page.dart';
 import 'pages/login_page.dart';
 import 'pages/me_page.dart';
@@ -15,7 +18,7 @@ import 'pages/search_page.dart';
 import 'tabs.dart';
 import 'theme.dart';
 
-/// 底部 tab：首页 / 购物车 / 我的（订单在第 4 步加进来）。
+/// 底部 tab：首页 / 购物车 / 订单 / 我的。
 GoRouter buildRouter(Session session) => GoRouter(
       routes: [
         StatefulShellRoute.indexedStack(
@@ -31,6 +34,7 @@ GoRouter buildRouter(Session session) => GoRouter(
                 destinations: [
                   const NavigationDestination(key: Key('tab.home'), icon: Icon(Icons.home_outlined), label: '首页'),
                   NavigationDestination(key: const Key('tab.cart'), icon: _CartIcon(count: Services.of(context).cart), label: '购物车'),
+                  const NavigationDestination(key: Key('tab.orders'), icon: Icon(Icons.receipt_long_outlined), label: '订单'),
                   const NavigationDestination(key: Key('tab.me'), icon: Icon(Icons.person_outline), label: '我的'),
                 ],
               ),
@@ -39,6 +43,7 @@ GoRouter buildRouter(Session session) => GoRouter(
           branches: [
             StatefulShellBranch(routes: [GoRoute(path: '/', builder: (_, _) => const HomePage())]),
             StatefulShellBranch(routes: [GoRoute(path: '/cart', builder: (_, _) => const CartPage())]),
+            StatefulShellBranch(routes: [GoRoute(path: '/orders', builder: (_, _) => const OrdersPage())]),
             StatefulShellBranch(routes: [GoRoute(path: '/me', builder: (_, _) => const MePage())]),
           ],
         ),
@@ -48,6 +53,16 @@ GoRouter buildRouter(Session session) => GoRouter(
         GoRoute(path: '/addresses', builder: (_, st) => AddressListPage(select: st.uri.queryParameters['select'] == '1')),
         GoRoute(path: '/addresses/new', builder: (_, _) => const AddressEditPage()),
         GoRoute(path: '/addresses/:id', builder: (_, st) => AddressEditPage(addressId: int.tryParse(st.pathParameters['id'] ?? '') ?? 0)),
+        GoRoute(
+          path: '/checkout',
+          builder: (_, st) => CheckoutPage(
+            fromCart: st.uri.queryParameters['from'] == 'cart',
+            skuId: int.tryParse(st.uri.queryParameters['sku_id'] ?? '') ?? 0,
+            productId: int.tryParse(st.uri.queryParameters['product_id'] ?? '') ?? 0,
+            addressId: int.tryParse(st.uri.queryParameters['address_id'] ?? '') ?? 0,
+          ),
+        ),
+        GoRoute(path: '/orders/:no', builder: (_, st) => OrderPage(orderNo: st.pathParameters['no'] ?? '')),
         GoRoute(path: '/login', builder: (_, st) => LoginPage(from: st.uri.queryParameters['from'] ?? '')),
       ],
     );

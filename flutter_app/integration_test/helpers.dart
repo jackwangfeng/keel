@@ -104,6 +104,9 @@ Future<void> open(WidgetTester t, String location) async {
   await t.pump(const Duration(milliseconds: 400));
 }
 
+/// 「¥12.30」/「-¥8.00」-> 分。
+int centsOf(String t) => (double.parse(t.replaceAll(RegExp('[-¥]'), '')) * 100).round() * (t.startsWith('-') ? -1 : 1);
+
 /// 在 App 里登录 e2e 专用买家（已登录就不动）。结束时停在「我的」。
 Future<void> loginInApp(WidgetTester t) async {
   requireAccount();
@@ -162,6 +165,43 @@ class Api {
     }
     if (best == null || best.qty < minQty) fail('演示库里没有库存 ≥ $minQty 的规格了，请重置演示库：$best');
     return best;
+  }
+
+  static Future<int> storeId() async =>
+      ((((await get('/products?page_size=1', auth: false)) as Map)['store']) as Map)['store_id'] as int;
+
+  static Future<List<Map>> addresses() async => ((await get('/addresses')) as List).cast<Map>();
+
+  /// 服务端试算（拿这一单能用的券等）。
+  static Future<Map> preview(int skuId, int qty, int addressId, {int? couponId}) async => (await call('POST', '/orders/preview', body: {
+        'items': [{'sku_id': skuId, 'quantity': qty}], 'store_id': await storeId(), 'address_id': addressId,
+        'user_coupon_id': ?couponId,
+      })) as Map;
+
+  static Future<int> makeAddress(Map<String, dynamic> fields) async {
+    final r = await idem('POST', '/addresses', {'phone': '13900000000', 'detail': '1 号', ...fields});
+    if (r is! Map || r['id'] == null) fail('建地址失败：$r');
+    return r['id'] as int;
+  }
+
+  static Future<dynamic> idem(String method, String path, Object? body) async {
+    final req = http.Request(method, Uri.parse('$_base$path'))
+      ..headers['Authorization'] = 'Bearer ${await token()}'
+      ..headers['Idempotency-Key'] = _uuid();
+    if (body != null) {
+      req.headers['Content-Type'] = 'application/json';
+      req.body = jsonEncode(body);
+    }
+    final res = await http.Response.fromStream(await req.send());
+    final text = utf8.decode(res.bodyBytes);
+    if (res.statusCode >= 300) return {'_status': res.statusCode, if (text.isNotEmpty) '_body': jsonDecode(text)};
+    return text.isEmpty ? null : jsonDecode(text);
+  }
+
+  static String _uuid() {
+    final r = DateTime.now().microsecondsSinceEpoch;
+    final h = r.toRadixString(16).padLeft(12, '0');
+    return '00000000-0000-4000-8000-${h.substring(h.length - 12)}';
   }
 
   static Future<List<dynamic>> cartItems() async => ((await get('/cart')) as Map)['items'] as List;

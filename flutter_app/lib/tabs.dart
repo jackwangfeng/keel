@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 abstract final class Tabs {
   static const home = 0;
   static const cart = 1;
-  static const me = 2;
+  static const orders = 2;
+  static const me = 3;
   static final current = ValueNotifier<int>(home);
 }
