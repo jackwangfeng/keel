@@ -83,6 +83,9 @@ type NewJob struct {
 	Payload []byte
 	// Priority 大的先出队，**仅在租户内有意义**（§12）。回填任务取 -10。
 	Priority int16
+
+	// MaxAttempts 非 0 时覆盖表上的默认值（5）。库存的 outbox 任务用它（EnqueueJobWithMaxAttempts 的注释）。
+	MaxAttempts int32
 }
 
 // Job 是出队拿到的一行。
@@ -112,12 +115,20 @@ func (t tenantTx) EnqueueJob(ctx context.Context, j NewJob) (bool, error) {
 	if len(payload) == 0 {
 		payload = []byte(`{}`)
 	}
-	n, err := t.q.EnqueueJob(ctx, db.EnqueueJobParams{
-		Queue:    j.Queue,
-		JobKey:   j.JobKey,
-		Payload:  payload,
-		Priority: j.Priority,
-	})
+	var n int64
+	var err error
+	if j.MaxAttempts > 0 {
+		n, err = t.q.EnqueueJobWithMaxAttempts(ctx, db.EnqueueJobWithMaxAttemptsParams{
+			Queue: j.Queue, JobKey: j.JobKey, Payload: payload, Priority: j.Priority, MaxAttempts: j.MaxAttempts,
+		})
+	} else {
+		n, err = t.q.EnqueueJob(ctx, db.EnqueueJobParams{
+			Queue:    j.Queue,
+			JobKey:   j.JobKey,
+			Payload:  payload,
+			Priority: j.Priority,
+		})
+	}
 	if err != nil {
 		return false, err
 	}
@@ -318,6 +329,61 @@ func (r *Repo) RetryJob(ctx context.Context, id int64, reason string) error {
 		return fmt.Errorf("job %d: %w", id, ErrJobDeadLettered)
 	}
 	return nil
+}
+
+// RetryJobCapped 与 RetryJob 相同，只是退避封顶在 maxBackoff：1 秒 × 2^attempts，最多 maxBackoff。
+//
+// 为库存的 outbox 任务而加（微服务拆分阶段 1b）：那些任务配着很大的 max_attempts
+// （EnqueueJobWithMaxAttempts），不封顶的话第十几次重试之后一次退避就是几个小时，
+// 库存服务早就回来了、而放回库存还要再等半天 —— 那半天全是少卖。
+func (r *Repo) RetryJobCapped(ctx context.Context, id int64, reason string, maxBackoff time.Duration) error {
+	var status int16
+	err := r.pool.QueryRow(ctx, `
+		UPDATE jobs
+		   SET status     = CASE WHEN attempts >= max_attempts THEN 3 ELSE 0 END,
+		       run_after  = now() + (interval '1 second' * LEAST(pow(2, attempts), $3::float8)),
+		       last_error = $2,
+		       locked_by  = NULL, locked_at = NULL
+		 WHERE id = $1
+		RETURNING status`, id, reason, maxBackoff.Seconds()).Scan(&status)
+	if err != nil {
+		return err
+	}
+	if status == jobStatusDead {
+		return fmt.Errorf("job %d: %w", id, ErrJobDeadLettered)
+	}
+	return nil
+}
+
+// ClaimJobByKey 按 (租户, 队列, job_key) 占下一条**还没被 worker 取走**（status = 0）的任务：
+// 与 DequeueJobs 同一个占位（status = 1、attempts + 1、记下 locked_by），只是点名要哪一条。
+// 没有这条（从没入过队、已经被 worker 取走、已经做完）返回 ok = false。
+//
+// 为 outbox 的「提交之后就地跑一次」而加（service/inventory_outbox.go）：业务事务提交之后，
+// 调用方先自己把那件事做了（关单之后立刻放回库存），占下再做、做完照常 FinishJobs / RetryJobCapped
+// —— 与 worker 走完全相同的状态机，只是不等下一次轮询。占不到就说明 worker 已经在做了，
+// 调用方什么都不用管；那件事本身按单号幂等，即使两边都做了也只生效一次。
+//
+// 带 merchant_id：jobs 没有 RLS（这个文件的文件头），这里是本仓库的 Go 代码而不是 db/queries，
+// 不受「查询里不许出现租户列」那条规矩管；而 job_key 只在租户内唯一（uk_jobs_pending）。
+// run_after 不看：退避中的任务同样可以被点名拿来重试（调用方就是那个「现在就再试一次」的理由）。
+func (r *Repo) ClaimJobByKey(ctx context.Context, merchantID int64, queue, jobKey, workerID string) (Job, bool, error) {
+	var j Job
+	err := r.pool.QueryRow(ctx, `
+		UPDATE jobs
+		   SET status = 1, attempts = attempts + 1, locked_by = $4, locked_at = now()
+		 WHERE merchant_id = $1 AND queue = $2 AND job_key = $3 AND status = 0
+		   AND attempts < max_attempts
+		RETURNING id, merchant_id, queue, job_key, payload, attempts`,
+		merchantID, queue, jobKey, workerID).
+		Scan(&j.ID, &j.MerchantID, &j.Queue, &j.JobKey, &j.Payload, &j.Attempts)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Job{}, false, nil
+	}
+	if err != nil {
+		return Job{}, false, err
+	}
+	return j, true, nil
 }
 
 // ReapStuckJobs 把卡在「执行中」超过 olderThan 的任务放回队列。

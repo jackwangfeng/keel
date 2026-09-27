@@ -4,7 +4,7 @@
 // 一个接口，两个实现
 // ===========================================================================
 //
-// core 里凡是要读写门店库存的地方（阶段 1b 的四处除外，见下），都只认 Service 这个接口：
+// core 里凡是要读写库存（门店库存与活动配额）的地方，都只认 Service 这个接口：
 //
 //	Local   进程内实现，直接用库存仓储（repository.InventoryStore，只用库存池、只碰库存的表）。
 //	        KEEL_ROLE=all 用它；KEEL_ROLE=inventory 也用它 —— 挂在内网 HTTP 上给 core 调。
@@ -37,11 +37,17 @@
 // 单体形态下这两个错误不会出现（进程内调用没有「没回答」这回事），数据库错误原样上浮。
 //
 // ===========================================================================
-// 还没搬过来的（阶段 1b）
+// 阶段 1b：下单扣减、关单释放、退款回补、活动配额也过来了
 // ===========================================================================
 //
-// 下单 SAGA 的库存分支、超时关单 / 买家取消的回补、退款回补、扣减事务里读预警上下文，
-// 以及孤儿草稿关单前的流水核对，仍然在 core 的事务里直接碰库存表。
+// 阶段 1b 之后 core 的代码一处都不碰库存的表（inventories / inventory_logs / activity_stocks），
+// 库存的代码一处都不碰 core 的表 —— core 与库存可以真的跑在两个库上：
+//
+//	下单扣减 / 补偿   SAGA 分支（saga.go），载荷带着订单号、门店与行；屏障记在库存库
+//	关单 / 取消       core 事务里入队 outbox 任务，worker 调 ReleaseForOrder（按订单号幂等）
+//	退款回补          同上，RestockForRefund（按退款单号幂等）
+//	收尾与孤儿核对    OrderTrail：一张单的流水（扣减被拒、跌破预警线、有没有扣过）
+//	活动配额          ActivityStock（计价 / 标签 / 后台读）、SetActivityQuotas（后台整组设）
 package inventory
 
 import (
@@ -171,7 +177,133 @@ type Service interface {
 	// InitSKUs 给新 SKU 建第一行库存。可以放心重复调用：这家店已经有这一行、或这个 SKU
 	// 在任何一家店已经有行时什么都不做（见 db/queries/inventory_svc.sql 的 InvInitSKU）。
 	InitSKUs(ctx context.Context, rows []InitRow) error
+
+	// —— 阶段 1b ——
+
+	// ActivityStock 批量取活动配额与已售。q 里 SKUIDs 与 PromotionIDs 恰好给一个。
+	// 结果里没有的 (活动, SKU) 即「还没同步配额」（计价按报价不生效处理）。
+	ActivityStock(ctx context.Context, q ActivityQuery) (map[ActivityKey]Activity, error)
+
+	// SetActivityQuotas 整组设一个活动的配额：items 里的 SKU 设成给定配额（已售不动），
+	// 不在 items 里的删掉。可以放心重复调用。出路：nil / *ActivityRuleError（卖出过的 SKU
+	// 被移除、或配额低于已售 —— core 回 422）/ ErrInvalid / ErrOutcomeUnknown。
+	SetActivityQuotas(ctx context.Context, promotionID int64, items []ActivityQuota) error
+
+	// ReleaseForOrder 把一笔关掉的订单占着的库存与活动配额放回（超时关单 / 买家取消）。
+	// **按流水放**：只放这一单在自己的流水里还没补回来的部分（扣过多少、补过多少），
+	// 所以扣减从没发生（库存分支还在重试、或被拒）时什么都不放；按订单号幂等，
+	// 第二次调用什么都不做。放回之后这一单再来的扣减会被拒绝（saga.go 的「关单守卫」）。
+	ReleaseForOrder(ctx context.Context, r ReleaseRequest) (ReleaseResult, error)
+
+	// RestockForRefund 未发货的退款到账后把货加回门店库存。按退款单号幂等：
+	// 第二次调用什么都不做（Replayed）。活动配额不放回（货已经卖出去了，配额兑现过了）。
+	RestockForRefund(ctx context.Context, r RestockRequest) (ReleaseResult, error)
+
+	// OrderTrail 一张单（订单号或退款单号）在库存服务里的全部流水，按写入顺序，
+	// 每一行带着那一行库存此刻的预警线。
+	OrderTrail(ctx context.Context, bizID string) ([]TrailEntry, error)
 }
+
+// ActivityKey 是一行活动配额的键。
+type ActivityKey struct {
+	PromotionID int64
+	SKUID       int64
+}
+
+// Activity 是一行活动配额：Quota 为 0 表示不限（限时折扣），Sold 含待支付。
+type Activity struct {
+	Quota int32
+	Sold  int32
+}
+
+// ActivityQuery 是 ActivityStock 的入参：按一批 SKU（计价、标签），或按一批活动（后台）。
+type ActivityQuery struct {
+	SKUIDs       []int64
+	PromotionIDs []int64
+}
+
+// ActivityQuota 是整组设配额的一项。
+type ActivityQuota struct {
+	SKUID int64
+	Quota int32
+}
+
+// ActivityRuleError 是整组设配额违反了「卖出过的 SKU 不能移出活动 / 配额不能低于已售」。
+// 判定在库存服务的事务里、配额行的行锁之下（它看得见已售，core 看不见）。
+type ActivityRuleError struct {
+	SKUID   int64
+	Sold    int32
+	Quota   int32 // Removed 为真时无意义
+	Removed bool
+}
+
+func (e *ActivityRuleError) Error() string {
+	if e.Removed {
+		return fmt.Sprintf("sku %d 已按活动价卖出 %d 件，不能移出活动", e.SKUID, e.Sold)
+	}
+	return fmt.Sprintf("sku %d 已卖出 %d 件，配额不能改成 %d", e.SKUID, e.Sold, e.Quota)
+}
+
+func (e *ActivityRuleError) Unwrap() error { return ErrActivityRule }
+
+// OrderLine 是一笔订单的一行：扣减载荷、关单释放、退款回补共用。
+// PromotionID 非空表示这一行按活动价成交（要扣 / 放活动配额）。
+type OrderLine struct {
+	SKUID       int64  `json:"sku_id"`
+	Qty         int32  `json:"qty"`
+	PromotionID *int64 `json:"promotion_id,omitempty"`
+}
+
+// ReleaseRequest 是关单释放的入参。BizType 是流水的 biz_type：3 超时关单释放 / 6 买家取消释放。
+type ReleaseRequest struct {
+	OrderNo string
+	StoreID int64
+	BizType int16
+	Lines   []OrderLine
+}
+
+// RestockRequest 是退款回补的入参。Lines 的 PromotionID 被忽略（退款不放回配额）。
+type RestockRequest struct {
+	RefundNo string
+	StoreID  int64
+	Lines    []OrderLine
+}
+
+// ReleaseResult 是放回 / 加回了多少件。Replayed 为真表示这张单之前已经处理过，这一次什么都没改。
+type ReleaseResult struct {
+	Qty      int32
+	Replayed bool
+}
+
+// TrailEntry 是一行流水。Reason 只有扣减被拒（BizType 7）有，是拒绝码（Reject*）。
+type TrailEntry struct {
+	SKUID   int64
+	StoreID int64
+	BizType int16
+	Change  int32
+	Before  int32
+	After   int32
+	Warning int32
+	Reason  string
+}
+
+// 流水的 biz_type（与 repository.InventoryLog* 同值；库存服务自己的这一份是它的协议面）。
+const (
+	BizOrderDeduct    int16 = 1 // 下单扣减
+	BizSagaCompensate int16 = 2 // SAGA 补偿回补
+	BizTimeoutRelease int16 = 3 // 超时关单释放
+	BizRefundRestock  int16 = 4 // 退款回补
+	BizManual         int16 = 5 // 手工调整
+	BizBuyerCancel    int16 = 6 // 买家取消释放
+	BizOrderRejected  int16 = 7 // 下单扣减被拒（Reason 是拒绝码）
+)
+
+// 扣减被拒的拒绝码（TrailEntry.Reason）。core 的收尾分支据此回 409 的哪一种。
+const (
+	RejectInsufficient = "insufficient" // 门店库存不够（含这家店没有这一行）
+	RejectSoldOut      = "sold_out"     // 活动配额不够（含配额还没同步）
+	RejectReleased     = "released"     // 这一单已经被关单释放过了（取消 / 超时抢在扣减之前）
+)
 
 var (
 	// ErrUnavailable：读的时候库存服务没回答。只在拆分形态出现。
@@ -195,6 +327,9 @@ var (
 
 	// ErrInvalid：入参不合法（负数、缺 id、缺 biz_id）。是调用方的 bug，不是用户的错。
 	ErrInvalid = errors.New("库存请求不合法")
+
+	// ErrActivityRule：整组设配额违反了活动配额的规则。errors.As 取 *ActivityRuleError。
+	ErrActivityRule = errors.New("活动配额的修改违反了已售规则")
 )
 
 // IsUnavailable 回答「是不是没拿到库存服务的答案」（读的 ErrUnavailable 或写的 ErrOutcomeUnknown）。

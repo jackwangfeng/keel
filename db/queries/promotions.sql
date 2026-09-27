@@ -47,8 +47,11 @@ SELECT ps.promotion_id, ps.scope_type, ps.target_id, ps.include,
 -- name: ListLivePriceOffers :many
 -- 一批 SKU 身上此刻生效的限时折扣 / 秒杀。一个 SKU 可以同时在几个活动里，
 -- 取哪一个（价低者）是 service 的事。
+--
+-- 配额与已售不在这里（00075 起在库存服务的 activity_stocks）：有报价时 service 再向库存服务
+-- 批量问一次（service/pricing.go 的 activityQuotas），没有任何报价时不问。
 SELECT ps.promotion_id, ps.sku_id, ps.promo_price_cents, ps.discount_rate,
-       ps.per_user_limit, ps.stock_qty, ps.sold_qty
+       ps.per_user_limit
   FROM promotion_skus ps
   JOIN promotions pr ON pr.id = ps.promotion_id
  WHERE ps.sku_id = ANY(sqlc.arg(sku_ids)::bigint[])
@@ -62,8 +65,9 @@ SELECT ps.promotion_id, ps.sku_id, ps.promo_price_cents, ps.discount_rate,
 -- 商品列表 / 详情的活动标签：一批商品的全部 SKU 身上此刻生效的单价类活动，
 -- 连同这家门店的生效价（活动价 = min(门店价, 特价)，折扣类的特价要按门店价算）。
 -- 门店价从 sku_prices_by_store 取 —— 三层定价只许经由视图读（check_query_tenancy.py 第二条）。
+-- 秒杀余量（配额 − 已售）同 ListLivePriceOffers：不在这里，由 service 事后向库存服务问。
 SELECT ps.promotion_id, ps.sku_id, s.product_id, v.price_cents AS store_price_cents,
-       ps.promo_price_cents, ps.discount_rate, ps.per_user_limit, ps.stock_qty, ps.sold_qty
+       ps.promo_price_cents, ps.discount_rate, ps.per_user_limit
   FROM promotion_skus ps
   JOIN promotions pr ON pr.id = ps.promotion_id
   JOIN skus s ON s.id = ps.sku_id AND s.status = 1 AND s.deleted_at IS NULL
@@ -91,27 +95,23 @@ SELECT promotion_id, sku_id, qty
    AND promotion_id = ANY(sqlc.arg(promotion_ids)::bigint[]);
 
 -- ---------------------------------------------------------------------------
--- 下单 SAGA 的库存分支：活动配额与每人限购（与门店库存扣减同一个事务）
+-- 下单 SAGA 的建单分支：每人限购（活动配额 00075 起归库存服务，见 inventory_svc.sql）
 -- ---------------------------------------------------------------------------
 
--- name: ReservePromotionSku :one
--- 秒杀不超卖的那一条（00058 文件头）：条件 UPDATE，READ COMMITTED 下后到者在最新版本上
--- 重评 WHERE。stock_qty = 0 表示不限配额（限时折扣），此时只是累计已售件数。
--- 受影响 0 行即配额不够（或这个 SKU 已被移出活动）—— :one 变成 pgx.ErrNoRows。
---
--- 不看活动的上下线与有效期：价格在建单那一刻已经定下、写进了订单行，
--- 下单几百毫秒之后活动恰好下线，按已经报给买家的价成交才是对的。
-UPDATE promotion_skus
-   SET sold_qty = sold_qty + sqlc.arg(qty)::int
- WHERE promotion_id = sqlc.arg(promotion_id)
-   AND sku_id = sqlc.arg(sku_id)
-   AND (stock_qty = 0 OR sold_qty + sqlc.arg(qty)::int <= stock_qty)
-RETURNING per_user_limit;
+-- name: PromotionSkuPerUserLimit :one
+-- 一个活动商品的每人限购（0 = 不限）。建单分支（0 → 10）按它累计 promotion_purchases。
+-- 查不到（这个 SKU 在下单之后被移出了活动）由调用方当作不限：那一行的配额也不在了，
+-- 库存分支会按「配额不足」拒绝整单，限购计数随全局补偿放回。
+SELECT per_user_limit
+  FROM promotion_skus
+ WHERE promotion_id = sqlc.arg(promotion_id) AND sku_id = sqlc.arg(sku_id);
 
 -- name: AddPromotionPurchase :execrows
--- 每人限购：在 ReservePromotionSku 拿到的那把行锁之下累计。
+-- 每人限购：同一个买家、同一个活动商品的累计件数。
 -- 首次（INSERT 分支）由 SELECT ... WHERE 判「这一单本身就超了没有」；
 -- 再次（冲突分支）由 DO UPDATE ... WHERE 判「累计超了没有」。受影响 0 行即超限。
+-- 两笔并发订单撞同一个键时，后到者在 ON CONFLICT 上等先到者提交、再在最新版本上重评
+-- WHERE（READ COMMITTED），所以不需要别的锁（拆分前借的是 promotion_skus 的行锁）。
 INSERT INTO promotion_purchases (promotion_id, sku_id, user_id, qty)
 SELECT sqlc.arg(promotion_id), sqlc.arg(sku_id), sqlc.arg(user_id), sqlc.arg(qty)::int
  WHERE sqlc.arg(qty)::int <= sqlc.arg(per_user_limit)::int
@@ -119,16 +119,9 @@ SELECT sqlc.arg(promotion_id), sqlc.arg(sku_id), sqlc.arg(user_id), sqlc.arg(qty
     DO UPDATE SET qty = promotion_purchases.qty + EXCLUDED.qty
  WHERE promotion_purchases.qty + EXCLUDED.qty <= sqlc.arg(per_user_limit)::int;
 
--- name: ReleasePromotionSku :execrows
--- SAGA 补偿、超时关单、买家取消：把这一行占的配额放回去。
--- 带 sold_qty >= qty：放回不该把计数放成负数；0 行由调用方记日志（SKU 已被移出活动之类）。
-UPDATE promotion_skus
-   SET sold_qty = sold_qty - sqlc.arg(qty)::int
- WHERE promotion_id = sqlc.arg(promotion_id)
-   AND sku_id = sqlc.arg(sku_id)
-   AND sold_qty >= sqlc.arg(qty)::int;
-
 -- name: ReleasePromotionPurchase :execrows
+-- SAGA 建单分支的补偿、超时关单、买家取消：把这一单占的限购额度放回去。
+-- 带 qty >= 那一条：不把计数放成负数；这个活动商品不限购（从没累计过）时受影响 0 行，正常。
 UPDATE promotion_purchases
    SET qty = qty - sqlc.arg(qty)::int
  WHERE promotion_id = sqlc.arg(promotion_id)
@@ -235,9 +228,9 @@ INSERT INTO promotion_scopes (promotion_id, scope_type, target_id, include)
 VALUES (sqlc.arg(promotion_id), sqlc.arg(scope_type), sqlc.narg(target_id), sqlc.arg(include));
 
 -- name: ListPromotionSkusAdmin :many
--- 后台看活动商品：连同标题与 SKU 编码（展示用），以及已售件数。
+-- 后台看活动商品：连同标题与 SKU 编码（展示用）。配额与已售由 service 向库存服务批量取。
 SELECT ps.promotion_id, ps.sku_id, ps.promo_price_cents, ps.discount_rate,
-       ps.per_user_limit, ps.stock_qty, ps.sold_qty, s.sku_code, p.title
+       ps.per_user_limit, s.sku_code, p.title
   FROM promotion_skus ps
   JOIN skus s ON s.id = ps.sku_id
   JOIN products p ON p.id = s.product_id
@@ -245,25 +238,24 @@ SELECT ps.promotion_id, ps.sku_id, ps.promo_price_cents, ps.discount_rate,
  ORDER BY ps.promotion_id, ps.sku_id;
 
 -- name: UpsertPromotionSku :exec
--- 整组替换活动商品时逐条 upsert：保留下来的 SKU 保留它的 sold_qty（已兑现的配额不清零）。
--- chk_promotion_sku_qty 兜底「配额改到低于已售数」。
+-- 整组替换活动商品时逐条 upsert：价格配置与每人限购。
+-- stock_qty / sold_qty 00075 起停用、不再写（新行取默认 0，老行保持迁移那一刻的值）：
+-- 配额在库存服务的 activity_stocks，由 service 在写这里**之前**整组设过（admin_promotion.go）。
 INSERT INTO promotion_skus (promotion_id, sku_id, promo_price_cents, discount_rate,
-                            per_user_limit, stock_qty)
+                            per_user_limit)
 VALUES (sqlc.arg(promotion_id), sqlc.arg(sku_id), sqlc.arg(promo_price_cents),
-        sqlc.arg(discount_rate), sqlc.arg(per_user_limit), sqlc.arg(stock_qty))
+        sqlc.arg(discount_rate), sqlc.arg(per_user_limit))
     ON CONFLICT ON CONSTRAINT uk_promotion_skus
     DO UPDATE SET promo_price_cents = EXCLUDED.promo_price_cents,
                   discount_rate = EXCLUDED.discount_rate,
-                  per_user_limit = EXCLUDED.per_user_limit,
-                  stock_qty = EXCLUDED.stock_qty;
+                  per_user_limit = EXCLUDED.per_user_limit;
 
 -- name: DeletePromotionSkusExcept :exec
--- 删掉不在新名单里的 SKU。已售出过的（sold_qty > 0）不删：service 已经先拒过一次，
--- 这里的条件是第二道 —— 两道的失效方式不一样。
+-- 删掉不在新名单里的 SKU。「卖出过的不能移除」这一道在库存服务（它看得见已售，core 看不见）：
+-- service 先调库存服务整组设配额，被拒就不走到这里（admin_promotion.go 的 Update）。
 DELETE FROM promotion_skus
  WHERE promotion_id = sqlc.arg(promotion_id)
-   AND sku_id <> ALL(sqlc.arg(keep_sku_ids)::bigint[])
-   AND sold_qty = 0;
+   AND sku_id <> ALL(sqlc.arg(keep_sku_ids)::bigint[]);
 
 -- name: LiveSkuIDs :many
 -- 活动商品的归属校验：在本租户存在且未软删的 SKU（RLS 之下，别家的与不存在的同形）。

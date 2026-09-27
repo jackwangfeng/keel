@@ -19,8 +19,9 @@ package repository
 // 单体形态下库存池就是业务池（同一个 *pgxpool.Pool），两者连的是同一个库；
 // 拆分形态下库存池连库存库。代码路径一模一样，差的只是池指向哪里。
 //
-// 阶段 1b 要搬过来的四处（下单扣减分支、关单回补、退款回补、扣减事务里读预警上下文）
-// 仍在 inventory.go / order.go / notification.go，走业务池。
+// 阶段 1b 把剩下的几处搬了过来：下单 SAGA 的扣减与补偿（带屏障，WithSagaBranch —— 屏障记在
+// 库存池指向的那个库里）、关单释放与退款回补的流水核对、活动配额（activity_stocks）。
+// 预警通知的展示上下文（商品名、门店名）没有搬：那是 core 的数据，由 core 自己查。
 
 import (
 	"context"
@@ -49,6 +50,45 @@ func (s *InventoryStore) WithTenant(ctx context.Context, fn func(InventoryStoreT
 	return s.r.withTenantTx(ctx, func(tx pgx.Tx, _ Tx) error {
 		return fn(invTx{q: db.New(tx)})
 	})
+}
+
+// WithSagaBranch 在一个「设好租户 + 过了屏障」的事务里执行库存服务的 SAGA 分支
+// （下单扣减 / 补偿，inventory 包 saga.go）。与 Repo.WithSagaBranch 同一个屏障算法
+// （saga.go 的 decideBarrier），差别只在池：屏障记录必须与业务变更同事务提交，
+// 而库存分支的业务变更在库存库里，所以屏障也记在库存库里（微服务拆分阶段 1b）。
+// 单体形态下库存池就是业务池，两个入口写的是同一张 barrier 表 —— 分支的 gid / branch_id
+// 各不相同，不会互相占位。
+//
+// 租户从 ctx 取（inventory 包的分支经 dtm.TenantContextFromGID 从 gid 解出来），
+// 三种判定与 Repo.WithSagaBranch 一致，都是正常路径。
+func (s *InventoryStore) WithSagaBranch(ctx context.Context, gid, branchID, op string,
+	fn func(InventoryStoreTx) error) (Decision, error) {
+	if gid == "" || branchID == "" {
+		return decisionNone, fmt.Errorf("屏障需要非空的 gid 与 branch_id，实得 gid=%q branch_id=%q",
+			gid, branchID)
+	}
+	if !knownOps[op] {
+		return decisionNone, fmt.Errorf("%w: %q", ErrUnknownBranchOp, op)
+	}
+	if fn == nil {
+		return decisionNone, errors.New("屏障分支的业务函数为空")
+	}
+	decision := decisionNone
+	err := s.r.withTenantTx(ctx, func(tx pgx.Tx, _ Tx) error {
+		d, err := decideBarrier(ctx, tx, gid, branchID, op)
+		if err != nil {
+			return err
+		}
+		decision = d
+		if d != DecisionExecute {
+			return nil
+		}
+		return fn(invTx{q: db.New(tx)})
+	})
+	if err != nil {
+		return decisionNone, err
+	}
+	return decision, nil
 }
 
 // StockLevel 是一行门店库存。
@@ -116,6 +156,32 @@ type ManualLogEntry struct {
 // ErrManualLogNotFound：这个 biz_id 还没有手工流水。
 var ErrManualLogNotFound = errors.New("没有这个 biz_id 的手工流水")
 
+// BizLogEntry 是一行按单号记的流水（下单扣减 / 补偿 / 关单释放 / 退款回补 / 扣减被拒）。
+type BizLogEntry struct {
+	SKUID, StoreID int64
+	ChangeQty      int32
+	BizType        int16
+	BizID          string
+	Before, After  int32
+	Reason         *string
+}
+
+// TrailEntry 是一张单的一行流水，连同那一行库存此刻的预警线（缺行为 0）。
+type TrailEntry struct {
+	SKUID, StoreID int64
+	BizType        int16
+	ChangeQty      int32
+	Before, After  int32
+	Reason         *string
+	Warning        int32
+}
+
+// ActivityRow 是一行活动配额。
+type ActivityRow struct {
+	PromotionID, SKUID int64
+	Quota, Sold        int32
+}
+
 // InventoryStoreTx 是库存服务仓储在一个事务里能做的全部事情。
 type InventoryStoreTx interface {
 	StoreStock(ctx context.Context, storeID int64, skuIDs []int64) ([]StockLevel, error)
@@ -135,6 +201,35 @@ type InventoryStoreTx interface {
 
 	// InitSKU 给新 SKU 建第一行库存；返回是否真的插了一行（已经有了就是 false）。
 	InitSKU(ctx context.Context, skuID, storeID int64, available, warning int32) (bool, error)
+
+	// —— 阶段 1b：按单号的扣减 / 回补（调用方先 LockBizID(单号) 再用下面这些）
+
+	// LockStoreStock 按 sku_id 升序锁住这家店这批 SKU 的库存行并读出水位。缺行不回。
+	LockStoreStock(ctx context.Context, storeID int64, skuIDs []int64) ([]StockLevel, error)
+	// LockActivity 锁住一行活动配额；ok 为假表示没有这一行（还没同步配额）。
+	LockActivity(ctx context.Context, promotionID, skuID int64) (row ActivityRow, ok bool, err error)
+	// DeductLocked 扣门店库存（只在 LockStoreStock 判过够之后调），返回扣减后的水位。
+	DeductLocked(ctx context.Context, skuID, storeID int64, qty int32) (int32, error)
+	// AddStock 加回门店库存（缺行按 0 建），返回加回后的水位。
+	AddStock(ctx context.Context, skuID, storeID int64, qty int32) (int32, error)
+	// AddActivitySold 扣活动配额（已售 + qty，只在 LockActivity 判过之后调）。
+	AddActivitySold(ctx context.Context, promotionID, skuID int64, qty int32) error
+	// ReleaseActivitySold 放回活动配额；返回是否真的放回了（假：没有这一行或已售不够减）。
+	ReleaseActivitySold(ctx context.Context, promotionID, skuID int64, qty int32) (bool, error)
+	// AppendBizLog 记一行按单号的流水。
+	AppendBizLog(ctx context.Context, e BizLogEntry) error
+	// BizTrail 一张单（订单号 / 退款单号）的全部流水，按写入顺序。
+	BizTrail(ctx context.Context, bizID string) ([]TrailEntry, error)
+
+	// —— 阶段 1b：活动配额
+
+	ActivityBySKUs(ctx context.Context, skuIDs []int64) ([]ActivityRow, error)
+	ActivityByPromotions(ctx context.Context, promotionIDs []int64) ([]ActivityRow, error)
+	// LockPromotionActivity 锁住一个活动现有的全部配额行（整组设配额的第一步）。
+	LockPromotionActivity(ctx context.Context, promotionID int64) ([]ActivityRow, error)
+	UpsertActivityQuota(ctx context.Context, promotionID, skuID int64, quota int32) error
+	// DeleteActivityExcept 删掉不在 keep 里、且没卖过的配额行，返回删了几行。
+	DeleteActivityExcept(ctx context.Context, promotionID int64, keep []int64) (int64, error)
 }
 
 // invTx 只包着 *db.Queries，而且只调 inventory_svc.sql 里的查询。

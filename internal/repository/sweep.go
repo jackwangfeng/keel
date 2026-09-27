@@ -118,10 +118,6 @@ type SweepTx interface {
 	// CloseExpiredDraftOrder 把一笔孤儿草稿关到 90。
 	// 没占下（SAGA 的建单分支刚把它推到 10）返回 ErrOrderNotClaimed。
 	CloseExpiredDraftOrder(ctx context.Context, orderNo string) error
-
-	// AssertNoInventoryLog 核对这一单一行库存流水都没有。
-	// 有则返回 ErrDraftHasInventoryLog —— 见那个 sentinel 的注释。
-	AssertNoInventoryLog(ctx context.Context, orderNo string) error
 }
 
 func (t tenantTx) ListExpiredPendingOrders(ctx context.Context, limit int32) ([]ExpiredOrder, error) {
@@ -167,17 +163,6 @@ func (t tenantTx) CloseExpiredDraftOrder(ctx context.Context, orderNo string) er
 	}
 	if n == 0 {
 		return fmt.Errorf("order %s: %w（status 已不是 0）", orderNo, ErrOrderNotClaimed)
-	}
-	return nil
-}
-
-func (t tenantTx) AssertNoInventoryLog(ctx context.Context, orderNo string) error {
-	n, err := t.q.CountInventoryLogsForOrder(ctx, orderNo)
-	if err != nil {
-		return err
-	}
-	if n != 0 {
-		return fmt.Errorf("order %s 有 %d 行库存流水: %w", orderNo, n, ErrDraftHasInventoryLog)
 	}
 	return nil
 }

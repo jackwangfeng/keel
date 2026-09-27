@@ -49,3 +49,13 @@
 INSERT INTO jobs (queue, job_key, payload, priority)
 VALUES (@queue, @job_key, @payload, @priority)
 ON CONFLICT DO NOTHING;
+
+-- name: EnqueueJobWithMaxAttempts :execrows
+-- 与 EnqueueJob 同一条入队（同一个 ON CONFLICT、同一个默认租户），只多一个 max_attempts。
+--
+-- 为库存的 outbox 任务而加（微服务拆分阶段 1b，service/inventory_outbox.go）：关单释放与退款回补
+-- 是「库存服务不在就一直等它回来」的任务，默认的 5 次（约一分钟）远不够一次库存服务的故障；
+-- 进了死信就是永久少卖。调用方给的次数配合 RetryJobCapped 的封顶退避，覆盖的是小时级的故障。
+INSERT INTO jobs (queue, job_key, payload, priority, max_attempts)
+VALUES (@queue, @job_key, @payload, @priority, @max_attempts)
+ON CONFLICT DO NOTHING;

@@ -184,6 +184,7 @@ func Mount(g *gin.RouterGroup, svc Service) {
 	g.POST(pathSet, h.set)
 	g.POST(pathAdjust, h.adjust)
 	g.POST(pathInit, h.init)
+	mountOrders(g, h)
 }
 
 type handler struct{ svc Service }
