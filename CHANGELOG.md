@@ -585,6 +585,11 @@ Migrations `00027`–`00038`, `00053`–`00065`. The database lands on `00065`.
 
 ### Fixed
 
+- Buyer app product cards (home, category and search results now share one component):
+  long price ranges no longer push over the "+" button — the price shrinks, then
+  truncates, and grid cards show "¥9.90 起" for multi-spec products; titles clamp at two
+  lines and cards in a row line up. The product page's bottom bar gives its hint its own
+  line (it wrapped into four lines on an iPhone) and keeps the cart badge off the label.
 - **Concurrent refreshes with the same refresh token all succeeded**, rotating the session
   once per request so every client but the last held an already-dead token (found by
   firing 5 concurrent refreshes through 3 instances: 5 × 200). Rotation now requires the
