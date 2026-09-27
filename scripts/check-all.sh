@@ -5,12 +5,18 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 
 fail=0
-for script in check_links check_promises check_openapi check_capabilities check_tenancy check_query_tenancy check_uts_contract; do
+for script in check_links check_promises check_openapi check_capabilities check_tenancy check_query_tenancy check_uts_contract check_dart_contract; do
     printf '\n=== %s ===\n' "$script"
     if ! python3 "scripts/${script}.py"; then
         fail=1
     fi
 done
+
+# Dart 契约生成器的单测（flutter_app/lib/api/schema.g.dart 的映射规则）。
+printf '\n=== test_gen_dart_schema ===\n'
+if ! python3 -m unittest scripts/test_gen_dart_schema.py; then
+    fail=1
+fi
 
 # 契约产物的闸门。
 #

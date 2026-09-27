@@ -86,7 +86,7 @@ GOOSE_INVENTORY := GOOSE_DRIVER=postgres GOOSE_DBSTRING="$(INVENTORY_GOOSE_DBSTR
 	$(GOOSE_BIN) -table goose_db_version_inventory
 
 .PHONY: help generate generate-go generate-ts generate-sql generate-uts tools-versions version search-metrics \
-	contract-check schema-check app-type-check admin-install admin-type-check admin-test admin-build app-install app-build-h5 app-build-android app-build-mp-weixin app-apk app-apk-e2e app-e2e app-e2e-h5 flutter-get flutter-analyze flutter-test app-adb-wifi app-ios app-ios-e2e app-e2e-ios \
+	contract-check schema-check app-type-check admin-install admin-type-check admin-test admin-build app-install app-build-h5 app-build-android app-build-mp-weixin app-apk app-apk-e2e app-e2e app-e2e-h5 flutter-get flutter-generate flutter-analyze flutter-test app-adb-wifi app-ios app-ios-e2e app-e2e-ios \
 	sdk-smoke goose-bin migrate migrate-down migrate-status migrate-inventory migrate-inventory-status test-db \
 	test-engine category-eval dtmrs-deps build
 
@@ -550,3 +550,6 @@ flutter-analyze:
 
 flutter-test:
 	cd $(FLUTTER_APP) && $(FLUTTER_ENV) $(FLUTTER) test
+
+flutter-generate:
+	python3 $(ROOT)/scripts/gen_dart_schema.py
