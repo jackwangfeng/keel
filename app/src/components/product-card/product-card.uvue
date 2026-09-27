@@ -133,9 +133,6 @@ export default {
   font-size: 12px;
   color: #9A8D7E;
 }
-.pc-price-off {
-  color: #A89B8C;
-}
 
 /* ---------- tile ---------- */
 .pc-tile {
@@ -205,6 +202,10 @@ export default {
 }
 .pc-price-s {
   font-size: 13px;
+}
+/* 必须写在 .pc-price 之后：同优先级按先后，写在前面会被 .pc-price 的颜色盖掉。 */
+.pc-price-off {
+  color: #A89B8C;
 }
 .pc-qi {
   font-size: 11px;
