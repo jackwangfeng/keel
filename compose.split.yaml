@@ -1,0 +1,116 @@
+# C 档：物理拆分（docs/电商系统-微服务拆分方案.md「部署档位」）。用法：
+#     export KEEL_INTERNAL_SECRET=$(openssl rand -base64 48)
+#     docker compose -f compose.yaml -f compose.split.yaml up -d --build
+#     ./scripts/smoke.sh
+#
+# 与单体相比多了三样东西，代码一行不变：
+#   · postgres-inventory：库存服务自己的库（keel_inventory），库存四张表只在这里有真数据；
+#   · inventory：同一个镜像，KEEL_ROLE=inventory，只听内网端口 8090（不映射到宿主机）；
+#   · app 换成 KEEL_ROLE=core：库存调用与下单 SAGA 的库存分支都经 http://inventory:8090。
+#
+# 种子怎么进库存库：seed 照旧把整份 single.sql 播进 core 库（其中的库存行落在 core 库 public 里，
+# core 从来不读它们），然后 split-data 用 scripts/split-migrate.sh 把它们搬进库存库并 cutover ——
+# 也就是**从单体迁到拆分用的同一个脚本**，每次起新栈都实跑一遍。已经切过的库，它直接跳过。
+#
+# 用自己的一套卷（与 compose.multi.yaml 同一个理由）：cutover 会收回 keel_app 对 core 库里库存表的权限，
+# 共用单体的卷的话，切回单体形态时下单当场 42501。要把一个真实的单体库迁过来，照部署指南
+# 「从单体迁到拆分」一节手工跑 split-migrate.sh，而不是指望这个叠加层替你迁。
+#
+# 协调器仍在 core 进程里（sqlite，单实例）。多实例 core 要换成 Postgres 存储，见部署指南。
+services:
+  postgres-inventory:
+    build:
+      context: docker/postgres
+    image: keel-postgres:16
+    environment:
+      POSTGRES_USER: keel
+      POSTGRES_PASSWORD: ${KEEL_ADMIN_PASSWORD:-keel}
+      POSTGRES_DB: keel_inventory
+    volumes:
+      - pginvdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 -U keel -d keel_inventory"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # 库存目录的迁移。同一个迁移器镜像，换目录与版本表。
+  # 账号用 keel_inventory 而不是 keel_app：C 档两个库本来就在两个集群上，换名字不为隔离，
+  # 为的是日志与 pg_stat_activity 里一眼分得清是谁连的（B 档那边换名字是必须的）。
+  migrate-inventory:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: migrate
+      args:
+        GOPROXY: ${GOPROXY:-}
+    environment:
+      GOOSE_DBSTRING: postgres://keel:${KEEL_ADMIN_PASSWORD:-keel}@postgres-inventory:5432/keel_inventory?sslmode=disable
+      GOOSE_MIGRATION_DIR: /db/migrations-inventory
+      KEEL_INVENTORY_ROLE: keel_inventory
+      KEEL_INVENTORY_PASSWORD: ${KEEL_INVENTORY_PASSWORD:-keel_inventory}
+    command: ["-table", "goose_db_version_inventory", "up"]
+    depends_on:
+      postgres-inventory:
+        condition: service_healthy
+
+  # 把 core 库里的库存行搬进库存库并 cutover（见文件头）。
+  split-data:
+    image: keel-postgres:16
+    environment:
+      SRC_DSN: postgres://keel:${KEEL_ADMIN_PASSWORD:-keel}@postgres:5432/keel?sslmode=disable
+      DST_DSN: postgres://keel:${KEEL_ADMIN_PASSWORD:-keel}@postgres-inventory:5432/keel_inventory?sslmode=disable
+    volumes:
+      - ./scripts/split-migrate.sh:/split-migrate.sh:ro
+    command: ["sh", "-c", "sh /split-migrate.sh copy && sh /split-migrate.sh cutover"]
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+      migrate-inventory:
+        condition: service_completed_successfully
+
+  inventory:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: app
+      args:
+        GOPROXY: ${GOPROXY:-}
+        KEEL_VERSION: ${KEEL_VERSION:-dev}
+        KEEL_COMMIT: ${KEEL_COMMIT:-}
+        KEEL_DATE: ${KEEL_DATE:-}
+    environment:
+      KEEL_ROLE: inventory
+      KEEL_INVENTORY_DSN: postgres://keel_inventory:${KEEL_INVENTORY_PASSWORD:-keel_inventory}@postgres-inventory:5432/keel_inventory?sslmode=disable
+      KEEL_INTERNAL_ADDR: ":8090"
+      # 没有默认值：两个进程必须是同一个值，而写在公开仓库里的默认密钥等于内网接口不验签。
+      KEEL_INTERNAL_SECRET: ${KEEL_INTERNAL_SECRET:?C 档要设 KEEL_INTERNAL_SECRET（openssl rand -base64 48）}
+      KEEL_INTERNAL_SECRET_PREVIOUS: ${KEEL_INTERNAL_SECRET_PREVIOUS:-}
+      KEEL_DB_MAX_CONNS: ${KEEL_DB_MAX_CONNS:-}
+      GIN_MODE: release
+    depends_on:
+      split-data:
+        condition: service_completed_successfully
+
+  app:
+    environment:
+      KEEL_ROLE: core
+      KEEL_INVENTORY_URL: http://inventory:8090
+      KEEL_INTERNAL_SECRET: ${KEEL_INTERNAL_SECRET:?C 档要设 KEEL_INTERNAL_SECRET（openssl rand -base64 48）}
+      KEEL_INTERNAL_SECRET_PREVIOUS: ${KEEL_INTERNAL_SECRET_PREVIOUS:-}
+    depends_on:
+      split-data:
+        condition: service_completed_successfully
+      # 只等启动：库存服务暂时不在时 core 照样能起，读接口按降级处理，下单的 SAGA 重试到它回来。
+      inventory:
+        condition: service_started
+
+volumes:
+  pgdata:
+    name: keel_pgdata_split
+  dtmdata:
+    name: keel_dtmdata_split
+  uploads:
+    name: keel_uploads_split
+  pginvdata:
+    name: keel_pginvdata_split

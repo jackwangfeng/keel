@@ -107,6 +107,8 @@ RUN CGO_ENABLED=0 go -C tools build -trimpath \
 FROM scratch AS migrate
 COPY --from=build /out/goose /goose
 COPY db/migrations /db/migrations
+# 库存服务自己的迁移目录（拆分部署：GOOSE_MIGRATION_DIR=/db/migrations-inventory + -table goose_db_version_inventory，见 compose.split.yaml）。
+COPY db/migrations-inventory /db/migrations-inventory
 ENV GOOSE_DRIVER=postgres \
     GOOSE_MIGRATION_DIR=/db/migrations
 ENTRYPOINT ["/goose"]

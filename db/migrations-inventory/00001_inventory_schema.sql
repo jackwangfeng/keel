@@ -40,6 +40,17 @@
 -- 同一个 GRANT 面：keel_app 只有 INSERT（理由见 db/migrations/00008_barrier.sql）。
 --
 -- ===========================================================================
+-- 建在哪个 schema：连接串的 search_path 决定（B 档）
+-- ===========================================================================
+--
+-- 所有「已存在就跳过」的判断都按 current_schema()，不写死 public：B 档用
+-- `options=-csearch_path=inventory` 连上来，表、函数、策略、触发器全部落进 inventory schema，
+-- 与 public 里 core 那份互不相干（public 里有同名的 current_merchant() 也不会被当成「已存在」）。
+-- A 档与 C 档 current_schema() 就是 public，与改之前逐字等价。
+-- inventory schema 本身与 keel_inventory 角色由 scripts/split-migrate.sh prepare-b 先建好
+-- （goose 要先在这个 schema 里建版本表，迁移自己建不了它）。
+--
+-- ===========================================================================
 -- 不可回滚
 -- ===========================================================================
 --
@@ -50,31 +61,36 @@
 
 -- 应用角色：与 db/migrations/00003 同一段（角色是集群级对象，库存库可能在另一个集群上）。
 -- 口令只在角色不存在时用，已存在就只压掉危险属性、不碰口令（理由写在 00003）。
+--
+-- 角色名可配（KEEL_INVENTORY_ROLE，默认 keel_app）：A 档与两库测试都用 keel_app；
+-- B 档（同一个 Postgres、独立 schema）必须换成 keel_inventory —— 否则 core 的 keel_app
+-- 也拿到了库存表的权限，「靠权限隔离」就不成立。下面所有 GRANT 都给这个角色。
 -- +goose ENVSUB ON
-SET LOCAL keel.app_password = '${KEEL_APP_PASSWORD:-keel_app}';
+SET LOCAL keel.inventory_role = '${KEEL_INVENTORY_ROLE:-keel_app}';
+SET LOCAL keel.app_password = '${KEEL_INVENTORY_PASSWORD:-keel_app}';
 -- +goose ENVSUB OFF
 
 -- +goose StatementBegin
 DO $$
+DECLARE r TEXT := current_setting('keel.inventory_role');
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'keel_app') THEN
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = r) THEN
         EXECUTE format(
-            'CREATE ROLE keel_app LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE '
-            'PASSWORD %L', current_setting('keel.app_password'));
+            'CREATE ROLE %I LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE '
+            'PASSWORD %L', r, current_setting('keel.app_password'));
     ELSE
-        ALTER ROLE keel_app NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
+        EXECUTE format('ALTER ROLE %I NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE', r);
     END IF;
+    EXECUTE format('GRANT USAGE ON SCHEMA %I TO %I', current_schema(), r);
 END $$;
 -- +goose StatementEnd
-
-GRANT USAGE ON SCHEMA public TO keel_app;
 
 -- current_merchant()：与 db/migrations/00002 逐字一致。已存在（单体库）就不动它。
 -- +goose StatementBegin
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-                    WHERE n.nspname = 'public' AND p.proname = 'current_merchant') THEN
+                    WHERE n.nspname = current_schema() AND p.proname = 'current_merchant') THEN
         EXECUTE $f$
 CREATE FUNCTION current_merchant() RETURNS BIGINT
 LANGUAGE plpgsql STABLE AS $b$
@@ -89,7 +105,7 @@ END $b$
 $f$;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-                    WHERE n.nspname = 'public' AND p.proname = 'touch_updated_at') THEN
+                    WHERE n.nspname = current_schema() AND p.proname = 'touch_updated_at') THEN
         EXECUTE $f$
 CREATE FUNCTION touch_updated_at() RETURNS trigger AS $b$
 BEGIN NEW.updated_at = now(); RETURN NEW; END;
@@ -183,27 +199,29 @@ ALTER TABLE activity_stocks FORCE  ROW LEVEL SECURITY;
 -- +goose StatementBegin
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public'
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = current_schema()
                     AND tablename = 'inventories' AND policyname = 'tenant') THEN
         CREATE POLICY tenant ON inventories
           USING (merchant_id = current_merchant()) WITH CHECK (merchant_id = current_merchant());
     END IF;
     -- inventory_logs 的策略只有 USING（与 core 库里 00020 那一条逐字一致）：
     -- 没写 WITH CHECK 时 PostgreSQL 拿 USING 当插入检查，效果相同。
-    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public'
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = current_schema()
                     AND tablename = 'inventory_logs' AND policyname = 'tenant') THEN
         CREATE POLICY tenant ON inventory_logs USING (merchant_id = current_merchant());
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public'
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = current_schema()
                     AND tablename = 'activity_stocks' AND policyname = 'tenant') THEN
         CREATE POLICY tenant ON activity_stocks
           USING (merchant_id = current_merchant()) WITH CHECK (merchant_id = current_merchant());
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'touch_inventories_updated_at') THEN
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'touch_inventories_updated_at'
+                    AND tgrelid = 'inventories'::regclass) THEN
         CREATE TRIGGER touch_inventories_updated_at
             BEFORE UPDATE ON inventories FOR EACH ROW EXECUTE FUNCTION touch_updated_at();
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'touch_activity_stocks_updated_at') THEN
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'touch_activity_stocks_updated_at'
+                    AND tgrelid = 'activity_stocks'::regclass) THEN
         CREATE TRIGGER touch_activity_stocks_updated_at
             BEFORE UPDATE ON activity_stocks FOR EACH ROW EXECUTE FUNCTION touch_updated_at();
     END IF;
@@ -213,10 +231,16 @@ END $$;
 -- ---------------------------------------------------------------------------
 -- GRANT 面（与 core 库一致；GRANT 本来就是幂等的）
 -- ---------------------------------------------------------------------------
-GRANT SELECT, INSERT, UPDATE, DELETE ON inventories, inventory_logs, activity_stocks TO keel_app;
-GRANT SELECT, USAGE ON SEQUENCE inventory_logs_id_seq TO keel_app;
-REVOKE ALL ON barrier FROM keel_app;
-GRANT INSERT ON barrier TO keel_app;
+-- +goose StatementBegin
+DO $$
+DECLARE r TEXT := current_setting('keel.inventory_role');
+BEGIN
+    EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON inventories, inventory_logs, activity_stocks TO %I', r);
+    EXECUTE format('GRANT SELECT, USAGE ON SEQUENCE inventory_logs_id_seq TO %I', r);
+    EXECUTE format('REVOKE ALL ON barrier FROM %I', r);
+    EXECUTE format('GRANT INSERT ON barrier TO %I', r);
+END $$;
+-- +goose StatementEnd
 
 -- +goose Down
 SELECT 1;
