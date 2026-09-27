@@ -106,7 +106,7 @@
   买家端：自动续期 + 统一跳登录、列表原地加购与规格浮层、详情页购物车入口、下单直达付款、沙箱底栏结算、地址丢街道、
   券截止日、折扣率精度；后台日期区间默认 23:59:59。
 ### 深度审查留下的（未修，需拍板或较大）
-- **0 元订单付不了**（payment.go:205 拒绝 amount<=0；立减券 / 满100减100 + 免运费可达）：自动入账还是禁止 0 元单？
+- ~~0 元订单付不了~~ **已修（自动入账）**：收尾分支在 MarkOrderPlaced 同一事务里 settleFreeOrder（10→20、paid_cents=0、不落 payments、核销券、发支付成功通知）；下单直接返回 20，再发起支付 409，售后回无可退。回归测试 TestZeroPayableOrderSettlesOnPlacement。
 - ~~单字搜索无结果~~ **已修**：索引侧 search_text 在二元组后追加单字（search.IndexTerms），查询侧不变；search_text 指纹独立版本 bigram-v2，00086 把 product_understanding.updated_at 拨回纪元触发全库重判（光升版本号触发不到已有商品），只重写 search_text、不重算向量；已在演示库副本上试跑。演示站部署新 API 后生效（种子已同步）。
 - 后台订单 / 售后日期筛选按浏览器时区切天，报表按店铺时区（改契约传日期 + 店铺时区）。
 - 订单号 / 退款单号前缀日期是 UTC（order.go:778 / refund.go:1015），纯展示。

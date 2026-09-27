@@ -128,6 +128,13 @@ so "which one is running?" never depends on anyone's memory.
 
 ### Fixed
 
+- **Zero-payable orders could not be paid.** A coupon or promotion that brings the payable
+  amount to 0 left the order stuck in pending (the payment webhook rightly rejects
+  `amount_cents <= 0`) until the timeout sweep closed it and released the coupon. The SAGA's
+  finish branch now settles such orders in the same transaction that marks them placed:
+  status 20, `paid_cents = 0`, no `payments` row, coupon consumed, "order paid" notification
+  sent. `POST /orders` returns them as status 20; paying again is 409 and refunds report
+  nothing refundable.
 - **Single-character search returned nothing** (「杯」, 「咖」). The keyword index only held
   CJK bigrams, so a one-character query never matched a lexeme. `search_text` now appends each
   distinct ideograph after the bigrams (`search.IndexTerms`); bigram positions are unchanged, so

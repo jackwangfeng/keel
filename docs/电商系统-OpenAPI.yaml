@@ -5158,6 +5158,11 @@ paths:
           description: |
             订单创建成功。幂等重放命中成功记录时，同样返回 201 与首次的响应体，
             并带 `Idempotency-Replayed: true`。
+
+            通常返回的订单是 `status=10` 待支付。**应付为 0 的单（券或活动把金额抵完）
+            在下单时就直接入账**，返回 `status=20` 已支付、`paid_cents=0`，券同时变为已使用；
+            它不需要、也不能再发起支付（`POST /orders/{order_no}/payments` 回 409），
+            售后申请回「没有可退的」。
           headers:
             Idempotency-Replayed: { $ref: '#/components/headers/IdempotencyReplayed' }
           content:

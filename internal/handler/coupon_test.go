@@ -1023,3 +1023,62 @@ func TestOrderKeepsTheCouponNameItWasPlacedWith(t *testing.T) {
 		t.Errorf("没用券的订单详情里出现了 coupon_name：%s", w.Body.String())
 	}
 }
+
+// 0 元单：券把应付抵到 0，下成的那一刻就直接入账（深度审查 2026-09-27：原来付不了，
+// 回调拒绝 amount<=0，这一单只能停在待支付直到超时被关）。
+//
+// 断言的是「和付过款的单一模一样」的那几件事 —— 状态 20、券已使用、有「支付成功」通知 ——
+// 外加它与真付款的区别：没有 payments 行、paid_cents 是 0、退款回「没有可退的」。
+func TestZeroPayableOrderSettlesOnPlacement(t *testing.T) {
+	cs := newCouponShop(t)
+	tpl := cs.createTemplate(t, fmt.Sprintf(`{"name":"满120减120","coupon_type":1,"threshold_cents":12000,
+		"discount_cents":12000,"valid_mode":1,"valid_start_at":%q,"valid_end_at":%q,"total_count":0,"per_user_limit":1}`,
+		time.Now().Add(-time.Hour).UTC().Format(time.RFC3339),
+		time.Now().Add(72*time.Hour).UTC().Format(time.RFC3339)))
+	wantStatus(t, cs.patchTemplate(t, tpl.Id, `{"claimable":true}`), http.StatusOK, "设为可领")
+	b := cs.newBuyer(t, "free")
+	coupon := cs.mustClaim(t, b, tpl.Id)
+
+	body := cs.orderJSON(b, cs.NorthStore, cs.DressSKU, 2, &coupon.Id)
+	cw := createOrder(t, cs.Host, body, b.Token, "free-"+uniqueKey())
+	if cw.Code != http.StatusCreated {
+		t.Fatalf("下单失败：%d %s", cw.Code, cw.Body.String())
+	}
+	var order api.Order
+	if err := json.Unmarshal(cw.Body.Bytes(), &order); err != nil {
+		t.Fatal(err)
+	}
+	if order.PayableCents != 0 {
+		t.Fatalf("应付 %d，期望 0 —— 夹具没造出 0 元单，这条测试没在测任何东西", order.PayableCents)
+	}
+
+	if got := orderStatusOf(t, order.OrderNo); got != 20 {
+		t.Fatalf("0 元单下成之后状态是 %d，期望 20 已支付", got)
+	}
+	if st, _ := couponState(t, coupon.Id); st != 3 {
+		t.Fatalf("0 元单入账之后券状态是 %d，期望 3 已使用", st)
+	}
+	var paid int64
+	var paidAt *time.Time
+	var payments, notices int
+	if err := admin(t).QueryRow(context.Background(), `
+		SELECT o.paid_cents, o.paid_at,
+		       (SELECT count(*) FROM payments p WHERE p.order_id = o.id),
+		       (SELECT count(*) FROM notifications n WHERE n.kind = $2 AND n.dedupe_key LIKE '%' || o.order_no)
+		  FROM orders o WHERE o.order_no = $1`, order.OrderNo, "order_paid").Scan(&paid, &paidAt, &payments, &notices); err != nil {
+		t.Fatal(err)
+	}
+	if paid != 0 || paidAt == nil || payments != 0 {
+		t.Fatalf("paid_cents=%d paid_at=%v payments=%d，期望 0 / 非空 / 0 行", paid, paidAt, payments)
+	}
+	if notices == 0 {
+		t.Error("0 元单入账没有发「支付成功」通知")
+	}
+
+	// 发起支付：已经不在待支付，409。
+	pw := postWithKey(t, cs.Host, "/api/v1/orders/"+order.OrderNo+"/payments", `{"channel":"wechat"}`,
+		b.Token, freshIdemKey())
+	if pw.Code != http.StatusConflict {
+		t.Fatalf("0 元单再发起支付应 409，实得 %d %s", pw.Code, pw.Body.String())
+	}
+}

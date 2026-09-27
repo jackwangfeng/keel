@@ -14,6 +14,7 @@ type notifyPolicy struct {
 var notificationCallSites = map[string]notifyPolicy{
 	// —— 订单履约维度
 	"PaymentService.settle/SettleOrder":                 {Notify: "notifyOrderPaid"},
+	"settleFreeOrder/SettleOrder":                       {Notify: "notifyOrderPaid"},
 	"AdminOrderService.Ship/ShipOrder":                  {Notify: "notifyOrderShipped"},
 	"AutoConfirmService.confirmOne/ConfirmOrderReceipt": {Notify: "notifyOrderAutoFinished"},
 	"OrderService.Confirm/ConfirmOrderReceipt": {Silent: "买家自己点的确认收货：动作是他做的，" +

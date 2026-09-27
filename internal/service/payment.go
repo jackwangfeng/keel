@@ -324,22 +324,8 @@ func (s *PaymentService) settle(ctx context.Context, channel int16, n notificati
 			return err
 		}
 
-		// 券核销：2 锁定 → 3 已使用，与订单 10 → 20 **同一个事务**（数据模型 §7）。
-		// 「已使用」只描述一件事：有一笔真实到账的订单用了这张券。
-		//
-		// 走到这里说明 SettleOrder 刚把这一单从 10 推到 20，而订单到得了 10 就意味着
-		// SAGA 的券分支锁上了券（它排在建单之后、库存之前）。所以挂了券却核销 0 行
-		// 是一条被破坏的不变量 —— 但**不回滚**：钱已经到了，回滚会让这笔到账记不下来、
-		// 渠道一遍遍重推。留一条 Error 让人去对账，订单照常认账。
-		if order.UserCouponID != nil {
-			consumed, err := tx.ConsumeCouponForOrder(ctx, order.ID)
-			if err != nil {
-				return err
-			}
-			if consumed != 1 {
-				s.log.ErrorContext(ctx, "订单已支付，但它挂的券不在「锁定」状态，核销了 0 张 —— 需要人工对账",
-					"order_no", n.OrderNo, "user_coupon_id", *order.UserCouponID)
-			}
+		if err := consumeOrderCoupon(ctx, tx, s.log, order); err != nil {
+			return err
 		}
 		// 通知（买家「支付成功」+ 门店「新订单待发货」）与 10 → 20 同一个事务（数据模型 §16）。
 		return notifyOrderPaid(ctx, tx, order)
@@ -354,6 +340,52 @@ func (s *PaymentService) settle(ctx context.Context, channel int16, n notificati
 		return err
 	}
 	return outcome
+}
+
+// consumeOrderCoupon 是订单 10 → 20 之后、**同一个事务里**的券核销。
+// 支付回调（settle）与 0 元单在收尾分支里自动入账（settleFreeOrder）共用它 ——
+// 两处各写一份的话，迟早有一处忘了核销券（券停在「锁定」，买家的券就这么没了）。
+// 通知不收进来：notification_policy_test 要在改状态的那个函数里直接看到 notifyXxx 的调用。
+func consumeOrderCoupon(ctx context.Context, tx repository.Tx, log *slog.Logger, order repository.Order) error {
+	// 券核销：2 锁定 → 3 已使用，与订单 10 → 20 **同一个事务**（数据模型 §7）。
+	// 「已使用」只描述一件事：有一笔认了账的订单用了这张券。
+	//
+	// 走到这里说明 SettleOrder 刚把这一单从 10 推到 20，而订单到得了 10 就意味着
+	// SAGA 的券分支锁上了券（它排在建单之后、库存之前）。所以挂了券却核销 0 行
+	// 是一条被破坏的不变量 —— 但**不回滚**：钱已经到了，回滚会让这笔到账记不下来、
+	// 渠道一遍遍重推。留一条 Error 让人去对账，订单照常认账。
+	if order.UserCouponID != nil {
+		consumed, err := tx.ConsumeCouponForOrder(ctx, order.ID)
+		if err != nil {
+			return err
+		}
+		if consumed != 1 {
+			log.ErrorContext(ctx, "订单已支付，但它挂的券不在「锁定」状态，核销了 0 张 —— 需要人工对账",
+				"order_no", order.OrderNo, "user_coupon_id", *order.UserCouponID)
+		}
+	}
+	return nil
+}
+
+// settleFreeOrder 让一张应付 0 元的单直接入账（10 → 20），不经过任何支付渠道。
+//
+// 立减券 / 满 100 减 100 再叠免运费，应付可以是 0。这样的单没有钱可收：发起支付会造出
+// 一份 amount_cents=0 的回调，而回调那一侧拒绝 amount<=0（渠道从不回 0 元到账，
+// 收到了就是伪造或报文坏了，那条校验不能放）—— 于是这一单卡在「待支付」直到超时被关，
+// 券被解锁、库存被放回，买家白下一单。
+//
+// 所以它在收尾分支里、库存扣成的同一个事务里就认账：不落 payments 行（没有渠道、没有到账，
+// payments 描述的是「渠道那边这笔支付成没成」），paid_cents 记 0，其余与支付回调逐项相同
+// （consumeOrderCoupon + notifyOrderPaid）。退款那一侧对 paid_cents<=0 本来就回「没有可退的」，不用另改。
+func settleFreeOrder(ctx context.Context, tx repository.Tx, log *slog.Logger,
+	order repository.Order, now time.Time) error {
+	if err := tx.SettleOrder(ctx, order.OrderNo, 0, now); err != nil {
+		return err
+	}
+	if err := consumeOrderCoupon(ctx, tx, log, order); err != nil {
+		return err
+	}
+	return notifyOrderPaid(ctx, tx, order)
 }
 
 // newPaymentNo 生成支付单号：14 位时间前缀 + 18 位十六进制随机。

@@ -472,7 +472,8 @@ func (s *OrderService) Create(ctx context.Context, req CreateRequest, idemKey st
 	if err != nil {
 		return CreateResult{}, err
 	}
-	if final.Status != orderStatusPending {
+	// 0 元单在收尾分支里已经直接入账（settleFreeOrder），这时它该是 20。
+	if final.Status != orderStatusPending && !(final.PayableCents == 0 && final.Status == orderStatusPaid) {
 		return CreateResult{}, fmt.Errorf(
 			"事务报告成功，但订单 %s 的状态是 %d 而不是 %d —— 建单分支没有生效",
 			final.OrderNo, final.Status, orderStatusPending)

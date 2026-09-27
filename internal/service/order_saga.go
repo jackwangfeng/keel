@@ -401,6 +401,7 @@ func unlockCoupon(ctx context.Context, tx repository.Tx, order repository.Order)
 //  2. **关单守卫的另一半**：锁订单行，已经不是 10（买家取消 / 超时关单抢在了扣减之后）就确定性
 //     失败，全局补偿按流水把刚扣的放回去（与关单那一侧的释放在库存服务里按同一把锁串行，只放一次）。
 //  3. **库存预警**：流水里的扣减行有扣减前后的水位与此刻的预警线，跨线的那一次发（notification.go）。
+//  4. **0 元单直接入账**：应付为 0 时在同一个事务里 10 → 20（settleFreeOrder）。
 //
 // 问库存服务在屏障事务**之外**（单体下库存池就是业务池，事务内再要连接会整池互等；拆分下是一次网络
 // 往返）。问不到（库存服务不在）返回 Unknown，协调器重试 —— 这时库存已经扣了，订单停在 10，
@@ -458,6 +459,13 @@ func (s *OrderService) finishBranch() dtm.BranchFunc {
 			// 下成了：发起支付从这一刻起才放行（00085）。在这之前付掉的单，库存分支一旦被拒就关不掉了。
 			if err := tx.MarkOrderPlaced(ctx, order.ID); err != nil {
 				return err
+			}
+			// 应付 0 元：没有钱可收，下成的这一刻就认账（10 → 20），理由见 settleFreeOrder。
+			// 只认 10：st 是 0 时 SettleOrder 的谓词本来就落空，那一单留给支付那条路按原样拒。
+			if st == orderStatusPending && order.PayableCents == 0 {
+				if err := settleFreeOrder(ctx, tx, log, order, s.now()); err != nil {
+					return err
+				}
 			}
 			for _, e := range trail {
 				if e.BizType != inventory.BizOrderDeduct {
