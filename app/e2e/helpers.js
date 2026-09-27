@@ -53,19 +53,45 @@ function apiBase() {
   return b
 }
 
+// e2e 专用买家的账号口令：优先用环境变量；没设就读本机的 ~/.config/keel/e2e.env（KEEL_E2E_ENV 可换路径），
+// 每行 KEY=VALUE。口令只在这台机器的这个文件里，不进仓库、不经过会话（用户自己写进去，建议 chmod 600）。
+;(function loadE2eEnv() {
+  const fs = require('fs')
+  const file = process.env.KEEL_E2E_ENV || require('path').join(process.env.HOME || '', '.config', 'keel', 'e2e.env')
+  if (!fs.existsSync(file)) return
+  for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
+    const m = line.match(/^\s*(?:export\s+)?(KEEL_E2E_[A-Z_]+)\s*=\s*(.*?)\s*$/)
+    if (!m) continue
+    const v = m[2].replace(/^(['"])(.*)\1$/, '$2')
+    if (!process.env[m[1]]) process.env[m[1]] = v
+  }
+})()
+
 // 用例用哪个买家。默认是演示买家（登录页预填的那个）；演示栈对公众开放之后，公众访客也在用它 ——
 // 用例会清空购物车、改昵称、把通知标已读，两边会互相干扰。所以可以用 KEEL_E2E_PHONE / KEEL_E2E_PASSWORD
 // 指定一个专供 e2e 的买家（名下要有一条杭州的默认地址，运费用例按它断言 8 元）。
 const DEMO_PHONE = process.env.KEEL_E2E_PHONE || '13800000000'
 const DEMO_PASSWORD = process.env.KEEL_E2E_PASSWORD || 'keel-demo-2026'
+// 专用买家不在登录锁定的豁免名单里：连错 5 次锁 15 分钟。口令写错时 16 个用例文件各登一次就会把它锁住，
+// 所以第一次登录失败就在临时目录留个标记，15 分钟内后面的文件直接报错、不再去试 —— 一轮最多错 1 次。
+const LOGIN_FAIL_MARK = require('path').join(require('os').tmpdir(), 'keel-e2e-login-failed-' + DEMO_PHONE)
 async function serverToken() {
+  const fs = require('fs')
+  if (fs.existsSync(LOGIN_FAIL_MARK) && Date.now() - fs.statSync(LOGIN_FAIL_MARK).mtimeMs < 15 * 60 * 1000) {
+    throw new Error('这个账号刚刚登录失败过（口令不对？），15 分钟内不再尝试，免得把它锁住。修好口令后删掉 ' + LOGIN_FAIL_MARK)
+  }
   const res = await httpPost(apiBase() + '/auth/login', { phone: DEMO_PHONE, password: DEMO_PASSWORD })
-  if (res.status !== 200) throw new Error('测试进程登录失败：' + res.status + ' ' + JSON.stringify(res.body))
+  if (res.status !== 200) {
+    if (res.status === 401 || res.status === 429) fs.writeFileSync(LOGIN_FAIL_MARK, String(res.status))
+    throw new Error('测试进程登录失败：' + res.status + ' ' + JSON.stringify(res.body && res.body.title))
+  }
   return res.body.access_token
 }
 
 // App 里从未登录开始登一次。登录页预填的是演示买家；指定了别的账号就把两格改掉再登。
 async function loginInApp() {
+  // 先由测试进程登录一次：口令不对就在这里停住（见 serverToken），不让 App 再去试一次错的口令。
+  await serverToken()
   await program.callUniMethod('clearStorageSync')
   const page = await program.reLaunch('/pages/auth/login')
   await page.waitFor(1000)
