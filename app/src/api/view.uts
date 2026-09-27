@@ -16,6 +16,7 @@
 //     并且照样 exit 0 —— 见 app/README.md「类型检查」那一节。所以它是第二道，
 //     不是第一道。）
 
+import { assetUrl } from './config.uts'
 import {
   PromotionHit,
   PromotionTag,
@@ -107,7 +108,8 @@ export type Cover = {
 export function coverOf(key : number, title : string, imageUrl ?: string) : Cover {
   const idx = Math.abs(Math.floor(key)) % COVER_TONES.length
   return {
-    imageUrl: imageUrl != null ? imageUrl! : '',
+    // 相对路径补上服务地址的 origin：原生端不补就去 App 包里找（见 config.uts 的 assetUrl）。
+    imageUrl: imageUrl != null ? assetUrl(imageUrl!) : '',
     color: COVER_TONES[idx],
     glyph: title.length > 0 ? title.substring(0, 1) : '·',
   } as Cover

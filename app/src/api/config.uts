@@ -162,3 +162,25 @@ export function takePickedAddress(): number {
   const n = parseInt(raw as string)
   return isNaN(n) ? 0 : n
 }
+
+/**
+ * 把服务端给的图片地址变成 <image src> 能直接用的地址。
+ *
+ * 服务端返回的商品图是相对路径（`/api/v1/uploads/{id}`，契约 ProductImage.url 的形状）。
+ * H5 上页面与接口同源，相对路径天然指向服务端；**原生端（iOS / Android）不是**：
+ * 相对路径会被当成 App 包里的本地资源去找，图片一张都出不来（iOS 真机实测）。
+ * 所以相对路径前面补上服务地址的 origin；已经是完整 URL 的原样返回。
+ * H5 的服务地址本身就是相对的（`/api/v1`），origin 为空，行为不变。
+ */
+export function assetUrl(u : string) : string {
+  if (u == '' || u.startsWith('http://') || u.startsWith('https://') || !u.startsWith('/')) {
+    return u
+  }
+  const base = getBaseUrl()
+  const i = base.indexOf('://')
+  if (i < 0) {
+    return u
+  }
+  const slash = base.indexOf('/', i + 3)
+  return (slash < 0 ? base : base.substring(0, slash)) + u
+}
