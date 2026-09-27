@@ -1,4 +1,4 @@
 # mp-flutter（把本工程编成微信小程序）的配置。服务地址在编译期注入（小程序没有页面 origin）。
-appid: wx49d872db96d90546
+appid: wxc6c33e38dbeed25f
 # 按位置解析就近门店（wx.getLocation，wgs84）：要在 app.json 里声明。
 require_location: true
