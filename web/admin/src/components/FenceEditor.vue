@@ -14,9 +14,14 @@
 // 并且在那里（且只在那里）可以显式声明「这批坐标是从高德 / 百度抄的」，
 // 由 api/geo.ts 换回 WGS-84（换算有测试：geo.test.ts）。
 //
-// ## 画法
+// ## 画法（两种状态）
 //
-// 点地图加顶点，拖顶点改位置，「撤销上一个点」「清空重画」。
+// **绘制中**（还没闭合）：点地图依次加点，画成虚线折线；点回第一个点、或按「闭合」完成。
+// **已闭合**（读进来的已保存围栏、粘贴进来的、或刚闭合的）：点地图不再加点 ——
+// 早先的版本闭合后仍然往末尾追加，新点被连在首尾两点之间，看上去像多边形被扯出一个角。
+// 闭合后改形状靠三样：拖顶点；拖 / 点每条边中点的小圆点，在这条边上插一个顶点；
+// 右键顶点删掉它（或单击选中后按 Delete / 点「删除选中顶点」），两边的点直接连上。
+// 所有改动都能「撤销」，不只是撤销上一个点。
 // 没有引 leaflet-draw：它多年没有维护，而这里只需要画一个环。
 // 顶点用 divIcon（纯 CSS），不用 Leaflet 默认的图片 marker——
 // 那套图片的路径在打包器下是出了名会坏的。
@@ -65,30 +70,110 @@ function holesOf(fence: GeoPolygon | null | undefined): Position[][] {
 }
 const holes = ref<Position[][]>(holesOf(props.saved));
 const localError = ref("");
+/** 已闭合：点地图不再加点，改形状靠拖顶点、边中点插点、右键删点。 */
+const closed = ref(vertices.value.length >= 3);
+/** 单击选中的顶点下标，给 Delete 键与「删除选中顶点」用。 */
+const selected = ref<number | null>(null);
+/** 撤销栈：每次改动之前的顶点与闭合状态。 */
+const history = ref<{ v: Position[]; closed: boolean }[]>([]);
+
+function snapshot(): void {
+    history.value.push({ v: vertices.value.map((p): Position => [p[0], p[1]]), closed: closed.value });
+    if (history.value.length > 200) history.value.shift();
+}
 
 let map: L.Map | null = null;
-let polygonLayer: L.Polygon | null = null;
+let polygonLayer: L.Polygon | L.Polyline | null = null;
 let savedLayer: L.Polygon | null = null;
 let markers: L.Marker[] = [];
+let midMarkers: L.Marker[] = [];
 let errorLayer: L.CircleMarker | null = null;
 let resizeObserver: ResizeObserver | null = null;
 
 const vertexIcon = L.divIcon({ className: "fence-vertex", iconSize: [14, 14], iconAnchor: [7, 7] });
+const selectedIcon = L.divIcon({ className: "fence-vertex fence-vertex-selected", iconSize: [16, 16], iconAnchor: [8, 8] });
+const firstIcon = L.divIcon({ className: "fence-vertex fence-vertex-first", iconSize: [16, 16], iconAnchor: [8, 8] });
+const midIcon = L.divIcon({ className: "fence-mid", iconSize: [10, 10], iconAnchor: [5, 5] });
+
+function removeVertex(i: number): void {
+    snapshot();
+    vertices.value.splice(i, 1);
+    selected.value = null;
+    // 删到不足 3 个就不成面了，回到「绘制中」，点地图接着加。
+    if (vertices.value.length < 3) closed.value = false;
+    localError.value = "";
+    redraw();
+}
+
+function closeRingDraft(): void {
+    if (vertices.value.length < 3) return;
+    snapshot();
+    closed.value = true;
+    selected.value = null;
+    redraw();
+}
 
 function redraw(): void {
     if (map === null) return;
     const m = map;
     for (const mk of markers) mk.remove();
+    for (const mk of midMarkers) mk.remove();
+    const drawingFirst = !closed.value && vertices.value.length >= 3;
     markers = vertices.value.map((pos, i) => {
-        const mk = L.marker(toLatLng(pos), { icon: vertexIcon, draggable: true, title: `第 ${i + 1} 个点` });
+        const icon = selected.value === i ? selectedIcon : i === 0 && drawingFirst ? firstIcon : vertexIcon;
+        const title = i === 0 && drawingFirst ? "点这里闭合围栏" : `第 ${i + 1} 个点（右键删除）`;
+        const mk = L.marker(toLatLng(pos), { icon, draggable: !props.readonly, title });
+        mk.on("dragstart", () => snapshot());
         mk.on("drag", () => {
-            const ll = mk.getLatLng();
-            vertices.value[i] = toPosition(ll);
+            vertices.value[i] = toPosition(mk.getLatLng());
             drawPolygon();
+        });
+        mk.on("dragend", () => redraw());
+        mk.on("click", () => {
+            if (i === 0 && drawingFirst) {
+                closeRingDraft();
+                return;
+            }
+            selected.value = selected.value === i ? null : i;
+            redraw();
+        });
+        mk.on("contextmenu", (e: L.LeafletMouseEvent) => {
+            L.DomEvent.preventDefault(e.originalEvent);
+            if (!props.readonly) removeVertex(i);
         });
         mk.addTo(m);
         return mk;
     });
+    midMarkers = [];
+    if (closed.value && !props.readonly) {
+        const n = vertices.value.length;
+        for (let i = 0; i < n; i++) {
+            const a = vertices.value[i];
+            const b = vertices.value[(i + 1) % n];
+            if (a === undefined || b === undefined) continue;
+            const mid: Position = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+            const mk = L.marker(toLatLng(mid), { icon: midIcon, draggable: true, title: "点或拖这里，在这条边上加一个点" });
+            // 拖：一开始就把新点插进去，拖动过程中改的就是它。
+            mk.on("dragstart", () => {
+                snapshot();
+                vertices.value.splice(i + 1, 0, toPosition(mk.getLatLng()));
+            });
+            mk.on("drag", () => {
+                vertices.value[i + 1] = toPosition(mk.getLatLng());
+                drawPolygon();
+            });
+            mk.on("dragend", () => redraw());
+            // 点：在中点处插一个，接着可以拖它。
+            mk.on("click", () => {
+                snapshot();
+                vertices.value.splice(i + 1, 0, mid);
+                selected.value = i + 1;
+                redraw();
+            });
+            mk.addTo(m);
+            midMarkers.push(mk);
+        }
+    }
     drawPolygon();
 }
 
@@ -96,8 +181,11 @@ function drawPolygon(): void {
     if (map === null) return;
     polygonLayer?.remove();
     polygonLayer = null;
-    if (vertices.value.length >= 2) {
-        polygonLayer = L.polygon(vertices.value.map(toLatLng), { color: "#409eff", weight: 2, fillOpacity: 0.15 }).addTo(map);
+    if (closed.value && vertices.value.length >= 3) {
+        polygonLayer = L.polygon(vertices.value.map(toLatLng), { color: "#409eff", weight: 2, fillOpacity: 0.15, interactive: false }).addTo(map);
+    } else if (vertices.value.length >= 2) {
+        // 绘制中：折线，不闭合 —— 让人看得出「还没画完」。
+        polygonLayer = L.polyline(vertices.value.map(toLatLng), { color: "#409eff", weight: 2, dashArray: "6 4", interactive: false }).addTo(map);
     }
 }
 
@@ -154,10 +242,21 @@ onMounted(() => {
             .addTo(map);
     }
     map.on("click", (e: L.LeafletMouseEvent) => {
+        if (props.readonly) return;
+        if (closed.value) {
+            // 已闭合：点空白处只是取消选中。加点用边中点的小圆点。
+            if (selected.value !== null) {
+                selected.value = null;
+                redraw();
+            }
+            return;
+        }
+        snapshot();
         vertices.value.push(toPosition(e.latlng));
         localError.value = "";
         redraw();
     });
+    document.addEventListener("keydown", onKey);
     drawSaved();
     redraw();
     drawError();
@@ -168,7 +267,18 @@ onMounted(() => {
     resizeObserver.observe(mapEl.value);
 });
 
+function onKey(e: KeyboardEvent): void {
+    if (selected.value === null || props.readonly) return;
+    const t = e.target as HTMLElement | null;
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+    if (e.key === "Delete" || e.key === "Backspace") {
+        e.preventDefault();
+        removeVertex(selected.value);
+    }
+}
+
 onBeforeUnmount(() => {
+    document.removeEventListener("keydown", onKey);
     resizeObserver?.disconnect();
     map?.remove();
     map = null;
@@ -179,6 +289,9 @@ watch(
     (fence) => {
         vertices.value = verticesFromPolygon(fence);
         holes.value = holesOf(fence);
+        closed.value = vertices.value.length >= 3;
+        selected.value = null;
+        history.value = [];
         drawSaved();
         redraw();
     },
@@ -186,18 +299,32 @@ watch(
 watch(() => props.errorPoint, drawError);
 
 function undo(): void {
-    vertices.value.pop();
+    const h = history.value.pop();
+    if (h === undefined) return;
+    vertices.value = h.v;
+    closed.value = h.closed;
+    selected.value = null;
     redraw();
 }
 
+function removeSelected(): void {
+    if (selected.value !== null) removeVertex(selected.value);
+}
+
 function clearDraft(): void {
+    snapshot();
     vertices.value = [];
     holes.value = [];
+    closed.value = false;
+    selected.value = null;
     redraw();
 }
 
 function revert(): void {
+    snapshot();
     vertices.value = verticesFromPolygon(props.saved);
+    closed.value = vertices.value.length >= 3;
+    selected.value = null;
     redraw();
     fitView();
 }
@@ -237,8 +364,11 @@ function applyPaste(): void {
         return;
     }
     localError.value = "";
+    snapshot();
     vertices.value = verticesFromPolygon(r.polygon);
     holes.value = holesOf(r.polygon);
+    closed.value = vertices.value.length >= 3;
+    selected.value = null;
     pasteWarnings.value = r.warnings;
     if (pasteFrom.value !== "wgs84") {
         pasteNote.value = `已从 ${pasteFrom.value === "gcj02" ? "GCJ-02" : "BD-09"} 换回 WGS-84，顶点最多挪了 ${r.shiftedMeters.toFixed(0)} 米——不换的话围栏就偏这么多。`;
@@ -261,7 +391,9 @@ const draftGeoJson = computed(() => {
     <div class="fence-editor">
         <el-alert type="info" :closable="false" show-icon class="mb8">
             <template #title>坐标系：WGS-84（与库里的 GEOGRAPHY 4326、买家端定位一致）</template>
-            在地图上点一下加一个顶点，拖动顶点改位置。地图是 OpenStreetMap，它本身就是 WGS-84，点出来的坐标原样保存。
+            <b>画</b>：点地图依次加点，点回第一个点（或按「闭合」）完成。
+            <b>改</b>：拖顶点移动；点 / 拖每条边中间的小圆点，在这条边上加一个点；右键顶点删掉它（或单击选中后按 Delete）。
+            地图是 OpenStreetMap，它本身就是 WGS-84，点出来的坐标原样保存。
             <b>别从高德 / 腾讯 / 百度地图上抄坐标直接贴</b>——那是 GCJ-02 / BD-09，城区会偏几百米而且不报错；
             真要贴，在下面「粘贴坐标」里选对来源，会先换回 WGS-84。
         </el-alert>
@@ -269,9 +401,17 @@ const draftGeoJson = computed(() => {
         <div ref="mapEl" class="map" />
 
         <div class="toolbar">
-            <span class="hint">顶点 {{ vertices.length }} 个（灰色虚线是已保存的围栏）</span>
+            <span class="hint">
+                顶点 {{ vertices.length }} 个 ·
+                <template v-if="closed">已闭合</template>
+                <template v-else-if="vertices.length >= 3"><b class="warn">绘制中</b>：点第一个点或按「闭合」完成</template>
+                <template v-else>绘制中：在地图上点顶点</template>
+                （灰色虚线是已保存的围栏）
+            </span>
             <span class="grow" />
-            <el-button size="small" :disabled="vertices.length === 0" @click="undo">撤销上一个点</el-button>
+            <el-button v-if="!closed" size="small" type="primary" plain :disabled="vertices.length < 3" @click="closeRingDraft">闭合</el-button>
+            <el-button size="small" :disabled="selected === null || readonly" @click="removeSelected">删除选中顶点</el-button>
+            <el-button size="small" :disabled="history.length === 0" @click="undo">撤销</el-button>
             <el-button size="small" :disabled="vertices.length === 0" @click="clearDraft">清空重画</el-button>
             <el-button size="small" :disabled="!dirty" @click="revert">还原为已保存</el-button>
             <el-button
@@ -284,7 +424,7 @@ const draftGeoJson = computed(() => {
             >
                 清空围栏
             </el-button>
-            <el-button size="small" type="primary" :loading="busy" :disabled="vertices.length < 3 || readonly" @click="save">
+            <el-button size="small" type="primary" :loading="busy" :disabled="!closed || vertices.length < 3 || readonly" @click="save">
                 保存围栏
             </el-button>
         </div>
@@ -335,6 +475,9 @@ const draftGeoJson = computed(() => {
 .grow {
     flex: 1;
 }
+.warn {
+    color: var(--el-color-warning);
+}
 .mb8 {
     margin-bottom: 8px;
 }
@@ -361,5 +504,23 @@ code {
     border-radius: 50%;
     box-shadow: 0 0 2px rgba(0, 0, 0, 0.4);
     cursor: move;
+}
+.fence-vertex-selected {
+    background: #f56c6c;
+    border-color: #fff;
+    box-shadow: 0 0 0 2px #f56c6c;
+}
+.fence-vertex-first {
+    background: #67c23a;
+    border-color: #fff;
+    box-shadow: 0 0 0 2px #67c23a;
+    cursor: pointer;
+}
+/* 边中点：点或拖它在这条边上插一个点。比顶点小、半透明，免得和顶点混。 */
+.fence-mid {
+    background: rgba(64, 158, 255, 0.55);
+    border: 1px solid #fff;
+    border-radius: 50%;
+    cursor: copy;
 }
 </style>
