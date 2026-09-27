@@ -18,6 +18,8 @@ class Services extends InheritedWidget {
   final SearchTrace trace;
   final UnreadCount unread;
 
+  static Services? maybeOf(BuildContext context) => context.dependOnInheritedWidgetOfExactType<Services>();
+
   static Services of(BuildContext context) {
     final s = context.dependOnInheritedWidgetOfExactType<Services>();
     assert(s != null, '上层没有 Services');

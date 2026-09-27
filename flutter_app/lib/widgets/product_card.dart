@@ -11,6 +11,9 @@ class ProductCard extends StatelessWidget {
   /// 「＋」原地加购；下架 / 缺货的不显示。
   final VoidCallback? onAdd;
 
+  bool get _off => row.offShelf || row.soldOut;
+  String get _offText => row.offShelf ? '已下架' : '无货';
+
   @override
   Widget build(BuildContext context) {
     final c = row.cover;
@@ -23,10 +26,24 @@ class ProductCard extends StatelessWidget {
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           AspectRatio(
             aspectRatio: 1,
-            child: c.imageUrl.isNotEmpty
-                ? Image.network(c.imageUrl, fit: BoxFit.cover,
-                    errorBuilder: (_, _, _) => _Glyph(cover: c))
-                : _Glyph(cover: c),
+            child: Stack(fit: StackFit.expand, children: [
+              c.imageUrl.isNotEmpty
+                  ? Image.network(c.imageUrl, fit: BoxFit.cover, errorBuilder: (_, _, _) => _Glyph(cover: c))
+                  : _Glyph(cover: c),
+              // 无货 / 下架：整张封面压一层灰，正中写字 —— 角落一个小标签在两列网格里太容易看漏。
+              if (_off)
+                ColoredBox(
+                  key: Key('product.mask.${row.id}'),
+                  color: const Color(0x8CFFFDF9),
+                  child: Center(
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+                      decoration: BoxDecoration(color: const Color(0xB82A211B), borderRadius: BorderRadius.circular(14)),
+                      child: Text(_offText, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: KeelColors.card)),
+                    ),
+                  ),
+                ),
+            ]),
           ),
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
@@ -48,10 +65,14 @@ class ProductCard extends StatelessWidget {
                 ),
               const SizedBox(height: 6),
               Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
-                Text(row.minPriceText, style: KeelText.price),
+                Text(row.minPriceText, style: _off ? KeelText.price.copyWith(color: _offPrice) : KeelText.price),
                 if (row.hasRange) const Text(' 起', style: KeelText.hint),
                 const Spacer(),
-                if (onAdd != null && !row.offShelf && !row.soldOut) AddButton(id: row.id, onTap: onAdd!),
+                // 买不了时「＋」的位置换成一个灰标签：不给一个点了才告诉你无货的按钮。
+                if (_off)
+                  SoldTag(key: Key('product.sold.${row.id}'), text: _offText)
+                else if (onAdd != null)
+                  AddButton(id: row.id, onTap: onAdd!),
               ]),
             ]),
           ),
@@ -104,7 +125,7 @@ class ProductTile extends StatelessWidget {
       onTap: onTap,
       behavior: HitTestBehavior.opaque,
       child: Opacity(
-        opacity: dim ? 0.55 : 1,
+        opacity: dim ? 0.6 : 1,
         child: Container(
           margin: const EdgeInsets.only(bottom: 10),
           padding: const EdgeInsets.all(10),
@@ -127,9 +148,10 @@ class ProductTile extends StatelessWidget {
                 if (row.subtitle.isNotEmpty) Text(row.subtitle, maxLines: 1, overflow: TextOverflow.ellipsis, style: KeelText.hint),
                 const SizedBox(height: 6),
                 Row(children: [
-                  Flexible(child: Text(row.priceText, style: KeelText.price)),
-                  if (row.soldOut) const Padding(padding: EdgeInsets.only(left: 6), child: Text('暂时缺货', style: KeelText.hint)),
-                  if (row.offShelf) const Padding(padding: EdgeInsets.only(left: 6), child: Text('已下架', style: KeelText.hint)),
+                  Flexible(child: Text(row.priceText, maxLines: 1, overflow: TextOverflow.ellipsis, style: KeelText.price)),
+                  if (dim)
+                    Padding(padding: const EdgeInsets.only(left: 6),
+                        child: SoldTag(key: Key('search.sold.${row.id}'), text: row.offShelf ? '已下架' : '无货')),
                 ]),
               ]),
             ),
@@ -139,4 +161,20 @@ class ProductTile extends StatelessWidget {
       ),
     );
   }
+}
+
+const _offPrice = Color(0xFFA89B8C);
+
+/// 买不了时的灰标签（「无货」/「已下架」）。
+class SoldTag extends StatelessWidget {
+  const SoldTag({super.key, required this.text});
+  final String text;
+  @override
+  Widget build(BuildContext context) => Container(
+        height: 24,
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(color: const Color(0xFFEFE9E2), borderRadius: BorderRadius.circular(12)),
+        child: Text(text, style: const TextStyle(fontSize: 12, color: Color(0xFF9A8D7E))),
+      );
 }

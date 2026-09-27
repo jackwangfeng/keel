@@ -47,7 +47,14 @@ class _LoginPageState extends State<LoginPage> {
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
+  Widget build(BuildContext context) {
+    // 服务端刻意让 A 店签发的令牌在 B 店被拒：把当前是哪家店低调地写出来（同源相对地址就不写）。
+    final base = Services.maybeOf(context)?.client.base ?? '';
+    return Scaffold(
+        bottomNavigationBar: base.contains('://')
+            ? SafeArea(child: Padding(padding: const EdgeInsets.all(16),
+                child: Text('当前店铺 $base', key: const Key('login.base'), textAlign: TextAlign.center, style: KeelText.hint)))
+            : null,
         appBar: AppBar(title: const Text('登录')),
         body: ListView(padding: const EdgeInsets.all(20), children: [
           const Text('欢迎回来', style: KeelText.display),
@@ -64,4 +71,5 @@ class _LoginPageState extends State<LoginPage> {
                 child: Text(_message, key: const Key('login.message'), style: KeelText.err)),
         ]),
       );
+  }
 }

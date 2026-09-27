@@ -45,7 +45,9 @@ class Fake {
         return j([{'id': 5, 'name': '咖啡', 'level': 1}, {'id': 6, 'name': '茶', 'level': 1}]);
       case '/products':
         final cat = r.url.queryParameters['category_id'];
-        final items = cat == '6' ? [summary(30, '白茶')] : [summary(21, '单规格豆'), summary(22, '多规格豆', max: 2000)];
+        final items = cat == '6'
+            ? [summary(30, '白茶')]
+            : [summary(21, '单规格豆'), summary(22, '多规格豆', max: 2000), {...summary(23, '缺货豆'), 'in_stock': false}, {...summary(24, '下架豆'), 'status': 2}];
         return j({'page': 1, 'page_size': 20, 'total': items.length, 'store': {'match_type': 'default', 'store_id': 1}, 'items': items});
       case '/products/21':
         return j({...summary(21, '单规格豆'), 'skus': [sku(211, 5, '一种')]});
@@ -174,7 +176,7 @@ void main() {
     await t.tap(find.byKey(const Key('search.submit')));
     await t.pumpAndSettle();
     expect(find.text('「咖啡」共 1 件，按相关度排序'), findsOneWidget);
-    expect(find.text('暂时缺货'), findsOneWidget);
+    expect(find.descendant(of: find.byKey(const Key('search.sold.22')), matching: find.text('无货')), findsOneWidget);
     expect(find.byKey(const Key('product.add.22')), findsNothing, reason: '缺货不给「＋」');
     await t.tap(find.byKey(const Key('search.row.22')));
     await t.pumpAndSettle();
@@ -192,5 +194,18 @@ void main() {
     await t.pumpAndSettle();
     expect(f.to('/stores/resolve').length, 2);
     expect(f.to('/products').length, greaterThan(before));
+  });
+
+  testWidgets('缺货 / 下架的卡片：封面压灰、正中写字；「＋」的位置换成灰标签', (t) async {
+    phone(t);
+    final f = Fake();
+    await t.pumpWidget((await app(f)).$1);
+    await t.pumpAndSettle();
+    await t.scrollUntilVisible(find.byKey(const Key('product.card.24')), 200, scrollable: find.byType(Scrollable).first);
+    expect(find.descendant(of: find.byKey(const Key('product.mask.23')), matching: find.text('无货')), findsOneWidget);
+    expect(find.descendant(of: find.byKey(const Key('product.mask.24')), matching: find.text('已下架')), findsOneWidget);
+    expect(find.descendant(of: find.byKey(const Key('product.sold.23')), matching: find.text('无货')), findsOneWidget);
+    expect(find.byKey(const Key('product.add.23')), findsNothing);
+    expect(find.byKey(const Key('product.mask.21')), findsNothing);
   });
 }
