@@ -56,10 +56,18 @@ SELECT ci.id, ci.sku_id, ci.product_id, ci.quantity, ci.selected,
        p.title, s.spec_values, s.image_url,
        (s.status = 1 AND s.deleted_at IS NULL
         AND p.status = 1 AND p.deleted_at IS NULL)::boolean AS on_shelf,
-       COALESCE(i.available_qty, 0)::int AS available_qty
+       COALESCE(i.available_qty, 0)::int AS available_qty,
+       -- SKU 没有自己的图时，购物车行显示商品主图（与订单行快照同一个退路）。
+       COALESCE(img.upload_id, 0)::bigint AS main_image_upload_id
   FROM cart_items ci
   JOIN skus s     ON s.id = ci.sku_id
   JOIN products p ON p.id = ci.product_id
+  LEFT JOIN LATERAL (
+        SELECT pi.upload_id FROM product_images pi
+         WHERE pi.product_id = p.id
+         ORDER BY pi.sort_order, pi.id
+         LIMIT 1
+       ) img ON TRUE
   LEFT JOIN inventories i ON i.sku_id = ci.sku_id AND i.store_id = sqlc.arg(store_id)
  WHERE ci.cart_id = sqlc.arg(cart_id)
  ORDER BY ci.created_at DESC, ci.id DESC;

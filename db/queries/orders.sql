@@ -55,11 +55,20 @@
 -- 与 GET /products?category_id= 同一个语义（products.sql 文件头）。
 -- LEFT JOIN 且只认未软删的分类：分类删了，category_path 为 NULL，
 -- 分类范围的规则就命中不了这一行 —— 与列表页「分类已删就是空列表」一致。
+-- main_image_upload_id：商品主图（product_images 的第一张）。SKU 自己没有图时，订单行快照用它 ——
+-- 否则种子商品这类「图挂在商品上」的订单行永远没有图（买家端订单 / 售后行只剩单字占位）。
 SELECT s.id, s.product_id, s.spec_values, v.price_cents, s.image_url,
-       p.title, p.brand_id, c.path AS category_path
+       p.title, p.brand_id, c.path AS category_path,
+       COALESCE(img.upload_id, 0)::bigint AS main_image_upload_id
   FROM skus s
   JOIN products p ON p.id = s.product_id
   JOIN sku_prices_by_store v ON v.sku_id = s.id AND v.store_id = sqlc.arg(store_id)
+  LEFT JOIN LATERAL (
+        SELECT pi.upload_id FROM product_images pi
+         WHERE pi.product_id = p.id
+         ORDER BY pi.sort_order, pi.id
+         LIMIT 1
+       ) img ON TRUE
   LEFT JOIN categories c ON c.id = p.category_id AND c.deleted_at IS NULL
  WHERE s.id = ANY(sqlc.arg(sku_ids)::bigint[])
    AND s.status = 1

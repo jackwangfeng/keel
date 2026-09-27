@@ -38,6 +38,8 @@ type CartLine struct {
 	Title      string
 	SpecValues []byte
 	ImageURL   *string
+	// MainImageUploadID 是商品主图的 upload id（没有为 0），SKU 没有自己的图时 handler 用它。
+	MainImageUploadID int64
 
 	// OnShelf 与定价查询的四个在架条件逐字对应。为假即失效（off_shelf）。
 	OnShelf bool
@@ -110,16 +112,18 @@ func (t tenantTx) ListCartLines(ctx context.Context, cartID, storeID int64) ([]C
 	out := make([]CartLine, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, CartLine{
-			ID:           r.ID,
-			SKUID:        r.SkuID,
-			ProductID:    r.ProductID,
-			Quantity:     r.Quantity,
-			Selected:     r.Selected,
-			Title:        r.Title,
-			SpecValues:   r.SpecValues,
-			ImageURL:     r.ImageUrl,
-			OnShelf:      r.OnShelf,
-			AvailableQty: r.AvailableQty,
+			ID:         r.ID,
+			SKUID:      r.SkuID,
+			ProductID:  r.ProductID,
+			Quantity:   r.Quantity,
+			Selected:   r.Selected,
+			Title:      r.Title,
+			SpecValues: r.SpecValues,
+			ImageURL:   r.ImageUrl,
+			OnShelf:    r.OnShelf,
+
+			MainImageUploadID: r.MainImageUploadID,
+			AvailableQty:      r.AvailableQty,
 		})
 	}
 	return out, nil

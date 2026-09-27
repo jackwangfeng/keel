@@ -282,7 +282,7 @@ func priceOrder(ctx context.Context, tx repository.Tx, sc repository.StoreScope,
 			ProductID:  sku.ProductID,
 			Title:      sku.Title,
 			SpecValues: sku.SpecValues,
-			ImageURL:   sku.ImageURL,
+			ImageURL:   lineImageURL(sku.ImageURL, sku.MainImageUploadID),
 			PriceCents: price,
 			Quantity:   it.Quantity,
 
@@ -582,4 +582,22 @@ func applicableCoupons(ctx context.Context, tx repository.Tx, sc repository.Stor
 		return out[i].Coupon.ValidEndAt.Before(out[j].Coupon.ValidEndAt)
 	})
 	return out, nil
+}
+
+// lineImageURL 是一行商品该显示的图：SKU 自己有图用 SKU 的，否则用商品主图（product_images 第一张）。
+// 订单行的 image_snapshot 与购物车行都走它，两处的退路是同一条规则。
+func lineImageURL(skuImage *string, mainUploadID int64) *string {
+	if skuImage != nil && *skuImage != "" {
+		return skuImage
+	}
+	if mainUploadID > 0 {
+		u := UploadURL(mainUploadID)
+		return &u
+	}
+	return nil
+}
+
+// LineImageURL 给 handler 用（购物车行）。
+func LineImageURL(skuImage *string, mainUploadID int64) *string {
+	return lineImageURL(skuImage, mainUploadID)
 }

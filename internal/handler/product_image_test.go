@@ -7,8 +7,10 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/keel/keel/internal/api"
+	"github.com/keel/keel/internal/auth"
 	"github.com/keel/keel/internal/search"
 )
 
@@ -191,4 +193,72 @@ func TestSearchHitsCarryProductImages(t *testing.T) {
 	if n := countFixtureItems(t, "检索结果", fx, resp.Items); n != 2 {
 		t.Fatalf("检索结果里只找到 %d / 2 件夹具商品：%v", n, titlesOf(body))
 	}
+}
+
+// 购物车行与订单行：SKU 没有自己的图时，退回商品主图（iPhone / 小米真机验收发现这两处仍是单字占位）。
+// 订单行存的是下单那一刻的快照（image_snapshot），不是读的时候再去找商品图。
+func TestCartAndOrderLinesFallBackToProductMainImage(t *testing.T) {
+	fx := newProductImageFixture(t)
+	sh := fx.Shop
+	_, sku := seedPublishedProduct(t, sh, "购物车图", 2990, 5)
+	// 上面那件新商品没图；给它挂 fx.Main，走真实接口。
+	pid := adminQueryInt64(t, `SELECT product_id FROM skus WHERE id = $1`, sku)
+	wantStatus(t, putAs(t, sh.Host, fmt.Sprintf("/api/v1/admin/products/%d/images", pid),
+		fmt.Sprintf(`{"images":[{"upload_id":%d}]}`, fx.Main.Id), sh.Token), http.StatusOK, "挂主图")
+	want := fmt.Sprintf("/api/v1/uploads/%d", fx.Main.Id)
+
+	phone := fmt.Sprintf("134%08d", time.Now().UnixNano()%100_000_000)
+	uid := adminQueryInt64(t, `INSERT INTO users (merchant_id, phone, nickname) VALUES ($1, $2, '看图买家') RETURNING id`,
+		sh.MerchantID, phone)
+	addr := adminQueryInt64(t, `INSERT INTO user_addresses (merchant_id, user_id, receiver_name, phone, province, city, district, street, detail)
+		VALUES ($1, $2, '收件人', $3, '北京', '北京', '朝阳', '某街道', '1 号') RETURNING id`, sh.MerchantID, uid, phone)
+	tok, err := testSigner.Issue(sh.MerchantID, uid, 0, auth.KindAccess, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 买家、购物车、订单不在 adminShop 的清理清单里；t.Cleanup 后进先出，这一段先跑。
+	t.Cleanup(func() {
+		for _, stmt := range []string{
+			`DELETE FROM inventory_logs WHERE merchant_id = $1`,
+			`DELETE FROM order_items WHERE merchant_id = $1`,
+			`DELETE FROM orders WHERE merchant_id = $1`,
+			`DELETE FROM cart_items WHERE merchant_id = $1`,
+			`DELETE FROM carts WHERE merchant_id = $1`,
+			`DELETE FROM idempotency_keys WHERE merchant_id = $1`,
+			`DELETE FROM user_addresses WHERE merchant_id = $1`,
+			`DELETE FROM users WHERE merchant_id = $1`,
+		} {
+			if _, err := admin(t).Exec(context.Background(), stmt, sh.MerchantID); err != nil {
+				t.Errorf("清理失败 (%s): %v", stmt, err)
+			}
+		}
+	})
+
+	wantStatus(t, postIdem(t, sh.Host, fmt.Sprintf("/api/v1/cart/items?store_id=%d", sh.StoreID),
+		fmt.Sprintf(`{"sku_id":%d,"quantity":1}`, sku), tok), http.StatusOK, "加购")
+	var cart struct {
+		Items []map[string]json.RawMessage `json:"items"`
+	}
+	decodeInto(t, reqAs(t, http.MethodGet, sh.Host, fmt.Sprintf("/api/v1/cart?store_id=%d", sh.StoreID), "", tok),
+		http.StatusOK, "读购物车", &cart)
+	if len(cart.Items) != 1 {
+		t.Fatalf("购物车有 %d 行，期望 1", len(cart.Items))
+	}
+	wantImageURL(t, "购物车行", cart.Items[0], want)
+
+	var order struct {
+		OrderNo string `json:"order_no"`
+	}
+	decodeInto(t, postIdem(t, sh.Host, "/api/v1/orders",
+		fmt.Sprintf(`{"items":[{"sku_id":%d,"quantity":1}],"store_id":%d,"address_id":%d}`, sku, sh.StoreID, addr), tok),
+		http.StatusCreated, "下单", &order)
+	var detail struct {
+		Items []map[string]json.RawMessage `json:"items"`
+	}
+	decodeInto(t, reqAs(t, http.MethodGet, sh.Host, "/api/v1/orders/"+order.OrderNo, "", tok),
+		http.StatusOK, "订单详情", &detail)
+	if len(detail.Items) != 1 {
+		t.Fatalf("订单有 %d 行，期望 1", len(detail.Items))
+	}
+	wantImageURL(t, "订单行", detail.Items[0], want)
 }

@@ -1128,10 +1128,17 @@ func (q *Queries) ListPaymentsForOrder(ctx context.Context, orderID int64) ([]Li
 const listSKUsForPricing = `-- name: ListSKUsForPricing :many
 
 SELECT s.id, s.product_id, s.spec_values, v.price_cents, s.image_url,
-       p.title, p.brand_id, c.path AS category_path
+       p.title, p.brand_id, c.path AS category_path,
+       COALESCE(img.upload_id, 0)::bigint AS main_image_upload_id
   FROM skus s
   JOIN products p ON p.id = s.product_id
   JOIN sku_prices_by_store v ON v.sku_id = s.id AND v.store_id = $1
+  LEFT JOIN LATERAL (
+        SELECT pi.upload_id FROM product_images pi
+         WHERE pi.product_id = p.id
+         ORDER BY pi.sort_order, pi.id
+         LIMIT 1
+       ) img ON TRUE
   LEFT JOIN categories c ON c.id = p.category_id AND c.deleted_at IS NULL
  WHERE s.id = ANY($2::bigint[])
    AND s.status = 1
@@ -1153,14 +1160,15 @@ type ListSKUsForPricingParams struct {
 }
 
 type ListSKUsForPricingRow struct {
-	ID           int64
-	ProductID    int64
-	SpecValues   []byte
-	PriceCents   int64
-	ImageUrl     *string
-	Title        string
-	BrandID      *int64
-	CategoryPath *string
+	ID                int64
+	ProductID         int64
+	SpecValues        []byte
+	PriceCents        int64
+	ImageUrl          *string
+	Title             string
+	BrandID           *int64
+	CategoryPath      *string
+	MainImageUploadID int64
 }
 
 // 下单主链路的查询：试算、建单、SAGA 两个分支各自要读写的东西。
@@ -1219,6 +1227,8 @@ type ListSKUsForPricingRow struct {
 // 与 GET /products?category_id= 同一个语义（products.sql 文件头）。
 // LEFT JOIN 且只认未软删的分类：分类删了，category_path 为 NULL，
 // 分类范围的规则就命中不了这一行 —— 与列表页「分类已删就是空列表」一致。
+// main_image_upload_id：商品主图（product_images 的第一张）。SKU 自己没有图时，订单行快照用它 ——
+// 否则种子商品这类「图挂在商品上」的订单行永远没有图（买家端订单 / 售后行只剩单字占位）。
 func (q *Queries) ListSKUsForPricing(ctx context.Context, arg ListSKUsForPricingParams) ([]ListSKUsForPricingRow, error) {
 	rows, err := q.db.Query(ctx, listSKUsForPricing, arg.StoreID, arg.SkuIds, arg.RegionID)
 	if err != nil {
@@ -1237,6 +1247,7 @@ func (q *Queries) ListSKUsForPricing(ctx context.Context, arg ListSKUsForPricing
 			&i.Title,
 			&i.BrandID,
 			&i.CategoryPath,
+			&i.MainImageUploadID,
 		); err != nil {
 			return nil, err
 		}

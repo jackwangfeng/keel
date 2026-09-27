@@ -52,7 +52,10 @@ type PriceableSKU struct {
 	Title      string
 	SpecValues []byte // JSONB 原样带上来，快照要一字不差地拷进 order_items
 	ImageURL   *string
-	PriceCents int64
+	// MainImageUploadID 是商品主图的 upload id（没有为 0）。SKU 没有自己的图时，
+	// 服务层用它拼订单行的图片快照（URL 的形状归 service.UploadURL，不在这一层拼）。
+	MainImageUploadID int64
+	PriceCents        int64
 
 	// BrandID 与 CategoryPath 是券挑行的素材（数据模型 §7）：适用范围按品牌、
 	// 分类（含子孙，按 path 前缀判）挑出参与计算的行。与价格从同一条查询取，
@@ -395,6 +398,8 @@ func (t tenantTx) ListSKUsForPricing(ctx context.Context, sc StoreScope, skuIDs 
 			SpecValues: r.SpecValues,
 			ImageURL:   r.ImageUrl,
 			PriceCents: r.PriceCents,
+
+			MainImageUploadID: r.MainImageUploadID,
 
 			BrandID:      r.BrandID,
 			CategoryPath: r.CategoryPath,

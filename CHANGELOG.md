@@ -41,6 +41,9 @@ so "which one is running?" never depends on anyone's memory.
 
 ### Fixed
 
+- **Cart lines and order lines show the product image.** When a SKU has no image of its own,
+  `GET /cart` items and new order lines fall back to the product's main image (order lines
+  snapshot it at order time, so existing orders are unchanged).
 - **Buyer API returns product images.** `GET /products`, `POST /search` and
   `GET /products/{id}` now fill `image_url` with the main image (the `product_images` row
   with the lowest `sort_order`, as managed by `PUT /admin/products/{id}/images`), and the
