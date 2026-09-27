@@ -10,6 +10,9 @@
 
 ## Flutter 买家端（flutter_app/，2026-09-28 起主要维护的客户端）
 
+- **对外展示（eshop.zzss.fun 的 `/`）2026-09-28 起是 Flutter Web**：`~/.local/share/keel-eshop/bin/publish-frontend.sh h5`（本机构建，SDK `~/development/flutter` 3.47.5；PATH 上的是 flutter_ohos）。uni-app x 版留作 `h5-uniapp`（回滚用），上一份产物备份在 `/srv/keel-eshop/h5-uniapp`。
+  **国内打得开的关键**：Flutter Web 默认从 gstatic 取 CanvasKit 与补字字体，屏蔽后整页空白（实测）。构建加 `--no-web-resources-cdn`，`flutter_bootstrap.js` 注入 `fontFallbackBaseUrl: "/gfonts/"`，引擎补字清单的 725 个字体镜像在 `~/.local/share/keel-eshop/gfonts`（24M），发布时拷进产物。升级 Flutter 后按 `bin/cache/flutter_web_sdk/lib/_engine/engine/font_fallback_data.dart` 补镜像。屏蔽 google/gstatic 后从公网打开首页验证通过（请求全在本站）。首屏要下 main.dart.js 约 3M + canvaskit.wasm 约 7M（Caddy gzip）。
+
 - **状态**：对齐 uni-app x 全部页面（第一阶段购物主链路 + 第二阶段券 / 消息 / 资料 / 服务地址 / 售后），main `fce951c` 起。uni-app x（`app/`）冻结，只修 bug。
 - **验收**：`make flutter-analyze flutter-test`（107 条单测）· `KEEL_API_BASE=http://192.168.0.110:18099/api/v1 make flutter-e2e-web`（Web 无头 25 条，带前置状态的 5 条读 `KEEL_E2E_*`，没设跳过）· `make flutter-build`（web / apk / ios）· `make flutter-build-mp`（mp-flutter main `bc76bf5`）· `make flutter-ios-install KEEL_IOS_TEAM=2Q89DQSSH6`。
 - **小程序**：开发者工具与 mp-flutter 会话共用，用前打招呼；`flutter_app/tool/mp_walk.js` 冒烟（复用 mp-flutter 的 drive.js）。报给 mp-flutter 的：安全区 / 胶囊（viewPadding 恒 0）、冷启动首页滚动位置、webgl2 日志 —— 在修。凭证上传（chooseMedia → uploadFile）、定位（getLocation wgs84）、image_picker / geolocator 的 Web 注册在小程序里还没实测。
