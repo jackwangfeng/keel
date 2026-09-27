@@ -30,6 +30,7 @@ import { notifyError, notifyOk } from "../ui/notify.ts";
 import { can, NO_PERMISSION } from "../auth/permissions.ts";
 import ProblemAlert from "../components/ProblemAlert.vue";
 import FenceEditor from "../components/FenceEditor.vue";
+import LocationPicker, { type LatLng } from "../components/LocationPicker.vue";
 import ScopedProducts from "../components/ScopedProducts.vue";
 import InventoryDialog, { type InventoryTarget } from "../components/InventoryDialog.vue";
 
@@ -76,6 +77,8 @@ const center = computed(() => {
 // ---------------------------------------------------------------- 基本信息
 
 const form = ref<StoreUpdateRequest>({});
+/** 地图选的点。门店必须有坐标（2026-09-27）：老门店没有时要先选，才能保存基本信息。 */
+const point = ref<LatLng | null>(null);
 const saving = ref(false);
 const saveError = ref<unknown>(null);
 
@@ -92,9 +95,8 @@ function syncForm(): void {
         district: s.district ?? "",
         address: s.address ?? "",
         status: s.status,
-        ...(typeof s.lat === "number" ? { lat: s.lat } : {}),
-        ...(typeof s.lng === "number" ? { lng: s.lng } : {}),
     };
+    point.value = typeof s.lat === "number" && typeof s.lng === "number" ? { lat: s.lat, lng: s.lng } : null;
 }
 
 const regionChanged = computed(() => store.value !== null && form.value.region_id !== store.value.region_id);
@@ -104,7 +106,12 @@ async function saveBasic(): Promise<void> {
     saveError.value = null;
     try {
         const body: StoreUpdateRequest = { ...form.value };
-        for (const k of ["lat", "lng"] as const) if (body[k] === null || body[k] === undefined) delete body[k];
+        const s = store.value;
+        // 坐标只在变了的时候发：服务端对改坐标会查「还在不在围栏内」，没动就不该触发那条判定。
+        if (point.value !== null && (s === null || point.value.lat !== s.lat || point.value.lng !== s.lng)) {
+            body.lat = point.value.lat;
+            body.lng = point.value.lng;
+        }
         store.value = await keel.request("patch", "/admin/stores/{store_id}", { path: { store_id: id.value }, body });
         syncForm();
         notifyOk("已保存");
@@ -268,12 +275,9 @@ function onInventoryUpdated(inv: AdminInventory): void {
                             </div>
                         </el-form-item>
                         <el-form-item label="地址"><el-input v-model="form.address" /></el-form-item>
-                        <el-form-item label="坐标">
-                            <div class="row3">
-                                <el-input-number v-model="form.lat" :precision="6" :step="0.001" :min="-90" :max="90" placeholder="纬度" controls-position="right" />
-                                <el-input-number v-model="form.lng" :precision="6" :step="0.001" :min="-180" :max="180" placeholder="经度" controls-position="right" />
-                            </div>
-                            <p class="hint">WGS-84。它只用于展示与地图定位，接单范围看围栏，不看这个点。</p>
+                        <el-form-item label="位置" required>
+                            <LocationPicker v-if="tab === 'basic'" v-model="point" :fence="store.fence ?? null" :readonly="!can.manageStore(store)" />
+                            <p class="hint">接单范围看围栏；这个点是门店自己的位置，「按距离排」按它算，而且必须落在围栏内。</p>
                         </el-form-item>
                         <el-form-item label="营业状态">
                             <el-radio-group v-model="form.status">
@@ -283,7 +287,7 @@ function onInventoryUpdated(inv: AdminInventory): void {
                             <p class="hint">停业的门店不参与围栏判定，也不能下单。</p>
                         </el-form-item>
                         <el-form-item>
-                            <el-button type="primary" :loading="saving" :disabled="!can.manageStore(store)" :title="can.manageStore(store) ? '' : NO_PERMISSION" @click="saveBasic">保存</el-button>
+                            <el-button type="primary" :loading="saving" :disabled="!can.manageStore(store) || point === null" :title="!can.manageStore(store) ? NO_PERMISSION : point === null ? '先在地图上选门店位置' : ''" @click="saveBasic">保存</el-button>
                             <span class="hint ml8">更新于 {{ datetime(store.updated_at) }}</span>
                         </el-form-item>
                     </el-form>
@@ -292,6 +296,8 @@ function onInventoryUpdated(inv: AdminInventory): void {
                 <!-- ------------------------------------------------- 围栏 -->
                 <el-tab-pane label="围栏" name="fence">
                     <ProblemAlert v-if="fenceError" :error="fenceError" />
+                    <el-alert v-if="center === null" type="warning" :closable="false" show-icon class="mb12"
+                        title="这家门店还没有坐标。先到「基本信息」用地图选点，再画围栏——门店必须落在自己的围栏内。" />
                     <FenceEditor
                         :saved="store.fence ?? null"
                         :center="center"

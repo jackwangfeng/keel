@@ -339,7 +339,7 @@ func TestRegionManagerCannotMoveAStoreOutOfTheirRegion(t *testing.T) {
 func TestOnlyAdminCanCreateADefaultStore(t *testing.T) {
 	fx := newPermFixture(t)
 	body := func() string {
-		return fmt.Sprintf(`{"region_id":%d,"code":"d-%s","name":"默认店候选","is_default":true}`, fx.North, fx.next())
+		return fmt.Sprintf(`{"region_id":%d,"code":"d-%s","name":"默认店候选","is_default":true,"lng":116.4,"lat":39.9}`, fx.North, fx.next())
 	}
 	// 操作员与大区管理员（华北在他范围里）都不行。
 	wantForbidden(t, postIdem(t, fx.sh.Host, "/api/v1/admin/stores", body(), fx.tokens[roleOperator]),

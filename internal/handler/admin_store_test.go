@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/keel/keel/internal/api"
+	"github.com/keel/keel/internal/problem"
 )
 
 // 门店 / 大区那 21 条后台接口的行为测试（00020）。
@@ -413,7 +414,7 @@ func TestDefaultStoreIsSwitchedOnlyByItsOwnEndpoint(t *testing.T) {
 	region := createRegion(t, sh, "second", "第二大区")
 
 	w := post(t, sh.Host, "/api/v1/admin/stores",
-		fmt.Sprintf(`{"region_id":%d,"code":"grab","name":"抢默认位的店","is_default":true}`, region),
+		fmt.Sprintf(`{"region_id":%d,"code":"grab","name":"抢默认位的店","is_default":true,"lng":116.4,"lat":39.9}`, region),
 		sh.Token)
 	if w.Code != http.StatusConflict {
 		t.Fatalf("已经有默认店时再建一家 is_default=true 返回 %d，期望 409。响应体：%s",
@@ -562,5 +563,65 @@ func TestInventoryWithoutStoreIsAmbiguousWhenThereAreTwoStores(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("第一家店的库存清单里找不到 sku %d —— 缺行要显示成 0，不能漏掉", skuID)
+	}
+}
+
+// 门店必须有坐标；有围栏时门店必须在围栏内（2026-09-27）。
+//
+// 四条路径各一刀：建店缺坐标 → 422；配一个不盖住门店的围栏 → 422 store-outside-fence
+// 且围栏没被写进去；把坐标挪出已有围栏 → 422 且坐标没变；没有坐标的老门店配围栏 →
+// 422 store-location-required。外加阳性对照：点正好落在围栏边上算在内。
+func TestStoreMustHaveLocationInsideItsFence(t *testing.T) {
+	sh := newAdminShop(t)
+	region := createRegion(t, sh, "geo", "定位大区")
+
+	w := post(t, sh.Host, "/api/v1/admin/stores",
+		fmt.Sprintf(`{"region_id":%d,"code":"noloc-%s","name":"没坐标的店"}`, region, sh.Suffix), sh.Token)
+	if p := problemOf(t, w, http.StatusUnprocessableEntity); p.Title == "" {
+		t.Fatalf("建店缺坐标应 422：%+v", p)
+	}
+
+	store := createStore(t, sh, region, "geo", "定位店", 116.40, 39.90)
+	fencePath := fmt.Sprintf("/api/v1/admin/stores/%d/fence", store)
+	box := func(lng0, lat0, lng1, lat1 float64) string {
+		return fmt.Sprintf(`{"fence":{"type":"Polygon","coordinates":[[[%v,%v],[%v,%v],[%v,%v],[%v,%v],[%v,%v]]]}}`,
+			lng0, lat0, lng1, lat0, lng1, lat1, lng0, lat1, lng0, lat0)
+	}
+
+	// 围栏不盖住门店：拒，而且围栏没写进去（事务回滚）。
+	p := problemOf(t, putAs(t, sh.Host, fencePath, box(117.0, 39.0, 117.5, 39.5), sh.Token), http.StatusUnprocessableEntity)
+	if p.Type != problem.TypeStoreOutsideFence {
+		t.Fatalf("门店在围栏外应 store-outside-fence，实得 %s", p.Type)
+	}
+	var got api.AdminStore
+	decodeInto(t, getAs(t, sh.Host, fmt.Sprintf("/api/v1/admin/stores/%d", store), sh.Token), http.StatusOK, "读门店", &got)
+	if got.Fence != nil {
+		t.Fatal("被拒的围栏被写进去了 —— 判定在写之后，但事务没有回滚")
+	}
+
+	// 点正好在围栏边上（经度 116.40 是左边界）：算在内。
+	setFence(t, sh, store, 116.40, 39.80, 116.60, 40.00)
+
+	// 把坐标挪出围栏：拒，坐标不变。
+	w = patchAs(t, sh.Host, fmt.Sprintf("/api/v1/admin/stores/%d", store), `{"lng":121.47,"lat":31.23}`, sh.Token)
+	if p := problemOf(t, w, http.StatusUnprocessableEntity); p.Type != problem.TypeStoreOutsideFence {
+		t.Fatalf("坐标挪出围栏应 store-outside-fence，实得 %s", p.Type)
+	}
+	decodeInto(t, getAs(t, sh.Host, fmt.Sprintf("/api/v1/admin/stores/%d", store), sh.Token), http.StatusOK, "读门店", &got)
+	if got.Lng == nil || *got.Lng < 116.39 || *got.Lng > 116.41 {
+		t.Fatalf("被拒的改坐标生效了：lng=%v", got.Lng)
+	}
+	// 围栏内挪动：放行。
+	wantStatus(t, patchAs(t, sh.Host, fmt.Sprintf("/api/v1/admin/stores/%d", store), `{"lng":116.5,"lat":39.9}`, sh.Token),
+		http.StatusOK, "围栏内改坐标")
+	// 不碰坐标的改动不查围栏。
+	wantStatus(t, patchAs(t, sh.Host, fmt.Sprintf("/api/v1/admin/stores/%d", store), `{"phone":"010-1"}`, sh.Token),
+		http.StatusOK, "改电话")
+
+	// 没有坐标的老门店（夹具里的默认门店就是：迁移回填 / 早期种子那一类）配围栏：先要选点。
+	p = problemOf(t, putAs(t, sh.Host, fmt.Sprintf("/api/v1/admin/stores/%d/fence", sh.StoreID),
+		box(70, 15, 140, 55), sh.Token), http.StatusUnprocessableEntity)
+	if p.Type != problem.TypeStoreLocationRequired {
+		t.Fatalf("没坐标的店配围栏应 store-location-required，实得 %s", p.Type)
 	}
 }

@@ -20,6 +20,7 @@ import { isIncomplete, listAllRegions } from "../api/stores.ts";
 import { notifyError, notifyOk } from "../ui/notify.ts";
 import { can, NO_PERMISSION } from "../auth/permissions.ts";
 import ProblemAlert from "../components/ProblemAlert.vue";
+import LocationPicker, { type LatLng } from "../components/LocationPicker.vue";
 
 const route = useRoute();
 const router = useRouter();
@@ -82,6 +83,8 @@ const createError = ref<unknown>(null);
 const creating = ref(false);
 const submission = new IdempotentSubmission();
 const draft = ref<StoreCreateRequest>({ region_id: 0, code: "", name: "" });
+/** 地图选的点。门店必须有坐标（2026-09-27），没选就不能提交。 */
+const draftPoint = ref<LatLng | null>(null);
 
 function openCreate(): void {
     draft.value = {
@@ -92,6 +95,7 @@ function openCreate(): void {
         // 落进「全体访客不在服务范围」那个状态。已有默认店时不勾——勾了必 409。
         is_default: page.value?.has_default === false,
     };
+    draftPoint.value = null;
     createError.value = null;
     submission.rotate();
     createVisible.value = true;
@@ -106,9 +110,9 @@ async function submitCreate(): Promise<void> {
         for (const k of ["phone", "province", "city", "district", "address"] as const) {
             if (body[k] === "") delete body[k];
         }
-        // el-input-number 清空时给 null，而契约里 lat / lng 是 number（可省略，不可为 null）。
-        for (const k of ["lat", "lng"] as const) {
-            if (body[k] === null || body[k] === undefined) delete body[k];
+        if (draftPoint.value !== null) {
+            body.lat = draftPoint.value.lat;
+            body.lng = draftPoint.value.lng;
         }
         const created = await withIdempotency(submission, (key) =>
             keel.request("post", "/admin/stores", { body, headers: { "Idempotency-Key": key } }),
@@ -182,6 +186,7 @@ async function remove(row: AdminStore): Promise<void> {
                     <router-link :to="{ name: 'store-detail', params: { storeId: row.id } }">{{ row.name }}</router-link>
                     <el-tag v-if="row.is_default" type="primary" size="small" effect="dark" class="ml4">默认</el-tag>
                     <el-tag v-if="row.deleted_at" type="danger" size="small" class="ml4">已删</el-tag>
+                    <el-tag v-if="!row.deleted_at && typeof row.lat !== 'number'" type="warning" size="small" class="ml4" title="门店必须有坐标：点进去在基本信息里用地图选点">未定位</el-tag>
                 </template>
             </el-table-column>
             <el-table-column label="大区" width="130">
@@ -262,12 +267,8 @@ async function remove(row: AdminStore): Promise<void> {
                     </div>
                 </el-form-item>
                 <el-form-item label="地址"><el-input v-model="draft.address" /></el-form-item>
-                <el-form-item label="坐标">
-                    <div class="row3">
-                        <el-input-number v-model="draft.lat" :precision="6" :step="0.001" :min="-90" :max="90" placeholder="纬度" controls-position="right" />
-                        <el-input-number v-model="draft.lng" :precision="6" :step="0.001" :min="-180" :max="180" placeholder="经度" controls-position="right" />
-                    </div>
-                    <p class="hint">WGS-84（GPS 原始坐标）。别从高德 / 百度地图上抄——那是偏过的坐标。可以不填。</p>
+                <el-form-item label="位置" required>
+                    <LocationPicker v-if="createVisible" v-model="draftPoint" height="260px" />
                 </el-form-item>
                 <el-form-item label="默认门店">
                     <el-checkbox v-model="draft.is_default" :disabled="page?.has_default === true">
@@ -283,7 +284,7 @@ async function remove(row: AdminStore): Promise<void> {
                 <el-button
                     type="primary"
                     :loading="creating"
-                    :disabled="draft.code.trim() === '' || draft.name.trim() === '' || draft.region_id === 0"
+                    :disabled="draft.code.trim() === '' || draft.name.trim() === '' || draft.region_id === 0 || draftPoint === null"
                     @click="submitCreate"
                 >
                     创建

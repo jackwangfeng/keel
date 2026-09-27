@@ -430,6 +430,8 @@ export const ProblemType = {
     storeUnavailable: `${P}store-unavailable`,
     storeAmbiguous: `${P}store-ambiguous`,
     invalidFence: `${P}invalid-fence`,
+    storeLocationRequired: `${P}store-location-required`,
+    storeOutsideFence: `${P}store-outside-fence`,
     skuNotSoldInStore: `${P}sku-not-sold-in-store`,
     // 商家管理与平台级租户切换。
     tenantSwitchForbidden: `${P}tenant-switch-forbidden`,

@@ -53,6 +53,10 @@ export function problemHint(type: string): string {
             return "这家店不是默认门店。清空它的围栏会让它永远接不到单（不被任何坐标命中，也不是回落目标）。要么别清，要么先把它设成默认门店。";
         case ProblemType.invalidFence:
             return "多边形本身画错了。上面那句是 PostGIS 给的原话（ST_IsValidReason），方括号里是出错位置的 [经度 纬度]，地图上已用红圈标出。常见原因：边交叉（自交）、点太少。";
+        case ProblemType.storeLocationRequired:
+            return "门店必须有坐标，而「门店在不在围栏内」没有坐标就判不了。先到「基本信息」在地图上选门店位置并保存，再回来画围栏。";
+        case ProblemType.storeOutsideFence:
+            return "门店自己的位置不在围栏内。要么把围栏画大一些、把门店圈进去（橙色圆点是门店），要么到「基本信息」把门店位置挪到围栏里。";
         case ProblemType.storeUnavailable:
             return "这家门店已停业或已删除，不能作为回落目标。先把它改回营业，或换一家设为默认。";
         case ProblemType.storeAmbiguous:

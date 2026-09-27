@@ -2136,9 +2136,9 @@ export type StoreCreateRequest = {
   city? : string
   district? : string
   address? : string
-  /** 门店自身坐标的纬度，`/stores/resolve` 的 `distance_m` 按它算。 */
+  /** 必填。门店自身坐标的纬度（WGS-84），`/stores/resolve` 的 `distance_m` 按它算。 */
   lat? : number
-  /** 经度。与 `lat` 同时给或同时不给。 */
+  /** 必填。经度（WGS-84）。 */
   lng? : number
   /** 建出来就是默认门店。已经有一家时返回 409——切换默认店请用 */
   is_default? : boolean
@@ -2180,6 +2180,7 @@ export type StoreUpdateRequest = {
   city? : string
   district? : string
   address? : string
+  /** 与 `lng` 同时给或同时不给。坐标只能改、不能清空。 */
   lat? : number
   lng? : number
   status? : number

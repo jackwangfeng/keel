@@ -286,6 +286,11 @@ func (s *AdminStoreService) CreateStore(ctx context.Context,
 	if err := checkCoordPair(n.Lat, n.Lng); err != nil {
 		return repository.Store{}, err
 	}
+	// 门店必须有坐标（2026-09-27）：后台建店用地图选点。建出来就没有坐标的店，
+	// 之后画围栏时判不了「门店在不在围栏内」（repository.ErrStoreLocationRequired）。
+	if n.Lat == nil || n.Lng == nil {
+		return repository.Store{}, fmt.Errorf("%w: lat / lng 必填，门店必须有坐标", ErrCatalogBadRequest)
+	}
 	var out repository.Store
 	err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
 		var e error

@@ -404,7 +404,7 @@ var permMatrix = []permRoute{
 	}},
 	{"POST", v1 + "/admin/stores", storeManage, func(t *testing.T, fx *permFixture, c permCase) permReq {
 		return permReq{Method: "POST", Path: v1 + "/admin/stores", OK: http.StatusCreated,
-			Body: fmt.Sprintf(`{"region_id":%d,"code":"s-%s","name":"新门店"}`, fx.region(c), fx.next())}
+			Body: fmt.Sprintf(`{"region_id":%d,"code":"s-%s","name":"新门店","lng":116.4,"lat":39.9}`, fx.region(c), fx.next())}
 	}},
 	{"GET", v1 + "/admin/stores/:store_id", storeOperate, func(t *testing.T, fx *permFixture, c permCase) permReq {
 		return permGet(fmt.Sprintf(v1+"/admin/stores/%d", fx.store(c)))
@@ -419,7 +419,9 @@ var permMatrix = []permRoute{
 	}},
 	{"PUT", v1 + "/admin/stores/:store_id/fence", storeManage, func(t *testing.T, fx *permFixture, c permCase) permReq {
 		return permReq{Method: "PUT", Path: fmt.Sprintf(v1+"/admin/stores/%d/fence", fx.store(c)),
-			Body: `{"fence":{"type":"Polygon","coordinates":[[[116,39],[117,39],[117,40],[116,40],[116,39]]]}}`,
+			// 盖住全国的一个框：门店必须在自己的围栏内（store-outside-fence），这里测的是权限，
+			// 不该因为范围内外两家店坐标不同而被那条规则拦下。
+			Body: `{"fence":{"type":"Polygon","coordinates":[[[70,15],[140,15],[140,55],[70,55],[70,15]]]}}`,
 			OK:   http.StatusOK}
 	}},
 	{"PUT", v1 + "/admin/stores/:store_id/default", adminOnly, func(t *testing.T, fx *permFixture, c permCase) permReq {

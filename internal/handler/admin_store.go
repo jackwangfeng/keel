@@ -158,6 +158,14 @@ func writeStoreError(c *gin.Context, err error) {
 		problem.Write(c, http.StatusConflict, problem.TypeStoreFenceRequired,
 			"非默认门店必须有围栏，清空会让它永远接不到单")
 
+	case errors.Is(err, repository.ErrStoreLocationRequired):
+		problem.Write(c, http.StatusUnprocessableEntity, problem.TypeStoreLocationRequired,
+			"门店还没有坐标，请先在基本信息里用地图选点，再配围栏")
+
+	case errors.Is(err, repository.ErrStoreOutsideFence):
+		problem.Write(c, http.StatusUnprocessableEntity, problem.TypeStoreOutsideFence,
+			"门店坐标不在围栏内：挪一下门店位置，或者把围栏画大一些")
+
 	case errors.Is(err, repository.ErrStoreUnavailable):
 		problem.Write(c, http.StatusConflict, problem.TypeStoreUnavailable,
 			"这家门店已停业或已软删，不能作为回落目标")

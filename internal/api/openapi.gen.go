@@ -6168,6 +6168,12 @@ type StoreContext struct {
 
 // StoreCreateRequest **围栏不在这里传**，走 `PUT /admin/stores/{store_id}/fence`。
 // 建店是表单、画围栏是地图，是后台的两个界面。
+//
+// **坐标必填**（2026-09-27）：门店必须有坐标，后台用地图选点；缺了返回 422。
+// 之后配围栏时要求门店在围栏内（`store-outside-fence`），没有坐标判不了。
+// `lat` / `lng` 没列进 `required` 是刻意的：生成的 Go 类型会把必填的 number
+// 变成非指针，缺字段时读出来是 0 —— 那是几内亚湾里一个合法的点，服务端就分不出
+// 「没传」和「传了 0,0」。可选指针 + 服务端必填校验，缺了才能如实报 422。
 type StoreCreateRequest struct {
 	Address  *string `json:"address,omitempty"`
 	City     *string `json:"city,omitempty"`
@@ -6178,10 +6184,10 @@ type StoreCreateRequest struct {
 	// `PUT /admin/stores/{store_id}/default`，那条会先清旧再置新。
 	IsDefault *bool `json:"is_default,omitempty"`
 
-	// Lat 门店自身坐标的纬度，`/stores/resolve` 的 `distance_m` 按它算。
+	// Lat 必填。门店自身坐标的纬度（WGS-84），`/stores/resolve` 的 `distance_m` 按它算。
 	Lat *float32 `json:"lat,omitempty"`
 
-	// Lng 经度。与 `lat` 同时给或同时不给。
+	// Lng 必填。经度（WGS-84）。
 	Lng      *float32 `json:"lng,omitempty"`
 	Name     string   `json:"name"`
 	Phone    *string  `json:"phone,omitempty"`
@@ -6257,10 +6263,14 @@ type StoreResolveResult struct {
 // `ST_IsValid`），`is_default` 走 `PUT .../default`（要在同一事务里
 // 先清旧再置新）。
 type StoreUpdateRequest struct {
-	Address  *string                   `json:"address,omitempty"`
-	City     *string                   `json:"city,omitempty"`
-	Code     *string                   `json:"code,omitempty"`
-	District *string                   `json:"district,omitempty"`
+	Address  *string `json:"address,omitempty"`
+	City     *string `json:"city,omitempty"`
+	Code     *string `json:"code,omitempty"`
+	District *string `json:"district,omitempty"`
+
+	// Lat 与 `lng` 同时给或同时不给。坐标只能改、不能清空。
+	// 这家店有围栏时，新坐标必须在围栏内，否则 422
+	// （`https://keel.dev/problems/store-outside-fence`）。
 	Lat      *float32                  `json:"lat,omitempty"`
 	Lng      *float32                  `json:"lng,omitempty"`
 	Name     *string                   `json:"name,omitempty"`

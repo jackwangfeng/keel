@@ -188,7 +188,7 @@ const (
 	// 服务端保证重试不会多加一遍。与 internal 的 500 分开：这不是谁写错了代码，是一个会自己
 	// 好的依赖暂时不在，503 + 退避重试是它在 HTTP 上的准确说法。
 	TypeInventoryUnavailable = "https://keel.dev/problems/inventory-unavailable"
-	TypeUploadNotFound        = "https://keel.dev/problems/upload-not-found"
+	TypeUploadNotFound       = "https://keel.dev/problems/upload-not-found"
 	// upload-forbidden 是**读**那条路上的 403：文件在、也属于这家店，
 	// 但它的 purpose 不是「所有人可读」的那一类（典型：别人的退款凭证）。
 	// 契约在 GET /uploads/{upload_id} 上明写这里不能用 404 掩盖存在性。
@@ -260,7 +260,11 @@ const (
 	TypeStoreUnavailable     = "https://keel.dev/problems/store-unavailable"
 	TypeStoreAmbiguous       = "https://keel.dev/problems/store-ambiguous"
 	TypeInvalidFence         = "https://keel.dev/problems/invalid-fence"
-	TypeSKUNotSoldInStore    = "https://keel.dev/problems/sku-not-sold-in-store"
+	// store-location-required / store-outside-fence：门店必须有坐标，有围栏时门店必须在围栏内
+	// （2026-09-27）。都是 422：不改请求重试永远不会成功 —— 前者要先选点，后者要挪点或重画围栏。
+	TypeStoreLocationRequired = "https://keel.dev/problems/store-location-required"
+	TypeStoreOutsideFence     = "https://keel.dev/problems/store-outside-fence"
+	TypeSKUNotSoldInStore     = "https://keel.dev/problems/sku-not-sold-in-store"
 
 	// 优惠券那一组（数据模型 §7，契约 Coupon tag）。分得细的理由同上：
 	//

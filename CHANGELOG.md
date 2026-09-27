@@ -41,6 +41,16 @@ so "which one is running?" never depends on anyone's memory.
 
 ### Added
 
+- **Stores must have a location, picked on a map, and sit inside their own fence.**
+  `POST /admin/stores` now requires `lat` / `lng` (422 without them); `PATCH` can move a store
+  but not clear its location. Setting a fence, or moving a store that has one, checks
+  `ST_Covers(fence, location)` in the same transaction and rejects with 422
+  `store-outside-fence` (points on the boundary count as inside); fencing a legacy store that
+  has no location is 422 `store-location-required`. The admin console replaces the two
+  number inputs with a Leaflet map picker (same OSM / WGS-84 map as the fence editor) in both
+  the create dialog and the store page, draws the saved fence as a reference, and tags
+  stores without a location as 「未定位」.
+
 - **Split deployment tiers B and C (phase 2 of `docs/电商系统-微服务拆分方案.md`).**
   Tier B keeps one Postgres but puts inventory in its own `inventory` schema owned by a
   `keel_inventory` role that `keel_app` cannot read. Tier C is `compose.split.yaml`: two

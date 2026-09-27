@@ -162,6 +162,25 @@ UPDATE stores SET deleted_at = now()
  WHERE id = $1 AND deleted_at IS NULL
 RETURNING id;
 
+-- name: StoreLocationInFence :one
+-- 门店坐标与围栏的包含关系，**写完之后、在同一个事务里**读一次。
+--
+-- 规则（2026-09-27）：门店必须有坐标；有围栏时门店自己必须在围栏内。
+-- 一家开在自己配送范围之外的店，「按距离排」与围栏判定会给出互相矛盾的答案 ——
+-- 买家离店 200 米却不在服务范围，或者被判进一家离他十公里的店。
+--
+-- 写之后读而不是写之前判：判定与写入在同一个事务里、读的是本事务刚写的那一行，
+-- 不会与并发的另一次改坐标 / 改围栏交错出一个两边都没检查过的组合。违反时由调用方
+-- 返回错误，整个事务回滚。
+--
+-- ST_Covers 而不是 ST_Intersects / ST_Within：点正好落在围栏边上算在内
+-- （ST_Within 对边界上的点是假），而这两个参数的顺序是「面 covers 点」。
+-- fence 为 NULL 时 covered 恒真：没有围栏就没有「在不在围栏内」这一说。
+SELECT (st.location IS NOT NULL)::boolean AS has_location,
+       (st.fence IS NULL OR (st.location IS NOT NULL AND ST_Covers(st.fence, st.location)))::boolean AS covered
+  FROM stores st
+ WHERE st.id = sqlc.arg(id) AND st.deleted_at IS NULL;
+
 -- name: CheckPolygonValidity :one
 -- 落库前的 ST_IsValid 校验。**在服务端，不在客户端。**
 --

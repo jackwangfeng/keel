@@ -70,6 +70,16 @@ var (
 	// 围栏）。论证与两次实测记在 00020 里 stores 表的定义上。
 	ErrStoreFenceRequired = errors.New("非默认门店必须有围栏")
 
+	// ErrStoreLocationRequired：要给一家**没有坐标**的门店配围栏（契约 422
+	// store-location-required）。门店必须有坐标，而「门店在围栏内」这条没有坐标就判不了 ——
+	// 先在基本信息里用地图选点，再画围栏。建店时坐标必填（service.CreateStore），
+	// 这一支只剩迁移回填与早期种子留下的老门店会撞上。
+	ErrStoreLocationRequired = errors.New("门店还没有坐标")
+
+	// ErrStoreOutsideFence：门店自己的坐标不在它的围栏内（契约 422 store-outside-fence）。
+	// 改坐标与改围栏两条路径都会撞上，判据是 StoreLocationInFence（ST_Covers，边界上算在内）。
+	ErrStoreOutsideFence = errors.New("门店坐标不在围栏内")
+
 	// ErrStoreUnavailable：这家门店已被软删或已停业，不能作为回落目标
 	// （契约 409 store-unavailable）。回落目标接不了单的话，「回落」
 	// 就成了一个把用户送进死胡同的动作。
@@ -440,7 +450,34 @@ func (t tenantTx) UpdateStore(ctx context.Context, id int64, p StorePatch) (Stor
 	if row.VisibleRows == 0 || row.UpdatedRows == 0 {
 		return Store{}, fmt.Errorf("store %d: %w", id, ErrCatalogNotFound)
 	}
+	if p.SetLocation {
+		// 改了坐标：有围栏的话新坐标必须还在围栏内。没改坐标就不查 —— 一家历史上
+		// 就在围栏外的老门店，改个电话不该被拦住（它下一次改坐标或改围栏时才会被要求修正）。
+		if err := t.checkStoreInFence(ctx, id, false); err != nil {
+			return Store{}, err
+		}
+	}
 	return t.FindStore(ctx, id)
+}
+
+// checkStoreInFence 在本事务里读刚写完的那一行，按「门店必须在自己的围栏内」判定。
+// needLocation 为真时，没有坐标本身就是错误（配围栏那条路径：没有坐标就判不了在不在内）。
+// 违反时返回错误，调用方所在的 WithTenant 事务整体回滚，刚才那次写入随之撤销。
+func (t tenantTx) checkStoreInFence(ctx context.Context, id int64, needLocation bool) error {
+	r, err := t.q.StoreLocationInFence(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("store %d: %w", id, ErrCatalogNotFound)
+	}
+	if err != nil {
+		return err
+	}
+	if needLocation && !r.HasLocation {
+		return fmt.Errorf("store %d: %w", id, ErrStoreLocationRequired)
+	}
+	if !r.Covered {
+		return fmt.Errorf("store %d: %w", id, ErrStoreOutsideFence)
+	}
+	return nil
 }
 
 func (t tenantTx) SoftDeleteStore(ctx context.Context, id int64) error {
@@ -500,6 +537,12 @@ func (t tenantTx) SetStoreFence(ctx context.Context, id int64, geojson *string) 
 			return Store{}, fmt.Errorf("store %d: %w", id, ErrCatalogNotFound)
 		}
 		return Store{}, err
+	}
+	if geojson != nil {
+		// ④ 门店必须有坐标，且在新围栏内。放在写之后：判定读的是本事务刚写的那一行。
+		if err := t.checkStoreInFence(ctx, id, true); err != nil {
+			return Store{}, err
+		}
 	}
 	return t.FindStore(ctx, id)
 }

@@ -4508,7 +4508,7 @@ export interface paths {
                     };
                 };
                 /**
-                 * @description `region_id` 不存在或不属于当前租户，或字段校验不过，
+                 * @description `region_id` 不存在或不属于当前租户，或字段校验不过（`lat` / `lng` 必填），
                  *     或同一 Idempotency-Key 配了不同的请求体
                  *     （`https://keel.dev/problems/idempotency-key-reused`）。
                  */
@@ -4747,7 +4747,8 @@ export interface paths {
                     };
                 };
                 /**
-                 * @description `region_id` 不存在或不属于当前租户。
+                 * @description `region_id` 不存在或不属于当前租户；或者这家店有围栏、新坐标不在围栏内
+                 *     （`https://keel.dev/problems/store-outside-fence`）。
                  *     **换大区会改变这家店的价格与可见性**（大区是两层覆盖里的外层），
                  *     服务端不做任何提示性拦截，但后台界面应当二次确认。
                  */
@@ -4787,6 +4788,8 @@ export interface paths {
          *        答案。落库前过一次 `ST_IsValid`，假则 422，并把 PostGIS 给出的
          *        `Self-intersection at or near point ...` 放进 Problem 的 `detail`。
          *     3. **SRID 固定 4326**，不接受别的。
+         *     4. **门店必须在自己的围栏内**（2026-09-27）：门店要有坐标，且坐标被新围栏覆盖
+         *        （`ST_Covers`，边界上算在内）。否则 422。
          *
          *     ### 整体替换，不做局部编辑
          *
@@ -4872,9 +4875,14 @@ export interface paths {
                     };
                 };
                 /**
-                 * @description 多边形非法：环未闭合、自交、坐标越界、SRID 不对，或顶点数少于 4。
-                 *     `type` 为 `https://keel.dev/problems/invalid-fence`，
-                 *     `detail` 转述 PostGIS 的 `ST_IsValidReason`。
+                 * @description 按 `type` 区分：
+                 *
+                 *     - 多边形非法：环未闭合、自交、坐标越界、SRID 不对，或顶点数少于 4。
+                 *       `https://keel.dev/problems/invalid-fence`，`detail` 转述 PostGIS 的 `ST_IsValidReason`。
+                 *     - 门店还没有坐标（`https://keel.dev/problems/store-location-required`）：
+                 *       先 `PATCH` 坐标再配围栏。只有迁移回填与早期种子留下的老门店会撞上。
+                 *     - 门店坐标不在新围栏内（`https://keel.dev/problems/store-outside-fence`）。
+                 *       判定用 `ST_Covers`，点落在围栏边上算在内。
                  */
                 422: {
                     headers: {
@@ -16396,6 +16404,12 @@ export interface components {
         /**
          * @description **围栏不在这里传**，走 `PUT /admin/stores/{store_id}/fence`。
          *     建店是表单、画围栏是地图，是后台的两个界面。
+         *
+         *     **坐标必填**（2026-09-27）：门店必须有坐标，后台用地图选点；缺了返回 422。
+         *     之后配围栏时要求门店在围栏内（`store-outside-fence`），没有坐标判不了。
+         *     `lat` / `lng` 没列进 `required` 是刻意的：生成的 Go 类型会把必填的 number
+         *     变成非指针，缺字段时读出来是 0 —— 那是几内亚湾里一个合法的点，服务端就分不出
+         *     「没传」和「传了 0,0」。可选指针 + 服务端必填校验，缺了才能如实报 422。
          */
         StoreCreateRequest: {
             /**
@@ -16410,9 +16424,9 @@ export interface components {
             city?: string;
             district?: string;
             address?: string;
-            /** @description 门店自身坐标的纬度，`/stores/resolve` 的 `distance_m` 按它算。 */
+            /** @description 必填。门店自身坐标的纬度（WGS-84），`/stores/resolve` 的 `distance_m` 按它算。 */
             lat?: number;
-            /** @description 经度。与 `lat` 同时给或同时不给。 */
+            /** @description 必填。经度（WGS-84）。 */
             lng?: number;
             /**
              * @description 建出来就是默认门店。已经有一家时返回 409——切换默认店请用
@@ -16435,6 +16449,11 @@ export interface components {
             city?: string;
             district?: string;
             address?: string;
+            /**
+             * @description 与 `lng` 同时给或同时不给。坐标只能改、不能清空。
+             *     这家店有围栏时，新坐标必须在围栏内，否则 422
+             *     （`https://keel.dev/problems/store-outside-fence`）。
+             */
             lat?: number;
             lng?: number;
             /** @enum {integer} */
