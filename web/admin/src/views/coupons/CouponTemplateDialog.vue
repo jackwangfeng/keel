@@ -16,6 +16,7 @@ import {
 import { IdempotentSubmission, withIdempotency } from "../../api/idempotency.ts";
 import { centsToYuanInput, rateToZheInput, yuanToCents, zheToRate } from "../../api/money.ts";
 import ProblemAlert from "../../components/ProblemAlert.vue";
+import { rangeDefaultTime } from "../../ui/format.ts";
 
 const props = defineProps<{ modelValue: boolean; template: AdminCouponTemplate | null }>();
 const emit = defineEmits<{ "update:modelValue": [boolean]; saved: [AdminCouponTemplate] }>();
@@ -285,6 +286,7 @@ async function submit(): Promise<void> {
                 <el-date-picker
                     v-model="form.range"
                     type="datetimerange"
+                    :default-time="rangeDefaultTime"
                     :disabled="locked"
                     start-placeholder="开始"
                     end-placeholder="结束"

@@ -27,7 +27,7 @@ import {
     type PromotionType,
 } from "../../api/promotionRules.ts";
 import { listAllRegions, listAllStores } from "../../api/stores.ts";
-import { yuan } from "../../ui/format.ts";
+import { rangeDefaultTime, yuan } from "../../ui/format.ts";
 import ProblemAlert from "../../components/ProblemAlert.vue";
 
 const props = defineProps<{ modelValue: boolean; promotion: AdminPromotion | null }>();
@@ -210,7 +210,7 @@ async function submit(): Promise<void> {
                 </el-radio-group>
             </el-form-item>
             <el-form-item label="活动时间" required>
-                <el-date-picker v-model="form.range" type="datetimerange" :disabled="online" start-placeholder="开始" end-placeholder="结束" />
+                <el-date-picker v-model="form.range" type="datetimerange" :default-time="rangeDefaultTime" :disabled="online" start-placeholder="开始" end-placeholder="结束" />
             </el-form-item>
             <el-form-item v-if="form.type !== 5" label="与券同享">
                 <el-switch v-model="form.stack" :disabled="online" />

@@ -51,3 +51,11 @@ export const STAFF_STATUS: Record<1 | 2, { text: string; tag: "success" | "info"
     1: { text: "正常", tag: "success" },
     2: { text: "停用", tag: "info" },
 };
+
+/**
+ * 有效期 / 活动时间这类「按天选」的区间，点日期时的默认钟点：开始 00:00:00、结束 23:59:59。
+ *
+ * 不设的话 Element Plus 两端都给 00:00:00，于是选「10-01 至 10-07」发出去的是
+ * [10-01 00:00, 10-07 00:00)，服务端按开区间判过期 —— 10-07 整天不能用，而买家端还写着「至 10-07」。
+ */
+export const rangeDefaultTime: [Date, Date] = [new Date(2000, 0, 1, 0, 0, 0), new Date(2000, 0, 1, 23, 59, 59)];
