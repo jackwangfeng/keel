@@ -27,7 +27,7 @@ async function pickByPrice() {
 
 async function cleanup(token) {
   for (const a of (await httpGet(apiBase() + '/addresses', token)).body) {
-    if (a.receiver_name === NAME) await httpRequest('DELETE', apiBase() + '/addresses/' + a.id, null, token)
+    if (a.receiver_name === NAME && !a.is_default && a.region_code !== '330106') await httpRequest('DELETE', apiBase() + '/addresses/' + a.id, null, token)
   }
 }
 
