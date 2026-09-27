@@ -38,6 +38,13 @@ type ServerConfig struct {
 	// 就会因为没配它而拒绝启动，走到这里的空串只可能是代码写错了。
 	Secret string
 
+	// PreviousSecrets 是 KEEL_INTERNAL_SECRET_PREVIOUS 解析后的结果（见
+	// rpc.ParsePreviousSecrets）：轮换期间仍要接受的旧密钥，可以有多个。
+	// 只影响验证——请求验签（Verify）与分支令牌校验（BranchTokenAuth）拿
+	// Secret 与它们一起试，对上任意一个都算数；本引擎自己不会用它们签任何
+	// 东西。nil = 只认 Secret（今天的行为）。轮换步骤见 EnvInternalSecretPrevious。
+	PreviousSecrets []string
+
 	// Ready 是 /readyz 的检查（通常是 Ping 本服务的库）。nil = /readyz 恒为 ok。
 	Ready func(ctx context.Context) error
 }
@@ -69,9 +76,11 @@ type Routes struct {
 	//   - 拿到它的人能调分支接口。分支本身按 gid 找租户、按子事务屏障幂等，
 	//     能做的事以「重放某个 gid 的正向或补偿」为限 —— 与协调器本来就会做的
 	//     重试同一类，而不是任意读写。它仍然只该监听在内网。
-	//   - 轮换 KEEL_INTERNAL_SECRET 会让**已持久化**的在途事务的旧地址 401。
-	//     401 在 dtmrs 那里是 Unknown（不是 Failure），协调器会一直重试而不会误补偿；
-	//     但要让它们推完，轮换前得先等在途事务清空。见方案文档的待办。
+	//   - 轮换 KEEL_INTERNAL_SECRET 本会让**已持久化**的在途事务的旧地址 401
+	//     （401 在 dtmrs 那里是 Unknown，不是 Failure，协调器会一直重试而不会
+	//     误补偿，但也推不完）。KEEL_INTERNAL_SECRET_PREVIOUS 解决的就是这个：
+	//     验证方在轮换期间同时认当前值与旧值，旧地址里的令牌照样通过，等在途
+	//     事务自然跑完再摘掉旧值。步骤与安全的顺序见该常量的注释。
 	//
 	// 失败一律回 401：dtmrs 把非 2xx / 409 / 425 的响应都当 Unknown 重试，
 	// 这正是配错令牌时该有的行为 —— 配错不等于业务失败，不能触发补偿。
@@ -111,19 +120,24 @@ func NewRouter(cfg ServerConfig) (*gin.Engine, Routes) {
 		c.String(http.StatusOK, "ok")
 	})
 
-	signed := r.Group(Prefix, Verify(cfg.Secret))
+	// secrets：Secret 在前——不影响正确性（每个都要完整试一遍），但让最常见的
+	// 那条路径（没在轮换）在列表第一个位置命中。
+	secrets := append([]string{cfg.Secret}, cfg.PreviousSecrets...)
+	signed := r.Group(Prefix, Verify(secrets))
 	return r, Routes{
 		Signed: signed,
 		Tenant: signed.Group("", RequireTenant()),
-		Saga:   r.Group(SagaPrefix, BranchTokenAuth(cfg.Secret)),
+		Saga:   r.Group(SagaPrefix, BranchTokenAuth(secrets)),
 	}
 }
 
 // Verify 是验签中间件。缺签名、签名不对、时间戳超出 ±MaxSkew 一律 401。
+// secrets 是当前密钥与全部仍接受的旧密钥（见 ServerConfig.PreviousSecrets），
+// 对上其中任意一个就放行。
 //
 // 拒绝原因只进日志、不进响应：告诉对方「差在时间戳」还是「差在签名」，
 // 是在帮一个正在试探的人缩小范围。
-func Verify(secret string) gin.HandlerFunc {
+func Verify(secrets []string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		body, err := io.ReadAll(http.MaxBytesReader(c.Writer, c.Request.Body, maxBody))
 		if err != nil {
@@ -139,7 +153,7 @@ func Verify(secret string) gin.HandlerFunc {
 		c.Request.Body = io.NopCloser(bytes.NewReader(body))
 
 		// EscapedPath 而不是 Path：客户端签的是线上那串转义后的路径（见 Client.do）。
-		ok, why := verify(secret, c.Request.Method, c.Request.URL.EscapedPath(), c.Request.URL.RawQuery,
+		ok, why := verify(secrets, c.Request.Method, c.Request.URL.EscapedPath(), c.Request.URL.RawQuery,
 			c.GetHeader(HeaderMerchantID), c.GetHeader(HeaderTimestamp), c.GetHeader(HeaderSignature),
 			body, time.Now())
 		if !ok {
@@ -176,17 +190,25 @@ func RequireTenant() gin.HandlerFunc {
 }
 
 // BranchTokenAuth 校验 SAGA 分支路由的 ?bt=。为什么是它而不是签名，见 Routes.Saga。
-func BranchTokenAuth(secret string) gin.HandlerFunc {
-	want := []byte(BranchToken(secret))
+// secrets 是当前密钥与全部仍接受的旧密钥：分支地址一旦生成就被协调器持久化，
+// 轮换 KEEL_INTERNAL_SECRET 不能让已经发出去的地址失效，见 EnvInternalSecretPrevious。
+func BranchTokenAuth(secrets []string) gin.HandlerFunc {
+	wants := make([][]byte, len(secrets))
+	for i, s := range secrets {
+		wants[i] = []byte(BranchToken(s))
+	}
 	return func(c *gin.Context) {
-		if !hmac.Equal([]byte(c.Query("bt")), want) {
-			// 这条日志要响：配错令牌时协调器会无限重试，而重试日志在它那边，
-			// 这边若不喊，排查的人只会看到「分支一直 Unknown」。
-			slog.ErrorContext(c.Request.Context(), "SAGA 分支请求的令牌无效（KEEL_INTERNAL_SECRET 两边不一致？）",
-				"path", c.Request.URL.Path, "gid", c.Query("gid"), "remote", c.ClientIP())
-			problem.Write(c, http.StatusUnauthorized, problem.TypeUnauthorized, "分支令牌无效")
-			return
+		got := []byte(c.Query("bt"))
+		for _, want := range wants {
+			if hmac.Equal(got, want) {
+				c.Next()
+				return
+			}
 		}
-		c.Next()
+		// 这条日志要响：配错令牌时协调器会无限重试，而重试日志在它那边，
+		// 这边若不喊，排查的人只会看到「分支一直 Unknown」。
+		slog.ErrorContext(c.Request.Context(), "SAGA 分支请求的令牌无效（KEEL_INTERNAL_SECRET 两边不一致？）",
+			"path", c.Request.URL.Path, "gid", c.Query("gid"), "remote", c.ClientIP())
+		problem.Write(c, http.StatusUnauthorized, problem.TypeUnauthorized, "分支令牌无效")
 	}
 }

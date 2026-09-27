@@ -95,6 +95,14 @@ so "which one is running?" never depends on anyone's memory.
   order writes a zero-quantity "checked" row for lines that had nothing to release;
   when the inventory service is down (split only), product lists omit flash-sale /
   limited-price tags and stock released by cancel/timeout/refund comes back once it is up.
+- **`KEEL_INTERNAL_SECRET` can be rotated without draining in-flight SAGA transactions.**
+  New, optional `KEEL_INTERNAL_SECRET_PREVIOUS` (comma-separated for more than one):
+  during rotation, verification of internal-request HMAC signatures and SAGA branch
+  tokens (`?bt=`) accepts the current secret or any listed previous one; signing always
+  uses the current secret. Split deployments only; no effect when unset. See the
+  deployment guide's environment variable table for the safe rotation order (expand
+  accepted secrets first, then flip which one is current, then drop the old one once
+  in-flight transactions have drained).
 
 ### Fixed
 

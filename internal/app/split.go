@@ -30,10 +30,11 @@ const EnvRole = "KEEL_ROLE"
 // 拆分部署用的其余几个变量，名字定义在各自的包里（它们的错误信息也在那儿），
 // 这里重新导出，好让 app 的测试与文档检查只认一个地方。
 const (
-	EnvInventoryDSN   = db.EnvInventoryDSN
-	EnvInternalAddr   = rpc.EnvInternalAddr
-	EnvInternalSecret = rpc.EnvInternalSecret
-	EnvInventoryURL   = rpc.EnvInventoryURL
+	EnvInventoryDSN           = db.EnvInventoryDSN
+	EnvInternalAddr           = rpc.EnvInternalAddr
+	EnvInternalSecret         = rpc.EnvInternalSecret
+	EnvInternalSecretPrevious = rpc.EnvInternalSecretPrevious
+	EnvInventoryURL           = rpc.EnvInventoryURL
 )
 
 // Role 是本进程在部署里扮演的角色。**同一个二进制**，靠它决定起哪些东西。
@@ -73,17 +74,30 @@ type SplitConfig struct {
 	InventoryDSN   string
 	InternalAddr   string
 	InternalSecret string
-	InventoryURL   string
+	// InternalSecretPrevious 是 KEEL_INTERNAL_SECRET_PREVIOUS 的原始值（未解析）。
+	// 轮换期间仍要接受的旧密钥，逗号分隔可以给多个；见 rpc.EnvInternalSecretPrevious
+	// 的注释里的轮换步骤。空 = 不在轮换（今天的行为）。
+	InternalSecretPrevious string
+	InventoryURL           string
 }
 
 func splitConfigFromEnv() SplitConfig {
 	return SplitConfig{
-		Role:           roleFromEnv(),
-		InventoryDSN:   strings.TrimSpace(os.Getenv(EnvInventoryDSN)),
-		InternalAddr:   strings.TrimSpace(os.Getenv(EnvInternalAddr)),
-		InternalSecret: os.Getenv(EnvInternalSecret),
-		InventoryURL:   strings.TrimSpace(os.Getenv(EnvInventoryURL)),
+		Role:                   roleFromEnv(),
+		InventoryDSN:           strings.TrimSpace(os.Getenv(EnvInventoryDSN)),
+		InternalAddr:           strings.TrimSpace(os.Getenv(EnvInternalAddr)),
+		InternalSecret:         os.Getenv(EnvInternalSecret),
+		InternalSecretPrevious: os.Getenv(EnvInternalSecretPrevious),
+		InventoryURL:           strings.TrimSpace(os.Getenv(EnvInventoryURL)),
 	}
+}
+
+// previousSecrets 解析 InternalSecretPrevious。validate 已经用同一个解析器
+// 确认过它不会出错，这里只是拿结果——签名是 []string 而不是 (..., error)，
+// 是因为调用点（internalRouter）已经在 validate 通过之后才跑得到。
+func (s SplitConfig) previousSecrets() []string {
+	prev, _ := rpc.ParsePreviousSecrets(s.InternalSecretPrevious)
+	return prev
 }
 
 // validate 只查配置本身，不碰网络与数据库 —— 所以它排在 Run 的最前面，
@@ -120,6 +134,10 @@ func (s SplitConfig) validate() error {
 			"例如 openssl rand -base64 48）", EnvInternalAddr, EnvInventoryURL,
 			EnvInternalSecret, rpc.MinSecretLen)
 	}
+	if _, err := rpc.ParsePreviousSecrets(s.InternalSecretPrevious); err != nil {
+		// 同样的下限：轮换期间还在接受的旧密钥，安全余量不能比当前密钥低。
+		return err
+	}
 	if s.InventoryURL != "" {
 		// 两个构造器都会解析地址：客户端（阶段 1 的库存调用）与分支地址解析器。
 		// 这里建一次只为了让格式错误在启动时暴露，而不是第一笔订单时。
@@ -154,7 +172,11 @@ func inventoryPool(ctx context.Context, s SplitConfig, main *pgxpool.Pool) (*pgx
 // core 不挂 —— 它是库存服务的调用方，挂上就成了第二个库存服务入口，而且读写的是它自己
 // 那个库里的库存表。SAGA 库存分支（dtm.MountBranches 到 routes.Saga）在阶段 1b 挂。
 func internalRouter(s SplitConfig, inv *pgxpool.Pool) *gin.Engine {
-	r, routes := rpc.NewRouter(rpc.ServerConfig{Secret: s.InternalSecret, Ready: inv.Ping})
+	r, routes := rpc.NewRouter(rpc.ServerConfig{
+		Secret:          s.InternalSecret,
+		PreviousSecrets: s.previousSecrets(),
+		Ready:           inv.Ping,
+	})
 	if s.Role == RoleInventory || s.Role == RoleAll {
 		local := inventory.NewLocal(repository.NewInventoryStore(inv))
 		inventory.Mount(routes.Tenant, local)
