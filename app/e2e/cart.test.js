@@ -29,6 +29,9 @@ describe('购物车', () => {
     const rows = await waitData(page, 'rows', (r) => r.length === 1)
     expect(rows[0].available).toBe(true)
     expect(rows[0].selected).toBe(true)
+    // 购物车行服务端 ce2d6cd 起带 image_url（SKU 没图用商品主图）：显示成图，不是单字占位。
+    expect(rows[0].cover.imageUrl).not.toBe('')
+    expect((await page.$$('.cover-img')).length).toBeGreaterThan(0)
     expect(await page.data('selectedCount')).toBe(1)
     const one = await page.data('selectedText')
 

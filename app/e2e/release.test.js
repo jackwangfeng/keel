@@ -94,24 +94,26 @@ d('发版前真机验证', () => {
     await httpRequest('POST', apiBase() + '/cart/items?store_id=' + store, { sku_id: sku.id, quantity: 1 }, token, { 'Idempotency-Key': randomUUID() })
     const cart = await program.switchTab('/pages/cart/index')
     await waitData(cart, 'rows', (r) => r.length > 0)
-    // 购物车行 / 订单行：服务端（ff552e5）还没带 image_url，只有商品列表 / 检索 / 详情有。
-    // 服务端给了才断言显示成图；没给就是占位，记为服务端缺口。
-    const cartHasImg = (await httpGet(apiBase() + '/cart?store_id=' + store, token)).body.items.some((x) => x.image_url)
-    if (cartHasImg) expect((await cart.$$('.cover-img')).length).toBeGreaterThan(0)
-    else console.log('release: 服务端购物车行没有 image_url（服务端缺口），购物车显示占位')
+    // 购物车行服务端 ce2d6cd 起带 image_url（SKU 没图用商品主图）。
+    expect((await httpGet(apiBase() + '/cart?store_id=' + store, token)).body.items.every((x) => x.image_url)).toBe(true)
+    expect((await cart.$$('.cover-img')).length).toBeGreaterThan(0)
     await cart.waitFor(1500)
     await shot('0-cart-images')
     await httpRequest('DELETE', apiBase() + '/cart', null, token)
 
-    const orderNo = await placeOrder(token)
+    // 新下的单：订单行在下单时快照了商品主图（image_snapshot → image_url），售后申请页复用同一份。
+    const orderNo = await placeOrder(token, { pay: true })
+    expect((await httpGet(apiBase() + '/orders/' + orderNo, token)).body.items.every((x) => x.image_url)).toBe(true)
     const od = await program.navigateTo('/pages/order/detail?order_no=' + orderNo)
     await waitData(od, 'view', (v) => v != null)
-    const orderHasImg = ((await httpGet(apiBase() + '/orders/' + orderNo, token)).body.items || []).some((x) => x.image_url)
-    if (orderHasImg) expect((await od.$$('.cover-img')).length).toBeGreaterThan(0)
-    else console.log('release: 服务端订单行没有 image_url（服务端缺口），订单详情显示占位')
+    expect((await od.$$('.cover-img')).length).toBeGreaterThan(0)
     await od.waitFor(1500)
     await shot('0-order-images')
-    await httpRequest('POST', apiBase() + '/orders/' + orderNo + '/cancel', null, token, { 'Idempotency-Key': randomUUID() })
+    const apply = await program.navigateTo('/pages/refund/apply?order_no=' + orderNo)
+    await waitEl(apply, '.submit-btn')
+    expect((await apply.$$('.cover-img')).length).toBeGreaterThan(0)
+    await apply.waitFor(1500)
+    await shot('0-refund-apply-images')
   })
 
   it('1 时间：订单列表 / 详情的下单时间按本地时区显示（原生解析带微秒的 ISO）', async () => {
