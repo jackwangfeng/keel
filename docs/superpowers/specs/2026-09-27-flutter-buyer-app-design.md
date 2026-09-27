@@ -162,6 +162,6 @@ Makefile 显式用 `FLUTTER ?= $(HOME)/development/flutter/bin/flutter`，可覆
 
 ## 6. 风险
 
-- **mp-flutter 仍在开发**：第 1 步一编出小程序就在开发者工具里跑。发现 mp-flutter 的问题，记下来交给那边，不在 App 里绕开。
+- **mp-flutter 仍在开发**：第 1 步一编出小程序就在开发者工具里跑。发现 mp-flutter 的问题，**直接发消息给 mp-flutter 的会话**（附复现步骤与报错），不在 App 里绕开，也不改 mp-flutter 仓库。
 - **Flutter Web 用 canvas 渲染**：没有 DOM，uni-app x 那套 automator 用不上，e2e 改用 integration_test；两套用例第一阶段并存。
 - **Web 首屏包体偏大**：只影响开发体验，第一阶段不优化。
