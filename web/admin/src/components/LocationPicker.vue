@@ -67,11 +67,14 @@ function drawFence(): void {
     fenceLayer = null;
     const outer = verticesFromPolygon(props.fence ?? null);
     if (outer.length >= 3) {
+        // 醒目的蓝：选点时最要紧的就是看清边界。原先的灰色细虚线压在 OSM 底图上几乎看不见。
+        // 门店标记是橙色，两者对比分明。
         fenceLayer = L.polygon(outer.map(toLatLng), {
-            color: "#909399",
-            weight: 1,
-            dashArray: "4 4",
-            fillOpacity: 0.05,
+            color: "#1677ff",
+            weight: 3,
+            dashArray: "8 6",
+            fillColor: "#1677ff",
+            fillOpacity: 0.12,
             interactive: false,
         }).addTo(map);
     }
@@ -79,10 +82,14 @@ function drawFence(): void {
 
 function fitView(): void {
     if (map === null) return;
-    if (props.modelValue) {
+    if (fenceLayer) {
+        // 有围栏时视野框住整个围栏（连同门店点）：只按门店点放大到 15 级的话，
+        // 围栏比视野大，边界全在屏幕外，看上去像没有围栏。
+        const bounds = fenceLayer.getBounds();
+        if (props.modelValue) bounds.extend(props.modelValue);
+        map.fitBounds(bounds, { padding: [30, 30], maxZoom: 16 });
+    } else if (props.modelValue) {
         map.setView(props.modelValue, 15);
-    } else if (fenceLayer) {
-        map.fitBounds(fenceLayer.getBounds(), { padding: [30, 30], maxZoom: 16 });
     } else {
         map.setView({ lat: 35, lng: 105 }, 4);
     }
@@ -126,7 +133,7 @@ watch(() => props.fence, drawFence);
             </template>
             <template v-else-if="!readonly">在地图上点一下门店所在的位置（必填）。</template>
             <template v-else>还没有定位。</template>
-            <template v-if="fence">虚线是这家店的围栏，门店必须落在围栏内。</template>
+            <template v-if="fence">蓝色区域是这家店的围栏，门店必须落在围栏内。</template>
         </p>
     </div>
 </template>
