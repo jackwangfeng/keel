@@ -88,6 +88,7 @@ func newCouponShop(t *testing.T) couponShop {
 			`DELETE FROM refunds WHERE merchant_id = $1`,
 			`DELETE FROM payments WHERE merchant_id = $1`,
 			`DELETE FROM inventory_logs WHERE merchant_id = $1`,
+			`DELETE FROM activity_stocks WHERE merchant_id = $1`,
 			`DELETE FROM order_items WHERE merchant_id = $1`,
 			`DELETE FROM orders WHERE merchant_id = $1`,
 			`DELETE FROM user_addresses WHERE merchant_id = $1`,
