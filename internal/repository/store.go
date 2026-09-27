@@ -209,6 +209,8 @@ type StoreTx interface {
 
 	// StoreScope 取一家未软删门店的 (id, region_id)。查不到返回 ErrCatalogNotFound。
 	StoreScope(ctx context.Context, id int64) (int64, int64, error)
+	// StoreOpen：门店营业且所在大区启用。门店不存在（或已软删）返回 ErrCatalogNotFound。
+	StoreOpen(ctx context.Context, id int64) (bool, error)
 
 	// —— 买家侧
 	ListOpenStores(ctx context.Context, limit, offset int32) ([]StoreMatch, int64, error)
@@ -586,6 +588,14 @@ func (t tenantTx) StoreScope(ctx context.Context, id int64) (int64, int64, error
 		return 0, 0, err
 	}
 	return r.ID, r.RegionID, nil
+}
+
+func (t tenantTx) StoreOpen(ctx context.Context, id int64) (bool, error) {
+	open, err := t.q.StoreOpen(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, fmt.Errorf("store %d: %w", id, ErrCatalogNotFound)
+	}
+	return open, err
 }
 
 // ---------------------------------------------------------------------------

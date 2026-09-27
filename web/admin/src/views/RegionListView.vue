@@ -212,6 +212,9 @@ async function remove(row: AdminRegion): Promise<void> {
                         <el-radio :value="1">启用</el-radio>
                         <el-radio :value="0">停用</el-radio>
                     </el-radio-group>
+                    <p v-if="editStatus === 0" class="warn-text">
+                        停用后，这个大区下的<b>{{ editing?.store_count ?? 0 }} 家门店</b>一律按停业处理：买家定位不到、选店列表里没有、不能作为回落的默认门店，也不能下单。
+                    </p>
                 </el-form-item>
             </el-form>
             <template #footer>
@@ -223,6 +226,12 @@ async function remove(row: AdminRegion): Promise<void> {
 </template>
 
 <style scoped>
+.warn-text {
+    margin: 4px 0 0;
+    color: var(--el-color-warning);
+    font-size: 12px;
+    line-height: 1.5;
+}
 .ml4 {
     margin-left: 4px;
 }

@@ -69,6 +69,11 @@ var ErrOutOfServiceArea = errors.New("当前位置不在服务范围（这家商
 // 契约在买家侧读路径上把它定成 422（store_id 在 query 里，不在路径里）。
 var ErrStoreNotFound = errors.New("指定的门店不存在或不属于当前租户")
 
+// ErrStoreClosed：指名的门店存在，但现在接不了单 —— 它停业了，或者它所在的大区停用了
+// （2026-09-27：大区停用之前对买家毫无影响）。契约 409 store-unavailable：状态问题，
+// 不是请求写错了；客户端该做的是重新定位 / 换一家店。
+var ErrStoreClosed = errors.New("门店已停业或所在大区已停用")
+
 // ErrInvalidCoord：lat / lng 只给了一个，或取值超范围（契约 422）。
 var ErrInvalidCoord = errors.New("lat 与 lng 必须同时给出且在有效范围内")
 

@@ -168,7 +168,7 @@ func writeStoreError(c *gin.Context, err error) {
 
 	case errors.Is(err, repository.ErrStoreUnavailable):
 		problem.Write(c, http.StatusConflict, problem.TypeStoreUnavailable,
-			"这家门店已停业或已软删，不能作为回落目标")
+			"这家门店已停业、已软删或所在大区已停用，不能作为回落目标")
 
 	case errors.Is(err, repository.ErrStoreAmbiguous):
 		problem.Write(c, http.StatusConflict, problem.TypeStoreAmbiguous,

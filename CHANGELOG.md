@@ -142,6 +142,17 @@ so "which one is running?" never depends on anyone's memory.
 
 ### Fixed
 
+- **Disabling a region had no effect on its stores**, and a closed store could still take
+  orders. `regions.status` was never read. A disabled region now takes all its stores offline:
+  they drop out of fence resolution, `GET /stores` and the default-store fallback, cannot be
+  made the default, and `POST /orders`, `/orders/preview` and `/coupons/applicable` answer
+  409 `store-unavailable` for them — as they now also do for a store that is itself closed.
+  The admin region dialog warns how many stores are affected before disabling.
+- **Fence editor appended to a closed polygon.** Once a fence was closed, every map click still
+  appended a vertex, wiring it between the last and first points. The editor now has a drawing
+  state (polyline; click the first vertex or 「闭合」 to close) and a closed state (drag
+  vertices, click or drag edge midpoints to insert, right-click or select + Delete to remove),
+  with full undo.
 - **Zero-payable orders could not be paid.** A coupon or promotion that brings the payable
   amount to 0 left the order stuck in pending (the payment webhook rightly rejects
   `amount_cents <= 0`) until the timeout sweep closed it and released the coupon. The SAGA's

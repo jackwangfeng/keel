@@ -319,6 +319,14 @@ func orderScope(ctx context.Context, tx repository.Tx, storeID int64) (repositor
 	if err != nil {
 		return repository.StoreScope{}, err
 	}
+	open, err := tx.StoreOpen(ctx, storeID)
+	if err != nil {
+		return repository.StoreScope{}, err
+	}
+	if !open {
+		// 下单、试算、本单可用券都经过这里：停业的门店、停用大区里的门店都不许成交。
+		return repository.StoreScope{}, fmt.Errorf("%w: store_id=%d", ErrStoreClosed, storeID)
+	}
 	return repository.StoreScope{StoreID: storeID, RegionID: regionID}, nil
 }
 

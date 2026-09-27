@@ -5210,12 +5210,20 @@ type RegionCreateRequest struct {
 
 // RegionUpdateRequest 只给要改的字段。`code` 改了要重查唯一性。
 type RegionUpdateRequest struct {
-	Code   *string                    `json:"code,omitempty"`
-	Name   *string                    `json:"name,omitempty"`
+	Code *string `json:"code,omitempty"`
+	Name *string `json:"name,omitempty"`
+
+	// Status 0 停用 1 启用。**停用大区 = 名下门店一律按停业处理**：不参与围栏判定、
+	// 不在 `GET /stores` 里、不能作为回落的默认门店（也不能被设为默认），
+	// 下单 / 试算 / 本单可用券回 409 `store-unavailable`。门店自己的 `status` 不变，
+	// 重新启用大区即恢复。
 	Status *RegionUpdateRequestStatus `json:"status,omitempty"`
 }
 
-// RegionUpdateRequestStatus defines model for RegionUpdateRequest.Status.
+// RegionUpdateRequestStatus 0 停用 1 启用。**停用大区 = 名下门店一律按停业处理**：不参与围栏判定、
+// 不在 `GET /stores` 里、不能作为回落的默认门店（也不能被设为默认），
+// 下单 / 试算 / 本单可用券回 409 `store-unavailable`。门店自己的 `status` 不变，
+// 重新启用大区即恢复。
 type RegionUpdateRequestStatus int
 
 // ReportInventoryAlert defines model for ReportInventoryAlert.

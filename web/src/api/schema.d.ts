@@ -10155,7 +10155,9 @@ export interface paths {
                     };
                 };
                 /**
-                 * @description 带的 `user_coupon_id` 本单不可用 —— `https://keel.dev/problems/coupon-not-applicable`，
+                 * @description `store_id` 指向的门店已停业，或它所在的大区已停用
+                 *     （`https://keel.dev/problems/store-unavailable`）：重新定位或换一家门店。
+                 *     带的 `user_coupon_id` 本单不可用 —— `https://keel.dev/problems/coupon-not-applicable`，
                  *     `detail` 说明原因（门槛不够、范围不含、已锁定 / 已使用 / 已过期、不是你的券）。
                  *     与 `POST /orders` 同一个 type：试算就是要在下单之前把它说出来。
                  *     **不会忽略这张券按原价试算**——用户正是照着试算结果决定要不要下单的。
@@ -10317,7 +10319,9 @@ export interface paths {
                     };
                 };
                 /**
-                 * @description 业务冲突，按 Problem `type` 区分：
+                 * @description `store_id` 指向的门店已停业，或它所在的大区已停用
+                 *     （`https://keel.dev/problems/store-unavailable`）：重新定位或换一家门店。
+                 *     业务冲突，按 Problem `type` 区分：
                  *     · 库存不足 —— .../insufficient-stock
                  *     · 券不可用 —— .../coupon-not-applicable
                  *     · 超出活动每人限购 —— .../promotion-limit-exceeded
@@ -16325,7 +16329,13 @@ export interface components {
         RegionUpdateRequest: {
             code?: string;
             name?: string;
-            /** @enum {integer} */
+            /**
+             * @description 0 停用 1 启用。**停用大区 = 名下门店一律按停业处理**：不参与围栏判定、
+             *     不在 `GET /stores` 里、不能作为回落的默认门店（也不能被设为默认），
+             *     下单 / 试算 / 本单可用券回 409 `store-unavailable`。门店自己的 `status` 不变，
+             *     重新启用大区即恢复。
+             * @enum {integer}
+             */
             status?: 0 | 1;
         };
         /**

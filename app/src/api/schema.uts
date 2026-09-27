@@ -1720,6 +1720,7 @@ export type RegionCreateRequest = {
 export type RegionUpdateRequest = {
   code? : string
   name? : string
+  /** 0 停用 1 启用。**停用大区 = 名下门店一律按停业处理**：不参与围栏判定、 */
   status? : number
 }
 

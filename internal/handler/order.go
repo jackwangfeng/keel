@@ -283,6 +283,10 @@ func writeOrderError(c *gin.Context, err error) {
 		problem.Write(c, http.StatusUnprocessableEntity,
 			problem.TypeSKUNotSoldInStore, "这家门店不卖请求里的某些商品，请换一家门店")
 
+	case errors.Is(err, service.ErrStoreClosed):
+		problem.Write(c, http.StatusConflict, problem.TypeStoreUnavailable,
+			"这家门店已停业或所在大区已停用，请重新定位或换一家门店")
+
 	case errors.Is(err, service.ErrStoreNotFound):
 		// store_id 服务端不认识。与「不是你的 SKU」合用 invalid-request 是
 		// 契约定的：两者对客户端是同一件事 —— 请求体里指名了一个不存在的东西。

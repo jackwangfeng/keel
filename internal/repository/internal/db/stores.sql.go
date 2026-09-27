@@ -290,6 +290,8 @@ func (q *Queries) ClearDefaultStore(ctx context.Context) error {
 const countOpenStores = `-- name: CountOpenStores :one
 SELECT count(*) FROM stores st
  WHERE st.deleted_at IS NULL AND st.status = 1
+   AND EXISTS (SELECT 1 FROM regions rg
+                WHERE rg.id = st.region_id AND rg.status = 1 AND rg.deleted_at IS NULL)
 `
 
 // 条件必须与 ListOpenStores 逐字一致。
@@ -366,6 +368,8 @@ SELECT st.id, st.region_id, st.name, st.phone, st.address, st.is_default,
        COALESCE(ST_X(st.location::geometry), 0)::float8 AS lng
   FROM stores st
  WHERE st.is_default AND st.deleted_at IS NULL AND st.status = 1
+   AND EXISTS (SELECT 1 FROM regions rg
+                WHERE rg.id = st.region_id AND rg.status = 1 AND rg.deleted_at IS NULL)
 `
 
 type GetDefaultStoreRow struct {
@@ -433,6 +437,8 @@ SELECT st.id, st.name, st.phone, st.address, st.is_default,
        COALESCE(ST_X(st.location::geometry), 0)::float8 AS lng
   FROM stores st
  WHERE st.deleted_at IS NULL AND st.status = 1
+   AND EXISTS (SELECT 1 FROM regions rg
+                WHERE rg.id = st.region_id AND rg.status = 1 AND rg.deleted_at IS NULL)
  ORDER BY st.is_default DESC, st.id
  LIMIT $2 OFFSET $1
 `
@@ -500,6 +506,8 @@ SELECT st.id, st.name, st.phone, st.address, st.is_default,
                                        4326)::geography), -1)::float8 AS distance_m
   FROM stores st
  WHERE st.deleted_at IS NULL AND st.status = 1
+   AND EXISTS (SELECT 1 FROM regions rg
+                WHERE rg.id = st.region_id AND rg.status = 1 AND rg.deleted_at IS NULL)
    AND st.fence IS NOT NULL
    AND ST_Intersects(st.fence,
                      ST_SetSRID(ST_MakePoint($1::float8,
@@ -541,7 +549,7 @@ type ResolveStoresByFenceRow struct {
 // （distance_m）升序；写序号是因为那一列是 COALESCE 出来的表达式，
 // 在 ORDER BY 里重写一遍就是第二处会各自漂的公式。
 //
-// 停业（status <> 1）与软删的不参与围栏判定。
+// 停业（status <> 1）、软删、所在大区停用的都不参与围栏判定。
 //
 // ST_Intersects 而不是 ST_Contains：落在边界线上的点在 Contains 下是 false。
 // 一个买家站在围栏边界上被判成「不在服务范围」，而他向前走一米就好了 ——
@@ -578,13 +586,15 @@ func (q *Queries) ResolveStoresByFence(ctx context.Context, arg ResolveStoresByF
 
 const setDefaultStore = `-- name: SetDefaultStore :one
 UPDATE stores SET is_default = TRUE
- WHERE id = $1 AND deleted_at IS NULL AND status = 1
+ WHERE stores.id = $1 AND stores.deleted_at IS NULL AND stores.status = 1
+   AND EXISTS (SELECT 1 FROM regions rg
+                WHERE rg.id = stores.region_id AND rg.status = 1 AND rg.deleted_at IS NULL)
 RETURNING id
 `
 
 // 「设默认店」的后半句。
 //
-// 条件里带 status = 1：一家停业或已软删的门店不能作为回落目标（契约的 409
+// 条件里带 status = 1 与大区启用：一家停业、已软删或所在大区停用的门店不能作为回落目标（契约的 409
 // store-unavailable）—— 回落目标接不了单的话，「回落」就成了一个把用户送进
 // 死胡同的动作。零行由调用方分成 404（不存在）与 409（存在但不可用）两支。
 func (q *Queries) SetDefaultStore(ctx context.Context, id int64) (int64, error) {
@@ -693,6 +703,26 @@ func (q *Queries) StoreLocationInFence(ctx context.Context, id int64) (StoreLoca
 	var i StoreLocationInFenceRow
 	err := row.Scan(&i.HasLocation, &i.Covered)
 	return i, err
+}
+
+const storeOpen = `-- name: StoreOpen :one
+SELECT (st.status = 1 AND rg.status = 1 AND rg.deleted_at IS NULL)::boolean AS open
+  FROM stores st
+  JOIN regions rg ON rg.id = st.region_id
+ WHERE st.id = $1 AND st.deleted_at IS NULL
+`
+
+// 这家门店现在能不能接单：自己营业（status = 1），**且所在大区启用**。
+//
+// 大区停用（regions.status = 0）等于它名下的门店一律停业（2026-09-27）：之前 regions.status
+// 哪条查询都没读，停用一个大区对买家毫无影响。买家侧四条（ListOpenStores / CountOpenStores /
+// ResolveStoresByFence / GetDefaultStore）与 SetDefaultStore 都带同一个 EXISTS；下单、试算、
+// 本单可用券走这一条（service.orderScope）。门店不存在由 StoreExists 那一支先报。
+func (q *Queries) StoreOpen(ctx context.Context, id int64) (bool, error) {
+	row := q.db.QueryRow(ctx, storeOpen, id)
+	var open bool
+	err := row.Scan(&open)
+	return open, err
 }
 
 const updateStore = `-- name: UpdateStore :one
