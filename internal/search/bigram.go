@@ -86,6 +86,40 @@ func Bigram(s string) string {
 	return strings.Join(out, " ")
 }
 
+// IndexTerms 是**索引侧**的切分：Bigram 的输出，后面再追加每个表意文字的单字。
+//
+// 为什么索引要有单字：查询侧「杯」「咖」这种单字查询，Bigram 出的就是那个字本身，
+// 而索引里只有「克杯」「咖啡」这种二元组 —— tsvector 按整词匹配，单字永远对不上，
+// 搜一个字一条也召不回（深度审查 2026-09-27）。
+//
+// 为什么查询侧不跟着加单字：两个字以上的查询只出二元组，从来不会去撞索引里的单字；
+// 要是查询也拆单字，「连衣裙」会 OR 上「连」「衣」「裙」，召回层被单字噪声淹掉。
+// 所以两侧的约定从「切得一模一样」放宽成「查询切出来的每个词，索引一定有」——
+// 这正是 Bigram 的输出是 IndexTerms 输出前缀这件事保证的。
+//
+// 单字**追加在最后**而不是插在二元组之间：ts_rank_cd 按位置算覆盖密度，
+// 插在中间会把相邻二元组的位置拉开，多字查询的排序就跟着变了。追加在后面，
+// 二元组的位置与原来逐个相同，多字查询的召回与排序都不受影响。单字去重，
+// 同一个字出现几次只记一次（它只为单字查询的召回服务，不参与排序区分）。
+func IndexTerms(s string) string {
+	b := Bigram(s)
+	seen := map[rune]bool{}
+	var uni []string
+	for _, r := range strings.ToLower(s) {
+		if isIdeograph(r) && !seen[r] {
+			seen[r] = true
+			uni = append(uni, string(r))
+		}
+	}
+	if len(uni) == 0 {
+		return b
+	}
+	if b == "" {
+		return strings.Join(uni, " ")
+	}
+	return b + " " + strings.Join(uni, " ")
+}
+
 // isIdeograph 判断这个字符要不要走二元组。
 //
 // 范围取表意文字本身（汉字、日文假名、谚文音节），不含 CJK 标点

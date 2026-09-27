@@ -128,6 +128,14 @@ so "which one is running?" never depends on anyone's memory.
 
 ### Fixed
 
+- **Single-character search returned nothing** (「杯」, 「咖」). The keyword index only held
+  CJK bigrams, so a one-character query never matched a lexeme. `search_text` now appends each
+  distinct ideograph after the bigrams (`search.IndexTerms`); bigram positions are unchanged, so
+  multi-character recall and `ts_rank_cd` ordering are unaffected. The search-text fingerprint
+  has its own version (`SearchTextVersion = "bigram-v2"`), and migration 00086 rewinds
+  `product_understanding.updated_at` so the indexing job re-judges every product: `search_text`
+  is rewritten, embeddings are not recomputed. Stacks without `KEEL_EMBED_ENDPOINT` keep their
+  old `search_text` until reseeded.
 - **The seeded flash-price promotion had no effect on fresh installs.** Since 00075 the quota
   lives only in `activity_stocks`. That migration's backfill runs before the seed on a new
   database, so the seed's "挂耳咖啡限时特价" had no quota row, and pricing skipped it. The seed

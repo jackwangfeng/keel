@@ -75,11 +75,11 @@ func TestEmbedContentCarriesOnlyTheStableFields(t *testing.T) {
 	}
 }
 
-// search_text 是 bigram 串，而且标题与副标题之间不许跨界切。
+// search_text 是 bigram 串（后面追加单字），而且标题与副标题之间不许跨界切。
 func TestSearchTextIsBigramAndDoesNotCrossTitleBoundary(t *testing.T) {
 	p := search.ProductText{Title: "连衣裙", Subtitle: "夏季新款", CategoryName: "女装"}
 	got := p.SearchText()
-	if got != "连衣 衣裙 夏季 季新 新款" {
+	if got != "连衣 衣裙 夏季 季新 新款 连 衣 裙 夏 季 新 款" {
 		t.Fatalf("SearchText() = %q", got)
 	}
 	// 类目不许进去：进去之后同类目的商品共享一批二元组，关键词路的区分度被摊平。
@@ -102,7 +102,7 @@ func TestFingerprintsAreNailedDown(t *testing.T) {
 	p := search.ProductText{Title: "红色连衣裙", Subtitle: "夏季新款", CategoryName: "女装"}
 	const (
 		wantEmbed  = "dc3dcea1bedd6ca4a5a9c28095ac7d0011729715b5e546c565a494503bee11ce"
-		wantSearch = "9af5373e5e0045f653d30f988a86a6e187c5f15745eab0f1a293bd2921cfa20e"
+		wantSearch = "f74090054d7b6e8a6e9828ff28e77c2af9fdbcf60badc50b5d1118c231c84eab"
 	)
 	if got := p.EmbedFingerprint(); got != wantEmbed {
 		t.Errorf("text_embedding 指纹变了：%s（原 %s）—— "+

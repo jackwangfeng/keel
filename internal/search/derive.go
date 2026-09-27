@@ -43,6 +43,13 @@ const (
 // 改 EmbedContent / SearchText 的输出形状时**必须**同时改这里。
 const TemplateVersion = "text-v1"
 
+// SearchTextVersion 是 search_text 这一格自己的版本，只进那一格的指纹。
+//
+// 从 TemplateVersion 分出来，是因为改切分算法（v2：索引侧追加单字，见 IndexTerms）
+// 不该让全库的 embedding 跟着重算 —— 那是真花钱的，而向量的输入一个字没变。
+// 改 SearchText 的输出形状时**必须**同时改这里。
+const SearchTextVersion = "bigram-v2"
+
 // PipelineVersion 落进 product_understanding.pipeline_version。
 //
 // 它与 TemplateVersion 不是一回事：那个是「文本怎么拼」，这个是「这一轮加工
@@ -90,7 +97,7 @@ func (p ProductText) EmbedContent() string {
 	return b.String()
 }
 
-// SearchText 是写进 products.search_text 的 bigram 串。
+// SearchText 是写进 products.search_text 的 bigram 串（后面追加单字，见 IndexTerms）。
 //
 // 输入只有标题与副标题 —— 类目名进来的话，同类目的商品会共享一批二元组，
 // 关键词路的区分度被摊平；而且换类目就要重写全类目商品的 search_text。
@@ -98,12 +105,12 @@ func (p ProductText) EmbedContent() string {
 // 标题与副标题之间用空格隔开，二元组不许跨过这个边界：拼成一整串的话
 // 「连衣裙」+「夏季新款」会切出一个「裙夏」，那是一个不存在的词。
 func (p ProductText) SearchText() string {
-	return Bigram(strings.TrimSpace(p.Title) + " " + strings.TrimSpace(p.Subtitle))
+	return IndexTerms(strings.TrimSpace(p.Title) + " " + strings.TrimSpace(p.Subtitle))
 }
 
 // EmbedFingerprint 是 text_embedding 这一格的指纹。
 func (p ProductText) EmbedFingerprint() string {
-	return fingerprint(ProcessorTextEmbedding, p.EmbedContent())
+	return fingerprint(ProcessorTextEmbedding, TemplateVersion, p.EmbedContent())
 }
 
 // SearchTextFingerprint 是 search_text 这一格的指纹。
@@ -111,10 +118,10 @@ func (p ProductText) EmbedFingerprint() string {
 // 它按**原始输入**算，不按 Bigram 的输出算。两者在「输入没变则指纹不变」上
 // 等价，但按输出算会让「切分算法改了」这件事悄悄溜过去 —— 输出变了、指纹跟着变、
 // 于是会重算，听起来没问题；可切分算法一改，**没被触发点扫到的商品**
-// 永远不会被重新判定，库里从此新老两套切分混着。按输入算 + TemplateVersion
+// 永远不会被重新判定，库里从此新老两套切分混着。按输入算 + SearchTextVersion
 // 进指纹，改算法时只要顺手改一次版本号，全库就都会被判成过期。
 func (p ProductText) SearchTextFingerprint() string {
-	return fingerprint(ProcessorSearchText,
+	return fingerprint(ProcessorSearchText, SearchTextVersion,
 		strings.TrimSpace(p.Title)+"\x00"+strings.TrimSpace(p.Subtitle))
 }
 
@@ -126,11 +133,11 @@ func (p ProductText) SearchTextFingerprint() string {
 //
 // 分隔符用 \x00 而不是空格或换行：文本里出现空格是常态，
 // ("ab", "c") 与 ("a", "bc") 拼出来一样，那是一次真实的指纹碰撞。
-func fingerprint(processor, input string) string {
+func fingerprint(processor, version, input string) string {
 	h := sha256.New()
 	h.Write([]byte(processor))
 	h.Write([]byte{0})
-	h.Write([]byte(TemplateVersion))
+	h.Write([]byte(version))
 	h.Write([]byte{0})
 	h.Write([]byte(input))
 	return hex.EncodeToString(h.Sum(nil))

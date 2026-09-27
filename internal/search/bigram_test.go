@@ -89,3 +89,35 @@ func TestBigramIsDeterministic(t *testing.T) {
 		t.Fatal("切出来是空的 —— 上面那条循环在比较两个空串")
 	}
 }
+
+// 索引侧追加单字，单字查询才召得回来（深度审查 2026-09-27：「杯」「咖」无结果）。
+func TestIndexTermsAppendsUnigramsAfterBigrams(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"陶瓷马克杯", "陶瓷 瓷马 马克 克杯 陶 瓷 马 克 杯"},
+		{"裙", "裙 裙"},                              // 单字成段：Bigram 已出一次，单字再记一次，无害
+		{"咖啡 咖啡豆", "咖啡 咖啡 啡豆 咖 啡 豆"}, // 单字去重
+		{"iPhone 15", "iphone 15"},                  // 没有表意文字：与 Bigram 相同
+		{"", ""},
+	}
+	for _, tc := range cases {
+		if got := search.IndexTerms(tc.in); got != tc.want {
+			t.Errorf("IndexTerms(%q) = %q，期望 %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// 查询侧切出来的每个词，索引侧一定有 —— 两侧约定的底线。
+func TestQueryTermsAreSubsetOfIndexTerms(t *testing.T) {
+	title := "陶瓷马克杯 挂耳咖啡 10 包"
+	idx := map[string]bool{}
+	for _, w := range strings.Fields(search.IndexTerms(title)) {
+		idx[w] = true
+	}
+	for _, q := range []string{"杯", "咖", "马克杯", "咖啡", "10", "陶瓷马克杯"} {
+		for _, w := range strings.Fields(search.Bigram(q)) {
+			if !idx[w] {
+				t.Errorf("查询 %q 切出 %q，索引里没有 —— 这个词永远搜不到", q, w)
+			}
+		}
+	}
+}

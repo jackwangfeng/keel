@@ -200,6 +200,37 @@ func TestKeywordRecallMatchesMidWordBigram(t *testing.T) {
 		search.TSQueryOr("衣裙"), fxDress.Title, src)
 }
 
+// 单字查询由关键词那一路召回（深度审查 2026-09-27：「杯」「咖」无结果）。
+//
+// 查询侧「裙」切出来就是「裙」；索引侧过去只有二元组（「长裙」），整词对不上，
+// 这件商品只能靠向量那一路碰运气。索引侧追加单字之后（search.IndexTerms），
+// 关键词那一路必须命中它 —— 断言的是 recall_source 含 keyword，不只是「找到了」：
+// 无阈值的 ANN 什么都会返回，只断言找到会恒绿。
+func TestKeywordRecallMatchesSingleCharacter(t *testing.T) {
+	fx := newSearchFixture(t)
+
+	w, body := doSearch(t, fx.HostA, `{"query":"裙","explain":true}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("检索返回 %d：%s", w.Code, w.Body.String())
+	}
+	for _, title := range []string{fxDress.Title, fxSkirt.Title} {
+		hit := hitByTitle(body, title)
+		if hit == nil {
+			t.Fatalf("搜「裙」没找到 %q。结果：%v", title, titlesOf(body))
+		}
+		src := fmt.Sprint(hit["recall_source"])
+		if src != string(search.SourceKeyword) && src != string(search.SourceBoth) {
+			t.Errorf("%q 的 recall_source 是 %q，里面没有 keyword —— "+
+				"索引侧没有单字，单字查询在关键词那一路对不上", title, src)
+		}
+	}
+	if hit := hitByTitle(body, fxCoffee.Title); hit != nil {
+		if src := fmt.Sprint(hit["recall_source"]); src != string(search.SourceVector) {
+			t.Errorf("%q 标题里没有「裙」，recall_source 却是 %q", fxCoffee.Title, src)
+		}
+	}
+}
+
 // 跨租户：A 店搜不到 B 店的同名商品。
 //
 // 这是 M3 唯一的新读路径，而且它走的是**索引扫描**（HNSW / GIN），
