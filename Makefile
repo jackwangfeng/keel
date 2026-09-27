@@ -86,7 +86,7 @@ GOOSE_INVENTORY := GOOSE_DRIVER=postgres GOOSE_DBSTRING="$(INVENTORY_GOOSE_DBSTR
 	$(GOOSE_BIN) -table goose_db_version_inventory
 
 .PHONY: help generate generate-go generate-ts generate-sql generate-uts tools-versions version search-metrics \
-	contract-check schema-check app-type-check admin-install admin-type-check admin-test admin-build app-install app-build-h5 app-build-android app-build-mp-weixin app-apk app-apk-e2e app-e2e app-e2e-h5 flutter-get flutter-generate flutter-analyze flutter-test flutter-e2e-web flutter-build flutter-build-mp app-adb-wifi app-ios app-ios-e2e app-e2e-ios \
+	contract-check schema-check app-type-check admin-install admin-type-check admin-test admin-build app-install app-build-h5 app-build-android app-build-mp-weixin app-apk app-apk-e2e app-e2e app-e2e-h5 flutter-get flutter-generate flutter-analyze flutter-test flutter-e2e-web flutter-build flutter-build-mp flutter-ios-install app-adb-wifi app-ios app-ios-e2e app-e2e-ios \
 	sdk-smoke goose-bin migrate migrate-down migrate-status migrate-inventory migrate-inventory-status test-db \
 	test-engine category-eval dtmrs-deps build
 
@@ -564,6 +564,17 @@ flutter-build:
 	cd $(FLUTTER_APP) && $(FLUTTER_ENV) $(FLUTTER) build web
 	cd $(FLUTTER_APP) && $(FLUTTER_ENV) ANDROID_HOME=$(FLUTTER_ANDROID_HOME:/platforms=) JAVA_HOME=$(FLUTTER_JAVA_HOME) $(FLUTTER) build apk --dart-define=KEEL_API_BASE=$(KEEL_API_BASE)
 	cd $(FLUTTER_APP) && $(FLUTTER_ENV) $(FLUTTER) build ios --no-codesign --dart-define=KEEL_API_BASE=$(KEEL_API_BASE)
+
+# 装到连着的 iPhone（发版前真机验 / 想玩一下时）。签名团队与 app-ios 一样用 KEEL_IOS_TEAM 传，不写进工程。
+flutter-ios-install:
+	@test -n "$(KEEL_API_BASE)" || (echo "要设 KEEL_API_BASE" && exit 1)
+	@test -n "$(KEEL_IOS_TEAM)" || (echo "要设 KEEL_IOS_TEAM（security find-identity -v -p codesigning）" && exit 1)
+	cd $(FLUTTER_APP) && $(FLUTTER_ENV) $(FLUTTER) build ios --config-only --release --dart-define=KEEL_API_BASE=$(KEEL_API_BASE)
+	cd $(FLUTTER_APP)/ios && xcodebuild -workspace Runner.xcworkspace -scheme Runner -configuration Release -sdk iphoneos \
+	  -derivedDataPath ../build/ios-derived DEVELOPMENT_TEAM=$(KEEL_IOS_TEAM) CODE_SIGN_STYLE=Automatic -allowProvisioningUpdates -quiet build
+	DEV=$$(xcrun devicectl list devices | awk '/available/ && /iPhone/ {print $$3; exit}'); \
+	  xcrun devicectl device install app --device $$DEV $(FLUTTER_APP)/build/ios-derived/Build/Products/Release-iphoneos/Runner.app && \
+	  xcrun devicectl device process launch --device $$DEV dev.keel.keelBuyer
 
 # 微信小程序（mp-flutter）。产物 flutter_app/build/weapp，用微信开发者工具打开。
 flutter-build-mp:
