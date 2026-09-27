@@ -35,6 +35,11 @@ dev_dependencies:
     sdk: flutter
   flutter_driver:
     sdk: flutter
+  mp_flutter:
+    git:
+      url: git@github.com:jackwangfeng/mp-flutter.git
+      ref: phase6
+      path: packages/mp_flutter
   flutter_lints: ^6.0.0
 
 flutter:

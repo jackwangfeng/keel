@@ -86,7 +86,7 @@ GOOSE_INVENTORY := GOOSE_DRIVER=postgres GOOSE_DBSTRING="$(INVENTORY_GOOSE_DBSTR
 	$(GOOSE_BIN) -table goose_db_version_inventory
 
 .PHONY: help generate generate-go generate-ts generate-sql generate-uts tools-versions version search-metrics \
-	contract-check schema-check app-type-check admin-install admin-type-check admin-test admin-build app-install app-build-h5 app-build-android app-build-mp-weixin app-apk app-apk-e2e app-e2e app-e2e-h5 flutter-get flutter-generate flutter-analyze flutter-test flutter-e2e-web app-adb-wifi app-ios app-ios-e2e app-e2e-ios \
+	contract-check schema-check app-type-check admin-install admin-type-check admin-test admin-build app-install app-build-h5 app-build-android app-build-mp-weixin app-apk app-apk-e2e app-e2e app-e2e-h5 flutter-get flutter-generate flutter-analyze flutter-test flutter-e2e-web flutter-build flutter-build-mp app-adb-wifi app-ios app-ios-e2e app-e2e-ios \
 	sdk-smoke goose-bin migrate migrate-down migrate-status migrate-inventory migrate-inventory-status test-db \
 	test-engine category-eval dtmrs-deps build
 
@@ -553,6 +553,22 @@ flutter-test:
 
 flutter-e2e-web:
 	FLUTTER=$(FLUTTER) bash $(FLUTTER_APP)/tool/e2e_web.sh
+
+# Android SDK / JDK 17：与 app/scripts/build-apk.sh 同一套找法（ANDROID_HOME → ~/Library/Android/sdk → Homebrew）。
+FLUTTER_ANDROID_HOME ?= $(or $(ANDROID_HOME),$(firstword $(wildcard $(HOME)/Library/Android/sdk/platforms /opt/homebrew/share/android-commandlinetools/platforms)))
+FLUTTER_JAVA_HOME ?= $(or $(JAVA_HOME),$(shell /usr/libexec/java_home -v 17 2>/dev/null))
+
+# 编译检查：Web / Android / iOS（不签名）。服务地址用 KEEL_API_BASE 注入（原生必须注入）。
+flutter-build:
+	@test -n "$(KEEL_API_BASE)" || (echo "要设 KEEL_API_BASE" && exit 1)
+	cd $(FLUTTER_APP) && $(FLUTTER_ENV) $(FLUTTER) build web
+	cd $(FLUTTER_APP) && $(FLUTTER_ENV) ANDROID_HOME=$(FLUTTER_ANDROID_HOME:/platforms=) JAVA_HOME=$(FLUTTER_JAVA_HOME) $(FLUTTER) build apk --dart-define=KEEL_API_BASE=$(KEEL_API_BASE)
+	cd $(FLUTTER_APP) && $(FLUTTER_ENV) $(FLUTTER) build ios --no-codesign --dart-define=KEEL_API_BASE=$(KEEL_API_BASE)
+
+# 微信小程序（mp-flutter）。产物 flutter_app/build/weapp，用微信开发者工具打开。
+flutter-build-mp:
+	@test -n "$(KEEL_API_BASE)" || (echo "要设 KEEL_API_BASE" && exit 1)
+	cd $(FLUTTER_APP) && $(FLUTTER_ENV) dart run mp_flutter --flutter $(FLUTTER) --dart-define=KEEL_API_BASE=$(KEEL_API_BASE)
 
 flutter-generate:
 	python3 $(ROOT)/scripts/gen_dart_schema.py
