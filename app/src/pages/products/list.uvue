@@ -45,31 +45,8 @@
       </view>
 
       <view class="grid">
-        <view v-for="item in rows" :key="item.id" class="cell" @click="openDetail(item.id)">
-          <view class="tile">
-            <view class="cover tile-cover" :style="{ backgroundColor: item.cover.color }">
-              <image v-if="item.cover.imageUrl != ''" class="cover-img" :src="item.cover.imageUrl" mode="aspectFill"></image>
-              <text v-else class="cover-glyph tile-glyph">{{ item.cover.glyph }}</text>
-              <view v-if="item.offShelf || item.soldOut" class="tile-flag">
-                <text class="tile-flag-text">{{ item.offShelf ? '已下架' : '暂时无货' }}</text>
-              </view>
-            </view>
-            <view class="tile-info">
-              <text class="tile-title">{{ item.title }}</text>
-              <text v-if="item.subtitle != ''" class="t-hint">{{ item.subtitle }}</text>
-              <view v-if="item.promoTags.length > 0" class="tag-row">
-                <text v-for="(tag, ti) in item.promoTags" :key="ti" class="promo-tag">{{ tag }}</text>
-              </view>
-              <view class="gap-s"></view>
-              <view class="price-row">
-                <text class="t-price">{{ item.priceText }}</text>
-                <!-- 原地加购：不进详情。.stop 挡住卡片本身的「打开详情」。 -->
-                <view v-if="!item.offShelf && !item.soldOut" class="add-btn" @click.stop="quickAdd(item.id)">
-                  <text class="add-btn-text">＋</text>
-                </view>
-              </view>
-            </view>
-          </view>
+        <view v-for="item in rows" :key="item.id" class="cell">
+          <product-card :item="item" layout="tile" @open="openDetail" @add="quickAdd"></product-card>
         </view>
       </view>
 
@@ -281,56 +258,7 @@ export default {
 .cell {
   width: 50%;
   padding: 6px;
-}
-.tile {
-  background-color: #FFFDF9;
-  border-radius: 16px;
-  overflow: hidden;
-}
-.tile-cover {
-  width: 100%;
-  height: 156px;
-}
-.tile-glyph {
-  font-size: 44px;
-}
-.tile-flag {
-  position: absolute;
-  left: 10px;
-  top: 10px;
-  padding: 2px 8px;
-  border-radius: 8px;
-  background-color: rgba(42, 33, 27, 0.6);
-}
-.tile-flag-text {
-  font-size: 11px;
-  color: #FFFDF9;
-}
-.tile-info {
-  padding: 12px 12px 14px 12px;
-}
-.price-row {
-  flex-direction: row;
-  align-items: center;
-  justify-content: space-between;
-}
-.add-btn {
-  width: 28px;
-  height: 28px;
-  border-radius: 14px;
-  background-color: #3B2A20;
-  align-items: center;
-  justify-content: center;
-}
-.add-btn-text {
-  font-size: 18px;
-  line-height: 20px;
-  color: #FFFDF9;
-}
-.tile-title {
-  font-size: 14px;
-  font-weight: bold;
-  color: #2A211B;
-  margin-bottom: 2px;
+  /* 让卡片撑满格子：同一行两张卡片等高（行高由较高的那张决定） */
+  flex-direction: column;
 }
 </style>

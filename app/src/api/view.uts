@@ -122,6 +122,10 @@ export type ProductRow = {
   title : string
   subtitle : string
   priceText : string
+  /** 最低价（「¥9.90」）。多规格时网格卡片显示「¥9.90 起」—— 两列的卡片放不下完整区间。 */
+  minPriceText : string
+  /** 各规格价格不一样（priceText 是一个区间）。 */
+  hasRange : boolean
   /** 契约里 status: 0 草稿 / 1 上架 / 2 下架。下架的要显式说出来。 */
   offShelf : boolean
   soldOut : boolean
@@ -150,6 +154,8 @@ export function productRow(p : ProductSummary) : ProductRow {
     title: p.title,
     subtitle: p.subtitle != null ? p.subtitle! : '',
     priceText: priceText,
+    minPriceText: yuan(min),
+    hasRange: max != null && min != null && max! > min!,
     offShelf: p.status == 2,
     // in_stock 是可选字段：契约没保证一定返回。没返回时不敢说它没货。
     soldOut: p.in_stock != null && !p.in_stock!,
@@ -177,6 +183,8 @@ export function searchHitRow(h : SearchHit) : ProductRow {
     title: h.title,
     subtitle: h.subtitle != null ? h.subtitle! : '',
     priceText: priceText,
+    minPriceText: yuan(min),
+    hasRange: max != null && max! > min,
     offShelf: h.status == 2,
     soldOut: h.in_stock != null && !h.in_stock!,
     cover: coverOf(h.id, h.title, h.image_url),

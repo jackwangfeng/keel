@@ -1,0 +1,236 @@
+<template>
+  <!-- 商品卡片：首页 / 分类（同一个页面）用 tile（两列网格），搜索结果用 row（左图右文）。
+       两处共用这一个组件，布局规则只写一遍：
+         · 「＋」固定 28px、flex-shrink: 0，永远不被挤；
+         · 价格占剩下的宽度，单行，超长省略；文字过长时先降一档字号；
+         · 网格里多规格显示「¥9.90 起」—— 两列卡片放不下完整区间（375px 宽时价格只剩约 100px）；
+           搜索结果一行一个，宽度够，显示完整区间；
+         · 标题最多两行、副标题一行，网格同一行的两张卡片等高，价格行贴底对齐。 -->
+  <view v-if="layout == 'tile'" class="pc-tile" @click="onOpen">
+    <view class="cover pc-tile-cover" :style="{ backgroundColor: item.cover.color }">
+      <image v-if="item.cover.imageUrl != ''" class="cover-img" :src="item.cover.imageUrl" mode="aspectFill"></image>
+      <text v-else class="cover-glyph pc-tile-glyph">{{ item.cover.glyph }}</text>
+      <view v-if="item.offShelf || item.soldOut" class="pc-flag">
+        <text class="pc-flag-text">{{ item.offShelf ? '已下架' : '暂时无货' }}</text>
+      </view>
+    </view>
+    <view class="pc-info">
+      <view>
+        <text class="pc-title">{{ item.title }}</text>
+        <text v-if="item.subtitle != ''" class="pc-sub">{{ item.subtitle }}</text>
+        <view v-if="item.promoTags.length > 0" class="tag-row">
+          <text v-for="(tag, ti) in item.promoTags" :key="ti" class="promo-tag">{{ tag }}</text>
+        </view>
+      </view>
+      <view class="pc-price-row">
+        <view class="pc-price-box">
+          <text :class="['pc-price', tilePriceSmall ? 'pc-price-s' : '']">{{ item.hasRange ? item.minPriceText : item.priceText }}</text>
+          <text v-if="item.hasRange" class="pc-qi">起</text>
+        </view>
+        <view v-if="canAdd" class="pc-add" @click.stop="onAdd">
+          <text class="pc-add-text">＋</text>
+        </view>
+      </view>
+    </view>
+  </view>
+
+  <view v-else :class="['card-flat', 'pc-row', item.offShelf || item.soldOut ? 'pc-row-off' : '']" @click="onOpen">
+    <view class="cover pc-thumb" :style="{ backgroundColor: item.cover.color }">
+      <image v-if="item.cover.imageUrl != ''" class="cover-img" :src="item.cover.imageUrl" mode="aspectFill"></image>
+      <text v-else class="cover-glyph pc-thumb-glyph">{{ item.cover.glyph }}</text>
+    </view>
+    <view class="pc-row-info">
+      <text class="pc-title pc-row-title">{{ item.title }}</text>
+      <text v-if="item.subtitle != ''" class="pc-sub">{{ item.subtitle }}</text>
+      <view v-if="item.promoTags.length > 0" class="tag-row">
+        <text v-for="(tag, ti) in item.promoTags" :key="ti" class="promo-tag">{{ tag }}</text>
+      </view>
+      <view class="pc-price-row pc-row-price">
+        <view class="pc-price-box">
+          <text :class="['pc-price', rowPriceSmall ? 'pc-price-s' : '']">{{ item.priceText }}</text>
+        </view>
+        <view v-if="item.offShelf || item.soldOut" class="badge badge-muted pc-badge">
+          <text class="badge-text badge-muted-text">{{ item.offShelf ? '已下架' : '缺货' }}</text>
+        </view>
+        <view v-if="canAdd" class="pc-add" @click.stop="onAdd">
+          <text class="pc-add-text">＋</text>
+        </view>
+      </view>
+    </view>
+  </view>
+</template>
+
+<script lang="uts">
+import { ProductRow } from '@/api/view.uts'
+
+export default {
+  props: {
+    item: { type: Object as PropType<ProductRow>, required: true },
+    // tile：两列网格（首页、分类）；row：一行一个（搜索结果）
+    layout: { type: String, default: 'tile' },
+  },
+  emits: ['open', 'add'],
+  computed: {
+    canAdd(): boolean {
+      return !this.item.offShelf && !this.item.soldOut
+    },
+    // 字符数阈值按「¥ + 数字 + 小数点」的宽度量过：网格卡片在 375px 屏上价格区约 100px，
+    // 16px 粗体放得下 8 个字符左右；再长就换 13px，还放不下才省略。
+    tilePriceSmall(): boolean {
+      const t = this.item.hasRange ? this.item.minPriceText : this.item.priceText
+      return t.length > 8
+    },
+    rowPriceSmall(): boolean {
+      return this.item.priceText.length > 16
+    },
+  },
+  methods: {
+    onOpen() {
+      this.$emit('open', this.item.id)
+    },
+    onAdd() {
+      this.$emit('add', this.item.id)
+    },
+  },
+}
+</script>
+
+<style>
+/* ---------- tile ---------- */
+.pc-tile {
+  flex: 1;
+  background-color: #FFFDF9;
+  border-radius: 16px;
+  overflow: hidden;
+}
+.pc-tile-cover {
+  width: 100%;
+  height: 156px;
+}
+.pc-tile-glyph {
+  font-size: 44px;
+}
+.pc-flag {
+  position: absolute;
+  left: 10px;
+  top: 10px;
+  padding: 2px 8px;
+  border-radius: 8px;
+  background-color: rgba(42, 33, 27, 0.6);
+}
+.pc-flag-text {
+  font-size: 11px;
+  color: #FFFDF9;
+}
+.pc-info {
+  flex: 1;
+  padding: 12px 12px 14px 12px;
+  justify-content: space-between;
+}
+/* 标题最多两行、副标题一行。lines 在原生端生效（带省略号）；Web 端不认 lines，
+   靠固定行高 + max-height + overflow 截断 —— 实测不加这一段，超长标题在 H5 上铺满五行。 */
+.pc-title {
+  font-size: 14px;
+  line-height: 20px;
+  max-height: 40px;
+  overflow: hidden;
+  font-weight: bold;
+  color: #2A211B;
+  margin-bottom: 2px;
+  lines: 2;
+  text-overflow: ellipsis;
+}
+.pc-sub {
+  font-size: 12px;
+  line-height: 17px;
+  max-height: 17px;
+  overflow: hidden;
+  color: #A89C90;
+  lines: 1;
+  text-overflow: ellipsis;
+}
+
+/* ---------- 价格行：两种布局共用 ---------- */
+.pc-price-row {
+  flex-direction: row;
+  align-items: center;
+  margin-top: 8px;
+}
+.pc-price-box {
+  flex: 1;
+  /* 让它能收缩到比内容更窄，省略号才会出现；否则长价格会把「＋」顶出去 */
+  width: 0;
+  flex-direction: row;
+  align-items: flex-end;
+  overflow: hidden;
+}
+.pc-price {
+  font-size: 16px;
+  white-space: nowrap;
+  overflow: hidden;
+  font-weight: bold;
+  color: #3B2A20;
+  lines: 1;
+  text-overflow: ellipsis;
+  flex-shrink: 1;
+}
+.pc-price-s {
+  font-size: 13px;
+}
+.pc-qi {
+  font-size: 11px;
+  color: #A89C90;
+  margin-left: 2px;
+  flex-shrink: 0;
+}
+.pc-add {
+  width: 28px;
+  height: 28px;
+  border-radius: 14px;
+  background-color: #3B2A20;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-left: 8px;
+}
+.pc-add-text {
+  font-size: 18px;
+  line-height: 20px;
+  color: #FFFDF9;
+}
+
+/* ---------- row ---------- */
+.pc-row {
+  flex-direction: row;
+  padding: 12px;
+}
+.pc-row-off {
+  opacity: 0.6;
+}
+.pc-thumb {
+  width: 72px;
+  height: 72px;
+  border-radius: 12px;
+  flex-shrink: 0;
+}
+.pc-thumb-glyph {
+  font-size: 28px;
+}
+.pc-row-info {
+  flex: 1;
+  width: 0;
+  margin-left: 12px;
+}
+.pc-row-title {
+  font-size: 15px;
+  line-height: 21px;
+  max-height: 42px;
+}
+.pc-row-price {
+  margin-top: 6px;
+}
+.pc-badge {
+  flex-shrink: 0;
+  margin-left: 8px;
+}
+</style>

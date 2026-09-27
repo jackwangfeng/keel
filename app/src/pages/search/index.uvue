@@ -43,30 +43,7 @@
           <text class="t-hint count">「{{ searched }}」共 {{ rows.length }} 件，按相关度排序</text>
           <!-- 缺货的商品服务端也返回（排在最后，in_stock: false，契约 M3 起如此）：标出来、压暗，
                而不是藏掉 —— 用户搜的就是它时，「有这东西但暂时没货」比「搜不到」有用。 -->
-          <view v-for="item in rows" :key="item.id" :class="['card-flat', 'hit', 'row', item.offShelf || item.soldOut ? 'hit-off' : '']" @click="open(item.id)">
-            <view class="cover thumb" :style="{ backgroundColor: item.cover.color }">
-              <image v-if="item.cover.imageUrl != ''" class="cover-img" :src="item.cover.imageUrl" mode="aspectFill"></image>
-              <text v-else class="cover-glyph thumb-glyph">{{ item.cover.glyph }}</text>
-            </view>
-            <view class="fill hit-info">
-              <text class="hit-title">{{ item.title }}</text>
-              <text v-if="item.subtitle != ''" class="t-hint">{{ item.subtitle }}</text>
-              <view v-if="item.promoTags.length > 0" class="tag-row">
-                <text v-for="(tag, ti) in item.promoTags" :key="ti" class="promo-tag">{{ tag }}</text>
-              </view>
-              <view class="gap-s"></view>
-              <view class="row">
-                <text class="t-price">{{ item.priceText }}</text>
-                <view v-if="item.offShelf || item.soldOut" class="badge badge-muted flag">
-                  <text class="badge-text badge-muted-text soldout">{{ item.offShelf ? '已下架' : '缺货' }}</text>
-                </view>
-                <view class="fill"></view>
-                <view v-if="!item.offShelf && !item.soldOut" class="add-btn" @click.stop="quickAdd(item.id)">
-                  <text class="add-btn-text">＋</text>
-                </view>
-              </view>
-            </view>
-          </view>
+          <product-card v-for="item in rows" :key="item.id" :item="item" layout="row" @open="open" @add="quickAdd"></product-card>
         </view>
       </view>
     </scroll-view>
@@ -188,43 +165,5 @@ export default {
 }
 .count {
   padding: 4px 4px 0 4px;
-}
-.hit {
-  padding: 12px;
-}
-.thumb {
-  width: 72px;
-  height: 72px;
-  border-radius: 12px;
-}
-.thumb-glyph {
-  font-size: 28px;
-}
-.hit-info {
-  margin-left: 12px;
-}
-.hit-title {
-  font-size: 15px;
-  font-weight: bold;
-  color: #2A211B;
-}
-.flag {
-  margin-left: 10px;
-}
-.hit-off {
-  opacity: 0.6;
-}
-.add-btn {
-  width: 28px;
-  height: 28px;
-  border-radius: 14px;
-  background-color: #3B2A20;
-  align-items: center;
-  justify-content: center;
-}
-.add-btn-text {
-  font-size: 18px;
-  line-height: 20px;
-  color: #FFFDF9;
 }
 </style>
