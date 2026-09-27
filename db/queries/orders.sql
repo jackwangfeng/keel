@@ -526,3 +526,12 @@ SELECT payment_no, channel, amount_cents, status, paid_at
 -- （service/order_saga.go 的文件头）：库存服务按流水拒绝「已经被关单释放过」的订单，
 -- 这里在扣减之后再看一眼订单 —— 已经关掉了就确定性失败，全局补偿按流水把刚扣的放回去。
 SELECT status FROM orders WHERE id = $1 FOR UPDATE;
+
+-- name: MarkOrderPlaced :exec
+-- 收尾分支在 LockOrderStatus 之后、同一个屏障事务里写：库存已扣成、订单仍在 10 —— 这一单下成了。
+-- 发起支付只认写过它的单（00085 的文件头）。IS NULL 让协调器重放时不改第一次的时刻。
+UPDATE orders SET placed_at = now() WHERE id = $1 AND placed_at IS NULL;
+
+-- name: IsOrderPlaced :one
+-- 发起支付用：下单 SAGA 走完收尾分支了没有。
+SELECT (placed_at IS NOT NULL)::boolean AS placed FROM orders WHERE id = $1;

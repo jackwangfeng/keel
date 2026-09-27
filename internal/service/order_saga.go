@@ -455,6 +455,10 @@ func (s *OrderService) finishBranch() dtm.BranchFunc {
 			if st != orderStatusPending && st != orderStatusDraft {
 				return fmt.Errorf("%w: 订单 %s 已经是 %d，扣下的库存要放回", errOrderNotPending, orderNo, st)
 			}
+			// 下成了：发起支付从这一刻起才放行（00085）。在这之前付掉的单，库存分支一旦被拒就关不掉了。
+			if err := tx.MarkOrderPlaced(ctx, order.ID); err != nil {
+				return err
+			}
 			for _, e := range trail {
 				if e.BizType != inventory.BizOrderDeduct {
 					continue

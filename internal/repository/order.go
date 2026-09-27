@@ -319,6 +319,10 @@ type OrderTx interface {
 	// LockOrderStatus 锁住订单行（FOR UPDATE）并返回它此刻的状态。下单 SAGA 的收尾分支
 	// 用它确认「扣完库存时这一单还没被关掉」（service/order_saga.go）。
 	LockOrderStatus(ctx context.Context, orderID int64) (int16, error)
+	// MarkOrderPlaced 在收尾分支里标记「这一单下成了」（库存已扣、仍待支付，00085）。可重放。
+	MarkOrderPlaced(ctx context.Context, orderID int64) error
+	// IsOrderPlaced 回答下单 SAGA 是否已经走完收尾分支。发起支付只放行下成了的单。
+	IsOrderPlaced(ctx context.Context, orderID int64) (bool, error)
 
 	// PromoteOrderDraft 把订单从 0 创建中推到 10 待支付，返回受影响行数。
 	PromoteOrderDraft(ctx context.Context, orderNo string) (int64, error)
@@ -612,6 +616,18 @@ func (t tenantTx) ReleaseIdempotencyKey(ctx context.Context, scope string, subj 
 		return false, err
 	}
 	return n == 1, nil
+}
+
+func (t tenantTx) MarkOrderPlaced(ctx context.Context, orderID int64) error {
+	return t.q.MarkOrderPlaced(ctx, orderID)
+}
+
+func (t tenantTx) IsOrderPlaced(ctx context.Context, orderID int64) (bool, error) {
+	placed, err := t.q.IsOrderPlaced(ctx, orderID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, fmt.Errorf("订单 %d: %w", orderID, ErrOrderNotFound)
+	}
+	return placed, err
 }
 
 func (t tenantTx) LockOrderStatus(ctx context.Context, orderID int64) (int16, error) {

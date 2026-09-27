@@ -216,6 +216,16 @@ func (s *PaymentService) CreateIntent(ctx context.Context, orderNo, channel, ide
 			return fmt.Errorf("%w: 订单 %s 当前状态是 %d，只有 %d 待支付可以发起支付",
 				ErrOrderNotPayable, orderNo, order.Status, orderStatusPending)
 		}
+		placed, err := tx.IsOrderPlaced(ctx, order.ID)
+		if err != nil {
+			return err
+		}
+		if !placed {
+			// 下单 SAGA 还没走完（库存还没扣成）。单号可能已经在买家的订单列表里了 ——
+			// 拆分部署下库存服务不在时这一段能有几分钟。这时收钱，库存分支若被拒，全局补偿
+			// 关不掉一张已支付的单（closeOrder 里那条 ERROR）。与「状态不对」同一个 409，客户端稍后重试。
+			return fmt.Errorf("%w: 订单 %s 还在确认库存，请稍后再付", ErrOrderNotPayable, orderNo)
+		}
 		if !order.ExpireAt.After(s.now()) {
 			// 已经过了支付时限。它还停在 10 只是因为超时补偿任务还没扫到它
 			// （service/sweep.go 每隔一会儿跑一轮）。放行的话，用户会付一笔

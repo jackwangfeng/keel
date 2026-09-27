@@ -323,6 +323,46 @@ func TestPaymentIntentRefusesAnOrderThatIsNoLongerPayable(t *testing.T) {
 	}
 }
 
+// 下单 SAGA 还没走完收尾分支（库存还没扣成）的单不能付（00085）。
+//
+// 拆分部署下库存服务不在时，订单以 10 待支付的样子在买家的订单列表里停几分钟；
+// 这时收了钱，库存分支若被拒，全局补偿关不掉一张已支付的单。这里把 placed_at 抹掉
+// 来造出「建单分支跑完、收尾分支还没跑」的那一刻；标记回来之后同一个请求照常放行。
+func TestPaymentIntentWaitsUntilTheOrderSagaFinishes(t *testing.T) {
+	tok := tokenA(t)
+	no := placeOrderFor(t, tok, seedAddressA, "unplaced")
+	setPlaced := func(placed bool) {
+		t.Helper()
+		expr := "NULL"
+		if placed {
+			expr = "now()"
+		}
+		if _, err := admin(t).Exec(context.Background(),
+			"UPDATE orders SET placed_at = "+expr+" WHERE order_no = $1", no); err != nil {
+			t.Fatalf("改 placed_at 失败: %v", err)
+		}
+	}
+	var placed bool
+	if err := admin(t).QueryRow(context.Background(),
+		"SELECT placed_at IS NOT NULL FROM orders WHERE order_no = $1", no).Scan(&placed); err != nil || !placed {
+		t.Fatalf("走完 SAGA 的订单 placed_at 应当非空（err=%v, placed=%v）", err, placed)
+	}
+
+	setPlaced(false)
+	key := "unplaced-" + uniqueKey()
+	w := createIntent(t, hostA, no, "wechat", tok, key)
+	p := problemOf(t, w, http.StatusConflict)
+	if p.Type != problem.TypeOrderStatusNotPayable {
+		t.Fatalf("收尾分支没跑完的单发起支付回了 %s，期望 %s", p.Type, problem.TypeOrderStatusNotPayable)
+	}
+
+	// 被拒的请求不占钥匙（整个事务回滚）：收尾分支跑完之后，同一把钥匙重试就能付。
+	setPlaced(true)
+	if w := createIntent(t, hostA, no, "wechat", tok, key); w.Code != http.StatusCreated {
+		t.Fatalf("placed_at 补上之后同一把钥匙应当放行，实得 %d %s", w.Code, w.Body.String())
+	}
+}
+
 // 不能替别人的订单发起支付。
 //
 // 这一条与「读不到别人的订单」是同一个越权面的两半，但后果不同：读到的是信息，

@@ -277,6 +277,7 @@ type Order struct {
 	FreightSnapshot        []byte
 	PromotionDiscountCents int64
 	Promotions             []byte
+	PlacedAt               pgtype.Timestamptz
 }
 
 type OrderItem struct {

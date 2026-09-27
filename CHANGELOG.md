@@ -41,6 +41,26 @@ so "which one is running?" never depends on anyone's memory.
 
 ### Added
 
+- **Split deployment tiers B and C (phase 2 of `docs/电商系统-微服务拆分方案.md`).**
+  Tier B keeps one Postgres but puts inventory in its own `inventory` schema owned by a
+  `keel_inventory` role that `keel_app` cannot read. Tier C is `compose.split.yaml`: two
+  keel processes (`core` + `inventory`) and two Postgres instances. The inventory migration
+  directory now builds into whatever schema the connection's `search_path` points at, and
+  grants to `KEEL_INVENTORY_ROLE` (default `keel_app`, so the single database is unchanged).
+  `scripts/split-migrate.sh` moves a monolith's inventory tables across
+  (`prepare-b` / `copy` / `verify` / `cutover` / `rollback`). All steps can be re-run, and
+  `cutover` revokes `keel_app` on the old copies so a process still on the monolith
+  configuration fails loudly instead of using stale stock.
+- **Hourly inventory reconciliation** in the `all` / `core` roles. It is read-only and only
+  reports what it finds: inventory rows whose SKU or store no longer exists in core,
+  mismatches between the quota rows of live promotions and `promotion_skus`, and
+  dead-lettered `inventory.release` jobs. Findings are logged at WARN.
+- **Payment waits for the order SAGA to finish (migration 00085, `orders.placed_at`).** An
+  order shows as pending payment as soon as its first SAGA step commits. When the inventory
+  service is down, that state can last for minutes in a split deployment. Paying during that
+  window and then losing the stock deduction left a paid order that compensation could not
+  close. `POST /orders/{order_no}/payments` now returns the existing 409
+  `order-status-not-payable` until the finish branch has run. No contract change.
 - **Groundwork for splitting inventory into its own service (phase 0 of
   `docs/电商系统-微服务拆分方案.md`).** No behaviour change in the default deployment.
   New, all optional: `KEEL_ROLE` (`all` default / `core` / `inventory`; unknown values

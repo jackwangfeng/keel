@@ -767,6 +767,18 @@ func (q *Queries) InsertPayment(ctx context.Context, arg InsertPaymentParams) (I
 	return i, err
 }
 
+const isOrderPlaced = `-- name: IsOrderPlaced :one
+SELECT (placed_at IS NOT NULL)::boolean AS placed FROM orders WHERE id = $1
+`
+
+// 发起支付用：下单 SAGA 走完收尾分支了没有。
+func (q *Queries) IsOrderPlaced(ctx context.Context, id int64) (bool, error) {
+	row := q.db.QueryRow(ctx, isOrderPlaced, id)
+	var placed bool
+	err := row.Scan(&placed)
+	return placed, err
+}
+
 const listExpiredDraftOrders = `-- name: ListExpiredDraftOrders :many
 SELECT id, order_no, store_id, user_id
   FROM orders
@@ -1301,6 +1313,17 @@ func (q *Queries) LockOrderStatus(ctx context.Context, id int64) (int16, error) 
 	var status int16
 	err := row.Scan(&status)
 	return status, err
+}
+
+const markOrderPlaced = `-- name: MarkOrderPlaced :exec
+UPDATE orders SET placed_at = now() WHERE id = $1 AND placed_at IS NULL
+`
+
+// 收尾分支在 LockOrderStatus 之后、同一个屏障事务里写：库存已扣成、订单仍在 10 —— 这一单下成了。
+// 发起支付只认写过它的单（00085 的文件头）。IS NULL 让协调器重放时不改第一次的时刻。
+func (q *Queries) MarkOrderPlaced(ctx context.Context, id int64) error {
+	_, err := q.db.Exec(ctx, markOrderPlaced, id)
+	return err
 }
 
 const promoteOrderDraft = `-- name: PromoteOrderDraft :execrows
