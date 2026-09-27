@@ -28,6 +28,8 @@ dependencies:
   shared_preferences: ^2.3.2
   go_router: ^17.5.0
   http_parser: ^4.1.2
+  # 定位（按围栏解析门店）：Web / 原生。小程序里走 mp_flutter_wechat 的 getLocation。
+  geolocator: ^14.0.0
   # 售后凭证选图（Web / 原生）。小程序里不走它，走下面的 mp_flutter_wechat（wx.chooseMedia）。
   image_picker: ^1.1.2
   # mp-flutter 的微信能力桥：只在小程序里可用，其它平台 isAvailable 为 false。
@@ -50,6 +52,7 @@ dev_dependencies:
       ref: phase6
       path: packages/mp_flutter
   flutter_lints: ^6.0.0
+  fake_async: ^1.3.1
 
 flutter:
 

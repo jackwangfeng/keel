@@ -14,8 +14,10 @@ class LoginPage extends StatefulWidget {
 }
 
 class _LoginPageState extends State<LoginPage> {
-  final _phone = TextEditingController();
-  final _password = TextEditingController();
+  // 预填公开的演示买家（与 uni-app x 的登录页同一个），直接点登录就行；
+  // 要预填别的账号，编译时加 --dart-define=KEEL_DEMO_PHONE=... / KEEL_DEMO_PASSWORD=...。
+  final _phone = TextEditingController(text: const String.fromEnvironment('KEEL_DEMO_PHONE', defaultValue: '13800000000'));
+  final _password = TextEditingController(text: const String.fromEnvironment('KEEL_DEMO_PASSWORD', defaultValue: 'keel-demo-2026'));
   String _message = '';
   bool _busy = false;
 

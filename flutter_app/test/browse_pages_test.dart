@@ -82,7 +82,7 @@ Future<(Widget, CartCount)> app(Fake f, {bool loggedIn = true}) async {
   final client = ApiClient(base: 'http://h/api/v1', session: session, http: f.client);
   final count = CartCount(client, session);
   return (
-    Services(client: client, session: session, store: StoreService(client), cart: count, trace: SearchTrace(client), unread: UnreadCount(client, session),
+    Services(client: client, session: session, store: StoreService(client, locate: () async => null), cart: count, trace: SearchTrace(client), unread: UnreadCount(client, session),
         child: MaterialApp.router(theme: keelTheme(), routerConfig: buildRouter(session))),
     count
   );

@@ -1,4 +1,7 @@
+import 'dart:async';
 import 'dart:convert';
+
+import 'package:fake_async/fake_async.dart';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -28,5 +31,45 @@ void main() {
     final none = StoreService(ApiClient(base: 'http://h/api/v1', session: Session(),
         http: MockClient((r) async => http.Response(jsonEncode({'match_type': 'none', 'stores': []}), 200))));
     expect((await none.ensure()).storeId, isNull);
+  });
+
+  group('定位', () {
+    Future<(StoreService, List<Uri>)> svc(Future<({double lat, double lng})?> Function() locate) async {
+      final seen = <Uri>[];
+      final c = ApiClient(base: 'http://h/api/v1', session: Session(), http: MockClient((r) async {
+        seen.add(r.url);
+        return http.Response(jsonEncode({'match_type': 'fence', 'stores': [{'id': 2, 'name': '西湖店', 'is_default': false, 'distance_m': 800}]}), 200,
+            headers: {'content-type': 'application/json; charset=utf-8'});
+      }));
+      return (StoreService(c, locate: locate), seen);
+    }
+
+    test('拿到坐标：带 lat / lng 去解析', () async {
+      final (s, seen) = await svc(() async => (lat: 30.25, lng: 120.13));
+      expect((await s.ensure()).storeId, 2);
+      expect(seen.single.queryParameters, {'lat': '30.25', 'lng': '120.13'});
+    });
+
+    test('拿不到（拒绝授权 / 出错）：不带坐标解析，不是错误', () async {
+      final (s, seen) = await svc(() async => throw StateError('denied'));
+      expect((await s.ensure()).storeId, 2);
+      expect(seen.single.queryParameters, isEmpty);
+    });
+
+    test('定位挂着不回：最多等 5 秒就按拿不到处理', () {
+      fakeAsync((fa) {
+        late (StoreService, List<Uri>) pair;
+        svc(() => Completer<({double lat, double lng})?>().future).then((p) => pair = p);
+        fa.flushMicrotasks();
+        CurrentStore? got;
+        pair.$1.ensure().then((v) => got = v);
+        fa.elapse(const Duration(seconds: 4));
+        expect(got, isNull);
+        fa.elapse(const Duration(seconds: 2));
+        fa.flushMicrotasks();
+        expect(got?.storeId, 2);
+        expect(pair.$2.single.queryParameters, isEmpty);
+      });
+    });
   });
 }

@@ -60,7 +60,7 @@ Future<Widget> app(Fake f, String at) async {
   final client = ApiClient(base: 'http://h/api/v1', session: session, http: f.client);
   final router = buildRouter(session);
   router.go(at);
-  return Services(client: client, session: session, store: StoreService(client), cart: CartCount(client, session),
+  return Services(client: client, session: session, store: StoreService(client, locate: () async => null), cart: CartCount(client, session),
       trace: SearchTrace(client), unread: UnreadCount(client, session),
       child: MaterialApp.router(theme: keelTheme(), routerConfig: router));
 }

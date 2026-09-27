@@ -23,7 +23,7 @@ Future<Widget> app(MockClient fake) async {
   final session = Session();
   await session.load();
   final client = ApiClient(base: 'http://h/api/v1', session: session, http: fake);
-  return Services(client: client, session: session, store: StoreService(client),
+  return Services(client: client, session: session, store: StoreService(client, locate: () async => null),
       cart: CartCount(client, session), trace: SearchTrace(client), unread: UnreadCount(client, session),
       child: MaterialApp.router(theme: keelTheme(), routerConfig: buildRouter(session)));
 }

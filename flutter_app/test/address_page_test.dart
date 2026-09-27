@@ -31,7 +31,7 @@ Future<Widget> host(MockClient fake, Widget page) async {
     GoRoute(path: '/', builder: (c, _) => Scaffold(body: TextButton(onPressed: () => c.push('/e'), child: const Text('open')))),
     GoRoute(path: '/e', builder: (_, _) => page),
   ]);
-  return Services(client: client, session: session, store: StoreService(client), cart: CartCount(client, session),
+  return Services(client: client, session: session, store: StoreService(client, locate: () async => null), cart: CartCount(client, session),
       trace: SearchTrace(client), unread: UnreadCount(client, session), child: MaterialApp.router(theme: keelTheme(), routerConfig: router));
 }
 
