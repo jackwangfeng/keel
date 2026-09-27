@@ -19,6 +19,13 @@ class StoreService extends ChangeNotifier {
   CurrentStore? current;
   Future<CurrentStore>? _inflight;
 
+  /// 换了服务地址：门店要重新解析。
+  void reset() {
+    current = null;
+    _inflight = null;
+    notifyListeners();
+  }
+
   Future<CurrentStore> ensure() {
     final cur = current;
     if (cur != null) return Future.value(cur);

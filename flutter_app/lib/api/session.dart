@@ -23,6 +23,13 @@ class Session extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 改了昵称（个人资料页保存后）。
+  Future<void> setNickname(String v) async {
+    nickname = v;
+    await (await SharedPreferences.getInstance()).setString(_kNick, v);
+    notifyListeners();
+  }
+
   Future<void> save(LoginResponse r) =>
       saveTokens(access: r.accessToken, refresh: r.refreshToken ?? refreshToken, nickname: r.user.nickname);
 

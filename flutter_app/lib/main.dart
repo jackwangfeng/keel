@@ -4,6 +4,8 @@ import 'package:go_router/go_router.dart';
 import 'api/cart_count.dart';
 import 'api/catalog.dart';
 import 'api/client.dart';
+import 'api/notification.dart';
+import 'api/profile.dart';
 import 'api/services.dart';
 import 'api/session.dart';
 import 'api/store.dart';
@@ -19,7 +21,8 @@ Future<void> main() async {
   final session = Session();
   await session.load();
   final router = appRouter = buildRouter(session);
-  final client = ApiClient(base: apiBase(), session: session,
+  // 「服务地址」页设过的优先（换了店），没有就用编译时注入的。
+  final client = ApiClient(base: await savedBase() ?? apiBase(), session: session,
       onSessionExpired: () => router.push('/login?from=${Uri.encodeComponent(router.state.uri.toString())}'));
   runApp(Services(
     client: client,
@@ -27,6 +30,7 @@ Future<void> main() async {
     store: StoreService(client),
     cart: CartCount(client, session)..refresh(),
     trace: SearchTrace(client),
+    unread: UnreadCount(client, session)..refresh(),
     child: MaterialApp.router(title: 'Keel', theme: keelTheme(), routerConfig: router, debugShowCheckedModeBanner: false),
   ));
 }

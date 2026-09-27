@@ -2,6 +2,7 @@
 import 'cart.dart';
 import 'client.dart';
 import 'coupon.dart';
+import 'refund.dart';
 import 'schema.g.dart';
 import 'view.dart';
 
@@ -223,6 +224,10 @@ class OrderDetailView {
   final String couponName;
   final List<OrderItemRow> items;
   final List<PaymentRow> payments;
+  /// 这一单的售后单。
+  final List<RefundRow> refunds;
+  /// 已支付 / 已发货 / 已完成，且还有没退完、也没在途售后的件数。
+  final bool canRefund;
   /// 原始订单：售后那几页（第二阶段）要按行算可退件数。
   final OrderDetail raw;
   const OrderDetailView({required this.head, required this.receiver, required this.goodsAmountText,
@@ -230,7 +235,7 @@ class OrderDetailView {
       required this.hasPaid, required this.refundedText, required this.freightDiscountText, required this.autoConfirmAt,
       required this.promotionDiscountText, required this.promotionLines, required this.freightNote, required this.canCancel,
       required this.canConfirm, required this.couponId, required this.couponName, required this.items,
-      required this.payments, required this.raw});
+      required this.payments, required this.refunds, required this.canRefund, required this.raw});
 
   /// 状态下面那一句说明。
   String get statusLine => switch (head.statusText) {
@@ -276,6 +281,8 @@ OrderDetailView orderDetailView(OrderDetail o, String Function(String) asset) {
     couponName: o.couponName ?? '',
     items: (o.items ?? const <OrderItem>[]).map((it) => orderItemRow(it, asset)).toList(),
     payments: (o.payments ?? const <PaymentRecord>[]).map(paymentRow).toList(),
+    refunds: (o.refunds ?? const <Refund>[]).map(refundRow).toList(),
+    canRefund: (o.status == 20 || o.status == 30 || o.status == 40) && refundableItems(o).isNotEmpty,
     raw: o,
   );
 }

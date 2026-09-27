@@ -8,6 +8,15 @@ import 'pages/address_edit_page.dart';
 import 'pages/address_list_page.dart';
 import 'pages/cart_page.dart';
 import 'pages/checkout_page.dart';
+import 'pages/coupon_center_page.dart';
+import 'pages/my_coupons_page.dart';
+import 'pages/notifications_page.dart';
+import 'pages/profile_page.dart';
+import 'pages/refund_apply_page.dart';
+import 'pages/refund_page.dart';
+import 'pages/refunds_page.dart';
+import 'pages/settings_page.dart';
+import 'api/notification.dart';
 import 'pages/order_page.dart';
 import 'pages/orders_page.dart';
 import 'pages/home_page.dart';
@@ -35,7 +44,7 @@ GoRouter buildRouter(Session session) => GoRouter(
                   const NavigationDestination(key: Key('tab.home'), icon: Icon(Icons.home_outlined), label: '首页'),
                   NavigationDestination(key: const Key('tab.cart'), icon: _CartIcon(count: Services.of(context).cart), label: '购物车'),
                   const NavigationDestination(key: Key('tab.orders'), icon: Icon(Icons.receipt_long_outlined), label: '订单'),
-                  const NavigationDestination(key: Key('tab.me'), icon: Icon(Icons.person_outline), label: '我的'),
+                  NavigationDestination(key: const Key('tab.me'), icon: _MeIcon(unread: Services.of(context).unread), label: '我的'),
                 ],
               ),
             );
@@ -63,6 +72,14 @@ GoRouter buildRouter(Session session) => GoRouter(
           ),
         ),
         GoRoute(path: '/orders/:no', builder: (_, st) => OrderPage(orderNo: st.pathParameters['no'] ?? '')),
+        GoRoute(path: '/orders/:no/refund', builder: (_, st) => RefundApplyPage(orderNo: st.pathParameters['no'] ?? '')),
+        GoRoute(path: '/refunds', builder: (_, _) => const RefundsPage()),
+        GoRoute(path: '/refunds/:no', builder: (_, st) => RefundPage(refundNo: st.pathParameters['no'] ?? '')),
+        GoRoute(path: '/coupon-center', builder: (_, _) => const CouponCenterPage()),
+        GoRoute(path: '/coupons', builder: (_, _) => const MyCouponsPage()),
+        GoRoute(path: '/notifications', builder: (_, _) => const NotificationsPage()),
+        GoRoute(path: '/profile', builder: (_, _) => const ProfilePage()),
+        GoRoute(path: '/settings', builder: (_, _) => const SettingsPage()),
         GoRoute(path: '/login', builder: (_, st) => LoginPage(from: st.uri.queryParameters['from'] ?? '')),
       ],
     );
@@ -77,6 +94,20 @@ class _CartIcon extends StatelessWidget {
           isLabelVisible: count.n > 0,
           label: Text(count.n > 99 ? '99+' : '${count.n}', key: const Key('tab.cartBadge')),
           child: const Icon(Icons.shopping_cart_outlined),
+        ),
+      );
+}
+
+class _MeIcon extends StatelessWidget {
+  const _MeIcon({required this.unread});
+  final UnreadCount unread;
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+        listenable: unread,
+        builder: (_, _) => Badge(
+          isLabelVisible: unread.n > 0,
+          label: Text(unread.n > 99 ? '99+' : '${unread.n}', key: const Key('tab.meBadge')),
+          child: const Icon(Icons.person_outline),
         ),
       );
 }

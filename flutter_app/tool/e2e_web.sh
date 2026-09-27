@@ -19,6 +19,10 @@ if [ -z "${KEEL_E2E_PHONE:-}" ] && [ -f "$ENV_FILE" ]; then set -a; . "$ENV_FILE
 DEFINES=()
 [ -n "${KEEL_E2E_PHONE:-}" ] && DEFINES+=(--dart-define=KEEL_E2E_PHONE="$KEEL_E2E_PHONE")
 [ -n "${KEEL_E2E_PASSWORD:-}" ] && DEFINES+=(--dart-define=KEEL_E2E_PASSWORD="$KEEL_E2E_PASSWORD")
+# 后台前置状态的单号（请服务端会话代做后传进来）：没设的那几条用例跳过。
+for v in KEEL_E2E_REJECTED_REFUND KEEL_E2E_REFUNDED_REFUND KEEL_E2E_RETURN_REFUND KEEL_E2E_SHIPPED_ORDER; do
+  [ -n "${!v:-}" ] && DEFINES+=(--dart-define="$v=${!v}")
+done
 
 # chromedriver：与本机 Chrome 同一个主版本，缓存在 .tools/（gitignore）。
 CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"

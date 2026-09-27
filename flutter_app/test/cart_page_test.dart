@@ -7,6 +7,7 @@ import 'package:http/testing.dart';
 import 'package:keel_buyer/api/cart_count.dart';
 import 'package:keel_buyer/api/catalog.dart';
 import 'package:keel_buyer/api/client.dart';
+import 'package:keel_buyer/api/notification.dart';
 import 'package:keel_buyer/api/services.dart';
 import 'package:keel_buyer/api/session.dart';
 import 'package:keel_buyer/api/store.dart';
@@ -74,7 +75,7 @@ Future<(Widget, CartCount)> app(FakeCart f) async {
   final client = ApiClient(base: 'http://h/api/v1', session: session, http: f.client);
   final count = CartCount(client, session);
   return (
-    Services(client: client, session: session, store: StoreService(client), cart: count, trace: SearchTrace(client),
+    Services(client: client, session: session, store: StoreService(client), cart: count, trace: SearchTrace(client), unread: UnreadCount(client, session),
         child: MaterialApp.router(theme: keelTheme(), routerConfig: buildRouter(session))),
     count
   );

@@ -7,6 +7,7 @@ import 'package:http/testing.dart';
 import 'package:keel_buyer/api/cart_count.dart';
 import 'package:keel_buyer/api/catalog.dart';
 import 'package:keel_buyer/api/client.dart';
+import 'package:keel_buyer/api/notification.dart';
 import 'package:keel_buyer/api/services.dart';
 import 'package:keel_buyer/api/session.dart';
 import 'package:keel_buyer/api/store.dart';
@@ -80,7 +81,7 @@ Future<Widget> app(Fake f) async {
   final router = buildRouter(session);
   router.go('/checkout?sku_id=91&product_id=9');
   return Services(client: client, session: session, store: StoreService(client), cart: CartCount(client, session),
-      trace: SearchTrace(client), child: MaterialApp.router(theme: keelTheme(), routerConfig: router));
+      trace: SearchTrace(client), unread: UnreadCount(client, session), child: MaterialApp.router(theme: keelTheme(), routerConfig: router));
 }
 
 void phone(WidgetTester t) {

@@ -7,6 +7,7 @@ import 'package:http/testing.dart';
 import 'package:keel_buyer/api/cart_count.dart';
 import 'package:keel_buyer/api/catalog.dart';
 import 'package:keel_buyer/api/client.dart';
+import 'package:keel_buyer/api/notification.dart';
 import 'package:keel_buyer/api/services.dart';
 import 'package:keel_buyer/api/session.dart';
 import 'package:keel_buyer/api/store.dart';
@@ -23,7 +24,7 @@ Future<Widget> app(MockClient fake) async {
   await session.load();
   final client = ApiClient(base: 'http://h/api/v1', session: session, http: fake);
   return Services(client: client, session: session, store: StoreService(client),
-      cart: CartCount(client, session), trace: SearchTrace(client),
+      cart: CartCount(client, session), trace: SearchTrace(client), unread: UnreadCount(client, session),
       child: MaterialApp.router(theme: keelTheme(), routerConfig: buildRouter(session)));
 }
 
@@ -72,6 +73,7 @@ void main() {
     await t.pumpAndSettle();
     expect(find.byKey(const Key('me.nickname')), findsOneWidget);
     expect(find.text('e2e 买家'), findsOneWidget);
+    await t.scrollUntilVisible(find.byKey(const Key('me.logout')), 200);
     await t.tap(find.byKey(const Key('me.logout')));
     await t.pumpAndSettle();
     expect(find.byKey(const Key('me.login')), findsOneWidget);

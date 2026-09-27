@@ -1,3 +1,4 @@
+import 'client.dart';
 import 'schema.g.dart';
 import 'view.dart';
 
@@ -88,3 +89,101 @@ CouponOption couponOption(ApplicableCoupon c) => CouponOption(
       validText: '${endDay(c.validEndAt)} 到期',
       saveText: '-${yuan(c.applicableDiscountCents)}',
     );
+
+// ---- 领券中心 / 我的优惠券 ----
+
+class ClaimRow {
+  final int id;
+  final String name;
+  final String valueText;
+  final String ruleText;
+  final String scopeText;
+  final String validText;
+  final bool canClaim;
+  /// 领取 / 已领取 / 已领完 / 不可领。
+  final String actionText;
+  /// 「剩 12 张」；不限量是空串。
+  final String remainingText;
+  const ClaimRow({required this.id, required this.name, required this.valueText, required this.ruleText,
+      required this.scopeText, required this.validText, required this.canClaim, required this.actionText,
+      required this.remainingText});
+}
+
+ClaimRow claimRow(ClaimableCouponTemplate t) {
+  final valid = t.validMode == 2
+      ? '领取后 ${t.validDays} 天内有效'
+      : '${t.validStartAt == null ? '' : day(t.validStartAt!)} 至 ${t.validEndAt == null ? '' : endDay(t.validEndAt!)}';
+  // 次序有讲究：领过又领完了的，对这个人来说是「已领取」—— 那是他关心的那件事。
+  final action = t.canClaim
+      ? '领取'
+      : t.claimedCount > 0
+          ? '已领取'
+          : (t.remaining != null && t.remaining! <= 0)
+              ? '已领完'
+              : '不可领';
+  return ClaimRow(
+    id: t.id,
+    name: t.name,
+    valueText: couponValueText(t.couponType, t.discountCents, t.discountRate),
+    ruleText: couponRuleText(t.couponType, t.thresholdCents, t.discountCents, t.discountRate, t.maxDiscountCents),
+    scopeText: couponScopeText(t.scopes),
+    validText: valid,
+    canClaim: t.canClaim,
+    actionText: action,
+    remainingText: t.remaining != null ? '剩 ${t.remaining} 张' : '',
+  );
+}
+
+class CouponRow {
+  final int id;
+  final String name;
+  final String valueText;
+  final String ruleText;
+  final String scopeText;
+  final String validText;
+  const CouponRow({required this.id, required this.name, required this.valueText, required this.ruleText,
+      required this.scopeText, required this.validText});
+}
+
+CouponRow couponRow(UserCoupon c) => CouponRow(
+      id: c.id,
+      name: c.name,
+      valueText: couponValueText(c.couponType, c.discountCents, c.discountRate),
+      ruleText: couponRuleText(c.couponType, c.thresholdCents, c.discountCents, c.discountRate, c.maxDiscountCents),
+      scopeText: couponScopeText(c.scopes),
+      validText: c.usedAt != null ? '使用于 ${shortTime(c.usedAt!)}' : '${day(c.validStartAt)} 至 ${endDay(c.validEndAt)}',
+    );
+
+Future<List<ClaimRow>> fetchClaimable(ApiClient c) async => (await c.send('GET', '/coupon-templates',
+        query: {'page': '1', 'page_size': '50'}, decode: (j) => ListCouponTemplatesResponse.fromJson(j as Map<String, dynamic>)))
+    .data
+    .items
+    .map(claimRow)
+    .toList();
+
+/// 领券（幂等键每张模板一个，页面活着期间复用：超时后再点是重放，不会领两张、也不会被说成「已达上限」）。
+/// 返回券名与是否重放；常见问题翻成人话。
+Future<({String name, bool replayed})> claimCoupon(ApiClient c, int templateId, String idempotencyKey) async {
+  try {
+    final res = await c.send('POST', '/coupon-templates/$templateId/claim', idempotencyKey: idempotencyKey,
+        decode: (j) => UserCoupon.fromJson(j as Map<String, dynamic>));
+    return (name: res.data.name, replayed: res.replayed);
+  } on ApiFailure catch (f) {
+    if (f.isType('coupon-claim-limit-reached')) throw f.withMessage('这张券你已经领过了');
+    if (f.isType('coupon-sold-out')) throw f.withMessage('来晚了，这张券已经领完');
+    if (f.isType('coupon-claim-ended')) throw f.withMessage('这张券的领取时间已经结束');
+    if (f.status == 404) throw f.withMessage('这张券已经下架了');
+    rethrow;
+  }
+}
+
+/// 我的优惠券的四个 tab，与 GET /coupons 的 status 一一对应。
+const couponTabs = [('available', '未使用'), ('locked', '使用中'), ('used', '已使用'), ('expired', '已过期')];
+
+Future<List<CouponRow>> fetchMyCoupons(ApiClient c, String status) async => (await c.send('GET', '/coupons',
+        query: {'status': status, 'page': '1', 'page_size': '50'},
+        decode: (j) => ListCouponsResponse.fromJson(j as Map<String, dynamic>)))
+    .data
+    .items
+    .map(couponRow)
+    .toList();

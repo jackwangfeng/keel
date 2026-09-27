@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
+import 'package:http_parser/http_parser.dart';
 import 'package:keel_buyer/main.dart' as app;
 import 'package:keel_buyer/main.dart' show appRouter;
 
@@ -65,6 +66,13 @@ Future<void> scrollTo(WidgetTester t, String k) async {
   await t.pump();
 }
 
+/// 在「我的」页退出登录（退出按钮在列表下面，要滚过去）。
+Future<void> logoutInApp(WidgetTester t) async {
+  await scrollTo(t, 'me.logout');
+  await t.tap(byKey('me.logout'));
+  await waitFor(t, byKey('me.login'));
+}
+
 Future<void> tapKey(WidgetTester t, String k) async {
   await waitFor(t, byKey(k));
   await t.ensureVisible(byKey(k));
@@ -112,7 +120,7 @@ Future<void> loginInApp(WidgetTester t) async {
   requireAccount();
   await tapKey(t, 'tab.me');
   await t.pumpAndSettle();
-  if (byKey('me.logout').evaluate().isNotEmpty) return;
+  if (byKey('me.nickname').evaluate().isNotEmpty) return;
   await tapKey(t, 'me.login');
   await waitFor(t, byKey('login.phone'));
   await t.enterText(byKey('login.phone'), e2ePhone);
@@ -198,10 +206,51 @@ class Api {
     return text.isEmpty ? null : jsonDecode(text);
   }
 
+  static int _n = 0;
   static String _uuid() {
-    final r = DateTime.now().microsecondsSinceEpoch;
-    final h = r.toRadixString(16).padLeft(12, '0');
+    final h = (DateTime.now().microsecondsSinceEpoch * 1000 + (_n++ % 1000)).toRadixString(16).padLeft(12, '0');
     return '00000000-0000-4000-8000-${h.substring(h.length - 12)}';
+  }
+
+  /// 从测试进程下一单（默认地址、默认门店），pay 时顺手付掉：发起支付 → 把服务端签好的沙箱回调原样投回去 → 等已支付。
+  static Future<String> placeOrder({bool pay = false, int quantity = 1}) async {
+    final sku = await pickSku(quantity + 2);
+    final addrs = await addresses();
+    final addr = addrs.where((a) => a['is_default'] == true).firstOrNull ?? addrs.firstOrNull;
+    if (addr == null) fail('e2e 买家名下没有地址');
+    final o = await idem('POST', '/orders', {
+      'items': [{'sku_id': sku.skuId, 'quantity': quantity}], 'store_id': await storeId(), 'address_id': addr['id'],
+    });
+    if (o is! Map || o['order_no'] == null) fail('下单失败：$o');
+    final no = o['order_no'] as String;
+    if (!pay) return no;
+    final p = await idem('POST', '/orders/$no/payments', {'channel': 'wechat'});
+    final payload = p is Map ? p['payload'] as Map? : null;
+    final settle = payload?['settle'] as Map?;
+    if (settle == null) fail('支付响应里没有沙箱回调信封：$p');
+    final w = await http.post(Uri.base.resolve(settle['url'] as String),
+        headers: {for (final e in ((settle['headers'] as Map?) ?? const {}).entries) '${e.key}': '${e.value}'}, body: settle['body'] as String);
+    if (w.statusCode >= 300) fail('沙箱回调失败：${w.statusCode} ${w.body}');
+    for (var i = 0; i < 30; i++) {
+      if (((await get('/orders/$no')) as Map)['status'] == 20) return no;
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+    }
+    fail('付款后订单没有变成已支付：$no');
+  }
+
+  /// 从测试进程传一张 1×1 的 PNG 当凭证（purpose=3），返回 /api/v1/uploads/{id}。
+  static Future<String> uploadPng() async {
+    const png = [137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0, 31, 21, 196,
+      137, 0, 0, 0, 13, 73, 68, 65, 84, 120, 156, 99, 248, 207, 192, 240, 31, 0, 5, 0, 1, 255, 137, 153, 61, 29, 0, 0, 0, 0, 73, 69, 78,
+      68, 174, 66, 96, 130];
+    final req = http.MultipartRequest('POST', Uri.parse('$_base/uploads'))
+      ..headers['Authorization'] = 'Bearer ${await token()}'
+      ..headers['Idempotency-Key'] = _uuid()
+      ..fields['purpose'] = '3'
+      ..files.add(http.MultipartFile.fromBytes('file', png, filename: 'e2e.png', contentType: MediaType('image', 'png')));
+    final res = await http.Response.fromStream(await req.send());
+    if (res.statusCode != 201) fail('传凭证失败：${res.statusCode} ${res.body}');
+    return (jsonDecode(res.body) as Map)['url'] as String;
   }
 
   static Future<List<dynamic>> cartItems() async => ((await get('/cart')) as Map)['items'] as List;

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 
 import '../api/client.dart';
 import '../api/order.dart';
@@ -6,6 +7,7 @@ import '../api/services.dart';
 import '../theme.dart';
 import '../widgets/badge.dart';
 import '../widgets/states.dart';
+import 'refunds_page.dart';
 
 /// 订单详情：状态说明、收货信息、商品与金额明细、支付记录、沙箱支付、取消 / 确认收货（都是点两下）。
 class OrderPage extends StatefulWidget {
@@ -265,8 +267,19 @@ class _OrderPageState extends State<OrderPage> {
                       Text(_settleMessage, key: const Key('order.settleMessage'), style: _settleFailed ? KeelText.err : KeelText.ok),
                   ]),
                 ),
-              if (v.canCancel || v.canConfirm)
-                Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+              if (v.refunds.isNotEmpty)
+                _card(Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  const Text('售后', style: KeelText.overline),
+                  const SizedBox(height: 6),
+                  for (final r in v.refunds)
+                    RefundTile(row: r, onTap: () => context.push('/refunds/${Uri.encodeComponent(r.refundNo)}').then((_) => _load())),
+                ])),
+              if (v.canCancel || v.canConfirm || v.canRefund)
+                Wrap(alignment: WrapAlignment.end, spacing: 8, children: [
+                  if (v.canRefund)
+                    OutlinedButton(key: const Key('order.refund'),
+                        onPressed: () => context.push('/orders/${Uri.encodeComponent(widget.orderNo)}/refund').then((_) => _load()),
+                        child: const Text('申请售后')),
                   if (v.canCancel)
                     OutlinedButton(key: const Key('order.cancel'), onPressed: _acting ? null : () => _act('cancel'),
                         child: Text(_armed == 'cancel' ? '再点一次确认取消' : '取消订单')),

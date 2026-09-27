@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:math';
 
 import 'package:http/http.dart' as http;
+import 'package:http_parser/http_parser.dart';
 
 import 'schema.g.dart';
 import 'session.dart';
@@ -55,7 +56,8 @@ class ApiClient {
   ApiClient({required this.base, required this.session, http.Client? http, this.onSessionExpired})
       : _http = http ?? _defaultClient();
 
-  final String base;
+  /// 服务地址。「服务地址」页可以换（换了就是换一家店）。
+  String base;
   final Session session;
   final http.Client _http;
 
@@ -67,21 +69,55 @@ class ApiClient {
   static http.Client _defaultClient() => http.Client();
 
   Future<ApiResult<T>> send<T>(String method, String path,
-      {Map<String, String>? query, Object? body, String? idempotencyKey, required T Function(dynamic json) decode}) async {
-    final res = await _raw(method, path, query, body, idempotencyKey);
-    if (res.statusCode == 401 && session.loggedIn && !path.startsWith('/auth/')) {
-      final ok = await _refresh();
-      if (!ok) throw _expired();
-      // 重放用同一个幂等键：第一次既然是 401，服务端什么都没做。
-      final again = await _raw(method, path, query, body, idempotencyKey);
-      if (again.statusCode == 401) {
-        await _giveUp();
-        throw _expired();
-      }
-      return _finish(again, decode);
+      {Map<String, String>? query, Object? body, String? idempotencyKey, required T Function(dynamic json) decode}) async =>
+      _finish(await _withRefresh(path, () => _raw(method, path, query, body, idempotencyKey)), decode);
+
+  /// 401 且登着录：单飞刷新一次，再用同一个请求（同一个幂等键 —— 第一次既然是 401，服务端什么都没做）重放。
+  Future<http.Response> _withRefresh(String path, Future<http.Response> Function() attempt) async {
+    final res = await attempt();
+    if (res.statusCode != 401 || !session.loggedIn || path.startsWith('/auth/')) return res;
+    if (!await _refresh()) throw _expired();
+    final again = await attempt();
+    if (again.statusCode == 401) {
+      await _giveUp();
+      throw _expired();
     }
-    return _finish(res, decode);
+    return again;
   }
+
+  /// multipart 上传（售后凭证：POST /uploads，purpose=3）。要令牌和幂等键；过期同样单飞刷新后重传。
+  Future<ApiResult<T>> upload<T>(String path, {required List<int> bytes, required String filename, required String contentType,
+      required Map<String, String> fields, required String idempotencyKey, required T Function(dynamic json) decode}) async {
+    Future<http.Response> attempt() async {
+      final req = http.MultipartRequest('POST', Uri.parse('$base$path'))
+        ..headers['Accept'] = 'application/json, application/problem+json'
+        ..headers['Idempotency-Key'] = idempotencyKey
+        ..fields.addAll(fields)
+        ..files.add(http.MultipartFile.fromBytes('file', bytes, filename: filename, contentType: _mediaType(contentType)));
+      final t = session.accessToken;
+      if (t != null && t.isNotEmpty) req.headers['Authorization'] = 'Bearer $t';
+      return http.Response.fromStream(await _http.send(req));
+    }
+
+    return _finish(await _withRefresh(path, attempt), decode);
+  }
+
+  /// 带令牌读一个资源的字节（本人的凭证图：GET /uploads/{id} 本人 302 到限时地址，匿名 403）。url 是服务端给的路径。
+  Future<List<int>> bytesOf(String url) async {
+    Future<http.Response> attempt() {
+      final req = http.Request('GET', Uri.parse(assetUrl(url)));
+      final t = session.accessToken;
+      if (t != null && t.isNotEmpty) req.headers['Authorization'] = 'Bearer $t';
+      return _http.send(req).then(http.Response.fromStream);
+    }
+
+    final res = await _withRefresh(url, attempt);
+    if (res.statusCode >= 200 && res.statusCode < 300) return res.bodyBytes;
+    throw _failure(res.statusCode, utf8.decode(res.bodyBytes, allowMalformed: true), null);
+  }
+
+  /// 当前的访问令牌（小程序里用 wx.uploadFile 上传时要自己带）。
+  String? get accessToken => session.accessToken;
 
   /// 公开的「发了就不管」接口（搜索回传）：不带令牌，错误一律吞掉。
   Future<void> fireAndForget(String path, Object body) async {
@@ -140,6 +176,14 @@ class ApiClient {
     final msg = p != null ? ((p.detail ?? '').isNotEmpty ? p.detail! : p.title) : 'HTTP $status：响应体不是契约里的 Problem';
     return ApiFailure(status, p, msg,
         retryAfter: int.tryParse(retryAfter ?? '') ?? 0, fieldErrors: p?.errors ?? const []);
+  }
+
+  static MediaType? _mediaType(String v) {
+    try {
+      return MediaType.parse(v);
+    } catch (_) {
+      return null;
+    }
   }
 
   ApiFailure _expired() => const ApiFailure(401, null, '登录已过期，请重新登录');

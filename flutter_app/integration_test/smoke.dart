@@ -15,10 +15,7 @@ void smokeTests() {
 
     await t.tap(find.byKey(const Key('tab.me')));
     await t.pumpAndSettle();
-    if (find.byKey(const Key('me.logout')).evaluate().isNotEmpty) {
-      await t.tap(find.byKey(const Key('me.logout')));
-      await waitFor(t, find.byKey(const Key('me.login')));
-    }
+    if (find.byKey(const Key('me.nickname')).evaluate().isNotEmpty) await logoutInApp(t);
     await t.tap(find.byKey(const Key('me.login')));
     await waitFor(t, find.byKey(const Key('login.phone')));
     await t.enterText(find.byKey(const Key('login.phone')), e2ePhone);
@@ -26,7 +23,6 @@ void smokeTests() {
     await t.tap(find.byKey(const Key('login.submit')));
     await waitFor(t, find.byKey(const Key('me.nickname')));
     await waitGone(t, find.byKey(const Key('login.submit')));
-    await t.tap(find.byKey(const Key('me.logout')));
-    await waitFor(t, find.byKey(const Key('me.login')));
+    await logoutInApp(t);
   });
 }

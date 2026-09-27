@@ -43,7 +43,7 @@ Future<void> quickAdd(BuildContext context, int productId, {VoidCallback? onAdde
       isScrollControlled: true,
       backgroundColor: KeelColors.card,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (_) => Services(client: s.client, session: s.session, store: s.store, cart: s.cart, trace: s.trace,
+      builder: (_) => Services(client: s.client, session: s.session, store: s.store, cart: s.cart, trace: s.trace, unread: s.unread,
           child: QuickCartSheet(detail: d, storeId: store.storeId)),
     );
     if (added == true) {
