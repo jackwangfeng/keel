@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:keel_buyer/api/cart_count.dart';
+import 'package:keel_buyer/api/catalog.dart';
 import 'package:keel_buyer/api/client.dart';
 import 'package:keel_buyer/api/services.dart';
 import 'package:keel_buyer/api/session.dart';
@@ -20,6 +22,7 @@ Future<Widget> app(MockClient fake) async {
   await session.load();
   final client = ApiClient(base: 'http://h/api/v1', session: session, http: fake);
   return Services(client: client, session: session, store: StoreService(client),
+      cart: CartCount(client, session), trace: SearchTrace(client),
       child: MaterialApp.router(routerConfig: buildRouter(session)));
 }
 

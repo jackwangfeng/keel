@@ -26,7 +26,8 @@ void main() {
           PromotionTag(promotionId: 9, promotionType: 1, label: '第三个'),
         ]);
     final r = productRow(p, (u) => 'http://h$u');
-    expect(r.priceText, '¥69.00');
+    expect(r.priceText, '¥69.00 ~ ¥89.00');
+    expect(r.minPriceText, '¥69.00');
     expect(r.hasRange, isTrue);
     expect(r.promoTags, ['限时特价 ¥49.9', '满199减20']);
     expect(r.cover.imageUrl, 'http://h/api/v1/uploads/3');

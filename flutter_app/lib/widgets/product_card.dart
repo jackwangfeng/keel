@@ -5,9 +5,11 @@ import '../theme.dart';
 
 /// 首页网格的商品卡：封面（真图 / 首字色块）、标题两行省略、活动标签、价格（多规格加「起」）。
 class ProductCard extends StatelessWidget {
-  const ProductCard({super.key, required this.row, required this.onTap});
+  const ProductCard({super.key, required this.row, required this.onTap, this.onAdd});
   final ProductRow row;
   final VoidCallback onTap;
+  /// 「＋」原地加购；下架 / 缺货的不显示。
+  final VoidCallback? onAdd;
 
   @override
   Widget build(BuildContext context) {
@@ -46,8 +48,10 @@ class ProductCard extends StatelessWidget {
                 ),
               const SizedBox(height: 6),
               Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
-                Text(row.priceText, style: KeelText.price),
+                Text(row.minPriceText, style: KeelText.price),
                 if (row.hasRange) const Text(' 起', style: KeelText.hint),
+                const Spacer(),
+                if (onAdd != null && !row.offShelf && !row.soldOut) AddButton(id: row.id, onTap: onAdd!),
               ]),
             ]),
           ),
@@ -65,4 +69,74 @@ class _Glyph extends StatelessWidget {
         color: cover.color,
         child: Center(child: Text(cover.glyph, style: const TextStyle(fontSize: 44, fontWeight: FontWeight.w700, color: KeelColors.card))),
       );
+}
+
+/// 「＋」：原地加购的入口。
+class AddButton extends StatelessWidget {
+  const AddButton({super.key, required this.id, required this.onTap});
+  final int id;
+  final VoidCallback onTap;
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+        key: Key('product.add.$id'),
+        onTap: onTap,
+        child: Container(
+          width: 26, height: 26, alignment: Alignment.center,
+          decoration: const BoxDecoration(color: KeelColors.primary, shape: BoxShape.circle),
+          child: const Icon(Icons.add, size: 18, color: KeelColors.card),
+        ),
+      );
+}
+
+/// 搜索结果的一行：封面、标题、完整价格区间；缺货 / 下架标出来并压暗（不藏）。
+class ProductTile extends StatelessWidget {
+  const ProductTile({super.key, required this.row, required this.onTap, this.onAdd});
+  final ProductRow row;
+  final VoidCallback onTap;
+  final VoidCallback? onAdd;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = row.cover;
+    final dim = row.soldOut || row.offShelf;
+    return GestureDetector(
+      key: Key('search.row.${row.id}'),
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: Opacity(
+        opacity: dim ? 0.55 : 1,
+        child: Container(
+          margin: const EdgeInsets.only(bottom: 10),
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(color: KeelColors.card, borderRadius: BorderRadius.circular(14)),
+          child: Row(children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child: SizedBox(
+                width: 76, height: 76,
+                child: c.imageUrl.isNotEmpty
+                    ? Image.network(c.imageUrl, fit: BoxFit.cover, errorBuilder: (_, _, _) => _Glyph(cover: c))
+                    : _Glyph(cover: c),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(row.title, maxLines: 2, overflow: TextOverflow.ellipsis,
+                    style: KeelText.body.copyWith(fontWeight: FontWeight.w700)),
+                if (row.subtitle.isNotEmpty) Text(row.subtitle, maxLines: 1, overflow: TextOverflow.ellipsis, style: KeelText.hint),
+                const SizedBox(height: 6),
+                Row(children: [
+                  Flexible(child: Text(row.priceText, style: KeelText.price)),
+                  if (row.soldOut) const Padding(padding: EdgeInsets.only(left: 6), child: Text('暂时缺货', style: KeelText.hint)),
+                  if (row.offShelf) const Padding(padding: EdgeInsets.only(left: 6), child: Text('已下架', style: KeelText.hint)),
+                ]),
+              ]),
+            ),
+            if (onAdd != null && !dim) AddButton(id: row.id, onTap: onAdd!),
+          ]),
+        ),
+      ),
+    );
+  }
 }

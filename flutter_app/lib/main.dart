@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'api/cart_count.dart';
+import 'api/catalog.dart';
 import 'api/client.dart';
 import 'api/services.dart';
 import 'api/session.dart';
@@ -19,6 +21,8 @@ Future<void> main() async {
     client: client,
     session: session,
     store: StoreService(client),
+    cart: CartCount(client, session)..refresh(),
+    trace: SearchTrace(client),
     child: MaterialApp.router(title: 'Keel', theme: keelTheme(), routerConfig: router, debugShowCheckedModeBanner: false),
   ));
 }

@@ -23,6 +23,12 @@ class ApiFailure implements Exception {
         ((status == 404 || status == 405) && (t.endsWith('/not-found') || t.endsWith('/method-not-allowed')));
   }
 
+  /// 问题类型的最后一段，例如 'insufficient-stock'。
+  bool isType(String slug) => (problem?.type ?? '').endsWith('/$slug');
+
+  /// 同一个失败换一句给人看的话（问题类型翻成页面上的说法）。
+  ApiFailure withMessage(String m) => ApiFailure(status, problem, m, retryAfter: retryAfter, fieldErrors: fieldErrors);
+
   @override
   String toString() => 'ApiFailure($status, $message)';
 }

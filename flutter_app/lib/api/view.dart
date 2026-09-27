@@ -39,39 +39,45 @@ class ProductRow {
   final int id;
   final String title;
   final String subtitle;
+  /// 完整价格区间（搜索结果用）：单一价格就是它本身。
   final String priceText;
+  /// 最低价（首页卡片显示「¥x 起」）。
+  final String minPriceText;
   final bool hasRange;
   final bool offShelf;
   final bool soldOut;
   final Cover cover;
   final List<String> promoTags;
   const ProductRow({required this.id, required this.title, required this.subtitle, required this.priceText,
-      required this.hasRange, required this.offShelf, required this.soldOut, required this.cover, required this.promoTags});
+      required this.minPriceText, required this.hasRange, required this.offShelf, required this.soldOut, required this.cover, required this.promoTags});
 }
 
-/// 首页卡片：多规格只显示最低价 + 「起」（hasRange），搜索页另显示完整区间（第 2 步）。
-ProductRow productRow(ProductSummary p, String Function(String) asset) {
-  final max = p.maxPriceCents;
+/// 商品列表与搜索结果共用的行。ProductSummary 与 SearchHit 在契约里是两个 schema，字段各取一遍。
+ProductRow productRow(ProductSummary p, String Function(String) asset) => _row(p.id, p.title, p.subtitle,
+    p.minPriceCents, p.maxPriceCents, p.status, p.inStock, p.imageUrl, p.promotionTags, asset);
+
+ProductRow searchHitRow(SearchHit h, String Function(String) asset) => _row(h.id, h.title, h.subtitle,
+    h.minPriceCents, h.maxPriceCents, h.status, h.inStock, h.imageUrl, h.promotionTags, asset);
+
+ProductRow _row(int id, String title, String? subtitle, int min, int? max, int status, bool? inStock,
+    String? imageUrl, List<PromotionTag>? tags, String Function(String) asset) {
+  final range = max != null && max > min;
   return ProductRow(
-    id: p.id,
-    title: p.title,
-    subtitle: p.subtitle ?? '',
-    priceText: yuan(p.minPriceCents),
-    hasRange: max != null && max > p.minPriceCents,
-    offShelf: p.status == 2,
-    soldOut: p.inStock == false,
-    cover: coverOf(p.id, p.title, p.imageUrl == null ? '' : asset(p.imageUrl!)),
-    promoTags: (p.promotionTags ?? const []).take(2).map((t) => t.label).toList(),
+    id: id,
+    title: title,
+    subtitle: subtitle ?? '',
+    priceText: range ? '${yuan(min)} ~ ${yuan(max)}' : yuan(min),
+    minPriceText: yuan(min),
+    hasRange: range,
+    offShelf: status == 2,
+    // in_stock 是可选字段：没返回时不敢说它没货。
+    soldOut: inStock == false,
+    cover: coverOf(id, title, imageUrl == null ? '' : asset(imageUrl)),
+    promoTags: promoTagLabels(tags),
   );
 }
 
-Future<List<ProductRow>> fetchProducts(ApiClient c, {required int? storeId, int page = 1, int pageSize = 20}) async {
-  final q = <String, String>{'page': '$page', 'page_size': '$pageSize'};
-  if (storeId != null) q['store_id'] = '$storeId';
-  final res = await c.send('GET', '/products', query: q,
-      decode: (j) => ListProductsResponse.fromJson(j as Map<String, dynamic>));
-  return res.data.items.map((p) => productRow(p, c.assetUrl)).toList();
-}
+List<String> promoTagLabels(List<PromotionTag>? tags) => (tags ?? const []).take(2).map((t) => t.label).toList();
 
 Future<void> login(ApiClient c, Session s, String phone, String password) async {
   final res = await c.send('POST', '/auth/login', body: LoginRequest(phone: phone, password: password).toJson(),
