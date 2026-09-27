@@ -29,6 +29,25 @@ type Product struct {
 	MaxPriceCents int64
 	SalesCount    int32
 	Status        int16
+
+	// MainImageUploadID 是主图（product_images 里 sort_order 最小的那一张）的
+	// upload id；这件商品一张图都没有时为 nil。这一层只交 id 不交 URL：
+	// URL 的形状（/api/v1/uploads/{id}）是 service.UploadURL 的事，理由同
+	// handler/admin_catalog.go 里 ProductImage.url 那一段 —— repository 认得的是列。
+	MainImageUploadID *int64
+}
+
+// mainImageOf 把查询里的「0 = 没有图」翻回 nil。
+//
+// 0 是 SQL 那边的权宜（sqlc 推不出 LEFT JOIN LATERAL 那一侧可空，
+// 见 db/queries/products.sql 的 ListProducts），翻译只在这里做一次：
+// 让 0 漏到 service，下游就会拼出一个 /api/v1/uploads/0，
+// 买家端渲染的是一张 404 的图，而不是「这件商品没有图」的占位。
+func mainImageOf(uploadID int64) *int64 {
+	if uploadID <= 0 {
+		return nil
+	}
+	return &uploadID
 }
 
 // Tx 是一次租户事务里能做的全部事情，也是 service 能拿到的全部。
@@ -175,6 +194,8 @@ func (t tenantTx) ListProducts(ctx context.Context, sc StoreScope, categoryID *i
 			MaxPriceCents: r.MaxPriceCents,
 			SalesCount:    r.SalesCount,
 			Status:        r.Status,
+
+			MainImageUploadID: mainImageOf(r.MainImageUploadID),
 		})
 	}
 	return out, nil

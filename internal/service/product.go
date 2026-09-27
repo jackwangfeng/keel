@@ -33,6 +33,12 @@ type ProductSummary struct {
 	SalesCount    int32
 	Status        int16
 
+	// ImageURL 是主图的对外地址（契约 ProductSummary.image_url：「取的就是
+	// images[0]」），形如 /api/v1/uploads/{id}。这件商品一张图都没有时为 nil，
+	// handler 据此让字段**缺席**：空串会让客户端去请求一个空地址、渲染一张
+	// 「加载失败」，而缺席让它走自己的占位封面（app/src/api/view.uts 的 coverOf）。
+	ImageURL *string
+
 	// PromotionTags 是这件商品在这家店此刻生效的活动标签（00058，promotion_tags.go）。
 	// MinPriceCents 仍是门店价：活动价看标签与 SKU.PromoPriceCents。
 	PromotionTags []ProductPromotionTag
@@ -155,6 +161,7 @@ func (s *ProductService) List(ctx context.Context, storeID, categoryID *int64, p
 				MaxPriceCents: r.MaxPriceCents,
 				SalesCount:    r.SalesCount,
 				Status:        r.Status,
+				ImageURL:      imageURLOf(r.MainImageUploadID),
 				PromotionTags: tags[r.ID],
 			})
 		}
@@ -164,6 +171,18 @@ func (s *ProductService) List(ctx context.Context, storeID, categoryID *int64, p
 		return ProductList{}, err
 	}
 	return out, nil
+}
+
+// imageURLOf 把主图的 upload id 拼成对外地址；没有图（nil）时回 nil。
+//
+// 列表与检索共用这一个：两边拼法不同的话，同一件商品在列表与搜索结果里
+// 会顶着两个不同的 image_url，而客户端按 URL 做图片缓存。
+func imageURLOf(uploadID *int64) *string {
+	if uploadID == nil {
+		return nil
+	}
+	u := UploadURL(*uploadID)
+	return &u
 }
 
 // clampPaging 把越界的分页参数收进契约允许的范围。
@@ -245,6 +264,16 @@ type ProductDetail struct {
 	Description *string
 	SKUs        []SKU
 
+	// Images 是这件商品的全部商品图地址，按 sort_order（再按 id）排好，
+	// 第 0 张即主图，与 ProductSummary.ImageURL 是同一张。
+	//
+	// 形状是地址串的数组而不是 ProductImage 对象：契约的 ProductDetail.images
+	// 就是 `items: { type: string }`。upload_id / sort_order 是后台管图要的东西，
+	// 买家端拿地址直接喂 <image src>，顺序即数组下标。
+	//
+	// 一张图都没有时为 nil（handler 让字段缺席），理由同 ImageURL。
+	Images []string
+
 	// Store 同 ProductList.Store：SKU 的 price_cents 与 available_qty 都是
 	// **这家门店**的值，不写明是哪一家，它们就是三个不知道属于谁的数。
 	Store StoreContext
@@ -293,6 +322,23 @@ func (s *ProductService) Detail(ctx context.Context, storeID *int64, id int64) (
 			return err
 		}
 
+		// 商品图。借用后台那条 ListProductImages（同一条 SQL，同一个排序键），
+		// 而不是再写一条买家版：两条写岔的话，后台排好的第一张与买家看到的主图
+		// 会是两张图。它本身不判可见性 —— 用不着：走到这里 FindProduct 已经
+		// 确认过这件商品在架、未软删、这家店卖；租户照例由 RLS 挡。
+		imgs, err := q.ListProductImages(ctx, p.ID)
+		if err != nil {
+			return err
+		}
+		var images []string
+		for _, im := range imgs {
+			images = append(images, UploadURL(im.UploadID))
+		}
+		var mainImage *string
+		if len(images) > 0 {
+			mainImage = &images[0]
+		}
+
 		skus := make([]SKU, 0, len(rows))
 		inStock := false
 		for _, r := range rows {
@@ -326,11 +372,13 @@ func (s *ProductService) Detail(ctx context.Context, storeID *int64, id int64) (
 				MaxPriceCents: p.MaxPriceCents,
 				SalesCount:    p.SalesCount,
 				Status:        p.Status,
+				ImageURL:      mainImage,
 				PromotionTags: tags[p.ID],
 			},
 			CategoryID:  p.CategoryID,
 			Description: p.Description,
 			SKUs:        skus,
+			Images:      images,
 			InStock:     inStock,
 		}
 		return nil

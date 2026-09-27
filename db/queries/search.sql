@@ -26,6 +26,14 @@
 -- 与 min=0（**通过** max_price 筛选）。裸的 max()/min() 在那种情况下是 NULL，
 -- 而 NULL 两个方向都不通过 —— 那就不是「换了个算法」，是悄悄改了一条筛选规则。
 -- 留着 COALESCE，现算与旧列在全部取值上逐点相同。
+--
+-- 两条都带同一个取主图的 LEFT JOIN LATERAL（main_image_upload_id，可空），
+-- 写法与 products.sql 的 ListProducts 逐字一致：sort_order 最小、id 次之的那一张。
+-- 没有图时是 0 而不是 NULL（sqlc 推不出那一侧可空，理由写在 ListProducts 上）。
+-- 它不参与任何过滤，写岔了不会让结果集变样，但会让同一件商品在列表与检索里
+-- 顶着两张不同的封面；更隐蔽的是检索内部：两路都命中时 service 合并留的是
+-- 关键词路那一行，只命中向量路时留的是向量路那一行（service/search.go 的 byID）
+-- —— 两路写岔，同一件商品的封面就取决于这次是哪一路捞到了它。
 
 -- name: SearchProductsByVector :many
 -- 向量召回。余弦距离，配 idx_ptv_hnsw（vector_cosine_ops）。
@@ -52,6 +60,7 @@ SELECT p.id, p.title, p.subtitle,
        COALESCE(agg.min_price, 0)::bigint AS min_price_cents,
        COALESCE(agg.max_price, 0)::bigint AS max_price_cents,
        p.sales_count, p.status,
+       COALESCE(img.upload_id, 0)::bigint AS main_image_upload_id,
        (v.embedding <=> @query_embedding::vector)::float8 AS distance,
        EXISTS (SELECT 1 FROM skus s JOIN inventories i
                       ON i.sku_id = s.id AND i.store_id = sqlc.arg(store_id)
@@ -64,6 +73,13 @@ SELECT p.id, p.title, p.subtitle,
           FROM sku_prices_by_store pv
          WHERE pv.store_id = sqlc.arg(store_id) AND pv.product_id = p.id
        ) agg ON TRUE
+  LEFT JOIN LATERAL (
+        SELECT pi.upload_id
+          FROM product_images pi
+         WHERE pi.product_id = p.id
+         ORDER BY pi.sort_order, pi.id
+         LIMIT 1
+       ) img ON TRUE
  WHERE p.deleted_at IS NULL
    AND p.status = 1
    AND (sqlc.narg(category_id)::bigint IS NULL
@@ -108,6 +124,7 @@ SELECT p.id, p.title, p.subtitle,
        COALESCE(agg.min_price, 0)::bigint AS min_price_cents,
        COALESCE(agg.max_price, 0)::bigint AS max_price_cents,
        p.sales_count, p.status,
+       COALESCE(img.upload_id, 0)::bigint AS main_image_upload_id,
        ts_rank_cd(p.search_vector, to_tsquery('simple', @tsquery::text))::float8 AS rank,
        EXISTS (SELECT 1 FROM skus s JOIN inventories i
                       ON i.sku_id = s.id AND i.store_id = sqlc.arg(store_id)
@@ -119,6 +136,13 @@ SELECT p.id, p.title, p.subtitle,
           FROM sku_prices_by_store pv
          WHERE pv.store_id = sqlc.arg(store_id) AND pv.product_id = p.id
        ) agg ON TRUE
+  LEFT JOIN LATERAL (
+        SELECT pi.upload_id
+          FROM product_images pi
+         WHERE pi.product_id = p.id
+         ORDER BY pi.sort_order, pi.id
+         LIMIT 1
+       ) img ON TRUE
  WHERE p.deleted_at IS NULL
    AND p.status = 1
    AND p.search_vector @@ to_tsquery('simple', @tsquery::text)

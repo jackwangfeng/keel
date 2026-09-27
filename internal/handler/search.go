@@ -186,6 +186,7 @@ func (h *SearchHandler) Search(c *gin.Context) {
 			Id:            it.ID,
 			Title:         it.Title,
 			Subtitle:      it.Subtitle,
+			ImageUrl:      it.ImageURL, // 没有图时 nil，字段缺席
 			MinPriceCents: api.Money(it.MinPriceCents),
 			MaxPriceCents: &max,
 			SalesCount:    &sales,

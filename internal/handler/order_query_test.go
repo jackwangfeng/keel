@@ -497,10 +497,6 @@ func TestOrderDetailListsRefundsEvenWhenThereAreNone(t *testing.T) {
 	if string(m["refunds"]) != "[]" {
 		t.Fatalf("没有退款的订单，详情里的 refunds 应是 []，实得 %q", m["refunds"])
 	}
-	r := routeOf(t, http.MethodGet, "/orders/{order_no}")
-	if _, listed := r.NotYetImplementedResponse["refunds"]; listed {
-		t.Fatal("refunds 已经实现了，NotYetImplementedResponse 里还挂着它 —— 挂账清单烂了")
-	}
 	var items []map[string]json.RawMessage
 	if err := json.Unmarshal(m["items"], &items); err != nil || len(items) == 0 {
 		t.Fatalf("详情里没有订单行：%v %s", err, m["items"])

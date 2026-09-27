@@ -14,6 +14,7 @@ SELECT p.id, p.title, p.subtitle,
        COALESCE(agg.min_price, 0)::bigint AS min_price_cents,
        COALESCE(agg.max_price, 0)::bigint AS max_price_cents,
        p.sales_count, p.status,
+       COALESCE(img.upload_id, 0)::bigint AS main_image_upload_id,
        ts_rank_cd(p.search_vector, to_tsquery('simple', $1::text))::float8 AS rank,
        EXISTS (SELECT 1 FROM skus s JOIN inventories i
                       ON i.sku_id = s.id AND i.store_id = $2
@@ -25,6 +26,13 @@ SELECT p.id, p.title, p.subtitle,
           FROM sku_prices_by_store pv
          WHERE pv.store_id = $2 AND pv.product_id = p.id
        ) agg ON TRUE
+  LEFT JOIN LATERAL (
+        SELECT pi.upload_id
+          FROM product_images pi
+         WHERE pi.product_id = p.id
+         ORDER BY pi.sort_order, pi.id
+         LIMIT 1
+       ) img ON TRUE
  WHERE p.deleted_at IS NULL
    AND p.status = 1
    AND p.search_vector @@ to_tsquery('simple', $1::text)
@@ -61,15 +69,16 @@ type SearchProductsByKeywordParams struct {
 }
 
 type SearchProductsByKeywordRow struct {
-	ID            int64
-	Title         string
-	Subtitle      *string
-	MinPriceCents int64
-	MaxPriceCents int64
-	SalesCount    int32
-	Status        int16
-	Rank          float64
-	InStock       bool
+	ID                int64
+	Title             string
+	Subtitle          *string
+	MinPriceCents     int64
+	MaxPriceCents     int64
+	SalesCount        int32
+	Status            int16
+	MainImageUploadID int64
+	Rank              float64
+	InStock           bool
 }
 
 // bigram 关键词召回（语义检索层 §3）。
@@ -115,6 +124,7 @@ func (q *Queries) SearchProductsByKeyword(ctx context.Context, arg SearchProduct
 			&i.MaxPriceCents,
 			&i.SalesCount,
 			&i.Status,
+			&i.MainImageUploadID,
 			&i.Rank,
 			&i.InStock,
 		); err != nil {
@@ -134,6 +144,7 @@ SELECT p.id, p.title, p.subtitle,
        COALESCE(agg.min_price, 0)::bigint AS min_price_cents,
        COALESCE(agg.max_price, 0)::bigint AS max_price_cents,
        p.sales_count, p.status,
+       COALESCE(img.upload_id, 0)::bigint AS main_image_upload_id,
        (v.embedding <=> $1::vector)::float8 AS distance,
        EXISTS (SELECT 1 FROM skus s JOIN inventories i
                       ON i.sku_id = s.id AND i.store_id = $2
@@ -146,6 +157,13 @@ SELECT p.id, p.title, p.subtitle,
           FROM sku_prices_by_store pv
          WHERE pv.store_id = $2 AND pv.product_id = p.id
        ) agg ON TRUE
+  LEFT JOIN LATERAL (
+        SELECT pi.upload_id
+          FROM product_images pi
+         WHERE pi.product_id = p.id
+         ORDER BY pi.sort_order, pi.id
+         LIMIT 1
+       ) img ON TRUE
  WHERE p.deleted_at IS NULL
    AND p.status = 1
    AND ($3::bigint IS NULL
@@ -181,15 +199,16 @@ type SearchProductsByVectorParams struct {
 }
 
 type SearchProductsByVectorRow struct {
-	ID            int64
-	Title         string
-	Subtitle      *string
-	MinPriceCents int64
-	MaxPriceCents int64
-	SalesCount    int32
-	Status        int16
-	Distance      float64
-	InStock       bool
+	ID                int64
+	Title             string
+	Subtitle          *string
+	MinPriceCents     int64
+	MaxPriceCents     int64
+	SalesCount        int32
+	Status            int16
+	MainImageUploadID int64
+	Distance          float64
+	InStock           bool
 }
 
 // 混合检索的两路召回（M3 Task 4）。向量一路、bigram 关键词一路，
@@ -220,6 +239,14 @@ type SearchProductsByVectorRow struct {
 // 与 min=0（**通过** max_price 筛选）。裸的 max()/min() 在那种情况下是 NULL，
 // 而 NULL 两个方向都不通过 —— 那就不是「换了个算法」，是悄悄改了一条筛选规则。
 // 留着 COALESCE，现算与旧列在全部取值上逐点相同。
+//
+// 两条都带同一个取主图的 LEFT JOIN LATERAL（main_image_upload_id，可空），
+// 写法与 products.sql 的 ListProducts 逐字一致：sort_order 最小、id 次之的那一张。
+// 没有图时是 0 而不是 NULL（sqlc 推不出那一侧可空，理由写在 ListProducts 上）。
+// 它不参与任何过滤，写岔了不会让结果集变样，但会让同一件商品在列表与检索里
+// 顶着两张不同的封面；更隐蔽的是检索内部：两路都命中时 service 合并留的是
+// 关键词路那一行，只命中向量路时留的是向量路那一行（service/search.go 的 byID）
+// —— 两路写岔，同一件商品的封面就取决于这次是哪一路捞到了它。
 // 向量召回。余弦距离，配 idx_ptv_hnsw（vector_cosine_ops）。
 //
 // ## 这条查询就是语义检索层 §2.4 里那个「❌ 危险写法」，一字不差
@@ -266,6 +293,7 @@ func (q *Queries) SearchProductsByVector(ctx context.Context, arg SearchProducts
 			&i.MaxPriceCents,
 			&i.SalesCount,
 			&i.Status,
+			&i.MainImageUploadID,
 			&i.Distance,
 			&i.InStock,
 		); err != nil {
