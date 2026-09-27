@@ -195,6 +195,11 @@
       "documented": false,
       "reason": "goose 自己的迁移记录表，不由本项目定义，也不在设计文档里。keel_app 一个权限都不该有。"
     },
+    "goose_db_version_inventory": {
+      "class": "cross-tenant-infra",
+      "documented": false,
+      "reason": "库存迁移目录（db/migrations-inventory，make migrate-inventory）的 goose 版本表，与 goose_db_version 同类。单独一张是因为两个目录可以指向同一个库（单体）：共用一张版本表的话两条时间线会互相当成对方的版本。keel_app 一个权限都不该有。"
+    },
     "spatial_ref_sys": {
       "class": "cross-tenant-infra",
       "documented": false,
@@ -261,6 +266,15 @@
       "规矩二的**对偶**豁免：列名形如 <x>_id、能解析到一张同名父表、却没有任何外键引用它。",
       "键是 表名.列名。每一条都要说清为什么这里不该有外键 —— 默认答案是「补上外键」。"
     ],
+    "activity_stocks.merchant_id": "库存服务的表不指向 merchants（00075 / 00076）：拆分部署下库存库里没有 merchants 表（那是 core 的 tenant-root），外键建不出来；单体库里一起不要，两种部署跑同一套约束。租户隔离不靠这条外键而靠 RLS：merchant_id 的 DEFAULT 与策略都是 current_merchant()，它只读事务级的 app.merchant_id、不查任何表，由库存服务按已验签的内网请求头或 gid 里的租户设进去（db/migrations-inventory/00001 文件头）。商家是否存在、是否停用由调用方 core 判。",
+    "inventories.merchant_id": "库存服务的表不指向 merchants（00075 / 00076）：拆分部署下库存库里没有 merchants 表（那是 core 的 tenant-root），外键建不出来；单体库里一起不要，两种部署跑同一套约束。租户隔离不靠这条外键而靠 RLS：merchant_id 的 DEFAULT 与策略都是 current_merchant()，它只读事务级的 app.merchant_id、不查任何表，由库存服务按已验签的内网请求头或 gid 里的租户设进去（db/migrations-inventory/00001 文件头）。商家是否存在、是否停用由调用方 core 判。",
+    "inventory_logs.merchant_id": "库存服务的表不指向 merchants（00075 / 00076）：拆分部署下库存库里没有 merchants 表（那是 core 的 tenant-root），外键建不出来；单体库里一起不要，两种部署跑同一套约束。租户隔离不靠这条外键而靠 RLS：merchant_id 的 DEFAULT 与策略都是 current_merchant()，它只读事务级的 app.merchant_id、不查任何表，由库存服务按已验签的内网请求头或 gid 里的租户设进去（db/migrations-inventory/00001 文件头）。商家是否存在、是否停用由调用方 core 判。",
+    "activity_stocks.promotion_id": "activity_stocks 归库存服务（00075）：promotions 在 core 库，拆分部署下外键建不出来。core 改活动商品时整组调库存服务设配额，「卖出过的不能移除、配额不能低于已售」由库存服务判；行缺失按配额不足处理（宁可少卖），对账任务报孤儿（数据模型 §7·二）。",
+    "activity_stocks.sku_id": "activity_stocks 归库存服务（00075）：skus 在 core 库，拆分部署下外键建不出来。core 改活动商品时整组调库存服务设配额，「卖出过的不能移除、配额不能低于已售」由库存服务判；行缺失按配额不足处理（宁可少卖），对账任务报孤儿（数据模型 §7·二）。",
+    "inventories.sku_id": "库存表归库存服务（微服务拆分阶段 1b，00076 删掉了这条外键）：拆分部署下 skus 在 core 库、这张表在库存库，外键建不出来；单体库里一起删，两种部署跑同一套约束。一致性由应用层守：core 只拿自己租户里判过的 id 调库存服务（建 SKU 时建行、下单只扣定价阶段判过在架且本店可售的 SKU），RLS 按 merchant_id 挡跨租户，对账任务报孤儿（数据模型 §4）。",
+    "inventories.store_id": "库存表归库存服务（微服务拆分阶段 1b，00076 删掉了这条外键）：拆分部署下 stores 在 core 库、这张表在库存库，外键建不出来；单体库里一起删，两种部署跑同一套约束。一致性由应用层守：core 只拿自己租户里判过的 id 调库存服务（建 SKU 时建行、下单只扣定价阶段判过在架且本店可售的 SKU），RLS 按 merchant_id 挡跨租户，对账任务报孤儿（数据模型 §4）。",
+    "inventory_logs.sku_id": "库存表归库存服务（微服务拆分阶段 1b，00076 删掉了这条外键）：拆分部署下 skus 在 core 库、这张表在库存库，外键建不出来；单体库里一起删，两种部署跑同一套约束。一致性由应用层守：core 只拿自己租户里判过的 id 调库存服务（建 SKU 时建行、下单只扣定价阶段判过在架且本店可售的 SKU），RLS 按 merchant_id 挡跨租户，对账任务报孤儿（数据模型 §4）。",
+    "inventory_logs.store_id": "库存表归库存服务（微服务拆分阶段 1b，00076 删掉了这条外键）：拆分部署下 stores 在 core 库、这张表在库存库，外键建不出来；单体库里一起删，两种部署跑同一套约束。一致性由应用层守：core 只拿自己租户里判过的 id 调库存服务（建 SKU 时建行、下单只扣定价阶段判过在架且本店可售的 SKU），RLS 按 merchant_id 挡跨租户，对账任务报孤儿（数据模型 §4）。",
     "search_logs.user_id": "搜索日志要能记录未登录访客（该列可空），且日志表不该因为用户注销而卡住删除顺序（数据模型 §8）。"
   },
   "fk_single_column_ok": {
