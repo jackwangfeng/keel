@@ -39,7 +39,7 @@ so "which one is running?" never depends on anyone's memory.
 
 ## [Unreleased]
 
-Migrations `00027`–`00038`, `00053`–`00064`.
+Migrations `00027`–`00038`, `00053`–`00065`.
 
 
 ### Added
@@ -583,6 +583,14 @@ Migrations `00027`–`00038`, `00053`–`00064`.
 
 ### Fixed
 
+- **Concurrent refreshes with the same refresh token all succeeded**, rotating the session
+  once per request so every client but the last held an already-dead token (found by
+  firing 5 concurrent refreshes through 3 instances: 5 × 200). Rotation now requires the
+  old token hash, so exactly one succeeds and the rest get 401.
+- **The login lockout counted per process**: behind 3 instances a phone locked only after
+  15 failures, and any restart unlocked everyone. Counts now live in Postgres
+  (`login_failures`, migration `00065`), shared by all instances and kept across restarts.
+  `KEEL_LOGIN_LOCK_EXEMPT_PHONES` exempts phones whose password is public (demo buyers).
 - **Product list and search were unusably slow on large catalogs**: `skus` had no index on
   `product_id` (the data model declared `idx_skus_product`, no migration created it), so
   every per-product price/stock lookup scanned all of a shop's SKUs — about 55 s per page

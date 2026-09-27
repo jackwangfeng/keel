@@ -83,7 +83,12 @@ type UserTx interface {
 
 	// RotateSession 把会话上的 hash 与到期时间换成新的（刷新时轮换）。
 	// 并发的第二次刷新会拿到 ErrSessionNotFound —— 那一条的 hash 已经不在了。
-	RotateSession(ctx context.Context, sessionID int64, tokenHash []byte, expireAt time.Time) error
+	RotateSession(ctx context.Context, sessionID int64, oldHash, tokenHash []byte, expireAt time.Time) error
+
+	// 口令登录的失败锁定（00065）。计数在库里：多实例共用、重启不丢。
+	LoginLockedUntil(ctx context.Context, phone string) (*time.Time, error)
+	RecordLoginFailure(ctx context.Context, phone string, maxFailures int, window, lockFor time.Duration) (*time.Time, error)
+	ClearLoginFailures(ctx context.Context, phone string) error
 
 	// RevokeSession 吊销一条会话（退出登录）。
 	// 会话不存在或已被吊销过时返回 ErrSessionNotFound，由上层决定那算不算失败。
@@ -159,11 +164,12 @@ func (t tenantTx) FindLiveSession(ctx context.Context, tokenHash []byte) (Sessio
 	return Session{ID: row.ID, UserID: row.UserID}, nil
 }
 
-func (t tenantTx) RotateSession(ctx context.Context, sessionID int64, tokenHash []byte, expireAt time.Time) error {
+func (t tenantTx) RotateSession(ctx context.Context, sessionID int64, oldHash, tokenHash []byte, expireAt time.Time) error {
 	_, err := t.q.RotateUserToken(ctx, db.RotateUserTokenParams{
-		ID:        sessionID,
-		TokenHash: tokenHash,
-		ExpireAt:  pgtype.Timestamptz{Time: expireAt, Valid: true},
+		ID:           sessionID,
+		OldTokenHash: oldHash,
+		NewTokenHash: tokenHash,
+		ExpireAt:     pgtype.Timestamptz{Time: expireAt, Valid: true},
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrSessionNotFound
@@ -190,4 +196,35 @@ func timePtr(ts pgtype.Timestamptz) *time.Time {
 	}
 	t := ts.Time
 	return &t
+}
+
+func (t tenantTx) LoginLockedUntil(ctx context.Context, phone string) (*time.Time, error) {
+	v, err := t.q.LoginLockedUntil(ctx, phone)
+	if err != nil || !v.Valid {
+		return nil, err
+	}
+	return &v.Time, nil
+}
+
+func (t tenantTx) RecordLoginFailure(ctx context.Context, phone string, maxFailures int,
+	window, lockFor time.Duration) (*time.Time, error) {
+	v, err := t.q.RecordLoginFailure(ctx, db.RecordLoginFailureParams{
+		Phone:       phone,
+		FailWindow:  pgtype.Interval{Microseconds: window.Microseconds(), Valid: true},
+		MaxFailures: int32(maxFailures),
+		LockFor:     pgtype.Interval{Microseconds: lockFor.Microseconds(), Valid: true},
+	})
+	if err != nil {
+		return nil, err
+	}
+	// 顺手清一点过期的行；失败不影响这次计数。
+	_ = t.q.PruneLoginFailures(ctx)
+	if !v.Valid {
+		return nil, nil
+	}
+	return &v.Time, nil
+}
+
+func (t tenantTx) ClearLoginFailures(ctx context.Context, phone string) error {
+	return t.q.ClearLoginFailures(ctx, phone)
 }

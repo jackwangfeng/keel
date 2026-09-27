@@ -54,3 +54,22 @@ func TestPasswordLoginLocksAPhoneAfterRepeatedFailures(t *testing.T) {
 		t.Fatalf("一个号被锁之后别的号应照常登录，得到 %d %s", w.Code, w.Body.String())
 	}
 }
+
+// 豁免名单里的号不计数、不锁：演示环境把一个买家号公开给所有人，谁都能故意连错五次把它锁住。
+func TestLoginLockExemptPhoneIsNeverLocked(t *testing.T) {
+	cs := newCouponShop(t)
+	phone := fmt.Sprintf("135%08d", time.Now().UnixNano()%100_000_000)
+	hash, err := auth.HashPassword("right-pass-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	adminQueryInt64(t, `INSERT INTO users (merchant_id, phone, nickname, password_hash, status)
+	                    VALUES ($1, $2, '豁免测试', $3, 1) RETURNING id`, cs.MerchantID, phone, hash)
+	t.Setenv("KEEL_LOGIN_LOCK_EXEMPT_PHONES", "10000000000, "+phone)
+	for i := 0; i < 8; i++ {
+		post(t, cs.Host, "/api/v1/auth/login", `{"phone":"`+phone+`","password":"wrong"}`, "")
+	}
+	if w := post(t, cs.Host, "/api/v1/auth/login", `{"phone":"`+phone+`","password":"right-pass-2"}`, ""); w.Code != http.StatusOK {
+		t.Fatalf("豁免的号连错 8 次之后正确口令应能登录，得到 %d %s", w.Code, w.Body.String())
+	}
+}

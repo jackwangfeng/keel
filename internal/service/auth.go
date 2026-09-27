@@ -59,14 +59,13 @@ type AuthService struct {
 	repo   AuthRepository
 	signer *auth.Signer
 	log    *slog.Logger
-	guard  *loginGuard
 }
 
 func NewAuthService(r AuthRepository, s *auth.Signer, log *slog.Logger) *AuthService {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &AuthService{repo: r, signer: s, log: log, guard: newLoginGuard()}
+	return &AuthService{repo: r, signer: s, log: log}
 }
 
 // LoginRequest 是 /auth/login 的入参。code 与 password 二选一（契约的 oneOf）。
@@ -114,17 +113,12 @@ func (s *AuthService) Login(ctx context.Context, req LoginRequest) (Session, err
 		return Session{}, ErrSMSLoginUnavailable
 	}
 
-	merchantID, err := tenant.FromContext(ctx)
-	if err != nil {
-		return Session{}, err
-	}
-	key := loginGuardKey(merchantID, phone)
-	if err := s.guard.check(key); err != nil {
+	if err := s.checkLoginLock(ctx, phone); err != nil {
 		return Session{}, err
 	}
 
 	var out Session
-	err = s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+	err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
 		user, err := tx.FindUserByPhone(ctx, phone)
 		switch {
 		case errors.Is(err, repository.ErrUserNotFound):
@@ -154,17 +148,21 @@ func (s *AuthService) Login(ctx context.Context, req LoginRequest) (Session, err
 			return ErrAccountDisabled
 		}
 
+		// 与签发同一个事务清掉失败记录：登录成功才算数。
+		if err := tx.ClearLoginFailures(ctx, phone); err != nil {
+			return err
+		}
 		out, err = s.issue(ctx, tx, user)
 		return err
 	})
 	if err != nil {
 		err = mapCredentialError(err)
 		if errors.Is(err, ErrInvalidCredentials) {
-			s.guard.fail(key)
+			// 另开一个事务记失败：上面那个事务因为这次失败已经回滚了。
+			s.recordLoginFailure(ctx, phone)
 		}
 		return Session{}, err
 	}
-	s.guard.succeed(key)
 	// 新人礼（营销活动类型 5）：首单前的买家登录成功即补发。放在登录事务**之外**、
 	// 尽力而为 —— 发不出券不能让登录失败（promotion_gift.go 的文件头）。
 	GrantNewBuyerGifts(ctx, s.repo, out.User.ID, time.Now(), s.log)
@@ -228,7 +226,7 @@ func (s *AuthService) Refresh(ctx context.Context, refreshToken string) (Session
 			return ErrAccountDisabled
 		}
 
-		out, err = s.rotate(ctx, tx, merchantID, sess.ID, user)
+		out, err = s.rotate(ctx, tx, merchantID, sess.ID, auth.HashToken(refreshToken), user)
 		return err
 	})
 	if err != nil {
@@ -309,7 +307,7 @@ func (s *AuthService) issue(ctx context.Context, tx repository.Tx, user reposito
 
 // rotate 在刷新时换掉会话上的 refresh_token，并签一串新的 access_token。
 func (s *AuthService) rotate(ctx context.Context, tx repository.Tx,
-	merchantID, sessionID int64, user repository.User) (Session, error) {
+	merchantID, sessionID int64, oldHash []byte, user repository.User) (Session, error) {
 
 	refresh, err := s.signer.Issue(merchantID, user.ID, 0, auth.KindRefresh, auth.RefreshTTL)
 	if err != nil {
@@ -317,7 +315,7 @@ func (s *AuthService) rotate(ctx context.Context, tx repository.Tx,
 	}
 	// 轮换而不是新建：一个会话行始终对应一台设备，刷新不该在库里留下一串
 	// 越积越多的死行。旧 hash 在这一句之后立刻失效（见 users.sql 里的说明）。
-	if err := tx.RotateSession(ctx, sessionID,
+	if err := tx.RotateSession(ctx, sessionID, oldHash,
 		auth.HashToken(refresh), time.Now().UTC().Add(auth.RefreshTTL)); err != nil {
 		if errors.Is(err, repository.ErrSessionNotFound) {
 			return Session{}, ErrInvalidToken
@@ -344,4 +342,40 @@ func mapCredentialError(err error) error {
 		return ErrInvalidCredentials
 	}
 	return err
+}
+
+// checkLoginLock 在核对口令**之前**调用：锁定中直接拒绝，连 KDF 都不跑。
+func (s *AuthService) checkLoginLock(ctx context.Context, phone string) error {
+	if loginLockExempt(phone) {
+		return nil
+	}
+	var until *time.Time
+	err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+		var e error
+		until, e = tx.LoginLockedUntil(ctx, phone)
+		return e
+	})
+	if err != nil {
+		return err
+	}
+	if until != nil {
+		if left := time.Until(*until); left > 0 {
+			return &ErrLoginLocked{RetryAfter: left}
+		}
+	}
+	return nil
+}
+
+// recordLoginFailure 记一次口令错误。记不上只打日志：锁定是加固，不能因为它把登录本身搞挂。
+func (s *AuthService) recordLoginFailure(ctx context.Context, phone string) {
+	if loginLockExempt(phone) {
+		return
+	}
+	err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+		_, e := tx.RecordLoginFailure(ctx, phone, loginMaxFailures, loginFailWindow, loginLockFor)
+		return e
+	})
+	if err != nil {
+		s.log.ErrorContext(ctx, "记录登录失败次数出错，这一次不计入锁定", "err", err)
+	}
 }

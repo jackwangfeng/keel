@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -379,5 +380,50 @@ func TestLogoutRevokesTheSession(t *testing.T) {
 	// 重复退出是幂等的：客户端在网络抖动时会重发。
 	if w := post(t, hostA, "/api/v1/auth/logout", "", refreshed.AccessToken); w.Code != http.StatusNoContent {
 		t.Fatalf("第二次退出登录返回 %d，退出必须幂等", w.Code)
+	}
+}
+
+// 同一个 refresh_token 并发刷新，只能有一次成功（多实例实测发现的：原来 5 次全 200，
+// 会话被连转 5 次，只有最后一次发出的令牌是活的，其余客户端下次刷新就被登出）。
+func TestConcurrentRefreshWithTheSameTokenSucceedsOnce(t *testing.T) {
+	rt := *login(t, hostA, seedPhone, seedPassword).RefreshToken
+	const n = 8
+	codes := make(chan int, n)
+	bodies := make(chan string, n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			w := post(t, hostA, "/api/v1/auth/refresh", `{"refresh_token":"`+rt+`"}`, "")
+			codes <- w.Code
+			if w.Code == http.StatusOK {
+				bodies <- w.Body.String()
+			}
+		}()
+	}
+	wg.Wait()
+	close(codes)
+	close(bodies)
+	ok := 0
+	for c := range codes {
+		if c == http.StatusOK {
+			ok++
+		} else if c != http.StatusUnauthorized {
+			t.Fatalf("并发刷新里出现了 %d，期望只有 200 与 401", c)
+		}
+	}
+	if ok != 1 {
+		t.Fatalf("同一个 refresh_token 并发刷新成功了 %d 次，期望恰好 1 次", ok)
+	}
+	// 唯一那次成功拿到的新令牌必须真的能用 —— 这才是「谁先用谁继续有效」。
+	var got struct {
+		RefreshToken string `json:"refresh_token"`
+	}
+	if err := json.Unmarshal([]byte(<-bodies), &got); err != nil {
+		t.Fatal(err)
+	}
+	if w := post(t, hostA, "/api/v1/auth/refresh", `{"refresh_token":"`+got.RefreshToken+`"}`, ""); w.Code != http.StatusOK {
+		t.Fatalf("胜出那次拿到的新 refresh_token 不能用：%d %s", w.Code, w.Body.String())
 	}
 }

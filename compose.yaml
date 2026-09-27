@@ -213,6 +213,8 @@ services:
       # 放在反向代理后面时必须配，否则全部访客算到代理那一个 IP 上、共用一份配额。
       # 只写真正会覆写 / 追加这两个头的代理，别写 0.0.0.0/0。
       KEEL_TRUSTED_PROXIES: ${KEEL_TRUSTED_PROXIES:-}
+      # 不参与口令失败锁定的手机号（逗号分隔）。只给把一个买家号公开给所有人用的演示环境，正式环境不要配。
+      KEEL_LOGIN_LOCK_EXEMPT_PHONES: ${KEEL_LOGIN_LOCK_EXEMPT_PHONES:-}
 
       # 镜像是拿来跑的，不是拿来开发的：gin 的 debug 模式会在启动时打一屏
       # 「你没有设置 release」的警告，而 `docker compose up` 的头一屏正是

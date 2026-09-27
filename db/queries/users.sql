@@ -69,10 +69,16 @@ SELECT id, user_id
 -- 已经查过，但那是另一条语句、另一个时刻。并发的两次刷新都拿着同一个旧令牌时，
 -- 这里的 UPDATE 是串行化的，第二次会更新 0 行（因为 hash 已经被换掉了），
 -- :one 于是把它变成一次 ErrNoRows，而不是两个都成功。
+--
+-- **「hash 已经被换掉」要靠 token_hash = 旧 hash 这一条才成立。** 原来 WHERE 里只有 id，
+-- 这段注释说的事并没有发生：多实例实测，同一个 refresh_token 并发刷新 5 次，5 次全是 200，
+-- 会话被连转 5 次，只有最后一次发出去的令牌是活的 —— 其余 4 个客户端手里拿着一个
+-- 当场就作废的令牌，下次刷新被登出；泄露的旧令牌也能和真用户同时换出新令牌而不被察觉。
 UPDATE user_tokens
-   SET token_hash = $2,
-       expire_at  = $3
- WHERE id = $1
+   SET token_hash = sqlc.arg(new_token_hash),
+       expire_at  = sqlc.arg(expire_at)
+ WHERE id = sqlc.arg(id)
+   AND token_hash = sqlc.arg(old_token_hash)
    AND revoked_at IS NULL
    AND expire_at > now()
 RETURNING id;
@@ -139,3 +145,43 @@ SELECT count(*) FROM user_identities WHERE user_id = $1 AND provider <> $2;
 -- 解绑某个 provider 下的全部身份（同一个 provider 下按约定至多一条，
 -- 见契约 identity-duplicate-provider；这里不假设它）。
 DELETE FROM user_identities WHERE user_id = $1 AND provider = $2;
+
+-- name: LoginLockedUntil :one
+-- 这个号此刻是否在锁定中；不在锁定中返回 NULL（没有行也走这一支）。
+SELECT max(locked_until)::timestamptz AS locked_until
+  FROM login_failures
+ WHERE phone = sqlc.arg(phone) AND locked_until > now();
+
+-- name: RecordLoginFailure :one
+-- 记一次口令错误，一条语句完成「窗口过期就从 1 重计 / 否则 +1 / 到阈值就锁」。
+-- 并发的两次失败在主键上串行：后到的那次看到前一次提交后的 fail_count，不会丢计数。
+-- 锁上之后计数清零、窗口从锁定那一刻重开：解锁之后再错五次才再锁。
+INSERT INTO login_failures (phone, fail_count, window_start)
+VALUES (sqlc.arg(phone), 1, now())
+ON CONFLICT ON CONSTRAINT login_failures_pkey DO UPDATE SET
+    fail_count = CASE
+        WHEN login_failures.window_start < now() - sqlc.arg(fail_window)::interval THEN 1
+        WHEN login_failures.fail_count + 1 >= sqlc.arg(max_failures)::int THEN 0
+        ELSE login_failures.fail_count + 1 END,
+    window_start = CASE
+        WHEN login_failures.window_start < now() - sqlc.arg(fail_window)::interval THEN now()
+        WHEN login_failures.fail_count + 1 >= sqlc.arg(max_failures)::int THEN now()
+        ELSE login_failures.window_start END,
+    locked_until = CASE
+        WHEN login_failures.window_start >= now() - sqlc.arg(fail_window)::interval
+         AND login_failures.fail_count + 1 >= sqlc.arg(max_failures)::int
+        THEN now() + sqlc.arg(lock_for)::interval
+        ELSE login_failures.locked_until END
+RETURNING locked_until;
+
+-- name: ClearLoginFailures :exec
+-- 登录成功：清掉这个号的失败记录（记住的是「连续」失败，不是历史总数）。
+DELETE FROM login_failures WHERE phone = sqlc.arg(phone);
+
+-- name: PruneLoginFailures :exec
+-- 顺手清掉本店早已过期的行（窗口与锁都过去一天以上），每次至多 100 行。
+DELETE FROM login_failures
+ WHERE ctid IN (SELECT ctid FROM login_failures
+                 WHERE window_start < now() - interval '1 day'
+                   AND (locked_until IS NULL OR locked_until < now() - interval '1 day')
+                 LIMIT 100);

@@ -11,6 +11,16 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const clearLoginFailures = `-- name: ClearLoginFailures :exec
+DELETE FROM login_failures WHERE phone = $1
+`
+
+// 登录成功：清掉这个号的失败记录（记住的是「连续」失败，不是历史总数）。
+func (q *Queries) ClearLoginFailures(ctx context.Context, phone string) error {
+	_, err := q.db.Exec(ctx, clearLoginFailures, phone)
+	return err
+}
+
 const countUserIdentitiesExcept = `-- name: CountUserIdentitiesExcept :one
 SELECT count(*) FROM user_identities WHERE user_id = $1 AND provider <> $2
 `
@@ -255,6 +265,76 @@ func (q *Queries) LockUserRow(ctx context.Context, id int64) (int64, error) {
 	return id_2, err
 }
 
+const loginLockedUntil = `-- name: LoginLockedUntil :one
+SELECT max(locked_until)::timestamptz AS locked_until
+  FROM login_failures
+ WHERE phone = $1 AND locked_until > now()
+`
+
+// 这个号此刻是否在锁定中；不在锁定中返回 NULL（没有行也走这一支）。
+func (q *Queries) LoginLockedUntil(ctx context.Context, phone string) (pgtype.Timestamptz, error) {
+	row := q.db.QueryRow(ctx, loginLockedUntil, phone)
+	var locked_until pgtype.Timestamptz
+	err := row.Scan(&locked_until)
+	return locked_until, err
+}
+
+const pruneLoginFailures = `-- name: PruneLoginFailures :exec
+DELETE FROM login_failures
+ WHERE ctid IN (SELECT ctid FROM login_failures
+                 WHERE window_start < now() - interval '1 day'
+                   AND (locked_until IS NULL OR locked_until < now() - interval '1 day')
+                 LIMIT 100)
+`
+
+// 顺手清掉本店早已过期的行（窗口与锁都过去一天以上），每次至多 100 行。
+func (q *Queries) PruneLoginFailures(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, pruneLoginFailures)
+	return err
+}
+
+const recordLoginFailure = `-- name: RecordLoginFailure :one
+INSERT INTO login_failures (phone, fail_count, window_start)
+VALUES ($1, 1, now())
+ON CONFLICT ON CONSTRAINT login_failures_pkey DO UPDATE SET
+    fail_count = CASE
+        WHEN login_failures.window_start < now() - $2::interval THEN 1
+        WHEN login_failures.fail_count + 1 >= $3::int THEN 0
+        ELSE login_failures.fail_count + 1 END,
+    window_start = CASE
+        WHEN login_failures.window_start < now() - $2::interval THEN now()
+        WHEN login_failures.fail_count + 1 >= $3::int THEN now()
+        ELSE login_failures.window_start END,
+    locked_until = CASE
+        WHEN login_failures.window_start >= now() - $2::interval
+         AND login_failures.fail_count + 1 >= $3::int
+        THEN now() + $4::interval
+        ELSE login_failures.locked_until END
+RETURNING locked_until
+`
+
+type RecordLoginFailureParams struct {
+	Phone       string
+	FailWindow  pgtype.Interval
+	MaxFailures int32
+	LockFor     pgtype.Interval
+}
+
+// 记一次口令错误，一条语句完成「窗口过期就从 1 重计 / 否则 +1 / 到阈值就锁」。
+// 并发的两次失败在主键上串行：后到的那次看到前一次提交后的 fail_count，不会丢计数。
+// 锁上之后计数清零、窗口从锁定那一刻重开：解锁之后再错五次才再锁。
+func (q *Queries) RecordLoginFailure(ctx context.Context, arg RecordLoginFailureParams) (pgtype.Timestamptz, error) {
+	row := q.db.QueryRow(ctx, recordLoginFailure,
+		arg.Phone,
+		arg.FailWindow,
+		arg.MaxFailures,
+		arg.LockFor,
+	)
+	var locked_until pgtype.Timestamptz
+	err := row.Scan(&locked_until)
+	return locked_until, err
+}
+
 const revokeUserToken = `-- name: RevokeUserToken :one
 UPDATE user_tokens
    SET revoked_at = now()
@@ -281,18 +361,20 @@ func (q *Queries) RevokeUserToken(ctx context.Context, id int64) (int64, error) 
 
 const rotateUserToken = `-- name: RotateUserToken :one
 UPDATE user_tokens
-   SET token_hash = $2,
-       expire_at  = $3
- WHERE id = $1
+   SET token_hash = $1,
+       expire_at  = $2
+ WHERE id = $3
+   AND token_hash = $4
    AND revoked_at IS NULL
    AND expire_at > now()
 RETURNING id
 `
 
 type RotateUserTokenParams struct {
-	ID        int64
-	TokenHash []byte
-	ExpireAt  pgtype.Timestamptz
+	NewTokenHash []byte
+	ExpireAt     pgtype.Timestamptz
+	ID           int64
+	OldTokenHash []byte
 }
 
 // 刷新时轮换：旧的 hash 当场作废，换成新的。
@@ -305,8 +387,18 @@ type RotateUserTokenParams struct {
 // 已经查过，但那是另一条语句、另一个时刻。并发的两次刷新都拿着同一个旧令牌时，
 // 这里的 UPDATE 是串行化的，第二次会更新 0 行（因为 hash 已经被换掉了），
 // :one 于是把它变成一次 ErrNoRows，而不是两个都成功。
+//
+// **「hash 已经被换掉」要靠 token_hash = 旧 hash 这一条才成立。** 原来 WHERE 里只有 id，
+// 这段注释说的事并没有发生：多实例实测，同一个 refresh_token 并发刷新 5 次，5 次全是 200，
+// 会话被连转 5 次，只有最后一次发出去的令牌是活的 —— 其余 4 个客户端手里拿着一个
+// 当场就作废的令牌，下次刷新被登出；泄露的旧令牌也能和真用户同时换出新令牌而不被察觉。
 func (q *Queries) RotateUserToken(ctx context.Context, arg RotateUserTokenParams) (int64, error) {
-	row := q.db.QueryRow(ctx, rotateUserToken, arg.ID, arg.TokenHash, arg.ExpireAt)
+	row := q.db.QueryRow(ctx, rotateUserToken,
+		arg.NewTokenHash,
+		arg.ExpireAt,
+		arg.ID,
+		arg.OldTokenHash,
+	)
 	var id int64
 	err := row.Scan(&id)
 	return id, err

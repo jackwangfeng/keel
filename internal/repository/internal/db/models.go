@@ -172,6 +172,15 @@ type Job struct {
 	UpdatedAt   pgtype.Timestamptz
 }
 
+type LoginFailure struct {
+	MerchantID  int64
+	Phone       string
+	FailCount   int32
+	WindowStart pgtype.Timestamptz
+	LockedUntil pgtype.Timestamptz
+	UpdatedAt   pgtype.Timestamptz
+}
+
 type Merchant struct {
 	ID        int64
 	Code      string
