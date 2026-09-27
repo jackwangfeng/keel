@@ -11,9 +11,23 @@ const { waitFor, waitData, waitEl, httpGet, httpRequest, apiBase, serverToken, l
 const RUN = process.env.KEEL_E2E_RELEASE === '1'
 const d = RUN ? describe : describe.skip
 const SHOTS = process.env.KEEL_E2E_SHOTS || path.join(__dirname, '..', 'dist', 'release-shots')
+const IOS = process.env.UNI_APP_PLATFORM === 'ios'
 const shot = async (name) => {
   require('fs').mkdirSync(SHOTS, { recursive: true })
-  await program.screenshot({ path: path.join(SHOTS, name + '.png') })
+  // 等页面稳定再截：Android 上刚切页（切 tab）就调 automator 截图，调用会一直不返回（实测卡满 60 秒）。
+  // 再套一个 20 秒上限：截图只是给人看的，卡住就记一句，不拖垮断言。
+  await new Promise((r) => setTimeout(r, 800))
+  const r = await Promise.race([
+    program.screenshot({ path: path.join(SHOTS, name + '.png') }).then(() => 'ok'),
+    new Promise((res) => setTimeout(() => res('timeout'), 20000)),
+  ])
+  if (r !== 'ok') console.log('release: 截图 ' + name + ' 超时，跳过')
+  // Android 另外用 adb 截整屏：automator 的截图只有页面区域，看不到原生 tab 栏（角标在那上面）。
+  if (!IOS && process.env.KEEL_E2E_ADB) {
+    const { execFileSync } = require('child_process')
+    const png = execFileSync(process.env.KEEL_E2E_ADB, ['exec-out', 'screencap', '-p'], { maxBuffer: 64 * 1024 * 1024 })
+    require('fs').writeFileSync(path.join(SHOTS, name + '-screen.png'), png)
+  }
 }
 function localShort(iso) {
   const t = new Date(iso)
@@ -46,6 +60,58 @@ d('发版前真机验证', () => {
 
   afterAll(async () => {
     await httpRequest('DELETE', apiBase() + '/cart', null, token)
+  })
+
+  it('0 商品图：首页 / 搜索 / 详情 / 购物车 / 订单详情都显示真图（相对路径补 origin、302 跟随）', async () => {
+    const withImg = (await httpGet(apiBase() + '/products?page_size=50')).body.items.filter((p) => p.image_url)
+    expect(withImg.length).toBeGreaterThan(0)
+    const home = await program.reLaunch('/pages/products/list')
+    await waitFor(home, '.pc-title', (t) => t.length > 0)
+    const rows = await home.data('rows')
+    const r0 = rows.find((r) => withImg.some((p) => p.id === r.id))
+    // 原生端必须是绝对地址（H5 的 base 是相对的，才会原样是相对路径）。
+    if (!process.env.UNI_PLATFORM || process.env.UNI_PLATFORM !== 'h5') expect(r0.cover.imageUrl).toMatch(/^https?:\/\/.+\/api\/v1\/uploads\/\d+$/)
+    expect((await home.$$('.cover-img')).length).toBeGreaterThan(0)
+    await home.waitFor(1500)   // 等图下载完再截
+    await shot('0-home-images')
+
+    const search = await program.navigateTo('/pages/search/index')
+    await (await waitEl(search, '.box-input')).input('咖啡')
+    await (await search.$('.go')).tap()
+    await waitFor(search, '.count', (t) => t.includes('共'))
+    expect((await search.$$('.cover-img')).length).toBeGreaterThan(0)
+    await search.waitFor(1500)
+    await shot('0-search-images')
+
+    const detail = await program.navigateTo('/pages/products/detail?id=' + r0.id)
+    await waitFor(detail, '.name', (t) => t.length > 0)
+    expect((await detail.$$('.cover-img')).length).toBeGreaterThan(0)
+    await detail.waitFor(1500)
+    await shot('0-detail-image')
+
+    const store = (await httpGet(apiBase() + '/products?page_size=1')).body.store.store_id
+    const sku = (await httpGet(apiBase() + '/products/' + r0.id)).body.skus.find((x) => x.available_qty > 0)
+    await httpRequest('POST', apiBase() + '/cart/items?store_id=' + store, { sku_id: sku.id, quantity: 1 }, token, { 'Idempotency-Key': randomUUID() })
+    const cart = await program.switchTab('/pages/cart/index')
+    await waitData(cart, 'rows', (r) => r.length > 0)
+    // 购物车行 / 订单行：服务端（ff552e5）还没带 image_url，只有商品列表 / 检索 / 详情有。
+    // 服务端给了才断言显示成图；没给就是占位，记为服务端缺口。
+    const cartHasImg = (await httpGet(apiBase() + '/cart?store_id=' + store, token)).body.items.some((x) => x.image_url)
+    if (cartHasImg) expect((await cart.$$('.cover-img')).length).toBeGreaterThan(0)
+    else console.log('release: 服务端购物车行没有 image_url（服务端缺口），购物车显示占位')
+    await cart.waitFor(1500)
+    await shot('0-cart-images')
+    await httpRequest('DELETE', apiBase() + '/cart', null, token)
+
+    const orderNo = await placeOrder(token)
+    const od = await program.navigateTo('/pages/order/detail?order_no=' + orderNo)
+    await waitData(od, 'view', (v) => v != null)
+    const orderHasImg = ((await httpGet(apiBase() + '/orders/' + orderNo, token)).body.items || []).some((x) => x.image_url)
+    if (orderHasImg) expect((await od.$$('.cover-img')).length).toBeGreaterThan(0)
+    else console.log('release: 服务端订单行没有 image_url（服务端缺口），订单详情显示占位')
+    await od.waitFor(1500)
+    await shot('0-order-images')
+    await httpRequest('POST', apiBase() + '/orders/' + orderNo + '/cancel', null, token, { 'Idempotency-Key': randomUUID() })
   })
 
   it('1 时间：订单列表 / 详情的下单时间按本地时区显示（原生解析带微秒的 ISO）', async () => {
