@@ -79,19 +79,13 @@ type route struct {
 	// 测试比没有更糟。行为由 admin_auth_test.go 的 TestPlatformScopedWritesAreIdempotent
 	// 与 TestMerchantStaffCreateIsIdempotentToo 盯着。）
 
-	// NotYetImplementedResponse 是**响应体**里契约声明了、这条 handler 刻意不
-	// 填的字段，与前两笔账是同一件事的第三种形状。
-	//
-	// 下单两条接口的 freight_cents 在这里挂过账（运费模板没有落地时，「没算」的诚实
-	// 形状是整个不出现，不是 0）。00056 运费落地之后两笔都划掉了，行为由
-	// freight_test.go 的 TestPreviewAndOrderCarryComputedFreight 盯着（没配模板时是
-	// 算出来的 0，而且字段必返）。眼下挂着的是商品详情的图片字段。
-	//
-	// 两个方向都锁得住：
-	//   - 契约把这个字段改名或删掉 → 下面那条对账测试红（清单在描述一个不存在
-	//     的东西）；
-	//   - 真的实现了、字段开始出现在响应里 → 对应的行为测试红，逼人回来删掉这一行。
-	NotYetImplementedResponse map[string]string
+	// （这里原先还有第三笔账 NotYetImplementedResponse：**响应体**里契约声明了、
+	// handler 刻意不填的字段。挂过的有下单两条接口的 freight_cents（00056 运费落地
+	// 后划掉，行为由 freight_test.go 的 TestPreviewAndOrderCarryComputedFreight 盯着）
+	// 与商品详情的 image_url / images（商品图接进买家读路径后划掉，行为由
+	// product_image_test.go 盯着：有图时按 sort_order 返回、没图时字段缺席）。
+	// 清单空了，字段连同它那条「清单 → 契约」的对账测试一起删掉 —— 留着一条恒绿的
+	// 测试比没有更糟。下次再有响应字段要挂账，把字段和那条测试从历史里捡回来。）
 
 	// NotYetImplementedStage 是契约的 **description** 里写着、这条 handler
 	// 还没跑的流水线阶段，与前三笔账是同一件事的第四种形状。
@@ -209,15 +203,6 @@ var routes = []route{
 		// 也不挂账 —— 对账测试会两个方向都核一遍。
 		// （这条接口原先登记的是 NoQueryParams「详情只吃路径参数」，
 		// 那句话从 00020 起不再成立：门店决定了 SKU 的价与水位。）
-		NotYetImplementedResponse: map[string]string{
-			"image_url": "商品主图。**缺的东西本轮（M4 任务 1）变了，理由要跟着改**：" +
-				"原先写的是「products 表上没有图片列，uploads 与商品没有任何关联」，" +
-				"那个缺口已经在数据模型 §3 补上了（product_images 关联表，sort_order 最小的即主图）。" +
-				"现在缺的是**迁移与 handler**，属于 M4 的下一个任务。" +
-				"在那之前仍然缺席而不是回空串：空串会让客户端渲染一个「加载失败」的占位图。",
-			"images": "商品图集，同 image_url —— 表设计好了，迁移与 handler 还没写。" +
-				"回空数组会让轮播图组件显示「无图」，而那与「这件商品确实没有配图」是两件事。",
-		},
 	},
 	{
 		ContractPath:   "/orders",
@@ -1839,49 +1824,6 @@ func contractBodyProps(t *testing.T, r route) map[string]bool {
 		fmt.Sprintf("%s %s 的请求体", r.ContractMethod, r.ContractPath))
 }
 
-// contractResponseProps 取出该接口**成功响应**的 application/json body 的顶层属性名。
-//
-// 成功码按 201 → 200 的顺序找：契约里建单是 201、试算是 200，而写死其中一个会
-// 让另一条路悄悄退化成「一个属性都没解析出来」，那正是下面那条测试的 Fatal 要
-// 抓的东西。
-func contractResponseProps(t *testing.T, r route) map[string]bool {
-	t.Helper()
-
-	doc := loadContract(t)
-	op, ok := doc.Paths[r.ContractPath][r.ContractMethod].(map[string]any)
-	if !ok {
-		t.Fatalf("契约里没有 %s %s", r.ContractMethod, r.ContractPath)
-	}
-	resps, ok := op["responses"].(map[string]any)
-	if !ok {
-		t.Fatalf("契约里 %s %s 没有 responses", r.ContractMethod, r.ContractPath)
-	}
-	var body map[string]any
-	for _, code := range []string{"201", "200"} {
-		if v, ok := resps[code].(map[string]any); ok {
-			body = v
-			break
-		}
-	}
-	if body == nil {
-		t.Fatalf("契约里 %s %s 既没有 200 也没有 201 响应", r.ContractMethod, r.ContractPath)
-	}
-	content, ok := body["content"].(map[string]any)
-	if !ok {
-		t.Fatalf("契约里 %s %s 的成功响应没有 content", r.ContractMethod, r.ContractPath)
-	}
-	media, ok := content["application/json"].(map[string]any)
-	if !ok {
-		t.Fatalf("契约里 %s %s 的成功响应不是 application/json", r.ContractMethod, r.ContractPath)
-	}
-	schema, ok := media["schema"].(map[string]any)
-	if !ok {
-		t.Fatalf("契约里 %s %s 的成功响应没有 schema", r.ContractMethod, r.ContractPath)
-	}
-	return schemaProps(t, doc.Components.Schemas, schema,
-		fmt.Sprintf("%s %s 的成功响应", r.ContractMethod, r.ContractPath))
-}
-
 // schemaProps 把一个 schema 解成顶层属性名集合，顺带跟 $ref 与 allOf。
 //
 // 跟 $ref 是必须的：契约里 OrderCreateRequest / Order 都是 $ref 到
@@ -1933,36 +1875,6 @@ func schemaProps(t *testing.T, defs map[string]map[string]any,
 		t.Fatalf("%s 一个属性都没解析出来 —— 这个解析器跟不上契约的形状了", where)
 	}
 	return out
-}
-
-// NotYetImplementedResponse 里挂的每一笔账，都必须是契约成功响应里真有的字段。
-//
-// 与请求体那条同理，这里只做「清单 → 契约」这一个方向的机械对账。
-// 反向（实现了却忘了划掉）由行为测试 order_test.go 的 TestFreightIsAbsentNotZero
-// 盯着：它断言响应里**没有**这个键，真的实现了运费它就会红。
-func TestNotYetImplementedResponseFieldsExistInContract(t *testing.T) {
-	checked := 0
-	for _, r := range routes {
-		if len(r.NotYetImplementedResponse) == 0 {
-			continue
-		}
-		t.Run(r.HTTPMethod+" "+r.ContractPath, func(t *testing.T) {
-			props := contractResponseProps(t, r)
-			for name, why := range r.NotYetImplementedResponse {
-				if !props[name] {
-					t.Errorf("NotYetImplementedResponse 里挂着 %q（%s），"+
-						"但契约的成功响应里没有这个字段了 —— 清单烂了，请删掉这一行",
-						name, why)
-				}
-				checked++
-			}
-			t.Logf("契约成功响应声明 %v；挂账 %v", sortedBool(props), sorted(r.NotYetImplementedResponse))
-		})
-	}
-	if checked == 0 {
-		t.Fatal("一笔响应体挂账都没查到 —— 挂账清空了就该把这条测试一起删掉，" +
-			"留着一条恒绿的测试比没有更糟")
-	}
 }
 
 // NotYetImplementedStage 里挂的每一笔账，都必须是契约描述里真提到的那个阶段。

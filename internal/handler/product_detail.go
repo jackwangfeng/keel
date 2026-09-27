@@ -116,10 +116,21 @@ func (h *ProductHandler) Detail(c *gin.Context) {
 		// 那等于把「什么叫有货」这条规则复制到每一个客户端里。
 		InStock: &inStock,
 
-		// ImageUrl 与 Images 刻意缺席：products 表上没有图片列，商品图在
-		// 数据模型里还没有落地（uploads 那张表存的是上传件，没有与商品的关联）。
-		// 这两笔挂在 contract_test.go 的 NotYetImplementedResponse 里。
-		// 回空字符串或空数组会让客户端渲染一个「加载失败」的占位图，
-		// 而缺席说的是实话：这个字段还没有数据来源。
+		// 商品图（product_images，后台 PUT /admin/products/{id}/images 整组维护）。
+		// ImageUrl 是 Images[0]，契约原话「ProductSummary.image_url 取的就是这一张」。
+		// 一张图都没有时两个都**缺席**，不回空串 / 空数组：空串会让客户端去请求
+		// 一个空地址、渲染一张「加载失败」，而缺席让它走自己的占位封面。
+		// 这两个字段曾挂在 contract_test.go 的 NotYetImplementedResponse 里，
+		// 落地之后那笔账连同那份清单一起划掉了。
+		ImageUrl: d.ImageURL,
+		Images:   imagesOf(d.Images),
 	})
+}
+
+// imagesOf：没有图时回 nil，让 images 整个缺席（理由见上面 ImageUrl 那段）。
+func imagesOf(urls []string) *[]string {
+	if len(urls) == 0 {
+		return nil
+	}
+	return &urls
 }

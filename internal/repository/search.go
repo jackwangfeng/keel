@@ -49,6 +49,9 @@ type SearchHit struct {
 	Status        int16
 	InStock       bool
 
+	// MainImageUploadID 同 Product.MainImageUploadID：主图的 upload id，没有图为 nil。
+	MainImageUploadID *int64
+
 	// Distance 是余弦距离（0 = 完全一致，2 = 完全相反），向量路专用。
 	Distance float64
 
@@ -196,6 +199,7 @@ func (t tenantTx) SearchProductsByVector(ctx context.Context, sc StoreScope,
 			MinPriceCents: r.MinPriceCents, MaxPriceCents: r.MaxPriceCents,
 			SalesCount: r.SalesCount, Status: r.Status,
 			InStock: r.InStock, Distance: r.Distance,
+			MainImageUploadID: mainImageOf(r.MainImageUploadID),
 		})
 	}
 	return out, nil
@@ -224,6 +228,7 @@ func (t tenantTx) SearchProductsByKeyword(ctx context.Context, sc StoreScope,
 			MinPriceCents: r.MinPriceCents, MaxPriceCents: r.MaxPriceCents,
 			SalesCount: r.SalesCount, Status: r.Status,
 			InStock: r.InStock, Rank: r.Rank,
+			MainImageUploadID: mainImageOf(r.MainImageUploadID),
 		})
 	}
 	return out, nil

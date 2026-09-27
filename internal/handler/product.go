@@ -115,9 +115,11 @@ func (h *ProductHandler) List(c *gin.Context) {
 		max := api.Money(it.MaxPriceCents)
 		sales := int(it.SalesCount)
 		items = append(items, api.ProductSummary{
-			Id:            it.ID,
-			Title:         it.Title,
-			Subtitle:      it.Subtitle,
+			Id:       it.ID,
+			Title:    it.Title,
+			Subtitle: it.Subtitle,
+			// 主图地址；没有图时 nil，字段缺席（不是空串）。
+			ImageUrl:      it.ImageURL,
 			MinPriceCents: api.Money(it.MinPriceCents),
 			MaxPriceCents: &max,
 			SalesCount:    &sales,

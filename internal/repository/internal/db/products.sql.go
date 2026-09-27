@@ -207,13 +207,21 @@ const listProducts = `-- name: ListProducts :many
 SELECT p.id, p.title, p.subtitle,
        COALESCE(agg.min_price, 0)::bigint AS min_price_cents,
        COALESCE(agg.max_price, 0)::bigint AS max_price_cents,
-       p.sales_count, p.status
+       p.sales_count, p.status,
+       COALESCE(img.upload_id, 0)::bigint AS main_image_upload_id
   FROM products p
   LEFT JOIN LATERAL (
         SELECT min(v.price_cents) AS min_price, max(v.price_cents) AS max_price
           FROM sku_prices_by_store v
          WHERE v.store_id = $1 AND v.product_id = p.id
        ) agg ON TRUE
+  LEFT JOIN LATERAL (
+        SELECT pi.upload_id
+          FROM product_images pi
+         WHERE pi.product_id = p.id
+         ORDER BY pi.sort_order, pi.id
+         LIMIT 1
+       ) img ON TRUE
  WHERE p.deleted_at IS NULL
    AND p.status = 1
    AND NOT EXISTS (SELECT 1 FROM region_product_overrides ro
@@ -242,13 +250,14 @@ type ListProductsParams struct {
 }
 
 type ListProductsRow struct {
-	ID            int64
-	Title         string
-	Subtitle      *string
-	MinPriceCents int64
-	MaxPriceCents int64
-	SalesCount    int32
-	Status        int16
+	ID                int64
+	Title             string
+	Subtitle          *string
+	MinPriceCents     int64
+	MaxPriceCents     int64
+	SalesCount        int32
+	Status            int16
+	MainImageUploadID int64
 }
 
 // 刻意不带 WHERE merchant_id —— 租户由 RLS 在数据库层过滤。
@@ -298,6 +307,20 @@ type ListProductsRow struct {
 //	  不返回停用的那一支），商品能不能被看到由 products.status 与两层排除决定。
 //	  一件在架商品放在停用类目下，它在不筛选的列表里本来就看得见，
 //	  在祖先类目的筛选里也看得见，两边一致。
+//
+// 主图（main_image_upload_id，可空）是 product_images 里 sort_order 最小的那一张
+// ——「0 即主图」，没有 is_primary（00018 与契约 ProductImage.sort_order）。
+// 第二排序键 id 与后台 ListProductImages 逐字一致：sort_order 撞了时两边必须
+// 挑出同一张，否则后台看到的主图与买家列表上的封面是两张图。
+// 没有图的商品这一列是 **0**，repository 把它翻回 nil，service 据此让 image_url
+// **缺席**而不是空串。为什么不直接回 NULL：sqlc 推不出 LEFT JOIN LATERAL 子查询
+// 那一侧的列可空，生成的是 int64，扫到 NULL 就报错（试过 ::bigint、NULLIF、
+// 标量子查询三种写法，都推成非空或推错类型）。0 不会与真实 id 撞：uploads.id 是
+// IDENTITY，从 1 起。翻译只有 repository 里一处（mainImageOf），不外泄到 service。
+//
+// 它和价格那个 LATERAL 一样只在这一页的 LIMIT 行上各跑一次：ORDER BY 不引用它，
+// 每行一次 idx_product_images_product (merchant_id, product_id, sort_order) 上的
+// 索引查找 —— merchant_id 那一段由 RLS 谓词补上，这里照例一个字都不写。
 func (q *Queries) ListProducts(ctx context.Context, arg ListProductsParams) ([]ListProductsRow, error) {
 	rows, err := q.db.Query(ctx, listProducts,
 		arg.StoreID,
@@ -321,6 +344,7 @@ func (q *Queries) ListProducts(ctx context.Context, arg ListProductsParams) ([]L
 			&i.MaxPriceCents,
 			&i.SalesCount,
 			&i.Status,
+			&i.MainImageUploadID,
 		); err != nil {
 			return nil, err
 		}

@@ -323,6 +323,9 @@ type SearchHit struct {
 	Status        int16
 	InStock       bool
 
+	// ImageURL 同 ProductSummary.ImageURL：主图地址，没有图为 nil（字段缺席）。
+	ImageURL *string
+
 	// Source 是它被哪一路捞回来的（契约 SearchHit.recall_source）。
 	Source search.RecallSource
 
@@ -591,7 +594,8 @@ func (s *SearchService) Search(ctx context.Context, req SearchRequest) (SearchRe
 			ID: row.ID, Title: row.Title, Subtitle: row.Subtitle,
 			MinPriceCents: row.MinPriceCents, MaxPriceCents: row.MaxPriceCents,
 			SalesCount: row.SalesCount, Status: row.Status, InStock: row.InStock,
-			Source: r.Source(),
+			ImageURL: imageURLOf(row.MainImageUploadID),
+			Source:   r.Source(),
 			// 1 - 余弦距离 = 余弦相似度。只有向量路捞到它时这个数才有意义，
 			// 没捞到时 Distance 是零值 0，而 1-0=1 会冒充「完美匹配」——
 			// 所以这里按名次判一次，而不是无条件算。

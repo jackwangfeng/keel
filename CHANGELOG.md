@@ -39,6 +39,15 @@ so "which one is running?" never depends on anyone's memory.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Buyer API returns product images.** `GET /products`, `POST /search` and
+  `GET /products/{id}` now fill `image_url` with the main image (the `product_images` row
+  with the lowest `sort_order`, as managed by `PUT /admin/products/{id}/images`), and the
+  detail's `images` lists every image URL in display order. Both are omitted — not empty —
+  for products without images. URLs are `/api/v1/uploads/{id}`, readable anonymously.
+  No migration.
+
 ## [0.2.0] - 2026-09-27
 
 Migrations `00027`–`00038`, `00053`–`00065`. The database lands on `00065`.
