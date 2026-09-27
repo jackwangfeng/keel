@@ -89,6 +89,13 @@ type fakeCatalogTx struct {
 // 抢占恒为 true（这一组没有一条在测重放），存档吞掉。**不记状态**：
 // 这一组要断言的是「写调用发生了但事务回滚了」，而那由 repo.Committed
 // 与 tx.Wrote 那一对负责，多记一份只会多一处可能对不上的真相。
+// AdminLiveSKUsOfProducts：发布成功之后，回显里的 total_stock 要先问这件商品有哪些
+// 未软删 SKU（微服务拆分阶段 1a，合计由库存服务给）。这一组的商品没有 SKU，
+// 回空即合计 0，库存服务不会被调到（所以构造服务时库存服务传 nil 是安全的）。
+func (t *fakeCatalogTx) AdminLiveSKUsOfProducts(ctx context.Context, productIDs []int64) (map[int64][]int64, error) {
+	return map[int64][]int64{}, nil
+}
+
 func (t *fakeCatalogTx) ClaimIdempotencyKey(ctx context.Context, scope string,
 	subj repository.IdempotencySubject, key, requestHash string) (bool, error) {
 	return true, nil
@@ -151,7 +158,7 @@ func newCatalogFixture(t *testing.T, title string) (*service.AdminCatalogService
 	repo := &fakeCatalogRepo{tx: &fakeCatalogTx{
 		product: repository.AdminProduct{ID: 7, Title: title, Status: 0},
 	}}
-	svc := service.NewAdminCatalogService(repo, nil)
+	svc := service.NewAdminCatalogService(repo, nil, nil)
 	return svc, repo, staffContext()
 }
 

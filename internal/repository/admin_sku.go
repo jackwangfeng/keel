@@ -21,16 +21,24 @@ const skuCodeIndex = "uk_skus_code"
 
 // AdminSKUTx 是商家写路径上 SKU 与库存这一面。
 type AdminSKUTx interface {
-	// AdminListProductSKUs 取一件商品的全部**未软删** SKU（含停售），
-	// 带上库存水位与预警线。
+	// AdminListProductSKUs 取一件商品的全部**未软删** SKU（含停售）。
+	//
+	// **AvailableQty / WarningQty 是零值**（微服务拆分阶段 1a）：库存归库存服务，
+	// service 拿这批 id 向它要跨门店合计再填上。这一层不读库存表。
 	AdminListProductSKUs(ctx context.Context, productID int64) ([]AdminSKU, error)
 
 	// AdminFindSKU 取一个未软删的 SKU。查不到返回 ErrCatalogNotFound。
+	// 库存两列同上，是零值。
 	AdminFindSKU(ctx context.Context, id int64) (AdminSKU, error)
 
-	// CreateSKU 建一个 SKU，**并在同一个事务里建出它的 inventories 行**。
-	// 货号撞车返回 ErrSKUCodeDuplicated。
+	// CreateSKU 建一个 SKU。**库存行不在这里建**（阶段 1a 起归库存服务）：
+	// 返回值里的 AvailableQty / WarningQty 是入参原样回显，service 在事务提交之后
+	// 调库存服务建行（门店取 DefaultStoreForNewSKU）。货号撞车返回 ErrSKUCodeDuplicated。
 	CreateSKU(ctx context.Context, n NewSKU) (AdminSKU, error)
+
+	// DefaultStoreForNewSKU 返回新 SKU 的第一行库存该建在哪家店（默认门店，未软删）。
+	// 没有默认门店时 ok 为 false —— 那不是失败：缺行 ≡ 可售 0。
+	DefaultStoreForNewSKU(ctx context.Context) (storeID int64, ok bool, err error)
 
 	// UpdateSKU 改 SKU（含改价）。**没有 AvailableQty** —— 库存走 SetInventory。
 	UpdateSKU(ctx context.Context, id int64, p SKUPatch) (AdminSKU, error)
@@ -38,16 +46,9 @@ type AdminSKUTx interface {
 	// SoftDeleteSKU 置 deleted_at，并返回它所属的 product_id。
 	// 两支：ErrCatalogNotFound 与 ErrSKULastOfPublishedProduct。
 	SoftDeleteSKU(ctx context.Context, id int64) (int64, error)
-
-	// SetInventory 是比较并设置。三条出路，形状各不相同：
-	//
-	//	err == nil                                 写成功，返回写后的那一行
-	//	errors.Is(err, ErrSKUNotInTenant)          这个 SKU 在本租户不可见 → 404
-	//	errors.Is(err, ErrInventoryPrecondition)   CAS 对不上 → 409，
-	//	                                           errors.As 取 *InventoryConflict
-	//	                                           拿当前真实值
-	SetInventory(ctx context.Context, storeID, skuID int64, expected, want int32, warning *int32, bizID string) (Inventory, error)
 }
+
+// NewSKU}
 
 // NewSKU 是建 SKU 的入参。AvailableQty 在这里是**允许的**，而在 SKUPatch 里
 // 不允许：建行与改行是两件事 —— 建的时候没有并发对手（这一行还不存在），
@@ -100,7 +101,6 @@ func (t tenantTx) AdminListProductSKUs(ctx context.Context, productID int64) ([]
 			ID: r.ID, ProductID: r.ProductID, SKUCode: r.SkuCode,
 			SpecValues: r.SpecValues, PriceCents: r.PriceCents, CostCents: r.CostCents,
 			WeightGram: r.WeightGram, ImageURL: r.ImageUrl, Status: r.Status,
-			AvailableQty: r.AvailableQty, WarningQty: r.WarningQty,
 			CreatedAt: r.CreatedAt.Time, UpdatedAt: r.UpdatedAt.Time,
 		})
 	}
@@ -119,7 +119,6 @@ func (t tenantTx) AdminFindSKU(ctx context.Context, id int64) (AdminSKU, error) 
 		ID: r.ID, ProductID: r.ProductID, SKUCode: r.SkuCode,
 		SpecValues: r.SpecValues, PriceCents: r.PriceCents, CostCents: r.CostCents,
 		WeightGram: r.WeightGram, ImageURL: r.ImageUrl, Status: r.Status,
-		AvailableQty: r.AvailableQty, WarningQty: r.WarningQty,
 		CreatedAt: r.CreatedAt.Time, UpdatedAt: r.UpdatedAt.Time,
 	}, nil
 }
@@ -185,15 +184,6 @@ func (t tenantTx) CreateSKU(ctx context.Context, n NewSKU) (AdminSKU, error) {
 		return AdminSKU{}, err
 	}
 
-	_, err = t.q.CreateInventoryRow(ctx, db.CreateInventoryRowParams{
-		SkuID:        s.ID,
-		AvailableQty: n.AvailableQty,
-		WarningQty:   n.WarningQty,
-	})
-	if err != nil {
-		return AdminSKU{}, fmt.Errorf("sku %d 建出来了但库存行没建成（这件商品会表现为永远缺货）: %w", s.ID, err)
-	}
-
 	// 这里**没有**「重算商品冗余价格」那一步了（00019 把那两列删了，
 	// RecalcProductAggregates 也一起删了）。价格区间与总库存现在由读路径上的
 	// LEFT JOIN LATERAL 现算 —— 建完 SKU 立刻去读商品，读到的就是含这个新
@@ -202,11 +192,8 @@ func (t tenantTx) CreateSKU(ctx context.Context, n NewSKU) (AdminSKU, error) {
 		ID: s.ID, ProductID: s.ProductID, SKUCode: s.SkuCode,
 		SpecValues: s.SpecValues, PriceCents: s.PriceCents, CostCents: s.CostCents,
 		WeightGram: s.WeightGram, ImageURL: s.ImageUrl, Status: s.Status,
-		// 库存取入参而不是取那条 INSERT 的回显：本轮它变成了 :execrows
-		// （只给默认门店建行，没有默认门店时一行都不建，见那条查询的注释），
-		// 于是没有行可回。回显入参在两种情况下都是对的：建成了就是这个数，
-		// 没建成的话「这个 SKU 现在可售 0」也确实是 n.AvailableQty 之外
-		// 唯一诚实的答案 —— 而 rows 会告诉调用方到底是哪一种。
+		// 库存取入参：库存行由 service 在提交之后经库存服务建（阶段 1a），
+		// 这里没有行可回。回显入参与拆分前同一个口径（契约的 AdminSku 回的是「建成的样子」）。
 		AvailableQty: n.AvailableQty, WarningQty: n.WarningQty,
 		CreatedAt: s.CreatedAt.Time, UpdatedAt: s.UpdatedAt.Time,
 	}, nil
@@ -280,96 +267,14 @@ func (t tenantTx) SoftDeleteSKU(ctx context.Context, id int64) (int64, error) {
 	return *r.ProductID, nil
 }
 
-// SetInventory 比较并设置。
-//
-// ===========================================================================
-// rows_affected = 0 的两个来源，以及为什么必须分开
-// ===========================================================================
-//
-//	① CAS 不匹配 —— 库存在你读到它之后被改过（多半是并发下单扣减）。
-//	   契约定成 409，并把**当前真实值**放进 Problem 的 current 里一起返回，
-//	   调用方刷新那一格再试一次就能成功。
-//	② 这个 SKU 不在本租户 / 不存在 / 已软删 —— 契约定成 404。
-//	   重试**永远**不会成功。
-//
-// 契约在这条端点上明写了混掉的代价：把「不是你的 SKU」也报成 409，会让调用方
-// 以为重读一次再试就能成功，而那个循环永远不会结束。这与 inventory.go 里
-// ErrInsufficientStock / ErrSKUNotInTenant 那一对是同一件事的另一面。
-//
-// 两者的分辨发生在 **SQL 里**，不在这里：db/queries/admin_skus.sql 的
-// SetInventoryByCAS 用两个 CTE 在同一个 MVCC 快照下分别回传 visible_rows 与
-// updated_rows。这一层只是把两个数翻成两个 sentinel —— 如果分辨发生在这里
-// （先 SELECT 再 UPDATE），那就是两次快照，中间的窗口正是这条接口要防的东西。
-// **storeID 由调用方定，这一层不猜。** 00020 之后 inventories 的主键是
-// (sku_id, store_id)，一条只给 sku_id 的 CAS 没有唯一的目标行。契约把这条
-// 路径的语义写死成「本租户恰好一家未软删门店时它就是那一家，否则 409
-// store-ambiguous」，而那一步判断在 service 里用 SoleStore 做 —— 放在这里
-// 或放进 SQL，都等于在最热的写路径上默认一个猜测，而猜错的后果是把另一家店
-// 的水位覆盖掉，没有任何东西会响。
-func (t tenantTx) SetInventory(ctx context.Context, storeID, skuID int64, expected, want int32, warning *int32, bizID string) (Inventory, error) {
-	if storeID <= 0 {
-		// 漏传 store_id 的症状最难查：params 里那个字段会取零值，
-		// 而 store_id = 0 匹配不上任何一行，于是 visible_rows = 0，
-		// 这条接口对**每一个** SKU 都回 404 —— 一个看起来像鉴权问题的 bug。
-		return Inventory{}, fmt.Errorf("sku %d 的库存 CAS 没有门店上下文", skuID)
-	}
-	if want < 0 || expected < 0 {
-		// chk_qty_nonneg 也会兜住负的新值，但它兜不住负的 expected ——
-		// 而一个负的 expected 永远匹配不上，症状是「怎么改都 409」。
-		return Inventory{}, fmt.Errorf("库存 %d / 期望值 %d 不能为负", want, expected)
-	}
-	if warning != nil && *warning < 0 {
-		return Inventory{}, fmt.Errorf("预警线 %d 不能为负", *warning)
-	}
-
-	r, err := t.q.SetInventoryByCAS(ctx, db.SetInventoryByCASParams{
-		SkuID:                skuID,
-		StoreID:              storeID,
-		AvailableQty:         want,
-		WarningQty:           warning,
-		ExpectedAvailableQty: expected,
-	})
+func (t tenantTx) DefaultStoreForNewSKU(ctx context.Context) (int64, bool, error) {
+	ids, err := t.q.DefaultStoreForNewSKU(ctx)
 	if err != nil {
-		return Inventory{}, err
+		return 0, false, err
 	}
-
-	// 顺序要紧：先问「看得见吗」。反过来的话，一个别家店的 sku_id 会被报成
-	// 「CAS 对不上」，而 current 字段里是一个 NULL —— 调用方拿着它去刷新页面，
-	// 刷出一个空格子，然后无限重试。
-	if r.VisibleRows == 0 {
-		return Inventory{}, fmt.Errorf("sku %d: %w", skuID, ErrSKUNotInTenant)
+	if len(ids) == 0 {
+		return 0, false, nil
 	}
-	if r.UpdatedRows == 0 {
-		if r.CurrentAvailableQty == nil || r.CurrentWarningQty == nil {
-			return Inventory{}, fmt.Errorf(
-				"sku %d 可见却没回传当前值——SetInventoryByCAS 的 SQL 被改坏了", skuID)
-		}
-		return Inventory{}, &InventoryConflict{
-			SKUID:    skuID,
-			Expected: expected,
-			Current: Inventory{
-				SKUID:        skuID,
-				StoreID:      storeID,
-				AvailableQty: *r.CurrentAvailableQty,
-				WarningQty:   *r.CurrentWarningQty,
-				UpdatedAt:    r.CurrentUpdatedAt.Time,
-			},
-		}
-	}
-	if r.NewAvailableQty == nil || r.NewWarningQty == nil {
-		// 写成功却没回传水位，只可能是那条 SQL 被改坏了。不要静默返回 0：
-		// 0 是一个合法的库存水位，它会一路写进后台页面。
-		return Inventory{}, fmt.Errorf(
-			"sku %d 写成功但没有回传水位——SetInventoryByCAS 的 SQL 被改坏了", skuID)
-	}
-	if err := t.logInventorySet(ctx, storeID, skuID, expected, *r.NewAvailableQty, bizID); err != nil {
-		return Inventory{}, err
-	}
-	return Inventory{
-		SKUID:        skuID,
-		StoreID:      storeID,
-		AvailableQty: *r.NewAvailableQty,
-		WarningQty:   *r.NewWarningQty,
-		UpdatedAt:    r.NewUpdatedAt.Time,
-	}, nil
+	// uk_stores_default 保证至多一行。
+	return ids[0], true, nil
 }

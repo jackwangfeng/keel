@@ -87,6 +87,21 @@ type ReportInventoryAlert struct {
 	WarningQty   int
 }
 
+// ReportAlertStore 是库存预警门店范围里的一家店。
+type ReportAlertStore struct {
+	ID       int64
+	Name     string
+	RegionID int64
+}
+
+// ReportAlertSKU 是给库存预警补名字用的 SKU 信息。
+type ReportAlertSKU struct {
+	SKUCode      string
+	SpecValues   map[string]string
+	ProductID    int64
+	ProductTitle string
+}
+
 // ReportSearchTotals 是窗口内检索日志的合计。
 type ReportSearchTotals struct {
 	SearchCount     int64
@@ -112,8 +127,16 @@ type ReportTx interface {
 	ReportProductRanking(ctx context.Context, f ReportFilter, categoryID *int64, sortBy string, limit int) ([]ReportProductRow, error)
 	// ReportStoreComparison 不看 f.StoreID（门店对比本来就是按门店展开的）。
 	ReportStoreComparison(ctx context.Context, f ReportFilter) ([]ReportStoreRow, error)
-	// ReportInventoryAlerts 不看 f.Start / f.End（库存是现状）。返回前 limit 条与总条数。
-	ReportInventoryAlerts(ctx context.Context, f ReportFilter, limit int) ([]ReportInventoryAlert, int64, error)
+	// 库存预警的 core 那一半（微服务拆分阶段 1a）：预警行本身由库存服务给
+	// （inventory.Service.LowStock），这三条回答库存服务回答不了的事 ——
+	// 门店范围、要排除的 SKU、补名字。三条都不看 f.Start / f.End（库存是现状）。
+	//
+	// ReportAlertStores 是未软删、落在 f.StoreID / f.RegionID / f.Only 里的门店。
+	ReportAlertStores(ctx context.Context, f ReportFilter) ([]ReportAlertStore, error)
+	// ReportAlertExcludedSKUs 是软删 SKU 与软删商品下的 SKU。
+	ReportAlertExcludedSKUs(ctx context.Context) ([]int64, error)
+	// ReportAlertSKUInfo 按 id 取货号、规格、商品与商品名。查不到的 id 不在结果里。
+	ReportAlertSKUInfo(ctx context.Context, skuIDs []int64) (map[int64]ReportAlertSKU, error)
 	// ReportSearchTotals / ReportSearchTerms 只看 f.Start / f.End（检索日志没有门店维度）。
 	ReportSearchTotals(ctx context.Context, f ReportFilter) (ReportSearchTotals, error)
 	ReportSearchTerms(ctx context.Context, f ReportFilter, onlyZero bool, limit int) ([]ReportSearchTerm, error)
@@ -242,41 +265,52 @@ func (t tenantTx) ReportStoreComparison(ctx context.Context, f ReportFilter) ([]
 	return out, nil
 }
 
-func (t tenantTx) ReportInventoryAlerts(ctx context.Context, f ReportFilter, limit int) ([]ReportInventoryAlert, int64, error) {
-	if err := checkLimit(limit); err != nil {
-		return nil, 0, err
-	}
-	total, err := t.q.ReportCountInventoryAlerts(ctx, db.ReportCountInventoryAlertsParams{
+func (t tenantTx) ReportAlertStores(ctx context.Context, f ReportFilter) ([]ReportAlertStore, error) {
+	rows, err := t.q.ReportAlertStores(ctx, db.ReportAlertStoresParams{
 		StoreID: f.StoreID, RegionID: f.RegionID,
 		OnlyRegionIds: f.Only.RegionIDs, OnlyStoreIds: f.Only.StoreIDs,
 	})
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
-	rows, err := t.q.ReportInventoryAlerts(ctx, db.ReportInventoryAlertsParams{
-		StoreID: f.StoreID, RegionID: f.RegionID,
-		OnlyRegionIds: f.Only.RegionIDs, OnlyStoreIds: f.Only.StoreIDs,
-		RowLimit: int32(limit),
-	})
+	out := make([]ReportAlertStore, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, ReportAlertStore{ID: r.ID, Name: r.Name, RegionID: r.RegionID})
+	}
+	return out, nil
+}
+
+func (t tenantTx) ReportAlertExcludedSKUs(ctx context.Context) ([]int64, error) {
+	ids, err := t.q.ReportAlertExcludedSKUs(ctx)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
-	out := make([]ReportInventoryAlert, 0, len(rows))
+	if ids == nil {
+		ids = []int64{}
+	}
+	return ids, nil
+}
+
+func (t tenantTx) ReportAlertSKUInfo(ctx context.Context, skuIDs []int64) (map[int64]ReportAlertSKU, error) {
+	out := make(map[int64]ReportAlertSKU, len(skuIDs))
+	if len(skuIDs) == 0 {
+		return out, nil
+	}
+	rows, err := t.q.ReportAlertSKUInfo(ctx, skuIDs)
+	if err != nil {
+		return nil, err
+	}
 	for _, r := range rows {
 		spec := map[string]string{}
 		if len(r.SpecValues) > 0 {
 			if err := json.Unmarshal(r.SpecValues, &spec); err != nil {
-				return nil, 0, fmt.Errorf("sku %d 的 spec_values 解不开: %w", r.SkuID, err)
+				return nil, fmt.Errorf("sku %d 的 spec_values 解不开: %w", r.ID, err)
 			}
 		}
-		out = append(out, ReportInventoryAlert{
-			StoreID: r.StoreID, StoreName: r.StoreName, RegionID: r.RegionID,
-			SKUID: r.SkuID, SKUCode: r.SkuCode, SpecValues: spec,
-			ProductID: r.ProductID, ProductTitle: r.ProductTitle,
-			AvailableQty: int(r.AvailableQty), WarningQty: int(r.WarningQty),
-		})
+		out[r.ID] = ReportAlertSKU{SKUCode: r.SkuCode, SpecValues: spec,
+			ProductID: r.ProductID, ProductTitle: r.ProductTitle}
 	}
-	return out, total, nil
+	return out, nil
 }
 
 func (t tenantTx) ReportSearchTotals(ctx context.Context, f ReportFilter) (ReportSearchTotals, error) {

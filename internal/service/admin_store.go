@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/keel/keel/internal/auth"
+	"github.com/keel/keel/internal/inventory"
 	"github.com/keel/keel/internal/repository"
 )
 
@@ -54,10 +55,14 @@ type AdminStoreRepository interface {
 }
 
 // AdminStoreService 实现那 21 条。
-type AdminStoreService struct{ repo AdminStoreRepository }
+type AdminStoreService struct {
+	repo AdminStoreRepository
+	// inv 是库存服务（微服务拆分阶段 1a）：门店库存清单的水位与两条改库存都经它。
+	inv inventory.Service
+}
 
-func NewAdminStoreService(r AdminStoreRepository) *AdminStoreService {
-	return &AdminStoreService{repo: r}
+func NewAdminStoreService(r AdminStoreRepository, inv inventory.Service) *AdminStoreService {
+	return &AdminStoreService{repo: r, inv: inv}
 }
 
 // ---------------------------------------------------------------------------
@@ -618,39 +623,18 @@ func (s *AdminStoreService) ClearRegionPrice(ctx context.Context, regionID, skuI
 // ListStoreInventories 实现 GET /admin/stores/{store_id}/inventories。
 //
 // **缺行要显示成 0，不能漏掉**：一家刚开的店在录库存之前每个 SKU 都缺行，
-// 漏掉它们会让后台看起来「这家店一个 SKU 都没有」。那件事由 SQL 的
-// LEFT JOIN 做（db/queries/scoped_catalog.sql），这里只是把页传下去。
+// 漏掉它们会让后台看起来「这家店一个 SKU 都没有」。驱动是 core 的 SKU 分页，
+// 水位由库存服务补（缺行记 0），见 inventory_admin.go 的 listStoreInventories。
 func (s *AdminStoreService) ListStoreInventories(ctx context.Context, storeID int64,
 	lowStockOnly bool, page, pageSize int) (StoreInventoryPage, error) {
-
-	page, pageSize = clampPaging(page, pageSize)
-	out := StoreInventoryPage{Items: []repository.StoreInventory{}, Page: page, PageSize: pageSize}
-	err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
-		if _, e := authorizeStore(ctx, tx, storeID, storeOperate); e != nil {
-			return e
-		}
-		if _, _, e := tx.StoreScope(ctx, storeID); e != nil {
-			return e
-		}
-		items, total, e := tx.ListStoreInventories(ctx, storeID, lowStockOnly,
-			int32(pageSize), int32(offsetOf(page, pageSize)))
-		if e != nil {
-			return e
-		}
-		out.Items, out.Total = items, total
-		return nil
-	})
-	if err != nil {
-		return StoreInventoryPage{}, err
-	}
-	return out, nil
+	return listStoreInventories(ctx, s.repo, s.inv, storeID, lowStockOnly, page, pageSize)
 }
 
 // SetStoreInventory 实现 PUT /admin/stores/{store_id}/skus/{sku_id}/inventory。
 //
 // CAS 的条件里**不能漏 store_id** —— 漏了会一次改掉该 SKU 在所有门店的行。
-// 那件事由 SQL 保证（SetStoreInventoryByCAS 的 WHERE 里两列都在），
-// 这一层只负责把两个数量校到非负：chk_qty_nonneg 兜不住负的 expected，
+// 那件事由库存服务的 SQL 保证（InvSetStock 的 WHERE 里两列都在），
+// 这一层负责把两个数量校到非负：chk_qty_nonneg 兜不住负的 expected，
 // 而一个负的 expected 永远匹配不上任何一行，症状是「怎么改都 409」——
 // 而 409 的含义是「重读一次再试就能成功」，于是调用方会一直试下去。
 func (s *AdminStoreService) SetStoreInventory(ctx context.Context, storeID, skuID int64,
@@ -672,16 +656,7 @@ func (s *AdminStoreService) SetStoreInventory(ctx context.Context, storeID, skuI
 		return repository.StoreInventory{}, err
 	}
 	in.BizID = bizID
-	var out repository.StoreInventory
-	err = s.repo.WithTenant(ctx, func(tx repository.Tx) error {
-		if _, e := authorizeStore(ctx, tx, storeID, storeOperate); e != nil {
-			return e
-		}
-		var e error
-		out, e = tx.SetStoreInventory(ctx, storeID, skuID, in)
-		return e
-	})
-	return out, err
+	return setStockInStore(ctx, s.repo, s.inv, storeID, skuID, in)
 }
 
 // InventoryAdjustInput 是契约 InventoryAdjustRequest 在业务层的形状。
@@ -697,93 +672,10 @@ const (
 )
 
 // AdjustStoreInventory 实现 POST /admin/stores/{store_id}/skus/{sku_id}/inventory/adjustments。
-// 返回的 bool 为真表示幂等重放。
+// 返回的 bool 为真表示幂等重放。业务全在 inventory_admin.go 的 adjustInventory。
 func (s *AdminStoreService) AdjustStoreInventory(ctx context.Context, storeID, skuID int64,
 	in InventoryAdjustInput, idemKey string) (repository.StoreInventory, bool, error) {
-	return adjustInventory(ctx, s.repo, storeID, skuID, in, idemKey)
-}
-
-// adjustInventory 是相对调整的全部业务，两条路径共用（按门店那条与单店捷径，
-// 后者 storeID 传 0，在事务里用 SoleStore 解析）。
-//
-// ===========================================================================
-// 为什么它要幂等键，而 PUT 那条不要
-// ===========================================================================
-//
-// PUT 是绝对值：同一个请求发两次，结果与发一次相同，天然幂等。相对调整不是 ——
-// 「+100」因为网络超时被客户端重发一次就是 +200，而且没有任何东西会响。
-// 所以它走 idempotentTx：抢占、调整、写流水、存档，全在**同一个事务**里。
-// 409（扣完会变负）让整个事务回滚，抢占那一行随之消失，补完货之后拿同一把钥匙
-// 重试可以成功 —— 失败的请求等于没有发生过（admin_idempotency.go 的文件头）。
-//
-// ===========================================================================
-// 请求哈希里的门店位
-// ===========================================================================
-//
-// 路径参数进哈希（adminRequestHash 的规矩）。捷径的门店不在路径上，写 0 ——
-// 门店 id 是自增主键，不会是 0。于是同一把钥匙先打捷径、再打按门店那条，
-// 哪怕落到同一家店，也是两个不同的请求（422 idempotency-key-reused），
-// 不会被当成重放。反过来的做法（捷径先解析门店再算哈希）要把哈希挪进事务里，
-// 而那时钥匙已经抢到了 —— 一个注定 422 的请求不该先占住钥匙。
-//
-// ===========================================================================
-// 通知
-// ===========================================================================
-//
-// 不发。动作是商家自己做的，改到预警线以下时他正看着那个数 —— 与 PUT 那条同一个
-// 决定，登记在 notification_policy.go。
-func adjustInventory(ctx context.Context, repo tenantRunner, storeID, skuID int64,
-	in InventoryAdjustInput, idemKey string) (repository.StoreInventory, bool, error) {
-
-	staff, err := requireStaff(ctx)
-	if err != nil {
-		return repository.StoreInventory{}, false, err
-	}
-	// 校验排在抢占幂等键之前：一个注定被拒的请求不该占掉客户端那把钥匙
-	// （同 AdminCatalogService.CreateProduct）。
-	if in.Delta == 0 {
-		// 一次什么都不改的调整只会在流水里留下一行 before = after 的噪声。
-		return repository.StoreInventory{}, false,
-			fmt.Errorf("%w: delta 不能为 0", ErrCatalogBadRequest)
-	}
-	if in.Delta > maxInventoryAdjustDelta || in.Delta < -maxInventoryAdjustDelta {
-		// available_qty 是 INT：没有上限的话几次重复提交就能把它推到溢出，
-		// 而溢出在 PG 里是 22003，会以 500 的样子出现。
-		return repository.StoreInventory{}, false, fmt.Errorf(
-			"%w: delta 是 %d，绝对值上限是 %d", ErrCatalogBadRequest, in.Delta, maxInventoryAdjustDelta)
-	}
-	if err := checkOptText("reason", in.Reason, maxInventoryAdjustReason); err != nil {
-		return repository.StoreInventory{}, false, err
-	}
-	hash, err := adminRequestHash([]int64{storeID, skuID}, in)
-	if err != nil {
-		return repository.StoreInventory{}, false, err
-	}
-	// biz_id：谁、哪一次请求。幂等存档 24 小时后会被清掉，员工 id 不会 ——
-	// 过了存档期，流水里仍然说得出是谁调的。
-	bizID := fmt.Sprintf("adj:%d:%s", staff.StaffID, idemKey)
-
-	return idempotentTx(ctx, repo, repository.StaffSubject(staff.StaffID),
-		scopeAdminInventoryAdjust, idemKey, hash, archivedOK,
-		func(tx repository.Tx) (repository.StoreInventory, error) {
-			target := storeID
-			if target == 0 {
-				// 单店捷径。解析、判权、调整在同一个事务里（SetInventory 那段注释的
-				// 同一条理由）：分开的话，中间的一次开店会让「解析到 A 店」与
-				// 「调进 A 店」之间出现窗口，而那时正确答案已经是 409 了。
-				sole, e := tx.SoleStore(ctx)
-				if e != nil {
-					return repository.StoreInventory{}, e
-				}
-				target = sole
-			}
-			if _, e := authorizeStore(ctx, tx, target, storeOperate); e != nil {
-				return repository.StoreInventory{}, e
-			}
-			return tx.AdjustStoreInventory(ctx, target, skuID, repository.InventoryAdjust{
-				Delta: in.Delta, Reason: in.Reason, BizID: bizID,
-			})
-		})
+	return adjustInventory(ctx, s.repo, s.inv, storeID, skuID, in, idemKey)
 }
 
 // ---------------------------------------------------------------------------

@@ -14,6 +14,7 @@ import (
 	// 本身也加载不出来。编进来之后结果不再取决于部署机器上装了什么。
 	_ "time/tzdata"
 
+	"github.com/keel/keel/internal/inventory"
 	"github.com/keel/keel/internal/repository"
 )
 
@@ -83,12 +84,14 @@ type ReportRepo interface {
 // ReportService 实现六条报表。
 type ReportService struct {
 	repo ReportRepo
-	now  func() time.Time
+	// inv 是库存服务（微服务拆分阶段 1a）：库存预警的行由它给，core 只补名字。
+	inv inventory.Service
+	now func() time.Time
 }
 
 // NewReportService 建报表服务。
-func NewReportService(r ReportRepo) *ReportService {
-	return &ReportService{repo: r, now: time.Now}
+func NewReportService(r ReportRepo, inv inventory.Service) *ReportService {
+	return &ReportService{repo: r, inv: inv, now: time.Now}
 }
 
 // ReportQuery 是报表的公共参数（契约 ReportPeriod / ReportStartDate / ReportEndDate /
@@ -294,23 +297,92 @@ func (s *ReportService) Stores(ctx context.Context, q ReportQuery) (ReportStoreC
 }
 
 // InventoryAlerts 实现 GET /admin/reports/inventory-alerts。
+//
+// 拆分前是一条查询（inventories JOIN stores / skus / products）。本轮（微服务拆分阶段 1a）
+// 三段，结果与拆分前逐行相同：
+//
+//  1. core 事务：门店范围（未软删、落在 store_id / region_id 筛选与员工范围里的门店）
+//     与要排除的 SKU（软删的、软删商品下的）—— 拆分前那几个 JOIN 条件做的就是这两件；
+//  2. 库存服务按「显式的门店 id 列表 + 排除列表」取前 limit 条与总数（排序键不变）；
+//  3. core 事务：给这一页补货号、规格、商品名（门店名第 1 段已经有了）。
+//
+// 员工范围在第 1 段就收成了门店 id 列表，所以库存服务那一侧不需要认识员工，
+// 也不可能「忘了带范围」—— 空列表在它那里就是一条都没有。
+//
+// 库存服务不可用（拆分形态）时 503：total 与 items 在契约里都是必填，编不出来。
 func (s *ReportService) InventoryAlerts(ctx context.Context, storeID, regionID *int64, limit int) (ReportInventoryAlerts, error) {
 	if _, err := requireStaff(ctx); err != nil {
 		return ReportInventoryAlerts{}, err
 	}
 	limit = clampLimit(limit, ReportAlertDefaultLimit, ReportAlertMaxLimit)
-	var out ReportInventoryAlerts
+	var (
+		stores  []repository.ReportAlertStore
+		exclude []int64
+	)
 	err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
 		only, err := orderListScope(ctx)
 		if err != nil {
 			return err
 		}
-		out.Items, out.Total, err = tx.ReportInventoryAlerts(ctx,
-			repository.ReportFilter{StoreID: storeID, RegionID: regionID, Only: only}, limit)
+		if stores, err = tx.ReportAlertStores(ctx,
+			repository.ReportFilter{StoreID: storeID, RegionID: regionID, Only: only}); err != nil {
+			return err
+		}
+		exclude, err = tx.ReportAlertExcludedSKUs(ctx)
 		return err
 	})
 	if err != nil {
 		return ReportInventoryAlerts{}, err
+	}
+	out := ReportInventoryAlerts{Items: []repository.ReportInventoryAlert{}}
+	if len(stores) == 0 {
+		return out, nil
+	}
+
+	byStore := make(map[int64]repository.ReportAlertStore, len(stores))
+	storeIDs := make([]int64, 0, len(stores))
+	for _, st := range stores {
+		byStore[st.ID] = st
+		storeIDs = append(storeIDs, st.ID)
+	}
+	page, err := s.inv.LowStock(ctx, inventory.LowStockQuery{
+		StoreIDs: storeIDs, ExcludeSKUIDs: exclude, Limit: limit,
+	})
+	if err != nil {
+		return ReportInventoryAlerts{}, err
+	}
+	out.Total = page.Total
+	if len(page.Items) == 0 {
+		return out, nil
+	}
+
+	skuIDs := make([]int64, 0, len(page.Items))
+	for _, it := range page.Items {
+		skuIDs = append(skuIDs, it.SKUID)
+	}
+	var info map[int64]repository.ReportAlertSKU
+	if err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+		var err error
+		info, err = tx.ReportAlertSKUInfo(ctx, skuIDs)
+		return err
+	}); err != nil {
+		return ReportInventoryAlerts{}, err
+	}
+	for _, it := range page.Items {
+		sk, ok := info[it.SKUID]
+		st := byStore[it.StoreID]
+		if !ok {
+			// 库存有行、core 没有这个 SKU：单体形态下外键让它不可能；拆分形态下是孤儿行
+			// （对账任务的事，阶段 2）。不编名字，跳过这一行 —— total 里仍算着它，
+			// 与「库存服务说有这么多条」一致。
+			continue
+		}
+		out.Items = append(out.Items, repository.ReportInventoryAlert{
+			StoreID: it.StoreID, StoreName: st.Name, RegionID: st.RegionID,
+			SKUID: it.SKUID, SKUCode: sk.SKUCode, SpecValues: sk.SpecValues,
+			ProductID: sk.ProductID, ProductTitle: sk.ProductTitle,
+			AvailableQty: int(it.Available), WarningQty: int(it.Warning),
+		})
 	}
 	return out, nil
 }

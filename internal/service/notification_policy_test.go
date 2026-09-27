@@ -23,7 +23,10 @@ import (
 //  1. db/queries 里每一条改 orders.status、改 refunds、建 refunds、改库存水位的语句
 //     （正则识别，见 stateChangingQuery）—— 这是状态变化真正落库的地方；
 //  2. internal/repository 里调这条语句的方法（t.q.<Query>(…) 所在的方法）；
-//  3. internal/service 里每一处 tx.<方法>(…) 的调用，按所在的函数归类。
+//  3. internal/service 里每一处 tx.<方法>(…) 的调用，按所在的函数归类；
+//     以及每一处对库存服务写方法的调用（inv.Set / inv.Adjust / inv.InitSKUs，接收者是 inv 或
+//     s.inv）—— 微服务拆分阶段 1a 起后台改库存经 inventory.Service，落库在库存服务的仓储里
+//     （repository/inventory_svc.go），service 里能看见的只剩这一跳。
 //
 // 第 3 步的每一处都必须在 notificationCallSites 里登记：要么点名发哪个 notifyXxx ——
 // 而且**所在的函数里真的调了它**；要么写明为什么刻意不发。新加一条状态迁移、新加一个调用点、
@@ -197,11 +200,17 @@ func TestEveryStateTransitionNotifiesOrSaysWhyNot(t *testing.T) {
 					return true
 				}
 				q, ok := methods[sel.Sel.Name]
-				if !ok {
-					return true
+				if ok {
+					if id, isIdent := sel.X.(*ast.Ident); !isIdent || id.Name != "tx" {
+						ok = false
+					}
 				}
-				if id, ok := sel.X.(*ast.Ident); !ok || id.Name != "tx" {
-					return true
+				if !ok {
+					w, isWrite := inventoryWrites[sel.Sel.Name]
+					if !isWrite || !isInventoryReceiver(sel.X) {
+						return true
+					}
+					q = w
 				}
 				key := funcKey(fn) + "/" + sel.Sel.Name
 				seen[key] = true
@@ -240,6 +249,25 @@ func TestEveryStateTransitionNotifiesOrSaysWhyNot(t *testing.T) {
 	// 每个点名的 notifyXxx 都真的存在（callsIdent 只比名字，一个拼错的名字会恒不命中而报错，
 	// 但一个被删掉定义、却还被调用的名字编译不过 —— 两头都有人管）。
 	t.Logf("状态变化语句 %d 条，service 里的调用点 %d 处", len(queries), len(seen))
+}
+
+// inventoryWrites 是库存服务（inventory.Service）上会改库存水位的方法，值是它最终落库的语句
+// （只为报错信息）。读方法（StoreStock / SKUTotals / HealthySKUs / LowStock）不在这里。
+var inventoryWrites = map[string]string{
+	"Set":      "InvSetStock",
+	"Adjust":   "InvAdjustStock",
+	"InitSKUs": "InvInitSKU",
+}
+
+// isInventoryReceiver 判调用的接收者是不是库存服务：一个叫 inv 的标识符，或者 x.inv。
+func isInventoryReceiver(x ast.Expr) bool {
+	switch v := x.(type) {
+	case *ast.Ident:
+		return v.Name == "inv"
+	case *ast.SelectorExpr:
+		return v.Sel.Name == "inv"
+	}
+	return false
 }
 
 var transitionInsertRE = regexp.MustCompile(`(?s)INSERT INTO (order|refund)_status_transitions[^;]*?VALUES(.*?);`)

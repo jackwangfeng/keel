@@ -128,11 +128,9 @@ func (q *Queries) GetProduct(ctx context.Context, arg GetProductParams) (GetProd
 }
 
 const listProductSKUs = `-- name: ListProductSKUs :many
-SELECT s.id, s.sku_code, s.spec_values, v.price_cents, s.image_url,
-       COALESCE(i.available_qty, 0)::int AS available_qty
+SELECT s.id, s.sku_code, s.spec_values, v.price_cents, s.image_url
   FROM skus s
   JOIN sku_prices_by_store v ON v.sku_id = s.id AND v.store_id = $1
-  LEFT JOIN inventories i ON i.sku_id = s.id AND i.store_id = $1
  WHERE s.product_id = $2
    AND s.status = 1
    AND s.deleted_at IS NULL
@@ -145,15 +143,20 @@ type ListProductSKUsParams struct {
 }
 
 type ListProductSKUsRow struct {
-	ID           int64
-	SkuCode      string
-	SpecValues   []byte
-	PriceCents   int64
-	ImageUrl     *string
-	AvailableQty int32
+	ID         int64
+	SkuCode    string
+	SpecValues []byte
+	PriceCents int64
+	ImageUrl   *string
 }
 
-// 一件商品的全部在售 SKU，带上当前可售水位。契约的 ProductDetail.skus。
+// 一件商品的全部在售 SKU。契约的 ProductDetail.skus。
+//
+// **水位不在这里了**（微服务拆分阶段 1a）：inventories 归库存服务，core 的查询不再 JOIN 它。
+// service/product.go 拿这批 sku_id 向库存服务批量问一次这家店的水位，在 Go 里合并；
+// 没问到的 sku_id 记可售 0 —— 与下面那段「缺行 ≡ 可售 0」是同一个口径，只是判定从
+// LEFT JOIN + COALESCE 挪到了合并那一步。下面几段讲 LEFT JOIN 与 store_id 的旧注释保留着，
+// 它们说的「缺行即 0」「按 (sku_id, store_id) 取」如今由合并那一步兑现。
 //
 // s.status = 1 与 ListSKUsForPricing 的那个条件对齐：详情页列出来的 SKU
 // 必须是真的下得了单的那些，否则用户点进去加购再下单才被 422 拒掉，
@@ -191,7 +194,6 @@ func (q *Queries) ListProductSKUs(ctx context.Context, arg ListProductSKUsParams
 			&i.SpecValues,
 			&i.PriceCents,
 			&i.ImageUrl,
-			&i.AvailableQty,
 		); err != nil {
 			return nil, err
 		}

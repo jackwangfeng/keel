@@ -181,7 +181,13 @@ func (h *SearchHandler) Search(c *gin.Context) {
 	for _, it := range res.Items {
 		max := api.Money(it.MaxPriceCents)
 		sales := int(it.SalesCount)
-		inStock := it.InStock
+		// 没拿到库存（拆分形态下库存服务不可用）时 in_stock 缺席：它在契约里是可选的，
+		// 缺席如实说「这次不知道」，而一个编出来的 true / false 都是在撒谎。
+		var inStock *bool
+		if !it.StockUnknown {
+			v := it.InStock
+			inStock = &v
+		}
 		hit := api.SearchHit{
 			Id:            it.ID,
 			Title:         it.Title,
@@ -190,7 +196,7 @@ func (h *SearchHandler) Search(c *gin.Context) {
 			MinPriceCents: api.Money(it.MinPriceCents),
 			MaxPriceCents: &max,
 			SalesCount:    &sales,
-			InStock:       &inStock,
+			InStock:       inStock,
 			Status:        api.SearchHitStatus(it.Status),
 		}
 		if sr.Explain {

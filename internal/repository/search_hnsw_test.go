@@ -100,7 +100,6 @@ func TestHNSWPostFilterTrapAndItsFix(t *testing.T) {
 		QueryEmbedding: fx.queryLiteral,
 		StoreID:        fx.victimStore,
 		RegionID:       fx.victimRegion,
-		InStockOnly:    false,
 		RowLimit:       hnswSearchSize,
 	}
 

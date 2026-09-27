@@ -44,15 +44,17 @@ type CartLine struct {
 	// OnShelf 与定价查询的四个在架条件逐字对应。为假即失效（off_shelf）。
 	OnShelf bool
 	// AvailableQty 这家门店的可售量；没有库存行记为 0。
+	//
+	// **这一层不填它**（微服务拆分阶段 1a）：库存归库存服务，service/cart.go 在开事务之前
+	// 批量问好这家店的水位，读出车之后逐行填上。ListCartLines 返回时它恒为 0。
 	AvailableQty int32
 }
 
-// CartSKU 是加购时取的 SKU 状态。
+// CartSKU 是加购时取的 SKU 状态。可售量不在这里（同 CartLine.AvailableQty）。
 type CartSKU struct {
-	ID           int64
-	ProductID    int64
-	OnShelf      bool
-	AvailableQty int32
+	ID        int64
+	ProductID int64
+	OnShelf   bool
 }
 
 // CartTx 是购物车这一面。
@@ -62,11 +64,13 @@ type CartTx interface {
 	// EnsureCart 取这个买家的车，没有就建。
 	EnsureCart(ctx context.Context, userID int64) (int64, error)
 
-	// ListCartLines 整辆车，按加购时间倒序。storeID 决定 AvailableQty 按哪家店算；
-	// 0 表示没有门店（不在服务范围），此时 AvailableQty 恒为 0。
-	ListCartLines(ctx context.Context, cartID, storeID int64) ([]CartLine, error)
-	// FindSKUForCart 取一个 SKU 在这家店的状态。查不到返回 ErrSKUNotFound。
-	FindSKUForCart(ctx context.Context, skuID, storeID int64) (CartSKU, error)
+	// ListCartLines 整辆车，按加购时间倒序。AvailableQty 恒为 0，由 service 按库存服务的
+	// 回答填（阶段 1a）。
+	ListCartLines(ctx context.Context, cartID int64) ([]CartLine, error)
+	// CartSKUIDs 这辆车里有哪些 SKU（service 据此向库存服务批量问水位）。
+	CartSKUIDs(ctx context.Context, cartID int64) ([]int64, error)
+	// FindSKUForCart 取一个 SKU 的状态（属于哪件商品、在不在架）。查不到返回 ErrSKUNotFound。
+	FindSKUForCart(ctx context.Context, skuID int64) (CartSKU, error)
 	// CountCartLines 车里有几种商品。
 	CountCartLines(ctx context.Context, cartID int64) (int64, error)
 	// CartLineQuantity 车里某个 SKU 当前的数量；不在车里返回 0。
@@ -104,8 +108,12 @@ func (t tenantTx) EnsureCart(ctx context.Context, userID int64) (int64, error) {
 	return t.q.EnsureCart(ctx, userID)
 }
 
-func (t tenantTx) ListCartLines(ctx context.Context, cartID, storeID int64) ([]CartLine, error) {
-	rows, err := t.q.ListCartLines(ctx, db.ListCartLinesParams{CartID: cartID, StoreID: storeID})
+func (t tenantTx) CartSKUIDs(ctx context.Context, cartID int64) ([]int64, error) {
+	return t.q.ListCartSKUIDs(ctx, cartID)
+}
+
+func (t tenantTx) ListCartLines(ctx context.Context, cartID int64) ([]CartLine, error) {
+	rows, err := t.q.ListCartLines(ctx, cartID)
 	if err != nil {
 		return nil, err
 	}
@@ -123,21 +131,20 @@ func (t tenantTx) ListCartLines(ctx context.Context, cartID, storeID int64) ([]C
 			OnShelf:    r.OnShelf,
 
 			MainImageUploadID: r.MainImageUploadID,
-			AvailableQty:      r.AvailableQty,
 		})
 	}
 	return out, nil
 }
 
-func (t tenantTx) FindSKUForCart(ctx context.Context, skuID, storeID int64) (CartSKU, error) {
-	r, err := t.q.FindSKUForCart(ctx, db.FindSKUForCartParams{SkuID: skuID, StoreID: storeID})
+func (t tenantTx) FindSKUForCart(ctx context.Context, skuID int64) (CartSKU, error) {
+	r, err := t.q.FindSKUForCart(ctx, skuID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return CartSKU{}, ErrSKUNotFound
 	}
 	if err != nil {
 		return CartSKU{}, err
 	}
-	return CartSKU{ID: r.ID, ProductID: r.ProductID, OnShelf: r.OnShelf, AvailableQty: r.AvailableQty}, nil
+	return CartSKU{ID: r.ID, ProductID: r.ProductID, OnShelf: r.OnShelf}, nil
 }
 
 func (t tenantTx) CountCartLines(ctx context.Context, cartID int64) (int64, error) {

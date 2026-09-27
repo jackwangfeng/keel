@@ -42,16 +42,13 @@ const adminGetProduct = `-- name: AdminGetProduct :one
 SELECT p.id, p.category_id, p.brand_id, p.title, p.subtitle, p.description,
        COALESCE(agg.min_price, 0)::bigint AS min_price_cents,
        COALESCE(agg.max_price, 0)::bigint AS max_price_cents,
-       COALESCE(agg.stock, 0)::int        AS total_stock,
        p.sales_count,
        p.status, p.published_at, p.deleted_at, p.created_at, p.updated_at,
        p.freight_template_id
   FROM products p
   LEFT JOIN LATERAL (
-        SELECT min(s.price_cents) AS min_price, max(s.price_cents) AS max_price,
-               COALESCE(sum(i.available_qty), 0)::int AS stock
+        SELECT min(s.price_cents) AS min_price, max(s.price_cents) AS max_price
           FROM skus s
-          LEFT JOIN inventories i ON i.sku_id = s.id
          WHERE s.product_id = p.id AND s.deleted_at IS NULL
        ) agg ON TRUE
  WHERE p.id = $1
@@ -66,7 +63,6 @@ type AdminGetProductRow struct {
 	Description       *string
 	MinPriceCents     int64
 	MaxPriceCents     int64
-	TotalStock        int32
 	SalesCount        int32
 	Status            int16
 	PublishedAt       pgtype.Timestamptz
@@ -97,7 +93,6 @@ func (q *Queries) AdminGetProduct(ctx context.Context, id int64) (AdminGetProduc
 		&i.Description,
 		&i.MinPriceCents,
 		&i.MaxPriceCents,
-		&i.TotalStock,
 		&i.SalesCount,
 		&i.Status,
 		&i.PublishedAt,
@@ -109,21 +104,52 @@ func (q *Queries) AdminGetProduct(ctx context.Context, id int64) (AdminGetProduc
 	return i, err
 }
 
+const adminListLiveSKUsOfProducts = `-- name: AdminListLiveSKUsOfProducts :many
+SELECT s.product_id, s.id
+  FROM skus s
+ WHERE s.product_id = ANY($1::bigint[])
+   AND s.deleted_at IS NULL
+`
+
+type AdminListLiveSKUsOfProductsRow struct {
+	ProductID int64
+	ID        int64
+}
+
+// 一批商品的未软删 SKU（含停售）。后台商品列表 / 详情算 total_stock 用：
+// 与拆分前 LATERAL 里 「s.deleted_at IS NULL」 那个条件逐字一致。
+func (q *Queries) AdminListLiveSKUsOfProducts(ctx context.Context, productIds []int64) ([]AdminListLiveSKUsOfProductsRow, error) {
+	rows, err := q.db.Query(ctx, adminListLiveSKUsOfProducts, productIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AdminListLiveSKUsOfProductsRow
+	for rows.Next() {
+		var i AdminListLiveSKUsOfProductsRow
+		if err := rows.Scan(&i.ProductID, &i.ID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const adminListProducts = `-- name: AdminListProducts :many
 
 SELECT p.id, p.category_id, p.brand_id, p.title, p.subtitle, p.description,
        COALESCE(agg.min_price, 0)::bigint AS min_price_cents,
        COALESCE(agg.max_price, 0)::bigint AS max_price_cents,
-       COALESCE(agg.stock, 0)::int        AS total_stock,
        p.sales_count,
        p.status, p.published_at, p.deleted_at, p.created_at, p.updated_at,
        p.freight_template_id
   FROM products p
   LEFT JOIN LATERAL (
-        SELECT min(s.price_cents) AS min_price, max(s.price_cents) AS max_price,
-               COALESCE(sum(i.available_qty), 0)::int AS stock
+        SELECT min(s.price_cents) AS min_price, max(s.price_cents) AS max_price
           FROM skus s
-          LEFT JOIN inventories i ON i.sku_id = s.id
          WHERE s.product_id = p.id AND s.deleted_at IS NULL
        ) agg ON TRUE
  WHERE ($1::smallint IS NULL OR p.status = $1::smallint)
@@ -151,7 +177,6 @@ type AdminListProductsRow struct {
 	Description       *string
 	MinPriceCents     int64
 	MaxPriceCents     int64
-	TotalStock        int32
 	SalesCount        int32
 	Status            int16
 	PublishedAt       pgtype.Timestamptz
@@ -186,6 +211,11 @@ type AdminListProductsRow struct {
 // 但从此没有任何一处写它，所以后台这三个数一律从 skus / inventories 现算）。
 // 公式与前台 ListProducts 那条逐字一致：未软删的 SKU，COALESCE 到 0。
 //
+// **total_stock 本轮（微服务拆分阶段 1a）搬出了这条查询**：inventories 归库存服务，
+// service/admin_catalog.go 用 AdminListLiveSKUsOfProducts 取这一页商品的未软删 SKU、
+// 向库存服务要这批 SKU 的跨门店合计，再按商品加总 —— 公式不变（未软删 SKU 的
+// available_qty 之和，缺行记 0），只是加总从 SQL 挪到了 Go。
+//
 // 为什么 total_stock 也跟着现算而不是继续读列：RecalcProductAggregates 一删，
 // 那一列就回到了 db/queries/search.sql 文件头点名的状态 ——
 // 「一句永远不会被纠正的谎」。后台那个数是商家用来决定要不要补货的，
@@ -214,7 +244,6 @@ func (q *Queries) AdminListProducts(ctx context.Context, arg AdminListProductsPa
 			&i.Description,
 			&i.MinPriceCents,
 			&i.MaxPriceCents,
-			&i.TotalStock,
 			&i.SalesCount,
 			&i.Status,
 			&i.PublishedAt,

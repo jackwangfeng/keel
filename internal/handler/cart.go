@@ -216,6 +216,7 @@ func apiCart(v service.CartView) api.Cart {
 // writeCartError 把购物车的业务错误翻成契约里的响应。cart_delete.go 共用。
 func writeCartError(c *gin.Context, err error) {
 	switch {
+	case writeInventoryUnavailable(c, err):
 	case errors.Is(err, service.ErrCartItemNotFound):
 		// 别人车里的条目与不存在的条目同一个 404（契约：不是 403）。
 		problem.Write(c, http.StatusNotFound, problem.TypeNotFound, "购物车条目不存在")

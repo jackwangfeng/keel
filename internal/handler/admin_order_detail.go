@@ -248,7 +248,7 @@ func apiStoreSnapshot(s service.StoreSnapshot) api.OrderStoreSnapshot {
 // writeAdminListError 是两条后台列表的错误出口：判权（理论上列表不会被拒 ——
 // 范围只收窄、不拒绝 —— 但未知的判权错误照样按契约翻）、筛选参数不合法 422，其余 500。
 func writeAdminListError(c *gin.Context, err error) {
-	if writePermissionError(c, err) {
+	if writePermissionError(c, err) || writeInventoryUnavailable(c, err) {
 		return
 	}
 	if errors.Is(err, service.ErrAdminListBadRequest) {

@@ -23,14 +23,15 @@ import (
 // SearchFilters 是契约 SearchFilters 在这一层的形状。
 //
 // 指针表示「没传」：category_id 传 0 与不传是两件事（前者会筛掉一切，
-// 后者不筛）。InStockOnly 不是指针 —— 契约给了它 default（false），
-// 「没传」在契约里就等于 false，handler 负责把这件事落定，到这一层时它已经
-// 是一个确定的布尔值。
+// 后者不筛）。
+//
+// **没有 InStockOnly**（微服务拆分阶段 1a）：库存归库存服务，召回查询不再 JOIN
+// inventories，「只看有货」变成 service 在召回之后的过滤（service/search.go）。
+// 这一层留一个不执行的开关，等于让调用方以为 SQL 在替它筛。
 type SearchFilters struct {
 	CategoryID    *int64
 	MinPriceCents *int64
 	MaxPriceCents *int64
-	InStockOnly   bool
 }
 
 // SearchHit 是一路召回里的一条。
@@ -47,7 +48,8 @@ type SearchHit struct {
 	MaxPriceCents int64
 	SalesCount    int32
 	Status        int16
-	InStock       bool
+	// InStock 这一层不填（恒为 false）：由 service 按库存服务的回答算（阶段 1a）。
+	InStock bool
 
 	// MainImageUploadID 同 Product.MainImageUploadID：主图的 upload id，没有图为 nil。
 	MainImageUploadID *int64
@@ -76,6 +78,10 @@ type SearchTx interface {
 	// 悄悄返回空列表会把那个错藏起来。
 	SearchProductsByKeyword(ctx context.Context, sc StoreScope, tsquery string,
 		f SearchFilters, limit int32) ([]SearchHit, error)
+
+	// OnSaleSKUsOfProducts 返回这批商品各自的在售 SKU（键是 product_id），
+	// 检索据此算 in_stock（阶段 1a：水位由库存服务回答）。
+	OnSaleSKUsOfProducts(ctx context.Context, productIDs []int64) (map[int64][]int64, error)
 
 	// InsertSearchLog 写一行检索日志（数据模型 §8，迁移 00027）。
 	InsertSearchLog(ctx context.Context, l SearchLog) error
@@ -186,7 +192,6 @@ func (t tenantTx) SearchProductsByVector(ctx context.Context, sc StoreScope,
 		CategoryID:     f.CategoryID,
 		MinPriceCents:  f.MinPriceCents,
 		MaxPriceCents:  f.MaxPriceCents,
-		InStockOnly:    f.InStockOnly,
 		RowLimit:       limit,
 	})
 	if err != nil {
@@ -198,7 +203,7 @@ func (t tenantTx) SearchProductsByVector(ctx context.Context, sc StoreScope,
 			ID: r.ID, Title: r.Title, Subtitle: r.Subtitle,
 			MinPriceCents: r.MinPriceCents, MaxPriceCents: r.MaxPriceCents,
 			SalesCount: r.SalesCount, Status: r.Status,
-			InStock: r.InStock, Distance: r.Distance,
+			Distance:          r.Distance,
 			MainImageUploadID: mainImageOf(r.MainImageUploadID),
 		})
 	}
@@ -215,7 +220,6 @@ func (t tenantTx) SearchProductsByKeyword(ctx context.Context, sc StoreScope,
 		CategoryID:    f.CategoryID,
 		MinPriceCents: f.MinPriceCents,
 		MaxPriceCents: f.MaxPriceCents,
-		InStockOnly:   f.InStockOnly,
 		RowLimit:      limit,
 	})
 	if err != nil {
@@ -227,9 +231,26 @@ func (t tenantTx) SearchProductsByKeyword(ctx context.Context, sc StoreScope,
 			ID: r.ID, Title: r.Title, Subtitle: r.Subtitle,
 			MinPriceCents: r.MinPriceCents, MaxPriceCents: r.MaxPriceCents,
 			SalesCount: r.SalesCount, Status: r.Status,
-			InStock: r.InStock, Rank: r.Rank,
+			Rank:              r.Rank,
 			MainImageUploadID: mainImageOf(r.MainImageUploadID),
 		})
+	}
+	return out, nil
+}
+
+// OnSaleSKUsOfProducts 返回这批商品各自的在售 SKU（未软删、status = 1），键是 product_id。
+// 检索据此向库存服务问水位、算 in_stock（阶段 1a）。
+func (t tenantTx) OnSaleSKUsOfProducts(ctx context.Context, productIDs []int64) (map[int64][]int64, error) {
+	out := make(map[int64][]int64, len(productIDs))
+	if len(productIDs) == 0 {
+		return out, nil
+	}
+	rows, err := t.q.ListOnSaleSKUsOfProducts(ctx, productIDs)
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range rows {
+		out[r.ProductID] = append(out[r.ProductID], r.ID)
 	}
 	return out, nil
 }

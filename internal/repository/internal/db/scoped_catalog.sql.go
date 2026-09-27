@@ -11,220 +11,70 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const adjustStoreInventory = `-- name: AdjustStoreInventory :one
-WITH sellable AS (
-    SELECT sk.id
-      FROM skus sk
-      JOIN stores st ON st.id = $1
-     WHERE sk.id = $2 AND sk.deleted_at IS NULL
-       AND st.deleted_at IS NULL
-       AND NOT EXISTS (SELECT 1 FROM store_product_overrides o
-                        WHERE o.store_id = st.id AND o.product_id = sk.product_id
-                          AND o.status = 0)
-       AND NOT EXISTS (SELECT 1 FROM region_product_overrides o2
-                        WHERE o2.region_id = st.region_id AND o2.product_id = sk.product_id
-                          AND o2.status = 0)
-), cur AS (
-    SELECT inv.sku_id, inv.available_qty, inv.warning_qty, inv.updated_at
-      FROM inventories inv
-     WHERE inv.sku_id = $2 AND inv.store_id = $1
-), wrote AS (
-    INSERT INTO inventories (sku_id, store_id, available_qty, warning_qty)
-    SELECT $2, $1, GREATEST($3::int, 0), 0
-     WHERE EXISTS (SELECT 1 FROM sellable)
-       AND (EXISTS (SELECT 1 FROM cur) OR $3::int > 0)
-    ON CONFLICT (sku_id, store_id) DO UPDATE
-       SET available_qty = inventories.available_qty + $3::int,
-           updated_at    = now()
-     WHERE inventories.available_qty + $3::int >= 0
-    RETURNING available_qty AS w_available_qty,
-              warning_qty   AS w_warning_qty,
-              updated_at    AS w_updated_at
-)
-SELECT (SELECT count(*) FROM sellable) AS sellable_rows,
-       (SELECT count(*) FROM wrote)    AS written_rows,
-       c.available_qty   AS current_available_qty,
-       c.warning_qty     AS current_warning_qty,
-       c.updated_at      AS current_updated_at,
-       w.w_available_qty AS new_available_qty,
-       w.w_warning_qty   AS new_warning_qty,
-       w.w_updated_at    AS new_updated_at
-  FROM (SELECT 1) anchor
-  LEFT JOIN cur   c ON true
-  LEFT JOIN wrote w ON true
-`
-
-type AdjustStoreInventoryParams struct {
-	StoreID int64
-	SkuID   int64
-	Delta   int32
-}
-
-type AdjustStoreInventoryRow struct {
-	SellableRows        int64
-	WrittenRows         int64
-	CurrentAvailableQty *int32
-	CurrentWarningQty   *int32
-	CurrentUpdatedAt    pgtype.Timestamptz
-	NewAvailableQty     *int32
-	NewWarningQty       *int32
-	NewUpdatedAt        pgtype.Timestamptz
-}
-
-// 按门店的**相对调整**（契约 POST /admin/stores/{store_id}/skus/{sku_id}/inventory/adjustments，
-// 以及那条不带门店的捷径）。数据模型 §15 第 12 / 18 条在这里结清。
-//
-// 与 SetStoreInventoryByCAS 同一个骨架（sellable / cur / wrote 三个 CTE、同一个 MVCC 快照），
-// 差别只在写的那一句：不是「= $expected 才写」，是
-//
-//	available_qty = available_qty + $delta，且结果不得为负
-//
-// 这是下单扣减（DeductInventory 的 「available_qty >= $n」）的同一个手法，只是方向可正可负。
-// 进货 100 件从此是一条天然可组合的语句：两个人同时各进 100，结果是 +200，
-// 没有谁需要先读一个会过期的值，也没有谁会拿到一个「重读再试」的 409。
-//
-// ### 缺行 ≡ 可售 0（数据模型 §4），于是正的 delta 要能凭空建出那一行
-//
-// 写成 INSERT ... ON CONFLICT DO UPDATE ... WHERE，不是「有行就 UPDATE、没行就 INSERT」
-// 两条分支：那是两次快照，两个并发的首次进货会一个插成功、一个撞主键报 23505。
-// ON CONFLICT 由唯一索引判定有没有，判定与写在同一个点上 —— 并发的第二个会等第一个
-// 提交，然后走 DO UPDATE 把自己那一份加上去。
-//
-// 三处写法是逼出来的，每一处写反都会以一种不响的方式坏掉：
-//
-// 一、**插入值是 GREATEST($delta, 0)，不是 $delta。** chk_qty_nonneg 是对「提议插入的那一行」
-//
-//	求值的，而且早于冲突判定 —— 行已存在、delta 为负时，提议行里的负数会让整条语句以
-//	23514 失败，根本走不到 DO UPDATE。夹成 0 之后提议行永远合法；它只在真插入的那一支
-//	生效，而那一支由下面第二条保证 delta > 0。
-//
-// 二、**插入的前提是「快照里有这一行，或者 delta > 0」。** 缺行且 delta 为负，就是「从 0 扣」，
-//
-//	一行都不该写 —— 写一行 0 会把「这家店从没录过库存」变成「录过、是 0」，
-//	而两者在盘点页上是可以分开看的。这一支落到 written_rows = 0，调用方报 409，current 为 0。
-//
-// 三、**DO UPDATE 里加的是 inventories.available_qty + $delta，不是 excluded.available_qty。**
-//
-//	excluded 是第一条夹过的那个值，与「加上 delta」没有关系。WHERE 里的非负判定同理，
-//	而且它看的是**冲突那一行的最新提交版本**（READ COMMITTED 下 ON CONFLICT 会锁住并重读它），
-//	所以并发扣减之后的真实余量才是判据，不是快照里那个旧值。
-//
-// ### 两种 0 行，与 CAS 那条同一种分法
-//
-//	sellable_rows = 0 → 404（门店 / SKU 不可见、已软删，或这家店 / 它所在大区下架了这件商品）；
-//	written_rows  = 0 → 409 inventory-insufficient（扣完会变负），current 是快照里的水位
-//	                     （缺行时为 0）。
-//
-// current 取自快照，不是 DO UPDATE 那一刻重读到的最新值：并发扣减发生在两者之间时，
-// 它可能比真实值大。这与 CAS 那条的 current 是同一个精度，而且方向是安全的 ——
-// 调用方拿它算出来的新 delta 仍然走这条带判定的语句，不会把库存扣成负数。
-//
-// 流水（inventory_logs，biz_type = 5）不在这条语句里，由 repository 在同一个事务里
-// 紧接着写：before = after - delta 在这里是精确的（写的就是 「+ delta」），不需要再读一次。
-//
-// sqlc 的将就与 SetStoreInventoryByCAS 一样：CTE 里的表各带别名，RETURNING 列改名（w_ 前缀），
-// 末尾 FROM (SELECT 1) anchor LEFT JOIN。
-func (q *Queries) AdjustStoreInventory(ctx context.Context, arg AdjustStoreInventoryParams) (AdjustStoreInventoryRow, error) {
-	row := q.db.QueryRow(ctx, adjustStoreInventory, arg.StoreID, arg.SkuID, arg.Delta)
-	var i AdjustStoreInventoryRow
-	err := row.Scan(
-		&i.SellableRows,
-		&i.WrittenRows,
-		&i.CurrentAvailableQty,
-		&i.CurrentWarningQty,
-		&i.CurrentUpdatedAt,
-		&i.NewAvailableQty,
-		&i.NewWarningQty,
-		&i.NewUpdatedAt,
-	)
-	return i, err
-}
-
-const adminCountStoreInventories = `-- name: AdminCountStoreInventories :one
+const adminCountStoreInventorySKUs = `-- name: AdminCountStoreInventorySKUs :one
 SELECT count(*)
   FROM skus s
-  LEFT JOIN inventories i ON i.sku_id = s.id AND i.store_id = $1
  WHERE s.deleted_at IS NULL
-   AND (NOT $2::boolean
-        OR COALESCE(i.available_qty, 0) <= COALESCE(i.warning_qty, 0))
+   AND NOT (s.id = ANY($1::bigint[]))
 `
 
-type AdminCountStoreInventoriesParams struct {
-	StoreID      int64
-	LowStockOnly bool
-}
-
-// 条件必须与 AdminListStoreInventories 逐字一致。
-func (q *Queries) AdminCountStoreInventories(ctx context.Context, arg AdminCountStoreInventoriesParams) (int64, error) {
-	row := q.db.QueryRow(ctx, adminCountStoreInventories, arg.StoreID, arg.LowStockOnly)
+// 条件必须与 AdminListStoreInventorySKUs 逐字一致。
+func (q *Queries) AdminCountStoreInventorySKUs(ctx context.Context, excludeSkuIds []int64) (int64, error) {
+	row := q.db.QueryRow(ctx, adminCountStoreInventorySKUs, excludeSkuIds)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
 }
 
-const adminListStoreInventories = `-- name: AdminListStoreInventories :many
+const adminListStoreInventorySKUs = `-- name: AdminListStoreInventorySKUs :many
 
-SELECT s.id AS sku_id, s.sku_code,
-       COALESCE(i.available_qty, 0)::int AS available_qty,
-       COALESCE(i.warning_qty, 0)::int   AS warning_qty,
-       COALESCE(i.updated_at, s.updated_at) AS updated_at
+SELECT s.id AS sku_id, s.sku_code, s.updated_at
   FROM skus s
-  LEFT JOIN inventories i ON i.sku_id = s.id AND i.store_id = $1
  WHERE s.deleted_at IS NULL
-   AND (NOT $2::boolean
-        OR COALESCE(i.available_qty, 0) <= COALESCE(i.warning_qty, 0))
+   AND NOT (s.id = ANY($1::bigint[]))
  ORDER BY s.id
- LIMIT $4 OFFSET $3
+ LIMIT $3 OFFSET $2
 `
 
-type AdminListStoreInventoriesParams struct {
-	StoreID      int64
-	LowStockOnly bool
-	PageOffset   int32
-	PageLimit    int32
+type AdminListStoreInventorySKUsParams struct {
+	ExcludeSkuIds []int64
+	PageOffset    int32
+	PageLimit     int32
 }
 
-type AdminListStoreInventoriesRow struct {
-	SkuID        int64
-	SkuCode      string
-	AvailableQty int32
-	WarningQty   int32
-	UpdatedAt    pgtype.Timestamptz
+type AdminListStoreInventorySKUsRow struct {
+	SkuID     int64
+	SkuCode   string
+	UpdatedAt pgtype.Timestamptz
 }
 
 // ===========================================================================
 // 门店维度的库存
 // ===========================================================================
-// 这家店的库存清单。
+// 这家店的库存清单（GET /admin/stores/{store_id}/inventories）的 SKU 那一半。
 //
-// **缺一行等于可售 0，不等于「这家店不卖」**（数据模型 §4 把这条写死了）。
-// 一家刚开的店在录库存之前每个 SKU 都缺行，这条列表要把它们显示成
-// available_qty = 0，而不是漏掉 —— 所以驱动表是 skus，inventories 是 LEFT JOIN。
+// **缺一行等于可售 0，不等于「这家店不卖」**（数据模型 §4 把这条写死了），所以驱动表
+// 仍然是 skus —— 一家刚开的店在录库存之前每个 SKU 都缺行，清单要把它们显示成 0 而不是漏掉。
 //
-// low_stock_only 的判据是「水位 ≤ warning_qty」。缺行时两者都是 0，
-// 0 ≤ 0 成立，于是缺行的 SKU 会出现在低库存清单里 —— 那是对的：
-// 一个没录过库存的规格确实一件都卖不出去。
-func (q *Queries) AdminListStoreInventories(ctx context.Context, arg AdminListStoreInventoriesParams) ([]AdminListStoreInventoriesRow, error) {
-	rows, err := q.db.Query(ctx, adminListStoreInventories,
-		arg.StoreID,
-		arg.LowStockOnly,
-		arg.PageOffset,
-		arg.PageLimit,
-	)
+// 水位本轮（微服务拆分阶段 1a）由库存服务回答，service 按这一页的 sku_id 批量问一次再合并
+// （缺行记 0 / 0，updated_at 回落到 SKU 自己的 updated_at，与拆分前的 COALESCE 同一个口径）。
+//
+// low_stock_only 的判据仍是「水位 ≤ warning_qty」（缺行时 0 ≤ 0 成立，算低库存）。
+// 它要影响分页，所以不能在取完一页之后再过滤：service 先向库存服务要这家店
+// 「水位高于预警线」的 SKU（InvHealthySKUIDs），作为 exclude_sku_ids 递进来 ——
+// 低库存 = 未软删 SKU 除掉这批，与拆分前的 WHERE 逐点相同，total 与分页都精确。
+// 不筛时传空数组。代价：这家店健康 SKU 很多时这个数组会长（门店 × SKU 数量级的上限），
+// 这是后台低频页面，可以接受。
+func (q *Queries) AdminListStoreInventorySKUs(ctx context.Context, arg AdminListStoreInventorySKUsParams) ([]AdminListStoreInventorySKUsRow, error) {
+	rows, err := q.db.Query(ctx, adminListStoreInventorySKUs, arg.ExcludeSkuIds, arg.PageOffset, arg.PageLimit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []AdminListStoreInventoriesRow
+	var items []AdminListStoreInventorySKUsRow
 	for rows.Next() {
-		var i AdminListStoreInventoriesRow
-		if err := rows.Scan(
-			&i.SkuID,
-			&i.SkuCode,
-			&i.AvailableQty,
-			&i.WarningQty,
-			&i.UpdatedAt,
-		); err != nil {
+		var i AdminListStoreInventorySKUsRow
+		if err := rows.Scan(&i.SkuID, &i.SkuCode, &i.UpdatedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -499,6 +349,43 @@ func (q *Queries) RelistProductInStore(ctx context.Context, arg RelistProductInS
 	return err
 }
 
+const sKUSellableInStore = `-- name: SKUSellableInStore :one
+SELECT EXISTS (
+    SELECT 1
+      FROM skus sk
+      JOIN stores st ON st.id = $1
+     WHERE sk.id = $2 AND sk.deleted_at IS NULL
+       AND st.deleted_at IS NULL
+       AND NOT EXISTS (SELECT 1 FROM store_product_overrides o
+                        WHERE o.store_id = st.id AND o.product_id = sk.product_id
+                          AND o.status = 0)
+       AND NOT EXISTS (SELECT 1 FROM region_product_overrides o2
+                        WHERE o2.region_id = st.region_id AND o2.product_id = sk.product_id
+                          AND o2.status = 0)
+)::boolean AS sellable
+`
+
+type SKUSellableInStoreParams struct {
+	StoreID int64
+	SkuID   int64
+}
+
+// 这家店此刻能不能给这个 SKU 录库存：SKU 可见且未软删、门店可见且未软删、
+// 这家店与它所在大区都没有下架这件商品。
+//
+// 拆分前它是 SetStoreInventoryByCAS / AdjustStoreInventory 里的 sellable 那个 CTE，
+// 与写在同一个快照里。本轮（微服务拆分阶段 1a）写搬到了库存服务，判定留在 core
+// （它要 JOIN skus / stores / 两张覆盖表，库存库里没有那些表）：service 先调它，
+// 不成立回 404，成立再调库存服务写。两步之间的窗口里商品被下架，结果是多录一次
+// 库存 —— 没有任何地方会用到它，而下单那一侧自己会判「这家店卖不卖」。
+// 条件与拆分前那个 CTE 逐字一致。
+func (q *Queries) SKUSellableInStore(ctx context.Context, arg SKUSellableInStoreParams) (bool, error) {
+	row := q.db.QueryRow(ctx, sKUSellableInStore, arg.StoreID, arg.SkuID)
+	var sellable bool
+	err := row.Scan(&sellable)
+	return sellable, err
+}
+
 const scopedCountRegionProducts = `-- name: ScopedCountRegionProducts :one
 SELECT count(*)
   FROM products p
@@ -672,7 +559,7 @@ type ScopedListStoreProductsRow struct {
 // 门店 / 大区两个作用域下的商品可见性、生效价与库存
 // （契约 /admin/stores/{id}/products、/admin/regions/{id}/products、
 //
-//	两条 .../listing、/admin/stores/{id}/inventories 与那条按门店的库存 CAS）。
+//	两条 .../listing、/admin/stores/{id}/inventories 的 SKU 一半与按门店改库存前的可售判定）。
 //
 // 数据模型 §4。
 //
@@ -732,132 +619,4 @@ func (q *Queries) ScopedListStoreProducts(ctx context.Context, arg ScopedListSto
 		return nil, err
 	}
 	return items, nil
-}
-
-const setStoreInventoryByCAS = `-- name: SetStoreInventoryByCAS :one
-WITH sellable AS (
-    SELECT sk.id
-      FROM skus sk
-      JOIN stores st ON st.id = $1
-     WHERE sk.id = $2 AND sk.deleted_at IS NULL
-       AND st.deleted_at IS NULL
-       AND NOT EXISTS (SELECT 1 FROM store_product_overrides o
-                        WHERE o.store_id = st.id AND o.product_id = sk.product_id
-                          AND o.status = 0)
-       AND NOT EXISTS (SELECT 1 FROM region_product_overrides o2
-                        WHERE o2.region_id = st.region_id AND o2.product_id = sk.product_id
-                          AND o2.status = 0)
-), cur AS (
-    SELECT inv.sku_id, inv.available_qty, inv.warning_qty, inv.updated_at
-      FROM inventories inv
-     WHERE inv.sku_id = $2 AND inv.store_id = $1
-), wrote AS (
-    INSERT INTO inventories (sku_id, store_id, available_qty, warning_qty)
-    SELECT $2, $1, $3,
-           COALESCE($4::int, 0)
-     WHERE EXISTS (SELECT 1 FROM sellable)
-       AND (EXISTS (SELECT 1 FROM cur)
-            OR $5::int = 0)
-    ON CONFLICT (sku_id, store_id) DO UPDATE
-       SET available_qty = excluded.available_qty,
-           warning_qty   = COALESCE($4::int, inventories.warning_qty),
-           updated_at    = now()
-     WHERE inventories.available_qty = $5::int
-    RETURNING available_qty AS w_available_qty,
-              warning_qty   AS w_warning_qty,
-              updated_at    AS w_updated_at
-)
-SELECT (SELECT count(*) FROM sellable) AS sellable_rows,
-       (SELECT count(*) FROM cur)      AS current_rows,
-       (SELECT count(*) FROM wrote)    AS written_rows,
-       c.available_qty   AS current_available_qty,
-       c.warning_qty     AS current_warning_qty,
-       c.updated_at      AS current_updated_at,
-       w.w_available_qty AS new_available_qty,
-       w.w_warning_qty   AS new_warning_qty,
-       w.w_updated_at    AS new_updated_at
-  FROM (SELECT 1) anchor
-  LEFT JOIN cur   c ON true
-  LEFT JOIN wrote w ON true
-`
-
-type SetStoreInventoryByCASParams struct {
-	StoreID              int64
-	SkuID                int64
-	AvailableQty         int32
-	WarningQty           *int32
-	ExpectedAvailableQty int32
-}
-
-type SetStoreInventoryByCASRow struct {
-	SellableRows        int64
-	CurrentRows         int64
-	WrittenRows         int64
-	CurrentAvailableQty *int32
-	CurrentWarningQty   *int32
-	CurrentUpdatedAt    pgtype.Timestamptz
-	NewAvailableQty     *int32
-	NewWarningQty       *int32
-	NewUpdatedAt        pgtype.Timestamptz
-}
-
-// 按门店的比较并设置（契约 PUT /admin/stores/{store_id}/skus/{sku_id}/inventory）。
-//
-// **store_id 这个条件不能漏。** 漏了它会匹配到该 SKU 在**所有**门店的行，
-// 一次后台改库存把五家店的水位一起覆盖掉，而且没有任何东西会响
-// （数据模型 §4 把这条列为本轮最容易漏、后果最重的一处）。
-//
-// ### 与那条不带门店的 CAS 的三点不同
-//
-// 一、**是 upsert，不是纯 UPDATE。**「这家店没有这一行库存」不是错误，
-//
-//	是一次正常的首次录入（新店、新品都缺行）。契约写死：那时
-//	expected_available_qty 必须传 0。
-//
-//	写成一条 INSERT ... ON CONFLICT DO UPDATE ... WHERE，不是两条分支：
-//	「先看有没有那一行、没有就插、有就 CAS」是两次快照，而这条接口存在的
-//	全部理由就是那个窗口。ON CONFLICT 那一句由**唯一索引**判定有没有，
-//	判定与写在同一条语句的同一个点上，中间没有窗口。
-//	三种结果都落在 written_rows 上：插成功 1、CAS 成功 1、CAS 失败 0。
-//
-// 二、**多一条 sellable 判定。** 契约的 404 覆盖三种情况，第三种是
-//
-//	「这家店（或它所在大区）已把这件商品下架」—— 给一件卖不了的商品录库存
-//	是一个没有意义的动作，而它写进去之后没有任何地方会用到。
-//
-// 三、两个 id 都在路径里，所以三种都是 404（「这个 URI 下没有这个资源」
-//
-//	是 404 的本义）。下单那条把第三种报成 422，因为那里 id 在请求体里。
-//	共同点才是要紧的：都不是 409 —— 409 在本契约里被客户端读成
-//	「重读一次再试」，而这三种重试永远不会成功。
-//
-// 三个 CTE 看到的是**同一个 MVCC 快照**，中间没有别的事务能把行删掉、
-// 改掉归属、或者把商品下架。
-//
-// sqlc 的两处将就照旧：CTE 里的表各带别名（拍平之后同名列会 ambiguous），
-// 末尾用 FROM (SELECT 1) anchor LEFT JOIN（标量子查询会被推断成非空，
-// 而它在 CAS 失败那一支恰恰是 NULL）。wrote 的 RETURNING 三列都改了名
-// （w_ 前缀）：不改名的话它们与 cur 的同名列在拍平之后撞在一起，
-// sqlc 报的是 column ... does not exist，而那句话指不到任何一行。
-func (q *Queries) SetStoreInventoryByCAS(ctx context.Context, arg SetStoreInventoryByCASParams) (SetStoreInventoryByCASRow, error) {
-	row := q.db.QueryRow(ctx, setStoreInventoryByCAS,
-		arg.StoreID,
-		arg.SkuID,
-		arg.AvailableQty,
-		arg.WarningQty,
-		arg.ExpectedAvailableQty,
-	)
-	var i SetStoreInventoryByCASRow
-	err := row.Scan(
-		&i.SellableRows,
-		&i.CurrentRows,
-		&i.WrittenRows,
-		&i.CurrentAvailableQty,
-		&i.CurrentWarningQty,
-		&i.CurrentUpdatedAt,
-		&i.NewAvailableQty,
-		&i.NewWarningQty,
-		&i.NewUpdatedAt,
-	)
-	return i, err
 }

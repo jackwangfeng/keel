@@ -245,37 +245,25 @@ func (q *Queries) FindCartLineBySKU(ctx context.Context, arg FindCartLineBySKUPa
 const findSKUForCart = `-- name: FindSKUForCart :one
 SELECT s.id, s.product_id,
        (s.status = 1 AND s.deleted_at IS NULL
-        AND p.status = 1 AND p.deleted_at IS NULL)::boolean AS on_shelf,
-       COALESCE(i.available_qty, 0)::int AS available_qty
+        AND p.status = 1 AND p.deleted_at IS NULL)::boolean AS on_shelf
   FROM skus s
   JOIN products p ON p.id = s.product_id
-  LEFT JOIN inventories i ON i.sku_id = s.id AND i.store_id = $1
- WHERE s.id = $2
+ WHERE s.id = $1
 `
 
-type FindSKUForCartParams struct {
-	StoreID int64
-	SkuID   int64
-}
-
 type FindSKUForCartRow struct {
-	ID           int64
-	ProductID    int64
-	OnShelf      bool
-	AvailableQty int32
+	ID        int64
+	ProductID int64
+	OnShelf   bool
 }
 
-// 加购时取这个 SKU 的状态：属于哪件商品、在不在架、这家店还剩几件。
+// 加购时取这个 SKU 的状态：属于哪件商品、在不在架。这家店还剩几件由库存服务回答
+// （service/cart.go 在事务之前问好）。
 // 查不到（不存在，或属于别家店 —— RLS 让两者同形）即 ErrNoRows。
-func (q *Queries) FindSKUForCart(ctx context.Context, arg FindSKUForCartParams) (FindSKUForCartRow, error) {
-	row := q.db.QueryRow(ctx, findSKUForCart, arg.StoreID, arg.SkuID)
+func (q *Queries) FindSKUForCart(ctx context.Context, skuID int64) (FindSKUForCartRow, error) {
+	row := q.db.QueryRow(ctx, findSKUForCart, skuID)
 	var i FindSKUForCartRow
-	err := row.Scan(
-		&i.ID,
-		&i.ProductID,
-		&i.OnShelf,
-		&i.AvailableQty,
-	)
+	err := row.Scan(&i.ID, &i.ProductID, &i.OnShelf)
 	return i, err
 }
 
@@ -284,7 +272,6 @@ SELECT ci.id, ci.sku_id, ci.product_id, ci.quantity, ci.selected,
        p.title, s.spec_values, s.image_url,
        (s.status = 1 AND s.deleted_at IS NULL
         AND p.status = 1 AND p.deleted_at IS NULL)::boolean AS on_shelf,
-       COALESCE(i.available_qty, 0)::int AS available_qty,
        -- SKU 没有自己的图时，购物车行显示商品主图（与订单行快照同一个退路）。
        COALESCE(img.upload_id, 0)::bigint AS main_image_upload_id
   FROM cart_items ci
@@ -296,15 +283,9 @@ SELECT ci.id, ci.sku_id, ci.product_id, ci.quantity, ci.selected,
          ORDER BY pi.sort_order, pi.id
          LIMIT 1
        ) img ON TRUE
-  LEFT JOIN inventories i ON i.sku_id = ci.sku_id AND i.store_id = $1
- WHERE ci.cart_id = $2
+ WHERE ci.cart_id = $1
  ORDER BY ci.created_at DESC, ci.id DESC
 `
-
-type ListCartLinesParams struct {
-	StoreID int64
-	CartID  int64
-}
 
 type ListCartLinesRow struct {
 	ID                int64
@@ -316,7 +297,6 @@ type ListCartLinesRow struct {
 	SpecValues        []byte
 	ImageUrl          *string
 	OnShelf           bool
-	AvailableQty      int32
 	MainImageUploadID int64
 }
 
@@ -331,11 +311,11 @@ type ListCartLinesRow struct {
 // on_shelf 为假是失效（off_shelf），为真是这家店或它所在大区不卖（not_sold_in_store）。
 // 门店 / 大区那两条排除不在这里再写一遍：它们只在定价查询里有一份。
 //
-// 库存按 (sku_id, store_id) 取，LEFT JOIN + COALESCE 把「这家店没有这一行」
-// 记成 0（缺行即可售 0，与 db/queries/products.sql 同一个口径）。
-// 漏掉 store_id 的话这条 JOIN 会匹配到该 SKU 在所有门店的行，一行变多行。
-func (q *Queries) ListCartLines(ctx context.Context, arg ListCartLinesParams) ([]ListCartLinesRow, error) {
-	rows, err := q.db.Query(ctx, listCartLines, arg.StoreID, arg.CartID)
+// 库存**不在这里**（微服务拆分阶段 1a）：service/cart.go 在开这个事务之前先向库存服务
+// 批量问过这家店的水位（一次调用），合并时把「没问到的 sku_id」记成 0（缺行即可售 0，
+// 与 db/queries/products.sql 同一个口径）。
+func (q *Queries) ListCartLines(ctx context.Context, cartID int64) ([]ListCartLinesRow, error) {
+	rows, err := q.db.Query(ctx, listCartLines, cartID)
 	if err != nil {
 		return nil, err
 	}
@@ -353,12 +333,37 @@ func (q *Queries) ListCartLines(ctx context.Context, arg ListCartLinesParams) ([
 			&i.SpecValues,
 			&i.ImageUrl,
 			&i.OnShelf,
-			&i.AvailableQty,
 			&i.MainImageUploadID,
 		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCartSKUIDs = `-- name: ListCartSKUIDs :many
+SELECT sku_id FROM cart_items WHERE cart_id = $1
+`
+
+// 这辆车里有哪些 SKU。购物车在开主事务之前用它凑出「要向库存服务问哪几个 SKU 的水位」
+// （微服务拆分阶段 1a：一次批量调用，不在持有业务连接的事务里等下游）。
+func (q *Queries) ListCartSKUIDs(ctx context.Context, cartID int64) ([]int64, error) {
+	rows, err := q.db.Query(ctx, listCartSKUIDs, cartID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []int64
+	for rows.Next() {
+		var sku_id int64
+		if err := rows.Scan(&sku_id); err != nil {
+			return nil, err
+		}
+		items = append(items, sku_id)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

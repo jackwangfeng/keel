@@ -254,11 +254,13 @@ type ProductDetail struct {
 // SpecValues 是 JSONB 原样的字节：这一层不解释它，解释放在 service ——
 // repository 认得的是列的类型，不是它的语义。
 type SKU struct {
-	ID           int64
-	SKUCode      string
-	SpecValues   []byte
-	PriceCents   int64
-	ImageURL     *string
+	ID         int64
+	SKUCode    string
+	SpecValues []byte
+	PriceCents int64
+	ImageURL   *string
+	// AvailableQty 这家门店的可售量。**ListProductSKUs 不填它**（微服务拆分阶段 1a）：
+	// 库存归库存服务，service/product.go 批量问一次再填；这一层返回时恒为 0。
 	AvailableQty int32
 }
 
@@ -303,12 +305,11 @@ func (t tenantTx) ListProductSKUs(ctx context.Context, sc StoreScope, productID 
 	out := make([]SKU, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, SKU{
-			ID:           r.ID,
-			SKUCode:      r.SkuCode,
-			SpecValues:   r.SpecValues,
-			PriceCents:   r.PriceCents,
-			ImageURL:     r.ImageUrl,
-			AvailableQty: r.AvailableQty,
+			ID:         r.ID,
+			SKUCode:    r.SkuCode,
+			SpecValues: r.SpecValues,
+			PriceCents: r.PriceCents,
+			ImageURL:   r.ImageUrl,
 		})
 	}
 	return out, nil

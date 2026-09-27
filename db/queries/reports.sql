@@ -230,53 +230,39 @@ SELECT st.id                                 AS store_id,
         OR st.id = ANY(sqlc.narg(only_store_ids)::bigint[]))
  ORDER BY COALESCE(pd.paid_cents, 0) - COALESCE(rf.refund_cents, 0) DESC, st.id;
 
--- name: ReportInventoryAlerts :many
--- 库存预警：可售不高于预警线的门店 SKU。i.available_qty <= i.warning_qty 这一句必须与
--- idx_inventories_warning 的谓词逐字一致，规划器才认得出那条部分索引。
-SELECT i.store_id,
-       st.name       AS store_name,
-       st.region_id,
-       i.sku_id,
-       s.sku_code,
-       s.spec_values,
-       s.product_id,
-       p.title       AS product_title,
-       i.available_qty,
-       i.warning_qty
-  FROM inventories i
-  JOIN stores st  ON st.id = i.store_id
-  JOIN skus s     ON s.id = i.sku_id
-  JOIN products p ON p.id = s.product_id
- WHERE i.available_qty <= i.warning_qty
-   AND st.deleted_at IS NULL
-   AND s.deleted_at IS NULL
-   AND p.deleted_at IS NULL
-   AND (sqlc.narg(store_id)::bigint IS NULL OR i.store_id = sqlc.narg(store_id)::bigint)
+-- name: ReportAlertStores :many
+-- 库存预警的门店范围：未软删、落在筛选（store_id / region_id）与员工范围
+-- （only_region_ids / only_store_ids）里的门店，带上补名字要用的店名与大区。
+--
+-- 拆分前这些条件写在 ReportInventoryAlerts 的 JOIN stores 上。本轮（微服务拆分阶段 1a）
+-- 预警行由库存服务按「显式的门店 id 列表」取（inventory_svc.sql 的 InvLowStock），
+-- 门店那一半的判断留在 core：条件与拆分前逐字一致。
+SELECT st.id, st.name, st.region_id
+  FROM stores st
+ WHERE st.deleted_at IS NULL
+   AND (sqlc.narg(store_id)::bigint IS NULL OR st.id = sqlc.narg(store_id)::bigint)
    AND (sqlc.narg(region_id)::bigint IS NULL OR st.region_id = sqlc.narg(region_id)::bigint)
    AND (sqlc.narg(only_region_ids)::bigint[] IS NULL
         OR st.region_id = ANY(sqlc.narg(only_region_ids)::bigint[]))
    AND (sqlc.narg(only_store_ids)::bigint[] IS NULL
-        OR i.store_id = ANY(sqlc.narg(only_store_ids)::bigint[]))
- ORDER BY i.available_qty - i.warning_qty, i.available_qty, i.store_id, i.sku_id
- LIMIT sqlc.arg(row_limit);
+        OR st.id = ANY(sqlc.narg(only_store_ids)::bigint[]))
+ ORDER BY st.id;
 
--- name: ReportCountInventoryAlerts :one
--- 条件必须与 ReportInventoryAlerts 逐字一致。
-SELECT count(*)::bigint
-  FROM inventories i
-  JOIN stores st  ON st.id = i.store_id
-  JOIN skus s     ON s.id = i.sku_id
+-- name: ReportAlertExcludedSKUs :many
+-- 不该出现在库存预警里的 SKU：软删的 SKU，与软删商品下的 SKU。
+-- 拆分前是 ReportInventoryAlerts 里 s.deleted_at IS NULL 与 p.deleted_at IS NULL 两个条件；
+-- 本轮作为排除列表递给库存服务（软删是少数，这个列表通常很短）。
+SELECT s.id
+  FROM skus s
   JOIN products p ON p.id = s.product_id
- WHERE i.available_qty <= i.warning_qty
-   AND st.deleted_at IS NULL
-   AND s.deleted_at IS NULL
-   AND p.deleted_at IS NULL
-   AND (sqlc.narg(store_id)::bigint IS NULL OR i.store_id = sqlc.narg(store_id)::bigint)
-   AND (sqlc.narg(region_id)::bigint IS NULL OR st.region_id = sqlc.narg(region_id)::bigint)
-   AND (sqlc.narg(only_region_ids)::bigint[] IS NULL
-        OR st.region_id = ANY(sqlc.narg(only_region_ids)::bigint[]))
-   AND (sqlc.narg(only_store_ids)::bigint[] IS NULL
-        OR i.store_id = ANY(sqlc.narg(only_store_ids)::bigint[]));
+ WHERE s.deleted_at IS NOT NULL OR p.deleted_at IS NOT NULL;
+
+-- name: ReportAlertSKUInfo :many
+-- 给库存预警补名字：货号、规格、所属商品与商品名。只查这一页的 SKU。
+SELECT s.id, s.sku_code, s.spec_values, s.product_id, p.title AS product_title
+  FROM skus s
+  JOIN products p ON p.id = s.product_id
+ WHERE s.id = ANY(sqlc.arg(sku_ids)::bigint[]);
 
 -- name: ReportSearchTotals :one
 -- 搜索概况：检索次数、无结果次数、有点击的次数。走 idx_search_logs_created。

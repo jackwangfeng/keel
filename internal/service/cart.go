@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/keel/keel/internal/auth"
+	"github.com/keel/keel/internal/inventory"
 	"github.com/keel/keel/internal/repository"
 )
 
@@ -87,9 +88,80 @@ type CartRepository interface {
 }
 
 // CartService 实现 /cart 那 7 个操作。
-type CartService struct{ repo CartRepository }
+type CartService struct {
+	repo CartRepository
+	// inv 是库存服务（微服务拆分阶段 1a）：车里每一行的水位、加购与改数量时的库存判断经它。
+	inv inventory.Service
+}
 
-func NewCartService(r CartRepository) *CartService { return &CartService{repo: r} }
+func NewCartService(r CartRepository, inv inventory.Service) *CartService {
+	return &CartService{repo: r, inv: inv}
+}
+
+// cartStock 是开主事务之前向库存服务问好的这家店的水位。没有的 sku_id 即缺行（可售 0）。
+type cartStock map[int64]inventory.Level
+
+// prepare 是每个「要回一辆车」的操作在主事务之前的那一段（微服务拆分阶段 1a）：
+//
+//  1. 一个短事务：解析门店与收货地址（resolveCartScope）、取这辆车里有哪些 SKU；
+//  2. 事务之外，向库存服务按这家店批量问一次水位（车里的 SKU，加上 extra —— 加购的那一个）。
+//
+// 主事务随后用这里的 cartScope 与水位，不再解析第二次。
+//
+// ===========================================================================
+// 为什么水位要在主事务之前问，而不是在 buildCart 里
+// ===========================================================================
+//
+// buildCart 跑在主事务里（加购与批量删除还要在同一个事务里存幂等档）。在那里调库存服务，
+// 就是攥着一条业务连接等下游：单体形态下库存池就是业务池，并发一高就是整池互等；拆分形态下
+// 是攥着连接等一次网络往返。所以先问、后开事务。
+//
+// 代价：拆分前水位与车是同一个快照读出来的，现在是先后两次读。两次之间同一个买家在另一台
+// 设备上加进来的 SKU 不在这份水位里，会按缺行显示成缺货 —— 下一次读车就对了。
+// 加购这一刻的库存判断也用这份水位：拆分前它也只是一次不加锁的读（不是预留），
+// 真正的判定点仍是下单时 SAGA 的库存分支。
+//
+// 库存服务不可用（只在拆分形态出现）时整个操作 503：车里每一行的 status / available
+// 在契约里都是必填，而它们全取决于水位 —— 编一个 0 会把整辆车标成缺货、合计清零。
+func (s *CartService) prepare(ctx context.Context, userID int64, storeID, addressID *int64,
+	extra ...int64) (cartScope, cartStock, error) {
+	var (
+		cs  cartScope
+		ids []int64
+	)
+	err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+		var err error
+		if cs, err = resolveCartScope(ctx, tx, userID, storeID, addressID); err != nil {
+			return err
+		}
+		cartID, err := tx.FindCart(ctx, userID)
+		if errors.Is(err, repository.ErrCartNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		ids, err = tx.CartSKUIDs(ctx, cartID)
+		return err
+	})
+	if err != nil {
+		return cartScope{}, nil, err
+	}
+	stock := cartStock{}
+	if cs.Match == MatchNone {
+		// 没有门店就没有水位：每一行本来就买不了（buildCart 判成 not_sold_in_store）。
+		return cs, stock, nil
+	}
+	ids = append(ids, extra...)
+	levels, err := s.inv.StoreStock(ctx, cs.Scope.StoreID, ids)
+	if err != nil {
+		return cartScope{}, nil, err
+	}
+	for id, l := range levels {
+		stock[id] = l
+	}
+	return cs, stock, nil
+}
 
 // 幂等作用域（POST /cart/items 与 POST /cart/items/batch-delete 都声明了必填的
 // Idempotency-Key）。每条一个，理由同 admin_idempotency.go 那一段。
@@ -174,15 +246,21 @@ func (cs cartScope) requireStore() error {
 }
 
 // buildCart 读出整辆车并标注每一行。cartID 为 0 表示这个买家还没有车。
-func buildCart(ctx context.Context, tx repository.Tx, cartID int64, cs cartScope) (CartView, error) {
+// stock 是 prepare 在事务之前问好的水位（阶段 1a），没有的 sku_id 记可售 0。
+func buildCart(ctx context.Context, tx repository.Tx, cartID int64, cs cartScope, stock cartStock) (CartView, error) {
 	out := CartView{Lines: []CartLineView{}, Promotions: []PromotionHit{},
 		Store: storeContextOf(cs.Scope, cs.Match)}
 	if cartID == 0 {
 		return withCartFreight(ctx, tx, out, cs)
 	}
-	lines, err := tx.ListCartLines(ctx, cartID, cs.Scope.StoreID)
+	lines, err := tx.ListCartLines(ctx, cartID)
 	if err != nil {
 		return CartView{}, err
+	}
+	// 水位按这家店填（缺行 ≡ 可售 0；不在服务范围时 stock 是空的，每一行都是 0 ——
+	// 与拆分前 store_id = 0 时 LEFT JOIN 什么都匹配不上是同一个结果）。
+	for i := range lines {
+		lines[i].AvailableQty = stock[lines[i].SKUID].Available
 	}
 	if len(lines) == 0 {
 		return withCartFreight(ctx, tx, out, cs)
@@ -360,12 +438,12 @@ func (s *CartService) Get(ctx context.Context, storeID, addressID *int64) (CartV
 	if err != nil {
 		return CartView{}, err
 	}
+	cs, stock, err := s.prepare(ctx, id.UserID, storeID, addressID)
+	if err != nil {
+		return CartView{}, err
+	}
 	var out CartView
 	err = s.repo.WithTenant(ctx, func(tx repository.Tx) error {
-		cs, err := resolveCartScope(ctx, tx, id.UserID, storeID, addressID)
-		if err != nil {
-			return err
-		}
 		cartID, err := tx.FindCart(ctx, id.UserID)
 		if errors.Is(err, repository.ErrCartNotFound) {
 			cartID, err = 0, nil
@@ -373,7 +451,7 @@ func (s *CartService) Get(ctx context.Context, storeID, addressID *int64) (CartV
 		if err != nil {
 			return err
 		}
-		out, err = buildCart(ctx, tx, cartID, cs)
+		out, err = buildCart(ctx, tx, cartID, cs, stock)
 		return err
 	})
 	return out, err
@@ -405,18 +483,19 @@ func (s *CartService) Add(ctx context.Context, req AddRequest, idemKey string) (
 	if err != nil {
 		return CartView{}, false, err
 	}
+	// 水位（车里的 SKU 加上要加购的这一个）在抢占幂等键之前问好，理由见 prepare。
+	cs, stock, err := s.prepare(ctx, id.UserID, req.StoreID, req.AddressID, req.SKUID)
+	if err != nil {
+		return CartView{}, false, err
+	}
 	return idempotentTenantWrite(ctx, s.repo, scopeCartAdd, repository.BuyerSubject(id.UserID),
 		idemKey, hash, archivedOK, func(tx repository.Tx) (CartView, error) {
-			cs, err := resolveCartScope(ctx, tx, id.UserID, req.StoreID, req.AddressID)
-			if err != nil {
-				return CartView{}, err
-			}
 			if err := cs.requireStore(); err != nil {
 				return CartView{}, err
 			}
 
 			// 卖不卖：先判在架，再问定价查询（与 buildCart 的判定顺序一致）。
-			sku, err := tx.FindSKUForCart(ctx, req.SKUID, cs.Scope.StoreID)
+			sku, err := tx.FindSKUForCart(ctx, req.SKUID)
 			if errors.Is(err, repository.ErrSKUNotFound) {
 				return CartView{}, fmt.Errorf("%w: sku %d", ErrSKUUnavailable, req.SKUID)
 			}
@@ -457,9 +536,9 @@ func (s *CartService) Add(ctx context.Context, req AddRequest, idemKey string) (
 			}
 			// 够不够：按累加后的数量比这家店的可售量。这只是加购这一刻的判断，
 			// 不是预留 —— 真正的判定点仍是下单时 SAGA 的库存分支（架构 §5）。
-			if cur+req.Quantity > sku.AvailableQty {
+			if avail := stock[req.SKUID].Available; cur+req.Quantity > avail {
 				return CartView{}, fmt.Errorf("%w: 这家店可售 %d 件，车里已有 %d 件，再加 %d 件不够",
-					ErrInsufficientStock, sku.AvailableQty, cur, req.Quantity)
+					ErrInsufficientStock, avail, cur, req.Quantity)
 			}
 			if err := tx.AddCartLine(ctx, cartID, req.SKUID, sku.ProductID, req.Quantity); err != nil {
 				if errors.Is(err, repository.ErrCartLineQuantityCap) {
@@ -468,7 +547,7 @@ func (s *CartService) Add(ctx context.Context, req AddRequest, idemKey string) (
 				}
 				return CartView{}, err
 			}
-			return buildCart(ctx, tx, cartID, cs)
+			return buildCart(ctx, tx, cartID, cs, stock)
 		})
 }
 
@@ -501,12 +580,13 @@ func (s *CartService) Patch(ctx context.Context, req PatchRequest) (CartView, er
 	if req.Quantity != nil && (*req.Quantity < 1 || *req.Quantity > maxCartQuantity) {
 		return CartView{}, fmt.Errorf("%w: quantity 必须在 [1, %d] 内", ErrBadRequest, maxCartQuantity)
 	}
+	// 这一行的 SKU 本来就在车里，prepare 问的水位里有它。
+	cs, stock, err := s.prepare(ctx, id.UserID, req.StoreID, req.AddressID)
+	if err != nil {
+		return CartView{}, err
+	}
 	var out CartView
 	err = s.repo.WithTenant(ctx, func(tx repository.Tx) error {
-		cs, err := resolveCartScope(ctx, tx, id.UserID, req.StoreID, req.AddressID)
-		if err != nil {
-			return err
-		}
 		cartID, err := s.ownCart(ctx, tx, id.UserID)
 		if err != nil {
 			return err
@@ -522,13 +602,12 @@ func (s *CartService) Patch(ctx context.Context, req PatchRequest) (CartView, er
 			if err := cs.requireStore(); err != nil {
 				return err
 			}
-			sku, err := tx.FindSKUForCart(ctx, line.SKUID, cs.Scope.StoreID)
-			if err != nil {
+			if _, err := tx.FindSKUForCart(ctx, line.SKUID); err != nil {
 				return err
 			}
-			if *req.Quantity > sku.AvailableQty {
+			if avail := stock[line.SKUID].Available; *req.Quantity > avail {
 				return fmt.Errorf("%w: 这家店可售 %d 件，要改成 %d 件不够",
-					ErrInsufficientStock, sku.AvailableQty, *req.Quantity)
+					ErrInsufficientStock, avail, *req.Quantity)
 			}
 		}
 		if err := tx.UpdateCartLine(ctx, cartID, req.ItemID, req.Quantity, req.Selected); err != nil {
@@ -537,7 +616,7 @@ func (s *CartService) Patch(ctx context.Context, req PatchRequest) (CartView, er
 			}
 			return err
 		}
-		out, err = buildCart(ctx, tx, cartID, cs)
+		out, err = buildCart(ctx, tx, cartID, cs, stock)
 		return err
 	})
 	return out, err
@@ -576,18 +655,18 @@ func (s *CartService) Select(ctx context.Context, storeID, addressID *int64, sel
 	if err != nil {
 		return CartView{}, err
 	}
+	cs, stock, err := s.prepare(ctx, id.UserID, storeID, addressID)
+	if err != nil {
+		return CartView{}, err
+	}
 	var out CartView
 	err = s.repo.WithTenant(ctx, func(tx repository.Tx) error {
-		cs, err := resolveCartScope(ctx, tx, id.UserID, storeID, addressID)
-		if err != nil {
-			return err
-		}
 		cartID, err := tx.FindCart(ctx, id.UserID)
 		if errors.Is(err, repository.ErrCartNotFound) {
 			if itemIDs != nil && len(*itemIDs) > 0 {
 				return ErrCartItemNotFound
 			}
-			out, err = buildCart(ctx, tx, 0, cs)
+			out, err = buildCart(ctx, tx, 0, cs, stock)
 			return err
 		}
 		if err != nil {
@@ -606,7 +685,7 @@ func (s *CartService) Select(ctx context.Context, storeID, addressID *int64, sel
 				return fmt.Errorf("%w: 请求 %d 个，车里只有其中 %d 个", ErrCartItemNotFound, len(ids), len(got))
 			}
 		}
-		out, err = buildCart(ctx, tx, cartID, cs)
+		out, err = buildCart(ctx, tx, cartID, cs, stock)
 		return err
 	})
 	return out, err
@@ -647,18 +726,18 @@ func (s *CartService) BatchDelete(ctx context.Context, req BatchDeleteRequest, i
 	if err != nil {
 		return CartView{}, false, err
 	}
+	cs, stock, err := s.prepare(ctx, id.UserID, req.StoreID, req.AddressID)
+	if err != nil {
+		return CartView{}, false, err
+	}
 	return idempotentTenantWrite(ctx, s.repo, scopeCartBatchDelete, repository.BuyerSubject(id.UserID),
 		idemKey, hash, archivedOK, func(tx repository.Tx) (CartView, error) {
-			cs, err := resolveCartScope(ctx, tx, id.UserID, req.StoreID, req.AddressID)
-			if err != nil {
-				return CartView{}, err
-			}
 			cartID, err := tx.FindCart(ctx, id.UserID)
 			if errors.Is(err, repository.ErrCartNotFound) {
 				if norm.ItemIDs != nil {
 					return CartView{}, ErrCartItemNotFound
 				}
-				return buildCart(ctx, tx, 0, cs)
+				return buildCart(ctx, tx, 0, cs, stock)
 			}
 			if err != nil {
 				return CartView{}, err
@@ -675,7 +754,7 @@ func (s *CartService) BatchDelete(ctx context.Context, req BatchDeleteRequest, i
 			} else if err := tx.DeleteSelectedCartLines(ctx, cartID); err != nil {
 				return CartView{}, err
 			}
-			return buildCart(ctx, tx, cartID, cs)
+			return buildCart(ctx, tx, cartID, cs, stock)
 		})
 }
 

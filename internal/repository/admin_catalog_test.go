@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/keel/keel/internal/db"
+	"github.com/keel/keel/internal/inventory"
 	"github.com/keel/keel/internal/repository"
 	"github.com/keel/keel/internal/tenant"
 )
@@ -213,90 +214,80 @@ func realQty(t *testing.T, skuID int64) int32 {
 // 四条路径一次跑全，且互为对照：少了「写成功」那一支，另外几支可能只是因为
 // 整条语句根本没生效；少了「CAS 不匹配」那一支，ErrSKUNotInTenant 可能只是
 // 「任何失败都报不可见」。
+//
+// 微服务拆分阶段 1a 起写搬到了库存服务（inventory.Local.Set，AllowInsert = false 即这条单店
+// 捷径的语义），「SKU 可见且未软删」那一半留在 core（AdminFindSKU）。四条路径照旧一次跑全。
 func TestSetInventoryTellsPreconditionFromCrossTenant(t *testing.T) {
 	ctx := context.Background()
 	f := seedCatalog(t)
 	r := repository.New(pool(t))
+	inv := inventory.NewLocal(repository.NewInventoryStore(pool(t)))
 	asA := tenant.NewContext(ctx, f.merchantA)
+	set := func(storeID, skuID int64, expected, want int32) (inventory.Stock, error) {
+		return inv.Set(asA, inventory.SetRequest{SKUID: skuID, StoreID: storeID,
+			Available: want, Expected: expected, BizID: "set:test"})
+	}
 
 	t.Run("自家_CAS匹配_写成功", func(t *testing.T) {
-		var inv repository.Inventory
-		err := r.WithTenant(asA, func(q repository.Tx) error {
-			var e error
-			inv, e = q.SetInventory(ctx, f.storeA, f.skuA, 10, 25, nil, "set:test")
-			return e
-		})
+		got, err := set(f.storeA, f.skuA, 10, 25)
 		if err != nil {
 			t.Fatalf("改自家库存失败: %v", err)
 		}
-		if inv.AvailableQty != 25 {
-			t.Fatalf("返回的水位是 %d，期望 25", inv.AvailableQty)
+		if got.Available != 25 {
+			t.Fatalf("返回的水位是 %d，期望 25", got.Available)
 		}
-		if got := realQty(t, f.skuA); got != 25 {
-			t.Fatalf("库里的水位是 %d，期望 25 —— 返回值和真实状态对不上", got)
+		if q := realQty(t, f.skuA); q != 25 {
+			t.Fatalf("库里的水位是 %d，期望 25 —— 返回值和真实状态对不上", q)
 		}
 	})
 
 	t.Run("自家_CAS不匹配_是409且带当前真实值", func(t *testing.T) {
 		before := realQty(t, f.skuA) // 25
-		err := r.WithTenant(asA, func(q repository.Tx) error {
-			_, e := q.SetInventory(ctx, f.storeA, f.skuA, before+1, 999, nil, "set:test")
-			return e
-		})
-		if !errors.Is(err, repository.ErrInventoryPrecondition) {
-			t.Fatalf("期望 ErrInventoryPrecondition，实得 %v", err)
+		_, err := set(f.storeA, f.skuA, before+1, 999)
+		if !errors.Is(err, inventory.ErrConflict) {
+			t.Fatalf("期望 ErrConflict，实得 %v", err)
 		}
-		// 反向断言：它**不能**同时是「不在本租户」。两个 sentinel 要是被谁包成
-		// 了同一个错误，上面那句 errors.Is 照样绿。
-		if errors.Is(err, repository.ErrSKUNotInTenant) {
+		// 反向断言：它**不能**同时是「缺行 / 不可见」。
+		if errors.Is(err, inventory.ErrNotFound) {
 			t.Fatal("CAS 不匹配被同时报成了「不可见」—— 两种成因又混回去了")
 		}
-		var conflict *repository.InventoryConflict
+		var conflict *inventory.ConflictError
 		if !errors.As(err, &conflict) {
-			t.Fatalf("拿不到 *InventoryConflict，服务层就填不出契约要求的 current: %v", err)
+			t.Fatalf("拿不到 *ConflictError，服务层就填不出契约要求的 current: %v", err)
 		}
-		if conflict.Current.AvailableQty != before {
+		if conflict.Current.Available != before {
 			t.Fatalf("回传的当前值是 %d，真实值是 %d —— 后台页面据此刷新会刷出一个错的数",
-				conflict.Current.AvailableQty, before)
+				conflict.Current.Available, before)
 		}
-		if got := realQty(t, f.skuA); got != before {
-			t.Fatalf("CAS 失败时水位从 %d 变成了 %d —— 条件原子更新没守住", before, got)
+		if q := realQty(t, f.skuA); q != before {
+			t.Fatalf("CAS 失败时水位从 %d 变成了 %d —— 条件原子更新没守住", before, q)
 		}
 	})
 
 	t.Run("别家的SKU_是404_不是409", func(t *testing.T) {
-		// **这里是整条测试的要害。** 传进去的 expected 是商家 B 那一行的
-		// **真实水位**，所以这次失败**只可能**是因为 RLS 把它挡在视野外 ——
-		// 如果实现退化成「rows_affected = 0 ⇒ CAS 不匹配」，这里会拿到
-		// ErrInventoryPrecondition，而 expected 明明是对的。
-		//
-		// store_id 也得是**商家 B 那一家**（00020 之后它进了主键）。
-		// 传 f.storeA 的话，(skuB, storeA) 这一行本来就不存在，这次失败
-		// 会退化成「查无此行」，而 RLS 拦没拦住就再也看不出来了。
+		// **这里是整条测试的要害。** 传进去的 expected 是商家 B 那一行的**真实水位**，
+		// 所以这次失败**只可能**是因为 RLS 把它挡在视野外 —— 库存服务的仓储只碰
+		// inventories，挡住它的是这张表自己的 merchant_id 策略（00020）。
 		realB := realQty(t, f.skuB)
 		if realB != 10 {
 			t.Fatalf("夹具坏了：商家 B 的水位是 %d，这次失败就分不清是 CAS 还是不可见", realB)
 		}
-		err := r.WithTenant(asA, func(q repository.Tx) error {
-			_, e := q.SetInventory(ctx, f.storeB, f.skuB, realB, 999, nil, "set:test")
-			return e
-		})
-		if !errors.Is(err, repository.ErrSKUNotInTenant) {
-			t.Fatalf("期望 ErrSKUNotInTenant，实得 %v", err)
+		_, err := set(f.storeB, f.skuB, realB, 999)
+		if !errors.Is(err, inventory.ErrNotFound) {
+			t.Fatalf("期望 ErrNotFound，实得 %v", err)
 		}
-		if errors.Is(err, repository.ErrInventoryPrecondition) {
+		if errors.Is(err, inventory.ErrConflict) {
 			t.Fatal("跨租户改库存被报成了 CAS 失败 —— 调用方会对一个永远不会成功的请求无限重试")
 		}
-		if got := realQty(t, f.skuB); got != realB {
-			t.Fatalf("商家 B 的水位变成了 %d —— 跨租户写真的写进去了", got)
+		if q := realQty(t, f.skuB); q != realB {
+			t.Fatalf("商家 B 的水位变成了 %d —— 跨租户写真的写进去了", q)
 		}
 	})
 
-	t.Run("软删掉的SKU_是404", func(t *testing.T) {
-		// skus.deleted_at 是 00018 新加的，而 inventories 的 RLS 谓词看的是
-		// skus.merchant_id，**不看 deleted_at**。所以这一条靠的是查询里那句
-		// 显式的 sk.deleted_at IS NULL；去掉它，后台就能给一个「已经不存在」
-		// 的规格改库存。
+	t.Run("软删掉的SKU_core先判404", func(t *testing.T) {
+		// 拆分前这一条靠 SetInventoryByCAS 里那句 sk.deleted_at IS NULL；库存库里没有 skus，
+		// 这道闸门挪到了 core：service 在调库存服务之前先 AdminFindSKU，查不到即 404
+		// （service/inventory_admin.go 的 setStockSole）。这里验的就是那道闸门认得软删。
 		var deadSKU int64
 		if err := adminQuery(t,
 			`INSERT INTO skus (merchant_id, product_id, sku_code, price_cents, deleted_at)
@@ -304,23 +295,12 @@ func TestSetInventoryTellsPreconditionFromCrossTenant(t *testing.T) {
 			f.merchantA, f.prodA, f.suffix+"-dead").Scan(&deadSKU); err != nil {
 			t.Fatal(err)
 		}
-		// 挂在 A 的默认门店上：这一条要测的是 sk.deleted_at IS NULL 那道闸门，
-		// 所以除了「已软删」之外的每一维都得是合法的 —— 门店挂错会让语句
-		// 先撞上复合外键，断言就变成在测外键。
-		if _, err := adminExec(t,
-			`INSERT INTO inventories (sku_id, store_id, merchant_id, available_qty)
-			 VALUES ($1, $2, $3, 7)`, deadSKU, f.storeA, f.merchantA); err != nil {
-			t.Fatal(err)
-		}
 		err := r.WithTenant(asA, func(q repository.Tx) error {
-			_, e := q.SetInventory(ctx, f.storeA, deadSKU, 7, 99, nil, "set:test")
+			_, e := q.AdminFindSKU(ctx, deadSKU)
 			return e
 		})
-		if !errors.Is(err, repository.ErrSKUNotInTenant) {
-			t.Fatalf("期望 ErrSKUNotInTenant，实得 %v", err)
-		}
-		if got := realQty(t, deadSKU); got != 7 {
-			t.Fatalf("软删 SKU 的水位被改成了 %d", got)
+		if !errors.Is(err, repository.ErrCatalogNotFound) {
+			t.Fatalf("软删的 SKU 在 core 的闸门上应当查不到，实得 %v", err)
 		}
 	})
 }
@@ -429,29 +409,59 @@ func TestSKUCodeIsReusableAfterSoftDelete(t *testing.T) {
 }
 
 // =============================================================================
-// 三、建 SKU 必须在同一个事务里建出库存行
+// 三、建 SKU 之后必须建出库存行（阶段 1a 起在提交之后、经库存服务）
 // =============================================================================
 //
 // 没有那一行时，下单 SAGA 的 rows_affected = 0 会被判成缺货，症状是
 // 「这件商品永远缺货」，而排查方向从一开始就是错的。
+//
+// 拆分之后两步分开：core 建 SKU（不再碰 inventories），提交之后 service 取默认门店、
+// 调库存服务 InitSKUs（service/inventory_admin.go 的 initSKUStock）。这里按同一个顺序走一遍，
+// 并守住 InitSKUs 可以放心重放的两条性质。
 func TestCreateSKUAlwaysCreatesInventoryRow(t *testing.T) {
 	ctx := context.Background()
 	f := seedCatalog(t)
 	r := repository.New(pool(t))
+	inv := inventory.NewLocal(repository.NewInventoryStore(pool(t)))
 	asA := tenant.NewContext(ctx, f.merchantA)
 
-	var sku repository.AdminSKU
+	var (
+		sku     repository.AdminSKU
+		storeID int64
+		ok      bool
+	)
 	if err := r.WithTenant(asA, func(q repository.Tx) error {
 		var e error
-		sku, e = q.CreateSKU(ctx, repository.NewSKU{
+		if sku, e = q.CreateSKU(ctx, repository.NewSKU{
 			ProductID: f.prodA, SKUCode: f.suffix + "-INV", PriceCents: 700,
 			Status: 1, AvailableQty: 12, WarningQty: 2,
-		})
+		}); e != nil {
+			return e
+		}
+		storeID, ok, e = q.DefaultStoreForNewSKU(ctx)
 		return e
 	}); err != nil {
 		t.Fatalf("建 SKU 失败: %v", err)
 	}
+	if !ok || storeID != f.storeA {
+		t.Fatalf("新 SKU 的库存行应当建在默认门店 %d，实得 (%d, %v)", f.storeA, storeID, ok)
+	}
+	if sku.AvailableQty != 12 {
+		t.Fatalf("返回的水位是 %d，期望 12", sku.AvailableQty)
+	}
+	// 阳性对照：core 这一步**不再**建库存行 —— 否则下面那一步验不出任何东西。
+	var n int
+	if err := adminQuery(t, `SELECT count(*) FROM inventories WHERE sku_id = $1`, sku.ID).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("core 建 SKU 时仍然写了 %d 行库存 —— 库存表应当只由库存服务写", n)
+	}
 
+	row := inventory.InitRow{SKUID: sku.ID, StoreID: storeID, Available: sku.AvailableQty, Warning: sku.WarningQty}
+	if err := inv.InitSKUs(asA, []inventory.InitRow{row}); err != nil {
+		t.Fatalf("建库存行失败: %v", err)
+	}
 	var qty, warn int32
 	if err := adminQuery(t,
 		`SELECT available_qty, warning_qty FROM inventories WHERE sku_id = $1`, sku.ID).
@@ -461,15 +471,16 @@ func TestCreateSKUAlwaysCreatesInventoryRow(t *testing.T) {
 	if qty != 12 || warn != 2 {
 		t.Fatalf("库存行是 (%d, %d)，期望 (12, 2)", qty, warn)
 	}
-	if sku.AvailableQty != 12 {
-		t.Fatalf("返回的水位是 %d，期望 12", sku.AvailableQty)
-	}
 
-	// 扣库存之前先记一次商品的总库存，下面要拿它做差。
-	before, err := findProduct(t, r, asA, f.prodA)
-	if err != nil {
-		t.Fatal(err)
+	totalOf := func() int32 {
+		t.Helper()
+		m, err := inv.SKUTotals(asA, []int64{sku.ID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return m[sku.ID].Available
 	}
+	before := totalOf()
 
 	// 真正要守的不是「有一行」，是「SAGA 扣得动」。直接用下单那条语句验一次：
 	// 漏建库存行时它返回的是 ErrInsufficientStock，而那正是最误导人的症状。
@@ -484,28 +495,35 @@ func TestCreateSKUAlwaysCreatesInventoryRow(t *testing.T) {
 	if after != 7 {
 		t.Fatalf("扣减后水位 %d，期望 7", after)
 	}
+	// 合计是**当下**的水位（库存服务现算），不是某一次写入时的快照。
+	if got := before - totalOf(); got != 5 {
+		t.Fatalf("扣掉 5 件之后合计差 %d，期望 5 —— 这个数不是现算的", got)
+	}
 
-	// 价格区间与总库存要跟着 SKU 一起动。
-	//
-	// 00019 之前这句话的意思是「同步器跑过了」；现在它们是读的时候从
-	// skus / inventories 现算的，所以这条断言检查的是那个 LEFT JOIN LATERAL
-	// 真的接到了这件商品的 SKU 上 —— 把 LATERAL 的 WHERE 改成一个恒假条件，
-	// 两个数都会回到 0，这里就红。
-	p, err := findProduct(t, r, asA, f.prodA)
-	if err != nil {
+	// 重放不覆盖：上一次其实建成了、之后卖掉了 5 件，再调一次 InitSKUs 不能把水位打回 12。
+	if err := inv.InitSKUs(asA, []inventory.InitRow{row}); err != nil {
+		t.Fatalf("重放建库存行失败: %v", err)
+	}
+	if q := realQty(t, sku.ID); q != 7 {
+		t.Fatalf("重放 InitSKUs 把水位从 7 改成了 %d —— 卖掉的那几件被初始值抹掉了", q)
+	}
+	// 换了默认门店之后重放，也不能在新门店凭空多一份初始库存。
+	var otherStore int64
+	if err := adminQuery(t,
+		`INSERT INTO stores (merchant_id, region_id, code, name) VALUES ($1,$2,$3,'S2') RETURNING id`,
+		f.merchantA, f.regionA, f.suffix+"-s2").Scan(&otherStore); err != nil {
 		t.Fatal(err)
 	}
-	if p.TotalStock == 0 || p.MinPriceCents == 0 {
-		t.Fatalf("建完 SKU 之后商品的价格区间与总库存还是 (min=%d, stock=%d) —— 现算没接上",
-			p.MinPriceCents, p.TotalStock)
+	moved := row
+	moved.StoreID = otherStore
+	if err := inv.InitSKUs(asA, []inventory.InitRow{moved}); err != nil {
+		t.Fatalf("重放建库存行失败: %v", err)
 	}
-	// 现算比同步器多守住一件事：这个数是**当下**的水位，不是某一次写入时的快照。
-	// 上面那次 DeductInventory 扣掉了 5 件，而它不经过任何「重算冗余字段」的
-	// 代码路径 —— 同步器版本在这里会原样回 before.TotalStock。
-	if got := before.TotalStock - p.TotalStock; got != 5 {
-		t.Fatalf("扣掉 5 件之后商品的总库存从 %d 变成 %d（差 %d），期望差 5 —— "+
-			"这个数不是现算的，它停在某一次写入的快照上",
-			before.TotalStock, p.TotalStock, got)
+	if err := adminQuery(t, `SELECT count(*) FROM inventories WHERE sku_id = $1`, sku.ID).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("这个 SKU 现在有 %d 行库存 —— 换了默认门店之后的重放多建了一份初始库存", n)
 	}
 }
 

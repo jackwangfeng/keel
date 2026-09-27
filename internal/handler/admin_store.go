@@ -72,7 +72,7 @@ func NewAdminStoreHandler(s *service.AdminStoreService) *AdminStoreHandler {
 //	   sentinel，漏了就掉进 500，而那句 ST_IsValidReason 是运营唯一能拿来
 //	   定位自己画错在哪儿的东西。
 func writeStoreError(c *gin.Context, err error) {
-	if writePermissionError(c, err) {
+	if writePermissionError(c, err) || writeInventoryUnavailable(c, err) {
 		return
 	}
 	var invConflict *repository.StoreInventoryConflict
@@ -782,6 +782,7 @@ func inventoryAdjustInput(req api.InventoryAdjustRequest) service.InventoryAdjus
 func writeInventoryAdjustError(c *gin.Context, err error) {
 	var short *repository.InventoryInsufficient
 	switch {
+	case writeInventoryUnavailable(c, err):
 	case writeAdminIdempotencyError(c, err):
 	case errors.As(err, &short):
 		// 扣完会变负。与 CAS 那条共用 InventoryConflict 响应体（带 current），

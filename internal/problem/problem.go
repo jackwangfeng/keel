@@ -182,6 +182,12 @@ const (
 	// 也不复用买家那条 insufficient-stock：那一个的响应体里没有 current，
 	// 语境是「这单买不了」，不是「这次调整做不了」。
 	TypeInventoryInsufficient = "https://keel.dev/problems/inventory-insufficient"
+	// inventory-unavailable 是 503：库存服务此刻没回答（只在拆分部署下出现，微服务拆分阶段 1a）。
+	// 读：取决于水位的接口（商品详情、购物车、后台商品 / SKU / 门店库存页、库存预警）答不出来；
+	// 写：库存那一笔**可能已经生效也可能没有** —— 客户端原样重试（带同一个 Idempotency-Key），
+	// 服务端保证重试不会多加一遍。与 internal 的 500 分开：这不是谁写错了代码，是一个会自己
+	// 好的依赖暂时不在，503 + 退避重试是它在 HTTP 上的准确说法。
+	TypeInventoryUnavailable = "https://keel.dev/problems/inventory-unavailable"
 	TypeUploadNotFound        = "https://keel.dev/problems/upload-not-found"
 	// upload-forbidden 是**读**那条路上的 403：文件在、也属于这家店，
 	// 但它的 purpose 不是「所有人可读」的那一类（典型：别人的退款凭证）。

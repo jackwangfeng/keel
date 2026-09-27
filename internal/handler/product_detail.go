@@ -55,6 +55,10 @@ func (h *ProductHandler) Detail(c *gin.Context) {
 	d, err := h.svc.Detail(c.Request.Context(), storeID, id)
 	switch {
 	case err == nil:
+	case writeInventoryUnavailable(c, err):
+		// 拆分部署下库存服务不在：详情整页 503，不编一排 0（Sku.available_qty 是必填的，
+		// 0 会把每个规格渲染成售罄）。列表与检索不受影响。见 service.ProductService.Detail。
+		return
 	case errors.Is(err, service.ErrStoreNotFound):
 		problem.Write(c, http.StatusUnprocessableEntity,
 			problem.TypeInvalidRequest, "store_id 指向的门店不存在或不属于当前店铺")

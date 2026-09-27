@@ -136,7 +136,7 @@ func bindJSON(c *gin.Context, dst any) bool {
 // 而契约把它定成必填（InventoryConflict schema）。客户端拿不到当前值，
 // 就只能自己再查一次 —— 那一跳正是这个字段存在要省掉的东西。
 func writeCatalogError(c *gin.Context, err error) {
-	if writePermissionError(c, err) {
+	if writePermissionError(c, err) || writeInventoryUnavailable(c, err) {
 		return
 	}
 	var conflict *repository.InventoryConflict
