@@ -26,7 +26,9 @@ for v in KEEL_E2E_ONLY KEEL_E2E_REJECTED_REFUND KEEL_E2E_REFUNDED_REFUND KEEL_E2
 done
 
 # chromedriver：与本机 Chrome 同一个主版本，缓存在 .tools/（gitignore）。
-CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+# 本机 Chrome：默认 macOS 的位置；Linux 上传 CHROME=/usr/bin/google-chrome（flutter drive 也读 CHROME_EXECUTABLE）。
+CHROME=${CHROME:-"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"}
+export CHROME_EXECUTABLE=${CHROME_EXECUTABLE:-$CHROME}
 VER=$("$CHROME" --version | awk '{print $3}')
 DRIVER=".tools/chromedriver-$VER/chromedriver"
 if [ ! -x "$DRIVER" ]; then
