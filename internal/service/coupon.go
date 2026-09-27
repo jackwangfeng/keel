@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/keel/keel/internal/auth"
+	"github.com/keel/keel/internal/inventory"
 	"github.com/keel/keel/internal/repository"
 )
 
@@ -45,11 +46,12 @@ type CouponRepository interface {
 // CouponService 实现买家侧的四条接口。
 type CouponService struct {
 	repo CouponRepository
+	inv  inventory.Service // 「本单可用券」要先定价，定价撞上活动报价时问活动配额（pricing.go）
 	now  func() time.Time
 }
 
-func NewCouponService(r CouponRepository) *CouponService {
-	return &CouponService{repo: r, now: time.Now}
+func NewCouponService(r CouponRepository, inv inventory.Service) *CouponService {
+	return &CouponService{repo: r, inv: inv, now: time.Now}
 }
 
 // MyCoupon 是「我的券」里的一张：券、它的范围、展示用的状态。
@@ -144,29 +146,31 @@ func (s *CouponService) Applicable(ctx context.Context, items []LineInput, store
 	}
 	now := s.now()
 	var out []ApplicableCoupon
-	err = s.repo.WithTenant(ctx, func(tx repository.Tx) error {
-		sc, err := orderScope(ctx, tx, storeID)
-		if err != nil {
-			return err
-		}
-		var dest *FreightDestination
-		if addressID != nil {
-			addr, err := tx.FindAddress(ctx, *addressID, id.UserID)
-			if errors.Is(err, repository.ErrAddressNotFound) {
-				return fmt.Errorf("%w: address_id=%d", ErrAddressNotFound, *addressID)
-			}
+	err = withActivityQuotas(ctx, s.inv, func(quotas *activityQuotas) error {
+		return s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+			sc, err := orderScope(ctx, tx, storeID)
 			if err != nil {
 				return err
 			}
-			d := destinationOf(addr)
-			dest = &d
-		}
-		q, err := priceOrder(ctx, tx, sc, dest, items, couponRequest{UserID: id.UserID, Now: now})
-		if err != nil {
+			var dest *FreightDestination
+			if addressID != nil {
+				addr, err := tx.FindAddress(ctx, *addressID, id.UserID)
+				if errors.Is(err, repository.ErrAddressNotFound) {
+					return fmt.Errorf("%w: address_id=%d", ErrAddressNotFound, *addressID)
+				}
+				if err != nil {
+					return err
+				}
+				d := destinationOf(addr)
+				dest = &d
+			}
+			q, err := priceOrder(ctx, tx, sc, dest, items, couponRequest{UserID: id.UserID, Now: now, Quotas: quotas})
+			if err != nil {
+				return err
+			}
+			out, err = applicableCoupons(ctx, tx, sc, id.UserID, q, now)
 			return err
-		}
-		out, err = applicableCoupons(ctx, tx, sc, id.UserID, q, now)
-		return err
+		})
 	})
 	return out, err
 }

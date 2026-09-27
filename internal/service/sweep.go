@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/keel/keel/internal/inventory"
 	"github.com/keel/keel/internal/repository"
 	"github.com/keel/keel/internal/tenant"
 )
@@ -90,6 +91,8 @@ import (
 //	  订单里随时可能到来的那个对手。
 type SweepService struct {
 	repo SweepRepository
+	inv  inventory.Service
+	ob   *inventoryOutbox
 	log  *slog.Logger
 	cfg  SweepConfig
 
@@ -178,8 +181,9 @@ type SweepReport struct {
 	Fallback bool
 }
 
-// NewSweepService 建超时补偿服务。
-func NewSweepService(r SweepRepository, cfg SweepConfig, log *slog.Logger) *SweepService {
+// NewSweepService 建超时补偿服务。inv 是这个进程的库存服务（微服务拆分阶段 1b）：
+// 孤儿草稿关单前的流水核对要问它，关单之后就地放回库存也经它（inventory_outbox.go）。
+func NewSweepService(r SweepRepository, inv inventory.Service, cfg SweepConfig, log *slog.Logger) *SweepService {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -192,7 +196,7 @@ func NewSweepService(r SweepRepository, cfg SweepConfig, log *slog.Logger) *Swee
 	if cfg.Interval <= 0 {
 		cfg.Interval = DefaultSweepInterval
 	}
-	return &SweepService{repo: r, log: log, cfg: cfg}
+	return &SweepService{repo: r, inv: inv, ob: newInventoryOutbox(r, inv, log), log: log, cfg: cfg}
 }
 
 // Run 按 Interval 一轮一轮地扫，直到 ctx 被取消。
@@ -358,15 +362,12 @@ func (s *SweepService) sweepTenant(ctx context.Context, merchantID int64, limit 
 // 订单那一行在这段时间里是不加锁的，窗口白白拉长。
 func (s *SweepService) releasePending(ctx context.Context, log *slog.Logger,
 	o repository.ExpiredOrder, rep *SweepReport) {
-	qty := 0
 	err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
 		if err := tx.ClaimExpiredPendingOrder(ctx, o.OrderNo); err != nil {
 			return err
 		}
-		var err error
-		qty, err = releaseClosedOrder(ctx, tx, o.ID, o.OrderNo, o.StoreID, o.UserID,
-			repository.InventoryLogTimeoutRelease)
-		if err != nil {
+		if err := releaseClosedOrder(ctx, tx, o.ID, o.OrderNo, o.UserID,
+			repository.InventoryLogTimeoutRelease); err != nil {
 			return err
 		}
 		// 通知与关单同一个事务（数据模型 §16）。
@@ -375,6 +376,9 @@ func (s *SweepService) releasePending(ctx context.Context, log *slog.Logger,
 
 	switch {
 	case err == nil:
+		// 库存与活动配额的放回是 outbox 任务（与关单同一个事务入队）；提交之后就地跑一次，
+		// 库存服务不在时留给 worker（inventory_outbox.go 的文件头）。
+		qty := int(s.ob.kick(ctx, releaseJobKey(o.OrderNo)))
 		rep.Released++
 		rep.ReleasedQty += qty
 		log.InfoContext(ctx, "超时未支付：已关单并回补库存",
@@ -387,13 +391,6 @@ func (s *SweepService) releasePending(ctx context.Context, log *slog.Logger,
 		rep.Raced++
 		log.InfoContext(ctx, "超时未支付：这一单已被别人处理（多半是支付回调抢先），跳过",
 			"order_no", o.OrderNo)
-
-	case errors.Is(err, repository.ErrSKUNotInTenant):
-		// 不是业务分支，是 bug 或数据坏了。这一单的库存回补不了，
-		// 少卖在这一单上恢复不了，值得一条 Error。
-		rep.Failed++
-		log.ErrorContext(ctx, "超时未支付：回补时发现 SKU 在本租户不可见 —— "+
-			"这一单的库存放不回去了", "order_no", o.OrderNo, "err", err)
 
 	default:
 		rep.Failed++
@@ -408,12 +405,15 @@ func (s *SweepService) releasePending(ctx context.Context, log *slog.Logger,
 // 每一轮都会再被扫到、再报一次警，而不是被关掉之后线索一起消失。
 func (s *SweepService) closeDraft(ctx context.Context, log *slog.Logger,
 	o repository.ExpiredOrder, rep *SweepReport) {
-	err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
-		if err := tx.AssertNoInventoryLog(ctx, o.OrderNo); err != nil {
-			return err
-		}
-		return tx.CloseExpiredDraftOrder(ctx, o.OrderNo)
-	})
+	// 流水在库存服务里（微服务拆分阶段 1b），核对在关单事务之前、事务之外问一次。
+	// 核对与关单之间隔着一次调用而不是同一个快照：那个窗口里库存分支不可能开始 —— 它排在建单
+	// 分支之后，而建单分支要把订单从 0 推到 10，关单这条语句要的正是 0（撞上了就是 ErrOrderNotClaimed）。
+	err := s.assertNoInventoryTrail(ctx, o.OrderNo)
+	if err == nil {
+		err = s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+			return tx.CloseExpiredDraftOrder(ctx, o.OrderNo)
+		})
+	}
 
 	switch {
 	case err == nil:
@@ -441,8 +441,25 @@ func (s *SweepService) closeDraft(ctx context.Context, log *slog.Logger,
 	}
 }
 
+// assertNoInventoryTrail 核对一笔孤儿草稿在库存服务里一行流水都没有（repository.ErrDraftHasInventoryLog
+// 的注释：孤儿清理不回补库存的全部依据是「建单在前、库存在后」这条编排顺序，这里把它变成一次响亮的失败）。
+func (s *SweepService) assertNoInventoryTrail(ctx context.Context, orderNo string) error {
+	if s.inv == nil {
+		return errors.New("超时补偿任务没有接上库存服务，核对不了孤儿草稿的库存流水")
+	}
+	trail, err := s.inv.OrderTrail(ctx, orderNo)
+	if err != nil {
+		return err
+	}
+	if len(trail) > 0 {
+		return fmt.Errorf("order %s 在库存服务里有 %d 行流水: %w", orderNo, len(trail), repository.ErrDraftHasInventoryLog)
+	}
+	return nil
+}
+
 // releaseClosedOrder 把一笔**刚在本事务里从 10 关到 90** 的订单占着的东西放回去：
-// 逐行回补库存并记流水、把锁着的券退回「未使用」。
+// core 这一侧的每人限购与券在本事务里放回；库存与活动配额入队一条 outbox 任务（同一个事务），
+// 由库存服务按流水放回（inventory.ReleaseForOrder，按订单号幂等）—— 微服务拆分阶段 1b。
 //
 // 超时关单（releasePending）与买家取消（OrderService.Cancel）共用它 ——
 // 两者的差别只在「谁、凭什么把这一单关掉」（那条条件 UPDATE）与流水的 biz_type，
@@ -450,60 +467,29 @@ func (s *SweepService) closeDraft(ctx context.Context, log *slog.Logger,
 // 「券也要退」，另一条路径就会静默地把券锁死在一笔已关闭的订单上
 // （00026 之前超时关单正是这么漏过券的）。
 //
-// 调用方必须保证：① 已经在**同一个事务**里把这一单从 10 推到了 90（占位成功）；
-// ② 这一单进过 SAGA，库存真实扣减过。孤儿草稿（status 0）不满足 ②，
-// 走 closeDraft，不走这里。
+// 调用方必须保证已经在**同一个事务**里把这一单从 10 推到了 90（占位成功）。
+// 「10 ⇒ 每人限购已累计」按构造成立：限购在建单分支里与 0 → 10 同一个事务累计（order_saga.go）。
+// 「10 ⇒ 库存已扣」**不成立**（库存分支可能还在重试），所以库存按流水放、放多少由库存服务算。
+// 孤儿草稿（status 0）走 closeDraft，不走这里。
 func releaseClosedOrder(ctx context.Context, tx repository.Tx, orderID int64,
-	orderNo string, storeID, userID int64, bizType int16) (int, error) {
+	orderNo string, userID int64, bizType int16) error {
 	lines, err := tx.ListOrderLines(ctx, orderID)
 	if err != nil {
-		return 0, err
+		return err
 	}
 	if len(lines) == 0 {
 		// 一笔待支付订单一行都没有，说明它当初就没建全。返回错误会把关单一起
 		// 回滚 —— 超时任务那边这一单每一轮都会再被扫到、再报一次，直到有人来看；
 		// 买家取消那边是一次 500，同样值得人看。
-		return 0, fmt.Errorf("订单 %s 是待支付状态却一行订单项都没有", orderNo)
+		return fmt.Errorf("订单 %s 是待支付状态却一行订单项都没有", orderNo)
 	}
-	qty := 0
-	for _, ln := range lines {
-		// 只回补**真的扣了、还没补回来**的那部分。「status = 10 ⇒ 库存已扣」在 SAGA 的
-		// 窗口里不成立：建单分支已经把订单推到 10，库存分支还在重试（审查发现）。那时
-		// 无条件回补就是凭空加库存 —— 库存分支之后若因缺货失败，它的补偿被屏障判成空回滚，
-		// 多出来的库存永远留着，下一个人就超卖了。流水净值是唯一可信的「扣没扣」。
-		net, err := tx.OrderSkuNetInventoryChange(ctx, orderNo, ln.SKUID, storeID)
-		if err != nil {
-			return 0, err
-		}
-		outstanding := -net
-		if outstanding <= 0 {
-			slog.WarnContext(ctx, "关单时这一行没有未回补的扣减，跳过回补（库存分支没扣或已补偿）",
-				"order_no", orderNo, "sku_id", ln.SKUID, "net", net)
-			continue
-		}
-		if outstanding > ln.Quantity {
-			// 流水说扣得比下单数量还多：数据已经不对了，不要再按错的数加回去。
-			return 0, fmt.Errorf("订单 %s sku %d 的扣减流水净值 %d 超过下单数量 %d",
-				orderNo, ln.SKUID, outstanding, ln.Quantity)
-		}
-		after, err := tx.RestoreInventory(ctx, ln.SKUID, storeID, outstanding)
-		if err != nil {
-			return 0, err
-		}
-		if err := tx.AppendInventoryLog(ctx, ln.SKUID, storeID, outstanding,
-			bizType, orderNo, after-outstanding, after); err != nil {
-			return 0, err
-		}
-		// 按活动价成交的行：活动配额与每人限购一起放回（00058），与回补库存同一个事务。
-		if err := releasePromotionLine(ctx, tx, ln, userID, orderNo); err != nil {
-			return 0, err
-		}
-		qty += int(ln.Quantity)
+	if err := releasePromotionLimits(ctx, tx, lines, userID); err != nil {
+		return err
 	}
-	// 这一单锁着的券退回「未使用」，与关单、回补库存同一个事务（数据模型 §7）。
+	// 这一单锁着的券退回「未使用」，与关单同一个事务（数据模型 §7）。
 	// 没挂券的订单受影响 0 行，是正常路径。
 	if _, err := tx.UnlockCouponForOrder(ctx, orderID); err != nil {
-		return 0, err
+		return err
 	}
-	return qty, nil
+	return enqueueOrderRelease(ctx, tx, orderNo, bizType)
 }

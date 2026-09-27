@@ -9,6 +9,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/keel/keel/internal/inventory"
 	"github.com/keel/keel/internal/repository"
 )
 
@@ -26,6 +27,25 @@ import (
 // 那正是「试算与下单必须共用一份计算」要防的事，只不过换成了数据而不是代码在分叉。
 // 所以上线中只能改名、下线；改规则先下线（409 promotion-online）。
 // 已成交的订单不受任何修改影响：订单行快照了单价与分摊额，订单上快照了命中的活动。
+//
+// # 活动配额在库存服务（00075，微服务拆分阶段 1b）
+//
+// promotion_skus 只剩价格配置与每人限购；配额（stock_qty）与已售（sold_qty）在库存服务的
+// activity_stocks。于是写活动商品是两段：
+//
+//  1. **先**调库存服务整组设配额（inventory.SetActivityQuotas）。「卖出过的 SKU 不能移出活动 /
+//     配额不能低于已售」由它在配额行的行锁之下判（它看得见已售，core 看不见），违反时回
+//     *ActivityRuleError，这里翻成与拆分前相同的 422；
+//  2. **再**在 core 的事务里写 promotion_skus（价格与限购）。
+//
+// 顺序是为了「被拒就什么都没写」：反过来的话 core 先提交、库存服务再拒，promotion_skus 已经改了。
+// 两段之间没有一个事务，窗口里的失败（第 2 段的并发冲突、进程崩溃）让配额先于 core 生效 ——
+// 活动是下线的（上线中不许改规则），多出来的配额行没有报价可用、少了的配额行让计价跳过那个报价，
+// 都不会超卖；同一个请求重试即收敛。上线（0 → 1）时再整组同步一次，作为兜底：
+// 一个活动不可能在配额没同步的情况下上线。
+//
+// 读（列表、详情、写接口的回显）在事务之后向库存服务按活动批量取配额与已售，库存服务不在时 503。
+// 新建是例外：回显里的配额取自请求本身（已售恒为 0），新建的活动还没有任何配额行可读。
 
 var (
 	// ErrPromotionBadRequest：规则本身不成立（满 100 减 200、秒杀没配额、范围目标查不到……）。422。
@@ -50,11 +70,54 @@ const (
 // AdminPromotionService 实现 /admin/promotions 那四条接口。
 type AdminPromotionService struct {
 	repo CouponRepository
+	inv  inventory.Service
 	now  func() time.Time
 }
 
-func NewAdminPromotionService(r CouponRepository) *AdminPromotionService {
-	return &AdminPromotionService{repo: r, now: time.Now}
+func NewAdminPromotionService(r CouponRepository, inv inventory.Service) *AdminPromotionService {
+	return &AdminPromotionService{repo: r, inv: inv, now: time.Now}
+}
+
+// fillActivity 把库存服务里的配额与已售填进一批视图（事务之后调）。库存服务没有的行记 0 / 0。
+func (s *AdminPromotionService) fillActivity(ctx context.Context, views []AdminPromotionView) error {
+	ids := make([]int64, 0, len(views))
+	for _, v := range views {
+		if len(v.Skus) > 0 {
+			ids = append(ids, v.Promotion.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	act, err := s.inv.ActivityStock(ctx, inventory.ActivityQuery{PromotionIDs: ids})
+	if err != nil {
+		return err
+	}
+	for i := range views {
+		applyActivity(views[i].Skus, act)
+	}
+	return nil
+}
+
+func applyActivity(skus []repository.PromotionSku, act map[inventory.ActivityKey]inventory.Activity) {
+	for j := range skus {
+		a := act[inventory.ActivityKey{PromotionID: skus[j].PromotionID, SKUID: skus[j].SKUID}]
+		skus[j].StockQty, skus[j].SoldQty = a.Quota, a.Sold
+	}
+}
+
+// syncQuotas 整组把活动配额交给库存服务。违反已售规则翻成 422（与拆分前 checkSoldSkusKept 同一句话）。
+func (s *AdminPromotionService) syncQuotas(ctx context.Context, id int64, skus []repository.PromotionSkuInput) error {
+	items := make([]inventory.ActivityQuota, 0, len(skus))
+	for _, sk := range skus {
+		items = append(items, inventory.ActivityQuota{SKUID: sk.SKUID, Quota: sk.StockQty})
+	}
+	err := s.inv.SetActivityQuotas(ctx, id, items)
+	var rule *inventory.ActivityRuleError
+	if errors.As(err, &rule) {
+		return fmt.Errorf("%w: %v", ErrPromotionBadRequest, rule)
+	}
+	return err
 }
 
 // PromotionPhase 是现算的阶段（契约 AdminPromotion.phase）。
@@ -173,6 +236,9 @@ func (s *AdminPromotionService) List(ctx context.Context, status, promoType *int
 	if err != nil {
 		return AdminPromotionPage{}, err
 	}
+	if err := s.fillActivity(ctx, out.Items); err != nil {
+		return AdminPromotionPage{}, err
+	}
 	return out, nil
 }
 
@@ -187,7 +253,14 @@ func (s *AdminPromotionService) Get(ctx context.Context, id int64) (AdminPromoti
 		out, err = s.view(ctx, tx, id)
 		return err
 	})
-	return out, err
+	if err != nil {
+		return AdminPromotionView{}, err
+	}
+	vs := []AdminPromotionView{out}
+	if err := s.fillActivity(ctx, vs); err != nil {
+		return AdminPromotionView{}, err
+	}
+	return vs[0], nil
 }
 
 // PromotionRules 是活动的规则部分：新建时全给，修改时 nil 表示不改。
@@ -229,7 +302,7 @@ func (s *AdminPromotionService) Create(ctx context.Context, in PromotionInput,
 	if err != nil {
 		return AdminPromotionView{}, false, err
 	}
-	return idempotentTenantWrite(ctx, s.repo, scopeAdminPromotionCreate, repository.StaffSubject(staff.StaffID),
+	out, replayed, err := idempotentTenantWrite(ctx, s.repo, scopeAdminPromotionCreate, repository.StaffSubject(staff.StaffID),
 		idemKey, hash, archivedCreated, func(tx repository.Tx) (AdminPromotionView, error) {
 			if err := checkPromotionTargets(ctx, tx, f, scopes, skus); err != nil {
 				return AdminPromotionView{}, err
@@ -241,8 +314,40 @@ func (s *AdminPromotionService) Create(ctx context.Context, in PromotionInput,
 			if err := writePromotionRules(ctx, tx, id, in.Rules); err != nil {
 				return AdminPromotionView{}, err
 			}
-			return s.view(ctx, tx, id)
+			v, err := s.view(ctx, tx, id)
+			if err != nil {
+				return AdminPromotionView{}, err
+			}
+			// 回显（也是幂等存档）里的配额取自请求：新活动在库存服务里还没有配额行，已售恒为 0。
+			quota := map[int64]int32{}
+			for _, sk := range skus {
+				quota[sk.SKUID] = sk.StockQty
+			}
+			for i := range v.Skus {
+				v.Skus[i].StockQty, v.Skus[i].SoldQty = quota[v.Skus[i].SKUID], 0
+			}
+			return v, nil
 		})
+	if err != nil || len(out.Skus) == 0 {
+		return out, replayed, err
+	}
+	// 活动行提交之后再设配额（新建的活动还没有 id 可给库存服务）。新活动一律是下线的，
+	// 配额没设上之前它不会被任何一单命中；设不上回 503，同一把幂等键重试会走重放、再设一次。
+	// 重放时库存服务里已经有这个活动的配额行（第一次其实设上了、或之后被修改同步过）就不再设 ——
+	// 存档里是新建那一刻的配额，拿它覆盖会把之后的修改抹掉。
+	if replayed {
+		cur, err := s.inv.ActivityStock(ctx, inventory.ActivityQuery{PromotionIDs: []int64{out.Promotion.ID}})
+		if err != nil {
+			return AdminPromotionView{}, false, err
+		}
+		if len(cur) > 0 {
+			return out, replayed, nil
+		}
+	}
+	if err := s.syncQuotas(ctx, out.Promotion.ID, skuInputsOf(out.Skus)); err != nil {
+		return AdminPromotionView{}, false, err
+	}
+	return out, replayed, nil
 }
 
 // PromotionPatch 是 PATCH 请求：nil 表示不改。
@@ -275,82 +380,127 @@ func (s *AdminPromotionService) Update(ctx context.Context, id int64, p Promotio
 	if p.Status != nil && *p.Status != 0 && *p.Status != 1 {
 		return AdminPromotionView{}, fmt.Errorf("%w: status 只能是 0 或 1", ErrPromotionBadRequest)
 	}
-	var out AdminPromotionView
-	err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
-		status, err := tx.AdminLockPromotion(ctx, id)
-		if errors.Is(err, repository.ErrPromotionNotFound) {
-			return fmt.Errorf("%w: promotion_id=%d", ErrPromotionNotFound, id)
-		}
-		if err != nil {
-			return err
-		}
-		if status == 1 && p.touchesRules() {
-			return fmt.Errorf("%w: 上线中的活动只能改名或下线", ErrPromotionOnline)
-		}
-		cur, err := s.view(ctx, tx, id)
-		if err != nil {
-			return err
-		}
-		f := promotionFieldsOf(cur.Promotion)
-		if p.Name != nil {
-			f.Name = strings.TrimSpace(*p.Name)
-		}
-		if p.ThresholdUnit != nil {
-			f.ThresholdUnit = *p.ThresholdUnit
-		}
-		if p.StackWithCoupon != nil {
-			f.StackWithCoupon = *p.StackWithCoupon
-		}
-		if p.StartsAt != nil {
-			f.StartsAt = *p.StartsAt
-		}
-		if p.EndsAt != nil {
-			f.EndsAt = *p.EndsAt
-		}
-		if p.GiftTemplateID != nil {
-			f.GiftTemplateID = p.GiftTemplateID
-		}
-		if p.Status != nil {
-			f.Status = *p.Status
-		}
-
-		// 合并之后的完整规则：没传的一组沿用现状。
-		tiers, scopes, skus := cur.Tiers, scopeInputsOf(cur.Scopes), skuInputsOf(cur.Skus)
-		if p.Rules.Tiers != nil {
-			tiers = *p.Rules.Tiers
-		}
-		if p.Rules.Scopes != nil {
-			scopes = *p.Rules.Scopes
-		}
-		if p.Rules.Skus != nil {
-			skus = *p.Rules.Skus
-			if err := checkSoldSkusKept(cur.Skus, skus); err != nil {
-				return err
-			}
-		}
-		if err := validatePromotion(f, tiers, scopes, skus); err != nil {
-			return err
-		}
-		// 上线（0 → 1）时再核一遍「这个活动能不能真的生效」：规则不完整或已经过期的活动
-		// 上线了也不会命中任何一单，而运营会以为它在跑。
-		if status == 0 && f.Status == 1 {
-			if err := validateGoLive(f, tiers, skus, s.now()); err != nil {
-				return err
-			}
-		}
-		if err := checkPromotionTargets(ctx, tx, f, scopes, skus); err != nil {
-			return err
-		}
-		if err := tx.AdminUpdatePromotion(ctx, id, f); err != nil {
-			return mapPromotionRepoErr(err)
-		}
-		if err := writePromotionRules(ctx, tx, id, p.Rules); err != nil {
-			return err
-		}
-		out, err = s.view(ctx, tx, id)
+	// 现有配额与已售（库存服务），合并「没传的一组沿用现状」时要用，事务之外先问。
+	act, err := s.inv.ActivityStock(ctx, inventory.ActivityQuery{PromotionIDs: []int64{id}})
+	if err != nil {
+		return AdminPromotionView{}, err
+	}
+	// 第一遍：只判不写（锁、上线中不许改规则、合并、校验、目标归属），算出要不要先同步配额。
+	var sync []repository.PromotionSkuInput
+	err = s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+		var err error
+		sync, _, err = s.updateTx(ctx, tx, id, p, act, false)
 		return err
 	})
-	return out, err
+	if err != nil {
+		return AdminPromotionView{}, err
+	}
+	// 先设配额（文件头「活动配额在库存服务」第 1 段）：被拒就什么都没写。
+	if sync != nil {
+		if err := s.syncQuotas(ctx, id, sync); err != nil {
+			return AdminPromotionView{}, err
+		}
+		if act, err = s.inv.ActivityStock(ctx, inventory.ActivityQuery{PromotionIDs: []int64{id}}); err != nil {
+			return AdminPromotionView{}, err
+		}
+	}
+	// 第二遍：同一套判定再走一次（两遍之间状态可能变了），然后写。
+	var out AdminPromotionView
+	err = s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+		var err error
+		_, out, err = s.updateTx(ctx, tx, id, p, act, true)
+		return err
+	})
+	if err != nil {
+		return AdminPromotionView{}, err
+	}
+	applyActivity(out.Skus, act)
+	return out, nil
+}
+
+// updateTx 是 Update 的一遍：锁活动行、判「上线中不许改规则」、合并与校验；write 为真时整行写回与
+// 整组替换并回视图。另回「要不要先向库存服务同步配额、同步哪一组」：改了活动商品，或者这一次上线。
+// act 是库存服务里现有的配额与已售，合并「没传的活动商品沿用现状」时用它补上配额。
+func (s *AdminPromotionService) updateTx(ctx context.Context, tx repository.Tx, id int64, p PromotionPatch,
+	act map[inventory.ActivityKey]inventory.Activity, write bool) ([]repository.PromotionSkuInput, AdminPromotionView, error) {
+	status, err := tx.AdminLockPromotion(ctx, id)
+	if errors.Is(err, repository.ErrPromotionNotFound) {
+		return nil, AdminPromotionView{}, fmt.Errorf("%w: promotion_id=%d", ErrPromotionNotFound, id)
+	}
+	if err != nil {
+		return nil, AdminPromotionView{}, err
+	}
+	if status == 1 && p.touchesRules() {
+		return nil, AdminPromotionView{}, fmt.Errorf("%w: 上线中的活动只能改名或下线", ErrPromotionOnline)
+	}
+	cur, err := s.view(ctx, tx, id)
+	if err != nil {
+		return nil, AdminPromotionView{}, err
+	}
+	applyActivity(cur.Skus, act)
+	f := promotionFieldsOf(cur.Promotion)
+	if p.Name != nil {
+		f.Name = strings.TrimSpace(*p.Name)
+	}
+	if p.ThresholdUnit != nil {
+		f.ThresholdUnit = *p.ThresholdUnit
+	}
+	if p.StackWithCoupon != nil {
+		f.StackWithCoupon = *p.StackWithCoupon
+	}
+	if p.StartsAt != nil {
+		f.StartsAt = *p.StartsAt
+	}
+	if p.EndsAt != nil {
+		f.EndsAt = *p.EndsAt
+	}
+	if p.GiftTemplateID != nil {
+		f.GiftTemplateID = p.GiftTemplateID
+	}
+	if p.Status != nil {
+		f.Status = *p.Status
+	}
+
+	// 合并之后的完整规则：没传的一组沿用现状。
+	tiers, scopes, skus := cur.Tiers, scopeInputsOf(cur.Scopes), skuInputsOf(cur.Skus)
+	if p.Rules.Tiers != nil {
+		tiers = *p.Rules.Tiers
+	}
+	if p.Rules.Scopes != nil {
+		scopes = *p.Rules.Scopes
+	}
+	if p.Rules.Skus != nil {
+		skus = *p.Rules.Skus
+	}
+	if err := validatePromotion(f, tiers, scopes, skus); err != nil {
+		return nil, AdminPromotionView{}, err
+	}
+	// 上线（0 → 1）时再核一遍「这个活动能不能真的生效」：规则不完整或已经过期的活动
+	// 上线了也不会命中任何一单，而运营会以为它在跑。
+	goingLive := status == 0 && f.Status == 1
+	if goingLive {
+		if err := validateGoLive(f, tiers, skus, s.now()); err != nil {
+			return nil, AdminPromotionView{}, err
+		}
+	}
+	if err := checkPromotionTargets(ctx, tx, f, scopes, skus); err != nil {
+		return nil, AdminPromotionView{}, err
+	}
+	var sync []repository.PromotionSkuInput
+	if p.Rules.Skus != nil || goingLive {
+		sync = append([]repository.PromotionSkuInput{}, skus...)
+	}
+	if !write {
+		return sync, AdminPromotionView{}, nil
+	}
+	if err := tx.AdminUpdatePromotion(ctx, id, f); err != nil {
+		return nil, AdminPromotionView{}, mapPromotionRepoErr(err)
+	}
+	if err := writePromotionRules(ctx, tx, id, p.Rules); err != nil {
+		return nil, AdminPromotionView{}, err
+	}
+	out, err := s.view(ctx, tx, id)
+	return sync, out, err
 }
 
 func derefRules(r PromotionRules) ([]repository.PromotionTier, []repository.CouponScopeInput,
@@ -416,29 +566,6 @@ func skuInputsOf(cur []repository.PromotionSku) []repository.PromotionSkuInput {
 		})
 	}
 	return out
-}
-
-// checkSoldSkusKept：卖出过的 SKU 不能移出活动，配额不能低于已售数。
-// 那部分配额已经兑现给了买家；移除它会让关单时放不回配额（releasePromotionLine 的那条日志）。
-func checkSoldSkusKept(cur []repository.PromotionSku, next []repository.PromotionSkuInput) error {
-	byID := map[int64]repository.PromotionSkuInput{}
-	for _, n := range next {
-		byID[n.SKUID] = n
-	}
-	for _, c := range cur {
-		if c.SoldQty == 0 {
-			continue
-		}
-		n, ok := byID[c.SKUID]
-		if !ok {
-			return fmt.Errorf("%w: sku %d 已按活动价卖出 %d 件，不能移出活动", ErrPromotionBadRequest, c.SKUID, c.SoldQty)
-		}
-		if n.StockQty > 0 && n.StockQty < c.SoldQty {
-			return fmt.Errorf("%w: sku %d 已卖出 %d 件，配额不能改成 %d", ErrPromotionBadRequest,
-				c.SKUID, c.SoldQty, n.StockQty)
-		}
-	}
-	return nil
 }
 
 // validatePromotion 在进库之前把 chk_promotion_* 与跨表的形状规则用人话说一遍。

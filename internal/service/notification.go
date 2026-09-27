@@ -9,6 +9,7 @@ import (
 	"strings"
 	"text/template"
 
+	"github.com/keel/keel/internal/inventory"
 	"github.com/keel/keel/internal/repository"
 )
 
@@ -387,23 +388,32 @@ func notifyRefundSucceeded(ctx context.Context, tx repository.Tx, r repository.R
 // 只在跨线的那一次发：已经在线下的库存每卖一件都提醒一次，铃铛会被同一件商品刷屏。
 // 补货回到线上之后再跌下来，是新的一次（去重键带着触发它的订单号）。
 //
-// 它跑在 SAGA 库存分支的屏障事务里。这一单之后若被全局补偿（库存回补），
-// 这条预警不撤回：它说的是「刚才跌破过」，而补偿回来的那几件在下一次跨线时会再报。
+// ### 微服务拆分阶段 1b：判据来自库存服务的流水，发在 core 的收尾分支里
+//
+// 拆分前它跑在库存分支的屏障事务里，before / after 就是那一次扣减的前后水位。拆分后扣减在库存
+// 服务里，dtmrs 又不把分支的响应带回给提交方，于是由排在库存分支之后的收尾分支
+// （order_saga.go 的 finishBranch）向库存服务要这一单的流水：扣减那一行记着**这一次**扣减的
+// 前后水位（行锁之下的精确值，不是事后读的近似），预警线取那一行库存此刻的值。所以「每次跨线
+// 恰好一单报」照旧成立 —— 同一行库存上的扣减在行锁下排队，前后水位首尾相接，一条预警线只会
+// 落在其中一单的 (after, before] 里；去重键（门店:SKU:订单号）照旧，收尾分支的重试不会重复发。
+// 唯一的偏差是预警线本身在扣减与收尾之间（毫秒级）被后台改了，那时按新的线判。
+//
+// 这一单之后若被全局补偿（库存回补），这条预警不撤回：它说的是「刚才跌破过」，
+// 而补偿回来的那几件在下一次跨线时会再报。
 func notifyLowStockIfCrossed(ctx context.Context, tx repository.Tx, order repository.Order,
-	skuID int64, qty, after int32) error {
-	a, err := tx.InventoryAlert(ctx, skuID, order.StoreID)
+	e inventory.TrailEntry) error {
+	if !(e.Before > e.Warning && e.After <= e.Warning) {
+		return nil
+	}
+	a, err := tx.LowStockContext(ctx, e.SKUID, e.StoreID)
 	if err != nil {
 		return err
 	}
-	before := after + qty
-	if !(before > a.WarningQty && after <= a.WarningQty) {
-		return nil
-	}
 	return emitNotification(ctx, tx, outgoing{Kind: KindMerchantInventoryLow,
-		StoreID: order.StoreID, SKUID: skuID,
+		StoreID: e.StoreID, SKUID: e.SKUID,
 		Params: notifyParams{ProductTitle: a.ProductTitle, SpecLabel: specLabel(a.SpecValues),
-			StoreName: a.StoreName, Left: after, Warning: a.WarningQty},
-		Dedupe: strconv.FormatInt(order.StoreID, 10) + ":" + strconv.FormatInt(skuID, 10) + ":" + order.OrderNo})
+			StoreName: a.StoreName, Left: e.After, Warning: e.Warning},
+		Dedupe: strconv.FormatInt(e.StoreID, 10) + ":" + strconv.FormatInt(e.SKUID, 10) + ":" + order.OrderNo})
 }
 
 // specLabel 把 skus.spec_values（{"颜色":"黑","尺码":"M"}）写成「（黑 / M）」，按键名排序；

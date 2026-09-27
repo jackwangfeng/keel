@@ -239,7 +239,7 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	// 它们分叉时的症状是「沙箱支付 401」，看上去像密钥配错了。
 	payments := service.NewPaymentService(repo, payment, nil)
 	// 退款与支付共用同一份渠道配置（沙箱开关、回调密钥），见 service/refund.go 的文件头。
-	refunds := service.NewRefundService(repo, payment, nil)
+	refunds := service.NewRefundService(repo, payment, nil).WithInventory(inv)
 	rh := handler.NewRefundHandler(refunds)
 
 	v1 := r.Group("/api/v1", res.Middleware())
@@ -333,7 +333,7 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	// 优惠券的买家侧四条（契约 Coupon tag）。四条都要令牌：我的券、本单可用券
 	// 读的是「我的」东西；领券中心要回「我已经领了几张」；领券写的是「我的」券包。
 	// 券的计算与试算、下单共用同一份实现（service/coupon_calc.go）。
-	cpn := handler.NewCouponHandler(service.NewCouponService(repo))
+	cpn := handler.NewCouponHandler(service.NewCouponService(repo, inv))
 	v1.GET("/coupons", auth.Bearer(signer, nil), cpn.ListMine)
 	v1.POST("/coupons/applicable", auth.Bearer(signer, nil), cpn.Applicable)
 	v1.GET("/coupon-templates", auth.Bearer(signer, nil), cpn.ListClaimable)
@@ -641,7 +641,7 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 
 	// 营销活动（契约 /admin/promotions 那一段）。权限与券管理同一行（全店范围），
 	// 判据在业务层（service/admin_promotion.go 的文件头）。
-	pra := handler.NewAdminPromotionHandler(service.NewAdminPromotionService(repo))
+	pra := handler.NewAdminPromotionHandler(service.NewAdminPromotionService(repo, inv))
 	v1.GET("/admin/promotions", staffAuth, pra.List)
 	v1.POST("/admin/promotions", staffAuth, pra.Create)
 	v1.GET("/admin/promotions/:promotion_id", staffAuth, pra.Detail)
@@ -699,6 +699,13 @@ func uploadStoreFromEnv() *service.LocalDiskStore {
 // 而其中两处对不上时没有任何编译错误。
 func Branches(orders *service.OrderService) map[string]dtm.BranchFunc {
 	return orders.Branches()
+}
+
+// InventoryBranches 是库存服务的两个 SAGA 分支（带载荷），单体（KEEL_ROLE=all）注册到进程内
+// 协调器上（local://inventory_deduct / inventory_restore）。KEEL_ROLE=core 不注册它们：
+// 那时编排里的地址是库存服务的 http://…/internal/v1/saga/…（dtm.BranchResolver）。
+func InventoryBranches(l *inventory.Local) map[string]dtm.BranchFuncEx {
+	return l.SagaBranches()
 }
 
 // Listen 是默认的监听方式。它是 Run 的一个参数，好让测试换掉它。
@@ -785,12 +792,31 @@ func Run(ctx context.Context, listen func(addr string, h http.Handler) error) er
 		return err
 	}
 
+	// 库存服务（微服务拆分阶段 1a / 1b）：all 是建在库存池上的进程内实现，core 是 HTTP 实现。
+	// 下单服务、超时补偿、库存 outbox 与 Router 用的是同一个。
+	inv, err := inventoryService(cfg.Split, invPool)
+	if err != nil {
+		return err
+	}
+
 	// 下单服务要先造出来才能拿到它的分支，而协调器要先拿到分支才能 Start，
 	// 服务又要在 Start 之后才能拿到协调器 —— 这个环在
 	// service.OrderService.AttachCoordinator 那里被打开，理由写在那儿。
-	orders := service.NewOrderService(repository.New(pool), nil, nil)
+	orders := service.NewOrderService(repository.New(pool), inv, nil, nil)
+	// 库存分支的地址：单体进程内（local://），core 指向库存服务（http://，带分支令牌）。
+	// 单体注册库存的两个分支，core 不注册（它们在库存进程里，挂在内网端口上）。
+	var invBranches map[string]dtm.BranchFuncEx
+	if cfg.Split.Role == RoleCore {
+		res, err := dtm.NewBranchResolver(cfg.Split.InventoryURL, cfg.Split.InternalSecret)
+		if err != nil {
+			return err
+		}
+		orders.UseBranchResolver(res)
+	} else {
+		invBranches = InventoryBranches(inventory.NewLocal(repository.NewInventoryStore(invPool)))
+	}
 
-	tc, err := dtm.Start(cfg.DTMDSN, 0, Branches(orders))
+	tc, err := dtm.StartEx(cfg.DTMDSN, 0, Branches(orders), invBranches)
 	if err != nil {
 		return fmt.Errorf("启动事务协调器失败（%s）: %w", EnvDTMDSN, err)
 	}
@@ -819,8 +845,14 @@ func Run(ctx context.Context, listen func(addr string, h http.Handler) error) er
 	// 同一条 —— 跟着 listen 走，进程要退时一起收到取消。
 	bgCtx, stopBackground := context.WithCancel(ctx)
 	defer stopBackground()
-	sweeper := service.NewSweepService(repository.New(pool), service.SweepConfig{}, nil)
+	sweeper := service.NewSweepService(repository.New(pool), inv, service.SweepConfig{}, nil)
 	go sweeper.Run(bgCtx)
+
+	// 库存 outbox 的 worker（微服务拆分阶段 1b）：关单释放与退款回补。关单 / 退款的那段代码在提交之后
+	// 已经就地跑过一次，这里接住没跑成的（库存服务不在、进程在提交之后崩了）。与超时补偿同一个理由
+	// 排在监听之前：它停着的代价是库存一直被关掉的订单占着（少卖）。
+	invOutbox := service.NewInventoryOutboxService(repository.New(pool), inv, service.InventoryOutboxConfig{}, nil)
+	go invOutbox.Run(bgCtx)
 
 	// 自动确认收货（数据模型 §5 发货第三条规则）：发货满店铺设置的 auto_confirm_days
 	// 天的 30 已发货订单推到 40。与超时补偿同一套机制（按租户扫描、同一份公平调度），
@@ -918,10 +950,6 @@ func Run(ctx context.Context, listen func(addr string, h http.Handler) error) er
 		return err
 	}
 
-	inv, err := inventoryService(cfg.Split, invPool)
-	if err != nil {
-		return err
-	}
 	public := Router(pool, res, signer, orders, cfg.Payment, searchEmbedder, WithInventory(inv))
 	if cfg.Split.InternalAddr == "" {
 		return listen(cfg.Addr, public)

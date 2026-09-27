@@ -156,7 +156,11 @@ func inventoryPool(ctx context.Context, s SplitConfig, main *pgxpool.Pool) (*pgx
 func internalRouter(s SplitConfig, inv *pgxpool.Pool) *gin.Engine {
 	r, routes := rpc.NewRouter(rpc.ServerConfig{Secret: s.InternalSecret, Ready: inv.Ping})
 	if s.Role == RoleInventory || s.Role == RoleAll {
-		inventory.Mount(routes.Tenant, inventory.NewLocal(repository.NewInventoryStore(inv)))
+		local := inventory.NewLocal(repository.NewInventoryStore(inv))
+		inventory.Mount(routes.Tenant, local)
+		// 库存的 SAGA 分支（阶段 1b）：core 的协调器经 http://…/internal/v1/saga/<名字> 调它们，
+		// 分支令牌准入（rpc.Routes.Saga）。屏障记在库存池指向的库里。
+		inventory.MountSaga(routes.Saga, local)
 	}
 	return r
 }

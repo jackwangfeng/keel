@@ -122,6 +122,7 @@ func (s *ProductService) List(ctx context.Context, storeID, categoryID *int64, p
 	page, pageSize = clampPaging(page, pageSize)
 
 	out := ProductList{Items: []ProductSummary{}, Page: page, PageSize: pageSize}
+	var promo promoTagMaterial
 	err := s.repo.WithTenant(ctx, func(q repository.Tx) error {
 		// 门店解析与后面两条查询在**同一个事务**里：分成两次的话，
 		// 两者之间的一次门店软删会让「解析到了 A 店」与「按 A 店读商品」
@@ -155,8 +156,7 @@ func (s *ProductService) List(ctx context.Context, storeID, categoryID *int64, p
 		for _, r := range rows {
 			ids = append(ids, r.ID)
 		}
-		tags, _, err := promotionTagsFor(ctx, q, sc, ids, time.Now())
-		if err != nil {
+		if promo, err = loadPromotionTags(ctx, q, sc, ids, time.Now()); err != nil {
 			return err
 		}
 		for _, r := range rows {
@@ -169,13 +169,21 @@ func (s *ProductService) List(ctx context.Context, storeID, categoryID *int64, p
 				SalesCount:    r.SalesCount,
 				Status:        r.Status,
 				ImageURL:      imageURLOf(r.MainImageUploadID),
-				PromotionTags: tags[r.ID],
 			})
 		}
 		return nil
 	})
 	if err != nil {
 		return ProductList{}, err
+	}
+	// 活动标签在事务之后算（秒杀配额要问库存服务，promotion_tags.go）。列表不读库存，
+	// 库存服务不在时照常返回（标签里没有单价类活动），与 in_stock 缺席同一个降级口径。
+	tags, _, err := promo.finish(ctx, s.inv, true)
+	if err != nil {
+		return ProductList{}, err
+	}
+	for i := range out.Items {
+		out.Items[i].PromotionTags = tags[out.Items[i].ID]
 	}
 	return out, nil
 }
@@ -311,6 +319,7 @@ func (s *ProductService) Detail(ctx context.Context, storeID *int64, id int64) (
 	var (
 		out     ProductDetail
 		stockAt int64
+		promo   promoTagMaterial
 	)
 	err := s.repo.WithTenant(ctx, func(q repository.Tx) error {
 		sc, mt, err := scopeIn(ctx, q, storeID)
@@ -337,8 +346,7 @@ func (s *ProductService) Detail(ctx context.Context, storeID *int64, id int64) (
 		if err != nil {
 			return err
 		}
-		tags, promoPrices, err := promotionTagsFor(ctx, q, sc, []int64{p.ID}, time.Now())
-		if err != nil {
+		if promo, err = loadPromotionTags(ctx, q, sc, []int64{p.ID}, time.Now()); err != nil {
 			return err
 		}
 
@@ -372,10 +380,6 @@ func (s *ProductService) Detail(ctx context.Context, storeID *int64, id int64) (
 				PriceCents: r.PriceCents,
 				ImageURL:   r.ImageURL,
 			}
-			if pp, ok := promoPrices[r.ID]; ok {
-				price, promo := pp.PriceCents, pp.PromotionID
-				sku.PromoPriceCents, sku.PromotionID = &price, &promo
-			}
 			skus = append(skus, sku)
 		}
 		out = ProductDetail{
@@ -388,7 +392,6 @@ func (s *ProductService) Detail(ctx context.Context, storeID *int64, id int64) (
 				SalesCount:    p.SalesCount,
 				Status:        p.Status,
 				ImageURL:      mainImage,
-				PromotionTags: tags[p.ID],
 			},
 			CategoryID:  p.CategoryID,
 			Description: p.Description,
@@ -409,10 +412,21 @@ func (s *ProductService) Detail(ctx context.Context, storeID *int64, id int64) (
 	if err != nil {
 		return ProductDetail{}, err
 	}
+	// 活动标签与各 SKU 的活动价：秒杀配额在库存服务，事务之后问（promotion_tags.go）。
+	// 问不到时与水位同一个口径：整页 503（degrade = false）。
+	tags, promoPrices, err := promo.finish(ctx, s.inv, false)
+	if err != nil {
+		return ProductDetail{}, err
+	}
+	out.PromotionTags = tags[out.ID]
 	for i := range out.SKUs {
 		out.SKUs[i].AvailableQty = levels[out.SKUs[i].ID].Available
 		if out.SKUs[i].AvailableQty > 0 {
 			out.InStock = true
+		}
+		if pp, ok := promoPrices[out.SKUs[i].ID]; ok {
+			price, pid := pp.PriceCents, pp.PromotionID
+			out.SKUs[i].PromoPriceCents, out.SKUs[i].PromotionID = &price, &pid
 		}
 	}
 	return out, nil

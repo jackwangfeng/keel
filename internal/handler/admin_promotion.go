@@ -205,7 +205,7 @@ func apiAdminPromotion(v service.AdminPromotionView) api.AdminPromotion {
 
 // writePromotionError 把活动后台的业务错误翻成契约里的响应。
 func writePromotionError(c *gin.Context, err error) {
-	if writePermissionError(c, err) {
+	if writePermissionError(c, err) || writeInventoryUnavailable(c, err) {
 		return
 	}
 	switch {
