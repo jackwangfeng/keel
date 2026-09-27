@@ -2,6 +2,9 @@ package db
 
 import (
 	"context"
+	"os"
+	"strconv"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -18,6 +21,9 @@ import (
 // 池会在运行期按需新建物理连接，也会在连接断掉后重连。建池时查一次只覆盖
 // 第一条连接，而角色属性是可以在运行期被 ALTER ROLE 改掉的（一次「临时给
 // keel_app 加 BYPASSRLS 排查问题」就够了）。AfterConnect 覆盖每一次新建。
+// EnvDBMaxConns 是业务连接池的上限；不配或配非正数时用 pgxpool 的默认值（max(4, CPU 核数)）。
+const EnvDBMaxConns = "KEEL_DB_MAX_CONNS"
+
 func NewPool(ctx context.Context) (*pgxpool.Pool, error) {
 	cfg, err := pgxpool.ParseConfig(DSN())
 	if err != nil {
@@ -25,6 +31,13 @@ func NewPool(ctx context.Context) (*pgxpool.Pool, error) {
 	}
 	cfg.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
 		return Guard(ctx, conn)
+	}
+	// 连接池上限。pgxpool 的默认值是 max(4, CPU 核数)：20 核的机器上一个实例就是 20 条，
+	// 再加上事务协调器自己的池（DTMRS_DB_POOL，默认 32），一个实例最多 52 条 ——
+	// 多实例实测 3 个实例就把 Postgres 默认的 max_connections = 100 打满，读写一起 500。
+	// 多实例部署按「实例数 × (KEEL_DB_MAX_CONNS + DTMRS_DB_POOL) + 留给运维的几条 < max_connections」配。
+	if n, err := strconv.Atoi(strings.TrimSpace(os.Getenv(EnvDBMaxConns))); err == nil && n > 0 {
+		cfg.MaxConns = int32(n)
 	}
 
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)

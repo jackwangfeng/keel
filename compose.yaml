@@ -215,6 +215,10 @@ services:
       KEEL_TRUSTED_PROXIES: ${KEEL_TRUSTED_PROXIES:-}
       # 不参与口令失败锁定的手机号（逗号分隔）。只给把一个买家号公开给所有人用的演示环境，正式环境不要配。
       KEEL_LOGIN_LOCK_EXEMPT_PHONES: ${KEEL_LOGIN_LOCK_EXEMPT_PHONES:-}
+      # 连接池上限：业务池（默认 max(4, CPU 核数)）与事务协调器的池（默认 32）。
+      # 多实例共用一个 Postgres 时按「实例数 × 两者之和 + 余量 < max_connections」配，见部署指南。
+      KEEL_DB_MAX_CONNS: ${KEEL_DB_MAX_CONNS:-}
+      DTMRS_DB_POOL: ${DTMRS_DB_POOL:-}
 
       # 镜像是拿来跑的，不是拿来开发的：gin 的 debug 模式会在启动时打一屏
       # 「你没有设置 release」的警告，而 `docker compose up` 的头一屏正是
