@@ -133,8 +133,11 @@ services:
       PGPASSWORD: ${KEEL_ADMIN_PASSWORD:-keel}
     volumes:
       - ./db/seed:/seed:ro
+      # 种子商品图要写进与 app 共用的上传目录（db/seed/seed-images.sh）。
+      - uploads:/uploads
     command: >
-      psql -v ON_ERROR_STOP=1 -h postgres -U keel -d keel -f /seed/single.sql
+      sh -c "psql -v ON_ERROR_STOP=1 -h postgres -U keel -d keel -f /seed/single.sql
+      && sh /seed/seed-images.sh"
     depends_on:
       migrate:
         condition: service_completed_successfully
