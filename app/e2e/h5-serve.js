@@ -3,6 +3,7 @@
 // 为什么要反代：服务端不发 CORS 头，H5 只能同源访问（src/api/config.uts 的默认地址是相对路径 /api/v1）。
 // Host 头换成服务端自己的地址 —— 租户按 Host 定，这样和原生 App 访问的是同一家店。
 const http = require('http')
+const https = require('https')
 const fs = require('fs')
 const path = require('path')
 
@@ -16,7 +17,10 @@ const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '
 
 http.createServer((req, res) => {
   if (req.url.startsWith('/api/')) {
-    const up = http.request({ host: target.hostname, port: target.port || 80, method: req.method, path: req.url,
+    // 目标可以是 http（局域网演示栈）也可以是 https（公网演示站）。
+    const mod = target.protocol === 'https:' ? https : http
+    const up = mod.request({ host: target.hostname, port: target.port || (target.protocol === 'https:' ? 443 : 80),
+      method: req.method, path: req.url, servername: target.hostname,
       headers: { ...req.headers, host: target.host } }, (r) => {
       res.writeHead(r.statusCode, r.headers)
       r.pipe(res)
