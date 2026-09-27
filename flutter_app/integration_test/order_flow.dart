@@ -55,7 +55,8 @@ void orderTests() {
     await tapKey(t, 'checkout.submit');
     await waitFor(t, keyedText('order.status', '待支付'));
     await tapKey(t, 'order.pay');
-    await waitFor(t, byKey('order.sandbox'));
+    // 底栏直接变「模拟支付完成（沙箱）」（说明卡片在页面下面，可能在首屏以外）。
+    await waitFor(t, byKey('order.settle'));
     await tapKey(t, 'order.settle');
     await waitFor(t, keyedText('order.status', '已支付'), timeout: const Duration(seconds: 30));
     expect(byKey('order.pay'), findsNothing);

@@ -252,16 +252,13 @@ class AddButton extends StatelessWidget {
 
 /// 搜索结果的一行：封面、标题、完整价格区间；缺货 / 下架标出来并压暗（不藏）。
 class ProductTile extends StatelessWidget {
-  const ProductTile({
-    super.key,
-    required this.row,
-    required this.onTap,
-    this.onAdd,
-  });
+  const ProductTile({super.key, required this.row, required this.onTap, this.onAdd});
   final ProductRow row;
   final VoidCallback onTap;
   final VoidCallback? onAdd;
 
+  // 左图右文（uni-app x 的 .pc-row）：内边距 12、72 的图、标题 15 最多两行；
+  // 价格行里右边是「＋」或灰标签，和价格齐平。缺货 / 下架整行压暗 0.6（不藏）。
   @override
   Widget build(BuildContext context) {
     final c = row.cover;
@@ -273,75 +270,46 @@ class ProductTile extends StatelessWidget {
       child: Opacity(
         opacity: dim ? 0.6 : 1,
         child: Container(
-          margin: const EdgeInsets.only(bottom: 10),
-          padding: const EdgeInsets.all(10),
-          decoration: BoxDecoration(
-            color: KeelColors.card,
-            borderRadius: BorderRadius.circular(14),
-          ),
-          child: Row(
-            children: [
-              ClipRRect(
-                borderRadius: BorderRadius.circular(10),
-                child: SizedBox(
-                  width: 76,
-                  height: 76,
-                  child: c.imageUrl.isNotEmpty
-                      ? Image.network(
-                          c.imageUrl,
-                          fit: BoxFit.cover,
-                          errorBuilder: (_, _, _) => _Glyph(cover: c),
-                        )
-                      : _Glyph(cover: c),
-                ),
+          margin: const EdgeInsets.only(top: 12),
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(color: KeelColors.card, borderRadius: BorderRadius.circular(16)),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: SizedBox(
+                width: 72, height: 72,
+                child: c.imageUrl.isNotEmpty
+                    ? Image.network(c.imageUrl, fit: BoxFit.cover, errorBuilder: (_, _, _) => _Glyph(cover: c))
+                    : _Glyph(cover: c),
               ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      row.title,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: KeelText.body.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    if (row.subtitle.isNotEmpty)
-                      Text(
-                        row.subtitle,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: KeelText.hint,
-                      ),
-                    const SizedBox(height: 6),
-                    Row(
-                      children: [
-                        Flexible(
-                          child: Text(
-                            row.priceText,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: KeelText.price,
-                          ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(row.title, maxLines: 2, overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 15, height: 21 / 15, fontWeight: FontWeight.w700, color: KeelColors.text)),
+                if (row.subtitle.isNotEmpty) Text(row.subtitle, maxLines: 1, overflow: TextOverflow.ellipsis, style: KeelText.hint),
+                if (row.promoTags.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Wrap(spacing: 4, runSpacing: 2, children: [
+                      for (final tag in row.promoTags)
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                          decoration: BoxDecoration(border: Border.all(color: const Color(0xFFE8B4A6)), borderRadius: BorderRadius.circular(4)),
+                          child: Text(tag, style: const TextStyle(fontSize: 11, color: KeelColors.err)),
                         ),
-                        if (dim)
-                          Padding(
-                            padding: const EdgeInsets.only(left: 6),
-                            child: SoldTag(
-                              key: Key('search.sold.${row.id}'),
-                              text: row.offShelf ? '已下架' : '无货',
-                            ),
-                          ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-              if (onAdd != null && !dim) AddButton(id: row.id, onTap: onAdd!),
-            ],
-          ),
+                    ]),
+                  ),
+                const SizedBox(height: 6),
+                Row(children: [
+                  Expanded(child: Text(row.priceText, maxLines: 1, overflow: TextOverflow.ellipsis, style: KeelText.price)),
+                  if (dim) SoldTag(key: Key('search.sold.${row.id}'), text: row.offShelf ? '已下架' : '无货'),
+                  if (onAdd != null && !dim) AddButton(id: row.id, onTap: onAdd!),
+                ]),
+              ]),
+            ),
+          ]),
         ),
       ),
     );

@@ -78,46 +78,63 @@ class _SearchPageState extends State<SearchPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        backgroundColor: KeelColors.bg,
-        surfaceTintColor: KeelColors.bg,
-        titleSpacing: 0,
-        title: Container(
-          height: 38,
-          decoration: BoxDecoration(color: KeelColors.searchBox, borderRadius: BorderRadius.circular(19)),
-          child: TextField(
-            key: const Key('search.input'),
-            controller: _input,
-            autofocus: true,
-            maxLength: 200,
-            textInputAction: TextInputAction.search,
-            onSubmitted: (_) => _submit(),
-            style: KeelText.body,
-            decoration: const InputDecoration(
-              counterText: '',
-              border: InputBorder.none,
-              prefixIcon: Icon(Icons.search, size: 18, color: KeelColors.textHint),
-              hintText: '搜索商品，例如「连衣裙」「咖啡」',
-              hintStyle: KeelText.hint,
-              contentPadding: EdgeInsets.symmetric(vertical: 9),
+      appBar: AppBar(title: const Text('搜索')),
+      body: Column(children: [
+        // 搜索框在内容区顶上一行（uni-app x 的 .bar-top）：导航栏只放标题，右上角留给小程序的胶囊。
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+          child: Row(children: [
+            Expanded(
+              child: Container(
+                height: 40,
+                padding: const EdgeInsets.symmetric(horizontal: 14),
+                decoration: BoxDecoration(color: KeelColors.searchBox, borderRadius: BorderRadius.circular(20)),
+                child: Row(children: [
+                  const Icon(Icons.search, size: 17, color: KeelColors.textHint),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: TextField(
+                      key: const Key('search.input'),
+                      controller: _input,
+                      autofocus: true,
+                      maxLength: 200,
+                      textInputAction: TextInputAction.search,
+                      onSubmitted: (_) => _submit(),
+                      style: const TextStyle(fontSize: 14, color: KeelColors.text),
+                      decoration: const InputDecoration(
+                        counterText: '',
+                        border: InputBorder.none,
+                        isCollapsed: true,
+                        hintText: '搜索商品，例如「连衣裙」「咖啡」',
+                        hintStyle: KeelText.hint,
+                      ),
+                    ),
+                  ),
+                ]),
+              ),
             ),
-          ),
+            const SizedBox(width: 12),
+            GestureDetector(
+              key: const Key('search.submit'),
+              onTap: _submit,
+              child: const Text('搜索', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: KeelColors.primary)),
+            ),
+          ]),
         ),
-        actions: [TextButton(key: const Key('search.submit'), onPressed: _submit, child: const Text('搜索'))],
-      ),
-      body: switch (_state) {
+        Expanded(child: switch (_state) {
         _State.idle => const EmptyState(text: '输入关键词，按相关度为你排好'),
         _State.loading => const EmptyState(text: '正在搜索…'),
         _State.error => ErrorCard(message: _error, onRetry: _submit),
         _State.done when _rows.isEmpty => EmptyState(key: const Key('search.empty'), text: '没有找到「$_searched」相关的商品'),
-        _State.done => ListView(padding: const EdgeInsets.fromLTRB(16, 8, 16, 24), children: [
+        _State.done => ListView(padding: const EdgeInsets.fromLTRB(16, 0, 16, 24), children: [
             Padding(
-              padding: const EdgeInsets.only(bottom: 10),
+              padding: const EdgeInsets.fromLTRB(4, 4, 4, 0),
               child: Text('「$_searched」共 ${_rows.length} 件，按相关度排序', key: const Key('search.count'), style: KeelText.hint),
             ),
             for (final r in _rows) ProductTile(row: r, onTap: () => _open(r.id), onAdd: () => _quickAdd(r.id)),
           ]),
-      },
+      }),
+      ]),
     );
   }
 }
