@@ -36,7 +36,7 @@ dependencies:
   mp_flutter_wechat:
     git:
       url: git@github.com:jackwangfeng/mp-flutter.git
-      ref: phase6
+      ref: main
       path: packages/mp_flutter_wechat
 
 dev_dependencies:
@@ -49,7 +49,7 @@ dev_dependencies:
   mp_flutter:
     git:
       url: git@github.com:jackwangfeng/mp-flutter.git
-      ref: phase6
+      ref: main
       path: packages/mp_flutter
   flutter_lints: ^6.0.0
   fake_async: ^1.3.1

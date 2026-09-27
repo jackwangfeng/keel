@@ -14,7 +14,12 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // 用 mp-flutter 自己的驱动（冷启动、launch 重试、吞开发者工具的自动化超时）：它就在 pub 缓存里的依赖源码中。
 function findDrive() {
   const cache = path.join(process.env.HOME, '.pub-cache', 'git');
-  for (const d of fs.readdirSync(cache).filter((x) => x.startsWith('mp-flutter-'))) {
+  // 优先用 pubspec.lock 里锁定的那一版（缓存里可能还留着旧版本）。
+  const lock = fs.readFileSync(path.join(__dirname, '..', 'pubspec.lock'), 'utf8');
+  const m = lock.match(/mp-flutter\.git[\s\S]*?resolved-ref: "?([0-9a-f]{40})/);
+  const dirs = fs.readdirSync(cache).filter((x) => x.startsWith('mp-flutter-'));
+  if (m) dirs.sort((a, b) => (b.endsWith(m[1]) ? 1 : 0) - (a.endsWith(m[1]) ? 1 : 0));
+  for (const d of dirs) {
     const f = path.join(cache, d, 'tools', 'e2e', 'drive.js');
     if (fs.existsSync(f)) return f;
   }
