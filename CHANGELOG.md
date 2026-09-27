@@ -39,7 +39,9 @@ so "which one is running?" never depends on anyone's memory.
 
 ## [Unreleased]
 
-Migrations `00027`–`00038`, `00053`–`00065`.
+## [0.2.0] - 2026-09-27
+
+Migrations `00027`–`00038`, `00053`–`00065`. The database lands on `00065`.
 
 
 ### Added
@@ -997,5 +999,6 @@ Listed because a changelog that only lists wins is an advertisement.
   show why a product was rejected last time; the merchant only ever saw it in
   that one response.
 
-[Unreleased]: https://github.com/jackwangfeng/keel/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/jackwangfeng/keel/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/jackwangfeng/keel/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/jackwangfeng/keel/releases/tag/v0.1.0

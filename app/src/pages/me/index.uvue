@@ -65,7 +65,7 @@
         <text v-if="message != ''" class="t-hint msg">{{ message }}</text>
 
         <view class="foot">
-          <text class="t-hint">Keel 买家端 · v0.1.0</text>
+          <text class="t-hint">Keel 买家端 · v0.2.0</text>
         </view>
       </view>
     </scroll-view>

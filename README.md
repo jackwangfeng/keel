@@ -452,6 +452,7 @@ battle-tested at scale. What it has is a stronger core.
 - [x] **Transaction flow completed** — cart, address book, cancel, shipping,
   confirm and auto-confirm receipt, after-sales refunds with return tracking,
   admin orders and after-sales pages
+  → **v0.2.0** (together with the finished parts of M5–M7 below)
 - [ ] **M5 Measurable search quality** — business re-ranking, search logs,
   click-back events and metrics ✅; cross-encoder reranking (waiting on the
   inference engine's rerank endpoint) and an offline evaluation set to do
@@ -461,8 +462,8 @@ battle-tested at scale. What it has is a stronger core.
   payments, WeChat login and SMS codes need business qualifications and will
   be wired in once those are in hand
 - [ ] **M7 Ready to do business** — promotions (tiered discounts, flash
-  prices, new-buyer gifts) ✅ (group buying not done); business reports, Excel
-  bulk import with AI category suggestions (in progress)
+  prices, new-buyer gifts) ✅ (group buying not done); business reports with
+  export, Excel bulk import with AI category suggestions ✅
 - [ ] **M8 Visual search** — image embeddings, a differentiator
 
 **Later, if real demand shows up:** conversational shopping, cross-supplier
