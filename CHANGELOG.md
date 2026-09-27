@@ -126,6 +126,10 @@ so "which one is running?" never depends on anyone's memory.
 
 ### Fixed
 
+- **The seeded flash-price promotion had no effect on fresh installs.** Since 00075 the quota
+  lives only in `activity_stocks`. That migration's backfill runs before the seed on a new
+  database, so the seed's "挂耳咖啡限时特价" had no quota row, and pricing skipped it. The seed
+  now writes the quota row, and `scripts/smoke.sh` checks that the promotion price is in effect.
 - **Cart lines and order lines show the product image.** When a SKU has no image of its own,
   `GET /cart` items and new order lines fall back to the product's main image (order lines
   snapshot it at order time, so existing orders are unchanged).

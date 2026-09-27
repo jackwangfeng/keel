@@ -541,3 +541,15 @@ SELECT p.merchant_id, p.id, s.id, 4990, 2
   JOIN skus s ON s.merchant_id = p.merchant_id AND s.sku_code = 'DRIP-10'
  WHERE m.code = 'demo' AND p.name = '挂耳咖啡限时特价'
    AND NOT EXISTS (SELECT 1 FROM promotion_skus ps WHERE ps.promotion_id = p.id AND ps.sku_id = s.id);
+
+-- 活动配额行（00075 起配额只在 activity_stocks 里，promotion_skus.stock_qty / sold_qty 停用）。
+-- 00075 的回填是迁移时跑的，而全新库上迁移在种子之前 —— 不在这里补，演示活动就没有配额行，
+-- 计价按「配额未同步」跳过特价（宁可少卖），挂耳咖啡按门店价卖。拆分部署里这一行随
+-- split-migrate.sh copy 搬进库存库。quota 0 = 不设总量上限。
+INSERT INTO activity_stocks (merchant_id, promotion_id, sku_id, quota, sold)
+SELECT ps.merchant_id, ps.promotion_id, ps.sku_id, 0, 0
+  FROM promotion_skus ps
+  JOIN promotions p ON p.id = ps.promotion_id
+  JOIN merchants m ON m.id = p.merchant_id
+ WHERE m.code = 'demo' AND p.name = '挂耳咖啡限时特价'
+ON CONFLICT DO NOTHING;

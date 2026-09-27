@@ -291,6 +291,27 @@ if [ "$code" != "422" ]; then
 fi
 echo "    切不出词的查询被拒（422）"
 
+# 种子里的限时特价真的生效了（只在单商家形态查：多商家的 dev.sql 没有这条活动）。
+# 它要求 promotion_skus 与活动配额 activity_stocks 两边都有行 —— 00075 之后配额只在后者，
+# 种子漏了它时特价被计价静默跳过、页面照常，只有这里会红（2026-09-27 客户端 e2e 发现过一次）。
+if [ -z "$HOST" ]; then
+    echo "==> 种子的限时特价：挂耳咖啡按 ¥49.90 报价"
+    promo_file=$(mktemp)
+    curl "${curl_args[@]}" -s -o "$promo_file" -H 'Content-Type: application/json' \
+        -d '{"query":"挂耳咖啡"}' "$BASE/api/v1/search"
+    promo_pid=$(python3 -c 'import json,sys;h=json.load(open(sys.argv[1])).get("items") or json.load(open(sys.argv[1])).get("hits") or [];print(h[0].get("product_id") or h[0]["id"])' "$promo_file")
+    curl "${curl_args[@]}" -s -o "$promo_file" "$BASE/api/v1/products/$promo_pid"
+    python3 - "$promo_file" <<'PYEOF' || { rm -f "$promo_file"; exit 1; }
+import json, sys
+d = json.load(open(sys.argv[1]))
+prices = [s.get("promo_price_cents") for s in d.get("skus", [])]
+if 4990 not in prices:
+    raise SystemExit(f"挂耳咖啡的规格没有 4990 的特价（实得 {prices}）—— 种子活动的配额行缺了？")
+PYEOF
+    rm -f "$promo_file"
+    echo "    特价 4990 分"
+fi
+
 echo "==> POST $BASE/api/v1/auth/logout 带上刚拿到的令牌"
 code=$(curl "${curl_args[@]}" -o /dev/null -w '%{http_code}' -X POST \
     -H "Authorization: Bearer $token" "$BASE/api/v1/auth/logout")
