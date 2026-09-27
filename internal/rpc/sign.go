@@ -28,6 +28,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -46,6 +47,34 @@ const (
 	// EnvInventoryURL 是库存服务内网地址（如 "http://inventory:8090"）。
 	// 空 = 库存在本进程内（单体）。拆分部署用，阶段 1 起生效。
 	EnvInventoryURL = "KEEL_INVENTORY_URL"
+
+	// EnvInternalSecretPrevious 是轮换 KEEL_INTERNAL_SECRET 时**仍要接受**的旧密钥。
+	// 可选；逗号分隔可以给多个（配合多轮轮换或多个上一版并存）。每一项也要满足
+	// MinSecretLen。它只影响验证：签名（Sign）与生成分支令牌（BranchToken）永远
+	// 只用 KEEL_INTERNAL_SECRET 当前值；验签（Verify）与分支令牌校验
+	// （BranchTokenAuth）则接受当前值或其中任意一个旧值。
+	//
+	// 轮换步骤（安全的顺序，见 ParsePreviousSecrets 与 ServerConfig 的注释）：
+	//
+	//  1. 所有进程：KEEL_INTERNAL_SECRET 不变（=旧密钥 S_old），
+	//     KEEL_INTERNAL_SECRET_PREVIOUS=<新密钥 S_new>。滚动部署到全部进程。
+	//     此时大家仍然只用 S_old 签名，但验证方已经能认 S_new 了 ——
+	//     这一步只是让「认」跑在「用」前面，不改变任何签名行为。
+	//  2. 确认第 1 步已经**完整**覆盖所有进程后，翻转：
+	//     KEEL_INTERNAL_SECRET=S_new，KEEL_INTERNAL_SECRET_PREVIOUS=S_old。
+	//     滚动部署到全部进程。这一步允许旧新混跑：还没翻转的进程签 S_old、
+	//     认 {S_old, S_new}；已经翻转的签 S_new、认 {S_new, S_old} —— 两边
+	//     都认对方在签的那个，所以滚动过程中不会有 401。
+	//  3. 等第 2 步之前持久化的在途 SAGA 事务（分支地址里带着 S_old 派生的令牌）
+	//     都跑完 —— 它们的地址不会更新，只能靠「仍然认 S_old」撑到自然结束。
+	//  4. 全部进程去掉 KEEL_INTERNAL_SECRET_PREVIOUS（清空）。到此只认 S_new。
+	//
+	// 第 1、2 步的顺序不能换：如果先翻转当前值再让旧值下线（也就是先让某些
+	// 进程只认 S_new、其余仍只认 S_old 再补发 PREVIOUS），滚动窗口内会出现
+	// 「签 S_new 的请求打到还没学会认 S_new 的进程」——那正是这次改动要消灭的
+	// 401。先扩验证范围、再切签名默认值，两步都不缩小任何一刻的「能被认出的
+	// 签名集合」，是这类共享密钥轮换（HMAC/JWT 常见做法）的标准手法。
+	EnvInternalSecretPrevious = "KEEL_INTERNAL_SECRET_PREVIOUS"
 )
 
 // 请求头。
@@ -106,8 +135,10 @@ func Sign(secret, method, path, rawQuery, merchant, ts string, body []byte) stri
 	return hex.EncodeToString(m.Sum(nil))
 }
 
-// verify 校验签名与时间戳。返回的字符串是给日志看的拒绝原因（不回给调用方）。
-func verify(secret, method, path, rawQuery, merchant, ts, sig string, body []byte, now time.Time) (bool, string) {
+// verify 校验签名与时间戳。secrets 是「当前 + 全部仍接受的旧密钥」，签名对上
+// 其中任意一个就算数（轮换期间的验证方，见 EnvInternalSecretPrevious）。
+// 返回的字符串是给日志看的拒绝原因（不回给调用方）。
+func verify(secrets []string, method, path, rawQuery, merchant, ts, sig string, body []byte, now time.Time) (bool, string) {
 	if ts == "" || sig == "" {
 		return false, "缺少签名头"
 	}
@@ -119,17 +150,46 @@ func verify(secret, method, path, rawQuery, merchant, ts, sig string, body []byt
 	if d > MaxSkew || d < -MaxSkew {
 		return false, "时间戳超出允许偏差"
 	}
-	want := Sign(secret, method, path, rawQuery, merchant, ts, body)
-	// hmac.Equal 是常数时间比较；== 会按第一个不同字节提前返回，
-	// 泄露「前几位对了」这件事。
-	if !hmac.Equal([]byte(want), []byte(strings.ToLower(sig))) {
-		return false, "签名不匹配"
+	got := []byte(strings.ToLower(sig))
+	for _, secret := range secrets {
+		want := Sign(secret, method, path, rawQuery, merchant, ts, body)
+		// hmac.Equal 是常数时间比较；== 会按第一个不同字节提前返回，
+		// 泄露「前几位对了」这件事。逐个密钥试是常数时间比较的循环，
+		// 不是在密钥之间提前退出去泄露「命中第几个」——命中哪个密钥不是秘密，
+		// 秘密只是密钥本身，而每次比较都完整跑完。
+		if hmac.Equal([]byte(want), got) {
+			return true, ""
+		}
 	}
-	return true, ""
+	return false, "签名不匹配"
 }
 
 // BranchToken 是 SAGA 分支路由的准入令牌（见 Routes.Saga 的注释）。
 // 由 KEEL_INTERNAL_SECRET 单向派生，截 32 个十六进制字符（128 位）。
 func BranchToken(secret string) string {
 	return hex.EncodeToString(derive(secret, labelBranchToken))[:32]
+}
+
+// ParsePreviousSecrets 解析 KEEL_INTERNAL_SECRET_PREVIOUS：逗号分隔，可以给
+// 多个，每一项前后空白会被去掉，空项（含整个 raw 为空串/纯空白）忽略。
+// 每一项都要满足 MinSecretLen —— 轮换期间用一个短密钥掩护，跟当前密钥太短
+// 是同一种白扔安全余量。
+func ParsePreviousSecrets(raw string) ([]string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	fields := strings.Split(raw, ",")
+	out := make([]string, 0, len(fields))
+	for _, f := range fields {
+		f = strings.TrimSpace(f)
+		if f == "" {
+			continue
+		}
+		if len(f) < MinSecretLen {
+			return nil, fmt.Errorf("%s 里有一项短于 %d 字节", EnvInternalSecretPrevious, MinSecretLen)
+		}
+		out = append(out, f)
+	}
+	return out, nil
 }
