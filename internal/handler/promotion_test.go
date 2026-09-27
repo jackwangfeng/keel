@@ -14,8 +14,8 @@ import (
 	"github.com/keel/keel/internal/api"
 	"github.com/keel/keel/internal/auth"
 	"github.com/keel/keel/internal/dtm"
-	"github.com/keel/keel/internal/problem"
 	"github.com/keel/keel/internal/inventory"
+	"github.com/keel/keel/internal/problem"
 	"github.com/keel/keel/internal/service"
 )
 
