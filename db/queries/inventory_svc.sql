@@ -351,3 +351,18 @@ DELETE FROM activity_stocks
  WHERE promotion_id = sqlc.arg(promotion_id)
    AND sku_id <> ALL(sqlc.arg(keep_sku_ids)::bigint[])
    AND sold = 0;
+
+-- ---------------------------------------------------------------------------
+-- 阶段 2：对账（core 的 InventoryReconcileService 驱动，只读）
+-- ---------------------------------------------------------------------------
+
+-- name: InvListStockKeys :many
+-- 本租户全部库存行的键，按主键 (sku_id, store_id) 键集分页：从 (after_sku_id, after_store_id)
+-- 之后取 row_limit 行。对账拿去与 core 的 skus / stores 比，找库存库里的孤儿行
+-- （拆分之后两边没有外键，SKU / 门店不在了库存行也不会跟着走）。
+-- 用行值比较而不是 OFFSET：表在对账期间照常被写，OFFSET 会漏行或重行，键集不会。
+SELECT inv.sku_id, inv.store_id
+  FROM inventories inv
+ WHERE (inv.sku_id, inv.store_id) > (sqlc.arg(after_sku_id)::bigint, sqlc.arg(after_store_id)::bigint)
+ ORDER BY inv.sku_id, inv.store_id
+ LIMIT sqlc.arg(row_limit);

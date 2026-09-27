@@ -453,3 +453,64 @@ func (r *Repo) PurgeFinishedJobs(ctx context.Context, queue string, retain time.
 	}
 	return tag.RowsAffected(), nil
 }
+
+// DeadJob 是一条死信任务（对账用，只读）。
+type DeadJob struct {
+	MerchantID int64
+	JobKey     string
+	Attempts   int32
+	LastError  string
+	UpdatedAt  time.Time
+}
+
+// DeadJobs 读一个队列的死信：各租户的条数，以及最近进死信的至多 limit 条（按 updated_at 倒序）。
+//
+// 与这个文件里别的语句同一个理由跑在 pool 上（文件头第一节）：对账要的是全平台的死信，
+// 按租户分组是在 SQL 里做的，而 jobs 没有 RLS。两条都走 idx_jobs_dead（queue 前缀 + status = 3
+// 的部分索引）。死信永久保留（PurgeFinishedJobs 不碰它），所以这里读到的是累计值，
+// 不是「这一轮新增」—— 有人处理掉之前它会一直在报，这正是想要的。
+func (r *Repo) DeadJobs(ctx context.Context, queue string, limit int) (map[int64]int64, []DeadJob, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT merchant_id, count(*)
+		  FROM jobs
+		 WHERE queue = $1 AND status = 3
+		 GROUP BY merchant_id`, queue)
+	if err != nil {
+		return nil, nil, fmt.Errorf("读死信条数失败: %w", err)
+	}
+	counts := map[int64]int64{}
+	for rows.Next() {
+		var m, n int64
+		if err := rows.Scan(&m, &n); err != nil {
+			rows.Close()
+			return nil, nil, err
+		}
+		counts[m] = n
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	if limit <= 0 || len(counts) == 0 {
+		return counts, []DeadJob{}, nil
+	}
+	rows, err = r.pool.Query(ctx, `
+		SELECT merchant_id, job_key, attempts, coalesce(last_error, ''), updated_at
+		  FROM jobs
+		 WHERE queue = $1 AND status = 3
+		 ORDER BY updated_at DESC, id DESC
+		 LIMIT $2`, queue, limit)
+	if err != nil {
+		return nil, nil, fmt.Errorf("读死信清单失败: %w", err)
+	}
+	defer rows.Close()
+	out := []DeadJob{}
+	for rows.Next() {
+		var j DeadJob
+		if err := rows.Scan(&j.MerchantID, &j.JobKey, &j.Attempts, &j.LastError, &j.UpdatedAt); err != nil {
+			return nil, nil, err
+		}
+		out = append(out, j)
+	}
+	return counts, out, rows.Err()
+}

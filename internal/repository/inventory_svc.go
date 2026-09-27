@@ -230,6 +230,30 @@ type InventoryStoreTx interface {
 	UpsertActivityQuota(ctx context.Context, promotionID, skuID int64, quota int32) error
 	// DeleteActivityExcept 删掉不在 keep 里、且没卖过的配额行，返回删了几行。
 	DeleteActivityExcept(ctx context.Context, promotionID int64, keep []int64) (int64, error)
+
+	// —— 阶段 2：对账
+
+	// StockKeys 按主键 (sku_id, store_id) 键集分页列出库存行的键：严格在 after 之后的至多 limit 行。
+	StockKeys(ctx context.Context, after StockKey, limit int32) ([]StockKey, error)
+}
+
+// StockKey 是一行库存的主键。
+type StockKey struct {
+	SKUID, StoreID int64
+}
+
+func (t invTx) StockKeys(ctx context.Context, after StockKey, limit int32) ([]StockKey, error) {
+	rows, err := t.q.InvListStockKeys(ctx, db.InvListStockKeysParams{
+		AfterSkuID: after.SKUID, AfterStoreID: after.StoreID, RowLimit: limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]StockKey, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, StockKey{SKUID: r.SkuID, StoreID: r.StoreID})
+	}
+	return out, nil
 }
 
 // invTx 只包着 *db.Queries，而且只调 inventory_svc.sql 里的查询。

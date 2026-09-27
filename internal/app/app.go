@@ -854,6 +854,11 @@ func Run(ctx context.Context, listen func(addr string, h http.Handler) error) er
 	invOutbox := service.NewInventoryOutboxService(repository.New(pool), inv, service.InventoryOutboxConfig{}, nil)
 	go invOutbox.Run(bgCtx)
 
+	// 库存对账（微服务拆分阶段 2）：孤儿库存行、上线活动的配额差集、死信的库存任务。只读、只报不修，
+	// 一小时一轮；晚起一轮不丢任何东西（文件头见 service/inventory_reconcile.go）。
+	invReconcile := service.NewInventoryReconcileService(repository.New(pool), inv, service.InventoryReconcileConfig{}, nil)
+	go invReconcile.Run(bgCtx)
+
 	// 自动确认收货（数据模型 §5 发货第三条规则）：发货满店铺设置的 auto_confirm_days
 	// 天的 30 已发货订单推到 40。与超时补偿同一套机制（按租户扫描、同一份公平调度），
 	// 同一个生命周期。它不像超时补偿那样卡着库存，晚起一轮不丢任何东西，

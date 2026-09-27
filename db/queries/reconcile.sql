@@ -1,0 +1,40 @@
+-- 库存对账的 core 一侧（微服务拆分阶段 2，service/inventory_reconcile.go）。
+--
+-- 全部只读。库存那一侧的数经 inventory.Service 批量问回来（InvListStockKeys / 活动配额），
+-- 这里只回答「core 眼里这些 id 是什么状态」，差集在 Go 里算 —— 这个文件与 core 的
+-- 其他查询一样，一张库存的表都不碰（TestQueryFilesStayOnTheirSideOfTheSplit）。
+--
+-- 一个 merchant_id 都没有（RLS 过滤）。注释里一个反引号都不许有（inventories.sql 第三条说明）。
+
+-- name: ReconcileSKUStates :many
+-- 这批 SKU 在本租户里的状态：回来的行带软删标记，没回来的就是 core 里根本没有
+-- （被硬删、或属于别的租户 —— RLS 之下两者同形，对账都算孤儿）。
+SELECT id, (deleted_at IS NOT NULL)::bool AS deleted
+  FROM skus
+ WHERE id = ANY(sqlc.arg(ids)::bigint[]);
+
+-- name: ReconcileStoreStates :many
+-- 同上，门店。
+SELECT id, (deleted_at IS NOT NULL)::bool AS deleted
+  FROM stores
+ WHERE id = ANY(sqlc.arg(ids)::bigint[]);
+
+-- name: ReconcileLivePromotionSkus :many
+-- 上线中且还没结束（进行中 + 未开始）的活动的活动商品。只取这一段：上线中的活动不许改规则
+-- （admin_promotion.go 的 Update），配额在上线那一刻整组同步过，两边此后应当逐行一致；
+-- 下线的活动在后台编辑的两步之间本来就可能短暂不一致，结束的活动不再被任何一单命中。
+-- 「此刻」由调用方传入（与 ListLivePromotions 同一个理由）。
+SELECT ps.promotion_id, ps.sku_id
+  FROM promotion_skus ps
+  JOIN promotions p ON p.id = ps.promotion_id
+ WHERE p.status = 1
+   AND p.ends_at > sqlc.arg(now)
+ ORDER BY ps.promotion_id, ps.sku_id;
+
+-- name: ReconcileLivePromotionIDs :many
+-- 同一段活动的 id（包括一个活动商品都没有的：库存那边若有它的配额行，就是多出来的）。
+SELECT id
+  FROM promotions
+ WHERE status = 1
+   AND ends_at > sqlc.arg(now)
+ ORDER BY id;

@@ -502,6 +502,53 @@ func (q *Queries) InvInitSKU(ctx context.Context, arg InvInitSKUParams) (int64, 
 	return result.RowsAffected(), nil
 }
 
+const invListStockKeys = `-- name: InvListStockKeys :many
+
+SELECT inv.sku_id, inv.store_id
+  FROM inventories inv
+ WHERE (inv.sku_id, inv.store_id) > ($1::bigint, $2::bigint)
+ ORDER BY inv.sku_id, inv.store_id
+ LIMIT $3
+`
+
+type InvListStockKeysParams struct {
+	AfterSkuID   int64
+	AfterStoreID int64
+	RowLimit     int32
+}
+
+type InvListStockKeysRow struct {
+	SkuID   int64
+	StoreID int64
+}
+
+// ---------------------------------------------------------------------------
+// 阶段 2：对账（core 的 InventoryReconcileService 驱动，只读）
+// ---------------------------------------------------------------------------
+// 本租户全部库存行的键，按主键 (sku_id, store_id) 键集分页：从 (after_sku_id, after_store_id)
+// 之后取 row_limit 行。对账拿去与 core 的 skus / stores 比，找库存库里的孤儿行
+// （拆分之后两边没有外键，SKU / 门店不在了库存行也不会跟着走）。
+// 用行值比较而不是 OFFSET：表在对账期间照常被写，OFFSET 会漏行或重行，键集不会。
+func (q *Queries) InvListStockKeys(ctx context.Context, arg InvListStockKeysParams) ([]InvListStockKeysRow, error) {
+	rows, err := q.db.Query(ctx, invListStockKeys, arg.AfterSkuID, arg.AfterStoreID, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []InvListStockKeysRow
+	for rows.Next() {
+		var i InvListStockKeysRow
+		if err := rows.Scan(&i.SkuID, &i.StoreID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const invLockActivity = `-- name: InvLockActivity :one
 SELECT a.quota, a.sold
   FROM activity_stocks a
