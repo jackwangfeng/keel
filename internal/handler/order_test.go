@@ -142,9 +142,11 @@ func TestInsufficientStockClosesTheOrderAndTouchesNothing(t *testing.T) {
 		t.Fatalf("最近一笔订单 %s 的状态是 %d，期望 90 已关闭 —— 全局补偿没有把它关掉",
 			orderNo, got)
 	}
-	if logs := inventoryLogsOf(t, orderNo); len(logs) != 0 {
-		t.Fatalf("订单 %s 留下了 %d 行库存流水：%+v —— 失败的扣减提交过？",
-			orderNo, len(logs), logs)
+	// 阶段 1b 起库存服务拒绝扣减时提交一行拒绝流水（biz_type 7，change 0），收尾分支据此回 409；
+	// 除此之外一行都不许有（扣减行出现就是失败的扣减提交过）。
+	if logs := inventoryLogsOf(t, orderNo); len(logs) != 1 || logs[0].BizType != 7 || logs[0].ChangeQty != 0 {
+		t.Fatalf("订单 %s 的库存流水是 %+v，期望恰好一行 change 0 的拒绝 —— 失败的扣减提交过？",
+			orderNo, logs)
 	}
 	t.Logf("库存不足：409 %s，订单 %s 已关闭，水位仍是 %d", p.Type, orderNo, before)
 }

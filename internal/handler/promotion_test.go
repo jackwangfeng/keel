@@ -15,6 +15,7 @@ import (
 	"github.com/keel/keel/internal/auth"
 	"github.com/keel/keel/internal/dtm"
 	"github.com/keel/keel/internal/problem"
+	"github.com/keel/keel/internal/inventory"
 	"github.com/keel/keel/internal/service"
 )
 
@@ -315,7 +316,7 @@ func TestLimitedPriceWithPerUserLimit(t *testing.T) {
 	if o.PayableCents != 7980 {
 		t.Fatalf("应付 %d，期望 7980", o.PayableCents)
 	}
-	if got := adminQueryInt64(t, `SELECT sold_qty FROM promotion_skus WHERE promotion_id = $1`, promo.Id); got != 2 {
+	if got := adminQueryInt64(t, `SELECT sold FROM activity_stocks WHERE promotion_id = $1`, promo.Id); got != 2 {
 		t.Fatalf("活动已售 %d，期望 2", got)
 	}
 	_, w = cs.preview(t, b, cs.orderJSON(b, cs.NorthStore, cs.DressSKU, 1, nil))
@@ -329,7 +330,7 @@ func TestLimitedPriceWithPerUserLimit(t *testing.T) {
 
 	// 取消订单：限购额度与活动已售件数放回，又能按特价买 2 件。
 	wantStatus(t, orderAction(t, cs.Host, o.OrderNo, "cancel", b.Token, "c-"+uniqueKey()), http.StatusOK, "取消")
-	if got := adminQueryInt64(t, `SELECT sold_qty FROM promotion_skus WHERE promotion_id = $1`, promo.Id); got != 0 {
+	if got := adminQueryInt64(t, `SELECT sold FROM activity_stocks WHERE promotion_id = $1`, promo.Id); got != 0 {
 		t.Fatalf("取消之后活动已售 %d，期望放回到 0", got)
 	}
 	_, w = cs.preview(t, b, cs.orderJSON(b, cs.NorthStore, cs.DressSKU, 2, nil))
@@ -389,7 +390,7 @@ func TestFlashSaleDoesNotOversellUnderConcurrency(t *testing.T) {
 	}
 	wg.Wait()
 
-	sold := adminQueryInt64(t, `SELECT sold_qty FROM promotion_skus WHERE promotion_id = $1`, promo.Id)
+	sold := adminQueryInt64(t, `SELECT sold FROM activity_stocks WHERE promotion_id = $1`, promo.Id)
 	atFlash := adminQueryInt64(t, `
 		SELECT COALESCE(sum(oi.quantity), 0) FROM order_items oi JOIN orders o ON o.id = oi.order_id
 		 WHERE oi.price_promotion_id = $1 AND o.status = 10`, promo.Id)
@@ -455,49 +456,75 @@ func TestFlashSalePerUserLimitHoldsUnderConcurrency(t *testing.T) {
 	}
 }
 
-// 库存分支才是配额与限购的最终仲裁（试算与建单只是预告）。
+// 每人限购与活动配额的最终仲裁（试算与建单前的计价只是预告）。微服务拆分阶段 1b 起两道闸分在两处：
+// 每人限购在建单分支（0 → 10 的同一个事务里累计，core），活动配额在库存分支（库存服务，
+// 与门店库存同一个事务）。这里把两条竞态**确定性地**造出来：
 //
-// 上面两条并发用例里，大多数「超限」在建单那一步就被试算挡掉了（先提交的那一单已经把
-// 限购计数写进库），打不到库存分支的条件 upsert 上。这里把那条竞态**确定性地**造出来：
-// 先在活动下线时下两单普通价的衬衫（B、C），活动上线后 A 按秒杀价买走限购额度，再在库里
-// 把 B、C 改成「按秒杀价成交」的样子，直接调库存分支 —— 就是两笔并发订单里后到的那一笔
-// 在库存分支里看到的世界。
+//   - 限购：b 已经按秒杀价买走了限购额度，再造一笔 b 的、按秒杀价成交的草稿单直接调建单分支 ——
+//     两笔并发订单里后到的那一笔在建单分支里看到的世界。必须 Failure，订单停在 0，限购计数不动。
+//   - 配额：把库存服务里的配额收紧到已售数，再用一笔按秒杀价成交的载荷直接调库存分支 ——
+//     必须拒绝（提交一行 sold_out），门店库存与已售一件不动；收尾分支据此 Failure。
 func TestStockBranchIsTheFinalArbiterOfQuotaAndLimit(t *testing.T) {
 	cs := newCouponShop(t)
 	p := cs.createPromotion(t, "秒杀仲裁", fmt.Sprintf(`"promotion_type":4,`+
 		`"skus":[{"sku_id":%d,"promo_price_cents":990,"stock_qty":2,"per_user_limit":1}]`, cs.ShirtSKU))
 	b := cs.newBuyer(t, "arbiter-b")
-	c := cs.newBuyer(t, "arbiter-c")
 	orderB := cs.placeOrder(t, b, cs.NorthStore, cs.ShirtSKU, 1, nil) // 活动还没上线：门店价
-	orderC := cs.placeOrder(t, c, cs.NorthStore, cs.ShirtSKU, 1, nil)
 	wantStatus(t, cs.patchPromotion(t, p.Id, `{"status":1}`), http.StatusOK, "上线")
 	orderA := cs.placeOrder(t, b, cs.NorthStore, cs.ShirtSKU, 1, nil) // 秒杀价，占掉 b 的限购
 	if orderA.PayableCents != 990 {
 		t.Fatalf("A 应当按秒杀价 990 成交，实得 %d", orderA.PayableCents)
 	}
-	for _, no := range []string{orderB.OrderNo, orderC.OrderNo} {
-		adminExec(t, `UPDATE order_items SET price_promotion_id = $1, price_cents = 990
-		               WHERE order_id = (SELECT id FROM orders WHERE order_no = $2)`, p.Id, no)
-	}
 	sold := func() int64 {
-		return adminQueryInt64(t, `SELECT sold_qty FROM promotion_skus WHERE promotion_id = $1`, p.Id)
+		return adminQueryInt64(t, `SELECT sold FROM activity_stocks WHERE promotion_id = $1`, p.Id)
+	}
+	purchases := func() int64 {
+		return adminQueryInt64(t, `SELECT COALESCE(sum(qty), 0) FROM promotion_purchases WHERE promotion_id = $1`, p.Id)
 	}
 	stock := availableAt(t, cs.NorthStore, cs.ShirtSKU)
 
-	// B：同一个买家，限购 1 件已经用掉 —— 条件 upsert 受影响 0 行，整个分支回滚。
-	if got := branchOf(t, service.BranchOrderStock)(gidFor(t, cs.MerchantID, orderB.OrderNo), "13", "action"); got != dtm.Failure {
-		t.Fatalf("超出每人限购，库存分支应当返回 Failure，实得 %d", got)
+	// 限购：照着 B 造一笔 status = 0、按秒杀价成交的草稿单（同一个买家 b）。
+	draftNo := orderB.OrderNo + "d"
+	adminExec(t, `INSERT INTO orders (merchant_id, order_no, user_id, status, goods_amount_cents, payable_cents,
+	                                  receiver_snapshot, expire_at, store_id, region_id, store_snapshot)
+	              SELECT merchant_id, $2, user_id, 0, 990, 990, receiver_snapshot, expire_at, store_id, region_id, store_snapshot
+	                FROM orders WHERE order_no = $1`, orderB.OrderNo, draftNo)
+	adminExec(t, `INSERT INTO order_items (merchant_id, order_id, sku_id, product_id, title_snapshot, spec_snapshot,
+	                                       price_cents, list_price_cents, quantity, amount_cents, price_promotion_id)
+	              SELECT oi.merchant_id, (SELECT id FROM orders WHERE order_no = $2), oi.sku_id, oi.product_id,
+	                     oi.title_snapshot, oi.spec_snapshot, 990, oi.list_price_cents, 1, 990, $3
+	                FROM order_items oi JOIN orders o ON o.id = oi.order_id WHERE o.order_no = $1`,
+		orderB.OrderNo, draftNo, p.Id)
+	if got := branchOf(t, service.BranchOrderCreate)(gidFor(t, cs.MerchantID, draftNo), "01", "action"); got != dtm.Failure {
+		t.Fatalf("超出每人限购，建单分支应当返回 Failure，实得 %d", got)
 	}
-	// C：换个买家，但把配额收紧到已售数 —— 条件 UPDATE 受影响 0 行。
-	adminExec(t, `UPDATE promotion_skus SET stock_qty = sold_qty WHERE promotion_id = $1`, p.Id)
-	if got := branchOf(t, service.BranchOrderStock)(gidFor(t, cs.MerchantID, orderC.OrderNo), "13", "action"); got != dtm.Failure {
-		t.Fatalf("配额已满，库存分支应当返回 Failure，实得 %d", got)
+	if st := orderStatusOf(t, draftNo); st != 0 || purchases() != 1 {
+		t.Fatalf("超限的建单分支动了账：订单 %d、限购计数 %d", st, purchases())
 	}
-	// 两次失败都是整体回滚：配额、限购、门店库存一件没动。
-	if sold() != 1 || availableAt(t, cs.NorthStore, cs.ShirtSKU) != stock ||
-		adminQueryInt64(t, `SELECT COALESCE(sum(qty), 0) FROM promotion_purchases WHERE promotion_id = $1`, p.Id) != 1 {
-		t.Fatalf("失败的分支动了账：已售 %d、门店库存 %d→%d", sold(), stock, availableAt(t, cs.NorthStore, cs.ShirtSKU))
+
+	// 配额：收紧到已售数，再按秒杀价扣一件。
+	adminExec(t, `UPDATE activity_stocks SET quota = sold WHERE promotion_id = $1`, p.Id)
+	gid := gidFor(t, cs.MerchantID, draftNo)
+	payload, err := inventory.EncodeDeductPayload(inventory.DeductPayload{OrderNo: draftNo, StoreID: cs.NorthStore,
+		Lines: []inventory.OrderLine{{SKUID: cs.ShirtSKU, Qty: 1, PromotionID: &p.Id}}})
+	if err != nil {
+		t.Fatal(err)
 	}
+	if got := invBranchOf(t, inventory.BranchDeduct)(gid, "03", "action", payload); got != dtm.Success {
+		t.Fatalf("配额已满的库存分支返回 %d，期望 Success（一行 sold_out 拒绝）", got)
+	}
+	if sold() != 1 || availableAt(t, cs.NorthStore, cs.ShirtSKU) != stock {
+		t.Fatalf("被拒的库存分支动了账：已售 %d、门店库存 %d→%d", sold(), stock, availableAt(t, cs.NorthStore, cs.ShirtSKU))
+	}
+	logs := inventoryLogsOf(t, draftNo)
+	if len(logs) != 1 || logs[0].BizType != inventory.BizOrderRejected {
+		t.Fatalf("期望一行拒绝流水，实得 %+v", logs)
+	}
+	adminExec(t, `UPDATE orders SET status = 10 WHERE order_no = $1`, draftNo)
+	if got := branchOf(t, service.BranchOrderFinish)(gid, "04", "action"); got != dtm.Failure {
+		t.Fatalf("收尾分支读到 sold_out 应当 Failure，实得 %d", got)
+	}
+	adminExec(t, `UPDATE orders SET status = 90 WHERE order_no = $1`, draftNo)
 }
 
 // ---------------------------------------------------------------------------

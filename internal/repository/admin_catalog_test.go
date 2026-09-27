@@ -484,14 +484,7 @@ func TestCreateSKUAlwaysCreatesInventoryRow(t *testing.T) {
 
 	// 真正要守的不是「有一行」，是「SAGA 扣得动」。直接用下单那条语句验一次：
 	// 漏建库存行时它返回的是 ErrInsufficientStock，而那正是最误导人的症状。
-	var after int32
-	if err := r.WithTenant(asA, func(q repository.Tx) error {
-		var e error
-		after, e = q.DeductInventory(ctx, sku.ID, f.storeA, 5)
-		return e
-	}); err != nil {
-		t.Fatalf("新建 SKU 扣不动库存: %v —— SAGA 会把它判成缺货", err)
-	}
+	after := deductViaSaga(t, pool(t), f.merchantA, f.storeA, sku.ID, 5)
 	if after != 7 {
 		t.Fatalf("扣减后水位 %d，期望 7", after)
 	}

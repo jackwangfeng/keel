@@ -92,14 +92,14 @@ func failIfBarrierDenied(t *testing.T, err error) {
 func TestSagaBranchExecutesOnceThenReportsDuplicated(t *testing.T) {
 	ctx := context.Background()
 	f := seedInventories(t)
-	r := repository.New(pool(t))
+	r := repository.NewInventoryStore(pool(t))
 	asA := tenant.NewContext(ctx, f.merchantA)
 	gid := barrierGID(t, f.merchantA)
 
 	calls := 0
-	deduct := func(q repository.Tx) error {
+	deduct := func(q repository.InventoryStoreTx) error {
 		calls++
-		_, err := q.DeductInventory(ctx, f.skuA, f.storeA, 1)
+		_, err := deductTx(ctx, q, f.skuA, f.storeA, 1)
 		return err
 	}
 
@@ -160,22 +160,22 @@ func TestSagaBranchExecutesOnceThenReportsDuplicated(t *testing.T) {
 func TestSagaBranchNullCompensationThenSuspendedAction(t *testing.T) {
 	ctx := context.Background()
 	f := seedInventories(t)
-	r := repository.New(pool(t))
+	r := repository.NewInventoryStore(pool(t))
 	asA := tenant.NewContext(ctx, f.merchantA)
 	gid := barrierGID(t, f.merchantA)
 
 	before := availableQty(t, f.skuA)
 
 	restored := 0
-	restore := func(q repository.Tx) error {
+	restore := func(q repository.InventoryStoreTx) error {
 		restored++
-		_, err := q.RestoreInventory(ctx, f.skuA, f.storeA, 5)
+		_, err := restoreTx(ctx, q, f.skuA, f.storeA, 5)
 		return err
 	}
 	deducted := 0
-	deduct := func(q repository.Tx) error {
+	deduct := func(q repository.InventoryStoreTx) error {
 		deducted++
-		_, err := q.DeductInventory(ctx, f.skuA, f.storeA, 5)
+		_, err := deductTx(ctx, q, f.skuA, f.storeA, 5)
 		return err
 	}
 
@@ -219,12 +219,12 @@ func TestSagaBranchNullCompensationThenSuspendedAction(t *testing.T) {
 func TestSagaBranchCompensatesAfterARealAction(t *testing.T) {
 	ctx := context.Background()
 	f := seedInventories(t)
-	r := repository.New(pool(t))
+	r := repository.NewInventoryStore(pool(t))
 	asA := tenant.NewContext(ctx, f.merchantA)
 	gid := barrierGID(t, f.merchantA)
 
-	deduct := func(q repository.Tx) error { _, e := q.DeductInventory(ctx, f.skuA, f.storeA, 4); return e }
-	restore := func(q repository.Tx) error { _, e := q.RestoreInventory(ctx, f.skuA, f.storeA, 4); return e }
+	deduct := func(q repository.InventoryStoreTx) error { _, e := deductTx(ctx, q, f.skuA, f.storeA, 4); return e }
+	restore := func(q repository.InventoryStoreTx) error { _, e := restoreTx(ctx, q, f.skuA, f.storeA, 4); return e }
 
 	d, err := r.WithSagaBranch(asA, gid, "01", "action", deduct)
 	failIfBarrierDenied(t, err)
@@ -276,7 +276,7 @@ func TestSagaBranchCompensatesAfterARealAction(t *testing.T) {
 func TestSagaBranchRollsBackTheBarrierWithTheBusiness(t *testing.T) {
 	ctx := context.Background()
 	f := seedInventories(t)
-	r := repository.New(pool(t))
+	r := repository.NewInventoryStore(pool(t))
 	asA := tenant.NewContext(ctx, f.merchantA)
 	gid := barrierGID(t, f.merchantA)
 
@@ -284,8 +284,8 @@ func TestSagaBranchRollsBackTheBarrierWithTheBusiness(t *testing.T) {
 	// 误读成「业务失败被正确地上浮了」。
 	errBoom := errors.New("业务自己炸了")
 
-	d, err := r.WithSagaBranch(asA, gid, "01", "action", func(q repository.Tx) error {
-		if _, e := q.DeductInventory(ctx, f.skuA, f.storeA, 3); e != nil {
+	d, err := r.WithSagaBranch(asA, gid, "01", "action", func(q repository.InventoryStoreTx) error {
+		if _, e := deductTx(ctx, q, f.skuA, f.storeA, 3); e != nil {
 			return e
 		}
 		return errBoom
@@ -309,8 +309,8 @@ func TestSagaBranchRollsBackTheBarrierWithTheBusiness(t *testing.T) {
 	}
 
 	// 重试：协调器重放的样子。必须重新是 Execute，而且业务这次真的落地。
-	d, err = r.WithSagaBranch(asA, gid, "01", "action", func(q repository.Tx) error {
-		_, e := q.DeductInventory(ctx, f.skuA, f.storeA, 3)
+	d, err = r.WithSagaBranch(asA, gid, "01", "action", func(q repository.InventoryStoreTx) error {
+		_, e := deductTx(ctx, q, f.skuA, f.storeA, 3)
 		return e
 	})
 	failIfBarrierDenied(t, err)
@@ -334,15 +334,15 @@ func TestSagaBranchRollsBackTheBarrierWithTheBusiness(t *testing.T) {
 func TestSagaBranchRefusesUnknownOp(t *testing.T) {
 	ctx := context.Background()
 	f := seedInventories(t)
-	r := repository.New(pool(t))
+	r := repository.NewInventoryStore(pool(t))
 	asA := tenant.NewContext(ctx, f.merchantA)
 	gid := barrierGID(t, f.merchantA)
 
 	for _, op := range []string{"compensat", "", "ACTION", "action "} {
 		called := false
-		d, err := r.WithSagaBranch(asA, gid, "01", op, func(q repository.Tx) error {
+		d, err := r.WithSagaBranch(asA, gid, "01", op, func(q repository.InventoryStoreTx) error {
 			called = true
-			_, e := q.DeductInventory(ctx, f.skuA, f.storeA, 1)
+			_, e := deductTx(ctx, q, f.skuA, f.storeA, 1)
 			return e
 		})
 		if !errors.Is(err, repository.ErrUnknownBranchOp) {
@@ -368,11 +368,11 @@ func TestSagaBranchRefusesUnknownOp(t *testing.T) {
 func TestSagaBranchRefusesMissingTenant(t *testing.T) {
 	ctx := context.Background()
 	f := seedInventories(t)
-	r := repository.New(pool(t))
+	r := repository.NewInventoryStore(pool(t))
 	gid := barrierGID(t, f.merchantA)
 
 	called := false
-	d, err := r.WithSagaBranch(ctx, gid, "01", "action", func(q repository.Tx) error {
+	d, err := r.WithSagaBranch(ctx, gid, "01", "action", func(q repository.InventoryStoreTx) error {
 		called = true
 		return nil
 	})
@@ -388,16 +388,16 @@ func TestSagaBranchRefusesMissingTenant(t *testing.T) {
 	}
 }
 
-// 屏障事务里的业务写入照样受 RLS 管：扣别家的 SKU 是 ErrSKUNotInTenant，
+// 屏障事务里的业务写入照样受 RLS 管：扣别家的 SKU 扣不动（看不见 ≡ 缺行），
 // 不是缺货，而且屏障那行也跟着回滚。
 //
 // 这条的区分力在于商家 B 的水位是够的（10 ≥ 1），所以这次失败只可能来自 RLS。
 // 它同时证明 WithSagaBranch 真的设了 app.merchant_id —— 没设的话
-// current_merchant() 抛的是 42501，落不进 ErrSKUNotInTenant 这一支。
+// current_merchant() 抛的是 42501，落不进「不足」这一支。
 func TestSagaBranchStillRunsUnderRLS(t *testing.T) {
 	ctx := context.Background()
 	f := seedInventories(t)
-	r := repository.New(pool(t))
+	r := repository.NewInventoryStore(pool(t))
 	asA := tenant.NewContext(ctx, f.merchantA)
 	gid := barrierGID(t, f.merchantA)
 
@@ -405,12 +405,14 @@ func TestSagaBranchStillRunsUnderRLS(t *testing.T) {
 		t.Fatalf("夹具坏了：商家 B 的水位是 %d，这次失败就分不清是缺货还是不可见", got)
 	}
 
-	_, err := r.WithSagaBranch(asA, gid, "01", "action", func(q repository.Tx) error {
-		_, e := q.DeductInventory(ctx, f.skuB, f.storeB, 1)
+	_, err := r.WithSagaBranch(asA, gid, "01", "action", func(q repository.InventoryStoreTx) error {
+		_, e := deductTx(ctx, q, f.skuB, f.storeB, 1)
 		return e
 	})
-	if !errors.Is(err, repository.ErrSKUNotInTenant) {
-		t.Fatalf("期望 ErrSKUNotInTenant，实得 %v", err)
+	// 阶段 1b 起库存服务看不见 skus：别家的行在 RLS 之下与缺行同形（可售 0），报的是不足；
+	// 要守的是水位一件不动、屏障一行不留。
+	if !errors.Is(err, repository.ErrInsufficientStock) {
+		t.Fatalf("期望 ErrInsufficientStock（RLS 挡住 ≡ 缺行），实得 %v", err)
 	}
 	if got := availableQty(t, f.skuB); got != 10 {
 		t.Fatalf("商家 B 的水位变成了 %d —— 跨租户扣减真的写进去了", got)
@@ -431,7 +433,7 @@ func TestSagaBranchStillRunsUnderRLS(t *testing.T) {
 func TestSagaBranchIsIdempotentUnderConcurrency(t *testing.T) {
 	ctx := context.Background()
 	f := seedInventories(t)
-	r := repository.New(pool(t))
+	r := repository.NewInventoryStore(pool(t))
 	asA := tenant.NewContext(ctx, f.merchantA)
 	gid := barrierGID(t, f.merchantA)
 
@@ -445,8 +447,8 @@ func TestSagaBranchIsIdempotentUnderConcurrency(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			d, err := r.WithSagaBranch(asA, gid, "01", "action", func(q repository.Tx) error {
-				_, e := q.DeductInventory(ctx, f.skuA, f.storeA, 1)
+			d, err := r.WithSagaBranch(asA, gid, "01", "action", func(q repository.InventoryStoreTx) error {
+				_, e := deductTx(ctx, q, f.skuA, f.storeA, 1)
 				return e
 			})
 			mu.Lock()
@@ -473,4 +475,26 @@ func TestSagaBranchIsIdempotentUnderConcurrency(t *testing.T) {
 	if got := availableQty(t, f.skuA); got != 9 {
 		t.Fatalf("水位是 %d，期望 9 —— 并发下业务被执行了不止一次", got)
 	}
+}
+
+// deductTx / restoreTx 是屏障测试里的「业务」：在库存服务的仓储上做一次相对调整。
+// 微服务拆分阶段 1b 起库存的屏障入口是 InventoryStore.WithSagaBranch（屏障在库存库），
+// 与 Repo.WithSagaBranch 共用同一个 decideBarrier —— 这组测试守的是那个算法。
+func deductTx(ctx context.Context, q repository.InventoryStoreTx, skuID, storeID int64, qty int32) (int32, error) {
+	w, err := q.AdjustStock(ctx, skuID, storeID, -qty)
+	if err != nil {
+		return 0, err
+	}
+	if !w.Written {
+		return 0, fmt.Errorf("sku %d 扣 %d: %w", skuID, qty, repository.ErrInsufficientStock)
+	}
+	return w.New.Available, nil
+}
+
+func restoreTx(ctx context.Context, q repository.InventoryStoreTx, skuID, storeID int64, qty int32) (int32, error) {
+	w, err := q.AdjustStock(ctx, skuID, storeID, qty)
+	if err != nil {
+		return 0, err
+	}
+	return w.New.Available, nil
 }

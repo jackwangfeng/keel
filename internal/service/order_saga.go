@@ -61,6 +61,9 @@ const (
 	BranchOrderCoupon     = "order_coupon"
 	BranchOrderCouponUndo = "order_coupon_undo"
 	BranchOrderFinish     = "order_finish"
+	// BranchOrderFinishUndo 是收尾分支的「补偿」：什么都不做。收尾分支自己不写要撤回的东西，
+	// 但 dtmrs 的步骤要求每一步都有 compensate 地址（steps_json 缺了会拒绝提交）。
+	BranchOrderFinishUndo = "order_finish_undo"
 )
 
 // dtmrs 的 BranchOp 里我们只用到的两个。见 repository/saga.go 的白名单。
@@ -79,7 +82,8 @@ const (
 //     订单被补偿关到 90，而不是留下一行没人关的 status = 0。
 //
 // **收尾在最后**（阶段 1b）：它是库存分支的关单守卫的另一半，也是扣减被拒的原因回到 core 的地方。
-// 它没有补偿：它自己不写任何要撤回的东西（预警通知不撤回，理由见 notifyLowStockIfCrossed）。
+// 它的补偿是空操作（order_finish_undo）：它自己不写任何要撤回的东西（预警通知不撤回，理由见
+// notifyLowStockIfCrossed）；写一个空补偿只因为 dtmrs 要求每一步都有 compensate 地址。
 //
 // 没带券的订单同样经过券分支，两个方向都是空操作。步骤形状对每一单都一样（分支号 01–04），
 // 排障时不必先问「这单带券了吗」；只有库存分支的载荷随订单变化。
@@ -95,7 +99,7 @@ func (s *OrderService) sagaStepsFor(orderNo string, storeID int64, lines []inven
 		dtm.Step{Action: "local://" + BranchOrderCoupon, Compensate: "local://" + BranchOrderCouponUndo},
 		dtm.Step{Action: s.res.BranchURL(inventory.BranchDeduct), Compensate: s.res.BranchURL(inventory.BranchRestore),
 			Payload: payload},
-		dtm.Step{Action: "local://" + BranchOrderFinish},
+		dtm.Step{Action: "local://" + BranchOrderFinish, Compensate: "local://" + BranchOrderFinishUndo},
 	)
 }
 
@@ -129,6 +133,7 @@ func (s *OrderService) Branches() map[string]dtm.BranchFunc {
 		BranchOrderCoupon:     s.branch(BranchOrderCoupon, opAction, lockCoupon),
 		BranchOrderCouponUndo: s.branch(BranchOrderCouponUndo, opCompensate, unlockCoupon),
 		BranchOrderFinish:     s.finishBranch(),
+		BranchOrderFinishUndo: func(string, string, string) int { return dtm.Success },
 	}
 }
 

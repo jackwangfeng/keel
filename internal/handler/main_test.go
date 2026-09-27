@@ -17,6 +17,7 @@ import (
 	"github.com/keel/keel/internal/auth"
 	"github.com/keel/keel/internal/db"
 	"github.com/keel/keel/internal/dtm"
+	"github.com/keel/keel/internal/inventory"
 	"github.com/keel/keel/internal/repository"
 	"github.com/keel/keel/internal/service"
 	"github.com/keel/keel/internal/tenant"
@@ -47,6 +48,9 @@ var (
 	// 的 branchNotes）。换一个实例，那条路径就断了而测试看不出来。
 	testOrders *service.OrderService
 
+	// testInvLocal 是建在测试池上的进程内库存服务，它的两个 SAGA 分支注册在 testTC 上（单体形态）。
+	testInvLocal *inventory.Local
+
 	// testSigner 是路由里那一个 —— **同一个实例**，不是一份长得一样的复制品。
 	// 测试要用它签出「过期的」「别家店的」「类型不对的」令牌，而那些令牌必须
 	// 真的能被服务端验签，否则测试验的就只是「随便一串东西会被拒」，
@@ -64,7 +68,7 @@ var (
 // 预算由调用方给：默认值（每租户 50、每轮 500）对公平调度那条测试没有区分力，
 // 因为种子里的订单量远够不到上限。
 func newSweeper(cfg service.SweepConfig) *service.SweepService {
-	return service.NewSweepService(repository.New(testPool), cfg, nil)
+	return service.NewSweepService(repository.New(testPool), localInventory(), cfg, nil)
 }
 
 // TestMain 备好 schema、加载种子、装一次路由。
@@ -110,7 +114,9 @@ func setup(ctx context.Context) error {
 	//
 	// 下单服务 → 注册分支 → 起协调器 → 接上。顺序与 app.Run 里一模一样，
 	// 理由见 service.OrderService.AttachCoordinator。
-	testOrders = service.NewOrderService(repository.New(pool), nil, nil)
+	invLocal := inventory.NewLocal(repository.NewInventoryStore(pool))
+	testInvLocal = invLocal
+	testOrders = service.NewOrderService(repository.New(pool), invLocal, nil, nil)
 	dtmDir, err := os.MkdirTemp("", "keel-handler-dtm-")
 	if err != nil {
 		return err
@@ -129,7 +135,8 @@ func setup(ctx context.Context) error {
 	branches["test_always_fail"] = func(string, string, string) int { return dtm.Failure }
 	branches["test_always_fail_undo"] = func(string, string, string) int { return dtm.Success }
 
-	tc, err := dtm.Start("sqlite:"+filepath.Join(dtmDir, "dtm.db"), 0, branches)
+	// 库存的两个分支（带载荷）与单体一样注册在进程内（app.InventoryBranches）。
+	tc, err := dtm.StartEx("sqlite:"+filepath.Join(dtmDir, "dtm.db"), 0, branches, app.InventoryBranches(invLocal))
 	if err != nil {
 		return fmt.Errorf("起协调器失败: %w", err)
 	}

@@ -10,7 +10,6 @@ import (
 	"github.com/keel/keel/internal/problem"
 	"github.com/keel/keel/internal/repository"
 	"github.com/keel/keel/internal/service"
-	"github.com/keel/keel/internal/tenant"
 )
 
 // 商家自助发布那 16 条写接口的行为测试（M4 Task 3）。
@@ -173,16 +172,7 @@ func TestMerchantCanPublishAProductAndBuyersSeeIt(t *testing.T) {
 	// 语句验一次，而不是查「有没有那一行」：漏建时 SAGA 返回的是
 	// 「库存不足」，那正是最误导人的症状（商品表现为永远缺货，
 	// 而排查方向从第一步就是错的）。
-	ctx := tenant.NewContext(context.Background(), sh.MerchantID)
-	var left int32
-	if err := repository.New(testPool).WithTenant(ctx, func(q repository.Tx) error {
-		var e error
-		left, e = q.DeductInventory(ctx, sku2.Id, sh.StoreID, 1)
-		return e
-	}); err != nil {
-		t.Fatalf("新建 SKU 扣不动库存: %v —— 那一行 inventories 没建出来，"+
-			"而 SAGA 会把它判成缺货，症状是「这件商品永远缺货」", err)
-	}
+	left := deductViaSaga(t, sh.MerchantID, sh.StoreID, sku2.Id, 1)
 	if left != 3 {
 		t.Fatalf("扣 1 件之后水位是 %d，期望 3", left)
 	}
