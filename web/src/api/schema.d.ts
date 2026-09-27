@@ -13482,6 +13482,11 @@ export interface components {
             image_url?: string;
             min_price_cents: components["schemas"]["Money"];
             max_price_cents?: components["schemas"]["Money"];
+            /**
+             * @description 这家店里任意一个在售 SKU 可售数 > 0。`GET /products` 与 `POST /search` 都按解析出的门店填
+             *     （2026-09-27 起列表也填；之前列表恒缺席，买家端因此无法在列表上标无货）。
+             *     **缺席**表示这一次不知道（拆分部署下库存服务不在），客户端不应据此判成无货。
+             */
             in_stock?: boolean;
             sales_count?: number;
             /**

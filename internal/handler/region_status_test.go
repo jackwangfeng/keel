@@ -99,3 +99,43 @@ func TestClosedStoreRejectsOrders(t *testing.T) {
 		t.Fatalf("停业门店试算应 409 store-unavailable，实得 %s", p.Type)
 	}
 }
+
+// 商品列表按门店标出有没有货（2026-09-27：之前列表不读库存，in_stock 恒缺席，
+// 买家端列表上无货的商品照样挂「＋」，点进去才知道没货）。
+//
+// 连衣裙在北京门店清零、广州门店不动：同一件商品按门店给出不同的 in_stock ——
+// 证明它是按这家店算的，而不是全局的「还有没有」。
+func TestProductListMarksOutOfStockPerStore(t *testing.T) {
+	cs := newCouponShop(t)
+	setStoreStock(t, cs.adminShop, cs.NorthStore, cs.DressSKU, 0)
+
+	inStock := func(storeID int64) map[int64]*bool {
+		var out struct {
+			Items []api.ProductSummary `json:"items"`
+		}
+		decodeInto(t, getAs(t, cs.Host, fmt.Sprintf("/api/v1/products?store_id=%d", storeID), ""),
+			http.StatusOK, "商品列表", &out)
+		m := map[int64]*bool{}
+		for _, it := range out.Items {
+			m[it.Id] = it.InStock
+		}
+		return m
+	}
+	north, south := inStock(cs.NorthStore), inStock(cs.SouthStore)
+	for _, c := range []struct {
+		what string
+		got  *bool
+		want bool
+	}{
+		{"北京门店的连衣裙", north[cs.DressProduct], false},
+		{"北京门店的衬衫", north[cs.ShirtProduct], true},
+		{"广州门店的连衣裙", south[cs.DressProduct], true},
+	} {
+		if c.got == nil {
+			t.Fatalf("%s：in_stock 缺席 —— 列表没有读库存", c.what)
+		}
+		if *c.got != c.want {
+			t.Errorf("%s：in_stock=%v，期望 %v", c.what, *c.got, c.want)
+		}
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/keel/keel/internal/inventory"
@@ -43,6 +44,11 @@ type ProductSummary struct {
 	// PromotionTags 是这件商品在这家店此刻生效的活动标签（00058，promotion_tags.go）。
 	// MinPriceCents 仍是门店价：活动价看标签与 SKU.PromoPriceCents。
 	PromotionTags []ProductPromotionTag
+
+	// InStock：这家店里任意一个在售 SKU 水位 > 0（与详情页、检索同一个判据）。
+	// nil 表示这一次不知道（拆分部署下库存服务不在）—— handler 让字段缺席，客户端不敢说它没货。
+	// 2026-09-27 之前列表根本不读库存，这个字段恒缺席，于是买家端列表上无货的商品照样挂着「＋」。
+	InStock *bool
 }
 
 // ProductList 是一页商品，带上生效后的分页参数。
@@ -123,6 +129,8 @@ func (s *ProductService) List(ctx context.Context, storeID, categoryID *int64, p
 
 	out := ProductList{Items: []ProductSummary{}, Page: page, PageSize: pageSize}
 	var promo promoTagMaterial
+	var onSale map[int64][]int64
+	var stockStore int64
 	err := s.repo.WithTenant(ctx, func(q repository.Tx) error {
 		// 门店解析与后面两条查询在**同一个事务**里：分成两次的话，
 		// 两者之间的一次门店软删会让「解析到了 A 店」与「按 A 店读商品」
@@ -159,6 +167,10 @@ func (s *ProductService) List(ctx context.Context, storeID, categoryID *int64, p
 		if promo, err = loadPromotionTags(ctx, q, sc, ids, time.Now()); err != nil {
 			return err
 		}
+		if onSale, err = q.OnSaleSKUsOfProducts(ctx, ids); err != nil {
+			return err
+		}
+		stockStore = sc.StoreID
 		for _, r := range rows {
 			out.Items = append(out.Items, ProductSummary{
 				ID:            r.ID,
@@ -185,7 +197,41 @@ func (s *ProductService) List(ctx context.Context, storeID, categoryID *int64, p
 	for i := range out.Items {
 		out.Items[i].PromotionTags = tags[out.Items[i].ID]
 	}
+	s.fillInStock(ctx, stockStore, onSale, out.Items)
 	return out, nil
+}
+
+// fillInStock 按这家店一次批量问库存服务，给这一页每件商品填 InStock。
+// 在事务之外问（拆分部署下是一次网络往返）；问不到就整页不填 —— 列表照常返回，
+// in_stock 缺席即「这次不知道」，与检索同一个降级口径（search.go 的 applyStock）。
+func (s *ProductService) fillInStock(ctx context.Context, storeID int64,
+	onSale map[int64][]int64, items []ProductSummary) {
+	if s.inv == nil || storeID == 0 || len(items) == 0 {
+		return
+	}
+	var all []int64
+	for _, list := range onSale {
+		all = append(all, list...)
+	}
+	levels := map[int64]inventory.Level{}
+	if len(all) > 0 {
+		var err error
+		levels, err = s.inv.StoreStock(ctx, storeID, all)
+		if err != nil {
+			slog.WarnContext(ctx, "商品列表问不到库存，这一页 in_stock 缺席", "store_id", storeID, "err", err)
+			return
+		}
+	}
+	for i := range items {
+		in := false
+		for _, id := range onSale[items[i].ID] {
+			if levels[id].Available > 0 {
+				in = true
+				break
+			}
+		}
+		items[i].InStock = &in
+	}
 }
 
 // imageURLOf 把主图的 upload id 拼成对外地址；没有图（nil）时回 nil。

@@ -10,8 +10,9 @@
     <view class="cover pc-tile-cover" :style="{ backgroundColor: item.cover.color }">
       <image v-if="item.cover.imageUrl != ''" class="cover-img" :src="item.cover.imageUrl" mode="aspectFill"></image>
       <text v-else class="cover-glyph pc-tile-glyph">{{ item.cover.glyph }}</text>
-      <view v-if="item.offShelf || item.soldOut" class="pc-flag">
-        <text class="pc-flag-text">{{ item.offShelf ? '已下架' : '暂时无货' }}</text>
+      <!-- 无货 / 下架：整张封面压一层灰，正中写字 —— 角落一个小标签在两列网格里太容易看漏。 -->
+      <view v-if="item.offShelf || item.soldOut" class="pc-mask">
+        <text class="pc-mask-text">{{ item.offShelf ? '已下架' : '无货' }}</text>
       </view>
     </view>
     <view class="pc-info">
@@ -24,11 +25,15 @@
       </view>
       <view class="pc-price-row">
         <view class="pc-price-box">
-          <text :class="['pc-price', tilePriceSmall ? 'pc-price-s' : '']">{{ item.hasRange ? item.minPriceText : item.priceText }}</text>
+          <text :class="['pc-price', tilePriceSmall ? 'pc-price-s' : '', canAdd ? '' : 'pc-price-off']">{{ item.hasRange ? item.minPriceText : item.priceText }}</text>
           <text v-if="item.hasRange" class="pc-qi">起</text>
         </view>
         <view v-if="canAdd" class="pc-add" @click.stop="onAdd">
           <text class="pc-add-text">＋</text>
+        </view>
+        <!-- 买不了时「＋」的位置换成一个灰标签：不给一个点了才告诉你无货的按钮。 -->
+        <view v-else class="pc-sold">
+          <text class="pc-sold-text">{{ item.offShelf ? '已下架' : '无货' }}</text>
         </view>
       </view>
     </view>
@@ -49,8 +54,8 @@
         <view class="pc-price-box">
           <text :class="['pc-price', rowPriceSmall ? 'pc-price-s' : '']">{{ item.priceText }}</text>
         </view>
-        <view v-if="item.offShelf || item.soldOut" class="badge badge-muted pc-badge">
-          <text class="badge-text badge-muted-text">{{ item.offShelf ? '已下架' : '缺货' }}</text>
+        <view v-if="item.offShelf || item.soldOut" class="pc-sold">
+          <text class="pc-sold-text">{{ item.offShelf ? '已下架' : '无货' }}</text>
         </view>
         <view v-if="canAdd" class="pc-add" @click.stop="onAdd">
           <text class="pc-add-text">＋</text>
@@ -96,6 +101,42 @@ export default {
 </script>
 
 <style>
+/* ---------- 无货 / 下架 ---------- */
+.pc-mask {
+  position: absolute;
+  left: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(255, 253, 249, 0.55);
+  align-items: center;
+  justify-content: center;
+}
+.pc-mask-text {
+  font-size: 15px;
+  font-weight: bold;
+  color: #FFFDF9;
+  background-color: rgba(42, 33, 27, 0.72);
+  padding: 4px 14px;
+  border-radius: 14px;
+}
+.pc-sold {
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 12px;
+  background-color: #EFE9E2;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.pc-sold-text {
+  font-size: 12px;
+  color: #9A8D7E;
+}
+.pc-price-off {
+  color: #A89B8C;
+}
+
 /* ---------- tile ---------- */
 .pc-tile {
   flex: 1;
@@ -109,18 +150,6 @@ export default {
 }
 .pc-tile-glyph {
   font-size: 44px;
-}
-.pc-flag {
-  position: absolute;
-  left: 10px;
-  top: 10px;
-  padding: 2px 8px;
-  border-radius: 8px;
-  background-color: rgba(42, 33, 27, 0.6);
-}
-.pc-flag-text {
-  font-size: 11px;
-  color: #FFFDF9;
 }
 .pc-info {
   flex: 1;

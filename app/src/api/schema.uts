@@ -912,6 +912,7 @@ export type ProductSummary = {
   min_price_cents : Money
   /** 金额，单位「分」。禁止使用浮点。 */
   max_price_cents? : Money
+  /** 这家店里任意一个在售 SKU 可售数 > 0。`GET /products` 与 `POST /search` 都按解析出的门店填 */
   in_stock? : boolean
   sales_count? : number
   /** 对应 `products.status`：0 草稿 / 1 上架 / 2 下架。 */
@@ -1480,6 +1481,7 @@ export type ProductDetail = {
   min_price_cents : Money
   /** 金额，单位「分」。禁止使用浮点。 */
   max_price_cents? : Money
+  /** 这家店里任意一个在售 SKU 可售数 > 0。`GET /products` 与 `POST /search` 都按解析出的门店填 */
   in_stock? : boolean
   sales_count? : number
   /** 对应 `products.status`：0 草稿 / 1 上架 / 2 下架。 */
@@ -1971,6 +1973,7 @@ export type SearchHit = {
   min_price_cents : Money
   /** 金额，单位「分」。禁止使用浮点。 */
   max_price_cents? : Money
+  /** 这家店里任意一个在售 SKU 可售数 > 0。`GET /products` 与 `POST /search` 都按解析出的门店填 */
   in_stock? : boolean
   sales_count? : number
   /** 对应 `products.status`：0 草稿 / 1 上架 / 2 下架。 */

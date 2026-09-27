@@ -26,9 +26,9 @@ info:
     **库存服务不可用时（只在拆分部署下出现）**。库存可以部署成单独的服务
     （docs/电商系统-微服务拆分方案.md）；它暂时不在时，契约的行为如下，单体部署不受影响：
 
-    · 浏览照常：`GET /products` 不读库存（限时折扣 / 秒杀的活动标签此时缺席，满减满折照常）；`POST /search` 照常返回，每条结果的
+    · 浏览照常：`GET /products` 与 `POST /search` 照常返回，每条的
       `in_stock` **缺席**（它是可选字段——缺席即「这次不知道」），`in_stock_only`
-      此时不生效。
+      此时不生效；`GET /products` 上限时折扣 / 秒杀的活动标签也缺席，满减满折照常。
     · 取决于水位的接口回 503 `https://keel.dev/problems/inventory-unavailable`
       （带 `Retry-After`）：商品详情（`Sku.available_qty` 是必填的，不编一个 0）、
       购物车的读写（行的 `status` / `available` 全取决于水位）、后台商品 / SKU /
@@ -6974,7 +6974,12 @@ components:
         image_url: { type: string }
         min_price_cents: { $ref: '#/components/schemas/Money' }
         max_price_cents: { $ref: '#/components/schemas/Money' }
-        in_stock:  { type: boolean }
+        in_stock:
+          type: boolean
+          description: |
+            这家店里任意一个在售 SKU 可售数 > 0。`GET /products` 与 `POST /search` 都按解析出的门店填
+            （2026-09-27 起列表也填；之前列表恒缺席，买家端因此无法在列表上标无货）。
+            **缺席**表示这一次不知道（拆分部署下库存服务不在），客户端不应据此判成无货。
         sales_count: { type: integer }
         status:
           type: integer

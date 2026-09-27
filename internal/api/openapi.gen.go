@@ -4477,7 +4477,11 @@ type ProductDetail struct {
 	Id          int64     `json:"id"`
 	ImageUrl    *string   `json:"image_url,omitempty"`
 	Images      *[]string `json:"images,omitempty"`
-	InStock     *bool     `json:"in_stock,omitempty"`
+
+	// InStock 这家店里任意一个在售 SKU 可售数 > 0。`GET /products` 与 `POST /search` 都按解析出的门店填
+	// （2026-09-27 起列表也填；之前列表恒缺席，买家端因此无法在列表上标无货）。
+	// **缺席**表示这一次不知道（拆分部署下库存服务不在），客户端不应据此判成无货。
+	InStock *bool `json:"in_stock,omitempty"`
 
 	// MaxPriceCents 金额，单位「分」。禁止使用浮点。
 	MaxPriceCents *Money `json:"max_price_cents,omitempty"`
@@ -4779,7 +4783,11 @@ type ProductPublicationRequestAction string
 type ProductSummary struct {
 	Id       int64   `json:"id"`
 	ImageUrl *string `json:"image_url,omitempty"`
-	InStock  *bool   `json:"in_stock,omitempty"`
+
+	// InStock 这家店里任意一个在售 SKU 可售数 > 0。`GET /products` 与 `POST /search` 都按解析出的门店填
+	// （2026-09-27 起列表也填；之前列表恒缺席，买家端因此无法在列表上标无货）。
+	// **缺席**表示这一次不知道（拆分部署下库存服务不在），客户端不应据此判成无货。
+	InStock *bool `json:"in_stock,omitempty"`
 
 	// MaxPriceCents 金额，单位「分」。禁止使用浮点。
 	MaxPriceCents *Money `json:"max_price_cents,omitempty"`
@@ -5759,7 +5767,11 @@ type SearchFilters struct {
 type SearchHit struct {
 	Id       int64   `json:"id"`
 	ImageUrl *string `json:"image_url,omitempty"`
-	InStock  *bool   `json:"in_stock,omitempty"`
+
+	// InStock 这家店里任意一个在售 SKU 可售数 > 0。`GET /products` 与 `POST /search` 都按解析出的门店填
+	// （2026-09-27 起列表也填；之前列表恒缺席，买家端因此无法在列表上标无货）。
+	// **缺席**表示这一次不知道（拆分部署下库存服务不在），客户端不应据此判成无货。
+	InStock *bool `json:"in_stock,omitempty"`
 
 	// MaxPriceCents 金额，单位「分」。禁止使用浮点。
 	MaxPriceCents *Money `json:"max_price_cents,omitempty"`

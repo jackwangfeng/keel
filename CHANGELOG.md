@@ -142,6 +142,11 @@ so "which one is running?" never depends on anyone's memory.
 
 ### Fixed
 
+- **Product list showed an add button on out-of-stock items.** `GET /products` never read
+  inventory, so `in_stock` was always absent and the buyer app could not tell. The list now
+  asks the inventory service once per page for the resolved store and fills `in_stock` (absent
+  only when the inventory service is down, as with search). Product cards grey out the cover
+  with a centred 「无货」, dim the price, and replace the 「＋」 with a 「无货」 tag.
 - **Disabling a region had no effect on its stores**, and a closed store could still take
   orders. `regions.status` was never read. A disabled region now takes all its stores offline:
   they drop out of fence resolution, `GET /stores` and the default-store fallback, cannot be
