@@ -72,7 +72,8 @@ function iosDevice() {
   return phone.identifier
 }
 
-if (!IOS && !fs.existsSync(APK)) throw new Error(`没有自动化测试包 ${APK}：先跑 make app-apk-e2e`)
+// H5 无头不装包，不检查 apk（以前碰巧有旧版本的 apk 才没暴露，版本号一改就挂）。
+if (!IOS && !H5 && !fs.existsSync(APK)) throw new Error(`没有自动化测试包 ${APK}：先跑 make app-apk-e2e`)
 if (IOS && !fs.existsSync(IOS_APP)) throw new Error(`没有 iOS 自动化测试包 ${IOS_APP}：先跑 make app-ios-e2e`)
 
 function launchAndroid() {

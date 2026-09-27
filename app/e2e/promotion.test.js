@@ -43,13 +43,30 @@ describe('营销活动与包邮券', () => {
   })
 
   it('限时特价：结算按特价算并显示说明；买 3 件超过限购，提示减数量', async () => {
+    // 限购是每人累计的：演示买家（公众也在用）已经买满时，买 1 件就被拒。先问服务端还有没有额度，
+    // 没有就只验「限购提示」这条路径 —— 页面照样要说清楚，而不是这条用例红掉。
+    const store = (await httpGet(apiBase() + '/products?page_size=1')).body.store.store_id
+    const probe = await httpRequest('POST', apiBase() + '/orders/preview',
+      { items: [{ sku_id: GUAER.skuId, quantity: 1 }], store_id: store, address_id: (await httpGet(apiBase() + '/addresses', token)).body[0].id }, token)
+    if (probe.status === 409 && probe.body.type.endsWith('/promotion-limit-exceeded')) {
+      const p0 = await checkout(GUAER)
+      await waitFor(p0, '.result-err', (t) => t.includes('限购'))
+      expect((await p0.data('pv')) == null).toBe(true)
+      return
+    }
     const page = await checkout(GUAER)
     const pv = await waitData(page, 'pv', (p) => p != null)
     expect(pv.goodsAmountText).toBe('¥49.90')
     expect(pv.promotionNotes.some((n) => n.includes('限时特价'))).toBe(true)
     // 手上有包邮券时 1 件（49.9 + 8 运费）会自动选上它；加到 2 件满 99 包邮，那张券就用不上了 ——
-    // 页面照设计报「本单运费为 0，包邮券抵不了钱」并让用户换券（实测）。这条测的是限购，先不用券。
-    await page.setData({ couponId: 0, couponAuto: false })
+    // 页面照设计报「本单运费为 0，包邮券抵不了钱」并让用户换券（实测，下面单有一条）。这条测的是限购，先不用券。
+    // 在界面上选「不使用优惠券」（列表最后一项）。不用 page.setData：iOS 的自动化下它不生效（实测）。
+    if (pv.couponId > 0) {
+      await (await page.$('.coupon-head')).tap()
+      const opts = await page.$$('.coupon-opt')
+      await opts[opts.length - 1].tap()
+      await waitData(page, 'pv', (p) => p != null && p.couponId === 0)
+    }
 
     await (await page.$$('.step'))[1].tap()   // +
     await waitData(page, 'pv', (p) => p != null && p.goodsAmountText === '¥99.80')
@@ -95,9 +112,9 @@ describe('营销活动与包邮券', () => {
   })
 
   it('包邮券选着时数量加到满 99 包邮：显示「包邮券抵不了钱」并展开券列表，不悄悄换掉', async () => {
-    // 上一条已经领过包邮券。挂耳 1 件（49.9 + 8 运费）选上包邮券，加到 2 件（99.8）就包邮了。
-    // 显式选包邮券，不依赖它恰好是自动选中的那张（取决于买家手上还有什么券）。
-    const page = await checkout(GUAER)
+    // 上一条已经领过包邮券。冷萃 1 件（55.8 + 8 运费）选上包邮券，加到 2 件（111.6）就包邮了。
+    // 不用挂耳：它有每人限购，额度会被用光。显式选包邮券，不依赖它恰好是自动选中的那张。
+    const page = await checkout(CHEAP)
     const first = await waitData(page, 'pv', (p) => p != null)
     const idx = first.coupons.findIndex((c) => c.name.includes('包邮'))
     expect(idx).toBeGreaterThanOrEqual(0)

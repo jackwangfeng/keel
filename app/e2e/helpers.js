@@ -111,7 +111,9 @@ async function pickSku(minQty = 5) {
   for (const p of list.items || []) {
     if (p.status !== 1) continue
     const d = (await httpGet(apiBase() + '/products/' + p.id)).body
-    const first = (d.skus || []).find((s) => s.available_qty > 0)
+    // 跳过做限时特价 / 秒杀的规格：它们有每人限购，下单用例反复买会把演示买家的额度用光
+    // （实测：挂耳咖啡被买满 2 件后，特价那条用例在第 1 件就被拒）。
+    const first = (d.skus || []).find((s) => s.available_qty > 0 && s.promo_price_cents == null)
     if (!first) continue
     if (!best || first.available_qty > best.qty) best = { productId: p.id, skuId: first.id, qty: first.available_qty }
   }

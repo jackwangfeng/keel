@@ -47,12 +47,18 @@ async function checkoutWith(sku, addressId) {
 describe('运费', () => {
   let token = ''
   let skus = null
+  // 种子里的杭州地址（region_code 330106）。**不用「默认地址」**：演示买家对公众开放，
+  // 访客会往里加地址、改默认（实测有人加了一条广东地址并设成默认），默认地址是谁不可控。
+  let hz = 0
 
   beforeAll(async () => {
     await loginInApp()
     token = await serverToken()
     await cleanup(token)
     skus = await pickByPrice()
+    const seed = (await httpGet(apiBase() + '/addresses', token)).body.find((a) => a.region_code === '330106')
+    if (!seed) throw new Error('演示买家名下没有种子里的杭州地址（region_code 330106），请重置演示库')
+    hz = seed.id
   })
 
   afterAll(async () => {
@@ -60,8 +66,9 @@ describe('运费', () => {
     await httpRequest('DELETE', apiBase() + '/cart', null, token)
   })
 
-  it('默认地址（杭州）：99 元以下运费 8 元并提示满 99 包邮，应付 = 商品 + 运费 − 优惠', async () => {
-    const page = await checkoutWith(skus.cheap, null)
+  it('杭州地址：99 元以下运费 8 元并提示满 99 包邮，应付 = 商品 + 运费 − 优惠', async () => {
+    const page = await checkoutWith(skus.cheap, hz)
+    await waitData(page, 'addressId', (v) => v === hz)
     const pv = await waitData(page, 'pv', (p) => p != null)
     expect(pv.freightText).toBe('¥8.00')
     expect(pv.freightNote).toBe('满¥99 包邮')
@@ -70,8 +77,9 @@ describe('运费', () => {
     expect(pv.payableCents).toBe(cents(pv.goodsAmountText) + cents(pv.freightText) - cents(pv.discountText))
   })
 
-  it('默认地址：99 元以上包邮，说明写「已满¥99 包邮」', async () => {
-    const page = await checkoutWith(skus.dear, null)
+  it('杭州地址：99 元以上包邮，说明写「已满¥99 包邮」', async () => {
+    const page = await checkoutWith(skus.dear, hz)
+    await waitData(page, 'addressId', (v) => v === hz)
     const pv = await waitData(page, 'pv', (p) => p != null)
     expect(pv.freightText).toBe('¥0.00')
     expect(pv.freightNote).toBe('已满¥99 包邮')
@@ -114,7 +122,11 @@ describe('运费', () => {
     expect(add.status).toBe(200)
     const cart = await program.switchTab('/pages/cart/index')
     await waitData(cart, 'rows', (r) => r.length === 1)
-    await waitData(cart, 'freightText', (t) => t === '¥8.00')
-    await waitFor(cart, '.cart-freight', (t) => t.includes('¥8.00') && t.includes('满¥99 包邮'))
+    // 购物车不传地址 = 服务端用默认地址；默认地址可能被访客改过，所以和服务端同口径的 Cart.freight 比，不写死 8 元。
+    const server = (await httpGet(apiBase() + '/cart?store_id=' + store, token)).body
+    expect(server.freight).toBeTruthy()
+    const want = '¥' + (server.freight.freight_cents / 100).toFixed(2)
+    await waitData(cart, 'freightText', (t) => t === want)
+    await waitFor(cart, '.cart-freight', (t) => t.includes(want))
   })
 })
