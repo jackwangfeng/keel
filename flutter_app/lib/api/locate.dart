@@ -6,7 +6,10 @@ import 'package:mp_flutter_wechat/mp_flutter_wechat.dart';
 ///
 /// 坐标系必须是 WGS-84：围栏存在 SRID 4326。国内接口默认常给 GCJ-02（火星坐标），城区差一两百到五六百米，
 /// 足够把人判到隔壁店或围栏外。所以小程序里显式要 wgs84；Web（浏览器 Geolocation）与原生（系统定位）本来就是。
+///
+/// 编译时 `--dart-define=KEEL_LOCATE=off`：不定位，总用默认店（只有一家店的商家；Web e2e 也用它，用例按默认店写）。
 Future<({double lat, double lng})?> locateDevice() async {
+  if (const String.fromEnvironment('KEEL_LOCATE') == 'off') return null;
   if (MpWechat.isAvailable) {
     final r = await MpWechat.getLocation(type: 'wgs84');
     return (lat: r.latitude, lng: r.longitude);

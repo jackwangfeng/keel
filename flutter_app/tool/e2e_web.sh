@@ -16,7 +16,8 @@ EOF
 # e2e 账号：环境变量优先，没有就读 ~/.config/keel/e2e.env（不进仓库，与 app/ 的 e2e 同一个文件）。
 ENV_FILE=${KEEL_E2E_ENV:-$HOME/.config/keel/e2e.env}
 if [ -z "${KEEL_E2E_PHONE:-}" ] && [ -f "$ENV_FILE" ]; then set -a; . "$ENV_FILE"; set +a; fi
-DEFINES=()
+# 不定位：用例按默认店的商品与价格写（本机的真实位置会被围栏解析到别的店）。
+DEFINES=(--dart-define=KEEL_LOCATE=off)
 [ -n "${KEEL_E2E_PHONE:-}" ] && DEFINES+=(--dart-define=KEEL_E2E_PHONE="$KEEL_E2E_PHONE")
 [ -n "${KEEL_E2E_PASSWORD:-}" ] && DEFINES+=(--dart-define=KEEL_E2E_PASSWORD="$KEEL_E2E_PASSWORD")
 # 后台前置状态的单号（请服务端会话代做后传进来）：没设的那几条用例跳过。
