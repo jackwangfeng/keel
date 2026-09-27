@@ -7,7 +7,7 @@ const { waitFor } = require('./helpers')
 describe('首页', () => {
   it('显示服务端的商品', async () => {
     const page = await program.reLaunch('/pages/products/list')
-    const first = await waitFor(page, '.tile-title', (t) => t.length > 0)
+    const first = await waitFor(page, '.pc-title', (t) => t.length > 0)
     expect((await first.text()).length).toBeGreaterThan(0)
   })
 })

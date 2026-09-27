@@ -46,7 +46,7 @@ describe('搜索效果回传', () => {
     const idx = rows.findIndex((r) => r.id === sku.productId)
     expect(idx).toBeGreaterThanOrEqual(0)
     productId = sku.productId
-    await (await page.$$('.hit'))[idx].tap()
+    await (await page.$$('.pc-row'))[idx].tap()
 
     const again = await httpRequest('POST', apiBase() + '/search/events', { trace_id: traceId, event: 'click', product_id: productId })
     expect(again.status).toBe(204)

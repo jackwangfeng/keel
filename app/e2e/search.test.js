@@ -9,7 +9,7 @@ describe('搜索', () => {
 
   beforeAll(async () => {
     const home = await program.reLaunch('/pages/products/list')
-    const first = await waitFor(home, '.tile-title', (t) => t.length > 0)
+    const first = await waitFor(home, '.pc-title', (t) => t.length > 0)
     title = await first.text()
   })
 
@@ -26,11 +26,11 @@ describe('搜索', () => {
     await (await page.$('.box-input')).input(title)
     await (await page.$('.go')).tap()
     await waitFor(page, '.count', (t) => t.includes('共'))
-    const hits = await page.$$('.hit-title')
+    const hits = await page.$$('.pc-row-title')
     expect(hits.length).toBeGreaterThan(0)
     expect(await hits[0].text()).toBe(title)
 
-    await (await page.$('.hit')).tap()
+    await (await page.$('.pc-row')).tap()
     await page.waitFor(1000)
     const detail = await program.currentPage()
     expect(detail.path).toBe('pages/products/detail')

@@ -20,7 +20,7 @@ async function serverCategories() {
 describe('商品分类', () => {
   it('分类栏与服务端的能力一致；有分类时能切换', async () => {
     const home = await program.reLaunch('/pages/products/list')
-    await waitFor(home, '.tile-title', (t) => t.length > 0)
+    await waitFor(home, '.pc-title', (t) => t.length > 0)
     const tree = await serverCategories()
     const chips = await home.$$('.cat-chip')
 

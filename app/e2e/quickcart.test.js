@@ -19,13 +19,13 @@ async function waitCartHas(token, skuId, page) {
   throw new Error('购物车里没等到 sku ' + skuId)
 }
 
-// 「＋」只画在能买的卡片上，所以按「能买的卡片」数第几个，而不是 rows 下标。
+// 「＋」（.pc-add）只画在能买的卡片上，所以按「能买的卡片」数第几个，而不是 rows 下标。
 async function addBtnOf(home, productId) {
   const rows = await waitData(home, 'rows', (r) => r.some((x) => x.id === productId))
   const buyable = rows.filter((x) => !x.offShelf && !x.soldOut)
   const idx = buyable.findIndex((x) => x.id === productId)
   if (idx < 0) throw new Error('商品 ' + productId + ' 在首页上不能买')
-  const btns = await home.$$('.add-btn')
+  const btns = await home.$$('.pc-add')
   return btns[idx]
 }
 
