@@ -39,3 +39,21 @@ func goBranchHandler(gid, branchID, op *C.char, ud unsafe.Pointer) (ret C.int) {
 	fn := h.Value().(BranchFunc)
 	return C.int(fn(g, b, o))
 }
+
+// goBranchHandlerEx 是 dtmrs_register_ex 那条回调的入口，多一个 payload。
+// panic 的处置与 goBranchHandler 相同，理由也相同。
+//
+//export goBranchHandlerEx
+func goBranchHandlerEx(gid, branchID, op, payload *C.char, ud unsafe.Pointer) (ret C.int) {
+	g, b, o := C.GoString(gid), C.GoString(branchID), C.GoString(op)
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("事务分支 panic，按 Unknown 上报以便协调器重试",
+				"gid", g, "branch_id", b, "op", o, "panic", r)
+			ret = C.int(Unknown)
+		}
+	}()
+	h := cgo.Handle(*(*C.uintptr_t)(ud))
+	fn := h.Value().(BranchFuncEx)
+	return C.int(fn(g, b, o, normalizePayload(C.GoString(payload))))
+}

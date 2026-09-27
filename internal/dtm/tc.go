@@ -43,9 +43,14 @@ package dtm
 
 // 声明 Go 侧导出的符号，以便取它的地址传给注册函数。
 extern int goBranchHandler(const char*, const char*, const char*, void*);
+extern int goBranchHandlerEx(const char*, const char*, const char*, const char*, void*);
 
 static int reg_go(DtmrsTc *tc, const char *name, void *ud) {
     return dtmrs_register(tc, name, goBranchHandler, ud);
+}
+
+static int reg_go_ex(DtmrsTc *tc, const char *name, void *ud) {
+    return dtmrs_register_ex(tc, name, goBranchHandlerEx, ud);
 }
 */
 import "C"
@@ -82,6 +87,25 @@ const DefaultMaxInflight = 32
 // 进程对原请求毫无记忆。所以分支需要的一切（包括租户）都必须能从 gid 推出来 ——
 // 这就是 gid.go 存在的全部理由。
 type BranchFunc func(gid, branchID, op string) int
+
+// BranchFuncEx 是带载荷的分支：多一个 payload，即 SAGA 那一步的 Step.Payload
+// （正向与补偿共用同一份；没给就是空串）。
+//
+// 它为拆分部署而加（docs/电商系统-微服务拆分方案.md 阶段 0）。上面那条
+// 「一切从 gid 推」在单体里成立，是因为分支与下单在同一个库里、能按 gid 反查
+// 订单行；分支搬进库存服务之后，那个库里没有订单表，扣多少、扣哪几个 SKU
+// 只能随步骤带过去。载荷在提交时与步骤一起落进协调器的存储，崩溃重放时原样再给，
+// 所以它与 gid 同样可靠 —— 但它仍然**不带租户**：租户照旧从 gid 推
+// （TenantContextFromGID），载荷里即使出现 merchant_id 也不该被采信。
+//
+// 同一个函数既可以注册成进程内分支（RegisterEx，local://），也可以经 HTTPBranch
+// 挂成 HTTP 分支；两条路径上它收到的 payload 相同（见 normalizePayload）。
+type BranchFuncEx func(gid, branchID, op, payload string) int
+
+// Ex 把一个不看载荷的 BranchFunc 包成 BranchFuncEx，方便老分支挂到 HTTP 上。
+func Ex(fn BranchFunc) BranchFuncEx {
+	return func(gid, branchID, op, _ string) int { return fn(gid, branchID, op) }
+}
 
 // TC 是嵌入在本进程里的事务协调器。
 type TC struct {
@@ -158,21 +182,37 @@ func Open(dsn string, maxInflight int) (*TC, error) {
 
 // Register 注册一个进程内分支，对应编排里的 "local://<name>"。必须在 Start 之前调。
 func (t *TC) Register(name string, fn BranchFunc) error {
+	c := cstr(name)
+	defer C.free(unsafe.Pointer(c))
+	if C.reg_go(t.p, c, t.box(fn)) != C.DTMRS_OK {
+		return fmt.Errorf("注册分支 %q 失败: %s", name, lastError())
+	}
+	return nil
+}
+
+// RegisterEx 注册一个带载荷的进程内分支（dtmrs_register_ex）。与 Register 可以混用，
+// 各管各的名字。必须在 Start 之前调。
+func (t *TC) RegisterEx(name string, fn BranchFuncEx) error {
+	c := cstr(name)
+	defer C.free(unsafe.Pointer(c))
+	if C.reg_go_ex(t.p, c, t.box(fn)) != C.DTMRS_OK {
+		return fmt.Errorf("注册分支 %q 失败: %s", name, lastError())
+	}
+	return nil
+}
+
+// box 把 fn 装进一个 cgo.Handle，再把 handle 放进 C 分配的内存交给 C 侧持有。
+//
+// 放进 C 内存而不是 unsafe.Pointer(uintptr(h))：后者在 -race 下必然
+// fatal error: checkptr —— 这个坑 100% 会在 CI 上命中，而本机不开 race 跑起来一切正常。
+// 两种分支共用这一份：回调那一侧按注册时走的是 reg_go 还是 reg_go_ex 决定断言成哪个类型。
+func (t *TC) box(fn any) unsafe.Pointer {
 	h := cgo.NewHandle(fn)
-	// 把 handle 放进 C 分配的内存，而不是 unsafe.Pointer(uintptr(h))。
-	// 后者在 -race 下必然 fatal error: checkptr —— 这个坑 100% 会在 CI 上命中，
-	// 而本机不开 race 跑起来一切正常。
 	box := C.malloc(C.size_t(unsafe.Sizeof(C.uintptr_t(0))))
 	*(*C.uintptr_t)(box) = C.uintptr_t(h)
 	t.boxes = append(t.boxes, box)
 	t.handles = append(t.handles, h)
-
-	c := cstr(name)
-	defer C.free(unsafe.Pointer(c))
-	if C.reg_go(t.p, c, box) != C.DTMRS_OK {
-		return fmt.Errorf("注册分支 %q 失败: %s", name, lastError())
-	}
-	return nil
+	return box
 }
 
 // Start 建表（见 Open 的注释）并启动推进器。
@@ -188,7 +228,8 @@ func (t *TC) Start() error {
 // SubmitSaga 提交一个 SAGA 全局事务。steps 是 JSON 数组，每项
 // {"action": "...", "compensate": "..."}，地址可以是 local:// 也可以是 http://。
 //
-// steps 里**只有地址，没有业务载荷** —— 分支要的一切从 gid 推。见 gid.go。
+// 单体里的分支只用地址、业务数据从 gid 推（见 gid.go）；要带载荷的（拆分部署后
+// 跨库的分支）用 SubmitSagaSteps，它替调用方把 Step 编成 JSON。
 func (t *TC) SubmitSaga(gid, stepsJSON string) error {
 	t.acquire()
 	defer t.release()
@@ -246,12 +287,31 @@ func (t *TC) Close() {
 // 出错时会把已经建出来的协调器关掉再返回 —— 否则一次启动失败会漏掉一个
 // tokio 运行时和两个线程，而进程还要继续活着去报这个错。
 func Start(dsn string, maxInflight int, branches map[string]BranchFunc) (*TC, error) {
+	return StartEx(dsn, maxInflight, branches, nil)
+}
+
+// StartEx 同 Start，另外注册一组带载荷的分支。两组里出现同一个名字时拒绝启动：
+// dtmrs 按名字查表，重名时谁生效取决于注册顺序，而 map 的遍历顺序是随机的 ——
+// 那是一个「每次启动随机挑一个实现」的分支。
+func StartEx(dsn string, maxInflight int, branches map[string]BranchFunc,
+	exBranches map[string]BranchFuncEx) (*TC, error) {
+	for name := range exBranches {
+		if _, dup := branches[name]; dup {
+			return nil, fmt.Errorf("分支 %q 同时出现在两组注册里", name)
+		}
+	}
 	tc, err := Open(dsn, maxInflight)
 	if err != nil {
 		return nil, err
 	}
 	for name, fn := range branches {
 		if err := tc.Register(name, fn); err != nil {
+			tc.Close()
+			return nil, err
+		}
+	}
+	for name, fn := range exBranches {
+		if err := tc.RegisterEx(name, fn); err != nil {
 			tc.Close()
 			return nil, err
 		}
