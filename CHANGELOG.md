@@ -142,6 +142,12 @@ so "which one is running?" never depends on anyone's memory.
 
 ### Fixed
 
+- **Product list puts in-stock items first**, globally (pagination stays correct). Stock lives
+  in the inventory service, so the list query cannot join it; migration 00087 adds
+  `product_store_stock`, a per-store "has stock" flag used only for ordering. It is refreshed
+  right after every admin inventory write, and by a full pass every `KEEL_STOCK_FLAG_INTERVAL`
+  (default 1m) that catches order deductions and restocks. The `in_stock` shown on each item
+  is still read live, so display is always current; ordering can lag by at most one pass.
 - **Product list showed an add button on out-of-stock items.** `GET /products` never read
   inventory, so `in_stock` was always absent and the buyer app could not tell. The list now
   asks the inventory service once per page for the resolved store and fills `in_stock` (absent

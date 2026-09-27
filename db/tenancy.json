@@ -333,6 +333,7 @@
     "store_product_overrides(store_id,product_id)": "③ 首列 store_id 已蕴含租户（stores 自带 merchant_id）。这是一张排除表，「这家店不卖哪些商品」，缺一行即在售（数据模型 §4）。",
     "region_product_overrides(region_id,product_id)": "③ 同上，大区那一层。首列 region_id 已蕴含租户。",
     "store_sku_prices(store_id,sku_id)": "③ 首列 store_id 已蕴含租户。三层定价里最内的那一层覆盖，缺一行即沿用大区价 / 基准价（数据模型 §4）。",
-    "region_sku_prices(region_id,sku_id)": "③ 同上，大区那一层。"
+    "region_sku_prices(region_id,sku_id)": "③ 同上，大区那一层。",
+    "product_store_stock(store_id,product_id)": "③ 首列 store_id 已蕴含租户（stores 自带 merchant_id）。门店 × 商品有没有货的冗余标记，只给商品列表排序用（00087）。"
   }
 }

@@ -249,6 +249,7 @@ func setStockSole(ctx context.Context, repo tenantRunner, inv inventory.Service,
 	var conflict *inventory.ConflictError
 	switch {
 	case err == nil:
+		refreshSKUStockFlag(ctx, repo, inv, storeID, skuID) // 商品列表的有货排序（stock_flags.go）
 		return repository.Inventory{SKUID: skuID, StoreID: storeID,
 			AvailableQty: s.Available, WarningQty: s.Warning, UpdatedAt: s.UpdatedAt}, nil
 	case errors.As(err, &conflict):
@@ -286,6 +287,7 @@ func setStockInStore(ctx context.Context, repo tenantRunner, inv inventory.Servi
 	var conflict *inventory.ConflictError
 	switch {
 	case err == nil:
+		refreshSKUStockFlag(ctx, repo, inv, storeID, skuID) // 商品列表的有货排序（stock_flags.go）
 		return storeInventoryOf(s), nil
 	case errors.As(err, &conflict):
 		// CAS 对不上。缺行（而 expected 不是 0）时当前值就是「可售 0」。
@@ -438,6 +440,7 @@ func adjustInventory(ctx context.Context, repo tenantRunner, inv inventory.Servi
 	var short *inventory.InsufficientError
 	switch {
 	case err == nil:
+		refreshSKUStockFlag(ctx, repo, inv, target, skuID) // 商品列表的有货排序（stock_flags.go）
 	case errors.As(err, &short):
 		return repository.StoreInventory{}, false, &repository.InventoryInsufficient{
 			Delta: in.Delta, Current: storeInventoryOf(short.Current)}

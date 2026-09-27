@@ -21,8 +21,8 @@ import (
 func TestBigramSplitsCJK(t *testing.T) {
 	for _, tc := range []struct{ in, want string }{
 		{"红色连衣裙", "红色 色连 连衣 衣裙"}, // 语义检索层 §3 的例子
-		{"羊毛衫", "羊毛 毛衫"},          // 数据模型 §8 的例子
-		{"裙", "裙"},                // 单字成段：丢掉它，「裙」这个词从关键词路消失
+		{"羊毛衫", "羊毛 毛衫"},         // 数据模型 §8 的例子
+		{"裙", "裙"},               // 单字成段：丢掉它，「裙」这个词从关键词路消失
 		{"", ""},
 	} {
 		if got := search.Bigram(tc.in); got != tc.want {
@@ -94,9 +94,9 @@ func TestBigramIsDeterministic(t *testing.T) {
 func TestIndexTermsAppendsUnigramsAfterBigrams(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"陶瓷马克杯", "陶瓷 瓷马 马克 克杯 陶 瓷 马 克 杯"},
-		{"裙", "裙 裙"},                              // 单字成段：Bigram 已出一次，单字再记一次，无害
+		{"裙", "裙 裙"}, // 单字成段：Bigram 已出一次，单字再记一次，无害
 		{"咖啡 咖啡豆", "咖啡 咖啡 啡豆 咖 啡 豆"}, // 单字去重
-		{"iPhone 15", "iphone 15"},                  // 没有表意文字：与 Bigram 相同
+		{"iPhone 15", "iphone 15"},   // 没有表意文字：与 Bigram 相同
 		{"", ""},
 	}
 	for _, tc := range cases {

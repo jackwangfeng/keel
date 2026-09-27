@@ -384,6 +384,15 @@ type ProductImportBatch struct {
 	CreatedAt       pgtype.Timestamptz
 }
 
+// 门店 × 商品有没有货的冗余标记，只给商品列表排序用（00087）；显示仍现问库存服务。刷新见 service/stock_flags.go。
+type ProductStoreStock struct {
+	StoreID    int64
+	ProductID  int64
+	MerchantID int64
+	InStock    bool
+	UpdatedAt  pgtype.Timestamptz
+}
+
 type ProductTextVector struct {
 	ProductID    int64
 	MerchantID   int64

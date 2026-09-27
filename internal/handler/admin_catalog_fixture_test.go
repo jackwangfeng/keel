@@ -102,6 +102,8 @@ func newAdminShop(t *testing.T) adminShop {
 			`DELETE FROM region_sku_prices WHERE merchant_id = $1`,
 			`DELETE FROM store_product_overrides WHERE merchant_id = $1`,
 			`DELETE FROM region_product_overrides WHERE merchant_id = $1`,
+			// 有货排序标记（00087）指向 stores 与 products，后台改库存会写它。
+			`DELETE FROM product_store_stock WHERE merchant_id = $1`,
 			`DELETE FROM skus WHERE merchant_id = $1`,
 			`DELETE FROM products WHERE merchant_id = $1`,
 			// 运费模板（00055）：products 挂着它、它挂着 stores，排在两者之间。

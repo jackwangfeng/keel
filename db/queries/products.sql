@@ -1,4 +1,6 @@
 -- name: ListProducts :many
+-- 排序（2026-09-27）：**这家店有货的在前**，再按上架时间新到旧。有没有货读 product_store_stock
+-- （00087，库存在库存服务那边，这里 JOIN 不到 inventories）；没刷过的行按有货排，不错压。
 -- 刻意不带 WHERE merchant_id —— 租户由 RLS 在数据库层过滤。
 --
 -- 这不是偷懒：应用层再加一遍条件会让「RLS 是否真的生效」变得测不出来。
@@ -92,7 +94,9 @@ SELECT p.id, p.title, p.subtitle,
                 AND c.path LIKE (SELECT cc.path FROM categories cc
                                   WHERE cc.id = sqlc.narg(category_id)::bigint
                                     AND cc.deleted_at IS NULL) || '%'))
- ORDER BY p.published_at DESC NULLS LAST, p.id DESC
+ ORDER BY COALESCE((SELECT pss.in_stock FROM product_store_stock pss
+                      WHERE pss.store_id = sqlc.arg(store_id) AND pss.product_id = p.id), TRUE) DESC,
+          p.published_at DESC NULLS LAST, p.id DESC
  LIMIT sqlc.arg(page_limit) OFFSET sqlc.arg(page_offset);
 
 -- name: CountProducts :one

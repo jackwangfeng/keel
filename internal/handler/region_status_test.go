@@ -1,12 +1,15 @@
 package handler_test
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"testing"
 
 	"github.com/keel/keel/internal/api"
 	"github.com/keel/keel/internal/problem"
+	"github.com/keel/keel/internal/repository"
+	"github.com/keel/keel/internal/service"
 )
 
 // 大区停用 = 名下门店一律按停业处理（2026-09-27：之前 regions.status 哪条查询都没读，
@@ -138,4 +141,52 @@ func TestProductListMarksOutOfStockPerStore(t *testing.T) {
 			t.Errorf("%s：in_stock=%v，期望 %v", c.what, *c.got, c.want)
 		}
 	}
+}
+
+// 商品列表有货在前（2026-09-27，00087 product_store_stock）。
+//
+// 夹具里衬衫比连衣裙晚建，默认顺序是衬衫在前。
+//
+//  ① 后台把北京门店的衬衫清零（后台改库存那条会立刻刷标记）：北京列表连衣裙在前、衬衫在后；
+//     广州不受影响，衬衫仍在前 —— 证明排序按门店。
+//  ② 绕过后台，用下单 SAGA 的库存分支把北京门店的连衣裙扣到 0（这条路 core 不逐笔知道水位），
+//     全量刷新一轮之后两件都无货，回到默认顺序；再补回衬衫库存，衬衫排回前面。
+func TestProductListPutsInStockFirst(t *testing.T) {
+	cs := newCouponShop(t)
+	order := func(storeID int64) []int64 {
+		var out struct {
+			Items []api.ProductSummary `json:"items"`
+		}
+		decodeInto(t, getAs(t, cs.Host, fmt.Sprintf("/api/v1/products?store_id=%d", storeID), ""),
+			http.StatusOK, "商品列表", &out)
+		var ids []int64
+		for _, it := range out.Items {
+			if it.Id == cs.DressProduct || it.Id == cs.ShirtProduct {
+				ids = append(ids, it.Id)
+			}
+		}
+		return ids
+	}
+	want := func(what string, got []int64, first, second int64) {
+		t.Helper()
+		if len(got) != 2 || got[0] != first || got[1] != second {
+			t.Fatalf("%s：顺序是 %v，期望 [%d %d]（连衣裙 %d，衬衫 %d）", what, got, first, second,
+				cs.DressProduct, cs.ShirtProduct)
+		}
+	}
+	want("初始（都有货）", order(cs.NorthStore), cs.ShirtProduct, cs.DressProduct)
+
+	setStoreStock(t, cs.adminShop, cs.NorthStore, cs.ShirtSKU, 0)
+	want("北京衬衫清零后", order(cs.NorthStore), cs.DressProduct, cs.ShirtProduct)
+	want("广州不受影响", order(cs.SouthStore), cs.ShirtProduct, cs.DressProduct)
+
+	deductViaSaga(t, cs.MerchantID, cs.NorthStore, cs.DressSKU, int32(availableAt(t, cs.NorthStore, cs.DressSKU)))
+	job := service.NewStockFlagService(repository.New(testPool), localInventory(), 0, nil)
+	if err := job.RefreshOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	want("下单扣光连衣裙 + 全量刷新后（两件都无货）", order(cs.NorthStore), cs.ShirtProduct, cs.DressProduct)
+
+	setStoreStock(t, cs.adminShop, cs.NorthStore, cs.ShirtSKU, 5)
+	want("补回衬衫后", order(cs.NorthStore), cs.ShirtProduct, cs.DressProduct)
 }
