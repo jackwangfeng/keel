@@ -53,7 +53,7 @@ type AgentProposal struct {
 	MerchantID     int64
 	AgentStaffID   int64
 	Kind           string
-	StoreID        int64
+	StoreID        *int64
 	SkuID          *int64
 	Payload        []byte
 	Title          string
@@ -67,6 +67,7 @@ type AgentProposal struct {
 	ExpiresAt      pgtype.Timestamptz
 	CreatedAt      pgtype.Timestamptz
 	UpdatedAt      pgtype.Timestamptz
+	TargetKey      string
 }
 
 // AI 员工的 MCP 工具调用审计（00093，AI 经营 M9）。

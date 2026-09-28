@@ -890,12 +890,13 @@ export type AgentProposal = {
   id : number
   agent_staff_id : number
   agent_name : string
-  /** M9 只有加库存一种 */
+  /** `inventory_adjust` 加库存（M9）；M10：`flash_price` 限时折扣、`coupon` 发券、`product_copy` 改标题 / 副标题、 */
   kind : string
-  store_id : number
-  store_name : string
+  /** 门店类提案（加库存、售后审核）才有 */
+  store_id? : number
+  store_name? : string
   sku_id? : number
-  /** 执行参数。inventory_adjust 是 {store_id, sku_id, delta, reason} */
+  /** 执行参数，按 kind：`inventory_adjust` {store_id, sku_id, delta, reason}； */
   payload : UTSJSONObject
   /** 一句话，如「北京门店：颜色：黑 / 尺码：M 补 40 件」 */
   title : string
@@ -908,7 +909,7 @@ export type AgentProposal = {
   decided_by_name? : string
   decided_at? : string
   reject_reason? : string
-  /** 执行结果：{before_available, after_available} 或 {error_type, error} */
+  /** 执行结果：加库存 {before_available, after_available}；M10 各种提案 {detail: {promotion_id | coupon_template_id | */
   result? : UTSJSONObject
   expires_at : string
   created_at : string

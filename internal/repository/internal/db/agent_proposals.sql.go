@@ -37,16 +37,23 @@ SELECT count(*) FROM agent_proposals p
  WHERE ($1::smallint IS NULL OR p.status = $1::smallint)
    AND ($2::bigint IS NULL OR p.agent_staff_id = $2::bigint)
    AND ($3::bigint[] IS NULL OR p.store_id = ANY($3::bigint[]))
+   AND ($4::text IS NULL OR p.kind = $4::text)
 `
 
 type CountAgentProposalsParams struct {
 	Status       *int16
 	AgentStaffID *int64
 	StoreIds     []int64
+	Kind         *string
 }
 
 func (q *Queries) CountAgentProposals(ctx context.Context, arg CountAgentProposalsParams) (int64, error) {
-	row := q.db.QueryRow(ctx, countAgentProposals, arg.Status, arg.AgentStaffID, arg.StoreIds)
+	row := q.db.QueryRow(ctx, countAgentProposals,
+		arg.Status,
+		arg.AgentStaffID,
+		arg.StoreIds,
+		arg.Kind,
+	)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -91,7 +98,7 @@ SELECT p.id, p.agent_staff_id, p.kind, p.store_id, p.sku_id, p.payload, p.title,
        a.name AS agent_name, st.name AS store_name, d.name AS decided_by_name
   FROM agent_proposals p
   JOIN staff a ON a.id = p.agent_staff_id
-  JOIN stores st ON st.id = p.store_id
+  LEFT JOIN stores st ON st.id = p.store_id
   LEFT JOIN staff d ON d.id = p.decided_by
  WHERE p.id = $1
 `
@@ -100,7 +107,7 @@ type GetAgentProposalRow struct {
 	ID             int64
 	AgentStaffID   int64
 	Kind           string
-	StoreID        int64
+	StoreID        *int64
 	SkuID          *int64
 	Payload        []byte
 	Title          string
@@ -115,7 +122,7 @@ type GetAgentProposalRow struct {
 	CreatedAt      pgtype.Timestamptz
 	UpdatedAt      pgtype.Timestamptz
 	AgentName      string
-	StoreName      string
+	StoreName      *string
 	DecidedByName  *string
 }
 
@@ -149,16 +156,18 @@ func (q *Queries) GetAgentProposal(ctx context.Context, id int64) (GetAgentPropo
 
 const insertAgentProposal = `-- name: InsertAgentProposal :one
 
-INSERT INTO agent_proposals (agent_staff_id, kind, store_id, sku_id, payload, title, evidence, expected_impact, expires_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+INSERT INTO agent_proposals (agent_staff_id, kind, store_id, sku_id, target_key, payload, title, evidence,
+                             expected_impact, expires_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 RETURNING id
 `
 
 type InsertAgentProposalParams struct {
 	AgentStaffID   int64
 	Kind           string
-	StoreID        int64
+	StoreID        *int64
 	SkuID          *int64
+	TargetKey      string
 	Payload        []byte
 	Title          string
 	Evidence       string
@@ -173,6 +182,7 @@ func (q *Queries) InsertAgentProposal(ctx context.Context, arg InsertAgentPropos
 		arg.Kind,
 		arg.StoreID,
 		arg.SkuID,
+		arg.TargetKey,
 		arg.Payload,
 		arg.Title,
 		arg.Evidence,
@@ -190,19 +200,21 @@ SELECT p.id, p.agent_staff_id, p.kind, p.store_id, p.sku_id, p.payload, p.title,
        a.name AS agent_name, st.name AS store_name, d.name AS decided_by_name
   FROM agent_proposals p
   JOIN staff a ON a.id = p.agent_staff_id
-  JOIN stores st ON st.id = p.store_id
+  LEFT JOIN stores st ON st.id = p.store_id
   LEFT JOIN staff d ON d.id = p.decided_by
  WHERE ($1::smallint IS NULL OR p.status = $1::smallint)
    AND ($2::bigint IS NULL OR p.agent_staff_id = $2::bigint)
    AND ($3::bigint[] IS NULL OR p.store_id = ANY($3::bigint[]))
+   AND ($4::text IS NULL OR p.kind = $4::text)
  ORDER BY (p.status IN (10, 15)) DESC, p.created_at DESC, p.id DESC
- LIMIT $5 OFFSET $4
+ LIMIT $6 OFFSET $5
 `
 
 type ListAgentProposalsParams struct {
 	Status       *int16
 	AgentStaffID *int64
 	StoreIds     []int64
+	Kind         *string
 	PageOffset   int32
 	PageLimit    int32
 }
@@ -211,7 +223,7 @@ type ListAgentProposalsRow struct {
 	ID             int64
 	AgentStaffID   int64
 	Kind           string
-	StoreID        int64
+	StoreID        *int64
 	SkuID          *int64
 	Payload        []byte
 	Title          string
@@ -226,16 +238,18 @@ type ListAgentProposalsRow struct {
 	CreatedAt      pgtype.Timestamptz
 	UpdatedAt      pgtype.Timestamptz
 	AgentName      string
-	StoreName      string
+	StoreName      *string
 	DecidedByName  *string
 }
 
-// 后台列表：按状态（空 = 全部）、门店范围（store_ids 为 NULL = 不收窄）筛；待处理的在前，新的在前。
+// 后台列表：按状态（空 = 全部）、门店范围（store_ids 为 NULL = 不收窄；收窄时全店类提案一律不出现 ——
+// 门店范围的人批不了它们）、种类筛；待处理的在前，新的在前。
 func (q *Queries) ListAgentProposals(ctx context.Context, arg ListAgentProposalsParams) ([]ListAgentProposalsRow, error) {
 	rows, err := q.db.Query(ctx, listAgentProposals,
 		arg.Status,
 		arg.AgentStaffID,
 		arg.StoreIds,
+		arg.Kind,
 		arg.PageOffset,
 		arg.PageLimit,
 	)
@@ -280,18 +294,17 @@ func (q *Queries) ListAgentProposals(ctx context.Context, arg ListAgentProposals
 
 const openAgentProposalFor = `-- name: OpenAgentProposalFor :one
 SELECT id FROM agent_proposals
- WHERE kind = $1 AND store_id = $2 AND sku_id IS NOT DISTINCT FROM $3 AND status IN (10, 15)
+ WHERE kind = $1 AND target_key = $2 AND status IN (10, 15)
 `
 
 type OpenAgentProposalForParams struct {
-	Kind    string
-	StoreID int64
-	SkuID   *int64
+	Kind      string
+	TargetKey string
 }
 
-// 同一个（kind，门店，SKU）现在那条待处理 / 执行中的提案（重复提案时告诉 agent 是哪一条）。
+// 同一个（kind，作用对象）现在那条待处理 / 执行中的提案（重复提案时告诉 agent 是哪一条）。
 func (q *Queries) OpenAgentProposalFor(ctx context.Context, arg OpenAgentProposalForParams) (int64, error) {
-	row := q.db.QueryRow(ctx, openAgentProposalFor, arg.Kind, arg.StoreID, arg.SkuID)
+	row := q.db.QueryRow(ctx, openAgentProposalFor, arg.Kind, arg.TargetKey)
 	var id int64
 	err := row.Scan(&id)
 	return id, err

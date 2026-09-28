@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/keel/keel/internal/problem"
 )
@@ -54,12 +55,20 @@ func TestMCPEveryToolReturnsItsDeclaredShape(t *testing.T) {
 		{"list_products", map[string]any{}},
 		{"get_product", map[string]any{"product_id": cs.DressProduct}},
 		{"list_refunds", map[string]any{}},
+		{"propose_flash_price", map[string]any{"name": "清仓", "items": []map[string]any{{"sku_id": cs.ShirtSKU, "discount_rate": 900}},
+			"starts_at": time.Now().Add(time.Minute).UTC().Format(time.RFC3339),
+			"ends_at":   time.Now().Add(48 * time.Hour).UTC().Format(time.RFC3339), "evidence": "slow_movers：周转 120 天"}},
+		{"propose_coupon", map[string]any{"name": "新券", "coupon_type": 3, "discount_cents": 300, "valid_days": 7,
+			"total_count": 10, "per_user_limit": 1, "evidence": "promotion_review：上次券核销率 40%"}},
+		{"propose_product_copy", map[string]any{"product_id": cs.ShirtProduct, "subtitle": "纯棉透气",
+			"evidence": "search_insights：「纯棉」近 7 天 30 次低点击"}},
 	}
 	tools, err := sess.ListTools(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tools.Tools) != len(calls) {
+	// propose_refund_decision 要一张待审核的售后单，另在 agent_proposal_kinds_test.go 里调；这里只算数。
+	if len(tools.Tools) != len(calls)+1 {
 		t.Fatalf("工具清单有 %d 个，这条测试调了 %d 个 —— 新工具要加进来", len(tools.Tools), len(calls))
 	}
 	for _, c := range calls {

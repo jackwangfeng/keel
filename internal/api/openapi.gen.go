@@ -401,13 +401,25 @@ func (e AgentCreateRequestRole) Valid() bool {
 
 // Defines values for AgentProposalKind.
 const (
-	InventoryAdjust AgentProposalKind = "inventory_adjust"
+	AgentProposalKindCoupon          AgentProposalKind = "coupon"
+	AgentProposalKindFlashPrice      AgentProposalKind = "flash_price"
+	AgentProposalKindInventoryAdjust AgentProposalKind = "inventory_adjust"
+	AgentProposalKindProductCopy     AgentProposalKind = "product_copy"
+	AgentProposalKindRefundDecision  AgentProposalKind = "refund_decision"
 )
 
 // Valid indicates whether the value is a known member of the AgentProposalKind enum.
 func (e AgentProposalKind) Valid() bool {
 	switch e {
-	case InventoryAdjust:
+	case AgentProposalKindCoupon:
+		return true
+	case AgentProposalKindFlashPrice:
+		return true
+	case AgentProposalKindInventoryAdjust:
+		return true
+	case AgentProposalKindProductCopy:
+		return true
+	case AgentProposalKindRefundDecision:
 		return true
 	default:
 		return false
@@ -1941,6 +1953,33 @@ func (e GetAdminAgentProposalsParamsStatus) Valid() bool {
 	case GetAdminAgentProposalsParamsStatusN40:
 		return true
 	case GetAdminAgentProposalsParamsStatusN50:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GetAdminAgentProposalsParamsKind.
+const (
+	GetAdminAgentProposalsParamsKindCoupon          GetAdminAgentProposalsParamsKind = "coupon"
+	GetAdminAgentProposalsParamsKindFlashPrice      GetAdminAgentProposalsParamsKind = "flash_price"
+	GetAdminAgentProposalsParamsKindInventoryAdjust GetAdminAgentProposalsParamsKind = "inventory_adjust"
+	GetAdminAgentProposalsParamsKindProductCopy     GetAdminAgentProposalsParamsKind = "product_copy"
+	GetAdminAgentProposalsParamsKindRefundDecision  GetAdminAgentProposalsParamsKind = "refund_decision"
+)
+
+// Valid indicates whether the value is a known member of the GetAdminAgentProposalsParamsKind enum.
+func (e GetAdminAgentProposalsParamsKind) Valid() bool {
+	switch e {
+	case GetAdminAgentProposalsParamsKindCoupon:
+		return true
+	case GetAdminAgentProposalsParamsKindFlashPrice:
+		return true
+	case GetAdminAgentProposalsParamsKindInventoryAdjust:
+		return true
+	case GetAdminAgentProposalsParamsKindProductCopy:
+		return true
+	case GetAdminAgentProposalsParamsKindRefundDecision:
 		return true
 	default:
 		return false
@@ -3509,28 +3548,37 @@ type AgentProposal struct {
 	ExpiresAt      time.Time `json:"expires_at"`
 	Id             int64     `json:"id"`
 
-	// Kind M9 只有加库存一种
+	// Kind `inventory_adjust` 加库存（M9）；M10：`flash_price` 限时折扣、`coupon` 发券、`product_copy` 改标题 / 副标题、
+	// `refund_decision` 售后审核（同意 / 驳回）。营销与商品类是全店的（没有 `store_id`），批准要全店范围
 	Kind AgentProposalKind `json:"kind"`
 
-	// Payload 执行参数。inventory_adjust 是 {store_id, sku_id, delta, reason}
+	// Payload 执行参数，按 kind：`inventory_adjust` {store_id, sku_id, delta, reason}；
+	// `flash_price` {name, store_id?, items: [{sku_id, discount_rate}], starts_at, ends_at}；
+	// `coupon` {name, coupon_type, threshold_cents, discount_cents, discount_rate, max_discount_cents,
+	// valid_days, total_count, per_user_limit, claimable}；`product_copy` {product_id, title?, subtitle?,
+	// before_title, before_subtitle?}；`refund_decision` {refund_no, action, reject_reason?, amount_cents}
 	Payload      map[string]interface{} `json:"payload"`
 	RejectReason *string                `json:"reject_reason,omitempty"`
 
-	// Result 执行结果：{before_available, after_available} 或 {error_type, error}
+	// Result 执行结果：加库存 {before_available, after_available}；M10 各种提案 {detail: {promotion_id | coupon_template_id |
+	// before_title/after_title | refund_status …}}；失败 {error_type, error}
 	Result *map[string]interface{} `json:"result,omitempty"`
 	SkuId  *int64                  `json:"sku_id,omitempty"`
 
 	// Status 10 待处理 / 15 执行中 / 20 已执行 / 30 已驳回 / 40 执行失败 / 50 已过期
-	Status    AgentProposalStatus `json:"status"`
-	StoreId   int64               `json:"store_id"`
-	StoreName string              `json:"store_name"`
+	Status AgentProposalStatus `json:"status"`
+
+	// StoreId 门店类提案（加库存、售后审核）才有
+	StoreId   *int64  `json:"store_id,omitempty"`
+	StoreName *string `json:"store_name,omitempty"`
 
 	// Title 一句话，如「北京门店：颜色：黑 / 尺码：M 补 40 件」
 	Title     string    `json:"title"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
-// AgentProposalKind M9 只有加库存一种
+// AgentProposalKind `inventory_adjust` 加库存（M9）；M10：`flash_price` 限时折扣、`coupon` 发券、`product_copy` 改标题 / 副标题、
+// `refund_decision` 售后审核（同意 / 驳回）。营销与商品类是全店的（没有 `store_id`），批准要全店范围
 type AgentProposalKind string
 
 // AgentProposalStatus 10 待处理 / 15 执行中 / 20 已执行 / 30 已驳回 / 40 执行失败 / 50 已过期
@@ -7185,9 +7233,12 @@ type GetAdminAgentProposalsParams struct {
 	Status *GetAdminAgentProposalsParamsStatus `form:"status,omitempty" json:"status,omitempty"`
 
 	// AgentStaffId 只看这名 AI 员工提的
-	AgentStaffId *int64    `form:"agent_staff_id,omitempty" json:"agent_staff_id,omitempty"`
-	Page         *Page     `form:"page,omitempty" json:"page,omitempty"`
-	PageSize     *PageSize `form:"page_size,omitempty" json:"page_size,omitempty"`
+	AgentStaffId *int64 `form:"agent_staff_id,omitempty" json:"agent_staff_id,omitempty"`
+
+	// Kind 只看这一种提案
+	Kind     *GetAdminAgentProposalsParamsKind `form:"kind,omitempty" json:"kind,omitempty"`
+	Page     *Page                             `form:"page,omitempty" json:"page,omitempty"`
+	PageSize *PageSize                         `form:"page_size,omitempty" json:"page_size,omitempty"`
 
 	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
 	//
@@ -7216,6 +7267,9 @@ type GetAdminAgentProposalsParams struct {
 
 // GetAdminAgentProposalsParamsStatus defines parameters for GetAdminAgentProposals.
 type GetAdminAgentProposalsParamsStatus int
+
+// GetAdminAgentProposalsParamsKind defines parameters for GetAdminAgentProposals.
+type GetAdminAgentProposalsParamsKind string
 
 // GetAdminAgentProposalsProposalIdParams defines parameters for GetAdminAgentProposalsProposalId.
 type GetAdminAgentProposalsProposalIdParams struct {

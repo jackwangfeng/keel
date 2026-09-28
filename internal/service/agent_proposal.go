@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strconv"
 	"strings"
 	"time"
 
@@ -23,7 +22,7 @@ import (
 // 人可能已经把它停用）。执行复用后台接口同一个函数（adjustInventory），幂等键固定为提案 id ——
 // 「执行成功但结果没写回」时再点一次批准，库存也只加一次。
 //
-// M9 只有一种提案：inventory_adjust（加库存）。
+// M9 只有一种提案：inventory_adjust（加库存）；M10 加了四种（agent_proposal_kinds.go）。
 
 const (
 	ProposalKindInventoryAdjust = "inventory_adjust"
@@ -57,6 +56,9 @@ type InventoryAdjustPayload struct {
 type ProposalResult struct {
 	BeforeAvailable *int32 `json:"before_available,omitempty"`
 	AfterAvailable  *int32 `json:"after_available,omitempty"`
+	// Detail 是 M10 各种提案的执行结果：flash_price → promotion_id；coupon → coupon_template_id；
+	// product_copy → before / after 的标题；refund_decision → refund 的新状态。
+	Detail map[string]any `json:"detail,omitempty"`
 	ErrorType       string `json:"error_type,omitempty"`
 	Error           string `json:"error,omitempty"`
 }
@@ -77,6 +79,17 @@ type AgentProposalService struct {
 	inv    inventory.Service
 	stores *AdminStoreService
 	log    *slog.Logger
+	// M10 各种提案的执行者（SetExecutors）：批准后以 AI 员工身份调它们，判权与校验与后台接口逐字相同。
+	promos  *AdminPromotionService
+	coupons *AdminCouponService
+	catalog *AdminCatalogService
+	refunds *RefundService
+}
+
+// SetExecutors 接上 M10 提案的执行者（装配时调用；没接上的种类提得出、批准时执行失败并说明原因）。
+func (s *AgentProposalService) SetExecutors(promos *AdminPromotionService, coupons *AdminCouponService,
+	catalog *AdminCatalogService, refunds *RefundService) {
+	s.promos, s.coupons, s.catalog, s.refunds = promos, coupons, catalog, refunds
 }
 
 func NewAgentProposalService(repo tenantRunner, inv inventory.Service, stores *AdminStoreService,
@@ -155,28 +168,47 @@ func (s *AgentProposalService) ProposeInventoryAdjust(ctx context.Context, in Pr
 		// 标题要让店长一眼认出是哪件货：商品名 + 规格（只写规格的话，「尺码：M」认不出是哪件衣服）。
 		title := fmt.Sprintf("%s：%s（%s）补 %d 件", st.Name, prod.Title, skuLabel(sku.SKUCode, string(sku.SpecValues)),
 			in.Delta)
-		skuID := in.SKUID
-		// 先查一次已有的待处理提案，好告诉 agent 是哪一条。插入撞唯一索引会让整个事务失效（之后什么都查不了），
-		// 所以不能「先插、撞了再查」；插入时仍可能撞上（两个请求并发），那时只能回一句不带编号的。
-		if open, err := tx.OpenAgentProposalFor(ctx, ProposalKindInventoryAdjust, in.StoreID, &skuID); err == nil {
-			return fmt.Errorf("%w：#%d（门店 %d、SKU %d）还没处理，不要重复提", ErrProposalDuplicate, open, in.StoreID, in.SKUID)
-		} else if !errors.Is(err, repository.ErrProposalNotFound) {
-			return err
-		}
-		pid, err := tx.InsertAgentProposal(ctx, repository.NewAgentProposal{AgentStaffID: id.StaffID,
-			Kind: ProposalKindInventoryAdjust, StoreID: in.StoreID, SKUID: &skuID, Payload: payload, Title: title,
-			Evidence: strings.TrimSpace(in.Evidence), ExpectedImpact: strings.TrimSpace(in.ExpectedImpact),
-			ExpiresAt: time.Now().Add(proposalTTL)})
-		if errors.Is(err, repository.ErrProposalDuplicate) {
-			return fmt.Errorf("%w（门店 %d、SKU %d）", ErrProposalDuplicate, in.StoreID, in.SKUID)
-		}
-		if err != nil {
-			return err
-		}
-		out, err = tx.FindAgentProposal(ctx, pid)
+		skuID, storeID := in.SKUID, in.StoreID
+		out, err = insertProposal(ctx, tx, repository.NewAgentProposal{AgentStaffID: id.StaffID,
+			Kind: ProposalKindInventoryAdjust, StoreID: &storeID, SKUID: &skuID,
+			TargetKey: fmt.Sprintf("store:%d:sku:%d", in.StoreID, in.SKUID), Payload: payload, Title: title,
+			Evidence: strings.TrimSpace(in.Evidence), ExpectedImpact: strings.TrimSpace(in.ExpectedImpact)})
 		return err
 	})
 	return out, mapProposalErr(err)
+}
+
+// insertProposal 写一条提案并读回：先查同一个（kind，作用对象）有没有待处理的，好告诉 agent 是哪一条 ——
+// 插入撞唯一索引会让整个事务失效（之后什么都查不了），所以不能「先插、撞了再查」；插入时仍可能撞上
+// （两个请求并发），那时只能回一句不带编号的。ExpiresAt 为零值时取 proposalTTL。
+func insertProposal(ctx context.Context, tx repository.Tx, n repository.NewAgentProposal) (repository.AgentProposal, error) {
+	if open, err := tx.OpenAgentProposalFor(ctx, n.Kind, n.TargetKey); err == nil {
+		return repository.AgentProposal{}, fmt.Errorf("%w：#%d（%s）还没处理，不要重复提", ErrProposalDuplicate, open, n.TargetKey)
+	} else if !errors.Is(err, repository.ErrProposalNotFound) {
+		return repository.AgentProposal{}, err
+	}
+	if n.ExpiresAt.IsZero() {
+		n.ExpiresAt = time.Now().Add(proposalTTL)
+	}
+	pid, err := tx.InsertAgentProposal(ctx, n)
+	if errors.Is(err, repository.ErrProposalDuplicate) {
+		return repository.AgentProposal{}, fmt.Errorf("%w（%s）", ErrProposalDuplicate, n.TargetKey)
+	}
+	if err != nil {
+		return repository.AgentProposal{}, err
+	}
+	return tx.FindAgentProposal(ctx, pid)
+}
+
+// authorizeProposal：看 / 批 / 驳一条提案的人对它要有权 —— 门店类按门店（storeOperate），
+// 全店类（营销、商品）要全店范围。
+func authorizeProposal(ctx context.Context, tx repository.Tx, p repository.AgentProposal) error {
+	if p.StoreID != nil {
+		_, err := authorizeStore(ctx, tx, *p.StoreID, storeOperate)
+		return err
+	}
+	_, err := requireMerchantWide(ctx)
+	return err
 }
 
 // ProposalPage 是一页提案。
@@ -201,12 +233,13 @@ func (s *AgentProposalService) ListMine(ctx context.Context, status *int16, page
 }
 
 // List 实现 GET /admin/agent-proposals：按人的管辖范围收窄到它管的门店（与门店列表同一个收窄）。
-func (s *AgentProposalService) List(ctx context.Context, status, agentStaffID *int64, page, pageSize int) (ProposalPage, error) {
+func (s *AgentProposalService) List(ctx context.Context, status, agentStaffID *int64, kind *string,
+	page, pageSize int) (ProposalPage, error) {
 	id, err := requireStaff(ctx)
 	if err != nil {
 		return ProposalPage{}, err
 	}
-	f := repository.ProposalFilter{AgentStaffID: agentStaffID}
+	f := repository.ProposalFilter{AgentStaffID: agentStaffID, Kind: kind}
 	if status != nil {
 		st := int16(*status)
 		f.Status = &st
@@ -252,7 +285,7 @@ func (s *AgentProposalService) Get(ctx context.Context, proposalID int64) (repos
 		if err != nil {
 			return err
 		}
-		if _, err := authorizeStore(ctx, tx, p.StoreID, storeOperate); err != nil {
+		if err := authorizeProposal(ctx, tx, p); err != nil {
 			return err
 		}
 		out = p
@@ -282,7 +315,7 @@ func (s *AgentProposalService) Approve(ctx context.Context, proposalID int64) (r
 		if p, err = tx.FindAgentProposal(ctx, proposalID); err != nil {
 			return err
 		}
-		if _, err := authorizeStore(ctx, tx, p.StoreID, storeOperate); err != nil {
+		if err := authorizeProposal(ctx, tx, p); err != nil {
 			return err
 		}
 		if err := tx.ClaimAgentProposal(ctx, proposalID, id.StaffID); err != nil {
@@ -313,24 +346,16 @@ func (s *AgentProposalService) Approve(ctx context.Context, proposalID int64) (r
 		status, result = repository.ProposalFailed, ProposalResult{ErrorType: "agent-disabled",
 			Error: "提这条提案的 AI 员工已被停用或删除，不以它的身份执行"}
 	} else {
-		var pl InventoryAdjustPayload
-		if err := json.Unmarshal(p.Payload, &pl); err != nil {
-			return repository.AgentProposal{}, err
-		}
-		reason := "AI 提案 #" + strconv.FormatInt(p.ID, 10) + "：" + pl.Reason
-		after, _, err := adjustInventory(auth.NewStaffContext(ctx, agentID), s.repo, s.inv, pl.StoreID, pl.SKUID,
-			InventoryAdjustInput{Delta: pl.Delta, Reason: &reason}, "agent-proposal-"+strconv.FormatInt(p.ID, 10))
+		res, err := s.execute(auth.NewStaffContext(ctx, agentID), p)
 		if err != nil {
-			// 业务规则拒绝（范围、可售、库存服务 4xx）记成执行失败；基础设施错误（库存服务不在、库挂了）原样上抛，
-			// 提案停在 15，稍后再点批准会以同一个幂等键重试。
+			// 业务规则拒绝（范围、可售、库存服务 4xx、活动 / 券 / 商品的校验）记成执行失败；基础设施错误
+			// （库存服务不在、库挂了）原样上抛，提案停在 15，稍后再点批准会以同一个幂等键重试。
 			if isInfraError(err) {
 				return repository.AgentProposal{}, err
 			}
 			status, result = repository.ProposalFailed, ProposalResult{ErrorType: proposalErrorType(err), Error: err.Error()}
 		} else {
-			before := after.AvailableQty - pl.Delta
-			a := after.AvailableQty
-			result = ProposalResult{BeforeAvailable: &before, AfterAvailable: &a}
+			result = res
 		}
 	}
 	raw, err := json.Marshal(result)
@@ -399,7 +424,7 @@ func (s *AgentProposalService) Reject(ctx context.Context, proposalID int64, rea
 		if err != nil {
 			return err
 		}
-		if _, err := authorizeStore(ctx, tx, p.StoreID, storeOperate); err != nil {
+		if err := authorizeProposal(ctx, tx, p); err != nil {
 			return err
 		}
 		if err := tx.RejectAgentProposal(ctx, proposalID, id.StaffID, strings.TrimSpace(reason)); err != nil {

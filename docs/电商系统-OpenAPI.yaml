@@ -685,6 +685,10 @@ paths:
           in: query
           schema: { type: integer, format: int64 }
           description: 只看这名 AI 员工提的
+        - name: kind
+          in: query
+          schema: { type: string, enum: [inventory_adjust, flash_price, coupon, product_copy, refund_decision] }
+          description: 只看这一种提案
         - $ref: '#/components/parameters/Page'
         - $ref: '#/components/parameters/PageSize'
       responses:
@@ -9801,20 +9805,30 @@ components:
 
     AgentProposal:
       type: object
-      required: [id, agent_staff_id, agent_name, kind, store_id, store_name, payload, title, evidence,
+      required: [id, agent_staff_id, agent_name, kind, payload, title, evidence,
                  expected_impact, status, expires_at, created_at, updated_at]
       properties:
         id:             { type: integer, format: int64 }
         agent_staff_id: { type: integer, format: int64 }
         agent_name:     { type: string }
-        kind:           { type: string, enum: [inventory_adjust], description: M9 只有加库存一种 }
-        store_id:       { type: integer, format: int64 }
+        kind:
+          type: string
+          enum: [inventory_adjust, flash_price, coupon, product_copy, refund_decision]
+          description: |
+            `inventory_adjust` 加库存（M9）；M10：`flash_price` 限时折扣、`coupon` 发券、`product_copy` 改标题 / 副标题、
+            `refund_decision` 售后审核（同意 / 驳回）。营销与商品类是全店的（没有 `store_id`），批准要全店范围
+        store_id:       { type: integer, format: int64, description: 门店类提案（加库存、售后审核）才有 }
         store_name:     { type: string }
         sku_id:         { type: integer, format: int64 }
         payload:
           type: object
           additionalProperties: true
-          description: 执行参数。inventory_adjust 是 {store_id, sku_id, delta, reason}
+          description: |
+            执行参数，按 kind：`inventory_adjust` {store_id, sku_id, delta, reason}；
+            `flash_price` {name, store_id?, items: [{sku_id, discount_rate}], starts_at, ends_at}；
+            `coupon` {name, coupon_type, threshold_cents, discount_cents, discount_rate, max_discount_cents,
+            valid_days, total_count, per_user_limit, claimable}；`product_copy` {product_id, title?, subtitle?,
+            before_title, before_subtitle?}；`refund_decision` {refund_no, action, reject_reason?, amount_cents}
         title:           { type: string, description: 一句话，如「北京门店：颜色：黑 / 尺码：M 补 40 件」 }
         evidence:        { type: string, description: AI 员工写的证据（markdown，按不可信输入渲染） }
         expected_impact: { type: string }
@@ -9829,7 +9843,9 @@ components:
         result:
           type: object
           additionalProperties: true
-          description: 执行结果：{before_available, after_available} 或 {error_type, error}
+          description: |
+            执行结果：加库存 {before_available, after_available}；M10 各种提案 {detail: {promotion_id | coupon_template_id |
+            before_title/after_title | refund_status …}}；失败 {error_type, error}
         expires_at: { type: string, format: date-time }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }

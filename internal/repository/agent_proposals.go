@@ -38,8 +38,8 @@ type AgentProposal struct {
 	AgentStaffID   int64
 	AgentName      string
 	Kind           string
-	StoreID        int64
-	StoreName      string
+	StoreID        *int64 // 全店类提案（营销、商品）为 nil（00120）
+	StoreName      *string
 	SKUID          *int64
 	Payload        []byte
 	Title          string
@@ -60,8 +60,9 @@ type AgentProposal struct {
 type NewAgentProposal struct {
 	AgentStaffID   int64
 	Kind           string
-	StoreID        int64
+	StoreID        *int64
 	SKUID          *int64
+	TargetKey      string // 作用对象（去重键，00120）
 	Payload        []byte
 	Title          string
 	Evidence       string
@@ -74,13 +75,14 @@ type ProposalFilter struct {
 	Status       *int16
 	AgentStaffID *int64
 	StoreIDs     []int64
+	Kind         *string
 }
 
 // AgentProposalTx 是提案那一面。
 type AgentProposalTx interface {
 	InsertAgentProposal(ctx context.Context, p NewAgentProposal) (int64, error)
 	FindAgentProposal(ctx context.Context, id int64) (AgentProposal, error)
-	OpenAgentProposalFor(ctx context.Context, kind string, storeID int64, skuID *int64) (int64, error)
+	OpenAgentProposalFor(ctx context.Context, kind, targetKey string) (int64, error)
 	ListAgentProposals(ctx context.Context, f ProposalFilter, limit, offset int32) ([]AgentProposal, int64, error)
 	ClaimAgentProposal(ctx context.Context, id, decidedBy int64) error
 	FinishAgentProposal(ctx context.Context, id int64, status int16, result []byte) error
@@ -92,7 +94,7 @@ const proposalOpenIndex = "uk_agent_proposals_open"
 
 func (t tenantTx) InsertAgentProposal(ctx context.Context, p NewAgentProposal) (int64, error) {
 	id, err := t.q.InsertAgentProposal(ctx, db.InsertAgentProposalParams{AgentStaffID: p.AgentStaffID, Kind: p.Kind,
-		StoreID: p.StoreID, SkuID: p.SKUID, Payload: p.Payload, Title: p.Title, Evidence: p.Evidence,
+		StoreID: p.StoreID, SkuID: p.SKUID, TargetKey: p.TargetKey, Payload: p.Payload, Title: p.Title, Evidence: p.Evidence,
 		ExpectedImpact: p.ExpectedImpact, ExpiresAt: pgtype.Timestamptz{Time: p.ExpiresAt, Valid: true}})
 	if isUniqueViolation(err, proposalOpenIndex) {
 		return 0, ErrProposalDuplicate
@@ -100,7 +102,7 @@ func (t tenantTx) InsertAgentProposal(ctx context.Context, p NewAgentProposal) (
 	return id, err
 }
 
-func proposalOf(id, agentID int64, agentName, kind string, storeID int64, storeName string, skuID *int64,
+func proposalOf(id, agentID int64, agentName, kind string, storeID *int64, storeName *string, skuID *int64,
 	payload []byte, title, evidence, impact string, status int16, decidedBy *int64, decidedByName *string,
 	decidedAt pgtype.Timestamptz, reject *string, result []byte, expires, created, updated pgtype.Timestamptz) AgentProposal {
 	return AgentProposal{ID: id, AgentStaffID: agentID, AgentName: agentName, Kind: kind, StoreID: storeID,
@@ -122,8 +124,8 @@ func (t tenantTx) FindAgentProposal(ctx context.Context, id int64) (AgentProposa
 		r.ExpiresAt, r.CreatedAt, r.UpdatedAt), nil
 }
 
-func (t tenantTx) OpenAgentProposalFor(ctx context.Context, kind string, storeID int64, skuID *int64) (int64, error) {
-	id, err := t.q.OpenAgentProposalFor(ctx, db.OpenAgentProposalForParams{Kind: kind, StoreID: storeID, SkuID: skuID})
+func (t tenantTx) OpenAgentProposalFor(ctx context.Context, kind, targetKey string) (int64, error) {
+	id, err := t.q.OpenAgentProposalFor(ctx, db.OpenAgentProposalForParams{Kind: kind, TargetKey: targetKey})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return 0, ErrProposalNotFound
 	}
@@ -132,12 +134,12 @@ func (t tenantTx) OpenAgentProposalFor(ctx context.Context, kind string, storeID
 
 func (t tenantTx) ListAgentProposals(ctx context.Context, f ProposalFilter, limit, offset int32) ([]AgentProposal, int64, error) {
 	rows, err := t.q.ListAgentProposals(ctx, db.ListAgentProposalsParams{Status: f.Status, AgentStaffID: f.AgentStaffID,
-		StoreIds: f.StoreIDs, PageLimit: limit, PageOffset: offset})
+		StoreIds: f.StoreIDs, Kind: f.Kind, PageLimit: limit, PageOffset: offset})
 	if err != nil {
 		return nil, 0, err
 	}
 	total, err := t.q.CountAgentProposals(ctx, db.CountAgentProposalsParams{Status: f.Status,
-		AgentStaffID: f.AgentStaffID, StoreIds: f.StoreIDs})
+		AgentStaffID: f.AgentStaffID, StoreIds: f.StoreIDs, Kind: f.Kind})
 	if err != nil {
 		return nil, 0, err
 	}

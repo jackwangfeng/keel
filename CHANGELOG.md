@@ -39,6 +39,18 @@ so "which one is running?" never depends on anyone's memory.
 
 ## [Unreleased]
 
+### Added
+
+- **AI staff can propose marketing, copy and after-sales actions (M10, 00120).** Four new proposal kinds, each an
+  MCP tool that only proposes; a human approves in the console and Keel executes as the agent, with the same checks
+  as the admin API and the proposal id as the idempotency key: `propose_flash_price` (a limited-time discount on up
+  to 20 SKUs, at most 50% off, at most 14 days — created and put online on approval), `propose_coupon` (a coupon
+  template, face value ≤ ¥100, ≤ 10,000 issued), `propose_product_copy` (new title / subtitle; before and after are
+  kept), `propose_refund_decision` (approve / reject a pending after-sales request, with a buyer-facing reason
+  for rejections). Marketing and product proposals are shop-wide: only merchant-wide AI staff can file them and only
+  merchant-wide staff can approve them. `AgentProposal.store_id` is now optional; the proposal list filters by
+  `kind`.
+
 ## [0.4.0] - 2026-09-28
 
 Migration `00111`; the database lands on `00111`.

@@ -273,8 +273,9 @@ func (fx *permFixture) proposal(t *testing.T, storeID int64) int64 {
 	a := createAgent(t, fx.sh, `{"name":"矩阵 AI","role":2}`)
 	var id int64
 	if err := admin(t).QueryRow(context.Background(), `
-		INSERT INTO agent_proposals (merchant_id, agent_staff_id, kind, store_id, payload, title, evidence, expires_at)
-		VALUES ($1, $2, 'inventory_adjust', $3, jsonb_build_object('store_id', $3::bigint, 'sku_id', $4::bigint, 'delta', 1, 'reason', '矩阵'),
+		INSERT INTO agent_proposals (merchant_id, agent_staff_id, kind, store_id, target_key, payload, title, evidence, expires_at)
+		VALUES ($1, $2, 'inventory_adjust', $3, 'matrix:' || gen_random_uuid(),
+		        jsonb_build_object('store_id', $3::bigint, 'sku_id', $4::bigint, 'delta', 1, 'reason', '矩阵'),
 		        '矩阵提案', '权限矩阵用的提案', now() + interval '1 hour')
 		RETURNING id`, fx.sh.MerchantID, a.Id, storeID, fx.SKUID).Scan(&id); err != nil {
 		t.Fatal(err)

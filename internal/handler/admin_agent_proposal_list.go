@@ -16,8 +16,12 @@ import (
 func (h *AgentProposalHandler) List(c *gin.Context) {
 	page, _ := strconv.Atoi(c.Query("page"))
 	pageSize, _ := strconv.Atoi(c.Query("page_size"))
+	var kind *string
+	if k := c.Query("kind"); k != "" {
+		kind = &k
+	}
 	out, err := h.svc.List(c.Request.Context(), adminListInt64(c.Query("status")),
-		adminListInt64(c.Query("agent_staff_id")), page, pageSize)
+		adminListInt64(c.Query("agent_staff_id")), kind, page, pageSize)
 	if err != nil {
 		writeProposalError(c, err)
 		return

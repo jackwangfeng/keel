@@ -1730,8 +1730,8 @@ class AgentProposal {
   final int agentStaffId;
   final String agentName;
   final String kind;
-  final int storeId;
-  final String storeName;
+  final int? storeId;
+  final String? storeName;
   final int? skuId;
   final Map<String, dynamic> payload;
   final String title;
@@ -1746,14 +1746,14 @@ class AgentProposal {
   final String expiresAt;
   final String createdAt;
   final String updatedAt;
-  const AgentProposal({required this.id, required this.agentStaffId, required this.agentName, required this.kind, required this.storeId, required this.storeName, this.skuId, required this.payload, required this.title, required this.evidence, required this.expectedImpact, required this.status, this.decidedBy, this.decidedByName, this.decidedAt, this.rejectReason, this.result, required this.expiresAt, required this.createdAt, required this.updatedAt});
+  const AgentProposal({required this.id, required this.agentStaffId, required this.agentName, required this.kind, this.storeId, this.storeName, this.skuId, required this.payload, required this.title, required this.evidence, required this.expectedImpact, required this.status, this.decidedBy, this.decidedByName, this.decidedAt, this.rejectReason, this.result, required this.expiresAt, required this.createdAt, required this.updatedAt});
   factory AgentProposal.fromJson(Map<String, dynamic> j) => AgentProposal(
         id: (j['id'] as num).toInt(),
         agentStaffId: (j['agent_staff_id'] as num).toInt(),
         agentName: j['agent_name'] as String,
         kind: j['kind'] as String,
-        storeId: (j['store_id'] as num).toInt(),
-        storeName: j['store_name'] as String,
+        storeId: (j['store_id'] as num?)?.toInt(),
+        storeName: j['store_name'] as String?,
         skuId: (j['sku_id'] as num?)?.toInt(),
         payload: j['payload'] as Map<String, dynamic>,
         title: j['title'] as String,
@@ -1774,8 +1774,8 @@ class AgentProposal {
         'agent_staff_id': agentStaffId,
         'agent_name': agentName,
         'kind': kind,
-        'store_id': storeId,
-        'store_name': storeName,
+        if (storeId != null) 'store_id': storeId,
+        if (storeName != null) 'store_name': storeName,
         if (skuId != null) 'sku_id': skuId,
         'payload': payload,
         'title': title,

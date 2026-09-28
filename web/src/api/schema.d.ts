@@ -1168,6 +1168,8 @@ export interface paths {
                     status?: 10 | 15 | 20 | 30 | 40 | 50;
                     /** @description 只看这名 AI 员工提的 */
                     agent_staff_id?: number;
+                    /** @description 只看这一种提案 */
+                    kind?: "inventory_adjust" | "flash_price" | "coupon" | "product_copy" | "refund_decision";
                     page?: components["parameters"]["Page"];
                     page_size?: components["parameters"]["PageSize"];
                 };
@@ -17163,16 +17165,26 @@ export interface components {
             agent_staff_id: number;
             agent_name: string;
             /**
-             * @description M9 只有加库存一种
+             * @description `inventory_adjust` 加库存（M9）；M10：`flash_price` 限时折扣、`coupon` 发券、`product_copy` 改标题 / 副标题、
+             *     `refund_decision` 售后审核（同意 / 驳回）。营销与商品类是全店的（没有 `store_id`），批准要全店范围
              * @enum {string}
              */
-            kind: "inventory_adjust";
-            /** Format: int64 */
-            store_id: number;
-            store_name: string;
+            kind: "inventory_adjust" | "flash_price" | "coupon" | "product_copy" | "refund_decision";
+            /**
+             * Format: int64
+             * @description 门店类提案（加库存、售后审核）才有
+             */
+            store_id?: number;
+            store_name?: string;
             /** Format: int64 */
             sku_id?: number;
-            /** @description 执行参数。inventory_adjust 是 {store_id, sku_id, delta, reason} */
+            /**
+             * @description 执行参数，按 kind：`inventory_adjust` {store_id, sku_id, delta, reason}；
+             *     `flash_price` {name, store_id?, items: [{sku_id, discount_rate}], starts_at, ends_at}；
+             *     `coupon` {name, coupon_type, threshold_cents, discount_cents, discount_rate, max_discount_cents,
+             *     valid_days, total_count, per_user_limit, claimable}；`product_copy` {product_id, title?, subtitle?,
+             *     before_title, before_subtitle?}；`refund_decision` {refund_no, action, reject_reason?, amount_cents}
+             */
             payload: {
                 [key: string]: unknown;
             };
@@ -17192,7 +17204,10 @@ export interface components {
             /** Format: date-time */
             decided_at?: string;
             reject_reason?: string;
-            /** @description 执行结果：{before_available, after_available} 或 {error_type, error} */
+            /**
+             * @description 执行结果：加库存 {before_available, after_available}；M10 各种提案 {detail: {promotion_id | coupon_template_id |
+             *     before_title/after_title | refund_status …}}；失败 {error_type, error}
+             */
             result?: {
                 [key: string]: unknown;
             };

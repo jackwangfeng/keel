@@ -413,10 +413,16 @@
                 "type": "integer"
               },
               "store_id": {
-                "type": "integer"
+                "type": [
+                  "null",
+                  "integer"
+                ]
               },
               "store_name": {
-                "type": "string"
+                "type": [
+                  "null",
+                  "string"
+                ]
               },
               "title": {
                 "type": "string"
@@ -436,8 +442,6 @@
               "kind",
               "payload",
               "status",
-              "store_id",
-              "store_name",
               "title",
               "updated_at"
             ],
@@ -1380,6 +1384,364 @@
     }
   },
   {
+    "description": "提一条发券提案：建一张券（满减 / 折扣 / 立减），可放进领券中心。不会立即执行：人批准后 Keel 建券。需要全店范围的 AI 员工。面额至多 100 元、发行量至多 10000。",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "claimable": {
+          "description": "是否放进领券中心让买家自己领",
+          "type": "boolean"
+        },
+        "coupon_type": {
+          "description": "1 满减 / 2 折扣 / 3 立减",
+          "maximum": 32767,
+          "minimum": -32768,
+          "type": "integer"
+        },
+        "discount_cents": {
+          "description": "满减 / 立减的面额（分），≤10000",
+          "type": "integer"
+        },
+        "discount_rate": {
+          "description": "折扣券的千分比，500–999",
+          "maximum": 32767,
+          "minimum": -32768,
+          "type": "integer"
+        },
+        "evidence": {
+          "description": "证据（markdown）：引用工具返回的数字，能被人复现；10–8000 字",
+          "type": "string"
+        },
+        "expected_impact": {
+          "description": "预计影响，≤2000 字",
+          "type": "string"
+        },
+        "max_discount_cents": {
+          "description": "折扣券的封顶（分），≤10000",
+          "type": "integer"
+        },
+        "name": {
+          "description": "券名，1–30 字，买家看得到",
+          "type": "string"
+        },
+        "per_user_limit": {
+          "description": "每人限领，1–5",
+          "maximum": 2147483647,
+          "minimum": -2147483648,
+          "type": "integer"
+        },
+        "threshold_cents": {
+          "description": "满多少可用（分）；立减券为 0",
+          "type": "integer"
+        },
+        "total_count": {
+          "description": "发行量，1–10000",
+          "maximum": 2147483647,
+          "minimum": -2147483648,
+          "type": "integer"
+        },
+        "valid_days": {
+          "description": "领取后几天内有效，1–90",
+          "maximum": 2147483647,
+          "minimum": -2147483648,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "name",
+        "coupon_type",
+        "valid_days",
+        "total_count",
+        "per_user_limit",
+        "evidence"
+      ],
+      "type": "object"
+    },
+    "name": "propose_coupon",
+    "outputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "agent_name": {
+          "type": "string"
+        },
+        "agent_staff_id": {
+          "type": "integer"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "decided_at": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "decided_by": {
+          "type": [
+            "null",
+            "integer"
+          ]
+        },
+        "decided_by_name": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "evidence": {
+          "type": "string"
+        },
+        "expected_impact": {
+          "type": "string"
+        },
+        "expires_at": {
+          "type": "string"
+        },
+        "id": {
+          "type": "integer"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "reject_reason": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "result": {
+          "additionalProperties": true,
+          "type": [
+            "null",
+            "object"
+          ]
+        },
+        "sku_id": {
+          "type": [
+            "null",
+            "integer"
+          ]
+        },
+        "status": {
+          "type": "integer"
+        },
+        "store_id": {
+          "type": [
+            "null",
+            "integer"
+          ]
+        },
+        "store_name": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "title": {
+          "type": "string"
+        },
+        "updated_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "agent_name",
+        "agent_staff_id",
+        "created_at",
+        "evidence",
+        "expected_impact",
+        "expires_at",
+        "id",
+        "kind",
+        "payload",
+        "status",
+        "title",
+        "updated_at"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "提一条限时折扣提案（清仓 / 促销）：若干 SKU 在一段时间内打折。不会立即执行：人批准后 Keel 建活动并上线。需要全店范围的 AI 员工。同一组 SKU 已有待处理提案时会被拒。",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "ends_at": {
+          "description": "结束时间，活动至多 14 天",
+          "type": "string"
+        },
+        "evidence": {
+          "description": "证据（markdown）：引用工具返回的数字，能被人复现；10–8000 字",
+          "type": "string"
+        },
+        "expected_impact": {
+          "description": "预计影响，≤2000 字",
+          "type": "string"
+        },
+        "items": {
+          "description": "参加的 SKU，1–20 个",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "discount_rate": {
+                "description": "千分比折扣，850 即 85 折；500–999（最多打五折）",
+                "maximum": 32767,
+                "minimum": -32768,
+                "type": "integer"
+              },
+              "sku_id": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "sku_id",
+              "discount_rate"
+            ],
+            "type": "object"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        },
+        "name": {
+          "description": "活动名，1–30 字，买家看得到",
+          "type": "string"
+        },
+        "starts_at": {
+          "description": "开始时间（RFC 3339），现在到 7 天内",
+          "type": "string"
+        },
+        "store_id": {
+          "description": "只在这家门店生效；不给即全店",
+          "type": [
+            "null",
+            "integer"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "items",
+        "starts_at",
+        "ends_at",
+        "evidence"
+      ],
+      "type": "object"
+    },
+    "name": "propose_flash_price",
+    "outputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "agent_name": {
+          "type": "string"
+        },
+        "agent_staff_id": {
+          "type": "integer"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "decided_at": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "decided_by": {
+          "type": [
+            "null",
+            "integer"
+          ]
+        },
+        "decided_by_name": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "evidence": {
+          "type": "string"
+        },
+        "expected_impact": {
+          "type": "string"
+        },
+        "expires_at": {
+          "type": "string"
+        },
+        "id": {
+          "type": "integer"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "reject_reason": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "result": {
+          "additionalProperties": true,
+          "type": [
+            "null",
+            "object"
+          ]
+        },
+        "sku_id": {
+          "type": [
+            "null",
+            "integer"
+          ]
+        },
+        "status": {
+          "type": "integer"
+        },
+        "store_id": {
+          "type": [
+            "null",
+            "integer"
+          ]
+        },
+        "store_name": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "title": {
+          "type": "string"
+        },
+        "updated_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "agent_name",
+        "agent_staff_id",
+        "created_at",
+        "evidence",
+        "expected_impact",
+        "expires_at",
+        "id",
+        "kind",
+        "payload",
+        "status",
+        "title",
+        "updated_at"
+      ],
+      "type": "object"
+    }
+  },
+  {
     "description": "提一条补货提案（给某门店某 SKU 加库存）。不会立即执行：人在后台批准后，Keel 以你的身份执行。同一门店同一 SKU 已有待处理提案时会被拒。48 小时没人处理即过期。",
     "inputSchema": {
       "additionalProperties": false,
@@ -1493,10 +1855,16 @@
           "type": "integer"
         },
         "store_id": {
-          "type": "integer"
+          "type": [
+            "null",
+            "integer"
+          ]
         },
         "store_name": {
-          "type": "string"
+          "type": [
+            "null",
+            "string"
+          ]
         },
         "title": {
           "type": "string"
@@ -1516,8 +1884,294 @@
         "kind",
         "payload",
         "status",
-        "store_id",
-        "store_name",
+        "title",
+        "updated_at"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "提一条改商品标题 / 副标题的提案（搜索缺口：让搜得到、点得进）。不会立即执行：人批准后 Keel 改，并过广告法违禁词检查。需要全店范围的 AI 员工。",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "evidence": {
+          "description": "证据（markdown）：引用工具返回的数字，能被人复现；10–8000 字",
+          "type": "string"
+        },
+        "expected_impact": {
+          "description": "预计影响，≤2000 字",
+          "type": "string"
+        },
+        "product_id": {
+          "type": "integer"
+        },
+        "subtitle": {
+          "description": "新副标题，≤120 字；不改就不给",
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "title": {
+          "description": "新标题，1–60 字；不改就不给",
+          "type": [
+            "null",
+            "string"
+          ]
+        }
+      },
+      "required": [
+        "product_id",
+        "evidence"
+      ],
+      "type": "object"
+    },
+    "name": "propose_product_copy",
+    "outputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "agent_name": {
+          "type": "string"
+        },
+        "agent_staff_id": {
+          "type": "integer"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "decided_at": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "decided_by": {
+          "type": [
+            "null",
+            "integer"
+          ]
+        },
+        "decided_by_name": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "evidence": {
+          "type": "string"
+        },
+        "expected_impact": {
+          "type": "string"
+        },
+        "expires_at": {
+          "type": "string"
+        },
+        "id": {
+          "type": "integer"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "reject_reason": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "result": {
+          "additionalProperties": true,
+          "type": [
+            "null",
+            "object"
+          ]
+        },
+        "sku_id": {
+          "type": [
+            "null",
+            "integer"
+          ]
+        },
+        "status": {
+          "type": "integer"
+        },
+        "store_id": {
+          "type": [
+            "null",
+            "integer"
+          ]
+        },
+        "store_name": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "title": {
+          "type": "string"
+        },
+        "updated_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "agent_name",
+        "agent_staff_id",
+        "created_at",
+        "evidence",
+        "expected_impact",
+        "expires_at",
+        "id",
+        "kind",
+        "payload",
+        "status",
+        "title",
+        "updated_at"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "对一张待审核的售后单提审核意见（同意 / 驳回，驳回要写给买家看的理由）。不会立即执行：人批准后 Keel 审核。按订单的履约门店判权。",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "description": "approve 同意 / reject 驳回",
+          "type": "string"
+        },
+        "evidence": {
+          "description": "证据（markdown）：引用工具返回的数字，能被人复现；10–8000 字",
+          "type": "string"
+        },
+        "expected_impact": {
+          "description": "预计影响，≤2000 字",
+          "type": "string"
+        },
+        "refund_no": {
+          "type": "string"
+        },
+        "reject_reason": {
+          "description": "驳回理由，买家看得到；驳回时必填，≤200 字",
+          "type": [
+            "null",
+            "string"
+          ]
+        }
+      },
+      "required": [
+        "refund_no",
+        "action",
+        "evidence"
+      ],
+      "type": "object"
+    },
+    "name": "propose_refund_decision",
+    "outputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "agent_name": {
+          "type": "string"
+        },
+        "agent_staff_id": {
+          "type": "integer"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "decided_at": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "decided_by": {
+          "type": [
+            "null",
+            "integer"
+          ]
+        },
+        "decided_by_name": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "evidence": {
+          "type": "string"
+        },
+        "expected_impact": {
+          "type": "string"
+        },
+        "expires_at": {
+          "type": "string"
+        },
+        "id": {
+          "type": "integer"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "reject_reason": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "result": {
+          "additionalProperties": true,
+          "type": [
+            "null",
+            "object"
+          ]
+        },
+        "sku_id": {
+          "type": [
+            "null",
+            "integer"
+          ]
+        },
+        "status": {
+          "type": "integer"
+        },
+        "store_id": {
+          "type": [
+            "null",
+            "integer"
+          ]
+        },
+        "store_name": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "title": {
+          "type": "string"
+        },
+        "updated_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "agent_name",
+        "agent_staff_id",
+        "created_at",
+        "evidence",
+        "expected_impact",
+        "expires_at",
+        "id",
+        "kind",
+        "payload",
+        "status",
         "title",
         "updated_at"
       ],

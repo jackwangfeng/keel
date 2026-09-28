@@ -652,6 +652,9 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	// 多构造一份不共享任何东西）。
 	// AI 员工的提案（M9 任务 4）：AI 员工经 MCP 提，人在后台批准 / 驳回。
 	proposals := service.NewAgentProposalService(repo, inv, service.NewAdminStoreService(repo, inv), nil)
+	// M10 的四种提案批准后以 AI 员工身份调这几个 service（与后台接口同一批构造，无状态）。
+	proposals.SetExecutors(service.NewAdminPromotionService(repo, inv), service.NewAdminCouponService(repo),
+		service.NewAdminCatalogService(repo, store, inv), refunds)
 	aph := handler.NewAgentProposalHandler(proposals)
 	v1.GET("/admin/agent-proposals", staffAuth, aph.List)
 	v1.GET("/admin/agent-proposals/:proposal_id", staffAuth, aph.Get)
