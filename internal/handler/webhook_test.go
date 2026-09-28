@@ -389,6 +389,52 @@ func TestPaymentWebhookRefusesToSettleOnAnAmountMismatch(t *testing.T) {
 		payable, payable-1, p.PaymentNo)
 }
 
+// 已支付的订单又来一笔**流水号不同**的成功回调（用户重复付了一次、或渠道换号重推）。
+//
+// 流水号不同，uk_payments_channel_txn 挡不住，这一条守的是后面那道：订单已不在待支付上，
+// 第二笔钱落一行支付单留痕，但订单的实收、支付时间不被改写，也不再走一遍核销与通知。
+// 回 200：重推多少次结论都一样，让渠道停下来；多收的钱由人按支付单去退。
+func TestPaymentWebhookDoesNotSettleAPaidOrderTwice(t *testing.T) {
+	orderNo, _, _ := placeRealOrder(t, hostA, "shop-a", seedAddressA, 1)
+	payable := payableOf(t, orderNo)
+	first := "paid1-" + uniqueKey()
+	if w := notifyPayment(t, hostA, "shop-a", "wechat", payload(orderNo, first, payable)); w.Code != http.StatusOK {
+		t.Fatalf("首次回调返回 %d：%s", w.Code, w.Body.String())
+	}
+	var paidAt time.Time
+	if err := admin(t).QueryRow(context.Background(),
+		`SELECT paid_at FROM orders WHERE order_no = $1`, orderNo).Scan(&paidAt); err != nil {
+		t.Fatal(err)
+	}
+
+	second := "paid2-" + uniqueKey()
+	w := notifyPayment(t, hostA, "shop-a", "alipay", payload(orderNo, second, payable))
+	if w.Code != http.StatusOK {
+		t.Fatalf("已支付订单的第二笔回调返回 %d，期望 200（重推也不会改结论）：%s", w.Code, w.Body.String())
+	}
+
+	if got := orderStatusOf(t, orderNo); got != 20 {
+		t.Fatalf("订单状态是 %d，期望仍是 20", got)
+	}
+	if got := paidCentsOf(t, orderNo); got != payable {
+		t.Fatalf("订单实收是 %d，期望 %d —— 第二笔钱被累加或改写进了订单", got, payable)
+	}
+	var paidAt2 time.Time
+	if err := admin(t).QueryRow(context.Background(),
+		`SELECT paid_at FROM orders WHERE order_no = $1`, orderNo).Scan(&paidAt2); err != nil {
+		t.Fatal(err)
+	}
+	if !paidAt2.Equal(paidAt) {
+		t.Fatalf("支付时间从 %v 被改成了 %v —— 第二笔回调重新入账了", paidAt, paidAt2)
+	}
+	if n := countPaymentsFor(t, orderNo); n != 2 {
+		t.Fatalf("订单名下 %d 行支付单，期望 2 行 —— 第二笔钱到账了却没留痕，事后退不了", n)
+	}
+	if p := paymentOf(t, second); p.OrderNo != orderNo || p.AmountCents != payable {
+		t.Fatalf("第二笔支付单记成了 %+v", p)
+	}
+}
+
 // 不认识的渠道名一律 401。
 //
 // 契约里 channel 的枚举只有 wechat 与 alipay，**没有 balance** ——

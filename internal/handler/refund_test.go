@@ -364,6 +364,27 @@ func TestRejectedWholeRefundReturnsTheOrderToPaid(t *testing.T) {
 	wantStatus(t, cs.ship(t, o.OrderNo, "sf", "SF"+uniqueKey()), http.StatusCreated, "驳回之后发货")
 }
 
+// 别人的订单申请不了售后：404 order-not-found，与「订单不存在」同一个响应，也不落任何退款单。
+// 退款金额由服务端倒算、钱退回原支付渠道，但一张挂在别人名下的退款单本身就是越权。
+func TestRefundOnAnotherBuyersOrderIs404(t *testing.T) {
+	cs := newCouponShop(t)
+	b := cs.newBuyer(t, "rother-owner")
+	other := cs.newBuyer(t, "rother-intruder")
+	o := cs.twoLineOrder(t, b, nil)
+	cs.pay(t, o.OrderNo, o.PayableCents)
+	_, lines := cs.lines(t, b, o.OrderNo)
+
+	w := applyRefund(t, cs.Host, o.OrderNo, other.Token, refundBody(1, [2]int64{lines[cs.ShirtSKU].Id, 1}), "r-"+uniqueKey())
+	if p := problemOf(t, w, http.StatusNotFound); p.Type != problem.TypeOrderNotFound {
+		t.Fatalf("给别人的订单申请售后应 404 order-not-found，实得 %+v", p)
+	}
+	if n := adminQueryInt64(t, `SELECT count(*) FROM refunds r JOIN orders o ON o.id = r.order_id WHERE o.order_no = $1`, o.OrderNo); n != 0 {
+		t.Fatalf("别人的申请在这笔订单下落了 %d 张退款单", n)
+	}
+	// 本人照常能申请：上面的 404 不是订单本身的问题。
+	cs.mustApply(t, b, o.OrderNo, refundBody(1, [2]int64{lines[cs.ShirtSKU].Id, 1}))
+}
+
 // ---------------------------------------------------------------------------
 // 撤回
 // ---------------------------------------------------------------------------

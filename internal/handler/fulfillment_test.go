@@ -238,6 +238,16 @@ func TestShipThenConfirm(t *testing.T) {
 		t.Fatalf("空运单号应 422 invalid-request，实得 %+v", p)
 	}
 
+	// 别人确认不了：404，订单停在 30。
+	other := cs.newBuyer(t, "ship-other")
+	if p := problemOf(t, orderAction(t, cs.Host, o.OrderNo, "confirm", other.Token, "cf-"+uniqueKey()),
+		http.StatusNotFound); p.Type != problem.TypeNotFound {
+		t.Fatalf("确认别人的订单应 404，实得 %+v", p)
+	}
+	if st := orderStatusOf(t, o.OrderNo); st != 30 {
+		t.Fatalf("别人的确认收货把订单改成了 %d", st)
+	}
+
 	// 确认收货：30 → 40，记下完成时间；重放带头；再确认一次 409。
 	key := "cf-" + uniqueKey()
 	var done api.Order
