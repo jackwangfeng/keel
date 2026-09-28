@@ -89,6 +89,7 @@ type AgentProposalTx interface {
 	AgentOutcomeTx
 	AgentAutoPolicyTx
 	AgentSQLTx
+	PublicAILogTx
 
 	InsertAgentProposal(ctx context.Context, p NewAgentProposal) (int64, error)
 	FindAgentProposal(ctx context.Context, id int64) (AgentProposal, error)

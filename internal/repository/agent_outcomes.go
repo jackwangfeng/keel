@@ -187,3 +187,60 @@ func (t tenantTx) ClaimAgentProposalAuto(ctx context.Context, id int64) error {
 	}
 	return err
 }
+
+// PublicAILogEntry 是公开 AI 经营日志上的一条提案（00132）。Verdict 为空 = 还没复盘。
+type PublicAILogEntry struct {
+	ID           int64
+	Kind         string
+	Title        string
+	Status       int16
+	AutoApproved bool
+	Verdict      string
+	AgentName    string
+	CreatedAt    time.Time
+	DecidedAt    *time.Time
+}
+
+// PublicAILogSummary 是近 30 天的总数。
+type PublicAILogSummary struct {
+	Proposed, Executed, AutoExecuted, Rejected, Positive, Negative int64
+}
+
+// PublicAILogTx 是公开 AI 经营日志这一面。
+type PublicAILogTx interface {
+	// PublicAILogEnabled：店铺设置里的开关；没有 shop_preferences 那一行即关。
+	PublicAILogEnabled(ctx context.Context) (bool, error)
+	SetPublicAILog(ctx context.Context, enabled bool) error
+	PublicAILog(ctx context.Context) ([]PublicAILogEntry, PublicAILogSummary, error)
+}
+
+func (t tenantTx) PublicAILogEnabled(ctx context.Context) (bool, error) {
+	on, err := t.q.GetPublicAILog(ctx)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	return on, err
+}
+
+func (t tenantTx) SetPublicAILog(ctx context.Context, enabled bool) error {
+	return t.q.SetPublicAILog(ctx, enabled)
+}
+
+func (t tenantTx) PublicAILog(ctx context.Context) ([]PublicAILogEntry, PublicAILogSummary, error) {
+	rows, err := t.q.PublicAILogProposals(ctx)
+	if err != nil {
+		return nil, PublicAILogSummary{}, err
+	}
+	out := make([]PublicAILogEntry, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, PublicAILogEntry{ID: r.ID, Kind: r.Kind, Title: r.Title, Status: r.Status,
+			AutoApproved: r.AutoApproved, Verdict: r.Verdict, AgentName: r.AgentName, CreatedAt: r.CreatedAt.Time,
+			DecidedAt: tsPtr(r.DecidedAt)})
+	}
+	s, err := t.q.PublicAILogSummary(ctx)
+	if err != nil {
+		return nil, PublicAILogSummary{}, err
+	}
+	return out, PublicAILogSummary{Proposed: s.Proposed, Executed: s.Executed, AutoExecuted: s.AutoExecuted,
+		Rejected: s.Rejected, Positive: s.Positive, Negative: s.Negative}, nil
+}

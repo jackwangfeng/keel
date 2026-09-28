@@ -914,6 +914,7 @@ type ShopPreference struct {
 	AutoConfirmDays int16
 	ReturnShipDays  int16
 	UpdatedAt       pgtype.Timestamptz
+	PublicAiLog     bool
 }
 
 type ShopSetting struct {

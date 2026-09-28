@@ -58,7 +58,7 @@ curl -H "Authorization: Bearer $KEEL_AGENT_KEY" https://<店铺域名>/api/v1/ag
 ## 工具
 
 完整的名字、说明、**输入与输出的 JSON Schema** 在 [`AI接口-工具清单.json`](./AI接口-工具清单.json)
-（就是 `tools/list` 的返回，测试逐字守着它）。每个工具都声明了 `outputSchema`，服务端返回前按它校验；
+（就是 `tools/list` 的返回，测试逐字守着它，共 24 个）。每个工具都声明了 `outputSchema`，服务端返回前按它校验；
 结构化结果在 `structuredContent`，同时附一份 JSON 文本给只读文本的客户端。字段与 [OpenAPI 契约](./电商系统-OpenAPI.yaml)
 里同名的类型一致（`AgentProposal`、`AdminStore`、`ReportOverview` …），字段含义看那里。
 
@@ -69,9 +69,16 @@ curl -H "Authorization: Bearer $KEEL_AGENT_KEY" https://<店铺域名>/api/v1/ag
 | 搜索 | `search_insights` | 高频词、无结果词、低点击词 |
 | 查询 | `list_stores` `list_products` `get_product` `list_refunds` | 门店、商品（含 SKU 与各店库存）、售后单 |
 | 计算 | `restock_plan` | 补货计算：日均（分母去掉断货天）、可售天数、预计卖断日、建议量、置信。**数字由 Keel 算，agent 不要自己估** |
+| 查数 | `query_sql` | 只读 SQL 兜底（M11）：现有工具答不了的问题自己写一条 `SELECT` / `WITH`，只能读 `agent_ro` schema 里的脱敏视图（无手机号、地址、买家原话），至多 500 行、3 秒超时；需要全店范围 |
 | 计算 | `slow_movers` | 滞销清仓：每个（门店，SKU）的库存周转天数（可售 ÷ 日均，口径同 `restock_plan`）。周转天数为 null 的是回看期内一件没卖出去的，排最前 |
 | 计算 | `promotion_review` | 活动 / 券复盘：一个活动窗口内与前一个等长窗口的销售额、单量、客单价、参与 SKU 销量对比；一张券的发出数、核销数、核销率、带来的销售额与优惠 |
-| 提案 | `propose_inventory_adjust` `list_my_proposals` | 提一条加库存提案；看自己提过的与结果（执行前后的可售、驳回理由） |
+| 提案 | `propose_inventory_adjust` | 提一条加库存提案（给某门店某 SKU 加库存） |
+| 提案 | `propose_flash_price` | 提一条限时折扣提案：若干 SKU 在一段时间内打折，批准后 Keel 建活动并上线。需要全店范围 |
+| 提案 | `propose_coupon` | 提一条发券提案：满减 / 折扣 / 立减，可选放进领券中心。需要全店范围 |
+| 提案 | `propose_product_copy` | 提一条改商品标题 / 副标题的提案，批准后 Keel 改，并过广告法违禁词检查。需要全店范围 |
+| 提案 | `propose_refund_decision` | 对一张待审核售后单提审核意见（同意 / 驳回，驳回要写给买家看的理由）。按订单履约门店判权；**不允许自动执行** |
+| 提案 | `list_my_proposals` | 看自己提过的与结果（执行前后的可售、驳回理由、执行后复盘的 `outcome`） |
+| 成绩单 | `my_scorecard` | 自己近 30 天：按提案种类的提 / 批 / 驳回 / 过期数、执行后 `outcome.verdict`（positive / neutral / negative）分布 |
 | 简报 | `post_brief` | 写一份 markdown 简报（巡店日报等），直接生效 |
 | 事件 | `list_events` `ack_events` | 拉你管辖范围内的新事件（库存预警、售后申请、无结果词突增、提案结果）；确认处理到哪一条。见下文「事件」 |
 
@@ -89,11 +96,33 @@ agent: propose_inventory_adjust(store, sku, +70, 理由, 证据, 预计影响)
           └──48 小时没人处理──▶ 已过期（50）
 ```
 
-- 同一门店同一 SKU 同时只能有一条待处理提案；重复提回 409。
+**五种提案种类**（`kind`）：`inventory_adjust`（加库存，门店操作范围）、`flash_price`（限时折扣，全店范围）、
+`coupon`（发券，全店范围）、`product_copy`（改标题 / 副标题，全店范围）、`refund_decision`（售后审核，
+按订单履约门店判权）。营销与商品是全店维度的东西，所以 `flash_price` / `coupon` / `product_copy` 只有全店范围
+（角色 2 操作员）的 AI 员工能提；门店 / 大区范围的 AI 员工提这三种会拿到 `role-forbidden`，不是故障。
+
+- 去重按 `target_key`（同一门店同一 SKU、同一商品、同一售后单号、同一组限时折扣 SKU、同一券名同时只能有一条
+  待处理提案）；重复提回 409。
 - 批准后 Keel **以 AI 员工的身份**、带幂等键执行：审计上看得出是谁提的、谁批的。
 - 驳回理由会回到 `list_my_proposals`，agent 下次能读到（「这周有活动，别补这么多」）。
 - 人在后台「AI 员工 → 提案」审批。自己做审批界面（比如飞书卡片上的按钮）的话，按钮背后要用**真人员工**的后台会话调
   `POST /api/v1/admin/agent-proposals/{id}/approve` / `reject`（契约里有），不能用 AI 员工的密钥。
+
+### 自动执行（M11）
+
+店长可以在后台按「AI 员工 × 提案种类」配自动执行策略：`enabled`、单笔上限（按种类含义不同：加库存件数 /
+限时折扣最低折扣率 / 券面额）、每日条数上限。提案写入时若命中策略且在上限内，**Keel 当场以 AI 员工身份执行**
+（与人批准走同一段执行代码），返回的提案 `status` 直接是 20（已执行）或执行失败对应的 40，`decided_by` 为空、
+`auto_approved = true`；超出上限的照常进待处理队列等人批准。`refund_decision` 是资金动作，**不允许配自动执行**
+（库里 CHECK 挡住）。agent 手册（`agent/AGENTS.md`）要求收到 `auto_approved = true` 的返回照样写进简报，
+不能因为「不用等审批」就不报备。
+
+### 成绩单
+
+`GET /admin/agents/{staff_id}/scorecard`（后台 AI 员工页一个标签页）与 MCP 工具 `my_scorecard` 是同一份数据：
+按提案种类的提 / 批 / 驳回 / 过期数，以及执行后 7 天（`flash_price` / `coupon` 是活动 / 券结束后 3 天）算出的
+`outcome.verdict`（positive / neutral / negative，规则写死、可解释）分布。agent 手册要求 agent 自己每周看一次，
+驳回多、negative 多的种类要收着提。
 
 ## 事件
 
@@ -182,12 +211,20 @@ def verify(secret: str, body: bytes, header: str) -> bool:
 | 2026-09-28 | 首版：14 个工具；全部工具声明 `outputSchema`；工具错误带 `_meta["keel/problem"]` |
 | 2026-09-28 | 加 `list_events` `ack_events`（M10 事件）；AI 员工可配事件 webhook（`X-Keel-Signature` HMAC 签名） |
 | 2026-09-28 | AI 经营 M10：加 `slow_movers`（滞销清仓）、`promotion_review`（活动 / 券复盘）两个只读计算工具 |
+| 2026-09-28 | AI 经营 M10 / M11：加 `propose_flash_price` `propose_coupon` `propose_product_copy` `propose_refund_decision` 四种提案与 `my_scorecard` 成绩单工具；提案支持按 AI 员工 × 种类的自动执行策略（`auto_approved` 字段），`refund_decision` 不允许自动执行 |
+| 2026-09-28 | AI 经营 M11：加 `query_sql`（只读 SQL 兜底，只读 `agent_ro` 脱敏视图，需全店范围） |
 
 ## 接入方式举例
 
 **Claude Code 定时跑（演示站就是这么跑的）**：[`agent/runner/claude-daily.sh`](../agent/runner/claude-daily.sh)。
 要点：在 `agent/` 目录下跑（读到的 `CLAUDE.md` 是 AI 员工手册）、`--strict-mcp-config` 只挂 keel、
 `--allowedTools "mcp__keel__*" "Read"` 不给 shell 与写文件。cron 包一层即可。
+
+**Claude Code 被事件唤醒**：[`agent/runner/claude-events.sh`](../agent/runner/claude-events.sh)。
+每次先裸调一次 `tools/call`（不经 claude）看看有没有新事件——MCP 无状态，不需要先 `initialize` 握手，
+一条 JSON-RPC 请求就够；没有新事件就安静退出，省 token。有事件才拉起 Claude Code 按
+`agent/skills/事件处理.md` 分派。cron 每 10 分钟跑一次即可；配了 webhook 的话收到推送直接跑同一条
+prompt，不需要轮询。
 
 **只支持 stdio 的客户端**：
 
@@ -220,7 +257,3 @@ asyncio.run(main())
 **做成聊天机器人（飞书 / 钉钉 / 企业微信）**：机器人收到消息 → 用你的 agent 框架带上面的 MCP 配置跑一轮 → 回复。
 日报可以定时跑完后把 `post_brief` 的内容也推到群里；提案审批按上文「提案」一节，用真人员工的身份调后台接口。
 Keel 这边不需要改任何东西。
-
-## 还没有的
-
-- **更多写操作**：清仓活动、发券、改标题、售后审核的提案，排在 M10（[规划](./AI经营-规划.md)）。

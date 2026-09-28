@@ -5268,6 +5268,59 @@ paths:
   # 这条链的第二级与第三级**在实现上是同一条路径**：「没有位置」与
   # 「位置不在任何围栏内」走同一段代码、给同一种答案。给「没有位置」单开一条
   # 分支是这块最容易长出来的分歧——两条分支迟早只更新一条。
+  /ai-log:
+    get:
+      tags: [Agent]
+      summary: 公开的 AI 经营日志
+      description: |
+        店铺在后台打开「公开 AI 经营日志」之后才有（默认关，没开 404）。免登录，租户按 Host。
+        返回最近 10 份简报（标题、覆盖日期、开头一段）、最近 30 条提案（种类、标题、状态、是否自动执行、复盘结论）
+        与近 30 天的总数。证据全文、执行参数、驳回理由不公开。AI 经营 M11（00132）。
+      security: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PublicAILog' }
+        '404':
+          description: 这家店没有公开 AI 经营日志。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /admin/ai-log/settings:
+    get:
+      tags: [Admin, Agent]
+      summary: 公开 AI 经营日志的开关
+      description: 只有本店管理员。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AILogSettings' }
+        default: { $ref: '#/components/responses/Problem' }
+    put:
+      tags: [Admin, Agent]
+      summary: 打开 / 关闭公开 AI 经营日志
+      description: 打开后任何人都能在 `GET /api/v1/ai-log` 看到本店 AI 员工的简报标题与提案。只有本店管理员。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AILogSettings' }
+      responses:
+        '200':
+          description: 已保存
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AILogSettings' }
+        default: { $ref: '#/components/responses/Problem' }
   /stores:
     get:
       tags: [Store]
@@ -10032,6 +10085,62 @@ components:
         auto_approved:
           type: boolean
           description: 按自动执行策略当场执行的（00130）；此时没有 `decided_by`
+
+    AILogSettings:
+      type: object
+      required: [enabled]
+      properties:
+        enabled: { type: boolean }
+
+    PublicAILog:
+      type: object
+      required: [briefs, proposals, summary]
+      properties:
+        briefs:
+          type: array
+          items: { $ref: '#/components/schemas/PublicAILogBrief' }
+        proposals:
+          type: array
+          items: { $ref: '#/components/schemas/PublicAILogProposal' }
+        summary: { $ref: '#/components/schemas/PublicAILogSummary' }
+
+    PublicAILogBrief:
+      type: object
+      required: [id, title, excerpt, agent_name, period_start, period_end, created_at]
+      properties:
+        id: { type: integer, format: int64 }
+        title: { type: string }
+        excerpt: { type: string, description: 正文开头至多 300 字（markdown 原文，按不可信输入渲染） }
+        agent_name: { type: string }
+        period_start: { type: string, format: date }
+        period_end: { type: string, format: date }
+        created_at: { type: string, format: date-time }
+
+    PublicAILogProposal:
+      type: object
+      required: [id, kind, title, status, auto_approved, agent_name, created_at]
+      properties:
+        id: { type: integer, format: int64 }
+        kind: { type: string }
+        title: { type: string }
+        status: { type: integer, description: 10 待处理 / 15 执行中 / 20 已执行 / 30 已驳回 / 40 执行失败 / 50 已过期 }
+        auto_approved: { type: boolean }
+        verdict: { type: string, enum: [positive, neutral, negative], description: 复盘结论；还没复盘时不出现 }
+        agent_name: { type: string }
+        created_at: { type: string, format: date-time }
+        decided_at: { type: string, format: date-time }
+
+    PublicAILogSummary:
+      type: object
+      required: [proposed, executed, auto_executed, rejected, positive, negative]
+      description: 近 30 天
+      properties:
+        proposed: { type: integer, format: int64 }
+        executed: { type: integer, format: int64 }
+        auto_executed: { type: integer, format: int64 }
+        rejected: { type: integer, format: int64 }
+        positive: { type: integer, format: int64 }
+        negative: { type: integer, format: int64 }
 
     AgentAutoPolicyInput:
       type: object

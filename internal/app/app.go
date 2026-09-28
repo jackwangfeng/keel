@@ -302,6 +302,9 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	sh := handler.NewStoreHandler(service.NewStoreService(repo))
 	v1.GET("/stores", sh.List)
 	v1.GET("/stores/resolve", sh.Resolve)
+	// 公开的 AI 经营日志（00132）：免登录，租户按 Host；店铺没开开关即 404。
+	ailog := handler.NewPublicAILogHandler(service.NewPublicAILogService(repo))
+	v1.GET("/ai-log", ailog.Get)
 
 	// /auth/login 与 /auth/refresh 在契约里是 security: []（公开的）：
 	// 一个还没有令牌的人要能打到它们。**这不等于它们不校验租户** ——
@@ -667,6 +670,8 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	v1.POST("/admin/agent-proposals/:proposal_id/approve", staffAuth, aph.Approve)
 	v1.POST("/admin/agent-proposals/:proposal_id/reject", staffAuth, aph.Reject)
 	v1.GET("/admin/agents/:staff_id/scorecard", staffAuth, aph.Scorecard)
+	v1.GET("/admin/ai-log/settings", staffAuth, ailog.Settings)
+	v1.PUT("/admin/ai-log/settings", staffAuth, ailog.PutSettings)
 	v1.GET("/admin/agents/:staff_id/auto-policies", staffAuth, aph.ListAutoPolicies)
 	v1.PUT("/admin/agents/:staff_id/auto-policies/:kind", staffAuth, aph.PutAutoPolicy)
 	// AI 员工写的经营简报（M9 任务 5）：AI 员工经 MCP 写，全店范围的人在后台看。

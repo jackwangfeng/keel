@@ -1437,6 +1437,27 @@ func (e PromotionType) Valid() bool {
 	}
 }
 
+// Defines values for PublicAILogProposalVerdict.
+const (
+	Negative PublicAILogProposalVerdict = "negative"
+	Neutral  PublicAILogProposalVerdict = "neutral"
+	Positive PublicAILogProposalVerdict = "positive"
+)
+
+// Valid indicates whether the value is a known member of the PublicAILogProposalVerdict enum.
+func (e PublicAILogProposalVerdict) Valid() bool {
+	switch e {
+	case Negative:
+		return true
+	case Neutral:
+		return true
+	case Positive:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for RefundChannel.
 const (
 	RefundChannelAlipay  RefundChannel = "alipay"
@@ -2500,6 +2521,11 @@ func (e PostWebhooksRefundsChannelParamsChannel) Valid() bool {
 	default:
 		return false
 	}
+}
+
+// AILogSettings defines model for AILogSettings.
+type AILogSettings struct {
+	Enabled bool `json:"enabled"`
 }
 
 // Address defines model for Address.
@@ -5759,6 +5785,58 @@ type PromotionType int
 // Examples: 110000
 type ProvinceCode = string
 
+// PublicAILog defines model for PublicAILog.
+type PublicAILog struct {
+	Briefs    []PublicAILogBrief    `json:"briefs"`
+	Proposals []PublicAILogProposal `json:"proposals"`
+
+	// Summary 近 30 天
+	Summary PublicAILogSummary `json:"summary"`
+}
+
+// PublicAILogBrief defines model for PublicAILogBrief.
+type PublicAILogBrief struct {
+	AgentName string    `json:"agent_name"`
+	CreatedAt time.Time `json:"created_at"`
+
+	// Excerpt 正文开头至多 300 字（markdown 原文，按不可信输入渲染）
+	Excerpt     string             `json:"excerpt"`
+	Id          int64              `json:"id"`
+	PeriodEnd   openapi_types.Date `json:"period_end"`
+	PeriodStart openapi_types.Date `json:"period_start"`
+	Title       string             `json:"title"`
+}
+
+// PublicAILogProposal defines model for PublicAILogProposal.
+type PublicAILogProposal struct {
+	AgentName    string     `json:"agent_name"`
+	AutoApproved bool       `json:"auto_approved"`
+	CreatedAt    time.Time  `json:"created_at"`
+	DecidedAt    *time.Time `json:"decided_at,omitempty"`
+	Id           int64      `json:"id"`
+	Kind         string     `json:"kind"`
+
+	// Status 10 待处理 / 15 执行中 / 20 已执行 / 30 已驳回 / 40 执行失败 / 50 已过期
+	Status int    `json:"status"`
+	Title  string `json:"title"`
+
+	// Verdict 复盘结论；还没复盘时不出现
+	Verdict *PublicAILogProposalVerdict `json:"verdict,omitempty"`
+}
+
+// PublicAILogProposalVerdict 复盘结论；还没复盘时不出现
+type PublicAILogProposalVerdict string
+
+// PublicAILogSummary 近 30 天
+type PublicAILogSummary struct {
+	AutoExecuted int64 `json:"auto_executed"`
+	Executed     int64 `json:"executed"`
+	Negative     int64 `json:"negative"`
+	Positive     int64 `json:"positive"`
+	Proposed     int64 `json:"proposed"`
+	Rejected     int64 `json:"rejected"`
+}
+
 // ReceiverSnapshot 下单瞬间从 `user_addresses` 拷贝的收货信息快照，落在
 // `orders.receiver_snapshot`。地址簿后来改了或删了，历史订单不受影响。
 //
@@ -7802,6 +7880,60 @@ type GetAdminAgentsStaffIdWebhookParams struct {
 
 // PutAdminAgentsStaffIdWebhookParams defines parameters for PutAdminAgentsStaffIdWebhook.
 type PutAdminAgentsStaffIdWebhookParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// GetAdminAiLogSettingsParams defines parameters for GetAdminAiLogSettings.
+type GetAdminAiLogSettingsParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// PutAdminAiLogSettingsParams defines parameters for PutAdminAiLogSettings.
+type PutAdminAiLogSettingsParams struct {
 	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
 	//
 	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
@@ -11825,6 +11957,9 @@ type PostAdminAgentsStaffIdKeysJSONRequestBody = AgentKeyCreateRequest
 
 // PutAdminAgentsStaffIdWebhookJSONRequestBody defines body for PutAdminAgentsStaffIdWebhook for application/json ContentType.
 type PutAdminAgentsStaffIdWebhookJSONRequestBody = AgentWebhookPutRequest
+
+// PutAdminAiLogSettingsJSONRequestBody defines body for PutAdminAiLogSettings for application/json ContentType.
+type PutAdminAiLogSettingsJSONRequestBody = AILogSettings
 
 // PostAdminAuthBootstrapJSONRequestBody defines body for PostAdminAuthBootstrap for application/json ContentType.
 type PostAdminAuthBootstrapJSONRequestBody PostAdminAuthBootstrapJSONBody

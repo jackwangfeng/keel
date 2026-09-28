@@ -460,6 +460,12 @@ var permMatrix = []permRoute{
 		return permReq{Method: "PUT", Path: fmt.Sprintf(v1+"/admin/agents/%d/auto-policies/inventory_adjust", a.Id),
 			Body: `{"enabled":true,"max_units":20,"min_discount_rate":1000,"max_discount_cents":0,"daily_limit":5}`, OK: http.StatusOK}
 	}},
+	{"GET", v1 + "/admin/ai-log/settings", adminOnly, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permGet(v1 + "/admin/ai-log/settings")
+	}},
+	{"PUT", v1 + "/admin/ai-log/settings", adminOnly, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permReq{Method: "PUT", Path: v1 + "/admin/ai-log/settings", Body: `{"enabled":false}`, OK: http.StatusOK}
+	}},
 	{"GET", v1 + "/admin/agents/:staff_id/scorecard", merchantWide, func(t *testing.T, fx *permFixture, c permCase) permReq {
 		a := createAgent(t, fx.sh, `{"name":"成绩单 AI","role":2}`)
 		return permGet(fmt.Sprintf(v1+"/admin/agents/%d/scorecard", a.Id))

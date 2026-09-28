@@ -106,3 +106,35 @@ UPDATE agent_proposals
    SET status = 15, decided_at = now(), auto_approved = TRUE
  WHERE id = $1 AND status = 10 AND expires_at > now()
 RETURNING id;
+
+-- ===========================================================================
+-- 公开的 AI 经营日志（00132）
+-- ===========================================================================
+
+-- name: GetPublicAILog :one
+SELECT public_ai_log FROM shop_preferences LIMIT 1;
+
+-- name: SetPublicAILog :exec
+-- 没有 shop_preferences 那一行时建一行（其余列取默认值）。
+INSERT INTO shop_preferences (public_ai_log) VALUES (sqlc.arg(enabled))
+ON CONFLICT ON CONSTRAINT shop_preferences_pkey DO UPDATE SET public_ai_log = EXCLUDED.public_ai_log;
+
+-- name: PublicAILogProposals :many
+-- 最近的提案（全部 AI 员工）：公开页只给种类、标题、状态、是否自动执行、复盘结论与时间 —— 不给证据全文与执行参数。
+SELECT p.id, p.kind, p.title, p.status, p.auto_approved, COALESCE(p.outcome->>'verdict', '')::text AS verdict, p.created_at, p.decided_at,
+       a.name AS agent_name
+  FROM agent_proposals p
+  JOIN staff a ON a.id = p.agent_staff_id
+ ORDER BY p.created_at DESC
+ LIMIT 30;
+
+-- name: PublicAILogSummary :one
+-- 近 30 天的总数。
+SELECT count(*)::bigint                                                   AS proposed,
+       count(*) FILTER (WHERE status = 20)::bigint                        AS executed,
+       count(*) FILTER (WHERE status = 20 AND auto_approved)::bigint      AS auto_executed,
+       count(*) FILTER (WHERE status = 30)::bigint                        AS rejected,
+       count(*) FILTER (WHERE outcome->>'verdict' = 'positive')::bigint   AS positive,
+       count(*) FILTER (WHERE outcome->>'verdict' = 'negative')::bigint   AS negative
+  FROM agent_proposals
+ WHERE created_at >= now() - interval '30 days';

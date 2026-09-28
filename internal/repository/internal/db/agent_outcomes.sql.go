@@ -266,6 +266,21 @@ func (q *Queries) GetAgentAutoPolicy(ctx context.Context, arg GetAgentAutoPolicy
 	return i, err
 }
 
+const getPublicAILog = `-- name: GetPublicAILog :one
+
+SELECT public_ai_log FROM shop_preferences LIMIT 1
+`
+
+// ===========================================================================
+// 公开的 AI 经营日志（00132）
+// ===========================================================================
+func (q *Queries) GetPublicAILog(ctx context.Context) (bool, error) {
+	row := q.db.QueryRow(ctx, getPublicAILog)
+	var public_ai_log bool
+	err := row.Scan(&public_ai_log)
+	return public_ai_log, err
+}
+
 const listAgentAutoPolicies = `-- name: ListAgentAutoPolicies :many
 
 SELECT agent_staff_id, kind, enabled, max_units, min_discount_rate, max_discount_cents, daily_limit, updated_by, updated_at
@@ -342,6 +357,93 @@ func (q *Queries) ProductUnitsSoldBetween(ctx context.Context, arg ProductUnitsS
 	return qty, err
 }
 
+const publicAILogProposals = `-- name: PublicAILogProposals :many
+SELECT p.id, p.kind, p.title, p.status, p.auto_approved, COALESCE(p.outcome->>'verdict', '')::text AS verdict, p.created_at, p.decided_at,
+       a.name AS agent_name
+  FROM agent_proposals p
+  JOIN staff a ON a.id = p.agent_staff_id
+ ORDER BY p.created_at DESC
+ LIMIT 30
+`
+
+type PublicAILogProposalsRow struct {
+	ID           int64
+	Kind         string
+	Title        string
+	Status       int16
+	AutoApproved bool
+	Verdict      string
+	CreatedAt    pgtype.Timestamptz
+	DecidedAt    pgtype.Timestamptz
+	AgentName    string
+}
+
+// 最近的提案（全部 AI 员工）：公开页只给种类、标题、状态、是否自动执行、复盘结论与时间 —— 不给证据全文与执行参数。
+func (q *Queries) PublicAILogProposals(ctx context.Context) ([]PublicAILogProposalsRow, error) {
+	rows, err := q.db.Query(ctx, publicAILogProposals)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PublicAILogProposalsRow
+	for rows.Next() {
+		var i PublicAILogProposalsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Kind,
+			&i.Title,
+			&i.Status,
+			&i.AutoApproved,
+			&i.Verdict,
+			&i.CreatedAt,
+			&i.DecidedAt,
+			&i.AgentName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const publicAILogSummary = `-- name: PublicAILogSummary :one
+SELECT count(*)::bigint                                                   AS proposed,
+       count(*) FILTER (WHERE status = 20)::bigint                        AS executed,
+       count(*) FILTER (WHERE status = 20 AND auto_approved)::bigint      AS auto_executed,
+       count(*) FILTER (WHERE status = 30)::bigint                        AS rejected,
+       count(*) FILTER (WHERE outcome->>'verdict' = 'positive')::bigint   AS positive,
+       count(*) FILTER (WHERE outcome->>'verdict' = 'negative')::bigint   AS negative
+  FROM agent_proposals
+ WHERE created_at >= now() - interval '30 days'
+`
+
+type PublicAILogSummaryRow struct {
+	Proposed     int64
+	Executed     int64
+	AutoExecuted int64
+	Rejected     int64
+	Positive     int64
+	Negative     int64
+}
+
+// 近 30 天的总数。
+func (q *Queries) PublicAILogSummary(ctx context.Context) (PublicAILogSummaryRow, error) {
+	row := q.db.QueryRow(ctx, publicAILogSummary)
+	var i PublicAILogSummaryRow
+	err := row.Scan(
+		&i.Proposed,
+		&i.Executed,
+		&i.AutoExecuted,
+		&i.Rejected,
+		&i.Positive,
+		&i.Negative,
+	)
+	return i, err
+}
+
 const sKUUnitsSoldBetween = `-- name: SKUUnitsSoldBetween :one
 SELECT COALESCE(sum(oi.quantity), 0)::bigint AS qty,
        COALESCE(sum(oi.amount_cents - oi.discount_cents), 0)::bigint AS amount_cents
@@ -411,6 +513,17 @@ type SetAgentProposalExecutedParams struct {
 // 「卖出」与补货计算同一个口径（restock.sql 的 StoreSKUSales）：已支付 / 已发货 / 已完成 / 售后中的单都算。
 func (q *Queries) SetAgentProposalExecuted(ctx context.Context, arg SetAgentProposalExecutedParams) error {
 	_, err := q.db.Exec(ctx, setAgentProposalExecuted, arg.OutcomeDueAt, arg.Outcome, arg.ID)
+	return err
+}
+
+const setPublicAILog = `-- name: SetPublicAILog :exec
+INSERT INTO shop_preferences (public_ai_log) VALUES ($1)
+ON CONFLICT ON CONSTRAINT shop_preferences_pkey DO UPDATE SET public_ai_log = EXCLUDED.public_ai_log
+`
+
+// 没有 shop_preferences 那一行时建一行（其余列取默认值）。
+func (q *Queries) SetPublicAILog(ctx context.Context, enabled bool) error {
+	_, err := q.db.Exec(ctx, setPublicAILog, enabled)
 	return err
 }
 

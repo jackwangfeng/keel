@@ -41,6 +41,15 @@ so "which one is running?" never depends on anyone's memory.
 
 ### Added
 
+- **Public AI operations log (M11, 00132).** A shop admin can publish the AI staff's work: `PUT
+  /admin/ai-log/settings` (off by default) makes `GET /api/v1/ai-log` return, without login, the latest briefs
+  (title, dates, first 300 characters), the latest proposals (kind, title, status, auto-executed or not, review
+  verdict) and 30-day totals — never the evidence, execution parameters or rejection reasons. A static page
+  `web/ai-log/` renders it; the demo site serves it at `/ai-log/`.
+- **Playbooks and an event-driven runner (M10).** `agent/skills/` gains 滞销清仓 (clearance), 搜索缺口 (search
+  gaps), 售后审核 (after-sales review), 活动复盘 (promotion review) and 事件处理 (event dispatch);
+  `agent/runner/claude-events.sh` checks for new events with one plain JSON-RPC call and only starts the agent
+  when there are some (cron every 10 minutes). `agent/AGENTS.md` and `docs/AI接口.md` cover all tools.
 - **Read-only SQL for AI staff (M11, 00131).** The MCP tool `query_sql` answers questions the dedicated tools
   can't. It runs one `SELECT` / `WITH` as the role `keel_agent_ro`, which can only read a set of views in schema
   `agent_ro` (orders, order items, products, SKUs, categories, stores, regions, refunds, search logs, coupons,

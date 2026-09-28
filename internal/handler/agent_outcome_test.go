@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/keel/keel/internal/api"
@@ -109,5 +110,27 @@ func TestAutoPolicyExecutesWithinLimits(t *testing.T) {
 		http.StatusOK, "策略列表", &list)
 	if len(list.Items) != 4 {
 		t.Fatalf("四种可自动执行的种类都应列出：%+v", list.Items)
+	}
+}
+
+// 公开的 AI 经营日志（00132）：默认关（404）；管理员打开后免登录可读，只有标题 / 状态 / 结论，不带证据全文。
+func TestPublicAILog(t *testing.T) {
+	cs := newCouponShop(t)
+	a := createAgent(t, cs.adminShop, `{"name":"公开 AI","role":2}`)
+	k := issueAgentKey(t, cs.adminShop, a.Id, `{"name":"test"}`)
+	sess := mcpConnect(t, cs.Host, k.Secret)
+	res, _ := mcpCall(t, sess, "propose_inventory_adjust", map[string]any{"store_id": cs.NorthStore, "sku_id": cs.DressSKU,
+		"delta": 5, "reason": "补货", "evidence": "内部证据：供应商报价 12 元，不该公开"})
+	if res.IsError {
+		t.Fatal(mcpText(res))
+	}
+	if w := getAs(t, cs.Host, "/api/v1/ai-log", ""); w.Code != http.StatusNotFound {
+		t.Fatalf("默认关，应 404，实得 %d", w.Code)
+	}
+	wantStatus(t, putAs(t, cs.Host, "/api/v1/admin/ai-log/settings", `{"enabled":true}`, cs.Token), http.StatusOK, "打开")
+	w := getAs(t, cs.Host, "/api/v1/ai-log", "")
+	wantStatus(t, w, http.StatusOK, "公开日志")
+	if body := w.Body.String(); !strings.Contains(body, "补 5 件") || strings.Contains(body, "供应商报价") {
+		t.Fatalf("公开日志应有提案标题、不带证据：%s", body)
 	}
 }

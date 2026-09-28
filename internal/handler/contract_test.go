@@ -1250,6 +1250,27 @@ var routes = []route{
 		NoQueryParams:  "策略在请求体里",
 	},
 	{
+		ContractPath:   "/ai-log",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "public_ai_log.go",
+		NoQueryParams:  "固定最近 10 份简报、30 条提案",
+	},
+	{
+		ContractPath:   "/admin/ai-log/settings",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "public_ai_log.go",
+		NoQueryParams:  "一个开关",
+	},
+	{
+		ContractPath:   "/admin/ai-log/settings",
+		ContractMethod: "put",
+		HTTPMethod:     http.MethodPut,
+		HandlerFile:    "public_ai_log.go",
+		NoQueryParams:  "开关在请求体里",
+	},
+	{
 		ContractPath:   "/admin/agents/{staff_id}/scorecard",
 		ContractMethod: "get",
 		HTTPMethod:     http.MethodGet,

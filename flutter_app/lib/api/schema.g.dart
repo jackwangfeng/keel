@@ -4,6 +4,17 @@
 // 只有类型与 JSON 编解码，没有网络代码 —— 网络在 lib/api/client.dart。
 // ignore_for_file: non_constant_identifier_names, unnecessary_cast, prefer_null_aware_operators
 
+class AILogSettings {
+  final bool enabled;
+  const AILogSettings({required this.enabled});
+  factory AILogSettings.fromJson(Map<String, dynamic> j) => AILogSettings(
+        enabled: j['enabled'] as bool,
+      );
+  Map<String, dynamic> toJson() => {
+        'enabled': enabled,
+      };
+}
+
 class Address {
   final double? lat;
   final double? lng;
@@ -4165,6 +4176,114 @@ class PromotionPatchRequest {
         if (skus != null) 'skus': skus!.map((e) => e.toJson()).toList(),
         if (giftCouponTemplateId != null) 'gift_coupon_template_id': giftCouponTemplateId,
         if (status != null) 'status': status,
+      };
+}
+
+class PublicAILogBrief {
+  final int id;
+  final String title;
+  final String excerpt;
+  final String agentName;
+  final String periodStart;
+  final String periodEnd;
+  final String createdAt;
+  const PublicAILogBrief({required this.id, required this.title, required this.excerpt, required this.agentName, required this.periodStart, required this.periodEnd, required this.createdAt});
+  factory PublicAILogBrief.fromJson(Map<String, dynamic> j) => PublicAILogBrief(
+        id: (j['id'] as num).toInt(),
+        title: j['title'] as String,
+        excerpt: j['excerpt'] as String,
+        agentName: j['agent_name'] as String,
+        periodStart: j['period_start'] as String,
+        periodEnd: j['period_end'] as String,
+        createdAt: j['created_at'] as String,
+      );
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'title': title,
+        'excerpt': excerpt,
+        'agent_name': agentName,
+        'period_start': periodStart,
+        'period_end': periodEnd,
+        'created_at': createdAt,
+      };
+}
+
+class PublicAILogProposal {
+  final int id;
+  final String kind;
+  final String title;
+  final int status;
+  final bool autoApproved;
+  final String? verdict;
+  final String agentName;
+  final String createdAt;
+  final String? decidedAt;
+  const PublicAILogProposal({required this.id, required this.kind, required this.title, required this.status, required this.autoApproved, this.verdict, required this.agentName, required this.createdAt, this.decidedAt});
+  factory PublicAILogProposal.fromJson(Map<String, dynamic> j) => PublicAILogProposal(
+        id: (j['id'] as num).toInt(),
+        kind: j['kind'] as String,
+        title: j['title'] as String,
+        status: (j['status'] as num).toInt(),
+        autoApproved: j['auto_approved'] as bool,
+        verdict: j['verdict'] as String?,
+        agentName: j['agent_name'] as String,
+        createdAt: j['created_at'] as String,
+        decidedAt: j['decided_at'] as String?,
+      );
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'kind': kind,
+        'title': title,
+        'status': status,
+        'auto_approved': autoApproved,
+        if (verdict != null) 'verdict': verdict,
+        'agent_name': agentName,
+        'created_at': createdAt,
+        if (decidedAt != null) 'decided_at': decidedAt,
+      };
+}
+
+/// 近 30 天
+class PublicAILogSummary {
+  final int proposed;
+  final int executed;
+  final int autoExecuted;
+  final int rejected;
+  final int positive;
+  final int negative;
+  const PublicAILogSummary({required this.proposed, required this.executed, required this.autoExecuted, required this.rejected, required this.positive, required this.negative});
+  factory PublicAILogSummary.fromJson(Map<String, dynamic> j) => PublicAILogSummary(
+        proposed: (j['proposed'] as num).toInt(),
+        executed: (j['executed'] as num).toInt(),
+        autoExecuted: (j['auto_executed'] as num).toInt(),
+        rejected: (j['rejected'] as num).toInt(),
+        positive: (j['positive'] as num).toInt(),
+        negative: (j['negative'] as num).toInt(),
+      );
+  Map<String, dynamic> toJson() => {
+        'proposed': proposed,
+        'executed': executed,
+        'auto_executed': autoExecuted,
+        'rejected': rejected,
+        'positive': positive,
+        'negative': negative,
+      };
+}
+
+class PublicAILog {
+  final List<PublicAILogBrief> briefs;
+  final List<PublicAILogProposal> proposals;
+  final PublicAILogSummary summary;
+  const PublicAILog({required this.briefs, required this.proposals, required this.summary});
+  factory PublicAILog.fromJson(Map<String, dynamic> j) => PublicAILog(
+        briefs: (j['briefs'] as List).map((e) => PublicAILogBrief.fromJson(e as Map<String, dynamic>)).toList(),
+        proposals: (j['proposals'] as List).map((e) => PublicAILogProposal.fromJson(e as Map<String, dynamic>)).toList(),
+        summary: PublicAILogSummary.fromJson(j['summary'] as Map<String, dynamic>),
+      );
+  Map<String, dynamic> toJson() => {
+        'briefs': briefs.map((e) => e.toJson()).toList(),
+        'proposals': proposals.map((e) => e.toJson()).toList(),
+        'summary': summary.toJson(),
       };
 }
 

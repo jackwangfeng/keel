@@ -5,6 +5,10 @@
 //
 // 这里只有类型，没有一行运行时代码 —— 运行时在 app/src/api/client.uts。
 
+export type AILogSettings = {
+  enabled : boolean
+}
+
 export type Address = {
   /** 地址的坐标（WGS-84），搜索地点 / 地图选点时填；手填与老地址没有。与 lng 同时给或同时不给（POI，00100） */
   lat? : number
@@ -2015,6 +2019,48 @@ export type PromotionPatchRequest = {
   skus? : PromotionSkuInput[]
   gift_coupon_template_id? : number
   status? : number
+}
+
+export type PublicAILogBrief = {
+  id : number
+  title : string
+  /** 正文开头至多 300 字（markdown 原文，按不可信输入渲染） */
+  excerpt : string
+  agent_name : string
+  period_start : string
+  period_end : string
+  created_at : string
+}
+
+export type PublicAILogProposal = {
+  id : number
+  kind : string
+  title : string
+  /** 10 待处理 / 15 执行中 / 20 已执行 / 30 已驳回 / 40 执行失败 / 50 已过期 */
+  status : number
+  auto_approved : boolean
+  /** 复盘结论；还没复盘时不出现 */
+  verdict? : string
+  agent_name : string
+  created_at : string
+  decided_at? : string
+}
+
+/** 近 30 天 */
+export type PublicAILogSummary = {
+  proposed : number
+  executed : number
+  auto_executed : number
+  rejected : number
+  positive : number
+  negative : number
+}
+
+export type PublicAILog = {
+  briefs : PublicAILogBrief[]
+  proposals : PublicAILogProposal[]
+  /** 近 30 天 */
+  summary : PublicAILogSummary
 }
 
 export type RefundItemInput = {
