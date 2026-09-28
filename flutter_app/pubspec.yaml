@@ -35,7 +35,7 @@ dependencies:
   # mp-flutter 的微信能力桥：只在小程序里可用，其它平台 isAvailable 为 false。
   mp_flutter_wechat:
     git:
-      url: git@github.com:jackwangfeng/mp-flutter.git
+      url: git@github.com:jackwangfeng/mp-flutter-internal.git
       ref: main
       path: packages/mp_flutter_wechat
 
@@ -48,7 +48,7 @@ dev_dependencies:
     sdk: flutter
   mp_flutter:
     git:
-      url: git@github.com:jackwangfeng/mp-flutter.git
+      url: git@github.com:jackwangfeng/mp-flutter-internal.git
       ref: main
       path: packages/mp_flutter
   flutter_lints: ^6.0.0

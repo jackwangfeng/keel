@@ -2346,7 +2346,7 @@ mp-flutter 已在 phase6 分支（06c00b4）支持 `--dart-define` 透传与 `mp
 ```yaml
   mp_flutter:
     git:
-      url: git@github.com:jackwangfeng/mp-flutter.git
+      url: git@github.com:jackwangfeng/mp-flutter-internal.git
       ref: phase6
       path: packages/mp_flutter
 ```
