@@ -20,6 +20,21 @@ type ActivityStock struct {
 	UpdatedAt   pgtype.Timestamptz
 }
 
+// AI 员工的接入密钥（00090，AI 经营 M9）。只存 sha256；明文只在创建响应里出现一次。
+type AgentKey struct {
+	ID         int64
+	MerchantID int64
+	StaffID    int64
+	Name       string
+	Prefix     string
+	SecretHash string
+	ExpiresAt  pgtype.Timestamptz
+	RevokedAt  pgtype.Timestamptz
+	LastUsedAt pgtype.Timestamptz
+	CreatedBy  int64
+	CreatedAt  pgtype.Timestamptz
+}
+
 // 子事务屏障（数据模型 §6）。形状照抄 dtmrs-barrier v0.11.0，别加列。
 type Barrier struct {
 	TransType  string
@@ -651,6 +666,7 @@ type Staff struct {
 	DeletedAt   pgtype.Timestamptz
 	CreatedAt   pgtype.Timestamptz
 	UpdatedAt   pgtype.Timestamptz
+	Kind        int16
 }
 
 type StaffScope struct {

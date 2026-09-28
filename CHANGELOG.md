@@ -41,6 +41,15 @@ so "which one is running?" never depends on anyone's memory.
 
 ### Added
 
+- **AI staff accounts and access keys (AI operations M9, task 1).** An AI staff member is a staff row
+  with `kind = 2` (migration 00090): it reuses roles and scopes, so every tool it will call goes through
+  the same authorization as a human; it cannot be an admin or platform-level (database CHECKs), cannot
+  obtain an admin session (the login-token and session queries only accept `kind = 1`), and does not
+  appear in or get modified through `/admin/staff`. Shop admins manage them under `/admin/agents`
+  and issue `kagt_…` access keys (shown once, stored as sha256, optional expiry, revocable, instantly
+  effective). `GET /agent/whoami` lets an agent check its key. Keys are looked up inside the tenant
+  resolved from Host, so one shop's key is unknown on another shop's domain.
+
 - **Thumbnails: `GET /uploads/{upload_id}?w=`.** Four widths (160 / 320 / 480 / 640); any
   other value snaps up to the next tier, capped at 640; absent means the original, unchanged.
   Aspect-preserving, never upscales, always JPEG quality 80 with transparency flattened to

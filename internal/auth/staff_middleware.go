@@ -48,6 +48,10 @@ type StaffIdentity struct {
 	// internal/service/authz.go，这里只是载体。
 	RegionIDs []int64
 	StoreIDs  []int64
+
+	// AgentKeyID 非 0 表示这是一名 AI 员工、凭这把接入密钥进来的（AI 经营 M9，agent_bearer.go）。
+	// 判权不看它 —— AI 员工与人走同一套角色 / 范围判定；它只用于审计与限流。
+	AgentKeyID int64
 }
 
 // Platform 回答这个操作员是不是平台级的。
@@ -59,6 +63,9 @@ func (s StaffIdentity) Platform() bool { return s.MerchantID == nil }
 // 自己店的员工）不在这个判据里 —— 那一层由作用域与 RLS 保证，而不是由
 // 一个布尔值保证。
 func (s StaffIdentity) IsAdmin() bool { return s.Role == StaffRoleAdmin }
+
+// IsAgent：这是一名 AI 员工（凭接入密钥进来）。
+func (s StaffIdentity) IsAgent() bool { return s.AgentKeyID != 0 }
 
 // 角色与状态取值，与数据模型 §14 的注释逐值一致。
 const (

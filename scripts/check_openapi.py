@@ -191,6 +191,8 @@ IDEMPOTENCY_EXEMPT = {
     '/admin/auth/session':    '一次性 token 换会话，重放由 used_at 拦截',
     '/admin/staff/{staff_id}/login-token': '每次签发作废此前没用掉的登录链接 token，'
                                            '重复调用 = 只有最新一串有效；存档重放会让 token 明文进库',
+    '/admin/agents/{staff_id}/keys': '接入密钥明文只在创建响应里出现一次；存档重放会让明文进库、再交出去一次。'
+                                     '重复调用 = 多一把密钥，列表里看得见、可吊销（与 login-token 同一理由）',
     '/assistant/chat':    '无副作用；会话状态由 session_id 承载',
     '/search/events':     '天然幂等：每一列首次写入为准、不覆盖，重放与首次效果相同；'
                           '且是公开接口，幂等键的 (scope, user_id, key) 作用域在这里没有 user_id',

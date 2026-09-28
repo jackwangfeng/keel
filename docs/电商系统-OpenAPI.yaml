@@ -98,6 +98,8 @@ tags:
       投递记录里记为「未配置、跳过」。
   - name: Upload
     description: 文件上传（商品图 / 头像 / 退款凭证）
+  - name: Agent
+    description: AI 员工（AI 经营 M9）：后台管理 AI 员工与接入密钥；AI 员工凭密钥调用的接口
   - name: Store
     description: |
       门店与电子围栏。买家侧只有「列出门店」与「按位置选店」两条；
@@ -597,6 +599,215 @@ paths:
               schema: { $ref: '#/components/schemas/Problem' }
         '422':
           description: 一个字段都没传、名字为空，或 `status` 不是 1 / 2
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /admin/agents:
+    get:
+      tags: [Admin, Agent]
+      summary: AI 员工列表（本店管理员）
+      description: |
+        AI 员工是 kind = 2 的员工（AI 经营 M9，docs/AI经营-M9设计.md §2）：角色与管辖范围与人相同，
+        不能是管理员、不能登录后台，只能凭接入密钥（`kagt_…`）调用 `/agent/*` 与 MCP。
+        它们**不出现在** `GET /admin/staff` 里，也不能用 `/admin/staff/*` 修改 —— 只从这一组接口管。
+
+        只有**本店管理员**能管 AI 员工（它等于给外部程序发长期有效的钥匙）；平台级账号不行。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/AdminAgent' }
+        '403':
+          description: 不是本店管理员（role-forbidden）。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Admin, Agent]
+      summary: 新建 AI 员工（本店管理员）
+      description: |
+        角色只能是 2 操作员 / 3 大区管理员 / 4 门店管理员（不能是管理员），范围与角色的配套规则同
+        `POST /admin/staff`。建好之后用 `POST /admin/agents/{staff_id}/keys` 发接入密钥。
+
+        **幂等**：同一把 `Idempotency-Key` 重发回放首次的 `201`（带 `Idempotency-Replayed: true`），不会建出第二名。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentCreateRequest' }
+      responses:
+        '201':
+          description: 已创建（重放时是首次的那一份）
+          headers:
+            Idempotency-Replayed: { $ref: '#/components/headers/IdempotencyReplayed' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminAgent' }
+        '403':
+          description: 不是本店管理员（role-forbidden）。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: 名称为空或过长、角色是管理员或不认识、范围与角色不配套。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /admin/agents/{staff_id}:
+    parameters:
+      - name: staff_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64 }
+    get:
+      tags: [Admin, Agent]
+      summary: AI 员工详情（含管辖范围与全部接入密钥的元数据）
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminAgent' }
+        '404':
+          description: 不是本店的 AI 员工（人的员工 id 在这里也是 404）。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+    patch:
+      tags: [Admin, Agent]
+      summary: 改 AI 员工（名称、角色 / 范围、停用）
+      description: |
+        停用（status = 2）即刻生效：它的所有密钥下一次请求就回 403 account-disabled。
+        改成操作员（role 2）时若没同时给范围，旧范围一并清掉。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentUpdateRequest' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminAgent' }
+        '404':
+          description: 不是本店的 AI 员工。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: 一个字段都没给、角色是管理员、范围与角色不配套。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /admin/agents/{staff_id}/keys:
+    parameters:
+      - name: staff_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64 }
+    post:
+      tags: [Admin, Agent]
+      summary: 给 AI 员工发一把接入密钥（明文只在这次响应里出现）
+      description: |
+        明文形如 `kagt_<43 位 base64url>`，**只在这次响应里出现一次**，服务端只存 sha256；丢了只能吊销重发。
+        `expires_in_days` 为 0 表示不过期（给定时运行的 agent 用），最长 3650 天。
+
+        **不带幂等键**：重放会把明文再交出去一次，那恰恰是这条接口要避免的。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentKeyCreateRequest' }
+      responses:
+        '201':
+          description: 已发出
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentKeyCreated' }
+        '404':
+          description: 不是本店的 AI 员工。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: 名称为空或过长、有效期越界。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /admin/agents/{staff_id}/keys/{key_id}:
+    parameters:
+      - name: staff_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64 }
+      - name: key_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64 }
+    delete:
+      tags: [Admin, Agent]
+      summary: 吊销接入密钥（即刻生效）
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+      responses:
+        '204':
+          description: 已吊销
+        '404':
+          description: 不是本店的 AI 员工，或这把密钥不存在 / 已吊销 / 不属于它。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /agent/whoami:
+    get:
+      tags: [Agent]
+      summary: 当前接入密钥对应的 AI 员工（给 agent 与运行器自检用）
+      description: |
+        `Authorization: Bearer kagt_…`。租户按 Host 解析，密钥在这家店里查：拿 A 店的密钥打 B 店的域名回 401。
+        密钥无效 / 吊销 / 过期一律 401（不区分）；AI 员工停用 403 `account-disabled`。
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWhoAmI' }
+        '401':
+          description: 没带密钥，或密钥无效、已吊销、已过期。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '403':
+          description: 这名 AI 员工已停用（account-disabled）。
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
@@ -9043,6 +9254,96 @@ components:
             一次性登录 token 明文。**服务端只存它的 sha256**，明文只在这一次响应
             （和进程日志）里出现。
         expire_at: { type: string, format: date-time }
+
+    AdminAgent:
+      type: object
+      required: [id, name, role, status, region_ids, store_ids, live_keys, created_at]
+      properties:
+        id:        { type: integer, format: int64, description: 即 staff_id }
+        name:      { type: string }
+        role:      { type: integer, enum: [2, 3, 4], description: '2 操作员 / 3 大区管理员 / 4 门店管理员' }
+        status:    { type: integer, enum: [1, 2], description: '1 正常 / 2 停用' }
+        region_ids:
+          type: array
+          items: { type: integer, format: int64 }
+        store_ids:
+          type: array
+          items: { type: integer, format: int64 }
+        live_keys: { type: integer, description: 没吊销、没过期的密钥数 }
+        last_used_at: { type: string, format: date-time, description: 任一把密钥最近一次被用的时间（分钟级节流） }
+        created_at: { type: string, format: date-time }
+        keys:
+          type: array
+          description: 只在详情里给（列表里缺席）。
+          items: { $ref: '#/components/schemas/AgentKey' }
+
+    AgentCreateRequest:
+      type: object
+      required: [name, role]
+      properties:
+        name: { type: string, maxLength: 50 }
+        role: { type: integer, enum: [2, 3, 4] }
+        region_ids:
+          type: array
+          items: { type: integer, format: int64 }
+        store_ids:
+          type: array
+          items: { type: integer, format: int64 }
+
+    AgentUpdateRequest:
+      type: object
+      properties:
+        name:   { type: string, maxLength: 50 }
+        role:   { type: integer, enum: [2, 3, 4] }
+        status: { type: integer, enum: [1, 2] }
+        region_ids:
+          type: array
+          items: { type: integer, format: int64 }
+        store_ids:
+          type: array
+          items: { type: integer, format: int64 }
+
+    AgentKey:
+      type: object
+      required: [id, name, prefix, created_at]
+      properties:
+        id:     { type: integer, format: int64 }
+        name:   { type: string }
+        prefix: { type: string, description: 明文前 12 位（含 kagt_），给人认是哪一把 }
+        expires_at:   { type: string, format: date-time }
+        revoked_at:   { type: string, format: date-time }
+        last_used_at: { type: string, format: date-time }
+        created_at:   { type: string, format: date-time }
+
+    AgentKeyCreateRequest:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, maxLength: 50 }
+        expires_in_days: { type: integer, minimum: 0, maximum: 3650, default: 0, description: 0 = 不过期 }
+
+    AgentKeyCreated:
+      allOf:
+        - $ref: '#/components/schemas/AgentKey'
+        - type: object
+          required: [secret]
+          properties:
+            secret: { type: string, description: 明文，只在这一次响应里出现 }
+
+    AgentWhoAmI:
+      type: object
+      required: [staff_id, name, role, region_ids, store_ids, key_id]
+      properties:
+        staff_id: { type: integer, format: int64 }
+        name:     { type: string }
+        role:     { type: integer, enum: [2, 3, 4] }
+        region_ids:
+          type: array
+          items: { type: integer, format: int64 }
+        store_ids:
+          type: array
+          items: { type: integer, format: int64 }
+        key_id:   { type: integer, format: int64 }
 
     StaffCreateRequest:
       type: object

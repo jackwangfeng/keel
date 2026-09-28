@@ -137,7 +137,7 @@ func (q *Queries) CountOtherLiveAdmins(ctx context.Context, id int64) (int64, er
 }
 
 const countStaff = `-- name: CountStaff :one
-SELECT count(*) FROM staff WHERE deleted_at IS NULL
+SELECT count(*) FROM staff WHERE deleted_at IS NULL AND kind = 1
 `
 
 func (q *Queries) CountStaff(ctx context.Context) (int64, error) {
@@ -231,6 +231,7 @@ SELECT t.id, t.staff_id, t.kind,
    AND t.revoked_at IS NULL
    AND t.expire_at > now()
    AND s.deleted_at IS NULL
+   AND s.kind = 1
 `
 
 type FindLiveOneTimeStaffTokenParams struct {
@@ -277,7 +278,7 @@ func (q *Queries) FindLiveOneTimeStaffToken(ctx context.Context, arg FindLiveOne
 const getStaffByID = `-- name: GetStaffByID :one
 SELECT id, email, name, role, status, last_login_at, created_at
   FROM staff
- WHERE id = $1 AND deleted_at IS NULL
+ WHERE id = $1 AND deleted_at IS NULL AND kind = 1
 `
 
 type GetStaffByIDRow struct {
@@ -309,7 +310,7 @@ func (q *Queries) GetStaffByID(ctx context.Context, id int64) (GetStaffByIDRow, 
 const listStaff = `-- name: ListStaff :many
 SELECT id, email, name, role, status, last_login_at, created_at
   FROM staff
- WHERE deleted_at IS NULL
+ WHERE deleted_at IS NULL AND kind = 1
  ORDER BY id
  LIMIT $1 OFFSET $2
 `
@@ -447,6 +448,7 @@ UPDATE staff_tokens t
    AND t.expire_at > now()
    AND s.id = t.staff_id
    AND s.deleted_at IS NULL
+   AND s.kind = 1
 RETURNING t.id, s.id AS staff_id, s.role, s.status
 `
 
@@ -496,7 +498,7 @@ const updateStaffRoleStatus = `-- name: UpdateStaffRoleStatus :one
 UPDATE staff
    SET role   = coalesce($1,   role),
        status = coalesce($2, status)
- WHERE id = $3 AND deleted_at IS NULL
+ WHERE id = $3 AND deleted_at IS NULL AND kind = 1
 RETURNING id, email, name, role, status, last_login_at, created_at
 `
 

@@ -95,6 +95,73 @@ class AddressInput {
       };
 }
 
+class AgentKey {
+  final int id;
+  final String name;
+  final String prefix;
+  final String? expiresAt;
+  final String? revokedAt;
+  final String? lastUsedAt;
+  final String createdAt;
+  const AgentKey({required this.id, required this.name, required this.prefix, this.expiresAt, this.revokedAt, this.lastUsedAt, required this.createdAt});
+  factory AgentKey.fromJson(Map<String, dynamic> j) => AgentKey(
+        id: (j['id'] as num).toInt(),
+        name: j['name'] as String,
+        prefix: j['prefix'] as String,
+        expiresAt: j['expires_at'] as String?,
+        revokedAt: j['revoked_at'] as String?,
+        lastUsedAt: j['last_used_at'] as String?,
+        createdAt: j['created_at'] as String,
+      );
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'name': name,
+        'prefix': prefix,
+        if (expiresAt != null) 'expires_at': expiresAt,
+        if (revokedAt != null) 'revoked_at': revokedAt,
+        if (lastUsedAt != null) 'last_used_at': lastUsedAt,
+        'created_at': createdAt,
+      };
+}
+
+class AdminAgent {
+  final int id;
+  final String name;
+  final int role;
+  final int status;
+  final List<int> regionIds;
+  final List<int> storeIds;
+  final int liveKeys;
+  final String? lastUsedAt;
+  final String createdAt;
+  final List<AgentKey>? keys;
+  const AdminAgent({required this.id, required this.name, required this.role, required this.status, required this.regionIds, required this.storeIds, required this.liveKeys, this.lastUsedAt, required this.createdAt, this.keys});
+  factory AdminAgent.fromJson(Map<String, dynamic> j) => AdminAgent(
+        id: (j['id'] as num).toInt(),
+        name: j['name'] as String,
+        role: (j['role'] as num).toInt(),
+        status: (j['status'] as num).toInt(),
+        regionIds: (j['region_ids'] as List).map((e) => (e as num).toInt()).toList(),
+        storeIds: (j['store_ids'] as List).map((e) => (e as num).toInt()).toList(),
+        liveKeys: (j['live_keys'] as num).toInt(),
+        lastUsedAt: j['last_used_at'] as String?,
+        createdAt: j['created_at'] as String,
+        keys: (j['keys'] as List?)?.map((e) => AgentKey.fromJson(e as Map<String, dynamic>)).toList(),
+      );
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'name': name,
+        'role': role,
+        'status': status,
+        'region_ids': regionIds,
+        'store_ids': storeIds,
+        'live_keys': liveKeys,
+        if (lastUsedAt != null) 'last_used_at': lastUsedAt,
+        'created_at': createdAt,
+        if (keys != null) 'keys': keys!.map((e) => e.toJson()).toList(),
+      };
+}
+
 /// 后台视角的分类，**扁平**。与前台的 `Category` 不同，它不嵌 `children`：
 class AdminCategory {
   final int id;
@@ -1442,6 +1509,121 @@ class AdminStoreList {
         'total': total,
         'items': items.map((e) => e.toJson()).toList(),
         'has_default': hasDefault,
+      };
+}
+
+class AgentCreateRequest {
+  final String name;
+  final int role;
+  final List<int>? regionIds;
+  final List<int>? storeIds;
+  const AgentCreateRequest({required this.name, required this.role, this.regionIds, this.storeIds});
+  factory AgentCreateRequest.fromJson(Map<String, dynamic> j) => AgentCreateRequest(
+        name: j['name'] as String,
+        role: (j['role'] as num).toInt(),
+        regionIds: (j['region_ids'] as List?)?.map((e) => (e as num).toInt()).toList(),
+        storeIds: (j['store_ids'] as List?)?.map((e) => (e as num).toInt()).toList(),
+      );
+  Map<String, dynamic> toJson() => {
+        'name': name,
+        'role': role,
+        if (regionIds != null) 'region_ids': regionIds,
+        if (storeIds != null) 'store_ids': storeIds,
+      };
+}
+
+class AgentKeyCreateRequest {
+  final String name;
+  final int? expiresInDays;
+  const AgentKeyCreateRequest({required this.name, this.expiresInDays});
+  factory AgentKeyCreateRequest.fromJson(Map<String, dynamic> j) => AgentKeyCreateRequest(
+        name: j['name'] as String,
+        expiresInDays: (j['expires_in_days'] as num?)?.toInt(),
+      );
+  Map<String, dynamic> toJson() => {
+        'name': name,
+        if (expiresInDays != null) 'expires_in_days': expiresInDays,
+      };
+}
+
+class AgentKeyCreated {
+  final int id;
+  final String name;
+  final String prefix;
+  final String? expiresAt;
+  final String? revokedAt;
+  final String? lastUsedAt;
+  final String createdAt;
+  final String secret;
+  const AgentKeyCreated({required this.id, required this.name, required this.prefix, this.expiresAt, this.revokedAt, this.lastUsedAt, required this.createdAt, required this.secret});
+  factory AgentKeyCreated.fromJson(Map<String, dynamic> j) => AgentKeyCreated(
+        id: (j['id'] as num).toInt(),
+        name: j['name'] as String,
+        prefix: j['prefix'] as String,
+        expiresAt: j['expires_at'] as String?,
+        revokedAt: j['revoked_at'] as String?,
+        lastUsedAt: j['last_used_at'] as String?,
+        createdAt: j['created_at'] as String,
+        secret: j['secret'] as String,
+      );
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'name': name,
+        'prefix': prefix,
+        if (expiresAt != null) 'expires_at': expiresAt,
+        if (revokedAt != null) 'revoked_at': revokedAt,
+        if (lastUsedAt != null) 'last_used_at': lastUsedAt,
+        'created_at': createdAt,
+        'secret': secret,
+      };
+}
+
+class AgentUpdateRequest {
+  final String? name;
+  final int? role;
+  final int? status;
+  final List<int>? regionIds;
+  final List<int>? storeIds;
+  const AgentUpdateRequest({this.name, this.role, this.status, this.regionIds, this.storeIds});
+  factory AgentUpdateRequest.fromJson(Map<String, dynamic> j) => AgentUpdateRequest(
+        name: j['name'] as String?,
+        role: (j['role'] as num?)?.toInt(),
+        status: (j['status'] as num?)?.toInt(),
+        regionIds: (j['region_ids'] as List?)?.map((e) => (e as num).toInt()).toList(),
+        storeIds: (j['store_ids'] as List?)?.map((e) => (e as num).toInt()).toList(),
+      );
+  Map<String, dynamic> toJson() => {
+        if (name != null) 'name': name,
+        if (role != null) 'role': role,
+        if (status != null) 'status': status,
+        if (regionIds != null) 'region_ids': regionIds,
+        if (storeIds != null) 'store_ids': storeIds,
+      };
+}
+
+class AgentWhoAmI {
+  final int staffId;
+  final String name;
+  final int role;
+  final List<int> regionIds;
+  final List<int> storeIds;
+  final int keyId;
+  const AgentWhoAmI({required this.staffId, required this.name, required this.role, required this.regionIds, required this.storeIds, required this.keyId});
+  factory AgentWhoAmI.fromJson(Map<String, dynamic> j) => AgentWhoAmI(
+        staffId: (j['staff_id'] as num).toInt(),
+        name: j['name'] as String,
+        role: (j['role'] as num).toInt(),
+        regionIds: (j['region_ids'] as List).map((e) => (e as num).toInt()).toList(),
+        storeIds: (j['store_ids'] as List).map((e) => (e as num).toInt()).toList(),
+        keyId: (j['key_id'] as num).toInt(),
+      );
+  Map<String, dynamic> toJson() => {
+        'staff_id': staffId,
+        'name': name,
+        'role': role,
+        'region_ids': regionIds,
+        'store_ids': storeIds,
+        'key_id': keyId,
       };
 }
 

@@ -60,6 +60,45 @@ func (e AddressInputTag) Valid() bool {
 	}
 }
 
+// Defines values for AdminAgentRole.
+const (
+	AdminAgentRoleN2 AdminAgentRole = 2
+	AdminAgentRoleN3 AdminAgentRole = 3
+	AdminAgentRoleN4 AdminAgentRole = 4
+)
+
+// Valid indicates whether the value is a known member of the AdminAgentRole enum.
+func (e AdminAgentRole) Valid() bool {
+	switch e {
+	case AdminAgentRoleN2:
+		return true
+	case AdminAgentRoleN3:
+		return true
+	case AdminAgentRoleN4:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AdminAgentStatus.
+const (
+	AdminAgentStatusN1 AdminAgentStatus = 1
+	AdminAgentStatusN2 AdminAgentStatus = 2
+)
+
+// Valid indicates whether the value is a known member of the AdminAgentStatus enum.
+func (e AdminAgentStatus) Valid() bool {
+	switch e {
+	case AdminAgentStatusN1:
+		return true
+	case AdminAgentStatusN2:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AdminCategoryStatus.
 const (
 	AdminCategoryStatusN0 AdminCategoryStatus = 0
@@ -309,6 +348,87 @@ func (e AdminStoreStatus) Valid() bool {
 	case AdminStoreStatusN0:
 		return true
 	case AdminStoreStatusN1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentCreateRequestRole.
+const (
+	AgentCreateRequestRoleN2 AgentCreateRequestRole = 2
+	AgentCreateRequestRoleN3 AgentCreateRequestRole = 3
+	AgentCreateRequestRoleN4 AgentCreateRequestRole = 4
+)
+
+// Valid indicates whether the value is a known member of the AgentCreateRequestRole enum.
+func (e AgentCreateRequestRole) Valid() bool {
+	switch e {
+	case AgentCreateRequestRoleN2:
+		return true
+	case AgentCreateRequestRoleN3:
+		return true
+	case AgentCreateRequestRoleN4:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentUpdateRequestRole.
+const (
+	AgentUpdateRequestRoleN2 AgentUpdateRequestRole = 2
+	AgentUpdateRequestRoleN3 AgentUpdateRequestRole = 3
+	AgentUpdateRequestRoleN4 AgentUpdateRequestRole = 4
+)
+
+// Valid indicates whether the value is a known member of the AgentUpdateRequestRole enum.
+func (e AgentUpdateRequestRole) Valid() bool {
+	switch e {
+	case AgentUpdateRequestRoleN2:
+		return true
+	case AgentUpdateRequestRoleN3:
+		return true
+	case AgentUpdateRequestRoleN4:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentUpdateRequestStatus.
+const (
+	AgentUpdateRequestStatusN1 AgentUpdateRequestStatus = 1
+	AgentUpdateRequestStatusN2 AgentUpdateRequestStatus = 2
+)
+
+// Valid indicates whether the value is a known member of the AgentUpdateRequestStatus enum.
+func (e AgentUpdateRequestStatus) Valid() bool {
+	switch e {
+	case AgentUpdateRequestStatusN1:
+		return true
+	case AgentUpdateRequestStatusN2:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentWhoAmIRole.
+const (
+	AgentWhoAmIRoleN2 AgentWhoAmIRole = 2
+	AgentWhoAmIRoleN3 AgentWhoAmIRole = 3
+	AgentWhoAmIRoleN4 AgentWhoAmIRole = 4
+)
+
+// Valid indicates whether the value is a known member of the AgentWhoAmIRole enum.
+func (e AgentWhoAmIRole) Valid() bool {
+	switch e {
+	case AgentWhoAmIRoleN2:
+		return true
+	case AgentWhoAmIRoleN3:
+		return true
+	case AgentWhoAmIRoleN4:
 		return true
 	default:
 		return false
@@ -2246,6 +2366,38 @@ type AddressInput struct {
 // AddressInputTag 0 无 / 1 家 / 2 公司 / 3 学校
 type AddressInputTag int
 
+// AdminAgent defines model for AdminAgent.
+type AdminAgent struct {
+	CreatedAt time.Time `json:"created_at"`
+
+	// Id 即 staff_id
+	Id int64 `json:"id"`
+
+	// Keys 只在详情里给（列表里缺席）。
+	Keys *[]AgentKey `json:"keys,omitempty"`
+
+	// LastUsedAt 任一把密钥最近一次被用的时间（分钟级节流）
+	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
+
+	// LiveKeys 没吊销、没过期的密钥数
+	LiveKeys  int     `json:"live_keys"`
+	Name      string  `json:"name"`
+	RegionIds []int64 `json:"region_ids"`
+
+	// Role 2 操作员 / 3 大区管理员 / 4 门店管理员
+	Role AdminAgentRole `json:"role"`
+
+	// Status 1 正常 / 2 停用
+	Status   AdminAgentStatus `json:"status"`
+	StoreIds []int64          `json:"store_ids"`
+}
+
+// AdminAgentRole 2 操作员 / 3 大区管理员 / 4 门店管理员
+type AdminAgentRole int
+
+// AdminAgentStatus 1 正常 / 2 停用
+type AdminAgentStatus int
+
 // AdminCategory 后台视角的分类，**扁平**。与前台的 `Category` 不同，它不嵌 `children`：
 // 后台管的是单个节点，而 `path` / `level` 足以让客户端自己拼出树。
 type AdminCategory struct {
@@ -3105,6 +3257,81 @@ type AdminStoreList struct {
 	PageSize   int          `json:"page_size"`
 	Total      int          `json:"total"`
 }
+
+// AgentCreateRequest defines model for AgentCreateRequest.
+type AgentCreateRequest struct {
+	Name      string                 `json:"name"`
+	RegionIds *[]int64               `json:"region_ids,omitempty"`
+	Role      AgentCreateRequestRole `json:"role"`
+	StoreIds  *[]int64               `json:"store_ids,omitempty"`
+}
+
+// AgentCreateRequestRole defines model for AgentCreateRequest.Role.
+type AgentCreateRequestRole int
+
+// AgentKey defines model for AgentKey.
+type AgentKey struct {
+	CreatedAt  time.Time  `json:"created_at"`
+	ExpiresAt  *time.Time `json:"expires_at,omitempty"`
+	Id         int64      `json:"id"`
+	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
+	Name       string     `json:"name"`
+
+	// Prefix 明文前 12 位（含 kagt_），给人认是哪一把
+	Prefix    string     `json:"prefix"`
+	RevokedAt *time.Time `json:"revoked_at,omitempty"`
+}
+
+// AgentKeyCreateRequest defines model for AgentKeyCreateRequest.
+type AgentKeyCreateRequest struct {
+	// ExpiresInDays 0 = 不过期
+	ExpiresInDays *int   `json:"expires_in_days,omitempty"`
+	Name          string `json:"name"`
+}
+
+// AgentKeyCreated defines model for AgentKeyCreated.
+type AgentKeyCreated struct {
+	CreatedAt  time.Time  `json:"created_at"`
+	ExpiresAt  *time.Time `json:"expires_at,omitempty"`
+	Id         int64      `json:"id"`
+	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
+	Name       string     `json:"name"`
+
+	// Prefix 明文前 12 位（含 kagt_），给人认是哪一把
+	Prefix    string     `json:"prefix"`
+	RevokedAt *time.Time `json:"revoked_at,omitempty"`
+
+	// Secret 明文，只在这一次响应里出现
+	Secret string `json:"secret"`
+}
+
+// AgentUpdateRequest defines model for AgentUpdateRequest.
+type AgentUpdateRequest struct {
+	Name      *string                   `json:"name,omitempty"`
+	RegionIds *[]int64                  `json:"region_ids,omitempty"`
+	Role      *AgentUpdateRequestRole   `json:"role,omitempty"`
+	Status    *AgentUpdateRequestStatus `json:"status,omitempty"`
+	StoreIds  *[]int64                  `json:"store_ids,omitempty"`
+}
+
+// AgentUpdateRequestRole defines model for AgentUpdateRequest.Role.
+type AgentUpdateRequestRole int
+
+// AgentUpdateRequestStatus defines model for AgentUpdateRequest.Status.
+type AgentUpdateRequestStatus int
+
+// AgentWhoAmI defines model for AgentWhoAmI.
+type AgentWhoAmI struct {
+	KeyId     int64           `json:"key_id"`
+	Name      string          `json:"name"`
+	RegionIds []int64         `json:"region_ids"`
+	Role      AgentWhoAmIRole `json:"role"`
+	StaffId   int64           `json:"staff_id"`
+	StoreIds  []int64         `json:"store_ids"`
+}
+
+// AgentWhoAmIRole defines model for AgentWhoAmI.Role.
+type AgentWhoAmIRole int
 
 // ApplicableCoupon defines model for ApplicableCoupon.
 type ApplicableCoupon struct {
@@ -6527,6 +6754,184 @@ type PostAddressesParams struct {
 	// · 首次执行失败（存档为失败态）时同样回放该失败响应；
 	//   确需重试的场景请换一个新 key
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// GetAdminAgentsParams defines parameters for GetAdminAgents.
+type GetAdminAgentsParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// PostAdminAgentsParams defines parameters for PostAdminAgents.
+type PostAdminAgentsParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+
+	// IdempotencyKey 客户端生成的 UUID。幂等作用域为 `(接口 scope, user_id, key)`，
+	// 有效期 24h，过期后同一 key 可复用（见数据模型文档 §11）。
+	//
+	// · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
+	//   并带 `Idempotency-Replayed: true` 响应头
+	// · **同 key 正在处理中**：`409` + `Retry-After`，
+	//   type=https://keel.dev/problems/idempotency-key-in-flight，
+	//   客户端应退避重试，不要当成业务失败
+	// · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
+	//   type=https://keel.dev/problems/idempotency-key-reused。
+	//   宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
+	//   那会让用户以为下单成功了而实际什么都没发生
+	// · 首次执行失败（存档为失败态）时同样回放该失败响应；
+	//   确需重试的场景请换一个新 key
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// GetAdminAgentsStaffIdParams defines parameters for GetAdminAgentsStaffId.
+type GetAdminAgentsStaffIdParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// PatchAdminAgentsStaffIdParams defines parameters for PatchAdminAgentsStaffId.
+type PatchAdminAgentsStaffIdParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// PostAdminAgentsStaffIdKeysParams defines parameters for PostAdminAgentsStaffIdKeys.
+type PostAdminAgentsStaffIdKeysParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// DeleteAdminAgentsStaffIdKeysKeyIdParams defines parameters for DeleteAdminAgentsStaffIdKeysKeyId.
+type DeleteAdminAgentsStaffIdKeysKeyIdParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
 }
 
 // PostAdminAuthBootstrapJSONBody defines parameters for PostAdminAuthBootstrap.
@@ -10290,6 +10695,15 @@ type PostAddressesJSONRequestBody = AddressInput
 
 // PutAddressesAddressIdJSONRequestBody defines body for PutAddressesAddressId for application/json ContentType.
 type PutAddressesAddressIdJSONRequestBody = AddressInput
+
+// PostAdminAgentsJSONRequestBody defines body for PostAdminAgents for application/json ContentType.
+type PostAdminAgentsJSONRequestBody = AgentCreateRequest
+
+// PatchAdminAgentsStaffIdJSONRequestBody defines body for PatchAdminAgentsStaffId for application/json ContentType.
+type PatchAdminAgentsStaffIdJSONRequestBody = AgentUpdateRequest
+
+// PostAdminAgentsStaffIdKeysJSONRequestBody defines body for PostAdminAgentsStaffIdKeys for application/json ContentType.
+type PostAdminAgentsStaffIdKeysJSONRequestBody = AgentKeyCreateRequest
 
 // PostAdminAuthBootstrapJSONRequestBody defines body for PostAdminAuthBootstrap for application/json ContentType.
 type PostAdminAuthBootstrapJSONRequestBody PostAdminAuthBootstrapJSONBody

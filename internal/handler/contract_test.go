@@ -763,6 +763,56 @@ var routes = []route{
 		HandlerFile:    "admin_product_import.go",
 		NoQueryParams:  "文件与类目选择在 multipart 里（file / categories），幂等键在请求头里",
 	},
+	// —— AI 员工与接入密钥（AI 经营 M9，docs/AI经营-M9设计.md §2）。
+	{
+		ContractPath:   "/admin/agents",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "admin_agent.go",
+		NoQueryParams:  "AI 员工与接入密钥（AI 经营 M9）：参数全在路径与请求体里",
+	},
+	{
+		ContractPath:   "/admin/agents",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "admin_agent.go",
+		NoQueryParams:  "AI 员工与接入密钥（AI 经营 M9）：参数全在路径与请求体里",
+	},
+	{
+		ContractPath:   "/admin/agents/{staff_id}",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "admin_agent.go",
+		NoQueryParams:  "AI 员工与接入密钥（AI 经营 M9）：参数全在路径与请求体里",
+	},
+	{
+		ContractPath:   "/admin/agents/{staff_id}",
+		ContractMethod: "patch",
+		HTTPMethod:     http.MethodPatch,
+		HandlerFile:    "admin_agent.go",
+		NoQueryParams:  "AI 员工与接入密钥（AI 经营 M9）：参数全在路径与请求体里",
+	},
+	{
+		ContractPath:   "/admin/agents/{staff_id}/keys",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "admin_agent.go",
+		NoQueryParams:  "AI 员工与接入密钥（AI 经营 M9）：参数全在路径与请求体里",
+	},
+	{
+		ContractPath:   "/admin/agents/{staff_id}/keys/{key_id}",
+		ContractMethod: "delete",
+		HTTPMethod:     http.MethodDelete,
+		HandlerFile:    "admin_agent.go",
+		NoQueryParams:  "AI 员工与接入密钥（AI 经营 M9）：参数全在路径与请求体里",
+	},
+	{
+		ContractPath:   "/agent/whoami",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "admin_agent.go",
+		NoQueryParams:  "AI 员工与接入密钥（AI 经营 M9）：参数全在路径与请求体里",
+	},
 	// —— 读文件（M4 收尾）。买家侧，没有 /admin/ 前缀。
 	{
 		ContractPath:   "/uploads/{upload_id}",

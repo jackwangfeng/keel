@@ -432,6 +432,29 @@ var permMatrix = []permRoute{
 	}},
 	// —— 店铺设置（00059）：与设默认门店同一行，只有管理员（含平台级经 X-Keel-Merchant 切进来的）。
 	// PUT 写的是列默认值，放几次都不改变这家店的行为（矩阵后面的格子不受影响）。
+	// —— AI 员工与接入密钥（AI 经营 M9）：只有本店管理员。每一格用自己新建的 AI 员工 / 密钥，互不影响。
+	{"GET", v1 + "/admin/agents", adminOnly, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permGet(v1 + "/admin/agents")
+	}},
+	{"POST", v1 + "/admin/agents", adminOnly, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permReq{Method: "POST", Path: v1 + "/admin/agents", Body: `{"name":"矩阵 AI","role":2}`, OK: http.StatusCreated}
+	}},
+	{"GET", v1 + "/admin/agents/:staff_id", adminOnly, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permGet(fmt.Sprintf(v1+"/admin/agents/%d", createAgent(t, fx.sh, `{"name":"矩阵 AI","role":2}`).Id))
+	}},
+	{"PATCH", v1 + "/admin/agents/:staff_id", adminOnly, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		id := createAgent(t, fx.sh, `{"name":"矩阵 AI","role":2}`).Id
+		return permReq{Method: "PATCH", Path: fmt.Sprintf(v1+"/admin/agents/%d", id), Body: `{"name":"改名"}`, OK: http.StatusOK}
+	}},
+	{"POST", v1 + "/admin/agents/:staff_id/keys", adminOnly, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		id := createAgent(t, fx.sh, `{"name":"矩阵 AI","role":2}`).Id
+		return permReq{Method: "POST", Path: fmt.Sprintf(v1+"/admin/agents/%d/keys", id), Body: `{"name":"k"}`, OK: http.StatusCreated}
+	}},
+	{"DELETE", v1 + "/admin/agents/:staff_id/keys/:key_id", adminOnly, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		id := createAgent(t, fx.sh, `{"name":"矩阵 AI","role":2}`).Id
+		k := issueAgentKey(t, fx.sh, id, `{"name":"k"}`)
+		return permReq{Method: "DELETE", Path: fmt.Sprintf(v1+"/admin/agents/%d/keys/%d", id, k.Id), OK: http.StatusNoContent}
+	}},
 	{"GET", v1 + "/admin/shop-settings", adminOnly, func(t *testing.T, fx *permFixture, c permCase) permReq {
 		return permGet(v1 + "/admin/shop-settings")
 	}},

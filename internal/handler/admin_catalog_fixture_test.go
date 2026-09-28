@@ -120,6 +120,8 @@ func newAdminShop(t *testing.T) adminShop {
 			// product_import_batches（00054）指向 staff 与 merchants：批量导入那一组
 			// 与权限矩阵每确认一次就留一行，要排在 staff 之前删。
 			`DELETE FROM product_import_batches WHERE merchant_id = $1`,
+			// AI 员工的接入密钥（00090）指向 staff（staff_id 与 created_by 两条复合外键）。
+			`DELETE FROM agent_keys WHERE merchant_id = $1`,
 			`DELETE FROM staff WHERE merchant_id = $1`,
 			// 幂等键那张表也指向 merchants（merchant_id 上有外键）。
 			// M4 收尾给后台写接口接上幂等之后，这一组测试每跑一次就会在这里

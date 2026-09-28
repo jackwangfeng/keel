@@ -133,6 +133,8 @@ type BootstrapState struct {
 // 所以那条路径能拿到的接口就该只有这些方法 —— 让错误的写法写不出来，
 // 而不是让它跑起来才报错。
 type StaffTx interface {
+	AgentTx
+
 	// BootstrapChannelState 读引导通道的状态。只在平台作用域里有意义。
 	// placeholderEmail 是引导占位账号的邮箱（service 里那个常量），用来把它
 	// 从「能登录的管理员」里排除掉。

@@ -44,6 +44,36 @@ export type AddressInput = {
   is_default? : boolean
 }
 
+export type AgentKey = {
+  id : number
+  name : string
+  /** 明文前 12 位（含 kagt_），给人认是哪一把 */
+  prefix : string
+  expires_at? : string
+  revoked_at? : string
+  last_used_at? : string
+  created_at : string
+}
+
+export type AdminAgent = {
+  /** 即 staff_id */
+  id : number
+  name : string
+  /** 2 操作员 / 3 大区管理员 / 4 门店管理员 */
+  role : number
+  /** 1 正常 / 2 停用 */
+  status : number
+  region_ids : number[]
+  store_ids : number[]
+  /** 没吊销、没过期的密钥数 */
+  live_keys : number
+  /** 任一把密钥最近一次被用的时间（分钟级节流） */
+  last_used_at? : string
+  created_at : string
+  /** 只在详情里给（列表里缺席）。 */
+  keys? : AgentKey[]
+}
+
 /** 后台视角的分类，**扁平**。与前台的 `Category` 不同，它不嵌 `children`： */
 export type AdminCategory = {
   id : number
@@ -749,6 +779,49 @@ export type AdminStoreList = {
   items : AdminStore[]
   /** 这家商家有没有默认门店。**必返。** */
   has_default : boolean
+}
+
+export type AgentCreateRequest = {
+  name : string
+  role : number
+  region_ids? : number[]
+  store_ids? : number[]
+}
+
+export type AgentKeyCreateRequest = {
+  name : string
+  /** 0 = 不过期 */
+  expires_in_days? : number
+}
+
+export type AgentKeyCreated = {
+  id : number
+  name : string
+  /** 明文前 12 位（含 kagt_），给人认是哪一把 */
+  prefix : string
+  expires_at? : string
+  revoked_at? : string
+  last_used_at? : string
+  created_at : string
+  /** 明文，只在这一次响应里出现 */
+  secret : string
+}
+
+export type AgentUpdateRequest = {
+  name? : string
+  role? : number
+  status? : number
+  region_ids? : number[]
+  store_ids? : number[]
+}
+
+export type AgentWhoAmI = {
+  staff_id : number
+  name : string
+  role : number
+  region_ids : number[]
+  store_ids : number[]
+  key_id : number
 }
 
 export type ApplicableCoupon = {

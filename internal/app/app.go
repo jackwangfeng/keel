@@ -441,6 +441,18 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	v1.PATCH("/admin/staff/:staff_id", staffAuth, adm.UpdateStaff)
 	v1.POST("/admin/staff/:staff_id/login-token", staffAuth, adm.ReissueLoginToken)
 
+	// AI 员工与接入密钥（AI 经营 M9，handler/admin_agent.go）。管 AI 员工走人的会话（staffAuth，本店管理员）；
+	// AI 员工自己凭 kagt_ 密钥进来（agentAuth，租户同样按 Host）。
+	agh := handler.NewAgentHandler(staffSvc)
+	agentAuth := auth.AgentBearer(staffSvc, service.IsAgentKeyRejected)
+	v1.GET("/admin/agents", staffAuth, agh.List)
+	v1.POST("/admin/agents", staffAuth, agh.Create)
+	v1.GET("/admin/agents/:staff_id", staffAuth, agh.Get)
+	v1.PATCH("/admin/agents/:staff_id", staffAuth, agh.Update)
+	v1.POST("/admin/agents/:staff_id/keys", staffAuth, agh.CreateKey)
+	v1.DELETE("/admin/agents/:staff_id/keys/:key_id", staffAuth, agh.RevokeKey)
+	v1.GET("/agent/whoami", agentAuth, agh.WhoAmI)
+
 	// 开店（M4 收尾）。它挂同一道 staffAuth，而「只有平台级管理员能调」
 	// 是业务规则，在 service.StaffService.OpenShop 里 —— 不在这里再套一层
 	// 中间件：那会让同一个判据有两份实现，而中间件那一份没有任何测试盯着

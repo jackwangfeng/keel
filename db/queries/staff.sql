@@ -81,19 +81,19 @@ RETURNING id, email, name, role, status, last_login_at, created_at;
 -- 按 id 取一个**没被软删**的操作员。查不到（包括「不在本作用域里」）返回 ErrNoRows。
 SELECT id, email, name, role, status, last_login_at, created_at
   FROM staff
- WHERE id = $1 AND deleted_at IS NULL;
+ WHERE id = $1 AND deleted_at IS NULL AND kind = 1;
 
 -- name: ListStaff :many
 -- 员工列表。契约：平台级看见平台操作员，商家级只看见自己店的 —— 而这句话
 -- 在这条 SQL 里**一个字都没有**，它由作用域和 RLS 给出。
 SELECT id, email, name, role, status, last_login_at, created_at
   FROM staff
- WHERE deleted_at IS NULL
+ WHERE deleted_at IS NULL AND kind = 1
  ORDER BY id
  LIMIT $1 OFFSET $2;
 
 -- name: CountStaff :one
-SELECT count(*) FROM staff WHERE deleted_at IS NULL;
+SELECT count(*) FROM staff WHERE deleted_at IS NULL AND kind = 1;
 
 -- name: SetStaffEmail :one
 -- 引导账号换会话时补上自己的邮箱（§14 认证流程 ①）。
@@ -112,7 +112,7 @@ RETURNING id, email, name, role, status, last_login_at, created_at;
 UPDATE staff
    SET role   = coalesce(sqlc.narg('role'),   role),
        status = coalesce(sqlc.narg('status'), status)
- WHERE id = sqlc.arg('id') AND deleted_at IS NULL
+ WHERE id = sqlc.arg('id') AND deleted_at IS NULL AND kind = 1
 RETURNING id, email, name, role, status, last_login_at, created_at;
 
 -- name: CountOtherLiveAdmins :one
@@ -174,7 +174,8 @@ SELECT t.id, t.staff_id, t.kind,
    AND t.used_at IS NULL
    AND t.revoked_at IS NULL
    AND t.expire_at > now()
-   AND s.deleted_at IS NULL;
+   AND s.deleted_at IS NULL
+   AND s.kind = 1;
 
 -- name: ConsumeStaffToken :one
 -- 一次性 token 用掉即失效。
@@ -213,4 +214,5 @@ UPDATE staff_tokens t
    AND t.expire_at > now()
    AND s.id = t.staff_id
    AND s.deleted_at IS NULL
+   AND s.kind = 1
 RETURNING t.id, s.id AS staff_id, s.role, s.status;
