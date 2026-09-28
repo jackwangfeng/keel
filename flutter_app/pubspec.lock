@@ -428,7 +428,7 @@ packages:
     description:
       path: "packages/mp_flutter"
       ref: main
-      resolved-ref: "42737150dd2b39b9b032388d826fe938979a4ec6"
+      resolved-ref: "4e78c7efcd1d71bf448f17c067bf041f9dd69a8b"
       url: "git@github.com:jackwangfeng/mp-flutter.git"
     source: git
     version: "0.1.0"
@@ -437,7 +437,7 @@ packages:
     description:
       path: "packages/mp_flutter_wechat"
       ref: main
-      resolved-ref: "42737150dd2b39b9b032388d826fe938979a4ec6"
+      resolved-ref: "4e78c7efcd1d71bf448f17c067bf041f9dd69a8b"
       url: "git@github.com:jackwangfeng/mp-flutter.git"
     source: git
     version: "0.1.0"
