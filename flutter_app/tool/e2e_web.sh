@@ -27,6 +27,9 @@ done
 
 # chromedriver：与本机 Chrome 同一个主版本，缓存在 .tools/（gitignore）。
 # 本机 Chrome：默认 macOS 的位置；Linux 上传 CHROME=/usr/bin/google-chrome（flutter drive 也读 CHROME_EXECUTABLE）。
+# 按手机屏跑（默认 iPhone 14/15 的 390×844@3）：flutter drive 默认是 1600×1024 的桌面窗口，窄屏才有的问题
+# （按钮在屏幕外、价格行溢出、键盘挡住提示）在桌面宽度下全都测不出来 —— 2026-09 真机 e2e 一次抓到四个。
+VIEWPORT=${KEEL_E2E_VIEWPORT:-390x844@3}
 CHROME=${CHROME:-"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"}
 export CHROME_EXECUTABLE=${CHROME_EXECUTABLE:-$CHROME}
 VER=$("$CHROME" --version | awk '{print $3}')
@@ -44,5 +47,5 @@ sleep 1
 
 for f in integration_test/*_test.dart; do
   "$FLUTTER" drive --driver=test_driver/integration_test.dart --target="$f" \
-    -d web-server --headless --browser-name=chrome "${DEFINES[@]}"
+    -d web-server --headless --browser-name=chrome --browser-dimension="$VIEWPORT" "${DEFINES[@]}"
 done
