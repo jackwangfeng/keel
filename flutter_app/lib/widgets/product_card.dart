@@ -18,6 +18,9 @@ class ProductCard extends StatelessWidget {
   /// 「＋」原地加购；下架 / 缺货的不显示。
   final VoidCallback? onAdd;
 
+  /// 网格里的固定行高：封面 156 + 内边距 12/14 + 两行标题 40 + 2 + 副标题 17 + 标签 4+19 + 余量 4 + 4 + 价格行 28 + 2。
+  static const gridExtent = 302.0;
+
   bool get _off => row.offShelf || row.soldOut;
   String get _offText => row.offShelf ? '已下架' : '无货';
 
@@ -79,7 +82,7 @@ class ProductCard extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // 标题 / 副标题 / 标签这一块占剩下的高度并裁掉超出部分：同一行两张卡片等高靠 IntrinsicHeight，
+                    // 标题 / 副标题 / 标签这一块占剩下的高度并裁掉超出部分（行高固定，内容少时价格照样贴底），
                     // 字体还在加载时测量差一两像素，不裁就是「溢出 1–2 像素」；价格行永远贴底。
                     Expanded(
                       child: ClipRect(
@@ -142,7 +145,7 @@ class ProductCard extends StatelessWidget {
                                     ],
                                   ),
                                 ),
-                              // 4 像素余量：IntrinsicHeight 量出来的文字高度比实际排版少一两像素（标签、行高）；
+                              // 4 像素余量：字体测量差一两像素（标签、行高）时，
                               // 余量在裁剪区里，被裁的是它而不是标签的下边框。
                               const SizedBox(height: 4),
                             ],

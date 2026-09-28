@@ -218,32 +218,22 @@ class _HomePageState extends State<HomePage> {
             if (!_loading && !_outOfRange && _error.isEmpty && _rows.isEmpty)
               const SliverToBoxAdapter(child: EmptyState(text: '店里还没有上架商品')),
             if (_loading && _rows.isEmpty) const SliverToBoxAdapter(child: EmptyState(text: '正在加载…')),
-            // 两列：同一行两张卡片等高（行高由较高的那张决定），价格行贴底对齐。边距 16、卡片间距 12。
+            // 两列网格：固定行高（按最高的卡片：两行标题 + 副标题 + 标签），同一行两张卡片等高、价格行贴底。
+            // 不用 IntrinsicHeight：它每行要排两遍版，滑动时每进来一行都付一次，小程序里（canvas + wasm）明显卡。
+            // 边距 16、卡片间距 12（与 uni-app x 一样）。
             SliverPadding(
               key: const Key('home.grid'),
-              padding: const EdgeInsets.symmetric(horizontal: 10),
-              sliver: SliverList(
+              padding: const EdgeInsets.fromLTRB(16, 6, 16, 0),
+              sliver: SliverGrid(
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: 2, mainAxisSpacing: 12, crossAxisSpacing: 12, mainAxisExtent: ProductCard.gridExtent),
                 delegate: SliverChildBuilderDelegate(
-                  (_, r) => Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
-                    child: IntrinsicHeight(
-                      child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                        for (final i in [r * 2, r * 2 + 1]) ...[
-                          if (i == r * 2 + 1) const SizedBox(width: 12),
-                          Expanded(
-                            child: i < _rows.length
-                                ? ProductCard(
-                                    row: _rows[i],
-                                    onTap: () => context.push('/product/${_rows[i].id}'),
-                                    onAdd: () => quickAdd(context, _rows[i].id),
-                                  )
-                                : const SizedBox(),
-                          ),
-                        ],
-                      ]),
-                    ),
+                  (_, i) => ProductCard(
+                    row: _rows[i],
+                    onTap: () => context.push('/product/${_rows[i].id}'),
+                    onAdd: () => quickAdd(context, _rows[i].id),
                   ),
-                  childCount: (_rows.length + 1) ~/ 2,
+                  childCount: _rows.length,
                 ),
               ),
             ),
