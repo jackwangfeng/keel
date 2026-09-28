@@ -33,10 +33,12 @@ dependencies:
   # 售后凭证选图（Web / 原生）。小程序里不走它，走下面的 mp_flutter_wechat（wx.chooseMedia）。
   image_picker: ^1.1.2
   # mp-flutter 的微信能力桥：只在小程序里可用，其它平台 isAvailable 为 false。
+  # 用公开仓库的发版标签（https，不要 GitHub 权限）：keel 是公开仓库，依赖私有库别人就编不了。
+  # 要抢先用 mp-flutter 还没发版的修复时，临时改成 internal 库（私有）的 main，发版后再换回标签。
   mp_flutter_wechat:
     git:
-      url: git@github.com:jackwangfeng/mp-flutter-internal.git
-      ref: main
+      url: https://github.com/jackwangfeng/mp-flutter.git
+      ref: v0.2.0
       path: packages/mp_flutter_wechat
 
 dev_dependencies:
@@ -48,8 +50,8 @@ dev_dependencies:
     sdk: flutter
   mp_flutter:
     git:
-      url: git@github.com:jackwangfeng/mp-flutter-internal.git
-      ref: main
+      url: https://github.com/jackwangfeng/mp-flutter.git
+      ref: v0.2.0
       path: packages/mp_flutter
   flutter_lints: ^6.0.0
   fake_async: ^1.3.1
