@@ -481,7 +481,7 @@ func (s *StaffService) ListStaff(ctx context.Context, page, pageSize int) (Staff
 	page, pageSize = clampPaging(page, pageSize)
 
 	out := StaffPage{Page: page, PageSize: pageSize}
-	err = s.inScope(ctx, id.Platform(), func(tx repository.StaffTx) error {
+	err = s.inScope(ctx, staffPlatformScope(ctx, id), func(tx repository.StaffTx) error {
 		var (
 			total int64
 			items []repository.Staff
@@ -515,7 +515,7 @@ func (s *StaffService) ListStaff(ctx context.Context, page, pageSize int) (Staff
 		if err != nil {
 			return err
 		}
-		items, err = withScopesAll(ctx, tx, id.Platform(), items)
+		items, err = withScopesAll(ctx, tx, staffPlatformScope(ctx, id), items)
 		if err != nil {
 			return err
 		}
@@ -600,7 +600,7 @@ func (s *StaffService) CreateStaff(ctx context.Context, email, name string, role
 
 	var out StaffCreated
 	replayed := false
-	err = s.inScopeIdempotent(ctx, id.Platform(), func(tx repository.StaffTx, itx repository.IdempotencyTx) error {
+	err = s.inScopeIdempotent(ctx, staffPlatformScope(ctx, id), func(tx repository.StaffTx, itx repository.IdempotencyTx) error {
 		st, r, err := idempotentInTx(ctx, itx, scopeAdminStaffCreate, subj, idemKey, hash, archivedCreated,
 			func() (repository.Staff, error) {
 				created, err := s.createStaffIn(ctx, tx, id, email, name, role, scopes)
@@ -624,6 +624,14 @@ func (s *StaffService) CreateStaff(ctx context.Context, email, name string, role
 	return out, replayed, nil
 }
 
+// staffPlatformScope：员工管理（列表、加、改、重签）落在平台作用域还是这家店的作用域。
+// 平台级会话**没切**租户时管的是平台级员工；经 X-Keel-Merchant 切进某家店时管的是这家店的员工 ——
+// 与切进来之后管商品、券、订单同一个道理（2026-09-28 破坏性测试：之前建员工时这个头被静默忽略，
+// 调用方以为给 demo 加了管理员，实际多了一个平台级管理员）。「我是谁」（Me）不走这条，永远按身份。
+func staffPlatformScope(ctx context.Context, id auth.StaffIdentity) bool {
+	return id.Platform() && !auth.MerchantSwitched(ctx)
+}
+
 // createStaffIn 是加员工的业务本身，跑在调用方开好的那个事务里。
 func (s *StaffService) createStaffIn(ctx context.Context, tx repository.StaffTx, id auth.StaffIdentity,
 	email, name string, role int16, scopes repository.StaffScopes) (StaffCreated, error) {
@@ -638,7 +646,7 @@ func (s *StaffService) createStaffIn(ctx context.Context, tx repository.StaffTx,
 		}); err != nil {
 			return err
 		}
-		if err := checkRoleScopes(ctx, tx, id.Platform(), role, scopes); err != nil {
+		if err := checkRoleScopes(ctx, tx, staffPlatformScope(ctx, id), role, scopes); err != nil {
 			return err
 		}
 		creator := id.StaffID
@@ -649,7 +657,7 @@ func (s *StaffService) createStaffIn(ctx context.Context, tx repository.StaffTx,
 			}
 			return err
 		}
-		if !id.Platform() {
+		if !staffPlatformScope(ctx, id) {
 			if err := tx.ReplaceStaffScopes(ctx, st.ID, scopes); err != nil {
 				return err
 			}
@@ -694,7 +702,7 @@ func (s *StaffService) UpdateStaff(ctx context.Context, staffID int64, role, sta
 	}
 
 	var out repository.Staff
-	err = s.inScope(ctx, id.Platform(), func(tx repository.StaffTx) error {
+	err = s.inScope(ctx, staffPlatformScope(ctx, id), func(tx repository.StaffTx) error {
 		// 先读一次：要知道这个人现在是不是在岗管理员，才能判断这一改会不会
 		// 把最后一个管理员拿掉。**「只能改同租户内的人」不在这个 if 里** ——
 		// 别的租户那一行在本作用域里根本查不出来，于是这里直接是 404。
@@ -705,7 +713,7 @@ func (s *StaffService) UpdateStaff(ctx context.Context, staffID int64, role, sta
 		if err != nil {
 			return err
 		}
-		beforeScopes, err := loadStaffScopes(ctx, tx, id.Platform(), staffID)
+		beforeScopes, err := loadStaffScopes(ctx, tx, staffPlatformScope(ctx, id), staffID)
 		if err != nil {
 			return err
 		}
@@ -738,7 +746,7 @@ func (s *StaffService) UpdateStaff(ctx context.Context, staffID int64, role, sta
 		}); err != nil {
 			return err
 		}
-		if err := checkRoleScopes(ctx, tx, id.Platform(), newRole, newScopes); err != nil {
+		if err := checkRoleScopes(ctx, tx, staffPlatformScope(ctx, id), newRole, newScopes); err != nil {
 			return err
 		}
 
@@ -836,7 +844,7 @@ func (s *StaffService) ReissueLoginToken(ctx context.Context, staffID int64) (St
 		return StaffLoginToken{}, err
 	}
 	var out StaffLoginToken
-	err = s.inScope(ctx, id.Platform(), func(tx repository.StaffTx) error {
+	err = s.inScope(ctx, staffPlatformScope(ctx, id), func(tx repository.StaffTx) error {
 		target, err := tx.FindStaff(ctx, staffID)
 		if errors.Is(err, repository.ErrStaffNotFound) {
 			return ErrStaffNotFound
@@ -844,7 +852,7 @@ func (s *StaffService) ReissueLoginToken(ctx context.Context, staffID int64) (St
 		if err != nil {
 			return err
 		}
-		scopes, err := loadStaffScopes(ctx, tx, id.Platform(), staffID)
+		scopes, err := loadStaffScopes(ctx, tx, staffPlatformScope(ctx, id), staffID)
 		if err != nil {
 			return err
 		}

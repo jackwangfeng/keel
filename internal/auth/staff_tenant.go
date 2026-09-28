@@ -113,6 +113,16 @@ func applyPlatformTenantSwitch(c *gin.Context, dir MerchantDirectory, id StaffId
 	}
 
 	// 规则 2：替换，不是叠加。之后所有 tenant.FromContext 读到的都是这家。
-	c.Request = c.Request.WithContext(tenant.NewContext(ctx, merchantID))
+	c.Request = c.Request.WithContext(context.WithValue(tenant.NewContext(ctx, merchantID), merchantSwitchedKey{}, true))
 	return true
+}
+
+type merchantSwitchedKey struct{}
+
+// MerchantSwitched 回答这一次请求是不是平台级会话经 X-Keel-Merchant 切进了某家店。
+// 员工管理据此决定落在哪个作用域：切进来了就是管这家店的员工（与切进来之后管商品、券同一个道理），
+// 没切就是管平台级员工（service/staff.go 的 staffPlatformScope）。
+func MerchantSwitched(ctx context.Context) bool {
+	v, _ := ctx.Value(merchantSwitchedKey{}).(bool)
+	return v
 }

@@ -500,3 +500,34 @@ func TestTenantScopeCannotReviseTheMerchantDirectory(t *testing.T) {
 		t.Fatalf("keel_app UPDATE merchants 的结果是 %v，期望 42501（没有 UPDATE 权限）", err)
 	}
 }
+
+// 平台管理员带头切进某家店加员工：建出来的是**这家店**的员工（与切进来之后管商品、券同一个道理），
+// 员工列表也按这家店列；不带头时照旧是平台级员工。
+// 2026-09-28 破坏性测试：之前这个头被静默忽略，调用方以为给店里加了管理员，实际多了一个平台级管理员。
+func TestPlatformSwitchManagesThatShopsStaff(t *testing.T) {
+	b := newAdminShop(t)
+	token := newPlatformAdmin(t)
+	email := fmt.Sprintf("switched-%d@keel.test", time.Now().UnixNano())
+	t.Cleanup(func() {
+		adminExec(t, `DELETE FROM staff_tokens WHERE staff_id IN (SELECT id FROM staff WHERE email = $1)`, email)
+		adminExec(t, `DELETE FROM staff WHERE email = $1`, email)
+	})
+	wantStatus(t, switchReq(t, nil, http.MethodPost, hostA,
+		"/api/v1/admin/staff", fmt.Sprintf(`{"email":%q,"name":"店长","role":1}`, email), token, shopCode(b)),
+		http.StatusCreated, "平台管理员带头加员工")
+	var owner *int64
+	if err := admin(t).QueryRow(context.Background(), `SELECT merchant_id FROM staff WHERE email = $1`, email).Scan(&owner); err != nil {
+		t.Fatal(err)
+	}
+	if owner == nil || *owner != b.MerchantID {
+		t.Fatalf("带头加的员工 merchant_id=%v，期望这家店 %d（不是平台级）", owner, b.MerchantID)
+	}
+	w := switchReq(t, nil, http.MethodGet, hostA, "/api/v1/admin/staff?page_size=100", "", token, shopCode(b))
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), email) {
+		t.Fatalf("带头列员工应看到这家店的新员工：%d %s", w.Code, w.Body.String())
+	}
+	w = switchReq(t, nil, http.MethodGet, hostA, "/api/v1/admin/staff?page_size=100", "", token, "")
+	if w.Code != http.StatusOK || strings.Contains(w.Body.String(), email) {
+		t.Fatalf("不带头列的是平台级员工，不该有这家店的员工：%d", w.Code)
+	}
+}
