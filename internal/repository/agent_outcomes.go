@@ -45,6 +45,8 @@ type AgentOutcomeTx interface {
 	SetAgentProposalExecuted(ctx context.Context, id int64, dueAt *time.Time, outcome []byte) error
 	DueAgentProposalOutcomes(ctx context.Context) ([]DueProposalOutcome, error)
 	SaveAgentProposalOutcome(ctx context.Context, id int64, outcome []byte) error
+	// DeferAgentProposalOutcome 把一条到点的复盘推迟到 dueAt（统计窗口还没走完）。
+	DeferAgentProposalOutcome(ctx context.Context, id int64, dueAt time.Time) error
 	SKUUnitsSoldBetween(ctx context.Context, skuIDs []int64, storeID *int64, from, to time.Time) (qty, amountCents int64, err error)
 	ProductUnitsSoldBetween(ctx context.Context, productID int64, from, to time.Time) (int64, error)
 	CouponTemplateUsage(ctx context.Context, templateID int64) (claimed, used int64, err error)
@@ -76,6 +78,10 @@ func (t tenantTx) DueAgentProposalOutcomes(ctx context.Context) ([]DueProposalOu
 
 func (t tenantTx) SaveAgentProposalOutcome(ctx context.Context, id int64, outcome []byte) error {
 	return t.q.SaveAgentProposalOutcome(ctx, db.SaveAgentProposalOutcomeParams{ID: id, Outcome: outcome})
+}
+
+func (t tenantTx) DeferAgentProposalOutcome(ctx context.Context, id int64, dueAt time.Time) error {
+	return t.q.DeferAgentProposalOutcome(ctx, db.DeferAgentProposalOutcomeParams{ID: id, DueAt: tsArg(dueAt)})
 }
 
 func (t tenantTx) SKUUnitsSoldBetween(ctx context.Context, skuIDs []int64, storeID *int64, from, to time.Time) (int64, int64, error) {

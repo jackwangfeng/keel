@@ -38,8 +38,20 @@ func TestProposalOutcomeAndScorecard(t *testing.T) {
 		`SELECT outcome_due_at > now() + interval '6 days' FROM agent_proposals WHERE id = $1`, id).Scan(&due); err != nil || !due {
 		t.Fatalf("加库存应 7 天后复盘：%v %v", due, err)
 	}
+	// 只把 outcome_due_at 拨到过去、窗口（执行后 7 天）还没走完：不算半截数据，推迟回窗口关闭。
 	adminExec(t, `UPDATE agent_proposals SET outcome_due_at = now() - interval '1 minute' WHERE id = $1`, id)
+	if _, err := service.ReviewProposalOutcomesOnce(context.Background(), repository.New(testPool), localInventory(), nil); err != nil {
+		t.Fatal(err)
+	}
+	var deferred bool
+	if err := admin(t).QueryRow(context.Background(), `SELECT outcome IS NULL AND outcome_due_at = executed_at + interval '7 days'
+		FROM agent_proposals WHERE id = $1`, id).Scan(&deferred); err != nil || !deferred {
+		t.Fatalf("窗口没走完时应推迟到执行后 7 天、不写 outcome：%v %v", deferred, err)
+	}
 
+	// 窗口真的走完了（执行时间拨回 8 天前）：量一次。
+	adminExec(t, `UPDATE agent_proposals SET executed_at = executed_at - interval '8 days',
+		outcome_due_at = now() - interval '1 minute' WHERE id = $1`, id)
 	n, err := service.ReviewProposalOutcomesOnce(context.Background(), repository.New(testPool), localInventory(), nil)
 	if err != nil || n < 1 {
 		t.Fatalf("复盘扫描：n=%d err=%v", n, err)

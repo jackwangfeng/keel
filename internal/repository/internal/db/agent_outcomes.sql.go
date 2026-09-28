@@ -182,6 +182,22 @@ func (q *Queries) CouponTemplateUsage(ctx context.Context, templateID int64) (Co
 	return i, err
 }
 
+const deferAgentProposalOutcome = `-- name: DeferAgentProposalOutcome :exec
+UPDATE agent_proposals SET outcome_due_at = $1
+ WHERE id = $2 AND status = 20 AND outcome_at IS NULL
+`
+
+type DeferAgentProposalOutcomeParams struct {
+	DueAt pgtype.Timestamptz
+	ID    int64
+}
+
+// 到点了但统计窗口还没走完（outcome_due_at 被提前了）：推迟到窗口关闭，不算半截数据。
+func (q *Queries) DeferAgentProposalOutcome(ctx context.Context, arg DeferAgentProposalOutcomeParams) error {
+	_, err := q.db.Exec(ctx, deferAgentProposalOutcome, arg.DueAt, arg.ID)
+	return err
+}
+
 const dueAgentProposalOutcomes = `-- name: DueAgentProposalOutcomes :many
 SELECT id, kind, store_id, sku_id, payload, executed_at
   FROM agent_proposals

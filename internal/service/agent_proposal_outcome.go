@@ -93,6 +93,22 @@ func verdictRatio(after, before int64, up, down float64) string {
 	return verdictNeutral
 }
 
+// outcomeWindowClose 是一条提案的统计窗口关闭的时刻：到这之前量出来的是半截数据。
+// 与 computeOutcome 用的窗口一一对应：加库存 / 改文案 / 发券 = 执行后 7 天，限时折扣 = 活动结束
+// （复盘在结束后 3 天，窗口本身在结束时就关了）。量不出效果的种类返回零值（不等）。
+func outcomeWindowClose(d repository.DueProposalOutcome) time.Time {
+	switch d.Kind {
+	case ProposalKindInventoryAdjust, ProposalKindProductCopy, ProposalKindCoupon:
+		return d.ExecutedAt.Add(outcomeWindow)
+	case ProposalKindFlashPrice:
+		var pl FlashPricePayload
+		if json.Unmarshal(d.Payload, &pl) == nil {
+			return max64t(pl.EndsAt, d.ExecutedAt)
+		}
+	}
+	return time.Time{}
+}
+
 // computeOutcome 量一条提案的效果（事务里跑；断货天数经库存服务）。
 func computeOutcome(ctx context.Context, tx repository.Tx, inv inventory.Service, tz string,
 	d repository.DueProposalOutcome) (ProposalOutcome, error) {
@@ -254,6 +270,17 @@ func ReviewProposalOutcomesOnce(ctx context.Context, repo ProposalOutcomeReposit
 			return total, err
 		}
 		for _, d := range due {
+			// outcome_due_at 由执行时按窗口定（outcomePlan），正常到点时窗口已经关了。被人手工提前、
+			// 或者将来改了 outcomePlan 的时候，不拿半截窗口下结论：推迟到窗口关闭再算。
+			// （2026-09-28 演示站验收强制提前过一次，算出「7 天内卖出不到三成」—— 其实才过了几分钟。）
+			if closeAt := outcomeWindowClose(d); time.Now().Before(closeAt) {
+				if err := repo.WithTenant(mctx, func(tx repository.Tx) error {
+					return tx.DeferAgentProposalOutcome(mctx, d.ID, closeAt)
+				}); err != nil {
+					log.ErrorContext(mctx, "AI 员工提案复盘推迟出错", "proposal_id", d.ID, "err", err)
+				}
+				continue
+			}
 			err := repo.WithTenant(mctx, func(tx repository.Tx) error {
 				o, err := computeOutcome(mctx, tx, inv, tz, d)
 				if err != nil {

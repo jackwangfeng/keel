@@ -18,6 +18,11 @@ SELECT id, kind, store_id, sku_id, payload, executed_at
 UPDATE agent_proposals SET outcome = sqlc.arg(outcome), outcome_at = now()
  WHERE id = sqlc.arg(id) AND status = 20 AND outcome_at IS NULL;
 
+-- name: DeferAgentProposalOutcome :exec
+-- 到点了但统计窗口还没走完（outcome_due_at 被提前了）：推迟到窗口关闭，不算半截数据。
+UPDATE agent_proposals SET outcome_due_at = sqlc.arg(due_at)
+ WHERE id = sqlc.arg(id) AND status = 20 AND outcome_at IS NULL;
+
 -- name: SKUUnitsSoldBetween :one
 -- 一组 SKU 在 [from, to) 内卖出的件数与金额（分）。store_id 为空 = 全部门店。
 SELECT COALESCE(sum(oi.quantity), 0)::bigint AS qty,
