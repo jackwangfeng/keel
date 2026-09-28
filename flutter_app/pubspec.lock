@@ -427,20 +427,20 @@ packages:
     dependency: "direct dev"
     description:
       path: "packages/mp_flutter"
-      ref: "v0.2.0"
-      resolved-ref: "87dd015665c99b3cfccb09cac03fef8e79b7eccd"
+      ref: "v0.2.1"
+      resolved-ref: "3d3bbd64cd05165921b0fa234b324e2f702f4c4b"
       url: "https://github.com/jackwangfeng/mp-flutter.git"
     source: git
-    version: "0.1.0"
+    version: "0.2.1"
   mp_flutter_wechat:
     dependency: "direct main"
     description:
       path: "packages/mp_flutter_wechat"
-      ref: "v0.2.0"
-      resolved-ref: "87dd015665c99b3cfccb09cac03fef8e79b7eccd"
+      ref: "v0.2.1"
+      resolved-ref: "3d3bbd64cd05165921b0fa234b324e2f702f4c4b"
       url: "https://github.com/jackwangfeng/mp-flutter.git"
     source: git
-    version: "0.1.0"
+    version: "0.2.1"
   package_info_plus:
     dependency: transitive
     description:
