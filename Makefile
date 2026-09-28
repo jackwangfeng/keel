@@ -123,7 +123,7 @@ help:
 	@echo "make migrate-inventory-status 打印库存库各版本的应用状态"
 	@echo "make search-metrics 按店铺 × 策略统计搜索效果（PERIOD 默认 7 days，要管理员连接）"
 	@echo "make test-db      跑需要数据库的测试（强制不吃缓存，含替身那一组）"
-	@echo "make test-engine    对真的跑着的 infero 跑三条判据（要 GPU + KEEL_EMBED_ENDPOINT + 数据库）"
+	@echo "make test-engine    对真的跑着的 infero 跑三条判据（要 KEEL_EMBED_ENDPOINT + 数据库；GPU 版，CPU 版目前太慢）"
 	@echo "make category-eval  类目推荐的离线评测（Top-1 / Top-3 与阈值表，要跑着的 infero + KEEL_EMBED_ENDPOINT）"
 	@echo "make dtmrs-deps     取回 dtmrs 并编出 libdtmrs.so（需要 Rust 1.88+）"
 	@echo "make build          编译主模块（会先确保 libdtmrs.so 在）"
@@ -444,7 +444,8 @@ category-eval:
 # 它们能证明客户端的判断力，证明不了「这套东西真的能算出语义相近」——
 # 而那正是 M3 的验收标准（搜「连衣裙」能返回相关商品）。
 #
-# 起引擎（要 GPU；infero 只有 CUDA / Metal 后端，没有 CPU 后端）：
+# 起引擎（要 GPU；infero 的 CPU 后端 --features cpu 数值一致但单线程、单条约 5 秒，
+# 跑这条会慢且可能超时，见 docs/电商系统-总体架构.md §1「那个缺口」）：
 #     ./scripts/infero-up.sh
 # 然后（**两样都要**：真引擎 + 真数据库，理由见下）：
 #     KEEL_EMBED_ENDPOINT=http://127.0.0.1:18081 make test-engine

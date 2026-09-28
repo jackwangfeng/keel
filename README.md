@@ -319,11 +319,15 @@ are not there yet, and are listed so that nothing above reads as if it ships:
   visibly. The derived-data indexer does not start either; the startup log
   carries one WARN spelling that out.
 
-  **That is the only shape a GPU-less deployment has today.** infero has CUDA
-  and Metal backends and no CPU backend yet, and this repo does not keep a
-  second engine implementation around as a stand-in — the M3 Python service
-  (BGE-M3 on CPU) has been retired. The fix is a CPU backend inside infero
-  itself, which is in progress there; until it lands this is an intention, not a feature
+  **That is the only shape a GPU-less deployment has today.** infero gained a CPU
+  backend on 2026-09-26 (`--features cpu`), and measured here its vectors match the
+  GPU build (cosine ≥ 0.999999, same model id). But it is single-threaded for now:
+  about 5 s per query (≈8 ms on the GPU) and about 4 minutes for an indexing batch of 64 —
+  far over Keel's 250 ms query budget and 5 s indexing timeout — so "semantic search without a
+  GPU" is **not** a feature yet. The measurements and how to reproduce them are in the
+  architecture doc (§1, "那个缺口"); we will re-measure once infero's CPU path is faster.
+  This repo does not keep a second engine implementation around as a stand-in — the
+  M3 Python service (BGE-M3 on CPU) has been retired
 - **SMS, WeChat and e-mail.** SMS-code login, WeChat login and the console's
   e-mail login link all need an outside service that is not wired up; those
   endpoints answer 501 on purpose. Buyers log in with phone + password; staff

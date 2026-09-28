@@ -7,7 +7,8 @@
 # 本来打算给它一个 compose 服务、用 deploy.resources.reservations.devices
 # 把 GPU 透进容器。实测下来放弃了，理由是显存账而不是技术障碍：
 #
-#   - infero 是 GPU-only（CUDA / Metal，没有 CPU 后端），而一块卡上
+#   - 这里起的是 infero 的 GPU 版（CUDA / Metal；它 2026-09-26 起也有 CPU 后端，但单线程、单条约 5 秒，
+#     Keel 今天用不上，见 docs/电商系统-总体架构.md §1「那个缺口」），而一块卡上
 #     **同时只装得下一份**。本机这块 RTX A4000（16 GiB）此刻还分给另外两个
 #     项目（约 9 GiB），infero 自己要 4.8 GiB —— 容器化不会让它变小，
 #     只会在切换时多一次停机。
@@ -85,9 +86,9 @@ if [ ! -d "$KEEL_INFERO_MODEL" ]; then
     exit 1
 fi
 if ! command -v nvidia-smi >/dev/null 2>&1; then
-    echo "这台机器上没有 nvidia-smi。infero 只有 CUDA / Metal 后端，**没有 CPU 后端**——" >&2
-    echo "无 GPU 的机器跑不了它。那种部署目前只能不配 KEEL_EMBED_ENDPOINT，" >&2
-    echo "让 /search 走纯关键词降级路径（§8）。" >&2
+    echo "这台机器上没有 nvidia-smi，这个脚本起的是 infero 的 GPU 版。" >&2
+    echo "infero 的 CPU 后端（--features cpu）数值一致但今天单线程、单条查询约 5 秒，Keel 用不上；" >&2
+    echo "无 GPU 的部署目前只能不配 KEEL_EMBED_ENDPOINT，让 /search 走纯关键词降级路径（§8）。" >&2
     exit 1
 fi
 

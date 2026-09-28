@@ -209,7 +209,9 @@ docker compose -f compose.yaml -f compose.infero.yaml up -d   # 再起栈
 **没配 `KEEL_EMBED_ENDPOINT` 时它不启动**，启动日志里有一条 WARN 说明后果
 （新品与改过的商品搜不到）。这是刻意的：默认那条 `docker compose up` 里没有引擎。
 没有 GPU 的机器今天就是这条路 —— 栈起得来、`/search` 走纯关键词降级链，
-只是没有语义召回（infero 只有 CUDA / Metal 后端，CPU 后端还没有）。
+只是没有语义召回。infero 2026-09-26 起有了 CPU 后端（`--features cpu`），数值与 GPU 一致，
+但目前单线程、单条查询约 5 秒，撑不起查询与索引 —— 实测见
+[总体架构](./docs/电商系统-总体架构.md) §1「那个缺口」，想自己验可以照那里的复现命令跑 `make test-engine`。
 
 **全量**走一条单独的命令，补两类增量看不见的东西：存量（00016 刚落地时全库
 `search_text` 都是 NULL，而没有任何 `updated_at` 因此前进），以及换模型 / 改拼接模板：
