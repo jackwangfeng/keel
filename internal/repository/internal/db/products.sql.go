@@ -240,7 +240,11 @@ SELECT p.id, p.title, p.subtitle,
                                   WHERE cc.id = $3::bigint
                                     AND cc.deleted_at IS NULL) || '%'))
  ORDER BY COALESCE((SELECT pss.in_stock FROM product_store_stock pss
-                      WHERE pss.store_id = $1 AND pss.product_id = p.id), TRUE) DESC,
+                      WHERE pss.store_id = $1 AND pss.product_id = p.id),
+                   -- 没刷过的行按有货排，但前提是它真有在售 SKU：一个 SKU 都没有的商品永远不会有那一行，
+                   -- 之前因此永远排第一（2026-09-28 演示站：没有 SKU 的商品 24 顶在列表首位、显示 ¥0）。
+                   -- COALESCE 短路，只在缺行时查这一次。
+                   EXISTS (SELECT 1 FROM skus sk WHERE sk.product_id = p.id AND sk.status = 1 AND sk.deleted_at IS NULL)) DESC,
           p.published_at DESC NULLS LAST, p.id DESC
  LIMIT $5 OFFSET $4
 `
@@ -265,7 +269,8 @@ type ListProductsRow struct {
 }
 
 // 排序（2026-09-27）：**这家店有货的在前**，再按上架时间新到旧。有没有货读 product_store_stock
-// （00087，库存在库存服务那边，这里 JOIN 不到 inventories）；没刷过的行按有货排，不错压。
+// （00087，库存在库存服务那边，这里 JOIN 不到 inventories）；没刷过的行按有货排，不错压
+// （一个在售 SKU 都没有的除外，见 ORDER BY）。
 // 刻意不带 WHERE merchant_id —— 租户由 RLS 在数据库层过滤。
 //
 // 这不是偷懒：应用层再加一遍条件会让「RLS 是否真的生效」变得测不出来。

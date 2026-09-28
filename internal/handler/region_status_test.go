@@ -190,3 +190,27 @@ func TestProductListPutsInStockFirst(t *testing.T) {
 	setStoreStock(t, cs.adminShop, cs.NorthStore, cs.ShirtSKU, 5)
 	want("补回衬衫后", order(cs.NorthStore), cs.ShirtProduct, cs.DressProduct)
 }
+
+// 一个在售 SKU 都没有的商品（绕过了上架闸门，比如手工写库）永远不会有 product_store_stock 那一行；
+// 之前「没刷过的行按有货排」让它永远排第一（2026-09-28 演示站：商品 24 顶在首位、显示 ¥0）。
+func TestProductWithoutSKUsDoesNotJumpTheList(t *testing.T) {
+	cs := newCouponShop(t)
+	empty := adminQueryInt64(t, `INSERT INTO products (merchant_id, title, category_id, status, published_at)
+		VALUES ($1, '没有规格的商品', $2, 1, now() + interval '1 hour') RETURNING id`, cs.MerchantID, cs.ChildCat)
+	t.Cleanup(func() { adminExec(t, `DELETE FROM products WHERE id = $1`, empty) })
+	var out struct {
+		Items []api.ProductSummary `json:"items"`
+	}
+	decodeInto(t, getAs(t, cs.Host, fmt.Sprintf("/api/v1/products?store_id=%d", cs.NorthStore), ""), http.StatusOK, "商品列表", &out)
+	pos := map[int64]int{}
+	for i, it := range out.Items {
+		pos[it.Id] = i
+	}
+	e, ok := pos[empty]
+	if !ok {
+		t.Fatalf("列表里没有那件商品：%v", pos)
+	}
+	if e < pos[cs.ShirtProduct] || e < pos[cs.DressProduct] {
+		t.Fatalf("没有 SKU 的商品（上架时间最新）排在了有货商品前面：%v", pos)
+	}
+}
