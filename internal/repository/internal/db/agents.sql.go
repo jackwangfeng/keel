@@ -134,6 +134,35 @@ func (q *Queries) GetAgent(ctx context.Context, id int64) (GetAgentRow, error) {
 	return i, err
 }
 
+const insertAgentToolCall = `-- name: InsertAgentToolCall :exec
+INSERT INTO agent_tool_calls (agent_staff_id, key_id, tool, args, ok, error_type, duration_ms)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+`
+
+type InsertAgentToolCallParams struct {
+	AgentStaffID int64
+	KeyID        int64
+	Tool         string
+	Args         []byte
+	Ok           bool
+	ErrorType    string
+	DurationMs   int32
+}
+
+// 工具调用审计（00093）。key_id 不带外键：密钥删不掉（只吊销），但审计不该因为将来的清理策略卡住。
+func (q *Queries) InsertAgentToolCall(ctx context.Context, arg InsertAgentToolCallParams) error {
+	_, err := q.db.Exec(ctx, insertAgentToolCall,
+		arg.AgentStaffID,
+		arg.KeyID,
+		arg.Tool,
+		arg.Args,
+		arg.Ok,
+		arg.ErrorType,
+		arg.DurationMs,
+	)
+	return err
+}
+
 const listAgentKeys = `-- name: ListAgentKeys :many
 SELECT id, staff_id, name, prefix, expires_at, revoked_at, last_used_at, created_at
   FROM agent_keys

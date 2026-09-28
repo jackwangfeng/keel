@@ -65,6 +65,19 @@ type AgentTx interface {
 	RevokeAgentKey(ctx context.Context, staffID, keyID int64) error
 	LoadAgentKey(ctx context.Context, secretHash string) (AgentKeyAuth, error)
 	TouchAgentKey(ctx context.Context, keyID int64) error
+	// RecordAgentToolCall 写一行工具调用审计（00093）。args 是原样的 JSON。
+	RecordAgentToolCall(ctx context.Context, c AgentToolCall) error
+}
+
+// AgentToolCall 是一次 MCP 工具调用的审计记录。
+type AgentToolCall struct {
+	StaffID    int64
+	KeyID      int64
+	Tool       string
+	Args       []byte
+	OK         bool
+	ErrorType  string
+	DurationMS int32
 }
 
 func tsPtr(ts pgtype.Timestamptz) *time.Time {
@@ -171,4 +184,13 @@ func (t tenantTx) LoadAgentKey(ctx context.Context, secretHash string) (AgentKey
 
 func (t tenantTx) TouchAgentKey(ctx context.Context, keyID int64) error {
 	return t.q.TouchAgentKey(ctx, keyID)
+}
+
+func (t tenantTx) RecordAgentToolCall(ctx context.Context, c AgentToolCall) error {
+	args := c.Args
+	if len(args) == 0 {
+		args = []byte("{}")
+	}
+	return t.q.InsertAgentToolCall(ctx, db.InsertAgentToolCallParams{AgentStaffID: c.StaffID, KeyID: c.KeyID,
+		Tool: c.Tool, Args: args, Ok: c.OK, ErrorType: c.ErrorType, DurationMs: c.DurationMS})
 }

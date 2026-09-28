@@ -1329,6 +1329,12 @@ func routeOf(t *testing.T, method, contractPath string) route {
 // 往这里加一行是一个需要解释的动作：它等于说「这个 URL 对外存在，但契约里
 // 找不到它」，而契约是前后端唯一的约定。
 var nonContractRoutes = map[string]string{
+	"POST /api/v1/mcp": "AI 员工的 MCP 入口（AI 经营 M9，handler/mcp.go）：形状由 MCP 规范（streamable HTTP + JSON-RPC）定义，" +
+		"不是 REST 资源；工具清单与参数由 MCP 的 tools/list 自描述。鉴权是 kagt_ 接入密钥（契约里 /agent/whoami 描述了它）",
+	"GET /api/v1/mcp": "AI 员工的 MCP 入口（AI 经营 M9，handler/mcp.go）：形状由 MCP 规范（streamable HTTP + JSON-RPC）定义，" +
+		"不是 REST 资源；工具清单与参数由 MCP 的 tools/list 自描述。鉴权是 kagt_ 接入密钥（契约里 /agent/whoami 描述了它）",
+	"DELETE /api/v1/mcp": "AI 员工的 MCP 入口（AI 经营 M9，handler/mcp.go）：形状由 MCP 规范（streamable HTTP + JSON-RPC）定义，" +
+		"不是 REST 资源；工具清单与参数由 MCP 的 tools/list 自描述。鉴权是 kagt_ 接入密钥（契约里 /agent/whoami 描述了它）",
 	"GET /healthz": "存活探针，给编排系统和 compose 用；契约描述的是业务接口",
 	"GET /version": "构建信息（版本 / commit / 构建时间 / Go 版本），给运维与 issue 里" +
 		"「你跑的是哪一版」用；和 healthz 同类，不是业务接口。" +

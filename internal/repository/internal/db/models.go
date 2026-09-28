@@ -35,6 +35,20 @@ type AgentKey struct {
 	CreatedAt  pgtype.Timestamptz
 }
 
+// AI 员工的 MCP 工具调用审计（00093，AI 经营 M9）。
+type AgentToolCall struct {
+	ID           int64
+	MerchantID   int64
+	AgentStaffID int64
+	KeyID        int64
+	Tool         string
+	Args         []byte
+	Ok           bool
+	ErrorType    string
+	DurationMs   int32
+	CreatedAt    pgtype.Timestamptz
+}
+
 // 子事务屏障（数据模型 §6）。形状照抄 dtmrs-barrier v0.11.0，别加列。
 type Barrier struct {
 	TransType  string

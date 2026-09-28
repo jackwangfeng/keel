@@ -121,6 +121,7 @@ func newAdminShop(t *testing.T) adminShop {
 			// 与权限矩阵每确认一次就留一行，要排在 staff 之前删。
 			`DELETE FROM product_import_batches WHERE merchant_id = $1`,
 			// AI 员工的接入密钥（00090）指向 staff（staff_id 与 created_by 两条复合外键）。
+			`DELETE FROM agent_tool_calls WHERE merchant_id = $1`,
 			`DELETE FROM agent_keys WHERE merchant_id = $1`,
 			`DELETE FROM staff WHERE merchant_id = $1`,
 			// 幂等键那张表也指向 merchants（merchant_id 上有外键）。

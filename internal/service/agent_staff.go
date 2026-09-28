@@ -377,3 +377,9 @@ func (s *StaffService) AgentSelf(ctx context.Context) (repository.Agent, error) 
 
 // IsAgentKeyRejected 给 auth.AgentBearer 判「这是密钥不能用（401）」还是服务端故障（500）。
 func IsAgentKeyRejected(err error) bool { return errors.Is(err, ErrAgentKeyInvalid) }
+
+// RecordAgentToolCall 写一行 MCP 工具调用审计（00093），在调用返回之后、独立的短事务里。
+// 调用方（handler/mcp.go）对它的失败只记日志：审计写失败不该改变工具的结果。
+func (s *StaffService) RecordAgentToolCall(ctx context.Context, c repository.AgentToolCall) error {
+	return s.repo.WithTenant(ctx, func(tx repository.Tx) error { return tx.RecordAgentToolCall(ctx, c) })
+}

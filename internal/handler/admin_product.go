@@ -9,6 +9,7 @@ import (
 	"github.com/keel/keel/internal/api"
 	"github.com/keel/keel/internal/problem"
 	"github.com/keel/keel/internal/repository"
+	"github.com/keel/keel/internal/service"
 )
 
 // 商品域那 6 条写接口（列表在 admin_product_list.go，理由见那个文件的头）。
@@ -77,15 +78,21 @@ func (h *AdminCatalogHandler) Detail(c *gin.Context) {
 		writeCatalogError(c, err)
 		return
 	}
-	// AdminProductDetail 在契约里是 allOf(AdminProduct, {skus, images})，
-	// 而生成器把它展平成了一个独立的结构体 —— 所以这里逐字段填，
-	// 不能内嵌 api.AdminProduct。
+	c.JSON(http.StatusOK, apiAdminProductDetail(d))
+}
+
+// apiAdminProductDetail 是商品详情的响应形状。后台接口与 MCP 的 get_product 共用（mcp_tools.go）。
+//
+// AdminProductDetail 在契约里是 allOf(AdminProduct, {skus, images})，
+// 而生成器把它展平成了一个独立的结构体 —— 所以这里逐字段填，
+// 不能内嵌 api.AdminProduct。
+func apiAdminProductDetail(d service.AdminProductDetail) api.AdminProductDetail {
 	base := apiAdminProduct(d.Product)
 	skus := make([]api.AdminSku, 0, len(d.SKUs))
 	for _, s := range d.SKUs {
 		skus = append(skus, apiAdminSKU(s))
 	}
-	c.JSON(http.StatusOK, api.AdminProductDetail{
+	return api.AdminProductDetail{
 		Id: base.Id, CategoryId: base.CategoryId, BrandId: base.BrandId,
 		Title: base.Title, Subtitle: base.Subtitle, Description: base.Description,
 		MinPriceCents: base.MinPriceCents, MaxPriceCents: base.MaxPriceCents,
@@ -96,7 +103,7 @@ func (h *AdminCatalogHandler) Detail(c *gin.Context) {
 		FreightTemplateId: base.FreightTemplateId,
 		Skus:              skus,
 		Images:            apiProductImages(d.Images),
-	})
+	}
 }
 
 // Update 实现 PATCH /api/v1/admin/products/{product_id}。

@@ -41,6 +41,13 @@ so "which one is running?" never depends on anyone's memory.
 
 ### Added
 
+- **MCP endpoint for AI staff (M9, task 2): `/api/v1/mcp`.** Streamable HTTP (official Go SDK, stateless:
+  every request re-authenticates the `kagt_` key), tenant from Host. Ten read tools — `shop_overview`,
+  `sales_trend`, `product_ranking`, `store_comparison`, `inventory_alerts`, `search_insights`, `list_stores`,
+  `list_products`, `get_product`, `list_refunds` — call the same services as the admin API (same scope
+  checks: a store-manager AI sees only its stores), return the same contract types, and translate errors
+  through the same error writers into the same problem types. Every call is audited in `agent_tool_calls`
+  (migration 00093); each key is limited to 120 requests per minute (HTTP 429 with Retry-After).
 - **AI staff accounts and access keys (AI operations M9, task 1).** An AI staff member is a staff row
   with `kind = 2` (migration 00090): it reuses roles and scopes, so every tool it will call goes through
   the same authorization as a human; it cannot be an admin or platform-level (database CHECKs), cannot

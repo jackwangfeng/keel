@@ -92,7 +92,8 @@ CREATE UNIQUE INDEX uk_agent_keys_hash ON agent_keys(merchant_id, secret_hash);
   放进 ctx，之后工具调用的判权与后台接口**逐字相同**（`authorizeStore` 等）；
 - **租户看 Host**：与后台接口相同，MCP 地址就是这家店的域名（如 `https://eshop.zzss.fun/api/v1/mcp`），
   密钥在这家店的租户事务里查；拿 A 店的密钥打 B 店的域名查不到，回 401；
-- **限流**：每把密钥每分钟 120 次工具调用，超了回 MCP 错误（不是 HTTP 429，harness 更好处理）；
+- **限流**：每把密钥每分钟 120 次请求（进程内固定窗口），超了回 HTTP 429 + `Retry-After`（各 harness 的 HTTP 层都会退避）；
+- **无状态**：SDK 的 Stateless 模式，每个请求都重新过密钥鉴权，吊销 / 停用 / 收窄范围在下一次调用立即生效；
 - **本地 stdio**：`cmd/keel-mcp` 是一个几十行的桥（stdio ↔ HTTP），给只支持 stdio 的 harness 用；它不含任何业务逻辑。
 
 ### 3.1 工具清单（M9）

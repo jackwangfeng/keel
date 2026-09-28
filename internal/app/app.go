@@ -628,6 +628,20 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	// 范围与后台订单列表同一个判据（service/authz.go 的 orderListScope），
 	// 搜索概况只放全店范围的人（检索日志没有门店维度）。判据全在 service/report.go。
 	rpt := handler.NewAdminReportHandler(service.NewReportService(repo, inv))
+	// MCP：AI 员工的工具入口（AI 经营 M9，handler/mcp.go）。streamable HTTP，POST / GET / DELETE 都交给 SDK；
+	// 鉴权是 agentAuth（kagt_ 密钥，租户按 Host）。工具调用的 service 与后台接口是同一批构造（无状态，
+	// 多构造一份不共享任何东西）。
+	mcpH := handler.NewMCPHandler(handler.MCPDeps{
+		Staff:   staffSvc,
+		Reports: service.NewReportService(repo, inv),
+		Stores:  service.NewAdminStoreService(repo, inv),
+		Catalog: service.NewAdminCatalogService(repo, store, inv),
+		Orders:  service.NewAdminOrderService(repo),
+		Version: buildinfo.Get().Version,
+	})
+	v1.POST("/mcp", agentAuth, mcpH)
+	v1.GET("/mcp", agentAuth, mcpH)
+	v1.DELETE("/mcp", agentAuth, mcpH)
 	v1.GET("/admin/reports/overview", staffAuth, rpt.Overview)
 	v1.GET("/admin/reports/trend", staffAuth, rpt.Trend)
 	v1.GET("/admin/reports/products", staffAuth, rpt.Products)

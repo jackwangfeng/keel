@@ -65,3 +65,8 @@ SELECT k.id AS key_id, s.id AS staff_id, s.role, s.status
 -- last_used_at 节流：同一把密钥一分钟最多写一次，免得每次工具调用都写一行。
 UPDATE agent_keys SET last_used_at = now()
  WHERE id = $1 AND (last_used_at IS NULL OR last_used_at < now() - interval '1 minute');
+
+-- name: InsertAgentToolCall :exec
+-- 工具调用审计（00093）。key_id 不带外键：密钥删不掉（只吊销），但审计不该因为将来的清理策略卡住。
+INSERT INTO agent_tool_calls (agent_staff_id, key_id, tool, args, ok, error_type, duration_ms)
+VALUES ($1, $2, $3, $4, $5, $6, $7);
