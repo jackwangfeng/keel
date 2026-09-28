@@ -451,6 +451,15 @@ var permMatrix = []permRoute{
 		return permReq{Method: "DELETE", Path: fmt.Sprintf(v1+"/admin/local-delivery-templates/%d", permLocalDeliveryTemplate(t, fx)),
 			OK: http.StatusNoContent}
 	}},
+	{"GET", v1 + "/admin/agents/:staff_id/auto-policies", adminOnly, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		a := createAgent(t, fx.sh, `{"name":"策略 AI","role":2}`)
+		return permGet(fmt.Sprintf(v1+"/admin/agents/%d/auto-policies", a.Id))
+	}},
+	{"PUT", v1 + "/admin/agents/:staff_id/auto-policies/:kind", adminOnly, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		a := createAgent(t, fx.sh, `{"name":"策略 AI","role":2}`)
+		return permReq{Method: "PUT", Path: fmt.Sprintf(v1+"/admin/agents/%d/auto-policies/inventory_adjust", a.Id),
+			Body: `{"enabled":true,"max_units":20,"min_discount_rate":1000,"max_discount_cents":0,"daily_limit":5}`, OK: http.StatusOK}
+	}},
 	{"GET", v1 + "/admin/agents/:staff_id/scorecard", merchantWide, func(t *testing.T, fx *permFixture, c permCase) permReq {
 		a := createAgent(t, fx.sh, `{"name":"成绩单 AI","role":2}`)
 		return permGet(fmt.Sprintf(v1+"/admin/agents/%d/scorecard", a.Id))

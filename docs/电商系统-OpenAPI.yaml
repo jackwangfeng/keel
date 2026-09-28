@@ -947,6 +947,80 @@ paths:
               schema: { $ref: '#/components/schemas/Problem' }
         default: { $ref: '#/components/responses/Problem' }
 
+  /admin/agents/{staff_id}/auto-policies:
+    parameters:
+      - name: staff_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64 }
+    get:
+      tags: [Admin, Agent]
+      summary: AI 员工的自动执行策略
+      description: |
+        按提案种类放开自动执行（AI 经营 M11，00130）：命中策略、在单笔上限与近 24 小时条数上限之内的提案，
+        写入后当场以 AI 员工身份执行（`auto_approved = true`，`decided_by` 为空）；超限的照常进待处理队列。
+        四种可自动执行的种类都列出来，没配过的是默认（关）。售后审核不许自动执行。只有本店管理员能看、能改。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/AgentAutoPolicy' }
+        '404':
+          description: 本店没有这名 AI 员工。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /admin/agents/{staff_id}/auto-policies/{kind}:
+    parameters:
+      - name: staff_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64 }
+      - name: kind
+        in: path
+        required: true
+        schema: { type: string, enum: [inventory_adjust, flash_price, coupon, product_copy] }
+    put:
+      tags: [Admin, Agent]
+      summary: 设置一种提案的自动执行策略
+      description: |
+        单笔上限按种类取不同的字段：`inventory_adjust` 用 `max_units`（一条至多加多少件）；`flash_price` 用
+        `min_discount_rate`（每个 SKU 的折扣率不低于它，千分比，900 = 最多打九折）；`coupon` 用 `max_discount_cents`
+        （面额，折扣券为封顶）；`product_copy` 只有条数上限。`daily_limit` 是近 24 小时至多自动执行几条（0 = 不自动执行）。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentAutoPolicyInput' }
+      responses:
+        '200':
+          description: 已保存
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentAutoPolicy' }
+        '404':
+          description: 本店没有这名 AI 员工。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: 策略不成立（`https://keel.dev/problems/invalid-request`）：上限超出范围。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
   /admin/agents/{staff_id}/scorecard:
     parameters:
       - name: staff_id
@@ -9883,6 +9957,29 @@ components:
           description: |
             执行后复盘（00122）：{verdict: positive|neutral|negative, explanation, 各种类的指标…}。还没到点时不出现
         outcome_at: { type: string, format: date-time }
+        auto_approved:
+          type: boolean
+          description: 按自动执行策略当场执行的（00130）；此时没有 `decided_by`
+
+    AgentAutoPolicyInput:
+      type: object
+      required: [enabled, max_units, min_discount_rate, max_discount_cents, daily_limit]
+      properties:
+        enabled: { type: boolean }
+        max_units: { type: integer, format: int32, minimum: 0, maximum: 1000 }
+        min_discount_rate: { type: integer, format: int32, minimum: 500, maximum: 1000 }
+        max_discount_cents: { type: integer, format: int64, minimum: 0, maximum: 10000 }
+        daily_limit: { type: integer, format: int32, minimum: 0, maximum: 100 }
+
+    AgentAutoPolicy:
+      allOf:
+        - $ref: '#/components/schemas/AgentAutoPolicyInput'
+        - type: object
+          required: [kind]
+          properties:
+            kind: { type: string, enum: [inventory_adjust, flash_price, coupon, product_copy] }
+            updated_by: { type: integer, format: int64 }
+            updated_at: { type: string, format: date-time }
 
     AgentScorecard:
       type: object

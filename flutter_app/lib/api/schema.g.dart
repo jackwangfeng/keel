@@ -1627,6 +1627,61 @@ class AdminStoreList {
       };
 }
 
+class AgentAutoPolicy {
+  final bool enabled;
+  final int maxUnits;
+  final int minDiscountRate;
+  final int maxDiscountCents;
+  final int dailyLimit;
+  final String kind;
+  final int? updatedBy;
+  final String? updatedAt;
+  const AgentAutoPolicy({required this.enabled, required this.maxUnits, required this.minDiscountRate, required this.maxDiscountCents, required this.dailyLimit, required this.kind, this.updatedBy, this.updatedAt});
+  factory AgentAutoPolicy.fromJson(Map<String, dynamic> j) => AgentAutoPolicy(
+        enabled: j['enabled'] as bool,
+        maxUnits: (j['max_units'] as num).toInt(),
+        minDiscountRate: (j['min_discount_rate'] as num).toInt(),
+        maxDiscountCents: (j['max_discount_cents'] as num).toInt(),
+        dailyLimit: (j['daily_limit'] as num).toInt(),
+        kind: j['kind'] as String,
+        updatedBy: (j['updated_by'] as num?)?.toInt(),
+        updatedAt: j['updated_at'] as String?,
+      );
+  Map<String, dynamic> toJson() => {
+        'enabled': enabled,
+        'max_units': maxUnits,
+        'min_discount_rate': minDiscountRate,
+        'max_discount_cents': maxDiscountCents,
+        'daily_limit': dailyLimit,
+        'kind': kind,
+        if (updatedBy != null) 'updated_by': updatedBy,
+        if (updatedAt != null) 'updated_at': updatedAt,
+      };
+}
+
+class AgentAutoPolicyInput {
+  final bool enabled;
+  final int maxUnits;
+  final int minDiscountRate;
+  final int maxDiscountCents;
+  final int dailyLimit;
+  const AgentAutoPolicyInput({required this.enabled, required this.maxUnits, required this.minDiscountRate, required this.maxDiscountCents, required this.dailyLimit});
+  factory AgentAutoPolicyInput.fromJson(Map<String, dynamic> j) => AgentAutoPolicyInput(
+        enabled: j['enabled'] as bool,
+        maxUnits: (j['max_units'] as num).toInt(),
+        minDiscountRate: (j['min_discount_rate'] as num).toInt(),
+        maxDiscountCents: (j['max_discount_cents'] as num).toInt(),
+        dailyLimit: (j['daily_limit'] as num).toInt(),
+      );
+  Map<String, dynamic> toJson() => {
+        'enabled': enabled,
+        'max_units': maxUnits,
+        'min_discount_rate': minDiscountRate,
+        'max_discount_cents': maxDiscountCents,
+        'daily_limit': dailyLimit,
+      };
+}
+
 class AgentBrief {
   final int id;
   final int agentStaffId;
@@ -1749,7 +1804,8 @@ class AgentProposal {
   final String? executedAt;
   final Map<String, dynamic>? outcome;
   final String? outcomeAt;
-  const AgentProposal({required this.id, required this.agentStaffId, required this.agentName, required this.kind, this.storeId, this.storeName, this.skuId, required this.payload, required this.title, required this.evidence, required this.expectedImpact, required this.status, this.decidedBy, this.decidedByName, this.decidedAt, this.rejectReason, this.result, required this.expiresAt, required this.createdAt, required this.updatedAt, this.executedAt, this.outcome, this.outcomeAt});
+  final bool? autoApproved;
+  const AgentProposal({required this.id, required this.agentStaffId, required this.agentName, required this.kind, this.storeId, this.storeName, this.skuId, required this.payload, required this.title, required this.evidence, required this.expectedImpact, required this.status, this.decidedBy, this.decidedByName, this.decidedAt, this.rejectReason, this.result, required this.expiresAt, required this.createdAt, required this.updatedAt, this.executedAt, this.outcome, this.outcomeAt, this.autoApproved});
   factory AgentProposal.fromJson(Map<String, dynamic> j) => AgentProposal(
         id: (j['id'] as num).toInt(),
         agentStaffId: (j['agent_staff_id'] as num).toInt(),
@@ -1774,6 +1830,7 @@ class AgentProposal {
         executedAt: j['executed_at'] as String?,
         outcome: j['outcome'] as Map<String, dynamic>?,
         outcomeAt: j['outcome_at'] as String?,
+        autoApproved: j['auto_approved'] as bool?,
       );
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -1799,6 +1856,7 @@ class AgentProposal {
         if (executedAt != null) 'executed_at': executedAt,
         if (outcome != null) 'outcome': outcome,
         if (outcomeAt != null) 'outcome_at': outcomeAt,
+        if (autoApproved != null) 'auto_approved': autoApproved,
       };
 }
 

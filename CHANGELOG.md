@@ -41,6 +41,11 @@ so "which one is running?" never depends on anyone's memory.
 
 ### Added
 
+- **Auto-execution policies (M11, 00130).** A shop admin can let an AI staff member's proposals of one kind execute
+  immediately, within a per-proposal cap (restock units, minimum discount rate, coupon face value) and a 24-hour
+  count. Matching proposals run through the same execution path as a human approval (`auto_approved = true`, no
+  `decided_by`); anything over a limit waits in the queue as before. After-sales decisions can never be
+  auto-executed. `GET /admin/agents/{staff_id}/auto-policies`, `PUT /admin/agents/{staff_id}/auto-policies/{kind}`.
 - **Post-execution review and the AI staff scorecard (M10, 00122).** Keel measures every executed proposal after a
   while — restocks after 7 days (units sold, stock-out days), limited-time discounts 3 days after they end (units vs
   the equal period before), coupons after 7 days (claimed, used, use rate), copy changes after 7 days (units vs the

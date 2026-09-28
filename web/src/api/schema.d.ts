@@ -1853,6 +1853,185 @@ export interface paths {
         };
         trace?: never;
     };
+    "/admin/agents/{staff_id}/auto-policies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                staff_id: number;
+            };
+            cookie?: never;
+        };
+        /**
+         * AI 员工的自动执行策略
+         * @description 按提案种类放开自动执行（AI 经营 M11，00130）：命中策略、在单笔上限与近 24 小时条数上限之内的提案，
+         *     写入后当场以 AI 员工身份执行（`auto_approved = true`，`decided_by` 为空）；超限的照常进待处理队列。
+         *     四种可自动执行的种类都列出来，没配过的是默认（关）。售后审核不许自动执行。只有本店管理员能看、能改。
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /**
+                     * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+                     *
+                     *     它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+                     *     而例外成立的前提是平台级鉴权：
+                     *
+                     *     · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+                     *       读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+                     *       行级安全落在这家店上。
+                     *     · **商家级员工带了这个头：403**
+                     *       （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+                     *       静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+                     *     · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+                     *       **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+                     *       实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+                     *       请求其余部分指名的东西不存在是 422。
+                     *     · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+                     *       买家侧对它照旧 404。
+                     *     · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+                     *       （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+                     *
+                     *     后台每一条挂后台会话的操作都声明了它（机械核对：
+                     *     `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+                     */
+                    "X-Keel-Merchant"?: components["parameters"]["KeelMerchant"];
+                };
+                path: {
+                    staff_id: number;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: components["schemas"]["AgentAutoPolicy"][];
+                        };
+                    };
+                };
+                /** @description 本店没有这名 AI 员工。 */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/agents/{staff_id}/auto-policies/{kind}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                staff_id: number;
+                kind: "inventory_adjust" | "flash_price" | "coupon" | "product_copy";
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * 设置一种提案的自动执行策略
+         * @description 单笔上限按种类取不同的字段：`inventory_adjust` 用 `max_units`（一条至多加多少件）；`flash_price` 用
+         *     `min_discount_rate`（每个 SKU 的折扣率不低于它，千分比，900 = 最多打九折）；`coupon` 用 `max_discount_cents`
+         *     （面额，折扣券为封顶）；`product_copy` 只有条数上限。`daily_limit` 是近 24 小时至多自动执行几条（0 = 不自动执行）。
+         */
+        put: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /**
+                     * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+                     *
+                     *     它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+                     *     而例外成立的前提是平台级鉴权：
+                     *
+                     *     · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+                     *       读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+                     *       行级安全落在这家店上。
+                     *     · **商家级员工带了这个头：403**
+                     *       （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+                     *       静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+                     *     · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+                     *       **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+                     *       实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+                     *       请求其余部分指名的东西不存在是 422。
+                     *     · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+                     *       买家侧对它照旧 404。
+                     *     · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+                     *       （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+                     *
+                     *     后台每一条挂后台会话的操作都声明了它（机械核对：
+                     *     `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+                     */
+                    "X-Keel-Merchant"?: components["parameters"]["KeelMerchant"];
+                };
+                path: {
+                    staff_id: number;
+                    kind: "inventory_adjust" | "flash_price" | "coupon" | "product_copy";
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AgentAutoPolicyInput"];
+                };
+            };
+            responses: {
+                /** @description 已保存 */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AgentAutoPolicy"];
+                    };
+                };
+                /** @description 本店没有这名 AI 员工。 */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /** @description 策略不成立（`https://keel.dev/problems/invalid-request`）：上限超出范围。 */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/agents/{staff_id}/scorecard": {
         parameters: {
             query?: never;
@@ -17309,6 +17488,27 @@ export interface components {
             };
             /** Format: date-time */
             outcome_at?: string;
+            /** @description 按自动执行策略当场执行的（00130）；此时没有 `decided_by` */
+            auto_approved?: boolean;
+        };
+        AgentAutoPolicyInput: {
+            enabled: boolean;
+            /** Format: int32 */
+            max_units: number;
+            /** Format: int32 */
+            min_discount_rate: number;
+            /** Format: int64 */
+            max_discount_cents: number;
+            /** Format: int32 */
+            daily_limit: number;
+        };
+        AgentAutoPolicy: components["schemas"]["AgentAutoPolicyInput"] & {
+            /** @enum {string} */
+            kind: "inventory_adjust" | "flash_price" | "coupon" | "product_copy";
+            /** Format: int64 */
+            updated_by?: number;
+            /** Format: date-time */
+            updated_at?: string;
         };
         AgentScorecard: {
             /** Format: int64 */

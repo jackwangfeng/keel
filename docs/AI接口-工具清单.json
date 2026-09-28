@@ -350,6 +350,12 @@
               "agent_staff_id": {
                 "type": "integer"
               },
+              "auto_approved": {
+                "type": [
+                  "null",
+                  "boolean"
+                ]
+              },
               "created_at": {
                 "type": "string"
               },
@@ -1605,6 +1611,12 @@
         "agent_staff_id": {
           "type": "integer"
         },
+        "auto_approved": {
+          "type": [
+            "null",
+            "boolean"
+          ]
+        },
         "created_at": {
           "type": "string"
         },
@@ -1800,6 +1812,12 @@
         "agent_staff_id": {
           "type": "integer"
         },
+        "auto_approved": {
+          "type": [
+            "null",
+            "boolean"
+          ]
+        },
         "created_at": {
           "type": "string"
         },
@@ -1968,6 +1986,12 @@
         "agent_staff_id": {
           "type": "integer"
         },
+        "auto_approved": {
+          "type": [
+            "null",
+            "boolean"
+          ]
+        },
         "created_at": {
           "type": "string"
         },
@@ -2132,6 +2156,12 @@
         "agent_staff_id": {
           "type": "integer"
         },
+        "auto_approved": {
+          "type": [
+            "null",
+            "boolean"
+          ]
+        },
         "created_at": {
           "type": "string"
         },
@@ -2293,6 +2323,12 @@
         },
         "agent_staff_id": {
           "type": "integer"
+        },
+        "auto_approved": {
+          "type": [
+            "null",
+            "boolean"
+          ]
         },
         "created_at": {
           "type": "string"

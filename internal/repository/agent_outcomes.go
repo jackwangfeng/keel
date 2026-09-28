@@ -2,8 +2,10 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/keel/keel/internal/repository/internal/db"
@@ -112,4 +114,76 @@ func (t tenantTx) AgentScorecard(ctx context.Context, agentStaffID int64, since 
 		rs = append(rs, RecentOutcome{ID: r.ID, Kind: r.Kind, Title: r.Title, Outcome: r.Outcome, OutcomeAt: r.OutcomeAt.Time})
 	}
 	return ks, rs, nil
+}
+
+// AgentAutoPolicy 是一名 AI 员工对一种提案的自动执行策略（00130）。没配过 = 不自动执行。
+type AgentAutoPolicy struct {
+	AgentStaffID     int64
+	Kind             string
+	Enabled          bool
+	MaxUnits         int32
+	MinDiscountRate  int16
+	MaxDiscountCents int64
+	DailyLimit       int32
+	UpdatedBy        *int64
+	UpdatedAt        *time.Time
+}
+
+// ErrAutoPolicyNotFound：这名 AI 员工对这种提案没有策略。
+var ErrAutoPolicyNotFound = errors.New("没有自动执行策略")
+
+// AgentAutoPolicyTx 是自动执行策略这一面。
+type AgentAutoPolicyTx interface {
+	ListAgentAutoPolicies(ctx context.Context, agentStaffID int64) ([]AgentAutoPolicy, error)
+	FindAgentAutoPolicy(ctx context.Context, agentStaffID int64, kind string) (AgentAutoPolicy, error)
+	UpsertAgentAutoPolicy(ctx context.Context, p AgentAutoPolicy) error
+	CountAutoApprovedSince(ctx context.Context, agentStaffID int64, kind string, since time.Time) (int64, error)
+	// ClaimAgentProposalAuto：10 → 15（自动执行）。没认领到（已被处理 / 过期）返回 ErrProposalNotOpen。
+	ClaimAgentProposalAuto(ctx context.Context, id int64) error
+}
+
+func (t tenantTx) ListAgentAutoPolicies(ctx context.Context, agentStaffID int64) ([]AgentAutoPolicy, error) {
+	rows, err := t.q.ListAgentAutoPolicies(ctx, agentStaffID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]AgentAutoPolicy, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, AgentAutoPolicy{AgentStaffID: r.AgentStaffID, Kind: r.Kind, Enabled: r.Enabled,
+			MaxUnits: r.MaxUnits, MinDiscountRate: r.MinDiscountRate, MaxDiscountCents: r.MaxDiscountCents,
+			DailyLimit: r.DailyLimit, UpdatedBy: r.UpdatedBy, UpdatedAt: tsPtr(r.UpdatedAt)})
+	}
+	return out, nil
+}
+
+func (t tenantTx) FindAgentAutoPolicy(ctx context.Context, agentStaffID int64, kind string) (AgentAutoPolicy, error) {
+	r, err := t.q.GetAgentAutoPolicy(ctx, db.GetAgentAutoPolicyParams{AgentStaffID: agentStaffID, Kind: kind})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return AgentAutoPolicy{}, ErrAutoPolicyNotFound
+	}
+	if err != nil {
+		return AgentAutoPolicy{}, err
+	}
+	return AgentAutoPolicy{AgentStaffID: r.AgentStaffID, Kind: r.Kind, Enabled: r.Enabled, MaxUnits: r.MaxUnits,
+		MinDiscountRate: r.MinDiscountRate, MaxDiscountCents: r.MaxDiscountCents, DailyLimit: r.DailyLimit,
+		UpdatedBy: r.UpdatedBy, UpdatedAt: tsPtr(r.UpdatedAt)}, nil
+}
+
+func (t tenantTx) UpsertAgentAutoPolicy(ctx context.Context, p AgentAutoPolicy) error {
+	return t.q.UpsertAgentAutoPolicy(ctx, db.UpsertAgentAutoPolicyParams{AgentStaffID: p.AgentStaffID, Kind: p.Kind,
+		Enabled: p.Enabled, MaxUnits: p.MaxUnits, MinDiscountRate: p.MinDiscountRate,
+		MaxDiscountCents: p.MaxDiscountCents, DailyLimit: p.DailyLimit, UpdatedBy: p.UpdatedBy})
+}
+
+func (t tenantTx) CountAutoApprovedSince(ctx context.Context, agentStaffID int64, kind string, since time.Time) (int64, error) {
+	return t.q.CountAutoApprovedSince(ctx, db.CountAutoApprovedSinceParams{AgentStaffID: agentStaffID, Kind: kind,
+		DecidedAt: tsArg(since)})
+}
+
+func (t tenantTx) ClaimAgentProposalAuto(ctx context.Context, id int64) error {
+	_, err := t.q.ClaimAgentProposalAuto(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrProposalNotOpen
+	}
+	return err
 }

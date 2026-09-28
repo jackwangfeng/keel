@@ -70,3 +70,39 @@ SELECT p.id, p.kind, p.title, p.outcome, p.outcome_at
  WHERE p.agent_staff_id = sqlc.arg(agent_staff_id) AND p.outcome_at IS NOT NULL AND p.outcome_at >= sqlc.arg(since)
  ORDER BY p.outcome_at DESC
  LIMIT 50;
+
+-- ===========================================================================
+-- 自动执行策略（00130）
+-- ===========================================================================
+
+-- name: ListAgentAutoPolicies :many
+SELECT agent_staff_id, kind, enabled, max_units, min_discount_rate, max_discount_cents, daily_limit, updated_by, updated_at
+  FROM agent_auto_policies
+ WHERE agent_staff_id = $1
+ ORDER BY kind;
+
+-- name: GetAgentAutoPolicy :one
+SELECT agent_staff_id, kind, enabled, max_units, min_discount_rate, max_discount_cents, daily_limit, updated_by, updated_at
+  FROM agent_auto_policies
+ WHERE agent_staff_id = $1 AND kind = $2;
+
+-- name: UpsertAgentAutoPolicy :exec
+INSERT INTO agent_auto_policies (agent_staff_id, kind, enabled, max_units, min_discount_rate, max_discount_cents,
+                                 daily_limit, updated_by)
+VALUES (sqlc.arg(agent_staff_id), sqlc.arg(kind), sqlc.arg(enabled), sqlc.arg(max_units), sqlc.arg(min_discount_rate),
+        sqlc.arg(max_discount_cents), sqlc.arg(daily_limit), sqlc.arg(updated_by))
+ON CONFLICT ON CONSTRAINT agent_auto_policies_pkey DO UPDATE
+   SET enabled = EXCLUDED.enabled, max_units = EXCLUDED.max_units, min_discount_rate = EXCLUDED.min_discount_rate,
+       max_discount_cents = EXCLUDED.max_discount_cents, daily_limit = EXCLUDED.daily_limit,
+       updated_by = EXCLUDED.updated_by;
+
+-- name: CountAutoApprovedSince :one
+SELECT count(*) FROM agent_proposals
+ WHERE agent_staff_id = $1 AND kind = $2 AND auto_approved AND decided_at >= $3;
+
+-- name: ClaimAgentProposalAuto :one
+-- 按策略自动执行：10 → 15，decided_by 为空、auto_approved = true。
+UPDATE agent_proposals
+   SET status = 15, decided_at = now(), auto_approved = TRUE
+ WHERE id = $1 AND status = 10 AND expires_at > now()
+RETURNING id;

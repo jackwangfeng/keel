@@ -1215,6 +1215,20 @@ var routes = []route{
 		NoQueryParams:  "删哪一个在路径上",
 	},
 	{
+		ContractPath:   "/admin/agents/{staff_id}/auto-policies",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "admin_agent_policy.go",
+		NoQueryParams:  "四种一次列全，没有筛选",
+	},
+	{
+		ContractPath:   "/admin/agents/{staff_id}/auto-policies/{kind}",
+		ContractMethod: "put",
+		HTTPMethod:     http.MethodPut,
+		HandlerFile:    "admin_agent_policy.go",
+		NoQueryParams:  "策略在请求体里",
+	},
+	{
 		ContractPath:   "/admin/agents/{staff_id}/scorecard",
 		ContractMethod: "get",
 		HTTPMethod:     http.MethodGet,

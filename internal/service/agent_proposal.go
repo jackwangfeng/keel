@@ -175,7 +175,7 @@ func (s *AgentProposalService) ProposeInventoryAdjust(ctx context.Context, in Pr
 			Evidence: strings.TrimSpace(in.Evidence), ExpectedImpact: strings.TrimSpace(in.ExpectedImpact)})
 		return err
 	})
-	return out, mapProposalErr(err)
+	return s.afterPropose(ctx, out, mapProposalErr(err))
 }
 
 // insertProposal 写一条提案并读回：先查同一个（kind，作用对象）有没有待处理的，好告诉 agent 是哪一条 ——
@@ -341,6 +341,14 @@ func (s *AgentProposalService) Approve(ctx context.Context, proposalID int64) (r
 		return repository.AgentProposal{}, mapProposalErr(err)
 	}
 
+	return s.runClaimed(ctx, p, agentID, agentActive)
+}
+
+// runClaimed 执行一条已认领（15）的提案并写回结果：人批准与按策略自动执行（agent_auto_policy.go）走同一段。
+// agentID 是提案的 AI 员工身份；agentActive 为假时不执行、记成执行失败。
+func (s *AgentProposalService) runClaimed(ctx context.Context, p repository.AgentProposal, agentID auth.StaffIdentity,
+	agentActive bool) (repository.AgentProposal, error) {
+	proposalID := p.ID
 	status, result := repository.ProposalExecuted, ProposalResult{}
 	if !agentActive {
 		status, result = repository.ProposalFailed, ProposalResult{ErrorType: "agent-disabled",

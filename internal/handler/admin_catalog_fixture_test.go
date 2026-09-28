@@ -103,6 +103,7 @@ func newAdminShop(t *testing.T) adminShop {
 			`DELETE FROM store_product_overrides WHERE merchant_id = $1`,
 			`DELETE FROM region_product_overrides WHERE merchant_id = $1`,
 			// AI 员工的提案（00091）指向 skus / stores / staff，排在它们之前。
+			`DELETE FROM agent_auto_policies WHERE merchant_id = $1`,
 			`DELETE FROM agent_proposals WHERE merchant_id = $1`,
 			`DELETE FROM store_local_delivery WHERE merchant_id = $1`,
 			`DELETE FROM local_delivery_templates WHERE merchant_id = $1`,

@@ -153,7 +153,7 @@ func (s *AgentProposalService) ProposeFlashPrice(ctx context.Context, in FlashPr
 			Evidence: strings.TrimSpace(meta.Evidence), ExpectedImpact: strings.TrimSpace(meta.ExpectedImpact)})
 		return err
 	})
-	return out, mapProposalErr(err)
+	return s.afterPropose(ctx, out, mapProposalErr(err))
 }
 
 func joinIDs(ids []int64) string {
@@ -281,7 +281,7 @@ func (s *AgentProposalService) ProposeCoupon(ctx context.Context, in CouponPaylo
 			Evidence: strings.TrimSpace(meta.Evidence), ExpectedImpact: strings.TrimSpace(meta.ExpectedImpact)})
 		return e
 	})
-	return out, mapProposalErr(err)
+	return s.afterPropose(ctx, out, mapProposalErr(err))
 }
 
 func (s *AgentProposalService) execCoupon(ctx context.Context, p repository.AgentProposal) (ProposalResult, error) {
@@ -369,7 +369,7 @@ func (s *AgentProposalService) ProposeProductCopy(ctx context.Context, productID
 			ExpectedImpact: strings.TrimSpace(meta.ExpectedImpact)})
 		return err
 	})
-	return out, mapProposalErr(err)
+	return s.afterPropose(ctx, out, mapProposalErr(err))
 }
 
 func truncRunes(s string, n int) string {
@@ -466,7 +466,7 @@ func (s *AgentProposalService) ProposeRefundDecision(ctx context.Context, refund
 			Evidence: strings.TrimSpace(meta.Evidence), ExpectedImpact: strings.TrimSpace(meta.ExpectedImpact)})
 		return err
 	})
-	return out, mapProposalErr(err)
+	return s.afterPropose(ctx, out, mapProposalErr(err))
 }
 
 func (s *AgentProposalService) execRefundDecision(ctx context.Context, p repository.AgentProposal) (ProposalResult, error) {

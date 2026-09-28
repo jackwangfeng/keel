@@ -661,6 +661,8 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	v1.POST("/admin/agent-proposals/:proposal_id/approve", staffAuth, aph.Approve)
 	v1.POST("/admin/agent-proposals/:proposal_id/reject", staffAuth, aph.Reject)
 	v1.GET("/admin/agents/:staff_id/scorecard", staffAuth, aph.Scorecard)
+	v1.GET("/admin/agents/:staff_id/auto-policies", staffAuth, aph.ListAutoPolicies)
+	v1.PUT("/admin/agents/:staff_id/auto-policies/:kind", staffAuth, aph.PutAutoPolicy)
 	// AI 员工写的经营简报（M9 任务 5）：AI 员工经 MCP 写，全店范围的人在后台看。
 	briefs := service.NewAgentBriefService(repo)
 	abh := handler.NewAgentBriefHandler(briefs)

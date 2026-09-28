@@ -58,6 +58,8 @@ type AgentProposal struct {
 	ExecutedAt *time.Time
 	Outcome    []byte
 	OutcomeAt  *time.Time
+	// AutoApproved：按自动执行策略当场执行（00130），DecidedBy 为空。
+	AutoApproved bool
 }
 
 // NewAgentProposal 是一条新提案。
@@ -85,6 +87,7 @@ type ProposalFilter struct {
 // AgentProposalTx 是提案那一面。
 type AgentProposalTx interface {
 	AgentOutcomeTx
+	AgentAutoPolicyTx
 
 	InsertAgentProposal(ctx context.Context, p NewAgentProposal) (int64, error)
 	FindAgentProposal(ctx context.Context, id int64) (AgentProposal, error)
@@ -111,12 +114,12 @@ func (t tenantTx) InsertAgentProposal(ctx context.Context, p NewAgentProposal) (
 func proposalOf(id, agentID int64, agentName, kind string, storeID *int64, storeName *string, skuID *int64,
 	payload []byte, title, evidence, impact string, status int16, decidedBy *int64, decidedByName *string,
 	decidedAt pgtype.Timestamptz, reject *string, result []byte, expires, created, updated pgtype.Timestamptz,
-	executed pgtype.Timestamptz, outcome []byte, outcomeAt pgtype.Timestamptz) AgentProposal {
+	executed pgtype.Timestamptz, outcome []byte, outcomeAt pgtype.Timestamptz, auto bool) AgentProposal {
 	return AgentProposal{ID: id, AgentStaffID: agentID, AgentName: agentName, Kind: kind, StoreID: storeID,
 		StoreName: storeName, SKUID: skuID, Payload: payload, Title: title, Evidence: evidence, ExpectedImpact: impact,
 		Status: status, DecidedBy: decidedBy, DecidedByName: decidedByName, DecidedAt: tsPtr(decidedAt),
 		RejectReason: reject, Result: result, ExpiresAt: expires.Time, CreatedAt: created.Time, UpdatedAt: updated.Time,
-		ExecutedAt: tsPtr(executed), Outcome: outcome, OutcomeAt: tsPtr(outcomeAt)}
+		ExecutedAt: tsPtr(executed), Outcome: outcome, OutcomeAt: tsPtr(outcomeAt), AutoApproved: auto}
 }
 
 func (t tenantTx) FindAgentProposal(ctx context.Context, id int64) (AgentProposal, error) {
@@ -129,7 +132,7 @@ func (t tenantTx) FindAgentProposal(ctx context.Context, id int64) (AgentProposa
 	}
 	return proposalOf(r.ID, r.AgentStaffID, r.AgentName, r.Kind, r.StoreID, r.StoreName, r.SkuID, r.Payload, r.Title,
 		r.Evidence, r.ExpectedImpact, r.Status, r.DecidedBy, r.DecidedByName, r.DecidedAt, r.RejectReason, r.Result,
-		r.ExpiresAt, r.CreatedAt, r.UpdatedAt, r.ExecutedAt, r.Outcome, r.OutcomeAt), nil
+		r.ExpiresAt, r.CreatedAt, r.UpdatedAt, r.ExecutedAt, r.Outcome, r.OutcomeAt, r.AutoApproved), nil
 }
 
 func (t tenantTx) OpenAgentProposalFor(ctx context.Context, kind, targetKey string) (int64, error) {
@@ -155,7 +158,7 @@ func (t tenantTx) ListAgentProposals(ctx context.Context, f ProposalFilter, limi
 	for _, r := range rows {
 		out = append(out, proposalOf(r.ID, r.AgentStaffID, r.AgentName, r.Kind, r.StoreID, r.StoreName, r.SkuID,
 			r.Payload, r.Title, r.Evidence, r.ExpectedImpact, r.Status, r.DecidedBy, r.DecidedByName, r.DecidedAt,
-			r.RejectReason, r.Result, r.ExpiresAt, r.CreatedAt, r.UpdatedAt, r.ExecutedAt, r.Outcome, r.OutcomeAt))
+			r.RejectReason, r.Result, r.ExpiresAt, r.CreatedAt, r.UpdatedAt, r.ExecutedAt, r.Outcome, r.OutcomeAt, r.AutoApproved))
 	}
 	return out, total, nil
 }

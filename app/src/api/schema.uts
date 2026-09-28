@@ -848,6 +848,25 @@ export type AdminStoreList = {
   has_default : boolean
 }
 
+export type AgentAutoPolicy = {
+  enabled : boolean
+  max_units : number
+  min_discount_rate : number
+  max_discount_cents : number
+  daily_limit : number
+  kind : string
+  updated_by? : number
+  updated_at? : string
+}
+
+export type AgentAutoPolicyInput = {
+  enabled : boolean
+  max_units : number
+  min_discount_rate : number
+  max_discount_cents : number
+  daily_limit : number
+}
+
 export type AgentBrief = {
   id : number
   agent_staff_id : number
@@ -919,6 +938,8 @@ export type AgentProposal = {
   /** 执行后复盘（00122）：{verdict: positive|neutral|negative, explanation, 各种类的指标…}。还没到点时不出现 */
   outcome? : UTSJSONObject
   outcome_at? : string
+  /** 按自动执行策略当场执行的（00130）；此时没有 `decided_by` */
+  auto_approved? : boolean
 }
 
 export type AgentProposalRejectRequest = {

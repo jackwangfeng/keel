@@ -20,6 +20,21 @@ type ActivityStock struct {
 	UpdatedAt   pgtype.Timestamptz
 }
 
+// AI 员工按提案种类的自动执行策略（00130，AI 经营 M11）。
+type AgentAutoPolicy struct {
+	MerchantID       int64
+	AgentStaffID     int64
+	Kind             string
+	Enabled          bool
+	MaxUnits         int32
+	MinDiscountRate  int16
+	MaxDiscountCents int64
+	DailyLimit       int32
+	UpdatedBy        *int64
+	CreatedAt        pgtype.Timestamptz
+	UpdatedAt        pgtype.Timestamptz
+}
+
 // AI 员工写的经营简报（00092，AI 经营 M9）。
 type AgentBrief struct {
 	ID           int64
@@ -72,6 +87,7 @@ type AgentProposal struct {
 	OutcomeDueAt   pgtype.Timestamptz
 	Outcome        []byte
 	OutcomeAt      pgtype.Timestamptz
+	AutoApproved   bool
 }
 
 // AI 员工的 MCP 工具调用审计（00093，AI 经营 M9）。

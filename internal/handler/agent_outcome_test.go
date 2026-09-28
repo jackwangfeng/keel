@@ -60,3 +60,54 @@ func TestProposalOutcomeAndScorecard(t *testing.T) {
 		t.Fatalf("my_scorecard：%s %v", mcpText(res), mine)
 	}
 }
+
+// 自动执行策略（00130）：给「加库存」开策略（单笔 ≤ 20 件、24 小时 ≤ 1 条）后，15 件的提案当场执行（auto_approved）；
+// 同一天第二条超出条数上限、30 件的超出单笔上限，都照常进待处理。售后审核的策略写不进去。
+func TestAutoPolicyExecutesWithinLimits(t *testing.T) {
+	cs := newCouponShop(t)
+	a := createAgent(t, cs.adminShop, `{"name":"放手 AI","role":2}`)
+	k := issueAgentKey(t, cs.adminShop, a.Id, `{"name":"test"}`)
+	sess := mcpConnect(t, cs.Host, k.Secret)
+	polPath := fmt.Sprintf("/api/v1/admin/agents/%d/auto-policies/", a.Id)
+	var pol api.AgentAutoPolicy
+	decodeInto(t, putAs(t, cs.Host, polPath+"inventory_adjust",
+		`{"enabled":true,"max_units":20,"min_discount_rate":1000,"max_discount_cents":0,"daily_limit":1}`, cs.Token),
+		http.StatusOK, "设策略", &pol)
+	w := putAs(t, cs.Host, polPath+"refund_decision",
+		`{"enabled":true,"max_units":0,"min_discount_rate":1000,"max_discount_cents":0,"daily_limit":5}`, cs.Token)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("售后审核不许自动执行，应 422，实得 %d", w.Code)
+	}
+	propose := func(store, sku int64, delta int) map[string]any {
+		t.Helper()
+		res, out := mcpCall(t, sess, "propose_inventory_adjust", map[string]any{"store_id": store, "sku_id": sku,
+			"delta": delta, "reason": "补货", "evidence": "restock_plan：日均 3 件，可售 2"})
+		if res.IsError {
+			t.Fatalf("提案出错：%s", mcpText(res))
+		}
+		return out
+	}
+	p1 := propose(cs.NorthStore, cs.DressSKU, 15)
+	if p1["status"].(float64) != 20 || p1["auto_approved"] != true || p1["decided_by"] != nil {
+		t.Fatalf("在上限内应当场执行：%v", p1)
+	}
+	p2 := propose(cs.NorthStore, cs.ShirtSKU, 10)
+	if p2["status"].(float64) != 10 || p2["auto_approved"] == true {
+		t.Fatalf("24 小时的条数用完，应进待处理：%v", p2)
+	}
+	decodeInto(t, putAs(t, cs.Host, polPath+"inventory_adjust",
+		`{"enabled":true,"max_units":20,"min_discount_rate":1000,"max_discount_cents":0,"daily_limit":10}`, cs.Token),
+		http.StatusOK, "放宽条数", &pol)
+	p3 := propose(cs.SouthStore, cs.DressSKU, 30)
+	if p3["status"].(float64) != 10 {
+		t.Fatalf("超出单笔上限应进待处理：%v", p3)
+	}
+	var list struct {
+		Items []api.AgentAutoPolicy `json:"items"`
+	}
+	decodeInto(t, getAs(t, cs.Host, fmt.Sprintf("/api/v1/admin/agents/%d/auto-policies", a.Id), cs.Token),
+		http.StatusOK, "策略列表", &list)
+	if len(list.Items) != 4 {
+		t.Fatalf("四种可自动执行的种类都应列出：%+v", list.Items)
+	}
+}

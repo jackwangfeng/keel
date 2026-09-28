@@ -129,6 +129,39 @@ func (q *Queries) AgentScorecardByKind(ctx context.Context, arg AgentScorecardBy
 	return items, nil
 }
 
+const claimAgentProposalAuto = `-- name: ClaimAgentProposalAuto :one
+UPDATE agent_proposals
+   SET status = 15, decided_at = now(), auto_approved = TRUE
+ WHERE id = $1 AND status = 10 AND expires_at > now()
+RETURNING id
+`
+
+// 按策略自动执行：10 → 15，decided_by 为空、auto_approved = true。
+func (q *Queries) ClaimAgentProposalAuto(ctx context.Context, id int64) (int64, error) {
+	row := q.db.QueryRow(ctx, claimAgentProposalAuto, id)
+	var id_2 int64
+	err := row.Scan(&id_2)
+	return id_2, err
+}
+
+const countAutoApprovedSince = `-- name: CountAutoApprovedSince :one
+SELECT count(*) FROM agent_proposals
+ WHERE agent_staff_id = $1 AND kind = $2 AND auto_approved AND decided_at >= $3
+`
+
+type CountAutoApprovedSinceParams struct {
+	AgentStaffID int64
+	Kind         string
+	DecidedAt    pgtype.Timestamptz
+}
+
+func (q *Queries) CountAutoApprovedSince(ctx context.Context, arg CountAutoApprovedSinceParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countAutoApprovedSince, arg.AgentStaffID, arg.Kind, arg.DecidedAt)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const couponTemplateUsage = `-- name: CouponTemplateUsage :one
 SELECT count(*)::bigint AS claimed,
        count(*) FILTER (WHERE uc.status IN (2, 3))::bigint AS used
@@ -182,6 +215,99 @@ func (q *Queries) DueAgentProposalOutcomes(ctx context.Context) ([]DueAgentPropo
 			&i.SkuID,
 			&i.Payload,
 			&i.ExecutedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getAgentAutoPolicy = `-- name: GetAgentAutoPolicy :one
+SELECT agent_staff_id, kind, enabled, max_units, min_discount_rate, max_discount_cents, daily_limit, updated_by, updated_at
+  FROM agent_auto_policies
+ WHERE agent_staff_id = $1 AND kind = $2
+`
+
+type GetAgentAutoPolicyParams struct {
+	AgentStaffID int64
+	Kind         string
+}
+
+type GetAgentAutoPolicyRow struct {
+	AgentStaffID     int64
+	Kind             string
+	Enabled          bool
+	MaxUnits         int32
+	MinDiscountRate  int16
+	MaxDiscountCents int64
+	DailyLimit       int32
+	UpdatedBy        *int64
+	UpdatedAt        pgtype.Timestamptz
+}
+
+func (q *Queries) GetAgentAutoPolicy(ctx context.Context, arg GetAgentAutoPolicyParams) (GetAgentAutoPolicyRow, error) {
+	row := q.db.QueryRow(ctx, getAgentAutoPolicy, arg.AgentStaffID, arg.Kind)
+	var i GetAgentAutoPolicyRow
+	err := row.Scan(
+		&i.AgentStaffID,
+		&i.Kind,
+		&i.Enabled,
+		&i.MaxUnits,
+		&i.MinDiscountRate,
+		&i.MaxDiscountCents,
+		&i.DailyLimit,
+		&i.UpdatedBy,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const listAgentAutoPolicies = `-- name: ListAgentAutoPolicies :many
+
+SELECT agent_staff_id, kind, enabled, max_units, min_discount_rate, max_discount_cents, daily_limit, updated_by, updated_at
+  FROM agent_auto_policies
+ WHERE agent_staff_id = $1
+ ORDER BY kind
+`
+
+type ListAgentAutoPoliciesRow struct {
+	AgentStaffID     int64
+	Kind             string
+	Enabled          bool
+	MaxUnits         int32
+	MinDiscountRate  int16
+	MaxDiscountCents int64
+	DailyLimit       int32
+	UpdatedBy        *int64
+	UpdatedAt        pgtype.Timestamptz
+}
+
+// ===========================================================================
+// 自动执行策略（00130）
+// ===========================================================================
+func (q *Queries) ListAgentAutoPolicies(ctx context.Context, agentStaffID int64) ([]ListAgentAutoPoliciesRow, error) {
+	rows, err := q.db.Query(ctx, listAgentAutoPolicies, agentStaffID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListAgentAutoPoliciesRow
+	for rows.Next() {
+		var i ListAgentAutoPoliciesRow
+		if err := rows.Scan(
+			&i.AgentStaffID,
+			&i.Kind,
+			&i.Enabled,
+			&i.MaxUnits,
+			&i.MinDiscountRate,
+			&i.MaxDiscountCents,
+			&i.DailyLimit,
+			&i.UpdatedBy,
+			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -285,5 +411,41 @@ type SetAgentProposalExecutedParams struct {
 // 「卖出」与补货计算同一个口径（restock.sql 的 StoreSKUSales）：已支付 / 已发货 / 已完成 / 售后中的单都算。
 func (q *Queries) SetAgentProposalExecuted(ctx context.Context, arg SetAgentProposalExecutedParams) error {
 	_, err := q.db.Exec(ctx, setAgentProposalExecuted, arg.OutcomeDueAt, arg.Outcome, arg.ID)
+	return err
+}
+
+const upsertAgentAutoPolicy = `-- name: UpsertAgentAutoPolicy :exec
+INSERT INTO agent_auto_policies (agent_staff_id, kind, enabled, max_units, min_discount_rate, max_discount_cents,
+                                 daily_limit, updated_by)
+VALUES ($1, $2, $3, $4, $5,
+        $6, $7, $8)
+ON CONFLICT ON CONSTRAINT agent_auto_policies_pkey DO UPDATE
+   SET enabled = EXCLUDED.enabled, max_units = EXCLUDED.max_units, min_discount_rate = EXCLUDED.min_discount_rate,
+       max_discount_cents = EXCLUDED.max_discount_cents, daily_limit = EXCLUDED.daily_limit,
+       updated_by = EXCLUDED.updated_by
+`
+
+type UpsertAgentAutoPolicyParams struct {
+	AgentStaffID     int64
+	Kind             string
+	Enabled          bool
+	MaxUnits         int32
+	MinDiscountRate  int16
+	MaxDiscountCents int64
+	DailyLimit       int32
+	UpdatedBy        *int64
+}
+
+func (q *Queries) UpsertAgentAutoPolicy(ctx context.Context, arg UpsertAgentAutoPolicyParams) error {
+	_, err := q.db.Exec(ctx, upsertAgentAutoPolicy,
+		arg.AgentStaffID,
+		arg.Kind,
+		arg.Enabled,
+		arg.MaxUnits,
+		arg.MinDiscountRate,
+		arg.MaxDiscountCents,
+		arg.DailyLimit,
+		arg.UpdatedBy,
+	)
 	return err
 }
