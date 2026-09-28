@@ -16,7 +16,8 @@ function findDrive() {
   const cache = path.join(process.env.HOME, '.pub-cache', 'git');
   // 优先用 pubspec.lock 里锁定的那一版（缓存里可能还留着旧版本）。
   const lock = fs.readFileSync(path.join(__dirname, '..', 'pubspec.lock'), 'utf8');
-  const m = lock.match(/mp-flutter\.git[\s\S]*?resolved-ref: "?([0-9a-f]{40})/);
+  // lock 里 resolved-ref 在 url 前面；仓库名可能是 mp-flutter 或 mp-flutter-internal（2026-09 私有库改名）。
+  const m = lock.match(/resolved-ref: "?([0-9a-f]{40})"?\s+url: "?[^"\n]*mp-flutter(?:-internal)?\.git/);
   const dirs = fs.readdirSync(cache).filter((x) => x.startsWith('mp-flutter-'));
   if (m) dirs.sort((a, b) => (b.endsWith(m[1]) ? 1 : 0) - (a.endsWith(m[1]) ? 1 : 0));
   for (const d of dirs) {

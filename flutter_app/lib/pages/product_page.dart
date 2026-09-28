@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
@@ -52,6 +54,8 @@ class _ProductPageState extends State<ProductPage> {
       final store = await s.store.ensure();
       final d = await fetchProduct(s.client, widget.productId, store.storeId);
       if (!mounted) return;
+      await _afterTransition();
+      if (!mounted) return;
       setState(() {
         _storeId = store.storeId;
         _d = d;
@@ -65,6 +69,23 @@ class _ProductPageState extends State<ProductPage> {
         _error = f.message;
       });
     }
+  }
+
+  /// 滑入动画走完再换上内容：整页第一次排版在小程序 iOS 上要两三百毫秒（没有 JIT，一段中文十几毫秒），
+  /// 落在转场中间就是一下明显的卡；等动画停了再排，动画是顺的，内容晚出现不到 0.3 秒。
+  Future<void> _afterTransition() {
+    final a = ModalRoute.of(context)?.animation;
+    if (a == null || a.isCompleted) return Future.value();
+    final done = Completer<void>();
+    void listen(AnimationStatus st) {
+      if (st == AnimationStatus.completed || st == AnimationStatus.dismissed) {
+        a.removeStatusListener(listen);
+        done.complete();
+      }
+    }
+
+    a.addStatusListener(listen);
+    return done.future;
   }
 
   SkuRow? get _picked => _d?.sku(_skuId);
