@@ -153,6 +153,30 @@ func (e AdminCouponTemplateValidMode) Valid() bool {
 	}
 }
 
+// Defines values for AdminLocalDeliverySource.
+const (
+	LocalDeliverySourceCustom          AdminLocalDeliverySource = "custom"
+	LocalDeliverySourceDefaultTemplate AdminLocalDeliverySource = "default_template"
+	LocalDeliverySourceNone            AdminLocalDeliverySource = "none"
+	LocalDeliverySourceTemplate        AdminLocalDeliverySource = "template"
+)
+
+// Valid indicates whether the value is a known member of the AdminLocalDeliverySource enum.
+func (e AdminLocalDeliverySource) Valid() bool {
+	switch e {
+	case LocalDeliverySourceCustom:
+		return true
+	case LocalDeliverySourceDefaultTemplate:
+		return true
+	case LocalDeliverySourceNone:
+		return true
+	case LocalDeliverySourceTemplate:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AdminProductStatus.
 const (
 	AdminProductStatusN0 AdminProductStatus = 0
@@ -2645,10 +2669,13 @@ type AdminInventory struct {
 	WarningQty int       `json:"warning_qty"`
 }
 
-// AdminLocalDelivery defines model for AdminLocalDelivery.
+// AdminLocalDelivery 顶层的三个数是**生效的**规则（按 `source` 取自模板、门店自定义或默认模板）。
 type AdminLocalDelivery struct {
-	// Active 这家店现在是否按这份配置收费（有围栏且不是默认店）。false 时它走运费模板
+	// Active 这家店现在是否按同城配送收费（有围栏且不是默认店）。false 时它走运费模板
 	Active bool `json:"active"`
+
+	// Custom 这家店自己存着的自定义规则（引用模板时也保留，切回自定义时还在）；从没存过时不出现
+	Custom *LocalDeliveryConfig `json:"custom,omitempty"`
 
 	// FeeTiers 按 `within_m` 严格递增。空数组 = 配送费 0
 	FeeTiers []DeliveryTier `json:"fee_tiers"`
@@ -2659,9 +2686,19 @@ type AdminLocalDelivery struct {
 	// MinOrderCents 起送价，0 = 不设
 	MinOrderCents Money `json:"min_order_cents"`
 
-	// UpdatedAt 最后一次保存的时间；没配过时不出现
+	// Source 生效的规则从哪来（见 `GET /admin/stores/{store_id}/local-delivery`）
+	Source AdminLocalDeliverySource `json:"source"`
+
+	// TemplateId `source` 为 `template` / `default_template` 时，是哪个模板
+	TemplateId   *int64  `json:"template_id,omitempty"`
+	TemplateName *string `json:"template_name,omitempty"`
+
+	// UpdatedAt 这家店的配置最后一次保存的时间；从没配过（跟随默认模板）时不出现
 	UpdatedAt *time.Time `json:"updated_at,omitempty"`
 }
+
+// AdminLocalDeliverySource 生效的规则从哪来（见 `GET /admin/stores/{store_id}/local-delivery`）
+type AdminLocalDeliverySource string
 
 // AdminOrderDetail defines model for AdminOrderDetail.
 type AdminOrderDetail struct {
@@ -4280,6 +4317,45 @@ type LocalDeliveryQuote struct {
 
 // LocalDeliveryQuoteFreeReason 免了配送费时为 `threshold`；照常收费时不出现
 type LocalDeliveryQuoteFreeReason string
+
+// LocalDeliveryTemplate defines model for LocalDeliveryTemplate.
+type LocalDeliveryTemplate struct {
+	CreatedAt time.Time `json:"created_at"`
+
+	// FeeTiers 按 `within_m` 严格递增。空数组 = 配送费 0
+	FeeTiers []DeliveryTier `json:"fee_tiers"`
+
+	// FreeOverCents 满多少免配送费，0 = 不设
+	FreeOverCents Money `json:"free_over_cents"`
+	Id            int64 `json:"id"`
+	IsDefault     bool  `json:"is_default"`
+
+	// MinOrderCents 起送价，0 = 不设
+	MinOrderCents Money  `json:"min_order_cents"`
+	Name          string `json:"name"`
+
+	// StoreCount 几家门店在用（显式引用的 + 默认模板时跟随默认的围栏店）。只在列表里出现
+	StoreCount *int64    `json:"store_count,omitempty"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+// LocalDeliveryTemplateInput defines model for LocalDeliveryTemplateInput.
+type LocalDeliveryTemplateInput struct {
+	// FeeTiers 按 `within_m` 严格递增。空数组 = 配送费 0
+	FeeTiers []DeliveryTier `json:"fee_tiers"`
+
+	// FreeOverCents 满多少免配送费，0 = 不设
+	FreeOverCents Money `json:"free_over_cents"`
+
+	// IsDefault 设为默认模板（没配过的围栏店按它收）。至多一个，设了新的旧的自动取消
+	IsDefault bool `json:"is_default"`
+
+	// MinOrderCents 起送价，0 = 不设
+	MinOrderCents Money `json:"min_order_cents"`
+
+	// Name 本店内不重名
+	Name string `json:"name"`
+}
 
 // LoginResponse defines model for LoginResponse.
 type LoginResponse struct {
@@ -6730,6 +6806,15 @@ type StoreFenceRequest struct {
 	Fence *GeoPolygon `json:"fence"`
 }
 
+// StoreLocalDeliveryRequest 二选一：给 `template_id` 即引用那个模板；不给就必须给齐 `min_order_cents` / `free_over_cents` / `fee_tiers`
+// 作为这家店的自定义规则。改回「跟随默认模板」用 `DELETE`。
+type StoreLocalDeliveryRequest struct {
+	FeeTiers      *[]DeliveryTier `json:"fee_tiers,omitempty"`
+	FreeOverCents *Money          `json:"free_over_cents,omitempty"`
+	MinOrderCents *Money          `json:"min_order_cents,omitempty"`
+	TemplateId    *int64          `json:"template_id,omitempty"`
+}
+
 // StoreMatch defines model for StoreMatch.
 type StoreMatch struct {
 	Address *string `json:"address,omitempty"`
@@ -6951,6 +7036,9 @@ type IdempotencyKey = openapi_types.UUID
 
 // KeelMerchant defines model for KeelMerchant.
 type KeelMerchant = string
+
+// LocalDeliveryTemplateId defines model for LocalDeliveryTemplateId.
+type LocalDeliveryTemplateId = int64
 
 // MerchantId defines model for MerchantId.
 type MerchantId = int64
@@ -7866,6 +7954,130 @@ type GetAdminFreightTemplatesTemplateIdParams struct {
 
 // PutAdminFreightTemplatesTemplateIdParams defines parameters for PutAdminFreightTemplatesTemplateId.
 type PutAdminFreightTemplatesTemplateIdParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// GetAdminLocalDeliveryTemplatesParams defines parameters for GetAdminLocalDeliveryTemplates.
+type GetAdminLocalDeliveryTemplatesParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// PostAdminLocalDeliveryTemplatesParams defines parameters for PostAdminLocalDeliveryTemplates.
+type PostAdminLocalDeliveryTemplatesParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+
+	// IdempotencyKey 客户端生成的 UUID。幂等作用域为 `(接口 scope, user_id, key)`，
+	// 有效期 24h，过期后同一 key 可复用（见数据模型文档 §11）。
+	//
+	// · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
+	//   并带 `Idempotency-Replayed: true` 响应头
+	// · **同 key 正在处理中**：`409` + `Retry-After`，
+	//   type=https://keel.dev/problems/idempotency-key-in-flight，
+	//   客户端应退避重试，不要当成业务失败
+	// · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
+	//   type=https://keel.dev/problems/idempotency-key-reused。
+	//   宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
+	//   那会让用户以为下单成功了而实际什么都没发生
+	// · 首次执行失败（存档为失败态）时同样回放该失败响应；
+	//   确需重试的场景请换一个新 key
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// DeleteAdminLocalDeliveryTemplatesTemplateIdParams defines parameters for DeleteAdminLocalDeliveryTemplatesTemplateId.
+type DeleteAdminLocalDeliveryTemplatesTemplateIdParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// PutAdminLocalDeliveryTemplatesTemplateIdParams defines parameters for PutAdminLocalDeliveryTemplatesTemplateId.
+type PutAdminLocalDeliveryTemplatesTemplateIdParams struct {
 	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
 	//
 	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
@@ -10234,6 +10446,33 @@ type GetAdminStoresStoreIdInventoriesParams struct {
 	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
 }
 
+// DeleteAdminStoresStoreIdLocalDeliveryParams defines parameters for DeleteAdminStoresStoreIdLocalDelivery.
+type DeleteAdminStoresStoreIdLocalDeliveryParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
 // GetAdminStoresStoreIdLocalDeliveryParams defines parameters for GetAdminStoresStoreIdLocalDelivery.
 type GetAdminStoresStoreIdLocalDeliveryParams struct {
 	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
@@ -11263,6 +11502,12 @@ type PostAdminFreightTemplatesJSONRequestBody = FreightTemplateInput
 // PutAdminFreightTemplatesTemplateIdJSONRequestBody defines body for PutAdminFreightTemplatesTemplateId for application/json ContentType.
 type PutAdminFreightTemplatesTemplateIdJSONRequestBody = FreightTemplateInput
 
+// PostAdminLocalDeliveryTemplatesJSONRequestBody defines body for PostAdminLocalDeliveryTemplates for application/json ContentType.
+type PostAdminLocalDeliveryTemplatesJSONRequestBody = LocalDeliveryTemplateInput
+
+// PutAdminLocalDeliveryTemplatesTemplateIdJSONRequestBody defines body for PutAdminLocalDeliveryTemplatesTemplateId for application/json ContentType.
+type PutAdminLocalDeliveryTemplatesTemplateIdJSONRequestBody = LocalDeliveryTemplateInput
+
 // PostAdminMerchantsJSONRequestBody defines body for PostAdminMerchants for application/json ContentType.
 type PostAdminMerchantsJSONRequestBody = MerchantCreateRequest
 
@@ -11342,7 +11587,7 @@ type PatchAdminStoresStoreIdJSONRequestBody = StoreUpdateRequest
 type PutAdminStoresStoreIdFenceJSONRequestBody = StoreFenceRequest
 
 // PutAdminStoresStoreIdLocalDeliveryJSONRequestBody defines body for PutAdminStoresStoreIdLocalDelivery for application/json ContentType.
-type PutAdminStoresStoreIdLocalDeliveryJSONRequestBody = LocalDeliveryConfig
+type PutAdminStoresStoreIdLocalDeliveryJSONRequestBody = StoreLocalDeliveryRequest
 
 // PutAdminStoresStoreIdProductsProductIdListingJSONRequestBody defines body for PutAdminStoresStoreIdProductsProductIdListing for application/json ContentType.
 type PutAdminStoresStoreIdProductsProductIdListingJSONRequestBody = ProductListingRequest

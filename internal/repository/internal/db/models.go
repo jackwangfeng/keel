@@ -245,6 +245,19 @@ type Job struct {
 	UpdatedAt   pgtype.Timestamptz
 }
 
+// 同城配送模板：门店引用，没配的围栏店用默认模板（00111）。
+type LocalDeliveryTemplate struct {
+	ID            int64
+	MerchantID    int64
+	Name          string
+	IsDefault     bool
+	MinOrderCents int64
+	FreeOverCents int64
+	FeeTiers      []byte
+	CreatedAt     pgtype.Timestamptz
+	UpdatedAt     pgtype.Timestamptz
+}
+
 type LoginFailure struct {
 	MerchantID  int64
 	Phone       string
@@ -767,6 +780,7 @@ type StoreLocalDelivery struct {
 	FreeOverCents int64
 	FeeTiers      []byte
 	UpdatedAt     pgtype.Timestamptz
+	TemplateID    *int64
 }
 
 type StoreProductOverride struct {

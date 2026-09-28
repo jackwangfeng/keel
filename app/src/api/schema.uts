@@ -228,6 +228,16 @@ export type DeliveryTier = {
   fee_cents : Money
 }
 
+export type LocalDeliveryConfig = {
+  /** 起送价，0 = 不设 */
+  min_order_cents : Money
+  /** 满多少免配送费，0 = 不设 */
+  free_over_cents : Money
+  /** 按 `within_m` 严格递增。空数组 = 配送费 0 */
+  fee_tiers : DeliveryTier[]
+}
+
+/** 顶层的三个数是**生效的**规则（按 `source` 取自模板、门店自定义或默认模板）。 */
 export type AdminLocalDelivery = {
   /** 起送价，0 = 不设 */
   min_order_cents : Money
@@ -235,9 +245,16 @@ export type AdminLocalDelivery = {
   free_over_cents : Money
   /** 按 `within_m` 严格递增。空数组 = 配送费 0 */
   fee_tiers : DeliveryTier[]
-  /** 这家店现在是否按这份配置收费（有围栏且不是默认店）。false 时它走运费模板 */
+  /** 这家店现在是否按同城配送收费（有围栏且不是默认店）。false 时它走运费模板 */
   active : boolean
-  /** 最后一次保存的时间；没配过时不出现 */
+  /** 生效的规则从哪来（见 `GET /admin/stores/{store_id}/local-delivery`） */
+  source : string
+  /** `source` 为 `template` / `default_template` 时，是哪个模板 */
+  template_id? : number
+  template_name? : string
+  /** 这家店自己存着的自定义规则（引用模板时也保留，切回自定义时还在）；从没存过时不出现 */
+  custom? : LocalDeliveryConfig
+  /** 这家店的配置最后一次保存的时间；从没配过（跟随默认模板）时不出现 */
   updated_at? : string
 }
 
@@ -1301,13 +1318,33 @@ export type InventorySetRequest = {
   warning_qty? : number
 }
 
-export type LocalDeliveryConfig = {
+export type LocalDeliveryTemplate = {
   /** 起送价，0 = 不设 */
   min_order_cents : Money
   /** 满多少免配送费，0 = 不设 */
   free_over_cents : Money
   /** 按 `within_m` 严格递增。空数组 = 配送费 0 */
   fee_tiers : DeliveryTier[]
+  id : number
+  name : string
+  is_default : boolean
+  /** 几家门店在用（显式引用的 + 默认模板时跟随默认的围栏店）。只在列表里出现 */
+  store_count? : number
+  created_at : string
+  updated_at : string
+}
+
+export type LocalDeliveryTemplateInput = {
+  /** 起送价，0 = 不设 */
+  min_order_cents : Money
+  /** 满多少免配送费，0 = 不设 */
+  free_over_cents : Money
+  /** 按 `within_m` 严格递增。空数组 = 配送费 0 */
+  fee_tiers : DeliveryTier[]
+  /** 本店内不重名 */
+  name : string
+  /** 设为默认模板（没配过的围栏店按它收）。至多一个，设了新的旧的自动取消 */
+  is_default : boolean
 }
 
 export type User = {
@@ -2346,6 +2383,14 @@ export type StoreCreateRequest = {
 export type StoreFenceRequest = {
   /** 传 `null` 即清空围栏。**清空只对默认门店合法**—— */
   fence : any
+}
+
+/** 二选一：给 `template_id` 即引用那个模板；不给就必须给齐 `min_order_cents` / `free_over_cents` / `fee_tiers` */
+export type StoreLocalDeliveryRequest = {
+  template_id? : number
+  min_order_cents? : Money
+  free_over_cents? : Money
+  fee_tiers? : DeliveryTier[]
 }
 
 export type StoreMatch = {

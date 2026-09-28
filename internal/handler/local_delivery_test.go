@@ -120,3 +120,102 @@ func TestLocalDeliveryForFencedStores(t *testing.T) {
 		t.Fatal("默认门店的同城配送配置不该 active")
 	}
 }
+
+// 同城配送模板（00111）：没配过的围栏店按默认模板收；门店可以引用别的模板；改模板即生效；
+// 在用的模板与默认模板删不掉；重名 409；设新默认会取消旧默认。
+func TestLocalDeliveryTemplates(t *testing.T) {
+	cs := newCouponShop(t)
+	setFence(t, cs.adminShop, cs.NorthStore, 116.30, 39.80, 116.50, 40.00)
+	b := cs.newBuyer(t, "ldtpl")
+	var lat, lng float64
+	if err := admin(t).QueryRow(t.Context(),
+		`SELECT ST_Y(location::geometry), ST_X(location::geometry) FROM stores WHERE id = $1`, cs.NorthStore).
+		Scan(&lat, &lng); err != nil {
+		t.Fatal(err)
+	}
+	adminExec(t, `UPDATE user_addresses SET lat = $2, lng = $3 WHERE id = $1`, b.Address, lat, lng)
+	body := orderBodyAt(b.Address, cs.NorthStore, [][2]int64{{cs.DressSKU, 1}}, nil)
+	fee := func() int64 { t.Helper(); return int64(cs.mustPreview(t, b, body).FreightCents) }
+	createTpl := func(body string) api.LocalDeliveryTemplate {
+		t.Helper()
+		var out api.LocalDeliveryTemplate
+		decodeInto(t, postIdem(t, cs.Host, "/api/v1/admin/local-delivery-templates", body, cs.Token),
+			http.StatusCreated, "建同城配送模板", &out)
+		return out
+	}
+	storeCfg := func() api.AdminLocalDelivery {
+		t.Helper()
+		var out api.AdminLocalDelivery
+		decodeInto(t, getAs(t, cs.Host, fmt.Sprintf("/api/v1/admin/stores/%d/local-delivery", cs.NorthStore), cs.Token),
+			http.StatusOK, "读门店同城配送", &out)
+		return out
+	}
+	storePath := fmt.Sprintf("/api/v1/admin/stores/%d/local-delivery", cs.NorthStore)
+
+	if c := storeCfg(); c.Source != api.LocalDeliverySourceNone || fee() != 0 {
+		t.Fatalf("没有任何模板时应是 none、配送费 0：%+v", c)
+	}
+	std := createTpl(`{"name":"市区标准","is_default":true,"min_order_cents":0,"free_over_cents":0,
+		"fee_tiers":[{"within_m":3000,"fee_cents":300}]}`)
+	if c := storeCfg(); c.Source != api.LocalDeliverySourceDefaultTemplate || c.TemplateId == nil || *c.TemplateId != std.Id ||
+		fee() != 300 {
+		t.Fatalf("没配过的围栏店应跟随默认模板收 3 元：%+v", c)
+	}
+	far := createTpl(`{"name":"远郊","is_default":false,"min_order_cents":0,"free_over_cents":0,
+		"fee_tiers":[{"within_m":50000,"fee_cents":900}]}`)
+	var c api.AdminLocalDelivery
+	decodeInto(t, putAs(t, cs.Host, storePath, fmt.Sprintf(`{"template_id":%d}`, far.Id), cs.Token), http.StatusOK, "选模板", &c)
+	if c.Source != api.LocalDeliverySourceTemplate || c.TemplateName == nil || *c.TemplateName != "远郊" || fee() != 900 {
+		t.Fatalf("引用「远郊」应收 9 元：%+v", c)
+	}
+	wantStatus(t, putAs(t, cs.Host, fmt.Sprintf("/api/v1/admin/local-delivery-templates/%d", far.Id),
+		`{"name":"远郊","is_default":false,"min_order_cents":0,"free_over_cents":0,"fee_tiers":[{"within_m":50000,"fee_cents":700}]}`,
+		cs.Token), http.StatusOK, "改模板")
+	if fee() != 700 {
+		t.Fatal("改了模板，引用它的门店应立即按新规则收 7 元")
+	}
+
+	// 在用 / 默认的删不掉；重名 409。
+	for _, id := range []int64{far.Id, std.Id} {
+		w := deleteAs(t, cs.Host, fmt.Sprintf("/api/v1/admin/local-delivery-templates/%d", id), cs.Token)
+		if p := problemOf(t, w, http.StatusConflict); p.Type != problem.TypeLocalDeliveryTemplateInUse {
+			t.Fatalf("模板 %d 在用 / 是默认，删除应 409 in-use，实得 %s", id, p.Type)
+		}
+	}
+	w := postIdem(t, cs.Host, "/api/v1/admin/local-delivery-templates",
+		`{"name":"远郊","is_default":false,"min_order_cents":0,"free_over_cents":0,"fee_tiers":[]}`, cs.Token)
+	if p := problemOf(t, w, http.StatusConflict); p.Type != problem.TypeLocalDeliveryTemplateConflict {
+		t.Fatalf("重名应 409 conflict，实得 %s", p.Type)
+	}
+
+	// 改回跟随默认 → 3 元；「远郊」没人用了，能删。
+	decodeInto(t, deleteAs(t, cs.Host, storePath, cs.Token), http.StatusOK, "改回跟随默认", &c)
+	if c.Source != api.LocalDeliverySourceDefaultTemplate || fee() != 300 {
+		t.Fatalf("改回跟随默认后应按「市区标准」3 元：%+v", c)
+	}
+	wantStatus(t, deleteAs(t, cs.Host, fmt.Sprintf("/api/v1/admin/local-delivery-templates/%d", far.Id), cs.Token),
+		http.StatusNoContent, "删没人用的模板")
+
+	// 设新默认：旧的自动取消；列表的 store_count 数的是跟随默认的围栏店。
+	night := createTpl(`{"name":"夜间","is_default":true,"min_order_cents":0,"free_over_cents":0,
+		"fee_tiers":[{"within_m":3000,"fee_cents":600}]}`)
+	var list struct {
+		Items []api.LocalDeliveryTemplate `json:"items"`
+	}
+	decodeInto(t, getAs(t, cs.Host, "/api/v1/admin/local-delivery-templates", cs.Token), http.StatusOK, "模板列表", &list)
+	for _, it := range list.Items {
+		switch it.Id {
+		case std.Id:
+			if it.IsDefault {
+				t.Error("设了新默认，「市区标准」应不再是默认")
+			}
+		case night.Id:
+			if !it.IsDefault || it.StoreCount == nil || *it.StoreCount < 1 {
+				t.Errorf("「夜间」应是默认且至少有北京门店跟随：%+v", it)
+			}
+		}
+	}
+	if fee() != 600 {
+		t.Fatal("跟随默认的门店应按新默认「夜间」收 6 元")
+	}
+}

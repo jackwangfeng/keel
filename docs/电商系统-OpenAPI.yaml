@@ -3063,9 +3063,13 @@ paths:
       tags: [Admin, Store]
       summary: 门店的同城配送配置
       description: |
-        有围栏、不是默认店的门店按这份配置收配送费（00110），**不读运费模板**：起送价、按距离分档的配送费、
+        有围栏、不是默认店的门店按同城配送收配送费（00110），**不读运费模板**：起送价、按距离分档的配送费、
         满额免配送费。默认门店（全国兜底）与没有围栏的门店照旧走运费模板 —— 它们也能存这份配置，只是不生效，
-        `active` 说明这一点。没配过的门店返回全 0（不设起送价、配送费 0）、`updated_at` 缺席。
+        `active` 说明这一点。
+
+        **规则从哪来**（`source`，00111）：门店引用了模板 → `template`；门店填了自己的规则 → `custom`；
+        门店什么都没配 → 全店默认模板（`default_template`）；连默认模板都没有 → `none`（全 0）。
+        所以新开的围栏店什么都不用做就按默认模板收费。响应顶层的三个数是**生效的**规则。
 
         权限与门店模板相同：大区管理员管本大区的店，门店管理员管自己的店。
       parameters:
@@ -3103,7 +3107,7 @@ paths:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/LocalDeliveryConfig' }
+            schema: { $ref: '#/components/schemas/StoreLocalDeliveryRequest' }
       responses:
         '200':
           description: 已更新
@@ -3117,8 +3121,142 @@ paths:
               schema: { $ref: '#/components/schemas/Problem' }
         '422':
           description: |
-            配置不成立（`https://keel.dev/problems/invalid-request`）：档数超过 10、`within_m` 不严格递增或超出
-            1–100000 米、单档配送费超过 100 元、起送价或免配送费门槛超过 10 万元、金额为负。
+            配置不成立（`https://keel.dev/problems/invalid-request`）：`template_id` 与自定义规则都给或都没给、
+            `template_id` 不存在、档数超过 10、`within_m` 不严格递增或超出 1–100000 米、单档配送费超过 100 元、
+            起送价或免配送费门槛超过 10 万元、金额为负。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+    delete:
+      tags: [Admin, Store]
+      summary: 门店的同城配送改回「跟随默认模板」
+      description: 删掉这家店自己的配置（自定义规则一并清掉），之后按全店默认模板收费。返回删完之后生效的配置。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+        - $ref: '#/components/parameters/StoreId'
+      responses:
+        '200':
+          description: 已改回跟随默认模板
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminLocalDelivery' }
+        '404':
+          description: 门店不存在或不属于当前租户。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /admin/local-delivery-templates:
+    get:
+      tags: [Admin, Store]
+      summary: 同城配送模板列表
+      description: |
+        一套「起送价 + 满额免配送费 + 距离分档」存成模板（00111），门店引用它；改模板即对引用它的全部门店生效。
+        `is_default` 的那一个是没配过的围栏店的兜底。不分页（一家店至多几十个）。任何员工都能读（门店管理员要从里面挑）。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/LocalDeliveryTemplate' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Admin, Store]
+      summary: 新建同城配送模板
+      description: |
+        规则口径同 `PUT /admin/stores/{store_id}/local-delivery`。`is_default = true` 时原来的默认模板自动取消默认。
+        只有全店范围的员工（管理员、操作员）能写模板。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LocalDeliveryTemplateInput' }
+      responses:
+        '201':
+          description: 已创建
+          headers:
+            Idempotency-Replayed: { $ref: '#/components/headers/IdempotencyReplayed' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LocalDeliveryTemplate' }
+        '409':
+          description: |
+            重名（`https://keel.dev/problems/local-delivery-template-conflict`）；
+            同一 Idempotency-Key 正在处理中（`https://keel.dev/problems/idempotency-key-in-flight`）。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: 规则不成立（`https://keel.dev/problems/invalid-request`），或同一 Idempotency-Key 配了不同的请求体。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /admin/local-delivery-templates/{template_id}:
+    parameters:
+      - $ref: '#/components/parameters/LocalDeliveryTemplateId'
+    put:
+      tags: [Admin, Store]
+      summary: 修改同城配送模板（整体替换）
+      description: 引用它的门店（以及它是默认模板时跟随默认的门店）立即按新规则收费。`is_default = true` 时原来的默认模板自动取消默认。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LocalDeliveryTemplateInput' }
+      responses:
+        '200':
+          description: 已更新
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LocalDeliveryTemplate' }
+        '404':
+          description: 模板不存在或属于别家店。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '409':
+          description: 重名（`https://keel.dev/problems/local-delivery-template-conflict`）。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: 规则不成立（`https://keel.dev/problems/invalid-request`）。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+    delete:
+      tags: [Admin, Store]
+      summary: 删除同城配送模板
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+      responses:
+        '204':
+          description: 已删除
+        '404':
+          description: 模板不存在或属于别家店。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '409':
+          description: |
+            还有门店在用，或它是默认模板（`https://keel.dev/problems/local-delivery-template-in-use`）：
+            先让那些门店换模板 / 先把别的模板设为默认或取消默认 —— 否则跟随默认的门店会悄悄变成配送费 0。
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
@@ -7291,6 +7429,12 @@ components:
       required: true
       description: '`promotions.id`。查不到（含属于别家店）即 404。'
       schema: { type: integer, format: int64 }
+    LocalDeliveryTemplateId:
+      name: template_id
+      in: path
+      required: true
+      description: '`local_delivery_templates.id`。查不到（含属于别家店）即 404。'
+      schema: { type: integer, format: int64 }
     FreightTemplateId:
       name: template_id
       in: path
@@ -10668,18 +10812,80 @@ components:
           description: 按 `within_m` 严格递增。空数组 = 配送费 0
 
     AdminLocalDelivery:
+      description: 顶层的三个数是**生效的**规则（按 `source` 取自模板、门店自定义或默认模板）。
       allOf:
         - $ref: '#/components/schemas/LocalDeliveryConfig'
         - type: object
-          required: [active]
+          required: [active, source]
           properties:
             active:
               type: boolean
-              description: 这家店现在是否按这份配置收费（有围栏且不是默认店）。false 时它走运费模板
+              description: 这家店现在是否按同城配送收费（有围栏且不是默认店）。false 时它走运费模板
+            source:
+              type: string
+              enum: [custom, template, default_template, none]
+              # 常量名显式给出：none 与 StoreMatchType 的 none 撞名，生成器会把两边的常量都改名。
+              x-enum-varnames: [LocalDeliverySourceCustom, LocalDeliverySourceTemplate,
+                                LocalDeliverySourceDefaultTemplate, LocalDeliverySourceNone]
+              description: 生效的规则从哪来（见 `GET /admin/stores/{store_id}/local-delivery`）
+            template_id:
+              type: integer
+              format: int64
+              description: '`source` 为 `template` / `default_template` 时，是哪个模板'
+            template_name:
+              type: string
+            custom:
+              allOf: [{ $ref: '#/components/schemas/LocalDeliveryConfig' }]
+              description: 这家店自己存着的自定义规则（引用模板时也保留，切回自定义时还在）；从没存过时不出现
             updated_at:
               type: string
               format: date-time
-              description: 最后一次保存的时间；没配过时不出现
+              description: 这家店的配置最后一次保存的时间；从没配过（跟随默认模板）时不出现
+
+    StoreLocalDeliveryRequest:
+      type: object
+      description: |
+        二选一：给 `template_id` 即引用那个模板；不给就必须给齐 `min_order_cents` / `free_over_cents` / `fee_tiers`
+        作为这家店的自定义规则。改回「跟随默认模板」用 `DELETE`。
+      properties:
+        template_id:
+          type: integer
+          format: int64
+        min_order_cents:
+          allOf: [{ $ref: '#/components/schemas/Money' }]
+        free_over_cents:
+          allOf: [{ $ref: '#/components/schemas/Money' }]
+        fee_tiers:
+          type: array
+          maxItems: 10
+          items: { $ref: '#/components/schemas/DeliveryTier' }
+
+    LocalDeliveryTemplateInput:
+      allOf:
+        - $ref: '#/components/schemas/LocalDeliveryConfig'
+        - type: object
+          required: [name, is_default]
+          properties:
+            name: { type: string, minLength: 1, maxLength: 50, description: 本店内不重名 }
+            is_default:
+              type: boolean
+              description: 设为默认模板（没配过的围栏店按它收）。至多一个，设了新的旧的自动取消
+
+    LocalDeliveryTemplate:
+      allOf:
+        - $ref: '#/components/schemas/LocalDeliveryConfig'
+        - type: object
+          required: [id, name, is_default, created_at, updated_at]
+          properties:
+            id: { type: integer, format: int64 }
+            name: { type: string }
+            is_default: { type: boolean }
+            store_count:
+              type: integer
+              format: int64
+              description: 几家门店在用（显式引用的 + 默认模板时跟随默认的围栏店）。只在列表里出现
+            created_at: { type: string, format: date-time }
+            updated_at: { type: string, format: date-time }
 
     FreightUndeliverableLine:
       type: object

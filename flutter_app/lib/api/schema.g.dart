@@ -455,18 +455,44 @@ class DeliveryTier {
       };
 }
 
+class LocalDeliveryConfig {
+  final Money minOrderCents;
+  final Money freeOverCents;
+  final List<DeliveryTier> feeTiers;
+  const LocalDeliveryConfig({required this.minOrderCents, required this.freeOverCents, required this.feeTiers});
+  factory LocalDeliveryConfig.fromJson(Map<String, dynamic> j) => LocalDeliveryConfig(
+        minOrderCents: (j['min_order_cents'] as num).toInt(),
+        freeOverCents: (j['free_over_cents'] as num).toInt(),
+        feeTiers: (j['fee_tiers'] as List).map((e) => DeliveryTier.fromJson(e as Map<String, dynamic>)).toList(),
+      );
+  Map<String, dynamic> toJson() => {
+        'min_order_cents': minOrderCents,
+        'free_over_cents': freeOverCents,
+        'fee_tiers': feeTiers.map((e) => e.toJson()).toList(),
+      };
+}
+
+/// 顶层的三个数是**生效的**规则（按 `source` 取自模板、门店自定义或默认模板）。
 class AdminLocalDelivery {
   final Money minOrderCents;
   final Money freeOverCents;
   final List<DeliveryTier> feeTiers;
   final bool active;
+  final String source;
+  final int? templateId;
+  final String? templateName;
+  final LocalDeliveryConfig? custom;
   final String? updatedAt;
-  const AdminLocalDelivery({required this.minOrderCents, required this.freeOverCents, required this.feeTiers, required this.active, this.updatedAt});
+  const AdminLocalDelivery({required this.minOrderCents, required this.freeOverCents, required this.feeTiers, required this.active, required this.source, this.templateId, this.templateName, this.custom, this.updatedAt});
   factory AdminLocalDelivery.fromJson(Map<String, dynamic> j) => AdminLocalDelivery(
         minOrderCents: (j['min_order_cents'] as num).toInt(),
         freeOverCents: (j['free_over_cents'] as num).toInt(),
         feeTiers: (j['fee_tiers'] as List).map((e) => DeliveryTier.fromJson(e as Map<String, dynamic>)).toList(),
         active: j['active'] as bool,
+        source: j['source'] as String,
+        templateId: (j['template_id'] as num?)?.toInt(),
+        templateName: j['template_name'] as String?,
+        custom: j['custom'] == null ? null : LocalDeliveryConfig.fromJson(j['custom'] as Map<String, dynamic>),
         updatedAt: j['updated_at'] as String?,
       );
   Map<String, dynamic> toJson() => {
@@ -474,6 +500,10 @@ class AdminLocalDelivery {
         'free_over_cents': freeOverCents,
         'fee_tiers': feeTiers.map((e) => e.toJson()).toList(),
         'active': active,
+        'source': source,
+        if (templateId != null) 'template_id': templateId,
+        if (templateName != null) 'template_name': templateName,
+        if (custom != null) 'custom': custom!.toJson(),
         if (updatedAt != null) 'updated_at': updatedAt,
       };
 }
@@ -2633,20 +2663,61 @@ class InventorySetRequest {
       };
 }
 
-class LocalDeliveryConfig {
+class LocalDeliveryTemplate {
   final Money minOrderCents;
   final Money freeOverCents;
   final List<DeliveryTier> feeTiers;
-  const LocalDeliveryConfig({required this.minOrderCents, required this.freeOverCents, required this.feeTiers});
-  factory LocalDeliveryConfig.fromJson(Map<String, dynamic> j) => LocalDeliveryConfig(
+  final int id;
+  final String name;
+  final bool isDefault;
+  final int? storeCount;
+  final String createdAt;
+  final String updatedAt;
+  const LocalDeliveryTemplate({required this.minOrderCents, required this.freeOverCents, required this.feeTiers, required this.id, required this.name, required this.isDefault, this.storeCount, required this.createdAt, required this.updatedAt});
+  factory LocalDeliveryTemplate.fromJson(Map<String, dynamic> j) => LocalDeliveryTemplate(
         minOrderCents: (j['min_order_cents'] as num).toInt(),
         freeOverCents: (j['free_over_cents'] as num).toInt(),
         feeTiers: (j['fee_tiers'] as List).map((e) => DeliveryTier.fromJson(e as Map<String, dynamic>)).toList(),
+        id: (j['id'] as num).toInt(),
+        name: j['name'] as String,
+        isDefault: j['is_default'] as bool,
+        storeCount: (j['store_count'] as num?)?.toInt(),
+        createdAt: j['created_at'] as String,
+        updatedAt: j['updated_at'] as String,
       );
   Map<String, dynamic> toJson() => {
         'min_order_cents': minOrderCents,
         'free_over_cents': freeOverCents,
         'fee_tiers': feeTiers.map((e) => e.toJson()).toList(),
+        'id': id,
+        'name': name,
+        'is_default': isDefault,
+        if (storeCount != null) 'store_count': storeCount,
+        'created_at': createdAt,
+        'updated_at': updatedAt,
+      };
+}
+
+class LocalDeliveryTemplateInput {
+  final Money minOrderCents;
+  final Money freeOverCents;
+  final List<DeliveryTier> feeTiers;
+  final String name;
+  final bool isDefault;
+  const LocalDeliveryTemplateInput({required this.minOrderCents, required this.freeOverCents, required this.feeTiers, required this.name, required this.isDefault});
+  factory LocalDeliveryTemplateInput.fromJson(Map<String, dynamic> j) => LocalDeliveryTemplateInput(
+        minOrderCents: (j['min_order_cents'] as num).toInt(),
+        freeOverCents: (j['free_over_cents'] as num).toInt(),
+        feeTiers: (j['fee_tiers'] as List).map((e) => DeliveryTier.fromJson(e as Map<String, dynamic>)).toList(),
+        name: j['name'] as String,
+        isDefault: j['is_default'] as bool,
+      );
+  Map<String, dynamic> toJson() => {
+        'min_order_cents': minOrderCents,
+        'free_over_cents': freeOverCents,
+        'fee_tiers': feeTiers.map((e) => e.toJson()).toList(),
+        'name': name,
+        'is_default': isDefault,
       };
 }
 
@@ -4823,6 +4894,27 @@ class StoreFenceRequest {
       );
   Map<String, dynamic> toJson() => {
         'fence': fence,
+      };
+}
+
+/// 二选一：给 `template_id` 即引用那个模板；不给就必须给齐 `min_order_cents` / `free_over_cents` / `fee_tiers`
+class StoreLocalDeliveryRequest {
+  final int? templateId;
+  final Money? minOrderCents;
+  final Money? freeOverCents;
+  final List<DeliveryTier>? feeTiers;
+  const StoreLocalDeliveryRequest({this.templateId, this.minOrderCents, this.freeOverCents, this.feeTiers});
+  factory StoreLocalDeliveryRequest.fromJson(Map<String, dynamic> j) => StoreLocalDeliveryRequest(
+        templateId: (j['template_id'] as num?)?.toInt(),
+        minOrderCents: (j['min_order_cents'] as num?)?.toInt(),
+        freeOverCents: (j['free_over_cents'] as num?)?.toInt(),
+        feeTiers: (j['fee_tiers'] as List?)?.map((e) => DeliveryTier.fromJson(e as Map<String, dynamic>)).toList(),
+      );
+  Map<String, dynamic> toJson() => {
+        if (templateId != null) 'template_id': templateId,
+        if (minOrderCents != null) 'min_order_cents': minOrderCents,
+        if (freeOverCents != null) 'free_over_cents': freeOverCents,
+        if (feeTiers != null) 'fee_tiers': feeTiers!.map((e) => e.toJson()).toList(),
       };
 }
 

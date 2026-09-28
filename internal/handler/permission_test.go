@@ -432,6 +432,25 @@ var permMatrix = []permRoute{
 			Body: `{"min_order_cents":2000,"free_over_cents":0,"fee_tiers":[{"within_m":3000,"fee_cents":300}]}`,
 			OK:   http.StatusOK}
 	}},
+	{"DELETE", v1 + "/admin/stores/:store_id/local-delivery", storeOperate, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permReq{Method: "DELETE", Path: fmt.Sprintf(v1+"/admin/stores/%d/local-delivery", fx.store(c)), OK: http.StatusOK}
+	}},
+	{"GET", v1 + "/admin/local-delivery-templates", everyone, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permGet(v1 + "/admin/local-delivery-templates")
+	}},
+	{"POST", v1 + "/admin/local-delivery-templates", merchantWide, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permReq{Method: "POST", Path: v1 + "/admin/local-delivery-templates", OK: http.StatusCreated,
+			Body: fmt.Sprintf(`{"name":"perm-%s","is_default":false,"min_order_cents":0,"free_over_cents":0,"fee_tiers":[]}`, fx.next())}
+	}},
+	{"PUT", v1 + "/admin/local-delivery-templates/:template_id", merchantWide, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permReq{Method: "PUT", Path: fmt.Sprintf(v1+"/admin/local-delivery-templates/%d", permLocalDeliveryTemplate(t, fx)),
+			Body: fmt.Sprintf(`{"name":"perm-%s","is_default":false,"min_order_cents":0,"free_over_cents":0,"fee_tiers":[]}`, fx.next()),
+			OK:   http.StatusOK}
+	}},
+	{"DELETE", v1 + "/admin/local-delivery-templates/:template_id", merchantWide, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permReq{Method: "DELETE", Path: fmt.Sprintf(v1+"/admin/local-delivery-templates/%d", permLocalDeliveryTemplate(t, fx)),
+			OK: http.StatusNoContent}
+	}},
 	{"PUT", v1 + "/admin/stores/:store_id/default", adminOnly, func(t *testing.T, fx *permFixture, c permCase) permReq {
 		// 目标一律是现在的默认门店 S0：把它再设一次默认是幂等的，
 		// 不会让矩阵的后面几格换一个默认店。
@@ -933,4 +952,11 @@ func permCleanupOrders(t *testing.T, fx *permFixture) {
 			adminExec(t, q, fx.sh.MerchantID)
 		}
 	})
+}
+
+// permLocalDeliveryTemplate 建一个不被引用、不是默认的同城配送模板（每格一个，删 / 改互不影响）。
+func permLocalDeliveryTemplate(t *testing.T, fx *permFixture) int64 {
+	t.Helper()
+	return adminQueryInt64(t, `INSERT INTO local_delivery_templates (merchant_id, name) VALUES ($1, $2) RETURNING id`,
+		fx.sh.MerchantID, "perm-tpl-"+fx.next())
 }

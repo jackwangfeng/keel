@@ -273,6 +273,9 @@ const (
 	TypeAddressOutOfRange = "https://keel.dev/problems/address-out-of-range"
 	// below-minimum-order：同城配送的门店设了起送价，这一单没到（422，00110）。
 	TypeBelowMinimumOrder = "https://keel.dev/problems/below-minimum-order"
+	// local-delivery-template-in-use / -conflict：同城配送模板还有门店在用或是默认模板（删不掉）/ 重名（409，00111）。
+	TypeLocalDeliveryTemplateInUse    = "https://keel.dev/problems/local-delivery-template-in-use"
+	TypeLocalDeliveryTemplateConflict = "https://keel.dev/problems/local-delivery-template-conflict"
 
 	// 优惠券那一组（数据模型 §7，契约 Coupon tag）。分得细的理由同上：
 	//

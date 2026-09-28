@@ -11,9 +11,85 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const clearOtherDefaultLocalDeliveryTemplates = `-- name: ClearOtherDefaultLocalDeliveryTemplates :exec
+UPDATE local_delivery_templates SET is_default = FALSE WHERE is_default AND id <> $1
+`
+
+// 设一个为默认之前先清掉别的（uk_local_delivery_templates_default 保证至多一个；同一事务里先清再置）。
+func (q *Queries) ClearOtherDefaultLocalDeliveryTemplates(ctx context.Context, keepID int64) error {
+	_, err := q.db.Exec(ctx, clearOtherDefaultLocalDeliveryTemplates, keepID)
+	return err
+}
+
+const countStoresReferencingTemplate = `-- name: CountStoresReferencingTemplate :one
+SELECT count(*) FROM store_local_delivery WHERE template_id = $1
+`
+
+func (q *Queries) CountStoresReferencingTemplate(ctx context.Context, templateID *int64) (int64, error) {
+	row := q.db.QueryRow(ctx, countStoresReferencingTemplate, templateID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const deleteLocalDeliveryTemplate = `-- name: DeleteLocalDeliveryTemplate :execrows
+DELETE FROM local_delivery_templates WHERE id = $1
+`
+
+func (q *Queries) DeleteLocalDeliveryTemplate(ctx context.Context, id int64) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteLocalDeliveryTemplate, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteStoreLocalDelivery = `-- name: DeleteStoreLocalDelivery :exec
+DELETE FROM store_local_delivery WHERE store_id = $1
+`
+
+// 「跟随默认模板」：删掉这家店自己的那一行。
+func (q *Queries) DeleteStoreLocalDelivery(ctx context.Context, storeID int64) error {
+	_, err := q.db.Exec(ctx, deleteStoreLocalDelivery, storeID)
+	return err
+}
+
+const getLocalDeliveryTemplate = `-- name: GetLocalDeliveryTemplate :one
+SELECT id, name, is_default, min_order_cents, free_over_cents, fee_tiers, created_at, updated_at
+  FROM local_delivery_templates
+ WHERE id = $1
+`
+
+type GetLocalDeliveryTemplateRow struct {
+	ID            int64
+	Name          string
+	IsDefault     bool
+	MinOrderCents int64
+	FreeOverCents int64
+	FeeTiers      []byte
+	CreatedAt     pgtype.Timestamptz
+	UpdatedAt     pgtype.Timestamptz
+}
+
+func (q *Queries) GetLocalDeliveryTemplate(ctx context.Context, id int64) (GetLocalDeliveryTemplateRow, error) {
+	row := q.db.QueryRow(ctx, getLocalDeliveryTemplate, id)
+	var i GetLocalDeliveryTemplateRow
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.IsDefault,
+		&i.MinOrderCents,
+		&i.FreeOverCents,
+		&i.FeeTiers,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getStoreLocalDelivery = `-- name: GetStoreLocalDelivery :one
 
-SELECT min_order_cents, free_over_cents, fee_tiers, updated_at
+SELECT min_order_cents, free_over_cents, fee_tiers, template_id, updated_at
   FROM store_local_delivery
  WHERE store_id = $1
 `
@@ -22,11 +98,12 @@ type GetStoreLocalDeliveryRow struct {
 	MinOrderCents int64
 	FreeOverCents int64
 	FeeTiers      []byte
+	TemplateID    *int64
 	UpdatedAt     pgtype.Timestamptz
 }
 
-// 同城配送（00110）：有围栏、不是默认店的门店按它收配送费。
-// 后台读一家店的配置。没有这一行由 repository 翻成全 0（不设起送价、配送费 0）。
+// 同城配送（00110 / 00111）：有围栏、不是默认店的门店按它收配送费。
+// 后台读一家店自己的那一行。没有这一行由 repository 翻成「跟随默认模板」。
 func (q *Queries) GetStoreLocalDelivery(ctx context.Context, storeID int64) (GetStoreLocalDeliveryRow, error) {
 	row := q.db.QueryRow(ctx, getStoreLocalDelivery, storeID)
 	var i GetStoreLocalDeliveryRow
@@ -34,23 +111,122 @@ func (q *Queries) GetStoreLocalDelivery(ctx context.Context, storeID int64) (Get
 		&i.MinOrderCents,
 		&i.FreeOverCents,
 		&i.FeeTiers,
+		&i.TemplateID,
 		&i.UpdatedAt,
 	)
 	return i, err
 }
 
+const insertLocalDeliveryTemplate = `-- name: InsertLocalDeliveryTemplate :one
+INSERT INTO local_delivery_templates (name, is_default, min_order_cents, free_over_cents, fee_tiers)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING id
+`
+
+type InsertLocalDeliveryTemplateParams struct {
+	Name          string
+	IsDefault     bool
+	MinOrderCents int64
+	FreeOverCents int64
+	FeeTiers      []byte
+}
+
+func (q *Queries) InsertLocalDeliveryTemplate(ctx context.Context, arg InsertLocalDeliveryTemplateParams) (int64, error) {
+	row := q.db.QueryRow(ctx, insertLocalDeliveryTemplate,
+		arg.Name,
+		arg.IsDefault,
+		arg.MinOrderCents,
+		arg.FreeOverCents,
+		arg.FeeTiers,
+	)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
+}
+
+const listLocalDeliveryTemplates = `-- name: ListLocalDeliveryTemplates :many
+
+SELECT t.id, t.name, t.is_default, t.min_order_cents, t.free_over_cents, t.fee_tiers, t.created_at, t.updated_at,
+       ((SELECT count(*) FROM store_local_delivery d WHERE d.template_id = t.id)
+        + (CASE WHEN t.is_default THEN
+             (SELECT count(*) FROM stores st
+               WHERE st.deleted_at IS NULL AND st.fence IS NOT NULL AND NOT st.is_default
+                 AND NOT EXISTS (SELECT 1 FROM store_local_delivery d2 WHERE d2.store_id = st.id))
+           ELSE 0 END))::bigint AS store_count
+  FROM local_delivery_templates t
+ ORDER BY t.is_default DESC, t.id
+`
+
+type ListLocalDeliveryTemplatesRow struct {
+	ID            int64
+	Name          string
+	IsDefault     bool
+	MinOrderCents int64
+	FreeOverCents int64
+	FeeTiers      []byte
+	CreatedAt     pgtype.Timestamptz
+	UpdatedAt     pgtype.Timestamptz
+	StoreCount    int64
+}
+
+// ===========================================================================
+// 模板
+// ===========================================================================
+// 全部模板（一家店至多几十个，不分页），带「几家门店在用」：显式引用的 + 默认模板时没有自己那一行的围栏店。
+func (q *Queries) ListLocalDeliveryTemplates(ctx context.Context) ([]ListLocalDeliveryTemplatesRow, error) {
+	rows, err := q.db.Query(ctx, listLocalDeliveryTemplates)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListLocalDeliveryTemplatesRow
+	for rows.Next() {
+		var i ListLocalDeliveryTemplatesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.IsDefault,
+			&i.MinOrderCents,
+			&i.FreeOverCents,
+			&i.FeeTiers,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.StoreCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const localDeliveryForPricing = `-- name: LocalDeliveryForPricing :one
 SELECT (st.fence IS NOT NULL AND NOT st.is_default)::boolean AS local,
-       COALESCE(d.min_order_cents, 0)::bigint                AS min_order_cents,
-       COALESCE(d.free_over_cents, 0)::bigint                AS free_over_cents,
-       COALESCE(d.fee_tiers, '[]'::jsonb)                    AS fee_tiers,
+       (CASE WHEN d.store_id IS NOT NULL AND d.template_id IS NULL THEN 'custom'
+             WHEN d.template_id IS NOT NULL THEN 'template'
+             WHEN t.id IS NOT NULL THEN 'default_template'
+             ELSE 'none' END)::text                                           AS source,
+       t.id                                                                    AS template_id,
+       t.name                                                                  AS template_name,
+       (CASE WHEN d.store_id IS NOT NULL AND d.template_id IS NULL THEN d.min_order_cents
+             ELSE COALESCE(t.min_order_cents, 0) END)::bigint                  AS min_order_cents,
+       (CASE WHEN d.store_id IS NOT NULL AND d.template_id IS NULL THEN d.free_over_cents
+             ELSE COALESCE(t.free_over_cents, 0) END)::bigint                  AS free_over_cents,
+       (CASE WHEN d.store_id IS NOT NULL AND d.template_id IS NULL THEN d.fee_tiers
+             ELSE COALESCE(t.fee_tiers, '[]'::jsonb) END)::jsonb               AS fee_tiers,
        (CASE WHEN st.location IS NULL OR NOT $1::boolean THEN -1
              ELSE ST_Distance(st.location,
                               ST_SetSRID(ST_MakePoint($2::float8, $3::float8),
                                          4326)::geography)
-        END)::float8                                          AS distance_m
+        END)::float8                                                           AS distance_m
   FROM stores st
   LEFT JOIN store_local_delivery d ON d.store_id = st.id
+  LEFT JOIN local_delivery_templates t
+         ON (d.template_id IS NOT NULL AND t.id = d.template_id)
+         OR (d.store_id IS NULL AND t.is_default)
  WHERE st.id = $4 AND st.deleted_at IS NULL
 `
 
@@ -63,14 +239,20 @@ type LocalDeliveryForPricingParams struct {
 
 type LocalDeliveryForPricingRow struct {
 	Local         bool
+	Source        string
+	TemplateID    *int64
+	TemplateName  *string
 	MinOrderCents int64
 	FreeOverCents int64
 	FeeTiers      []byte
 	DistanceM     float64
 }
 
-// 计价用：这家店走不走同城配送（有围栏且不是默认店）、它的配置、门店到收货坐标的球面距离（米）。
-// 距离与 ResolveStoresByFence 的 distance_m 同一个算法（geography 上的 ST_Distance），买家在首页看到的
+// 计价用：这家店走不走同城配送（有围栏且不是默认店）、生效的配置从哪来、门店到收货坐标的球面距离（米）。
+//
+// 来源（source）：有这家店的行且引用模板 → template；有行不引用 → custom；没有行 → 默认模板（default_template）；
+// 连默认模板都没有 → none（全 0）。引用的模板一定存在（FK RESTRICT）。
+// 距离与 ResolveStoresByFence 的 distance_m 同一个算法（geography 上的 ST_Distance）：买家在首页看到的
 // 距离与结算时计费的距离一致。算不出（没传坐标、门店没坐标）给哨兵 -1，repository 翻成 nil。
 func (q *Queries) LocalDeliveryForPricing(ctx context.Context, arg LocalDeliveryForPricingParams) (LocalDeliveryForPricingRow, error) {
 	row := q.db.QueryRow(ctx, localDeliveryForPricing,
@@ -82,6 +264,9 @@ func (q *Queries) LocalDeliveryForPricing(ctx context.Context, arg LocalDelivery
 	var i LocalDeliveryForPricingRow
 	err := row.Scan(
 		&i.Local,
+		&i.Source,
+		&i.TemplateID,
+		&i.TemplateName,
 		&i.MinOrderCents,
 		&i.FreeOverCents,
 		&i.FeeTiers,
@@ -90,14 +275,50 @@ func (q *Queries) LocalDeliveryForPricing(ctx context.Context, arg LocalDelivery
 	return i, err
 }
 
+const updateLocalDeliveryTemplate = `-- name: UpdateLocalDeliveryTemplate :execrows
+UPDATE local_delivery_templates
+   SET name = $1, is_default = $2, min_order_cents = $3,
+       free_over_cents = $4, fee_tiers = $5
+ WHERE id = $6
+`
+
+type UpdateLocalDeliveryTemplateParams struct {
+	Name          string
+	IsDefault     bool
+	MinOrderCents int64
+	FreeOverCents int64
+	FeeTiers      []byte
+	ID            int64
+}
+
+func (q *Queries) UpdateLocalDeliveryTemplate(ctx context.Context, arg UpdateLocalDeliveryTemplateParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateLocalDeliveryTemplate,
+		arg.Name,
+		arg.IsDefault,
+		arg.MinOrderCents,
+		arg.FreeOverCents,
+		arg.FeeTiers,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const upsertStoreLocalDelivery = `-- name: UpsertStoreLocalDelivery :one
-INSERT INTO store_local_delivery (store_id, min_order_cents, free_over_cents, fee_tiers)
-VALUES ($1, $2, $3, $4)
+INSERT INTO store_local_delivery (store_id, min_order_cents, free_over_cents, fee_tiers, template_id)
+VALUES ($1, $2, $3, $4,
+        $5)
 ON CONFLICT ON CONSTRAINT store_local_delivery_pkey DO UPDATE
-   SET min_order_cents = EXCLUDED.min_order_cents,
-       free_over_cents = EXCLUDED.free_over_cents,
-       fee_tiers       = EXCLUDED.fee_tiers
-RETURNING min_order_cents, free_over_cents, fee_tiers, updated_at
+   SET min_order_cents = CASE WHEN EXCLUDED.template_id IS NULL THEN EXCLUDED.min_order_cents
+                              ELSE store_local_delivery.min_order_cents END,
+       free_over_cents = CASE WHEN EXCLUDED.template_id IS NULL THEN EXCLUDED.free_over_cents
+                              ELSE store_local_delivery.free_over_cents END,
+       fee_tiers       = CASE WHEN EXCLUDED.template_id IS NULL THEN EXCLUDED.fee_tiers
+                              ELSE store_local_delivery.fee_tiers END,
+       template_id     = EXCLUDED.template_id
+RETURNING store_id
 `
 
 type UpsertStoreLocalDeliveryParams struct {
@@ -105,29 +326,20 @@ type UpsertStoreLocalDeliveryParams struct {
 	MinOrderCents int64
 	FreeOverCents int64
 	FeeTiers      []byte
+	TemplateID    *int64
 }
 
-type UpsertStoreLocalDeliveryRow struct {
-	MinOrderCents int64
-	FreeOverCents int64
-	FeeTiers      []byte
-	UpdatedAt     pgtype.Timestamptz
-}
-
-// 整份替换（PUT 语义）。merchant_id 取 current_merchant() 的列默认值，FK 保证门店属于本店。
-func (q *Queries) UpsertStoreLocalDelivery(ctx context.Context, arg UpsertStoreLocalDeliveryParams) (UpsertStoreLocalDeliveryRow, error) {
+// 整份替换（PUT 语义）。template_id 非空 = 引用模板，此时自己的三个数原样保留（切回自定义时还在）。
+// merchant_id 取 current_merchant() 的列默认值，FK 保证门店与模板都属于本店。
+func (q *Queries) UpsertStoreLocalDelivery(ctx context.Context, arg UpsertStoreLocalDeliveryParams) (int64, error) {
 	row := q.db.QueryRow(ctx, upsertStoreLocalDelivery,
 		arg.StoreID,
 		arg.MinOrderCents,
 		arg.FreeOverCents,
 		arg.FeeTiers,
+		arg.TemplateID,
 	)
-	var i UpsertStoreLocalDeliveryRow
-	err := row.Scan(
-		&i.MinOrderCents,
-		&i.FreeOverCents,
-		&i.FeeTiers,
-		&i.UpdatedAt,
-	)
-	return i, err
+	var store_id int64
+	err := row.Scan(&store_id)
+	return store_id, err
 }

@@ -105,6 +105,7 @@ func newAdminShop(t *testing.T) adminShop {
 			// AI 员工的提案（00091）指向 skus / stores / staff，排在它们之前。
 			`DELETE FROM agent_proposals WHERE merchant_id = $1`,
 			`DELETE FROM store_local_delivery WHERE merchant_id = $1`,
+			`DELETE FROM local_delivery_templates WHERE merchant_id = $1`,
 			// 有货排序标记（00087）指向 stores 与 products，后台改库存会写它。
 			`DELETE FROM product_store_stock WHERE merchant_id = $1`,
 			`DELETE FROM skus WHERE merchant_id = $1`,
