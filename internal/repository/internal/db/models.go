@@ -68,6 +68,10 @@ type AgentProposal struct {
 	CreatedAt      pgtype.Timestamptz
 	UpdatedAt      pgtype.Timestamptz
 	TargetKey      string
+	ExecutedAt     pgtype.Timestamptz
+	OutcomeDueAt   pgtype.Timestamptz
+	Outcome        []byte
+	OutcomeAt      pgtype.Timestamptz
 }
 
 // AI 员工的 MCP 工具调用审计（00093，AI 经营 M9）。

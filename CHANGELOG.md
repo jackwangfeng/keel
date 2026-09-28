@@ -41,6 +41,13 @@ so "which one is running?" never depends on anyone's memory.
 
 ### Added
 
+- **Post-execution review and the AI staff scorecard (M10, 00122).** Keel measures every executed proposal after a
+  while — restocks after 7 days (units sold, stock-out days), limited-time discounts 3 days after they end (units vs
+  the equal period before), coupons after 7 days (claimed, used, use rate), copy changes after 7 days (units vs the
+  7 days before) — and stores an `outcome` with a fixed, explainable `verdict` (positive / neutral / negative).
+  `GET /admin/agents/{staff_id}/scorecard` counts proposals by kind and status plus the verdicts over 30 days; the
+  agent reads its own with the MCP tool `my_scorecard`. `AgentProposal` gains `executed_at`, `outcome`,
+  `outcome_at`.
 - **AI staff can propose marketing, copy and after-sales actions (M10, 00120).** Four new proposal kinds, each an
   MCP tool that only proposes; a human approves in the console and Keel executes as the agent, with the same checks
   as the admin API and the proposal id as the idempotency key: `propose_flash_price` (a limited-time discount on up

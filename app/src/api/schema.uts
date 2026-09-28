@@ -914,10 +914,46 @@ export type AgentProposal = {
   expires_at : string
   created_at : string
   updated_at : string
+  /** 执行成功的时间（00122） */
+  executed_at? : string
+  /** 执行后复盘（00122）：{verdict: positive|neutral|negative, explanation, 各种类的指标…}。还没到点时不出现 */
+  outcome? : UTSJSONObject
+  outcome_at? : string
 }
 
 export type AgentProposalRejectRequest = {
   reason : string
+}
+
+export type AgentScorecardKind = {
+  kind : string
+  proposed : number
+  /** 批准了的（执行成功 + 执行失败） */
+  approved : number
+  executed : number
+  failed : number
+  rejected : number
+  expired : number
+  /** 待处理 / 执行中 */
+  open : number
+  positive : number
+  neutral : number
+  negative : number
+}
+
+export type AgentScorecardEntry = {
+  proposal_id : number
+  kind : string
+  title : string
+  outcome : UTSJSONObject
+  outcome_at : string
+}
+
+export type AgentScorecard = {
+  agent_staff_id : number
+  since : string
+  kinds : AgentScorecardKind[]
+  recent : AgentScorecardEntry[]
 }
 
 export type AgentUpdateRequest = {

@@ -3543,14 +3543,21 @@ type AgentProposal struct {
 	DecidedByName *string    `json:"decided_by_name,omitempty"`
 
 	// Evidence AI 员工写的证据（markdown，按不可信输入渲染）
-	Evidence       string    `json:"evidence"`
-	ExpectedImpact string    `json:"expected_impact"`
-	ExpiresAt      time.Time `json:"expires_at"`
-	Id             int64     `json:"id"`
+	Evidence string `json:"evidence"`
+
+	// ExecutedAt 执行成功的时间（00122）
+	ExecutedAt     *time.Time `json:"executed_at,omitempty"`
+	ExpectedImpact string     `json:"expected_impact"`
+	ExpiresAt      time.Time  `json:"expires_at"`
+	Id             int64      `json:"id"`
 
 	// Kind `inventory_adjust` 加库存（M9）；M10：`flash_price` 限时折扣、`coupon` 发券、`product_copy` 改标题 / 副标题、
 	// `refund_decision` 售后审核（同意 / 驳回）。营销与商品类是全店的（没有 `store_id`），批准要全店范围
 	Kind AgentProposalKind `json:"kind"`
+
+	// Outcome 执行后复盘（00122）：{verdict: positive|neutral|negative, explanation, 各种类的指标…}。还没到点时不出现
+	Outcome   *map[string]interface{} `json:"outcome,omitempty"`
+	OutcomeAt *time.Time              `json:"outcome_at,omitempty"`
 
 	// Payload 执行参数，按 kind：`inventory_adjust` {store_id, sku_id, delta, reason}；
 	// `flash_price` {name, store_id?, items: [{sku_id, discount_rate}], starts_at, ends_at}；
@@ -3587,6 +3594,41 @@ type AgentProposalStatus int
 // AgentProposalRejectRequest defines model for AgentProposalRejectRequest.
 type AgentProposalRejectRequest struct {
 	Reason string `json:"reason"`
+}
+
+// AgentScorecard defines model for AgentScorecard.
+type AgentScorecard struct {
+	AgentStaffId int64                 `json:"agent_staff_id"`
+	Kinds        []AgentScorecardKind  `json:"kinds"`
+	Recent       []AgentScorecardEntry `json:"recent"`
+	Since        time.Time             `json:"since"`
+}
+
+// AgentScorecardEntry defines model for AgentScorecardEntry.
+type AgentScorecardEntry struct {
+	Kind       string                 `json:"kind"`
+	Outcome    map[string]interface{} `json:"outcome"`
+	OutcomeAt  time.Time              `json:"outcome_at"`
+	ProposalId int64                  `json:"proposal_id"`
+	Title      string                 `json:"title"`
+}
+
+// AgentScorecardKind defines model for AgentScorecardKind.
+type AgentScorecardKind struct {
+	// Approved 批准了的（执行成功 + 执行失败）
+	Approved int64  `json:"approved"`
+	Executed int64  `json:"executed"`
+	Expired  int64  `json:"expired"`
+	Failed   int64  `json:"failed"`
+	Kind     string `json:"kind"`
+	Negative int64  `json:"negative"`
+	Neutral  int64  `json:"neutral"`
+
+	// Open 待处理 / 执行中
+	Open     int64 `json:"open"`
+	Positive int64 `json:"positive"`
+	Proposed int64 `json:"proposed"`
+	Rejected int64 `json:"rejected"`
 }
 
 // AgentUpdateRequest defines model for AgentUpdateRequest.
@@ -7505,6 +7547,33 @@ type PostAdminAgentsStaffIdKeysParams struct {
 
 // DeleteAdminAgentsStaffIdKeysKeyIdParams defines parameters for DeleteAdminAgentsStaffIdKeysKeyId.
 type DeleteAdminAgentsStaffIdKeysKeyIdParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// GetAdminAgentsStaffIdScorecardParams defines parameters for GetAdminAgentsStaffIdScorecard.
+type GetAdminAgentsStaffIdScorecardParams struct {
 	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
 	//
 	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，

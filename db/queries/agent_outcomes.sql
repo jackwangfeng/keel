@@ -1,0 +1,72 @@
+-- 提案复盘（00122，service/agent_proposal_outcome.go）与成绩单。一个 merchant_id 都没有：租户由 RLS 过滤。
+-- 「卖出」与补货计算同一个口径（restock.sql 的 StoreSKUSales）：已支付 / 已发货 / 已完成 / 售后中的单都算。
+
+-- name: SetAgentProposalExecuted :exec
+UPDATE agent_proposals
+   SET executed_at = now(), outcome_due_at = sqlc.narg(outcome_due_at), outcome = sqlc.narg(outcome),
+       outcome_at = CASE WHEN sqlc.narg(outcome)::jsonb IS NULL THEN NULL ELSE now() END
+ WHERE id = sqlc.arg(id) AND status = 20;
+
+-- name: DueAgentProposalOutcomes :many
+SELECT id, kind, store_id, sku_id, payload, executed_at
+  FROM agent_proposals
+ WHERE status = 20 AND outcome_at IS NULL AND outcome_due_at IS NOT NULL AND outcome_due_at <= now()
+ ORDER BY outcome_due_at
+ LIMIT 100;
+
+-- name: SaveAgentProposalOutcome :exec
+UPDATE agent_proposals SET outcome = sqlc.arg(outcome), outcome_at = now()
+ WHERE id = sqlc.arg(id) AND status = 20 AND outcome_at IS NULL;
+
+-- name: SKUUnitsSoldBetween :one
+-- 一组 SKU 在 [from, to) 内卖出的件数与金额（分）。store_id 为空 = 全部门店。
+SELECT COALESCE(sum(oi.quantity), 0)::bigint AS qty,
+       COALESCE(sum(oi.amount_cents - oi.discount_cents), 0)::bigint AS amount_cents
+  FROM order_items oi
+  JOIN orders o ON o.id = oi.order_id
+ WHERE oi.sku_id = ANY(sqlc.arg(sku_ids)::bigint[])
+   AND (sqlc.narg(store_id)::bigint IS NULL OR o.store_id = sqlc.narg(store_id)::bigint)
+   AND o.status IN (20, 30, 40, 50)
+   AND o.paid_at >= sqlc.arg(from_at) AND o.paid_at < sqlc.arg(to_at);
+
+-- name: ProductUnitsSoldBetween :one
+SELECT COALESCE(sum(oi.quantity), 0)::bigint AS qty
+  FROM order_items oi
+  JOIN orders o ON o.id = oi.order_id
+  JOIN skus s ON s.id = oi.sku_id
+ WHERE s.product_id = sqlc.arg(product_id)
+   AND o.status IN (20, 30, 40, 50)
+   AND o.paid_at >= sqlc.arg(from_at) AND o.paid_at < sqlc.arg(to_at);
+
+-- name: CouponTemplateUsage :one
+-- 一张券模板：领了多少、用了多少（status 3 已使用；2 锁定是下单进行中，也算用了；4 过期不算）。
+SELECT count(*)::bigint AS claimed,
+       count(*) FILTER (WHERE uc.status IN (2, 3))::bigint AS used
+  FROM user_coupons uc
+ WHERE uc.template_id = $1;
+
+-- name: AgentScorecardByKind :many
+-- 成绩单：这名 AI 员工近 since 以来按种类的提案数、各状态数、verdict 分布。
+SELECT p.kind,
+       count(*)::bigint                                                  AS proposed,
+       count(*) FILTER (WHERE p.status IN (20, 40))::bigint               AS approved,
+       count(*) FILTER (WHERE p.status = 20)::bigint                      AS executed,
+       count(*) FILTER (WHERE p.status = 40)::bigint                      AS failed,
+       count(*) FILTER (WHERE p.status = 30)::bigint                      AS rejected,
+       count(*) FILTER (WHERE p.status = 50)::bigint                      AS expired,
+       count(*) FILTER (WHERE p.status IN (10, 15))::bigint               AS open,
+       count(*) FILTER (WHERE p.outcome->>'verdict' = 'positive')::bigint AS positive,
+       count(*) FILTER (WHERE p.outcome->>'verdict' = 'neutral')::bigint  AS neutral,
+       count(*) FILTER (WHERE p.outcome->>'verdict' = 'negative')::bigint AS negative
+  FROM agent_proposals p
+ WHERE p.agent_staff_id = sqlc.arg(agent_staff_id) AND p.created_at >= sqlc.arg(since)
+ GROUP BY p.kind
+ ORDER BY p.kind;
+
+-- name: AgentRecentOutcomes :many
+-- 成绩单的明细：近 since 以来已经量过效果的提案，新的在前。
+SELECT p.id, p.kind, p.title, p.outcome, p.outcome_at
+  FROM agent_proposals p
+ WHERE p.agent_staff_id = sqlc.arg(agent_staff_id) AND p.outcome_at IS NOT NULL AND p.outcome_at >= sqlc.arg(since)
+ ORDER BY p.outcome_at DESC
+ LIMIT 50;

@@ -95,6 +95,7 @@ func (q *Queries) FinishAgentProposal(ctx context.Context, arg FinishAgentPropos
 const getAgentProposal = `-- name: GetAgentProposal :one
 SELECT p.id, p.agent_staff_id, p.kind, p.store_id, p.sku_id, p.payload, p.title, p.evidence, p.expected_impact,
        p.status, p.decided_by, p.decided_at, p.reject_reason, p.result, p.expires_at, p.created_at, p.updated_at,
+       p.executed_at, p.outcome, p.outcome_at,
        a.name AS agent_name, st.name AS store_name, d.name AS decided_by_name
   FROM agent_proposals p
   JOIN staff a ON a.id = p.agent_staff_id
@@ -121,6 +122,9 @@ type GetAgentProposalRow struct {
 	ExpiresAt      pgtype.Timestamptz
 	CreatedAt      pgtype.Timestamptz
 	UpdatedAt      pgtype.Timestamptz
+	ExecutedAt     pgtype.Timestamptz
+	Outcome        []byte
+	OutcomeAt      pgtype.Timestamptz
 	AgentName      string
 	StoreName      *string
 	DecidedByName  *string
@@ -147,6 +151,9 @@ func (q *Queries) GetAgentProposal(ctx context.Context, id int64) (GetAgentPropo
 		&i.ExpiresAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ExecutedAt,
+		&i.Outcome,
+		&i.OutcomeAt,
 		&i.AgentName,
 		&i.StoreName,
 		&i.DecidedByName,
@@ -197,6 +204,7 @@ func (q *Queries) InsertAgentProposal(ctx context.Context, arg InsertAgentPropos
 const listAgentProposals = `-- name: ListAgentProposals :many
 SELECT p.id, p.agent_staff_id, p.kind, p.store_id, p.sku_id, p.payload, p.title, p.evidence, p.expected_impact,
        p.status, p.decided_by, p.decided_at, p.reject_reason, p.result, p.expires_at, p.created_at, p.updated_at,
+       p.executed_at, p.outcome, p.outcome_at,
        a.name AS agent_name, st.name AS store_name, d.name AS decided_by_name
   FROM agent_proposals p
   JOIN staff a ON a.id = p.agent_staff_id
@@ -237,6 +245,9 @@ type ListAgentProposalsRow struct {
 	ExpiresAt      pgtype.Timestamptz
 	CreatedAt      pgtype.Timestamptz
 	UpdatedAt      pgtype.Timestamptz
+	ExecutedAt     pgtype.Timestamptz
+	Outcome        []byte
+	OutcomeAt      pgtype.Timestamptz
 	AgentName      string
 	StoreName      *string
 	DecidedByName  *string
@@ -278,6 +289,9 @@ func (q *Queries) ListAgentProposals(ctx context.Context, arg ListAgentProposals
 			&i.ExpiresAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ExecutedAt,
+			&i.Outcome,
+			&i.OutcomeAt,
 			&i.AgentName,
 			&i.StoreName,
 			&i.DecidedByName,

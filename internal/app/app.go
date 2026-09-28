@@ -660,6 +660,7 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	v1.GET("/admin/agent-proposals/:proposal_id", staffAuth, aph.Get)
 	v1.POST("/admin/agent-proposals/:proposal_id/approve", staffAuth, aph.Approve)
 	v1.POST("/admin/agent-proposals/:proposal_id/reject", staffAuth, aph.Reject)
+	v1.GET("/admin/agents/:staff_id/scorecard", staffAuth, aph.Scorecard)
 	// AI 员工写的经营简报（M9 任务 5）：AI 员工经 MCP 写，全店范围的人在后台看。
 	briefs := service.NewAgentBriefService(repo)
 	abh := handler.NewAgentBriefHandler(briefs)
@@ -926,6 +927,8 @@ func Run(ctx context.Context, listen func(addr string, h http.Handler) error) er
 	go stockFlags.Run(bgCtx)
 	// AI 员工提案的过期扫描（00091，service/agent_proposal_expiry.go）。
 	go service.RunProposalExpiry(bgCtx, repository.New(pool), nil)
+	// 提案执行后的复盘（00122，service/agent_proposal_outcome.go）：到点量一次效果，给成绩单。
+	go service.RunProposalOutcomes(bgCtx, repository.New(pool), inv, nil)
 
 	// 自动确认收货（数据模型 §5 发货第三条规则）：发货满店铺设置的 auto_confirm_days
 	// 天的 30 已发货订单推到 40。与超时补偿同一套机制（按租户扫描、同一份公平调度），

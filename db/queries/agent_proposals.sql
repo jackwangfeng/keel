@@ -9,6 +9,7 @@ RETURNING id;
 -- name: GetAgentProposal :one
 SELECT p.id, p.agent_staff_id, p.kind, p.store_id, p.sku_id, p.payload, p.title, p.evidence, p.expected_impact,
        p.status, p.decided_by, p.decided_at, p.reject_reason, p.result, p.expires_at, p.created_at, p.updated_at,
+       p.executed_at, p.outcome, p.outcome_at,
        a.name AS agent_name, st.name AS store_name, d.name AS decided_by_name
   FROM agent_proposals p
   JOIN staff a ON a.id = p.agent_staff_id
@@ -26,6 +27,7 @@ SELECT id FROM agent_proposals
 -- 门店范围的人批不了它们）、种类筛；待处理的在前，新的在前。
 SELECT p.id, p.agent_staff_id, p.kind, p.store_id, p.sku_id, p.payload, p.title, p.evidence, p.expected_impact,
        p.status, p.decided_by, p.decided_at, p.reject_reason, p.result, p.expires_at, p.created_at, p.updated_at,
+       p.executed_at, p.outcome, p.outcome_at,
        a.name AS agent_name, st.name AS store_name, d.name AS decided_by_name
   FROM agent_proposals p
   JOIN staff a ON a.id = p.agent_staff_id

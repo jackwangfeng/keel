@@ -54,6 +54,10 @@ type AgentProposal struct {
 	ExpiresAt      time.Time
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
+	// 执行后复盘（00122）。
+	ExecutedAt *time.Time
+	Outcome    []byte
+	OutcomeAt  *time.Time
 }
 
 // NewAgentProposal 是一条新提案。
@@ -80,6 +84,8 @@ type ProposalFilter struct {
 
 // AgentProposalTx 是提案那一面。
 type AgentProposalTx interface {
+	AgentOutcomeTx
+
 	InsertAgentProposal(ctx context.Context, p NewAgentProposal) (int64, error)
 	FindAgentProposal(ctx context.Context, id int64) (AgentProposal, error)
 	OpenAgentProposalFor(ctx context.Context, kind, targetKey string) (int64, error)
@@ -104,11 +110,13 @@ func (t tenantTx) InsertAgentProposal(ctx context.Context, p NewAgentProposal) (
 
 func proposalOf(id, agentID int64, agentName, kind string, storeID *int64, storeName *string, skuID *int64,
 	payload []byte, title, evidence, impact string, status int16, decidedBy *int64, decidedByName *string,
-	decidedAt pgtype.Timestamptz, reject *string, result []byte, expires, created, updated pgtype.Timestamptz) AgentProposal {
+	decidedAt pgtype.Timestamptz, reject *string, result []byte, expires, created, updated pgtype.Timestamptz,
+	executed pgtype.Timestamptz, outcome []byte, outcomeAt pgtype.Timestamptz) AgentProposal {
 	return AgentProposal{ID: id, AgentStaffID: agentID, AgentName: agentName, Kind: kind, StoreID: storeID,
 		StoreName: storeName, SKUID: skuID, Payload: payload, Title: title, Evidence: evidence, ExpectedImpact: impact,
 		Status: status, DecidedBy: decidedBy, DecidedByName: decidedByName, DecidedAt: tsPtr(decidedAt),
-		RejectReason: reject, Result: result, ExpiresAt: expires.Time, CreatedAt: created.Time, UpdatedAt: updated.Time}
+		RejectReason: reject, Result: result, ExpiresAt: expires.Time, CreatedAt: created.Time, UpdatedAt: updated.Time,
+		ExecutedAt: tsPtr(executed), Outcome: outcome, OutcomeAt: tsPtr(outcomeAt)}
 }
 
 func (t tenantTx) FindAgentProposal(ctx context.Context, id int64) (AgentProposal, error) {
@@ -121,7 +129,7 @@ func (t tenantTx) FindAgentProposal(ctx context.Context, id int64) (AgentProposa
 	}
 	return proposalOf(r.ID, r.AgentStaffID, r.AgentName, r.Kind, r.StoreID, r.StoreName, r.SkuID, r.Payload, r.Title,
 		r.Evidence, r.ExpectedImpact, r.Status, r.DecidedBy, r.DecidedByName, r.DecidedAt, r.RejectReason, r.Result,
-		r.ExpiresAt, r.CreatedAt, r.UpdatedAt), nil
+		r.ExpiresAt, r.CreatedAt, r.UpdatedAt, r.ExecutedAt, r.Outcome, r.OutcomeAt), nil
 }
 
 func (t tenantTx) OpenAgentProposalFor(ctx context.Context, kind, targetKey string) (int64, error) {
@@ -147,7 +155,7 @@ func (t tenantTx) ListAgentProposals(ctx context.Context, f ProposalFilter, limi
 	for _, r := range rows {
 		out = append(out, proposalOf(r.ID, r.AgentStaffID, r.AgentName, r.Kind, r.StoreID, r.StoreName, r.SkuID,
 			r.Payload, r.Title, r.Evidence, r.ExpectedImpact, r.Status, r.DecidedBy, r.DecidedByName, r.DecidedAt,
-			r.RejectReason, r.Result, r.ExpiresAt, r.CreatedAt, r.UpdatedAt))
+			r.RejectReason, r.Result, r.ExpiresAt, r.CreatedAt, r.UpdatedAt, r.ExecutedAt, r.Outcome, r.OutcomeAt))
 	}
 	return out, total, nil
 }

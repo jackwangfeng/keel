@@ -451,6 +451,10 @@ var permMatrix = []permRoute{
 		return permReq{Method: "DELETE", Path: fmt.Sprintf(v1+"/admin/local-delivery-templates/%d", permLocalDeliveryTemplate(t, fx)),
 			OK: http.StatusNoContent}
 	}},
+	{"GET", v1 + "/admin/agents/:staff_id/scorecard", merchantWide, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		a := createAgent(t, fx.sh, `{"name":"成绩单 AI","role":2}`)
+		return permGet(fmt.Sprintf(v1+"/admin/agents/%d/scorecard", a.Id))
+	}},
 	{"PUT", v1 + "/admin/stores/:store_id/default", adminOnly, func(t *testing.T, fx *permFixture, c permCase) permReq {
 		// 目标一律是现在的默认门店 S0：把它再设一次默认是幂等的，
 		// 不会让矩阵的后面几格换一个默认店。

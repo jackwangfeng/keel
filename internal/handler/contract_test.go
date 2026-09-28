@@ -1215,6 +1215,13 @@ var routes = []route{
 		NoQueryParams:  "删哪一个在路径上",
 	},
 	{
+		ContractPath:   "/admin/agents/{staff_id}/scorecard",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "admin_agent_scorecard.go",
+		NoQueryParams:  "固定近 30 天，没有筛选",
+	},
+	{
 		ContractPath:   "/admin/stores/{store_id}/default",
 		ContractMethod: "put",
 		HTTPMethod:     http.MethodPut,

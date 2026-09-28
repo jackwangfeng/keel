@@ -60,6 +60,7 @@ func TestMCPEveryToolReturnsItsDeclaredShape(t *testing.T) {
 			"ends_at":   time.Now().Add(48 * time.Hour).UTC().Format(time.RFC3339), "evidence": "slow_movers：周转 120 天"}},
 		{"propose_coupon", map[string]any{"name": "新券", "coupon_type": 3, "discount_cents": 300, "valid_days": 7,
 			"total_count": 10, "per_user_limit": 1, "evidence": "promotion_review：上次券核销率 40%"}},
+		{"my_scorecard", map[string]any{}},
 		{"propose_product_copy", map[string]any{"product_id": cs.ShirtProduct, "subtitle": "纯棉透气",
 			"evidence": "search_insights：「纯棉」近 7 天 30 次低点击"}},
 	}

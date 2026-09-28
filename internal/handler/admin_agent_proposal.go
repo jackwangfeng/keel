@@ -48,7 +48,8 @@ func apiAgentProposal(p repository.AgentProposal) api.AgentProposal {
 		Payload: payload, Title: p.Title, Evidence: p.Evidence, ExpectedImpact: p.ExpectedImpact,
 		Status: api.AgentProposalStatus(p.Status), DecidedBy: p.DecidedBy, DecidedByName: p.DecidedByName,
 		DecidedAt: p.DecidedAt, RejectReason: p.RejectReason, Result: jsonObject(p.Result),
-		ExpiresAt: p.ExpiresAt, CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt}
+		ExpiresAt: p.ExpiresAt, CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt,
+		ExecutedAt: p.ExecutedAt, Outcome: jsonObject(p.Outcome), OutcomeAt: p.OutcomeAt}
 }
 
 func writeProposalError(c *gin.Context, err error) {

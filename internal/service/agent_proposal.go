@@ -367,6 +367,12 @@ func (s *AgentProposalService) Approve(ctx context.Context, proposalID int64) (r
 		if err := tx.FinishAgentProposal(ctx, proposalID, status, raw); err != nil {
 			return err
 		}
+		if status == repository.ProposalExecuted {
+			due, now := outcomePlan(p.Kind, p.Payload, time.Now())
+			if err := tx.SetAgentProposalExecuted(ctx, proposalID, due, now); err != nil {
+				return err
+			}
+		}
 		var e error
 		out, e = tx.FindAgentProposal(ctx, proposalID)
 		return e

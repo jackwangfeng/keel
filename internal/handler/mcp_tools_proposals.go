@@ -64,6 +64,16 @@ type mcpRefundDecisionIn struct {
 }
 
 func registerMCPProposalTools(srv *mcp.Server, d *MCPDeps) {
+	mcpTool(srv, d, "my_scorecard",
+		"你自己的成绩单（近 30 天）：按提案种类的提 / 批 / 驳回 / 过期数，以及执行后复盘的 positive / neutral / negative "+
+			"分布与最近的明细。驳回多、negative 多的种类要收着提。",
+		writeProposalError, func(ctx context.Context, _ struct{}) (api.AgentScorecard, error) {
+			sc, err := d.Proposals.MyScorecard(ctx)
+			if err != nil {
+				return api.AgentScorecard{}, err
+			}
+			return apiScorecard(sc), nil
+		})
 	mcpTool(srv, d, "propose_flash_price",
 		"提一条限时折扣提案（清仓 / 促销）：若干 SKU 在一段时间内打折。不会立即执行：人批准后 Keel 建活动并上线。"+
 			"需要全店范围的 AI 员工。同一组 SKU 已有待处理提案时会被拒。",

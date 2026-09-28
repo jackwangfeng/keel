@@ -947,6 +947,33 @@ paths:
               schema: { $ref: '#/components/schemas/Problem' }
         default: { $ref: '#/components/responses/Problem' }
 
+  /admin/agents/{staff_id}/scorecard:
+    parameters:
+      - name: staff_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64 }
+    get:
+      tags: [Admin, Agent]
+      summary: AI 员工成绩单（近 30 天）
+      description: |
+        按提案种类：提了多少、批了多少、执行成功 / 失败、驳回、过期、还在待处理，以及执行后复盘的 verdict 分布
+        （positive / neutral / negative，规则见 docs/AI经营-M10M11设计.md §4）；另附最近已复盘的明细。
+        店长据此决定要不要放手（M11 自动执行）。全店范围的人能看。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentScorecard' }
+        '404':
+          description: 本店没有这名 AI 员工。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
   /admin/agents/{staff_id}/keys:
     parameters:
       - name: staff_id
@@ -9849,6 +9876,52 @@ components:
         expires_at: { type: string, format: date-time }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+        executed_at: { type: string, format: date-time, description: 执行成功的时间（00122） }
+        outcome:
+          type: object
+          additionalProperties: true
+          description: |
+            执行后复盘（00122）：{verdict: positive|neutral|negative, explanation, 各种类的指标…}。还没到点时不出现
+        outcome_at: { type: string, format: date-time }
+
+    AgentScorecard:
+      type: object
+      required: [agent_staff_id, since, kinds, recent]
+      properties:
+        agent_staff_id: { type: integer, format: int64 }
+        since: { type: string, format: date-time }
+        kinds:
+          type: array
+          items: { $ref: '#/components/schemas/AgentScorecardKind' }
+        recent:
+          type: array
+          items: { $ref: '#/components/schemas/AgentScorecardEntry' }
+
+    AgentScorecardKind:
+      type: object
+      required: [kind, proposed, approved, executed, failed, rejected, expired, open, positive, neutral, negative]
+      properties:
+        kind: { type: string }
+        proposed: { type: integer, format: int64 }
+        approved: { type: integer, format: int64, description: 批准了的（执行成功 + 执行失败） }
+        executed: { type: integer, format: int64 }
+        failed: { type: integer, format: int64 }
+        rejected: { type: integer, format: int64 }
+        expired: { type: integer, format: int64 }
+        open: { type: integer, format: int64, description: 待处理 / 执行中 }
+        positive: { type: integer, format: int64 }
+        neutral: { type: integer, format: int64 }
+        negative: { type: integer, format: int64 }
+
+    AgentScorecardEntry:
+      type: object
+      required: [proposal_id, kind, title, outcome, outcome_at]
+      properties:
+        proposal_id: { type: integer, format: int64 }
+        kind: { type: string }
+        title: { type: string }
+        outcome: { type: object, additionalProperties: true }
+        outcome_at: { type: string, format: date-time }
 
     AgentProposalRejectRequest:
       type: object

@@ -374,6 +374,12 @@
               "evidence": {
                 "type": "string"
               },
+              "executed_at": {
+                "type": [
+                  "null",
+                  "string"
+                ]
+              },
               "expected_impact": {
                 "type": "string"
               },
@@ -385,6 +391,19 @@
               },
               "kind": {
                 "type": "string"
+              },
+              "outcome": {
+                "additionalProperties": true,
+                "type": [
+                  "null",
+                  "object"
+                ]
+              },
+              "outcome_at": {
+                "type": [
+                  "null",
+                  "string"
+                ]
               },
               "payload": {
                 "additionalProperties": true,
@@ -1125,6 +1144,125 @@
     }
   },
   {
+    "description": "你自己的成绩单（近 30 天）：按提案种类的提 / 批 / 驳回 / 过期数，以及执行后复盘的 positive / neutral / negative 分布与最近的明细。驳回多、negative 多的种类要收着提。",
+    "inputSchema": {
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "name": "my_scorecard",
+    "outputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "agent_staff_id": {
+          "type": "integer"
+        },
+        "kinds": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "approved": {
+                "type": "integer"
+              },
+              "executed": {
+                "type": "integer"
+              },
+              "expired": {
+                "type": "integer"
+              },
+              "failed": {
+                "type": "integer"
+              },
+              "kind": {
+                "type": "string"
+              },
+              "negative": {
+                "type": "integer"
+              },
+              "neutral": {
+                "type": "integer"
+              },
+              "open": {
+                "type": "integer"
+              },
+              "positive": {
+                "type": "integer"
+              },
+              "proposed": {
+                "type": "integer"
+              },
+              "rejected": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "approved",
+              "executed",
+              "expired",
+              "failed",
+              "kind",
+              "negative",
+              "neutral",
+              "open",
+              "positive",
+              "proposed",
+              "rejected"
+            ],
+            "type": "object"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        },
+        "recent": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "outcome": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "outcome_at": {
+                "type": "string"
+              },
+              "proposal_id": {
+                "type": "integer"
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "outcome",
+              "outcome_at",
+              "proposal_id",
+              "title"
+            ],
+            "type": "object"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        },
+        "since": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "agent_staff_id",
+        "kinds",
+        "recent",
+        "since"
+      ],
+      "type": "object"
+    }
+  },
+  {
     "description": "写一份经营简报（巡店日报等），后台「AI 员工 → 简报」可见。低风险，直接生效。",
     "inputSchema": {
       "additionalProperties": false,
@@ -1491,6 +1629,12 @@
         "evidence": {
           "type": "string"
         },
+        "executed_at": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
         "expected_impact": {
           "type": "string"
         },
@@ -1502,6 +1646,19 @@
         },
         "kind": {
           "type": "string"
+        },
+        "outcome": {
+          "additionalProperties": true,
+          "type": [
+            "null",
+            "object"
+          ]
+        },
+        "outcome_at": {
+          "type": [
+            "null",
+            "string"
+          ]
         },
         "payload": {
           "additionalProperties": true,
@@ -1667,6 +1824,12 @@
         "evidence": {
           "type": "string"
         },
+        "executed_at": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
         "expected_impact": {
           "type": "string"
         },
@@ -1678,6 +1841,19 @@
         },
         "kind": {
           "type": "string"
+        },
+        "outcome": {
+          "additionalProperties": true,
+          "type": [
+            "null",
+            "object"
+          ]
+        },
+        "outcome_at": {
+          "type": [
+            "null",
+            "string"
+          ]
         },
         "payload": {
           "additionalProperties": true,
@@ -1816,6 +1992,12 @@
         "evidence": {
           "type": "string"
         },
+        "executed_at": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
         "expected_impact": {
           "type": "string"
         },
@@ -1827,6 +2009,19 @@
         },
         "kind": {
           "type": "string"
+        },
+        "outcome": {
+          "additionalProperties": true,
+          "type": [
+            "null",
+            "object"
+          ]
+        },
+        "outcome_at": {
+          "type": [
+            "null",
+            "string"
+          ]
         },
         "payload": {
           "additionalProperties": true,
@@ -1961,6 +2156,12 @@
         "evidence": {
           "type": "string"
         },
+        "executed_at": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
         "expected_impact": {
           "type": "string"
         },
@@ -1972,6 +2173,19 @@
         },
         "kind": {
           "type": "string"
+        },
+        "outcome": {
+          "additionalProperties": true,
+          "type": [
+            "null",
+            "object"
+          ]
+        },
+        "outcome_at": {
+          "type": [
+            "null",
+            "string"
+          ]
         },
         "payload": {
           "additionalProperties": true,
@@ -2104,6 +2318,12 @@
         "evidence": {
           "type": "string"
         },
+        "executed_at": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
         "expected_impact": {
           "type": "string"
         },
@@ -2115,6 +2335,19 @@
         },
         "kind": {
           "type": "string"
+        },
+        "outcome": {
+          "additionalProperties": true,
+          "type": [
+            "null",
+            "object"
+          ]
+        },
+        "outcome_at": {
+          "type": [
+            "null",
+            "string"
+          ]
         },
         "payload": {
           "additionalProperties": true,

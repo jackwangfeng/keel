@@ -1746,7 +1746,10 @@ class AgentProposal {
   final String expiresAt;
   final String createdAt;
   final String updatedAt;
-  const AgentProposal({required this.id, required this.agentStaffId, required this.agentName, required this.kind, this.storeId, this.storeName, this.skuId, required this.payload, required this.title, required this.evidence, required this.expectedImpact, required this.status, this.decidedBy, this.decidedByName, this.decidedAt, this.rejectReason, this.result, required this.expiresAt, required this.createdAt, required this.updatedAt});
+  final String? executedAt;
+  final Map<String, dynamic>? outcome;
+  final String? outcomeAt;
+  const AgentProposal({required this.id, required this.agentStaffId, required this.agentName, required this.kind, this.storeId, this.storeName, this.skuId, required this.payload, required this.title, required this.evidence, required this.expectedImpact, required this.status, this.decidedBy, this.decidedByName, this.decidedAt, this.rejectReason, this.result, required this.expiresAt, required this.createdAt, required this.updatedAt, this.executedAt, this.outcome, this.outcomeAt});
   factory AgentProposal.fromJson(Map<String, dynamic> j) => AgentProposal(
         id: (j['id'] as num).toInt(),
         agentStaffId: (j['agent_staff_id'] as num).toInt(),
@@ -1768,6 +1771,9 @@ class AgentProposal {
         expiresAt: j['expires_at'] as String,
         createdAt: j['created_at'] as String,
         updatedAt: j['updated_at'] as String,
+        executedAt: j['executed_at'] as String?,
+        outcome: j['outcome'] as Map<String, dynamic>?,
+        outcomeAt: j['outcome_at'] as String?,
       );
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -1790,6 +1796,9 @@ class AgentProposal {
         'expires_at': expiresAt,
         'created_at': createdAt,
         'updated_at': updatedAt,
+        if (executedAt != null) 'executed_at': executedAt,
+        if (outcome != null) 'outcome': outcome,
+        if (outcomeAt != null) 'outcome_at': outcomeAt,
       };
 }
 
@@ -1801,6 +1810,90 @@ class AgentProposalRejectRequest {
       );
   Map<String, dynamic> toJson() => {
         'reason': reason,
+      };
+}
+
+class AgentScorecardKind {
+  final String kind;
+  final int proposed;
+  final int approved;
+  final int executed;
+  final int failed;
+  final int rejected;
+  final int expired;
+  final int open;
+  final int positive;
+  final int neutral;
+  final int negative;
+  const AgentScorecardKind({required this.kind, required this.proposed, required this.approved, required this.executed, required this.failed, required this.rejected, required this.expired, required this.open, required this.positive, required this.neutral, required this.negative});
+  factory AgentScorecardKind.fromJson(Map<String, dynamic> j) => AgentScorecardKind(
+        kind: j['kind'] as String,
+        proposed: (j['proposed'] as num).toInt(),
+        approved: (j['approved'] as num).toInt(),
+        executed: (j['executed'] as num).toInt(),
+        failed: (j['failed'] as num).toInt(),
+        rejected: (j['rejected'] as num).toInt(),
+        expired: (j['expired'] as num).toInt(),
+        open: (j['open'] as num).toInt(),
+        positive: (j['positive'] as num).toInt(),
+        neutral: (j['neutral'] as num).toInt(),
+        negative: (j['negative'] as num).toInt(),
+      );
+  Map<String, dynamic> toJson() => {
+        'kind': kind,
+        'proposed': proposed,
+        'approved': approved,
+        'executed': executed,
+        'failed': failed,
+        'rejected': rejected,
+        'expired': expired,
+        'open': open,
+        'positive': positive,
+        'neutral': neutral,
+        'negative': negative,
+      };
+}
+
+class AgentScorecardEntry {
+  final int proposalId;
+  final String kind;
+  final String title;
+  final Map<String, dynamic> outcome;
+  final String outcomeAt;
+  const AgentScorecardEntry({required this.proposalId, required this.kind, required this.title, required this.outcome, required this.outcomeAt});
+  factory AgentScorecardEntry.fromJson(Map<String, dynamic> j) => AgentScorecardEntry(
+        proposalId: (j['proposal_id'] as num).toInt(),
+        kind: j['kind'] as String,
+        title: j['title'] as String,
+        outcome: j['outcome'] as Map<String, dynamic>,
+        outcomeAt: j['outcome_at'] as String,
+      );
+  Map<String, dynamic> toJson() => {
+        'proposal_id': proposalId,
+        'kind': kind,
+        'title': title,
+        'outcome': outcome,
+        'outcome_at': outcomeAt,
+      };
+}
+
+class AgentScorecard {
+  final int agentStaffId;
+  final String since;
+  final List<AgentScorecardKind> kinds;
+  final List<AgentScorecardEntry> recent;
+  const AgentScorecard({required this.agentStaffId, required this.since, required this.kinds, required this.recent});
+  factory AgentScorecard.fromJson(Map<String, dynamic> j) => AgentScorecard(
+        agentStaffId: (j['agent_staff_id'] as num).toInt(),
+        since: j['since'] as String,
+        kinds: (j['kinds'] as List).map((e) => AgentScorecardKind.fromJson(e as Map<String, dynamic>)).toList(),
+        recent: (j['recent'] as List).map((e) => AgentScorecardEntry.fromJson(e as Map<String, dynamic>)).toList(),
+      );
+  Map<String, dynamic> toJson() => {
+        'agent_staff_id': agentStaffId,
+        'since': since,
+        'kinds': kinds.map((e) => e.toJson()).toList(),
+        'recent': recent.map((e) => e.toJson()).toList(),
       };
 }
 
