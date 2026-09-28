@@ -216,9 +216,21 @@ func (o *inventoryOutbox) run(ctx context.Context, payload []byte) (int32, error
 			if err != nil {
 				return err
 			}
+			// 每一行按哪个活动价成交：未发货的退款把那部分活动配额一起放回（库存服务那边），
+			// 否则货回到门店库存了、活动的「已售」却还算着它，配额凭空少掉（2026-09-28 破坏性测试遗留）。
+			// 每人限购不放回（在 core 的 promotion_purchases，这里不碰）：防「特价买了退、退了再买」。
+			// 一单里同一个 SKU 至多一行（pricing 拒重复），按 SKU 对上。
+			ol, err := tx.ListOrderLines(ctx, order.ID)
+			if err != nil {
+				return err
+			}
+			promo := make(map[int64]*int64, len(ol))
+			for _, l := range ol {
+				promo[l.SKUID] = l.PricePromotionID
+			}
 			req = inventory.RestockRequest{RefundNo: r.RefundNo, StoreID: order.StoreID}
 			for _, it := range r.Items {
-				req.Lines = append(req.Lines, inventory.OrderLine{SKUID: it.SKUID, Qty: it.Quantity})
+				req.Lines = append(req.Lines, inventory.OrderLine{SKUID: it.SKUID, Qty: it.Quantity, PromotionID: promo[it.SKUID]})
 			}
 			return nil
 		})

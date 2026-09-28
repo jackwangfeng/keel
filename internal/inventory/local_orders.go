@@ -6,6 +6,7 @@ package inventory
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sort"
 
 	"github.com/keel/keel/internal/repository"
@@ -173,6 +174,18 @@ func (l *Local) RestockForRefund(ctx context.Context, r RestockRequest) (Release
 				BizID: r.RefundNo, Before: after - ln.Qty, After: after,
 			}); err != nil {
 				return err
+			}
+			// 按活动价成交的行：活动配额一起放回（与关单释放同一个做法，saga.go 的 putBack）。
+			// 放不回只出声不报错：活动已删了这个 SKU 之类，不为一个计数把库存回补卡死。
+			if ln.PromotionID != nil {
+				ok, err := tx.ReleaseActivitySold(ctx, *ln.PromotionID, ln.SKUID, ln.Qty)
+				if err != nil {
+					return err
+				}
+				if !ok {
+					slog.WarnContext(ctx, "退款回补放回活动配额时受影响 0 行：这个 SKU 已不在活动里，或已售不够减",
+						"refund_no", r.RefundNo, "promotion_id", *ln.PromotionID, "sku_id", ln.SKUID)
+				}
 			}
 			out.Qty += ln.Qty
 		}

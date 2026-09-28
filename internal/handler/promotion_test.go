@@ -671,3 +671,33 @@ func TestAdminPromotionRulesAndLifecycle(t *testing.T) {
 		t.Fatalf("卖出过的 SKU 移出活动应当 422：%+v", p)
 	}
 }
+
+// 未发货的退款把活动配额放回（activity_stocks.sold），每人限购不放回（promotion_purchases 照旧计着）：
+// 货回到门店库存了，活动的「已售」不该还算着它；限购留着，防「特价买了退、退了再买」。
+// 2026-09-28 破坏性测试：部分退款把特价份额全退掉后，配额与限购都不释放。
+func TestRefundReleasesPromotionQuotaButNotThePerUserLimit(t *testing.T) {
+	cs := newCouponShop(t)
+	promo := cs.livePromotion(t, "连衣裙限时特价", fmt.Sprintf(`"promotion_type":3,`+
+		`"skus":[{"sku_id":%d,"promo_price_cents":3990,"per_user_limit":2}]`, cs.DressSKU))
+	b := cs.newBuyer(t, "promo-refund")
+	o := cs.placePaid(t, b, cs.NorthStore, cs.DressSKU, 2, nil)
+	sold := func() int64 {
+		return adminQueryInt64(t, `SELECT sold FROM activity_stocks WHERE promotion_id = $1 AND sku_id = $2`, promo.Id, cs.DressSKU)
+	}
+	purchased := func() int64 {
+		return adminQueryInt64(t, `SELECT COALESCE(sum(qty), 0) FROM promotion_purchases WHERE promotion_id = $1 AND sku_id = $2`,
+			promo.Id, cs.DressSKU)
+	}
+	if sold() != 2 || purchased() != 2 {
+		t.Fatalf("特价买了 2 件：sold=%d purchased=%d", sold(), purchased())
+	}
+	_, lines := cs.lines(t, b, o.OrderNo)
+	r := cs.mustApply(t, b, o.OrderNo, refundBody(1, [2]int64{lines[cs.DressSKU].Id, 2}))
+	cs.mustApprove(t, r.RefundNo)
+	if got := sold(); got != 0 {
+		t.Fatalf("未发货退款后活动配额应放回：sold=%d", got)
+	}
+	if got := purchased(); got != 2 {
+		t.Fatalf("每人限购不该放回：purchased=%d", got)
+	}
+}
