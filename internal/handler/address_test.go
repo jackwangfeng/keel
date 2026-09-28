@@ -325,3 +325,24 @@ func TestNewAddressIsUsableForCheckout(t *testing.T) {
 		t.Fatalf("删地址之后订单的收货快照变了：%+v", d.Receiver)
 	}
 }
+
+// 地址带坐标（POI，00100）：搜索地点 / 选点填的地址带 WGS-84 坐标回显；整体替换不给就清掉；只给一个 422。
+func TestAddressCoordinates(t *testing.T) {
+	bs := newBuyerShop(t)
+	b := bs.newBuyer(t, "地址坐标")
+	base := `"receiver_name":"王五","phone":"13900139000","province":"北京市","city":"北京市","district":"朝阳区","detail":"望京 SOHO"`
+	var a api.Address
+	w := bs.call(t, http.MethodPost, "/api/v1/addresses", `{`+base+`,"lat":39.996539,"lng":116.480983}`, b)
+	decodeInto(t, w, http.StatusCreated, "带坐标新建", &a)
+	if a.Lat == nil || a.Lng == nil || *a.Lat != 39.996539 || *a.Lng != 116.480983 {
+		t.Fatalf("坐标没回显或丢了精度：%v %v", a.Lat, a.Lng)
+	}
+	var replaced api.Address // 新变量：响应里没有 lat 时 JSON 解码不会清掉旧值
+	decodeInto(t, bs.call(t, http.MethodPut, fmt.Sprintf("/api/v1/addresses/%d", a.Id), `{`+base+`}`, b), http.StatusOK, "替换", &replaced)
+	if replaced.Lat != nil || replaced.Lng != nil {
+		t.Fatalf("整体替换没给坐标应清掉：%v %v", *replaced.Lat, *replaced.Lng)
+	}
+	if w := bs.call(t, http.MethodPost, "/api/v1/addresses", `{`+base+`,"lat":39.99}`, b); w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("只给 lat 应 422，实得 %d", w.Code)
+	}
+}

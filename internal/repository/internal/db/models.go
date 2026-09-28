@@ -827,6 +827,8 @@ type UserAddress struct {
 	DeletedAt    pgtype.Timestamptz
 	CreatedAt    pgtype.Timestamptz
 	UpdatedAt    pgtype.Timestamptz
+	Lat          *float64
+	Lng          *float64
 }
 
 type UserCoupon struct {

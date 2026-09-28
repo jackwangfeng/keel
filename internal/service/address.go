@@ -144,6 +144,8 @@ type AddressInput struct {
 	PostalCode   *string
 	Tag          *int
 	IsDefault    *bool
+	// Lat / Lng：地址的坐标（WGS-84，00100），两个都给或都不给。PUT 是整体替换：不给就清掉。
+	Lat, Lng *float64
 }
 
 // normalize 校验并收成仓储那一层的字段。
@@ -173,6 +175,15 @@ func (in AddressInput) normalize() (repository.AddressFields, error) {
 		}
 	}
 	f.IsDefault = in.IsDefault != nil && *in.IsDefault
+	switch {
+	case in.Lat == nil && in.Lng == nil:
+	case in.Lat == nil || in.Lng == nil:
+		c.add("lat", "lat 与 lng 要么都给要么都不给")
+	case *in.Lat < -90 || *in.Lat > 90 || *in.Lng < -180 || *in.Lng > 180:
+		c.add("lat", "坐标越界（WGS-84：纬度 -90–90、经度 -180–180）")
+	default:
+		f.Lat, f.Lng = in.Lat, in.Lng
+	}
 	return f, c.err()
 }
 

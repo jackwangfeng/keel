@@ -29,8 +29,10 @@ type SavedAddress struct {
 	PostalCode   *string
 	Tag          int16
 	IsDefault    bool
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	// Lat / Lng 是地址的坐标（WGS-84，00100）：搜索地点 / 地图选点时由客户端写入，手填与老地址为 nil。
+	Lat, Lng  *float64
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 // AddressFields 是新增与整体替换共用的那一组字段。IsDefault 只在新增时有意义
@@ -47,6 +49,7 @@ type AddressFields struct {
 	PostalCode   *string
 	Tag          int16
 	IsDefault    bool
+	Lat, Lng     *float64
 }
 
 // ErrUserGone：锁买家行时发现这一行已经不在了（注销软删）。令牌还没过期，
@@ -97,6 +100,8 @@ func savedAddressOf(r db.FindUserAddressRow) SavedAddress {
 		PostalCode:   r.PostalCode,
 		Tag:          r.Tag,
 		IsDefault:    r.IsDefault,
+		Lat:          r.Lat,
+		Lng:          r.Lng,
 		CreatedAt:    r.CreatedAt.Time,
 		UpdatedAt:    r.UpdatedAt.Time,
 	}
@@ -139,6 +144,8 @@ func (t tenantTx) InsertAddress(ctx context.Context, userID int64, f AddressFiel
 		PostalCode:   f.PostalCode,
 		Tag:          f.Tag,
 		IsDefault:    f.IsDefault,
+		Lat:          f.Lat,
+		Lng:          f.Lng,
 	})
 	if err != nil {
 		return SavedAddress{}, err
@@ -158,6 +165,8 @@ func (t tenantTx) ReplaceAddress(ctx context.Context, id, userID int64, f Addres
 		RegionCode:   f.RegionCode,
 		PostalCode:   f.PostalCode,
 		Tag:          f.Tag,
+		Lat:          f.Lat,
+		Lng:          f.Lng,
 		ID:           id,
 		UserID:       userID,
 	})

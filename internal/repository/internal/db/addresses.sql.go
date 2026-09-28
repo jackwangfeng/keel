@@ -38,7 +38,7 @@ func (q *Queries) ClearDefaultAddress(ctx context.Context, arg ClearDefaultAddre
 
 const findUserAddress = `-- name: FindUserAddress :one
 SELECT id, receiver_name, phone, province, city, district, street, detail,
-       region_code, postal_code, tag, is_default, created_at, updated_at
+       region_code, postal_code, tag, is_default, lat, lng, created_at, updated_at
   FROM user_addresses
  WHERE id = $1
    AND user_id = $2
@@ -63,6 +63,8 @@ type FindUserAddressRow struct {
 	PostalCode   *string
 	Tag          int16
 	IsDefault    bool
+	Lat          *float64
+	Lng          *float64
 	CreatedAt    pgtype.Timestamptz
 	UpdatedAt    pgtype.Timestamptz
 }
@@ -84,6 +86,8 @@ func (q *Queries) FindUserAddress(ctx context.Context, arg FindUserAddressParams
 		&i.PostalCode,
 		&i.Tag,
 		&i.IsDefault,
+		&i.Lat,
+		&i.Lng,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -92,10 +96,10 @@ func (q *Queries) FindUserAddress(ctx context.Context, arg FindUserAddressParams
 
 const insertUserAddress = `-- name: InsertUserAddress :one
 INSERT INTO user_addresses (user_id, receiver_name, phone, province, city, district,
-                            street, detail, region_code, postal_code, tag, is_default)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                            street, detail, region_code, postal_code, tag, is_default, lat, lng)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 RETURNING id, receiver_name, phone, province, city, district, street, detail,
-          region_code, postal_code, tag, is_default, created_at, updated_at
+          region_code, postal_code, tag, is_default, lat, lng, created_at, updated_at
 `
 
 type InsertUserAddressParams struct {
@@ -111,6 +115,8 @@ type InsertUserAddressParams struct {
 	PostalCode   *string
 	Tag          int16
 	IsDefault    bool
+	Lat          *float64
+	Lng          *float64
 }
 
 type InsertUserAddressRow struct {
@@ -126,6 +132,8 @@ type InsertUserAddressRow struct {
 	PostalCode   *string
 	Tag          int16
 	IsDefault    bool
+	Lat          *float64
+	Lng          *float64
 	CreatedAt    pgtype.Timestamptz
 	UpdatedAt    pgtype.Timestamptz
 }
@@ -149,6 +157,8 @@ func (q *Queries) InsertUserAddress(ctx context.Context, arg InsertUserAddressPa
 		arg.PostalCode,
 		arg.Tag,
 		arg.IsDefault,
+		arg.Lat,
+		arg.Lng,
 	)
 	var i InsertUserAddressRow
 	err := row.Scan(
@@ -164,6 +174,8 @@ func (q *Queries) InsertUserAddress(ctx context.Context, arg InsertUserAddressPa
 		&i.PostalCode,
 		&i.Tag,
 		&i.IsDefault,
+		&i.Lat,
+		&i.Lng,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -173,7 +185,7 @@ func (q *Queries) InsertUserAddress(ctx context.Context, arg InsertUserAddressPa
 const listUserAddresses = `-- name: ListUserAddresses :many
 
 SELECT id, receiver_name, phone, province, city, district, street, detail,
-       region_code, postal_code, tag, is_default, created_at, updated_at
+       region_code, postal_code, tag, is_default, lat, lng, created_at, updated_at
   FROM user_addresses
  WHERE user_id = $1
    AND deleted_at IS NULL
@@ -193,6 +205,8 @@ type ListUserAddressesRow struct {
 	PostalCode   *string
 	Tag          int16
 	IsDefault    bool
+	Lat          *float64
+	Lng          *float64
 	CreatedAt    pgtype.Timestamptz
 	UpdatedAt    pgtype.Timestamptz
 }
@@ -235,6 +249,8 @@ func (q *Queries) ListUserAddresses(ctx context.Context, userID int64) ([]ListUs
 			&i.PostalCode,
 			&i.Tag,
 			&i.IsDefault,
+			&i.Lat,
+			&i.Lng,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
@@ -255,7 +271,7 @@ UPDATE user_addresses
    AND user_id = $2
    AND deleted_at IS NULL
 RETURNING id, receiver_name, phone, province, city, district, street, detail,
-          region_code, postal_code, tag, is_default, created_at, updated_at
+          region_code, postal_code, tag, is_default, lat, lng, created_at, updated_at
 `
 
 type MarkDefaultAddressParams struct {
@@ -276,6 +292,8 @@ type MarkDefaultAddressRow struct {
 	PostalCode   *string
 	Tag          int16
 	IsDefault    bool
+	Lat          *float64
+	Lng          *float64
 	CreatedAt    pgtype.Timestamptz
 	UpdatedAt    pgtype.Timestamptz
 }
@@ -297,6 +315,8 @@ func (q *Queries) MarkDefaultAddress(ctx context.Context, arg MarkDefaultAddress
 		&i.PostalCode,
 		&i.Tag,
 		&i.IsDefault,
+		&i.Lat,
+		&i.Lng,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -341,12 +361,14 @@ UPDATE user_addresses
        detail        = $7,
        region_code   = $8,
        postal_code   = $9,
-       tag           = $10
- WHERE id = $11
-   AND user_id = $12
+       tag           = $10,
+       lat           = $11,
+       lng           = $12
+ WHERE id = $13
+   AND user_id = $14
    AND deleted_at IS NULL
 RETURNING id, receiver_name, phone, province, city, district, street, detail,
-          region_code, postal_code, tag, is_default, created_at, updated_at
+          region_code, postal_code, tag, is_default, lat, lng, created_at, updated_at
 `
 
 type UpdateUserAddressParams struct {
@@ -360,6 +382,8 @@ type UpdateUserAddressParams struct {
 	RegionCode   *string
 	PostalCode   *string
 	Tag          int16
+	Lat          *float64
+	Lng          *float64
 	ID           int64
 	UserID       int64
 }
@@ -377,6 +401,8 @@ type UpdateUserAddressRow struct {
 	PostalCode   *string
 	Tag          int16
 	IsDefault    bool
+	Lat          *float64
+	Lng          *float64
 	CreatedAt    pgtype.Timestamptz
 	UpdatedAt    pgtype.Timestamptz
 }
@@ -395,6 +421,8 @@ func (q *Queries) UpdateUserAddress(ctx context.Context, arg UpdateUserAddressPa
 		arg.RegionCode,
 		arg.PostalCode,
 		arg.Tag,
+		arg.Lat,
+		arg.Lng,
 		arg.ID,
 		arg.UserID,
 	)
@@ -412,6 +440,8 @@ func (q *Queries) UpdateUserAddress(ctx context.Context, arg UpdateUserAddressPa
 		&i.PostalCode,
 		&i.Tag,
 		&i.IsDefault,
+		&i.Lat,
+		&i.Lng,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)

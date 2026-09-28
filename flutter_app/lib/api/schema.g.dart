@@ -5,6 +5,8 @@
 // ignore_for_file: non_constant_identifier_names, unnecessary_cast, prefer_null_aware_operators
 
 class Address {
+  final double? lat;
+  final double? lng;
   final String receiverName;
   final String phone;
   final String province;
@@ -19,8 +21,10 @@ class Address {
   final int id;
   final String? createdAt;
   final String? updatedAt;
-  const Address({required this.receiverName, required this.phone, required this.province, required this.city, required this.district, this.street, required this.detail, this.regionCode, this.postalCode, this.tag, required this.isDefault, required this.id, this.createdAt, this.updatedAt});
+  const Address({this.lat, this.lng, required this.receiverName, required this.phone, required this.province, required this.city, required this.district, this.street, required this.detail, this.regionCode, this.postalCode, this.tag, required this.isDefault, required this.id, this.createdAt, this.updatedAt});
   factory Address.fromJson(Map<String, dynamic> j) => Address(
+        lat: (j['lat'] as num?)?.toDouble(),
+        lng: (j['lng'] as num?)?.toDouble(),
         receiverName: j['receiver_name'] as String,
         phone: j['phone'] as String,
         province: j['province'] as String,
@@ -37,6 +41,8 @@ class Address {
         updatedAt: j['updated_at'] as String?,
       );
   Map<String, dynamic> toJson() => {
+        if (lat != null) 'lat': lat,
+        if (lng != null) 'lng': lng,
         'receiver_name': receiverName,
         'phone': phone,
         'province': province,
@@ -55,6 +61,8 @@ class Address {
 }
 
 class AddressInput {
+  final double? lat;
+  final double? lng;
   final String receiverName;
   final String phone;
   final String province;
@@ -66,8 +74,10 @@ class AddressInput {
   final String? postalCode;
   final int? tag;
   final bool? isDefault;
-  const AddressInput({required this.receiverName, required this.phone, required this.province, required this.city, required this.district, this.street, required this.detail, this.regionCode, this.postalCode, this.tag, this.isDefault});
+  const AddressInput({this.lat, this.lng, required this.receiverName, required this.phone, required this.province, required this.city, required this.district, this.street, required this.detail, this.regionCode, this.postalCode, this.tag, this.isDefault});
   factory AddressInput.fromJson(Map<String, dynamic> j) => AddressInput(
+        lat: (j['lat'] as num?)?.toDouble(),
+        lng: (j['lng'] as num?)?.toDouble(),
         receiverName: j['receiver_name'] as String,
         phone: j['phone'] as String,
         province: j['province'] as String,
@@ -81,6 +91,8 @@ class AddressInput {
         isDefault: j['is_default'] as bool?,
       );
   Map<String, dynamic> toJson() => {
+        if (lat != null) 'lat': lat,
+        if (lng != null) 'lng': lng,
         'receiver_name': receiverName,
         'phone': phone,
         'province': province,

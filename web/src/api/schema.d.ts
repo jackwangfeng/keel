@@ -16853,6 +16853,16 @@ export interface components {
             created_at: string;
         };
         AddressInput: {
+            /**
+             * Format: double
+             * @description 地址的坐标（WGS-84），搜索地点 / 地图选点时填；手填与老地址没有。与 lng 同时给或同时不给（POI，00100）
+             */
+            lat?: number;
+            /**
+             * Format: double
+             * @description 经度（WGS-84）
+             */
+            lng?: number;
             receiver_name: string;
             phone: string;
             province: string;

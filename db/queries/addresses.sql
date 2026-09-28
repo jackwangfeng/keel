@@ -17,7 +17,7 @@
 -- 地址簿。默认地址排在首位，其余按更新时间倒序（契约原话）。id 兜底让顺序确定：
 -- 同一事务里改过的两行 updated_at 相同（now() 是事务开始时刻）。
 SELECT id, receiver_name, phone, province, city, district, street, detail,
-       region_code, postal_code, tag, is_default, created_at, updated_at
+       region_code, postal_code, tag, is_default, lat, lng, created_at, updated_at
   FROM user_addresses
  WHERE user_id = $1
    AND deleted_at IS NULL
@@ -26,7 +26,7 @@ SELECT id, receiver_name, phone, province, city, district, street, detail,
 -- name: FindUserAddress :one
 -- 取一条。查不到（含属于别人、已软删）即 ErrNoRows。
 SELECT id, receiver_name, phone, province, city, district, street, detail,
-       region_code, postal_code, tag, is_default, created_at, updated_at
+       region_code, postal_code, tag, is_default, lat, lng, created_at, updated_at
   FROM user_addresses
  WHERE id = $1
    AND user_id = $2
@@ -39,10 +39,10 @@ SELECT id, receiver_name, phone, province, city, district, street, detail,
 -- is_default 为真时，调用方必须已经在同一事务里清掉了旧默认
 -- （ClearDefaultAddress），否则这里撞 uk_user_addresses_default。
 INSERT INTO user_addresses (user_id, receiver_name, phone, province, city, district,
-                            street, detail, region_code, postal_code, tag, is_default)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                            street, detail, region_code, postal_code, tag, is_default, lat, lng)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, sqlc.narg(lat), sqlc.narg(lng))
 RETURNING id, receiver_name, phone, province, city, district, street, detail,
-          region_code, postal_code, tag, is_default, created_at, updated_at;
+          region_code, postal_code, tag, is_default, lat, lng, created_at, updated_at;
 
 -- name: UpdateUserAddress :one
 -- 整体替换（PUT）。**is_default 不在 SET 里**：契约说 is_default 只在新增时有效，
@@ -57,12 +57,14 @@ UPDATE user_addresses
        detail        = sqlc.arg(detail),
        region_code   = sqlc.narg(region_code),
        postal_code   = sqlc.narg(postal_code),
-       tag           = sqlc.arg(tag)
+       tag           = sqlc.arg(tag),
+       lat           = sqlc.narg(lat),
+       lng           = sqlc.narg(lng)
  WHERE id = sqlc.arg(id)
    AND user_id = sqlc.arg(user_id)
    AND deleted_at IS NULL
 RETURNING id, receiver_name, phone, province, city, district, street, detail,
-          region_code, postal_code, tag, is_default, created_at, updated_at;
+          region_code, postal_code, tag, is_default, lat, lng, created_at, updated_at;
 
 -- name: ClearDefaultAddress :exec
 -- 清掉这个买家现有的默认地址，除了 keep_id 那一条（新增时传 0）。
@@ -86,7 +88,7 @@ UPDATE user_addresses
    AND user_id = $2
    AND deleted_at IS NULL
 RETURNING id, receiver_name, phone, province, city, district, street, detail,
-          region_code, postal_code, tag, is_default, created_at, updated_at;
+          region_code, postal_code, tag, is_default, lat, lng, created_at, updated_at;
 
 -- name: SoftDeleteUserAddress :one
 -- 软删（契约：写 deleted_at）。地址与订单是快照关系，删它不影响任何历史订单。

@@ -152,6 +152,8 @@ func addressInputOf(raw api.AddressInput) service.AddressInput {
 		RegionCode:   raw.RegionCode,
 		PostalCode:   raw.PostalCode,
 		IsDefault:    raw.IsDefault,
+		Lat:          raw.Lat,
+		Lng:          raw.Lng,
 	}
 	if raw.Tag != nil {
 		t := int(*raw.Tag)
@@ -177,6 +179,8 @@ func apiAddress(a repository.SavedAddress) api.Address {
 		PostalCode:   a.PostalCode,
 		Tag:          &tag,
 		IsDefault:    a.IsDefault,
+		Lat:          a.Lat,
+		Lng:          a.Lng,
 		CreatedAt:    &created,
 		UpdatedAt:    &updated,
 	}

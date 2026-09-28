@@ -2394,11 +2394,17 @@ type Address struct {
 
 	// IsDefault 仅在**新增**时有效（服务端同事务内先清旧默认再置新）。
 	// 后续切换默认地址请用 `PUT /addresses/{address_id}/default`。
-	IsDefault    bool    `json:"is_default"`
-	Phone        string  `json:"phone"`
-	PostalCode   *string `json:"postal_code,omitempty"`
-	Province     string  `json:"province"`
-	ReceiverName string  `json:"receiver_name"`
+	IsDefault bool `json:"is_default"`
+
+	// Lat 地址的坐标（WGS-84），搜索地点 / 地图选点时填；手填与老地址没有。与 lng 同时给或同时不给（POI，00100）
+	Lat *float64 `json:"lat,omitempty"`
+
+	// Lng 经度（WGS-84）
+	Lng          *float64 `json:"lng,omitempty"`
+	Phone        string   `json:"phone"`
+	PostalCode   *string  `json:"postal_code,omitempty"`
+	Province     string   `json:"province"`
+	ReceiverName string   `json:"receiver_name"`
 
 	// RegionCode 行政区划码。比省市区三个字符串可靠 ——「内蒙古」与「内蒙古自治区」
 	// 是同一个地方，但字符串匹配不出来，而运费模板与偏远地区判定都按区划做。
@@ -2423,11 +2429,17 @@ type AddressInput struct {
 
 	// IsDefault 仅在**新增**时有效（服务端同事务内先清旧默认再置新）。
 	// 后续切换默认地址请用 `PUT /addresses/{address_id}/default`。
-	IsDefault    *bool   `json:"is_default,omitempty"`
-	Phone        string  `json:"phone"`
-	PostalCode   *string `json:"postal_code,omitempty"`
-	Province     string  `json:"province"`
-	ReceiverName string  `json:"receiver_name"`
+	IsDefault *bool `json:"is_default,omitempty"`
+
+	// Lat 地址的坐标（WGS-84），搜索地点 / 地图选点时填；手填与老地址没有。与 lng 同时给或同时不给（POI，00100）
+	Lat *float64 `json:"lat,omitempty"`
+
+	// Lng 经度（WGS-84）
+	Lng          *float64 `json:"lng,omitempty"`
+	Phone        string   `json:"phone"`
+	PostalCode   *string  `json:"postal_code,omitempty"`
+	Province     string   `json:"province"`
+	ReceiverName string   `json:"receiver_name"`
 
 	// RegionCode 行政区划码。比省市区三个字符串可靠 ——「内蒙古」与「内蒙古自治区」
 	// 是同一个地方，但字符串匹配不出来，而运费模板与偏远地区判定都按区划做。

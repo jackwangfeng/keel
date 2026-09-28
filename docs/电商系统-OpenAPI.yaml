@@ -9868,6 +9868,11 @@ components:
       type: object
       required: [receiver_name, phone, province, city, district, detail]
       properties:
+        lat:
+          type: number
+          format: double
+          description: 地址的坐标（WGS-84），搜索地点 / 地图选点时填；手填与老地址没有。与 lng 同时给或同时不给（POI，00100）
+        lng: { type: number, format: double, description: 经度（WGS-84） }
         receiver_name: { type: string, maxLength: 32 }
         phone:         { type: string }
         province:      { type: string }
