@@ -149,6 +149,8 @@ export type StoreInventoryPage = ResponseBodyOf<"/admin/stores/{store_id}/invent
 export type AdminOrderPage = ResponseBodyOf<"/admin/orders", "get">;
 /** `GET /admin/refunds` 的响应体。 */
 export type AdminRefundPage = ResponseBodyOf<"/admin/refunds", "get">;
+export type PaymentReturn = S["PaymentReturn"];
+export type PaymentReturnPage = ResponseBodyOf<"/admin/payment-returns", "get">;
 /** `GET /admin/merchants` 的响应体（含 single_merchant_mode）。 */
 export type MerchantList = ResponseBodyOf<"/admin/merchants", "get">;
 /** `POST /admin/uploads` 的响应体。 */

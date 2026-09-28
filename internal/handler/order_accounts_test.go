@@ -191,10 +191,14 @@ func TestCreateCompensationShoutsWhenTheOrderWasAlreadyPaid(t *testing.T) {
 	// seedDraftOrder 的清理不认得 payments（它比支付回调早一轮）。在它之后注册，
 	// 于是按 LIFO 先跑，否则那边删 orders 会撞外键。
 	t.Cleanup(func() {
-		if _, err := admin(t).Exec(context.Background(),
+		for _, q := range []string{
+			`DELETE FROM payment_returns WHERE order_id IN (SELECT id FROM orders WHERE order_no = $1)`,
+			`DELETE FROM payment_intents WHERE order_id IN (SELECT id FROM orders WHERE order_no = $1)`,
 			`DELETE FROM payments WHERE order_id IN (SELECT id FROM orders WHERE order_no = $1)`,
-			orderNo); err != nil {
-			t.Errorf("清理支付单失败: %v", err)
+		} {
+			if _, err := admin(t).Exec(context.Background(), q, orderNo); err != nil {
+				t.Errorf("清理支付单失败: %v", err)
+			}
 		}
 	})
 

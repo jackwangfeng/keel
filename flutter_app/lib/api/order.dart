@@ -233,6 +233,9 @@ class OrderDetailView {
   final List<PaymentRow> payments;
   /// 这一单的售后单。
   final List<RefundRow> refunds;
+  /// 多收款退回（契约 OrderDetail.payment_returns，00150）：订单只认一笔到账，其余的系统自动原路退回。
+  /// 每行一句「多付的 ¥x（重复支付）已原路退回」；没有时空。
+  final List<String> returnLines;
   /// 已支付 / 已发货 / 已完成，且还有没退完、也没在途售后的件数。
   final bool canRefund;
   /// 原始订单：售后那几页（第二阶段）要按行算可退件数。
@@ -242,7 +245,7 @@ class OrderDetailView {
       required this.hasPaid, required this.refundedText, required this.freightDiscountText, required this.autoConfirmAt,
       required this.promotionDiscountText, required this.promotionLines, required this.freightNote, this.freightLabel = '运费', required this.canCancel,
       required this.canConfirm, required this.couponId, required this.couponName, required this.items,
-      required this.payments, required this.refunds, required this.canRefund, required this.raw});
+      required this.payments, required this.refunds, this.returnLines = const [], required this.canRefund, required this.raw});
 
   /// 状态下面那一句说明。
   String get statusLine => switch (head.statusText) {
@@ -290,6 +293,7 @@ OrderDetailView orderDetailView(OrderDetail o, String Function(String) asset) {
     items: (o.items ?? const <OrderItem>[]).map((it) => orderItemRow(it, asset)).toList(),
     payments: (o.payments ?? const <PaymentRecord>[]).map(paymentRow).toList(),
     refunds: (o.refunds ?? const <Refund>[]).map(refundRow).toList(),
+    returnLines: [for (final r in o.paymentReturns ?? const <PaymentReturn>[]) paymentReturnLine(r)],
     canRefund: (o.status == 20 || o.status == 30 || o.status == 40) && refundableItems(o).isNotEmpty,
     raw: o,
   );
@@ -361,3 +365,10 @@ Future<void> settleSandbox(ApiClient c, SandboxSettle s) async {
   throw c.failureOf(res.status, res.text);
 }
 
+
+/// 一张多收款退回单给买家看的那一句。
+String paymentReturnLine(PaymentReturn r) {
+  final why = switch (r.reason) { 1 => '重复支付', 2 => '订单关闭后到账', _ => '金额与应付不符' };
+  final state = r.status == 40 ? '已原路退回' : '正在原路退回';
+  return '多付的 ${yuan(r.amountCents)}（$why）$state';
+}

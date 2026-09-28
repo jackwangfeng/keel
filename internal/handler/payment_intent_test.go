@@ -289,11 +289,19 @@ func TestSandboxPaymentIntentIsIdempotent(t *testing.T) {
 			"客户端会把一次重放记成一次新的支付调起", got)
 	}
 
-	// 阳性对照：换一把钥匙必须给出**另一个**凭据。两次都返回同一个的实现
-	// （比如凭据是从订单号派生的）会让上面那条断言恒绿。
-	third, _, _ := intentOf(t, no, "wechat", tok, "payintent-"+uniqueKey())
-	if third.PaymentNo == first.PaymentNo {
-		t.Fatalf("换了钥匙还是同一个凭据 %s —— 上面那条幂等断言没有区分力", first.PaymentNo)
+	// 换一把钥匙：不是重放（没有 Idempotency-Replayed），但同一单同一渠道**复用同一个流水号**（00150：一单至多一个
+	// 有效的支付意图 —— 之前每次一个新流水号，同一单能拿到任意多套都能付的参数，第二笔到账就是多收）。
+	third, _, w3 := intentOf(t, no, "wechat", tok, "payintent-"+uniqueKey())
+	if got := w3.Header().Get("Idempotency-Replayed"); got != "" {
+		t.Fatalf("换了钥匙却被当成重放：%q", got)
+	}
+	if third.PaymentNo != first.PaymentNo {
+		t.Fatalf("同一单同一渠道再次发起支付应复用流水号 %s，实得 %s", first.PaymentNo, third.PaymentNo)
+	}
+	// 换渠道：旧的作废，给一个新的流水号（阳性对照：凭据不是从订单号派生的）。
+	fourth, _, _ := intentOf(t, no, "alipay", tok, "payintent-"+uniqueKey())
+	if fourth.PaymentNo == first.PaymentNo {
+		t.Fatalf("换了渠道还是同一个流水号 %s", first.PaymentNo)
 	}
 
 	// 同一把钥匙配另一个渠道 = 键被复用，契约要求 422。

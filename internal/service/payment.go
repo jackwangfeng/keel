@@ -167,6 +167,14 @@ type PaymentService struct {
 	cfg  PaymentConfig
 	log  *slog.Logger
 	now  func() time.Time
+	// returns 把订单不认的到账原路退回（00150）。nil 时退回单照样开，留给兜底扫描提交。
+	returns *PaymentReturnService
+}
+
+// WithReturns 接上多收款退回：回调里开了退回单就当场提交，不等下一轮扫描。
+func (s *PaymentService) WithReturns(r *PaymentReturnService) *PaymentService {
+	s.returns = r
+	return s
 }
 
 func NewPaymentService(r PaymentRepository, cfg PaymentConfig, log *slog.Logger) *PaymentService {
@@ -282,6 +290,7 @@ func (s *PaymentService) settle(ctx context.Context, channel int16, n notificati
 	}
 
 	var outcome error
+	var returnNo string
 	err = s.repo.WithTenant(ctx, func(tx repository.Tx) error {
 		order, err := tx.FindOrderByNo(ctx, n.OrderNo)
 		if err != nil {
@@ -296,7 +305,7 @@ func (s *PaymentService) settle(ctx context.Context, channel int16, n notificati
 		// status 记 1 成功，**哪怕我们接下来不认这笔账**：这一列描述的是
 		// 「渠道那边这笔支付成没成」，而 orders.status 描述的是「我们认不认」。
 		// 把它们压进一列的话，「钱到了但订单已关」这种情形就没有形状可以表达。
-		if _, err := tx.InsertPayment(ctx, repository.NewPayment{
+		paymentID, err := tx.InsertPayment(ctx, repository.NewPayment{
 			PaymentNo:     paymentNo,
 			OrderID:       order.ID,
 			Channel:       channel,
@@ -305,22 +314,38 @@ func (s *PaymentService) settle(ctx context.Context, channel int16, n notificati
 			ChannelTxnID:  n.ChannelTxnID,
 			NotifyPayload: rawBody,
 			PaidAt:        paidAt,
-		}); err != nil {
+		})
+		if err != nil {
 			return err
 		}
 
+		// 订单不认的到账（金额不符、订单已不是待支付）：同一个事务里开多收款退回单（00150），钱原路退回，
+		// 不再只留一条 Error 日志（2026-09-28 破坏性测试：重复支付、取消后才到的回调，钱收了、不退、后台看不到）。
+		refuse := func(why error) error {
+			outcome = why
+			// 重读订单再定原因：并发的两笔回调都先读到待支付，后到的这笔在 SettleOrder 上等到了先到那笔的行锁、
+			// 失败 —— 这时候订单已经被先到那笔入账了（是「重复支付」，不是「订单已关」）。新语句读得到已提交的状态。
+			cur, err := tx.FindOrderByNo(ctx, n.OrderNo)
+			if err != nil {
+				return err
+			}
+			no, err := openReturn(ctx, tx, paymentID, returnReasonOf(cur, n.AmountCents), s.now())
+			returnNo = no
+			return err
+		}
 		if n.AmountCents != order.PayableCents {
-			outcome = fmt.Errorf("%w: 订单 %s 应付 %d，到账 %d",
-				ErrWebhookAmountMismatch, n.OrderNo, order.PayableCents, n.AmountCents)
-			return nil
+			return refuse(fmt.Errorf("%w: 订单 %s 应付 %d，到账 %d",
+				ErrWebhookAmountMismatch, n.OrderNo, order.PayableCents, n.AmountCents))
 		}
 
 		if err := tx.SettleOrder(ctx, n.OrderNo, n.AmountCents, paidAt); err != nil {
 			if errors.Is(err, repository.ErrOrderNotPayable) {
-				outcome = fmt.Errorf("%w: 订单 %s 当前状态是 %d",
-					ErrWebhookOrderNotPayable, n.OrderNo, order.Status)
-				return nil
+				return refuse(fmt.Errorf("%w: 订单 %s 当前状态是 %d",
+					ErrWebhookOrderNotPayable, n.OrderNo, order.Status))
 			}
+			return err
+		}
+		if err := tx.MarkPaymentIntentSettled(ctx, channel, n.ChannelTxnID); err != nil {
 			return err
 		}
 
@@ -331,6 +356,11 @@ func (s *PaymentService) settle(ctx context.Context, channel int16, n notificati
 		return notifyOrderPaid(ctx, tx, order)
 	})
 
+	if err == nil && returnNo != "" && s.returns != nil {
+		if e := s.returns.Submit(ctx, returnNo); e != nil {
+			s.log.ErrorContext(ctx, "多收款退回单当场提交失败，留给兜底扫描重试", "return_no", returnNo, "err", e)
+		}
+	}
 	switch {
 	case errors.Is(err, repository.ErrOrderNotFound):
 		return fmt.Errorf("%w: %s", ErrWebhookOrderUnknown, n.OrderNo)

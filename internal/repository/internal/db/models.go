@@ -641,6 +641,37 @@ type Payment struct {
 	UpdatedAt     pgtype.Timestamptz
 }
 
+type PaymentIntent struct {
+	ID           int64
+	MerchantID   int64
+	OrderID      int64
+	Channel      int16
+	ChannelTxnID string
+	AmountCents  int64
+	Status       int16
+	CreatedAt    pgtype.Timestamptz
+	ClosedAt     pgtype.Timestamptz
+}
+
+type PaymentReturn struct {
+	ID              int64
+	MerchantID      int64
+	ReturnNo        string
+	PaymentID       int64
+	OrderID         int64
+	Channel         int16
+	AmountCents     int64
+	Reason          int16
+	Status          int16
+	ChannelRefundID *string
+	NotifyPayload   []byte
+	Attempts        int32
+	LastError       *string
+	CreatedAt       pgtype.Timestamptz
+	UpdatedAt       pgtype.Timestamptz
+	ReturnedAt      pgtype.Timestamptz
+}
+
 type Product struct {
 	ID                int64
 	MerchantID        int64

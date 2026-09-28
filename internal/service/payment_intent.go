@@ -205,7 +205,8 @@ func (s *PaymentService) CreateIntent(ctx context.Context, orderNo, channel, ide
 			return err
 		}
 
-		order, err := tx.FindUserOrderByNo(ctx, orderNo, id.UserID)
+		// 锁住订单行：同一单并发的两次发起支付要串行，才能保证「至多一个有效的支付意图」（00150）。
+		order, err := tx.LockUserOrderByNo(ctx, orderNo, id.UserID)
 		if errors.Is(err, repository.ErrOrderNotFound) {
 			return fmt.Errorf("%w: order_no=%s", ErrOrderNotFound, orderNo)
 		}
@@ -234,7 +235,33 @@ func (s *PaymentService) CreateIntent(ctx context.Context, orderNo, channel, ide
 				ErrOrderNotPayable, orderNo, order.ExpireAt.Format(time.RFC3339))
 		}
 
-		intent, err := s.sandboxIntent(order, channel, secret)
+		// 一单同一时刻至多一个有效的支付意图（00150）。之前每次都造一个新流水号、库里不留痕，同一单能拿到任意多套
+		// 都能付的参数（先点微信再点支付宝、并发点两次），第二笔到账就是多收（2026-09-28 破坏性测试）。
+		//   · 同渠道：复用同一个流水号，参数一模一样 —— 买家不管付哪一次拿到的，都是同一笔；
+		//   · 换渠道：旧的作废（真实渠道在这里要调它的关单接口；沙箱不需要），再发新的。作废之前旧的已经付了的，
+		//     那笔到账订单不认，由多收款退回原路退回（payment_return.go）—— 关单挡不死，兜底必须在。
+		chCode := webhookChannels[channel]
+		active, found, err := tx.FindActivePaymentIntent(ctx, order.ID)
+		if err != nil {
+			return err
+		}
+		txn := ""
+		if found && active.Channel == chCode && active.AmountCents == order.PayableCents {
+			txn = active.ChannelTxnID
+		} else {
+			if found {
+				if err := tx.SupersedePaymentIntent(ctx, active.ID); err != nil {
+					return err
+				}
+			}
+			if txn, err = newSandboxTxnID(s.now()); err != nil {
+				return err
+			}
+			if err := tx.InsertPaymentIntent(ctx, order.ID, chCode, txn, order.PayableCents); err != nil {
+				return err
+			}
+		}
+		intent, err := s.sandboxIntent(order, channel, secret, txn)
 		if err != nil {
 			return err
 		}
@@ -267,11 +294,7 @@ func (s *PaymentService) CreateIntent(ctx context.Context, orderNo, channel, ide
 // **报文的字节就是要被签的字节。** 这里先 Marshal 成 []byte 再签、再把同一份
 // 字节以字符串形式放进 payload，不是绕远路：重新序列化一次会得到语义相同、
 // 字节不同的 JSON（空格、字段顺序），而 HMAC 算的是字节。
-func (s *PaymentService) sandboxIntent(order repository.Order, channel, secret string) (PaymentIntent, error) {
-	txn, err := newSandboxTxnID(s.now())
-	if err != nil {
-		return PaymentIntent{}, err
-	}
+func (s *PaymentService) sandboxIntent(order repository.Order, channel, secret, txn string) (PaymentIntent, error) {
 
 	// 报文的形状是 service/payment.go 里那个 notification —— Keel 的规范报文，
 	// 不是任何真实渠道的格式。用同一个类型而不是手拼一个 JSON 字面量：

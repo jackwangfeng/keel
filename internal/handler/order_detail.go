@@ -111,6 +111,8 @@ func (h *OrderHandler) Detail(c *gin.Context) {
 
 		// 退款域（00034）落地之后这是**查过的**：空数组的意思就是「这一单没有售后」。
 		Refunds: &refunds,
+		// 原路退回的多收款（00150）：没有时缺席。
+		PaymentReturns: apiPaymentReturns(d.Returns),
 
 		// 自动确认收货的截止（00059）：只有已发货的单才有。
 		AutoConfirmAt: d.AutoConfirmAt,

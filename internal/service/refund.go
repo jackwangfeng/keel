@@ -164,9 +164,17 @@ type RefundService struct {
 	// ob 在退款到账（事务提交）之后就地把库存回补任务跑一次（微服务拆分阶段 1b）；
 	// 没接库存服务时为 nil，任务照样在队列里等 worker。
 	ob *inventoryOutbox
+	// returns 处理多收款退回单的渠道回调（WithReturns）。
+	returns *PaymentReturnService
 }
 
 // WithInventory 接上这个进程的库存服务（单体进程内、core 远端），用于提交之后就地回补库存。
+// WithReturns 接上多收款退回：渠道退款回调里单号以 PR 开头的分派给它（00150）。
+func (s *RefundService) WithReturns(r *PaymentReturnService) *RefundService {
+	s.returns = r
+	return s
+}
+
 func (s *RefundService) WithInventory(inv inventory.Service) *RefundService {
 	s.ob = newInventoryOutbox(s.repo, inv, s.log)
 	return s
@@ -836,6 +844,13 @@ func (s *RefundService) Notify(ctx context.Context, channel string, rawBody []by
 	}
 	if n.AmountCents <= 0 {
 		return fmt.Errorf("%w: amount_cents 是 %d", ErrWebhookBadPayload, n.AmountCents)
+	}
+	// 多收款退回单（PR 开头，00150）与售后退款走同一个渠道回调入口，在这里分开。
+	if isPaymentReturnNo(n.RefundNo) {
+		if s.returns == nil {
+			return fmt.Errorf("%w: %s（多收款退回没接上）", ErrRefundWebhookUnknown, n.RefundNo)
+		}
+		return s.returns.Notify(ctx, code, n, rawBody)
 	}
 
 	var outcome error

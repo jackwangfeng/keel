@@ -1188,6 +1188,66 @@ func (e PaymentRecordChannel) Valid() bool {
 	}
 }
 
+// Defines values for PaymentReturnChannel.
+const (
+	PaymentReturnChannelAlipay PaymentReturnChannel = "alipay"
+	PaymentReturnChannelWechat PaymentReturnChannel = "wechat"
+)
+
+// Valid indicates whether the value is a known member of the PaymentReturnChannel enum.
+func (e PaymentReturnChannel) Valid() bool {
+	switch e {
+	case PaymentReturnChannelAlipay:
+		return true
+	case PaymentReturnChannelWechat:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PaymentReturnReason.
+const (
+	PaymentReturnReasonN1 PaymentReturnReason = 1
+	PaymentReturnReasonN2 PaymentReturnReason = 2
+	PaymentReturnReasonN3 PaymentReturnReason = 3
+)
+
+// Valid indicates whether the value is a known member of the PaymentReturnReason enum.
+func (e PaymentReturnReason) Valid() bool {
+	switch e {
+	case PaymentReturnReasonN1:
+		return true
+	case PaymentReturnReasonN2:
+		return true
+	case PaymentReturnReasonN3:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PaymentReturnStatus.
+const (
+	PaymentReturnStatusN10 PaymentReturnStatus = 10
+	PaymentReturnStatusN30 PaymentReturnStatus = 30
+	PaymentReturnStatusN40 PaymentReturnStatus = 40
+)
+
+// Valid indicates whether the value is a known member of the PaymentReturnStatus enum.
+func (e PaymentReturnStatus) Valid() bool {
+	switch e {
+	case PaymentReturnStatusN10:
+		return true
+	case PaymentReturnStatusN30:
+		return true
+	case PaymentReturnStatusN40:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ProductDetailStatus.
 const (
 	ProductDetailStatusN0 ProductDetailStatus = 0
@@ -2043,6 +2103,27 @@ func (e GetAdminCouponTemplatesParamsStatus) Valid() bool {
 	case GetAdminCouponTemplatesParamsStatusN0:
 		return true
 	case GetAdminCouponTemplatesParamsStatusN1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GetAdminPaymentReturnsParamsStatus.
+const (
+	GetAdminPaymentReturnsParamsStatusN10 GetAdminPaymentReturnsParamsStatus = 10
+	GetAdminPaymentReturnsParamsStatusN30 GetAdminPaymentReturnsParamsStatus = 30
+	GetAdminPaymentReturnsParamsStatusN40 GetAdminPaymentReturnsParamsStatus = 40
+)
+
+// Valid indicates whether the value is a known member of the GetAdminPaymentReturnsParamsStatus enum.
+func (e GetAdminPaymentReturnsParamsStatus) Valid() bool {
+	switch e {
+	case GetAdminPaymentReturnsParamsStatusN10:
+		return true
+	case GetAdminPaymentReturnsParamsStatusN30:
+		return true
+	case GetAdminPaymentReturnsParamsStatusN40:
 		return true
 	default:
 		return false
@@ -4922,8 +5003,13 @@ type OrderDetail struct {
 	PaidCents *Money `json:"paid_cents,omitempty"`
 
 	// PayableCents 金额，单位「分」。禁止使用浮点。
-	PayableCents Money            `json:"payable_cents"`
-	Payments     *[]PaymentRecord `json:"payments,omitempty"`
+	PayableCents Money `json:"payable_cents"`
+
+	// PaymentReturns 这一单被**原路退回的多收款**（2026-09-28 起）：订单只认一笔到账，其余的——重复支付
+	// （换了渠道又付了一次）、订单取消或超时关闭之后才到的、金额与应付不符的——系统自动原路退回，
+	// 不需要申请。没有时整个缺席。客户端据此显示「多付的 ¥x 已原路退回」。
+	PaymentReturns *[]PaymentReturn `json:"payment_returns,omitempty"`
+	Payments       *[]PaymentRecord `json:"payments,omitempty"`
 
 	// PromotionDiscountCents 满减满折的优惠合计，已含在 `discount_cents` 里。
 	PromotionDiscountCents *Money `json:"promotion_discount_cents,omitempty"`
@@ -5235,6 +5321,47 @@ type PaymentRecord struct {
 
 // PaymentRecordChannel 对外字符串 ↔ `payments.channel`：wechat=1 / alipay=2 / balance=3
 type PaymentRecordChannel string
+
+// PaymentReturn 一笔订单不认的到账的原路退回（多收款退回，00150）。
+type PaymentReturn struct {
+	// AmountCents 金额，单位「分」。禁止使用浮点。
+	AmountCents Money `json:"amount_cents"`
+
+	// Attempts 提交给渠道的次数（后台列表给）
+	Attempts  *int                  `json:"attempts,omitempty"`
+	Channel   *PaymentReturnChannel `json:"channel,omitempty"`
+	CreatedAt time.Time             `json:"created_at"`
+
+	// LastError 最近一次提交失败的原因（后台列表给；成功后清空）
+	LastError *string `json:"last_error,omitempty"`
+
+	// OrderNo 所属订单（后台列表给）
+	OrderNo *string `json:"order_no,omitempty"`
+
+	// PaymentTxnId 被退回的那笔到账的渠道流水号（后台列表给）
+	PaymentTxnId *string `json:"payment_txn_id,omitempty"`
+
+	// Reason 1 重复支付（订单已由另一笔入账）/ 2 订单已取消或关闭之后才到账 / 3 金额与应付不符
+	Reason PaymentReturnReason `json:"reason"`
+
+	// ReturnNo 退回单号（PR 开头）
+	ReturnNo string `json:"return_no"`
+
+	// ReturnedAt 退回成功的时间；没退完时缺席
+	ReturnedAt *time.Time `json:"returned_at,omitempty"`
+
+	// Status 10 待提交 / 30 退回中（已交给渠道，等回调）/ 40 已退回
+	Status PaymentReturnStatus `json:"status"`
+}
+
+// PaymentReturnChannel defines model for PaymentReturn.Channel.
+type PaymentReturnChannel string
+
+// PaymentReturnReason 1 重复支付（订单已由另一笔入账）/ 2 订单已取消或关闭之后才到账 / 3 金额与应付不符
+type PaymentReturnReason int
+
+// PaymentReturnStatus 10 待提交 / 30 退回中（已交给渠道，等回调）/ 40 已退回
+type PaymentReturnStatus int
 
 // Problem RFC 9457 Problem Details
 type Problem struct {
@@ -9028,6 +9155,40 @@ type PostAdminOrdersOrderNoShipmentsParams struct {
 	//   确需重试的场景请换一个新 key
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
+
+// GetAdminPaymentReturnsParams defines parameters for GetAdminPaymentReturns.
+type GetAdminPaymentReturnsParams struct {
+	Page     *Page                               `form:"page,omitempty" json:"page,omitempty"`
+	PageSize *PageSize                           `form:"page_size,omitempty" json:"page_size,omitempty"`
+	Status   *GetAdminPaymentReturnsParamsStatus `form:"status,omitempty" json:"status,omitempty"`
+
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// GetAdminPaymentReturnsParamsStatus defines parameters for GetAdminPaymentReturns.
+type GetAdminPaymentReturnsParamsStatus int
 
 // PostAdminProductImportsMultipartBody defines parameters for PostAdminProductImports.
 type PostAdminProductImportsMultipartBody struct {

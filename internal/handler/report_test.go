@@ -97,6 +97,8 @@ func newReportFixture(t *testing.T) *reportFixture {
 		for _, q := range []string{
 			`DELETE FROM refund_items WHERE merchant_id = $1`,
 			`DELETE FROM refunds WHERE merchant_id = $1`,
+			`DELETE FROM payment_returns WHERE merchant_id = $1`,
+			`DELETE FROM payment_intents WHERE merchant_id = $1`,
 			`DELETE FROM payments WHERE merchant_id = $1`,
 			`DELETE FROM order_items WHERE merchant_id = $1`,
 			`DELETE FROM orders WHERE merchant_id = $1`,

@@ -332,6 +332,12 @@ var routes = []route{
 		HandlerFile:    "admin_refund_list.go",
 	},
 	{
+		ContractPath:   "/admin/payment-returns",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "payment_return.go",
+	},
+	{
 		ContractPath:   "/admin/refunds/{refund_no}",
 		ContractMethod: "get",
 		HTTPMethod:     http.MethodGet,

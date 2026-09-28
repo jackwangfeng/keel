@@ -39,8 +39,9 @@ so "which one is running?" never depends on anyone's memory.
 
 ## [Unreleased]
 
-Core migrations `00140` (`search_logs.fallback`, and the column on the `agent_ro.search_logs` view) and `00141`
-(`agent_briefs.corrects_id`).
+Core migrations `00140` (`search_logs.fallback`, and the column on the `agent_ro.search_logs` view), `00141`
+(`agent_briefs.corrects_id`), `00142` (price upper bounds, `NOT VALID`) and `00150` (`payment_intents`,
+`payment_returns`).
 
 ### Added
 
@@ -68,8 +69,25 @@ Core migrations `00140` (`search_logs.fallback`, and the column on the `agent_ro
 - Proposal outcome reviews wait for the measurement window to close; a review that comes due early is deferred.
 - MCP tool output reports times in the shop's time zone (RFC 3339 with offset) instead of UTC.
 
+- **Over-collected payments are returned automatically.** An order accepts exactly one payment. Starting a payment
+  again on the same channel now reuses the same channel transaction (switching channels supersedes the old one), and
+  any payment the order does not accept — a duplicate, one that arrives after the order was cancelled or closed, or
+  one whose amount does not match — gets a payment return that refunds it to the original channel (immediately in
+  sandbox mode; real channels settle through `/webhooks/refunds/{channel}`). A sweep every minute backfills anything
+  missed and retries failed submissions. New `GET /admin/payment-returns`; `OrderDetail.payment_returns` for buyers.
+  Previously the money was kept with only an error log.
+
 ### Fixed
 
+- Unit prices had no upper bound; a huge price overflowed order totals (500) or produced an absurd order. Capped at
+  100 million yuan everywhere prices are written.
+- An unshipped order refunded line by line (a second request while the first was pending) never refunded the freight
+  and could still be shipped. That request is now refused in favour of a whole-order refund; shipping an order whose
+  every item is refunded or being refunded is refused.
+- After-sales refunds now go back to the payment that settled the order, not the earliest successful one.
+- Approving an AI proposal whose target had changed returned 500 and left it stuck "executing"; it is now recorded as
+  failed with the reason. `propose_coupon` validates exactly like the admin coupon form. The auto-execution daily
+  limit held under concurrency. `query_sql` results are capped at 1 MB (4 KB per value).
 - Search results never carried `promotion_tags`; they now carry the same tags as the product list.
 - The Flutter checkout page no longer shows the idempotency key ("技术信息") in release builds.
 

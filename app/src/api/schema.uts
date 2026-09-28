@@ -1646,6 +1646,30 @@ export type Refund = {
   updated_at? : string
 }
 
+/** 一笔订单不认的到账的原路退回（多收款退回，00150）。 */
+export type PaymentReturn = {
+  /** 退回单号（PR 开头） */
+  return_no : string
+  /** 所属订单（后台列表给） */
+  order_no? : string
+  /** 被退回的那笔到账的渠道流水号（后台列表给） */
+  payment_txn_id? : string
+  channel? : string
+  /** 金额，单位「分」。禁止使用浮点。 */
+  amount_cents : Money
+  /** 1 重复支付（订单已由另一笔入账）/ 2 订单已取消或关闭之后才到账 / 3 金额与应付不符 */
+  reason : number
+  /** 10 待提交 / 30 退回中（已交给渠道，等回调）/ 40 已退回 */
+  status : number
+  /** 提交给渠道的次数（后台列表给） */
+  attempts? : number
+  /** 最近一次提交失败的原因（后台列表给；成功后清空） */
+  last_error? : string
+  created_at : string
+  /** 退回成功的时间；没退完时缺席 */
+  returned_at? : string
+}
+
 export type OrderDetail = {
   order_no : string
   /** 履约门店。**必返**（DB 上是 `NOT NULL`）。 */
@@ -1694,6 +1718,8 @@ export type OrderDetail = {
   payments? : PaymentRecord[]
   /** 该订单下的全部退款单，按申请时间倒序。 */
   refunds? : Refund[]
+  /** 这一单被**原路退回的多收款**（2026-09-28 起）：订单只认一笔到账，其余的——重复支付 */
+  payment_returns? : PaymentReturn[]
   /** 自动确认收货的截止时间：只有 `30 已发货` 的订单才出现， */
   auto_confirm_at? : string
 }

@@ -154,4 +154,11 @@ void main() {
     expect((w.freightNote, w.needsPin), ('按最远一档计', true));
     expect(previewView(OrderPreview.fromJson(preview())).freightLabel, '运费');
   });
+
+  test('多收款退回：订单详情上每张一句（已退回 / 正在退回）', () {
+    const r1 = PaymentReturn(returnNo: 'PR1', amountCents: 6880, reason: 1, status: 40, createdAt: '2026-09-28T00:00:00Z');
+    const r2 = PaymentReturn(returnNo: 'PR2', amountCents: 100, reason: 2, status: 30, createdAt: '2026-09-28T00:00:00Z');
+    expect(paymentReturnLine(r1), '多付的 ¥68.80（重复支付）已原路退回');
+    expect(paymentReturnLine(r2), '多付的 ¥1.00（订单关闭后到账）正在原路退回');
+  });
 }

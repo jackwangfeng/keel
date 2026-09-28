@@ -610,6 +610,10 @@ var permMatrix = []permRoute{
 	{"GET", v1 + "/admin/refunds", everyone, func(t *testing.T, fx *permFixture, c permCase) permReq {
 		return permGet(v1 + "/admin/refunds")
 	}},
+	// 多收款退回（00150）：资金面，同券 —— 全店范围。
+	{"GET", v1 + "/admin/payment-returns", merchantWide, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permGet(v1 + "/admin/payment-returns")
+	}},
 	{"GET", v1 + "/admin/refunds/:refund_no", storeOperate, func(t *testing.T, fx *permFixture, c permCase) permReq {
 		return permGet(v1 + "/admin/refunds/" + permRefund(t, fx, fx.store(c), 10))
 	}},
@@ -979,6 +983,8 @@ func permCleanupOrders(t *testing.T, fx *permFixture) {
 			`DELETE FROM shipments WHERE merchant_id = $1`,
 			`DELETE FROM refund_items WHERE merchant_id = $1`,
 			`DELETE FROM refunds WHERE merchant_id = $1`,
+			`DELETE FROM payment_returns WHERE merchant_id = $1`,
+			`DELETE FROM payment_intents WHERE merchant_id = $1`,
 			`DELETE FROM payments WHERE merchant_id = $1`,
 			`DELETE FROM order_items WHERE merchant_id = $1`,
 			`DELETE FROM orders WHERE merchant_id = $1`,

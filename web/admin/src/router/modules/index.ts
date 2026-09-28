@@ -15,12 +15,13 @@ import orders from "./orders.ts";
 import overview from "./overview.ts";
 import promotions from "./promotions.ts";
 import refunds from "./refunds.ts";
+import paymentReturns from "./paymentReturns.ts";
 import regions from "./regions.ts";
 import staff from "./staff.ts";
 import stores from "./stores.ts";
 import merchants from "./merchants.ts";
 import shopSettings from "./shopSettings.ts";
 
-export const sections: AdminSection[] = [overview, catalog, categories, coupons, promotions, freight, localDelivery, orders, refunds, regions, stores, staff, agents, shopSettings, merchants].sort(
+export const sections: AdminSection[] = [overview, catalog, categories, coupons, promotions, freight, localDelivery, orders, refunds, paymentReturns, regions, stores, staff, agents, shopSettings, merchants].sort(
     (a, b) => a.order - b.order,
 );

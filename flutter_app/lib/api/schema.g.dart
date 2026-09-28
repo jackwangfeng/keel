@@ -3369,6 +3369,48 @@ class Refund {
       };
 }
 
+/// 一笔订单不认的到账的原路退回（多收款退回，00150）。
+class PaymentReturn {
+  final String returnNo;
+  final String? orderNo;
+  final String? paymentTxnId;
+  final String? channel;
+  final Money amountCents;
+  final int reason;
+  final int status;
+  final int? attempts;
+  final String? lastError;
+  final String createdAt;
+  final String? returnedAt;
+  const PaymentReturn({required this.returnNo, this.orderNo, this.paymentTxnId, this.channel, required this.amountCents, required this.reason, required this.status, this.attempts, this.lastError, required this.createdAt, this.returnedAt});
+  factory PaymentReturn.fromJson(Map<String, dynamic> j) => PaymentReturn(
+        returnNo: j['return_no'] as String,
+        orderNo: j['order_no'] as String?,
+        paymentTxnId: j['payment_txn_id'] as String?,
+        channel: j['channel'] as String?,
+        amountCents: (j['amount_cents'] as num).toInt(),
+        reason: (j['reason'] as num).toInt(),
+        status: (j['status'] as num).toInt(),
+        attempts: (j['attempts'] as num?)?.toInt(),
+        lastError: j['last_error'] as String?,
+        createdAt: j['created_at'] as String,
+        returnedAt: j['returned_at'] as String?,
+      );
+  Map<String, dynamic> toJson() => {
+        'return_no': returnNo,
+        if (orderNo != null) 'order_no': orderNo,
+        if (paymentTxnId != null) 'payment_txn_id': paymentTxnId,
+        if (channel != null) 'channel': channel,
+        'amount_cents': amountCents,
+        'reason': reason,
+        'status': status,
+        if (attempts != null) 'attempts': attempts,
+        if (lastError != null) 'last_error': lastError,
+        'created_at': createdAt,
+        if (returnedAt != null) 'returned_at': returnedAt,
+      };
+}
+
 class OrderDetail {
   final String orderNo;
   final int storeId;
@@ -3397,8 +3439,9 @@ class OrderDetail {
   final List<OrderItem>? items;
   final List<PaymentRecord>? payments;
   final List<Refund>? refunds;
+  final List<PaymentReturn>? paymentReturns;
   final String? autoConfirmAt;
-  const OrderDetail({required this.orderNo, required this.storeId, this.regionId, required this.status, required this.refundStatus, this.goodsAmountCents, this.freightCents, this.freightDiscountCents, this.discountCents, this.userCouponId, this.couponName, this.promotionDiscountCents, this.promotions, required this.payableCents, this.paidCents, this.refundedCents, this.expireAt, required this.createdAt, this.paidAt, this.shippedAt, this.finishedAt, this.receiver, this.store, this.freight, this.items, this.payments, this.refunds, this.autoConfirmAt});
+  const OrderDetail({required this.orderNo, required this.storeId, this.regionId, required this.status, required this.refundStatus, this.goodsAmountCents, this.freightCents, this.freightDiscountCents, this.discountCents, this.userCouponId, this.couponName, this.promotionDiscountCents, this.promotions, required this.payableCents, this.paidCents, this.refundedCents, this.expireAt, required this.createdAt, this.paidAt, this.shippedAt, this.finishedAt, this.receiver, this.store, this.freight, this.items, this.payments, this.refunds, this.paymentReturns, this.autoConfirmAt});
   factory OrderDetail.fromJson(Map<String, dynamic> j) => OrderDetail(
         orderNo: j['order_no'] as String,
         storeId: (j['store_id'] as num).toInt(),
@@ -3427,6 +3470,7 @@ class OrderDetail {
         items: (j['items'] as List?)?.map((e) => OrderItem.fromJson(e as Map<String, dynamic>)).toList(),
         payments: (j['payments'] as List?)?.map((e) => PaymentRecord.fromJson(e as Map<String, dynamic>)).toList(),
         refunds: (j['refunds'] as List?)?.map((e) => Refund.fromJson(e as Map<String, dynamic>)).toList(),
+        paymentReturns: (j['payment_returns'] as List?)?.map((e) => PaymentReturn.fromJson(e as Map<String, dynamic>)).toList(),
         autoConfirmAt: j['auto_confirm_at'] as String?,
       );
   Map<String, dynamic> toJson() => {
@@ -3457,6 +3501,7 @@ class OrderDetail {
         if (items != null) 'items': items!.map((e) => e.toJson()).toList(),
         if (payments != null) 'payments': payments!.map((e) => e.toJson()).toList(),
         if (refunds != null) 'refunds': refunds!.map((e) => e.toJson()).toList(),
+        if (paymentReturns != null) 'payment_returns': paymentReturns!.map((e) => e.toJson()).toList(),
         if (autoConfirmAt != null) 'auto_confirm_at': autoConfirmAt,
       };
 }

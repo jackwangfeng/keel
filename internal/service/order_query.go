@@ -59,6 +59,8 @@ type OrderDetail struct {
 	Payments []repository.Payment
 	// Refunds 是这一单的全部退款单，按申请时间倒序（契约 OrderDetail.refunds）。
 	Refunds []repository.Refund
+	// Returns 是这一单被原路退回的多收款（重复支付、订单关闭后才到账、金额不符；00150，契约 OrderDetail.payment_returns）。
+	Returns []repository.PaymentReturn
 	// AutoConfirmAt 是自动确认收货的截止时间（契约 OrderDetail.auto_confirm_at）：
 	// 只有 30 已发货的单才有，= 发货时间 + 店铺设置的天数。其余为 nil。
 	AutoConfirmAt *time.Time
@@ -189,6 +191,9 @@ func (s *OrderService) Detail(ctx context.Context, orderNo string) (OrderDetail,
 		}
 		for i := range out.Items {
 			out.Items[i].RefundingQty = inflight[out.Items[i].ID]
+		}
+		if out.Returns, err = tx.ListPaymentReturnsForOrder(ctx, order.ID); err != nil {
+			return err
 		}
 		if out.Refunds, err = tx.ListOrderRefunds(ctx, order.ID); err != nil {
 			return err

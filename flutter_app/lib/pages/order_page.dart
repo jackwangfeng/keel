@@ -184,6 +184,11 @@ class _OrderPageState extends State<OrderPage> {
                   Text(v.statusLine, key: const Key('order.statusLine'), style: KeelText.sub),
                 ]),
               ),
+              // 多收款退回（00150）：不需要买家做什么，告诉他钱去哪了。
+              if (v.returnLines.isNotEmpty)
+                _card(Column(key: const Key('order.returns'), crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  for (final line in v.returnLines) Text(line, style: KeelText.body),
+                ])),
               if (v.receiver.isNotEmpty)
                 _card(Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   const Text('收货信息', style: KeelText.overline),

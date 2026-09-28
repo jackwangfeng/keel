@@ -96,6 +96,8 @@ func dropOrder(t *testing.T, orderNo string) {
 	}
 	for _, stmt := range []string{
 		`DELETE FROM inventory_logs WHERE biz_id = $1`,
+		`DELETE FROM payment_returns WHERE order_id IN (SELECT id FROM orders WHERE order_no = $1)`,
+		`DELETE FROM payment_intents WHERE order_id IN (SELECT id FROM orders WHERE order_no = $1)`,
 		`DELETE FROM payments WHERE order_id IN (SELECT id FROM orders WHERE order_no = $1)`,
 		`DELETE FROM order_items WHERE order_id IN (SELECT id FROM orders WHERE order_no = $1)`,
 		`DELETE FROM orders WHERE order_no = $1`,

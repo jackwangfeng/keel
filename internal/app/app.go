@@ -239,9 +239,11 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	// 发起支付与支付回调共用同一个 PaymentService —— 沙箱造出来的报文与回调
 	// 认得的报文必须是同一个形状、同一把密钥、同一个签名算法。两个实例的话，
 	// 它们分叉时的症状是「沙箱支付 401」，看上去像密钥配错了。
-	payments := service.NewPaymentService(repo, payment, nil)
+	// 多收款退回（00150）：支付回调里订单不认的到账当场开单、当场提交；渠道退款回调按 PR 单号分派给它。
+	returns := service.NewPaymentReturnService(repo, payment, nil)
+	payments := service.NewPaymentService(repo, payment, nil).WithReturns(returns)
 	// 退款与支付共用同一份渠道配置（沙箱开关、回调密钥），见 service/refund.go 的文件头。
-	refunds := service.NewRefundService(repo, payment, nil).WithInventory(inv)
+	refunds := service.NewRefundService(repo, payment, nil).WithInventory(inv).WithReturns(returns)
 	rh := handler.NewRefundHandler(refunds)
 
 	v1 := r.Group("/api/v1", res.Middleware())
@@ -646,6 +648,8 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	v1.GET("/admin/orders", staffAuth, aoh.ListOrders)
 	v1.GET("/admin/orders/:order_no", staffAuth, aoh.OrderDetail)
 	v1.GET("/admin/refunds", staffAuth, aoh.ListRefunds)
+	// 多收款退回（00150）：订单不认的到账的原路退回单，全店范围的员工看。
+	v1.GET("/admin/payment-returns", staffAuth, handler.NewPaymentReturnHandler(returns).List)
 	v1.GET("/admin/refunds/:refund_no", staffAuth, aoh.RefundDetail)
 	// 后台待办提醒（铃铛，数据模型 §16）。范围与订单 / 售后列表同一个判据（orderListScope），
 	// 已读状态每个员工各一份。
@@ -946,6 +950,9 @@ func Run(ctx context.Context, listen func(addr string, h http.Handler) error) er
 	// 商品列表按有货排序用的冗余标记（00087，service/stock_flags.go）：全量刷新兜住下单扣减、关单回补。
 	stockFlags := service.NewStockFlagService(repository.New(pool), inv, stockFlagIntervalFromEnv(), nil)
 	go stockFlags.Run(bgCtx)
+	// 多收款退回的兜底扫描与重试（00150，service/payment_return.go）：每分钟补开订单不认的到账的退回单、
+	// 提交没提交成的。它停着的代价是多收的钱晚几分钟退回，不会丢。
+	go service.NewPaymentReturnService(repository.New(pool), cfg.Payment, nil).Run(bgCtx)
 	// AI 员工提案的过期扫描（00091，service/agent_proposal_expiry.go）。
 	go service.RunProposalExpiry(bgCtx, repository.New(pool), nil)
 	// 提案执行后的复盘（00122，service/agent_proposal_outcome.go）：到点量一次效果，给成绩单。
