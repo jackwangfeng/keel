@@ -212,10 +212,14 @@ type CouponPayload struct {
 	DiscountCents    int64  `json:"discount_cents"`
 	DiscountRate     int16  `json:"discount_rate"`
 	MaxDiscountCents int64  `json:"max_discount_cents"`
-	ValidDays        int32  `json:"valid_days"`
-	TotalCount       int32  `json:"total_count"`
-	PerUserLimit     int32  `json:"per_user_limit"`
-	Claimable        bool   `json:"claimable"`
+	ValidDays        int32  `json:"valid_days,omitempty"`
+	// ValidStartAt / ValidEndAt 是固定可用时段（与 ValidDays 二选一；2026-09-28 起，之前只能「领后 N 天」，
+	// 店长要「国庆 10/1–10/7 可用」时 AI 店长做不到）。
+	ValidStartAt *time.Time `json:"valid_start_at,omitempty"`
+	ValidEndAt   *time.Time `json:"valid_end_at,omitempty"`
+	TotalCount   int32      `json:"total_count"`
+	PerUserLimit int32      `json:"per_user_limit"`
+	Claimable    bool       `json:"claimable"`
 }
 
 // ProposeCoupon 是 MCP 工具 propose_coupon。
@@ -247,8 +251,9 @@ func (s *AgentProposalService) ProposeCoupon(ctx context.Context, in CouponPaylo
 	default:
 		return repository.AgentProposal{}, badProposal("coupon_type 取 1 满减 / 2 折扣 / 3 立减")
 	}
-	if in.ValidDays < 1 || in.ValidDays > couponMaxValidDays {
-		return repository.AgentProposal{}, badProposal("valid_days 取 1–%d", couponMaxValidDays)
+	validText, err := checkCouponValidity(in, time.Now())
+	if err != nil {
+		return repository.AgentProposal{}, err
 	}
 	if in.TotalCount < 1 || in.TotalCount > couponMaxTotal {
 		return repository.AgentProposal{}, badProposal("total_count 取 1–%d", couponMaxTotal)
@@ -272,7 +277,7 @@ func (s *AgentProposalService) ProposeCoupon(ctx context.Context, in CouponPaylo
 	default:
 		what = "立减 " + yuan(in.DiscountCents)
 	}
-	title := fmt.Sprintf("发券「%s」：%s，%d 张，领后 %d 天有效", in.Name, what, in.TotalCount, in.ValidDays)
+	title := fmt.Sprintf("发券「%s」：%s，%d 张，%s", in.Name, what, in.TotalCount, validText)
 	var out repository.AgentProposal
 	err = s.repo.WithTenant(ctx, func(tx repository.Tx) error {
 		var e error
@@ -282,6 +287,45 @@ func (s *AgentProposalService) ProposeCoupon(ctx context.Context, in CouponPaylo
 		return e
 	})
 	return s.afterPropose(ctx, out, mapProposalErr(err))
+}
+
+// checkCouponValidity 校验发券提案的有效期（valid_days 与固定时段二选一），返回标题里那半句。
+// 固定时段按提案里给的时区显示日期（AI 员工拿到的时间都是店铺时区，它照抄回来）。
+func checkCouponValidity(in CouponPayload, now time.Time) (string, error) {
+	fixed := in.ValidStartAt != nil || in.ValidEndAt != nil
+	switch {
+	case fixed && in.ValidDays != 0:
+		return "", badProposal("有效期二选一：valid_days，或 valid_start_at + valid_end_at")
+	case fixed:
+		if in.ValidStartAt == nil || in.ValidEndAt == nil {
+			return "", badProposal("固定时段要同时给 valid_start_at 与 valid_end_at")
+		}
+		start, end := *in.ValidStartAt, *in.ValidEndAt
+		if !end.After(start) {
+			return "", badProposal("valid_end_at 必须晚于 valid_start_at")
+		}
+		if !end.After(now) {
+			return "", badProposal("valid_end_at 已经过去了")
+		}
+		if end.Sub(start) > couponMaxValidDays*24*time.Hour || end.Sub(now) > couponMaxValidDays*24*time.Hour {
+			return "", badProposal("固定时段至多 %d 天，且要在 %d 天内结束", couponMaxValidDays, couponMaxValidDays)
+		}
+		last := end.Add(-time.Nanosecond) // 结束不含：10-08T00:00 结束即「用到 10-07」
+		return fmt.Sprintf("%s 至 %s 可用", start.Format("01-02 15:04"), last.Format("01-02 15:04")), nil
+	default:
+		if in.ValidDays < 1 || in.ValidDays > couponMaxValidDays {
+			return "", badProposal("valid_days 取 1–%d（或改用 valid_start_at + valid_end_at 固定时段）", couponMaxValidDays)
+		}
+		return fmt.Sprintf("领后 %d 天有效", in.ValidDays), nil
+	}
+}
+
+// couponValidMode：1 绝对时间（固定时段）/ 2 领取后 N 天（券模板的 valid_mode）。
+func couponValidMode(pl CouponPayload) int16 {
+	if pl.ValidStartAt != nil {
+		return 1
+	}
+	return 2
 }
 
 func (s *AgentProposalService) execCoupon(ctx context.Context, p repository.AgentProposal) (ProposalResult, error) {
@@ -294,7 +338,8 @@ func (s *AgentProposalService) execCoupon(ctx context.Context, p repository.Agen
 	}
 	v, _, err := s.coupons.Create(ctx, CouponTemplateInput{Name: pl.Name, CouponType: pl.CouponType,
 		ThresholdCents: pl.ThresholdCents, DiscountCents: pl.DiscountCents, DiscountRate: pl.DiscountRate,
-		MaxDiscountCents: pl.MaxDiscountCents, ValidMode: 2, ValidDays: pl.ValidDays, TotalCount: pl.TotalCount,
+		MaxDiscountCents: pl.MaxDiscountCents, ValidMode: couponValidMode(pl), ValidStartAt: pl.ValidStartAt,
+		ValidEndAt: pl.ValidEndAt, ValidDays: pl.ValidDays, TotalCount: pl.TotalCount,
 		PerUserLimit: pl.PerUserLimit, Claimable: pl.Claimable}, proposalIdemKey(p.ID))
 	if err != nil {
 		return ProposalResult{}, err

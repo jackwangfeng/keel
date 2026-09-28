@@ -131,8 +131,15 @@ export interface CouponView {
 
 /**
  * `coupon` 执行参数：{name, coupon_type, threshold_cents, discount_cents, discount_rate,
- * max_discount_cents, valid_days, total_count, per_user_limit, claimable}（M10）。
+ * max_discount_cents, valid_days | valid_start_at + valid_end_at, total_count, per_user_limit, claimable}（M10）。
+ * 有效期二选一：领后 N 天，或固定时段（2026-09-28 起；结束不含）。
  */
+// 规则文件不引 ui/format.ts（那边连着 API 客户端，node --test 下解析不了）：同样的写法就地一份。
+function localTime(value: string): string {
+    const t = new Date(value);
+    return Number.isNaN(t.getTime()) ? value : t.toLocaleString("zh-CN", { hour12: false });
+}
+
 export function couponPayload(payload: Rec): CouponView {
     const type = num(payload["coupon_type"]);
     const thresholdCents = num(payload["threshold_cents"]);
@@ -140,6 +147,8 @@ export function couponPayload(payload: Rec): CouponView {
     const discountRate = num(payload["discount_rate"]);
     const maxDiscountCents = num(payload["max_discount_cents"]);
     const validDays = num(payload["valid_days"]);
+    const validStart = str(payload["valid_start_at"]);
+    const validEnd = str(payload["valid_end_at"]);
     const totalCount = num(payload["total_count"]);
     const perUserLimit = num(payload["per_user_limit"]);
     const claimable = bool(payload["claimable"]);
@@ -157,7 +166,12 @@ export function couponPayload(payload: Rec): CouponView {
         typeText: type === undefined ? DASH : (COUPON_TYPE_LABEL[type] ?? `类型 ${type}`),
         thresholdText: thresholdCents === undefined || thresholdCents <= 0 ? "无门槛" : `满 ${yuanText(thresholdCents)}`,
         faceText,
-        validDaysText: validDays === undefined ? DASH : `领后 ${validDays} 天内有效`,
+        validDaysText:
+            validStart !== undefined && validEnd !== undefined
+                ? `${localTime(validStart)} 至 ${localTime(validEnd)} 可用`
+                : validDays === undefined
+                  ? DASH
+                  : `领后 ${validDays} 天内有效`,
         totalText: totalCount === undefined ? DASH : `${totalCount} 张`,
         perUserLimitText: perUserLimit === undefined ? DASH : `每人限 ${perUserLimit} 张`,
         claimableText: claimable === undefined ? DASH : claimable ? "进领券中心" : "不进领券中心",

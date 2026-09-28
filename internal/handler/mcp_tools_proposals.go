@@ -36,16 +36,18 @@ type mcpFlashPriceIn struct {
 }
 
 type mcpCouponIn struct {
-	Name             string `json:"name" jsonschema:"券名，1–30 字，买家看得到"`
-	CouponType       int16  `json:"coupon_type" jsonschema:"1 满减 / 2 折扣 / 3 立减"`
-	ThresholdCents   int64  `json:"threshold_cents,omitempty" jsonschema:"满多少可用（分）；立减券为 0"`
-	DiscountCents    int64  `json:"discount_cents,omitempty" jsonschema:"满减 / 立减的面额（分），≤10000"`
-	DiscountRate     int16  `json:"discount_rate,omitempty" jsonschema:"折扣券的千分比，500–999"`
-	MaxDiscountCents int64  `json:"max_discount_cents,omitempty" jsonschema:"折扣券的封顶（分），≤10000"`
-	ValidDays        int32  `json:"valid_days" jsonschema:"领取后几天内有效，1–90"`
-	TotalCount       int32  `json:"total_count" jsonschema:"发行量，1–10000"`
-	PerUserLimit     int32  `json:"per_user_limit" jsonschema:"每人限领，1–5"`
-	Claimable        bool   `json:"claimable,omitempty" jsonschema:"是否放进领券中心让买家自己领"`
+	Name             string     `json:"name" jsonschema:"券名，1–30 字，买家看得到"`
+	CouponType       int16      `json:"coupon_type" jsonschema:"1 满减 / 2 折扣 / 3 立减"`
+	ThresholdCents   int64      `json:"threshold_cents,omitempty" jsonschema:"满多少可用（分）；立减券为 0"`
+	DiscountCents    int64      `json:"discount_cents,omitempty" jsonschema:"满减 / 立减的面额（分），≤10000"`
+	DiscountRate     int16      `json:"discount_rate,omitempty" jsonschema:"折扣券的千分比，500–999"`
+	MaxDiscountCents int64      `json:"max_discount_cents,omitempty" jsonschema:"折扣券的封顶（分），≤10000"`
+	ValidDays        int32      `json:"valid_days,omitempty" jsonschema:"领取后几天内有效，1–90。与 valid_start_at / valid_end_at 二选一"`
+	ValidStartAt     *time.Time `json:"valid_start_at,omitempty" jsonschema:"固定可用时段的开始（RFC 3339，带时区，如 2026-10-01T00:00:00+08:00）；与 valid_end_at 成对，与 valid_days 二选一"`
+	ValidEndAt       *time.Time `json:"valid_end_at,omitempty" jsonschema:"固定可用时段的结束（不含）；时段至多 90 天，结束在 90 天内"`
+	TotalCount       int32      `json:"total_count" jsonschema:"发行量，1–10000"`
+	PerUserLimit     int32      `json:"per_user_limit" jsonschema:"每人限领，1–5"`
+	Claimable        bool       `json:"claimable,omitempty" jsonschema:"是否放进领券中心让买家自己领"`
 	mcpProposalMetaIn
 }
 
@@ -90,13 +92,15 @@ func registerMCPProposalTools(srv *mcp.Server, d *MCPDeps) {
 			return apiAgentProposal(p), nil
 		})
 	mcpTool(srv, d, "propose_coupon",
-		"提一条发券提案：建一张券（满减 / 折扣 / 立减），可放进领券中心。不会立即执行：人批准后 Keel 建券。"+
+		"提一条发券提案：建一张券（满减 / 折扣 / 立减），可放进领券中心。有效期二选一：领取后 N 天（valid_days），"+
+			"或固定时段（valid_start_at + valid_end_at，比如只在国庆 7 天能用）。不会立即执行：人批准后 Keel 建券。"+
 			"需要全店范围的 AI 员工。面额至多 100 元、发行量至多 10000。",
 		writeProposalError, func(ctx context.Context, in mcpCouponIn) (api.AgentProposal, error) {
 			p, err := d.Proposals.ProposeCoupon(ctx, service.CouponPayload{Name: in.Name, CouponType: in.CouponType,
 				ThresholdCents: in.ThresholdCents, DiscountCents: in.DiscountCents, DiscountRate: in.DiscountRate,
-				MaxDiscountCents: in.MaxDiscountCents, ValidDays: in.ValidDays, TotalCount: in.TotalCount,
-				PerUserLimit: in.PerUserLimit, Claimable: in.Claimable}, in.meta())
+				MaxDiscountCents: in.MaxDiscountCents, ValidDays: in.ValidDays, ValidStartAt: in.ValidStartAt,
+				ValidEndAt: in.ValidEndAt, TotalCount: in.TotalCount, PerUserLimit: in.PerUserLimit,
+				Claimable: in.Claimable}, in.meta())
 			if err != nil {
 				return api.AgentProposal{}, err
 			}

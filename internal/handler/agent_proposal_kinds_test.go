@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 //   - 发券：券模板建好；
 //   - 改文案：商品标题改了（执行结果带前后标题）；
 //   - 售后审核：待审核的售后单被同意。
+//
 // 另外：门店管理员身份的 AI 员工提不了全店类提案（营销、商品）；打五折以下的限时折扣在提案层就被拒。
 func TestAgentProposalKindsExecuteOnApproval(t *testing.T) {
 	cs := newCouponShop(t)
@@ -65,6 +67,32 @@ func TestAgentProposalKindsExecuteOnApproval(t *testing.T) {
 	if err := admin(t).QueryRow(context.Background(), `SELECT name FROM coupon_templates WHERE id = $1`, tid).Scan(&name); err != nil ||
 		name != "回头客 5 元券" {
 		t.Fatalf("批准后券模板应已建好：%q err=%v", name, err)
+	}
+
+	// 发券（固定时段）：只在指定的几天里能用 —— 2026-09-28 演示站店长要「国庆 10/1–10/7 可用」时做不到。
+	vs := time.Now().Add(48 * time.Hour).Truncate(time.Hour)
+	ve := vs.Add(7 * 24 * time.Hour)
+	fx := propose("propose_coupon", map[string]any{"name": "节日满减", "coupon_type": 1, "threshold_cents": 19900,
+		"discount_cents": 2000, "valid_start_at": vs.Format(time.RFC3339), "valid_end_at": ve.Format(time.RFC3339),
+		"total_count": 200, "per_user_limit": 1, "evidence": ev})
+	fid := fx["id"].(float64)
+	out = approve(fid)
+	ftid := int64((*out.Result)["detail"].(map[string]any)["coupon_template_id"].(float64))
+	var mode int16
+	var gs, ge time.Time
+	if err := admin(t).QueryRow(context.Background(), `SELECT valid_mode, valid_start_at, valid_end_at FROM coupon_templates WHERE id = $1`,
+		ftid).Scan(&mode, &gs, &ge); err != nil || mode != 1 || !gs.Equal(vs) || !ge.Equal(ve) {
+		t.Fatalf("固定时段的券：valid_mode=%d %v–%v（期望 1 %v–%v） err=%v", mode, gs, ge, vs, ve, err)
+	}
+	var dueOK bool
+	if err := admin(t).QueryRow(context.Background(), `SELECT outcome_due_at = $2::timestamptz + interval '1 day' FROM agent_proposals WHERE id = $1`,
+		int64(fid), ve).Scan(&dueOK); err != nil || !dueOK {
+		t.Fatalf("固定时段的券应在结束后一天复盘：%v %v", dueOK, err)
+	}
+	if res, _ := mcpCall(t, sess, "propose_coupon", map[string]any{"name": "两个都给", "coupon_type": 3, "discount_cents": 300,
+		"valid_days": 7, "valid_start_at": vs.Format(time.RFC3339), "valid_end_at": ve.Format(time.RFC3339),
+		"total_count": 10, "per_user_limit": 1, "evidence": ev}); !res.IsError || !strings.Contains(mcpText(res), "二选一") {
+		t.Fatalf("valid_days 与固定时段同时给应被拒：%q", mcpText(res))
 	}
 
 	// 改文案

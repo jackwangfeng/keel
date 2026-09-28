@@ -68,6 +68,13 @@ func outcomePlan(kind string, payload []byte, now time.Time) (*time.Time, []byte
 			due := pl.EndsAt.Add(outcomeAfterPromoEnd)
 			return &due, nil
 		}
+	case ProposalKindCoupon:
+		// 固定时段的券：可用时段结束后一天复盘（使用率要等券都过期才定型）。
+		var pl CouponPayload
+		if json.Unmarshal(payload, &pl) == nil && pl.ValidEndAt != nil && pl.ValidEndAt.After(now) {
+			due := pl.ValidEndAt.Add(24 * time.Hour)
+			return &due, nil
+		}
 	}
 	due := now.Add(outcomeWindow)
 	return &due, nil
@@ -98,7 +105,13 @@ func verdictRatio(after, before int64, up, down float64) string {
 // （复盘在结束后 3 天，窗口本身在结束时就关了）。量不出效果的种类返回零值（不等）。
 func outcomeWindowClose(d repository.DueProposalOutcome) time.Time {
 	switch d.Kind {
-	case ProposalKindInventoryAdjust, ProposalKindProductCopy, ProposalKindCoupon:
+	case ProposalKindInventoryAdjust, ProposalKindProductCopy:
+		return d.ExecutedAt.Add(outcomeWindow)
+	case ProposalKindCoupon:
+		var pl CouponPayload
+		if json.Unmarshal(d.Payload, &pl) == nil && pl.ValidEndAt != nil {
+			return max64t(*pl.ValidEndAt, d.ExecutedAt)
+		}
 		return d.ExecutedAt.Add(outcomeWindow)
 	case ProposalKindFlashPrice:
 		var pl FlashPricePayload
@@ -193,7 +206,7 @@ func computeOutcome(ctx context.Context, tx repository.Tx, inv inventory.Service
 		case rate >= 0.2:
 			o.Verdict, o.Explanation = verdictPositive, "领取的券里至少两成被用掉了"
 		case used == 0:
-			o.Verdict, o.Explanation = verdictNegative, "7 天里一张都没被用"
+			o.Verdict, o.Explanation = verdictNegative, "复盘窗口里一张都没被用"
 		default:
 			o.Verdict, o.Explanation = verdictNeutral, "有人用，但使用率不到两成"
 		}

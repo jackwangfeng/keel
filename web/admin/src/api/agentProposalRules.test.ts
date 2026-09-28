@@ -82,6 +82,17 @@ test("发券 payload：满减 / 折扣（带封顶）/ 立减", () => {
         per_user_limit: 1,
         claimable: false,
     });
+    assert.equal(full.validDaysText, "领后 7 天内有效");
+    const fixed = couponPayload({
+        name: "节日券",
+        coupon_type: 3,
+        discount_cents: 300,
+        valid_start_at: "2026-10-01T00:00:00+08:00",
+        valid_end_at: "2026-10-08T00:00:00+08:00",
+        total_count: 10,
+        per_user_limit: 1,
+    });
+    assert.ok(fixed.validDaysText.includes(" 至 ") && fixed.validDaysText.endsWith("可用"), fixed.validDaysText);
     assert.equal(rate.thresholdText, "无门槛");
     assert.equal(rate.faceText, "8.5 折，封顶 ¥50");
     assert.equal(rate.claimableText, "不进领券中心");

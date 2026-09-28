@@ -1875,7 +1875,7 @@
     }
   },
   {
-    "description": "提一条发券提案：建一张券（满减 / 折扣 / 立减），可放进领券中心。不会立即执行：人批准后 Keel 建券。需要全店范围的 AI 员工。面额至多 100 元、发行量至多 10000。",
+    "description": "提一条发券提案：建一张券（满减 / 折扣 / 立减），可放进领券中心。有效期二选一：领取后 N 天（valid_days），或固定时段（valid_start_at + valid_end_at，比如只在国庆 7 天能用）。不会立即执行：人批准后 Keel 建券。需要全店范围的 AI 员工。面额至多 100 元、发行量至多 10000。",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
@@ -1932,16 +1932,29 @@
           "type": "integer"
         },
         "valid_days": {
-          "description": "领取后几天内有效，1–90",
+          "description": "领取后几天内有效，1–90。与 valid_start_at / valid_end_at 二选一",
           "maximum": 2147483647,
           "minimum": -2147483648,
           "type": "integer"
+        },
+        "valid_end_at": {
+          "description": "固定可用时段的结束（不含）；时段至多 90 天，结束在 90 天内",
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "valid_start_at": {
+          "description": "固定可用时段的开始（RFC 3339，带时区，如 2026-10-01T00:00:00+08:00）；与 valid_end_at 成对，与 valid_days 二选一",
+          "type": [
+            "null",
+            "string"
+          ]
         }
       },
       "required": [
         "name",
         "coupon_type",
-        "valid_days",
         "total_count",
         "per_user_limit",
         "evidence"
