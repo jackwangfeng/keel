@@ -41,6 +41,14 @@ so "which one is running?" never depends on anyone's memory.
 
 ### Added
 
+- **Flutter storefront (`flutter_app/`) becomes the main buyer client.** One codebase for Android, iOS, Web and
+  the WeChat Mini Program (via mp-flutter), generated from the same OpenAPI contract (`make flutter-generate` →
+  `lib/api/schema.g.dart`, committed and checked; pages read view models, a check enforces it), with unit tests
+  and a headless Web e2e suite. The demo site's `/` now serves its Web build (CanvasKit and fallback fonts are
+  self-hosted, so it loads without Google's CDN). The uni-app x client (`app/`) is frozen: bug fixes only.
+- **Shipping addresses carry coordinates (00100).** `Address` / `AddressInput` gain optional `lat` / `lng`
+  (WGS-84, both or neither — one alone is 422; `PUT` without them clears them). Filled by place search or map
+  picking; the fence check at checkout and same-city delivery distance use them.
 - **Admin 「AI 员工」 section (M9, task 6).** Proposals (filter by status, evidence / payload / result shown as
   plain text, approve with confirmation and outcome-aware feedback, reject with a required reason), briefs, and
   AI staff with access keys (create, edit role and scope, disable, issue a key shown once with a ready-to-paste
