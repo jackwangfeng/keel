@@ -93,14 +93,14 @@ test("发货请求体：两个字段都要填，去掉首尾空白", () => {
     assert.ok("error" in buildShipment("sf", "x".repeat(65)));
 });
 
-test("日期范围 → 半开区间：结束日的次日本地零点，不是 23:59:59", () => {
-    const r = dayRange(["2026-01-15", "2026-01-15"]);
-    assert.equal(r.created_from, new Date(2026, 0, 15).toISOString());
-    assert.equal(r.created_to, new Date(2026, 0, 16).toISOString());
-    // 跨月
-    assert.equal(dayRange(["2026-01-31", "2026-01-31"]).created_to, new Date(2026, 1, 1).toISOString());
+test("日期范围 → 原样传日期，由服务端按店铺时区切天", () => {
+    assert.deepEqual(dayRange(["2026-01-15", "2026-01-31"]), {
+        created_date_from: "2026-01-15",
+        created_date_to: "2026-01-31",
+    });
     assert.deepEqual(dayRange(null), {});
     assert.deepEqual(dayRange(["2026-1-5", "2026-01-06"]), {});
+    assert.deepEqual(dayRange(["2026-02-30", "2026-03-01"]), {});
 });
 
 test("筛选 → query：没填的字段不出现，单号与手机号去掉空白", () => {

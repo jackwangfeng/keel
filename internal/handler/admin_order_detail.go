@@ -276,6 +276,33 @@ func adminListTime(raw, name string) (*time.Time, error) {
 	return &t, nil
 }
 
+// adminListDay 解析列表上的一个可选日期参数（YYYY-MM-DD，契约 created_date_from / created_date_to）。
+// 与 adminListTime 一样，解析失败是 422，不当成没传。
+func adminListDay(raw, name string) (*time.Time, error) {
+	if raw == "" {
+		return nil, nil
+	}
+	t, err := time.Parse(time.DateOnly, raw)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s 不是合法的日期（YYYY-MM-DD）：%q", service.ErrAdminListBadRequest, name, raw)
+	}
+	return &t, nil
+}
+
+// createdRange 合并列表的两种时间筛选：按时刻（created_from / created_to）或按店铺时区的
+// 自然日（created_date_from / created_date_to）。两种不能同时传 —— 同一端给了两个界，
+// 取哪个都是替调用方做决定。
+func (h *AdminOrderHandler) createdRange(c *gin.Context, from, to, dayFrom, dayTo *time.Time) (*time.Time, *time.Time, error) {
+	if dayFrom == nil && dayTo == nil {
+		return from, to, nil
+	}
+	if from != nil || to != nil {
+		return nil, nil, fmt.Errorf("%w: created_date_from / created_date_to 与 created_from / created_to 不能同时传",
+			service.ErrAdminListBadRequest)
+	}
+	return h.svc.ShopDayRange(c.Request.Context(), dayFrom, dayTo)
+}
+
 // adminListInt64 解析一个可选的正整数 id 参数。读不动当没传，与 GET /admin/stores 的
 // region_id 一致（筛选 id 写错时拿到的是更宽的列表，不是一个错误的窄列表）。
 func adminListInt64(raw string) *int64 {

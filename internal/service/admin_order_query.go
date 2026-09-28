@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/keel/keel/internal/repository"
 )
@@ -256,6 +257,31 @@ func viewRefunds(rows []repository.AdminRefund) ([]AdminRefundView, error) {
 //
 // 不当成「没传」：一个写反了的时间范围回一页不带筛选的全量结果，
 // 会让人以为那段时间就这么多单（契约的 422 那一条）。
+// ShopDayRange 把后台列表「按天选」的一对日期（契约 created_date_from / created_date_to，两端都含）
+// 按**店铺时区**换成半开区间 [起始日零点, 结束日次日零点)，与经营报表同一个切天口径
+// （reportLocation：时区名不合法时回落 Asia/Shanghai）。
+//
+// 日期只取年月日（handler 按 YYYY-MM-DD 解析，时刻是 UTC 零点，这里不看它）。
+// 两个都没传时不读店铺设置，返回两个 nil。
+func (s *AdminOrderService) ShopDayRange(ctx context.Context, fromDay, toDay *time.Time) (*time.Time, *time.Time, error) {
+	if fromDay == nil && toDay == nil {
+		return nil, nil, nil
+	}
+	name, err := s.repo.ShopTimezone(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	_, loc := reportLocation(name)
+	at := func(d *time.Time, plusDays int) *time.Time {
+		if d == nil {
+			return nil
+		}
+		t := time.Date(d.Year(), d.Month(), d.Day()+plusDays, 0, 0, 0, 0, loc)
+		return &t
+	}
+	return at(fromDay, 0), at(toDay, 1), nil
+}
+
 func checkTimeRange(inverted bool) error {
 	if inverted {
 		return fmt.Errorf("%w: created_from 必须早于 created_to（区间是半开的 [from, to)）", ErrAdminListBadRequest)

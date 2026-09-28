@@ -219,6 +219,8 @@ func TestAdminOrderListFilters(t *testing.T) {
 	shipped := aoOrder(t, fx, fx.N1, 30, "13911110002", "", time.Time{})
 	old := aoOrder(t, fx, fx.N1, 20, "13911110003", "", day)
 	edge := aoOrder(t, fx, fx.N1, 20, "13911110004", "", day.Add(24*time.Hour-8*time.Hour)) // 次日零点
+	// UTC 还是 14 日，北京时间已是 15 日 01:00：按店铺时区切天时属于 15 日。
+	early := aoOrder(t, fx, fx.N1, 20, "13911110005", "", time.Date(2026, 1, 14, 17, 0, 0, 0, time.UTC))
 	tok := fx.sh.Token
 
 	if got, _ := aoOrders(t, fx, tok, "&status=30"); !sameSet(got, shipped) {
@@ -232,6 +234,19 @@ func TestAdminOrderListFilters(t *testing.T) {
 	if got, _ := aoOrders(t, fx, tok, q); !sameSet(got, old) {
 		t.Errorf("按 1 月 15 日查拿到 %v，期望只有 %s（%s 落在次日零点，区间不含上界）", keysOf(got), old, edge)
 	}
+
+	// 按店铺时区的自然日（created_date_*）：没设过时区即 Asia/Shanghai，15 日 = [14 日 16:00Z, 15 日 16:00Z)。
+	// edge（16 日 00:00Z = 北京 16 日 08:00）不在；early（北京 15 日 01:00）在。
+	if got, _ := aoOrders(t, fx, tok, "&created_date_from=2026-01-15&created_date_to=2026-01-15"); !sameSet(got, old, early) {
+		t.Errorf("按店铺时区的 1 月 15 日查拿到 %v，期望 %s、%s", keysOf(got), old, early)
+	}
+	// 店铺时区改成 UTC：同一个 15 日只剩 old。
+	adminExec(t, `INSERT INTO shop_preferences (merchant_id, timezone) VALUES ($1, 'UTC')
+		ON CONFLICT (merchant_id) DO UPDATE SET timezone = EXCLUDED.timezone`, fx.sh.MerchantID)
+	if got, _ := aoOrders(t, fx, tok, "&created_date_from=2026-01-15&created_date_to=2026-01-15"); !sameSet(got, old) {
+		t.Errorf("店铺时区 UTC 时按 1 月 15 日查拿到 %v，期望只有 %s", keysOf(got), old)
+	}
+	adminExec(t, `DELETE FROM shop_preferences WHERE merchant_id = $1`, fx.sh.MerchantID)
 
 	if got, _ := aoOrders(t, fx, tok, "&order_no="+paid); !sameSet(got, paid) {
 		t.Errorf("order_no=%s 拿到 %v", paid, keysOf(got))
@@ -253,6 +268,10 @@ func TestAdminOrderListFilters(t *testing.T) {
 	for _, bad := range []string{
 		"&created_from=2026-01-15",
 		"&created_from=" + url.QueryEscape("2026-01-16T00:00:00Z") + "&created_to=" + url.QueryEscape("2026-01-15T00:00:00Z"),
+		"&created_date_from=2026-1-5",
+		"&created_date_from=2026-01-16&created_date_to=2026-01-15",
+		// 两种时间筛选不能混用。
+		"&created_date_from=2026-01-15&created_to=" + url.QueryEscape("2026-01-16T00:00:00Z"),
 	} {
 		for _, path := range []string{"/api/v1/admin/orders?", "/api/v1/admin/refunds?"} {
 			typ := problemType(t, getAs(t, fx.sh.Host, path+bad[1:], tok), http.StatusUnprocessableEntity, path+bad)

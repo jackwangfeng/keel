@@ -165,11 +165,17 @@ func findBuyerOrder(ctx context.Context, tx repository.Tx, orderNo string, userI
 
 // AdminOrderService 实现后台的订单与售后写操作（发货、退款审核、确认收到退货）。
 type AdminOrderService struct {
-	repo tenantRunner
+	repo adminOrderRepo
+}
+
+// adminOrderRepo 是后台订单服务要的仓库：租户事务，外加店铺时区（列表「按天选」按它切天）。
+type adminOrderRepo interface {
+	tenantRunner
+	ShopTimezone(ctx context.Context) (string, error)
 }
 
 // NewAdminOrderService 建后台订单服务。
-func NewAdminOrderService(r tenantRunner) *AdminOrderService {
+func NewAdminOrderService(r adminOrderRepo) *AdminOrderService {
 	return &AdminOrderService{repo: r}
 }
 

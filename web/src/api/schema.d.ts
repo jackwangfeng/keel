@@ -13529,6 +13529,14 @@ export interface paths {
                     created_from?: string;
                     /** @description 下单时间上界（**不含**）。RFC3339。半开区间，按天查时传次日零点。 */
                     created_to?: string;
+                    /**
+                     * @description 按**店铺时区**（`GET /admin/shop-settings` 的 `timezone`，与经营报表同一个口径）的自然日筛下单时间：
+                     *     起始日（含），`YYYY-MM-DD`。服务端换成该日店铺时区零点。后台「按天选」用这一对，
+                     *     不必知道店铺时区（门店管理员读不到店铺设置）。与 `created_from` / `created_to` 不能同时传（422）。
+                     */
+                    created_date_from?: string;
+                    /** @description 结束日（**含**），`YYYY-MM-DD`。服务端换成**次日**店铺时区零点作为不含的上界。 */
+                    created_date_to?: string;
                     /** @description 订单号，精确匹配。 */
                     order_no?: string;
                     /**
@@ -13852,6 +13860,14 @@ export interface paths {
                     created_from?: string;
                     /** @description 申请时间上界（**不含**）。RFC3339。 */
                     created_to?: string;
+                    /**
+                     * @description 按**店铺时区**（`GET /admin/shop-settings` 的 `timezone`，与经营报表同一个口径）的自然日筛申请时间：
+                     *     起始日（含），`YYYY-MM-DD`。服务端换成该日店铺时区零点。后台「按天选」用这一对，
+                     *     不必知道店铺时区（门店管理员读不到店铺设置）。与 `created_from` / `created_to` 不能同时传（422）。
+                     */
+                    created_date_from?: string;
+                    /** @description 结束日（**含**），`YYYY-MM-DD`。服务端换成**次日**店铺时区零点作为不含的上界。 */
+                    created_date_to?: string;
                 };
                 header?: {
                     /**

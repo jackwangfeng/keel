@@ -211,24 +211,25 @@ type OrderQuery = NonNullable<paths["/admin/orders"]["get"]["parameters"]["query
 type RefundQuery = NonNullable<paths["/admin/refunds"]["get"]["parameters"]["query"]>;
 
 /**
- * 「YYYY-MM-DD 到 YYYY-MM-DD」（按**本地**日历，两端都含）→ 契约的半开区间
- * [created_from, created_to)：起始日本地零点、结束日**次日**本地零点，都转成 RFC3339（UTC）。
+ * 「YYYY-MM-DD 到 YYYY-MM-DD」（两端都含）→ 契约的 created_date_from / created_date_to，原样传日期。
  *
- * 次日零点而不是 23:59:59：契约的上界不含，23:59:59.500 下的单用后者会漏掉。
+ * 切天由服务端按**店铺时区**做（与经营报表同一个口径）。之前这里按浏览器本地时区换成
+ * RFC3339 的 created_from / created_to，于是异地登录后台看到的「某一天的单」与报表对不上；
+ * 门店管理员又读不到店铺设置，前端拿不到店铺时区，只能交给服务端。
  */
-export function dayRange(range: [string, string] | null | undefined): { created_from?: string; created_to?: string } {
+export function dayRange(
+    range: [string, string] | null | undefined,
+): { created_date_from?: string; created_date_to?: string } {
     if (range === null || range === undefined) return {};
-    const from = localMidnight(range[0], 0);
-    const to = localMidnight(range[1], 1);
-    if (from === null || to === null) return {};
-    return { created_from: from, created_to: to };
+    if (!isDay(range[0]) || !isDay(range[1])) return {};
+    return { created_date_from: range[0], created_date_to: range[1] };
 }
 
-function localMidnight(day: string, plusDays: number): string | null {
+function isDay(day: string): boolean {
     const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day);
-    if (m === null) return null;
-    const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]) + plusDays, 0, 0, 0, 0);
-    return Number.isNaN(d.getTime()) ? null : d.toISOString();
+    if (m === null) return false;
+    const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+    return d.getUTCFullYear() === Number(m[1]) && d.getUTCMonth() === Number(m[2]) - 1 && d.getUTCDate() === Number(m[3]);
 }
 
 function textOrUndefined(s: string | undefined): string | undefined {

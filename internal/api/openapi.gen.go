@@ -8889,6 +8889,14 @@ type GetAdminOrdersParams struct {
 	// CreatedTo 下单时间上界（**不含**）。RFC3339。半开区间，按天查时传次日零点。
 	CreatedTo *time.Time `form:"created_to,omitempty" json:"created_to,omitempty"`
 
+	// CreatedDateFrom 按**店铺时区**（`GET /admin/shop-settings` 的 `timezone`，与经营报表同一个口径）的自然日筛下单时间：
+	// 起始日（含），`YYYY-MM-DD`。服务端换成该日店铺时区零点。后台「按天选」用这一对，
+	// 不必知道店铺时区（门店管理员读不到店铺设置）。与 `created_from` / `created_to` 不能同时传（422）。
+	CreatedDateFrom *openapi_types.Date `form:"created_date_from,omitempty" json:"created_date_from,omitempty"`
+
+	// CreatedDateTo 结束日（**含**），`YYYY-MM-DD`。服务端换成**次日**店铺时区零点作为不含的上界。
+	CreatedDateTo *openapi_types.Date `form:"created_date_to,omitempty" json:"created_date_to,omitempty"`
+
 	// OrderNo 订单号，精确匹配。
 	OrderNo *string `form:"order_no,omitempty" json:"order_no,omitempty"`
 
@@ -9541,6 +9549,14 @@ type GetAdminRefundsParams struct {
 
 	// CreatedTo 申请时间上界（**不含**）。RFC3339。
 	CreatedTo *time.Time `form:"created_to,omitempty" json:"created_to,omitempty"`
+
+	// CreatedDateFrom 按**店铺时区**（`GET /admin/shop-settings` 的 `timezone`，与经营报表同一个口径）的自然日筛申请时间：
+	// 起始日（含），`YYYY-MM-DD`。服务端换成该日店铺时区零点。后台「按天选」用这一对，
+	// 不必知道店铺时区（门店管理员读不到店铺设置）。与 `created_from` / `created_to` 不能同时传（422）。
+	CreatedDateFrom *openapi_types.Date `form:"created_date_from,omitempty" json:"created_date_from,omitempty"`
+
+	// CreatedDateTo 结束日（**含**），`YYYY-MM-DD`。服务端换成**次日**店铺时区零点作为不含的上界。
+	CreatedDateTo *openapi_types.Date `form:"created_date_to,omitempty" json:"created_date_to,omitempty"`
 
 	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
 	//

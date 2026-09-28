@@ -39,6 +39,20 @@ func (h *AdminOrderHandler) ListOrders(c *gin.Context) {
 		writeAdminListError(c, err)
 		return
 	}
+	dayFrom, err := adminListDay(c.Query("created_date_from"), "created_date_from")
+	if err != nil {
+		writeAdminListError(c, err)
+		return
+	}
+	dayTo, err := adminListDay(c.Query("created_date_to"), "created_date_to")
+	if err != nil {
+		writeAdminListError(c, err)
+		return
+	}
+	if from, to, err = h.createdRange(c, from, to, dayFrom, dayTo); err != nil {
+		writeAdminListError(c, err)
+		return
+	}
 	f := repository.AdminOrderFilter{
 		Status:      parseSmallint(c.Query("status")),
 		StoreID:     adminListInt64(c.Query("store_id")),
