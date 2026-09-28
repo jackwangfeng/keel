@@ -208,4 +208,18 @@ void main() {
     expect(find.byKey(const Key('product.add.23')), findsNothing);
     expect(find.byKey(const Key('product.mask.21')), findsNothing);
   });
+
+  testWidgets('详情：数据在滑入动画途中就到了，也等动画走完再换上内容（首次排版别打断转场，小程序 iOS 上一段中文排版十几毫秒）', (t) async {
+    phone(t);
+    final f = Fake();
+    await t.pumpWidget((await app(f)).$1);
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('product.card.21')));
+    await t.pump(); // 开始转场
+    await t.pump(const Duration(milliseconds: 50)); // 数据（mock，立即返回）已到，动画还没走完
+    expect(f.to('/products/21'), isNotEmpty);
+    expect(find.byKey(const Key('detail.title')), findsNothing);
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('detail.title')), findsOneWidget);
+  });
 }
