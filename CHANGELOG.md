@@ -39,6 +39,23 @@ so "which one is running?" never depends on anyone's memory.
 
 ## [Unreleased]
 
+No migrations.
+
+### Added
+
+- `ProductSummary.promo_min_price_cents` (on `GET /products` and `POST /search`): the lowest limited-time / flash-sale
+  unit price in the resolved store, present only when it undercuts `min_price_cents`. The Flutter product card shows
+  it with the store price struck through.
+- `GET /admin/orders` and `GET /admin/refunds` accept `created_date_from` / `created_date_to` (`YYYY-MM-DD`, both
+  inclusive), cut into days in the **shop's time zone** — the same rule as the reports. Combining them with
+  `created_from` / `created_to` is a 422. The admin console's date filter now sends these instead of converting in
+  the browser's time zone.
+
+### Fixed
+
+- Search results never carried `promotion_tags`; they now carry the same tags as the product list.
+- The Flutter checkout page no longer shows the idempotency key ("技术信息") in release builds.
+
 ## [0.5.0] - 2026-09-28
 
 Core migrations `00120`–`00122`, `00130`–`00132`; the core database lands on `00132`. Migration `00131` creates the

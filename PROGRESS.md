@@ -1,4 +1,4 @@
-# keel 进度（2026-09-27 晚更新）
+# keel 进度（2026-09-28 更新）
 
 新会话先读这份，再看 CLAUDE.md 的 token 纪律。
 
@@ -122,16 +122,14 @@
   登录连续失败锁定；00062 改空操作（滚动发布兼容，下一版再删列）、00063 CHECK NOT VALID；券错误文案分 / UTC；
   买家端：自动续期 + 统一跳登录、列表原地加购与规格浮层、详情页购物车入口、下单直达付款、沙箱底栏结算、地址丢街道、
   券截止日、折扣率精度；后台日期区间默认 23:59:59。
-### 深度审查留下的（未修，需拍板或较大）
-- ~~0 元订单付不了~~ **已修（自动入账）**：收尾分支在 MarkOrderPlaced 同一事务里 settleFreeOrder（10→20、paid_cents=0、不落 payments、核销券、发支付成功通知）；下单直接返回 20，再发起支付 409，售后回无可退。回归测试 TestZeroPayableOrderSettlesOnPlacement。
-- ~~单字搜索无结果~~ **已修**：索引侧 search_text 在二元组后追加单字（search.IndexTerms），查询侧不变；search_text 指纹独立版本 bigram-v2，00086 把 product_understanding.updated_at 拨回纪元触发全库重判（光升版本号触发不到已有商品），只重写 search_text、不重算向量；已在演示库副本上试跑。演示站部署新 API 后生效（种子已同步）。
-- 后台订单 / 售后日期筛选按浏览器时区切天，报表按店铺时区（改契约传日期 + 店铺时区）。
-- 订单号 / 退款单号前缀日期是 UTC（order.go:778 / refund.go:1015），纯展示。
-- 后台订单按手机号筛选 OR 用不上索引（admin_orders.sql ~38，20 万单 60ms×2）；has_open_refund 子计划、按门店数售后总数。
-- 促销 SKU 移除与并发预占时被静默跳过（promotions.sql:260）；ReservePromotionSku 不复核活动状态 / 时间窗。
-- 测试缺口：买家 B 操作 A 的订单没有回归测试；已支付订单二次入账没有测试；e2e 结算 / 券 / 活动下单几乎不断言金额；
-  售后 4 条在缺 staff token 时静默跳过。
-- 列表卡片价格不体现限时特价（卡片 ¥69–89，浮层里实际 ¥49.9）；确认页「技术信息」对买家可见。
+### 深度审查留下的（2026-09-28 清了一轮）
+- ~~0 元订单付不了~~ 已修（自动入账，TestZeroPayableOrderSettlesOnPlacement）。~~单字搜索无结果~~ 已修（00086）。
+- ~~后台订单 / 售后日期筛选按浏览器时区切天~~ **已修（957dda7）**：契约加 `created_date_from` / `created_date_to`（YYYY-MM-DD，两端含），服务端按店铺时区切（`AdminOrderService.ShopDayRange`，与报表同一个 reportLocation）；与 created_from/to 混传 422；后台 dayRange 改传日期。
+- ~~促销 SKU 移除与并发预占被静默跳过、ReservePromotionSku 不复核活动状态~~ **拆分后已不成立**：配额在库存服务 activity_stocks，移除走 InvLockPromotionActivity 同一把锁、DELETE 带 sold = 0；扣减查不到配额行即拒；下单算价只取上线且在时间窗内的活动（priceOrder 与建单同一事务）。
+- ~~测试缺口：买家 B 操作 A 的订单、已支付订单二次入账~~ **已补（855a986）**：别人确认收货 404、别人申请售后 404 order-not-found、已支付订单来第二笔不同流水的回调（200，落支付单留痕，实收与 paid_at 不变）。
+- ~~列表卡片不体现限时特价~~ **已修（fdcf78e）**：契约 `ProductSummary.promo_min_price_cents`（活动价低于门店最低价才给），列表与检索都填；**检索结果之前从来不填活动标签**，一起补上；Flutter 卡片活动价 + 门店价划线（单规格打特价不显示「起」）。uni-app x 冻结只重新生成类型。
+- ~~确认页「技术信息」对买家可见~~ **Flutter 已改（fd977ae）**：release 包不显示，debug / profile 保留。uni-app x 未改（冻结）。
+- 仍未修：订单号 / 退款单号前缀日期是 UTC（order.go newOrderNo，纯展示）；后台订单按手机号筛选 OR 用不上索引（admin_orders.sql AdminListOrders，要表达式索引 `receiver_snapshot->>'phone'` + 改写成两路，得在 20 万单数据上 EXPLAIN 验证）、has_open_refund 子计划、按门店数售后总数；e2e 结算 / 券 / 活动下单几乎不断言金额；售后 4 条在缺 staff token 时静默跳过。
 - 下一版：新迁移 DROP products.total_stock（旧版本全下线之后）。
 
 ### 多实例实测（2026-09-27，3 实例 + nginx 轮询 + 1 个 Postgres）
@@ -142,8 +140,7 @@
 - 压测（同一台 20 核机器上全部同跑，是下限）：列表 6300 req/s（PG ~10 核，读瓶颈在 PG）；下单 650 单/s p95 178ms（PG ~5.5 核）。
 - 拆库结论：到指标再拆（见最终报告里的指标线）。
 ### 商品卡片
-- product-card 组件（首页 / 分类 / 搜索共用）；卡片上没有划线价（列表接口没有特价字段，要加契约）；
-  搜索结果里看不到活动标签（挂耳咖啡有限时特价，搜索行没标签）—— 待查 SearchHit.promotion_tags 是否填了。
+- ~~卡片没有划线价、搜索结果没有活动标签~~ 已修（fdcf78e，见上）。
 
 ### 微服务拆分（进行中，施工图 docs/电商系统-微服务拆分方案.md）
 - 粒度：只拆 inventory（门店库存 + 活动配额），券 / 订单 / 支付留 core；三档部署（单体 / 同库独立 schema+账号 / 物理拆分）。
