@@ -41,7 +41,7 @@ func TestAmap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pl.City != "北京市" || pl.District != "东城区" || pl.Adcode != "110101" || pl.Name != "天安门" || pl.Street != "" {
+	if pl.City != "北京市" || pl.District != "东城区" || pl.Adcode != "110101" || pl.Name != "天安门" || pl.Street != "东华门街道" {
 		t.Fatalf("逆地理编码：%+v", pl)
 	}
 	// 出去的坐标是 GCJ-02（lng,lat）：比 WGS-84 偏约 +0.0062 / +0.0014。

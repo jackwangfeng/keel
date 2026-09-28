@@ -48,6 +48,13 @@ so "which one is running?" never depends on anyone's memory.
 - **POI backend: `/geo/reverse` and `/geo/suggest`.** Server-side proxy to the map provider (AMap for now,
   `KEEL_GEO_PROVIDER` / `KEEL_GEO_KEY`); coordinates in and out are WGS-84 (GCJ-02 converted server-side),
   results cached, rate-limited per IP; 501 when not configured so clients fall back to manual entry.
+  `street` is the sub-district (township, the fourth level of a shipping address), not the road name;
+  coordinates are rounded to 6 decimals. The admin console's store editor gained a place search above the map
+  that fills province / city / district / address from the chosen point.
+- **Orders must ship inside the store's fence.** `POST /orders` and `POST /orders/preview` return 422
+  `address-out-of-range` when the shipping address has coordinates outside the chosen store's fence. Addresses
+  without coordinates (manual entry, pre-00100) are not checked; the default store (nationwide fallback) and
+  stores without a fence accept any address.
 - **Briefs (M9, task 5).** AI staff write operating briefs (daily store-walk reports and the like) with the MCP
   tool `post_brief` (markdown, up to 8 KB, with the covered date range); shop-wide staff read them under
   `/admin/agent-briefs` (migration 00092). Bodies are treated as untrusted input by clients.

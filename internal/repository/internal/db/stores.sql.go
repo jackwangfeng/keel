@@ -725,6 +725,31 @@ func (q *Queries) StoreOpen(ctx context.Context, id int64) (bool, error) {
 	return open, err
 }
 
+const storeServesPoint = `-- name: StoreServesPoint :one
+SELECT (st.is_default OR st.fence IS NULL
+        OR ST_Intersects(st.fence,
+                         ST_SetSRID(ST_MakePoint($1::float8,
+                                                 $2::float8), 4326)::geography))::boolean AS serves
+  FROM stores st
+ WHERE st.id = $3 AND st.deleted_at IS NULL
+`
+
+type StoreServesPointParams struct {
+	Lng     float64
+	Lat     float64
+	StoreID int64
+}
+
+// 下单 / 试算：收货地址的坐标落不落在这家店的围栏里（2026-09-28）。
+// 默认店与没有围栏的店一律 true —— 默认店是「不在任何围栏内」时的全国兜底（ResolveStoresByFence
+// 那条回落就落到它），拿围栏卡它等于让围栏外的买家无处可买。边界线上算在内（ST_Intersects，同上）。
+func (q *Queries) StoreServesPoint(ctx context.Context, arg StoreServesPointParams) (bool, error) {
+	row := q.db.QueryRow(ctx, storeServesPoint, arg.Lng, arg.Lat, arg.StoreID)
+	var serves bool
+	err := row.Scan(&serves)
+	return serves, err
+}
+
 const updateStore = `-- name: UpdateStore :one
 WITH cur AS (
     SELECT st.id FROM stores st WHERE st.id = $1 AND st.deleted_at IS NULL

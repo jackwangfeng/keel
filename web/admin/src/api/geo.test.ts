@@ -7,6 +7,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+    detailAddress,
     bd09ToGcj02,
     closeRing,
     distanceMeters,
@@ -159,4 +160,13 @@ test("parseFenceInput：中国境内两值都不越界的写反，给警告但�
     const straight = parseFenceInput("75.99,39.47\n75.99,39.50\n76.02,39.50", "wgs84");
     assert.ok(straight.ok);
     if (straight.ok) assert.equal(straight.warnings.length, 0);
+});
+
+test("detailAddress：去掉省市区前缀，不重复地点名", () => {
+    const base = { province: "浙江省", city: "杭州市", district: "拱墅区" };
+    assert.equal(detailAddress({ ...base, name: "天巢花苑", address: "浙江省杭州市拱墅区天水街道天巢花苑" }), "天水街道天巢花苑");
+    // 直辖市：city 与 province 同名，只去一次
+    assert.equal(detailAddress({ province: "北京市", city: "北京市", district: "东城区", name: "天安门",
+        address: "北京市东城区东华门街道" }), "东华门街道天安门");
+    assert.equal(detailAddress({ ...base, name: "某店", address: "" }), "某店");
 });

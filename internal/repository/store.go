@@ -211,6 +211,9 @@ type StoreTx interface {
 	StoreScope(ctx context.Context, id int64) (int64, int64, error)
 	// StoreOpen：门店营业且所在大区启用。门店不存在（或已软删）返回 ErrCatalogNotFound。
 	StoreOpen(ctx context.Context, id int64) (bool, error)
+	// StoreServesPoint：坐标（WGS-84）在不在这家店的围栏内；默认店与没有围栏的店恒为 true。
+	// 门店不存在（或已软删）返回 ErrCatalogNotFound。
+	StoreServesPoint(ctx context.Context, id int64, lat, lng float64) (bool, error)
 
 	// —— 买家侧
 	ListOpenStores(ctx context.Context, limit, offset int32) ([]StoreMatch, int64, error)
@@ -588,6 +591,14 @@ func (t tenantTx) StoreScope(ctx context.Context, id int64) (int64, int64, error
 		return 0, 0, err
 	}
 	return r.ID, r.RegionID, nil
+}
+
+func (t tenantTx) StoreServesPoint(ctx context.Context, id int64, lat, lng float64) (bool, error) {
+	ok, err := t.q.StoreServesPoint(ctx, db.StoreServesPointParams{StoreID: id, Lat: lat, Lng: lng})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, fmt.Errorf("store %d: %w", id, ErrCatalogNotFound)
+	}
+	return ok, err
 }
 
 func (t tenantTx) StoreOpen(ctx context.Context, id int64) (bool, error) {

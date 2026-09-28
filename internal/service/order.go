@@ -278,6 +278,9 @@ func (s *OrderService) Preview(ctx context.Context, req CreateRequest) (Quote, e
 			if err != nil {
 				return err
 			}
+			if err := checkAddressInRange(ctx, tx, sc, addr); err != nil {
+				return err
+			}
 			dest := destinationOf(addr)
 			q, err = priceOrder(ctx, tx, sc, &dest, req.Items, couponOf(id.UserID, req, now, quotas))
 			if err != nil {
@@ -328,6 +331,25 @@ func orderScope(ctx context.Context, tx repository.Tx, storeID int64) (repositor
 		return repository.StoreScope{}, fmt.Errorf("%w: store_id=%d", ErrStoreClosed, storeID)
 	}
 	return repository.StoreScope{StoreID: storeID, RegionID: regionID}, nil
+}
+
+// checkAddressInRange：收货地址必须在门店的围栏内（试算与下单同一道）。
+//
+// 只判带坐标的地址：手填的、00100 之前的老地址没有坐标，判不了 —— 拿它们一律拒单等于让存量买家
+// 全部下不了单。客户端的选址流程（搜索地点 / 地图选点）都会写坐标，缺坐标的会越来越少。
+// 默认店与没有围栏的店不卡（repository.StoreServesPoint）。
+func checkAddressInRange(ctx context.Context, tx repository.Tx, sc repository.StoreScope, addr repository.Address) error {
+	if addr.Lat == nil || addr.Lng == nil {
+		return nil
+	}
+	ok, err := tx.StoreServesPoint(ctx, sc.StoreID, *addr.Lat, *addr.Lng)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("%w: store_id=%d", ErrAddressOutOfRange, sc.StoreID)
+	}
+	return nil
 }
 
 // Create 实现 POST /orders。
@@ -511,6 +533,9 @@ func (s *OrderService) placeDraft(ctx context.Context, tx repository.Tx,
 	// 券分支（order_saga.go 的 lockCoupon），它按订单行上的 user_coupon_id 去做
 	// 条件更新 —— 这里算过的只是预告，那里才是判定点：两笔并发订单用同一张券，
 	// 两边都能算过，只有一边锁得上，另一边的 SAGA 失败并补偿掉建单。
+	if err := checkAddressInRange(ctx, tx, sc, addr); err != nil {
+		return repository.Order{}, nil, err
+	}
 	dest := destinationOf(addr)
 	q, err := priceOrder(ctx, tx, sc, &dest, req.Items, couponOf(userID, req, s.now(), quotas))
 	if err != nil {

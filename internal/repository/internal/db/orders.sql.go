@@ -544,7 +544,7 @@ func (q *Queries) GetOrderStoreSnapshot(ctx context.Context, id int64) ([]byte, 
 
 const getUserAddress = `-- name: GetUserAddress :one
 SELECT id, receiver_name, phone, province, city, district, street, detail,
-       region_code, postal_code
+       region_code, postal_code, lat, lng
   FROM user_addresses
  WHERE id = $1
    AND user_id = $2
@@ -567,6 +567,8 @@ type GetUserAddressRow struct {
 	Detail       string
 	RegionCode   *string
 	PostalCode   *string
+	Lat          *float64
+	Lng          *float64
 }
 
 // 取当前买家名下的一条收货地址，用于拍成 orders.receiver_snapshot。
@@ -575,6 +577,7 @@ type GetUserAddressRow struct {
 // 不保证它属于这个买家。契约里 address_id 用自增 id 对外，防越权靠的正是
 // 服务端按 user_id 强制过滤（数据模型 §9 的约定 4）。
 //
+// lat / lng（00100）：下单与试算拿它判「地址在不在门店围栏内」，不进快照。
 // deleted_at IS NULL：地址是软删的，删掉的地址不能再用来下单。
 // 历史订单不受影响 —— 它存的是快照，不是外键。
 func (q *Queries) GetUserAddress(ctx context.Context, arg GetUserAddressParams) (GetUserAddressRow, error) {
@@ -591,13 +594,15 @@ func (q *Queries) GetUserAddress(ctx context.Context, arg GetUserAddressParams) 
 		&i.Detail,
 		&i.RegionCode,
 		&i.PostalCode,
+		&i.Lat,
+		&i.Lng,
 	)
 	return i, err
 }
 
 const getUserDefaultAddress = `-- name: GetUserDefaultAddress :one
 SELECT id, receiver_name, phone, province, city, district, street, detail,
-       region_code, postal_code
+       region_code, postal_code, lat, lng
   FROM user_addresses
  WHERE user_id = $1
    AND is_default
@@ -615,6 +620,8 @@ type GetUserDefaultAddressRow struct {
 	Detail       string
 	RegionCode   *string
 	PostalCode   *string
+	Lat          *float64
+	Lng          *float64
 }
 
 // 当前买家的默认收货地址（至多一条，uk_user_addresses_default）。购物车没指名地址时
@@ -633,6 +640,8 @@ func (q *Queries) GetUserDefaultAddress(ctx context.Context, userID int64) (GetU
 		&i.Detail,
 		&i.RegionCode,
 		&i.PostalCode,
+		&i.Lat,
+		&i.Lng,
 	)
 	return i, err
 }

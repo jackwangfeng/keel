@@ -80,6 +80,8 @@ type Address struct {
 	Detail       string
 	RegionCode   *string
 	PostalCode   *string
+	// Lat / Lng：地址的坐标（WGS-84，00100），手填与老地址为 nil。下单判围栏用，不进收货快照。
+	Lat, Lng *float64
 }
 
 // Order 是订单在 repository 边界上的形状。
@@ -433,6 +435,8 @@ func (t tenantTx) FindAddress(ctx context.Context, addressID, userID int64) (Add
 		Detail:       r.Detail,
 		RegionCode:   r.RegionCode,
 		PostalCode:   r.PostalCode,
+		Lat:          r.Lat,
+		Lng:          r.Lng,
 	}, nil
 }
 

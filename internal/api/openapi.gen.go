@@ -4074,7 +4074,7 @@ type GeoPlace struct {
 	// Adcode 区县级行政区划代码
 	Adcode string `json:"adcode"`
 
-	// Address 完整地址
+	// Address 完整地址（以省市区开头，可能已含地点名）；填门牌 / 详细地址前要去掉省市区前缀
 	Address  string  `json:"address"`
 	City     string  `json:"city"`
 	District string  `json:"district"`
@@ -4084,7 +4084,9 @@ type GeoPlace struct {
 	// Name 地点名 / 小区 / 门牌
 	Name     string `json:"name"`
 	Province string `json:"province"`
-	Street   string `json:"street"`
+
+	// Street 街道办 / 乡镇（收货地址四级里的「街道」），不是道路名；输入提示的候选没有
+	Street string `json:"street"`
 }
 
 // GeoPolygon GeoJSON Polygon，SRID 固定 4326。落库成 `GEOGRAPHY(POLYGON, 4326)`。

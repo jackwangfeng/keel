@@ -11436,6 +11436,7 @@ export interface paths {
                  *     （`https://keel.dev/problems/sku-not-sold-in-store`），
                  *     有商品送不到这个收货地址（`https://keel.dev/problems/region-not-deliverable`，
                  *     `undeliverable_items` 逐行给出 SKU 与原因），
+                 *     收货地址不在这家店的围栏内（`https://keel.dev/problems/address-out-of-range`），
                  *     或 `store_id` / `address_id` / `sku_id` 有一个服务端不认识
                  *     （`https://keel.dev/problems/invalid-request`）。
                  *     试算的全部意义就是在下单之前把这些说出来。
@@ -11609,6 +11610,10 @@ export interface paths {
                  *       也**刻意不是 404**：那条分界线是「路径里指名的资源不存在 → 404，
                  *       请求体里指名的东西不存在或不可用 → 422」，
                  *       而这条路径是 `/orders`，报 404 会被读成「下单接口不存在」。
+                 *     · **收货地址不在这家店的配送范围内** —— `https://keel.dev/problems/address-out-of-range`：
+                 *       地址带坐标（`Address.lat` / `lng`）且落在门店围栏外。客户端该换地址，或按这个地址的坐标
+                 *       重新 `GET /stores/resolve` 换门店。没有坐标的地址（手填、老地址）判不了，不拦；
+                 *       默认门店（全国兜底）与没有围栏的门店不拦。
                  *     · **有商品送不到这个收货地址** —— `https://keel.dev/problems/region-not-deliverable`，
                  *       响应体的 `undeliverable_items` 逐行给出 SKU 与原因（这件商品的运费模板把
                  *       收货地址所在的省列为不配送，或地址归不到省而模板设了不配送地区）。
@@ -16631,13 +16636,14 @@ export interface components {
         GeoPlace: {
             /** @description 地点名 / 小区 / 门牌 */
             name: string;
-            /** @description 完整地址 */
+            /** @description 完整地址（以省市区开头，可能已含地点名）；填门牌 / 详细地址前要去掉省市区前缀 */
             address: string;
             province: string;
             city: string;
             district: string;
             /** @description 区县级行政区划代码 */
             adcode: string;
+            /** @description 街道办 / 乡镇（收货地址四级里的「街道」），不是道路名；输入提示的候选没有 */
             street: string;
             /** Format: double */
             lat: number;

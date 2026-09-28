@@ -22,6 +22,7 @@ import {
     type GeoPlace,
     type StoreCreateRequest,
 } from "../api/client.ts";
+import { detailAddress } from "../api/geo.ts";
 import { IdempotentSubmission, withIdempotency } from "../api/idempotency.ts";
 import { isIncomplete, listAllRegions } from "../api/stores.ts";
 import { notifyError, notifyOk } from "../ui/notify.ts";
@@ -116,7 +117,7 @@ function onPlace(p: GeoPlace): void {
     draft.value.province = p.province;
     draft.value.city = p.city;
     draft.value.district = p.district;
-    draft.value.address = p.address || [p.name, p.street].filter(Boolean).join(" ");
+    draft.value.address = detailAddress(p);
     addressAutofilled.value = true;
 }
 

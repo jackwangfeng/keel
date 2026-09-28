@@ -247,6 +247,17 @@ SELECT (st.status = 1 AND rg.status = 1 AND rg.deleted_at IS NULL)::boolean AS o
   JOIN regions rg ON rg.id = st.region_id
  WHERE st.id = $1 AND st.deleted_at IS NULL;
 
+-- name: StoreServesPoint :one
+-- 下单 / 试算：收货地址的坐标落不落在这家店的围栏里（2026-09-28）。
+-- 默认店与没有围栏的店一律 true —— 默认店是「不在任何围栏内」时的全国兜底（ResolveStoresByFence
+-- 那条回落就落到它），拿围栏卡它等于让围栏外的买家无处可买。边界线上算在内（ST_Intersects，同上）。
+SELECT (st.is_default OR st.fence IS NULL
+        OR ST_Intersects(st.fence,
+                         ST_SetSRID(ST_MakePoint(sqlc.arg(lng)::float8,
+                                                 sqlc.arg(lat)::float8), 4326)::geography))::boolean AS serves
+  FROM stores st
+ WHERE st.id = sqlc.arg(store_id) AND st.deleted_at IS NULL;
+
 -- name: StoreExists :one
 -- 只问「这个 id 在本租户里是不是一家未软删的门店」。
 -- 给那些路径里带 store_id、但主查询不该因为门店不存在而返回空集的接口用

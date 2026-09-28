@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -89,7 +90,8 @@ func parseLocation(s string) (float64, float64, bool) {
 		return 0, 0, false
 	}
 	wLat, wLng := GCJ02ToWGS84(lat, lng)
-	return wLat, wLng, true
+	// 转换是迭代求逆，出来一长串小数；6 位（约 0.1 米）与库里坐标的精度一致。
+	return math.Round(wLat*1e6) / 1e6, math.Round(wLng*1e6) / 1e6, true
 }
 
 func (a *Amap) Reverse(ctx context.Context, lat, lng float64) (Place, error) {
@@ -116,6 +118,7 @@ func (a *Amap) Reverse(ctx context.Context, lat, lng float64) (Place, error) {
 		return Place{}, err
 	}
 	c := r.Regeocode.AddressComponent
+	// Street 对应收货地址四级里的「街道」（街道办 / 乡镇，高德的 township），不是门牌所在的道路（streetNumber.street）。
 	city := string(c.City)
 	if city == "" {
 		city = string(c.Province) // 直辖市高德给空城市
@@ -128,7 +131,7 @@ func (a *Amap) Reverse(ctx context.Context, lat, lng float64) (Place, error) {
 		name = string(c.Township)
 	}
 	return Place{Name: name, Address: string(r.Regeocode.FormattedAddress), Province: string(c.Province), City: city,
-		District: string(c.District), Adcode: string(c.Adcode), Street: string(c.StreetNumber.Street), Lat: lat, Lng: lng}, nil
+		District: string(c.District), Adcode: string(c.Adcode), Street: string(c.Township), Lat: lat, Lng: lng}, nil
 }
 
 func (a *Amap) Suggest(ctx context.Context, q string, lat, lng float64, city string) ([]Place, error) {

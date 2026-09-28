@@ -23,6 +23,7 @@ import {
     type GeoPolygon,
     type StoreUpdateRequest,
 } from "../api/client.ts";
+import { detailAddress } from "../api/geo.ts";
 import { fenceErrorPoint } from "../api/errors.ts";
 import { isIncomplete, listAllRegions } from "../api/stores.ts";
 import { listAllStoreInventories } from "../api/storeInventory.ts";
@@ -108,7 +109,7 @@ function onPlace(p: GeoPlace): void {
     form.value.province = p.province;
     form.value.city = p.city;
     form.value.district = p.district;
-    form.value.address = p.address || [p.name, p.street].filter(Boolean).join(" ");
+    form.value.address = detailAddress(p);
     addressAutofilled.value = true;
 }
 

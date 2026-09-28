@@ -325,3 +325,16 @@ export function parseFenceInput(text: string, from: CoordSystem): ParseResult {
         shiftedMeters,
     };
 }
+
+/**
+ * 选点回填「详细地址」：高德的完整地址以省市区开头（「浙江省杭州市拱墅区天水街道天巢花苑」），
+ * 省市区已经各有一栏，这里去掉前缀；已经含地点名就不再拼一遍。
+ */
+export function detailAddress(p: { name: string; address: string; province: string; city: string; district: string }): string {
+    let s = p.address.trim();
+    for (const part of [p.province, p.city, p.district]) {
+        if (part && s.startsWith(part)) s = s.slice(part.length);
+    }
+    if (p.name && !s.includes(p.name)) s += p.name;
+    return s.trim();
+}

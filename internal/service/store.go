@@ -74,6 +74,10 @@ var ErrStoreNotFound = errors.New("指定的门店不存在或不属于当前租
 // 不是请求写错了；客户端该做的是重新定位 / 换一家店。
 var ErrStoreClosed = errors.New("门店已停业或所在大区已停用")
 
+// ErrAddressOutOfRange：收货地址带坐标，而坐标不在所选门店的围栏内（2026-09-28）。契约 422
+// address-out-of-range：重试不会成功，客户端该换地址或按地址重新定位门店。
+var ErrAddressOutOfRange = errors.New("收货地址不在门店的配送范围内")
+
 // ErrInvalidCoord：lat / lng 只给了一个，或取值超范围（契约 422）。
 var ErrInvalidCoord = errors.New("lat 与 lng 必须同时给出且在有效范围内")
 

@@ -1204,13 +1204,14 @@ export type FreightTemplateInput = {
 export type GeoPlace = {
   /** 地点名 / 小区 / 门牌 */
   name : string
-  /** 完整地址 */
+  /** 完整地址（以省市区开头，可能已含地点名）；填门牌 / 详细地址前要去掉省市区前缀 */
   address : string
   province : string
   city : string
   district : string
   /** 区县级行政区划代码 */
   adcode : string
+  /** 街道办 / 乡镇（收货地址四级里的「街道」），不是道路名；输入提示的候选没有 */
   street : string
   lat : number
   lng : number
