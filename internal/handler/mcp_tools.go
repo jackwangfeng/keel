@@ -125,7 +125,8 @@ func registerMCPTools(srv *mcp.Server, d *MCPDeps) {
 	registerMCPProposalTools(srv, d)
 	registerMCPSQLTool(srv, d) // 只读 SQL（M11，00131）
 	mcpTool(srv, d, "shop_overview",
-		"经营概览：销售额、单量、客单价、退款等，与上一个同长周期的对比。经营判断的起点。",
+		"经营概览：销售额、单量、客单价、退款等，与上一个同长周期的对比。经营判断的起点。"+
+			"客单价（avg_order_value_cents）按行业口径 = 支付金额 ÷ 支付买家数，不是 ÷ 单量；要每单平均就自己用 paid_cents ÷ order_count。",
 		writeAdminListError, func(ctx context.Context, in mcpReportWindow) (api.ReportOverview, error) {
 			out, err := d.Reports.Overview(ctx, in.query())
 			if err != nil {
