@@ -217,6 +217,13 @@ func (s *PaymentService) CreateIntent(ctx context.Context, orderNo, channel, ide
 			return fmt.Errorf("%w: 订单 %s 当前状态是 %d，只有 %d 待支付可以发起支付",
 				ErrOrderNotPayable, orderNo, order.Status, orderStatusPending)
 		}
+		// 门店停业（或所在大区停用）之后，它名下的待支付单不再收钱：接不了的单不该让买家付款
+		// （2026-09-28 破坏性测试：停业门店的待支付单照样拿得到支付参数）。已支付的单照常发货，把存量做完。
+		if open, err := tx.StoreOpen(ctx, order.StoreID); err != nil {
+			return err
+		} else if !open {
+			return fmt.Errorf("%w: 订单 %s 的门店 %d", ErrStoreClosed, orderNo, order.StoreID)
+		}
 		placed, err := tx.IsOrderPlaced(ctx, order.ID)
 		if err != nil {
 			return err

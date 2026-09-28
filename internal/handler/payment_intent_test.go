@@ -511,3 +511,20 @@ func TestPaymentIntentIsRefusedWhenSandboxIsOff(t *testing.T) {
 	}
 	t.Logf("关掉沙箱：%d %s", w.Code, p.Title)
 }
+
+// 门店停业之后：名下的待支付单不能再发起支付（409 store-unavailable）；已支付的单照常发货，把存量做完。
+// 2026-09-28 破坏性测试：停业门店的待支付单照样拿得到支付参数。
+func TestClosedStoreStopsTakingPaymentButStillShips(t *testing.T) {
+	cs := newCouponShop(t)
+	b := cs.newBuyer(t, "closed-store")
+	pending := cs.placeOrder(t, b, cs.NorthStore, cs.ShirtSKU, 1, nil)
+	paid := cs.placePaid(t, b, cs.NorthStore, cs.ShirtSKU, 1, nil)
+	adminExec(t, `UPDATE stores SET status = 0 WHERE id = $1`, cs.NorthStore)
+	t.Cleanup(func() { adminExec(t, `UPDATE stores SET status = 1 WHERE id = $1`, cs.NorthStore) })
+
+	w := createIntent(t, cs.Host, pending.OrderNo, "wechat", b.Token, "pi-"+uniqueKey())
+	if p := problemOf(t, w, http.StatusConflict); p.Type != problem.TypeStoreUnavailable {
+		t.Fatalf("停业门店的待支付单发起支付应 409 store-unavailable：%+v", p)
+	}
+	wantStatus(t, cs.ship(t, paid.OrderNo, "sf", "SF"+uniqueKey()), http.StatusCreated, "停业门店的已支付单照常发货")
+}

@@ -7442,6 +7442,8 @@ paths:
           description: |
             · 订单当前状态不允许支付（非 `10 待支付`，或已超时关闭）——
               .../order-status-not-payable
+            · 订单的门店已停业、或所在大区已停用（2026-09-28 起：接不了的单不收钱）——
+              .../store-unavailable
             · 同一 Idempotency-Key 正在处理中 —— .../idempotency-key-in-flight
           headers:
             Retry-After:
