@@ -39,9 +39,17 @@ so "which one is running?" never depends on anyone's memory.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-28
+
 Core migrations `00140` (`search_logs.fallback`, and the column on the `agent_ro.search_logs` view), `00141`
 (`agent_briefs.corrects_id`), `00142` (price upper bounds, `NOT VALID`) and `00150` (`payment_intents`,
-`payment_returns`) and `00151` (`shop_preferences.after_sale_days`).
+`payment_returns`) and `00151` (`shop_preferences.after_sale_days`); the core database lands on `00151`.
+
+**Highlights.** Hardening. AI operations were accepted end to end on the demo site, and three rounds of destructive
+testing (money and concurrency, input validation, state machines and AI tools, cross-shop isolation) found real
+bugs that are fixed here. The biggest: a payment the order does not accept is now refunded automatically instead of
+kept with only a log line. Search gets a relevance floor, so the zero-result metric and the AI staff's search-gap
+playbook finally mean something.
 
 ### Added
 
@@ -1415,7 +1423,8 @@ Listed because a changelog that only lists wins is an advertisement.
   show why a product was rejected last time; the merchant only ever saw it in
   that one response.
 
-[Unreleased]: https://github.com/jackwangfeng/keel/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/jackwangfeng/keel/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/jackwangfeng/keel/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/jackwangfeng/keel/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/jackwangfeng/keel/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/jackwangfeng/keel/compare/v0.3.0...v0.3.1

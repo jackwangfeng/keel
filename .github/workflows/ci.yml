@@ -353,12 +353,14 @@ jobs:
     env:
       # 和同机演示环境（keeldemo / 18099）隔开；宿主机 8080 被占。
       # smoke.sh 与 web/src/api/smoke.mts 都读 KEEL_HTTP_PORT。
+      # 18180 / 18181 自 2026-09-27 起被演示站的 Caddy 网关（127.0.0.1:18180）占着，
+      # 这一步从那天起每次都在「起全栈」上 bind 失败 —— 换到 28180 / 28181（本机无人监听）。
       COMPOSE_PROJECT_NAME: keelci
-      KEEL_HTTP_PORT: "18180"
+      KEEL_HTTP_PORT: "28180"
       # 商家后台的宿主机端口。默认 8081 在这台自建 runner 上被别的东西占着
       # （实测 127.0.0.1:8081 有监听），不换的话 console 容器会起不来，
       # 而症状是 `docker compose up` 之后 smoke 照样绿、只有后台是死的。
-      KEEL_CONSOLE_PORT: "18181"
+      KEEL_CONSOLE_PORT: "28181"
     # 比另外两个宽：这里要在 runner 上从零建两个镜像，Go 依赖在容器里重下一遍。
     #
     # M2 又加了一段：镜像里多一个 Rust 阶段（装 cargo/rustc、clone dtmrs、

@@ -245,4 +245,10 @@ jobs:
           set -euo pipefail
           prerelease=""
           case "$V" in *-*) prerelease="--prerelease" ;; esac
-          gh release create "$V" --title "$V" --notes-file /tmp/notes.md $prerelease
+          # 幂等：release 已经在了（有人先手动建过、或者重跑这个 workflow）就只更新说明。
+          # v0.3.0 到 v0.5.0 这一步都因为「Release.tag_name already exists」红了 —— 镜像其实都推上去了。
+          if gh release view "$V" >/dev/null 2>&1; then
+            gh release edit "$V" --title "$V" --notes-file /tmp/notes.md $prerelease
+          else
+            gh release create "$V" --title "$V" --notes-file /tmp/notes.md $prerelease
+          fi

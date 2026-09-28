@@ -669,6 +669,13 @@ battle-tested at scale. What it has is a stronger core.
   log" page, the interface re-tested with the official Python SDK (Gemini CLI and
   opencode connect; see the compatibility record in the AI Interface doc)
   → **v0.5.0**
+- [x] **Hardening** — AI operations accepted end to end on the demo site (all five proposal kinds executed,
+  events, webhooks, auto-execution, reviews); three rounds of destructive testing fixed: over-collected payments
+  (duplicates, payments after cancellation, amount mismatches) are refunded automatically, unit prices are capped,
+  line-by-line refunds of unshipped orders no longer skip the freight, the auto-execution cap holds under
+  concurrency; a search relevance floor (queries for things the shop doesn't sell no longer come back padded);
+  an after-sale window; stock in checkout previews; brief corrections
+  → **v0.6.0**
 - [ ] **M8 Visual search** — image embeddings, a differentiator; pushed after
   AI operations
 

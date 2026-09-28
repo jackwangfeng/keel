@@ -1,12 +1,14 @@
-# keel 进度（2026-09-28 更新）
+# keel 进度（2026-09-28 晚更新，v0.6.0）
 
 新会话先读这份，再看 CLAUDE.md 的 token 纪律。
 
 ## 当前状态
 
-- main：`861c51c`（已 push，2026-09-28；含上传缩略图 ?w=；含商品列表有货在前（00087 product_store_stock，每分钟全量刷新）；含商品列表 in_stock 与无货卡片、选点围栏配色；含单字搜索 00086、0 元单自动入账、门店坐标必填 + 地图选点 + 须在围栏内、无货 SKU 排后、围栏编辑器两态、大区停用生效）；演示站 API `861c51c`（库 00087，部署前备份 backup-pre-00087-*.dump）、后台 `33b23b5`、H5 `7200942`（华南大区当前是停用状态，gaoerfu 因此不在买家端）（gaoerfu 坐标已设为围栏中心，默认门店仍未定位；部署前备份 backup-pre-storeloc-*.dump；库 00086，部署前备份 `backup-pre-00086-202609271948.dump`；公网搜「杯」「咖」「茶」关键词路均命中），23 个种子商品有图（db/seed/images，CC0）。收尾分支已合并（`8a826db`），worktree 与分支已删。
-- 演示栈（2026-09-27 晚起 **C 档**：core + inventory 两个进程、两个库，40c23da）：环境与 compose 文件清单统一在 `~/.local/share/keel-eshop/demo-env.sh`（`source` 后用 `"${DC[@]}"`），叠加层 `compose.demo-split.yaml` 把卷名换回 keeldemo_*（原地迁移，迁移前备份 `backup-pre-split-202609271854.dump`）；内网密钥 `~/.config/keel/demo-internal-secret`；keeldemo.service 已改为 source demo-env.sh（含登录锁定豁免，重启不再丢）；reset-demo.sh 已适配 C 档（两个库一起重建 + split-data）。**库存在库存库 keeldemo-postgres-inventory-1 / keel_inventory 里**，补库存要改那边。外部验证通过。
-- 已发布：**v0.2.0**（2026-09-27，tag 指向 d530fd7，库落在 00065）；ghcr 四个镜像 keel / keel-migrate / keel-postgres / keel-console 均可匿名拉取。iPhone 15 真机验证通过；Android 真机、小程序真机、tab 角标、长标题两行省略未验证。
+- **v0.6.0**（2026-09-28，加固版）：AI 经营演示站实跑验收 + 三轮破坏性测试的修复（多收款自动原路退回 00150、单价上限 00142、检索相关度下限 00140、简报更正 00141、售后期 00151 等），核心库落在 **00151**。发布说明见 CHANGELOG `[0.6.0]`。
+- **演示站**（https://eshop.zzss.fun，C 档：core + inventory 两个进程、两个库）：API `4fbd2f9`、库 00151（与 v0.6.0 代码一致，之后只加了测试与 CI 修复）；最近一次部署前备份 `~/.local/share/keel-eshop/backup-pre-00151-202609282256.dump`。环境与 compose 清单在 `~/.local/share/keel-eshop/demo-env.sh`（`source` 后用 `"${DC[@]}"`）；**库存在库存库 keeldemo-postgres-inventory-1 / keel_inventory**。部署：`"${DC[@]}" up -d --build inventory app console` + `bin/publish-frontend.sh all`，外部验证走 44922 跳板。
+- **CI**（自建 runner lenserver = 本机）：端到端那一步 2026-09-27 起每次都红 —— 宿主机 18180 被演示站 Caddy 网关占了，已换到 28180 / 28181。**发版 workflow** v0.3.0–v0.5.0 的「建 release」都红（之前的会话先手动 `gh release create`，workflow 再建撞 already exists；镜像其实都推上去了），已改成已存在就 edit。**以后发版只打标签，不要手动建 release。**
+- **跨商家隔离**：仓库里跨租户 / 权限 / 范围的测试 135 条 + 租户检查脚本全绿；2026-09-28 补了 AI 员工密钥只在本店有效、多收款退回 / 简报更正 / MCP 时区按店隔离四条。多商家真栈的人工抽查被安全机制拦下没做成（写越权请求清单 / 脚本会被拦）——以后这类验证一律写成仓库里的防守性回归测试。
+- ghcr 四个镜像 keel / keel-migrate / keel-postgres / keel-console 均可匿名拉取。真机：iPhone 15 验过；Android 真机、小程序真机未验。
 
 ## Flutter 买家端（flutter_app/，2026-09-28 起主要维护的客户端）
 
