@@ -266,11 +266,12 @@ SELECT s.id, s.sku_code, s.spec_values, s.product_id, p.title AS product_title
 
 -- name: ReportSearchTotals :one
 -- 搜索概况：检索次数、无结果次数、有点击的次数。走 idx_search_logs_created。
--- 无结果与 scripts/search_metrics.sql 的 zero_rate 同一个口径（ranked_ids 为空）；
+-- 无结果与 scripts/search_metrics.sql 的 zero_rate 同一个口径（ranked_ids 为空，或只回了低于相关度下限的
+-- 「猜你想要」—— fallback，00140）；
 -- COALESCE 是给 NULL 的 ranked_ids 兜底 —— cardinality(NULL) 是 NULL，不兜的话
 -- 那一行既不算有结果、也不算无结果。
 SELECT count(*)::bigint AS search_count,
-       count(*) FILTER (WHERE COALESCE(cardinality(l.ranked_ids), 0) = 0)::bigint AS zero_result_count,
+       count(*) FILTER (WHERE (COALESCE(cardinality(l.ranked_ids), 0) = 0 OR l.fallback))::bigint AS zero_result_count,
        count(*) FILTER (WHERE l.clicked_id IS NOT NULL)::bigint AS click_count
   FROM search_logs l
  WHERE l.created_at >= sqlc.arg(window_start)::timestamptz
@@ -282,18 +283,18 @@ SELECT count(*)::bigint AS search_count,
 -- 两种都是第二键另一个次数、第三键词本身，并列时结果稳定。
 SELECT lower(btrim(l.query))::text AS term,
        count(*)::bigint AS search_count,
-       count(*) FILTER (WHERE COALESCE(cardinality(l.ranked_ids), 0) = 0)::bigint AS zero_result_count
+       count(*) FILTER (WHERE (COALESCE(cardinality(l.ranked_ids), 0) = 0 OR l.fallback))::bigint AS zero_result_count
   FROM search_logs l
  WHERE l.created_at >= sqlc.arg(window_start)::timestamptz
    AND l.created_at <  sqlc.arg(window_end)::timestamptz
  GROUP BY 1
 HAVING NOT sqlc.arg(only_zero)::boolean
-       OR count(*) FILTER (WHERE COALESCE(cardinality(l.ranked_ids), 0) = 0) > 0
+       OR count(*) FILTER (WHERE (COALESCE(cardinality(l.ranked_ids), 0) = 0 OR l.fallback)) > 0
  ORDER BY CASE WHEN sqlc.arg(only_zero)::boolean
-               THEN count(*) FILTER (WHERE COALESCE(cardinality(l.ranked_ids), 0) = 0)
+               THEN count(*) FILTER (WHERE (COALESCE(cardinality(l.ranked_ids), 0) = 0 OR l.fallback))
                ELSE count(*) END DESC,
           CASE WHEN sqlc.arg(only_zero)::boolean
                THEN count(*)
-               ELSE count(*) FILTER (WHERE COALESCE(cardinality(l.ranked_ids), 0) = 0) END DESC,
+               ELSE count(*) FILTER (WHERE (COALESCE(cardinality(l.ranked_ids), 0) = 0 OR l.fallback)) END DESC,
           1
  LIMIT sqlc.arg(row_limit);

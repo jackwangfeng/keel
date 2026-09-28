@@ -213,7 +213,28 @@ type SearchConfig struct {
 	// EmbedTimeout 是 query embedding 这一步的上限。<= 0 用
 	// DefaultQueryEmbedTimeout。
 	EmbedTimeout time.Duration
+
+	// VectorFloor 是向量召回的相关度下限（余弦相似度）：0 用 DefaultVectorFloor，负数关闭下限。
+	// 见 applyFloor 与 DefaultVectorFloor。
+	VectorFloor float64
 }
+
+// DefaultVectorFloor 是「只被向量路捞到的商品」算作可信命中的最低余弦相似度。
+//
+// 没有下限时向量召回永远凑满 size 条：2026-09-28 演示站上「瑜伽垫」「登山鞋」（店里没有）返回的是开衫、地毯，
+// 于是无结果恒 0、search_zero_spike 永远不触发，AI 员工的搜索缺口手册读到的榜单是假的。
+//
+// 0.40 是在演示站（Qwen3-Embedding-0.6B，23 件商品）上量出来的，55 条查询：
+//
+//	店里有货的 35 条：命中商品的相似度 0.41–0.82；只有意图类的「提神的饮品」0.355、「送女朋友的礼物」0.326 落在下面
+//	店里没有的 20 条：14 条最高分 < 0.40（足球 0.286 … 螺丝刀 0.426 之外）；保温杯 0.531、手机壳 0.513、
+//	羽绒服 0.506 在上面（近义品类，双塔模型分不开，要等精排）
+//
+// 绝对门槛分不干净两类，所以低于下限的结果**不丢**：一条可信命中都没有时它们作为「猜你想要」返回
+// （SearchResult.Fallback），「提神的饮品」照样看得到龙井和冷萃，只是记作无结果。
+// **与模型绑定**：换 embedding 模型后余弦的尺度会变，这个数失效时不报错 —— 重新量（同 DefaultCategoryGate）。
+// 部署可用 KEEL_SEARCH_VECTOR_FLOOR 覆盖。
+const DefaultVectorFloor = 0.40
 
 // DefaultQueryEmbedTimeout 是查询侧给引擎的时间上限里**与长度无关的那一段**。
 //
@@ -394,6 +415,10 @@ type SearchResult struct {
 	// 那条 WARN 也没有任何断言 —— 整段删掉，全绿。
 	Degraded bool
 
+	// Fallback 为真表示这一次没有可信命中（applyFloor）：Items 是相关度低于下限的「猜你想要」。
+	// 契约 SearchResponse.fallback；search_logs.fallback 记它，无结果的口径据此算（00140）。
+	Fallback bool
+
 	// TraceID 是这次检索在 search_logs 里那一行的定位键，客户端回传行为时带回来
 	// （POST /search/events）。**检索日志没写进去时为空串**：那时库里没有这一行，
 	// 回一个 id 出去只会换来之后每一次回传的 404（文件头第六节）。
@@ -422,6 +447,9 @@ func NewSearchService(r SearchRepository, inv inventory.Service, emb inference.E
 	}
 	if cfg.EmbedTimeout <= 0 {
 		cfg.EmbedTimeout = DefaultQueryEmbedTimeout
+	}
+	if cfg.VectorFloor == 0 {
+		cfg.VectorFloor = DefaultVectorFloor
 	}
 	return &SearchService{repo: r, inv: inv, emb: emb, log: log, cfg: cfg}
 }
@@ -608,6 +636,8 @@ func (s *SearchService) Search(ctx context.Context, req SearchRequest) (SearchRe
 		}
 		stages = append(stages, StageBusiness)
 	}
+	var fallback bool
+	ranked, fallback = applyFloor(ranked, byID, s.cfg.VectorFloor)
 	if len(ranked) > size {
 		ranked = ranked[:size]
 	}
@@ -638,10 +668,31 @@ func (s *SearchService) Search(ctx context.Context, req SearchRequest) (SearchRe
 		Strategy: strategy,
 		Stages:   stages,
 		Degraded: degraded,
+		Fallback: fallback,
 		Store:    storeContextOf(scope, matchTyp),
 	}
 	res.TraceID = s.recordSearchLog(ctx, req.Query, res, fused, model, start)
 	return res, nil
+}
+
+// applyFloor 按相关度下限分出可信命中：关键词路捞到的一律可信（字面上就对得上），只被向量路捞到的要
+// 相似度 ≥ floor。有可信命中就只留可信的（低分的尾巴丢掉，比如「蜡烛」捞回来的法压壶 0.32）；
+// 一条都没有时原样返回、fallback 为真（「猜你想要」，见 DefaultVectorFloor）。floor < 0 不设下限。
+// 作用在业务重排之后、截断之前：顺序不变，只是剔掉不可信的。
+func applyFloor(ranked []search.Ranked, byID map[int64]repository.SearchHit, floor float64) ([]search.Ranked, bool) {
+	if floor < 0 || len(ranked) == 0 {
+		return ranked, false
+	}
+	kept := make([]search.Ranked, 0, len(ranked))
+	for _, r := range ranked {
+		if r.KeywordRank > 0 || (r.VectorRank > 0 && 1-byID[r.ID].Distance >= floor) {
+			kept = append(kept, r)
+		}
+	}
+	if len(kept) == 0 {
+		return ranked, true
+	}
+	return kept, false
 }
 
 // inStockOnlyRecallBoost 是 in_stock_only 时召回窗口的放大倍数，见 Search 里那一段。
@@ -800,6 +851,7 @@ func (s *SearchService) recordSearchLog(ctx context.Context, query string, res S
 		TraceID:   newTraceID(),
 		Strategy:  res.Strategy,
 		Stages:    res.Stages,
+		Fallback:  res.Fallback,
 	}
 	if model.Name != "" {
 		entry.ModelName = &model.Name

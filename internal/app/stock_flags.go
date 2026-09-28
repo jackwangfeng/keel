@@ -33,3 +33,7 @@ const (
 	EnvGeoProvider = "KEEL_GEO_PROVIDER"
 	EnvGeoKey      = "KEEL_GEO_KEY"
 )
+
+// EnvSearchVectorFloor 覆盖检索的向量相关度下限（service.DefaultVectorFloor，余弦相似度）。
+// 没设用默认值；负数关闭下限（回到「向量永远凑满 size 条」）。换 embedding 模型后要重新量。
+const EnvSearchVectorFloor = "KEEL_SEARCH_VECTOR_FLOOR"

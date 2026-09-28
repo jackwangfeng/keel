@@ -153,6 +153,9 @@ type SearchLog struct {
 	// 向量路没跑成时为 nil（不是空串 —— 空串会被读成「有个模型，名字是空的」）。
 	ModelName    *string
 	ModelVersion *string
+	// Fallback：这一次没有可信命中，RankedIDs 是低于相关度下限的「猜你想要」（00140）。
+	// 无结果的口径是「RankedIDs 为空或 Fallback」。
+	Fallback bool
 }
 
 func (t tenantTx) InsertSearchLog(ctx context.Context, l SearchLog) error {
@@ -173,6 +176,7 @@ func (t tenantTx) InsertSearchLog(ctx context.Context, l SearchLog) error {
 		Query: l.Query, RecallIds: recall, RankedIds: ranked,
 		LatencyMs: &lat, TraceID: l.TraceID, Strategy: l.Strategy,
 		Stages: stages, ModelName: l.ModelName, ModelVersion: l.ModelVersion,
+		Fallback: l.Fallback,
 	})
 }
 

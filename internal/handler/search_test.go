@@ -1280,3 +1280,48 @@ func TestBothRecallPathsFilterIdentically(t *testing.T) {
 		}
 	}
 }
+
+// 相关度下限（2026-09-28）：只被向量路捞到、相似度低于下限的商品不算可信命中。
+//
+// 夹具的向量按概念轴给（search_fixture_test.go）：跨概念的余弦是 0 上下，远低于 0.40。
+//
+//	· 「连衣裙」有可信命中（裙子两件）：咖啡那件（跨概念，只有向量路捞到）不再挂在尾巴上，fallback = false；
+//	· 「瑜伽垫」（夹具里没有这个概念，也没有字面命中）：一条可信命中都没有 → 回的是「猜你想要」，
+//	  fallback = true，items 非空；search_logs 那一行 fallback 也是 true（无结果统计按它算）。
+func TestSearchVectorFloorSeparatesMatchesFromGuesses(t *testing.T) {
+	fx := newSearchFixture(t)
+
+	w, body := doSearch(t, fx.HostA, `{"query":"连衣裙","explain":true}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("检索返回 %d：%s", w.Code, w.Body.String())
+	}
+	titles := titlesOf(body)
+	if !contains(titles, fxDress.Title) || !contains(titles, fxSkirt.Title) {
+		t.Fatalf("搜「连衣裙」应当有两件裙子：%v", titles)
+	}
+	if contains(titles, fxCoffee.Title) {
+		t.Fatalf("搜「连衣裙」时咖啡（跨概念、只有向量路、相似度远低于下限）仍在结果里：%v", titles)
+	}
+	if body.raw["fallback"] != false {
+		t.Fatalf("有可信命中时 fallback 应为 false：%v", body.raw["fallback"])
+	}
+
+	w, body = doSearch(t, fx.HostA, `{"query":"瑜伽垫"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("检索返回 %d：%s", w.Code, w.Body.String())
+	}
+	if body.raw["fallback"] != true || len(body.Items) == 0 {
+		t.Fatalf("搜「瑜伽垫」应当 fallback = true 且回「猜你想要」：fallback=%v items=%v", body.raw["fallback"], titlesOf(body))
+	}
+	trace, _ := body.raw["trace_id"].(string)
+	if trace == "" {
+		t.Fatal("检索没有回 trace_id")
+	}
+	var fb bool
+	if err := admin(t).QueryRow(context.Background(), `SELECT fallback FROM search_logs WHERE trace_id = $1`, trace).Scan(&fb); err != nil {
+		t.Fatal(err)
+	}
+	if !fb {
+		t.Fatal("「猜你想要」那一次的 search_logs.fallback 应为 true —— 否则无结果统计又数成有结果")
+	}
+}

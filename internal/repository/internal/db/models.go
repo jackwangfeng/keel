@@ -248,6 +248,7 @@ type AgentRoSearchLog struct {
 	OrderedID   *int64
 	LatencyMs   *int32
 	CreatedAt   pgtype.Timestamptz
+	Fallback    bool
 }
 
 type AgentRoSku struct {
@@ -891,6 +892,7 @@ type SearchLog struct {
 	ModelName    *string
 	ModelVersion *string
 	CreatedAt    pgtype.Timestamptz
+	Fallback     bool
 }
 
 type Shipment struct {

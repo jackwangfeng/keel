@@ -5610,14 +5610,16 @@ class SearchResponse {
   final int latencyMs;
   final int? total;
   final String strategy;
+  final bool? fallback;
   final String? traceId;
-  const SearchResponse({required this.items, required this.store, required this.latencyMs, this.total, required this.strategy, this.traceId});
+  const SearchResponse({required this.items, required this.store, required this.latencyMs, this.total, required this.strategy, this.fallback, this.traceId});
   factory SearchResponse.fromJson(Map<String, dynamic> j) => SearchResponse(
         items: (j['items'] as List).map((e) => SearchHit.fromJson(e as Map<String, dynamic>)).toList(),
         store: StoreContext.fromJson(j['store'] as Map<String, dynamic>),
         latencyMs: (j['latency_ms'] as num).toInt(),
         total: (j['total'] as num?)?.toInt(),
         strategy: j['strategy'] as String,
+        fallback: j['fallback'] as bool?,
         traceId: j['trace_id'] as String?,
       );
   Map<String, dynamic> toJson() => {
@@ -5626,6 +5628,7 @@ class SearchResponse {
         'latency_ms': latencyMs,
         if (total != null) 'total': total,
         'strategy': strategy,
+        if (fallback != null) 'fallback': fallback,
         if (traceId != null) 'trace_id': traceId,
       };
 }

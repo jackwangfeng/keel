@@ -57,6 +57,8 @@ type searchResponse struct {
 	Total     int             `json:"total"`
 	Strategy  string          `json:"strategy"`
 	TraceID   string          `json:"trace_id,omitempty"`
+	// Fallback：没有可信命中，items 是低于相关度下限的「猜你想要」（service.applyFloor）。总是返回。
+	Fallback bool `json:"fallback"`
 
 	// Store 在契约里是**必返**的，与 GET /products 的同名字段同义：
 	// 检索结果里的价格区间、in_stock、以及「这家店卖不卖这件商品」
@@ -217,6 +219,7 @@ func (h *SearchHandler) Search(c *gin.Context) {
 		Total:     len(items),
 		Strategy:  res.Strategy,
 		TraceID:   res.TraceID,
+		Fallback:  res.Fallback,
 		LatencyMs: int(time.Since(start).Milliseconds()),
 		Store:     apiStoreContext(res.Store),
 	})

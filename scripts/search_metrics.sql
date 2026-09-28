@@ -42,7 +42,7 @@ WITH w AS (
     SELECT l.merchant_id,
            l.strategy,
            array_to_string(l.stages, '+')                     AS stages,
-           cardinality(l.ranked_ids) > 0                      AS has_results,
+           cardinality(l.ranked_ids) > 0 AND NOT l.fallback   AS has_results, -- fallback：只有低于下限的猜你想要（00140）
            array_position(l.ranked_ids, l.clicked_id)         AS click_rank,
            l.carted_id IS NOT NULL                            AS carted,
            l.ordered_id IS NOT NULL                           AS ordered

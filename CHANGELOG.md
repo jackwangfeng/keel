@@ -39,7 +39,7 @@ so "which one is running?" never depends on anyone's memory.
 
 ## [Unreleased]
 
-No migrations.
+Core migration `00140` (`search_logs.fallback`, and the column on the `agent_ro.search_logs` view).
 
 ### Added
 
@@ -50,6 +50,14 @@ No migrations.
   inclusive), cut into days in the **shop's time zone** — the same rule as the reports. Combining them with
   `created_from` / `created_to` is a 422. The admin console's date filter now sends these instead of converting in
   the browser's time zone.
+
+- `POST /search` has a relevance floor. A product found only by vector recall counts as a match when its cosine
+  similarity is at least `KEEL_SEARCH_VECTOR_FLOOR` (default `0.40`, calibrated for Qwen3-Embedding-0.6B). If
+  anything matches, only matches are returned; if nothing does, the low-similarity results come back as suggestions
+  with `fallback: true`, and the search is counted as a zero-result search in reports, `search_insights` and the
+  `search_zero_spike` event. Before this, vector recall always filled the page, so the zero-result rate was always 0.
+- `AdminRefund.order_shipped_at` (also on the MCP `list_refunds` tool).
+- MCP tool output reports times in the shop's time zone (RFC 3339 with offset) instead of UTC.
 
 ### Fixed
 

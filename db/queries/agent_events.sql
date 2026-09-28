@@ -43,11 +43,11 @@ SELECT e.store_id::bigint AS store_id, (e.payload->>'sku_id')::bigint AS sku_id
  WHERE e.type = 'stock_low' AND e.created_at > now() - interval '24 hours';
 
 -- name: SearchZeroSpikes :many
--- 近 1 小时的无结果词（口径同经营报表：去首尾空白、转小写；ranked_ids 为空即无结果），出现 ≥ min_count 次的。
+-- 近 1 小时的无结果词（口径同经营报表：去首尾空白、转小写；ranked_ids 为空或 fallback 即无结果，00140），出现 ≥ min_count 次的。
 SELECT lower(btrim(l.query))::text AS term, count(*)::bigint AS zero_count
   FROM search_logs l
  WHERE l.created_at >= now() - interval '1 hour'
-   AND COALESCE(cardinality(l.ranked_ids), 0) = 0
+   AND (COALESCE(cardinality(l.ranked_ids), 0) = 0 OR l.fallback)
    AND btrim(l.query) <> ''
  GROUP BY 1
 HAVING count(*) >= sqlc.arg(min_count)::bigint

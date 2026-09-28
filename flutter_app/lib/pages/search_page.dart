@@ -26,6 +26,7 @@ class _SearchPageState extends State<SearchPage> {
   String _searched = '';
   List<ProductRow> _rows = const [];
   String _traceId = '';
+  bool _fallback = false;
   String _error = '';
   // 连着搜两次时只认最后一次发出去的请求。
   int _seq = 0;
@@ -52,6 +53,7 @@ class _SearchPageState extends State<SearchPage> {
       setState(() {
         _rows = res.rows;
         _traceId = res.traceId;
+        _fallback = res.fallback;
         _state = _State.done;
       });
     } on ApiFailure catch (f) {
@@ -127,10 +129,21 @@ class _SearchPageState extends State<SearchPage> {
         _State.error => ErrorCard(message: _error, onRetry: _submit),
         _State.done when _rows.isEmpty => EmptyState(key: const Key('search.empty'), text: '没有找到「$_searched」相关的商品'),
         _State.done => ListView(padding: const EdgeInsets.fromLTRB(16, 0, 16, 24), children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(4, 4, 4, 0),
-              child: Text('「$_searched」共 ${_rows.length} 件，按相关度排序', key: const Key('search.count'), style: KeelText.hint),
-            ),
+            if (_fallback)
+              // 没有可信命中：先说没找到，下面的是按相近程度猜的，不冒充搜索结果。
+              Padding(
+                padding: const EdgeInsets.fromLTRB(4, 12, 4, 0),
+                child: Column(key: const Key('search.fallback'), crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text('没有找到「$_searched」相关的商品', style: KeelText.body),
+                  const SizedBox(height: 4),
+                  const Text('看看这些相近的：', style: KeelText.hint),
+                ]),
+              )
+            else
+              Padding(
+                padding: const EdgeInsets.fromLTRB(4, 4, 4, 0),
+                child: Text('「$_searched」共 ${_rows.length} 件，按相关度排序', key: const Key('search.count'), style: KeelText.hint),
+              ),
             for (final r in _rows) ProductTile(row: r, onTap: () => _open(r.id), onAdd: () => _quickAdd(r.id)),
           ]),
       }),

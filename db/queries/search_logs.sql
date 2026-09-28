@@ -13,10 +13,10 @@
 -- 买家身份不在这条路径上；查询理解还没有；行为列由 POST /search/events 回填
 -- （下面那几条）。它们留着列的默认值 NULL —— 那是实话，不是占位。
 INSERT INTO search_logs (query, recall_ids, ranked_ids, latency_ms, trace_id,
-                         strategy, stages, model_name, model_version)
+                         strategy, stages, model_name, model_version, fallback)
 VALUES (@query, @recall_ids::bigint[], @ranked_ids::bigint[], @latency_ms,
         @trace_id, @strategy, @stages::text[],
-        sqlc.narg(model_name), sqlc.narg(model_version));
+        sqlc.narg(model_name), sqlc.narg(model_version), @fallback);
 
 -- 下面四条是 POST /search/events 的落点（数据模型 §8 那段 trace_id 的注）。
 --

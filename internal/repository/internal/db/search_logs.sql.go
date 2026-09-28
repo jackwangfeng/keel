@@ -30,10 +30,10 @@ func (q *Queries) GetSearchLogRankedIDs(ctx context.Context, traceID string) ([]
 const insertSearchLog = `-- name: InsertSearchLog :exec
 
 INSERT INTO search_logs (query, recall_ids, ranked_ids, latency_ms, trace_id,
-                         strategy, stages, model_name, model_version)
+                         strategy, stages, model_name, model_version, fallback)
 VALUES ($1, $2::bigint[], $3::bigint[], $4,
         $5, $6, $7::text[],
-        $8, $9)
+        $8, $9, $10)
 `
 
 type InsertSearchLogParams struct {
@@ -46,6 +46,7 @@ type InsertSearchLogParams struct {
 	Stages       []string
 	ModelName    *string
 	ModelVersion *string
+	Fallback     bool
 }
 
 // 检索日志（数据模型 §8，迁移 00027）。
@@ -71,6 +72,7 @@ func (q *Queries) InsertSearchLog(ctx context.Context, arg InsertSearchLogParams
 		arg.Stages,
 		arg.ModelName,
 		arg.ModelVersion,
+		arg.Fallback,
 	)
 	return err
 }

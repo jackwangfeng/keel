@@ -132,7 +132,7 @@ Keel 在这些时刻写一条事件，agent 可以被它叫醒，而不必每天
 |---|---|---|---|
 | `stock_low` | 一个（门店，SKU）可售不高于预警线（与 `inventory_alerts` 同一口径）；每对每 24 小时至多一条 | 该门店 | `store_id` `sku_id` `available` `threshold` |
 | `refund_created` | 买家提交售后申请 | 履约门店 | `refund_no` `order_no` `store_id` `amount_cents` `refund_type` |
-| `search_zero_spike` | 一个无结果词近 1 小时出现 ≥ 5 次；每词每天（UTC）至多一条 | 无（全店） | `query` `count` |
+| `search_zero_spike` | 一个无结果词近 1 小时出现 ≥ 5 次；每词每天（UTC）至多一条。「无结果」含只回了低于相关度下限的「猜你想要」（`POST /search` 的 `fallback`） | 无（全店） | `query` `count` |
 | `proposal_decided` | 提案被批准执行 / 执行失败 / 驳回 / 过期 | 提案的门店 | `proposal_id` `kind` `agent_staff_id` `status`（`executed` / `failed` / `rejected` / `expired`） |
 
 库存预警与无结果词每 5 分钟扫一轮，所以最多晚 5 分钟；售后申请与提案结果与业务同一个事务写入，即时。
@@ -213,6 +213,7 @@ def verify(secret: str, body: bytes, header: str) -> bool:
 | 2026-09-28 | AI 经营 M10：加 `slow_movers`（滞销清仓）、`promotion_review`（活动 / 券复盘）两个只读计算工具 |
 | 2026-09-28 | AI 经营 M10 / M11：加 `propose_flash_price` `propose_coupon` `propose_product_copy` `propose_refund_decision` 四种提案与 `my_scorecard` 成绩单工具；提案支持按 AI 员工 × 种类的自动执行策略（`auto_approved` 字段），`refund_decision` 不允许自动执行 |
 | 2026-09-28 | AI 经营 M11：加 `query_sql`（只读 SQL 兜底，只读 `agent_ro` 脱敏视图，需全店范围） |
+| 2026-09-28 | 检索加相关度下限：`search_insights` 的无结果词与 `search_zero_spike` 把「只回了低于下限的猜你想要」（fallback）也算作无结果；之前向量召回永远凑满，这两样恒为 0 |
 | 2026-09-28 | 演示站实跑验收修两处：全部工具输出里的时刻改为**店铺时区**（带偏移的 RFC 3339，如 `+08:00`；之前是 UTC，AI 店长把它当北京时间写进简报）；`list_refunds` 加 `order_shipped_at`（没发过货时缺席），判发没发货看它，不看 `order_status`（50 / 60 是未发货的整单退款） |
 
 ## 接入方式举例

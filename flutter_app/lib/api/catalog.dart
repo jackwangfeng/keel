@@ -132,7 +132,9 @@ class SearchResult {
   final List<ProductRow> rows;
   /// 这批结果的 trace_id（效果回传用）；服务端写日志失败时缺席，是空串 —— 这批的回传全部跳过。
   final String traceId;
-  const SearchResult(this.rows, this.traceId);
+  /// 没有可信命中：rows 是相关度低于下限的「猜你想要」，页面要先说「没找到」（契约 fallback；缺席按 false）。
+  final bool fallback;
+  const SearchResult(this.rows, this.traceId, {this.fallback = false});
 }
 
 /// POST /search（公开）。一期不翻页，结果上限就是 size。query 超过 200 字截断（契约 1~200）。
@@ -140,7 +142,8 @@ Future<SearchResult> searchProducts(ApiClient c, String query, int? storeId, {in
   final q = query.length > 200 ? query.substring(0, 200) : query;
   final res = await c.send('POST', '/search', body: SearchRequest(query: q, size: size, storeId: storeId).toJson(),
       decode: (j) => SearchResponse.fromJson(j as Map<String, dynamic>));
-  return SearchResult(res.data.items.map((h) => searchHitRow(h, c.assetUrl)).toList(), res.data.traceId ?? '');
+  return SearchResult(res.data.items.map((h) => searchHitRow(h, c.assetUrl)).toList(), res.data.traceId ?? '',
+      fallback: res.data.fallback ?? false);
 }
 
 /// 搜索效果回传的归因：只有从搜索结果点进去的（或在结果里原地加购的）商品才算「来自这次搜索」。

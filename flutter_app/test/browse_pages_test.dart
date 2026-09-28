@@ -58,8 +58,10 @@ class Fake {
       case '/cart':
         return j(cart(0));
       case '/search':
+        // 「瑜伽垫」店里没有：服务端回低于相关度下限的「猜你想要」（fallback）。
+        final guess = jsonDecode(r.body)['query'] == '瑜伽垫';
         return j({'items': [{...summary(22, '多规格豆'), 'in_stock': false}], 'store': {'match_type': 'default', 'store_id': 1},
-          'latency_ms': 3, 'strategy': 'hybrid', 'trace_id': 'tr-1'});
+          'latency_ms': 3, 'strategy': 'hybrid', 'trace_id': 'tr-1', if (guess) 'fallback': true});
       case '/search/events':
         return http.Response('', 204);
     }
@@ -182,6 +184,22 @@ void main() {
     await t.pumpAndSettle();
     expect(jsonDecode(f.to('/search/events').single.body), {'trace_id': 'tr-1', 'event': 'click', 'product_id': 22});
     expect(find.byKey(const Key('detail.title')), findsOneWidget);
+  });
+
+  testWidgets('搜索没有可信命中（fallback）：先说没找到，下面是「看看这些相近的」', (t) async {
+    phone(t);
+    final f = Fake();
+    await t.pumpWidget((await app(f)).$1);
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('home.search')));
+    await t.pumpAndSettle();
+    await t.enterText(find.byKey(const Key('search.input')), '瑜伽垫');
+    await t.tap(find.byKey(const Key('search.submit')));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('search.fallback')), findsOneWidget);
+    expect(find.text('没有找到「瑜伽垫」相关的商品'), findsOneWidget);
+    expect(find.byKey(const Key('search.count')), findsNothing, reason: '猜的不冒充「共 N 件，按相关度排序」');
+    expect(find.byKey(const Key('search.row.22')), findsOneWidget, reason: '猜你想要照样列出来、点得进去');
   });
 
   testWidgets('#4 换了服务地址（门店作废）：首页重新解析门店、重拉商品', (t) async {

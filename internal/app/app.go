@@ -265,7 +265,8 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	// 挡不住什么，都写在 ratelimit.go 的文件头。请求体大小闸门在 handler 里
 	// （handler.MaxSearchBodyBytes），和 webhook 那处同一个顺序：先限大小再解析。
 	srh := handler.NewSearchHandler(
-		service.NewSearchService(repo, inv, embedder, service.SearchConfig{}, nil))
+		service.NewSearchService(repo, inv, embedder,
+			service.SearchConfig{VectorFloor: envFloat(EnvSearchVectorFloor, service.DefaultVectorFloor)}, nil))
 	v1.POST("/search", rateLimitByIP(searchRateLimiterFromEnv()), srh.Search)
 	// POI 与地址（docs/POI-设计.md）：服务端代理地图服务商。没配 KEEL_GEO_PROVIDER / KEEL_GEO_KEY 时回 501。
 	// 与 /search 共用一个按 IP 的限流器配置（各自一份计数）：服务商的免费额度很小，不能让一个脚本刷完。
