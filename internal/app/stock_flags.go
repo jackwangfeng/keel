@@ -26,3 +26,10 @@ func stockFlagIntervalFromEnv() time.Duration {
 	}
 	return d
 }
+
+// EnvGeoProvider / EnvGeoKey 配地图服务商（docs/POI-设计.md）：目前只有 amap（高德 Web 服务 key，绑服务器 IP 白名单）。
+// 两个都没配时 /geo/* 回 501，客户端退回手填 + 地图选点。
+const (
+	EnvGeoProvider = "KEEL_GEO_PROVIDER"
+	EnvGeoKey      = "KEEL_GEO_KEY"
+)

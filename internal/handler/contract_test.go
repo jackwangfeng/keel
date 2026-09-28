@@ -777,6 +777,19 @@ var routes = []route{
 		HandlerFile:    "admin_agent_brief.go",
 		NoQueryParams:  "简报 id 在路径上",
 	},
+	// —— POI 与地址（docs/POI-设计.md）。两条各占一个文件：都读 query 参数。
+	{
+		ContractPath:   "/geo/reverse",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "geo_reverse.go",
+	},
+	{
+		ContractPath:   "/geo/suggest",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "geo_suggest.go",
+	},
 	// —— AI 员工的提案（AI 经营 M9 任务 4）。列表读 status / agent_staff_id / page，单独一个文件。
 	{
 		ContractPath:   "/admin/agent-proposals",

@@ -2022,6 +2022,155 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/geo/reverse": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 逆地理编码：坐标 → 地址（POI，docs/POI-设计.md）
+         * @description 买家端首页「送至 XX」、收货地址与后台门店地址的地图选点都用它。**坐标一律 WGS-84**
+         *     （与门店、围栏一致）；服务商（高德等）的 GCJ-02 由服务端换算，key 不下发给客户端。
+         *     结果缓存 24 小时（按约 1 米精度的坐标）。没配地图服务商时回 501（客户端退回手填）；
+         *     服务商不可用（额度用完、key 失效）回 503。公开接口，按客户端 IP 限流。
+         */
+        get: {
+            parameters: {
+                query: {
+                    lat: number;
+                    lng: number;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["GeoPlace"];
+                    };
+                };
+                /** @description 坐标缺失或越界。 */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /** @description 没有配置地图服务商（not-implemented）。 */
+                501: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /** @description 地图服务商不可用（geo-unavailable）。 */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/geo/suggest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 地点输入提示：关键字 → 候选地点（带坐标）
+         * @description 只返回有坐标的候选（公交线路之类丢掉），坐标 WGS-84。`lat` / `lng`（可选）让结果按离你近的排；
+         *     `city`（可选，城市名或 adcode）限定城市。结果缓存 1 小时。501 / 503 同 `/geo/reverse`。
+         *     候选里的省市区可能不全（服务商只给区县）：选中后再调一次 `/geo/reverse` 取完整的地址组成。
+         */
+        get: {
+            parameters: {
+                query: {
+                    q: string;
+                    lat?: number;
+                    lng?: number;
+                    city?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: components["schemas"]["GeoPlace"][];
+                        };
+                    };
+                };
+                /** @description 关键字为空或过长、坐标越界或只给了一个。 */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /** @description 没有配置地图服务商（not-implemented）。 */
+                501: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /** @description 地图服务商不可用（geo-unavailable）。 */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/agent/whoami": {
         parameters: {
             query?: never;
@@ -16477,6 +16626,23 @@ export interface components {
         };
         AgentProposalRejectRequest: {
             reason: string;
+        };
+        /** @description 一个地点，坐标 WGS-84。字段与收货地址对齐：adcode 即地址的 region_code（运费按它算）。 */
+        GeoPlace: {
+            /** @description 地点名 / 小区 / 门牌 */
+            name: string;
+            /** @description 完整地址 */
+            address: string;
+            province: string;
+            city: string;
+            district: string;
+            /** @description 区县级行政区划代码 */
+            adcode: string;
+            street: string;
+            /** Format: double */
+            lat: number;
+            /** Format: double */
+            lng: number;
         };
         AdminAgent: {
             /**

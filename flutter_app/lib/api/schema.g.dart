@@ -2426,6 +2426,42 @@ class FreightTemplateInput {
       };
 }
 
+/// 一个地点，坐标 WGS-84。字段与收货地址对齐：adcode 即地址的 region_code（运费按它算）。
+class GeoPlace {
+  final String name;
+  final String address;
+  final String province;
+  final String city;
+  final String district;
+  final String adcode;
+  final String street;
+  final double lat;
+  final double lng;
+  const GeoPlace({required this.name, required this.address, required this.province, required this.city, required this.district, required this.adcode, required this.street, required this.lat, required this.lng});
+  factory GeoPlace.fromJson(Map<String, dynamic> j) => GeoPlace(
+        name: j['name'] as String,
+        address: j['address'] as String,
+        province: j['province'] as String,
+        city: j['city'] as String,
+        district: j['district'] as String,
+        adcode: j['adcode'] as String,
+        street: j['street'] as String,
+        lat: (j['lat'] as num).toDouble(),
+        lng: (j['lng'] as num).toDouble(),
+      );
+  Map<String, dynamic> toJson() => {
+        'name': name,
+        'address': address,
+        'province': province,
+        'city': city,
+        'district': district,
+        'adcode': adcode,
+        'street': street,
+        'lat': lat,
+        'lng': lng,
+      };
+}
+
 /// GeoJSON Polygon，SRID 固定 4326。落库成 `GEOGRAPHY(POLYGON, 4326)`。
 class GeoPolygon {
   final String type;

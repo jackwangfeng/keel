@@ -4057,6 +4057,24 @@ type FreightUndeliverableLine struct {
 // 而这个模板设了不配送地区，判不了在不在配送范围——请买家补全地址。
 type FreightUndeliverableLineReasonCode string
 
+// GeoPlace 一个地点，坐标 WGS-84。字段与收货地址对齐：adcode 即地址的 region_code（运费按它算）。
+type GeoPlace struct {
+	// Adcode 区县级行政区划代码
+	Adcode string `json:"adcode"`
+
+	// Address 完整地址
+	Address  string  `json:"address"`
+	City     string  `json:"city"`
+	District string  `json:"district"`
+	Lat      float64 `json:"lat"`
+	Lng      float64 `json:"lng"`
+
+	// Name 地点名 / 小区 / 门牌
+	Name     string `json:"name"`
+	Province string `json:"province"`
+	Street   string `json:"street"`
+}
+
 // GeoPolygon GeoJSON Polygon，SRID 固定 4326。落库成 `GEOGRAPHY(POLYGON, 4326)`。
 //
 // **坐标序是 `[经度, 纬度]`**，和中文口语里的「纬度、经度」相反。
@@ -10631,6 +10649,20 @@ type GetCouponsParams struct {
 
 // GetCouponsParamsStatus defines parameters for GetCoupons.
 type GetCouponsParamsStatus string
+
+// GetGeoReverseParams defines parameters for GetGeoReverse.
+type GetGeoReverseParams struct {
+	Lat float32 `form:"lat" json:"lat"`
+	Lng float32 `form:"lng" json:"lng"`
+}
+
+// GetGeoSuggestParams defines parameters for GetGeoSuggest.
+type GetGeoSuggestParams struct {
+	Q    string   `form:"q" json:"q"`
+	Lat  *float32 `form:"lat,omitempty" json:"lat,omitempty"`
+	Lng  *float32 `form:"lng,omitempty" json:"lng,omitempty"`
+	City *string  `form:"city,omitempty" json:"city,omitempty"`
+}
 
 // PatchMeJSONBody defines parameters for PatchMe.
 type PatchMeJSONBody struct {

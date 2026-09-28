@@ -98,6 +98,8 @@ tags:
       投递记录里记为「未配置、跳过」。
   - name: Upload
     description: 文件上传（商品图 / 头像 / 退款凭证）
+  - name: Geo
+    description: POI 与地址：逆地理编码与地点输入提示（服务端代理地图服务商，坐标 WGS-84）
   - name: Agent
     description: AI 员工（AI 经营 M9）：后台管理 AI 员工与接入密钥；AI 员工凭密钥调用的接口
   - name: Store
@@ -1000,6 +1002,100 @@ paths:
           description: 已吊销
         '404':
           description: 不是本店的 AI 员工，或这把密钥不存在 / 已吊销 / 不属于它。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /geo/reverse:
+    get:
+      tags: [Geo]
+      summary: 逆地理编码：坐标 → 地址（POI，docs/POI-设计.md）
+      description: |
+        买家端首页「送至 XX」、收货地址与后台门店地址的地图选点都用它。**坐标一律 WGS-84**
+        （与门店、围栏一致）；服务商（高德等）的 GCJ-02 由服务端换算，key 不下发给客户端。
+        结果缓存 24 小时（按约 1 米精度的坐标）。没配地图服务商时回 501（客户端退回手填）；
+        服务商不可用（额度用完、key 失效）回 503。公开接口，按客户端 IP 限流。
+      security: []
+      parameters:
+        - name: lat
+          in: query
+          required: true
+          schema: { type: number, minimum: -90, maximum: 90 }
+        - name: lng
+          in: query
+          required: true
+          schema: { type: number, minimum: -180, maximum: 180 }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GeoPlace' }
+        '422':
+          description: 坐标缺失或越界。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '501':
+          description: 没有配置地图服务商（not-implemented）。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '503':
+          description: 地图服务商不可用（geo-unavailable）。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /geo/suggest:
+    get:
+      tags: [Geo]
+      summary: 地点输入提示：关键字 → 候选地点（带坐标）
+      description: |
+        只返回有坐标的候选（公交线路之类丢掉），坐标 WGS-84。`lat` / `lng`（可选）让结果按离你近的排；
+        `city`（可选，城市名或 adcode）限定城市。结果缓存 1 小时。501 / 503 同 `/geo/reverse`。
+        候选里的省市区可能不全（服务商只给区县）：选中后再调一次 `/geo/reverse` 取完整的地址组成。
+      security: []
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 50 }
+        - name: lat
+          in: query
+          schema: { type: number, minimum: -90, maximum: 90 }
+        - name: lng
+          in: query
+          schema: { type: number, minimum: -180, maximum: 180 }
+        - name: city
+          in: query
+          schema: { type: string, maxLength: 20 }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/GeoPlace' }
+        '422':
+          description: 关键字为空或过长、坐标越界或只给了一个。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '501':
+          description: 没有配置地图服务商（not-implemented）。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '503':
+          description: 地图服务商不可用（geo-unavailable）。
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
@@ -9525,6 +9621,21 @@ components:
       required: [reason]
       properties:
         reason: { type: string, maxLength: 500 }
+
+    GeoPlace:
+      type: object
+      required: [name, address, province, city, district, adcode, street, lat, lng]
+      description: 一个地点，坐标 WGS-84。字段与收货地址对齐：adcode 即地址的 region_code（运费按它算）。
+      properties:
+        name:     { type: string, description: 地点名 / 小区 / 门牌 }
+        address:  { type: string, description: 完整地址 }
+        province: { type: string }
+        city:     { type: string }
+        district: { type: string }
+        adcode:   { type: string, description: 区县级行政区划代码 }
+        street:   { type: string }
+        lat:      { type: number, format: double }
+        lng:      { type: number, format: double }
 
     AdminAgent:
       type: object

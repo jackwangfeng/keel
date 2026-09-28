@@ -262,6 +262,8 @@ const (
 	TypeInvalidFence         = "https://keel.dev/problems/invalid-fence"
 	// store-location-required / store-outside-fence：门店必须有坐标，有围栏时门店必须在围栏内
 	// （2026-09-27）。都是 422：不改请求重试永远不会成功 —— 前者要先选点，后者要挪点或重画围栏。
+	// geo-unavailable：地图服务商不可用（额度用完、key 失效、网络），POI 接口回 503（docs/POI-设计.md）。
+	TypeGeoUnavailable = "https://keel.dev/problems/geo-unavailable"
 	// proposal-not-open：AI 员工的提案已经处理过（已执行 / 已驳回）或已过期，不能再批准 / 驳回（AI 经营 M9）。
 	TypeProposalNotOpen       = "https://keel.dev/problems/proposal-not-open"
 	TypeStoreLocationRequired = "https://keel.dev/problems/store-location-required"

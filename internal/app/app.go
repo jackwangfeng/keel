@@ -9,6 +9,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"github.com/keel/keel/internal/geo"
 	"log/slog"
 	"net/http"
 	"os"
@@ -265,6 +266,17 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	srh := handler.NewSearchHandler(
 		service.NewSearchService(repo, inv, embedder, service.SearchConfig{}, nil))
 	v1.POST("/search", rateLimitByIP(searchRateLimiterFromEnv()), srh.Search)
+	// POI 与地址（docs/POI-设计.md）：服务端代理地图服务商。没配 KEEL_GEO_PROVIDER / KEEL_GEO_KEY 时回 501。
+	// 与 /search 共用一个按 IP 的限流器配置（各自一份计数）：服务商的免费额度很小，不能让一个脚本刷完。
+	geoP, err := geo.FromEnv(os.Getenv(EnvGeoProvider), os.Getenv(EnvGeoKey))
+	if err != nil {
+		// 配错（服务商名写错）是部署错误，与 trustProxies 配错同一个处理：启动即失败，而不是静默没有 POI。
+		panic(err)
+	}
+	gh := handler.NewGeoHandler(geoP)
+	geoLimit := rateLimitByIP(searchRateLimiterFromEnv())
+	v1.GET("/geo/reverse", geoLimit, gh.Reverse)
+	v1.GET("/geo/suggest", geoLimit, gh.Suggest)
 
 	// 搜索行为回传（契约 security: []，与 /search 一样公开：没登录的访客也在点）。
 	// 挡刷指标的不是限流，是 service 那道「product_id 必须在这次检索返回的

@@ -1192,6 +1192,22 @@ export type FreightTemplateInput = {
   undeliverable_region_codes? : ProvinceCode[]
 }
 
+/** 一个地点，坐标 WGS-84。字段与收货地址对齐：adcode 即地址的 region_code（运费按它算）。 */
+export type GeoPlace = {
+  /** 地点名 / 小区 / 门牌 */
+  name : string
+  /** 完整地址 */
+  address : string
+  province : string
+  city : string
+  district : string
+  /** 区县级行政区划代码 */
+  adcode : string
+  street : string
+  lat : number
+  lng : number
+}
+
 /** GeoJSON Polygon，SRID 固定 4326。落库成 `GEOGRAPHY(POLYGON, 4326)`。 */
 export type GeoPolygon = {
   type : string
