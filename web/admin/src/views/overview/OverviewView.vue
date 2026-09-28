@@ -59,6 +59,21 @@ const stores = ref<AdminStore[]>([]);
 const categories = ref<AdminCategory[]>([]);
 const canSeeSearch = computed(() => merchantWide());
 
+// ------------------------------------------------------------------ AI 员工待处理提案的横幅
+//
+// 只查 total，不取列表本体（page_size=1）——这里只是「有没有事要办」的一个数字。
+// 查不到就不挂：这条和「没有默认门店」那条不一样，不是「不挂就会出线上问题」的量级，
+// 失败静默即可（AI 经营 M9）。
+const pendingProposals = ref<number | null>(null);
+async function checkPendingProposals(): Promise<void> {
+    try {
+        const res = await keel.get("/admin/agent-proposals", { query: { status: 10, page_size: 1 } });
+        pendingProposals.value = res.total;
+    } catch {
+        pendingProposals.value = null;
+    }
+}
+
 // ------------------------------------------------------------------ 六块数据
 
 interface Block<T> {
@@ -160,6 +175,7 @@ watch([sortBy, categoryId], loadProducts);
 
 onMounted(async () => {
     loadAll();
+    void checkPendingProposals();
     try {
         stores.value = (await listAllStores()).stores;
     } catch {
@@ -273,6 +289,13 @@ function openStore(id: number): void {
             <span class="caption">{{ windowCaption }}</span>
         </div>
         <el-alert v-if="rangeError" :title="rangeError" type="warning" :closable="false" show-icon class="mb12" />
+
+        <el-alert v-if="(pendingProposals ?? 0) > 0" type="warning" :closable="false" show-icon class="mb12">
+            <template #title>
+                AI 员工有 {{ pendingProposals }} 条提案待处理。
+                <router-link :to="{ name: 'agents', query: { tab: 'proposals' } }">去处理</router-link>
+            </template>
+        </el-alert>
 
         <!-- 指标卡 -->
         <ProblemAlert v-if="overview.error" :error="overview.error" />

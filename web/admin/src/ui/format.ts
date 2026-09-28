@@ -46,10 +46,20 @@ export const CATEGORY_STATUS: Record<0 | 1, { text: string; tag: "info" | "succe
 /** `staff.role`：契约里 StaffRole 是 1 | 2 | 3 | 4。显示名只有一份，在 auth/permissions.ts。 */
 export { ROLE_TEXT as STAFF_ROLE } from "../auth/permissions.ts";
 
-/** `staff.status`：1 正常 2 停用。 */
+/** `staff.status`：1 正常 2 停用。AdminAgent.status 是同一个域，复用这份。 */
 export const STAFF_STATUS: Record<1 | 2, { text: string; tag: "success" | "info" }> = {
     1: { text: "正常", tag: "success" },
     2: { text: "停用", tag: "info" },
+};
+
+/** `AgentProposal.status`：10 待处理 / 15 执行中 / 20 已执行 / 30 已驳回 / 40 执行失败 / 50 已过期（AI 经营 M9）。 */
+export const PROPOSAL_STATUS: Record<10 | 15 | 20 | 30 | 40 | 50, { text: string; tag: "warning" | "success" | "info" | "danger" }> = {
+    10: { text: "待处理", tag: "warning" },
+    15: { text: "执行中", tag: "warning" },
+    20: { text: "已执行", tag: "success" },
+    30: { text: "已驳回", tag: "info" },
+    40: { text: "执行失败", tag: "danger" },
+    50: { text: "已过期", tag: "info" },
 };
 
 /**

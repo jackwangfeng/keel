@@ -83,6 +83,18 @@ export type StoreCreateRequest = S["StoreCreateRequest"];
 export type StoreUpdateRequest = S["StoreUpdateRequest"];
 export type MerchantUpdateRequest = S["MerchantUpdateRequest"];
 
+// AI 员工（AI 经营 M9）：AI 员工本身是一种 staff（角色 2/3/4，见 AdminAgent.role），
+// 通过密钥调 MCP 工具；写操作走「提案 → 人批准 → 以 AI 员工身份执行」（见 AgentProposal）。
+export type AdminAgent = S["AdminAgent"];
+export type AgentKey = S["AgentKey"];
+export type AgentKeyCreated = S["AgentKeyCreated"];
+export type AgentProposal = S["AgentProposal"];
+export type AgentBrief = S["AgentBrief"];
+export type AgentCreateRequest = S["AgentCreateRequest"];
+export type AgentUpdateRequest = S["AgentUpdateRequest"];
+export type AgentKeyCreateRequest = S["AgentKeyCreateRequest"];
+export type AgentProposalRejectRequest = S["AgentProposalRejectRequest"];
+
 // 商品批量导入（契约 /admin/product-imports）。
 export type ProductImportFormat = S["ProductImportFormat"];
 export type ProductImportPreview = S["ProductImportPreview"];
@@ -131,6 +143,12 @@ export type AdminRefundPage = ResponseBodyOf<"/admin/refunds", "get">;
 export type MerchantList = ResponseBodyOf<"/admin/merchants", "get">;
 /** `POST /admin/uploads` 的响应体。 */
 export type UploadResponse = ResponseBodyOf<"/admin/uploads", "post">;
+/** `GET /admin/agents` 的响应体（没有分页——一家商家的 AI 员工不会多到要翻页）。 */
+export type AdminAgentList = ResponseBodyOf<"/admin/agents", "get">;
+/** `GET /admin/agent-proposals` 的响应体。 */
+export type AgentProposalPage = ResponseBodyOf<"/admin/agent-proposals", "get">;
+/** `GET /admin/agent-briefs` 的响应体。 */
+export type AgentBriefPage = ResponseBodyOf<"/admin/agent-briefs", "get">;
 
 // ---------------------------------------------------------------------------
 // 会话 token
@@ -450,6 +468,8 @@ export const ProblemType = {
     refundStatusNotAuditable: `${P}refund-status-not-auditable`,
     refundStatusNotReceivable: `${P}refund-status-not-receivable`,
     refundFreightExceeded: `${P}refund-freight-exceeded`,
+    // AI 员工的提案（AI 经营 M9）：409，已经被处理过（批准/驳回/过期）。
+    proposalNotOpen: `${P}proposal-not-open`,
     // 商品批量导入。
     importFileTooLarge: `${P}import-file-too-large`,
     importUnsupportedFormat: `${P}import-unsupported-format`,

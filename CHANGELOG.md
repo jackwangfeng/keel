@@ -41,6 +41,13 @@ so "which one is running?" never depends on anyone's memory.
 
 ### Added
 
+- **Admin 「AI 员工」 section (M9, task 6).** Proposals (filter by status, evidence / payload / result shown as
+  plain text, approve with confirmation and outcome-aware feedback, reject with a required reason), briefs, and
+  AI staff with access keys (create, edit role and scope, disable, issue a key shown once with a ready-to-paste
+  MCP config, revoke). The overview page shows a banner when proposals are waiting.
+- **POI backend: `/geo/reverse` and `/geo/suggest`.** Server-side proxy to the map provider (AMap for now,
+  `KEEL_GEO_PROVIDER` / `KEEL_GEO_KEY`); coordinates in and out are WGS-84 (GCJ-02 converted server-side),
+  results cached, rate-limited per IP; 501 when not configured so clients fall back to manual entry.
 - **Briefs (M9, task 5).** AI staff write operating briefs (daily store-walk reports and the like) with the MCP
   tool `post_brief` (markdown, up to 8 KB, with the covered date range); shop-wide staff read them under
   `/admin/agent-briefs` (migration 00092). Bodies are treated as untrusted input by clients.

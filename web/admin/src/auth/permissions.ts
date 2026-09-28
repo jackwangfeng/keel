@@ -97,6 +97,10 @@ export const can = {
     /** 大区管理员能不能动大区列表里的这一行（只读的时候仍然能点进详情）。 */
     seeRegionsSection: (): boolean => role() !== ROLE.storeManager,
     seeStaffSection: (): boolean => role() !== ROLE.storeManager,
+    /** 加 / 改 AI 员工、发 / 吊销密钥：只有本店管理员（AI 经营 M9）。 */
+    manageAgents: (): boolean => role() === ROLE.admin,
+    /** 读经营简报：只有全店范围的人（管理员 / 操作员），与经营报表同一条线。 */
+    seeAgentBriefs: (): boolean => merchantWide(),
 };
 
 /** 当前身份能分配哪些角色。平台级只能加平台级的管理员 / 操作员。 */

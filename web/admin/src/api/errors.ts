@@ -93,6 +93,8 @@ export function problemHint(type: string): string {
             return "这张退款单已经不是「待买家退货」了。刷新看它现在的状态。";
         case ProblemType.refundFreightExceeded:
             return "退运费超过了订单实收运费（扣掉别的退款单已占的部分）。改小一点，或者留空保持申请时的值。";
+        case ProblemType.proposalNotOpen:
+            return "这条提案已经被处理过（批准 / 驳回）或者已经过期，不是「待处理」状态了。刷新列表看它现在的状态。";
         case ProblemType.importFileTooLarge:
             return "单个导入文件不超过 5 MB。把表格拆成几个文件分批导入。";
         case ProblemType.importUnsupportedFormat:
