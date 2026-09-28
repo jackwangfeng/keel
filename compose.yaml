@@ -218,6 +218,9 @@ services:
       KEEL_TRUSTED_PROXIES: ${KEEL_TRUSTED_PROXIES:-}
       # 不参与口令失败锁定的手机号（逗号分隔）。只给把一个买家号公开给所有人用的演示环境，正式环境不要配。
       KEEL_LOGIN_LOCK_EXEMPT_PHONES: ${KEEL_LOGIN_LOCK_EXEMPT_PHONES:-}
+      # 地图服务商（POI 选址，/geo/*）：amap + 高德 Web 服务 key。不配时 /geo/* 回 501，客户端退回手填。
+      KEEL_GEO_PROVIDER: ${KEEL_GEO_PROVIDER:-}
+      KEEL_GEO_KEY: ${KEEL_GEO_KEY:-}
       # 连接池上限：业务池（默认 max(4, CPU 核数)）与事务协调器的池（默认 32）。
       # 多实例共用一个 Postgres 时按「实例数 × 两者之和 + 余量 < max_connections」配，见部署指南。
       KEEL_DB_MAX_CONNS: ${KEEL_DB_MAX_CONNS:-}
