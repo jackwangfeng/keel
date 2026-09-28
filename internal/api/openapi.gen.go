@@ -6295,8 +6295,12 @@ type ReportRegionRow struct {
 
 // ReportSearchOverview defines model for ReportSearchOverview.
 type ReportSearchOverview struct {
-	ClickCount  int64 `json:"click_count"`
-	SearchCount int64 `json:"search_count"`
+	ClickCount int64 `json:"click_count"`
+
+	// LowClickQueries 低点击词 Top N：窗口内搜过至少 3 次、每次都有可信结果（不在无结果词里），按点击率从低到高排、
+	// 并列时搜得多的在前。「有结果却没人点」多半是标题没写清、或者货不对路。2026-09-28 起总是返回。
+	LowClickQueries *[]ReportSearchTerm `json:"low_click_queries,omitempty"`
+	SearchCount     int64               `json:"search_count"`
 
 	// TopQueries 热门搜索词 Top N。
 	TopQueries []ReportSearchTerm `json:"top_queries"`
@@ -6340,6 +6344,12 @@ type ReportSearchOverview struct {
 
 // ReportSearchTerm defines model for ReportSearchTerm.
 type ReportSearchTerm struct {
+	// ClickCount 这个词的检索里，有点击的次数（一次检索至多算一次）。点击率 = click_count ÷ search_count。2026-09-28 起总是返回。
+	ClickCount *int64 `json:"click_count,omitempty"`
+
+	// OrderCount 这个词的检索里，带来下单的次数。2026-09-28 起总是返回。
+	OrderCount *int64 `json:"order_count,omitempty"`
+
 	// Query 归并后的搜索词（去首尾空白、小写）
 	Query           string `json:"query"`
 	SearchCount     int64  `json:"search_count"`

@@ -537,10 +537,79 @@ func (q *Queries) ReportRefundTotals(ctx context.Context, arg ReportRefundTotals
 	return i, err
 }
 
+const reportSearchLowClickTerms = `-- name: ReportSearchLowClickTerms :many
+SELECT lower(btrim(l.query))::text AS term,
+       count(*)::bigint AS search_count,
+       0::bigint AS zero_result_count,
+       count(*) FILTER (WHERE l.clicked_id IS NOT NULL)::bigint AS click_count,
+       count(*) FILTER (WHERE l.ordered_id IS NOT NULL)::bigint AS order_count
+  FROM search_logs l
+ WHERE l.created_at >= $1::timestamptz
+   AND l.created_at <  $2::timestamptz
+ GROUP BY 1
+HAVING count(*) >= $3::bigint
+   AND count(*) FILTER (WHERE (COALESCE(cardinality(l.ranked_ids), 0) = 0 OR l.fallback)) = 0
+ ORDER BY count(*) FILTER (WHERE l.clicked_id IS NOT NULL)::float8 / count(*),
+          count(*) DESC,
+          1
+ LIMIT $4
+`
+
+type ReportSearchLowClickTermsParams struct {
+	WindowStart pgtype.Timestamptz
+	WindowEnd   pgtype.Timestamptz
+	MinCount    int64
+	RowLimit    int32
+}
+
+type ReportSearchLowClickTermsRow struct {
+	Term            string
+	SearchCount     int64
+	ZeroResultCount int64
+	ClickCount      int64
+	OrderCount      int64
+}
+
+// 低点击词 Top N：搜过至少 min_count 次、每次都有可信结果（不是无结果词 —— 那归 ReportSearchTerms），
+// 按点击率从低到高排，并列时搜得多的在前。「有结果却没人点」多半是标题没写清、或者货不对路。
+// 口径与上一条相同（去首尾空白、转小写）；点击率 = 有点击的次数 ÷ 搜索次数（一次检索至多算一次点击）。
+func (q *Queries) ReportSearchLowClickTerms(ctx context.Context, arg ReportSearchLowClickTermsParams) ([]ReportSearchLowClickTermsRow, error) {
+	rows, err := q.db.Query(ctx, reportSearchLowClickTerms,
+		arg.WindowStart,
+		arg.WindowEnd,
+		arg.MinCount,
+		arg.RowLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ReportSearchLowClickTermsRow
+	for rows.Next() {
+		var i ReportSearchLowClickTermsRow
+		if err := rows.Scan(
+			&i.Term,
+			&i.SearchCount,
+			&i.ZeroResultCount,
+			&i.ClickCount,
+			&i.OrderCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const reportSearchTerms = `-- name: ReportSearchTerms :many
 SELECT lower(btrim(l.query))::text AS term,
        count(*)::bigint AS search_count,
-       count(*) FILTER (WHERE (COALESCE(cardinality(l.ranked_ids), 0) = 0 OR l.fallback))::bigint AS zero_result_count
+       count(*) FILTER (WHERE (COALESCE(cardinality(l.ranked_ids), 0) = 0 OR l.fallback))::bigint AS zero_result_count,
+       count(*) FILTER (WHERE l.clicked_id IS NOT NULL)::bigint AS click_count,
+       count(*) FILTER (WHERE l.ordered_id IS NOT NULL)::bigint AS order_count
   FROM search_logs l
  WHERE l.created_at >= $1::timestamptz
    AND l.created_at <  $2::timestamptz
@@ -568,6 +637,8 @@ type ReportSearchTermsRow struct {
 	Term            string
 	SearchCount     int64
 	ZeroResultCount int64
+	ClickCount      int64
+	OrderCount      int64
 }
 
 // 搜索词 Top N：去首尾空白、转小写后归并。only_zero 为真时只要出现过无结果的词，
@@ -587,7 +658,13 @@ func (q *Queries) ReportSearchTerms(ctx context.Context, arg ReportSearchTermsPa
 	var items []ReportSearchTermsRow
 	for rows.Next() {
 		var i ReportSearchTermsRow
-		if err := rows.Scan(&i.Term, &i.SearchCount, &i.ZeroResultCount); err != nil {
+		if err := rows.Scan(
+			&i.Term,
+			&i.SearchCount,
+			&i.ZeroResultCount,
+			&i.ClickCount,
+			&i.OrderCount,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

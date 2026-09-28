@@ -161,10 +161,15 @@ func apiReportAlerts(r service.ReportInventoryAlerts) api.ReportInventoryAlerts 
 func apiReportTerms(ts []repository.ReportSearchTerm) []api.ReportSearchTerm {
 	out := make([]api.ReportSearchTerm, 0, len(ts))
 	for _, t := range ts {
-		out = append(out, api.ReportSearchTerm{Query: t.Term, SearchCount: t.SearchCount, ZeroResultCount: t.ZeroResultCount})
+		clicks, orders := t.ClickCount, t.OrderCount
+		out = append(out, api.ReportSearchTerm{Query: t.Term, SearchCount: t.SearchCount, ZeroResultCount: t.ZeroResultCount,
+			ClickCount: &clicks, OrderCount: &orders})
 	}
 	return out
 }
+
+// ptrReportTerms：low_click_queries 在契约里是可选字段（2026-09-28 才加），但我们总是给（空数组也给）。
+func ptrReportTerms(ts []api.ReportSearchTerm) *[]api.ReportSearchTerm { return &ts }
 
 func apiReportSearch(r service.ReportSearchOverview) api.ReportSearchOverview {
 	return api.ReportSearchOverview{
@@ -175,5 +180,6 @@ func apiReportSearch(r service.ReportSearchOverview) api.ReportSearchOverview {
 		ClickCount:        r.Totals.ClickCount,
 		TopQueries:        apiReportTerms(r.TopQueries),
 		ZeroResultQueries: apiReportTerms(r.ZeroQueries),
+		LowClickQueries:   ptrReportTerms(apiReportTerms(r.LowClickQueries)),
 	}
 }

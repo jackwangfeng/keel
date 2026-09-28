@@ -165,7 +165,9 @@ func registerMCPTools(srv *mcp.Server, d *MCPDeps) {
 			}
 			return apiReportAlerts(out), nil
 		})
-	mcpTool(srv, d, "search_insights", "搜索概况：高频搜索词、无结果词、低点击词。用来发现缺货、标题问题与上新机会。",
+	mcpTool(srv, d, "search_insights", "搜索概况：热门词（top_queries）、无结果词（zero_result_queries，含只回了「猜你想要」的）、"+
+			"低点击词（low_click_queries：搜过 ≥3 次、都有结果、点击率最低）。每个词带 search_count / click_count / order_count。"+
+			"用来发现缺货、标题问题与上新机会。",
 		writeAdminListError, func(ctx context.Context, in mcpSearchIn) (api.ReportSearchOverview, error) {
 			w := mcpReportWindow{Period: in.Period, StartDate: in.StartDate, EndDate: in.EndDate}
 			out, err := d.Reports.Search(ctx, w.query(), in.Limit)

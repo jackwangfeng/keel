@@ -114,6 +114,8 @@ type ReportSearchTerm struct {
 	Term            string
 	SearchCount     int64
 	ZeroResultCount int64
+	ClickCount      int64 // 有点击的检索次数（一次检索至多算一次）
+	OrderCount      int64 // 带来下单的检索次数
 }
 
 // ReportTx 是经营报表的读这一面。
@@ -140,6 +142,8 @@ type ReportTx interface {
 	// ReportSearchTotals / ReportSearchTerms 只看 f.Start / f.End（检索日志没有门店维度）。
 	ReportSearchTotals(ctx context.Context, f ReportFilter) (ReportSearchTotals, error)
 	ReportSearchTerms(ctx context.Context, f ReportFilter, onlyZero bool, limit int) ([]ReportSearchTerm, error)
+	// ReportSearchLowClickTerms：搜过至少 minCount 次、都有可信结果的词，按点击率从低到高。
+	ReportSearchLowClickTerms(ctx context.Context, f ReportFilter, minCount int64, limit int) ([]ReportSearchTerm, error)
 }
 
 func checkLimit(limit int) error {
@@ -330,6 +334,25 @@ func (t tenantTx) ReportSearchTerms(ctx context.Context, f ReportFilter, onlyZer
 	rows, err := t.q.ReportSearchTerms(ctx, db.ReportSearchTermsParams{
 		WindowStart: ts(f.Start), WindowEnd: ts(f.End),
 		OnlyZero: onlyZero, RowLimit: int32(limit),
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ReportSearchTerm, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, ReportSearchTerm(r))
+	}
+	return out, nil
+}
+
+// ReportSearchLowClickTerms 是低点击词 Top N（db/queries/reports.sql 同名那条）：搜过至少 minCount 次、
+// 都有可信结果，按点击率从低到高。
+func (t tenantTx) ReportSearchLowClickTerms(ctx context.Context, f ReportFilter, minCount int64, limit int) ([]ReportSearchTerm, error) {
+	if err := checkLimit(limit); err != nil {
+		return nil, err
+	}
+	rows, err := t.q.ReportSearchLowClickTerms(ctx, db.ReportSearchLowClickTermsParams{
+		WindowStart: ts(f.Start), WindowEnd: ts(f.End), MinCount: minCount, RowLimit: int32(limit),
 	})
 	if err != nil {
 		return nil, err

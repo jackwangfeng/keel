@@ -4597,16 +4597,22 @@ class ReportSearchTerm {
   final String query;
   final int searchCount;
   final int zeroResultCount;
-  const ReportSearchTerm({required this.query, required this.searchCount, required this.zeroResultCount});
+  final int? clickCount;
+  final int? orderCount;
+  const ReportSearchTerm({required this.query, required this.searchCount, required this.zeroResultCount, this.clickCount, this.orderCount});
   factory ReportSearchTerm.fromJson(Map<String, dynamic> j) => ReportSearchTerm(
         query: j['query'] as String,
         searchCount: (j['search_count'] as num).toInt(),
         zeroResultCount: (j['zero_result_count'] as num).toInt(),
+        clickCount: (j['click_count'] as num?)?.toInt(),
+        orderCount: (j['order_count'] as num?)?.toInt(),
       );
   Map<String, dynamic> toJson() => {
         'query': query,
         'search_count': searchCount,
         'zero_result_count': zeroResultCount,
+        if (clickCount != null) 'click_count': clickCount,
+        if (orderCount != null) 'order_count': orderCount,
       };
 }
 
@@ -4618,7 +4624,8 @@ class ReportSearchOverview {
   final int clickCount;
   final List<ReportSearchTerm> topQueries;
   final List<ReportSearchTerm> zeroResultQueries;
-  const ReportSearchOverview({required this.window, required this.searchCount, required this.zeroResultCount, this.zeroResultRate, required this.clickCount, required this.topQueries, required this.zeroResultQueries});
+  final List<ReportSearchTerm>? lowClickQueries;
+  const ReportSearchOverview({required this.window, required this.searchCount, required this.zeroResultCount, this.zeroResultRate, required this.clickCount, required this.topQueries, required this.zeroResultQueries, this.lowClickQueries});
   factory ReportSearchOverview.fromJson(Map<String, dynamic> j) => ReportSearchOverview(
         window: ReportWindow.fromJson(j['window'] as Map<String, dynamic>),
         searchCount: (j['search_count'] as num).toInt(),
@@ -4627,6 +4634,7 @@ class ReportSearchOverview {
         clickCount: (j['click_count'] as num).toInt(),
         topQueries: (j['top_queries'] as List).map((e) => ReportSearchTerm.fromJson(e as Map<String, dynamic>)).toList(),
         zeroResultQueries: (j['zero_result_queries'] as List).map((e) => ReportSearchTerm.fromJson(e as Map<String, dynamic>)).toList(),
+        lowClickQueries: (j['low_click_queries'] as List?)?.map((e) => ReportSearchTerm.fromJson(e as Map<String, dynamic>)).toList(),
       );
   Map<String, dynamic> toJson() => {
         'window': window.toJson(),
@@ -4636,6 +4644,7 @@ class ReportSearchOverview {
         'click_count': clickCount,
         'top_queries': topQueries.map((e) => e.toJson()).toList(),
         'zero_result_queries': zeroResultQueries.map((e) => e.toJson()).toList(),
+        if (lowClickQueries != null) 'low_click_queries': lowClickQueries!.map((e) => e.toJson()).toList(),
       };
 }
 

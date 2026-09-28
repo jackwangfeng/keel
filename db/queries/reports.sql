@@ -283,7 +283,9 @@ SELECT count(*)::bigint AS search_count,
 -- 两种都是第二键另一个次数、第三键词本身，并列时结果稳定。
 SELECT lower(btrim(l.query))::text AS term,
        count(*)::bigint AS search_count,
-       count(*) FILTER (WHERE (COALESCE(cardinality(l.ranked_ids), 0) = 0 OR l.fallback))::bigint AS zero_result_count
+       count(*) FILTER (WHERE (COALESCE(cardinality(l.ranked_ids), 0) = 0 OR l.fallback))::bigint AS zero_result_count,
+       count(*) FILTER (WHERE l.clicked_id IS NOT NULL)::bigint AS click_count,
+       count(*) FILTER (WHERE l.ordered_id IS NOT NULL)::bigint AS order_count
   FROM search_logs l
  WHERE l.created_at >= sqlc.arg(window_start)::timestamptz
    AND l.created_at <  sqlc.arg(window_end)::timestamptz
@@ -296,5 +298,25 @@ HAVING NOT sqlc.arg(only_zero)::boolean
           CASE WHEN sqlc.arg(only_zero)::boolean
                THEN count(*)
                ELSE count(*) FILTER (WHERE (COALESCE(cardinality(l.ranked_ids), 0) = 0 OR l.fallback)) END DESC,
+          1
+ LIMIT sqlc.arg(row_limit);
+
+-- name: ReportSearchLowClickTerms :many
+-- 低点击词 Top N：搜过至少 min_count 次、每次都有可信结果（不是无结果词 —— 那归 ReportSearchTerms），
+-- 按点击率从低到高排，并列时搜得多的在前。「有结果却没人点」多半是标题没写清、或者货不对路。
+-- 口径与上一条相同（去首尾空白、转小写）；点击率 = 有点击的次数 ÷ 搜索次数（一次检索至多算一次点击）。
+SELECT lower(btrim(l.query))::text AS term,
+       count(*)::bigint AS search_count,
+       0::bigint AS zero_result_count,
+       count(*) FILTER (WHERE l.clicked_id IS NOT NULL)::bigint AS click_count,
+       count(*) FILTER (WHERE l.ordered_id IS NOT NULL)::bigint AS order_count
+  FROM search_logs l
+ WHERE l.created_at >= sqlc.arg(window_start)::timestamptz
+   AND l.created_at <  sqlc.arg(window_end)::timestamptz
+ GROUP BY 1
+HAVING count(*) >= sqlc.arg(min_count)::bigint
+   AND count(*) FILTER (WHERE (COALESCE(cardinality(l.ranked_ids), 0) = 0 OR l.fallback)) = 0
+ ORDER BY count(*) FILTER (WHERE l.clicked_id IS NOT NULL)::float8 / count(*),
+          count(*) DESC,
           1
  LIMIT sqlc.arg(row_limit);

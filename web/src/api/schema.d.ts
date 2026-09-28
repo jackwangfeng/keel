@@ -17670,6 +17670,16 @@ export interface components {
             search_count: number;
             /** Format: int64 */
             zero_result_count: number;
+            /**
+             * Format: int64
+             * @description 这个词的检索里，有点击的次数（一次检索至多算一次）。点击率 = click_count ÷ search_count。2026-09-28 起总是返回。
+             */
+            click_count?: number;
+            /**
+             * Format: int64
+             * @description 这个词的检索里，带来下单的次数。2026-09-28 起总是返回。
+             */
+            order_count?: number;
         };
         ReportSearchOverview: {
             window: components["schemas"]["ReportWindow"];
@@ -17688,6 +17698,11 @@ export interface components {
             top_queries: components["schemas"]["ReportSearchTerm"][];
             /** @description 无结果搜索词 Top N（按无结果次数排）。 */
             zero_result_queries: components["schemas"]["ReportSearchTerm"][];
+            /**
+             * @description 低点击词 Top N：窗口内搜过至少 3 次、每次都有可信结果（不在无结果词里），按点击率从低到高排、
+             *     并列时搜得多的在前。「有结果却没人点」多半是标题没写清、或者货不对路。2026-09-28 起总是返回。
+             */
+            low_click_queries?: components["schemas"]["ReportSearchTerm"][];
         };
         /**
          * @description 审计字段里的「谁」。`name` 取员工此刻的名字；平台级员工（不属于这家店）

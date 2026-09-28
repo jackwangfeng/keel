@@ -181,7 +181,12 @@ type ReportSearchOverview struct {
 	Totals                  repository.ReportSearchTotals
 	ZeroResultRate          *float64
 	TopQueries, ZeroQueries []repository.ReportSearchTerm
+	// LowClickQueries：有结果却少有人点的词（搜过至少 ReportLowClickMinSearches 次），按点击率从低到高。
+	LowClickQueries []repository.ReportSearchTerm
 }
+
+// ReportLowClickMinSearches 是进低点击词榜的最少搜索次数：搜一两次没点击说明不了什么。
+const ReportLowClickMinSearches = 3
 
 // ---------------------------------------------------------------------------
 // 六条报表
@@ -407,7 +412,10 @@ func (s *ReportService) Search(ctx context.Context, q ReportQuery, limit int) (R
 		if out.TopQueries, err = tx.ReportSearchTerms(ctx, f, false, limit); err != nil {
 			return err
 		}
-		out.ZeroQueries, err = tx.ReportSearchTerms(ctx, f, true, limit)
+		if out.ZeroQueries, err = tx.ReportSearchTerms(ctx, f, true, limit); err != nil {
+			return err
+		}
+		out.LowClickQueries, err = tx.ReportSearchLowClickTerms(ctx, f, ReportLowClickMinSearches, limit)
 		return err
 	})
 	if err != nil {

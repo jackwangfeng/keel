@@ -9872,6 +9872,14 @@ components:
         query:             { type: string, description: 归并后的搜索词（去首尾空白、小写） }
         search_count:      { type: integer, format: int64 }
         zero_result_count: { type: integer, format: int64 }
+        click_count:
+          type: integer
+          format: int64
+          description: 这个词的检索里，有点击的次数（一次检索至多算一次）。点击率 = click_count ÷ search_count。2026-09-28 起总是返回。
+        order_count:
+          type: integer
+          format: int64
+          description: 这个词的检索里，带来下单的次数。2026-09-28 起总是返回。
 
     ReportSearchOverview:
       type: object
@@ -9893,6 +9901,12 @@ components:
         zero_result_queries:
           type: array
           description: 无结果搜索词 Top N（按无结果次数排）。
+          items: { $ref: '#/components/schemas/ReportSearchTerm' }
+        low_click_queries:
+          type: array
+          description: |
+            低点击词 Top N：窗口内搜过至少 3 次、每次都有可信结果（不在无结果词里），按点击率从低到高排、
+            并列时搜得多的在前。「有结果却没人点」多半是标题没写清、或者货不对路。2026-09-28 起总是返回。
           items: { $ref: '#/components/schemas/ReportSearchTerm' }
 
     # ---- 后台订单与售后（后台视角的读） ----

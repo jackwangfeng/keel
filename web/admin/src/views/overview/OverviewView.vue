@@ -461,6 +461,15 @@ function openStore(id: number): void {
                             </ol>
                             <p v-if="(search.data?.zero_result_queries.length ?? 0) === 0" class="muted">没有无结果的搜索</p>
                         </div>
+                        <div>
+                            <h4>低点击搜索词 <small class="muted">搜得到、没人点（至少 3 次）</small></h4>
+                            <ol>
+                                <li v-for="q in search.data?.low_click_queries ?? []" :key="q.query">
+                                    <span>{{ q.query }}</span><small>{{ q.click_count ?? 0 }} / {{ q.search_count }} 次有点击</small>
+                                </li>
+                            </ol>
+                            <p v-if="(search.data?.low_click_queries?.length ?? 0) === 0" class="muted">没有低点击的搜索词</p>
+                        </div>
                     </div>
                 </div>
             </el-card>
@@ -593,7 +602,7 @@ function openStore(id: number): void {
 }
 .terms {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
     gap: 16px;
 }
 .terms h4 {

@@ -2218,6 +2218,10 @@ export type ReportSearchTerm = {
   query : string
   search_count : number
   zero_result_count : number
+  /** 这个词的检索里，有点击的次数（一次检索至多算一次）。点击率 = click_count ÷ search_count。2026-09-28 起总是返回。 */
+  click_count? : number
+  /** 这个词的检索里，带来下单的次数。2026-09-28 起总是返回。 */
+  order_count? : number
 }
 
 export type ReportSearchOverview = {
@@ -2232,6 +2236,8 @@ export type ReportSearchOverview = {
   top_queries : ReportSearchTerm[]
   /** 无结果搜索词 Top N（按无结果次数排）。 */
   zero_result_queries : ReportSearchTerm[]
+  /** 低点击词 Top N：窗口内搜过至少 3 次、每次都有可信结果（不在无结果词里），按点击率从低到高排、 */
+  low_click_queries? : ReportSearchTerm[]
 }
 
 export type ReportStoreRow = {

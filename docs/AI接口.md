@@ -213,6 +213,7 @@ def verify(secret: str, body: bytes, header: str) -> bool:
 | 2026-09-28 | AI 经营 M10：加 `slow_movers`（滞销清仓）、`promotion_review`（活动 / 券复盘）两个只读计算工具 |
 | 2026-09-28 | AI 经营 M10 / M11：加 `propose_flash_price` `propose_coupon` `propose_product_copy` `propose_refund_decision` 四种提案与 `my_scorecard` 成绩单工具；提案支持按 AI 员工 × 种类的自动执行策略（`auto_approved` 字段），`refund_decision` 不允许自动执行 |
 | 2026-09-28 | AI 经营 M11：加 `query_sql`（只读 SQL 兜底，只读 `agent_ro` 脱敏视图，需全店范围） |
+| 2026-09-28 | `search_insights` 加 `low_click_queries`（搜过 ≥3 次、都有结果、点击率最低）；每个词带 `click_count` `order_count`。之前工具描述写着「低点击词」但没有这份数据 |
 | 2026-09-28 | `propose_coupon` 支持固定可用时段：`valid_start_at` + `valid_end_at`（与 `valid_days` 二选一，时段 ≤ 90 天）；固定时段的券在结束后一天复盘 |
 | 2026-09-28 | `promotion_review` 的券分支加 `refunded_order_count`（整单退款的单数；这些单的券已退回，所以 `used_count` 会比 `order_count` 少） |
 | 2026-09-28 | 检索加相关度下限：`search_insights` 的无结果词与 `search_zero_spike` 把「只回了低于下限的猜你想要」（fallback）也算作无结果；之前向量召回永远凑满，这两样恒为 0 |

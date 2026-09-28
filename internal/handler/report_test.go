@@ -716,6 +716,57 @@ func TestReportSearchOverview(t *testing.T) {
 	}
 }
 
+// 低点击词与每个词的点击 / 下单次数；只回了「猜你想要」（fallback）的那次算无结果（2026-09-28）。
+//
+//	帽子 ×4：都有结果，0 次点击      → 低点击第一（点击率 0）
+//	包包 ×3：都有结果，1 次点击 1 单  → 低点击第二（1/3）
+//	围巾 ×2：都有结果，0 次点击      → 不进低点击（不到 3 次）
+//	瑜伽垫 ×3：其中一次 fallback     → 进无结果词、不进低点击
+func TestReportSearchLowClickTermsAndFallback(t *testing.T) {
+	fx := newReportFixture(t)
+	log := func(q, ranked string, clicked, ordered any, fallback bool) {
+		adminExec(t, `INSERT INTO search_logs (merchant_id, query, ranked_ids, clicked_id, ordered_id, trace_id,
+		                                       strategy, stages, created_at, fallback)
+		              VALUES ($1, $2, $3::bigint[], $4, $5, $6, 'hybrid', '{keyword}', $7, $8)`,
+			fx.sh.MerchantID, q, ranked, clicked, ordered, "rlc-"+fx.next(), sh(10, 12, 0, 0), fallback)
+	}
+	for i := 0; i < 4; i++ {
+		log("帽子", "{3}", nil, nil, false)
+	}
+	log("包包", "{4}", int64(4), int64(4), false)
+	log("包包", "{4}", nil, nil, false)
+	log("包包", "{4}", nil, nil, false)
+	log("围巾", "{5}", nil, nil, false)
+	log("围巾", "{5}", nil, nil, false)
+	log("瑜伽垫", "{6}", nil, nil, false)
+	log("瑜伽垫", "{6}", nil, nil, false)
+	log("瑜伽垫", "{6,7}", nil, nil, true)
+
+	var so api.ReportSearchOverview
+	fx.get(t, roleAdmin, "search?"+rptWin, &so)
+	if so.ZeroResultCount != 1 {
+		t.Errorf("fallback 那一次应算无结果：zero_result_count = %d，想要 1", so.ZeroResultCount)
+	}
+	if len(so.ZeroResultQueries) != 1 || so.ZeroResultQueries[0].Query != "瑜伽垫" {
+		t.Errorf("无结果词应只有瑜伽垫：%+v", so.ZeroResultQueries)
+	}
+	if so.LowClickQueries == nil {
+		t.Fatal("low_click_queries 缺席")
+	}
+	var got []string
+	for _, x := range *so.LowClickQueries {
+		got = append(got, fmt.Sprintf("%s:%d/%d/%d", x.Query, x.SearchCount, *x.ClickCount, *x.OrderCount))
+	}
+	if strings.Join(got, " ") != "帽子:4/0/0 包包:3/1/1" {
+		t.Errorf("低点击词 = %v，想要 帽子:4/0/0 包包:3/1/1（按点击率升序；围巾不到 3 次、瑜伽垫有无结果都不进）", got)
+	}
+	for _, x := range so.TopQueries {
+		if x.ClickCount == nil || x.OrderCount == nil {
+			t.Fatalf("热门词也要带点击 / 下单次数：%+v", x)
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // 窗口参数的 422
 // ---------------------------------------------------------------------------

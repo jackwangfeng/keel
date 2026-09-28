@@ -3158,7 +3158,7 @@
     }
   },
   {
-    "description": "搜索概况：高频搜索词、无结果词、低点击词。用来发现缺货、标题问题与上新机会。",
+    "description": "搜索概况：热门词（top_queries）、无结果词（zero_result_queries，含只回了「猜你想要」的）、低点击词（low_click_queries：搜过 ≥3 次、都有结果、点击率最低）。每个词带 search_count / click_count / order_count。用来发现缺货、标题问题与上新机会。",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
@@ -3186,6 +3186,44 @@
         "click_count": {
           "type": "integer"
         },
+        "low_click_queries": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "click_count": {
+                "type": [
+                  "null",
+                  "integer"
+                ]
+              },
+              "order_count": {
+                "type": [
+                  "null",
+                  "integer"
+                ]
+              },
+              "query": {
+                "type": "string"
+              },
+              "search_count": {
+                "type": "integer"
+              },
+              "zero_result_count": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "query",
+              "search_count",
+              "zero_result_count"
+            ],
+            "type": "object"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        },
         "search_count": {
           "type": "integer"
         },
@@ -3193,6 +3231,18 @@
           "items": {
             "additionalProperties": false,
             "properties": {
+              "click_count": {
+                "type": [
+                  "null",
+                  "integer"
+                ]
+              },
+              "order_count": {
+                "type": [
+                  "null",
+                  "integer"
+                ]
+              },
               "query": {
                 "type": "string"
               },
@@ -3292,6 +3342,18 @@
           "items": {
             "additionalProperties": false,
             "properties": {
+              "click_count": {
+                "type": [
+                  "null",
+                  "integer"
+                ]
+              },
+              "order_count": {
+                "type": [
+                  "null",
+                  "integer"
+                ]
+              },
               "query": {
                 "type": "string"
               },
