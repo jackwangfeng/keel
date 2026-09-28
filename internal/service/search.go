@@ -638,6 +638,9 @@ func (s *SearchService) Search(ctx context.Context, req SearchRequest) (SearchRe
 	}
 	var fallback bool
 	ranked, fallback = applyFloor(ranked, byID, s.cfg.VectorFloor)
+	if !fallback {
+		ranked = exactTitleFirst(ranked, byID, req.Query, stockKnown)
+	}
 	if len(ranked) > size {
 		ranked = ranked[:size]
 	}
@@ -694,6 +697,33 @@ func applyFloor(ranked []search.Ranked, byID map[int64]repository.SearchHit, flo
 	}
 	return kept, false
 }
+
+// exactTitleFirst 把标题与查询词完全一致（忽略大小写与空白）、且有货的商品挪到最前面，其余相对顺序不变。
+//
+// 融合与业务重排只看名次和乘子，同名商品与「同名 + 规格后缀」的商品（「陶瓷马克杯」vs「陶瓷马克杯 两只装」）
+// 在 RRF 上常常并列，谁在前是偶然的（2026-09-28 Flutter e2e 报：按完整标题搜，那一件没排第一）。买家输入的
+// 正好是商品全名时，他要的就是那一件。没货（或没有可售 SKU）的不挪：缺货下沉的判断优先。库存不知道时按有货。
+func exactTitleFirst(ranked []search.Ranked, byID map[int64]repository.SearchHit, query string, stockKnown bool) []search.Ranked {
+	q := normTitle(query)
+	if q == "" {
+		return ranked
+	}
+	var exact, rest []search.Ranked
+	for _, r := range ranked {
+		row := byID[r.ID]
+		if normTitle(row.Title) == q && (row.InStock || !stockKnown) {
+			exact = append(exact, r)
+		} else {
+			rest = append(rest, r)
+		}
+	}
+	if len(exact) == 0 {
+		return ranked
+	}
+	return append(exact, rest...)
+}
+
+func normTitle(s string) string { return strings.ToLower(strings.Join(strings.Fields(s), "")) }
 
 // inStockOnlyRecallBoost 是 in_stock_only 时召回窗口的放大倍数，见 Search 里那一段。
 const inStockOnlyRecallBoost = 2

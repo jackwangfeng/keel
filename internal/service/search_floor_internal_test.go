@@ -1,6 +1,7 @@
 package service
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/keel/keel/internal/repository"
@@ -39,5 +40,36 @@ func TestApplyFloor(t *testing.T) {
 	}
 	if got, fb = applyFloor(nil, byID, 0.40); fb || len(got) != 0 {
 		t.Fatalf("没有候选不是 fallback：%v %v", ids(got), fb)
+	}
+}
+
+func TestExactTitleFirst(t *testing.T) {
+	r := func(id int64) search.Ranked { return search.Ranked{Fused: search.Fused{ID: id}} }
+	byID := map[int64]repository.SearchHit{
+		18: {ID: 18, Title: "陶瓷马克杯 两只装", InStock: true},
+		24: {ID: 24, Title: "陶瓷马克杯", InStock: true},
+		30: {ID: 30, Title: "陶瓷 马克杯", InStock: false},
+	}
+	ids := func(rs []search.Ranked) []int64 {
+		var out []int64
+		for _, x := range rs {
+			out = append(out, x.ID)
+		}
+		return out
+	}
+	got := ids(exactTitleFirst([]search.Ranked{r(18), r(30), r(24)}, byID, " 陶瓷马克杯 ", true))
+	if fmt.Sprint(got) != "[24 18 30]" {
+		t.Fatalf("精确同名且有货的挪到最前、其余顺序不变：%v", got)
+	}
+	// 无货的同名不挪（30 忽略空白后也同名，但缺货）。
+	if got := ids(exactTitleFirst([]search.Ranked{r(18), r(30)}, byID, "陶瓷马克杯", true)); fmt.Sprint(got) != "[18 30]" {
+		t.Fatalf("缺货的同名不挪：%v", got)
+	}
+	// 库存不知道时按有货。
+	if got := ids(exactTitleFirst([]search.Ranked{r(18), r(30)}, byID, "陶瓷马克杯", false)); fmt.Sprint(got) != "[30 18]" {
+		t.Fatalf("库存不知道时同名的照样挪：%v", got)
+	}
+	if got := ids(exactTitleFirst([]search.Ranked{r(18)}, byID, "  ", true)); fmt.Sprint(got) != "[18]" {
+		t.Fatalf("空查询原样：%v", got)
 	}
 }
