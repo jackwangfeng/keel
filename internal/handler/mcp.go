@@ -3,15 +3,19 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strconv"
 	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	openapi_types "github.com/oapi-codegen/runtime/types"
 
 	"github.com/keel/keel/internal/auth"
 	"github.com/keel/keel/internal/problem"
@@ -99,9 +103,9 @@ M9 阶段你只能读数据、计算、写简报、提出提案；提案要人�
 // mcpTool 注册一个工具：统一做审计与错误翻译。fn 返回的 Out 会作为结构化结果给 agent。
 func mcpTool[In, Out any](srv *mcp.Server, d *MCPDeps, name, desc string, writeErr func(*gin.Context, error),
 	fn func(ctx context.Context, in In) (Out, error)) {
-	// 输出类型声明成 any：SDK 就不从 Out 推 outputSchema（api 包里的 openapi 日期等类型推不出来），
-	// 结构化结果照样放进 structuredContent，同时附一份 JSON 文本。
-	mcp.AddTool(srv, &mcp.Tool{Name: name, Description: desc},
+	// outputSchema 由 Out 推出（mcpOutputSchema）并显式给出：接入方据此知道返回的形状，SDK 每次返回前按它校验。
+	// 处理函数的输出类型仍声明成 any，只是为了让 SDK 不再自己推一遍（它推不出 openapi 的日期类型）。
+	mcp.AddTool(srv, &mcp.Tool{Name: name, Description: desc, OutputSchema: mcpOutputSchema[Out](name)},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in In) (*mcp.CallToolResult, any, error) {
 			start := time.Now()
 			out, err := fn(ctx, in)
@@ -109,11 +113,15 @@ func mcpTool[In, Out any](srv *mcp.Server, d *MCPDeps, name, desc string, writeE
 			var res *mcp.CallToolResult
 			if err != nil {
 				var text string
-				errType, text = mcpError(err, writeErr)
+				var pr mcpProblem
+				pr, text = mcpError(err, writeErr)
+				errType = pr.Type
 				if errType == problem.TypeInternal {
 					d.Log.ErrorContext(ctx, "MCP 工具调用出错", "tool", name, "err", err)
 				}
-				res = &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: text}}}
+				// 文字给模型读；_meta["keel/problem"] 给接入方的程序判断（type 与后台接口的 problem type 逐字相同）。
+				res = &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: text}},
+					Meta: mcp.Meta{"keel/problem": pr}}
 			}
 			mcpAudit(ctx, d, name, in, err == nil, errType, time.Since(start))
 			if err != nil {
@@ -123,9 +131,31 @@ func mcpTool[In, Out any](srv *mcp.Server, d *MCPDeps, name, desc string, writeE
 		})
 }
 
+// mcpSchemaTypes 是推 outputSchema 时要特殊处理的类型：openapi 的 Date 内嵌 time.Time，jsonschema 推不出。
+var mcpSchemaTypes = map[reflect.Type]*jsonschema.Schema{
+	reflect.TypeFor[openapi_types.Date](): {Type: "string", Format: "date"},
+}
+
+// mcpOutputSchema 从 Go 类型推出工具的 outputSchema。推不出是装配错误（新工具用了没登记的类型），启动即 panic。
+func mcpOutputSchema[Out any](tool string) *jsonschema.Schema {
+	s, err := jsonschema.ForType(reflect.TypeFor[Out](), &jsonschema.ForOptions{TypeSchemas: mcpSchemaTypes})
+	if err != nil {
+		panic(fmt.Sprintf("MCP 工具 %s 的 outputSchema 推不出来：%v", tool, err))
+	}
+	return s
+}
+
+// mcpProblem 是工具出错时放进 _meta["keel/problem"] 的形状（docs/AI接口.md「错误」）。
+type mcpProblem struct {
+	Type   string `json:"type"`
+	Title  string `json:"title"`
+	Status int    `json:"status"`
+	Detail string `json:"detail,omitempty"`
+}
+
 // mcpError 借后台接口的错误出口把 err 翻成 problem：写进一个内存里的响应，再把 type / title / detail 读回来。
-// 这样 agent 拿到的错误类型与后台接口逐字相同，不必再维护一份映射。
-func mcpError(err error, writeErr func(*gin.Context, error)) (string, string) {
+// 这样 agent 拿到的错误类型与后台接口逐字相同，不必再维护一份映射。内部错误不带 detail（不外泄）。
+func mcpError(err error, writeErr func(*gin.Context, error)) (mcpProblem, string) {
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodGet, "/", nil)
@@ -136,13 +166,16 @@ func mcpError(err error, writeErr func(*gin.Context, error)) (string, string) {
 		Detail *string `json:"detail"`
 	}
 	if json.Unmarshal(w.Body.Bytes(), &p) != nil || p.Type == "" {
-		return problem.TypeInternal, "服务内部错误"
+		return mcpProblem{Type: problem.TypeInternal, Title: "服务内部错误", Status: http.StatusInternalServerError},
+			"服务内部错误"
 	}
+	out := mcpProblem{Type: p.Type, Title: p.Title, Status: w.Code}
 	text := p.Title + "（" + p.Type + "）"
 	if p.Detail != nil && *p.Detail != "" && p.Type != problem.TypeInternal {
+		out.Detail = *p.Detail
 		text += "：" + *p.Detail
 	}
-	return p.Type, text
+	return out, text
 }
 
 func mcpAudit(ctx context.Context, d *MCPDeps, tool string, args any, ok bool, errType string, dur time.Duration) {

@@ -1,0 +1,2412 @@
+[
+  {
+    "description": "商品详情：全部 SKU（规格、价格、库存）与图片。",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "product_id": {
+          "description": "商品 id",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "product_id"
+      ],
+      "type": "object"
+    },
+    "name": "get_product",
+    "outputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "brand_id": {
+          "type": [
+            "null",
+            "integer"
+          ]
+        },
+        "category_id": {
+          "type": "integer"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "deleted_at": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "description": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "freight_template_id": {
+          "type": [
+            "null",
+            "integer"
+          ]
+        },
+        "id": {
+          "type": "integer"
+        },
+        "images": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "sort_order": {
+                "type": "integer"
+              },
+              "upload_id": {
+                "type": "integer"
+              },
+              "url": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "sort_order",
+              "upload_id",
+              "url"
+            ],
+            "type": "object"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        },
+        "max_price_cents": {
+          "type": "integer"
+        },
+        "min_price_cents": {
+          "type": "integer"
+        },
+        "published_at": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "sales_count": {
+          "type": "integer"
+        },
+        "skus": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "available_qty": {
+                "type": "integer"
+              },
+              "cost_cents": {
+                "type": [
+                  "null",
+                  "integer"
+                ]
+              },
+              "created_at": {
+                "type": [
+                  "null",
+                  "string"
+                ]
+              },
+              "id": {
+                "type": "integer"
+              },
+              "image_url": {
+                "type": [
+                  "null",
+                  "string"
+                ]
+              },
+              "price_cents": {
+                "type": "integer"
+              },
+              "product_id": {
+                "type": "integer"
+              },
+              "sku_code": {
+                "type": "string"
+              },
+              "spec_values": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": [
+                  "null",
+                  "object"
+                ]
+              },
+              "status": {
+                "type": "integer"
+              },
+              "updated_at": {
+                "type": [
+                  "null",
+                  "string"
+                ]
+              },
+              "warning_qty": {
+                "type": [
+                  "null",
+                  "integer"
+                ]
+              },
+              "weight_gram": {
+                "type": [
+                  "null",
+                  "integer"
+                ]
+              }
+            },
+            "required": [
+              "available_qty",
+              "id",
+              "price_cents",
+              "product_id",
+              "sku_code",
+              "status"
+            ],
+            "type": "object"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        },
+        "status": {
+          "type": "integer"
+        },
+        "subtitle": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "title": {
+          "type": "string"
+        },
+        "total_stock": {
+          "type": "integer"
+        },
+        "updated_at": {
+          "type": [
+            "null",
+            "string"
+          ]
+        }
+      },
+      "required": [
+        "category_id",
+        "created_at",
+        "id",
+        "images",
+        "max_price_cents",
+        "min_price_cents",
+        "sales_count",
+        "skus",
+        "status",
+        "title",
+        "total_stock"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "库存预警：可售数不高于预警线的（门店，SKU）。补货判断的起点。",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "limit": {
+          "description": "最多返回几条，默认 20",
+          "type": "integer"
+        },
+        "region_id": {
+          "description": "只看这个大区",
+          "type": [
+            "null",
+            "integer"
+          ]
+        },
+        "store_id": {
+          "description": "只看这家门店",
+          "type": [
+            "null",
+            "integer"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "name": "inventory_alerts",
+    "outputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "available_qty": {
+                "type": "integer"
+              },
+              "product_id": {
+                "type": "integer"
+              },
+              "product_title": {
+                "type": "string"
+              },
+              "region_id": {
+                "type": "integer"
+              },
+              "sku_code": {
+                "type": "string"
+              },
+              "sku_id": {
+                "type": "integer"
+              },
+              "spec_values": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              "store_id": {
+                "type": "integer"
+              },
+              "store_name": {
+                "type": "string"
+              },
+              "warning_qty": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "available_qty",
+              "product_id",
+              "product_title",
+              "region_id",
+              "sku_code",
+              "sku_id",
+              "spec_values",
+              "store_id",
+              "store_name",
+              "warning_qty"
+            ],
+            "type": "object"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        },
+        "total": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "items",
+        "total"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "你提过的提案与结果：待处理、已执行（执行前后的可售）、已驳回（驳回理由）、已过期。",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "page": {
+          "description": "页码，从 1 开始",
+          "type": "integer"
+        },
+        "page_size": {
+          "description": "每页条数，默认 20，最多 100",
+          "type": "integer"
+        },
+        "status": {
+          "description": "10 待处理 / 15 执行中 / 20 已执行 / 30 已驳回 / 40 执行失败 / 50 已过期",
+          "maximum": 32767,
+          "minimum": -32768,
+          "type": [
+            "null",
+            "integer"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "name": "list_my_proposals",
+    "outputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "agent_name": {
+                "type": "string"
+              },
+              "agent_staff_id": {
+                "type": "integer"
+              },
+              "created_at": {
+                "type": "string"
+              },
+              "decided_at": {
+                "type": [
+                  "null",
+                  "string"
+                ]
+              },
+              "decided_by": {
+                "type": [
+                  "null",
+                  "integer"
+                ]
+              },
+              "decided_by_name": {
+                "type": [
+                  "null",
+                  "string"
+                ]
+              },
+              "evidence": {
+                "type": "string"
+              },
+              "expected_impact": {
+                "type": "string"
+              },
+              "expires_at": {
+                "type": "string"
+              },
+              "id": {
+                "type": "integer"
+              },
+              "kind": {
+                "type": "string"
+              },
+              "payload": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "reject_reason": {
+                "type": [
+                  "null",
+                  "string"
+                ]
+              },
+              "result": {
+                "additionalProperties": true,
+                "type": [
+                  "null",
+                  "object"
+                ]
+              },
+              "sku_id": {
+                "type": [
+                  "null",
+                  "integer"
+                ]
+              },
+              "status": {
+                "type": "integer"
+              },
+              "store_id": {
+                "type": "integer"
+              },
+              "store_name": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "updated_at": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "agent_name",
+              "agent_staff_id",
+              "created_at",
+              "evidence",
+              "expected_impact",
+              "expires_at",
+              "id",
+              "kind",
+              "payload",
+              "status",
+              "store_id",
+              "store_name",
+              "title",
+              "updated_at"
+            ],
+            "type": "object"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        },
+        "page": {
+          "type": "integer"
+        },
+        "page_size": {
+          "type": "integer"
+        },
+        "total": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "page",
+        "page_size",
+        "total",
+        "items"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "商品列表：标题、状态、价格区间、总库存、销量。",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "category_id": {
+          "type": [
+            "null",
+            "integer"
+          ]
+        },
+        "page": {
+          "description": "页码，从 1 开始",
+          "type": "integer"
+        },
+        "page_size": {
+          "description": "每页条数，默认 20，最多 100",
+          "type": "integer"
+        },
+        "status": {
+          "description": "0 草稿 / 1 上架 / 2 下架；不传则全部",
+          "maximum": 32767,
+          "minimum": -32768,
+          "type": [
+            "null",
+            "integer"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "name": "list_products",
+    "outputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "brand_id": {
+                "type": [
+                  "null",
+                  "integer"
+                ]
+              },
+              "category_id": {
+                "type": "integer"
+              },
+              "created_at": {
+                "type": "string"
+              },
+              "deleted_at": {
+                "type": [
+                  "null",
+                  "string"
+                ]
+              },
+              "description": {
+                "type": [
+                  "null",
+                  "string"
+                ]
+              },
+              "freight_template_id": {
+                "type": [
+                  "null",
+                  "integer"
+                ]
+              },
+              "id": {
+                "type": "integer"
+              },
+              "max_price_cents": {
+                "type": "integer"
+              },
+              "min_price_cents": {
+                "type": "integer"
+              },
+              "published_at": {
+                "type": [
+                  "null",
+                  "string"
+                ]
+              },
+              "sales_count": {
+                "type": "integer"
+              },
+              "status": {
+                "type": "integer"
+              },
+              "subtitle": {
+                "type": [
+                  "null",
+                  "string"
+                ]
+              },
+              "title": {
+                "type": "string"
+              },
+              "total_stock": {
+                "type": "integer"
+              },
+              "updated_at": {
+                "type": [
+                  "null",
+                  "string"
+                ]
+              }
+            },
+            "required": [
+              "category_id",
+              "created_at",
+              "id",
+              "max_price_cents",
+              "min_price_cents",
+              "sales_count",
+              "status",
+              "title",
+              "total_stock"
+            ],
+            "type": "object"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        },
+        "page": {
+          "type": "integer"
+        },
+        "page_size": {
+          "type": "integer"
+        },
+        "total": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "page",
+        "page_size",
+        "total",
+        "items"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "售后单列表：状态、类型、金额、原因。",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "page": {
+          "description": "页码，从 1 开始",
+          "type": "integer"
+        },
+        "page_size": {
+          "description": "每页条数，默认 20，最多 100",
+          "type": "integer"
+        },
+        "status": {
+          "description": "售后单状态：10 待审核 / 20 待买家退货 / 30 待收货 / 40 已退款 / 50 已驳回 / 60 已撤回",
+          "maximum": 32767,
+          "minimum": -32768,
+          "type": [
+            "null",
+            "integer"
+          ]
+        },
+        "store_id": {
+          "type": [
+            "null",
+            "integer"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "name": "list_refunds",
+    "outputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "amount_cents": {
+                "type": "integer"
+              },
+              "audited_at": {
+                "type": [
+                  "null",
+                  "string"
+                ]
+              },
+              "audited_by": {
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "type": "integer"
+                  },
+                  "name": {
+                    "type": [
+                      "null",
+                      "string"
+                    ]
+                  }
+                },
+                "required": [
+                  "id"
+                ],
+                "type": [
+                  "null",
+                  "object"
+                ]
+              },
+              "channel": {
+                "type": [
+                  "null",
+                  "string"
+                ]
+              },
+              "channel_refund_id": {
+                "type": [
+                  "null",
+                  "string"
+                ]
+              },
+              "created_at": {
+                "type": "string"
+              },
+              "evidence_urls": {
+                "items": {
+                  "type": "string"
+                },
+                "type": [
+                  "null",
+                  "array"
+                ]
+              },
+              "freight_cents": {
+                "type": [
+                  "null",
+                  "integer"
+                ]
+              },
+              "goods_amount_cents": {
+                "type": [
+                  "null",
+                  "integer"
+                ]
+              },
+              "items": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "amount_cents": {
+                      "type": "integer"
+                    },
+                    "image_url": {
+                      "type": [
+                        "null",
+                        "string"
+                      ]
+                    },
+                    "order_item_id": {
+                      "type": "integer"
+                    },
+                    "quantity": {
+                      "type": "integer"
+                    },
+                    "title": {
+                      "type": [
+                        "null",
+                        "string"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "amount_cents",
+                    "order_item_id",
+                    "quantity"
+                  ],
+                  "type": "object"
+                },
+                "type": [
+                  "null",
+                  "array"
+                ]
+              },
+              "order_no": {
+                "type": "string"
+              },
+              "order_status": {
+                "type": "integer"
+              },
+              "payment_no": {
+                "type": [
+                  "null",
+                  "string"
+                ]
+              },
+              "reason_code": {
+                "type": [
+                  "null",
+                  "integer"
+                ]
+              },
+              "reason_text": {
+                "type": [
+                  "null",
+                  "string"
+                ]
+              },
+              "received_at": {
+                "type": [
+                  "null",
+                  "string"
+                ]
+              },
+              "received_by": {
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "type": "integer"
+                  },
+                  "name": {
+                    "type": [
+                      "null",
+                      "string"
+                    ]
+                  }
+                },
+                "required": [
+                  "id"
+                ],
+                "type": [
+                  "null",
+                  "object"
+                ]
+              },
+              "refund_no": {
+                "type": "string"
+              },
+              "refund_type": {
+                "type": "integer"
+              },
+              "refunded_at": {
+                "type": [
+                  "null",
+                  "string"
+                ]
+              },
+              "reject_reason": {
+                "type": [
+                  "null",
+                  "string"
+                ]
+              },
+              "return_deadline_at": {
+                "type": [
+                  "null",
+                  "string"
+                ]
+              },
+              "return_shipment": {
+                "additionalProperties": false,
+                "properties": {
+                  "carrier_code": {
+                    "type": "string"
+                  },
+                  "submitted_at": {
+                    "type": "string"
+                  },
+                  "tracking_no": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "carrier_code",
+                  "submitted_at",
+                  "tracking_no"
+                ],
+                "type": [
+                  "null",
+                  "object"
+                ]
+              },
+              "status": {
+                "type": "integer"
+              },
+              "store": {
+                "additionalProperties": false,
+                "properties": {
+                  "region_name": {
+                    "type": [
+                      "null",
+                      "string"
+                    ]
+                  },
+                  "store_address": {
+                    "type": [
+                      "null",
+                      "string"
+                    ]
+                  },
+                  "store_name": {
+                    "type": "string"
+                  },
+                  "store_phone": {
+                    "type": [
+                      "null",
+                      "string"
+                    ]
+                  }
+                },
+                "required": [
+                  "store_name"
+                ],
+                "type": "object"
+              },
+              "store_id": {
+                "type": "integer"
+              },
+              "updated_at": {
+                "type": [
+                  "null",
+                  "string"
+                ]
+              }
+            },
+            "required": [
+              "amount_cents",
+              "created_at",
+              "items",
+              "order_no",
+              "order_status",
+              "refund_no",
+              "refund_type",
+              "status",
+              "store",
+              "store_id"
+            ],
+            "type": "object"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        },
+        "page": {
+          "type": "integer"
+        },
+        "page_size": {
+          "type": "integer"
+        },
+        "total": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "page",
+        "page_size",
+        "total",
+        "items"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "门店列表（你管辖范围内的），含营业状态、坐标、是否默认店。",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "page": {
+          "description": "页码，从 1 开始",
+          "type": "integer"
+        },
+        "page_size": {
+          "description": "每页条数，默认 20，最多 100",
+          "type": "integer"
+        },
+        "region_id": {
+          "description": "只看这个大区的门店",
+          "type": [
+            "null",
+            "integer"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "name": "list_stores",
+    "outputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "address": {
+                "type": [
+                  "null",
+                  "string"
+                ]
+              },
+              "city": {
+                "type": [
+                  "null",
+                  "string"
+                ]
+              },
+              "code": {
+                "type": "string"
+              },
+              "created_at": {
+                "type": "string"
+              },
+              "deleted_at": {
+                "type": [
+                  "null",
+                  "string"
+                ]
+              },
+              "district": {
+                "type": [
+                  "null",
+                  "string"
+                ]
+              },
+              "fence": {
+                "additionalProperties": false,
+                "properties": {
+                  "coordinates": {
+                    "items": {
+                      "items": {
+                        "items": {
+                          "type": "number"
+                        },
+                        "type": [
+                          "null",
+                          "array"
+                        ]
+                      },
+                      "type": [
+                        "null",
+                        "array"
+                      ]
+                    },
+                    "type": [
+                      "null",
+                      "array"
+                    ]
+                  },
+                  "type": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "coordinates",
+                  "type"
+                ],
+                "type": [
+                  "null",
+                  "object"
+                ]
+              },
+              "id": {
+                "type": "integer"
+              },
+              "is_default": {
+                "type": "boolean"
+              },
+              "lat": {
+                "type": [
+                  "null",
+                  "number"
+                ]
+              },
+              "lng": {
+                "type": [
+                  "null",
+                  "number"
+                ]
+              },
+              "name": {
+                "type": "string"
+              },
+              "phone": {
+                "type": [
+                  "null",
+                  "string"
+                ]
+              },
+              "province": {
+                "type": [
+                  "null",
+                  "string"
+                ]
+              },
+              "region_id": {
+                "type": "integer"
+              },
+              "region_name": {
+                "type": [
+                  "null",
+                  "string"
+                ]
+              },
+              "status": {
+                "type": "integer"
+              },
+              "updated_at": {
+                "type": [
+                  "null",
+                  "string"
+                ]
+              }
+            },
+            "required": [
+              "code",
+              "created_at",
+              "id",
+              "is_default",
+              "name",
+              "region_id",
+              "status"
+            ],
+            "type": "object"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        },
+        "page": {
+          "type": "integer"
+        },
+        "page_size": {
+          "type": "integer"
+        },
+        "total": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "page",
+        "page_size",
+        "total",
+        "items"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "写一份经营简报（巡店日报等），后台「AI 员工 → 简报」可见。低风险，直接生效。",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "description": "正文 markdown，≤8KB。数字只引用工具返回的",
+          "type": "string"
+        },
+        "period_end": {
+          "description": "简报覆盖的结束日期 YYYY-MM-DD（含）",
+          "type": "string"
+        },
+        "period_start": {
+          "description": "简报覆盖的起始日期 YYYY-MM-DD（店铺时区）",
+          "type": "string"
+        },
+        "title": {
+          "description": "标题，≤100 字，如「9 月 28 日巡店日报」",
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "body",
+        "period_start",
+        "period_end"
+      ],
+      "type": "object"
+    },
+    "name": "post_brief",
+    "outputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "agent_name": {
+          "type": "string"
+        },
+        "agent_staff_id": {
+          "type": "integer"
+        },
+        "body": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "id": {
+          "type": "integer"
+        },
+        "period_end": {
+          "format": "date",
+          "type": "string"
+        },
+        "period_start": {
+          "format": "date",
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "agent_name",
+        "agent_staff_id",
+        "body",
+        "created_at",
+        "id",
+        "period_end",
+        "period_start",
+        "title"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "商品排行：按销售额或销量的 Top N。",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "category_id": {
+          "description": "只看这个类目（含子类目）",
+          "type": [
+            "null",
+            "integer"
+          ]
+        },
+        "end_date": {
+          "description": "自定义周期（custom）的结束日期 YYYY-MM-DD（店铺时区，含）",
+          "type": "string"
+        },
+        "limit": {
+          "description": "Top N，默认 10",
+          "type": "integer"
+        },
+        "period": {
+          "description": "统计周期：today / yesterday / last_7_days / last_30_days / custom，默认 last_7_days",
+          "type": "string"
+        },
+        "region_id": {
+          "description": "只看这个大区",
+          "type": [
+            "null",
+            "integer"
+          ]
+        },
+        "sort_by": {
+          "description": "amount（销售额，默认）或 quantity（销量）",
+          "type": "string"
+        },
+        "start_date": {
+          "description": "自定义周期（custom）的开始日期 YYYY-MM-DD（店铺时区，含）",
+          "type": "string"
+        },
+        "store_id": {
+          "description": "只看这家门店；不传则是你管辖范围内的全部",
+          "type": [
+            "null",
+            "integer"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "name": "product_ranking",
+    "outputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "amount_cents": {
+                "type": "integer"
+              },
+              "category_id": {
+                "type": "integer"
+              },
+              "order_count": {
+                "type": "integer"
+              },
+              "product_id": {
+                "type": "integer"
+              },
+              "quantity": {
+                "type": "integer"
+              },
+              "rank": {
+                "type": "integer"
+              },
+              "refunded_amount_cents": {
+                "type": "integer"
+              },
+              "refunded_quantity": {
+                "type": "integer"
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "amount_cents",
+              "category_id",
+              "order_count",
+              "product_id",
+              "quantity",
+              "rank",
+              "refunded_amount_cents",
+              "refunded_quantity",
+              "title"
+            ],
+            "type": "object"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        },
+        "sort_by": {
+          "type": "string"
+        },
+        "window": {
+          "additionalProperties": false,
+          "properties": {
+            "current": {
+              "additionalProperties": false,
+              "properties": {
+                "end_at": {
+                  "type": "string"
+                },
+                "end_date": {
+                  "format": "date",
+                  "type": "string"
+                },
+                "start_at": {
+                  "type": "string"
+                },
+                "start_date": {
+                  "format": "date",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "end_at",
+                "end_date",
+                "start_at",
+                "start_date"
+              ],
+              "type": "object"
+            },
+            "period": {
+              "type": "string"
+            },
+            "previous": {
+              "additionalProperties": false,
+              "properties": {
+                "end_at": {
+                  "type": "string"
+                },
+                "end_date": {
+                  "format": "date",
+                  "type": "string"
+                },
+                "start_at": {
+                  "type": "string"
+                },
+                "start_date": {
+                  "format": "date",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "end_at",
+                "end_date",
+                "start_at",
+                "start_date"
+              ],
+              "type": "object"
+            },
+            "timezone": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "current",
+            "period",
+            "previous",
+            "timezone"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "items",
+        "sort_by",
+        "window"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "提一条补货提案（给某门店某 SKU 加库存）。不会立即执行：人在后台批准后，Keel 以你的身份执行。同一门店同一 SKU 已有待处理提案时会被拒。48 小时没人处理即过期。",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "delta": {
+          "description": "加多少件，1–1000（只提加库存）",
+          "maximum": 2147483647,
+          "minimum": -2147483648,
+          "type": "integer"
+        },
+        "evidence": {
+          "description": "证据（markdown）：引用 restock_plan 等工具返回的数字，能被人复现；10–8000 字",
+          "type": "string"
+        },
+        "expected_impact": {
+          "description": "预计影响，如「避免 3 天后断货，覆盖到 10 月 12 日」",
+          "type": "string"
+        },
+        "reason": {
+          "description": "一句话原因，写进库存流水，≤100 字",
+          "type": "string"
+        },
+        "sku_id": {
+          "description": "SKU id",
+          "type": "integer"
+        },
+        "store_id": {
+          "description": "门店 id",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "store_id",
+        "sku_id",
+        "delta",
+        "reason",
+        "evidence"
+      ],
+      "type": "object"
+    },
+    "name": "propose_inventory_adjust",
+    "outputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "agent_name": {
+          "type": "string"
+        },
+        "agent_staff_id": {
+          "type": "integer"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "decided_at": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "decided_by": {
+          "type": [
+            "null",
+            "integer"
+          ]
+        },
+        "decided_by_name": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "evidence": {
+          "type": "string"
+        },
+        "expected_impact": {
+          "type": "string"
+        },
+        "expires_at": {
+          "type": "string"
+        },
+        "id": {
+          "type": "integer"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "reject_reason": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "result": {
+          "additionalProperties": true,
+          "type": [
+            "null",
+            "object"
+          ]
+        },
+        "sku_id": {
+          "type": [
+            "null",
+            "integer"
+          ]
+        },
+        "status": {
+          "type": "integer"
+        },
+        "store_id": {
+          "type": "integer"
+        },
+        "store_name": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "updated_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "agent_name",
+        "agent_staff_id",
+        "created_at",
+        "evidence",
+        "expected_impact",
+        "expires_at",
+        "id",
+        "kind",
+        "payload",
+        "status",
+        "store_id",
+        "store_name",
+        "title",
+        "updated_at"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "补货计算（确定性，不是估算）：每个（门店，SKU）的日均销量（分母去掉断货天）、可售、可售天数、预计卖断日、建议补货量（补到能卖 cover_days 天，取到 5 的倍数）、置信。confidence=low 的样本不足 5 天，只写进简报、不要提案。按最先卖断排序。",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "all": {
+          "description": "true 时连建议补货量为 0 的也返回；默认只返回需要补的",
+          "type": "boolean"
+        },
+        "cover_days": {
+          "description": "补到能卖多少天，1–90，默认 14",
+          "type": "integer"
+        },
+        "lookback_days": {
+          "description": "按最近多少天的销量算日均，1–90，默认 14",
+          "type": "integer"
+        },
+        "store_id": {
+          "description": "只算这家门店；不传则是你管辖范围内全部营业中的门店",
+          "type": [
+            "null",
+            "integer"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "name": "restock_plan",
+    "outputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "cover_days": {
+          "type": "integer"
+        },
+        "generated_at": {
+          "type": "string"
+        },
+        "lines": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "available": {
+                "maximum": 2147483647,
+                "minimum": -2147483648,
+                "type": "integer"
+              },
+              "confidence": {
+                "type": "string"
+              },
+              "daily_avg": {
+                "type": "number"
+              },
+              "days_of_cover": {
+                "type": [
+                  "null",
+                  "number"
+                ]
+              },
+              "effective_days": {
+                "type": "integer"
+              },
+              "product_id": {
+                "type": "integer"
+              },
+              "product_title": {
+                "type": "string"
+              },
+              "sku_id": {
+                "type": "integer"
+              },
+              "sku_label": {
+                "type": "string"
+              },
+              "sold": {
+                "type": "integer"
+              },
+              "stockout_date": {
+                "type": "string"
+              },
+              "stockout_days": {
+                "type": "integer"
+              },
+              "store_id": {
+                "type": "integer"
+              },
+              "store_name": {
+                "type": "string"
+              },
+              "suggested": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "store_id",
+              "store_name",
+              "sku_id",
+              "product_id",
+              "product_title",
+              "sku_label",
+              "available",
+              "sold",
+              "effective_days",
+              "stockout_days",
+              "daily_avg",
+              "suggested",
+              "confidence"
+            ],
+            "type": "object"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        },
+        "lookback_days": {
+          "type": "integer"
+        },
+        "timezone": {
+          "type": "string"
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "generated_at",
+        "timezone",
+        "cover_days",
+        "lookback_days",
+        "lines",
+        "truncated"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "按天的销售趋势（销售额、单量）。用来发现某天的异常。",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "end_date": {
+          "description": "自定义周期（custom）的结束日期 YYYY-MM-DD（店铺时区，含）",
+          "type": "string"
+        },
+        "period": {
+          "description": "统计周期：today / yesterday / last_7_days / last_30_days / custom，默认 last_7_days",
+          "type": "string"
+        },
+        "region_id": {
+          "description": "只看这个大区",
+          "type": [
+            "null",
+            "integer"
+          ]
+        },
+        "start_date": {
+          "description": "自定义周期（custom）的开始日期 YYYY-MM-DD（店铺时区，含）",
+          "type": "string"
+        },
+        "store_id": {
+          "description": "只看这家门店；不传则是你管辖范围内的全部",
+          "type": [
+            "null",
+            "integer"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "name": "sales_trend",
+    "outputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "granularity": {
+          "type": "string"
+        },
+        "points": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "bucket_start_at": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "net_sales_cents": {
+                "type": "integer"
+              },
+              "order_count": {
+                "type": "integer"
+              },
+              "paid_amount_cents": {
+                "type": "integer"
+              },
+              "refund_amount_cents": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "bucket_start_at",
+              "label",
+              "net_sales_cents",
+              "order_count",
+              "paid_amount_cents",
+              "refund_amount_cents"
+            ],
+            "type": "object"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        },
+        "window": {
+          "additionalProperties": false,
+          "properties": {
+            "current": {
+              "additionalProperties": false,
+              "properties": {
+                "end_at": {
+                  "type": "string"
+                },
+                "end_date": {
+                  "format": "date",
+                  "type": "string"
+                },
+                "start_at": {
+                  "type": "string"
+                },
+                "start_date": {
+                  "format": "date",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "end_at",
+                "end_date",
+                "start_at",
+                "start_date"
+              ],
+              "type": "object"
+            },
+            "period": {
+              "type": "string"
+            },
+            "previous": {
+              "additionalProperties": false,
+              "properties": {
+                "end_at": {
+                  "type": "string"
+                },
+                "end_date": {
+                  "format": "date",
+                  "type": "string"
+                },
+                "start_at": {
+                  "type": "string"
+                },
+                "start_date": {
+                  "format": "date",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "end_at",
+                "end_date",
+                "start_at",
+                "start_date"
+              ],
+              "type": "object"
+            },
+            "timezone": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "current",
+            "period",
+            "previous",
+            "timezone"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "granularity",
+        "points",
+        "window"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "搜索概况：高频搜索词、无结果词、低点击词。用来发现缺货、标题问题与上新机会。",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "end_date": {
+          "type": "string"
+        },
+        "limit": {
+          "description": "每个榜单的 Top N，默认 10",
+          "type": "integer"
+        },
+        "period": {
+          "description": "统计周期，同 shop_overview",
+          "type": "string"
+        },
+        "start_date": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "search_insights",
+    "outputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "click_count": {
+          "type": "integer"
+        },
+        "search_count": {
+          "type": "integer"
+        },
+        "top_queries": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "query": {
+                "type": "string"
+              },
+              "search_count": {
+                "type": "integer"
+              },
+              "zero_result_count": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "query",
+              "search_count",
+              "zero_result_count"
+            ],
+            "type": "object"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        },
+        "window": {
+          "additionalProperties": false,
+          "properties": {
+            "current": {
+              "additionalProperties": false,
+              "properties": {
+                "end_at": {
+                  "type": "string"
+                },
+                "end_date": {
+                  "format": "date",
+                  "type": "string"
+                },
+                "start_at": {
+                  "type": "string"
+                },
+                "start_date": {
+                  "format": "date",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "end_at",
+                "end_date",
+                "start_at",
+                "start_date"
+              ],
+              "type": "object"
+            },
+            "period": {
+              "type": "string"
+            },
+            "previous": {
+              "additionalProperties": false,
+              "properties": {
+                "end_at": {
+                  "type": "string"
+                },
+                "end_date": {
+                  "format": "date",
+                  "type": "string"
+                },
+                "start_at": {
+                  "type": "string"
+                },
+                "start_date": {
+                  "format": "date",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "end_at",
+                "end_date",
+                "start_at",
+                "start_date"
+              ],
+              "type": "object"
+            },
+            "timezone": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "current",
+            "period",
+            "previous",
+            "timezone"
+          ],
+          "type": "object"
+        },
+        "zero_result_count": {
+          "type": "integer"
+        },
+        "zero_result_queries": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "query": {
+                "type": "string"
+              },
+              "search_count": {
+                "type": "integer"
+              },
+              "zero_result_count": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "query",
+              "search_count",
+              "zero_result_count"
+            ],
+            "type": "object"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        },
+        "zero_result_rate": {
+          "type": [
+            "null",
+            "number"
+          ]
+        }
+      },
+      "required": [
+        "click_count",
+        "search_count",
+        "top_queries",
+        "window",
+        "zero_result_count",
+        "zero_result_queries",
+        "zero_result_rate"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "经营概览：销售额、单量、客单价、退款等，与上一个同长周期的对比。经营判断的起点。",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "end_date": {
+          "description": "自定义周期（custom）的结束日期 YYYY-MM-DD（店铺时区，含）",
+          "type": "string"
+        },
+        "period": {
+          "description": "统计周期：today / yesterday / last_7_days / last_30_days / custom，默认 last_7_days",
+          "type": "string"
+        },
+        "region_id": {
+          "description": "只看这个大区",
+          "type": [
+            "null",
+            "integer"
+          ]
+        },
+        "start_date": {
+          "description": "自定义周期（custom）的开始日期 YYYY-MM-DD（店铺时区，含）",
+          "type": "string"
+        },
+        "store_id": {
+          "description": "只看这家门店；不传则是你管辖范围内的全部",
+          "type": [
+            "null",
+            "integer"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "name": "shop_overview",
+    "outputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "current": {
+          "additionalProperties": false,
+          "properties": {
+            "avg_order_value_cents": {
+              "type": "integer"
+            },
+            "buyer_count": {
+              "type": "integer"
+            },
+            "net_sales_cents": {
+              "type": "integer"
+            },
+            "order_count": {
+              "type": "integer"
+            },
+            "paid_amount_cents": {
+              "type": "integer"
+            },
+            "refund_amount_cents": {
+              "type": "integer"
+            },
+            "refund_count": {
+              "type": "integer"
+            },
+            "refund_rate": {
+              "type": [
+                "null",
+                "number"
+              ]
+            }
+          },
+          "required": [
+            "avg_order_value_cents",
+            "buyer_count",
+            "net_sales_cents",
+            "order_count",
+            "paid_amount_cents",
+            "refund_amount_cents",
+            "refund_count",
+            "refund_rate"
+          ],
+          "type": "object"
+        },
+        "previous": {
+          "additionalProperties": false,
+          "properties": {
+            "avg_order_value_cents": {
+              "type": "integer"
+            },
+            "buyer_count": {
+              "type": "integer"
+            },
+            "net_sales_cents": {
+              "type": "integer"
+            },
+            "order_count": {
+              "type": "integer"
+            },
+            "paid_amount_cents": {
+              "type": "integer"
+            },
+            "refund_amount_cents": {
+              "type": "integer"
+            },
+            "refund_count": {
+              "type": "integer"
+            },
+            "refund_rate": {
+              "type": [
+                "null",
+                "number"
+              ]
+            }
+          },
+          "required": [
+            "avg_order_value_cents",
+            "buyer_count",
+            "net_sales_cents",
+            "order_count",
+            "paid_amount_cents",
+            "refund_amount_cents",
+            "refund_count",
+            "refund_rate"
+          ],
+          "type": "object"
+        },
+        "window": {
+          "additionalProperties": false,
+          "properties": {
+            "current": {
+              "additionalProperties": false,
+              "properties": {
+                "end_at": {
+                  "type": "string"
+                },
+                "end_date": {
+                  "format": "date",
+                  "type": "string"
+                },
+                "start_at": {
+                  "type": "string"
+                },
+                "start_date": {
+                  "format": "date",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "end_at",
+                "end_date",
+                "start_at",
+                "start_date"
+              ],
+              "type": "object"
+            },
+            "period": {
+              "type": "string"
+            },
+            "previous": {
+              "additionalProperties": false,
+              "properties": {
+                "end_at": {
+                  "type": "string"
+                },
+                "end_date": {
+                  "format": "date",
+                  "type": "string"
+                },
+                "start_at": {
+                  "type": "string"
+                },
+                "start_date": {
+                  "format": "date",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "end_at",
+                "end_date",
+                "start_at",
+                "start_date"
+              ],
+              "type": "object"
+            },
+            "timezone": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "current",
+            "period",
+            "previous",
+            "timezone"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "current",
+        "previous",
+        "window"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "门店对比：各门店的销售额、单量、客单价。",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "end_date": {
+          "description": "自定义周期（custom）的结束日期 YYYY-MM-DD（店铺时区，含）",
+          "type": "string"
+        },
+        "period": {
+          "description": "统计周期：today / yesterday / last_7_days / last_30_days / custom，默认 last_7_days",
+          "type": "string"
+        },
+        "region_id": {
+          "description": "只看这个大区",
+          "type": [
+            "null",
+            "integer"
+          ]
+        },
+        "start_date": {
+          "description": "自定义周期（custom）的开始日期 YYYY-MM-DD（店铺时区，含）",
+          "type": "string"
+        },
+        "store_id": {
+          "description": "只看这家门店；不传则是你管辖范围内的全部",
+          "type": [
+            "null",
+            "integer"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "name": "store_comparison",
+    "outputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "regions": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "net_sales_cents": {
+                "type": "integer"
+              },
+              "order_count": {
+                "type": "integer"
+              },
+              "paid_amount_cents": {
+                "type": "integer"
+              },
+              "refund_amount_cents": {
+                "type": "integer"
+              },
+              "region_id": {
+                "type": "integer"
+              },
+              "region_name": {
+                "type": "string"
+              },
+              "store_count": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "net_sales_cents",
+              "order_count",
+              "paid_amount_cents",
+              "refund_amount_cents",
+              "region_id",
+              "region_name",
+              "store_count"
+            ],
+            "type": "object"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        },
+        "stores": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "deleted": {
+                "type": "boolean"
+              },
+              "net_sales_cents": {
+                "type": "integer"
+              },
+              "order_count": {
+                "type": "integer"
+              },
+              "paid_amount_cents": {
+                "type": "integer"
+              },
+              "refund_amount_cents": {
+                "type": "integer"
+              },
+              "region_id": {
+                "type": "integer"
+              },
+              "region_name": {
+                "type": "string"
+              },
+              "store_code": {
+                "type": "string"
+              },
+              "store_id": {
+                "type": "integer"
+              },
+              "store_name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "deleted",
+              "net_sales_cents",
+              "order_count",
+              "paid_amount_cents",
+              "refund_amount_cents",
+              "region_id",
+              "region_name",
+              "store_code",
+              "store_id",
+              "store_name"
+            ],
+            "type": "object"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        },
+        "window": {
+          "additionalProperties": false,
+          "properties": {
+            "current": {
+              "additionalProperties": false,
+              "properties": {
+                "end_at": {
+                  "type": "string"
+                },
+                "end_date": {
+                  "format": "date",
+                  "type": "string"
+                },
+                "start_at": {
+                  "type": "string"
+                },
+                "start_date": {
+                  "format": "date",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "end_at",
+                "end_date",
+                "start_at",
+                "start_date"
+              ],
+              "type": "object"
+            },
+            "period": {
+              "type": "string"
+            },
+            "previous": {
+              "additionalProperties": false,
+              "properties": {
+                "end_at": {
+                  "type": "string"
+                },
+                "end_date": {
+                  "format": "date",
+                  "type": "string"
+                },
+                "start_at": {
+                  "type": "string"
+                },
+                "start_date": {
+                  "format": "date",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "end_at",
+                "end_date",
+                "start_at",
+                "start_date"
+              ],
+              "type": "object"
+            },
+            "timezone": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "current",
+            "period",
+            "previous",
+            "timezone"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "regions",
+        "stores",
+        "window"
+      ],
+      "type": "object"
+    }
+  }
+]

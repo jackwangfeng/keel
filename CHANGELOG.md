@@ -51,6 +51,11 @@ so "which one is running?" never depends on anyone's memory.
   `street` is the sub-district (township, the fourth level of a shipping address), not the road name;
   coordinates are rounded to 6 decimals. The admin console's store editor gained a place search above the map
   that fills province / city / district / address from the chosen point.
+- **AI interface for third-party harnesses (`docs/AI接口.md`).** An integrator-facing reference for connecting any
+  MCP client (Claude Code, Codex, Cursor, custom scripts, chat bots) as AI staff. Every MCP tool now declares an
+  `outputSchema` (validated before returning); tool errors carry a machine-readable `_meta["keel/problem"]`
+  (`type`, `title`, `status`, `detail`, same problem types as the admin API). The tool list is snapshotted in
+  `docs/AI接口-工具清单.json` and guarded by a test: changes must be additive, breaking changes get a new tool name.
 - **Orders must ship inside the store's fence.** `POST /orders` and `POST /orders/preview` return 422
   `address-out-of-range` when the shipping address has coordinates outside the chosen store's fence. Addresses
   without coordinates (manual entry, pre-00100) are not checked; the default store (nationwide fallback) and
