@@ -148,7 +148,13 @@ func (s *AgentProposalService) ProposeInventoryAdjust(ctx context.Context, in Pr
 		if err != nil {
 			return err
 		}
-		title := fmt.Sprintf("%s：%s 补 %d 件", st.Name, skuLabel(sku.SKUCode, string(sku.SpecValues)), in.Delta)
+		prod, err := tx.AdminFindProduct(ctx, sku.ProductID)
+		if err != nil {
+			return err
+		}
+		// 标题要让店长一眼认出是哪件货：商品名 + 规格（只写规格的话，「尺码：M」认不出是哪件衣服）。
+		title := fmt.Sprintf("%s：%s（%s）补 %d 件", st.Name, prod.Title, skuLabel(sku.SKUCode, string(sku.SpecValues)),
+			in.Delta)
 		skuID := in.SKUID
 		// 先查一次已有的待处理提案，好告诉 agent 是哪一条。插入撞唯一索引会让整个事务失效（之后什么都查不了），
 		// 所以不能「先插、撞了再查」；插入时仍可能撞上（两个请求并发），那时只能回一句不带编号的。
