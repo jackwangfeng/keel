@@ -9,7 +9,11 @@ import { Refresh } from "@element-plus/icons-vue";
 import { keel, type AgentProposal, type AgentProposalPage } from "../../api/client.ts";
 import { datetime, PROPOSAL_STATUS } from "../../ui/format.ts";
 import { notifyError, notifyOk } from "../../ui/notify.ts";
+import { KIND_LABEL, type AgentProposalKind } from "../../api/agentProposalRules.ts";
 import ProblemAlert from "../../components/ProblemAlert.vue";
+import ProposalPayloadView from "./ProposalPayloadView.vue";
+import ProposalResultView from "./ProposalResultView.vue";
+import ProposalOutcomeView from "./ProposalOutcomeView.vue";
 
 const loading = ref(false);
 const error = ref<unknown>(null);
@@ -18,15 +22,22 @@ const pageNo = ref(1);
 const pageSize = ref(20);
 /** 默认只看待处理——这是需要人做决定的那一批。 */
 const statusFilter = ref<10 | 15 | 20 | 30 | 40 | 50 | "">(10);
+/** 种类筛选（AI 经营 M10 §1，五种）：不选即全部。 */
+const kindFilter = ref<AgentProposalKind | "">("");
 
 const STATUS_OPTIONS: { value: 10 | 15 | 20 | 30 | 40 | 50 | ""; label: string }[] = [
-    { value: "", label: "全部" },
+    { value: "", label: "全部状态" },
     { value: 10, label: "待处理" },
     { value: 15, label: "执行中" },
     { value: 20, label: "已执行" },
     { value: 30, label: "已驳回" },
     { value: 40, label: "执行失败" },
     { value: 50, label: "已过期" },
+];
+
+const KIND_OPTIONS: { value: AgentProposalKind | ""; label: string }[] = [
+    { value: "", label: "全部种类" },
+    ...(Object.entries(KIND_LABEL) as [AgentProposalKind, string][]).map(([value, label]) => ({ value, label })),
 ];
 
 async function load(): Promise<void> {
@@ -38,6 +49,7 @@ async function load(): Promise<void> {
                 page: pageNo.value,
                 page_size: pageSize.value,
                 ...(statusFilter.value === "" ? {} : { status: statusFilter.value }),
+                ...(kindFilter.value === "" ? {} : { kind: kindFilter.value }),
             },
         });
     } catch (err) {
@@ -54,14 +66,6 @@ function onFilterChange(): void {
 
 onMounted(() => void load());
 defineExpose({ reload: load });
-
-// ------------------------------------------------------------------ 详情（展开行）
-
-/** payload / result 是 `{[key:string]: unknown}`，原样格式化成 JSON 给人看，不猜它的形状。 */
-function pretty(v: Record<string, unknown> | undefined): string {
-    if (v === undefined || Object.keys(v).length === 0) return "—";
-    return JSON.stringify(v, null, 2);
-}
 
 // ------------------------------------------------------------------ 批准
 
@@ -153,6 +157,9 @@ async function submitReject(): Promise<void> {
         <ProblemAlert v-if="error" :error="error" />
 
         <div class="page-toolbar">
+            <el-select v-model="kindFilter" style="width: 140px" @change="onFilterChange">
+                <el-option v-for="o in KIND_OPTIONS" :key="o.value" :label="o.label" :value="o.value" />
+            </el-select>
             <el-select v-model="statusFilter" style="width: 140px" @change="onFilterChange">
                 <el-option v-for="o in STATUS_OPTIONS" :key="o.value" :label="o.label" :value="o.value" />
             </el-select>
@@ -169,10 +176,14 @@ async function submitReject(): Promise<void> {
                         <h4>预计影响</h4>
                         <p class="pre">{{ row.expected_impact || "—" }}</p>
                         <h4>执行参数</h4>
-                        <pre class="pre">{{ pretty(row.payload) }}</pre>
+                        <ProposalPayloadView :kind="row.kind" :payload="row.payload" />
                         <template v-if="row.result">
                             <h4>执行结果</h4>
-                            <pre class="pre">{{ pretty(row.result) }}</pre>
+                            <ProposalResultView :kind="row.kind" :result="row.result" />
+                        </template>
+                        <template v-if="row.executed_at">
+                            <h4>执行后复盘</h4>
+                            <ProposalOutcomeView :outcome="row.outcome" :executed-at="row.executed_at" :outcome-at="row.outcome_at" />
                         </template>
                         <template v-if="row.status === 30">
                             <h4>驳回理由</h4>
@@ -185,17 +196,21 @@ async function submitReject(): Promise<void> {
             <el-table-column label="标题" min-width="220" show-overflow-tooltip>
                 <template #default="{ row }: { row: AgentProposal }">{{ row.title }}</template>
             </el-table-column>
-            <el-table-column label="门店" width="140" show-overflow-tooltip>
-                <template #default="{ row }: { row: AgentProposal }">{{ row.store_name }}</template>
+            <el-table-column label="种类" width="90">
+                <template #default="{ row }: { row: AgentProposal }">{{ KIND_LABEL[row.kind] }}</template>
+            </el-table-column>
+            <el-table-column label="门店" width="120" show-overflow-tooltip>
+                <template #default="{ row }: { row: AgentProposal }">{{ row.store_name ?? "全店" }}</template>
             </el-table-column>
             <el-table-column label="AI 员工" width="120" show-overflow-tooltip>
                 <template #default="{ row }: { row: AgentProposal }">{{ row.agent_name }}</template>
             </el-table-column>
-            <el-table-column label="状态" width="90">
+            <el-table-column label="状态" width="150">
                 <template #default="{ row }: { row: AgentProposal }">
                     <el-tag :type="PROPOSAL_STATUS[row.status].tag" size="small">
                         {{ PROPOSAL_STATUS[row.status].text }}
                     </el-tag>
+                    <el-tag v-if="row.auto_approved" type="warning" size="small" class="auto-tag">自动执行</el-tag>
                 </template>
             </el-table-column>
             <el-table-column label="创建时间" width="170">
@@ -272,5 +287,8 @@ async function submitReject(): Promise<void> {
 }
 .muted {
     color: var(--el-text-color-secondary);
+}
+.auto-tag {
+    margin-left: 4px;
 }
 </style>

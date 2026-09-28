@@ -95,6 +95,15 @@ export type AgentCreateRequest = S["AgentCreateRequest"];
 export type AgentUpdateRequest = S["AgentUpdateRequest"];
 export type AgentKeyCreateRequest = S["AgentKeyCreateRequest"];
 export type AgentProposalRejectRequest = S["AgentProposalRejectRequest"];
+// AI 经营 M10/M11：自动执行策略、成绩单、事件 webhook。
+export type AgentAutoPolicy = S["AgentAutoPolicy"];
+export type AgentAutoPolicyInput = S["AgentAutoPolicyInput"];
+export type AgentScorecard = S["AgentScorecard"];
+export type AgentScorecardKind = S["AgentScorecardKind"];
+export type AgentScorecardEntry = S["AgentScorecardEntry"];
+export type AgentWebhook = S["AgentWebhook"];
+export type AgentWebhookPutRequest = S["AgentWebhookPutRequest"];
+export type AgentWebhookDelivery = S["AgentWebhookDelivery"];
 
 // 商品批量导入（契约 /admin/product-imports）。
 export type ProductImportFormat = S["ProductImportFormat"];
@@ -150,6 +159,8 @@ export type AdminAgentList = ResponseBodyOf<"/admin/agents", "get">;
 export type AgentProposalPage = ResponseBodyOf<"/admin/agent-proposals", "get">;
 /** `GET /admin/agent-briefs` 的响应体。 */
 export type AgentBriefPage = ResponseBodyOf<"/admin/agent-briefs", "get">;
+/** `GET /admin/agents/{staff_id}/auto-policies` 的响应体（固定 4 条：M11 §6）。 */
+export type AgentAutoPolicyList = ResponseBodyOf<"/admin/agents/{staff_id}/auto-policies", "get">;
 
 // ---------------------------------------------------------------------------
 // 会话 token

@@ -103,6 +103,8 @@ export const can = {
     manageAgents: (): boolean => role() === ROLE.admin,
     /** 读经营简报：只有全店范围的人（管理员 / 操作员），与经营报表同一条线。 */
     seeAgentBriefs: (): boolean => merchantWide(),
+    /** 读 AI 员工成绩单（AI 经营 M10 §4）：全店范围的人，与简报同一条线——店长据此决定要不要放手（M11 自动执行）。 */
+    seeAgentScorecard: (): boolean => merchantWide(),
 };
 
 /** 当前身份能分配哪些角色。平台级只能加平台级的管理员 / 操作员。 */

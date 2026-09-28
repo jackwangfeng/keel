@@ -5,18 +5,31 @@
 // 密钥的明文（secret）只在发密钥的那一次响应里出现，服务端只存哈希——
 // 弹窗关掉就再也看不到，这里不缓存它、不放进任何会被刷新覆盖的 ref 之外的地方。
 import { computed, ref, onMounted } from "vue";
-import { ElMessageBox } from "element-plus";
+import { ElMessage, ElMessageBox } from "element-plus";
 import { Plus, Refresh } from "@element-plus/icons-vue";
 import {
     keel,
+    ProblemError,
     type AdminAgent,
     type AdminRegion,
     type AdminStore,
+    type AgentAutoPolicyInput,
     type AgentCreateRequest,
     type AgentKey,
     type AgentKeyCreated,
+    type AgentWebhook,
+    type AgentWebhookDelivery,
 } from "../../api/client.ts";
 import { AGENT_ROLES, mcpConfigSnippet } from "../../api/agents.ts";
+import {
+    AUTO_POLICY_KINDS,
+    AUTO_POLICY_KIND_LABEL,
+    capFieldOf,
+    capInputText,
+    parseCap,
+    withCap,
+    type AutoPolicyKind,
+} from "../../api/agentPolicyRules.ts";
 import { listAllRegions, listAllStores } from "../../api/stores.ts";
 import { IdempotentSubmission, withIdempotency } from "../../api/idempotency.ts";
 import { ROLE, ROLE_TEXT } from "../../auth/permissions.ts";
@@ -258,6 +271,183 @@ async function revoke(agent: AdminAgent, key: AgentKey): Promise<void> {
         error.value = err;
     }
 }
+
+// ------------------------------------------------------------------ 设置（自动执行策略 + 事件 webhook，AI 经营 M11）
+
+const settingsVisible = ref(false);
+const settingsTarget = ref<AdminAgent | null>(null);
+const settingsTab = ref<"policy" | "webhook">("policy");
+
+interface PolicyFormRow {
+    kind: AutoPolicyKind;
+    enabled: boolean;
+    /** 单笔上限的输入框内容——`capFieldOf(kind)` 为 null（改文案）时不用。 */
+    capInput: string;
+    dailyLimit: number;
+    saving: boolean;
+    /** 原始四字段，保存时只替换这一种相关的那一个，其余原样带回。 */
+    base: AgentAutoPolicyInput;
+}
+
+const policyLoading = ref(false);
+const policyError = ref<unknown>(null);
+const policyRows = ref<PolicyFormRow[]>([]);
+
+async function loadPolicies(staffId: number): Promise<void> {
+    policyLoading.value = true;
+    policyError.value = null;
+    try {
+        const list = await keel.get("/admin/agents/{staff_id}/auto-policies", { path: { staff_id: staffId } });
+        // 服务端固定给四条；按 AUTO_POLICY_KINDS 的顺序展示，缺的（不该发生）用全零兜底。
+        policyRows.value = AUTO_POLICY_KINDS.map((kind) => {
+            const found = list.items.find((p) => p.kind === kind);
+            const base: AgentAutoPolicyInput = found ?? {
+                enabled: false,
+                max_units: 0,
+                min_discount_rate: 0,
+                max_discount_cents: 0,
+                daily_limit: 0,
+            };
+            return { kind, enabled: base.enabled, capInput: capInputText(kind, base), dailyLimit: base.daily_limit, saving: false, base };
+        });
+    } catch (err) {
+        policyError.value = err;
+    } finally {
+        policyLoading.value = false;
+    }
+}
+
+async function savePolicy(row: PolicyFormRow): Promise<void> {
+    const target = settingsTarget.value;
+    if (target === null) return;
+    let capValue = 0;
+    if (capFieldOf(row.kind) !== null) {
+        const parsed = parseCap(row.kind, row.capInput);
+        if (!parsed.ok) {
+            ElMessage.error(parsed.msg);
+            return;
+        }
+        capValue = parsed.value;
+    }
+    row.saving = true;
+    try {
+        const body = withCap(row.kind, { ...row.base, enabled: row.enabled, daily_limit: row.dailyLimit }, capValue);
+        const saved = await keel.request("put", "/admin/agents/{staff_id}/auto-policies/{kind}", {
+            path: { staff_id: target.id, kind: row.kind },
+            body,
+        });
+        row.base = saved;
+        row.enabled = saved.enabled;
+        row.capInput = capInputText(row.kind, saved);
+        row.dailyLimit = saved.daily_limit;
+        notifyOk("已保存");
+    } catch (err) {
+        policyError.value = err;
+    } finally {
+        row.saving = false;
+    }
+}
+
+// -------- 事件 webhook
+
+const webhookLoading = ref(false);
+const webhookError = ref<unknown>(null);
+const webhookSaving = ref(false);
+const webhook = ref<AgentWebhook | null>(null);
+const webhookExists = ref(false);
+const webhookUrl = ref("");
+const webhookEnabled = ref(true);
+/** 签名密钥明文，只在新建 / 轮换那一次响应里出现——同接入密钥的规矩，不缓存到别处。 */
+const issuedWebhookSecret = ref<string | null>(null);
+const webhookSecretCopied = ref(false);
+
+async function loadWebhook(staffId: number): Promise<void> {
+    webhookLoading.value = true;
+    webhookError.value = null;
+    issuedWebhookSecret.value = null;
+    try {
+        const w = await keel.get("/admin/agents/{staff_id}/webhook", { path: { staff_id: staffId } });
+        webhook.value = w;
+        webhookExists.value = true;
+        webhookUrl.value = w.url;
+        webhookEnabled.value = w.enabled;
+    } catch (err) {
+        // 404：这名 AI 员工还没配 webhook——不是错误，是空状态。
+        if (err instanceof ProblemError && err.status === 404) {
+            webhook.value = null;
+            webhookExists.value = false;
+            webhookUrl.value = "";
+            webhookEnabled.value = true;
+        } else {
+            webhookError.value = err;
+        }
+    } finally {
+        webhookLoading.value = false;
+    }
+}
+
+async function saveWebhook(rotate: boolean): Promise<void> {
+    const target = settingsTarget.value;
+    if (target === null || webhookUrl.value.trim() === "") return;
+    webhookSaving.value = true;
+    webhookError.value = null;
+    try {
+        const saved = await keel.request("put", "/admin/agents/{staff_id}/webhook", {
+            path: { staff_id: target.id },
+            body: { url: webhookUrl.value.trim(), enabled: webhookEnabled.value, rotate_secret: rotate },
+        });
+        webhook.value = saved;
+        webhookExists.value = true;
+        issuedWebhookSecret.value = saved.secret ?? null;
+        notifyOk("已保存");
+    } catch (err) {
+        webhookError.value = err;
+    } finally {
+        webhookSaving.value = false;
+    }
+}
+
+async function deleteWebhook(): Promise<void> {
+    const target = settingsTarget.value;
+    if (target === null) return;
+    try {
+        await ElMessageBox.confirm("删除这个 webhook？删除后事件不再推送给它（AI 员工仍能用 list_events 自己拉）。", "确认删除", {
+            type: "warning",
+            confirmButtonText: "删除",
+            cancelButtonText: "取消",
+        });
+    } catch {
+        return;
+    }
+    try {
+        await keel.request("delete", "/admin/agents/{staff_id}/webhook", { path: { staff_id: target.id } });
+        webhook.value = null;
+        webhookExists.value = false;
+        webhookUrl.value = "";
+        notifyOk("已删除");
+    } catch (err) {
+        webhookError.value = err;
+    }
+}
+
+function copyWebhookSecret(): void {
+    if (issuedWebhookSecret.value === null) return;
+    navigator.clipboard.writeText(issuedWebhookSecret.value).then(
+        () => {
+            webhookSecretCopied.value = true;
+            setTimeout(() => (webhookSecretCopied.value = false), 1500);
+        },
+        () => undefined,
+    );
+}
+
+function openSettings(row: AdminAgent): void {
+    settingsTarget.value = row;
+    settingsTab.value = "policy";
+    settingsVisible.value = true;
+    void loadPolicies(row.id);
+    void loadWebhook(row.id);
+}
 </script>
 
 <template>
@@ -334,10 +524,11 @@ async function revoke(agent: AdminAgent, key: AgentKey): Promise<void> {
             <el-table-column label="最近使用" width="170">
                 <template #default="{ row }: { row: AdminAgent }">{{ datetime(row.last_used_at) }}</template>
             </el-table-column>
-            <el-table-column label="操作" width="150" fixed="right">
+            <el-table-column label="操作" width="200" fixed="right">
                 <template #default="{ row }: { row: AdminAgent }">
                     <el-button link type="primary" @click="openIssue(row)">发密钥</el-button>
                     <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
+                    <el-button link type="primary" @click="openSettings(row)">设置</el-button>
                 </template>
             </el-table-column>
         </el-table>
@@ -445,6 +636,97 @@ async function revoke(agent: AdminAgent, key: AgentKey): Promise<void> {
                 <el-button v-else type="primary" @click="keyVisible = false">关闭</el-button>
             </template>
         </el-dialog>
+
+        <!-- 设置：自动执行策略（M11 §6）+ 事件 webhook（M10 §3） -->
+        <el-dialog v-model="settingsVisible" :title="`AI 员工设置：${settingsTarget?.name ?? ''}`" width="680px" @closed="issuedWebhookSecret = null">
+            <el-tabs v-model="settingsTab">
+                <el-tab-pane label="自动执行策略" name="policy">
+                    <ProblemAlert v-if="policyError" :error="policyError" />
+                    <el-alert type="warning" :closable="false" show-icon class="mb12">
+                        <template #title>开启后符合条件的提案会不经审批直接执行；售后审核不支持自动执行。</template>
+                    </el-alert>
+                    <el-table :data="policyRows" v-loading="policyLoading" size="small" border row-key="kind">
+                        <el-table-column label="种类" width="90">
+                            <template #default="{ row }: { row: PolicyFormRow }">{{ AUTO_POLICY_KIND_LABEL[row.kind] }}</template>
+                        </el-table-column>
+                        <el-table-column label="启用" width="70">
+                            <template #default="{ row }: { row: PolicyFormRow }">
+                                <el-switch v-model="row.enabled" />
+                            </template>
+                        </el-table-column>
+                        <el-table-column label="单笔上限" min-width="170">
+                            <template #default="{ row }: { row: PolicyFormRow }">
+                                <el-input v-if="capFieldOf(row.kind) !== null" v-model="row.capInput" size="small" style="width: 120px" />
+                                <span v-else class="hint">没有单笔上限</span>
+                            </template>
+                        </el-table-column>
+                        <el-table-column label="每 24 小时至多" width="160">
+                            <template #default="{ row }: { row: PolicyFormRow }">
+                                <el-input-number v-model="row.dailyLimit" :min="0" size="small" style="width: 100px" />
+                                <span class="hint suffix">条，0 = 不自动</span>
+                            </template>
+                        </el-table-column>
+                        <el-table-column label="操作" width="80">
+                            <template #default="{ row }: { row: PolicyFormRow }">
+                                <el-button link type="primary" size="small" :loading="row.saving" @click="savePolicy(row)">保存</el-button>
+                            </template>
+                        </el-table-column>
+                    </el-table>
+                </el-tab-pane>
+                <el-tab-pane label="事件 Webhook" name="webhook">
+                    <ProblemAlert v-if="webhookError" :error="webhookError" />
+                    <p class="hint mb12">
+                        事件写入后 Keel 会 POST 到这个地址（JSON 体 + HMAC 签名，5 秒超时，非 2xx 指数退避重试至多 6 次）；
+                        AI 员工自己也能用 MCP 工具 list_events 拉。
+                    </p>
+                    <el-form label-width="70px" @submit.prevent v-loading="webhookLoading">
+                        <el-form-item label="URL">
+                            <el-input v-model="webhookUrl" placeholder="https://…（本机联调可用 http://127.0.0.1 / localhost）" />
+                        </el-form-item>
+                        <el-form-item label="启用">
+                            <el-switch v-model="webhookEnabled" />
+                        </el-form-item>
+                    </el-form>
+                    <template v-if="issuedWebhookSecret">
+                        <el-alert type="warning" :closable="false" show-icon class="mb12">
+                            <template #title>签名密钥只显示这一次，关掉就看不到了。请立刻复制。</template>
+                        </el-alert>
+                        <el-input :model-value="issuedWebhookSecret" readonly class="mb12">
+                            <template #append>
+                                <el-button @click="copyWebhookSecret">{{ webhookSecretCopied ? "已复制" : "复制" }}</el-button>
+                            </template>
+                        </el-input>
+                    </template>
+                    <div class="webhook-actions mb12">
+                        <el-button type="primary" :loading="webhookSaving" :disabled="webhookUrl.trim() === ''" @click="saveWebhook(false)">
+                            {{ webhookExists ? "保存" : "新建" }}
+                        </el-button>
+                        <el-button v-if="webhookExists" :loading="webhookSaving" @click="saveWebhook(true)">轮换签名密钥</el-button>
+                        <el-button v-if="webhookExists" type="danger" @click="deleteWebhook">删除</el-button>
+                    </div>
+                    <template v-if="webhook?.recent_deliveries && webhook.recent_deliveries.length > 0">
+                        <h4 class="section-title">最近投递（新的在前）</h4>
+                        <el-table :data="webhook.recent_deliveries" size="small" border>
+                            <el-table-column label="第几次" width="70">
+                                <template #default="{ row }: { row: AgentWebhookDelivery }">{{ row.attempt }}</template>
+                            </el-table-column>
+                            <el-table-column label="状态码" width="80">
+                                <template #default="{ row }: { row: AgentWebhookDelivery }">{{ row.status_code ?? "—" }}</template>
+                            </el-table-column>
+                            <el-table-column label="失败原因" min-width="160" show-overflow-tooltip>
+                                <template #default="{ row }: { row: AgentWebhookDelivery }">{{ row.error || "—" }}</template>
+                            </el-table-column>
+                            <el-table-column label="时间" width="170">
+                                <template #default="{ row }: { row: AgentWebhookDelivery }">{{ datetime(row.delivered_at) }}</template>
+                            </el-table-column>
+                        </el-table>
+                    </template>
+                </el-tab-pane>
+            </el-tabs>
+            <template #footer>
+                <el-button @click="settingsVisible = false">关闭</el-button>
+            </template>
+        </el-dialog>
     </div>
 </template>
 
@@ -478,5 +760,13 @@ code {
     background: var(--el-fill-color-light);
     padding: 1px 4px;
     border-radius: 3px;
+}
+.section-title {
+    margin: 8px 0;
+    font-size: 13px;
+    color: var(--el-text-color-secondary);
+}
+.webhook-actions .el-button {
+    margin-right: 8px;
 }
 </style>

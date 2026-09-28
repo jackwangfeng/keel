@@ -8,12 +8,13 @@ import { useRoute, useRouter } from "vue-router";
 import { can } from "../../auth/permissions.ts";
 import ProposalsTab from "./ProposalsTab.vue";
 import BriefsTab from "./BriefsTab.vue";
+import ScorecardTab from "./ScorecardTab.vue";
 import AgentsTab from "./AgentsTab.vue";
 
 const route = useRoute();
 const router = useRouter();
 
-const TABS = ["proposals", "briefs", "staff"] as const;
+const TABS = ["proposals", "briefs", "scorecard", "staff"] as const;
 const tabFromQuery = typeof route.query["tab"] === "string" ? route.query["tab"] : "proposals";
 const tab = ref<(typeof TABS)[number]>(TABS.includes(tabFromQuery as (typeof TABS)[number]) ? (tabFromQuery as (typeof TABS)[number]) : "proposals");
 
@@ -22,6 +23,7 @@ function onTabChange(name: string | number): void {
 }
 
 const canSeeBriefs = can.seeAgentBriefs();
+const canSeeScorecard = can.seeAgentScorecard();
 const canManageAgents = can.manageAgents();
 </script>
 
@@ -34,12 +36,16 @@ const canManageAgents = can.manageAgents();
             <el-tab-pane v-if="canSeeBriefs" label="简报" name="briefs" lazy>
                 <BriefsTab />
             </el-tab-pane>
+            <el-tab-pane v-if="canSeeScorecard" label="成绩单" name="scorecard" lazy>
+                <ScorecardTab />
+            </el-tab-pane>
             <el-tab-pane v-if="canManageAgents" label="AI 员工与密钥" name="staff" lazy>
                 <AgentsTab />
             </el-tab-pane>
         </el-tabs>
-        <p v-if="!canSeeBriefs || !canManageAgents" class="hint foot">
+        <p v-if="!canSeeBriefs || !canSeeScorecard || !canManageAgents" class="hint foot">
             <span v-if="!canSeeBriefs">简报只有全店范围的人（管理员 / 操作员）能看。</span>
+            <span v-if="!canSeeScorecard">成绩单只有全店范围的人（管理员 / 操作员）能看。</span>
             <span v-if="!canManageAgents">员工与密钥的管理只有本店管理员能做。</span>
         </p>
     </div>
