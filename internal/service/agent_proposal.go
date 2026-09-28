@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/keel/keel/internal/auth"
 	"github.com/keel/keel/internal/inventory"
 	"github.com/keel/keel/internal/repository"
@@ -58,9 +60,9 @@ type ProposalResult struct {
 	AfterAvailable  *int32 `json:"after_available,omitempty"`
 	// Detail 是 M10 各种提案的执行结果：flash_price → promotion_id；coupon → coupon_template_id；
 	// product_copy → before / after 的标题；refund_decision → refund 的新状态。
-	Detail map[string]any `json:"detail,omitempty"`
-	ErrorType       string `json:"error_type,omitempty"`
-	Error           string `json:"error,omitempty"`
+	Detail    map[string]any `json:"detail,omitempty"`
+	ErrorType string         `json:"error_type,omitempty"`
+	Error     string         `json:"error,omitempty"`
 }
 
 // ProposalInput 是 AI 员工提一条补货提案的输入。
@@ -391,23 +393,30 @@ func (s *AgentProposalService) runClaimed(ctx context.Context, p repository.Agen
 	return out, mapProposalErr(err)
 }
 
-// isInfraError：库存服务不在、数据库出错这类「重试可能成功」的错误 —— 它们让批准整体失败（提案留在 15，
-// 稍后再点批准以同一个幂等键重试）。业务规则的拒绝（范围、可售、库存不够）记成执行失败。
+// isInfraError：库存服务不在、超时、数据库连接 / 资源 / 并发冲突这类「重试可能成功」的错误 —— 它们让批准整体失败
+// （提案留在 15，稍后再点批准以同一个幂等键重试）。其余一律是业务规则的拒绝（范围、可售、库存不够、目标已变、
+// 参数不合规、约束冲突……），记成执行失败（40）并写明原因。
+//
+// 之前反过来写（列出业务错误、其余当基础设施）：白名单漏了售后单已被人工处理、券参数被后台拒、商品已删，
+// 于是批准 500、提案永久卡在 15 —— 过期任务只扫 10、人工驳回回 409、同目标去重又把它算作待处理，
+// 那个目标从此再也提不了（2026-09-28 破坏性测试）。
 func isInfraError(err error) bool {
-	if inventory.IsUnavailable(err) {
+	if inventory.IsUnavailable(err) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 		return true
 	}
-	var short *repository.InventoryInsufficient
-	if errors.As(err, &short) {
+	var pg *pgconn.PgError
+	if errors.As(err, &pg) {
+		switch pg.Code[:2] {
+		case "08", "40", "53", "57", "58": // 连接、事务回滚（死锁 / 序列化失败）、资源不足、运维干预、系统错误
+			return true
+		}
 		return false
 	}
-	for _, biz := range []error{ErrRoleForbidden, ErrOutOfScope, ErrCatalogBadRequest,
-		repository.ErrCatalogNotFound, repository.ErrSKUNotInTenant, repository.ErrSKUNotSoldInStore, ErrStoreClosed} {
-		if errors.Is(err, biz) {
-			return false
-		}
+	var ne net.Error
+	if errors.As(err, &ne) {
+		return true
 	}
-	return true
+	return false
 }
 
 func proposalErrorType(err error) string {

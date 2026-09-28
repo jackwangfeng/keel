@@ -140,3 +140,34 @@ func TestAgentProposalKindsExecuteOnApproval(t *testing.T) {
 		t.Fatal("门店管理员身份的 AI 员工不该能提发券提案")
 	}
 }
+
+// 批准时目标已经变了（售后单已被人工处理）：记成执行失败（40）并写明原因，不是 500、不卡在 15。
+// 2026-09-28 破坏性测试：批准 500、提案永久 15，人工驳回 409，同一目标再也提不了。
+func TestProposalWhoseTargetChangedFailsInsteadOfSticking(t *testing.T) {
+	cs := newCouponShop(t)
+	a := createAgent(t, cs.adminShop, `{"name":"售后 AI","role":2}`)
+	sess := mcpConnect(t, cs.Host, issueAgentKey(t, cs.adminShop, a.Id, `{"name":"t"}`).Secret)
+	b := cs.newBuyer(t, "stale-target")
+	o := cs.placePaid(t, b, cs.NorthStore, cs.DressSKU, 1, nil)
+	_, lines := cs.lines(t, b, o.OrderNo)
+	rf := cs.mustApply(t, b, o.OrderNo, refundBody(1, [2]int64{lines[cs.DressSKU].Id, 1}))
+	res, p := mcpCall(t, sess, "propose_refund_decision", map[string]any{"refund_no": rf.RefundNo, "action": "approve",
+		"evidence": "list_refunds：未发货、仅退款、理由是拍错尺码"})
+	if res.IsError {
+		t.Fatal(mcpText(res))
+	}
+	// 人先处理掉：驳回。
+	wantStatus(t, cs.audit(t, rf.RefundNo, `{"action":"reject","reject_reason":"已与买家电话沟通，改为换货"}`), http.StatusOK, "人工驳回")
+
+	var out api.AgentProposal
+	decodeInto(t, postWithKey(t, cs.Host, fmt.Sprintf("/api/v1/admin/agent-proposals/%d/approve", int64(p["id"].(float64))), "",
+		cs.Token, freshIdemKey()), http.StatusOK, "批准一条目标已变的提案", &out)
+	if out.Status != 40 || out.Result == nil || (*out.Result)["error"] == nil {
+		t.Fatalf("目标已变应记成执行失败 40 并写明原因：status=%d result=%v", out.Status, out.Result)
+	}
+	// 同一目标可以再提（去重不再把它算作待处理）。
+	if res, _ := mcpCall(t, sess, "propose_refund_decision", map[string]any{"refund_no": rf.RefundNo, "action": "approve",
+		"evidence": "list_refunds：再提一次，未发货、仅退款"}); res.IsError && strings.Contains(mcpText(res), "同样的待处理提案") {
+		t.Fatalf("失败的提案不该挡住同一目标再提：%s", mcpText(res))
+	}
+}
