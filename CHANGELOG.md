@@ -39,6 +39,23 @@ so "which one is running?" never depends on anyone's memory.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-28
+
+Migration `00111`; the database lands on `00111`.
+
+### Added
+
+- **Same-city delivery templates (00111).** Save a delivery rule (minimum order, free-over amount, distance tiers)
+  as a named template and mark one as the default. A fenced store with no configuration of its own now follows the
+  default template, so opening a new store needs no delivery setup; a store can reference another template or keep
+  a custom rule, and editing a template takes effect for every store using it. `GET/POST
+  /admin/local-delivery-templates`, `PUT/DELETE /admin/local-delivery-templates/{template_id}` (writes need
+  merchant-wide staff; a template in use, or the default one, cannot be deleted — 409
+  `local-delivery-template-in-use`); `DELETE /admin/stores/{store_id}/local-delivery` switches a store back to
+  following the default. The store response gains `source` (`custom` / `template` / `default_template` / `none`),
+  `template_id`, `template_name` and `custom`; the v0.3 request and response shapes still work. The console gets
+  a 「同城配送模板」 section and the store tab chooses follow-default / template / custom.
+
 ## [0.3.1] - 2026-09-28
 
 No migrations; the database stays on `00110`.
@@ -1258,7 +1275,8 @@ Listed because a changelog that only lists wins is an advertisement.
   show why a product was rejected last time; the merchant only ever saw it in
   that one response.
 
-[Unreleased]: https://github.com/jackwangfeng/keel/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/jackwangfeng/keel/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/jackwangfeng/keel/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/jackwangfeng/keel/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/jackwangfeng/keel/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/jackwangfeng/keel/compare/v0.1.0...v0.2.0

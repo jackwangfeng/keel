@@ -79,6 +79,8 @@ export const can = {
      * 门店模板同门店价（本大区 / 自己的店）。传 null 表示全店模板。
      */
     editFreight: (store: StoreRef | null): boolean => (store === null ? merchantWide() : can.operateStore(store)),
+    /** 同城配送模板（00111）：全店范围（管理员、操作员），与全店运费模板同一行。任何员工都能读。 */
+    editLocalDeliveryTemplates: (): boolean => merchantWide(),
     /** 设默认门店：只有管理员。 */
     setDefaultStore: (): boolean => role() === ROLE.admin,
     /** 店铺设置（时区、自动确认天数、退货寄回时限、客服电话）的读与改：只有管理员，与设默认门店同一行。 */

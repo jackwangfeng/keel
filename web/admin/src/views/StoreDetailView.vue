@@ -9,7 +9,7 @@
 
 import { computed, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { ArrowLeft, Delete, Plus, Refresh } from "@element-plus/icons-vue";
+import { ArrowLeft, Delete, Refresh } from "@element-plus/icons-vue";
 import { ElMessageBox } from "element-plus";
 import {
     isProblemType,
@@ -25,9 +25,10 @@ import {
 } from "../api/client.ts";
 import { detailAddress } from "../api/geo.ts";
 import { fenceErrorPoint } from "../api/errors.ts";
-import { getLocalDelivery, putLocalDelivery, type AdminLocalDelivery, type DeliveryTier } from "../api/localDelivery.ts";
-import { checkLocalDeliveryDraft, kmToMeters, metersToKmInput } from "../api/localDeliveryRules.ts";
-import { centsToYuanInput, yuanToCents } from "../api/money.ts";
+import { deleteLocalDelivery, getLocalDelivery, putLocalDelivery, type AdminLocalDelivery } from "../api/localDelivery.ts";
+import { tiersSummary, type RuleConfig } from "../api/localDeliveryRules.ts";
+import { listLocalDeliveryTemplates, type LocalDeliveryTemplate } from "../api/localDeliveryTemplates.ts";
+import { centsToYuanInput } from "../api/money.ts";
 import { isIncomplete, listAllRegions } from "../api/stores.ts";
 import { listAllStoreInventories } from "../api/storeInventory.ts";
 import { datetime } from "../ui/format.ts";
@@ -38,6 +39,7 @@ import FenceEditor from "../components/FenceEditor.vue";
 import LocationPicker, { type LatLng } from "../components/LocationPicker.vue";
 import ScopedProducts from "../components/ScopedProducts.vue";
 import InventoryDialog, { type InventoryTarget } from "../components/InventoryDialog.vue";
+import LocalDeliveryRuleForm from "../components/LocalDeliveryRuleForm.vue";
 
 const props = defineProps<{ storeId: string }>();
 const route = useRoute();
@@ -250,24 +252,21 @@ function onInventoryUpdated(inv: AdminInventory): void {
 }
 
 // ---------------------------------------------------------------- 同城配送
+//
+// 三种模式（对应 AdminLocalDelivery.source，00111）：
+//   跟随默认模板 —— 门店什么都没存，DELETE 回到这个状态；
+//   使用模板     —— PUT { template_id }；
+//   自定义       —— PUT 三个字段（起送价 / 满额免配送费 / 距离分档），交给
+//                    LocalDeliveryRuleForm（与模板管理共用同一份表单 + 校验）。
+// 顶层三个数永远是「生效的」规则，不管当前是哪种模式，都在页面上摊开显示
+// （来源 + 具体数字），免得运营切来切去时看不出「现在到底按什么收」。
 
-interface TierForm {
-    withinKm: string;
-    feeYuan: string;
-}
+type LdMode = "default" | "template" | "custom";
 
-interface LocalDeliveryForm {
-    minOrder: string;
-    freeOver: string;
-    tiers: TierForm[];
-}
-
-function localDeliveryFormOf(ld: AdminLocalDelivery): LocalDeliveryForm {
-    return {
-        minOrder: centsToYuanInput(ld.min_order_cents),
-        freeOver: centsToYuanInput(ld.free_over_cents),
-        tiers: ld.fee_tiers.map((t) => ({ withinKm: metersToKmInput(t.within_m), feeYuan: centsToYuanInput(t.fee_cents) })),
-    };
+function modeOf(ld: AdminLocalDelivery): LdMode {
+    if (ld.source === "custom") return "custom";
+    if (ld.source === "template") return "template";
+    return "default"; // default_template | none
 }
 
 const ldLoading = ref(false);
@@ -276,14 +275,38 @@ const ldSaveError = ref<unknown>(null);
 const ldLocalError = ref("");
 const ldSaving = ref(false);
 const localDelivery = ref<AdminLocalDelivery | null>(null);
-const ldForm = ref<LocalDeliveryForm>({ minOrder: "0", freeOver: "0", tiers: [] });
+const ldTemplates = ref<LocalDeliveryTemplate[]>([]);
+const ldMode = ref<LdMode>("default");
+const ldTemplateId = ref<number | null>(null);
+const ruleFormRef = ref<InstanceType<typeof LocalDeliveryRuleForm> | null>(null);
+
+/** 默认模板的名字，给「跟随默认模板」那一档单选按钮的说明用；商家还没设默认模板时说清楚。 */
+const defaultTemplateName = computed(() => ldTemplates.value.find((t) => t.is_default)?.name ?? null);
+
+/** 「自定义」那一档的初始值：有自己存过的 custom 就用它，否则退回当前生效的规则。 */
+const customInitial = computed<RuleConfig | null>(() => {
+    const ld = localDelivery.value;
+    if (ld === null) return null;
+    if (ld.custom) return ld.custom;
+    return { min_order_cents: ld.min_order_cents, free_over_cents: ld.free_over_cents, fee_tiers: ld.fee_tiers };
+});
+
+function sourceLabel(ld: AdminLocalDelivery): string {
+    if (ld.source === "custom") return "门店自定义";
+    if (ld.source === "template") return `模板「${ld.template_name ?? `#${ld.template_id}`}」`;
+    if (ld.source === "default_template") return `默认模板「${ld.template_name ?? `#${ld.template_id}`}」`;
+    return "无（还没设过默认模板，门店也没有自定义规则）";
+}
 
 async function loadLocalDelivery(): Promise<void> {
     ldLoading.value = true;
     ldLoadError.value = null;
     try {
-        localDelivery.value = await getLocalDelivery(id.value);
-        ldForm.value = localDeliveryFormOf(localDelivery.value);
+        const [ld, templates] = await Promise.all([getLocalDelivery(id.value), listLocalDeliveryTemplates()]);
+        localDelivery.value = ld;
+        ldTemplates.value = templates;
+        ldMode.value = modeOf(ld);
+        ldTemplateId.value = ld.source === "template" ? (ld.template_id ?? null) : null;
     } catch (err) {
         ldLoadError.value = err;
     } finally {
@@ -291,76 +314,32 @@ async function loadLocalDelivery(): Promise<void> {
     }
 }
 
-/** 按公里排序（解析不出的排到最后），提交前与「离开输入框」时都调一次。 */
-function sortTiers(): void {
-    ldForm.value.tiers.sort((a, b) => {
-        const ma = kmToMeters(a.withinKm) ?? Number.POSITIVE_INFINITY;
-        const mb = kmToMeters(b.withinKm) ?? Number.POSITIVE_INFINITY;
-        return ma - mb;
-    });
-}
-
-function addTier(): void {
-    const last = ldForm.value.tiers[ldForm.value.tiers.length - 1];
-    const lastM = last === undefined ? null : kmToMeters(last.withinKm);
-    const nextM = Math.min((lastM ?? 0) + 1000, 100000);
-    ldForm.value.tiers.push({ withinKm: metersToKmInput(nextM), feeYuan: last?.feeYuan ?? "0" });
-}
-
-function removeTier(i: number): void {
-    ldForm.value.tiers.splice(i, 1);
-}
-
 async function saveLocalDelivery(): Promise<void> {
     ldLocalError.value = "";
     ldSaveError.value = null;
-    sortTiers();
 
-    const money = (label: string, s: string): number | string => {
-        const v = yuanToCents(s.trim() === "" ? "0" : s);
-        return v === null ? `${label}「${s}」不是合法金额（元，至多两位小数）` : v;
-    };
-    const minOrder = money("起送价", ldForm.value.minOrder);
-    if (typeof minOrder === "string") {
-        ldLocalError.value = minOrder;
-        return;
-    }
-    const freeOver = money("满多少免配送费", ldForm.value.freeOver);
-    if (typeof freeOver === "string") {
-        ldLocalError.value = freeOver;
+    if (ldMode.value === "template" && ldTemplateId.value === null) {
+        ldLocalError.value = "请选一个模板";
         return;
     }
 
-    const tiers: DeliveryTier[] = [];
-    for (let i = 0; i < ldForm.value.tiers.length; i += 1) {
-        const t = ldForm.value.tiers[i]!;
-        const withinM = kmToMeters(t.withinKm);
-        if (withinM === null) {
-            ldLocalError.value = `第 ${i + 1} 档的距离「${t.withinKm}」不是合法的公里数（至多三位小数）`;
-            return;
-        }
-        const feeCents = yuanToCents(t.feeYuan);
-        if (feeCents === null) {
-            ldLocalError.value = `第 ${i + 1} 档的配送费「${t.feeYuan}」不是合法金额（元，至多两位小数）`;
-            return;
-        }
-        tiers.push({ within_m: withinM, fee_cents: feeCents });
-    }
-
-    const bad = checkLocalDeliveryDraft(tiers, minOrder, freeOver);
-    if (bad !== null) {
-        ldLocalError.value = bad;
-        return;
+    let cfg: RuleConfig | null = null;
+    if (ldMode.value === "custom") {
+        cfg = ruleFormRef.value?.submit() ?? null;
+        if (cfg === null) return; // 规则表单已经把错误显示在自己的错误条上
     }
 
     ldSaving.value = true;
     try {
-        localDelivery.value = await putLocalDelivery(id.value, {
-            min_order_cents: minOrder,
-            free_over_cents: freeOver,
-            fee_tiers: tiers,
-        });
-        ldForm.value = localDeliveryFormOf(localDelivery.value);
+        if (ldMode.value === "default") {
+            localDelivery.value = await deleteLocalDelivery(id.value);
+        } else if (ldMode.value === "template") {
+            localDelivery.value = await putLocalDelivery(id.value, { template_id: ldTemplateId.value! });
+        } else {
+            localDelivery.value = await putLocalDelivery(id.value, cfg!);
+        }
+        ldMode.value = modeOf(localDelivery.value);
+        ldTemplateId.value = localDelivery.value.source === "template" ? (localDelivery.value.template_id ?? null) : null;
         notifyOk("已保存");
     } catch (err) {
         ldSaveError.value = err;
@@ -516,59 +495,42 @@ async function saveLocalDelivery(): Promise<void> {
                                         : '本店是默认门店或没有围栏，走运费模板，这里的配置暂不生效'
                                 "
                             />
+
+                            <el-descriptions title="生效规则" :column="1" border size="small" class="mb12">
+                                <el-descriptions-item label="来源">{{ sourceLabel(localDelivery) }}</el-descriptions-item>
+                                <el-descriptions-item label="起送价">
+                                    {{ localDelivery.min_order_cents > 0 ? `${centsToYuanInput(localDelivery.min_order_cents)} 元` : "不设" }}
+                                </el-descriptions-item>
+                                <el-descriptions-item label="满多少免配送费">
+                                    {{ localDelivery.free_over_cents > 0 ? `${centsToYuanInput(localDelivery.free_over_cents)} 元` : "不设" }}
+                                </el-descriptions-item>
+                                <el-descriptions-item label="距离分档">{{ tiersSummary(localDelivery.fee_tiers) }}</el-descriptions-item>
+                            </el-descriptions>
+
                             <ProblemAlert v-if="ldSaveError" :error="ldSaveError" />
                             <el-alert v-if="ldLocalError" :title="ldLocalError" type="error" :closable="false" show-icon class="mb12" />
+
                             <el-form label-width="140px" style="max-width: 640px" @submit.prevent>
-                                <el-form-item label="起送价（元）">
-                                    <el-input
-                                        v-model="ldForm.minOrder"
-                                        style="width: 160px"
-                                        placeholder="0 = 不设"
-                                        :disabled="!can.operateStore(store)"
-                                    />
-                                    <span class="hint ml8">活动之后、用券之前的商品金额没到它，下单会被拒</span>
+                                <el-form-item label="配送费怎么算">
+                                    <el-radio-group v-model="ldMode" :disabled="!can.operateStore(store)">
+                                        <el-radio value="default">
+                                            跟随默认模板（当前：{{ defaultTemplateName ?? "未设默认模板" }}）
+                                        </el-radio>
+                                        <el-radio value="template">使用模板</el-radio>
+                                        <el-radio value="custom">自定义</el-radio>
+                                    </el-radio-group>
                                 </el-form-item>
-                                <el-form-item label="满多少免配送费">
-                                    <el-input
-                                        v-model="ldForm.freeOver"
-                                        style="width: 160px"
-                                        placeholder="0 = 不设"
-                                        :disabled="!can.operateStore(store)"
-                                    >
-                                        <template #append>元</template>
-                                    </el-input>
+
+                                <el-form-item v-if="ldMode === 'template'" label="选模板">
+                                    <el-select v-model="ldTemplateId" style="width: 280px" :disabled="!can.operateStore(store)" placeholder="选一个模板">
+                                        <el-option v-for="t in ldTemplates" :key="t.id" :value="t.id" :label="t.is_default ? `${t.name}（默认）` : t.name" />
+                                    </el-select>
                                 </el-form-item>
-                                <el-form-item label="距离分档">
-                                    <div class="ld-tiers">
-                                        <div v-for="(t, i) in ldForm.tiers" :key="i" class="ld-tier-row">
-                                            <span>距离 ≤</span>
-                                            <el-input
-                                                v-model="t.withinKm"
-                                                size="small"
-                                                class="ld-num"
-                                                :disabled="!can.operateStore(store)"
-                                                @change="sortTiers"
-                                            >
-                                                <template #append>公里</template>
-                                            </el-input>
-                                            <span>配送费</span>
-                                            <el-input v-model="t.feeYuan" size="small" class="ld-num" :disabled="!can.operateStore(store)">
-                                                <template #append>元</template>
-                                            </el-input>
-                                            <el-button
-                                                link
-                                                type="danger"
-                                                :icon="Delete"
-                                                :disabled="!can.operateStore(store)"
-                                                @click="removeTier(i)"
-                                            >删除</el-button>
-                                        </div>
-                                        <el-button :icon="Plus" size="small" :disabled="!can.operateStore(store)" @click="addTier">加一档</el-button>
-                                        <p class="hint">
-                                            超出最后一档或买家地址没有坐标时按最后一档收；一档都不配 = 配送费恒为 0。
-                                        </p>
-                                    </div>
-                                </el-form-item>
+
+                                <template v-if="ldMode === 'custom'">
+                                    <LocalDeliveryRuleForm ref="ruleFormRef" :initial="customInitial" :disabled="!can.operateStore(store)" />
+                                </template>
+
                                 <el-form-item>
                                     <el-button
                                         type="primary"
@@ -619,18 +581,6 @@ async function saveLocalDelivery(): Promise<void> {
 }
 .low {
     color: var(--el-color-danger);
-}
-.ld-tiers {
-    width: 100%;
-}
-.ld-tier-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-bottom: 8px;
-}
-.ld-num {
-    width: 140px;
 }
 :deep(.hl-row) {
     --el-table-tr-bg-color: var(--el-color-warning-light-9);

@@ -1,12 +1,20 @@
-// 同城配送配置页纯逻辑的单元测试。`node --test src/api/localDeliveryRules.test.ts`
-// 直接跑，不要 node_modules。
-//
-// 注：这个文件目前**没有**被列进仓库根 Makefile 的 `admin-test` 目标（那份文件不在
-// web/admin/src 之内，本次改动的范围限定在 web/admin/src，没有一并加这一行）。
+// 同城配送配置页纯逻辑的单元测试，已列进仓库根 Makefile 的 `admin-test` 目标。
 // 单跑：`cd web/admin && node --test src/api/localDeliveryRules.test.ts`。
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { checkLocalDeliveryDraft, kmToMeters, localDistanceText, metersToKmInput, type DeliveryTierLike } from "./localDeliveryRules.ts";
+import {
+    checkLocalDeliveryDraft,
+    emptyRuleDraft,
+    kmToMeters,
+    localDistanceText,
+    metersToKmInput,
+    parseRuleDraft,
+    ruleDraftOf,
+    sortTierDrafts,
+    tiersSummary,
+    type DeliveryTierLike,
+    type RuleDraft,
+} from "./localDeliveryRules.ts";
 
 const tier = (withinM: number, feeCents: number): DeliveryTierLike => ({ within_m: withinM, fee_cents: feeCents });
 
@@ -47,4 +55,42 @@ test("订单详情里的距离怎么念", () => {
     assert.equal(localDistanceText(1500), "1.5 公里");
     assert.equal(localDistanceText(999), "1.0 公里");
     assert.equal(localDistanceText(0), "0.0 公里");
+});
+
+test("分档摘要：模板列表 / 生效规则共用", () => {
+    assert.equal(tiersSummary([]), "不收配送费");
+    assert.equal(tiersSummary([tier(3000, 300), tier(5000, 500)]), "≤3 公里 ¥3、≤5 公里 ¥5");
+});
+
+test("表单草稿 ↔ 服务端配置往返", () => {
+    const cfg = { min_order_cents: 2000, free_over_cents: 5000, fee_tiers: [tier(3000, 300), tier(5000, 500)] };
+    const draft = ruleDraftOf(cfg);
+    assert.deepEqual(draft, { minOrder: "20", freeOver: "50", tiers: [{ withinKm: "3", feeYuan: "3" }, { withinKm: "5", feeYuan: "5" }] });
+    const back = parseRuleDraft(draft);
+    assert.deepEqual(back, { ok: true, config: cfg });
+
+    assert.deepEqual(emptyRuleDraft(), { minOrder: "0", freeOver: "0", tiers: [] });
+});
+
+test("表单草稿校验：金额 / 距离解析失败，或不满足 checkLocalDeliveryDraft 的规矩", () => {
+    const bad = parseRuleDraft({ minOrder: "abc", freeOver: "0", tiers: [] });
+    assert.equal(bad.ok, false);
+    if (!bad.ok) assert.match(bad.msg, /起送价.*不是合法金额/);
+
+    const badTier = parseRuleDraft({ minOrder: "0", freeOver: "0", tiers: [{ withinKm: "abc", feeYuan: "1" }] });
+    assert.equal(badTier.ok, false);
+    if (!badTier.ok) assert.match(badTier.msg, /第 1 档的距离.*不是合法的公里数/);
+
+    const badOrder = parseRuleDraft({ minOrder: "0", freeOver: "0", tiers: [{ withinKm: "5", feeYuan: "1" }, { withinKm: "3", feeYuan: "1" }] });
+    assert.equal(badOrder.ok, false);
+    if (!badOrder.ok) assert.match(badOrder.msg, /严格递增/);
+});
+
+test("按公里排序草稿：解析不出的排到最后", () => {
+    const tiers: RuleDraft["tiers"] = [{ withinKm: "5", feeYuan: "5" }, { withinKm: "abc", feeYuan: "9" }, { withinKm: "3", feeYuan: "3" }];
+    sortTierDrafts(tiers);
+    assert.deepEqual(
+        tiers.map((t) => t.withinKm),
+        ["3", "5", "abc"],
+    );
 });

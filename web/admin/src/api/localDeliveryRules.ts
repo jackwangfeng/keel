@@ -10,8 +10,10 @@
 // 不做浮点乘法——`Number("1.5") * 1000` 在多数情况下没事，但这条路径上一旦哪天
 // 换成更细的单位，同一类误差就会出现，不如从一开始就用同一套字符串解析。
 //
-// 刻意零运行时 import：`make admin-test` 用 `node --test` 直接跑这个文件，
-// 不需要 node_modules，与 geo.ts / money.ts / freightRules.ts 同一个约定。
+// 只 import 同目录零运行时依赖的 money.ts（它本身零 import）：`make admin-test`
+// 用 `node --test` 直接跑这个文件，不需要 node_modules，与 freightRules.ts 同一个约定。
+
+import { centsToYuanInput, yuanToCents } from "./money.ts";
 
 const KM_RE = /^(\d+)(?:\.(\d{0,3}))?$/;
 
@@ -79,4 +81,85 @@ export function checkLocalDeliveryDraft(
 export function localDistanceText(distanceM: number | null): string {
     if (distanceM === null) return "地址无坐标，按最后一档";
     return `${(distanceM / 1000).toFixed(1)} 公里`;
+}
+
+/** 「≤3 公里 ¥3、≤5 公里 ¥5」；空数组给「不收配送费」——模板列表 / 生效规则摘要共用。 */
+export function tiersSummary(tiers: readonly DeliveryTierLike[]): string {
+    if (tiers.length === 0) return "不收配送费";
+    return tiers.map((t) => `≤${metersToKmInput(t.within_m)} 公里 ¥${centsToYuanInput(t.fee_cents)}`).join("、");
+}
+
+// ---------------------------------------------------------------------------
+// 表单草稿：起送价 + 满额免配送费 + 距离分档。模板管理（LocalDeliveryTemplateDialog）
+// 与门店「自定义」（LocalDeliveryRuleForm）共用同一套换算 + 校验，不各写一遍。
+// ---------------------------------------------------------------------------
+
+export interface TierDraft {
+    withinKm: string;
+    feeYuan: string;
+}
+
+/** 表单里的一份草稿：金额按「元」，距离按「公里」，都是字符串（原样回显用户输入）。 */
+export interface RuleDraft {
+    minOrder: string;
+    freeOver: string;
+    tiers: TierDraft[];
+}
+
+/** 服务端形状的子集（`LocalDeliveryConfig` / `LocalDeliveryTemplateInput` 都满足）。 */
+export interface RuleConfig {
+    min_order_cents: number;
+    free_over_cents: number;
+    fee_tiers: DeliveryTierLike[];
+}
+
+/** 空白草稿：新建模板、或门店从没存过自定义规则时的默认值。 */
+export function emptyRuleDraft(): RuleDraft {
+    return { minOrder: "0", freeOver: "0", tiers: [] };
+}
+
+/** 服务端配置 → 表单草稿（分转元、米转公里）。 */
+export function ruleDraftOf(cfg: RuleConfig): RuleDraft {
+    return {
+        minOrder: centsToYuanInput(cfg.min_order_cents),
+        freeOver: centsToYuanInput(cfg.free_over_cents),
+        tiers: cfg.fee_tiers.map((t) => ({ withinKm: metersToKmInput(t.within_m), feeYuan: centsToYuanInput(t.fee_cents) })),
+    };
+}
+
+/** 按公里排序（解析不出的排到最后）；提交前与「离开输入框」时都调一次。 */
+export function sortTierDrafts(tiers: TierDraft[]): void {
+    tiers.sort((a, b) => {
+        const ma = kmToMeters(a.withinKm) ?? Number.POSITIVE_INFINITY;
+        const mb = kmToMeters(b.withinKm) ?? Number.POSITIVE_INFINITY;
+        return ma - mb;
+    });
+}
+
+/**
+ * 表单草稿 → 服务端形状：金额 / 距离解析 + `checkLocalDeliveryDraft` 校验一起做。
+ * 不合法时返回一句给运营看的话；服务端仍会再判一遍。
+ */
+export function parseRuleDraft(draft: RuleDraft): { ok: true; config: RuleConfig } | { ok: false; msg: string } {
+    const money = (label: string, s: string): number | string => {
+        const v = yuanToCents(s.trim() === "" ? "0" : s);
+        return v === null ? `${label}「${s}」不是合法金额（元，至多两位小数）` : v;
+    };
+    const minOrder = money("起送价", draft.minOrder);
+    if (typeof minOrder === "string") return { ok: false, msg: minOrder };
+    const freeOver = money("满多少免配送费", draft.freeOver);
+    if (typeof freeOver === "string") return { ok: false, msg: freeOver };
+
+    const tiers: DeliveryTierLike[] = [];
+    for (let i = 0; i < draft.tiers.length; i += 1) {
+        const t = draft.tiers[i]!;
+        const withinM = kmToMeters(t.withinKm);
+        if (withinM === null) return { ok: false, msg: `第 ${i + 1} 档的距离「${t.withinKm}」不是合法的公里数（至多三位小数）` };
+        const feeCents = yuanToCents(t.feeYuan);
+        if (feeCents === null) return { ok: false, msg: `第 ${i + 1} 档的配送费「${t.feeYuan}」不是合法金额（元，至多两位小数）` };
+        tiers.push({ within_m: withinM, fee_cents: feeCents });
+    }
+    const bad = checkLocalDeliveryDraft(tiers, minOrder, freeOver);
+    if (bad !== null) return { ok: false, msg: bad };
+    return { ok: true, config: { min_order_cents: minOrder, free_over_cents: freeOver, fee_tiers: tiers } };
 }
