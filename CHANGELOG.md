@@ -39,6 +39,19 @@ so "which one is running?" never depends on anyone's memory.
 
 ## [Unreleased]
 
+### Added
+
+- **Two more read-only MCP compute tools (AI operations M10).** `slow_movers`: for each (store, SKU) with
+  available stock at or above `min_available`, the inventory turnover in days (available ÷ daily average,
+  same denominator convention as `restock_plan` — stockout days excluded); a null turnover means nothing sold
+  in the lookback window, sorted first as the most worth clearing. `promotion_review`: given exactly one of
+  `promotion_id` or `coupon_template_id` — for a promotion, sales/orders/AOV and participating-SKU units sold
+  in its window (`starts_at`..`min(ends_at, now)`) versus the previous window of equal length (limited-time
+  discounts and flash sales scope to their `promotion_skus`; full-reduction/full-discount promotions are
+  shop-wide); for a coupon template, claimed/used counts, use rate, and the sales and total discount from the
+  orders that used it. No migrations. 16 MCP tools total; see `docs/AI接口-工具清单.json` and
+  `docs/AI接口.md`.
+
 ## [0.4.0] - 2026-09-28
 
 Migration `00111`; the database lands on `00111`.

@@ -20,6 +20,8 @@ Keel 是一个电商系统；你通过 MCP 工具读它的数据、做计算、�
 | 读 | `search_insights` | 高频词、无结果词、低点击词 |
 | 读 | `list_stores` `list_products` `get_product` `list_refunds` | 门店、商品（含 SKU 与各门店库存）、售后单 |
 | 计算 | `restock_plan` | 补货计算：日均销量（分母去掉断货天）、可售天数、预计卖断日、建议补货量、置信 |
+| 计算 | `slow_movers` | 滞销清仓：每个（门店，SKU）的库存周转天数（可售 ÷ 日均，口径同 `restock_plan`）；从没卖出去过的排最前 |
+| 计算 | `promotion_review` | 活动 / 券复盘：一个活动窗口内与前一个等长窗口的销售额、单量、客单价对比；一张券的核销率与带来的销售额 |
 | 提案 | `propose_inventory_adjust` | 提一条加库存提案；**不会立即执行**，人批准后 Keel 以你的身份执行 |
 | 提案 | `list_my_proposals` | 你提过的提案、执行结果、驳回理由 |
 | 简报 | `post_brief` | 写一份经营简报（markdown），直接生效 |

@@ -59,6 +59,10 @@ type MCPDeps struct {
 	Proposals *service.AgentProposalService
 	// Briefs 是简报（任务 5）。
 	Briefs *service.AgentBriefService
+	// SlowMovers 与 PromotionReview 是 M10 的计算工具（docs/AI经营-M10M11设计.md §2），
+	// 注册在 mcp_tools_compute.go。
+	SlowMovers      *service.SlowMoversService
+	PromotionReview *service.PromotionReviewService
 	Log     *slog.Logger
 	// Version 进 MCP 的 serverInfo，agent 能看到连的是哪个版本。
 	Version string

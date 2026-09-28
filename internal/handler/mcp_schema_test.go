@@ -33,6 +33,8 @@ func TestMCPEveryToolReturnsItsDeclaredShape(t *testing.T) {
 	}
 	// 可售压到 3，restock_plan 才有行、propose 才有意义。
 	setStoreStock(t, cs.adminShop, cs.NorthStore, cs.DressSKU, 3)
+	// promotion_review 的券分支要一张模板（哪怕没人领过、没人用过）。
+	tpl := cs.createTemplate(t, full100minus20(0, 1))
 
 	calls := []struct {
 		tool string
@@ -54,6 +56,8 @@ func TestMCPEveryToolReturnsItsDeclaredShape(t *testing.T) {
 		{"list_products", map[string]any{}},
 		{"get_product", map[string]any{"product_id": cs.DressProduct}},
 		{"list_refunds", map[string]any{}},
+		{"slow_movers", map[string]any{}},
+		{"promotion_review", map[string]any{"coupon_template_id": tpl.Id}},
 	}
 	tools, err := sess.ListTools(context.Background(), nil)
 	if err != nil {

@@ -69,6 +69,8 @@ curl -H "Authorization: Bearer $KEEL_AGENT_KEY" https://<店铺域名>/api/v1/ag
 | 搜索 | `search_insights` | 高频词、无结果词、低点击词 |
 | 查询 | `list_stores` `list_products` `get_product` `list_refunds` | 门店、商品（含 SKU 与各店库存）、售后单 |
 | 计算 | `restock_plan` | 补货计算：日均（分母去掉断货天）、可售天数、预计卖断日、建议量、置信。**数字由 Keel 算，agent 不要自己估** |
+| 计算 | `slow_movers` | 滞销清仓：每个（门店，SKU）的库存周转天数（可售 ÷ 日均，口径同 `restock_plan`）。周转天数为 null 的是回看期内一件没卖出去的，排最前 |
+| 计算 | `promotion_review` | 活动 / 券复盘：一个活动窗口内与前一个等长窗口的销售额、单量、客单价、参与 SKU 销量对比；一张券的发出数、核销数、核销率、带来的销售额与优惠 |
 | 提案 | `propose_inventory_adjust` `list_my_proposals` | 提一条加库存提案；看自己提过的与结果（执行前后的可售、驳回理由） |
 | 简报 | `post_brief` | 写一份 markdown 简报（巡店日报等），直接生效 |
 
@@ -119,6 +121,7 @@ agent: propose_inventory_adjust(store, sku, +70, 理由, 证据, 预计影响)
 | 日期 | 变更 |
 |---|---|
 | 2026-09-28 | 首版：14 个工具；全部工具声明 `outputSchema`；工具错误带 `_meta["keel/problem"]` |
+| 2026-09-28 | AI 经营 M10：加 `slow_movers`（滞销清仓）、`promotion_review`（活动 / 券复盘）两个只读计算工具，16 个 |
 
 ## 接入方式举例
 
