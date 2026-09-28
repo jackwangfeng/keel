@@ -65,16 +65,19 @@ type PromotionReview struct {
 // CouponTemplateReview 是一张券模板的复盘。ClaimedCount 是已发出总数（issued_count 口径，
 // 含领券中心自领与定向发放）；UseRate 是已核销 ÷ 已发出，已发出为 0 时是 null。
 type CouponTemplateReview struct {
-	TemplateID    int64    `json:"template_id"`
-	Name          string   `json:"name"`
-	ClaimedCount  int32    `json:"claimed_count"`
-	UsedCount     int32    `json:"used_count"`
-	UseRate       *float64 `json:"use_rate"`
-	OrderCount    int64    `json:"order_count"`
-	SalesCents    int64    `json:"sales_cents"`
-	SalesYuan     string   `json:"sales_yuan"`
-	DiscountCents int64    `json:"discount_cents"`
-	DiscountYuan  string   `json:"discount_yuan"`
+	TemplateID   int64    `json:"template_id"`
+	Name         string   `json:"name"`
+	ClaimedCount int32    `json:"claimed_count"`
+	UsedCount    int32    `json:"used_count"`
+	UseRate      *float64 `json:"use_rate"`
+	// OrderCount 是用这张券付过款的订单数，**含后来整单退款的**；RefundedOrderCount 是其中整单退款的单数，
+	// 那些单的券退回了买家（不再算已核销），所以 UsedCount 通常 = OrderCount − RefundedOrderCount。
+	OrderCount         int64  `json:"order_count" jsonschema:"用这张券付过款的订单数，含后来整单退款的"`
+	RefundedOrderCount int64  `json:"refunded_order_count" jsonschema:"其中整单退款的订单数；这些单的券已退回买家，不计入 used_count，所以 used_count 会比 order_count 少这么多"`
+	SalesCents         int64  `json:"sales_cents"`
+	SalesYuan          string `json:"sales_yuan"`
+	DiscountCents      int64  `json:"discount_cents"`
+	DiscountYuan       string `json:"discount_yuan"`
 }
 
 // PromotionReviewOut 是 promotion_review 的返回：两个分支恰好填一个（另一个是 null）。
@@ -238,7 +241,7 @@ func (s *PromotionReviewService) reviewCoupon(ctx context.Context, id int64) (Co
 		}
 		out = CouponTemplateReview{TemplateID: t.Rule.TemplateID, Name: t.Rule.Name,
 			ClaimedCount: st.Issued, UsedCount: st.Used, UseRate: ratio(int64(st.Used), int64(st.Issued)),
-			OrderCount: os.OrderCount, SalesCents: os.PaidCents, SalesYuan: yuan(os.PaidCents),
+			OrderCount: os.OrderCount, RefundedOrderCount: os.RefundedOrderCount, SalesCents: os.PaidCents, SalesYuan: yuan(os.PaidCents),
 			DiscountCents: os.DiscountCents, DiscountYuan: yuan(os.DiscountCents)}
 		return nil
 	})

@@ -38,7 +38,10 @@ SELECT count(DISTINCT lines.order_id)::bigint AS order_count,
 -- promotion_discount_cents，当且仅当没挂券），所以「这张券让出的优惠」= discount_cents 减去
 -- promotion_discount_cents 的那一份，包邮券抵的运费也算在其中（discount_cents 本就含它）。
 -- 给 promotion_review 复盘一张券模板用。
+-- refunded_order_count 是其中整单退款（60）的单数：那些单的券按规则退回了买家（不再算已核销），
+-- 所以已核销数会比 order_count 少这么多 —— 两个数对不上不是 bug（2026-09-28 AI 店长复盘时以为是）。
 SELECT count(*)::bigint AS order_count,
+       count(*) FILTER (WHERE o.status = 60)::bigint AS refunded_order_count,
        COALESCE(sum(o.paid_cents), 0)::bigint AS paid_cents,
        COALESCE(sum(o.discount_cents - o.promotion_discount_cents), 0)::bigint AS coupon_discount_cents
   FROM orders o

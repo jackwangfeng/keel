@@ -163,6 +163,24 @@ func TestMCPPromotionReview(t *testing.T) {
 	if int64(c["discount_cents"].(float64)) != co.DiscountCents {
 		t.Fatalf("这张券让出的优惠应是 %d：%v", co.DiscountCents, c)
 	}
+	if int64(c["refunded_order_count"].(float64)) != 0 {
+		t.Fatalf("还没有退款：%v", c)
+	}
+
+	// 整单退款：券退回买家，不再算已核销；订单仍在 order_count 里，refunded_order_count 说明差在哪
+	// （2026-09-28 演示站：AI 店长看到「下单 20 / 核销 19」以为统计错了）。
+	_, lines := cs.lines(t, b, co.OrderNo)
+	r := cs.mustApply(t, b, co.OrderNo, refundBody(1, [2]int64{lines[cs.ShirtSKU].Id, 2}))
+	cs.mustApprove(t, r.RefundNo)
+	res, out = mcpCall(t, sess, "promotion_review", map[string]any{"coupon_template_id": tpl.Id})
+	if res.IsError {
+		t.Fatalf("promotion_review（券，退款后）出错：%s", mcpText(res))
+	}
+	c, _ = out["coupon"].(map[string]any)
+	if int64(c["order_count"].(float64)) != 1 || int64(c["refunded_order_count"].(float64)) != 1 ||
+		int64(c["used_count"].(float64)) != 0 {
+		t.Fatalf("整单退款后应是 order_count 1、refunded_order_count 1、used_count 0：%v", c)
+	}
 
 	// 二选一的入参：都不给、都给，都是 invalid-request。
 	res, _ = mcpCall(t, sess, "promotion_review", map[string]any{})

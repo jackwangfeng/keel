@@ -1691,6 +1691,11 @@
               "type": "string"
             },
             "order_count": {
+              "description": "用这张券付过款的订单数，含后来整单退款的",
+              "type": "integer"
+            },
+            "refunded_order_count": {
+              "description": "其中整单退款的订单数；这些单的券已退回买家，不计入 used_count，所以 used_count 会比 order_count 少这么多",
               "type": "integer"
             },
             "sales_cents": {
@@ -1721,6 +1726,7 @@
             "used_count",
             "use_rate",
             "order_count",
+            "refunded_order_count",
             "sales_cents",
             "sales_yuan",
             "discount_cents",

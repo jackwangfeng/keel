@@ -24,9 +24,10 @@ type PromotionOrderStats struct {
 // CouponOrderStats 是一张券模板带来的已支付订单聚合：单量、销售额、这些订单里由这张券
 // 让出的优惠（discount_cents 减去满减满折的那一份）。
 type CouponOrderStats struct {
-	OrderCount    int64
-	PaidCents     int64
-	DiscountCents int64
+	OrderCount         int64
+	RefundedOrderCount int64 // 其中整单退款（60）的：券已退回，不计已核销
+	PaidCents          int64
+	DiscountCents      int64
 }
 
 // AgentComputeTx 是 promotion_review 用到的、别处没有的查询。
@@ -56,5 +57,6 @@ func (t tenantTx) CouponOrderStats(ctx context.Context, templateID int64) (Coupo
 	if err != nil {
 		return CouponOrderStats{}, err
 	}
-	return CouponOrderStats{OrderCount: r.OrderCount, PaidCents: r.PaidCents, DiscountCents: r.CouponDiscountCents}, nil
+	return CouponOrderStats{OrderCount: r.OrderCount, RefundedOrderCount: r.RefundedOrderCount,
+		PaidCents: r.PaidCents, DiscountCents: r.CouponDiscountCents}, nil
 }

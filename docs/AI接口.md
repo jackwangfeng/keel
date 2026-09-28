@@ -213,6 +213,7 @@ def verify(secret: str, body: bytes, header: str) -> bool:
 | 2026-09-28 | AI 经营 M10：加 `slow_movers`（滞销清仓）、`promotion_review`（活动 / 券复盘）两个只读计算工具 |
 | 2026-09-28 | AI 经营 M10 / M11：加 `propose_flash_price` `propose_coupon` `propose_product_copy` `propose_refund_decision` 四种提案与 `my_scorecard` 成绩单工具；提案支持按 AI 员工 × 种类的自动执行策略（`auto_approved` 字段），`refund_decision` 不允许自动执行 |
 | 2026-09-28 | AI 经营 M11：加 `query_sql`（只读 SQL 兜底，只读 `agent_ro` 脱敏视图，需全店范围） |
+| 2026-09-28 | `promotion_review` 的券分支加 `refunded_order_count`（整单退款的单数；这些单的券已退回，所以 `used_count` 会比 `order_count` 少） |
 | 2026-09-28 | 检索加相关度下限：`search_insights` 的无结果词与 `search_zero_spike` 把「只回了低于下限的猜你想要」（fallback）也算作无结果；之前向量召回永远凑满，这两样恒为 0 |
 | 2026-09-28 | 演示站实跑验收修两处：全部工具输出里的时刻改为**店铺时区**（带偏移的 RFC 3339，如 `+08:00`；之前是 UTC，AI 店长把它当北京时间写进简报）；`list_refunds` 加 `order_shipped_at`（没发过货时缺席），判发没发货看它，不看 `order_status`（50 / 60 是未发货的整单退款） |
 
