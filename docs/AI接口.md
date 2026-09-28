@@ -238,18 +238,22 @@ KEEL_MCP_URL=https://<店铺域名>/api/v1/mcp KEEL_AGENT_KEY=kagt_… ./keel-mc
 **自己写程序**（Python 官方 SDK）：
 
 ```python
+# 官方 Python SDK（pip install mcp；2026-09-28 用 2.2.0 实测）。1.x 里函数叫 streamablehttp_client、
+# 请求头直接传 headers=，结构化结果是 r.structuredContent —— 按你装的版本对照。
 import asyncio, os
+import httpx2
 from mcp import ClientSession
-from mcp.client.streamable_http import streamablehttp_client
+from mcp.client.streamable_http import streamable_http_client
 
 async def main():
     url = "https://<店铺域名>/api/v1/mcp"
     headers = {"Authorization": "Bearer " + os.environ["KEEL_AGENT_KEY"]}
-    async with streamablehttp_client(url, headers=headers) as (read, write, _):
-        async with ClientSession(read, write) as s:
-            await s.initialize()
-            r = await s.call_tool("shop_overview", {"period": "yesterday"})
-            print(r.structuredContent)
+    async with httpx2.AsyncClient(headers=headers, timeout=30) as http:
+        async with streamable_http_client(url, http_client=http) as (read, write):
+            async with ClientSession(read, write) as s:
+                await s.initialize()
+                r = await s.call_tool("shop_overview", {"period": "yesterday"})
+                print(r.structured_content)
 
 asyncio.run(main())
 ```
@@ -257,3 +261,33 @@ asyncio.run(main())
 **做成聊天机器人（飞书 / 钉钉 / 企业微信）**：机器人收到消息 → 用你的 agent 框架带上面的 MCP 配置跑一轮 → 回复。
 日报可以定时跑完后把 `post_brief` 的内容也推到群里；提案审批按上文「提案」一节，用真人员工的身份调后台接口。
 Keel 这边不需要改任何东西。
+
+## 实测记录（哪些客户端接过）
+
+| 客户端 | 版本 | 结果（2026-09-28） |
+|---|---|---|
+| Claude Code | 本机 | ✅ 全流程：演示站每天 08:00 巡店（`agent/runner/claude-daily.sh`），简报、补货提案、批准执行、复盘都跑通 |
+| 官方 Python SDK | `mcp` 2.2.0 | ✅ 连上、列出全部工具、调 `shop_overview`（结构化结果）与 `query_sql`；上面的示例就是实测过的那一份 |
+| Gemini CLI | 0.33.1 | ⚠️ MCP 握手与工具列表成功（`.gemini/settings.json` 里 `mcpServers.keel.httpUrl` + `headers`，可用 `includeTools` 只放行只读工具）；模型调用被 Google 拒绝（个人免费档不再支持这个客户端），所以没跑完一轮对话 |
+| opencode | 1.15.13 | ⚠️ 配置见下；这台机器上的模型供应商不允许无头调用，没跑完一轮对话 |
+| Codex CLI | — | 未实测（这台机器上没装）。任何支持 streamable HTTP + 自定义请求头的客户端都按「连接参数」一节配；只支持 stdio 的用 `cmd/keel-mcp` |
+
+Gemini CLI（项目目录下 `.gemini/settings.json`；`$KEEL_AGENT_KEY` 由环境变量展开）：
+
+```json
+{ "mcpServers": { "keel": {
+    "httpUrl": "https://<店铺域名>/api/v1/mcp",
+    "headers": { "Authorization": "Bearer $KEEL_AGENT_KEY" },
+    "includeTools": ["shop_overview", "sales_trend", "restock_plan", "slow_movers"] } } }
+```
+
+opencode（项目目录下 `opencode.json`；工具名是 `keel_<工具名>`）：
+
+```json
+{ "mcp": { "keel": { "type": "remote", "url": "https://<店铺域名>/api/v1/mcp",
+    "headers": { "Authorization": "Bearer {env:KEEL_AGENT_KEY}" } } },
+  "permission": { "edit": "deny", "bash": "deny", "webfetch": "deny" } }
+```
+
+给 agent 配权限的原则不分客户端：**只放行 keel 的工具**，关掉 shell、写文件、上网 —— AI 员工的一切动作都应该经过 Keel
+（判权、审计、提案），而不是绕到别处。

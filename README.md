@@ -63,7 +63,8 @@ role and store/region scope as a human, MCP tools to read the business and compu
 **proposal queue** — every write is a proposal with evidence and expected impact, and a
 human approves before Keel executes it (idempotently, as the agent, fully audited).
 
-This is running on the demo site today (M9, shipped): every morning an AI store manager
+This is running on the demo site today (M9–M11, shipped): every morning, and whenever stock runs low or a
+buyer files an after-sales request, an AI store manager
 walks the shop, posts a daily brief (sales vs. the day before, anomalies worth a second
 look, what is about to sell out) and files restock proposals computed by Keel — daily
 sales with stock-out days removed from the denominator, days of cover, suggested quantity,
@@ -167,7 +168,8 @@ back to wiring up Algolia yourself. Keel assumes you want to own your stack.
 | Path | What you get |
 |---|---|
 | [`/`](https://eshop.zzss.fun/) | Buyer app (Flutter Web build of `flutter_app/`) — allow location, or pick an address, to see the geofenced store |
-| [`/admin/`](https://eshop.zzss.fun/admin/) | Merchant console, signed in as the demo merchant's admin — see **AI 员工** for the AI store manager's daily briefs and restock proposals (it runs every morning on simulated orders) |
+| [`/admin/`](https://eshop.zzss.fun/admin/) | Merchant console, signed in as the demo merchant's admin — see **AI 员工** for the AI store manager's briefs, proposals, their measured outcomes and its scorecard (it walks the shop every morning and wakes on events, on simulated orders) |
+| [`/ai-log/`](https://eshop.zzss.fun/ai-log/) | The public AI operations log: what the AI staff proposed, what was approved or auto-executed, and how it turned out |
 
 > This is a demo environment shared by all visitors. Data is reset from time to time without notice, and anything you enter may be seen by others — **do not enter real personal information** (names, phone numbers, addresses, payment details).
 
@@ -376,10 +378,14 @@ the remaining gaps are under "Not in the box yet" above.
   attribute extraction are not built yet — attribute extraction waits for the
   inference engine's generate endpoint; see "Later" in the roadmap.
 - **Compliance checks** — catch prohibited advertising claims before publish.
-- **AI staff** — shipped in M9: staff accounts and `kagt_` access keys, an MCP service
-  (report, inventory, search, catalog and after-sales reads; `restock_plan`; restock
-  proposals; briefs), a proposal queue approved in the console, per-call audit, playbooks
-  and a reference runner. See "AI staff" and "Open to any agent harness" above.
+- **AI staff** — shipped (M9–M11): staff accounts and `kagt_` access keys; 24 MCP tools
+  (reports, inventory, search, catalog, after-sales reads; `restock_plan`, `slow_movers`,
+  `promotion_review`; read-only SQL over curated views; proposals for restocks, limited-time
+  discounts, coupons, product copy and after-sales decisions; events; briefs; scorecard); a
+  proposal queue approved in the console, with per-kind auto-execution policies under caps;
+  events by pull or signed webhook; every executed proposal reviewed after the fact;
+  per-call audit; playbooks and reference runners. See "AI staff" and "Open to any agent
+  harness" above.
 
 **Correctness, taken seriously**
 - Money is `BIGINT` cents. Never a float.
@@ -653,14 +659,16 @@ battle-tested at scale. What it has is a stronger core.
   shipping addresses with coordinates, place search and reverse geocoding (AMap,
   server-side), the Flutter storefront, same-city delivery for fenced stores
   → **v0.3.0** (together with M9 above)
-- [ ] **M10 AI operations: staff can run the shop** — event-triggered
-  wake-ups (and webhooks for integrators), playbooks and proposals for clearance
-  sales / coupons / search gaps / after-sales review, automatic before/after
-  comparison after execution
-- [ ] **M11 AI operations: staff can be trusted with more** — per-tool-category
-  auto-execute policies with caps, a read-only SQL tool, verifying the same
-  integration with a second harness (e.g. Codex), a public "AI operations log"
-  page on the demo site
+- [x] **M10 AI operations: staff can run the shop** — events (stock low, new
+  after-sales request, zero-result search spike, proposal decided) pulled over MCP or
+  pushed by signed webhook; proposals for limited-time discounts, coupons, product
+  copy and after-sales decisions; `slow_movers` and `promotion_review`; automatic
+  before/after review of every executed proposal and a scorecard; five new playbooks
+- [x] **M11 AI operations: staff can be trusted with more** — per-kind auto-execution
+  policies with caps, a read-only SQL tool over curated views, a public "AI operations
+  log" page, the interface re-tested with the official Python SDK (Gemini CLI and
+  opencode connect; see the compatibility record in the AI Interface doc)
+  → **v0.5.0**
 - [ ] **M8 Visual search** — image embeddings, a differentiator; pushed after
   AI operations
 

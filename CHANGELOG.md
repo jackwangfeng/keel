@@ -39,6 +39,18 @@ so "which one is running?" never depends on anyone's memory.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-28
+
+Core migrations `00120`–`00122`, `00130`–`00132`; the core database lands on `00132`. Migration `00131` creates the
+cluster role `keel_agent_ro` (NOLOGIN) and grants it to `keel_app`.
+
+**Highlights.** AI operations M10 and M11. AI staff can now propose limited-time discounts, coupons, product copy
+changes and after-sales decisions, not just restocks; they are woken by events (pull over MCP, or a signed
+webhook for your own harness); every executed proposal is measured after the fact and rolled into a scorecard; a
+shop admin can let proposals of a kind execute automatically under caps; a read-only SQL tool answers ad-hoc
+questions over curated views; and a shop can publish its AI operations log. 24 MCP tools, each with an output
+schema.
+
 ### Added
 
 - **Public AI operations log (M11, 00132).** A shop admin can publish the AI staff's work: `PUT
@@ -1339,7 +1351,8 @@ Listed because a changelog that only lists wins is an advertisement.
   show why a product was rejected last time; the merchant only ever saw it in
   that one response.
 
-[Unreleased]: https://github.com/jackwangfeng/keel/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/jackwangfeng/keel/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/jackwangfeng/keel/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/jackwangfeng/keel/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/jackwangfeng/keel/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/jackwangfeng/keel/compare/v0.2.0...v0.3.0
