@@ -169,7 +169,8 @@
   e2e 已切到专用买家 13800000001（客户端写好了 e2e.env）。
   **C 档客户端 H5 全量 e2e：40 过 / 0 失败 / 14 跳过**（演示站已是 C 档；首轮 3 条 promotion 失败 = 种子缺活动配额行，9293b56 修）。B 档 e2e ✅ 45/0/9。
 - 阶段 3 ✅（README 中英「部署形态：单体与微服务」，命令原样跑过）。
-- 待办：秒杀单 SKU 热点吞吐基线；下一版删 promotion_skus.stock_qty / sold_qty。
+- 待办：下一版删 promotion_skus.stock_qty / sold_qty。
+- 大规模秒杀：**用户 2026-09-28 定为暂不做**，方案记在 `docs/大规模秒杀-方案备忘.md`（先量基线 → 准入 / 配额分片 / dtmrs 推荐的 Redis 预扣 + Redis 屏障 + SAGA 建单）。今天的秒杀正确但吞吐没量过；dtmrs 的 Redis 存储、Redis 屏障、msg 模式 Keel 一样都还没用。
 
 ### A. 等用户拍板 / 批准（被权限拦下的）
 1. ~~e2e 专用买家~~ **已建（2026-09-27）**：13800000001，杭州默认地址（运费 8 元已验），口令在 `~/.config/keel/demo-e2e-buyer-password`（0600），`reset-demo.sh` 调 `~/.local/share/keel-eshop/bin/e2e-buyer.sql` 重建。待用户在客户端机器上设 `KEEL_E2E_PHONE/KEEL_E2E_PASSWORD`。
