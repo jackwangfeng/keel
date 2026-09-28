@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "keel": {
+      "type": "http",
+      "url": "https://eshop.zzss.fun/api/v1/mcp",
+      "headers": {
+        "Authorization": "Bearer ${KEEL_AGENT_KEY}"
+      }
+    }
+  }
+}
