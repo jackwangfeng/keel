@@ -142,6 +142,8 @@ var ErrAutoPolicyNotFound = errors.New("没有自动执行策略")
 type AgentAutoPolicyTx interface {
 	ListAgentAutoPolicies(ctx context.Context, agentStaffID int64) ([]AgentAutoPolicy, error)
 	FindAgentAutoPolicy(ctx context.Context, agentStaffID int64, kind string) (AgentAutoPolicy, error)
+	// LockAgentAutoPolicy 同上，但 FOR UPDATE（自动执行判定用）。
+	LockAgentAutoPolicy(ctx context.Context, agentStaffID int64, kind string) (AgentAutoPolicy, error)
 	UpsertAgentAutoPolicy(ctx context.Context, p AgentAutoPolicy) error
 	CountAutoApprovedSince(ctx context.Context, agentStaffID int64, kind string, since time.Time) (int64, error)
 	// ClaimAgentProposalAuto：10 → 15（自动执行）。没认领到（已被处理 / 过期）返回 ErrProposalNotOpen。
@@ -160,6 +162,20 @@ func (t tenantTx) ListAgentAutoPolicies(ctx context.Context, agentStaffID int64)
 			DailyLimit: r.DailyLimit, UpdatedBy: r.UpdatedBy, UpdatedAt: tsPtr(r.UpdatedAt)})
 	}
 	return out, nil
+}
+
+// LockAgentAutoPolicy 同 FindAgentAutoPolicy，但锁住那一行（自动执行判定在锁之下数条数、认领）。
+func (t tenantTx) LockAgentAutoPolicy(ctx context.Context, agentStaffID int64, kind string) (AgentAutoPolicy, error) {
+	r, err := t.q.LockAgentAutoPolicy(ctx, db.LockAgentAutoPolicyParams{AgentStaffID: agentStaffID, Kind: kind})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return AgentAutoPolicy{}, ErrAutoPolicyNotFound
+	}
+	if err != nil {
+		return AgentAutoPolicy{}, err
+	}
+	return AgentAutoPolicy{AgentStaffID: r.AgentStaffID, Kind: r.Kind, Enabled: r.Enabled, MaxUnits: r.MaxUnits,
+		MinDiscountRate: r.MinDiscountRate, MaxDiscountCents: r.MaxDiscountCents, DailyLimit: r.DailyLimit,
+		UpdatedBy: r.UpdatedBy, UpdatedAt: tsPtr(r.UpdatedAt)}, nil
 }
 
 func (t tenantTx) FindAgentAutoPolicy(ctx context.Context, agentStaffID int64, kind string) (AgentAutoPolicy, error) {

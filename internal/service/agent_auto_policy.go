@@ -143,7 +143,8 @@ func (s *AgentProposalService) afterPropose(ctx context.Context, p repository.Ag
 	}
 	claimed := false
 	e = s.repo.WithTenant(ctx, func(tx repository.Tx) error {
-		pol, err := tx.FindAgentAutoPolicy(ctx, p.AgentStaffID, p.Kind)
+		// 锁住策略行：同一 AI 员工 × 种类的并发判定排队，「数条数 → 认领」不会被并发突破上限。
+		pol, err := tx.LockAgentAutoPolicy(ctx, p.AgentStaffID, p.Kind)
 		if errors.Is(err, repository.ErrAutoPolicyNotFound) {
 			return nil
 		}

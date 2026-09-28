@@ -350,6 +350,50 @@ func (q *Queries) ListAgentAutoPolicies(ctx context.Context, agentStaffID int64)
 	return items, nil
 }
 
+const lockAgentAutoPolicy = `-- name: LockAgentAutoPolicy :one
+SELECT agent_staff_id, kind, enabled, max_units, min_discount_rate, max_discount_cents, daily_limit, updated_by, updated_at
+  FROM agent_auto_policies
+ WHERE agent_staff_id = $1 AND kind = $2
+   FOR UPDATE
+`
+
+type LockAgentAutoPolicyParams struct {
+	AgentStaffID int64
+	Kind         string
+}
+
+type LockAgentAutoPolicyRow struct {
+	AgentStaffID     int64
+	Kind             string
+	Enabled          bool
+	MaxUnits         int32
+	MinDiscountRate  int16
+	MaxDiscountCents int64
+	DailyLimit       int32
+	UpdatedBy        *int64
+	UpdatedAt        pgtype.Timestamptz
+}
+
+// 自动执行判定用：锁住这一行，让同一个 AI 员工 × 种类的并发判定排队 —— 「数 24 小时内已自动执行几条
+// → 认领」在锁之下做，后到的那次读得到先到的那次已提交的认领（READ COMMITTED 每条语句一个新快照）。
+// 2026-09-28 破坏性测试：12 路并发提案、daily_limit=2，自动执行了 4 条。
+func (q *Queries) LockAgentAutoPolicy(ctx context.Context, arg LockAgentAutoPolicyParams) (LockAgentAutoPolicyRow, error) {
+	row := q.db.QueryRow(ctx, lockAgentAutoPolicy, arg.AgentStaffID, arg.Kind)
+	var i LockAgentAutoPolicyRow
+	err := row.Scan(
+		&i.AgentStaffID,
+		&i.Kind,
+		&i.Enabled,
+		&i.MaxUnits,
+		&i.MinDiscountRate,
+		&i.MaxDiscountCents,
+		&i.DailyLimit,
+		&i.UpdatedBy,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const productUnitsSoldBetween = `-- name: ProductUnitsSoldBetween :one
 SELECT COALESCE(sum(oi.quantity), 0)::bigint AS qty
   FROM order_items oi

@@ -91,6 +91,15 @@ SELECT agent_staff_id, kind, enabled, max_units, min_discount_rate, max_discount
   FROM agent_auto_policies
  WHERE agent_staff_id = $1 AND kind = $2;
 
+-- name: LockAgentAutoPolicy :one
+-- 自动执行判定用：锁住这一行，让同一个 AI 员工 × 种类的并发判定排队 —— 「数 24 小时内已自动执行几条
+-- → 认领」在锁之下做，后到的那次读得到先到的那次已提交的认领（READ COMMITTED 每条语句一个新快照）。
+-- 2026-09-28 破坏性测试：12 路并发提案、daily_limit=2，自动执行了 4 条。
+SELECT agent_staff_id, kind, enabled, max_units, min_discount_rate, max_discount_cents, daily_limit, updated_by, updated_at
+  FROM agent_auto_policies
+ WHERE agent_staff_id = $1 AND kind = $2
+   FOR UPDATE;
+
 -- name: UpsertAgentAutoPolicy :exec
 INSERT INTO agent_auto_policies (agent_staff_id, kind, enabled, max_units, min_discount_rate, max_discount_cents,
                                  daily_limit, updated_by)

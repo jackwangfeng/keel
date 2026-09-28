@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/keel/keel/internal/api"
 	"github.com/keel/keel/internal/repository"
 	"github.com/keel/keel/internal/service"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // 执行后复盘（00122）：加库存提案批准执行 → 到点（把 outcome_due_at 拨到过去）复盘扫描量一次 →
@@ -144,5 +146,53 @@ func TestPublicAILog(t *testing.T) {
 	wantStatus(t, w, http.StatusOK, "公开日志")
 	if body := w.Body.String(); !strings.Contains(body, "补 5 件") || strings.Contains(body, "供应商报价") {
 		t.Fatalf("公开日志应有提案标题、不带证据：%s", body)
+	}
+}
+
+// 自动执行的 daily_limit 在并发下不被突破：12 个不同目标的加库存提案同时到，daily_limit=1 → 恰好 1 条自动执行。
+// 2026-09-28 破坏性测试：12 路并发、daily_limit=2，自动执行了 4 条（先数后认领，中间没有串行化）。
+// 注意：进程内测试的并发窗口太小，把修复（LockAgentAutoPolicy）改回去这条也常常是绿的 —— 它锁的是结论，
+// 抓回归靠真栈上的并发脚本（keelfz 上 12 路并发复现过、修后复验）。
+func TestAutoPolicyDailyLimitHoldsUnderConcurrency(t *testing.T) {
+	cs := newCouponShop(t)
+	a := createAgent(t, cs.adminShop, `{"name":"并发 AI","role":2}`)
+	k := issueAgentKey(t, cs.adminShop, a.Id, `{"name":"test"}`)
+	wantStatus(t, putAs(t, cs.Host, fmt.Sprintf("/api/v1/admin/agents/%d/auto-policies/inventory_adjust", a.Id),
+		`{"enabled":true,"max_units":20,"min_discount_rate":1000,"max_discount_cents":0,"daily_limit":1}`, cs.Token),
+		http.StatusOK, "设策略")
+	// 12 个不同目标（提案按目标去重）：夹具的两件商品 × 两家店，再补 10 个 SKU。
+	targets := [][2]int64{{cs.NorthStore, cs.DressSKU}, {cs.NorthStore, cs.ShirtSKU}, {cs.SouthStore, cs.DressSKU}, {cs.SouthStore, cs.ShirtSKU}}
+	for i := 0; i < 8; i++ {
+		_, sku := seedPublishedProduct(t, cs.adminShop, fmt.Sprintf("AUTO%d", i), 1000, 5)
+		targets = append(targets, [2]int64{cs.NorthStore, sku}) // 门店可见性是排除表语义：新 SKU 默认在售
+	}
+	sessions := make([]*mcp.ClientSession, len(targets))
+	for i := range targets {
+		sessions[i] = mcpConnect(t, cs.Host, k.Secret)
+	}
+	var wg sync.WaitGroup
+	autos := make([]bool, len(targets))
+	for i, tg := range targets {
+		wg.Add(1)
+		go func(i int, store, sku int64) {
+			defer wg.Done()
+			res, out := mcpCall(t, sessions[i], "propose_inventory_adjust", map[string]any{"store_id": store, "sku_id": sku,
+				"delta": 5, "reason": "补货", "evidence": "restock_plan：日均 3 件，可售 2"})
+			if res.IsError {
+				t.Errorf("提案出错：%s", mcpText(res))
+				return
+			}
+			autos[i] = out["auto_approved"] == true
+		}(i, tg[0], tg[1])
+	}
+	wg.Wait()
+	n := 0
+	for _, v := range autos {
+		if v {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("daily_limit=1 时并发 %d 条应恰好 1 条自动执行，实得 %d", len(targets), n)
 	}
 }
