@@ -109,6 +109,185 @@ type AgentProposal struct {
 	AutoApproved   bool
 }
 
+type AgentRoCategory struct {
+	ID       int64
+	ParentID *int64
+	Name     string
+	Path     string
+	Level    int16
+	Status   int16
+}
+
+type AgentRoCouponTemplate struct {
+	ID               int64
+	Name             string
+	CouponType       int16
+	ThresholdCents   int64
+	DiscountCents    int64
+	DiscountRate     int16
+	MaxDiscountCents int64
+	ValidMode        int16
+	ValidStartAt     pgtype.Timestamptz
+	ValidEndAt       pgtype.Timestamptz
+	ValidDays        int32
+	TotalCount       int32
+	IssuedCount      int32
+	PerUserLimit     int32
+	Claimable        bool
+	Status           int16
+	CreatedAt        pgtype.Timestamptz
+}
+
+type AgentRoOrder struct {
+	ID                     int64
+	OrderNo                string
+	UserID                 int64
+	Status                 int16
+	RefundStatus           int16
+	StoreID                int64
+	RegionID               int64
+	GoodsAmountCents       int64
+	FreightCents           int64
+	DiscountCents          int64
+	PromotionDiscountCents int64
+	FreightDiscountCents   int64
+	PayableCents           int64
+	PaidCents              int64
+	RefundedCents          int64
+	CouponName             *string
+	CreatedAt              pgtype.Timestamptz
+	PaidAt                 pgtype.Timestamptz
+	ShippedAt              pgtype.Timestamptz
+	FinishedAt             pgtype.Timestamptz
+}
+
+type AgentRoOrderItem struct {
+	ID                     int64
+	OrderID                int64
+	SkuID                  int64
+	ProductID              int64
+	TitleSnapshot          string
+	SpecSnapshot           []byte
+	ListPriceCents         int64
+	PriceCents             int64
+	Quantity               int32
+	AmountCents            int64
+	DiscountCents          int64
+	PromotionDiscountCents int64
+	PricePromotionID       *int64
+	RefundedQty            int32
+	RefundedCents          int64
+}
+
+type AgentRoProduct struct {
+	ID          int64
+	CategoryID  int64
+	BrandID     *int64
+	Title       string
+	Subtitle    *string
+	TotalStock  int32
+	SalesCount  int32
+	Status      int16
+	PublishedAt pgtype.Timestamptz
+	CreatedAt   pgtype.Timestamptz
+	UpdatedAt   pgtype.Timestamptz
+}
+
+type AgentRoPromotion struct {
+	ID              int64
+	Name            string
+	PromoType       int16
+	ThresholdUnit   int16
+	StackWithCoupon bool
+	StartsAt        pgtype.Timestamptz
+	EndsAt          pgtype.Timestamptz
+	Status          int16
+	CreatedAt       pgtype.Timestamptz
+}
+
+type AgentRoPromotionSku struct {
+	ID              int64
+	PromotionID     int64
+	SkuID           int64
+	PromoPriceCents int64
+	DiscountRate    int16
+	PerUserLimit    int32
+	StockQty        int32
+	SoldQty         int32
+}
+
+type AgentRoRefund struct {
+	ID               int64
+	RefundNo         string
+	OrderID          int64
+	RefundType       int16
+	ReasonCode       int16
+	GoodsAmountCents int64
+	FreightCents     int64
+	AmountCents      int64
+	Status           int16
+	AuditedAt        pgtype.Timestamptz
+	RefundedAt       pgtype.Timestamptz
+	CreatedAt        pgtype.Timestamptz
+}
+
+type AgentRoRegion struct {
+	ID     int64
+	Code   string
+	Name   string
+	Status int16
+}
+
+type AgentRoSearchLog struct {
+	ID          int64
+	Query       string
+	Strategy    string
+	ResultCount int32
+	ClickedID   *int64
+	CartedID    *int64
+	OrderedID   *int64
+	LatencyMs   *int32
+	CreatedAt   pgtype.Timestamptz
+}
+
+type AgentRoSku struct {
+	ID         int64
+	ProductID  int64
+	SkuCode    string
+	SpecValues []byte
+	PriceCents int64
+	CostCents  int64
+	WeightGram int32
+	Status     int16
+	CreatedAt  pgtype.Timestamptz
+}
+
+type AgentRoStore struct {
+	ID        int64
+	RegionID  int64
+	Code      string
+	Name      string
+	Province  string
+	City      string
+	District  string
+	IsDefault bool
+	Status    int16
+	Lat       interface{}
+	Lng       interface{}
+	CreatedAt pgtype.Timestamptz
+}
+
+type AgentRoUserCoupon struct {
+	ID         int64
+	TemplateID int64
+	UserID     int64
+	Source     int16
+	Status     int16
+	OrderID    *int64
+	CreatedAt  pgtype.Timestamptz
+	UsedAt     pgtype.Timestamptz
+}
+
 // AI 员工的 MCP 工具调用审计（00093，AI 经营 M9）。
 type AgentToolCall struct {
 	ID           int64

@@ -63,6 +63,8 @@ func writeProposalError(c *gin.Context, err error) {
 		problem.Write(c, http.StatusConflict, problem.TypeProposalNotOpen, "提案已经处理过或已过期")
 	case errors.Is(err, service.ErrProposalDuplicate):
 		writeProblemDetail(c, http.StatusConflict, problem.TypeInvalidRequest, "已有一条同样的待处理提案", err)
+	case errors.Is(err, service.ErrAgentSQLRejected):
+		writeProblemDetail(c, http.StatusUnprocessableEntity, problem.TypeInvalidRequest, "只读 SQL 被拒绝", err)
 	case errors.Is(err, service.ErrProposalBadRequest), errors.Is(err, service.ErrAdminListBadRequest):
 		writeProblemDetail(c, http.StatusUnprocessableEntity, problem.TypeInvalidRequest, "请求参数不合法", err)
 	default:

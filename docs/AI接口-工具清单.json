@@ -2783,6 +2783,63 @@
     }
   },
   {
+    "description": "只读 SQL：现有工具答不了的经营问题（「上周复购的买家占比」「某类目的客单分布」）用它自己查。只能读一组脱敏视图（没有手机号、地址、买家原话），只接受一条 SELECT / WITH，至多 500 行、3 秒超时。金额是分。需要全店范围的 AI 员工。能用专门工具的（报表、补货、滞销）优先用专门工具。",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "sql": {
+          "description": "一条 SELECT / WITH 查询，只能读 agent_ro 里的视图（不写 schema 前缀即可）：orders order_items products skus categories stores regions refunds search_logs coupon_templates user_coupons promotions promotion_skus。至多 500 行、3 秒",
+          "type": "string"
+        }
+      },
+      "required": [
+        "sql"
+      ],
+      "type": "object"
+    },
+    "name": "query_sql",
+    "outputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "columns": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        },
+        "row_count": {
+          "type": "integer"
+        },
+        "rows": {
+          "items": {
+            "items": true,
+            "type": [
+              "null",
+              "array"
+            ]
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "columns",
+        "rows",
+        "row_count",
+        "truncated"
+      ],
+      "type": "object"
+    }
+  },
+  {
     "description": "补货计算（确定性，不是估算）：每个（门店，SKU）的日均销量（分母去掉断货天）、可售、可售天数、预计卖断日、建议补货量（补到能卖 cover_days 天，取到 5 的倍数）、置信。confidence=low 的样本不足 5 天，只写进简报、不要提案。按最先卖断排序。",
     "inputSchema": {
       "additionalProperties": false,

@@ -41,6 +41,13 @@ so "which one is running?" never depends on anyone's memory.
 
 ### Added
 
+- **Read-only SQL for AI staff (M11, 00131).** The MCP tool `query_sql` answers questions the dedicated tools
+  can't. It runs one `SELECT` / `WITH` as the role `keel_agent_ro`, which can only read a set of views in schema
+  `agent_ro` (orders, order items, products, SKUs, categories, stores, regions, refunds, search logs, coupons,
+  promotions) that leave out phone numbers, addresses, buyers' own words, payment callbacks, tokens and keys and
+  filter by tenant explicitly. Functions that change session settings or touch the server are rejected up front,
+  the tenant setting is re-checked after the query (results are discarded if it changed), 3-second timeout, 500
+  rows. Merchant-wide AI staff only.
 - **Auto-execution policies (M11, 00130).** A shop admin can let an AI staff member's proposals of one kind execute
   immediately, within a per-proposal cap (restock units, minimum discount rate, coupon face value) and a 24-hour
   count. Matching proposals run through the same execution path as a human approval (`auto_approved = true`, no

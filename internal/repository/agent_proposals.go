@@ -88,6 +88,7 @@ type ProposalFilter struct {
 type AgentProposalTx interface {
 	AgentOutcomeTx
 	AgentAutoPolicyTx
+	AgentSQLTx
 
 	InsertAgentProposal(ctx context.Context, p NewAgentProposal) (int64, error)
 	FindAgentProposal(ctx context.Context, id int64) (AgentProposal, error)

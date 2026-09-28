@@ -122,6 +122,7 @@ type mcpAlerts struct {
 
 func registerMCPTools(srv *mcp.Server, d *MCPDeps) {
 	registerMCPProposalTools(srv, d)
+	registerMCPSQLTool(srv, d) // 只读 SQL（M11，00131）
 	mcpTool(srv, d, "shop_overview",
 		"经营概览：销售额、单量、客单价、退款等，与上一个同长周期的对比。经营判断的起点。",
 		writeAdminListError, func(ctx context.Context, in mcpReportWindow) (api.ReportOverview, error) {

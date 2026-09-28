@@ -167,6 +167,9 @@ type ProductTx interface {
 type tenantTx struct {
 	q     *db.Queries
 	scope *int64
+	// raw 是底下那个事务本身：只有只读 SQL 工具（agent_sql.go）用它 —— 它要在同一个事务里 SET ROLE、跑一条
+	// 不经 sqlc 的查询再复核租户。别的方法一律走 q。没有它的构造路径（平台作用域、开店）调那个方法会报错。
+	raw pgx.Tx
 }
 
 func (t tenantTx) ListProducts(ctx context.Context, sc StoreScope, categoryID *int64, limit, offset int64) ([]Product, error) {

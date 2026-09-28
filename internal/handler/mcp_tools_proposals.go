@@ -123,3 +123,17 @@ func registerMCPProposalTools(srv *mcp.Server, d *MCPDeps) {
 			return apiAgentProposal(p), nil
 		})
 }
+
+type mcpQuerySQLIn struct {
+	SQL string `json:"sql" jsonschema:"一条 SELECT / WITH 查询，只能读 agent_ro 里的视图（不写 schema 前缀即可）：orders order_items products skus categories stores regions refunds search_logs coupon_templates user_coupons promotions promotion_skus。至多 500 行、3 秒"`
+}
+
+func registerMCPSQLTool(srv *mcp.Server, d *MCPDeps) {
+	mcpTool(srv, d, "query_sql",
+		"只读 SQL：现有工具答不了的经营问题（「上周复购的买家占比」「某类目的客单分布」）用它自己查。只能读一组脱敏视图"+
+			"（没有手机号、地址、买家原话），只接受一条 SELECT / WITH，至多 500 行、3 秒超时。金额是分。"+
+			"需要全店范围的 AI 员工。能用专门工具的（报表、补货、滞销）优先用专门工具。",
+		writeProposalError, func(ctx context.Context, in mcpQuerySQLIn) (service.AgentSQLResult, error) {
+			return d.Proposals.QuerySQL(ctx, in.SQL)
+		})
+}
