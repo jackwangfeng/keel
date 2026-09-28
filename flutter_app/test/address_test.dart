@@ -95,4 +95,15 @@ void main() {
     final b = f.input(false).toJson();
     expect((b['lat'], b['lng']), (30.27, 120.15));
   });
+
+  test('详细地址：高德的 address 常带着省市区、也已含地点名 —— 去掉省市区前缀，已含地点名就不再拼', () {
+    GeoPlace g(String name, String address, {String province = '浙江省', String city = '杭州市', String district = '拱墅区'}) =>
+        GeoPlace(name: name, address: address, province: province, city: city, district: district, adcode: '330105', street: '',
+            lat: 30.27, lng: 120.15);
+    String detail(GeoPlace p) => (AddressForm()..applyPlace(p)).detail;
+    expect(detail(g('天巢花苑', '浙江省杭州市拱墅区天水街道天巢花苑')), '天水街道天巢花苑');
+    expect(detail(g('黄龙时代广场', '杭大路 15 号')), '杭大路 15 号 黄龙时代广场');
+    expect(detail(g('人民广场', '上海市黄浦区人民大道', province: '上海市', city: '上海市', district: '黄浦区')), '人民大道 人民广场');
+    expect(detail(g('某地', '')), '某地');
+  });
 }

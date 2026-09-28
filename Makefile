@@ -86,7 +86,7 @@ GOOSE_INVENTORY := GOOSE_DRIVER=postgres GOOSE_DBSTRING="$(INVENTORY_GOOSE_DBSTR
 	$(GOOSE_BIN) -table goose_db_version_inventory
 
 .PHONY: help generate generate-go generate-ts generate-sql generate-uts tools-versions version search-metrics \
-	contract-check schema-check app-type-check admin-install admin-type-check admin-test admin-build app-install app-build-h5 app-build-android app-build-mp-weixin app-apk app-apk-e2e app-e2e app-e2e-h5 flutter-get flutter-generate flutter-analyze flutter-test flutter-e2e-web flutter-build flutter-build-mp flutter-ios-install app-adb-wifi app-ios app-ios-e2e app-e2e-ios \
+	contract-check schema-check app-type-check admin-install admin-type-check admin-test admin-build app-install app-build-h5 app-build-android app-build-mp-weixin app-apk app-apk-e2e app-e2e app-e2e-h5 flutter-get flutter-generate flutter-analyze flutter-test flutter-e2e-web flutter-build flutter-build-mp flutter-ios-install flutter-android-install app-adb-wifi app-ios app-ios-e2e app-e2e-ios \
 	sdk-smoke goose-bin migrate migrate-down migrate-status migrate-inventory migrate-inventory-status test-db \
 	test-engine category-eval dtmrs-deps build
 
@@ -575,6 +575,17 @@ flutter-ios-install:
 	DEV=$$(xcrun devicectl list devices | awk '/available/ && /iPhone/ {print $$3; exit}'); \
 	  xcrun devicectl device install app --device $$DEV $(FLUTTER_APP)/build/ios-derived/Build/Products/Release-iphoneos/Runner.app && \
 	  xcrun devicectl device process launch --device $$DEV dev.keel.keelBuyer
+
+# 装到连着的安卓机（USB 或 adb 无线，比如 app-adb-wifi 连上的）：release、只打 arm64，装完拉起。
+# 连着多台时用 ANDROID_SERIAL=<adb devices 里的序列号> 指定。
+FLUTTER_ADB ?= $(FLUTTER_ANDROID_HOME:/platforms=)/platform-tools/adb
+flutter-android-install:
+	@test -n "$(KEEL_API_BASE)" || (echo "要设 KEEL_API_BASE" && exit 1)
+	cd $(FLUTTER_APP) && $(FLUTTER_ENV) ANDROID_HOME=$(FLUTTER_ANDROID_HOME:/platforms=) JAVA_HOME=$(FLUTTER_JAVA_HOME) \
+	  $(FLUTTER) build apk --release --target-platform android-arm64 --dart-define=KEEL_API_BASE=$(KEEL_API_BASE)
+	$(FLUTTER_ADB) install -r $(FLUTTER_APP)/build/app/outputs/flutter-apk/app-release.apk
+	$(FLUTTER_ADB) shell am force-stop dev.keel.keel_buyer
+	$(FLUTTER_ADB) shell monkey -p dev.keel.keel_buyer -c android.intent.category.LAUNCHER 1 >/dev/null
 
 # 微信小程序（mp-flutter）。产物 flutter_app/build/weapp，用微信开发者工具打开。
 flutter-build-mp:

@@ -81,7 +81,7 @@ class AddressForm {
     district = p.district;
     street = p.street.isNotEmpty ? p.street : null;
     regionCode = p.adcode.isNotEmpty ? p.adcode : null;
-    detail = [p.address, p.name].where((s) => s.isNotEmpty).join(' ');
+    detail = _detailOf(p);
     lat = p.lat;
     lng = p.lng;
   }
@@ -101,6 +101,18 @@ class AddressForm {
         lng: lng,
         isDefault: isDefault,
       );
+}
+
+/// 详细地址：高德的 address 常以省市区开头（「浙江省杭州市拱墅区天水街道天巢花苑」），而且可能已经含着地点名 ——
+/// 去掉省市区前缀（直辖市省、市同名只去一次），已含地点名就不再拼上。
+String _detailOf(GeoPlace p) {
+  var a = p.address;
+  for (final prefix in [p.province, p.city, p.district]) {
+    if (prefix.isNotEmpty && a.startsWith(prefix)) a = a.substring(prefix.length);
+  }
+  a = a.trim();
+  if (a.isEmpty) return p.name;
+  return p.name.isEmpty || a.contains(p.name) ? a : '$a ${p.name}';
 }
 
 /// 422 的 errors[].field 是契约名 -> 表单字段名 -> 那一格下面写的话。
