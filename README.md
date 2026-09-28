@@ -2,8 +2,8 @@
 
 # Keel
 
-**An AI-native commerce platform with a built-in distributed transaction engine.**
-*Runs on a single machine. Scales without a rewrite. Search runs locally; AI staff plug in your own agent (in progress).*
+**Location-first commerce with geofenced stores, AI staff, and an open interface for any agent harness.**
+*Built-in distributed transactions. Runs on a single machine, scales without a rewrite.*
 
 <!-- The badge and the clone URL in the quick start point at the same repository.
      scripts/check_promises.py guards two things: a build badge is a false claim when
@@ -24,9 +24,77 @@
 ## Why another commerce platform?
 
 There are already good open-source commerce systems — Saleor, Medusa, Shopware, mall.
-Keel is not trying to be the fiftieth. It exists for three things none of them have:
+Keel is not trying to be the fiftieth. Three things are what it is about, and three more
+are the foundation that makes them safe:
 
-### 1. A distributed transaction engine, built in
+### 1. Location-first: every store is a geofence
+
+Keel is built for shops that deliver from physical stores — convenience chains, fresh
+groceries, pharmacies, a coffee brand with twenty branches. A store is a point on the map
+plus a **delivery fence** (a polygon drawn on the map in the console), and the whole flow
+is decided by where the buyer is:
+
+- **Open the app, get the right store.** `GET /stores/resolve?lat&lng` returns every open
+  store whose fence contains the buyer, nearest first; outside every fence, the default
+  store takes over as the nationwide fallback. Fences may overlap (shared trading areas) —
+  the server never silently picks one for you.
+- **Per-store everything.** Stock, visibility and price are per store (base → region →
+  store), and a sold-out item sorts to the end *of that store's* list.
+- **Orders must ship inside the fence.** A shipping address with coordinates outside the
+  chosen store's fence is rejected at preview and at checkout (`422 address-out-of-range`),
+  with the client offering "change address" or "switch to the store that covers it".
+- **The console keeps the map honest.** A store must have coordinates, and must sit inside
+  its own fence; disabling a region takes every store in it offline.
+- **POI, not typing.** `/geo/reverse` and `/geo/suggest` proxy a map provider (AMap today)
+  on the server: the home page shows "deliver to …" with the street address, buyers pick an
+  address by searching or dropping a pin, and the console fills a store's address from a
+  place search. The key never leaves the server; everything is stored in WGS-84 (GCJ-02 is
+  converted in one place, with tests against known points). No key configured → 501, and
+  clients fall back to manual entry plus map picking.
+
+### 2. AI staff: an agent on the team, not a chatbot on the page
+
+Keel does not bundle a model. It gives **your** agent a job: a staff account with the same
+role and store/region scope as a human, MCP tools to read the business and compute, and a
+**proposal queue** — every write is a proposal with evidence and expected impact, and a
+human approves before Keel executes it (idempotently, as the agent, fully audited).
+
+This is running on the demo site today (M9, shipped): every morning an AI store manager
+walks the shop, posts a daily brief (sales vs. the day before, anomalies worth a second
+look, what is about to sell out) and files restock proposals computed by Keel — daily
+sales with stock-out days removed from the denominator, days of cover, suggested quantity,
+a confidence flag. Approve one in the console and the stock goes up; reject it with a
+reason and the agent reads that reason next time.
+
+Most platforms put their AI on the demand side (search, recommendations, chat). **Almost
+nobody applies it to replenishment, pricing, promotions or after-sales** — where merchants
+spend their hours. The hard part is not wiring up a model, it is being willing to hand
+over the keys. What makes that safe here is infrastructure Keel already had: idempotent
+write APIs, tiered roles and scopes (an agent that oversteps is rejected exactly like a
+human), row-level security, preview endpoints, distributed transactions and audit.
+Plan: [AI Operations: Plan](./docs/AI经营-规划.md); M9 design:
+[AI Operations M9 Design](./docs/AI经营-M9设计.md) (Chinese).
+
+### 3. Open to any agent harness
+
+The AI interface is a documented, versioned contract, so you bring the agent:
+Claude Code, Codex, Cursor, the official MCP SDKs in a twenty-line script, or the bot behind
+your Feishu / DingTalk / WeCom group. Keel speaks **MCP over streamable HTTP**, stateless,
+one `kagt_…` access key per agent:
+
+```json
+{ "mcpServers": { "keel": { "type": "http", "url": "https://<your-shop>/api/v1/mcp",
+    "headers": { "Authorization": "Bearer ${KEEL_AGENT_KEY}" } } } }
+```
+
+Every tool declares its input **and output** JSON Schema (validated before returning);
+tool errors carry a machine-readable problem type identical to the admin API's; the full
+tool list is snapshotted in the repo and a test holds it — changes are additive only, a
+breaking change gets a new tool name. stdio-only clients use the bundled `cmd/keel-mcp`
+bridge. Integrator guide: [AI Interface](./docs/AI接口.md) (Chinese); tool list with
+schemas: [`docs/AI接口-工具清单.json`](./docs/AI接口-工具清单.json).
+
+### 4. A distributed transaction engine, built in
 
 Transactional consistency is handled by [dtmrs](https://github.com/jackwangfeng/dtmrs) —
 a Rust transaction coordinator supporting SAGA, TCC, two-phase messaging, XA and workflow.
@@ -38,51 +106,7 @@ sub-transaction barriers that survive process crashes.
 Most open-source commerce projects either avoid the problem (one big local transaction)
 or bolt on an external coordinator. Keel treats it as a first-class concern.
 
-### 2. AI staff: handing operations to an agent (in progress) · local inference for search (shipped)
-
-Keel's AI has two layers. What's in the box today is local-inference search and product
-understanding. What's being built is "AI staff" — merchants plug in their own agent to run
-operations. That second layer is what Keel considers most worth talking about, and hardest
-to copy.
-
-**What's in the box today**
-
-| Stage | Capability |
-|---|---|
-| **Demand** | Hybrid vector + keyword search, fused with RRF, then business re-ranking (out-of-stock demotion) |
-| **Supply** | Category suggestions from title embeddings during bulk import (Top-3 95.9% offline) · block prohibited advertising claims before publish |
-
-**No external API calls. No data leaving your network. No per-token billing.**
-Search's vector inference runs on our own [infero](https://github.com/jackwangfeng/infero)
-engine (details under "Not in the box yet" below). Other platforms' semantic search is
-either a wrapper around a third-party API, or only available on their hosted cloud —
-Medusa's semantic search, for instance, runs on Medusa Cloud. If you self-host, you are
-back to wiring up Algolia yourself. Keel assumes you want to own your stack.
-
-**What's being built: AI staff** (milestones M9–M11, **in progress, not shipped today**)
-
-Keel does not bundle a model. Merchants plug in their own agent — Claude Code, Codex, or
-any MCP-capable harness — and Keel gives it a staff account: the same role and scope
-permissions as a human, a set of MCP tools, playbooks, a proposal/approval queue (write
-actions are proposals by default; a human approves before Keel executes them), call
-auditing, and measured outcomes.
-
-Most open-source commerce platforms put nearly all their AI on the demand side (search,
-recommendations, chat). **Nobody is applying AI to supply, replenishment, pricing,
-promotions or after-sales** — exactly where merchants spend their hours. The hard part of
-letting an agent actually run operations isn't wiring up a model, it's being willing to
-hand over the keys. What makes that safe in Keel is infrastructure that already existed:
-idempotent write APIs (a retry from the agent never double-charges or double-ships),
-tiered roles and store/region scopes (an AI staff member that oversteps is rejected
-exactly like a human), row-level security (a query the agent writes itself still can't see
-another shop's data), preview/dry-run endpoints (compute before you act), distributed
-transactions, and audit.
-
-Full plan: [AI Operations: Plan](./docs/AI经营-规划.md) (Chinese). M9's design — staff
-accounts and access keys, the MCP tool catalog, the proposal queue and state machine, how
-the demo site runs it — is in [AI Operations M9 Design](./docs/AI经营-M9设计.md) (Chinese).
-
-### 3. One codebase, from a laptop to a cluster
+### 5. One codebase, from a laptop to a cluster
 
 Thanks to dtmrs's embeddable coordinator, transaction orchestration code is
 **identical** whether branches are in-process function calls or remote services.
@@ -100,7 +124,7 @@ or microservices that scale but are a deployment nightmare. Keel doesn't require
 This is running code, not a slogan: inventory already ships as a separate service. See
 [Deployment shapes](#deployment-shapes-monolith-and-microservices).
 
-### Four — one deployment, many merchants
+### 6. One deployment, many merchants
 
 Each merchant gets their own storefront, and orders never span merchants.
 
@@ -116,6 +140,20 @@ row-level security underneath. All three are checked mechanically: the
 `merchant_id` rule against **the DDL in the design doc**, the other two against
 **the live database's catalog** in the test suite.
 
+### 7. Search and product understanding with local inference
+
+| Stage | Capability |
+|---|---|
+| **Demand** | Hybrid vector + keyword search, fused with RRF, then business re-ranking (out-of-stock demotion) |
+| **Supply** | Category suggestions from title embeddings during bulk import (Top-3 95.9% offline) · block prohibited advertising claims before publish |
+
+**No external API calls. No data leaving your network. No per-token billing.**
+Search's vector inference runs on our own [infero](https://github.com/jackwangfeng/infero)
+engine (details under "Not in the box yet" below). Other platforms' semantic search is
+either a wrapper around a third-party API, or only available on their hosted cloud —
+Medusa's semantic search, for instance, runs on Medusa Cloud. If you self-host, you are
+back to wiring up Algolia yourself. Keel assumes you want to own your stack.
+
 ---
 
 ## Live demo
@@ -124,8 +162,8 @@ row-level security underneath. All three are checked mechanically: the
 
 | Path | What you get |
 |---|---|
-| [`/`](https://eshop.zzss.fun/) | Buyer app (H5 build of `app/`) |
-| [`/admin/`](https://eshop.zzss.fun/admin/) | Merchant console, signed in as the demo merchant's admin |
+| [`/`](https://eshop.zzss.fun/) | Buyer app (Flutter Web build of `flutter_app/`) — allow location, or pick an address, to see the geofenced store |
+| [`/admin/`](https://eshop.zzss.fun/admin/) | Merchant console, signed in as the demo merchant's admin — see **AI 员工** for the AI store manager's daily briefs and restock proposals (it runs every morning on simulated orders) |
 
 > This is a demo environment shared by all visitors. Data is reset from time to time without notice, and anything you enter may be seen by others — **do not enter real personal information** (names, phone numbers, addresses, payment details).
 
@@ -236,15 +274,14 @@ products, run regions and stores, issue coupons, manage staff, ship orders and
 handle after-sales. These parts
 are not there yet, and are listed so that nothing above reads as if it ships:
 
-- **a few after-sales and profile screens in the buyer app.** Auto-confirming
-  receipt N days after shipping, closing a return-and-refund whose goods are never
-  shipped back, cleaning up uploads left unreferenced for 24 hours, buyer-entered
-  return tracking numbers, private refund evidence and avatar uploads (avatars
-  accept only the buyer's own upload) are all on the server, with the day counts
-  set by the merchant under "Shop settings" in the console; the buyer app has not
-  wired the evidence upload, return-shipment and avatar upload endpoints, nor shown
-  the auto-confirm and return deadlines (the server and the contract are ready:
-  `auto_confirm_at`, `return_deadline_at`)
+- **avatar upload in the buyer app.** The server accepts it (only the buyer's own
+  upload); neither client has wired the screen yet. Refund evidence, return tracking
+  numbers and the auto-confirm / return deadlines are wired in both clients
+- **a map provider key.** POI search and reverse geocoding (`/geo/*`) need
+  `KEEL_GEO_PROVIDER=amap` and an AMap *Web service* key (`KEEL_GEO_KEY`); an individual
+  developer's free quota is small and commercial use needs a verified business account.
+  Without it those endpoints answer 501 and clients fall back to manual entry plus map
+  picking — geofenced store resolution and the fence check at checkout work either way
 - **cross-encoder reranking.** `POST /search` today is three-stage — vector
   recall and keyword recall fused with RRF, then business re-ranking
   (out-of-stock products are demoted multiplicatively below everything in
@@ -307,7 +344,9 @@ an amount or a quantity after discounts, undeliverable regions, per store or
 shop-wide) · promotions (tiered spend/quantity discounts, limited-time prices, flash
 sales, new-buyer gifts; allocated per line, coupons apply to the
 post-promotion amount) · order state
-machine · multi-store with delivery fences · tiered staff roles · in-app
+machine · multi-store with delivery fences (store resolution by location, the
+shipping address must be inside the store's fence) · POI place search and reverse
+geocoding · tiered staff roles · in-app
 notifications (buyer message center and console to-do bell, written in the same
 transaction as the state change) · business reports (overview vs. previous
 period, trend, top products, store comparison, low-stock alerts, search summary)
@@ -332,8 +371,10 @@ the remaining gaps are under "Not in the box yet" above.
   attribute extraction are not built yet — attribute extraction waits for the
   inference engine's generate endpoint; see "Later" in the roadmap.
 - **Compliance checks** — catch prohibited advertising claims before publish.
-- **AI staff** — in progress (M9); see "AI staff: handing operations to an agent"
-  above and [AI Operations: Plan](./docs/AI经营-规划.md) (Chinese).
+- **AI staff** — shipped in M9: staff accounts and `kagt_` access keys, an MCP service
+  (report, inventory, search, catalog and after-sales reads; `restock_plan`; restock
+  proposals; briefs), a proposal queue approved in the console, per-call audit, playbooks
+  and a reference runner. See "AI staff" and "Open to any agent harness" above.
 
 **Correctness, taken seriously**
 - Money is `BIGINT` cents. Never a float.
@@ -351,7 +392,8 @@ Keel ships with its clients, not just an API.
 
 | Client | Stack | Targets |
 |---|---|---|
-| **Storefront** | uni-app x (UTS compiled to native Kotlin / Swift) | Android · iOS · H5 · WeChat Mini Program — one codebase (the Mini Program runs in the WeChat devtools simulator; not yet previewed on a device or published) |
+| **Storefront** (main) | Flutter ([`flutter_app/`](./flutter_app)) | Android · iOS · Web · WeChat Mini Program (via mp-flutter) — one codebase; the demo site serves the Web build. The Mini Program runs in the WeChat devtools and on-device debugging; not yet published |
+| Storefront (frozen) | uni-app x ([`app/`](./app), UTS compiled to native Kotlin / Swift) | Android · iOS · H5 · WeChat Mini Program. The first client; now bug fixes only, new features land in Flutter |
 | **Admin console** | Vue 3 + Element Plus | Desktop web |
 
 Every client is generated from the same OpenAPI spec, so a contract change
@@ -372,10 +414,20 @@ If you are selling in that market, a web-only storefront is not a storefront.
 
 ---
 
-## Buyer app — what's actually in `app/` today
+## Buyer apps — what's actually there today
 
-The table above is the plan. This section is the part that exists, so that
-nothing above reads as if the rest already ships.
+**[`flutter_app/`](./flutter_app) is the storefront that gets new features.** Home with
+the geofenced store and "deliver to …" (change it by place search, a map pin, a saved
+address or the current location), category and search, product detail, cart, checkout
+(best coupon picked automatically, every failure explained — undeliverable, out of the
+store's fence, sold out, price changed), orders and payment (sandbox), after-sales with
+evidence and return tracking, address book with place search, coupons and messages.
+Its types come from the same OpenAPI spec (`make flutter-generate` →
+`lib/api/schema.g.dart`, committed and checked), pages read view models rather than the
+generated types (a check enforces that), and it has unit tests plus a headless Web e2e
+suite. How to build and run it: [`flutter_app/README.md`](./flutter_app/README.md).
+
+The rest of this section is about **[`app/`](./app)**, the first client, kept for bug fixes.
 
 [`app/`](./app) is the buyer storefront, written in
 [uni-app x](https://doc.dcloud.net.cn/uni-app-x/) (UTS compiled to native
@@ -545,6 +597,8 @@ The inventory split is the worked example:
 
 **Use Keel if you want**
 - Transactional correctness you can actually reason about
+- Stores that deliver within a geofence, with the store picked by where the buyer is
+- An AI staff member you can plug your own agent into, with a human approving every write
 - AI features without sending your catalog to a third party
 - A system that runs on one box today and splits into services later
 - A modern Go/PostgreSQL stack
@@ -584,15 +638,19 @@ battle-tested at scale. What it has is a stronger core.
 - [ ] **M7 Ready to do business** — promotions (tiered discounts, flash
   prices, new-buyer gifts) ✅ (group buying not done); business reports with
   export, Excel bulk import with AI category suggestions ✅
-- [ ] **M9 AI operations: staff can plug in** — AI staff accounts and access
+- [x] **M9 AI operations: staff can plug in** — AI staff accounts and access
   keys, an MCP service (read / compute / proposal / brief tools), a proposal
   queue with admin approval, call auditing, two playbooks, demo-site simulated
-  commerce data and a scheduled AI staff run — **in progress**, see
+  commerce data and a scheduled AI staff run — **running on the demo site**, see
   [AI Operations: Plan](./docs/AI经营-规划.md) and
   [AI Operations M9 Design](./docs/AI经营-M9设计.md) (Chinese)
+- [x] **Location & POI** — geofenced store resolution, the fence check at checkout,
+  shipping addresses with coordinates, place search and reverse geocoding (AMap,
+  server-side), the Flutter storefront
 - [ ] **M10 AI operations: staff can run the shop** — event-triggered
-  wake-ups, playbooks and proposals for clearance sales / search gaps /
-  after-sales review, automatic before/after comparison after execution
+  wake-ups (and webhooks for integrators), playbooks and proposals for clearance
+  sales / coupons / search gaps / after-sales review, automatic before/after
+  comparison after execution
 - [ ] **M11 AI operations: staff can be trusted with more** — per-tool-category
   auto-execute policies with caps, a read-only SQL tool, verifying the same
   integration with a second harness (e.g. Codex), a public "AI operations log"
