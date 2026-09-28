@@ -2,3 +2,6 @@
 appid: wxc6c33e38dbeed25f
 # 按位置解析就近门店（wx.getLocation，wgs84）：要在 app.json 里声明。
 require_location: true
+# 换送货地址 / 填收货地址时的地图选点（wx.chooseLocation）也要声明；小程序后台「开发管理 → 接口设置」里另要开通。
+# mp-flutter 80f8de5（perf-font2）起认这个键；更早的版本只警告一次、忽略。
+private_infos: [getLocation, chooseLocation]
