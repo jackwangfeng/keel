@@ -8,6 +8,7 @@
 import { computed, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { keel, type AdminOrderDetail, type AdminStore } from "../../api/client.ts";
+import { localDistanceText } from "../../api/localDeliveryRules.ts";
 import {
     ORDER_REFUND_STATUS,
     ORDER_STATUS,
@@ -179,6 +180,11 @@ function openRefund(refundNo: string): void {
                     <el-descriptions-item label="实付">{{ yuan(order.paid_cents ?? 0) }}</el-descriptions-item>
                     <el-descriptions-item label="已退">{{ yuan(order.refunded_cents ?? 0) }}</el-descriptions-item>
                 </el-descriptions>
+
+                <p v-if="order.freight?.mode === 'local' && order.freight.local" class="hint mb12">
+                    同城配送：距离 {{ localDistanceText(order.freight.local.distance_m) }}，配送费 {{ yuan(order.freight.local.tier_fee_cents) }}
+                    <template v-if="order.freight.local.free_reason === 'threshold'">；满 {{ yuan(order.freight.local.free_over_cents) }} 免配送费</template>
+                </p>
 
                 <h4>支付</h4>
                 <el-table :data="order.payments" size="small" class="mb12" empty-text="没有支付记录">

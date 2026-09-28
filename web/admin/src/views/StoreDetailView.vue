@@ -9,7 +9,7 @@
 
 import { computed, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { ArrowLeft, Delete, Refresh } from "@element-plus/icons-vue";
+import { ArrowLeft, Delete, Plus, Refresh } from "@element-plus/icons-vue";
 import { ElMessageBox } from "element-plus";
 import {
     isProblemType,
@@ -25,6 +25,9 @@ import {
 } from "../api/client.ts";
 import { detailAddress } from "../api/geo.ts";
 import { fenceErrorPoint } from "../api/errors.ts";
+import { getLocalDelivery, putLocalDelivery, type AdminLocalDelivery, type DeliveryTier } from "../api/localDelivery.ts";
+import { checkLocalDeliveryDraft, kmToMeters, metersToKmInput } from "../api/localDeliveryRules.ts";
+import { centsToYuanInput, yuanToCents } from "../api/money.ts";
 import { isIncomplete, listAllRegions } from "../api/stores.ts";
 import { listAllStoreInventories } from "../api/storeInventory.ts";
 import { datetime } from "../ui/format.ts";
@@ -42,7 +45,9 @@ const router = useRouter();
 const id = computed(() => Number(props.storeId));
 
 const tabFromQuery = typeof route.query["tab"] === "string" ? route.query["tab"] : "basic";
-const tab = ref(["basic", "fence", "products", "inventory"].includes(tabFromQuery) ? tabFromQuery : "basic");
+const tab = ref(
+    ["basic", "fence", "products", "inventory", "local-delivery"].includes(tabFromQuery) ? tabFromQuery : "basic",
+);
 
 const loading = ref(false);
 const loadError = ref<unknown>(null);
@@ -69,6 +74,7 @@ onMounted(() => {
         (e: unknown) => notifyError(e),
     );
     if (tab.value === "inventory") void loadInventory();
+    if (tab.value === "local-delivery") void loadLocalDelivery();
 });
 
 const center = computed(() => {
@@ -220,6 +226,7 @@ async function loadInventory(): Promise<void> {
 
 function onTabChange(name: string | number): void {
     if (name === "inventory") void loadInventory();
+    if (name === "local-delivery") void loadLocalDelivery();
     void router.replace({ query: { ...route.query, tab: String(name) } });
 }
 
@@ -240,6 +247,126 @@ function onInventoryUpdated(inv: AdminInventory): void {
     const i = inventories.value.findIndex((r) => r.sku_id === inv.sku_id);
     if (i >= 0) inventories.value[i] = inv;
     else inventories.value.push(inv);
+}
+
+// ---------------------------------------------------------------- 同城配送
+
+interface TierForm {
+    withinKm: string;
+    feeYuan: string;
+}
+
+interface LocalDeliveryForm {
+    minOrder: string;
+    freeOver: string;
+    tiers: TierForm[];
+}
+
+function localDeliveryFormOf(ld: AdminLocalDelivery): LocalDeliveryForm {
+    return {
+        minOrder: centsToYuanInput(ld.min_order_cents),
+        freeOver: centsToYuanInput(ld.free_over_cents),
+        tiers: ld.fee_tiers.map((t) => ({ withinKm: metersToKmInput(t.within_m), feeYuan: centsToYuanInput(t.fee_cents) })),
+    };
+}
+
+const ldLoading = ref(false);
+const ldLoadError = ref<unknown>(null);
+const ldSaveError = ref<unknown>(null);
+const ldLocalError = ref("");
+const ldSaving = ref(false);
+const localDelivery = ref<AdminLocalDelivery | null>(null);
+const ldForm = ref<LocalDeliveryForm>({ minOrder: "0", freeOver: "0", tiers: [] });
+
+async function loadLocalDelivery(): Promise<void> {
+    ldLoading.value = true;
+    ldLoadError.value = null;
+    try {
+        localDelivery.value = await getLocalDelivery(id.value);
+        ldForm.value = localDeliveryFormOf(localDelivery.value);
+    } catch (err) {
+        ldLoadError.value = err;
+    } finally {
+        ldLoading.value = false;
+    }
+}
+
+/** 按公里排序（解析不出的排到最后），提交前与「离开输入框」时都调一次。 */
+function sortTiers(): void {
+    ldForm.value.tiers.sort((a, b) => {
+        const ma = kmToMeters(a.withinKm) ?? Number.POSITIVE_INFINITY;
+        const mb = kmToMeters(b.withinKm) ?? Number.POSITIVE_INFINITY;
+        return ma - mb;
+    });
+}
+
+function addTier(): void {
+    const last = ldForm.value.tiers[ldForm.value.tiers.length - 1];
+    const lastM = last === undefined ? null : kmToMeters(last.withinKm);
+    const nextM = Math.min((lastM ?? 0) + 1000, 100000);
+    ldForm.value.tiers.push({ withinKm: metersToKmInput(nextM), feeYuan: last?.feeYuan ?? "0" });
+}
+
+function removeTier(i: number): void {
+    ldForm.value.tiers.splice(i, 1);
+}
+
+async function saveLocalDelivery(): Promise<void> {
+    ldLocalError.value = "";
+    ldSaveError.value = null;
+    sortTiers();
+
+    const money = (label: string, s: string): number | string => {
+        const v = yuanToCents(s.trim() === "" ? "0" : s);
+        return v === null ? `${label}「${s}」不是合法金额（元，至多两位小数）` : v;
+    };
+    const minOrder = money("起送价", ldForm.value.minOrder);
+    if (typeof minOrder === "string") {
+        ldLocalError.value = minOrder;
+        return;
+    }
+    const freeOver = money("满多少免配送费", ldForm.value.freeOver);
+    if (typeof freeOver === "string") {
+        ldLocalError.value = freeOver;
+        return;
+    }
+
+    const tiers: DeliveryTier[] = [];
+    for (let i = 0; i < ldForm.value.tiers.length; i += 1) {
+        const t = ldForm.value.tiers[i]!;
+        const withinM = kmToMeters(t.withinKm);
+        if (withinM === null) {
+            ldLocalError.value = `第 ${i + 1} 档的距离「${t.withinKm}」不是合法的公里数（至多三位小数）`;
+            return;
+        }
+        const feeCents = yuanToCents(t.feeYuan);
+        if (feeCents === null) {
+            ldLocalError.value = `第 ${i + 1} 档的配送费「${t.feeYuan}」不是合法金额（元，至多两位小数）`;
+            return;
+        }
+        tiers.push({ within_m: withinM, fee_cents: feeCents });
+    }
+
+    const bad = checkLocalDeliveryDraft(tiers, minOrder, freeOver);
+    if (bad !== null) {
+        ldLocalError.value = bad;
+        return;
+    }
+
+    ldSaving.value = true;
+    try {
+        localDelivery.value = await putLocalDelivery(id.value, {
+            min_order_cents: minOrder,
+            free_over_cents: freeOver,
+            fee_tiers: tiers,
+        });
+        ldForm.value = localDeliveryFormOf(localDelivery.value);
+        notifyOk("已保存");
+    } catch (err) {
+        ldSaveError.value = err;
+    } finally {
+        ldSaving.value = false;
+    }
 }
 </script>
 
@@ -372,6 +499,90 @@ function onInventoryUpdated(inv: AdminInventory): void {
                     </el-table>
                     <el-empty v-if="!invLoading && inventories.length === 0" description="这家店还没有任何库存行" :image-size="70" />
                 </el-tab-pane>
+
+                <!-- ------------------------------------------------ 同城配送 -->
+                <el-tab-pane label="同城配送" name="local-delivery" lazy>
+                    <ProblemAlert v-if="ldLoadError" :error="ldLoadError" />
+                    <div v-loading="ldLoading">
+                        <template v-if="localDelivery">
+                            <el-alert
+                                :type="localDelivery.active ? 'success' : 'info'"
+                                :closable="false"
+                                show-icon
+                                class="mb12"
+                                :title="
+                                    localDelivery.active
+                                        ? '本店有围栏，按下面的配置收配送费（不读运费模板）'
+                                        : '本店是默认门店或没有围栏，走运费模板，这里的配置暂不生效'
+                                "
+                            />
+                            <ProblemAlert v-if="ldSaveError" :error="ldSaveError" />
+                            <el-alert v-if="ldLocalError" :title="ldLocalError" type="error" :closable="false" show-icon class="mb12" />
+                            <el-form label-width="140px" style="max-width: 640px" @submit.prevent>
+                                <el-form-item label="起送价（元）">
+                                    <el-input
+                                        v-model="ldForm.minOrder"
+                                        style="width: 160px"
+                                        placeholder="0 = 不设"
+                                        :disabled="!can.operateStore(store)"
+                                    />
+                                    <span class="hint ml8">活动之后、用券之前的商品金额没到它，下单会被拒</span>
+                                </el-form-item>
+                                <el-form-item label="满多少免配送费">
+                                    <el-input
+                                        v-model="ldForm.freeOver"
+                                        style="width: 160px"
+                                        placeholder="0 = 不设"
+                                        :disabled="!can.operateStore(store)"
+                                    >
+                                        <template #append>元</template>
+                                    </el-input>
+                                </el-form-item>
+                                <el-form-item label="距离分档">
+                                    <div class="ld-tiers">
+                                        <div v-for="(t, i) in ldForm.tiers" :key="i" class="ld-tier-row">
+                                            <span>距离 ≤</span>
+                                            <el-input
+                                                v-model="t.withinKm"
+                                                size="small"
+                                                class="ld-num"
+                                                :disabled="!can.operateStore(store)"
+                                                @change="sortTiers"
+                                            >
+                                                <template #append>公里</template>
+                                            </el-input>
+                                            <span>配送费</span>
+                                            <el-input v-model="t.feeYuan" size="small" class="ld-num" :disabled="!can.operateStore(store)">
+                                                <template #append>元</template>
+                                            </el-input>
+                                            <el-button
+                                                link
+                                                type="danger"
+                                                :icon="Delete"
+                                                :disabled="!can.operateStore(store)"
+                                                @click="removeTier(i)"
+                                            >删除</el-button>
+                                        </div>
+                                        <el-button :icon="Plus" size="small" :disabled="!can.operateStore(store)" @click="addTier">加一档</el-button>
+                                        <p class="hint">
+                                            超出最后一档或买家地址没有坐标时按最后一档收；一档都不配 = 配送费恒为 0。
+                                        </p>
+                                    </div>
+                                </el-form-item>
+                                <el-form-item>
+                                    <el-button
+                                        type="primary"
+                                        :loading="ldSaving"
+                                        :disabled="!can.operateStore(store)"
+                                        :title="can.operateStore(store) ? '' : NO_PERMISSION"
+                                        @click="saveLocalDelivery"
+                                    >保存</el-button>
+                                    <span v-if="localDelivery.updated_at" class="hint ml8">更新于 {{ datetime(localDelivery.updated_at) }}</span>
+                                </el-form-item>
+                            </el-form>
+                        </template>
+                    </div>
+                </el-tab-pane>
             </el-tabs>
         </template>
 
@@ -408,6 +619,18 @@ function onInventoryUpdated(inv: AdminInventory): void {
 }
 .low {
     color: var(--el-color-danger);
+}
+.ld-tiers {
+    width: 100%;
+}
+.ld-tier-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+.ld-num {
+    width: 140px;
 }
 :deep(.hl-row) {
     --el-table-tr-bg-color: var(--el-color-warning-light-9);
