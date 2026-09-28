@@ -243,7 +243,7 @@ class _OrderPageState extends State<OrderPage> {
                 _card(Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   const Text('支付方式', style: KeelText.overline),
                   for (final c in _channels)
-                    ListTile(
+                    Material(type: MaterialType.transparency, child: ListTile(
                       key: Key('order.channel.${c.key}'),
                       contentPadding: EdgeInsets.zero,
                       leading: Container(
@@ -254,7 +254,7 @@ class _OrderPageState extends State<OrderPage> {
                       title: Text(c.name, style: KeelText.body),
                       trailing: KeelRadio(on: _channel == c.key),
                       onTap: () => setState(() => _channel = c.key),
-                    ),
+                    )),
                 ])),
               if (_payMessage.isNotEmpty)
                 Padding(padding: const EdgeInsets.only(bottom: 10),

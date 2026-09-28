@@ -587,7 +587,7 @@ class _CheckoutPageState extends State<CheckoutPage> {
       ),
       if (_couponOpen) ...[
         for (final c in _coupons)
-          ListTile(
+          Material(type: MaterialType.transparency, child: ListTile(
             key: Key('checkout.coupon.${c.id}'),
             contentPadding: EdgeInsets.zero,
             title: Text(c.name, style: KeelText.body),
@@ -598,14 +598,14 @@ class _CheckoutPageState extends State<CheckoutPage> {
               KeelRadio(on: c.id == _couponId),
             ]),
             onTap: () => _pickCoupon(c.id),
-          ),
-        ListTile(
+          )),
+        Material(type: MaterialType.transparency, child: ListTile(
           key: const Key('checkout.coupon.none'),
           contentPadding: EdgeInsets.zero,
           title: const Text('不使用优惠券', style: KeelText.body),
           trailing: KeelRadio(on: _couponId == 0),
           onTap: () => _pickCoupon(0),
-        ),
+        )),
       ],
     ]);
   }
