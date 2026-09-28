@@ -759,6 +759,16 @@ type Store struct {
 	UpdatedAt  pgtype.Timestamptz
 }
 
+// 有围栏门店的同城配送：起送价、按距离分档的配送费、满额免配送费（00110）。
+type StoreLocalDelivery struct {
+	MerchantID    int64
+	StoreID       int64
+	MinOrderCents int64
+	FreeOverCents int64
+	FeeTiers      []byte
+	UpdatedAt     pgtype.Timestamptz
+}
+
 type StoreProductOverride struct {
 	StoreID    int64
 	ProductID  int64

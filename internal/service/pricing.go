@@ -386,7 +386,7 @@ func priceOrder(ctx context.Context, tx repository.Tx, sc repository.StoreScope,
 
 	// ---- 运费：满额包邮按「优惠后应付商品金额」判 ----
 	if dest != nil {
-		fc, err := loadFreightContext(ctx, tx, sc, skuIDsOf(q.Lines))
+		fc, err := loadFreightContext(ctx, tx, sc, skuIDsOf(q.Lines), *dest)
 		if err != nil {
 			return Quote{}, err
 		}
@@ -415,6 +415,16 @@ func priceOrder(ctx context.Context, tx repository.Tx, sc repository.StoreScope,
 			noCoupon = nb.FreightCents
 		}
 		q.freightNoCoupon = &noCoupon
+
+		// 同城配送的起送价比「活动之后、用券之前」的商品金额（与购物车显示的同一个数）：
+		// 用券不会把一单挤到起送价以下 —— 否则「自动选最省的券 → 试算 422 → 换券」会来回打转。
+		if b.Local != nil {
+			b.Local.ShortfallCents = max(0, b.Local.MinOrderCents-(q.GoodsAmountCents-q.PromotionDiscountCents))
+			if b.Local.ShortfallCents > 0 {
+				return Quote{}, fmt.Errorf("%w：起送价 %d 分，还差 %d 分", ErrBelowMinimumOrder,
+					b.Local.MinOrderCents, b.Local.ShortfallCents)
+			}
+		}
 	}
 
 	// ---- 包邮券抵运费：最多抵到 0；本单运费为 0 时这张券不可用 ----

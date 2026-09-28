@@ -6150,6 +6150,174 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/stores/{store_id}/local-delivery": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 门店的同城配送配置
+         * @description 有围栏、不是默认店的门店按这份配置收配送费（00110），**不读运费模板**：起送价、按距离分档的配送费、
+         *     满额免配送费。默认门店（全国兜底）与没有围栏的门店照旧走运费模板 —— 它们也能存这份配置，只是不生效，
+         *     `active` 说明这一点。没配过的门店返回全 0（不设起送价、配送费 0）、`updated_at` 缺席。
+         *
+         *     权限与门店模板相同：大区管理员管本大区的店，门店管理员管自己的店。
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /**
+                     * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+                     *
+                     *     它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+                     *     而例外成立的前提是平台级鉴权：
+                     *
+                     *     · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+                     *       读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+                     *       行级安全落在这家店上。
+                     *     · **商家级员工带了这个头：403**
+                     *       （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+                     *       静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+                     *     · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+                     *       **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+                     *       实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+                     *       请求其余部分指名的东西不存在是 422。
+                     *     · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+                     *       买家侧对它照旧 404。
+                     *     · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+                     *       （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+                     *
+                     *     后台每一条挂后台会话的操作都声明了它（机械核对：
+                     *     `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+                     */
+                    "X-Keel-Merchant"?: components["parameters"]["KeelMerchant"];
+                };
+                path: {
+                    /** @description `stores.id`。同 ProductId，查不到即 404（含「不属于当前租户」与「已软删」）。 */
+                    store_id: components["parameters"]["StoreId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AdminLocalDelivery"];
+                    };
+                };
+                /** @description 门店不存在或不属于当前租户。 */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        /**
+         * 配置门店的同城配送（整体替换）
+         * @description 计费口径：
+         *
+         *     - **配送费按距离分档**：距离是门店坐标到收货地址坐标的球面距离（与 `GET /stores/resolve` 的 `distance_m`
+         *       同一个算法），落进第一个 `within_m` ≥ 距离的档。超出最后一档（围栏比最后一档大）、或算不出距离
+         *       （地址没有坐标），**按最后一档**收。一档都不配 = 配送费 0。
+         *     - **满额免配送费**：`free_over_cents` > 0 且活动与券都减完的商品金额 ≥ 它（与运费模板的满额包邮同一个口径）。
+         *     - **起送价**：`min_order_cents` > 0 时，**活动之后、用券之前**的商品金额没到它，试算与下单 422
+         *       `below-minimum-order`（购物车照常显示，带上还差多少）。不按用券之后算：用券不该把一单挤到起送价以下。
+         *     - 包邮券照常能抵配送费。
+         */
+        put: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /**
+                     * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+                     *
+                     *     它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+                     *     而例外成立的前提是平台级鉴权：
+                     *
+                     *     · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+                     *       读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+                     *       行级安全落在这家店上。
+                     *     · **商家级员工带了这个头：403**
+                     *       （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+                     *       静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+                     *     · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+                     *       **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+                     *       实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+                     *       请求其余部分指名的东西不存在是 422。
+                     *     · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+                     *       买家侧对它照旧 404。
+                     *     · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+                     *       （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+                     *
+                     *     后台每一条挂后台会话的操作都声明了它（机械核对：
+                     *     `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+                     */
+                    "X-Keel-Merchant"?: components["parameters"]["KeelMerchant"];
+                };
+                path: {
+                    /** @description `stores.id`。同 ProductId，查不到即 404（含「不属于当前租户」与「已软删」）。 */
+                    store_id: components["parameters"]["StoreId"];
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["LocalDeliveryConfig"];
+                };
+            };
+            responses: {
+                /** @description 已更新 */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AdminLocalDelivery"];
+                    };
+                };
+                /** @description 门店不存在或不属于当前租户。 */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /**
+                 * @description 配置不成立（`https://keel.dev/problems/invalid-request`）：档数超过 10、`within_m` 不严格递增或超出
+                 *     1–100000 米、单档配送费超过 100 元、起送价或免配送费门槛超过 10 万元、金额为负。
+                 */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/stores/{store_id}/default": {
         parameters: {
             query?: never;
@@ -11437,6 +11605,7 @@ export interface paths {
                  *     有商品送不到这个收货地址（`https://keel.dev/problems/region-not-deliverable`，
                  *     `undeliverable_items` 逐行给出 SKU 与原因），
                  *     收货地址不在这家店的围栏内（`https://keel.dev/problems/address-out-of-range`），
+                 *     没到这家门店的起送价（`https://keel.dev/problems/below-minimum-order`），
                  *     或 `store_id` / `address_id` / `sku_id` 有一个服务端不认识
                  *     （`https://keel.dev/problems/invalid-request`）。
                  *     试算的全部意义就是在下单之前把这些说出来。
@@ -11610,6 +11779,9 @@ export interface paths {
                  *       也**刻意不是 404**：那条分界线是「路径里指名的资源不存在 → 404，
                  *       请求体里指名的东西不存在或不可用 → 422」，
                  *       而这条路径是 `/orders`，报 404 会被读成「下单接口不存在」。
+                 *     · **没到这家门店的起送价** —— `https://keel.dev/problems/below-minimum-order`：同城配送的门店设了
+                 *       起送价，活动之后、用券之前的商品金额没到。`detail` 写着起送价与还差多少；购物车的
+                 *       `freight.local.shortfall_cents` 是同一个数，客户端该在结算之前就提示「还差 x 元起送」。
                  *     · **收货地址不在这家店的配送范围内** —— `https://keel.dev/problems/address-out-of-range`：
                  *       地址带坐标（`Address.lat` / `lng`）且落在门店围栏外。客户端该换地址，或按这个地址的坐标
                  *       重新 `GET /stores/resolve` 换门店。没有坐标的地址（手填、老地址）判不了，不拦；
@@ -17381,6 +17553,13 @@ export interface components {
          *     （`orders.freight_snapshot`），之后改模板不影响它。
          */
         FreightBreakdown: {
+            /**
+             * @description `express`：按运费模板算（默认门店与没有围栏的门店，按省）；`local`：同城配送（有围栏的门店，按距离，
+             *     见 `local`；此时 `groups` 为空、`province_code` 不出现）。00110 之前的订单快照没有这个字段，按 `express` 读
+             * @enum {string}
+             */
+            mode?: "express" | "local";
+            local?: components["schemas"]["LocalDeliveryQuote"];
             /** @description 收货地址归到的省。地址既没有可用的 `region_code` 也匹配不上省名时不出现（此时按各模板的默认规则算） */
             province_code?: components["schemas"]["ProvinceCode"];
             /** @description 运费合计（包邮券抵扣之前），= 各组 `fee_cents` 之和 */
@@ -17388,6 +17567,58 @@ export interface components {
             /** @description 包邮券抵掉的运费，≤ `freight_cents`。没用包邮券为 0 */
             freight_discount_cents: components["schemas"]["Money"];
             groups: components["schemas"]["FreightGroup"][];
+        };
+        /** @description 同城配送怎么算的（`FreightBreakdown.mode` = `local` 时出现）。口径见 `PUT /admin/stores/{store_id}/local-delivery`。 */
+        LocalDeliveryQuote: {
+            /**
+             * Format: int64
+             * @description 门店到收货坐标的球面距离（米）。null = 算不出（地址或门店没有坐标），此时按最后一档收
+             */
+            distance_m: number | null;
+            /**
+             * Format: int32
+             * @description 命中那一档的上限（米）。门店一档都没配时不出现（配送费 0）
+             */
+            tier_within_m?: number;
+            /** @description 按档的配送费（免配送费之前） */
+            tier_fee_cents: components["schemas"]["Money"];
+            /** @description 满多少免配送费，0 = 不设 */
+            free_over_cents: components["schemas"]["Money"];
+            /**
+             * @description 免了配送费时为 `threshold`；照常收费时不出现
+             * @enum {string}
+             */
+            free_reason?: "threshold";
+            /** @description 起送价，0 = 不设 */
+            min_order_cents: components["schemas"]["Money"];
+            /** @description 离起送价还差多少（活动之后、用券之前的商品金额）。> 0 时试算与下单 422 `below-minimum-order` */
+            shortfall_cents: components["schemas"]["Money"];
+        };
+        DeliveryTier: {
+            /**
+             * Format: int32
+             * @description 这一档的距离上限（米），含
+             */
+            within_m: number;
+            /** @description 这一档的配送费，≤ 10000（100 元） */
+            fee_cents: components["schemas"]["Money"];
+        };
+        LocalDeliveryConfig: {
+            /** @description 起送价，0 = 不设 */
+            min_order_cents: components["schemas"]["Money"];
+            /** @description 满多少免配送费，0 = 不设 */
+            free_over_cents: components["schemas"]["Money"];
+            /** @description 按 `within_m` 严格递增。空数组 = 配送费 0 */
+            fee_tiers: components["schemas"]["DeliveryTier"][];
+        };
+        AdminLocalDelivery: components["schemas"]["LocalDeliveryConfig"] & {
+            /** @description 这家店现在是否按这份配置收费（有围栏且不是默认店）。false 时它走运费模板 */
+            active: boolean;
+            /**
+             * Format: date-time
+             * @description 最后一次保存的时间；没配过时不出现
+             */
+            updated_at?: string;
         };
         FreightUndeliverableLine: {
             /** Format: int64 */

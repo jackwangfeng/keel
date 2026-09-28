@@ -750,6 +750,24 @@ func (e CouponType) Valid() bool {
 	}
 }
 
+// Defines values for FreightBreakdownMode.
+const (
+	Express FreightBreakdownMode = "express"
+	Local   FreightBreakdownMode = "local"
+)
+
+// Valid indicates whether the value is a known member of the FreightBreakdownMode enum.
+func (e FreightBreakdownMode) Valid() bool {
+	switch e {
+	case Express:
+		return true
+	case Local:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for FreightChargeMode.
 const (
 	FreightChargeModeN1 FreightChargeMode = 1
@@ -843,6 +861,21 @@ func (e IdentityProvider) Valid() bool {
 	case IdentityProviderN4:
 		return true
 	case IdentityProviderN5:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for LocalDeliveryQuoteFreeReason.
+const (
+	LocalDeliveryQuoteFreeReasonThreshold LocalDeliveryQuoteFreeReason = "threshold"
+)
+
+// Valid indicates whether the value is a known member of the LocalDeliveryQuoteFreeReason enum.
+func (e LocalDeliveryQuoteFreeReason) Valid() bool {
+	switch e {
+	case LocalDeliveryQuoteFreeReasonThreshold:
 		return true
 	default:
 		return false
@@ -2612,6 +2645,24 @@ type AdminInventory struct {
 	WarningQty int       `json:"warning_qty"`
 }
 
+// AdminLocalDelivery defines model for AdminLocalDelivery.
+type AdminLocalDelivery struct {
+	// Active 这家店现在是否按这份配置收费（有围栏且不是默认店）。false 时它走运费模板
+	Active bool `json:"active"`
+
+	// FeeTiers 按 `within_m` 严格递增。空数组 = 配送费 0
+	FeeTiers []DeliveryTier `json:"fee_tiers"`
+
+	// FreeOverCents 满多少免配送费，0 = 不设
+	FreeOverCents Money `json:"free_over_cents"`
+
+	// MinOrderCents 起送价，0 = 不设
+	MinOrderCents Money `json:"min_order_cents"`
+
+	// UpdatedAt 最后一次保存的时间；没配过时不出现
+	UpdatedAt *time.Time `json:"updated_at,omitempty"`
+}
+
 // AdminOrderDetail defines model for AdminOrderDetail.
 type AdminOrderDetail struct {
 	// CouponName 这一单用的券的名字，**下单时的快照**。没用券时不出现（与 `user_coupon_id` 同进同出）。
@@ -3932,6 +3983,15 @@ type CouponTemplateStats struct {
 // （0 = 运费全免），门槛与范围的判法与别的券相同。本单运费为 0 时不可用（数据模型 §7）。
 type CouponType int
 
+// DeliveryTier defines model for DeliveryTier.
+type DeliveryTier struct {
+	// FeeCents 这一档的配送费，≤ 10000（100 元）
+	FeeCents Money `json:"fee_cents"`
+
+	// WithinM 这一档的距离上限（米），含
+	WithinM int32 `json:"within_m"`
+}
+
 // FieldError 一条字段级错误。`field` 是请求体（或商品对象）里的字段名。
 //
 // `offset` / `length` 只在错误**能定位到具体位置**时出现，眼下唯一的
@@ -3966,9 +4026,20 @@ type FreightBreakdown struct {
 	FreightDiscountCents Money          `json:"freight_discount_cents"`
 	Groups               []FreightGroup `json:"groups"`
 
+	// Local 同城配送怎么算的（`FreightBreakdown.mode` = `local` 时出现）。口径见 `PUT /admin/stores/{store_id}/local-delivery`。
+	Local *LocalDeliveryQuote `json:"local,omitempty"`
+
+	// Mode `express`：按运费模板算（默认门店与没有围栏的门店，按省）；`local`：同城配送（有围栏的门店，按距离，
+	// 见 `local`；此时 `groups` 为空、`province_code` 不出现）。00110 之前的订单快照没有这个字段，按 `express` 读
+	Mode *FreightBreakdownMode `json:"mode,omitempty"`
+
 	// ProvinceCode 收货地址归到的省。地址既没有可用的 `region_code` 也匹配不上省名时不出现（此时按各模板的默认规则算）
 	ProvinceCode *ProvinceCode `json:"province_code,omitempty"`
 }
+
+// FreightBreakdownMode `express`：按运费模板算（默认门店与没有围栏的门店，按省）；`local`：同城配送（有围栏的门店，按距离，
+// 见 `local`；此时 `groups` 为空、`province_code` 不出现）。00110 之前的订单快照没有这个字段，按 `express` 读
+type FreightBreakdownMode string
 
 // FreightChargeMode 1 按件 · 2 按重量（单位克，取 SKU 的 `weight_gram`）
 type FreightChargeMode int
@@ -4170,6 +4241,45 @@ type InventorySetRequest struct {
 	// WarningQty 低库存预警线。省略则不动。
 	WarningQty *int `json:"warning_qty,omitempty"`
 }
+
+// LocalDeliveryConfig defines model for LocalDeliveryConfig.
+type LocalDeliveryConfig struct {
+	// FeeTiers 按 `within_m` 严格递增。空数组 = 配送费 0
+	FeeTiers []DeliveryTier `json:"fee_tiers"`
+
+	// FreeOverCents 满多少免配送费，0 = 不设
+	FreeOverCents Money `json:"free_over_cents"`
+
+	// MinOrderCents 起送价，0 = 不设
+	MinOrderCents Money `json:"min_order_cents"`
+}
+
+// LocalDeliveryQuote 同城配送怎么算的（`FreightBreakdown.mode` = `local` 时出现）。口径见 `PUT /admin/stores/{store_id}/local-delivery`。
+type LocalDeliveryQuote struct {
+	// DistanceM 门店到收货坐标的球面距离（米）。null = 算不出（地址或门店没有坐标），此时按最后一档收
+	DistanceM *int64 `json:"distance_m"`
+
+	// FreeOverCents 满多少免配送费，0 = 不设
+	FreeOverCents Money `json:"free_over_cents"`
+
+	// FreeReason 免了配送费时为 `threshold`；照常收费时不出现
+	FreeReason *LocalDeliveryQuoteFreeReason `json:"free_reason,omitempty"`
+
+	// MinOrderCents 起送价，0 = 不设
+	MinOrderCents Money `json:"min_order_cents"`
+
+	// ShortfallCents 离起送价还差多少（活动之后、用券之前的商品金额）。> 0 时试算与下单 422 `below-minimum-order`
+	ShortfallCents Money `json:"shortfall_cents"`
+
+	// TierFeeCents 按档的配送费（免配送费之前）
+	TierFeeCents Money `json:"tier_fee_cents"`
+
+	// TierWithinM 命中那一档的上限（米）。门店一档都没配时不出现（配送费 0）
+	TierWithinM *int32 `json:"tier_within_m,omitempty"`
+}
+
+// LocalDeliveryQuoteFreeReason 免了配送费时为 `threshold`；照常收费时不出现
+type LocalDeliveryQuoteFreeReason string
 
 // LoginResponse defines model for LoginResponse.
 type LoginResponse struct {
@@ -10124,6 +10234,60 @@ type GetAdminStoresStoreIdInventoriesParams struct {
 	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
 }
 
+// GetAdminStoresStoreIdLocalDeliveryParams defines parameters for GetAdminStoresStoreIdLocalDelivery.
+type GetAdminStoresStoreIdLocalDeliveryParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// PutAdminStoresStoreIdLocalDeliveryParams defines parameters for PutAdminStoresStoreIdLocalDelivery.
+type PutAdminStoresStoreIdLocalDeliveryParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
 // GetAdminStoresStoreIdProductsParams defines parameters for GetAdminStoresStoreIdProducts.
 type GetAdminStoresStoreIdProductsParams struct {
 	Page     *Page     `form:"page,omitempty" json:"page,omitempty"`
@@ -11176,6 +11340,9 @@ type PatchAdminStoresStoreIdJSONRequestBody = StoreUpdateRequest
 
 // PutAdminStoresStoreIdFenceJSONRequestBody defines body for PutAdminStoresStoreIdFence for application/json ContentType.
 type PutAdminStoresStoreIdFenceJSONRequestBody = StoreFenceRequest
+
+// PutAdminStoresStoreIdLocalDeliveryJSONRequestBody defines body for PutAdminStoresStoreIdLocalDelivery for application/json ContentType.
+type PutAdminStoresStoreIdLocalDeliveryJSONRequestBody = LocalDeliveryConfig
 
 // PutAdminStoresStoreIdProductsProductIdListingJSONRequestBody defines body for PutAdminStoresStoreIdProductsProductIdListing for application/json ContentType.
 type PutAdminStoresStoreIdProductsProductIdListingJSONRequestBody = ProductListingRequest

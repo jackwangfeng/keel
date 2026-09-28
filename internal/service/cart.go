@@ -411,7 +411,7 @@ func withCartFreight(ctx context.Context, tx repository.Tx, out CartView, cs car
 	for _, it := range all {
 		ids = append(ids, it.SKUID)
 	}
-	fc, err := loadFreightContext(ctx, tx, cs.Scope, ids)
+	fc, err := loadFreightContext(ctx, tx, cs.Scope, ids, *cs.Dest)
 	if err != nil {
 		return CartView{}, err
 	}

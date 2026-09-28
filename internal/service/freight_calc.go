@@ -2,6 +2,7 @@ package service
 
 import (
 	"fmt"
+	"math"
 	"slices"
 
 	"github.com/keel/keel/internal/repository"
@@ -104,10 +105,13 @@ type FreightGroup struct {
 // FreightBreakdown 是运费的明细（契约 FreightBreakdown）。试算与购物车现算，
 // 订单上存的是下单那一刻的这一份（orders.freight_snapshot）。
 type FreightBreakdown struct {
-	ProvinceCode         string         `json:"province_code,omitempty"`
-	FreightCents         int64          `json:"freight_cents"`
-	FreightDiscountCents int64          `json:"freight_discount_cents"`
-	Groups               []FreightGroup `json:"groups"`
+	// Mode：express（运费模板，按省）/ local（同城配送，按距离，00110）。00110 之前的快照没有这个字段，按 express 读。
+	Mode                 string              `json:"mode,omitempty"`
+	Local                *LocalDeliveryQuote `json:"local,omitempty"`
+	ProvinceCode         string              `json:"province_code,omitempty"`
+	FreightCents         int64               `json:"freight_cents"`
+	FreightDiscountCents int64               `json:"freight_discount_cents"`
+	Groups               []FreightGroup      `json:"groups"`
 }
 
 // FreightUndeliverable 是送不到的一行（契约 FreightUndeliverableLine）。
@@ -123,6 +127,8 @@ type freightContext struct {
 	store     repository.StoreScope
 	info      map[int64]repository.SKUFreightInfo
 	templates map[int64]repository.FreightTemplate
+	// local 非 nil = 这家店走同城配送，templates / info 都是空的（loadFreightContext）。
+	local *repository.LocalDeliveryPricing
 }
 
 // templateFor 按「商品单独挂的 → 门店模板 → 全店默认」挑一行用的模板；都没有返回 nil。
@@ -193,7 +199,10 @@ type freightGroupAcc struct {
 func (fc freightContext) quote(provinceCode string, items []FreightItem,
 	goodsPayable int64) (FreightBreakdown, []FreightUndeliverable, error) {
 
-	out := FreightBreakdown{ProvinceCode: provinceCode, Groups: []FreightGroup{}}
+	if fc.local != nil {
+		return localDeliveryQuote(*fc.local, goodsPayable), nil, nil
+	}
+	out := FreightBreakdown{Mode: freightModeExpress, ProvinceCode: provinceCode, Groups: []FreightGroup{}}
 
 	// 分组，保持首次出现的顺序：明细里组的顺序与订单行的顺序一致，人读得懂。
 	var order []int64
@@ -297,4 +306,60 @@ func freeShippingDeduction(maxDiscountCents, freightCents int64) int64 {
 		return maxDiscountCents
 	}
 	return freightCents
+}
+
+// 运费方式（契约 FreightBreakdown.mode）。
+const (
+	freightModeExpress = "express"
+	freightModeLocal   = "local"
+)
+
+// LocalDeliveryQuote 是同城配送的明细（契约 LocalDeliveryQuote）。
+type LocalDeliveryQuote struct {
+	// DistanceM：门店到收货坐标的球面距离，取整到米；null = 算不出（地址或门店没有坐标），按最后一档收。
+	DistanceM *int64 `json:"distance_m"`
+	// TierWithinM：命中的那一档的上限；没有配任何档时缺席（配送费 0）。
+	TierWithinM   *int32 `json:"tier_within_m,omitempty"`
+	TierFeeCents  int64  `json:"tier_fee_cents"` // 按档的配送费（免配送费之前）
+	FreeOverCents int64  `json:"free_over_cents"`
+	FreeReason    string `json:"free_reason,omitempty"`
+	MinOrderCents int64  `json:"min_order_cents"`
+	// ShortfallCents：离起送价还差多少（比的是活动之后、用券之前的商品金额）。> 0 时下单与试算 422 below-minimum-order。
+	ShortfallCents int64 `json:"shortfall_cents"`
+}
+
+// localDeliveryQuote 是同城配送的计费，纯函数（freight_calc_test.go 覆盖边界）：
+//
+//	档：距离落进第一个 within_m ≥ 距离的档；超出最后一档（围栏比最后一档大）或算不出距离，按最后一档
+//	    —— 宁可多收几块，不按最近一档少收。没配任何档：配送费 0。
+//	免配送费：free_over_cents > 0 且 goodsPayable（活动与券都减完）≥ 它 —— 与运费模板的满额包邮同一个口径。
+//	起送价：这里按 goodsPayable 算差额（购物车传的正是「用券之前」的金额）；试算与下单由 priceOrder 按
+//	    「活动之后、用券之前」重算一次并据此拒单。
+func localDeliveryQuote(p repository.LocalDeliveryPricing, goodsPayable int64) FreightBreakdown {
+	lq := &LocalDeliveryQuote{FreeOverCents: p.FreeOverCents, MinOrderCents: p.MinOrderCents,
+		ShortfallCents: max(0, p.MinOrderCents-goodsPayable)}
+	if p.DistanceM != nil {
+		d := int64(math.Round(*p.DistanceM))
+		lq.DistanceM = &d
+	}
+	if n := len(p.Tiers); n > 0 {
+		tier := p.Tiers[n-1]
+		if lq.DistanceM != nil {
+			for _, t := range p.Tiers {
+				if *lq.DistanceM <= int64(t.WithinM) {
+					tier = t
+					break
+				}
+			}
+		}
+		w := tier.WithinM
+		lq.TierWithinM = &w
+		lq.TierFeeCents = tier.FeeCents
+	}
+	fee := lq.TierFeeCents
+	if fee > 0 && p.FreeOverCents > 0 && goodsPayable >= p.FreeOverCents {
+		lq.FreeReason = freightFreeThreshold
+		fee = 0
+	}
+	return FreightBreakdown{Mode: freightModeLocal, Local: lq, FreightCents: fee, Groups: []FreightGroup{}}
 }

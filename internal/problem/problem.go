@@ -271,6 +271,8 @@ const (
 	TypeSKUNotSoldInStore     = "https://keel.dev/problems/sku-not-sold-in-store"
 	// address-out-of-range：收货地址带坐标且不在所选门店围栏内，下单 / 试算回 422（2026-09-28）。
 	TypeAddressOutOfRange = "https://keel.dev/problems/address-out-of-range"
+	// below-minimum-order：同城配送的门店设了起送价，这一单没到（422，00110）。
+	TypeBelowMinimumOrder = "https://keel.dev/problems/below-minimum-order"
 
 	// 优惠券那一组（数据模型 §7，契约 Coupon tag）。分得细的理由同上：
 	//

@@ -441,6 +441,43 @@ class AdminInventory {
       };
 }
 
+class DeliveryTier {
+  final int withinM;
+  final Money feeCents;
+  const DeliveryTier({required this.withinM, required this.feeCents});
+  factory DeliveryTier.fromJson(Map<String, dynamic> j) => DeliveryTier(
+        withinM: (j['within_m'] as num).toInt(),
+        feeCents: (j['fee_cents'] as num).toInt(),
+      );
+  Map<String, dynamic> toJson() => {
+        'within_m': withinM,
+        'fee_cents': feeCents,
+      };
+}
+
+class AdminLocalDelivery {
+  final Money minOrderCents;
+  final Money freeOverCents;
+  final List<DeliveryTier> feeTiers;
+  final bool active;
+  final String? updatedAt;
+  const AdminLocalDelivery({required this.minOrderCents, required this.freeOverCents, required this.feeTiers, required this.active, this.updatedAt});
+  factory AdminLocalDelivery.fromJson(Map<String, dynamic> j) => AdminLocalDelivery(
+        minOrderCents: (j['min_order_cents'] as num).toInt(),
+        freeOverCents: (j['free_over_cents'] as num).toInt(),
+        feeTiers: (j['fee_tiers'] as List).map((e) => DeliveryTier.fromJson(e as Map<String, dynamic>)).toList(),
+        active: j['active'] as bool,
+        updatedAt: j['updated_at'] as String?,
+      );
+  Map<String, dynamic> toJson() => {
+        'min_order_cents': minOrderCents,
+        'free_over_cents': freeOverCents,
+        'fee_tiers': feeTiers.map((e) => e.toJson()).toList(),
+        'active': active,
+        if (updatedAt != null) 'updated_at': updatedAt,
+      };
+}
+
 /// **履约维度** —— 货走到哪儿了。资金维度另见 `Order.refund_status`。
 typedef OrderStatus = int;
 
@@ -531,6 +568,36 @@ class OrderStoreSnapshot {
       };
 }
 
+/// 同城配送怎么算的（`FreightBreakdown.mode` = `local` 时出现）。口径见 `PUT /admin/stores/{store_id}/local-delivery`。
+class LocalDeliveryQuote {
+  final int? distanceM;
+  final int? tierWithinM;
+  final Money tierFeeCents;
+  final Money freeOverCents;
+  final String? freeReason;
+  final Money minOrderCents;
+  final Money shortfallCents;
+  const LocalDeliveryQuote({this.distanceM, this.tierWithinM, required this.tierFeeCents, required this.freeOverCents, this.freeReason, required this.minOrderCents, required this.shortfallCents});
+  factory LocalDeliveryQuote.fromJson(Map<String, dynamic> j) => LocalDeliveryQuote(
+        distanceM: (j['distance_m'] as num?)?.toInt(),
+        tierWithinM: (j['tier_within_m'] as num?)?.toInt(),
+        tierFeeCents: (j['tier_fee_cents'] as num).toInt(),
+        freeOverCents: (j['free_over_cents'] as num).toInt(),
+        freeReason: j['free_reason'] as String?,
+        minOrderCents: (j['min_order_cents'] as num).toInt(),
+        shortfallCents: (j['shortfall_cents'] as num).toInt(),
+      );
+  Map<String, dynamic> toJson() => {
+        'distance_m': distanceM,
+        if (tierWithinM != null) 'tier_within_m': tierWithinM,
+        'tier_fee_cents': tierFeeCents,
+        'free_over_cents': freeOverCents,
+        if (freeReason != null) 'free_reason': freeReason,
+        'min_order_cents': minOrderCents,
+        'shortfall_cents': shortfallCents,
+      };
+}
+
 /// 这一组为什么免运费：`threshold` 满额包邮、`quantity` 满件包邮、
 typedef FreightFreeReason = String;
 
@@ -569,18 +636,24 @@ class FreightGroup {
 
 /// 运费是怎么算出来的。试算与购物车里是**现算**的，订单上是**下单那一刻的快照**
 class FreightBreakdown {
+  final String? mode;
+  final LocalDeliveryQuote? local;
   final ProvinceCode? provinceCode;
   final Money freightCents;
   final Money freightDiscountCents;
   final List<FreightGroup> groups;
-  const FreightBreakdown({this.provinceCode, required this.freightCents, required this.freightDiscountCents, required this.groups});
+  const FreightBreakdown({this.mode, this.local, this.provinceCode, required this.freightCents, required this.freightDiscountCents, required this.groups});
   factory FreightBreakdown.fromJson(Map<String, dynamic> j) => FreightBreakdown(
+        mode: j['mode'] as String?,
+        local: j['local'] == null ? null : LocalDeliveryQuote.fromJson(j['local'] as Map<String, dynamic>),
         provinceCode: j['province_code'] as String?,
         freightCents: (j['freight_cents'] as num).toInt(),
         freightDiscountCents: (j['freight_discount_cents'] as num).toInt(),
         groups: (j['groups'] as List).map((e) => FreightGroup.fromJson(e as Map<String, dynamic>)).toList(),
       );
   Map<String, dynamic> toJson() => {
+        if (mode != null) 'mode': mode,
+        if (local != null) 'local': local!.toJson(),
         if (provinceCode != null) 'province_code': provinceCode,
         'freight_cents': freightCents,
         'freight_discount_cents': freightDiscountCents,
@@ -2557,6 +2630,23 @@ class InventorySetRequest {
         'expected_available_qty': expectedAvailableQty,
         'available_qty': availableQty,
         if (warningQty != null) 'warning_qty': warningQty,
+      };
+}
+
+class LocalDeliveryConfig {
+  final Money minOrderCents;
+  final Money freeOverCents;
+  final List<DeliveryTier> feeTiers;
+  const LocalDeliveryConfig({required this.minOrderCents, required this.freeOverCents, required this.feeTiers});
+  factory LocalDeliveryConfig.fromJson(Map<String, dynamic> j) => LocalDeliveryConfig(
+        minOrderCents: (j['min_order_cents'] as num).toInt(),
+        freeOverCents: (j['free_over_cents'] as num).toInt(),
+        feeTiers: (j['fee_tiers'] as List).map((e) => DeliveryTier.fromJson(e as Map<String, dynamic>)).toList(),
+      );
+  Map<String, dynamic> toJson() => {
+        'min_order_cents': minOrderCents,
+        'free_over_cents': freeOverCents,
+        'fee_tiers': feeTiers.map((e) => e.toJson()).toList(),
       };
 }
 

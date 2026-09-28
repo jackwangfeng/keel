@@ -1166,6 +1166,20 @@ var routes = []route{
 		NoQueryParams:  "围栏是一整块 GeoJSON，在请求体里；传 null 即清空",
 	},
 	{
+		ContractPath:   "/admin/stores/{store_id}/local-delivery",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "admin_local_delivery.go",
+		NoQueryParams:  "读哪一家在路径上",
+	},
+	{
+		ContractPath:   "/admin/stores/{store_id}/local-delivery",
+		ContractMethod: "put",
+		HTTPMethod:     http.MethodPut,
+		HandlerFile:    "admin_local_delivery.go",
+		NoQueryParams:  "整份配置在请求体里",
+	},
+	{
 		ContractPath:   "/admin/stores/{store_id}/default",
 		ContractMethod: "put",
 		HTTPMethod:     http.MethodPut,

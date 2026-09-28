@@ -283,6 +283,10 @@ func writeOrderError(c *gin.Context, err error) {
 		problem.Write(c, http.StatusUnprocessableEntity,
 			problem.TypeSKUNotSoldInStore, "这家门店不卖请求里的某些商品，请换一家门店")
 
+	case errors.Is(err, service.ErrBelowMinimumOrder):
+		writeProblemDetail(c, http.StatusUnprocessableEntity, problem.TypeBelowMinimumOrder,
+			"没到这家门店的起送价", err)
+
 	case errors.Is(err, service.ErrAddressOutOfRange):
 		problem.Write(c, http.StatusUnprocessableEntity, problem.TypeAddressOutOfRange,
 			"收货地址不在这家门店的配送范围内，请换一个地址或按地址重新选择门店")

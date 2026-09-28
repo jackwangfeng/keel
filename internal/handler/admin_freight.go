@@ -253,6 +253,20 @@ func apiFreightBreakdown(b service.FreightBreakdown) api.FreightBreakdown {
 		pc := b.ProvinceCode
 		out.ProvinceCode = &pc
 	}
+	if b.Mode != "" {
+		m := api.FreightBreakdownMode(b.Mode)
+		out.Mode = &m
+	}
+	if l := b.Local; l != nil {
+		al := api.LocalDeliveryQuote{DistanceM: l.DistanceM, TierWithinM: l.TierWithinM,
+			TierFeeCents: api.Money(l.TierFeeCents), FreeOverCents: api.Money(l.FreeOverCents),
+			MinOrderCents: api.Money(l.MinOrderCents), ShortfallCents: api.Money(l.ShortfallCents)}
+		if l.FreeReason != "" {
+			fr := api.LocalDeliveryQuoteFreeReason(l.FreeReason)
+			al.FreeReason = &fr
+		}
+		out.Local = &al
+	}
 	return out
 }
 

@@ -221,6 +221,26 @@ export type AdminInventory = {
   updated_at : string
 }
 
+export type DeliveryTier = {
+  /** 这一档的距离上限（米），含 */
+  within_m : number
+  /** 这一档的配送费，≤ 10000（100 元） */
+  fee_cents : Money
+}
+
+export type AdminLocalDelivery = {
+  /** 起送价，0 = 不设 */
+  min_order_cents : Money
+  /** 满多少免配送费，0 = 不设 */
+  free_over_cents : Money
+  /** 按 `within_m` 严格递增。空数组 = 配送费 0 */
+  fee_tiers : DeliveryTier[]
+  /** 这家店现在是否按这份配置收费（有围栏且不是默认店）。false 时它走运费模板 */
+  active : boolean
+  /** 最后一次保存的时间；没配过时不出现 */
+  updated_at? : string
+}
+
 /** **履约维度** —— 货走到哪儿了。资金维度另见 `Order.refund_status`。 */
 export type OrderStatus = number
 
@@ -262,6 +282,24 @@ export type OrderStoreSnapshot = {
   region_name? : string
 }
 
+/** 同城配送怎么算的（`FreightBreakdown.mode` = `local` 时出现）。口径见 `PUT /admin/stores/{store_id}/local-delivery`。 */
+export type LocalDeliveryQuote = {
+  /** 门店到收货坐标的球面距离（米）。null = 算不出（地址或门店没有坐标），此时按最后一档收 */
+  distance_m : number | null
+  /** 命中那一档的上限（米）。门店一档都没配时不出现（配送费 0） */
+  tier_within_m? : number
+  /** 金额，单位「分」。禁止使用浮点。 */
+  tier_fee_cents : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  free_over_cents : Money
+  /** 免了配送费时为 `threshold`；照常收费时不出现 */
+  free_reason? : string
+  /** 金额，单位「分」。禁止使用浮点。 */
+  min_order_cents : Money
+  /** 金额，单位「分」。禁止使用浮点。 */
+  shortfall_cents : Money
+}
+
 /** 这一组为什么免运费：`threshold` 满额包邮、`quantity` 满件包邮、 */
 export type FreightFreeReason = string
 
@@ -286,6 +324,10 @@ export type FreightGroup = {
 
 /** 运费是怎么算出来的。试算与购物车里是**现算**的，订单上是**下单那一刻的快照** */
 export type FreightBreakdown = {
+  /** `express`：按运费模板算（默认门店与没有围栏的门店，按省）；`local`：同城配送（有围栏的门店，按距离， */
+  mode? : string
+  /** 同城配送怎么算的（`FreightBreakdown.mode` = `local` 时出现）。口径见 `PUT /admin/stores/{store_id}/local-delivery`。 */
+  local? : LocalDeliveryQuote
   /** 收货地址归到的省。地址既没有可用的 `region_code` 也匹配不上省名时不出现（此时按各模板的默认规则算） */
   province_code? : ProvinceCode
   /** 金额，单位「分」。禁止使用浮点。 */
@@ -1257,6 +1299,15 @@ export type InventorySetRequest = {
   available_qty : number
   /** 低库存预警线。省略则不动。 */
   warning_qty? : number
+}
+
+export type LocalDeliveryConfig = {
+  /** 起送价，0 = 不设 */
+  min_order_cents : Money
+  /** 满多少免配送费，0 = 不设 */
+  free_over_cents : Money
+  /** 按 `within_m` 严格递增。空数组 = 配送费 0 */
+  fee_tiers : DeliveryTier[]
 }
 
 export type User = {

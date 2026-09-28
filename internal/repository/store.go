@@ -191,6 +191,8 @@ type StorePatch struct {
 
 // StoreTx 是门店与大区这一面。
 type StoreTx interface {
+	LocalDeliveryTx
+
 	// —— 大区
 	AdminListRegions(ctx context.Context, includeDeleted bool, only ScopeFilter, limit, offset int32) ([]Region, int64, error)
 	FindRegion(ctx context.Context, id int64) (Region, error)

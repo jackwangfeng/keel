@@ -295,3 +295,47 @@ func TestProvinceListMatchesMigration(t *testing.T) {
 		t.Fatalf("省级行政区应是 34 个，实得 %d", len(want))
 	}
 }
+
+// 同城配送（00110）：分档、超出最后一档、算不出距离、满额免配送费、起送差额。
+func TestLocalDeliveryQuote(t *testing.T) {
+	f := func(v float64) *float64 { return &v }
+	cfg := repository.LocalDeliveryPricing{Local: true, LocalDelivery: repository.LocalDelivery{
+		MinOrderCents: 2000, FreeOverCents: 5000,
+		Tiers: []repository.DeliveryTier{{WithinM: 3000, FeeCents: 300}, {WithinM: 5000, FeeCents: 500}}}}
+	cases := []struct {
+		name      string
+		dist      *float64
+		goods     int64
+		fee, tier int64
+		within    int32
+		free      string
+		shortfall int64
+	}{
+		{"第一档内", f(1200.4), 3000, 300, 300, 3000, "", 0},
+		{"正好在档的边界上算这一档", f(3000), 3000, 300, 300, 3000, "", 0},
+		{"第二档", f(3000.6), 3000, 500, 500, 5000, "", 0},
+		{"超出最后一档按最后一档", f(8000), 3000, 500, 500, 5000, "", 0},
+		{"算不出距离按最后一档", nil, 3000, 500, 500, 5000, "", 0},
+		{"满额免配送费", f(1000), 5000, 0, 300, 3000, "threshold", 0},
+		{"没到起送价：照常算费并给差额", f(1000), 1500, 300, 300, 3000, "", 500},
+	}
+	for _, c := range cases {
+		p := cfg
+		p.DistanceM = c.dist
+		b := localDeliveryQuote(p, c.goods)
+		l := b.Local
+		if b.Mode != "local" || l == nil || b.FreightCents != c.fee || l.TierFeeCents != c.tier ||
+			l.TierWithinM == nil || *l.TierWithinM != c.within || l.FreeReason != c.free || l.ShortfallCents != c.shortfall ||
+			len(b.Groups) != 0 {
+			t.Errorf("%s：%+v local=%+v", c.name, b, l)
+		}
+		if (c.dist == nil) != (l.DistanceM == nil) {
+			t.Errorf("%s：distance_m 应%v", c.name, map[bool]string{true: "为 null", false: "有值"}[c.dist == nil])
+		}
+	}
+	// 一档都没配：配送费 0，tier_within_m 缺席。
+	b := localDeliveryQuote(repository.LocalDeliveryPricing{Local: true}, 100)
+	if b.FreightCents != 0 || b.Local.TierWithinM != nil || b.Local.ShortfallCents != 0 {
+		t.Errorf("没配档：%+v %+v", b, b.Local)
+	}
+}

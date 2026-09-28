@@ -18,6 +18,10 @@ import (
 // 响应体的 undeliverable_items 逐行列出。具体的行在 *UndeliverableError 里。
 var ErrRegionNotDeliverable = errors.New("有商品送不到这个收货地址")
 
+// ErrBelowMinimumOrder：同城配送的门店设了起送价，这一单（活动之后、用券之前的商品金额）没到。
+// 契约：422 below-minimum-order —— 重试不会成功，客户端该提示「还差 x 元起送」。
+var ErrBelowMinimumOrder = errors.New("没到这家门店的起送价")
+
 // UndeliverableError 带着送不到的那几行。errors.Is(err, ErrRegionNotDeliverable) 为真。
 //
 // 它必须是一个错误，不能是「把这几行的运费算成 0 继续」：那会让一笔注定发不出去的
@@ -39,11 +43,13 @@ func (e *UndeliverableError) Unwrap() error { return ErrRegionNotDeliverable }
 // FreightDestination 是「运费往哪里送」：收货地址归到的省（归不到为 ""）。
 type FreightDestination struct {
 	ProvinceCode string
+	// Lat / Lng：收货地址的坐标（WGS-84），手填与老地址为 nil。同城配送按它算距离。
+	Lat, Lng *float64
 }
 
 // destinationOf 把一个收货地址变成 FreightDestination（freight_region.go 的 provinceOf）。
 func destinationOf(a repository.Address) FreightDestination {
-	return FreightDestination{ProvinceCode: provinceOf(a.RegionCode, a.Province)}
+	return FreightDestination{ProvinceCode: provinceOf(a.RegionCode, a.Province), Lat: a.Lat, Lng: a.Lng}
 }
 
 // FreightRequest 是运费一段的全部输入 —— 与营销活动那一段约定的接口形状：
@@ -66,12 +72,23 @@ type FreightQuote struct {
 	Undeliverable []FreightUndeliverable
 }
 
-// loadFreightContext 取齐一批 SKU 在这家门店计运费要的全部素材：每一行的重量与
-// 商品单独挂的模板、这些模板 + 门店模板 + 全店默认（连同规则）。两条查询。
+// loadFreightContext 取齐一批 SKU 在这家门店计运费要的全部素材。
+//
+// 先问门店走不走同城配送（有围栏且不是默认店，00110）：走的话只要它的配置与到收货坐标的距离，
+// **不读运费模板**（商品单独挂的快递模板不许盖掉门店的配送费）。不走的话照旧：每一行的重量与
+// 商品单独挂的模板、这些模板 + 门店模板 + 全店默认（连同规则）。
 func loadFreightContext(ctx context.Context, tx repository.Tx, store repository.StoreScope,
-	skuIDs []int64) (freightContext, error) {
+	skuIDs []int64, dest FreightDestination) (freightContext, error) {
 	fc := freightContext{store: store, info: map[int64]repository.SKUFreightInfo{},
 		templates: map[int64]repository.FreightTemplate{}}
+	ld, err := tx.LocalDeliveryForPricing(ctx, store.StoreID, dest.Lat, dest.Lng)
+	if err != nil {
+		return freightContext{}, err
+	}
+	if ld.Local {
+		fc.local = &ld
+		return fc, nil
+	}
 	if len(skuIDs) == 0 {
 		return fc, nil
 	}
@@ -102,7 +119,7 @@ func quoteFreight(ctx context.Context, tx repository.Tx, req FreightRequest) (Fr
 	for _, it := range req.Items {
 		ids = append(ids, it.SKUID)
 	}
-	fc, err := loadFreightContext(ctx, tx, req.Store, ids)
+	fc, err := loadFreightContext(ctx, tx, req.Store, ids, req.Dest)
 	if err != nil {
 		return FreightQuote{}, err
 	}

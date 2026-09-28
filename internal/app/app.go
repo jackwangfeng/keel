@@ -596,6 +596,8 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	// 部分唯一索引，反过来会自己撞自己）。并进 PATCH 就等于给那两条纪律
 	// 留了第二条绕过去的路，而 repository.StorePatch 上刻意没有这两个字段。
 	v1.PUT("/admin/stores/:store_id/fence", staffAuth, st.SetFence)
+	v1.GET("/admin/stores/:store_id/local-delivery", staffAuth, st.GetLocalDelivery)
+	v1.PUT("/admin/stores/:store_id/local-delivery", staffAuth, st.PutLocalDelivery)
 	v1.PUT("/admin/stores/:store_id/default", staffAuth, st.MakeDefault)
 	v1.GET("/admin/stores/:store_id/products", staffAuth, st.ListStoreProducts)
 	v1.PUT("/admin/stores/:store_id/products/:product_id/listing", staffAuth, st.SetStoreListing)

@@ -424,6 +424,14 @@ var permMatrix = []permRoute{
 			Body: `{"fence":{"type":"Polygon","coordinates":[[[70,15],[140,15],[140,55],[70,55],[70,15]]]}}`,
 			OK:   http.StatusOK}
 	}},
+	{"GET", v1 + "/admin/stores/:store_id/local-delivery", storeOperate, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permGet(fmt.Sprintf(v1+"/admin/stores/%d/local-delivery", fx.store(c)))
+	}},
+	{"PUT", v1 + "/admin/stores/:store_id/local-delivery", storeOperate, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permReq{Method: "PUT", Path: fmt.Sprintf(v1+"/admin/stores/%d/local-delivery", fx.store(c)),
+			Body: `{"min_order_cents":2000,"free_over_cents":0,"fee_tiers":[{"within_m":3000,"fee_cents":300}]}`,
+			OK:   http.StatusOK}
+	}},
 	{"PUT", v1 + "/admin/stores/:store_id/default", adminOnly, func(t *testing.T, fx *permFixture, c permCase) permReq {
 		// 目标一律是现在的默认门店 S0：把它再设一次默认是幂等的，
 		// 不会让矩阵的后面几格换一个默认店。

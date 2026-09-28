@@ -56,6 +56,16 @@ so "which one is running?" never depends on anyone's memory.
   `outputSchema` (validated before returning); tool errors carry a machine-readable `_meta["keel/problem"]`
   (`type`, `title`, `status`, `detail`, same problem types as the admin API). The tool list is snapshotted in
   `docs/AI接口-工具清单.json` and guarded by a test: changes must be additive, breaking changes get a new tool name.
+- **Same-city delivery for geofenced stores (00110).** A store with a fence (and not the default store) now charges
+  delivery by distance instead of by freight template: fee tiers by straight-line distance from the store to the
+  shipping address (`within_m` → `fee_cents`, beyond the last tier or without coordinates the last tier applies),
+  free delivery over an amount (after promotions and coupons, like free shipping), and a minimum order (after
+  promotions, before coupons) — below it, preview and checkout return 422 `below-minimum-order` and the cart shows
+  the shortfall. Freight templates, including templates attached to a product, no longer apply at fenced stores:
+  a product's nationwide express template used to override the store's own delivery fee. The default store and
+  stores without a fence keep using templates. `FreightBreakdown` gains `mode` (`express` / `local`) and `local`;
+  configured under `GET/PUT /admin/stores/{store_id}/local-delivery`.
+  **Upgrade note:** fenced stores charge 0 delivery until configured.
 - **Orders must ship inside the store's fence.** `POST /orders` and `POST /orders/preview` return 422
   `address-out-of-range` when the shipping address has coordinates outside the chosen store's fence. Addresses
   without coordinates (manual entry, pre-00100) are not checked; the default store (nationwide fallback) and
