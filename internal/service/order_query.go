@@ -64,6 +64,8 @@ type OrderDetail struct {
 	// AutoConfirmAt 是自动确认收货的截止时间（契约 OrderDetail.auto_confirm_at）：
 	// 只有 30 已发货的单才有，= 发货时间 + 店铺设置的天数。其余为 nil。
 	AutoConfirmAt *time.Time
+	// AfterSaleDeadline 是售后截止时间（契约 OrderDetail.after_sale_deadline）：只有 40 已完成的单才有。
+	AfterSaleDeadline *time.Time
 }
 
 // StoreSnapshot 是从 orders.store_snapshot 里读回来的门店 / 大区展示信息
@@ -208,7 +210,9 @@ func (s *OrderService) Detail(ctx context.Context, orderNo string) (OrderDetail,
 			at := order.ShippedAt.Add(time.Duration(prefs.AutoConfirmDays) * 24 * time.Hour)
 			out.AutoConfirmAt = &at
 		}
-		return nil
+		// 售后截止（00151）：已完成的单才有，与申请售后同一个算式（refund.go 的 afterSaleDeadline）。
+		out.AfterSaleDeadline, err = afterSaleDeadline(ctx, tx, order)
+		return err
 	})
 	if err != nil {
 		return OrderDetail{}, err

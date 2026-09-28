@@ -4959,6 +4959,11 @@ type OrderCreateRequest struct {
 
 // OrderDetail defines model for OrderDetail.
 type OrderDetail struct {
+	// AfterSaleDeadline 售后截止时间（2026-09-28 起）：只有 `40 已完成` 的订单才出现，= 完成时间 + 店铺设置的
+	// `after_sale_days` 天（默认 15）。过了之后申请售后回 409 `after-sale-window-closed`，
+	// 客户端据此不再显示「申请售后」，并可提示「售后期至 …」。
+	AfterSaleDeadline *time.Time `json:"after_sale_deadline,omitempty"`
+
 	// AutoConfirmAt 自动确认收货的截止时间：只有 `30 已发货` 的订单才出现，
 	// = 发货时间 + 店铺设置的 `auto_confirm_days` 天（默认 7）。过了这个时间，
 	// 定时任务替买家确认收货（最迟晚十分钟）。客户端据此显示「N 天后自动确认」，
@@ -6898,6 +6903,10 @@ type ShipmentCreateRequest struct {
 
 // ShopSettings defines model for ShopSettings.
 type ShopSettings struct {
+	// AfterSaleDays 售后期：订单**完成**（确认收货）后多少天内可以申请售后，默认 15（2026-09-28 起）。
+	// 过了之后申请回 409 `after-sale-window-closed`；还没完成的订单不受它限制。
+	AfterSaleDays int `json:"after_sale_days"`
+
 	// AutoConfirmDays 发货后多少天由系统自动确认收货
 	AutoConfirmDays int `json:"auto_confirm_days"`
 
@@ -6921,8 +6930,10 @@ type ShopSettings struct {
 
 // ShopSettingsInput defines model for ShopSettingsInput.
 type ShopSettingsInput struct {
-	AutoConfirmDays int `json:"auto_confirm_days"`
-	ReturnShipDays  int `json:"return_ship_days"`
+	// AfterSaleDays 售后期（完成后多少天内可申请售后）。不给即默认 15 —— 老客户端整体替换时不会被拒。
+	AfterSaleDays   *int `json:"after_sale_days,omitempty"`
+	AutoConfirmDays int  `json:"auto_confirm_days"`
+	ReturnShipDays  int  `json:"return_ship_days"`
 
 	// ServicePhone 客服电话。不给即清空
 	ServicePhone *string `json:"service_phone,omitempty"`

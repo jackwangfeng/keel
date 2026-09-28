@@ -246,6 +246,8 @@ class OrderDetailView {
   /// 多收款退回（契约 OrderDetail.payment_returns，00150）：订单只认一笔到账，其余的系统自动原路退回。
   /// 每行一句「多付的 ¥x（重复支付）已原路退回」；没有时空。
   final List<String> returnLines;
+  /// 售后截止（契约 OrderDetail.after_sale_deadline，只有已完成的单才有）：「售后期至 …」，没有时空。
+  final String afterSaleText;
   /// 已支付 / 已发货 / 已完成，且还有没退完、也没在途售后的件数。
   final bool canRefund;
   /// 原始订单：售后那几页（第二阶段）要按行算可退件数。
@@ -255,7 +257,7 @@ class OrderDetailView {
       required this.hasPaid, required this.refundedText, required this.freightDiscountText, required this.autoConfirmAt,
       required this.promotionDiscountText, required this.promotionLines, required this.freightNote, this.freightLabel = '运费', required this.canCancel,
       required this.canConfirm, required this.couponId, required this.couponName, required this.items,
-      required this.payments, required this.refunds, this.returnLines = const [], required this.canRefund, required this.raw});
+      required this.payments, required this.refunds, this.returnLines = const [], this.afterSaleText = '', required this.canRefund, required this.raw});
 
   /// 状态下面那一句说明。
   String get statusLine => switch (head.statusText) {
@@ -304,7 +306,14 @@ OrderDetailView orderDetailView(OrderDetail o, String Function(String) asset) {
     payments: (o.payments ?? const <PaymentRecord>[]).map(paymentRow).toList(),
     refunds: (o.refunds ?? const <Refund>[]).map(refundRow).toList(),
     returnLines: [for (final r in o.paymentReturns ?? const <PaymentReturn>[]) paymentReturnLine(r)],
-    canRefund: (o.status == 20 || o.status == 30 || o.status == 40) && refundableItems(o).isNotEmpty,
+    // 已完成的单过了售后期（00151）就不给「申请售后」：服务端会 409 after-sale-window-closed。
+    canRefund: (o.status == 20 || o.status == 30 || o.status == 40) && refundableItems(o).isNotEmpty &&
+        !afterSaleExpired(o.afterSaleDeadline, DateTime.now()),
+    afterSaleText: o.afterSaleDeadline == null
+        ? ''
+        : afterSaleExpired(o.afterSaleDeadline, DateTime.now())
+            ? '已过售后期（${shortTime(o.afterSaleDeadline!)} 截止）'
+            : '售后期至 ${shortTime(o.afterSaleDeadline!)}',
     raw: o,
   );
 }
@@ -381,4 +390,11 @@ String paymentReturnLine(PaymentReturn r) {
   final why = switch (r.reason) { 1 => '重复支付', 2 => '订单关闭后到账', _ => '金额与应付不符' };
   final state = r.status == 40 ? '已原路退回' : '正在原路退回';
   return '多付的 ${yuan(r.amountCents)}（$why）$state';
+}
+
+/// 售后期是否已过（deadline 为空 = 不受限制）。
+bool afterSaleExpired(String? deadline, DateTime now) {
+  if (deadline == null) return false;
+  final d = DateTime.tryParse(deadline);
+  return d != null && !now.isBefore(d);
 }

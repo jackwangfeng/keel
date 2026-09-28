@@ -13,7 +13,7 @@ import (
 
 const getShopPreferences = `-- name: GetShopPreferences :one
 
-SELECT service_phone, timezone, auto_confirm_days, return_ship_days, updated_at
+SELECT service_phone, timezone, auto_confirm_days, return_ship_days, after_sale_days, updated_at
   FROM shop_preferences
 `
 
@@ -22,6 +22,7 @@ type GetShopPreferencesRow struct {
 	Timezone        string
 	AutoConfirmDays int16
 	ReturnShipDays  int16
+	AfterSaleDays   int16
 	UpdatedAt       pgtype.Timestamptz
 }
 
@@ -41,21 +42,23 @@ func (q *Queries) GetShopPreferences(ctx context.Context) (GetShopPreferencesRow
 		&i.Timezone,
 		&i.AutoConfirmDays,
 		&i.ReturnShipDays,
+		&i.AfterSaleDays,
 		&i.UpdatedAt,
 	)
 	return i, err
 }
 
 const upsertShopPreferences = `-- name: UpsertShopPreferences :one
-INSERT INTO shop_preferences (service_phone, timezone, auto_confirm_days, return_ship_days)
+INSERT INTO shop_preferences (service_phone, timezone, auto_confirm_days, return_ship_days, after_sale_days)
 VALUES ($1, $2, $3,
-        $4)
+        $4, $5)
 ON CONFLICT ON CONSTRAINT shop_preferences_pkey DO UPDATE
    SET service_phone     = EXCLUDED.service_phone,
        timezone          = EXCLUDED.timezone,
        auto_confirm_days = EXCLUDED.auto_confirm_days,
-       return_ship_days  = EXCLUDED.return_ship_days
-RETURNING service_phone, timezone, auto_confirm_days, return_ship_days, updated_at
+       return_ship_days  = EXCLUDED.return_ship_days,
+       after_sale_days   = EXCLUDED.after_sale_days
+RETURNING service_phone, timezone, auto_confirm_days, return_ship_days, after_sale_days, updated_at
 `
 
 type UpsertShopPreferencesParams struct {
@@ -63,6 +66,7 @@ type UpsertShopPreferencesParams struct {
 	Timezone        string
 	AutoConfirmDays int16
 	ReturnShipDays  int16
+	AfterSaleDays   int16
 }
 
 type UpsertShopPreferencesRow struct {
@@ -70,6 +74,7 @@ type UpsertShopPreferencesRow struct {
 	Timezone        string
 	AutoConfirmDays int16
 	ReturnShipDays  int16
+	AfterSaleDays   int16
 	UpdatedAt       pgtype.Timestamptz
 }
 
@@ -82,6 +87,7 @@ func (q *Queries) UpsertShopPreferences(ctx context.Context, arg UpsertShopPrefe
 		arg.Timezone,
 		arg.AutoConfirmDays,
 		arg.ReturnShipDays,
+		arg.AfterSaleDays,
 	)
 	var i UpsertShopPreferencesRow
 	err := row.Scan(
@@ -89,6 +95,7 @@ func (q *Queries) UpsertShopPreferences(ctx context.Context, arg UpsertShopPrefe
 		&i.Timezone,
 		&i.AutoConfirmDays,
 		&i.ReturnShipDays,
+		&i.AfterSaleDays,
 		&i.UpdatedAt,
 	)
 	return i, err

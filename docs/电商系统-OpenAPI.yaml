@@ -6381,6 +6381,8 @@ paths:
               .../refund-quantity-exceeded
             · 订单状态不允许申请（如 `10 待支付` / `90 已关闭`，或订单未支付）——
               .../order-status-not-refundable
+            · 订单完成已超过店铺的售后期（`after_sale_days`，默认 15 天）——
+              .../after-sale-window-closed
             · 该 `order_item_id` 已在一张进行中的退款单里 ——
               .../refund-already-in-progress
               （`UNIQUE (refund_id, order_item_id)` 只保证单张单内不重复，
@@ -9291,6 +9293,13 @@ components:
                 有 `payments` 却没有 `refunds` 是不对称的——订单详情页要展示售后进度，
                 否则客户端得再请求一次 `GET /orders/{order_no}/refunds`。
               items: { $ref: '#/components/schemas/Refund' }
+            after_sale_deadline:
+              type: string
+              format: date-time
+              description: |
+                售后截止时间（2026-09-28 起）：只有 `40 已完成` 的订单才出现，= 完成时间 + 店铺设置的
+                `after_sale_days` 天（默认 15）。过了之后申请售后回 409 `after-sale-window-closed`，
+                客户端据此不再显示「申请售后」，并可提示「售后期至 …」。
             payment_returns:
               type: array
               description: |
@@ -11177,7 +11186,7 @@ components:
 
     ShopSettings:
       type: object
-      required: [shop_name, service_phone, timezone, auto_confirm_days, return_ship_days, updated_at]
+      required: [shop_name, service_phone, timezone, auto_confirm_days, return_ship_days, after_sale_days, updated_at]
       properties:
         shop_name:
           type: string
@@ -11199,6 +11208,13 @@ components:
           minimum: 1
           maximum: 365
           description: 退货退款审核通过后多少天未填寄回物流即自动关闭
+        after_sale_days:
+          type: integer
+          minimum: 1
+          maximum: 365
+          description: |
+            售后期：订单**完成**（确认收货）后多少天内可以申请售后，默认 15（2026-09-28 起）。
+            过了之后申请回 409 `after-sale-window-closed`；还没完成的订单不受它限制。
         updated_at:
           type: [string, 'null']
           format: date-time
@@ -11227,6 +11243,11 @@ components:
           type: integer
           minimum: 1
           maximum: 365
+        after_sale_days:
+          type: integer
+          minimum: 1
+          maximum: 365
+          description: 售后期（完成后多少天内可申请售后）。不给即默认 15 —— 老客户端整体替换时不会被拒。
 
     FreightFreeReason:
       type: string

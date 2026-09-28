@@ -870,3 +870,28 @@ func TestMoneyOnlyRefundHasNoReturnShipment(t *testing.T) {
 		t.Fatalf("给仅退款的单直接写寄回物流应撞 chk_refund_return_shipment，实得 %v", err)
 	}
 }
+
+// 售后期（00151）：订单完成后 after_sale_days 天（默认 15）内可以申请售后，过了 409 after-sale-window-closed；
+// 订单详情给 after_sale_deadline。改店铺设置的天数跟着变。
+// 2026-09-28 破坏性测试：完成 400 天后还能申请退货退款。
+func TestAfterSaleWindow(t *testing.T) {
+	cs := newCouponShop(t)
+	b := cs.newBuyer(t, "after-sale")
+	o := cs.placePaid(t, b, cs.NorthStore, cs.ShirtSKU, 1, nil)
+	wantStatus(t, cs.ship(t, o.OrderNo, "sf", "SF"+uniqueKey()), http.StatusCreated, "发货")
+	wantStatus(t, orderAction(t, cs.Host, o.OrderNo, "confirm", b.Token, "cf-"+uniqueKey()), http.StatusOK, "确认收货")
+	// 完成时间拨回 16 天前：默认 15 天已过。
+	adminExec(t, `UPDATE orders SET finished_at = now() - interval '16 days' WHERE order_no = $1`, o.OrderNo)
+	d, lines := cs.lines(t, b, o.OrderNo)
+	if d.AfterSaleDeadline == nil {
+		t.Fatal("已完成的订单详情应带 after_sale_deadline")
+	}
+	w := applyRefund(t, cs.Host, o.OrderNo, b.Token, refundBody(2, [2]int64{lines[cs.ShirtSKU].Id, 1}), "r-"+uniqueKey())
+	if p := problemOf(t, w, http.StatusConflict); p.Type != problem.TypeAfterSaleWindowClosed {
+		t.Fatalf("过了售后期应 409 after-sale-window-closed：%+v", p)
+	}
+	// 店铺把售后期改成 30 天：又能申请了。
+	adminExec(t, `INSERT INTO shop_preferences (merchant_id, after_sale_days) VALUES ($1, 30)
+		ON CONFLICT (merchant_id) DO UPDATE SET after_sale_days = EXCLUDED.after_sale_days`, cs.MerchantID)
+	cs.mustApply(t, b, o.OrderNo, refundBody(2, [2]int64{lines[cs.ShirtSKU].Id, 1}))
+}

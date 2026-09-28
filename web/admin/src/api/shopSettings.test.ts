@@ -6,14 +6,15 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { formOf, shopSettingsBody, timezoneOptions, validateShopSettings, type ShopSettingsForm } from "./shopSettings.ts";
 
-const base: ShopSettingsForm = { timezone: "Asia/Shanghai", autoConfirmDays: 7, returnShipDays: 7, servicePhone: "" };
+const base: ShopSettingsForm = { timezone: "Asia/Shanghai", autoConfirmDays: 7, returnShipDays: 7, afterSaleDays: 15, servicePhone: "" };
 
 test("表单 → 请求体：客服电话留空不带字段，有值时去掉首尾空白", () => {
-    assert.deepEqual(shopSettingsBody(base), { timezone: "Asia/Shanghai", auto_confirm_days: 7, return_ship_days: 7 });
+    assert.deepEqual(shopSettingsBody(base), { timezone: "Asia/Shanghai", auto_confirm_days: 7, return_ship_days: 7, after_sale_days: 15 });
     assert.deepEqual(shopSettingsBody({ ...base, servicePhone: "  400-800  ", timezone: " UTC " }), {
         timezone: "UTC",
         auto_confirm_days: 7,
         return_ship_days: 7,
+        after_sale_days: 15,
         service_phone: "400-800",
     });
     assert.equal("service_phone" in shopSettingsBody({ ...base, servicePhone: "   " }), false);
@@ -26,9 +27,10 @@ test("响应 → 表单：没设客服电话是空串", () => {
         timezone: "Asia/Tokyo",
         auto_confirm_days: 10,
         return_ship_days: 3,
+        after_sale_days: 20,
         updated_at: null,
     });
-    assert.deepEqual(f, { timezone: "Asia/Tokyo", autoConfirmDays: 10, returnShipDays: 3, servicePhone: "" });
+    assert.deepEqual(f, { timezone: "Asia/Tokyo", autoConfirmDays: 10, returnShipDays: 3, afterSaleDays: 20, servicePhone: "" });
 });
 
 test("本地预检：天数 1–365 的整数、时区不能空也不能是 Local、电话至多 32 字", () => {
@@ -36,6 +38,7 @@ test("本地预检：天数 1–365 的整数、时区不能空也不能是 Loca
     assert.deepEqual(validateShopSettings({ ...base, autoConfirmDays: 1, returnShipDays: 365 }), {});
     assert.ok(validateShopSettings({ ...base, autoConfirmDays: 0 }).autoConfirmDays);
     assert.ok(validateShopSettings({ ...base, returnShipDays: 366 }).returnShipDays);
+    assert.ok(validateShopSettings({ ...base, afterSaleDays: 0 }).afterSaleDays);
     assert.ok(validateShopSettings({ ...base, returnShipDays: 2.5 }).returnShipDays);
     assert.ok(validateShopSettings({ ...base, timezone: "  " }).timezone);
     assert.ok(validateShopSettings({ ...base, timezone: "Local" }).timezone);

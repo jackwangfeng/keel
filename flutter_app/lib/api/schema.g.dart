@@ -3439,9 +3439,10 @@ class OrderDetail {
   final List<OrderItem>? items;
   final List<PaymentRecord>? payments;
   final List<Refund>? refunds;
+  final String? afterSaleDeadline;
   final List<PaymentReturn>? paymentReturns;
   final String? autoConfirmAt;
-  const OrderDetail({required this.orderNo, required this.storeId, this.regionId, required this.status, required this.refundStatus, this.goodsAmountCents, this.freightCents, this.freightDiscountCents, this.discountCents, this.userCouponId, this.couponName, this.promotionDiscountCents, this.promotions, required this.payableCents, this.paidCents, this.refundedCents, this.expireAt, required this.createdAt, this.paidAt, this.shippedAt, this.finishedAt, this.receiver, this.store, this.freight, this.items, this.payments, this.refunds, this.paymentReturns, this.autoConfirmAt});
+  const OrderDetail({required this.orderNo, required this.storeId, this.regionId, required this.status, required this.refundStatus, this.goodsAmountCents, this.freightCents, this.freightDiscountCents, this.discountCents, this.userCouponId, this.couponName, this.promotionDiscountCents, this.promotions, required this.payableCents, this.paidCents, this.refundedCents, this.expireAt, required this.createdAt, this.paidAt, this.shippedAt, this.finishedAt, this.receiver, this.store, this.freight, this.items, this.payments, this.refunds, this.afterSaleDeadline, this.paymentReturns, this.autoConfirmAt});
   factory OrderDetail.fromJson(Map<String, dynamic> j) => OrderDetail(
         orderNo: j['order_no'] as String,
         storeId: (j['store_id'] as num).toInt(),
@@ -3470,6 +3471,7 @@ class OrderDetail {
         items: (j['items'] as List?)?.map((e) => OrderItem.fromJson(e as Map<String, dynamic>)).toList(),
         payments: (j['payments'] as List?)?.map((e) => PaymentRecord.fromJson(e as Map<String, dynamic>)).toList(),
         refunds: (j['refunds'] as List?)?.map((e) => Refund.fromJson(e as Map<String, dynamic>)).toList(),
+        afterSaleDeadline: j['after_sale_deadline'] as String?,
         paymentReturns: (j['payment_returns'] as List?)?.map((e) => PaymentReturn.fromJson(e as Map<String, dynamic>)).toList(),
         autoConfirmAt: j['auto_confirm_at'] as String?,
       );
@@ -3501,6 +3503,7 @@ class OrderDetail {
         if (items != null) 'items': items!.map((e) => e.toJson()).toList(),
         if (payments != null) 'payments': payments!.map((e) => e.toJson()).toList(),
         if (refunds != null) 'refunds': refunds!.map((e) => e.toJson()).toList(),
+        if (afterSaleDeadline != null) 'after_sale_deadline': afterSaleDeadline,
         if (paymentReturns != null) 'payment_returns': paymentReturns!.map((e) => e.toJson()).toList(),
         if (autoConfirmAt != null) 'auto_confirm_at': autoConfirmAt,
       };
@@ -5024,14 +5027,16 @@ class ShopSettings {
   final String timezone;
   final int autoConfirmDays;
   final int returnShipDays;
+  final int afterSaleDays;
   final String? updatedAt;
-  const ShopSettings({required this.shopName, this.servicePhone, required this.timezone, required this.autoConfirmDays, required this.returnShipDays, this.updatedAt});
+  const ShopSettings({required this.shopName, this.servicePhone, required this.timezone, required this.autoConfirmDays, required this.returnShipDays, required this.afterSaleDays, this.updatedAt});
   factory ShopSettings.fromJson(Map<String, dynamic> j) => ShopSettings(
         shopName: j['shop_name'] as String,
         servicePhone: j['service_phone'] as String?,
         timezone: j['timezone'] as String,
         autoConfirmDays: (j['auto_confirm_days'] as num).toInt(),
         returnShipDays: (j['return_ship_days'] as num).toInt(),
+        afterSaleDays: (j['after_sale_days'] as num).toInt(),
         updatedAt: j['updated_at'] as String?,
       );
   Map<String, dynamic> toJson() => {
@@ -5040,6 +5045,7 @@ class ShopSettings {
         'timezone': timezone,
         'auto_confirm_days': autoConfirmDays,
         'return_ship_days': returnShipDays,
+        'after_sale_days': afterSaleDays,
         'updated_at': updatedAt,
       };
 }
@@ -5049,18 +5055,21 @@ class ShopSettingsInput {
   final String timezone;
   final int autoConfirmDays;
   final int returnShipDays;
-  const ShopSettingsInput({this.servicePhone, required this.timezone, required this.autoConfirmDays, required this.returnShipDays});
+  final int? afterSaleDays;
+  const ShopSettingsInput({this.servicePhone, required this.timezone, required this.autoConfirmDays, required this.returnShipDays, this.afterSaleDays});
   factory ShopSettingsInput.fromJson(Map<String, dynamic> j) => ShopSettingsInput(
         servicePhone: j['service_phone'] as String?,
         timezone: j['timezone'] as String,
         autoConfirmDays: (j['auto_confirm_days'] as num).toInt(),
         returnShipDays: (j['return_ship_days'] as num).toInt(),
+        afterSaleDays: (j['after_sale_days'] as num?)?.toInt(),
       );
   Map<String, dynamic> toJson() => {
         if (servicePhone != null) 'service_phone': servicePhone,
         'timezone': timezone,
         'auto_confirm_days': autoConfirmDays,
         'return_ship_days': returnShipDays,
+        if (afterSaleDays != null) 'after_sale_days': afterSaleDays,
       };
 }
 

@@ -29,7 +29,7 @@ const saving = ref(false);
 const loadError = ref<unknown>(null);
 const saveError = ref<unknown>(null);
 const current = ref<ShopSettings | null>(null);
-const form = reactive<ShopSettingsForm>({ timezone: "", autoConfirmDays: 7, returnShipDays: 7, servicePhone: "" });
+const form = reactive<ShopSettingsForm>({ timezone: "", autoConfirmDays: 7, returnShipDays: 7, afterSaleDays: 15, servicePhone: "" });
 
 const zones = computed(() => {
     let all: string[] = [];
@@ -119,6 +119,16 @@ onMounted(() => void load());
                 <span class="hint">
                     到期由系统替买家确认收货。按「此刻」的天数判断：改短之后，已发货超过新天数的单会在十分钟内被确认；
                     有售后在途的单暂停，售后结束后再确认。
+                </span>
+            </el-form-item>
+
+            <el-form-item label="售后期" :error="problems.afterSaleDays">
+                <span>订单完成后</span>
+                <el-input-number v-model="form.afterSaleDays" :min="DAYS_MIN" :max="DAYS_MAX" :step="1" step-strictly />
+                <span>天内可申请售后</span>
+                <span class="hint">
+                    从买家确认收货（或系统自动确认）算起，过了这个天数买家就不能再申请退款 / 退货。还没完成的订单不受限制。
+                    按「此刻」的天数判断：改长之后，已过期的单重新可以申请。
                 </span>
             </el-form-item>
 

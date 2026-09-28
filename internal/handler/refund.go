@@ -211,6 +211,10 @@ func writeRefundError(c *gin.Context, err error) {
 		writeProblemDetail(c, http.StatusConflict, problem.TypeOrderStatusNotRefundable,
 			"这笔订单当前不能申请退款", err)
 
+	case errors.Is(err, service.ErrAfterSaleWindowClosed):
+		writeProblemDetail(c, http.StatusConflict, problem.TypeAfterSaleWindowClosed,
+			"这笔订单已过售后期，不能再申请售后", err)
+
 	case errors.Is(err, service.ErrRefundAlreadyInProgress):
 		writeProblemDetail(c, http.StatusConflict, problem.TypeRefundAlreadyInProgress,
 			"这件商品已经有一张进行中的退款单", err)

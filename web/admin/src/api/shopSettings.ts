@@ -15,6 +15,8 @@ export interface ShopSettingsForm {
     timezone: string;
     autoConfirmDays: number;
     returnShipDays: number;
+    /** 售后期：订单完成后多少天内可申请售后（00151，默认 15）。 */
+    afterSaleDays: number;
     servicePhone: string;
 }
 
@@ -28,6 +30,7 @@ export function formOf(s: ShopSettings): ShopSettingsForm {
         timezone: s.timezone,
         autoConfirmDays: s.auto_confirm_days,
         returnShipDays: s.return_ship_days,
+        afterSaleDays: s.after_sale_days,
         servicePhone: s.service_phone ?? "",
     };
 }
@@ -41,6 +44,7 @@ export function shopSettingsBody(f: ShopSettingsForm): ShopSettingsInput {
         timezone: f.timezone.trim(),
         auto_confirm_days: f.autoConfirmDays,
         return_ship_days: f.returnShipDays,
+        after_sale_days: f.afterSaleDays,
     };
     const phone = f.servicePhone.trim();
     if (phone !== "") body.service_phone = phone;
@@ -56,7 +60,7 @@ export function validateShopSettings(f: ShopSettingsForm): Partial<Record<keyof 
     const tz = f.timezone.trim();
     if (tz === "") out.timezone = "请选择时区";
     else if (tz.toLowerCase() === "local") out.timezone = "不能用 Local（那是服务器所在的时区，不是店铺的）";
-    for (const key of ["autoConfirmDays", "returnShipDays"] as const) {
+    for (const key of ["autoConfirmDays", "returnShipDays", "afterSaleDays"] as const) {
         const v = f[key];
         if (!Number.isInteger(v) || v < DAYS_MIN || v > DAYS_MAX) out[key] = `只能是 ${DAYS_MIN} 到 ${DAYS_MAX} 之间的整数`;
     }

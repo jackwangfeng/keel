@@ -232,6 +232,7 @@ class _OrderPageState extends State<OrderPage> {
                 if (v.hasDiscount) _kv('优惠合计', '-${v.discountText}'),
                 if (v.hasPaid) _kv('已付', v.paidText, key: 'order.paid'),
                 if (v.refundedText.isNotEmpty) _kv('已退', v.refundedText),
+                if (v.afterSaleText.isNotEmpty) _kv('售后', v.afterSaleText),
                 const Divider(height: 29, color: KeelColors.line),
                 Row(children: [
                   const Text('应付', style: KeelText.section),

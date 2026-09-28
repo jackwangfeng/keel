@@ -180,4 +180,11 @@ void main() {
     expect(shortageText(1), '库存不足，仅剩 1 件');
     expect(shortageText(0), '库存不足，已售罄');
   });
+
+  test('售后期：截止之前可申请，过了不给入口', () {
+    final now = DateTime.utc(2026, 10, 1, 12);
+    expect(afterSaleExpired(null, now), isFalse);
+    expect(afterSaleExpired('2026-10-02T00:00:00Z', now), isFalse);
+    expect(afterSaleExpired('2026-10-01T00:00:00Z', now), isTrue);
+  });
 }

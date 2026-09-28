@@ -1718,6 +1718,8 @@ export type OrderDetail = {
   payments? : PaymentRecord[]
   /** 该订单下的全部退款单，按申请时间倒序。 */
   refunds? : Refund[]
+  /** 售后截止时间（2026-09-28 起）：只有 `40 已完成` 的订单才出现，= 完成时间 + 店铺设置的 */
+  after_sale_deadline? : string
   /** 这一单被**原路退回的多收款**（2026-09-28 起）：订单只认一笔到账，其余的——重复支付 */
   payment_returns? : PaymentReturn[]
   /** 自动确认收货的截止时间：只有 `30 已发货` 的订单才出现， */
@@ -2436,6 +2438,8 @@ export type ShopSettings = {
   auto_confirm_days : number
   /** 退货退款审核通过后多少天未填寄回物流即自动关闭 */
   return_ship_days : number
+  /** 售后期：订单**完成**（确认收货）后多少天内可以申请售后，默认 15（2026-09-28 起）。 */
+  after_sale_days : number
   /** 最近一次修改的时间；从没改过（全是默认值）为 null */
   updated_at : string | null
 }
@@ -2447,6 +2451,8 @@ export type ShopSettingsInput = {
   timezone : string
   auto_confirm_days : number
   return_ship_days : number
+  /** 售后期（完成后多少天内可申请售后）。不给即默认 15 —— 老客户端整体替换时不会被拒。 */
+  after_sale_days? : number
 }
 
 /** `available_qty` 在这里是**允许的**，而在 `SkuUpdateRequest` 里不允许： */

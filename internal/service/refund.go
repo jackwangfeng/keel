@@ -71,6 +71,8 @@ var (
 	// ErrOrderNotRefundable：订单状态不允许申请售后（待支付、已关闭、整单退款中、
 	// 已退款、没付过钱）。契约：409 order-status-not-refundable。
 	ErrOrderNotRefundable = errors.New("订单当前状态不允许申请退款")
+	// ErrAfterSaleWindowClosed：订单完成已超过店铺的售后期（shop_preferences.after_sale_days，00151）。
+	ErrAfterSaleWindowClosed = errors.New("已过售后期")
 
 	// ErrRefundQuantityExceeded：退的件数超过「购买 - 已退」。契约：409。
 	ErrRefundQuantityExceeded = errors.New("退款件数超出可退范围")
@@ -327,6 +329,14 @@ func (s *RefundService) Create(ctx context.Context, orderNo string, req RefundCr
 			}
 			if order.PaidCents <= 0 {
 				return repository.Refund{}, fmt.Errorf("%w: 订单 %s 实收为 0", ErrOrderNotRefundable, orderNo)
+			}
+			// 售后期（00151）：已完成的订单在完成后 after_sale_days 天内可以申请，过了就不行。
+			// 还没完成的（已支付、已发货）不受它限制。2026-09-28 破坏性测试：完成 400 天后照样能申请退货退款。
+			if deadline, err := afterSaleDeadline(ctx, tx, order); err != nil {
+				return repository.Refund{}, err
+			} else if deadline != nil && !s.now().Before(*deadline) {
+				return repository.Refund{}, fmt.Errorf("%w: 订单 %s 的售后期到 %s 为止", ErrAfterSaleWindowClosed, orderNo,
+					deadline.Format(time.RFC3339))
 			}
 			if req.RefundType == repository.RefundTypeReturnGoods && order.ShippedAt == nil {
 				// 货还没发出去，没有东西可以退回来。契约说「已发货但用户还没收到货时
@@ -1072,4 +1082,18 @@ func newSandboxRefundID(now time.Time) (string, error) {
 		return "", fmt.Errorf("生成沙箱退款流水号失败: %w", err)
 	}
 	return sandboxRefundPrefix + now.UTC().Format("20060102150405") + "-" + hex.EncodeToString(b[:]), nil
+}
+
+// afterSaleDeadline 是一笔已完成订单的售后截止时间（完成时间 + 店铺的 after_sale_days 天）；
+// 还没完成的订单返回 nil（不受售后期限制）。申请售后与订单详情（OrderDetail.after_sale_deadline）共用。
+func afterSaleDeadline(ctx context.Context, tx repository.Tx, order repository.Order) (*time.Time, error) {
+	if order.Status != orderStatusFinished || order.FinishedAt == nil {
+		return nil, nil
+	}
+	prefs, err := tx.ShopPreferences(ctx)
+	if err != nil {
+		return nil, err
+	}
+	d := order.FinishedAt.Add(time.Duration(prefs.AfterSaleDays) * 24 * time.Hour)
+	return &d, nil
 }

@@ -116,6 +116,8 @@ func (h *OrderHandler) Detail(c *gin.Context) {
 
 		// 自动确认收货的截止（00059）：只有已发货的单才有。
 		AutoConfirmAt: d.AutoConfirmAt,
+		// 售后截止（00151）：只有已完成的单才有。
+		AfterSaleDeadline: d.AfterSaleDeadline,
 	})
 }
 

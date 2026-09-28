@@ -47,6 +47,7 @@ func (h *AdminShopSettingsHandler) Replace(c *gin.Context) {
 		Timezone:        raw.Timezone,
 		AutoConfirmDays: raw.AutoConfirmDays,
 		ReturnShipDays:  raw.ReturnShipDays,
+		AfterSaleDays:   raw.AfterSaleDays,
 	})
 	if err != nil {
 		writeShopSettingsError(c, err)
@@ -62,6 +63,7 @@ func apiShopSettings(s service.ShopSettings) api.ShopSettings {
 		Timezone:        s.Timezone,
 		AutoConfirmDays: s.AutoConfirmDays,
 		ReturnShipDays:  s.ReturnShipDays,
+		AfterSaleDays:   s.AfterSaleDays,
 		UpdatedAt:       s.UpdatedAt,
 	}
 }

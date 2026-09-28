@@ -41,7 +41,7 @@ so "which one is running?" never depends on anyone's memory.
 
 Core migrations `00140` (`search_logs.fallback`, and the column on the `agent_ro.search_logs` view), `00141`
 (`agent_briefs.corrects_id`), `00142` (price upper bounds, `NOT VALID`) and `00150` (`payment_intents`,
-`payment_returns`).
+`payment_returns`) and `00151` (`shop_preferences.after_sale_days`).
 
 ### Added
 
@@ -77,8 +77,20 @@ Core migrations `00140` (`search_logs.fallback`, and the column on the `agent_ro
   missed and retries failed submissions. New `GET /admin/payment-returns`; `OrderDetail.payment_returns` for buyers.
   Previously the money was kept with only an error log.
 
+- **After-sale window**: `ShopSettings.after_sale_days` (default 15). A finished order can be refunded only within that
+  many days of completion; after that `POST /orders/{no}/refunds` is a 409 `after-sale-window-closed`.
+  `OrderDetail.after_sale_deadline` tells clients when it ends; the Flutter app hides the refund entry after it.
+- `OrderPreviewItem.available_qty`: the store's current stock for each line, so checkout can flag a shortage before
+  submitting (the Flutter checkout does, and disables submit).
+- Searching for a product's exact title puts that product first (when in stock).
+- A platform session switched into a shop with `X-Keel-Merchant` now manages that shop's staff (create, list,
+  update, reissue); without the header it still manages platform staff.
+
 ### Fixed
 
+- A pending order at a closed store (or a disabled region) can no longer start a payment (409
+  `store-unavailable`); paid orders there can still be shipped.
+- Refunding an unshipped line bought at a promotion price releases its promotion quota (the per-buyer limit is kept).
 - Unit prices had no upper bound; a huge price overflowed order totals (500) or produced an absurd order. Capped at
   100 million yuan everywhere prices are written.
 - An unshipped order refunded line by line (a second request while the first was pending) never refunded the freight

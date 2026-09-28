@@ -13189,6 +13189,8 @@ export interface paths {
                  *       .../refund-quantity-exceeded
                  *     · 订单状态不允许申请（如 `10 待支付` / `90 已关闭`，或订单未支付）——
                  *       .../order-status-not-refundable
+                 *     · 订单完成已超过店铺的售后期（`after_sale_days`，默认 15 天）——
+                 *       .../after-sale-window-closed
                  *     · 该 `order_item_id` 已在一张进行中的退款单里 ——
                  *       .../refund-already-in-progress
                  *       （`UNIQUE (refund_id, order_item_id)` 只保证单张单内不重复，
@@ -17168,6 +17170,13 @@ export interface components {
              */
             refunds?: components["schemas"]["Refund"][];
             /**
+             * Format: date-time
+             * @description 售后截止时间（2026-09-28 起）：只有 `40 已完成` 的订单才出现，= 完成时间 + 店铺设置的
+             *     `after_sale_days` 天（默认 15）。过了之后申请售后回 409 `after-sale-window-closed`，
+             *     客户端据此不再显示「申请售后」，并可提示「售后期至 …」。
+             */
+            after_sale_deadline?: string;
+            /**
              * @description 这一单被**原路退回的多收款**（2026-09-28 起）：订单只认一笔到账，其余的——重复支付
              *     （换了渠道又付了一次）、订单取消或超时关闭之后才到的、金额与应付不符的——系统自动原路退回，
              *     不需要申请。没有时整个缺席。客户端据此显示「多付的 ¥x 已原路退回」。
@@ -18942,6 +18951,11 @@ export interface components {
             /** @description 退货退款审核通过后多少天未填寄回物流即自动关闭 */
             return_ship_days: number;
             /**
+             * @description 售后期：订单**完成**（确认收货）后多少天内可以申请售后，默认 15（2026-09-28 起）。
+             *     过了之后申请回 409 `after-sale-window-closed`；还没完成的订单不受它限制。
+             */
+            after_sale_days: number;
+            /**
              * Format: date-time
              * @description 最近一次修改的时间；从没改过（全是默认值）为 null
              */
@@ -18954,6 +18968,8 @@ export interface components {
             timezone: string;
             auto_confirm_days: number;
             return_ship_days: number;
+            /** @description 售后期（完成后多少天内可申请售后）。不给即默认 15 —— 老客户端整体替换时不会被拒。 */
+            after_sale_days?: number;
         };
         /**
          * @description 这一组为什么免运费：`threshold` 满额包邮、`quantity` 满件包邮、

@@ -81,6 +81,7 @@ const (
 	//   order-not-found               404  申请退款时订单不存在或不是你的（契约在这一条上
 	//                                      点名了这个 type，别的 404 仍是通用的 not-found）
 	//   order-status-not-refundable   409  待支付 / 已关闭 / 整单退款中的订单不能申请售后
+	//   after-sale-window-closed      409  订单完成超过店铺设置的售后期（after_sale_days，00151）
 	//   refund-quantity-exceeded      409  退的件数超过「购买 - 已退」
 	//   refund-already-in-progress    409  这一行已经在一张进行中的退款单里
 	//   order-item-mismatch           422  order_item_id 不属于这一单
@@ -96,6 +97,7 @@ const (
 	TypeTrackingNoDuplicated      = "https://keel.dev/problems/tracking-no-duplicated"
 	TypeOrderNotFound             = "https://keel.dev/problems/order-not-found"
 	TypeOrderStatusNotRefundable  = "https://keel.dev/problems/order-status-not-refundable"
+	TypeAfterSaleWindowClosed     = "https://keel.dev/problems/after-sale-window-closed"
 	TypeRefundQuantityExceeded    = "https://keel.dev/problems/refund-quantity-exceeded"
 	TypeRefundAlreadyInProgress   = "https://keel.dev/problems/refund-already-in-progress"
 	TypeOrderItemMismatch         = "https://keel.dev/problems/order-item-mismatch"

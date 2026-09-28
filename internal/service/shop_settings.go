@@ -49,6 +49,8 @@ type ShopSettingsInput struct {
 	Timezone        string
 	AutoConfirmDays int
 	ReturnShipDays  int
+	// AfterSaleDays 为 nil 即默认 15（契约里它是可选的，老客户端整体替换不带它）。
+	AfterSaleDays *int
 }
 
 // 契约 ShopSettingsInput 的边界。天数的边界与 00059 的两条 CHECK 一致。
@@ -85,6 +87,10 @@ func (s *ShopSettingsService) Replace(ctx context.Context, in ShopSettingsInput)
 		Timezone:        strings.TrimSpace(in.Timezone),
 		AutoConfirmDays: in.AutoConfirmDays,
 		ReturnShipDays:  in.ReturnShipDays,
+		AfterSaleDays:   repository.DefaultAfterSaleDays,
+	}
+	if in.AfterSaleDays != nil {
+		p.AfterSaleDays = *in.AfterSaleDays
 	}
 	if !validShopTimezone(p.Timezone) {
 		c.add("timezone", "不是能加载的 IANA 时区名（如 Asia/Shanghai）")
@@ -94,6 +100,9 @@ func (s *ShopSettingsService) Replace(ctx context.Context, in ShopSettingsInput)
 	}
 	if p.ReturnShipDays < shopSettingsMinDays || p.ReturnShipDays > shopSettingsMaxDays {
 		c.add("return_ship_days", "只能是 1 到 365 之间的整数")
+	}
+	if p.AfterSaleDays < shopSettingsMinDays || p.AfterSaleDays > shopSettingsMaxDays {
+		c.add("after_sale_days", "只能是 1 到 365 之间的整数")
 	}
 	if in.ServicePhone != nil {
 		// 空串与全空白按契约 minLength 1 是 422，不悄悄当成「清空」：清空的写法是不给这个字段。

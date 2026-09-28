@@ -949,6 +949,7 @@ type ShopPreference struct {
 	ReturnShipDays  int16
 	UpdatedAt       pgtype.Timestamptz
 	PublicAiLog     bool
+	AfterSaleDays   int16
 }
 
 type ShopSetting struct {

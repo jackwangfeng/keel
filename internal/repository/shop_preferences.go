@@ -26,6 +26,8 @@ const (
 	DefaultAutoConfirmDays = 7
 	DefaultShopTimezone    = "Asia/Shanghai"
 	DefaultReturnShipDays  = 7
+	// DefaultAfterSaleDays 是售后期：订单完成后多少天内可申请售后（00151）。
+	DefaultAfterSaleDays = 15
 )
 
 // ShopPreferences 是一家店可改的设置。UpdatedAt 为 nil 表示这家店还没有那一行，
@@ -35,6 +37,7 @@ type ShopPreferences struct {
 	Timezone        string
 	AutoConfirmDays int
 	ReturnShipDays  int
+	AfterSaleDays   int
 	UpdatedAt       *time.Time
 }
 
@@ -44,6 +47,7 @@ func DefaultShopPreferences() ShopPreferences {
 		Timezone:        DefaultShopTimezone,
 		AutoConfirmDays: DefaultAutoConfirmDays,
 		ReturnShipDays:  DefaultReturnShipDays,
+		AfterSaleDays:   DefaultAfterSaleDays,
 	}
 }
 
@@ -67,7 +71,7 @@ func (t tenantTx) ShopPreferences(ctx context.Context) (ShopPreferences, error) 
 	return ShopPreferences{
 		ServicePhone: r.ServicePhone, Timezone: r.Timezone,
 		AutoConfirmDays: int(r.AutoConfirmDays), ReturnShipDays: int(r.ReturnShipDays),
-		UpdatedAt: timePtr(r.UpdatedAt),
+		AfterSaleDays: int(r.AfterSaleDays), UpdatedAt: timePtr(r.UpdatedAt),
 	}, nil
 }
 
@@ -77,6 +81,7 @@ func (t tenantTx) ReplaceShopPreferences(ctx context.Context, p ShopPreferences)
 		Timezone:        p.Timezone,
 		AutoConfirmDays: int16(p.AutoConfirmDays),
 		ReturnShipDays:  int16(p.ReturnShipDays),
+		AfterSaleDays:   int16(p.AfterSaleDays),
 	})
 	if err != nil {
 		return ShopPreferences{}, err
@@ -84,7 +89,7 @@ func (t tenantTx) ReplaceShopPreferences(ctx context.Context, p ShopPreferences)
 	return ShopPreferences{
 		ServicePhone: r.ServicePhone, Timezone: r.Timezone,
 		AutoConfirmDays: int(r.AutoConfirmDays), ReturnShipDays: int(r.ReturnShipDays),
-		UpdatedAt: timePtr(r.UpdatedAt),
+		AfterSaleDays: int(r.AfterSaleDays), UpdatedAt: timePtr(r.UpdatedAt),
 	}, nil
 }
 
