@@ -1,5 +1,35 @@
 [
   {
+    "description": "确认事件处理到哪一条（含）为止：之后 list_events 不带 after_id 就从这里之后读。游标只进不退。",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "up_to_id": {
+          "description": "确认到这个事件 id（含）为止都处理完了；一般传 list_events 返回的 next_after_id",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "up_to_id"
+      ],
+      "type": "object"
+    },
+    "name": "ack_events",
+    "outputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "cursor": {
+          "description": "确认之后的游标（只进不退）",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "cursor"
+      ],
+      "type": "object"
+    }
+  },
+  {
     "description": "商品详情：全部 SKU（规格、价格、库存）与图片。",
     "inputSchema": {
       "additionalProperties": false,
@@ -307,6 +337,90 @@
       "required": [
         "items",
         "total"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "拉取你管辖范围内的新事件（库存跌破预警线、买家申请售后、无结果词突增、提案有了结果），按 id 升序。不传 after_id 就从上次 ack_events 的位置接着读；处理完一页用 ack_events(next_after_id) 确认。",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "after_id": {
+          "description": "从这个事件 id 之后读；不传则从你上次 ack_events 确认的位置接着读",
+          "type": [
+            "null",
+            "integer"
+          ]
+        },
+        "limit": {
+          "description": "最多返回几条，默认 50，最多 100",
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "name": "list_events",
+    "outputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "cursor": {
+          "description": "你上次 ack_events 确认到的事件 id（从没确认过是 0）",
+          "type": "integer"
+        },
+        "has_more": {
+          "description": "后面还有，接着 list_events(after_id=next_after_id)",
+          "type": "boolean"
+        },
+        "items": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "created_at": {
+                "type": "string"
+              },
+              "id": {
+                "type": "integer"
+              },
+              "payload": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "store_id": {
+                "description": "事件属于哪家门店；没有即全店口径",
+                "type": [
+                  "null",
+                  "integer"
+                ]
+              },
+              "type": {
+                "description": "stock_low / refund_created / search_zero_spike / proposal_decided",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "type",
+              "payload",
+              "created_at"
+            ],
+            "type": "object"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        },
+        "next_after_id": {
+          "description": "这一页最后一条的 id；处理完就 ack_events(next_after_id)",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "items",
+        "cursor",
+        "next_after_id",
+        "has_more"
       ],
       "type": "object"
     }

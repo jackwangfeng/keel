@@ -62,6 +62,20 @@ so "which one is running?" never depends on anyone's memory.
   for rejections). Marketing and product proposals are shop-wide: only merchant-wide AI staff can file them and only
   merchant-wide staff can approve them. `AgentProposal.store_id` is now optional; the proposal list filters by
   `kind`.
+- **AI staff events (00121, AI operations M10).** Keel records an event when a (store, SKU) drops to or below its
+  warning line (`stock_low`, same basis as the inventory-alerts report, at most once per pair per 24 hours), a buyer
+  files an after-sales request (`refund_created`, written in the same transaction), a zero-result search term is seen
+  5+ times in an hour (`search_zero_spike`, shop-wide, once per term per day), or a proposal is executed / fails /
+  is rejected / expires (`proposal_decided`). A background sweep every 5 minutes emits the first and third kind; it
+  reads stock through the inventory service, so it works with inventory in its own database. New MCP tools
+  `list_events` (filtered by the agent's scope: store events only for stores it can operate, shop-wide events only
+  for merchant-wide agents) and `ack_events` (a per-agent cursor that only moves forward).
+- **Event webhooks for AI staff.** `GET/PUT/DELETE /admin/agents/{staff_id}/webhook` (shop admins only): one https
+  URL per AI staff member; the signing secret is returned only on creation or with `rotate_secret: true`. Events are
+  delivered through the jobs queue as `POST` JSON with `X-Keel-Event`, `X-Keel-Event-Id` and
+  `X-Keel-Signature: sha256=<hex HMAC-SHA256 of the body>`, 5 s timeout, up to 6 attempts with exponential backoff,
+  only for events within the agent's scope at delivery time; every attempt is logged and the last 20 are shown by
+  `GET`. See `docs/AI接口.md` 「事件」.
 
 ## [0.4.0] - 2026-09-28
 

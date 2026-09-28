@@ -35,7 +35,11 @@ func ExpireProposalsOnce(ctx context.Context, repo ProposalExpiryRepository) (in
 		err := repo.WithTenant(tenant.NewContext(ctx, m), func(tx repository.Tx) error {
 			n, err := tx.ExpireAgentProposals(ctx)
 			total += n
-			return err
+			if err != nil {
+				return err
+			}
+			// 刚过期的提案各补一条 proposal_decided（AI 员工事件，agent_event.go），同一个事务。
+			return emitExpiredProposalEvents(ctx, tx)
 		})
 		if err != nil {
 			return total, err

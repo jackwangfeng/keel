@@ -1978,6 +1978,78 @@ class AgentUpdateRequest {
       };
 }
 
+class AgentWebhookDelivery {
+  final int id;
+  final int eventId;
+  final int attempt;
+  final int? statusCode;
+  final String error;
+  final String deliveredAt;
+  const AgentWebhookDelivery({required this.id, required this.eventId, required this.attempt, this.statusCode, required this.error, required this.deliveredAt});
+  factory AgentWebhookDelivery.fromJson(Map<String, dynamic> j) => AgentWebhookDelivery(
+        id: (j['id'] as num).toInt(),
+        eventId: (j['event_id'] as num).toInt(),
+        attempt: (j['attempt'] as num).toInt(),
+        statusCode: (j['status_code'] as num?)?.toInt(),
+        error: j['error'] as String,
+        deliveredAt: j['delivered_at'] as String,
+      );
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'event_id': eventId,
+        'attempt': attempt,
+        if (statusCode != null) 'status_code': statusCode,
+        'error': error,
+        'delivered_at': deliveredAt,
+      };
+}
+
+class AgentWebhook {
+  final int id;
+  final String url;
+  final bool enabled;
+  final String? secret;
+  final String createdAt;
+  final String updatedAt;
+  final List<AgentWebhookDelivery>? recentDeliveries;
+  const AgentWebhook({required this.id, required this.url, required this.enabled, this.secret, required this.createdAt, required this.updatedAt, this.recentDeliveries});
+  factory AgentWebhook.fromJson(Map<String, dynamic> j) => AgentWebhook(
+        id: (j['id'] as num).toInt(),
+        url: j['url'] as String,
+        enabled: j['enabled'] as bool,
+        secret: j['secret'] as String?,
+        createdAt: j['created_at'] as String,
+        updatedAt: j['updated_at'] as String,
+        recentDeliveries: (j['recent_deliveries'] as List?)?.map((e) => AgentWebhookDelivery.fromJson(e as Map<String, dynamic>)).toList(),
+      );
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'url': url,
+        'enabled': enabled,
+        if (secret != null) 'secret': secret,
+        'created_at': createdAt,
+        'updated_at': updatedAt,
+        if (recentDeliveries != null) 'recent_deliveries': recentDeliveries!.map((e) => e.toJson()).toList(),
+      };
+}
+
+class AgentWebhookPutRequest {
+  final String url;
+  final bool? enabled;
+  final bool? rotateSecret;
+  const AgentWebhookPutRequest({required this.url, this.enabled, this.rotateSecret});
+  factory AgentWebhookPutRequest.fromJson(Map<String, dynamic> j) => AgentWebhookPutRequest(
+        url: j['url'] as String,
+        enabled: j['enabled'] as bool?,
+        rotateSecret: j['rotate_secret'] as bool?,
+      );
+  Map<String, dynamic> toJson() => {
+        'url': url,
+        if (enabled != null) 'enabled': enabled,
+        if (rotateSecret != null) 'rotate_secret': rotateSecret,
+      };
+}
+
 class AgentWhoAmI {
   final int staffId;
   final String name;

@@ -104,6 +104,11 @@ func newAdminShop(t *testing.T) adminShop {
 			`DELETE FROM region_product_overrides WHERE merchant_id = $1`,
 			// AI 员工的提案（00091）指向 skus / stores / staff，排在它们之前。
 			`DELETE FROM agent_auto_policies WHERE merchant_id = $1`,
+			// AI 员工事件（00121）：投递记录指向事件与 webhook，webhook / 游标指向 staff，事件指向 stores。
+			`DELETE FROM agent_webhook_deliveries WHERE merchant_id = $1`,
+			`DELETE FROM agent_webhooks WHERE merchant_id = $1`,
+			`DELETE FROM agent_event_cursors WHERE merchant_id = $1`,
+			`DELETE FROM agent_events WHERE merchant_id = $1`,
 			`DELETE FROM agent_proposals WHERE merchant_id = $1`,
 			`DELETE FROM store_local_delivery WHERE merchant_id = $1`,
 			`DELETE FROM local_delivery_templates WHERE merchant_id = $1`,

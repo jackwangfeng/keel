@@ -59,7 +59,9 @@ type MCPDeps struct {
 	Proposals *service.AgentProposalService
 	// Briefs 是简报（任务 5）。
 	Briefs *service.AgentBriefService
-	Log     *slog.Logger
+	// Events 是事件的拉取（M10，mcp_tools_events.go）。
+	Events *service.AgentEventService
+	Log    *slog.Logger
 	// Version 进 MCP 的 serverInfo，agent 能看到连的是哪个版本。
 	Version string
 }

@@ -381,6 +381,9 @@ func (s *AgentProposalService) runClaimed(ctx context.Context, p repository.Agen
 				return err
 			}
 		}
+		if err := emitProposalDecided(ctx, tx, proposalID); err != nil { // AI 员工事件（agent_event.go）
+			return err
+		}
 		var e error
 		out, e = tx.FindAgentProposal(ctx, proposalID)
 		return e
@@ -442,6 +445,9 @@ func (s *AgentProposalService) Reject(ctx context.Context, proposalID int64, rea
 			return err
 		}
 		if err := tx.RejectAgentProposal(ctx, proposalID, id.StaffID, strings.TrimSpace(reason)); err != nil {
+			return err
+		}
+		if err := emitProposalDecided(ctx, tx, proposalID); err != nil { // AI 员工事件（agent_event.go）
 			return err
 		}
 		out, err = tx.FindAgentProposal(ctx, proposalID)

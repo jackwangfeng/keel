@@ -985,6 +985,39 @@ export type AgentUpdateRequest = {
   store_ids? : number[]
 }
 
+export type AgentWebhookDelivery = {
+  id : number
+  event_id : number
+  /** 这是第几次尝试（1–6） */
+  attempt : number
+  /** 接收方的 HTTP 状态码；没拿到响应（连不上、超时）时没有 */
+  status_code? : number
+  /** 失败原因；成功为空串 */
+  error : string
+  delivered_at : string
+}
+
+export type AgentWebhook = {
+  id : number
+  url : string
+  enabled : boolean
+  /** HMAC-SHA256 签名密钥明文（kwhs_ 开头），只在新建或轮换时出现 */
+  secret? : string
+  created_at : string
+  updated_at : string
+  /** 最近 20 次投递尝试（新的在前），只在 GET 里有 */
+  recent_deliveries? : AgentWebhookDelivery[]
+}
+
+export type AgentWebhookPutRequest = {
+  /** https 地址（本机联调可用 http://127.0.0.1 / localhost） */
+  url : string
+  /** 不传：新建默认启用，改时不动 */
+  enabled? : boolean
+  /** true 时换一把新密钥并在响应里回一次，旧的立即作废 */
+  rotate_secret? : boolean
+}
+
 export type AgentWhoAmI = {
   staff_id : number
   name : string
