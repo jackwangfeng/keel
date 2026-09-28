@@ -3,7 +3,7 @@
 # Keel
 
 **An AI-native commerce platform with a built-in distributed transaction engine.**
-*Runs on a single machine. Scales without a rewrite. No external AI APIs.*
+*Runs on a single machine. Scales without a rewrite. Search runs locally; AI staff plug in your own agent (in progress).*
 
 <!-- The badge and the clone URL in the quick start point at the same repository.
      scripts/check_promises.py guards two things: a build badge is a false claim when
@@ -38,28 +38,49 @@ sub-transaction barriers that survive process crashes.
 Most open-source commerce projects either avoid the problem (one big local transaction)
 or bolt on an external coordinator. Keel treats it as a first-class concern.
 
-### 2. AI across the whole commerce lifecycle — all running locally
+### 2. AI staff: handing operations to an agent (in progress) · local inference for search (shipped)
 
-Not one AI feature bolted on. AI at every stage, on your own hardware:
+Keel's AI has two layers. What's in the box today is local-inference search and product
+understanding. What's being built is "AI staff" — merchants plug in their own agent to run
+operations. That second layer is what Keel considers most worth talking about, and hardest
+to copy.
 
-| Stage | Capabilities |
+**What's in the box today**
+
+| Stage | Capability |
 |---|---|
-| **Supply** | Extract SKUs and attributes from messy supplier files · auto-categorize · detect duplicate listings across suppliers · block prohibited advertising claims before publish |
-| **Demand** | Hybrid semantic search · conversational shopping · visual search · intent clarification when nothing matches |
-| **Operations** | Demand forecasting · replenishment suggestions · ask your data in plain language |
-| **Feedback** | Cluster review complaints into actionable product fixes · classify return reasons |
+| **Demand** | Hybrid vector + keyword search, fused with RRF, then business re-ranking (out-of-stock demotion) |
+| **Supply** | Category suggestions from title embeddings during bulk import (Top-3 95.9% offline) · block prohibited advertising claims before publish |
 
 **No external API calls. No data leaving your network. No per-token billing.**
+Search's vector inference runs on our own [infero](https://github.com/jackwangfeng/infero)
+engine (details under "Not in the box yet" below). Other platforms' semantic search is
+either a wrapper around a third-party API, or only available on their hosted cloud —
+Medusa's semantic search, for instance, runs on Medusa Cloud. If you self-host, you are
+back to wiring up Algolia yourself. Keel assumes you want to own your stack.
 
-Supplier prices, cost structure and customer conversations stay on your machine.
+**What's being built: AI staff** (milestones M9–M11, **in progress, not shipped today**)
 
-This matters more than it sounds. Other platforms' AI is either a wrapper around a
-third-party API, or only available on their hosted cloud — Medusa's semantic search,
-for instance, runs on Medusa Cloud. If you self-host, you are back to wiring up
-Algolia yourself. Keel assumes you want to own your stack.
+Keel does not bundle a model. Merchants plug in their own agent — Claude Code, Codex, or
+any MCP-capable harness — and Keel gives it a staff account: the same role and scope
+permissions as a human, a set of MCP tools, playbooks, a proposal/approval queue (write
+actions are proposals by default; a human approves before Keel executes them), call
+auditing, and measured outcomes.
 
-And almost all of it sits on the demand side. **Nobody is applying AI to the supply
-side or to operations** — which is exactly where merchants spend their hours.
+Most open-source commerce platforms put nearly all their AI on the demand side (search,
+recommendations, chat). **Nobody is applying AI to supply, replenishment, pricing,
+promotions or after-sales** — exactly where merchants spend their hours. The hard part of
+letting an agent actually run operations isn't wiring up a model, it's being willing to
+hand over the keys. What makes that safe in Keel is infrastructure that already existed:
+idempotent write APIs (a retry from the agent never double-charges or double-ships),
+tiered roles and store/region scopes (an AI staff member that oversteps is rejected
+exactly like a human), row-level security (a query the agent writes itself still can't see
+another shop's data), preview/dry-run endpoints (compute before you act), distributed
+transactions, and audit.
+
+Full plan: [AI Operations: Plan](./docs/AI经营-规划.md) (Chinese). M9's design — staff
+accounts and access keys, the MCP tool catalog, the proposal queue and state machine, how
+the demo site runs it — is in [AI Operations M9 Design](./docs/AI经营-M9设计.md) (Chinese).
 
 ### 3. One codebase, from a laptop to a cluster
 
@@ -305,16 +326,14 @@ the remaining gaps are under "Not in the box yet" above.
   version); clients report the clicks, add-to-carts and orders that follow via
   `POST /search/events`, and `make search-metrics` turns them into CTR@10,
   search→cart and search→order rates per strategy.
-- **Conversational shopping** — understands intent, never invents products.
-  Every item shown comes from a real retrieval result.
-- **Visual search** — find the same product from a photo.
-- **Product understanding** — extract structured attributes from messy supplier
-  spreadsheets, auto-classify categories, detect duplicate listings across suppliers.
-  What ships today is the zero-shot half of auto-classification: bulk import
+- **Product understanding** — what ships today is auto-classification: bulk import
   suggests categories from title embeddings (Top-3 95.9% on the offline set) and
-  leaves low-confidence ones to a human; attribute extraction waits for the
-  inference engine's generate endpoint.
+  leaves low-confidence ones to a human. Cross-supplier duplicate detection and
+  attribute extraction are not built yet — attribute extraction waits for the
+  inference engine's generate endpoint; see "Later" in the roadmap.
 - **Compliance checks** — catch prohibited advertising claims before publish.
+- **AI staff** — in progress (M9); see "AI staff: handing operations to an agent"
+  above and [AI Operations: Plan](./docs/AI经营-规划.md) (Chinese).
 
 **Correctness, taken seriously**
 - Money is `BIGINT` cents. Never a float.
@@ -565,14 +584,28 @@ battle-tested at scale. What it has is a stronger core.
 - [ ] **M7 Ready to do business** — promotions (tiered discounts, flash
   prices, new-buyer gifts) ✅ (group buying not done); business reports with
   export, Excel bulk import with AI category suggestions ✅
-- [ ] **M8 Visual search** — image embeddings, a differentiator
+- [ ] **M9 AI operations: staff can plug in** — AI staff accounts and access
+  keys, an MCP service (read / compute / proposal / brief tools), a proposal
+  queue with admin approval, call auditing, two playbooks, demo-site simulated
+  commerce data and a scheduled AI staff run — **in progress**, see
+  [AI Operations: Plan](./docs/AI经营-规划.md) and
+  [AI Operations M9 Design](./docs/AI经营-M9设计.md) (Chinese)
+- [ ] **M10 AI operations: staff can run the shop** — event-triggered
+  wake-ups, playbooks and proposals for clearance sales / search gaps /
+  after-sales review, automatic before/after comparison after execution
+- [ ] **M11 AI operations: staff can be trusted with more** — per-tool-category
+  auto-execute policies with caps, a read-only SQL tool, verifying the same
+  integration with a second harness (e.g. Codex), a public "AI operations log"
+  page on the demo site
+- [ ] **M8 Visual search** — image embeddings, a differentiator; pushed after
+  AI operations
 
 **Later, if real demand shows up:** conversational shopping, cross-supplier
 duplicate merging, attribute extraction and review attribution (need the
-inference engine's generate endpoint), natural-language analytics, an MCP
-server, sales forecasting (needs months of orders). These AI features demo
-well but do little for a shop that just opened, so they come after "can open a
-shop" and "can do business".
+inference engine's generate endpoint), sales forecasting (needs months of
+orders). These AI features demo well but do little for a shop that just
+opened, so they come after "can open a shop", "can do business" and AI
+operations.
 
 ---
 
