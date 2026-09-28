@@ -521,6 +521,19 @@ func (s *ReportService) window(ctx context.Context, q ReportQuery) (ReportWindow
 	return resolveReportWindow(q.Period, q.StartDate, q.EndDate, s.now(), name, loc)
 }
 
+// ShopLocation 取本租户的店铺时区（与报表同一个回落规则）。MCP 工具的输出按它改写时刻
+// （handler/mcp.go 的 mcpLocalTimes），agent 读到的时间直接就是店铺当地时间。
+func ShopLocation(ctx context.Context, r interface {
+	ShopTimezone(ctx context.Context) (string, error)
+}) (*time.Location, error) {
+	name, err := r.ShopTimezone(ctx)
+	if err != nil {
+		return nil, err
+	}
+	_, loc := reportLocation(name)
+	return loc, nil
+}
+
 // reportLocation 把店铺时区名换成 *time.Location；不是合法的 IANA 名字（空串、拼错、
 // 数据库里被人手工写坏）时回落到 Asia/Shanghai，并回显实际用的那一个 ——
 // 界面上写着的时区必须是真正参与计算的时区。

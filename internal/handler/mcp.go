@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -68,6 +69,9 @@ type MCPDeps struct {
 	Log             *slog.Logger
 	// Version 进 MCP 的 serverInfo，agent 能看到连的是哪个版本。
 	Version string
+	// ShopLocation 取本店时区。非 nil 时工具输出里的时刻一律改写成店铺当地时间（带偏移的 RFC 3339）：
+	// 2026-09-28 演示站实跑，AI 店长把工具给的 UTC 时间当成北京时间写进了简报（15:57 写成 07:57）。
+	ShopLocation func(ctx context.Context) (*time.Location, error)
 }
 
 // NewMCPHandler 建 MCP 服务并返回挂在 gin 上的处理函数（前面要先挂 auth.AgentBearer）。
@@ -133,7 +137,7 @@ func mcpTool[In, Out any](srv *mcp.Server, d *MCPDeps, name, desc string, writeE
 			if err != nil {
 				return res, nil, nil
 			}
-			return nil, out, nil
+			return nil, mcpLocalTimes(ctx, d, out), nil
 		})
 }
 
@@ -229,4 +233,49 @@ func (l *keyLimiter) allow(key int64, now time.Time) (time.Duration, bool) {
 	}
 	w.n++
 	return 0, true
+}
+
+// mcpLocalTimes 把工具输出里所有 UTC 时刻（RFC 3339 字符串）改写成店铺时区的同一时刻，
+// 比如 2026-09-28T07:57:00Z → 2026-09-28T15:57:00+08:00。只改能按 RFC 3339 完整解析、且带时刻的
+// 字符串（纯日期、别的文字原样）；取不到时区或编解码失败时原样返回 —— 时间对，只是还是 UTC。
+func mcpLocalTimes(ctx context.Context, d *MCPDeps, out any) any {
+	if d.ShopLocation == nil {
+		return out
+	}
+	loc, err := d.ShopLocation(ctx)
+	if err != nil {
+		d.Log.WarnContext(ctx, "MCP 输出取不到店铺时区，时间按 UTC 给出", "err", err)
+		return out
+	}
+	raw, err := json.Marshal(out)
+	if err != nil {
+		return out
+	}
+	var v any
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber() // 金额是整数分，不经 float64 走一遍
+	if err := dec.Decode(&v); err != nil {
+		return out
+	}
+	return localizeTimes(v, loc)
+}
+
+func localizeTimes(v any, loc *time.Location) any {
+	switch x := v.(type) {
+	case map[string]any:
+		for k, e := range x {
+			x[k] = localizeTimes(e, loc)
+		}
+	case []any:
+		for i, e := range x {
+			x[i] = localizeTimes(e, loc)
+		}
+	case string:
+		if len(x) >= len("2006-01-02T15:04:05Z") && x[10] == 'T' {
+			if t, err := time.Parse(time.RFC3339Nano, x); err == nil {
+				return t.In(loc).Format(time.RFC3339Nano)
+			}
+		}
+	}
+	return v
 }

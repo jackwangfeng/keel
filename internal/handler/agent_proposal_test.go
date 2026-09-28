@@ -181,3 +181,33 @@ func TestAgentBriefs(t *testing.T) {
 		t.Fatalf("起晚于止的简报应被拒：%q", mcpText(res))
 	}
 }
+
+// 工具输出里的时刻是店铺当地时间（没设过时区 = Asia/Shanghai，+08:00），不是 UTC。
+// 2026-09-28 演示站实跑：AI 店长把 UTC 的 07:57 当成北京时间写进了简报（应是 15:57）。
+func TestMCPTimesAreInShopTimezone(t *testing.T) {
+	cs := newCouponShop(t)
+	a := createAgent(t, cs.adminShop, `{"name":"AI","role":2}`)
+	sess := mcpConnect(t, cs.Host, issueAgentKey(t, cs.adminShop, a.Id, `{"name":"t"}`).Secret)
+	res, p := mcpCall(t, sess, "propose_inventory_adjust", map[string]any{"store_id": cs.NorthStore, "sku_id": cs.DressSKU,
+		"delta": 5, "reason": "补货", "evidence": "restock_plan 显示需要补 5 件"})
+	if res.IsError {
+		t.Fatal(mcpText(res))
+	}
+	for _, k := range []string{"created_at", "expires_at"} {
+		v, _ := p[k].(string)
+		if !strings.HasSuffix(v, "+08:00") {
+			t.Fatalf("%s = %q，期望店铺时区（+08:00）", k, v)
+		}
+	}
+	// 店铺时区改成 UTC 后跟着变。
+	adminExec(t, `INSERT INTO shop_preferences (merchant_id, timezone) VALUES ($1, 'UTC')
+		ON CONFLICT (merchant_id) DO UPDATE SET timezone = EXCLUDED.timezone`, cs.MerchantID)
+	_, l := mcpCall(t, sess, "list_my_proposals", map[string]any{})
+	items, _ := l["items"].([]any)
+	if len(items) == 0 {
+		t.Fatalf("list_my_proposals 没有返回提案：%v", l)
+	}
+	if v, _ := items[0].(map[string]any)["created_at"].(string); !strings.HasSuffix(v, "Z") {
+		t.Fatalf("店铺时区 UTC 时 created_at = %q，期望以 Z 结尾", v)
+	}
+}

@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -680,6 +681,9 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	v1.GET("/admin/agent-briefs", staffAuth, abh.List)
 	v1.GET("/admin/agent-briefs/:brief_id", staffAuth, abh.Get)
 	mcpH := handler.NewMCPHandler(handler.MCPDeps{
+		ShopLocation: func(ctx context.Context) (*time.Location, error) {
+			return service.ShopLocation(ctx, repo)
+		},
 		Staff:           staffSvc,
 		Reports:         service.NewReportService(repo, inv),
 		Stores:          service.NewAdminStoreService(repo, inv),
