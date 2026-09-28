@@ -20,6 +20,13 @@ void main() {
     expect(decodePixelRatio(3, miniProgram: false), 3);
   });
 
+  test('Web / 小程序上缩略图不再传 cacheWidth（Web 引擎带 cacheWidth 要先按原尺寸解一遍、再按目标解一遍）', () {
+    expect(decodeWidth(497, thumb: true, web: true), isNull);
+    expect(decodeWidth(497, thumb: false, web: true), 497, reason: '外链原图可能很大，照旧按显示尺寸解');
+    expect(decodeWidth(497, thumb: true, web: false), 497, reason: '原生只解一遍，缩到显示尺寸省内存');
+    expect(decodeWidth(0, thumb: false, web: false), isNull);
+  });
+
   group('缩略图档位（GET /uploads/{id}?w=，服务端只认 160 / 320 / 480 / 640）', () {
     test('按显示像素向上取档，超过 640 按 640', () {
       expect(thumbUrl('http://h/api/v1/uploads/23', 100), 'http://h/api/v1/uploads/23?w=160');

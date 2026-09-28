@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:mp_flutter_wechat/mp_flutter_wechat.dart';
 
@@ -20,6 +21,11 @@ String thumbUrl(String url, int px) {
 /// 原生（手机 App / 浏览器）解码快，照设备像素比。
 double decodePixelRatio(double dpr, {required bool miniProgram}) => miniProgram ? math.min(dpr, 2) : dpr;
 
+/// 传给 Image 的 cacheWidth。Web（含小程序）引擎带 cacheWidth 时要先按原尺寸解一遍拿宽高、再按目标尺寸解一遍
+/// （flutter_web_sdk lib/ui/painting.dart instantiateImageCodecWithSize），iPhone 上实测每张图 decode-slow 成对出现；
+/// 缩略图已经是服务端按档位缩好的，就不再传。外链原图可能很大，照旧按显示尺寸解；原生只解一遍，照旧传、省内存。
+int? decodeWidth(int px, {required bool thumb, required bool web}) => px <= 0 || (thumb && web) ? null : px;
+
 /// 网络图：向服务端要按显示尺寸缩好的图（thumbUrl），并按显示尺寸解码（cacheWidth = 逻辑宽 × 像素比）——
 /// iPhone 小程序里图片在 wasm 里解码（没有 JIT），解 800×800 比解 320 宽慢好几倍；
 /// 列表里一张 1200 宽的商品图只显示 173 宽，小程序（mp-flutter 支持 cacheWidth）和手机上都省内存。
@@ -35,7 +41,9 @@ class NetImage extends StatelessWidget {
   Widget build(BuildContext context) {
     Widget image(double w) {
       final px = (w * decodePixelRatio(MediaQuery.devicePixelRatioOf(context), miniProgram: MpWechat.isAvailable)).round();
-      return Image.network(thumbUrl(url, px), width: width, height: height, fit: BoxFit.cover, cacheWidth: px > 0 ? px : null,
+      final src = thumbUrl(url, px);
+      return Image.network(src, width: width, height: height, fit: BoxFit.cover,
+          cacheWidth: decodeWidth(px, thumb: src != url, web: kIsWeb),
           errorBuilder: (_, _, _) => fallback ?? const SizedBox());
     }
 
