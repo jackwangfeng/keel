@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:mp_flutter_wechat/mp_flutter_wechat.dart';
 
@@ -8,6 +9,12 @@ import 'package:mp_flutter_wechat/mp_flutter_wechat.dart';
 /// 足够把人判到隔壁店或围栏外。所以小程序里显式要 wgs84；Web（浏览器 Geolocation）与原生（系统定位）本来就是。
 ///
 /// 编译时 `--dart-define=KEEL_LOCATE=off`：不定位，总用默认店（只有一家店的商家；Web e2e 也用它，用例按默认店写）。
+/// 原生定位参数。Android 上不走 Google Play 服务的融合定位：国内机器装了 GMS 也连不上 Google，
+/// 请求就那么挂着（小米真机实测，权限给了、系统定位开着，5 秒超时回落默认店）；系统 LocationManager 用厂商网络定位，能拿到。
+LocationSettings locationSettingsFor(TargetPlatform platform) => platform == TargetPlatform.android
+    ? AndroidSettings(accuracy: LocationAccuracy.medium, forceLocationManager: true)
+    : const LocationSettings(accuracy: LocationAccuracy.medium);
+
 Future<({double lat, double lng})?> locateDevice() async {
   if (const String.fromEnvironment('KEEL_LOCATE') == 'off') return null;
   if (MpWechat.isAvailable) {
@@ -18,6 +25,6 @@ Future<({double lat, double lng})?> locateDevice() async {
   var perm = await Geolocator.checkPermission();
   if (perm == LocationPermission.denied) perm = await Geolocator.requestPermission();
   if (perm == LocationPermission.denied || perm == LocationPermission.deniedForever) return null;
-  final p = await Geolocator.getCurrentPosition(locationSettings: const LocationSettings(accuracy: LocationAccuracy.medium));
+  final p = await Geolocator.getCurrentPosition(locationSettings: locationSettingsFor(defaultTargetPlatform));
   return (lat: p.latitude, lng: p.longitude);
 }
