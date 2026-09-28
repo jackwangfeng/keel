@@ -402,7 +402,12 @@ func (s *RefundService) Create(ctx context.Context, orderNo string, req RefundCr
 			if err := notifyRefundRequested(ctx, tx, refundNo); err != nil {
 				return repository.Refund{}, err
 			}
-			return tx.FindUserRefundByNo(ctx, refundNo, id.UserID)
+			r, err := tx.FindUserRefundByNo(ctx, refundNo, id.UserID)
+			if err != nil {
+				return repository.Refund{}, err
+			}
+			// AI 员工的 refund_created 事件（00121）也在这个事务里：售后单与事件同生同灭。
+			return r, emitRefundCreated(ctx, tx, r)
 		})
 }
 

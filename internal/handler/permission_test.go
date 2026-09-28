@@ -505,6 +505,22 @@ var permMatrix = []permRoute{
 		k := issueAgentKey(t, fx.sh, id, `{"name":"k"}`)
 		return permReq{Method: "DELETE", Path: fmt.Sprintf(v1+"/admin/agents/%d/keys/%d", id, k.Id), OK: http.StatusNoContent}
 	}},
+	// —— AI 员工的事件 webhook（AI 经营 M10）：只有本店管理员。GET / DELETE 那两格先由店主配好一个。
+	{"GET", v1 + "/admin/agents/:staff_id/webhook", adminOnly, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		id := createAgent(t, fx.sh, `{"name":"矩阵 AI","role":2}`).Id
+		putAgentWebhook(t, fx.sh, id, `{"url":"https://hooks.example.com/keel"}`)
+		return permGet(fmt.Sprintf(v1+"/admin/agents/%d/webhook", id))
+	}},
+	{"PUT", v1 + "/admin/agents/:staff_id/webhook", adminOnly, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		id := createAgent(t, fx.sh, `{"name":"矩阵 AI","role":2}`).Id
+		return permReq{Method: "PUT", Path: fmt.Sprintf(v1+"/admin/agents/%d/webhook", id),
+			Body: `{"url":"https://hooks.example.com/keel"}`, OK: http.StatusOK}
+	}},
+	{"DELETE", v1 + "/admin/agents/:staff_id/webhook", adminOnly, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		id := createAgent(t, fx.sh, `{"name":"矩阵 AI","role":2}`).Id
+		putAgentWebhook(t, fx.sh, id, `{"url":"https://hooks.example.com/keel"}`)
+		return permReq{Method: "DELETE", Path: fmt.Sprintf(v1+"/admin/agents/%d/webhook", id), OK: http.StatusNoContent}
+	}},
 	{"GET", v1 + "/admin/shop-settings", adminOnly, func(t *testing.T, fx *permFixture, c permCase) permReq {
 		return permGet(v1 + "/admin/shop-settings")
 	}},

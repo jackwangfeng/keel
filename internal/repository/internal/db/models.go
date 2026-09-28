@@ -32,6 +32,25 @@ type AgentBrief struct {
 	CreatedAt    pgtype.Timestamptz
 }
 
+// AI 员工的事件：库存预警、售后申请、无结果词突增、提案结果（00121，AI 经营 M10）。
+type AgentEvent struct {
+	ID         int64
+	MerchantID int64
+	Type       string
+	StoreID    *int64
+	Payload    []byte
+	DedupeKey  string
+	CreatedAt  pgtype.Timestamptz
+}
+
+// AI 员工拉取事件的游标：确认到哪一条（00121）。
+type AgentEventCursor struct {
+	MerchantID   int64
+	AgentStaffID int64
+	LastAckedID  int64
+	UpdatedAt    pgtype.Timestamptz
+}
+
 // AI 员工的接入密钥（00090，AI 经营 M9）。只存 sha256；明文只在创建响应里出现一次。
 type AgentKey struct {
 	ID         int64
@@ -81,6 +100,30 @@ type AgentToolCall struct {
 	ErrorType    string
 	DurationMs   int32
 	CreatedAt    pgtype.Timestamptz
+}
+
+// AI 员工的事件 webhook：每名 AI 员工至多一个（00121）。
+type AgentWebhook struct {
+	ID           int64
+	MerchantID   int64
+	AgentStaffID int64
+	Url          string
+	Secret       string
+	Enabled      bool
+	CreatedAt    pgtype.Timestamptz
+	UpdatedAt    pgtype.Timestamptz
+}
+
+// AI 员工事件 webhook 的投递记录：每次尝试一行（00121）。
+type AgentWebhookDelivery struct {
+	ID          int64
+	MerchantID  int64
+	EventID     int64
+	WebhookID   int64
+	Attempt     int32
+	StatusCode  *int32
+	Error       string
+	DeliveredAt pgtype.Timestamptz
 }
 
 // 子事务屏障（数据模型 §6）。形状照抄 dtmrs-barrier v0.11.0，别加列。

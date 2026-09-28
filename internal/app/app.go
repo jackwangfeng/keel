@@ -463,6 +463,12 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	v1.PATCH("/admin/agents/:staff_id", staffAuth, agh.Update)
 	v1.POST("/admin/agents/:staff_id/keys", staffAuth, agh.CreateKey)
 	v1.DELETE("/admin/agents/:staff_id/keys/:key_id", staffAuth, agh.RevokeKey)
+	// AI 员工的事件 webhook（AI 经营 M10 §3，handler/admin_agent_webhook.go）：本店管理员。
+	agentEvents := service.NewAgentEventService(repo)
+	awh := handler.NewAgentWebhookHandler(agentEvents)
+	v1.GET("/admin/agents/:staff_id/webhook", staffAuth, awh.Get)
+	v1.PUT("/admin/agents/:staff_id/webhook", staffAuth, awh.Put)
+	v1.DELETE("/admin/agents/:staff_id/webhook", staffAuth, awh.Delete)
 	v1.GET("/agent/whoami", agentAuth, agh.WhoAmI)
 
 	// 开店（M4 收尾）。它挂同一道 staffAuth，而「只有平台级管理员能调」
@@ -671,6 +677,7 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 		Restock:   service.NewRestockService(repo, inv, service.NewAdminStoreService(repo, inv)),
 		Proposals: proposals,
 		Briefs:    briefs,
+		Events:    agentEvents,
 		Version:   buildinfo.Get().Version,
 	})
 	v1.POST("/mcp", agentAuth, mcpH)
@@ -923,6 +930,10 @@ func Run(ctx context.Context, listen func(addr string, h http.Handler) error) er
 	go stockFlags.Run(bgCtx)
 	// AI 员工提案的过期扫描（00091，service/agent_proposal_expiry.go）。
 	go service.RunProposalExpiry(bgCtx, repository.New(pool), nil)
+	// AI 员工事件（00121，AI 经营 M10 §3）：每 5 分钟扫 stock_low / search_zero_spike（库存经 inv，拆分形态同样成立），
+	// 以及 webhook 的投递 worker（jobs 队列 agent.event.deliver）。晚起一轮不丢任何东西。
+	go service.NewAgentEventSweepService(repository.New(pool), inv, nil).Run(bgCtx)
+	go service.NewAgentWebhookDeliveryService(repository.New(pool), nil, nil).Run(bgCtx)
 
 	// 自动确认收货（数据模型 §5 发货第三条规则）：发货满店铺设置的 auto_confirm_days
 	// 天的 30 已发货订单推到 40。与超时补偿同一套机制（按租户扫描、同一份公平调度），

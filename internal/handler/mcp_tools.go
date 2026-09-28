@@ -260,4 +260,5 @@ func registerMCPTools(srv *mcp.Server, d *MCPDeps) {
 			}
 			return mcpPage[api.AdminRefund]{Page: out.Page, PageSize: out.PageSize, Total: int(out.Total), Items: items}, nil
 		})
+	registerMCPEventTools(srv, d) // 事件（M10，mcp_tools_events.go）
 }

@@ -71,6 +71,7 @@ curl -H "Authorization: Bearer $KEEL_AGENT_KEY" https://<店铺域名>/api/v1/ag
 | 计算 | `restock_plan` | 补货计算：日均（分母去掉断货天）、可售天数、预计卖断日、建议量、置信。**数字由 Keel 算，agent 不要自己估** |
 | 提案 | `propose_inventory_adjust` `list_my_proposals` | 提一条加库存提案；看自己提过的与结果（执行前后的可售、驳回理由） |
 | 简报 | `post_brief` | 写一份 markdown 简报（巡店日报等），直接生效 |
+| 事件 | `list_events` `ack_events` | 拉你管辖范围内的新事件（库存预警、售后申请、无结果词突增、提案结果）；确认处理到哪一条。见下文「事件」 |
 
 金额一律是**分**（整数），同时附人读的元。时间是 RFC 3339（UTC），日期按店铺时区。
 
@@ -91,6 +92,64 @@ agent: propose_inventory_adjust(store, sku, +70, 理由, 证据, 预计影响)
 - 驳回理由会回到 `list_my_proposals`，agent 下次能读到（「这周有活动，别补这么多」）。
 - 人在后台「AI 员工 → 提案」审批。自己做审批界面（比如飞书卡片上的按钮）的话，按钮背后要用**真人员工**的后台会话调
   `POST /api/v1/admin/agent-proposals/{id}/approve` / `reject`（契约里有），不能用 AI 员工的密钥。
+
+## 事件
+
+Keel 在这些时刻写一条事件，agent 可以被它叫醒，而不必每天定时全量巡一遍：
+
+| type | 什么时候 | store_id | payload |
+|---|---|---|---|
+| `stock_low` | 一个（门店，SKU）可售不高于预警线（与 `inventory_alerts` 同一口径）；每对每 24 小时至多一条 | 该门店 | `store_id` `sku_id` `available` `threshold` |
+| `refund_created` | 买家提交售后申请 | 履约门店 | `refund_no` `order_no` `store_id` `amount_cents` `refund_type` |
+| `search_zero_spike` | 一个无结果词近 1 小时出现 ≥ 5 次；每词每天（UTC）至多一条 | 无（全店） | `query` `count` |
+| `proposal_decided` | 提案被批准执行 / 执行失败 / 驳回 / 过期 | 提案的门店 | `proposal_id` `kind` `agent_staff_id` `status`（`executed` / `failed` / `rejected` / `expired`） |
+
+库存预警与无结果词每 5 分钟扫一轮，所以最多晚 5 分钟；售后申请与提案结果与业务同一个事务写入，即时。
+**范围**：门店级事件只给能操作那家店的 AI 员工；全店事件（没有 `store_id`）只给全店范围（操作员）的。
+
+### 拉
+
+```
+list_events()                 → {items:[{id,type,store_id,payload,created_at}…], cursor, next_after_id, has_more}
+  …处理 items…
+ack_events(up_to_id=next_after_id) → {cursor}
+```
+
+- 游标由 Keel 记（每名 AI 员工一个）。`list_events` 不带 `after_id` 就从上次 `ack_events` 的位置之后读；
+  带 `after_id` 可以回看。`limit` 默认 50、最多 100，`has_more` 为真就接着 `list_events(after_id=next_after_id)`。
+- 游标只进不退；`up_to_id` 必须是一条存在的事件。没 ack 的下次还会读到 —— **至少一次**，按 `id` 去重。
+
+### 推（webhook）
+
+管理员在后台给 AI 员工配一个 URL（契约 `PUT /api/v1/admin/agents/{staff_id}/webhook`，只接受 https）。
+**签名密钥只在新建、或 `rotate_secret: true` 时回一次**，存好；丢了就轮换。事件写入后 Keel 投递：
+
+```
+POST <你的 URL>
+Content-Type: application/json
+X-Keel-Event: refund_created
+X-Keel-Event-Id: 1234
+X-Keel-Signature: sha256=<hex(HMAC-SHA256(secret, 原始请求体))>
+
+{"id":1234,"type":"refund_created","store_id":3,"payload":{…},"created_at":"2026-09-28T08:00:00Z"}
+```
+
+- 5 秒超时、不跟随重定向；回 2xx 算成功，否则指数退避重试（2、4、8、16、32 秒），至多 6 次。至少一次，按 `X-Keel-Event-Id` 去重。
+- 只推这名 AI 员工**投递那一刻**管辖范围内的事件；AI 员工停用、webhook 关掉或删掉之后不再推。
+- 后台 `GET` 同一个地址能看到最近 20 次投递（第几次、状态码、错误）。
+
+验签（**对原始请求体字节**算，不要先解析再序列化）：
+
+```python
+import hmac, hashlib
+
+def verify(secret: str, body: bytes, header: str) -> bool:
+    want = "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(want, header)
+```
+
+推送里只有事件本身；收到后照常用接入密钥连 MCP、`list_events` 拉取处理 —— webhook 只是「叫醒」，
+伪造的推送拿不到任何数据。
 
 ## 错误
 
@@ -119,6 +178,7 @@ agent: propose_inventory_adjust(store, sku, +70, 理由, 证据, 预计影响)
 | 日期 | 变更 |
 |---|---|
 | 2026-09-28 | 首版：14 个工具；全部工具声明 `outputSchema`；工具错误带 `_meta["keel/problem"]` |
+| 2026-09-28 | 加 `list_events` `ack_events`（M10 事件）；AI 员工可配事件 webhook（`X-Keel-Signature` HMAC 签名） |
 
 ## 接入方式举例
 
@@ -160,6 +220,4 @@ Keel 这边不需要改任何东西。
 
 ## 还没有的
 
-- **事件推送（webhook）**：现在只能轮询（`list_my_proposals`、后台接口）。「有新提案 / 提案被处理 / 库存跌破预警线」
-  推给接入方，排在 M10。
 - **更多写操作**：清仓活动、发券、改标题、售后审核的提案，排在 M10（[规划](./AI经营-规划.md)）。

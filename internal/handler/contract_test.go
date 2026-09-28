@@ -862,6 +862,27 @@ var routes = []route{
 		NoQueryParams:  "AI 员工与接入密钥（AI 经营 M9）：参数全在路径与请求体里",
 	},
 	{
+		ContractPath:   "/admin/agents/{staff_id}/webhook",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "admin_agent_webhook.go",
+		NoQueryParams:  "AI 员工的事件 webhook（AI 经营 M10）：参数全在路径与请求体里",
+	},
+	{
+		ContractPath:   "/admin/agents/{staff_id}/webhook",
+		ContractMethod: "put",
+		HTTPMethod:     http.MethodPut,
+		HandlerFile:    "admin_agent_webhook.go",
+		NoQueryParams:  "AI 员工的事件 webhook（AI 经营 M10）：参数全在路径与请求体里",
+	},
+	{
+		ContractPath:   "/admin/agents/{staff_id}/webhook",
+		ContractMethod: "delete",
+		HTTPMethod:     http.MethodDelete,
+		HandlerFile:    "admin_agent_webhook.go",
+		NoQueryParams:  "AI 员工的事件 webhook（AI 经营 M10）：参数全在路径与请求体里",
+	},
+	{
 		ContractPath:   "/agent/whoami",
 		ContractMethod: "get",
 		HTTPMethod:     http.MethodGet,

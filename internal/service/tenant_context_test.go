@@ -155,6 +155,12 @@ var tenantContextAllowed = map[string]string{
 		"并带着同一个租户上下文调库存服务（租户头由它给出）。它不是 SAGA 分支，上面第 ② 道会把这一点钉住。",
 	"agent_proposal_expiry.go": "AI 员工提案的过期扫描（00091），与 stock_flags.go 同一处境：跑在任何 HTTP 请求之外，" +
 		"没有 Host 也没有 gid。枚举 merchants 再逐家进 WithTenant，把过期的待处理提案置 50。它不是 SAGA 分支。",
+	"agent_event_sweep.go": "AI 员工事件扫描（00121，stock_low / search_zero_spike），与 inventory_reconcile.go 同一处境：" +
+		"跑在任何 HTTP 请求之外，没有 Host 也没有 gid。枚举 merchants 再逐家进 WithTenant，并带着同一个租户上下文调库存服务" +
+		"（LowStock，租户头由它给出）。它不是 SAGA 分支。",
+	"agent_webhook_delivery.go": "AI 员工事件 webhook 的投递 worker（00121），与 notification_delivery.go 同一处境：" +
+		"跑在任何 HTTP 请求之外，没有 Host 也没有 gid。按出队那一行的 jobs.merchant_id 进 WithTenant —— 那一列由入队时的 " +
+		"current_merchant() 写下，写不出别家的租户（00022）。它不是 SAGA 分支。",
 	"stock_flags.go": "商品列表有货排序标记的全量刷新（00087），与 inventory_reconcile.go 同一处境：跑在任何 HTTP 请求之外，" +
 		"没有 Host 也没有 gid。枚举 merchants 再逐家进 WithTenant 读 skus / stores、写 product_store_stock，" +
 		"并带着同一个租户上下文调库存服务（租户头由它给出）。它不是 SAGA 分支，上面第 ② 道会把这一点钉住。",

@@ -33,6 +33,12 @@ func TestMCPEveryToolReturnsItsDeclaredShape(t *testing.T) {
 	}
 	// 可售压到 3，restock_plan 才有行、propose 才有意义。
 	setStoreStock(t, cs.adminShop, cs.NorthStore, cs.DressSKU, 3)
+	// 一条全店事件（M10）：list_events 有东西可回、ack_events 有 id 可确认。
+	var evID int64
+	if err := admin(t).QueryRow(context.Background(), `INSERT INTO agent_events (merchant_id, type, payload, dedupe_key)
+		VALUES ($1, 'search_zero_spike', '{"query":"泳衣","count":6}', 'schema-test') RETURNING id`, cs.MerchantID).Scan(&evID); err != nil {
+		t.Fatal(err)
+	}
 
 	calls := []struct {
 		tool string
@@ -54,6 +60,8 @@ func TestMCPEveryToolReturnsItsDeclaredShape(t *testing.T) {
 		{"list_products", map[string]any{}},
 		{"get_product", map[string]any{"product_id": cs.DressProduct}},
 		{"list_refunds", map[string]any{}},
+		{"list_events", map[string]any{}},
+		{"ack_events", map[string]any{"up_to_id": evID}},
 	}
 	tools, err := sess.ListTools(context.Background(), nil)
 	if err != nil {
