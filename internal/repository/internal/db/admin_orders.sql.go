@@ -185,7 +185,7 @@ SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, p.payment_no, r.us
        r.channel_refund_id, r.reject_reason, r.audited_at, r.refunded_at,
        r.created_at, r.updated_at,
        r.return_carrier_code, r.return_tracking_no, r.return_submitted_at,
-       o.status AS order_status, o.store_snapshot,
+       o.status AS order_status, o.shipped_at AS order_shipped_at, o.store_snapshot,
        r.audited_by, sa.name AS audited_by_name,
        r.received_at, r.received_by, sr.name AS received_by_name
   FROM refunds r
@@ -223,6 +223,7 @@ type AdminGetRefundByNoRow struct {
 	ReturnTrackingNo  *string
 	ReturnSubmittedAt pgtype.Timestamptz
 	OrderStatus       int16
+	OrderShippedAt    pgtype.Timestamptz
 	StoreSnapshot     []byte
 	AuditedBy         *int64
 	AuditedByName     *string
@@ -262,6 +263,7 @@ func (q *Queries) AdminGetRefundByNo(ctx context.Context, refundNo string) (Admi
 		&i.ReturnTrackingNo,
 		&i.ReturnSubmittedAt,
 		&i.OrderStatus,
+		&i.OrderShippedAt,
 		&i.StoreSnapshot,
 		&i.AuditedBy,
 		&i.AuditedByName,
@@ -279,7 +281,7 @@ SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, p.payment_no, r.us
        r.channel_refund_id, r.reject_reason, r.audited_at, r.refunded_at,
        r.created_at, r.updated_at,
        r.return_carrier_code, r.return_tracking_no, r.return_submitted_at,
-       o.status AS order_status, o.store_snapshot,
+       o.status AS order_status, o.shipped_at AS order_shipped_at, o.store_snapshot,
        r.audited_by, sa.name AS audited_by_name,
        r.received_at, r.received_by, sr.name AS received_by_name
   FROM refunds r
@@ -318,6 +320,7 @@ type AdminListOrderRefundsRow struct {
 	ReturnTrackingNo  *string
 	ReturnSubmittedAt pgtype.Timestamptz
 	OrderStatus       int16
+	OrderShippedAt    pgtype.Timestamptz
 	StoreSnapshot     []byte
 	AuditedBy         *int64
 	AuditedByName     *string
@@ -363,6 +366,7 @@ func (q *Queries) AdminListOrderRefunds(ctx context.Context, orderID int64) ([]A
 			&i.ReturnTrackingNo,
 			&i.ReturnSubmittedAt,
 			&i.OrderStatus,
+			&i.OrderShippedAt,
 			&i.StoreSnapshot,
 			&i.AuditedBy,
 			&i.AuditedByName,
@@ -544,7 +548,7 @@ SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, p.payment_no, r.us
        r.channel_refund_id, r.reject_reason, r.audited_at, r.refunded_at,
        r.created_at, r.updated_at,
        r.return_carrier_code, r.return_tracking_no, r.return_submitted_at,
-       o.status AS order_status, o.store_snapshot,
+       o.status AS order_status, o.shipped_at AS order_shipped_at, o.store_snapshot,
        r.audited_by, sa.name AS audited_by_name,
        r.received_at, r.received_by, sr.name AS received_by_name
   FROM refunds r
@@ -603,6 +607,7 @@ type AdminListRefundsRow struct {
 	ReturnTrackingNo  *string
 	ReturnSubmittedAt pgtype.Timestamptz
 	OrderStatus       int16
+	OrderShippedAt    pgtype.Timestamptz
 	StoreSnapshot     []byte
 	AuditedBy         *int64
 	AuditedByName     *string
@@ -659,6 +664,7 @@ func (q *Queries) AdminListRefunds(ctx context.Context, arg AdminListRefundsPara
 			&i.ReturnTrackingNo,
 			&i.ReturnSubmittedAt,
 			&i.OrderStatus,
+			&i.OrderShippedAt,
 			&i.StoreSnapshot,
 			&i.AuditedBy,
 			&i.AuditedByName,

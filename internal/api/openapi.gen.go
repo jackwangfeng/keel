@@ -3180,6 +3180,10 @@ type AdminRefund struct {
 	Items   []RefundItem `json:"items"`
 	OrderNo string       `json:"order_no"`
 
+	// OrderShippedAt 所属订单的发货时间；**没发过货时缺席**。判「发没发货」看它，不要按 `order_status` 的大小判：
+	// `50 退款中` / `60 已退款` 是**未发货**的整单退款。
+	OrderShippedAt *time.Time `json:"order_shipped_at,omitempty"`
+
 	// OrderStatus 所属订单此刻的履约状态
 	OrderStatus OrderStatus `json:"order_status"`
 
@@ -3305,6 +3309,10 @@ type AdminRefundDetail struct {
 	// 服务端另外会扣掉这一单别的退款单已占的运费，超了回 422 refund-freight-exceeded。
 	Order   AdminOrderSummary `json:"order"`
 	OrderNo string            `json:"order_no"`
+
+	// OrderShippedAt 所属订单的发货时间；**没发过货时缺席**。判「发没发货」看它，不要按 `order_status` 的大小判：
+	// `50 退款中` / `60 已退款` 是**未发货**的整单退款。
+	OrderShippedAt *time.Time `json:"order_shipped_at,omitempty"`
 
 	// OrderStatus 所属订单此刻的履约状态
 	OrderStatus OrderStatus `json:"order_status"`

@@ -484,6 +484,8 @@ export type AdminRefund = {
   store : OrderStoreSnapshot
   /** 所属订单此刻的履约状态 */
   order_status : OrderStatus
+  /** 所属订单的发货时间；**没发过货时缺席**。判「发没发货」看它，不要按 `order_status` 的大小判： */
+  order_shipped_at? : string
   /** 通过或驳回这张单的员工（与 `audited_at` 同一次动作） */
   audited_by? : StaffRef
   /** 确认收到退货的时间（退货退款 `20 → 30` 那一步） */
@@ -790,6 +792,8 @@ export type AdminRefundDetail = {
   store : OrderStoreSnapshot
   /** 所属订单此刻的履约状态 */
   order_status : OrderStatus
+  /** 所属订单的发货时间；**没发过货时缺席**。判「发没发货」看它，不要按 `order_status` 的大小判： */
+  order_shipped_at? : string
   /** 通过或驳回这张单的员工（与 `audited_at` 同一次动作） */
   audited_by? : StaffRef
   /** 确认收到退货的时间（退货退款 `20 → 30` 那一步） */

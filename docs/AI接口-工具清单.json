@@ -902,6 +902,12 @@
               "order_no": {
                 "type": "string"
               },
+              "order_shipped_at": {
+                "type": [
+                  "null",
+                  "string"
+                ]
+              },
               "order_status": {
                 "type": "integer"
               },

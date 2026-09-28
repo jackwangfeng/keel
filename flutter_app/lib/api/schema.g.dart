@@ -894,10 +894,11 @@ class AdminRefund {
   final int storeId;
   final OrderStoreSnapshot store;
   final OrderStatus orderStatus;
+  final String? orderShippedAt;
   final StaffRef? auditedBy;
   final String? receivedAt;
   final StaffRef? receivedBy;
-  const AdminRefund({required this.refundNo, required this.orderNo, this.paymentNo, required this.refundType, required this.status, required this.items, this.goodsAmountCents, this.freightCents, required this.amountCents, this.channel, this.channelRefundId, this.reasonCode, this.reasonText, this.evidenceUrls, this.returnShipment, this.rejectReason, this.auditedAt, this.returnDeadlineAt, this.refundedAt, required this.createdAt, this.updatedAt, required this.storeId, required this.store, required this.orderStatus, this.auditedBy, this.receivedAt, this.receivedBy});
+  const AdminRefund({required this.refundNo, required this.orderNo, this.paymentNo, required this.refundType, required this.status, required this.items, this.goodsAmountCents, this.freightCents, required this.amountCents, this.channel, this.channelRefundId, this.reasonCode, this.reasonText, this.evidenceUrls, this.returnShipment, this.rejectReason, this.auditedAt, this.returnDeadlineAt, this.refundedAt, required this.createdAt, this.updatedAt, required this.storeId, required this.store, required this.orderStatus, this.orderShippedAt, this.auditedBy, this.receivedAt, this.receivedBy});
   factory AdminRefund.fromJson(Map<String, dynamic> j) => AdminRefund(
         refundNo: j['refund_no'] as String,
         orderNo: j['order_no'] as String,
@@ -923,6 +924,7 @@ class AdminRefund {
         storeId: (j['store_id'] as num).toInt(),
         store: OrderStoreSnapshot.fromJson(j['store'] as Map<String, dynamic>),
         orderStatus: (j['order_status'] as num).toInt(),
+        orderShippedAt: j['order_shipped_at'] as String?,
         auditedBy: j['audited_by'] == null ? null : StaffRef.fromJson(j['audited_by'] as Map<String, dynamic>),
         receivedAt: j['received_at'] as String?,
         receivedBy: j['received_by'] == null ? null : StaffRef.fromJson(j['received_by'] as Map<String, dynamic>),
@@ -952,6 +954,7 @@ class AdminRefund {
         'store_id': storeId,
         'store': store.toJson(),
         'order_status': orderStatus,
+        if (orderShippedAt != null) 'order_shipped_at': orderShippedAt,
         if (auditedBy != null) 'audited_by': auditedBy!.toJson(),
         if (receivedAt != null) 'received_at': receivedAt,
         if (receivedBy != null) 'received_by': receivedBy!.toJson(),
@@ -1451,11 +1454,12 @@ class AdminRefundDetail {
   final int storeId;
   final OrderStoreSnapshot store;
   final OrderStatus orderStatus;
+  final String? orderShippedAt;
   final StaffRef? auditedBy;
   final String? receivedAt;
   final StaffRef? receivedBy;
   final AdminOrderSummary order;
-  const AdminRefundDetail({required this.refundNo, required this.orderNo, this.paymentNo, required this.refundType, required this.status, required this.items, this.goodsAmountCents, this.freightCents, required this.amountCents, this.channel, this.channelRefundId, this.reasonCode, this.reasonText, this.evidenceUrls, this.returnShipment, this.rejectReason, this.auditedAt, this.returnDeadlineAt, this.refundedAt, required this.createdAt, this.updatedAt, required this.storeId, required this.store, required this.orderStatus, this.auditedBy, this.receivedAt, this.receivedBy, required this.order});
+  const AdminRefundDetail({required this.refundNo, required this.orderNo, this.paymentNo, required this.refundType, required this.status, required this.items, this.goodsAmountCents, this.freightCents, required this.amountCents, this.channel, this.channelRefundId, this.reasonCode, this.reasonText, this.evidenceUrls, this.returnShipment, this.rejectReason, this.auditedAt, this.returnDeadlineAt, this.refundedAt, required this.createdAt, this.updatedAt, required this.storeId, required this.store, required this.orderStatus, this.orderShippedAt, this.auditedBy, this.receivedAt, this.receivedBy, required this.order});
   factory AdminRefundDetail.fromJson(Map<String, dynamic> j) => AdminRefundDetail(
         refundNo: j['refund_no'] as String,
         orderNo: j['order_no'] as String,
@@ -1481,6 +1485,7 @@ class AdminRefundDetail {
         storeId: (j['store_id'] as num).toInt(),
         store: OrderStoreSnapshot.fromJson(j['store'] as Map<String, dynamic>),
         orderStatus: (j['order_status'] as num).toInt(),
+        orderShippedAt: j['order_shipped_at'] as String?,
         auditedBy: j['audited_by'] == null ? null : StaffRef.fromJson(j['audited_by'] as Map<String, dynamic>),
         receivedAt: j['received_at'] as String?,
         receivedBy: j['received_by'] == null ? null : StaffRef.fromJson(j['received_by'] as Map<String, dynamic>),
@@ -1511,6 +1516,7 @@ class AdminRefundDetail {
         'store_id': storeId,
         'store': store.toJson(),
         'order_status': orderStatus,
+        if (orderShippedAt != null) 'order_shipped_at': orderShippedAt,
         if (auditedBy != null) 'audited_by': auditedBy!.toJson(),
         if (receivedAt != null) 'received_at': receivedAt,
         if (receivedBy != null) 'received_by': receivedBy!.toJson(),

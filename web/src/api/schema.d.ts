@@ -17731,6 +17731,12 @@ export interface components {
             store: components["schemas"]["OrderStoreSnapshot"];
             /** @description 所属订单此刻的履约状态 */
             order_status: components["schemas"]["OrderStatus"];
+            /**
+             * Format: date-time
+             * @description 所属订单的发货时间；**没发过货时缺席**。判「发没发货」看它，不要按 `order_status` 的大小判：
+             *     `50 退款中` / `60 已退款` 是**未发货**的整单退款。
+             */
+            order_shipped_at?: string;
             /** @description 通过或驳回这张单的员工（与 `audited_at` 同一次动作） */
             audited_by?: components["schemas"]["StaffRef"];
             /**

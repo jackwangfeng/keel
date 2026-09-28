@@ -211,3 +211,38 @@ func TestMCPTimesAreInShopTimezone(t *testing.T) {
 		t.Fatalf("店铺时区 UTC 时 created_at = %q，期望以 Z 结尾", v)
 	}
 }
+
+// list_refunds 给出 order_shipped_at：未发货的整单退款（订单进 50 退款中）没有它，发过货的有。
+// 2026-09-28 演示站实跑：手册写「order_status >= 30 即已发货」，AI 店长把 50 当成已发货、没提同意。
+func TestMCPListRefundsSaysWhetherTheOrderShipped(t *testing.T) {
+	cs := newCouponShop(t)
+	b := cs.newBuyer(t, "mcp-refund-ship")
+	unshipped := cs.twoLineOrder(t, b, nil)
+	cs.pay(t, unshipped.OrderNo, unshipped.PayableCents)
+	_, lines := cs.lines(t, b, unshipped.OrderNo)
+	r1 := cs.mustApply(t, b, unshipped.OrderNo, refundBody(1, [2]int64{lines[cs.ShirtSKU].Id, 1}, [2]int64{lines[cs.DressSKU].Id, 1}))
+
+	shipped := cs.placePaid(t, b, cs.NorthStore, cs.ShirtSKU, 1, nil)
+	wantStatus(t, cs.ship(t, shipped.OrderNo, "sf", "SF"+uniqueKey()), http.StatusCreated, "发货")
+	_, l2 := cs.lines(t, b, shipped.OrderNo)
+	r2 := cs.mustApply(t, b, shipped.OrderNo, refundBody(1, [2]int64{l2[cs.ShirtSKU].Id, 1}))
+
+	a := createAgent(t, cs.adminShop, `{"name":"AI","role":2}`)
+	sess := mcpConnect(t, cs.Host, issueAgentKey(t, cs.adminShop, a.Id, `{"name":"t"}`).Secret)
+	res, out := mcpCall(t, sess, "list_refunds", map[string]any{"status": 10})
+	if res.IsError {
+		t.Fatal(mcpText(res))
+	}
+	got := map[string]map[string]any{}
+	items, _ := out["items"].([]any)
+	for _, it := range items {
+		m := it.(map[string]any)
+		got[m["refund_no"].(string)] = m
+	}
+	if m := got[r1.RefundNo]; m == nil || m["order_shipped_at"] != nil {
+		t.Fatalf("未发货订单的售后：%v（不该有 order_shipped_at）", m)
+	}
+	if m := got[r2.RefundNo]; m == nil || m["order_shipped_at"] == nil {
+		t.Fatalf("已发货订单的售后：%v（应有 order_shipped_at）", m)
+	}
+}

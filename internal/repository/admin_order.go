@@ -59,11 +59,14 @@ type StaffRef struct {
 // 门店快照、审核记录（00035）。
 type AdminRefund struct {
 	Refund
-	OrderStatus   int16
-	StoreSnapshot []byte
-	AuditedBy     *StaffRef
-	ReceivedAt    *time.Time
-	ReceivedBy    *StaffRef
+	OrderStatus int16
+	// OrderShippedAt 是所属订单的发货时间，没发过货为 nil。「发没发货」看它，不看 OrderStatus：
+	// 50 / 60 是未发货的整单退款（2026-09-28 AI 店长把 50 当成了已发货）。
+	OrderShippedAt *time.Time
+	StoreSnapshot  []byte
+	AuditedBy      *StaffRef
+	ReceivedAt     *time.Time
+	ReceivedBy     *StaffRef
 }
 
 // AdminOrderTx 是后台订单与售后的读这一面。
@@ -265,9 +268,10 @@ func adminRefundFromRow(r db.AdminGetRefundByNoRow) AdminRefund {
 			ReturnCarrierCode: r.ReturnCarrierCode, ReturnTrackingNo: r.ReturnTrackingNo,
 			ReturnSubmittedAt: r.ReturnSubmittedAt,
 		}),
-		OrderStatus:   r.OrderStatus,
-		StoreSnapshot: r.StoreSnapshot,
-		ReceivedAt:    optTime(r.ReceivedAt),
+		OrderStatus:    r.OrderStatus,
+		OrderShippedAt: optTime(r.OrderShippedAt),
+		StoreSnapshot:  r.StoreSnapshot,
+		ReceivedAt:     optTime(r.ReceivedAt),
 	}
 	if r.AuditedBy != nil {
 		out.AuditedBy = &StaffRef{ID: *r.AuditedBy, Name: r.AuditedByName}

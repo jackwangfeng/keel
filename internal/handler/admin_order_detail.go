@@ -155,12 +155,13 @@ func apiAdminRefund(v service.AdminRefundView) api.AdminRefund {
 		CreatedAt:        b.CreatedAt,
 		UpdatedAt:        b.UpdatedAt,
 
-		StoreId:     v.Refund.StoreID,
-		Store:       apiStoreSnapshot(v.Store),
-		OrderStatus: api.OrderStatus(v.Refund.OrderStatus),
-		AuditedBy:   apiStaffRef(v.Refund.AuditedBy),
-		ReceivedAt:  v.Refund.ReceivedAt,
-		ReceivedBy:  apiStaffRef(v.Refund.ReceivedBy),
+		StoreId:        v.Refund.StoreID,
+		Store:          apiStoreSnapshot(v.Store),
+		OrderStatus:    api.OrderStatus(v.Refund.OrderStatus),
+		OrderShippedAt: v.Refund.OrderShippedAt,
+		AuditedBy:      apiStaffRef(v.Refund.AuditedBy),
+		ReceivedAt:     v.Refund.ReceivedAt,
+		ReceivedBy:     apiStaffRef(v.Refund.ReceivedBy),
 	}
 	if b.Channel != nil {
 		ch := api.AdminRefundChannel(*b.Channel)
