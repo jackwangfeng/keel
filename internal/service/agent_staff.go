@@ -144,15 +144,29 @@ func (s *StaffService) CreateAgent(ctx context.Context, name string, role int16,
 }
 
 // ListAgents 实现 GET /admin/agents。管理员才看得到（列表本身就是「谁拿着钥匙」）。
-func (s *StaffService) ListAgents(ctx context.Context) ([]repository.Agent, error) {
+//
+// 每一名都带上管辖范围（契约 AdminAgent.region_ids / store_ids 必返）：此前列表只回空数组，
+// 后台「管辖范围」一列对大区 / 门店管理员永远显示「—」，看上去像范围没生效（判权一直是按库里的范围走的）。
+// AI 员工一家店只有几名，逐个查范围不值得为它另写一条聚合查询。
+func (s *StaffService) ListAgents(ctx context.Context) ([]AgentView, error) {
 	if _, err := requireShopAdmin(ctx); err != nil {
 		return nil, err
 	}
-	var out []repository.Agent
+	var out []AgentView
 	err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
-		var e error
-		out, e = tx.ListAgents(ctx)
-		return e
+		agents, e := tx.ListAgents(ctx)
+		if e != nil {
+			return e
+		}
+		out = make([]AgentView, 0, len(agents))
+		for _, a := range agents {
+			sc, e := tx.ListStaffScopes(ctx, a.ID)
+			if e != nil {
+				return e
+			}
+			out = append(out, AgentView{Agent: a, Scopes: sc})
+		}
+		return nil
 	})
 	return out, err
 }

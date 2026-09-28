@@ -152,3 +152,23 @@ func TestAgentBoundaries(t *testing.T) {
 		t.Errorf("B 店读 A 店 AI 员工回 %d，期望 404", w.Code)
 	}
 }
+
+// 列表带管辖范围（2026-09-28 修）：之前 GET /admin/agents 对每一名都回空的 region_ids / store_ids，
+// 后台「管辖范围」一列对门店管理员身份的 AI 员工永远显示「—」。
+func TestAgentListCarriesScopes(t *testing.T) {
+	cs := newCouponShop(t)
+	a := createAgent(t, cs.adminShop, fmt.Sprintf(`{"name":"北京店 AI","role":4,"store_ids":[%d]}`, cs.NorthStore))
+	var out struct {
+		Items []api.AdminAgent `json:"items"`
+	}
+	decodeInto(t, getAs(t, cs.Host, "/api/v1/admin/agents", cs.Token), http.StatusOK, "AI 员工列表", &out)
+	for _, it := range out.Items {
+		if it.Id == a.Id {
+			if len(it.StoreIds) != 1 || it.StoreIds[0] != cs.NorthStore {
+				t.Fatalf("列表里的管辖范围应是北京门店，实得 store_ids=%v region_ids=%v", it.StoreIds, it.RegionIds)
+			}
+			return
+		}
+	}
+	t.Fatal("列表里没有刚建的 AI 员工")
+}

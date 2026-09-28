@@ -94,8 +94,8 @@ func (h *AgentHandler) List(c *gin.Context) {
 		return
 	}
 	items := make([]api.AdminAgent, 0, len(agents))
-	for _, a := range agents {
-		items = append(items, apiAgent(a, nil, nil))
+	for _, v := range agents {
+		items = append(items, apiAgent(v.Agent, &v.Scopes, nil))
 	}
 	c.JSON(http.StatusOK, gin.H{"items": items})
 }

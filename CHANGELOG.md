@@ -39,6 +39,17 @@ so "which one is running?" never depends on anyone's memory.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-09-28
+
+No migrations; the database stays on `00110`.
+
+### Fixed
+
+- **AI staff list showed no scope.** `GET /admin/agents` returned empty `region_ids` / `store_ids` for every AI staff
+  member, so the console's 「管辖范围」 column showed 「—」 for region and store managers and it looked as if the
+  scope had not taken effect. Only the list was wrong: the scope was stored and enforced on every tool call all
+  along (and `GET /admin/agents/{staff_id}` returned it).
+
 ## [0.3.0] - 2026-09-28
 
 Core migrations `00075`–`00076`, `00085`–`00087`, `00090`–`00093`, `00100`, `00110`; the core database lands on
@@ -1247,7 +1258,8 @@ Listed because a changelog that only lists wins is an advertisement.
   show why a product was rejected last time; the merchant only ever saw it in
   that one response.
 
-[Unreleased]: https://github.com/jackwangfeng/keel/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/jackwangfeng/keel/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/jackwangfeng/keel/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/jackwangfeng/keel/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/jackwangfeng/keel/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/jackwangfeng/keel/releases/tag/v0.1.0
