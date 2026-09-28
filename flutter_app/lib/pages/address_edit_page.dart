@@ -6,6 +6,7 @@ import '../api/client.dart';
 import '../api/services.dart';
 import '../theme.dart';
 import '../widgets/form_bits.dart';
+import 'place_picker_page.dart';
 
 /// 新建 / 编辑地址。422 按 errors[].field 标红对应的那一格；PUT 不切默认，想切默认 PUT 之后另调专用接口。
 class AddressEditPage extends StatefulWidget {
@@ -90,7 +91,31 @@ class _AddressEditPageState extends State<AddressEditPage> {
     }
   }
 
+  /// 搜索地点 / 地图选点：选中后省市区、街道、区划码、坐标照填，详细地址先写上，门牌号用户自己补。
+  Future<void> _searchPlace() async {
+    final p = await context.push<PickedPlace>('/place?for=address');
+    final place = p?.place;
+    if (place == null || !mounted) return;
+    _collect();
+    _form.applyPlace(place);
+    setState(() {
+      _c['province']!.text = _form.province;
+      _c['city']!.text = _form.city;
+      _c['district']!.text = _form.district;
+      _c['detail']!.text = _form.detail;
+    });
+  }
+
   void _collect() {
+    final province = _c['province']!.text.trim(), city = _c['city']!.text.trim(), district = _c['district']!.text.trim();
+    // 手改了省市区：坐标、区划码、街道是按原来那一处定的，不再可信，一起清掉（不然运费、门店还按旧的点算）。
+    if (province != _form.province || city != _form.city || district != _form.district) {
+      _form
+        ..lat = null
+        ..lng = null
+        ..regionCode = null
+        ..street = null;
+    }
     _form
       ..receiverName = _c['receiverName']!.text.trim()
       ..phone = _c['phone']!.text.trim()
@@ -184,6 +209,22 @@ class _AddressEditPageState extends State<AddressEditPage> {
           ? const Center(child: Text('正在加载…', style: KeelText.hint))
           : ListView(padding: const EdgeInsets.fromLTRB(16, 0, 16, 24), children: [
               // 422 时按 errors[].field 标红对应的那一格，错误原文写在格子下面。
+              KeelCard(
+                padding: EdgeInsets.zero,
+                child: InkWell(
+                  key: const Key('address.searchPlace'),
+                  onTap: _searchPlace,
+                  child: const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                    child: Row(children: [
+                      Icon(Icons.search, size: 18, color: KeelColors.textSub),
+                      SizedBox(width: 10),
+                      Expanded(child: Text('搜索地点，自动填写地址', style: KeelText.body)),
+                      Text('›', style: KeelText.hint),
+                    ]),
+                  ),
+                ),
+              ),
               KeelCard(
                 padding: const EdgeInsets.symmetric(horizontal: 16),
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [

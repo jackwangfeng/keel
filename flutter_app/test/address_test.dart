@@ -9,9 +9,9 @@ import 'package:keel_buyer/api/schema.g.dart';
 import 'package:keel_buyer/api/session.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-Map<String, dynamic> addr({int id = 5, bool def = false, String? street, String? region, int? tag}) => {
+Map<String, dynamic> addr({int id = 5, bool def = false, String? street, String? region, int? tag, double? lat, double? lng}) => {
       'id': id, 'receiver_name': '张三', 'phone': '13900000000', 'province': '浙江省', 'city': '杭州市', 'district': '西湖区',
-      'street': ?street, 'detail': '文三路 1 号', 'region_code': ?region, 'tag': ?tag, 'is_default': def,
+      'street': ?street, 'detail': '文三路 1 号', 'region_code': ?region, 'tag': ?tag, 'is_default': def, 'lat': ?lat, 'lng': ?lng,
     };
 
 Future<(ApiClient, List<http.Request>)> client(http.Response Function(http.Request) h) async {
@@ -74,5 +74,25 @@ void main() {
       final errs = formErrors(f);
       expect(errs, {'receiverName': '不能为空', 'phone': '手机号格式不对'});
     }
+  });
+
+  test('坐标（POI）：PUT 整条替换，表单原样带回，不然一保存就把坐标清掉；行上也带着（首页换地址用）', () async {
+    final (c, seen) = await client((r) => j(addr(lat: 30.27, lng: 120.15)));
+    final a = Address.fromJson(addr(lat: 30.27, lng: 120.15));
+    await updateAddress(c, 5, AddressForm.of(a));
+    final b = jsonDecode(seen.single.body) as Map;
+    expect((b['lat'], b['lng']), (30.27, 120.15));
+    expect(addressRow(a).at, (lat: 30.27, lng: 120.15));
+    expect(addressRow(Address.fromJson(addr())).at, isNull);
+  });
+
+  test('选中一个地点：自动填省市区、街道、区划码、坐标与详细地址', () {
+    final f = AddressForm()..applyPlace(const GeoPlace(name: '黄龙时代广场', address: '杭大路 15 号', province: '浙江省', city: '杭州市',
+        district: '西湖区', adcode: '330106', street: '北山街道', lat: 30.27, lng: 120.15));
+    expect([f.province, f.city, f.district, f.street, f.regionCode], ['浙江省', '杭州市', '西湖区', '北山街道', '330106']);
+    expect(f.detail, '杭大路 15 号 黄龙时代广场');
+    expect((f.lat, f.lng), (30.27, 120.15));
+    final b = f.input(false).toJson();
+    expect((b['lat'], b['lng']), (30.27, 120.15));
   });
 }

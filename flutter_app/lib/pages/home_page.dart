@@ -5,6 +5,7 @@ import '../api/catalog.dart';
 
 import '../api/client.dart';
 import '../api/services.dart';
+import 'place_picker_page.dart';
 import '../api/store.dart';
 import '../api/view.dart';
 import '../theme.dart';
@@ -47,17 +48,21 @@ class _HomePageState extends State<HomePage> {
     super.dispose();
   }
 
-  /// 门店作废了（换了服务地址 = 换了一家店）：重新解析、重拉 —— 不然首页还摆着上一家店的商品。
+  /// 门店作废了（换了服务地址 / 换了送货地址 = 可能换了一家店）：重新解析、重拉 —— 不然首页还摆着上一家店的商品。
+  /// 地址名（逆地理编码）晚一步到，到了刷一下顶上那行。
   void _onStore() {
-    if (mounted && _store!.current == null && !_loading) {
-      setState(() {
-        _rows = const [];
-        _categories = const [];
-        _categoryId = 0;
-        _storeLine = '';
-      });
-      _load();
+    if (!mounted) return;
+    if (_store!.current != null) {
+      setState(() {});
+      return;
     }
+    setState(() {
+      _rows = const [];
+      _categories = const [];
+      _categoryId = 0;
+      _storeLine = '';
+    });
+    _load();
   }
 
   Future<void> _load() async {
@@ -143,6 +148,26 @@ class _HomePageState extends State<HomePage> {
     return '全部商品';
   }
 
+  /// 「送至 …」：定位到的地址名 / 换过的地址；还不知道（没配地图服务商、没定位）就退回门店。
+  String get _placeLine {
+    final label = _store?.placeLabel ?? '';
+    return label.isNotEmpty ? '送至 $label' : _storeLine;
+  }
+
+  /// 换送货地址：搜索地点 / 地图选点 / 收货地址 / 当前定位。选完按新坐标重新解析门店（StoreService 通知 → _onStore 重拉）。
+  Future<void> _changePlace() async {
+    final store = Services.of(context).store;
+    final messenger = ScaffoldMessenger.of(context);
+    final p = await context.push<PickedPlace>('/place');
+    if (p == null) return;
+    if (p.device) {
+      store.useDeviceLocation();
+      return;
+    }
+    store.deliverTo(at: p.at, label: p.label);
+    if (p.at == null) messenger.showSnackBar(const SnackBar(content: Text('这条地址没有位置信息，暂按默认门店')));
+  }
+
   String get _greeting {
     final h = DateTime.now().hour;
     return h < 11 ? '早上好' : (h < 18 ? '下午好' : '晚上好');
@@ -164,10 +189,15 @@ class _HomePageState extends State<HomePage> {
                   Text(_greeting, style: KeelText.display),
                   const SizedBox(height: 4),
                   const Text('慢一点，好好喝一杯', style: KeelText.sub),
-                  if (_storeLine.isNotEmpty)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 6),
-                      child: Text(_storeLine, key: const Key('home.store'), style: KeelText.hint),
+                  if (_placeLine.isNotEmpty)
+                    GestureDetector(
+                      key: const Key('home.store'),
+                      behavior: HitTestBehavior.opaque,
+                      onTap: _changePlace,
+                      child: Padding(
+                        padding: const EdgeInsets.only(top: 6),
+                        child: Text('$_placeLine ›', maxLines: 1, overflow: TextOverflow.ellipsis, style: KeelText.hint),
+                      ),
                     ),
                   const SizedBox(height: 20),
                   // 首页只放一个入口，真正的输入框在搜索页（首页一聚焦就弹键盘挡住商品）。

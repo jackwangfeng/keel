@@ -1,4 +1,5 @@
 import 'client.dart';
+import 'geo.dart';
 import 'schema.g.dart';
 
 /// 地址簿。照 uni-app x 的 view.uts（addressRow / addressForm / addressRequest / fieldErrors）与 pages/address 移植。
@@ -13,8 +14,10 @@ class AddressRow {
   final String fullText;
   final bool isDefault;
   final String tagText;
+  /// 坐标（WGS-84）。老地址、手填的没有。首页「换地址」按它重新解析门店。
+  final LatLng? at;
   const AddressRow({required this.id, required this.name, required this.phone, required this.regionText,
-      required this.detail, required this.fullText, required this.isDefault, required this.tagText});
+      required this.detail, required this.fullText, required this.isDefault, required this.tagText, this.at});
 }
 
 String _tag(int? t) => switch (t) { 1 => '家', 2 => '公司', 3 => '学校', _ => '' };
@@ -31,10 +34,11 @@ AddressRow addressRow(Address a) {
     fullText: '$region ${street.isNotEmpty ? '$street ' : ''}${a.detail}',
     isDefault: a.isDefault,
     tagText: _tag(a.tag),
+    at: a.lat != null && a.lng != null ? (lat: a.lat!, lng: a.lng!) : null,
   );
 }
 
-/// 编辑页的表单。表单上没有的字段（街道、区划码、邮编、标签）也存着，PUT 时原样带回 ——
+/// 编辑页的表单。表单上没有的字段（街道、区划码、邮编、标签、坐标）也存着，PUT 时原样带回 ——
 /// PUT 是整条替换，不带就被清掉（uni-app x 那版漏了这几项）。
 class AddressForm {
   String receiverName = '';
@@ -49,6 +53,9 @@ class AddressForm {
   String? regionCode;
   String? postalCode;
   int? tag;
+  /// WGS-84，要么都有要么都没有（只给一个服务端回 422）。
+  double? lat;
+  double? lng;
 
   AddressForm();
 
@@ -63,7 +70,21 @@ class AddressForm {
         street = a.street,
         regionCode = a.regionCode,
         postalCode = a.postalCode,
-        tag = a.tag;
+        tag = a.tag,
+        lat = a.lat,
+        lng = a.lng;
+
+  /// 搜索地点 / 地图选点选中了一处：省市区、街道、区划码（运费按它算）与坐标照填，详细地址先写上地址与地点名，门牌号用户自己补。
+  void applyPlace(GeoPlace p) {
+    province = p.province;
+    city = p.city;
+    district = p.district;
+    street = p.street.isNotEmpty ? p.street : null;
+    regionCode = p.adcode.isNotEmpty ? p.adcode : null;
+    detail = [p.address, p.name].where((s) => s.isNotEmpty).join(' ');
+    lat = p.lat;
+    lng = p.lng;
+  }
 
   AddressInput input(bool isDefault) => AddressInput(
         receiverName: receiverName,
@@ -76,6 +97,8 @@ class AddressForm {
         regionCode: regionCode,
         postalCode: postalCode,
         tag: tag,
+        lat: lat,
+        lng: lng,
         isDefault: isDefault,
       );
 }

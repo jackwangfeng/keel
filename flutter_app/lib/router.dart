@@ -23,6 +23,7 @@ import 'pages/home_page.dart';
 import 'pages/login_page.dart';
 import 'pages/me_page.dart';
 import 'pages/product_page.dart';
+import 'pages/place_picker_page.dart';
 import 'pages/search_page.dart';
 import 'tabs.dart';
 import 'theme.dart';
@@ -59,6 +60,7 @@ GoRouter buildRouter(Session session) => GoRouter(
         ),
         // 外壳之上的页（push 进来，返回回到原 tab）。
         GoRoute(path: '/search', builder: (_, _) => const SearchPage()),
+        GoRoute(path: '/place', builder: (_, st) => PlacePickerPage(forAddress: st.uri.queryParameters['for'] == 'address')),
         GoRoute(path: '/product/:id', builder: (_, st) => ProductPage(productId: int.tryParse(st.pathParameters['id'] ?? '') ?? 0)),
         GoRoute(path: '/addresses', builder: (_, st) => AddressListPage(select: st.uri.queryParameters['select'] == '1')),
         GoRoute(path: '/addresses/new', builder: (_, _) => const AddressEditPage()),
