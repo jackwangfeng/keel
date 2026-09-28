@@ -432,6 +432,22 @@ var permMatrix = []permRoute{
 	}},
 	// —— 店铺设置（00059）：与设默认门店同一行，只有管理员（含平台级经 X-Keel-Merchant 切进来的）。
 	// PUT 写的是列默认值，放几次都不改变这家店的行为（矩阵后面的格子不受影响）。
+	// —— AI 员工的提案（AI 经营 M9）：列表人人可看（按范围收窄）；详情 / 批准 / 驳回按门店 storeOperate，
+	// 与「加减库存」同一个判据（批准会以 AI 员工身份执行一次加库存）。每一格插一条自己的提案。
+	{"GET", v1 + "/admin/agent-proposals", everyone, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permGet(v1 + "/admin/agent-proposals")
+	}},
+	{"GET", v1 + "/admin/agent-proposals/:proposal_id", storeOperate, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permGet(fmt.Sprintf(v1+"/admin/agent-proposals/%d", fx.proposal(t, fx.store(c))))
+	}},
+	{"POST", v1 + "/admin/agent-proposals/:proposal_id/approve", storeOperate, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permReq{Method: "POST", Path: fmt.Sprintf(v1+"/admin/agent-proposals/%d/approve", fx.proposal(t, fx.store(c))),
+			OK: http.StatusOK}
+	}},
+	{"POST", v1 + "/admin/agent-proposals/:proposal_id/reject", storeOperate, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permReq{Method: "POST", Path: fmt.Sprintf(v1+"/admin/agent-proposals/%d/reject", fx.proposal(t, fx.store(c))),
+			Body: `{"reason":"矩阵"}`, OK: http.StatusOK}
+	}},
 	// —— AI 员工与接入密钥（AI 经营 M9）：只有本店管理员。每一格用自己新建的 AI 员工 / 密钥，互不影响。
 	{"GET", v1 + "/admin/agents", adminOnly, func(t *testing.T, fx *permFixture, c permCase) permReq {
 		return permGet(v1 + "/admin/agents")

@@ -1578,6 +1578,85 @@ class AgentKeyCreated {
       };
 }
 
+class AgentProposal {
+  final int id;
+  final int agentStaffId;
+  final String agentName;
+  final String kind;
+  final int storeId;
+  final String storeName;
+  final int? skuId;
+  final Map<String, dynamic> payload;
+  final String title;
+  final String evidence;
+  final String expectedImpact;
+  final int status;
+  final int? decidedBy;
+  final String? decidedByName;
+  final String? decidedAt;
+  final String? rejectReason;
+  final Map<String, dynamic>? result;
+  final String expiresAt;
+  final String createdAt;
+  final String updatedAt;
+  const AgentProposal({required this.id, required this.agentStaffId, required this.agentName, required this.kind, required this.storeId, required this.storeName, this.skuId, required this.payload, required this.title, required this.evidence, required this.expectedImpact, required this.status, this.decidedBy, this.decidedByName, this.decidedAt, this.rejectReason, this.result, required this.expiresAt, required this.createdAt, required this.updatedAt});
+  factory AgentProposal.fromJson(Map<String, dynamic> j) => AgentProposal(
+        id: (j['id'] as num).toInt(),
+        agentStaffId: (j['agent_staff_id'] as num).toInt(),
+        agentName: j['agent_name'] as String,
+        kind: j['kind'] as String,
+        storeId: (j['store_id'] as num).toInt(),
+        storeName: j['store_name'] as String,
+        skuId: (j['sku_id'] as num?)?.toInt(),
+        payload: j['payload'] as Map<String, dynamic>,
+        title: j['title'] as String,
+        evidence: j['evidence'] as String,
+        expectedImpact: j['expected_impact'] as String,
+        status: (j['status'] as num).toInt(),
+        decidedBy: (j['decided_by'] as num?)?.toInt(),
+        decidedByName: j['decided_by_name'] as String?,
+        decidedAt: j['decided_at'] as String?,
+        rejectReason: j['reject_reason'] as String?,
+        result: j['result'] as Map<String, dynamic>?,
+        expiresAt: j['expires_at'] as String,
+        createdAt: j['created_at'] as String,
+        updatedAt: j['updated_at'] as String,
+      );
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'agent_staff_id': agentStaffId,
+        'agent_name': agentName,
+        'kind': kind,
+        'store_id': storeId,
+        'store_name': storeName,
+        if (skuId != null) 'sku_id': skuId,
+        'payload': payload,
+        'title': title,
+        'evidence': evidence,
+        'expected_impact': expectedImpact,
+        'status': status,
+        if (decidedBy != null) 'decided_by': decidedBy,
+        if (decidedByName != null) 'decided_by_name': decidedByName,
+        if (decidedAt != null) 'decided_at': decidedAt,
+        if (rejectReason != null) 'reject_reason': rejectReason,
+        if (result != null) 'result': result,
+        'expires_at': expiresAt,
+        'created_at': createdAt,
+        'updated_at': updatedAt,
+      };
+}
+
+class AgentProposalRejectRequest {
+  final String reason;
+  const AgentProposalRejectRequest({required this.reason});
+  factory AgentProposalRejectRequest.fromJson(Map<String, dynamic> j) => AgentProposalRejectRequest(
+        reason: j['reason'] as String,
+      );
+  Map<String, dynamic> toJson() => {
+        'reason': reason,
+      };
+}
+
 class AgentUpdateRequest {
   final String? name;
   final int? role;

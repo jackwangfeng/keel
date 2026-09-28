@@ -153,6 +153,8 @@ var tenantContextAllowed = map[string]string{
 	"inventory_reconcile.go": "库存对账（微服务拆分阶段 2），与 auto_confirm.go 同一处境：跑在任何 HTTP 请求之外，" +
 		"没有 Host 也没有 gid。只读：枚举 merchants 再逐家进 WithTenant 读 core 的 skus / stores / promotion_skus，" +
 		"并带着同一个租户上下文调库存服务（租户头由它给出）。它不是 SAGA 分支，上面第 ② 道会把这一点钉住。",
+	"agent_proposal_expiry.go": "AI 员工提案的过期扫描（00091），与 stock_flags.go 同一处境：跑在任何 HTTP 请求之外，" +
+		"没有 Host 也没有 gid。枚举 merchants 再逐家进 WithTenant，把过期的待处理提案置 50。它不是 SAGA 分支。",
 	"stock_flags.go": "商品列表有货排序标记的全量刷新（00087），与 inventory_reconcile.go 同一处境：跑在任何 HTTP 请求之外，" +
 		"没有 Host 也没有 gid。枚举 merchants 再逐家进 WithTenant 读 skus / stores、写 product_store_stock，" +
 		"并带着同一个租户上下文调库存服务（租户头由它给出）。它不是 SAGA 分支，上面第 ② 道会把这一点钉住。",

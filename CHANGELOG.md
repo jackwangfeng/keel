@@ -41,6 +41,13 @@ so "which one is running?" never depends on anyone's memory.
 
 ### Added
 
+- **Proposals (M9, task 4): AI staff propose, humans approve, Keel executes as the agent.** New MCP tools
+  `propose_inventory_adjust` (same authorization as the admin inventory adjustment; one open proposal per
+  store and SKU) and `list_my_proposals` (results and rejection reasons). Admin endpoints under
+  `/admin/agent-proposals` list, show, approve and reject (migration 00091). Approval checks the approver,
+  then executes the existing inventory adjustment **as the agent** with the proposal id as idempotency key,
+  so a narrowed scope or a disabled agent makes execution fail (status 40, reason recorded) and a retry
+  after a crash never adds stock twice. Unhandled proposals expire after 48 hours.
 - **`restock_plan` MCP tool (M9, task 3): deterministic restock suggestions.** Per (store, SKU): paid units
   over the lookback window divided by *in-stock* days (days whose closing level was ≤ 0 are excluded —
   otherwise items that ran out get under-ordered), days of cover, projected sell-out date in the shop's time

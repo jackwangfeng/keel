@@ -191,6 +191,9 @@ IDEMPOTENCY_EXEMPT = {
     '/admin/auth/session':    '一次性 token 换会话，重放由 used_at 拦截',
     '/admin/staff/{staff_id}/login-token': '每次签发作废此前没用掉的登录链接 token，'
                                            '重复调用 = 只有最新一串有效；存档重放会让 token 明文进库',
+    '/admin/agent-proposals/{proposal_id}/approve': '状态机就是幂等闸门：只有 10 / 15 能批（条件 UPDATE），'
+                                                    '执行那一笔按提案 id 幂等（库存 biz_id），重复批准不会重复执行',
+    '/admin/agent-proposals/{proposal_id}/reject':  '只有待处理（10）的能驳回，条件 UPDATE；重复驳回回 409',
     '/admin/agents/{staff_id}/keys': '接入密钥明文只在创建响应里出现一次；存档重放会让明文进库、再交出去一次。'
                                      '重复调用 = 多一把密钥，列表里看得见、可吊销（与 login-token 同一理由）',
     '/assistant/chat':    '无副作用；会话状态由 session_id 承载',

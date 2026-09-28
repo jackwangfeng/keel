@@ -21,7 +21,6 @@ type AgentKeyLoader interface {
 	LoadAgentIdentity(ctx context.Context, raw string) (StaffIdentity, error)
 }
 
-
 func AgentBearer(loader AgentKeyLoader, isRejected func(error) bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		raw, ok := bearerToken(c.GetHeader("Authorization"))

@@ -98,6 +98,7 @@ type Tx interface {
 	ReconcileTx
 	StockFlagTx
 	RestockTx
+	AgentProposalTx
 }
 
 // StoreScope 是「本次请求按哪家门店算」——门店 id 与它所属的大区 id。

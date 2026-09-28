@@ -375,6 +375,51 @@ func (e AgentCreateRequestRole) Valid() bool {
 	}
 }
 
+// Defines values for AgentProposalKind.
+const (
+	InventoryAdjust AgentProposalKind = "inventory_adjust"
+)
+
+// Valid indicates whether the value is a known member of the AgentProposalKind enum.
+func (e AgentProposalKind) Valid() bool {
+	switch e {
+	case InventoryAdjust:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentProposalStatus.
+const (
+	AgentProposalStatusN10 AgentProposalStatus = 10
+	AgentProposalStatusN15 AgentProposalStatus = 15
+	AgentProposalStatusN20 AgentProposalStatus = 20
+	AgentProposalStatusN30 AgentProposalStatus = 30
+	AgentProposalStatusN40 AgentProposalStatus = 40
+	AgentProposalStatusN50 AgentProposalStatus = 50
+)
+
+// Valid indicates whether the value is a known member of the AgentProposalStatus enum.
+func (e AgentProposalStatus) Valid() bool {
+	switch e {
+	case AgentProposalStatusN10:
+		return true
+	case AgentProposalStatusN15:
+		return true
+	case AgentProposalStatusN20:
+		return true
+	case AgentProposalStatusN30:
+		return true
+	case AgentProposalStatusN40:
+		return true
+	case AgentProposalStatusN50:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AgentUpdateRequestRole.
 const (
 	AgentUpdateRequestRoleN2 AgentUpdateRequestRole = 2
@@ -1809,6 +1854,36 @@ func (e ReportPeriod) Valid() bool {
 	case ReportPeriodToday:
 		return true
 	case ReportPeriodYesterday:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GetAdminAgentProposalsParamsStatus.
+const (
+	GetAdminAgentProposalsParamsStatusN10 GetAdminAgentProposalsParamsStatus = 10
+	GetAdminAgentProposalsParamsStatusN15 GetAdminAgentProposalsParamsStatus = 15
+	GetAdminAgentProposalsParamsStatusN20 GetAdminAgentProposalsParamsStatus = 20
+	GetAdminAgentProposalsParamsStatusN30 GetAdminAgentProposalsParamsStatus = 30
+	GetAdminAgentProposalsParamsStatusN40 GetAdminAgentProposalsParamsStatus = 40
+	GetAdminAgentProposalsParamsStatusN50 GetAdminAgentProposalsParamsStatus = 50
+)
+
+// Valid indicates whether the value is a known member of the GetAdminAgentProposalsParamsStatus enum.
+func (e GetAdminAgentProposalsParamsStatus) Valid() bool {
+	switch e {
+	case GetAdminAgentProposalsParamsStatusN10:
+		return true
+	case GetAdminAgentProposalsParamsStatusN15:
+		return true
+	case GetAdminAgentProposalsParamsStatusN20:
+		return true
+	case GetAdminAgentProposalsParamsStatusN30:
+		return true
+	case GetAdminAgentProposalsParamsStatusN40:
+		return true
+	case GetAdminAgentProposalsParamsStatusN50:
 		return true
 	default:
 		return false
@@ -3303,6 +3378,53 @@ type AgentKeyCreated struct {
 
 	// Secret 明文，只在这一次响应里出现
 	Secret string `json:"secret"`
+}
+
+// AgentProposal defines model for AgentProposal.
+type AgentProposal struct {
+	AgentName     string     `json:"agent_name"`
+	AgentStaffId  int64      `json:"agent_staff_id"`
+	CreatedAt     time.Time  `json:"created_at"`
+	DecidedAt     *time.Time `json:"decided_at,omitempty"`
+	DecidedBy     *int64     `json:"decided_by,omitempty"`
+	DecidedByName *string    `json:"decided_by_name,omitempty"`
+
+	// Evidence AI 员工写的证据（markdown，按不可信输入渲染）
+	Evidence       string    `json:"evidence"`
+	ExpectedImpact string    `json:"expected_impact"`
+	ExpiresAt      time.Time `json:"expires_at"`
+	Id             int64     `json:"id"`
+
+	// Kind M9 只有加库存一种
+	Kind AgentProposalKind `json:"kind"`
+
+	// Payload 执行参数。inventory_adjust 是 {store_id, sku_id, delta, reason}
+	Payload      map[string]interface{} `json:"payload"`
+	RejectReason *string                `json:"reject_reason,omitempty"`
+
+	// Result 执行结果：{before_available, after_available} 或 {error_type, error}
+	Result *map[string]interface{} `json:"result,omitempty"`
+	SkuId  *int64                  `json:"sku_id,omitempty"`
+
+	// Status 10 待处理 / 15 执行中 / 20 已执行 / 30 已驳回 / 40 执行失败 / 50 已过期
+	Status    AgentProposalStatus `json:"status"`
+	StoreId   int64               `json:"store_id"`
+	StoreName string              `json:"store_name"`
+
+	// Title 一句话，如「北京门店：颜色：黑 / 尺码：M 补 40 件」
+	Title     string    `json:"title"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// AgentProposalKind M9 只有加库存一种
+type AgentProposalKind string
+
+// AgentProposalStatus 10 待处理 / 15 执行中 / 20 已执行 / 30 已驳回 / 40 执行失败 / 50 已过期
+type AgentProposalStatus int
+
+// AgentProposalRejectRequest defines model for AgentProposalRejectRequest.
+type AgentProposalRejectRequest struct {
+	Reason string `json:"reason"`
 }
 
 // AgentUpdateRequest defines model for AgentUpdateRequest.
@@ -6754,6 +6876,125 @@ type PostAddressesParams struct {
 	// · 首次执行失败（存档为失败态）时同样回放该失败响应；
 	//   确需重试的场景请换一个新 key
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// GetAdminAgentProposalsParams defines parameters for GetAdminAgentProposals.
+type GetAdminAgentProposalsParams struct {
+	// Status 10 待处理 / 15 执行中 / 20 已执行 / 30 已驳回 / 40 执行失败 / 50 已过期；不传即全部
+	Status *GetAdminAgentProposalsParamsStatus `form:"status,omitempty" json:"status,omitempty"`
+
+	// AgentStaffId 只看这名 AI 员工提的
+	AgentStaffId *int64    `form:"agent_staff_id,omitempty" json:"agent_staff_id,omitempty"`
+	Page         *Page     `form:"page,omitempty" json:"page,omitempty"`
+	PageSize     *PageSize `form:"page_size,omitempty" json:"page_size,omitempty"`
+
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// GetAdminAgentProposalsParamsStatus defines parameters for GetAdminAgentProposals.
+type GetAdminAgentProposalsParamsStatus int
+
+// GetAdminAgentProposalsProposalIdParams defines parameters for GetAdminAgentProposalsProposalId.
+type GetAdminAgentProposalsProposalIdParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// PostAdminAgentProposalsProposalIdApproveParams defines parameters for PostAdminAgentProposalsProposalIdApprove.
+type PostAdminAgentProposalsProposalIdApproveParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// PostAdminAgentProposalsProposalIdRejectParams defines parameters for PostAdminAgentProposalsProposalIdReject.
+type PostAdminAgentProposalsProposalIdRejectParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
 }
 
 // GetAdminAgentsParams defines parameters for GetAdminAgents.
@@ -10695,6 +10936,9 @@ type PostAddressesJSONRequestBody = AddressInput
 
 // PutAddressesAddressIdJSONRequestBody defines body for PutAddressesAddressId for application/json ContentType.
 type PutAddressesAddressIdJSONRequestBody = AddressInput
+
+// PostAdminAgentProposalsProposalIdRejectJSONRequestBody defines body for PostAdminAgentProposalsProposalIdReject for application/json ContentType.
+type PostAdminAgentProposalsProposalIdRejectJSONRequestBody = AgentProposalRejectRequest
 
 // PostAdminAgentsJSONRequestBody defines body for PostAdminAgents for application/json ContentType.
 type PostAdminAgentsJSONRequestBody = AgentCreateRequest

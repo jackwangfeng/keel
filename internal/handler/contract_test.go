@@ -763,6 +763,34 @@ var routes = []route{
 		HandlerFile:    "admin_product_import.go",
 		NoQueryParams:  "文件与类目选择在 multipart 里（file / categories），幂等键在请求头里",
 	},
+	// —— AI 员工的提案（AI 经营 M9 任务 4）。列表读 status / agent_staff_id / page，单独一个文件。
+	{
+		ContractPath:   "/admin/agent-proposals",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "admin_agent_proposal_list.go",
+	},
+	{
+		ContractPath:   "/admin/agent-proposals/{proposal_id}",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "admin_agent_proposal.go",
+		NoQueryParams:  "提案 id 在路径上，驳回理由在请求体里",
+	},
+	{
+		ContractPath:   "/admin/agent-proposals/{proposal_id}/approve",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "admin_agent_proposal.go",
+		NoQueryParams:  "提案 id 在路径上，驳回理由在请求体里",
+	},
+	{
+		ContractPath:   "/admin/agent-proposals/{proposal_id}/reject",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "admin_agent_proposal.go",
+		NoQueryParams:  "提案 id 在路径上，驳回理由在请求体里",
+	},
 	// —— AI 员工与接入密钥（AI 经营 M9，docs/AI经营-M9设计.md §2）。
 	{
 		ContractPath:   "/admin/agents",

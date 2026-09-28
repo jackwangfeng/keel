@@ -51,6 +51,8 @@ type MCPDeps struct {
 	Catalog *service.AdminCatalogService
 	Orders  *service.AdminOrderService
 	Restock *service.RestockService
+	// Proposals 是提案（任务 4）：AI 员工只能提、看自己的；批准 / 驳回在后台接口。
+	Proposals *service.AgentProposalService
 	Log     *slog.Logger
 	// Version 进 MCP 的 serverInfo，agent 能看到连的是哪个版本。
 	Version string
@@ -89,7 +91,7 @@ func NewMCPHandler(d MCPDeps) gin.HandlerFunc {
 // mcpInstructions 进 initialize 的 instructions：agent 连上时看到的第一段话。完整的纪律在仓库的 agent/AGENTS.md。
 const mcpInstructions = `你是这家店的一名 AI 员工，权限与你的角色和管辖范围一致，越权会被拒绝。
 数字只引用工具返回的，不要自己估算；金额单位是「分」，同时附有人读的元。
-M9 阶段你只能读数据、计算、写简报、提出提案；提案要人在后台批准后才会执行。
+M9 阶段你只能读数据、计算、写简报、提出提案；提案要人在后台批准后才会执行。提之前先用 list_my_proposals 看有没有同样的待处理提案。
 完整的工作纪律与手册见仓库 agent/AGENTS.md 与 agent/skills/。`
 
 // mcpTool 注册一个工具：统一做审计与错误翻译。fn 返回的 Out 会作为结构化结果给 agent。

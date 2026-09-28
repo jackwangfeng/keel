@@ -807,6 +807,39 @@ export type AgentKeyCreated = {
   secret : string
 }
 
+export type AgentProposal = {
+  id : number
+  agent_staff_id : number
+  agent_name : string
+  /** M9 只有加库存一种 */
+  kind : string
+  store_id : number
+  store_name : string
+  sku_id? : number
+  /** 执行参数。inventory_adjust 是 {store_id, sku_id, delta, reason} */
+  payload : UTSJSONObject
+  /** 一句话，如「北京门店：颜色：黑 / 尺码：M 补 40 件」 */
+  title : string
+  /** AI 员工写的证据（markdown，按不可信输入渲染） */
+  evidence : string
+  expected_impact : string
+  /** 10 待处理 / 15 执行中 / 20 已执行 / 30 已驳回 / 40 执行失败 / 50 已过期 */
+  status : number
+  decided_by? : number
+  decided_by_name? : string
+  decided_at? : string
+  reject_reason? : string
+  /** 执行结果：{before_available, after_available} 或 {error_type, error} */
+  result? : UTSJSONObject
+  expires_at : string
+  created_at : string
+  updated_at : string
+}
+
+export type AgentProposalRejectRequest = {
+  reason : string
+}
+
 export type AgentUpdateRequest = {
   name? : string
   role? : number

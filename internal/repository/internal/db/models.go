@@ -35,6 +35,28 @@ type AgentKey struct {
 	CreatedAt  pgtype.Timestamptz
 }
 
+// AI 员工的提案（00091，AI 经营 M9）：人批准后以 AI 员工的身份执行。
+type AgentProposal struct {
+	ID             int64
+	MerchantID     int64
+	AgentStaffID   int64
+	Kind           string
+	StoreID        int64
+	SkuID          *int64
+	Payload        []byte
+	Title          string
+	Evidence       string
+	ExpectedImpact string
+	Status         int16
+	DecidedBy      *int64
+	DecidedAt      pgtype.Timestamptz
+	RejectReason   *string
+	Result         []byte
+	ExpiresAt      pgtype.Timestamptz
+	CreatedAt      pgtype.Timestamptz
+	UpdatedAt      pgtype.Timestamptz
+}
+
 // AI 员工的 MCP 工具调用审计（00093，AI 经营 M9）。
 type AgentToolCall struct {
 	ID           int64

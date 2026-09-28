@@ -1,0 +1,406 @@
+package service
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/keel/keel/internal/auth"
+	"github.com/keel/keel/internal/inventory"
+	"github.com/keel/keel/internal/repository"
+	"github.com/keel/keel/internal/tenant"
+)
+
+// AI 员工的提案（AI 经营 M9 任务 4，docs/AI经营-M9设计.md §4）。
+//
+// 写操作默认不直接执行：AI 员工提「证据 + 动作 + 预计影响」，人批准后由 Keel **以 AI 员工的身份**执行。
+// 判权两道：批准的人对这件事要有权（按人判）；执行时再按 AI 员工的身份判一次（它提案之后范围可能被收窄、
+// 人可能已经把它停用）。执行复用后台接口同一个函数（adjustInventory），幂等键固定为提案 id ——
+// 「执行成功但结果没写回」时再点一次批准，库存也只加一次。
+//
+// M9 只有一种提案：inventory_adjust（加库存）。
+
+const (
+	ProposalKindInventoryAdjust = "inventory_adjust"
+	// proposalTTL 是提案的有效期：过期没处理的由过期任务置 50，不能再批。
+	proposalTTL = 48 * time.Hour
+	// proposalMaxDelta 是一条补货提案的上限（与 restock_plan 的建议上限一致）。
+	proposalMaxDelta = 1000
+)
+
+var (
+	// ErrProposalBadRequest：提案参数不合法。契约 422。
+	ErrProposalBadRequest = errors.New("提案参数不合法")
+	// ErrProposalNotFound / ErrProposalNotOpen / ErrProposalDuplicate 与 repository 同名错误一一对应。
+	ErrProposalNotFound  = errors.New("提案不存在")
+	ErrProposalNotOpen   = errors.New("提案已经处理过或已过期")
+	ErrProposalDuplicate = errors.New("已有一条同样的待处理提案")
+	// ErrAgentOnly / ErrHumanOnly：提案只能由 AI 员工提；批准 / 驳回只能由人来做。契约 403 role-forbidden。
+	ErrAgentOnly = fmt.Errorf("%w: 只有 AI 员工能提提案", ErrRoleForbidden)
+	ErrHumanOnly = fmt.Errorf("%w: 提案只能由人批准或驳回，AI 员工不行", ErrRoleForbidden)
+)
+
+// InventoryAdjustPayload 是 inventory_adjust 提案的执行参数。
+type InventoryAdjustPayload struct {
+	StoreID int64  `json:"store_id"`
+	SKUID   int64  `json:"sku_id"`
+	Delta   int32  `json:"delta"`
+	Reason  string `json:"reason"`
+}
+
+// ProposalResult 是执行结果快照（写进 agent_proposals.result）。
+type ProposalResult struct {
+	BeforeAvailable *int32 `json:"before_available,omitempty"`
+	AfterAvailable  *int32 `json:"after_available,omitempty"`
+	ErrorType       string `json:"error_type,omitempty"`
+	Error           string `json:"error,omitempty"`
+}
+
+// ProposalInput 是 AI 员工提一条补货提案的输入。
+type ProposalInput struct {
+	StoreID        int64
+	SKUID          int64
+	Delta          int32
+	Reason         string
+	Evidence       string
+	ExpectedImpact string
+}
+
+// AgentProposalService 实现提案的全部。
+type AgentProposalService struct {
+	repo   tenantRunner
+	inv    inventory.Service
+	stores *AdminStoreService
+	log    *slog.Logger
+}
+
+func NewAgentProposalService(repo tenantRunner, inv inventory.Service, stores *AdminStoreService,
+	log *slog.Logger) *AgentProposalService {
+	if log == nil {
+		log = slog.Default()
+	}
+	return &AgentProposalService{repo: repo, inv: inv, stores: stores, log: log}
+}
+
+func mapProposalErr(err error) error {
+	switch {
+	case errors.Is(err, repository.ErrProposalNotFound):
+		return fmt.Errorf("%w: %v", ErrProposalNotFound, err)
+	case errors.Is(err, repository.ErrProposalNotOpen):
+		return fmt.Errorf("%w: %v", ErrProposalNotOpen, err)
+	}
+	return err
+}
+
+func checkProposalText(field, v string, min, max int) error {
+	n := len([]rune(strings.TrimSpace(v)))
+	if n < min || n > max {
+		return fmt.Errorf("%w: %s 长度要在 %d–%d 字", ErrProposalBadRequest, field, min, max)
+	}
+	return nil
+}
+
+// ProposeInventoryAdjust 是 MCP 工具 propose_inventory_adjust：AI 员工提一条补货提案（不执行）。
+// 判权与后台「加减库存」相同（storeOperate + 这家店卖这个 SKU）：它提不了它无权做的事。
+func (s *AgentProposalService) ProposeInventoryAdjust(ctx context.Context, in ProposalInput) (repository.AgentProposal, error) {
+	id, err := requireStaff(ctx)
+	if err != nil {
+		return repository.AgentProposal{}, err
+	}
+	if !id.IsAgent() {
+		return repository.AgentProposal{}, ErrAgentOnly
+	}
+	if in.Delta < 1 || in.Delta > proposalMaxDelta {
+		return repository.AgentProposal{}, fmt.Errorf("%w: delta 取 1–%d（只提加库存）", ErrProposalBadRequest, proposalMaxDelta)
+	}
+	if err := checkProposalText("reason", in.Reason, 1, 100); err != nil {
+		return repository.AgentProposal{}, err
+	}
+	if err := checkProposalText("evidence", in.Evidence, 10, 8000); err != nil {
+		return repository.AgentProposal{}, err
+	}
+	if err := checkProposalText("expected_impact", in.ExpectedImpact, 0, 2000); err != nil {
+		return repository.AgentProposal{}, err
+	}
+	payload, err := json.Marshal(InventoryAdjustPayload{StoreID: in.StoreID, SKUID: in.SKUID, Delta: in.Delta,
+		Reason: strings.TrimSpace(in.Reason)})
+	if err != nil {
+		return repository.AgentProposal{}, err
+	}
+	var out repository.AgentProposal
+	err = s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+		if _, err := authorizeStore(ctx, tx, in.StoreID, storeOperate); err != nil {
+			return err
+		}
+		if err := requireSellable(ctx, tx, in.StoreID, in.SKUID); err != nil {
+			return err
+		}
+		st, err := tx.FindStore(ctx, in.StoreID)
+		if err != nil {
+			return err
+		}
+		sku, err := tx.AdminFindSKU(ctx, in.SKUID)
+		if err != nil {
+			return err
+		}
+		title := fmt.Sprintf("%s：%s 补 %d 件", st.Name, skuLabel(sku.SKUCode, string(sku.SpecValues)), in.Delta)
+		skuID := in.SKUID
+		// 先查一次已有的待处理提案，好告诉 agent 是哪一条。插入撞唯一索引会让整个事务失效（之后什么都查不了），
+		// 所以不能「先插、撞了再查」；插入时仍可能撞上（两个请求并发），那时只能回一句不带编号的。
+		if open, err := tx.OpenAgentProposalFor(ctx, ProposalKindInventoryAdjust, in.StoreID, &skuID); err == nil {
+			return fmt.Errorf("%w：#%d（门店 %d、SKU %d）还没处理，不要重复提", ErrProposalDuplicate, open, in.StoreID, in.SKUID)
+		} else if !errors.Is(err, repository.ErrProposalNotFound) {
+			return err
+		}
+		pid, err := tx.InsertAgentProposal(ctx, repository.NewAgentProposal{AgentStaffID: id.StaffID,
+			Kind: ProposalKindInventoryAdjust, StoreID: in.StoreID, SKUID: &skuID, Payload: payload, Title: title,
+			Evidence: strings.TrimSpace(in.Evidence), ExpectedImpact: strings.TrimSpace(in.ExpectedImpact),
+			ExpiresAt: time.Now().Add(proposalTTL)})
+		if errors.Is(err, repository.ErrProposalDuplicate) {
+			return fmt.Errorf("%w（门店 %d、SKU %d）", ErrProposalDuplicate, in.StoreID, in.SKUID)
+		}
+		if err != nil {
+			return err
+		}
+		out, err = tx.FindAgentProposal(ctx, pid)
+		return err
+	})
+	return out, mapProposalErr(err)
+}
+
+// ProposalPage 是一页提案。
+type ProposalPage struct {
+	Items    []repository.AgentProposal
+	Total    int64
+	Page     int
+	PageSize int
+}
+
+// ListMine 是 MCP 工具 list_my_proposals：AI 员工看自己提过的提案与结果（避免重复提、看驳回理由）。
+func (s *AgentProposalService) ListMine(ctx context.Context, status *int16, page, pageSize int) (ProposalPage, error) {
+	id, err := requireStaff(ctx)
+	if err != nil {
+		return ProposalPage{}, err
+	}
+	if !id.IsAgent() {
+		return ProposalPage{}, ErrAgentOnly
+	}
+	staffID := id.StaffID
+	return s.list(ctx, repository.ProposalFilter{Status: status, AgentStaffID: &staffID}, page, pageSize)
+}
+
+// List 实现 GET /admin/agent-proposals：按人的管辖范围收窄到它管的门店（与门店列表同一个收窄）。
+func (s *AgentProposalService) List(ctx context.Context, status, agentStaffID *int64, page, pageSize int) (ProposalPage, error) {
+	id, err := requireStaff(ctx)
+	if err != nil {
+		return ProposalPage{}, err
+	}
+	f := repository.ProposalFilter{AgentStaffID: agentStaffID}
+	if status != nil {
+		st := int16(*status)
+		f.Status = &st
+	}
+	if !id.MerchantWide() {
+		ids := []int64{}
+		for p := 1; ; p++ {
+			pg, err := s.stores.ListStores(ctx, nil, false, p, 100)
+			if err != nil {
+				return ProposalPage{}, err
+			}
+			for _, st := range pg.Items {
+				ids = append(ids, st.ID)
+			}
+			if int64(p*pg.PageSize) >= pg.Total || len(pg.Items) == 0 {
+				break
+			}
+		}
+		f.StoreIDs = ids
+	}
+	return s.list(ctx, f, page, pageSize)
+}
+
+func (s *AgentProposalService) list(ctx context.Context, f repository.ProposalFilter, page, pageSize int) (ProposalPage, error) {
+	page, pageSize = clampPaging(page, pageSize)
+	out := ProposalPage{Page: page, PageSize: pageSize}
+	err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+		var e error
+		out.Items, out.Total, e = tx.ListAgentProposals(ctx, f, int32(pageSize), int32(offsetOf(page, pageSize)))
+		return e
+	})
+	return out, err
+}
+
+// Get 实现 GET /admin/agent-proposals/{id}：对这家店有 storeOperate 的人才看得到。
+func (s *AgentProposalService) Get(ctx context.Context, proposalID int64) (repository.AgentProposal, error) {
+	if _, err := requireStaff(ctx); err != nil {
+		return repository.AgentProposal{}, err
+	}
+	var out repository.AgentProposal
+	err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+		p, err := tx.FindAgentProposal(ctx, proposalID)
+		if err != nil {
+			return err
+		}
+		if _, err := authorizeStore(ctx, tx, p.StoreID, storeOperate); err != nil {
+			return err
+		}
+		out = p
+		return nil
+	})
+	return out, mapProposalErr(err)
+}
+
+// Approve 实现 POST /admin/agent-proposals/{id}/approve：批准并执行。
+//
+// 返回的提案状态说明结果：20 已执行（result 里是执行前后的可售）或 40 执行失败（result 里是原因）。
+// 执行失败不是这条接口的失败 —— 批准这个动作成功了，是执行被业务规则拒了（比如 AI 员工已被停用、
+// 这家店不再卖这个 SKU），人要看到的是那条原因。
+func (s *AgentProposalService) Approve(ctx context.Context, proposalID int64) (repository.AgentProposal, error) {
+	id, err := requireStaff(ctx)
+	if err != nil {
+		return repository.AgentProposal{}, err
+	}
+	if id.IsAgent() {
+		return repository.AgentProposal{}, ErrHumanOnly
+	}
+	var p repository.AgentProposal
+	var agentID auth.StaffIdentity
+	agentActive := false
+	err = s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+		var err error
+		if p, err = tx.FindAgentProposal(ctx, proposalID); err != nil {
+			return err
+		}
+		if _, err := authorizeStore(ctx, tx, p.StoreID, storeOperate); err != nil {
+			return err
+		}
+		if err := tx.ClaimAgentProposal(ctx, proposalID, id.StaffID); err != nil {
+			return err
+		}
+		a, err := tx.FindAgent(ctx, p.AgentStaffID)
+		if err != nil && !errors.Is(err, repository.ErrAgentNotFound) {
+			return err
+		}
+		if err == nil {
+			sc, err := tx.ListStaffScopes(ctx, a.ID)
+			if err != nil {
+				return err
+			}
+			m, _ := tenant.FromContext(ctx)
+			agentID = auth.StaffIdentity{StaffID: a.ID, MerchantID: &m, Role: a.Role, Status: a.Status,
+				RegionIDs: sc.RegionIDs, StoreIDs: sc.StoreIDs}
+			agentActive = a.Status == auth.StaffStatusActive
+		}
+		return nil
+	})
+	if err != nil {
+		return repository.AgentProposal{}, mapProposalErr(err)
+	}
+
+	status, result := repository.ProposalExecuted, ProposalResult{}
+	if !agentActive {
+		status, result = repository.ProposalFailed, ProposalResult{ErrorType: "agent-disabled",
+			Error: "提这条提案的 AI 员工已被停用或删除，不以它的身份执行"}
+	} else {
+		var pl InventoryAdjustPayload
+		if err := json.Unmarshal(p.Payload, &pl); err != nil {
+			return repository.AgentProposal{}, err
+		}
+		reason := "AI 提案 #" + strconv.FormatInt(p.ID, 10) + "：" + pl.Reason
+		after, _, err := adjustInventory(auth.NewStaffContext(ctx, agentID), s.repo, s.inv, pl.StoreID, pl.SKUID,
+			InventoryAdjustInput{Delta: pl.Delta, Reason: &reason}, "agent-proposal-"+strconv.FormatInt(p.ID, 10))
+		if err != nil {
+			// 业务规则拒绝（范围、可售、库存服务 4xx）记成执行失败；基础设施错误（库存服务不在、库挂了）原样上抛，
+			// 提案停在 15，稍后再点批准会以同一个幂等键重试。
+			if isInfraError(err) {
+				return repository.AgentProposal{}, err
+			}
+			status, result = repository.ProposalFailed, ProposalResult{ErrorType: proposalErrorType(err), Error: err.Error()}
+		} else {
+			before := after.AvailableQty - pl.Delta
+			a := after.AvailableQty
+			result = ProposalResult{BeforeAvailable: &before, AfterAvailable: &a}
+		}
+	}
+	raw, err := json.Marshal(result)
+	if err != nil {
+		return repository.AgentProposal{}, err
+	}
+	var out repository.AgentProposal
+	err = s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+		if err := tx.FinishAgentProposal(ctx, proposalID, status, raw); err != nil {
+			return err
+		}
+		var e error
+		out, e = tx.FindAgentProposal(ctx, proposalID)
+		return e
+	})
+	return out, mapProposalErr(err)
+}
+
+// isInfraError：库存服务不在、数据库出错这类「重试可能成功」的错误 —— 它们让批准整体失败（提案留在 15，
+// 稍后再点批准以同一个幂等键重试）。业务规则的拒绝（范围、可售、库存不够）记成执行失败。
+func isInfraError(err error) bool {
+	if inventory.IsUnavailable(err) {
+		return true
+	}
+	var short *repository.InventoryInsufficient
+	if errors.As(err, &short) {
+		return false
+	}
+	for _, biz := range []error{ErrRoleForbidden, ErrOutOfScope, ErrCatalogBadRequest,
+		repository.ErrCatalogNotFound, repository.ErrSKUNotInTenant, repository.ErrSKUNotSoldInStore, ErrStoreClosed} {
+		if errors.Is(err, biz) {
+			return false
+		}
+	}
+	return true
+}
+
+func proposalErrorType(err error) string {
+	switch {
+	case errors.Is(err, ErrOutOfScope):
+		return "out-of-scope"
+	case errors.Is(err, ErrRoleForbidden):
+		return "role-forbidden"
+	case errors.Is(err, repository.ErrSKUNotSoldInStore), errors.Is(err, repository.ErrCatalogNotFound):
+		return "sku-not-sold-in-store"
+	default:
+		return "rejected"
+	}
+}
+
+// Reject 实现 POST /admin/agent-proposals/{id}/reject：驳回，理由必填（AI 员工用 list_my_proposals 看得到）。
+func (s *AgentProposalService) Reject(ctx context.Context, proposalID int64, reason string) (repository.AgentProposal, error) {
+	id, err := requireStaff(ctx)
+	if err != nil {
+		return repository.AgentProposal{}, err
+	}
+	if id.IsAgent() {
+		return repository.AgentProposal{}, ErrHumanOnly
+	}
+	if err := checkProposalText("reason", reason, 1, 500); err != nil {
+		return repository.AgentProposal{}, err
+	}
+	var out repository.AgentProposal
+	err = s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+		p, err := tx.FindAgentProposal(ctx, proposalID)
+		if err != nil {
+			return err
+		}
+		if _, err := authorizeStore(ctx, tx, p.StoreID, storeOperate); err != nil {
+			return err
+		}
+		if err := tx.RejectAgentProposal(ctx, proposalID, id.StaffID, strings.TrimSpace(reason)); err != nil {
+			return err
+		}
+		out, err = tx.FindAgentProposal(ctx, proposalID)
+		return err
+	})
+	return out, mapProposalErr(err)
+}

@@ -77,6 +77,20 @@ type mcpRestockIn struct {
 	All          bool   `json:"all,omitempty" jsonschema:"true 时连建议补货量为 0 的也返回；默认只返回需要补的"`
 }
 
+type mcpProposeAdjustIn struct {
+	StoreID        int64  `json:"store_id" jsonschema:"门店 id"`
+	SKUID          int64  `json:"sku_id" jsonschema:"SKU id"`
+	Delta          int32  `json:"delta" jsonschema:"加多少件，1–1000（只提加库存）"`
+	Reason         string `json:"reason" jsonschema:"一句话原因，写进库存流水，≤100 字"`
+	Evidence       string `json:"evidence" jsonschema:"证据（markdown）：引用 restock_plan 等工具返回的数字，能被人复现；10–8000 字"`
+	ExpectedImpact string `json:"expected_impact,omitempty" jsonschema:"预计影响，如「避免 3 天后断货，覆盖到 10 月 12 日」"`
+}
+
+type mcpListMineIn struct {
+	mcpPageIn
+	Status *int16 `json:"status,omitempty" jsonschema:"10 待处理 / 15 执行中 / 20 已执行 / 30 已驳回 / 40 执行失败 / 50 已过期"`
+}
+
 type mcpGetProductIn struct {
 	ProductID int64 `json:"product_id" jsonschema:"商品 id"`
 }
@@ -158,6 +172,29 @@ func registerMCPTools(srv *mcp.Server, d *MCPDeps) {
 		writeAdminListError, func(ctx context.Context, in mcpRestockIn) (service.RestockPlan, error) {
 			return d.Restock.Plan(ctx, service.RestockQuery{StoreID: in.StoreID, CoverDays: in.CoverDays,
 				LookbackDays: in.LookbackDays, OnlyNeeded: !in.All})
+		})
+	mcpTool(srv, d, "propose_inventory_adjust",
+		"提一条补货提案（给某门店某 SKU 加库存）。不会立即执行：人在后台批准后，Keel 以你的身份执行。"+
+			"同一门店同一 SKU 已有待处理提案时会被拒。48 小时没人处理即过期。",
+		writeProposalError, func(ctx context.Context, in mcpProposeAdjustIn) (api.AgentProposal, error) {
+			p, err := d.Proposals.ProposeInventoryAdjust(ctx, service.ProposalInput{StoreID: in.StoreID, SKUID: in.SKUID,
+				Delta: in.Delta, Reason: in.Reason, Evidence: in.Evidence, ExpectedImpact: in.ExpectedImpact})
+			if err != nil {
+				return api.AgentProposal{}, err
+			}
+			return apiAgentProposal(p), nil
+		})
+	mcpTool(srv, d, "list_my_proposals", "你提过的提案与结果：待处理、已执行（执行前后的可售）、已驳回（驳回理由）、已过期。",
+		writeProposalError, func(ctx context.Context, in mcpListMineIn) (mcpPage[api.AgentProposal], error) {
+			out, err := d.Proposals.ListMine(ctx, in.Status, in.Page, in.PageSize)
+			if err != nil {
+				return mcpPage[api.AgentProposal]{}, err
+			}
+			items := make([]api.AgentProposal, 0, len(out.Items))
+			for _, p := range out.Items {
+				items = append(items, apiAgentProposal(p))
+			}
+			return mcpPage[api.AgentProposal]{Page: out.Page, PageSize: out.PageSize, Total: int(out.Total), Items: items}, nil
 		})
 	mcpTool(srv, d, "list_stores", "门店列表（你管辖范围内的），含营业状态、坐标、是否默认店。",
 		writeStoreError, func(ctx context.Context, in mcpListStoresIn) (mcpPage[api.AdminStore], error) {

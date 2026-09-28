@@ -631,14 +631,22 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	// MCP：AI 员工的工具入口（AI 经营 M9，handler/mcp.go）。streamable HTTP，POST / GET / DELETE 都交给 SDK；
 	// 鉴权是 agentAuth（kagt_ 密钥，租户按 Host）。工具调用的 service 与后台接口是同一批构造（无状态，
 	// 多构造一份不共享任何东西）。
+	// AI 员工的提案（M9 任务 4）：AI 员工经 MCP 提，人在后台批准 / 驳回。
+	proposals := service.NewAgentProposalService(repo, inv, service.NewAdminStoreService(repo, inv), nil)
+	aph := handler.NewAgentProposalHandler(proposals)
+	v1.GET("/admin/agent-proposals", staffAuth, aph.List)
+	v1.GET("/admin/agent-proposals/:proposal_id", staffAuth, aph.Get)
+	v1.POST("/admin/agent-proposals/:proposal_id/approve", staffAuth, aph.Approve)
+	v1.POST("/admin/agent-proposals/:proposal_id/reject", staffAuth, aph.Reject)
 	mcpH := handler.NewMCPHandler(handler.MCPDeps{
-		Staff:   staffSvc,
-		Reports: service.NewReportService(repo, inv),
-		Stores:  service.NewAdminStoreService(repo, inv),
-		Catalog: service.NewAdminCatalogService(repo, store, inv),
-		Orders:  service.NewAdminOrderService(repo),
-		Restock: service.NewRestockService(repo, inv, service.NewAdminStoreService(repo, inv)),
-		Version: buildinfo.Get().Version,
+		Staff:     staffSvc,
+		Reports:   service.NewReportService(repo, inv),
+		Stores:    service.NewAdminStoreService(repo, inv),
+		Catalog:   service.NewAdminCatalogService(repo, store, inv),
+		Orders:    service.NewAdminOrderService(repo),
+		Restock:   service.NewRestockService(repo, inv, service.NewAdminStoreService(repo, inv)),
+		Proposals: proposals,
+		Version:   buildinfo.Get().Version,
 	})
 	v1.POST("/mcp", agentAuth, mcpH)
 	v1.GET("/mcp", agentAuth, mcpH)
@@ -888,6 +896,8 @@ func Run(ctx context.Context, listen func(addr string, h http.Handler) error) er
 	// 商品列表按有货排序用的冗余标记（00087，service/stock_flags.go）：全量刷新兜住下单扣减、关单回补。
 	stockFlags := service.NewStockFlagService(repository.New(pool), inv, stockFlagIntervalFromEnv(), nil)
 	go stockFlags.Run(bgCtx)
+	// AI 员工提案的过期扫描（00091，service/agent_proposal_expiry.go）。
+	go service.RunProposalExpiry(bgCtx, repository.New(pool), nil)
 
 	// 自动确认收货（数据模型 §5 发货第三条规则）：发货满店铺设置的 auto_confirm_days
 	// 天的 30 已发货订单推到 40。与超时补偿同一套机制（按租户扫描、同一份公平调度），

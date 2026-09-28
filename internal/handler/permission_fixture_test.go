@@ -1,6 +1,7 @@
 package handler_test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -262,4 +263,21 @@ func problemTypeOf(w *httptest.ResponseRecorder) (string, string) {
 	}
 	_ = json.Unmarshal(w.Body.Bytes(), &p)
 	return p.Type, p.Detail
+}
+
+// proposal 给这家门店插一条待处理的补货提案（AI 员工是一名操作员）。直接写库：矩阵测的是后台接口的判权，
+// 提案经 MCP 怎么提在 agent_proposal_test.go 里测过。sku_id 列留空：唯一索引「同一门店同一 SKU 只能有一条待处理」
+// 对 NULL 不生效，于是同一家店的多格可以各插一条；执行参数（payload）里照样带着 SKU。
+func (fx *permFixture) proposal(t *testing.T, storeID int64) int64 {
+	t.Helper()
+	a := createAgent(t, fx.sh, `{"name":"矩阵 AI","role":2}`)
+	var id int64
+	if err := admin(t).QueryRow(context.Background(), `
+		INSERT INTO agent_proposals (merchant_id, agent_staff_id, kind, store_id, payload, title, evidence, expires_at)
+		VALUES ($1, $2, 'inventory_adjust', $3, jsonb_build_object('store_id', $3::bigint, 'sku_id', $4::bigint, 'delta', 1, 'reason', '矩阵'),
+		        '矩阵提案', '权限矩阵用的提案', now() + interval '1 hour')
+		RETURNING id`, fx.sh.MerchantID, a.Id, storeID, fx.SKUID).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	return id
 }
