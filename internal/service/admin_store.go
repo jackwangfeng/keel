@@ -539,7 +539,7 @@ func (s *AdminStoreService) SetStorePrice(ctx context.Context, storeID, skuID, c
 
 	// 非负同时由 chk_store_price_nonneg 兜底。两道都要：数据库那道挡的是
 	// 任何路径，这一道给的是一句能读懂的话（契约的 422）。
-	if err := checkNonNeg("price_cents", cents); err != nil {
+	if err := checkPrice("price_cents", cents); err != nil {
 		return repository.ScopedPrice{}, err
 	}
 	var out repository.ScopedPrice
@@ -588,7 +588,7 @@ func (s *AdminStoreService) SetRegionPrice(ctx context.Context, regionID, skuID,
 	if _, err := authorizeRegion(ctx, regionID); err != nil {
 		return repository.ScopedPrice{}, err
 	}
-	if err := checkNonNeg("price_cents", cents); err != nil {
+	if err := checkPrice("price_cents", cents); err != nil {
 		return repository.ScopedPrice{}, err
 	}
 	var out repository.ScopedPrice

@@ -13,6 +13,12 @@ import (
 	"unicode/utf8"
 )
 
+// MaxPriceCents 是任何一个单价（SKU 价、大区 / 门店价、活动特价）的上限：一亿元。
+// 导入、后台录入、数据库约束（00142）三处同一个数。它同时保证金额求和不会溢出 int64：
+// 一亿元 × 单行 999 件 × 50 行 ≈ 5×10¹⁴ 分，离 int64 上限（约 9.2×10¹⁸）很远。
+// 2026-09-28 破坏性测试：后台录入 int64 最大值作价格，结算求和溢出成负数、接口 500，单买一件能下出天价订单。
+const MaxPriceCents int64 = 100_000_000_00
+
 // Issue 是一行里的一条问题。Code 是给程序认的（契约 ProductImportIssue.code
 // 列出了全部取值），Message 是给人看的。
 type Issue struct {
@@ -315,8 +321,8 @@ const (
 	maxSpecDims    = 5
 	maxImageURLs   = 20
 	maxURLLen      = 2048
-	// maxPriceCents 是一亿元。再往上几乎只可能是填错了单位（把分当元）或多敲了几个 0。
-	maxPriceCents int64 = 100_000_000_00
+	// maxPriceCents 是一亿元（MaxPriceCents）。再往上几乎只可能是填错了单位（把分当元）或多敲了几个 0。
+	maxPriceCents = MaxPriceCents
 )
 
 func parseRow(sr SheetRow, idx map[ColumnKey]int) Row {

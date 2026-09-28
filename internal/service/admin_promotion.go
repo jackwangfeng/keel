@@ -9,6 +9,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/keel/keel/internal/catalogimport"
 	"github.com/keel/keel/internal/inventory"
 	"github.com/keel/keel/internal/repository"
 )
@@ -643,7 +644,7 @@ func validatePromotion(f repository.PromotionFields, tiers []repository.Promotio
 			if (s.PromoPriceCents > 0) == (s.DiscountRate > 0) {
 				return bad("sku %d：promo_price_cents 与 discount_rate 二选一（另一个为 0）", s.SKUID)
 			}
-			if s.PromoPriceCents < 0 || s.DiscountRate < 0 || s.DiscountRate > 999 {
+			if s.PromoPriceCents < 0 || s.PromoPriceCents > catalogimport.MaxPriceCents || s.DiscountRate < 0 || s.DiscountRate > 999 {
 				return bad("sku %d：特价不能为负，折扣是千分比 1 到 999", s.SKUID)
 			}
 			if s.PerUserLimit < 0 || s.PerUserLimit > maxLineQuantity {

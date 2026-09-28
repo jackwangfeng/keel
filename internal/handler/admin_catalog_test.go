@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/keel/keel/internal/api"
+	"github.com/keel/keel/internal/catalogimport"
 	"github.com/keel/keel/internal/problem"
 	"github.com/keel/keel/internal/repository"
 	"github.com/keel/keel/internal/service"
@@ -964,5 +966,35 @@ func TestPublishingABannedTitleIsRejectedWithPositions(t *testing.T) {
 		`SELECT status FROM products WHERE id = $1`, p.Id); status != 0 {
 		t.Fatalf("合规拒绝之后库里 products.status = %d，期望 0（还是草稿）—— "+
 			"响应是 422，但商品已经上架了，而买家现在就看得到那个违禁标题", status)
+	}
+}
+
+// 单价上限一亿元（catalogimport.MaxPriceCents、00142）：后台建 SKU / 改价超过上限 422，数据库也兜底。
+// 2026-09-28 破坏性测试：int64 最大值原样入库，结算求和溢出成负数 → 500；单买能下出天价订单。
+func TestSKUPriceHasAnUpperBound(t *testing.T) {
+	sh := newAdminShop(t)
+	prod, sku := seedPublishedProduct(t, sh, "PRICECAP", 1000, 5)
+	over := catalogimport.MaxPriceCents + 1
+	for _, body := range []string{
+		fmt.Sprintf(`{"sku_code":"CAP-%s","price_cents":%d}`, sh.Suffix, over),
+		fmt.Sprintf(`{"sku_code":"CAP-%s","price_cents":9223372036854775807}`, sh.Suffix),
+		fmt.Sprintf(`{"sku_code":"CAP-%s","price_cents":100,"cost_cents":%d}`, sh.Suffix, over),
+	} {
+		if got := problemType(t, postIdem(t, sh.Host, fmt.Sprintf("/api/v1/admin/products/%d/skus", prod), body, sh.Token),
+			http.StatusUnprocessableEntity, "超上限的价格建 SKU"); got != problem.TypeInvalidRequest {
+			t.Fatalf("超上限的价格应 422 invalid-request，实得 %q（%s）", got, body)
+		}
+	}
+	if got := problemType(t, patchAs(t, sh.Host, fmt.Sprintf("/api/v1/admin/skus/%d", sku),
+		fmt.Sprintf(`{"price_cents":%d}`, over), sh.Token), http.StatusUnprocessableEntity, "改价超上限"); got != problem.TypeInvalidRequest {
+		t.Fatalf("改价超上限应 422，实得 %q", got)
+	}
+	// 上限本身可以。
+	wantStatus(t, patchAs(t, sh.Host, fmt.Sprintf("/api/v1/admin/skus/%d", sku),
+		fmt.Sprintf(`{"price_cents":%d}`, catalogimport.MaxPriceCents), sh.Token), http.StatusOK, "改到上限")
+	// 绕过服务层直接写库：约束兜底。
+	if _, err := admin(t).Exec(context.Background(), `UPDATE skus SET price_cents = $2 WHERE id = $1`, sku, over); err == nil ||
+		!strings.Contains(err.Error(), "chk_price_upper") {
+		t.Fatalf("直接写库超上限应被 chk_price_upper 拒：%v", err)
 	}
 }

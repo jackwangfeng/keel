@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/keel/keel/internal/auth"
+	"github.com/keel/keel/internal/catalogimport"
 	"github.com/keel/keel/internal/inventory"
 	"github.com/keel/keel/internal/repository"
 	"github.com/keel/keel/internal/tenant"
@@ -492,10 +493,10 @@ func (s *AdminCatalogService) CreateSKU(ctx context.Context, productID int64,
 	if err := checkSKUCode(in.SKUCode); err != nil {
 		return repository.AdminSKU{}, false, err
 	}
-	if err := checkNonNeg("price_cents", in.PriceCents); err != nil {
+	if err := checkPrice("price_cents", in.PriceCents); err != nil {
 		return repository.AdminSKU{}, false, err
 	}
-	if err := checkNonNeg("cost_cents", in.CostCents); err != nil {
+	if err := checkPrice("cost_cents", in.CostCents); err != nil {
 		return repository.AdminSKU{}, false, err
 	}
 	if err := checkNonNeg("weight_gram", int64(in.WeightGram)); err != nil {
@@ -586,7 +587,7 @@ func (s *AdminCatalogService) UpdateSKU(ctx context.Context, skuID int64,
 	}
 	for name, v := range map[string]*int64{"price_cents": in.PriceCents, "cost_cents": in.CostCents} {
 		if v != nil {
-			if err := checkNonNeg(name, *v); err != nil {
+			if err := checkPrice(name, *v); err != nil {
 				return repository.AdminSKU{}, err
 			}
 		}
@@ -991,6 +992,18 @@ func checkOptText(field string, v *string, max int) error {
 	}
 	if n := utf8.RuneCountInString(*v); n > max {
 		return fmt.Errorf("%w: %s 有 %d 个字，契约上限是 %d", ErrCatalogBadRequest, field, n, max)
+	}
+	return nil
+}
+
+// checkPrice 是单价的校验：[0, catalogimport.MaxPriceCents]。上限挡的是录错单位 / 多敲 0，也保证金额求和不溢出。
+func checkPrice(field string, v int64) error {
+	if err := checkNonNeg(field, v); err != nil {
+		return err
+	}
+	if v > catalogimport.MaxPriceCents {
+		return fmt.Errorf("%w: %s 是 %d 分，超过单价上限一亿元（%d 分），请核对单位", ErrCatalogBadRequest, field, v,
+			catalogimport.MaxPriceCents)
 	}
 	return nil
 }
