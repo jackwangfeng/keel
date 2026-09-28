@@ -75,6 +75,7 @@ export type AdminRegion = S["AdminRegion"];
 export type AdminStore = S["AdminStore"];
 export type AdminStoreList = S["AdminStoreList"];
 export type GeoPolygon = S["GeoPolygon"];
+export type GeoPlace = S["GeoPlace"];
 export type ScopedProductListing = S["ScopedProductListing"];
 export type ScopedSkuPrice = S["ScopedSkuPrice"];
 export type RegionCreateRequest = S["RegionCreateRequest"];

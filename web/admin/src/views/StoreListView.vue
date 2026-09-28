@@ -14,7 +14,14 @@ import { computed, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { Plus, Refresh } from "@element-plus/icons-vue";
 import { ElMessageBox } from "element-plus";
-import { keel, type AdminRegion, type AdminStore, type AdminStoreList, type StoreCreateRequest } from "../api/client.ts";
+import {
+    keel,
+    type AdminRegion,
+    type AdminStore,
+    type AdminStoreList,
+    type GeoPlace,
+    type StoreCreateRequest,
+} from "../api/client.ts";
 import { IdempotentSubmission, withIdempotency } from "../api/idempotency.ts";
 import { isIncomplete, listAllRegions } from "../api/stores.ts";
 import { notifyError, notifyOk } from "../ui/notify.ts";
@@ -85,6 +92,8 @@ const submission = new IdempotentSubmission();
 const draft = ref<StoreCreateRequest>({ region_id: 0, code: "", name: "" });
 /** 地图选的点。门店必须有坐标（2026-09-27），没选就不能提交。 */
 const draftPoint = ref<LatLng | null>(null);
+/** 上一次是不是由「选点」自动填的地址：给个提示，不是锁字段——填完照样能改。 */
+const addressAutofilled = ref(false);
 
 function openCreate(): void {
     draft.value = {
@@ -96,9 +105,19 @@ function openCreate(): void {
         is_default: page.value?.has_default === false,
     };
     draftPoint.value = null;
+    addressAutofilled.value = false;
     createError.value = null;
     submission.rotate();
     createVisible.value = true;
+}
+
+/** LocationPicker 搜索选点 / 点地图之后回填省市区与地址；填完用户还能改。 */
+function onPlace(p: GeoPlace): void {
+    draft.value.province = p.province;
+    draft.value.city = p.city;
+    draft.value.district = p.district;
+    draft.value.address = p.address || [p.name, p.street].filter(Boolean).join(" ");
+    addressAutofilled.value = true;
 }
 
 async function submitCreate(): Promise<void> {
@@ -266,9 +285,12 @@ async function remove(row: AdminStore): Promise<void> {
                         <el-input v-model="draft.district" placeholder="区" />
                     </div>
                 </el-form-item>
-                <el-form-item label="地址"><el-input v-model="draft.address" /></el-form-item>
+                <el-form-item label="地址">
+                    <el-input v-model="draft.address" @input="addressAutofilled = false" />
+                    <p v-if="addressAutofilled" class="hint">已按选点填写地址，可修改。</p>
+                </el-form-item>
                 <el-form-item label="位置" required>
-                    <LocationPicker v-if="createVisible" v-model="draftPoint" height="260px" />
+                    <LocationPicker v-if="createVisible" v-model="draftPoint" height="260px" @place="onPlace" />
                 </el-form-item>
                 <el-form-item label="默认门店">
                     <el-checkbox v-model="draft.is_default" :disabled="page?.has_default === true">

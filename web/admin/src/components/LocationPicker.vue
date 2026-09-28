@@ -11,7 +11,7 @@
 import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import type { GeoPolygon } from "../api/client.ts";
+import { keel, ProblemError, type GeoPlace, type GeoPolygon } from "../api/client.ts";
 import { toLatLng, verticesFromPolygon } from "../api/geo.ts";
 
 export type LatLng = { lat: number; lng: number };
@@ -25,7 +25,92 @@ const props = defineProps<{
     height?: string;
 }>();
 
-const emit = defineEmits<{ "update:modelValue": [v: LatLng] }>();
+const emit = defineEmits<{
+    "update:modelValue": [v: LatLng];
+    /** 搜索选点 / 点地图 / 拖标记之后，服务端解析出来的完整地址（可能省略号码等）。 */
+    place: [p: GeoPlace];
+}>();
+
+// ---------------------------------------------------------------------------
+// 地点搜索（GET /geo/suggest、/geo/reverse）。两个接口都公开、免鉴权，
+// 没配地图服务商时回 501，服务商挂了回 503——都不能挡住手工填写/选点，
+// 所以这里只做「能用就用，不能用就退回手填」，不抛错到外面。
+// ---------------------------------------------------------------------------
+
+type GeoStatus = "ok" | "not-configured" | "unavailable";
+const geoStatus = ref<GeoStatus>("ok");
+const searchQuery = ref("");
+
+/** 501 永久退回手填（不再显示搜索框）；503 只是暂时的，下次调用还会再试。 */
+function noteGeoError(err: unknown): void {
+    if (err instanceof ProblemError && err.status === 501) {
+        geoStatus.value = "not-configured";
+        return;
+    }
+    if (err instanceof ProblemError && err.status === 503) {
+        geoStatus.value = "unavailable";
+        return;
+    }
+    // 其它错误（网络抖动之类）：安静忽略，不打断选点。
+}
+
+let suggestSeq = 0;
+
+function fetchSuggestions(
+    queryString: string,
+    cb: (items: Array<{ value: string; address: string; place: GeoPlace }>) => void,
+): void {
+    const q = queryString.trim();
+    if (q.length < 2 || geoStatus.value === "not-configured") {
+        cb([]);
+        return;
+    }
+    const seq = ++suggestSeq;
+    const query = props.modelValue ? { q, lat: props.modelValue.lat, lng: props.modelValue.lng } : { q };
+    keel
+        .get("/geo/suggest", { query })
+        .then((res) => {
+            if (seq !== suggestSeq) return; // 输入已经变了，这一批结果作废
+            if (geoStatus.value !== "ok") geoStatus.value = "ok";
+            cb(res.items.map((p) => ({ value: p.name, address: p.address, place: p })));
+        })
+        .catch((err: unknown) => {
+            noteGeoError(err);
+            if (seq === suggestSeq) cb([]);
+        });
+}
+
+/** 拿到一个点之后补全省市区（候选点的省市区可能不全，见 /geo/suggest 文档）。 */
+async function resolvePlace(point: LatLng, fallback?: GeoPlace): Promise<void> {
+    if (geoStatus.value === "not-configured") {
+        if (fallback) emit("place", fallback);
+        return;
+    }
+    try {
+        const full = await keel.get("/geo/reverse", { query: point });
+        if (geoStatus.value !== "ok") geoStatus.value = "ok";
+        emit("place", full);
+    } catch (err) {
+        noteGeoError(err);
+        if (fallback) emit("place", fallback);
+    }
+}
+
+let reverseTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** 点地图 / 拖标记触发的逆地理编码：防抖，失败静默忽略（不影响已经落下的点）。 */
+function scheduleReverse(point: LatLng): void {
+    if (reverseTimer) clearTimeout(reverseTimer);
+    reverseTimer = setTimeout(() => void resolvePlace(point), 300);
+}
+
+function onSelectSuggestion(item: { value: string; address: string; place: GeoPlace }): void {
+    const p = item.place;
+    const point = { lat: round6(p.lat), lng: round6(p.lng) };
+    emit("update:modelValue", point);
+    map?.setView(point, 17);
+    void resolvePlace(point, p);
+}
 
 const mapEl = ref<HTMLDivElement | null>(null);
 let map: L.Map | null = null;
@@ -42,7 +127,9 @@ function round6(v: number): number {
 
 function pick(ll: L.LatLng): void {
     if (props.readonly) return;
-    emit("update:modelValue", { lat: round6(ll.lat), lng: round6(ll.lng) });
+    const point = { lat: round6(ll.lat), lng: round6(ll.lng) };
+    emit("update:modelValue", point);
+    scheduleReverse(point);
 }
 
 function drawMarker(): void {
@@ -113,6 +200,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+    if (reverseTimer) clearTimeout(reverseTimer);
     resizeObserver?.disconnect();
     map?.remove();
     map = null;
@@ -125,13 +213,32 @@ watch(() => props.fence, drawFence);
 
 <template>
     <div class="picker">
+        <el-autocomplete
+            v-if="!readonly && geoStatus !== 'not-configured'"
+            v-model="searchQuery"
+            class="search"
+            clearable
+            :trigger-on-focus="false"
+            :fetch-suggestions="fetchSuggestions"
+            placeholder="搜索地点（小区 / 商场 / 门牌），至少 2 个字"
+            @select="onSelectSuggestion"
+        >
+            <template #default="{ item }: { item: { value: string; address: string } }">
+                <div class="sugg-name">{{ item.value }}</div>
+                <div class="sugg-address">{{ item.address }}</div>
+            </template>
+        </el-autocomplete>
+        <p v-if="geoStatus === 'not-configured'" class="hint geo-hint">
+            地图服务商未配置，请手填地址并在地图上选点。
+        </p>
+        <p v-else-if="geoStatus === 'unavailable'" class="hint geo-hint">地图服务暂时不可用，可以先手填地址，或稍后再搜。</p>
         <div ref="mapEl" class="map" :style="{ height: height ?? '320px' }" />
         <p class="hint">
             <template v-if="modelValue">
                 已选：纬度 {{ modelValue.lat.toFixed(6) }}，经度 {{ modelValue.lng.toFixed(6) }}（WGS-84）。
                 <template v-if="!readonly">点地图换位置，或拖动标记微调。</template>
             </template>
-            <template v-else-if="!readonly">在地图上点一下门店所在的位置（必填）。</template>
+            <template v-else-if="!readonly">在地图上点一下门店所在的位置（必填），或用上面的搜索框找地点。</template>
             <template v-else>还没有定位。</template>
             <template v-if="fence">蓝色区域是这家店的围栏，门店必须落在围栏内。</template>
         </p>
@@ -141,6 +248,17 @@ watch(() => props.fence, drawFence);
 <style scoped>
 .picker {
     width: 100%;
+}
+.search {
+    width: 100%;
+    margin-bottom: 8px;
+}
+.sugg-name {
+    font-size: 13px;
+}
+.sugg-address {
+    font-size: 12px;
+    color: var(--el-text-color-secondary);
 }
 .map {
     width: 100%;
@@ -152,6 +270,9 @@ watch(() => props.fence, drawFence);
     color: var(--el-text-color-secondary);
     font-size: 12px;
     line-height: 1.5;
+}
+.geo-hint {
+    margin: 0 0 6px;
 }
 :global(.store-pin) {
     background: #e6a23c;

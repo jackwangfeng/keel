@@ -19,6 +19,7 @@ import {
     type AdminInventory,
     type AdminRegion,
     type AdminStore,
+    type GeoPlace,
     type GeoPolygon,
     type StoreUpdateRequest,
 } from "../api/client.ts";
@@ -81,6 +82,8 @@ const form = ref<StoreUpdateRequest>({});
 const point = ref<LatLng | null>(null);
 const saving = ref(false);
 const saveError = ref<unknown>(null);
+/** 上一次是不是由「选点」自动填的地址：给个提示，不是锁字段——填完照样能改。 */
+const addressAutofilled = ref(false);
 
 function syncForm(): void {
     const s = store.value;
@@ -97,6 +100,16 @@ function syncForm(): void {
         status: s.status,
     };
     point.value = typeof s.lat === "number" && typeof s.lng === "number" ? { lat: s.lat, lng: s.lng } : null;
+    addressAutofilled.value = false;
+}
+
+/** LocationPicker 搜索选点 / 点地图之后回填省市区与地址；填完用户还能改。 */
+function onPlace(p: GeoPlace): void {
+    form.value.province = p.province;
+    form.value.city = p.city;
+    form.value.district = p.district;
+    form.value.address = p.address || [p.name, p.street].filter(Boolean).join(" ");
+    addressAutofilled.value = true;
 }
 
 const regionChanged = computed(() => store.value !== null && form.value.region_id !== store.value.region_id);
@@ -274,9 +287,18 @@ function onInventoryUpdated(inv: AdminInventory): void {
                                 <el-input v-model="form.district" placeholder="区" />
                             </div>
                         </el-form-item>
-                        <el-form-item label="地址"><el-input v-model="form.address" /></el-form-item>
+                        <el-form-item label="地址">
+                            <el-input v-model="form.address" @input="addressAutofilled = false" />
+                            <p v-if="addressAutofilled" class="hint">已按选点填写地址，可修改。</p>
+                        </el-form-item>
                         <el-form-item label="位置" required>
-                            <LocationPicker v-if="tab === 'basic'" v-model="point" :fence="store.fence ?? null" :readonly="!can.manageStore(store)" />
+                            <LocationPicker
+                                v-if="tab === 'basic'"
+                                v-model="point"
+                                :fence="store.fence ?? null"
+                                :readonly="!can.manageStore(store)"
+                                @place="onPlace"
+                            />
                             <p class="hint">接单范围看围栏；这个点是门店自己的位置，「按距离排」按它算，而且必须落在围栏内。</p>
                         </el-form-item>
                         <el-form-item label="营业状态">
