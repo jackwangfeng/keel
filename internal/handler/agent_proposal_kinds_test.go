@@ -95,6 +95,22 @@ func TestAgentProposalKindsExecuteOnApproval(t *testing.T) {
 		t.Fatalf("valid_days 与固定时段同时给应被拒：%q", mcpText(res))
 	}
 
+	// 后台建不出来的券，提案阶段就拒（与后台建券同一套规则；2026-09-28 破坏性测试：这些都提得出来，批准时才被拒）。
+	for _, bad := range []map[string]any{
+		{"coupon_type": 1, "threshold_cents": 100, "discount_cents": 200},
+		{"coupon_type": 1, "threshold_cents": -100, "discount_cents": 50},
+		{"coupon_type": 3, "threshold_cents": 500, "discount_cents": 300},
+		{"coupon_type": 2, "discount_rate": 900, "max_discount_cents": 500, "discount_cents": 300},
+	} {
+		args := map[string]any{"name": "不合规", "valid_days": 7, "total_count": 10, "per_user_limit": 1, "evidence": ev}
+		for k, v := range bad {
+			args[k] = v
+		}
+		if res, _ := mcpCall(t, sess, "propose_coupon", args); !res.IsError {
+			t.Fatalf("后台建不出来的券应在提案阶段就拒：%v", bad)
+		}
+	}
+
 	// 改文案
 	pc := propose("propose_product_copy", map[string]any{"product_id": cs.DressProduct, "title": "法式碎花连衣裙 夏季",
 		"evidence": "search_insights：「碎花裙」近 7 天搜索 40 次、0 结果"})

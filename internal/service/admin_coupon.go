@@ -351,6 +351,9 @@ func sameFaceValue(a, b repository.CouponTemplateFields) bool {
 
 // validateCouponTemplate 在进库之前把 chk_coupon_* 的每一条用人话说一遍。
 // 数据库的 CHECK 是最后一道；这里先挡，是为了让 422 的 detail 说得出是哪一条。
+// maxCouponAmountCents 是券门槛 / 面额 / 封顶的上限：一百亿元（1e12 分，< 2^53）。
+const maxCouponAmountCents int64 = 1_000_000_000_000
+
 func validateCouponTemplate(f repository.CouponTemplateFields, issued int32) error {
 	bad := func(format string, args ...any) error {
 		return fmt.Errorf("%w: %s", ErrCouponBadRequest, fmt.Sprintf(format, args...))
@@ -360,6 +363,11 @@ func validateCouponTemplate(f repository.CouponTemplateFields, issued int32) err
 	}
 	if f.ThresholdCents < 0 || f.DiscountCents < 0 || f.MaxDiscountCents < 0 {
 		return bad("金额不能为负")
+	}
+	// 上限：一笔订单的货款至多是单价上限 × 行数 × 件数量级，门槛 / 面额超过它就是填错了；
+	// 也让这几个数落在 JSON 数字（float64）能精确表达的范围里（2026-09-28 破坏性测试：门槛 2^62 进出一次丢了精度）。
+	if f.ThresholdCents > maxCouponAmountCents || f.DiscountCents > maxCouponAmountCents || f.MaxDiscountCents > maxCouponAmountCents {
+		return bad("金额至多 %d 分", maxCouponAmountCents)
 	}
 	switch f.CouponType {
 	case couponTypeFullReduction:

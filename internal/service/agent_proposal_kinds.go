@@ -255,6 +255,15 @@ func (s *AgentProposalService) ProposeCoupon(ctx context.Context, in CouponPaylo
 	if err != nil {
 		return repository.AgentProposal{}, err
 	}
+	// 与后台建券同一套规则（执行时就是调它建券）：提案阶段放过、批准时才被拒的券，
+	// 之前会掉进执行失败（更早时卡死在 15）—— 2026-09-28 破坏性测试：满 100 减 200、负门槛、立减券带门槛都提得出来。
+	if err := validateCouponTemplate(repository.CouponTemplateFields{Name: in.Name, CouponType: in.CouponType,
+		ThresholdCents: in.ThresholdCents, DiscountCents: in.DiscountCents, DiscountRate: in.DiscountRate,
+		MaxDiscountCents: in.MaxDiscountCents, ValidMode: couponValidMode(in), ValidStartAt: in.ValidStartAt,
+		ValidEndAt: in.ValidEndAt, ValidDays: in.ValidDays, TotalCount: in.TotalCount, PerUserLimit: in.PerUserLimit,
+		Claimable: in.Claimable, Status: 1}, 0); err != nil {
+		return repository.AgentProposal{}, badProposal("%s", strings.TrimPrefix(err.Error(), ErrCouponBadRequest.Error()+": "))
+	}
 	if in.TotalCount < 1 || in.TotalCount > couponMaxTotal {
 		return repository.AgentProposal{}, badProposal("total_count 取 1–%d", couponMaxTotal)
 	}
