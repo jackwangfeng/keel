@@ -14,6 +14,12 @@ void main() {
     expect(r.height, isNull, reason: '只限宽，高按原图比例，BoxFit.cover 不变形');
   });
 
+  test('小程序里解码像素比封顶 2x（wasm 解码，640 图一张 60–100ms）；原生照设备像素比', () {
+    expect(decodePixelRatio(3, miniProgram: true), 2);
+    expect(decodePixelRatio(1.5, miniProgram: true), 1.5);
+    expect(decodePixelRatio(3, miniProgram: false), 3);
+  });
+
   group('缩略图档位（GET /uploads/{id}?w=，服务端只认 160 / 320 / 480 / 640）', () {
     test('按显示像素向上取档，超过 640 按 640', () {
       expect(thumbUrl('http://h/api/v1/uploads/23', 100), 'http://h/api/v1/uploads/23?w=160');

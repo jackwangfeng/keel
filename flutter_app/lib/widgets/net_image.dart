@@ -1,4 +1,7 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
+import 'package:mp_flutter_wechat/mp_flutter_wechat.dart';
 
 /// 服务端缩略图档位（GET /uploads/{id}?w=，契约只认这四档，其它值向上取、超过 640 按 640）。
 const thumbWidths = [160, 320, 480, 640];
@@ -11,6 +14,11 @@ String thumbUrl(String url, int px) {
   final w = thumbWidths.firstWhere((t) => t >= px, orElse: () => thumbWidths.last);
   return '$url?w=$w';
 }
+
+/// 解码用的像素比。小程序里封顶 2x：iPhone 上图片在 wasm 里解，3x 屏的网格图会取到 640 档，
+/// 实测一张 60–100ms、正好卡在新图进屏那一帧；2x 取 480 档，像素少近一半，商品卡这个尺寸看不出差别。
+/// 原生（手机 App / 浏览器）解码快，照设备像素比。
+double decodePixelRatio(double dpr, {required bool miniProgram}) => miniProgram ? math.min(dpr, 2) : dpr;
 
 /// 网络图：向服务端要按显示尺寸缩好的图（thumbUrl），并按显示尺寸解码（cacheWidth = 逻辑宽 × 像素比）——
 /// iPhone 小程序里图片在 wasm 里解码（没有 JIT），解 800×800 比解 320 宽慢好几倍；
@@ -26,7 +34,7 @@ class NetImage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     Widget image(double w) {
-      final px = (w * MediaQuery.devicePixelRatioOf(context)).round();
+      final px = (w * decodePixelRatio(MediaQuery.devicePixelRatioOf(context), miniProgram: MpWechat.isAvailable)).round();
       return Image.network(thumbUrl(url, px), width: width, height: height, fit: BoxFit.cover, cacheWidth: px > 0 ? px : null,
           errorBuilder: (_, _, _) => fallback ?? const SizedBox());
     }
