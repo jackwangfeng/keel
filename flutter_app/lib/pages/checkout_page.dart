@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kReleaseMode;
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
@@ -515,7 +516,8 @@ class _CheckoutPageState extends State<CheckoutPage> {
             ]),
           ),
         // 幂等键：进页面生成一次，重复点提交不会重复下单（服务端对重放回 201 + Idempotency-Replayed，同键异体回 422）。
-        // 对买家不是主信息，收起来；但不藏掉 —— 排查「为什么没下成」时要看得到。
+        // 对买家不是主信息：正式包（release）里不出现；调试 / profile 包里收起来留着，排查「为什么没下成」时要看得到。
+        if (!kReleaseMode)
         Padding(
           padding: const EdgeInsets.fromLTRB(4, 20, 4, 0),
           child: Column(children: [
