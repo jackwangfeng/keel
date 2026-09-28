@@ -163,4 +163,16 @@ void main() {
     expect(t.widget<Text>(find.byKey(const Key('cart.shortfall'))).data, '还差 ¥20.00 起送');
     expect(t.widget<FilledButton>(find.byKey(const Key('cart.checkout'))).onPressed, isNull);
   });
+
+  testWidgets('窄屏（320 宽）上特价行（现价 + 划线门店价 + 数量）不溢出：价格放不下就换行', (t) async {
+    t.view.physicalSize = const Size(960, 1800);
+    t.view.devicePixelRatio = 3;
+    addTearDown(t.view.reset);
+    final f = FakeCart();
+    f.items[1]!.addAll({'price_cents': 1234567, 'list_price_cents': 2345678, 'quantity': 88});
+    final (w, _) = await app(f);
+    await openCart(t, w);
+    expect(t.takeException(), isNull);
+    expect(find.text('¥23456.78'), findsOneWidget);
+  });
 }

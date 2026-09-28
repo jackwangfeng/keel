@@ -257,8 +257,6 @@ class _AddressEditPageState extends State<AddressEditPage> {
                   ),
                 ]),
               ),
-              if (_message.isNotEmpty)
-                KeelCard(child: Text(_message, key: const Key('address.message'), style: _failed ? KeelText.err : KeelText.ok)),
               if (widget.addressId > 0)
                 Padding(
                   padding: const EdgeInsets.symmetric(vertical: 24),
@@ -274,7 +272,15 @@ class _AddressEditPageState extends State<AddressEditPage> {
           top: false,
           child: Padding(
             padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
-            child: FilledButton(key: const Key('address.save'), onPressed: _busy ? null : _save, child: Text(_busy ? '保存中…' : '保存')),
+            // 提示放在保存按钮正上方：表单一长、键盘再占半屏，放在列表末尾的那句用户点完保存根本看不见。
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              if (_message.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Text(_message, key: const Key('address.message'), style: _failed ? KeelText.err : KeelText.ok),
+                ),
+              FilledButton(key: const Key('address.save'), onPressed: _busy ? null : _save, child: Text(_busy ? '保存中…' : '保存')),
+            ]),
           ),
         ),
       ),

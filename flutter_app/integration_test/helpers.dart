@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
+import 'package:keel_buyer/config.dart';
 import 'package:keel_buyer/main.dart' as app;
 import 'package:keel_buyer/main.dart' show appRouter;
 
@@ -83,8 +84,34 @@ Future<void> logoutInApp(WidgetTester t) async {
   await waitFor(t, byKey('me.login'));
 }
 
+/// 等到这个 Key 出现在树里；列表懒构建、它在屏幕外（真机屏窄、键盘占了半屏）就滑过去找。
+/// 先原地等一会儿（多半只是还没加载完），找不到再依次在每个可滚动区域里滚（纵向、横向都算）。
+Future<void> reveal(WidgetTester t, String k) async {
+  final f = byKey(k);
+  try {
+    await waitFor(t, f, timeout: const Duration(seconds: 3));
+    return;
+  } on TestFailure {
+    // 屏幕外：下面去滚。
+  }
+  for (final e in find.byType(Scrollable).evaluate().toList()) {
+    if (f.evaluate().isNotEmpty) break;
+    final s = e.widget as Scrollable;
+    final scrollable = find.byWidget(s);
+    for (final delta in const [300.0, -300.0]) {
+      try {
+        await t.scrollUntilVisible(f, delta, scrollable: scrollable, maxScrolls: 40);
+        break;
+      } catch (_) {
+        // 这个方向 / 这个区域里没有：换一个。
+      }
+    }
+  }
+  await waitFor(t, f);
+}
+
 Future<void> tapKey(WidgetTester t, String k) async {
-  await waitFor(t, byKey(k));
+  await reveal(t, k);
   await t.ensureVisible(byKey(k));
   await t.pump();
   await t.tap(byKey(k));
@@ -156,9 +183,11 @@ Future<void> loginInApp(WidgetTester t) async {
   await waitGone(t, byKey('login.submit'));
 }
 
-/// 测试进程自己的 HTTP：对着同一个服务端查 / 清前置状态（Web 同源，走 /api/v1 反代）。
+/// 测试进程自己的 HTTP：对着同一个服务端查 / 清前置状态。服务地址与 App 同一个来源（apiBase）：
+/// Web 同源走 /api/v1 反代；原生（真机 e2e）没有页面 origin，用编译时注入的 KEEL_API_BASE。
 class Api {
-  static final _base = Uri.base.resolve('/api/v1').toString();
+  static final _root = Uri.base.resolve(apiBase());
+  static final _base = _root.toString();
   static String? _token;
 
   static Future<String> token() async {
@@ -254,7 +283,7 @@ class Api {
     final payload = p is Map ? p['payload'] as Map? : null;
     final settle = payload?['settle'] as Map?;
     if (settle == null) fail('支付响应里没有沙箱回调信封：$p');
-    final w = await http.post(Uri.base.resolve(settle['url'] as String),
+    final w = await http.post(_root.resolve(settle['url'] as String),
         headers: {for (final e in ((settle['headers'] as Map?) ?? const {}).entries) '${e.key}': '${e.value}'}, body: settle['body'] as String);
     if (w.statusCode >= 300) fail('沙箱回调失败：${w.statusCode} ${w.body}');
     for (var i = 0; i < 30; i++) {

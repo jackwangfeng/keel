@@ -410,17 +410,24 @@ class _CartPageState extends State<CartPage> {
                   const SizedBox(height: 6),
                   Row(
                     children: [
-                      Text(r.priceText, style: KeelText.price),
-                      if (r.listPriceText.isNotEmpty) ...[
-                        const SizedBox(width: 6),
-                        Text(
-                          r.listPriceText,
-                          style: KeelText.hint.copyWith(
-                            decoration: TextDecoration.lineThrough,
-                          ),
+                      // 价格占剩下的宽度、放不下就换行（真机屏窄 / 系统字体宽一点时，现价 + 划线价 + 数量排不下）。
+                      Expanded(
+                        child: Wrap(
+                          spacing: 6,
+                          crossAxisAlignment: WrapCrossAlignment.end,
+                          children: [
+                            Text(r.priceText, style: KeelText.price),
+                            if (r.listPriceText.isNotEmpty)
+                              Text(
+                                r.listPriceText,
+                                style: KeelText.hint.copyWith(
+                                  decoration: TextDecoration.lineThrough,
+                                ),
+                              ),
+                          ],
                         ),
-                      ],
-                      const Spacer(),
+                      ),
+                      const SizedBox(width: 8),
                       QtyStepper(
                         value: r.quantity,
                         canMinus: r.quantity > 1 && !_busy,

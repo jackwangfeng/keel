@@ -212,8 +212,9 @@ class _ProductPageState extends State<ProductPage> {
                               ),
                             ),
                           const SizedBox(height: 12),
-                          Row(
-                            crossAxisAlignment: CrossAxisAlignment.end,
+                          // Wrap 不用 Row：窄屏上现价 + 划线价 + 库存排不下时换行，不溢出。
+                          Wrap(
+                            crossAxisAlignment: WrapCrossAlignment.end,
                             children: [
                               Text(
                                 p?.priceText ?? d.priceText,

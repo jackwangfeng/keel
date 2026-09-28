@@ -240,4 +240,17 @@ void main() {
     await t.pumpAndSettle();
     expect(find.byKey(const Key('detail.title')), findsOneWidget);
   });
+
+  testWidgets('详情：窄屏（320 宽）上价格行不溢出', (t) async {
+    t.view.physicalSize = const Size(960, 1800);
+    t.view.devicePixelRatio = 3;
+    addTearDown(t.view.reset);
+    final f = Fake();
+    await t.pumpWidget((await app(f)).$1);
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('product.card.22')));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('detail.price')), findsOneWidget);
+    expect(t.takeException(), isNull);
+  });
 }

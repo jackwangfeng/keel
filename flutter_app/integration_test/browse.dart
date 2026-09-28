@@ -23,6 +23,7 @@ void browseTests() {
     }
     await waitFor(t, byKey('home.cat.all'));
     for (final c in tree) {
+      await reveal(t, 'home.cat.${c['id']}'); // 分类栏横向滚动，真机屏窄时后面几个要滑过去才构建
       expect(byKey('home.cat.${c['id']}'), findsOneWidget);
     }
     final target = tree.first as Map;
