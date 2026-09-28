@@ -1642,6 +1642,227 @@
     }
   },
   {
+    "description": "活动 / 券复盘：promotion_id 或 coupon_template_id 二选一。活动给窗口内与紧邻的前一个等长窗口的销售额、单量、客单价对比，以及参与 SKU 的销量（限时折扣 / 秒杀才有；满减满折按全店口径算）；券给发出数、核销数、核销率，以及这张券带来的已支付订单与优惠合计。",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "coupon_template_id": {
+          "description": "券模板 id；与 promotion_id 二选一",
+          "type": [
+            "null",
+            "integer"
+          ]
+        },
+        "promotion_id": {
+          "description": "活动 id；与 coupon_template_id 二选一",
+          "type": [
+            "null",
+            "integer"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "name": "promotion_review",
+    "outputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "coupon": {
+          "additionalProperties": false,
+          "properties": {
+            "claimed_count": {
+              "maximum": 2147483647,
+              "minimum": -2147483648,
+              "type": "integer"
+            },
+            "discount_cents": {
+              "type": "integer"
+            },
+            "discount_yuan": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "order_count": {
+              "type": "integer"
+            },
+            "sales_cents": {
+              "type": "integer"
+            },
+            "sales_yuan": {
+              "type": "string"
+            },
+            "template_id": {
+              "type": "integer"
+            },
+            "use_rate": {
+              "type": [
+                "null",
+                "number"
+              ]
+            },
+            "used_count": {
+              "maximum": 2147483647,
+              "minimum": -2147483648,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "template_id",
+            "name",
+            "claimed_count",
+            "used_count",
+            "use_rate",
+            "order_count",
+            "sales_cents",
+            "sales_yuan",
+            "discount_cents",
+            "discount_yuan"
+          ],
+          "type": [
+            "null",
+            "object"
+          ]
+        },
+        "promotion": {
+          "additionalProperties": false,
+          "properties": {
+            "current": {
+              "additionalProperties": false,
+              "properties": {
+                "aov_cents": {
+                  "type": "integer"
+                },
+                "aov_yuan": {
+                  "type": "string"
+                },
+                "order_count": {
+                  "type": "integer"
+                },
+                "sales_cents": {
+                  "type": "integer"
+                },
+                "sales_yuan": {
+                  "type": "string"
+                },
+                "units_sold": {
+                  "type": [
+                    "null",
+                    "integer"
+                  ]
+                }
+              },
+              "required": [
+                "sales_cents",
+                "sales_yuan",
+                "order_count",
+                "aov_cents",
+                "aov_yuan"
+              ],
+              "type": "object"
+            },
+            "name": {
+              "type": "string"
+            },
+            "previous": {
+              "additionalProperties": false,
+              "properties": {
+                "aov_cents": {
+                  "type": "integer"
+                },
+                "aov_yuan": {
+                  "type": "string"
+                },
+                "order_count": {
+                  "type": "integer"
+                },
+                "sales_cents": {
+                  "type": "integer"
+                },
+                "sales_yuan": {
+                  "type": "string"
+                },
+                "units_sold": {
+                  "type": [
+                    "null",
+                    "integer"
+                  ]
+                }
+              },
+              "required": [
+                "sales_cents",
+                "sales_yuan",
+                "order_count",
+                "aov_cents",
+                "aov_yuan"
+              ],
+              "type": "object"
+            },
+            "previous_window": {
+              "additionalProperties": false,
+              "properties": {
+                "end": {
+                  "type": "string"
+                },
+                "start": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "start",
+                "end"
+              ],
+              "type": "object"
+            },
+            "promo_type": {
+              "maximum": 32767,
+              "minimum": -32768,
+              "type": "integer"
+            },
+            "promotion_id": {
+              "type": "integer"
+            },
+            "shop_wide": {
+              "type": "boolean"
+            },
+            "window": {
+              "additionalProperties": false,
+              "properties": {
+                "end": {
+                  "type": "string"
+                },
+                "start": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "start",
+                "end"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "promotion_id",
+            "name",
+            "promo_type",
+            "shop_wide",
+            "window",
+            "previous_window",
+            "current",
+            "previous"
+          ],
+          "type": [
+            "null",
+            "object"
+          ]
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
     "description": "提一条发券提案：建一张券（满减 / 折扣 / 立减），可放进领券中心。不会立即执行：人批准后 Keel 建券。需要全店范围的 AI 员工。面额至多 100 元、发行量至多 10000。",
     "inputSchema": {
       "additionalProperties": false,
@@ -3229,6 +3450,130 @@
         "current",
         "previous",
         "window"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "滞销清仓：每个（门店，SKU）的库存周转天数（可售 ÷ 日均，日均口径与 restock_plan 相同——分母去掉断货天）。周转天数为 null 的是回看期内一件没卖出去的，排最前，比任何数字都更该清。只给「哪些该清」的名单，不算折扣或清货量。",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "limit": {
+          "description": "最多返回几条，默认 50，最多 200",
+          "type": "integer"
+        },
+        "lookback_days": {
+          "description": "按最近多少天的销量算周转，1–90，默认 30",
+          "type": "integer"
+        },
+        "min_available": {
+          "description": "只看可售数不低于它的（门店，SKU），默认 10",
+          "maximum": 2147483647,
+          "minimum": -2147483648,
+          "type": "integer"
+        },
+        "store_id": {
+          "description": "只算这家门店；不传则是你管辖范围内全部营业中的门店",
+          "type": [
+            "null",
+            "integer"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "name": "slow_movers",
+    "outputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "generated_at": {
+          "type": "string"
+        },
+        "lines": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "available": {
+                "maximum": 2147483647,
+                "minimum": -2147483648,
+                "type": "integer"
+              },
+              "daily_avg": {
+                "type": "number"
+              },
+              "days_of_stock": {
+                "type": [
+                  "null",
+                  "number"
+                ]
+              },
+              "effective_days": {
+                "type": "integer"
+              },
+              "product_id": {
+                "type": "integer"
+              },
+              "product_title": {
+                "type": "string"
+              },
+              "sku_id": {
+                "type": "integer"
+              },
+              "sku_label": {
+                "type": "string"
+              },
+              "sold": {
+                "type": "integer"
+              },
+              "store_id": {
+                "type": "integer"
+              },
+              "store_name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "store_id",
+              "store_name",
+              "sku_id",
+              "product_id",
+              "product_title",
+              "sku_label",
+              "available",
+              "sold",
+              "effective_days",
+              "daily_avg"
+            ],
+            "type": "object"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        },
+        "lookback_days": {
+          "type": "integer"
+        },
+        "min_available": {
+          "maximum": 2147483647,
+          "minimum": -2147483648,
+          "type": "integer"
+        },
+        "timezone": {
+          "type": "string"
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "generated_at",
+        "timezone",
+        "lookback_days",
+        "min_available",
+        "lines",
+        "truncated"
       ],
       "type": "object"
     }

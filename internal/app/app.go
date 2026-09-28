@@ -675,16 +675,18 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	v1.GET("/admin/agent-briefs", staffAuth, abh.List)
 	v1.GET("/admin/agent-briefs/:brief_id", staffAuth, abh.Get)
 	mcpH := handler.NewMCPHandler(handler.MCPDeps{
-		Staff:     staffSvc,
-		Reports:   service.NewReportService(repo, inv),
-		Stores:    service.NewAdminStoreService(repo, inv),
-		Catalog:   service.NewAdminCatalogService(repo, store, inv),
-		Orders:    service.NewAdminOrderService(repo),
-		Restock:   service.NewRestockService(repo, inv, service.NewAdminStoreService(repo, inv)),
-		Proposals: proposals,
-		Briefs:    briefs,
-		Events:    agentEvents,
-		Version:   buildinfo.Get().Version,
+		Staff:           staffSvc,
+		Reports:         service.NewReportService(repo, inv),
+		Stores:          service.NewAdminStoreService(repo, inv),
+		Catalog:         service.NewAdminCatalogService(repo, store, inv),
+		Orders:          service.NewAdminOrderService(repo),
+		Restock:         service.NewRestockService(repo, inv, service.NewAdminStoreService(repo, inv)),
+		Proposals:       proposals,
+		Briefs:          briefs,
+		Events:          agentEvents,
+		SlowMovers:      service.NewSlowMoversService(repo, inv, service.NewAdminStoreService(repo, inv)),
+		PromotionReview: service.NewPromotionReviewService(repo),
+		Version:         buildinfo.Get().Version,
 	})
 	v1.POST("/mcp", agentAuth, mcpH)
 	v1.GET("/mcp", agentAuth, mcpH)

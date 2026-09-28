@@ -40,6 +40,8 @@ func TestMCPEveryToolReturnsItsDeclaredShape(t *testing.T) {
 		VALUES ($1, 'search_zero_spike', '{"query":"泳衣","count":6}', 'schema-test') RETURNING id`, cs.MerchantID).Scan(&evID); err != nil {
 		t.Fatal(err)
 	}
+	// promotion_review 的券分支要一张模板（哪怕没人领过、没人用过）。
+	tpl := cs.createTemplate(t, full100minus20(0, 1))
 
 	calls := []struct {
 		tool string
@@ -71,6 +73,8 @@ func TestMCPEveryToolReturnsItsDeclaredShape(t *testing.T) {
 			"evidence": "search_insights：「纯棉」近 7 天 30 次低点击"}},
 		{"list_events", map[string]any{}},
 		{"ack_events", map[string]any{"up_to_id": evID}},
+		{"slow_movers", map[string]any{}},
+		{"promotion_review", map[string]any{"coupon_template_id": tpl.Id}},
 	}
 	tools, err := sess.ListTools(context.Background(), nil)
 	if err != nil {
