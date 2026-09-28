@@ -60,22 +60,22 @@ void browseTests() {
     await Api.clearCart();
   });
 
-  e2e('搜索：按商品标题搜，这件排第一；点进去是它的详情；详情里加购成功', (t) async {
+  // 取有货的第一件（没 SKU / 缺货的会被检索降权，排不上来，且买不了）。同名商品在融合分上可能并列（比如「陶瓷马克杯」
+  // 与「陶瓷马克杯 两只装」），所以不断言它排第一，只断言它在结果里、点进去是它。
+  e2e('搜索：按商品标题搜得到这件；点进去是它的详情；详情里加购成功', (t) async {
     await startApp(t);
     await loginInApp(t);
     await Api.clearCart();
     await tapKey(t, 'tab.home');
-    final first = (((await Api.get('/products?page_size=1', auth: false)) as Map)['items'] as List).first as Map;
+    final items = (((await Api.get('/products?page_size=50', auth: false)) as Map)['items'] as List).cast<Map>();
+    final first = items.firstWhere((p) => p['in_stock'] == true, orElse: () => fail('列表里没有有货的商品'));
     final title = first['title'] as String;
     await tapKey(t, 'home.search');
     await waitFor(t, byKey('search.input'));
     await t.enterText(byKey('search.input'), title);
     await tapKey(t, 'search.submit');
     await waitFor(t, byKey('search.count'));
-    final rows = find.byWidgetPredicate((w) => w.key is ValueKey<String> && '${(w.key! as ValueKey).value}'.startsWith('search.row.'));
-    expect(rows, findsWidgets);
-    expect((rows.evaluate().first.widget.key! as ValueKey).value, 'search.row.${first['id']}');
-    await t.tap(rows.first);
+    await tapKey(t, 'search.row.${first['id']}');
     await waitFor(t, keyedText('detail.title', title));
     await tapKey(t, 'detail.add');
     await waitFor(t, byKey('detail.added'));
