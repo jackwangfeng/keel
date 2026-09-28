@@ -8438,8 +8438,8 @@ export interface paths {
          * 券模板列表（含发放与核销统计）
          * @description 按创建时间倒序。每一项带发放与核销统计（`stats`）与适用范围（`scopes`）。
          *
-         *     **权限**：本期只开放给商家级的管理员与操作员（`staff.role` 为 1 或 2），
-         *     平台级操作员与其他角色 403 `staff-forbidden`。券直接决定订单实付，是资金面。
+         *     **权限**：全店范围的员工——管理员与操作员（`staff.role` 为 1 或 2，含经 `X-Keel-Merchant`
+         *     切进来的平台级员工）；大区 / 门店管理员 403 `role-forbidden`（券的适用范围可以跨大区）。券直接决定订单实付，是资金面。
          */
         get: {
             parameters: {
@@ -8492,7 +8492,7 @@ export interface paths {
                         };
                     };
                 };
-                /** @description 不是商家级管理员或操作员（`https://keel.dev/problems/staff-forbidden`）。 */
+                /** @description 不是全店范围的员工（`https://keel.dev/problems/role-forbidden`；大区 / 门店管理员）。 */
                 403: {
                     headers: {
                         [name: string]: unknown;
@@ -8593,7 +8593,7 @@ export interface paths {
                         "application/json": components["schemas"]["AdminCouponTemplate"];
                     };
                 };
-                /** @description 不是商家级管理员或操作员（`https://keel.dev/problems/staff-forbidden`）。 */
+                /** @description 不是全店范围的员工（`https://keel.dev/problems/role-forbidden`；大区 / 门店管理员）。 */
                 403: {
                     headers: {
                         [name: string]: unknown;
