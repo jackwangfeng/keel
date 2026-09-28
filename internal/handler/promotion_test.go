@@ -701,3 +701,15 @@ func TestRefundReleasesPromotionQuotaButNotThePerUserLimit(t *testing.T) {
 		t.Fatalf("每人限购不该放回：purchased=%d", got)
 	}
 }
+
+// 试算回每一行此刻的可售数：不够时客户端当场标出来，而不是等下单 409（2026-09-28 破坏性测试）。
+func TestPreviewReportsAvailableQuantity(t *testing.T) {
+	cs := newCouponShop(t)
+	b := cs.newBuyer(t, "preview-stock")
+	setStoreStock(t, cs.adminShop, cs.NorthStore, cs.ShirtSKU, 1)
+	pv, w := cs.preview(t, b, cs.orderJSON(b, cs.NorthStore, cs.ShirtSKU, 2, nil))
+	wantStatus(t, w, http.StatusOK, "试算")
+	if len(pv.Items) != 1 || pv.Items[0].AvailableQty == nil || *pv.Items[0].AvailableQty != 1 {
+		t.Fatalf("试算行应带 available_qty=1（买 2 件）：%+v", pv.Items)
+	}
+}

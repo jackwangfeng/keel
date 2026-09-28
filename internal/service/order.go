@@ -294,7 +294,27 @@ func (s *OrderService) Preview(ctx context.Context, req CreateRequest) (Quote, e
 			return err
 		})
 	})
-	return q, err
+	if err != nil {
+		return q, err
+	}
+	// 可售数在事务之外问（拆分部署下是一次网络往返）：试算就告诉买家哪一行不够，
+	// 而不是等下单才 409（2026-09-28 破坏性测试：库存 0 的 SKU 试算照样 200）。
+	// 问不到只记一条，试算照常返回 —— 与商品列表 in_stock 同一个降级口径。
+	if s.inv != nil && len(q.Lines) > 0 {
+		skus := make([]int64, 0, len(q.Lines))
+		for _, ln := range q.Lines {
+			skus = append(skus, ln.SKUID)
+		}
+		if levels, e := s.inv.StoreStock(ctx, q.Store.StoreID, skus); e == nil {
+			q.Available = make(map[int64]int32, len(levels))
+			for _, id := range skus {
+				q.Available[id] = levels[id].Available
+			}
+		} else {
+			slog.WarnContext(ctx, "试算问不到库存，available_qty 缺席", "store_id", q.Store.StoreID, "err", e)
+		}
+	}
+	return q, nil
 }
 
 // couponOf 是试算与下单构造 couponRequest 的唯一方式：同一个买家、同一张券、

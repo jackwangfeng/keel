@@ -5187,6 +5187,11 @@ type OrderPreviewItem struct {
 	// AmountCents `price_cents × quantity`。
 	AmountCents Money `json:"amount_cents"`
 
+	// AvailableQty 这家门店此刻的可售数（2026-09-28 起）。**小于 `quantity` 即库存不足**，照这个试算下单会 409
+	// `insufficient-stock` —— 客户端据此在结算页标出来、不让提交，而不是等下单才失败。
+	// 问不到库存时缺席（拆分部署下库存服务不在），不要据此判成无货。
+	AvailableQty *int `json:"available_qty,omitempty"`
+
 	// DiscountCents 该行分摊到的全部商品优惠（满减满折 + 券）。余数归金额最大行，保证求和恒等。
 	// 包邮券抵的是运费，不分摊到行。
 	DiscountCents Money `json:"discount_cents"`

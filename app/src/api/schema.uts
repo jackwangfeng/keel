@@ -1726,6 +1726,8 @@ export type OrderDetail = {
 
 /** 试算的一行。**本轮从内联 schema 提成了具名类型**（数据模型 §15 记过的那笔债）： */
 export type OrderPreviewItem = {
+  /** 这家门店此刻的可售数（2026-09-28 起）。**小于 `quantity` 即库存不足**，照这个试算下单会 409 */
+  available_qty? : number
   sku_id : number
   quantity : number
   /** 金额，单位「分」。禁止使用浮点。 */

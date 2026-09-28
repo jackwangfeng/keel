@@ -543,7 +543,7 @@ class _CheckoutPageState extends State<CheckoutPage> {
                 onPressed: () => context.pushReplacement('/orders/${Uri.encodeComponent(_orderNo)}'), child: const Text('查看订单'))
             : FilledButton(
                 key: const Key('checkout.submit'),
-                onPressed: pv == null || _busy || _addressId == 0 || _outOfRange ? null : _submit,
+                onPressed: pv == null || _busy || _addressId == 0 || _outOfRange || pv.shortages.isNotEmpty ? null : _submit,
                 child: Text(_busy ? '提交中…' : '提交订单'),
               ),
       ),
@@ -603,6 +603,8 @@ class _CheckoutPageState extends State<CheckoutPage> {
                   if (r.specText.isNotEmpty) Text(r.specText, style: KeelText.hint),
                   if (_undeliverableOf(r.skuId).isNotEmpty)
                     Text(_undeliverableOf(r.skuId), key: Key('checkout.undeliverable.${r.skuId}'), style: KeelText.err),
+                  if (_pv?.shortages[r.skuId] != null)
+                    Text(shortageText(_pv!.shortages[r.skuId]!), key: Key('checkout.short.${r.skuId}'), style: KeelText.err),
                   Row(children: [Text(r.priceText, style: KeelText.price), const Spacer(), Text('× ${r.quantity}', style: KeelText.sub)]),
                 ]),
               ),
@@ -620,6 +622,8 @@ class _CheckoutPageState extends State<CheckoutPage> {
             if (_itemSpec.isNotEmpty) Text(_itemSpec, style: KeelText.hint),
             if (_undeliverableOf(widget.skuId).isNotEmpty)
               Text(_undeliverableOf(widget.skuId), key: Key('checkout.undeliverable.${widget.skuId}'), style: KeelText.err),
+            if (_pv?.shortages[widget.skuId] != null)
+              Text(shortageText(_pv!.shortages[widget.skuId]!), key: Key('checkout.short.${widget.skuId}'), style: KeelText.err),
             Row(children: [
               Text(_unitPrice, style: KeelText.price),
               const Spacer(),

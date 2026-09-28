@@ -103,6 +103,10 @@ type PricedLine struct {
 type Quote struct {
 	Lines []PricedLine
 
+	// Available 是试算时这家门店每个 SKU 此刻的可售数（契约 OrderPreviewItem.available_qty）。
+	// 只有试算填（下单的库存分支本来就会按真实水位扣、不够就 409）；问不到库存服务时为 nil，字段缺席。
+	Available map[int64]int32
+
 	GoodsAmountCents int64
 
 	// FreightCents 是运费（包邮券抵扣之前），FreightDiscountCents 是包邮券抵掉的部分

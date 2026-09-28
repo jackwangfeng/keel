@@ -66,6 +66,7 @@ func (h *OrderHandler) Preview(c *gin.Context) {
 			AmountCents:            api.Money(ln.AmountCents),
 			DiscountCents:          api.Money(ln.DiscountCents),
 			PromotionDiscountCents: api.Money(ln.PromotionDiscountCents),
+			AvailableQty:           availableOf(q.Available, ln.SKUID),
 		})
 	}
 
@@ -392,4 +393,13 @@ func writeUndeliverable(c *gin.Context, err error) {
 		Detail:             &detail,
 		UndeliverableItems: &items,
 	})
+}
+
+// availableOf 是试算行上的 available_qty：问不到库存时缺席。
+func availableOf(m map[int64]int32, sku int64) *int {
+	if m == nil {
+		return nil
+	}
+	v := int(m[sku])
+	return &v
 }

@@ -161,4 +161,23 @@ void main() {
     expect(paymentReturnLine(r1), '多付的 ¥68.80（重复支付）已原路退回');
     expect(paymentReturnLine(r2), '多付的 ¥1.00（订单关闭后到账）正在原路退回');
   });
+
+  test('试算：available_qty 小于 quantity 的行记为缺货，文案区分售罄', () {
+    final p = OrderPreview.fromJson({
+      'store_id': 1, 'goods_amount_cents': 100, 'freight_cents': 0, 'freight_discount_cents': 0,
+      'freight': {'freight_cents': 0, 'freight_discount_cents': 0, 'groups': []},
+      'payable_cents': 100, 'promotion_discount_cents': 0, 'coupon_discount_cents': 0, 'promotions': [],
+      'items': [
+        {'sku_id': 1, 'quantity': 2, 'price_cents': 50, 'list_price_cents': 50, 'amount_cents': 100, 'discount_cents': 0,
+         'promotion_discount_cents': 0, 'available_qty': 1},
+        {'sku_id': 2, 'quantity': 1, 'price_cents': 50, 'list_price_cents': 50, 'amount_cents': 50, 'discount_cents': 0,
+         'promotion_discount_cents': 0, 'available_qty': 5},
+        {'sku_id': 3, 'quantity': 1, 'price_cents': 50, 'list_price_cents': 50, 'amount_cents': 50, 'discount_cents': 0,
+         'promotion_discount_cents': 0},
+      ],
+    });
+    expect(previewView(p).shortages, {1: 1});
+    expect(shortageText(1), '库存不足，仅剩 1 件');
+    expect(shortageText(0), '库存不足，已售罄');
+  });
 }

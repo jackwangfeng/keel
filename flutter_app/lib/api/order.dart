@@ -34,7 +34,10 @@ class PreviewView {
   final int couponId;
   /// 这一单能用的券，服务端按优惠从大到小排好（第一张最省）。
   final List<CouponOption> coupons;
-  const PreviewView({required this.goodsAmountText, required this.freightText, required this.discountText,
+  /// 库存不够的行：sku_id → 此刻可售数（契约 OrderPreviewItem.available_qty 小于 quantity 的那些）。
+  /// 非空时结算页标出来、不让提交 —— 照这样下单会 409 insufficient-stock。
+  final Map<int, int> shortages;
+  const PreviewView({this.shortages = const {}, required this.goodsAmountText, required this.freightText, required this.discountText,
       required this.payableText, required this.payableCents, required this.promotionDiscountText,
       required this.couponDiscountText, required this.promotionNotes, required this.freightDiscountText,
       required this.freightNote, this.freightLabel = '运费', this.needsPin = false, required this.couponId, required this.coupons});
@@ -60,7 +63,14 @@ PreviewView previewView(OrderPreview p) => PreviewView(
       promotionNotes: promotionNotes(p.promotions),
       couponId: p.userCouponId ?? 0,
       coupons: (p.applicableCoupons ?? const []).map(couponOption).toList(),
+      shortages: {
+        for (final it in p.items)
+          if (it.availableQty != null && it.availableQty! < it.quantity) it.skuId: it.availableQty!,
+      },
     );
+
+/// 库存不够那一行的提示。
+String shortageText(int available) => available <= 0 ? '库存不足，已售罄' : '库存不足，仅剩 $available 件';
 
 /// 试算与下单共用一个请求体。expected 试算过才带；coupon null = 不用券。
 Map<String, dynamic> orderBody(List<OrderLine> lines, int addressId, int storeId, int? expected, int? couponId) =>

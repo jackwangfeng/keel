@@ -19320,6 +19320,12 @@ export interface components {
          *     加 `list_price_cents` 这几个字段时，内联匿名 struct 会让 handler 里那处字面量编译失败。
          */
         OrderPreviewItem: {
+            /**
+             * @description 这家门店此刻的可售数（2026-09-28 起）。**小于 `quantity` 即库存不足**，照这个试算下单会 409
+             *     `insufficient-stock` —— 客户端据此在结算页标出来、不让提交，而不是等下单才失败。
+             *     问不到库存时缺席（拆分部署下库存服务不在），不要据此判成无货。
+             */
+            available_qty?: number;
             /** Format: int64 */
             sku_id: number;
             quantity: number;

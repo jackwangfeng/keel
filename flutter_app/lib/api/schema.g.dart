@@ -3508,6 +3508,7 @@ class OrderDetail {
 
 /// 试算的一行。**本轮从内联 schema 提成了具名类型**（数据模型 §15 记过的那笔债）：
 class OrderPreviewItem {
+  final int? availableQty;
   final int skuId;
   final int quantity;
   final Money priceCents;
@@ -3516,8 +3517,9 @@ class OrderPreviewItem {
   final Money amountCents;
   final Money discountCents;
   final Money promotionDiscountCents;
-  const OrderPreviewItem({required this.skuId, required this.quantity, required this.priceCents, required this.listPriceCents, this.pricePromotionId, required this.amountCents, required this.discountCents, required this.promotionDiscountCents});
+  const OrderPreviewItem({this.availableQty, required this.skuId, required this.quantity, required this.priceCents, required this.listPriceCents, this.pricePromotionId, required this.amountCents, required this.discountCents, required this.promotionDiscountCents});
   factory OrderPreviewItem.fromJson(Map<String, dynamic> j) => OrderPreviewItem(
+        availableQty: (j['available_qty'] as num?)?.toInt(),
         skuId: (j['sku_id'] as num).toInt(),
         quantity: (j['quantity'] as num).toInt(),
         priceCents: (j['price_cents'] as num).toInt(),
@@ -3528,6 +3530,7 @@ class OrderPreviewItem {
         promotionDiscountCents: (j['promotion_discount_cents'] as num).toInt(),
       );
   Map<String, dynamic> toJson() => {
+        if (availableQty != null) 'available_qty': availableQty,
         'sku_id': skuId,
         'quantity': quantity,
         'price_cents': priceCents,

@@ -11685,6 +11685,12 @@ components:
       required: [sku_id, quantity, price_cents, list_price_cents, amount_cents, discount_cents,
                  promotion_discount_cents]
       properties:
+        available_qty:
+          type: integer
+          description: |
+            这家门店此刻的可售数（2026-09-28 起）。**小于 `quantity` 即库存不足**，照这个试算下单会 409
+            `insufficient-stock` —— 客户端据此在结算页标出来、不让提交，而不是等下单才失败。
+            问不到库存时缺席（拆分部署下库存服务不在），不要据此判成无货。
         sku_id:   { type: integer, format: int64 }
         quantity: { type: integer }
         price_cents:
