@@ -221,5 +221,11 @@ func (s *LocalDiskStore) Remove(key string) error {
 		!errors.Is(err, os.ErrNotExist) {
 		return err
 	}
+	// 缩略图缓存（upload_thumb.go）跟着原图走：原图没了，各档缩略图留着就是没人认领的文件。
+	for _, w := range ThumbWidths {
+		if err := os.Remove(thumbPath(s.root, key, w)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
 	return nil
 }

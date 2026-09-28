@@ -41,6 +41,14 @@ so "which one is running?" never depends on anyone's memory.
 
 ### Added
 
+- **Thumbnails: `GET /uploads/{upload_id}?w=`.** Four widths (160 / 320 / 480 / 640); any
+  other value snaps up to the next tier, capped at 640; absent means the original, unchanged.
+  Aspect-preserving, never upscales, always JPEG quality 80 with transparency flattened to
+  white. Applies to product images and avatars only (refund evidence ignores it). Thumbnails
+  are cached per (file, width) next to the original and removed with it. Motivation: the
+  Flutter mini-program decodes images in wasm without JIT on iOS, and list cards display
+  ~173 px of an 800 px image.
+
 - **Out-of-stock SKUs sort last and are clearly marked.** On the product page and in the
   quick-add sheet, SKUs with no stock move after the in-stock ones (stable partition, server
   order kept within each group) and render with a dashed grey chip, struck-through label and a

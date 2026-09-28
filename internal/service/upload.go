@@ -255,6 +255,25 @@ func (s *UploadService) AdminRedirectTarget(ctx context.Context, uploadID int64)
 // 那两样不进签名（它们会让地址变长、也会让「改一下文件元数据」变成
 // 「所有已发出的地址全部失效」）。
 func (s *UploadService) BlobFor(ctx context.Context, uploadID int64, exp, sig string) (UploadBlob, error) {
+	return s.BlobForWidth(ctx, uploadID, exp, sig, 0)
+}
+
+// RedirectTargetWidth 是带 ?w= 的第一跳：判权与 RedirectTarget 完全相同，限时地址后面带上归档后的 w。
+// w 不进签名：它只决定缩略图的档位（已归到固定档），改它拿到的仍是同一个文件，不越权。
+func (s *UploadService) RedirectTargetWidth(ctx context.Context, uploadID int64, w int) (string, error) {
+	target, err := s.RedirectTarget(ctx, uploadID)
+	if err != nil {
+		return "", err
+	}
+	if w = SnapThumbWidth(w); w > 0 {
+		target += "&w=" + strconv.Itoa(w)
+	}
+	return target, nil
+}
+
+// BlobForWidth 是 BlobFor 带缩略图档位的版本（upload_thumb.go）。w <= 0 即原图。
+// 只对公开的两类（商品图、头像）出缩略图；私有文件（退款凭证）忽略 w，照给原图。
+func (s *UploadService) BlobForWidth(ctx context.Context, uploadID int64, exp, sig string, w int) (UploadBlob, error) {
 	merchantID, err := tenant.FromContext(ctx)
 	if err != nil {
 		return UploadBlob{}, err
@@ -297,6 +316,13 @@ func (s *UploadService) BlobFor(ctx context.Context, uploadID int64, exp, sig st
 
 	if s.store == nil {
 		return UploadBlob{}, errors.New("没有配置文件存储 driver，GET /uploads/{upload_id} 不可用")
+	}
+	if w = SnapThumbWidth(w); w > 0 && publicPurposes[up.Purpose] {
+		if blob, ok, err := s.thumbBlob(up.StorageKey, w); err != nil {
+			return UploadBlob{}, err
+		} else if ok {
+			return blob, nil
+		}
 	}
 	body, err := s.store.Open(up.StorageKey)
 	if err != nil {

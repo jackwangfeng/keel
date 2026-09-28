@@ -768,12 +768,9 @@ var routes = []route{
 		ContractPath:   "/uploads/{upload_id}",
 		ContractMethod: "get",
 		HTTPMethod:     http.MethodGet,
-		HandlerFile:    "upload.go",
-		NoQueryParams: "要读哪个文件在路径上；契约里这条接口一个 query 参数都没有。" +
-			"第二跳（GET /uploads/{upload_id}/blob，不在契约里）确实要读 exp 与 sig，" +
-			"而它因此单独占了 upload_blob.go —— 下面那条对账按 HandlerFile 解析" +
-			"**整份源码**里的 c.Query，两跳同文件会让这一行登记当场红。" +
-			"同一条纪律让 GET /admin/products 单独占了 admin_product_list.go",
+		// 读 w（缩略图宽度，2026-09-28），所以单独占 upload_redirect.go。第二跳（/blob，不在契约里）
+		// 读 exp / sig / w，单独占 upload_blob.go —— 对账按 HandlerFile 解析整份源码里的 c.Query。
+		HandlerFile: "upload_redirect.go",
 	},
 	// —— 买家上传与后台读文件（售后链路补齐那一轮）。契约 GET /uploads/{upload_id} 那张
 	// 可读者表的「仅上传者本人与后台客服」原先挂在上面那条的 NotYetImplementedStage 里，

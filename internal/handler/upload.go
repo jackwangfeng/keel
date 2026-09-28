@@ -64,28 +64,6 @@ func NewUploadHandler(s *service.UploadService) *UploadHandler {
 	return &UploadHandler{svc: s}
 }
 
-// Redirect 实现 GET /api/v1/uploads/{upload_id}。
-func (h *UploadHandler) Redirect(c *gin.Context) {
-	id, ok := pathID(c, "upload_id")
-	if !ok {
-		return
-	}
-	target, err := h.svc.RedirectTarget(c.Request.Context(), id)
-	if err != nil {
-		writeUploadError(c, err)
-		return
-	}
-	// 302 而不是 307/308：契约逐字写的就是 302，而且这条路上没有方法或请求体
-	// 需要被保留（它只可能是 GET）。
-	//
-	// 跳转目标是**相对路径**。绝对 URL 要这个进程知道自己对外是什么 origin，
-	// 而它不知道（反代、自定义域名、路径路由三种形态各不一样）——
-	// 猜一个的结果是在自定义域名的店上把用户跳到别的域名去。
-	// 同一条推理写在 service/payment_intent.go 的 settle.url 上。
-	c.Header("Cache-Control", "no-store")
-	c.Redirect(http.StatusFound, target)
-}
-
 // AdminRedirect 实现 GET /api/v1/admin/uploads/{upload_id}（后台客服读文件）。
 // 响应形状与 Redirect 相同：302 到同一种限时地址。判权在 service.AdminRedirectTarget。
 func (h *UploadHandler) AdminRedirect(c *gin.Context) {

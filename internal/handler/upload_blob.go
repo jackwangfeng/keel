@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 )
@@ -37,7 +38,9 @@ func (h *UploadHandler) Blob(c *gin.Context) {
 	// 过期了，在这条路上是同一件事（地址不能用），而分辨它们只会造出一个
 	// 「这个签名是不是我们签的」的预言机。service.BlobFor 把三者合成一个
 	// ErrUploadLinkInvalid。
-	blob, err := h.svc.BlobFor(c.Request.Context(), id, c.Query("exp"), c.Query("sig"))
+	// w 是第一跳归好档再带过来的缩略图宽度；解不开当 0（原图）—— 这一跳不在契约里，不为它报 422。
+	w, _ := strconv.Atoi(c.Query("w"))
+	blob, err := h.svc.BlobForWidth(c.Request.Context(), id, c.Query("exp"), c.Query("sig"), w)
 	if err != nil {
 		writeUploadError(c, err)
 		return
