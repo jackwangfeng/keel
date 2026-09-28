@@ -6,7 +6,6 @@ import 'package:go_router/go_router.dart';
 import '../api/address.dart';
 import '../api/client.dart';
 import '../api/geo.dart';
-import '../api/schema.g.dart';
 import '../api/services.dart';
 import '../theme.dart';
 import '../widgets/form_bits.dart';
@@ -16,11 +15,11 @@ import '../widgets/form_bits.dart';
 class PickedPlace {
   final String label;
   final LatLng? at;
-  final GeoPlace? place;
+  final Place? place;
   final bool device;
   const PickedPlace({required this.label, this.at, this.place, this.device = false});
   const PickedPlace.device() : this(label: '', device: true);
-  PickedPlace.of(GeoPlace p) : this(label: geoLabel(p), at: (lat: p.lat, lng: p.lng), place: p);
+  PickedPlace.of(Place p) : this(label: geoLabel(p), at: (lat: p.lat, lng: p.lng), place: p);
 }
 
 /// 选地点：输入提示（/geo/suggest）+ 地图选点（小程序）；首页换地址时另有「使用当前定位」和收货地址列表。
@@ -39,7 +38,7 @@ class _PlacePickerPageState extends State<PlacePickerPage> {
   final _input = TextEditingController();
   Timer? _debounce;
   _Geo _geo = _Geo.idle;
-  List<GeoPlace> _hits = const [];
+  List<Place> _hits = const [];
   String _error = '';
   // 连着敲字时只认最后一次发出去的请求。
   int _seq = 0;
@@ -114,7 +113,7 @@ class _PlacePickerPageState extends State<PlacePickerPage> {
     }
   }
 
-  Future<void> _pickPlace(GeoPlace p) async {
+  Future<void> _pickPlace(Place p) async {
     if (_busy) return;
     setState(() => _busy = true);
     final full = await completePlace(Services.of(context).client, p);

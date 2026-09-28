@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:keel_buyer/api/address.dart';
 import 'package:keel_buyer/api/client.dart';
+import 'package:keel_buyer/api/geo.dart';
 import 'package:keel_buyer/api/schema.g.dart';
 import 'package:keel_buyer/api/session.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -87,7 +88,7 @@ void main() {
   });
 
   test('选中一个地点：自动填省市区、街道、区划码、坐标与详细地址', () {
-    final f = AddressForm()..applyPlace(const GeoPlace(name: '黄龙时代广场', address: '杭大路 15 号', province: '浙江省', city: '杭州市',
+    final f = AddressForm()..applyPlace(const Place(name: '黄龙时代广场', address: '杭大路 15 号', province: '浙江省', city: '杭州市',
         district: '西湖区', adcode: '330106', street: '北山街道', lat: 30.27, lng: 120.15));
     expect([f.province, f.city, f.district, f.street, f.regionCode], ['浙江省', '杭州市', '西湖区', '北山街道', '330106']);
     expect(f.detail, '杭大路 15 号 黄龙时代广场');
@@ -97,10 +98,10 @@ void main() {
   });
 
   test('详细地址：高德的 address 常带着省市区、也已含地点名 —— 去掉省市区前缀，已含地点名就不再拼', () {
-    GeoPlace g(String name, String address, {String province = '浙江省', String city = '杭州市', String district = '拱墅区'}) =>
-        GeoPlace(name: name, address: address, province: province, city: city, district: district, adcode: '330105', street: '',
+    Place g(String name, String address, {String province = '浙江省', String city = '杭州市', String district = '拱墅区'}) =>
+        Place(name: name, address: address, province: province, city: city, district: district, adcode: '330105', street: '',
             lat: 30.27, lng: 120.15);
-    String detail(GeoPlace p) => (AddressForm()..applyPlace(p)).detail;
+    String detail(Place p) => (AddressForm()..applyPlace(p)).detail;
     expect(detail(g('天巢花苑', '浙江省杭州市拱墅区天水街道天巢花苑')), '天水街道天巢花苑');
     expect(detail(g('黄龙时代广场', '杭大路 15 号')), '杭大路 15 号 黄龙时代广场');
     expect(detail(g('人民广场', '上海市黄浦区人民大道', province: '上海市', city: '上海市', district: '黄浦区')), '人民大道 人民广场');

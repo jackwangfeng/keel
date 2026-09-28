@@ -5,7 +5,6 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:keel_buyer/api/client.dart';
 import 'package:keel_buyer/api/geo.dart';
-import 'package:keel_buyer/api/schema.g.dart';
 import 'package:keel_buyer/api/session.dart';
 
 const _json = {'content-type': 'application/json; charset=utf-8'};
@@ -83,15 +82,14 @@ void main() {
   });
 
   test('首页上显示的地址：优先地点名，没有就用地址', () {
-    expect(geoLabel(GeoPlace.fromJson(place('黄龙时代广场'))), '黄龙时代广场');
-    expect(geoLabel(GeoPlace.fromJson(place(''))), '文三路 90 号');
+    expect(geoLabel(const Place(name: '黄龙时代广场', address: '文三路 90 号', lat: 0, lng: 0)), '黄龙时代广场');
+    expect(geoLabel(const Place(name: '', address: '文三路 90 号', lat: 0, lng: 0)), '文三路 90 号');
   });
 
   group('选中一个点之后', () {
     ApiClient client(Future<http.Response> Function(http.Request r) h) =>
         ApiClient(base: 'http://h/api/v1', session: Session(), http: MockClient(h));
-    const picked = GeoPlace(name: '西湖文化广场', address: '中山北路', province: '', city: '', district: '', adcode: '', street: '',
-        lat: 30.28, lng: 120.16);
+    const picked = Place(name: '西湖文化广场', address: '中山北路', lat: 30.28, lng: 120.16);
 
     test('再 reverse 一次补全省市区；地点名、地址、坐标保留选中的', () async {
       final c = client((r) async => http.Response(jsonEncode(place('某大厦', lat: 30.2801, lng: 120.1601)), 200, headers: _json));

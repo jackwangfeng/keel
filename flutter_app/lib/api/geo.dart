@@ -10,13 +10,32 @@ import 'schema.g.dart';
 
 typedef LatLng = ({double lat, double lng});
 
+/// 一个地点（页面用的行模型；契约的 GeoPlace 只在这一层读）。字段与收货地址对齐，adcode 就是 region_code。
+class Place {
+  final String name;
+  final String address;
+  final String province;
+  final String city;
+  final String district;
+  final String adcode;
+  /// 街道办 / 乡镇（收货地址的第四级）。
+  final String street;
+  final double lat;
+  final double lng;
+  const Place({required this.name, required this.address, this.province = '', this.city = '', this.district = '', this.adcode = '',
+      this.street = '', required this.lat, required this.lng});
+}
+
+Place _place(GeoPlace g) => Place(name: g.name, address: g.address, province: g.province, city: g.city, district: g.district,
+    adcode: g.adcode, street: g.street, lat: g.lat, lng: g.lng);
+
 /// 坐标 → 地点（省市区、街道、adcode 齐全）。
-Future<GeoPlace> reverseGeocode(ApiClient c, double lat, double lng) async => (await c.send('GET', '/geo/reverse',
-        query: {'lat': '$lat', 'lng': '$lng'}, decode: (j) => GeoPlace.fromJson(j as Map<String, dynamic>)))
+Future<Place> reverseGeocode(ApiClient c, double lat, double lng) async => (await c.send('GET', '/geo/reverse',
+        query: {'lat': '$lat', 'lng': '$lng'}, decode: (j) => _place(GeoPlace.fromJson(j as Map<String, dynamic>))))
     .data;
 
 /// 输入提示：只含有坐标的候选；给了 near 就按离得近的排。候选里省市可能不全，选中后再 reverse 取完整的。
-Future<List<GeoPlace>> suggestPlaces(ApiClient c, String q, {LatLng? near, String? city}) async {
+Future<List<Place>> suggestPlaces(ApiClient c, String q, {LatLng? near, String? city}) async {
   final k = q.trim();
   if (k.isEmpty) return const [];
   return (await c.send('GET', '/geo/suggest',
@@ -26,7 +45,7 @@ Future<List<GeoPlace>> suggestPlaces(ApiClient c, String q, {LatLng? near, Strin
             if (near != null) 'lng': '${near.lng}',
             if (city != null && city.isNotEmpty) 'city': city,
           },
-          decode: (j) => ((j as Map<String, dynamic>)['items'] as List).map((e) => GeoPlace.fromJson(e as Map<String, dynamic>)).toList()))
+          decode: (j) => ((j as Map<String, dynamic>)['items'] as List).map((e) => _place(GeoPlace.fromJson(e as Map<String, dynamic>))).toList()))
       .data;
 }
 
@@ -37,14 +56,14 @@ bool geoOff(ApiFailure f) => f.status == 501;
 bool geoDown(ApiFailure f) => f.status == 503;
 
 /// 首页「送至 …」里的那一截：优先地点名（「黄龙时代广场」），没有就用地址。
-String geoLabel(GeoPlace p) => p.name.isNotEmpty ? p.name : p.address;
+String geoLabel(Place p) => p.name.isNotEmpty ? p.name : p.address;
 
 /// 选中了一个点（输入提示的候选 / 地图选点）：再 reverse 一次取完整的省市区、街道、adcode；
 /// 地点名、地址、坐标保留选中的那个。拿不到（501 / 503 / 网络）就原样用，省市区留给用户手填。
-Future<GeoPlace> completePlace(ApiClient c, GeoPlace p) async {
+Future<Place> completePlace(ApiClient c, Place p) async {
   try {
     final r = await reverseGeocode(c, p.lat, p.lng);
-    return GeoPlace(
+    return Place(
       name: p.name.isNotEmpty ? p.name : r.name,
       address: p.address.isNotEmpty ? p.address : r.address,
       province: r.province,
@@ -61,18 +80,17 @@ Future<GeoPlace> completePlace(ApiClient c, GeoPlace p) async {
 }
 
 /// wx.chooseLocation 的返回 → 地点（坐标已转 WGS-84，省市区空着，交给 [completePlace]）。没有坐标 = 没选。
-GeoPlace? mapPick(Map<String, Object?> r) {
+Place? mapPick(Map<String, Object?> r) {
   final lat = r['latitude'], lng = r['longitude'];
   if (lat is! num || lng is! num) return null;
   final w = gcj02ToWgs84(lat.toDouble(), lng.toDouble());
-  return GeoPlace(name: '${r['name'] ?? ''}', address: '${r['address'] ?? ''}', province: '', city: '', district: '', adcode: '',
-      street: '', lat: w.lat, lng: w.lng);
+  return Place(name: '${r['name'] ?? ''}', address: '${r['address'] ?? ''}', lat: w.lat, lng: w.lng);
 }
 
 /// 小程序里才有的地图选点（微信自带的选点页，免 key）。用户取消是 null。
 bool get canPickOnMap => MpWechat.isAvailable;
 
-Future<GeoPlace?> pickOnMap({LatLng? near}) async {
+Future<Place?> pickOnMap({LatLng? near}) async {
   final g = near == null ? null : wgs84ToGcj02(near.lat, near.lng);
   try {
     return mapPick(await MpWechat.call('chooseLocation', {'latitude': ?g?.lat, 'longitude': ?g?.lng}));

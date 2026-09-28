@@ -75,7 +75,7 @@ class AddressForm {
         lng = a.lng;
 
   /// 搜索地点 / 地图选点选中了一处：省市区、街道、区划码（运费按它算）与坐标照填，详细地址先写上地址与地点名，门牌号用户自己补。
-  void applyPlace(GeoPlace p) {
+  void applyPlace(Place p) {
     province = p.province;
     city = p.city;
     district = p.district;
@@ -105,7 +105,7 @@ class AddressForm {
 
 /// 详细地址：高德的 address 常以省市区开头（「浙江省杭州市拱墅区天水街道天巢花苑」），而且可能已经含着地点名 ——
 /// 去掉省市区前缀（直辖市省、市同名只去一次），已含地点名就不再拼上。
-String _detailOf(GeoPlace p) {
+String _detailOf(Place p) {
   var a = p.address;
   for (final prefix in [p.province, p.city, p.district]) {
     if (prefix.isNotEmpty && a.startsWith(prefix)) a = a.substring(prefix.length);
