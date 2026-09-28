@@ -55,6 +55,8 @@ class _CheckoutPageState extends State<CheckoutPage> {
   String _orderNo = '';
   int? _storeId;
   bool _outOfRange = false;
+  // 收货地址带坐标、落在这家门店的围栏外（422 address-out-of-range）：给「换地址」和「按这条地址换门店」两个出路。
+  bool _outOfFence = false;
   int _couponId = 0;
   // 还没替用户选过券：第一次试算回来时自动选最省的那张；选过一次（或用户自己选了）就关掉。
   bool _couponAuto = true;
@@ -178,6 +180,7 @@ class _CheckoutPageState extends State<CheckoutPage> {
   /// 而且下单要用户先看见应付金额再确认，过期的试算不该还摆着。
   void _invalidate() {
     _pv = null;
+    _outOfFence = false;
     if (!_needNewKey) _message = '';
   }
 
@@ -249,7 +252,7 @@ class _CheckoutPageState extends State<CheckoutPage> {
       if (stale()) return;
       setState(() {
         _previewing = false;
-        if (_notDeliverable(f)) return;
+        if (_notDeliverable(f) || _notInFence(f)) return;
         _failed = true;
         if (f.isType('promotion-limit-exceeded')) {
           _message = '超出活动每人限购，请减少数量（${f.message}）';
@@ -272,6 +275,49 @@ class _CheckoutPageState extends State<CheckoutPage> {
         ? '收货地址缺少省份信息，判断不了能不能配送，请补全地址'
         : '有商品送不到这个收货地址，请换一个地址${widget.fromCart ? '，或回购物车去掉标红的商品' : ''}';
     return true;
+  }
+
+  /// 422 address-out-of-range：地址的坐标不在所选门店的围栏里。调用方已在 setState 里。
+  bool _notInFence(ApiFailure f) {
+    if (!f.isType('address-out-of-range')) return false;
+    _outOfFence = true;
+    _failed = true;
+    _message = '地址不在这家门店配送范围';
+    return true;
+  }
+
+  /// 按这条收货地址的坐标重新解析门店（首页、购物车也跟着换），再按新门店试算。
+  Future<void> _switchStore() async {
+    final a = _address;
+    if (a == null) return;
+    _s.store.deliverTo(at: a.at, label: a.detail);
+    try {
+      final store = await _s.store.ensure();
+      if (!mounted) return;
+      setState(() {
+        _outOfFence = false;
+        _failed = false;
+        _message = '';
+        _invalidate();
+        _cartLoaded = false; // 车按门店算价，换了门店重读
+        _storeId = store.storeId;
+        if (store.storeId == null) {
+          _outOfRange = true;
+          _failed = true;
+          _message = '这个地址暂不在配送范围内，无法下单';
+        }
+      });
+      if (store.storeId == null) return;
+      if (!widget.fromCart) _loadItem();
+      _preview();
+    } on ApiFailure catch (f) {
+      if (mounted) {
+        setState(() {
+          _failed = true;
+          _message = f.message;
+        });
+      }
+    }
   }
 
   String _undeliverableOf(int skuId) => _undeliverable.where((l) => l.skuId == skuId).firstOrNull?.reason ?? '';
@@ -324,8 +370,8 @@ class _CheckoutPageState extends State<CheckoutPage> {
       setState(() {
         _busy = false;
         _failed = true;
-        if (_notDeliverable(f)) {
-          // 这一单没建成；换了地址再提交是新请求，换个键免得撞「同键异体」。
+        if (_notDeliverable(f) || _notInFence(f)) {
+          // 这一单没建成；换了地址 / 门店再提交是新请求，换个键免得撞「同键异体」。
           _key = newIdempotencyKey();
           _pv = null;
           return;
@@ -444,6 +490,14 @@ class _CheckoutPageState extends State<CheckoutPage> {
                   child: OutlinedButton(key: const Key('checkout.fixAddress'),
                       onPressed: () => context.push('/addresses/$_addressId').then((_) => _loadAddresses()),
                       child: const Text('去补全地址')),
+                ),
+              if (_outOfFence)
+                Padding(
+                  padding: const EdgeInsets.only(top: 10),
+                  child: Wrap(spacing: 10, runSpacing: 10, children: [
+                    OutlinedButton(key: const Key('checkout.changeAddress'), onPressed: _pickAddress, child: const Text('换地址')),
+                    FilledButton(key: const Key('checkout.switchStore'), onPressed: _switchStore, child: const Text('按这个地址换门店')),
+                  ]),
                 ),
               if (_needNewKey)
                 Padding(

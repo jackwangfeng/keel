@@ -31,9 +31,19 @@ class Fake {
   bool slowAddr1 = false;
   bool noCoupons = false;
   String status = '10';
+  /// 地址 1 带坐标、落在默认店（1）的围栏外：按门店 1 试算 / 下单回 422 address-out-of-range；按它的坐标解析得到门店 5。
+  bool fence = false;
+  bool fenceOnSubmit = false;
+  final resolves = <Map<String, String>>[];
   late final client = MockClient((r) async {
     final p = r.url.path.replaceFirst('/api/v1', '');
-    if (p == '/stores/resolve') return j({'match_type': 'default', 'stores': [{'id': 1, 'name': '示例小店', 'is_default': true}]});
+    if (p == '/stores/resolve') {
+      resolves.add(r.url.queryParameters);
+      if (r.url.queryParameters['lat'] == '31.23') {
+        return j({'match_type': 'fence', 'stores': [{'id': 5, 'name': '人民广场店', 'is_default': false, 'distance_m': 300}]});
+      }
+      return j({'match_type': 'default', 'stores': [{'id': 1, 'name': '示例小店', 'is_default': true}]});
+    }
     if (p == '/products' ) return j({'page': 1, 'page_size': 20, 'total': 0, 'store': {'match_type': 'default', 'store_id': 1}, 'items': []});
     if (p == '/categories') return j([]);
     if (p == '/cart') return j({'items': [], 'store': {'match_type': 'default', 'store_id': 1}, 'total_cents': 0, 'selected_total_cents': 0, 'promotion_discount_cents': 0, 'promotions': []});
@@ -43,13 +53,15 @@ class Fake {
     }
     if (p == '/addresses') {
       return j([
-        {'id': 1, 'receiver_name': '张三', 'phone': '139', 'province': '浙江省', 'city': '杭州市', 'district': '西湖区', 'detail': '1 号', 'is_default': true},
+        {'id': 1, 'receiver_name': '张三', 'phone': '139', 'province': '浙江省', 'city': '杭州市', 'district': '西湖区', 'detail': '1 号', 'is_default': true,
+          if (fence) 'lat': 31.23, if (fence) 'lng': 121.47},
         {'id': 2, 'receiver_name': '李四', 'phone': '138', 'province': '新疆维吾尔自治区', 'city': '乌鲁木齐市', 'district': '天山区', 'detail': '2 号', 'is_default': false},
       ]);
     }
     if (p == '/orders/preview') {
       final b = jsonDecode(r.body) as Map;
       previews.add(b);
+      if (fence && !fenceOnSubmit && b['store_id'] == 1) return outOfRange();
       if (slowAddr1 && b['address_id'] == 1) await Future<void>.delayed(const Duration(seconds: 2));
       if (((b['items'] as List).first as Map)['quantity'] == 2 && b['user_coupon_id'] == 3) {
         return j({'type': 'https://keel.dev/problems/coupon-not-applicable', 'title': '这张优惠券本单不可用', 'status': 409,
@@ -65,6 +77,7 @@ class Fake {
     }
     if (p == '/orders') {
       orders.add(r);
+      if (fenceOnSubmit && (jsonDecode(r.body) as Map)['store_id'] == 1) return outOfRange();
       return j({'order_no': 'N100', 'store_id': 1, 'status': 10, 'refund_status': 0, 'payable_cents': 4000, 'created_at': '2026-09-26T00:05:12Z'},
           201, replay ? {'idempotency-replayed': 'true'} : {});
     }
@@ -83,6 +96,9 @@ class Fake {
     return j({'type': 'x', 'title': 'nope $p', 'status': 404}, 404);
   });
 }
+
+http.Response outOfRange() => j({'type': 'https://keel.dev/problems/address-out-of-range', 'title': '收货地址不在门店配送范围',
+      'status': 422, 'detail': '收货地址不在「示例小店」的配送范围内'}, 422);
 
 Future<Widget> app(Fake f) async {
   SharedPreferences.setMockInitialValues({'keel.access': 'a', 'keel.refresh': 'r', 'keel.nickname': 'e2e'});
@@ -185,5 +201,40 @@ void main() {
     expect(find.textContaining('包邮券抵不了钱'), findsOneWidget);
     expect(find.byKey(const Key('checkout.coupon.none')), findsOneWidget);
     expect(t.widget<Text>(find.byKey(const Key('checkout.payable'))).data, '—');
+  });
+
+  testWidgets('地址在门店围栏外（试算 422 address-out-of-range）：照实说，按这条地址换门店后重新试算', (t) async {
+    phone(t);
+    final f = Fake()..fence = true;
+    await t.pumpWidget(await app(f));
+    await t.pumpAndSettle();
+    expect(t.widget<Text>(find.byKey(const Key('checkout.message'))).data, '地址不在这家门店配送范围');
+    expect(find.byKey(const Key('checkout.changeAddress')), findsOneWidget);
+    await t.tap(find.byKey(const Key('checkout.switchStore')));
+    await t.pumpAndSettle();
+    expect(f.resolves.last, {'lat': '31.23', 'lng': '121.47'});
+    expect(f.previews.last['store_id'], 5);
+    expect(find.byKey(const Key('checkout.switchStore')), findsNothing);
+    expect(find.byKey(const Key('checkout.payable')), findsOneWidget);
+  });
+
+  testWidgets('提交时才发现在围栏外：这单没建成，换键；同样给两个出路', (t) async {
+    phone(t);
+    final f = Fake()
+      ..fence = true
+      ..fenceOnSubmit = true;
+    await t.pumpWidget(await app(f));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('checkout.submit')));
+    await t.pumpAndSettle();
+    expect(t.widget<Text>(find.byKey(const Key('checkout.message'))).data, '地址不在这家门店配送范围');
+    await t.tap(find.byKey(const Key('checkout.switchStore')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('checkout.submit')));
+    await t.pumpAndSettle();
+    final keys = f.orders.map((r) => r.headers['Idempotency-Key']).toList();
+    expect(keys, hasLength(2));
+    expect(keys[0], isNot(keys[1]));
+    expect((jsonDecode(f.orders.last.body) as Map)['store_id'], 5);
   });
 }
