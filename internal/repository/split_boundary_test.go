@@ -57,7 +57,10 @@ func TestQueryFilesStayOnTheirSideOfTheSplit(t *testing.T) {
 			for _, m := range refs {
 				name := strings.ToLower(m[1])
 				// CTE 名（cur / wrote）不是表，「DO UPDATE SET」里的 set 也不是；库存服务自己的表之外只许出现 CTE。
-				if inventoryTables[name] || name == "cur" || name == "wrote" || name == "set" {
+				// 放行的不是表：cur / wrote / set 与 req_skus / day_idx / day_ends 是 CTE 名（后三个是
+				// InvStockoutDays 的），generate_series 是函数。
+				if inventoryTables[name] || name == "cur" || name == "wrote" || name == "set" ||
+					name == "req_skus" || name == "day_idx" || name == "day_ends" || name == "generate_series" {
 					continue
 				}
 				t.Errorf("inventory_svc.sql 引用了 %q —— 库存服务的仓储只许碰 inventories / inventory_logs / "+

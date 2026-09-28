@@ -41,6 +41,13 @@ so "which one is running?" never depends on anyone's memory.
 
 ### Added
 
+- **`restock_plan` MCP tool (M9, task 3): deterministic restock suggestions.** Per (store, SKU): paid units
+  over the lookback window divided by *in-stock* days (days whose closing level was ≤ 0 are excluded —
+  otherwise items that ran out get under-ordered), days of cover, projected sell-out date in the shop's time
+  zone, suggested quantity to cover N days (rounded up to a multiple of 5, capped at 1000), and a `low`
+  confidence flag when fewer than 5 days of data exist. Stockout days come from the inventory service
+  (new `StockoutDays`, local and HTTP), since inventory logs live there in split deployments. Same scope rules
+  as the store inventory list.
 - **MCP endpoint for AI staff (M9, task 2): `/api/v1/mcp`.** Streamable HTTP (official Go SDK, stateless:
   every request re-authenticates the `kagt_` key), tenant from Host. Ten read tools — `shop_overview`,
   `sales_trend`, `product_ranking`, `store_comparison`, `inventory_alerts`, `search_insights`, `list_stores`,

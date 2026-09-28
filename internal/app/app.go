@@ -637,6 +637,7 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 		Stores:  service.NewAdminStoreService(repo, inv),
 		Catalog: service.NewAdminCatalogService(repo, store, inv),
 		Orders:  service.NewAdminOrderService(repo),
+		Restock: service.NewRestockService(repo, inv, service.NewAdminStoreService(repo, inv)),
 		Version: buildinfo.Get().Version,
 	})
 	v1.POST("/mcp", agentAuth, mcpH)

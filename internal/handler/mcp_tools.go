@@ -11,7 +11,7 @@ import (
 	"github.com/keel/keel/internal/service"
 )
 
-// MCP 工具清单（AI 经营 M9，docs/AI经营-M9设计.md §3.1）。本文件只放读工具；计算、提案、简报工具随任务 3–5 加进来。
+// MCP 工具清单（AI 经营 M9，docs/AI经营-M9设计.md §3.1）：读工具与计算工具；提案、简报工具随任务 4–5 加进来。
 //
 // 每个工具都是「后台同名接口的另一个入口」：调同一个 service 函数（判权相同 —— 门店管理员身份的 AI 员工
 // 只看得到它那家店），返回同一个契约类型，错误走同一个错误出口（mcpTool 的 writeErr）。
@@ -68,6 +68,13 @@ type mcpListProductsIn struct {
 	mcpPageIn
 	Status     *int16 `json:"status,omitempty" jsonschema:"0 草稿 / 1 上架 / 2 下架；不传则全部"`
 	CategoryID *int64 `json:"category_id,omitempty"`
+}
+
+type mcpRestockIn struct {
+	StoreID      *int64 `json:"store_id,omitempty" jsonschema:"只算这家门店；不传则是你管辖范围内全部营业中的门店"`
+	CoverDays    int    `json:"cover_days,omitempty" jsonschema:"补到能卖多少天，1–90，默认 14"`
+	LookbackDays int    `json:"lookback_days,omitempty" jsonschema:"按最近多少天的销量算日均，1–90，默认 14"`
+	All          bool   `json:"all,omitempty" jsonschema:"true 时连建议补货量为 0 的也返回；默认只返回需要补的"`
 }
 
 type mcpGetProductIn struct {
@@ -143,6 +150,14 @@ func registerMCPTools(srv *mcp.Server, d *MCPDeps) {
 				return api.ReportSearchOverview{}, err
 			}
 			return apiReportSearch(out), nil
+		})
+	mcpTool(srv, d, "restock_plan",
+		"补货计算（确定性，不是估算）：每个（门店，SKU）的日均销量（分母去掉断货天）、可售、可售天数、预计卖断日、"+
+			"建议补货量（补到能卖 cover_days 天，取到 5 的倍数）、置信。confidence=low 的样本不足 5 天，只写进简报、不要提案。"+
+			"按最先卖断排序。",
+		writeAdminListError, func(ctx context.Context, in mcpRestockIn) (service.RestockPlan, error) {
+			return d.Restock.Plan(ctx, service.RestockQuery{StoreID: in.StoreID, CoverDays: in.CoverDays,
+				LookbackDays: in.LookbackDays, OnlyNeeded: !in.All})
 		})
 	mcpTool(srv, d, "list_stores", "门店列表（你管辖范围内的），含营业状态、坐标、是否默认店。",
 		writeStoreError, func(ctx context.Context, in mcpListStoresIn) (mcpPage[api.AdminStore], error) {

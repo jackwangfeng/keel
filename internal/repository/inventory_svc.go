@@ -185,6 +185,8 @@ type ActivityRow struct {
 // InventoryStoreTx 是库存服务仓储在一个事务里能做的全部事情。
 type InventoryStoreTx interface {
 	StoreStock(ctx context.Context, storeID int64, skuIDs []int64) ([]StockLevel, error)
+	// StockoutDays：最近 days 天里收盘时可售 ≤ 0 的天数（天按 tz 切）。没回来的 sku_id 即 0 天。
+	StockoutDays(ctx context.Context, storeID int64, skuIDs []int64, days int32, tz string) (map[int64]int32, error)
 	SKUTotals(ctx context.Context, skuIDs []int64) ([]StockTotal, error)
 	HealthySKUIDs(ctx context.Context, storeID int64) ([]int64, error)
 	// LowStock 返回前 limit 条与总条数。storeIDs 为空时一条都没有（不是「全部门店」）。
@@ -282,6 +284,21 @@ func (t invTx) StoreStock(ctx context.Context, storeID int64, skuIDs []int64) ([
 	for _, r := range rows {
 		out = append(out, StockLevel{SKUID: r.SkuID, Available: r.AvailableQty,
 			Warning: r.WarningQty, UpdatedAt: r.UpdatedAt.Time})
+	}
+	return out, nil
+}
+
+func (t invTx) StockoutDays(ctx context.Context, storeID int64, skuIDs []int64, days int32, tz string) (map[int64]int32, error) {
+	out := make(map[int64]int32, len(skuIDs))
+	if len(skuIDs) == 0 || days <= 0 {
+		return out, nil
+	}
+	rows, err := t.q.InvStockoutDays(ctx, db.InvStockoutDaysParams{StoreID: storeID, SkuIds: skuIDs, Days: days, Tz: tz})
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range rows {
+		out[r.SkuID] = r.StockoutDays
 	}
 	return out, nil
 }

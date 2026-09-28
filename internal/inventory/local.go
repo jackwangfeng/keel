@@ -29,6 +29,35 @@ func checkBatch(n int) error {
 	return nil
 }
 
+func (l *Local) StockoutDays(ctx context.Context, storeID int64, skuIDs []int64, days int, tz string) (map[int64]int, error) {
+	ids := dedup(skuIDs)
+	out := make(map[int64]int, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	if err := checkBatch(len(ids)); err != nil {
+		return nil, err
+	}
+	if storeID <= 0 || days < 1 || days > 90 || tz == "" {
+		return nil, fmt.Errorf("%w: StockoutDays 要 store_id > 0、days 1–90、tz 非空（实得 %d / %d / %q）",
+			ErrInvalid, storeID, days, tz)
+	}
+	err := l.store.WithTenant(ctx, func(tx repository.InventoryStoreTx) error {
+		m, err := tx.StockoutDays(ctx, storeID, ids, int32(days), tz)
+		if err != nil {
+			return err
+		}
+		for k, v := range m {
+			out[k] = int(v)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (l *Local) StoreStock(ctx context.Context, storeID int64, skuIDs []int64) (map[int64]Level, error) {
 	ids := dedup(skuIDs)
 	out := make(map[int64]Level, len(ids))

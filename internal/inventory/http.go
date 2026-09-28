@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -37,12 +38,14 @@ import (
 // 路径（接在 rpc.Prefix = /internal/v1 之后）。客户端与服务端共用这几个常量。
 const (
 	pathStoreStock = "/inventory/stock/by-store"
-	pathSKUTotals  = "/inventory/stock/totals"
-	pathHealthy    = "/inventory/stock/healthy"
-	pathLowStock   = "/inventory/alerts"
-	pathSet        = "/inventory/stock/set"
-	pathAdjust     = "/inventory/stock/adjust"
-	pathInit       = "/inventory/stock/init"
+	// pathStockoutDays：补货计算用的断货天数（AI 经营 M9）。
+	pathStockoutDays = "/inventory/stock/stockout-days"
+	pathSKUTotals    = "/inventory/stock/totals"
+	pathHealthy      = "/inventory/stock/healthy"
+	pathLowStock     = "/inventory/alerts"
+	pathSet          = "/inventory/stock/set"
+	pathAdjust       = "/inventory/stock/adjust"
+	pathInit         = "/inventory/stock/init"
 )
 
 // 写操作的 outcome 取值。
@@ -68,6 +71,18 @@ type levelDTO struct {
 	Available int32     `json:"available"`
 	Warning   int32     `json:"warning"`
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+type stockoutDaysReq struct {
+	StoreID int64   `json:"store_id"`
+	SKUIDs  []int64 `json:"sku_ids"`
+	Days    int     `json:"days"`
+	TZ      string  `json:"tz"`
+}
+
+type stockoutDaysResp struct {
+	// Days 以 sku_id（十进制字符串）为键；没回来的即 0 天。
+	Days map[string]int `json:"days"`
 }
 
 type storeStockResp struct {
@@ -178,6 +193,7 @@ type initRowDTO struct {
 func Mount(g *gin.RouterGroup, svc Service) {
 	h := handler{svc: svc}
 	g.POST(pathStoreStock, h.storeStock)
+	g.POST(pathStockoutDays, h.stockoutDays)
 	g.POST(pathSKUTotals, h.skuTotals)
 	g.POST(pathHealthy, h.healthy)
 	g.POST(pathLowStock, h.lowStock)
@@ -207,6 +223,23 @@ func bind(c *gin.Context, v any) bool {
 		return false
 	}
 	return true
+}
+
+func (h handler) stockoutDays(c *gin.Context) {
+	var in stockoutDaysReq
+	if !bind(c, &in) {
+		return
+	}
+	m, err := h.svc.StockoutDays(c.Request.Context(), in.StoreID, in.SKUIDs, in.Days, in.TZ)
+	if err != nil {
+		fail(c, err)
+		return
+	}
+	out := stockoutDaysResp{Days: make(map[string]int, len(m))}
+	for id, n := range m {
+		out.Days[strconv.FormatInt(id, 10)] = n
+	}
+	c.JSON(http.StatusOK, out)
 }
 
 func (h handler) storeStock(c *gin.Context) {
@@ -378,6 +411,26 @@ func (r *Remote) write(ctx context.Context, path string, in, out any) error {
 		return fmt.Errorf("%w: %v", ErrInvalid, err)
 	}
 	return fmt.Errorf("库存服务拒绝了写请求: %w", err)
+}
+
+func (r *Remote) StockoutDays(ctx context.Context, storeID int64, skuIDs []int64, days int, tz string) (map[int64]int, error) {
+	ids := dedup(skuIDs)
+	out := make(map[int64]int, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	var resp stockoutDaysResp
+	if err := r.read(ctx, pathStockoutDays, stockoutDaysReq{StoreID: storeID, SKUIDs: ids, Days: days, TZ: tz}, &resp); err != nil {
+		return nil, err
+	}
+	for k, n := range resp.Days {
+		id, err := strconv.ParseInt(k, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("%w: 库存服务回的 sku_id %q 不是整数", ErrInvalid, k)
+		}
+		out[id] = n
+	}
+	return out, nil
 }
 
 func (r *Remote) StoreStock(ctx context.Context, storeID int64, skuIDs []int64) (map[int64]Level, error) {

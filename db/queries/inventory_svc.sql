@@ -366,3 +366,36 @@ SELECT inv.sku_id, inv.store_id
  WHERE (inv.sku_id, inv.store_id) > (sqlc.arg(after_sku_id)::bigint, sqlc.arg(after_store_id)::bigint)
  ORDER BY inv.sku_id, inv.store_id
  LIMIT sqlc.arg(row_limit);
+
+-- name: InvStockoutDays :many
+-- 一家门店、一批 SKU 在最近 days 天里「收盘时可售 ≤ 0」的天数（AI 经营 M9 的补货计算用，service/restock.go）。
+--
+-- 天按店铺时区切（tz 由 core 传，库存服务不知道店铺时区）：第 i 天的收盘 = 当地午夜往回 i 天再加一天，
+-- 今天的收盘取 now()。某天收盘时的水位按下面的顺序取第一个有的：
+--   ① 收盘前最后一条流水的 after_available；
+--   ② 收盘后第一条流水的 before_available（那天没动过，水位就是下一次变动前的样子）；
+--   ③ 现在的可售（一条流水都没有）；④ 0（连库存行都没有 —— 缺行 ≡ 可售 0）。
+-- 为什么要它：日均销量的分母只该算有货的天。断过货的 SKU 按日历天数平均，会越断越少补。
+WITH req_skus AS (
+    SELECT unnest(sqlc.arg(sku_ids)::bigint[]) AS sku_id
+), day_idx AS (
+    SELECT gs AS i FROM generate_series(0, sqlc.arg(days)::int - 1) AS gs
+), day_ends AS (
+    SELECT req_skus.sku_id,
+           LEAST(now(), ((date_trunc('day', now() AT TIME ZONE sqlc.arg(tz)::text) - make_interval(days => day_idx.i)
+                          + interval '1 day') AT TIME ZONE sqlc.arg(tz)::text)) AS day_end
+      FROM req_skus CROSS JOIN day_idx
+)
+SELECT day_ends.sku_id::bigint AS sku_id,
+       count(*) FILTER (WHERE COALESCE(
+           (SELECT l.after_available FROM inventory_logs l
+             WHERE l.store_id = sqlc.arg(store_id) AND l.sku_id = day_ends.sku_id AND l.created_at < day_ends.day_end
+             ORDER BY l.created_at DESC, l.id DESC LIMIT 1),
+           (SELECT l.before_available FROM inventory_logs l
+             WHERE l.store_id = sqlc.arg(store_id) AND l.sku_id = day_ends.sku_id AND l.created_at >= day_ends.day_end
+             ORDER BY l.created_at, l.id LIMIT 1),
+           (SELECT inv.available_qty FROM inventories inv
+             WHERE inv.store_id = sqlc.arg(store_id) AND inv.sku_id = day_ends.sku_id),
+           0) <= 0)::int AS stockout_days
+  FROM day_ends
+ GROUP BY day_ends.sku_id;

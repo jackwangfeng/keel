@@ -156,6 +156,11 @@ type Service interface {
 	// StoreStock 批量取一家门店一批 SKU 的水位。结果里没有的 sku_id 即缺行（可售 0）。
 	StoreStock(ctx context.Context, storeID int64, skuIDs []int64) (map[int64]Level, error)
 
+	// StockoutDays 是最近 days 天（1–90，按 IANA 时区 tz 切天）里每个 SKU「收盘时可售 ≤ 0」的天数。
+	// 补货计算（core 的 service/restock.go）用它把断货的天从日均销量的分母里去掉。流水在库存服务的库里，
+	// 所以只能由库存服务回答。结果里没有的 sku_id 即 0 天。
+	StockoutDays(ctx context.Context, storeID int64, skuIDs []int64, days int, tz string) (map[int64]int, error)
+
 	// SKUTotals 批量取一批 SKU 的跨门店合计。结果里没有的 sku_id 记 0 / 0。
 	SKUTotals(ctx context.Context, skuIDs []int64) (map[int64]Total, error)
 

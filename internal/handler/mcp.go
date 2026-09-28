@@ -50,6 +50,7 @@ type MCPDeps struct {
 	Stores  *service.AdminStoreService
 	Catalog *service.AdminCatalogService
 	Orders  *service.AdminOrderService
+	Restock *service.RestockService
 	Log     *slog.Logger
 	// Version 进 MCP 的 serverInfo，agent 能看到连的是哪个版本。
 	Version string

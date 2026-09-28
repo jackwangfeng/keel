@@ -8,8 +8,11 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/keel/keel/internal/tenant"
 )
 
 // MCP 服务（AI 经营 M9 任务 2）：用官方 SDK 的客户端经真实 HTTP 连上来 ——
@@ -141,5 +144,85 @@ func TestMCPReadToolsAuthorizeLikeHumans(t *testing.T) {
 		http.StatusNoContent, "吊销")
 	if _, err := sess.CallTool(context.Background(), &mcp.CallToolParams{Name: "shop_overview"}); err == nil {
 		t.Fatal("吊销之后还能调工具")
+	}
+}
+
+// restock_plan（M9 任务 3）：北京门店连衣裙可售 10，下 3 单各 2 件并付款 → 已售 6、剩 4。
+// SKU 今天才建（有效天数 1，置信 low），日均 6；覆盖 14 天要 84，补 80。
+// 门店管理员身份的 AI 员工点名要广州门店：与人一样 out-of-scope。
+func TestMCPRestockPlan(t *testing.T) {
+	cs := newCouponShop(t)
+	setStoreStock(t, cs.adminShop, cs.NorthStore, cs.DressSKU, 10)
+	b := cs.newBuyer(t, "restock")
+	for i := 0; i < 3; i++ {
+		w := createOrder(t, cs.Host, cs.orderJSON(b, cs.NorthStore, cs.DressSKU, 2, nil), b.Token, fmt.Sprintf("rs-%d-%s", i, uniqueKey()))
+		var o struct {
+			OrderNo      string `json:"order_no"`
+			PayableCents int64  `json:"payable_cents"`
+		}
+		decodeInto(t, w, http.StatusCreated, "下单", &o)
+		cs.pay(t, o.OrderNo, o.PayableCents)
+	}
+	a := createAgent(t, cs.adminShop, fmt.Sprintf(`{"name":"北京店 AI","role":4,"store_ids":[%d]}`, cs.NorthStore))
+	sess := mcpConnect(t, cs.Host, issueAgentKey(t, cs.adminShop, a.Id, `{"name":"t"}`).Secret)
+
+	res, out := mcpCall(t, sess, "restock_plan", nil)
+	if res.IsError {
+		t.Fatalf("restock_plan 出错：%s", mcpText(res))
+	}
+	lines, _ := out["lines"].([]any)
+	var dress map[string]any
+	for _, l := range lines {
+		m := l.(map[string]any)
+		if int64(m["store_id"].(float64)) != cs.NorthStore {
+			t.Fatalf("门店管理员身份的 AI 员工拿到了别的门店的补货行：%v", m)
+		}
+		if int64(m["sku_id"].(float64)) == cs.DressSKU {
+			dress = m
+		}
+	}
+	if dress == nil {
+		t.Fatalf("北京门店连衣裙卖了 6 件剩 4 件，restock_plan 里没有它：%v", lines)
+	}
+	if dress["sold"].(float64) != 6 || dress["available"].(float64) != 4 || dress["daily_avg"].(float64) != 6 ||
+		dress["suggested"].(float64) != 80 || dress["confidence"] != "low" || dress["effective_days"].(float64) != 1 {
+		t.Fatalf("连衣裙的补货计算不对：%v", dress)
+	}
+	res, _ = mcpCall(t, sess, "restock_plan", map[string]any{"store_id": cs.SouthStore})
+	if !res.IsError || !strings.Contains(mcpText(res), "out-of-scope") {
+		t.Fatalf("点名要广州门店应 out-of-scope：%q", mcpText(res))
+	}
+}
+
+// 库存服务的断货天数（inventory.Service.StockoutDays，补货计算的分母）：按店铺时区切天，
+// 每天取收盘时的水位。构造：3 天前中午卖空（after 0）、1 天前中午补到 10 →
+// 3 天前、2 天前两天收盘为 0，其余有货 → 近 5 天断货 2 天。
+func TestStockoutDaysCountsClosingLevels(t *testing.T) {
+	cs := newCouponShop(t)
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	now := time.Now().In(loc)
+	noon := func(daysAgo int) time.Time {
+		d := now.AddDate(0, 0, -daysAgo)
+		return time.Date(d.Year(), d.Month(), d.Day(), 12, 0, 0, 0, loc)
+	}
+	for _, l := range []struct {
+		at            time.Time
+		before, after int
+	}{{noon(3), 5, 0}, {noon(1), 0, 10}} {
+		if _, err := admin(t).Exec(context.Background(), `
+			INSERT INTO inventory_logs (merchant_id, sku_id, store_id, change_qty, biz_type, biz_id, before_available, after_available, created_at)
+			VALUES ($1, $2, $3, $4, 5, 'stockout-test', $5, $6, $7)`,
+			cs.MerchantID, cs.ShirtSKU, cs.SouthStore, l.after-l.before, l.before, l.after, l.at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// 今天夹具里那一次设库存（50）的流水时间是现在，排在 1 天前那条之后 —— 今天收盘有货。
+	got, err := localInventory().StockoutDays(tenant.NewContext(context.Background(), cs.MerchantID),
+		cs.SouthStore, []int64{cs.ShirtSKU}, 5, "Asia/Shanghai")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got[cs.ShirtSKU] != 2 {
+		t.Fatalf("近 5 天断货天数 %d，期望 2", got[cs.ShirtSKU])
 	}
 }
