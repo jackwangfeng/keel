@@ -29,6 +29,19 @@ func TestMCPQuerySQLIsReadOnlyAndTenantBound(t *testing.T) {
 		t.Fatalf("应只看到本店这一单两件（另一家店的看不见）：%v", row)
 	}
 
+	// 结果有字节上限：宽行截断、单个值截短（2026-09-28 破坏性测试：200 行 × 1MB 的值，响应 400MB）。
+	res, out = mcpCall(t, sess, "query_sql", map[string]any{"sql": "select repeat('x', 100000) as v from generate_series(1, 200)"})
+	if res.IsError {
+		t.Fatalf("宽行查询出错：%s", mcpText(res))
+	}
+	rows := out["rows"].([]any)
+	if out["truncated"] != true || len(rows) >= 200 {
+		t.Fatalf("宽行应被截断：truncated=%v rows=%d", out["truncated"], len(rows))
+	}
+	if v := rows[0].([]any)[0].(string); len(v) > 5000 {
+		t.Fatalf("单个值应截到 4KB 上下，实得 %d 字节", len(v))
+	}
+
 	for _, q := range []string{
 		"select phone from users",                                    // 底表：没权限
 		"select phone from public.users",                             // 带 schema 前缀也不行

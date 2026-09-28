@@ -213,6 +213,7 @@ def verify(secret: str, body: bytes, header: str) -> bool:
 | 2026-09-28 | AI 经营 M10：加 `slow_movers`（滞销清仓）、`promotion_review`（活动 / 券复盘）两个只读计算工具 |
 | 2026-09-28 | AI 经营 M10 / M11：加 `propose_flash_price` `propose_coupon` `propose_product_copy` `propose_refund_decision` 四种提案与 `my_scorecard` 成绩单工具；提案支持按 AI 员工 × 种类的自动执行策略（`auto_approved` 字段），`refund_decision` 不允许自动执行 |
 | 2026-09-28 | AI 经营 M11：加 `query_sql`（只读 SQL 兜底，只读 `agent_ro` 脱敏视图，需全店范围） |
+| 2026-09-28 | 破坏性测试修：`query_sql` 结果加字节上限（1MB，单个文本值 4KB，超了截断）；提案批准时目标已变记为执行失败（40）而不是 500 卡在 15；`propose_coupon` 与后台建券同一套校验；自动执行的 `daily_limit` 并发下不再被突破 |
 | 2026-09-28 | `post_brief` 加 `corrects_brief_id`：发一份更正旧简报（只能更正自己写的；旧的保留原样、标已更正，`AgentBrief.corrected_by_brief_id`） |
 | 2026-09-28 | `search_insights` 加 `low_click_queries`（搜过 ≥3 次、都有结果、点击率最低）；每个词带 `click_count` `order_count`。之前工具描述写着「低点击词」但没有这份数据 |
 | 2026-09-28 | `propose_coupon` 支持固定可用时段：`valid_start_at` + `valid_end_at`（与 `valid_days` 二选一，时段 ≤ 90 天）；固定时段的券在结束后一天复盘 |

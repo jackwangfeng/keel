@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"time"
+	"unicode/utf8"
 )
 
 // 只读 SQL 工具的执行（00131，service/agent_sql.go）。闸门与理由写在迁移 00131 的文件头。
@@ -17,6 +18,24 @@ var (
 )
 
 // AgentSQLResult 是一次只读查询的结果：列名、行（值已是 JSON 友好的 Go 值）、是否截断。
+// AgentSQLMaxBytes 是只读 SQL 一次结果的原始字节预算（1MB），AgentSQLMaxValueBytes 是单个文本值的上限（4KB）。
+// 给 AI 员工看的是统计结果，不是导数据；超了就截断、Truncated = true。
+const (
+	AgentSQLMaxBytes      = 1 << 20
+	AgentSQLMaxValueBytes = 4 << 10
+)
+
+// truncUTF8 按字节截短，不切断一个 UTF-8 字符。
+func truncUTF8(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
+}
+
 type AgentSQLResult struct {
 	Columns   []string
 	Rows      [][]any
@@ -60,8 +79,18 @@ func (t tenantTx) AgentReadOnlyQuery(ctx context.Context, sql string, maxRows in
 	for _, f := range rows.FieldDescriptions() {
 		out.Columns = append(out.Columns, f.Name)
 	}
+	budget := AgentSQLMaxBytes
 	for rows.Next() {
 		if len(out.Rows) >= maxRows {
+			out.Truncated = true
+			break
+		}
+		// 字节预算：行数上限挡不住「一行很宽」（2026-09-28 破坏性测试：repeat('x', 1e6) × 200 行，
+		// 响应 400MB、13.7 秒）。按线上原始字节累计，超了就截断；单个值再按 AgentSQLMaxValueBytes 截短。
+		for _, raw := range rows.RawValues() {
+			budget -= len(raw)
+		}
+		if budget < 0 && len(out.Rows) > 0 {
 			out.Truncated = true
 			break
 		}
@@ -70,7 +99,17 @@ func (t tenantTx) AgentReadOnlyQuery(ctx context.Context, sql string, maxRows in
 			rows.Close()
 			return AgentSQLResult{}, err
 		}
+		for i, v := range vals {
+			if str, ok := v.(string); ok && len(str) > AgentSQLMaxValueBytes {
+				vals[i] = truncUTF8(str, AgentSQLMaxValueBytes) + "…（已截断）"
+				out.Truncated = true
+			}
+		}
 		out.Rows = append(out.Rows, vals)
+		if budget < 0 {
+			out.Truncated = true
+			break
+		}
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
