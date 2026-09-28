@@ -171,6 +171,14 @@ class _CheckoutPageState extends State<CheckoutPage> {
     if (mounted) _loadAddresses();
   }
 
+  /// 去编辑这条地址（顶上有「搜索地点，自动填写地址」），回来后重读地址、重新试算。
+  Future<void> _pinAddress() async {
+    await context.push('/addresses/$_addressId');
+    if (!mounted) return;
+    setState(_invalidate);
+    _loadAddresses();
+  }
+
   Future<void> _login() async {
     await context.push('/login');
     if (mounted) _start();
@@ -686,7 +694,14 @@ class _CheckoutPageState extends State<CheckoutPage> {
     if (pv != null) {
       return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         _kv('商品金额', pv.goodsAmountText, key: 'checkout.goods'),
-        _kv('运费', pv.freightText, key: 'checkout.freight', note: pv.freightNote),
+        _kv(pv.freightLabel, pv.freightText, key: 'checkout.freight', note: pv.freightNote),
+        // 同城配送、地址没坐标：服务端按最远一档收。给地址选个点就能按实际距离算。
+        if (pv.needsPin)
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton(key: const Key('checkout.pinAddress'), onPressed: _pinAddress,
+                child: const Text('给地址选点，按实际距离算', style: KeelText.link)),
+          ),
         if (pv.promotionDiscountText.isNotEmpty) _kv('活动优惠', pv.promotionDiscountText, key: 'checkout.promotion'),
         if (pv.couponDiscountText.isNotEmpty) _kv('优惠券', pv.couponDiscountText, key: 'checkout.couponOff'),
         if (pv.freightDiscountText.isNotEmpty) _kv('运费抵扣', pv.freightDiscountText, key: 'checkout.freightOff'),

@@ -144,4 +144,14 @@ void main() {
     expect(hook.headers['X-Sign'], 'abc');
     expect(hook.headers.containsKey('Authorization'), isFalse);
   });
+
+  test('同城配送的试算：叫配送费、写距离；地址没坐标时提示选点', () {
+    Map<String, dynamic> local(int? d) => {...preview(), 'freight': {'mode': 'local', 'freight_cents': 600, 'freight_discount_cents': 0,
+      'groups': [], 'local': {'distance_m': d, 'tier_fee_cents': 600, 'free_over_cents': 0, 'min_order_cents': 0, 'shortfall_cents': 0}}};
+    final v = previewView(OrderPreview.fromJson(local(1500)));
+    expect((v.freightLabel, v.freightNote, v.needsPin), ('配送费', '距离 1.5 公里', false));
+    final w = previewView(OrderPreview.fromJson(local(null)));
+    expect((w.freightNote, w.needsPin), ('按最远一档计', true));
+    expect(previewView(OrderPreview.fromJson(preview())).freightLabel, '运费');
+  });
 }

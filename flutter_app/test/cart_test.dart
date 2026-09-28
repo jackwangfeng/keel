@@ -90,4 +90,44 @@ void main() {
     }));
     await expectLater(setCartQuantity(c, 1, 9, storeId: 1), throwsA(isA<ApiFailure>().having((f) => f.message, 'm', '只剩 3 件')));
   });
+
+  group('同城配送（mode = local：有围栏的门店按距离分档）', () {
+    Map<String, dynamic> local({int? distance = 3200, int fee = 600, String? free, int freeOver = 0, int minOrder = 0, int shortfall = 0}) => {
+          'mode': 'local', 'freight_cents': free == null ? fee : 0, 'freight_discount_cents': 0, 'groups': [],
+          'local': {'distance_m': distance, 'tier_within_m': 5000, 'tier_fee_cents': fee, 'free_over_cents': freeOver,
+            'free_reason': ?free, 'min_order_cents': minOrder, 'shortfall_cents': shortfall},
+        };
+
+    test('叫「配送费」，说明里写距离（公里，一位小数）', () {
+      final v = view(cart([item(1)], freight: local()));
+      expect(v.freightLabel, '配送费');
+      expect(v.freightText, '¥6.00');
+      expect(v.freightNote, '距离 3.2 公里');
+      expect(v.shortfallText, '');
+      expect(v.needsPin, isFalse);
+    });
+
+    test('满额免配送费：「已免配送费」；还没满、门店设了免费线：顺带说一句', () {
+      expect(view(cart([item(1)], freight: local(free: 'free_over', freeOver: 5000))).freightNote, '已免配送费');
+      expect(view(cart([item(1)], freight: local(freeOver: 5000))).freightNote, '距离 3.2 公里，满¥50 免配送费');
+    });
+
+    test('地址没有坐标（distance_m 为 null）：按最远一档计，并提示给地址选点', () {
+      final v = view(cart([item(1)], freight: local(distance: null)));
+      expect(v.freightNote, '按最远一档计');
+      expect(v.needsPin, isTrue);
+    });
+
+    test('没到起送价：「还差 ¥z 起送」', () {
+      final v = view(cart([item(1)], freight: local(minOrder: 3000, shortfall: 1250)));
+      expect(v.shortfallText, '还差 ¥12.50 起送');
+      expect(v.belowMinimum, isTrue);
+    });
+
+    test('express（默认店）照旧叫「运费」', () {
+      final v = view(cart([item(1)], freight: freight()));
+      expect(v.freightLabel, '运费');
+      expect(v.belowMinimum, isFalse);
+    });
+  });
 }

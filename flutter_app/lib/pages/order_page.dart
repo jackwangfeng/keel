@@ -217,7 +217,7 @@ class _OrderPageState extends State<OrderPage> {
                   ),
                 const Divider(height: 29, color: KeelColors.line),
                 _kv('商品金额', v.goodsAmountText),
-                _kv('运费', v.freightText, note: v.freightNote),
+                _kv(v.freightLabel, v.freightText, note: v.freightNote),
                 if (v.promotionDiscountText.isNotEmpty) _kv('活动优惠', v.promotionDiscountText),
                 for (final l in v.promotionLines) Align(alignment: Alignment.centerLeft, child: Text(l, style: KeelText.hint)),
                 if (v.freightDiscountText.isNotEmpty) _kv('运费抵扣', v.freightDiscountText),

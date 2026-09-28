@@ -26,6 +26,10 @@ class PreviewView {
   final List<String> promotionNotes;
   final String freightDiscountText;
   final String freightNote;
+  /// 「运费」/「配送费」（同城）。
+  final String freightLabel;
+  /// 同城配送、地址没有坐标：按最远一档计，提示给地址选点。
+  final bool needsPin;
   /// 服务端认下的券；0 = 这次没用券。
   final int couponId;
   /// 这一单能用的券，服务端按优惠从大到小排好（第一张最省）。
@@ -33,7 +37,7 @@ class PreviewView {
   const PreviewView({required this.goodsAmountText, required this.freightText, required this.discountText,
       required this.payableText, required this.payableCents, required this.promotionDiscountText,
       required this.couponDiscountText, required this.promotionNotes, required this.freightDiscountText,
-      required this.freightNote, required this.couponId, required this.coupons});
+      required this.freightNote, this.freightLabel = '运费', this.needsPin = false, required this.couponId, required this.coupons});
 
   /// 活动 / 券 / 运费抵扣一行都没有时才显示一行「优惠」。
   bool get noDiscountLines => promotionDiscountText.isEmpty && couponDiscountText.isEmpty && freightDiscountText.isEmpty;
@@ -49,6 +53,8 @@ PreviewView previewView(OrderPreview p) => PreviewView(
       payableCents: p.payableCents,
       freightDiscountText: _neg(p.freightDiscountCents),
       freightNote: freightNote(p.freight),
+      freightLabel: freightLabel(p.freight),
+      needsPin: needsPin(p.freight),
       promotionDiscountText: _neg(p.promotionDiscountCents),
       couponDiscountText: _neg(p.couponDiscountCents),
       promotionNotes: promotionNotes(p.promotions),
@@ -218,6 +224,7 @@ class OrderDetailView {
   final String promotionDiscountText;
   final List<String> promotionLines;
   final String freightNote;
+  final String freightLabel;
   final bool canCancel;
   final bool canConfirm;
   final int couponId;
@@ -233,7 +240,7 @@ class OrderDetailView {
   const OrderDetailView({required this.head, required this.receiver, required this.goodsAmountText,
       required this.freightText, required this.discountText, required this.paidText, required this.hasDiscount,
       required this.hasPaid, required this.refundedText, required this.freightDiscountText, required this.autoConfirmAt,
-      required this.promotionDiscountText, required this.promotionLines, required this.freightNote, required this.canCancel,
+      required this.promotionDiscountText, required this.promotionLines, required this.freightNote, this.freightLabel = '运费', required this.canCancel,
       required this.canConfirm, required this.couponId, required this.couponName, required this.items,
       required this.payments, required this.refunds, required this.canRefund, required this.raw});
 
@@ -270,6 +277,7 @@ OrderDetailView orderDetailView(OrderDetail o, String Function(String) asset) {
     refundedText: (o.refundedCents ?? 0) > 0 ? yuan(o.refundedCents) : '',
     freightDiscountText: _neg(o.freightDiscountCents),
     freightNote: o.freight == null ? '' : freightNote(o.freight!),
+    freightLabel: freightLabel(o.freight),
     promotionDiscountText: _neg(o.promotionDiscountCents),
     autoConfirmAt: o.autoConfirmAt == null ? '' : shortTime(o.autoConfirmAt!),
     promotionLines: [

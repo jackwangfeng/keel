@@ -26,12 +26,14 @@ class FakeCart {
     3: {'id': 3, 'sku_id': 103, 'product_id': 13, 'title': '手冲壶', 'price_cents': 9000, 'quantity': 1, 'selected': true, 'available': false, 'status': 'out_of_stock'},
   };
   final calls = <String>[];
+  /// 同城配送的运费块（null = 没有地址，服务端不给 freight）。
+  Map<String, dynamic>? freight;
 
   Map<String, dynamic> body() {
     final sel = items.values.where((i) => i['selected'] == true && i['status'] == 'available');
     return {'items': items.values.toList(), 'store': {'match_type': 'default', 'store_id': 1}, 'total_cents': 0,
       'selected_total_cents': sel.fold<int>(0, (n, i) => n + (i['price_cents'] as int) * (i['quantity'] as int)),
-      'promotion_discount_cents': 0, 'promotions': []};
+      'promotion_discount_cents': 0, 'promotions': [], 'freight': ?freight};
   }
 
   late final client = MockClient((r) async {
@@ -149,5 +151,16 @@ void main() {
     await t.pageBack();
     await t.pumpAndSettle();
     expect(f.calls.where((c) => c == 'GET /cart').length, greaterThan(before));
+  });
+
+  testWidgets('同城配送没到起送价：显示配送费与距离、「还差 ¥z 起送」，去结算置灰', (t) async {
+    final f = FakeCart()
+      ..freight = {'mode': 'local', 'freight_cents': 600, 'freight_discount_cents': 0, 'groups': [],
+        'local': {'distance_m': 3200, 'tier_fee_cents': 600, 'free_over_cents': 0, 'min_order_cents': 3000, 'shortfall_cents': 2000}};
+    final (w, _) = await app(f);
+    await openCart(t, w);
+    expect(t.widget<Text>(find.byKey(const Key('cart.freight'))).data, '配送费 ¥6.00（距离 3.2 公里）');
+    expect(t.widget<Text>(find.byKey(const Key('cart.shortfall'))).data, '还差 ¥20.00 起送');
+    expect(t.widget<FilledButton>(find.byKey(const Key('cart.checkout'))).onPressed, isNull);
   });
 }

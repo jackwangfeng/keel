@@ -73,13 +73,21 @@ class CartView {
   /// 预估运费。没有地址时服务端不给 freight：空串（算不了，不是包邮）。
   final String freightText;
   final String freightNote;
+  /// 「运费」（快递，按模板）或「配送费」（同城，按距离）。
+  final String freightLabel;
+  /// 同城配送没到起送价：「还差 ¥z 起送」，此时去结算置灰。空 = 没有起送价或已够。
+  final String shortfallText;
+  /// 同城配送、地址没有坐标：配送费按最远一档计，提示给地址选点。
+  final bool needsPin;
   final String promotionDiscountText;
   final List<String> promotionNotes;
   /// 总件数（角标）。
   final int quantity;
   const CartView({required this.rows, required this.selectedText, required this.selectedCount, required this.allSelected,
       required this.availableCount, required this.storeId, required this.freightText, required this.freightNote,
-      required this.promotionDiscountText, required this.promotionNotes, required this.quantity});
+      this.freightLabel = '运费', this.shortfallText = '', this.needsPin = false, required this.promotionDiscountText, required this.promotionNotes, required this.quantity});
+
+  bool get belowMinimum => shortfallText.isNotEmpty;
 
   /// 去结算带哪些行：能买且勾选的（与 selected_total_cents 同一口径）。
   List<({int skuId, int quantity})> get checkoutLines =>
@@ -100,14 +108,39 @@ CartView cartView(Cart c, String Function(String) asset) {
     storeId: c.store.storeId ?? 0,
     freightText: f == null ? '' : yuan(f.freightCents),
     freightNote: f == null ? '' : freightNote(f),
+    freightLabel: freightLabel(f),
+    shortfallText: shortfallText(f),
+    needsPin: needsPin(f),
     promotionDiscountText: c.promotionDiscountCents > 0 ? '-${yuan(c.promotionDiscountCents)}' : '',
     promotionNotes: promotionNotes(c.promotions),
     quantity: cartQuantity(c),
   );
 }
 
-/// 运费一句话说明。多组（多个模板）时只说第一组。
+bool _local(FreightBreakdown? b) => b?.mode == 'local' && b?.local != null;
+
+/// 同城配送（有围栏的门店）叫配送费，快递（默认店，按模板）叫运费。
+String freightLabel(FreightBreakdown? b) => _local(b) ? '配送费' : '运费';
+
+/// 同城配送没到起送价（比的是活动后、用券前的商品金额，与购物车显示的同一个数）。
+String shortfallText(FreightBreakdown? b) {
+  final q = _local(b) ? b!.local! : null;
+  return q != null && q.shortfallCents > 0 ? '还差 ${yuan(q.shortfallCents)} 起送' : '';
+}
+
+/// 同城配送但地址没有坐标：服务端按最远一档计。
+bool needsPin(FreightBreakdown? b) => _local(b) && b!.local!.distanceM == null;
+
+/// 运费一句话说明。快递多组（多个模板）时只说第一组；同城说距离 / 免配送费 / 按最远一档。
 String freightNote(FreightBreakdown b) {
+  if (_local(b)) {
+    final q = b.local!;
+    if ((q.freeReason ?? '').isNotEmpty) return '已免配送费';
+    final d = q.distanceM;
+    if (d == null) return '按最远一档计';
+    final km = '距离 ${(d / 1000).toStringAsFixed(1)} 公里';
+    return q.freeOverCents > 0 ? '$km，满${faceYuan(q.freeOverCents)} 免配送费' : km;
+  }
   if (b.groups.isEmpty) return '';
   final g = b.groups.first;
   final reason = g.freeReason ?? '';

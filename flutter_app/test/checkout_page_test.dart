@@ -34,6 +34,10 @@ class Fake {
   /// 地址 1 带坐标、落在默认店（1）的围栏外：按门店 1 试算 / 下单回 422 address-out-of-range；按它的坐标解析得到门店 5。
   bool fence = false;
   bool fenceOnSubmit = false;
+  /// 同城配送：local = 试算按距离给配送费（distance 为 null = 地址没坐标）；belowMin = 没到起送价回 422。
+  bool local = false;
+  int? distance = 2100;
+  bool belowMin = false;
   final resolves = <Map<String, String>>[];
   late final client = MockClient((r) async {
     final p = r.url.path.replaceFirst('/api/v1', '');
@@ -62,6 +66,10 @@ class Fake {
       final b = jsonDecode(r.body) as Map;
       previews.add(b);
       if (fence && !fenceOnSubmit && b['store_id'] == 1) return outOfRange();
+      if (belowMin) {
+        return j({'type': 'https://keel.dev/problems/below-minimum-order', 'title': '未达起送价', 'status': 422,
+          'detail': '这家门店满 ¥30.00 起送，还差 ¥12.50'}, 422);
+      }
       if (slowAddr1 && b['address_id'] == 1) await Future<void>.delayed(const Duration(seconds: 2));
       if (((b['items'] as List).first as Map)['quantity'] == 2 && b['user_coupon_id'] == 3) {
         return j({'type': 'https://keel.dev/problems/coupon-not-applicable', 'title': '这张优惠券本单不可用', 'status': 409,
@@ -71,7 +79,11 @@ class Fake {
       final c = b['user_coupon_id'] as int?;
       final off = c == 3 ? 1000 : (c == 4 ? 500 : 0);
       return j({'store_id': 1, 'goods_amount_cents': 5000, 'freight_cents': freight, 'freight_discount_cents': 0,
-        'freight': {'freight_cents': freight, 'freight_discount_cents': 0, 'groups': []}, 'payable_cents': 5000 - off,
+        'freight': local
+            ? {'mode': 'local', 'freight_cents': freight, 'freight_discount_cents': 0, 'groups': [],
+                'local': {'distance_m': distance, 'tier_fee_cents': 600, 'free_over_cents': 0, 'min_order_cents': 0, 'shortfall_cents': 0}}
+            : {'freight_cents': freight, 'freight_discount_cents': 0, 'groups': []},
+        'payable_cents': 5000 - off,
         'promotion_discount_cents': 0, 'coupon_discount_cents': off, 'items': [], 'promotions': [],
         'user_coupon_id': ?c, 'applicable_coupons': noCoupons ? [] : [coupon(3, 1000), coupon(4, 500)]});
     }
@@ -236,5 +248,35 @@ void main() {
     expect(keys, hasLength(2));
     expect(keys[0], isNot(keys[1]));
     expect((jsonDecode(f.orders.last.body) as Map)['store_id'], 5);
+  });
+
+  testWidgets('同城配送：叫配送费、写距离', (t) async {
+    phone(t);
+    final f = Fake()..local = true;
+    await t.pumpWidget(await app(f));
+    await t.pumpAndSettle();
+    expect(find.text('配送费'), findsOneWidget);
+    expect(find.text('距离 2.1 公里'), findsOneWidget);
+    expect(find.byKey(const Key('checkout.pinAddress')), findsNothing);
+  });
+
+  testWidgets('同城配送、地址没坐标：按最远一档计，给「给地址选点」', (t) async {
+    phone(t);
+    final f = Fake()
+      ..local = true
+      ..distance = null;
+    await t.pumpWidget(await app(f));
+    await t.pumpAndSettle();
+    expect(find.text('按最远一档计'), findsOneWidget);
+    expect(find.byKey(const Key('checkout.pinAddress')), findsOneWidget);
+  });
+
+  testWidgets('没到起送价（422 below-minimum-order）：照实说还差多少，提交置灰', (t) async {
+    phone(t);
+    final f = Fake()..belowMin = true;
+    await t.pumpWidget(await app(f));
+    await t.pumpAndSettle();
+    expect(t.widget<Text>(find.byKey(const Key('checkout.message'))).data, '这家门店满 ¥30.00 起送，还差 ¥12.50');
+    expect(t.widget<FilledButton>(find.byKey(const Key('checkout.submit'))).onPressed, isNull);
   });
 }

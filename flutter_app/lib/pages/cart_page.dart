@@ -491,10 +491,13 @@ class _CartPageState extends State<CartPage> {
                         // 预估运费按默认地址算；没有地址时服务端不给 freight：不显示，不能写成「包邮」。
                         if (v.freightText.isNotEmpty)
                           Text(
-                            '运费 ${v.freightText}${v.freightNote.isEmpty ? '' : '（${v.freightNote}）'}',
+                            '${v.freightLabel} ${v.freightText}${v.freightNote.isEmpty ? '' : '（${v.freightNote}）'}',
                             key: const Key('cart.freight'),
                             style: KeelText.hint,
                           ),
+                        // 同城配送的起送价：比的是活动后、用券前的商品金额（就是上面的合计）。
+                        if (v.belowMinimum)
+                          Text(v.shortfallText, key: const Key('cart.shortfall'), style: KeelText.promo),
                       ],
                     ),
             ),
@@ -513,7 +516,7 @@ class _CartPageState extends State<CartPage> {
                     style: FilledButton.styleFrom(
                       minimumSize: const Size(132, 48),
                     ),
-                    onPressed: v.selectedCount == 0
+                    onPressed: v.selectedCount == 0 || v.belowMinimum
                         ? null
                         : () => _pushThenReload('/checkout?from=cart'),
                     child: Text('去结算(${v.selectedCount})'),
