@@ -638,6 +638,11 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	v1.GET("/admin/agent-proposals/:proposal_id", staffAuth, aph.Get)
 	v1.POST("/admin/agent-proposals/:proposal_id/approve", staffAuth, aph.Approve)
 	v1.POST("/admin/agent-proposals/:proposal_id/reject", staffAuth, aph.Reject)
+	// AI 员工写的经营简报（M9 任务 5）：AI 员工经 MCP 写，全店范围的人在后台看。
+	briefs := service.NewAgentBriefService(repo)
+	abh := handler.NewAgentBriefHandler(briefs)
+	v1.GET("/admin/agent-briefs", staffAuth, abh.List)
+	v1.GET("/admin/agent-briefs/:brief_id", staffAuth, abh.Get)
 	mcpH := handler.NewMCPHandler(handler.MCPDeps{
 		Staff:     staffSvc,
 		Reports:   service.NewReportService(repo, inv),
@@ -646,6 +651,7 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 		Orders:    service.NewAdminOrderService(repo),
 		Restock:   service.NewRestockService(repo, inv, service.NewAdminStoreService(repo, inv)),
 		Proposals: proposals,
+		Briefs:    briefs,
 		Version:   buildinfo.Get().Version,
 	})
 	v1.POST("/mcp", agentAuth, mcpH)

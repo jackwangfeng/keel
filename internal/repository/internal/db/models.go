@@ -20,6 +20,18 @@ type ActivityStock struct {
 	UpdatedAt   pgtype.Timestamptz
 }
 
+// AI 员工写的经营简报（00092，AI 经营 M9）。
+type AgentBrief struct {
+	ID           int64
+	MerchantID   int64
+	AgentStaffID int64
+	Title        string
+	Body         string
+	PeriodStart  pgtype.Date
+	PeriodEnd    pgtype.Date
+	CreatedAt    pgtype.Timestamptz
+}
+
 // AI 员工的接入密钥（00090，AI 经营 M9）。只存 sha256；明文只在创建响应里出现一次。
 type AgentKey struct {
 	ID         int64

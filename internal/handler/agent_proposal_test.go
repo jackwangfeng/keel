@@ -159,3 +159,25 @@ func TestAgentProposalScopeAndExpiry(t *testing.T) {
 		t.Fatalf("过期的提案批准：%s", p.Type)
 	}
 }
+
+// 简报（M9 任务 5）：AI 员工写，管理员在后台看得到；门店管理员看不到（全店口径）；参数错被拒。
+func TestAgentBriefs(t *testing.T) {
+	cs := newCouponShop(t)
+	a := createAgent(t, cs.adminShop, `{"name":"AI 店长","role":2}`)
+	sess := mcpConnect(t, cs.Host, issueAgentKey(t, cs.adminShop, a.Id, `{"name":"t"}`).Secret)
+	res, b := mcpCall(t, sess, "post_brief", map[string]any{"title": "9 月 28 日巡店日报",
+		"body": "## 概览\n- 销售额 ¥1,234.00\n<script>alert(1)</script>", "period_start": "2026-09-28", "period_end": "2026-09-28"})
+	if res.IsError {
+		t.Fatalf("post_brief：%s", mcpText(res))
+	}
+	bid := int64(b["id"].(float64))
+	var got api.AgentBrief
+	decodeInto(t, getAs(t, cs.Host, fmt.Sprintf("/api/v1/admin/agent-briefs/%d", bid), cs.Token), http.StatusOK, "简报详情", &got)
+	if got.Title != "9 月 28 日巡店日报" || !strings.Contains(got.Body, "<script>") || got.AgentName != "AI 店长" {
+		t.Fatalf("简报详情：%+v", got)
+	}
+	res, _ = mcpCall(t, sess, "post_brief", map[string]any{"title": "x", "body": "y", "period_start": "2026-09-28", "period_end": "2026-09-01"})
+	if !res.IsError || !strings.Contains(mcpText(res), "invalid-request") {
+		t.Fatalf("起晚于止的简报应被拒：%q", mcpText(res))
+	}
+}

@@ -53,6 +53,8 @@ type MCPDeps struct {
 	Restock *service.RestockService
 	// Proposals 是提案（任务 4）：AI 员工只能提、看自己的；批准 / 驳回在后台接口。
 	Proposals *service.AgentProposalService
+	// Briefs 是简报（任务 5）。
+	Briefs *service.AgentBriefService
 	Log     *slog.Logger
 	// Version 进 MCP 的 serverInfo，agent 能看到连的是哪个版本。
 	Version string

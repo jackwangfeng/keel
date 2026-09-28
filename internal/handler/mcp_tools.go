@@ -11,7 +11,7 @@ import (
 	"github.com/keel/keel/internal/service"
 )
 
-// MCP 工具清单（AI 经营 M9，docs/AI经营-M9设计.md §3.1）：读工具与计算工具；提案、简报工具随任务 4–5 加进来。
+// MCP 工具清单（AI 经营 M9，docs/AI经营-M9设计.md §3.1）：读工具、计算工具、提案工具、简报工具。
 //
 // 每个工具都是「后台同名接口的另一个入口」：调同一个 service 函数（判权相同 —— 门店管理员身份的 AI 员工
 // 只看得到它那家店），返回同一个契约类型，错误走同一个错误出口（mcpTool 的 writeErr）。
@@ -89,6 +89,13 @@ type mcpProposeAdjustIn struct {
 type mcpListMineIn struct {
 	mcpPageIn
 	Status *int16 `json:"status,omitempty" jsonschema:"10 待处理 / 15 执行中 / 20 已执行 / 30 已驳回 / 40 执行失败 / 50 已过期"`
+}
+
+type mcpPostBriefIn struct {
+	Title       string `json:"title" jsonschema:"标题，≤100 字，如「9 月 28 日巡店日报」"`
+	Body        string `json:"body" jsonschema:"正文 markdown，≤8KB。数字只引用工具返回的"`
+	PeriodStart string `json:"period_start" jsonschema:"简报覆盖的起始日期 YYYY-MM-DD（店铺时区）"`
+	PeriodEnd   string `json:"period_end" jsonschema:"简报覆盖的结束日期 YYYY-MM-DD（含）"`
 }
 
 type mcpGetProductIn struct {
@@ -195,6 +202,14 @@ func registerMCPTools(srv *mcp.Server, d *MCPDeps) {
 				items = append(items, apiAgentProposal(p))
 			}
 			return mcpPage[api.AgentProposal]{Page: out.Page, PageSize: out.PageSize, Total: int(out.Total), Items: items}, nil
+		})
+	mcpTool(srv, d, "post_brief", "写一份经营简报（巡店日报等），后台「AI 员工 → 简报」可见。低风险，直接生效。",
+		writeBriefError, func(ctx context.Context, in mcpPostBriefIn) (api.AgentBrief, error) {
+			b, err := d.Briefs.Post(ctx, in.Title, in.Body, in.PeriodStart, in.PeriodEnd)
+			if err != nil {
+				return api.AgentBrief{}, err
+			}
+			return apiAgentBrief(b), nil
 		})
 	mcpTool(srv, d, "list_stores", "门店列表（你管辖范围内的），含营业状态、坐标、是否默认店。",
 		writeStoreError, func(ctx context.Context, in mcpListStoresIn) (mcpPage[api.AdminStore], error) {

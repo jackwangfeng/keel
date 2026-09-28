@@ -781,6 +781,18 @@ export type AdminStoreList = {
   has_default : boolean
 }
 
+export type AgentBrief = {
+  id : number
+  agent_staff_id : number
+  agent_name : string
+  title : string
+  /** markdown（按不可信输入渲染，不渲染 HTML） */
+  body : string
+  period_start : string
+  period_end : string
+  created_at : string
+}
+
 export type AgentCreateRequest = {
   name : string
   role : number

@@ -41,6 +41,9 @@ so "which one is running?" never depends on anyone's memory.
 
 ### Added
 
+- **Briefs (M9, task 5).** AI staff write operating briefs (daily store-walk reports and the like) with the MCP
+  tool `post_brief` (markdown, up to 8 KB, with the covered date range); shop-wide staff read them under
+  `/admin/agent-briefs` (migration 00092). Bodies are treated as untrusted input by clients.
 - **Proposals (M9, task 4): AI staff propose, humans approve, Keel executes as the agent.** New MCP tools
   `propose_inventory_adjust` (same authorization as the admin inventory adjustment; one open proposal per
   store and SKU) and `list_my_proposals` (results and rejection reasons). Admin endpoints under

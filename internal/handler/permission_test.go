@@ -432,6 +432,13 @@ var permMatrix = []permRoute{
 	}},
 	// —— 店铺设置（00059）：与设默认门店同一行，只有管理员（含平台级经 X-Keel-Merchant 切进来的）。
 	// PUT 写的是列默认值，放几次都不改变这家店的行为（矩阵后面的格子不受影响）。
+	// —— AI 员工写的经营简报（AI 经营 M9）：全店口径，只给管理员与操作员。
+	{"GET", v1 + "/admin/agent-briefs", merchantWide, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permGet(v1 + "/admin/agent-briefs")
+	}},
+	{"GET", v1 + "/admin/agent-briefs/:brief_id", merchantWide, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permGet(fmt.Sprintf(v1+"/admin/agent-briefs/%d", fx.brief(t)))
+	}},
 	// —— AI 员工的提案（AI 经营 M9）：列表人人可看（按范围收窄）；详情 / 批准 / 驳回按门店 storeOperate，
 	// 与「加减库存」同一个判据（批准会以 AI 员工身份执行一次加库存）。每一格插一条自己的提案。
 	{"GET", v1 + "/admin/agent-proposals", everyone, func(t *testing.T, fx *permFixture, c permCase) permReq {

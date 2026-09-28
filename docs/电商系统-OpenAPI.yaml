@@ -604,6 +604,67 @@ paths:
               schema: { $ref: '#/components/schemas/Problem' }
         default: { $ref: '#/components/responses/Problem' }
 
+  /admin/agent-briefs:
+    get:
+      tags: [Admin, Agent]
+      summary: AI 员工写的经营简报（新的在前）
+      description: |
+        AI 员工用 MCP 工具 `post_brief` 写的巡店日报等（AI 经营 M9）。简报是全店口径的经营信息，
+        只给全店范围的人（管理员 / 操作员）看。`body` 是 markdown，**按不可信输入渲染（不渲染 HTML）**。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PageMeta'
+                  - type: object
+                    required: [items]
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: '#/components/schemas/AgentBrief' }
+        '403':
+          description: 不是全店范围的人（role-forbidden）。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /admin/agent-briefs/{brief_id}:
+    parameters:
+      - name: brief_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64 }
+    get:
+      tags: [Admin, Agent]
+      summary: 简报详情
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentBrief' }
+        '403':
+          description: 不是全店范围的人（role-forbidden）。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: 本店没有这份简报。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
   /admin/agent-proposals:
     get:
       tags: [Admin, Agent]
@@ -9410,6 +9471,19 @@ components:
             一次性登录 token 明文。**服务端只存它的 sha256**，明文只在这一次响应
             （和进程日志）里出现。
         expire_at: { type: string, format: date-time }
+
+    AgentBrief:
+      type: object
+      required: [id, agent_staff_id, agent_name, title, body, period_start, period_end, created_at]
+      properties:
+        id:             { type: integer, format: int64 }
+        agent_staff_id: { type: integer, format: int64 }
+        agent_name:     { type: string }
+        title:          { type: string }
+        body:           { type: string, description: markdown（按不可信输入渲染，不渲染 HTML） }
+        period_start:   { type: string, format: date }
+        period_end:     { type: string, format: date }
+        created_at:     { type: string, format: date-time }
 
     AgentProposal:
       type: object

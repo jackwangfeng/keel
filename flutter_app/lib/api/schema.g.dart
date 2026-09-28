@@ -1512,6 +1512,38 @@ class AdminStoreList {
       };
 }
 
+class AgentBrief {
+  final int id;
+  final int agentStaffId;
+  final String agentName;
+  final String title;
+  final String body;
+  final String periodStart;
+  final String periodEnd;
+  final String createdAt;
+  const AgentBrief({required this.id, required this.agentStaffId, required this.agentName, required this.title, required this.body, required this.periodStart, required this.periodEnd, required this.createdAt});
+  factory AgentBrief.fromJson(Map<String, dynamic> j) => AgentBrief(
+        id: (j['id'] as num).toInt(),
+        agentStaffId: (j['agent_staff_id'] as num).toInt(),
+        agentName: j['agent_name'] as String,
+        title: j['title'] as String,
+        body: j['body'] as String,
+        periodStart: j['period_start'] as String,
+        periodEnd: j['period_end'] as String,
+        createdAt: j['created_at'] as String,
+      );
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'agent_staff_id': agentStaffId,
+        'agent_name': agentName,
+        'title': title,
+        'body': body,
+        'period_start': periodStart,
+        'period_end': periodEnd,
+        'created_at': createdAt,
+      };
+}
+
 class AgentCreateRequest {
   final String name;
   final int role;

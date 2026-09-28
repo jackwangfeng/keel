@@ -281,3 +281,16 @@ func (fx *permFixture) proposal(t *testing.T, storeID int64) int64 {
 	}
 	return id
 }
+
+// brief 插一份简报（直接写库，理由同 proposal）。
+func (fx *permFixture) brief(t *testing.T) int64 {
+	t.Helper()
+	a := createAgent(t, fx.sh, `{"name":"矩阵 AI","role":2}`)
+	var id int64
+	if err := admin(t).QueryRow(context.Background(), `
+		INSERT INTO agent_briefs (merchant_id, agent_staff_id, title, body, period_start, period_end)
+		VALUES ($1, $2, '矩阵简报', '正文', current_date, current_date) RETURNING id`, fx.sh.MerchantID, a.Id).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
