@@ -364,6 +364,32 @@ func TestRejectedWholeRefundReturnsTheOrderToPaid(t *testing.T) {
 	wantStatus(t, cs.ship(t, o.OrderNo, "sf", "SF"+uniqueKey()), http.StatusCreated, "驳回之后发货")
 }
 
+// 原路退回退到让订单进 20 的那笔支付，不是最早的一笔：先来一笔金额不符的到账（落了 status=1 的支付单、订单不认），
+// 再来金额对的那笔，售后退款要挂在后者上（2026-09-28 破坏性测试：挂到了 1 分那笔上）。
+func TestRefundGoesBackToThePaymentThatSettledTheOrder(t *testing.T) {
+	cs := newCouponShop(t)
+	b := cs.newBuyer(t, "refund-payment")
+	o := cs.twoLineOrder(t, b, nil)
+	notify := func(txn string, amount int64) {
+		body := payload(o.OrderNo, txn, amount)
+		if w := notifyPaymentSigned(t, cs.Host, "wechat", body, sign(couponWebhookSecret(cs.adminShop), []byte(body))); w.Code != http.StatusOK {
+			t.Fatalf("回调 %s：%d %s", txn, w.Code, w.Body.String())
+		}
+	}
+	notify("short-"+o.OrderNo, 1)
+	notify("right-"+o.OrderNo, o.PayableCents)
+	_, lines := cs.lines(t, b, o.OrderNo)
+	r := cs.mustApply(t, b, o.OrderNo, refundBody(1, [2]int64{lines[cs.ShirtSKU].Id, 1}))
+	var txn string
+	if err := admin(t).QueryRow(context.Background(), `SELECT p.channel_txn_id FROM refunds r JOIN payments p ON p.id = r.payment_id
+		WHERE r.refund_no = $1`, r.RefundNo).Scan(&txn); err != nil {
+		t.Fatal(err)
+	}
+	if txn != "right-"+o.OrderNo {
+		t.Fatalf("退款挂在了流水 %s 上，期望让订单入账的 right-%s", txn, o.OrderNo)
+	}
+}
+
 // 未发货订单按行分别退（前一张还在处理时申请把剩下的退完）：拒，引导撤回后整单退（整单退连运费一起退、订单进 50）。
 // 兜底：每一件都已退完 / 在退的单不能发货。
 // 2026-09-28 破坏性测试：两张各自都不是整单退，运费谁也不退，订单停在 20，货款全退、库存回补之后货照样发出。

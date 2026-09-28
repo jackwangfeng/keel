@@ -164,10 +164,12 @@ func (q *Queries) ExpireReturnRefund(ctx context.Context, arg ExpireReturnRefund
 }
 
 const findSettledPayment = `-- name: FindSettledPayment :one
-SELECT id, payment_no, channel
-  FROM payments
- WHERE order_id = $1 AND status = 1
- ORDER BY id
+SELECT p.id, p.payment_no, p.channel
+  FROM payments p
+  JOIN orders o ON o.id = p.order_id
+ WHERE p.order_id = $1 AND p.status = 1
+   AND p.amount_cents = o.paid_cents AND p.paid_at = o.paid_at
+ ORDER BY p.id
  LIMIT 1
 `
 
@@ -177,11 +179,14 @@ type FindSettledPaymentRow struct {
 	Channel   int16
 }
 
-// 原路退回退到哪一笔：这一单**成功**的那笔支付。
+// 原路退回退到哪一笔：让这一单从 10 走到 20 的那笔支付。
 //
-// 付过两次的订单（支付回调在订单已是 20 之后又来了一笔）会有两行成功支付，
-// 取最早的那一笔 —— 它是让订单从 10 走到 20 的那一笔（SettleOrder 与它同一个事务）。
-// 后来那一笔是要人工退的重复付款，不该被售后流程顺手退掉。
+// 一单可能有不止一行「渠道成功」的支付（status = 1 描述的是渠道那边成没成，不是我们认不认）：
+// 金额不符的到账、订单已关之后才到的、重复付款，都落一行 status = 1 留痕、但订单不认。
+// 认账的那一笔由 SettleOrder 与它同一个事务把金额与到账时间写进 orders.paid_cents / paid_at，
+// 所以按这两列对上它，而不是取「最早的一笔」—— 2026-09-28 破坏性测试：先来一笔 1 分的
+// 金额不符回调、再来正确的那笔，售后退款挂到了 1 分那笔上（真实渠道会超额退或退错交易）。
+// 对不上任何一行时查不到（ErrNoRows），宁可售后申请失败，也不退到错的那笔。
 func (q *Queries) FindSettledPayment(ctx context.Context, orderID int64) (FindSettledPaymentRow, error) {
 	row := q.db.QueryRow(ctx, findSettledPayment, orderID)
 	var i FindSettledPaymentRow
