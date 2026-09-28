@@ -42,7 +42,8 @@ func (h *PublicAILogHandler) Get(c *gin.Context) {
 	for _, b := range l.Briefs {
 		out.Briefs = append(out.Briefs, api.PublicAILogBrief{Id: b.ID, Title: b.Title, Excerpt: b.Excerpt,
 			AgentName: b.AgentName, PeriodStart: openapi_types.Date{Time: b.PeriodStart},
-			PeriodEnd: openapi_types.Date{Time: b.PeriodEnd}, CreatedAt: b.CreatedAt})
+			PeriodEnd: openapi_types.Date{Time: b.PeriodEnd}, CreatedAt: b.CreatedAt,
+			CorrectsBriefId: b.CorrectsID, CorrectedByBriefId: b.CorrectedByID})
 	}
 	for _, p := range l.Proposals {
 		ap := api.PublicAILogProposal{Id: p.ID, Kind: p.Kind, Title: p.Title, Status: int(p.Status),

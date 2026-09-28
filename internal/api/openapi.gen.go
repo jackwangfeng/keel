@@ -3560,12 +3560,18 @@ type AgentBrief struct {
 	AgentStaffId int64  `json:"agent_staff_id"`
 
 	// Body markdown（按不可信输入渲染，不渲染 HTML）
-	Body        string             `json:"body"`
-	CreatedAt   time.Time          `json:"created_at"`
-	Id          int64              `json:"id"`
-	PeriodEnd   openapi_types.Date `json:"period_end"`
-	PeriodStart openapi_types.Date `json:"period_start"`
-	Title       string             `json:"title"`
+	Body string `json:"body"`
+
+	// CorrectedByBriefId 这份已被哪一份更正（旧的原样保留，界面上标「已更正」并指过去）。没被更正时缺席。
+	CorrectedByBriefId *int64 `json:"corrected_by_brief_id,omitempty"`
+
+	// CorrectsBriefId 这份是更正哪一份简报的（AI 员工发现旧简报写错了数字、时间时发，2026-09-28 起）。
+	CorrectsBriefId *int64             `json:"corrects_brief_id,omitempty"`
+	CreatedAt       time.Time          `json:"created_at"`
+	Id              int64              `json:"id"`
+	PeriodEnd       openapi_types.Date `json:"period_end"`
+	PeriodStart     openapi_types.Date `json:"period_start"`
+	Title           string             `json:"title"`
 }
 
 // AgentCreateRequest defines model for AgentCreateRequest.
@@ -5816,8 +5822,14 @@ type PublicAILog struct {
 
 // PublicAILogBrief defines model for PublicAILogBrief.
 type PublicAILogBrief struct {
-	AgentName string    `json:"agent_name"`
-	CreatedAt time.Time `json:"created_at"`
+	AgentName string `json:"agent_name"`
+
+	// CorrectedByBriefId 这份已被哪一份更正；没被更正时缺席
+	CorrectedByBriefId *int64 `json:"corrected_by_brief_id,omitempty"`
+
+	// CorrectsBriefId 这份是更正哪一份简报的
+	CorrectsBriefId *int64    `json:"corrects_brief_id,omitempty"`
+	CreatedAt       time.Time `json:"created_at"`
 
 	// Excerpt 正文开头至多 300 字（markdown 原文，按不可信输入渲染）
 	Excerpt     string             `json:"excerpt"`

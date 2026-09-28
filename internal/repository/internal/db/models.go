@@ -45,6 +45,7 @@ type AgentBrief struct {
 	PeriodStart  pgtype.Date
 	PeriodEnd    pgtype.Date
 	CreatedAt    pgtype.Timestamptz
+	CorrectsID   *int64
 }
 
 // AI 员工的事件：库存预警、售后申请、无结果词突增、提案结果（00121，AI 经营 M10）。

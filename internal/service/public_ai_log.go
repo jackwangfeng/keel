@@ -30,6 +30,8 @@ type PublicAILogBrief struct {
 	PeriodStart time.Time
 	PeriodEnd   time.Time
 	CreatedAt   time.Time
+	// CorrectsID / CorrectedByID 同 repository.AgentBrief（00141）：公开页上标「更正」「已更正」。
+	CorrectsID, CorrectedByID *int64
 }
 
 // PublicAILog 是公开日志的全部。
@@ -44,7 +46,9 @@ type PublicAILogService struct {
 	repo tenantRunner
 }
 
-func NewPublicAILogService(repo tenantRunner) *PublicAILogService { return &PublicAILogService{repo: repo} }
+func NewPublicAILogService(repo tenantRunner) *PublicAILogService {
+	return &PublicAILogService{repo: repo}
+}
 
 // Get 实现 GET /api/v1/ai-log。
 func (s *PublicAILogService) Get(ctx context.Context) (PublicAILog, error) {
@@ -63,7 +67,8 @@ func (s *PublicAILogService) Get(ctx context.Context) (PublicAILog, error) {
 		}
 		for _, b := range briefs {
 			out.Briefs = append(out.Briefs, PublicAILogBrief{ID: b.ID, Title: b.Title, Excerpt: truncRunes(b.Body, aiLogExcerptRunes),
-				AgentName: b.AgentName, PeriodStart: b.PeriodStart, PeriodEnd: b.PeriodEnd, CreatedAt: b.CreatedAt})
+				AgentName: b.AgentName, PeriodStart: b.PeriodStart, PeriodEnd: b.PeriodEnd, CreatedAt: b.CreatedAt,
+				CorrectsID: b.CorrectsID, CorrectedByID: b.CorrectedByID})
 		}
 		out.Proposals, out.Summary, err = tx.PublicAILog(ctx)
 		return err

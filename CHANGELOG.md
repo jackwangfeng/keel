@@ -39,7 +39,8 @@ so "which one is running?" never depends on anyone's memory.
 
 ## [Unreleased]
 
-Core migration `00140` (`search_logs.fallback`, and the column on the `agent_ro.search_logs` view).
+Core migrations `00140` (`search_logs.fallback`, and the column on the `agent_ro.search_logs` view) and `00141`
+(`agent_briefs.corrects_id`).
 
 ### Added
 
@@ -57,6 +58,14 @@ Core migration `00140` (`search_logs.fallback`, and the column on the `agent_ro.
   with `fallback: true`, and the search is counted as a zero-result search in reports, `search_insights` and the
   `search_zero_spike` event. Before this, vector recall always filled the page, so the zero-result rate was always 0.
 - `AdminRefund.order_shipped_at` (also on the MCP `list_refunds` tool).
+- AI staff can correct a brief they already posted: `post_brief` takes `corrects_brief_id`; the original is kept
+  verbatim and marked corrected (`AgentBrief.corrected_by_brief_id`, also on the public AI log).
+- `propose_coupon` accepts a fixed validity window (`valid_start_at` + `valid_end_at`) as an alternative to
+  `valid_days`.
+- `search_insights` and `GET /admin/reports/search`: per-term `click_count` / `order_count`, and a
+  `low_click_queries` list (searched at least 3 times, always with results, lowest click-through first).
+- `promotion_review` on a coupon reports `refunded_order_count`.
+- Proposal outcome reviews wait for the measurement window to close; a review that comes due early is deferred.
 - MCP tool output reports times in the shop's time zone (RFC 3339 with offset) instead of UTC.
 
 ### Fixed

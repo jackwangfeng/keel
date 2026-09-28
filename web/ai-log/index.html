@@ -69,7 +69,10 @@
     if (!d.briefs.length) app.append(el('p', 'empty', '还没有简报。'));
     d.briefs.forEach(function (b) {
       var c = el('div', 'card');
-      c.append(el('div', null, b.title), el('div', 'meta', b.agent_name + ' · 覆盖 ' + b.period_start + (b.period_end !== b.period_start ? ' 至 ' + b.period_end : '') + ' · ' + day(b.created_at)),
+      // 更正：旧的原样保留，标「已更正」；更正的那份标它更正了哪一份（00141）。
+      var tag = b.corrected_by_brief_id ? '〔已更正，见 #' + b.corrected_by_brief_id + '〕 ' :
+        b.corrects_brief_id ? '〔更正 #' + b.corrects_brief_id + '〕 ' : '';
+      c.append(el('div', null, '#' + b.id + ' ' + tag + b.title), el('div', 'meta', b.agent_name + ' · 覆盖 ' + b.period_start + (b.period_end !== b.period_start ? ' 至 ' + b.period_end : '') + ' · ' + day(b.created_at)),
         el('div', 'excerpt', b.excerpt + (b.excerpt.length >= 300 ? '…' : '')));
       app.append(c);
     });

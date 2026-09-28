@@ -1389,13 +1389,20 @@
     }
   },
   {
-    "description": "写一份经营简报（巡店日报等），后台「AI 员工 → 简报」可见。低风险，直接生效。",
+    "description": "写一份经营简报（巡店日报等），后台「AI 员工 → 简报」可见。低风险，直接生效。发现已发的简报写错了，带 corrects_brief_id 发一份更正（正文写清改了哪里），不要另起一份不相关的。",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
         "body": {
           "description": "正文 markdown，≤8KB。数字只引用工具返回的",
           "type": "string"
+        },
+        "corrects_brief_id": {
+          "description": "这份是更正哪一份简报的（发现已发的简报写错了数字、时间时用）。只能更正自己写的；正文写清改了什么。旧的保留原样、标为已更正",
+          "type": [
+            "null",
+            "integer"
+          ]
         },
         "period_end": {
           "description": "简报覆盖的结束日期 YYYY-MM-DD（含）",
@@ -1430,6 +1437,18 @@
         },
         "body": {
           "type": "string"
+        },
+        "corrected_by_brief_id": {
+          "type": [
+            "null",
+            "integer"
+          ]
+        },
+        "corrects_brief_id": {
+          "type": [
+            "null",
+            "integer"
+          ]
         },
         "created_at": {
           "type": "string"

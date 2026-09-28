@@ -1708,7 +1708,9 @@ class AgentBrief {
   final String periodStart;
   final String periodEnd;
   final String createdAt;
-  const AgentBrief({required this.id, required this.agentStaffId, required this.agentName, required this.title, required this.body, required this.periodStart, required this.periodEnd, required this.createdAt});
+  final int? correctsBriefId;
+  final int? correctedByBriefId;
+  const AgentBrief({required this.id, required this.agentStaffId, required this.agentName, required this.title, required this.body, required this.periodStart, required this.periodEnd, required this.createdAt, this.correctsBriefId, this.correctedByBriefId});
   factory AgentBrief.fromJson(Map<String, dynamic> j) => AgentBrief(
         id: (j['id'] as num).toInt(),
         agentStaffId: (j['agent_staff_id'] as num).toInt(),
@@ -1718,6 +1720,8 @@ class AgentBrief {
         periodStart: j['period_start'] as String,
         periodEnd: j['period_end'] as String,
         createdAt: j['created_at'] as String,
+        correctsBriefId: (j['corrects_brief_id'] as num?)?.toInt(),
+        correctedByBriefId: (j['corrected_by_brief_id'] as num?)?.toInt(),
       );
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -1728,6 +1732,8 @@ class AgentBrief {
         'period_start': periodStart,
         'period_end': periodEnd,
         'created_at': createdAt,
+        if (correctsBriefId != null) 'corrects_brief_id': correctsBriefId,
+        if (correctedByBriefId != null) 'corrected_by_brief_id': correctedByBriefId,
       };
 }
 
@@ -4199,7 +4205,9 @@ class PublicAILogBrief {
   final String periodStart;
   final String periodEnd;
   final String createdAt;
-  const PublicAILogBrief({required this.id, required this.title, required this.excerpt, required this.agentName, required this.periodStart, required this.periodEnd, required this.createdAt});
+  final int? correctsBriefId;
+  final int? correctedByBriefId;
+  const PublicAILogBrief({required this.id, required this.title, required this.excerpt, required this.agentName, required this.periodStart, required this.periodEnd, required this.createdAt, this.correctsBriefId, this.correctedByBriefId});
   factory PublicAILogBrief.fromJson(Map<String, dynamic> j) => PublicAILogBrief(
         id: (j['id'] as num).toInt(),
         title: j['title'] as String,
@@ -4208,6 +4216,8 @@ class PublicAILogBrief {
         periodStart: j['period_start'] as String,
         periodEnd: j['period_end'] as String,
         createdAt: j['created_at'] as String,
+        correctsBriefId: (j['corrects_brief_id'] as num?)?.toInt(),
+        correctedByBriefId: (j['corrected_by_brief_id'] as num?)?.toInt(),
       );
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -4217,6 +4227,8 @@ class PublicAILogBrief {
         'period_start': periodStart,
         'period_end': periodEnd,
         'created_at': createdAt,
+        if (correctsBriefId != null) 'corrects_brief_id': correctsBriefId,
+        if (correctedByBriefId != null) 'corrected_by_brief_id': correctedByBriefId,
       };
 }
 

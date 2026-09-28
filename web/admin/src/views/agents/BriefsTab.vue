@@ -54,7 +54,13 @@ function openDetail(row: AgentBrief): void {
 
         <el-table :data="page?.items ?? []" v-loading="loading" border stripe @row-click="openDetail" class="clickable">
             <el-table-column label="标题" min-width="240" show-overflow-tooltip>
-                <template #default="{ row }: { row: AgentBrief }">{{ row.title }}</template>
+                <template #default="{ row }: { row: AgentBrief }">
+                    <span class="muted">#{{ row.id }}</span>
+                    <!-- 更正（00141）：旧的原样保留，标「已更正」并指向新的那份 -->
+                    <el-tag v-if="row.corrected_by_brief_id" type="warning" size="small" class="tag">已更正，见 #{{ row.corrected_by_brief_id }}</el-tag>
+                    <el-tag v-else-if="row.corrects_brief_id" type="info" size="small" class="tag">更正 #{{ row.corrects_brief_id }}</el-tag>
+                    {{ row.title }}
+                </template>
             </el-table-column>
             <el-table-column label="AI 员工" width="120" show-overflow-tooltip>
                 <template #default="{ row }: { row: AgentBrief }">{{ row.agent_name }}</template>
@@ -86,12 +92,19 @@ function openDetail(row: AgentBrief): void {
 
         <el-dialog v-model="detailVisible" :title="detail?.title ?? ''" width="640px">
             <p class="muted">{{ detail?.agent_name }} · {{ detail?.period_start }} ~ {{ detail?.period_end }} · {{ datetime(detail?.created_at) }}</p>
+            <el-alert v-if="detail?.corrected_by_brief_id" type="warning" :closable="false" show-icon
+                :title="`这份简报有错，已由 #${detail.corrected_by_brief_id} 更正（下面是原文，保留不改）`" />
+            <el-alert v-else-if="detail?.corrects_brief_id" type="info" :closable="false" show-icon
+                :title="`这份是对 #${detail.corrects_brief_id} 的更正`" />
             <p class="body">{{ detail?.body }}</p>
         </el-dialog>
     </div>
 </template>
 
 <style scoped>
+.tag {
+    margin: 0 6px;
+}
 .pager {
     margin-top: 12px;
     justify-content: flex-end;

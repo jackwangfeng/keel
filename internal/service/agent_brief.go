@@ -33,7 +33,9 @@ type AgentBriefService struct {
 func NewAgentBriefService(repo tenantRunner) *AgentBriefService { return &AgentBriefService{repo: repo} }
 
 // Post 是 MCP 工具 post_brief。period_* 是 YYYY-MM-DD（店铺时区的日期，简报说的是哪几天）。
-func (s *AgentBriefService) Post(ctx context.Context, title, body, periodStart, periodEnd string) (repository.AgentBrief, error) {
+// correctsID 非 nil 时这份是更正（00141）：只能更正自己写的、还没被更正过的那份；旧的原样保留，标「已更正」。
+func (s *AgentBriefService) Post(ctx context.Context, title, body, periodStart, periodEnd string,
+	correctsID *int64) (repository.AgentBrief, error) {
 	id, err := requireStaff(ctx)
 	if err != nil {
 		return repository.AgentBrief{}, err
@@ -56,7 +58,26 @@ func (s *AgentBriefService) Post(ctx context.Context, title, body, periodStart, 
 	}
 	var out repository.AgentBrief
 	err = s.repo.WithTenant(ctx, func(tx repository.Tx) error {
-		bid, err := tx.InsertAgentBrief(ctx, id.StaffID, title, body, start, end)
+		if correctsID != nil {
+			old, err := tx.FindAgentBrief(ctx, *correctsID)
+			if errors.Is(err, repository.ErrBriefNotFound) {
+				return fmt.Errorf("%w: corrects_brief_id=%d 这份简报不存在", ErrBriefBadRequest, *correctsID)
+			}
+			if err != nil {
+				return err
+			}
+			if old.AgentStaffID != id.StaffID {
+				return fmt.Errorf("%w: 只能更正自己写的简报（#%d 是 %s 写的）", ErrBriefBadRequest, old.ID, old.AgentName)
+			}
+			if old.CorrectedByID != nil {
+				return fmt.Errorf("%w: #%d 已经被 #%d 更正过；还要改就更正 #%d", ErrBriefBadRequest, old.ID,
+					*old.CorrectedByID, *old.CorrectedByID)
+			}
+		}
+		bid, err := tx.InsertAgentBrief(ctx, id.StaffID, title, body, start, end, correctsID)
+		if errors.Is(err, repository.ErrBriefAlreadyCorrected) {
+			return fmt.Errorf("%w: #%d 刚被另一份简报更正了", ErrBriefBadRequest, *correctsID)
+		}
 		if err != nil {
 			return err
 		}

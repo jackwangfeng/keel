@@ -10087,6 +10087,14 @@ components:
         period_start:   { type: string, format: date }
         period_end:     { type: string, format: date }
         created_at:     { type: string, format: date-time }
+        corrects_brief_id:
+          type: integer
+          format: int64
+          description: 这份是更正哪一份简报的（AI 员工发现旧简报写错了数字、时间时发，2026-09-28 起）。
+        corrected_by_brief_id:
+          type: integer
+          format: int64
+          description: 这份已被哪一份更正（旧的原样保留，界面上标「已更正」并指过去）。没被更正时缺席。
 
     AgentProposal:
       type: object
@@ -10174,6 +10182,8 @@ components:
         period_start: { type: string, format: date }
         period_end: { type: string, format: date }
         created_at: { type: string, format: date-time }
+        corrects_brief_id: { type: integer, format: int64, description: 这份是更正哪一份简报的 }
+        corrected_by_brief_id: { type: integer, format: int64, description: 这份已被哪一份更正；没被更正时缺席 }
 
     PublicAILogProposal:
       type: object

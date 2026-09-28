@@ -23,21 +23,25 @@ func (q *Queries) CountAgentBriefs(ctx context.Context) (int64, error) {
 }
 
 const getAgentBrief = `-- name: GetAgentBrief :one
-SELECT b.id, b.agent_staff_id, a.name AS agent_name, b.title, b.body, b.period_start, b.period_end, b.created_at
+SELECT b.id, b.agent_staff_id, a.name AS agent_name, b.title, b.body, b.period_start, b.period_end, b.created_at,
+       b.corrects_id, c.id AS corrected_by_id
   FROM agent_briefs b
   JOIN staff a ON a.id = b.agent_staff_id
+  LEFT JOIN agent_briefs c ON c.corrects_id = b.id  -- 至多一行：uk_agent_briefs_corrects
  WHERE b.id = $1
 `
 
 type GetAgentBriefRow struct {
-	ID           int64
-	AgentStaffID int64
-	AgentName    string
-	Title        string
-	Body         string
-	PeriodStart  pgtype.Date
-	PeriodEnd    pgtype.Date
-	CreatedAt    pgtype.Timestamptz
+	ID            int64
+	AgentStaffID  int64
+	AgentName     string
+	Title         string
+	Body          string
+	PeriodStart   pgtype.Date
+	PeriodEnd     pgtype.Date
+	CreatedAt     pgtype.Timestamptz
+	CorrectsID    *int64
+	CorrectedByID *int64
 }
 
 func (q *Queries) GetAgentBrief(ctx context.Context, id int64) (GetAgentBriefRow, error) {
@@ -52,14 +56,16 @@ func (q *Queries) GetAgentBrief(ctx context.Context, id int64) (GetAgentBriefRow
 		&i.PeriodStart,
 		&i.PeriodEnd,
 		&i.CreatedAt,
+		&i.CorrectsID,
+		&i.CorrectedByID,
 	)
 	return i, err
 }
 
 const insertAgentBrief = `-- name: InsertAgentBrief :one
 
-INSERT INTO agent_briefs (agent_staff_id, title, body, period_start, period_end)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO agent_briefs (agent_staff_id, title, body, period_start, period_end, corrects_id)
+VALUES ($1, $2, $3, $4, $5, $6)
 RETURNING id
 `
 
@@ -69,6 +75,7 @@ type InsertAgentBriefParams struct {
 	Body         string
 	PeriodStart  pgtype.Date
 	PeriodEnd    pgtype.Date
+	CorrectsID   *int64
 }
 
 // AI 员工写的经营简报（00092，AI 经营 M9，service/agent_brief.go）。一个 merchant_id 都没有：租户由 RLS 过滤。
@@ -79,6 +86,7 @@ func (q *Queries) InsertAgentBrief(ctx context.Context, arg InsertAgentBriefPara
 		arg.Body,
 		arg.PeriodStart,
 		arg.PeriodEnd,
+		arg.CorrectsID,
 	)
 	var id int64
 	err := row.Scan(&id)
@@ -86,9 +94,11 @@ func (q *Queries) InsertAgentBrief(ctx context.Context, arg InsertAgentBriefPara
 }
 
 const listAgentBriefs = `-- name: ListAgentBriefs :many
-SELECT b.id, b.agent_staff_id, a.name AS agent_name, b.title, b.body, b.period_start, b.period_end, b.created_at
+SELECT b.id, b.agent_staff_id, a.name AS agent_name, b.title, b.body, b.period_start, b.period_end, b.created_at,
+       b.corrects_id, c.id AS corrected_by_id
   FROM agent_briefs b
   JOIN staff a ON a.id = b.agent_staff_id
+  LEFT JOIN agent_briefs c ON c.corrects_id = b.id  -- 至多一行：uk_agent_briefs_corrects
  ORDER BY b.created_at DESC, b.id DESC
  LIMIT $2 OFFSET $1
 `
@@ -99,14 +109,16 @@ type ListAgentBriefsParams struct {
 }
 
 type ListAgentBriefsRow struct {
-	ID           int64
-	AgentStaffID int64
-	AgentName    string
-	Title        string
-	Body         string
-	PeriodStart  pgtype.Date
-	PeriodEnd    pgtype.Date
-	CreatedAt    pgtype.Timestamptz
+	ID            int64
+	AgentStaffID  int64
+	AgentName     string
+	Title         string
+	Body          string
+	PeriodStart   pgtype.Date
+	PeriodEnd     pgtype.Date
+	CreatedAt     pgtype.Timestamptz
+	CorrectsID    *int64
+	CorrectedByID *int64
 }
 
 func (q *Queries) ListAgentBriefs(ctx context.Context, arg ListAgentBriefsParams) ([]ListAgentBriefsRow, error) {
@@ -127,6 +139,8 @@ func (q *Queries) ListAgentBriefs(ctx context.Context, arg ListAgentBriefsParams
 			&i.PeriodStart,
 			&i.PeriodEnd,
 			&i.CreatedAt,
+			&i.CorrectsID,
+			&i.CorrectedByID,
 		); err != nil {
 			return nil, err
 		}

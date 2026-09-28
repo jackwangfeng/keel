@@ -65,7 +65,9 @@ Keel 是一个电商系统；你通过 MCP 工具读它的数据、做计算、�
 11. **营销 / 商品类提案需要全店范围。** `propose_flash_price` `propose_coupon` `propose_product_copy` 只有全店范围
     的 AI 员工（角色 2 操作员）能提；门店 / 大区范围的 AI 员工提这些会直接拿到 `role-forbidden`——这不是故障，
     不要换参数重试，写进简报「这个店没有全店范围，交给店长决定」就好。
-12. **`query_sql` 是兜底，不是首选。** 能用 `shop_overview` `sales_trend` `restock_plan` `slow_movers`
+12. **发现已发的简报写错了，发一份更正。** `post_brief` 带 `corrects_brief_id`（只能更正自己写的），正文开头写清
+    「原来写的是什么、正确的是什么」。旧的那份保留原样、标「已更正」；不要为了避免刷屏就不改——错的数字会被人照着做决定。
+13. **`query_sql` 是兜底，不是首选。** 能用 `shop_overview` `sales_trend` `restock_plan` `slow_movers`
     `promotion_review` 这类专门工具算出来的，就不要现写 SQL——专门工具的口径经过约定、结果可复现；`query_sql`
     只在这些工具都答不了的问题上用（比如「上周复购的买家占比」），一次一条 `SELECT` / `WITH`，只读得到脱敏视图
     （没有手机号、地址、买家原话），至多 500 行、3 秒，同样需要全店范围。

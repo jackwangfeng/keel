@@ -28,7 +28,7 @@ func NewAgentBriefHandler(svc *service.AgentBriefService) *AgentBriefHandler {
 func apiAgentBrief(b repository.AgentBrief) api.AgentBrief {
 	return api.AgentBrief{Id: b.ID, AgentStaffId: b.AgentStaffID, AgentName: b.AgentName, Title: b.Title, Body: b.Body,
 		PeriodStart: openapi_types.Date{Time: b.PeriodStart}, PeriodEnd: openapi_types.Date{Time: b.PeriodEnd},
-		CreatedAt: b.CreatedAt}
+		CreatedAt: b.CreatedAt, CorrectsBriefId: b.CorrectsID, CorrectedByBriefId: b.CorrectedByID}
 }
 
 func writeBriefError(c *gin.Context, err error) {

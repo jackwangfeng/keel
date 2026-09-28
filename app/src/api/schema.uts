@@ -885,6 +885,10 @@ export type AgentBrief = {
   period_start : string
   period_end : string
   created_at : string
+  /** 这份是更正哪一份简报的（AI 员工发现旧简报写错了数字、时间时发，2026-09-28 起）。 */
+  corrects_brief_id? : number
+  /** 这份已被哪一份更正（旧的原样保留，界面上标「已更正」并指过去）。没被更正时缺席。 */
+  corrected_by_brief_id? : number
 }
 
 export type AgentCreateRequest = {
@@ -2038,6 +2042,10 @@ export type PublicAILogBrief = {
   period_start : string
   period_end : string
   created_at : string
+  /** 这份是更正哪一份简报的 */
+  corrects_brief_id? : number
+  /** 这份已被哪一份更正；没被更正时缺席 */
+  corrected_by_brief_id? : number
 }
 
 export type PublicAILogProposal = {

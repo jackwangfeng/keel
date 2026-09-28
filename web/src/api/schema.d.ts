@@ -17853,6 +17853,16 @@ export interface components {
             period_end: string;
             /** Format: date-time */
             created_at: string;
+            /**
+             * Format: int64
+             * @description 这份是更正哪一份简报的（AI 员工发现旧简报写错了数字、时间时发，2026-09-28 起）。
+             */
+            corrects_brief_id?: number;
+            /**
+             * Format: int64
+             * @description 这份已被哪一份更正（旧的原样保留，界面上标「已更正」并指过去）。没被更正时缺席。
+             */
+            corrected_by_brief_id?: number;
         };
         AgentProposal: {
             /** Format: int64 */
@@ -17948,6 +17958,16 @@ export interface components {
             period_end: string;
             /** Format: date-time */
             created_at: string;
+            /**
+             * Format: int64
+             * @description 这份是更正哪一份简报的
+             */
+            corrects_brief_id?: number;
+            /**
+             * Format: int64
+             * @description 这份已被哪一份更正；没被更正时缺席
+             */
+            corrected_by_brief_id?: number;
         };
         PublicAILogProposal: {
             /** Format: int64 */

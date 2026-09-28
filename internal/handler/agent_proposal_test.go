@@ -11,6 +11,7 @@ import (
 	"github.com/keel/keel/internal/problem"
 	"github.com/keel/keel/internal/repository"
 	"github.com/keel/keel/internal/service"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // AI 员工的提案（AI 经营 M9 任务 4，docs/AI经营-M9设计.md §0 验收 4、§4）。
@@ -244,5 +245,51 @@ func TestMCPListRefundsSaysWhetherTheOrderShipped(t *testing.T) {
 	}
 	if m := got[r2.RefundNo]; m == nil || m["order_shipped_at"] == nil {
 		t.Fatalf("已发货订单的售后：%v（应有 order_shipped_at）", m)
+	}
+}
+
+// 简报更正（00141）：带 corrects_brief_id 发一份新简报更正旧的；旧的原样保留、标已更正。
+// 只能更正自己写的；一份至多被直接更正一次（再错就更正那份更正）。
+// 2026-09-28 演示站：AI 店长两次发现已发的简报写错了（时间、条数），只能说「需要的话再发一份」。
+func TestBriefCorrection(t *testing.T) {
+	cs := newCouponShop(t)
+	a := createAgent(t, cs.adminShop, `{"name":"AI","role":2}`)
+	sess := mcpConnect(t, cs.Host, issueAgentKey(t, cs.adminShop, a.Id, `{"name":"t"}`).Secret)
+	post := func(s *mcp.ClientSession, extra map[string]any) (*mcp.CallToolResult, map[string]any) {
+		args := map[string]any{"title": "日报", "body": "待批 8 条", "period_start": "2026-09-28", "period_end": "2026-09-28"}
+		for k, v := range extra {
+			args[k] = v
+		}
+		return mcpCall(t, s, "post_brief", args)
+	}
+	res, orig := post(sess, nil)
+	if res.IsError {
+		t.Fatal(mcpText(res))
+	}
+	oid := orig["id"].(float64)
+	res, fix := post(sess, map[string]any{"title": "更正：日报", "body": "待批是 9 条，不是 8 条", "corrects_brief_id": oid})
+	if res.IsError || fix["corrects_brief_id"] != oid {
+		t.Fatalf("更正：%s %v", mcpText(res), fix)
+	}
+	var old api.AgentBrief
+	decodeInto(t, getAs(t, cs.Host, fmt.Sprintf("/api/v1/admin/agent-briefs/%d", int64(oid)), cs.Token), http.StatusOK, "旧简报", &old)
+	if old.CorrectedByBriefId == nil || float64(*old.CorrectedByBriefId) != fix["id"].(float64) || old.Body != "待批 8 条" {
+		t.Fatalf("旧简报应原样保留并标已更正：%+v", old)
+	}
+	if res, _ := post(sess, map[string]any{"corrects_brief_id": oid}); !res.IsError || !strings.Contains(mcpText(res), "已经被") {
+		t.Fatalf("同一份不能再被更正一次：%q", mcpText(res))
+	}
+	if res, _ := post(sess, map[string]any{"corrects_brief_id": fix["id"]}); res.IsError {
+		t.Fatalf("更正那份更正应当可以：%s", mcpText(res))
+	}
+
+	other := createAgent(t, cs.adminShop, `{"name":"另一个 AI","role":2}`)
+	os := mcpConnect(t, cs.Host, issueAgentKey(t, cs.adminShop, other.Id, `{"name":"t"}`).Secret)
+	_, theirs := post(os, nil)
+	if res, _ := post(sess, map[string]any{"corrects_brief_id": theirs["id"]}); !res.IsError || !strings.Contains(mcpText(res), "自己写的") {
+		t.Fatalf("不能更正别的 AI 员工写的简报：%q", mcpText(res))
+	}
+	if res, _ := post(sess, map[string]any{"corrects_brief_id": 99999999}); !res.IsError {
+		t.Fatal("更正一份不存在的简报应当报错")
 	}
 }

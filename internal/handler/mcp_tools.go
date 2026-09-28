@@ -92,10 +92,11 @@ type mcpListMineIn struct {
 }
 
 type mcpPostBriefIn struct {
-	Title       string `json:"title" jsonschema:"标题，≤100 字，如「9 月 28 日巡店日报」"`
-	Body        string `json:"body" jsonschema:"正文 markdown，≤8KB。数字只引用工具返回的"`
-	PeriodStart string `json:"period_start" jsonschema:"简报覆盖的起始日期 YYYY-MM-DD（店铺时区）"`
-	PeriodEnd   string `json:"period_end" jsonschema:"简报覆盖的结束日期 YYYY-MM-DD（含）"`
+	Title           string `json:"title" jsonschema:"标题，≤100 字，如「9 月 28 日巡店日报」"`
+	Body            string `json:"body" jsonschema:"正文 markdown，≤8KB。数字只引用工具返回的"`
+	PeriodStart     string `json:"period_start" jsonschema:"简报覆盖的起始日期 YYYY-MM-DD（店铺时区）"`
+	PeriodEnd       string `json:"period_end" jsonschema:"简报覆盖的结束日期 YYYY-MM-DD（含）"`
+	CorrectsBriefID *int64 `json:"corrects_brief_id,omitempty" jsonschema:"这份是更正哪一份简报的（发现已发的简报写错了数字、时间时用）。只能更正自己写的；正文写清改了什么。旧的保留原样、标为已更正"`
 }
 
 type mcpGetProductIn struct {
@@ -166,8 +167,8 @@ func registerMCPTools(srv *mcp.Server, d *MCPDeps) {
 			return apiReportAlerts(out), nil
 		})
 	mcpTool(srv, d, "search_insights", "搜索概况：热门词（top_queries）、无结果词（zero_result_queries，含只回了「猜你想要」的）、"+
-			"低点击词（low_click_queries：搜过 ≥3 次、都有结果、点击率最低）。每个词带 search_count / click_count / order_count。"+
-			"用来发现缺货、标题问题与上新机会。",
+		"低点击词（low_click_queries：搜过 ≥3 次、都有结果、点击率最低）。每个词带 search_count / click_count / order_count。"+
+		"用来发现缺货、标题问题与上新机会。",
 		writeAdminListError, func(ctx context.Context, in mcpSearchIn) (api.ReportSearchOverview, error) {
 			w := mcpReportWindow{Period: in.Period, StartDate: in.StartDate, EndDate: in.EndDate}
 			out, err := d.Reports.Search(ctx, w.query(), in.Limit)
@@ -207,9 +208,10 @@ func registerMCPTools(srv *mcp.Server, d *MCPDeps) {
 			}
 			return mcpPage[api.AgentProposal]{Page: out.Page, PageSize: out.PageSize, Total: int(out.Total), Items: items}, nil
 		})
-	mcpTool(srv, d, "post_brief", "写一份经营简报（巡店日报等），后台「AI 员工 → 简报」可见。低风险，直接生效。",
+	mcpTool(srv, d, "post_brief", "写一份经营简报（巡店日报等），后台「AI 员工 → 简报」可见。低风险，直接生效。"+
+		"发现已发的简报写错了，带 corrects_brief_id 发一份更正（正文写清改了哪里），不要另起一份不相关的。",
 		writeBriefError, func(ctx context.Context, in mcpPostBriefIn) (api.AgentBrief, error) {
-			b, err := d.Briefs.Post(ctx, in.Title, in.Body, in.PeriodStart, in.PeriodEnd)
+			b, err := d.Briefs.Post(ctx, in.Title, in.Body, in.PeriodStart, in.PeriodEnd, in.CorrectsBriefID)
 			if err != nil {
 				return api.AgentBrief{}, err
 			}
