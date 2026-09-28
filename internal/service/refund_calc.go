@@ -45,6 +45,10 @@ type refundPlan struct {
 	// CoversEverything：这一单没有任何在途退款，而且本次把每一行剩下的件数都退了 ——
 	// 即「整单退」。只有它配上「未发货」才进 50 退款中、才全退运费（§5 / §11）。
 	CoversEverything bool
+	// ClosesWithInflight：本次加上在途的退款单，恰好把每一行剩下的件数都退完（且确有在途的）。
+	// 未发货的单遇到它要拒：两张各自都不是「整单退」，于是运费谁也不退、订单停在 20 还能发货
+	// （2026-09-28 破坏性测试：按行分别申请、前一张未审时申请后一张）。
+	ClosesWithInflight bool
 }
 
 // refundLineAmount 是一行退 k 件的金额，见文件头的两条式子。
@@ -104,11 +108,18 @@ func planRefund(items []repository.RefundableItem, inflight map[int64]int32,
 	}
 
 	plan.CoversEverything = true
+	anyInflight, closes := false, true
 	for _, it := range items {
+		if inflight[it.ID] > 0 {
+			anyInflight = true
+		}
 		if inflight[it.ID] > 0 || it.RefundedQty+asked[it.ID] != it.Quantity {
 			plan.CoversEverything = false
-			break
+		}
+		if it.RefundedQty+asked[it.ID]+inflight[it.ID] != it.Quantity {
+			closes = false
 		}
 	}
+	plan.ClosesWithInflight = anyInflight && closes
 	return plan, nil
 }

@@ -364,6 +364,39 @@ func TestRejectedWholeRefundReturnsTheOrderToPaid(t *testing.T) {
 	wantStatus(t, cs.ship(t, o.OrderNo, "sf", "SF"+uniqueKey()), http.StatusCreated, "驳回之后发货")
 }
 
+// 未发货订单按行分别退（前一张还在处理时申请把剩下的退完）：拒，引导撤回后整单退（整单退连运费一起退、订单进 50）。
+// 兜底：每一件都已退完 / 在退的单不能发货。
+// 2026-09-28 破坏性测试：两张各自都不是整单退，运费谁也不退，订单停在 20，货款全退、库存回补之后货照样发出。
+func TestSplitRefundThatWouldEmptyAnUnshippedOrderIsRefused(t *testing.T) {
+	cs := newCouponShop(t)
+	b := cs.newBuyer(t, "split-refund")
+	o := cs.twoLineOrder(t, b, nil)
+	cs.pay(t, o.OrderNo, o.PayableCents)
+	_, lines := cs.lines(t, b, o.OrderNo)
+	first := cs.mustApply(t, b, o.OrderNo, refundBody(1, [2]int64{lines[cs.DressSKU].Id, 2}))
+
+	w := applyRefund(t, cs.Host, o.OrderNo, b.Token, refundBody(1, [2]int64{lines[cs.ShirtSKU].Id, 1}), "r-"+uniqueKey())
+	if p := problemOf(t, w, http.StatusConflict); p.Type != problem.TypeRefundAlreadyInProgress {
+		t.Fatalf("前一张在处理、这张加上它正好退完未发货的单：应 409 refund-already-in-progress，实得 %+v", p)
+	}
+	// 发货兜底：把两行都记成已退完（模拟历史上按行退完的单），发货应拒。
+	adminExec(t, `UPDATE order_items SET refunded_qty = quantity WHERE order_id = (SELECT id FROM orders WHERE order_no = $1)`, o.OrderNo)
+	if p := problemOf(t, cs.ship(t, o.OrderNo, "sf", "SF"+uniqueKey()), http.StatusConflict); p.Type != problem.TypeOrderStatusNotShippable {
+		t.Fatalf("每一件都已退完的单不该能发货：%+v", p)
+	}
+	adminExec(t, `UPDATE order_items SET refunded_qty = 0 WHERE order_id = (SELECT id FROM orders WHERE order_no = $1)`, o.OrderNo)
+
+	// 撤回前一张，整单申请：连运费一起退，订单进 50。
+	wantStatus(t, postWithKey(t, cs.Host, "/api/v1/refunds/"+first.RefundNo+"/cancel", "", b.Token, "c-"+uniqueKey()), http.StatusOK, "撤回")
+	whole := cs.mustApply(t, b, o.OrderNo, refundBody(1, [2]int64{lines[cs.DressSKU].Id, 2}, [2]int64{lines[cs.ShirtSKU].Id, 1}))
+	if whole.AmountCents != o.PayableCents {
+		t.Fatalf("整单退应退实付 %d（含运费）：%+v", o.PayableCents, whole)
+	}
+	if st := orderStatusOf(t, o.OrderNo); st != 50 {
+		t.Fatalf("整单退后订单应进 50，实得 %d", st)
+	}
+}
+
 // 别人的订单申请不了售后：404 order-not-found，与「订单不存在」同一个响应，也不落任何退款单。
 // 退款金额由服务端倒算、钱退回原支付渠道，但一张挂在别人名下的退款单本身就是越权。
 func TestRefundOnAnotherBuyersOrderIs404(t *testing.T) {

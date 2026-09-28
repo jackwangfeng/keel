@@ -344,6 +344,11 @@ func (s *RefundService) Create(ctx context.Context, orderNo string, req RefundCr
 			// 退货退款的运费由客服在审核时裁定（这里先记 0）。
 			// 「全退」退的是**实收运费**（00056）：包邮券抵掉的那部分买家没付过，
 			// 退了就是多退 —— 整单退的合计因此恰好等于实付（payable）。
+			if plan.ClosesWithInflight && order.Status == orderStatusPaid {
+				return repository.Refund{}, fmt.Errorf("%w: 这一单还有售后在处理，这次加上它正好把整单退完 —— "+
+					"未发货的订单要全部退掉，请先撤回处理中的那张，再整单申请（整单退会连运费一起退）",
+					ErrRefundAlreadyInProgress)
+			}
 			whole := plan.CoversEverything && order.Status == orderStatusPaid
 			var freight int64
 			if whole {

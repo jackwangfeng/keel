@@ -237,6 +237,14 @@ func (s *AdminOrderService) Ship(ctx context.Context, orderNo string, req ShipRe
 				return repository.Shipment{}, fmt.Errorf("%w: 订单 %s 当前状态是 %d，只有 %d 已支付可以发货",
 					ErrOrderNotShippable, orderNo, order.Status, orderStatusPaid)
 			}
+			// 每一件都已退款或正在退：没有东西可发（兜底；正常路径上这种单会走整单退进 50）。
+			// 2026-09-28 破坏性测试：按行分别退完之后订单仍是 20，货款全退、库存回补，货照样发了出去。
+			if nothing, err := nothingLeftToShip(ctx, tx, order.ID); err != nil {
+				return repository.Shipment{}, err
+			} else if nothing {
+				return repository.Shipment{}, fmt.Errorf("%w: 订单 %s 的商品已全部退款或正在退款，没有可发的货",
+					ErrOrderNotShippable, orderNo)
+			}
 			ok, err := tx.ShipOrder(ctx, order.ID)
 			if errors.Is(err, repository.ErrIllegalOrderTransition) {
 				ok, err = false, nil
@@ -289,4 +297,22 @@ func pathHash(parts ...string) string {
 		h.Write([]byte{0})
 	}
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+// nothingLeftToShip：订单每一行的件数都已退完或在一张进行中的退款单里。
+func nothingLeftToShip(ctx context.Context, tx repository.Tx, orderID int64) (bool, error) {
+	items, err := tx.ListRefundableItems(ctx, orderID)
+	if err != nil {
+		return false, err
+	}
+	inflight, err := tx.RefundingQtyByItem(ctx, orderID)
+	if err != nil {
+		return false, err
+	}
+	for _, it := range items {
+		if it.Quantity-it.RefundedQty-inflight[it.ID] > 0 {
+			return false, nil
+		}
+	}
+	return len(items) > 0, nil
 }
