@@ -198,6 +198,9 @@ func (h *SearchHandler) Search(c *gin.Context) {
 			SalesCount:    &sales,
 			InStock:       inStock,
 			Status:        api.SearchHitStatus(it.Status),
+			// 活动标签与最低活动价，与商品列表同一份（算不出来时标签为空数组、活动价缺席）。
+			PromotionTags:      ptrTags(it.PromotionTags),
+			PromoMinPriceCents: moneyPtrOf(it.PromoMinPriceCents),
 		}
 		if sr.Explain {
 			src := api.SearchHitRecallSource(it.Source)

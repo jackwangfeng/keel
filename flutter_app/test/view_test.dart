@@ -34,6 +34,28 @@ void main() {
     expect(r.cover.glyph, '挂');
   });
 
+  test('productRow：有活动价时显示活动价、门店价划线；活动价不低于门店价不划线', () {
+    const p = ProductSummary(id: 19, title: '挂耳咖啡 10 包', minPriceCents: 6900, maxPriceCents: 8900, status: 1,
+        promoMinPriceCents: 4990);
+    final r = productRow(p, (u) => u);
+    expect(r.minPriceText, '¥49.90');
+    expect(r.listPriceText, '¥69.00');
+    expect(r.priceText, '¥49.90 ~ ¥89.00');
+    expect(r.hasRange, isTrue);
+
+    const single = ProductSummary(id: 2, title: '单规格', minPriceCents: 6000, maxPriceCents: 6000, status: 1,
+        promoMinPriceCents: 3990);
+    final s = productRow(single, (u) => u);
+    expect(s.minPriceText, '¥39.90');
+    expect(s.listPriceText, '¥60.00');
+    expect(s.hasRange, isFalse, reason: '单规格打特价，价格就是 39.9，不是「起」');
+    expect(s.priceText, '¥39.90');
+
+    const bogus = ProductSummary(id: 3, title: '不划线', minPriceCents: 6000, status: 1, promoMinPriceCents: 6000);
+    expect(productRow(bogus, (u) => u).listPriceText, '');
+    expect(productRow(const ProductSummary(id: 4, title: '无活动', minPriceCents: 100, status: 1), (u) => u).listPriceText, '');
+  });
+
   test('productRow：in_stock 缺席时不说它没货；下架标出来', () {
     const p = ProductSummary(id: 1, title: 'A', minPriceCents: 100, status: 2);
     final r = productRow(p, (u) => u);

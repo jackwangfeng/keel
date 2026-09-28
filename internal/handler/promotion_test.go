@@ -16,6 +16,7 @@ import (
 	"github.com/keel/keel/internal/dtm"
 	"github.com/keel/keel/internal/inventory"
 	"github.com/keel/keel/internal/problem"
+	"github.com/keel/keel/internal/search"
 	"github.com/keel/keel/internal/service"
 )
 
@@ -262,12 +263,41 @@ func TestLimitedPriceWithPerUserLimit(t *testing.T) {
 	for _, it := range list.Items {
 		if it.Id == cs.DressProduct {
 			dressTags = *it.PromotionTags
-		} else if it.PromotionTags == nil || len(*it.PromotionTags) != 0 {
-			t.Fatalf("衬衫不在活动里，不该有标签：%+v", it.PromotionTags)
+			// 卡片上的活动价：门店价 60 元划线，显示 39.9。
+			if it.PromoMinPriceCents == nil || *it.PromoMinPriceCents != 3990 || it.MinPriceCents != 6000 {
+				t.Fatalf("连衣裙列表卡片：门店价 %d 活动价 %v", it.MinPriceCents, it.PromoMinPriceCents)
+			}
+		} else if it.PromotionTags == nil || len(*it.PromotionTags) != 0 || it.PromoMinPriceCents != nil {
+			t.Fatalf("衬衫不在活动里，不该有标签与活动价：%+v / %v", it.PromotionTags, it.PromoMinPriceCents)
 		}
 	}
 	if len(dressTags) != 1 || dressTags[0].Label != "限时特价 ¥39.9" || dressTags[0].PromotionId != promo.Id {
 		t.Fatalf("连衣裙的标签：%+v", dressTags)
+	}
+
+	// 检索结果与列表同一份：标签与活动价都在（2026-09-28 之前检索结果不带活动标签）。
+	// search_text 在生产上由异步索引任务写，这里直接写，算法同一份（search.ProductText）。
+	dressTitle := adminQueryText(t, `SELECT title FROM products WHERE id = $1`, cs.DressProduct)
+	adminExec(t, `UPDATE products SET search_text = $2 WHERE id = $1`,
+		cs.DressProduct, search.ProductText{Title: dressTitle}.SearchText())
+	var sr struct {
+		Items []api.SearchHit `json:"items"`
+	}
+	w, _ := doSearch(t, cs.Host, fmt.Sprintf(`{"query":%q,"store_id":%d}`, dressTitle, cs.NorthStore))
+	decodeInto(t, w, http.StatusOK, "检索", &sr)
+	found := false
+	for _, it := range sr.Items {
+		if it.Id != cs.DressProduct {
+			continue
+		}
+		found = true
+		if it.PromotionTags == nil || len(*it.PromotionTags) != 1 || (*it.PromotionTags)[0].PromotionId != promo.Id ||
+			it.PromoMinPriceCents == nil || *it.PromoMinPriceCents != 3990 {
+			t.Fatalf("检索结果里的连衣裙：标签 %+v 活动价 %v", it.PromotionTags, it.PromoMinPriceCents)
+		}
+	}
+	if !found {
+		t.Fatalf("按标题 %q 没搜到连衣裙", dressTitle)
 	}
 	var detail api.ProductDetail
 	decodeInto(t, getAs(t, cs.Host, fmt.Sprintf("/api/v1/products/%d?store_id=%d", cs.DressProduct, cs.NorthStore), ""),
@@ -294,7 +324,7 @@ func TestLimitedPriceWithPerUserLimit(t *testing.T) {
 	}
 
 	// 试算：超出限购 409；限购之内按活动价。
-	_, w := cs.preview(t, b, cs.orderJSON(b, cs.NorthStore, cs.DressSKU, 3, nil))
+	_, w = cs.preview(t, b, cs.orderJSON(b, cs.NorthStore, cs.DressSKU, 3, nil))
 	if p := problemOf(t, w, http.StatusConflict); p.Type != problem.TypePromotionLimitExceeded {
 		t.Fatalf("买 3 件超出限购 2，应当 409 promotion-limit-exceeded：%+v", p)
 	}

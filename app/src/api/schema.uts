@@ -1199,6 +1199,8 @@ export type ProductSummary = {
   status : number
   /** 这件商品在响应里 `store` 那家门店**此刻生效**的活动标签（满减满折、限时折扣、秒杀）。 */
   promotion_tags? : PromotionTag[]
+  /** 金额，单位「分」。禁止使用浮点。 */
+  promo_min_price_cents? : Money
 }
 
 export type ChatReplyAction = {
@@ -1814,6 +1816,8 @@ export type ProductDetail = {
   status : number
   /** 这件商品在响应里 `store` 那家门店**此刻生效**的活动标签（满减满折、限时折扣、秒杀）。 */
   promotion_tags? : PromotionTag[]
+  /** 金额，单位「分」。禁止使用浮点。 */
+  promo_min_price_cents? : Money
   description? : string
   category_id? : number
   images? : string[]
@@ -2348,6 +2352,8 @@ export type SearchHit = {
   status : number
   /** 这件商品在响应里 `store` 那家门店**此刻生效**的活动标签（满减满折、限时折扣、秒杀）。 */
   promotion_tags? : PromotionTag[]
+  /** 金额，单位「分」。禁止使用浮点。 */
+  promo_min_price_cents? : Money
   /** explain=true 时返回，用于效果调优 */
   scores? : SearchHitScores
   /** 该结果来自哪一路召回，`explain=true` 时返回。 */

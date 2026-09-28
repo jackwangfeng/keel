@@ -47,33 +47,40 @@ class ProductRow {
   final String subtitle;
   /// 完整价格区间（搜索结果用）：单一价格就是它本身。
   final String priceText;
-  /// 最低价（首页卡片显示「¥x 起」）。
+  /// 最低价（首页卡片显示「¥x 起」）。有活动价（promo_min_price_cents）时是活动价。
   final String minPriceText;
+  /// 被活动价压下去的门店最低价（卡片上划线）；没有活动价时为空串。
+  final String listPriceText;
   final bool hasRange;
   final bool offShelf;
   final bool soldOut;
   final Cover cover;
   final List<String> promoTags;
   const ProductRow({required this.id, required this.title, required this.subtitle, required this.priceText,
-      required this.minPriceText, required this.hasRange, required this.offShelf, required this.soldOut, required this.cover, required this.promoTags});
+      required this.minPriceText, this.listPriceText = '', required this.hasRange, required this.offShelf, required this.soldOut, required this.cover, required this.promoTags});
 }
 
 /// 商品列表与搜索结果共用的行。ProductSummary 与 SearchHit 在契约里是两个 schema，字段各取一遍。
 ProductRow productRow(ProductSummary p, String Function(String) asset) => _row(p.id, p.title, p.subtitle,
-    p.minPriceCents, p.maxPriceCents, p.status, p.inStock, p.imageUrl, p.promotionTags, asset);
+    p.minPriceCents, p.maxPriceCents, p.promoMinPriceCents, p.status, p.inStock, p.imageUrl, p.promotionTags, asset);
 
 ProductRow searchHitRow(SearchHit h, String Function(String) asset) => _row(h.id, h.title, h.subtitle,
-    h.minPriceCents, h.maxPriceCents, h.status, h.inStock, h.imageUrl, h.promotionTags, asset);
+    h.minPriceCents, h.maxPriceCents, h.promoMinPriceCents, h.status, h.inStock, h.imageUrl, h.promotionTags, asset);
 
-ProductRow _row(int id, String title, String? subtitle, int min, int? max, int status, bool? inStock,
-    String? imageUrl, List<PromotionTag>? tags, String Function(String) asset) {
-  final range = max != null && max > min;
+ProductRow _row(int id, String title, String? subtitle, int storeMin, int? max, int? promoMin, int status,
+    bool? inStock, String? imageUrl, List<PromotionTag>? tags, String Function(String) asset) {
+  // 服务端只在活动价低于门店最低价时给 promo_min_price_cents；这里再判一次，不信就不划线。
+  final promo = promoMin != null && promoMin < storeMin;
+  final min = promo ? promoMin : storeMin;
+  // 「起」按门店价本身有没有区间判：单规格商品打了特价，价格就是那一个数，不是「起」。
+  final range = max != null && max > storeMin;
   return ProductRow(
     id: id,
     title: title,
     subtitle: subtitle ?? '',
     priceText: range ? '${yuan(min)} ~ ${yuan(max)}' : yuan(min),
     minPriceText: yuan(min),
+    listPriceText: promo ? yuan(storeMin) : '',
     hasRange: range,
     offShelf: status == 2,
     // in_stock 是可选字段：没返回时不敢说它没货。

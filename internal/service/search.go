@@ -330,6 +330,11 @@ type SearchHit struct {
 	// ImageURL 同 ProductSummary.ImageURL：主图地址，没有图为 nil（字段缺席）。
 	ImageURL *string
 
+	// PromotionTags / PromoMinPriceCents 同 ProductSummary（promotion_tags.go，列表同一份判据）。
+	// 算不出来时两个都空 —— 检索不为活动标签失败（applyPromotions）。
+	PromotionTags      []ProductPromotionTag
+	PromoMinPriceCents *int64
+
 	// Source 是它被哪一路捞回来的（契约 SearchHit.recall_source）。
 	Source search.RecallSource
 
@@ -627,6 +632,7 @@ func (s *SearchService) Search(ctx context.Context, req SearchRequest) (SearchRe
 			FinalScore:    r.Final,
 		})
 	}
+	s.applyPromotions(ctx, scope, items)
 	res := SearchResult{
 		Items:    items,
 		Strategy: strategy,
@@ -695,6 +701,39 @@ func (s *SearchService) applyStock(ctx context.Context, scope repository.StoreSc
 		return out
 	}
 	return mark(vecHits), mark(kwHits), true
+}
+
+// applyPromotions 给这一页结果填活动标签与活动价，与商品列表同一份判据（promotion_tags.go）。
+// 只算截断之后的这一页。任何一步出错都只记一条、这一页不带标签 —— 检索的纪律是
+// 「任何一环故障都必须仍能返回结果」（§8）；库存服务不在时 finish 自己降级（单价类报价不生效）。
+func (s *SearchService) applyPromotions(ctx context.Context, scope repository.StoreScope, items []SearchHit) {
+	if len(items) == 0 {
+		return
+	}
+	ids := make([]int64, 0, len(items))
+	for _, it := range items {
+		ids = append(ids, it.ID)
+	}
+	var promo promoTagMaterial
+	if err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+		var err error
+		promo, err = loadPromotionTags(ctx, tx, scope, ids, time.Now())
+		return err
+	}); err != nil {
+		s.log.WarnContext(ctx, "检索结果取不到活动素材，这一页不带活动标签", "err", err)
+		return
+	}
+	tags, prices, err := promo.finish(ctx, s.inv, true)
+	if err != nil {
+		s.log.WarnContext(ctx, "检索结果算不出活动标签，这一页不带活动标签", "err", err)
+		return
+	}
+	floors := promo.promoFloors(prices)
+	for i := range items {
+		it := &items[i]
+		it.PromotionTags = tags[it.ID]
+		it.PromoMinPriceCents = promoMinPriceOf(floors, it.ID, it.MinPriceCents)
+	}
 }
 
 // productsInStock 回答「这批商品在这家店有没有货」。数据库错误与库存服务错误都原样返回，

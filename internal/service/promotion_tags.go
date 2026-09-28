@@ -109,3 +109,30 @@ func (m promoTagMaterial) finish(ctx context.Context, inv inventory.Service,
 	}
 	return tags, prices, nil
 }
+
+// promoFloors 从 finish 算出的各 SKU 活动价里，按商品取最低的那个（列表卡片上的活动价）。
+func (m promoTagMaterial) promoFloors(prices map[int64]SkuPromoPrice) map[int64]int64 {
+	out := map[int64]int64{}
+	for pid, offers := range m.byProduct {
+		for _, o := range offers {
+			p, ok := prices[o.SKUID]
+			if !ok {
+				continue
+			}
+			if cur, seen := out[pid]; !seen || p.PriceCents < cur {
+				out[pid] = p.PriceCents
+			}
+		}
+	}
+	return out
+}
+
+// promoMinPriceOf 是契约 ProductSummary.promo_min_price_cents：活动价里最低的比门店最低价
+// 还低时才给（这件商品此刻实际能买到的最低单价）；不低（特价落在较贵的规格上）时缺席，
+// 卡片照旧只显示门店价。
+func promoMinPriceOf(floors map[int64]int64, productID, minPriceCents int64) *int64 {
+	if p, ok := floors[productID]; ok && p < minPriceCents {
+		return &p
+	}
+	return nil
+}

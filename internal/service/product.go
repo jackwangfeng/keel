@@ -44,6 +44,8 @@ type ProductSummary struct {
 	// PromotionTags 是这件商品在这家店此刻生效的活动标签（00058，promotion_tags.go）。
 	// MinPriceCents 仍是门店价：活动价看标签与 SKU.PromoPriceCents。
 	PromotionTags []ProductPromotionTag
+	// PromoMinPriceCents 是活动价里最低的那个，只在比 MinPriceCents 低时给（promoMinPriceOf）。
+	PromoMinPriceCents *int64
 
 	// InStock：这家店里任意一个在售 SKU 水位 > 0（与详情页、检索同一个判据）。
 	// nil 表示这一次不知道（拆分部署下库存服务不在）—— handler 让字段缺席，客户端不敢说它没货。
@@ -190,12 +192,15 @@ func (s *ProductService) List(ctx context.Context, storeID, categoryID *int64, p
 	}
 	// 活动标签在事务之后算（秒杀配额要问库存服务，promotion_tags.go）。列表不读库存，
 	// 库存服务不在时照常返回（标签里没有单价类活动），与 in_stock 缺席同一个降级口径。
-	tags, _, err := promo.finish(ctx, s.inv, true)
+	tags, prices, err := promo.finish(ctx, s.inv, true)
 	if err != nil {
 		return ProductList{}, err
 	}
+	floors := promo.promoFloors(prices)
 	for i := range out.Items {
-		out.Items[i].PromotionTags = tags[out.Items[i].ID]
+		it := &out.Items[i]
+		it.PromotionTags = tags[it.ID]
+		it.PromoMinPriceCents = promoMinPriceOf(floors, it.ID, it.MinPriceCents)
 	}
 	s.fillInStock(ctx, stockStore, onSale, out.Items)
 	return out, nil

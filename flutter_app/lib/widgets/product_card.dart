@@ -184,6 +184,21 @@ class ProductCard extends StatelessWidget {
                                     ),
                                   ),
                                 ),
+                              // 活动价压下去的门店价，划线；挤不下时先省略它，活动价不让。
+                              if (row.listPriceText.isNotEmpty)
+                                Flexible(
+                                  child: Padding(
+                                    padding: const EdgeInsets.only(left: 4),
+                                    child: Text(
+                                      row.listPriceText,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: KeelText.hint.copyWith(
+                                        decoration: TextDecoration.lineThrough,
+                                      ),
+                                    ),
+                                  ),
+                                ),
                             ],
                           ),
                         ),

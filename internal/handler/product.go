@@ -126,6 +126,8 @@ func (h *ProductHandler) List(c *gin.Context) {
 			Status:        api.ProductSummaryStatus(it.Status),
 			// 这家店此刻生效的活动标签（00058）。没有活动时是空数组。
 			PromotionTags: ptrTags(it.PromotionTags),
+			// 最低活动价，只在比门店最低价低时有；否则字段缺席。
+			PromoMinPriceCents: moneyPtrOf(it.PromoMinPriceCents),
 			// 这家店有没有货；库存服务不在时 nil，字段缺席。
 			InStock: it.InStock,
 		})

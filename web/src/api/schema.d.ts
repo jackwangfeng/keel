@@ -15982,6 +15982,13 @@ export interface components {
              *     `Sku.promo_price_cents`，最终以 `/orders/preview` 为准。
              */
             promotion_tags?: components["schemas"]["PromotionTag"][];
+            /**
+             * @description 这件商品在同一家门店此刻的最低活动单价（限时折扣 / 秒杀给出的各 SKU `Sku.promo_price_cents` 里最低的那个）。
+             *     **只在它低于 `min_price_cents` 时出现**；没有单价类活动、或特价只落在较贵的规格上时缺席。
+             *     列表卡片用它显示活动价、把 `min_price_cents` 划线。`GET /products` 与 `POST /search` 都填
+             *     （2026-09-28 起；之前卡片只有门店价，要点进规格浮层才看得到特价）。
+             */
+            promo_min_price_cents?: components["schemas"]["Money"];
         };
         ProductDetail: components["schemas"]["ProductSummary"] & {
             description?: string;

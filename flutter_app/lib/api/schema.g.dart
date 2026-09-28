@@ -2402,7 +2402,8 @@ class ProductSummary {
   final int? salesCount;
   final int status;
   final List<PromotionTag>? promotionTags;
-  const ProductSummary({required this.id, required this.title, this.subtitle, this.imageUrl, required this.minPriceCents, this.maxPriceCents, this.inStock, this.salesCount, required this.status, this.promotionTags});
+  final Money? promoMinPriceCents;
+  const ProductSummary({required this.id, required this.title, this.subtitle, this.imageUrl, required this.minPriceCents, this.maxPriceCents, this.inStock, this.salesCount, required this.status, this.promotionTags, this.promoMinPriceCents});
   factory ProductSummary.fromJson(Map<String, dynamic> j) => ProductSummary(
         id: (j['id'] as num).toInt(),
         title: j['title'] as String,
@@ -2414,6 +2415,7 @@ class ProductSummary {
         salesCount: (j['sales_count'] as num?)?.toInt(),
         status: (j['status'] as num).toInt(),
         promotionTags: (j['promotion_tags'] as List?)?.map((e) => PromotionTag.fromJson(e as Map<String, dynamic>)).toList(),
+        promoMinPriceCents: (j['promo_min_price_cents'] as num?)?.toInt(),
       );
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -2426,6 +2428,7 @@ class ProductSummary {
         if (salesCount != null) 'sales_count': salesCount,
         'status': status,
         if (promotionTags != null) 'promotion_tags': promotionTags!.map((e) => e.toJson()).toList(),
+        if (promoMinPriceCents != null) 'promo_min_price_cents': promoMinPriceCents,
       };
 }
 
@@ -3680,11 +3683,12 @@ class ProductDetail {
   final int? salesCount;
   final int status;
   final List<PromotionTag>? promotionTags;
+  final Money? promoMinPriceCents;
   final String? description;
   final int? categoryId;
   final List<String>? images;
   final List<Sku> skus;
-  const ProductDetail({required this.id, required this.title, this.subtitle, this.imageUrl, required this.minPriceCents, this.maxPriceCents, this.inStock, this.salesCount, required this.status, this.promotionTags, this.description, this.categoryId, this.images, required this.skus});
+  const ProductDetail({required this.id, required this.title, this.subtitle, this.imageUrl, required this.minPriceCents, this.maxPriceCents, this.inStock, this.salesCount, required this.status, this.promotionTags, this.promoMinPriceCents, this.description, this.categoryId, this.images, required this.skus});
   factory ProductDetail.fromJson(Map<String, dynamic> j) => ProductDetail(
         id: (j['id'] as num).toInt(),
         title: j['title'] as String,
@@ -3696,6 +3700,7 @@ class ProductDetail {
         salesCount: (j['sales_count'] as num?)?.toInt(),
         status: (j['status'] as num).toInt(),
         promotionTags: (j['promotion_tags'] as List?)?.map((e) => PromotionTag.fromJson(e as Map<String, dynamic>)).toList(),
+        promoMinPriceCents: (j['promo_min_price_cents'] as num?)?.toInt(),
         description: j['description'] as String?,
         categoryId: (j['category_id'] as num?)?.toInt(),
         images: (j['images'] as List?)?.map((e) => e as String).toList(),
@@ -3712,6 +3717,7 @@ class ProductDetail {
         if (salesCount != null) 'sales_count': salesCount,
         'status': status,
         if (promotionTags != null) 'promotion_tags': promotionTags!.map((e) => e.toJson()).toList(),
+        if (promoMinPriceCents != null) 'promo_min_price_cents': promoMinPriceCents,
         if (description != null) 'description': description,
         if (categoryId != null) 'category_id': categoryId,
         if (images != null) 'images': images,
@@ -4859,9 +4865,10 @@ class SearchHit {
   final int? salesCount;
   final int status;
   final List<PromotionTag>? promotionTags;
+  final Money? promoMinPriceCents;
   final SearchHitScores? scores;
   final String? recallSource;
-  const SearchHit({required this.id, required this.title, this.subtitle, this.imageUrl, required this.minPriceCents, this.maxPriceCents, this.inStock, this.salesCount, required this.status, this.promotionTags, this.scores, this.recallSource});
+  const SearchHit({required this.id, required this.title, this.subtitle, this.imageUrl, required this.minPriceCents, this.maxPriceCents, this.inStock, this.salesCount, required this.status, this.promotionTags, this.promoMinPriceCents, this.scores, this.recallSource});
   factory SearchHit.fromJson(Map<String, dynamic> j) => SearchHit(
         id: (j['id'] as num).toInt(),
         title: j['title'] as String,
@@ -4873,6 +4880,7 @@ class SearchHit {
         salesCount: (j['sales_count'] as num?)?.toInt(),
         status: (j['status'] as num).toInt(),
         promotionTags: (j['promotion_tags'] as List?)?.map((e) => PromotionTag.fromJson(e as Map<String, dynamic>)).toList(),
+        promoMinPriceCents: (j['promo_min_price_cents'] as num?)?.toInt(),
         scores: j['scores'] == null ? null : SearchHitScores.fromJson(j['scores'] as Map<String, dynamic>),
         recallSource: j['recall_source'] as String?,
       );
@@ -4887,6 +4895,7 @@ class SearchHit {
         if (salesCount != null) 'sales_count': salesCount,
         'status': status,
         if (promotionTags != null) 'promotion_tags': promotionTags!.map((e) => e.toJson()).toList(),
+        if (promoMinPriceCents != null) 'promo_min_price_cents': promoMinPriceCents,
         if (scores != null) 'scores': scores!.toJson(),
         if (recallSource != null) 'recall_source': recallSource,
       };

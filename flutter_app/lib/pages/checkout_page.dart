@@ -247,7 +247,7 @@ class _CheckoutPageState extends State<CheckoutPage> {
         if (coupon == 0 && v.coupons.isNotEmpty) {
           // 先不带券算一次拿到可用列表，再带上最省的那张算一次；中间那份不摆出来（应付闪一下大再变小没有意义）。
           _couponId = v.coupons.first.id;
-          return _runPreview();
+          return await _runPreview();
         }
       }
       setState(() {
