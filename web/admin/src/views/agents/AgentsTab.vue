@@ -265,7 +265,7 @@ async function revoke(agent: AdminAgent, key: AgentKey): Promise<void> {
         <ProblemAlert v-if="error" :error="error" />
 
         <div class="page-toolbar">
-            <span class="hint">AI 员工是一种特殊的员工：不登录后台，靠密钥调 MCP 工具；写操作走「提案」，不直接执行。</span>
+            <span class="hint">AI 员工是一种特殊的员工：不登录后台，靠密钥调 MCP 工具；写操作走「提案」，不直接执行。先「加 AI 员工」，再点那一行的「发密钥」；展开一行可看、可吊销已发的密钥。</span>
             <span class="grow" />
             <el-button :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
             <el-button type="primary" :icon="Plus" @click="openCreate">加 AI 员工</el-button>
@@ -334,8 +334,9 @@ async function revoke(agent: AdminAgent, key: AgentKey): Promise<void> {
             <el-table-column label="最近使用" width="170">
                 <template #default="{ row }: { row: AdminAgent }">{{ datetime(row.last_used_at) }}</template>
             </el-table-column>
-            <el-table-column label="操作" width="90" fixed="right">
+            <el-table-column label="操作" width="150" fixed="right">
                 <template #default="{ row }: { row: AdminAgent }">
+                    <el-button link type="primary" @click="openIssue(row)">发密钥</el-button>
                     <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
                 </template>
             </el-table-column>

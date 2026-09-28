@@ -39,6 +39,17 @@ so "which one is running?" never depends on anyone's memory.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-28
+
+Core migrations `00075`–`00076`, `00085`–`00087`, `00090`–`00093`, `00100`, `00110`; the core database lands on
+`00110`. The inventory service's own database (split tier C) starts its migration line at `00001`.
+
+**Highlights.** Keel is now location-first: a store is a geofence, the buyer's location picks the store, the
+shipping address must be inside that store's fence, and fenced stores charge same-city delivery by distance with a
+minimum order. POI place search and reverse geocoding replace typing addresses. AI staff (M9) ship: plug in your own
+agent over MCP — reads, deterministic restock computation, proposals a human approves, briefs, audit — with an
+integrator-facing interface contract that any harness can build on. The Flutter storefront becomes the main client.
+
 ### Added
 
 - **Flutter storefront (`flutter_app/`) becomes the main buyer client.** One codebase for Android, iOS, Web and
@@ -1236,6 +1247,7 @@ Listed because a changelog that only lists wins is an advertisement.
   show why a product was rejected last time; the merchant only ever saw it in
   that one response.
 
-[Unreleased]: https://github.com/jackwangfeng/keel/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/jackwangfeng/keel/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/jackwangfeng/keel/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/jackwangfeng/keel/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/jackwangfeng/keel/releases/tag/v0.1.0

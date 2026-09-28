@@ -45,6 +45,10 @@ is decided by where the buyer is:
   with the client offering "change address" or "switch to the store that covers it".
 - **The console keeps the map honest.** A store must have coordinates, and must sit inside
   its own fence; disabling a region takes every store in it offline.
+- **Same-city delivery, not express shipping.** A fenced store charges delivery by distance tiers (straight-line
+  from the store to the address), with a minimum order and free delivery over an amount — the cart shows
+  "¥x more to reach the minimum" before checkout. Freight templates (by province) stay for the default store's
+  nationwide express shipping; a product's express template can no longer override a store's delivery fee.
 - **POI, not typing.** `/geo/reverse` and `/geo/suggest` proxy a map provider (AMap today)
   on the server: the home page shows "deliver to …" with the street address, buyers pick an
   address by searching or dropping a pin, and the console fills a store's address from a
@@ -339,6 +343,7 @@ Products & SKUs · category tree · per-store inventory · three-tier pricing
 (base → region → store) · cart · address book · checkout · payments · cancel ·
 shipping · confirm receipt · after-sales refunds · coupons (amount-off /
 percent-off / no-threshold / free-shipping, claim center and targeted grants) ·
+same-city delivery for fenced stores (distance tiers, minimum order, free over an amount) ·
 shipping-fee templates (per piece or by weight, priced per province, free over
 an amount or a quantity after discounts, undeliverable regions, per store or
 shop-wide) · promotions (tiered spend/quantity discounts, limited-time prices, flash
@@ -646,7 +651,8 @@ battle-tested at scale. What it has is a stronger core.
   [AI Operations M9 Design](./docs/AI经营-M9设计.md) (Chinese)
 - [x] **Location & POI** — geofenced store resolution, the fence check at checkout,
   shipping addresses with coordinates, place search and reverse geocoding (AMap,
-  server-side), the Flutter storefront
+  server-side), the Flutter storefront, same-city delivery for fenced stores
+  → **v0.3.0** (together with M9 above)
 - [ ] **M10 AI operations: staff can run the shop** — event-triggered
   wake-ups (and webhooks for integrators), playbooks and proposals for clearance
   sales / coupons / search gaps / after-sales review, automatic before/after
