@@ -10,10 +10,13 @@ import { keel, type AgentProposal, type AgentProposalPage } from "../../api/clie
 import { datetime, PROPOSAL_STATUS } from "../../ui/format.ts";
 import { notifyError, notifyOk } from "../../ui/notify.ts";
 import { KIND_LABEL, type AgentProposalKind } from "../../api/agentProposalRules.ts";
+import { useMobile } from "../../ui/useMobile.ts";
 import ProblemAlert from "../../components/ProblemAlert.vue";
 import ProposalPayloadView from "./ProposalPayloadView.vue";
 import ProposalResultView from "./ProposalResultView.vue";
 import ProposalOutcomeView from "./ProposalOutcomeView.vue";
+
+const mobile = useMobile();
 
 const loading = ref(false);
 const error = ref<unknown>(null);
@@ -131,6 +134,17 @@ function openReject(row: AgentProposal): void {
     rejectVisible.value = true;
 }
 
+// ------------------------------------------------------------------ 手机卡片：展开/收起详情
+
+const expandedIds = ref<Set<number>>(new Set());
+
+function toggleExpand(id: number): void {
+    const next = new Set(expandedIds.value);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    expandedIds.value = next;
+}
+
 async function submitReject(): Promise<void> {
     const target = rejectTarget.value;
     if (target === null || rejectReason.value.trim() === "") return;
@@ -167,7 +181,7 @@ async function submitReject(): Promise<void> {
             <el-button :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
         </div>
 
-        <el-table :data="page?.items ?? []" v-loading="loading" border stripe row-key="id">
+        <el-table v-if="!mobile" :data="page?.items ?? []" v-loading="loading" border stripe row-key="id">
             <el-table-column type="expand">
                 <template #default="{ row }: { row: AgentProposal }">
                     <div class="detail">
@@ -232,6 +246,58 @@ async function submitReject(): Promise<void> {
             </el-table-column>
         </el-table>
 
+        <!-- 手机：卡片列表。展开看证据 / 预计影响 / 执行参数；批准 / 驳回两个大按钮放底部方便单手操作。 -->
+        <div v-else class="proposal-cards" v-loading="loading">
+            <el-card v-for="row in page?.items ?? []" :key="row.id" shadow="never" class="proposal-card">
+                <div class="card-head">
+                    <span class="card-title">{{ row.title }}</span>
+                    <el-tag :type="PROPOSAL_STATUS[row.status].tag" size="small">{{ PROPOSAL_STATUS[row.status].text }}</el-tag>
+                </div>
+                <div class="card-meta">
+                    <span>{{ KIND_LABEL[row.kind] }}</span>
+                    <span>{{ row.store_name ?? "全店" }}</span>
+                    <span>{{ row.agent_name }}</span>
+                </div>
+                <div class="card-meta muted">
+                    <span>{{ datetime(row.created_at) }}</span>
+                    <el-tag v-if="row.auto_approved" type="warning" size="small">自动执行</el-tag>
+                </div>
+
+                <el-button link type="primary" class="expand-btn" @click="toggleExpand(row.id)">
+                    {{ expandedIds.has(row.id) ? "收起详情 ▲" : "展开详情 ▼" }}
+                </el-button>
+
+                <div v-if="expandedIds.has(row.id)" class="detail">
+                    <h4>证据</h4>
+                    <p class="pre">{{ row.evidence || "—" }}</p>
+                    <h4>预计影响</h4>
+                    <p class="pre">{{ row.expected_impact || "—" }}</p>
+                    <h4>执行参数</h4>
+                    <ProposalPayloadView :kind="row.kind" :payload="row.payload" />
+                    <template v-if="row.result">
+                        <h4>执行结果</h4>
+                        <ProposalResultView :kind="row.kind" :result="row.result" />
+                    </template>
+                    <template v-if="row.executed_at">
+                        <h4>执行后复盘</h4>
+                        <ProposalOutcomeView :outcome="row.outcome" :executed-at="row.executed_at" :outcome-at="row.outcome_at" />
+                    </template>
+                    <template v-if="row.status === 30">
+                        <h4>驳回理由</h4>
+                        <p class="pre">{{ row.reject_reason || "—" }}</p>
+                        <p class="muted">{{ row.decided_by_name ?? "" }} · {{ datetime(row.decided_at) }}</p>
+                    </template>
+                    <p class="muted">过期时间：{{ datetime(row.expires_at) }}</p>
+                </div>
+
+                <div v-if="row.status === 10" class="card-actions">
+                    <el-button type="primary" :loading="approvingId === row.id" @click="approve(row)">批准</el-button>
+                    <el-button type="danger" plain @click="openReject(row)">驳回</el-button>
+                </div>
+            </el-card>
+            <el-empty v-if="!loading && (page?.items.length ?? 0) === 0" description="没有符合条件的提案" />
+        </div>
+
         <el-pagination
             v-if="page"
             class="pager"
@@ -290,5 +356,52 @@ async function submitReject(): Promise<void> {
 }
 .auto-tag {
     margin-left: 4px;
+}
+
+/* 手机卡片列表 */
+.proposal-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-height: 60px;
+}
+.proposal-card :deep(.el-card__body) {
+    padding: 12px 14px;
+}
+.card-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 15px;
+    font-weight: 600;
+}
+.card-title {
+    flex: 1;
+    word-break: break-word;
+}
+.card-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 6px;
+    font-size: 13px;
+}
+.card-meta.muted {
+    color: var(--el-text-color-secondary);
+    font-size: 12px;
+}
+.expand-btn {
+    margin-top: 6px;
+    padding-left: 0;
+}
+.card-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 10px;
+}
+.card-actions .el-button {
+    flex: 1;
+    min-height: 40px;
 }
 </style>

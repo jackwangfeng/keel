@@ -21,12 +21,14 @@ import {
 import { can } from "../../auth/permissions.ts";
 import { datetime, yuan } from "../../ui/format.ts";
 import { notifyOk } from "../../ui/notify.ts";
+import { useMobile } from "../../ui/useMobile.ts";
 import ProblemAlert from "../../components/ProblemAlert.vue";
 import ShipDialog from "./ShipDialog.vue";
 
 const props = defineProps<{ orderNo: string | null; stores: Map<number, AdminStore> }>();
 const emit = defineEmits<{ close: []; changed: [] }>();
 const router = useRouter();
+const mobile = useMobile();
 
 const visible = computed({
     get: () => props.orderNo !== null,
@@ -127,7 +129,7 @@ function openRefund(refundNo: string): void {
                     :title="ship.hint"
                 />
 
-                <el-descriptions :column="2" border size="small" class="mb12">
+                <el-descriptions :column="mobile ? 1 : 2" border size="small" class="mb12">
                     <el-descriptions-item label="下单时间">{{ datetime(order.created_at) }}</el-descriptions-item>
                     <el-descriptions-item label="支付时间">{{ datetime(order.paid_at) }}</el-descriptions-item>
                     <el-descriptions-item label="发货时间">{{ datetime(order.shipped_at) }}</el-descriptions-item>
@@ -148,7 +150,7 @@ function openRefund(refundNo: string): void {
                 </el-descriptions>
 
                 <h4>商品</h4>
-                <el-table :data="order.items" size="small" class="mb12">
+                <el-table v-if="!mobile" :data="order.items" size="small" class="mb12">
                     <el-table-column label="商品" min-width="180">
                         <template #default="{ row }">
                             {{ row.title }}
@@ -171,8 +173,19 @@ function openRefund(refundNo: string): void {
                         </template>
                     </el-table-column>
                 </el-table>
+                <div v-else class="mobile-list mb12">
+                    <div v-for="(row, i) in order.items" :key="i" class="mobile-row">
+                        <div class="mr-title">{{ row.title }}</div>
+                        <div v-if="specText(row.spec_values)" class="hint">{{ specText(row.spec_values) }}</div>
+                        <div class="mr-line">{{ yuan(row.price_cents) }} × {{ row.quantity }} = {{ yuan(row.amount_cents ?? 0) }}</div>
+                        <div class="mr-line hint">
+                            分摊优惠 {{ yuan(row.discount_cents ?? 0) }} · 已退/在途/可退
+                            {{ row.refunded_qty ?? 0 }}/{{ row.refunding_qty ?? 0 }}/{{ refundableQty(row) }}
+                        </div>
+                    </div>
+                </div>
 
-                <el-descriptions :column="3" border size="small" class="mb12">
+                <el-descriptions :column="mobile ? 1 : 3" border size="small" class="mb12">
                     <el-descriptions-item label="商品金额">{{ yuan(order.goods_amount_cents ?? 0) }}</el-descriptions-item>
                     <el-descriptions-item label="运费">{{ yuan(order.freight_cents ?? 0) }}</el-descriptions-item>
                     <el-descriptions-item label="优惠">-{{ yuan(order.discount_cents ?? 0) }}</el-descriptions-item>
@@ -187,7 +200,7 @@ function openRefund(refundNo: string): void {
                 </p>
 
                 <h4>支付</h4>
-                <el-table :data="order.payments" size="small" class="mb12" empty-text="没有支付记录">
+                <el-table v-if="!mobile" :data="order.payments" size="small" class="mb12" empty-text="没有支付记录">
                     <el-table-column prop="payment_no" label="支付单号" min-width="200" />
                     <el-table-column prop="channel" label="渠道" width="90" />
                     <el-table-column label="金额" width="90">
@@ -200,9 +213,20 @@ function openRefund(refundNo: string): void {
                         <template #default="{ row }">{{ datetime(row.paid_at) }}</template>
                     </el-table-column>
                 </el-table>
+                <div v-else class="mobile-list mb12">
+                    <el-empty v-if="order.payments.length === 0" description="没有支付记录" />
+                    <div v-for="(row, i) in order.payments" :key="i" class="mobile-row">
+                        <div class="mr-title">{{ row.payment_no }}</div>
+                        <div class="mr-line">
+                            {{ row.channel }} · {{ yuan(row.amount_cents ?? 0) }} ·
+                            {{ ["待支付", "成功", "失败", "已关闭"][row.status ?? 0] }}
+                        </div>
+                        <div v-if="row.paid_at" class="mr-line hint">{{ datetime(row.paid_at) }}</div>
+                    </div>
+                </div>
 
                 <h4>发货</h4>
-                <el-table :data="order.shipments" size="small" class="mb12" empty-text="还没发货">
+                <el-table v-if="!mobile" :data="order.shipments" size="small" class="mb12" empty-text="还没发货">
                     <el-table-column label="承运商" width="120">
                         <template #default="{ row }">{{ carrierName(row.carrier_code) }}</template>
                     </el-table-column>
@@ -211,9 +235,16 @@ function openRefund(refundNo: string): void {
                         <template #default="{ row }">{{ datetime(row.shipped_at) }}</template>
                     </el-table-column>
                 </el-table>
+                <div v-else class="mobile-list mb12">
+                    <el-empty v-if="order.shipments.length === 0" description="还没发货" />
+                    <div v-for="(row, i) in order.shipments" :key="i" class="mobile-row">
+                        <div class="mr-title">{{ carrierName(row.carrier_code) }} · {{ row.tracking_no }}</div>
+                        <div class="mr-line hint">{{ datetime(row.shipped_at) }}</div>
+                    </div>
+                </div>
 
                 <h4>售后</h4>
-                <el-table :data="order.refunds" size="small" empty-text="没有退款单">
+                <el-table v-if="!mobile" :data="order.refunds" size="small" empty-text="没有退款单">
                     <el-table-column label="退款单号" min-width="200">
                         <template #default="{ row }">
                             <el-link type="primary" @click="openRefund(row.refund_no)">{{ row.refund_no }}</el-link>
@@ -233,6 +264,20 @@ function openRefund(refundNo: string): void {
                         <template #default="{ row }">{{ yuan(row.amount_cents) }}</template>
                     </el-table-column>
                 </el-table>
+                <div v-else class="mobile-list">
+                    <el-empty v-if="order.refunds.length === 0" description="没有退款单" />
+                    <div v-for="(row, i) in order.refunds" :key="i" class="mobile-row" @click="openRefund(row.refund_no)">
+                        <div class="mr-title">
+                            <el-link type="primary">{{ row.refund_no }}</el-link>
+                        </div>
+                        <div class="mr-line">
+                            {{ REFUND_TYPE[row.refund_type as keyof typeof REFUND_TYPE] }} · {{ yuan(row.amount_cents) }}
+                            <el-tag size="small" :type="REFUND_STATUS[row.status as keyof typeof REFUND_STATUS].tag" class="ml4">
+                                {{ REFUND_STATUS[row.status as keyof typeof REFUND_STATUS].text }}
+                            </el-tag>
+                        </div>
+                    </div>
+                </div>
             </template>
         </div>
         <ShipDialog v-model="shipVisible" :order-no="orderNo" @shipped="onShipped" />
@@ -245,5 +290,25 @@ function openRefund(refundNo: string): void {
 }
 h4 {
     margin: 16px 0 8px;
+}
+.ml4 {
+    margin-left: 4px;
+}
+.mobile-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.mobile-row {
+    border: 1px solid var(--el-border-color-lighter);
+    border-radius: 6px;
+    padding: 8px 10px;
+}
+.mr-title {
+    font-weight: 500;
+}
+.mr-line {
+    margin-top: 4px;
+    font-size: 13px;
 }
 </style>

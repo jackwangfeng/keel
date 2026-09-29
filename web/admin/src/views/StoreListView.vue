@@ -27,11 +27,13 @@ import { IdempotentSubmission, withIdempotency } from "../api/idempotency.ts";
 import { isIncomplete, listAllRegions } from "../api/stores.ts";
 import { notifyError, notifyOk } from "../ui/notify.ts";
 import { can, NO_PERMISSION } from "../auth/permissions.ts";
+import { useMobile } from "../ui/useMobile.ts";
 import ProblemAlert from "../components/ProblemAlert.vue";
 import LocationPicker, { type LatLng } from "../components/LocationPicker.vue";
 
 const route = useRoute();
 const router = useRouter();
+const mobile = useMobile();
 
 const loading = ref(false);
 const error = ref<unknown>(null);
@@ -198,7 +200,49 @@ async function remove(row: AdminStore): Promise<void> {
         </div>
         <p v-if="regions.length === 0" class="hint">门店必须属于一个大区（stores.region_id NOT NULL）——先去「大区」建一个。</p>
 
-        <el-table :data="page?.items ?? []" v-loading="loading" border stripe>
+        <!-- 手机：卡片列表 -->
+        <div v-if="mobile" v-loading="loading" class="store-cards">
+            <router-link
+                v-for="row in page?.items ?? []"
+                :key="row.id"
+                :to="{ name: 'store-detail', params: { storeId: row.id } }"
+                class="store-card"
+            >
+                <div class="store-card-title">
+                    <span>{{ row.name }}</span>
+                    <el-tag v-if="row.is_default" type="primary" size="small" effect="dark" class="ml4">默认</el-tag>
+                    <el-tag v-if="row.deleted_at" type="danger" size="small" class="ml4">已删</el-tag>
+                    <el-tag v-if="!row.deleted_at && typeof row.lat !== 'number'" type="warning" size="small" class="ml4">未定位</el-tag>
+                </div>
+                <div class="store-card-row hint">{{ row.region_name ?? `#${row.region_id}` }}</div>
+                <div class="store-card-row">
+                    <el-tag :type="row.status === 1 ? 'success' : 'info'" size="small">{{ row.status === 1 ? "营业" : "停业" }}</el-tag>
+                    <el-tag v-if="isIncomplete(row)" type="warning" size="small" effect="dark" class="ml4">未完成</el-tag>
+                    <el-tag v-else-if="row.fence" type="success" size="small" class="ml4">已配围栏</el-tag>
+                    <el-tag v-else size="small" class="ml4">无围栏</el-tag>
+                </div>
+                <div class="store-card-row hint">{{ [row.city, row.district, row.address].filter(Boolean).join(" ") || "—" }}</div>
+                <div class="store-card-actions" @click.stop.prevent>
+                    <el-button size="small" type="primary" @click="router.push({ name: 'store-detail', params: { storeId: row.id } })">
+                        管理
+                    </el-button>
+                    <el-button
+                        size="small"
+                        :disabled="row.is_default || !!row.deleted_at || row.status !== 1 || !can.setDefaultStore()"
+                        :title="!can.setDefaultStore() ? NO_PERMISSION : row.status !== 1 ? '停业的门店不能作为回落目标' : ''"
+                        @click="makeDefault(row)"
+                    >
+                        设为默认
+                    </el-button>
+                    <el-button size="small" type="danger" plain :disabled="!!row.deleted_at || !can.manageStore(row)" @click="remove(row)">
+                        删除
+                    </el-button>
+                </div>
+            </router-link>
+            <el-empty v-if="!loading && (page?.items?.length ?? 0) === 0" description="没有门店" :image-size="70" />
+        </div>
+
+        <el-table v-else :data="page?.items ?? []" v-loading="loading" border stripe>
             <el-table-column prop="id" label="ID" width="70" />
             <el-table-column prop="code" label="编号" width="120" />
             <el-table-column label="名称" min-width="180">
@@ -337,5 +381,34 @@ async function remove(row: AdminStore): Promise<void> {
 .pager {
     margin-top: 12px;
     justify-content: flex-end;
+}
+
+/* ---------------------------------------------------------------- 手机：卡片 */
+.store-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+.store-card {
+    display: block;
+    border: 1px solid var(--el-border-color-light);
+    border-radius: 8px;
+    padding: 12px;
+    text-decoration: none;
+    color: inherit;
+}
+.store-card-title {
+    font-weight: 600;
+    word-break: break-all;
+}
+.store-card-row {
+    margin-top: 6px;
+}
+.store-card-actions {
+    margin-top: 10px;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 8px;
 }
 </style>

@@ -35,7 +35,10 @@ import { IdempotentSubmission, withIdempotency } from "../../api/idempotency.ts"
 import { ROLE, ROLE_TEXT } from "../../auth/permissions.ts";
 import { datetime, STAFF_STATUS } from "../../ui/format.ts";
 import { notifyOk } from "../../ui/notify.ts";
+import { useMobile } from "../../ui/useMobile.ts";
 import ProblemAlert from "../../components/ProblemAlert.vue";
+
+const mobile = useMobile();
 
 const loading = ref(false);
 const error = ref<unknown>(null);
@@ -192,6 +195,19 @@ async function loadKeys(agentId: number): Promise<void> {
 
 function onExpandChange(row: AdminAgent, expandedRows: AdminAgent[]): void {
     if (expandedRows.some((r) => r.id === row.id) && keysByAgent.value[row.id] === undefined) void loadKeys(row.id);
+}
+
+/** 手机卡片：点「查看密钥」展开，展开时按需拉一次（与桌面版展开行同一套 keysByAgent/loadKeys）。 */
+const expandedAgentIds = ref<Set<number>>(new Set());
+function toggleAgentKeys(row: AdminAgent): void {
+    const next = new Set(expandedAgentIds.value);
+    if (next.has(row.id)) {
+        next.delete(row.id);
+    } else {
+        next.add(row.id);
+        if (keysByAgent.value[row.id] === undefined) void loadKeys(row.id);
+    }
+    expandedAgentIds.value = next;
 }
 
 // -------- 发密钥
@@ -461,7 +477,7 @@ function openSettings(row: AdminAgent): void {
             <el-button type="primary" :icon="Plus" @click="openCreate">加 AI 员工</el-button>
         </div>
 
-        <el-table :data="agents" v-loading="loading" border stripe row-key="id" @expand-change="onExpandChange">
+        <el-table v-if="!mobile" :data="agents" v-loading="loading" border stripe row-key="id" @expand-change="onExpandChange">
             <el-table-column type="expand">
                 <template #default="{ row }: { row: AdminAgent }">
                     <div class="keys-panel">
@@ -533,7 +549,53 @@ function openSettings(row: AdminAgent): void {
             </el-table-column>
         </el-table>
 
-        <el-empty v-if="!loading && agents.length === 0" description="还没有 AI 员工" />
+        <!-- 手机：卡片列表；「查看密钥」展开显示该员工的密钥，操作按钮直接可点 -->
+        <div v-else class="agent-cards" v-loading="loading">
+            <el-card v-for="row in agents" :key="row.id" shadow="never" class="agent-card">
+                <div class="card-head">
+                    <span class="card-title">{{ row.name }}</span>
+                    <el-tag :type="STAFF_STATUS[row.status].tag" size="small">{{ STAFF_STATUS[row.status].text }}</el-tag>
+                </div>
+                <div class="card-meta muted">
+                    <span>{{ ROLE_TEXT[row.role] }}</span>
+                    <span>{{ scopeText(row) }}</span>
+                </div>
+                <div class="card-meta muted">
+                    <span>有效密钥 {{ row.live_keys }}</span>
+                    <span>最近使用 {{ datetime(row.last_used_at) }}</span>
+                </div>
+                <div class="card-actions">
+                    <el-button size="small" type="primary" @click="openIssue(row)">发密钥</el-button>
+                    <el-button size="small" @click="openEdit(row)">编辑</el-button>
+                    <el-button size="small" @click="openSettings(row)">设置</el-button>
+                </div>
+                <el-button link type="primary" class="expand-btn" @click="toggleAgentKeys(row)">
+                    {{ expandedAgentIds.has(row.id) ? "收起密钥 ▲" : "查看密钥 ▼" }}
+                </el-button>
+                <div v-if="expandedAgentIds.has(row.id)" class="keys-list" v-loading="keysLoading[row.id] === true">
+                    <div v-for="k in keysByAgent[row.id] ?? []" :key="k.id" class="key-item">
+                        <div class="key-row">
+                            <code>{{ k.prefix }}…</code>
+                            <span class="key-name">{{ k.name }}</span>
+                        </div>
+                        <div class="key-meta muted">
+                            <span>过期：{{ k.expires_at ? datetime(k.expires_at) : "不过期" }}</span>
+                            <span>最近使用：{{ datetime(k.last_used_at) }}</span>
+                        </div>
+                        <div v-if="k.revoked_at" class="key-meta muted">已吊销：{{ datetime(k.revoked_at) }}</div>
+                        <el-button v-if="!k.revoked_at" link type="danger" size="small" @click="revoke(row, k)">吊销</el-button>
+                    </div>
+                    <el-empty
+                        v-if="(keysByAgent[row.id]?.length ?? 0) === 0 && keysLoading[row.id] !== true"
+                        description="还没有密钥"
+                        :image-size="40"
+                    />
+                </div>
+            </el-card>
+            <el-empty v-if="!loading && agents.length === 0" description="还没有 AI 员工" />
+        </div>
+
+        <el-empty v-if="!mobile && !loading && agents.length === 0" description="还没有 AI 员工" />
 
         <!-- 新建 -->
         <el-dialog v-model="createVisible" title="加 AI 员工" width="520px">
@@ -645,7 +707,7 @@ function openSettings(row: AdminAgent): void {
                     <el-alert type="warning" :closable="false" show-icon class="mb12">
                         <template #title>开启后符合条件的提案会不经审批直接执行；售后审核不支持自动执行。</template>
                     </el-alert>
-                    <el-table :data="policyRows" v-loading="policyLoading" size="small" border row-key="kind">
+                    <el-table v-if="!mobile" :data="policyRows" v-loading="policyLoading" size="small" border row-key="kind">
                         <el-table-column label="种类" width="90">
                             <template #default="{ row }: { row: PolicyFormRow }">{{ AUTO_POLICY_KIND_LABEL[row.kind] }}</template>
                         </el-table-column>
@@ -672,6 +734,27 @@ function openSettings(row: AdminAgent): void {
                             </template>
                         </el-table-column>
                     </el-table>
+
+                    <!-- 手机：每种类一张卡片，字段竖排 -->
+                    <div v-else class="policy-cards" v-loading="policyLoading">
+                        <el-card v-for="row in policyRows" :key="row.kind" shadow="never" class="policy-card">
+                            <div class="policy-head">
+                                <span class="policy-title">{{ AUTO_POLICY_KIND_LABEL[row.kind] }}</span>
+                                <el-switch v-model="row.enabled" />
+                            </div>
+                            <div v-if="capFieldOf(row.kind) !== null" class="policy-field">
+                                <span class="hint">单笔上限</span>
+                                <el-input v-model="row.capInput" size="small" />
+                            </div>
+                            <div class="policy-field">
+                                <span class="hint">每 24 小时至多（0 = 不自动）</span>
+                                <el-input-number v-model="row.dailyLimit" :min="0" size="small" style="width: 100%" />
+                            </div>
+                            <el-button type="primary" size="small" :loading="row.saving" class="policy-save" @click="savePolicy(row)">
+                                保存
+                            </el-button>
+                        </el-card>
+                    </div>
                 </el-tab-pane>
                 <el-tab-pane label="事件 Webhook" name="webhook">
                     <ProblemAlert v-if="webhookError" :error="webhookError" />
@@ -706,7 +789,7 @@ function openSettings(row: AdminAgent): void {
                     </div>
                     <template v-if="webhook?.recent_deliveries && webhook.recent_deliveries.length > 0">
                         <h4 class="section-title">最近投递（新的在前）</h4>
-                        <el-table :data="webhook.recent_deliveries" size="small" border>
+                        <el-table v-if="!mobile" :data="webhook.recent_deliveries" size="small" border>
                             <el-table-column label="第几次" width="70">
                                 <template #default="{ row }: { row: AgentWebhookDelivery }">{{ row.attempt }}</template>
                             </el-table-column>
@@ -720,6 +803,13 @@ function openSettings(row: AdminAgent): void {
                                 <template #default="{ row }: { row: AgentWebhookDelivery }">{{ datetime(row.delivered_at) }}</template>
                             </el-table-column>
                         </el-table>
+                        <div v-else class="delivery-cards">
+                            <el-card v-for="(row, i) in webhook.recent_deliveries" :key="i" shadow="never" class="delivery-card">
+                                <div class="delivery-row">第 {{ row.attempt }} 次 · 状态码 {{ row.status_code ?? "—" }}</div>
+                                <div v-if="row.error" class="delivery-row muted">{{ row.error }}</div>
+                                <div class="delivery-row muted">{{ datetime(row.delivered_at) }}</div>
+                            </el-card>
+                        </div>
                     </template>
                 </el-tab-pane>
             </el-tabs>
@@ -768,5 +858,131 @@ code {
 }
 .webhook-actions .el-button {
     margin-right: 8px;
+}
+
+/* 手机：员工卡片列表 */
+.agent-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-height: 60px;
+}
+.agent-card :deep(.el-card__body) {
+    padding: 12px 14px;
+}
+.card-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 15px;
+    font-weight: 600;
+}
+.card-title {
+    flex: 1;
+    word-break: break-word;
+}
+.card-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 6px;
+    font-size: 13px;
+}
+.card-meta.muted {
+    color: var(--el-text-color-secondary);
+    font-size: 12px;
+}
+.card-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 10px;
+    flex-wrap: wrap;
+}
+.card-actions .el-button {
+    flex: 1;
+    min-width: 88px;
+}
+.expand-btn {
+    margin-top: 8px;
+    padding-left: 0;
+}
+.keys-list {
+    margin-top: 6px;
+    padding-top: 8px;
+    border-top: 1px solid var(--el-border-color-lighter);
+    min-height: 32px;
+}
+.key-item {
+    padding: 6px 0;
+    border-bottom: 1px dashed var(--el-border-color-lighter);
+}
+.key-item:last-child {
+    border-bottom: none;
+}
+.key-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+}
+.key-name {
+    word-break: break-word;
+}
+.key-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    font-size: 12px;
+    margin-top: 2px;
+}
+
+/* 手机：自动执行策略卡片 */
+.policy-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+.policy-card :deep(.el-card__body) {
+    padding: 12px 14px;
+}
+.policy-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-weight: 600;
+    margin-bottom: 8px;
+}
+.policy-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 8px;
+}
+.policy-field .el-input,
+.policy-field .el-input-number {
+    width: 100%;
+}
+.policy-save {
+    width: 100%;
+}
+
+/* 手机：webhook 投递记录卡片 */
+.delivery-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.delivery-card :deep(.el-card__body) {
+    padding: 10px 12px;
+}
+.delivery-row {
+    font-size: 13px;
+}
+.delivery-row.muted {
+    color: var(--el-text-color-secondary);
+    font-size: 12px;
+    margin-top: 2px;
+    word-break: break-word;
 }
 </style>

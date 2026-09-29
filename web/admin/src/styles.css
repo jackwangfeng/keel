@@ -19,7 +19,7 @@ body {
 /* notifyError 用的那个类：type / trace_id 是要被复制走的，
    默认宽度会把它们折成三行。 */
 .keel-error-notification {
-    width: 420px !important;
+    width: min(420px, 92vw) !important;
 }
 
 .page-toolbar {
@@ -38,4 +38,135 @@ body {
     color: var(--el-text-color-secondary);
     font-size: 12px;
     line-height: 1.6;
+}
+
+/* ============================================================ 手机（≤ 768px）
+ *
+ * 断点与 src/ui/useMobile.ts 的 MOBILE_QUERY 同一个数。这一段让所有页面在手机浏览器上「能用」：
+ * 不横向撑破、表单单列、弹窗不出屏、按钮够手指点。个别页面自己的手机版布局写在各自的 <style> 里。
+ * 用 scripts/admin-responsive-check.cjs 检查（手机 390px + 电脑 1440px 两种尺寸）。 */
+.menu-drawer .el-drawer__body {
+    padding: 0;
+    background: #20222a;
+}
+
+@media (max-width: 768px) {
+    /* 表单：标签放到输入框上面，一行一个字段 */
+    .el-form-item {
+        flex-direction: column;
+        align-items: stretch;
+        margin-bottom: 14px;
+    }
+    .el-form-item__label {
+        width: auto !important;
+        justify-content: flex-start !important;
+        height: auto !important;
+        line-height: 1.5 !important;
+        margin-bottom: 4px;
+        padding-right: 0 !important;
+    }
+    .el-form-item__content {
+        margin-left: 0 !important;
+        min-width: 0;
+        flex-wrap: wrap;
+    }
+    .el-form--inline .el-form-item {
+        display: flex;
+        width: 100%;
+        margin-right: 0;
+    }
+    .el-form--inline .el-input,
+    .el-form--inline .el-select,
+    .el-form--inline .el-date-editor,
+    .el-form--inline .el-input-number,
+    .el-form--inline .el-cascader {
+        width: 100% !important;
+    }
+    .el-form .el-input,
+    .el-form .el-select,
+    .el-form .el-textarea,
+    .el-form .el-date-editor.el-input,
+    .el-form .el-date-editor.el-input__wrapper,
+    .el-form .el-cascader {
+        max-width: 100%;
+    }
+    .el-date-editor.el-range-editor {
+        width: 100% !important;
+        max-width: 100%;
+    }
+
+    /* 弹窗、确认框、抽屉：不超出屏幕 */
+    .el-dialog {
+        width: 94vw !important;
+        max-width: 94vw;
+        margin-top: 4vh !important;
+    }
+    .el-dialog__body {
+        padding: 12px 14px !important;
+    }
+    .el-dialog__footer {
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+    .el-message-box {
+        width: 92vw !important;
+        max-width: 92vw;
+    }
+    .el-drawer.rtl,
+    .el-drawer.ltr:not(.menu-drawer) {
+        width: 100% !important;
+    }
+
+    /* 表格：表格自己横向滑（Element Plus 的 body-wrapper 本来就能滚），外面一圈不许被它撑宽 */
+    .el-table {
+        max-width: 100%;
+    }
+    .el-descriptions,
+    .el-descriptions__body {
+        max-width: 100%;
+        overflow-x: auto;
+    }
+    .el-pagination {
+        flex-wrap: wrap;
+        row-gap: 8px;
+        justify-content: center;
+    }
+    .el-pagination .el-pagination__sizes,
+    .el-pagination .el-pagination__jump {
+        display: none;
+    }
+
+    /* 工具栏 / 标签页 / 卡片 */
+    .page-toolbar > * {
+        max-width: 100%;
+    }
+    .page-toolbar .el-input,
+    .page-toolbar .el-select,
+    .page-toolbar .el-date-editor {
+        width: 100% !important;
+    }
+    .el-card__body {
+        padding: 12px;
+    }
+    .el-tabs__item {
+        padding: 0 12px !important;
+    }
+    .el-row {
+        row-gap: 12px;
+    }
+
+    /* 手指点得到：按钮至少 32px 高，小号链接按钮加宽点击区；下拉框与输入框 36px */
+    .el-button {
+        min-height: 32px;
+    }
+    .el-select__wrapper,
+    .el-input__wrapper {
+        min-height: 36px;
+    }
+    .el-button.is-link {
+        padding: 6px 4px;
+    }
+    .el-button + .el-button {
+        margin-left: 8px;
+    }
 }

@@ -134,6 +134,14 @@ watch(open, (v) => {
 .bell {
     margin-right: 4px;
 }
+/* 手机上铃铛是顶栏里最常点的一个：点击区至少 40×40（与菜单、「更多」按钮一样大）。 */
+@media (max-width: 768px) {
+    .bell :deep(.el-button) {
+        width: 40px;
+        height: 40px;
+        font-size: 20px;
+    }
+}
 .head {
     display: flex;
     align-items: center;

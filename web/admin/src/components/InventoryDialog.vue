@@ -34,7 +34,7 @@
 // 这条接口**没有**幂等键（契约的 parameters 里只有 SkuId）：PUT + CAS 本身
 // 就是幂等的，重发同一个请求要么成功一次要么 409，不会写出第二笔。
 
-import { computed, ref, watch } from "vue";
+import { ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import {
     asInventoryConflict,
@@ -118,13 +118,6 @@ watch(
     },
     { immediate: true },
 );
-
-const skuLabel = computed(() => {
-    const sku = props.sku;
-    if (sku === null) return "";
-    const base = sku.spec === undefined || sku.spec === "" ? sku.skuCode : `${sku.skuCode}（${sku.spec}）`;
-    return props.storeId ? `${base} · 门店：${props.storeName ?? `#${props.storeId}`}` : base;
-});
 
 function close(): void {
     emit("update:modelValue", false);
@@ -258,9 +251,17 @@ function retryWithDelta(): void {
         width="560px"
         @update:model-value="emit('update:modelValue', $event)"
     >
-        <p class="hint">
-            {{ skuLabel }}
-        </p>
+        <div v-if="sku" class="sku-card">
+            <div class="sku-card-row">
+                <b>{{ sku.skuCode }}</b>
+                <span v-if="sku.spec" class="hint ml8">{{ sku.spec }}</span>
+            </div>
+            <div v-if="storeId" class="sku-card-row hint">门店：{{ storeName ?? `#${storeId}` }}</div>
+            <div class="sku-card-row">
+                当前库存：<b>{{ sku.availableQty }}</b>
+                <span v-if="sku.warningQty" class="hint ml8">预警线 {{ sku.warningQty }}</span>
+            </div>
+        </div>
         <el-radio-group v-if="ambiguousStores === null" v-model="mode" size="small" class="mode">
             <el-radio-button value="adjust">加减（进货 / 盘亏）</el-radio-button>
             <el-radio-button value="set">设为（盘点结果 / 预警线）</el-radio-button>
@@ -389,5 +390,34 @@ function retryWithDelta(): void {
 }
 .ml8 {
     margin-left: 8px;
+}
+.sku-card {
+    border: 1px solid var(--el-border-color-light);
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin-bottom: 10px;
+}
+.sku-card-row {
+    line-height: 1.6;
+}
+
+/* 390px 左右：加减模式按钮组、库存输入框、门店按钮都改成单列，够大手指点。 */
+@media (max-width: 480px) {
+    .mode {
+        display: flex;
+    }
+    .mode :deep(.el-radio-button) {
+        flex: 1;
+    }
+    .mode :deep(.el-radio-button__inner) {
+        width: 100%;
+    }
+    :deep(.el-input-number) {
+        width: 100%;
+    }
+    .store-buttons .el-button {
+        width: 100%;
+        margin-left: 0 !important;
+    }
 }
 </style>

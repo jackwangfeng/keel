@@ -225,6 +225,13 @@ admin-type-check:
 admin-test:
 	cd $(ROOT)/web/admin && node --test src/api/geo.test.ts src/api/money.test.ts src/api/orderRules.test.ts src/api/notifications.test.ts src/api/importRules.test.ts src/api/freightRules.test.ts src/api/reports.test.ts src/api/promotionRules.test.ts src/api/shopSettings.test.ts src/api/localDeliveryRules.test.ts src/api/agentProposalRules.test.ts src/api/agentPolicyRules.test.ts src/api/paymentReturnRules.test.ts src/api/mapTiles.test.ts
 
+# 后台布局检查：每个页面（含标签页、「新建」弹窗）按手机 390px 与电脑 1440px 各打开一次，查横向撑破、控件出屏、
+# 点击目标过小、按钮文字截断、控制台报错，并截图。只读。报告在 tmp/responsive/report.md。
+# ADMIN_URL 默认演示站（免登录）；本地预览见 scripts/admin-responsive-check.cjs 文件头的 LOCAL_DIST。
+ADMIN_URL ?= https://eshop.zzss.fun/admin
+admin-responsive-check:
+	node $(ROOT)/scripts/admin-responsive-check.cjs $(ADMIN_URL) $(ROOT)/tmp/responsive
+
 # 构建静态产物到 web/admin/dist。日常不用跑：compose 起栈时在
 # docker/Dockerfile.admin 的 node 阶段里构建，产物交给 nginx。
 admin-build:

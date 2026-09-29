@@ -9,7 +9,10 @@ import { ref, onMounted } from "vue";
 import { Refresh } from "@element-plus/icons-vue";
 import { keel, type AgentBrief, type AgentBriefPage } from "../../api/client.ts";
 import { datetime } from "../../ui/format.ts";
+import { useMobile } from "../../ui/useMobile.ts";
 import ProblemAlert from "../../components/ProblemAlert.vue";
+
+const mobile = useMobile();
 
 const loading = ref(false);
 const error = ref<unknown>(null);
@@ -52,7 +55,7 @@ function openDetail(row: AgentBrief): void {
             <el-button :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
         </div>
 
-        <el-table :data="page?.items ?? []" v-loading="loading" border stripe @row-click="openDetail" class="clickable">
+        <el-table v-if="!mobile" :data="page?.items ?? []" v-loading="loading" border stripe @row-click="openDetail" class="clickable">
             <el-table-column label="标题" min-width="240" show-overflow-tooltip>
                 <template #default="{ row }: { row: AgentBrief }">
                     <span class="muted">#{{ row.id }}</span>
@@ -72,6 +75,25 @@ function openDetail(row: AgentBrief): void {
                 <template #default="{ row }: { row: AgentBrief }">{{ datetime(row.created_at) }}</template>
             </el-table-column>
         </el-table>
+
+        <!-- 手机：卡片列表，点开看全文 -->
+        <div v-else class="brief-cards" v-loading="loading">
+            <el-card v-for="row in page?.items ?? []" :key="row.id" shadow="never" class="brief-card" @click="openDetail(row)">
+                <div class="card-title">
+                    <span class="muted">#{{ row.id }}</span>
+                    {{ row.title }}
+                </div>
+                <div class="card-tags" v-if="row.corrected_by_brief_id || row.corrects_brief_id">
+                    <el-tag v-if="row.corrected_by_brief_id" type="warning" size="small">已更正，见 #{{ row.corrected_by_brief_id }}</el-tag>
+                    <el-tag v-else-if="row.corrects_brief_id" type="info" size="small">更正 #{{ row.corrects_brief_id }}</el-tag>
+                </div>
+                <div class="card-meta muted">
+                    <span>{{ row.agent_name }}</span>
+                    <span>{{ row.period_start }} ~ {{ row.period_end }}</span>
+                    <span>{{ datetime(row.created_at) }}</span>
+                </div>
+            </el-card>
+        </div>
 
         <el-empty v-if="!loading && (page?.items.length ?? 0) === 0" description="还没有简报" />
 
@@ -123,5 +145,38 @@ function openDetail(row: AgentBrief): void {
     margin: 0;
     max-height: 60vh;
     overflow: auto;
+}
+
+/* 手机卡片列表 */
+.brief-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-height: 60px;
+}
+.brief-card {
+    cursor: pointer;
+}
+.brief-card :deep(.el-card__body) {
+    padding: 12px 14px;
+}
+.card-title {
+    font-size: 15px;
+    font-weight: 600;
+    word-break: break-word;
+}
+.card-title .muted {
+    font-weight: 400;
+    margin-right: 4px;
+}
+.card-tags {
+    margin-top: 4px;
+}
+.card-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 6px;
+    font-size: 12px;
 }
 </style>

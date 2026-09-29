@@ -8,7 +8,7 @@
 
 import { computed, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
-import { Plus, Refresh, Upload } from "@element-plus/icons-vue";
+import { Filter, Plus, Refresh, Upload } from "@element-plus/icons-vue";
 import { ElMessageBox } from "element-plus";
 import {
     keel,
@@ -22,9 +22,13 @@ import { IdempotentSubmission, withIdempotency } from "../api/idempotency.ts";
 import { datetime, PRODUCT_STATUS, priceRange } from "../ui/format.ts";
 import { notifyError, notifyOk } from "../ui/notify.ts";
 import { can, NO_PERMISSION } from "../auth/permissions.ts";
+import { useMobile } from "../ui/useMobile.ts";
 import ProblemAlert from "../components/ProblemAlert.vue";
 
 const router = useRouter();
+const mobile = useMobile();
+/** 手机上筛选区折叠成一个按钮，点开才展开——判据同 useMobile 的断点。 */
+const filtersOpen = ref(false);
 
 const loading = ref(false);
 const error = ref<unknown>(null);
@@ -172,24 +176,29 @@ async function removeProduct(row: AdminProduct): Promise<void> {
         <ProblemAlert v-if="error" :error="error" />
 
         <div class="page-toolbar">
-            <el-select v-model="filterStatus" placeholder="全部状态" clearable style="width: 140px" @change="resetAndLoad">
-                <el-option :value="0" label="草稿" />
-                <el-option :value="1" label="上架" />
-                <el-option :value="2" label="下架" />
-            </el-select>
+            <template v-if="!mobile">
+                <el-select v-model="filterStatus" placeholder="全部状态" clearable style="width: 140px" @change="resetAndLoad">
+                    <el-option :value="0" label="草稿" />
+                    <el-option :value="1" label="上架" />
+                    <el-option :value="2" label="下架" />
+                </el-select>
 
-            <el-select
-                v-model="filterCategory"
-                placeholder="全部类目"
-                clearable
-                filterable
-                style="width: 220px"
-                @change="resetAndLoad"
-            >
-                <el-option v-for="c in categories" :key="c.id" :value="c.id" :label="indentedLabel(c)" />
-            </el-select>
+                <el-select
+                    v-model="filterCategory"
+                    placeholder="全部类目"
+                    clearable
+                    filterable
+                    style="width: 220px"
+                    @change="resetAndLoad"
+                >
+                    <el-option v-for="c in categories" :key="c.id" :value="c.id" :label="indentedLabel(c)" />
+                </el-select>
 
-            <el-checkbox v-model="includeDeleted" @change="resetAndLoad">含已软删</el-checkbox>
+                <el-checkbox v-model="includeDeleted" @change="resetAndLoad">含已软删</el-checkbox>
+            </template>
+            <el-button v-else :icon="Filter" @click="filtersOpen = !filtersOpen">
+                筛选{{ filtersOpen ? "▲" : "▼" }}
+            </el-button>
 
             <span class="grow" />
 
@@ -198,7 +207,65 @@ async function removeProduct(row: AdminProduct): Promise<void> {
             <el-button type="primary" :icon="Plus" :disabled="!can.editCatalog()" :title="can.editCatalog() ? '' : NO_PERMISSION" @click="openCreate">新建商品</el-button>
         </div>
 
-        <el-table :data="page?.items ?? []" v-loading="loading" border stripe row-key="id">
+        <div v-if="mobile && filtersOpen" class="mobile-filters">
+            <el-select v-model="filterStatus" placeholder="全部状态" clearable @change="resetAndLoad">
+                <el-option :value="0" label="草稿" />
+                <el-option :value="1" label="上架" />
+                <el-option :value="2" label="下架" />
+            </el-select>
+            <el-select v-model="filterCategory" placeholder="全部类目" clearable filterable @change="resetAndLoad">
+                <el-option v-for="c in categories" :key="c.id" :value="c.id" :label="indentedLabel(c)" />
+            </el-select>
+            <el-checkbox v-model="includeDeleted" @change="resetAndLoad">含已软删</el-checkbox>
+        </div>
+
+        <!-- 手机：卡片列表 -->
+        <div v-if="mobile" v-loading="loading" class="product-cards">
+            <router-link
+                v-for="row in page?.items ?? []"
+                :key="row.id"
+                :to="{ name: 'product-detail', params: { productId: row.id } }"
+                class="product-card"
+            >
+                <div class="card-top">
+                    <div class="card-main">
+                        <div class="card-title">{{ row.title }}</div>
+                        <div v-if="row.subtitle" class="hint">{{ row.subtitle }}</div>
+                        <div class="card-price">{{ priceRange(row.min_price_cents, row.max_price_cents) }}</div>
+                        <div class="card-meta">
+                            <el-tag :type="PRODUCT_STATUS[row.status].tag" size="small">
+                                {{ PRODUCT_STATUS[row.status].text }}
+                            </el-tag>
+                            <el-tag v-if="row.deleted_at" type="danger" size="small" class="ml4">已删</el-tag>
+                            <span class="hint ml8">库存 {{ row.total_stock }}</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="card-actions" @click.stop.prevent>
+                    <el-button
+                        size="small"
+                        :disabled="!!row.deleted_at || !can.editCatalog()"
+                        :title="can.editCatalog() ? '' : NO_PERMISSION"
+                        @click="togglePublication(row)"
+                    >
+                        {{ row.status === 1 ? "下架" : "上架" }}
+                    </el-button>
+                    <el-button
+                        size="small"
+                        type="danger"
+                        plain
+                        :disabled="!!row.deleted_at || !can.editCatalog()"
+                        :title="can.editCatalog() ? '' : NO_PERMISSION"
+                        @click="removeProduct(row)"
+                    >
+                        删除
+                    </el-button>
+                </div>
+            </router-link>
+            <el-empty v-if="!loading && (page?.items?.length ?? 0) === 0" description="没有商品" :image-size="70" />
+        </div>
+
+        <el-table v-else :data="page?.items ?? []" v-loading="loading" border stripe row-key="id">
             <el-table-column prop="id" label="ID" width="80" />
             <el-table-column label="标题" min-width="220">
                 <template #default="{ row }: { row: AdminProduct }">
@@ -317,5 +384,63 @@ async function removeProduct(row: AdminProduct): Promise<void> {
 }
 .ml4 {
     margin-left: 4px;
+}
+.ml8 {
+    margin-left: 8px;
+}
+
+/* ---------------------------------------------------------- 手机：筛选 / 卡片 */
+.mobile-filters {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+.mobile-filters .el-select {
+    width: 100%;
+}
+.product-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+.product-card {
+    display: block;
+    border: 1px solid var(--el-border-color-light);
+    border-radius: 8px;
+    padding: 12px;
+    background: var(--el-bg-color);
+    text-decoration: none;
+    color: inherit;
+}
+.card-top {
+    display: flex;
+    gap: 10px;
+}
+.card-main {
+    flex: 1;
+    min-width: 0;
+}
+.card-title {
+    font-weight: 600;
+    line-height: 1.4;
+    word-break: break-all;
+}
+.card-price {
+    margin-top: 4px;
+    font-size: 14px;
+}
+.card-meta {
+    margin-top: 4px;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+.card-actions {
+    margin-top: 10px;
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
 }
 </style>

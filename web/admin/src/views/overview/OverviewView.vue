@@ -44,11 +44,13 @@ import {
 import { merchantWide } from "../../auth/permissions.ts";
 import { yuan } from "../../ui/format.ts";
 import { notifyError } from "../../ui/notify.ts";
+import { useMobile } from "../../ui/useMobile.ts";
 import ProblemAlert from "../../components/ProblemAlert.vue";
 import TrendChart from "./TrendChart.vue";
 
 const route = useRoute();
 const router = useRouter();
+const mobile = useMobile();
 
 // 地址栏的 ?period= 决定打开时看哪一段（今日 / 近 7 天……），方便把一个视图发给别人。
 const initialPeriod = PERIOD_OPTIONS.find((o) => o.value === route.query["period"] && o.value !== "custom")?.value ?? "today";
@@ -342,7 +344,7 @@ function openStore(id: number): void {
                     </div>
                 </template>
                 <ProblemAlert v-if="products.error" :error="products.error" />
-                <el-table v-loading="products.loading" :data="products.data?.items ?? []" size="small" empty-text="这段时间没有成交">
+                <el-table v-if="!mobile" v-loading="products.loading" :data="products.data?.items ?? []" size="small" empty-text="这段时间没有成交">
                     <el-table-column prop="rank" label="#" width="44" />
                     <el-table-column label="商品" min-width="160" show-overflow-tooltip>
                         <template #default="{ row }">
@@ -361,6 +363,23 @@ function openStore(id: number): void {
                         </template>
                     </el-table-column>
                 </el-table>
+
+                <!-- 手机：排行改成一行一个商品的列表 -->
+                <div v-else class="rank-list" v-loading="products.loading">
+                    <div v-for="row in products.data?.items ?? []" :key="row.rank" class="rank-item">
+                        <span class="rank-no">{{ row.rank }}</span>
+                        <div class="rank-body">
+                            <router-link :to="{ name: 'product-detail', params: { productId: String(row.product_id) } }" class="rank-title">
+                                {{ row.title }}
+                            </router-link>
+                            <div class="rank-meta muted">销量 {{ row.quantity }} · 销售额 {{ yuan(row.amount_cents) }}</div>
+                            <div v-if="row.refunded_quantity > 0" class="rank-meta muted">
+                                已退 {{ row.refunded_quantity }} 件 / {{ yuan(row.refunded_amount_cents) }}
+                            </div>
+                        </div>
+                    </div>
+                    <el-empty v-if="(products.data?.items.length ?? 0) === 0 && !products.loading" description="这段时间没有成交" :image-size="50" />
+                </div>
                 <p class="foot">销售额 = 订单行实付分摊（不含运费），按支付时间计；「已退」是这些订单行截至此刻已退的，不按退款时间切。</p>
             </el-card>
 
@@ -413,7 +432,7 @@ function openStore(id: number): void {
                     </div>
                 </template>
                 <ProblemAlert v-if="alerts.error" :error="alerts.error" />
-                <el-table v-loading="alerts.loading" :data="alerts.data?.items ?? []" size="small" empty-text="没有低于预警线的库存" max-height="360">
+                <el-table v-if="!mobile" v-loading="alerts.loading" :data="alerts.data?.items ?? []" size="small" empty-text="没有低于预警线的库存" max-height="360">
                     <el-table-column label="门店" prop="store_name" width="120" show-overflow-tooltip />
                     <el-table-column label="商品 / 规格" min-width="160" show-overflow-tooltip>
                         <template #default="{ row }">
@@ -430,6 +449,23 @@ function openStore(id: number): void {
                         </template>
                     </el-table-column>
                 </el-table>
+
+                <!-- 手机：预警改成卡片列表 -->
+                <div v-else class="alert-list" v-loading="alerts.loading">
+                    <div v-for="(row, i) in alerts.data?.items ?? []" :key="i" class="alert-item">
+                        <div class="alert-top">
+                            <span class="alert-title">{{ row.product_title }}</span>
+                            <el-tag size="small" :type="row.available_qty === 0 ? 'danger' : 'warning'">
+                                {{ row.available_qty === 0 ? "卖空" : "偏低" }}
+                            </el-tag>
+                        </div>
+                        <div class="alert-meta muted">
+                            {{ row.store_name }} · {{ Object.values(row.spec_values).join(" / ") || row.sku_code }}
+                        </div>
+                        <div class="alert-meta muted">可售 {{ row.available_qty }} / 预警线 {{ row.warning_qty }}</div>
+                    </div>
+                    <el-empty v-if="(alerts.data?.items.length ?? 0) === 0 && !alerts.loading" description="没有低于预警线的库存" :image-size="50" />
+                </div>
             </el-card>
 
             <!-- 搜索概况 -->
@@ -620,5 +656,83 @@ function openStore(id: number): void {
 .terms li small {
     margin-left: 8px;
     color: var(--el-text-color-secondary);
+}
+
+/* 手机：商品排行列表 */
+.rank-list {
+    display: flex;
+    flex-direction: column;
+    min-height: 60px;
+}
+.rank-item {
+    display: flex;
+    gap: 10px;
+    padding: 8px 0;
+    border-bottom: 1px dashed var(--el-border-color-lighter);
+}
+.rank-item:last-child {
+    border-bottom: none;
+}
+.rank-no {
+    flex: 0 0 auto;
+    width: 20px;
+    color: var(--el-text-color-secondary);
+    font-variant-numeric: tabular-nums;
+}
+.rank-body {
+    flex: 1;
+    min-width: 0;
+}
+.rank-title {
+    display: block;
+    word-break: break-word;
+}
+.rank-meta {
+    font-size: 12px;
+    margin-top: 2px;
+}
+
+/* 手机：库存预警列表 */
+.alert-list {
+    display: flex;
+    flex-direction: column;
+    min-height: 60px;
+}
+.alert-item {
+    padding: 8px 0;
+    border-bottom: 1px dashed var(--el-border-color-lighter);
+}
+.alert-item:last-child {
+    border-bottom: none;
+}
+.alert-top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px;
+}
+.alert-title {
+    flex: 1;
+    word-break: break-word;
+    font-size: 13px;
+}
+.alert-meta {
+    font-size: 12px;
+    margin-top: 2px;
+}
+
+@media (max-width: 768px) {
+    .cards {
+        grid-template-columns: repeat(2, 1fr);
+    }
+    .bar-row {
+        grid-template-columns: 96px 1fr 96px;
+        gap: 6px;
+        font-size: 12px;
+    }
+    .bar-value small {
+        display: block;
+        margin-left: 0;
+    }
 }
 </style>

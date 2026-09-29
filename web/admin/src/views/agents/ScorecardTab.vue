@@ -10,7 +10,10 @@ import { Refresh } from "@element-plus/icons-vue";
 import { keel, type AdminAgent, type AgentScorecard, type AgentScorecardEntry, type AgentScorecardKind } from "../../api/client.ts";
 import { KIND_LABEL, VERDICT, describeOutcome, safeRatePercent, type AgentProposalKind } from "../../api/agentProposalRules.ts";
 import { datetime } from "../../ui/format.ts";
+import { useMobile } from "../../ui/useMobile.ts";
 import ProblemAlert from "../../components/ProblemAlert.vue";
+
+const mobile = useMobile();
 
 const loading = ref(false);
 const error = ref<unknown>(null);
@@ -68,6 +71,24 @@ function positiveRate(k: AgentScorecardKind): string {
 function approveRate(k: AgentScorecardKind): string {
     return safeRatePercent(k.approved, k.proposed);
 }
+
+/** 手机卡片：宽表的每一列在这里变成一行「标签：值」，两列键值排布（见 styles.css 的 .kv-grid）。 */
+function kindStats(k: AgentScorecardKind): { label: string; value: string | number }[] {
+    return [
+        { label: "提案", value: k.proposed },
+        { label: "批准", value: k.approved },
+        { label: "批准率", value: approveRate(k) },
+        { label: "执行成功", value: k.executed },
+        { label: "失败", value: k.failed },
+        { label: "驳回", value: k.rejected },
+        { label: "过期", value: k.expired },
+        { label: "待处理", value: k.open },
+        { label: "正面", value: k.positive },
+        { label: "中性", value: k.neutral },
+        { label: "负面", value: k.negative },
+        { label: "正面率", value: positiveRate(k) },
+    ];
+}
 </script>
 
 <template>
@@ -87,7 +108,7 @@ function approveRate(k: AgentScorecardKind): string {
         <template v-if="card">
             <p class="hint">统计区间：{{ datetime(card.since) }} 至今（近 30 天）</p>
 
-            <el-table :data="card.kinds" v-loading="loading" border stripe size="small">
+            <el-table v-if="!mobile" :data="card.kinds" v-loading="loading" border stripe size="small">
                 <el-table-column label="种类" width="100">
                     <template #default="{ row }: { row: AgentScorecardKind }">{{ kindLabel(row.kind) }}</template>
                 </el-table-column>
@@ -109,8 +130,21 @@ function approveRate(k: AgentScorecardKind): string {
                 </el-table-column>
             </el-table>
 
+            <!-- 手机：每个种类一张卡片，统计两列键值排 -->
+            <div v-else class="kind-cards" v-loading="loading">
+                <el-card v-for="row in card.kinds" :key="row.kind" shadow="never" class="kind-card">
+                    <div class="kind-title">{{ kindLabel(row.kind) }}</div>
+                    <div class="kv-grid">
+                        <div v-for="s in kindStats(row)" :key="s.label" class="kv-item">
+                            <span class="kv-label">{{ s.label }}</span>
+                            <span class="kv-value">{{ s.value }}</span>
+                        </div>
+                    </div>
+                </el-card>
+            </div>
+
             <h4 class="section-title">最近已复盘</h4>
-            <el-table :data="card.recent" border stripe size="small">
+            <el-table v-if="!mobile" :data="card.recent" border stripe size="small">
                 <el-table-column label="标题" min-width="220" show-overflow-tooltip>
                     <template #default="{ row }: { row: AgentScorecardEntry }">{{ row.title }}</template>
                 </el-table-column>
@@ -132,6 +166,21 @@ function approveRate(k: AgentScorecardKind): string {
                     <template #default="{ row }: { row: AgentScorecardEntry }">{{ datetime(row.outcome_at) }}</template>
                 </el-table-column>
             </el-table>
+
+            <!-- 手机：最近复盘也是卡片 -->
+            <div v-else class="recent-cards">
+                <el-card v-for="(row, i) in card.recent" :key="i" shadow="never" class="recent-card">
+                    <div class="card-head">
+                        <span class="card-title">{{ row.title }}</span>
+                        <el-tag v-if="verdictOf(row).verdict" :type="VERDICT[verdictOf(row).verdict!].tag" size="small">
+                            {{ VERDICT[verdictOf(row).verdict!].text }}
+                        </el-tag>
+                        <span v-else class="muted">—</span>
+                    </div>
+                    <div class="card-meta muted">{{ kindLabel(row.kind) }} · {{ datetime(row.outcome_at) }}</div>
+                    <p v-if="verdictOf(row).explanation" class="explanation">{{ verdictOf(row).explanation }}</p>
+                </el-card>
+            </div>
             <el-empty v-if="card.recent.length === 0" description="还没有已复盘的提案" :image-size="50" />
         </template>
     </div>
@@ -145,5 +194,70 @@ function approveRate(k: AgentScorecardKind): string {
 }
 .muted {
     color: var(--el-text-color-secondary);
+}
+
+/* 手机：种类统计卡片 */
+.kind-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-height: 60px;
+}
+.kind-card :deep(.el-card__body) {
+    padding: 12px 14px;
+}
+.kind-title {
+    font-size: 15px;
+    font-weight: 600;
+    margin-bottom: 8px;
+}
+.kv-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px 12px;
+}
+.kv-item {
+    display: flex;
+    justify-content: space-between;
+    font-size: 13px;
+    padding: 2px 0;
+    border-bottom: 1px dashed var(--el-border-color-lighter);
+}
+.kv-label {
+    color: var(--el-text-color-secondary);
+}
+.kv-value {
+    font-variant-numeric: tabular-nums;
+}
+
+/* 手机：最近复盘卡片 */
+.recent-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+.recent-card :deep(.el-card__body) {
+    padding: 12px 14px;
+}
+.card-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px;
+}
+.card-title {
+    flex: 1;
+    font-weight: 600;
+    word-break: break-word;
+}
+.card-meta {
+    margin-top: 4px;
+    font-size: 12px;
+}
+.explanation {
+    margin: 6px 0 0;
+    font-size: 13px;
+    white-space: pre-wrap;
+    word-break: break-word;
 }
 </style>

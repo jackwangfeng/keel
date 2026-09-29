@@ -372,3 +372,12 @@ Makefile 里的 `TSC` 同一个版本 —— 免得两道 TS 闸门用两个编�
 更好的形态是服务端下发 HttpOnly Cookie，但契约把 token 放在响应体里
 （`StaffSession.token`）并要求 `Authorization: Bearer` —— 前端**没有**把它
 藏进 HttpOnly 的办法。这是契约层面的事，不是界面能自己解决的。
+
+## 手机浏览器
+
+后台在手机浏览器上可用（≤ 768px，断点在 `src/ui/useMobile.ts` 与 `src/styles.css` 两处）：菜单收进左上角抽屉，
+表单单列、弹窗不出屏；订单、售后、多收款退回、AI 员工（提案 / 简报 / 成绩单 / 密钥）、经营概览、商品、门店与库存
+这些高频页在手机上换成卡片列表，电脑上仍是原来的表格（`v-if="!mobile"`）。
+
+改了页面之后跑 `make admin-responsive-check`（手机 390px + 电脑 1440px 两种尺寸逐页检查并截图）；
+要在发布前检查本地构建，用 `LOCAL_DIST=<vite build 产物目录>`（见脚本文件头）。

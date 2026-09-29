@@ -37,12 +37,14 @@ import { fieldErrorsOf } from "../api/errors.ts";
 import { datetime, PRODUCT_STATUS, SKU_STATUS, yuan } from "../ui/format.ts";
 import { notifyError, notifyOk } from "../ui/notify.ts";
 import { can, NO_PERMISSION } from "../auth/permissions.ts";
+import { useMobile } from "../ui/useMobile.ts";
 import ProblemAlert from "../components/ProblemAlert.vue";
 import HighlightedText from "../components/HighlightedText.vue";
 import InventoryDialog, { type InventoryTarget } from "../components/InventoryDialog.vue";
 
 const props = defineProps<{ productId: string }>();
 const router = useRouter();
+const mobile = useMobile();
 
 const id = computed(() => Number(props.productId));
 
@@ -509,7 +511,7 @@ function onInventoryUpdated(inv: AdminInventory): void {
                         </el-form-item>
                     </el-form>
 
-                    <el-descriptions :column="3" border size="small" class="derived">
+                    <el-descriptions :column="mobile ? 1 : 3" border size="small" class="derived">
                         <el-descriptions-item label="价格区间">
                             {{ yuan(product.min_price_cents) }} ~ {{ yuan(product.max_price_cents) }}
                         </el-descriptions-item>
@@ -573,7 +575,38 @@ function onInventoryUpdated(inv: AdminInventory): void {
                         <el-button type="primary" :icon="Plus" :disabled="!can.editCatalog()" :title="can.editCatalog() ? '' : NO_PERMISSION" @click="openSkuCreate">加 SKU</el-button>
                     </div>
 
-                    <el-table :data="product.skus" border stripe>
+                    <!-- 手机：SKU 卡片 -->
+                    <div v-if="mobile" class="sku-cards">
+                        <div v-for="row in product.skus" :key="row.id" class="sku-card">
+                            <div class="sku-card-row">
+                                <b>{{ row.sku_code }}</b>
+                                <el-tag :type="SKU_STATUS[row.status].tag" size="small" class="ml4">
+                                    {{ SKU_STATUS[row.status].text }}
+                                </el-tag>
+                            </div>
+                            <div v-if="Object.keys(row.spec_values ?? {}).length > 0" class="sku-card-row">
+                                <el-tag v-for="(v, k) in row.spec_values ?? {}" :key="k" size="small" class="mr4">
+                                    {{ k }}：{{ v }}
+                                </el-tag>
+                            </div>
+                            <div class="sku-card-row">
+                                <span>售价 {{ yuan(row.price_cents) }}</span>
+                                <span class="hint ml8">成本 {{ row.cost_cents === undefined ? "—" : yuan(row.cost_cents) }}</span>
+                            </div>
+                            <div class="sku-card-row">
+                                可售库存：<b>{{ row.available_qty }}</b>
+                                <span v-if="row.warning_qty" class="hint"> / 预警 {{ row.warning_qty }}</span>
+                            </div>
+                            <div class="sku-card-actions">
+                                <el-button size="small" type="primary" :disabled="!can.editCatalog()" :title="can.editCatalog() ? '' : NO_PERMISSION" @click="openSkuEdit(row)">编辑</el-button>
+                                <el-button size="small" type="primary" @click="openInventory(row)">改库存</el-button>
+                                <el-button size="small" type="danger" plain :disabled="!can.editCatalog()" :title="can.editCatalog() ? '' : NO_PERMISSION" @click="removeSku(row)">删除</el-button>
+                            </div>
+                        </div>
+                        <el-empty v-if="product.skus.length === 0" description="还没有 SKU" :image-size="70" />
+                    </div>
+
+                    <el-table v-else :data="product.skus" border stripe>
                         <el-table-column prop="sku_code" label="货号" width="140" />
                         <el-table-column label="规格" min-width="160">
                             <template #default="{ row }: { row: AdminSku }">
@@ -739,5 +772,31 @@ function onInventoryUpdated(inv: AdminInventory): void {
     display: flex;
     gap: 8px;
     margin-bottom: 6px;
+}
+
+/* -------------------------------------------------------------- 手机：SKU 卡片 */
+.sku-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+.sku-card {
+    border: 1px solid var(--el-border-color-light);
+    border-radius: 8px;
+    padding: 10px 12px;
+}
+.sku-card-row {
+    margin-bottom: 4px;
+    line-height: 1.6;
+}
+.sku-card-row:last-of-type {
+    margin-bottom: 0;
+}
+.sku-card-actions {
+    margin-top: 8px;
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    flex-wrap: wrap;
 }
 </style>

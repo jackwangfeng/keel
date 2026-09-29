@@ -13,11 +13,13 @@ import { listAllStores } from "../../api/stores.ts";
 import { REFUND_STATUS, REFUND_TYPE, refundQuery, type RefundFilterForm } from "../../api/orderRules.ts";
 import { datetime, yuan } from "../../ui/format.ts";
 import { notifyError } from "../../ui/notify.ts";
+import { useMobile } from "../../ui/useMobile.ts";
 import ProblemAlert from "../../components/ProblemAlert.vue";
 import RefundDetailDrawer from "./RefundDetailDrawer.vue";
 
 const route = useRoute();
 const router = useRouter();
+const mobile = useMobile();
 
 const loading = ref(false);
 const error = ref<unknown>(null);
@@ -74,13 +76,30 @@ watch(
 );
 
 const statusOptions = Object.entries(REFUND_STATUS).map(([k, v]) => ({ value: Number(k) as keyof typeof REFUND_STATUS, label: v.text }));
+
+// ------------------------------------------------------------------ 手机：筛选区折叠
+
+const filtersOpen = ref(false);
+const activeFilterCount = computed(() => {
+    let n = 0;
+    if (filters.value.status !== undefined && filters.value.status !== null) n++;
+    if (filters.value.storeId !== undefined && filters.value.storeId !== null) n++;
+    if (filters.value.dateRange && filters.value.dateRange.length > 0) n++;
+    return n;
+});
 </script>
 
 <template>
     <div>
         <ProblemAlert v-if="error" :error="error" />
 
-        <el-form :inline="true" class="filters" @submit.prevent="search">
+        <div v-if="mobile" class="filter-toggle">
+            <el-button :type="activeFilterCount > 0 ? 'primary' : 'default'" plain @click="filtersOpen = !filtersOpen">
+                筛选<template v-if="activeFilterCount > 0">（{{ activeFilterCount }}）</template>
+            </el-button>
+        </div>
+
+        <el-form v-show="!mobile || filtersOpen" :inline="true" class="filters" @submit.prevent="search">
             <el-form-item label="状态">
                 <el-select v-model="filters.status" clearable placeholder="全部" style="width: 140px">
                     <el-option v-for="o in statusOptions" :key="o.value" :label="o.label" :value="o.value" />
@@ -116,6 +135,7 @@ const statusOptions = Object.entries(REFUND_STATUS).map(([k, v]) => ({ value: Nu
         </el-form>
 
         <el-table
+            v-if="!mobile"
             v-loading="loading"
             :data="page?.items ?? []"
             row-key="refund_no"
@@ -150,6 +170,27 @@ const statusOptions = Object.entries(REFUND_STATUS).map(([k, v]) => ({ value: Nu
             </el-table-column>
         </el-table>
 
+        <div v-else v-loading="loading" class="refund-cards">
+            <el-empty v-if="!loading && (page?.items?.length ?? 0) === 0" description="没有符合条件的退款单" />
+            <div v-for="row in page?.items ?? []" :key="row.refund_no" class="refund-card" @click="openDetail(row)">
+                <div class="rc-top">
+                    <el-link type="primary" class="rc-no">{{ row.refund_no }}</el-link>
+                    <span class="rc-amount">{{ yuan(row.amount_cents) }}</span>
+                </div>
+                <div class="hint">订单 {{ row.order_no }}</div>
+                <div class="rc-tags">
+                    <el-tag size="small" :type="REFUND_STATUS[row.status as keyof typeof REFUND_STATUS].tag">
+                        {{ REFUND_STATUS[row.status as keyof typeof REFUND_STATUS].text }}
+                    </el-tag>
+                    <el-tag size="small" type="info">{{ REFUND_TYPE[row.refund_type as keyof typeof REFUND_TYPE] }}</el-tag>
+                </div>
+                <div class="rc-info">
+                    <span>{{ row.store.store_name || `门店 #${row.store_id}` }}</span>
+                    <span>{{ datetime(row.created_at) }}</span>
+                </div>
+            </div>
+        </div>
+
         <el-pagination
             v-if="page"
             class="pager"
@@ -183,5 +224,47 @@ const statusOptions = Object.entries(REFUND_STATUS).map(([k, v]) => ({ value: Nu
 .pager {
     margin-top: 12px;
     justify-content: flex-end;
+}
+.filter-toggle {
+    margin-bottom: 8px;
+}
+.refund-cards {
+    min-height: 60px;
+}
+.refund-card {
+    border: 1px solid var(--el-border-color-lighter);
+    border-radius: 8px;
+    padding: 12px;
+    margin-bottom: 10px;
+    background: var(--el-bg-color);
+}
+.rc-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+}
+.rc-no {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 65%;
+}
+.rc-amount {
+    font-weight: 600;
+}
+.rc-tags {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+    margin-top: 6px;
+}
+.rc-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-top: 8px;
+    font-size: 13px;
+    color: var(--el-text-color-secondary);
 }
 </style>

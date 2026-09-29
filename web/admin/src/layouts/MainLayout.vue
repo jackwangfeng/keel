@@ -4,7 +4,7 @@
 // 菜单上没有」，一个没人会主动去看的状态。
 import { computed, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { SwitchButton } from "@element-plus/icons-vue";
+import { Menu as MenuIcon, MoreFilled, SwitchButton } from "@element-plus/icons-vue";
 import { currentSession, keel, setSession } from "../api/client.ts";
 import { notifyError } from "../ui/notify.ts";
 import { sections } from "../router/modules/index.ts";
@@ -14,9 +14,17 @@ import NotificationBell from "../components/NotificationBell.vue";
 import { setMerchantScope } from "../api/merchantScope.ts";
 // 按角色的显示 / 置灰全在这个模块里，布局只调它（分级权限，v0.1.0）。
 import { roleLabel, sectionVisible } from "../auth/permissions.ts";
+import { useMobile } from "../ui/useMobile.ts";
 
 const route = useRoute();
 const router = useRouter();
+
+// 手机上（≤ 768px）左侧菜单收进抽屉，顶栏只留标题、铃铛、切店与「更多」；切页后抽屉自动收起。
+const mobile = useMobile();
+const drawerOpen = ref(false);
+watch(() => route.fullPath, () => {
+    drawerOpen.value = false;
+});
 
 const session = computed(() => currentSession());
 
@@ -91,8 +99,8 @@ function copyToken(): void {
 </script>
 
 <template>
-    <el-container class="shell">
-        <el-aside width="200px" class="aside">
+    <el-container class="shell" :class="{ 'is-mobile': mobile }">
+        <el-aside v-if="!mobile" width="200px" class="aside">
             <div class="brand">
                 <span class="brand-name">Keel</span>
                 <span class="brand-sub">商家后台</span>
@@ -104,17 +112,53 @@ function copyToken(): void {
                 </el-menu-item>
             </el-menu>
         </el-aside>
+        <el-drawer
+            v-if="mobile"
+            v-model="drawerOpen"
+            direction="ltr"
+            size="232px"
+            :with-header="false"
+            class="menu-drawer"
+        >
+            <div class="aside">
+                <div class="brand">
+                    <span class="brand-name">Keel</span>
+                    <span class="brand-sub">商家后台</span>
+                </div>
+                <el-menu :default-active="activeMenu" router class="menu">
+                    <el-menu-item v-for="item in menu" :key="item.path" :index="item.path">
+                        <el-icon><component :is="item.icon" /></el-icon>
+                        <span>{{ item.title }}</span>
+                    </el-menu-item>
+                </el-menu>
+                <div class="drawer-who">{{ session?.staff.email }}（{{ roleText }}）</div>
+            </div>
+        </el-drawer>
 
-        <el-container>
+        <el-container class="body">
             <el-header class="header">
-                <div class="crumb">{{ route.meta.title ?? "" }}</div>
+                <div class="crumb">
+                    <el-button v-if="mobile" class="menu-btn" text :icon="MenuIcon" aria-label="打开菜单" @click="drawerOpen = true" />
+                    <span class="crumb-title">{{ route.meta.title ?? "" }}</span>
+                </div>
                 <div class="who">
                     <NotificationBell />
                     <MerchantSwitcher />
                     <el-tag v-if="isPlatform" type="warning" size="small" effect="dark">平台级</el-tag>
-                    <span class="who-text">{{ session?.staff.email }}（{{ roleText }}）</span>
-                    <el-button link size="small" @click="copyToken">复制会话 token</el-button>
-                    <el-button link size="small" :icon="SwitchButton" @click="logout">退出</el-button>
+                    <template v-if="!mobile">
+                        <span class="who-text">{{ session?.staff.email }}（{{ roleText }}）</span>
+                        <el-button link size="small" @click="copyToken">复制会话 token</el-button>
+                        <el-button link size="small" :icon="SwitchButton" @click="logout">退出</el-button>
+                    </template>
+                    <el-dropdown v-else trigger="click">
+                        <el-button text :icon="MoreFilled" aria-label="更多" class="more-btn" />
+                        <template #dropdown>
+                            <el-dropdown-menu>
+                                <el-dropdown-item @click="copyToken">复制会话 token</el-dropdown-item>
+                                <el-dropdown-item :icon="SwitchButton" @click="logout">退出</el-dropdown-item>
+                            </el-dropdown-menu>
+                        </template>
+                    </el-dropdown>
                 </div>
             </el-header>
             <el-main class="main">
@@ -141,10 +185,20 @@ function copyToken(): void {
 .shell {
     height: 100vh;
 }
+.body {
+    min-width: 0; /* 不让里面的宽表格把整列撑出屏幕：flex 子项默认 min-width: auto */
+}
 .aside {
     background: #20222a;
     display: flex;
     flex-direction: column;
+    min-height: 100%;
+}
+.drawer-who {
+    padding: 12px 18px 18px;
+    font-size: 12px;
+    color: #9aa0ad;
+    word-break: break-all;
 }
 .brand {
     height: 60px;
@@ -180,8 +234,24 @@ function copyToken(): void {
     background: #fff;
 }
 .crumb {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
     font-size: 16px;
     font-weight: 600;
+}
+.crumb-title {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.menu-btn,
+.more-btn {
+    width: 40px;
+    height: 40px;
+    font-size: 20px;
+    padding: 0;
 }
 .who {
     display: flex;
@@ -195,5 +265,15 @@ function copyToken(): void {
 }
 .main {
     background: var(--el-bg-color-page);
+}
+.is-mobile .header {
+    padding: 0 8px 0 4px;
+}
+.is-mobile .who {
+    gap: 4px;
+    flex-shrink: 0;
+}
+.is-mobile .main {
+    padding: 12px;
 }
 </style>

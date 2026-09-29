@@ -20,7 +20,7 @@
 // 真要逐 SKU 回显，得在契约里加一条读接口。
 
 import { computed, onMounted, ref } from "vue";
-import { Refresh } from "@element-plus/icons-vue";
+import { ArrowDown, Refresh } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
 import {
     keel,
@@ -35,6 +35,7 @@ import { PRICE_SOURCE } from "../api/stores.ts";
 import { PRODUCT_STATUS, yuan } from "../ui/format.ts";
 import { notifyError, notifyOk } from "../ui/notify.ts";
 import { can, NO_PERMISSION } from "../auth/permissions.ts";
+import { useMobile } from "../ui/useMobile.ts";
 import ProblemAlert from "./ProblemAlert.vue";
 import InventoryDialog, { type InventoryTarget } from "./InventoryDialog.vue";
 
@@ -43,6 +44,7 @@ export type Scope =
     | { kind: "store"; id: number; name: string; regionName: string; regionId?: number };
 
 const props = defineProps<{ scope: Scope }>();
+const mobile = useMobile();
 
 const layer = computed(() => (props.scope.kind === "store" ? "本店" : "本大区"));
 
@@ -159,6 +161,29 @@ async function onExpand(row: ScopedProductListing, expanded: ScopedProductListin
     }
 }
 
+/** 手机卡片的展开/收起：el-table 的 expand-change 给不了这个形状，逻辑与 onExpand 同构。 */
+async function toggleExpandMobile(row: ScopedProductListing): Promise<void> {
+    const i = expandedKeys.value.indexOf(row.product_id);
+    if (i >= 0) {
+        expandedKeys.value.splice(i, 1);
+        return;
+    }
+    expandedKeys.value.push(row.product_id);
+    if (skusByProduct.value.has(row.product_id)) return;
+    try {
+        const detail = await keel.get("/admin/products/{product_id}", { path: { product_id: row.product_id } });
+        skusByProduct.value.set(row.product_id, detail.skus);
+        for (const sku of detail.skus) if (!priceDraft.value.has(sku.id)) priceDraft.value.set(sku.id, sku.price_cents);
+    } catch (err) {
+        skuLoadError.value.set(row.product_id, err);
+    }
+}
+
+/** 规格的可读文案，卡片与表格共用。 */
+function specText(sku: AdminSku): string {
+    return Object.entries(sku.spec_values ?? {}).map(([k, v]) => `${k}:${v}`).join(" / ") || "—";
+}
+
 async function setPrice(sku: AdminSku): Promise<void> {
     priceBusy.value = sku.id;
     try {
@@ -257,7 +282,107 @@ function onInventoryUpdated(inv: AdminInventory): void {
             <el-button :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
         </div>
 
+        <!-- 手机：卡片列表 -->
+        <div v-if="mobile" v-loading="loading" class="scoped-cards">
+            <div v-for="row in page?.items ?? []" :key="row.product_id" class="scoped-card">
+                <div class="scoped-card-head" @click="toggleExpandMobile(row)">
+                    <div class="scoped-card-title">
+                        <router-link
+                            :to="{ name: 'product-detail', params: { productId: row.product_id } }"
+                            @click.stop
+                        >
+                            {{ row.title }}
+                        </router-link>
+                        <el-tag v-if="row.status !== undefined" :type="PRODUCT_STATUS[row.status].tag" size="small" class="ml4">
+                            {{ PRODUCT_STATUS[row.status].text }}
+                        </el-tag>
+                    </div>
+                    <el-icon class="expand-icon" :class="{ open: expandedKeys.includes(row.product_id) }">
+                        <ArrowDown />
+                    </el-icon>
+                </div>
+
+                <div class="scoped-card-row">
+                    <span class="hint">{{ layer }}开关</span>
+                    <el-switch
+                        :model-value="row.listed"
+                        :loading="toggling === row.product_id"
+                        :disabled="!editable"
+                        @click.stop
+                        @update:model-value="(v: string | number | boolean) => setListed(row, v === true)"
+                    />
+                </div>
+                <div class="scoped-card-row">
+                    <span class="hint">买家看得见吗</span>
+                    <el-tag v-if="row.effective_listed" type="success" size="small">看得见</el-tag>
+                    <el-tag v-else type="danger" size="small">看不见</el-tag>
+                </div>
+                <div v-if="!row.effective_listed" class="reason">{{ invisibleReason(row) }}</div>
+                <div class="scoped-card-row">
+                    <span class="hint">生效价</span>
+                    <span>
+                        <template v-if="row.min_price_cents !== undefined">
+                            {{ yuan(row.min_price_cents) }}<template v-if="row.max_price_cents !== undefined && row.max_price_cents !== row.min_price_cents"> ~ {{ yuan(row.max_price_cents) }}</template>
+                        </template>
+                        <span v-else class="hint">—</span>
+                        <el-tag size="small" :type="PRICE_SOURCE[row.price_source].tag" class="ml4">
+                            {{ PRICE_SOURCE[row.price_source].text }}
+                        </el-tag>
+                    </span>
+                </div>
+
+                <div v-if="expandedKeys.includes(row.product_id)" class="scoped-card-skus" @click.stop>
+                    <ProblemAlert v-if="skuLoadError.get(row.product_id)" :error="skuLoadError.get(row.product_id)" />
+                    <div v-for="sku in skusByProduct.get(row.product_id) ?? []" :key="sku.id" class="sku-card">
+                        <div class="sku-card-row">
+                            <b>{{ sku.sku_code }}</b>
+                            <span class="hint ml8">{{ specText(sku) }}</span>
+                        </div>
+                        <div class="sku-card-row hint">基准价 {{ yuan(sku.price_cents) }}</div>
+                        <div class="sku-card-row price-row">
+                            <span class="hint">{{ layer }}价（分）</span>
+                            <el-input-number
+                                :model-value="priceDraft.get(sku.id) ?? sku.price_cents"
+                                :min="0"
+                                :step="100"
+                                size="small"
+                                @update:model-value="(v: number | undefined) => priceDraft.set(sku.id, v ?? 0)"
+                            />
+                        </div>
+                        <div class="sku-card-actions">
+                            <el-button size="small" type="primary" :loading="priceBusy === sku.id" :disabled="!editable" :title="editable ? '' : NO_PERMISSION" @click="setPrice(sku)">
+                                设价
+                            </el-button>
+                            <el-button size="small" :disabled="priceBusy === sku.id || !editable" @click="revokePrice(sku)">
+                                撤销
+                            </el-button>
+                        </div>
+                        <div class="sku-card-row">
+                            <span class="hint">生效价</span>
+                            <template v-if="priceResult.get(sku.id)">
+                                <b>{{ yuan(priceResult.get(sku.id)!.effective_price_cents) }}</b>
+                                <el-tag size="small" :type="PRICE_SOURCE[priceResult.get(sku.id)!.price_source].tag" class="ml4">
+                                    {{ PRICE_SOURCE[priceResult.get(sku.id)!.price_source].text }}
+                                </el-tag>
+                            </template>
+                            <span v-else class="hint">看上面这一行的区间</span>
+                        </div>
+                        <div v-if="scope.kind === 'store'" class="sku-card-row">
+                            <span class="hint">
+                                本店库存：{{ inventoryBySku.get(sku.id)?.available_qty ?? 0 }}
+                                <template v-if="!inventoryBySku.get(sku.id)">（未录入）</template>
+                            </span>
+                            <el-button size="small" type="primary" :disabled="!editable" @click="openInventory(sku)">改</el-button>
+                        </div>
+                    </div>
+                    <el-empty v-if="(skusByProduct.get(row.product_id) ?? []).length === 0" description="没有 SKU" :image-size="50" />
+                </div>
+            </div>
+            <el-empty v-if="!loading && (page?.items?.length ?? 0) === 0" description="没有商品" :image-size="70" />
+        </div>
+
         <el-table
+            v-else
             :data="page?.items ?? []"
             v-loading="loading"
             border
@@ -396,8 +521,81 @@ function onInventoryUpdated(inv: AdminInventory): void {
 .ml4 {
     margin-left: 4px;
 }
+.ml8 {
+    margin-left: 8px;
+}
 .pager {
     margin-top: 12px;
     justify-content: flex-end;
+}
+
+/* ---------------------------------------------------------------- 手机：卡片 */
+.scoped-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+.scoped-card {
+    border: 1px solid var(--el-border-color-light);
+    border-radius: 8px;
+    padding: 12px;
+}
+.scoped-card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+.scoped-card-title {
+    font-weight: 600;
+    word-break: break-all;
+}
+.expand-icon {
+    flex: none;
+    transition: transform 0.2s;
+    color: var(--el-text-color-secondary);
+}
+.expand-icon.open {
+    transform: rotate(180deg);
+}
+.scoped-card-row {
+    margin-top: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+.scoped-card-row.price-row {
+    justify-content: flex-start;
+}
+.scoped-card-skus {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px dashed var(--el-border-color-light);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.sku-card {
+    border: 1px solid var(--el-border-color-lighter);
+    border-radius: 6px;
+    padding: 8px 10px;
+    background: var(--el-fill-color-blank);
+}
+.sku-card-row {
+    margin-top: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+.sku-card-row:first-child {
+    margin-top: 0;
+}
+.sku-card-actions {
+    margin-top: 6px;
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
 }
 </style>

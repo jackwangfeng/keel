@@ -34,11 +34,13 @@ import {
 import { can } from "../../auth/permissions.ts";
 import { datetime, yuan } from "../../ui/format.ts";
 import { notifyOk } from "../../ui/notify.ts";
+import { useMobile } from "../../ui/useMobile.ts";
 import ProblemAlert from "../../components/ProblemAlert.vue";
 
 const props = defineProps<{ refundNo: string | null; stores: Map<number, AdminStore> }>();
 const emit = defineEmits<{ close: []; changed: [] }>();
 const router = useRouter();
+const mobile = useMobile();
 
 const visible = computed({
     get: () => props.refundNo !== null,
@@ -259,7 +261,7 @@ async function submitReceive(): Promise<void> {
                     </el-button>
                 </div>
 
-                <el-descriptions :column="2" border size="small" class="mb12">
+                <el-descriptions :column="mobile ? 1 : 2" border size="small" class="mb12">
                     <el-descriptions-item label="订单">
                         <el-link type="primary" @click="openOrder(refund.order_no)">{{ refund.order_no }}</el-link>
                         <el-tag size="small" class="ml4" :type="ORDER_STATUS[refund.order_status].tag">
@@ -277,15 +279,21 @@ async function submitReceive(): Promise<void> {
                 </el-descriptions>
 
                 <h4>退哪些（每一行的金额由服务端按优惠分摊算好）</h4>
-                <el-table :data="refund.items" size="small" class="mb12">
+                <el-table v-if="!mobile" :data="refund.items" size="small" class="mb12">
                     <el-table-column prop="title" label="商品" min-width="200" />
                     <el-table-column prop="quantity" label="件数" width="70" />
                     <el-table-column label="实退" width="110">
                         <template #default="{ row }">{{ yuan(row.amount_cents) }}</template>
                     </el-table-column>
                 </el-table>
+                <div v-else class="mobile-list mb12">
+                    <div v-for="(row, i) in refund.items" :key="i" class="mobile-row">
+                        <div class="mr-title">{{ row.title }}</div>
+                        <div class="mr-line">{{ row.quantity }} 件 · 实退 {{ yuan(row.amount_cents) }}</div>
+                    </div>
+                </div>
 
-                <el-descriptions :column="3" border size="small" class="mb12">
+                <el-descriptions :column="mobile ? 1 : 3" border size="small" class="mb12">
                     <el-descriptions-item label="货款">{{ yuan(refund.goods_amount_cents ?? 0) }}</el-descriptions-item>
                     <el-descriptions-item label="运费">{{ yuan(refund.freight_cents ?? 0) }}</el-descriptions-item>
                     <el-descriptions-item label="实退合计">
@@ -300,7 +308,7 @@ async function submitReceive(): Promise<void> {
                     <h4>寄回物流</h4>
                     <el-descriptions
                         v-if="refund.return_shipment"
-                        :column="3"
+                        :column="mobile ? 1 : 3"
                         border
                         size="small"
                         class="mb12"
@@ -449,6 +457,23 @@ async function submitReceive(): Promise<void> {
 }
 h4 {
     margin: 16px 0 8px;
+}
+.mobile-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.mobile-row {
+    border: 1px solid var(--el-border-color-lighter);
+    border-radius: 6px;
+    padding: 8px 10px;
+}
+.mr-title {
+    font-weight: 500;
+}
+.mr-line {
+    margin-top: 4px;
+    font-size: 13px;
 }
 .evidence {
     display: flex;

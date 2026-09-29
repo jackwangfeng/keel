@@ -34,6 +34,7 @@ import { listAllStoreInventories } from "../api/storeInventory.ts";
 import { datetime } from "../ui/format.ts";
 import { notifyError, notifyOk } from "../ui/notify.ts";
 import { can, NO_PERMISSION } from "../auth/permissions.ts";
+import { useMobile } from "../ui/useMobile.ts";
 import ProblemAlert from "../components/ProblemAlert.vue";
 import FenceEditor from "../components/FenceEditor.vue";
 import LocationPicker, { type LatLng } from "../components/LocationPicker.vue";
@@ -45,6 +46,7 @@ const props = defineProps<{ storeId: string }>();
 const route = useRoute();
 const router = useRouter();
 const id = computed(() => Number(props.storeId));
+const mobile = useMobile();
 
 const tabFromQuery = typeof route.query["tab"] === "string" ? route.query["tab"] : "basic";
 const tab = ref(
@@ -456,27 +458,55 @@ async function saveLocalDelivery(): Promise<void> {
                         <span class="grow" />
                         <el-button :icon="Refresh" :loading="invLoading" @click="loadInventory">刷新</el-button>
                     </div>
-                    <el-table :data="inventories" v-loading="invLoading" border stripe :row-class-name="({ row }: { row: AdminInventory }) => (row.sku_id === highlightSku ? 'hl-row' : '')">
-                        <el-table-column prop="sku_id" label="SKU ID" width="90" />
-                        <el-table-column label="货号" min-width="140">
-                            <template #default="{ row }: { row: AdminInventory }">{{ row.sku_code ?? "—" }}</template>
-                        </el-table-column>
-                        <el-table-column label="可售" width="100">
-                            <template #default="{ row }: { row: AdminInventory }">
-                                <b :class="{ low: row.available_qty <= row.warning_qty }">{{ row.available_qty }}</b>
-                            </template>
-                        </el-table-column>
-                        <el-table-column prop="warning_qty" label="预警线" width="100" />
-                        <el-table-column label="更新时间" width="180">
-                            <template #default="{ row }: { row: AdminInventory }">{{ datetime(row.updated_at) }}</template>
-                        </el-table-column>
-                        <el-table-column label="操作" width="120">
-                            <template #default="{ row }: { row: AdminInventory }">
-                                <el-button link type="primary" :disabled="!can.operateStore(store)" :title="can.operateStore(store) ? '' : NO_PERMISSION" @click="openInventory(row)">改库存</el-button>
-                            </template>
-                        </el-table-column>
-                    </el-table>
-                    <el-empty v-if="!invLoading && inventories.length === 0" description="这家店还没有任何库存行" :image-size="70" />
+                    <!-- 手机：库存卡片 -->
+                    <div v-if="mobile" v-loading="invLoading" class="inv-cards">
+                        <div
+                            v-for="row in inventories"
+                            :key="row.sku_id"
+                            class="inv-card"
+                            :class="{ 'hl-card': row.sku_id === highlightSku }"
+                        >
+                            <div class="inv-card-row">
+                                <b>{{ row.sku_code ?? `#${row.sku_id}` }}</b>
+                                <span class="hint">SKU {{ row.sku_id }}</span>
+                            </div>
+                            <div class="inv-card-row">
+                                <span>可售：<b :class="{ low: row.available_qty <= row.warning_qty }">{{ row.available_qty }}</b></span>
+                                <span class="hint">预警线 {{ row.warning_qty }}</span>
+                            </div>
+                            <div class="inv-card-row hint">更新于 {{ datetime(row.updated_at) }}</div>
+                            <div class="inv-card-actions">
+                                <el-button size="small" type="primary" :disabled="!can.operateStore(store)" :title="can.operateStore(store) ? '' : NO_PERMISSION" @click="openInventory(row)">
+                                    改库存
+                                </el-button>
+                            </div>
+                        </div>
+                        <el-empty v-if="!invLoading && inventories.length === 0" description="这家店还没有任何库存行" :image-size="70" />
+                    </div>
+
+                    <template v-else>
+                        <el-table :data="inventories" v-loading="invLoading" border stripe :row-class-name="({ row }: { row: AdminInventory }) => (row.sku_id === highlightSku ? 'hl-row' : '')">
+                            <el-table-column prop="sku_id" label="SKU ID" width="90" />
+                            <el-table-column label="货号" min-width="140">
+                                <template #default="{ row }: { row: AdminInventory }">{{ row.sku_code ?? "—" }}</template>
+                            </el-table-column>
+                            <el-table-column label="可售" width="100">
+                                <template #default="{ row }: { row: AdminInventory }">
+                                    <b :class="{ low: row.available_qty <= row.warning_qty }">{{ row.available_qty }}</b>
+                                </template>
+                            </el-table-column>
+                            <el-table-column prop="warning_qty" label="预警线" width="100" />
+                            <el-table-column label="更新时间" width="180">
+                                <template #default="{ row }: { row: AdminInventory }">{{ datetime(row.updated_at) }}</template>
+                            </el-table-column>
+                            <el-table-column label="操作" width="120">
+                                <template #default="{ row }: { row: AdminInventory }">
+                                    <el-button link type="primary" :disabled="!can.operateStore(store)" :title="can.operateStore(store) ? '' : NO_PERMISSION" @click="openInventory(row)">改库存</el-button>
+                                </template>
+                            </el-table-column>
+                        </el-table>
+                        <el-empty v-if="!invLoading && inventories.length === 0" description="这家店还没有任何库存行" :image-size="70" />
+                    </template>
                 </el-tab-pane>
 
                 <!-- ------------------------------------------------ 同城配送 -->
@@ -584,5 +614,52 @@ async function saveLocalDelivery(): Promise<void> {
 }
 :deep(.hl-row) {
     --el-table-tr-bg-color: var(--el-color-warning-light-9);
+}
+
+/* ---------------------------------------------------------- 手机：库存卡片 */
+.inv-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+.inv-card {
+    border: 1px solid var(--el-border-color-light);
+    border-radius: 8px;
+    padding: 10px 12px;
+}
+.inv-card.hl-card {
+    border-color: var(--el-color-warning);
+    background: var(--el-color-warning-light-9);
+}
+.inv-card-row {
+    margin-top: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+.inv-card-row:first-child {
+    margin-top: 0;
+}
+.inv-card-actions {
+    margin-top: 8px;
+    display: flex;
+    justify-content: flex-end;
+}
+
+/* ---------------------------------------------------------- 手机：标签页横向滑动，不截断 */
+@media (max-width: 768px) {
+    :deep(.el-tabs__nav-wrap) {
+        overflow-x: auto;
+    }
+    :deep(.el-tabs__nav-wrap)::after {
+        display: none;
+    }
+    :deep(.el-tabs__nav) {
+        flex-wrap: nowrap;
+    }
+    :deep(.el-tabs__item) {
+        flex-shrink: 0;
+    }
 }
 </style>
