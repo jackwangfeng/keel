@@ -346,10 +346,10 @@ const (
 	EnvTileRateBurst = "KEEL_TILE_RATE_BURST"
 
 	// DefaultTileRatePerSec / DefaultTileRateBurst：一屏地图（手机约 4×6、后台约 6×5 张）两层叠就是
-	// 四五十张，拖动、缩放一下又是一屏 —— 瞬时额度按两屏给，持续额度按每秒一屏给。
+	// 六七十张，连续放大几级就是几百张 —— 瞬时额度按「从全国放大到街道」给，持续额度按每秒一屏给。
 	// 挡的是一条 for 循环把整个中国的瓦片刷一遍、耗光天地图 key 的日调用量。
 	DefaultTileRatePerSec = 60.0
-	DefaultTileRateBurst  = 120.0
+	DefaultTileRateBurst  = 300.0
 
 	// EnvTileUpstreamPerSec / EnvTileUpstreamBurst 是瓦片的**总闸**：全站（不分 IP）每秒最多向瓦片服务商
 	// 取多少张（缓存没命中的那些），默认值与理由在 geo.DefaultTileUpstreamPerSec。<= 0 关闭。

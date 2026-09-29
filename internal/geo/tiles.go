@@ -83,7 +83,8 @@ const maxTileBytes = 1 << 20
 // tileAttempts：天地图的域名解析到两台（华为云 WAF）节点，2026-09-29 实测其中一台对同一个合法请求
 // **每次**都回 418「疑似攻击」，另一台每次都 200。所以 418 不是「请求有问题」，换一台再来就好：
 // 每次重试都新建连接（不复用那条落在坏节点上的 keep-alive），并随机挑一个解析出来的地址（见 dialAnyAddr）。
-const tileAttempts = 3
+// 每次约一半的机会落到坏节点：3 次全落空约 1/8（演示站一天 48 张），5 次约 1/32。
+const tileAttempts = 5
 
 func (h *httpTiles) Tile(ctx context.Context, layer string, z, x, y int) ([]byte, string, error) {
 	if !hasLayer(h, layer) || !ValidTile(h, z, x, y) {
@@ -222,12 +223,16 @@ type CachedTiles struct {
 // ErrUpstreamBusy：瓦片总闸满了（全站向服务商取瓦片的速率超过上限）。
 var ErrUpstreamBusy = fmt.Errorf("%w: 瓦片请求太多，稍后再试", ErrUpstream)
 
-// DefaultTileUpstreamPerSec / DefaultTileUpstreamBurst：全站每秒最多向服务商取 10 张、瞬时 40 张。
-// 一个人打开地图是两层四五十张的一屏，缓存冷的时候瞬时额度够一个人；缓存热了之后绝大多数请求不过这道闸。
-// 按天算，10 张/秒打满也是 86 万张 —— 真打到这个量级先该怀疑是被刷了。
+// DefaultTileUpstreamPerSec / DefaultTileUpstreamBurst：全站每秒最多向服务商取 20 张、瞬时 400 张。
+//
+// 瞬时额度按「一个人从全国视图一路放大到街道」算：每放大一级是两层七八十张新瓦片（后台地图一屏约 6×5），
+// 连续放大五六级就是四五百张，而且是几秒之内打出来的。2026-09-29 最初给的是瞬时 40 张：一放大就有一半
+// 瓦片被闸拦下（一天 646 次 503），Leaflet / flutter_map 不重试失败的瓦片，那几块就一直空白 ——
+// 看起来像「小城市没有底图」，其实是闸太窄。缓存热了之后绝大多数请求不过这道闸。
+// 持续额度 20 张/秒挡的是长时间刷：按天打满约 170 万张，真到这个量级先该怀疑是被刷了。
 const (
-	DefaultTileUpstreamPerSec = 10.0
-	DefaultTileUpstreamBurst  = 40.0
+	DefaultTileUpstreamPerSec = 20.0
+	DefaultTileUpstreamBurst  = 400.0
 )
 
 // SetUpstreamLimit 设总闸；ratePerSec <= 0 关闭。
