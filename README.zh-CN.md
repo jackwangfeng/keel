@@ -356,9 +356,8 @@ Keel 自带客户端，不只是一套 API。
 而没有任何一个主流开源电商平台把它当作目标平台。
 如果你在这个市场卖东西，只有 Web 的商城等于没有商城。
 
-> v0.1.0 交付了管理后台与买家端（Android 可以本地打出 apk，H5 可以直接发布）。
-> 微信小程序已经能用 `make app-build-mp-weixin` 编译，并在微信开发者工具的模拟器里走通了
-> 浏览、登录、购物车、结算；真机预览与上线需要 HTTPS 合法域名。桌面端优化的 Web 商城随后跟上。
+> 微信小程序现在由 Flutter 经 mp-flutter 构建（`make flutter-build-mp`），在微信开发者工具
+> 与真机调试里跑通了浏览、登录、购物车、结算，尚未上架——与上面表格一致。
 
 ---
 
@@ -373,32 +372,11 @@ Keel 自带客户端，不只是一套 API。
 页面读的是视图模型而不是生成的类型（有检查强制这一点），还有单元测试加一套
 无头 Web 端到端测试。怎么构建和运行见 [`flutter_app/README.md`](./flutter_app/README.md)。
 
-这一节剩下的部分讲的是 **[`app/`](./app)**——最早的那个客户端，现在只做 bug 修复。
-
-[`app/`](./app) 是买家端店面，用 [uni-app x](https://doc.dcloud.net.cn/uni-app-x/)
-写（UTS 编译成原生 Kotlin/Swift，不走 webview）。页面流是：商品列表（按类目筛选）/ 搜索 →
-商品详情 → 登录 → 下单（试算、自动选最省的券 → 提交）→ 我的订单 → 订单详情 → 发起支付；
-「我的」里有领券中心和我的优惠券。搜索走 `POST /search`，语义与关键词混合检索。
-
-**它的类型同样从契约生成，但不是 `web/` 那份产物。** UTS 不是 TypeScript ——
-它的类型系统要落到 Kotlin 与 Swift 上，`web/src/api/client.mts` 里那套条件类型与
-映射类型没有任何东西可以生成成。所以另有一个生成器
-（`scripts/gen_uts_schema.py`）从同一份 `docs/电商系统-OpenAPI.yaml` 生成
-`app/src/api/schema.uts`，产物入库，两道闸门钉着它：
-`scripts/check_uts_contract.py`（重生成到临时目录再 diff）与
-`scripts/check_app_types.py`（`tsc --strict` 编译每一个 `.uts`）。
-把契约里的字段改个名，两道都会红 —— 变异验证的完整输出在
-[`app/README.md`](./app/README.md)。
-
-**命令行能构建 H5、Kotlin，也能在本地打出 apk。**
-`uni build --platform h5` 出的是可直接发布的 web 产物；
-`uni build --platform app-android` 出的是 Kotlin 源码；
-`make app-apk` 用离线 SDK 加 Gradle 把它打成能装的 apk，不需要 HBuilderX。
-CI 跑的是前两步。`app/README.md` 记了每一步实测到哪里，
-包括为了让一个纯命令行项目能编起来绕开的那些坑。
-
-怎么跑起来见 [`app/README.md`](./app/README.md)。H5 形态必须与 API 同源
-（服务端不发 CORS 头），`app/vite.config.js` 里那段开发服务器代理干的就是这件事。
+这一节剩下的部分讲的是 **[`app/`](./app)**——最早的那个客户端，现在只做 bug 修复，
+不接新功能。它用 [uni-app x](https://doc.dcloud.net.cn/uni-app-x/) 写（UTS 编译成原生
+Kotlin/Swift），类型同样从同一份契约生成（`scripts/gen_uts_schema.py` →
+`app/src/api/schema.uts`，产物入库并有漂移与类型两道闸门守着）。细节、构建方式与
+实测记录见 [`app/README.md`](./app/README.md)。
 
 ---
 

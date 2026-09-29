@@ -425,7 +425,8 @@ curl -OJ -H "Authorization: Bearer $STAFF_TOKEN" \
 | 语言 | 位置 | 说明 |
 |---|---|---|
 | TypeScript | `web/src/api/client.mts` + `schema.d.ts` | 一个泛型的 `request` 原语，路径、参数、请求体、响应体的类型全部从契约推导，没有手写的 interface |
-| UTS（uni-app x） | `app/src/api/schema.uts` | 买家端 App 用，由 `scripts/gen_uts_schema.py` 从同一份契约生成 |
+| Dart（Flutter） | `flutter_app/lib/api/schema.g.dart` | 买家端主力 App 用，由 `make flutter-generate` 从同一份契约生成，产物入库并有检查 |
+| UTS（uni-app x，冻结） | `app/src/api/schema.uts` | 买家端旧客户端用，只修 bug，由 `scripts/gen_uts_schema.py` 从同一份契约生成 |
 | Go（服务端） | `internal/api/` | oapi-codegen 生成，handler 实现的就是它的接口 |
 
 其他语言可以直接用契约跑 [OpenAPI Generator](https://openapi-generator.tech/) 之类的工具生成客户端。

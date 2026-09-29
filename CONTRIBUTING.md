@@ -236,7 +236,7 @@ KEEL_EMBED_ENDPOINT=http://127.0.0.1:8001 go run ./cmd/keel-index -force      # 
 商家后台的依赖。没有它们的环境里会失败，那是诚实的失败：
 契约产物与后台确实没被验证过。
 
-十一步，依次是：
+十二步，依次是：
 
 1. 文档链接是否有效（含中文文件名的百分号编码与锚点）
 2. README 承诺的文件是否真实存在，以及快速开始里的端口是否真的在 compose 里映射
@@ -246,18 +246,23 @@ KEEL_EMBED_ENDPOINT=http://127.0.0.1:8001 go run ./cmd/keel-index -force      # 
 6. `db/queries/*.sql` 里有没有应用层的租户过滤（那是 RLS 的活；应用层再加一份，
    「RLS 到底有没有生效」就永远测不出来了）
 7. **契约产物漂移比对** —— 生成到临时目录再和入库产物比，对工作区只读
-8. `make schema-check` —— `web/src` 在 `--strict` 下编译得过，且编译范围真的覆盖到每个源文件
-9. `make app-type-check` —— `app/src` 下全部 `.uts` 在 `--strict` 下编译得过（客户端跟上了契约没有）
-10. `make admin-type-check` —— 商家后台 `web/admin/src` 下全部 `.ts` 与 `.vue` 在 `--strict`
+8. **Flutter 契约漂移比对与页面结构** —— `flutter_app/lib/api/schema.g.dart` 是否与契约同步
+   （`check_dart_contract`，重生成到临时目录再 diff，红了跑 `make flutter-generate`），
+   `lib/pages`、`lib/widgets` 下有没有直接 `import` 契约生成的类型（`check_flutter_pages`，
+   不许，页面只能读视图模型），外加生成器自身的单元测试
+9. `make schema-check` —— `web/src` 在 `--strict` 下编译得过，且编译范围真的覆盖到每个源文件
+10. `make app-type-check` —— `app/src` 下全部 `.uts` 在 `--strict` 下编译得过（**冻结客户端**，
+    只做存量维护，跟不跟得上契约仍然会红，但新功能不再往这里加）
+11. `make admin-type-check` —— 商家后台 `web/admin/src` 下全部 `.ts` 与 `.vue` 在 `--strict`
     下编译得过，编译范围真的覆盖到它们，且类型真的来自入库的契约产物。
     **它要先 `make admin-install`**（`vue-tsc` 才认 `.vue`，npx 拉不到一个能用的组合）；
     没装依赖时它失败而不是跳过——跳过会让「后台的类型检查跑过了」这句话变成假话
 
-11. `make admin-test` —— 商家后台的单元测试（电子围栏的坐标序与 GCJ-02 / BD-09 → WGS-84 换算）。
+12. `make admin-test` —— 商家后台的单元测试（电子围栏的坐标序与 GCJ-02 / BD-09 → WGS-84 换算）。
     `node --test` 直接跑 .ts，不需要 node_modules
 
-第 8、9、10 三条不能合成一条，理由写在 `scripts/check_admin_types.py` 的文件头：
-第 8 条的全部价值是「零 node_modules」，把它换成 `vue-tsc` 等于让契约产物的闸门
+第 9、10、11 三条不能合成一条，理由写在 `scripts/check_admin_types.py` 的文件头：
+第 9 条的全部价值是「零 node_modules」，把它换成 `vue-tsc` 等于让契约产物的闸门
 取决于一棵 UI 框架依赖树。
 
 改动文档或契约的 PR 必须先让它通过。

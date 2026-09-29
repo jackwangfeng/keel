@@ -1,5 +1,9 @@
 # Keel 买家端（uni-app x）
 
+> **本客户端已冻结，只修 bug，不再接新功能。** 买家端主力是 Flutter，见
+> [`flutter_app/`](../flutter_app)（[README](../flutter_app/README.md)）；演示站
+> [eshop.zzss.fun](https://eshop.zzss.fun/) 用的也是 Flutter 的 Web 构建版。
+
 用 [uni-app x](https://doc.dcloud.net.cn/uni-app-x/) 写的买家端：UTS 编译成原生
 Kotlin / Swift，不走 webview；同一份代码也编 H5 与小程序。
 

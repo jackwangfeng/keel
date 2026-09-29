@@ -430,11 +430,10 @@ what a browser can.
 happens inside WeChat, and no major open-source commerce platform targets it.
 If you are selling in that market, a web-only storefront is not a storefront.
 
-> v0.1.0 ships the admin console and the buyer app (an Android apk can be
-> built locally; the H5 build deploys as-is). The WeChat Mini Program now builds
-> with `make app-build-mp-weixin` and runs browse, login, cart and checkout in
-> the WeChat devtools simulator; on-device preview and publishing need an HTTPS
-> domain. A desktop-optimized web storefront follows.
+> The WeChat Mini Program is now built from Flutter via mp-flutter
+> (`make flutter-build-mp`), and runs browse, login, cart and checkout in both
+> the WeChat devtools and on-device debugging; not yet published — consistent
+> with the table above.
 
 ---
 
@@ -451,37 +450,13 @@ Its types come from the same OpenAPI spec (`make flutter-generate` →
 generated types (a check enforces that), and it has unit tests plus a headless Web e2e
 suite. How to build and run it: [`flutter_app/README.md`](./flutter_app/README.md).
 
-The rest of this section is about **[`app/`](./app)**, the first client, kept for bug fixes.
-
-[`app/`](./app) is the buyer storefront, written in
+The rest of this section is about **[`app/`](./app)**, the first client, now
+frozen for bug fixes only, no new features. It's written in
 [uni-app x](https://doc.dcloud.net.cn/uni-app-x/) (UTS compiled to native
-Kotlin/Swift — not a webview). Product list (filterable by category) / search →
-product detail → login → checkout (preview, best coupon picked automatically,
-then submit) → my orders → order detail → pay; "Me" holds the coupon claim
-center and my coupons. Search uses `POST /search`, hybrid semantic + keyword.
-
-**Its types are generated from the same OpenAPI spec, but not from the same
-artifact as `web/`.** UTS is not TypeScript — its type system has to land on
-Kotlin and Swift, so the conditional/mapped types in `web/src/api/client.mts`
-have nothing to compile to. A second generator
-(`scripts/gen_uts_schema.py`) emits `app/src/api/schema.uts` from the same
-`docs/电商系统-OpenAPI.yaml`, the artifact is committed, and two gates hold it
-in place: `scripts/check_uts_contract.py` (regenerate to a temp dir and diff)
-and `scripts/check_app_types.py` (`tsc --strict` over every `.uts`).
-Rename a contract field and both go red — the mutation transcript is in
-[`app/README.md`](./app/README.md).
-
-**Command-line builds reach H5, Kotlin, and a local apk.**
-`uni build --platform h5` produces a deployable web bundle;
-`uni build --platform app-android` produces Kotlin source;
-`make app-apk` turns that into an installable apk with the offline SDK and
-Gradle, no HBuilderX needed. CI runs the first two steps.
-`app/README.md` records what was measured at each step, including the things
-that had to be worked around to get a CLI project to build at all.
-
-Building and running it: see [`app/README.md`](./app/README.md).
-The H5 form needs to be served same-origin with the API (the server sends no
-CORS headers), which is what the dev-server proxy in `app/vite.config.js` does.
+Kotlin/Swift). Its types are also generated from the same OpenAPI spec
+(`scripts/gen_uts_schema.py` → `app/src/api/schema.uts`, committed and held in
+place by a drift gate and a type-check gate). Details, build steps and the
+measured-results log: [`app/README.md`](./app/README.md).
 
 ---
 

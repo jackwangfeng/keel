@@ -39,4 +39,5 @@
 - [CONTRIBUTING.md](../CONTRIBUTING.md)：开发环境、测试、提交规范
 - [CHANGELOG.md](../CHANGELOG.md)：版本变更（英文）
 - [SECURITY.md](../SECURITY.md)：安全问题报告方式（英文）
-- [app/README.md](../app/README.md)：买家端 App（uni-app x）怎么构建
+- [flutter_app/README.md](../flutter_app/README.md)：买家端主力 App（Flutter）怎么构建
+- [app/README.md](../app/README.md)：买家端旧客户端（uni-app x，冻结，只修 bug）怎么构建
