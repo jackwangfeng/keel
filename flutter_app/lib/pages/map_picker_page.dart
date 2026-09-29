@@ -172,10 +172,18 @@ class _MapPickerPageState extends State<MapPickerPage> {
                       userAgentPackageName: 'dev.keel.keel_buyer',
                       tileProvider: widget.tileProvider,
                     ),
+                  // 不用 SimpleAttributionWidget：它会自己在前面拼「flutter_map | ©」，而服务商的署名本身带 ©，
+                  // 显示出来是「© © 天地图」。署名照服务端给的原样显示。
                   if (widget.config.attribution.isNotEmpty)
-                    SimpleAttributionWidget(
-                      source: Text(widget.config.attribution, key: const Key('map.attribution'), style: KeelText.hint),
-                      backgroundColor: KeelColors.card.withValues(alpha: 0.8),
+                    Align(
+                      alignment: Alignment.bottomRight,
+                      child: ColoredBox(
+                        color: KeelColors.card.withValues(alpha: 0.8),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          child: Text(widget.config.attribution, key: const Key('map.attribution'), style: KeelText.hint),
+                        ),
+                      ),
                     ),
                 ],
               ),
