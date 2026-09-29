@@ -9,6 +9,7 @@ import (
 	"math/rand/v2"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -83,8 +84,9 @@ const maxTileBytes = 1 << 20
 // tileAttempts：天地图的域名解析到两台（华为云 WAF）节点，2026-09-29 实测其中一台对同一个合法请求
 // **每次**都回 418「疑似攻击」，另一台每次都 200。所以 418 不是「请求有问题」，换一台再来就好：
 // 每次重试都新建连接（不复用那条落在坏节点上的 keep-alive），并随机挑一个解析出来的地址（见 dialAnyAddr）。
-// 每次约一半的机会落到坏节点：3 次全落空约 1/8（演示站一天 48 张），5 次约 1/32。
-const tileAttempts = 5
+// 每次约一半的机会落到坏节点：3 次全落空约 1/8。**别再加大**：2026-09-30 试过 5 次，失败的瓦片每张都放大成
+// 五个请求，没多久两台节点都对本机 IP 回 418（像是被 WAF 当成攻击封了），天地图整个不可用。
+const tileAttempts = 3
 
 func (h *httpTiles) Tile(ctx context.Context, layer string, z, x, y int) ([]byte, string, error) {
 	if !hasLayer(h, layer) || !ValidTile(h, z, x, y) {
@@ -159,10 +161,17 @@ func dialAnyAddr(ctx context.Context, network, addr string) (net.Conn, error) {
 	return nil, last
 }
 
+// tileProxy 是瓦片请求专用的出口代理（KEEL_TILE_PROXY，见 TilesFromEnv）；为空则直连（仍认 HTTPS_PROXY 等环境变量）。
+// 只给瓦片用，不影响高德、库存服务等其它对外请求。
+var tileProxy *url.URL
+
 func newTileClient() *http.Client {
 	t := http.DefaultTransport.(*http.Transport).Clone()
 	t.DialContext = dialAnyAddr
-	return &http.Client{Timeout: 5 * time.Second, Transport: t}
+	if tileProxy != nil {
+		t.Proxy = http.ProxyURL(tileProxy)
+	}
+	return &http.Client{Timeout: 8 * time.Second, Transport: t}
 }
 
 // NewTianditu 建天地图瓦片源。base 为空用官方 t0–t7 子域名轮换（测试时指向 httptest）。
@@ -320,8 +329,19 @@ func (c *CachedTiles) removeLocked(el *list.Element) {
 // 选了 tianditu 却没给 key 或 referer、或者写了不认识的名字，是部署错误（启动即失败，与 KEEL_GEO_PROVIDER 同一个处理）。
 //
 // upPerSec / upBurst 是总闸（见 CachedTiles.upRate），<= 0 关闭。
-func TilesFromEnv(provider, tiandituKey, tiandituReferer string, upPerSec, upBurst float64) (TileSource, error) {
+//
+// proxy（KEEL_TILE_PROXY）是瓦片请求专用的出口代理，如 http://192.168.0.110:8890：国内服务器直连
+// tile.openstreetmap.org 不通（域名解析被污染，2026-09-30 实测全部超时），走代理由代理去解析。
+func TilesFromEnv(provider, tiandituKey, tiandituReferer string, upPerSec, upBurst float64, proxy string) (TileSource, error) {
 	provider, tiandituKey = strings.TrimSpace(strings.ToLower(provider)), strings.TrimSpace(tiandituKey)
+	tileProxy = nil
+	if p := strings.TrimSpace(proxy); p != "" {
+		u, err := url.Parse(p)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https" && u.Scheme != "socks5") || u.Host == "" {
+			return nil, fmt.Errorf("KEEL_TILE_PROXY=%q 不是合法的代理地址（如 http://host:port）", p)
+		}
+		tileProxy = u
+	}
 	switch provider {
 	case "":
 		return nil, nil

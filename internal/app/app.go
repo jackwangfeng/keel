@@ -284,7 +284,8 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	// 地图底图瓦片：服务端转发并缓存，key 不下发（同上）。瓦片的限流单独一只宽桶 ——
 	// 拖一下地图就是几十张，与 /geo/reverse 共用会把选点本身挤成 429。
 	tiles, err := geo.TilesFromEnv(os.Getenv(EnvMapTiles), os.Getenv(EnvTiandituKey), os.Getenv(EnvTiandituReferer),
-		envFloat(EnvTileUpstreamPerSec, geo.DefaultTileUpstreamPerSec), envFloat(EnvTileUpstreamBurst, geo.DefaultTileUpstreamBurst))
+		envFloat(EnvTileUpstreamPerSec, geo.DefaultTileUpstreamPerSec), envFloat(EnvTileUpstreamBurst, geo.DefaultTileUpstreamBurst),
+		os.Getenv(EnvTileProxy))
 	if err != nil {
 		panic(err)
 	}

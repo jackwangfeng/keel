@@ -108,22 +108,28 @@ func TestCachedTilesHitsAndEvicts(t *testing.T) {
 }
 
 func TestTilesFromEnv(t *testing.T) {
-	if s, err := TilesFromEnv("", "", "", 0, 0); s != nil || err != nil {
+	if s, err := TilesFromEnv("", "", "", 0, 0, ""); s != nil || err != nil {
 		t.Errorf("没配应 (nil, nil)，实得 (%v, %v)", s, err)
 	}
-	if _, err := TilesFromEnv("tianditu", "", "https://a.example/", 0, 0); err == nil {
+	if _, err := TilesFromEnv("tianditu", "", "https://a.example/", 0, 0, ""); err == nil {
 		t.Error("选了 tianditu 却没给 key 应报错（部署错误，启动即失败）")
 	}
-	if _, err := TilesFromEnv("tianditu", "k", "", 0, 0); err == nil {
+	if _, err := TilesFromEnv("tianditu", "k", "", 0, 0, ""); err == nil {
 		t.Error("选了 tianditu 却没给 referer 应报错（浏览器端 key 按域名校验）")
 	}
-	if _, err := TilesFromEnv("gaode", "k", "", 0, 0); err == nil {
+	if _, err := TilesFromEnv("gaode", "k", "", 0, 0, ""); err == nil {
 		t.Error("不认识的服务商应报错")
 	}
-	if s, err := TilesFromEnv(" Tianditu ", "k", "https://a.example/", 10, 40); err != nil || s.Name() != "tianditu" {
+	if s, err := TilesFromEnv(" Tianditu ", "k", "https://a.example/", 10, 40, ""); err != nil || s.Name() != "tianditu" {
 		t.Errorf("大小写与空白应容忍：%v %v", s, err)
 	}
-	if s, err := TilesFromEnv("osm", "", "", 10, 40); err != nil || s.Name() != "osm" || len(s.Layers()) != 1 {
+	if _, err := TilesFromEnv("osm", "", "", 10, 40, "not a url"); err == nil {
+		t.Error("KEEL_TILE_PROXY 写错应报错（部署错误，启动即失败）")
+	}
+	if s, err := TilesFromEnv("osm", "", "", 10, 40, "http://127.0.0.1:8890"); err != nil || tileProxy == nil || tileProxy.Host != "127.0.0.1:8890" || s.Name() != "osm" {
+		t.Errorf("代理地址应被采用：%v %v", tileProxy, err)
+	}
+	if s, err := TilesFromEnv("osm", "", "", 10, 40, ""); err != nil || s.Name() != "osm" || len(s.Layers()) != 1 {
 		t.Errorf("osm 不需要 key、只有一层：%v %v", s, err)
 	}
 }

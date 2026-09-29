@@ -40,6 +40,8 @@ const (
 	EnvMapTiles        = "KEEL_MAP_TILES"
 	EnvTiandituKey     = "KEEL_TIANDITU_KEY"
 	EnvTiandituReferer = "KEEL_TIANDITU_REFERER"
+	// EnvTileProxy 是瓦片请求专用的出口代理（只影响 /geo/tiles 向服务商取图，见 geo.TilesFromEnv）。
+	EnvTileProxy = "KEEL_TILE_PROXY"
 )
 
 // EnvSearchVectorFloor 覆盖检索的向量相关度下限（service.DefaultVectorFloor，余弦相似度）。
