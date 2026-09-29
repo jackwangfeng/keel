@@ -9,7 +9,7 @@
 #
 # ## 镜像
 #
-# 从 infero 源码按它的 Dockerfile.cpu 构建（infero `226308f`；性能修复在 `cb0ccbd`，
+# 从 infero 源码按它的 Dockerfile.cpu 构建（需要 infero `500ff62` 或更新；性能修复在 `cb0ccbd`，
 # 实测见 docs/电商系统-总体架构.md §1「那个缺口」）。infero 不发布镜像，所以这里是
 # build 而不是 pull：KEEL_INFERO_SRC 指到 infero 仓库的工作副本（默认与 keel 并排的 ../infero）。
 # 构建一次约几分钟（整个 Rust workspace），之后 `up` 直接用 infero:cpu 这个本地镜像。
@@ -34,9 +34,9 @@ services:
       context: ${KEEL_INFERO_SRC:-../infero}
       dockerfile: Dockerfile.cpu
     image: infero:cpu
-    # command 会整个替换镜像的 CMD，所以 --host 要写上：不写就不是 0.0.0.0，app 连不进来。
-    # 端口必须是 8081 —— 镜像的 HEALTHCHECK 写死了 127.0.0.1:8081/health/ready。
-    command: ["--model", "/models/${KEEL_INFERO_MODEL_DIR:-Qwen3-Embedding-0.6B}", "--host", "0.0.0.0:8081", "--ctx", "2048", "--max-seqs", "32"]
+    # --host 0.0.0.0:8081 在镜像的 ENTRYPOINT 里（infero 500ff62 起），这里**不要再写** ——
+    # 重复传 clap 直接报用法错误、容器反复重启（实测）。端口因此固定 8081，与镜像 HEALTHCHECK 一致。
+    command: ["--model", "/models/${KEEL_INFERO_MODEL_DIR:-Qwen3-Embedding-0.6B}", "--ctx", "2048", "--max-seqs", "32"]
     environment:
       INFERO_CPU_THREADS: ${INFERO_CPU_THREADS:-}
     volumes:
