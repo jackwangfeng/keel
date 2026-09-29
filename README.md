@@ -331,8 +331,12 @@ are not there yet, and are listed so that nothing above reads as if it ships:
   (4–8+ dedicated cores recommended). Measurements and how to reproduce them are in
   the architecture doc (§1, "那个缺口"); build and startup steps are in
   [部署与配置](./docs/指南/部署与配置.md) ("没有 GPU" section, Chinese only for now).
+  Or bring the engine up with the rest of the stack in one command:
+  `docker compose -f compose.yaml -f compose.infero-cpu.yaml up -d --build`
+  (builds the image locally from infero's source and its `Dockerfile.cpu`).
   This repo does not keep a second engine implementation around as a stand-in — the
-  M3 Python service (BGE-M3 on CPU) has been retired
+  M3 Python service (BGE-M3 on CPU) has been retired; the CPU path is the same infero
+  binary built with a different feature flag.
 - **SMS, WeChat and e-mail.** SMS-code login, WeChat login and the console's
   e-mail login link all need an outside service that is not wired up; those
   endpoints answer 501 on purpose. Buyers log in with phone + password; staff

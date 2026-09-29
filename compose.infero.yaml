@@ -17,7 +17,7 @@
 # （语义检索层 §8）—— 不报错，只是没有语义召回。README 的
 # 「还没在盒子里的」那一节记着这条。
 #
-# ## 没有 GPU 的机器怎么办：CPU 后端已经达标，只是还没进这个叠加层
+# ## 没有 GPU 的机器怎么办：用 compose.infero-cpu.yaml
 #
 # infero 2026-09-26 起有了 CPU 后端（--features cpu），首版单线程、单条约 5 秒撑不起 Keel；
 # infero `cb0ccbd`（2026-09-29，并行化 GEMM、常驻 F32 权重缓存、attention 并行）之后，
@@ -28,8 +28,8 @@
 # 编译与启动步骤见 docs/指南/部署与配置.md「没有 GPU」一节。CPU 形态要给它留够核
 # （建议 4–8 核以上）。这个仓库不为无 GPU 场景维护第二个推理引擎实现 —— M3 那个
 # 跑 BGE-M3 的 Python 服务已经退役，CPU 路也走同一个 infero 二进制，只是编译开关不同。
-# 目前它是源码编译的裸二进制、以宿主机进程运行，**还没有进这个 compose 叠加层**：
-# infero 的 Dockerfile 还没写，容器形态待它落地后再加一条 CPU 服务定义。不配置引擎、
+# CPU 版有自己的叠加层 compose.infero-cpu.yaml（引擎在 compose 里，从 infero 的 Dockerfile.cpu
+# 本地构建），与这个文件二选一，不要同时 -f。不配置引擎、
 # 直接 `docker compose up` 仍然可用，只是 /search 走关键词那一路。
 #
 # ## ⚠️ 换引擎 / 换模型要重算全库

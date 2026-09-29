@@ -1,0 +1,56 @@
+# 自研推理引擎 infero 的 **CPU 版**叠加层：没有 GPU 的机器用这个拿到语义检索。
+#
+#     KEEL_INFERO_SRC=../infero KEEL_INFERO_MODEL=/path/to/Qwen3-Embedding-0.6B \
+#       docker compose -f compose.yaml -f compose.infero-cpu.yaml up -d --build
+#
+# 和 compose.infero.yaml（GPU 版）的区别：GPU 版的引擎跑在 compose 之外（显存账，见
+# scripts/infero-up.sh 文件头）；CPU 版没有显存这回事，所以**引擎就是这里的一个服务**，
+# app 等它 healthy 再起 —— 两个叠加层二选一，别同时 -f。
+#
+# ## 镜像
+#
+# 从 infero 源码按它的 Dockerfile.cpu 构建（infero `226308f`；性能修复在 `cb0ccbd`，
+# 实测见 docs/电商系统-总体架构.md §1「那个缺口」）。infero 不发布镜像，所以这里是
+# build 而不是 pull：KEEL_INFERO_SRC 指到 infero 仓库的工作副本（默认与 keel 并排的 ../infero）。
+# 构建一次约几分钟（整个 Rust workspace），之后 `up` 直接用 infero:cpu 这个本地镜像。
+#
+# ## 资源
+#
+# - 常驻内存约 3.5 GB（F16 权重 1.2 GB + 启动时转的 F32 缓存 2.3 GB）。
+# - **要给它留核**：空闲 20 核上单条 117 ms、64 条一批 2.68 s；同机负载 17–23 时
+#   单条约 450 ms、64 条约 5.3 s，超出查询 250 ms / 索引 5 s 的预算。INFERO_CPU_THREADS
+#   缺省用全部逻辑核；和别的服务同机时可以限一下，但建议不少于 4–8。
+#
+# ## 模型
+#
+# 不打进镜像，只读挂载。换模型 = 换 model_name，要重算全库（见 compose.infero.yaml
+# 「换引擎 / 换模型要重算全库」那一节，CPU 版与 GPU 版同一个模型名，互换不用重算）。
+
+name: keel
+
+services:
+  inference:
+    build:
+      context: ${KEEL_INFERO_SRC:-../infero}
+      dockerfile: Dockerfile.cpu
+    image: infero:cpu
+    # command 会整个替换镜像的 CMD，所以 --host 要写上：不写就不是 0.0.0.0，app 连不进来。
+    # 端口必须是 8081 —— 镜像的 HEALTHCHECK 写死了 127.0.0.1:8081/health/ready。
+    command: ["--model", "/models/${KEEL_INFERO_MODEL_DIR:-Qwen3-Embedding-0.6B}", "--host", "0.0.0.0:8081", "--ctx", "2048", "--max-seqs", "32"]
+    environment:
+      INFERO_CPU_THREADS: ${INFERO_CPU_THREADS:-}
+    volumes:
+      # ⚠️ 容器里的目录名就是引擎报的模型名（取第一个「.」之前：Qwen3-Embedding-0.6B → Qwen3-Embedding-0）。
+      # 挂成 /models/model 之类，模型名就变成 'model'，与 GPU 版和库里的存量向量对不上，会触发全库重算。
+      # 所以容器内目录名要与原目录同名：换模型时 KEEL_INFERO_MODEL 与 KEEL_INFERO_MODEL_DIR 一起换。
+      - ${KEEL_INFERO_MODEL:-/mnt/data/tuili-models/Qwen3-Embedding-0.6B}:/models/${KEEL_INFERO_MODEL_DIR:-Qwen3-Embedding-0.6B}:ro
+    # 不映射宿主机端口：只给 app 用。要从宿主机测，`docker compose exec inference curl ...`。
+    restart: unless-stopped
+
+  app:
+    environment:
+      KEEL_EMBED_ENDPOINT: http://inference:8081
+    # /health/ready 在 F32 缓存预热完才 200，等它 healthy 再起 app，第一批索引就不会 connection refused。
+    depends_on:
+      inference:
+        condition: service_healthy
