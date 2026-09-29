@@ -76,6 +76,8 @@ export type AdminStore = S["AdminStore"];
 export type AdminStoreList = S["AdminStoreList"];
 export type GeoPolygon = S["GeoPolygon"];
 export type GeoPlace = S["GeoPlace"];
+/** 地图底图配置（`GET /geo/map`）。`enabled` 为 false 时部署没配 `KEEL_MAP_TILES`。 */
+export type GeoMapConfig = S["GeoMapConfig"];
 export type ScopedProductListing = S["ScopedProductListing"];
 export type ScopedSkuPrice = S["ScopedSkuPrice"];
 export type RegionCreateRequest = S["RegionCreateRequest"];

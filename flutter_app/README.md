@@ -63,6 +63,7 @@ NODE_PATH=flutter_app/tool/node_modules node flutter_app/tool/mp_walk.js   # 截
 - 契约字段只在 `lib/api/` 读写；`lib/pages/`、`lib/widgets/` 不许 import `schema.g.dart`（`scripts/check_flutter_pages.py`）。
 - `schema.g.dart` 由 `scripts/gen_dart_schema.py` 生成，`scripts/check_dart_contract.py` 比对，请勿手改。
 - 门店：先定位（最多等 5 秒，WGS-84）按围栏解析就近门店，拿不到回落默认店；`--dart-define=KEEL_LOCATE=off` 不定位（Web e2e 用它，用例按默认店写）。
+- 地图选点（选择送货地址 / 地址编辑页的「在地图上选点」）：小程序用微信自带的 `wx.chooseLocation`（GCJ-02 转 WGS-84 再 reverse 补全）；App / Web 在服务端 `GET /geo/map` 开了底图时才给入口（一次会话问一次），打开 `lib/pages/map_picker_page.dart`——`flutter_map` 叠服务端代理的瓦片（`/geo/tiles/{layer}/{z}/{x}/{y}`，坐标 CGCS2000≈WGS-84，不做 GCJ 转换），中心图钉、停下 400ms 后 reverse 显示当前位置，确定返回省市区齐全的地点。`flutter_map` 在小程序包里会编进去（约 +120 KB dart），但入口不走它。
 - 服务地址：原生与小程序编译期 `--dart-define=KEEL_API_BASE=...` 注入；Web 用相对路径 `/api/v1` 同源（开发 / e2e 走 `web_dev_config.yaml` 反代）。
 - 依赖只用 mp-flutter 能透明接管的（`http`、`shared_preferences`）；不依赖 Cookie；不用原生插件。
 - 登录页压在外壳上（push，成功 pop），不要 `go('/login')`：会在转场中重建外壳（Duplicate GlobalKey）。

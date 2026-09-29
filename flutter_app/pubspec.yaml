@@ -40,6 +40,9 @@ dependencies:
       url: https://github.com/jackwangfeng/mp-flutter.git
       ref: v0.2.1
       path: packages/mp_flutter_wechat
+  # 地图选点页（App / Web）：叠服务端代理的天地图瓦片。小程序不走它（用 wx.chooseLocation），但会编进包里。
+  flutter_map: ^8.3.2
+  latlong2: ^0.10.1
 
 dev_dependencies:
   flutter_test:

@@ -221,10 +221,12 @@ services:
       # 地图服务商（POI 选址，/geo/*）：amap + 高德 Web 服务 key。不配时 /geo/* 回 501，客户端退回手填。
       KEEL_GEO_PROVIDER: ${KEEL_GEO_PROVIDER:-}
       KEEL_GEO_KEY: ${KEEL_GEO_KEY:-}
-      # 地图底图（/geo/map、/geo/tiles）：tianditu + 天地图「服务端」key；osm 只给开发自测。
+      # 地图底图（/geo/map、/geo/tiles）：tianditu + 天地图「浏览器端」key + 站点地址（与 key 的域名白名单一致，
+      # 代理取瓦片时带作 Referer）；osm 只给开发自测。
       # 不配时客户端不显示地图（买家端没有地图选点，后台退回手填坐标）。
       KEEL_MAP_TILES: ${KEEL_MAP_TILES:-}
       KEEL_TIANDITU_KEY: ${KEEL_TIANDITU_KEY:-}
+      KEEL_TIANDITU_REFERER: ${KEEL_TIANDITU_REFERER:-}
       # 连接池上限：业务池（默认 max(4, CPU 核数)）与事务协调器的池（默认 32）。
       # 多实例共用一个 Postgres 时按「实例数 × 两者之和 + 余量 < max_connections」配，见部署指南。
       KEEL_DB_MAX_CONNS: ${KEEL_DB_MAX_CONNS:-}

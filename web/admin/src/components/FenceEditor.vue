@@ -1,18 +1,24 @@
 <script setup lang="ts">
-// 电子围栏编辑器：Leaflet + OpenStreetMap 瓦片。
+// 电子围栏编辑器：Leaflet + 服务端代理的底图瓦片。
 //
-// ## 为什么是 OSM 而不是高德 / 腾讯 / 百度
+// ## 为什么不是高德 / 腾讯 / 百度
 //
-// 库里是 `GEOGRAPHY(POLYGON, 4326)`——WGS-84。OSM 的瓦片与 Leaflet 的
-// lat/lng 都是 WGS-84，在这张地图上点出来的顶点**原样**就是要存的值，
+// 库里是 `GEOGRAPHY(POLYGON, 4326)`——WGS-84。底图瓦片走 GET /geo/map
+// （配置：开没开、叠哪几层、最大级别、署名，部署上通常是天地图，CGCS2000
+// ≈ WGS-84）+ GET /geo/tiles/{layer}/{z}/{x}/{y}（转发），与 Leaflet 的
+// lat/lng 一样都是 WGS-84，在这张地图上点出来的顶点**原样**就是要存的值，
 // 这条路上没有任何换算，也就没有「忘了换算」这种会偏几百米而不报错的错。
 // 国内地图给的是 GCJ-02 / BD-09（完整说明在 api/geo.ts 的文件头）；
 // 用它们就必须在存之前换算，而换算是一段只要漏一次就会把买家判错店的代码。
 //
-// 代价：OSM 瓦片在国内有时加载慢或加载不出来，国内路网细节也不如高德。
-// 所以旁边有一个「粘贴 GeoJSON / 坐标」入口——没网、瓦片出不来时也能配围栏，
-// 并且在那里（且只在那里）可以显式声明「这批坐标是从高德 / 百度抄的」，
-// 由 api/geo.ts 换回 WGS-84（换算有测试：geo.test.ts）。
+// 代价：瓦片有时加载慢或加载不出来（跨网络、部署没配 KEEL_MAP_TILES 等）。
+// 所以旁边有一个「粘贴 GeoJSON / 坐标」入口——没有地图也能配围栏，并且在那里
+// （且只在那里）可以显式声明「这批坐标是从高德 / 百度抄的」，由 api/geo.ts
+// 换回 WGS-84（换算有测试：geo.test.ts）。
+// 部署没配 KEEL_MAP_TILES 时（GeoMapConfig.enabled=false）：直接不画地图，
+// 只显示一句说明，「撤销」「清空重画」「保存围栏」等按钮与粘贴入口照常可用
+// （它们本来就只读写 vertices 这份数据，不依赖地图）。两个组件共用的
+// 取值 / 缓存逻辑在 api/mapTiles.ts。
 //
 // ## 画法（两种状态）
 //
@@ -30,10 +36,11 @@
 // 界面把它原样显示并在地图上标出位置（errorPoint）。前端再写一套判据，
 // 两边迟早分叉。
 
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import type { GeoPolygon } from "../api/client.ts";
+import { API_BASE, keel, type GeoPolygon } from "../api/client.ts";
+import { loadMapConfig, tileLayerSpecs, type GeoMapConfig } from "../api/mapTiles.ts";
 import {
     closeRing,
     openRing,
@@ -89,6 +96,10 @@ let markers: L.Marker[] = [];
 let midMarkers: L.Marker[] = [];
 let errorLayer: L.CircleMarker | null = null;
 let resizeObserver: ResizeObserver | null = null;
+
+// 底图瓦片（GET /geo/map）。enabled=false（部署没配 KEEL_MAP_TILES）或者请求
+// 本身失败时都退回「没有地图」——粘贴入口、撤销/清空/保存按钮不受影响。
+const mapStatus = ref<"loading" | "enabled" | "disabled">("loading");
 
 const vertexIcon = L.divIcon({ className: "fence-vertex", iconSize: [14, 14], iconAnchor: [7, 7] });
 const selectedIcon = L.divIcon({ className: "fence-vertex fence-vertex-selected", iconSize: [16, 16], iconAnchor: [8, 8] });
@@ -229,13 +240,33 @@ function fitView(): void {
 }
 
 onMounted(() => {
+    document.addEventListener("keydown", onKey);
+    void bootstrapMap();
+});
+
+async function bootstrapMap(): Promise<void> {
+    try {
+        const config = await loadMapConfig(() => keel.get("/geo/map"));
+        if (!config.enabled) {
+            mapStatus.value = "disabled";
+            return;
+        }
+        mapStatus.value = "enabled";
+        await nextTick(); // v-if 要先把 mapEl 的 div 渲染出来
+        if (mapEl.value === null) return; // 组件在这中间被卸载了
+        createLeafletMap(config);
+    } catch {
+        // /geo/map 本身请求失败（比如反代没配好）：和「明确没配」一样处理。
+        mapStatus.value = "disabled";
+    }
+}
+
+function createLeafletMap(config: GeoMapConfig): void {
     if (mapEl.value === null) return;
     map = L.map(mapEl.value, { zoomControl: true });
-    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        maxZoom: 19,
-        // OSM 的瓦片使用政策要求署名，这一行不是装饰。
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> 贡献者（WGS-84）',
-    }).addTo(map);
+    for (const spec of tileLayerSpecs(API_BASE, config)) {
+        L.tileLayer(spec.urlTemplate, { maxZoom: config.max_zoom, attribution: config.attribution }).addTo(map);
+    }
     if (props.center) {
         L.circleMarker(props.center, { radius: 5, color: "#e6a23c", fillOpacity: 1 })
             .bindTooltip("门店坐标")
@@ -256,7 +287,6 @@ onMounted(() => {
         localError.value = "";
         redraw();
     });
-    document.addEventListener("keydown", onKey);
     drawSaved();
     redraw();
     drawError();
@@ -265,7 +295,7 @@ onMounted(() => {
     // 监听容器尺寸而不是监听 tab 切换，这样放在哪儿都对。
     resizeObserver = new ResizeObserver(() => map?.invalidateSize());
     resizeObserver.observe(mapEl.value);
-});
+}
 
 function onKey(e: KeyboardEvent): void {
     if (selected.value === null || props.readonly) return;
@@ -391,22 +421,32 @@ const draftGeoJson = computed(() => {
     <div class="fence-editor">
         <el-alert type="info" :closable="false" show-icon class="mb8">
             <template #title>坐标系：WGS-84（与库里的 GEOGRAPHY 4326、买家端定位一致）</template>
-            <b>画</b>：点地图依次加点，点回第一个点（或按「闭合」）完成。
-            <b>改</b>：拖顶点移动；点 / 拖每条边中间的小圆点，在这条边上加一个点；右键顶点删掉它（或单击选中后按 Delete）。
-            地图是 OpenStreetMap，它本身就是 WGS-84，点出来的坐标原样保存。
-            <b>别从高德 / 腾讯 / 百度地图上抄坐标直接贴</b>——那是 GCJ-02 / BD-09，城区会偏几百米而且不报错；
-            真要贴，在下面「粘贴坐标」里选对来源，会先换回 WGS-84。
+            <template v-if="mapStatus !== 'disabled'">
+                <b>画</b>：点地图依次加点，点回第一个点（或按「闭合」）完成。
+                <b>改</b>：拖顶点移动；点 / 拖每条边中间的小圆点，在这条边上加一个点；右键顶点删掉它（或单击选中后按 Delete）。
+                地图底图本身就是 WGS-84，点出来的坐标原样保存。
+                <b>别从高德 / 腾讯 / 百度地图上抄坐标直接贴</b>——那是 GCJ-02 / BD-09，城区会偏几百米而且不报错；
+                真要贴，在下面「粘贴坐标」里选对来源，会先换回 WGS-84。
+            </template>
+            <template v-else>
+                没有可视化地图（部署未配置 KEEL_MAP_TILES）。围栏请在下面「粘贴 GeoJSON / 坐标」里手工提供，
+                「撤销」「清空重画」「保存围栏」等按钮照常可用。
+                <b>别从高德 / 腾讯 / 百度地图上抄坐标直接贴</b>——那是 GCJ-02 / BD-09，选对来源会先换回 WGS-84。
+            </template>
         </el-alert>
 
-        <div ref="mapEl" class="map" />
+        <div v-if="mapStatus === 'enabled'" ref="mapEl" class="map" />
+        <el-alert v-else-if="mapStatus === 'disabled'" type="warning" :closable="false" show-icon class="mb8" title="未配置地图底图（KEEL_MAP_TILES），图形化编辑不可用，用下面「粘贴 GeoJSON / 坐标」提供围栏" />
+        <p v-else class="hint">地图加载中…</p>
 
         <div class="toolbar">
             <span class="hint">
                 顶点 {{ vertices.length }} 个 ·
                 <template v-if="closed">已闭合</template>
                 <template v-else-if="vertices.length >= 3"><b class="warn">绘制中</b>：点第一个点或按「闭合」完成</template>
-                <template v-else>绘制中：在地图上点顶点</template>
-                （灰色虚线是已保存的围栏）
+                <template v-else-if="mapStatus === 'enabled'">绘制中：在地图上点顶点</template>
+                <template v-else>绘制中：用下面「粘贴 GeoJSON / 坐标」提供顶点</template>
+                <template v-if="mapStatus === 'enabled'">（灰色虚线是已保存的围栏）</template>
             </span>
             <span class="grow" />
             <el-button v-if="!closed" size="small" type="primary" plain :disabled="vertices.length < 3" @click="closeRingDraft">闭合</el-button>

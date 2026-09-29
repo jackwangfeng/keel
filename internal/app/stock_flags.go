@@ -34,11 +34,12 @@ const (
 	EnvGeoKey      = "KEEL_GEO_KEY"
 )
 
-// EnvMapTiles / EnvTiandituKey 配地图底图（docs/POI-设计.md「地图底图」）：tianditu（天地图，要「服务端」类型的 key）
-// 或 osm（只给开发自测）。没配时 /geo/map 报 enabled=false，客户端不显示地图。
+// EnvMapTiles / EnvTiandituKey / EnvTiandituReferer 配地图底图（docs/POI-设计.md「地图底图」）：tianditu（天地图，
+// 「浏览器端」类型的 key + 站点地址，代理取瓦片时带作 Referer）或 osm（只给开发自测）。没配时 /geo/map 报 enabled=false。
 const (
-	EnvMapTiles    = "KEEL_MAP_TILES"
-	EnvTiandituKey = "KEEL_TIANDITU_KEY"
+	EnvMapTiles        = "KEEL_MAP_TILES"
+	EnvTiandituKey     = "KEEL_TIANDITU_KEY"
+	EnvTiandituReferer = "KEEL_TIANDITU_REFERER"
 )
 
 // EnvSearchVectorFloor 覆盖检索的向量相关度下限（service.DefaultVectorFloor，余弦相似度）。

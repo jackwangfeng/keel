@@ -1,14 +1,17 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_map/flutter_map.dart' show TileProvider;
 import 'package:go_router/go_router.dart';
 
 import '../api/address.dart';
 import '../api/client.dart';
 import '../api/geo.dart';
+import '../api/locate.dart';
 import '../api/services.dart';
 import '../theme.dart';
 import '../widgets/form_bits.dart';
+import 'map_picker_page.dart';
 
 /// 选出来的送货位置。[device] = 改回用当前定位；[at] 为 null = 选了一条没坐标、也没查到坐标的收货地址。
 /// [place] 是搜索地点 / 地图选点选中的完整地点（省市区已补全，填收货地址用）。
@@ -22,12 +25,16 @@ class PickedPlace {
   PickedPlace.of(Place p) : this(label: geoLabel(p), at: (lat: p.lat, lng: p.lng), place: p);
 }
 
-/// 选地点：输入提示（/geo/suggest）+ 地图选点（小程序）；首页换地址时另有「使用当前定位」和收货地址列表。
+/// 选地点：输入提示（/geo/suggest）+ 地图选点（小程序用微信选点页，App / Web 在服务端开了底图时用 [MapPickerPage]）；首页换地址时另有「使用当前定位」和收货地址列表。
 /// 没配地图服务商（501）时搜索框说明暂未开通 —— 降级，不当错误；收货地址照样能选。
 class PlacePickerPage extends StatefulWidget {
-  const PlacePickerPage({super.key, this.forAddress = false});
+  const PlacePickerPage({super.key, this.forAddress = false, this.mapTiles, this.mapLocate = locateDevice});
   /// 从地址编辑页进来：只要一个地点（省市区、坐标），不列收货地址、不给当前定位。
   final bool forAddress;
+  /// 测试用：地图选点页的瓦片来源（不发网络请求）。
+  final TileProvider? mapTiles;
+  /// 地图选点页开场 /「回到我的位置」用的定位（测试里换掉）。
+  final Future<LatLng?> Function() mapLocate;
   @override
   State<PlacePickerPage> createState() => _PlacePickerPageState();
 }
@@ -48,6 +55,8 @@ class _PlacePickerPageState extends State<PlacePickerPage> {
   String _addressError = '';
   bool _needLogin = false;
   bool _started = false;
+  // 地图选点的入口：进页面时问一次（小程序恒有；其它平台看 /geo/map 开没开）。
+  bool _canMap = false;
 
   @override
   void didChangeDependencies() {
@@ -55,6 +64,7 @@ class _PlacePickerPageState extends State<PlacePickerPage> {
     if (!_started) {
       _started = true;
       if (!widget.forAddress) _loadAddresses();
+      _checkMap();
     }
   }
 
@@ -63,6 +73,11 @@ class _PlacePickerPageState extends State<PlacePickerPage> {
     _debounce?.cancel();
     _input.dispose();
     super.dispose();
+  }
+
+  Future<void> _checkMap() async {
+    final ok = await canPickOnMap(Services.of(context).client);
+    if (mounted && ok) setState(() => _canMap = true);
   }
 
   Future<void> _loadAddresses() async {
@@ -121,8 +136,21 @@ class _PlacePickerPageState extends State<PlacePickerPage> {
   }
 
   Future<void> _pickOnMap() async {
-    final p = await pickOnMap(near: Services.of(context).store.at);
-    if (p != null && mounted) await _pickPlace(p);
+    if (_busy) return;
+    final s = Services.of(context);
+    final nav = Navigator.of(context);
+    setState(() => _busy = true);
+    // 两条路返回的都已补全省市区（小程序那条在 pickOnMap 里 completePlace，地图页确定时 reverse 过）。
+    final p = await pickOnMap(s.client,
+        near: s.store.at,
+        openMap: (cfg) => nav.push<Place>(MaterialPageRoute(
+            builder: (_) => MapPickerPage(config: cfg, near: s.store.at, locate: widget.mapLocate, tileProvider: widget.mapTiles))));
+    if (!mounted) return;
+    if (p == null) {
+      setState(() => _busy = false);
+      return;
+    }
+    context.pop(PickedPlace.of(p));
   }
 
   /// 收货地址：有坐标直接用；老地址没有，先用地址全文搜一次取第一个候选的坐标；拿不到（含 501）就不带坐标。
@@ -214,7 +242,7 @@ class _PlacePickerPageState extends State<PlacePickerPage> {
 
   List<Widget> _shortcuts() {
     final rows = <Widget>[
-      if (canPickOnMap)
+      if (_canMap)
         _row(key: const Key('place.map'), icon: Icons.map_outlined, title: '在地图上选点', onTap: _pickOnMap, last: widget.forAddress),
       if (!widget.forAddress)
         _row(key: const Key('place.device'), icon: Icons.my_location, title: '使用当前定位',

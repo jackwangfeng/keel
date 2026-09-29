@@ -87,10 +87,64 @@ Place? mapPick(Map<String, Object?> r) {
   return Place(name: '${r['name'] ?? ''}', address: '${r['address'] ?? ''}', lat: w.lat, lng: w.lng);
 }
 
-/// 小程序里才有的地图选点（微信自带的选点页，免 key）。用户取消是 null。
-bool get canPickOnMap => MpWechat.isAvailable;
+/// 底图配置（GET /geo/map；契约的 GeoMapConfig 只在这一层读）。[layers] 从下往上叠（天地图 base + label，label 透明底）。
+/// 瓦片坐标 CGCS2000 ≈ WGS-84，与门店 / 围栏 / 收货地址同一套，不做 GCJ-02 转换。
+class MapConfig {
+  final bool enabled;
+  final List<String> layers;
+  final int maxZoom;
+  final String attribution;
+  const MapConfig({required this.enabled, this.layers = const [], this.maxZoom = 18, this.attribution = ''});
+  static const off = MapConfig(enabled: false);
+}
 
-Future<Place?> pickOnMap({LatLng? near}) async {
+// 一次会话问一次；按服务地址分开记（「服务地址」页换了店就重新问）。
+final _mapConfigs = <String, Future<MapConfig>>{};
+
+/// 底图开没开。拿不到（没这条接口 / 网络）按没开算、不记下，下次再问；页面据此不给入口，不当错误。
+Future<MapConfig> fetchMapConfig(ApiClient c) {
+  final base = c.base;
+  return _mapConfigs[base] ??= () async {
+    try {
+      final g = (await c.send('GET', '/geo/map', decode: (j) => GeoMapConfig.fromJson(j as Map<String, dynamic>))).data;
+      return MapConfig(enabled: g.enabled && g.layers.isNotEmpty, layers: g.layers, maxZoom: g.maxZoom, attribution: g.attribution);
+    } on ApiFailure {
+      _mapConfigs.remove(base);
+      return MapConfig.off;
+    }
+  }();
+}
+
+/// 测试用：清掉 [fetchMapConfig] 的缓存。
+void resetMapConfigCache() => _mapConfigs.clear();
+
+/// 某一层瓦片的 URL 模板（{z}/{x}/{y} 由地图组件填）。服务地址是相对的（Web 同源 /api/v1）就按页面地址补全。
+String mapTileUrl(ApiClient c, String layer, {Uri? page}) {
+  final t = '${c.base}/geo/tiles/$layer/{z}/{x}/{y}';
+  final b = Uri.tryParse(c.base);
+  if (b != null && b.hasScheme) return t;
+  final origin = page ?? Uri.base;
+  if (!origin.hasScheme || !origin.hasAuthority) return t;
+  return '${origin.scheme}://${origin.authority}${t.startsWith('/') ? '' : '/'}$t';
+}
+
+/// 地图选点的入口给不给：小程序有微信自带的选点页（免 key）；其它平台要服务端开了底图。
+Future<bool> canPickOnMap(ApiClient c) async => MpWechat.isAvailable || (await fetchMapConfig(c)).enabled;
+
+/// 地图选点，返回省市区已补全的地点；用户取消是 null。
+/// 小程序走 wx.chooseLocation（GCJ-02 → WGS-84，再 [completePlace]）；其它平台用 [openMap] 打开自带的地图选点页
+/// （那一页确定时已经 reverse 过，原样返回）。
+Future<Place?> pickOnMap(ApiClient c, {LatLng? near, required Future<Place?> Function(MapConfig cfg) openMap}) async {
+  if (MpWechat.isAvailable) {
+    final p = await _wxChooseLocation(near);
+    return p == null ? null : completePlace(c, p);
+  }
+  final cfg = await fetchMapConfig(c);
+  if (!cfg.enabled) return null;
+  return openMap(cfg);
+}
+
+Future<Place?> _wxChooseLocation(LatLng? near) async {
   final g = near == null ? null : wgs84ToGcj02(near.lat, near.lng);
   try {
     return mapPick(await MpWechat.call('chooseLocation', {'latitude': ?g?.lat, 'longitude': ?g?.lng}));

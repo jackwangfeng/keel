@@ -215,12 +215,19 @@ GCJ-02（高德 / 腾讯）或 BD-09（百度），城区偏几百米（`geo.tes
 约 550 米 / 1.4 公里）——偏过的多边形照样合法，ST_Intersects 照样给答案，
 只是把买家判进错的门店。
 
-所以编辑器是 **Leaflet 1.9.4 + OpenStreetMap 瓦片**（`src/components/FenceEditor.vue`）：
-OSM 与 Leaflet 的 lat/lng 都是 WGS-84，点出来的顶点原样存。考虑过国内地图，
-否决的理由是它把「存之前必须换算」变成一段只要漏一次就悄悄判错店的代码。
-代价是 OSM 瓦片在国内有时加载慢、路网细节不如高德——所以旁边有「粘贴
-GeoJSON / 坐标」入口，没网也能配；**换算只发生在那里**，且要运营显式选
-「这批坐标来自 GCJ-02 / BD-09」，默认 WGS-84、不猜。
+所以编辑器是 **Leaflet 1.9.4 + 服务端代理的底图瓦片**（`src/components/FenceEditor.vue`、
+`src/components/LocationPicker.vue`，两者共用 `src/api/mapTiles.ts` 取配置 /
+缓存）：底图走 `GET /geo/map`（开没开、叠哪几层、最大级别、署名）+
+`GET /geo/tiles/{layer}/{z}/{x}/{y}`（服务端转发），部署上通常是天地图
+（CGCS2000 ≈ WGS-84），本地开发也可以用 OSM——不管哪种，瓦片与 Leaflet 的
+lat/lng 都是 WGS-84，点出来的顶点原样存。考虑过国内地图，否决的理由是它把
+「存之前必须换算」变成一段只要漏一次就悄悄判错店的代码。
+代价是瓦片有时加载慢、路网细节不如高德——所以旁边有「粘贴 GeoJSON / 坐标」
+入口，没网也能配；**换算只发生在那里**，且要运营显式选「这批坐标来自
+GCJ-02 / BD-09」，默认 WGS-84、不猜。部署没配 `KEEL_MAP_TILES` 时
+（`GeoMapConfig.enabled=false`）：两个组件都不画地图，`LocationPicker`
+退回经纬度输入框，`FenceEditor` 退回只读说明 + 「粘贴 GeoJSON / 坐标」，
+两条路都不依赖地图本身。
 
 几何规则全在 `src/api/geo.ts`，有 14 条测试（`make admin-test`，接进 check-all.sh）：
 经纬度换序只经 `toPosition` / `toLatLng` 两个函数；GCJ-02 逆变换迭代到 1 厘米内；

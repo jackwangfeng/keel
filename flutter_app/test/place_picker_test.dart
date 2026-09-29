@@ -8,13 +8,17 @@ import 'package:http/testing.dart';
 import 'package:keel_buyer/api/cart_count.dart';
 import 'package:keel_buyer/api/catalog.dart';
 import 'package:keel_buyer/api/client.dart';
+import 'package:keel_buyer/api/geo.dart';
 import 'package:keel_buyer/api/notification.dart';
 import 'package:keel_buyer/api/services.dart';
 import 'package:keel_buyer/api/session.dart';
 import 'package:keel_buyer/api/store.dart';
+import 'package:keel_buyer/pages/map_picker_page.dart';
 import 'package:keel_buyer/pages/place_picker_page.dart';
 import 'package:keel_buyer/theme.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import 'map_tiles.dart';
 
 http.Response j(Object body, [int status = 200]) => http.Response(jsonEncode(body), status,
     headers: {'content-type': 'application/json; charset=utf-8'});
@@ -43,7 +47,7 @@ Future<(Widget, List<PickedPlace?>, List<Uri>)> host(http.Response Function(http
   final router = GoRouter(routes: [
     GoRoute(path: '/', builder: (c, _) => Scaffold(body: TextButton(
         onPressed: () async => got.add(await c.push<PickedPlace>('/p')), child: const Text('open')))),
-    GoRoute(path: '/p', builder: (_, _) => PlacePickerPage(forAddress: forAddress)),
+    GoRoute(path: '/p', builder: (_, _) => PlacePickerPage(forAddress: forAddress, mapTiles: NoNetworkTiles(), mapLocate: () async => null)),
   ]);
   final w = Services(client: client, session: session, store: StoreService(client, locate: () async => null),
       cart: CartCount(client, session), trace: SearchTrace(client), unread: UnreadCount(client, session),
@@ -64,6 +68,8 @@ Future<void> type(WidgetTester t, String q) async {
 }
 
 void main() {
+  setUp(resetMapConfigCache);
+
   testWidgets('没配地图服务商（501）：搜索框说明暂未开通，不当错误；收货地址照样能选（带坐标的直接用）', (t) async {
     final (w, got, _) = await host((r) => switch (r.url.path) {
           '/api/v1/addresses' => j([addr(1, '文三路 1 号', lat: 30.27, lng: 120.15)]),
@@ -147,5 +153,44 @@ void main() {
     await open(t, w);
     expect(find.byKey(const Key('place.device')), findsNothing);
     expect(seen.where((u) => u.path == '/api/v1/addresses'), isEmpty);
+  });
+
+  group('地图选点（App / Web）', () {
+    final mapOn = {'enabled': true, 'layers': ['vec', 'cva'], 'max_zoom': 18, 'attribution': '© 天地图'};
+
+    testWidgets('服务端没开底图（enabled=false）：不给「在地图上选点」', (t) async {
+      final (w, _, seen) = await host((r) => switch (r.url.path) {
+            '/api/v1/geo/map' => j({'enabled': false, 'layers': [], 'max_zoom': 0, 'attribution': ''}),
+            '/api/v1/addresses' => j([]),
+            _ => off(),
+          });
+      await open(t, w);
+      expect(seen.where((u) => u.path == '/api/v1/geo/map'), hasLength(1));
+      expect(find.byKey(const Key('place.map')), findsNothing);
+      expect(find.byKey(const Key('place.device')), findsOneWidget);
+    });
+
+    testWidgets('开了：入口出来，点开是地图页；确定后带着补全的地点回来', (t) async {
+      final (w, got, seen) = await host((r) => switch (r.url.path) {
+            '/api/v1/geo/map' => j(mapOn),
+            '/api/v1/geo/reverse' => j(place('黄龙时代广场', lat: 39.9, lng: 116.4)),
+            '/api/v1/addresses' => j([]),
+            _ => off(),
+          }, forAddress: true);
+      await open(t, w);
+      await t.tap(find.byKey(const Key('place.map')));
+      await t.pumpAndSettle();
+      expect(find.byType(MapPickerPage), findsOneWidget);
+      expect(find.text('当前位置：黄龙时代广场'), findsOneWidget);
+      await t.tap(find.byKey(const Key('map.confirm')));
+      await t.pumpAndSettle();
+      final p = got.single!;
+      expect(p.label, '黄龙时代广场');
+      expect((p.place!.province, p.place!.adcode), ('浙江省', '330106'));
+      // 地图页已经 reverse 过，确定时不再多问一次。
+      expect(seen.where((u) => u.path == '/api/v1/geo/reverse'), hasLength(1));
+      // 一次会话只问一次底图配置。
+      expect(seen.where((u) => u.path == '/api/v1/geo/map'), hasLength(1));
+    });
   });
 }

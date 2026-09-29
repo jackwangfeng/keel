@@ -113,4 +113,60 @@ void main() {
     expect((p.name, p.address), ('天安门', '北京市东城区'));
     expect(mapPick({'errMsg': 'chooseLocation:ok'}), isNull, reason: '没有坐标就当没选');
   });
+
+  group('底图配置 /geo/map', () {
+    setUp(resetMapConfigCache);
+    ApiClient client(Future<http.Response> Function(http.Request r) h, {String base = 'http://h/api/v1'}) =>
+        ApiClient(base: base, session: Session(), http: MockClient(h));
+    final on = {'enabled': true, 'layers': ['vec', 'cva'], 'max_zoom': 18, 'attribution': '© 天地图'};
+
+    test('开了：一次会话只问一次', () async {
+      var n = 0;
+      final c = client((r) async {
+        n++;
+        expect(r.url.path, '/api/v1/geo/map');
+        return http.Response(jsonEncode(on), 200, headers: _json);
+      });
+      final m = await fetchMapConfig(c);
+      await fetchMapConfig(c);
+      expect(await canPickOnMap(c), isTrue);
+      expect(n, 1);
+      expect((m.enabled, m.maxZoom, m.attribution), (true, 18, '© 天地图'));
+      expect(m.layers, ['vec', 'cva']);
+    });
+
+    test('没开 / 没有图层：不给入口', () async {
+      final c = client((r) async => http.Response(jsonEncode({'enabled': false, 'layers': [], 'max_zoom': 0, 'attribution': ''}), 200, headers: _json));
+      expect(await canPickOnMap(c), isFalse);
+    });
+
+    test('拿不到（404 / 网络）按没开算，且不记下，下次再问', () async {
+      var n = 0;
+      final c = client((r) async {
+        n++;
+        return n == 1 ? http.Response('{}', 404, headers: _json) : http.Response(jsonEncode(on), 200, headers: _json);
+      });
+      expect(await canPickOnMap(c), isFalse);
+      expect(await canPickOnMap(c), isTrue);
+      expect(n, 2);
+    });
+
+    test('pickOnMap：没开就不打开地图页', () async {
+      final c = client((r) async => http.Response(jsonEncode({'enabled': false, 'layers': [], 'max_zoom': 0, 'attribution': ''}), 200, headers: _json));
+      var opened = false;
+      final p = await pickOnMap(c, openMap: (_) async {
+        opened = true;
+        return null;
+      });
+      expect((p, opened), (null, false));
+    });
+
+    test('瓦片地址：跟服务地址走；Web 同源的相对地址按页面补全', () {
+      final abs = client((r) async => http.Response('', 200));
+      expect(mapTileUrl(abs, 'vec'), 'http://h/api/v1/geo/tiles/vec/{z}/{x}/{y}');
+      final rel = client((r) async => http.Response('', 200), base: '/api/v1');
+      expect(mapTileUrl(rel, 'cva', page: Uri.parse('https://shop.example.com/#/place')),
+          'https://shop.example.com/api/v1/geo/tiles/cva/{z}/{x}/{y}');
+    });
+  });
 }

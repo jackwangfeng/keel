@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // 假天地图：认 tk、按 LAYER 区分两层，key 不对时像真的一样回 200 + XML 错误页。
@@ -16,6 +17,9 @@ func fakeTianditu(t *testing.T, hits *atomic.Int32) *httptest.Server {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits.Add(1)
 		q := r.URL.Query()
+		if r.Header.Get("Referer") != "https://shop.example/" {
+			t.Errorf("没带站点的 Referer：%q", r.Header.Get("Referer"))
+		}
 		if r.Header.Get("User-Agent") == "" {
 			w.WriteHeader(http.StatusTeapot)
 			return
@@ -40,7 +44,7 @@ func TestTiandituTileAndErrors(t *testing.T) {
 	srv := fakeTianditu(t, &hits)
 	ctx := context.Background()
 
-	s := NewTianditu("good", srv.URL)
+	s := NewTianditu("good", srv.URL, "https://shop.example/")
 	if got := s.Layers(); len(got) != 2 || got[0] != "base" || got[1] != "label" {
 		t.Fatalf("层应为 [base label]（底图在下、注记在上），实得 %v", got)
 	}
@@ -58,7 +62,7 @@ func TestTiandituTileAndErrors(t *testing.T) {
 		t.Errorf("不认识的层应 ErrTileNotFound，实得 %v", err)
 	}
 	// key 错：服务商回 200 + XML，不能当成一张图发给客户端（更不能进缓存）。
-	if _, _, err := NewTianditu("bad", srv.URL).Tile(ctx, "base", 1, 0, 0); !errors.Is(err, ErrUpstream) {
+	if _, _, err := NewTianditu("bad", srv.URL, "https://shop.example/").Tile(ctx, "base", 1, 0, 0); !errors.Is(err, ErrUpstream) {
 		t.Errorf("key 错应 ErrUpstream，实得 %v", err)
 	}
 }
@@ -68,7 +72,7 @@ func TestCachedTilesHitsAndEvicts(t *testing.T) {
 	srv := fakeTianditu(t, &hits)
 	ctx := context.Background()
 
-	c := NewCachedTiles(NewTianditu("good", srv.URL), 20) // 每张 9 字节（"vec:5/1/1"）：放得下两张
+	c := NewCachedTiles(NewTianditu("good", srv.URL, "https://shop.example/"), 20) // 每张 9 字节（"vec:5/1/1"）：放得下两张
 	for range 3 {
 		if _, _, err := c.Tile(ctx, "base", 5, 1, 1); err != nil {
 			t.Fatal(err)
@@ -94,7 +98,7 @@ func TestCachedTilesHitsAndEvicts(t *testing.T) {
 	}
 
 	// 失败不进缓存。
-	bad := NewCachedTiles(NewTianditu("bad", srv.URL), 1<<20)
+	bad := NewCachedTiles(NewTianditu("bad", srv.URL, "https://shop.example/"), 1<<20)
 	_, _, _ = bad.Tile(ctx, "base", 1, 0, 0)
 	n := hits.Load()
 	_, _, _ = bad.Tile(ctx, "base", 1, 0, 0)
@@ -104,19 +108,55 @@ func TestCachedTilesHitsAndEvicts(t *testing.T) {
 }
 
 func TestTilesFromEnv(t *testing.T) {
-	if s, err := TilesFromEnv("", ""); s != nil || err != nil {
+	if s, err := TilesFromEnv("", "", "", 0, 0); s != nil || err != nil {
 		t.Errorf("没配应 (nil, nil)，实得 (%v, %v)", s, err)
 	}
-	if _, err := TilesFromEnv("tianditu", ""); err == nil {
+	if _, err := TilesFromEnv("tianditu", "", "https://a.example/", 0, 0); err == nil {
 		t.Error("选了 tianditu 却没给 key 应报错（部署错误，启动即失败）")
 	}
-	if _, err := TilesFromEnv("gaode", "k"); err == nil {
+	if _, err := TilesFromEnv("tianditu", "k", "", 0, 0); err == nil {
+		t.Error("选了 tianditu 却没给 referer 应报错（浏览器端 key 按域名校验）")
+	}
+	if _, err := TilesFromEnv("gaode", "k", "", 0, 0); err == nil {
 		t.Error("不认识的服务商应报错")
 	}
-	if s, err := TilesFromEnv(" Tianditu ", "k"); err != nil || s.Name() != "tianditu" {
+	if s, err := TilesFromEnv(" Tianditu ", "k", "https://a.example/", 10, 40); err != nil || s.Name() != "tianditu" {
 		t.Errorf("大小写与空白应容忍：%v %v", s, err)
 	}
-	if s, err := TilesFromEnv("osm", ""); err != nil || s.Name() != "osm" || len(s.Layers()) != 1 {
+	if s, err := TilesFromEnv("osm", "", "", 10, 40); err != nil || s.Name() != "osm" || len(s.Layers()) != 1 {
 		t.Errorf("osm 不需要 key、只有一层：%v %v", s, err)
+	}
+}
+
+// 总闸：不分来源、只数真打到服务商的请求；缓存命中不占额度，额度随时间回来。
+func TestCachedTilesUpstreamLimit(t *testing.T) {
+	var hits atomic.Int32
+	srv := fakeTianditu(t, &hits)
+	ctx := context.Background()
+	c := NewCachedTiles(NewTianditu("good", srv.URL, "https://shop.example/"), 1<<20)
+	now := time.Unix(1000, 0)
+	c.now = func() time.Time { return now }
+	c.SetUpstreamLimit(1, 2)
+
+	for x := range 2 {
+		if _, _, err := c.Tile(ctx, "base", 5, x, 0); err != nil {
+			t.Fatalf("瞬时额度内的第 %d 张：%v", x+1, err)
+		}
+	}
+	if _, _, err := c.Tile(ctx, "base", 5, 9, 0); !errors.Is(err, ErrUpstreamBusy) {
+		t.Fatalf("超过瞬时额度应 ErrUpstreamBusy，实得 %v", err)
+	}
+	if _, _, err := c.Tile(ctx, "base", 5, 0, 0); err != nil {
+		t.Errorf("缓存命中不该过总闸：%v", err)
+	}
+	if _, _, err := c.Tile(ctx, "base", 30, 0, 0); !errors.Is(err, ErrTileNotFound) {
+		t.Errorf("越界的请求应先按 ErrTileNotFound 拒，不占额度：%v", err)
+	}
+	now = now.Add(time.Second)
+	if _, _, err := c.Tile(ctx, "base", 5, 9, 0); err != nil {
+		t.Errorf("一秒后额度回来一张：%v", err)
+	}
+	if hits.Load() != 3 {
+		t.Errorf("真打到服务商的应是 3 次，实得 %d", hits.Load())
 	}
 }

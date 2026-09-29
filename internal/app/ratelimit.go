@@ -350,6 +350,11 @@ const (
 	// 挡的是一条 for 循环把整个中国的瓦片刷一遍、耗光天地图 key 的日调用量。
 	DefaultTileRatePerSec = 60.0
 	DefaultTileRateBurst  = 120.0
+
+	// EnvTileUpstreamPerSec / EnvTileUpstreamBurst 是瓦片的**总闸**：全站（不分 IP）每秒最多向瓦片服务商
+	// 取多少张（缓存没命中的那些），默认值与理由在 geo.DefaultTileUpstreamPerSec。<= 0 关闭。
+	EnvTileUpstreamPerSec = "KEEL_TILE_UPSTREAM_PER_SEC"
+	EnvTileUpstreamBurst  = "KEEL_TILE_UPSTREAM_BURST"
 )
 
 func tileRateLimiterFromEnv() *ipRateLimiter {
