@@ -14,7 +14,7 @@
 
 ## Flutter 买家端（flutter_app/，2026-09-28 起主要维护的客户端）
 
-- **对外展示（eshop.zzss.fun 的 `/`）2026-09-28 起是 Flutter Web**：`~/.local/share/keel-eshop/bin/publish-frontend.sh h5`（本机构建，SDK `~/development/flutter` 3.47.5；PATH 上的是 flutter_ohos）。uni-app x 版留作 `h5-uniapp`（回滚用），上一份产物备份在 `/srv/keel-eshop/h5-uniapp`。
+- **对外展示（eshop.zzss.fun 的 `/`）2026-09-28 起是 Flutter Web**：`~/.local/share/keel-eshop/bin/publish-frontend.sh h5`（本机构建，SDK `~/development/flutter`，**钉在 3.41.9**（`flutter_app/.flutter-version`，mp-flutter 只支持这一版；CI 会校验）；PATH 上的是 flutter_ohos）。uni-app x 版留作 `h5-uniapp`（回滚用），上一份产物备份在 `/srv/keel-eshop/h5-uniapp`。
   **国内打得开的关键**：Flutter Web 默认从 gstatic 取 CanvasKit 与补字字体，屏蔽后整页空白（实测）。构建加 `--no-web-resources-cdn`，`flutter_bootstrap.js` 注入 `fontFallbackBaseUrl: "/gfonts/"`，引擎补字清单的 725 个字体镜像在 `~/.local/share/keel-eshop/gfonts`（24M），发布时拷进产物。升级 Flutter 后按 `bin/cache/flutter_web_sdk/lib/_engine/engine/font_fallback_data.dart` 补镜像。屏蔽 google/gstatic 后从公网打开首页验证通过（请求全在本站）。首屏要下 main.dart.js 约 3M + canvaskit.wasm 约 7M（Caddy gzip）。
 
 - **状态**：对齐 uni-app x 全部页面（第一阶段购物主链路 + 第二阶段券 / 消息 / 资料 / 服务地址 / 售后），main `fce951c` 起。uni-app x（`app/`）冻结，只修 bug。

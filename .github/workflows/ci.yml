@@ -466,6 +466,10 @@ jobs:
   # PUB_HOSTED_URL / FLUTTER_STORAGE_BASE_URL 与开发机一致（pubspec.lock 里记的是
   # pub.flutter-io.cn，源不一致时 --enforce-lockfile 会判成锁文件不符）。
   #
+  # SDK 版本钉在 3.41.9：小程序构建（mp-flutter）目前只支持这一版（它的 version_matrix），
+  # 开发机、runner、演示站发布脚本都用同一份，锁文件才对得上。要升 SDK，先等 mp-flutter 支持新版本，
+  # 再把这里、flutter_app/.flutter-version 与各台机器的 ~/development/flutter 一起升，重新生成 pubspec.lock。
+  #
   # 本机实测（2026-09-29）：pub get + analyze + 165 条测试约 20 秒，编 Web 约 46 秒。
   flutter:
     name: 客户端（Flutter：分析、测试、编 Web）
@@ -480,6 +484,16 @@ jobs:
       # --enforce-lockfile：锁文件与 pubspec 对不上就失败，而不是悄悄换一套依赖版本去测。
       # SDK 升级后 flutter_test 钉的 meta / matcher 会变，那时本地 `make flutter-get`
       # 更新 pubspec.lock 一起提交。
+      # 版本不对就在这里说清楚，别等 --enforce-lockfile 报一句看不出原因的「锁文件不符」。
+      - name: SDK 版本（与 flutter_app/.flutter-version 一致）
+        working-directory: flutter_app
+        run: |
+          want=$(cat .flutter-version)
+          got=$(PATH="$HOME/development/flutter/bin:$PATH" FLUTTER_GIT_URL= flutter --version --machine | python3 -c 'import sys,json;print(json.load(sys.stdin)["frameworkVersion"])')
+          if [ "$got" != "$want" ]; then
+            echo "::error::runner 的 ~/development/flutter 是 $got，要 $want（cd ~/development/flutter && git fetch --tags && git checkout $want && flutter --version）"
+            exit 1
+          fi
       - name: 依赖（按锁文件）
         working-directory: flutter_app
         run: PATH="$HOME/development/flutter/bin:$PATH" FLUTTER_GIT_URL= flutter pub get --enforce-lockfile
