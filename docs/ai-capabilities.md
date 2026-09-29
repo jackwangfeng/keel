@@ -13,8 +13,10 @@
 > （Qwen3-Embedding-0.6B，1024 维）。rerank / generate / forecast 那三半还没接，
 > 各自的里程碑见下表。
 >
-> **infero 2026-09-26 起有了 CPU 后端，数值与 GPU 一致，但今天单线程、单条查询约 5 秒，还用不上。** 所以没有 GPU 的部署
-> 仍然不配 `KEEL_EMBED_ENDPOINT`，`/search` 走纯关键词降级链 —— 能跑，只是没有语义
+> **infero 2026-09-26 起有了 CPU 后端，`cb0ccbd`（2026-09-29）提速后达标了。** 本机 20 核
+> 空闲实测：单条 117 ms 中位数、64 条一批 2.68 s，均在 Keel 的预算内，向量与 GPU 版一致。
+> **没有 GPU 的部署现在可以选择跑 infero CPU 版来获得语义检索**——默认的 `docker compose up`
+> 仍然不配 `KEEL_EMBED_ENDPOINT`，这时 `/search` 走纯关键词降级链，能跑，只是没有语义
 > 召回。实测表与完整的后果见[总体架构](./电商系统-总体架构.md) §1「那个缺口」与 §6 形态 A。
 
 ---

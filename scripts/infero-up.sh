@@ -7,8 +7,9 @@
 # 本来打算给它一个 compose 服务、用 deploy.resources.reservations.devices
 # 把 GPU 透进容器。实测下来放弃了，理由是显存账而不是技术障碍：
 #
-#   - 这里起的是 infero 的 GPU 版（CUDA / Metal；它 2026-09-26 起也有 CPU 后端，但单线程、单条约 5 秒，
-#     Keel 今天用不上，见 docs/电商系统-总体架构.md §1「那个缺口」），而一块卡上
+#   - 这里起的是 infero 的 GPU 版（CUDA / Metal；它 2026-09-26 起也有 CPU 后端，`cb0ccbd`
+#     （2026-09-29）提速后已经达标，见 docs/电商系统-总体架构.md §1「那个缺口」——
+#     没有 GPU 的机器想要语义检索可以编译并起 CPU 版，见下面的提示），而一块卡上
 #     **同时只装得下一份**。本机这块 RTX A4000（16 GiB）此刻还分给另外两个
 #     项目（约 9 GiB），infero 自己要 4.8 GiB —— 容器化不会让它变小，
 #     只会在切换时多一次停机。
@@ -87,8 +88,12 @@ if [ ! -d "$KEEL_INFERO_MODEL" ]; then
 fi
 if ! command -v nvidia-smi >/dev/null 2>&1; then
     echo "这台机器上没有 nvidia-smi，这个脚本起的是 infero 的 GPU 版。" >&2
-    echo "infero 的 CPU 后端（--features cpu）数值一致但今天单线程、单条查询约 5 秒，Keel 用不上；" >&2
-    echo "无 GPU 的部署目前只能不配 KEEL_EMBED_ENDPOINT，让 /search 走纯关键词降级路径（§8）。" >&2
+    echo "没有 GPU 也能有语义检索：infero 的 CPU 后端（--features cpu）已经达标（cb0ccbd，2026-09-29），" >&2
+    echo "数值与 GPU 一致，本机 20 核空闲实测单条 117 ms、64 条一批 2.68 s。编译：" >&2
+    echo "  cargo build --release -p infero-server --no-default-features --features cpu --target-dir target-cpu" >&2
+    echo "启动后跟 GPU 版一样把 KEEL_EMBED_ENDPOINT 指过去；要留够核（建议 4-8 核以上），" >&2
+    echo "详见 docs/指南/部署与配置.md「没有 GPU」一节。不想跑 CPU 版，就不配 KEEL_EMBED_ENDPOINT，" >&2
+    echo "让 /search 走纯关键词降级路径（§8）。" >&2
     exit 1
 fi
 

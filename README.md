@@ -319,13 +319,18 @@ are not there yet, and are listed so that nothing above reads as if it ships:
   visibly. The derived-data indexer does not start either; the startup log
   carries one WARN spelling that out.
 
-  **That is the only shape a GPU-less deployment has today.** infero gained a CPU
-  backend on 2026-09-26 (`--features cpu`), and measured here its vectors match the
-  GPU build (cosine ≥ 0.999999, same model id). But it is single-threaded for now:
-  about 5 s per query (≈8 ms on the GPU) and about 4 minutes for an indexing batch of 64 —
-  far over Keel's 250 ms query budget and 5 s indexing timeout — so "semantic search without a
-  GPU" is **not** a feature yet. The measurements and how to reproduce them are in the
-  architecture doc (§1, "那个缺口"); we will re-measure once infero's CPU path is faster.
+  **A GPU-less deployment can now have semantic search too: run infero's CPU build.**
+  infero gained a CPU backend on 2026-09-26 (`--features cpu`); the first cut was
+  single-threaded and too slow for Keel. `cb0ccbd` (2026-09-29 — parallel GEMM via
+  the `gemm` crate, a resident F32 weight cache, parallel attention) fixed that.
+  Measured here on an idle 20-core machine: 117 ms median / 124 ms p90 for a short
+  query, 359/384 ms for a 60-character query, 2.68 s median for a batch of 64 —
+  all three under Keel's budgets (250 ms / 430 ms / 5 s), cosine similarity to the
+  GPU build ≥ 0.9999995, same model id. Under load it slows down a lot (450–1,000 ms
+  per query at load 17–30), so **the CPU shape needs cores reserved for it**
+  (4–8+ dedicated cores recommended). Measurements and how to reproduce them are in
+  the architecture doc (§1, "那个缺口"); build and startup steps are in
+  [部署与配置](./docs/指南/部署与配置.md) ("没有 GPU" section, Chinese only for now).
   This repo does not keep a second engine implementation around as a stand-in — the
   M3 Python service (BGE-M3 on CPU) has been retired
 - **SMS, WeChat and e-mail.** SMS-code login, WeChat login and the console's
