@@ -99,7 +99,7 @@ tags:
   - name: Upload
     description: 文件上传（商品图 / 头像 / 退款凭证）
   - name: Geo
-    description: POI 与地址：逆地理编码与地点输入提示（服务端代理地图服务商，坐标 WGS-84）
+    description: POI 与地址：逆地理编码、地点输入提示与地图底图瓦片（服务端代理地图服务商，坐标 WGS-84）
   - name: Agent
     description: AI 员工（AI 经营 M9）：后台管理 AI 员工与接入密钥；AI 员工凭密钥调用的接口
   - name: Store
@@ -1273,6 +1273,83 @@ paths:
               schema: { $ref: '#/components/schemas/Problem' }
         '503':
           description: 地图服务商不可用（geo-unavailable）。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /geo/map:
+    get:
+      tags: [Geo]
+      summary: 地图底图配置：开没开、叠哪几层、最大级别、版权署名
+      description: |
+        客户端画地图（买家端地图选点、后台门店坐标与围栏）之前先问这一条。`enabled` 为 false
+        时不显示地图（买家端隐藏「地图选点」，后台退回手填坐标）。瓦片一律从同源的
+        `/geo/tiles/{layer}/{z}/{x}/{y}` 取，按 `layers` 的顺序从下往上叠；`attribution`
+        要显示在地图角上（服务商的使用条款要求）。服务商由部署配置决定（天地图 / 开发用的
+        OpenStreetMap），key 只在服务端。公开接口。
+      security: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GeoMapConfig' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /geo/tiles/{layer}/{z}/{x}/{y}:
+    get:
+      tags: [Geo]
+      summary: 地图瓦片（Web 墨卡托，256 像素）
+      description: |
+        服务端转发给瓦片服务商并缓存（进程内 7 天）；响应带 `Cache-Control: public, max-age=604800`。
+        坐标系：天地图为 CGCS2000，与门店 / 围栏存的 WGS-84 相差厘米级，直接叠画不偏。
+        没配瓦片服务商回 501；层名不认识回 404；级别或行列号越界回 422；服务商不可用
+        （key 失效、超额）回 503。公开接口，按客户端 IP 限流（额度按「拖一下地图几十张瓦片」给）。
+      security: []
+      parameters:
+        - name: layer
+          in: path
+          required: true
+          description: 层名，取 `/geo/map` 的 `layers` 里的一个。
+          schema: { type: string, maxLength: 20 }
+        - name: z
+          in: path
+          required: true
+          schema: { type: integer, minimum: 0, maximum: 22 }
+        - name: x
+          in: path
+          required: true
+          schema: { type: integer, minimum: 0 }
+        - name: y
+          in: path
+          required: true
+          schema: { type: integer, minimum: 0 }
+      responses:
+        '200':
+          description: 瓦片图片
+          content:
+            image/png:
+              schema: { type: string, format: binary }
+            image/jpeg:
+              schema: { type: string, format: binary }
+        '404':
+          description: 没有这一层（not-found）。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: 级别或行列号越界。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '501':
+          description: 没有配置瓦片服务商（not-implemented）。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '503':
+          description: 瓦片服务商不可用（geo-unavailable）。
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
@@ -10372,6 +10449,19 @@ components:
         street:   { type: string, description: 街道办 / 乡镇（收货地址四级里的「街道」），不是道路名；输入提示的候选没有 }
         lat:      { type: number, format: double }
         lng:      { type: number, format: double }
+
+    GeoMapConfig:
+      type: object
+      required: [enabled, layers, max_zoom, attribution]
+      description: 地图底图配置（`/geo/map`）。`enabled` 为 false 时其余字段是空值。
+      properties:
+        enabled:     { type: boolean, description: 部署有没有配瓦片服务商 }
+        layers:
+          type: array
+          description: 从下往上叠的层名（天地图是 base 底图 + label 注记）
+          items: { type: string }
+        max_zoom:    { type: integer, description: 最大缩放级别 }
+        attribution: { type: string, description: 要显示在地图角上的版权署名 }
 
     AdminAgent:
       type: object

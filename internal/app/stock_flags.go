@@ -34,6 +34,13 @@ const (
 	EnvGeoKey      = "KEEL_GEO_KEY"
 )
 
+// EnvMapTiles / EnvTiandituKey 配地图底图（docs/POI-设计.md「地图底图」）：tianditu（天地图，要「服务端」类型的 key）
+// 或 osm（只给开发自测）。没配时 /geo/map 报 enabled=false，客户端不显示地图。
+const (
+	EnvMapTiles    = "KEEL_MAP_TILES"
+	EnvTiandituKey = "KEEL_TIANDITU_KEY"
+)
+
 // EnvSearchVectorFloor 覆盖检索的向量相关度下限（service.DefaultVectorFloor，余弦相似度）。
 // 没设用默认值；负数关闭下限（回到「向量永远凑满 size 条」）。换 embedding 模型后要重新量。
 const EnvSearchVectorFloor = "KEEL_SEARCH_VECTOR_FLOOR"

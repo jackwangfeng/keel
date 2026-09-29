@@ -2790,6 +2790,27 @@ class FreightTemplateInput {
       };
 }
 
+/// 地图底图配置（`/geo/map`）。`enabled` 为 false 时其余字段是空值。
+class GeoMapConfig {
+  final bool enabled;
+  final List<String> layers;
+  final int maxZoom;
+  final String attribution;
+  const GeoMapConfig({required this.enabled, required this.layers, required this.maxZoom, required this.attribution});
+  factory GeoMapConfig.fromJson(Map<String, dynamic> j) => GeoMapConfig(
+        enabled: j['enabled'] as bool,
+        layers: (j['layers'] as List).map((e) => e as String).toList(),
+        maxZoom: (j['max_zoom'] as num).toInt(),
+        attribution: j['attribution'] as String,
+      );
+  Map<String, dynamic> toJson() => {
+        'enabled': enabled,
+        'layers': layers,
+        'max_zoom': maxZoom,
+        'attribution': attribution,
+      };
+}
+
 /// 一个地点，坐标 WGS-84。字段与收货地址对齐：adcode 即地址的 region_code（运费按它算）。
 class GeoPlace {
   final String name;

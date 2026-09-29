@@ -281,6 +281,15 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	geoLimit := rateLimitByIP(searchRateLimiterFromEnv())
 	v1.GET("/geo/reverse", geoLimit, gh.Reverse)
 	v1.GET("/geo/suggest", geoLimit, gh.Suggest)
+	// 地图底图瓦片：服务端转发并缓存，key 不下发（同上）。瓦片的限流单独一只宽桶 ——
+	// 拖一下地图就是几十张，与 /geo/reverse 共用会把选点本身挤成 429。
+	tiles, err := geo.TilesFromEnv(os.Getenv(EnvMapTiles), os.Getenv(EnvTiandituKey))
+	if err != nil {
+		panic(err)
+	}
+	maph := handler.NewMapHandler(tiles)
+	v1.GET("/geo/map", maph.Config)
+	v1.GET("/geo/tiles/:layer/:z/:x/:y", rateLimitByIP(tileRateLimiterFromEnv()), maph.Tile)
 
 	// 搜索行为回传（契约 security: []，与 /search 一样公开：没登录的访客也在点）。
 	// 挡刷指标的不是限流，是 service 那道「product_id 必须在这次检索返回的

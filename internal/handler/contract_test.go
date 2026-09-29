@@ -796,6 +796,21 @@ var routes = []route{
 		HTTPMethod:     http.MethodGet,
 		HandlerFile:    "geo_suggest.go",
 	},
+	// 地图底图：两条都不读 query（配置没有参数，瓦片的层名与行列号在路径上）。
+	{
+		ContractPath:   "/geo/map",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "geo_map.go",
+		NoQueryParams:  "底图配置没有参数：由部署配置决定",
+	},
+	{
+		ContractPath:   "/geo/tiles/{layer}/{z}/{x}/{y}",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "geo_map.go",
+		NoQueryParams:  "层名、级别、行列号全在路径上",
+	},
 	// —— AI 员工的提案（AI 经营 M9 任务 4）。列表读 status / agent_staff_id / page，单独一个文件。
 	{
 		ContractPath:   "/admin/agent-proposals",

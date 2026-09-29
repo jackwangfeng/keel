@@ -1364,6 +1364,18 @@ export type FreightTemplateInput = {
   undeliverable_region_codes? : ProvinceCode[]
 }
 
+/** 地图底图配置（`/geo/map`）。`enabled` 为 false 时其余字段是空值。 */
+export type GeoMapConfig = {
+  /** 部署有没有配瓦片服务商 */
+  enabled : boolean
+  /** 从下往上叠的层名（天地图是 base 底图 + label 注记） */
+  layers : string[]
+  /** 最大缩放级别 */
+  max_zoom : number
+  /** 要显示在地图角上的版权署名 */
+  attribution : string
+}
+
 /** 一个地点，坐标 WGS-84。字段与收货地址对齐：adcode 即地址的 region_code（运费按它算）。 */
 export type GeoPlace = {
   /** 地点名 / 小区 / 门牌 */

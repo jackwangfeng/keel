@@ -34,6 +34,23 @@
 - **返回形状**：`{name, address, province, city, district, adcode, street, lat, lng}` —— 与收货地址的字段对齐，
   `adcode` 就是地址的 `region_code`（运费按它算）。
 
+## 地图底图（2026-09-29）
+
+地图选点、门店坐标、围栏编辑都要一张底图。**底图也走服务端代理**：`GET /api/v1/geo/map` 报配置
+（开没开、叠哪几层、最大级别、版权署名），`GET /api/v1/geo/tiles/{layer}/{z}/{x}/{y}` 转发瓦片。
+
+- **天地图**（`KEEL_MAP_TILES=tianditu` + `KEEL_TIANDITU_KEY`）：国家地理信息公共服务平台，有审图号
+  （国内公开展示的地图必须有），免费 key 可商用、有日调用量上限；坐标 CGCS2000，与 WGS-84 差在厘米级，
+  门店 / 围栏 / 收货地址直接叠画不偏。两层：`base`（矢量底图 vec_w）+ `label`（注记 cva_w）。
+  key 用「服务端」类型、绑服务器出口 IP —— 请求都由 Keel 发出，浏览器与 App 不接触 key。
+- **OpenStreetMap**（`KEEL_MAP_TILES=osm`）：只给开发自测。国内细节少、没有审图号，官方瓦片服务的
+  使用政策不许商用 App 大流量调用。
+- **高德瓦片不用**：不走它的 SDK、不带 key 直接取瓦片没有授权；而且是 GCJ-02，要在客户端纠偏。
+- **缓存与限流**：服务端进程内 LRU（64 MB、7 天，只缓存成功的），响应带 `Cache-Control: public, max-age=604800`；
+  每 IP 每秒 60 张、瞬时 120 张（一屏两层约四五十张）。
+- **没配**：`/geo/map` 报 `enabled: false`，`/geo/tiles` 回 501；买家端不显示「地图选点」
+  （小程序照样用微信自带的 `wx.chooseLocation`，不需要底图），后台退回手填坐标。
+
 ## 三处接入
 
 | 位置 | 谁来做 | 用法 |

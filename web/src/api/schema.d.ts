@@ -2644,6 +2644,136 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/geo/map": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 地图底图配置：开没开、叠哪几层、最大级别、版权署名
+         * @description 客户端画地图（买家端地图选点、后台门店坐标与围栏）之前先问这一条。`enabled` 为 false
+         *     时不显示地图（买家端隐藏「地图选点」，后台退回手填坐标）。瓦片一律从同源的
+         *     `/geo/tiles/{layer}/{z}/{x}/{y}` 取，按 `layers` 的顺序从下往上叠；`attribution`
+         *     要显示在地图角上（服务商的使用条款要求）。服务商由部署配置决定（天地图 / 开发用的
+         *     OpenStreetMap），key 只在服务端。公开接口。
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["GeoMapConfig"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/geo/tiles/{layer}/{z}/{x}/{y}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 地图瓦片（Web 墨卡托，256 像素）
+         * @description 服务端转发给瓦片服务商并缓存（进程内 7 天）；响应带 `Cache-Control: public, max-age=604800`。
+         *     坐标系：天地图为 CGCS2000，与门店 / 围栏存的 WGS-84 相差厘米级，直接叠画不偏。
+         *     没配瓦片服务商回 501；层名不认识回 404；级别或行列号越界回 422；服务商不可用
+         *     （key 失效、超额）回 503。公开接口，按客户端 IP 限流（额度按「拖一下地图几十张瓦片」给）。
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description 层名，取 `/geo/map` 的 `layers` 里的一个。 */
+                    layer: string;
+                    z: number;
+                    x: number;
+                    y: number;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description 瓦片图片 */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "image/png": string;
+                        "image/jpeg": string;
+                    };
+                };
+                /** @description 没有这一层（not-found）。 */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /** @description 级别或行列号越界。 */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /** @description 没有配置瓦片服务商（not-implemented）。 */
+                501: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /** @description 瓦片服务商不可用（geo-unavailable）。 */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/agent/whoami": {
         parameters: {
             query?: never;
@@ -18228,6 +18358,17 @@ export interface components {
             lat: number;
             /** Format: double */
             lng: number;
+        };
+        /** @description 地图底图配置（`/geo/map`）。`enabled` 为 false 时其余字段是空值。 */
+        GeoMapConfig: {
+            /** @description 部署有没有配瓦片服务商 */
+            enabled: boolean;
+            /** @description 从下往上叠的层名（天地图是 base 底图 + label 注记） */
+            layers: string[];
+            /** @description 最大缩放级别 */
+            max_zoom: number;
+            /** @description 要显示在地图角上的版权署名 */
+            attribution: string;
         };
         AdminAgent: {
             /**

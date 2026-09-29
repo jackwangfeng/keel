@@ -340,6 +340,27 @@ func searchEventRateLimiterFromEnv() *ipRateLimiter {
 	return newIPRateLimiter(rate, burst)
 }
 
+const (
+	// EnvTileRateLimit / EnvTileRateBurst 是 /geo/tiles 那只桶。<= 0 关闭限流。
+	EnvTileRateLimit = "KEEL_TILE_RATE_PER_SEC"
+	EnvTileRateBurst = "KEEL_TILE_RATE_BURST"
+
+	// DefaultTileRatePerSec / DefaultTileRateBurst：一屏地图（手机约 4×6、后台约 6×5 张）两层叠就是
+	// 四五十张，拖动、缩放一下又是一屏 —— 瞬时额度按两屏给，持续额度按每秒一屏给。
+	// 挡的是一条 for 循环把整个中国的瓦片刷一遍、耗光天地图 key 的日调用量。
+	DefaultTileRatePerSec = 60.0
+	DefaultTileRateBurst  = 120.0
+)
+
+func tileRateLimiterFromEnv() *ipRateLimiter {
+	rate := envFloat(EnvTileRateLimit, DefaultTileRatePerSec)
+	burst := envFloat(EnvTileRateBurst, DefaultTileRateBurst)
+	if rate <= 0 || burst < 1 {
+		return nil
+	}
+	return newIPRateLimiter(rate, burst)
+}
+
 func envFloat(key string, def float64) float64 {
 	raw, ok := os.LookupEnv(key)
 	if !ok || raw == "" {

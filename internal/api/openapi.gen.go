@@ -4481,6 +4481,21 @@ type FreightUndeliverableLine struct {
 // 而这个模板设了不配送地区，判不了在不在配送范围——请买家补全地址。
 type FreightUndeliverableLineReasonCode string
 
+// GeoMapConfig 地图底图配置（`/geo/map`）。`enabled` 为 false 时其余字段是空值。
+type GeoMapConfig struct {
+	// Attribution 要显示在地图角上的版权署名
+	Attribution string `json:"attribution"`
+
+	// Enabled 部署有没有配瓦片服务商
+	Enabled bool `json:"enabled"`
+
+	// Layers 从下往上叠的层名（天地图是 base 底图 + label 注记）
+	Layers []string `json:"layers"`
+
+	// MaxZoom 最大缩放级别
+	MaxZoom int `json:"max_zoom"`
+}
+
 // GeoPlace 一个地点，坐标 WGS-84。字段与收货地址对齐：adcode 即地址的 region_code（运费按它算）。
 type GeoPlace struct {
 	// Adcode 区县级行政区划代码
