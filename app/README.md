@@ -214,8 +214,9 @@ open class ProductSummary (
 ```
 
 从这堆 Kotlin 到一个能装的 apk，需要 HBuilderX（本地打包）或 DCloud 云打包 ——
-那一步 CLI 做不到，也没有对应的 npm 包。**所以 CI 里跑的就是上面这张表里
-打 ✅ 的两格，不多不少**（`.github/workflows/ci.yml` 的 `client` job）。
+那一步 CLI 做不到，也没有对应的 npm 包。CI 曾经跑的就是上面这张表里打 ✅ 的两格
+（原来的 `client` job）；**2026-09-29 客户端冻结后这个 job 已换成 Flutter**，
+这两格现在只能用 `make app-build-h5` / `make app-build-android` 手动跑。
 
 #### 路上踩到的五个坑（都是实测，修法都在仓库里）
 

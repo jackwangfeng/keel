@@ -11,8 +11,7 @@
 # ## 为什么分成四个 job
 #
 # 前置条件不相交：gates 只要 Go 工具链 + Node，go 要一个 PostgreSQL，
-# e2e 要 Docker，client 要 app/ 那棵 527 个包的 npm 依赖树（含一个 16MB 的
-# 原生 UTS 编译器）。串成一个 job 的话，最慢的那段（compose 建镜像，分钟级）
+# e2e 要 Docker，flutter 要 Flutter SDK 与 pub 依赖。串成一个 job 的话，最慢的那段（compose 建镜像，分钟级）
 # 会挡住最快的那段（文档校验，本机实测 2.4 秒），而 PR 上最常红的恰恰是最快那段。
 #
 # （曾经有第五个 job：inference，跑真模型。M4 换引擎之后它没有执行者了，
@@ -29,11 +28,11 @@
 #   - examples/dtmrs-embedded 在自己的 workflow 里（example-dtmrs.yml）。
 #     它跑的是那个例子自己的五项验证（TCC、拉取式分支、崩溃恢复…），
 #     和服务端要的东西不一样，所以没有并进来。
-#   - 客户端（app/）的**原生 App 产物**。client 这个 job 只到「UTS 编译成 Kotlin」
-#     为止 —— 从 Kotlin 到 apk 要 HBuilderX 或 DCloud 云打包，命令行做不到。
-#     详见 app/README.md，那里写了实测到哪一步、卡在哪。
-#   - 客户端跑起来之后的行为。client 只编译，不启动浏览器、不打真后端。
-#     H5 形态对着真后端跑通过一次（记录在 app/README.md），但那是人手动跑的。
+#   - 买家端的**原生 App 产物**。flutter 这个 job 只编 Web；Android（Gradle 在这台
+#     runner 上要另配代理）与 iOS（要 macOS）发版前手动编，见 flutter_app/README.md。
+#     冻结的 uni-app x（app/）不再编译，只剩 gates 里的契约同步与类型检查。
+#   - 客户端跑起来之后的行为。flutter 只跑单元与组件测试，不启动浏览器、不打真后端；
+#     无头 Web 端到端（make flutter-e2e-web）要真后端与账号，目前人手动跑。
 #   - **真引擎（`make test-engine`）在 CI 里没有任何执行者，一个都没有。**
 #     这一条从「不挡 PR 的 inference job」退成了「不存在」，因为 M4 把引擎从
 #     Python + BGE-M3 换成了自研的 infero，而 infero 只有 CUDA / Metal 后端。
@@ -453,52 +452,51 @@ jobs:
         run: docker compose down -v --remove-orphans
 
   # ---------------------------------------------------------------------------
-  # 客户端（app/，uni-app x）：用 DCloud 自己的编译器真编一遍
+  # 客户端（flutter_app/，买家端主力）：依赖锁定、静态检查、单元测试、编 Web
   # ---------------------------------------------------------------------------
   #
-  # 与 gates 里那条 app-type-check **不重复**：
+  # uni-app x（app/）已冻结，这里不再编它；它的契约同步与 `.uts` 类型检查仍在
+  # gates 那条 check-all.sh 里（check_uts_contract、app-type-check），跟不上契约照样红。
+  # Flutter 这边的契约漂移（check_dart_contract）与「页面不许直接 import 生成类型」
+  # （check_flutter_pages）也在 gates 里 —— 这个 job 只管那两条管不到的：代码本身
+  # 编不编得过、测试过不过。
   #
-  #   · app-type-check 跑的是 tsc，范围是 app/src 下的 .uts。零 node_modules，
-  #     秒级，挡的是「契约改了而客户端没跟上」。
-  #   · 这个 job 跑的是 DCloud 的 UTS 编译器，范围多出 .uvue（模板表达式、样式、
-  #     pages.json 路由）与 UTS 自己那套落到 Kotlin 上的语义。
+  # SDK 用 runner 本机的 ~/development/flutter（Makefile 的 FLUTTER 默认值，与本地开发
+  # 同一份），不用 setup 类 action 现下：这台机器上从 Google 拉 SDK 要走代理、分钟级。
+  # PUB_HOSTED_URL / FLUTTER_STORAGE_BASE_URL 与开发机一致（pubspec.lock 里记的是
+  # pub.flutter-io.cn，源不一致时 --enforce-lockfile 会判成锁文件不符）。
   #
-  # 两者谁也替不了谁。实测过一条界线：把契约里的字段改个名之后，
-  # **DCloud 的编译器不报「访问了不存在的属性」**（本机实测：给一个 type 加一句
-  # `p.totally_bogus_field` 照样 exit 0），而 tsc 报 TS2551。
-  # 所以契约漂移这件事的判据在 gates 那条，不在这里。
-  client:
-    name: 客户端（uni-app x 编译）
+  # 本机实测（2026-09-29）：pub get + analyze + 165 条测试约 20 秒，编 Web 约 46 秒。
+  flutter:
+    name: 客户端（Flutter：分析、测试、编 Web）
     runs-on: [self-hosted, keel]
-    # 本机实测：npm ci 约 30 秒（冷缓存），两次 uni build 各几秒。
-    # 15 分钟给的是 runner 上下载 527 个包 + 那个 16MB 原生 binding 的余量。
     timeout-minutes: 15
+    env:
+      PUB_HOSTED_URL: https://pub.flutter-io.cn
+      FLUTTER_STORAGE_BASE_URL: https://storage.flutter-io.cn
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-          cache: npm
-          cache-dependency-path: app/package-lock.json
+      # --enforce-lockfile：锁文件与 pubspec 对不上就失败，而不是悄悄换一套依赖版本去测。
+      # SDK 升级后 flutter_test 钉的 meta / matcher 会变，那时本地 `make flutter-get`
+      # 更新 pubspec.lock 一起提交。
+      - name: 依赖（按锁文件）
+        working-directory: flutter_app
+        run: PATH="$HOME/development/flutter/bin:$PATH" FLUTTER_GIT_URL= flutter pub get --enforce-lockfile
 
-      # 不是裸 npm ci —— npm 11 会把 @dcloudio/uts-linux-x64-gnu 按「libc 不匹配」
-      # 跳过（它的 package.json 写 "libc": ["gnu"]，而 npm 报的是 "glibc"），
-      # 而少了它 uni 的编译器在加载 vite.config.js 时就死。
-      # app/scripts/install-deps.sh 装完会自己核对一遍，缺了就取 tarball 解开。
-      - name: 装客户端依赖
-        run: make app-install
+      - name: 静态检查
+        run: make flutter-analyze
 
-      # H5（web）。这是唯一会跑类型检查的目标 —— uni-uts-v1 里 `check: isWeb`。
-      - name: 编 H5
-        run: make app-build-h5
+      - name: 单元与组件测试
+        run: make flutter-test
 
-      # Android：UTS -> Kotlin。**到此为止，不产出 apk**（见文件头「没有覆盖到的」）。
-      # 它仍然值得跑：uvue/uts 里有些写法在 web 上能过、落到 Kotlin 上不成立，
-      # 而那类问题只有这一步会暴露。
-      - name: 编 Android（UTS -> Kotlin）
-        run: make app-build-android
+      # 与演示站同一种构建（同源部署，不需要 KEEL_API_BASE）。
+      # Android / iOS 不在这里编：Gradle 在这台 runner 上拉依赖要另配代理（实测挂在
+      # assembleDebug 十几分钟没有输出），iOS 要 macOS。发版前按 flutter_app/README.md 手动编。
+      - name: 编 Web
+        working-directory: flutter_app
+        run: PATH="$HOME/development/flutter/bin:$PATH" FLUTTER_GIT_URL= flutter build web
 
-      - name: 失败时列出产物
-        if: failure()
-        run: ls -R app/dist || true
+      # 工具（pub get 的迁移器之类）改了入库文件 = 仓库里的版本已经过时，要提交更新后的。
+      - name: 工作区没有被改脏
+        run: git diff --exit-code -- flutter_app
