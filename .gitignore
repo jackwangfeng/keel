@@ -52,3 +52,6 @@ __pycache__/
 # make build 的产物（-ldflags 注了版本号的那个二进制）。
 # 不入库：37 MB，且每次构建都不一样（构建时间在里面）。
 /build/
+
+# make admin-responsive-check 的报告与截图
+/tmp/
