@@ -89,6 +89,14 @@ type PaymentTx interface {
 	// 订单已不在 10 上时返回 ErrOrderNotPayable。**调用方不许把它当成成功**：
 	// 那意味着一笔真实到账没有对应的已支付订单，要人来退钱。
 	SettleOrder(ctx context.Context, orderNo string, paidCents int64, paidAt time.Time) error
+
+	// ChannelNotifySecret 与 Repo 上的同名方法读同一个值，但走**本事务的连接**。
+	//
+	// 已经开着事务的调用方（退款审核 / 收货里的沙箱渠道、多收款退回单的提交）
+	// 必须用这一个：Repo 那个走池上另一条连接，事务里再去池上拿一条，等于一个
+	// 请求同时占两条连接。池只有 max(4, CPU) 条，4 个这样的请求同时走到这一步
+	// 就会彼此等对方手里的连接 —— 谁都拿不到第二条，谁也不会放第一条，直到超时。
+	ChannelNotifySecret(ctx context.Context, channel string) (string, error)
 }
 
 func (t tenantTx) InsertPayment(ctx context.Context, p NewPayment) (int64, error) {
@@ -154,8 +162,9 @@ func (t tenantTx) SettleOrder(ctx context.Context, orderNo string, paidCents int
 //   - 没有「换密钥」的过渡期支持（同时接受新旧两把）。
 //
 // 走裸 SQL 而不是 sqlc：shop_settings 是 tenant-root 类，**没有 RLS**
-// （租户解析要在 SET LOCAL 之前读它），所以它不属于 tenantTx 那一面。
-// tenant/resolver.go 读它时同此惯例。
+// （租户解析要在 SET LOCAL 之前读它）。tenant/resolver.go 读它时同此惯例。
+// 这一个走池，给**还没开事务**的调用方（支付 / 退款回调的验签）；已经在事务里的
+// 调用方用 tenantTx 上的同名方法（下面），否则一个请求要同时占两条连接。
 //
 // merchantID 从 ctx 取，与 WithTenant 同一个规矩：调用方没有那个参数可以传错。
 // 这一条在这里尤其要紧 —— 传错了的后果是**拿 A 店的密钥去验 B 店的回调**，
@@ -165,8 +174,33 @@ func (r *Repo) ChannelNotifySecret(ctx context.Context, channel string) (string,
 	if err != nil {
 		return "", err
 	}
+	return channelNotifySecret(ctx, r.pool, merchantID, channel)
+}
+
+// ChannelNotifySecret 是 PaymentTx 那一面：同一条 SQL，走本事务的连接。
+//
+// 租户取事务自己的作用域（scope）而不是 ctx：WithTenant 里两者是同一个值，而
+// 平台作用域的事务（scope 为 nil）根本不该读某一家店的密钥 —— 报错比猜一个租户安全。
+// shop_settings 没有 RLS，所以在设好 app.merchant_id 的事务里读它与在池上读结果相同；
+// WHERE merchant_id 是唯一的租户谓词，与 Repo 那一个一样。
+func (t tenantTx) ChannelNotifySecret(ctx context.Context, channel string) (string, error) {
+	if t.scope == nil {
+		return "", errors.New("平台作用域的事务里不能读某一家店的渠道回调密钥")
+	}
+	if t.raw == nil {
+		return "", errors.New("这个事务没有底层连接（开店 / 平台路径），读不了渠道回调密钥")
+	}
+	return channelNotifySecret(ctx, t.raw, *t.scope, channel)
+}
+
+// rowQuerier 是池与事务共有的那一个方法：读密钥那条 SQL 只写一份，两个入口共用。
+type rowQuerier interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+func channelNotifySecret(ctx context.Context, q rowQuerier, merchantID int64, channel string) (string, error) {
 	var secret *string
-	err = r.pool.QueryRow(ctx, `
+	err := q.QueryRow(ctx, `
 		SELECT extra #>> ARRAY['payment_channels', $2, 'notify_secret']
 		  FROM shop_settings
 		 WHERE merchant_id = $1`, merchantID, channel).Scan(&secret)

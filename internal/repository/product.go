@@ -168,8 +168,10 @@ type ProductTx interface {
 type tenantTx struct {
 	q     *db.Queries
 	scope *int64
-	// raw 是底下那个事务本身：只有只读 SQL 工具（agent_sql.go）用它 —— 它要在同一个事务里 SET ROLE、跑一条
-	// 不经 sqlc 的查询再复核租户。别的方法一律走 q。没有它的构造路径（平台作用域、开店）调那个方法会报错。
+	// raw 是底下那个事务本身：只读 SQL 工具（agent_sql.go）用它 —— 它要在同一个事务里 SET ROLE、跑一条
+	// 不经 sqlc 的查询再复核租户；读渠道回调密钥（payment.go）也用它 —— shop_settings 没有 RLS、那条 SQL
+	// 走裸 SQL，而事务里的调用方不能再去池上拿第二条连接。别的方法一律走 q。
+	// 没有它的构造路径（平台作用域、开店）调那两个方法会报错。
 	raw pgx.Tx
 }
 
