@@ -16,7 +16,8 @@
 # 共用单体的卷的话，切回单体形态时下单当场 42501。要把一个真实的单体库迁过来，照部署指南
 # 「从单体迁到拆分」一节手工跑 split-migrate.sh，而不是指望这个叠加层替你迁。
 #
-# 协调器仍在 core 进程里（sqlite，单实例）。多实例 core 要换成 Postgres 存储，见部署指南。
+# 下单 SAGA 的协调器在 core 进程里（sqlite，单实例）。多实例 core 要换成 Postgres 存储，见部署指南。
+# 库存进程另有一个只发「可售数跨 0」通知的协调器（自己的 sqlite 卷），投到 core 的内网端口 8091。
 services:
   postgres-inventory:
     build:
@@ -83,11 +84,16 @@ services:
       KEEL_ROLE: inventory
       KEEL_INVENTORY_DSN: postgres://keel_inventory:${KEEL_INVENTORY_PASSWORD:-keel_inventory}@postgres-inventory:5432/keel_inventory?sslmode=disable
       KEEL_INTERNAL_ADDR: ":8090"
-      # 没有默认值：两个进程必须是同一个值，而写在公开仓库里的默认密钥等于内网接口不验签。
+      # 可售数跨 0 时通知 core 重算有货排序（二阶段消息，service/stock_flags.go）：投到 core 的内网端口，
+      # 由库存进程自己的协调器投递 —— 它的存储与 core 那份分开（inventory-dtm.db，挂 invdtmdata 卷）。
+      KEEL_CORE_URL: http://app:8091
+      KEEL_DTM_DSN: sqlite:/var/lib/keel/inventory-dtm.db
       KEEL_INTERNAL_SECRET: ${KEEL_INTERNAL_SECRET:?C 档要设 KEEL_INTERNAL_SECRET（openssl rand -base64 48）}
       KEEL_INTERNAL_SECRET_PREVIOUS: ${KEEL_INTERNAL_SECRET_PREVIOUS:-}
       KEEL_DB_MAX_CONNS: ${KEEL_DB_MAX_CONNS:-}
       GIN_MODE: release
+    volumes:
+      - invdtmdata:/var/lib/keel
     depends_on:
       split-data:
         condition: service_completed_successfully
@@ -96,6 +102,8 @@ services:
     environment:
       KEEL_ROLE: core
       KEEL_INVENTORY_URL: http://inventory:8090
+      # core 的内网端口：只接库存服务的跨 0 通知（/internal/v1/saga/stock_changed），不映射到宿主机。
+      KEEL_INTERNAL_ADDR: ":8091"
       KEEL_INTERNAL_SECRET: ${KEEL_INTERNAL_SECRET:?C 档要设 KEEL_INTERNAL_SECRET（openssl rand -base64 48）}
       KEEL_INTERNAL_SECRET_PREVIOUS: ${KEEL_INTERNAL_SECRET_PREVIOUS:-}
     depends_on:
@@ -114,3 +122,5 @@ volumes:
     name: keel_uploads_split
   pginvdata:
     name: keel_pginvdata_split
+  invdtmdata:
+    name: keel_invdtmdata_split

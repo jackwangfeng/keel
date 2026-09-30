@@ -39,6 +39,17 @@ so "which one is running?" never depends on anyone's memory.
 
 ## [Unreleased]
 
+### Changed
+
+- **In-stock ordering follows stock changes immediately instead of once a minute.** When a
+  SKU's sellable quantity in a store crosses zero (an order drains it, a cancellation or refund
+  restocks it, an admin sets or adjusts it), the inventory service registers a dtmrs two-phase
+  message in the same local transaction; the core re-reads live stock for the affected products
+  and rewrites `product_store_stock`. Changes that do not cross zero send nothing. The full pass
+  becomes a safety net: `KEEL_STOCK_FLAG_INTERVAL` now defaults to `1h`. Split deployments need
+  `KEEL_CORE_URL` plus its own `KEEL_DTM_DSN` on the inventory process and `KEEL_INTERNAL_ADDR`
+  on the core (`compose.split.yaml` sets them); without them ordering falls back to the hourly pass.
+
 ## [0.6.0] - 2026-09-28
 
 Core migrations `00140` (`search_logs.fallback`, and the column on the `agent_ro.search_logs` view), `00141`
