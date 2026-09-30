@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-/// 设计系统：照 app/src/App.uvue（uni-app x 买家端）搬过来，两端看起来是同一个产品。
+/// 设计系统：最初照 uni-app x 买家端的 App.uvue 搬过来（uni-app x 已下线，源码见 tag uniapp-final）。
 /// 改色板只改这一个文件。
 class KeelColors {
   static const bg = Color(0xFFF6F1EA);

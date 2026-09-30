@@ -3,7 +3,7 @@ import 'client.dart';
 import 'schema.g.dart';
 import 'view.dart';
 
-/// 购物车。照 uni-app x 的 view.uts（cartRow / cartView / freightNote / promotionNotes）与 pages/cart 移植。
+/// 购物车。最初从 uni-app x 版（view.uts 的 cartRow / cartView / freightNote / promotionNotes 与 pages/cart，见 tag uniapp-final）移植。
 /// 每个写接口都返回整辆车：页面拿到就整体替换，不在本地增减。
 
 class CartRow {

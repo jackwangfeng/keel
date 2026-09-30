@@ -6,7 +6,7 @@ import 'session.dart';
 import 'store.dart';
 import 'view.dart';
 
-/// 个人资料与服务地址。照 uni-app x 的 view.uts（meView / identityRow）与 pages/me/profile、pages/settings/base 移植。
+/// 个人资料与服务地址。最初从 uni-app x 版（view.uts 的 meView / identityRow 与 pages/me/profile、pages/settings/base，见 tag uniapp-final）移植。
 
 class MeView {
   final String nickname;

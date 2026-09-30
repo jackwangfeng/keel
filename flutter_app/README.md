@@ -1,6 +1,6 @@
 # Keel 买家端（Flutter）
 
-同一套代码：Android / iOS / Web / 微信小程序（经 mp-flutter）。更早的 uni-app x 客户端已于 2026-09-30 下线，新功能都在这里接。
+同一套代码：Android / iOS / Web / 微信小程序（经 mp-flutter）。更早的 uni-app x 客户端已于 2026-09-30 下线，新功能都在这里接。代码注释里提到的 uni-app x 的文件（view.uts、App.uvue …）和样式名（.btn、.card …）都能在 tag `uniapp-final` 里找到。
 
 ## 跑起来
 

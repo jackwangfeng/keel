@@ -3,7 +3,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:mp_flutter_wechat/mp_flutter_wechat.dart';
 
 /// 这台设备现在在哪（按围栏解析门店用）。**尽量拿到坐标，拿不到就给 null**：拒绝授权、没开定位、出错
-/// 都不是错误 —— 服务端对「没坐标」的回答就是回落默认店（与 uni-app x 的 store.uts 同一套规则）。
+/// 都不是错误 —— 服务端对「没坐标」的回答就是回落默认店（与已下线的 uni-app x 版 store.uts 同一套规则，见 tag uniapp-final）。
 ///
 /// 坐标系必须是 WGS-84：围栏存在 SRID 4326。国内接口默认常给 GCJ-02（火星坐标），城区差一两百到五六百米，
 /// 足够把人判到隔壁店或围栏外。所以小程序里显式要 wgs84；Web（浏览器 Geolocation）与原生（系统定位）本来就是。

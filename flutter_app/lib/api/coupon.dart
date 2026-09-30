@@ -3,7 +3,7 @@ import 'schema.g.dart';
 import 'view.dart';
 
 /// 券的文案。三种券的形状（可领的模板 / 我的券 / 这一单能用的券）字段大半重合，
-/// 共用的文案函数只收原始字段。照 uni-app x 的 view.uts 移植。
+/// 共用的文案函数只收原始字段。最初从 uni-app x 版的 view.uts 移植（见 tag uniapp-final）。
 
 /// 折扣率（千分比，900 = 9 折）->「9折」「8.5折」「9.95折」：两位小数，去掉末尾的 0。
 String rateText(int rate) {

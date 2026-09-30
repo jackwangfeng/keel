@@ -2,7 +2,7 @@ import 'client.dart';
 import 'geo.dart';
 import 'schema.g.dart';
 
-/// 地址簿。照 uni-app x 的 view.uts（addressRow / addressForm / addressRequest / fieldErrors）与 pages/address 移植。
+/// 地址簿。最初从 uni-app x 版（view.uts 的 addressRow / addressForm / addressRequest / fieldErrors 与 pages/address，见 tag uniapp-final）移植。
 
 class AddressRow {
   final int id;

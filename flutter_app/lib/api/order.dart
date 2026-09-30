@@ -6,8 +6,8 @@ import 'refund.dart';
 import 'schema.g.dart';
 import 'view.dart';
 
-/// 结算、下单、支付、订单。照 uni-app x 的 view.uts（previewView / orderRow / orderDetailView …）、
-/// client.uts（createOrder / createPayment / settleSandbox …）与 pages/order 移植。
+/// 结算、下单、支付、订单。最初从 uni-app x 版（view.uts 的 previewView / orderRow / orderDetailView …、
+/// client.uts 的 createOrder / createPayment / settleSandbox … 与 pages/order，见 tag uniapp-final）移植。
 /// 金额一律用服务端算好的数，这里不做加减。
 
 typedef OrderLine = ({int skuId, int quantity});

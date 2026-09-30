@@ -2,7 +2,7 @@ import 'client.dart';
 import 'schema.g.dart';
 import 'view.dart';
 
-/// 售后。照 uni-app x 的 view.uts（refundRow / refundDetailView / refundableItems / refundRequest …）
+/// 售后。最初从 uni-app x 版（tag uniapp-final）的 view.uts（refundRow / refundDetailView / refundableItems / refundRequest …）
 /// 与 pages/refund 移植。请求体不带金额：每行实退多少由服务端按优惠分摊算。
 
 /// 退款单状态（和订单上的 refund_status 不是一个东西）。30「退款中」不是失败：钱在路上，不会凭空消失。

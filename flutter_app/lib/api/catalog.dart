@@ -3,7 +3,7 @@ import 'schema.g.dart';
 import 'view.dart';
 
 /// 浏览：商品列表、分类、详情、搜索（含效果回传的归因）、加购。
-/// 行为照 uni-app x 的 app/src/api/view.uts、search-trace.uts 与各页面移植。
+/// 行为最初从 uni-app x 版（view.uts、search-trace.uts 与各页面，见 tag uniapp-final）移植。
 
 class ProductPage {
   final List<ProductRow> rows;
