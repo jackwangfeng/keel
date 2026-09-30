@@ -99,7 +99,7 @@ func TestServiceNeverBuildsATenantContextByHand(t *testing.T) {
 						"如果这段代码真的没有 gid 可用（比如定时任务），"+
 						"请往 tenantContextAllowed 里加一行并写明理由",
 						base, fset.Position(call.Pos()).Line)
-				case ident.Name == "dtm" && sel.Sel.Name == "TenantContextFromGID":
+				case ident.Name == "dtm" && (sel.Sel.Name == "TenantContextFromGID" || sel.Sel.Name == "TenantContextFromTenantGID"):
 					fromGID++
 				}
 				return true

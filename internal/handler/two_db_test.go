@@ -53,9 +53,19 @@ type twoDB struct {
 	engine   *gin.Engine
 	outbox   *service.InventoryOutboxService
 	sweeper  *service.SweepService
+
+	// 跨 0 通知（stock_msg_test.go）：只有 newTwoDBWithStockMsg 装。库存进程自己的协调器 + 通知器，
+	// core 的内网端口上挂着接收分支（与 KEEL_ROLE=inventory 配 KEEL_CORE_URL、core 配 KEEL_INTERNAL_ADDR 同一个装法）。
+	notifier *inventory.StockNotifier
+	flags    *service.StockFlagService
 }
 
-func newTwoDB(t *testing.T) *twoDB {
+func newTwoDB(t *testing.T) *twoDB { return newTwoDBOpts(t, false) }
+
+// newTwoDBWithStockMsg 同 newTwoDB，另外接上跨 0 通知。
+func newTwoDBWithStockMsg(t *testing.T) *twoDB { return newTwoDBOpts(t, true) }
+
+func newTwoDBOpts(t *testing.T, stockMsg bool) *twoDB {
 	t.Helper()
 	ctx := context.Background()
 	appDSN, adminDSN, cleanup, err := testdb.NewInventoryDB(ctx, "inv")
@@ -73,8 +83,36 @@ func newTwoDB(t *testing.T) *twoDB {
 	}
 	t.Cleanup(e.invAdmin.Close)
 
+	// core 的内网端口（只在 stockMsg 时有东西挂）：库存进程的协调器把跨 0 通知投到这里。
+	// 先起服务器、后填 handler —— 通知器要 core 的地址，而接收分支要 core 的库存客户端，后者又要库存进程的地址。
+	var coreInternal atomic.Pointer[gin.Engine]
+	coreSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if h := coreInternal.Load(); h != nil {
+			h.ServeHTTP(w, req)
+			return
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(coreSrv.Close)
+
 	// 库存进程：库存接口 + 两个 SAGA 分支，背后是建在库存库上的进程内实现。
 	local := inventory.NewLocal(repository.NewInventoryStore(e.invPool))
+	if stockMsg {
+		res, err := dtm.NewBranchResolver(coreSrv.URL, remoteInventorySecret)
+		if err != nil {
+			t.Fatal(err)
+		}
+		e.notifier = inventory.NewStockNotifier(repository.NewInventoryStore(e.invPool), res.BranchURL(inventory.BranchStockChanged))
+		dir := t.TempDir()
+		invTC, err := dtm.Start("sqlite:"+filepath.Join(dir, "inventory-dtm.db"), 0,
+			map[string]dtm.BranchFunc{inventory.BranchStockMsgQuery: e.notifier.QueryBranch()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(invTC.Close)
+		e.notifier.Attach(invTC)
+		local.WithStockNotifier(e.notifier)
+	}
 	r, routes := rpc.NewRouter(rpc.ServerConfig{Secret: remoteInventorySecret})
 	inventory.Mount(routes.Tenant, local)
 	inventory.MountSaga(routes.Saga, local)
@@ -118,6 +156,12 @@ func newTwoDB(t *testing.T) *twoDB {
 	e.orders.AttachCoordinator(tc)
 	e.engine = app.Router(testPool, tenant.NewResolver(testPool, tenant.Config{BaseDomain: baseDomain}), testSigner,
 		e.orders, service.PaymentConfig{Sandbox: true}, conceptEmbedder{}, app.WithInventory(e.remote))
+	if stockMsg {
+		e.flags = service.NewStockFlagService(repository.New(testPool), e.remote, 0, nil)
+		cr, routes := rpc.NewRouter(rpc.ServerConfig{Secret: remoteInventorySecret})
+		dtm.MountBranches(routes.Saga, map[string]dtm.BranchFuncEx{inventory.BranchStockChanged: dtm.Ex(e.flags.StockMsgBranch())})
+		coreInternal.Store(cr)
+	}
 	e.outbox = service.NewInventoryOutboxService(repository.New(testPool), e.remote, service.InventoryOutboxConfig{}, nil)
 	e.sweeper = service.NewSweepService(repository.New(testPool), e.remote, service.SweepConfig{}, nil)
 	return e
