@@ -24,7 +24,7 @@ class AddressRow {
 
 String _tag(int? t) => switch (t) { 1 => '家', 2 => '公司', 3 => '学校', _ => '' };
 
-AddressRow addressRow(Address a, {bool? inServiceArea}) {
+AddressRow addressRow(Address a) {
   final region = '${a.province} ${a.city} ${a.district}';
   final street = a.street ?? '';
   return AddressRow(
@@ -37,7 +37,7 @@ AddressRow addressRow(Address a, {bool? inServiceArea}) {
     isDefault: a.isDefault,
     tagText: _tag(a.tag),
     at: a.lat != null && a.lng != null ? (lat: a.lat!, lng: a.lng!) : null,
-    inServiceArea: inServiceArea,
+    inServiceArea: a.inServiceArea,
   );
 }
 
@@ -129,15 +129,13 @@ Future<List<Address>> _list(ApiClient c) async => (await c.send('GET', '/address
         decode: (j) => (j as List).map((e) => Address.fromJson(e as Map<String, dynamic>)).toList()))
     .data;
 
-/// 服务端已按默认在前排好。给了 [storeId]，每条多带 in_service_area（这家店送不送这里）。
-/// in_service_area 先从原始 JSON 读：契约生成的 Address 还没有这个字段，服务端合进来后换成 a.inServiceArea。
+/// 服务端已按默认在前排好。给了 [storeId]，每条多带 in_service_area（这家店送不送这里；缺省 = 判断不了）。
 Future<List<AddressRow>> fetchAddresses(ApiClient c, {int? storeId}) async => (await c.send('GET', '/addresses',
         query: storeId == null ? null : {'store_id': '$storeId'},
-        decode: (j) => [
-              for (final e in (j as List).cast<Map<String, dynamic>>())
-                addressRow(Address.fromJson(e), inServiceArea: e['in_service_area'] as bool?),
-            ]))
-    .data;
+        decode: (j) => (j as List).map((e) => Address.fromJson(e as Map<String, dynamic>)).toList()))
+    .data
+    .map(addressRow)
+    .toList();
 
 /// 结算页没被指定、用户也没手动选过地址时，替他挑一条。[hint] = 挑中的这条确定在配送范围内（页面据此提示）。
 typedef AddressPick = ({AddressRow? row, bool hint});
