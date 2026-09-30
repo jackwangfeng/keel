@@ -174,7 +174,7 @@ func (r *Repo) ChannelNotifySecret(ctx context.Context, channel string) (string,
 	if err != nil {
 		return "", err
 	}
-	return channelNotifySecret(ctx, r.pool, merchantID, channel)
+	return channelNotifySecret(ctx, r.poolFor(ctx, "ChannelNotifySecret"), merchantID, channel)
 }
 
 // ChannelNotifySecret 是 PaymentTx 那一面：同一条 SQL，走本事务的连接。

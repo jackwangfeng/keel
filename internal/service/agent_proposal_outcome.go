@@ -122,8 +122,25 @@ func outcomeWindowClose(d repository.DueProposalOutcome) time.Time {
 	return time.Time{}
 }
 
-// computeOutcome 量一条提案的效果（事务里跑；断货天数经库存服务）。
-func computeOutcome(ctx context.Context, tx repository.Tx, inv inventory.Service, tz string,
+// prefetchStockoutDays 在开事务**之前**经库存服务取加库存提案那件 SKU 的断货天数（别的种类不需要，返回 nil）。
+//
+// 不能放在 computeOutcome 的事务里取：单体形态下库存服务是建在同一个池上的进程内实现，
+// 事务里调它等于一个 goroutine 同时占两条连接（repository/txguard.go）。断货天数与事务里读的
+// 销量不需要同一个快照 —— 两者本来就来自两个服务（拆分形态下是两个库）。
+func prefetchStockoutDays(ctx context.Context, inv inventory.Service, tz string,
+	d repository.DueProposalOutcome) (map[int64]int, error) {
+	if d.Kind != ProposalKindInventoryAdjust {
+		return nil, nil
+	}
+	var pl InventoryAdjustPayload
+	if err := json.Unmarshal(d.Payload, &pl); err != nil {
+		return nil, err
+	}
+	return inv.StockoutDays(ctx, pl.StoreID, []int64{pl.SKUID}, 7, tz)
+}
+
+// computeOutcome 量一条提案的效果（事务里跑；断货天数由 prefetchStockoutDays 在事务外取好传进来）。
+func computeOutcome(ctx context.Context, tx repository.Tx, stockout map[int64]int,
 	d repository.DueProposalOutcome) (ProposalOutcome, error) {
 	day := func(t time.Time) string { return t.Format(time.RFC3339) }
 	switch d.Kind {
@@ -137,11 +154,7 @@ func computeOutcome(ctx context.Context, tx repository.Tx, inv inventory.Service
 		if err != nil {
 			return ProposalOutcome{}, err
 		}
-		so, err := inv.StockoutDays(ctx, pl.StoreID, []int64{pl.SKUID}, 7, tz)
-		if err != nil {
-			return ProposalOutcome{}, err
-		}
-		n := so[pl.SKUID]
+		n := stockout[pl.SKUID]
 		o := ProposalOutcome{SoldQty: &sold, StockoutDays: &n, DeltaQty: &pl.Delta, WindowStart: day(from), WindowEnd: day(to)}
 		switch {
 		case n >= 2:
@@ -294,8 +307,13 @@ func ReviewProposalOutcomesOnce(ctx context.Context, repo ProposalOutcomeReposit
 				}
 				continue
 			}
-			err := repo.WithTenant(mctx, func(tx repository.Tx) error {
-				o, err := computeOutcome(mctx, tx, inv, tz, d)
+			stockout, err := prefetchStockoutDays(mctx, inv, tz, d)
+			if err != nil {
+				log.ErrorContext(mctx, "AI 员工提案复盘出错", "proposal_id", d.ID, "err", err)
+				continue
+			}
+			err = repo.WithTenant(mctx, func(tx repository.Tx) error {
+				o, err := computeOutcome(mctx, tx, stockout, d)
 				if err != nil {
 					return err
 				}

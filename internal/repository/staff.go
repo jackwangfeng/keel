@@ -234,11 +234,12 @@ type PlatformTx interface {
 // 它也不需要 ctx 里有租户 —— 平台级请求的 Host 可以是任何一家店，
 // 而那个租户与这个事务无关。
 func (r *Repo) WithPlatform(ctx context.Context, fn func(PlatformTx) error) error {
-	tx, err := r.pool.Begin(ctx)
+	tx, err := r.poolFor(ctx, "WithPlatform").Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
+	defer r.enterTx()() // txguard.go
 
 	// is_local = true。会话级的话这条设置会留在连接上，被池交给下一个请求时
 	// 就是一次**提权**：那个请求会以平台级作用域运行。比 WithTenant 里

@@ -67,11 +67,11 @@ func scanMerchant(row pgx.Row) (Merchant, error) {
 // 含停用的是契约要求：平台要看得见停掉的店，才有入口把它启用回来。
 func (r *Repo) ListMerchants(ctx context.Context, limit, offset int64) ([]Merchant, int64, error) {
 	var total int64
-	if err := r.pool.QueryRow(ctx,
+	if err := r.poolFor(ctx, "ListMerchants").QueryRow(ctx,
 		`SELECT count(*) FROM merchants WHERE deleted_at IS NULL`).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("统计商家失败: %w", err)
 	}
-	rows, err := r.pool.Query(ctx,
+	rows, err := r.poolFor(ctx, "ListMerchants").Query(ctx,
 		merchantSelect+` WHERE m.deleted_at IS NULL ORDER BY m.id LIMIT $1 OFFSET $2`,
 		limit, offset)
 	if err != nil {
@@ -91,7 +91,7 @@ func (r *Repo) ListMerchants(ctx context.Context, limit, offset int64) ([]Mercha
 
 // GetMerchant 取一家未软删的商家（含停用）。查不到返回 ErrMerchantNotFound。
 func (r *Repo) GetMerchant(ctx context.Context, id int64) (Merchant, error) {
-	m, err := scanMerchant(r.pool.QueryRow(ctx,
+	m, err := scanMerchant(r.poolFor(ctx, "GetMerchant").QueryRow(ctx,
 		merchantSelect+` WHERE m.deleted_at IS NULL AND m.id = $1`, id))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Merchant{}, ErrMerchantNotFound
@@ -111,7 +111,7 @@ func (r *Repo) GetMerchant(ctx context.Context, id int64) (Merchant, error) {
 func (r *Repo) ReviseMerchant(ctx context.Context, id int64, name *string, status *int16,
 	changedBy int64) (Merchant, error) {
 
-	tx, err := r.pool.Begin(ctx)
+	tx, err := r.poolFor(ctx, "ReviseMerchant").Begin(ctx)
 	if err != nil {
 		return Merchant{}, err
 	}

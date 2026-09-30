@@ -119,12 +119,13 @@ func (r *Repo) WithNewTenant(ctx context.Context, code, name string, guard NewTe
 		return Merchant{}, false, errors.New("开店缺少「在新店作用域里做什么」或幂等那两个钩子")
 	}
 
-	tx, err := r.pool.Begin(ctx)
+	tx, err := r.poolFor(ctx, "WithNewTenant").Begin(ctx)
 	if err != nil {
 		return Merchant{}, false, err
 	}
 	// Commit 之后再 Rollback 是无害的 no-op（pgx 返回 ErrTxClosed）。
 	defer tx.Rollback(ctx)
+	defer r.enterTx()() // txguard.go
 
 	// ① 平台作用域。is_local = true 的理由见 WithPlatform 上那一段：
 	// 会话级的话这条设置会留在连接上，被池交给下一个请求就是一次提权。
