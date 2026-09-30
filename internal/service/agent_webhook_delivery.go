@@ -20,6 +20,7 @@ import (
 	"github.com/keel/keel/internal/auth"
 	"github.com/keel/keel/internal/repository"
 	"github.com/keel/keel/internal/tenant"
+	"github.com/keel/keel/internal/worker"
 )
 
 // 事件 webhook 的投递（AI 经营 M10 §3「推」）。机制照抄消息通知的外发（notification_delivery.go）：
@@ -101,19 +102,23 @@ func (s *AgentWebhookDeliveryService) Run(ctx context.Context) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		for {
-			rep, err := s.WorkOnce(ctx)
-			if err != nil {
-				s.log.ErrorContext(ctx, "AI 员工事件投递这一批没跑起来", "err", err)
-			} else if rep.Jobs > 0 {
-				continue
+		// 任务内部另起的 goroutine 接不住 Runner 的 recover，这里自己套一层（worker.Supervise）：
+		// 消费者 panic 记 ERROR、退避重启，而不是崩掉整个进程。
+		worker.Supervise(ctx, s.log, "agent_webhook_delivery.consume", 0, 0, func(ctx context.Context) {
+			for {
+				rep, err := s.WorkOnce(ctx)
+				if err != nil {
+					s.log.ErrorContext(ctx, "AI 员工事件投递这一批没跑起来", "err", err)
+				} else if rep.Jobs > 0 {
+					continue
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(s.poll):
+				}
 			}
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(s.poll):
-			}
-		}
+		})
 	}()
 	t := time.NewTicker(time.Hour)
 	defer t.Stop()

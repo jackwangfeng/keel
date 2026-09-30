@@ -173,13 +173,15 @@ func (r *Repo) withTenantTx(ctx context.Context, fn func(pgx.Tx, Tx) error) erro
 		return err
 	}
 
-	tx, err := r.pool.Begin(ctx)
+	tx, err := r.poolFor(ctx, "withTenantTx").Begin(ctx)
 	if err != nil {
 		return err
 	}
 	// Commit 之后再 Rollback 是无害的 no-op（pgx 返回 ErrTxClosed），
 	// 所以这条 defer 只在提前 return 的路径上真正起作用。
 	defer tx.Rollback(ctx)
+	// 回调期间记下「本 goroutine 在这个池上开着事务」：回调里再去池上拿连接会被 poolFor 抓到（txguard.go）。
+	defer r.enterTx()()
 
 	// 用 set_config(..., is_local => true) 而不是 SET LOCAL 拼字符串。
 	//

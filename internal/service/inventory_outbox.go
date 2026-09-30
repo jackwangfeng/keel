@@ -42,6 +42,7 @@ import (
 	"github.com/keel/keel/internal/inventory"
 	"github.com/keel/keel/internal/repository"
 	"github.com/keel/keel/internal/tenant"
+	"github.com/keel/keel/internal/worker"
 )
 
 // QueueInventoryRelease 是库存 outbox 的队列名（jobs.queue）。
@@ -316,16 +317,19 @@ func (s *InventoryOutboxService) Run(ctx context.Context) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		t := time.NewTicker(s.cfg.HousekeepInterval)
-		defer t.Stop()
-		for {
-			s.housekeep(ctx)
-			select {
-			case <-ctx.Done():
-				return
-			case <-t.C:
+		// 任务内部另起的 goroutine 接不住 Runner 的 recover，这里自己套一层（worker.Supervise）。
+		worker.Supervise(ctx, s.log, "inventory_outbox.housekeep", 0, 0, func(ctx context.Context) {
+			t := time.NewTicker(s.cfg.HousekeepInterval)
+			defer t.Stop()
+			for {
+				s.housekeep(ctx)
+				select {
+				case <-ctx.Done():
+					return
+				case <-t.C:
+				}
 			}
-		}
+		})
 	}()
 	for {
 		rep, err := s.WorkOnce(ctx)

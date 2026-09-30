@@ -220,6 +220,8 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	// healthz 在租户中间件之外：它回答的是「这个进程还活着吗」，
 	// 挂在中间件后面的话，一个没配对的 Host 会让编排系统以为进程死了。
 	r.GET("/healthz", func(c *gin.Context) { c.String(http.StatusOK, "ok") })
+	// readyz 与 healthz 分开：healthz 只表示进程活着，readyz 还要能 ping 通业务库（lifecycle.go）。
+	r.GET("/readyz", readyz(pool))
 
 	// version 和 healthz 并排，理由是同一条：它们都不是业务接口，都不该经过
 	// 租户中间件。**但两者刻意分开，没有把版本号塞进 healthz 的响应体**——
@@ -808,11 +810,6 @@ func InventoryBranches(l *inventory.Local) map[string]dtm.BranchFuncEx {
 	return l.SagaBranches()
 }
 
-// Listen 是默认的监听方式。它是 Run 的一个参数，好让测试换掉它。
-func Listen(addr string, h http.Handler) error {
-	return (&http.Server{Addr: addr, Handler: h}).ListenAndServe()
-}
-
 // Run 建池、建解析器、跑启动自检、装路由，然后才开始监听。
 //
 // 顺序是这个函数存在的理由。Preflight 检查的四种误配（两个租户来源同时配置 /
@@ -830,7 +827,10 @@ func Listen(addr string, h http.Handler) error {
 // listen 可注入是为了让上面这两句话可以被测试观察到。只在 main 里写一行
 // Preflight 是测不出来的：把那行删掉，所有测试照样绿，而 tenant 包里那四道检查
 // 会一声不响地变成死代码。协调器这一段同理。
-func Run(ctx context.Context, listen func(addr string, h http.Handler) error) error {
+//
+// ctx 是进程的停机信号（main 里是 signal.NotifyContext）：取消之后 listen 停止接新请求、
+// 等在途请求，返回后 defer 按「后台任务 → 协调器 → 池」的顺序收尾（lifecycle.go 文件头）。
+func Run(ctx context.Context, listen ListenFunc) error {
 	// 版本号排在所有事情之前，包括建连接池。
 	//
 	// 启动失败的日志才是最需要它的那一份：连不上库、自检不过、协调器起不来、
@@ -847,6 +847,10 @@ func Run(ctx context.Context, listen func(addr string, h http.Handler) error) er
 	}
 
 	if err := trustProxies(gin.New(), os.Getenv(EnvTrustedProxies)); err != nil {
+		return fmt.Errorf("拒绝启动: %w", err)
+	}
+	bgEnabled, err := backgroundEnabledFromEnv()
+	if err != nil {
 		return fmt.Errorf("拒绝启动: %w", err)
 	}
 
@@ -943,52 +947,65 @@ func Run(ctx context.Context, listen func(addr string, h http.Handler) error) er
 	// 而不是被进程退出从一次事务中间掐断。
 	// 两个后台任务（超时补偿、派生数据入库）共用这一个 ctx：它们的生命周期是
 	// 同一条 —— 跟着 listen 走，进程要退时一起收到取消。
-	bgCtx, stopBackground := context.WithCancel(ctx)
-	defer stopBackground()
+	//
+	// 停机时（ctx 取消、listen 返回）先取消、再**等**它们退出，然后才轮到上面两条 defer
+	// 关协调器与池：只取消不等的话，一个正在事务中间的扫描会撞上已经关掉的池。
+	//
+	// bgCtx 刻意**不**跟着 ctx 一起取消（WithoutCancel）：停机顺序是「先等在途请求、再停后台」。
+	// 信号一来就一起停的话，在途请求还在做、后台已经停了 —— 请求提交时刚入队给后台接手的
+	// 那部分（jobs / outbox）只能等下次启动。所以 listen 先返回，再由下面这条 defer 取消。
+	//
+	// 任务由 background（worker.Runner）启动：panic 不崩进程（记 ERROR、退避重启），
+	// 停机时等它们退出；扫描 / 对账 / 刷新类用 bg.Leader 注册，多实例下靠咨询锁只在
+	// 一个实例上跑，队列与 outbox 的消费者用 bg.Go，多实例并行（worker 包注释）。
+	// 全部注册完，在监听之前 bg.Start。
+	bgCtx := context.WithoutCancel(ctx)
+	bg := newBackground(pool, bgEnabled)
+	defer bg.Stop(shutdownGraceFromEnv())
 	sweeper := service.NewSweepService(repository.New(pool), inv, service.SweepConfig{}, nil)
-	go sweeper.Run(bgCtx)
+	bg.Leader("sweep", sweeper.Run)
 
 	// 库存 outbox 的 worker（微服务拆分阶段 1b）：关单释放与退款回补。关单 / 退款的那段代码在提交之后
 	// 已经就地跑过一次，这里接住没跑成的（库存服务不在、进程在提交之后崩了）。与超时补偿同一个理由
 	// 排在监听之前：它停着的代价是库存一直被关掉的订单占着（少卖）。
 	invOutbox := service.NewInventoryOutboxService(repository.New(pool), inv, service.InventoryOutboxConfig{}, nil)
-	go invOutbox.Run(bgCtx)
+	bg.Go("inventory_outbox", invOutbox.Run)
 
 	// 库存对账（微服务拆分阶段 2）：孤儿库存行、上线活动的配额差集、死信的库存任务。只读、只报不修，
 	// 一小时一轮；晚起一轮不丢任何东西（文件头见 service/inventory_reconcile.go）。
 	invReconcile := service.NewInventoryReconcileService(repository.New(pool), inv, service.InventoryReconcileConfig{}, nil)
-	go invReconcile.Run(bgCtx)
+	bg.Leader("inventory_reconcile", invReconcile.Run)
 	// 商品列表按有货排序用的冗余标记（00087，service/stock_flags.go）：全量刷新兜住下单扣减、关单回补。
 	stockFlags := service.NewStockFlagService(repository.New(pool), inv, stockFlagIntervalFromEnv(), nil)
-	go stockFlags.Run(bgCtx)
+	bg.Leader("stock_flags", stockFlags.Run)
 	// 多收款退回的兜底扫描与重试（00150，service/payment_return.go）：每分钟补开订单不认的到账的退回单、
 	// 提交没提交成的。它停着的代价是多收的钱晚几分钟退回，不会丢。
-	go service.NewPaymentReturnService(repository.New(pool), cfg.Payment, nil).Run(bgCtx)
+	bg.Leader("payment_return", service.NewPaymentReturnService(repository.New(pool), cfg.Payment, nil).Run)
 	// AI 员工提案的过期扫描（00091，service/agent_proposal_expiry.go）。
-	go service.RunProposalExpiry(bgCtx, repository.New(pool), nil)
+	bg.Leader("proposal_expiry", func(ctx context.Context) { service.RunProposalExpiry(ctx, repository.New(pool), nil) })
 	// 提案执行后的复盘（00122，service/agent_proposal_outcome.go）：到点量一次效果，给成绩单。
-	go service.RunProposalOutcomes(bgCtx, repository.New(pool), inv, nil)
+	bg.Leader("proposal_outcomes", func(ctx context.Context) { service.RunProposalOutcomes(ctx, repository.New(pool), inv, nil) })
 	// AI 员工事件（00121，AI 经营 M10 §3）：每 5 分钟扫 stock_low / search_zero_spike（库存经 inv，拆分形态同样成立），
 	// 以及 webhook 的投递 worker（jobs 队列 agent.event.deliver）。晚起一轮不丢任何东西。
-	go service.NewAgentEventSweepService(repository.New(pool), inv, nil).Run(bgCtx)
-	go service.NewAgentWebhookDeliveryService(repository.New(pool), nil, nil).Run(bgCtx)
+	bg.Leader("agent_event_sweep", service.NewAgentEventSweepService(repository.New(pool), inv, nil).Run)
+	bg.Go("agent_webhook_delivery", service.NewAgentWebhookDeliveryService(repository.New(pool), nil, nil).Run)
 
 	// 自动确认收货（数据模型 §5 发货第三条规则）：发货满店铺设置的 auto_confirm_days
 	// 天的 30 已发货订单推到 40。与超时补偿同一套机制（按租户扫描、同一份公平调度），
 	// 同一个生命周期。它不像超时补偿那样卡着库存，晚起一轮不丢任何东西，
 	// 所以不需要排在监听之前的那份讲究 —— 放在这里只是为了共用 bgCtx。
 	confirmer := service.NewAutoConfirmService(repository.New(pool), service.SweepConfig{}, nil)
-	go confirmer.Run(bgCtx)
+	bg.Leader("auto_confirm", confirmer.Run)
 
 	// 退货超时未寄回自动关闭（数据模型 §11，00059）：退货退款审核通过后超过店铺设置的天数
 	// 还没填寄回物流的，20 → 60。与自动确认收货同一套机制、同一个生命周期。
 	returnTimeout := service.NewReturnTimeoutService(repository.New(pool), service.SweepConfig{}, nil)
-	go returnTimeout.Run(bgCtx)
+	bg.Leader("return_timeout", returnTimeout.Run)
 
 	// 孤儿上传文件回收（数据模型 §13 的 24 小时规则）：没被引用、创建超过 24 小时的文件，
 	// 删记录再删文件。存储与 Router 里写文件的是同一个 driver（同一个 KEEL_UPLOAD_ROOT）。
 	uploadGC := service.NewUploadGCService(repository.New(pool), uploadStoreFromEnv(), service.SweepConfig{}, nil)
-	go uploadGC.Run(bgCtx)
+	bg.Leader("upload_gc", uploadGC.Run)
 
 	// 消息通知的外发投递与保留期清理（数据模型 §16）。站内消息不靠它 —— 通知行在业务事务里
 	// 就写好了；它只消费 outbox 里的 notification.deliver 任务，把每个外发渠道的结果记下来。
@@ -996,7 +1013,7 @@ func Run(ctx context.Context, listen func(addr string, h http.Handler) error) er
 	// 同一个生命周期（bgCtx），晚起一轮不丢任何东西：任务在 jobs 里等着。
 	notifier := service.NewNotificationDeliveryService(repository.New(pool), nil,
 		service.NotificationDeliveryConfig{}, nil)
-	go notifier.Run(bgCtx)
+	bg.Go("notification_delivery", notifier.Run)
 
 	// 派生数据入库的增量任务（M3 Task 3）：商品变了就把文本向量与 bigram 串重算。
 	//
@@ -1033,7 +1050,7 @@ func Run(ctx context.Context, listen func(addr string, h http.Handler) error) er
 		if err != nil {
 			return fmt.Errorf("建派生数据入库任务失败: %w", err)
 		}
-		go indexer.Run(bgCtx)
+		bg.Go("index", indexer.Run)
 	}
 
 	if cfg.Payment.Sandbox {
@@ -1069,11 +1086,13 @@ func Run(ctx context.Context, listen func(addr string, h http.Handler) error) er
 		return err
 	}
 
+	bg.Start(bgCtx)
+
 	public := Router(pool, res, signer, orders, cfg.Payment, searchEmbedder, WithInventory(inv))
 	if cfg.Split.InternalAddr == "" {
-		return listen(cfg.Addr, public)
+		return listen(ctx, cfg.Addr, public)
 	}
-	return serveBoth(listen, cfg.Addr, public, cfg.Split.InternalAddr, internalRouter(cfg.Split, invPool))
+	return serveBoth(ctx, listen, cfg.Addr, public, cfg.Split.InternalAddr, internalRouter(cfg.Split, invPool))
 }
 
 // bootstrapStaff 在库里一个在岗平台级管理员都没有时，建一个并把那串一次性

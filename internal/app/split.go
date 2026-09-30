@@ -7,11 +7,14 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -191,13 +194,58 @@ func internalRouter(s SplitConfig, inv *pgxpool.Pool) *gin.Engine {
 // 保证配了），其余走建在库存池上的进程内实现（单体时库存池就是业务池）。
 func inventoryService(s SplitConfig, invPool *pgxpool.Pool) (inventory.Service, error) {
 	if s.Role == RoleCore {
-		c, err := rpc.NewClient(s.InventoryURL, s.InternalSecret, 0)
+		c, err := rpc.NewClient(s.InventoryURL, s.InternalSecret, 0, inventoryClientOptions()...)
 		if err != nil {
 			return nil, err
 		}
 		return inventory.NewRemote(c), nil
 	}
 	return inventory.NewLocal(repository.NewInventoryStore(invPool)), nil
+}
+
+// 库存客户端（KEEL_ROLE=core）的读超时与熔断器。写与 SAGA 分支不受它们影响（rpc/breaker.go）。
+const (
+	// EnvInventoryReadTimeout 是读库存（商品列表 in_stock、试算、购物车、检索）的单次上限，Go duration。
+	EnvInventoryReadTimeout = "KEEL_INVENTORY_READ_TIMEOUT"
+	// EnvInventoryBreakerFailures 是连续多少次读失败（连不上、超时、5xx）之后熔断。0 = 不熔断。
+	EnvInventoryBreakerFailures = "KEEL_INVENTORY_BREAKER_FAILURES"
+	// EnvInventoryBreakerCooldown 是熔断之后多久放一个探测请求过去，Go duration。
+	EnvInventoryBreakerCooldown = "KEEL_INVENTORY_BREAKER_COOLDOWN"
+
+	defaultInventoryBreakerFailures = 5
+	defaultInventoryBreakerCooldown = 10 * time.Second
+)
+
+// inventoryClientOptions 按环境变量装库存客户端的读超时与熔断器。
+// 解析不了的值告警并用默认值，不拒绝启动 —— 与 KEEL_STOCK_FLAG_INTERVAL 同一个处置：
+// 写错一个调优参数不该让一个能正常服务的进程起不来。
+func inventoryClientOptions() []rpc.Option {
+	readTimeout := durationFromEnv(EnvInventoryReadTimeout, rpc.DefaultReadTimeout)
+	cooldown := durationFromEnv(EnvInventoryBreakerCooldown, defaultInventoryBreakerCooldown)
+	failures := defaultInventoryBreakerFailures
+	if raw := strings.TrimSpace(os.Getenv(EnvInventoryBreakerFailures)); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 0 {
+			slog.Warn(EnvInventoryBreakerFailures+" 解析不了，用默认值", "value", raw, "default", failures)
+		} else {
+			failures = n // 0 = 显式关掉熔断
+		}
+	}
+	return []rpc.Option{rpc.WithReadTimeout(readTimeout), rpc.WithBreaker(failures, cooldown)}
+}
+
+// durationFromEnv 读一个正的 Go duration；空着用默认值，解析不了告警并用默认值。
+func durationFromEnv(name string, def time.Duration) time.Duration {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return def
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 {
+		slog.Warn(name+" 解析不了，用默认值", "value", raw, "default", def)
+		return def
+	}
+	return d
 }
 
 // RouterOption 是 Router 的可选项。
@@ -218,7 +266,7 @@ func WithInventory(inv inventory.Service) RouterOption {
 // 它不建业务库的池、不跑租户自检、不起协调器、不跑后台任务：这些都属于 core。
 // 它只认库存库 —— KEEL_INVENTORY_DSN，没配时回落到 PG* 拼出来的那个 DSN
 // （两库合一的拆分部署，或本机试跑）。
-func runInventory(ctx context.Context, s SplitConfig, listen func(addr string, h http.Handler) error) error {
+func runInventory(ctx context.Context, s SplitConfig, listen ListenFunc) error {
 	dsn := s.InventoryDSN
 	if dsn == "" {
 		dsn = db.DSN()
@@ -231,25 +279,33 @@ func runInventory(ctx context.Context, s SplitConfig, listen func(addr string, h
 
 	slog.InfoContext(ctx, "以 "+EnvRole+"=inventory 启动：只监听内网服务，没有公网接口与后台任务",
 		"internal_addr", s.InternalAddr, "version", buildinfo.String())
-	return listen(s.InternalAddr, internalRouter(s, inv))
+	return listen(ctx, s.InternalAddr, internalRouter(s, inv))
 }
 
-// serveBoth 同时监听公网与内网两个端口，任何一个返回就返回。
+// serveBoth 同时监听公网与内网两个端口，任何一个返回就让另一个也停下，两个都返回后才返回。
 //
 // 用同一个可注入的 listen 起两个服务，好让 Run 的测试看得见内网那一个。
 // 任何一个先退出都让 Run 返回，而不是只剩半个进程继续跑：公网挂了而内网
 // 还活着，编排系统探内网端口会以为一切正常；反过来 core 的 SAGA 分支就没人接。
-// 进程退出由 main 完成，另一个服务随进程一起结束。
-func serveBoth(listen func(addr string, h http.Handler) error,
+//
+// 以前先返回的那一个直接让 Run 返回、另一个随进程一起被杀。有了优雅停机之后不行：
+// Run 返回之后要关协调器与池，而另一个服务上可能还有在途请求（内网上是 SAGA 分支）。
+// 所以先返回的那个触发取消，另一个走自己的 Shutdown，等它也返回。
+func serveBoth(ctx context.Context, listen ListenFunc,
 	publicAddr string, public http.Handler, internalAddr string, internal http.Handler) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	errc := make(chan error, 2)
 	go func() {
-		if err := listen(internalAddr, internal); err != nil {
+		if err := listen(ctx, internalAddr, internal); err != nil {
 			errc <- fmt.Errorf("内网服务（%s）: %w", internalAddr, err)
 			return
 		}
 		errc <- nil
 	}()
-	go func() { errc <- listen(publicAddr, public) }()
-	return <-errc
+	go func() { errc <- listen(ctx, publicAddr, public) }()
+	first := <-errc
+	cancel()
+	second := <-errc
+	return errors.Join(first, second)
 }

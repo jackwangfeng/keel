@@ -181,7 +181,7 @@ func (r *Repo) DequeueJobs(ctx context.Context, req DequeueRequest) ([]Job, erro
 		return nil, nil
 	}
 
-	tx, err := r.pool.Begin(ctx)
+	tx, err := r.poolFor(ctx, "DequeueJobs").Begin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -296,7 +296,7 @@ func (r *Repo) FinishJobs(ctx context.Context, ids []int64) error {
 	if len(ids) == 0 {
 		return nil
 	}
-	_, err := r.pool.Exec(ctx, `
+	_, err := r.poolFor(ctx, "FinishJobs").Exec(ctx, `
 		UPDATE jobs SET status = 2, locked_by = NULL, locked_at = NULL, last_error = NULL
 		 WHERE id = ANY($1)`, ids)
 	return err
@@ -314,7 +314,7 @@ var ErrJobDeadLettered = errors.New("任务重试次数用尽，已转死信")
 // 所以第一次失败退避 2 秒、第二次 4 秒，第五次之后转死信。
 func (r *Repo) RetryJob(ctx context.Context, id int64, reason string) error {
 	var status int16
-	err := r.pool.QueryRow(ctx, `
+	err := r.poolFor(ctx, "RetryJob").QueryRow(ctx, `
 		UPDATE jobs
 		   SET status     = CASE WHEN attempts >= max_attempts THEN 3 ELSE 0 END,
 		       run_after  = now() + (interval '1 second' * pow(2, attempts)),
@@ -338,7 +338,7 @@ func (r *Repo) RetryJob(ctx context.Context, id int64, reason string) error {
 // 库存服务早就回来了、而放回库存还要再等半天 —— 那半天全是少卖。
 func (r *Repo) RetryJobCapped(ctx context.Context, id int64, reason string, maxBackoff time.Duration) error {
 	var status int16
-	err := r.pool.QueryRow(ctx, `
+	err := r.poolFor(ctx, "RetryJobCapped").QueryRow(ctx, `
 		UPDATE jobs
 		   SET status     = CASE WHEN attempts >= max_attempts THEN 3 ELSE 0 END,
 		       run_after  = now() + (interval '1 second' * LEAST(pow(2, attempts), $3::float8)),
@@ -369,7 +369,7 @@ func (r *Repo) RetryJobCapped(ctx context.Context, id int64, reason string, maxB
 // run_after 不看：退避中的任务同样可以被点名拿来重试（调用方就是那个「现在就再试一次」的理由）。
 func (r *Repo) ClaimJobByKey(ctx context.Context, merchantID int64, queue, jobKey, workerID string) (Job, bool, error) {
 	var j Job
-	err := r.pool.QueryRow(ctx, `
+	err := r.poolFor(ctx, "ClaimJobByKey").QueryRow(ctx, `
 		UPDATE jobs
 		   SET status = 1, attempts = attempts + 1, locked_by = $4, locked_at = now()
 		 WHERE merchant_id = $1 AND queue = $2 AND job_key = $3 AND status = 0
@@ -410,7 +410,7 @@ func (r *Repo) ClaimJobByKey(ctx context.Context, merchantID int64, queue, jobKe
 // 占位过。不减的后果是反复崩溃的任务会在 max_attempts 次之后进死信 ——
 // 那正是想要的，一个每次都能把 worker 拖死的任务不该被无限重试。
 func (r *Repo) ReapStuckJobs(ctx context.Context, queue string, olderThan time.Duration) (int64, error) {
-	tag, err := r.pool.Exec(ctx, `
+	tag, err := r.poolFor(ctx, "ReapStuckJobs").Exec(ctx, `
 		UPDATE jobs
 		   SET status     = CASE WHEN attempts >= max_attempts THEN 3 ELSE 0 END,
 		       locked_by  = NULL, locked_at = NULL,
@@ -441,7 +441,7 @@ func (r *Repo) PurgeFinishedJobs(ctx context.Context, queue string, retain time.
 	if limit <= 0 {
 		return 0, nil
 	}
-	tag, err := r.pool.Exec(ctx, `
+	tag, err := r.poolFor(ctx, "PurgeFinishedJobs").Exec(ctx, `
 		DELETE FROM jobs
 		 WHERE id IN (SELECT id FROM jobs
 		               WHERE queue = $1 AND status = 2
@@ -470,7 +470,7 @@ type DeadJob struct {
 // 的部分索引）。死信永久保留（PurgeFinishedJobs 不碰它），所以这里读到的是累计值，
 // 不是「这一轮新增」—— 有人处理掉之前它会一直在报，这正是想要的。
 func (r *Repo) DeadJobs(ctx context.Context, queue string, limit int) (map[int64]int64, []DeadJob, error) {
-	rows, err := r.pool.Query(ctx, `
+	rows, err := r.poolFor(ctx, "DeadJobs").Query(ctx, `
 		SELECT merchant_id, count(*)
 		  FROM jobs
 		 WHERE queue = $1 AND status = 3
@@ -494,7 +494,7 @@ func (r *Repo) DeadJobs(ctx context.Context, queue string, limit int) (map[int64
 	if limit <= 0 || len(counts) == 0 {
 		return counts, []DeadJob{}, nil
 	}
-	rows, err = r.pool.Query(ctx, `
+	rows, err = r.poolFor(ctx, "DeadJobs").Query(ctx, `
 		SELECT merchant_id, job_key, attempts, coalesce(last_error, ''), updated_at
 		  FROM jobs
 		 WHERE queue = $1 AND status = 3

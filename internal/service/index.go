@@ -15,6 +15,7 @@ import (
 	"github.com/keel/keel/internal/search"
 	"github.com/keel/keel/internal/tenant"
 	"github.com/keel/keel/internal/understanding"
+	"github.com/keel/keel/internal/worker"
 )
 
 // 商品理解服务的慢路径：入队（触发点扫描）+ 出队（worker）+ 两个 processor。
@@ -437,7 +438,9 @@ func (s *IndexService) Run(ctx context.Context) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			s.consume(ctx)
+			// 任务内部另起的 goroutine 接不住 Runner 的 recover，这里自己套一层（worker.Supervise）：
+			// 消费者 panic 记 ERROR、退避重启，而不是崩掉整个进程。
+			worker.Supervise(ctx, s.log, "index.consume", 0, 0, s.consume)
 		}()
 	}
 

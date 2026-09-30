@@ -786,7 +786,9 @@ func (s *RefundService) submitToChannel(ctx context.Context, tx repository.Tx, r
 			"refund_no", refundNo, "channel", r.Channel)
 		return nil
 	}
-	secret, err := s.repo.ChannelNotifySecret(ctx, channel)
+	// 密钥与验签都走 tx 而不是 s.repo：这里已经在审核 / 收货的事务里，s.repo 那个
+	// 走池上另一条连接 —— 一个请求占两条，并发一上来池就自锁（repository.PaymentTx）。
+	secret, err := tx.ChannelNotifySecret(ctx, channel)
 	if err != nil {
 		return err
 	}
@@ -812,7 +814,7 @@ func (s *RefundService) submitToChannel(ctx context.Context, tx repository.Tx, r
 	}
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write(body)
-	if err := verifyChannelSignature(ctx, s.repo, s.log, channel, body, hex.EncodeToString(mac.Sum(nil))); err != nil {
+	if err := verifyChannelSignature(ctx, tx, s.log, channel, body, hex.EncodeToString(mac.Sum(nil))); err != nil {
 		return err
 	}
 	var n refundNotification

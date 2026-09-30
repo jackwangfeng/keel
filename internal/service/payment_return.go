@@ -102,7 +102,8 @@ func (s *PaymentReturnService) Submit(ctx context.Context, returnNo string) erro
 		if !ok {
 			return tx.MarkPaymentReturnAttemptFailed(ctx, r.ID, fmt.Sprintf("渠道 %d 不支持原路退回", r.Channel))
 		}
-		secret, err := s.repo.ChannelNotifySecret(ctx, channel)
+		// 走 tx 而不是 s.repo：已经在事务里，再去池上拿第二条连接会让并发的提交把池占死。
+		secret, err := tx.ChannelNotifySecret(ctx, channel)
 		if err != nil {
 			return err
 		}
@@ -119,7 +120,7 @@ func (s *PaymentReturnService) Submit(ctx context.Context, returnNo string) erro
 		}
 		mac := hmac.New(sha256.New, []byte(secret))
 		mac.Write(body)
-		if err := verifyChannelSignature(ctx, s.repo, s.log, channel, body, hex.EncodeToString(mac.Sum(nil))); err != nil {
+		if err := verifyChannelSignature(ctx, tx, s.log, channel, body, hex.EncodeToString(mac.Sum(nil))); err != nil {
 			return err
 		}
 		_, err = s.settleTx(ctx, tx, r, r.Channel, refundNotification{RefundNo: r.ReturnNo, ChannelRefundID: txn,

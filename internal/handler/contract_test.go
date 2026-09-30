@@ -1524,6 +1524,8 @@ var nonContractRoutes = map[string]string{
 	"DELETE /api/v1/mcp": "AI 员工的 MCP 入口（AI 经营 M9，handler/mcp.go）：形状由 MCP 规范（streamable HTTP + JSON-RPC）定义，" +
 		"不是 REST 资源；工具清单与参数由 MCP 的 tools/list 自描述。鉴权是 kagt_ 接入密钥（契约里 /agent/whoami 描述了它）",
 	"GET /healthz": "存活探针，给编排系统和 compose 用；契约描述的是业务接口",
+	"GET /readyz": "就绪探针（能 ping 通业务库才是 200），与 healthz 同类：给编排系统与负载均衡用，" +
+		"不是业务接口。与 healthz 分开是因为库暂时连不上时进程是活的、不该被重启，只是不该接流量（app/lifecycle.go）",
 	"GET /version": "构建信息（版本 / commit / 构建时间 / Go 版本），给运维与 issue 里" +
 		"「你跑的是哪一版」用；和 healthz 同类，不是业务接口。" +
 		"刻意不进契约：契约是前后端的约定，而没有任何客户端该按版本号分支行为 —— " +

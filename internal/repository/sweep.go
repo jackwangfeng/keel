@@ -45,7 +45,7 @@ import (
 // 的时候发的，它不属于那一面。tenant/resolver.go 读 merchants 时同此惯例。
 func (r *Repo) ActiveMerchants(ctx context.Context) ([]int64, error) {
 	// 「当前状态」取最新一行修订（00024），文本与解析层共用同一份。
-	rows, err := r.pool.Query(ctx, `
+	rows, err := r.poolFor(ctx, "ActiveMerchants").Query(ctx, `
 		SELECT m.id FROM `+tenant.EffectiveMerchantFrom+`
 		 WHERE m.deleted_at IS NULL AND `+tenant.EffectiveStatus+` = 1
 		 ORDER BY m.id`)

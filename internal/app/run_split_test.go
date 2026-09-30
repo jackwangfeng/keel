@@ -34,7 +34,7 @@ func newMultiSpy(want int) *multiSpy {
 	return &multiSpy{handlers: map[string]http.Handler{}, want: want, all: make(chan struct{})}
 }
 
-func (s *multiSpy) listen(addr string, h http.Handler) error {
+func (s *multiSpy) listen(_ context.Context, addr string, h http.Handler) error {
 	s.mu.Lock()
 	s.handlers[addr] = h
 	if len(s.handlers) == s.want {
@@ -73,7 +73,7 @@ func TestRunInventoryRoleServesOnlyInternal(t *testing.T) {
 	// 反过来这也顺带证明了 /readyz 查的是一个真实的池。
 	var addrs []string
 	codes := map[string]int{}
-	listen := func(addr string, h http.Handler) error {
+	listen := func(_ context.Context, addr string, h http.Handler) error {
 		addrs = append(addrs, addr)
 		for _, p := range []string{"/healthz", "/version", "/readyz", "/api/v1/products"} {
 			codes[p] = status(h, p)
