@@ -53,9 +53,22 @@ type twoDB struct {
 	engine   *gin.Engine
 	outbox   *service.InventoryOutboxService
 	sweeper  *service.SweepService
+
+	// 跨 0 通知（stock_msg_test.go）：只有 newTwoDBWithStockMsg 装。库存进程自己的协调器 + 通知器，
+	// core 的内网端口上挂着接收分支（与 KEEL_ROLE=inventory 配 KEEL_CORE_URL、core 配 KEEL_INTERNAL_ADDR 同一个装法）。
+	notifier *inventory.StockNotifier
+	flags    *service.StockFlagService
+
+	// 活动配额同步（二阶段消息）：core 发、库存收，库存进程经 core 的内网端口回源读定义。每一套都装。
+	quota *service.QuotaSync
 }
 
-func newTwoDB(t *testing.T) *twoDB {
+func newTwoDB(t *testing.T) *twoDB { return newTwoDBOpts(t, false) }
+
+// newTwoDBWithStockMsg 同 newTwoDB，另外接上跨 0 通知。
+func newTwoDBWithStockMsg(t *testing.T) *twoDB { return newTwoDBOpts(t, true) }
+
+func newTwoDBOpts(t *testing.T, stockMsg bool) *twoDB {
 	t.Helper()
 	ctx := context.Background()
 	appDSN, adminDSN, cleanup, err := testdb.NewInventoryDB(ctx, "inv")
@@ -73,11 +86,46 @@ func newTwoDB(t *testing.T) *twoDB {
 	}
 	t.Cleanup(e.invAdmin.Close)
 
+	// core 的内网端口：库存进程回源读活动配额定义（验签 + 租户头），stockMsg 时另挂跨 0 通知的接收分支。
+	// 先起服务器、后填 handler —— 通知器要 core 的地址，而接收分支要 core 的库存客户端，后者又要库存进程的地址。
+	var coreInternal atomic.Pointer[gin.Engine]
+	coreSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if h := coreInternal.Load(); h != nil {
+			h.ServeHTTP(w, req)
+			return
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(coreSrv.Close)
+
 	// 库存进程：库存接口 + 两个 SAGA 分支，背后是建在库存库上的进程内实现。
 	local := inventory.NewLocal(repository.NewInventoryStore(e.invPool))
+	if stockMsg {
+		res, err := dtm.NewBranchResolver(coreSrv.URL, remoteInventorySecret)
+		if err != nil {
+			t.Fatal(err)
+		}
+		e.notifier = inventory.NewStockNotifier(repository.NewInventoryStore(e.invPool), res.BranchURL(inventory.BranchStockChanged))
+		dir := t.TempDir()
+		invTC, err := dtm.Start("sqlite:"+filepath.Join(dir, "inventory-dtm.db"), 0,
+			map[string]dtm.BranchFunc{inventory.BranchStockMsgQuery: e.notifier.QueryBranch()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(invTC.Close)
+		e.notifier.Attach(invTC)
+		local.WithStockNotifier(e.notifier)
+	}
 	r, routes := rpc.NewRouter(rpc.ServerConfig{Secret: remoteInventorySecret})
 	inventory.Mount(routes.Tenant, local)
 	inventory.MountSaga(routes.Saga, local)
+	coreClient, err := rpc.NewClient(coreSrv.URL, remoteInventorySecret, 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dtm.MountBranches(routes.Saga, map[string]dtm.BranchFuncEx{
+		inventory.BranchActivitySync: dtm.Ex(local.ActivitySyncBranch(inventory.NewRemoteQuotaSource(coreClient))),
+	})
 	e.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		if e.down.Load() {
 			// 「不在」：连接直接断掉（与进程被杀、端口没人听一样是传输层失败），不回任何状态码。
@@ -110,14 +158,28 @@ func newTwoDB(t *testing.T) *twoDB {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(dir) })
-	tc, err := dtm.Start("sqlite:"+filepath.Join(dir, "dtm.db"), 0, app.Branches(e.orders)) // 不注册库存分支：它们在库存进程里
+	// 不注册库存分支：它们在库存进程里。配额同步只注册回查（接收分支在库存进程里）。
+	e.quota = service.NewQuotaSync(repository.New(testPool), e.res)
+	branches := app.Branches(e.orders)
+	for name, fn := range app.QuotaSyncBranches(e.quota, nil, nil) {
+		branches[name] = fn
+	}
+	tc, err := dtm.Start("sqlite:"+filepath.Join(dir, "dtm.db"), 0, branches)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(tc.Close)
 	e.orders.AttachCoordinator(tc)
+	e.quota.Attach(tc)
 	e.engine = app.Router(testPool, tenant.NewResolver(testPool, tenant.Config{BaseDomain: baseDomain}), testSigner,
-		e.orders, service.PaymentConfig{Sandbox: true}, conceptEmbedder{}, app.WithInventory(e.remote))
+		e.orders, service.PaymentConfig{Sandbox: true}, conceptEmbedder{}, app.WithInventory(e.remote), app.WithQuotaSync(e.quota))
+	cr, coreRoutes := rpc.NewRouter(rpc.ServerConfig{Secret: remoteInventorySecret})
+	inventory.MountQuotaSource(coreRoutes.Tenant, service.NewPromotionQuotaSource(repository.New(testPool)))
+	if stockMsg {
+		e.flags = service.NewStockFlagService(repository.New(testPool), e.remote, 0, nil)
+		dtm.MountBranches(coreRoutes.Saga, map[string]dtm.BranchFuncEx{inventory.BranchStockChanged: dtm.Ex(e.flags.StockMsgBranch())})
+	}
+	coreInternal.Store(cr)
 	e.outbox = service.NewInventoryOutboxService(repository.New(testPool), e.remote, service.InventoryOutboxConfig{}, nil)
 	e.sweeper = service.NewSweepService(repository.New(testPool), e.remote, service.SweepConfig{}, nil)
 	return e

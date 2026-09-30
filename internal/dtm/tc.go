@@ -3,7 +3,7 @@
 // 它是 examples/dtmrs-embedded/dtmrs 的产品化版本，**不是它的副本**。
 // 搬过来时做了三处取舍，每一处都有理由：
 //
-//	① 只搬 SAGA，没搬 TCC 与拉取式分支。
+//	① 只搬 SAGA，没搬 TCC 与拉取式分支。（2026-09-30 补：二阶段消息有了真实用户，搬了，见 msg.go。）
 //	  例子里那两套是「0.11 的 C ABI 够用」的证据（架构 ADR #1 那条悬了很久的
 //	  前提），证据的归宿是例子与它的 workflow，不是 internal/。架构 §7 写明
 //	  TCC 要到「预售 / 多仓调拨」才引入，而 internal/ 里一个没人调的导出 API
@@ -116,6 +116,14 @@ type TC struct {
 	// sem 给每一个**阻塞的 cgo 调用**发一张通行证。见 DefaultMaxInflight。
 	sem chan struct{}
 
+	// msgSem 是二阶段消息那几个调用（msg.go）的通行证，与 sem 分开。
+	//
+	// 分开不是为了吞吐，是为了不成环：消息常常是在**分支回调里**发的（库存分支扣到 0 时通知 core），
+	// 而分支所属的那个 SAGA 的提交方可能正卡在 WaitFinal 里、占着 sem。32 个 WaitFinal 占满 sem 时，
+	// 共用一个池的话分支里的 PrepareMsg 会排在它们后面，而它们等的正是这个分支 —— 要等到
+	// WaitFinal 超时才解开。线程总数的上限因此是 2×maxInflight，仍然是有界的。
+	msgSem chan struct{}
+
 	// 下面两个只为测试可观察：闸门守的是「真的有上限」，而不是「代码里有个
 	// channel」。把 acquire 删掉时 peak 会冲过 cap，测试才红。
 	inflight atomic.Int64
@@ -150,6 +158,9 @@ func (t *TC) release() {
 	<-t.sem
 }
 
+func (t *TC) acquireMsg() { t.msgSem <- struct{}{} }
+func (t *TC) releaseMsg() { <-t.msgSem }
+
 // Open 打开协调器。dsn 形如 "sqlite:/var/lib/keel/dtm.db" 或 "postgres://..."。
 //
 // **Open 不碰数据库**，Start 才碰 —— 这一点实测过，也决定了启动顺序：
@@ -177,7 +188,7 @@ func Open(dsn string, maxInflight int) (*TC, error) {
 	if p == nil {
 		return nil, fmt.Errorf("dtmrs_open: %s", lastError())
 	}
-	return &TC{p: p, sem: make(chan struct{}, maxInflight)}, nil
+	return &TC{p: p, sem: make(chan struct{}, maxInflight), msgSem: make(chan struct{}, maxInflight)}, nil
 }
 
 // Register 注册一个进程内分支，对应编排里的 "local://<name>"。必须在 Start 之前调。

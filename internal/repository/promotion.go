@@ -94,14 +94,18 @@ type PriceOffer struct {
 }
 
 // PromotionSku 是后台看到的一个活动商品。
+//
+// QuotaQty 是 core 记着的配额**定义**（promotion_skus.quota_qty，00180）；PriceOffer 里的 StockQty / SoldQty
+// 是库存服务里生效的那一份与已售（service 事后填）。NULL = 写于 00180 之前，core 不知道。
 type PromotionSku struct {
 	PriceOffer
-	SKUCode string
-	Title   string
+	SKUCode  string
+	Title    string
+	QuotaQty *int32
 }
 
-// PromotionSkuInput 是后台写活动商品的一条。StockQty 是活动配额：它不写进 promotion_skus
-// （00075 起停用），由 service 整组交给库存服务（inventory.SetActivityQuotas）。
+// PromotionSkuInput 是后台写活动商品的一条。StockQty 是活动配额：写进 promotion_skus.quota_qty
+// （定义，00180），库存服务里生效的那一份由二阶段消息按它同步（service/promotion_quota_msg.go）。
 type PromotionSkuInput struct {
 	SKUID           int64
 	PromoPriceCents int64
@@ -175,9 +179,12 @@ type PromotionTx interface {
 	AdminUpdatePromotion(ctx context.Context, id int64, f PromotionFields) error
 	ReplacePromotionTiers(ctx context.Context, promotionID int64, tiers []PromotionTier) error
 	ReplacePromotionScopes(ctx context.Context, promotionID int64, scopes []CouponScopeInput) error
-	// ReplacePromotionSkus 整组替换活动商品：逐条 upsert 价格配置与限购，删掉不在名单里的。
-	// 「卖出过的不能移除」由库存服务判（service 先调它，被拒就不走到这里）。
+	// ReplacePromotionSkus 整组替换活动商品：逐条 upsert 价格配置、限购与配额定义，删掉不在名单里的。
+	// 「卖出过的不能移除」由 service 在写之前按库存服务的已售预检（admin_promotion.go）。
 	ReplacePromotionSkus(ctx context.Context, promotionID int64, skus []PromotionSkuInput) error
+	// PromotionQuotaDefinition 是一场活动当前的配额定义（二阶段消息的接收方回源读它）。
+	// found 为假表示本租户没有这场活动。Quota 为 nil 的项写于 00180 之前。
+	PromotionQuotaDefinition(ctx context.Context, promotionID int64) (found bool, items []PromotionQuota, err error)
 	ListPromotionSkus(ctx context.Context, promotionIDs []int64) (map[int64][]PromotionSku, error)
 	CountGiftGrants(ctx context.Context, promotionIDs []int64) (map[int64]int32, error)
 	// LiveSkuIDs 返回 ids 里在本租户存在且未软删的 SKU。
@@ -522,7 +529,7 @@ func (t tenantTx) ReplacePromotionSkus(ctx context.Context, promotionID int64, s
 	for _, s := range skus {
 		if err := t.q.UpsertPromotionSku(ctx, db.UpsertPromotionSkuParams{
 			PromotionID: promotionID, SkuID: s.SKUID, PromoPriceCents: s.PromoPriceCents,
-			DiscountRate: s.DiscountRate, PerUserLimit: s.PerUserLimit,
+			DiscountRate: s.DiscountRate, PerUserLimit: s.PerUserLimit, QuotaQty: &s.StockQty,
 		}); err != nil {
 			return promotionViolation(err)
 		}
@@ -548,10 +555,32 @@ func (t tenantTx) ListPromotionSkus(ctx context.Context, promotionIDs []int64) (
 				PromotionID: r.PromotionID, SKUID: r.SkuID, PromoPriceCents: r.PromoPriceCents,
 				DiscountRate: r.DiscountRate, PerUserLimit: r.PerUserLimit,
 			},
-			SKUCode: r.SkuCode, Title: r.Title,
+			SKUCode: r.SkuCode, Title: r.Title, QuotaQty: r.QuotaQty,
 		})
 	}
 	return out, nil
+}
+
+// PromotionQuota 是配额定义的一项。Quota 为 nil 表示 core 没有记录（00180 之前写的行）。
+type PromotionQuota struct {
+	SKUID int64
+	Quota *int32
+}
+
+func (t tenantTx) PromotionQuotaDefinition(ctx context.Context, promotionID int64) (bool, []PromotionQuota, error) {
+	found, err := t.q.PromotionExists(ctx, promotionID)
+	if err != nil || !found {
+		return false, nil, err
+	}
+	rows, err := t.q.PromotionQuotaDefinition(ctx, promotionID)
+	if err != nil {
+		return false, nil, err
+	}
+	out := make([]PromotionQuota, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, PromotionQuota{SKUID: r.SkuID, Quota: r.QuotaQty})
+	}
+	return true, out, nil
 }
 
 func (t tenantTx) CountGiftGrants(ctx context.Context, promotionIDs []int64) (map[int64]int32, error) {

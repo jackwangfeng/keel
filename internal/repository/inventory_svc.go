@@ -48,7 +48,7 @@ func NewInventoryStore(pool *pgxpool.Pool) *InventoryStore {
 // 入口由 rpc.RequireTenant 放进去，进程内调用沿用 core 请求的 ctx）。
 func (s *InventoryStore) WithTenant(ctx context.Context, fn func(InventoryStoreTx) error) error {
 	return s.r.withTenantTx(ctx, func(tx pgx.Tx, _ Tx) error {
-		return fn(invTx{q: db.New(tx)})
+		return fn(invTx{q: db.New(tx), tx: tx})
 	})
 }
 
@@ -83,7 +83,7 @@ func (s *InventoryStore) WithSagaBranch(ctx context.Context, gid, branchID, op s
 		if d != DecisionExecute {
 			return nil
 		}
-		return fn(invTx{q: db.New(tx)})
+		return fn(invTx{q: db.New(tx), tx: tx})
 	})
 	if err != nil {
 		return decisionNone, err
@@ -237,6 +237,11 @@ type InventoryStoreTx interface {
 
 	// StockKeys 按主键 (sku_id, store_id) 键集分页列出库存行的键：严格在 after 之后的至多 limit 行。
 	StockKeys(ctx context.Context, after StockKey, limit int32) ([]StockKey, error)
+
+	// —— 二阶段消息（msg_barrier.go）
+
+	// MarkMsgPrepared 在本事务里占下这条消息的回查屏障；假表示回查已经抢先判了「没提交」。
+	MarkMsgPrepared(ctx context.Context, gid string) (bool, error)
 }
 
 // StockKey 是一行库存的主键。
@@ -260,7 +265,13 @@ func (t invTx) StockKeys(ctx context.Context, after StockKey, limit int32) ([]St
 
 // invTx 只包着 *db.Queries，而且只调 inventory_svc.sql 里的查询。
 // 它与 tenantTx 是两个类型：core 的 Tx 上够不着这里的任何一个方法。
-type invTx struct{ q *db.Queries }
+//
+// tx 只给二阶段消息的屏障用（MarkMsgPrepared，msg_barrier.go）：那条语句与分支屏障是同一句手写 SQL，
+// 不经 sqlc。别的方法一律走 q。
+type invTx struct {
+	q  *db.Queries
+	tx pgx.Tx
+}
 
 // nonNil 把 nil 切片换成空切片：pgx 把 nil 编码成 SQL NULL，
 // 而 x = ANY(NULL) 是 NULL、NOT (x = ANY(NULL)) 也是 NULL —— 排除列表为空时

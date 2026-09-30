@@ -159,3 +159,58 @@ func TenantContextFromGID(ctx context.Context, gid string) (context.Context, int
 	}
 	return tenant.NewContext(ctx, merchantID), merchantID, orderNo, nil
 }
+
+// ErrBadGID 表示这个字符串不是某一类「前缀-租户-其余」形状的 gid（二阶段消息用，见 msg.go）。
+var ErrBadGID = errors.New("不是合法的 gid")
+
+// TenantGID 拼出 `{prefix}{merchant_id}-{rest}`。二阶段消息的 gid 与下单 gid 是同一个处境
+// （msg.go 文件头：消息不带载荷，目标分支只拿到 gid），租户也只能从这里来。
+// rest 由各个消息自己定形状，这里只保证它非空、不含空白、总长不超 dtmrs 的上限。
+func TenantGID(prefix string, merchantID int64, rest string) (string, error) {
+	if merchantID <= 0 {
+		return "", fmt.Errorf("%w: merchant_id 是 %d，必须为正", ErrBadGID, merchantID)
+	}
+	if rest == "" || strings.ContainsAny(rest, " \t\r\n") {
+		return "", fmt.Errorf("%w: 其余部分 %q 为空或含空白", ErrBadGID, rest)
+	}
+	gid := prefix + strconv.FormatInt(merchantID, 10) + "-" + rest
+	if len(gid) > maxGIDLen {
+		return "", fmt.Errorf("%w: gid 长度 %d 超过 dtmrs 的上限 %d", ErrBadGID, len(gid), maxGIDLen)
+	}
+	return gid, nil
+}
+
+// TenantContextFromTenantGID 同 TenantContextFromGID，给「前缀-租户-其余」形状的 gid（二阶段消息）：
+// 把 gid 里的租户放进 ctx，回其余部分。消息的目标分支与 SAGA 分支是同一个处境（只拿到 gid），
+// 租户同样只许从这里来（service 包 tenant_context_test.go 那条机械检查认它）。
+func TenantContextFromTenantGID(ctx context.Context, prefix, gid string) (context.Context, string, error) {
+	merchantID, rest, err := ParseTenantGID(prefix, gid)
+	if err != nil {
+		return nil, "", err
+	}
+	return tenant.NewContext(ctx, merchantID), rest, nil
+}
+
+// ParseTenantGID 是 TenantGID 的逆：严格程度与 ParseOrderGID 相同（前导零、正负号、别的前缀一律拒绝），
+// 理由也相同 —— 返回值会直接进 SET LOCAL app.merchant_id。
+func ParseTenantGID(prefix, gid string) (merchantID int64, rest string, err error) {
+	if len(gid) > maxGIDLen {
+		return 0, "", fmt.Errorf("%w: 长度 %d 超过 %d", ErrBadGID, len(gid), maxGIDLen)
+	}
+	body, ok := strings.CutPrefix(gid, prefix)
+	if !ok {
+		return 0, "", fmt.Errorf("%w: %q 没有前缀 %q", ErrBadGID, gid, prefix)
+	}
+	mid, rest, ok := strings.Cut(body, "-")
+	if !ok || rest == "" {
+		return 0, "", fmt.Errorf("%w: %q 缺租户段之后的部分", ErrBadGID, gid)
+	}
+	if !isCanonicalPositiveDecimal(mid) {
+		return 0, "", fmt.Errorf("%w: %q 的租户段 %q 必须是无前导零的正十进制整数", ErrBadGID, gid, mid)
+	}
+	v, convErr := strconv.ParseInt(mid, 10, 64)
+	if convErr != nil {
+		return 0, "", fmt.Errorf("%w: %q 的租户段 %q 解析失败: %v", ErrBadGID, gid, mid, convErr)
+	}
+	return v, rest, nil
+}

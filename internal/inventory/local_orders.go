@@ -111,7 +111,7 @@ func (l *Local) ReleaseForOrder(ctx context.Context, r ReleaseRequest) (ReleaseR
 		return ReleaseResult{}, err
 	}
 	var out ReleaseResult
-	err = l.store.WithTenant(ctx, func(tx repository.InventoryStoreTx) error {
+	err = l.stockTx(ctx, l.inTenant(ctx), func(tx repository.InventoryStoreTx, rec *stockCrossings) error {
 		if err := tx.LockBizID(ctx, r.OrderNo); err != nil {
 			return err
 		}
@@ -126,7 +126,7 @@ func (l *Local) ReleaseForOrder(ctx context.Context, r ReleaseRequest) (ReleaseR
 				return nil
 			}
 		}
-		out.Qty, err = putBack(ctx, tx, r.OrderNo, r.StoreID, r.BizType, lines, true)
+		out.Qty, err = putBack(ctx, tx, rec, r.OrderNo, r.StoreID, r.BizType, lines, true)
 		return err
 	})
 	if err != nil {
@@ -146,7 +146,7 @@ func (l *Local) RestockForRefund(ctx context.Context, r RestockRequest) (Release
 		return ReleaseResult{}, err
 	}
 	var out ReleaseResult
-	err = l.store.WithTenant(ctx, func(tx repository.InventoryStoreTx) error {
+	err = l.stockTx(ctx, l.inTenant(ctx), func(tx repository.InventoryStoreTx, rec *stockCrossings) error {
 		if err := tx.LockBizID(ctx, r.RefundNo); err != nil {
 			return err
 		}
@@ -169,6 +169,7 @@ func (l *Local) RestockForRefund(ctx context.Context, r RestockRequest) (Release
 			if err != nil {
 				return err
 			}
+			rec.record(r.StoreID, ln.SKUID, after-ln.Qty, after)
 			if err := tx.AppendBizLog(ctx, repository.BizLogEntry{
 				SKUID: ln.SKUID, StoreID: r.StoreID, ChangeQty: ln.Qty, BizType: BizRefundRestock,
 				BizID: r.RefundNo, Before: after - ln.Qty, After: after,

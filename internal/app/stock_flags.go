@@ -6,13 +6,65 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/keel/keel/internal/dtm"
+	"github.com/keel/keel/internal/inventory"
+	"github.com/keel/keel/internal/repository"
 	"github.com/keel/keel/internal/service"
 )
 
-// EnvStockFlagInterval 是商品列表有货排序标记全量刷新的间隔（Go duration，如 30s / 2m）。
-// 空或非法时用 service.DefaultStockFlagInterval（1 分钟）。它决定下单扣减 / 关单回补之后
-// 列表排序最多晚多久跟上；列表上显示的「无货」不受它影响（那是现问库存服务的）。
+// EnvStockFlagInterval 是商品列表有货排序标记全量刷新的间隔（Go duration，如 30m / 2h）。
+// 空或非法时用 service.DefaultStockFlagInterval（1 小时）。可售数跨 0 由库存服务的二阶段消息即时同步
+// （service/stock_flags.go 文件头），这一轮只兜「漏发」与 SKU 上下架；列表上显示的「无货」不受它影响（现问库存服务）。
 const EnvStockFlagInterval = "KEEL_STOCK_FLAG_INTERVAL"
+
+// 以下三个是「库存跨 0 → 有货标记」这条二阶段消息在 Run 里的装配（service/stock_flags.go、inventory 包
+// stock_msg.go）。集中在这里，Run 里只剩几行调用（都标了「跨 0 通知」）。
+
+// newStockNotifier 建本进程的跨 0 通知器。all（单体）：通知器在进程内，目标是 local://stock_changed；
+// core：返回 nil —— core 不改库存，通知由库存进程发、经内网端口送进来，所以 core 没配内网端口时喊一声。
+// （inventory 角色不走这里，见 runInventory。）
+func newStockNotifier(s SplitConfig, invPool *pgxpool.Pool) *inventory.StockNotifier {
+	if s.Role == RoleCore {
+		if s.InternalAddr == "" {
+			slog.Warn(EnvRole + "=core 没有配 " + EnvInternalAddr + "：库存服务的跨 0 通知送不进来（投递会一直重试），" +
+				"商品列表的有货排序只靠全量刷新（" + EnvStockFlagInterval + "）")
+		}
+		return nil
+	}
+	return inventory.NewStockNotifier(repository.NewInventoryStore(invPool), "local://"+inventory.BranchStockChanged)
+}
+
+// StockMsgBranches 是跨 0 通知要注册到本进程协调器上的两个分支：接收（core 的 stock_changed）与回查
+// （库存的 inventory_stock_msg_query）。只有单体两个都在本进程；n 为 nil（core）时返回空。
+// 导出给测试：handler 包的协调器照 Run 的样子注册。
+func StockMsgBranches(n *inventory.StockNotifier, flags *service.StockFlagService) map[string]dtm.BranchFunc {
+	if n == nil {
+		return nil
+	}
+	return map[string]dtm.BranchFunc{
+		inventory.BranchStockChanged:  flags.StockMsgBranch(),
+		inventory.BranchStockMsgQuery: n.QueryBranch(),
+	}
+}
+
+// withBranches 把 extra 并进 base（同名时 dtm.StartEx 那边不会发现 —— 两组都是 BranchFunc —— 所以这里拒绝）。
+func withBranches(base, extra map[string]dtm.BranchFunc) map[string]dtm.BranchFunc {
+	for name, fn := range extra {
+		if _, dup := base[name]; dup {
+			panic("分支 " + name + " 重名")
+		}
+		base[name] = fn
+	}
+	return base
+}
+
+func attachStockNotifier(n *inventory.StockNotifier, tc *dtm.TC) {
+	if n != nil {
+		n.Attach(tc)
+	}
+}
 
 func stockFlagIntervalFromEnv() time.Duration {
 	raw := strings.TrimSpace(os.Getenv(EnvStockFlagInterval))
