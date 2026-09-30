@@ -399,3 +399,22 @@ SELECT day_ends.sku_id::bigint AS sku_id,
            0) <= 0)::int AS stockout_days
   FROM day_ends
  GROUP BY day_ends.sku_id;
+
+-- name: InvPurgeLogsBefore :execrows
+-- 库存流水按保留期分批清理（service/retention.go，默认留 180 天），删法同 db/queries/retention.sql
+-- 的文件头：带 LIMIT 的 ctid 子查询，走 idx_inv_logs_created (merchant_id, created_at)（00173）。
+--
+-- 删老流水对别处判断的影响，逐个看过（InvBizTrail 的三个用途 + 另外两处）：
+--   · 关单释放 / SAGA 补偿按流水**净值**算还欠多少（inventory/saga.go 的 putBack）：流水删了
+--     净值是 0，什么都不补 —— 不会重复加库存；
+--   · 退款回补（inventory/local_orders.go 的 RestockForRefund）按「有没有这张退款单的回补流水」
+--     判重放：**这是唯一一处删了会出错的**。同一张退款单的回补在它的流水被删之后再来一次，
+--     会再加一遍库存。它只来自 outbox 的重试，正常在分钟级完成；死信是永久保留、要人处理的，
+--     保留期（默认 180 天）必须长于「死信最晚会被人重新投递」的时间 —— 别配到 30 天以下；
+--   · 手工调整判重（InvLockBizID / InvFindManualLog）只在同一次操作的重试窗口里有意义；
+--   · InvStockoutDays 取某天收盘水位：收盘前的流水删了，会落到「收盘后第一条流水的
+--     before_available」或「现在的可售」，两者都等于那天收盘的水位（中间没有别的变动）。
+DELETE FROM inventory_logs
+ WHERE ctid = ANY(ARRAY(SELECT l.ctid FROM inventory_logs l
+                         WHERE l.created_at < sqlc.arg(before)::timestamptz
+                         LIMIT sqlc.arg(batch)::int));
