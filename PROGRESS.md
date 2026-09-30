@@ -21,6 +21,7 @@
 - **结算自动选收货地址（2026-09-30，服务端 d1be5f1 + 客户端 e438afc / 84227df，H5 e8c6f1e 已上演示站）**：`GET /addresses?store_id=` 给每条地址标 `in_service_area`（true / false / 缺省=判断不了；判据与下单围栏校验同一条，测试逐条对照）；结算页没明确选择时：默认地址不在围栏外就用它 → 否则围栏内离「送至」点最近的 → 都不在退回原行为；手动选择永不覆盖，自动选中且确定在范围内时提示「已按当前门店自动选择配送范围内的地址」。iPhone 真机已验（用户确认）。分工：服务端 lenserver、客户端 Mac 会话。顺带修：契约经纬度 / 围栏坐标 / 距离改 format: double（e8c6f1e；原来 Go 端 float32 写库掉约 1 米精度，演示站已存的围栏要重新保存一次才完全精确）。
 - **后台手机浏览器可用（2026-09-29，4565a36，演示站已上）**：≤768px 菜单进抽屉、全站表单单列 / 弹窗不出屏 / 控件够手指点；订单、售后、多收款退回、AI 员工、经营概览、商品、门店与库存有手机卡片（电脑版不变）。`make admin-responsive-check` 按手机 390 + 电脑 1440 逐页（36 项：页面 + 标签页 + 「新建」弹窗）检查并截图，改前手机 0/36、改后 36/36，电脑始终 36/36；发布前查本地构建用 `LOCAL_DIST`（脚本拦截后台页面文件换成本地产物，接口仍走线上）。坑：卡片整张包在 router-link 里时，卡片内按钮要 `@click.stop.prevent`（只 stop 挡不住 <a> 的默认跳转）。
 - ghcr 四个镜像 keel / keel-migrate / keel-postgres / keel-console 均可匿名拉取。真机：iPhone 15 验过；Android 真机、小程序真机未验。
+- **uni-app x 买家端下线（2026-09-30，300b267）**：架构-设计与加固.md 待办里第三档「uni-app x 下线」项完成。删了整个 `app/` 目录（源码、e2e、native-android/ios 壳工程、脚本、构建产物）与专属脚本（`gen_uts_schema.py`/`check_uts_contract.py`/`check_app_types.py`/`check_app_build.py`）；Makefile 去掉全部 `generate-uts`/`app-*` 目标，`check-all.sh` 去掉对应两步；`contract_operations.py` 头注释改 Dart 独占；README（中英）、CONTRIBUTING（十三步改十二步）、docs 索引与指南、flutter_app/README、PR 模板、CI workflow 里提它的地方都改成「已下线，见 tag `uniapp-final`」或直接去掉。留档 tag `uniapp-final` 已推到远程，指向下线前的 HEAD `4105526`。`flutter_app/lib` 下代码未动（归 Mac 会话），只改了 README。验证：check-all.sh / go build+vet / test-db / flutter-analyze+flutter-test 全过。
 
 ## Flutter 买家端（flutter_app/，2026-09-28 起主要维护的客户端）
 
