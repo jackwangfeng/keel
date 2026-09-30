@@ -60,7 +60,7 @@ type spy struct {
 	addr   string
 }
 
-func (s *spy) listen(addr string, _ http.Handler) error {
+func (s *spy) listen(_ context.Context, addr string, _ http.Handler) error {
 	s.called = true
 	s.addr = addr
 	return nil

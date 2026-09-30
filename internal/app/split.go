@@ -7,6 +7,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -218,7 +219,7 @@ func WithInventory(inv inventory.Service) RouterOption {
 // 它不建业务库的池、不跑租户自检、不起协调器、不跑后台任务：这些都属于 core。
 // 它只认库存库 —— KEEL_INVENTORY_DSN，没配时回落到 PG* 拼出来的那个 DSN
 // （两库合一的拆分部署，或本机试跑）。
-func runInventory(ctx context.Context, s SplitConfig, listen func(addr string, h http.Handler) error) error {
+func runInventory(ctx context.Context, s SplitConfig, listen ListenFunc) error {
 	dsn := s.InventoryDSN
 	if dsn == "" {
 		dsn = db.DSN()
@@ -231,25 +232,33 @@ func runInventory(ctx context.Context, s SplitConfig, listen func(addr string, h
 
 	slog.InfoContext(ctx, "以 "+EnvRole+"=inventory 启动：只监听内网服务，没有公网接口与后台任务",
 		"internal_addr", s.InternalAddr, "version", buildinfo.String())
-	return listen(s.InternalAddr, internalRouter(s, inv))
+	return listen(ctx, s.InternalAddr, internalRouter(s, inv))
 }
 
-// serveBoth 同时监听公网与内网两个端口，任何一个返回就返回。
+// serveBoth 同时监听公网与内网两个端口，任何一个返回就让另一个也停下，两个都返回后才返回。
 //
 // 用同一个可注入的 listen 起两个服务，好让 Run 的测试看得见内网那一个。
 // 任何一个先退出都让 Run 返回，而不是只剩半个进程继续跑：公网挂了而内网
 // 还活着，编排系统探内网端口会以为一切正常；反过来 core 的 SAGA 分支就没人接。
-// 进程退出由 main 完成，另一个服务随进程一起结束。
-func serveBoth(listen func(addr string, h http.Handler) error,
+//
+// 以前先返回的那一个直接让 Run 返回、另一个随进程一起被杀。有了优雅停机之后不行：
+// Run 返回之后要关协调器与池，而另一个服务上可能还有在途请求（内网上是 SAGA 分支）。
+// 所以先返回的那个触发取消，另一个走自己的 Shutdown，等它也返回。
+func serveBoth(ctx context.Context, listen ListenFunc,
 	publicAddr string, public http.Handler, internalAddr string, internal http.Handler) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	errc := make(chan error, 2)
 	go func() {
-		if err := listen(internalAddr, internal); err != nil {
+		if err := listen(ctx, internalAddr, internal); err != nil {
 			errc <- fmt.Errorf("内网服务（%s）: %w", internalAddr, err)
 			return
 		}
 		errc <- nil
 	}()
-	go func() { errc <- listen(publicAddr, public) }()
-	return <-errc
+	go func() { errc <- listen(ctx, publicAddr, public) }()
+	first := <-errc
+	cancel()
+	second := <-errc
+	return errors.Join(first, second)
 }

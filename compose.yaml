@@ -263,6 +263,9 @@ services:
     depends_on:
       seed:
         condition: service_completed_successfully
+    # SIGTERM 之后 app 要等在途请求、停后台任务、关协调器（KEEL_SHUTDOWN_GRACE，默认 20 秒）。
+    # docker stop 默认只给 10 秒就 SIGKILL，比宽限期短就等于没有宽限期，所以调长到 30 秒。
+    stop_grace_period: 30s
     # 刻意不配容器级 healthcheck。
     #
     # M2 换底座之后镜像里**有** shell 了（debian:trixie-slim），但仍然没有
