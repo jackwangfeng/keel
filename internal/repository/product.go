@@ -183,15 +183,45 @@ func (t tenantTx) ListProducts(ctx context.Context, sc StoreScope, categoryID *i
 		return nil, fmt.Errorf("offset %d 超出范围 [0, %d]", offset, math.MaxInt32)
 	}
 
-	rows, err := t.q.ListProducts(ctx, db.ListProductsParams{
+	// 「有货在前」分两段取（db/queries/products.sql 的 ListProductsByStock 说明了为什么）：
+	// 先在有货段里取这一页；取满即返回。没取满说明这一页跨过了有货段的末尾，从无货段补。
+	// 无货段的起点：有货段这一页取到了几行，就说明有货段恰好在 offset + 那几行处结束，
+	// 无货段从 0 开始；一行都没取到，才要数一次有货段有多长。
+	//
+	// 两段是同一个事务里的两条语句（READ COMMITTED，各自一个快照）：两次之间有货标记被刷新，
+	// 这一页的边界可能差一两行 —— 与跨两次请求翻页本来就有的漂移同一个量级。起点算成负数
+	// 只可能是这种竞争，钳到 0。
+	params := db.ListProductsByStockParams{
 		StoreID:    sc.StoreID,
 		RegionID:   sc.RegionID,
 		CategoryID: categoryID,
+		InStock:    true,
 		PageLimit:  int32(limit),
 		PageOffset: int32(offset),
-	})
+	}
+	rows, err := t.q.ListProductsByStock(ctx, params)
 	if err != nil {
 		return nil, err
+	}
+	if int64(len(rows)) < limit {
+		off2 := int64(0)
+		if len(rows) == 0 {
+			inStock, err := t.q.CountProductsInStock(ctx, db.CountProductsInStockParams{
+				StoreID: sc.StoreID, RegionID: sc.RegionID, CategoryID: categoryID,
+			})
+			if err != nil {
+				return nil, err
+			}
+			off2 = max(offset-inStock, 0)
+		}
+		params.InStock = false
+		params.PageLimit = int32(limit - int64(len(rows)))
+		params.PageOffset = int32(off2)
+		more, err := t.q.ListProductsByStock(ctx, params)
+		if err != nil {
+			return nil, err
+		}
+		rows = append(rows, more...)
 	}
 	out := make([]Product, 0, len(rows))
 	for _, r := range rows {

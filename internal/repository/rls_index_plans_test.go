@@ -99,13 +99,22 @@ func seedPlanFixture(t *testing.T) planFixture {
 		             jsonb_build_object('name', 'x', 'phone', '139' || lpad((g % 1500)::text, 8, '0')),
 		             now() + interval '1 day', $2, $3, '{}'
 		        FROM generate_series(1, $4::int) g`, m, store, region, planFixtureRows)
+
+		// SKU 与有货标记（商品列表排序用）：约 1% 的商品没有 SKU；2% 没刷过标记（缺行）；
+		// 刷过的里 5% 无货。四种情况（有货 / 无货 / 缺行有 SKU / 缺行无 SKU）都在。
+		exec(`INSERT INTO skus (merchant_id, product_id, sku_code, price_cents)
+		      SELECT $1, p.id, 'plan-' || p.id, 100 FROM products p
+		       WHERE p.merchant_id = $1 AND p.title LIKE 'plan-%' AND p.id % 97 <> 0`, m)
+		exec(`INSERT INTO product_store_stock (store_id, product_id, merchant_id, in_stock)
+		      SELECT $2, p.id, $1, p.id % 20 <> 0 FROM products p
+		       WHERE p.merchant_id = $1 AND p.title LIKE 'plan-%' AND p.id % 50 <> 0`, m, store)
 	}
 	if err := admin.QueryRow(ctx,
 		`SELECT id FROM categories WHERE merchant_id = $1 AND level = 1 AND name LIKE 'root%' ORDER BY id LIMIT 1`, idA).
 		Scan(&fx.rootCatA); err != nil {
 		t.Fatal(err)
 	}
-	for _, tbl := range []string{"categories", "products", "orders", "users"} {
+	for _, tbl := range []string{"categories", "products", "orders", "users", "skus", "product_store_stock"} {
 		exec(`ANALYZE ` + tbl)
 	}
 	return fx
@@ -391,5 +400,116 @@ func TestKeywordDefinerRoleIsNarrow(t *testing.T) {
 	want := "products.id:SELECT,products.merchant_id:SELECT,products.search_vector:SELECT"
 	if got := strings.Join(cols, ","); got != want {
 		t.Errorf("keel_search_definer 的列级授权 = %s，期望 %s", got, want)
+	}
+}
+
+// 商品列表「有货在前」：有货段按 idx_products_listing_published 的顺序取、LIMIT 先生效，
+// 计划里没有对全店行的 Sort（00064 那条索引重新提供顺序）。
+func TestPlanProductListingUsesPublishedIndex(t *testing.T) {
+	fx := seedPlanFixture(t)
+	sc := defaultScope(t, fx.a)
+	const inStockPage = `SELECT p.id FROM products p
+	 WHERE p.deleted_at IS NULL AND p.status = 1
+	   AND NOT EXISTS (SELECT 1 FROM region_product_overrides ro
+	                    WHERE ro.region_id = $2::bigint AND ro.product_id = p.id AND ro.status = 0)
+	   AND NOT EXISTS (SELECT 1 FROM store_product_overrides so
+	                    WHERE so.store_id = $1::bigint AND so.product_id = p.id AND so.status = 0)
+	   AND COALESCE((SELECT pss.in_stock FROM product_store_stock pss
+	                  WHERE pss.store_id = $1::bigint AND pss.product_id = p.id),
+	                EXISTS (SELECT 1 FROM skus sk WHERE sk.product_id = p.id AND sk.status = 1 AND sk.deleted_at IS NULL))
+	       = true
+	 ORDER BY p.published_at DESC NULLS LAST, p.id DESC
+	 LIMIT 20 OFFSET 0`
+	plan := explainAsApp(t, fx.a, inStockPage, true, sc.StoreID, sc.RegionID)
+	if !strings.Contains(plan, "idx_products_listing_published") {
+		t.Errorf("商品列表的有货段没有走 idx_products_listing_published：\n%s", plan)
+	}
+	if strings.Contains(plan, "Sort Key") {
+		t.Errorf("商品列表的有货段还在排序 —— 索引没有提供顺序，LIMIT 先不了：\n%s", plan)
+	}
+}
+
+// 两段拼出来的顺序与原来那句 ORDER BY 有货 DESC, published_at DESC, id DESC 逐行一致，
+// 页大小取一个不整除的 7，让边界页落在有货段中间；再翻过末尾，看最后一页与越界页。
+func TestListProductsStockOrderMatchesSingleSort(t *testing.T) {
+	fx := seedPlanFixture(t)
+	ctx := context.Background()
+	sc := defaultScope(t, fx.a)
+	r := repository.New(pool(t))
+	tctx := tenant.NewContext(ctx, fx.a)
+
+	// 让无货段靠前一些：把最新的 30 件里的 10 件标成无货，边界页才会出现在前几页里。
+	if _, err := fx.admin.Exec(ctx, `UPDATE product_store_stock SET in_stock = false
+	    WHERE merchant_id = $1 AND product_id IN (
+	      SELECT id FROM products WHERE merchant_id = $1 AND title LIKE 'plan-%'
+	       ORDER BY published_at DESC LIMIT 30) AND product_id % 3 = 0`, fx.a); err != nil {
+		t.Fatal(err)
+	}
+
+	var want []int64
+	if err := r.RawTenantTx(tctx, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT p.id FROM products p
+		 WHERE p.deleted_at IS NULL AND p.status = 1
+		   AND NOT EXISTS (SELECT 1 FROM region_product_overrides ro
+		                    WHERE ro.region_id = $2 AND ro.product_id = p.id AND ro.status = 0)
+		   AND NOT EXISTS (SELECT 1 FROM store_product_overrides so
+		                    WHERE so.store_id = $1 AND so.product_id = p.id AND so.status = 0)
+		 ORDER BY COALESCE((SELECT pss.in_stock FROM product_store_stock pss
+		                     WHERE pss.store_id = $1 AND pss.product_id = p.id),
+		                   EXISTS (SELECT 1 FROM skus sk WHERE sk.product_id = p.id AND sk.status = 1
+		                            AND sk.deleted_at IS NULL)) DESC,
+		          p.published_at DESC NULLS LAST, p.id DESC`, sc.StoreID, sc.RegionID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id int64
+			if err := rows.Scan(&id); err != nil {
+				return err
+			}
+			want = append(want, id)
+		}
+		return rows.Err()
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	const size = 7
+	var got []int64
+	for off := int64(0); ; off += size {
+		var page []repository.Product
+		if err := r.WithTenant(tctx, func(tx repository.Tx) error {
+			var err error
+			page, err = tx.ListProducts(ctx, sc, nil, size, off)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		for _, p := range page {
+			got = append(got, p.ID)
+		}
+		if len(page) < size {
+			break
+		}
+	}
+	if len(got) != len(want) {
+		t.Fatalf("分页取到 %d 件，单句排序是 %d 件", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("第 %d 件（第 %d 页）：分两段取得 %d，单句排序是 %d", i, i/size+1, got[i], want[i])
+		}
+	}
+
+	// 越界页：一行都不该有（有货段取 0 行 → 数有货段 → 无货段起点也越界）。
+	if err := r.WithTenant(tctx, func(tx repository.Tx) error {
+		page, err := tx.ListProducts(ctx, sc, nil, size, int64(len(want)+size))
+		if err == nil && len(page) != 0 {
+			t.Errorf("越界页取到 %d 件", len(page))
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
