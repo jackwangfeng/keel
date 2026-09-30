@@ -488,6 +488,7 @@ Clients (Web · Mini Program · App · Admin)
 ```
 
 Full details: [Architecture](./docs/电商系统-总体架构.md) ·
+[Design principles and a hardening pass](./docs/架构-设计与加固.md) (Chinese) ·
 [Data model](./docs/电商系统-数据模型设计.md) ·
 [Search layer](./docs/电商系统-语义检索层设计.md) ·
 [Product understanding](./docs/电商系统-商品理解服务设计.md)
