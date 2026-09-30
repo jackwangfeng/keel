@@ -112,8 +112,8 @@ var (
 
 // barrierTransType 写进 barrier.trans_type。
 //
-// 眼下只有 SAGA 一种事务类型（架构 §7：TCC 要到预售 / 多仓调拨才引入），
-// 所以是常量而不是参数。它不在主键里，只是一行记录的自述。
+// 分支屏障只有 SAGA 一种事务类型（架构 §7：TCC 要到预售 / 多仓调拨才引入）；二阶段消息的
+// 回查屏障另走 msg_barrier.go，写的是 "msg"。它不在主键里，只是一行记录的自述。
 const barrierTransType = "saga"
 
 // barrierID 是每次判定的 barrier_id。恒为 "01"，理由见文件头第 ① 条。
@@ -211,14 +211,14 @@ func decideBarrier(ctx context.Context, tx pgx.Tx, gid, branchID, op string) (De
 	var originAffected int64
 	origin, isCompensating := originOp[op]
 	if isCompensating {
-		n, err := insertBarrier(ctx, tx, gid, branchID, origin, op)
+		n, err := insertBarrier(ctx, tx, barrierTransType, gid, branchID, origin, op)
 		if err != nil {
 			return decisionNone, err
 		}
 		originAffected = n
 	}
 
-	currentAffected, err := insertBarrier(ctx, tx, gid, branchID, op, op)
+	currentAffected, err := insertBarrier(ctx, tx, barrierTransType, gid, branchID, op, op)
 	if err != nil {
 		return decisionNone, err
 	}
@@ -249,9 +249,11 @@ const barrierInsert = `INSERT INTO barrier
 // op 与 reason 是两个不同的东西，不要合并：op 是**这一行占的位置**（① 里插的是
 // 正向操作的位置），reason 是**谁插的这行**。空回滚留下的那一行 op='action'
 // reason='compensate'，一眼能看出它是补偿抢先占的位，而不是正向真的执行过。
-func insertBarrier(ctx context.Context, tx pgx.Tx, gid, branchID, op, reason string) (int64, error) {
+//
+// transType 只是一行记录的自述（不在主键里）：SAGA 分支写 "saga"，二阶段消息的屏障写 "msg"（msg_barrier.go）。
+func insertBarrier(ctx context.Context, tx pgx.Tx, transType, gid, branchID, op, reason string) (int64, error) {
 	ct, err := tx.Exec(ctx, barrierInsert,
-		barrierTransType, gid, branchID, op, barrierID, reason, time.Now().Unix())
+		transType, gid, branchID, op, barrierID, reason, time.Now().Unix())
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "42501" {
