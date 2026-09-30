@@ -549,6 +549,8 @@ func (s *AdminCatalogService) CreateSKU(ctx context.Context, productID int64,
 	if err := initSKUStock(ctx, s.repo, s.inv, sku); err != nil {
 		return repository.AdminSKU{}, false, err
 	}
+	// 新 SKU 在每家店的有货排序标记当场重算（stock_flags.go seedProductStockFlags）。
+	seedProductStockFlags(ctx, s.repo, s.inv, []int64{productID})
 	return sku, replayed, nil
 }
 

@@ -189,6 +189,32 @@ func refreshSKUStockFlag(ctx context.Context, repo tenantRunner, inv inventory.S
 	}
 }
 
+// seedStoreStockFlags 给一家新门店补齐全部商品的标记（2026-09-30）。
+//
+// 标记表里缺行的商品按「有没有在售 SKU」排（products.sql，缺行 ≈ 有货），而新门店建好时一行都没有，
+// 它所有商品都被排进「有货」那一段——实际上一件库存都没设。以前每分钟全量刷新，最多一分钟就补齐；
+// 改成跨 0 发消息 + 每小时全量之后，从来没设过库存的 SKU 永远不会跨 0，要等到整点才补齐（宝安中心区店踩过）。
+// 所以建店之后当场按实际水位（新店一般全是 0）写一遍。尽力而为：失败只记日志，下一轮全量刷新兜底。
+func seedStoreStockFlags(ctx context.Context, repo tenantRunner, inv inventory.Service, storeID int64) {
+	if inv == nil {
+		return
+	}
+	if err := refreshStockFlags(ctx, repo, inv, []int64{storeID}, nil); err != nil {
+		slog.WarnContext(ctx, "新门店没补上商品列表的有货排序标记（下一轮全量刷新会补上）", "store_id", storeID, "err", err)
+	}
+}
+
+// seedProductStockFlags 给新商品 / 新 SKU 在所有门店补齐标记，理由同 seedStoreStockFlags：
+// 没有初始库存的新 SKU 不会跨 0，缺行又会让它在每家店都排进「有货」那一段。
+func seedProductStockFlags(ctx context.Context, repo tenantRunner, inv inventory.Service, productIDs []int64) {
+	if inv == nil || len(productIDs) == 0 {
+		return
+	}
+	if err := refreshStockFlags(ctx, repo, inv, nil, productIDs); err != nil {
+		slog.WarnContext(ctx, "新商品没补上商品列表的有货排序标记（下一轮全量刷新会补上）", "products", productIDs, "err", err)
+	}
+}
+
 // StockFlagRepository 是全量刷新需要的仓储能力。
 type StockFlagRepository interface {
 	WithTenant(ctx context.Context, fn func(repository.Tx) error) error

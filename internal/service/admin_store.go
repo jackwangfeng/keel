@@ -297,7 +297,12 @@ func (s *AdminStoreService) CreateStore(ctx context.Context,
 		out, e = tx.CreateStore(ctx, n)
 		return e
 	})
-	return out, err
+	if err != nil {
+		return out, err
+	}
+	// 新店的有货排序标记当场补齐（stock_flags.go seedStoreStockFlags）：不然它所有商品都排在「有货」那一段。
+	seedStoreStockFlags(ctx, s.repo, s.inv, out.ID)
+	return out, nil
 }
 
 // UpdateStore 实现 PATCH /admin/stores/{store_id}。

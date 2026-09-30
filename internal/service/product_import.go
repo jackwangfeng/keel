@@ -698,6 +698,8 @@ func (s *ProductImportService) initImportStock(ctx context.Context, res ImportRe
 	if err := s.inv.InitSKUs(ctx, rows); err != nil {
 		return fmt.Errorf("商品已导入，初始库存还没写进库存服务（用同一个 Idempotency-Key 重试即可补上）: %w", err)
 	}
+	// 导入的新商品在每家店的有货排序标记当场补齐（stock_flags.go seedProductStockFlags）。
+	seedProductStockFlags(ctx, s.repo, s.inv, productIDs)
 	return nil
 }
 
