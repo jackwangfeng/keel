@@ -47,7 +47,7 @@ func NewInventoryStore(pool *pgxpool.Pool) *InventoryStore {
 // WithTenant 在一个设好租户上下文的事务里执行 fn。租户从 ctx 取（库存服务的 HTTP
 // 入口由 rpc.RequireTenant 放进去，进程内调用沿用 core 请求的 ctx）。
 func (s *InventoryStore) WithTenant(ctx context.Context, fn func(InventoryStoreTx) error) error {
-	return s.r.withTenantTx(ctx, func(tx pgx.Tx, _ Tx) error {
+	return s.r.withLockingTenantTx(ctx, func(tx pgx.Tx, _ Tx) error {
 		return fn(invTx{q: db.New(tx), tx: tx})
 	})
 }
@@ -74,7 +74,7 @@ func (s *InventoryStore) WithSagaBranch(ctx context.Context, gid, branchID, op s
 		return decisionNone, errors.New("屏障分支的业务函数为空")
 	}
 	decision := decisionNone
-	err := s.r.withTenantTx(ctx, func(tx pgx.Tx, _ Tx) error {
+	err := s.r.withLockingTenantTx(ctx, func(tx pgx.Tx, _ Tx) error {
 		d, err := decideBarrier(ctx, tx, gid, branchID, op)
 		if err != nil {
 			return err

@@ -21,7 +21,7 @@ SELECT count(*)
    AND ($4::timestamptz IS NULL OR o.created_at < $4::timestamptz)
    AND ($5::text IS NULL OR o.order_no = $5::text)
    AND ($6::text IS NULL
-        OR o.receiver_snapshot->>'phone' = $6::text
+        OR o.receiver_phone = $6::text
         OR o.user_id = (SELECT u.id FROM users u
                          WHERE u.phone = $6::text AND u.deleted_at IS NULL))
    AND ($7::bigint[] IS NULL
@@ -50,6 +50,98 @@ func (q *Queries) AdminCountOrders(ctx context.Context, arg AdminCountOrdersPara
 		arg.CreatedFrom,
 		arg.CreatedTo,
 		arg.OrderNo,
+		arg.Phone,
+		arg.OnlyRegionIds,
+		arg.OnlyStoreIds,
+	)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const adminCountOrdersByNo = `-- name: AdminCountOrdersByNo :one
+SELECT count(*)
+  FROM orders o
+ WHERE o.status <> 0
+   AND ($1::smallint IS NULL OR o.status = $1::smallint)
+   AND ($2::bigint IS NULL OR o.store_id = $2::bigint)
+   AND ($3::timestamptz IS NULL OR o.created_at >= $3::timestamptz)
+   AND ($4::timestamptz IS NULL OR o.created_at < $4::timestamptz)
+   AND o.order_no = $5::text
+   AND ($6::text IS NULL
+        OR o.receiver_phone = $6::text
+        OR o.user_id = (SELECT u.id FROM users u
+                         WHERE u.phone = $6::text AND u.deleted_at IS NULL))
+   AND ($7::bigint[] IS NULL
+        OR o.store_id IN (SELECT st.id FROM stores st
+                           WHERE st.region_id = ANY($7::bigint[])))
+   AND ($8::bigint[] IS NULL
+        OR o.store_id = ANY($8::bigint[]))
+`
+
+type AdminCountOrdersByNoParams struct {
+	Status        *int16
+	StoreID       *int64
+	CreatedFrom   pgtype.Timestamptz
+	CreatedTo     pgtype.Timestamptz
+	OrderNo       string
+	Phone         *string
+	OnlyRegionIds []int64
+	OnlyStoreIds  []int64
+}
+
+// 条件必须与 AdminListOrdersByNo 逐字一致。
+func (q *Queries) AdminCountOrdersByNo(ctx context.Context, arg AdminCountOrdersByNoParams) (int64, error) {
+	row := q.db.QueryRow(ctx, adminCountOrdersByNo,
+		arg.Status,
+		arg.StoreID,
+		arg.CreatedFrom,
+		arg.CreatedTo,
+		arg.OrderNo,
+		arg.Phone,
+		arg.OnlyRegionIds,
+		arg.OnlyStoreIds,
+	)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const adminCountOrdersByPhone = `-- name: AdminCountOrdersByPhone :one
+SELECT count(*)
+  FROM orders o
+ WHERE o.status <> 0
+   AND ($1::smallint IS NULL OR o.status = $1::smallint)
+   AND ($2::bigint IS NULL OR o.store_id = $2::bigint)
+   AND ($3::timestamptz IS NULL OR o.created_at >= $3::timestamptz)
+   AND ($4::timestamptz IS NULL OR o.created_at < $4::timestamptz)
+   AND (o.receiver_phone = $5::text
+        OR o.user_id = (SELECT u.id FROM users u
+                         WHERE u.phone = $5::text AND u.deleted_at IS NULL))
+   AND ($6::bigint[] IS NULL
+        OR o.store_id IN (SELECT st.id FROM stores st
+                           WHERE st.region_id = ANY($6::bigint[])))
+   AND ($7::bigint[] IS NULL
+        OR o.store_id = ANY($7::bigint[]))
+`
+
+type AdminCountOrdersByPhoneParams struct {
+	Status        *int16
+	StoreID       *int64
+	CreatedFrom   pgtype.Timestamptz
+	CreatedTo     pgtype.Timestamptz
+	Phone         string
+	OnlyRegionIds []int64
+	OnlyStoreIds  []int64
+}
+
+// 条件必须与 AdminListOrdersByPhone 逐字一致。
+func (q *Queries) AdminCountOrdersByPhone(ctx context.Context, arg AdminCountOrdersByPhoneParams) (int64, error) {
+	row := q.db.QueryRow(ctx, adminCountOrdersByPhone,
+		arg.Status,
+		arg.StoreID,
+		arg.CreatedFrom,
+		arg.CreatedTo,
 		arg.Phone,
 		arg.OnlyRegionIds,
 		arg.OnlyStoreIds,
@@ -403,7 +495,7 @@ SELECT o.id, o.order_no, o.user_id, o.store_id, o.region_id, o.status,
    AND ($4::timestamptz IS NULL OR o.created_at < $4::timestamptz)
    AND ($5::text IS NULL OR o.order_no = $5::text)
    AND ($6::text IS NULL
-        OR o.receiver_snapshot->>'phone' = $6::text
+        OR o.receiver_phone = $6::text
         OR o.user_id = (SELECT u.id FROM users u
                          WHERE u.phone = $6::text AND u.deleted_at IS NULL))
    AND ($7::bigint[] IS NULL
@@ -483,6 +575,8 @@ type AdminListOrdersRow struct {
 //
 // phone 同时认收货人手机号与买家账号手机号：后者先经 uk_users_phone 换成 user_id
 // （标量子查询；那条唯一索引保证本租户内至多一行），再走 idx_orders_user。
+// 收货人手机号比的是冗余列 receiver_phone（00170，触发器维护），不是
+// receiver_snapshot->>'phone'：->> 不是 leakproof，RLS 下进不了 Index Cond。
 func (q *Queries) AdminListOrders(ctx context.Context, arg AdminListOrdersParams) ([]AdminListOrdersRow, error) {
 	rows, err := q.db.Query(ctx, adminListOrders,
 		arg.Status,
@@ -503,6 +597,284 @@ func (q *Queries) AdminListOrders(ctx context.Context, arg AdminListOrdersParams
 	var items []AdminListOrdersRow
 	for rows.Next() {
 		var i AdminListOrdersRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.OrderNo,
+			&i.UserID,
+			&i.StoreID,
+			&i.RegionID,
+			&i.Status,
+			&i.GoodsAmountCents,
+			&i.FreightCents,
+			&i.FreightDiscountCents,
+			&i.DiscountCents,
+			&i.PayableCents,
+			&i.PaidCents,
+			&i.RefundedCents,
+			&i.RefundStatus,
+			&i.ExpireAt,
+			&i.PaidAt,
+			&i.ShippedAt,
+			&i.FinishedAt,
+			&i.CreatedAt,
+			&i.UserCouponID,
+			&i.CouponName,
+			&i.PromotionDiscountCents,
+			&i.Promotions,
+			&i.ReceiverSnapshot,
+			&i.StoreSnapshot,
+			&i.HasOpenRefund,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const adminListOrdersByNo = `-- name: AdminListOrdersByNo :many
+
+SELECT o.id, o.order_no, o.user_id, o.store_id, o.region_id, o.status,
+       o.goods_amount_cents, o.freight_cents, o.freight_discount_cents,
+       o.discount_cents, o.payable_cents,
+       o.paid_cents, o.refunded_cents, o.refund_status, o.expire_at, o.paid_at,
+       o.shipped_at, o.finished_at, o.created_at, o.user_coupon_id, o.coupon_name,
+       o.promotion_discount_cents, o.promotions,
+       o.receiver_snapshot, o.store_snapshot,
+       EXISTS (SELECT 1 FROM refunds r
+                WHERE r.order_id = o.id AND r.status IN (10, 20, 30)) AS has_open_refund
+  FROM orders o
+ WHERE o.status <> 0
+   AND ($1::smallint IS NULL OR o.status = $1::smallint)
+   AND ($2::bigint IS NULL OR o.store_id = $2::bigint)
+   AND ($3::timestamptz IS NULL OR o.created_at >= $3::timestamptz)
+   AND ($4::timestamptz IS NULL OR o.created_at < $4::timestamptz)
+   AND o.order_no = $5::text
+   AND ($6::text IS NULL
+        OR o.receiver_phone = $6::text
+        OR o.user_id = (SELECT u.id FROM users u
+                         WHERE u.phone = $6::text AND u.deleted_at IS NULL))
+   AND ($7::bigint[] IS NULL
+        OR o.store_id IN (SELECT st.id FROM stores st
+                           WHERE st.region_id = ANY($7::bigint[])))
+   AND ($8::bigint[] IS NULL
+        OR o.store_id = ANY($8::bigint[]))
+ ORDER BY o.created_at DESC, o.id DESC
+ LIMIT $10 OFFSET $9
+`
+
+type AdminListOrdersByNoParams struct {
+	Status        *int16
+	StoreID       *int64
+	CreatedFrom   pgtype.Timestamptz
+	CreatedTo     pgtype.Timestamptz
+	OrderNo       string
+	Phone         *string
+	OnlyRegionIds []int64
+	OnlyStoreIds  []int64
+	PageOffset    int32
+	PageLimit     int32
+}
+
+type AdminListOrdersByNoRow struct {
+	ID                     int64
+	OrderNo                string
+	UserID                 int64
+	StoreID                int64
+	RegionID               int64
+	Status                 int16
+	GoodsAmountCents       int64
+	FreightCents           int64
+	FreightDiscountCents   int64
+	DiscountCents          int64
+	PayableCents           int64
+	PaidCents              int64
+	RefundedCents          int64
+	RefundStatus           int16
+	ExpireAt               pgtype.Timestamptz
+	PaidAt                 pgtype.Timestamptz
+	ShippedAt              pgtype.Timestamptz
+	FinishedAt             pgtype.Timestamptz
+	CreatedAt              pgtype.Timestamptz
+	UserCouponID           *int64
+	CouponName             *string
+	PromotionDiscountCents int64
+	Promotions             []byte
+	ReceiverSnapshot       []byte
+	StoreSnapshot          []byte
+	HasOpenRefund          bool
+}
+
+// ### 稀疏的精确条件单独成句：ByNo / ByPhone（2026-09-30 架构审查）
+//
+// 上面两条是「每个条件都写成 (参数 IS NULL OR ...)」的万能查询。pgx 按语句缓存预备语句，
+// 同一条语句执行几次之后 PostgreSQL 可能改用**通用计划**：通用计划里参数值未知，
+// (参数 IS NULL OR 列 = 参数) 折不掉，于是哪个条件都进不了 Index Cond。实测每店 4 万单、
+// 强制通用计划：按手机号 14.6 ms、按单号 7.7 ms（全店扫、Rows Removed by Filter: 39998）；
+// 定制计划 0.05 ms / 0.03 ms。今天 plan_cache_mode = auto 下多数时候拿到的是定制计划，
+// 但「多数时候」取决于代价估算，不是一个能依赖的性质。
+//
+// 单号（全局唯一）与手机号是后台最常用、也最稀疏的两个条件：一个命中至多一行，一个命中
+// 几行。给它们各自一条**不带 IS NULL 分支**的语句，通用计划与定制计划就是同一个 ——
+// 单号走 orders_order_no_key，手机号走 idx_orders_receiver_phone_col 与 idx_orders_user
+// 的 BitmapOr。其余条件（状态、门店、时间、范围）照旧是 narg，对那一两行做过滤，便宜。
+//
+// 由 repository 按参数选（admin_order.go 的 AdminListOrders）：有单号走 ByNo（手机号
+// 若也给了，仍作为 narg 条件留在里面）、否则有手机号走 ByPhone、否则走万能那条。
+// 契约与返回形状不变。四条的谓词必须与上面逐字一致（除了被提成必填的那一个）；
+// internal/handler/admin_order_test.go 的筛选用例（单号、两种手机号、单号 + 手机号交叉）
+// 走的正是这两条分支。
+// 同 AdminListOrders，单号必填。
+func (q *Queries) AdminListOrdersByNo(ctx context.Context, arg AdminListOrdersByNoParams) ([]AdminListOrdersByNoRow, error) {
+	rows, err := q.db.Query(ctx, adminListOrdersByNo,
+		arg.Status,
+		arg.StoreID,
+		arg.CreatedFrom,
+		arg.CreatedTo,
+		arg.OrderNo,
+		arg.Phone,
+		arg.OnlyRegionIds,
+		arg.OnlyStoreIds,
+		arg.PageOffset,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AdminListOrdersByNoRow
+	for rows.Next() {
+		var i AdminListOrdersByNoRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.OrderNo,
+			&i.UserID,
+			&i.StoreID,
+			&i.RegionID,
+			&i.Status,
+			&i.GoodsAmountCents,
+			&i.FreightCents,
+			&i.FreightDiscountCents,
+			&i.DiscountCents,
+			&i.PayableCents,
+			&i.PaidCents,
+			&i.RefundedCents,
+			&i.RefundStatus,
+			&i.ExpireAt,
+			&i.PaidAt,
+			&i.ShippedAt,
+			&i.FinishedAt,
+			&i.CreatedAt,
+			&i.UserCouponID,
+			&i.CouponName,
+			&i.PromotionDiscountCents,
+			&i.Promotions,
+			&i.ReceiverSnapshot,
+			&i.StoreSnapshot,
+			&i.HasOpenRefund,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const adminListOrdersByPhone = `-- name: AdminListOrdersByPhone :many
+SELECT o.id, o.order_no, o.user_id, o.store_id, o.region_id, o.status,
+       o.goods_amount_cents, o.freight_cents, o.freight_discount_cents,
+       o.discount_cents, o.payable_cents,
+       o.paid_cents, o.refunded_cents, o.refund_status, o.expire_at, o.paid_at,
+       o.shipped_at, o.finished_at, o.created_at, o.user_coupon_id, o.coupon_name,
+       o.promotion_discount_cents, o.promotions,
+       o.receiver_snapshot, o.store_snapshot,
+       EXISTS (SELECT 1 FROM refunds r
+                WHERE r.order_id = o.id AND r.status IN (10, 20, 30)) AS has_open_refund
+  FROM orders o
+ WHERE o.status <> 0
+   AND ($1::smallint IS NULL OR o.status = $1::smallint)
+   AND ($2::bigint IS NULL OR o.store_id = $2::bigint)
+   AND ($3::timestamptz IS NULL OR o.created_at >= $3::timestamptz)
+   AND ($4::timestamptz IS NULL OR o.created_at < $4::timestamptz)
+   AND (o.receiver_phone = $5::text
+        OR o.user_id = (SELECT u.id FROM users u
+                         WHERE u.phone = $5::text AND u.deleted_at IS NULL))
+   AND ($6::bigint[] IS NULL
+        OR o.store_id IN (SELECT st.id FROM stores st
+                           WHERE st.region_id = ANY($6::bigint[])))
+   AND ($7::bigint[] IS NULL
+        OR o.store_id = ANY($7::bigint[]))
+ ORDER BY o.created_at DESC, o.id DESC
+ LIMIT $9 OFFSET $8
+`
+
+type AdminListOrdersByPhoneParams struct {
+	Status        *int16
+	StoreID       *int64
+	CreatedFrom   pgtype.Timestamptz
+	CreatedTo     pgtype.Timestamptz
+	Phone         string
+	OnlyRegionIds []int64
+	OnlyStoreIds  []int64
+	PageOffset    int32
+	PageLimit     int32
+}
+
+type AdminListOrdersByPhoneRow struct {
+	ID                     int64
+	OrderNo                string
+	UserID                 int64
+	StoreID                int64
+	RegionID               int64
+	Status                 int16
+	GoodsAmountCents       int64
+	FreightCents           int64
+	FreightDiscountCents   int64
+	DiscountCents          int64
+	PayableCents           int64
+	PaidCents              int64
+	RefundedCents          int64
+	RefundStatus           int16
+	ExpireAt               pgtype.Timestamptz
+	PaidAt                 pgtype.Timestamptz
+	ShippedAt              pgtype.Timestamptz
+	FinishedAt             pgtype.Timestamptz
+	CreatedAt              pgtype.Timestamptz
+	UserCouponID           *int64
+	CouponName             *string
+	PromotionDiscountCents int64
+	Promotions             []byte
+	ReceiverSnapshot       []byte
+	StoreSnapshot          []byte
+	HasOpenRefund          bool
+}
+
+// 同 AdminListOrders，手机号必填、单号不参与（有单号时走 ByNo）。
+func (q *Queries) AdminListOrdersByPhone(ctx context.Context, arg AdminListOrdersByPhoneParams) ([]AdminListOrdersByPhoneRow, error) {
+	rows, err := q.db.Query(ctx, adminListOrdersByPhone,
+		arg.Status,
+		arg.StoreID,
+		arg.CreatedFrom,
+		arg.CreatedTo,
+		arg.Phone,
+		arg.OnlyRegionIds,
+		arg.OnlyStoreIds,
+		arg.PageOffset,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AdminListOrdersByPhoneRow
+	for rows.Next() {
+		var i AdminListOrdersByPhoneRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.OrderNo,

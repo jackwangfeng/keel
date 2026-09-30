@@ -171,6 +171,9 @@ var tenantContextAllowed = map[string]string{
 	"upload_gc.go": "孤儿上传文件回收，与 auto_confirm.go 同一处境：跑在任何 HTTP 请求之外，" +
 		"没有 Host 也没有 gid。uploads 有 RLS，没有能跨租户的 DELETE，所以枚举 merchants 再逐家进，" +
 		"公平调度共用 fairRound。它不是 SAGA 分支，上面第 ② 道会把这一点钉住。",
+	"retention.go": "只增不删的表按保留期分批清理（幂等存档、检索日志、工具调用、库存流水），与 upload_gc.go " +
+		"同一处境：跑在任何 HTTP 请求之外，没有 Host 也没有 gid。这几张表都有 RLS，没有能跨租户的 DELETE，" +
+		"所以枚举 merchants（含停用，保留期对停用的店同样成立）再逐家进租户事务。它不是 SAGA 分支。",
 	"sweep.go": "超时补偿定时任务跑在任何 HTTP 请求之外：没有 Host（tenant.Resolver 用不上）、" +
 		"也没有 gid（它处理的订单不属于任何一笔正在跑的全局事务）。它拿租户的唯一办法是" +
 		"枚举 merchants（tenant-root 类，没有 RLS）再逐家进 WithTenant —— " +

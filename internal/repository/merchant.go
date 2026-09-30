@@ -162,7 +162,7 @@ func (r *Repo) WithNewTenant(ctx context.Context, code, name string, guard NewTe
 	}
 
 	// ② 切到新店的租户作用域。
-	if err := enterTenantScope(ctx, tx, m.ID); err != nil {
+	if err := enterTenantScope(ctx, tx, m.ID, ""); err != nil {
 		return Merchant{}, false, err
 	}
 

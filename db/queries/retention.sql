@@ -1,0 +1,41 @@
+-- 只增不删的表按保留期分批清理（service/retention.go，2026-09-30 架构审查）。
+--
+-- 租户由 RLS 过滤，这里一处都不写（check_query_tenancy.py）：清理是跨租户的任务，但它和
+-- 超时关单、孤儿回收一样按商家逐家进租户事务（repository/sweep.go 文件头），每条语句只删
+-- 当前这家店的行。
+--
+-- ### 删法：每批一条语句、带 LIMIT 的 ctid 子查询
+--
+-- DELETE 本身不能带 LIMIT。写成 ctid = ANY(ARRAY(SELECT ctid ... LIMIT n))：子查询先按
+-- (merchant_id, 时间) 索引取出至多 n 行的物理位置，外层 DELETE 走 Tid Scan 逐个删。
+-- 每批一个短事务，锁的行数、产生的 WAL 与死元组都有上界；不会一次删几百万行、
+-- 攥着行锁跑几分钟、再留下半张表的死元组给 autovacuum。
+--
+-- 保留期 / 截止时间由调用方传入（@before），不在 SQL 里写 now() - interval：保留期可配，
+-- 测试也要能拨时钟。
+
+-- name: PurgeExpiredIdempotencyKeys :execrows
+-- 过期的幂等存档（00012 的 expire_at）。00012 的注释说「清理走 jobs」，一直没人实现，
+-- 这张表因此只增不减。平台作用域那一抽屉（merchant_id IS NULL，00028）由调用方在平台作用域的
+-- 事务里调同一条：策略是 IS NOT DISTINCT FROM staff_scope_merchant()，作用域决定删哪一抽屉。
+--
+-- 删掉一行过期的键，意味着同一个键之后再来会被当成新请求 —— 那正是 expire_at 的定义。
+-- 抢占插入与回读之间恰好被删掉的竞态，repository 用 ErrIdempotencyKeyNotFound 报出来（order.go）。
+DELETE FROM idempotency_keys
+ WHERE ctid = ANY(ARRAY(SELECT k.ctid FROM idempotency_keys k
+                         WHERE k.expire_at < sqlc.arg(before)::timestamptz
+                         LIMIT sqlc.arg(batch)::int));
+
+-- name: PurgeSearchLogsBefore :execrows
+-- 检索日志（00027），默认留 90 天。走 idx_search_logs_created (merchant_id, created_at)。
+DELETE FROM search_logs
+ WHERE ctid = ANY(ARRAY(SELECT l.ctid FROM search_logs l
+                         WHERE l.created_at < sqlc.arg(before)::timestamptz
+                         LIMIT sqlc.arg(batch)::int));
+
+-- name: PurgeAgentToolCallsBefore :execrows
+-- AI 店长的工具调用记录（00093），默认留 180 天。走 idx_agent_tool_calls_recent (merchant_id, created_at DESC)。
+DELETE FROM agent_tool_calls
+ WHERE ctid = ANY(ARRAY(SELECT c.ctid FROM agent_tool_calls c
+                         WHERE c.created_at < sqlc.arg(before)::timestamptz
+                         LIMIT sqlc.arg(batch)::int));

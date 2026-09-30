@@ -171,9 +171,12 @@ SELECT l.product_id,
  WHERE (sqlc.narg(category_id)::bigint IS NULL
         OR p.category_id IN (
              SELECT c.id FROM categories c
-              WHERE c.path LIKE (SELECT cc.path FROM categories cc
+              WHERE c.path ~>=~ (SELECT cc.path FROM categories cc
                                   WHERE cc.id = sqlc.narg(category_id)::bigint
-                                    AND cc.deleted_at IS NULL) || '%'))
+                                    AND cc.deleted_at IS NULL)
+                AND c.path ~<~ (SELECT cc.path || chr(1114111) FROM categories cc
+                                 WHERE cc.id = sqlc.narg(category_id)::bigint
+                                   AND cc.deleted_at IS NULL)))
  GROUP BY l.product_id, p.title, p.category_id
  ORDER BY CASE WHEN sqlc.arg(sort_by)::text = 'quantity'
                THEN sum(l.quantity)::bigint

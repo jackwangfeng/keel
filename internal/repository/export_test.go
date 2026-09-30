@@ -19,3 +19,9 @@ import (
 func (r *Repo) RawTenantTx(ctx context.Context, fn func(pgx.Tx) error) error {
 	return r.withTenantTx(ctx, func(tx pgx.Tx, _ Tx) error { return fn(tx) })
 }
+
+// RawLockingTenantTx 与 RawTenantTx 相同，走的是锁行入口用的 withLockingTenantTx
+// （库存扣减 / SAGA 分支）。给「lock_timeout 只设在这几个入口上」那条测试用。
+func (r *Repo) RawLockingTenantTx(ctx context.Context, fn func(pgx.Tx) error) error {
+	return r.withLockingTenantTx(ctx, func(tx pgx.Tx, _ Tx) error { return fn(tx) })
+}

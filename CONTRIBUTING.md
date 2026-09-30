@@ -144,6 +144,41 @@ goose 不装全局二进制，它和 sqlc、oapi-codegen 一样钉在 `tools/go.
 `bin/goose`（已忽略，不在 PATH 上），已是最新时这一步约 0.15 秒；
 测试调的也是 `make migrate`，不另写一份调用方式。
 
+## 迁移怎么写
+
+迁移在线上是对着一个正在接流量的库跑的。本地库几百行、什么写法都是毫秒级，所以下面这几条
+在本地**永远测不出来**，只能靠写的时候守住。`scripts/check_migrations.py`（`check-all.sh` 的一步）
+机器检查其中第 2、3 条，只管编号 > 00151 的迁移 —— 更早的已经上线，改已应用的迁移不会重跑，
+只会让库与文件对不上。
+
+1. **先扩后收。** 一次部署里只做「加」：加列（可空、无默认值或常量默认值）、加表、加索引、
+   加触发器维护新列；等代码全部切到新结构、旧代码不再在线上跑了，下一次迁移再「收」（删旧列、
+   删旧索引、加 NOT NULL）。滚动发布期间新旧两版代码同时在跑，一步到位的迁移总有一版会炸。
+   `ADD COLUMN ... GENERATED ALWAYS AS (...) STORED` 与带易变默认值的 `ADD COLUMN` 会**重写整张表**、
+   全程持 ACCESS EXCLUSIVE 锁，大表上等于停机 —— 用普通可空列 + 触发器 + 分批回填代替
+   （例子：`00170` / `00171` 的 `orders.receiver_phone`）。
+2. **大表建索引用 `CREATE INDEX CONCURRENTLY`。** 普通 `CREATE INDEX` 持 SHARE 锁，建多久就挡多久的写。
+   CONCURRENTLY 不挡写，代价是：不能在事务块里跑、失败会留下一条 INVALID 索引
+   （`IF NOT EXISTS` 会把它当成已存在跳过，重跑前先 `DROP INDEX CONCURRENTLY`）。
+   「大表」的清单在 `scripts/check_migrations.py` 的 `BIG_TABLES`，一张表开始随商家数 × 时间增长就加进去。
+3. **CONCURRENTLY 要配 `-- +goose NO TRANSACTION`**（写在文件第一行）。goose 默认把整份迁移包在
+   一个事务里 —— `00057` / `00064` 当年就是以此为由没用 CONCURRENTLY，那个理由不成立。
+   NO TRANSACTION 的迁移中途失败不会回滚前面已执行的语句，所以每一句都要能重跑
+   （`IF NOT EXISTS` / `IF EXISTS`、回填的 WHERE 判「还没填」）。
+4. **回填不进 DDL 事务，分批提交。** 一条 `UPDATE` 改全表，就是整张表的行锁攥在一个事务里、
+   一次性产生整表的死元组（`00085` 在同一个事务里 ADD COLUMN 后全表 UPDATE，是反例）。
+   在 NO TRANSACTION 的迁移里用 DO 块按主键区间每批几千行、每批 `COMMIT`（PostgreSQL 11 起，
+   在事务外执行的 DO 块里可以 COMMIT）；要绕开 `touch_updated_at` 这类触发器时在 DO 块里把
+   `session_replication_role` 设成 `replica`、结束前复原（迁移角色是超级用户）。
+   例子：`00171`。
+5. **要拿锁的 DDL 先 `SET LOCAL lock_timeout`。** `ALTER TABLE` 要 ACCESS EXCLUSIVE：它排在一条长查询
+   后面等锁的时候，后面进来的**所有**读写都排在它后面 —— 一次加列变成整站卡死。
+   设个几秒的 `lock_timeout`，拿不到就失败重来。只对包事务的迁移有效（`SET LOCAL`）；
+   NO TRANSACTION 的迁移里 goose 逐条经 `*sql.DB` 执行，会话级 `SET` 落在哪条连接上没有保证。
+6. **迁移号按分配的号段取。** 多路并行开发前先分号段（见仓库根目录的 CLAUDE.md），
+   不要取「下一个可用编号」。`db/migrations-inventory/` 是库存库自己的目录，改库存表时两边各一份、
+   逐字一致（`00173` 是例子）。
+
 ## 起全栈：`docker compose up`
 
 ```bash
@@ -244,7 +279,8 @@ KEEL_EMBED_ENDPOINT=http://127.0.0.1:8001 go run ./cmd/keel-index -force      # 
 4. 架构文档声称的 AI 能力条目数是否与清单一致
 5. **每张业务表是否都带 `merchant_id`**（多租户隔离，漏一次就是跨租户泄露）
 6. `db/queries/*.sql` 里有没有应用层的租户过滤（那是 RLS 的活；应用层再加一份，
-   「RLS 到底有没有生效」就永远测不出来了）
+   「RLS 到底有没有生效」就永远测不出来了）；以及新迁移（> 00151）给大表建索引是不是
+   `CONCURRENTLY` + `-- +goose NO TRANSACTION`（`check_migrations`，见上文「迁移怎么写」）
 7. **契约产物漂移比对** —— 生成到临时目录再和入库产物比，对工作区只读
 8. **SQL 产物漂移比对** —— `make generate-sql` 生成到临时目录，与入库的 sqlc 产物比，红了跑 `make generate-sql` 并一起提交
 9. **Flutter 契约漂移比对与页面结构** —— `flutter_app/lib/api/schema.g.dart` 是否与契约同步

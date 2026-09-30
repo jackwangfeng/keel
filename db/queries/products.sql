@@ -1,7 +1,31 @@
--- name: ListProducts :many
+-- name: ListProductsByStock :many
 -- 排序（2026-09-27）：**这家店有货的在前**，再按上架时间新到旧。有没有货读 product_store_stock
 -- （00087，库存在库存服务那边，这里 JOIN 不到 inventories）；没刷过的行按有货排，不错压
--- （一个在售 SKU 都没有的除外，见 ORDER BY）。
+-- （一个在售 SKU 都没有的除外，见 WHERE 里那段 COALESCE）。
+--
+-- ### 为什么「有货在前」拆成两次取，而不是 ORDER BY 有货 DESC（2026-09-30 架构审查）
+--
+-- 之前这条是一句 ORDER BY COALESCE(有货标记, 有没有在售 SKU) DESC, published_at DESC, id DESC。
+-- 排序键里有一个每行现算的子查询，00064 那条 (merchant_id, published_at DESC NULLS LAST, id DESC)
+-- 的部分索引就只能用来取全店行，不能提供顺序：每一页都先把全店在架商品的有货标记算完、
+-- 整体排序，再取 20 行。实测每店 4 万商品，第一页 713 ms。
+--
+-- 现在这条语句只取**一侧**：in_stock = true 取有货的那一段、false 取无货的那一段，每一段
+-- 内部按 published_at DESC NULLS LAST, id DESC —— 与那条部分索引逐列一致，LIMIT 先生效，
+-- 有货标记只对扫到的那几十行算。第一页 0.08 ms。两段怎么拼成一页由 repository 做
+-- （product.go 的 ListProducts）：先在有货段里按 page 取；取满即返回；没取满说明这一页
+-- 跨过了有货段的末尾，再从无货段开头补。只有当整页都落在无货段时，才要知道有货段有多长
+-- （CountProductsInStock，O(全店) 的一次计数）—— 那是翻到列表尾部才走的路。
+--
+-- 拼出来的顺序与原来那句 ORDER BY 逐行一致：「有货 DESC」就是先放完 true 段再放 false 段，
+-- 段内次序不变。判据（COALESCE 那一段）也逐字没动：缺 product_store_stock 行（新品还没刷过）
+-- 仍按「有没有在售 SKU」算，所以表结构、写入方（service/stock_flags.go）都不用改。
+--
+-- 代价说清楚：某一段极稀疏时（比如全店只有几件无货），取那一段要顺着索引扫过大半个店才凑得满
+-- LIMIT —— 最坏是 O(全店) 次主键点查，仍比原来「全店算完再排序」便宜一个量级（实测无货段
+-- 第一页 7.7 ms）。若将来要把这一段也压到 O(页大小)，路子是给 product_store_stock 冗余
+-- published_at 与在架状态、建 (merchant_id, store_id, in_stock, published_at DESC, product_id DESC)，
+-- 那要求它对每件在架商品都有行、并由触发器跟着 products 维护 —— 这一轮刻意没走，理由见上一段。
 -- 刻意不带 WHERE merchant_id —— 租户由 RLS 在数据库层过滤。
 --
 -- 这不是偷懒：应用层再加一遍条件会让「RLS 是否真的生效」变得测不出来。
@@ -40,8 +64,18 @@
 -- （格式见 admin_categories.sql 的 CreateCategoryRow）。用 id 而不是名字，是为了
 -- 让前缀唯一：两个同名类目的 path 如果都是 /女装/，这里会把两棵子树并在一起。
 --
+-- 前缀写成区间 path ~>=~ 前缀 AND path ~<~ 前缀 || chr(1114111)，而不是 LIKE 前缀 || '%'
+-- （2026-09-30 架构审查）。categories 挂着 RLS，而 LIKE（textlike）不是 leakproof，
+-- 规划器不许它先于租户谓词求值，idx_categories_path（text_pattern_ops）只能用到 merchant_id
+-- 那一段；~>=~ / ~<~（text_pattern_ge / text_pattern_lt）是 leakproof 的，能进 Index Cond。
+-- 两者等价：path 只含数字与斜杠，U+10FFFF 不会出现在里面，所以「以前缀开头」与
+-- 「按字节序落在 [前缀, 前缀 || U+10FFFF) 里」是同一批行。starts_with 也是 leakproof，
+-- 但它只对常量前缀生成索引条件，这里的前缀是子查询的结果。
+-- 类目表小，这一处今天不是瓶颈；改它是为了让那条索引名副其实（internal/repository 的
+-- rls_index_plans_test.go 用应用角色 EXPLAIN 钉住）。
+--
 -- 两条边界是刻意的：
---   · 类目不存在或已软删 → 内层子查询为 NULL → LIKE NULL 恒为假 → **空列表**。
+--   · 类目不存在或已软删 → 内层子查询为 NULL → 区间比较恒为假 → **空列表**。
 --     不是 404（契约在这条接口上没有），也**不是**回退成全部商品 —— 后者会让
 --     一个过期的类目链接在买家面前显示成「这个类目里什么都有」。
 --   · 类目的 status（启停）**不参与**这里的筛选。启停管的是导航（GET /categories
@@ -92,16 +126,20 @@ SELECT p.id, p.title, p.subtitle,
         OR p.category_id IN (
              SELECT c.id FROM categories c
               WHERE c.deleted_at IS NULL
-                AND c.path LIKE (SELECT cc.path FROM categories cc
+                AND c.path ~>=~ (SELECT cc.path FROM categories cc
                                   WHERE cc.id = sqlc.narg(category_id)::bigint
-                                    AND cc.deleted_at IS NULL) || '%'))
- ORDER BY COALESCE((SELECT pss.in_stock FROM product_store_stock pss
-                      WHERE pss.store_id = sqlc.arg(store_id) AND pss.product_id = p.id),
-                   -- 没刷过的行按有货排，但前提是它真有在售 SKU：一个 SKU 都没有的商品永远不会有那一行，
-                   -- 之前因此永远排第一（2026-09-28 演示站：没有 SKU 的商品 24 顶在列表首位、显示 ¥0）。
-                   -- COALESCE 短路，只在缺行时查这一次。
-                   EXISTS (SELECT 1 FROM skus sk WHERE sk.product_id = p.id AND sk.status = 1 AND sk.deleted_at IS NULL)) DESC,
-          p.published_at DESC NULLS LAST, p.id DESC
+                                    AND cc.deleted_at IS NULL)
+                AND c.path ~<~ (SELECT cc.path || chr(1114111) FROM categories cc
+                                 WHERE cc.id = sqlc.narg(category_id)::bigint
+                                   AND cc.deleted_at IS NULL)))
+   AND COALESCE((SELECT pss.in_stock FROM product_store_stock pss
+                  WHERE pss.store_id = sqlc.arg(store_id) AND pss.product_id = p.id),
+                -- 没刷过的行按有货排，但前提是它真有在售 SKU：一个 SKU 都没有的商品永远不会有那一行，
+                -- 之前因此永远排第一（2026-09-28 演示站：没有 SKU 的商品 24 顶在列表首位、显示 ¥0）。
+                -- COALESCE 短路，只在缺行时查这一次。
+                EXISTS (SELECT 1 FROM skus sk WHERE sk.product_id = p.id AND sk.status = 1 AND sk.deleted_at IS NULL))
+       = sqlc.arg(in_stock)::boolean
+ ORDER BY p.published_at DESC NULLS LAST, p.id DESC
  LIMIT sqlc.arg(page_limit) OFFSET sqlc.arg(page_offset);
 
 -- name: CountProducts :one
@@ -132,9 +170,46 @@ SELECT count(*)
         OR p.category_id IN (
              SELECT c.id FROM categories c
               WHERE c.deleted_at IS NULL
-                AND c.path LIKE (SELECT cc.path FROM categories cc
+                AND c.path ~>=~ (SELECT cc.path FROM categories cc
                                   WHERE cc.id = sqlc.narg(category_id)::bigint
-                                    AND cc.deleted_at IS NULL) || '%'));
+                                    AND cc.deleted_at IS NULL)
+                AND c.path ~<~ (SELECT cc.path || chr(1114111) FROM categories cc
+                                 WHERE cc.id = sqlc.narg(category_id)::bigint
+                                   AND cc.deleted_at IS NULL)));
+
+-- name: CountProductsInStock :one
+-- 有货段有多长：ListProductsByStock(in_stock = true) 在同一组筛选下一共会分出多少行。
+-- 只在「整页都落在无货段」时由 repository 调（见 ListProductsByStock 的说明），用来算
+-- 无货段的起点 = offset - 这个数。
+--
+-- 谓词与 CountProducts 逐字一致，外加有货判据；判据与 ListProductsByStock 相同，只是
+-- 有货标记写成 LEFT JOIN 而不是标量子查询：product_store_stock 的主键是 (store_id, product_id)，
+-- 一件商品至多一行，两种写法取值相同；JOIN 的写法让规划器能对全店做一次哈希连接，
+-- 而不是四万次点查（实测每店 4 万商品：标量子查询 212 ms、LEFT JOIN 41 ms）。
+SELECT count(*)
+  FROM products p
+  LEFT JOIN product_store_stock pss
+         ON pss.store_id = sqlc.arg(store_id) AND pss.product_id = p.id
+ WHERE p.deleted_at IS NULL
+   AND p.status = 1
+   AND NOT EXISTS (SELECT 1 FROM region_product_overrides ro
+                    WHERE ro.region_id = sqlc.arg(region_id)
+                      AND ro.product_id = p.id AND ro.status = 0)
+   AND NOT EXISTS (SELECT 1 FROM store_product_overrides so
+                    WHERE so.store_id = sqlc.arg(store_id)
+                      AND so.product_id = p.id AND so.status = 0)
+   AND (sqlc.narg(category_id)::bigint IS NULL
+        OR p.category_id IN (
+             SELECT c.id FROM categories c
+              WHERE c.deleted_at IS NULL
+                AND c.path ~>=~ (SELECT cc.path FROM categories cc
+                                  WHERE cc.id = sqlc.narg(category_id)::bigint
+                                    AND cc.deleted_at IS NULL)
+                AND c.path ~<~ (SELECT cc.path || chr(1114111) FROM categories cc
+                                 WHERE cc.id = sqlc.narg(category_id)::bigint
+                                   AND cc.deleted_at IS NULL)))
+   AND COALESCE(pss.in_stock,
+                EXISTS (SELECT 1 FROM skus sk WHERE sk.product_id = p.id AND sk.status = 1 AND sk.deleted_at IS NULL));
 
 -- name: GetProduct :one
 -- 商品详情。谓词与 ListProducts 逐字一致（deleted_at IS NULL AND status = 1），

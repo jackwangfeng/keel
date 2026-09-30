@@ -99,29 +99,86 @@ func checkPaging(limit, offset int64) error {
 	return nil
 }
 
+// AdminListOrders 按筛选条件选三条语句之一：有单号走 ByNo、否则有手机号走 ByPhone、
+// 否则走万能那条。三条的谓词逐字一致，只差「哪个条件是必填」—— 把稀疏的精确条件
+// 提成必填，是为了让它在通用计划里也进得了 Index Cond（理由与实测见
+// db/queries/admin_orders.sql 的「稀疏的精确条件单独成句」）。
 func (t tenantTx) AdminListOrders(ctx context.Context, f AdminOrderFilter, only ScopeFilter,
 	limit, offset int64) ([]AdminOrder, error) {
 	if err := checkPaging(limit, offset); err != nil {
 		return nil, err
 	}
-	rows, err := t.q.AdminListOrders(ctx, db.AdminListOrdersParams{
-		Status: f.Status, StoreID: f.StoreID,
-		CreatedFrom: optTS(f.CreatedFrom), CreatedTo: optTS(f.CreatedTo),
-		OrderNo: f.OrderNo, Phone: f.Phone,
-		OnlyRegionIds: only.RegionIDs, OnlyStoreIds: only.StoreIDs,
-		PageLimit: int32(limit), PageOffset: int32(offset),
-	})
-	if err != nil {
-		return nil, err
+	var rows []db.AdminGetOrderByNoRow
+	switch {
+	case f.OrderNo != nil:
+		rs, err := t.q.AdminListOrdersByNo(ctx, db.AdminListOrdersByNoParams{
+			Status: f.Status, StoreID: f.StoreID,
+			CreatedFrom: optTS(f.CreatedFrom), CreatedTo: optTS(f.CreatedTo),
+			OrderNo: *f.OrderNo, Phone: f.Phone,
+			OnlyRegionIds: only.RegionIDs, OnlyStoreIds: only.StoreIDs,
+			PageLimit: int32(limit), PageOffset: int32(offset),
+		})
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range rs {
+			rows = append(rows, db.AdminGetOrderByNoRow(r))
+		}
+	case f.Phone != nil:
+		rs, err := t.q.AdminListOrdersByPhone(ctx, db.AdminListOrdersByPhoneParams{
+			Status: f.Status, StoreID: f.StoreID,
+			CreatedFrom: optTS(f.CreatedFrom), CreatedTo: optTS(f.CreatedTo),
+			Phone:         *f.Phone,
+			OnlyRegionIds: only.RegionIDs, OnlyStoreIds: only.StoreIDs,
+			PageLimit: int32(limit), PageOffset: int32(offset),
+		})
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range rs {
+			rows = append(rows, db.AdminGetOrderByNoRow(r))
+		}
+	default:
+		rs, err := t.q.AdminListOrders(ctx, db.AdminListOrdersParams{
+			Status: f.Status, StoreID: f.StoreID,
+			CreatedFrom: optTS(f.CreatedFrom), CreatedTo: optTS(f.CreatedTo),
+			OrderNo: f.OrderNo, Phone: f.Phone,
+			OnlyRegionIds: only.RegionIDs, OnlyStoreIds: only.StoreIDs,
+			PageLimit: int32(limit), PageOffset: int32(offset),
+		})
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range rs {
+			rows = append(rows, db.AdminGetOrderByNoRow(r))
+		}
 	}
 	out := make([]AdminOrder, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, adminOrderFromRow(db.AdminGetOrderByNoRow(r)))
+		out = append(out, adminOrderFromRow(r))
 	}
 	return out, nil
 }
 
+// AdminCountOrders 与 AdminListOrders 同一个选择规则 —— 两边选岔了，total 数的就不是
+// 列表会分出来的那批行。
 func (t tenantTx) AdminCountOrders(ctx context.Context, f AdminOrderFilter, only ScopeFilter) (int64, error) {
+	switch {
+	case f.OrderNo != nil:
+		return t.q.AdminCountOrdersByNo(ctx, db.AdminCountOrdersByNoParams{
+			Status: f.Status, StoreID: f.StoreID,
+			CreatedFrom: optTS(f.CreatedFrom), CreatedTo: optTS(f.CreatedTo),
+			OrderNo: *f.OrderNo, Phone: f.Phone,
+			OnlyRegionIds: only.RegionIDs, OnlyStoreIds: only.StoreIDs,
+		})
+	case f.Phone != nil:
+		return t.q.AdminCountOrdersByPhone(ctx, db.AdminCountOrdersByPhoneParams{
+			Status: f.Status, StoreID: f.StoreID,
+			CreatedFrom: optTS(f.CreatedFrom), CreatedTo: optTS(f.CreatedTo),
+			Phone:         *f.Phone,
+			OnlyRegionIds: only.RegionIDs, OnlyStoreIds: only.StoreIDs,
+		})
+	}
 	return t.q.AdminCountOrders(ctx, db.AdminCountOrdersParams{
 		Status: f.Status, StoreID: f.StoreID,
 		CreatedFrom: optTS(f.CreatedFrom), CreatedTo: optTS(f.CreatedTo),

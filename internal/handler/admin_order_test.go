@@ -263,6 +263,18 @@ func TestAdminOrderListFilters(t *testing.T) {
 	if got, _ := aoOrders(t, fx, tok, "&phone=1391111000"); len(got) != 0 {
 		t.Errorf("手机号少一位也命中了 %v —— phone 应当是精确匹配", keysOf(got))
 	}
+	// 单号与手机号同时给：走 ByNo 那条语句（repository/admin_order.go），手机号仍是一个条件，
+	// 不是被忽略掉 —— 两条对不上的组合必须是空的。
+	if got, _ := aoOrders(t, fx, tok, "&order_no="+paid+"&phone=13911110002"); len(got) != 0 {
+		t.Errorf("单号 %s + 别人的手机号 拿到 %v，期望空 —— 手机号在单号分支里被丢了", paid, keysOf(got))
+	}
+	if got, _ := aoOrders(t, fx, tok, "&order_no="+shipped+"&phone=13911110002"); !sameSet(got, shipped) {
+		t.Errorf("单号 %s + 它自己的收货手机号 拿到 %v", shipped, keysOf(got))
+	}
+	// 手机号 + 状态：走 ByPhone，状态仍在过滤。
+	if got, _ := aoOrders(t, fx, tok, "&phone=13911110002&status=20"); len(got) != 0 {
+		t.Errorf("phone=13911110002&status=20 拿到 %v，期望空（那一单是 30）", keysOf(got))
+	}
 
 	// 写错的时间不当成没传：422，而不是一页不带筛选的全量结果。
 	for _, bad := range []string{

@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	pooldb "github.com/keel/keel/internal/db"
 	"github.com/keel/keel/internal/repository/internal/db"
 	"github.com/keel/keel/internal/tenant"
 )
@@ -168,6 +169,37 @@ const (
 // set_config 是整个租户隔离的落点，两份实现意味着将来有人只改对其中一份，
 // 而漏掉的那一份的症状是线上偶发 42501。
 func (r *Repo) withTenantTx(ctx context.Context, fn func(pgx.Tx, Tx) error) error {
+	return r.tenantTxWith(ctx, "", fn)
+}
+
+// withLockingTenantTx 与 withTenantTx 相同，只是事务里多一句 SET LOCAL lock_timeout
+// （KEEL_DB_LOCK_TIMEOUT，默认 3s；见 db.LockTimeout）。
+//
+// 给「会对热点行 FOR UPDATE」的入口用：库存扣减 / 回补 / 按门店设库存
+// （InventoryStore 的两个入口）与 core 的 SAGA 分支（Repo.WithSagaBranch）。
+// 没有它时，一个持锁不放的事务会让后面同一个 SKU 的下单一个接一个地排进锁队列，
+// 每一个都占着一条池连接 —— 池耗尽的速度等于这个 SKU 的下单速率。有了它，
+// 排队超过 3 秒的那一笔以 55P03（lock_not_available）失败：下单那边是一次可重试的
+// 失败，SAGA 分支由协调器按退避重试，都比「整站陪着一行锁一起等」便宜。
+//
+// 只加在这几个入口而不是全部事务：别的事务要么不锁行，要么锁的是自己名下的一行
+// （一笔订单、一张退款单），排队本身就是想要的串行化语义。
+func (r *Repo) withLockingTenantTx(ctx context.Context, fn func(pgx.Tx, Tx) error) error {
+	return r.tenantTxWith(ctx, lockTimeoutSetting, fn)
+}
+
+// lockTimeoutSetting 在包初始化时读一次。变量写错时这里取空串（不设）而不是 panic：
+// 进程里第一个建出来的池（db.NewPool）会用同一个解析函数当场报错拒绝启动，
+// 走不到用它的地方。
+var lockTimeoutSetting = func() string {
+	v, err := pooldb.LockTimeout()
+	if err != nil {
+		return ""
+	}
+	return v
+}()
+
+func (r *Repo) tenantTxWith(ctx context.Context, lockTimeout string, fn func(pgx.Tx, Tx) error) error {
 	merchantID, err := tenant.FromContext(ctx)
 	if err != nil {
 		return err
@@ -199,7 +231,7 @@ func (r *Repo) withTenantTx(ctx context.Context, fn func(pgx.Tx, Tx) error) erro
 	// 它们补的正是这一句 set_config 带来的那个副作用。合成一条语句不是为了
 	// 省字，是为了省一次往返 —— 每个请求都要发的语句，多一次 RTT 就是每个
 	// 请求都多一次。
-	if err := enterTenantScope(ctx, tx, merchantID); err != nil {
+	if err := enterTenantScope(ctx, tx, merchantID, lockTimeout); err != nil {
 		return err
 	}
 
@@ -228,16 +260,27 @@ func (r *Repo) withTenantTx(ctx context.Context, fn func(pgx.Tx, Tx) error) erro
 // staff_scope_merchant() 仍然返回 NULL，于是「新店的第一个管理员」会被建成
 // 一个**平台级管理员** —— 一行 merchant_id 为 NULL 的 staff，拥有跨租户
 // 运维权。它不会报错，也不会有任何一条约束拦下来。
-func enterTenantScope(ctx context.Context, tx pgx.Tx, merchantID int64) error {
-	_, err := tx.Exec(ctx,
-		`SELECT set_config('app.merchant_id', $1, true),
+//
+// lockTimeout 非空时同一句里再设 lock_timeout（withLockingTenantTx）：合在一条语句里
+// 是同一个理由 —— 扣减是下单热路径上的事务，多一次 RTT 就是每一笔下单都多一次。
+func enterTenantScope(ctx context.Context, tx pgx.Tx, merchantID int64, lockTimeout string) error {
+	const base = `SELECT set_config('app.merchant_id', $1, true),
 		        set_config('app.platform_scope', 'off', true),
 		        set_config('hnsw.iterative_scan', $2, true),
 		        set_config('hnsw.max_scan_tuples', $3, true),
-		        set_config('hnsw.ef_search', $4, true)`,
+		        set_config('hnsw.ef_search', $4, true)`
+	args := []any{
 		strconv.FormatInt(merchantID, 10),
 		hnswIterativeScan,
 		strconv.Itoa(hnswMaxScanTuples),
-		strconv.Itoa(hnswEFSearch))
+		strconv.Itoa(hnswEFSearch),
+	}
+	sql := base
+	if lockTimeout != "" {
+		sql += `,
+		        set_config('lock_timeout', $5, true)`
+		args = append(args, lockTimeout)
+	}
+	_, err := tx.Exec(ctx, sql, args...)
 	return err
 }

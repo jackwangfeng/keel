@@ -599,6 +599,8 @@ type Order struct {
 	PromotionDiscountCents int64
 	Promotions             []byte
 	PlacedAt               pgtype.Timestamptz
+	// 收货人手机号，= receiver_snapshot->>'phone'，由触发器维护（00170），应用不写。存在的理由：->> 非 leakproof，RLS 下走不了表达式索引；text 的 = 是 leakproof。
+	ReceiverPhone *string
 }
 
 type OrderItem struct {
