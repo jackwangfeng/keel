@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -136,43 +135,5 @@ func readyz(pool *pgxpool.Pool) gin.HandlerFunc {
 			return
 		}
 		c.String(http.StatusOK, "ok")
-	}
-}
-
-// waitOrTimeout 等 done 关闭，最多 d。返回是否等到了。
-func waitOrTimeout(done <-chan struct{}, d time.Duration) bool {
-	t := time.NewTimer(d)
-	defer t.Stop()
-	select {
-	case <-done:
-		return true
-	case <-t.C:
-		return false
-	}
-}
-
-// background 是后台任务的 WaitGroup：Run 停机时取消它们的 ctx，然后等它们真的退出，
-// 再去关协调器与池 —— 否则一个正在事务中间的扫描会撞上一个已经关掉的池。
-type background struct {
-	ctx context.Context
-	wg  sync.WaitGroup
-}
-
-// Go 起一个后台任务。name 只用于日志。
-func (b *background) Go(name string, run func(context.Context)) {
-	b.wg.Add(1)
-	go func() {
-		defer b.wg.Done()
-		run(b.ctx)
-		slog.Debug("后台任务已退出", "task", name)
-	}()
-}
-
-// Wait 等全部后台任务退出，最多 d。超时只告警不阻塞：停机不能被一个不守 ctx 的任务卡住。
-func (b *background) Wait(d time.Duration) {
-	done := make(chan struct{})
-	go func() { b.wg.Wait(); close(done) }()
-	if !waitOrTimeout(done, d) {
-		slog.Warn("后台任务在宽限期内没有全部退出，继续停机", "grace", d)
 	}
 }

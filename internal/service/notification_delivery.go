@@ -13,6 +13,7 @@ import (
 
 	"github.com/keel/keel/internal/repository"
 	"github.com/keel/keel/internal/tenant"
+	"github.com/keel/keel/internal/worker"
 )
 
 // 消息通知的**外发**那一半（数据模型 §16）：outbox 里的 notification.deliver 任务 →
@@ -240,7 +241,9 @@ func (s *NotificationDeliveryService) Run(ctx context.Context) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			s.consume(ctx)
+			// 任务内部另起的 goroutine 接不住 Runner 的 recover，这里自己套一层（worker.Supervise）：
+			// 消费者 panic 记 ERROR、退避重启，而不是崩掉整个进程。
+			worker.Supervise(ctx, s.log, "notification_delivery.consume", 0, 0, s.consume)
 		}()
 	}
 	t := time.NewTicker(s.cfg.PurgeInterval)

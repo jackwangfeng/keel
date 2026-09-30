@@ -849,6 +849,10 @@ func Run(ctx context.Context, listen ListenFunc) error {
 	if err := trustProxies(gin.New(), os.Getenv(EnvTrustedProxies)); err != nil {
 		return fmt.Errorf("拒绝启动: %w", err)
 	}
+	bgEnabled, err := backgroundEnabledFromEnv()
+	if err != nil {
+		return fmt.Errorf("拒绝启动: %w", err)
+	}
 
 	if cfg.Split.Role == RoleInventory {
 		return runInventory(ctx, cfg.Split, listen)
@@ -950,14 +954,16 @@ func Run(ctx context.Context, listen ListenFunc) error {
 	// bgCtx 刻意**不**跟着 ctx 一起取消（WithoutCancel）：停机顺序是「先等在途请求、再停后台」。
 	// 信号一来就一起停的话，在途请求还在做、后台已经停了 —— 请求提交时刚入队给后台接手的
 	// 那部分（jobs / outbox）只能等下次启动。所以 listen 先返回，再由下面这条 defer 取消。
-	bgCtx, stopBackground := context.WithCancel(context.WithoutCancel(ctx))
-	bg := &background{ctx: bgCtx}
-	defer func() {
-		stopBackground()
-		bg.Wait(shutdownGraceFromEnv())
-	}()
+	//
+	// 任务由 background（worker.Runner）启动：panic 不崩进程（记 ERROR、退避重启），
+	// 停机时等它们退出；扫描 / 对账 / 刷新类用 bg.Leader 注册，多实例下靠咨询锁只在
+	// 一个实例上跑，队列与 outbox 的消费者用 bg.Go，多实例并行（worker 包注释）。
+	// 全部注册完，在监听之前 bg.Start。
+	bgCtx := context.WithoutCancel(ctx)
+	bg := newBackground(pool, bgEnabled)
+	defer bg.Stop(shutdownGraceFromEnv())
 	sweeper := service.NewSweepService(repository.New(pool), inv, service.SweepConfig{}, nil)
-	bg.Go("sweep", sweeper.Run)
+	bg.Leader("sweep", sweeper.Run)
 
 	// 库存 outbox 的 worker（微服务拆分阶段 1b）：关单释放与退款回补。关单 / 退款的那段代码在提交之后
 	// 已经就地跑过一次，这里接住没跑成的（库存服务不在、进程在提交之后崩了）。与超时补偿同一个理由
@@ -968,20 +974,20 @@ func Run(ctx context.Context, listen ListenFunc) error {
 	// 库存对账（微服务拆分阶段 2）：孤儿库存行、上线活动的配额差集、死信的库存任务。只读、只报不修，
 	// 一小时一轮；晚起一轮不丢任何东西（文件头见 service/inventory_reconcile.go）。
 	invReconcile := service.NewInventoryReconcileService(repository.New(pool), inv, service.InventoryReconcileConfig{}, nil)
-	bg.Go("inventory_reconcile", invReconcile.Run)
+	bg.Leader("inventory_reconcile", invReconcile.Run)
 	// 商品列表按有货排序用的冗余标记（00087，service/stock_flags.go）：全量刷新兜住下单扣减、关单回补。
 	stockFlags := service.NewStockFlagService(repository.New(pool), inv, stockFlagIntervalFromEnv(), nil)
-	bg.Go("stock_flags", stockFlags.Run)
+	bg.Leader("stock_flags", stockFlags.Run)
 	// 多收款退回的兜底扫描与重试（00150，service/payment_return.go）：每分钟补开订单不认的到账的退回单、
 	// 提交没提交成的。它停着的代价是多收的钱晚几分钟退回，不会丢。
-	bg.Go("payment_return", service.NewPaymentReturnService(repository.New(pool), cfg.Payment, nil).Run)
+	bg.Leader("payment_return", service.NewPaymentReturnService(repository.New(pool), cfg.Payment, nil).Run)
 	// AI 员工提案的过期扫描（00091，service/agent_proposal_expiry.go）。
-	bg.Go("proposal_expiry", func(ctx context.Context) { service.RunProposalExpiry(ctx, repository.New(pool), nil) })
+	bg.Leader("proposal_expiry", func(ctx context.Context) { service.RunProposalExpiry(ctx, repository.New(pool), nil) })
 	// 提案执行后的复盘（00122，service/agent_proposal_outcome.go）：到点量一次效果，给成绩单。
-	bg.Go("proposal_outcomes", func(ctx context.Context) { service.RunProposalOutcomes(ctx, repository.New(pool), inv, nil) })
+	bg.Leader("proposal_outcomes", func(ctx context.Context) { service.RunProposalOutcomes(ctx, repository.New(pool), inv, nil) })
 	// AI 员工事件（00121，AI 经营 M10 §3）：每 5 分钟扫 stock_low / search_zero_spike（库存经 inv，拆分形态同样成立），
 	// 以及 webhook 的投递 worker（jobs 队列 agent.event.deliver）。晚起一轮不丢任何东西。
-	bg.Go("agent_event_sweep", service.NewAgentEventSweepService(repository.New(pool), inv, nil).Run)
+	bg.Leader("agent_event_sweep", service.NewAgentEventSweepService(repository.New(pool), inv, nil).Run)
 	bg.Go("agent_webhook_delivery", service.NewAgentWebhookDeliveryService(repository.New(pool), nil, nil).Run)
 
 	// 自动确认收货（数据模型 §5 发货第三条规则）：发货满店铺设置的 auto_confirm_days
@@ -989,17 +995,17 @@ func Run(ctx context.Context, listen ListenFunc) error {
 	// 同一个生命周期。它不像超时补偿那样卡着库存，晚起一轮不丢任何东西，
 	// 所以不需要排在监听之前的那份讲究 —— 放在这里只是为了共用 bgCtx。
 	confirmer := service.NewAutoConfirmService(repository.New(pool), service.SweepConfig{}, nil)
-	bg.Go("auto_confirm", confirmer.Run)
+	bg.Leader("auto_confirm", confirmer.Run)
 
 	// 退货超时未寄回自动关闭（数据模型 §11，00059）：退货退款审核通过后超过店铺设置的天数
 	// 还没填寄回物流的，20 → 60。与自动确认收货同一套机制、同一个生命周期。
 	returnTimeout := service.NewReturnTimeoutService(repository.New(pool), service.SweepConfig{}, nil)
-	bg.Go("return_timeout", returnTimeout.Run)
+	bg.Leader("return_timeout", returnTimeout.Run)
 
 	// 孤儿上传文件回收（数据模型 §13 的 24 小时规则）：没被引用、创建超过 24 小时的文件，
 	// 删记录再删文件。存储与 Router 里写文件的是同一个 driver（同一个 KEEL_UPLOAD_ROOT）。
 	uploadGC := service.NewUploadGCService(repository.New(pool), uploadStoreFromEnv(), service.SweepConfig{}, nil)
-	bg.Go("upload_gc", uploadGC.Run)
+	bg.Leader("upload_gc", uploadGC.Run)
 
 	// 消息通知的外发投递与保留期清理（数据模型 §16）。站内消息不靠它 —— 通知行在业务事务里
 	// 就写好了；它只消费 outbox 里的 notification.deliver 任务，把每个外发渠道的结果记下来。
@@ -1079,6 +1085,8 @@ func Run(ctx context.Context, listen ListenFunc) error {
 	if err := bootstrapStaff(ctx, pool); err != nil {
 		return err
 	}
+
+	bg.Start(bgCtx)
 
 	public := Router(pool, res, signer, orders, cfg.Payment, searchEmbedder, WithInventory(inv))
 	if cfg.Split.InternalAddr == "" {
