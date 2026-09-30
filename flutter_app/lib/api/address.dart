@@ -16,13 +16,15 @@ class AddressRow {
   final String tagText;
   /// 坐标（WGS-84）。老地址、手填的没有。首页「换地址」按它重新解析门店。
   final LatLng? at;
+  /// 带门店拉地址簿时服务端给的：这家店送不送这里。true 送；false 有坐标但在围栏外；null 没坐标、判断不了（交给试算）。
+  final bool? inServiceArea;
   const AddressRow({required this.id, required this.name, required this.phone, required this.regionText,
-      required this.detail, required this.fullText, required this.isDefault, required this.tagText, this.at});
+      required this.detail, required this.fullText, required this.isDefault, required this.tagText, this.at, this.inServiceArea});
 }
 
 String _tag(int? t) => switch (t) { 1 => '家', 2 => '公司', 3 => '学校', _ => '' };
 
-AddressRow addressRow(Address a) {
+AddressRow addressRow(Address a, {bool? inServiceArea}) {
   final region = '${a.province} ${a.city} ${a.district}';
   final street = a.street ?? '';
   return AddressRow(
@@ -35,6 +37,7 @@ AddressRow addressRow(Address a) {
     isDefault: a.isDefault,
     tagText: _tag(a.tag),
     at: a.lat != null && a.lng != null ? (lat: a.lat!, lng: a.lng!) : null,
+    inServiceArea: inServiceArea,
   );
 }
 
@@ -126,8 +129,35 @@ Future<List<Address>> _list(ApiClient c) async => (await c.send('GET', '/address
         decode: (j) => (j as List).map((e) => Address.fromJson(e as Map<String, dynamic>)).toList()))
     .data;
 
-/// 服务端已按默认在前排好。
-Future<List<AddressRow>> fetchAddresses(ApiClient c) async => (await _list(c)).map(addressRow).toList();
+/// 服务端已按默认在前排好。给了 [storeId]，每条多带 in_service_area（这家店送不送这里）。
+/// in_service_area 先从原始 JSON 读：契约生成的 Address 还没有这个字段，服务端合进来后换成 a.inServiceArea。
+Future<List<AddressRow>> fetchAddresses(ApiClient c, {int? storeId}) async => (await c.send('GET', '/addresses',
+        query: storeId == null ? null : {'store_id': '$storeId'},
+        decode: (j) => [
+              for (final e in (j as List).cast<Map<String, dynamic>>())
+                addressRow(Address.fromJson(e), inServiceArea: e['in_service_area'] as bool?),
+            ]))
+    .data;
+
+/// 结算页没被指定、用户也没手动选过地址时，替他挑一条。[hint] = 挑中的这条确定在配送范围内（页面据此提示）。
+typedef AddressPick = ({AddressRow? row, bool hint});
+
+/// ① 默认地址且不在围栏外（true 或判断不了）；② 在范围内的里离 [near]（首页「送至」那一点 / 门店坐标）最近的，
+/// 没有 near 或都没坐标就按地址簿顺序；③ 都不在范围内：退回原来的规则（第一条是默认就用它，否则不替用户挑）。
+AddressPick autoPickAddress(List<AddressRow> list, {LatLng? near}) {
+  final def = list.where((a) => a.isDefault).firstOrNull;
+  if (def != null && def.inServiceArea != false) return (row: def, hint: def.inServiceArea == true);
+  final ok = list.where((a) => a.inServiceArea == true).toList();
+  if (ok.isNotEmpty) {
+    final withAt = ok.where((a) => a.at != null).toList();
+    if (near != null && withAt.isNotEmpty) {
+      withAt.sort((a, b) => distanceM(near, a.at!).compareTo(distanceM(near, b.at!)));
+      return (row: withAt.first, hint: true);
+    }
+    return (row: ok.first, hint: true);
+  }
+  return (row: list.isNotEmpty && list.first.isDefault ? list.first : null, hint: false);
+}
 
 /// 编辑页用：没有 GET /addresses/{id}，从列表里取。已经不存在是 null。
 Future<AddressForm?> fetchAddressForm(ApiClient c, int id) async {

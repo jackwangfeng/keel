@@ -49,6 +49,15 @@ Future<List<Place>> suggestPlaces(ApiClient c, String q, {LatLng? near, String? 
       .data;
 }
 
+/// 两点间的球面距离（米，haversine）。只用来比远近，精度够用。
+double distanceM(LatLng a, LatLng b) {
+  const r = 6371000.0;
+  double rad(double d) => d * math.pi / 180;
+  final dLat = rad(b.lat - a.lat), dLng = rad(b.lng - a.lng);
+  final h = math.pow(math.sin(dLat / 2), 2) + math.cos(rad(a.lat)) * math.cos(rad(b.lat)) * math.pow(math.sin(dLng / 2), 2);
+  return 2 * r * math.asin(math.sqrt(h));
+}
+
 /// 没配地图服务商。
 bool geoOff(ApiFailure f) => f.status == 501;
 

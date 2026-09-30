@@ -10,7 +10,9 @@ import 'schema.g.dart';
 class CurrentStore {
   final int? storeId;
   final String name;
-  const CurrentStore(this.storeId, this.name);
+  /// 门店坐标（WGS-84，没登记就是 null）。结算自动选地址时，没有送货位置就按离门店近的挑。
+  final LatLng? at;
+  const CurrentStore(this.storeId, this.name, {this.at});
 }
 
 /// 「哪家店在服务你」。价格与在售范围都跟着门店走，列表 / 详情 / 购物车 / 结算用同一家。
@@ -115,7 +117,8 @@ class StoreService extends ChangeNotifier {
         final stores = res.data.stores;
         final s = res.data.matchType == 'none' || stores.isEmpty
             ? const CurrentStore(null, '')
-            : CurrentStore(stores.first.id, stores.first.name);
+            : CurrentStore(stores.first.id, stores.first.name,
+                at: stores.first.lat != null && stores.first.lng != null ? (lat: stores.first.lat!, lng: stores.first.lng!) : null);
         current = s;
         notifyListeners();
         if (pinned == null && at != null) _lookUpLabel(at);

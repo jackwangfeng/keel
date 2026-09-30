@@ -6,6 +6,7 @@ import '../api/address.dart';
 import '../api/cart.dart';
 import '../api/catalog.dart';
 import '../api/client.dart';
+import '../api/geo.dart';
 import '../api/coupon.dart';
 import '../api/order.dart';
 import '../api/services.dart';
@@ -33,6 +34,12 @@ class _CheckoutPageState extends State<CheckoutPage> {
   // 收货地址。0 = 还没定。
   int _addressId = 0;
   AddressRow? _address;
+  // 地址是用户定的（进页面时带了 address_id，或在本页选过）：重读地址簿、换门店都不替他换。
+  bool _addressManual = false;
+  // 这条是按当前门店的配送范围自动挑的（显示一行说明）。
+  bool _addressAuto = false;
+  // 当前门店的坐标：没有送货位置时，自动选地址按离门店近的挑。
+  LatLng? _storeAt;
   bool _addressLoaded = false;
   int _addressCount = 0;
   String _addressError = '';
@@ -74,6 +81,7 @@ class _CheckoutPageState extends State<CheckoutPage> {
       _started = true;
       _itemTitle = '规格 #${widget.skuId}';
       _addressId = widget.addressId;
+      _addressManual = widget.addressId > 0;
       _start();
     }
   }
@@ -94,6 +102,7 @@ class _CheckoutPageState extends State<CheckoutPage> {
         });
       }
       _storeId = store.storeId;
+      _storeAt = store.at;
       if (!widget.fromCart) _loadItem();
       await _loadAddresses();
     } on ApiFailure catch (f) {
@@ -125,16 +134,23 @@ class _CheckoutPageState extends State<CheckoutPage> {
     }
   }
 
-  /// 每次回来都重读地址簿：在地址页里可能新建、改了、删了。
+  /// 每次回来都重读地址簿：在地址页里可能新建、改了、删了。带上当前门店，拿到每条在不在它的配送范围内。
+  /// 用户定过的地址照用（除非被删了）；没定过就按 [autoPickAddress] 挑：默认地址 → 范围内离送货位置最近的 → 原来的规则。
   Future<void> _loadAddresses() async {
     try {
-      final list = await fetchAddresses(_s.client);
+      final list = await fetchAddresses(_s.client, storeId: _storeId);
       if (!mounted) return;
-      AddressRow? found = list.where((a) => a.id == _addressId).firstOrNull;
-      // 还没选过（或选的那条被删了）：用默认地址（契约：默认排第一）。第一条不是默认就不替用户挑。
-      if (found == null && list.isNotEmpty && list.first.isDefault) found = list.first;
+      AddressRow? found = _addressManual ? list.where((a) => a.id == _addressId).firstOrNull : null;
+      if (found == null) _addressManual = false; // 定过的那条被删了：重新替他挑
+      var auto = false;
+      if (!_addressManual) {
+        final p = autoPickAddress(list, near: _s.store.at ?? _storeAt);
+        found = p.row;
+        auto = p.hint;
+      }
       final next = found?.id ?? 0;
       setState(() {
+        _addressAuto = auto;
         _addressLoaded = true;
         _addressError = '';
         _addressCount = list.length;
@@ -162,10 +178,14 @@ class _CheckoutPageState extends State<CheckoutPage> {
       await context.push('/addresses/new');
     } else {
       final picked = await context.push<int>('/addresses?select=1');
-      if (picked != null && picked != _addressId) {
+      if (picked != null) {
         setState(() {
-          _addressId = picked;
-          _invalidate();
+          _addressManual = true;
+          _addressAuto = false;
+          if (picked != _addressId) {
+            _addressId = picked;
+            _invalidate();
+          }
         });
       }
     }
@@ -299,6 +319,9 @@ class _CheckoutPageState extends State<CheckoutPage> {
   Future<void> _switchStore() async {
     final a = _address;
     if (a == null) return;
+    // 按这条地址换门店 = 用户认定了这条地址：换完不再自动换掉它。
+    _addressManual = true;
+    _addressAuto = false;
     _s.store.deliverTo(at: a.at, label: a.detail);
     try {
       final store = await _s.store.ensure();
@@ -310,6 +333,7 @@ class _CheckoutPageState extends State<CheckoutPage> {
         _invalidate();
         _cartLoaded = false; // 车按门店算价，换了门店重读
         _storeId = store.storeId;
+        _storeAt = store.at;
         if (store.storeId == null) {
           _outOfRange = true;
           _failed = true;
@@ -318,7 +342,8 @@ class _CheckoutPageState extends State<CheckoutPage> {
       });
       if (store.storeId == null) return;
       if (!widget.fromCart) _loadItem();
-      _preview();
+      // 按新门店重读地址簿（范围判断跟着门店变；地址是用户定的，不会被换掉），读完照常试算。
+      await _loadAddresses();
     } on ApiFailure catch (f) {
       if (mounted) {
         setState(() {
@@ -567,6 +592,11 @@ class _CheckoutPageState extends State<CheckoutPage> {
           Text(a.phone, style: KeelText.sub),
         ]),
         Text(a.fullText, style: KeelText.hint),
+        if (_addressAuto)
+          const Padding(
+            padding: EdgeInsets.only(top: 4),
+            child: Text('已按当前门店自动选择配送范围内的地址', key: Key('checkout.autoAddress'), style: KeelText.hint),
+          ),
       ]);
     }
     if (!loggedIn) return const Text('登录后选择收货地址', style: KeelText.hint);

@@ -39,6 +39,9 @@ class Fake {
   int? distance = 2100;
   bool belowMin = false;
   final resolves = <Map<String, String>>[];
+  /// 自动选收货地址：自定义地址簿（带 in_service_area），以及拉地址簿时带的参数。
+  List<Map<String, Object?>>? addrs;
+  final addrQueries = <Map<String, String>>[];
   late final client = MockClient((r) async {
     final p = r.url.path.replaceFirst('/api/v1', '');
     if (p == '/stores/resolve') {
@@ -56,6 +59,8 @@ class Fake {
         'skus': [{'id': 91, 'sku_code': 'S', 'price_cents': 5000, 'available_qty': 9, 'spec_values': {'规格': '10 包'}}]});
     }
     if (p == '/addresses') {
+      addrQueries.add(r.url.queryParameters);
+      if (addrs != null) return j(addrs!);
       return j([
         {'id': 1, 'receiver_name': '张三', 'phone': '139', 'province': '浙江省', 'city': '杭州市', 'district': '西湖区', 'detail': '1 号', 'is_default': true,
           if (fence) 'lat': 31.23, if (fence) 'lng': 121.47},
@@ -112,13 +117,13 @@ class Fake {
 http.Response outOfRange() => j({'type': 'https://keel.dev/problems/address-out-of-range', 'title': '收货地址不在门店配送范围',
       'status': 422, 'detail': '收货地址不在「示例小店」的配送范围内'}, 422);
 
-Future<Widget> app(Fake f) async {
+Future<Widget> app(Fake f, {String path = '/checkout?sku_id=91&product_id=9'}) async {
   SharedPreferences.setMockInitialValues({'keel.access': 'a', 'keel.refresh': 'r', 'keel.nickname': 'e2e'});
   final session = Session();
   await session.load();
   final client = ApiClient(base: 'http://h/api/v1', session: session, http: f.client);
   final router = buildRouter(session);
-  router.go('/checkout?sku_id=91&product_id=9');
+  router.go(path);
   return Services(client: client, session: session, store: StoreService(client, locate: () async => null), cart: CartCount(client, session),
       trace: SearchTrace(client), unread: UnreadCount(client, session), child: MaterialApp.router(theme: keelTheme(), routerConfig: router));
 }
@@ -278,5 +283,66 @@ void main() {
     await t.pumpAndSettle();
     expect(t.widget<Text>(find.byKey(const Key('checkout.message'))).data, '这家门店满 ¥30.00 起送，还差 ¥12.50');
     expect(t.widget<FilledButton>(find.byKey(const Key('checkout.submit'))).onPressed, isNull);
+  });
+
+  group('自动选收货地址（按当前门店的配送范围）', () {
+    Map<String, Object?> a(int id, {bool def = false, bool? inArea}) => {'id': id, 'receiver_name': '收$id', 'phone': '139',
+          'province': '浙江省', 'city': '杭州市', 'district': '西湖区', 'detail': '$id 号', 'is_default': def, 'in_service_area': inArea};
+    int previewAddr(Fake f) => f.previews.last['address_id'] as int;
+
+    testWidgets('默认地址在围栏外、另一条在范围内：自动选那一条并提示；拉地址簿带上门店', (t) async {
+      phone(t);
+      final f = Fake()..addrs = [a(1, def: true, inArea: false), a(2, inArea: true)];
+      await t.pumpWidget(await app(f));
+      await t.pumpAndSettle();
+      expect(f.addrQueries.first, {'store_id': '1'});
+      expect(find.byKey(const Key('checkout.address.2')), findsOneWidget);
+      expect(find.text('已按当前门店自动选择配送范围内的地址'), findsOneWidget);
+      expect(previewAddr(f), 2);
+    });
+
+    testWidgets('默认地址在范围内：用默认，也提示', (t) async {
+      phone(t);
+      final f = Fake()..addrs = [a(1, def: true, inArea: true), a(2, inArea: true)];
+      await t.pumpWidget(await app(f));
+      await t.pumpAndSettle();
+      expect(find.byKey(const Key('checkout.address.1')), findsOneWidget);
+      expect(find.byKey(const Key('checkout.autoAddress')), findsOneWidget);
+    });
+
+    testWidgets('一条都不在范围内：退回默认地址，不提示（试算照常报超出范围）', (t) async {
+      phone(t);
+      final f = Fake()..addrs = [a(1, def: true, inArea: false), a(2, inArea: false)];
+      await t.pumpWidget(await app(f));
+      await t.pumpAndSettle();
+      expect(find.byKey(const Key('checkout.address.1')), findsOneWidget);
+      expect(find.byKey(const Key('checkout.autoAddress')), findsNothing);
+    });
+
+    testWidgets('进结算页时带了地址：照用，不自动换、不提示', (t) async {
+      phone(t);
+      final f = Fake()..addrs = [a(1, def: true, inArea: true), a(2, inArea: false)];
+      await t.pumpWidget(await app(f, path: '/checkout?sku_id=91&product_id=9&address_id=2'));
+      await t.pumpAndSettle();
+      expect(find.byKey(const Key('checkout.address.2')), findsOneWidget);
+      expect(find.byKey(const Key('checkout.autoAddress')), findsNothing);
+      expect(previewAddr(f), 2);
+    });
+
+    testWidgets('在本页手动选过的地址：回来重读地址簿也不被自动选覆盖', (t) async {
+      phone(t);
+      final f = Fake()..addrs = [a(1, def: true, inArea: true), a(2, inArea: false)];
+      await t.pumpWidget(await app(f));
+      await t.pumpAndSettle();
+      expect(find.byKey(const Key('checkout.address.1')), findsOneWidget);
+      await t.tap(find.byKey(const Key('checkout.address')));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(const Key('address.row.2')));
+      await t.pumpAndSettle();
+      expect(f.addrQueries.length, greaterThanOrEqualTo(2), reason: '回来重读了地址簿');
+      expect(find.byKey(const Key('checkout.address.2')), findsOneWidget);
+      expect(find.byKey(const Key('checkout.autoAddress')), findsNothing);
+      expect(previewAddr(f), 2);
+    });
   });
 }

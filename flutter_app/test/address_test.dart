@@ -107,4 +107,57 @@ void main() {
     expect(detail(g('人民广场', '上海市黄浦区人民大道', province: '上海市', city: '上海市', district: '黄浦区')), '人民大道 人民广场');
     expect(detail(g('某地', '')), '某地');
   });
+
+  group('结算自动选收货地址（按当前门店的配送范围）', () {
+    AddressRow row(int id, {bool def = false, bool? inArea, double? lat, double? lng}) => AddressRow(
+        id: id, name: '张三', phone: '139', regionText: '浙江省 杭州市 西湖区', detail: '$id 号', fullText: '$id 号',
+        isDefault: def, tagText: '', at: lat == null ? null : (lat: lat, lng: lng!), inServiceArea: inArea);
+
+    test('① 默认地址在范围内（true）：选它，提示「已按当前门店…」', () {
+      final p = autoPickAddress([row(1, def: true, inArea: true), row(2, inArea: true)]);
+      expect((p.row?.id, p.hint), (1, true));
+    });
+
+    test('① 默认地址判断不了（null，没坐标）：也选它，但不提示（说不准在不在范围内）', () {
+      final p = autoPickAddress([row(1, def: true), row(2, inArea: true)]);
+      expect((p.row?.id, p.hint), (1, false));
+    });
+
+    test('② 默认地址在范围外（false）：在范围内的里挑离送货位置最近的', () {
+      final list = [
+        row(1, def: true, inArea: false, lat: 30.0, lng: 120.0),
+        row(2, inArea: true, lat: 31.30, lng: 121.50), // 远
+        row(3, inArea: true, lat: 31.231, lng: 121.471), // 近
+        row(4, inArea: null, lat: 31.2305, lng: 121.4705), // 更近但判断不了：不参与 ②
+      ];
+      final p = autoPickAddress(list, near: (lat: 31.23, lng: 121.47));
+      expect((p.row?.id, p.hint), (3, true));
+    });
+
+    test('② 没有送货位置：按地址簿顺序取第一条在范围内的', () {
+      final p = autoPickAddress([row(1, def: true, inArea: false), row(5, inArea: true), row(6, inArea: true)]);
+      expect((p.row?.id, p.hint), (5, true));
+    });
+
+    test('② 有送货位置但在范围内的都没坐标：也按地址簿顺序', () {
+      final p = autoPickAddress([row(7, inArea: true), row(8, inArea: true, lat: 31.5, lng: 121.9)], near: (lat: 31.23, lng: 121.47));
+      expect(p.row?.id, 8, reason: '有坐标的才有距离；都没坐标才退回顺序');
+    });
+
+    test('③ 一条都不在范围内：退回原来的行为（第一条是默认就用它，不提示）', () {
+      expect(autoPickAddress([row(1, def: true, inArea: false), row(2, inArea: false)]).row?.id, 1);
+      expect(autoPickAddress([row(1, def: true, inArea: false)]).hint, isFalse);
+      expect(autoPickAddress([row(1, inArea: false), row(2, def: true, inArea: false)]).row, isNull, reason: '第一条不是默认就不替用户挑');
+      expect(autoPickAddress(const []).row, isNull);
+    });
+
+    test('拉地址簿带上当前门店，读出 in_service_area', () async {
+      final (c, seen) = await client((r) => j([addr(id: 1), {...addr(id: 2), 'in_service_area': true}, {...addr(id: 3), 'in_service_area': false}]));
+      final list = await fetchAddresses(c, storeId: 5);
+      expect(seen.single.url.queryParameters, {'store_id': '5'});
+      expect(list.map((a) => a.inServiceArea), [null, true, false]);
+      await fetchAddresses(c);
+      expect(seen.last.url.queryParameters, isEmpty, reason: '不带门店时和原来一样');
+    });
+  });
 }
