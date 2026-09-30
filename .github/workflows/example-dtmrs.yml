@@ -42,6 +42,7 @@ jobs:
     # 自建 runner（lenserver，label keel），理由见 ci.yml 顶部「跑在哪」：私有仓库的托管 runner
     # 按分钟计费。make verify 里只有 cmd/topology 占一个宿主机端口（127.0.0.1:18089），
     # 同机空闲；不起容器，不用额外清理。
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, keel]
     # 本机实测：make deps（clone + cargo build --release，cargo 缓存是暖的）
     # 49 秒，make verify 二十来秒。runner 上 cargo registry 是冷的，给足余量。

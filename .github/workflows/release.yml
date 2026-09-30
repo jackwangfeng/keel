@@ -27,7 +27,7 @@
 #
 # ## 跑在哪
 #
-# 和 ci.yml 一样跑自建 runner（lenserver，label `keel`）：仓库私有，GitHub 托管
+# 和 ci.yml 一样跑自建 runner（lenserver，label `keel`）：当初仓库私有（现已公开，只由 tag 触发，fork 触发不了），GitHub 托管
 # runner 按分钟计费，额度用完 job 直接不启动 —— 而「发布卡在配额上」是最不该
 # 发生的那种失败。代价与 ci.yml 记的同一条：那是台长期运行、和别的服务共用的
 # 机器，所以这里起的容器都用一次性名字、跑完即删。

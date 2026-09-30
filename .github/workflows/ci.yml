@@ -89,6 +89,13 @@
 # 真到了那一天，修法是在这个文件里加一行 dtolnay/rust-toolchain@stable。
 name: CI
 
+# ## 公开仓库 + 自托管 runner（2026-09-30）
+#
+# 仓库是公开的，而 runner 就是 lenserver（同机跑着演示站、推理引擎、别的项目的库）。两道闸：
+#   1. 仓库设置：所有外部贡献者的 PR 都要维护者点「批准运行」（Actions → fork PR approval =
+#      all_external_contributors），不是只拦首次贡献者。
+#   2. 每个 job 的 `if:`：来自 fork 的 PR 一律不在这台机器上跑（本仓库分支的 PR 与 push 照常）。
+#      外部贡献者的改动由维护者拉到本仓库分支后再跑 CI。
 on:
   push:
     branches: [main]
@@ -103,8 +110,8 @@ permissions:
 
 # ## 跑在哪
 #
-# 全部 job 跑在自建 runner 上（lenserver，192.168.0.110，label `keel`）：仓库是私有的，
-# GitHub 托管的 runner 按分钟计费，额度用完 job 直接不启动。自建 runner 不计费，
+# 全部 job 跑在自建 runner 上（lenserver，192.168.0.110，label `keel`）：当初仓库私有，
+# GitHub 托管的 runner 按分钟计费，额度用完 job 直接不启动（仓库已公开，fork PR 的防护见文件头）。自建 runner 不计费，
 # 但它是一台**长期运行、和别的服务共用**的机器 —— 托管 runner 每次都是新虚拟机，
 # 这里不是。所以下面凡是占宿主机端口、起具名容器、建 compose 项目的地方，都满足三条：
 #   · 不用宿主机上已被占的端口（5432 有 quant_postgres，8080 有别的服务）；
@@ -124,6 +131,7 @@ jobs:
   # ---------------------------------------------------------------------------
   gates:
     name: 文档与契约闸门
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, keel]
     # 这一段本机 2.4 秒。给 15 分钟是留给 npx 首次下载与 Go 模块下载的，
     # 不是留给「卡住也没关系」——真卡住时，六小时的默认上限会把 runner 额度
@@ -171,6 +179,7 @@ jobs:
   # ---------------------------------------------------------------------------
   go:
     name: Go 构建与测试
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, keel]
     env:
       PGPORT: "15432"
@@ -353,6 +362,7 @@ jobs:
   # 只有这条链路会红。
   e2e:
     name: 端到端（compose + smoke + SDK）
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, keel]
     env:
       # 和同机演示环境（keeldemo / 18099）隔开；宿主机 8080 被占。
@@ -473,6 +483,7 @@ jobs:
   # 本机实测（2026-09-29）：pub get + analyze + 165 条测试约 20 秒，编 Web 约 46 秒。
   flutter:
     name: 客户端（Flutter：分析、测试、编 Web）
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, keel]
     timeout-minutes: 15
     env:
