@@ -24,6 +24,7 @@ import {
     verticesFromPolygon,
     wgs84ToGcj02,
     type Position,
+    neighborStores,
 } from "./geo.ts";
 
 const BEIJING: Position = [116.3914, 39.9042]; // 天安门附近，WGS-84
@@ -169,4 +170,19 @@ test("detailAddress：去掉省市区前缀，不重复地点名", () => {
     assert.equal(detailAddress({ province: "北京市", city: "北京市", district: "东城区", name: "天安门",
         address: "北京市东城区东华门街道" }), "东华门街道天安门");
     assert.equal(detailAddress({ ...base, name: "某店", address: "" }), "某店");
+});
+
+test("neighborStores：排除当前店、已删除、既没围栏也没坐标的；没围栏但有坐标的只标位置", () => {
+    const fence = { type: "Polygon" as const, coordinates: [[[114, 22.5], [114.1, 22.5], [114.1, 22.6], [114, 22.5]]] };
+    const got = neighborStores([
+        { id: 1, name: "当前店", lat: 22.55, lng: 114.05, fence },
+        { id: 2, name: "邻店", lat: 22.56, lng: 114.06, fence },
+        { id: 3, name: "已删", lat: 22.5, lng: 114, fence, deleted_at: "2026-09-30T00:00:00Z" },
+        { id: 4, name: "默认店", lat: 30.2, lng: 120.1, fence: null },
+        { id: 5, name: "什么都没有", lat: null, lng: null, fence: null },
+    ], 1);
+    assert.deepEqual(got.map((s) => s.id), [2, 4]);
+    assert.equal(got[0]?.ring.length, 3, "外环去掉闭合点后 3 个顶点");
+    assert.deepEqual(got[1]?.ring, []);
+    assert.deepEqual(got[1]?.center, { lat: 30.2, lng: 120.1 });
 });

@@ -50,6 +50,7 @@ import {
     toPosition,
     verticesFromPolygon,
     type CoordSystem,
+    type NeighborStore,
     type Position,
 } from "../api/geo.ts";
 
@@ -65,6 +66,11 @@ const props = defineProps<{
     isDefault: boolean;
     /** 当前角色改不了围栏（src/auth/permissions.ts）。只置灰保存 / 清空，照样能看。 */
     readonly?: boolean;
+    /**
+     * 同一商家的其他门店（api/geo.ts neighborStores）：画成参考层，看得到邻店的围栏与位置，
+     * 商圈怎么切、要不要留重叠一眼就清楚。参考层不接点击，照样在上面点顶点。
+     */
+    others?: NeighborStore[];
 }>();
 
 const emit = defineEmits<{ save: [fence: GeoPolygon | null] }>();
@@ -95,6 +101,10 @@ let savedLayer: L.Polygon | null = null;
 let markers: L.Marker[] = [];
 let midMarkers: L.Marker[] = [];
 let errorLayer: L.CircleMarker | null = null;
+let othersLayer: L.LayerGroup | null = null;
+/** 「显示其他门店」开关，默认开。 */
+const showOthers = ref(true);
+const othersCount = computed(() => props.others?.length ?? 0);
 let resizeObserver: ResizeObserver | null = null;
 
 // 底图瓦片（GET /geo/map）。enabled=false（部署没配 KEEL_MAP_TILES）或者请求
@@ -200,6 +210,45 @@ function drawPolygon(): void {
     }
 }
 
+// 其他门店的参考层：紫色虚线围栏 + 门店位置小点和店名。放在最底下、不接点击（interactive: false），
+// 在它上面点地图照样是给当前店加顶点。颜色刻意避开当前店的蓝（草稿）、灰（已保存）与橙（门店坐标）。
+function drawOthers(): void {
+    if (map === null) return;
+    othersLayer?.remove();
+    othersLayer = null;
+    if (!showOthers.value || othersCount.value === 0) return;
+    const group = L.layerGroup();
+    for (const s of props.others ?? []) {
+        if (s.ring.length >= 3) {
+            L.polygon(s.ring.map(toLatLng), {
+                color: "#7b4fd6",
+                weight: 2.5,
+                opacity: 0.9,
+                dashArray: "8 6",
+                fillColor: "#8e6cc9",
+                fillOpacity: 0.12,
+                interactive: false,
+            }).addTo(group);
+        }
+        if (s.center !== null) {
+            L.circleMarker(s.center, { radius: 5, color: "#fff", weight: 2, fillColor: "#7b4fd6", fillOpacity: 1, interactive: false })
+                .bindTooltip(s.name, { permanent: true, direction: "top", offset: [0, -4], className: "fence-other-label" })
+                .addTo(group);
+        }
+    }
+    othersLayer = group.addTo(map);
+    syncOtherLabels();
+    // 参考层压在最底：之后画的当前店图层都在它上面。
+    othersLayer.eachLayer((l) => (l as L.Path).bringToBack?.());
+}
+
+// 店名只在放大到街区级别（≥ OTHER_LABEL_MIN_ZOOM）才显示：缩得很小时几家店的名字会叠成一团，只留紫点。
+const OTHER_LABEL_MIN_ZOOM = 12;
+function syncOtherLabels(): void {
+    if (map === null) return;
+    map.getContainer().classList.toggle("fence-other-labels-hidden", map.getZoom() < OTHER_LABEL_MIN_ZOOM);
+}
+
 function drawSaved(): void {
     if (map === null) return;
     savedLayer?.remove();
@@ -287,6 +336,8 @@ function createLeafletMap(config: GeoMapConfig): void {
         localError.value = "";
         redraw();
     });
+    map.on("zoomend", syncOtherLabels);
+    drawOthers();
     drawSaved();
     redraw();
     drawError();
@@ -327,6 +378,7 @@ watch(
     },
 );
 watch(() => props.errorPoint, drawError);
+watch([() => props.others, showOthers], drawOthers);
 
 function undo(): void {
     const h = history.value.pop();
@@ -446,8 +498,11 @@ const draftGeoJson = computed(() => {
                 <template v-else-if="vertices.length >= 3"><b class="warn">绘制中</b>：点第一个点或按「闭合」完成</template>
                 <template v-else-if="mapStatus === 'enabled'">绘制中：在地图上点顶点</template>
                 <template v-else>绘制中：用下面「粘贴 GeoJSON / 坐标」提供顶点</template>
-                <template v-if="mapStatus === 'enabled'">（灰色虚线是已保存的围栏）</template>
+                <template v-if="mapStatus === 'enabled'">（灰色虚线是已保存的围栏<template v-if="othersCount > 0 && showOthers">，紫色是其他门店</template>）</template>
             </span>
+            <el-checkbox v-if="mapStatus === 'enabled' && othersCount > 0" v-model="showOthers" size="small" id="fence-show-others">
+                显示其他门店（{{ othersCount }}）
+            </el-checkbox>
             <span class="grow" />
             <el-button v-if="!closed" size="small" type="primary" plain :disabled="vertices.length < 3" @click="closeRingDraft">闭合</el-button>
             <el-button size="small" :disabled="selected === null || readonly" @click="removeSelected">删除选中顶点</el-button>
@@ -562,5 +617,18 @@ code {
     border: 1px solid #fff;
     border-radius: 50%;
     cursor: copy;
+}
+
+/* 其他门店的店名标签：小、半透明，不抢当前店的顶点。 */
+:global(.fence-other-labels-hidden .fence-other-label) {
+    display: none;
+}
+:global(.fence-other-label) {
+    padding: 1px 6px;
+    font-size: 11px;
+    color: #5b3fa0;
+    background: rgba(255, 255, 255, 0.85);
+    border: 1px solid #d9ccf0;
+    box-shadow: none;
 }
 </style>

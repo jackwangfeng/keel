@@ -91,6 +91,41 @@ export function verticesFromPolygon(polygon: GeoPolygon | null | undefined): Pos
     return openRing(outer.map((p): Position => [p[0] ?? NaN, p[1] ?? NaN]));
 }
 
+/** 画围栏时参考用的「别的门店」：围栏外环（可能没有）与门店坐标（可能没有）。 */
+export interface NeighborStore {
+    id: number;
+    name: string;
+    ring: Position[];
+    center: { lat: number; lng: number } | null;
+}
+
+/**
+ * 从门店列表里挑出画围栏时要当参考的别家门店（2026-09-30）：排除正在编辑的这家与已删除的；
+ * 既没围栏也没坐标的店画不出任何东西，也排除。默认门店（全国兜底、通常没围栏）有坐标就照样标出来。
+ * 入参只要这几个字段，不依赖契约类型，好让 node --test 直接测。
+ */
+export function neighborStores(
+    stores: readonly {
+        id: number;
+        name: string;
+        lat?: number | null;
+        lng?: number | null;
+        fence?: GeoPolygon | null;
+        deleted_at?: string | null;
+    }[],
+    currentId: number,
+): NeighborStore[] {
+    const out: NeighborStore[] = [];
+    for (const s of stores) {
+        if (s.id === currentId || (s.deleted_at !== null && s.deleted_at !== undefined)) continue;
+        const ring = verticesFromPolygon(s.fence ?? null);
+        const center = typeof s.lat === "number" && typeof s.lng === "number" ? { lat: s.lat, lng: s.lng } : null;
+        if (ring.length < 3 && center === null) continue;
+        out.push({ id: s.id, name: s.name, ring: ring.length >= 3 ? ring : [], center });
+    }
+    return out;
+}
+
 /** 经度 ∈ [-180,180]、纬度 ∈ [-90,90]。越界时返回一句人话，否则 null。 */
 export function rangeProblem(points: readonly Position[]): string | null {
     for (let i = 0; i < points.length; i += 1) {

@@ -23,13 +23,13 @@ import {
     type GeoPolygon,
     type StoreUpdateRequest,
 } from "../api/client.ts";
-import { detailAddress } from "../api/geo.ts";
+import { detailAddress, neighborStores, type NeighborStore } from "../api/geo.ts";
 import { fenceErrorPoint } from "../api/errors.ts";
 import { deleteLocalDelivery, getLocalDelivery, putLocalDelivery, type AdminLocalDelivery } from "../api/localDelivery.ts";
 import { tiersSummary, type RuleConfig } from "../api/localDeliveryRules.ts";
 import { listLocalDeliveryTemplates, type LocalDeliveryTemplate } from "../api/localDeliveryTemplates.ts";
 import { centsToYuanInput } from "../api/money.ts";
-import { isIncomplete, listAllRegions } from "../api/stores.ts";
+import { isIncomplete, listAllRegions, listAllStores } from "../api/stores.ts";
 import { listAllStoreInventories } from "../api/storeInventory.ts";
 import { datetime } from "../ui/format.ts";
 import { notifyError, notifyOk } from "../ui/notify.ts";
@@ -71,8 +71,18 @@ async function load(): Promise<void> {
     }
 }
 
+// 画围栏时参考的其他门店（FenceEditor 的 others）。取不到就不画，不影响编辑本身。
+const otherStores = ref<NeighborStore[]>([]);
+function loadOtherStores(): void {
+    listAllStores().then(
+        ({ stores }) => (otherStores.value = neighborStores(stores, id.value)),
+        () => (otherStores.value = []),
+    );
+}
+
 onMounted(() => {
     void load();
+    loadOtherStores();
     listAllRegions().then(
         (rs) => (regions.value = rs),
         (e: unknown) => notifyError(e),
@@ -436,6 +446,7 @@ async function saveLocalDelivery(): Promise<void> {
                         :busy="fenceBusy"
                         :is-default="store.is_default"
                         :readonly="!can.manageStore(store)"
+                        :others="otherStores"
                         @save="saveFence"
                     />
                 </el-tab-pane>
