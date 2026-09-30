@@ -1,0 +1,51 @@
+# 把 main 与版本标签同步推到 Gitee 镜像（2026-09-30）。
+#
+# 为什么要镜像：国内的搜索引擎（尤其百度）对 Gitee 收录好、对 GitHub 收录弱，国内用户 clone GitHub 也常常慢或断。
+# 镜像只读：所有开发、PR、Issue 仍在 GitHub；Gitee 上的改动会在下一次同步时被覆盖。
+#
+# 需要在 GitHub 仓库里配两样（Settings → Secrets and variables → Actions），缺一样这个任务就直接跳过、不报错：
+#   · 变量 GITEE_REPO：Gitee 上的仓库路径，如 `yourname/keel`
+#   · 密钥 GITEE_TOKEN：Gitee 私人令牌（Gitee → 设置 → 私人令牌，勾 projects 权限），只用来推这一个仓库
+# 令牌放在 GitHub 的加密密钥里，不进仓库、不出现在日志（下面用 http.extraheader 传，而不是拼进 URL）。
+name: 同步到 Gitee 镜像
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+concurrency:
+  group: mirror-gitee
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    runs-on: [self-hosted, keel]
+    timeout-minutes: 15
+    if: vars.GITEE_REPO != ''
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # 要完整历史与全部标签，浅克隆推不上去
+
+      - name: 推送 main 与标签
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          GITEE_REPO: ${{ vars.GITEE_REPO }}
+        run: |
+          if [ -z "$GITEE_TOKEN" ]; then
+            echo "没有配 GITEE_TOKEN，跳过同步"; exit 0
+          fi
+          auth=$(printf 'oauth2:%s' "$GITEE_TOKEN" | base64 -w0)
+          git fetch -q origin main
+          git remote add gitee "https://gitee.com/${GITEE_REPO}.git"
+          push() { git -c http.extraheader="Authorization: Basic ${auth}" push --force gitee "$@"; }
+          # 只推 main 与 v* 标签，不推别的分支；--force：镜像以 GitHub 为准。
+          # 打标签触发时 HEAD 是标签那个提交，不一定是 main 的最新，所以那时只推标签、不动 main。
+          if [ "${GITHUB_REF_TYPE}" = tag ]; then
+            push 'refs/tags/v*:refs/tags/v*'
+          else
+            push "origin/main:refs/heads/main" 2>/dev/null || push HEAD:refs/heads/main
+            push 'refs/tags/v*:refs/tags/v*'
+          fi
