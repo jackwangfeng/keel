@@ -679,7 +679,7 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	// AI 员工的提案（M9 任务 4）：AI 员工经 MCP 提，人在后台批准 / 驳回。
 	proposals := service.NewAgentProposalService(repo, inv, service.NewAdminStoreService(repo, inv), nil)
 	// M10 的四种提案批准后以 AI 员工身份调这几个 service（与后台接口同一批构造，无状态）。
-	proposals.SetExecutors(service.NewAdminPromotionService(repo, inv), service.NewAdminCouponService(repo),
+	proposals.SetExecutors(service.NewAdminPromotionService(repo, inv).WithQuotaSync(ro.quotaSync), service.NewAdminCouponService(repo),
 		service.NewAdminCatalogService(repo, store, inv), refunds)
 	aph := handler.NewAgentProposalHandler(proposals)
 	v1.GET("/admin/agent-proposals", staffAuth, aph.List)
@@ -741,7 +741,7 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 
 	// 营销活动（契约 /admin/promotions 那一段）。权限与券管理同一行（全店范围），
 	// 判据在业务层（service/admin_promotion.go 的文件头）。
-	pra := handler.NewAdminPromotionHandler(service.NewAdminPromotionService(repo, inv))
+	pra := handler.NewAdminPromotionHandler(service.NewAdminPromotionService(repo, inv).WithQuotaSync(ro.quotaSync))
 	v1.GET("/admin/promotions", staffAuth, pra.List)
 	v1.POST("/admin/promotions", staffAuth, pra.Create)
 	v1.GET("/admin/promotions/:promotion_id", staffAuth, pra.Detail)
@@ -919,13 +919,25 @@ func Run(ctx context.Context, listen func(addr string, h http.Handler) error) er
 	}
 	// 跨 0 通知的接收方就是有货标记的全量刷新服务（它的 Run 在下面的后台任务里起）；单体把接收与回查注册进协调器。
 	stockFlags := service.NewStockFlagService(repository.New(pool), inv, stockFlagIntervalFromEnv(), nil)
+	// 活动配额同步（二阶段消息，app/quota_sync.go）：core 发、库存收；回查在 core，单体把接收也注册进来。
+	quotaSync, err := newQuotaSync(cfg.Split, pool)
+	if err != nil {
+		return err
+	}
+	quotaSrc := service.NewPromotionQuotaSource(repository.New(pool))
+	var quotaLocal *inventory.Local
+	if cfg.Split.Role != RoleCore {
+		quotaLocal = inventory.NewLocal(repository.NewInventoryStore(invPool)).WithStockNotifier(stockNotifier)
+	}
 
-	tc, err := dtm.StartEx(cfg.DTMDSN, 0, withBranches(Branches(orders), StockMsgBranches(stockNotifier, stockFlags)), invBranches)
+	tc, err := dtm.StartEx(cfg.DTMDSN, 0, withBranches(withBranches(Branches(orders), StockMsgBranches(stockNotifier, stockFlags)),
+		QuotaSyncBranches(quotaSync, quotaLocal, quotaSrc)), invBranches)
 	if err != nil {
 		return fmt.Errorf("启动事务协调器失败（%s）: %w", EnvDTMDSN, err)
 	}
 	orders.AttachCoordinator(tc)
 	attachStockNotifier(stockNotifier, tc)
+	quotaSync.Attach(tc)
 	// 干净收尾：listen 返回（不论正常还是出错）之后把协调器关掉，
 	// 它才有机会把 tokio 运行时停下来、把注册分支的 cgo.Handle 还回去。
 	// Close 是幂等的，所以这条 defer 与将来可能加的显式收尾不会撞车。
@@ -1073,11 +1085,11 @@ func Run(ctx context.Context, listen func(addr string, h http.Handler) error) er
 		return err
 	}
 
-	public := Router(pool, res, signer, orders, cfg.Payment, searchEmbedder, WithInventory(inv))
+	public := Router(pool, res, signer, orders, cfg.Payment, searchEmbedder, WithInventory(inv), WithQuotaSync(quotaSync))
 	if cfg.Split.InternalAddr == "" {
 		return listen(cfg.Addr, public)
 	}
-	return serveBoth(listen, cfg.Addr, public, cfg.Split.InternalAddr, internalRouter(cfg.Split, invPool, stockNotifier, stockFlags))
+	return serveBoth(listen, cfg.Addr, public, cfg.Split.InternalAddr, internalRouter(cfg.Split, invPool, internalExtras{notifier: stockNotifier, flags: stockFlags, quotaSrc: quotaSrc}))
 }
 
 // bootstrapStaff 在库里一个在岗平台级管理员都没有时，建一个并把那串一次性

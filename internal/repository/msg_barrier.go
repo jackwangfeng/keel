@@ -50,6 +50,20 @@ func insertMsgBarrier(ctx context.Context, tx pgx.Tx, gid, reason string) (bool,
 	return n > 0, err
 }
 
+// MsgTx 是 core 事务上的二阶段消息那一面（活动配额同步，service/promotion_quota_msg.go）。
+type MsgTx interface {
+	// MarkMsgPrepared 在本事务里占下这条消息的回查屏障；假表示回查已经抢先判了「没提交」。
+	MarkMsgPrepared(ctx context.Context, gid string) (bool, error)
+}
+
+// MarkMsgPrepared 见 MsgTx。
+func (t tenantTx) MarkMsgPrepared(ctx context.Context, gid string) (bool, error) {
+	if t.raw == nil {
+		return false, errors.New("这个事务没有底层 tx，登记不了消息屏障")
+	}
+	return insertMsgBarrier(ctx, t.raw, gid, "msg")
+}
+
 // MarkMsgPrepared 见 InventoryStoreTx。
 func (t invTx) MarkMsgPrepared(ctx context.Context, gid string) (bool, error) {
 	return insertMsgBarrier(ctx, t.tx, gid, "msg")

@@ -39,10 +39,15 @@ const (
 	EnvInventoryURL           = rpc.EnvInventoryURL
 )
 
-// EnvCoreURL 是库存服务找 core 内网端口的地址（如 http://app:8091），只在 KEEL_ROLE=inventory 时用：
-// 可售数跨过 0 时，库存进程自己的协调器把二阶段消息投递到 <它>/internal/v1/saga/stock_changed
-// （inventory 包 stock_msg.go、service/stock_flags.go）。配了它就必须同时配 KEEL_DTM_DSN（库存进程的
-// 协调器存储）。不配：库存服务不发通知，有货排序标记只靠 core 的低频全量刷新（KEEL_STOCK_FLAG_INTERVAL）。
+// EnvCoreURL 是库存服务找 core 内网端口的地址（如 http://app:8091），只在 KEEL_ROLE=inventory 时用，两件事：
+//
+//   - 可售数跨过 0 时，库存进程自己的协调器把二阶段消息投递到 <它>/internal/v1/saga/stock_changed
+//     （inventory 包 stock_msg.go、service/stock_flags.go）。所以配了它就必须同时配 KEEL_DTM_DSN（库存进程的
+//     协调器存储）；
+//   - 活动配额同步消息（core 发、库存收）的接收分支经它回源读 core 的配额定义（inventory 包 activity_msg.go）。
+//
+// 不配：库存服务不发跨 0 通知（有货排序只靠 core 的低频全量刷新），配额同步消息读不到定义、一直重试
+// （活动上线那一刻 core 仍会直接同步配额，上线的活动不受影响）。
 //
 // 它让「inventory 不回调 core」那条边界（拆分方案「服务边界」）多了一个例外，但只是一个方向很窄的例外：
 // 库存服务从不**等** core —— 投递是协调器异步做的、带重试，core 不在时库存照常扣减，通知晚到而已。
@@ -205,28 +210,50 @@ func inventoryPool(ctx context.Context, s SplitConfig, main *pgxpool.Pool) (*pgx
 // core 不挂 —— 它是库存服务的调用方，挂上就成了第二个库存服务入口，而且读写的是它自己
 // 那个库里的库存表。SAGA 库存分支（dtm.MountBranches 到 routes.Saga）在阶段 1b 挂。
 //
-// notifier 是本进程的跨 0 通知器（inventory / all 上的 Local 共用它；core 上是 nil）；flags 不为 nil 时
-// （core）把跨 0 通知的接收分支挂到 routes.Saga 上 —— 拆分形态下库存进程的协调器经它投递。
-func internalRouter(s SplitConfig, inv *pgxpool.Pool, notifier *inventory.StockNotifier,
-	flags *service.StockFlagService) *gin.Engine {
+// x 是两条二阶段消息在内网上的那几端，见 internalExtras。
+func internalRouter(s SplitConfig, inv *pgxpool.Pool, x internalExtras) *gin.Engine {
 	r, routes := rpc.NewRouter(rpc.ServerConfig{
 		Secret:          s.InternalSecret,
 		PreviousSecrets: s.previousSecrets(),
 		Ready:           inv.Ping,
 	})
-	if s.Role == RoleCore && flags != nil {
-		dtm.MountBranches(routes.Saga, map[string]dtm.BranchFuncEx{
-			inventory.BranchStockChanged: dtm.Ex(flags.StockMsgBranch()),
-		})
+	if s.Role == RoleCore {
+		// 拆分形态下库存进程发来的两样：跨 0 通知的投递（分支令牌准入），配额同步回源读定义（验签 + 租户头）。
+		if x.flags != nil {
+			dtm.MountBranches(routes.Saga, map[string]dtm.BranchFuncEx{
+				inventory.BranchStockChanged: dtm.Ex(x.flags.StockMsgBranch()),
+			})
+		}
+		if x.quotaSrc != nil {
+			inventory.MountQuotaSource(routes.Tenant, x.quotaSrc)
+		}
 	}
 	if s.Role == RoleInventory || s.Role == RoleAll {
-		local := inventory.NewLocal(repository.NewInventoryStore(inv)).WithStockNotifier(notifier)
+		local := inventory.NewLocal(repository.NewInventoryStore(inv)).WithStockNotifier(x.notifier)
 		inventory.Mount(routes.Tenant, local)
 		// 库存的 SAGA 分支（阶段 1b）：core 的协调器经 http://…/internal/v1/saga/<名字> 调它们，
 		// 分支令牌准入（rpc.Routes.Saga）。屏障记在库存池指向的库里。
 		inventory.MountSaga(routes.Saga, local)
+		if s.Role == RoleInventory {
+			// 配额同步的接收分支：core 的协调器经 http://…/internal/v1/saga/inventory_activity_sync 投递
+			// （单体走进程内 local://，不挂）。回源读定义经 KEEL_CORE_URL；没配时分支一律 Unknown 并喊出来。
+			dtm.MountBranches(routes.Saga, map[string]dtm.BranchFuncEx{
+				inventory.BranchActivitySync: dtm.Ex(local.ActivitySyncBranch(x.quotaSrc)),
+			})
+		}
 	}
 	return r
+}
+
+// internalExtras 是内网路由上除库存接口之外的那几样 —— 两条二阶段消息的端点（app/stock_flags.go、quota_sync.go）：
+//
+//	notifier  inventory / all：本进程 Local 共用的跨 0 通知器（nil = 不发）
+//	flags     core：跨 0 通知的接收方
+//	quotaSrc  core：挂出去给库存服务回源读活动配额定义；inventory：配额同步分支回源用（经 KEEL_CORE_URL）
+type internalExtras struct {
+	notifier *inventory.StockNotifier
+	flags    *service.StockFlagService
+	quotaSrc inventory.QuotaSource
 }
 
 // inventoryService 按角色选库存服务的实现：core 走 HTTP（KEEL_INVENTORY_URL，validate 已经
@@ -249,6 +276,7 @@ type RouterOption func(*routerOptions)
 
 type routerOptions struct {
 	inventory inventory.Service
+	quotaSync *service.QuotaSync
 }
 
 // WithInventory 指定公网路由用的库存服务实现。不给时是建在业务池上的进程内实现。
@@ -276,7 +304,13 @@ func runInventory(ctx context.Context, s SplitConfig, listen func(addr string, h
 	// 跨 0 通知（stock_msg.go）：配了 KEEL_CORE_URL 才起自己的协调器。它只注册一个分支 —— 回查，
 	// 回答「本地事务提交了没有」，所以必须在本进程；投递目标是 core 的内网分支。
 	var notifier *inventory.StockNotifier
+	var quotaSrc inventory.QuotaSource
 	if s.CoreURL != "" {
+		c, err := rpc.NewClient(s.CoreURL, s.InternalSecret, 0)
+		if err != nil {
+			return fmt.Errorf("%s: %w", EnvCoreURL, err)
+		}
+		quotaSrc = inventory.NewRemoteQuotaSource(c)
 		res, err := dtm.NewBranchResolver(s.CoreURL, s.InternalSecret)
 		if err != nil {
 			return fmt.Errorf("%s: %w", EnvCoreURL, err)
@@ -290,12 +324,13 @@ func runInventory(ctx context.Context, s SplitConfig, listen func(addr string, h
 		notifier.Attach(tc)
 	} else {
 		slog.WarnContext(ctx, "没有配 "+EnvCoreURL+"：可售数跨 0 时不通知 core，商品列表的有货排序只靠 core 的全量刷新（"+
-			EnvStockFlagInterval+"，默认 1 小时）")
+			EnvStockFlagInterval+"，默认 1 小时）；活动配额的同步消息读不到 core 的定义、会一直重试，"+
+			"配额只在活动上线那一刻由 core 直接同步")
 	}
 
 	slog.InfoContext(ctx, "以 "+EnvRole+"=inventory 启动：只监听内网服务，没有公网接口与后台任务",
 		"internal_addr", s.InternalAddr, "version", buildinfo.String(), "stock_notify", notifier != nil)
-	return listen(s.InternalAddr, internalRouter(s, inv, notifier, nil))
+	return listen(s.InternalAddr, internalRouter(s, inv, internalExtras{notifier: notifier, quotaSrc: quotaSrc}))
 }
 
 // serveBoth 同时监听公网与内网两个端口，任何一个返回就返回。

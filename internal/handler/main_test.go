@@ -51,6 +51,10 @@ var (
 	// testInvLocal 是建在测试池上的进程内库存服务，它的两个 SAGA 分支注册在 testTC 上（单体形态）。
 	testInvLocal *inventory.Local
 
+	// testQuotaSync 是包级路由上活动配额同步的发送方（二阶段消息，service/promotion_quota_msg.go）：
+	// 回查与接收分支都注册在 testTC 上，与单体的 app.Run 同一个装法 —— 于是既有的活动测试全部走消息那条路。
+	testQuotaSync *service.QuotaSync
+
 	// testSigner 是路由里那一个 —— **同一个实例**，不是一份长得一样的复制品。
 	// 测试要用它签出「过期的」「别家店的」「类型不对的」令牌，而那些令牌必须
 	// 真的能被服务端验签，否则测试验的就只是「随便一串东西会被拒」，
@@ -135,6 +139,12 @@ func setup(ctx context.Context) error {
 	branches["test_always_fail"] = func(string, string, string) int { return dtm.Failure }
 	branches["test_always_fail_undo"] = func(string, string, string) int { return dtm.Success }
 
+	// 活动配额同步：回查 + 接收（库存在进程内，回源是进程内实现）。
+	testQuotaSync = service.NewQuotaSync(repository.New(pool), dtm.BranchResolver{})
+	for name, fn := range app.QuotaSyncBranches(testQuotaSync, invLocal, service.NewPromotionQuotaSource(repository.New(pool))) {
+		branches[name] = fn
+	}
+
 	// 库存的两个分支（带载荷）与单体一样注册在进程内（app.InventoryBranches）。
 	tc, err := dtm.StartEx("sqlite:"+filepath.Join(dtmDir, "dtm.db"), 0, branches, app.InventoryBranches(invLocal))
 	if err != nil {
@@ -142,6 +152,7 @@ func setup(ctx context.Context) error {
 	}
 	testTC = tc
 	testOrders.AttachCoordinator(tc)
+	testQuotaSync.Attach(tc)
 
 	// 刻意不配默认商家：跨租户测试要走 Host 解析那条真实路径。
 	gin.SetMode(gin.TestMode)
@@ -187,7 +198,7 @@ func setup(ctx context.Context) error {
 
 	testEngine = app.Router(pool,
 		tenant.NewResolver(pool, tenant.Config{BaseDomain: baseDomain}), testSigner, testOrders,
-		service.PaymentConfig{Sandbox: true}, conceptEmbedder{})
+		service.PaymentConfig{Sandbox: true}, conceptEmbedder{}, app.WithQuotaSync(testQuotaSync))
 	return nil
 }
 

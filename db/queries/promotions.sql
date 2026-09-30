@@ -230,7 +230,7 @@ VALUES (sqlc.arg(promotion_id), sqlc.arg(scope_type), sqlc.narg(target_id), sqlc
 -- name: ListPromotionSkusAdmin :many
 -- 后台看活动商品：连同标题与 SKU 编码（展示用）。配额与已售由 service 向库存服务批量取。
 SELECT ps.promotion_id, ps.sku_id, ps.promo_price_cents, ps.discount_rate,
-       ps.per_user_limit, s.sku_code, p.title
+       ps.per_user_limit, ps.quota_qty, s.sku_code, p.title
   FROM promotion_skus ps
   JOIN skus s ON s.id = ps.sku_id
   JOIN products p ON p.id = s.product_id
@@ -238,21 +238,32 @@ SELECT ps.promotion_id, ps.sku_id, ps.promo_price_cents, ps.discount_rate,
  ORDER BY ps.promotion_id, ps.sku_id;
 
 -- name: UpsertPromotionSku :exec
--- 整组替换活动商品时逐条 upsert：价格配置与每人限购。
--- stock_qty / sold_qty 00075 起停用、不再写（新行取默认 0，老行保持迁移那一刻的值）：
--- 配额在库存服务的 activity_stocks，由 service 在写这里**之前**整组设过（admin_promotion.go）。
+-- 整组替换活动商品时逐条 upsert：价格配置、每人限购与配额定义（quota_qty，00180）。
+-- 库存服务里生效的配额由二阶段消息按 quota_qty 同步（admin_promotion.go、promotion_quota_msg.go）。
+-- stock_qty / sold_qty 00075 起停用、不再写（新行取默认 0，老行保持迁移那一刻的值）。
 INSERT INTO promotion_skus (promotion_id, sku_id, promo_price_cents, discount_rate,
-                            per_user_limit)
+                            per_user_limit, quota_qty)
 VALUES (sqlc.arg(promotion_id), sqlc.arg(sku_id), sqlc.arg(promo_price_cents),
-        sqlc.arg(discount_rate), sqlc.arg(per_user_limit))
+        sqlc.arg(discount_rate), sqlc.arg(per_user_limit), sqlc.arg(quota_qty))
     ON CONFLICT ON CONSTRAINT uk_promotion_skus
     DO UPDATE SET promo_price_cents = EXCLUDED.promo_price_cents,
                   discount_rate = EXCLUDED.discount_rate,
-                  per_user_limit = EXCLUDED.per_user_limit;
+                  per_user_limit = EXCLUDED.per_user_limit,
+                  quota_qty = EXCLUDED.quota_qty;
+
+-- name: PromotionQuotaDefinition :many
+-- 一场活动当前的配额定义（二阶段消息的接收方回源读的就是它）。quota_qty 为 NULL 的行写于 00180 之前。
+SELECT ps.sku_id, ps.quota_qty
+  FROM promotion_skus ps
+ WHERE ps.promotion_id = sqlc.arg(promotion_id)
+ ORDER BY ps.sku_id;
+
+-- name: PromotionExists :one
+SELECT EXISTS (SELECT 1 FROM promotions p WHERE p.id = sqlc.arg(promotion_id));
 
 -- name: DeletePromotionSkusExcept :exec
--- 删掉不在新名单里的 SKU。「卖出过的不能移除」这一道在库存服务（它看得见已售，core 看不见）：
--- service 先调库存服务整组设配额，被拒就不走到这里（admin_promotion.go 的 Update）。
+-- 删掉不在新名单里的 SKU。「卖出过的不能移除」这一道看的是库存服务的已售（core 看不见）：
+-- service 在写之前按它预检，违反就不走到这里（admin_promotion.go 的 Update）；投递时才发现的由库存服务钳住。
 DELETE FROM promotion_skus
  WHERE promotion_id = sqlc.arg(promotion_id)
    AND sku_id <> ALL(sqlc.arg(keep_sku_ids)::bigint[]);

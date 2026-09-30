@@ -819,6 +819,8 @@ type PromotionSku struct {
 	StockQty int32
 	// 已停用（00075）：已售搬到 activity_stocks.sold，代码不再读写；下一版删列。
 	SoldQty int32
+	// 运营配置的活动配额（定义，00180）；库存服务的 activity_stocks.quota 由二阶段消息按它同步。NULL = 写于 00180 之前，同步时沿用库存服务现值。
+	QuotaQty *int32
 }
 
 type PromotionTier struct {

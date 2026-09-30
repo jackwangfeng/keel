@@ -326,8 +326,8 @@ type DeletePromotionSkusExceptParams struct {
 	KeepSkuIds  []int64
 }
 
-// 删掉不在新名单里的 SKU。「卖出过的不能移除」这一道在库存服务（它看得见已售，core 看不见）：
-// service 先调库存服务整组设配额，被拒就不走到这里（admin_promotion.go 的 Update）。
+// 删掉不在新名单里的 SKU。「卖出过的不能移除」这一道看的是库存服务的已售（core 看不见）：
+// service 在写之前按它预检，违反就不走到这里（admin_promotion.go 的 Update）；投递时才发现的由库存服务钳住。
 func (q *Queries) DeletePromotionSkusExcept(ctx context.Context, arg DeletePromotionSkusExceptParams) error {
 	_, err := q.db.Exec(ctx, deletePromotionSkusExcept, arg.PromotionID, arg.KeepSkuIds)
 	return err
@@ -709,7 +709,7 @@ func (q *Queries) ListPromotionScopes(ctx context.Context, promotionIds []int64)
 
 const listPromotionSkusAdmin = `-- name: ListPromotionSkusAdmin :many
 SELECT ps.promotion_id, ps.sku_id, ps.promo_price_cents, ps.discount_rate,
-       ps.per_user_limit, s.sku_code, p.title
+       ps.per_user_limit, ps.quota_qty, s.sku_code, p.title
   FROM promotion_skus ps
   JOIN skus s ON s.id = ps.sku_id
   JOIN products p ON p.id = s.product_id
@@ -723,6 +723,7 @@ type ListPromotionSkusAdminRow struct {
 	PromoPriceCents int64
 	DiscountRate    int16
 	PerUserLimit    int32
+	QuotaQty        *int32
 	SkuCode         string
 	Title           string
 }
@@ -743,6 +744,7 @@ func (q *Queries) ListPromotionSkusAdmin(ctx context.Context, promotionIds []int
 			&i.PromoPriceCents,
 			&i.DiscountRate,
 			&i.PerUserLimit,
+			&i.QuotaQty,
 			&i.SkuCode,
 			&i.Title,
 		); err != nil {
@@ -884,6 +886,50 @@ func (q *Queries) LiveSkuIDs(ctx context.Context, ids []int64) ([]int64, error) 
 	return items, nil
 }
 
+const promotionExists = `-- name: PromotionExists :one
+SELECT EXISTS (SELECT 1 FROM promotions p WHERE p.id = $1)
+`
+
+func (q *Queries) PromotionExists(ctx context.Context, promotionID int64) (bool, error) {
+	row := q.db.QueryRow(ctx, promotionExists, promotionID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
+const promotionQuotaDefinition = `-- name: PromotionQuotaDefinition :many
+SELECT ps.sku_id, ps.quota_qty
+  FROM promotion_skus ps
+ WHERE ps.promotion_id = $1
+ ORDER BY ps.sku_id
+`
+
+type PromotionQuotaDefinitionRow struct {
+	SkuID    int64
+	QuotaQty *int32
+}
+
+// 一场活动当前的配额定义（二阶段消息的接收方回源读的就是它）。quota_qty 为 NULL 的行写于 00180 之前。
+func (q *Queries) PromotionQuotaDefinition(ctx context.Context, promotionID int64) ([]PromotionQuotaDefinitionRow, error) {
+	rows, err := q.db.Query(ctx, promotionQuotaDefinition, promotionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PromotionQuotaDefinitionRow
+	for rows.Next() {
+		var i PromotionQuotaDefinitionRow
+		if err := rows.Scan(&i.SkuID, &i.QuotaQty); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const promotionSkuPerUserLimit = `-- name: PromotionSkuPerUserLimit :one
 
 SELECT per_user_limit
@@ -942,13 +988,14 @@ func (q *Queries) ReleasePromotionPurchase(ctx context.Context, arg ReleasePromo
 
 const upsertPromotionSku = `-- name: UpsertPromotionSku :exec
 INSERT INTO promotion_skus (promotion_id, sku_id, promo_price_cents, discount_rate,
-                            per_user_limit)
+                            per_user_limit, quota_qty)
 VALUES ($1, $2, $3,
-        $4, $5)
+        $4, $5, $6)
     ON CONFLICT ON CONSTRAINT uk_promotion_skus
     DO UPDATE SET promo_price_cents = EXCLUDED.promo_price_cents,
                   discount_rate = EXCLUDED.discount_rate,
-                  per_user_limit = EXCLUDED.per_user_limit
+                  per_user_limit = EXCLUDED.per_user_limit,
+                  quota_qty = EXCLUDED.quota_qty
 `
 
 type UpsertPromotionSkuParams struct {
@@ -957,11 +1004,12 @@ type UpsertPromotionSkuParams struct {
 	PromoPriceCents int64
 	DiscountRate    int16
 	PerUserLimit    int32
+	QuotaQty        *int32
 }
 
-// 整组替换活动商品时逐条 upsert：价格配置与每人限购。
-// stock_qty / sold_qty 00075 起停用、不再写（新行取默认 0，老行保持迁移那一刻的值）：
-// 配额在库存服务的 activity_stocks，由 service 在写这里**之前**整组设过（admin_promotion.go）。
+// 整组替换活动商品时逐条 upsert：价格配置、每人限购与配额定义（quota_qty，00180）。
+// 库存服务里生效的配额由二阶段消息按 quota_qty 同步（admin_promotion.go、promotion_quota_msg.go）。
+// stock_qty / sold_qty 00075 起停用、不再写（新行取默认 0，老行保持迁移那一刻的值）。
 func (q *Queries) UpsertPromotionSku(ctx context.Context, arg UpsertPromotionSkuParams) error {
 	_, err := q.db.Exec(ctx, upsertPromotionSku,
 		arg.PromotionID,
@@ -969,6 +1017,7 @@ func (q *Queries) UpsertPromotionSku(ctx context.Context, arg UpsertPromotionSku
 		arg.PromoPriceCents,
 		arg.DiscountRate,
 		arg.PerUserLimit,
+		arg.QuotaQty,
 	)
 	return err
 }
