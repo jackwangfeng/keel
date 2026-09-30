@@ -39,13 +39,12 @@ jobs:
           fi
           auth=$(printf 'oauth2:%s' "$GITEE_TOKEN" | base64 -w0)
           git fetch -q origin main
-          git remote add gitee "https://gitee.com/${GITEE_REPO}.git"
-          push() { git -c http.extraheader="Authorization: Basic ${auth}" push --force gitee "$@"; }
+          # 直接推到网址、不 `git remote add`：自托管 runner 复用工作目录，上一次加的 remote 还在，再加会报「已存在」。
+          url="https://gitee.com/${GITEE_REPO}.git"
+          push() { git -c http.extraheader="Authorization: Basic ${auth}" push --force "$url" "$@"; }
           # 只推 main 与 v* 标签，不推别的分支；--force：镜像以 GitHub 为准。
           # 打标签触发时 HEAD 是标签那个提交，不一定是 main 的最新，所以那时只推标签、不动 main。
-          if [ "${GITHUB_REF_TYPE}" = tag ]; then
-            push 'refs/tags/v*:refs/tags/v*'
-          else
-            push "origin/main:refs/heads/main" 2>/dev/null || push HEAD:refs/heads/main
-            push 'refs/tags/v*:refs/tags/v*'
+          if [ "${GITHUB_REF_TYPE}" != tag ]; then
+            push "refs/remotes/origin/main:refs/heads/main"
           fi
+          push 'refs/tags/v*:refs/tags/v*'
