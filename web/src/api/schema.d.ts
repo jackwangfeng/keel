@@ -11048,10 +11048,24 @@ export interface paths {
         /**
          * 地址簿
          * @description 默认地址排在首位，其余按更新时间倒序。已软删的地址不返回。
+         *
+         *     带 `store_id` 时每条地址多一个 `in_service_area`：这家门店送不送得到这条地址
+         *     （结算页据此自动挑一条配送范围内的地址，免得买家手选之后才在试算时撞上
+         *     `address-out-of-range`）。判据与试算 / 下单那道围栏校验是同一条，见
+         *     `Address.in_service_area`。**只是标记，不过滤、不改顺序**：围栏外的地址照样返回，
+         *     选哪条仍由客户端决定。
          */
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    /**
+                     * @description 按哪家门店标 `in_service_area`。不传则不标（响应里没有这个字段）。
+                     *     指名一家不存在、已软删或不属于当前店铺的门店返回 422，与 `GET /cart` 的
+                     *     `store_id` 同一个约定——不静默当作没传。停业的门店照样标（围栏还在），
+                     *     能不能下单由试算那一侧的 `store-unavailable` 说。
+                     */
+                    store_id?: number;
+                };
                 header?: never;
                 path?: never;
                 cookie?: never;
@@ -11065,6 +11079,15 @@ export interface paths {
                     };
                     content: {
                         "application/json": components["schemas"]["Address"][];
+                    };
+                };
+                /** @description `store_id` 指向的门店不存在或不属于当前店铺（`https://keel.dev/problems/invalid-request`） */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
                     };
                 };
                 default: components["responses"]["Problem"];
@@ -18663,6 +18686,21 @@ export interface components {
             created_at?: string;
             /** Format: date-time */
             updated_at?: string;
+            /**
+             * @description 只在 `GET /addresses` 带了 `store_id` 时给：那家门店送不送得到这条地址。
+             *
+             *     - `true`：送得到。判据与试算 / 下单的围栏校验逐字相同——默认门店（全国兜底）
+             *       与没配围栏的门店一律送得到（不论地址有没有坐标）；否则看地址坐标落不落在
+             *       门店围栏内，**边界线上算在内**。
+             *     - `false`：地址有坐标，且落在这家门店的围栏外——拿它去试算必然
+             *       422 `address-out-of-range`。
+             *     - 缺省或 `null`：判断不了——门店有围栏而这条地址没有坐标（手填的、老地址）。
+             *       试算那一侧对没坐标的地址不拦，所以它不等于「送不到」。
+             *
+             *     没带 `store_id` 时一律缺省。它是按请求算的，不是地址的属性：同一条地址
+             *     对不同门店答案不同，写接口的请求体里也不收它。
+             */
+            in_service_area?: boolean | null;
         };
         /**
          * @description 下单瞬间从 `user_addresses` 拷贝的收货信息快照，落在

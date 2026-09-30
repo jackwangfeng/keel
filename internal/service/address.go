@@ -188,14 +188,30 @@ func (in AddressInput) normalize() (repository.AddressFields, error) {
 }
 
 // List 实现 GET /addresses。
-func (s *AddressService) List(ctx context.Context) ([]repository.SavedAddress, error) {
+//
+// storeID 非 nil 时每条地址多标一个 InServiceArea（契约 Address.in_service_area）：
+// 结算页据此自动挑一条那家门店送得到的地址。门店不存在 / 已软删 / 别家店 →
+// ErrStoreNotFound（422），与 GET /cart 的 store_id 同一个约定，不静默当作没传。
+// 停业的门店不拦：围栏还在，标记照样有意义；能不能下单由试算说。
+func (s *AddressService) List(ctx context.Context, storeID *int64) ([]repository.SavedAddress, error) {
 	id, err := auth.FromContext(ctx)
 	if err != nil {
 		return nil, err
 	}
 	var out []repository.SavedAddress
 	err = s.repo.WithTenant(ctx, func(tx repository.Tx) error {
-		out, err = tx.ListAddresses(ctx, id.UserID)
+		if storeID == nil {
+			out, err = tx.ListAddresses(ctx, id.UserID)
+			return err
+		}
+		// 先问门店：ListAddressesForStore 在门店不在时是空集，与「地址簿是空的」分不开。
+		if _, _, err := tx.StoreScope(ctx, *storeID); err != nil {
+			if errors.Is(err, repository.ErrCatalogNotFound) {
+				return fmt.Errorf("%w: store_id=%d", ErrStoreNotFound, *storeID)
+			}
+			return err
+		}
+		out, err = tx.ListAddressesForStore(ctx, id.UserID, *storeID)
 		return err
 	})
 	return out, err

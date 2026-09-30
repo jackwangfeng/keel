@@ -2619,6 +2619,20 @@ type Address struct {
 	District string `json:"district"`
 	Id       int64  `json:"id"`
 
+	// InServiceArea 只在 `GET /addresses` 带了 `store_id` 时给：那家门店送不送得到这条地址。
+	//
+	// - `true`：送得到。判据与试算 / 下单的围栏校验逐字相同——默认门店（全国兜底）
+	//   与没配围栏的门店一律送得到（不论地址有没有坐标）；否则看地址坐标落不落在
+	//   门店围栏内，**边界线上算在内**。
+	// - `false`：地址有坐标，且落在这家门店的围栏外——拿它去试算必然
+	//   422 `address-out-of-range`。
+	// - 缺省或 `null`：判断不了——门店有围栏而这条地址没有坐标（手填的、老地址）。
+	//   试算那一侧对没坐标的地址不拦，所以它不等于「送不到」。
+	//
+	// 没带 `store_id` 时一律缺省。它是按请求算的，不是地址的属性：同一条地址
+	// 对不同门店答案不同，写接口的请求体里也不收它。
+	InServiceArea *bool `json:"in_service_area,omitempty"`
+
 	// IsDefault 仅在**新增**时有效（服务端同事务内先清旧默认再置新）。
 	// 后续切换默认地址请用 `PUT /addresses/{address_id}/default`。
 	IsDefault bool `json:"is_default"`
@@ -7569,6 +7583,15 @@ type InventoryUnavailable = Problem
 
 // ReportBadWindow RFC 9457 Problem Details
 type ReportBadWindow = Problem
+
+// GetAddressesParams defines parameters for GetAddresses.
+type GetAddressesParams struct {
+	// StoreId 按哪家门店标 `in_service_area`。不传则不标（响应里没有这个字段）。
+	// 指名一家不存在、已软删或不属于当前店铺的门店返回 422，与 `GET /cart` 的
+	// `store_id` 同一个约定——不静默当作没传。停业的门店照样标（围栏还在），
+	// 能不能下单由试算那一侧的 `store-unavailable` 说。
+	StoreId *int64 `form:"store_id,omitempty" json:"store_id,omitempty"`
+}
 
 // PostAddressesParams defines parameters for PostAddresses.
 type PostAddressesParams struct {

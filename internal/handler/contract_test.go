@@ -1413,8 +1413,9 @@ var routes = []route{
 		ContractPath:   "/addresses",
 		ContractMethod: "get",
 		HTTPMethod:     http.MethodGet,
-		HandlerFile:    "address.go",
-		NoQueryParams:  "地址簿一次返回全部，不分页；契约里这条接口没有 query 参数",
+		// 地址簿一次返回全部、不分页；唯一的 query 参数 store_id（标 in_service_area）
+		// 实现了，既不写 NoQueryParams 也不挂账。放在单独的文件里，理由见 address.go 文件头。
+		HandlerFile: "address_list.go",
 	},
 	{
 		ContractPath:   "/addresses",

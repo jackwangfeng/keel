@@ -67,6 +67,7 @@
 | 后台门店地址（`web/admin` 的 LocationPicker） | 本会话 | 地图上方加搜索框：输入提示 → 选中后落点并回填省市区与详细地址 |
 | 买家端首页地址 | Flutter 会话 | 定位 → `geo/reverse` 显示「送至 XX 路 XX 号」；点击 → 选已有收货地址或搜索 → 用选中的坐标重新 `stores/resolve` |
 | 买家端填收货地址 | Flutter 会话 | 「搜索地点」→ `geo/suggest`；小程序里优先 `wx.chooseLocation`（返回 GCJ-02，客户端转 WGS-84 或交给代理转） |
+| 买家端结算页收货地址 | Flutter 会话 | `GET /addresses?store_id=<当前门店>` 拿每条地址的 `in_service_area`，买家没手选时自动挑一条当前门店送得到的（2026-09-30；判据与下单的围栏校验同一条，见数据模型 §9 user_addresses） |
 
 ## 待定
 

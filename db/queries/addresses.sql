@@ -23,6 +23,34 @@ SELECT id, receiver_name, phone, province, city, district, street, detail,
    AND deleted_at IS NULL
  ORDER BY is_default DESC, updated_at DESC, id DESC;
 
+-- name: ListUserAddressesForStore :many
+-- 地址簿 + 每条地址这家门店送不送得到（GET /addresses?store_id=，2026-09-30）。
+-- 结算页拿它自动挑一条配送范围内的地址；一条查询把全部地址一次算完，不逐条问。
+--
+-- serves 的判据与 stores.sql 的 StoreServesPoint **是同一条**，改一处必须改另一处：
+-- 默认店与没有围栏的店一律 true，否则看坐标落不落在围栏内（ST_Intersects，边界线上算在内）。
+-- 两处写法唯一的差别是这里的坐标可能缺：ST_MakePoint 遇 NULL 得 NULL，ST_Intersects 也得
+-- NULL，COALESCE 成 false；「没坐标所以判断不了」由 has_point 另报，调用方据此给 null。
+-- 两处判据一致由 internal/handler/address_service_area_test.go 拿试算结果逐条对照钉住。
+--
+-- 门店不在（不存在、已软删、别家店的被 RLS 滤掉）时 CROSS JOIN 出零行，与「地址簿是空的」
+-- 同形 —— 所以调用方先用 StoreExists 问过门店，再来这里。顺序与 ListUserAddresses 逐字一致。
+SELECT ua.id, ua.receiver_name, ua.phone, ua.province, ua.city, ua.district, ua.street, ua.detail,
+       ua.region_code, ua.postal_code, ua.tag, ua.is_default, ua.lat, ua.lng,
+       ua.created_at, ua.updated_at,
+       (ua.lat IS NOT NULL AND ua.lng IS NOT NULL)::boolean AS has_point,
+       (st.is_default OR st.fence IS NULL
+        OR COALESCE(ST_Intersects(st.fence,
+                                  ST_SetSRID(ST_MakePoint(ua.lng, ua.lat), 4326)::geography),
+                    FALSE))::boolean AS serves
+  FROM user_addresses ua
+ CROSS JOIN stores st
+ WHERE ua.user_id = sqlc.arg(user_id)
+   AND ua.deleted_at IS NULL
+   AND st.id = sqlc.arg(store_id)
+   AND st.deleted_at IS NULL
+ ORDER BY ua.is_default DESC, ua.updated_at DESC, ua.id DESC;
+
 -- name: FindUserAddress :one
 -- 取一条。查不到（含属于别人、已软删）即 ErrNoRows。
 SELECT id, receiver_name, phone, province, city, district, street, detail,
