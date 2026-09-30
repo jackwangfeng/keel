@@ -384,14 +384,18 @@ func NewRemote(c *rpc.Client) *Remote { return &Remote{c: c} }
 
 var _ Service = (*Remote)(nil)
 
-// read 发一个读请求。结果未知（连不上、超时、5xx）→ ErrUnavailable，读页面据此降级；
+// read 发一个读请求。结果未知（连不上、超时、5xx）或熔断器打开 → ErrUnavailable，读页面据此降级；
 // 确定失败（4xx：签名不对、入参不合法）不是「对面暂时不在」，是配置或代码的错，原样上浮成 500。
+//
+// 走 ReadJSON（读超时 + 熔断器，app 里按 KEEL_INVENTORY_READ_TIMEOUT 等装配）而不是 PostJSON：
+// 读的调用方是公网页面，库存服务卡住时它们该很快降级，而不是每个请求陪着等满写的超时。
 func (r *Remote) read(ctx context.Context, path string, in, out any) error {
-	err := r.c.PostJSON(ctx, rpc.Prefix+path, in, out)
+	err := r.c.ReadJSON(ctx, rpc.Prefix+path, in, out)
 	if err == nil {
 		return nil
 	}
-	if rpc.IsUnknown(err) {
+	// 熔断器打开是「没发出去」，对读来说与结果未知是同一个处置：对面暂时不在，降级。
+	if rpc.IsUnknown(err) || errors.Is(err, rpc.ErrCircuitOpen) {
 		return fmt.Errorf("%w: %v", ErrUnavailable, err)
 	}
 	return fmt.Errorf("库存服务拒绝了读请求: %w", err)

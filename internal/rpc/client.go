@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -21,6 +22,22 @@ import (
 // 5 秒已经是「对面出事了」。它必须有界：调用方多半在一个公网请求里，
 // 无界等待会把公网那一侧的连接一起拖住。
 const DefaultTimeout = 5 * time.Second
+
+// DefaultReadTimeout 是 KEEL_ROLE=core 装配库存客户端时读请求的默认上限（app 里配，
+// 见 WithReadTimeout）。读的调用方是公网页面（商品列表的 in_stock、试算、购物车、检索），
+// 库存服务卡住时它们要降级而不是陪着等：5 秒的写超时放在读上，就是每个页面请求多等 5 秒。
+// 800ms 对一两条 SQL 的读仍然留了两个数量级的余量。
+const DefaultReadTimeout = 800 * time.Millisecond
+
+// 连接复用。默认 Transport 的 MaxIdleConnsPerHost 是 2：core 到库存服务只有一个 host，
+// 并发一上来，第 3 个起的请求每次都新建 TCP 连接、用完就关，TIME_WAIT 堆在 core 一侧，
+// 延迟里多一次握手。64 足够覆盖一个实例的正常并发。
+const (
+	maxIdleConnsPerHost = 64
+	dialTimeout         = 2 * time.Second // 内网建连，超过这个数就是对面不在
+	tlsHandshakeTimeout = 3 * time.Second
+	idleConnTimeout     = 90 * time.Second
+)
 
 // maxResponse 是响应体的上限，理由与 maxBody 相同。
 const maxResponse = 1 << 20
@@ -49,6 +66,10 @@ var (
 	// ErrRejected 是其余所有 4xx：确定失败，但不属于上面任何一类。
 	ErrRejected = errors.New("rpc: 请求被拒")
 	ErrUnknown  = errors.New("rpc: 结果未知")
+	// ErrCircuitOpen 是熔断器打开时的失败：请求**根本没发出去**，所以它是确定失败，
+	// 不是 ErrUnknown（IsUnknown 为 false）。只有 ReadJSON 会返回它（breaker.go）。
+	// 读的调用方把它与 ErrUnknown 一样当成「对面暂时不在」降级（inventory.Remote.read）。
+	ErrCircuitOpen = errors.New("rpc: 熔断器打开，请求未发出")
 )
 
 // Error 是一次失败调用的全部信息。
@@ -95,11 +116,38 @@ type Client struct {
 	base   *url.URL
 	secret string
 	http   *http.Client
+
+	timeout     time.Duration // PostJSON / GetJSON（写、以及没有分读写的调用）
+	readTimeout time.Duration // ReadJSON
+	brk         *breaker      // 只给 ReadJSON；nil = 不熔断
+}
+
+// Option 是 NewClient 的可选项。
+type Option func(*Client)
+
+// WithReadTimeout 给 ReadJSON 一个单独的（通常更短的）上限。d <= 0 时不改（沿用 timeout）。
+func WithReadTimeout(d time.Duration) Option {
+	return func(c *Client) {
+		if d > 0 {
+			c.readTimeout = d
+		}
+	}
+}
+
+// WithBreaker 给 ReadJSON 装熔断器：连续 failures 次结果未知就打开，cooldown 之后半开探测一次。
+// failures <= 0 或 cooldown <= 0 时不装。语义见 breaker.go。
+func WithBreaker(failures int, cooldown time.Duration) Option {
+	return func(c *Client) {
+		if failures > 0 && cooldown > 0 {
+			c.brk = newBreaker(failures, cooldown)
+		}
+	}
 }
 
 // NewClient 建客户端。baseURL 形如 "http://inventory:8090"（KEEL_INVENTORY_URL）。
-// timeout <= 0 时用 DefaultTimeout。
-func NewClient(baseURL, secret string, timeout time.Duration) (*Client, error) {
+// timeout <= 0 时用 DefaultTimeout。不给选项时 ReadJSON 与 PostJSON 同一个超时、不熔断
+// （测试与今天的行为）；KEEL_ROLE=core 的装配在 app 里按环境变量加上读超时与熔断器。
+func NewClient(baseURL, secret string, timeout time.Duration, opts ...Option) (*Client, error) {
 	if len(secret) < MinSecretLen {
 		return nil, fmt.Errorf("%s 至少要 %d 字节", EnvInternalSecret, MinSecretLen)
 	}
@@ -110,7 +158,70 @@ func NewClient(baseURL, secret string, timeout time.Duration) (*Client, error) {
 	if timeout <= 0 {
 		timeout = DefaultTimeout
 	}
-	return &Client{base: u, secret: secret, http: &http.Client{Timeout: timeout}}, nil
+	// 超时不放在 http.Client.Timeout 上，而是每次调用按读 / 写各自挂在 ctx 上（do）：
+	// 同一个客户端要给读与写两个不同的上限，而 http.Client.Timeout 只有一个。
+	c := &Client{base: u, secret: secret, http: &http.Client{Transport: newTransport()},
+		timeout: timeout, readTimeout: timeout}
+	for _, o := range opts {
+		o(c)
+	}
+	return c, nil
+}
+
+func newTransport() *http.Transport {
+	return &http.Transport{
+		// 与默认 Transport 一样认 HTTP(S)_PROXY / NO_PROXY：换 Transport 不该顺手改掉代理行为。
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   dialTimeout,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		ForceAttemptHTTP2:   true,
+		MaxIdleConns:        2 * maxIdleConnsPerHost,
+		MaxIdleConnsPerHost: maxIdleConnsPerHost,
+		IdleConnTimeout:     idleConnTimeout,
+		TLSHandshakeTimeout: tlsHandshakeTimeout,
+	}
+}
+
+// ReadJSON 是**读**请求：与 PostJSON 同一个形状（POST + JSON，库存服务的读也是 POST，
+// 见 inventory/http.go 文件头），但用读超时，并经过熔断器。
+//
+// 熔断器打开时直接返回 ErrCircuitOpen（请求没发出去）。错误分类与 PostJSON 相同：
+// 结果未知仍是 ErrUnknown，4xx 仍是各自的确定失败 —— 熔断器只多了「没发」这一种。
+func (c *Client) ReadJSON(ctx context.Context, path string, in, out any) error {
+	body, err := json.Marshal(in)
+	if err != nil {
+		return fmt.Errorf("rpc: 编码请求体失败: %w", err)
+	}
+	if c.brk == nil {
+		return c.do(ctx, c.readTimeout, http.MethodPost, path, nil, body, out)
+	}
+	if !c.brk.allow() {
+		return &Error{Method: http.MethodPost, Path: path, kind: ErrCircuitOpen}
+	}
+	err = c.do(ctx, c.readTimeout, http.MethodPost, path, nil, body, out)
+	switch {
+	case err == nil:
+		c.brk.done(outcomeSuccess)
+	case ctx.Err() != nil:
+		// 调用方自己取消 / 到了调用方的截止：不说明对面怎样。
+		c.brk.done(outcomeIgnored)
+	case IsUnknown(err):
+		c.brk.done(outcomeFailure)
+	default:
+		// 4xx：对面回答了。
+		c.brk.done(outcomeSuccess)
+	}
+	return err
+}
+
+// BreakerState 报告熔断器的状态（closed / open / half-open；没装时为空串）。只给测试与诊断。
+func (c *Client) BreakerState() string {
+	if c.brk == nil {
+		return ""
+	}
+	return c.brk.state()
 }
 
 // PostJSON 把 in 编成 JSON POST 到 path（形如 "/internal/v1/stock/deduct"），
@@ -124,15 +235,19 @@ func (c *Client) PostJSON(ctx context.Context, path string, in, out any) error {
 		// 编码失败时请求没有发出去，是确定失败 —— 所以不包成 ErrUnknown。
 		return fmt.Errorf("rpc: 编码请求体失败: %w", err)
 	}
-	return c.do(ctx, http.MethodPost, path, nil, body, out)
+	return c.do(ctx, c.timeout, http.MethodPost, path, nil, body, out)
 }
 
 // GetJSON 发 GET，query 可以为 nil。
 func (c *Client) GetJSON(ctx context.Context, path string, query url.Values, out any) error {
-	return c.do(ctx, http.MethodGet, path, query, nil, out)
+	return c.do(ctx, c.timeout, http.MethodGet, path, query, nil, out)
 }
 
-func (c *Client) do(ctx context.Context, method, path string, query url.Values, body []byte, out any) error {
+func (c *Client) do(ctx context.Context, timeout time.Duration, method, path string, query url.Values, body []byte, out any) error {
+	// 超时挂在 ctx 上并覆盖读响应体（下面的 ReadAll 在 cancel 之前）：与原先
+	// http.Client.Timeout 的覆盖范围相同。
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	u := *c.base
 	u.Path = c.base.Path + path
 	if query != nil {

@@ -6,8 +6,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"os"
-	"strings"
 	"sync"
 	"time"
 
@@ -119,16 +117,7 @@ func serveUntilDone(ctx context.Context, srv *http.Server, serve func() error, g
 // shutdownGraceFromEnv 读 KEEL_SHUTDOWN_GRACE。解析不了就用默认值并告警 ——
 // 不拒绝启动：写错一个停机参数不该让一个能正常服务的进程起不来。
 func shutdownGraceFromEnv() time.Duration {
-	raw := strings.TrimSpace(os.Getenv(EnvShutdownGrace))
-	if raw == "" {
-		return defaultShutdownGrace
-	}
-	d, err := time.ParseDuration(raw)
-	if err != nil || d <= 0 {
-		slog.Warn(EnvShutdownGrace+" 解析不了，用默认值", "value", raw, "default", defaultShutdownGrace)
-		return defaultShutdownGrace
-	}
-	return d
+	return durationFromEnv(EnvShutdownGrace, defaultShutdownGrace)
 }
 
 // readyz 回答「这个进程现在该不该接流量」：能 ping 通业务库才是 200。

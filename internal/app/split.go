@@ -12,7 +12,9 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -192,13 +194,58 @@ func internalRouter(s SplitConfig, inv *pgxpool.Pool) *gin.Engine {
 // 保证配了），其余走建在库存池上的进程内实现（单体时库存池就是业务池）。
 func inventoryService(s SplitConfig, invPool *pgxpool.Pool) (inventory.Service, error) {
 	if s.Role == RoleCore {
-		c, err := rpc.NewClient(s.InventoryURL, s.InternalSecret, 0)
+		c, err := rpc.NewClient(s.InventoryURL, s.InternalSecret, 0, inventoryClientOptions()...)
 		if err != nil {
 			return nil, err
 		}
 		return inventory.NewRemote(c), nil
 	}
 	return inventory.NewLocal(repository.NewInventoryStore(invPool)), nil
+}
+
+// 库存客户端（KEEL_ROLE=core）的读超时与熔断器。写与 SAGA 分支不受它们影响（rpc/breaker.go）。
+const (
+	// EnvInventoryReadTimeout 是读库存（商品列表 in_stock、试算、购物车、检索）的单次上限，Go duration。
+	EnvInventoryReadTimeout = "KEEL_INVENTORY_READ_TIMEOUT"
+	// EnvInventoryBreakerFailures 是连续多少次读失败（连不上、超时、5xx）之后熔断。0 = 不熔断。
+	EnvInventoryBreakerFailures = "KEEL_INVENTORY_BREAKER_FAILURES"
+	// EnvInventoryBreakerCooldown 是熔断之后多久放一个探测请求过去，Go duration。
+	EnvInventoryBreakerCooldown = "KEEL_INVENTORY_BREAKER_COOLDOWN"
+
+	defaultInventoryBreakerFailures = 5
+	defaultInventoryBreakerCooldown = 10 * time.Second
+)
+
+// inventoryClientOptions 按环境变量装库存客户端的读超时与熔断器。
+// 解析不了的值告警并用默认值，不拒绝启动 —— 与 KEEL_STOCK_FLAG_INTERVAL 同一个处置：
+// 写错一个调优参数不该让一个能正常服务的进程起不来。
+func inventoryClientOptions() []rpc.Option {
+	readTimeout := durationFromEnv(EnvInventoryReadTimeout, rpc.DefaultReadTimeout)
+	cooldown := durationFromEnv(EnvInventoryBreakerCooldown, defaultInventoryBreakerCooldown)
+	failures := defaultInventoryBreakerFailures
+	if raw := strings.TrimSpace(os.Getenv(EnvInventoryBreakerFailures)); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 0 {
+			slog.Warn(EnvInventoryBreakerFailures+" 解析不了，用默认值", "value", raw, "default", failures)
+		} else {
+			failures = n // 0 = 显式关掉熔断
+		}
+	}
+	return []rpc.Option{rpc.WithReadTimeout(readTimeout), rpc.WithBreaker(failures, cooldown)}
+}
+
+// durationFromEnv 读一个正的 Go duration；空着用默认值，解析不了告警并用默认值。
+func durationFromEnv(name string, def time.Duration) time.Duration {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return def
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 {
+		slog.Warn(name+" 解析不了，用默认值", "value", raw, "default", def)
+		return def
+	}
+	return d
 }
 
 // RouterOption 是 Router 的可选项。
