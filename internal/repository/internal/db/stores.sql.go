@@ -743,6 +743,8 @@ type StoreServesPointParams struct {
 // 下单 / 试算：收货地址的坐标落不落在这家店的围栏里（2026-09-28）。
 // 默认店与没有围栏的店一律 true —— 默认店是「不在任何围栏内」时的全国兜底（ResolveStoresByFence
 // 那条回落就落到它），拿围栏卡它等于让围栏外的买家无处可买。边界线上算在内（ST_Intersects，同上）。
+// 同一条判据在 addresses.sql 的 ListUserAddressesForStore 里还写了一遍（按门店批量标地址簿），
+// 改这里必须同步改那里；两处一致由 internal/handler/address_service_area_test.go 钉住。
 func (q *Queries) StoreServesPoint(ctx context.Context, arg StoreServesPointParams) (bool, error) {
 	row := q.db.QueryRow(ctx, storeServesPoint, arg.Lng, arg.Lat, arg.StoreID)
 	var serves bool

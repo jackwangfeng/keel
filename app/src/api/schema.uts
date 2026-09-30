@@ -32,6 +32,8 @@ export type Address = {
   id : number
   created_at? : string
   updated_at? : string
+  /** 只在 `GET /addresses` 带了 `store_id` 时给：那家门店送不送得到这条地址。 */
+  in_service_area? : boolean | null
 }
 
 export type AddressInput = {

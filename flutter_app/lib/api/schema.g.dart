@@ -32,7 +32,8 @@ class Address {
   final int id;
   final String? createdAt;
   final String? updatedAt;
-  const Address({this.lat, this.lng, required this.receiverName, required this.phone, required this.province, required this.city, required this.district, this.street, required this.detail, this.regionCode, this.postalCode, this.tag, required this.isDefault, required this.id, this.createdAt, this.updatedAt});
+  final bool? inServiceArea;
+  const Address({this.lat, this.lng, required this.receiverName, required this.phone, required this.province, required this.city, required this.district, this.street, required this.detail, this.regionCode, this.postalCode, this.tag, required this.isDefault, required this.id, this.createdAt, this.updatedAt, this.inServiceArea});
   factory Address.fromJson(Map<String, dynamic> j) => Address(
         lat: (j['lat'] as num?)?.toDouble(),
         lng: (j['lng'] as num?)?.toDouble(),
@@ -50,6 +51,7 @@ class Address {
         id: (j['id'] as num).toInt(),
         createdAt: j['created_at'] as String?,
         updatedAt: j['updated_at'] as String?,
+        inServiceArea: j['in_service_area'] as bool?,
       );
   Map<String, dynamic> toJson() => {
         if (lat != null) 'lat': lat,
@@ -68,6 +70,7 @@ class Address {
         'id': id,
         if (createdAt != null) 'created_at': createdAt,
         if (updatedAt != null) 'updated_at': updatedAt,
+        if (inServiceArea != null) 'in_service_area': inServiceArea,
       };
 }
 

@@ -33,6 +33,10 @@ type SavedAddress struct {
 	Lat, Lng  *float64
 	CreatedAt time.Time
 	UpdatedAt time.Time
+	// InServiceArea 只由 ListAddressesForStore 填：那家门店送不送得到这条地址。
+	// nil = 判断不了（门店有围栏而地址没坐标）。它是按门店算的，不是地址的属性，
+	// 其余查询一律留 nil —— 契约 Address.in_service_area 也只在带 store_id 时给。
+	InServiceArea *bool
 }
 
 // AddressFields 是新增与整体替换共用的那一组字段。IsDefault 只在新增时有意义
@@ -64,6 +68,9 @@ var ErrUserGone = errors.New("买家账号已不存在")
 type AddressBookTx interface {
 	// ListAddresses 地址簿：默认在首，其余按更新时间倒序。
 	ListAddresses(ctx context.Context, userID int64) ([]SavedAddress, error)
+	// ListAddressesForStore 同 ListAddresses，另按 storeID 那家门店给每条填 InServiceArea
+	// （判据与 StoreServesPoint 同一条）。门店不在时返回空集而不是错误 —— 调用方先问 StoreScope。
+	ListAddressesForStore(ctx context.Context, userID, storeID int64) ([]SavedAddress, error)
 	// FindSavedAddress 取一条。
 	FindSavedAddress(ctx context.Context, id, userID int64) (SavedAddress, error)
 	// InsertAddress 新增一条。f.IsDefault 为真时调用方必须已经 ClearDefaultAddress。
@@ -118,6 +125,37 @@ func (t tenantTx) ListAddresses(ctx context.Context, userID int64) ([]SavedAddre
 	}
 	return out, nil
 }
+
+func (t tenantTx) ListAddressesForStore(ctx context.Context, userID, storeID int64) ([]SavedAddress, error) {
+	rows, err := t.q.ListUserAddressesForStore(ctx, db.ListUserAddressesForStoreParams{
+		UserID: userID, StoreID: storeID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]SavedAddress, 0, len(rows))
+	for _, r := range rows {
+		a := savedAddressOf(db.FindUserAddressRow{
+			ID: r.ID, ReceiverName: r.ReceiverName, Phone: r.Phone, Province: r.Province,
+			City: r.City, District: r.District, Street: r.Street, Detail: r.Detail,
+			RegionCode: r.RegionCode, PostalCode: r.PostalCode, Tag: r.Tag, IsDefault: r.IsDefault,
+			Lat: r.Lat, Lng: r.Lng, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
+		})
+		// serves 为真（默认店 / 无围栏 / 在围栏内）就是 true，不看有没有坐标；
+		// 为假时再分：有坐标 = 围栏外（false），没坐标 = 判断不了（nil）。
+		// 这个三分与试算的 checkAddressInRange 一致：它对没坐标的地址不拦。
+		switch {
+		case r.Serves:
+			a.InServiceArea = ptrBool(true)
+		case r.HasPoint:
+			a.InServiceArea = ptrBool(false)
+		}
+		out = append(out, a)
+	}
+	return out, nil
+}
+
+func ptrBool(v bool) *bool { return &v }
 
 func (t tenantTx) FindSavedAddress(ctx context.Context, id, userID int64) (SavedAddress, error) {
 	r, err := t.q.FindUserAddress(ctx, db.FindUserAddressParams{ID: id, UserID: userID})

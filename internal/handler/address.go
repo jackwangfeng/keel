@@ -24,24 +24,14 @@ import (
 //
 // 越权、默认地址互斥这些规则在 service 与 SQL 里；这一层只做绑定与渲染。
 // 别人的地址与不存在的地址都是 404（契约 AddressId 参数的描述）。
+//
+// GET /addresses 单独放在 address_list.go：只有它读 query 参数（store_id），
+// contract_test.go 的 query 参数对账按 HandlerFile 解析整份源码，放在这里的话
+// 其余五条的 NoQueryParams 登记就会红（与 cart_delete.go 同一个理由）。
 
 type AddressHandler struct{ svc *service.AddressService }
 
 func NewAddressHandler(s *service.AddressService) *AddressHandler { return &AddressHandler{svc: s} }
-
-// List 实现 GET /api/v1/addresses。
-func (h *AddressHandler) List(c *gin.Context) {
-	list, err := h.svc.List(c.Request.Context())
-	if err != nil {
-		writeAddressError(c, err)
-		return
-	}
-	out := make([]api.Address, 0, len(list))
-	for _, a := range list {
-		out = append(out, apiAddress(a))
-	}
-	c.JSON(http.StatusOK, out)
-}
 
 // Create 实现 POST /api/v1/addresses。
 func (h *AddressHandler) Create(c *gin.Context) {
@@ -181,8 +171,10 @@ func apiAddress(a repository.SavedAddress) api.Address {
 		IsDefault:    a.IsDefault,
 		Lat:          a.Lat,
 		Lng:          a.Lng,
-		CreatedAt:    &created,
-		UpdatedAt:    &updated,
+		// 只有带 store_id 的地址簿会填；nil 在 JSON 里省略（契约：缺省与 null 同义）。
+		InServiceArea: a.InServiceArea,
+		CreatedAt:     &created,
+		UpdatedAt:     &updated,
 	}
 }
 
