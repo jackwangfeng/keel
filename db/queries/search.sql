@@ -114,6 +114,11 @@ SELECT p.id, p.title, p.subtitle,
 -- 的排前面 —— 「连衣 衣裙」连着出现的商品，比一个只在标题头、一个只在副标题尾
 -- 各命中一次的商品更像是真的在说那个词。
 --
+-- 命中集合由 keyword_hit_products（00172）给出，不在这里直接写 search_vector @@ ...：
+-- @@ 的实现 ts_match_vq 不是 leakproof，RLS 下 GIN 进不了计划，只能全店逐行匹配
+-- （每店 4 万商品 6.7 ms，随商品数线性变慢）。那个函数只返回本店命中的 id，
+-- 回 products 这次 JOIN 仍在 RLS 之下 —— 租户隔离照旧只靠 RLS，理由写在那份迁移里。
+--
 -- 过滤条件与上面那条逐字一致，理由写在文件头。
 SELECT p.id, p.title, p.subtitle,
        COALESCE(agg.min_price, 0)::bigint AS min_price_cents,
@@ -136,7 +141,7 @@ SELECT p.id, p.title, p.subtitle,
        ) img ON TRUE
  WHERE p.deleted_at IS NULL
    AND p.status = 1
-   AND p.search_vector @@ to_tsquery('simple', @tsquery::text)
+   AND p.id IN (SELECT keyword_hit_products(to_tsquery('simple', @tsquery::text)))
    AND (sqlc.narg(category_id)::bigint IS NULL
         OR p.category_id = sqlc.narg(category_id)::bigint)
    AND (sqlc.narg(min_price_cents)::bigint IS NULL

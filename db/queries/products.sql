@@ -40,8 +40,18 @@
 -- （格式见 admin_categories.sql 的 CreateCategoryRow）。用 id 而不是名字，是为了
 -- 让前缀唯一：两个同名类目的 path 如果都是 /女装/，这里会把两棵子树并在一起。
 --
+-- 前缀写成区间 path ~>=~ 前缀 AND path ~<~ 前缀 || chr(1114111)，而不是 LIKE 前缀 || '%'
+-- （2026-09-30 架构审查）。categories 挂着 RLS，而 LIKE（textlike）不是 leakproof，
+-- 规划器不许它先于租户谓词求值，idx_categories_path（text_pattern_ops）只能用到 merchant_id
+-- 那一段；~>=~ / ~<~（text_pattern_ge / text_pattern_lt）是 leakproof 的，能进 Index Cond。
+-- 两者等价：path 只含数字与斜杠，U+10FFFF 不会出现在里面，所以「以前缀开头」与
+-- 「按字节序落在 [前缀, 前缀 || U+10FFFF) 里」是同一批行。starts_with 也是 leakproof，
+-- 但它只对常量前缀生成索引条件，这里的前缀是子查询的结果。
+-- 类目表小，这一处今天不是瓶颈；改它是为了让那条索引名副其实（internal/repository 的
+-- rls_index_plans_test.go 用应用角色 EXPLAIN 钉住）。
+--
 -- 两条边界是刻意的：
---   · 类目不存在或已软删 → 内层子查询为 NULL → LIKE NULL 恒为假 → **空列表**。
+--   · 类目不存在或已软删 → 内层子查询为 NULL → 区间比较恒为假 → **空列表**。
 --     不是 404（契约在这条接口上没有），也**不是**回退成全部商品 —— 后者会让
 --     一个过期的类目链接在买家面前显示成「这个类目里什么都有」。
 --   · 类目的 status（启停）**不参与**这里的筛选。启停管的是导航（GET /categories
@@ -92,9 +102,12 @@ SELECT p.id, p.title, p.subtitle,
         OR p.category_id IN (
              SELECT c.id FROM categories c
               WHERE c.deleted_at IS NULL
-                AND c.path LIKE (SELECT cc.path FROM categories cc
+                AND c.path ~>=~ (SELECT cc.path FROM categories cc
                                   WHERE cc.id = sqlc.narg(category_id)::bigint
-                                    AND cc.deleted_at IS NULL) || '%'))
+                                    AND cc.deleted_at IS NULL)
+                AND c.path ~<~ (SELECT cc.path || chr(1114111) FROM categories cc
+                                 WHERE cc.id = sqlc.narg(category_id)::bigint
+                                   AND cc.deleted_at IS NULL)))
  ORDER BY COALESCE((SELECT pss.in_stock FROM product_store_stock pss
                       WHERE pss.store_id = sqlc.arg(store_id) AND pss.product_id = p.id),
                    -- 没刷过的行按有货排，但前提是它真有在售 SKU：一个 SKU 都没有的商品永远不会有那一行，
@@ -132,9 +145,12 @@ SELECT count(*)
         OR p.category_id IN (
              SELECT c.id FROM categories c
               WHERE c.deleted_at IS NULL
-                AND c.path LIKE (SELECT cc.path FROM categories cc
+                AND c.path ~>=~ (SELECT cc.path FROM categories cc
                                   WHERE cc.id = sqlc.narg(category_id)::bigint
-                                    AND cc.deleted_at IS NULL) || '%'));
+                                    AND cc.deleted_at IS NULL)
+                AND c.path ~<~ (SELECT cc.path || chr(1114111) FROM categories cc
+                                 WHERE cc.id = sqlc.narg(category_id)::bigint
+                                   AND cc.deleted_at IS NULL)));
 
 -- name: GetProduct :one
 -- 商品详情。谓词与 ListProducts 逐字一致（deleted_at IS NULL AND status = 1），

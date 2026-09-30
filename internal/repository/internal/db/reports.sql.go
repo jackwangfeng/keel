@@ -331,9 +331,12 @@ SELECT l.product_id,
  WHERE ($1::bigint IS NULL
         OR p.category_id IN (
              SELECT c.id FROM categories c
-              WHERE c.path LIKE (SELECT cc.path FROM categories cc
+              WHERE c.path ~>=~ (SELECT cc.path FROM categories cc
                                   WHERE cc.id = $1::bigint
-                                    AND cc.deleted_at IS NULL) || '%'))
+                                    AND cc.deleted_at IS NULL)
+                AND c.path ~<~ (SELECT cc.path || chr(1114111) FROM categories cc
+                                 WHERE cc.id = $1::bigint
+                                   AND cc.deleted_at IS NULL)))
  GROUP BY l.product_id, p.title, p.category_id
  ORDER BY CASE WHEN $2::text = 'quantity'
                THEN sum(l.quantity)::bigint

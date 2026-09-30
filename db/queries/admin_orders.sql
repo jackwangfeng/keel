@@ -25,6 +25,8 @@
 --
 -- phone 同时认收货人手机号与买家账号手机号：后者先经 uk_users_phone 换成 user_id
 -- （标量子查询；那条唯一索引保证本租户内至多一行），再走 idx_orders_user。
+-- 收货人手机号比的是冗余列 receiver_phone（00170，触发器维护），不是
+-- receiver_snapshot->>'phone'：->> 不是 leakproof，RLS 下进不了 Index Cond。
 SELECT o.id, o.order_no, o.user_id, o.store_id, o.region_id, o.status,
        o.goods_amount_cents, o.freight_cents, o.freight_discount_cents,
        o.discount_cents, o.payable_cents,
@@ -42,7 +44,7 @@ SELECT o.id, o.order_no, o.user_id, o.store_id, o.region_id, o.status,
    AND (sqlc.narg(created_to)::timestamptz IS NULL OR o.created_at < sqlc.narg(created_to)::timestamptz)
    AND (sqlc.narg(order_no)::text IS NULL OR o.order_no = sqlc.narg(order_no)::text)
    AND (sqlc.narg(phone)::text IS NULL
-        OR o.receiver_snapshot->>'phone' = sqlc.narg(phone)::text
+        OR o.receiver_phone = sqlc.narg(phone)::text
         OR o.user_id = (SELECT u.id FROM users u
                          WHERE u.phone = sqlc.narg(phone)::text AND u.deleted_at IS NULL))
    AND (sqlc.narg(only_region_ids)::bigint[] IS NULL
@@ -64,9 +66,125 @@ SELECT count(*)
    AND (sqlc.narg(created_to)::timestamptz IS NULL OR o.created_at < sqlc.narg(created_to)::timestamptz)
    AND (sqlc.narg(order_no)::text IS NULL OR o.order_no = sqlc.narg(order_no)::text)
    AND (sqlc.narg(phone)::text IS NULL
-        OR o.receiver_snapshot->>'phone' = sqlc.narg(phone)::text
+        OR o.receiver_phone = sqlc.narg(phone)::text
         OR o.user_id = (SELECT u.id FROM users u
                          WHERE u.phone = sqlc.narg(phone)::text AND u.deleted_at IS NULL))
+   AND (sqlc.narg(only_region_ids)::bigint[] IS NULL
+        OR o.store_id IN (SELECT st.id FROM stores st
+                           WHERE st.region_id = ANY(sqlc.narg(only_region_ids)::bigint[])))
+   AND (sqlc.narg(only_store_ids)::bigint[] IS NULL
+        OR o.store_id = ANY(sqlc.narg(only_store_ids)::bigint[]));
+
+-- ### 稀疏的精确条件单独成句：ByNo / ByPhone（2026-09-30 架构审查）
+--
+-- 上面两条是「每个条件都写成 (参数 IS NULL OR ...)」的万能查询。pgx 按语句缓存预备语句，
+-- 同一条语句执行几次之后 PostgreSQL 可能改用**通用计划**：通用计划里参数值未知，
+-- (参数 IS NULL OR 列 = 参数) 折不掉，于是哪个条件都进不了 Index Cond。实测每店 4 万单、
+-- 强制通用计划：按手机号 14.6 ms、按单号 7.7 ms（全店扫、Rows Removed by Filter: 39998）；
+-- 定制计划 0.05 ms / 0.03 ms。今天 plan_cache_mode = auto 下多数时候拿到的是定制计划，
+-- 但「多数时候」取决于代价估算，不是一个能依赖的性质。
+--
+-- 单号（全局唯一）与手机号是后台最常用、也最稀疏的两个条件：一个命中至多一行，一个命中
+-- 几行。给它们各自一条**不带 IS NULL 分支**的语句，通用计划与定制计划就是同一个 ——
+-- 单号走 orders_order_no_key，手机号走 idx_orders_receiver_phone_col 与 idx_orders_user
+-- 的 BitmapOr。其余条件（状态、门店、时间、范围）照旧是 narg，对那一两行做过滤，便宜。
+--
+-- 由 repository 按参数选（admin_order.go 的 AdminListOrders）：有单号走 ByNo（手机号
+-- 若也给了，仍作为 narg 条件留在里面）、否则有手机号走 ByPhone、否则走万能那条。
+-- 契约与返回形状不变。四条的谓词必须与上面逐字一致（除了被提成必填的那一个）；
+-- internal/handler/admin_order_test.go 的筛选用例（单号、两种手机号、单号 + 手机号交叉）
+-- 走的正是这两条分支。
+
+-- name: AdminListOrdersByNo :many
+-- 同 AdminListOrders，单号必填。
+SELECT o.id, o.order_no, o.user_id, o.store_id, o.region_id, o.status,
+       o.goods_amount_cents, o.freight_cents, o.freight_discount_cents,
+       o.discount_cents, o.payable_cents,
+       o.paid_cents, o.refunded_cents, o.refund_status, o.expire_at, o.paid_at,
+       o.shipped_at, o.finished_at, o.created_at, o.user_coupon_id, o.coupon_name,
+       o.promotion_discount_cents, o.promotions,
+       o.receiver_snapshot, o.store_snapshot,
+       EXISTS (SELECT 1 FROM refunds r
+                WHERE r.order_id = o.id AND r.status IN (10, 20, 30)) AS has_open_refund
+  FROM orders o
+ WHERE o.status <> 0
+   AND (sqlc.narg(status)::smallint IS NULL OR o.status = sqlc.narg(status)::smallint)
+   AND (sqlc.narg(store_id)::bigint IS NULL OR o.store_id = sqlc.narg(store_id)::bigint)
+   AND (sqlc.narg(created_from)::timestamptz IS NULL OR o.created_at >= sqlc.narg(created_from)::timestamptz)
+   AND (sqlc.narg(created_to)::timestamptz IS NULL OR o.created_at < sqlc.narg(created_to)::timestamptz)
+   AND o.order_no = sqlc.arg(order_no)::text
+   AND (sqlc.narg(phone)::text IS NULL
+        OR o.receiver_phone = sqlc.narg(phone)::text
+        OR o.user_id = (SELECT u.id FROM users u
+                         WHERE u.phone = sqlc.narg(phone)::text AND u.deleted_at IS NULL))
+   AND (sqlc.narg(only_region_ids)::bigint[] IS NULL
+        OR o.store_id IN (SELECT st.id FROM stores st
+                           WHERE st.region_id = ANY(sqlc.narg(only_region_ids)::bigint[])))
+   AND (sqlc.narg(only_store_ids)::bigint[] IS NULL
+        OR o.store_id = ANY(sqlc.narg(only_store_ids)::bigint[]))
+ ORDER BY o.created_at DESC, o.id DESC
+ LIMIT sqlc.arg(page_limit) OFFSET sqlc.arg(page_offset);
+
+-- name: AdminCountOrdersByNo :one
+-- 条件必须与 AdminListOrdersByNo 逐字一致。
+SELECT count(*)
+  FROM orders o
+ WHERE o.status <> 0
+   AND (sqlc.narg(status)::smallint IS NULL OR o.status = sqlc.narg(status)::smallint)
+   AND (sqlc.narg(store_id)::bigint IS NULL OR o.store_id = sqlc.narg(store_id)::bigint)
+   AND (sqlc.narg(created_from)::timestamptz IS NULL OR o.created_at >= sqlc.narg(created_from)::timestamptz)
+   AND (sqlc.narg(created_to)::timestamptz IS NULL OR o.created_at < sqlc.narg(created_to)::timestamptz)
+   AND o.order_no = sqlc.arg(order_no)::text
+   AND (sqlc.narg(phone)::text IS NULL
+        OR o.receiver_phone = sqlc.narg(phone)::text
+        OR o.user_id = (SELECT u.id FROM users u
+                         WHERE u.phone = sqlc.narg(phone)::text AND u.deleted_at IS NULL))
+   AND (sqlc.narg(only_region_ids)::bigint[] IS NULL
+        OR o.store_id IN (SELECT st.id FROM stores st
+                           WHERE st.region_id = ANY(sqlc.narg(only_region_ids)::bigint[])))
+   AND (sqlc.narg(only_store_ids)::bigint[] IS NULL
+        OR o.store_id = ANY(sqlc.narg(only_store_ids)::bigint[]));
+
+-- name: AdminListOrdersByPhone :many
+-- 同 AdminListOrders，手机号必填、单号不参与（有单号时走 ByNo）。
+SELECT o.id, o.order_no, o.user_id, o.store_id, o.region_id, o.status,
+       o.goods_amount_cents, o.freight_cents, o.freight_discount_cents,
+       o.discount_cents, o.payable_cents,
+       o.paid_cents, o.refunded_cents, o.refund_status, o.expire_at, o.paid_at,
+       o.shipped_at, o.finished_at, o.created_at, o.user_coupon_id, o.coupon_name,
+       o.promotion_discount_cents, o.promotions,
+       o.receiver_snapshot, o.store_snapshot,
+       EXISTS (SELECT 1 FROM refunds r
+                WHERE r.order_id = o.id AND r.status IN (10, 20, 30)) AS has_open_refund
+  FROM orders o
+ WHERE o.status <> 0
+   AND (sqlc.narg(status)::smallint IS NULL OR o.status = sqlc.narg(status)::smallint)
+   AND (sqlc.narg(store_id)::bigint IS NULL OR o.store_id = sqlc.narg(store_id)::bigint)
+   AND (sqlc.narg(created_from)::timestamptz IS NULL OR o.created_at >= sqlc.narg(created_from)::timestamptz)
+   AND (sqlc.narg(created_to)::timestamptz IS NULL OR o.created_at < sqlc.narg(created_to)::timestamptz)
+   AND (o.receiver_phone = sqlc.arg(phone)::text
+        OR o.user_id = (SELECT u.id FROM users u
+                         WHERE u.phone = sqlc.arg(phone)::text AND u.deleted_at IS NULL))
+   AND (sqlc.narg(only_region_ids)::bigint[] IS NULL
+        OR o.store_id IN (SELECT st.id FROM stores st
+                           WHERE st.region_id = ANY(sqlc.narg(only_region_ids)::bigint[])))
+   AND (sqlc.narg(only_store_ids)::bigint[] IS NULL
+        OR o.store_id = ANY(sqlc.narg(only_store_ids)::bigint[]))
+ ORDER BY o.created_at DESC, o.id DESC
+ LIMIT sqlc.arg(page_limit) OFFSET sqlc.arg(page_offset);
+
+-- name: AdminCountOrdersByPhone :one
+-- 条件必须与 AdminListOrdersByPhone 逐字一致。
+SELECT count(*)
+  FROM orders o
+ WHERE o.status <> 0
+   AND (sqlc.narg(status)::smallint IS NULL OR o.status = sqlc.narg(status)::smallint)
+   AND (sqlc.narg(store_id)::bigint IS NULL OR o.store_id = sqlc.narg(store_id)::bigint)
+   AND (sqlc.narg(created_from)::timestamptz IS NULL OR o.created_at >= sqlc.narg(created_from)::timestamptz)
+   AND (sqlc.narg(created_to)::timestamptz IS NULL OR o.created_at < sqlc.narg(created_to)::timestamptz)
+   AND (o.receiver_phone = sqlc.arg(phone)::text
+        OR o.user_id = (SELECT u.id FROM users u
+                         WHERE u.phone = sqlc.arg(phone)::text AND u.deleted_at IS NULL))
    AND (sqlc.narg(only_region_ids)::bigint[] IS NULL
         OR o.store_id IN (SELECT st.id FROM stores st
                            WHERE st.region_id = ANY(sqlc.narg(only_region_ids)::bigint[])))
