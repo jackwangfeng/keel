@@ -1022,6 +1022,18 @@ func Run(ctx context.Context, listen ListenFunc) error {
 	// 删记录再删文件。存储与 Router 里写文件的是同一个 driver（同一个 KEEL_UPLOAD_ROOT）。
 	uploadGC := service.NewUploadGCService(repository.New(pool), uploadStoreFromEnv(), service.SweepConfig{}, nil)
 	bg.Leader("upload_gc", uploadGC.Run)
+	// 只增不删的表的保留期清理（service/retention.go）：检索日志、AI 工具调用、幂等存档、库存流水，
+	// 每小时一轮、分批删。拆分部署（role=core）时库存流水在库存库里，这里不管（inv 传 nil）；
+	// 库存进程不跑后台任务，所以拆分形态下库存流水暂时没人清（保留期默认 180 天，量不急）。
+	retCfg, err := service.RetentionConfigFromEnv()
+	if err != nil {
+		return err
+	}
+	var invPurger service.InventoryLogPurger
+	if cfg.Split.Role != RoleCore {
+		invPurger = repository.NewInventoryStore(invPool)
+	}
+	bg.Leader("retention", service.NewRetentionService(repository.New(pool), invPurger, retCfg, nil).Run)
 
 	// 消息通知的外发投递与保留期清理（数据模型 §16）。站内消息不靠它 —— 通知行在业务事务里
 	// 就写好了；它只消费 outbox 里的 notification.deliver 任务，把每个外发渠道的结果记下来。
