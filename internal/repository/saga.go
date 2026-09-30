@@ -179,7 +179,7 @@ func (r *Repo) WithSagaBranch(ctx context.Context, gid, branchID, op string, fn 
 	}
 
 	decision := decisionNone
-	err := r.withTenantTx(ctx, func(tx pgx.Tx, q Tx) error {
+	err := r.withLockingTenantTx(ctx, func(tx pgx.Tx, q Tx) error {
 		d, err := decideBarrier(ctx, tx, gid, branchID, op)
 		if err != nil {
 			return err
