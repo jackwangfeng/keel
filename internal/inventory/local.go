@@ -10,7 +10,12 @@ import (
 
 // Local 是进程内实现：直接用库存仓储。它就是库存服务的业务本体 ——
 // 拆分形态下库存进程里跑的也是它（HTTP handler 只是把它挂到内网上）。
-type Local struct{ store *repository.InventoryStore }
+//
+// notify 不为 nil 时，改可售数的路径在可售数跨过 0 时发二阶段消息通知 core（stock_msg.go）。
+type Local struct {
+	store  *repository.InventoryStore
+	notify *StockNotifier
+}
 
 // NewLocal 建进程内实现。store 必须建在库存池上（repository.NewInventoryStore(invPool)）。
 func NewLocal(store *repository.InventoryStore) *Local { return &Local{store: store} }
@@ -170,7 +175,7 @@ func (l *Local) Set(ctx context.Context, r SetRequest) (Stock, error) {
 		return Stock{}, fmt.Errorf("%w: 数量不能为负", ErrInvalid)
 	}
 	var out Stock
-	err := l.store.WithTenant(ctx, func(tx repository.InventoryStoreTx) error {
+	err := l.stockTx(ctx, l.inTenant(ctx), func(tx repository.InventoryStoreTx, rec *stockCrossings) error {
 		w, err := tx.SetStock(ctx, repository.StockSet{
 			SKUID: r.SKUID, StoreID: r.StoreID, Available: r.Available, Expected: r.Expected,
 			Warning: r.Warning, AllowInsert: r.AllowInsert,
@@ -184,6 +189,8 @@ func (l *Local) Set(ctx context.Context, r SetRequest) (Stock, error) {
 		if !w.Written {
 			return &ConflictError{Current: stockOf(r.StoreID, w.Current)}
 		}
+		// CAS 成功即写之前恰好是 Expected（见上），跨 0 的判断不用再读一次。
+		rec.record(r.StoreID, r.SKUID, r.Expected, w.New.Available)
 		if w.New.Available != r.Expected {
 			if r.BizID == "" {
 				return fmt.Errorf("%w: sku %d 的库存覆盖没有 biz_id，拒绝写一行说不清来源的流水", ErrInvalid, r.SKUID)
@@ -237,7 +244,7 @@ func (l *Local) Adjust(ctx context.Context, r AdjustRequest) (AdjustResult, erro
 		return AdjustResult{}, fmt.Errorf("%w: sku %d 的相对调整没有 biz_id —— 流水会追不回那一次请求，重试也会加两遍", ErrInvalid, r.SKUID)
 	}
 	var out AdjustResult
-	err := l.store.WithTenant(ctx, func(tx repository.InventoryStoreTx) error {
+	err := l.stockTx(ctx, l.inTenant(ctx), func(tx repository.InventoryStoreTx, rec *stockCrossings) error {
 		if err := tx.LockBizID(ctx, r.BizID); err != nil {
 			return err
 		}
@@ -276,6 +283,7 @@ func (l *Local) Adjust(ctx context.Context, r AdjustRequest) (AdjustResult, erro
 		// before = after - delta 是精确的：那条语句写的就是「+ delta」，插入那一支（缺行）
 		// 也是 0 + delta。不再读一次 —— 多读一次就是多一个快照。
 		after := w.New.Available
+		rec.record(r.StoreID, r.SKUID, after-r.Delta, after)
 		if err := tx.AppendManualLog(ctx, repository.ManualLogEntry{
 			SKUID: r.SKUID, StoreID: r.StoreID, ChangeQty: r.Delta,
 			Before: after - r.Delta, After: after, BizID: r.BizID, Reason: r.Reason,
@@ -304,14 +312,25 @@ func (l *Local) InitSKUs(ctx context.Context, rows []InitRow) error {
 				ErrInvalid, r.SKUID, r.StoreID, r.Available, r.Warning)
 		}
 	}
-	return l.store.WithTenant(ctx, func(tx repository.InventoryStoreTx) error {
+	return l.stockTx(ctx, l.inTenant(ctx), func(tx repository.InventoryStoreTx, rec *stockCrossings) error {
 		for _, r := range rows {
-			if _, err := tx.InitSKU(ctx, r.SKUID, r.StoreID, r.Available, r.Warning); err != nil {
+			inserted, err := tx.InitSKU(ctx, r.SKUID, r.StoreID, r.Available, r.Warning)
+			if err != nil {
 				return fmt.Errorf("sku %d 的库存行没建成（这个 SKU 会表现为缺货）: %w", r.SKUID, err)
+			}
+			if inserted {
+				// 缺行 ≡ 可售 0：建出一行有货的首行库存就是一次 0 → >0。
+				// （新 SKU 通常还没上架，core 那边重算时它不算在售，标记不变 —— 多一条通知无害。）
+				rec.record(r.StoreID, r.SKUID, 0, r.Available)
 			}
 		}
 		return nil
 	})
+}
+
+// inTenant 是 stockTx 的「普通事务」入口（相对于 SAGA 分支的屏障事务）。
+func (l *Local) inTenant(ctx context.Context) func(func(repository.InventoryStoreTx) error) error {
+	return func(fn func(repository.InventoryStoreTx) error) error { return l.store.WithTenant(ctx, fn) }
 }
 
 func stockOf(storeID int64, l repository.StockLevel) Stock {

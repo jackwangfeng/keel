@@ -159,7 +159,7 @@ func (l *Local) SagaBranches() map[string]dtm.BranchFuncEx {
 	}
 }
 
-type branchBody func(ctx context.Context, tx repository.InventoryStoreTx, p DeductPayload) error
+type branchBody func(ctx context.Context, tx repository.InventoryStoreTx, rec *stockCrossings, p DeductPayload) error
 
 // branch 把分支体包成 BranchFuncEx：op 核对、租户只从 gid 来、载荷解析与核对、屏障、失败分类。
 // 与 core 那一侧的 OrderService.branch 同一套规矩（service/order_saga.go），逐条对应。
@@ -182,8 +182,15 @@ func (l *Local) branch(name, wantOp string, body branchBody) dtm.BranchFuncEx {
 			log.Error("库存分支的载荷不成立，拒绝执行", "err", err)
 			return dtm.Failure
 		}
-		decision, err := l.store.WithSagaBranch(ctx, gid, branchID, op, func(tx repository.InventoryStoreTx) error {
-			return body(ctx, tx, p)
+		// stockTx：跨 0 通知与扣减 / 补偿同一个事务登记（stock_msg.go）。屏障判成重复或空回滚时 body 不跑，
+		// rec 是空的，不发任何通知 —— 那一次调用本来就什么都没改。
+		decision := repository.Decision(0)
+		err = l.stockTx(ctx, func(fn func(repository.InventoryStoreTx) error) error {
+			var e error
+			decision, e = l.store.WithSagaBranch(ctx, gid, branchID, op, fn)
+			return e
+		}, func(tx repository.InventoryStoreTx, rec *stockCrossings) error {
+			return body(ctx, tx, rec, p)
 		})
 		if err != nil {
 			// 说不清楚的失败（连接断了、死锁、屏障被拒）一律 Unknown：协调器会重试，
@@ -222,7 +229,7 @@ func decodePayload(raw, orderNo string) (DeductPayload, error) {
 }
 
 // deduct 是库存分支的正向：锁 → 判 → 扣（或记一行拒绝），一个事务。
-func (l *Local) deduct(ctx context.Context, tx repository.InventoryStoreTx, p DeductPayload) error {
+func (l *Local) deduct(ctx context.Context, tx repository.InventoryStoreTx, rec *stockCrossings, p DeductPayload) error {
 	if err := tx.LockBizID(ctx, p.OrderNo); err != nil {
 		return err
 	}
@@ -270,6 +277,8 @@ func (l *Local) deduct(ctx context.Context, tx repository.InventoryStoreTx, p De
 		if err != nil {
 			return err
 		}
+		// 跨 0 的判断就在这把行锁之下、用这条语句本来就回的水位（stock_msg.go）：扣到 0 的那一单发通知，别的不发。
+		rec.record(p.StoreID, ln.SKUID, after+ln.Qty, after)
 		// 流水不是装饰：正向扣减与补偿回补跑完之后水位回到原值，和「从来没扣过」一模一样，
 		// 只有流水能把两者分开 —— 而关单释放、补偿、收尾分支的预警判定全都按它来。
 		if err := tx.AppendBizLog(ctx, repository.BizLogEntry{
@@ -319,11 +328,11 @@ func promoLines(lines []OrderLine) []OrderLine {
 //
 // 屏障只保证「正向执行过才补、补一次」；「补多少」按流水算，而不是按载荷的件数：
 // 正向可能是一次拒绝（什么都没扣），也可能在补偿之前关单释放已经放回过了。
-func (l *Local) restore(ctx context.Context, tx repository.InventoryStoreTx, p DeductPayload) error {
+func (l *Local) restore(ctx context.Context, tx repository.InventoryStoreTx, rec *stockCrossings, p DeductPayload) error {
 	if err := tx.LockBizID(ctx, p.OrderNo); err != nil {
 		return err
 	}
-	_, err := putBack(ctx, tx, p.OrderNo, p.StoreID, BizSagaCompensate, p.Lines, false)
+	_, err := putBack(ctx, tx, rec, p.OrderNo, p.StoreID, BizSagaCompensate, p.Lines, false)
 	return err
 }
 
@@ -332,7 +341,7 @@ func (l *Local) restore(ctx context.Context, tx repository.InventoryStoreTx, p D
 // 每个 SKU 的「还欠多少」= −(这一单在这家店这个 SKU 上全部流水的净值)：扣减记负、补偿与释放
 // 记正、拒绝与核对行记 0。marker 为真（关单释放）时，没有可放回的行也写一行 change 0 的核对行 ——
 // 它是关单守卫第 1 条的依据（扣减看到释放流水就拒绝），也是对账时「关单时核对过，净值 0」的记录。
-func putBack(ctx context.Context, tx repository.InventoryStoreTx, orderNo string, storeID int64,
+func putBack(ctx context.Context, tx repository.InventoryStoreTx, rec *stockCrossings, orderNo string, storeID int64,
 	bizType int16, lines []OrderLine, marker bool) (int32, error) {
 	trail, err := tx.BizTrail(ctx, orderNo)
 	if err != nil {
@@ -374,6 +383,7 @@ func putBack(ctx context.Context, tx repository.InventoryStoreTx, orderNo string
 		if err != nil {
 			return 0, err
 		}
+		rec.record(storeID, ln.SKUID, after-owed, after)
 		if err := tx.AppendBizLog(ctx, repository.BizLogEntry{
 			SKUID: ln.SKUID, StoreID: storeID, ChangeQty: owed, BizType: bizType,
 			BizID: orderNo, Before: after - owed, After: after,
