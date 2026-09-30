@@ -1,7 +1,11 @@
 """买家端用到的接口清单（方法, 路径, 名字前缀）。
 
-UTS（gen_uts_schema.py）与 Dart（gen_dart_schema.py）两个生成器共用这一份：
-两端接口面一致，新接口加在这里，两个生成物一起变、各自的闸门一起比对。
+Dart 生成器（gen_dart_schema.py）专用：Flutter 买家端要用哪些接口面，
+新接口加在这里，生成物与它的闸门（check_dart_contract.py）跟着一起变。
+
+历史注记：这份清单原来也给已下线的 uni-app x 客户端的生成器
+（gen_uts_schema.py）共用，两端接口面一致；那份客户端已于 2026-09-30
+下线（最后状态见 tag `uniapp-final`），现在只剩 Dart 这一份用它。
 """
 
 # 买家端闭环用到的接口。(方法, 路径, 名字前缀)

@@ -1,6 +1,6 @@
 # keel
 
-Go 后端 + Flutter 买家端（flutter_app/）+ 管理后台（web/admin，Vue 3）；旧 uni-app x 客户端（app/）已冻结。构建和测试统一走 Makefile，
+Go 后端 + Flutter 买家端（flutter_app/）+ 管理后台（web/admin，Vue 3）；旧 uni-app x 客户端（app/）已于 2026-09-30 下线，见 tag `uniapp-final`。构建和测试统一走 Makefile，
 数据库迁移用 goose，SQL 代码生成用 sqlc。`make help` 看全部 target。
 
 ## Token 纪律

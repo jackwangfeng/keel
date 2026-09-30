@@ -1,6 +1,6 @@
 # Keel 买家端（Flutter）
 
-同一套代码：Android / iOS / Web / 微信小程序（经 mp-flutter）。uni-app x 那套（`app/`）已冻结，新功能只接这里。
+同一套代码：Android / iOS / Web / 微信小程序（经 mp-flutter）。更早的 uni-app x 客户端已于 2026-09-30 下线，新功能都在这里接。
 
 ## 跑起来
 
@@ -13,8 +13,8 @@ KEEL_API_BASE=http://192.168.0.110:18099/api/v1 make flutter-build     # Web / a
 KEEL_API_BASE=https://eshop.zzss.fun/api/v1 make flutter-build-mp      # 微信小程序
 ```
 
-e2e 账号读 `~/.config/keel/e2e.env`（`KEEL_E2E_PHONE` / `KEEL_E2E_PASSWORD`，与 `app/` 的 e2e 同一个文件，不进仓库）。
-Android 编译找 SDK 的顺序与 `app/scripts/build-apk.sh` 相同：`ANDROID_HOME` → `~/Library/Android/sdk` → Homebrew 的 android-commandlinetools；JDK 17。
+e2e 账号读 `~/.config/keel/e2e.env`（`KEEL_E2E_PHONE` / `KEEL_E2E_PASSWORD`，不进仓库）。
+Android 编译找 SDK 的顺序：`ANDROID_HOME` → `~/Library/Android/sdk` → Homebrew 的 android-commandlinetools；JDK 17。
 
 ## 页面（第一阶段）
 
@@ -28,7 +28,7 @@ Android 编译找 SDK 的顺序与 `app/scripts/build-apk.sh` 相同：`ANDROID_
 - 订单列表 / 详情：状态 + 售后状态、取消 / 确认收货（点两下）、沙箱支付（「模拟支付完成（沙箱）」）
 - 地址簿：列表、新建（幂等键）、编辑（PUT 不切默认，切默认走专用接口）、设默认、删除；422 按字段标红
 
-## 页面（第二阶段，对齐 uni-app x）
+## 页面（第二阶段）
 
 - 我的：头像与昵称、个人资料、消息（未读角标，也挂在「我的」tab 上）、收货地址、我的订单、售后 / 退款、我的优惠券、领券中心、服务地址、退出
 - 领券中心 / 我的优惠券（未使用 / 使用中 / 已使用 / 已过期）

@@ -1,9 +1,0 @@
-// 原生 App 首次启动时用的服务地址。
-//
-// 原生 App 没有 origin，相对路径 /api/v1 在那里打不到任何地方，所以打包时需要一个
-// 绝对地址；但地址是部署环境的事（局域网测试机、预发、正式），不该写进源码。
-//
-// 值由 vite.config.js 在编译期注入：`define` 里 `process.env.*` 的条目，DCloud 的编译器
-// 会同时交给 UTS → Kotlin（Android）与 JS（iOS、H5）两条路。原生平台取环境变量
-// KEEL_API_BASE（build-apk.sh / build-ios.sh 读它），H5 永远是空串、走同源相对路径。
-export const NATIVE_DEFAULT_BASE_URL : string = process.env.KEEL_API_BASE

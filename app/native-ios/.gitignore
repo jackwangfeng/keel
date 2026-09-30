@@ -1,8 +1,0 @@
-# 离线 SDK 里取出来的库（build-ios.sh 下载）
-/.uni-sdk/
-# build-ios.sh 每次从 dist/build/app-ios 拷进来的编译产物
-/KeelBuyer/uni-app-x/
-# XcodeGen 生成物与构建输出
-/KeelBuyer.xcodeproj/
-/build/
-xcuserdata/

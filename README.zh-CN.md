@@ -347,7 +347,6 @@ Keel 自带客户端，不只是一套 API。
 | 客户端 | 技术栈 | 目标平台 |
 |---|---|---|
 | **商城前台**（主力） | Flutter（[`flutter_app/`](./flutter_app)） | Android · iOS · Web · 微信小程序（经 mp-flutter），一套代码——演示站用的就是 Web 构建版。小程序在微信开发者工具与真机调试里跑通，尚未上架 |
-| 商城前台（冻结） | uni-app x（[`app/`](./app)，UTS 编译成原生 Kotlin / Swift） | Android · iOS · H5 · 微信小程序。最早的客户端，现在只修 bug，新功能都落在 Flutter 上 |
 | **管理后台** | Vue 3 + Element Plus | 桌面 Web |
 
 所有客户端由同一份 OpenAPI 契约生成代码——接口变更会让构建失败，
@@ -376,11 +375,9 @@ Keel 自带客户端，不只是一套 API。
 页面读的是视图模型而不是生成的类型（有检查强制这一点），还有单元测试加一套
 无头 Web 端到端测试。怎么构建和运行见 [`flutter_app/README.md`](./flutter_app/README.md)。
 
-这一节剩下的部分讲的是 **[`app/`](./app)**——最早的那个客户端，现在只做 bug 修复，
-不接新功能。它用 [uni-app x](https://doc.dcloud.net.cn/uni-app-x/) 写（UTS 编译成原生
-Kotlin/Swift），类型同样从同一份契约生成（`scripts/gen_uts_schema.py` →
-`app/src/api/schema.uts`，产物入库并有漂移与类型两道闸门守着）。细节、构建方式与
-实测记录见 [`app/README.md`](./app/README.md)。
+最早的那个客户端 `app/`，用 [uni-app x](https://doc.dcloud.net.cn/uni-app-x/) 写
+（UTS 编译成原生 Kotlin/Swift），已于 2026-09-30 下线——Flutter 商城前台已经
+覆盖了它的全部能力。最后状态（含实测记录）见 tag `uniapp-final`。
 
 ---
 

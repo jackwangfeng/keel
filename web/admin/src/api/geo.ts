@@ -4,7 +4,7 @@
 // ## 坐标系：库里是 WGS-84，而且只能是 WGS-84
 //
 // 围栏落库成 `GEOGRAPHY(POLYGON, 4326)`，4326 就是 WGS-84。买家端按 `wgs84`
-// 取定位（app/src/api/store.uts 文件头）。国内地图给的不是它：
+// 取定位（flutter_app/lib/api/geo.dart 文件头）。国内地图给的不是它：
 //
 //   · 高德 / 腾讯：GCJ-02（「火星坐标」），在 WGS-84 上加了一个非线性偏移
 //   · 百度：BD-09，在 GCJ-02 上再偏一次

@@ -38,12 +38,6 @@ GO_OUT     ?= $(ROOT)/internal/api/openapi.gen.go
 GO_PACKAGE ?= api
 GO_MODE    ?= types
 TS_OUT     ?= $(ROOT)/web/src/api/schema.d.ts
-# 客户端（app/，uni-app x）那一份契约产物。**UTS 不是 TypeScript** ——
-# 它的类型系统要落到 Kotlin/Swift 上，openapi-typescript 的产物里那些
-# 映射类型、条件类型、索引签名都没有对应物（实测结论在 app/README.md）。
-# 所以 UTS 侧另生成一份，而不是共用 TS_OUT；生成器是自己的 Python 脚本，
-# 不引入新的 npm 生成器版本要钉。
-UTS_OUT    ?= $(ROOT)/app/src/api/schema.uts
 
 # 迁移目录必须是绝对路径：GORUN 用的 `go -C $(TOOLS)` 让 goose 的工作目录是
 # tools/，相对路径会从那里解析。
@@ -85,8 +79,8 @@ GOOSE_INVENTORY := GOOSE_DRIVER=postgres GOOSE_DBSTRING="$(INVENTORY_GOOSE_DBSTR
 	GOOSE_MIGRATION_DIR=$(MIGRATIONS_INVENTORY) \
 	$(GOOSE_BIN) -table goose_db_version_inventory
 
-.PHONY: help generate generate-go generate-ts generate-sql generate-uts tools-versions version search-metrics \
-	contract-check schema-check app-type-check admin-install admin-type-check admin-test admin-build app-install app-build-h5 app-build-android app-build-mp-weixin app-apk app-apk-e2e app-e2e app-e2e-h5 flutter-get flutter-generate flutter-analyze flutter-test flutter-e2e-web flutter-build flutter-build-mp flutter-ios-install flutter-android-install app-adb-wifi app-ios app-ios-e2e app-e2e-ios \
+.PHONY: help generate generate-go generate-ts generate-sql tools-versions version search-metrics \
+	contract-check schema-check admin-install admin-type-check admin-test admin-build flutter-get flutter-generate flutter-analyze flutter-test flutter-e2e-web flutter-build flutter-build-mp flutter-ios-install flutter-android-install \
 	sdk-smoke goose-bin migrate migrate-down migrate-status migrate-inventory migrate-inventory-status test-db \
 	test-engine category-eval dtmrs-deps build
 
@@ -94,25 +88,13 @@ help:
 	@echo "make generate       生成 Go + TS 两侧契约产物"
 	@echo "make generate-go    只生成 Go 侧（GO_OUT / GO_PACKAGE / GO_MODE 可覆盖）"
 	@echo "make generate-ts    只生成 TS 侧（TS_OUT 可覆盖）"
-	@echo "make generate-uts   只生成客户端 UTS 侧（UTS_OUT 可覆盖）"
 	@echo "make generate-sql   跑 sqlc，重生成 internal/repository/internal/db（SQLC_CONFIG 可覆盖）"
 	@echo "make contract-check 校验 3.1 可空语义没有被生成器悄悄改掉"
 	@echo "make schema-check   用 tsc --strict 检查整个 web/src（含契约产物与 SDK）"
-	@echo "make app-type-check 用 tsc --strict 检查 app/src 下全部 .uts"
 	@echo "make admin-install  装商家后台（web/admin）的依赖（npm ci，版本由 lock 锁定）"
 	@echo "make admin-type-check 用 vue-tsc --strict 检查 web/admin/src 下全部 .ts 与 .vue"
 	@echo "make admin-test     跑商家后台的单元测试（围栏几何与坐标系换算、券金额换算、订单与售后的按钮与请求体、铃铛的跳转、运费模板校验、经营概览的环比与图表几何、营销活动的表单换算、AI 员工提案的种类翻译与自动执行策略上限换算）"
 	@echo "make admin-build    构建商家后台静态产物（compose 起栈时会自己构建，日常不用跑）"
-	@echo "make app-install    装客户端依赖（含 npm 跳过 uts 原生 binding 的绕法）"
-	@echo "make app-build-h5   用 DCloud 编译器真编一遍 H5（要先 app-install）"
-	@echo "make app-build-mp-weixin  编微信小程序到 app/dist/build/mp-weixin（读 KEEL_API_BASE）"
-	@echo "make app-apk        本地打 Android apk（KEEL_API_BASE=http://host:port/api/v1 指定默认服务地址）"
-	@echo "make app-apk-e2e    打带自动化运行时的测试包（同样读 KEEL_API_BASE）"
-	@echo "make app-e2e        在 Android 真机上跑 app/e2e 下的自动化用例（USB 或无线）"
-	@echo "make app-adb-wifi   把 USB 连着的 Android 手机切到无线调试，之后可拔线"
-	@echo "make app-ios        本地打 iOS 真机包（KEEL_IOS_TEAM 指定签名团队，KEEL_API_BASE 同上）"
-	@echo "make app-ios-e2e    打带自动化运行时的 iOS 测试包"
-	@echo "make app-e2e-ios    在 USB 连着的 iPhone 上跑 app/e2e 下的自动化用例"
 	@echo "make sdk-smoke      用 TS SDK 对跑着的服务真打一次 GET /products"
 	@echo "make tools-versions 打印钉住的工具版本"
 	@echo "make goose-bin      把钉在 tools/go.mod 的 goose 编到 bin/goose（migrate 会先调它）"
@@ -167,19 +149,6 @@ generate-ts:
 # 把 include 写成 `src/**/*.ts` 就能悄悄漏掉所有 .mts 而照样退出 0。
 schema-check:
 	python3 $(ROOT)/scripts/check_ts_scope.py $(TSC)
-
-# 客户端的契约产物。生成器是 Python + PyYAML，刻意不是又一个 npm 生成器：
-# openapi-typescript 的产物 UTS 吃不下（见 app/README.md 的实测记录），
-# 而为了一份 600 行的类型再钉一个 npm 生成器版本不划算。
-generate-uts:
-	python3 $(ROOT)/scripts/gen_uts_schema.py -o $(UTS_OUT)
-
-# app/src 下全部 .uts 在 --strict 下能不能编译。
-#
-# 范围由脚本自己核对（tsc 对「范围里没有这个文件」是静默的，
-# 和 check_ts_scope.py 挡的是同一个坑）。零 node_modules，只 npx 拉 tsc。
-app-type-check:
-	python3 $(ROOT)/scripts/check_app_types.py $(TSC)
 
 # ---------------------------------------------------------------------------
 # 商家后台（web/admin，Vue 3 + Vite + Element Plus）
@@ -236,58 +205,6 @@ admin-responsive-check:
 # docker/Dockerfile.admin 的 node 阶段里构建，产物交给 nginx。
 admin-build:
 	cd $(ROOT)/web/admin && npm run build
-
-# 装客户端依赖。**不要直接 npm ci** —— 见脚本里那段：npm 11 会把
-# @dcloudio/uts-linux-x64-gnu 当成 libc 不匹配跳过，而少了它 uni 的编译器
-# 在加载配置时就死，报的是「Cannot find module」，和真因（npm 的 libc 判定）无关。
-app-install:
-	bash $(ROOT)/app/scripts/install-deps.sh
-
-# 用 DCloud 自己的编译器真编一遍（含 .uvue 模板）。要先 make app-install。
-# 它比 app-type-check 盖得多（模板表达式、pages.json、样式），也重得多。
-app-build-h5:
-	python3 $(ROOT)/scripts/check_app_build.py h5
-
-app-build-android:
-	python3 $(ROOT)/scripts/check_app_build.py app-android
-
-# 微信小程序。产物用微信开发者工具打开 app/dist/build/mp-weixin。小程序没有「页面 origin」，
-# 和原生 App 一样要绝对地址：KEEL_API_BASE 编进去（见 app/vite.config.js）。
-app-build-mp-weixin:
-	python3 $(ROOT)/scripts/check_app_build.py mp-weixin
-
-# 本地打 apk：离线 SDK + Gradle，不经 HBuilderX、不上传。前置条件（JDK 17、Android SDK）
-# 与流程写在脚本头里。KEEL_API_BASE 是原生 App 的默认服务地址，不设就要在 App 里手填。
-app-apk:
-	bash $(ROOT)/app/scripts/build-apk.sh
-
-# 真机自动化测试（uni-automator）。app-apk-e2e 打测试包，app-e2e 装到手机上跑用例。
-# 两步分开：改用例不必重新打包。怎么接上官方自动化、为什么不走 HBuilderX，见 app/e2e/README.md。
-app-apk-e2e:
-	bash $(ROOT)/app/scripts/build-apk.sh --e2e
-
-app-e2e:
-	cd $(ROOT)/app && npm run test:e2e
-
-# 同一套用例在本机 Chrome 无头里跑（带自动化运行时编 H5 → 同源反代 → playwright）。
-# 真机都锁屏时的兜底，一轮不到一分钟；只覆盖 JS / H5 那一层。要 KEEL_API_BASE。
-app-e2e-h5:
-	bash $(ROOT)/app/scripts/e2e-h5.sh
-
-# 插着线跑一次，之后拔线也能 make app-e2e。手机重启后要重跑。
-app-adb-wifi:
-	bash $(ROOT)/app/scripts/adb-wifi.sh
-
-# iOS：页面逻辑编译成 JS 跑在 JavaScriptCore，界面原生渲染；本地用离线 SDK + XcodeGen + xcodebuild
-# 出真机包（没有模拟器版本，理由见 app/scripts/build-ios.sh 头）。
-app-ios:
-	bash $(ROOT)/app/scripts/build-ios.sh
-
-app-ios-e2e:
-	bash $(ROOT)/app/scripts/build-ios.sh --e2e
-
-app-e2e-ios:
-	cd $(ROOT)/app && npm run test:e2e:ios
 
 # 用 SDK 对**真的跑起来的**服务打一次 GET /products。
 #
@@ -562,7 +479,7 @@ flutter-test:
 flutter-e2e-web:
 	FLUTTER=$(FLUTTER) bash $(FLUTTER_APP)/tool/e2e_web.sh
 
-# Android SDK / JDK 17：与 app/scripts/build-apk.sh 同一套找法（ANDROID_HOME → ~/Library/Android/sdk → Homebrew）。
+# Android SDK / JDK 17：找法是 ANDROID_HOME → ~/Library/Android/sdk → Homebrew，按顺序取第一个存在的。
 FLUTTER_ANDROID_HOME ?= $(or $(ANDROID_HOME),$(firstword $(wildcard $(HOME)/Library/Android/sdk/platforms /opt/homebrew/share/android-commandlinetools/platforms)))
 FLUTTER_JAVA_HOME ?= $(or $(JAVA_HOME),$(shell /usr/libexec/java_home -v 17 2>/dev/null))
 
@@ -573,7 +490,7 @@ flutter-build:
 	cd $(FLUTTER_APP) && $(FLUTTER_ENV) ANDROID_HOME=$(FLUTTER_ANDROID_HOME:/platforms=) JAVA_HOME=$(FLUTTER_JAVA_HOME) $(FLUTTER) build apk --dart-define=KEEL_API_BASE=$(KEEL_API_BASE)
 	cd $(FLUTTER_APP) && $(FLUTTER_ENV) $(FLUTTER) build ios --no-codesign --dart-define=KEEL_API_BASE=$(KEEL_API_BASE)
 
-# 装到连着的 iPhone（发版前真机验 / 想玩一下时）。签名团队与 app-ios 一样用 KEEL_IOS_TEAM 传，不写进工程。
+# 装到连着的 iPhone（发版前真机验 / 想玩一下时）。签名团队用 KEEL_IOS_TEAM 传，不写进工程。
 flutter-ios-install:
 	@test -n "$(KEEL_API_BASE)" || (echo "要设 KEEL_API_BASE" && exit 1)
 	@test -n "$(KEEL_IOS_TEAM)" || (echo "要设 KEEL_IOS_TEAM（security find-identity -v -p codesigning）" && exit 1)
@@ -584,7 +501,7 @@ flutter-ios-install:
 	  xcrun devicectl device install app --device $$DEV $(FLUTTER_APP)/build/ios-derived/Build/Products/Release-iphoneos/Runner.app && \
 	  xcrun devicectl device process launch --device $$DEV dev.keel.keelBuyer
 
-# 装到连着的安卓机（USB 或 adb 无线，比如 app-adb-wifi 连上的）：release、只打 arm64，装完拉起。
+# 装到连着的安卓机（USB 或 adb 无线连上的）：release、只打 arm64，装完拉起。
 # 连着多台时用 ANDROID_SERIAL=<adb devices 里的序列号> 指定。
 FLUTTER_ADB ?= $(FLUTTER_ANDROID_HOME:/platforms=)/platform-tools/adb
 flutter-android-install:

@@ -12,8 +12,8 @@ The two hard rules from [CONTRIBUTING.md](../CONTRIBUTING.md):
       `service`, data access in `repository`. This is the rule the "evolve to
       microservices without rewriting business code" claim rests on.
 - [ ] **Contract first.** If this changes the API: the spec changed before the
-      handler did, and `make generate generate-uts flutter-generate` has been
-      run and its four outputs committed.
+      handler did, and `make generate flutter-generate` has been
+      run and its three outputs committed.
 
 And:
 

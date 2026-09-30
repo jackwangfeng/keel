@@ -18,7 +18,7 @@ import (
 // Categories 实现 GET /categories：当前店启用中的类目树。
 //
 // 契约里 security: []，不需要登录；租户照常由 Host 定、由 RLS 挡。
-// 叶子节点也给 children: []，不省略：客户端（UTS）拿到一个恒定的形状，
+// 叶子节点也给 children: []，不省略：客户端拿到一个恒定的形状，
 // 不必在每一层都判一次「这个字段在不在」。
 func (h *ProductHandler) Categories(c *gin.Context) {
 	tree, err := h.svc.Categories(c.Request.Context())

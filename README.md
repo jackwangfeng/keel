@@ -419,7 +419,6 @@ Keel ships with its clients, not just an API.
 | Client | Stack | Targets |
 |---|---|---|
 | **Storefront** (main) | Flutter ([`flutter_app/`](./flutter_app)) | Android · iOS · Web · WeChat Mini Program (via mp-flutter) — one codebase; the demo site serves the Web build. The Mini Program runs in the WeChat devtools and on-device debugging; not yet published |
-| Storefront (frozen) | uni-app x ([`app/`](./app), UTS compiled to native Kotlin / Swift) | Android · iOS · H5 · WeChat Mini Program. The first client; now bug fixes only, new features land in Flutter |
 | **Admin console** | Vue 3 + Element Plus | Desktop web |
 
 Every client is generated from the same OpenAPI spec, so a contract change
@@ -452,13 +451,11 @@ Its types come from the same OpenAPI spec (`make flutter-generate` →
 generated types (a check enforces that), and it has unit tests plus a headless Web e2e
 suite. How to build and run it: [`flutter_app/README.md`](./flutter_app/README.md).
 
-The rest of this section is about **[`app/`](./app)**, the first client, now
-frozen for bug fixes only, no new features. It's written in
+The original client, `app/`, written in
 [uni-app x](https://doc.dcloud.net.cn/uni-app-x/) (UTS compiled to native
-Kotlin/Swift). Its types are also generated from the same OpenAPI spec
-(`scripts/gen_uts_schema.py` → `app/src/api/schema.uts`, committed and held in
-place by a drift gate and a type-check gate). Details, build steps and the
-measured-results log: [`app/README.md`](./app/README.md).
+Kotlin/Swift), was retired on 2026-09-30 once the Flutter storefront covered
+the same ground. Its last state, including the measured-results log, is
+preserved at the `uniapp-final` git tag.
 
 ---
 

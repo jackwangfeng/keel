@@ -38,7 +38,7 @@ type ProductSummary struct {
 	// ImageURL 是主图的对外地址（契约 ProductSummary.image_url：「取的就是
 	// images[0]」），形如 /api/v1/uploads/{id}。这件商品一张图都没有时为 nil，
 	// handler 据此让字段**缺席**：空串会让客户端去请求一个空地址、渲染一张
-	// 「加载失败」，而缺席让它走自己的占位封面（app/src/api/view.uts 的 coverOf）。
+	// 「加载失败」，而缺席让它走自己的占位封面（flutter_app/lib/api/view.dart 的 coverOf）。
 	ImageURL *string
 
 	// PromotionTags 是这件商品在这家店此刻生效的活动标签（00058，promotion_tags.go）。

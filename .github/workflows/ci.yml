@@ -30,7 +30,6 @@
 #     和服务端要的东西不一样，所以没有并进来。
 #   - 买家端的**原生 App 产物**。flutter 这个 job 只编 Web；Android（Gradle 在这台
 #     runner 上要另配代理）与 iOS（要 macOS）发版前手动编，见 flutter_app/README.md。
-#     冻结的 uni-app x（app/）不再编译，只剩 gates 里的契约同步与类型检查。
 #   - 客户端跑起来之后的行为。flutter 只跑单元与组件测试，不启动浏览器、不打真后端；
 #     无头 Web 端到端（make flutter-e2e-web）要真后端与账号，目前人手动跑。
 #   - **真引擎（`make test-engine`）在 CI 里没有任何执行者，一个都没有。**
@@ -465,8 +464,6 @@ jobs:
   # 客户端（flutter_app/，买家端主力）：依赖锁定、静态检查、单元测试、编 Web
   # ---------------------------------------------------------------------------
   #
-  # uni-app x（app/）已冻结，这里不再编它；它的契约同步与 `.uts` 类型检查仍在
-  # gates 那条 check-all.sh 里（check_uts_contract、app-type-check），跟不上契约照样红。
   # Flutter 这边的契约漂移（check_dart_contract）与「页面不许直接 import 生成类型」
   # （check_flutter_pages）也在 gates 里 —— 这个 job 只管那两条管不到的：代码本身
   # 编不编得过、测试过不过。

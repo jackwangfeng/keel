@@ -2,7 +2,7 @@
 """页面闸门：flutter_app/lib/pages 与 lib/widgets 下不许 import api/schema.g.dart。
 
 契约字段只在 lib/api/ 里读写（view.dart 翻成行模型）；页面直接碰契约类型，契约改名时
-报错不会集中在 api/ 这一层 —— 与 app/（uni-app x）的 check_app_types.py 同一条规矩。
+报错不会集中在 api/ 这一层。
 """
 import os
 import re

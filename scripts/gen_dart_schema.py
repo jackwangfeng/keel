@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """从 OpenAPI 契约生成 Dart 侧的契约类型（flutter_app/lib/api/schema.g.dart）。
 
-与 gen_uts_schema.py 同一份契约、同一份接口清单（contract_operations.py）、同一套遍历规则
-（allOf 展平、单成员 allOf 透出、内联对象提升成「父名 + 属性名」的具名类型），只换输出语言。
+读同一份契约、同一份接口清单（contract_operations.py），遍历规则是
+allOf 展平、单成员 allOf 透出、内联对象提升成「父名 + 属性名」的具名类型。
 产物入库，scripts/check_dart_contract.py 比对。
 
 映射：integer→int，number→double，string→String，boolean→bool，array→List<T>，
