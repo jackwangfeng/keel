@@ -3587,8 +3587,8 @@ type AdminStore struct {
 	// 改它走 `PUT /admin/stores/{store_id}/default`——
 	// 要在同一个事务里先清旧再置新。
 	IsDefault bool     `json:"is_default"`
-	Lat       *float32 `json:"lat,omitempty"`
-	Lng       *float32 `json:"lng,omitempty"`
+	Lat       *float64 `json:"lat,omitempty"`
+	Lng       *float64 `json:"lng,omitempty"`
 	Name      string   `json:"name"`
 	Phone     *string  `json:"phone,omitempty"`
 	Province  *string  `json:"province,omitempty"`
@@ -4545,7 +4545,7 @@ type GeoPolygon struct {
 	// Coordinates 环的数组。第一个是外环。
 	//
 	// Examples: [[[116.3,39.85],[116.5,39.85],[116.5,39.95],[116.3,39.95],[116.3,39.85]]]
-	Coordinates [][][]float32  `json:"coordinates"`
+	Coordinates [][][]float64  `json:"coordinates"`
 	Type        GeoPolygonType `json:"type"`
 }
 
@@ -7221,8 +7221,8 @@ type Store struct {
 
 	// IsDefault 是否是这家商家的「全国配送」回落门店。
 	IsDefault bool     `json:"is_default"`
-	Lat       *float32 `json:"lat,omitempty"`
-	Lng       *float32 `json:"lng,omitempty"`
+	Lat       *float64 `json:"lat,omitempty"`
+	Lng       *float64 `json:"lng,omitempty"`
 	Name      string   `json:"name"`
 	Phone     *string  `json:"phone,omitempty"`
 }
@@ -7267,10 +7267,10 @@ type StoreCreateRequest struct {
 	IsDefault *bool `json:"is_default,omitempty"`
 
 	// Lat 必填。门店自身坐标的纬度（WGS-84），`/stores/resolve` 的 `distance_m` 按它算。
-	Lat *float32 `json:"lat,omitempty"`
+	Lat *float64 `json:"lat,omitempty"`
 
 	// Lng 必填。经度（WGS-84）。
-	Lng      *float32 `json:"lng,omitempty"`
+	Lng      *float64 `json:"lng,omitempty"`
 	Name     string   `json:"name"`
 	Phone    *string  `json:"phone,omitempty"`
 	Province *string  `json:"province,omitempty"`
@@ -7311,13 +7311,13 @@ type StoreMatch struct {
 	// `ST_Distance` 返回度，而一度经度与一度纬度在中纬度差约 30%，
 	// 排序会在东西向与南北向上系统性偏斜——且看起来完全正常
 	// （数据模型 §4）。
-	DistanceM *float32 `json:"distance_m"`
+	DistanceM *float64 `json:"distance_m"`
 	Id        int64    `json:"id"`
 
 	// IsDefault 是否是这家商家的「全国配送」回落门店。
 	IsDefault bool     `json:"is_default"`
-	Lat       *float32 `json:"lat,omitempty"`
-	Lng       *float32 `json:"lng,omitempty"`
+	Lat       *float64 `json:"lat,omitempty"`
+	Lng       *float64 `json:"lng,omitempty"`
 	Name      string   `json:"name"`
 	Phone     *string  `json:"phone,omitempty"`
 }
@@ -7362,8 +7362,8 @@ type StoreUpdateRequest struct {
 	// Lat 与 `lng` 同时给或同时不给。坐标只能改、不能清空。
 	// 这家店有围栏时，新坐标必须在围栏内，否则 422
 	// （`https://keel.dev/problems/store-outside-fence`）。
-	Lat      *float32                  `json:"lat,omitempty"`
-	Lng      *float32                  `json:"lng,omitempty"`
+	Lat      *float64                  `json:"lat,omitempty"`
+	Lng      *float64                  `json:"lng,omitempty"`
 	Name     *string                   `json:"name,omitempty"`
 	Phone    *string                   `json:"phone,omitempty"`
 	Province *string                   `json:"province,omitempty"`
@@ -11831,15 +11831,15 @@ type GetCouponsParamsStatus string
 
 // GetGeoReverseParams defines parameters for GetGeoReverse.
 type GetGeoReverseParams struct {
-	Lat float32 `form:"lat" json:"lat"`
-	Lng float32 `form:"lng" json:"lng"`
+	Lat float64 `form:"lat" json:"lat"`
+	Lng float64 `form:"lng" json:"lng"`
 }
 
 // GetGeoSuggestParams defines parameters for GetGeoSuggest.
 type GetGeoSuggestParams struct {
 	Q    string   `form:"q" json:"q"`
-	Lat  *float32 `form:"lat,omitempty" json:"lat,omitempty"`
-	Lng  *float32 `form:"lng,omitempty" json:"lng,omitempty"`
+	Lat  *float64 `form:"lat,omitempty" json:"lat,omitempty"`
+	Lng  *float64 `form:"lng,omitempty" json:"lng,omitempty"`
 	City *string  `form:"city,omitempty" json:"city,omitempty"`
 }
 
@@ -12151,10 +12151,10 @@ type GetStoresParams struct {
 // GetStoresResolveParams defines parameters for GetStoresResolve.
 type GetStoresResolveParams struct {
 	// Lat 纬度，WGS84。与 `lng` **同时给或同时不给**；只给一个返回 422。
-	Lat *float32 `form:"lat,omitempty" json:"lat,omitempty"`
+	Lat *float64 `form:"lat,omitempty" json:"lat,omitempty"`
 
 	// Lng 经度，WGS84。
-	Lng *float32 `form:"lng,omitempty" json:"lng,omitempty"`
+	Lng *float64 `form:"lng,omitempty" json:"lng,omitempty"`
 
 	// Size 围栏命中时最多返回几家，默认 10。
 	Size *int `form:"size,omitempty" json:"size,omitempty"`

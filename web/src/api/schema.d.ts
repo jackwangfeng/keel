@@ -19625,13 +19625,16 @@ export interface components {
             name: string;
             phone?: string;
             address?: string;
+            /** Format: double */
             lat?: number | null;
+            /** Format: double */
             lng?: number | null;
             /** @description 是否是这家商家的「全国配送」回落门店。 */
             is_default: boolean;
         };
         StoreMatch: components["schemas"]["Store"] & {
             /**
+             * Format: double
              * @description 买家坐标到门店坐标的球面距离，**单位米**。
              *     `/stores/resolve` 的排序键，升序。
              *
@@ -19723,7 +19726,9 @@ export interface components {
             city?: string;
             district?: string;
             address?: string;
+            /** Format: double */
             lat?: number | null;
+            /** Format: double */
             lng?: number | null;
             /**
              * @description 电子围栏。**为 null 且 `is_default = false` 的门店是一家永远接不到单的店**——
@@ -19795,9 +19800,15 @@ export interface components {
             city?: string;
             district?: string;
             address?: string;
-            /** @description 必填。门店自身坐标的纬度（WGS-84），`/stores/resolve` 的 `distance_m` 按它算。 */
+            /**
+             * Format: double
+             * @description 必填。门店自身坐标的纬度（WGS-84），`/stores/resolve` 的 `distance_m` 按它算。
+             */
             lat?: number;
-            /** @description 必填。经度（WGS-84）。 */
+            /**
+             * Format: double
+             * @description 必填。经度（WGS-84）。
+             */
             lng?: number;
             /**
              * @description 建出来就是默认门店。已经有一家时返回 409——切换默认店请用
@@ -19821,11 +19832,13 @@ export interface components {
             district?: string;
             address?: string;
             /**
+             * Format: double
              * @description 与 `lng` 同时给或同时不给。坐标只能改、不能清空。
              *     这家店有围栏时，新坐标必须在围栏内，否则 422
              *     （`https://keel.dev/problems/store-outside-fence`）。
              */
             lat?: number;
+            /** Format: double */
             lng?: number;
             /** @enum {integer} */
             status?: 0 | 1;

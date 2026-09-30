@@ -1,6 +1,7 @@
 package handler_test
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
@@ -623,5 +624,37 @@ func TestStoreMustHaveLocationInsideItsFence(t *testing.T) {
 		box(70, 15, 140, 55), sh.Token), http.StatusUnprocessableEntity)
 	if p.Type != problem.TypeStoreLocationRequired {
 		t.Fatalf("没坐标的店配围栏应 store-location-required，实得 %s", p.Type)
+	}
+}
+
+// 坐标精度（2026-09-30）：契约里的经纬度原来是裸 number，生成 float32，后台保存门店坐标与围栏时
+// JSON 先解析进 float32 再存库，116.30 存成 116.30000305 —— 压在手画边线上的点会被判到围栏外。
+// 契约改成 format: double 之后，写进去什么、读出来就是什么，顶点本身也判在围栏内。
+func TestStoreCoordinatesAndFenceKeepFullPrecision(t *testing.T) {
+	sh := newAdminShop(t)
+	region := createRegion(t, sh, "prec", "精度大区")
+	const lng, lat = 114.0579831, 22.5430967
+	store := createStore(t, sh, region, "prec", "精度店", lng, lat)
+	body := `{"fence":{"type":"Polygon","coordinates":[[[114.0512345,22.5401234],[114.0654321,22.5401234],` +
+		`[114.0654321,22.5498765],[114.0512345,22.5498765],[114.0512345,22.5401234]]]}}`
+	if w := putAs(t, sh.Host, fmt.Sprintf("/api/v1/admin/stores/%d/fence", store), body, sh.Token); w.Code != http.StatusOK {
+		t.Fatalf("存围栏 %d：%s", w.Code, w.Body.String())
+	}
+	var got api.AdminStore
+	decodeInto(t, getAs(t, sh.Host, fmt.Sprintf("/api/v1/admin/stores/%d", store), sh.Token), http.StatusOK, "门店详情", &got)
+	if got.Lat == nil || got.Lng == nil || *got.Lat != lat || *got.Lng != lng {
+		t.Fatalf("门店坐标读回来是 %v,%v，期望原样 %v,%v", got.Lat, got.Lng, lat, lng)
+	}
+	if got.Fence == nil || got.Fence.Coordinates[0][0][0] != 114.0512345 || got.Fence.Coordinates[0][2][1] != 22.5498765 {
+		t.Fatalf("围栏顶点读回来掉了精度：%v", got.Fence)
+	}
+	// 顶点（边界上）按下单同一条判据算在围栏内。
+	var served bool
+	if err := admin(t).QueryRow(context.Background(), `SELECT ST_Intersects(fence, ST_SetSRID(ST_MakePoint(114.0654321, 22.5498765), 4326)::geography)
+		FROM stores WHERE id = $1`, store).Scan(&served); err != nil {
+		t.Fatal(err)
+	}
+	if !served {
+		t.Fatal("手画的顶点被判到了围栏外：坐标在写入路径上掉了精度")
 	}
 }

@@ -284,22 +284,13 @@ func optStr(v string) *string {
 	return &s
 }
 
-// optCoord 把 repository 的 *float64 收窄成契约的 *float32。
+// optCoord 把 repository 的坐标原样交给契约类型。
 //
-// **这一步会掉精度**，而且是有意接受的：契约把 lat / lng 写成裸 `type: number`
-// （没有 format: double），生成器据此产出 float32，约 7 位有效数字 ——
-// 在 116.3974 这个量级上大约 1 米。它只影响**回显**：围栏判定与距离排序都在
-// PostGIS 里用 float64 算（stores.location 是 GEOGRAPHY(POINT, 4326)），
-// 客户端拿这个值去画地图上的一个点，1 米的偏差看不出来。
-//
-// 真要改成 float64，改的是契约里那两行 format，然后重跑三个生成物 ——
-// 那是一次契约变更，不该在这里用一个 any 悄悄绕过去。
-func optCoord(v *float64) *float32 {
-	if v == nil {
-		return nil
-	}
-	f := float32(*v)
-	return &f
+// 契约里的经纬度原来是裸 `type: number`，生成器据此产出 float32（约 7 位有效数字，116.xx 这个量级上约 1 米）。
+// 当初以为只影响回显，其实**写入方向也掉精度**：后台保存门店坐标、围栏时 JSON 先解析进 float32 再存库，
+// 库里的围栏就偏了，压在边线上的点会被判到围栏外（2026-09-30 审查发现）。契约已改成 format: double，这里不再收窄。
+func optCoord(v *float64) *float64 {
+	return v
 }
 
 // ---------------------------------------------------------------------------
@@ -371,16 +362,12 @@ func decodeFence(raw *string) *api.GeoPolygon {
 	}
 	out := api.GeoPolygon{
 		Type:        api.GeoPolygonType(g.Type),
-		Coordinates: make([][][]float32, 0, len(g.Coordinates)),
+		Coordinates: make([][][]float64, 0, len(g.Coordinates)),
 	}
 	for _, ring := range g.Coordinates {
-		r := make([][]float32, 0, len(ring))
+		r := make([][]float64, 0, len(ring))
 		for _, pt := range ring {
-			p := make([]float32, 0, len(pt))
-			for _, v := range pt {
-				p = append(p, float32(v))
-			}
-			r = append(r, p)
+			r = append(r, append([]float64(nil), pt...))
 		}
 		out.Coordinates = append(out.Coordinates, r)
 	}
@@ -817,14 +804,9 @@ func derefStr(v *string) string {
 	return *v
 }
 
-// wideCoord 是 optCoord 的反向：契约的 float32 → repository 的 float64。
-// 这个方向不掉精度。
-func wideCoord(v *float32) *float64 {
-	if v == nil {
-		return nil
-	}
-	f := float64(*v)
-	return &f
+// wideCoord 是 optCoord 的反向：契约的坐标 → repository。两边都是 float64（见 optCoord）。
+func wideCoord(v *float64) *float64 {
+	return v
 }
 
 // 这个文件里不该出现任何 c.Query —— 上面那 16 条在 routes 表里全登记着
