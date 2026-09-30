@@ -5,6 +5,8 @@
 **Location-first commerce with geofenced stores, AI staff, and an open interface for any agent harness.**
 *Built-in distributed transactions. Runs on a single machine, scales without a rewrite.*
 
+Open-source multi-tenant e-commerce · multi-store O2O and local delivery · geofence-based store routing · Go + PostgreSQL + Flutter + Vue 3
+
 <!-- The badge and the clone URL in the quick start point at the same repository.
      scripts/check_promises.py guards two things: a build badge is a false claim when
      .github/workflows/ does not exist; and every GitHub URL pointing at this repository

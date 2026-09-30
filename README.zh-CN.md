@@ -5,6 +5,8 @@
 **位置优先的电商系统：门店带电子围栏、AI 员工、对任何 agent harness 开放的接口。**
 *内置分布式事务。单机可跑，扩展无需重写。*
 
+开源多租户电商系统 · 多门店 O2O 与同城配送 · 电子围栏按位置分配门店 · Go + PostgreSQL + Flutter + Vue 3
+
 <!-- 徽章与快速开始里的 clone 地址指向同一个仓库。
      scripts/check_promises.py 守两件事：.github/workflows/ 不存在时构建徽章判为虚标；
      以及两份 README 里指向本仓库的 GitHub 地址必须同源——要么都还是占位符，
