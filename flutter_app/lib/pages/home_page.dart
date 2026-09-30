@@ -13,6 +13,16 @@ import '../widgets/product_card.dart';
 import '../widgets/quick_cart.dart';
 import '../widgets/states.dart';
 
+/// 首页顶上的问候，按本地时间的小时分段（原来 11–18 点都算「下午好」，上午 11 点也显示下午好）。
+String greetingFor(int hour) => switch (hour) {
+      < 5 => '夜深了',
+      < 9 => '早上好',
+      < 12 => '上午好',
+      < 14 => '中午好',
+      < 18 => '下午好',
+      _ => '晚上好',
+    };
+
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
   @override
@@ -168,10 +178,7 @@ class _HomePageState extends State<HomePage> {
     if (p.at == null) messenger.showSnackBar(const SnackBar(content: Text('这条地址没有位置信息，暂按默认门店')));
   }
 
-  String get _greeting {
-    final h = DateTime.now().hour;
-    return h < 11 ? '早上好' : (h < 18 ? '下午好' : '晚上好');
-  }
+  String get _greeting => greetingFor(DateTime.now().hour);
 
   @override
   Widget build(BuildContext context) {
