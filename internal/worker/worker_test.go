@@ -92,18 +92,21 @@ type instance struct {
 }
 
 func newInstance(t *testing.T) *instance {
+	return newInstanceWith(t, worker.Config{RetryInterval: 50 * time.Millisecond})
+}
+
+// newInstanceWith 同 newInstance，只是 RetryInterval / IdleSessionTimeout 由调用方给。
+func newInstanceWith(t *testing.T, cfg worker.Config) *instance {
 	t.Helper()
 	in := &instance{}
-	in.r = worker.New(worker.Config{
-		RetryInterval: 50 * time.Millisecond,
-		Connect: func(ctx context.Context) (*pgx.Conn, error) {
-			c, err := pgx.Connect(ctx, db.DSN())
-			if err == nil {
-				in.pid.Store(c.PgConn().PID())
-			}
-			return c, err
-		},
-	})
+	cfg.Connect = func(ctx context.Context) (*pgx.Conn, error) {
+		c, err := pgx.Connect(ctx, db.DSN())
+		if err == nil {
+			in.pid.Store(c.PgConn().PID())
+		}
+		return c, err
+	}
+	in.r = worker.New(cfg)
 	in.r.Add(worker.Task{Name: "test.scan", Leader: true, Run: func(ctx context.Context) {
 		in.running.Add(1)
 		in.starts.Add(1)
@@ -165,6 +168,65 @@ func TestLeaderReElectsAfterConnectionLoss(t *testing.T) {
 	eventually(t, "断线之后换了一条新连接并重新当选", func() bool {
 		return a.pid.Load() != oldPID && a.starts.Load() == 2 && a.running.Load() == 1
 	})
+}
+
+// backendAlive 用管理员连接查一个后端进程还在不在。
+func backendAlive(t *testing.T, pid uint32) bool {
+	t.Helper()
+	admin, err := pgx.Connect(context.Background(), db.AdminDSN())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close(context.Background())
+	var n int
+	if err := admin.QueryRow(context.Background(),
+		`SELECT count(*) FROM pg_stat_activity WHERE pid = $1`, int32(pid)).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n == 1
+}
+
+// 当选者冻住（docker pause：进程不跑了，TCP 连接与会话都还在）：它不再 ping，
+// 服务端按 idle_session_timeout 断开它的会话，锁随之释放，另一个实例接手。
+//
+// 冻住用「ping 间隔一小时」来模拟：a 当选之后选主循环就睡下去了，那条连接上再没有一个字节 ——
+// 与进程被暂停时服务端看到的完全一样。idle_session_timeout 注入成 2 秒。
+// 修复前这条测试会在 eventually 上超时：a 的会话一直在，b 永远抢不到。
+func TestFrozenLeaderIsReplacedAfterIdleSessionTimeout(t *testing.T) {
+	a := newInstanceWith(t, worker.Config{RetryInterval: time.Hour, IdleSessionTimeout: 2 * time.Second})
+	a.r.Start(context.Background())
+	defer a.r.Stop(5 * time.Second)
+	eventually(t, "a 当选", func() bool { return a.running.Load() == 1 })
+	frozenPID := a.pid.Load()
+
+	b := newInstance(t)
+	b.r.Start(context.Background())
+	defer b.r.Stop(5 * time.Second)
+
+	// 超时之前：a 的会话还在，b 抢不到。
+	time.Sleep(time.Second)
+	if b.running.Load() != 0 {
+		t.Fatal("idle_session_timeout 还没到，b 就接手了 —— a 的锁不该这么早没")
+	}
+	eventually(t, "a 冻住 2 秒后会话被服务端断开、b 接手", func() bool { return b.running.Load() == 1 })
+	if backendAlive(t, frozenPID) {
+		t.Fatal("b 接手了，a 那条会话却还在 —— 锁是怎么放出来的？")
+	}
+}
+
+// 正常 ping 着的当选者不会被 idle_session_timeout 误断：ping 间隔 200ms、超时 600ms（3 倍），
+// 跑上 2 秒（三个多超时周期），连接还是那一条，任务只启动过一次。
+func TestPingingLeaderIsNotCutByIdleSessionTimeout(t *testing.T) {
+	a := newInstanceWith(t, worker.Config{RetryInterval: 200 * time.Millisecond, IdleSessionTimeout: 600 * time.Millisecond})
+	a.r.Start(context.Background())
+	defer a.r.Stop(5 * time.Second)
+	eventually(t, "a 当选", func() bool { return a.running.Load() == 1 })
+	pid := a.pid.Load()
+
+	time.Sleep(2 * time.Second)
+	if a.pid.Load() != pid || a.starts.Load() != 1 || !backendAlive(t, pid) {
+		t.Fatalf("正常 ping 的当选者被断过：pid %d → %d，任务启动 %d 次", pid, a.pid.Load(), a.starts.Load())
+	}
 }
 
 // 没有选主连接（Connect 为 nil）：选主任务宁可不跑，也不能每个实例都跑；并行任务照跑。

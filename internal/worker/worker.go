@@ -30,6 +30,27 @@
 //   - 拿不到锁不是错误：本轮跳过，RetryInterval 之后再试。持锁的实例停机
 //     （连接关闭即释放）之后，最多一个 RetryInterval 就有别的实例接手。
 //   - 不能经过 PgBouncer 的事务池模式：那种模式下会话级锁没有意义。
+//
+// # 活性：当选者冻住了怎么办
+//
+// 上面那条「连接关闭即释放」有一个前提：连接**真的**会关。当选实例的进程被冻住
+// （docker pause、SIGSTOP、宿主机卡死）时，它不 ping 了，可 TCP 连接还在、会话还在、锁也就还在
+// —— 别的实例永远抢不到，扫描类任务全部停摆（2026-10 破坏性测试）。网络分区同理：服务端那一侧
+// 要等内核的 TCP keepalive（Linux 默认 2 小时起）才发现对面没了。
+//
+// 两道兜底都设在选主那条专用连接上（prepareLeaderConn），由**服务端**动手，不依赖冻住的那一方：
+//
+//   - idle_session_timeout（PG 14+）：会话在事务之外空闲超过这个时长，服务端断开它，锁随会话释放。
+//     值取 ping 间隔的 3 倍（IdleSessionTimeout，默认 45 秒）：正常的当选者每个 RetryInterval
+//     至少 ping 一次，差两次 ping 都不会被误断；冻住的当选者最多 45 秒就让出锁。
+//   - tcp_keepalives_idle / interval / count（服务端那一侧的 keepalive）：分区时服务端发探测，
+//     15 + 5×3 = 30 秒内确认对面没了就断。它也是 PG 13 及以下（没有 idle_session_timeout）的兜底。
+//
+// 客户端那一侧另配了同样的 keepalive（app/background.go 的拨号器，KeepAlive），让分区里的当选者
+// 自己也尽快发现连接死了 —— 不过 ping 本身带 5 秒超时，那一侧主要还是靠 ping。
+//
+// 代价是「两个实例同时跑」的窗口：冻住的实例被唤醒时，它的任务还在跑，要到它下一次 ping 失败
+// （至多一个 RetryInterval）才停。与上面断线那条同一个代价，这些任务本来就要容忍并发。
 package worker
 
 import (
@@ -37,7 +58,9 @@ import (
 	"fmt"
 	"hash/fnv"
 	"log/slog"
+	"net"
 	"runtime/debug"
+	"strconv"
 	"sync"
 	"time"
 
@@ -60,11 +83,37 @@ type Config struct {
 	// Connect 建选主用的那条专用连接。没有选主任务时不会被调用；
 	// 有选主任务却为 nil 时，选主任务**不启动**（并告警）—— 宁可不跑，也不能每个实例都跑。
 	Connect func(ctx context.Context) (*pgx.Conn, error)
-	// RetryInterval 是拿不到锁之后多久再试、以及 ping 那条连接的间隔。默认 15 秒。
+	// RetryInterval 是拿不到锁之后多久再试、以及 ping 那条连接的间隔。默认 15 秒（DefaultRetryInterval）。
 	RetryInterval time.Duration
+	// IdleSessionTimeout 是选主连接上的 idle_session_timeout：当选者这么久没说话（冻住、分区），
+	// 服务端断开它的会话、锁随之释放（包注释「活性」）。默认 RetryInterval 的 3 倍，且不少于 1 秒
+	// （测试里 RetryInterval 只有几十毫秒，3 倍会短到一次调度抖动就误断）。
+	// 必须明显大于 RetryInterval，否则正常 ping 着的当选者也会被断。
+	IdleSessionTimeout time.Duration
 	// MinBackoff / MaxBackoff 是任务 panic（或意外返回）之后重启的退避，逐次翻倍。默认 1 秒 / 1 分钟。
 	MinBackoff, MaxBackoff time.Duration
 	Log                    *slog.Logger
+}
+
+// DefaultRetryInterval 是 RetryInterval 的默认值：选主连接每 15 秒 ping 一次。
+const DefaultRetryInterval = 15 * time.Second
+
+// idleSessionTimeoutFactor：idle_session_timeout 取 ping 间隔的几倍。3 倍 = 连续丢两次 ping
+// 都不误断，冻住的当选者至多 3 个间隔（默认 45 秒）让出锁。
+const idleSessionTimeoutFactor = 3
+
+// 选主连接两侧的 TCP keepalive：空闲 15 秒开始探测，每 5 秒一次，3 次没回就断 ——
+// 分区之后约 30 秒确认对面没了（内核默认是 2 小时起）。
+const (
+	keepAliveIdle     = 15 * time.Second
+	keepAliveInterval = 5 * time.Second
+	keepAliveCount    = 3
+)
+
+// KeepAlive 是选主连接**客户端**那一侧的 TCP keepalive，给建连的拨号器用（app/background.go）。
+// 服务端那一侧的同一组参数由 prepareLeaderConn 设。
+func KeepAlive() net.KeepAliveConfig {
+	return net.KeepAliveConfig{Enable: true, Idle: keepAliveIdle, Interval: keepAliveInterval, Count: keepAliveCount}
 }
 
 // LockClass 是选主锁的第一个键（两参数形式 pg_try_advisory_lock(int4, int4)）。
@@ -92,7 +141,10 @@ type Runner struct {
 // New 建 Runner。
 func New(cfg Config) *Runner {
 	if cfg.RetryInterval <= 0 {
-		cfg.RetryInterval = 15 * time.Second
+		cfg.RetryInterval = DefaultRetryInterval
+	}
+	if cfg.IdleSessionTimeout <= 0 {
+		cfg.IdleSessionTimeout = max(idleSessionTimeoutFactor*cfg.RetryInterval, time.Second)
 	}
 	if cfg.MinBackoff <= 0 {
 		cfg.MinBackoff = time.Second
@@ -282,6 +334,7 @@ func (r *Runner) elect(ctx context.Context, tasks []Task) {
 			if err != nil {
 				r.log.Warn("建选主连接失败，选主任务这一轮不跑，稍后再试", "err", err)
 			} else {
+				r.prepareLeaderConn(ctx, c)
 				conn = c
 			}
 		}
@@ -321,5 +374,27 @@ func (r *Runner) elect(ctx context.Context, tasks []Task) {
 			return
 		case <-t.C:
 		}
+	}
+}
+
+// prepareLeaderConn 在选主连接上设活性兜底（包注释「活性」）：服务端那一侧的 TCP keepalive，
+// 与 idle_session_timeout。会话级（set_config 第三个参数 false）：这条连接只给选主用，不进池。
+//
+// 设不上只告警、不放弃这条连接：没有活性兜底的选主仍然比不选主强（每个实例都跑），
+// 而 idle_session_timeout 设不上最常见的原因是服务端是 PG 13 或更老（没有这个参数）——
+// 那时还有 keepalive 兜着网络分区，冻住的进程则要等它自己恢复或被重启。
+// 两组分开发：keepalive 在老版本上也认，不能被 idle_session_timeout 的失败连累。
+func (r *Runner) prepareLeaderConn(ctx context.Context, c *pgx.Conn) {
+	secs := func(d time.Duration) string { return strconv.Itoa(int(d / time.Second)) }
+	if _, err := c.Exec(ctx, `SELECT set_config('tcp_keepalives_idle', $1, false),
+	                                 set_config('tcp_keepalives_interval', $2, false),
+	                                 set_config('tcp_keepalives_count', $3, false)`,
+		secs(keepAliveIdle), secs(keepAliveInterval), strconv.Itoa(keepAliveCount)); err != nil {
+		r.log.Warn("选主连接设不上服务端 TCP keepalive，网络分区时锁要等内核默认的 keepalive 才释放", "err", err)
+	}
+	ms := strconv.FormatInt(r.cfg.IdleSessionTimeout.Milliseconds(), 10)
+	if _, err := c.Exec(ctx, `SELECT set_config('idle_session_timeout', $1, false)`, ms); err != nil {
+		r.log.Warn("选主连接设不上 idle_session_timeout（PostgreSQL 14 之前没有这个参数）："+
+			"当选实例冻住时别的实例不会接手", "err", err)
 	}
 }

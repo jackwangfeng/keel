@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"strings"
 	"time"
@@ -48,7 +49,14 @@ func newBackground(pool *pgxpool.Pool, enabled bool) *background {
 		enabled: enabled,
 		r: worker.New(worker.Config{
 			Connect: func(ctx context.Context) (*pgx.Conn, error) {
-				c, err := pgx.ConnectConfig(ctx, pool.Config().ConnConfig.Copy())
+				cfg := pool.Config().ConnConfig.Copy()
+				// 客户端那一侧的 TCP keepalive（worker 包注释「活性」）：网络分区时当选者自己也尽快
+				// 发现这条连接死了。服务端那一侧与 idle_session_timeout 由 worker 在连上之后设。
+				// Unix 域套接字上 keepalive 没有意义，net.Dialer 会忽略它。
+				// Timeout 照抄连接串里的 connect_timeout：换掉 pgconn 默认的拨号器不该把它丢了。
+				d := &net.Dialer{Timeout: cfg.ConnectTimeout, KeepAliveConfig: worker.KeepAlive()}
+				cfg.DialFunc = d.DialContext
+				c, err := pgx.ConnectConfig(ctx, cfg)
 				if err != nil {
 					return nil, err
 				}
