@@ -591,7 +591,9 @@ SELECT pg.id, pg.title, pg.subtitle,
                                 FALSE) -- 缺行按无货（文件头）
                        = $4::boolean
                  ORDER BY p.published_at DESC NULLS LAST, p.id DESC
-                 LIMIT $5::int + $6::int
+                 -- 先按 int 定参数类型、再升成 bigint 相加：offset 钳到 int32 上限（service.offsetOf）时
+                 -- 再加 limit 会在 int4 里溢出报错（一个 500），bigint 里只是取不到行。
+                 LIMIT $5::int::bigint + $6::int::bigint
                ) c
          ORDER BY c.published_at DESC NULLS LAST, c.id DESC
          LIMIT $6 OFFSET $5) pg

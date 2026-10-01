@@ -351,6 +351,18 @@ func TestListProductsByCategoryMatchesSingleSort(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// offset 钳到 int32 上限（service.offsetOf 对巨大页码的处理）：per-category 那条内层 LIMIT 是
+	// offset+limit，不能在 int4 里溢出报错，应当只是空页。
+	if err := r.WithTenant(tctx, func(tx repository.Tx) error {
+		page, err := tx.ListProducts(ctx, sc, repository.ListingFilter{Categories: ids}, 100, 1<<31-1)
+		if err == nil && len(page) != 0 {
+			t.Errorf("越界的巨大 offset 取到 %d 件", len(page))
+		}
+		return err
+	}); err != nil {
+		t.Fatalf("巨大 offset + 按类目筛：%v", err)
+	}
+
 	// 别家的类目：子树在 RLS 下是空的（B 店看不到 A 店的类目）。
 	if got := subtreeOf(t, fx.b, fx.rootCatA); len(got) != 0 {
 		t.Errorf("B 店取到了 A 店类目的子树 %v", got)

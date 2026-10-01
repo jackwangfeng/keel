@@ -186,7 +186,9 @@ SELECT pg.id, pg.title, pg.subtitle,
                                 FALSE) -- 缺行按无货（文件头）
                        = sqlc.arg(in_stock)::boolean
                  ORDER BY p.published_at DESC NULLS LAST, p.id DESC
-                 LIMIT sqlc.arg(page_offset)::int + sqlc.arg(page_limit)::int
+                 -- 先按 int 定参数类型、再升成 bigint 相加：offset 钳到 int32 上限（service.offsetOf）时
+                 -- 再加 limit 会在 int4 里溢出报错（一个 500），bigint 里只是取不到行。
+                 LIMIT sqlc.arg(page_offset)::int::bigint + sqlc.arg(page_limit)::int::bigint
                ) c
          ORDER BY c.published_at DESC NULLS LAST, c.id DESC
          LIMIT sqlc.arg(page_limit) OFFSET sqlc.arg(page_offset)) pg
