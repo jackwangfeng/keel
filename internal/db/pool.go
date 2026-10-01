@@ -126,13 +126,16 @@ func NewPoolFromDSN(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 // 连接串里已经写了同名参数（如 ...?statement_timeout=5000）时以连接串为准：那是
 // 部署方更具体的意图。
 const (
-	EnvDBStatementTimeout   = "KEEL_DB_STATEMENT_TIMEOUT"
-	EnvDBIdleInTxTimeout    = "KEEL_DB_IDLE_IN_TX_TIMEOUT"
-	EnvDBLockTimeout        = "KEEL_DB_LOCK_TIMEOUT"
+	EnvDBStatementTimeout = "KEEL_DB_STATEMENT_TIMEOUT"
+	EnvDBIdleInTxTimeout  = "KEEL_DB_IDLE_IN_TX_TIMEOUT"
+	EnvDBLockTimeout      = "KEEL_DB_LOCK_TIMEOUT"
+	// EnvDBJIT：on 恢复数据库自己的 JIT 设置，默认（空 / off）关掉，理由见 applySessionTimeouts。
+	EnvDBJIT                = "KEEL_DB_JIT"
 	defaultStatementTimeout = 15 * time.Second
 	defaultIdleInTxTimeout  = 30 * time.Second
 	defaultLockTimeout      = 3 * time.Second
 	paramStatementTimeout   = "statement_timeout"
+	paramJIT                = "jit"
 	paramIdleInTxTimeout    = "idle_in_transaction_session_timeout"
 )
 
@@ -171,6 +174,19 @@ func applySessionTimeouts(params map[string]string) error {
 			continue
 		}
 		params[c.param] = strconv.FormatInt(d.Milliseconds(), 10)
+	}
+	// JIT 默认关（2026-10 性能压测）：PostgreSQL 在估算代价超过 jit_above_cost 时先做 JIT 编译。
+	// 这里全是毫秒级的 OLTP 语句，但深分页 / 按类目筛的列表估到几十万的代价，每次执行先花约 200 ms 编译、
+	// 实际只要 12 ms（EXPLAIN 带 COSTS OFF 时看不到这段编译时间）。报表那类真正的长查询也不靠 JIT 救。
+	// KEEL_DB_JIT=on 恢复数据库自己的设置；连接串里已写 jit 的以连接串为准。
+	if _, set := params[paramJIT]; !set {
+		switch v := os.Getenv(EnvDBJIT); v {
+		case "", "off":
+			params[paramJIT] = "off"
+		case "on":
+		default:
+			return fmt.Errorf("%s=%q 不认识（on / off）", EnvDBJIT, v)
+		}
 	}
 	return nil
 }
