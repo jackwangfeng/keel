@@ -37,7 +37,7 @@
 
 ## 仓库里的其他文档
 
-- [README](../README.zh-CN.md) · [English README](../README.md)
+- [README](../README.md) · [English README](../README.en.md)
 - [CONTRIBUTING.md](../CONTRIBUTING.md)：开发环境、测试、提交规范
 - [CHANGELOG.md](../CHANGELOG.md)：版本变更（英文）
 - [SECURITY.md](../SECURITY.md)：安全问题报告方式（英文）

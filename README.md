@@ -2,197 +2,180 @@
 
 # Keel
 
-**Location-first commerce with geofenced stores, AI staff, and an open interface for any agent harness.**
-*Built-in distributed transactions. Runs on a single machine, scales without a rewrite.*
+**位置优先的电商系统：门店带电子围栏、AI 员工、对任何 agent harness 开放的接口。**
+*内置分布式事务。单机可跑，扩展无需重写。*
 
-Open-source multi-tenant e-commerce · multi-store O2O and local delivery · geofence-based store routing · Go + PostgreSQL + Flutter + Vue 3
+开源多租户电商系统 · 多门店 O2O 与同城配送 · 电子围栏按位置分配门店 · Go + PostgreSQL + Flutter + Vue 3
 
-<!-- The badge and the clone URL in the quick start point at the same repository.
-     scripts/check_promises.py guards two things: a build badge is a false claim when
-     .github/workflows/ does not exist; and every GitHub URL pointing at this repository
-     must agree — either all still placeholders, or all filled in with the same owner.
-     Replacing only half is both the easiest mistake to make and the hardest to spot. -->
+国内镜像（自动同步，只读）：[gitee.com/dahuangfeng96/keel](https://gitee.com/dahuangfeng96/keel) —— Issue 与 PR 请到 GitHub
+
+<!-- 徽章与快速开始里的 clone 地址指向同一个仓库。
+     scripts/check_promises.py 守两件事：.github/workflows/ 不存在时构建徽章判为虚标；
+     以及两份 README 里指向本仓库的 GitHub 地址必须同源——要么都还是占位符，
+     要么都已填好且是同一个组织名。只替换一半是最容易发生也最难发现的那种错。 -->
 [![CI](https://github.com/jackwangfeng/keel/actions/workflows/ci.yml/badge.svg)](https://github.com/jackwangfeng/keel/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](./LICENSE)
 ![Go](https://img.shields.io/badge/Go-1.26+-00ADD8)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16+-336791)
 
-[Documentation](./docs/README.md) (Chinese) · [Changelog](./CHANGELOG.md) · [Security](./SECURITY.md) · [中文文档](./README.zh-CN.md)
+[快速上手](./docs/指南/快速上手.md) · [文档](./docs/README.md) · [变更日志](./CHANGELOG.md)（英文） · [安全](./SECURITY.md)（英文） · [English](./README.en.md)
 
 </div>
 
 ---
 
-## Why another commerce platform?
+## 为什么还要再做一个电商系统
 
-There are already good open-source commerce systems — Saleor, Medusa, Shopware, mall.
-Keel is not trying to be the fiftieth. Three things are what it is about, and three more
-are the foundation that makes them safe:
+开源电商已经有不少好项目——Saleor、Medusa、Shopware、mall。
+Keel 无意成为第五十个。它存在的理由是三件别人没有的事，另外三件是让这三件
+能够放心去做的地基：
 
-### 1. Location-first: every store is a geofence
+### 一、位置优先：每家门店都是一个围栏
 
-Keel is built for shops that deliver from physical stores — convenience chains, fresh
-groceries, pharmacies, a coffee brand with twenty branches. A store is a point on the map
-plus a **delivery fence** (a polygon drawn on the map in the console), and the whole flow
-is decided by where the buyer is:
+Keel 是为「从实体门店发货」的生意做的——便利店连锁、生鲜、药店，或者
+开了二十家分店的咖啡品牌。一家门店是地图上的一个点，加一个**配送围栏**
+（在后台地图上画的多边形），整条流程都由买家在哪里决定：
 
-- **Open the app, get the right store.** `GET /stores/resolve?lat&lng` returns every open
-  store whose fence contains the buyer, nearest first; outside every fence, the default
-  store takes over as the nationwide fallback. Fences may overlap (shared trading areas) —
-  the server never silently picks one for you.
-- **Per-store everything.** Stock, visibility and price are per store (base → region →
-  store), and a sold-out item sorts to the end *of that store's* list.
-- **Orders must ship inside the fence.** A shipping address with coordinates outside the
-  chosen store's fence is rejected at preview and at checkout (`422 address-out-of-range`),
-  with the client offering "change address" or "switch to the store that covers it".
-- **The console keeps the map honest.** A store must have coordinates, and must sit inside
-  its own fence; disabling a region takes every store in it offline.
-- **Same-city delivery, not express shipping.** A fenced store charges delivery by distance tiers (straight-line
-  from the store to the address), with a minimum order and free delivery over an amount — the cart shows
-  "¥x more to reach the minimum" before checkout. Freight templates (by province) stay for the default store's
-  nationwide express shipping; a product's express template can no longer override a store's delivery fee.
-- **POI, not typing.** `/geo/reverse` and `/geo/suggest` proxy a map provider (AMap today)
-  on the server: the home page shows "deliver to …" with the street address, buyers pick an
-  address by searching or dropping a pin, and the console fills a store's address from a
-  place search. The key never leaves the server; everything is stored in WGS-84 (GCJ-02 is
-  converted in one place, with tests against known points). No key configured → 501, and
-  clients fall back to manual entry plus map picking.
+- **打开 App 就找对门店。** `GET /stores/resolve?lat&lng` 返回所有围栏覆盖了
+  买家坐标的营业中门店，按距离排序；不在任何围栏内时，默认门店兜底全国。
+  围栏可以重叠（共享的商圈）——服务端从不替你悄悄挑一个。
+- **一切按门店区分。** 库存、可见性、价格都按门店分层（基准 → 大区 →
+  门店），售罄的商品只排到**那家门店**列表的末尾。
+- **订单必须发到围栏里。** 收货地址的坐标如果在所选门店的围栏之外，
+  试算和下单都会被拒绝（`422 address-out-of-range`），客户端提示「换个地址」
+  或「换一家覆盖这里的门店」。
+- **后台逼着地图数据保持诚实。** 门店必须有坐标，且必须落在自己的围栏内；
+  停用一个大区，这个大区里的门店全部下线。
+- **同城配送，不是快递。** 有围栏的门店按距离分档收配送费（门店到收货地址的直线距离），可设起送价与满额免配送费，
+  购物车里就提示「还差 ¥x 起送」。按省计价的运费模板留给默认门店的全国快递；商品单独挂的快递模板不再盖掉门店的配送费。
+- **靠 POI，不靠手打。** `/geo/reverse` 与 `/geo/suggest` 在服务端代理一个
+  地图供应商（今天是高德）：首页显示「送到 …」并带街道地址，买家搜索或
+  拖动图钉选地址，后台从地点搜索里回填门店地址。密钥不离开服务端，
+  一切坐标存成 WGS-84（GCJ-02 只在一处转换，有对照已知坐标点的测试）。
+  没配密钥就返回 501，客户端退回手动填写加地图选点。
 
-### 2. AI staff: an agent on the team, not a chatbot on the page
+### 二、AI 员工：agent 是团队的一员，不是页面上的聊天框
 
-Keel does not bundle a model. It gives **your** agent a job: a staff account with the same
-role and store/region scope as a human, MCP tools to read the business and compute, and a
-**proposal queue** — every write is a proposal with evidence and expected impact, and a
-human approves before Keel executes it (idempotently, as the agent, fully audited).
+Keel 不内置模型。它给**你的** agent 一份工作：一个和人一样有角色与门店 /
+大区管辖范围的员工账号、读业务与算数的 MCP 工具，以及一个**提案队列**——
+每一次写操作都是带证据和预期影响的提案，人批准后 Keel 才去执行
+（幂等、以 agent 身份、全程留痕）。
 
-This is running on the demo site today (M9–M11, shipped): every morning, and whenever stock runs low or a
-buyer files an after-sales request, an AI store manager
-walks the shop, posts a daily brief (sales vs. the day before, anomalies worth a second
-look, what is about to sell out) and files restock proposals computed by Keel — daily
-sales with stock-out days removed from the denominator, days of cover, suggested quantity,
-a confidence flag. Approve one in the console and the stock goes up; reject it with a
-reason and the agent reads that reason next time.
+这一套今天就跑在演示站上（M9，已上线）：AI 店长每天早上巡一遍店，
+发一份简报（销售额同比前一天、值得多看一眼的异常、快卖完的商品），
+并提交由 Keel 算好的补货提案——去掉断货天数的日均销量、周转天数、
+建议补货量、一个置信度标记。在后台批准一条，库存就加上去了；带理由驳回，
+agent 下次会读到这个理由。
 
-Most platforms put their AI on the demand side (search, recommendations, chat). **Almost
-nobody applies it to replenishment, pricing, promotions or after-sales** — where merchants
-spend their hours. The hard part is not wiring up a model, it is being willing to hand
-over the keys. What makes that safe here is infrastructure Keel already had: idempotent
-write APIs, tiered roles and scopes (an agent that oversteps is rejected exactly like a
-human), row-level security, preview endpoints, distributed transactions and audit.
-Plan: [AI Operations: Plan](./docs/AI经营-规划.md); M9 design:
-[AI Operations M9 Design](./docs/AI经营-M9设计.md) (Chinese).
+多数平台把 AI 放在需求侧（搜索、推荐、客服）。**几乎没人把它用在
+补货、定价、营销、售后**——而那正是商家花时间最多的地方。难点不在接一个
+模型，而在敢不敢把钥匙交出去。能这么做，靠的是 Keel 本来就有的底子：
+幂等的写接口、分级权限与管辖范围（越权的 agent 和人一样被拒）、行级安全、
+预览接口、分布式事务与审计。
+规划见 [AI 经营：规划](./docs/AI经营-规划.md)；M9 设计见
+[AI 经营 M9 设计](./docs/AI经营-M9设计.md)。
 
-### 3. Open to any agent harness
+### 三、向任何 agent harness 开放
 
-The AI interface is a documented, versioned contract, so you bring the agent:
-Claude Code, Codex, Cursor, the official MCP SDKs in a twenty-line script, or the bot behind
-your Feishu / DingTalk / WeCom group. Keel speaks **MCP over streamable HTTP**, stateless,
-one `kagt_…` access key per agent:
+AI 接口是一份成文的、带版本的契约，agent 你自己带：Claude Code、Codex、
+Cursor、二十行脚本写的官方 MCP SDK，或者你飞书 / 钉钉 / 企微群里的 bot。
+Keel 说的是**流式 HTTP 上的 MCP**，无状态，每个 agent 一个 `kagt_…` 接入密钥：
 
 ```json
 { "mcpServers": { "keel": { "type": "http", "url": "https://<your-shop>/api/v1/mcp",
     "headers": { "Authorization": "Bearer ${KEEL_AGENT_KEY}" } } } }
 ```
 
-Every tool declares its input **and output** JSON Schema (validated before returning);
-tool errors carry a machine-readable problem type identical to the admin API's; the full
-tool list is snapshotted in the repo and a test holds it — changes are additive only, a
-breaking change gets a new tool name. stdio-only clients use the bundled `cmd/keel-mcp`
-bridge. Integrator guide: [AI Interface](./docs/AI接口.md) (Chinese); tool list with
-schemas: [`docs/AI接口-工具清单.json`](./docs/AI接口-工具清单.json).
+每个工具都声明输入**与输出**的 JSON Schema（返回前会校验）；工具报错带的
+机器可读问题类型和管理 API 一致；完整工具清单在仓库里有快照，一条测试
+守着它——变更只做加法，破坏性改动一律换新工具名。只支持 stdio 的客户端
+用内置的 `cmd/keel-mcp` 桥接。接入指南见 [AI 接口](./docs/AI接口.md)；
+带 Schema 的工具清单见 [`docs/AI接口-工具清单.json`](./docs/AI接口-工具清单.json)。
 
-### 4. A distributed transaction engine, built in
+### 四、内置分布式事务引擎
 
-Transactional consistency is handled by [dtmrs](https://github.com/jackwangfeng/dtmrs) —
-a Rust transaction coordinator supporting SAGA, TCC, two-phase messaging, XA and workflow.
+交易一致性由 [dtmrs](https://github.com/jackwangfeng/dtmrs) 保障——
+Rust 实现的事务协调器，支持 SAGA、TCC、二阶段消息、XA 与 workflow。
 
-Checkout deducts stock, redeems a coupon and creates an order across three branches.
-If any step fails, the rest are compensated — correctly, idempotently, and with
-sub-transaction barriers that survive process crashes.
+下单要跨三个分支：扣减库存、核销优惠券、创建订单。
+任一步失败则已执行的分支全部补偿——幂等、可靠，子事务屏障能扛住进程崩溃。
 
-Most open-source commerce projects either avoid the problem (one big local transaction)
-or bolt on an external coordinator. Keel treats it as a first-class concern.
+多数开源电商要么回避这个问题（一个大本地事务），要么外挂一个协调器。
+Keel 把它当作一等公民。
 
-### 5. One codebase, from a laptop to a cluster
+### 五、一套代码，从笔记本到集群
 
-Thanks to dtmrs's embeddable coordinator, transaction orchestration code is
-**identical** whether branches are in-process function calls or remote services.
+借助 dtmrs 的嵌入式协调器，事务编排代码在「进程内函数调用」与
+「远程服务调用」两种形态下**完全一致**。
 
 ```diff
-  // Single process
+  // 单进程
 - tc.saga(gid).step("local://deduct_stock", "local://restore_stock").submit()
-  // Microservices — the only line that changes
+  // 微服务 —— 只有这一行变了
 + tc.saga(gid).step("http://inventory/deduct", "http://inventory/restore").submit()
 ```
 
-Traditional systems force a choice: a monolith that's easy to deploy but hard to scale,
-or microservices that scale but are a deployment nightmare. Keel doesn't require choosing.
+传统系统逼你二选一：单体好部署但难扩展，微服务能扩展但部署是地狱。
+Keel 不需要选。
 
-This is running code, not a slogan: inventory already ships as a separate service. See
-[Deployment shapes](#deployment-shapes-monolith-and-microservices).
+这不是口号：库存已经可以作为独立服务部署，见[部署形态：单体与微服务](#部署形态单体与微服务)。
 
-### 6. One deployment, many merchants
+### 六、一套部署，多个商家
 
-Each merchant gets their own storefront, and orders never span merchants.
+每个商家有自己独立的店铺前台，订单永远不跨商家。
 
-**This does not cost you the single-machine story.** A small shop runs
-`docker compose up` and gets a deployment with exactly one tenant; nothing about
-multi-tenancy is visible to them, and opening a second shop later does not mean
-changing architecture.
+**但这不影响单机叙事。** 小商家 `docker compose up` 起来就是租户数为 1 的部署，
+感知不到任何多租户的存在；需要开第二家店时不用换架构。
 
-Cross-tenant isolation does not rest on remembering a `WHERE` clause — that kind of
-bug is invisible against single-tenant test data. It rests on every table carrying
-`merchant_id`, parent-child rows pinned by composite foreign keys, and PostgreSQL
-row-level security underneath. All three are checked mechanically: the
-`merchant_id` rule against **the DDL in the design doc**, the other two against
-**the live database's catalog** in the test suite.
+跨租户隔离不靠「每个查询记得加 WHERE」——那种 bug 在单租户测试数据下完全看不出来。
+靠的是每张表都带 `merchant_id`、父子关系用复合外键钉死、以及 PostgreSQL 行级安全兜底。
+三条都有机械检查：`merchant_id` 那条由脚本核对**设计文档里的 DDL**，
+行级安全与复合外键那两条由测试直接查**真实数据库的系统目录**。
 
-### 7. Search and product understanding with local inference
+### 七、本地推理的检索与商品理解
 
-| Stage | Capability |
+| 环节 | 能力 |
 |---|---|
-| **Demand** | Hybrid vector + keyword search, fused with RRF, then business re-ranking (out-of-stock demotion) |
-| **Supply** | Category suggestions from title embeddings during bulk import (Top-3 95.9% offline) · block prohibited advertising claims before publish |
+| **卖货** | 语义与关键词混合检索，RRF 融合 + 业务重排（缺货商品降权） |
+| **进货** | 批量导入时按标题语义推荐类目（离线评测 Top-3 95.9%）· 发布前拦截广告法违禁词 |
 
-**No external API calls. No data leaving your network. No per-token billing.**
-Search's vector inference runs on our own [infero](https://github.com/jackwangfeng/infero)
-engine (details under "Not in the box yet" below). Other platforms' semantic search is
-either a wrapper around a third-party API, or only available on their hosted cloud —
-Medusa's semantic search, for instance, runs on Medusa Cloud. If you self-host, you are
-back to wiring up Algolia yourself. Keel assumes you want to own your stack.
+**零外部 API 调用，数据不出内网，无按量计费。** 检索的向量推理跑在自建的
+[infero](https://github.com/jackwangfeng/infero) 引擎上（细节见下面「还没在盒子里的」）。
+其他平台的语义检索要么是第三方接口的封装，要么只在自家托管云上提供——比如 Medusa
+的语义检索跑在 Medusa Cloud 上，自托管还是得自己去接 Algolia。Keel 默认你想完整
+拥有自己的技术栈。
 
 ---
 
-## Live demo
+## 在线演示
 
-**<https://eshop.zzss.fun>** — open to everyone, no sign-up or login needed.
+**<https://eshop.zzss.fun>** —— 对所有人开放，免注册、免登录直接访问。
 
-| Path | What you get |
+| 路径 | 内容 |
 |---|---|
-| [`/`](https://eshop.zzss.fun/) | Buyer app (Flutter Web build of `flutter_app/`) — allow location, or pick an address, to see the geofenced store |
-| [`/admin/`](https://eshop.zzss.fun/admin/) | Merchant console, signed in as the demo merchant's admin — see **AI 员工** for the AI store manager's briefs, proposals, their measured outcomes and its scorecard (it walks the shop every morning and wakes on events, on simulated orders) |
-| [`/ai-log/`](https://eshop.zzss.fun/ai-log/) | The public AI operations log: what the AI staff proposed, what was approved or auto-executed, and how it turned out |
+| [`/`](https://eshop.zzss.fun/) | 买家端（`flutter_app/` 的 Flutter Web 版）——允许定位，或手动选个地址，就能看到围栏对应的门店 |
+| [`/admin/`](https://eshop.zzss.fun/admin/) | 商家后台，以演示商家管理员身份进入——看 **AI 员工** 页可以看到 AI 店长的简报、提案、执行后的复盘与成绩单（跑在模拟订单上，每天早上巡店，有事件时也会被叫醒） |
+| [`/ai-log/`](https://eshop.zzss.fun/ai-log/) | 公开的 AI 经营日志：AI 员工提了什么、哪些被批准或自动执行、效果如何 |
 
-> This is a demo environment shared by all visitors. Data is reset from time to time without notice, and anything you enter may be seen by others — **do not enter real personal information** (names, phone numbers, addresses, payment details).
+> 这是所有访客共用的演示环境，数据会不定期重置、不另行通知，你录入的内容其他访客也可能看到——**请勿录入真实信息**（姓名、手机号、地址、支付信息等）。
 
 ---
 
-## Quick start
+## 快速开始
 
 ```bash
 git clone https://github.com/jackwangfeng/keel && cd keel
 docker compose up -d --build
-./scripts/smoke.sh                        # exit 0 means the chain works
+./scripts/smoke.sh                        # 退出码 0 表示链路通
 curl http://localhost:8080/api/v1/products
 ```
 
-One command brings up PostgreSQL, runs the migrations, loads a seed shop and
-starts the API and the merchant console. That `curl` comes back with the shop's products, and nothing in
-it says which shop — the deployment has exactly one tenant, which is the
-small-shop shape promised above.
+一条命令起 PostgreSQL、跑迁移、加载一家种子店铺、起 API 和商家后台。
+那条 `curl` 直接返回这家店的商品，而请求里没有任何东西说明「哪家店」——
+这套部署的租户数就是 1，正是上面承诺给小商家的那个形态。
 
-If 8080 is taken, move the whole group — the four commands above read the same
-variable, but the port in that `curl` is hard-coded, so don't change only the first:
+8080 被占就整组换端口 —— 上面四条命令读的是同一个变量，但那条 `curl` 里的
+端口号是写死的，别只改第一条：
 
 ```bash
 export KEEL_HTTP_PORT=18080
@@ -201,494 +184,395 @@ docker compose up -d --build
 curl "http://localhost:$KEEL_HTTP_PORT/api/v1/products"
 ```
 
-> When something else holds 8080, the `curl` copied verbatim gets a 404 from
-> **that** service. It reads like "Keel failed to start" when in fact the request
-> never reached Keel.
+> 8080 被别的服务占着时，原样照抄的那条 `curl` 会从**那个服务**拿到 404，
+> 看起来像「Keel 起崩了」，其实是打到了别人身上。
 
-### Merchant console
+### 商家后台
 
-The same `docker compose up` also brings up the **merchant admin console** at
-<http://localhost:8081> (Vue 3 + Element Plus, Chinese UI, served by nginx which
-reverse-proxies `/api` to the API — same origin, so no CORS).
+同一条 `docker compose up` 也把**商家后台界面**起起来了，在
+<http://localhost:8081>（Vue 3 + Element Plus，中文界面，nginx 托管、
+`/api` 同源反代到 API，所以不需要 CORS）。
 
-Getting in the first time needs a bootstrap token. The process mints one at
-startup and **prints it to the log in the clear**; it lasts 24 hours and is
-consumed on first use:
+第一次进去要一串引导 token。它由进程在启动时生成并**明文打进日志**，
+24 小时有效、用掉即失效：
 
 ```bash
 docker compose logs app | grep bootstrap_token
 ```
 
-Exchange it under "first time in" on the login page and you can create
-categories and products, upload images, add SKUs, set stock, publish, issue
-coupons and add staff.
-If 8081 is taken: `KEEL_CONSOLE_PORT=18081 docker compose up -d --build`.
+拿它在登录页的「首次进入」那一栏换一个会话，之后就能建类目、建商品、
+传图、加 SKU、改库存、上下架、发优惠券、加员工。每一页怎么用见
+[后台使用手册](./docs/指南/后台使用手册.md)。8081 被占的话换端口：
+`KEEL_CONSOLE_PORT=18081 docker compose up -d --build`。
 
-> The console is **not** a separately deployed thing: it lives in the same
-> compose file as the API and on the same contract — there is not one
-> hand-written request/response type in it, they all come from
-> `web/src/api/schema.d.ts`. Rename a field in the contract and the console's
-> type check goes red on the spot (`make admin-type-check`, wired into
-> `./scripts/check-all.sh`).
+> 后台**不是**一个独立部署的东西：它和 API 在同一个 compose 文件里，
+> 也在同一套契约上——界面里没有一个手写的请求 / 响应类型，全部来自
+> `web/src/api/schema.d.ts`。契约改个字段名，后台的类型检查当场变红
+> （`make admin-type-check`，已接进 `./scripts/check-all.sh`）。
 >
-> Today it covers products, SKUs, stock, categories, uploads, **bulk product
-> import** (xlsx / csv; a dry-run preview that flags every bad cell and
-> prohibited claim and suggests categories from title embeddings, then a
-> confirm step that creates drafts), **coupons**
-> (amount-off / percent-off / no-threshold, a claim center plus targeted grants,
-> scoped by category, product, region or store), **promotions** (tiered
-> discounts, limited-time prices, flash-sale quotas with per-buyer limits,
-> new-buyer gifts, online / offline), **staff with tiered roles**
-> (admin, operator, region manager, store manager — the last two carry scopes,
-> checked by the server on every call), **merchant management** (platform-level: list, open, disable / enable, and a
-> "currently managing" switcher), plus **regions and stores**: per-region and per-store product
-> visibility and pricing, per-store stock, and delivery fences drawn on
-> OpenStreetMap (WGS-84 — the same datum as the `GEOGRAPHY(POLYGON, 4326)`
-> column and the buyer app's location, with no conversion on the way), and
-> **orders and after-sales**: find orders by status, store, date, order number
-> or phone, ship them, review refunds (approve / reject, set the return freight)
-> and confirm returned goods, plus a **to-do bell** in the top bar (new paid
-> orders, refunds awaiting review, returns shipped back, low stock — narrowed to
-> the staff member's store scope, read state kept per person, each item jumps
-> straight to the order, refund or store stock it is about), and the **business
-> overview** dashboard on the home page: net sales (paid minus refunded), orders,
-> paying buyers, average order value and refund rate against the previous period,
-> an hourly / daily trend line, top products, store and region comparison,
-> low-stock alerts and a search summary (top queries and zero-result queries) —
-> fixed definitions, days cut in the shop's time zone, scoped by role, no AI involved.
+> 今天的后台覆盖商品、SKU、库存、类目、上传、**商品批量导入**（xlsx / csv，预检不落库，
+> 逐行标错、违禁词高亮、按标题语义推荐类目，确认后建成草稿）、**优惠券**（满减 / 折扣 / 立减，
+> 领券中心与定向发放，按类目、商品、大区、门店限定范围）、**营销活动**（满减 / 满折阶梯、
+> 限时特价、秒杀配额与每人限购、新人礼，上线 / 下线）、**员工与分级权限**
+> （管理员、操作员、大区管理员、门店管理员，后两种带管辖范围，服务端逐条校验）、
+> **商家管理**（平台级：列表、开店、停用启用，顶栏切换「当前管理哪家店」），以及**大区与门店**：
+> 大区 / 门店维度的商品可见性与定价、门店库存，和在 OpenStreetMap 上画的
+> 电子围栏（WGS-84，与库里的 `GEOGRAPHY(POLYGON, 4326)` 和买家端定位同一个
+> 坐标系，不经任何换算），以及**订单与售后**：按状态 / 门店 / 日期 / 单号 / 手机号找单、
+> 发货，退款单的审核（同意 / 驳回、退货退款裁定运费）与确认收到退货，顶栏的
+> **待办提醒铃铛**（新订单待发货、新的待审核售后、买家已寄回退货、库存预警；
+> 按员工的门店范围收窄，已读每人一份，点一条直接跳到对应的订单 / 售后 / 门店库存），以及首页的
+> **经营概览**：销售额（实付减退款）、订单数、支付买家数、客单价、退款率的指标卡与环比，
+> 按天 / 按小时的趋势线，商品排行，门店 / 大区对比，库存预警，搜索概况（热门词与无结果词）——
+> 固定口径、按店铺时区切天、按角色收窄，不走 AI。
 
-For the multi-merchant shape, where the `Host` header picks the shop:
-`docker compose -f compose.yaml -f compose.multi.yaml up -d --build`.
+要多商家形态（由 `Host` 头决定是哪家店）：
+`docker compose -f compose.yaml -f compose.multi.yaml up -d --build`。
 
-The seed includes a buyer you can log in as: phone `13800000000`, password
-`keel-demo-2026` (a development seed for local demos). Step-by-step guides —
-quick start, deployment and configuration, the console manual, API conventions,
-FAQ — are in [`docs/`](./docs/README.md) (Chinese). Read the deployment guide's
-"must change before going live" list before serving real customers.
+种子里有一个买家账号可以直接登录：手机号 `13800000000`，密码 `keel-demo-2026`
+（本地演示用的开发种子）。完整的上手步骤见 [快速上手](./docs/指南/快速上手.md)，
+部署给真实客人之前请先读 [部署与配置](./docs/指南/部署与配置.md#上线前必须改的)。
 
-No Elasticsearch. No MongoDB. No RabbitMQ. No Redis.
-**One database.** Vector search lives in `pgvector`, full-text in `tsvector`,
-the job queue in a table.
+不需要 Elasticsearch，不需要 MongoDB，不需要 RabbitMQ，不需要 Redis。
+**只有一个数据库。** 向量检索在 `pgvector`，全文检索在 `tsvector`，任务队列是一张表。
 
-> Files (product images, avatars, refund evidence) go to a local disk volume by
-> default — not another service. Switching to the S3 driver is what adds a component.
+> 文件（商品图、头像、退款凭证）默认写本地磁盘卷，不是额外的服务。
+> 换 S3 形态时才会多一个组件。
 
-### Not in the box yet
+### 还没在盒子里的
 
-What `docker compose up` brings up today is PostgreSQL, the migrations plus
-seed, the API and the merchant console. Buyers can browse, filter by category,
-search, claim coupons, check out and pay (sandbox); merchants can list
-products, run regions and stores, issue coupons, manage staff, ship orders and
-handle after-sales. These parts
-are not there yet, and are listed so that nothing above reads as if it ships:
+`docker compose up` 今天起来的是：PostgreSQL、迁移与种子、API、商家后台。
+买家能浏览、按类目筛选、搜索、领券、下单、付款（沙箱）；商家能上架商品、
+管大区与门店、发券、管员工、发货与处理售后。下面这些还没有，列在这里是为了不让上面的描述被读成「都有了」：
 
-- **avatar upload in the buyer app.** The server accepts it (only the buyer's own
-  upload); neither client has wired the screen yet. Refund evidence, return tracking
-  numbers and the auto-confirm / return deadlines are wired in both clients
-- **a map provider key.** POI search and reverse geocoding (`/geo/*`) need
-  `KEEL_GEO_PROVIDER=amap` and an AMap *Web service* key (`KEEL_GEO_KEY`); an individual
-  developer's free quota is small and commercial use needs a verified business account.
-  Without it those endpoints answer 501 and clients fall back to manual entry plus map
-  picking — geofenced store resolution and the fence check at checkout work either way
-- **cross-encoder reranking.** `POST /search` today is three-stage — vector
-  recall and keyword recall fused with RRF, then business re-ranking
-  (out-of-stock products are demoted multiplicatively below everything in
-  stock). The contract's fourth stage, reranking, is missing: the inference
-  engine has no `/v1/rerank` yet. Business re-ranking itself has only the stock
-  factor; promotions and quality have no data to read. `explain: true` names the
-  stages that actually ran, so the response never claims more than it did
-- **the inference engine is not part of `docker compose up`, and it needs an
-  NVIDIA GPU.** Since M4 the engine is our own
-  [infero](https://github.com/jackwangfeng/infero) running
-  Qwen3-Embedding-0.6B (1024-dim, exactly the `vector(1024)` already in the
-  schema). It runs as a **host process outside compose**:
+- **买家端上传头像。** 服务端已经支持（只收本人上传的文件）；两端客户端都还没接这个页面。
+  退款凭证、寄回物流单号、自动确认与寄回的截止时间在两端客户端都已经接好。
+- **地图供应商密钥。** POI 搜索与逆地理编码（`/geo/*`）需要 `KEEL_GEO_PROVIDER=amap`
+  和一个高德 *Web 服务* 密钥（`KEEL_GEO_KEY`）；个人开发者的免费额度很小，商用需要
+  已认证的企业账号。没配这个，对应接口返回 501，客户端退回手动填写加地图选点——
+  围栏门店解析与下单时的围栏校验两种情况下都照常工作。
+- **cross-encoder 精排。** 今天的 `POST /search` 是**三段**的——向量召回与关键词
+  召回用 RRF 融合，再做业务重排（缺货商品乘性降权、排到有货商品之后）。契约描述的
+  第四段——精排——还没有：推理引擎 infero 还没有 `/v1/rerank`。业务重排本身也只有
+  库存这一个因子，活动与口碑没有数据可读。`explain: true` 会列出这一次真正跑过的
+  阶段，所以响应不会声称自己做了没做的事
+- **推理引擎不在 `docker compose up` 里，而且它要一块 NVIDIA GPU。**
+  M4 起引擎是自研的 [infero](https://github.com/jackwangfeng/infero)
+  （Qwen3-Embedding-0.6B，1024 维，正好对上库里的 `vector(1024)`）。
+  它跑在 **compose 之外的宿主机进程**里：
 
-      ./scripts/infero-up.sh                                       # engine first
-      docker compose -f compose.yaml -f compose.infero.yaml up -d   # then the stack
+      ./scripts/infero-up.sh                                       # 先起引擎
+      docker compose -f compose.yaml -f compose.infero.yaml up -d   # 再起栈
 
-  Why not a compose service: infero is GPU-only and one card holds exactly one
-  of them at a time, so containerising it buys only the single command and
-  costs a 2–3 GB CUDA base image plus GPU passthrough. The measured reasoning
-  is in the header of `scripts/infero-up.sh`.
+  为什么不做成一个 compose 服务：infero 是 GPU-only，一块卡同时只装得下一份，
+  容器化换来的只有「一条命令起全栈」，代价是 2–3 GB 的 CUDA 基础镜像加 GPU 透传。
+  理由与实测数字写在 `scripts/infero-up.sh` 的文件头。
 
-  **Without a GPU the stack still runs, and search still answers.** Leave
-  `KEEL_EMBED_ENDPOINT` unset and `/search` takes the keyword-only path
-  (bigram recall plus business re-ranking): HTTP 200, no error, and
-  `explain: true` reports exactly which stages ran. That degradation is a
-  designed path with tests behind it, not a failure mode. What you lose is the
-  semantic half — a query like "something slimming for summer" shares no
-  characters with the product titles it should match, and recall drops
-  visibly. The derived-data indexer does not start either; the startup log
-  carries one WARN spelling that out.
+  **没有 GPU 这套东西照样跑得起来，搜索照样有结果。** 不配 `KEEL_EMBED_ENDPOINT`
+  时 `/search` 走纯关键词那一路（bigram 召回 + 业务重排）：返回 200、不报错，
+  `explain: true` 会如实列出这一次真正跑过的阶段。**那是一条设计好的、有测试
+  守着的降级路径，不是故障。** 少掉的是语义那一半 —— 搜「夏天穿的显瘦一点的」
+  这种和商品标题没有一个字重合的词，召回会明显变差。派生数据索引任务也不会启动，
+  启动日志里有一条 WARN 把后果说清楚。
 
-  **A GPU-less deployment can now have semantic search too: run infero's CPU build.**
-  infero gained a CPU backend on 2026-09-26 (`--features cpu`); the first cut was
-  single-threaded and too slow for Keel. `cb0ccbd` (2026-09-29 — parallel GEMM via
-  the `gemm` crate, a resident F32 weight cache, parallel attention) fixed that.
-  Measured here on an idle 20-core machine: 117 ms median / 124 ms p90 for a short
-  query, 359/384 ms for a 60-character query, 2.68 s median for a batch of 64 —
-  all three under Keel's budgets (250 ms / 430 ms / 5 s), cosine similarity to the
-  GPU build ≥ 0.9999995, same model id. Under load it slows down a lot (450–1,000 ms
-  per query at load 17–30), so **the CPU shape needs cores reserved for it**
-  (4–8+ dedicated cores recommended). Measurements and how to reproduce them are in
-  the architecture doc (§1, "那个缺口"); build and startup steps are in
-  [部署与配置](./docs/指南/部署与配置.md) ("没有 GPU" section, Chinese only for now).
-  Or bring the engine up with the rest of the stack in one command:
-  `docker compose -f compose.yaml -f compose.infero-cpu.yaml up -d --build`
-  (builds the image locally from infero's source and its `Dockerfile.cpu`).
-  This repo does not keep a second engine implementation around as a stand-in — the
-  M3 Python service (BGE-M3 on CPU) has been retired; the CPU path is the same infero
-  binary built with a different feature flag.
-- **SMS, WeChat and e-mail.** SMS-code login, WeChat login and the console's
-  e-mail login link all need an outside service that is not wired up; those
-  endpoints answer 501 on purpose. Buyers log in with phone + password; staff
-  get in with a one-time login token. Notifications are in the same position:
-  **in-app notifications ship** (buyer message center, console bell), and the
-  outbound-channel interface and delivery log for WeChat subscribe messages,
-  SMS and e-mail are in place, but no real channel is wired up — every
-  delivery is recorded as "not configured, skipped"
-- **real payment channels.** Payments run in a sandbox whose callback path is
-  the real one (signature check, amount check, de-duplication), but no WeChat
-  Pay or Alipay merchant account is wired in
+  **没有 GPU 现在也能有语义检索了：跑 infero 的 CPU 版。** infero 2026-09-26 起有了
+  CPU 后端（`--features cpu`），首版单线程、单条约 5 秒撑不起 Keel；`cb0ccbd`
+  （2026-09-29，并行化 GEMM、常驻 F32 权重缓存、attention 并行）提速后，本机（20 核，
+  空闲）实测：单条 117 ms 中位数 / 124 ms p90、60 字 359/384 ms、64 条一批 2.68 s ——
+  三条门槛（250 ms / 430 ms / 5 s）全过，向量与 GPU 版余弦 ≥ 0.9999995、模型名相同。
+  机器负载高时会明显变慢（负载 17–30 时单条约 450–1000 ms），**CPU 形态要给它留核**
+  （建议 4–8 核以上专用）。实测表与复现方法见
+  [总体架构](./docs/电商系统-总体架构.md) §1「那个缺口」；编译与启动方式见
+  [部署与配置](./docs/指南/部署与配置.md)「没有 GPU」一节；也可以一条命令连引擎一起起：
+  `docker compose -f compose.yaml -f compose.infero-cpu.yaml up -d --build`（从 infero 源码本地构建镜像）。
+  这个仓库不为此另养第二个推理引擎实现 —— M3 那个跑 BGE-M3 的 Python 服务已经退役，
+  CPU 这条路走的是同一个 infero 二进制，只是编译开关不同。
+- **短信、微信、邮件。** 验证码登录、微信登录、后台邮件登录链接都依赖外部服务，
+  本项目还没接，对应接口明确返回 501。买家今天用手机号 + 密码登录，
+  后台员工用一次性登录 token 进入（见 [后台使用手册](./docs/指南/后台使用手册.md#登录)）。
+  消息通知同理：**站内消息已经有了**（买家消息中心、后台铃铛），外发渠道（微信订阅消息 /
+  短信 / 邮件）的接口与投递记录已经就位，但一个真实渠道都没接，投递记录里记为「未配置、跳过」
+  （接入草案见 [消息通知外发渠道接入](./docs/指南/消息通知外发渠道接入.md)）
+- **真实支付渠道。** 支付走沙箱，回调路径与真实渠道相同（验签、金额校验、去重），
+  但还没有接微信支付、支付宝的真实商户
 
 ---
 
-## What it does
+## 能力
 
-**Commerce core**
-Products & SKUs · category tree · per-store inventory · three-tier pricing
-(base → region → store) · cart · address book · checkout · payments · cancel ·
-shipping · confirm receipt · after-sales refunds · coupons (amount-off /
-percent-off / no-threshold / free-shipping, claim center and targeted grants) ·
-same-city delivery for fenced stores (distance tiers, minimum order, free over an amount) ·
-shipping-fee templates (per piece or by weight, priced per province, free over
-an amount or a quantity after discounts, undeliverable regions, per store or
-shop-wide) · promotions (tiered spend/quantity discounts, limited-time prices, flash
-sales, new-buyer gifts; allocated per line, coupons apply to the
-post-promotion amount) · order state
-machine · multi-store with delivery fences (store resolution by location, the
-shipping address must be inside the store's fence) · POI place search and reverse
-geocoding · tiered staff roles · in-app
-notifications (buyer message center and console to-do bell, written in the same
-transaction as the state change) · business reports (overview vs. previous
-period, trend, top products, store comparison, low-stock alerts, search summary)
+**电商核心**
+商品与 SKU · 类目树 · 按门店的库存 · 三层定价（基准 → 大区 → 门店）· 购物车 · 收货地址 · 下单 · 支付 · 取消 · 发货 · 确认收货 · 售后退款 ·
+优惠券（满减 / 折扣 / 立减 / 包邮，领券中心与定向发放）·
+围栏门店的同城配送（按距离分档、起送价、满额免配送费）·
+运费模板（按件 / 按重量，按省设价，优惠后满额 / 满件包邮，指定地区不配送，全店或按门店）·
+营销活动（满减 / 满折阶梯、限时特价、秒杀、新人礼；按行分摊，券按活动后金额计）·
+订单状态机 · 多门店与电子围栏（按位置解析门店、收货地址须在所选门店围栏内）·
+POI 地点搜索与逆地理编码 ·
+分级权限（平台 / 商家管理员 / 操作员 / 大区管理员 / 门店管理员）· 站内消息通知
+（买家消息中心与后台待办提醒，与状态变化同一个事务写入）· 经营报表（概览与环比、趋势、商品排行、门店对比、库存预警、搜索概况）
 
-Cart, address book, profile, cancel, confirm-receipt, shipping and after-sales
-refunds (partial refunds allocated to the cent, discounts included) are in;
-the remaining gaps are under "Not in the box yet" above.
+购物车、收货地址、个人资料、取消订单、确认收货、发货、售后退款（部分退款按优惠分摊算到分）都已经有了；缺口见上面「还没在盒子里的」。
 
-**AI-native capabilities**
-- **Semantic search** — hybrid vector + keyword retrieval fused with RRF, then
-  *business re-ranking* (since M5: out-of-stock demotion; the promotion and
-  quality factors have no data yet). Cross-encoder reranking is designed and
-  contracted but not built — semantically relevant is not the same as worth
-  selling, and that distinction is the point of the last two stages. Every
-  search writes a `search_logs` row (strategy, stages that actually ran, model
-  version); clients report the clicks, add-to-carts and orders that follow via
-  `POST /search/events`, and `make search-metrics` turns them into CTR@10,
-  search→cart and search→order rates per strategy.
-- **Product understanding** — what ships today is auto-classification: bulk import
-  suggests categories from title embeddings (Top-3 95.9% on the offline set) and
-  leaves low-confidence ones to a human. Cross-supplier duplicate detection and
-  attribute extraction are not built yet — attribute extraction waits for the
-  inference engine's generate endpoint; see "Later" in the roadmap.
-- **Compliance checks** — catch prohibited advertising claims before publish.
-- **AI staff** — shipped (M9–M11): staff accounts and `kagt_` access keys; 24 MCP tools
-  (reports, inventory, search, catalog, after-sales reads; `restock_plan`, `slow_movers`,
-  `promotion_review`; read-only SQL over curated views; proposals for restocks, limited-time
-  discounts, coupons, product copy and after-sales decisions; events; briefs; scorecard); a
-  proposal queue approved in the console, with per-kind auto-execution policies under caps;
-  events by pull or signed webhook; every executed proposal reviewed after the fact;
-  per-call audit; playbooks and reference runners. See "AI staff" and "Open to any agent
-  harness" above.
+**AI 原生能力**
+- **语义检索** —— 向量与关键词双路召回，RRF 融合，再做*业务重排*（M5 起：
+  缺货商品降权；活动、口碑两个因子还没有数据）。cross-encoder 精排已经设计并写进
+  契约，还没落地——**语义相关不等于应该卖**，而那正是后两段存在的理由。
+  每一次检索写一行 `search_logs`（策略、真正跑过的阶段、模型版本），
+  客户端把之后的点击 / 加购 / 下单经 `POST /search/events` 回填到同一行上，
+  `make search-metrics` 按策略算出 CTR@10、搜索→加购率、搜索→下单转化率。
+- **商品理解** —— 今天落地的是「自动归类」：批量导入时按标题向量推荐类目
+  （离线评测 Top-3 95.9%），把握不够就交给人选。跨供应商同款识别与属性抽取
+  还没有——属性抽取要等推理引擎的生成接口，见路线图「远期」。
+- **合规检查** —— 发布前拦截广告法违禁词。
+- **AI 员工** —— 已上线（M9–M11）：员工账号与 `kagt_` 接入密钥；24 个 MCP 工具（报表 / 库存 / 检索 / 商品 /
+  售后只读，`restock_plan`、`slow_movers`、`promotion_review`，脱敏视图上的只读 SQL，加库存 / 限时折扣 / 发券 /
+  改文案 / 售后审核五种提案，事件，简报，成绩单）；后台审批的提案队列与按种类、带上限的自动执行；事件可拉可推
+  （签名 webhook）；每条执行过的提案事后复盘；逐条调用审计；操作手册与参考执行器。见上面
+  「AI 员工」与「向任何 agent harness 开放」两节。
 
-**Correctness, taken seriously**
-- Money is `BIGINT` cents. Never a float.
-- Order totals enforced by a database `CHECK` constraint — a miscalculation
-  is rejected at write time, not discovered during reconciliation.
-- Payment callbacks made idempotent by a unique index on `(channel, txn_id)`.
-- Stock deduction via conditional atomic update, backed by a `CHECK` constraint.
-- Discounts allocated per line item, so partial refunds compute correctly.
+**对正确性的认真程度**
+- 金额是 `BIGINT` 分，绝不用浮点。
+- 订单金额恒等式写进数据库 `CHECK` 约束——算错在写入瞬间被拒绝，
+  而不是等到对账时才发现。
+- 支付回调靠 `(渠道, 渠道流水号)` 唯一索引保证幂等。
+- 库存用条件原子更新，并有 `CHECK` 约束兜底。
+- 优惠按行分摊，所以部分退款能算对金额。
 
 ---
 
-## Clients
+## 客户端
 
-Keel ships with its clients, not just an API.
+Keel 自带客户端，不只是一套 API。
 
-| Client | Stack | Targets |
+| 客户端 | 技术栈 | 目标平台 |
 |---|---|---|
-| **Storefront** (main) | Flutter ([`flutter_app/`](./flutter_app)) | Android · iOS · Web · WeChat Mini Program (via mp-flutter) — one codebase; the demo site serves the Web build. The Mini Program runs in the WeChat devtools and on-device debugging; not yet published |
-| **Admin console** | Vue 3 + Element Plus | Desktop web |
+| **商城前台**（主力） | Flutter（[`flutter_app/`](./flutter_app)） | Android · iOS · Web · 微信小程序（经 mp-flutter），一套代码——演示站用的就是 Web 构建版。小程序在微信开发者工具与真机调试里跑通，尚未上架 |
+| **管理后台** | Vue 3 + Element Plus | 桌面 Web |
 
-Every client is generated from the same OpenAPI spec, so a contract change
-breaks the build rather than silently breaking production.
-Design tokens (color, spacing, typography, radius) are shared across platforms;
-component implementations are per-platform, because a mini program cannot render
-what a browser can.
+所有客户端由同一份 OpenAPI 契约生成代码——接口变更会让构建失败，
+而不是悄悄把线上搞坏。
 
-**WeChat Mini Program support is a deliberate choice.** In China most commerce
-happens inside WeChat, and no major open-source commerce platform targets it.
-If you are selling in that market, a web-only storefront is not a storefront.
+设计 token（颜色、间距、字体、圆角）跨平台统一，组件实现分平台——
+因为小程序渲染不了浏览器能渲染的东西，强求像素级一致只会两边都难看。
 
-> The WeChat Mini Program is now built from Flutter via mp-flutter
-> (`make flutter-build-mp`), and runs browse, login, cart and checkout in both
-> the WeChat devtools and on-device debugging; not yet published — consistent
-> with the table above.
+**支持微信小程序是有意为之。** 中国大部分电商交易发生在微信里，
+而没有任何一个主流开源电商平台把它当作目标平台。
+如果你在这个市场卖东西，只有 Web 的商城等于没有商城。
+
+> 微信小程序现在由 Flutter 经 mp-flutter 构建（`make flutter-build-mp`），在微信开发者工具
+> 与真机调试里跑通了浏览、登录、购物车、结算，尚未上架——与上面表格一致。
 
 ---
 
-## Buyer apps — what's actually there today
+## 买家端 —— 现在真的有什么
 
-**[`flutter_app/`](./flutter_app) is the storefront that gets new features.** Home with
-the geofenced store and "deliver to …" (change it by place search, a map pin, a saved
-address or the current location), category and search, product detail, cart, checkout
-(best coupon picked automatically, every failure explained — undeliverable, out of the
-store's fence, sold out, price changed), orders and payment (sandbox), after-sales with
-evidence and return tracking, address book with place search, coupons and messages.
-Its types come from the same OpenAPI spec (`make flutter-generate` →
-`lib/api/schema.g.dart`, committed and checked), pages read view models rather than the
-generated types (a check enforces that), and it has unit tests plus a headless Web e2e
-suite. How to build and run it: [`flutter_app/README.md`](./flutter_app/README.md).
+**新功能都落在 [`flutter_app/`](./flutter_app) 上。** 首页带围栏门店与「送到 …」
+（可以通过地点搜索、地图选点、常用地址或当前定位来改）、按类目筛选与搜索、
+商品详情、购物车、结算（自动选最省的券，每一种失败都有解释——不可配送、
+超出门店围栏、售罄、价格变了）、订单与支付（沙箱）、带凭证与寄回物流的售后、
+带地点搜索的地址簿、优惠券与消息。它的类型同样来自同一份 OpenAPI 契约
+（`make flutter-generate` → `lib/api/schema.g.dart`，产物入库并有检查守着），
+页面读的是视图模型而不是生成的类型（有检查强制这一点），还有单元测试加一套
+无头 Web 端到端测试。怎么构建和运行见 [`flutter_app/README.md`](./flutter_app/README.md)。
 
-The original client, `app/`, written in
-[uni-app x](https://doc.dcloud.net.cn/uni-app-x/) (UTS compiled to native
-Kotlin/Swift), was retired on 2026-09-30 once the Flutter storefront covered
-the same ground. Its last state, including the measured-results log, is
-preserved at the `uniapp-final` git tag.
+最早的那个客户端 `app/`，用 [uni-app x](https://doc.dcloud.net.cn/uni-app-x/) 写
+（UTS 编译成原生 Kotlin/Swift），已于 2026-09-30 下线——Flutter 商城前台已经
+覆盖了它的全部能力。最后状态（含实测记录）见 tag `uniapp-final`。
 
 ---
 
-## Architecture
+## 架构
 
 ```
-Clients (Web · Mini Program · App · Admin)
-             │  OpenAPI 3.1 — both sides generated from one spec
+客户端（Web · 小程序 · App · 后台）
+             │  OpenAPI 3.1 —— 前后端由同一份契约生成
       ┌──────▼───────┐
-      │   Go / Gin   │  handlers: validation only, no SQL, no transactions
+      │   Go / Gin   │  handler 只做校验，无 SQL、无事务
       └──────┬───────┘
       ┌──────▼───────────────────────────────┐
-      │  Services: catalog · inventory ·      │
-      │  order · payment · promotion · search │
+      │  Service：商品 · 库存 · 订单 ·         │
+      │  支付 · 营销 · 检索                    │
       └───┬───────────────┬──────────────┬───┘
           │               │              │
     ┌─────▼────┐   ┌──────▼──────┐  ┌────▼─────┐
-    │  dtmrs   │   │   Product   │  │ sqlc     │
-    │  (Rust)  │   │Understanding│  │          │
+    │  dtmrs   │   │ 商品理解服务 │  │  sqlc    │
+    │  (Rust)  │   │              │  │          │
     └─────┬────┘   └──────┬──────┘  └────┬─────┘
           │        ┌──────▼──────┐       │
-          │        │  Inference  │       │
-          │        │   engine    │       │
+          │        │  推理引擎    │       │
           │        └─────────────┘       │
           └───────────────┬──────────────┘
                    ┌──────▼──────┐
-                   │ PostgreSQL  │  business tables + barrier + pgvector
+                   │ PostgreSQL  │  业务表 + barrier + pgvector
                    └─────────────┘
 ```
 
-Full details: [Architecture](./docs/电商系统-总体架构.md) ·
-[Design principles and a hardening pass](./docs/架构-设计与加固.md) (Chinese) ·
-[Data model](./docs/电商系统-数据模型设计.md) ·
-[Search layer](./docs/电商系统-语义检索层设计.md) ·
-[Product understanding](./docs/电商系统-商品理解服务设计.md)
+详见：[总体架构](./docs/电商系统-总体架构.md) ·
+[架构：设计原则与一次系统性加固](./docs/架构-设计与加固.md) ·
+[数据模型](./docs/电商系统-数据模型设计.md) ·
+[语义检索层](./docs/电商系统-语义检索层设计.md) ·
+[商品理解服务](./docs/电商系统-商品理解服务设计.md)
 
 ---
 
-## Deployment shapes: monolith and microservices
+## 部署形态：单体与微服务
 
-**One codebase, two ways to deploy it.** `KEEL_ROLE` decides which service a process
-plays: `all` (the default, today's `docker compose up`), `core`, or `inventory`. The
-monolith is not a degraded mode of the split. In both shapes inventory is read and written
-only through the inventory service's interface and only touches inventory's own tables. The
-interface is an in-process Go call in one shape and signed internal HTTP in the other. The
-consistency protocol is the same, so the full test suite on the monolith also covers the
-split's business logic. A separate two-database test suite covers the transport.
+**一套代码，两种部署。** `KEEL_ROLE` 决定进程扮演哪个服务：`all`（默认，就是今天的 `docker compose up`）、
+`core` 或 `inventory`。单体不是拆分的降级模式：两种形态下库存都只经过库存服务的接口、只碰库存自己的表，
+区别只是接口在进程内是 Go 调用、拆开后是签名的内网 HTTP。一致性协议是同一套，所以单体上的全量测试
+同样覆盖拆分形态的业务逻辑，另有一组两库测试专门验传输层。
 
-**What is split today, and why only that.** Inventory (per-store stock plus flash-sale and
-limited-offer quotas) is its own service. Everything else stays in `core`:
+**现在拆了什么，为什么只拆这个。** 库存（门店库存 + 秒杀 / 限时特价的活动配额）是独立服务，其余都留在 `core`：
 
-| Candidate | Decision | Why |
+| 候选 | 结论 | 理由 |
 |---|---|---|
-| Inventory | **Split** | Clear boundary (quantities per SKU × store). Order placement's hottest write lands here, and flash sales pile onto single rows. |
-| Coupons | Keep in core | Thresholds, scopes and stacking are all computed in core's pricing. A coupon service would be storage plus six cross-service calls per order, for very little load. |
-| Orders / payments / refunds | Keep in core | They share one money state machine. Splitting them would only create distributed transactions. |
-| Catalog and search (read-only) | Next candidate | The measured pressure is on reads: listing at 6,300 req/s used about 10 Postgres cores, versus about 5.5 cores for placing 650 orders/s (all on one 20-core box). |
+| 库存 | **拆** | 边界清楚（SKU × 门店的数量）；下单最热的写落在这里，秒杀时热点压在单行上 |
+| 优惠券 | 留在 core | 门槛、适用范围、与活动叠加都在 core 的定价里算；拆出去只剩存储，每单还要跨服务 6 次，负载却很低 |
+| 订单 / 支付 / 退款 | 留在 core | 共用一个资金状态机，拆开是给自己造分布式事务 |
+| 商品与检索（只读） | 下一期候选 | 实测压力在读：列表 6300 req/s 吃掉 Postgres 约 10 核，下单 650 单/s 约 5.5 核（同一台 20 核机器上） |
 
-**Clients don't change.** There is one public entry point and one contract (OpenAPI).
-How the backend is split is invisible behind it. When a split needs the contract to say
-something new, it only adds. The only addition so far is a `503 inventory-unavailable` on
-the few endpoints that can't answer without stock levels. Those can only happen in a split
-deployment.
+**客户端不变。** 对外只有一个入口、一份契约（OpenAPI），后端怎么拆在它后面看不见。拆分需要契约多说一句话时
+只做加法：到目前为止唯一的加法是少数离不开库存水位的接口上的 `503 inventory-unavailable`，只在拆分部署下出现。
 
-**How consistency holds across the split.**
+**一致性怎么保证。**
 
-- **Placing an order** is a SAGA in core's embedded coordinator. The inventory step's address
-  is `local://inventory_deduct` in the monolith and
-  `http://inventory:8090/internal/v1/saga/inventory_deduct` when split. The step body is the
-  same function, and a subtransaction barrier in inventory's own database makes retries and
-  compensations safe.
-- **Closing an order, a buyer cancelling, or a refund landing** commits core's part together with an
-  outbox job (`inventory.release`), and a worker calls inventory, which is idempotent by
-  order or refund number.
-- **The trade-off is "under-sell, never over-sell".** After an order closes, stock looks held
-  until the release lands: milliseconds normally, longer while inventory is down.
-- **An order can't be paid until its SAGA has finished.** While inventory is down it waits in
-  your order list, and payment answers 409 until the stock is actually deducted.
+- **下单**是 core 里嵌入式协调器上的 SAGA。库存那一步的地址在单体里是 `local://inventory_deduct`，
+  拆开后是 `http://inventory:8090/internal/v1/saga/inventory_deduct`。分支体是同一个函数；
+  子事务屏障记在库存自己的库里，重试与补偿都安全。
+- **关单 / 买家取消 / 退款到账**：core 的部分与一个 outbox 任务（`inventory.release`）同一个事务提交，
+  由 worker 调库存服务，库存服务按订单号 / 退款单号幂等。
+- **代价是「少卖不超卖」**：关单之后到放回完成之间，库存看起来还被占着。平时是毫秒，库存服务不在时更长。
+- **SAGA 走完之前订单付不了**：库存服务不在时，订单会停在买家的订单列表里，发起支付回 409，
+  直到库存真正扣成。
 
-**How to run it.**
+**怎么跑。**
 
 ```bash
-# Monolith (tier A)
+# 单体（A 档）
 docker compose up -d
 
-# Split, one Postgres: inventory in its own schema under its own role (tier B)
+# 拆分：同一个 Postgres，库存用独立的 schema 与账号（B 档）
 docker compose -f compose.yaml -f compose.split-b.yaml up -d --build
 
-# Split, two processes and two databases (tier C)
+# 拆分：两个进程、两个库（C 档）
 export KEEL_INTERNAL_SECRET=$(openssl rand -base64 48)
 docker compose -f compose.yaml -f compose.split.yaml up -d --build
 
 ./scripts/smoke.sh
 ```
 
-In tier B, core's database role cannot even see the `inventory` schema, so a cross-module
-JOIN fails at the permission check. Moving an existing monolith to B or C means
-`scripts/split-migrate.sh` (`copy` → `verify` → `cutover`, re-runnable, with `rollback`) plus
-changing environment variables. No code changes. Step by step:
-[deployment guide](./docs/指南/部署与配置.md).
+B 档下 core 的数据库账号连 `inventory` schema 都看不见，跨模块 JOIN 在权限检查这一步就过不去。
+把现有的单体迁到 B 或 C，是 `scripts/split-migrate.sh`（`copy` → `verify` → `cutover`，可重复执行，
+有 `rollback`）加改环境变量，代码不改。逐步操作见[部署指南](./docs/指南/部署与配置.md)。
 
-**Availability.**
+**可用性。**
 
-- Every role can run several instances behind one address. All state lives in the database:
-  row locks, advisory locks and outbox jobs. Health checks are `/healthz` and `/readyz` on the
-  internal port. Several `core` instances also need the coordinator on Postgres instead of
-  the default SQLite (see the deployment guide).
-- When inventory is down:
-  - browsing and search still work (the in-stock flag is omitted);
-  - stock-dependent endpoints return 503;
-  - an order placed in the meantime finishes on the coordinator's next retry after inventory
-    returns (backoff caps at 5 minutes);
-  - release jobs retry until it's back.
-- You don't need service discovery or a config center to start. `KEEL_INVENTORY_URL` should
-  be a stable name (a DNS name, Kubernetes Service or load balancer), not an instance address,
-  because in-flight SAGAs have their branch addresses persisted.
-- Add discovery once you're running many services whose addresses change dynamically. The
-  change is small because every address is resolved in one place (`dtm.BranchResolver` and
-  `rpc.Client`), and configuration is read once at startup.
-- The internal secret rotates without draining (`KEEL_INTERNAL_SECRET_PREVIOUS`).
+- 每个角色都可以多实例挂在同一个地址后面。状态全在库里：行锁、advisory lock、outbox 任务。
+  健康检查是内网端口上的 `/healthz` 与 `/readyz`。`core` 多实例时协调器还要从默认的 SQLite 换成 Postgres
+  存储（见部署指南）。
+- 库存服务不在时：
+  - 浏览与检索照常（不带有货标记）；
+  - 离不开水位的接口回 503；
+  - 这期间下的单，在库存服务回来后协调器的下一次重试时推完（退避封顶 5 分钟）；
+  - 放回任务重试到它回来。
+- 起步不需要服务发现或配置中心。`KEEL_INVENTORY_URL` 应当是一个稳定的名字（DNS 名、Kubernetes Service、
+  负载均衡），不要写某个实例的地址，因为在途 SAGA 的分支地址是持久化的。
+- 服务多了、地址动态变化时再补服务发现。补起来改动小：所有地址都在一处解析（`dtm.BranchResolver` 与
+  `rpc.Client`），配置只在启动时读一次。
+- 内网密钥轮换不用排空在途事务（`KEEL_INTERNAL_SECRET_PREVIOUS`）。
 
-**Splitting the next service** reuses the same machinery: roles, the signed internal client,
-configurable branch addresses, the outbox, a per-service migration directory and the
-two-database test harness. The work is in the boundary:
+**以后再拆一个服务**，复用同一套机制：角色、签名的内网客户端、可配的分支地址、outbox、每个服务一个迁移目录、
+两库测试。工作量在边界上：
 
-1. List every JOIN that crosses it and every local transaction that writes both sides.
-2. Replace each JOIN with "fetch your own rows, batch-ask the other service, merge in Go".
-3. Replace each transaction with a SAGA branch or an outbox job.
-4. Drop the cross-boundary foreign keys, and let reconciliation report orphans.
-5. Add a test that the two sides' query files never touch each other's tables.
+1. 列出所有跨边界的 JOIN，以及所有同时写两边的本地事务。
+2. 每个 JOIN 改成「先取自己的，再批量问对方，在 Go 里合并」。
+3. 每个事务改成 SAGA 分支或 outbox 任务。
+4. 删掉跨边界的外键，孤儿由对账来报。
+5. 加一条测试，守住两边的查询文件不碰对方的表。
 
-The inventory split is the worked example:
-[microservice split plan](./docs/电商系统-微服务拆分方案.md).
+库存这一期就是完整的样例：[微服务拆分方案](./docs/电商系统-微服务拆分方案.md)。
 
 ---
 
-## Is Keel right for you?
+## Keel 适合你吗
 
-**Use Keel if you want**
-- Transactional correctness you can actually reason about
-- Stores that deliver within a geofence, with the store picked by where the buyer is
-- An AI staff member you can plug your own agent into, with a human approving every write
-- AI features without sending your catalog to a third party
-- A system that runs on one box today and splits into services later
-- A modern Go/PostgreSQL stack
+**适合，如果你想要**
+- 真正能推理清楚的交易正确性
+- 门店按围栏配送，由买家所在位置决定去哪家门店
+- 一个能接自己 agent 的 AI 员工，每一次写操作都有人批准
+- 不把商品库交给第三方的 AI 能力
+- 今天单机跑、将来拆服务的系统
+- 现代的 Go / PostgreSQL 技术栈
 
-**Use something else if you want**
-- A complete, batteries-included storefront today —
-  [mall](https://github.com/macrozheng/mall) has far broader feature coverage
-  and an excellent tutorial ecosystem
-- A hosted SaaS — use Shopify
-- A mature plugin marketplace — use Magento or WooCommerce
+**不适合，如果你想要**
+- 今天就要开箱即用的完整商城 ——
+  [mall](https://github.com/macrozheng/mall) 功能覆盖广得多，
+  教程生态也极其完善
+- 托管的 SaaS —— 用 Shopify
+- 成熟的插件市场 —— 用 Magento 或 WooCommerce
 
-Keel is young. It has fewer features than the projects above and has not been
-battle-tested at scale. What it has is a stronger core.
+Keel 还年轻。功能比上面这些少，也没有经过大规模真实流量的考验。
+它有的是一个更硬的内核。
 
 ---
 
-## Roadmap
+## 路线图
 
-- [x] Data model, OpenAPI contract, architecture
-- [x] **M2** — Catalog → checkout → payment, orchestrated by dtmrs
-- [x] **M3** — Text embeddings + hybrid search
-- [x] **M4** — Merchant self-service + multi-store and regions + compliance
-  checks + product-understanding skeleton + coupons + tiered roles
-  → **v0.1.0, first public release**
-- [x] **Transaction flow completed** — cart, address book, cancel, shipping,
-  confirm and auto-confirm receipt, after-sales refunds with return tracking,
-  admin orders and after-sales pages
-  → **v0.2.0** (together with the finished parts of M5–M7 below)
-- [ ] **M5 Measurable search quality** — business re-ranking, search logs,
-  click-back events and metrics ✅; cross-encoder reranking (waiting on the
-  inference engine's rerank endpoint) and an offline evaluation set to do
-- [ ] **M6 Ready to open a shop** — in-app notifications and console to-dos ✅
-  (written in the same transaction as the state change, outbound channels
-  pluggable); shipping-fee templates and free-shipping coupons ✅; real
-  payments, WeChat login and SMS codes need business qualifications and will
-  be wired in once those are in hand
-- [ ] **M7 Ready to do business** — promotions (tiered discounts, flash
-  prices, new-buyer gifts) ✅ (group buying not done); business reports with
-  export, Excel bulk import with AI category suggestions ✅
-- [x] **M9 AI operations: staff can plug in** — AI staff accounts and access
-  keys, an MCP service (read / compute / proposal / brief tools), a proposal
-  queue with admin approval, call auditing, two playbooks, demo-site simulated
-  commerce data and a scheduled AI staff run — **running on the demo site**, see
-  [AI Operations: Plan](./docs/AI经营-规划.md) and
-  [AI Operations M9 Design](./docs/AI经营-M9设计.md) (Chinese)
-- [x] **Location & POI** — geofenced store resolution, the fence check at checkout,
-  shipping addresses with coordinates, place search and reverse geocoding (AMap,
-  server-side), the Flutter storefront, same-city delivery for fenced stores
-  → **v0.3.0** (together with M9 above)
-- [x] **M10 AI operations: staff can run the shop** — events (stock low, new
-  after-sales request, zero-result search spike, proposal decided) pulled over MCP or
-  pushed by signed webhook; proposals for limited-time discounts, coupons, product
-  copy and after-sales decisions; `slow_movers` and `promotion_review`; automatic
-  before/after review of every executed proposal and a scorecard; five new playbooks
-- [x] **M11 AI operations: staff can be trusted with more** — per-kind auto-execution
-  policies with caps, a read-only SQL tool over curated views, a public "AI operations
-  log" page, the interface re-tested with the official Python SDK (Gemini CLI and
-  opencode connect; see the compatibility record in the AI Interface doc)
+- [x] 数据模型、OpenAPI 契约、架构设计
+- [x] **M2** —— 商品 → 下单 → 支付，由 dtmrs 编排
+- [x] **M3** —— 文本向量 + 混合检索
+- [x] **M4** —— 商家自助上架 + 多门店与大区 + 合规检查 + 商品理解服务骨架 + 优惠券 + 分级权限
+  → **v0.1.0，首个公开版本**
+- [x] **交易链路补齐** —— 购物车、收货地址、取消、发货、确认收货与自动确认、售后退款与寄回物流、
+  后台订单页与售后页
+  → **v0.2.0**（连同下面 M5–M7 已完成的部分）
+- [ ] **M5 搜索质量可量化** —— 业务重排、搜索日志、点击回传与指标 ✅；cross-encoder 精排
+  （等推理引擎的 rerank 接口）、离线评测集待做
+- [ ] **M6 能开店** —— 站内消息与后台待办提醒 ✅（与状态变化同一个事务写入，外发渠道接口就位）；运费模板与包邮券 ✅；
+  真实支付、微信登录、短信验证码需要资质，拿到后接入
+- [ ] **M7 能做生意** —— 营销活动（满减满折、限时特价与秒杀、新人礼）✅（拼团未做）；经营报表与导出、
+  Excel 批量导入与 AI 类目推荐 ✅
+- [x] **M9 AI 经营：能接上** —— AI 员工账号与接入密钥、MCP 服务（读工具 / 计算工具 /
+  提案工具 / 简报工具）、提案队列与后台审批、调用审计、两本操作手册、演示站模拟经营
+  数据与定时 AI 员工 —— **演示站在跑**，详见 [AI 经营：规划](./docs/AI经营-规划.md) 与
+  [AI 经营 M9 设计](./docs/AI经营-M9设计.md)
+- [x] **位置与 POI** —— 围栏门店解析、下单时的围栏校验、带坐标的收货地址、
+  地点搜索与逆地理编码（高德，服务端）、Flutter 商城前台、围栏门店的同城配送
+  → **v0.3.0**（与上面的 M9 一起）
+- [x] **M10 AI 经营：能经营** —— 事件（库存跌破预警线、新售后单、无结果搜索激增、提案有结果）经 MCP 拉取或签名
+  webhook 推送；限时折扣、发券、改文案、售后审核四种提案；`slow_movers`、`promotion_review`；每条执行过的提案
+  自动复盘与成绩单；五本新手册
+- [x] **M11 AI 经营：能放手** —— 按提案种类、带上限的自动执行策略；只读 SQL 工具（脱敏视图）；公开的「AI 经营日志」页；
+  用官方 Python SDK 重测接入（Gemini CLI、opencode 能连上，见 AI 接口文档的实测记录）
   → **v0.5.0**
-- [x] **Hardening** — AI operations accepted end to end on the demo site (all five proposal kinds executed,
-  events, webhooks, auto-execution, reviews); three rounds of destructive testing fixed: over-collected payments
-  (duplicates, payments after cancellation, amount mismatches) are refunded automatically, unit prices are capped,
-  line-by-line refunds of unshipped orders no longer skip the freight, the auto-execution cap holds under
-  concurrency; a search relevance floor (queries for things the shop doesn't sell no longer come back padded);
-  an after-sale window; stock in checkout previews; brief corrections
+- [x] **加固** —— AI 经营在演示站实跑验收（五种提案全部执行、事件、webhook、自动执行、复盘）；三轮破坏性测试
+  修掉的问题：多收款（重复支付、关单后到账、金额不符）自动原路退回、单价上限、未发货按行退款漏退运费、
+  自动执行上限并发突破；检索相关度下限（店里没有的词不再凑满结果）；售后期；试算回可售数；简报更正
   → **v0.6.0**
-- [ ] **M8 Visual search** — image embeddings, a differentiator; pushed after
-  AI operations
+- [ ] **M8 拍照搜同款** —— 图像向量，差异化能力；顺延到 AI 经营之后
 
-**Later, if real demand shows up:** conversational shopping, cross-supplier
-duplicate merging, attribute extraction and review attribution (need the
-inference engine's generate endpoint), sales forecasting (needs months of
-orders). These AI features demo well but do little for a shop that just
-opened, so they come after "can open a shop", "can do business" and AI
-operations.
+**远期，视真实需求再排：** 对话导购、跨供应商同款归并、属性抽取与评价归因
+（需要推理引擎的生成接口）、销量预测（需要数月订单积累）。这些 AI 功能在演示里显眼，
+但对一家刚开张的店帮助有限，排在「能开店、能做生意」与「AI 经营」之后。
 
 ---
 
-## Contributing
+## 参与贡献
 
-Contributions are welcome. Please read [CONTRIBUTING.md](./CONTRIBUTING.md).
+欢迎贡献，请先阅读 [CONTRIBUTING.md](./CONTRIBUTING.md)。
 
-Two rules that matter most:
+最重要的两条规矩：
 
-1. **Handlers contain no SQL and no transactions.** Business logic lives in services,
-   data access in repositories. This is what makes the monolith-to-services path work.
-2. **The OpenAPI spec is the source of truth.** Change the contract first,
-   regenerate, then implement.
+1. **handler 里不准出现 SQL 和事务。** 业务逻辑在 service，数据访问在 repository。
+   这是「单体平滑演进到微服务」能成立的前提。
+2. **OpenAPI 是唯一真相源。** 先改契约，再生成代码，最后实现。
 
 ---
 
-## License
+## 许可证
 
 Apache-2.0
+
+---
+
+> 本文档与 [README.en.md](./README.en.md)（英文）内容对应，两份一起维护。

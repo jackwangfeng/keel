@@ -436,4 +436,4 @@ curl -OJ -H "Authorization: Bearer $STAFF_TOKEN" \
 
 契约描述的是**完整的接口面**，其中一部分还没有实现，调用会得到 404「接口不存在」。
 后台接口的实现进度由 `internal/handler/contract_test.go` 里的锁表守着；
-总体进度见 [README 的路线图](../../README.zh-CN.md#路线图) 和 [CHANGELOG](../../CHANGELOG.md)。
+总体进度见 [README 的路线图](../../README.md#路线图) 和 [CHANGELOG](../../CHANGELOG.md)。

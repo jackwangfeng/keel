@@ -19,7 +19,7 @@ PROMISED_FILES = [
     'docs/电商系统-OpenAPI.yaml',
 ]
 
-READMES = ['README.md', 'README.zh-CN.md']
+READMES = ['README.md', 'README.en.md']
 
 # README 里出现的 localhost 端口，必须在某个 compose 文件里真的映射出来。
 #
