@@ -12,6 +12,12 @@
 package problem
 
 import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"reflect"
+
 	"github.com/gin-gonic/gin"
 
 	"github.com/keel/keel/internal/api"
@@ -410,4 +416,69 @@ func Write(c *gin.Context, status int, kind, title string) {
 func WriteValue(c *gin.Context, status int, body any) {
 	c.Header("Content-Type", "application/problem+json")
 	c.AbortWithStatusJSON(status, body)
+}
+
+// WriteBindError 把请求体解码失败翻成商家看得懂的 422。
+//
+// 后台乱点测试发现的真实案例：「加 SKU」把 weight_gram（契约里是 integer）
+// 填成 3.14159 提交，服务端回「请求体不是合法的 JSON」——但请求体本身完全
+// 合法，只是这一个字段的类型不对。`/search` 的 `store_id:"abc"` 同理。
+// 问题是全仓库十几处 `c.ShouldBindJSON` 把 encoding/json 能返回的几种失败
+// 全报成同一句话，而占比最高的那种根本不是语法错。这里按错误的实际类型分流：
+//
+//   - *json.UnmarshalTypeError（某个字段给的值类型不对）→ 422 + errors[]，
+//     点名字段与期望类型。errors[] 的形状照 ComplianceRejection 那个 422 的
+//     先例（也是 api.FieldError），不是另起一套。
+//   - 其余（*json.SyntaxError、io.EOF / io.ErrUnexpectedEOF 截断）→ 保持
+//     原文案「请求体不是合法的 JSON」—— 这一类才真的是语法错。
+//
+// 未知字段（`DisallowUnknownFields`）眼下没有任何 handler 开启（唯一一处
+// 用它的是 internal/inventory/saga.go，不经过这条路径），所以这里不分流；
+// 哪天某个 handler 开了，照 UnmarshalTypeError 那支的形状加一支判断即可。
+//
+// 调用方必须是 `c.ShouldBindJSON` 或 `json.Unmarshal` 直接返回的 err ——
+// 别再包一层 fmt.Errorf("...: %w", err) 之类，errors.As 认的是具体类型，
+// 包不包得住全看 %w 有没有写对，容易悄悄退化成「总是走语法错那支」。
+func WriteBindError(c *gin.Context, err error) {
+	var typeErr *json.UnmarshalTypeError
+	if errors.As(err, &typeErr) {
+		field := typeErr.Field
+		if field == "" {
+			// 极少见：类型不对的不是某个具名字段，而是顶层本身
+			// （比如请求体是个 JSON 数组而不是对象）。没有字段名可指，
+			// 退回语法错那句比硬凑一个空字段名更不容易让人迷惑。
+			Write(c, http.StatusUnprocessableEntity, TypeInvalidRequest, "请求体不是合法的 JSON")
+			return
+		}
+		msg := fmt.Sprintf("%s 应为%s", field, jsonTypeHint(typeErr.Type))
+		WriteValue(c, http.StatusUnprocessableEntity, api.Problem{
+			Type:   TypeInvalidRequest,
+			Title:  msg,
+			Status: http.StatusUnprocessableEntity,
+			Errors: &[]api.FieldError{{Field: &field, Message: &msg}},
+		})
+		return
+	}
+	Write(c, http.StatusUnprocessableEntity, TypeInvalidRequest, "请求体不是合法的 JSON")
+}
+
+// jsonTypeHint 把 Go 类型翻成商家看得懂的「这个字段应该是什么」。
+func jsonTypeHint(t reflect.Type) string {
+	switch t.Kind() {
+	case reflect.Bool:
+		return "布尔值（true / false）"
+	case reflect.String:
+		return "字符串"
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return "整数"
+	case reflect.Float32, reflect.Float64:
+		return "数字"
+	case reflect.Slice, reflect.Array:
+		return "数组"
+	case reflect.Map, reflect.Struct:
+		return "对象"
+	default:
+		return "其他类型（" + t.String() + "）"
+	}
 }

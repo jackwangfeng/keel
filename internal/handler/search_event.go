@@ -40,8 +40,7 @@ func (h *SearchHandler) Event(c *gin.Context) {
 				fmt.Sprintf("请求体最大 %d 字节", MaxSearchEventBodyBytes))
 			return
 		}
-		problem.Write(c, http.StatusUnprocessableEntity,
-			problem.TypeInvalidRequest, "请求体不是合法的 JSON")
+		problem.WriteBindError(c, err)
 		return
 	}
 

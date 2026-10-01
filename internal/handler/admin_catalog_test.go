@@ -998,3 +998,66 @@ func TestSKUPriceHasAnUpperBound(t *testing.T) {
 		t.Fatalf("直接写库超上限应被 chk_price_upper 拒：%v", err)
 	}
 }
+
+// 加 SKU 时请求体解码失败的三种情形，钉住 problem.WriteBindError 的分流。
+//
+// 真实案例（后台乱点测试）：重量填 3.14159（契约里 weight_gram 是
+// integer，Go 侧是 *int32），服务端回「请求体不是合法的 JSON」——但请求体
+// 本身是合法 JSON，商家对着它反复看也看不出「哪里不合法」。这条测试同时
+// 钉住一个阴性对照（真语法错不能被新逻辑误伤）与一个说明性对照（未知字段
+// 眼下不开 DisallowUnknownFields，照样当成合法请求处理，不在本轮报错范围）。
+func TestCreateSKUBodyDecodeErrorsNameTheOffendingField(t *testing.T) {
+	sh := newAdminShop(t)
+	var cat api.AdminCategory
+	decodeInto(t, postIdem(t, sh.Host, "/api/v1/admin/categories",
+		`{"name":"解码错误类目"}`, sh.Token), http.StatusCreated, "建类目", &cat)
+	var p api.AdminProduct
+	decodeInto(t, postIdem(t, sh.Host, "/api/v1/admin/products",
+		fmt.Sprintf(`{"category_id":%d,"title":"解码错误商品 %s"}`, cat.Id, sh.Suffix), sh.Token),
+		http.StatusCreated, "建商品", &p)
+	skuPath := fmt.Sprintf("/api/v1/admin/products/%d/skus", p.Id)
+
+	// 真正要修的案例：weight_gram 填成小数。
+	var typeProb api.Problem
+	decodeInto(t, postIdem(t, sh.Host, skuPath,
+		fmt.Sprintf(`{"sku_code":"DEC-%s","price_cents":100,"weight_gram":3.14159}`, sh.Suffix), sh.Token),
+		http.StatusUnprocessableEntity, "weight_gram 填小数", &typeProb)
+	if typeProb.Type != problem.TypeInvalidRequest {
+		t.Errorf("Problem type 是 %q，期望 %q", typeProb.Type, problem.TypeInvalidRequest)
+	}
+	if typeProb.Errors == nil || len(*typeProb.Errors) != 1 {
+		t.Fatalf("errors[] 是 %v，期望 1 条指明 weight_gram", typeProb.Errors)
+	}
+	fe := (*typeProb.Errors)[0]
+	if fe.Field == nil || *fe.Field != "weight_gram" {
+		t.Errorf("errors[0].field 是 %v，期望 \"weight_gram\"", fe.Field)
+	}
+	if fe.Message == nil || !strings.Contains(*fe.Message, "weight_gram") || !strings.Contains(*fe.Message, "整数") {
+		t.Errorf("errors[0].message 是 %v，期望点名 weight_gram 并说明应为整数", fe.Message)
+	}
+	if !strings.Contains(typeProb.Title, "weight_gram") {
+		t.Errorf("Problem.title 是 %q，期望点名 weight_gram，而不是回退成通用的「不是合法的 JSON」", typeProb.Title)
+	}
+
+	// 阴性对照：真语法错（缺右花括号）必须还是原来那句通用文案。
+	got := problemType(t, postIdem(t, sh.Host, skuPath,
+		fmt.Sprintf(`{"sku_code":"DEC2-%s","price_cents":100`, sh.Suffix), sh.Token),
+		http.StatusUnprocessableEntity, "截断的请求体")
+	if got != problem.TypeInvalidRequest {
+		t.Errorf("Problem type 是 %q，期望 %q", got, problem.TypeInvalidRequest)
+	}
+	var syntaxProb api.Problem
+	decodeInto(t, postIdem(t, sh.Host, skuPath,
+		fmt.Sprintf(`{"sku_code":"DEC3-%s","price_cents":100`, sh.Suffix), sh.Token),
+		http.StatusUnprocessableEntity, "截断的请求体（取文案）", &syntaxProb)
+	if syntaxProb.Title != "请求体不是合法的 JSON" {
+		t.Errorf("真语法错的 title 是 %q，期望保持原文案", syntaxProb.Title)
+	}
+
+	// 说明性对照：未知字段眼下不报错（没有 handler 开 DisallowUnknownFields），
+	// 这里钉住「静默忽略」是当前的真实行为，不是没测到。
+	var created api.AdminSku
+	decodeInto(t, postIdem(t, sh.Host, skuPath,
+		fmt.Sprintf(`{"sku_code":"DEC4-%s","price_cents":100,"这是个未知字段":"随便填"}`, sh.Suffix), sh.Token),
+		http.StatusCreated, "带未知字段建 SKU", &created)
+}

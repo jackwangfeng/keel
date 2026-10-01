@@ -115,10 +115,12 @@ func writeAdminIdempotencyError(c *gin.Context, err error) bool {
 }
 
 // bindJSON 收请求体。解不开一律 422（契约里这几条都有 422）。
+//
+// 错误文案的区分交给 problem.WriteBindError：语法错一句话，字段类型不对
+// 点名字段（真实案例：加 SKU 把 weight_gram 填成 3.14159）。
 func bindJSON(c *gin.Context, dst any) bool {
 	if err := c.ShouldBindJSON(dst); err != nil {
-		problem.Write(c, http.StatusUnprocessableEntity,
-			problem.TypeInvalidRequest, "请求体不是合法的 JSON")
+		problem.WriteBindError(c, err)
 		return false
 	}
 	return true

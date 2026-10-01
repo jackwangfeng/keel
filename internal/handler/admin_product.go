@@ -124,8 +124,14 @@ func (h *AdminCatalogHandler) Update(c *gin.Context) {
 	}
 	var req adminProductPatchRequest
 	var present map[string]json.RawMessage
-	if json.Unmarshal(raw, &req) != nil || json.Unmarshal(raw, &present) != nil {
-		problem.Write(c, http.StatusUnprocessableEntity, problem.TypeInvalidRequest, "请求体不是合法的 JSON")
+	// 两次 Unmarshal 分开判错，理由同 cart.go 的 Select：合在一行的话
+	// 具体是哪个字段类型不对的 err 会被 bool 吃掉。
+	if err := json.Unmarshal(raw, &req); err != nil {
+		problem.WriteBindError(c, err)
+		return
+	}
+	if err := json.Unmarshal(raw, &present); err != nil {
+		problem.WriteBindError(c, err)
 		return
 	}
 	if v, ok := present["brand_id"]; ok {

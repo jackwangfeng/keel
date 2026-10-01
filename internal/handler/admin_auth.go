@@ -63,8 +63,7 @@ type adminStaffPatchRequest struct {
 func (h *AdminAuthHandler) Bootstrap(c *gin.Context) {
 	var req adminBootstrapRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		problem.Write(c, http.StatusUnprocessableEntity,
-			problem.TypeInvalidRequest, "请求体不是合法的 JSON")
+		problem.WriteBindError(c, err)
 		return
 	}
 	sess, err := h.svc.Bootstrap(c.Request.Context(), req.Token, req.Email)
@@ -84,8 +83,7 @@ func (h *AdminAuthHandler) Bootstrap(c *gin.Context) {
 func (h *AdminAuthHandler) EmailLink(c *gin.Context) {
 	var req adminEmailLinkRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		problem.Write(c, http.StatusUnprocessableEntity,
-			problem.TypeInvalidRequest, "请求体不是合法的 JSON")
+		problem.WriteBindError(c, err)
 		return
 	}
 	if err := h.svc.RequestEmailLink(c.Request.Context(), req.Email); err != nil {
@@ -99,8 +97,7 @@ func (h *AdminAuthHandler) EmailLink(c *gin.Context) {
 func (h *AdminAuthHandler) Session(c *gin.Context) {
 	var req adminSessionRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		problem.Write(c, http.StatusUnprocessableEntity,
-			problem.TypeInvalidRequest, "请求体不是合法的 JSON")
+		problem.WriteBindError(c, err)
 		return
 	}
 	sess, err := h.svc.ExchangeEmailLink(c.Request.Context(), req.Token)
@@ -125,8 +122,7 @@ func (h *AdminAuthHandler) Me(c *gin.Context) {
 func (h *AdminAuthHandler) CreateStaff(c *gin.Context) {
 	var req api.StaffCreateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		problem.Write(c, http.StatusUnprocessableEntity,
-			problem.TypeInvalidRequest, "请求体不是合法的 JSON")
+		problem.WriteBindError(c, err)
 		return
 	}
 	// 用契约生成的类型收请求体：**它根本没有 merchant_id 这个字段**
@@ -181,8 +177,7 @@ func (h *AdminAuthHandler) UpdateStaff(c *gin.Context) {
 	}
 	var req adminStaffPatchRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		problem.Write(c, http.StatusUnprocessableEntity,
-			problem.TypeInvalidRequest, "请求体不是合法的 JSON")
+		problem.WriteBindError(c, err)
 		return
 	}
 	st, err := h.svc.UpdateStaff(c.Request.Context(), id, req.Role, req.Status,
