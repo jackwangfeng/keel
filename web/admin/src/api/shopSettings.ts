@@ -25,6 +25,15 @@ export const DAYS_MIN = 1;
 export const DAYS_MAX = 365;
 export const PHONE_MAX = 32;
 
+/**
+ * 客服电话格式闸门，规则与服务端 internal/service/shop_settings.go 的
+ * servicePhonePattern 逐字一致（手机 / 座机 / 400-800，可选「转」分机号）——
+ * 两边分叉的后果是前端放行了一个服务端照样拒的号码，用户看不到本地提示，
+ * 直接撞上一句服务端的 422。
+ */
+const SERVICE_PHONE_RE =
+    /^(?:1[3-9]\d{9}|0\d{2,3}[- ]?\d{7,8}|[48]00[- ]?\d{3}[- ]?\d{4})(?:(?:转|-)\d{1,6})?$/;
+
 export function formOf(s: ShopSettings): ShopSettingsForm {
     return {
         timezone: s.timezone,
@@ -64,7 +73,11 @@ export function validateShopSettings(f: ShopSettingsForm): Partial<Record<keyof 
         const v = f[key];
         if (!Number.isInteger(v) || v < DAYS_MIN || v > DAYS_MAX) out[key] = `只能是 ${DAYS_MIN} 到 ${DAYS_MAX} 之间的整数`;
     }
-    if ([...f.servicePhone.trim()].length > PHONE_MAX) out.servicePhone = `不能超过 ${PHONE_MAX} 个字`;
+    const phone = f.servicePhone.trim();
+    if ([...phone].length > PHONE_MAX) out.servicePhone = `不能超过 ${PHONE_MAX} 个字`;
+    else if (phone !== "" && !SERVICE_PHONE_RE.test(phone)) {
+        out.servicePhone = "格式不对：应为手机号、座机号（区号-号码）或 400/800 客服热线，可加「转」接分机号";
+    }
     return out;
 }
 

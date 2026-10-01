@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"regexp"
 	"strings"
 	"time"
 
@@ -107,6 +108,13 @@ func (s *ShopSettingsService) Replace(ctx context.Context, in ShopSettingsInput)
 	if in.ServicePhone != nil {
 		// 空串与全空白按契约 minLength 1 是 422，不悄悄当成「清空」：清空的写法是不给这个字段。
 		phone := c.text("service_phone", *in.ServicePhone, true, shopServicePhoneMaxLen)
+		// 格式闸门：乱点测试证明了光靠长度挡不住 `notaphone<script>` 这种东西存进去——
+		// 这是**展示给买家看**、买家会真的去拨的号码，格式乱的后果是买家拨不通，
+		// 不是收货地址那种「什么格式都该收」（address.go 的 isPhoneRune 故意松）。
+		if phone != "" && !validServicePhone(phone) {
+			c.add("service_phone", "格式不对：应为手机号、座机号（区号-号码）或 400/800 客服热线，"+
+				"可以在后面加「转」或「-」接 1~6 位分机号")
+		}
 		p.ServicePhone = &phone
 	}
 	if err := c.err(); err != nil {
@@ -134,6 +142,30 @@ func (s *ShopSettingsService) withName(ctx context.Context, p repository.ShopPre
 	}
 	return ShopSettings{ShopName: m.Name, ShopPreferences: p}, nil
 }
+
+// servicePhonePattern 客服电话的格式闸门。
+//
+// 覆盖三类商家实际会填的号码，外加一个可选的分机号：
+//
+//	手机：1[3-9] 开头的 11 位数字（如 13812345678）
+//	座机：0 开头的 2~4 位区号 + 7~8 位号码，区号与号码之间可以有一个 - 或空格
+//	     （如 010-12345678、0512 1234567）
+//	400/800：4 或 8 开头、紧跟两个 0，再接 7 位数字，可以用 - 或空格分成三段
+//	     （如 4001234567、400-123-4567）
+//	分机号：以上任意一种后面可以再跟「转」或「-」加 1~6 位数字
+//	     （如 010-12345678 转 8080、400-123-4567-1）
+//
+// 不接受字母、`<` `>` 这类乱点测试塞进去的东西——那正是这道闸门本身要挡的洞
+// （真实案例：`notaphone<script>` 存进去了）。长度上限交给 shopServicePhoneMaxLen，
+// 这里不重复。
+var servicePhonePattern = regexp.MustCompile(
+	`^(?:1[3-9]\d{9}` +
+		`|0\d{2,3}[- ]?\d{7,8}` +
+		`|[48]00[- ]?\d{3}[- ]?\d{4}` +
+		`)(?:(?:转|-)\d{1,6})?$`,
+)
+
+func validServicePhone(s string) bool { return servicePhonePattern.MatchString(s) }
 
 // validShopTimezone 判一个时区名能不能写进店铺设置。
 //
