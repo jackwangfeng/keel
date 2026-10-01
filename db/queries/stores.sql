@@ -36,6 +36,27 @@
 -- 距离一律用 GEOGRAPHY 的球面运算，单位米。用 GEOMETRY 的话 ST_Distance
 -- 返回「度」，而一度经度与一度纬度在中纬度差约 30% —— 排序会在东西向与南北向
 -- 上系统性偏斜，且看起来完全正常（数据模型 §4）。
+--
+-- ===========================================================================
+-- 围栏判定：平面几何，不是球面（2026-10-01）
+-- ===========================================================================
+--
+-- 「点在不在围栏内」一律写成 ST_Intersects(st.fence::geometry, 点)，点是
+-- ST_SetSRID(ST_MakePoint(lng, lat), 4326)（geometry），**不转 geography**。
+--
+-- geography 的边是大圆弧，而运营在后台地图（Leaflet / flutter_map，经纬度当平面画）上画的是直线。
+-- 两者在东西向的边上分得最开：北半球的大圆弧往北鼓，实测 20km 宽的围栏南边线上的点被判在外
+-- （南边界往北缩约 3.3m、北边界往外放约 3m；1° 宽时约 80m）—— 与契约「边界上算在内」、与地图上
+-- 那条线都对不上。平面判定下，地图上画在边线上的点就在边线上。
+--
+-- 用到的地方必须是**同一条判据**：StoreServesPoint（下单 / 试算）、ResolveStoresByFence（定位选店）、
+-- StoreLocationInFence（门店坐标在自己围栏内）、addresses.sql 的 ListUserAddressesForStore（地址簿标
+-- 配送范围）。一处平面、一处球面，边线附近几米内就会出现「地址簿说送得到、下单说不送」。
+-- 一致性由 internal/handler/address_service_area_test.go 钉住。
+--
+-- 索引是表达式索引 idx_stores_fence_geom ON stores USING GIST ((fence::geometry))（00190），
+-- 查询里必须逐字写 st.fence::geometry 才匹配得上；计划由 internal/repository/rls_index_plans_test.go 钉住。
+-- 距离（distance_m）不受影响，照旧按 geography 算米。
 
 -- name: AdminListStores :many
 -- 后台门店列表。region_name 一起带出来：后台列表要显示大区名，
@@ -173,11 +194,13 @@ RETURNING id;
 -- 不会与并发的另一次改坐标 / 改围栏交错出一个两边都没检查过的组合。违反时由调用方
 -- 返回错误，整个事务回滚。
 --
--- ST_Covers 而不是 ST_Intersects / ST_Within：点正好落在围栏边上算在内
--- （ST_Within 对边界上的点是假），而这两个参数的顺序是「面 covers 点」。
+-- 判据与 StoreServesPoint 等逐字同一条（文件头「围栏判定」）：ST_Intersects 平面判定，点正好落在
+-- 围栏边上算在内（ST_Within 对边界上的点是假）。面对点，ST_Intersects 与 ST_Covers 是同一个答案；
+-- 写成同一个函数，是为了四处判据看上去也一样。
 -- fence 为 NULL 时 covered 恒真：没有围栏就没有「在不在围栏内」这一说。
 SELECT (st.location IS NOT NULL)::boolean AS has_location,
-       (st.fence IS NULL OR (st.location IS NOT NULL AND ST_Covers(st.fence, st.location)))::boolean AS covered
+       (st.fence IS NULL OR (st.location IS NOT NULL
+                             AND ST_Intersects(st.fence::geometry, st.location::geometry)))::boolean AS covered
   FROM stores st
  WHERE st.id = sqlc.arg(id) AND st.deleted_at IS NULL;
 
@@ -250,13 +273,14 @@ SELECT (st.status = 1 AND rg.status = 1 AND rg.deleted_at IS NULL)::boolean AS o
 -- name: StoreServesPoint :one
 -- 下单 / 试算：收货地址的坐标落不落在这家店的围栏里（2026-09-28）。
 -- 默认店与没有围栏的店一律 true —— 默认店是「不在任何围栏内」时的全国兜底（ResolveStoresByFence
--- 那条回落就落到它），拿围栏卡它等于让围栏外的买家无处可买。边界线上算在内（ST_Intersects，同上）。
+-- 那条回落就落到它），拿围栏卡它等于让围栏外的买家无处可买。边界线上算在内（ST_Intersects 平面判定，
+-- 文件头「围栏判定」）。
 -- 同一条判据在 addresses.sql 的 ListUserAddressesForStore 里还写了一遍（按门店批量标地址簿），
 -- 改这里必须同步改那里；两处一致由 internal/handler/address_service_area_test.go 钉住。
 SELECT (st.is_default OR st.fence IS NULL
-        OR ST_Intersects(st.fence,
+        OR ST_Intersects(st.fence::geometry,
                          ST_SetSRID(ST_MakePoint(sqlc.arg(lng)::float8,
-                                                 sqlc.arg(lat)::float8), 4326)::geography))::boolean AS serves
+                                                 sqlc.arg(lat)::float8), 4326)))::boolean AS serves
   FROM stores st
  WHERE st.id = sqlc.arg(store_id) AND st.deleted_at IS NULL;
 
@@ -314,7 +338,7 @@ SELECT count(*) FROM stores st
 --
 -- ST_Intersects 而不是 ST_Contains：落在边界线上的点在 Contains 下是 false。
 -- 一个买家站在围栏边界上被判成「不在服务范围」，而他向前走一米就好了 ——
--- 那种 bug 没有人能复现。
+-- 那种 bug 没有人能复现。平面判定（fence::geometry）、走 idx_stores_fence_geom，见文件头「围栏判定」。
 SELECT st.id, st.name, st.phone, st.address, st.is_default,
        (st.location IS NOT NULL)::boolean AS has_location,
        COALESCE(ST_Y(st.location::geometry), 0)::float8 AS lat,
@@ -328,9 +352,9 @@ SELECT st.id, st.name, st.phone, st.address, st.is_default,
    AND EXISTS (SELECT 1 FROM regions rg
                 WHERE rg.id = st.region_id AND rg.status = 1 AND rg.deleted_at IS NULL)
    AND st.fence IS NOT NULL
-   AND ST_Intersects(st.fence,
+   AND ST_Intersects(st.fence::geometry,
                      ST_SetSRID(ST_MakePoint(sqlc.arg(lng)::float8,
-                                             sqlc.arg(lat)::float8), 4326)::geography)
+                                             sqlc.arg(lat)::float8), 4326))
  ORDER BY (st.location IS NULL), 8 ASC, st.id
  LIMIT sqlc.arg(page_limit);
 

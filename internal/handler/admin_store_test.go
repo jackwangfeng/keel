@@ -612,6 +612,9 @@ func TestStoreMustHaveLocationInsideItsFence(t *testing.T) {
 	if got.Lng == nil || *got.Lng < 116.39 || *got.Lng > 116.41 {
 		t.Fatalf("被拒的改坐标生效了：lng=%v", got.Lng)
 	}
+	// 挪到东西向的南边线中点上：算在内（平面判定；按 geography 的大圆弧，这个点在外约 2 米，2026-10-01）。
+	wantStatus(t, patchAs(t, sh.Host, fmt.Sprintf("/api/v1/admin/stores/%d", store), `{"lng":116.5,"lat":39.8}`, sh.Token),
+		http.StatusOK, "门店坐标在南边线上")
 	// 围栏内挪动：放行。
 	wantStatus(t, patchAs(t, sh.Host, fmt.Sprintf("/api/v1/admin/stores/%d", store), `{"lng":116.5,"lat":39.9}`, sh.Token),
 		http.StatusOK, "围栏内改坐标")
@@ -650,7 +653,7 @@ func TestStoreCoordinatesAndFenceKeepFullPrecision(t *testing.T) {
 	}
 	// 顶点（边界上）按下单同一条判据算在围栏内。
 	var served bool
-	if err := admin(t).QueryRow(context.Background(), `SELECT ST_Intersects(fence, ST_SetSRID(ST_MakePoint(114.0654321, 22.5498765), 4326)::geography)
+	if err := admin(t).QueryRow(context.Background(), `SELECT ST_Intersects(fence::geometry, ST_SetSRID(ST_MakePoint(114.0654321, 22.5498765), 4326))
 		FROM stores WHERE id = $1`, store).Scan(&served); err != nil {
 		t.Fatal(err)
 	}

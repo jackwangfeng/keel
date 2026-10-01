@@ -77,7 +77,7 @@ var (
 	ErrStoreLocationRequired = errors.New("门店还没有坐标")
 
 	// ErrStoreOutsideFence：门店自己的坐标不在它的围栏内（契约 422 store-outside-fence）。
-	// 改坐标与改围栏两条路径都会撞上，判据是 StoreLocationInFence（ST_Covers，边界上算在内）。
+	// 改坐标与改围栏两条路径都会撞上，判据是 StoreLocationInFence（平面 ST_Intersects，边界上算在内，与下单 / 选店同一条）。
 	ErrStoreOutsideFence = errors.New("门店坐标不在围栏内")
 
 	// ErrStoreUnavailable：这家门店已被软删或已停业，不能作为回落目标

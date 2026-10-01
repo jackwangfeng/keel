@@ -14,12 +14,15 @@ import (
 // GET /addresses?store_id=：每条地址标 in_service_area（2026-09-30，结算页自动选址用）。
 //
 // 北京门店围栏 116.30–116.50 × 39.80–40.00；广州门店不配围栏；再加默认门店（全国兜底）。
-// 同一个买家四条地址：围栏内、围栏外（上海）、恰在围栏边上、没坐标（fixture 建的那条）。
+// 同一个买家七条地址：围栏内、围栏外（上海）、恰在围栏顶点上、南 / 北边线中点、北边线外 0.1 米、
+// 没坐标（fixture 建的那条）。
 //
-// 「边上」取的是围栏**落库之后**的顶点（西南角），不是按 116.30 / 39.80 手写：
-// 后台配围栏的契约里坐标是 float32，116.30 存进库是 116.30000305…，手写的「边上」其实在
-// 围栏外 0.3 米（实测 ST_Intersects 为 false）。也不取边的中点：geography 的边是大圆弧，
-// 纬线那条边并不沿纬线走。只有从库里读回来的顶点是精确在边界上的点。
+// 「边上」取的是围栏**落库之后**的顶点（西南角）：当年后台配围栏的契约里坐标是 float32，
+// 116.30 存进库是 116.30000305…，手写的「边上」其实在围栏外 0.3 米。
+//
+// 东西向长边的中点（2026-10-01，破坏性测试 P2）：南边线 (116.40, 39.80)、北边线 (116.40, 40.00) 上的点
+// 算在内，北边线往外 1e-6°（约 0.1 米）的点算在外。判定改成平面几何之前，geography 的边是往北鼓的
+// 大圆弧，南边线上的点被判在外、北边线外 0.1 米的点被判在内 —— 与地图上画的直线不符。
 //
 // 后半段是这个特性最要紧的一条：in_service_area 与试算的围栏校验**判据一致**。
 // 两边是两条 SQL（addresses.sql 的 ListUserAddressesForStore 与 stores.sql 的
@@ -51,13 +54,20 @@ func TestAddressesInServiceArea(t *testing.T) {
 		t.Fatal(err)
 	}
 	edge := addAddr(edgeLat, edgeLng)
+	southEdge := addAddr(39.80, 116.40)
+	northEdge := addAddr(40.00, 116.40)
+	northOut := addAddr(40.000001, 116.40)
 	noPoint := b.Address
 
 	yes, no := true, false
 	want := map[int64]map[int64]*bool{
-		cs.NorthStore: {inside: &yes, outside: &no, edge: &yes, noPoint: nil},
-		cs.SouthStore: {inside: &yes, outside: &yes, edge: &yes, noPoint: &yes},
-		def:           {inside: &yes, outside: &yes, edge: &yes, noPoint: &yes},
+		cs.NorthStore: {inside: &yes, outside: &no, edge: &yes, southEdge: &yes, northEdge: &yes, northOut: &no, noPoint: nil},
+		cs.SouthStore: {inside: &yes, outside: &yes, edge: &yes, southEdge: &yes, northEdge: &yes, northOut: &yes, noPoint: &yes},
+		def:           {inside: &yes, outside: &yes, edge: &yes, southEdge: &yes, northEdge: &yes, northOut: &yes, noPoint: &yes},
+	}
+	points := map[int64][2]float64{ // 地址 → (lng, lat)，定位选店那条判据对照用
+		inside: {116.40, 39.90}, outside: {121.47, 31.23}, edge: {edgeLng, edgeLat},
+		southEdge: {116.40, 39.80}, northEdge: {116.40, 40.00}, northOut: {116.40, 40.000001},
 	}
 	show := func(v *bool) string {
 		if v == nil {
@@ -65,7 +75,8 @@ func TestAddressesInServiceArea(t *testing.T) {
 		}
 		return fmt.Sprint(*v)
 	}
-	names := map[int64]string{inside: "围栏内", outside: "围栏外", edge: "围栏边上", noPoint: "没坐标"}
+	names := map[int64]string{inside: "围栏内", outside: "围栏外", edge: "围栏边上", noPoint: "没坐标",
+		southEdge: "南边线中点", northEdge: "北边线中点", northOut: "北边线外 0.1 米"}
 
 	for store, byAddr := range want {
 		var list []api.Address
@@ -96,6 +107,17 @@ func TestAddressesInServiceArea(t *testing.T) {
 		}
 	}
 
+	// 定位选店（ResolveStoresByFence）与上面两条是同一条判据：北京门店在不在结果里，与它的标记一致。
+	for addr, pt := range points {
+		hit := false
+		for _, s := range resolveAt(t, cs.Host, pt[0], pt[1]).Stores {
+			hit = hit || s.Id == cs.NorthStore
+		}
+		if exp := *want[cs.NorthStore][addr]; hit != exp {
+			t.Errorf("%s：定位选店命中北京门店 = %v，与地址簿 / 试算的 %v 不一致", names[addr], hit, exp)
+		}
+	}
+
 	// 不带 store_id：字段整个不出现（契约：缺省）。看原始 JSON，不看解码后的指针 ——
 	// 解码分不开「缺省」与「null」，而这里要钉的是前者。
 	w := getAs(t, cs.Host, "/api/v1/addresses", b.Token)
@@ -106,8 +128,8 @@ func TestAddressesInServiceArea(t *testing.T) {
 		t.Fatalf("不带 store_id 时不该出现 in_service_area：%s", w.Body.String())
 	}
 	var plain []json.RawMessage
-	if err := json.Unmarshal(w.Body.Bytes(), &plain); err != nil || len(plain) != 4 {
-		t.Fatalf("不带 store_id 的地址簿应有 4 条：%v %s", err, w.Body.String())
+	if err := json.Unmarshal(w.Body.Bytes(), &plain); err != nil || len(plain) != 7 {
+		t.Fatalf("不带 store_id 的地址簿应有 7 条：%v %s", err, w.Body.String())
 	}
 
 	// 别家店的门店与不存在的门店：422 invalid-request，与 GET /cart 的 store_id 同一个约定。
