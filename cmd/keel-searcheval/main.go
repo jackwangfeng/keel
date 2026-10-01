@@ -1,18 +1,22 @@
 // Command keel-searcheval 做检索的离线评测集（语义检索层 §9.1），第一件用途是校准相关度下限
 // （service.DefaultVectorFloor，现在拍的 0.40）。
 //
-// # 两个子命令
+// # 三个子命令
 //
 //	KEEL_EMBED_ENDPOINT=http://127.0.0.1:18081 go run ./cmd/keel-searcheval sample \
 //	    -out pairs.jsonl [-merchant 3] [-since 2160h] [-queries 300] [-k 30] [-extra extra.txt]
+//	KEEL_SYSTEMONE_ENDPOINT=http://127.0.0.1:18095 go run ./cmd/keel-searcheval label \
+//	    -pairs pairs.jsonl -out labels.jsonl [-model kev-latest] [-per-request 32]
 //	go run ./cmd/keel-searcheval calibrate -pairs pairs.jsonl -labels labels.jsonl [-json]
 //
 // sample 连库（应用角色，RLS 照常生效）与推理引擎：从每家店的 search_logs 取搜得最多的查询
 // （-extra 再补一批，一行一条，适合放「店里没有的东西」当反例），每条查询配上向量近邻前 k 件、
 // 关键词 AND / OR 命中前 k 件，写成候选对（internal/searcheval.Pair）。
 //
-// 打标在这两步之间、不在这条命令里：人工或 System One 类判别模型（Kev / Jev）读候选对，
-// 按 (merchant_id, query, product_id) 给每对写一行 internal/searcheval.Label。
+// label 用 System One 类判别模型（Kev / Jev，`/v1/systemone`）给候选对打标：一条查询一次请求，
+// 每件候选一道是非题，「是」的概率记成 relevance（题面见 internal/searcheval/judge.go）。
+// 人工标注也行：按 (merchant_id, query, product_id) 给每对写一行 internal/searcheval.Label，
+// judge 写 "human"。两份标签可以拼在一个文件里，同一对多条标签 calibrate 取平均。
 //
 // calibrate 只读这两份文件，扫一遍下限，打印精确率 / 召回率 / F1 与「猜你想要」判对判错的比例，
 // 给出 F1 最高的下限和「精确率 ≥ -precision 的最低下限」两个候选。**它不改任何配置**：
@@ -46,6 +50,8 @@ func main() {
 	switch os.Args[1] {
 	case "sample":
 		err = sample(os.Args[2:])
+	case "label":
+		err = label(os.Args[2:])
 	case "calibrate":
 		err = calibrate(os.Args[2:])
 	default:
@@ -58,7 +64,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "用法：keel-searcheval sample|calibrate [参数]（-h 看各自的参数）")
+	fmt.Fprintln(os.Stderr, "用法：keel-searcheval sample|label|calibrate [参数]（-h 看各自的参数）")
 	os.Exit(2)
 }
 
@@ -248,6 +254,51 @@ func pairsForQuery(ctx context.Context, repo *repository.Repo, merchant int64, q
 		out = append(out, *byID[id])
 	}
 	return out, nil
+}
+
+func label(args []string) error {
+	fs := flag.NewFlagSet("label", flag.ExitOnError)
+	pairsPath := fs.String("pairs", "", "sample 写出的候选对（必填）")
+	out := fs.String("out", "", "标签写到这个 JSONL 文件（必填）")
+	endpoint := fs.String("endpoint", os.Getenv(inference.EnvSystemOneEndpoint), "判别模型引擎地址（默认取 "+inference.EnvSystemOneEndpoint+"）")
+	model := fs.String("model", "", "请求里的 model 字段；空着用引擎的默认")
+	perRequest := fs.Int("per-request", 32, "一次请求最多几道题（同一条查询的候选）")
+	_ = fs.Parse(args)
+	if *pairsPath == "" || *out == "" {
+		return fmt.Errorf("要给 -pairs 与 -out")
+	}
+	pairs, err := readFile[searcheval.Pair](*pairsPath)
+	if err != nil {
+		return err
+	}
+	c, err := inference.NewSystemOne(*endpoint, 0, nil)
+	if err != nil {
+		return err
+	}
+	ctx := context.Background()
+	groups := searcheval.GroupByQuery(pairs)
+	var labels []searcheval.Label
+	started := time.Now()
+	for i, g := range groups {
+		ls, err := searcheval.LabelQuery(ctx, c, *model, g, *perRequest)
+		if err != nil {
+			return fmt.Errorf("商户 %d 查询 %q: %w", g[0].MerchantID, g[0].Query, err)
+		}
+		labels = append(labels, ls...)
+		if (i+1)%20 == 0 || i+1 == len(groups) {
+			fmt.Fprintf(os.Stderr, "已打标 %d/%d 条查询、%d 对（%s）\n", i+1, len(groups), len(labels),
+				time.Since(started).Round(time.Second))
+		}
+	}
+	f, err := os.Create(*out)
+	if err != nil {
+		return err
+	}
+	if err := searcheval.WriteJSONL(f, labels); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
 }
 
 func calibrate(args []string) error {
