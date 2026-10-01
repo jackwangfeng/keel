@@ -78,8 +78,11 @@ type SearchTx interface {
 	// 空串会让 to_tsquery 报语法错，所以调用方必须先判空 —— 这一层不替它
 	// 兜底：一个「查询切不出任何词」的请求走到这里已经是上面的逻辑错了，
 	// 悄悄返回空列表会把那个错藏起来。
+	//
+	// hitCap > 0 时命中集合先封顶到这么多件（任意的那么多件，不是相关度最高的），再排序截断；
+	// 0 不封顶。只给 OR 补齐那一条用，理由见 db/queries/search.sql。
 	SearchProductsByKeyword(ctx context.Context, sc StoreScope, tsquery string,
-		f SearchFilters, limit int32) ([]SearchHit, error)
+		f SearchFilters, limit, hitCap int32) ([]SearchHit, error)
 
 	// OnSaleSKUsOfProducts 返回这批商品各自的在售 SKU（键是 product_id），
 	// 检索据此算 in_stock（阶段 1a：水位由库存服务回答）。
@@ -228,7 +231,12 @@ func (t tenantTx) SearchProductsByVector(ctx context.Context, sc StoreScope,
 }
 
 func (t tenantTx) SearchProductsByKeyword(ctx context.Context, sc StoreScope,
-	tsquery string, f SearchFilters, limit int32) ([]SearchHit, error) {
+	tsquery string, f SearchFilters, limit, hitCap int32) ([]SearchHit, error) {
+
+	var capArg *int32
+	if hitCap > 0 {
+		capArg = &hitCap
+	}
 
 	rows, err := t.q.SearchProductsByKeyword(ctx, db.SearchProductsByKeywordParams{
 		Tsquery:       tsquery,
@@ -238,6 +246,7 @@ func (t tenantTx) SearchProductsByKeyword(ctx context.Context, sc StoreScope,
 		MinPriceCents: f.MinPriceCents,
 		MaxPriceCents: f.MaxPriceCents,
 		RowLimit:      limit,
+		HitCap:        capArg,
 	})
 	if err != nil {
 		return nil, err

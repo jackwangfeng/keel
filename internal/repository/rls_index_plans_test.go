@@ -309,7 +309,7 @@ func TestKeywordSearchIsolatedAcrossTenants(t *testing.T) {
 		var hits []repository.SearchHit
 		if err := r.WithTenant(tenant.NewContext(ctx, m), func(tx repository.Tx) error {
 			var err error
-			hits, err = tx.SearchProductsByKeyword(ctx, sc, "onlyinb", repository.SearchFilters{}, 50)
+			hits, err = tx.SearchProductsByKeyword(ctx, sc, "onlyinb", repository.SearchFilters{}, 50, 0)
 			return err
 		}); err != nil {
 			t.Fatal(err)

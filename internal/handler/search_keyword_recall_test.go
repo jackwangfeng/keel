@@ -96,7 +96,7 @@ func TestKeywordRecallTruncatesAfterRankingWithoutChangingTopK(t *testing.T) {
 		var out []repository.SearchHit
 		if err := repo.WithTenant(ctx, func(tx repository.Tx) error {
 			var err error
-			out, err = tx.SearchProductsByKeyword(ctx, fx.ScopeA(), search.TSQueryOr("栖木"), f, limit)
+			out, err = tx.SearchProductsByKeyword(ctx, fx.ScopeA(), search.TSQueryOr("栖木"), f, limit, 0)
 			return err
 		}); err != nil {
 			t.Fatal(err)

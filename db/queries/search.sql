@@ -138,6 +138,15 @@ SELECT p.id, p.title, p.subtitle,
 -- 「排在前 N 之外、但价格落在区间里」的那些漏掉，返回的就不是「区间内相关度最高的 N 件」了。
 -- 那条路的耗时与改之前相同 —— 价格区间筛选本身就要先知道每件的价格。
 --
+-- ## 命中集合的上限 @hit_cap（2026-10 复压，第十节 ③）
+--
+-- 截断砍掉了价格 LATERAL，但内层的 ts_rank_cd 仍要对**全部**命中逐件算：长尾词 OR 召回近万件时，
+-- 这一步在 32 并发下排队，搜索 p95 474 ms。@hit_cap 给命中集合封顶，只在 OR 补齐那一条上传
+-- （service/search.go 的 recallByKeyword）；NULL 不封顶（AND、单词查询都是 NULL）。
+-- 封顶取的是命中集合里**任意** N 件（keyword_hit_products 的物理顺序），不是相关度最高的 N 件：
+-- 能走到 OR 的只有「全部词都命中的不够一页、向量路也没跑成」那种查询，那时 OR 补进来的本来就只是
+-- 「沾上一个二元组」的候选，在里面精挑不值近万次打分。全部命中的那批由 AND 那条另取，不受影响。
+--
 -- 过滤条件拆在两层，但**合起来**仍与向量那条逐字一致（TestBothRecallPathsFilterIdentically 在守）。
 WITH ranked AS (
     SELECT p.id,
@@ -145,7 +154,8 @@ WITH ranked AS (
       FROM products p
      WHERE p.deleted_at IS NULL
        AND p.status = 1
-       AND p.id IN (SELECT keyword_hit_products(to_tsquery('simple', @tsquery::text)))
+       AND p.id IN (SELECT keyword_hit_products(to_tsquery('simple', @tsquery::text))
+                     LIMIT sqlc.narg(hit_cap)::int)
        AND (sqlc.narg(category_id)::bigint IS NULL
             OR p.category_id = sqlc.narg(category_id)::bigint)
        AND NOT EXISTS (SELECT 1 FROM region_product_overrides ro

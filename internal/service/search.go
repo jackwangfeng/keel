@@ -223,6 +223,9 @@ type SearchConfig struct {
 	// VectorFloor 是向量召回的相关度下限（余弦相似度）：0 用 DefaultVectorFloor，负数关闭下限。
 	// 见 applyFloor 与 DefaultVectorFloor。
 	VectorFloor float64
+
+	// OrHitCap 是 OR 补齐那一条的命中集合上限：0 用 DefaultOrHitCap，负数不封顶。见 recallByKeyword。
+	OrHitCap int32
 }
 
 // DefaultVectorFloor 是「只被向量路捞到的商品」算作可信命中的最低余弦相似度。
@@ -548,9 +551,14 @@ func (s *SearchService) Search(ctx context.Context, req SearchRequest) (SearchRe
 		model           embedModel
 		kwPlan          KeywordRecall
 	)
+	// vecDone 在向量那一路出结果（成或败）后关闭：关键词那一路 AND 不够一页时要看它，
+	// 决定还跑不跑 OR（recallByKeyword 的文件注释）。close 先于 wg.Done，读的一方见到关闭时
+	// vecHits / vecErr 已经写完。
+	vecDone := make(chan struct{})
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
+		defer close(vecDone)
 		vecHits, model, vecErr = s.recallByVector(ctx, scope, req.Query, req.Filters.toRepo(), recall)
 	}()
 	go func() {
@@ -561,11 +569,11 @@ func (s *SearchService) Search(ctx context.Context, req SearchRequest) (SearchRe
 		if req.Filters.InStockOnly {
 			enough *= inStockOnlyRecallBoost
 		}
-		kwErr = s.repo.WithTenant(ctx, func(tx repository.Tx) error {
-			var err error
-			kwHits, kwPlan, err = recallByKeyword(ctx, tx, scope, req.Query, req.Filters.toRepo(), recall, enough)
-			return err
-		})
+		vectorCovers := func(andHits []repository.SearchHit) bool {
+			<-vecDone
+			return vecErr == nil && coversPage(andHits, vecHits, s.cfg.VectorFloor, enough)
+		}
+		kwHits, kwPlan, kwErr = s.recallByKeyword(ctx, scope, req.Query, req.Filters.toRepo(), recall, enough, vectorCovers)
 	}()
 	wg.Wait()
 
@@ -704,7 +712,16 @@ const (
 	KeywordMatchAnd = "and"
 	// KeywordMatchAndOr：多词，全部命中的不够一页，又用 OR 补齐（全部命中的排在前面）。
 	KeywordMatchAndOr = "and+or"
+	// KeywordMatchAndVector：多词，全部命中的不够一页，但向量路的可信命中把这一页凑够了，
+	// OR 没跑（00220）。
+	KeywordMatchAndVector = "and+vector"
 )
+
+// DefaultOrHitCap 是 OR 补齐那一条的命中集合上限（SearchConfig.OrHitCap 为 0 时用它）。
+//
+// 2026-10 复压：长尾词 OR 召回近万件，内层对每件算 ts_rank_cd，32 并发下搜索 p95 474 ms。
+// 1000 件之内的 OR 与常见词的单词查询同一个量级（「连衣裙」命中约 2000 件、13 ms）。
+const DefaultOrHitCap = 1000
 
 // KeywordRecall 记下这一次关键词那一路是怎么召回的：explain（响应头）与 search_logs 都读它。
 // 关键词那一路没跑成时是零值（Match 为空串）。
@@ -734,14 +751,33 @@ type KeywordRecall struct {
 // enough 取 size（一页）而不是 limit（召回窗口）：AND 已经够一页时，OR 补进来的只会排在
 // 后面、进不了这一页（纯关键词时），向量路在的时候语义相近的那些由向量路负责捞。
 // 取 limit 的话几乎每条多词查询都要再跑一遍 OR，而 OR 正是长尾词慢的来源。
-func recallByKeyword(ctx context.Context, tx repository.Tx, scope repository.StoreScope,
-	query string, f repository.SearchFilters, limit int32, enough int) ([]repository.SearchHit, KeywordRecall, error) {
+//
+// **向量路凑够了一页就不跑 OR**（2026-10 复压，第十节 ③）：AND 不够一页时先等向量那一路的结果
+// （vectorCovers），AND 的命中加上向量路里相似度够得上 VectorFloor 的、合起来已经够一页，OR 就不跑了
+// （match=and+vector）。OR 补进来的只是「沾上一个二元组」的候选（「栖木复古地毯」切出的「木复」
+// 「古地」都算），长尾词要对近万件逐个打分；语义相近的那些向量路本来就捞得到，而且捞得更准。
+// 向量路没跑成（降级）、或它的可信命中也凑不够，OR 照跑，但命中集合封顶到 OrHitCap 件。
+//
+// AND 与 OR 各开一个租户事务，等向量路的那段时间不占着连接（文件头第三节同一个理由）。
+// 降级时多等的那一段不加总延迟：Search 本来就要等两路都回来。
+func (s *SearchService) recallByKeyword(ctx context.Context, scope repository.StoreScope,
+	query string, f repository.SearchFilters, limit int32, enough int,
+	vectorCovers func(andHits []repository.SearchHit) bool) ([]repository.SearchHit, KeywordRecall, error) {
 
 	or := search.TSQueryOr(query)
 	and, terms := search.TSQueryAnd(query)
 	plan := KeywordRecall{Limit: limit}
+	run := func(tsq string, hitCap int32) ([]repository.SearchHit, error) {
+		var hits []repository.SearchHit
+		err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+			var err error
+			hits, err = tx.SearchProductsByKeyword(ctx, scope, tsq, f, limit, hitCap)
+			return err
+		})
+		return hits, err
+	}
 	if terms <= 1 {
-		hits, err := tx.SearchProductsByKeyword(ctx, scope, or, f, limit)
+		hits, err := run(or, 0)
 		if err != nil {
 			return nil, KeywordRecall{}, err
 		}
@@ -749,7 +785,7 @@ func recallByKeyword(ctx context.Context, tx repository.Tx, scope repository.Sto
 		return hits, plan, nil
 	}
 
-	andHits, err := tx.SearchProductsByKeyword(ctx, scope, and, f, limit)
+	andHits, err := run(and, 0)
 	if err != nil {
 		return nil, KeywordRecall{}, err
 	}
@@ -758,14 +794,49 @@ func recallByKeyword(ctx context.Context, tx repository.Tx, scope repository.Sto
 		plan.Match, plan.Hits = KeywordMatchAnd, len(andHits)
 		return andHits, plan, nil
 	}
+	if vectorCovers != nil && vectorCovers(andHits) {
+		plan.Match, plan.Hits = KeywordMatchAndVector, len(andHits)
+		return andHits, plan, nil
+	}
 
-	orHits, err := tx.SearchProductsByKeyword(ctx, scope, or, f, limit)
+	orHits, err := run(or, s.orHitCap())
 	if err != nil {
 		return nil, KeywordRecall{}, err
 	}
 	merged := mergeAndThenOr(andHits, orHits, int(limit))
 	plan.Match, plan.Hits = KeywordMatchAndOr, len(merged)
 	return merged, plan, nil
+}
+
+func (s *SearchService) orHitCap() int32 {
+	switch {
+	case s.cfg.OrHitCap < 0:
+		return 0 // 不封顶
+	case s.cfg.OrHitCap == 0:
+		return DefaultOrHitCap
+	}
+	return s.cfg.OrHitCap
+}
+
+// coversPage：AND 的命中加上向量路里「可信」的（相似度 ≥ floor，判据与 applyFloor 相同；floor < 0
+// 时全部可信）、去重后够不够 enough 件。
+func coversPage(andHits, vecHits []repository.SearchHit, floor float64, enough int) bool {
+	seen := make(map[int64]bool, len(andHits)+len(vecHits))
+	for _, h := range andHits {
+		seen[h.ID] = true
+	}
+	n := len(andHits)
+	for _, h := range vecHits {
+		if n >= enough {
+			break
+		}
+		if seen[h.ID] || (floor >= 0 && 1-h.Distance < floor) {
+			continue
+		}
+		seen[h.ID] = true
+		n++
+	}
+	return n >= enough
 }
 
 // mergeAndThenOr：AND 的结果原样在前，OR 里没出现过的按原顺序接在后面，截到 limit。

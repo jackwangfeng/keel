@@ -929,7 +929,7 @@ type SearchLog struct {
 	ModelVersion *string
 	CreatedAt    pgtype.Timestamptz
 	Fallback     bool
-	// 关键词召回的走法：single / and / and+or（00210）；关键词那一路没跑成时 NULL
+	// 关键词召回的走法：single / and / and+or / and+vector（00210、00220）；关键词那一路没跑成时 NULL
 	KeywordMatch *string
 	// 关键词召回窗口 N（召回 SQL 先排序截断到的件数，00210）
 	KeywordLimit *int32

@@ -1152,7 +1152,7 @@ type brokenKeywordTx struct{ repository.Tx }
 // 签名跟着 repository.Tx 走：00020 给两路召回都加了 StoreScope。
 // 这里原样接下不用 —— 这个替身的全部职责是「让关键词那一路失败」。
 func (brokenKeywordTx) SearchProductsByKeyword(ctx context.Context, sc repository.StoreScope,
-	tsquery string, f repository.SearchFilters, limit int32) ([]repository.SearchHit, error) {
+	tsquery string, f repository.SearchFilters, limit, hitCap int32) ([]repository.SearchHit, error) {
 	return nil, fmt.Errorf("注入的故障：关键词召回这一路挂了")
 }
 
@@ -1213,7 +1213,7 @@ func TestBothRecallPathsFilterIdentically(t *testing.T) {
 			for _, h := range vh {
 				v[h.ID] = true
 			}
-			kh, err := tx.SearchProductsByKeyword(ctx, fx.ScopeA(), tsq, f, limit)
+			kh, err := tx.SearchProductsByKeyword(ctx, fx.ScopeA(), tsq, f, limit, 0)
 			if err != nil {
 				return err
 			}
