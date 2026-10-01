@@ -2,10 +2,15 @@ package handler_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"math"
+	"math/rand/v2"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/keel/keel/internal/api"
 	"github.com/keel/keel/internal/problem"
@@ -659,5 +664,49 @@ func TestStoreCoordinatesAndFenceKeepFullPrecision(t *testing.T) {
 	}
 	if !served {
 		t.Fatal("手画的顶点被判到了围栏外：坐标在写入路径上掉了精度")
+	}
+}
+
+// 围栏读回逐位相等（2026-10-01，破坏性测试 P2）：ST_AsGeoJSON 默认只出 9 位小数，后台「改一个顶点
+// 再整体 PUT」会让所有顶点每存一次漂一次。随机取满精度的双精度坐标（含 0.30000000000000004、
+// 1e-8 附近这些最长的十进制串），写进去、读出来，一位都不许差。
+func TestFenceRoundTripsBitExact(t *testing.T) {
+	sh := newAdminShop(t)
+	region := createRegion(t, sh, "bits", "精度大区")
+	seed := time.Now().UnixNano()
+	rng := rand.New(rand.NewPCG(uint64(seed), 0))
+	t.Logf("随机种子 %d", seed)
+	cases := []struct {
+		name                   string
+		lng0, lat0, lng1, lat1 float64
+	}{
+		{"北京一带随机", 116 + rng.Float64()*0.1, 39 + rng.Float64()*0.1, 116.2 + rng.Float64()*0.1, 39.2 + rng.Float64()*0.1},
+		{"西南半球随机", -70 - rng.Float64(), -33 - rng.Float64(), -68 - rng.Float64(), -31 - rng.Float64()},
+		{"最长的十进制串", 1.2345678901234567e-8, 1.0000000000000002e-8, 0.30000000000000004, 1.2345678901234567e-6 + 0.2},
+		{"贴着 0 随机", rng.Float64() * 1e-7, rng.Float64() * 1e-9, 0.1 + rng.Float64()*0.01, 0.1 + rng.Float64()*1e-6},
+	}
+	for i, c := range cases {
+		store := createStore(t, sh, region, fmt.Sprintf("bits%d", i), c.name, (c.lng0+c.lng1)/2, (c.lat0+c.lat1)/2)
+		want := [][]float64{{c.lng0, c.lat0}, {c.lng1, c.lat0}, {c.lng1, c.lat1}, {c.lng0, c.lat1}, {c.lng0, c.lat0}}
+		ring, _ := json.Marshal(want)
+		body := fmt.Sprintf(`{"fence":{"type":"Polygon","coordinates":[%s]}}`, ring)
+		var put, got api.AdminStore
+		decodeInto(t, putAs(t, sh.Host, fmt.Sprintf("/api/v1/admin/stores/%d/fence", store), body, sh.Token),
+			http.StatusOK, "存围栏", &put)
+		decodeInto(t, getAs(t, sh.Host, fmt.Sprintf("/api/v1/admin/stores/%d", store), sh.Token),
+			http.StatusOK, "读门店", &got)
+		for what, s := range map[string]api.AdminStore{"PUT 的回显": put, "GET 详情": got} {
+			if s.Fence == nil || len(s.Fence.Coordinates) != 1 || len(s.Fence.Coordinates[0]) != len(want) {
+				t.Fatalf("%s · %s：围栏形状不对：%+v", c.name, what, s.Fence)
+			}
+			for j, pt := range s.Fence.Coordinates[0] {
+				for k := range 2 {
+					if math.Float64bits(pt[k]) != math.Float64bits(want[j][k]) {
+						t.Errorf("%s · %s：顶点 %d 第 %d 维读回 %v，写入的是 %v", c.name, what, j, k,
+							strconv.FormatFloat(pt[k], 'g', -1, 64), strconv.FormatFloat(want[j][k], 'g', -1, 64))
+					}
+				}
+			}
+		}
 	}
 }

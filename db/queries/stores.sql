@@ -9,7 +9,18 @@
 -- ===========================================================================
 --
 -- 库里是 GEOGRAPHY(POLYGON, 4326)，契约里是 GeoJSON Polygon。
--- 进：ST_GeomFromGeoJSON(text)::geography，出：ST_AsGeoJSON(fence)。
+-- 进：ST_GeomFromGeoJSON(text)::geography，出：ST_AsGeoJSON(fence::geometry, 24)。
+--
+-- ### 出的那一侧为什么写 24 位小数（2026-10-01，破坏性测试 P2）
+--
+-- ST_AsGeoJSON 默认 maxdecimaldigits = 9，读回与写入不逐位相等；后台「改一个顶点再整体 PUT」
+-- 于是每存一次所有顶点漂一次（亚毫米级，但边线上的点会因此翻到外面）。要的是读回逐位相等。
+-- PostGIS 3.1 起输出是「最短可往返」的十进制串，maxdecimaldigits 只是上限、给大了不会多出尾巴；
+-- |x| ≥ 1e-8 用定点、更小的用科学计数法。双精度最多 17 位有效数字，定点最坏的是 [1e-8, 1e-7)：
+-- 小数点后 7 个 0 再 17 位 = 24 位。实测（PostGIS 3.6）：15 位把 0.30000000000000004 截成 0.3，
+-- 17 位把 1.2345678901234567e-6 截短，23 位把 1.0000000000000002e-8 截成 1e-8，24 位全部原样。
+-- 经纬度的整数部分至多 3 位，不会更长。逐位相等由 internal/handler/admin_store_test.go 的
+-- TestFenceRoundTripsBitExact 钉住。
 --
 -- ### 出的那一侧为什么带一个 has_location 布尔，而不是让 lat/lng 可空
 --
@@ -69,7 +80,7 @@ SELECT st.id, st.region_id, r.name AS region_name, st.code, st.name, st.phone,
        (st.location IS NOT NULL)::boolean AS has_location,
        COALESCE(ST_Y(st.location::geometry), 0)::float8 AS lat,
        COALESCE(ST_X(st.location::geometry), 0)::float8 AS lng,
-       COALESCE(ST_AsGeoJSON(st.fence), '')::text       AS fence_geojson,
+       COALESCE(ST_AsGeoJSON(st.fence::geometry, 24), '')::text AS fence_geojson,
        st.is_default, st.status, st.deleted_at, st.created_at, st.updated_at
   FROM stores st
   JOIN regions r ON r.id = st.region_id
@@ -108,7 +119,7 @@ SELECT st.id, st.region_id, r.name AS region_name, st.code, st.name, st.phone,
        (st.location IS NOT NULL)::boolean AS has_location,
        COALESCE(ST_Y(st.location::geometry), 0)::float8 AS lat,
        COALESCE(ST_X(st.location::geometry), 0)::float8 AS lng,
-       COALESCE(ST_AsGeoJSON(st.fence), '')::text       AS fence_geojson,
+       COALESCE(ST_AsGeoJSON(st.fence::geometry, 24), '')::text AS fence_geojson,
        st.is_default, st.status, st.deleted_at, st.created_at, st.updated_at
   FROM stores st
   JOIN regions r ON r.id = st.region_id
