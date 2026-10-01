@@ -5,8 +5,8 @@
 //
 //	KEEL_EMBED_ENDPOINT=http://127.0.0.1:18081 go run ./cmd/keel-searcheval sample \
 //	    -out pairs.jsonl [-merchant 3] [-since 2160h] [-queries 300] [-k 30] [-extra extra.txt]
-//	KEEL_SYSTEMONE_ENDPOINT=http://127.0.0.1:18095 go run ./cmd/keel-searcheval label \
-//	    -pairs pairs.jsonl -out labels.jsonl [-model kev-latest] [-per-request 32]
+//	KEEL_SYSTEMONE_ENDPOINT=http://127.0.0.1:18095 [KEEL_SYSTEMONE_TOKEN=...] go run ./cmd/keel-searcheval label \
+//	    -pairs pairs.jsonl -out labels.jsonl [-model kev-latest] [-per-request 32] [-interval 2.1s]
 //	go run ./cmd/keel-searcheval calibrate -pairs pairs.jsonl -labels labels.jsonl [-json]
 //
 // sample 连库（应用角色，RLS 照常生效）与推理引擎：从每家店的 search_logs 取搜得最多的查询
@@ -26,6 +26,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -263,6 +264,7 @@ func label(args []string) error {
 	endpoint := fs.String("endpoint", os.Getenv(inference.EnvSystemOneEndpoint), "判别模型引擎地址（默认取 "+inference.EnvSystemOneEndpoint+"）")
 	model := fs.String("model", "", "请求里的 model 字段；空着用引擎的默认")
 	perRequest := fs.Int("per-request", 32, "一次请求最多几道题（同一条查询的候选）")
+	interval := fs.Duration("interval", 0, "两次请求之间至少隔多久（共享实例限流 30 次/分钟时给 2.1s）")
 	_ = fs.Parse(args)
 	if *pairsPath == "" || *out == "" {
 		return fmt.Errorf("要给 -pairs 与 -out")
@@ -271,7 +273,8 @@ func label(args []string) error {
 	if err != nil {
 		return err
 	}
-	c, err := inference.NewSystemOne(*endpoint, 0, nil)
+	// 令牌只从环境变量读（inference.EnvSystemOneToken 上写了为什么）。
+	c, err := inference.NewSystemOne(*endpoint, os.Getenv(inference.EnvSystemOneToken), 0, nil)
 	if err != nil {
 		return err
 	}
@@ -279,8 +282,9 @@ func label(args []string) error {
 	groups := searcheval.GroupByQuery(pairs)
 	var labels []searcheval.Label
 	started := time.Now()
+	dec := throttled{c, *interval, &time.Time{}}
 	for i, g := range groups {
-		ls, err := searcheval.LabelQuery(ctx, c, *model, g, *perRequest)
+		ls, err := searcheval.LabelQuery(ctx, dec, *model, g, *perRequest)
 		if err != nil {
 			return fmt.Errorf("商户 %d 查询 %q: %w", g[0].MerchantID, g[0].Query, err)
 		}
@@ -299,6 +303,36 @@ func label(args []string) error {
 		return err
 	}
 	return f.Close()
+}
+
+// throttled 让两次请求之间至少隔 interval（一条查询的候选多于 per-request 时一次 LabelQuery 会发多次）。
+type throttled struct {
+	d        searcheval.Decider
+	interval time.Duration
+	last     *time.Time
+}
+
+func (t throttled) Decide(ctx context.Context, r inference.SystemOneRequest) (*inference.SystemOneResponse, error) {
+	if wait := t.interval - time.Since(*t.last); !t.last.IsZero() && wait > 0 {
+		time.Sleep(wait)
+	}
+	// 共享实例的限流不只算我们一家：被 429 了就退避重试（10s、20s、40s……封顶 2 分钟），
+	// 不让一次限流把已经打完的几十条查询白扔。
+	backoff := 10 * time.Second
+	for attempt := 1; ; attempt++ {
+		*t.last = time.Now()
+		resp, err := t.d.Decide(ctx, r)
+		if !errors.Is(err, inference.ErrRateLimited) || attempt == 8 {
+			return resp, err
+		}
+		fmt.Fprintf(os.Stderr, "被限流，%s 后重试（第 %d 次）\n", backoff, attempt)
+		select {
+		case <-time.After(backoff):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		backoff = min(2*backoff, 2*time.Minute)
+	}
 }
 
 func calibrate(args []string) error {

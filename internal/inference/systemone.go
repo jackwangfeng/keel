@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -21,6 +22,14 @@ import (
 
 // EnvSystemOneEndpoint 是判别模型引擎的地址，形如 http://127.0.0.1:18095。
 const EnvSystemOneEndpoint = "KEEL_SYSTEMONE_ENDPOINT"
+
+// EnvSystemOneToken 是引擎要的 Bearer 令牌（共享的演示实例、Jev 云端要；本机引擎不要）。
+// 只从环境变量读，不进命令行参数与配置文件：参数会留在 shell 历史和进程列表里。
+const EnvSystemOneToken = "KEEL_SYSTEMONE_TOKEN"
+
+// ErrRateLimited 是引擎回了 429。它同时也是 ErrUnavailable（errors.Is 两个都成立）：
+// 只想降级的调用方不用认识它，离线批量的调用方可以认出它来退避重试。
+var ErrRateLimited = errors.New("推理引擎限流")
 
 // SystemOnePath 是引擎上那条接口的路径。
 const SystemOnePath = "/v1/systemone"
@@ -73,13 +82,15 @@ type SystemOneResponse struct {
 // SystemOneClient 是 SystemOnePath 的客户端。零值不可用，走 NewSystemOne。
 type SystemOneClient struct {
 	endpoint string
+	token    string
 	timeout  time.Duration
 	hc       *http.Client
 }
 
 // NewSystemOne 建客户端。endpoint 为空时拒绝（与 New 同一个理由：地址必须显式指定）。
+// token 非空时每次请求带 `Authorization: Bearer <token>`。
 // timeout <= 0 用 DefaultSystemOneTimeout；hc 为 nil 时自己建一个。
-func NewSystemOne(endpoint string, timeout time.Duration, hc *http.Client) (*SystemOneClient, error) {
+func NewSystemOne(endpoint, token string, timeout time.Duration, hc *http.Client) (*SystemOneClient, error) {
 	if endpoint == "" {
 		return nil, fmt.Errorf("没有配置判别模型引擎地址（%s），拒绝构造客户端", EnvSystemOneEndpoint)
 	}
@@ -89,12 +100,12 @@ func NewSystemOne(endpoint string, timeout time.Duration, hc *http.Client) (*Sys
 	if hc == nil {
 		hc = &http.Client{}
 	}
-	return &SystemOneClient{endpoint: endpoint, timeout: timeout, hc: hc}, nil
+	return &SystemOneClient{endpoint: endpoint, token: token, timeout: timeout, hc: hc}, nil
 }
 
 // SystemOneFromEnv 按 EnvSystemOneEndpoint 建客户端。
 func SystemOneFromEnv() (*SystemOneClient, error) {
-	return NewSystemOne(os.Getenv(EnvSystemOneEndpoint), 0, nil)
+	return NewSystemOne(os.Getenv(EnvSystemOneEndpoint), os.Getenv(EnvSystemOneToken), 0, nil)
 }
 
 // Decide 发一次请求。题号一个都没有、答案缺题、题型对不上、概率不在 [0, 1] 都报错 ——
@@ -114,6 +125,9 @@ func (c *SystemOneClient) Decide(ctx context.Context, r SystemOneRequest) (*Syst
 		return nil, fmt.Errorf("%w: 构造请求失败: %v", ErrUnavailable, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
 	httpResp, err := c.hc.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("%w: 打 %s 失败（%d 道题，单次上限 %s）: %w",
@@ -126,6 +140,9 @@ func (c *SystemOneClient) Decide(ctx context.Context, r SystemOneRequest) (*Syst
 	}
 	switch {
 	case httpResp.StatusCode == http.StatusOK:
+	case httpResp.StatusCode == http.StatusTooManyRequests:
+		// 限流是会自己好的一类：调用方按 ErrUnavailable 等一会儿再来，不当成请求本身有错。
+		return nil, fmt.Errorf("%w: %w（429）: %s", ErrUnavailable, ErrRateLimited, snippet(raw))
 	case httpResp.StatusCode >= 500:
 		return nil, fmt.Errorf("%w: 引擎回了 %d: %s", ErrUnavailable, httpResp.StatusCode, snippet(raw))
 	default:

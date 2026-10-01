@@ -21,13 +21,16 @@ func TestSystemOneDecideWireFormatAndValidation(t *testing.T) {
 		if r.URL.Path != inference.SystemOnePath || r.Method != http.MethodPost {
 			t.Errorf("打到了 %s %s", r.Method, r.URL.Path)
 		}
+		if a := r.Header.Get("Authorization"); a != "Bearer t0k" {
+			t.Errorf("Authorization = %q，期望 Bearer t0k", a)
+		}
 		_ = json.NewDecoder(r.Body).Decode(&got)
 		w.WriteHeader(status)
 		_, _ = w.Write([]byte(reply))
 	}))
 	defer srv.Close()
 
-	c, err := inference.NewSystemOne(srv.URL, 0, nil)
+	c, err := inference.NewSystemOne(srv.URL, "t0k", 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,11 +63,16 @@ func TestSystemOneDecideWireFormatAndValidation(t *testing.T) {
 		}
 	}
 
-	reply, status = `boom`, http.StatusServiceUnavailable
-	if _, err := c.Decide(context.Background(), req); !errors.Is(err, inference.ErrUnavailable) {
-		t.Errorf("5xx 应当 ErrUnavailable，得到 %v", err)
+	for _, st := range []int{http.StatusServiceUnavailable, http.StatusTooManyRequests} {
+		reply, status = `boom`, st
+		if _, err := c.Decide(context.Background(), req); !errors.Is(err, inference.ErrUnavailable) {
+			t.Errorf("%d 应当 ErrUnavailable，得到 %v", st, err)
+		}
+		if _, err := c.Decide(context.Background(), req); errors.Is(err, inference.ErrRateLimited) != (st == http.StatusTooManyRequests) {
+			t.Errorf("%d：ErrRateLimited 只该在 429 时成立，得到 %v", st, err)
+		}
 	}
-	if _, err := inference.NewSystemOne("", 0, nil); err == nil {
+	if _, err := inference.NewSystemOne("", "", 0, nil); err == nil {
 		t.Error("地址为空应当拒绝构造")
 	}
 }
