@@ -536,7 +536,15 @@ func failAtCommitNotifications(t *testing.T, orderNo string) {
 
 // 状态变化回滚了（提交时失败）→ 通知也不许留下：不存在「回滚了通知却发了」。
 // 外发任务同理：它与通知同一个事务，这里一并核对队列里没有指向这一单的任务。
+//
+// 这条测试要的是「任务与通知同生同灭」本身，不是「有没有配置渠道」，所以这里
+// 先立一个已配置的替身渠道——不然默认（无渠道配置）状态下任务从一开始就不
+// 入队，下面「提交成功之后队列多了 2 条」那句阳性对照会显得像是在验证一个
+// 不存在的东西。
 func TestStateRollbackLeavesNoNotificationBehind(t *testing.T) {
+	service.SetNotificationChannels([]service.NotificationChannel{&fakeChannel{name: "probe"}})
+	t.Cleanup(func() { service.SetNotificationChannels(nil) })
+
 	cs := newCouponShop(t)
 	b := cs.newBuyer(t, "notify-rollback-2")
 	o := cs.placeOrder(t, b, cs.NorthStore, cs.DressSKU, 1, nil)
@@ -666,38 +674,64 @@ func buyerNotificationID(t *testing.T, kind, orderNo string) int64 {
 	return adminQueryInt64(t, `SELECT id FROM notifications WHERE kind = $1 AND order_no = $2`, kind, orderNo)
 }
 
-// 默认渠道：三个都未配置 → 各记一行「跳过」，任务标成功，不报错、不重试。
-func TestDeliveryWithDefaultChannelsRecordsSkippedAndFinishes(t *testing.T) {
+// 没有一个渠道配置（本期默认状态）：站内消息照写，外发任务根本不入队——
+// 不是「入队之后 worker 把三个渠道都记成跳过」，是从一开始就不产生那条
+// notification.deliver 任务，投递表也就不会有这条通知的行。
+//
+// 压测报告 docs/性能压测-2026-10.md §5：旧行为是每付一单写 2 条通知、
+// 6 行投递记录（全部 status=2）、2 个任务，高峰积压到 5 万多个待办。
+//
+// 第二段验证「配置渠道之后，新产生的通知照常入队，但不会回补之前没入队的
+// 那些」——这是任务本身要求写清楚的取舍，没有自动补发的路径可以测，
+// 所以这里只能断言「之前那条仍然没有任务」。
+func TestNotificationDeliveryJobOnlyQueuedWhenAChannelIsConfigured(t *testing.T) {
 	cs := newCouponShop(t)
-	b := cs.newBuyer(t, "notify-deliver")
-	o := cs.placePaid(t, b, cs.NorthStore, cs.DressSKU, 1, nil)
-	id := buyerNotificationID(t, service.KindOrderPaid, o.OrderNo)
 
-	w := service.NewNotificationDeliveryService(repository.New(testPool), nil, service.NotificationDeliveryConfig{}, nil)
-	if _, err := w.Drain(context.Background()); err != nil {
-		t.Fatal(err)
+	// ① 默认状态（没有任何渠道配置）：站内消息照常出现，jobs 与投递表都不新增。
+	b1 := cs.newBuyer(t, "notify-deliver-none")
+	o1 := cs.placePaid(t, b1, cs.NorthStore, cs.DressSKU, 1, nil)
+	id1 := buyerNotificationID(t, service.KindOrderPaid, o1.OrderNo)
+	if id1 == 0 {
+		t.Fatal("没有渠道配置时站内消息没有照常写出来")
 	}
-	got := deliveriesOf(t, id)
-	if len(got) != 3 {
-		t.Fatalf("默认渠道投递之后有 %d 行投递记录，期望 3（微信订阅消息 / 短信 / 邮件各一行）：%+v", len(got), got)
+	if n := adminQueryInt64(t, `SELECT count(*) FROM jobs WHERE job_key = $1`,
+		fmt.Sprintf("notification:%d", id1)); n != 0 {
+		t.Errorf("没有渠道配置时还入队了 %d 条外发任务", n)
 	}
-	if n := adminQueryInt64(t, `SELECT count(*) FROM notification_deliveries
-	                             WHERE notification_id = $1 AND detail LIKE '未配置：%资质%'`, id); n < 1 {
-		t.Error("跳过的投递记录没写明原因（期望「未配置：……资质……」）")
+	if n := adminQueryInt64(t, `SELECT count(*) FROM notification_deliveries WHERE notification_id = $1`, id1); n != 0 {
+		t.Errorf("没有渠道配置时还写了 %d 行投递记录", n)
 	}
-	for _, d := range got {
-		if d.Status != repository.NotificationDeliverySkipped || d.Attempt != 1 {
-			t.Errorf("默认渠道的投递记录是 %+v，期望 status 2（未配置跳过）、attempt 1", d)
-		}
+
+	// ② 配置渠道之后：新产生的通知照常入队。
+	service.SetNotificationChannels([]service.NotificationChannel{&fakeChannel{name: "probe"}})
+	t.Cleanup(func() { service.SetNotificationChannels(nil) })
+
+	b2 := cs.newBuyer(t, "notify-deliver-some")
+	o2 := cs.placePaid(t, b2, cs.NorthStore, cs.DressSKU, 1, nil)
+	id2 := buyerNotificationID(t, service.KindOrderPaid, o2.OrderNo)
+	if n := adminQueryInt64(t, `SELECT count(*) FROM jobs WHERE job_key = $1`,
+		fmt.Sprintf("notification:%d", id2)); n != 1 {
+		t.Errorf("配置渠道之后新通知的外发任务没有入队（%d 条），期望 1", n)
 	}
-	if s := adminQueryInt64(t, `SELECT status FROM jobs WHERE queue = $1 AND job_key = $2`,
-		repository.QueueNotificationDelivery, fmt.Sprintf("notification:%d", id)); s != 2 {
-		t.Errorf("默认渠道投递之后任务状态是 %d，期望 2 已成功（跳过不是失败，不该重试）", s)
+
+	// ③ 配置动作不回补：①那条通知从一开始就没有产生任务，不是「有任务但失败了」，
+	// 没有什么可以在配置之后补发。
+	if n := adminQueryInt64(t, `SELECT count(*) FROM jobs WHERE job_key = $1`,
+		fmt.Sprintf("notification:%d", id1)); n != 0 {
+		t.Errorf("配置渠道之后，①那条早先的通知被补发了外发任务（%d 条）——这不是设计的行为", n)
 	}
 }
 
 // 替身渠道：发出 / 没有收件人（跳过）/ 失败退避；重试只补失败的那一路，已发出的不重发。
 func TestDeliveryRetriesOnlyTheChannelThatFailed(t *testing.T) {
+	// 外发任务要不要入队，在通知写入的那一刻就由 anyChannelConfigured 决定——
+	// 这条测试要验的是重试逻辑，前提是任务已经入队，所以必须在下单之前就把
+	// 「有渠道配置」立起来。具体用哪几个替身、让哪一路失败要等拿到通知 id
+	// 才能定（sms 只让这一条失败），这里先随便立一个占位的「已配置」，
+	// 拿到 id 之后再换成真正要用在 Drain 上的那三个。
+	service.SetNotificationChannels([]service.NotificationChannel{&fakeChannel{name: "probe"}})
+	t.Cleanup(func() { service.SetNotificationChannels(nil) })
+
 	cs := newCouponShop(t)
 	b := cs.newBuyer(t, "notify-deliver-fake")
 	o := cs.placePaid(t, b, cs.NorthStore, cs.DressSKU, 1, nil)

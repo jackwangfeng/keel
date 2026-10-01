@@ -183,8 +183,9 @@ type StaffTx interface {
 	// 并发的第二次会拿到 ErrStaffTokenNotFound —— 那一行已经被用掉了。
 	ConsumeStaffToken(ctx context.Context, tokenID int64) error
 
-	// TouchLiveStaffSession 校验一条会话 token 并记一次 last_seen_at。
-	// 校验与续活是同一条语句，理由见 db/queries/staff.sql。
+	// TouchLiveStaffSession 校验一条会话 token，并按阈值节流地记一次 last_seen_at。
+	// 校验（FindLiveStaffSession）与续活的写（TouchStaffSessionSeen）是两条语句，
+	// 拆开的理由与节流的阈值见 db/queries/staff.sql。
 	TouchLiveStaffSession(ctx context.Context, tokenHash string) (StaffSession, error)
 
 	// 管辖范围（staff_scope.go）。**只在租户作用域里可调**：staff_scopes 的
@@ -422,11 +423,18 @@ func (t tenantTx) ConsumeStaffToken(ctx context.Context, tokenID int64) error {
 }
 
 func (t tenantTx) TouchLiveStaffSession(ctx context.Context, tokenHash string) (StaffSession, error) {
-	row, err := t.q.TouchLiveStaffSession(ctx, tokenHash)
+	row, err := t.q.FindLiveStaffSession(ctx, tokenHash)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return StaffSession{}, ErrStaffTokenNotFound
 	}
 	if err != nil {
+		return StaffSession{}, err
+	}
+	// 续活按阈值节流，WHERE 里的条件自己决定要不要真的写这一行——调用方
+	// 不需要、也不应该先读 last_seen_at 的当前值再在 Go 这边决定写不写，
+	// 那样既多一次往返，又会把「阈值」这件事拆到两个地方去判。
+	// 见 db/queries/staff.sql 的 TouchStaffSessionSeen。
+	if err := t.q.TouchStaffSessionSeen(ctx, row.ID); err != nil {
 		return StaffSession{}, err
 	}
 	return StaffSession{

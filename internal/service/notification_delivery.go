@@ -122,6 +122,82 @@ func DefaultNotificationChannels() []NotificationChannel {
 	}
 }
 
+// ===========================================================================
+// 当前生效的渠道清单：emitNotification（写入口）与 worker 共用同一份判断
+// ===========================================================================
+//
+// 压测（docs/性能压测-2026-10.md §5）：没有一个渠道接通时，每付一单仍然照写
+// 2 条通知各 3 行投递记录 + 2 个外发任务，高峰积压到 51,819 个待办、最老等了
+// 239 秒。三行投递记录里全部是 status = 2（未配置跳过）——它们从一开始就
+// 不可能变成别的结果，写它们纯粹是把「这个渠道没接」这件事在压测规模下
+// 重复写了 70 多万遍。
+//
+// 所以 emitNotification 在落 notifications 行之后，写外发任务之前，先问一句
+// 「现在有没有至少一个渠道是配置了的」——一个都没有就连 jobs 都不入队，
+// 投递记录自然也不会有。站内消息（notifications 那一行）不受影响：
+// 买家消息中心、后台铃铛靠的是它本身，不等投递。
+//
+// 这个判断今天是**进程级**的，不是按商户、也不是按渠道的：三个渠道的
+// Configured() 本期都编译期写死为 false（文件头第一节），数据模型 §16
+// 待确认事项 27 也写着「按商户的渠道配置本期没有定」。所以 anyChannelConfigured
+// 今天等价于「是不是一个渠道都没接」，而不是更细的「这家店这个渠道配了没」——
+// 一旦真的接了按商户 / 按渠道配置，这里要换成查配置表，而不是这个全局判断。
+//
+// 取舍写清楚：**配置渠道之后，只有新产生的通知会入外发队列**，配置之前已经
+// 写了站内消息、但没入队的那些不会被补发——它们从一开始就不存在一条
+// notification.deliver 任务，没有什么可以「回去再投一次」。这与「有任务但
+// 全部渠道都跳过」是两种状态，后者（接入前的旧版本）会被这次改动直接消除。
+//
+// currentChannels / SetNotificationChannels 用一把锁而不是 atomic.Value：
+// 读写都不在热路径的内层循环里（每次 emit 一次、每次建 worker 一次），
+// 犯不着为这点调用省一次锁。
+var (
+	channelsMu     sync.RWMutex
+	channelsActive = DefaultNotificationChannels()
+)
+
+// SetNotificationChannels 替换当前生效的外发渠道清单。
+//
+// 两处用它：
+//   - 进程启动时真的接了渠道，换掉默认的「三个都未配置」（替换 app.go 里
+//     NewNotificationDeliveryService 的 nil 实参之外，还要调一次这个，
+//     否则 emitNotification 仍然按旧清单判断，worker 却在真的发 —— 两边
+//     看的不是同一份配置，是比「忘了接」更难查的一种漂移）；
+//   - 测试：替身渠道要让 emitNotification 认为「配置了」，必须在业务流程
+//     跑之前调用（emitNotification 是否入队，在通知写入的那一刻就决定了，
+//     后来才建的 NotificationDeliveryService 改变不了已经没入队的那些）。
+//
+// channels 为 nil 时回到 DefaultNotificationChannels()（全部未配置）。
+func SetNotificationChannels(channels []NotificationChannel) {
+	if channels == nil {
+		channels = DefaultNotificationChannels()
+	}
+	cp := append([]NotificationChannel(nil), channels...)
+	channelsMu.Lock()
+	channelsActive = cp
+	channelsMu.Unlock()
+}
+
+// currentChannels 是当前生效的渠道清单：NewNotificationDeliveryService 的
+// channels 参数为 nil 时取这份，而不是直接取 DefaultNotificationChannels()——
+// 不然 SetNotificationChannels 换过的清单只对 emitNotification 生效，
+// 新建的 worker 又回去看默认值。
+func currentChannels() []NotificationChannel {
+	channelsMu.RLock()
+	defer channelsMu.RUnlock()
+	return channelsActive
+}
+
+// anyChannelConfigured 报告现在是不是至少有一个外发渠道可用。
+func anyChannelConfigured() bool {
+	for _, ch := range currentChannels() {
+		if ch.Configured() {
+			return true
+		}
+	}
+	return false
+}
+
 // NotificationDeliveryRepository 是外发 worker 需要的仓储能力：队列那一半（跑在 pool 上）、
 // 租户事务、活跃商家清单（保留期清理要逐家进）。
 type NotificationDeliveryRepository interface {
@@ -192,14 +268,17 @@ type NotificationDeliveryService struct {
 	cursor uint64
 }
 
-// NewNotificationDeliveryService 建外发 worker。channels 为 nil 时用 DefaultNotificationChannels。
+// NewNotificationDeliveryService 建外发 worker。channels 为 nil 时用当前生效的清单
+// （currentChannels，默认是 DefaultNotificationChannels；被 SetNotificationChannels
+// 换过的话就是换过之后那份）——与 emitNotification 判断「要不要入队」用的是
+// 同一份，不会出现「worker 在用一套清单、写入口在用另一套」的漂移。
 func NewNotificationDeliveryService(r NotificationDeliveryRepository, channels []NotificationChannel,
 	cfg NotificationDeliveryConfig, log *slog.Logger) *NotificationDeliveryService {
 	if log == nil {
 		log = slog.Default()
 	}
 	if channels == nil {
-		channels = DefaultNotificationChannels()
+		channels = currentChannels()
 	}
 	if cfg.Workers <= 0 {
 		cfg.Workers = 1

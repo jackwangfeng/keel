@@ -225,9 +225,21 @@ type deliveryPayload struct {
 	NotificationID int64 `json:"notification_id"`
 }
 
-// emitNotification 是**唯一**写通知的地方：渲染 → 落行 → 入外发任务，全在调用方的 tx 里。
+// emitNotification 是**唯一**写通知的地方：渲染 → 落行 → （有渠道可投时）入外发任务，
+// 全在调用方的 tx 里。
 //
 // 去重键撞上（同一件事已经通知过）时什么都不做、返回 nil —— 那是正常路径。
+//
+// ===========================================================================
+// 站内消息照写，外发任务按「有没有渠道配置」决定入不入队
+// ===========================================================================
+//
+// notifications 那一行（站内消息本身：买家消息中心、后台铃铛）无条件写 ——
+// 它不依赖任何外发渠道，本来就不该受渠道配置影响。只有 notification.deliver
+// 这个外发任务，在 anyChannelConfigured() 为假时才不入队：一个渠道都没配时，
+// 入队换来的是 worker 必然把它投成「全部跳过」，而这件事从通知种类上就能
+// 确定，不需要真跑一次 worker 才知道。理由与取舍的完整论证见
+// notification_delivery.go 里 anyChannelConfigured 上面那段。
 func emitNotification(ctx context.Context, tx repository.Tx, o outgoing) error {
 	t, title, body, err := renderNotification(o.Kind, o.Params)
 	if err != nil {
@@ -254,6 +266,11 @@ func emitNotification(ctx context.Context, tx repository.Tx, o outgoing) error {
 	id, inserted, err := tx.InsertNotification(ctx, n)
 	if err != nil || !inserted {
 		return err
+	}
+	if !anyChannelConfigured() {
+		// 站内消息已经落地；没有渠道可投，连任务都不入队——不是「入队之后
+		// worker 发现没渠道」，是根本不产生这条任务。
+		return nil
 	}
 	payload, err := json.Marshal(deliveryPayload{NotificationID: id})
 	if err != nil {

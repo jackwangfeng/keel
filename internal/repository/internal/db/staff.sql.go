@@ -275,6 +275,44 @@ func (q *Queries) FindLiveOneTimeStaffToken(ctx context.Context, arg FindLiveOne
 	return i, err
 }
 
+const findLiveStaffSession = `-- name: FindLiveStaffSession :one
+SELECT t.id, s.id AS staff_id, s.role, s.status
+  FROM staff_tokens t
+  JOIN staff s ON s.id = t.staff_id
+ WHERE t.token_hash = $1
+   AND t.kind = 3
+   AND t.used_at IS NULL
+   AND t.revoked_at IS NULL
+   AND t.expire_at > now()
+   AND s.deleted_at IS NULL
+   AND s.kind = 1
+`
+
+type FindLiveStaffSessionRow struct {
+	ID      int64
+	StaffID int64
+	Role    int16
+	Status  int16
+}
+
+// 会话校验，只读：按 hash 取一条还活着的 kind=3 会话。不碰 last_seen_at ——
+// 续活的写那一半拆到 TouchStaffSessionSeen 里了，理由写在那条查询上。
+//
+// staff 那一侧连带取出 role 与 status：它们**不进令牌**。一个降级或停用的
+// 操作员必须在下一个请求就失去权限，而 7 天的会话里烤着一个旧 role 的话，
+// 「已经把他降成操作员了」这句话在一周之内都是假的。
+func (q *Queries) FindLiveStaffSession(ctx context.Context, tokenHash string) (FindLiveStaffSessionRow, error) {
+	row := q.db.QueryRow(ctx, findLiveStaffSession, tokenHash)
+	var i FindLiveStaffSessionRow
+	err := row.Scan(
+		&i.ID,
+		&i.StaffID,
+		&i.Role,
+		&i.Status,
+	)
+	return i, err
+}
+
 const getStaffByID = `-- name: GetStaffByID :one
 SELECT id, email, name, role, status, last_login_at, created_at
   FROM staff
@@ -437,60 +475,55 @@ func (q *Queries) SetStaffEmail(ctx context.Context, arg SetStaffEmailParams) (S
 	return i, err
 }
 
-const touchLiveStaffSession = `-- name: TouchLiveStaffSession :one
-UPDATE staff_tokens t
-   SET last_seen_at = now()
-  FROM staff s
- WHERE t.token_hash = $1
-   AND t.kind = 3
-   AND t.used_at IS NULL
-   AND t.revoked_at IS NULL
-   AND t.expire_at > now()
-   AND s.id = t.staff_id
-   AND s.deleted_at IS NULL
-   AND s.kind = 1
-RETURNING t.id, s.id AS staff_id, s.role, s.status
-`
-
-type TouchLiveStaffSessionRow struct {
-	ID      int64
-	StaffID int64
-	Role    int16
-	Status  int16
-}
-
-// 会话校验：按 hash 取一条还活着的 kind=3 会话，顺手记一次 last_seen_at。
-//
-// **校验与续活写在同一条语句里**，不是为了省一次往返，是因为分开写就有一个
-// 窗口：先 SELECT 确认活着，再 UPDATE 记时间，中间那一刻会话可以被吊销，
-// 而这个请求已经决定放行了。写成一条 UPDATE ... RETURNING 之后，
-// 「这条会话还活着」这个事实和放行这个动作发生在同一次行锁里。
-//
-// 代价说清楚：**每一个后台请求因此都是一次写事务**。后台流量本来就小
-// （运营与客服在用），而这一列换来的是「这个会话最后什么时候还在用」——
-// 撤销一串泄露的 token 时，那是唯一能回答「它被用过没有」的东西。
-//
-// staff 那一侧连带取出 role 与 status：它们**不进令牌**。一个降级或停用的
-// 操作员必须在下一个请求就失去权限，而 7 天的会话里烤着一个旧 role 的话，
-// 「已经把他降成操作员了」这句话在一周之内都是假的。
-func (q *Queries) TouchLiveStaffSession(ctx context.Context, tokenHash string) (TouchLiveStaffSessionRow, error) {
-	row := q.db.QueryRow(ctx, touchLiveStaffSession, tokenHash)
-	var i TouchLiveStaffSessionRow
-	err := row.Scan(
-		&i.ID,
-		&i.StaffID,
-		&i.Role,
-		&i.Status,
-	)
-	return i, err
-}
-
 const touchStaffLogin = `-- name: TouchStaffLogin :exec
 UPDATE staff SET last_login_at = now() WHERE id = $1
 `
 
 func (q *Queries) TouchStaffLogin(ctx context.Context, id int64) error {
 	_, err := q.db.Exec(ctx, touchStaffLogin, id)
+	return err
+}
+
+const touchStaffSessionSeen = `-- name: TouchStaffSessionSeen :exec
+UPDATE staff_tokens
+   SET last_seen_at = now()
+ WHERE id = $1
+   AND revoked_at IS NULL
+   AND (last_seen_at IS NULL OR last_seen_at < now() - interval '60 seconds')
+`
+
+// last_seen_at 节流：同一条会话 60 秒内最多写一次。
+//
+// ===========================================================================
+// 为什么从 TouchLiveStaffSession 拆成两条语句
+// ===========================================================================
+//
+// 原来是校验与续活同一条 UPDATE ... RETURNING：每一个后台请求因此都是一次
+// 写事务。压测（docs/性能压测-2026-10.md §6）量到：16 并发时平均 12–17 个
+// 会话在等同一行的锁（wait_event_type = Lock），而 PG CPU 只有 1–3 核，
+// 后台接口吞吐被压到 190–250 RPS、p95 170–330 ms。压测共用一个会话放大了它，
+// 但店员开多个标签页、批量导出、AI 员工并发调用都会天然撞到同一个会话 ——
+// 这一列换来的「最后一次还活着是什么时候」不值这个代价。
+//
+// 原注释担心的窗口——「先 SELECT 确认活着，再 UPDATE 记时间，中间那一刻
+// 会话可以被吊销，而这个请求已经决定放行了」——在这里不成立：**放行的决定
+// 仍然只由 FindLiveStaffSession 那次读的结果做出**，这条 UPDATE 不再参与
+// 「是否放行」，纯粹是记账。即使两条语句之间这个会话恰好被吊销，影响的
+// 至多是「last_seen_at 比吊销晚写入了几微秒」，而不是「一个已吊销的会话
+// 又多活了一个请求」——这个请求能走到这里，本来就是因为上一条语句读到它
+// 还活着，和原来单条语句里 RETURNING 读到的是同一类「读到之后世界可能
+// 变化」的窗口，并不比原来更宽。
+//
+// WHERE 里留着 revoked_at IS NULL，纯粹是不想在一行已经标记吊销的 token 上
+// 再盖一次时间戳，不是鉴权意义上的把关（把关已经在 FindLiveStaffSession 做完）。
+//
+// 阈值 60 秒：本表没有「按 last_seen_at 判断闲置过期」这种逻辑——会话的
+// 寿命完全由 expire_at 决定（auth.StaffSessionTTL，7 天，签发时写死），
+// TouchStaffSessionSeen 写不写都不影响任何一次鉴权判定。60 秒只是把「后台
+// 员工列表 / 密钥列表上显示的最后活跃时间」的误差从 0 放宽到至多 1 分钟，
+// 与 db/queries/agents.sql 的 TouchAgentKey 用的是同一个数量级、同一个理由。
+func (q *Queries) TouchStaffSessionSeen(ctx context.Context, id int64) error {
+	_, err := q.db.Exec(ctx, touchStaffSessionSeen, id)
 	return err
 }
 
