@@ -72,7 +72,9 @@ type SearchTx interface {
 
 	// SearchProductsByKeyword 按 bigram tsquery 召回，ts_rank_cd 高的在前。
 	//
-	// tsquery 是 internal/search.Bigram 的输出用 " | " 拼成的串。
+	// tsquery 是 internal/search.Bigram 的输出用 " | " 拼成的串（TSQueryOr），或去重后用
+	// " & " 拼成的串（TSQueryAnd）。先按 ts_rank_cd 截到 limit 件、再补价格与图片
+	// （带价格过滤时不先截），结果与「全部算完再取前 limit 件」相同。
 	// 空串会让 to_tsquery 报语法错，所以调用方必须先判空 —— 这一层不替它
 	// 兜底：一个「查询切不出任何词」的请求走到这里已经是上面的逻辑错了，
 	// 悄悄返回空列表会把那个错藏起来。

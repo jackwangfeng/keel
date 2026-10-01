@@ -101,7 +101,8 @@ SELECT p.id, p.title, p.subtitle,
 -- bigram 关键词召回（语义检索层 §3）。
 --
 -- @tsquery 是**应用层**切出来的 tsquery 串，由 internal/search.Bigram 的输出
--- 用竖线拼成（internal/search.TSQueryOr）。这里不做任何分词：
+-- 用竖线拼成（internal/search.TSQueryOr），或去重后用 & 拼成（TSQueryAnd：多词查询先要求
+-- 全部命中，不够一页再用 OR 那条补齐，见 service/search.go 的 recallByKeyword）。这里不做任何分词：
 -- to_tsquery('simple', '连衣裙') 会把整句
 -- 中文当成一个 token，那正是 §3 开头说的「完全不可用」。
 --
@@ -120,13 +121,52 @@ SELECT p.id, p.title, p.subtitle,
 -- 回 products 这次 JOIN 仍在 RLS 之下 —— 租户隔离照旧只靠 RLS，理由写在那份迁移里。
 --
 -- 过滤条件与上面那条逐字一致，理由写在文件头。
+--
+-- ## 先排序截断、再补价格与图片（2026-10 性能压测，第六节 ③）
+--
+-- 以前是一层：对**全部**命中先算价格区间与主图（两个 LATERAL），再 ORDER BY ... LIMIT。
+-- 长尾词 OR 召回 9980 件时价格 LATERAL 跑 9980 次（217 ms），而最后只要 @row_limit 件。
+-- 现在拆成两层：
+--
+--	· 内层 ranked：只用不涉及价格的条件（status / deleted_at / 命中集合 / 类目 / 两层可见性）
+--	  筛，按 ts_rank_cd 排、截到 @row_limit 件，只出 id 与分数；
+--	· 外层：对这 @row_limit 件补价格、主图，做价格过滤，再排一次（同一个键）。
+--
+-- **结果与一层写法逐行相同**：不带价格过滤时，外层的过滤恒真，内层的排序键
+-- （rank DESC, id）是全序，截断前后的前 @row_limit 件是同一批、同一个顺序。
+-- **带价格过滤时内层不截断**（LIMIT NULL 即不限）：价格是外层才算出来的，先截再滤会把
+-- 「排在前 N 之外、但价格落在区间里」的那些漏掉，返回的就不是「区间内相关度最高的 N 件」了。
+-- 那条路的耗时与改之前相同 —— 价格区间筛选本身就要先知道每件的价格。
+--
+-- 过滤条件拆在两层，但**合起来**仍与向量那条逐字一致（TestBothRecallPathsFilterIdentically 在守）。
+WITH ranked AS (
+    SELECT p.id,
+           ts_rank_cd(p.search_vector, to_tsquery('simple', @tsquery::text))::float8 AS rank
+      FROM products p
+     WHERE p.deleted_at IS NULL
+       AND p.status = 1
+       AND p.id IN (SELECT keyword_hit_products(to_tsquery('simple', @tsquery::text)))
+       AND (sqlc.narg(category_id)::bigint IS NULL
+            OR p.category_id = sqlc.narg(category_id)::bigint)
+       AND NOT EXISTS (SELECT 1 FROM region_product_overrides ro
+                        WHERE ro.region_id = sqlc.arg(region_id)
+                          AND ro.product_id = p.id AND ro.status = 0)
+       AND NOT EXISTS (SELECT 1 FROM store_product_overrides so
+                        WHERE so.store_id = sqlc.arg(store_id)
+                          AND so.product_id = p.id AND so.status = 0)
+     ORDER BY rank DESC, p.id
+     LIMIT CASE WHEN sqlc.narg(min_price_cents)::bigint IS NULL
+                 AND sqlc.narg(max_price_cents)::bigint IS NULL
+                THEN @row_limit::int END
+)
 SELECT p.id, p.title, p.subtitle,
        COALESCE(agg.min_price, 0)::bigint AS min_price_cents,
        COALESCE(agg.max_price, 0)::bigint AS max_price_cents,
        p.sales_count, p.status,
        COALESCE(img.upload_id, 0)::bigint AS main_image_upload_id,
-       ts_rank_cd(p.search_vector, to_tsquery('simple', @tsquery::text))::float8 AS rank
-  FROM products p
+       r.rank
+  FROM ranked r
+  JOIN products p ON p.id = r.id
   LEFT JOIN LATERAL (
         SELECT min(pv.price_cents) AS min_price, max(pv.price_cents) AS max_price
           FROM sku_prices_by_store pv
@@ -139,23 +179,12 @@ SELECT p.id, p.title, p.subtitle,
          ORDER BY pi.sort_order, pi.id
          LIMIT 1
        ) img ON TRUE
- WHERE p.deleted_at IS NULL
-   AND p.status = 1
-   AND p.id IN (SELECT keyword_hit_products(to_tsquery('simple', @tsquery::text)))
-   AND (sqlc.narg(category_id)::bigint IS NULL
-        OR p.category_id = sqlc.narg(category_id)::bigint)
-   AND (sqlc.narg(min_price_cents)::bigint IS NULL
+ WHERE (sqlc.narg(min_price_cents)::bigint IS NULL
         OR COALESCE(agg.max_price, 0) >= sqlc.narg(min_price_cents)::bigint)
    AND (sqlc.narg(max_price_cents)::bigint IS NULL
         OR COALESCE(agg.min_price, 0) <= sqlc.narg(max_price_cents)::bigint)
-   AND NOT EXISTS (SELECT 1 FROM region_product_overrides ro
-                    WHERE ro.region_id = sqlc.arg(region_id)
-                      AND ro.product_id = p.id AND ro.status = 0)
-   AND NOT EXISTS (SELECT 1 FROM store_product_overrides so
-                    WHERE so.store_id = sqlc.arg(store_id)
-                      AND so.product_id = p.id AND so.status = 0)
- ORDER BY ts_rank_cd(p.search_vector, to_tsquery('simple', @tsquery::text)) DESC, p.id
- LIMIT @row_limit;
+ ORDER BY r.rank DESC, p.id
+ LIMIT @row_limit::int;
 
 -- name: ListOnSaleSKUsOfProducts :many
 -- 一批商品的在售 SKU（未软删、status = 1）。检索算 in_stock 用：拿这批 sku_id 向库存服务

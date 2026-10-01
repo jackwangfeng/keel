@@ -206,6 +206,12 @@ const SearchLogTimeout = 200 * time.Millisecond
 // 在 size ≤ 100 的量级上那是几百行，不值得为它调参。
 //
 // 真要定这个数，要的是 §9.1 的离线评测集（Recall@50），而它还不存在。
+//
+// 这个窗口（size × 3，in_stock_only 时再 × 2）也是关键词召回 SQL 里**先排序截断**的那个 N
+// （2026-10 性能压测第六节 ③）：SearchProductsByKeyword 先按 ts_rank_cd 截到 N 件，再给这 N 件
+// 算价格与主图。融合、业务重排、相关度下限、精确标题优先都只作用在召回窗口之内（改之前也一样，
+// 截断原来就在同一条 SQL 的末尾），所以截断提前不改变它们看到的候选；它只是不再给窗口外的
+// 几千件算价格。N 不必为截断再放大：后面几层的「余量」就是这 3 倍。
 const RecallMultiplier = 3
 
 // SearchConfig 是检索的可调项。
