@@ -27,6 +27,7 @@ import (
 	"github.com/keel/keel/internal/handler"
 	"github.com/keel/keel/internal/inference"
 	"github.com/keel/keel/internal/inventory"
+	"github.com/keel/keel/internal/outcome"
 	"github.com/keel/keel/internal/problem"
 	"github.com/keel/keel/internal/repository"
 	"github.com/keel/keel/internal/service"
@@ -197,6 +198,14 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	// 必须在所有业务中间件之外：它靠 c.Next() 返回之后 drain c.Errors，
 	// 挂在里层会漏掉外层中间件（比如租户解析）记下的错误。
 	r.Use(logHandlerErrors())
+
+	// 给每个请求挂「有没有落地过什么」的记录器（internal/outcome）。语句超时 / 等锁超时的
+	// 兜底（problem.Write 的 rewriteBusy）靠它决定能不能说「这次没有生效」：
+	// 没挂的请求一律当作「可能生效了」，照旧 500。
+	r.Use(func(c *gin.Context) {
+		c.Request = c.Request.WithContext(outcome.Track(c.Request.Context()))
+		c.Next()
+	})
 
 	// 没匹配上的路径与方法也要回契约里的 Problem。
 	//

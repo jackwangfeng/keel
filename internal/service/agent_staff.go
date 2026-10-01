@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/keel/keel/internal/auth"
+	"github.com/keel/keel/internal/outcome"
 	"github.com/keel/keel/internal/repository"
 	"github.com/keel/keel/internal/tenant"
 )
@@ -347,6 +348,8 @@ func (s *StaffService) LoadAgentIdentity(ctx context.Context, raw string) (auth.
 	if err != nil {
 		return auth.StaffIdentity{}, err
 	}
+	// 刷 last_used_at 是鉴权的记账，不算这次调用落过地（理由同 LoadStaffSession）。
+	ctx = outcome.Untracked(ctx)
 	var out auth.StaffIdentity
 	err = s.repo.WithTenant(ctx, func(tx repository.Tx) error {
 		k, err := tx.LoadAgentKey(ctx, HashAgentKey(raw))

@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/keel/keel/internal/auth"
 	"github.com/keel/keel/internal/inventory"
+	"github.com/keel/keel/internal/outcome"
 	"github.com/keel/keel/internal/repository"
 	"github.com/keel/keel/internal/tenant"
 )
@@ -402,6 +403,11 @@ func (s *AgentProposalService) runClaimed(ctx context.Context, p repository.Agen
 // 那个目标从此再也提不了（2026-09-28 破坏性测试）。
 func isInfraError(err error) bool {
 	if inventory.IsUnavailable(err) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return true
+	}
+	// 等锁超时（55P03 —— 不在下面那几个类里）与库存进程回的 busy（拆分形态，rpc.ErrBusy）：
+	// 确定没生效、过一会儿就好，与语句超时（57014）同一类。
+	if outcome.IsDBBusy(err) {
 		return true
 	}
 	var pg *pgconn.PgError

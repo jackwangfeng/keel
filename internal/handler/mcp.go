@@ -124,7 +124,7 @@ func mcpTool[In, Out any](srv *mcp.Server, d *MCPDeps, name, desc string, writeE
 			if err != nil {
 				var text string
 				var pr mcpProblem
-				pr, text = mcpError(err, writeErr)
+				pr, text = mcpError(ctx, err, writeErr)
 				errType = pr.Type
 				if errType == problem.TypeInternal {
 					d.Log.ErrorContext(ctx, "MCP 工具调用出错", "tool", name, "err", err)
@@ -165,10 +165,13 @@ type mcpProblem struct {
 
 // mcpError 借后台接口的错误出口把 err 翻成 problem：写进一个内存里的响应，再把 type / title / detail 读回来。
 // 这样 agent 拿到的错误类型与后台接口逐字相同，不必再维护一份映射。内部错误不带 detail（不外泄）。
-func mcpError(err error, writeErr func(*gin.Context, error)) (mcpProblem, string) {
+//
+// 内存里那个请求带上工具调用的 ctx：语句超时 / 等锁超时的兜底（problem.Write）要从 ctx 上读
+// 「这次调用有没有落地过什么」（internal/outcome）才敢回 busy；不带的话 agent 永远只看到 internal。
+func mcpError(ctx context.Context, err error, writeErr func(*gin.Context, error)) (mcpProblem, string) {
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodGet, "/", nil)
+	c.Request = httptest.NewRequest(http.MethodGet, "/", nil).WithContext(ctx)
 	writeErr(c, err)
 	var p struct {
 		Type   string  `json:"type"`

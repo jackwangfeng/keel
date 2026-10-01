@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/keel/keel/internal/auth"
+	"github.com/keel/keel/internal/outcome"
 	"github.com/keel/keel/internal/repository"
 )
 
@@ -392,6 +393,9 @@ func (s *StaffService) exchangeIn(ctx context.Context, platform bool, hash strin
 func (s *StaffService) LoadStaffSession(ctx context.Context, claims auth.StaffClaims,
 	rawToken string) (auth.StaffIdentity, error) {
 
+	// 刷 last_seen_at 是鉴权的记账，不是这个请求的业务效果：不记进「落过地」（internal/outcome），
+	// 否则每个后台请求都在进 handler 之前就落过地，语句超时的兜底永远说不出「这次没有生效」。
+	ctx = outcome.Untracked(ctx)
 	var out auth.StaffIdentity
 	err := s.inScopeFor(ctx, claims, func(tx repository.StaffTx) error {
 		sess, err := tx.TouchLiveStaffSession(ctx, auth.HashStaffToken(rawToken))

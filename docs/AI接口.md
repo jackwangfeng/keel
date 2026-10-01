@@ -194,6 +194,10 @@ def verify(secret: str, body: bytes, header: str) -> bool:
 `type` 与后台接口的 problem type 逐字相同（如 `https://keel.dev/problems/out-of-scope`），判断用它，不要解析文字。
 内部错误（`internal`）不带 detail。
 
+`busy`（`https://keel.dev/problems/busy`，status 503）：数据库此刻繁忙（等行锁超时或语句超时），
+这次调用被整体撤销、**确定没有生效**。过几秒原样再调一次即可，不必先查「是不是已经成了」，
+也不要把它当成业务拒绝写进简报或提案的失败原因。与后台接口同一个判据（契约 `info.description`「数据库繁忙时」）。
+
 ## 兼容承诺
 
 接入方照着工具清单写解析，所以清单的变化要可预期：
@@ -220,6 +224,7 @@ def verify(secret: str, body: bytes, header: str) -> bool:
 | 2026-09-28 | `promotion_review` 的券分支加 `refunded_order_count`（整单退款的单数；这些单的券已退回，所以 `used_count` 会比 `order_count` 少） |
 | 2026-09-28 | 检索加相关度下限：`search_insights` 的无结果词与 `search_zero_spike` 把「只回了低于下限的猜你想要」（fallback）也算作无结果；之前向量召回永远凑满，这两样恒为 0 |
 | 2026-09-28 | 演示站实跑验收修两处：全部工具输出里的时刻改为**店铺时区**（带偏移的 RFC 3339，如 `+08:00`；之前是 UTC，AI 店长把它当北京时间写进简报）；`list_refunds` 加 `order_shipped_at`（没发过货时缺席），判发没发货看它，不看 `order_status`（50 / 60 是未发货的整单退款） |
+| 2026-10-01 | 工具错误新增 `busy`（503）：数据库等锁 / 语句超时，这次调用确定没有生效，稍后原样重试。之前同样的情况报 `internal` |
 
 ## 接入方式举例
 

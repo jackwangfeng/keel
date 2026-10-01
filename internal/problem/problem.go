@@ -12,9 +12,13 @@
 package problem
 
 import (
+	"net/http"
+	"strconv"
+
 	"github.com/gin-gonic/gin"
 
 	"github.com/keel/keel/internal/api"
+	"github.com/keel/keel/internal/outcome"
 )
 
 // 目前用到的 problem type。它们是 URI 形式的稳定标识，客户端按它分支，
@@ -334,6 +338,20 @@ const (
 	// 而这两件事的重试策略完全相反。
 	TypeNotImplemented = "https://keel.dev/problems/not-implemented"
 
+	// busy 是 503：数据库此刻忙 —— 语句等行锁超过 lock_timeout（55P03），或跑过了
+	// statement_timeout（57014）—— 这次请求被取消，而且**确定没有生效**。
+	// 客户端按 Retry-After 退避后原样重试（写接口带同一个 Idempotency-Key）即可。
+	//
+	// 与 internal 的 500 分开：500 是「服务端有 bug」，重试多半没用；这一条是一阵并发
+	// （典型：两个人同时审同一张退款单，一个人的事务还没提交）过去就会好。
+	// 与 inventory-unavailable 分开：那一条在写接口上是「可能已经生效」，这一条是
+	// 「确定没有」—— 屏幕前的人据此知道要不要去刷新看看，还是放心再点一次。
+	//
+	// 「确定没有生效」的推理与边界在 internal/outcome 的包注释里：出错的事务确定回滚了；
+	// 同一个请求里更早落了地的步骤由 outcome 记着，记到过的请求**不**回这个 type
+	// （照旧 500，不替它下结论）。怎么接到每一条接口上的，见下面 Write 里的 rewriteBusy。
+	TypeBusy = "https://keel.dev/problems/busy"
+
 	// 被限流挡住。契约里已经有这个 type（POST /auth/sms-code 的 429 描述
 	// 逐字写着它），所以这里复用，不新造一个 —— 同一件事两个 type，
 	// 客户端的退避逻辑就要写两遍。
@@ -382,6 +400,9 @@ const (
 // 调用点全都在匿名可访问的路径上，err 的内容里常常带着表名、列名和参数值。
 // 真要加 detail，加的是一句人写的话，不是 err.Error()。
 func Write(c *gin.Context, status int, kind, title string) {
+	if status == http.StatusInternalServerError && rewriteBusy(c) {
+		return
+	}
 	// 先设 Content-Type：gin 的 JSON 渲染只在它还没被设过时才写自己那个
 	// application/json，所以顺序反了的话 problem+json 会被吃掉。
 	c.Header("Content-Type", "application/problem+json")
@@ -408,6 +429,54 @@ func Write(c *gin.Context, status int, kind, title string) {
 // 错误响应的 Content-Type 退回 application/json，而按契约生成的客户端
 // 会在它最需要读懂的那类响应上走错分支。
 func WriteValue(c *gin.Context, status int, body any) {
+	if status == http.StatusInternalServerError && rewriteBusy(c) {
+		return
+	}
 	c.Header("Content-Type", "application/problem+json")
 	c.AbortWithStatusJSON(status, body)
+}
+
+// BusyRetryAfterSeconds 是 busy 那条 503 的 Retry-After。
+//
+// 行锁的持有者是另一个请求的短事务（毫秒到几秒），lock_timeout 默认 3 秒、
+// statement_timeout 默认 15 秒（internal/db/pool.go）。3 秒够那一阵并发过去，
+// 又不至于让屏幕前的人觉得卡死。
+const BusyRetryAfterSeconds = 3
+
+// BusyDetail 是 busy 的固定 detail。不带错误原文：原文里有表名与语句。
+const BusyDetail = "数据库此刻繁忙（等锁或语句超时），这次请求已被整体撤销，没有生效。" +
+	"稍后原样重试即可（写操作带同一个 Idempotency-Key）"
+
+// WriteBusy 写 busy 那条 503（带 Retry-After）。给不经过 Write 兜底、自己判出了 busy 的地方用
+// （库存进程的内网接口、core 收到库存进程回的 busy）。
+func WriteBusy(c *gin.Context) {
+	c.Header("Retry-After", strconv.Itoa(BusyRetryAfterSeconds))
+	detail := BusyDetail
+	c.Header("Content-Type", "application/problem+json")
+	c.AbortWithStatusJSON(http.StatusServiceUnavailable, api.Problem{
+		Type: TypeBusy, Title: "服务繁忙，请稍后重试",
+		Status: http.StatusServiceUnavailable, Detail: &detail,
+	})
+}
+
+// rewriteBusy 是「语句超时 / 等锁超时回裸 500」的统一兜底（2026-10 破坏性测试：退款单行被锁时
+// 审核接口等满 15 秒回 500，订单行被锁时发货同样）。
+//
+// 挂在 Write / WriteValue 里而不是每个 handler 的 default 分支：全仓四十多处
+// 「_ = c.Error(err); problem.Write(c, 500, internal, ...)」，逐处改既容易漏，新写的接口也
+// 不会记得。它们有一个共同点 —— 写 500 之前先 c.Error(err) 把原因交给日志中间件 ——
+// 这里就读那一条：最后一个错误是 57014 / 55P03、并且这个请求此前什么都没落地
+// （outcome.MaybeDurable 为假），就改写成 503 busy。两个条件缺一个都照旧写 500。
+//
+// 没先 c.Error 就写 500 的那几处（读上传文件失败之类）本来也不是数据库错误，不受影响。
+func rewriteBusy(c *gin.Context) bool {
+	last := c.Errors.Last()
+	if last == nil || !outcome.IsDBBusy(last.Err) {
+		return false
+	}
+	if c.Request == nil || outcome.MaybeDurable(c.Request.Context()) {
+		return false
+	}
+	WriteBusy(c)
+	return true
 }

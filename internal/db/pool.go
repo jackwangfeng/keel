@@ -10,6 +10,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/keel/keel/internal/outcome"
 )
 
 // NewPool 建应用用的连接池，并保证池里每一条物理连接都绕不过 RLS。
@@ -68,6 +70,10 @@ func NewPoolFromDSN(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 	if err := applySessionTimeouts(cfg.ConnConfig.RuntimeParams); err != nil {
 		return nil, err
 	}
+	// 按语句结果记「这个请求有没有落地过什么」（internal/outcome）：语句超时 / 等锁超时
+	// 回 503 时，只有一次都没落地过的请求才能说「这次没有生效」。请求之外的 ctx 上没有
+	// 记录器，Tracer 对它们什么也不做。
+	cfg.ConnConfig.Tracer = outcome.Tracer{}
 	// 锁等待上限不是会话参数（见 LockTimeout），但它的变量也在这里校验一次：
 	// 写错了要在启动时报，而不是在第一笔下单时。
 	if _, err := LockTimeout(); err != nil {
