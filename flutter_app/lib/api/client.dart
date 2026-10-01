@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
@@ -97,7 +98,9 @@ class ApiClient {
     } on ApiFailure {
       rethrow;
     } catch (e) {
-      throw ApiFailure(0, null, '网络异常，请检查网络后重试（$e）');
+      // 异常原文（ClientException: Failed to fetch, uri=…）只进日志，不给买家看。
+      debugPrint('keel.api: 网络层失败：$e');
+      throw const ApiFailure(0, null, '网络异常，请检查网络后重试');
     }
   }
 
@@ -198,12 +201,16 @@ class ApiClient {
       try {
         return ApiResult(decode(text.isEmpty ? null : jsonDecode(text)), replayed);
       } catch (e) {
-        // 2xx 但响应体不是契约里的形状（网关错页、半截响应）：照实说，不让解析异常漏出去。
-        throw ApiFailure(0, null, '服务器返回的内容读不懂（HTTP ${res.statusCode}）');
+        // 2xx 但响应体不是契约里的形状（网关错页、半截响应）：不让解析异常漏出去；细节只进日志。
+        debugPrint('keel.api: HTTP ${res.statusCode} 响应体解析失败：$e');
+        throw const ApiFailure(0, null, _unreadable);
       }
     }
     throw _failure(res.statusCode, text, res.headers['retry-after']);
   }
+
+  /// 响应不是契约里的形状（反代返回的 HTML 错页、瞬时 502 / 503、半截响应）时给买家看的话；技术细节只进日志。
+  static const _unreadable = '网络开小差了，请稍后重试';
 
   ApiFailure _failure(int status, String text, String? retryAfter) {
     Problem? p;
@@ -211,7 +218,8 @@ class ApiClient {
       final j = jsonDecode(text);
       if (j is Map<String, dynamic> && j['type'] is String && j['title'] is String) p = Problem.fromJson(j);
     } catch (_) {}
-    final msg = p != null ? ((p.detail ?? '').isNotEmpty ? p.detail! : p.title) : 'HTTP $status：响应体不是契约里的 Problem';
+    if (p == null) debugPrint('keel.api: HTTP $status 的响应体不是契约里的 Problem（反代错页 / 瞬时 5xx？）');
+    final msg = p != null ? ((p.detail ?? '').isNotEmpty ? p.detail! : p.title) : _unreadable;
     return ApiFailure(status, p, msg,
         retryAfter: int.tryParse(retryAfter ?? '') ?? 0, fieldErrors: p?.errors ?? const []);
   }

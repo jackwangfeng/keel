@@ -57,7 +57,7 @@ void main() {
     final c = ApiClient(base: 'http://h/api/v1', session: s,
         http: MockClient((r) async => http.Response('<html>bad gateway</html>', 502)));
     await expectLater(c.send('GET', '/x', decode: (x) => x),
-        throwsA(isA<ApiFailure>().having((f) => f.message, 'message', contains('502'))));
+        throwsA(isA<ApiFailure>().having((f) => f.status, 'status', 502).having((f) => f.message, 'message', '网络开小差了，请稍后重试')));
   });
 
   test('401：只刷新一次，并发请求排队，刷完用原幂等键重放', () async {
@@ -133,5 +133,40 @@ void main() {
     for (final k in keys) {
       expect(k, matches(RegExp(r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$')));
     }
+  });
+
+  group('给买家看的报错不带技术细节（乱点测试：网关 502 错页时买家看到「响应体不是契约里的 Problem」）', () {
+    Future<ApiFailure> fail(Future<http.Response> Function(http.Request) h) async {
+      final c = ApiClient(base: 'http://h/api/v1', session: Session(), http: MockClient(h));
+      try {
+        await c.send('GET', '/products', decode: (j) => j);
+      } on ApiFailure catch (f) {
+        return f;
+      }
+      throw StateError('没抛 ApiFailure');
+    }
+
+    test('非 Problem 的错误响应（网关 502 HTML 错页）：通用文案，状态码保留', () async {
+      final f = await fail((_) async => http.Response('<html>502 Bad Gateway</html>', 502));
+      expect(f.message, '网络开小差了，请稍后重试');
+      expect(f.status, 502);
+      expect(f.problem, isNull);
+    });
+
+    test('2xx 但内容解析不了：同样的通用文案', () async {
+      final f = await fail((_) async => http.Response('<html>oops', 200));
+      expect(f.message, '网络开小差了，请稍后重试');
+    });
+
+    test('网络层异常：不把异常原文拼给买家', () async {
+      final f = await fail((_) async => throw http.ClientException('Failed to fetch, uri=http://h/api/v1/products'));
+      expect(f.message, '网络异常，请检查网络后重试');
+      expect(f.status, 0);
+    });
+
+    test('标准 Problem 照旧用服务端的 detail', () async {
+      final f = await fail((_) async => j(409, {'type': 'https://keel.dev/problems/x', 'title': '标题', 'status': 409, 'detail': '原因'}));
+      expect(f.message, '原因');
+    });
   });
 }

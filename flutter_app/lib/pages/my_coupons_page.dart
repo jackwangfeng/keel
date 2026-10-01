@@ -33,7 +33,14 @@ class _MyCouponsPageState extends State<MyCouponsPage> {
     }
   }
 
+  Future<void> _login() async {
+    await context.push('/login');
+    if (mounted) _load();
+  }
+
   Future<void> _load() async {
+    // 没登录先不请求（不去拿一个 401 再当错误显示）：页面直接给登录入口，与领券中心一致。
+    if (!Services.of(context).session.loggedIn) return setState(() {});
     // 连着切两个 tab 时只认最后一次。
     final asked = _tab;
     try {
@@ -71,7 +78,15 @@ class _MyCouponsPageState extends State<MyCouponsPage> {
         backgroundColor: KeelColors.bg,
         surfaceTintColor: KeelColors.bg,
       ),
-      body: Column(children: [
+      body: !Services.of(context).session.loggedIn
+          ? Center(
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                const Text('登录后查看你的优惠券', style: KeelText.sub),
+                const SizedBox(height: 16),
+                FilledButton(key: const Key('coupons.login'), onPressed: _login, child: const Text('登录')),
+              ]),
+            )
+          : Column(children: [
         // 白底 tab 栏，选中的下面一条 2 像素深咖线（uni-app x 的 .tabs / .tab-on）。
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 8),

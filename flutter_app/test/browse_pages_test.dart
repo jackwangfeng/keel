@@ -13,6 +13,7 @@ import 'package:keel_buyer/api/session.dart';
 import 'package:keel_buyer/api/store.dart';
 import 'package:keel_buyer/router.dart';
 import 'package:keel_buyer/theme.dart';
+import 'package:keel_buyer/widgets/states.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 http.Response j(Object body, [int status = 200]) => http.Response(jsonEncode(body), status,
@@ -252,5 +253,19 @@ void main() {
     await t.pumpAndSettle();
     expect(find.byKey(const Key('detail.price')), findsOneWidget);
     expect(t.takeException(), isNull);
+  });
+
+  testWidgets('我的优惠券未登录：先判断登录，不发请求拿 401；显示登录入口（与领券中心一致）', (t) async {
+    phone(t);
+    final f = Fake();
+    await t.pumpWidget((await app(f, loggedIn: false)).$1);
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('tab.me')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('me.coupons')));
+    await t.pumpAndSettle();
+    expect(f.to('/coupons'), isEmpty);
+    expect(find.byKey(const Key('coupons.login')), findsOneWidget);
+    expect(find.byType(ErrorCard), findsNothing);
   });
 }
