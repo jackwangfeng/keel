@@ -456,8 +456,7 @@ func TestListProductsStockOrderMatchesSingleSort(t *testing.T) {
 		                    WHERE so.store_id = $1 AND so.product_id = p.id AND so.status = 0)
 		 ORDER BY COALESCE((SELECT pss.in_stock FROM product_store_stock pss
 		                     WHERE pss.store_id = $1 AND pss.product_id = p.id),
-		                   EXISTS (SELECT 1 FROM skus sk WHERE sk.product_id = p.id AND sk.status = 1
-		                            AND sk.deleted_at IS NULL)) DESC,
+		                   FALSE) DESC, -- 缺行按无货（2026-10-01，products.sql 文件头）
 		          p.published_at DESC NULLS LAST, p.id DESC`, sc.StoreID, sc.RegionID)
 		if err != nil {
 			return err
