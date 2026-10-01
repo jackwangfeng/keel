@@ -1046,7 +1046,11 @@ func Run(ctx context.Context, listen ListenFunc) error {
 
 	// 消息通知的外发投递与保留期清理（数据模型 §16）。站内消息不靠它 —— 通知行在业务事务里
 	// 就写好了；它只消费 outbox 里的 notification.deliver 任务，把每个外发渠道的结果记下来。
-	// 本期三个渠道（微信订阅消息 / 短信 / 邮件）都未配置，投递记录一律是「跳过」。
+	// 本期三个渠道（微信订阅消息 / 短信 / 邮件）都未配置：写入口（emitNotification）在
+	// anyChannelConfigured() 为假时根本不往 jobs 里放任务，这个 worker 因此收不到任何东西可投——
+	// 不是「收到了但都记成跳过」（压测 docs/性能压测-2026-10.md §5 之后改的行为）。
+	// 这里传 nil：channels 取 service.currentChannels()，与 emitNotification 判断用的是
+	// 同一份；真的接了渠道时两处要一起换（见 docs/指南/消息通知外发渠道接入.md）。
 	// 同一个生命周期（bgCtx），晚起一轮不丢任何东西：任务在 jobs 里等着。
 	notifier := service.NewNotificationDeliveryService(repository.New(pool), nil,
 		service.NotificationDeliveryConfig{}, nil)
