@@ -6,7 +6,8 @@
 |---|---|
 | `seed/main.go` | 造数据：10 万商品（每件 1–3 个 SKU）、40 家带围栏的门店（杭州城区）、库存行、5000 买家、5 万历史订单；写出 fixture |
 | `../../cmd/keel-loadtest/` | 压测器（只用标准库）：闭环并发、按场景生成请求，输出 RPS、p50/p95/p99、按状态码与 problem type 的错误分布，可选采样 `docker stats` 与 `pg_stat_activity` |
-| `run-all.sh` | 按文档里的场景表跑一轮（可只跑某几个阶段） |
+| `vectors/main.go` | 给种子商品补文本向量（接语义检索压搜索时用）：按「形容词 + 叶子类目名」去重约 1500 种，调引擎算完共用，**近似**（品牌、型号、副标题不进向量），见报告第十一节 |
+| `run-all.sh` | 按文档里的场景表跑一轮（可只跑某几个阶段；`SEARCH_C` 改搜索并发档，`SAMPLE_EXTRA` 多采样容器） |
 | `backlog.sh` | 看后台积压：jobs 队列、过期未关的待支付单、两个协调器里没走完的全局事务、连接数 |
 
 ## 1. 起一套一次性的私有栈
@@ -21,7 +22,8 @@ DC=(docker compose -f compose.yaml -f compose.split.yaml)
 "${DC[@]}" up -d --build
 ```
 
-语义检索不要接（不设 `KEEL_EMBED_ENDPOINT`），搜索只压关键词路径。
+语义检索不要接（不设 `KEEL_EMBED_ENDPOINT`），搜索只压关键词路径。要压带语义检索的搜索：再叠 `compose.infero-cpu.yaml`，造数后跑
+`go run ./scripts/loadtest/vectors -core-dsn ... -embed http://<inference 容器 IP>:8081` 补向量（报告第十一节）。
 
 ## 2. 造数据
 
