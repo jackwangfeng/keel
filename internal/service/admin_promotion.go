@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -55,8 +56,17 @@ import (
 //     照样保存**：预检要的已售只有它知道；投递时违反了规则的，接收方把整组钳到不变量上（保留卖出过的 SKU、
 //     配额抬到已售）并记 Warn —— 为什么钳而不拒、为什么不另开「需处理」状态，写在 activity_msg.go 的文件头。
 //   - 上线（0 → 1）：**照旧先直接同步**（syncQuotas，库存服务不在就 503），再写 status。上线那一刻配额必须已经
-//     是定义的样子 —— 靠消息的话，库存服务不在时活动会带着旧配额先上线，窗口里按旧配额卖。直接同步成功之后
-//     两边一致，不再另发消息；写 status 的事务失败了则补发一条（resync），把库存服务拉回 core 的当前定义。
+//     是定义的样子 —— 靠消息的话，库存服务不在时活动会带着旧配额先上线，窗口里按旧配额卖。写 status 的那个事务里
+//     **总是再登记一条消息**（2026-10-01）；写 status 的事务失败了则补发一条（resync）。两种情况都是把库存服务拉回
+//     core 的当前定义。
+//
+//     为什么直接同步之后还要发：直接同步的是第一遍读到的定义 A。两遍之间一次并发的改配额（下线状态，合法）
+//     可能已经提交了 B 并发出它的消息；那条消息要是先于 A 的直接同步落地，库存最后是 A、core 是 B、活动已上线，
+//     A > B 时按 A 超卖秒杀配额。接收方的复读核对发生在它自己写入之前，管不到之后才到的直接同步。
+//     补的这一条与写 status 同一个事务，提交时直接同步已经结束，而上线之后定义冻结（上线中不许改规则），
+//     所以它投递时回源读到的就是最终定义，落地之后库存与 core 一致。
+//     不选「第二遍比对 plan2.sync 与 plan.sync、不一致才发」：比对相等也不能证明两遍之间没有过别的定义
+//     （A → C → A 的那条 C 消息照样可能晚到），而多发一条的代价只是一次幂等的整组设。
 //   - 下线（1 → 0）、只改名：定义没变，不发（「只在有意义的变化时发」）。下线后配额行照旧留着 —— 已售是历史，
 //     关单时要放得回。
 //   - 删除：活动没有删除接口（下线即终态之一），无路径可覆盖。
@@ -486,6 +496,9 @@ func (s *AdminPromotionService) Update(ctx context.Context, id int64, p Promotio
 		switch {
 		case plan.goingLive || !s.quota.ready():
 			// 上线（或没接协调器）：先直接设配额，被拒就什么都没写（文件头「各条路径」）。
+			if h := beforeDirectQuotaSync.Load(); h != nil {
+				(*h)(ctx, id)
+			}
 			if err := s.syncQuotas(ctx, id, plan.sync); err != nil {
 				return AdminPromotionView{}, err
 			}
@@ -500,7 +513,8 @@ func (s *AdminPromotionService) Update(ctx context.Context, id int64, p Promotio
 			}
 		}
 	}
-	// 第二遍：同一套判定再走一次（两遍之间状态可能变了），然后写；要同步而还没直接同步过的，消息同一个事务登记。
+	// 第二遍：同一套判定再走一次（两遍之间状态可能变了），然后写；要同步的（直接同步过的也算，文件头「上线」），
+	// 消息同一个事务登记。
 	var out AdminPromotionView
 	var gid string
 	var lost bool
@@ -509,7 +523,7 @@ func (s *AdminPromotionService) Update(ctx context.Context, id int64, p Promotio
 		var err error
 		var plan2 quotaPlan
 		plan2, out, err = s.updateTx(ctx, tx, id, p, act, true)
-		if err != nil || plan2.sync == nil || direct || !s.quota.ready() {
+		if err != nil || plan2.sync == nil || !s.quota.ready() {
 			return err
 		}
 		gid, lost, err = s.quota.prepare(ctx, tx, merchantID, id)
@@ -537,6 +551,20 @@ func (s *AdminPromotionService) Update(ctx context.Context, id int64, p Promotio
 		applyDefinition(out.Skus)
 	}
 	return out, nil
+}
+
+// beforeDirectQuotaSync 是测试钩子：Update 第一遍提交之后、直接同步配额之前调用，好确定性地插入一次并发修改
+// （上线与改配额交错，文件头「上线」）。生产代码里恒为 nil。
+var beforeDirectQuotaSync atomic.Pointer[func(ctx context.Context, promotionID int64)]
+
+// SetBeforeDirectQuotaSyncHook 装上测试钩子（nil 卸下），回一个恢复原值的函数。只给测试用。
+func SetBeforeDirectQuotaSyncHook(f func(ctx context.Context, promotionID int64)) (restore func()) {
+	var p *func(ctx context.Context, promotionID int64)
+	if f != nil {
+		p = &f
+	}
+	old := beforeDirectQuotaSync.Swap(p)
+	return func() { beforeDirectQuotaSync.Store(old) }
 }
 
 // quotaPlan 是 updateTx 算出来的「要不要同步配额」：sync 是要同步的那一组（nil = 不同步），goingLive 是这一次上线。
