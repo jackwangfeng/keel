@@ -48,7 +48,7 @@ dev_dependencies:
   flutter_driver:
     sdk: flutter
   # 把本工程编成微信小程序（dart run flutter_miniprogram）。v0.3.0 起主包从 mp_flutter 改名（pub.dev 上原名被占）。
-  flutter_miniprogram: ^0.3.0
+  flutter_miniprogram: ^0.3.1
   flutter_lints: ^6.0.0
   fake_async: ^1.3.1
 

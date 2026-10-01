@@ -207,10 +207,10 @@ packages:
     dependency: "direct dev"
     description:
       name: flutter_miniprogram
-      sha256: "3ed9a6566be20759e41fcbe1d3cad6342fe48fd43125f022ebbb69c5838a6d61"
+      sha256: c994f40bc83fd89bde5c9ca502c5bcf8c8d8cc03fdfc4584e45859321e0d4e70
       url: "https://pub.flutter-io.cn"
     source: hosted
-    version: "0.3.0"
+    version: "0.3.1"
   flutter_plugin_android_lifecycle:
     dependency: transitive
     description:

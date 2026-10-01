@@ -11,26 +11,20 @@ fs.mkdirSync(shots, { recursive: true });
 const T = (x, y) => ({ identifier: 0, x, y, pageX: x, pageY: y, clientX: x, clientY: y });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// 用 mp-flutter 自己的驱动（冷启动、launch 重试、吞开发者工具的自动化超时）：tools/e2e/drive.js。
-// v0.3.0 起 keel 从 pub.dev 拉 flutter_miniprogram，pub 包里不带仓库根目录的 tools/，所以按这个顺序找：
-//   1. 环境变量 MP_FLUTTER_REPO 指向的 mp-flutter 仓库克隆（推荐：git clone https://github.com/jackwangfeng/mp-flutter.git）；
-//   2. pub 的 git 缓存里留下的 mp-flutter-* 目录（以前用 git 依赖时拉过的），取最新的一份并提示版本可能不一致。
+// 用 mp-flutter 自己的驱动（冷启动、launch 重试、吞开发者工具的自动化超时）：随 flutter_miniprogram 一起发布在包里的
+// tool/e2e/drive.js，`dart run flutter_miniprogram e2e-driver` 打印它所在的目录（0.3.1 起）。
+// 要用 mp-flutter 仓库里还没发版的驱动，设 MP_FLUTTER_REPO=<mp-flutter 克隆目录>。
+// drive.js 懒加载 miniprogram-automator：会在调用方的 cwd 与 NODE_PATH 里找，没装就 `npm i miniprogram-automator`。
 function findDrive() {
   const repo = process.env.MP_FLUTTER_REPO;
-  if (repo) {
-    const f = path.join(repo, 'tools', 'e2e', 'drive.js');
-    if (fs.existsSync(f)) return f;
-    throw new Error(`MP_FLUTTER_REPO=${repo} 下没有 tools/e2e/drive.js`);
-  }
-  const cache = path.join(process.env.HOME, '.pub-cache', 'git');
-  const dirs = fs.existsSync(cache) ? fs.readdirSync(cache).filter((x) => x.startsWith('mp-flutter-')) : [];
-  const hits = dirs.map((d) => path.join(cache, d, 'tools', 'e2e', 'drive.js')).filter((f) => fs.existsSync(f))
-    .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
-  if (hits.length) {
-    console.warn(`[mp_walk] 用 pub git 缓存里的驱动：${hits[0]}（可能比当前依赖的 flutter_miniprogram 旧；要对齐版本就设 MP_FLUTTER_REPO）`);
-    return hits[0];
-  }
-  throw new Error('找不到 mp-flutter 的 tools/e2e/drive.js：git clone https://github.com/jackwangfeng/mp-flutter.git，再设 MP_FLUTTER_REPO=<克隆目录>');
+  const dir = repo
+    ? path.join(repo, 'tools', 'e2e')
+    : require('child_process').execFileSync(
+        path.join(process.env.HOME, 'development', 'flutter', 'bin', 'dart'), ['run', 'flutter_miniprogram', 'e2e-driver'],
+        { cwd: path.join(__dirname, '..'), env: { ...process.env, FLUTTER_GIT_URL: '' }, encoding: 'utf8' }).trim().split('\n').pop();
+  const f = path.join(dir, 'drive.js');
+  if (!fs.existsSync(f)) throw new Error(`找不到 mp-flutter 的驱动：${f}（先 make flutter-get；或设 MP_FLUTTER_REPO）`);
+  return f;
 }
 const { runE2E } = require(findDrive());
 
