@@ -229,6 +229,10 @@ services:
       KEEL_TIANDITU_REFERER: ${KEEL_TIANDITU_REFERER:-}
       # 瓦片请求专用的出口代理（国内服务器直连 OpenStreetMap 不通时用），只影响 /geo/tiles。
       KEEL_TILE_PROXY: ${KEEL_TILE_PROXY:-}
+      # 判别模型引擎（/v1/systemone）：配了就在后台给热词做相关度预判（service/search_judge.go），不配检索只按余弦下限。
+      # 令牌只从环境变量来，不写进任何文件。
+      KEEL_SYSTEMONE_ENDPOINT: ${KEEL_SYSTEMONE_ENDPOINT:-}
+      KEEL_SYSTEMONE_TOKEN: ${KEEL_SYSTEMONE_TOKEN:-}
       # 连接池上限：业务池（默认 max(4, CPU 核数)）与事务协调器的池（默认 32）。
       # 多实例共用一个 Postgres 时按「实例数 × 两者之和 + 余量 < max_connections」配，见部署指南。
       KEEL_DB_MAX_CONNS: ${KEEL_DB_MAX_CONNS:-}
