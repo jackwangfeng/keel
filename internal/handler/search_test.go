@@ -19,6 +19,7 @@ import (
 	"github.com/keel/keel/internal/auth"
 	"github.com/keel/keel/internal/handler"
 	"github.com/keel/keel/internal/inference"
+	"github.com/keel/keel/internal/problem"
 	"github.com/keel/keel/internal/repository"
 	"github.com/keel/keel/internal/search"
 	"github.com/keel/keel/internal/service"
@@ -1016,7 +1017,7 @@ func TestSearchRateLimitsAFloodFromOneIP(t *testing.T) {
 	}
 }
 
-// size 的钳制与 total 的语义。
+// size 的上下界与 total 的语义。
 func TestSearchSizeIsClampedAndTotalIsTheReturnedCount(t *testing.T) {
 	fx := newSearchFixture(t)
 	w, one := doSearch(t, fx.HostA, `{"query":"连衣裙","size":1}`)
@@ -1030,14 +1031,22 @@ func TestSearchSizeIsClampedAndTotalIsTheReturnedCount(t *testing.T) {
 		t.Errorf("size=1 时 total=%d，期望 1（契约：本次召回并排序后的结果总数，"+
 			"上限即 size；一期不支持翻页）", one.Total)
 	}
-	// 越界的 size 钳制而不是报错，与 /products 的分页同一条纪律。
-	for _, body := range []string{`{"query":"连衣裙","size":0}`, `{"query":"连衣裙","size":100000}`} {
+	// 边界上的 size 照常（契约 minimum 1、maximum 100）。
+	for _, body := range []string{`{"query":"连衣裙","size":100}`, `{"query":"连衣裙"}`} {
 		w, got := doSearch(t, fx.HostA, body)
 		if w.Code != http.StatusOK {
-			t.Errorf("%s 返回 %d，期望钳制而不是报错", body, w.Code)
+			t.Errorf("%s 返回 %d，期望 200", body, w.Code)
 		}
 		if len(got.Items) == 0 {
 			t.Errorf("%s 返回空列表", body)
+		}
+	}
+	// 越界的 size 按契约拒 422（2026-10-01 破坏性测试：之前 101 / -5 都被悄悄钳制）。
+	for _, body := range []string{`{"query":"连衣裙","size":101}`, `{"query":"连衣裙","size":-5}`,
+		`{"query":"连衣裙","size":0}`, `{"query":"连衣裙","size":100000}`} {
+		w, _ := doSearch(t, fx.HostA, body)
+		if p := problemOf(t, w, http.StatusUnprocessableEntity); p.Type != problem.TypeInvalidRequest {
+			t.Errorf("%s 应 422 invalid-request，实得 %s", body, p.Type)
 		}
 	}
 }

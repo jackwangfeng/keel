@@ -988,8 +988,8 @@ func (s *SearchService) embedTimeoutFor(query string) time.Duration {
 	return s.cfg.EmbedTimeout + time.Duration(n)*PerRuneEmbedBudget
 }
 
-// clampSearchSize 把 size 收进契约允许的范围。钳制而不是报 400，
-// 理由与 clampPaging 那一段完全相同。
+// clampSearchSize 把 size 收进契约允许的范围。POST /search 在 handler 里已经按契约把越界的拒成 422
+// （2026-10-01）；这里的钳制留给不经契约的调用方，0 即「没传」取默认值。
 func clampSearchSize(size int) int {
 	if size < 1 {
 		return DefaultSearchSize

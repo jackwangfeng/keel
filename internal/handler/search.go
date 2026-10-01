@@ -122,6 +122,15 @@ func (h *SearchHandler) Search(c *gin.Context) {
 		return
 	}
 
+	// size 越界按契约拒 422（minimum 1、maximum 100，2026-10-01 破坏性测试）。之前钳制：传 101 拿到 100 条、
+	// 传 -5 拿到默认的 20 条，调用方的 bug（页大小算错、符号写反）被悄悄吞掉，而契约写着上下界。
+	// 不传仍是默认值；service 那一侧的钳制留给不经契约的调用方（MCP 工具等）。
+	if req.Size != nil && (*req.Size < 1 || *req.Size > service.MaxSearchSize) {
+		problem.Write(c, http.StatusUnprocessableEntity, problem.TypeInvalidRequest,
+			fmt.Sprintf("size 必须在 1–%d 之间，实得 %d", service.MaxSearchSize, *req.Size))
+		return
+	}
+
 	sr := service.SearchRequest{
 		Query:   req.Query,
 		Filters: defaultSearchFilters(),

@@ -8887,7 +8887,7 @@ components:
             混在一起会让「清空筛选」这个动作把门店也清掉。
         filters:
           $ref: '#/components/schemas/SearchFilters'
-        size: { type: integer, default: 20, maximum: 100 }
+        size: { type: integer, default: 20, minimum: 1, maximum: 100 }
         strategy:
           type: string
           default: default
