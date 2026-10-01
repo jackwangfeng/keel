@@ -26,20 +26,49 @@ func TestApplyFloor(t *testing.T) {
 		return out
 	}
 
-	got, fb := applyFloor([]search.Ranked{r(1, 1, 0), r(2, 2, 0), r(3, 3, 1)}, byID, 0.40)
+	got, fb := applyFloor([]search.Ranked{r(1, 1, 0), r(2, 2, 0), r(3, 3, 1)}, byID, nil, 0.40)
 	if fb || len(got) != 2 || got[0].ID != 1 || got[1].ID != 3 {
 		t.Fatalf("有可信命中：应留 [1 3]（关键词命中的 3 不看相似度）、fallback=false，实得 %v %v", ids(got), fb)
 	}
-	got, fb = applyFloor([]search.Ranked{r(2, 1, 0), r(4, 2, 0)}, byID, 0.40)
+	got, fb = applyFloor([]search.Ranked{r(2, 1, 0), r(4, 2, 0)}, byID, nil, 0.40)
 	if !fb || len(got) != 2 {
 		t.Fatalf("一条可信命中都没有：原样返回、fallback=true，实得 %v %v", ids(got), fb)
 	}
-	got, fb = applyFloor([]search.Ranked{r(2, 1, 0), r(4, 2, 0)}, byID, -1)
+	got, fb = applyFloor([]search.Ranked{r(2, 1, 0), r(4, 2, 0)}, byID, nil, -1)
 	if fb || len(got) != 2 {
 		t.Fatalf("floor < 0 关闭下限：原样、fallback=false，实得 %v %v", ids(got), fb)
 	}
-	if got, fb = applyFloor(nil, byID, 0.40); fb || len(got) != 0 {
+	if got, fb = applyFloor(nil, byID, nil, 0.40); fb || len(got) != 0 {
 		t.Fatalf("没有候选不是 fallback：%v %v", ids(got), fb)
+	}
+
+	// 有相关度预判的按预判，不看余弦：1（0.80）被判不相关 → 去；4（0.30）被判相关 → 留；2 没判过 → 照旧按下限去。
+	judged := map[int64]float64{1: 0.05, 4: JudgedRelevantAt}
+	got, fb = applyFloor([]search.Ranked{r(1, 1, 0), r(2, 2, 0), r(4, 3, 0)}, byID, judged, 0.40)
+	if fb || fmt.Sprint(ids(got)) != "[4]" {
+		t.Fatalf("预判优先于余弦：应只留 [4]，实得 %v %v", ids(got), fb)
+	}
+	// 关键词命中的不受预判影响（3 被判 0 也留）。
+	got, _ = applyFloor([]search.Ranked{r(3, 1, 1)}, byID, map[int64]float64{3: 0}, 0.40)
+	if fmt.Sprint(ids(got)) != "[3]" {
+		t.Fatalf("关键词命中的不看预判：%v", ids(got))
+	}
+	// 下限关了（floor < 0）也照样按预判去掉判不相关的。
+	got, fb = applyFloor([]search.Ranked{r(1, 1, 0), r(2, 2, 0)}, byID, map[int64]float64{1: 0.1}, -1)
+	if fb || fmt.Sprint(ids(got)) != "[2]" {
+		t.Fatalf("floor < 0 时预判仍生效：应留 [2]，实得 %v %v", ids(got), fb)
+	}
+}
+
+func TestCoversPageUsesJudgments(t *testing.T) {
+	vec := []repository.SearchHit{{ID: 1, Distance: 0.2}, {ID: 2, Distance: 0.7}, {ID: 3, Distance: 0.7}}
+	// 无预判：只有 1 过 0.40 → 凑不够 2 件。
+	if coversPage(nil, vec, nil, 0.40, 2) {
+		t.Error("无预判时只有 1 件可信，不该算凑够")
+	}
+	// 预判把 2、3 判成相关、1 判成不相关 → 2 件可信，凑够。
+	if !coversPage(nil, vec, map[int64]float64{1: 0, 2: 0.9, 3: 0.9}, 0.40, 2) {
+		t.Error("预判后有 2 件可信，应当凑够")
 	}
 }
 

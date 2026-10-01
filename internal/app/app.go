@@ -1092,6 +1092,18 @@ func Run(ctx context.Context, listen ListenFunc) error {
 			return fmt.Errorf("建派生数据入库任务失败: %w", err)
 		}
 		bg.Go("index", indexer.Run)
+
+		// 相关度预判（00230，service/search_judge.go）：要 embedding 引擎（算查询向量）和判别模型引擎两个都在。
+		// 没配判别模型不是错：检索照旧按余弦下限，只是没有预判那一层。
+		if dec, err := inference.SystemOneFromEnv(); err != nil {
+			slog.InfoContext(ctx, "没有配置 "+inference.EnvSystemOneEndpoint+"，相关度预判任务不启动，检索只按余弦下限过滤向量路候选")
+		} else {
+			judgeSvc, err := service.NewSearchJudgeService(repository.New(pool), embedder, dec, service.SearchJudgeConfig{}, nil)
+			if err != nil {
+				return fmt.Errorf("建相关度预判任务失败: %w", err)
+			}
+			bg.Leader("search_judge", judgeSvc.Run)
+		}
 	}
 
 	if cfg.Payment.Sandbox {

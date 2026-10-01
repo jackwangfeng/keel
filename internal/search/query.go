@@ -71,3 +71,8 @@ func TSQueryAnd(s string) (string, int) {
 	}
 	return strings.Join(terms, " & "), len(terms)
 }
+
+// NormQuery 是相关度预判表（00230 search_relevance_judgments.query）的键：去首尾空白、连续空白压成一个、转小写。
+// 写（后台预判）与读（检索）两边都走它，「连衣裙」「 连衣裙 」「Dress」与「dress」各自落到同一行。
+// 不去掉词间空格：「红色 连衣裙」与「红色连衣裙」切出的二元组不同，召回的候选也不同，判断不该共用。
+func NormQuery(s string) string { return strings.ToLower(strings.Join(strings.Fields(s), " ")) }

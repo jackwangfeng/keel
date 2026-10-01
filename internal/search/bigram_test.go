@@ -121,3 +121,13 @@ func TestQueryTermsAreSubsetOfIndexTerms(t *testing.T) {
 		}
 	}
 }
+
+func TestNormQuery(t *testing.T) {
+	for in, want := range map[string]string{
+		" 连衣裙 ": "连衣裙", "红色  连衣裙": "红色 连衣裙", "Dress\t": "dress", "红色连衣裙": "红色连衣裙",
+	} {
+		if got := search.NormQuery(in); got != want {
+			t.Errorf("NormQuery(%q) = %q，期望 %q", in, got, want)
+		}
+	}
+}

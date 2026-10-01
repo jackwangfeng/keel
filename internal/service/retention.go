@@ -62,6 +62,7 @@ type RetentionRepository interface {
 	PurgeExpiredPlatformIdempotencyKeys(ctx context.Context, before time.Time, batch int32) (int64, error)
 	PurgeSearchLogs(ctx context.Context, before time.Time, batch int32) (int64, error)
 	PurgeAgentToolCalls(ctx context.Context, before time.Time, batch int32) (int64, error)
+	PurgeSearchJudgments(ctx context.Context, before time.Time, batch int32) (int64, error)
 }
 
 // InventoryLogPurger 删库存流水（repository.InventoryStore 满足）。可以为 nil：
@@ -77,9 +78,10 @@ type RetentionConfig struct {
 	Batch      int32         // 每批至多删几行，默认 5000
 	MaxBatches int           // 一家店一张表一轮至多几批，默认 20
 
-	SearchLogs     time.Duration // 0 = 不清
-	AgentToolCalls time.Duration
-	InventoryLogs  time.Duration
+	SearchLogs      time.Duration // 0 = 不清
+	SearchJudgments time.Duration // 相关度预判（00230）太久没刷新的
+	AgentToolCalls  time.Duration
+	InventoryLogs   time.Duration
 }
 
 const (
@@ -89,9 +91,12 @@ const (
 
 	EnvRetentionInterval           = "KEEL_RETENTION_INTERVAL"
 	EnvRetentionSearchLogDays      = "KEEL_RETENTION_SEARCH_LOG_DAYS"
+	EnvRetentionSearchJudgmentDays = "KEEL_RETENTION_SEARCH_JUDGMENT_DAYS"
 	EnvRetentionAgentToolCallDays  = "KEEL_RETENTION_AGENT_TOOL_CALL_DAYS"
 	EnvRetentionInventoryLogDays   = "KEEL_RETENTION_INVENTORY_LOG_DAYS"
 	defaultSearchLogRetention      = 90 * 24 * time.Hour
+	// 预判默认 14 天重判一次（SearchJudgeConfig.FreshFor），30 天还没刷新说明那条查询已经不热了。
+	defaultSearchJudgmentRetention = 30 * 24 * time.Hour
 	defaultAgentToolCallRetention  = 180 * 24 * time.Hour
 	defaultInventoryLogRetention   = 180 * 24 * time.Hour
 	minInventoryLogRetentionInDays = 30
@@ -100,12 +105,13 @@ const (
 // DefaultRetentionConfig 是不配任何环境变量时的保留期：检索日志 90 天，工具调用与库存流水 180 天。
 func DefaultRetentionConfig() RetentionConfig {
 	return RetentionConfig{
-		Interval:       DefaultRetentionInterval,
-		Batch:          DefaultRetentionBatch,
-		MaxBatches:     DefaultRetentionMaxBatches,
-		SearchLogs:     defaultSearchLogRetention,
-		AgentToolCalls: defaultAgentToolCallRetention,
-		InventoryLogs:  defaultInventoryLogRetention,
+		Interval:        DefaultRetentionInterval,
+		Batch:           DefaultRetentionBatch,
+		MaxBatches:      DefaultRetentionMaxBatches,
+		SearchLogs:      defaultSearchLogRetention,
+		SearchJudgments: defaultSearchJudgmentRetention,
+		AgentToolCalls:  defaultAgentToolCallRetention,
+		InventoryLogs:   defaultInventoryLogRetention,
 	}
 }
 
@@ -126,6 +132,7 @@ func RetentionConfigFromEnv() (RetentionConfig, error) {
 		min int
 	}{
 		{EnvRetentionSearchLogDays, &cfg.SearchLogs, 0},
+		{EnvRetentionSearchJudgmentDays, &cfg.SearchJudgments, 0},
 		{EnvRetentionAgentToolCallDays, &cfg.AgentToolCalls, 0},
 		{EnvRetentionInventoryLogDays, &cfg.InventoryLogs, minInventoryLogRetentionInDays},
 	} {
@@ -226,6 +233,9 @@ func (s *RetentionService) RunOnce(ctx context.Context) (RetentionReport, error)
 	targets = append(targets, target{"idempotency_keys", s.repo.PurgeExpiredIdempotencyKeys, now})
 	if s.cfg.SearchLogs > 0 {
 		targets = append(targets, target{"search_logs", s.repo.PurgeSearchLogs, now.Add(-s.cfg.SearchLogs)})
+	}
+	if s.cfg.SearchJudgments > 0 {
+		targets = append(targets, target{"search_relevance_judgments", s.repo.PurgeSearchJudgments, now.Add(-s.cfg.SearchJudgments)})
 	}
 	if s.cfg.AgentToolCalls > 0 {
 		targets = append(targets, target{"agent_tool_calls", s.repo.PurgeAgentToolCalls, now.Add(-s.cfg.AgentToolCalls)})

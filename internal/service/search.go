@@ -550,6 +550,9 @@ func (s *SearchService) Search(ctx context.Context, req SearchRequest) (SearchRe
 		vecErr, kwErr   error
 		model           embedModel
 		kwPlan          KeywordRecall
+		// judged 是这条查询对向量路候选的相关度预判（00230，service/search_judge.go 在后台写）：
+		// 判过的候选按它留或去，不再看余弦下限（coversPage 与 applyFloor 两处）。
+		judged map[int64]float64
 	)
 	// vecDone 在向量那一路出结果（成或败）后关闭：关键词那一路 AND 不够一页时要看它，
 	// 决定还跑不跑 OR（recallByKeyword 的文件注释）。close 先于 wg.Done，读的一方见到关闭时
@@ -560,6 +563,9 @@ func (s *SearchService) Search(ctx context.Context, req SearchRequest) (SearchRe
 		defer wg.Done()
 		defer close(vecDone)
 		vecHits, model, vecErr = s.recallByVector(ctx, scope, req.Query, req.Filters.toRepo(), recall)
+		if vecErr == nil {
+			judged = s.loadJudgments(ctx, req.Query, vecHits)
+		}
 	}()
 	go func() {
 		defer wg.Done()
@@ -571,7 +577,7 @@ func (s *SearchService) Search(ctx context.Context, req SearchRequest) (SearchRe
 		}
 		vectorCovers := func(andHits []repository.SearchHit) bool {
 			<-vecDone
-			return vecErr == nil && coversPage(andHits, vecHits, s.cfg.VectorFloor, enough)
+			return vecErr == nil && coversPage(andHits, vecHits, judged, s.cfg.VectorFloor, enough)
 		}
 		kwHits, kwPlan, kwErr = s.recallByKeyword(ctx, scope, req.Query, req.Filters.toRepo(), recall, enough, vectorCovers)
 	}()
@@ -662,7 +668,7 @@ func (s *SearchService) Search(ctx context.Context, req SearchRequest) (SearchRe
 		stages = append(stages, StageBusiness)
 	}
 	var fallback bool
-	ranked, fallback = applyFloor(ranked, byID, s.cfg.VectorFloor)
+	ranked, fallback = applyFloor(ranked, byID, judged, s.cfg.VectorFloor)
 	if !fallback {
 		ranked = exactTitleFirst(ranked, byID, req.Query, stockKnown)
 	}
@@ -818,9 +824,8 @@ func (s *SearchService) orHitCap() int32 {
 	return s.cfg.OrHitCap
 }
 
-// coversPage：AND 的命中加上向量路里「可信」的（相似度 ≥ floor，判据与 applyFloor 相同；floor < 0
-// 时全部可信）、去重后够不够 enough 件。
-func coversPage(andHits, vecHits []repository.SearchHit, floor float64, enough int) bool {
+// coversPage：AND 的命中加上向量路里「可信」的（判据与 applyFloor 相同，见 vectorTrusted）、去重后够不够 enough 件。
+func coversPage(andHits, vecHits []repository.SearchHit, judged map[int64]float64, floor float64, enough int) bool {
 	seen := make(map[int64]bool, len(andHits)+len(vecHits))
 	for _, h := range andHits {
 		seen[h.ID] = true
@@ -830,7 +835,7 @@ func coversPage(andHits, vecHits []repository.SearchHit, floor float64, enough i
 		if n >= enough {
 			break
 		}
-		if seen[h.ID] || (floor >= 0 && 1-h.Distance < floor) {
+		if seen[h.ID] || !vectorTrusted(h.ID, h.Distance, judged, floor) {
 			continue
 		}
 		seen[h.ID] = true
@@ -865,13 +870,16 @@ func mergeAndThenOr(andHits, orHits []repository.SearchHit, limit int) []reposit
 // 相似度 ≥ floor。有可信命中就只留可信的（低分的尾巴丢掉，比如「蜡烛」捞回来的法压壶 0.32）；
 // 一条都没有时原样返回、fallback 为真（「猜你想要」，见 DefaultVectorFloor）。floor < 0 不设下限。
 // 作用在业务重排之后、截断之前：顺序不变，只是剔掉不可信的。
-func applyFloor(ranked []search.Ranked, byID map[int64]repository.SearchHit, floor float64) ([]search.Ranked, bool) {
-	if floor < 0 || len(ranked) == 0 {
+//
+// 只被向量路捞到的那些，**有相关度预判时按预判**（≥ JudgedRelevantAt 留），没有才看余弦下限（vectorTrusted）。
+func applyFloor(ranked []search.Ranked, byID map[int64]repository.SearchHit, judged map[int64]float64,
+	floor float64) ([]search.Ranked, bool) {
+	if (floor < 0 && len(judged) == 0) || len(ranked) == 0 {
 		return ranked, false
 	}
 	kept := make([]search.Ranked, 0, len(ranked))
 	for _, r := range ranked {
-		if r.KeywordRank > 0 || (r.VectorRank > 0 && 1-byID[r.ID].Distance >= floor) {
+		if r.KeywordRank > 0 || (r.VectorRank > 0 && vectorTrusted(r.ID, byID[r.ID].Distance, judged, floor)) {
 			kept = append(kept, r)
 		}
 	}
@@ -879,6 +887,41 @@ func applyFloor(ranked []search.Ranked, byID map[int64]repository.SearchHit, flo
 		return ranked, true
 	}
 	return kept, false
+}
+
+// JudgedRelevantAt：相关度预判 ≥ 它算可信。
+//
+// 0.3 而不是 0.5 是量出来的（语义检索层 §9.1，2026-10-01）：Kev-4B 偏保守，与人工参照不一致的几对全是它把相关的
+// 判低了（「咖啡→手冲咖啡壶」0.38）；取 0.3 时与参照一致 47/50，取 0.5 时 43/50。**跟着判别模型走**，换模型要重量。
+const JudgedRelevantAt = 0.3
+
+// vectorTrusted：一件只被向量路捞到的候选算不算可信命中。判过的按预判，没判过的按余弦下限（floor < 0 不设下限）。
+func vectorTrusted(id int64, distance float64, judged map[int64]float64, floor float64) bool {
+	if j, ok := judged[id]; ok {
+		return j >= JudgedRelevantAt
+	}
+	return floor < 0 || 1-distance >= floor
+}
+
+// loadJudgments 读这条查询对向量路候选的相关度预判。读不出来不让检索失败：记一条 WARN、当作都没判过（回到余弦下限）。
+func (s *SearchService) loadJudgments(ctx context.Context, query string, hits []repository.SearchHit) map[int64]float64 {
+	if len(hits) == 0 {
+		return nil
+	}
+	ids := make([]int64, len(hits))
+	for i, h := range hits {
+		ids[i] = h.ID
+	}
+	var out map[int64]float64
+	if err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+		var err error
+		out, err = tx.SearchJudgments(ctx, search.NormQuery(query), ids)
+		return err
+	}); err != nil {
+		s.log.WarnContext(ctx, "读相关度预判失败，这次只按余弦下限判", "query", query, "err", err)
+		return nil
+	}
+	return out
 }
 
 // exactTitleFirst 把标题与查询词完全一致（忽略大小写与空白）、且有货的商品挪到最前面，其余相对顺序不变。

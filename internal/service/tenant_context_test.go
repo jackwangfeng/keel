@@ -157,6 +157,8 @@ var tenantContextAllowed = map[string]string{
 		"没有 Host 也没有 gid。枚举 merchants 再逐家进 WithTenant，量到点的提案并写回 outcome；它调库存服务（断货天数）用的也是这个租户上下文。它不是 SAGA 分支。",
 	"payment_return.go": "多收款退回的兜底扫描与重试（00150），与 agent_proposal_expiry.go 同一处境：跑在任何 HTTP 请求之外，" +
 		"没有 Host 也没有 gid。枚举 merchants 再逐家进 WithTenant，补开订单不认的到账的退回单、提交待提交的。它不是 SAGA 分支。",
+	"search_judge.go": "检索相关度预判（00230），与 agent_proposal_expiry.go 同一处境：跑在任何 HTTP 请求之外，" +
+		"没有 Host 也没有 gid。枚举 merchants 再逐家进 WithTenant，读本店热词与候选、写回预判。它不是 SAGA 分支。",
 	"agent_proposal_expiry.go": "AI 员工提案的过期扫描（00091），与 stock_flags.go 同一处境：跑在任何 HTTP 请求之外，" +
 		"没有 Host 也没有 gid。枚举 merchants 再逐家进 WithTenant，把过期的待处理提案置 50。它不是 SAGA 分支。",
 	"agent_event_sweep.go": "AI 员工事件扫描（00121，stock_low / search_zero_spike），与 inventory_reconcile.go 同一处境：" +

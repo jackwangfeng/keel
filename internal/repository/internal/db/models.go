@@ -937,6 +937,19 @@ type SearchLog struct {
 	KeywordHits *int32
 }
 
+// 检索相关度预判（00230）：高频查询的向量独有候选由判别模型判好，搜索命中就用，替代余弦下限。写见 service/search_judge.go。
+type SearchRelevanceJudgment struct {
+	MerchantID int64
+	// 归一化后的查询（search.NormQuery）
+	Query     string
+	ProductID int64
+	// 判别模型给「是买家要找的」的概率，0–1
+	Relevance float32
+	// 判别模型 名字@版本
+	Judge    string
+	JudgedAt pgtype.Timestamptz
+}
+
 type Shipment struct {
 	ID          int64
 	MerchantID  int64
