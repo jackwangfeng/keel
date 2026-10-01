@@ -144,6 +144,9 @@ func TestShopSettingsRejectsBadValues(t *testing.T) {
 		{`{"timezone":"Asia/Shanghai","auto_confirm_days":7,"return_ship_days":7,"service_phone":"  "}`, "service_phone"},
 		{`{"timezone":"Asia/Shanghai","auto_confirm_days":7,"return_ship_days":7,"service_phone":"` +
 			strings.Repeat("1", 33) + `"}`, "service_phone"},
+		// 乱点测试的真实案例：格式不对的字符串（含 <script>）不该被当成合法电话存进去。
+		{`{"timezone":"Asia/Shanghai","auto_confirm_days":7,"return_ship_days":7,"service_phone":"notaphone<script>"}`, "service_phone"},
+		{`{"timezone":"Asia/Shanghai","auto_confirm_days":7,"return_ship_days":7,"service_phone":"123"}`, "service_phone"},
 	}
 	for _, c := range cases {
 		w := putAs(t, sh.Host, shopSettingsPath, c.body, sh.Token)
@@ -165,6 +168,30 @@ func TestShopSettingsRejectsBadValues(t *testing.T) {
 	}
 	// 请求体不是 JSON。
 	wantStatus(t, putAs(t, sh.Host, shopSettingsPath, `not json`, sh.Token), http.StatusUnprocessableEntity, "坏请求体")
+}
+
+// 客服电话格式闸门要收下商家实际会填的几种号码：手机、座机（带/不带分隔符）、
+// 400/800，以及带分机号的座机。422 那半边已经在 TestShopSettingsRejectsBadValues
+// 钉过了，这里补阳性对照——一个「只挡格式错的，不小心也挡了格式对的」的实现
+// 在上面那条测试里全是绿的。
+func TestShopSettingsAcceptsRealisticPhoneFormats(t *testing.T) {
+	sh := newAdminShop(t)
+	for _, phone := range []string{
+		"13812345678",
+		"010-12345678",
+		"0512 1234567",
+		"4001234567",
+		"400-123-4567",
+		"010-12345678转8080",
+		"400-123-4567-1",
+	} {
+		body := fmt.Sprintf(`{"timezone":"Asia/Shanghai","auto_confirm_days":7,"return_ship_days":7,"service_phone":%q}`, phone)
+		var put api.ShopSettings
+		decodeInto(t, putAs(t, sh.Host, shopSettingsPath, body, sh.Token), http.StatusOK, "合法电话 "+phone, &put)
+		if put.ServicePhone == nil || *put.ServicePhone != phone {
+			t.Errorf("service_phone=%q 被拒或回显不对：%+v", phone, put)
+		}
+	}
 }
 
 // 平台管理员经 X-Keel-Merchant 切到 B 店：写落在 B 店，A 店（Host 那家）一个字不动；

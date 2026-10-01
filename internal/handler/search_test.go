@@ -19,6 +19,7 @@ import (
 	"github.com/keel/keel/internal/auth"
 	"github.com/keel/keel/internal/handler"
 	"github.com/keel/keel/internal/inference"
+	"github.com/keel/keel/internal/problem"
 	"github.com/keel/keel/internal/repository"
 	"github.com/keel/keel/internal/search"
 	"github.com/keel/keel/internal/service"
@@ -1323,5 +1324,62 @@ func TestSearchVectorFloorSeparatesMatchesFromGuesses(t *testing.T) {
 	}
 	if !fb {
 		t.Fatal("「猜你想要」那一次的 search_logs.fallback 应为 true —— 否则无结果统计又数成有结果")
+	}
+}
+
+// 请求体解码失败的两种该报不同的话，别再都说「不是合法的 JSON」。
+//
+// 后台乱点测试的真实案例：`store_id:"abc"`（契约里 store_id 是 integer）
+// 被报成了「请求体不是合法的 JSON」—— 但请求体本身完全合法，商家对着一份
+// 合法 JSON 看半天也看不出哪里「不合法」。problem.WriteBindError 把
+// encoding/json 的 *json.UnmarshalTypeError 从真正的语法错里分出来，
+// 这条测试钉住两边都不回退：真语法错还是老文案，类型不对要点名字段。
+func TestSearchBodyDecodeErrorsNameTheOffendingField(t *testing.T) {
+	fx := newSearchFixture(t)
+
+	// 阴性对照：真正的语法错（少一个引号）必须还是那句通用文案，
+	// 不该被新逻辑误判成某个字段的类型错误。
+	w, _ := doSearch(t, fx.HostA, `{"query":"连衣裙"`)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("截断的 JSON 返回 %d，期望 422：%s", w.Code, w.Body.String())
+	}
+	var syntaxProb api.Problem
+	if err := json.Unmarshal(w.Body.Bytes(), &syntaxProb); err != nil {
+		t.Fatalf("响应不是 Problem: %v\n%s", err, w.Body.String())
+	}
+	if syntaxProb.Title != "请求体不是合法的 JSON" {
+		t.Errorf("真语法错的 title 是 %q，期望保持原文案「请求体不是合法的 JSON」", syntaxProb.Title)
+	}
+	if syntaxProb.Errors != nil {
+		t.Errorf("真语法错不该带 errors[]（没有具体字段可指）：%v", *syntaxProb.Errors)
+	}
+
+	// 真正要修的那个案例：store_id 给成字符串。
+	w, _ = doSearch(t, fx.HostA, `{"query":"连衣裙","store_id":"abc"}`)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("store_id 给字符串返回 %d，期望 422：%s", w.Code, w.Body.String())
+	}
+	if ct := w.Header().Get("Content-Type"); ct != "application/problem+json" {
+		t.Errorf("Content-Type 是 %q，期望 application/problem+json", ct)
+	}
+	var typeProb api.Problem
+	if err := json.Unmarshal(w.Body.Bytes(), &typeProb); err != nil {
+		t.Fatalf("响应不是 Problem: %v\n%s", err, w.Body.String())
+	}
+	if typeProb.Type != problem.TypeInvalidRequest {
+		t.Errorf("Problem type 是 %q，期望 %q", typeProb.Type, problem.TypeInvalidRequest)
+	}
+	if typeProb.Errors == nil || len(*typeProb.Errors) != 1 {
+		t.Fatalf("errors[] 是 %v，期望 1 条 —— 商家要知道是哪个字段", typeProb.Errors)
+	}
+	fe := (*typeProb.Errors)[0]
+	if fe.Field == nil || *fe.Field != "store_id" {
+		t.Errorf("errors[0].field 是 %v，期望 \"store_id\"", fe.Field)
+	}
+	if fe.Message == nil || !strings.Contains(*fe.Message, "store_id") || !strings.Contains(*fe.Message, "整数") {
+		t.Errorf("errors[0].message 是 %v，期望指明字段名与期望类型（整数）", fe.Message)
+	}
+	if !strings.Contains(typeProb.Title, "store_id") {
+		t.Errorf("Problem.title 是 %q，期望点名 store_id，而不是回退成通用的「不是合法的 JSON」", typeProb.Title)
 	}
 }

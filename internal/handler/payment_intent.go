@@ -54,8 +54,7 @@ type intentRequest struct {
 func (h *PaymentHandler) Create(c *gin.Context) {
 	var req intentRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		problem.Write(c, http.StatusUnprocessableEntity,
-			problem.TypeInvalidRequest, "请求体不是合法的 JSON")
+		problem.WriteBindError(c, err)
 		return
 	}
 

@@ -224,7 +224,7 @@ async function removeCategory(row: AdminCategory): Promise<void> {
                     </el-select>
                 </el-form-item>
                 <el-form-item label="排序">
-                    <el-input-number v-model="draft.sort_order" :min="0" />
+                    <el-input-number v-model="draft.sort_order" :min="0" :step="1" :precision="0" step-strictly />
                 </el-form-item>
             </el-form>
             <template #footer>
@@ -242,7 +242,7 @@ async function removeCategory(row: AdminCategory): Promise<void> {
                     <el-input v-model="editName" />
                 </el-form-item>
                 <el-form-item label="排序">
-                    <el-input-number v-model="editSort" :min="0" />
+                    <el-input-number v-model="editSort" :min="0" :step="1" :precision="0" step-strictly />
                 </el-form-item>
                 <el-form-item label="状态">
                     <el-radio-group v-model="editStatus">

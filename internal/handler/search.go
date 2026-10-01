@@ -117,8 +117,9 @@ func (h *SearchHandler) Search(c *gin.Context) {
 				fmt.Sprintf("请求体最大 %d 字节", MaxSearchBodyBytes))
 			return
 		}
-		problem.Write(c, http.StatusUnprocessableEntity,
-			problem.TypeInvalidRequest, "请求体不是合法的 JSON")
+		// 区分语法错与字段类型不对（真实案例：store_id 填成 "abc"），
+		// 见 problem.WriteBindError。
+		problem.WriteBindError(c, err)
 		return
 	}
 

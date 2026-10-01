@@ -38,8 +38,7 @@ type refreshRequest struct {
 func (h *AuthHandler) Login(c *gin.Context) {
 	var req loginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		problem.Write(c, http.StatusUnprocessableEntity,
-			problem.TypeInvalidRequest, "请求体不是合法的 JSON")
+		problem.WriteBindError(c, err)
 		return
 	}
 
@@ -59,8 +58,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 func (h *AuthHandler) Refresh(c *gin.Context) {
 	var req refreshRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		problem.Write(c, http.StatusUnprocessableEntity,
-			problem.TypeInvalidRequest, "请求体不是合法的 JSON")
+		problem.WriteBindError(c, err)
 		return
 	}
 	sess, err := h.svc.Refresh(c.Request.Context(), req.RefreshToken)

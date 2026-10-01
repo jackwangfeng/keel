@@ -126,8 +126,7 @@ func (h *OrderHandler) Create(c *gin.Context) {
 func bindOrderRequest(c *gin.Context) (service.CreateRequest, bool) {
 	var raw api.OrderCreateRequest
 	if err := c.ShouldBindJSON(&raw); err != nil {
-		problem.Write(c, http.StatusUnprocessableEntity,
-			problem.TypeInvalidRequest, "请求体不是合法的 JSON")
+		problem.WriteBindError(c, err)
 		return service.CreateRequest{}, false
 	}
 	items := make([]service.LineInput, 0, len(raw.Items))

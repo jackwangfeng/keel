@@ -35,8 +35,7 @@ func NewRefundHandler(s *service.RefundService) *RefundHandler { return &RefundH
 func (h *RefundHandler) Create(c *gin.Context) {
 	var raw api.RefundCreateRequest
 	if err := c.ShouldBindJSON(&raw); err != nil {
-		problem.Write(c, http.StatusUnprocessableEntity,
-			problem.TypeInvalidRequest, "请求体不是合法的 JSON")
+		problem.WriteBindError(c, err)
 		return
 	}
 	req := service.RefundCreateRequest{
@@ -107,8 +106,7 @@ func (h *RefundHandler) Cancel(c *gin.Context) {
 func (h *RefundHandler) ReturnShipment(c *gin.Context) {
 	var raw api.ReturnShipmentRequest
 	if err := c.ShouldBindJSON(&raw); err != nil {
-		problem.Write(c, http.StatusUnprocessableEntity,
-			problem.TypeInvalidRequest, "请求体不是合法的 JSON")
+		problem.WriteBindError(c, err)
 		return
 	}
 	r, replayed, err := h.svc.SubmitReturnShipment(c.Request.Context(), c.Param("refund_no"),

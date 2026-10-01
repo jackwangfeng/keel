@@ -96,8 +96,15 @@ func (h *CartHandler) Select(c *gin.Context) {
 	}
 	var raw api.PutCartSelectionJSONRequestBody
 	var present map[string]json.RawMessage
-	if json.Unmarshal(body, &raw) != nil || json.Unmarshal(body, &present) != nil {
-		problem.Write(c, http.StatusUnprocessableEntity, problem.TypeInvalidRequest, "请求体不是合法的 JSON")
+	// 两次 Unmarshal 分开判错（而不是用 || 合在一行）：要把具体是哪一次失败的
+	// err 传给 problem.WriteBindError 去分流语法错 / 字段类型不对，
+	// 合在一行会把 err 丢掉，只剩一个 bool。
+	if err := json.Unmarshal(body, &raw); err != nil {
+		problem.WriteBindError(c, err)
+		return
+	}
+	if err := json.Unmarshal(body, &present); err != nil {
+		problem.WriteBindError(c, err)
 		return
 	}
 	if _, ok := present["selected"]; !ok {

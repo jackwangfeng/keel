@@ -345,6 +345,8 @@ function onInventoryUpdated(inv: AdminInventory): void {
                                 :model-value="priceDraft.get(sku.id) ?? sku.price_cents"
                                 :min="0"
                                 :step="100"
+                                :precision="0"
+                                step-strictly
                                 size="small"
                                 @update:model-value="(v: number | undefined) => priceDraft.set(sku.id, v ?? 0)"
                             />
@@ -410,6 +412,8 @@ function onInventoryUpdated(inv: AdminInventory): void {
                                         :model-value="priceDraft.get(sku.id) ?? sku.price_cents"
                                         :min="0"
                                         :step="100"
+                                        :precision="0"
+                                        step-strictly
                                         size="small"
                                         @update:model-value="(v: number | undefined) => priceDraft.set(sku.id, v ?? 0)"
                                     />

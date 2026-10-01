@@ -53,8 +53,7 @@ func (h *AdminMerchantHandler) OpenShop(c *gin.Context) {
 	// 一家「已审核通过」的店的路（审核流程本轮还不存在，将来补时没人会想起这里）。
 	var req api.MerchantCreateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		problem.Write(c, http.StatusUnprocessableEntity,
-			problem.TypeInvalidRequest, "请求体不是合法的 JSON")
+		problem.WriteBindError(c, err)
 		return
 	}
 
@@ -142,8 +141,7 @@ func (h *AdminMerchantHandler) UpdateMerchant(c *gin.Context) {
 	// 本轮不开这条路），也没有 domain。
 	var req api.MerchantUpdateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		problem.Write(c, http.StatusUnprocessableEntity,
-			problem.TypeInvalidRequest, "请求体不是合法的 JSON")
+		problem.WriteBindError(c, err)
 		return
 	}
 	var status *int16

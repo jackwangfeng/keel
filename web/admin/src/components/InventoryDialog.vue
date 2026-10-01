@@ -332,7 +332,7 @@ function retryWithDelta(): void {
 
         <el-form v-if="ambiguousStores === null && mode === 'adjust'" label-width="140px" @submit.prevent>
             <el-form-item label="加减多少">
-                <el-input-number v-model="delta" :min="-1000000" :max="1000000" />
+                <el-input-number v-model="delta" :min="-1000000" :max="1000000" :step="1" :precision="0" step-strictly />
                 <span class="hint ml8">正数进货，负数扣减；不能为 0</span>
             </el-form-item>
             <el-form-item label="原因">
@@ -342,15 +342,15 @@ function retryWithDelta(): void {
 
         <el-form v-if="ambiguousStores === null && mode === 'set'" label-width="140px" @submit.prevent>
             <el-form-item label="我看到的值">
-                <el-input-number v-model="expected" :min="0" />
+                <el-input-number v-model="expected" :min="0" :step="1" :precision="0" step-strictly />
                 <span class="hint ml8">expected_available_qty</span>
             </el-form-item>
             <el-form-item label="要写进去的新值">
-                <el-input-number v-model="target" :min="0" />
+                <el-input-number v-model="target" :min="0" :step="1" :precision="0" step-strictly />
                 <span class="hint ml8">绝对值，不是增量</span>
             </el-form-item>
             <el-form-item label="低库存预警线">
-                <el-input-number v-model="warning" :min="0" />
+                <el-input-number v-model="warning" :min="0" :step="1" :precision="0" step-strictly />
                 <span class="hint ml8">一期只是一个存着的数，没有接到任何告警</span>
             </el-form-item>
         </el-form>

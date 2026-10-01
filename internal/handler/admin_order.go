@@ -37,8 +37,7 @@ func NewAdminOrderHandler(s *service.AdminOrderService, r *service.RefundService
 func (h *AdminOrderHandler) Audit(c *gin.Context) {
 	var raw api.PostAdminRefundsRefundNoAuditJSONBody
 	if err := c.ShouldBindJSON(&raw); err != nil {
-		problem.Write(c, http.StatusUnprocessableEntity,
-			problem.TypeInvalidRequest, "请求体不是合法的 JSON")
+		problem.WriteBindError(c, err)
 		return
 	}
 	req := service.AuditRequest{Action: string(raw.Action), RejectReason: raw.RejectReason}
@@ -76,8 +75,7 @@ func (h *AdminOrderHandler) Receive(c *gin.Context) {
 func (h *AdminOrderHandler) Ship(c *gin.Context) {
 	var req api.ShipmentCreateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		problem.Write(c, http.StatusUnprocessableEntity,
-			problem.TypeInvalidRequest, "请求体不是合法的 JSON")
+		problem.WriteBindError(c, err)
 		return
 	}
 	sh, replayed, err := h.svc.Ship(c.Request.Context(), c.Param("order_no"),

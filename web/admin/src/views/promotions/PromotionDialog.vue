@@ -285,12 +285,12 @@ async function submit(): Promise<void> {
                         </el-table-column>
                         <el-table-column label="每人限购" width="120">
                             <template #default="{ row }: { row: PromotionForm['skus'][number] }">
-                                <el-input-number v-model="row.perUserLimit" :min="0" :max="999" :disabled="online" size="small" controls-position="right" />
+                                <el-input-number v-model="row.perUserLimit" :min="0" :max="999" :step="1" :precision="0" step-strictly :disabled="online" size="small" controls-position="right" />
                             </template>
                         </el-table-column>
                         <el-table-column v-if="form.type === 4" label="秒杀配额" width="130">
                             <template #default="{ row }: { row: PromotionForm['skus'][number] }">
-                                <el-input-number v-model="row.stockQty" :min="1" :disabled="online" size="small" controls-position="right" />
+                                <el-input-number v-model="row.stockQty" :min="1" :step="1" :precision="0" step-strictly :disabled="online" size="small" controls-position="right" />
                             </template>
                         </el-table-column>
                         <el-table-column width="50">
@@ -339,7 +339,7 @@ async function submit(): Promise<void> {
                                 <el-select v-else-if="row.scope_type === 3" v-model="row.target_id" filterable :disabled="online" class="w100">
                                     <el-option v-for="p in products" :key="p.id" :value="p.id" :label="`${p.title}（#${p.id}）`" />
                                 </el-select>
-                                <el-input-number v-else-if="row.scope_type === 4" v-model="row.target_id" :min="1" :disabled="online" class="w100" />
+                                <el-input-number v-else-if="row.scope_type === 4" v-model="row.target_id" :min="1" :step="1" :precision="0" step-strictly :disabled="online" class="w100" />
                                 <el-select v-else-if="row.scope_type === 5" v-model="row.target_id" filterable :disabled="online" class="w100">
                                     <el-option v-for="r in regions" :key="r.id" :value="r.id" :label="`${r.name}（${r.code}）`" />
                                 </el-select>
