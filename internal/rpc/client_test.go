@@ -13,6 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/keel/keel/internal/outcome"
 	"github.com/keel/keel/internal/problem"
 	"github.com/keel/keel/internal/repository"
 	"github.com/keel/keel/internal/rpc"
@@ -147,6 +148,10 @@ func TestClientErrorMapping(t *testing.T) {
 	g.POST("/500", func(c *gin.Context) {
 		problem.Write(c, http.StatusInternalServerError, problem.TypeInternal, "内部错误")
 	})
+	g.POST("/busy", func(c *gin.Context) { problem.WriteBusy(c) })
+	g.POST("/503", func(c *gin.Context) {
+		problem.Write(c, http.StatusServiceUnavailable, problem.TypeInternal, "服务未就绪")
+	})
 	g.POST("/garbage", func(c *gin.Context) { c.String(http.StatusOK, "not json") })
 	g.POST("/slow", func(c *gin.Context) { time.Sleep(500 * time.Millisecond); c.JSON(http.StatusOK, gin.H{}) })
 	srv := httptest.NewServer(r)
@@ -179,6 +184,9 @@ func TestClientErrorMapping(t *testing.T) {
 		{"/internal/v1/409", rpc.ErrConflict, false, problem.TypeInsufficientStock},
 		{"/internal/v1/422", rpc.ErrUnprocessable, false, problem.TypeInvalidRequest},
 		{"/internal/v1/500", rpc.ErrUnknown, true, problem.TypeInternal},
+		// busy：对面的事务确定回滚了 —— 确定失败，不是结果未知；别的 503 仍是结果未知。
+		{"/internal/v1/busy", rpc.ErrBusy, false, problem.TypeBusy},
+		{"/internal/v1/503", rpc.ErrUnknown, true, problem.TypeInternal},
 		{"/internal/v1/garbage", rpc.ErrUnknown, true, ""},
 		{"/internal/v1/slow", rpc.ErrUnknown, true, ""},
 		{"/internal/v1/nope", rpc.ErrNotFound, false, problem.TypeNotFound},
@@ -201,6 +209,29 @@ func TestClientErrorMapping(t *testing.T) {
 		var e *rpc.Error
 		if !errors.As(err, &e) || e.Type != tc.ptype {
 			t.Fatalf("%s：problem type 期望 %q，得到 %+v", tc.path, tc.ptype, e)
+		}
+	}
+
+	// busy 的链上带着 outcome.ErrPeerBusy：core 的公网兜底认的是它。
+	if err := cl.PostJSON(ctx, "/internal/v1/busy", map[string]int{}, nil); !outcome.IsDBBusy(err) {
+		t.Fatalf("busy 的错误链上没有 outcome.ErrPeerBusy：%v", err)
+	}
+
+	// 写调用给请求记「落地」：成功与结果未知记，确定失败（4xx、busy）不记。
+	// 记错了的后果：记少了，core 后一步撞超时会对一个库存已经写进去的请求说「没有生效」。
+	for _, tc := range []struct {
+		path    string
+		durable bool
+	}{
+		{"/internal/v1/ok", true},
+		{"/internal/v1/500", true},
+		{"/internal/v1/busy", false},
+		{"/internal/v1/409", false},
+	} {
+		rctx := outcome.Track(ctx)
+		_ = cl.PostJSON(rctx, tc.path, map[string]int{}, nil)
+		if got := outcome.MaybeDurable(rctx); got != tc.durable {
+			t.Errorf("%s 之后 MaybeDurable = %v，期望 %v", tc.path, got, tc.durable)
 		}
 	}
 

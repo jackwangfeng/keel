@@ -15,6 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/keel/keel/internal/buildinfo"
+	reqoutcome "github.com/keel/keel/internal/outcome"
 	"github.com/keel/keel/internal/problem"
 	"github.com/keel/keel/internal/tenant"
 )
@@ -95,6 +96,12 @@ func NewRouter(cfg ServerConfig) (*gin.Engine, Routes) {
 	}
 	r := gin.New()
 	r.Use(gin.Recovery())
+	// 与公网 Router 同一个记录器（internal/outcome）：库存进程的接口据此判断一次语句超时 /
+	// 等锁超时能不能回「确定没生效」的 busy（inventory/http.go 的 fail）。
+	r.Use(func(c *gin.Context) {
+		c.Request = c.Request.WithContext(reqoutcome.Track(c.Request.Context()))
+		c.Next()
+	})
 	r.HandleMethodNotAllowed = true
 	r.NoRoute(func(c *gin.Context) {
 		problem.Write(c, http.StatusNotFound, problem.TypeNotFound, "接口不存在")

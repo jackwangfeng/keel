@@ -31,6 +31,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/keel/keel/internal/outcome"
 	"github.com/keel/keel/internal/problem"
 	"github.com/keel/keel/internal/rpc"
 )
@@ -208,9 +209,20 @@ type handler struct{ svc Service }
 
 // fail 把 svc 的非业务错误写成 Problem：ErrInvalid 是调用方的 bug（400，rpc 归为确定失败），
 // 其余（数据库错误）是 500 —— rpc 归为「结果未知」，写操作据此不会被 core 当成失败。
+//
+// 中间夹着一种：语句等锁超时（55P03，扣减 / 回补 / 设库存的事务有 3 秒 lock_timeout）或跑过了
+// statement_timeout（57014），而这个请求此前什么都没落地（internal/outcome）。那是**确定没生效**，
+// 回 503 busy —— rpc 客户端把它归为确定失败（rpc.ErrBusy），而不是「结果未知」。
+// 以前这里一律 500，core 收到后对写报「可能已经生效」，那是一句假话：那个事务确定回滚了。
 func fail(c *gin.Context, err error) {
 	if errors.Is(err, ErrInvalid) {
 		problem.Write(c, http.StatusBadRequest, problem.TypeInvalidRequest, err.Error())
+		return
+	}
+	if outcome.IsDBBusy(err) && !outcome.MaybeDurable(c.Request.Context()) {
+		slog.WarnContext(c.Request.Context(), "库存服务数据库繁忙，这次请求没有生效",
+			"path", c.Request.URL.Path, "err", err)
+		problem.WriteBusy(c)
 		return
 	}
 	slog.ErrorContext(c.Request.Context(), "库存服务内部错误", "path", c.Request.URL.Path, "err", err)
@@ -395,7 +407,8 @@ func (r *Remote) read(ctx context.Context, path string, in, out any) error {
 		return nil
 	}
 	// 熔断器打开是「没发出去」，对读来说与结果未知是同一个处置：对面暂时不在，降级。
-	if rpc.IsUnknown(err) || errors.Is(err, rpc.ErrCircuitOpen) {
+	if rpc.IsUnknown(err) || errors.Is(err, rpc.ErrCircuitOpen) || errors.Is(err, rpc.ErrBusy) {
+		// busy 也降级：读页面要的是「这次不知道」，不是一个 503（库里那一行锁几秒就放了）。
 		return fmt.Errorf("%w: %v", ErrUnavailable, err)
 	}
 	return fmt.Errorf("库存服务拒绝了读请求: %w", err)
@@ -410,6 +423,12 @@ func (r *Remote) write(ctx context.Context, path string, in, out any) error {
 	}
 	if rpc.IsUnknown(err) {
 		return fmt.Errorf("%w: %v", ErrOutcomeUnknown, err)
+	}
+	if errors.Is(err, rpc.ErrBusy) {
+		// 对面的事务确定回滚了（库存进程 fail 里的 busy）：确定没写成，可以重试。
+		// 原样包着 rpc 的错误往上交：链上带着 outcome.ErrPeerBusy，core 的公网兜底据此回 busy；
+		// SAGA 分支与 outbox 任务照常把它当一次失败、按自己的退避重试。
+		return fmt.Errorf("库存服务繁忙，这次写入没有生效: %w", err)
 	}
 	if errors.Is(err, rpc.ErrBadRequest) {
 		return fmt.Errorf("%w: %v", ErrInvalid, err)

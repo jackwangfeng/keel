@@ -31,6 +31,11 @@ func TestReadJSONTimeoutAndBreaker(t *testing.T) {
 		case "400":
 			w.WriteHeader(http.StatusBadRequest)
 			return
+		case "busy":
+			w.Header().Set("Content-Type", "application/problem+json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"type":"https://keel.dev/problems/busy","title":"服务繁忙","status":503}`))
+			return
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"ok":true}`))
@@ -103,6 +108,19 @@ func TestReadJSONTimeoutAndBreaker(t *testing.T) {
 	}
 	if got := c.BreakerState(); got != "closed" {
 		t.Fatalf("4xx 被算成了失败，熔断器 %s", got)
+	}
+
+	// busy（对面的库里那一行锁着）同样是对面回答了：确定失败、不计入熔断 —— 熔断它会把所有人的
+	// 库存读一起降级掉，而那一行锁几秒就放了。
+	mode.Store("busy")
+	for i := 0; i < 5; i++ {
+		err := c.ReadJSON(ctx, "/x", struct{}{}, &out)
+		if !errors.Is(err, rpc.ErrBusy) || rpc.IsUnknown(err) {
+			t.Fatalf("busy 应当是 ErrBusy 且不是 ErrUnknown，实得 %v", err)
+		}
+	}
+	if got := c.BreakerState(); got != "closed" {
+		t.Fatalf("busy 被算成了失败，熔断器 %s", got)
 	}
 
 	// 调用方自己取消不计入熔断。

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/keel/keel/internal/api"
+	reqoutcome "github.com/keel/keel/internal/outcome"
 	"github.com/keel/keel/internal/tenant"
 )
 
@@ -70,7 +71,21 @@ var (
 	// 不是 ErrUnknown（IsUnknown 为 false）。只有 ReadJSON 会返回它（breaker.go）。
 	// 读的调用方把它与 ErrUnknown 一样当成「对面暂时不在」降级（inventory.Remote.read）。
 	ErrCircuitOpen = errors.New("rpc: 熔断器打开，请求未发出")
+	// ErrBusy 是对面回了 503 busy（problem type https://keel.dev/problems/busy）：对面的数据库
+	// 等锁超时（55P03）或语句超时（57014），而那个请求此前什么都没落地 —— 对面的事务确定回滚了，
+	// 所以它是**确定失败**，不是 ErrUnknown（IsUnknown 为假）。调用方可以放心地报「没有生效、可以重试」。
+	//
+	// 它包着 outcome.ErrPeerBusy：core 一侧的兜底（problem.Write）认的是那个哨兵，
+	// 这样一次库存写撞上 busy，core 的公网接口不必逐个认识 rpc 也能回 busy。
+	//
+	// 只认 503 + 这个 type：别的 503（内网服务未就绪、反向代理回的 503）仍是结果未知 ——
+	// 那些情况下请求到没到对面的业务代码是不知道的。
+	ErrBusy = fmt.Errorf("rpc: 对面繁忙、这次没有生效: %w", reqoutcome.ErrPeerBusy)
 )
+
+// typeBusy 与 problem.TypeBusy 逐字相同。不 import problem 是为了不让客户端包依赖 gin 那一侧的包；
+// rpc 的测试里有一条钉住两者相等。
+const typeBusy = "https://keel.dev/problems/busy"
 
 // Error 是一次失败调用的全部信息。
 type Error struct {
@@ -102,8 +117,9 @@ func (e *Error) Error() string {
 	return b.String()
 }
 
-// Is 让 errors.Is(err, rpc.ErrConflict) 之类成立。
-func (e *Error) Is(target error) bool { return target == e.kind }
+// Is 让 errors.Is(err, rpc.ErrConflict) 之类成立；哨兵自己包着的东西（ErrBusy 里的
+// outcome.ErrPeerBusy）也算。
+func (e *Error) Is(target error) bool { return target == e.kind || errors.Is(e.kind, target) }
 
 // Unwrap 暴露传输层原始错误（比如 context.DeadlineExceeded），方便调用方记日志。
 func (e *Error) Unwrap() error { return e.err }
@@ -210,7 +226,9 @@ func (c *Client) ReadJSON(ctx context.Context, path string, in, out any) error {
 	case IsUnknown(err):
 		c.brk.done(outcomeFailure)
 	default:
-		// 4xx：对面回答了。
+		// 4xx 与 busy：对面回答了。busy 不算失败：对面进程在、只是它的库里那一行正被锁着，
+		// 熔断它只会把所有人的库存读一起降级掉，而那一行锁几秒就放了。（实际上读几乎碰不到
+		// busy：读超时 800ms 远短于对面的 lock_timeout / statement_timeout，先到的是这边的超时。）
 		c.brk.done(outcomeSuccess)
 	}
 	return err
@@ -235,7 +253,13 @@ func (c *Client) PostJSON(ctx context.Context, path string, in, out any) error {
 		// 编码失败时请求没有发出去，是确定失败 —— 所以不包成 ErrUnknown。
 		return fmt.Errorf("rpc: 编码请求体失败: %w", err)
 	}
-	return c.do(ctx, c.timeout, http.MethodPost, path, nil, body, out)
+	err = c.do(ctx, c.timeout, http.MethodPost, path, nil, body, out)
+	// 写成功了、或者不知道写没写成：这个请求从此「可能已经留下了东西」（internal/outcome）。
+	// 之后再撞上一次数据库超时，兜底就不会对它说「没有生效」。确定失败（4xx、busy）不记。
+	if err == nil || IsUnknown(err) {
+		reqoutcome.MarkDurable(ctx)
+	}
+	return err
 }
 
 // GetJSON 发 GET，query 可以为 nil。
@@ -314,6 +338,9 @@ func (c *Client) do(ctx context.Context, timeout time.Duration, method, path str
 		kind = ErrUnauthorized
 	case resp.StatusCode >= 400 && resp.StatusCode < 500:
 		kind = ErrRejected
+	case resp.StatusCode == http.StatusServiceUnavailable && problemType(raw) == typeBusy:
+		// 对面明确说了「我的事务回滚了」：确定失败（见 ErrBusy）。
+		kind = ErrBusy
 	default:
 		// 5xx 与任何意料之外的状态码（1xx / 3xx）：对面可能已经提交了。
 		kind = ErrUnknown
@@ -324,4 +351,13 @@ func (c *Client) do(ctx context.Context, timeout time.Duration, method, path str
 		e.Type, e.Title = p.Type, p.Title
 	}
 	return e
+}
+
+// problemType 取响应体里 Problem 的 type；解不出来时为空串。
+func problemType(raw []byte) string {
+	var p api.Problem
+	if json.Unmarshal(raw, &p) != nil {
+		return ""
+	}
+	return p.Type
 }

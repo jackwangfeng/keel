@@ -7,6 +7,7 @@ import (
 
 	"github.com/keel/keel/internal/api"
 	"github.com/keel/keel/internal/inventory"
+	"github.com/keel/keel/internal/outcome"
 	"github.com/keel/keel/internal/problem"
 )
 
@@ -22,7 +23,16 @@ import (
 // 建 SKU / 导入的初始库存可以放心重建（见 service/inventory_admin.go）。
 //
 // Retry-After 给一个保守的秒数：库存服务的恢复是编排系统拉起一个容器的量级。
+//
+// 排在它前面的一种：库存进程回了 busy（它的库里那一行锁着、等锁超时），那是**确定没写成**。
+// 这个请求此前也什么都没落地时回 503 busy（「没有生效，可以重试」），而不是这里那句「可能已经生效」。
+// 此前落过地的（core 先提交了点什么）交给调用方的默认分支：problem.Write 的兜底同样不替它下结论。
 func writeInventoryUnavailable(c *gin.Context, err error) bool {
+	if outcome.IsDBBusy(err) && !outcome.MaybeDurable(c.Request.Context()) {
+		_ = c.Error(err)
+		problem.WriteBusy(c)
+		return true
+	}
 	if !inventory.IsUnavailable(err) {
 		return false
 	}
