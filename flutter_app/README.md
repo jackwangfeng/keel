@@ -58,6 +58,36 @@ NODE_PATH=flutter_app/tool/node_modules node flutter_app/tool/mp_walk.js   # 截
 
 开发者工具是和 mp-flutter 会话共用的：用之前先跟它打招呼，用完说一声。
 
+## 安全：Web 端的登录令牌存在 localStorage
+
+**现状**：`lib/api/session.dart` 把 access token、refresh token 和昵称放进 `shared_preferences`。各平台落到不同的地方：
+
+| 平台 | 实际存储 | 风险 |
+|---|---|---|
+| Web（H5） | 浏览器 `localStorage` | **页面上任何能执行的脚本都读得到**。一旦有 XSS（比如注入的第三方脚本、被污染的依赖），令牌可以被整个读走，拿到别处冒用，直到它过期或被轮换 |
+| 小程序 | `wx.setStorageSync`（mp-flutter 替换） | 只在小程序沙箱里，外部脚本读不到 |
+| iOS / 安卓 App | 系统的偏好存储（NSUserDefaults / SharedPreferences） | 在 App 沙箱里；越狱 / root 设备上可被读取 |
+
+每次请求由 `lib/api/client.dart` 带 `Authorization: Bearer <access token>`。401 时用 refresh token 换新的一对，服务端每次刷新都轮换 refresh token（旧的立即作废），并发的 401 只刷新一次。
+
+**为什么现在这样取舍**
+
+- 四个端共用一套鉴权代码：原生 App 和小程序没有浏览器 cookie，只能用 Bearer 令牌；Web 用同一套，代码路径最少、行为一致，测试也只要一套。
+- 演示站是同源部署（页面和 `/api/v1` 同一个域名），不加载第三方脚本，页面上的文字都由 Flutter 画在画布上，不会把服务端数据当 HTML 插进页面。这降低了 XSS 的入口，但**不等于没有风险**。
+- access token 有效期短（登录返回 `expires_in`），被偷走后能用的窗口有限；refresh token 一旦被轮换，旧的就失效了。
+
+**以后换成 httpOnly cookie 要改的地方**（只改 Web，App 和小程序继续用 Bearer）
+
+1. **服务端**（不在本目录）：登录 / 刷新接口在 Web 请求时改用 `Set-Cookie` 下发令牌，设 `HttpOnly; Secure; SameSite=Strict; Path=/api`；鉴权中间件同时接受 cookie 和 `Authorization`；刷新接口从 cookie 里读 refresh token；退出接口清掉 cookie。
+2. **防 CSRF**：cookie 会被浏览器自动带上，写接口要加防护，比如校验 `SameSite`，再加一个自定义请求头（如 `X-Requested-With`）或双提交 token，服务端拒绝没有它的请求。
+3. **`lib/api/session.dart`**：Web 上不再保存 access / refresh token（`kIsWeb` 分支），只记一个「已登录」标记和昵称；`loggedIn` 改为依据这个标记，或者启动时调一次 `GET /me` 判断。
+4. **`lib/api/client.dart`**：Web 上不再设置 `Authorization` 请求头；同源请求浏览器会自动带 cookie。`_refresh()` 在 Web 上调刷新接口时不带 body，401 后的单飞重试逻辑保留。
+5. **凭证图**（`lib/widgets/evidence_image.dart` 通过 `ApiClient.bytesOf` 带令牌取图）：Web 上改为直接按地址加载，由 cookie 鉴权。
+6. **退出登录**：Web 上必须调服务端的退出接口，才能清掉 httpOnly cookie，前端自己删不掉。
+7. **测试**：`test/client_test.dart`、`test/order_test.dart`、`test/review_fixes_test.dart` 里断言 `Authorization` 请求头的用例要按平台分开；Web e2e（`tool/e2e_web.sh`）里测试进程自己调接口用的是 Bearer，不受影响。
+
+另外，原生 App 如果要更进一步，可以把令牌从偏好存储换到系统钥匙串（如 `flutter_secure_storage`），改动只在 `session.dart`。
+
 ## 规矩
 
 - 契约字段只在 `lib/api/` 读写；`lib/pages/`、`lib/widgets/` 不许 import `schema.g.dart`（`scripts/check_flutter_pages.py`）。
