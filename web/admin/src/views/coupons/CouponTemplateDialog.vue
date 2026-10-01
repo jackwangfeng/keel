@@ -293,15 +293,15 @@ async function submit(): Promise<void> {
                 />
             </el-form-item>
             <el-form-item v-else label="天数">
-                <el-input-number v-model="form.validDays" :min="1" :max="3650" :disabled="locked" />
+                <el-input-number v-model="form.validDays" :min="1" :max="3650" :step="1" :precision="0" step-strictly :disabled="locked" />
             </el-form-item>
 
             <el-form-item label="总量">
-                <el-input-number v-model="form.totalCount" :min="0" />
+                <el-input-number v-model="form.totalCount" :min="0" :step="1" :precision="0" step-strictly />
                 <span class="hint ml8">0 表示不限；不能低于已发出数</span>
             </el-form-item>
             <el-form-item label="每人限领">
-                <el-input-number v-model="form.perUserLimit" :min="1" />
+                <el-input-number v-model="form.perUserLimit" :min="1" :step="1" :precision="0" step-strictly />
                 <span class="hint ml8">只约束领券中心；定向发放不受它限制</span>
             </el-form-item>
             <el-form-item label="可领取">

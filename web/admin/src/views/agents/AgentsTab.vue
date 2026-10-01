@@ -672,7 +672,7 @@ function openSettings(row: AdminAgent): void {
                         <el-input v-model="keyName" placeholder="给这把密钥起个名字，比如它跑在哪台机器上" />
                     </el-form-item>
                     <el-form-item label="有效期">
-                        <el-input-number v-model="keyExpiresDays" :min="0" />
+                        <el-input-number v-model="keyExpiresDays" :min="0" :step="1" :precision="0" step-strictly />
                         <span class="hint suffix">天，0 = 不过期</span>
                     </el-form-item>
                 </el-form>
@@ -724,7 +724,7 @@ function openSettings(row: AdminAgent): void {
                         </el-table-column>
                         <el-table-column label="每 24 小时至多" width="160">
                             <template #default="{ row }: { row: PolicyFormRow }">
-                                <el-input-number v-model="row.dailyLimit" :min="0" size="small" style="width: 100px" />
+                                <el-input-number v-model="row.dailyLimit" :min="0" :step="1" :precision="0" step-strictly size="small" style="width: 100px" />
                                 <span class="hint suffix">条，0 = 不自动</span>
                             </template>
                         </el-table-column>
@@ -748,7 +748,7 @@ function openSettings(row: AdminAgent): void {
                             </div>
                             <div class="policy-field">
                                 <span class="hint">每 24 小时至多（0 = 不自动）</span>
-                                <el-input-number v-model="row.dailyLimit" :min="0" size="small" style="width: 100%" />
+                                <el-input-number v-model="row.dailyLimit" :min="0" :step="1" :precision="0" step-strictly size="small" style="width: 100%" />
                             </div>
                             <el-button type="primary" size="small" :loading="row.saving" class="policy-save" @click="savePolicy(row)">
                                 保存

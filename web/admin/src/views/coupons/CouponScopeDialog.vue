@@ -148,6 +148,9 @@ async function save(): Promise<void> {
                         v-else-if="row.scopeType === 4"
                         v-model="row.targetId"
                         :min="1"
+                        :step="1"
+                        :precision="0"
+                        step-strictly
                         :disabled="locked"
                         placeholder="品牌 id"
                         class="w100"

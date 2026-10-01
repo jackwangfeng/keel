@@ -260,11 +260,11 @@ async function submit(): Promise<void> {
                         </el-select>
                         <div class="rule-row">
                             <span>首{{ form.chargeMode === 1 ? "件" : "重" }}</span>
-                            <el-input-number v-model="r.firstUnit" :min="1" :max="1000000" size="small" />
+                            <el-input-number v-model="r.firstUnit" :min="1" :max="1000000" :step="1" :precision="0" step-strictly size="small" />
                             <span>{{ unit }}，</span>
                             <el-input v-model="r.firstFee" size="small" class="money"><template #append>元</template></el-input>
                             <span>；每续</span>
-                            <el-input-number v-model="r.addUnit" :min="1" :max="1000000" size="small" />
+                            <el-input-number v-model="r.addUnit" :min="1" :max="1000000" :step="1" :precision="0" step-strictly size="small" />
                             <span>{{ unit }}，加</span>
                             <el-input v-model="r.addFee" size="small" class="money"><template #append>元</template></el-input>
                         </div>
@@ -274,7 +274,7 @@ async function submit(): Promise<void> {
                                 <template #append>元</template>
                             </el-input>
                             <span>包邮，或满</span>
-                            <el-input-number v-model="r.freeQuantity" :min="0" :max="999999" size="small" />
+                            <el-input-number v-model="r.freeQuantity" :min="0" :max="999999" :step="1" :precision="0" step-strictly size="small" />
                             <span>件包邮（0 = 不设）</span>
                         </div>
                     </div>

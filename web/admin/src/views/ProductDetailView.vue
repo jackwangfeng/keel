@@ -669,22 +669,23 @@ function onInventoryUpdated(inv: AdminInventory): void {
                     <p class="hint">一期不校验同一商品下各 SKU 的规格键是否一致（没有规格模板的表）。</p>
                 </el-form-item>
                 <el-form-item label="售价（分）">
-                    <el-input-number v-model="skuForm.price_cents" :min="0" :step="100" />
+                    <!-- 单位是分（契约里的 price_cents 是整数），不是元，不能有小数。 -->
+                    <el-input-number v-model="skuForm.price_cents" :min="0" :step="100" :precision="0" step-strictly />
                     <span class="hint ml8">{{ yuan(skuForm.price_cents) }}</span>
                 </el-form-item>
                 <el-form-item label="成本（分）">
-                    <el-input-number v-model="skuForm.cost_cents" :min="0" :step="100" />
+                    <el-input-number v-model="skuForm.cost_cents" :min="0" :step="100" :precision="0" step-strictly />
                     <span class="hint ml8">只在后台接口里出现，前台永远看不到</span>
                 </el-form-item>
                 <el-form-item label="重量（克）">
-                    <el-input-number v-model="skuForm.weight_gram" :min="0" />
+                    <el-input-number v-model="skuForm.weight_gram" :min="0" :step="1" :precision="0" step-strictly />
                 </el-form-item>
                 <template v-if="skuEditing === null">
                     <el-form-item label="初始库存">
-                        <el-input-number v-model="skuForm.available_qty" :min="0" />
+                        <el-input-number v-model="skuForm.available_qty" :min="0" :step="1" :precision="0" step-strictly />
                     </el-form-item>
                     <el-form-item label="预警线">
-                        <el-input-number v-model="skuForm.warning_qty" :min="0" />
+                        <el-input-number v-model="skuForm.warning_qty" :min="0" :step="1" :precision="0" step-strictly />
                     </el-form-item>
                 </template>
                 <template v-else>
