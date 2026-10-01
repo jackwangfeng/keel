@@ -356,7 +356,8 @@ async function removeProduct(row: AdminProduct): Promise<void> {
                     <el-input v-model="draft.title" maxlength="200" show-word-limit />
                 </el-form-item>
                 <el-form-item label="副标题">
-                    <el-input v-model="draft.subtitle" />
+                    <!-- 上限与标题一样取契约 ProductCreateRequest.subtitle 的 maxLength: 200。 -->
+                    <el-input v-model="draft.subtitle" maxlength="200" show-word-limit />
                 </el-form-item>
                 <el-form-item label="详情">
                     <el-input v-model="draft.description" type="textarea" :rows="4" />

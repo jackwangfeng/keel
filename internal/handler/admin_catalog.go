@@ -178,8 +178,15 @@ func writeCatalogError(c *gin.Context, err error) {
 	case writeAdminIdempotencyError(c, err):
 
 	case errors.Is(err, service.ErrCatalogBadRequest):
+		// err.Error() 而不是硬编码的「请求参数不合法」：ErrCatalogBadRequest
+		// 在 service 层全部是 `fmt.Errorf("%w: 具体原因", ErrCatalogBadRequest)`
+		// 包出来的（校验函数早就把字段名与原因写进了这句话，见
+		// internal/service/admin_catalog.go 的 checkOptText 等），硬编码
+		// 文案等于把那句话凭空扔掉。真实案例：副标题填 2000 字，校验函数早就
+		// 拼出了「subtitle 有 2000 个字，契约上限是 200」，商家却只收到一句
+		// 「请求参数不合法」——不说哪个字段，只能挨个字段猜着改。
 		problem.Write(c, http.StatusUnprocessableEntity,
-			problem.TypeInvalidRequest, "请求参数不合法")
+			problem.TypeInvalidRequest, err.Error())
 
 	case errors.Is(err, service.ErrUploadTooLarge):
 		problem.Write(c, http.StatusRequestEntityTooLarge,

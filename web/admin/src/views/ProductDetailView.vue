@@ -466,7 +466,7 @@ function onInventoryUpdated(inv: AdminInventory): void {
                             />
                         </el-form-item>
                         <el-form-item label="副标题">
-                            <el-input v-model="form.subtitle" />
+                            <el-input v-model="form.subtitle" maxlength="200" show-word-limit />
                             <HighlightedText
                                 v-if="hitsFor('subtitle').length > 0"
                                 :text="form.subtitle ?? ''"
