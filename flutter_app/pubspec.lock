@@ -203,6 +203,14 @@ packages:
       url: "https://pub.flutter-io.cn"
     source: hosted
     version: "8.3.2"
+  flutter_miniprogram:
+    dependency: "direct dev"
+    description:
+      name: flutter_miniprogram
+      sha256: "3ed9a6566be20759e41fcbe1d3cad6342fe48fd43125f022ebbb69c5838a6d61"
+      url: "https://pub.flutter-io.cn"
+    source: hosted
+    version: "0.3.0"
   flutter_plugin_android_lifecycle:
     dependency: transitive
     description:
@@ -519,24 +527,14 @@ packages:
       url: "https://pub.flutter-io.cn"
     source: hosted
     version: "2.1.0"
-  mp_flutter:
-    dependency: "direct dev"
-    description:
-      path: "packages/mp_flutter"
-      ref: "v0.2.5"
-      resolved-ref: "9f0ddb3d2b01756e51438f8952daf1e5ec5ba352"
-      url: "https://github.com/jackwangfeng/mp-flutter.git"
-    source: git
-    version: "0.2.5"
   mp_flutter_wechat:
     dependency: "direct main"
     description:
-      path: "packages/mp_flutter_wechat"
-      ref: "v0.2.5"
-      resolved-ref: "9f0ddb3d2b01756e51438f8952daf1e5ec5ba352"
-      url: "https://github.com/jackwangfeng/mp-flutter.git"
-    source: git
-    version: "0.2.5"
+      name: mp_flutter_wechat
+      sha256: "54532afc4d4a87038e1323bb56ac8c98fd54c48fd4c8c61d1ed43e97871e33ff"
+      url: "https://pub.flutter-io.cn"
+    source: hosted
+    version: "0.3.0"
   objective_c:
     dependency: transitive
     description:

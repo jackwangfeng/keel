@@ -11,20 +11,26 @@ fs.mkdirSync(shots, { recursive: true });
 const T = (x, y) => ({ identifier: 0, x, y, pageX: x, pageY: y, clientX: x, clientY: y });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// 用 mp-flutter 自己的驱动（冷启动、launch 重试、吞开发者工具的自动化超时）：它就在 pub 缓存里的依赖源码中。
+// 用 mp-flutter 自己的驱动（冷启动、launch 重试、吞开发者工具的自动化超时）：tools/e2e/drive.js。
+// v0.3.0 起 keel 从 pub.dev 拉 flutter_miniprogram，pub 包里不带仓库根目录的 tools/，所以按这个顺序找：
+//   1. 环境变量 MP_FLUTTER_REPO 指向的 mp-flutter 仓库克隆（推荐：git clone https://github.com/jackwangfeng/mp-flutter.git）；
+//   2. pub 的 git 缓存里留下的 mp-flutter-* 目录（以前用 git 依赖时拉过的），取最新的一份并提示版本可能不一致。
 function findDrive() {
-  const cache = path.join(process.env.HOME, '.pub-cache', 'git');
-  // 优先用 pubspec.lock 里锁定的那一版（缓存里可能还留着旧版本）。
-  const lock = fs.readFileSync(path.join(__dirname, '..', 'pubspec.lock'), 'utf8');
-  // lock 里 resolved-ref 在 url 前面；仓库名可能是 mp-flutter 或 mp-flutter-internal（2026-09 私有库改名）。
-  const m = lock.match(/resolved-ref: "?([0-9a-f]{40})"?\s+url: "?[^"\n]*mp-flutter(?:-internal)?\.git/);
-  const dirs = fs.readdirSync(cache).filter((x) => x.startsWith('mp-flutter-'));
-  if (m) dirs.sort((a, b) => (b.endsWith(m[1]) ? 1 : 0) - (a.endsWith(m[1]) ? 1 : 0));
-  for (const d of dirs) {
-    const f = path.join(cache, d, 'tools', 'e2e', 'drive.js');
+  const repo = process.env.MP_FLUTTER_REPO;
+  if (repo) {
+    const f = path.join(repo, 'tools', 'e2e', 'drive.js');
     if (fs.existsSync(f)) return f;
+    throw new Error(`MP_FLUTTER_REPO=${repo} 下没有 tools/e2e/drive.js`);
   }
-  throw new Error('pub 缓存里没有 mp-flutter 的 tools/e2e/drive.js（先 make flutter-get）');
+  const cache = path.join(process.env.HOME, '.pub-cache', 'git');
+  const dirs = fs.existsSync(cache) ? fs.readdirSync(cache).filter((x) => x.startsWith('mp-flutter-')) : [];
+  const hits = dirs.map((d) => path.join(cache, d, 'tools', 'e2e', 'drive.js')).filter((f) => fs.existsSync(f))
+    .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
+  if (hits.length) {
+    console.warn(`[mp_walk] 用 pub git 缓存里的驱动：${hits[0]}（可能比当前依赖的 flutter_miniprogram 旧；要对齐版本就设 MP_FLUTTER_REPO）`);
+    return hits[0];
+  }
+  throw new Error('找不到 mp-flutter 的 tools/e2e/drive.js：git clone https://github.com/jackwangfeng/mp-flutter.git，再设 MP_FLUTTER_REPO=<克隆目录>');
 }
 const { runE2E } = require(findDrive());
 

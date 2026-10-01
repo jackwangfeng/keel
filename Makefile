@@ -516,7 +516,7 @@ flutter-android-install:
 # --no-licenses：第三方许可证清单不打进包（许可证页能开、不列第三方包），省体积。常用字合一字体默认打进 pkg-cjk。
 flutter-build-mp:
 	@test -n "$(KEEL_API_BASE)" || (echo "要设 KEEL_API_BASE" && exit 1)
-	cd $(FLUTTER_APP) && $(FLUTTER_ENV) dart run mp_flutter --flutter $(FLUTTER) --no-licenses --dart-define=KEEL_API_BASE=$(KEEL_API_BASE)
+	cd $(FLUTTER_APP) && $(FLUTTER_ENV) dart run flutter_miniprogram --flutter $(FLUTTER) --no-licenses --dart-define=KEEL_API_BASE=$(KEEL_API_BASE)
 
 flutter-generate:
 	python3 $(ROOT)/scripts/gen_dart_schema.py
