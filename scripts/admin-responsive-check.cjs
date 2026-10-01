@@ -11,6 +11,27 @@
 // 需要 puppeteer-core 与本机 Chrome：PUPPETEER_CORE（模块路径，默认 ~/.cache/keel-ui-test/node_modules/puppeteer-core）、
 // CHROME（默认 /usr/bin/google-chrome）、PROXY（可选，如 http://127.0.0.1:8890）。
 //
+// 登录（私有栈必须给其中一个，演示站不需要——它本身免登录）：
+//   ADMIN_SESSION_JSON=<JSON>   优先用这个。完整的一份 StaffSession（契约 Staff +
+//     token + expire_at），原样塞进浏览器的 sessionStorage，键是
+//     web/admin/src/api/client.ts 里的 STORAGE_KEY（"keel.admin.session"，
+//     演示站免登录注入脚本 /srv/keel-eshop/demo/inject.html 用的是同一个键）。
+//     最简单的拿法：登一次后台，devtools 里
+//     `copy(sessionStorage.getItem("keel.admin.session"))`，或者直接
+//     `curl` 一次 `POST /api/v1/admin/auth/session` 把响应体整个传进来。
+//   ADMIN_TOKEN=<token>         退而求其次：只有一个 token，脚本拼一个最小的
+//     StaffSession（1 小时后过期的占位 staff）。**拼出来的 staff 信息是假的**
+//     ——`merchant_id` 默认 null（平台管理员），角色默认 1（管理员）；界面上
+//     任何读 `session.staff.*` 的地方（员工列表「是不是自己」、角色文案、
+//     商家切换器）用的都是这份假数据，布局检查够用，别拿它的输出当权限验证。
+//     可选搭配 ADMIN_MERCHANT_ID（数字，商家级员工用）/ ADMIN_ROLE（1~4，同契约
+//     Staff.role）调整这份假 staff。
+//   两个都没给：按原样跑（演示站免登录；私有栈会被跳回 /login，
+//     检查结果里全是「没找到可点的新建按钮」一类的假阳性）。
+//
+//   例：ADMIN_SESSION_JSON="$(cat session.json)" make admin-responsive-check ADMIN_URL=https://xxx.zzss.fun/admin
+//      ADMIN_TOKEN=xxxxxxxx node scripts/admin-responsive-check.cjs https://xxx.zzss.fun/admin
+//
 // 判据（「不合格」进报告的 issues；「提醒」进 warnings）：
 //   overflow   页面本身能横向滚动（documentElement.scrollWidth > 视口宽）。表格等自带横向滚动的容器内部不算。
 //   clipped    可点的控件有一部分在视口右边之外，且不在可横向滚动的容器里（用户够不着）。
@@ -50,6 +71,38 @@ const PAGES = [
     { path: "/shop-settings" },
 ];
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// 会话存储的键，必须与 web/admin/src/api/client.ts 的 STORAGE_KEY 一字不差——
+// 那个常量没有导出，这里只能照抄（演示站的 inject.html 也是照抄的同一个值）。
+const SESSION_STORAGE_KEY = "keel.admin.session";
+
+// 解析登录用的环境变量，返回一份要塞进 sessionStorage 的 StaffSession，没配就是 null。
+function resolveSession() {
+    if (process.env.ADMIN_SESSION_JSON) {
+        try {
+            return JSON.parse(process.env.ADMIN_SESSION_JSON);
+        } catch (e) {
+            throw new Error("ADMIN_SESSION_JSON 不是合法 JSON：" + e.message);
+        }
+    }
+    if (process.env.ADMIN_TOKEN) {
+        const merchantId = process.env.ADMIN_MERCHANT_ID ? Number(process.env.ADMIN_MERCHANT_ID) : null;
+        const role = process.env.ADMIN_ROLE ? Number(process.env.ADMIN_ROLE) : 1;
+        return {
+            token: process.env.ADMIN_TOKEN,
+            expire_at: new Date(Date.now() + 3600 * 1000).toISOString(),
+            staff: {
+                id: 0,
+                email: "admin-responsive-check@local.invalid",
+                merchant_id: merchantId,
+                role,
+                region_ids: [],
+                created_at: new Date().toISOString(),
+            },
+        };
+    }
+    return null;
+}
 
 // 在页面里跑的检查（序列化进浏览器，不能引用外部变量）。
 function inspect(isMobile, vw) {
@@ -134,6 +187,7 @@ async function serveLocal(page, dir) {
 
 async function run() {
     for (const vp of VIEWPORTS) fs.mkdirSync(path.join(OUT, vp.name), { recursive: true });
+    const session = resolveSession();
     const args = process.env.PROXY ? [`--proxy-server=${process.env.PROXY}`] : [];
     const browser = await puppeteer.launch({ executablePath: process.env.CHROME || "/usr/bin/google-chrome", headless: "new", args });
     const results = [];
@@ -141,6 +195,14 @@ async function run() {
         for (const vp of VIEWPORTS) {
             const page = await browser.newPage();
             await page.setViewport(vp);
+            if (session) {
+                // evaluateOnNewDocument：赶在页面自己的脚本（会去读这个 key 判断
+                // 有没有登录）跑之前把会话写进去，每次导航都重新写一遍，
+                // 免得某个页面自己清过 sessionStorage 之后后面的页面又变成没登录。
+                await page.evaluateOnNewDocument((key, value) => {
+                    try { sessionStorage.setItem(key, value); } catch (e) { /* 隐私模式等，跳过 */ }
+                }, SESSION_STORAGE_KEY, JSON.stringify(session));
+            }
             const errors = [];
             if (process.env.LOCAL_DIST) await serveLocal(page, process.env.LOCAL_DIST);
             page.on("pageerror", e => errors.push("JS: " + String(e.message).slice(0, 160)));
