@@ -704,6 +704,53 @@ func TestAdminEndpointsRequireAStaffToken(t *testing.T) {
 	}
 }
 
+// 后台会话的 last_seen_at 60 秒内节流：短时间内连续打请求只写一次；
+// 回拨到阈值之外再打一次就会刷新。锁的是 db/queries/staff.sql 的
+// TouchStaffSessionSeen——不是这条测试守不住的东西（压测报告 §6）。
+func TestStaffSessionLastSeenIsThrottled(t *testing.T) {
+	idA := mkStaff(t, "shop-a", "throttle-a@example.com", 1, 1)
+	sess := staffSession(t, hostA, idA)
+	hash := auth.HashStaffToken(sess.Token)
+
+	// 这串会话是刚换出来的：此刻 last_seen_at 应该还是 NULL（issueSession
+	// 不碰它，第一次写要等第一次打 /admin/me）。少了这一句，下面「只写一次」
+	// 的断言在「它本来就从来没被写过」时也会是绿的。
+	if n := adminQueryInt64(t, `SELECT count(*) FROM staff_tokens
+	                             WHERE token_hash = $1 AND last_seen_at IS NOT NULL`, hash); n != 0 {
+		t.Fatalf("刚换出来的会话 last_seen_at 已经不是 NULL 了，这条测试的前提没建起来")
+	}
+
+	if w := getAs(t, hostA, "/api/v1/admin/me", sess.Token); w.Code != http.StatusOK {
+		t.Fatalf("第一次请求就失败了：%d %s", w.Code, w.Body.String())
+	}
+	firstSeen := adminQueryText(t, `SELECT last_seen_at::text FROM staff_tokens WHERE token_hash = $1`, hash)
+	if firstSeen == "" {
+		t.Fatal("打过一次 /admin/me 之后 last_seen_at 还是 NULL")
+	}
+
+	// 60 秒内连续打几次：last_seen_at 必须纹丝不动。
+	for i := 0; i < 3; i++ {
+		if w := getAs(t, hostA, "/api/v1/admin/me", sess.Token); w.Code != http.StatusOK {
+			t.Fatalf("第 %d 次连续请求失败：%d %s", i+2, w.Code, w.Body.String())
+		}
+	}
+	if got := adminQueryText(t, `SELECT last_seen_at::text FROM staff_tokens WHERE token_hash = $1`, hash); got != firstSeen {
+		t.Errorf("60 秒内的连续请求又写了 last_seen_at：%s -> %s —— 这正是压测里 12-17 个会话等锁的那一行",
+			firstSeen, got)
+	}
+
+	// 把这一行的 last_seen_at 拨到阈值之外（61 秒前），模拟「上一次活跃是一分钟多以前」。
+	adminExec(t, `UPDATE staff_tokens SET last_seen_at = now() - interval '61 seconds' WHERE token_hash = $1`, hash)
+	staleSeen := adminQueryText(t, `SELECT last_seen_at::text FROM staff_tokens WHERE token_hash = $1`, hash)
+
+	if w := getAs(t, hostA, "/api/v1/admin/me", sess.Token); w.Code != http.StatusOK {
+		t.Fatalf("超过阈值之后的请求失败了：%d %s", w.Code, w.Body.String())
+	}
+	if got := adminQueryText(t, `SELECT last_seen_at::text FROM staff_tokens WHERE token_hash = $1`, hash); got == staleSeen {
+		t.Error("超过 60 秒阈值之后，last_seen_at 没有被刷新")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // 员工管理
 // ---------------------------------------------------------------------------

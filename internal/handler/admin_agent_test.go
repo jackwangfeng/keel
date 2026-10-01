@@ -172,3 +172,47 @@ func TestAgentListCarriesScopes(t *testing.T) {
 	}
 	t.Fatal("列表里没有刚建的 AI 员工")
 }
+
+// AI 员工密钥的 last_used_at 1 分钟内节流（db/queries/agents.sql 的 TouchAgentKey），
+// 与后台会话 last_seen_at 的节流同一个理由（压测报告 docs/性能压测-2026-10.md §6）。
+// 这条写在这里之前这个节流已经实现了，这是补上的回归测试——避免将来有人改动
+// TouchAgentKey 时把它悄悄退化成每次调用都写（又变回每次工具调用都是一次写事务）。
+func TestAgentKeyLastUsedIsThrottled(t *testing.T) {
+	sh := newAdminShop(t)
+	a := createAgent(t, sh, `{"name":"节流 AI","role":2}`)
+	k := issueAgentKey(t, sh, a.Id, `{"name":"节流密钥"}`)
+
+	if n := adminQueryInt64(t, `SELECT count(*) FROM agent_keys
+	                             WHERE id = $1 AND last_used_at IS NOT NULL`, k.Id); n != 0 {
+		t.Fatal("刚发的密钥 last_used_at 已经不是 NULL 了，这条测试的前提没建起来")
+	}
+
+	if w := agentGet(t, sh.Host, "/api/v1/agent/whoami", k.Secret); w.Code != http.StatusOK {
+		t.Fatalf("第一次 whoami 失败：%d", w.Code)
+	}
+	firstSeen := adminQueryText(t, `SELECT last_used_at::text FROM agent_keys WHERE id = $1`, k.Id)
+	if firstSeen == "" {
+		t.Fatal("调过一次之后 last_used_at 还是 NULL")
+	}
+
+	// 1 分钟内连续调用：last_used_at 必须纹丝不动。
+	for i := 0; i < 3; i++ {
+		if w := agentGet(t, sh.Host, "/api/v1/agent/whoami", k.Secret); w.Code != http.StatusOK {
+			t.Fatalf("第 %d 次连续调用失败：%d", i+2, w.Code)
+		}
+	}
+	if got := adminQueryText(t, `SELECT last_used_at::text FROM agent_keys WHERE id = $1`, k.Id); got != firstSeen {
+		t.Errorf("1 分钟内的连续调用又写了 last_used_at：%s -> %s", firstSeen, got)
+	}
+
+	// 拨到阈值之外（61 秒前），模拟「上一次用是一分钟多以前」。
+	adminExec(t, `UPDATE agent_keys SET last_used_at = now() - interval '61 seconds' WHERE id = $1`, k.Id)
+	stale := adminQueryText(t, `SELECT last_used_at::text FROM agent_keys WHERE id = $1`, k.Id)
+
+	if w := agentGet(t, sh.Host, "/api/v1/agent/whoami", k.Secret); w.Code != http.StatusOK {
+		t.Fatalf("超过阈值之后的调用失败了：%d", w.Code)
+	}
+	if got := adminQueryText(t, `SELECT last_used_at::text FROM agent_keys WHERE id = $1`, k.Id); got == stale {
+		t.Error("超过 1 分钟阈值之后，last_used_at 没有被刷新")
+	}
+}
