@@ -360,6 +360,18 @@ var (
 	ErrActivityRule = errors.New("活动配额的修改违反了已售规则")
 )
 
+// CircuitOpen 回答「库存客户端的熔断器此刻是不是打开着」—— 只读，不消耗半开时的探测名额。
+//
+// 只有拆分形态的 Remote 有熔断器（rpc.WithBreaker）；进程内实现、测试替身没有，恒为否。
+// 用一个可选接口而不是加进 Service：熔断是传输层的事，进程内实现没有它可言，
+// 让每个实现（含测试里的替身）都写一个恒为否的方法只是噪声。
+//
+// 下单据此在提交 SAGA 之前快速失败（service/order.go）。
+func CircuitOpen(s Service) bool {
+	c, ok := s.(interface{ CircuitOpen() bool })
+	return ok && c.CircuitOpen()
+}
+
 // IsUnavailable 回答「是不是没拿到库存服务的答案」（读的 ErrUnavailable 或写的 ErrOutcomeUnknown）。
 // 公网 handler 据此回 503。
 func IsUnavailable(err error) bool {

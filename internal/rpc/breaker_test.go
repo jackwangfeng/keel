@@ -66,6 +66,9 @@ func TestReadJSONTimeoutAndBreaker(t *testing.T) {
 	if got := c.BreakerState(); got != "open" {
 		t.Fatalf("连续 3 次超时应当熔断，实得 %s", got)
 	}
+	if !c.CircuitOpen() {
+		t.Fatal("熔断器打开着，CircuitOpen 却回 false（下单靠它在提交 SAGA 之前快速失败）")
+	}
 
 	// 打开：不发请求、立刻失败，分类是 ErrCircuitOpen 而不是 ErrUnknown。
 	before := hits.Load()
@@ -90,6 +93,10 @@ func TestReadJSONTimeoutAndBreaker(t *testing.T) {
 	time.Sleep(350 * time.Millisecond)
 	if got := c.BreakerState(); got != "half-open" {
 		t.Fatalf("冷却之后应当半开，实得 %s", got)
+	}
+	// 半开时 CircuitOpen 为假（下单照常放行），而且问一句不占探测名额：下面那次读照样能探。
+	if c.CircuitOpen() {
+		t.Fatal("半开时 CircuitOpen 应为 false")
 	}
 	if err := c.ReadJSON(ctx, "/x", struct{}{}, &out); err != nil || !out.OK {
 		t.Fatalf("半开探测应当成功：%v", err)

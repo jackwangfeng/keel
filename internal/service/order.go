@@ -112,6 +112,11 @@ var (
 	// ErrOrderSagaFailed：SAGA 没有成功，而且没有更具体的原因。
 	// 出现它意味着分支把失败原因弄丢了 —— 值得一条 500 和一条日志。
 	ErrOrderSagaFailed = errors.New("下单事务未能完成")
+
+	// ErrInventoryCircuitOpen：拆分形态下库存客户端的熔断器开着（库存服务连续没回答）。
+	// 下单在抢到幂等键之后、落草稿之前就判了，整个事务回滚 —— **确定没有下单**，
+	// 幂等键也没被占住。handler 回 503 inventory-unavailable，客户端稍后原样重试。
+	ErrInventoryCircuitOpen = errors.New("库存服务暂时不可用（熔断中），这次没有下单")
 )
 
 // idempotencyScope 是这条接口在 idempotency_keys 里的作用域（数据模型 §12）。
@@ -413,6 +418,19 @@ func (s *OrderService) Create(ctx context.Context, req CreateRequest, idemKey st
 			if !claimed {
 				replayed, replayErr, err = s.replay(ctx, tx, id.UserID, idemKey, hash)
 				return err
+			}
+			// 库存服务在熔断中（2026-10 破坏性测试：库存服务不在时 POST /orders 要等满 15 秒，
+			// 回 409 处理中，SAGA 在后台对着一个不在的服务一遍遍重试）：不提交 SAGA，当场回 503。
+			//
+			// 判在这里而不是 Create 的开头：排在抢键之后，同一把钥匙的**回放**照常走（那一单早就
+			// 下完了，与库存服务在不在无关）；排在落草稿之前，返回错误会把抢占一起回滚，
+			// 库里什么都没留下，客户端带同一把钥匙重试会是一次全新的尝试。
+			//
+			// 只认「打开」：半开时放行，这一单的 SAGA 就是那次探测之后的第一批真实流量 ——
+			// 半开也拦的话，熔断器只能靠读请求探活，下单永远比读晚恢复一个冷却期。
+			// 单体形态下库存是进程内调用，没有熔断器，恒为否（inventory.CircuitOpen）。
+			if inventory.CircuitOpen(s.inv) {
+				return ErrInventoryCircuitOpen
 			}
 			draft, lines, err = s.placeDraft(ctx, tx, id.UserID, req, quotas)
 			return err

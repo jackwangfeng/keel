@@ -242,6 +242,14 @@ func (c *Client) BreakerState() string {
 	return c.brk.state()
 }
 
+// CircuitOpen 报告熔断器是不是「打开」（冷却期内，一律不放行）。半开、关闭、没装熔断器都为假。
+//
+// 只读：不像 allow 那样占用半开时那一个探测名额。给写的调用方在发起一件昂贵的事之前问一句用
+// （下单：熔断开着就不提交 SAGA，service/order.go）—— 写本身不经过熔断器（breaker.go 文件头）。
+func (c *Client) CircuitOpen() bool {
+	return c.brk != nil && c.brk.state() == "open"
+}
+
 // PostJSON 把 in 编成 JSON POST 到 path（形如 "/internal/v1/stock/deduct"），
 // 2xx 时把响应解到 out（out 为 nil 则丢弃响应体）。
 //

@@ -222,6 +222,16 @@ func writeOrderError(c *gin.Context, err error) {
 		return
 	}
 	switch {
+	case errors.Is(err, service.ErrInventoryCircuitOpen):
+		// 熔断中，下单当场被拒（service/order.go）：与 inventory-unavailable 同一个 type、同一个
+		// 处置（退避后原样重试），但 detail 说的是实话 —— 这一次**确定没有下单**，不是「可能已经生效」。
+		c.Header("Retry-After", "5")
+		detail := "库存服务暂时不可用，请稍后再试。这次没有下单，稍后用同一个 Idempotency-Key 原样重试即可"
+		problem.WriteValue(c, http.StatusServiceUnavailable, api.Problem{
+			Type: problem.TypeInventoryUnavailable, Title: "库存服务暂时不可用",
+			Status: http.StatusServiceUnavailable, Detail: &detail,
+		})
+
 	case errors.Is(err, service.ErrCouponNotApplicable):
 		// 契约：409 coupon-not-applicable，试算与下单同一个 type。detail 带原因
 		// （门槛差多少、范围不含这家店……），客户端换一张券或不用券。

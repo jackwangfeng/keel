@@ -396,6 +396,9 @@ func NewRemote(c *rpc.Client) *Remote { return &Remote{c: c} }
 
 var _ Service = (*Remote)(nil)
 
+// CircuitOpen 见 inventory.CircuitOpen。
+func (r *Remote) CircuitOpen() bool { return r.c.CircuitOpen() }
+
 // read 发一个读请求。结果未知（连不上、超时、5xx）或熔断器打开 → ErrUnavailable，读页面据此降级；
 // 确定失败（4xx：签名不对、入参不合法）不是「对面暂时不在」，是配置或代码的错，原样上浮成 500。
 //
