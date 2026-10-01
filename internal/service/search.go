@@ -206,6 +206,12 @@ const SearchLogTimeout = 200 * time.Millisecond
 // 在 size ≤ 100 的量级上那是几百行，不值得为它调参。
 //
 // 真要定这个数，要的是 §9.1 的离线评测集（Recall@50），而它还不存在。
+//
+// 这个窗口（size × 3，in_stock_only 时再 × 2）也是关键词召回 SQL 里**先排序截断**的那个 N
+// （2026-10 性能压测第六节 ③）：SearchProductsByKeyword 先按 ts_rank_cd 截到 N 件，再给这 N 件
+// 算价格与主图。融合、业务重排、相关度下限、精确标题优先都只作用在召回窗口之内（改之前也一样，
+// 截断原来就在同一条 SQL 的末尾），所以截断提前不改变它们看到的候选；它只是不再给窗口外的
+// 几千件算价格。N 不必为截断再放大：后面几层的「余量」就是这 3 倍。
 const RecallMultiplier = 3
 
 // SearchConfig 是检索的可调项。
@@ -423,6 +429,11 @@ type SearchResult struct {
 	// （POST /search/events）。**检索日志没写进去时为空串**：那时库里没有这一行，
 	// 回一个 id 出去只会换来之后每一次回传的 404（文件头第六节）。
 	TraceID string
+
+	// Keyword 是关键词那一路这次怎么召回的（先 AND 还是补了 OR、截到多少，recallByKeyword）。
+	// 契约的响应体里没有它的位置：search_logs 记它（00210），explain=true 时 handler 放进一个
+	// 诊断用的响应头。关键词那一路没跑成、或不在服务范围时是零值。
+	Keyword KeywordRecall
 }
 
 // SearchService 是混合检索。
@@ -481,8 +492,7 @@ func (s *SearchService) Search(ctx context.Context, req SearchRequest) (SearchRe
 			ErrQueryTooLong, runes, MaxQueryRunes)
 	}
 
-	tsquery := search.TSQueryOr(req.Query)
-	if tsquery == "" {
+	if search.TSQueryOr(req.Query) == "" {
 		return SearchResult{}, fmt.Errorf("%w: %q", ErrEmptyQuery, req.Query)
 	}
 
@@ -536,6 +546,7 @@ func (s *SearchService) Search(ctx context.Context, req SearchRequest) (SearchRe
 		vecHits, kwHits []repository.SearchHit
 		vecErr, kwErr   error
 		model           embedModel
+		kwPlan          KeywordRecall
 	)
 	wg.Add(2)
 	go func() {
@@ -544,9 +555,15 @@ func (s *SearchService) Search(ctx context.Context, req SearchRequest) (SearchRe
 	}()
 	go func() {
 		defer wg.Done()
+		// 「够一页」的线跟着 in_stock_only 放大：缺货的要在召回之后滤掉（applyStock），
+		// 全部命中的够 size 件、滤完却不够一页时，本该由 OR 补上的那些就没机会进来了。
+		enough := size
+		if req.Filters.InStockOnly {
+			enough *= inStockOnlyRecallBoost
+		}
 		kwErr = s.repo.WithTenant(ctx, func(tx repository.Tx) error {
 			var err error
-			kwHits, err = tx.SearchProductsByKeyword(ctx, scope, tsquery, req.Filters.toRepo(), recall)
+			kwHits, kwPlan, err = recallByKeyword(ctx, tx, scope, req.Query, req.Filters.toRepo(), recall, enough)
 			return err
 		})
 	}()
@@ -673,9 +690,104 @@ func (s *SearchService) Search(ctx context.Context, req SearchRequest) (SearchRe
 		Degraded: degraded,
 		Fallback: fallback,
 		Store:    storeContextOf(scope, matchTyp),
+		Keyword:  kwPlan,
 	}
 	res.TraceID = s.recordSearchLog(ctx, req.Query, res, fused, model, start)
 	return res, nil
+}
+
+// 关键词召回的匹配方式（KeywordRecall.Match，search_logs.keyword_match 记的就是这几个串）。
+const (
+	// KeywordMatchSingle：查询只切出一个词，AND 与 OR 是同一个集合，只跑一条。
+	KeywordMatchSingle = "single"
+	// KeywordMatchAnd：多词，全部命中的已经够一页，只用了 AND。
+	KeywordMatchAnd = "and"
+	// KeywordMatchAndOr：多词，全部命中的不够一页，又用 OR 补齐（全部命中的排在前面）。
+	KeywordMatchAndOr = "and+or"
+)
+
+// KeywordRecall 记下这一次关键词那一路是怎么召回的：explain（响应头）与 search_logs 都读它。
+// 关键词那一路没跑成时是零值（Match 为空串）。
+type KeywordRecall struct {
+	// Match 是 KeywordMatch* 之一。
+	Match string
+	// Limit 是召回窗口 N：每条召回 SQL 先按相关度排序、截到这么多件，再补价格与图片。
+	Limit int32
+	// AndHits 是 AND 那条返回的件数（Match = single 时是那唯一一条返回的件数）。
+	AndHits int
+	// Hits 是这一路最终交给融合的件数（≤ Limit）。
+	Hits int
+}
+
+// recallByKeyword 跑关键词那一路：先 AND、不够再 OR（internal/search/query.go 的
+// TSQueryOr 文档写了为什么）。两条（如果都跑）在同一个租户事务里。
+//
+//	· 单词查询（去重后只有一个词）：只跑 OR 那一条，与改之前逐字相同。
+//	· 多词：先跑 AND，返回 ≥ enough 件就只用它 —— 这时结果里不会混进只命中一部分词的商品。
+//	· 不够：再跑 OR（同样截到 limit），把 AND 的结果原样放在前面，OR 里没出现过的按 OR 的
+//	  相关度顺序接在后面，合起来截到 limit。
+//
+// **为什么 AND 的排在 OR 之前，而不是两边按分数混排**：两条的 ts_rank_cd 是对两个不同的
+// tsquery 算的，不在一个尺度上；而「全部词都命中」本身就是比任何「只命中一部分」更强的
+// 相关信号。KeywordScore（explain 里的 scores.keyword）因此是各自那条 tsquery 的 ts_rank_cd。
+//
+// enough 取 size（一页）而不是 limit（召回窗口）：AND 已经够一页时，OR 补进来的只会排在
+// 后面、进不了这一页（纯关键词时），向量路在的时候语义相近的那些由向量路负责捞。
+// 取 limit 的话几乎每条多词查询都要再跑一遍 OR，而 OR 正是长尾词慢的来源。
+func recallByKeyword(ctx context.Context, tx repository.Tx, scope repository.StoreScope,
+	query string, f repository.SearchFilters, limit int32, enough int) ([]repository.SearchHit, KeywordRecall, error) {
+
+	or := search.TSQueryOr(query)
+	and, terms := search.TSQueryAnd(query)
+	plan := KeywordRecall{Limit: limit}
+	if terms <= 1 {
+		hits, err := tx.SearchProductsByKeyword(ctx, scope, or, f, limit)
+		if err != nil {
+			return nil, KeywordRecall{}, err
+		}
+		plan.Match, plan.AndHits, plan.Hits = KeywordMatchSingle, len(hits), len(hits)
+		return hits, plan, nil
+	}
+
+	andHits, err := tx.SearchProductsByKeyword(ctx, scope, and, f, limit)
+	if err != nil {
+		return nil, KeywordRecall{}, err
+	}
+	plan.AndHits = len(andHits)
+	if len(andHits) >= enough {
+		plan.Match, plan.Hits = KeywordMatchAnd, len(andHits)
+		return andHits, plan, nil
+	}
+
+	orHits, err := tx.SearchProductsByKeyword(ctx, scope, or, f, limit)
+	if err != nil {
+		return nil, KeywordRecall{}, err
+	}
+	merged := mergeAndThenOr(andHits, orHits, int(limit))
+	plan.Match, plan.Hits = KeywordMatchAndOr, len(merged)
+	return merged, plan, nil
+}
+
+// mergeAndThenOr：AND 的结果原样在前，OR 里没出现过的按原顺序接在后面，截到 limit。
+func mergeAndThenOr(andHits, orHits []repository.SearchHit, limit int) []repository.SearchHit {
+	out := make([]repository.SearchHit, 0, min(limit, len(andHits)+len(orHits)))
+	seen := make(map[int64]bool, len(andHits))
+	for _, h := range andHits {
+		if len(out) == limit {
+			return out
+		}
+		seen[h.ID] = true
+		out = append(out, h)
+	}
+	for _, h := range orHits {
+		if len(out) == limit {
+			break
+		}
+		if !seen[h.ID] {
+			out = append(out, h)
+		}
+	}
+	return out
 }
 
 // applyFloor 按相关度下限分出可信命中：关键词路捞到的一律可信（字面上就对得上），只被向量路捞到的要
@@ -882,6 +994,10 @@ func (s *SearchService) recordSearchLog(ctx context.Context, query string, res S
 		Strategy:  res.Strategy,
 		Stages:    res.Stages,
 		Fallback:  res.Fallback,
+
+		KeywordMatch: res.Keyword.Match,
+		KeywordLimit: res.Keyword.Limit,
+		KeywordHits:  int32(res.Keyword.Hits),
 	}
 	if model.Name != "" {
 		entry.ModelName = &model.Name

@@ -222,6 +222,9 @@ func (h *SearchHandler) Search(c *gin.Context) {
 		items = append(items, hit)
 	}
 
+	if sr.Explain && res.Keyword.Match != "" {
+		c.Header(SearchKeywordExplainHeader, keywordExplainValue(res.Keyword))
+	}
 	c.JSON(http.StatusOK, searchResponse{
 		Items: items,
 		// 契约：「本次召回并排序后的结果总数（上限即 size）」。
@@ -252,6 +255,19 @@ type searchScores = struct {
 	Rerank   *float32 `json:"rerank,omitempty"`
 	Rrf      *float32 `json:"rrf,omitempty"`
 	Vector   *float32 `json:"vector,omitempty"`
+}
+
+// SearchKeywordExplainHeader 是 explain=true 时回的诊断头：关键词那一路这次怎么召回的
+// （service.KeywordRecall）。值形如 `match=and+or; limit=60; and_hits=3; hits=60`。
+//
+// 为什么是响应头而不是响应体里的字段：契约的 SearchResponse 没有它的位置，加字段是一次
+// 改契约的动作（与 SearchResult.Degraded 同一个理由）。它只在 explain=true 时出现、
+// 只给人读（排查「这条查询为什么搜出这些」），客户端不该依赖它；search_logs 的
+// keyword_match / keyword_limit / keyword_hits（00210）记的是同一份，那才是给统计用的。
+const SearchKeywordExplainHeader = "X-Keel-Search-Keyword"
+
+func keywordExplainValue(k service.KeywordRecall) string {
+	return fmt.Sprintf("match=%s; limit=%d; and_hits=%d; hits=%d", k.Match, k.Limit, k.AndHits, k.Hits)
 }
 
 // explainScores 填 explain=true 时的各阶段得分：**这一次真正跑过的阶段才有键**。

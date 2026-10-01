@@ -146,6 +146,31 @@ func TestTSQueryOrIsEmptyWhenNothingIsSearchable(t *testing.T) {
 		if got := search.TSQueryOr(s); got != "" {
 			t.Errorf("TSQueryOr(%q) = %q，期望空串", s, got)
 		}
+		if got, n := search.TSQueryAnd(s); got != "" || n != 0 {
+			t.Errorf("TSQueryAnd(%q) = (%q, %d)，期望 (\"\", 0)", s, got, n)
+		}
+	}
+}
+
+// AND 版：去重后用 & 拼，词数是去重后的。单个词（含「哈哈哈」这种切出重复二元组的）
+// 词数为 1，调用方据此只跑 OR 那一条。元字符一个都不放进来（与 OR 版同一条性质）。
+func TestTSQueryAnd(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+		n    int
+	}{
+		{"红色连衣裙", "红色 & 色连 & 连衣 & 衣裙", 4},
+		{"iPhone 15", "iphone & 15", 2},
+		{"衣裙", "衣裙", 1},
+		{"哈哈哈", "哈哈", 1},
+		{"a&b|c!(d):*'e<->f", "a & b & c & d & e & f", 6},
+	}
+	for _, c := range cases {
+		got, n := search.TSQueryAnd(c.in)
+		if got != c.want || n != c.n {
+			t.Errorf("TSQueryAnd(%q) = (%q, %d)，期望 (%q, %d)", c.in, got, n, c.want, c.n)
+		}
 	}
 }
 
