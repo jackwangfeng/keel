@@ -30,10 +30,12 @@ func (q *Queries) GetSearchLogRankedIDs(ctx context.Context, traceID string) ([]
 const insertSearchLog = `-- name: InsertSearchLog :exec
 
 INSERT INTO search_logs (query, recall_ids, ranked_ids, latency_ms, trace_id,
-                         strategy, stages, model_name, model_version, fallback)
+                         strategy, stages, model_name, model_version, fallback,
+                         keyword_match, keyword_limit, keyword_hits)
 VALUES ($1, $2::bigint[], $3::bigint[], $4,
         $5, $6, $7::text[],
-        $8, $9, $10)
+        $8, $9, $10,
+        $11, $12::int, $13::int)
 `
 
 type InsertSearchLogParams struct {
@@ -47,6 +49,9 @@ type InsertSearchLogParams struct {
 	ModelName    *string
 	ModelVersion *string
 	Fallback     bool
+	KeywordMatch *string
+	KeywordLimit *int32
+	KeywordHits  *int32
 }
 
 // 检索日志（数据模型 §8，迁移 00027）。
@@ -61,6 +66,8 @@ type InsertSearchLogParams struct {
 // user_id / session_id / parsed_intent 与三个行为列不在这里写：搜索是公开接口，
 // 买家身份不在这条路径上；查询理解还没有；行为列由 POST /search/events 回填
 // （下面那几条）。它们留着列的默认值 NULL —— 那是实话，不是占位。
+//
+// keyword_match / keyword_limit / keyword_hits（00210）：关键词那一路没跑成时三个都是 NULL。
 func (q *Queries) InsertSearchLog(ctx context.Context, arg InsertSearchLogParams) error {
 	_, err := q.db.Exec(ctx, insertSearchLog,
 		arg.Query,
@@ -73,6 +80,9 @@ func (q *Queries) InsertSearchLog(ctx context.Context, arg InsertSearchLogParams
 		arg.ModelName,
 		arg.ModelVersion,
 		arg.Fallback,
+		arg.KeywordMatch,
+		arg.KeywordLimit,
+		arg.KeywordHits,
 	)
 	return err
 }

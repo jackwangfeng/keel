@@ -994,6 +994,10 @@ func (s *SearchService) recordSearchLog(ctx context.Context, query string, res S
 		Strategy:  res.Strategy,
 		Stages:    res.Stages,
 		Fallback:  res.Fallback,
+
+		KeywordMatch: res.Keyword.Match,
+		KeywordLimit: res.Keyword.Limit,
+		KeywordHits:  int32(res.Keyword.Hits),
 	}
 	if model.Name != "" {
 		entry.ModelName = &model.Name

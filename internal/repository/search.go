@@ -158,6 +158,12 @@ type SearchLog struct {
 	// Fallback：这一次没有可信命中，RankedIDs 是低于相关度下限的「猜你想要」（00140）。
 	// 无结果的口径是「RankedIDs 为空或 Fallback」。
 	Fallback bool
+
+	// KeywordMatch / KeywordLimit / KeywordHits：关键词那一路的走法（single / and / and+or）、
+	// 召回窗口与交给融合的件数（00210）。那一路没跑成时 KeywordMatch 为空串，三列都写 NULL。
+	KeywordMatch string
+	KeywordLimit int32
+	KeywordHits  int32
 }
 
 func (t tenantTx) InsertSearchLog(ctx context.Context, l SearchLog) error {
@@ -174,12 +180,17 @@ func (t tenantTx) InsertSearchLog(ctx context.Context, l SearchLog) error {
 		stages = []string{}
 	}
 	lat := l.LatencyMs
-	return t.q.InsertSearchLog(ctx, db.InsertSearchLogParams{
+	p := db.InsertSearchLogParams{
 		Query: l.Query, RecallIds: recall, RankedIds: ranked,
 		LatencyMs: &lat, TraceID: l.TraceID, Strategy: l.Strategy,
 		Stages: stages, ModelName: l.ModelName, ModelVersion: l.ModelVersion,
 		Fallback: l.Fallback,
-	})
+	}
+	if l.KeywordMatch != "" {
+		m, lim, hits := l.KeywordMatch, l.KeywordLimit, l.KeywordHits
+		p.KeywordMatch, p.KeywordLimit, p.KeywordHits = &m, &lim, &hits
+	}
+	return t.q.InsertSearchLog(ctx, p)
 }
 
 func (t tenantTx) SearchProductsByVector(ctx context.Context, sc StoreScope,

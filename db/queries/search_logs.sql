@@ -12,11 +12,15 @@
 -- user_id / session_id / parsed_intent 与三个行为列不在这里写：搜索是公开接口，
 -- 买家身份不在这条路径上；查询理解还没有；行为列由 POST /search/events 回填
 -- （下面那几条）。它们留着列的默认值 NULL —— 那是实话，不是占位。
+--
+-- keyword_match / keyword_limit / keyword_hits（00210）：关键词那一路没跑成时三个都是 NULL。
 INSERT INTO search_logs (query, recall_ids, ranked_ids, latency_ms, trace_id,
-                         strategy, stages, model_name, model_version, fallback)
+                         strategy, stages, model_name, model_version, fallback,
+                         keyword_match, keyword_limit, keyword_hits)
 VALUES (@query, @recall_ids::bigint[], @ranked_ids::bigint[], @latency_ms,
         @trace_id, @strategy, @stages::text[],
-        sqlc.narg(model_name), sqlc.narg(model_version), @fallback);
+        sqlc.narg(model_name), sqlc.narg(model_version), @fallback,
+        sqlc.narg(keyword_match), sqlc.narg(keyword_limit)::int, sqlc.narg(keyword_hits)::int);
 
 -- 下面四条是 POST /search/events 的落点（数据模型 §8 那段 trace_id 的注）。
 --
