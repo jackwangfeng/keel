@@ -155,6 +155,15 @@ func (s *ProductService) List(ctx context.Context, storeID, categoryID *int64, i
 		}
 		out.Store = storeContextOf(sc, mt)
 
+		// 类目先解析成子树的 id 数组（同一个事务里一条小查询），列表与计数拿数组去取
+		// （db/queries/products.sql「类目筛选」）。类目不存在或已软删时是空数组：total 0、空列表。
+		var f repository.ListingFilter
+		if categoryID != nil {
+			if f.Categories, err = q.CategorySubtreeIDs(ctx, *categoryID); err != nil {
+				return err
+			}
+		}
+
 		// 计数与取页在同一个事务里，所以 total 和 items 看到的是同一个快照。
 		// 分开两次访问的话，两者之间的一次上下架会让「total=21 但第二页是空的」
 		// 这种自相矛盾的响应偶发出现。
@@ -162,13 +171,16 @@ func (s *ProductService) List(ctx context.Context, storeID, categoryID *int64, i
 		if inStockOnly {
 			count, list = q.CountProductsInStock, q.ListProductsInStock
 		}
-		total, err := count(ctx, sc, categoryID)
+		total, err := count(ctx, sc, f)
 		if err != nil {
 			return err
 		}
 		out.Total = total
 
-		rows, err := list(ctx, sc, categoryID, int64(pageSize), offsetOf(page, pageSize))
+		// 按类目筛时 f.Rows / StoreRows 留 0：repository 一律按类目逐个取（perCategoryCheaper 的「件数不知道」）。
+		// 下一步有了总数缓存再填。
+
+		rows, err := list(ctx, sc, f, int64(pageSize), offsetOf(page, pageSize))
 		if err != nil {
 			return err
 		}

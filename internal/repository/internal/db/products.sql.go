@@ -9,6 +9,56 @@ import (
 	"context"
 )
 
+const categorySubtreeIDs = `-- name: CategorySubtreeIDs :many
+SELECT c.id
+  FROM categories c
+ WHERE c.deleted_at IS NULL
+   AND c.path ~>=~ (SELECT cc.path FROM categories cc
+                     WHERE cc.id = $1::bigint
+                       AND cc.deleted_at IS NULL)
+   AND c.path ~<~ (SELECT cc.path || chr(1114111) FROM categories cc
+                    WHERE cc.id = $1::bigint
+                      AND cc.deleted_at IS NULL)
+ ORDER BY c.id
+`
+
+// 一个类目连同它全部子孙的 id（未软删的），按 id 升序。买家商品列表按类目筛之前先取这一次，
+// 列表与计数拿数组去 = ANY / unnest（ListProductsByStock 的「类目筛选」一节）。
+//
+// 子树按 path 前缀取 —— path 形如 /1/23/456/，含每一级祖先的 id，所以 /1/ 的前缀恰好是它的整棵子树
+// （格式见 admin_categories.sql 的 CreateCategoryRow）。用 id 而不是名字，是为了
+// 让前缀唯一：两个同名类目的 path 如果都是 /女装/，这里会把两棵子树并在一起。
+//
+// 前缀写成区间 path ~>=~ 前缀 AND path ~<~ 前缀 || chr(1114111)，而不是 LIKE 前缀 || '%'
+// （2026-09-30 架构审查）。categories 挂着 RLS，而 LIKE（textlike）不是 leakproof，
+// 规划器不许它先于租户谓词求值，idx_categories_path（text_pattern_ops）只能用到 merchant_id
+// 那一段；~>=~ / ~<~（text_pattern_ge / text_pattern_lt）是 leakproof 的，能进 Index Cond。
+// 两者等价：path 只含数字与斜杠，U+10FFFF 不会出现在里面，所以「以前缀开头」与
+// 「按字节序落在 [前缀, 前缀 || U+10FFFF) 里」是同一批行。starts_with 也是 leakproof，
+// 但它只对常量前缀生成索引条件，这里的前缀是子查询的结果。
+// internal/repository 的 rls_index_plans_test.go 用应用角色 EXPLAIN 钉住。
+//
+// 类目不存在或已软删 → 两条标量子查询为 NULL → 区间比较恒为假 → 空数组（列表因此为空，见上）。
+func (q *Queries) CategorySubtreeIDs(ctx context.Context, categoryID int64) ([]int64, error) {
+	rows, err := q.db.Query(ctx, categorySubtreeIDs, categoryID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const countProducts = `-- name: CountProducts :one
 SELECT count(*)
   FROM products p
@@ -20,22 +70,11 @@ SELECT count(*)
    AND NOT EXISTS (SELECT 1 FROM store_product_overrides so
                     WHERE so.store_id = $2
                       AND so.product_id = p.id AND so.status = 0)
-   AND ($3::bigint IS NULL
-        OR p.category_id IN (
-             SELECT c.id FROM categories c
-              WHERE c.deleted_at IS NULL
-                AND c.path ~>=~ (SELECT cc.path FROM categories cc
-                                  WHERE cc.id = $3::bigint
-                                    AND cc.deleted_at IS NULL)
-                AND c.path ~<~ (SELECT cc.path || chr(1114111) FROM categories cc
-                                 WHERE cc.id = $3::bigint
-                                   AND cc.deleted_at IS NULL)))
 `
 
 type CountProductsParams struct {
-	RegionID   int64
-	StoreID    int64
-	CategoryID *int64
+	RegionID int64
+	StoreID  int64
 }
 
 // 同样刻意不带 WHERE merchant_id —— 理由与 ListProducts 一模一样。
@@ -44,15 +83,49 @@ type CountProductsParams struct {
 // 没有这条查询，total 就只能靠 len(items) 现编，那在「还有下一页」时是错的，
 // 而且错得很安静：客户端据此算出的总页数会少，最后几页谁也翻不到。
 //
-// 条件必须与 ListProducts 逐字一致：两边只要有一处不同，total 数的就不是
-// 列表实际会分出来的那批行。
+// 它是 O(全店) 的一次计数（10 万商品 41 ms，取一页只要 0.75 ms），所以 service 不每页都数：
+// 按（商户, 门店, 类目, 只看有货）缓存 30 秒（service/product_total_cache.go，理由写在那里）。
+//
+// 条件必须与 ListProductsByStock 逐字一致：两边只要有一处不同，total 数的就不是
+// 列表实际会分出来的那批行。按类目筛的是 CountProductsInCategories。
 //
 // 它**不需要**那个 LATERAL：价格区间是 SELECT 出来的东西，不是筛选条件，
 // 而这条查询一列都不返回。加上去只会让每一行多做一次聚合，且改不了 count。
 // 两条 NOT EXISTS 则**必须**在：它们是筛选条件，漏掉它们 total 会把这家店
 // 下架掉的商品也数进去，于是最后一页永远翻不满，而客户端会一直重试。
 func (q *Queries) CountProducts(ctx context.Context, arg CountProductsParams) (int64, error) {
-	row := q.db.QueryRow(ctx, countProducts, arg.RegionID, arg.StoreID, arg.CategoryID)
+	row := q.db.QueryRow(ctx, countProducts, arg.RegionID, arg.StoreID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countProductsInCategories = `-- name: CountProductsInCategories :one
+SELECT count(*)
+  FROM unnest($1::bigint[]) AS cat(id)
+  JOIN products p ON p.category_id = cat.id
+ WHERE p.deleted_at IS NULL
+   AND p.status = 1
+   AND NOT EXISTS (SELECT 1 FROM region_product_overrides ro
+                    WHERE ro.region_id = $2
+                      AND ro.product_id = p.id AND ro.status = 0)
+   AND NOT EXISTS (SELECT 1 FROM store_product_overrides so
+                    WHERE so.store_id = $3
+                      AND so.product_id = p.id AND so.status = 0)
+`
+
+type CountProductsInCategoriesParams struct {
+	CategoryIds []int64
+	RegionID    int64
+	StoreID     int64
+}
+
+// CountProducts 的按类目版：类目数组来自 CategorySubtreeIDs。写成 unnest × JOIN 而不是
+// category_id = ANY(...)：每个类目一次 idx_products_listing_category（00200）上的范围扫描，
+// 通用计划里也不会退回「沿上架时间索引扫全店再逐行判类目」—— 那正是小类目原来的样子
+// （只有 5 件的类目数一次 18 ms，Rows Removed by Filter: 100018）。
+func (q *Queries) CountProductsInCategories(ctx context.Context, arg CountProductsInCategoriesParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countProductsInCategories, arg.CategoryIds, arg.RegionID, arg.StoreID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -60,10 +133,11 @@ func (q *Queries) CountProducts(ctx context.Context, arg CountProductsParams) (i
 
 const countProductsInStock = `-- name: CountProductsInStock :one
 SELECT count(*)
-  FROM products p
-  LEFT JOIN product_store_stock pss
-         ON pss.store_id = $1 AND pss.product_id = p.id
- WHERE p.deleted_at IS NULL
+  FROM product_store_stock pss
+  JOIN products p ON p.id = pss.product_id
+ WHERE pss.store_id = $1
+   AND pss.in_stock
+   AND p.deleted_at IS NULL
    AND p.status = 1
    AND NOT EXISTS (SELECT 1 FROM region_product_overrides ro
                     WHERE ro.region_id = $2
@@ -71,35 +145,59 @@ SELECT count(*)
    AND NOT EXISTS (SELECT 1 FROM store_product_overrides so
                     WHERE so.store_id = $1
                       AND so.product_id = p.id AND so.status = 0)
-   AND ($3::bigint IS NULL
-        OR p.category_id IN (
-             SELECT c.id FROM categories c
-              WHERE c.deleted_at IS NULL
-                AND c.path ~>=~ (SELECT cc.path FROM categories cc
-                                  WHERE cc.id = $3::bigint
-                                    AND cc.deleted_at IS NULL)
-                AND c.path ~<~ (SELECT cc.path || chr(1114111) FROM categories cc
-                                 WHERE cc.id = $3::bigint
-                                   AND cc.deleted_at IS NULL)))
-   AND COALESCE(pss.in_stock, FALSE)
 `
 
 type CountProductsInStockParams struct {
-	StoreID    int64
-	RegionID   int64
-	CategoryID *int64
+	StoreID  int64
+	RegionID int64
 }
 
 // 有货段有多长：ListProductsByStock(in_stock = true) 在同一组筛选下一共会分出多少行。
 // 两处用：「整页都落在无货段」时由 repository 调（见 ListProductsByStock 的说明），用来算
-// 无货段的起点 = offset - 这个数；GET /products?in_stock_only=true 的 total。
+// 无货段的起点 = offset - 这个数（这一处要精确，不走缓存）；GET /products?in_stock_only=true 的 total
+// （走 service 的缓存）。
 //
-// 谓词与 CountProducts 逐字一致，外加有货判据；判据与 ListProductsByStock 相同，只是
-// 有货标记写成 LEFT JOIN 而不是标量子查询：product_store_stock 的主键是 (store_id, product_id)，
-// 一件商品至多一行，两种写法取值相同；JOIN 的写法让规划器能对全店做一次哈希连接，
-// 而不是四万次点查（实测每店 4 万商品：标量子查询 212 ms、LEFT JOIN 41 ms）。
+// 谓词与 CountProducts 逐字一致，外加有货判据。判据与 ListProductsByStock 相同（缺行按无货），
+// 这里写成从 product_store_stock 出发的内连接 + pss.in_stock：只数 in_stock 为真的那一行，
+// 缺行与 false 都不进来，与 COALESCE(in_stock, FALSE) 取值相同；主键 (store_id, product_id)
+// 保证一件商品至多一行，不会数重。
+//
+// 之前写成 products LEFT JOIN product_store_stock … AND COALESCE(pss.in_stock, FALSE)：COALESCE
+// 不是严格函数，规划器不能把外连接化简成内连接，只好先取全店在架商品、再按主键位图扫描去
+// product_store_stock 回表取 in_stock（10 万商品 196 ms）。现在「这家店有货的商品」是
+// idx_product_store_stock_in_stock（00200）上的一次仅索引扫描，再去对 products。
 func (q *Queries) CountProductsInStock(ctx context.Context, arg CountProductsInStockParams) (int64, error) {
-	row := q.db.QueryRow(ctx, countProductsInStock, arg.StoreID, arg.RegionID, arg.CategoryID)
+	row := q.db.QueryRow(ctx, countProductsInStock, arg.StoreID, arg.RegionID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countProductsInStockInCategories = `-- name: CountProductsInStockInCategories :one
+SELECT count(*)
+  FROM unnest($1::bigint[]) AS cat(id)
+  JOIN products p ON p.category_id = cat.id
+  JOIN product_store_stock pss
+    ON pss.store_id = $2 AND pss.product_id = p.id AND pss.in_stock
+ WHERE p.deleted_at IS NULL
+   AND p.status = 1
+   AND NOT EXISTS (SELECT 1 FROM region_product_overrides ro
+                    WHERE ro.region_id = $3
+                      AND ro.product_id = p.id AND ro.status = 0)
+   AND NOT EXISTS (SELECT 1 FROM store_product_overrides so
+                    WHERE so.store_id = $2
+                      AND so.product_id = p.id AND so.status = 0)
+`
+
+type CountProductsInStockInCategoriesParams struct {
+	CategoryIds []int64
+	StoreID     int64
+	RegionID    int64
+}
+
+// CountProductsInStock 的按类目版，写法的理由见 CountProductsInCategories 与 CountProductsInStock。
+func (q *Queries) CountProductsInStockInCategories(ctx context.Context, arg CountProductsInStockInCategoriesParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countProductsInStockInCategories, arg.CategoryIds, arg.StoreID, arg.RegionID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -256,56 +354,47 @@ func (q *Queries) ListProductSKUs(ctx context.Context, arg ListProductSKUsParams
 }
 
 const listProductsByStock = `-- name: ListProductsByStock :many
-SELECT p.id, p.title, p.subtitle,
+SELECT pg.id, pg.title, pg.subtitle,
        COALESCE(agg.min_price, 0)::bigint AS min_price_cents,
        COALESCE(agg.max_price, 0)::bigint AS max_price_cents,
-       p.sales_count, p.status,
+       pg.sales_count, pg.status,
        COALESCE(img.upload_id, 0)::bigint AS main_image_upload_id
-  FROM products p
+  FROM (SELECT p.id, p.title, p.subtitle, p.sales_count, p.status, p.published_at
+          FROM products p
+         WHERE p.deleted_at IS NULL
+           AND p.status = 1
+           AND NOT EXISTS (SELECT 1 FROM region_product_overrides ro
+                            WHERE ro.region_id = $1
+                              AND ro.product_id = p.id AND ro.status = 0)
+           AND NOT EXISTS (SELECT 1 FROM store_product_overrides so
+                            WHERE so.store_id = $2
+                              AND so.product_id = p.id AND so.status = 0)
+           AND COALESCE((SELECT pss.in_stock FROM product_store_stock pss
+                          WHERE pss.store_id = $2 AND pss.product_id = p.id),
+                        -- 缺行按无货（文件头「缺行为什么按无货」）。一个 SKU 都没有的商品永远不会有那一行，
+                        -- 也落在这里（2026-09-28 演示站：没有 SKU 的商品曾经顶在列表首位、显示 ¥0）。
+                        FALSE)
+               = $3::boolean
+         ORDER BY p.published_at DESC NULLS LAST, p.id DESC
+         LIMIT $5 OFFSET $4) pg
   LEFT JOIN LATERAL (
         SELECT min(v.price_cents) AS min_price, max(v.price_cents) AS max_price
           FROM sku_prices_by_store v
-         WHERE v.store_id = $1 AND v.product_id = p.id
+         WHERE v.store_id = $2 AND v.product_id = pg.id
        ) agg ON TRUE
   LEFT JOIN LATERAL (
         SELECT pi.upload_id
           FROM product_images pi
-         WHERE pi.product_id = p.id
+         WHERE pi.product_id = pg.id
          ORDER BY pi.sort_order, pi.id
          LIMIT 1
        ) img ON TRUE
- WHERE p.deleted_at IS NULL
-   AND p.status = 1
-   AND NOT EXISTS (SELECT 1 FROM region_product_overrides ro
-                    WHERE ro.region_id = $2
-                      AND ro.product_id = p.id AND ro.status = 0)
-   AND NOT EXISTS (SELECT 1 FROM store_product_overrides so
-                    WHERE so.store_id = $1
-                      AND so.product_id = p.id AND so.status = 0)
-   AND ($3::bigint IS NULL
-        OR p.category_id IN (
-             SELECT c.id FROM categories c
-              WHERE c.deleted_at IS NULL
-                AND c.path ~>=~ (SELECT cc.path FROM categories cc
-                                  WHERE cc.id = $3::bigint
-                                    AND cc.deleted_at IS NULL)
-                AND c.path ~<~ (SELECT cc.path || chr(1114111) FROM categories cc
-                                 WHERE cc.id = $3::bigint
-                                   AND cc.deleted_at IS NULL)))
-   AND COALESCE((SELECT pss.in_stock FROM product_store_stock pss
-                  WHERE pss.store_id = $1 AND pss.product_id = p.id),
-                -- 缺行按无货（文件头「缺行为什么按无货」）。一个 SKU 都没有的商品永远不会有那一行，
-                -- 也落在这里（2026-09-28 演示站：没有 SKU 的商品曾经顶在列表首位、显示 ¥0）。
-                FALSE)
-       = $4::boolean
- ORDER BY p.published_at DESC NULLS LAST, p.id DESC
- LIMIT $6 OFFSET $5
+ ORDER BY pg.published_at DESC NULLS LAST, pg.id DESC
 `
 
 type ListProductsByStockParams struct {
-	StoreID    int64
 	RegionID   int64
-	CategoryID *int64
+	StoreID    int64
 	InStock    bool
 	PageOffset int32
 	PageLimit  int32
@@ -381,40 +470,54 @@ type ListProductsByStockRow struct {
 // 两条各是一次按主键的点查，每个候选商品两次。反过来说，包含表在这里更贵：
 // semi-join 的候选集是「这家店的上架清单」，那才是十万行的那张表。
 //
-// 为什么 LATERAL 不会把这条查询变成一次全表聚合：ORDER BY 只引用 p 的列，
-// 所以规划器能先按 published_at 取出这一页的 LIMIT 行，再对这几行做嵌套循环 ——
-// 每行多一次 skus 上的索引查找，页大小是 20。本轮实测 EXPLAIN 见下：
+// ### 先定页、再算价格与主图（2026-10-01，性能压测六 ⑦）
 //
-//	Limit  (actual rows=3)
-//	  ->  Nested Loop Left Join  (actual rows=3)
-//	        ->  Sort (products, 3 rows)
-//	        ->  Aggregate (skus, 每行一次)
+// 价格区间与主图两个 LATERAL 挂在**已经定好的那一页**上：FROM 里先是一个带 ORDER BY + LIMIT/OFFSET 的
+// 子查询 pg（只用排序列与过滤列），外层再对 pg 的那几十行各做一次价格聚合、一次主图查找。
+// 带 LIMIT 的子查询不会被上提，所以 OFFSET 跳过的行一行都不算价格。
 //
-// 类目筛选（category_id，可空）**含子孙**：点「服装」要看得到「连衣裙」里的
-// 商品，不然买家点进一个有子类目的类目只会看到空页。子树按 path 前缀取 ——
-// path 形如 /1/23/456/，含每一级祖先的 id，所以 /1/ 的前缀恰好是它的整棵子树
-// （格式见 admin_categories.sql 的 CreateCategoryRow）。用 id 而不是名字，是为了
-// 让前缀唯一：两个同名类目的 path 如果都是 /女装/，这里会把两棵子树并在一起。
+// 之前两个 LATERAL 与 products 在同一层，规划器把它们放在 Limit 下面：OFFSET 980 时价格聚合
+// loops=1000、主图 loops=1000，21.5 ms；第一页 0.75 ms。现在深分页只多出「沿索引数过 980 行」
+// 的那一点（每行仍要做两条 NOT EXISTS 与有货标记的点查，那是筛选条件，躲不掉）。
 //
-// 前缀写成区间 path ~>=~ 前缀 AND path ~<~ 前缀 || chr(1114111)，而不是 LIKE 前缀 || '%'
-// （2026-09-30 架构审查）。categories 挂着 RLS，而 LIKE（textlike）不是 leakproof，
-// 规划器不许它先于租户谓词求值，idx_categories_path（text_pattern_ops）只能用到 merchant_id
-// 那一段；~>=~ / ~<~（text_pattern_ge / text_pattern_lt）是 leakproof 的，能进 Index Cond。
-// 两者等价：path 只含数字与斜杠，U+10FFFF 不会出现在里面，所以「以前缀开头」与
-// 「按字节序落在 [前缀, 前缀 || U+10FFFF) 里」是同一批行。starts_with 也是 leakproof，
-// 但它只对常量前缀生成索引条件，这里的前缀是子查询的结果。
-// 类目表小，这一处今天不是瓶颈；改它是为了让那条索引名副其实（internal/repository 的
-// rls_index_plans_test.go 用应用角色 EXPLAIN 钉住）。
+// 外层再写一遍 ORDER BY：嵌套循环事实上会保持 pg 的次序，但那是计划的副作用，不是 SQL 的承诺；
+// 对 20 行排序的代价可以忽略。
+//
+// ### 类目筛选：先解析成 id 数组，再按类目逐个取（2026-10-01，性能压测六 ②）
+//
+// 类目筛选（可空）**含子孙**：点「服装」要看得到「连衣裙」里的商品，不然买家点进一个有子类目的
+// 类目只会看到空页。子树由 CategorySubtreeIDs 按 path 前缀取（见那条的说明），service 在同一个事务里
+// 先取出 id 数组，再按有没有类目筛选选这里的哪一条：
+//
+//	· ListProductsByStock —— 不筛类目，沿 idx_products_listing_published 按序取。
+//	· ListProductsByStockInCategories —— 对数组里每个类目各沿 idx_products_listing_category（00200）
+//	  按序取前 offset+limit 行，合并后再排一次取这一页。代价是 O(类目数 × (offset+limit))，与全店多大无关。
+//	· ListProductsByStockInWideCategories —— 类目多、页又深、这批类目里商品也多的时候（repository 按
+//	  service 给的件数判断，见 product.go 的 narrowBudget），上面那条的代价反而大：此时这批类目占全店的
+//	  比例不小，沿 idx_products_listing_published 按序扫、逐行判类目，几倍于页大小就凑得满。
+//
+// 之前三条共用一句 category_id IN (按 path 区间取子树的子查询)，规划器只能猜子树里有多少商品：
+// 只有 4 件的类目估成 2.5 万件，于是沿上架时间索引把全店 10 万行逐行过滤一遍
+// （Rows Removed by Filter: 100019，有货段 34 ms、无货段再 38 ms）。数组在 SQL 里是一个参数，
+// 规划器不必再猜：per-category 那条写成 unnest(数组) × LATERAL，每个类目一次有序的索引范围扫描，
+// 通用计划里也只有这一种走法（rls_index_plans_test.go 以强制通用计划钉住）。
+//
+// Wide 那条的类目谓词写成 category_id + 0 = ANY(...)：+0 让它进不了 idx_products_listing_category，
+// 规划器只剩「沿上架时间索引按序扫 + Filter」这一条路 —— 选它的前提（这批类目里商品多）是
+// repository 已经确认过的，不必再让规划器拿一个通用计划里的默认选择率去猜。
 //
 // 两条边界是刻意的：
 //
-//	· 类目不存在或已软删 → 内层子查询为 NULL → 区间比较恒为假 → **空列表**。
+//	· 类目不存在或已软删 → 子树是空数组 → **空列表**，total 0（repository 不发 SQL）。
 //	  不是 404（契约在这条接口上没有），也**不是**回退成全部商品 —— 后者会让
 //	  一个过期的类目链接在买家面前显示成「这个类目里什么都有」。
 //	· 类目的 status（启停）**不参与**这里的筛选。启停管的是导航（GET /categories
 //	  不返回停用的那一支），商品能不能被看到由 products.status 与两层排除决定。
 //	  一件在架商品放在停用类目下，它在不筛选的列表里本来就看得见，
 //	  在祖先类目的筛选里也看得见，两边一致。
+//
+// 三条的筛选条件（上架、两层排除、有货判据）逐字一致，只差类目那一句；改一条要三条一起改，
+// 再连同下面三条计数（CountProducts* 同样按有无类目分开）。
 //
 // 主图（main_image_upload_id，可空）是 product_images 里 sort_order 最小的那一张
 // ——「0 即主图」，没有 is_primary（00018 与契约 ProductImage.sort_order）。
@@ -426,14 +529,12 @@ type ListProductsByStockRow struct {
 // 标量子查询三种写法，都推成非空或推错类型）。0 不会与真实 id 撞：uploads.id 是
 // IDENTITY，从 1 起。翻译只有 repository 里一处（mainImageOf），不外泄到 service。
 //
-// 它和价格那个 LATERAL 一样只在这一页的 LIMIT 行上各跑一次：ORDER BY 不引用它，
 // 每行一次 idx_product_images_product (merchant_id, product_id, sort_order) 上的
 // 索引查找 —— merchant_id 那一段由 RLS 谓词补上，这里照例一个字都不写。
 func (q *Queries) ListProductsByStock(ctx context.Context, arg ListProductsByStockParams) ([]ListProductsByStockRow, error) {
 	rows, err := q.db.Query(ctx, listProductsByStock,
-		arg.StoreID,
 		arg.RegionID,
-		arg.CategoryID,
+		arg.StoreID,
 		arg.InStock,
 		arg.PageOffset,
 		arg.PageLimit,
@@ -445,6 +546,208 @@ func (q *Queries) ListProductsByStock(ctx context.Context, arg ListProductsBySto
 	var items []ListProductsByStockRow
 	for rows.Next() {
 		var i ListProductsByStockRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Title,
+			&i.Subtitle,
+			&i.MinPriceCents,
+			&i.MaxPriceCents,
+			&i.SalesCount,
+			&i.Status,
+			&i.MainImageUploadID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listProductsByStockInCategories = `-- name: ListProductsByStockInCategories :many
+SELECT pg.id, pg.title, pg.subtitle,
+       COALESCE(agg.min_price, 0)::bigint AS min_price_cents,
+       COALESCE(agg.max_price, 0)::bigint AS max_price_cents,
+       pg.sales_count, pg.status,
+       COALESCE(img.upload_id, 0)::bigint AS main_image_upload_id
+  FROM (SELECT c.id, c.title, c.subtitle, c.sales_count, c.status, c.published_at
+          FROM unnest($1::bigint[]) AS cat(id)
+          CROSS JOIN LATERAL (
+                SELECT p.id, p.title, p.subtitle, p.sales_count, p.status, p.published_at
+                  FROM products p
+                 WHERE p.category_id = cat.id
+                   AND p.deleted_at IS NULL
+                   AND p.status = 1
+                   AND NOT EXISTS (SELECT 1 FROM region_product_overrides ro
+                                    WHERE ro.region_id = $2
+                                      AND ro.product_id = p.id AND ro.status = 0)
+                   AND NOT EXISTS (SELECT 1 FROM store_product_overrides so
+                                    WHERE so.store_id = $3
+                                      AND so.product_id = p.id AND so.status = 0)
+                   AND COALESCE((SELECT pss.in_stock FROM product_store_stock pss
+                                  WHERE pss.store_id = $3 AND pss.product_id = p.id),
+                                FALSE) -- 缺行按无货（文件头）
+                       = $4::boolean
+                 ORDER BY p.published_at DESC NULLS LAST, p.id DESC
+                 LIMIT $5::int + $6::int
+               ) c
+         ORDER BY c.published_at DESC NULLS LAST, c.id DESC
+         LIMIT $6 OFFSET $5) pg
+  LEFT JOIN LATERAL (
+        SELECT min(v.price_cents) AS min_price, max(v.price_cents) AS max_price
+          FROM sku_prices_by_store v
+         WHERE v.store_id = $3 AND v.product_id = pg.id
+       ) agg ON TRUE
+  LEFT JOIN LATERAL (
+        SELECT pi.upload_id
+          FROM product_images pi
+         WHERE pi.product_id = pg.id
+         ORDER BY pi.sort_order, pi.id
+         LIMIT 1
+       ) img ON TRUE
+ ORDER BY pg.published_at DESC NULLS LAST, pg.id DESC
+`
+
+type ListProductsByStockInCategoriesParams struct {
+	CategoryIds []int64
+	RegionID    int64
+	StoreID     int64
+	InStock     bool
+	PageOffset  int32
+	PageLimit   int32
+}
+
+type ListProductsByStockInCategoriesRow struct {
+	ID                int64
+	Title             string
+	Subtitle          *string
+	MinPriceCents     int64
+	MaxPriceCents     int64
+	SalesCount        int32
+	Status            int16
+	MainImageUploadID int64
+}
+
+// 按类目筛的一段（类目少、或页浅、或这批类目里商品不多）。说明见 ListProductsByStock 的
+// 「类目筛选」一节；筛选条件除类目外与它逐字一致。
+//
+// 内层 LATERAL 对每个类目只取 offset+limit 行：这一页在合并后的次序里落在前 offset+limit 位，
+// 任何一个类目贡献给这一段的行也必然在它自己的前 offset+limit 位里，所以截断不丢行。
+// 一件商品只属于一个类目、数组里的 id 不重复（CategorySubtreeIDs），合并不会出重行。
+func (q *Queries) ListProductsByStockInCategories(ctx context.Context, arg ListProductsByStockInCategoriesParams) ([]ListProductsByStockInCategoriesRow, error) {
+	rows, err := q.db.Query(ctx, listProductsByStockInCategories,
+		arg.CategoryIds,
+		arg.RegionID,
+		arg.StoreID,
+		arg.InStock,
+		arg.PageOffset,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListProductsByStockInCategoriesRow
+	for rows.Next() {
+		var i ListProductsByStockInCategoriesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Title,
+			&i.Subtitle,
+			&i.MinPriceCents,
+			&i.MaxPriceCents,
+			&i.SalesCount,
+			&i.Status,
+			&i.MainImageUploadID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listProductsByStockInWideCategories = `-- name: ListProductsByStockInWideCategories :many
+SELECT pg.id, pg.title, pg.subtitle,
+       COALESCE(agg.min_price, 0)::bigint AS min_price_cents,
+       COALESCE(agg.max_price, 0)::bigint AS max_price_cents,
+       pg.sales_count, pg.status,
+       COALESCE(img.upload_id, 0)::bigint AS main_image_upload_id
+  FROM (SELECT p.id, p.title, p.subtitle, p.sales_count, p.status, p.published_at
+          FROM products p
+         WHERE p.deleted_at IS NULL
+           AND p.status = 1
+           AND p.category_id + 0 = ANY($1::bigint[])
+           AND NOT EXISTS (SELECT 1 FROM region_product_overrides ro
+                            WHERE ro.region_id = $2
+                              AND ro.product_id = p.id AND ro.status = 0)
+           AND NOT EXISTS (SELECT 1 FROM store_product_overrides so
+                            WHERE so.store_id = $3
+                              AND so.product_id = p.id AND so.status = 0)
+           AND COALESCE((SELECT pss.in_stock FROM product_store_stock pss
+                          WHERE pss.store_id = $3 AND pss.product_id = p.id),
+                        FALSE) -- 缺行按无货（文件头）
+               = $4::boolean
+         ORDER BY p.published_at DESC NULLS LAST, p.id DESC
+         LIMIT $6 OFFSET $5) pg
+  LEFT JOIN LATERAL (
+        SELECT min(v.price_cents) AS min_price, max(v.price_cents) AS max_price
+          FROM sku_prices_by_store v
+         WHERE v.store_id = $3 AND v.product_id = pg.id
+       ) agg ON TRUE
+  LEFT JOIN LATERAL (
+        SELECT pi.upload_id
+          FROM product_images pi
+         WHERE pi.product_id = pg.id
+         ORDER BY pi.sort_order, pi.id
+         LIMIT 1
+       ) img ON TRUE
+ ORDER BY pg.published_at DESC NULLS LAST, pg.id DESC
+`
+
+type ListProductsByStockInWideCategoriesParams struct {
+	CategoryIds []int64
+	RegionID    int64
+	StoreID     int64
+	InStock     bool
+	PageOffset  int32
+	PageLimit   int32
+}
+
+type ListProductsByStockInWideCategoriesRow struct {
+	ID                int64
+	Title             string
+	Subtitle          *string
+	MinPriceCents     int64
+	MaxPriceCents     int64
+	SalesCount        int32
+	Status            int16
+	MainImageUploadID int64
+}
+
+// 按类目筛的一段（类目多、页深、而且这批类目里商品多）。说明见 ListProductsByStock 的
+// 「类目筛选」一节，category_id + 0 的用意也在那里；筛选条件除类目外与它逐字一致。
+func (q *Queries) ListProductsByStockInWideCategories(ctx context.Context, arg ListProductsByStockInWideCategoriesParams) ([]ListProductsByStockInWideCategoriesRow, error) {
+	rows, err := q.db.Query(ctx, listProductsByStockInWideCategories,
+		arg.CategoryIds,
+		arg.RegionID,
+		arg.StoreID,
+		arg.InStock,
+		arg.PageOffset,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListProductsByStockInWideCategoriesRow
+	for rows.Next() {
+		var i ListProductsByStockInWideCategoriesRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.Title,

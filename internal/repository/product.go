@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 
 	"github.com/jackc/pgx/v5"
 
@@ -127,25 +126,30 @@ type StoreScope struct {
 // 卖不卖」在多门店之后都取决于哪一家店服务这次请求，而一个不带门店的读路径
 // 只能回一个租户级的答案 —— 那个答案对任何一个具体的买家都是错的。
 type ProductTx interface {
-	// ListProducts 返回当前租户在这家门店可见的在架商品，按上架时间倒序。
+	// ListProducts 返回当前租户在这家门店可见的在架商品，有货在前、再按上架时间倒序。
 	//
 	// limit / offset 的钳制是业务规则，在 service 里做。这里只负责把它们安全地
 	// 送进 int32 的参数位 —— 越界的值到这一层还是要挡，因为 int32 溢出的后果是
 	// 一个负数 OFFSET，Postgres 会报错，而错误里没有任何东西指向「页码太大」。
 	//
-	// categoryID 为 nil 表示不按类目筛；非 nil 时**含子孙**（db/queries/products.sql
-	// 文件头那一段）。不存在或已软删的类目返回空列表，不是错误。
-	ListProducts(ctx context.Context, sc StoreScope, categoryID *int64, limit, offset int64) ([]Product, error)
+	// f.Categories 为 nil 表示不按类目筛；非 nil 时是已经解析好的子树（CategorySubtreeIDs），
+	// 空切片（类目不存在或已软删）返回空列表，不是错误。
+	ListProducts(ctx context.Context, sc StoreScope, f ListingFilter, limit, offset int64) ([]Product, error)
 
 	// CountProducts 返回当前租户在架商品的总数，用于填契约里必填的 total。
-	// categoryID 必须与同一页 ListProducts 传的是同一个 —— 两边条件不一致，
-	// total 数的就不是列表实际会分出来的那批行。
-	CountProducts(ctx context.Context, sc StoreScope, categoryID *int64) (int64, error)
+	// f 必须与同一页 ListProducts 传的是同一个 —— 两边条件不一致，
+	// total 数的就不是列表实际会分出来的那批行。它是 O(全店) 的一次计数，service 缓存它的结果。
+	CountProducts(ctx context.Context, sc StoreScope, f ListingFilter) (int64, error)
 
 	// ListProductsInStock / CountProductsInStock 是 GET /products?in_stock_only=true：只取「有货」那一段
 	// （判据是有货排序标记，缺行按无货，db/queries/products.sql 文件头），段内次序与 ListProducts 相同。
-	ListProductsInStock(ctx context.Context, sc StoreScope, categoryID *int64, limit, offset int64) ([]Product, error)
-	CountProductsInStock(ctx context.Context, sc StoreScope, categoryID *int64) (int64, error)
+	ListProductsInStock(ctx context.Context, sc StoreScope, f ListingFilter, limit, offset int64) ([]Product, error)
+	CountProductsInStock(ctx context.Context, sc StoreScope, f ListingFilter) (int64, error)
+
+	// CategorySubtreeIDs 返回一个类目连同全部子孙的 id（未软删的），买家列表按类目筛之前先取一次，
+	// 结果放进 ListingFilter.Categories。类目不存在或已软删时返回**非 nil 的空切片** ——
+	// nil 在 ListingFilter 里的意思是「不筛类目」，两者混了就是「过期的类目链接显示全部商品」。
+	CategorySubtreeIDs(ctx context.Context, categoryID int64) ([]int64, error)
 
 	// ListVisibleCategories 返回启用且未软删的类目，扁平，父节点先于子节点。
 	// 拼成树是 service 的事（那里有「父节点停用则整棵子树不显示」这条规则）。
@@ -159,6 +163,18 @@ type ProductTx interface {
 
 	// 库存的扣减与回补不在 core 的 Tx 上（微服务拆分阶段 1b）：它们归库存服务，
 	// 仓储是 inventory_svc.go 的 InventoryStore（库存池、只碰库存的表）。
+}
+
+// ListingFilter 是买家商品列表（GET /products）的筛选条件。
+type ListingFilter struct {
+	// Categories 为 nil：不按类目筛。非 nil：只要这些类目里的商品 —— 已经解析好的子树
+	// （CategorySubtreeIDs，含子孙）。空切片表示类目不存在或已软删：列表为空、计数为 0，不发 SQL。
+	Categories []int64
+
+	// Rows / StoreRows 只用来在两种按类目取页的写法之间挑一个（perCategoryCheaper），不影响结果：
+	// Rows 是这批类目里大约有多少件，StoreRows 是不筛类目时全店大约多少件，与这一页同一个口径
+	// （全部 / 只看有货）。service 拿缓存里的 total 填，晚几十秒无妨。0 表示不知道。
+	Rows, StoreRows int64
 }
 
 // tenantTx 是 Tx 的唯一实现：一层薄薄的转换，把 sqlc 的行变成领域类型。
@@ -181,14 +197,96 @@ type tenantTx struct {
 	raw pgx.Tx
 }
 
-func (t tenantTx) ListProducts(ctx context.Context, sc StoreScope, categoryID *int64, limit, offset int64) ([]Product, error) {
-	// 到这里还越界只可能是上游的钳制没生效。报错而不是截断：截断会把
-	// 「第 1 亿页」悄悄变成某一页真实数据，一个错误的结果比一个错误更难发现。
-	if limit < 0 || limit > math.MaxInt32 {
-		return nil, fmt.Errorf("limit %d 超出范围 [0, %d]", limit, math.MaxInt32)
+// jitOffWindow：offset+limit 超过它时，这个事务里先关掉 JIT 再取页。
+//
+// 规划器按估算代价决定要不要 JIT 编译（jit_above_cost 默认 10 万），而列表的估算代价随 offset 线性涨：
+// 有货判据是一个标量子查询，规划器对它的选择率只能猜，深页、按类目筛的写法估得尤其高
+// （10 万商品、类目占一成、OFFSET 980 估到 58 万）。一旦越线，每次执行先花 ≈200 ms 编译，
+// 实际执行只要 12 ms（2026-10-01 在 10 万商品的压测库上实测，EXPLAIN 用 COSTS OFF 时看不到 JIT 那一段）。
+// 浅页的估算代价离线还远（第一页 1 万上下），不为它们多发一条语句。
+const jitOffWindow = 100
+
+// beforeListing 在取页之前对这个事务做的准备：深页关 JIT（见 jitOffWindow）。
+// set_config(..., true) 是事务内的，事务结束即失效，不会跟着连接回到池里。
+func (t tenantTx) beforeListing(ctx context.Context, limit, offset int64) error {
+	if offset+limit <= jitOffWindow || t.raw == nil {
+		return nil
 	}
-	if offset < 0 || offset > math.MaxInt32 {
-		return nil, fmt.Errorf("offset %d 超出范围 [0, %d]", offset, math.MaxInt32)
+	_, err := t.raw.Exec(ctx, `SELECT set_config('jit', 'off', true)`)
+	return err
+}
+
+// wideScanRatio 是 perCategoryCheaper 里两种代价的折算：沿上架时间索引扫过一行、只判一次类目，
+// 大约是「对一件候选商品做完两条 NOT EXISTS 与有货标记的点查」的十分之一（2026-10-01 压测库实测：
+// 后者每行 ≈5 µs，前者 ≈0.5 µs）。
+const wideScanRatio = 10
+
+// perCategoryCheaper 决定按类目筛的一段用哪条语句取（db/queries/products.sql 的「类目筛选」一节）：
+//
+//   - per-category（ListProductsByStockInCategories）：每个类目沿 idx_products_listing_category 各取前
+//     offset+limit 行再合并，每一行都要做完点查 —— 代价 ≈ min(类目里的件数, 类目数 × (offset+limit))。
+//   - wide（ListProductsByStockInWideCategories）：沿 idx_products_listing_published 按序扫、逐行判类目，
+//     凑满 offset+limit 行要扫 (offset+limit) / 占比 行，只有命中的那些做点查 ——
+//     代价 ≈ (offset+limit) × (1 + 全店件数 / (wideScanRatio × 类目里的件数))。
+//
+// 只有一个类目（叶子）时 per-category 恒不比 wide 贵，不必知道件数；件数不知道时也选它 ——
+// 它的代价有类目里的件数兜底，wide 在小类目上却是扫全店（原来的样子）。
+// 选错不影响结果，只影响快慢：两条语句的筛选与次序逐字一致（rls_index_plans_test.go 逐行对照）。
+func perCategoryCheaper(f ListingFilter, limit, offset int64) bool {
+	n := int64(len(f.Categories))
+	if n <= 1 || f.Rows <= 0 || f.StoreRows <= 0 {
+		return true
+	}
+	window := offset + limit
+	perCategory := min(f.Rows, n*window)
+	wide := window + window*f.StoreRows/(wideScanRatio*f.Rows)
+	return perCategory <= wide
+}
+
+// listSegment 取「有货」或「无货」那一段里的一页，按 f 挑语句。
+func (t tenantTx) listSegment(ctx context.Context, sc StoreScope, f ListingFilter, inStock bool,
+	limit, offset int64) ([]db.ListProductsByStockRow, error) {
+	if f.Categories == nil {
+		return t.q.ListProductsByStock(ctx, db.ListProductsByStockParams{
+			StoreID: sc.StoreID, RegionID: sc.RegionID,
+			InStock: inStock, PageLimit: int32(limit), PageOffset: int32(offset),
+		})
+	}
+	if len(f.Categories) == 0 {
+		return nil, nil
+	}
+	// 三条语句的列逐字一致，sqlc 生成的三个 Row 类型字段相同，可以直接转换。
+	if perCategoryCheaper(f, limit, offset) {
+		rows, err := t.q.ListProductsByStockInCategories(ctx, db.ListProductsByStockInCategoriesParams{
+			CategoryIds: f.Categories, StoreID: sc.StoreID, RegionID: sc.RegionID,
+			InStock: inStock, PageLimit: int32(limit), PageOffset: int32(offset),
+		})
+		out := make([]db.ListProductsByStockRow, 0, len(rows))
+		for _, r := range rows {
+			out = append(out, db.ListProductsByStockRow(r))
+		}
+		return out, err
+	}
+	rows, err := t.q.ListProductsByStockInWideCategories(ctx, db.ListProductsByStockInWideCategoriesParams{
+		CategoryIds: f.Categories, StoreID: sc.StoreID, RegionID: sc.RegionID,
+		InStock: inStock, PageLimit: int32(limit), PageOffset: int32(offset),
+	})
+	out := make([]db.ListProductsByStockRow, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, db.ListProductsByStockRow(r))
+	}
+	return out, err
+}
+
+func (t tenantTx) ListProducts(ctx context.Context, sc StoreScope, f ListingFilter, limit, offset int64) ([]Product, error) {
+	if err := checkPaging(limit, offset); err != nil {
+		return nil, err
+	}
+	if f.Categories != nil && len(f.Categories) == 0 {
+		return []Product{}, nil
+	}
+	if err := t.beforeListing(ctx, limit, offset); err != nil {
+		return nil, err
 	}
 
 	// 「有货在前」分两段取（db/queries/products.sql 的 ListProductsByStock 说明了为什么）：
@@ -196,36 +294,26 @@ func (t tenantTx) ListProducts(ctx context.Context, sc StoreScope, categoryID *i
 	// 无货段的起点：有货段这一页取到了几行，就说明有货段恰好在 offset + 那几行处结束，
 	// 无货段从 0 开始；一行都没取到，才要数一次有货段有多长。
 	//
+	// 那一次计数要**精确**，不走 service 的总数缓存：它决定无货段从第几行开始，差一行就是
+	// 这一页与上一页重一件或漏一件。它只在整页都落在无货段时才发生（翻到列表尾部）。
+	//
 	// 两段是同一个事务里的两条语句（READ COMMITTED，各自一个快照）：两次之间有货标记被刷新，
 	// 这一页的边界可能差一两行 —— 与跨两次请求翻页本来就有的漂移同一个量级。起点算成负数
 	// 只可能是这种竞争，钳到 0。
-	params := db.ListProductsByStockParams{
-		StoreID:    sc.StoreID,
-		RegionID:   sc.RegionID,
-		CategoryID: categoryID,
-		InStock:    true,
-		PageLimit:  int32(limit),
-		PageOffset: int32(offset),
-	}
-	rows, err := t.q.ListProductsByStock(ctx, params)
+	rows, err := t.listSegment(ctx, sc, f, true, limit, offset)
 	if err != nil {
 		return nil, err
 	}
 	if int64(len(rows)) < limit {
 		off2 := int64(0)
 		if len(rows) == 0 {
-			inStock, err := t.q.CountProductsInStock(ctx, db.CountProductsInStockParams{
-				StoreID: sc.StoreID, RegionID: sc.RegionID, CategoryID: categoryID,
-			})
+			inStock, err := t.CountProductsInStock(ctx, sc, f)
 			if err != nil {
 				return nil, err
 			}
 			off2 = max(offset-inStock, 0)
 		}
-		params.InStock = false
-		params.PageLimit = int32(limit - int64(len(rows)))
-		params.PageOffset = int32(off2)
-		more, err := t.q.ListProductsByStock(ctx, params)
+		more, err := t.listSegment(ctx, sc, f, false, limit-int64(len(rows)), off2)
 		if err != nil {
 			return nil, err
 		}
@@ -234,26 +322,34 @@ func (t tenantTx) ListProducts(ctx context.Context, sc StoreScope, categoryID *i
 	return productsOf(rows), nil
 }
 
-func (t tenantTx) ListProductsInStock(ctx context.Context, sc StoreScope, categoryID *int64, limit, offset int64) ([]Product, error) {
-	if limit < 0 || limit > math.MaxInt32 {
-		return nil, fmt.Errorf("limit %d 超出范围 [0, %d]", limit, math.MaxInt32)
+func (t tenantTx) ListProductsInStock(ctx context.Context, sc StoreScope, f ListingFilter, limit, offset int64) ([]Product, error) {
+	if err := checkPaging(limit, offset); err != nil {
+		return nil, err
 	}
-	if offset < 0 || offset > math.MaxInt32 {
-		return nil, fmt.Errorf("offset %d 超出范围 [0, %d]", offset, math.MaxInt32)
+	if f.Categories != nil && len(f.Categories) == 0 {
+		return []Product{}, nil
 	}
-	rows, err := t.q.ListProductsByStock(ctx, db.ListProductsByStockParams{
-		StoreID: sc.StoreID, RegionID: sc.RegionID, CategoryID: categoryID,
-		InStock: true, PageLimit: int32(limit), PageOffset: int32(offset),
-	})
+	if err := t.beforeListing(ctx, limit, offset); err != nil {
+		return nil, err
+	}
+	rows, err := t.listSegment(ctx, sc, f, true, limit, offset)
 	if err != nil {
 		return nil, err
 	}
 	return productsOf(rows), nil
 }
 
-func (t tenantTx) CountProductsInStock(ctx context.Context, sc StoreScope, categoryID *int64) (int64, error) {
-	return t.q.CountProductsInStock(ctx, db.CountProductsInStockParams{
-		StoreID: sc.StoreID, RegionID: sc.RegionID, CategoryID: categoryID,
+func (t tenantTx) CountProductsInStock(ctx context.Context, sc StoreScope, f ListingFilter) (int64, error) {
+	if f.Categories == nil {
+		return t.q.CountProductsInStock(ctx, db.CountProductsInStockParams{
+			StoreID: sc.StoreID, RegionID: sc.RegionID,
+		})
+	}
+	if len(f.Categories) == 0 {
+		return 0, nil
+	}
+	return t.q.CountProductsInStockInCategories(ctx, db.CountProductsInStockInCategoriesParams{
+		CategoryIds: f.Categories, StoreID: sc.StoreID, RegionID: sc.RegionID,
 	})
 }
 
@@ -275,10 +371,29 @@ func productsOf(rows []db.ListProductsByStockRow) []Product {
 	return out
 }
 
-func (t tenantTx) CountProducts(ctx context.Context, sc StoreScope, categoryID *int64) (int64, error) {
-	return t.q.CountProducts(ctx, db.CountProductsParams{
-		StoreID: sc.StoreID, RegionID: sc.RegionID, CategoryID: categoryID,
+func (t tenantTx) CountProducts(ctx context.Context, sc StoreScope, f ListingFilter) (int64, error) {
+	if f.Categories == nil {
+		return t.q.CountProducts(ctx, db.CountProductsParams{
+			StoreID: sc.StoreID, RegionID: sc.RegionID,
+		})
+	}
+	if len(f.Categories) == 0 {
+		return 0, nil
+	}
+	return t.q.CountProductsInCategories(ctx, db.CountProductsInCategoriesParams{
+		CategoryIds: f.Categories, StoreID: sc.StoreID, RegionID: sc.RegionID,
 	})
+}
+
+func (t tenantTx) CategorySubtreeIDs(ctx context.Context, categoryID int64) ([]int64, error) {
+	ids, err := t.q.CategorySubtreeIDs(ctx, categoryID)
+	if err != nil {
+		return nil, err
+	}
+	if ids == nil {
+		ids = []int64{}
+	}
+	return ids, nil
 }
 
 // CategoryNode 是一个启用中的类目，扁平形态。树由 service 拼。

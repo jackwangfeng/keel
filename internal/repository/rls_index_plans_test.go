@@ -480,7 +480,7 @@ func TestListProductsStockOrderMatchesSingleSort(t *testing.T) {
 		var page []repository.Product
 		if err := r.WithTenant(tctx, func(tx repository.Tx) error {
 			var err error
-			page, err = tx.ListProducts(ctx, sc, nil, size, off)
+			page, err = tx.ListProducts(ctx, sc, repository.ListingFilter{}, size, off)
 			return err
 		}); err != nil {
 			t.Fatal(err)
@@ -503,7 +503,7 @@ func TestListProductsStockOrderMatchesSingleSort(t *testing.T) {
 
 	// 越界页：一行都不该有（有货段取 0 行 → 数有货段 → 无货段起点也越界）。
 	if err := r.WithTenant(tctx, func(tx repository.Tx) error {
-		page, err := tx.ListProducts(ctx, sc, nil, size, int64(len(want)+size))
+		page, err := tx.ListProducts(ctx, sc, repository.ListingFilter{}, size, int64(len(want)+size))
 		if err == nil && len(page) != 0 {
 			t.Errorf("越界页取到 %d 件", len(page))
 		}
