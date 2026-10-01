@@ -115,8 +115,15 @@ type SweepConfig struct {
 	// 谁也没被饿死但谁都得等。有了它，上限决定的是这份有限预算怎么分。
 	RoundBudget int
 
-	// Interval 是两轮之间的间隔。<= 0 时用 DefaultSweepInterval。
+	// Interval 是两次唤醒之间的间隔。<= 0 时用 DefaultSweepInterval。
 	Interval time.Duration
+
+	// MaxRoundsPerWake 是一次唤醒里至多连跑几轮。<= 0 时用 DefaultMaxRoundsPerWake。
+	// 见 Run 上「一轮跑满就接着跑」那一段。
+	MaxRoundsPerWake int
+
+	// BurstPause 是连跑时两轮之间让出的那一小下。<= 0 时用 DefaultBurstPause。
+	BurstPause time.Duration
 }
 
 // 三个默认值。
@@ -142,6 +149,25 @@ const (
 	// 订单本身的超时是 30 分钟（orderExpireIn），再多一分钟的粒度可以忽略；
 	// 而扫得更密不会更快地放回任何库存，只会更频繁地扫到空。
 	DefaultSweepInterval = time.Minute
+
+	// DefaultMaxRoundsPerWake 一次唤醒至多连跑 20 轮，即至多 20 × 500 = 1 万笔。
+	//
+	// 2026-10 破坏性测试：约 1.1 万单集中到期（一场秒杀的未付单），每分钟 500 笔的硬上限
+	// 要 22 分钟才扫完，最晚那一批的库存晚了 12 分钟以上才放回 —— 那段时间里它们一直显示售罄。
+	// 连跑之后同样的积压一两次唤醒就清完。
+	//
+	// 为什么还要一个总上限，而不是「跑到没有为止」：每轮的预算是这个任务对数据库的压力上限
+	// （上面 DefaultRoundBudget 那一段），连跑把它变成了「每轮」的上限，总上限把「每次唤醒」
+	// 也封住 —— 一个出了 bug、每轮都扫满却永远扫不完的状态（比如某一单反复失败又反复被扫到），
+	// 不会变成一个占着库不放的死循环；下一次唤醒照常再来。
+	DefaultMaxRoundsPerWake = 20
+
+	// DefaultBurstPause 连跑时两轮之间让出 200ms。
+	//
+	// 不是为了等什么，是为了别把连跑变成一整段不间断的写：支付回调、买家下单与这个任务抢的是
+	// 同一批订单行与库存行，每轮之间留一个缝，让它们的事务排得进来。200ms × 20 轮 = 4 秒，
+	// 相对一分钟的间隔可以忽略。
+	DefaultBurstPause = 200 * time.Millisecond
 )
 
 // SweepRepository 是这个任务需要的仓储能力。
@@ -179,6 +205,10 @@ type SweepReport struct {
 
 	// Fallback 这一轮跑过兜底那一趟（去掉每租户上限）。
 	Fallback bool
+
+	// Touched 这一轮动过的笔数（含竞态与失败），即花掉的预算。与 RoundBudget 相等说明这一轮
+	// 是被预算截断的，后面多半还有积压（Run 据此决定要不要接着跑）。
+	Touched int
 }
 
 // NewSweepService 建超时补偿服务。inv 是这个进程的库存服务（微服务拆分阶段 1b）：
@@ -196,6 +226,12 @@ func NewSweepService(r SweepRepository, inv inventory.Service, cfg SweepConfig, 
 	if cfg.Interval <= 0 {
 		cfg.Interval = DefaultSweepInterval
 	}
+	if cfg.MaxRoundsPerWake <= 0 {
+		cfg.MaxRoundsPerWake = DefaultMaxRoundsPerWake
+	}
+	if cfg.BurstPause <= 0 {
+		cfg.BurstPause = DefaultBurstPause
+	}
 	return &SweepService{repo: r, inv: inv, ob: newInventoryOutbox(r, inv, log), log: log, cfg: cfg}
 }
 
@@ -206,13 +242,24 @@ func NewSweepService(r SweepRepository, inv inventory.Service, cfg SweepConfig, 
 //
 // 一轮出错不会让 Run 退出：这个任务停掉的代价是永久漏卖，而单轮失败的成因
 // （数据库抖了一下）下一轮通常就没有了。错误逐轮记在日志里。
+//
+// **一轮跑满就接着跑**（drain）：一轮用满了预算（Touched == RoundBudget），说明它是被预算
+// 截断的、后面多半还有积压，这时让出一小下（BurstPause）立刻跑下一轮，直到某一轮没跑满、
+// 或者这次唤醒已经连跑了 MaxRoundsPerWake 轮，再按 Interval 睡。以前不论积压多少都是
+// 每分钟一轮，吞吐被硬限在每分钟 RoundBudget 笔（DefaultMaxRoundsPerWake 那一段）。
+//
+// 每一轮仍是完整的一轮（公平调度、条件 UPDATE 占位、幂等的库存放回都原样不动），连跑只是
+// 把「下一轮什么时候开始」提前了，不改变任何一笔的处置。
+//
+// 睡用的是每次唤醒之后重新计时的 Timer 而不是 Ticker：连跑可能跑过一个间隔，Ticker 攒下的
+// 那一下会让任务一醒来立刻再连跑一次，「一次唤醒至多 N 轮」那个上限就被绕开了。
 func (s *SweepService) Run(ctx context.Context) {
-	t := time.NewTicker(s.cfg.Interval)
-	defer t.Stop()
 	for {
-		s.runOnce(ctx)
+		s.drain(ctx)
+		t := time.NewTimer(s.cfg.Interval)
 		select {
 		case <-ctx.Done():
+			t.Stop()
 			s.log.InfoContext(ctx, "超时补偿任务收到停止信号，退出")
 			return
 		case <-t.C:
@@ -220,22 +267,52 @@ func (s *SweepService) Run(ctx context.Context) {
 	}
 }
 
-func (s *SweepService) runOnce(ctx context.Context) {
+// drain 是一次唤醒：跑一轮，跑满了就让出一小下接着跑，至多 MaxRoundsPerWake 轮。返回跑了几轮。
+func (s *SweepService) drain(ctx context.Context) int {
+	for round := 1; ; round++ {
+		rep, ok := s.runOnce(ctx)
+		if !ok || !roundSaturated(rep, s.cfg.RoundBudget) {
+			return round
+		}
+		if round >= s.cfg.MaxRoundsPerWake {
+			s.log.WarnContext(ctx, "超时补偿连跑到了单次唤醒的上限，积压还没清完，下一次唤醒接着扫",
+				"rounds", round, "round_budget", s.cfg.RoundBudget)
+			return round
+		}
+		select {
+		case <-ctx.Done():
+			return round
+		case <-time.After(s.cfg.BurstPause):
+		}
+	}
+}
+
+// roundSaturated：这一轮是不是被预算截断的、值得接着跑。
+//
+// 两个条件：用满了预算；而且不是**全部**失败。后一条挡的是「库存服务不在、每一笔都失败、
+// 下一轮又扫到同一批」—— 那种时候连跑二十轮只是把同一批失败重复二十遍，等下一次唤醒更好。
+// 竞态（Raced）算进展：那几笔是被支付回调或别的实例处理掉了，积压确实在变少。
+func roundSaturated(rep SweepReport, budget int) bool {
+	return rep.Touched >= budget && rep.Failed < rep.Touched
+}
+
+func (s *SweepService) runOnce(ctx context.Context) (SweepReport, bool) {
 	rep, err := s.SweepOnce(ctx)
 	if err != nil {
 		s.log.ErrorContext(ctx, "超时补偿这一轮没跑起来", "err", err)
-		return
+		return rep, false
 	}
 	if rep.Released == 0 && rep.ClosedDrafts == 0 && rep.Raced == 0 && rep.Failed == 0 {
 		// 空轮是常态（大多数分钟里没有订单超时），Debug 级别，
 		// 否则这条日志会把别的东西淹掉。
 		s.log.DebugContext(ctx, "超时补偿这一轮没有可处理的订单", "tenants", rep.Tenants)
-		return
+		return rep, true
 	}
 	s.log.InfoContext(ctx, "超时补偿完成一轮",
 		"tenants", rep.Tenants, "released", rep.Released, "released_qty", rep.ReleasedQty,
 		"closed_drafts", rep.ClosedDrafts, "raced", rep.Raced,
 		"failed", rep.Failed, "fallback", rep.Fallback)
+	return rep, true
 }
 
 // SweepOnce 跑一轮。导出是为了让测试能在不等 ticker 的情况下驱动它 ——
@@ -256,7 +333,9 @@ func (s *SweepService) SweepOnce(ctx context.Context) (SweepReport, error) {
 
 	rep.Fallback = fairRound(merchants, start, s.cfg.PerTenantCap, s.cfg.RoundBudget,
 		func(merchantID int64, limit int) int {
-			return s.sweepTenant(ctx, merchantID, limit, &rep)
+			n := s.sweepTenant(ctx, merchantID, limit, &rep)
+			rep.Touched += n
+			return n
 		})
 	return rep, nil
 }
