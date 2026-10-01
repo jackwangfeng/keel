@@ -11,6 +11,7 @@ import (
 
 	"github.com/keel/keel/internal/inventory"
 	"github.com/keel/keel/internal/repository"
+	"github.com/keel/keel/internal/tenant"
 )
 
 const (
@@ -110,10 +111,42 @@ type ProductService struct {
 	repo ProductRepository
 	// inv 是库存服务（微服务拆分阶段 1a）：详情页的 SKU 水位与 in_stock 经它。
 	inv inventory.Service
+	// totals 缓存列表的 total（product_total_cache.go）。
+	totals *totalCache
 }
 
 func NewProductService(r ProductRepository, inv inventory.Service) *ProductService {
-	return &ProductService{repo: r, inv: inv}
+	return &ProductService{repo: r, inv: inv, totals: newTotalCache(productTotalCacheTTL, productTotalCacheCap)}
+}
+
+// WithoutTotalCache 关掉列表总数的缓存，每次都现数。给要在同一进程里先改商品、再立刻断言 total 的
+// 测试用；线上不调。
+func (s *ProductService) WithoutTotalCache() *ProductService {
+	s.totals = nil
+	return s
+}
+
+// cachedTotal 取（或现数并记下）一组筛选条件下的 total。键里带商户（product_total_cache.go「键与边界」）；
+// ctx 里取不到商户就不走缓存 —— 那种请求到不了这里（WithTenant 先拒了），这里只是不让键里出现 0。
+func (s *ProductService) cachedTotal(ctx context.Context, sc repository.StoreScope, categoryID *int64,
+	inStockOnly bool, count func() (int64, error)) (int64, error) {
+	merchant, err := tenant.FromContext(ctx)
+	if err != nil {
+		return count()
+	}
+	k := totalKey{merchant: merchant, store: sc.StoreID, region: sc.RegionID, inStockOnly: inStockOnly}
+	if categoryID != nil {
+		k.category = *categoryID
+	}
+	if n, ok := s.totals.get(k); ok {
+		return n, nil
+	}
+	n, err := count()
+	if err != nil {
+		return 0, err
+	}
+	s.totals.put(k, n)
+	return n, nil
 }
 
 // List 返回当前租户的在架商品。
@@ -155,20 +188,43 @@ func (s *ProductService) List(ctx context.Context, storeID, categoryID *int64, i
 		}
 		out.Store = storeContextOf(sc, mt)
 
-		// 计数与取页在同一个事务里，所以 total 和 items 看到的是同一个快照。
-		// 分开两次访问的话，两者之间的一次上下架会让「total=21 但第二页是空的」
-		// 这种自相矛盾的响应偶发出现。
+		// 类目先解析成子树的 id 数组（同一个事务里一条小查询），列表与计数拿数组去取
+		// （db/queries/products.sql「类目筛选」）。类目不存在或已软删时是空数组：total 0、空列表。
+		var f repository.ListingFilter
+		if categoryID != nil {
+			if f.Categories, err = q.CategorySubtreeIDs(ctx, *categoryID); err != nil {
+				return err
+			}
+		}
+
+		// total 走缓存（product_total_cache.go）：它不再与 items 同一个快照，最多晚 30 秒。
+		// 那会让「total=21 但第二页是空的」这种不一致在上下架后的几十秒里出现 —— 客户端按
+		// 「items 少于 page_size 即到底」收尾，晚的只是总页数的显示；换来的是列表不再每页数一遍全店。
 		count, list := q.CountProducts, q.ListProducts
 		if inStockOnly {
 			count, list = q.CountProductsInStock, q.ListProductsInStock
 		}
-		total, err := count(ctx, sc, categoryID)
+		total, err := s.cachedTotal(ctx, sc, categoryID, inStockOnly, func() (int64, error) {
+			return count(ctx, sc, f)
+		})
 		if err != nil {
 			return err
 		}
 		out.Total = total
 
-		rows, err := list(ctx, sc, categoryID, int64(pageSize), offsetOf(page, pageSize))
+		// 按类目筛、而且不止一个类目时，repository 要在两种取页写法之间挑一个，依据是这批类目
+		// 占全店的比例（repository.perCategoryCheaper）：Rows 就是上面的 total，StoreRows 是同一口径
+		// 不筛类目的 total，也走缓存（默认列表的那个键，通常是热的）。叶子类目用不着它，不数。
+		if len(f.Categories) > 1 {
+			f.Rows = total
+			if f.StoreRows, err = s.cachedTotal(ctx, sc, nil, inStockOnly, func() (int64, error) {
+				return count(ctx, sc, repository.ListingFilter{})
+			}); err != nil {
+				return err
+			}
+		}
+
+		rows, err := list(ctx, sc, f, int64(pageSize), offsetOf(page, pageSize))
 		if err != nil {
 			return err
 		}

@@ -25,3 +25,13 @@ func (r *Repo) RawTenantTx(ctx context.Context, fn func(pgx.Tx) error) error {
 func (r *Repo) RawLockingTenantTx(ctx context.Context, fn func(pgx.Tx) error) error {
 	return r.withLockingTenantTx(ctx, func(tx pgx.Tx, _ Tx) error { return fn(tx) })
 }
+
+// PerCategoryCheaper 把按类目取页的选法交给同目录的测试（product_listing_plans_test.go）：
+// 两种取法都要逐行对照单句排序，测试得能确认自己真的走到了想测的那一条。
+var PerCategoryCheaper = perCategoryCheaper
+
+// RawAndTenantTx 同时交出 pgx.Tx 与 Tx：给「ListProducts 深页在这个事务里关了 JIT」那条测试用 ——
+// 那是一条事务内的 GUC，只能在同一个事务里读回来。
+func (r *Repo) RawAndTenantTx(ctx context.Context, fn func(pgx.Tx, Tx) error) error {
+	return r.withTenantTx(ctx, fn)
+}
