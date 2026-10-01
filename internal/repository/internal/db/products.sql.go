@@ -81,8 +81,7 @@ SELECT count(*)
                 AND c.path ~<~ (SELECT cc.path || chr(1114111) FROM categories cc
                                  WHERE cc.id = $3::bigint
                                    AND cc.deleted_at IS NULL)))
-   AND COALESCE(pss.in_stock,
-                EXISTS (SELECT 1 FROM skus sk WHERE sk.product_id = p.id AND sk.status = 1 AND sk.deleted_at IS NULL))
+   AND COALESCE(pss.in_stock, FALSE)
 `
 
 type CountProductsInStockParams struct {
@@ -92,8 +91,8 @@ type CountProductsInStockParams struct {
 }
 
 // 有货段有多长：ListProductsByStock(in_stock = true) 在同一组筛选下一共会分出多少行。
-// 只在「整页都落在无货段」时由 repository 调（见 ListProductsByStock 的说明），用来算
-// 无货段的起点 = offset - 这个数。
+// 两处用：「整页都落在无货段」时由 repository 调（见 ListProductsByStock 的说明），用来算
+// 无货段的起点 = offset - 这个数；GET /products?in_stock_only=true 的 total。
 //
 // 谓词与 CountProducts 逐字一致，外加有货判据；判据与 ListProductsByStock 相同，只是
 // 有货标记写成 LEFT JOIN 而不是标量子查询：product_store_stock 的主键是 (store_id, product_id)，
@@ -295,10 +294,9 @@ SELECT p.id, p.title, p.subtitle,
                                    AND cc.deleted_at IS NULL)))
    AND COALESCE((SELECT pss.in_stock FROM product_store_stock pss
                   WHERE pss.store_id = $1 AND pss.product_id = p.id),
-                -- 没刷过的行按有货排，但前提是它真有在售 SKU：一个 SKU 都没有的商品永远不会有那一行，
-                -- 之前因此永远排第一（2026-09-28 演示站：没有 SKU 的商品 24 顶在列表首位、显示 ¥0）。
-                -- COALESCE 短路，只在缺行时查这一次。
-                EXISTS (SELECT 1 FROM skus sk WHERE sk.product_id = p.id AND sk.status = 1 AND sk.deleted_at IS NULL))
+                -- 缺行按无货（文件头「缺行为什么按无货」）。一个 SKU 都没有的商品永远不会有那一行，
+                -- 也落在这里（2026-09-28 演示站：没有 SKU 的商品曾经顶在列表首位、显示 ¥0）。
+                FALSE)
        = $4::boolean
  ORDER BY p.published_at DESC NULLS LAST, p.id DESC
  LIMIT $6 OFFSET $5
@@ -325,8 +323,17 @@ type ListProductsByStockRow struct {
 }
 
 // 排序（2026-09-27）：**这家店有货的在前**，再按上架时间新到旧。有没有货读 product_store_stock
-// （00087，库存在库存服务那边，这里 JOIN 不到 inventories）；没刷过的行按有货排，不错压
-// （一个在售 SKU 都没有的除外，见 WHERE 里那段 COALESCE）。
+// （00087，库存在库存服务那边，这里 JOIN 不到 inventories）；**缺行按无货**（2026-10-01，见 WHERE 里那段
+// COALESCE）。GET /products?in_stock_only=true 只取有货那一段（repository.ListProductsInStock），
+// 总数是 CountProductsInStock —— 排序、过滤、计数三处是同一条判据。
+//
+// ### 缺行为什么按无货（2026-10-01，破坏性测试 P2）
+//
+// 之前缺行按「有没有在售 SKU」算，等于缺行 ≈ 有货。缺行只出现在「新建之后还没补上」的短窗口
+// （新门店、新商品 / 新 SKU 的那一刷没成，典型是库存服务不在 —— service/stock_flags.go 的 seed*）。
+// 新店一件库存都没设，按有货排就是整店商品全排进「有货」段、in_stock_only 返回一屏 in_stock:false。
+// 按无货是保守的一侧：不会把没货的推到前面；真有货的会被跨 0 消息、种标记的重试任务或下一轮
+// 全量刷新补上，最坏是在那段窗口里排得靠后。没有在售 SKU 的商品（永远不会有那一行）也自然落进无货段。
 //
 // ### 为什么「有货在前」拆成两次取，而不是 ORDER BY 有货 DESC（2026-09-30 架构审查）
 //
@@ -343,8 +350,8 @@ type ListProductsByStockRow struct {
 // （CountProductsInStock，O(全店) 的一次计数）—— 那是翻到列表尾部才走的路。
 //
 // 拼出来的顺序与原来那句 ORDER BY 逐行一致：「有货 DESC」就是先放完 true 段再放 false 段，
-// 段内次序不变。判据（COALESCE 那一段）也逐字没动：缺 product_store_stock 行（新品还没刷过）
-// 仍按「有没有在售 SKU」算，所以表结构、写入方（service/stock_flags.go）都不用改。
+// 段内次序不变。两段的判据是同一个 COALESCE（缺行按无货），每件商品恰好落在一段里，
+// 所以两段拼起来不重不漏。
 //
 // 代价说清楚：某一段极稀疏时（比如全店只有几件无货），取那一段要顺着索引扫过大半个店才凑得满
 // LIMIT —— 最坏是 O(全店) 次主键点查，仍比原来「全店算完再排序」便宜一个量级（实测无货段

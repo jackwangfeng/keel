@@ -126,7 +126,13 @@ func NewProductService(r ProductRepository, inv inventory.Service) *ProductServi
 // categoryID 非 nil 时按类目筛，含子孙。它和 storeID 一样只是被透传 ——
 // 「含子孙」「不存在的类目给空列表」这两条规则在 SQL 里（products.sql 文件头），
 // 这里重复一遍就是两份会分叉的实现。
-func (s *ProductService) List(ctx context.Context, storeID, categoryID *int64, page, pageSize int) (ProductList, error) {
+//
+// inStockOnly 为真时只取这家店「有货」那一段（GET /products?in_stock_only=true，2026-10-01）：判据是有货排序标记
+// （product_store_stock，缺行按无货 —— db/queries/products.sql 文件头），total 也按同一段数。标记是冗余数据，
+// 跨 0 之后要等消息投递才跟上，所以这一页的 in_stock（现问库存服务）在那几秒里可能与过滤结果差一件；
+// 不在这里按现问的结果再滤一遍：那样一页的行数就与 total、与下一页的 offset 对不上了。
+func (s *ProductService) List(ctx context.Context, storeID, categoryID *int64, inStockOnly bool,
+	page, pageSize int) (ProductList, error) {
 	page, pageSize = clampPaging(page, pageSize)
 
 	out := ProductList{Items: []ProductSummary{}, Page: page, PageSize: pageSize}
@@ -152,13 +158,17 @@ func (s *ProductService) List(ctx context.Context, storeID, categoryID *int64, p
 		// 计数与取页在同一个事务里，所以 total 和 items 看到的是同一个快照。
 		// 分开两次访问的话，两者之间的一次上下架会让「total=21 但第二页是空的」
 		// 这种自相矛盾的响应偶发出现。
-		total, err := q.CountProducts(ctx, sc, categoryID)
+		count, list := q.CountProducts, q.ListProducts
+		if inStockOnly {
+			count, list = q.CountProductsInStock, q.ListProductsInStock
+		}
+		total, err := count(ctx, sc, categoryID)
 		if err != nil {
 			return err
 		}
 		out.Total = total
 
-		rows, err := q.ListProducts(ctx, sc, categoryID, int64(pageSize), offsetOf(page, pageSize))
+		rows, err := list(ctx, sc, categoryID, int64(pageSize), offsetOf(page, pageSize))
 		if err != nil {
 			return err
 		}

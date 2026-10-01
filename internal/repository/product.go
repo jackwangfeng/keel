@@ -142,6 +142,11 @@ type ProductTx interface {
 	// total 数的就不是列表实际会分出来的那批行。
 	CountProducts(ctx context.Context, sc StoreScope, categoryID *int64) (int64, error)
 
+	// ListProductsInStock / CountProductsInStock 是 GET /products?in_stock_only=true：只取「有货」那一段
+	// （判据是有货排序标记，缺行按无货，db/queries/products.sql 文件头），段内次序与 ListProducts 相同。
+	ListProductsInStock(ctx context.Context, sc StoreScope, categoryID *int64, limit, offset int64) ([]Product, error)
+	CountProductsInStock(ctx context.Context, sc StoreScope, categoryID *int64) (int64, error)
+
 	// ListVisibleCategories 返回启用且未软删的类目，扁平，父节点先于子节点。
 	// 拼成树是 service 的事（那里有「父节点停用则整棵子树不显示」这条规则）。
 	ListVisibleCategories(ctx context.Context) ([]CategoryNode, error)
@@ -226,6 +231,33 @@ func (t tenantTx) ListProducts(ctx context.Context, sc StoreScope, categoryID *i
 		}
 		rows = append(rows, more...)
 	}
+	return productsOf(rows), nil
+}
+
+func (t tenantTx) ListProductsInStock(ctx context.Context, sc StoreScope, categoryID *int64, limit, offset int64) ([]Product, error) {
+	if limit < 0 || limit > math.MaxInt32 {
+		return nil, fmt.Errorf("limit %d 超出范围 [0, %d]", limit, math.MaxInt32)
+	}
+	if offset < 0 || offset > math.MaxInt32 {
+		return nil, fmt.Errorf("offset %d 超出范围 [0, %d]", offset, math.MaxInt32)
+	}
+	rows, err := t.q.ListProductsByStock(ctx, db.ListProductsByStockParams{
+		StoreID: sc.StoreID, RegionID: sc.RegionID, CategoryID: categoryID,
+		InStock: true, PageLimit: int32(limit), PageOffset: int32(offset),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return productsOf(rows), nil
+}
+
+func (t tenantTx) CountProductsInStock(ctx context.Context, sc StoreScope, categoryID *int64) (int64, error) {
+	return t.q.CountProductsInStock(ctx, db.CountProductsInStockParams{
+		StoreID: sc.StoreID, RegionID: sc.RegionID, CategoryID: categoryID,
+	})
+}
+
+func productsOf(rows []db.ListProductsByStockRow) []Product {
 	out := make([]Product, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, Product{
@@ -240,7 +272,7 @@ func (t tenantTx) ListProducts(ctx context.Context, sc StoreScope, categoryID *i
 			MainImageUploadID: mainImageOf(r.MainImageUploadID),
 		})
 	}
-	return out, nil
+	return out
 }
 
 func (t tenantTx) CountProducts(ctx context.Context, sc StoreScope, categoryID *int64) (int64, error) {

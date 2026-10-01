@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -37,6 +38,12 @@ import (
 //
 // 刷新失败（库存服务不在）只记日志：旧标记继续用 —— 排序晚一点不值得让任何一条请求失败；消息那条路上
 // 返回 Unknown，协调器会重试到库存服务回来。
+//
+// **缺行按无货**（2026-10-01，db/queries/products.sql 文件头「缺行为什么按无货」）：列表排序、
+// GET /products?in_stock_only=true 的过滤与计数都这么算。缺行只出现在「新建之后还没种上」的短窗口
+// （下面的 seedStoreStockFlags / seedProductStockFlags）；种失败时进库存 outbox 的队列重试
+// （inventory_outbox.go 的 jobKindStockFlagSeed），库存服务回来之后几分钟内补上，不等整点的全量刷新。
+// 之前缺行按「有没有在售 SKU」算（≈ 有货），新店种失败的那一小时里整店商品排进有货段（破坏性测试）。
 //
 // 判据与详情页、检索、列表显示同一个：这家店里任意一个在售 SKU 可售数 > 0。
 
@@ -191,27 +198,45 @@ func refreshSKUStockFlag(ctx context.Context, repo tenantRunner, inv inventory.S
 
 // seedStoreStockFlags 给一家新门店补齐全部商品的标记（2026-09-30）。
 //
-// 标记表里缺行的商品按「有没有在售 SKU」排（products.sql，缺行 ≈ 有货），而新门店建好时一行都没有，
-// 它所有商品都被排进「有货」那一段——实际上一件库存都没设。以前每分钟全量刷新，最多一分钟就补齐；
-// 改成跨 0 发消息 + 每小时全量之后，从来没设过库存的 SKU 永远不会跨 0，要等到整点才补齐（宝安中心区店踩过）。
-// 所以建店之后当场按实际水位（新店一般全是 0）写一遍。尽力而为：失败只记日志，下一轮全量刷新兜底。
+// 新门店建好时标记表里一行都没有。从来没设过库存的 SKU 永远不会跨 0，只靠整点的全量刷新的话，
+// 这家店要等到整点才有标记（宝安中心区店踩过）。所以建店之后当场按实际水位（新店一般全是 0）写一遍。
+//
+// 失败（库存服务不在）时缺行按无货（文件头），不会把没货的排到前面；但真有货的商品在补上之前排在后面、
+// in_stock_only 看不见，所以在一个小事务里入队一条重试任务（库存 outbox 的队列，jobKindStockFlagSeed）。
+// 选它而不是「熔断恢复 / 下一次成功的库存调用」触发：这条队列本来就是「库存服务不在时把一件事重试到它回来」
+// 的机制（封顶 5 分钟退避，进程重启不丢，多实例只有一个占得到），每个 core 进程都在跑它的 worker；
+// 另起一套回调要在熔断器里挂业务钩子，还会在多实例下各补一遍。入队本身也失败了只记日志，全量刷新兜底。
 func seedStoreStockFlags(ctx context.Context, repo tenantRunner, inv inventory.Service, storeID int64) {
 	if inv == nil {
 		return
 	}
 	if err := refreshStockFlags(ctx, repo, inv, []int64{storeID}, nil); err != nil {
-		slog.WarnContext(ctx, "新门店没补上商品列表的有货排序标记（下一轮全量刷新会补上）", "store_id", storeID, "err", err)
+		slog.WarnContext(ctx, "新门店没补上商品列表的有货排序标记，进队列重试", "store_id", storeID, "err", err)
+		retryStockFlagSeed(ctx, repo, fmt.Sprintf("stock_flags:store:%d", storeID),
+			inventoryJob{Kind: jobKindStockFlagSeed, StoreIDs: []int64{storeID}})
 	}
 }
 
 // seedProductStockFlags 给新商品 / 新 SKU 在所有门店补齐标记，理由同 seedStoreStockFlags：
-// 没有初始库存的新 SKU 不会跨 0，缺行又会让它在每家店都排进「有货」那一段。
+// 没有初始库存的新 SKU 不会跨 0。失败时同样进队列重试。
 func seedProductStockFlags(ctx context.Context, repo tenantRunner, inv inventory.Service, productIDs []int64) {
 	if inv == nil || len(productIDs) == 0 {
 		return
 	}
 	if err := refreshStockFlags(ctx, repo, inv, nil, productIDs); err != nil {
-		slog.WarnContext(ctx, "新商品没补上商品列表的有货排序标记（下一轮全量刷新会补上）", "products", productIDs, "err", err)
+		slog.WarnContext(ctx, "新商品没补上商品列表的有货排序标记，进队列重试", "products", productIDs, "err", err)
+		// job_key 带时刻：同一批商品的重试任务撞键时第二条会被当成重复丢掉，而两批的商品可能不一样。
+		retryStockFlagSeed(ctx, repo, fmt.Sprintf("stock_flags:products:%d:%d", productIDs[0], time.Now().UnixNano()),
+			inventoryJob{Kind: jobKindStockFlagSeed, ProductIDs: productIDs})
+	}
+}
+
+// retryStockFlagSeed 入队一条种标记的重试任务（库存 outbox 的队列）。尽力而为。
+func retryStockFlagSeed(ctx context.Context, repo tenantRunner, key string, j inventoryJob) {
+	if err := repo.WithTenant(ctx, func(tx repository.Tx) error {
+		return enqueueInventoryJob(ctx, tx, key, j)
+	}); err != nil {
+		slog.ErrorContext(ctx, "有货排序标记的重试任务没入上队（下一轮全量刷新兜底）", "job_key", key, "err", err)
 	}
 }
 
