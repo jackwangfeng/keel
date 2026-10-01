@@ -157,7 +157,8 @@ class _MePageState extends State<MePage> {
                     child: const SizedBox(height: 56, child: Center(child: Text('退出登录', style: KeelText.link))),
                   ),
                 ),
-              if (_message.isNotEmpty) Center(child: Text(_message, key: const Key('me.message'), style: KeelText.hint)),
+              // 只在未登录时显示（「已退出」）：从「我的」页直接再登录回来，tab 没切走过，_onTab 不会清它。
+              if (_message.isNotEmpty && !loggedIn) Center(child: Text(_message, key: const Key('me.message'), style: KeelText.hint)),
               const SizedBox(height: 40),
               const Center(child: Text('Keel 买家端 · Flutter', style: KeelText.hint)),
             ]),

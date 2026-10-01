@@ -121,6 +121,19 @@ void main() {
     await t.tap(find.byKey(const Key('me.logout')));
     await t.pumpAndSettle();
     expect(find.byKey(const Key('me.login')), findsOneWidget);
+    expect(find.text('已退出'), findsOneWidget);
+    // 从「我的」页直接再登录（tab 一直是「我的」，没切走过）：回来不能还挂着「已退出」。
+    await t.tap(find.byKey(const Key('me.login')));
+    await t.pumpAndSettle();
+    await t.enterText(find.byKey(const Key('login.phone')), '13800000001');
+    await t.enterText(find.byKey(const Key('login.password')), 'pw');
+    await t.tap(find.byKey(const Key('login.submit')));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('me.nickname')), findsOneWidget);
+    // 提示在列表最底下（退出按钮下面）：先滚过去，免得它只是没被构建出来、而不是真的没了。
+    await t.scrollUntilVisible(find.byKey(const Key('me.logout')), 200);
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('me.message')), findsNothing);
   });
 
   testWidgets('登录页还在转场时就登录成功：外壳不重复（不报 Duplicate GlobalKey）', (t) async {
