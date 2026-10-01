@@ -61,6 +61,8 @@ const (
 
 	jobKindOrderRelease  = "order_release"
 	jobKindRefundRestock = "refund_restock"
+	// jobKindStockFlagSeed：新门店 / 新商品的有货排序标记当场没种上（库存服务不在），重试到它回来（stock_flags.go）。
+	jobKindStockFlagSeed = "stock_flag_seed"
 )
 
 // inventoryJob 是任务的载荷：只放定位业务对象的最小标识（00022 的约定）。
@@ -70,6 +72,9 @@ type inventoryJob struct {
 	OrderNo  string `json:"order_no,omitempty"`
 	BizType  int16  `json:"biz_type,omitempty"`
 	RefundNo string `json:"refund_no,omitempty"`
+	// StoreIDs / ProductIDs 是 jobKindStockFlagSeed 的范围，nil 即全部（refreshStockFlags 的约定）。
+	StoreIDs   []int64 `json:"store_ids,omitempty"`
+	ProductIDs []int64 `json:"product_ids,omitempty"`
 }
 
 func releaseJobKey(orderNo string) string  { return "release:" + orderNo }
@@ -240,6 +245,9 @@ func (o *inventoryOutbox) run(ctx context.Context, payload []byte) (int32, error
 		}
 		res, err := o.inv.RestockForRefund(ctx, req)
 		return res.Qty, err
+	case jobKindStockFlagSeed:
+		// 按库存服务当前水位重算那一批（读 → 写 → 复读核对），重跑无副作用。
+		return 0, refreshStockFlags(ctx, o.repo, o.inv, j.StoreIDs, j.ProductIDs)
 	default:
 		return 0, fmt.Errorf("不认识的库存任务 %q", j.Kind)
 	}

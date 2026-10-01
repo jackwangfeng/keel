@@ -298,7 +298,7 @@ func optCoord(v *float64) *float64 {
 // ---------------------------------------------------------------------------
 //
 // 库里那一列是 GEOGRAPHY(POLYGON, 4326)，进出都走 GeoJSON 文本
-// （ST_GeomFromGeoJSON / ST_AsGeoJSON，见 db/queries/stores.sql 的文件头）。
+// （ST_GeomFromGeoJSON / ST_AsGeoJSON(…, 24)，见 db/queries/stores.sql 的文件头；读回与写入逐位相等）。
 // 所以这两个函数是契约类型与那段文本之间唯一的桥。
 //
 // **不自己判合法性。** 环闭没闭、有没有自交、顶点够不够，一律交给

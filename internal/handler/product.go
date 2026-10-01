@@ -60,7 +60,7 @@ func (h *ProductHandler) List(c *gin.Context) {
 	// 对客户端是同一件事。越界值不在这里判 —— 钳制规则在 service。
 	//
 	// 契约里这个接口还有 sort / min_price_cents / max_price_cents 三个可选参数，
-	// 眼下**没有实现**，传了会被忽略。它们不在这里读，也不该在这里回 400 ——
+	// 眼下**没有实现**，传了会被忽略（in_stock_only 2026-10-01 接上了）。它们不在这里读，也不该在这里回 400 ——
 	// 对一份冻结的契约把 optional 参数判成错误是违约。（category_id 原本也在这张
 	// 单子上，买家端要做类目浏览，本轮接上了，见下面。）
 	// contract_test.go 里那份 notYetImplemented 清单钉着这笔账：契约新增参数、
@@ -94,7 +94,10 @@ func (h *ProductHandler) List(c *gin.Context) {
 		}
 	}
 
-	list, err := h.svc.List(c.Request.Context(), storeID, categoryID, page, pageSize)
+	// in_stock_only：只看当前门店有货的（2026-10-01 接上）。解析不出布尔按没传（false），与上面几个参数一致。
+	inStockOnly, _ := strconv.ParseBool(c.Query("in_stock_only"))
+
+	list, err := h.svc.List(c.Request.Context(), storeID, categoryID, inStockOnly, page, pageSize)
 	switch {
 	case err == nil:
 	case errors.Is(err, service.ErrStoreNotFound):

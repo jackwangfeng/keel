@@ -222,4 +222,34 @@ func exerciseQuotaMsg(t *testing.T, cs couponShop, rig quotaMsgRig) {
 		w := cs.patchPromotion(t, pid, fmt.Sprintf(`{"skus":[{"sku_id":%d,"promo_price_cents":990,"stock_qty":3}]}`, cs.ShirtSKU))
 		wantStatus(t, w, http.StatusUnprocessableEntity, "移除卖出过的 SKU")
 	})
+
+	// 上线与并发改配额交错（破坏性测试 P1，2026-10-01）：上线的第一遍读到定义 A=9，在它直接同步 A 之前，
+	// 一次并发的改配额提交了 B=4 并且它的消息已经落地；然后直接同步把库存写回 A。修之前第二遍因为「直接同步过」
+	// 既不比对也不发消息，库存停在 A、core 是 B、活动已上线。钩子把这个几毫秒的窗口撑成确定的顺序。
+	t.Run("上线与并发改配额交错_最终按当前定义", func(t *testing.T) {
+		p := cs.createPromotion(t, "交错秒杀", `"promotion_type":4,`+skusJSON(9))
+		pid = p.Id
+		waitQuota(t, 9, "新建之后")
+		var fired atomic.Bool
+		restore := service.SetBeforeDirectQuotaSyncHook(func(_ context.Context, id int64) {
+			if id != pid || !fired.CompareAndSwap(false, true) {
+				return
+			}
+			if w := cs.patchPromotion(t, pid, "{"+skusJSON(4)+"}"); w.Code != http.StatusOK {
+				t.Errorf("并发改配额返回 %d：%s", w.Code, w.Body.String())
+			}
+			waitQuota(t, 4, "并发改配额的消息落地") // B 的消息先于 A 的直接同步落地
+		})
+		w := cs.patchPromotion(t, pid, `{"status":1}`)
+		restore()
+		wantStatus(t, w, http.StatusOK, "上线")
+		if !fired.Load() {
+			t.Fatal("钩子没有触发：上线没走直接同步那一支")
+		}
+		if d := definition(t); d != 4 {
+			t.Fatalf("core 里的定义是 %d，期望并发改配额写进去的 4", d)
+		}
+		waitQuota(t, 4, "上线之后（库存应当跟 core 的当前定义一致，而不是停在第一遍读到的 9）")
+		wantStatus(t, cs.patchPromotion(t, pid, `{"status":0}`), http.StatusOK, "收尾下线")
+	})
 }
