@@ -69,8 +69,30 @@ func (a *Adapter) ParseInbound(b channel.Binding, r *http.Request, body []byte) 
 	case topic == "inventory_levels/update":
 		ev.Kind = channel.EventStockChanged
 	case strings.HasPrefix(topic, "orders/"):
-		_ = json.Unmarshal(body, &p)
-		ev.Kind, ev.ExternalOrderID = channel.EventOrderChanged, p.GID
+		if err := json.Unmarshal(body, &p); err != nil {
+			return nil, nil, fmt.Errorf("Shopify %s 回调解不开：%w", topic, err)
+		}
+		gid := p.GID
+		if gid == "" && len(p.ID) > 0 && string(p.ID) != "null" {
+			gid = "gid://shopify/Order/" + strings.Trim(string(p.ID), `"`)
+		}
+		if gid == "" {
+			return nil, nil, fmt.Errorf("Shopify %s 回调里没有订单 ID", topic)
+		}
+		ev.Kind, ev.ExternalOrderID = channel.EventOrderChanged, gid
+	case topic == "refunds/create" || topic == "fulfillments/create":
+		// 正文是退款 / fulfillment 本身，admin_graphql_api_id 指向它而不是订单；订单号在数字 order_id。
+		var q struct {
+			OrderID json.RawMessage `json:"order_id"`
+		}
+		if err := json.Unmarshal(body, &q); err != nil {
+			return nil, nil, fmt.Errorf("Shopify %s 回调解不开：%w", topic, err)
+		}
+		id := strings.Trim(string(q.OrderID), `"`)
+		if id == "" || id == "null" {
+			return nil, nil, fmt.Errorf("Shopify %s 回调里没有 order_id", topic)
+		}
+		ev.Kind, ev.ExternalOrderID = channel.EventOrderChanged, "gid://shopify/Order/"+id
 	default:
 		ev.Kind = channel.EventIgnored
 	}

@@ -7,8 +7,9 @@ import (
 	"github.com/keel/keel/internal/channel"
 )
 
-// webhookTopics 是这个适配器要订阅的主题（第三期加订单主题）。
-var webhookTopics = []string{"PRODUCTS_CREATE", "PRODUCTS_UPDATE", "PRODUCTS_DELETE", "INVENTORY_LEVELS_UPDATE", "APP_UNINSTALLED"}
+// webhookTopics 是这个适配器要订阅的主题。
+var webhookTopics = []string{"PRODUCTS_CREATE", "PRODUCTS_UPDATE", "PRODUCTS_DELETE", "INVENTORY_LEVELS_UPDATE", "APP_UNINSTALLED",
+	"ORDERS_CREATE", "ORDERS_UPDATED", "ORDERS_CANCELLED", "ORDERS_PAID", "REFUNDS_CREATE", "FULFILLMENTS_CREATE"}
 
 const queryWebhooks = `query Webhooks{ webhookSubscriptions(first:100){ nodes{ topic uri } } }`
 
