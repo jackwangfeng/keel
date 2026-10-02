@@ -168,6 +168,35 @@ type ChannelTx interface {
 	InsertChannelInboundEvent(ctx context.Context, in ChannelInboundEventInput) (id int64, inserted bool, err error)
 	GetChannelInboundEvent(ctx context.Context, id int64) (ChannelInboundEvent, error)
 	MarkChannelInboundEvent(ctx context.Context, id int64, status int16, errMsg *string) error
+
+	// ChannelSyncRev 是「开关渠道」消息的版本（数据库时钟的微秒数，单调）。
+	ChannelSyncRev(ctx context.Context) (int64, error)
+	// ChannelSKUOffers：这家门店这批 SKU 的就近生效价与能不能卖。查不到的 SKU 不在结果里。
+	ChannelSKUOffers(ctx context.Context, storeID int64, skuIDs []int64) (map[int64]SKUOffer, error)
+	UpsertChannelItemLink(ctx context.Context, l ChannelItemLink) error
+	ChannelItemLinks(ctx context.Context, bindingID int64, kind int16, keelIDs []int64) (map[int64]ChannelItemLink, error)
+	LinkedSKUIDsPage(ctx context.Context, bindingID, after int64, limit int32) ([]int64, error)
+}
+
+// channel_item_links.kind
+const (
+	ChannelItemProduct int16 = 1
+	ChannelItemSKU     int16 = 2
+)
+
+type ChannelItemLink struct {
+	BindingID  int64
+	Kind       int16
+	KeelID     int64
+	ExternalID string
+	Extra      json.RawMessage
+	SyncedAt   time.Time
+}
+
+// SKUOffer 是一个 SKU 在一家门店的就近生效价与能不能卖（商品在售没删、SKU 启用没删）。
+type SKUOffer struct {
+	PriceCents int64
+	Sellable   bool
 }
 
 func bindingFrom(id int64, channel, account, name string, roles, status int16, config []byte,
@@ -480,4 +509,47 @@ func (t invTx) SetChannelMerchant(ctx context.Context, enabled bool, rev int64) 
 
 func (t invTx) ChannelMerchantEnabled(ctx context.Context) (bool, error) {
 	return t.q.InvChannelMerchantEnabled(ctx)
+}
+
+func (t tenantTx) ChannelSyncRev(ctx context.Context) (int64, error) { return t.q.ChannelSyncRev(ctx) }
+
+func (t tenantTx) ChannelSKUOffers(ctx context.Context, storeID int64, skuIDs []int64) (map[int64]SKUOffer, error) {
+	out := make(map[int64]SKUOffer, len(skuIDs))
+	if len(skuIDs) == 0 {
+		return out, nil
+	}
+	rows, err := t.q.ChannelSKUOffers(ctx, db.ChannelSKUOffersParams{StoreID: storeID, SkuIds: skuIDs})
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range rows {
+		out[r.SkuID] = SKUOffer{PriceCents: r.PriceCents, Sellable: r.Sellable}
+	}
+	return out, nil
+}
+
+func (t tenantTx) UpsertChannelItemLink(ctx context.Context, l ChannelItemLink) error {
+	return channelWriteErr(t.q.UpsertChannelItemLink(ctx, db.UpsertChannelItemLinkParams{
+		BindingID: l.BindingID, Kind: l.Kind, KeelID: l.KeelID, ExternalID: l.ExternalID, Extra: jsonOrEmpty(l.Extra),
+	}))
+}
+
+func (t tenantTx) ChannelItemLinks(ctx context.Context, bindingID int64, kind int16, keelIDs []int64) (map[int64]ChannelItemLink, error) {
+	out := make(map[int64]ChannelItemLink, len(keelIDs))
+	if len(keelIDs) == 0 {
+		return out, nil
+	}
+	rows, err := t.q.ListChannelItemLinks(ctx, db.ListChannelItemLinksParams{BindingID: bindingID, Kind: kind, KeelIds: keelIDs})
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range rows {
+		out[r.KeelID] = ChannelItemLink{BindingID: r.BindingID, Kind: r.Kind, KeelID: r.KeelID, ExternalID: r.ExternalID,
+			Extra: json.RawMessage(r.Extra), SyncedAt: r.SyncedAt.Time}
+	}
+	return out, nil
+}
+
+func (t tenantTx) LinkedSKUIDsPage(ctx context.Context, bindingID, after int64, limit int32) ([]int64, error) {
+	return t.q.ListLinkedSKUIDsPage(ctx, db.ListLinkedSKUIDsPageParams{BindingID: bindingID, After: after, Lim: limit})
 }

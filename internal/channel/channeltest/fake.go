@@ -48,6 +48,7 @@ type Adapter struct {
 	pushes   [][]channel.Listing
 	failNext int                // 接下来几次 PushListings 整批返回可重试错误
 	conflict map[[2]int64]int32 // (门店, SKU) → 渠道上「被人改过」的现值，下一次推送报一次冲突
+	applied  map[[2]int64]int32 // 渠道上当前的可售数（只有生效的推送改它；冲突的那一次是被人改成的数）
 	actions  []channel.Action
 }
 
@@ -85,6 +86,9 @@ func mustHex(s string) []byte { b, _ := hex.DecodeString(s); return b }
 // FailNext 让接下来 n 次 PushListings 整批返回可重试错误。
 func (a *Adapter) FailNext(n int) { a.mu.Lock(); a.failNext = n; a.mu.Unlock() }
 
+// FailuresLeft 是还没用掉的编排失败次数。
+func (a *Adapter) FailuresLeft() int { a.mu.Lock(); defer a.mu.Unlock(); return a.failNext }
+
 // ConflictOnce 让下一次推送 (store, sku) 报一次 CAS 冲突，渠道上的现值是 observed。
 func (a *Adapter) ConflictOnce(store, sku int64, observed int32) {
 	a.mu.Lock()
@@ -104,18 +108,12 @@ func (a *Adapter) Pushes() [][]channel.Listing {
 	return out
 }
 
-// LastQty 是最近一次推给 (store, sku) 的可售数；没推过返回 false。
+// LastQty 是渠道上 (store, sku) 当前的可售数（最近一次**生效的**推送）；没推过返回 false。
 func (a *Adapter) LastQty(store, sku int64) (int32, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	for i := len(a.pushes) - 1; i >= 0; i-- {
-		for _, l := range a.pushes[i] {
-			if l.StoreID == store && l.SKUID == sku {
-				return l.Qty, true
-			}
-		}
-	}
-	return 0, false
+	q, ok := a.applied[[2]int64{store, sku}]
+	return q, ok
 }
 
 func (a *Adapter) PushListings(_ context.Context, _ channel.Binding, ls []channel.Listing) ([]channel.ListingResult, error) {
@@ -130,12 +128,22 @@ func (a *Adapter) PushListings(_ context.Context, _ channel.Binding, ls []channe
 	out := make([]channel.ListingResult, len(ls))
 	for i, l := range ls {
 		out[i] = channel.ListingResult{StoreID: l.StoreID, SKUID: l.SKUID}
-		if obs, ok := a.conflict[[2]int64{l.StoreID, l.SKUID}]; ok {
-			delete(a.conflict, [2]int64{l.StoreID, l.SKUID})
+		k := [2]int64{l.StoreID, l.SKUID}
+		if obs, ok := a.conflict[k]; ok {
+			delete(a.conflict, k)
 			o := obs
 			out[i].Conflict, out[i].ObservedQty = true, &o
 			out[i].Err = errors.New("假渠道：CAS 冲突")
+			if a.applied == nil {
+				a.applied = map[[2]int64]int32{}
+			}
+			a.applied[k] = obs // 渠道上是被人改成的那个数
+			continue
 		}
+		if a.applied == nil {
+			a.applied = map[[2]int64]int32{}
+		}
+		a.applied[k] = l.Qty
 	}
 	return out, nil
 }

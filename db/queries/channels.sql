@@ -131,3 +131,34 @@ SELECT id, binding_id, external_event_id, topic, payload, status, error, receive
 UPDATE channel_inbound_events
    SET status = @status::smallint, error = sqlc.narg(error)::text, processed_at = now()
  WHERE id = @id::bigint;
+
+-- name: ChannelSyncRev :one
+-- 「开关渠道」消息的版本：数据库时钟的微秒数。只用一台数据库的时钟，多个 core 实例之间没有时钟偏差。
+SELECT (extract(epoch FROM clock_timestamp()) * 1000000)::bigint AS rev;
+
+-- name: ChannelSKUOffers :many
+-- 推给渠道的基准价（门店就近生效价，sku_prices_by_store 是唯一实现）与「能不能卖」：
+-- 商品在售且没删、SKU 启用且没删。不能卖的 SKU 对外可售按 0 推。
+SELECT v.sku_id, v.price_cents,
+       (p.status = 1 AND p.deleted_at IS NULL AND s.status = 1 AND s.deleted_at IS NULL)::boolean AS sellable
+  FROM sku_prices_by_store v
+  JOIN skus s     ON s.id = v.sku_id
+  JOIN products p ON p.id = s.product_id
+ WHERE v.store_id = @store_id::bigint AND v.sku_id = ANY(@sku_ids::bigint[]);
+
+-- name: UpsertChannelItemLink :exec
+INSERT INTO channel_item_links (binding_id, kind, keel_id, external_id, extra)
+VALUES (@binding_id::bigint, @kind::smallint, @keel_id::bigint, @external_id::text, @extra::jsonb)
+ON CONFLICT ON CONSTRAINT channel_item_links_pkey
+DO UPDATE SET external_id = EXCLUDED.external_id, extra = EXCLUDED.extra, synced_at = now();
+
+-- name: ListChannelItemLinks :many
+SELECT binding_id, kind, keel_id, external_id, extra, synced_at
+  FROM channel_item_links
+ WHERE binding_id = @binding_id::bigint AND kind = @kind::smallint AND keel_id = ANY(@keel_ids::bigint[]);
+
+-- name: ListLinkedSKUIDsPage :many
+-- 这个 binding 映射过的 SKU，按 id 键集分页（整店重算用）。
+SELECT keel_id FROM channel_item_links
+ WHERE binding_id = @binding_id::bigint AND kind = 2 AND keel_id > @after::bigint
+ ORDER BY keel_id LIMIT @lim::int;

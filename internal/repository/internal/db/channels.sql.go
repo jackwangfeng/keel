@@ -11,6 +11,60 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const channelSKUOffers = `-- name: ChannelSKUOffers :many
+SELECT v.sku_id, v.price_cents,
+       (p.status = 1 AND p.deleted_at IS NULL AND s.status = 1 AND s.deleted_at IS NULL)::boolean AS sellable
+  FROM sku_prices_by_store v
+  JOIN skus s     ON s.id = v.sku_id
+  JOIN products p ON p.id = s.product_id
+ WHERE v.store_id = $1::bigint AND v.sku_id = ANY($2::bigint[])
+`
+
+type ChannelSKUOffersParams struct {
+	StoreID int64
+	SkuIds  []int64
+}
+
+type ChannelSKUOffersRow struct {
+	SkuID      int64
+	PriceCents int64
+	Sellable   bool
+}
+
+// 推给渠道的基准价（门店就近生效价，sku_prices_by_store 是唯一实现）与「能不能卖」：
+// 商品在售且没删、SKU 启用且没删。不能卖的 SKU 对外可售按 0 推。
+func (q *Queries) ChannelSKUOffers(ctx context.Context, arg ChannelSKUOffersParams) ([]ChannelSKUOffersRow, error) {
+	rows, err := q.db.Query(ctx, channelSKUOffers, arg.StoreID, arg.SkuIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ChannelSKUOffersRow
+	for rows.Next() {
+		var i ChannelSKUOffersRow
+		if err := rows.Scan(&i.SkuID, &i.PriceCents, &i.Sellable); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const channelSyncRev = `-- name: ChannelSyncRev :one
+SELECT (extract(epoch FROM clock_timestamp()) * 1000000)::bigint AS rev
+`
+
+// 「开关渠道」消息的版本：数据库时钟的微秒数。只用一台数据库的时钟，多个 core 实例之间没有时钟偏差。
+func (q *Queries) ChannelSyncRev(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, channelSyncRev)
+	var rev int64
+	err := row.Scan(&rev)
+	return rev, err
+}
+
 const countActiveOutletBindings = `-- name: CountActiveOutletBindings :one
 SELECT count(*) FROM channel_bindings WHERE status = 1 AND (roles & 4) <> 0
 `
@@ -389,6 +443,54 @@ func (q *Queries) ListChannelBindings(ctx context.Context) ([]ListChannelBinding
 	return items, nil
 }
 
+const listChannelItemLinks = `-- name: ListChannelItemLinks :many
+SELECT binding_id, kind, keel_id, external_id, extra, synced_at
+  FROM channel_item_links
+ WHERE binding_id = $1::bigint AND kind = $2::smallint AND keel_id = ANY($3::bigint[])
+`
+
+type ListChannelItemLinksParams struct {
+	BindingID int64
+	Kind      int16
+	KeelIds   []int64
+}
+
+type ListChannelItemLinksRow struct {
+	BindingID  int64
+	Kind       int16
+	KeelID     int64
+	ExternalID string
+	Extra      []byte
+	SyncedAt   pgtype.Timestamptz
+}
+
+func (q *Queries) ListChannelItemLinks(ctx context.Context, arg ListChannelItemLinksParams) ([]ListChannelItemLinksRow, error) {
+	rows, err := q.db.Query(ctx, listChannelItemLinks, arg.BindingID, arg.Kind, arg.KeelIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListChannelItemLinksRow
+	for rows.Next() {
+		var i ListChannelItemLinksRow
+		if err := rows.Scan(
+			&i.BindingID,
+			&i.Kind,
+			&i.KeelID,
+			&i.ExternalID,
+			&i.Extra,
+			&i.SyncedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listChannelListingsPage = `-- name: ListChannelListingsPage :many
 SELECT binding_id, store_id, sku_id, published_qty, published_cents, version, pushed_at, last_error
   FROM channel_listings
@@ -625,6 +727,39 @@ func (q *Queries) ListChannelStoreLinks(ctx context.Context, bindingID int64) ([
 	return items, nil
 }
 
+const listLinkedSKUIDsPage = `-- name: ListLinkedSKUIDsPage :many
+SELECT keel_id FROM channel_item_links
+ WHERE binding_id = $1::bigint AND kind = 2 AND keel_id > $2::bigint
+ ORDER BY keel_id LIMIT $3::int
+`
+
+type ListLinkedSKUIDsPageParams struct {
+	BindingID int64
+	After     int64
+	Lim       int32
+}
+
+// 这个 binding 映射过的 SKU，按 id 键集分页（整店重算用）。
+func (q *Queries) ListLinkedSKUIDsPage(ctx context.Context, arg ListLinkedSKUIDsPageParams) ([]int64, error) {
+	rows, err := q.db.Query(ctx, listLinkedSKUIDsPage, arg.BindingID, arg.After, arg.Lim)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []int64
+	for rows.Next() {
+		var keel_id int64
+		if err := rows.Scan(&keel_id); err != nil {
+			return nil, err
+		}
+		items = append(items, keel_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const markChannelInboundEvent = `-- name: MarkChannelInboundEvent :exec
 UPDATE channel_inbound_events
    SET status = $1::smallint, error = $2::text, processed_at = now()
@@ -733,6 +868,32 @@ func (q *Queries) UpdateChannelBinding(ctx context.Context, arg UpdateChannelBin
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const upsertChannelItemLink = `-- name: UpsertChannelItemLink :exec
+INSERT INTO channel_item_links (binding_id, kind, keel_id, external_id, extra)
+VALUES ($1::bigint, $2::smallint, $3::bigint, $4::text, $5::jsonb)
+ON CONFLICT ON CONSTRAINT channel_item_links_pkey
+DO UPDATE SET external_id = EXCLUDED.external_id, extra = EXCLUDED.extra, synced_at = now()
+`
+
+type UpsertChannelItemLinkParams struct {
+	BindingID  int64
+	Kind       int16
+	KeelID     int64
+	ExternalID string
+	Extra      []byte
+}
+
+func (q *Queries) UpsertChannelItemLink(ctx context.Context, arg UpsertChannelItemLinkParams) error {
+	_, err := q.db.Exec(ctx, upsertChannelItemLink,
+		arg.BindingID,
+		arg.Kind,
+		arg.KeelID,
+		arg.ExternalID,
+		arg.Extra,
+	)
+	return err
 }
 
 const upsertChannelListing = `-- name: UpsertChannelListing :one

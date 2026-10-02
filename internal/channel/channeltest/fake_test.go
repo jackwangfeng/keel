@@ -61,7 +61,13 @@ func TestPushListingsFailureAndConflictAreScripted(t *testing.T) {
 	if err != nil || !res[0].Conflict || *res[0].ObservedQty != 9 {
 		t.Fatalf("编排的冲突：res=%+v err=%v", res, err)
 	}
-	if q, ok := a.LastQty(1, 2); !ok || q != 5 {
-		t.Errorf("LastQty = %d,%v", q, ok)
+	if q, ok := a.LastQty(1, 2); !ok || q != 9 {
+		t.Errorf("冲突那一次不生效，渠道上应是被改成的 9：LastQty = %d,%v", q, ok)
+	}
+	if _, err := a.PushListings(ctx, binding("k"), []channel.Listing{{StoreID: 1, SKUID: 2, Qty: 5}}); err != nil {
+		t.Fatal(err)
+	}
+	if q, _ := a.LastQty(1, 2); q != 5 {
+		t.Errorf("重推之后 LastQty = %d，期望 5", q)
 	}
 }
