@@ -103,6 +103,11 @@ export const can = {
     manageAgents: (): boolean => role() === ROLE.admin,
     /** 渠道账号、凭据、门店映射、规则、重新同步：只有管理员（服务端 requireMerchantAdmin）。 */
     manageChannels: (): boolean => role() === ROLE.admin,
+    /**
+     * 看渠道账号（列表、详情、推送状态）：全店范围（服务端 requireMerchantWide）。大区 / 门店管理员
+     * 在「渠道」里只有「订单」视图：看、处理自己范围内门店的渠道单（服务端按门店范围滤）。
+     */
+    seeChannelAccounts: (): boolean => merchantWide(),
     /** 读经营简报：只有全店范围的人（管理员 / 操作员），与经营报表同一条线。 */
     seeAgentBriefs: (): boolean => merchantWide(),
     /** 读 AI 员工成绩单（AI 经营 M10 §4）：全店范围的人，与简报同一条线——店长据此决定要不要放手（M11 自动执行）。 */
@@ -126,8 +131,8 @@ export function sectionVisible(key: string): boolean {
         case "shop-settings":
             return can.manageShopSettings();
         case "channels":
-            // 读渠道账号要全店范围（服务端 requireMerchantWide），写要管理员。
-            return merchantWide();
+            // 人人可见：全店范围的看账号与订单（写要管理员）；大区 / 门店管理员只有「订单」视图（自己范围内门店的渠道单）。
+            return true;
         default:
             return true;
     }

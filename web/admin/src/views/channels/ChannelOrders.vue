@@ -85,12 +85,16 @@ function onStoreChange(): void {
 function bindingName(id: number): string {
     return bindingById.value.get(id)?.name ?? `账号 #${id}`;
 }
+/** 账号名：渠道单自己带（门店范围的员工没有账号列表）。 */
+function bindingNameOf(o: ChannelOrder): string {
+    return o.binding_name || bindingName(o.binding_id);
+}
 function storeName(id: number | null | undefined): string {
     if (id === null || id === undefined) return "未映射";
     return storeById.value.get(id)?.name ?? `门店 #${id}`;
 }
 function actionsOf(o: ChannelOrder): { retry: boolean; accept: boolean; reject: boolean } {
-    const kind = bindingById.value.get(o.binding_id)?.channel ?? "";
+    const kind = o.channel || (bindingById.value.get(o.binding_id)?.channel ?? "");
     return channelOrderActions(o, acceptRequiredOf.value.get(kind) ?? false);
 }
 /** 能不能处理这张单：服务端按渠道单门店判（同发货）；没映射门店的要全店范围。 */
@@ -147,7 +151,7 @@ const openId = ref<number | null>(null);
         <ProblemAlert v-if="error" :error="error" />
         <div class="page-toolbar">
             <el-select
-                v-if="bindingId === null"
+                v-if="bindingId === null && bindings.length > 0"
                 v-model="bindingFilter"
                 clearable
                 placeholder="全部账号"
@@ -179,7 +183,7 @@ const openId = ref<number | null>(null);
                     <template #default="{ row }: { row: ChannelOrder }">
                         <el-link type="primary" @click="openId = row.id">{{ row.external_order_name || row.external_order_id }}</el-link>
                         <el-tag v-if="row.test" size="small" type="info" class="ml4">测试单</el-tag>
-                        <div v-if="bindingId === null" class="hint">{{ bindingName(row.binding_id) }}</div>
+                        <div v-if="bindingId === null" class="hint">{{ bindingNameOf(row) }}</div>
                     </template>
                 </el-table-column>
                 <el-table-column label="状态" min-width="200">
@@ -262,7 +266,7 @@ const openId = ref<number | null>(null);
                 </div>
                 <div v-if="row.exception" class="err">{{ row.exception }}</div>
                 <div class="co-info">
-                    <span v-if="bindingId === null">{{ bindingName(row.binding_id) }}</span>
+                    <span v-if="bindingId === null">{{ bindingNameOf(row) }}</span>
                     <span>{{ storeName(row.store_id) }}</span>
                     <span v-if="row.order_no">
                         keel

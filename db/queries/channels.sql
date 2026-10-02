@@ -272,6 +272,8 @@ UPDATE channel_orders
 
 -- name: ListChannelOrders :many
 -- 后台的渠道单列表：可按 binding、门店（通知跳过来只带门店）、状态筛，可只看异常；新的在前。
+-- only_region_ids / only_store_ids 是员工的范围（service 的 orderListScope，同后台订单列表）：NULL 不限，
+-- 空数组一个都不给；没映射门店的渠道单（store_id 空）只有不限范围的人看得见。
 -- 渠道单表是一家店的渠道单（量远小于 orders），可空筛选在这里不构成 generic plan 的问题。
 SELECT id, binding_id, external_order_id, external_order_name, store_id, order_no, platform_status, status, exception,
        accept_deadline, delivery_mode, amounts, lines, receiver, version, last_payload, test, created_at, updated_at
@@ -280,6 +282,11 @@ SELECT id, binding_id, external_order_id, external_order_name, store_id, order_n
    AND (sqlc.narg(store_id)::bigint IS NULL OR store_id = sqlc.narg(store_id)::bigint)
    AND (sqlc.narg(status)::smallint IS NULL OR status = sqlc.narg(status)::smallint)
    AND (NOT @exception_only::boolean OR exception IS NOT NULL)
+   AND (sqlc.narg(only_region_ids)::bigint[] IS NULL
+        OR store_id IN (SELECT st.id FROM stores st
+                         WHERE st.region_id = ANY(sqlc.narg(only_region_ids)::bigint[])))
+   AND (sqlc.narg(only_store_ids)::bigint[] IS NULL
+        OR store_id = ANY(sqlc.narg(only_store_ids)::bigint[]))
  ORDER BY id DESC
  LIMIT @lim::int OFFSET @off::int;
 
@@ -290,7 +297,12 @@ SELECT count(*)::bigint
  WHERE (sqlc.narg(binding_id)::bigint IS NULL OR binding_id = sqlc.narg(binding_id)::bigint)
    AND (sqlc.narg(store_id)::bigint IS NULL OR store_id = sqlc.narg(store_id)::bigint)
    AND (sqlc.narg(status)::smallint IS NULL OR status = sqlc.narg(status)::smallint)
-   AND (NOT @exception_only::boolean OR exception IS NOT NULL);
+   AND (NOT @exception_only::boolean OR exception IS NOT NULL)
+   AND (sqlc.narg(only_region_ids)::bigint[] IS NULL
+        OR store_id IN (SELECT st.id FROM stores st
+                         WHERE st.region_id = ANY(sqlc.narg(only_region_ids)::bigint[])))
+   AND (sqlc.narg(only_store_ids)::bigint[] IS NULL
+        OR store_id = ANY(sqlc.narg(only_store_ids)::bigint[]));
 
 -- name: ChannelOrderRefs :many
 -- 后台订单列表 / 详情的「来自 Shopify #1001」：这一页有渠道单（source = 1）时按 channel_order_id 补查一次

@@ -82,6 +82,8 @@ type ChannelOrderFilter struct {
 	StoreID       *int64
 	Status        *int16
 	ExceptionOnly bool
+	// Only 是员工的范围（零值不限）；store_id 空的渠道单只在不限时出现。
+	Only          ScopeFilter
 	Limit, Offset int32
 }
 
@@ -212,7 +214,8 @@ func (t tenantTx) SetChannelOrderState(ctx context.Context, id int64, st Channel
 
 func (t tenantTx) ListChannelOrders(ctx context.Context, f ChannelOrderFilter) ([]ChannelOrder, error) {
 	rows, err := t.q.ListChannelOrders(ctx, db.ListChannelOrdersParams{BindingID: f.BindingID, StoreID: f.StoreID,
-		Status: f.Status, ExceptionOnly: f.ExceptionOnly, Lim: f.Limit, Off: f.Offset})
+		Status: f.Status, ExceptionOnly: f.ExceptionOnly, OnlyRegionIds: f.Only.RegionIDs, OnlyStoreIds: f.Only.StoreIDs,
+		Lim: f.Limit, Off: f.Offset})
 	if err != nil {
 		return nil, err
 	}
@@ -225,7 +228,7 @@ func (t tenantTx) ListChannelOrders(ctx context.Context, f ChannelOrderFilter) (
 
 func (t tenantTx) CountChannelOrders(ctx context.Context, f ChannelOrderFilter) (int64, error) {
 	return t.q.CountChannelOrders(ctx, db.CountChannelOrdersParams{BindingID: f.BindingID, StoreID: f.StoreID,
-		Status: f.Status, ExceptionOnly: f.ExceptionOnly})
+		Status: f.Status, ExceptionOnly: f.ExceptionOnly, OnlyRegionIds: f.Only.RegionIDs, OnlyStoreIds: f.Only.StoreIDs})
 }
 
 func (t tenantTx) ChannelOrderRefs(ctx context.Context, ids []int64) (map[int64]ChannelOrderRef, error) {

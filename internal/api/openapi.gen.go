@@ -4400,7 +4400,13 @@ type ChannelOrder struct {
 	// 为真（价内税）：行价已经含税，平台总价 = `buyer_paid`，`tax` 只是其中的税额，供参考。
 	Amounts   ChannelOrderAmounts `json:"amounts"`
 	BindingId int64               `json:"binding_id"`
-	CreatedAt time.Time           `json:"created_at"`
+
+	// BindingName 所属渠道账号的名称
+	BindingName string `json:"binding_name"`
+
+	// Channel 渠道种类（所属账号的 channel，如 `shopify`）；门店范围的员工看不到账号列表，靠它显示与判能力
+	Channel   string    `json:"channel"`
+	CreatedAt time.Time `json:"created_at"`
 
 	// DeliveryMode 配送方式（位）：1 快递、2 本地配送、4 平台骑手、8 商家自配送
 	DeliveryMode int32 `json:"delivery_mode"`
@@ -4466,7 +4472,13 @@ type ChannelOrderDetail struct {
 	// 为真（价内税）：行价已经含税，平台总价 = `buyer_paid`，`tax` 只是其中的税额，供参考。
 	Amounts   ChannelOrderAmounts `json:"amounts"`
 	BindingId int64               `json:"binding_id"`
-	CreatedAt time.Time           `json:"created_at"`
+
+	// BindingName 所属渠道账号的名称
+	BindingName string `json:"binding_name"`
+
+	// Channel 渠道种类（所属账号的 channel，如 `shopify`）；门店范围的员工看不到账号列表，靠它显示与判能力
+	Channel   string    `json:"channel"`
+	CreatedAt time.Time `json:"created_at"`
 
 	// DeliveryMode 配送方式（位）：1 快递、2 本地配送、4 平台骑手、8 商家自配送
 	DeliveryMode int32 `json:"delivery_mode"`
@@ -7641,6 +7653,8 @@ type Staff struct {
 	// | 门店：建、改、删、围栏 | ✅ | ✅ | 只限本大区的门店（换大区时新旧都得在范围内） | ❌ |
 	// | 门店价、门店上下架、门店库存 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
 	// | 订单与售后：订单 / 退款单的列表与详情、发货、退款审核、确认收到退货 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
+	// | 渠道订单：列表与详情、重试、接单、拒单、平台申请的决定（按渠道单映射到的 keel 门店；没映射门店的只有 1 / 2） | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
+	// | 渠道账号、凭据、价格规则、映射 | ✅ | ✅ | ❌ | ❌ |
 	// | 经营报表：概览、趋势、商品排行、门店对比、库存预警（含两份 CSV 导出） | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
 	// | 经营报表：搜索概况（检索日志没有门店维度） | ✅ | ✅ | ❌ | ❌ |
 	// | 设默认门店（含建店时 is_default） | ✅ | ❌ | ❌ | ❌ |
@@ -7652,7 +7666,8 @@ type Staff struct {
 	// 只在那家店在范围内时放行。列表类接口对 3 / 4 只返回范围内的；
 	// 订单与售后按订单的**履约门店**判，门店所属的大区取它**此刻**的大区
 	// （货从哪家店出，就由管那家店库存的人处理这一单）；
-	// 商品目录全量可读。被拒回 403，type 是 role-forbidden 或 out-of-scope。
+	// 商品目录全量可读。被拒回 403，type 是 role-forbidden 或 out-of-scope；
+	// 渠道订单详情越界回 404（与不存在一样，不泄露存在性）。
 	Role StaffRole `json:"role"`
 
 	// Status 1 正常 2 停用
@@ -7691,6 +7706,8 @@ type StaffCreateRequest struct {
 	// | 门店：建、改、删、围栏 | ✅ | ✅ | 只限本大区的门店（换大区时新旧都得在范围内） | ❌ |
 	// | 门店价、门店上下架、门店库存 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
 	// | 订单与售后：订单 / 退款单的列表与详情、发货、退款审核、确认收到退货 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
+	// | 渠道订单：列表与详情、重试、接单、拒单、平台申请的决定（按渠道单映射到的 keel 门店；没映射门店的只有 1 / 2） | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
+	// | 渠道账号、凭据、价格规则、映射 | ✅ | ✅ | ❌ | ❌ |
 	// | 经营报表：概览、趋势、商品排行、门店对比、库存预警（含两份 CSV 导出） | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
 	// | 经营报表：搜索概况（检索日志没有门店维度） | ✅ | ✅ | ❌ | ❌ |
 	// | 设默认门店（含建店时 is_default） | ✅ | ❌ | ❌ | ❌ |
@@ -7702,7 +7719,8 @@ type StaffCreateRequest struct {
 	// 只在那家店在范围内时放行。列表类接口对 3 / 4 只返回范围内的；
 	// 订单与售后按订单的**履约门店**判，门店所属的大区取它**此刻**的大区
 	// （货从哪家店出，就由管那家店库存的人处理这一单）；
-	// 商品目录全量可读。被拒回 403，type 是 role-forbidden 或 out-of-scope。
+	// 商品目录全量可读。被拒回 403，type 是 role-forbidden 或 out-of-scope；
+	// 渠道订单详情越界回 404（与不存在一样，不泄露存在性）。
 	Role StaffRole `json:"role"`
 
 	// StoreIds role 4 必填且至少一个；其余角色不带
@@ -7747,6 +7765,8 @@ type StaffRef struct {
 // | 门店：建、改、删、围栏 | ✅ | ✅ | 只限本大区的门店（换大区时新旧都得在范围内） | ❌ |
 // | 门店价、门店上下架、门店库存 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
 // | 订单与售后：订单 / 退款单的列表与详情、发货、退款审核、确认收到退货 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
+// | 渠道订单：列表与详情、重试、接单、拒单、平台申请的决定（按渠道单映射到的 keel 门店；没映射门店的只有 1 / 2） | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
+// | 渠道账号、凭据、价格规则、映射 | ✅ | ✅ | ❌ | ❌ |
 // | 经营报表：概览、趋势、商品排行、门店对比、库存预警（含两份 CSV 导出） | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
 // | 经营报表：搜索概况（检索日志没有门店维度） | ✅ | ✅ | ❌ | ❌ |
 // | 设默认门店（含建店时 is_default） | ✅ | ❌ | ❌ | ❌ |
@@ -7758,7 +7778,8 @@ type StaffRef struct {
 // 只在那家店在范围内时放行。列表类接口对 3 / 4 只返回范围内的；
 // 订单与售后按订单的**履约门店**判，门店所属的大区取它**此刻**的大区
 // （货从哪家店出，就由管那家店库存的人处理这一单）；
-// 商品目录全量可读。被拒回 403，type 是 role-forbidden 或 out-of-scope。
+// 商品目录全量可读。被拒回 403，type 是 role-forbidden 或 out-of-scope；
+// 渠道订单详情越界回 404（与不存在一样，不泄露存在性）。
 type StaffRole int
 
 // StaffSession defines model for StaffSession.
@@ -12177,6 +12198,8 @@ type PatchAdminStaffStaffIdJSONBody struct {
 	// | 门店：建、改、删、围栏 | ✅ | ✅ | 只限本大区的门店（换大区时新旧都得在范围内） | ❌ |
 	// | 门店价、门店上下架、门店库存 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
 	// | 订单与售后：订单 / 退款单的列表与详情、发货、退款审核、确认收到退货 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
+	// | 渠道订单：列表与详情、重试、接单、拒单、平台申请的决定（按渠道单映射到的 keel 门店；没映射门店的只有 1 / 2） | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
+	// | 渠道账号、凭据、价格规则、映射 | ✅ | ✅ | ❌ | ❌ |
 	// | 经营报表：概览、趋势、商品排行、门店对比、库存预警（含两份 CSV 导出） | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
 	// | 经营报表：搜索概况（检索日志没有门店维度） | ✅ | ✅ | ❌ | ❌ |
 	// | 设默认门店（含建店时 is_default） | ✅ | ❌ | ❌ | ❌ |
@@ -12188,7 +12211,8 @@ type PatchAdminStaffStaffIdJSONBody struct {
 	// 只在那家店在范围内时放行。列表类接口对 3 / 4 只返回范围内的；
 	// 订单与售后按订单的**履约门店**判，门店所属的大区取它**此刻**的大区
 	// （货从哪家店出，就由管那家店库存的人处理这一单）；
-	// 商品目录全量可读。被拒回 403，type 是 role-forbidden 或 out-of-scope。
+	// 商品目录全量可读。被拒回 403，type 是 role-forbidden 或 out-of-scope；
+	// 渠道订单详情越界回 404（与不存在一样，不泄露存在性）。
 	Role *StaffRole `json:"role,omitempty"`
 
 	// Status 1 正常 2 停用

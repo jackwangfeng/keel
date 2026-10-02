@@ -69,7 +69,7 @@ func (h *AdminChannelHandler) ListChannelOrders(c *gin.Context) {
 	}
 	items := make([]api.ChannelOrder, 0, len(out.Items))
 	for _, v := range out.Items {
-		items = append(items, apiChannelOrder(v.Order))
+		items = append(items, apiChannelOrder(v))
 	}
 	c.JSON(http.StatusOK, channelOrderListResponse{
 		PageMeta: api.PageMeta{Page: out.Page, PageSize: out.PageSize, Total: int(out.Total)},

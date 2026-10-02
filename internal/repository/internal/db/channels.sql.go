@@ -265,6 +265,11 @@ SELECT count(*)::bigint
    AND ($2::bigint IS NULL OR store_id = $2::bigint)
    AND ($3::smallint IS NULL OR status = $3::smallint)
    AND (NOT $4::boolean OR exception IS NOT NULL)
+   AND ($5::bigint[] IS NULL
+        OR store_id IN (SELECT st.id FROM stores st
+                         WHERE st.region_id = ANY($5::bigint[])))
+   AND ($6::bigint[] IS NULL
+        OR store_id = ANY($6::bigint[]))
 `
 
 type CountChannelOrdersParams struct {
@@ -272,6 +277,8 @@ type CountChannelOrdersParams struct {
 	StoreID       *int64
 	Status        *int16
 	ExceptionOnly bool
+	OnlyRegionIds []int64
+	OnlyStoreIds  []int64
 }
 
 // 与 ListChannelOrders 同一组筛选的总条数（后台分页）。
@@ -281,6 +288,8 @@ func (q *Queries) CountChannelOrders(ctx context.Context, arg CountChannelOrders
 		arg.StoreID,
 		arg.Status,
 		arg.ExceptionOnly,
+		arg.OnlyRegionIds,
+		arg.OnlyStoreIds,
 	)
 	var column_1 int64
 	err := row.Scan(&column_1)
@@ -1286,8 +1295,13 @@ SELECT id, binding_id, external_order_id, external_order_name, store_id, order_n
    AND ($2::bigint IS NULL OR store_id = $2::bigint)
    AND ($3::smallint IS NULL OR status = $3::smallint)
    AND (NOT $4::boolean OR exception IS NOT NULL)
+   AND ($5::bigint[] IS NULL
+        OR store_id IN (SELECT st.id FROM stores st
+                         WHERE st.region_id = ANY($5::bigint[])))
+   AND ($6::bigint[] IS NULL
+        OR store_id = ANY($6::bigint[]))
  ORDER BY id DESC
- LIMIT $6::int OFFSET $5::int
+ LIMIT $8::int OFFSET $7::int
 `
 
 type ListChannelOrdersParams struct {
@@ -1295,6 +1309,8 @@ type ListChannelOrdersParams struct {
 	StoreID       *int64
 	Status        *int16
 	ExceptionOnly bool
+	OnlyRegionIds []int64
+	OnlyStoreIds  []int64
 	Off           int32
 	Lim           int32
 }
@@ -1322,6 +1338,8 @@ type ListChannelOrdersRow struct {
 }
 
 // 后台的渠道单列表：可按 binding、门店（通知跳过来只带门店）、状态筛，可只看异常；新的在前。
+// only_region_ids / only_store_ids 是员工的范围（service 的 orderListScope，同后台订单列表）：NULL 不限，
+// 空数组一个都不给；没映射门店的渠道单（store_id 空）只有不限范围的人看得见。
 // 渠道单表是一家店的渠道单（量远小于 orders），可空筛选在这里不构成 generic plan 的问题。
 func (q *Queries) ListChannelOrders(ctx context.Context, arg ListChannelOrdersParams) ([]ListChannelOrdersRow, error) {
 	rows, err := q.db.Query(ctx, listChannelOrders,
@@ -1329,6 +1347,8 @@ func (q *Queries) ListChannelOrders(ctx context.Context, arg ListChannelOrdersPa
 		arg.StoreID,
 		arg.Status,
 		arg.ExceptionOnly,
+		arg.OnlyRegionIds,
+		arg.OnlyStoreIds,
 		arg.Off,
 		arg.Lim,
 	)

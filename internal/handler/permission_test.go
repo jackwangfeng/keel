@@ -435,8 +435,8 @@ var permMatrix = []permRoute{
 	{"DELETE", v1 + "/admin/stores/:store_id/local-delivery", storeOperate, func(t *testing.T, fx *permFixture, c permCase) permReq {
 		return permReq{Method: "DELETE", Path: fmt.Sprintf(v1+"/admin/stores/%d/local-delivery", fx.store(c)), OK: http.StatusOK}
 	}},
-	// —— 渠道管理（渠道适配层）：读要全店范围，写只许管理员
-	{"GET", v1 + "/admin/channel-kinds", merchantWide, func(t *testing.T, fx *permFixture, c permCase) permReq {
+	// —— 渠道管理（渠道适配层）：读要全店范围，写只许管理员；编进来的渠道种类（channel-kinds）人人可读
+	{"GET", v1 + "/admin/channel-kinds", everyone, func(t *testing.T, fx *permFixture, c permCase) permReq {
 		return permGet(v1 + "/admin/channel-kinds")
 	}},
 	{"GET", v1 + "/admin/channel-bindings", merchantWide, func(t *testing.T, fx *permFixture, c permCase) permReq {
@@ -503,13 +503,19 @@ var permMatrix = []permRoute{
 	{"GET", v1 + "/admin/channel-bindings/:binding_id/listings", merchantWide, func(t *testing.T, fx *permFixture, c permCase) permReq {
 		return permGet(fmt.Sprintf(v1+"/admin/channel-bindings/%d/listings", permChannelBinding(t, fx)))
 	}},
-	// —— 渠道订单（第三期）：读同渠道页（全店范围）；重试 / 接单 / 拒单 / 申请决定同发货，按渠道单的门店判范围。
-	// 夹具是一张已接单、没有异常的渠道单（与一个已同意的申请）：过了权限就是 409「此刻不能这样处理」，没有副作用。
-	{"GET", v1 + "/admin/channel-orders", merchantWide, func(t *testing.T, fx *permFixture, c permCase) permReq {
+	// —— 渠道订单（第三期）：读同后台订单（全店范围看全部，大区 / 门店管理员只看范围内门店的，列表在 SQL 里滤、
+	// 详情越界 404 不泄露存在性 —— 所以这两行人人放行，越界那格期望 404）；重试 / 接单 / 拒单 / 申请决定同发货，
+	// 按渠道单的门店判范围。夹具是一张已接单、没有异常的渠道单（与一个已同意的申请）：过了权限就是 409
+	// 「此刻不能这样处理」，没有副作用。没映射门店的那一种在 admin_channel_order_test.go。
+	{"GET", v1 + "/admin/channel-orders", everyone, func(t *testing.T, fx *permFixture, c permCase) permReq {
 		return permGet(v1 + "/admin/channel-orders")
 	}},
-	{"GET", v1 + "/admin/channel-orders/:channel_order_id", merchantWide, func(t *testing.T, fx *permFixture, c permCase) permReq {
-		return permGet(fmt.Sprintf(v1+"/admin/channel-orders/%d", permChannelOrder(t, fx, fx.store(c))))
+	{"GET", v1 + "/admin/channel-orders/:channel_order_id", everyone, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		req := permGet(fmt.Sprintf(v1+"/admin/channel-orders/%d", permChannelOrder(t, fx, fx.store(c))))
+		if storeOperate(c) != allow {
+			req.OK = http.StatusNotFound
+		}
+		return req
 	}},
 	{"POST", v1 + "/admin/channel-orders/:channel_order_id/retry", storeOperate, func(t *testing.T, fx *permFixture, c permCase) permReq {
 		return permReq{Method: "POST", Path: fmt.Sprintf(v1+"/admin/channel-orders/%d/retry", permChannelOrder(t, fx, fx.store(c))),

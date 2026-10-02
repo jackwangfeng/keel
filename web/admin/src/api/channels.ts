@@ -39,8 +39,8 @@ onSessionChange(() => {
 });
 
 export function channelSectionAvailable(): Promise<boolean> {
-    // 当前角色本来就看不见「渠道」分区（服务端 requireMerchantWide）：不用为一个
-    // 注定不显示的菜单项打请求。
+    // 当前角色本来就看不见「渠道」分区：不用为一个注定不显示的菜单项打请求。
+    // （channel-kinds 所有员工可读，门店范围的员工也用它探渠道层开没开。）
     if (!sectionVisible("channels")) return Promise.resolve(false);
     cached ??= (async () => {
         const { available, cacheable } = await channelsAvailable(probeChannelKinds);

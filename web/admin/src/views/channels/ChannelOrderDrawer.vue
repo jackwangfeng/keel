@@ -64,7 +64,8 @@ const binding = computed(() => props.bindings.find((b) => b.id === co.value?.bin
 const store = computed(() => props.stores.find((s) => s.id === co.value?.store_id) ?? null);
 const status = computed(() => (co.value === null ? null : channelOrderStatusLabel(co.value.status)));
 const totals = computed(() => (co.value === null ? null : channelOrderTotals(co.value.amounts)));
-const acceptRequired = computed(() => props.kinds.find((k) => k.channel === binding.value?.channel)?.accept_required ?? false);
+const kindOf = computed(() => co.value?.channel || binding.value?.channel || "");
+const acceptRequired = computed(() => props.kinds.find((k) => k.channel === kindOf.value)?.accept_required ?? false);
 const actions = computed(() => (co.value === null ? null : channelOrderActions(co.value, acceptRequired.value)));
 const canHandle = computed(() => {
     const o = co.value;
@@ -175,7 +176,13 @@ function deliveryText(mode: number): string {
 
                 <el-descriptions :column="mobile ? 1 : 2" border size="small" class="mb12">
                     <el-descriptions-item label="渠道账号">
-                        {{ binding ? `${binding.name}（${channelLabel(binding.channel)}）` : `账号 #${co.binding_id}` }}
+                        {{
+                            co.binding_name
+                                ? `${co.binding_name}（${channelLabel(co.channel)}）`
+                                : binding
+                                  ? `${binding.name}（${channelLabel(binding.channel)}）`
+                                  : `账号 #${co.binding_id}`
+                        }}
                     </el-descriptions-item>
                     <el-descriptions-item label="平台状态">{{ co.platform_status }}</el-descriptions-item>
                     <el-descriptions-item label="keel 订单">

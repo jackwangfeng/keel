@@ -7020,7 +7020,7 @@ export interface paths {
         /**
          * 这个服务编进来的渠道适配器
          * @description 建 binding 时可选的渠道（`channel` 取值）与各自能当的角色、能力声明。
-         *     全店范围的员工（管理员、操作员）可读。
+         *     所有员工可读（不含任何账号信息）：门店范围的员工处理自己门店的渠道单时，界面靠它判断渠道要不要接单。
          */
         get: {
             parameters: {
@@ -8494,7 +8494,8 @@ export interface paths {
          * 渠道订单列表
          * @description 从销售渠道（Shopify / 美团……）收进来的平台订单，新的在前。可按渠道账号、keel 门店（通知「渠道订单」跳过来只带门店）、
          *     规整状态筛，`exception_only=true` 只看有异常的（缺货、映射不全、发货后平台取消……）。
-         *     读与渠道页同一个权限（全店范围：管理员、操作员）。
+         *     权限同后台订单列表：全店范围（管理员、操作员）看全部；大区 / 门店管理员只看自己范围内门店的渠道单，
+         *     没映射到 keel 门店的渠道单只有全店范围看得见。
          */
         get: {
             parameters: {
@@ -8579,7 +8580,10 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** 渠道订单详情（含平台申请） */
+        /**
+         * 渠道订单详情（含平台申请）
+         * @description 范围同列表：不在调用者范围内的渠道单（大区 / 门店管理员看别家门店的、或没映射门店的）回 404，与不存在一样。
+         */
         get: {
             parameters: {
                 query?: never;
@@ -18523,6 +18527,10 @@ export interface components {
             id: number;
             /** Format: int64 */
             binding_id: number;
+            /** @description 渠道种类（所属账号的 channel，如 `shopify`）；门店范围的员工看不到账号列表，靠它显示与判能力 */
+            channel: string;
+            /** @description 所属渠道账号的名称 */
+            binding_name: string;
             external_order_id: string;
             /** @description 平台上给人看的单号，如 Shopify 的 `#1001` */
             external_order_name: string;
@@ -20107,6 +20115,8 @@ export interface components {
          *     | 门店：建、改、删、围栏 | ✅ | ✅ | 只限本大区的门店（换大区时新旧都得在范围内） | ❌ |
          *     | 门店价、门店上下架、门店库存 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
          *     | 订单与售后：订单 / 退款单的列表与详情、发货、退款审核、确认收到退货 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
+         *     | 渠道订单：列表与详情、重试、接单、拒单、平台申请的决定（按渠道单映射到的 keel 门店；没映射门店的只有 1 / 2） | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
+         *     | 渠道账号、凭据、价格规则、映射 | ✅ | ✅ | ❌ | ❌ |
          *     | 经营报表：概览、趋势、商品排行、门店对比、库存预警（含两份 CSV 导出） | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
          *     | 经营报表：搜索概况（检索日志没有门店维度） | ✅ | ✅ | ❌ | ❌ |
          *     | 设默认门店（含建店时 is_default） | ✅ | ❌ | ❌ | ❌ |
@@ -20118,7 +20128,8 @@ export interface components {
          *     只在那家店在范围内时放行。列表类接口对 3 / 4 只返回范围内的；
          *     订单与售后按订单的**履约门店**判，门店所属的大区取它**此刻**的大区
          *     （货从哪家店出，就由管那家店库存的人处理这一单）；
-         *     商品目录全量可读。被拒回 403，type 是 role-forbidden 或 out-of-scope。
+         *     商品目录全量可读。被拒回 403，type 是 role-forbidden 或 out-of-scope；
+         *     渠道订单详情越界回 404（与不存在一样，不泄露存在性）。
          * @enum {integer}
          */
         StaffRole: 1 | 2 | 3 | 4;

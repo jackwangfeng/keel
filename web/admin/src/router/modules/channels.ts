@@ -2,6 +2,7 @@ import type { NavigationGuardWithThis } from "vue-router";
 import { Connection } from "@element-plus/icons-vue";
 import type { AdminSection } from "../section.ts";
 import { channelSectionAvailable } from "../../api/channels.ts";
+import { can } from "../../auth/permissions.ts";
 
 // 渠道（Shopify / 美团……）：商家接的渠道账号、凭据、门店映射、库存与价格规则、推送状态。
 // 渠道层由 KEEL_CHANNELS 开关；关着时 GET /admin/channel-kinds 是 404，菜单整块不出现。
@@ -14,6 +15,12 @@ import { channelSectionAvailable } from "../../api/channels.ts";
 const guardChannelsRoute: NavigationGuardWithThis<undefined> = async () => {
     const ok = await channelSectionAvailable();
     return ok ? true : { name: "overview" };
+};
+
+// 渠道账号详情只给全店范围的人；大区 / 门店管理员直接敲地址进来，带去他们能看的「订单」视图。
+const guardChannelDetailRoute: NavigationGuardWithThis<undefined> = async () => {
+    if (!(await channelSectionAvailable())) return { name: "overview" };
+    return can.seeChannelAccounts() ? true : { name: "channels", query: { view: "orders" } };
 };
 
 const section: AdminSection = {
@@ -36,7 +43,7 @@ const section: AdminSection = {
             component: () => import("../../views/channels/ChannelDetailView.vue"),
             meta: { title: "渠道账号" },
             props: true,
-            beforeEnter: guardChannelsRoute,
+            beforeEnter: guardChannelDetailRoute,
         },
     ],
 };

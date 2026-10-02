@@ -5,6 +5,8 @@
 //
 // 「订单」视图（?view=orders，可带 &store_id=）：所有账号的渠道订单，通知「渠道订单」跳到这里、按门店筛。
 // 视图与门店筛选都写回地址栏（replace），刷新 / 分享链接停在同一处。
+// 大区 / 门店管理员（不是全店范围）只有「订单」视图：账号列表读不了（服务端 requireMerchantWide），
+// 订单列表服务端已经按他们的门店范围滤过；账号名 / 渠道种类从渠道单本身带（ChannelOrder.binding_name / channel）。
 
 import { computed, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
@@ -20,8 +22,9 @@ import ChannelOrders from "./ChannelOrders.vue";
 
 const router = useRouter();
 const route = useRoute();
+const seeAccounts = computed(() => can.seeChannelAccounts());
 const view = computed<"bindings" | "orders">({
-    get: () => (route.query.view === "orders" ? "orders" : "bindings"),
+    get: () => (route.query.view === "orders" || !seeAccounts.value ? "orders" : "bindings"),
     set: (v) => void router.replace({ query: v === "orders" ? { ...route.query, view: "orders" } : {} }),
 });
 const queryStoreId = computed<number | null>(() => {
@@ -45,7 +48,7 @@ async function load(): Promise<void> {
     error.value = null;
     try {
         const [b, k, st] = await Promise.all([
-            keel.get("/admin/channel-bindings", {}),
+            seeAccounts.value ? keel.get("/admin/channel-bindings", {}) : Promise.resolve({ items: [] as ChannelBinding[] }),
             keel.get("/admin/channel-kinds", {}),
             listAllStores(),
         ]);
@@ -81,7 +84,7 @@ async function onCreated(b: ChannelBinding): Promise<void> {
 <template>
     <div>
         <ProblemAlert v-if="error" :error="error" />
-        <el-tabs v-model="view" class="view-tabs">
+        <el-tabs v-if="seeAccounts" v-model="view" class="view-tabs">
             <el-tab-pane label="账号" name="bindings" />
             <el-tab-pane label="订单" name="orders" />
         </el-tabs>

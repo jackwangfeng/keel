@@ -14,6 +14,7 @@ import (
 	"github.com/keel/keel/internal/api"
 	"github.com/keel/keel/internal/app"
 	"github.com/keel/keel/internal/channel"
+	"github.com/keel/keel/internal/channel/channeltest"
 	"github.com/keel/keel/internal/problem"
 	"github.com/keel/keel/internal/service"
 	"github.com/keel/keel/internal/tenant"
@@ -170,9 +171,10 @@ func TestAdminChannelOrders(t *testing.T) {
 	})
 }
 
-// 审查 5：门店管理员（只管北店）对北店的渠道单动作（按门店判权限）成功之后，回包读同一个门店范围 —— 200 带渠道单，
-// 而不是动作已经生效了却因为「详情要全店范围」回 403。
-func TestAdminChannelOrderStoreScopedActionResponse(t *testing.T) {
+// 审查 5 + 用户拍板（门店范围的员工看、处理自己门店的渠道单）：门店管理员（只管北店）对北店的渠道单动作
+// （按门店判权限）成功之后回包 200 带渠道单；列表只列北店的（南店的、没映射门店的都不出现），
+// 详情看得到北店的，南店的、没映射门店的 404（不泄露存在性）；管理员照旧看全部。
+func TestAdminChannelOrderStoreScoped(t *testing.T) {
 	r := newFakeOrderRig(t, needsAccept, nil)
 	useEngine(t, app.Router(testPool, tenant.NewResolver(testPool, tenant.Config{BaseDomain: baseDomain}), testSigner,
 		testOrders, service.PaymentConfig{Sandbox: true}, conceptEmbedder{}, app.WithChannels(r.svc)))
@@ -186,6 +188,14 @@ func TestAdminChannelOrderStoreScopedActionResponse(t *testing.T) {
 
 	co1 := r.putAwaiting(t, "m-1", 1, 5*time.Minute)
 	co2 := r.putAwaiting(t, "m-2", 1, 5*time.Minute)
+	insert := func(ext string, store any) int64 {
+		return adminQueryInt64(t, `INSERT INTO channel_orders (merchant_id, binding_id, external_order_id, external_order_name, store_id,
+			platform_status, status, amounts, lines, version, last_payload)
+			VALUES ($1, $2, $3, '#'||$3, $4, 'PAID', 3, '{}', '[]', 1, '{}') RETURNING id`, r.cs.MerchantID, r.b.ID, ext, store)
+	}
+	south := insert("m-south", r.cs.SouthStore)
+	unmapped := insert("m-unmapped", nil)
+
 	var d api.ChannelOrderDetail
 	decodeInto(t, reqAs(t, http.MethodPost, host, fmt.Sprintf("%s/%d/accept", base, co1), "", tok), http.StatusOK, "门店管理员接单", &d)
 	if d.Id != co1 {
@@ -196,8 +206,49 @@ func TestAdminChannelOrderStoreScopedActionResponse(t *testing.T) {
 	if d.Id != co2 || d.Status != 7 {
 		t.Fatalf("拒单回包 id=%d status=%d", d.Id, d.Status)
 	}
-	// 读的权限没变：门店管理员看详情仍是 403（待用户定）。
-	if w := getAs(t, host, fmt.Sprintf("%s/%d", base, co1), tok); w.Code != http.StatusForbidden {
-		t.Fatalf("门店管理员看详情：%d，期望 403（读的权限本次不改）", w.Code)
+
+	ids := func(tok, query string) map[int64]bool {
+		t.Helper()
+		var p channelOrderPage
+		decodeInto(t, getAs(t, host, base+query, tok), http.StatusOK, "渠道单列表"+query, &p)
+		out := map[int64]bool{}
+		for _, it := range p.Items {
+			out[it.Id] = true
+		}
+		if int(p.Total) != len(out) {
+			t.Fatalf("列表 total=%d 与条数 %d 对不上", p.Total, len(out))
+		}
+		return out
+	}
+	if got := ids(tok, ""); len(got) != 2 || !got[co1] || !got[co2] {
+		t.Fatalf("门店管理员的列表 %v，期望只有北店的 %d、%d", got, co1, co2)
+	}
+	if got := ids(tok, fmt.Sprintf("?store_id=%d", r.cs.SouthStore)); len(got) != 0 {
+		t.Fatalf("门店管理员按南店筛：%v，期望空", got)
+	}
+	if got := ids(r.cs.Token, ""); len(got) != 4 || !got[south] || !got[unmapped] {
+		t.Fatalf("管理员的列表 %v，期望 4 张", got)
+	}
+	decodeInto(t, getAs(t, host, fmt.Sprintf("%s/%d", base, co1), tok), http.StatusOK, "门店管理员看北店的详情", &d)
+	if d.Channel != channeltest.Kind || d.BindingName != "假渠道" {
+		t.Fatalf("详情的渠道:账号名 = %q:%q（门店管理员读不了账号列表，靠它们显示）", d.Channel, d.BindingName)
+	}
+	if w := getAs(t, host, v1+"/admin/channel-kinds", tok); w.Code != http.StatusOK {
+		t.Fatalf("门店管理员读渠道种类（判要不要接单）：%d，期望 200", w.Code)
+	}
+	for _, id := range []int64{south, unmapped} {
+		if w := getAs(t, host, fmt.Sprintf("%s/%d", base, id), tok); w.Code != http.StatusNotFound {
+			t.Fatalf("门店管理员看渠道单 %d（南店 / 没映射门店）：%d，期望 404", id, w.Code)
+		}
+		if w := getAs(t, host, fmt.Sprintf("%s/%d", base, id), r.cs.Token); w.Code != http.StatusOK {
+			t.Fatalf("管理员看渠道单 %d：%d", id, w.Code)
+		}
+	}
+	// 动作越界仍是 403（同发货）；渠道账号仍只限全店范围。
+	if w := reqAs(t, http.MethodPost, host, fmt.Sprintf("%s/%d/retry", base, south), "", tok); w.Code != http.StatusForbidden {
+		t.Fatalf("门店管理员重试南店的单：%d，期望 403", w.Code)
+	}
+	if w := getAs(t, host, v1+"/admin/channel-bindings", tok); w.Code != http.StatusForbidden {
+		t.Fatalf("门店管理员看渠道账号：%d，期望 403", w.Code)
 	}
 }
