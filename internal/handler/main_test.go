@@ -159,6 +159,9 @@ func setup(ctx context.Context) error {
 	chReg.Register(testFakeChannel)
 	testChannels = service.NewChannelService(repository.New(pool), invLocal, chReg, dtm.BranchResolver{}, dtm.BranchResolver{})
 	exBranches[service.BranchChannelMerchantQuery] = dtm.Ex(testChannels.MerchantQueryBranch())
+	for name, fn := range testChannels.OrderBranches() {
+		exBranches[name] = dtm.Ex(fn)
+	}
 	exBranches[inventory.BranchChannelMerchantSync] = invLocal.ChannelMerchantSyncBranch(nil)
 	exBranches[inventory.BranchChannelStockChanged] = testChannels.StockChangedBranch()
 

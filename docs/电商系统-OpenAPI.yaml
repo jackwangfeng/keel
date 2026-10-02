@@ -3438,7 +3438,7 @@ paths:
       summary: 这个服务编进来的渠道适配器
       description: |
         建 binding 时可选的渠道（`channel` 取值）与各自能当的角色、能力声明。
-        全店范围的员工（管理员、操作员）可读。
+        所有员工可读（不含任何账号信息）：门店范围的员工处理自己门店的渠道单时，界面靠它判断渠道要不要接单。
       parameters:
         - $ref: '#/components/parameters/KeelMerchant'
       responses:
@@ -3918,6 +3918,215 @@ paths:
               schema: { $ref: '#/components/schemas/Problem' }
         '422':
           description: 缺少 Idempotency-Key，或同一 Idempotency-Key 配了不同的请求（`https://keel.dev/problems/invalid-request`）。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /admin/channel-orders:
+    get:
+      tags: [Admin, Channel]
+      summary: 渠道订单列表
+      description: |
+        从销售渠道（Shopify / 美团……）收进来的平台订单，新的在前。可按渠道账号、keel 门店（通知「渠道订单」跳过来只带门店）、
+        规整状态筛，`exception_only=true` 只看有异常的（缺货、映射不全、发货后平台取消……）。
+        权限同后台订单列表：全店范围（管理员、操作员）看全部；大区 / 门店管理员只看自己范围内门店的渠道单，
+        没映射到 keel 门店的渠道单只有全店范围看得见。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+        - name: binding_id
+          in: query
+          required: false
+          schema: { type: integer, format: int64, minimum: 1 }
+        - name: store_id
+          in: query
+          required: false
+          schema: { type: integer, format: int64, minimum: 1 }
+        - name: status
+          in: query
+          required: false
+          schema: { $ref: '#/components/schemas/ChannelOrderStatus' }
+        - name: exception_only
+          in: query
+          required: false
+          description: 只看有异常的渠道单
+          schema: { type: boolean }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PageMeta'
+                  - type: object
+                    required: [items]
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: '#/components/schemas/ChannelOrder' }
+        '404':
+          description: 给了 `binding_id` 而这个渠道账号在本店不存在（`https://keel.dev/problems/not-found`）
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /admin/channel-orders/{channel_order_id}:
+    parameters:
+      - $ref: '#/components/parameters/ChannelOrderId'
+    get:
+      tags: [Admin, Channel]
+      summary: 渠道订单详情（含平台申请）
+      description: |
+        范围同列表：不在调用者范围内的渠道单（大区 / 门店管理员看别家门店的、或没映射门店的）回 404，与不存在一样。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ChannelOrderDetail' }
+        '404':
+          description: 渠道单在本店不存在（`https://keel.dev/problems/not-found`）
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /admin/channel-orders/{channel_order_id}/retry:
+    parameters:
+      - $ref: '#/components/parameters/ChannelOrderId'
+    post:
+      tags: [Admin, Channel]
+      summary: 重试一张有异常的渠道单
+      description: |
+        补了库存 / 映射之后重新回读平台、重走接单：成单时清掉异常，又失败时换成新的原因（看返回的 `exception`）。
+        只对有异常、且没有活着的 keel 订单的渠道单。权限同发货（按渠道单映射到的 keel 门店判范围；没映射门店的要全店范围）。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+      responses:
+        '200':
+          description: 处理之后的渠道单
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ChannelOrderDetail' }
+        '404':
+          description: 渠道单在本店不存在（`https://keel.dev/problems/not-found`）
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '409':
+          description: 这张渠道单没有异常，或已经有 keel 订单，不用重试（`https://keel.dev/problems/channel-order-state`）
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /admin/channel-orders/{channel_order_id}/accept:
+    parameters:
+      - $ref: '#/components/parameters/ChannelOrderId'
+    post:
+      tags: [Admin, Channel]
+      summary: 接单
+      description: |
+        只对要求商家接单的渠道（`ChannelKind.accept_required`）上还在等人接的单：回读平台权威状态再建 keel 订单、扣库存。
+        权限同发货。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+      responses:
+        '200':
+          description: 接单之后的渠道单（成单了，或 SAGA 还没落定）
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ChannelOrderDetail' }
+        '404':
+          description: 渠道单在本店不存在（`https://keel.dev/problems/not-found`）
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '409':
+          description: 这张渠道单不在等待接单（已接 / 已拒 / 已取消 / 有异常 / 渠道不要求接单）（`https://keel.dev/problems/channel-order-state`）
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: |
+            接了但没成单（缺货 / 映射不全），`detail` 写原因；渠道单已标异常，缺货时已自动向平台拒单
+            （`https://keel.dev/problems/channel-order-accept-failed`）。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /admin/channel-orders/{channel_order_id}/reject:
+    parameters:
+      - $ref: '#/components/parameters/ChannelOrderId'
+    post:
+      tags: [Admin, Channel]
+      summary: 拒单
+      description: 只对还在等人接的单：渠道单记为已拒单，排队向平台拒单。权限同发货。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string, maxLength: 200, description: 拒单原因，空 = 「商家拒单」 }
+      responses:
+        '200':
+          description: 拒单之后的渠道单
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ChannelOrderDetail' }
+        '404':
+          description: 渠道单在本店不存在（`https://keel.dev/problems/not-found`）
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '409':
+          description: 这张渠道单不在等待接单（`https://keel.dev/problems/channel-order-state`）
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /admin/channel-order-requests/{request_id}/decision:
+    parameters:
+      - name: request_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    post:
+      tags: [Admin, Channel]
+      summary: 同意 / 拒绝平台发起的申请
+      description: |
+        对一个待处理的平台申请（取消 / 部分退款 / 缺货调整）表态，排队回给平台。**keel 订单不动**：
+        要等平台确认（回调）之后才按平台事实处理。权限同发货（按申请所在渠道单的门店）。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [agree]
+              properties:
+                agree: { type: boolean, description: true 同意，false 拒绝 }
+      responses:
+        '200':
+          description: 申请所在的渠道单（含申请）
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ChannelOrderDetail' }
+        '404':
+          description: 申请在本店不存在（`https://keel.dev/problems/not-found`）
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '409':
+          description: 这个申请已经处理过了（`https://keel.dev/problems/channel-order-state`）
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
@@ -8348,6 +8557,11 @@ components:
       in: path
       required: true
       schema: { type: integer, format: int64, minimum: 1 }
+    ChannelOrderId:
+      name: channel_order_id
+      in: path
+      required: true
+      schema: { type: integer, format: int64, minimum: 1 }
     ChannelRuleId:
       name: rule_id
       in: path
@@ -8733,6 +8947,131 @@ components:
         version: { type: integer, format: int64 }
         pushed_at: { type: string, format: date-time }
         last_error: { type: [string, 'null'] }
+    ChannelOrderStatus:
+      type: integer
+      format: int32
+      enum: [1, 2, 3, 4, 5, 6, 7]
+      description: |
+        渠道单的规整状态：1 待付款（不接单）、2 新单（等接单 / 待处理）、3 已接单、4 已发货、5 已完成、6 已取消、7 已拒单。
+        异常不是一个状态，看 `exception`。
+    ChannelOrderAmounts:
+      type: object
+      description: |
+        平台快照里的金额（分）。keel 订单实付 = `buyer_paid`（商品 + 运费 − 平台补贴 − 商家补贴）。
+        `taxes_included` 为假（价外税，美国店的常态）：行价不含税，平台总价 = `buyer_paid + tax`，税不进 keel 订单；
+        为真（价内税）：行价已经含税，平台总价 = `buyer_paid`，`tax` 只是其中的税额，供参考。
+      required: [goods, freight, platform_subsidy, merchant_subsidy, commission, tax, merchant_receivable, buyer_paid, refunded, taxes_included]
+      properties:
+        goods: { type: integer, format: int64 }
+        freight: { type: integer, format: int64 }
+        platform_subsidy: { type: integer, format: int64 }
+        merchant_subsidy: { type: integer, format: int64 }
+        commission: { type: integer, format: int64, description: 平台佣金 }
+        tax: { type: integer, format: int64 }
+        merchant_receivable: { type: integer, format: int64, description: 商家应收 }
+        buyer_paid: { type: integer, format: int64, description: 顾客实付（= keel 实付；价外税的店不含税） }
+        refunded: { type: integer, format: int64 }
+        taxes_included: { type: boolean, description: 价内税（行价已含税） }
+    ChannelOrderLine:
+      type: object
+      required: [external_line_id, external_sku_id, title, qty, price_cents, refunded_qty]
+      properties:
+        external_line_id: { type: string }
+        external_sku_id: { type: string }
+        title: { type: string }
+        qty: { type: integer, format: int32 }
+        price_cents: { type: integer, format: int64 }
+        refunded_qty: { type: integer, format: int32 }
+    ChannelOrderReceiver:
+      type: object
+      required: [name, phone, phone_kind, address]
+      properties:
+        name: { type: string }
+        phone: { type: string }
+        phone_kind: { type: integer, format: int32, description: 0 真实号码，1 平台隐私号 }
+        address:
+          type: object
+          required: [province, city, district, address, zip, country]
+          properties:
+            province: { type: string }
+            city: { type: string }
+            district: { type: string }
+            address: { type: string }
+            zip: { type: string }
+            country: { type: string }
+    ChannelOrder:
+      type: object
+      description: 一张平台订单在 keel 这边的记录（金额、行、收货人都是平台快照，不重新算价）。
+      required: [id, binding_id, channel, binding_name, retryable, external_order_id, external_order_name, platform_status, status, delivery_mode,
+                 amounts, lines, receiver, test, created_at, updated_at]
+      properties:
+        id: { type: integer, format: int64 }
+        binding_id: { type: integer, format: int64 }
+        channel: { type: string, description: 渠道种类（所属账号的 channel，如 `shopify`）；门店范围的员工看不到账号列表，靠它显示与判能力 }
+        binding_name: { type: string, description: 所属渠道账号的名称 }
+        retryable:
+          type: boolean
+          description: |
+            此刻能不能「重试」（与 POST …/retry 同一个判据）：有异常且没有活着的 keel 订单；keel 草稿卡在创建中（0）；
+            草稿被孤儿清扫关掉而渠道单没有异常。
+        external_order_id: { type: string }
+        external_order_name: { type: string, description: 平台上给人看的单号，如 Shopify 的 `#1001` }
+        store_id: { type: [integer, 'null'], format: int64, description: 映射到的 keel 门店；空 = 渠道门店没映射 }
+        order_no: { type: [string, 'null'], description: 建出来的 keel 订单号；空 = 还没成单 }
+        platform_status: { type: string, description: 平台原样的状态（排障用） }
+        status: { $ref: '#/components/schemas/ChannelOrderStatus' }
+        exception: { type: [string, 'null'], description: 异常原因（缺货、某一行没映射……）；空 = 没有异常 }
+        accept_deadline: { type: [string, 'null'], format: date-time, description: 接单截止（要求接单的渠道） }
+        delivery_mode: { type: integer, format: int32, description: 配送方式（位）：1 快递、2 本地配送、4 平台骑手、8 商家自配送 }
+        amounts: { $ref: '#/components/schemas/ChannelOrderAmounts' }
+        lines:
+          type: array
+          items: { $ref: '#/components/schemas/ChannelOrderLine' }
+        receiver: { $ref: '#/components/schemas/ChannelOrderReceiver' }
+        test: { type: boolean, description: 平台的测试单 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    ChannelOrderRequest:
+      type: object
+      description: 平台发起的申请（取消 / 部分退款 / 缺货调整）。
+      required: [id, external_request_id, kind, lines, amount_cents, reason, status, created_at]
+      properties:
+        id: { type: integer, format: int64 }
+        external_request_id: { type: string }
+        kind: { type: integer, format: int32, enum: [1, 2, 3], description: 1 取消（整单）、2 部分退款、3 缺货调整 }
+        lines:
+          type: array
+          items:
+            type: object
+            required: [external_sku_id, qty]
+            properties:
+              external_sku_id: { type: string }
+              qty: { type: integer, format: int32 }
+        amount_cents: { type: integer, format: int64 }
+        reason: { type: string }
+        status: { type: integer, format: int32, enum: [1, 2, 3, 4, 5], description: 1 待处理、2 已同意、3 已拒绝、4 超时自动同意、5 平台已撤销 }
+        deadline: { type: [string, 'null'], format: date-time, description: 平台的处理时限 }
+        decided_by: { type: [integer, 'null'], format: int64, description: 处置的员工；自动策略、超时、撤销为空 }
+        decided_at: { type: [string, 'null'], format: date-time }
+        created_at: { type: string, format: date-time }
+    ChannelOrderDetail:
+      allOf:
+        - $ref: '#/components/schemas/ChannelOrder'
+        - type: object
+          required: [requests]
+          properties:
+            requests:
+              type: array
+              description: 这张单上的平台申请，新的在前
+              items: { $ref: '#/components/schemas/ChannelOrderRequest' }
+    ChannelOrderRef:
+      type: object
+      description: 渠道单的来源说明（后台订单的「来自 Shopify #1001」）。
+      required: [kind, binding_name, external_order_name]
+      properties:
+        kind: { type: string, description: 渠道种类（同 `ChannelBinding.channel`，如 `shopify`） }
+        binding_name: { type: string, description: 渠道账号的名字 }
+        external_order_name: { type: string, description: 平台上给人看的单号 }
 
     # ---- 通用 ----
     Problem:
@@ -10449,6 +10788,8 @@ components:
         | 门店：建、改、删、围栏 | ✅ | ✅ | 只限本大区的门店（换大区时新旧都得在范围内） | ❌ |
         | 门店价、门店上下架、门店库存 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
         | 订单与售后：订单 / 退款单的列表与详情、发货、退款审核、确认收到退货 | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
+        | 渠道订单：列表与详情、重试、接单、拒单、平台申请的决定（按渠道单映射到的 keel 门店；没映射门店的只有 1 / 2） | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
+        | 渠道账号、凭据、价格规则、映射 | ✅ | ✅ | ❌ | ❌ |
         | 经营报表：概览、趋势、商品排行、门店对比、库存预警（含两份 CSV 导出） | ✅ | ✅ | 本大区的门店 | 只限自己的门店 |
         | 经营报表：搜索概况（检索日志没有门店维度） | ✅ | ✅ | ❌ | ❌ |
         | 设默认门店（含建店时 is_default） | ✅ | ❌ | ❌ | ❌ |
@@ -10460,7 +10801,8 @@ components:
         只在那家店在范围内时放行。列表类接口对 3 / 4 只返回范围内的；
         订单与售后按订单的**履约门店**判，门店所属的大区取它**此刻**的大区
         （货从哪家店出，就由管那家店库存的人处理这一单）；
-        商品目录全量可读。被拒回 403，type 是 role-forbidden 或 out-of-scope。
+        商品目录全量可读。被拒回 403，type 是 role-forbidden 或 out-of-scope；
+        渠道订单详情越界回 404（与不存在一样，不泄露存在性）。
 
     Shipment:
       type: object
@@ -10782,7 +11124,7 @@ components:
       allOf:
         - $ref: '#/components/schemas/Order'
         - type: object
-          required: [receiver, store, has_open_refund]
+          required: [receiver, store, has_open_refund, source]
           properties:
             receiver:
               allOf: [{ $ref: '#/components/schemas/ReceiverSnapshot' }]
@@ -10793,6 +11135,15 @@ components:
             has_open_refund:
               type: boolean
               description: 有没有处于 10 待审核 / 20 待买家退货 / 30 退款中的退款单
+            source:
+              type: integer
+              format: int32
+              description: 订单来源：0 自营（小程序 / H5 / App）、1 渠道单（从 Shopify 等销售渠道收进来，没有 keel 买家）
+            channel:
+              oneOf:
+                - $ref: '#/components/schemas/ChannelOrderRef'
+                - type: 'null'
+              description: 渠道单（`source = 1`）的来源说明；自营单为 null 或缺席
 
     AdminOrderDetail:
       allOf:
@@ -11823,6 +12174,11 @@ components:
         · `merchant_return_shipped` —— 买家填了（或改了）退货寄回物流
         · `merchant_inventory_low` —— 下单扣减后门店库存降到预警线（`warning_qty`）或以下；
           扣到 0 时标题是「已售罄」
+        · `merchant_channel_order_exception` —— 渠道（Shopify 等）上卖出的订单没能在 keel 成单
+          （缺货：keel 订单已关闭，正文写明哪件商品差几件）；补货后在渠道订单页「重试」
+        · `merchant_channel_order_pending` —— 渠道订单等门店处理：快到接单截止还没接单（截止前
+          `accept_remind_minutes` 分钟，每单一次）、平台发来取消 / 退款 / 缺货调整申请、申请过了截止
+          （平台按自己的规则处理）。跳门店的渠道订单页（`target.type = channel_orders`）
       enum:
         - order_paid
         - order_shipped
@@ -11837,6 +12193,8 @@ components:
         - merchant_refund_requested
         - merchant_return_shipped
         - merchant_inventory_low
+        - merchant_channel_order_exception
+        - merchant_channel_order_pending
 
     NotificationTarget:
       type: object
@@ -11845,11 +12203,12 @@ components:
         点了这条通知跳到哪里。四个定位字段都一定出现，用不上的是 `null`：
         · `order` —— `order_no` 非空，跳订单详情；
         · `refund` —— `refund_no` 非空（`order_no` 也给出所属订单），跳售后详情；
-        · `inventory` —— `store_id` 与 `sku_id` 非空，跳那家门店的库存（只出现在后台）。
+        · `inventory` —— `store_id` 与 `sku_id` 非空，跳那家门店的库存（只出现在后台）；
+        · `channel_orders` —— `store_id` 非空，跳那家门店的渠道订单（只出现在后台；等接单的渠道单还没有 keel 订单号）。
       properties:
         type:
           type: string
-          enum: [order, refund, inventory]
+          enum: [order, refund, inventory, channel_orders]
         order_no:  { type: [string, 'null'] }
         refund_no: { type: [string, 'null'] }
         store_id:  { type: [integer, 'null'], format: int64 }

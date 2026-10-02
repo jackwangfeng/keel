@@ -170,6 +170,29 @@ RETURNING id, order_no, store_id, region_id, status, goods_amount_cents, freight
           expire_at, created_at, user_coupon_id, coupon_name, promotion_discount_cents,
           promotions;
 
+-- name: CreateChannelOrderDraft :one
+-- 渠道单（00320）的 keel 订单草稿（status 0，渠道单 SAGA 的第一步把它推到 10）。与 CreateOrderDraft 同一个写法
+-- （门店快照与外键取自同一行 stores），差别：source = 1、user_id 为空、channel_order_id 指回渠道单；
+-- 金额全是平台快照（discount = promotion_discount = 平台补贴 + 商家补贴，没有券，chk_discount_sources 对
+-- source = 1 放开）；promotions 为空数组（不是 keel 的活动）。
+INSERT INTO orders (order_no, user_id, source, channel_order_id, store_id, region_id, store_snapshot,
+                    status, goods_amount_cents, freight_cents, freight_discount_cents,
+                    discount_cents, payable_cents, receiver_snapshot, remark, expire_at,
+                    promotion_discount_cents)
+SELECT sqlc.arg(order_no), NULL, 1, sqlc.arg(channel_order_id)::bigint, st.id, st.region_id,
+       jsonb_build_object('store_name', st.name, 'region_name', r.name,
+                          'address', st.address, 'phone', st.phone),
+       0, sqlc.arg(goods_amount_cents), sqlc.arg(freight_cents), sqlc.arg(freight_discount_cents),
+       sqlc.arg(discount_cents), sqlc.arg(payable_cents),
+       sqlc.arg(receiver_snapshot), sqlc.narg(remark), sqlc.arg(expire_at),
+       sqlc.arg(discount_cents)
+  FROM stores st
+  JOIN regions r ON r.id = st.region_id
+ WHERE st.id = sqlc.arg(store_id) AND st.deleted_at IS NULL
+RETURNING id, order_no, store_id, region_id, status, goods_amount_cents, freight_cents,
+          freight_discount_cents, discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
+          expire_at, created_at, promotion_discount_cents;
+
 -- name: CreateOrderItem :exec
 -- 订单项快照（数据模型 §5：下单即快照）。商品改价改名不影响历史订单。
 --
@@ -201,7 +224,8 @@ SELECT id, order_no, user_id, store_id, region_id, status,
        goods_amount_cents, freight_cents, freight_discount_cents,
        discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
        expire_at, paid_at, shipped_at, finished_at, created_at, user_coupon_id,
-       coupon_name, promotion_discount_cents, promotions
+       coupon_name, promotion_discount_cents, promotions,
+       source, channel_order_id  -- 00320：来源与渠道单（渠道单 user_id 为空）
   FROM orders
  WHERE order_no = $1;
 

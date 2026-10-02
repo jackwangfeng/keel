@@ -1,6 +1,7 @@
 package service
 
-// 渠道层的任务循环：推对外可售数（channel.listing.push）、整店重算（channel.listing.recompute）。
+// 渠道层的任务循环：推对外可售数（channel.listing.push）、整店重算（channel.listing.recompute）、
+// 回调（channel.inbound）、拉商品（channel.catalog.pull）、对渠道订单的动作（channel.order.action，channel_order_action.go）。
 // 与库存 outbox 同一处境：跑在任何 HTTP 请求之外，按出队那一行的 jobs.merchant_id 建租户上下文
 // （tenant_context_test.go 的放行清单）。
 //
@@ -53,7 +54,8 @@ func (s *ChannelService) RunWorkers(ctx context.Context) {
 }
 
 func (s *ChannelService) housekeep(ctx context.Context) {
-	for _, q := range []string{QueueChannelListingPush, QueueChannelListingRecompute, QueueChannelInbound, QueueChannelCatalogPull} {
+	for _, q := range []string{QueueChannelListingPush, QueueChannelListingRecompute, QueueChannelInbound, QueueChannelCatalogPull,
+		QueueChannelOrderAction} {
 		if n, err := s.repo.ReapStuckJobs(ctx, q, channelStuckAfter); err != nil {
 			s.log.ErrorContext(ctx, "回收卡死的渠道任务失败", "queue", q, "err", err)
 		} else if n > 0 {
@@ -63,12 +65,28 @@ func (s *ChannelService) housekeep(ctx context.Context) {
 			s.log.ErrorContext(ctx, "清理过期的渠道任务失败", "queue", q, "err", err)
 		}
 	}
+	s.SweepChannelDeadlines(ctx)
+}
+
+// SweepChannelDeadlines 是接单与申请的截止扫描（channel_order_request.go 文件头），housekeep 每分钟一次；导出给测试驱动。
+// 没有任务行可取租户：枚举活跃商家（merchants 没有 RLS）再逐家进，同 sweep.go。没接渠道的商家两条查询都是空的索引区间。
+func (s *ChannelService) SweepChannelDeadlines(ctx context.Context) {
+	merchants, err := s.repo.ActiveMerchants(ctx)
+	if err != nil {
+		s.log.ErrorContext(ctx, "截止扫描读不到商家列表", "err", err)
+		return
+	}
+	for _, m := range merchants {
+		if err := s.sweepTenantDeadlines(tenant.NewContext(ctx, m)); err != nil {
+			s.log.ErrorContext(ctx, "渠道单截止扫描失败", "merchant_id", m, "err", err)
+		}
+	}
 }
 
 // WorkOnce 各队列取一批跑完，返回处理的任务数。导出给测试驱动（不等轮询）。
 func (s *ChannelService) WorkOnce(ctx context.Context) (int, error) {
 	total := 0
-	for _, step := range []func(context.Context) (int, error){s.workCatalog, s.workRecompute, s.workPush, s.workInbound} {
+	for _, step := range []func(context.Context) (int, error){s.workCatalog, s.workRecompute, s.workPush, s.workInbound, s.workActions} {
 		n, err := step(ctx)
 		total += n
 		if err != nil {
@@ -106,28 +124,30 @@ func (s *ChannelService) finish(ctx context.Context, ids ...int64) {
 // retry 把一条失败的任务放回队列。cause 若来自适配器，调用方先过 channel.RedactError（错误文本会写进 jobs.last_error）。
 //
 // 平台限流（RetryableError.RateLimited）不算失败：按平台给的等待时间放回、不计次（DeferJob），
-// 否则一阵持续的限流就能把任务耗进死信。
-func (s *ChannelService) retry(ctx context.Context, j repository.Job, cause error) {
+// 否则一阵持续的限流就能把任务耗进死信。返回真表示这一次把它转进了死信（调用方可以据此标异常）。
+func (s *ChannelService) retry(ctx context.Context, j repository.Job, cause error) (deadLettered bool) {
 	log := s.log.With("merchant_id", j.MerchantID, "job_id", j.ID, "queue", j.Queue, "job_key", j.JobKey, "attempt", j.Attempts)
 	var re *channel.RetryableError
 	if errors.As(cause, &re) && re.RateLimited {
 		after := min(max(re.After, time.Second), channelMaxBackoff)
 		if err := s.repo.DeferJob(ctx, j.ID, cause.Error(), after); err != nil {
 			log.ErrorContext(ctx, "渠道任务被限流、放回队列失败（回收任务会接手）", "err", cause, "retry_err", err)
-			return
+			return false
 		}
 		log.InfoContext(ctx, "渠道限流，稍后再推（不计失败次数）", "after", after)
-		return
+		return false
 	}
 	err := s.repo.RetryJobCapped(ctx, j.ID, cause.Error(), channelMaxBackoff)
 	switch {
 	case errors.Is(err, repository.ErrJobDeadLettered):
-		log.ErrorContext(ctx, "渠道任务重试次数用尽，已转死信 —— 这一格没有推上去，请人工处理", "err", cause)
+		log.ErrorContext(ctx, "渠道任务重试次数用尽，已转死信，请人工处理", "err", cause)
+		return true
 	case err != nil:
 		log.ErrorContext(ctx, "渠道任务放回队列失败（回收任务会接手）", "err", cause, "retry_err", err)
 	default:
 		log.WarnContext(ctx, "渠道任务失败，退避重试", "err", cause)
 	}
+	return false
 }
 
 func (s *ChannelService) workRecompute(ctx context.Context) (int, error) {
@@ -369,6 +389,18 @@ func (s *ChannelService) workCatalog(ctx context.Context) (int, error) {
 			continue
 		}
 		s.finish(ctx, j.ID)
+	}
+	return len(jobs), nil
+}
+
+// workActions 跑一批对渠道订单的动作（channel_order_action.go）。
+func (s *ChannelService) workActions(ctx context.Context) (int, error) {
+	jobs, err := s.dequeue(ctx, QueueChannelOrderAction)
+	if err != nil {
+		return 0, err
+	}
+	for _, j := range jobs {
+		s.runAction(tenant.NewContext(ctx, j.MerchantID), j)
 	}
 	return len(jobs), nil
 }

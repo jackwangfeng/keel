@@ -39,8 +39,10 @@ so "which one is running?" never depends on anyone's memory.
 
 ## [Unreleased]
 
-Core migrations `00300` (`channel_merchants`, also in the inventory database), `00301` (channel tables) and
-`00302` (`uploads.channel_binding_id`: an upload's owner may now be a channel account).
+Core migrations `00300` (`channel_merchants`, also in the inventory database), `00301` (channel tables),
+`00302` (`uploads.channel_binding_id`: an upload's owner may now be a channel account), and `00320`–`00326`
+(channel orders: `orders.source`/`channel_order_id`, `channel_orders`/`channel_order_requests`, nullable
+`refunds.user_id`/`payment_id`, a `channel_orders` notification target, and the per-order keel-build basis).
 
 ### Added
 
@@ -88,12 +90,53 @@ Core migrations `00300` (`channel_merchants`, also in the inventory database), `
   `ChannelListing.sku_code` / `product_title`, `AdminProduct.managed_by`; new operation
   `POST /admin/channel-bindings/{binding_id}/catalog-pulls`.
 
+- **Sales-channel adapter layer, phase 3: channel orders.** `orders.user_id` is nullable now
+  (a new `source` column marks self-run vs. channel, 0/1, migrations `00320`–`00322`); a channel order first lands
+  as a normalized platform snapshot (`channel_orders`, one row per platform order) and only becomes a paid keel
+  order — deducting the same shared stock — once accepted. Shopify orders arrive paid-only (Shopify's `PENDING` /
+  `AUTHORIZED` / `PARTIALLY_PAID` are treated as not-yet-payable) and accept automatically, building the keel
+  order against each line's *remaining* quantity (`qty − refunded_qty`) so refunds taken on the platform before
+  accept are respected; a missing store or SKU mapping, or insufficient stock, marks the channel order an
+  exception with a specific reason instead of silently failing, and a store operator can retry once it is fixed.
+  Shipping in keel pushes the tracking number back to Shopify (`fulfillmentCreate`, idempotent); a cancel, refund
+  or fulfillment made on Shopify's side is translated into the matching keel action — platform refunds post
+  directly as settled refund rows against the matching keel order line, no payment channel involved
+  (migrations `00323`/`00324` let `refunds.user_id`/`payment_id` be null for these); a whole-order cancel before
+  shipment refunds the order and restocks, a cancel after shipment is marked an exception instead of
+  auto-refunding. Platform-initiated requests (`channel_order_requests`) get a generic accept/decline flow with a
+  decision-deadline scan, ready for Meituan's accept-or-timeout model in phase 4. A fourth notification target
+  (`channel_orders`, migration `00325`) lets a store be reminded about an unaccepted order or a pending platform
+  request before a keel order number even exists. Migration `00326` records, per channel order, the basis a keel
+  order was built on (platform line → keel order line, and which platform refunds were already folded into the
+  then-remaining quantity) so later platform refunds land on the right line and are not double-counted.
+  New admin pages: a channel-order list and detail (exception flag, retry, accept / reject, request decisions),
+  filtered to a store-scoped operator's own stores (reading another store's order returns `404`, not `403`, to
+  avoid leaking existence); the admin order list marks each order's `source`. With `KEEL_CHANNELS` off, the
+  self-run order, refund and fulfillment write paths stay branch-free, same as phases 1–2.
+
+### Fixed
+
+- Shopify stores with tax-inclusive pricing (`taxesIncluded`) now record keel's paid amount as the customer's
+  full payment; tax-exclusive stores keep tax out of the keel order and log it on the channel order instead.
+- A refund-only request (no cancellation) now books freight before goods and strips tax from the refunded
+  amount; a whole-order cancel's line-level refunds are capped at what was actually received per line.
+- Channel order list and detail responses carry `retryable`; the admin "retry" button follows that one field
+  instead of a separate, possibly inconsistent, check.
+- Retrying a channel order now recovers correctly after a SAGA commit failed partway through, or when two
+  platform updates landed in the same second; "retry" can rescue an order stuck at draft or swept by cleanup.
+- An action's response now checks the same store-scope permission the action itself used, so a store admin no
+  longer sees an action succeed and then get `403` reading it back.
+- Migration `00325` commits statement-by-statement so a failed run can be resumed instead of left half-applied.
+- Fulfillment push-back only counts an order as "already sent" once every non-cancelled fulfillment order is
+  fully `CLOSED`; `ON_HOLD` / `SCHEDULED` / `INCOMPLETE` are retried (and counted toward the dead-letter budget)
+  instead of being treated as done.
+
 ### Known limitations
 
-- Shopify orders are not imported yet (phase 3): a sale made on Shopify is overwritten by keel's next push for that
-  SKU. Prices are pushed as-is, with no currency conversion. A negative quantity on Shopify (oversold) is overwritten
-  with keel's non-negative number. Fields managed by Shopify are not yet locked in the
-  admin UI — an edit there is overwritten by the next sync.
+- No currency conversion: amounts are recorded in cents as given, so a channel's currency should match keel's.
+  A negative quantity on Shopify (oversold) is still overwritten with keel's non-negative number. An order Shopify
+  splits across more than one fulfillment location is marked an exception rather than split into multiple keel
+  orders. An edit made to an existing Shopify order (adding or removing line items) is only logged, not applied.
 
 ### Invariant
 

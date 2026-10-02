@@ -5,6 +5,8 @@
 //     一批里有一条出错整批不生效；changeFromQuantity 为 null 跳过比对；同一个 @idempotent 键只生效一次。
 //   - 每次 GraphQL 响应带 extensions.cost.throttleStatus。
 //
+// 订单、fulfillment order、fulfillmentCreate 与订单回调见 orders.go（操作名 Order / FulfillmentCreate）。
+//
 // 不解析 GraphQL：按请求里的 operationName 分发，变量按固定形状解。适配器的每条操作都带名字。
 // 不 import 适配器包（适配器的测试要 import 这里）。
 package shopifytest
@@ -23,6 +25,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // Product / Variant 是往模拟店里放的商品。
@@ -82,6 +85,12 @@ type Server struct {
 	webhooks  []WebhookSub
 	images    map[string][]byte
 	imageHits int
+
+	orders   map[string]*simOrder // 订单部分见 orders.go
+	orderSeq []string
+	clock    time.Time
+	frozen   bool              // FreezeClock：时钟不再走，之后的变化共用同一个 updatedAt
+	fail     map[string][]bool // operationName → 排着的 503（值：是否先落地）
 }
 
 // New 起一个模拟店。shop 是店铺域名（binding 的 external_account），clientID / clientSecret 是应用凭据。
@@ -337,7 +346,7 @@ func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
 	s.nextID++
 	tok := fmt.Sprintf("shpat_sim_%d", s.nextID)
 	s.tokens[tok] = true
-	_ = json.NewEncoder(w).Encode(map[string]any{"access_token": tok, "scope": "write_products,write_inventory", "expires_in": 86399})
+	_ = json.NewEncoder(w).Encode(map[string]any{"access_token": tok, "scope": "write_products,write_inventory,write_orders,write_assigned_fulfillment_orders", "expires_in": 86399})
 }
 
 type gqlReq struct {
@@ -371,6 +380,16 @@ func (s *Server) handleGraphQL(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"errors":     []any{map[string]any{"message": "Throttled", "extensions": map[string]any{"code": "THROTTLED"}}},
 			"extensions": cost(0)})
+		return
+	}
+	if q := s.fail[req.OperationName]; len(q) > 0 {
+		afterApply := q[0]
+		s.fail[req.OperationName] = q[1:]
+		if afterApply {
+			_, _ = s.dispatch(req)
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = io.WriteString(w, `{"errors":"Service Unavailable"}`)
 		return
 	}
 	data, err := s.dispatch(req)
@@ -442,6 +461,18 @@ func (s *Server) dispatch(req gqlReq) (any, error) {
 		return s.setQty(req.Variables)
 	case "SetPrices":
 		return s.setPrices(req.Variables)
+	case "Order":
+		var v struct {
+			ID string `json:"id"`
+		}
+		_ = json.Unmarshal(req.Variables, &v)
+		o := s.orders[v.ID]
+		if o == nil {
+			return map[string]any{"order": nil}, nil
+		}
+		return map[string]any{"order": s.orderJSON(o)}, nil
+	case "FulfillmentCreate":
+		return s.fulfillmentCreate(req.Variables)
 	case "Webhooks":
 		nodes := []any{}
 		for _, w := range s.webhooks {

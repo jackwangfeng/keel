@@ -1049,7 +1049,7 @@ SELECT EXISTS (
 // ---------------------------------------------------------------------------
 // 「首单前」的判据：这个买家有没有一笔进过 SAGA 且没被关掉的订单。
 // 创建中（0）与已关闭（90）不算 —— 下单失败、超时没付的单子不让人失去新人资格。
-func (q *Queries) UserHasPlacedOrder(ctx context.Context, userID int64) (bool, error) {
+func (q *Queries) UserHasPlacedOrder(ctx context.Context, userID *int64) (bool, error) {
 	row := q.db.QueryRow(ctx, userHasPlacedOrder, userID)
 	var exists bool
 	err := row.Scan(&exists)

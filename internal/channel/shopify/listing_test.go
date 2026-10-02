@@ -214,8 +214,8 @@ func TestEnsureWebhooks(t *testing.T) {
 			n++
 		}
 	}
-	if n != 5 || len(r.sim.Webhooks()) != 6 {
-		t.Fatalf("订阅 = %+v，期望指向回调地址的 5 条 + 旧的 1 条", r.sim.Webhooks())
+	if n != 11 || len(r.sim.Webhooks()) != 12 {
+		t.Fatalf("订阅 = %+v，期望指向回调地址的 11 条 + 旧的 1 条", r.sim.Webhooks())
 	}
 }
 

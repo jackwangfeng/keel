@@ -435,8 +435,8 @@ var permMatrix = []permRoute{
 	{"DELETE", v1 + "/admin/stores/:store_id/local-delivery", storeOperate, func(t *testing.T, fx *permFixture, c permCase) permReq {
 		return permReq{Method: "DELETE", Path: fmt.Sprintf(v1+"/admin/stores/%d/local-delivery", fx.store(c)), OK: http.StatusOK}
 	}},
-	// —— 渠道管理（渠道适配层）：读要全店范围，写只许管理员
-	{"GET", v1 + "/admin/channel-kinds", merchantWide, func(t *testing.T, fx *permFixture, c permCase) permReq {
+	// —— 渠道管理（渠道适配层）：读要全店范围，写只许管理员；编进来的渠道种类（channel-kinds）人人可读
+	{"GET", v1 + "/admin/channel-kinds", everyone, func(t *testing.T, fx *permFixture, c permCase) permReq {
 		return permGet(v1 + "/admin/channel-kinds")
 	}},
 	{"GET", v1 + "/admin/channel-bindings", merchantWide, func(t *testing.T, fx *permFixture, c permCase) permReq {
@@ -502,6 +502,36 @@ var permMatrix = []permRoute{
 	}},
 	{"GET", v1 + "/admin/channel-bindings/:binding_id/listings", merchantWide, func(t *testing.T, fx *permFixture, c permCase) permReq {
 		return permGet(fmt.Sprintf(v1+"/admin/channel-bindings/%d/listings", permChannelBinding(t, fx)))
+	}},
+	// —— 渠道订单（第三期）：读同后台订单（全店范围看全部，大区 / 门店管理员只看范围内门店的，列表在 SQL 里滤、
+	// 详情越界 404 不泄露存在性 —— 所以这两行人人放行，越界那格期望 404）；重试 / 接单 / 拒单 / 申请决定同发货，
+	// 按渠道单的门店判范围。夹具是一张已接单、没有异常的渠道单（与一个已同意的申请）：过了权限就是 409
+	// 「此刻不能这样处理」，没有副作用。没映射门店的那一种在 admin_channel_order_test.go。
+	{"GET", v1 + "/admin/channel-orders", everyone, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permGet(v1 + "/admin/channel-orders")
+	}},
+	{"GET", v1 + "/admin/channel-orders/:channel_order_id", everyone, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		req := permGet(fmt.Sprintf(v1+"/admin/channel-orders/%d", permChannelOrder(t, fx, fx.store(c))))
+		if storeOperate(c) != allow {
+			req.OK = http.StatusNotFound
+		}
+		return req
+	}},
+	{"POST", v1 + "/admin/channel-orders/:channel_order_id/retry", storeOperate, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permReq{Method: "POST", Path: fmt.Sprintf(v1+"/admin/channel-orders/%d/retry", permChannelOrder(t, fx, fx.store(c))),
+			OK: http.StatusConflict}
+	}},
+	{"POST", v1 + "/admin/channel-orders/:channel_order_id/accept", storeOperate, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permReq{Method: "POST", Path: fmt.Sprintf(v1+"/admin/channel-orders/%d/accept", permChannelOrder(t, fx, fx.store(c))),
+			OK: http.StatusConflict}
+	}},
+	{"POST", v1 + "/admin/channel-orders/:channel_order_id/reject", storeOperate, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permReq{Method: "POST", Path: fmt.Sprintf(v1+"/admin/channel-orders/%d/reject", permChannelOrder(t, fx, fx.store(c))),
+			Body: `{"reason":"权限矩阵"}`, OK: http.StatusConflict}
+	}},
+	{"POST", v1 + "/admin/channel-order-requests/:request_id/decision", storeOperate, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permReq{Method: "POST", Path: fmt.Sprintf(v1+"/admin/channel-order-requests/%d/decision", permChannelRequest(t, fx, fx.store(c))),
+			Body: `{"agree":true}`, OK: http.StatusConflict}
 	}},
 	{"GET", v1 + "/admin/local-delivery-templates", everyone, func(t *testing.T, fx *permFixture, c permCase) permReq {
 		return permGet(v1 + "/admin/local-delivery-templates")
@@ -1071,6 +1101,22 @@ func permLocalDeliveryTemplate(t *testing.T, fx *permFixture) int64 {
 }
 
 // permChannelBinding 是这家连锁的一个假渠道 binding（停用；每次新建，各行各角色互不影响）。
+// permChannelOrder 是 storeID 门店上一张已接单（3）、没有异常的渠道单。
+func permChannelOrder(t *testing.T, fx *permFixture, storeID int64) int64 {
+	t.Helper()
+	return adminQueryInt64(t, `INSERT INTO channel_orders (merchant_id, binding_id, external_order_id, external_order_name, store_id,
+		platform_status, status, amounts, lines, version, last_payload)
+		VALUES ($1, $2, $3, '#perm', $4, 'PAID', 3, '{}', '[]', 1, '{}') RETURNING id`,
+		fx.sh.MerchantID, permChannelBinding(t, fx), "perm-o-"+fx.next(), storeID)
+}
+
+// permChannelRequest 是 storeID 门店上一张渠道单的一个已同意（2）的申请。
+func permChannelRequest(t *testing.T, fx *permFixture, storeID int64) int64 {
+	t.Helper()
+	return adminQueryInt64(t, `INSERT INTO channel_order_requests (merchant_id, channel_order_id, external_request_id, kind, status)
+		VALUES ($1, $2, $3, 1, 2) RETURNING id`, fx.sh.MerchantID, permChannelOrder(t, fx, storeID), "perm-r-"+fx.next())
+}
+
 func permChannelBinding(t *testing.T, fx *permFixture) int64 {
 	t.Helper()
 	return adminQueryInt64(t, `INSERT INTO channel_bindings (merchant_id, channel, external_account, name, roles)

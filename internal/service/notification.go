@@ -49,22 +49,30 @@ import (
 
 // 通知种类（契约 NotificationKind，逐字一致；notification_policy_test.go 核对）。
 const (
-	KindOrderPaid               = "order_paid"
-	KindOrderShipped            = "order_shipped"
-	KindOrderAutoConfirmSoon    = "order_auto_confirm_soon"
-	KindOrderFinished           = "order_finished"
-	KindOrderTimeoutClosed      = "order_timeout_closed"
-	KindRefundApproved          = "refund_approved"
-	KindRefundRejected          = "refund_rejected"
-	KindRefundSucceeded         = "refund_succeeded"
-	KindRefundReturnExpired     = "refund_return_expired"
-	KindMerchantOrderPaid       = "merchant_order_paid"
-	KindMerchantRefundRequest   = "merchant_refund_requested"
-	KindMerchantReturnShipped   = "merchant_return_shipped"
-	KindMerchantInventoryLow    = "merchant_inventory_low"
-	notificationTargetOrder     = "order"
-	notificationTargetRefund    = "refund"
-	notificationTargetInventory = "inventory"
+	KindOrderPaid             = "order_paid"
+	KindOrderShipped          = "order_shipped"
+	KindOrderAutoConfirmSoon  = "order_auto_confirm_soon"
+	KindOrderFinished         = "order_finished"
+	KindOrderTimeoutClosed    = "order_timeout_closed"
+	KindRefundApproved        = "refund_approved"
+	KindRefundRejected        = "refund_rejected"
+	KindRefundSucceeded       = "refund_succeeded"
+	KindRefundReturnExpired   = "refund_return_expired"
+	KindMerchantOrderPaid     = "merchant_order_paid"
+	KindMerchantRefundRequest = "merchant_refund_requested"
+	KindMerchantReturnShipped = "merchant_return_shipped"
+	KindMerchantInventoryLow  = "merchant_inventory_low"
+	// KindMerchantChannelOrderException：渠道上卖出的单没能在 keel 成单（缺货），keel 订单已关到 90（第三期）；
+	// 第三期 Task 5 起也用于其余要门店知道 / 处理的渠道单事实（平台取消、发货没回传上……），正文带 Hint。
+	KindMerchantChannelOrderException = "merchant_channel_order_exception"
+	// KindMerchantChannelOrderPending：渠道单等门店处理（第三期 Task 6）：快到接单截止还没接单、平台发来申请、
+	// 申请过了截止。等接单的单还没有 keel 订单，所以跳的是门店的渠道订单页（00325 的 channel_orders 目标），
+	// 正文写明是哪张平台单。
+	KindMerchantChannelOrderPending = "merchant_channel_order_pending"
+	notificationTargetOrder         = "order"
+	notificationTargetRefund        = "refund"
+	notificationTargetInventory     = "inventory"
+	notificationTargetChannelOrders = "channel_orders"
 )
 
 // notifyParams 是模板能用到的全部字段。一个结构体而不是每种一个：
@@ -83,6 +91,8 @@ type notifyParams struct {
 	StoreName    string
 	Left         int32
 	Warning      int32
+	// Hint 是渠道订单要人处理时的下一步提示（notifyChannelOrderAttention）；为空是缺货关单那一种。
+	Hint string
 }
 
 // notificationTemplate 是一种通知的全部静态属性：发给谁、点了跳哪、标题与正文怎么写。
@@ -141,6 +151,12 @@ var notificationTemplates = map[string]notificationTemplate{
 	KindMerchantInventoryLow: {repository.NotificationAudienceMerchant, notificationTargetInventory,
 		"{{if eq .Left 0}}商品已售罄{{else}}库存预警{{end}}",
 		"{{.ProductTitle}}{{.SpecLabel}} 在{{.StoreName}}剩 {{.Left}} 件（预警线 {{.Warning}} 件）。"},
+	KindMerchantChannelOrderException: {repository.NotificationAudienceMerchant, notificationTargetOrder,
+		"{{if .Hint}}渠道订单要处理{{else}}渠道订单没能接单{{end}}",
+		"{{.Reason}}。{{if .Hint}}{{.Hint}}{{else}}keel 订单 {{.OrderNo}} 已关闭；补货后请在渠道订单页点「重试」。{{end}}"},
+	KindMerchantChannelOrderPending: {repository.NotificationAudienceMerchant, notificationTargetChannelOrders,
+		"渠道订单待处理",
+		"{{.Reason}}。{{if .Hint}}{{.Hint}}{{else}}请到渠道订单页处理。{{end}}"},
 }
 
 // carrierNames 是常见承运商代码的中文名。认不出的原样显示代码 —— 发货时填什么
@@ -210,8 +226,10 @@ func renderNotification(kind string, p notifyParams) (compiledTemplate, string, 
 
 // outgoing 是一条要写的通知：种类、收件人、定位、参数、去重后缀。
 type outgoing struct {
-	Kind    string
-	UserID  int64 // 发给买家时
+	Kind string
+	// UserID 发给买家时用。渠道单（00320）没有 keel 买家，为 nil：买家通知不发，
+	// 平台自己通知顾客（emitNotification 里跳过）；员工侧通知照发。
+	UserID  *int64
 	StoreID int64 // 发给商家时；库存预警的定位也用它
 	SKUID   int64 // 库存预警的定位
 	Params  notifyParams
@@ -250,7 +268,10 @@ func emitNotification(ctx context.Context, tx repository.Tx, o outgoing) error {
 		TargetType: t.Target, DedupeKey: o.Kind + ":" + o.Dedupe,
 	}
 	if t.Audience == repository.NotificationAudienceBuyer {
-		n.UserID = &o.UserID
+		if o.UserID == nil {
+			return nil // 渠道单无 keel 买家，平台自己通知顾客
+		}
+		n.UserID = o.UserID
 	} else {
 		n.StoreID = &o.StoreID
 	}
@@ -297,6 +318,20 @@ func notifyOrderPaid(ctx context.Context, tx repository.Tx, order repository.Ord
 	}
 	return emitNotification(ctx, tx, outgoing{Kind: KindMerchantOrderPaid, StoreID: order.StoreID,
 		Params: p, Dedupe: order.OrderNo})
+}
+
+// notifyChannelOrderException 渠道上卖出的单没能在 keel 成单（缺货，keel 订单已关到 90）：告诉履约门店。
+// 没有 keel 买家，买家侧本来就没有这一条。
+func notifyChannelOrderException(ctx context.Context, tx repository.Tx, order repository.Order, reason string) error {
+	return emitNotification(ctx, tx, outgoing{Kind: KindMerchantChannelOrderException, StoreID: order.StoreID,
+		Params: notifyParams{OrderNo: order.OrderNo, Reason: reason}, Dedupe: order.OrderNo})
+}
+
+// notifyChannelOrderAttention 渠道单上发生了要门店知道或处理的事（平台取消已整单退款、平台在 keel 发货后取消、
+// 发货没回传上……）。tag 区分同一张单上的不同事（去重键 = 单号:tag）。
+func notifyChannelOrderAttention(ctx context.Context, tx repository.Tx, order repository.Order, tag, reason, hint string) error {
+	return emitNotification(ctx, tx, outgoing{Kind: KindMerchantChannelOrderException, StoreID: order.StoreID,
+		Params: notifyParams{OrderNo: order.OrderNo, Reason: reason, Hint: hint}, Dedupe: order.OrderNo + ":" + tag})
 }
 
 // notifyOrderShipped 已发货，正文带物流。
@@ -347,7 +382,7 @@ func notifyRefundApproved(ctx context.Context, tx repository.Tx, refundNo string
 	if err != nil {
 		return err
 	}
-	return emitNotification(ctx, tx, outgoing{Kind: KindRefundApproved, UserID: r.UserID,
+	return emitNotification(ctx, tx, outgoing{Kind: KindRefundApproved, UserID: &r.UserID,
 		Params: notifyParams{OrderNo: r.OrderNo, RefundNo: r.RefundNo, AmountCents: r.AmountCents,
 			RefundType: r.RefundType},
 		Dedupe: r.RefundNo})
@@ -363,7 +398,7 @@ func notifyRefundRejected(ctx context.Context, tx repository.Tx, refundNo string
 	if r.RejectReason != nil {
 		reason = *r.RejectReason
 	}
-	return emitNotification(ctx, tx, outgoing{Kind: KindRefundRejected, UserID: r.UserID,
+	return emitNotification(ctx, tx, outgoing{Kind: KindRefundRejected, UserID: &r.UserID,
 		Params: notifyParams{OrderNo: r.OrderNo, RefundNo: r.RefundNo, Reason: reason},
 		Dedupe: r.RefundNo})
 }
@@ -387,14 +422,14 @@ func notifyRefundReturnExpired(ctx context.Context, tx repository.Tx, refundNo s
 	if err != nil {
 		return err
 	}
-	return emitNotification(ctx, tx, outgoing{Kind: KindRefundReturnExpired, UserID: r.UserID,
+	return emitNotification(ctx, tx, outgoing{Kind: KindRefundReturnExpired, UserID: &r.UserID,
 		Params: notifyParams{OrderNo: r.OrderNo, RefundNo: r.RefundNo, Days: days},
 		Dedupe: r.RefundNo})
 }
 
 // notifyRefundSucceeded 退款到账。
 func notifyRefundSucceeded(ctx context.Context, tx repository.Tx, r repository.Refund) error {
-	return emitNotification(ctx, tx, outgoing{Kind: KindRefundSucceeded, UserID: r.UserID,
+	return emitNotification(ctx, tx, outgoing{Kind: KindRefundSucceeded, UserID: &r.UserID,
 		Params: notifyParams{OrderNo: r.OrderNo, RefundNo: r.RefundNo, AmountCents: r.AmountCents},
 		Dedupe: r.RefundNo})
 }

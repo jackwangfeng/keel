@@ -174,6 +174,10 @@ type RefundTx interface {
 	RefundingQtyByItem(ctx context.Context, orderID int64) (map[int64]int32, error)
 	FindSettledPayment(ctx context.Context, orderID int64) (SettledPayment, error)
 	InsertRefund(ctx context.Context, r NewRefund) (int64, error)
+	InsertChannelRefund(ctx context.Context, r NewChannelRefund) (int64, error)
+	ChannelRefundExists(ctx context.Context, channelRefundID string) (bool, error)
+	// AddChannelRefundedCents 累加渠道退款的已退金额并同时对齐 refund_status（理由见 SQL 的注释）。
+	AddChannelRefundedCents(ctx context.Context, orderID, amount int64) error
 	StartWholeOrderRefund(ctx context.Context, orderID int64) (bool, error)
 	RevertWholeOrderRefund(ctx context.Context, orderID int64) (bool, error)
 	FinishWholeOrderRefund(ctx context.Context, orderID int64) (bool, error)
@@ -238,11 +242,13 @@ func orderFromRow(r db.GetOrderByNoRow) Order {
 		CouponName:             r.CouponName,
 		PromotionDiscountCents: r.PromotionDiscountCents,
 		Promotions:             r.Promotions,
+		Source:                 r.Source,
+		ChannelOrderID:         r.ChannelOrderID,
 	}
 }
 
 func (t tenantTx) LockUserOrderByNo(ctx context.Context, orderNo string, userID int64) (Order, error) {
-	r, err := t.q.LockUserOrderByNo(ctx, db.LockUserOrderByNoParams{OrderNo: orderNo, UserID: userID})
+	r, err := t.q.LockUserOrderByNo(ctx, db.LockUserOrderByNoParams{OrderNo: orderNo, UserID: &userID})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Order{}, fmt.Errorf("order %s: %w", orderNo, ErrOrderNotFound)
 	}
@@ -311,8 +317,8 @@ func (t tenantTx) InsertRefund(ctx context.Context, r NewRefund) (int64, error) 
 	id, err := t.q.InsertRefund(ctx, db.InsertRefundParams{
 		RefundNo:         r.RefundNo,
 		OrderID:          r.OrderID,
-		PaymentID:        r.PaymentID,
-		UserID:           r.UserID,
+		PaymentID:        &r.PaymentID,
+		UserID:           &r.UserID,
 		RefundType:       r.RefundType,
 		ReasonCode:       r.ReasonCode,
 		ReasonText:       r.ReasonText,
@@ -336,6 +342,52 @@ func (t tenantTx) InsertRefund(ctx context.Context, r NewRefund) (int64, error) 
 		}
 	}
 	return id, nil
+}
+
+// RefundChannelPlatform 是渠道退款单的 refunds.channel（00323）：钱在平台上退，keel 只记账。
+const RefundChannelPlatform int16 = 10
+
+// NewChannelRefund 是一张渠道退款单（直接落 40 已退款，没有买家与 payments 行）。
+// ChannelRefundID 是幂等键（channel_refund:<binding>:<平台退款 ID>）。
+type NewChannelRefund struct {
+	RefundNo         string
+	OrderID          int64
+	ReasonText       string
+	GoodsAmountCents int64
+	FreightCents     int64
+	ChannelRefundID  string
+	RefundedAt       time.Time
+	Items            []NewRefundItem
+}
+
+// InsertChannelRefund 落一张渠道退款单与它的明细（只记退款单，回写订单行 / 订单金额由调用方照入账那几步做）。
+func (t tenantTx) InsertChannelRefund(ctx context.Context, r NewChannelRefund) (int64, error) {
+	if r.ChannelRefundID == "" {
+		return 0, errors.New("渠道退款的幂等键为空")
+	}
+	reason := r.ReasonText
+	id, err := t.q.InsertChannelRefund(ctx, db.InsertChannelRefundParams{RefundNo: r.RefundNo, OrderID: r.OrderID,
+		ReasonText: &reason, GoodsAmountCents: r.GoodsAmountCents, FreightCents: r.FreightCents,
+		ChannelRefundID: &r.ChannelRefundID, RefundedAt: pgtype.Timestamptz{Time: r.RefundedAt, Valid: true}})
+	if err != nil {
+		return 0, err
+	}
+	for _, it := range r.Items {
+		if err := t.q.InsertRefundItem(ctx, db.InsertRefundItemParams{RefundID: id, OrderItemID: it.OrderItemID,
+			Quantity: it.Quantity, AmountCents: it.AmountCents}); err != nil {
+			return 0, err
+		}
+	}
+	return id, nil
+}
+
+// ChannelRefundExists：这个幂等键的渠道退款单记过没有。
+func (t tenantTx) ChannelRefundExists(ctx context.Context, channelRefundID string) (bool, error) {
+	return t.q.ChannelRefundExists(ctx, channelRefundID)
+}
+
+func (t tenantTx) AddChannelRefundedCents(ctx context.Context, orderID, amount int64) error {
+	return t.q.AddChannelRefundedCents(ctx, db.AddChannelRefundedCentsParams{ID: orderID, Amount: amount})
 }
 
 func (t tenantTx) StartWholeOrderRefund(ctx context.Context, orderID int64) (bool, error) {

@@ -22,7 +22,8 @@ export interface NotificationLocation {
 
 /**
  * 点了一条提醒跳到哪：订单 → 订单页并打开那一单（`?order_no=`，订单页已支持）；
- * 售后 → 售后页并打开那一张（`?refund_no=`）；库存 → 那家门店详情的库存页签。
+ * 售后 → 售后页并打开那一张（`?refund_no=`）；库存 → 那家门店详情的库存页签；
+ * 渠道订单 → 渠道页的订单视图、按那家门店筛（`?view=orders&store_id=`，等接单的渠道单还没有 keel 订单号）。
  * 定位字段缺了（不该发生：契约说对应 type 的字段一定非空）时返回 null，界面只标已读不跳。
  */
 export function notificationLocation(n: Pick<Notification, "target">): NotificationLocation | null {
@@ -34,6 +35,8 @@ export function notificationLocation(n: Pick<Notification, "target">): Notificat
             return t.refund_no === null ? null : { path: "/refunds", query: { refund_no: t.refund_no } };
         case "inventory":
             return t.store_id === null ? null : { path: `/stores/${t.store_id}`, query: { tab: "inventory" } };
+        case "channel_orders":
+            return t.store_id === null ? null : { path: "/channels", query: { view: "orders", store_id: String(t.store_id) } };
     }
 }
 
@@ -52,6 +55,8 @@ export const NOTIFICATION_TAG: Record<NotificationKind, "warning" | "danger" | "
     merchant_refund_requested: "danger",
     merchant_return_shipped: "primary",
     merchant_inventory_low: "danger",
+    merchant_channel_order_exception: "danger",
+    merchant_channel_order_pending: "warning",
     order_paid: "info",
     order_shipped: "info",
     order_auto_confirm_soon: "info",

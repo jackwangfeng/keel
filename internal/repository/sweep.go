@@ -98,7 +98,8 @@ type ExpiredOrder struct {
 	// 而这条清扫路径跑在任何请求之外，它对那一单的记忆只有这几列。
 	StoreID int64
 	// UserID 是下单的买家（00058）：关单时放回每人限购，那个计数按买家记。
-	UserID int64
+	// 渠道单为 nil（00320）：没有买家，也就没有限购要放回。
+	UserID *int64
 }
 
 // SweepTx 是超时补偿在一次租户事务里能做的事。

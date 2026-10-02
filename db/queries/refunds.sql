@@ -27,7 +27,8 @@ SELECT id, order_no, user_id, store_id, region_id, status,
        goods_amount_cents, freight_cents, freight_discount_cents,
        discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
        expire_at, paid_at, shipped_at, finished_at, created_at, user_coupon_id,
-       coupon_name, promotion_discount_cents, promotions
+       coupon_name, promotion_discount_cents, promotions,
+       source, channel_order_id  -- 00320
   FROM orders
  WHERE order_no = $1
    AND user_id = $2
@@ -40,7 +41,8 @@ SELECT id, order_no, user_id, store_id, region_id, status,
        goods_amount_cents, freight_cents, freight_discount_cents,
        discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
        expire_at, paid_at, shipped_at, finished_at, created_at, user_coupon_id,
-       coupon_name, promotion_discount_cents, promotions
+       coupon_name, promotion_discount_cents, promotions,
+       source, channel_order_id  -- 00320
   FROM orders
  WHERE id = $1
    FOR UPDATE;
@@ -127,7 +129,7 @@ UPDATE orders o
 -- name: GetRefundByNo :one
 -- 按对外编号取退款单（后台与入账用，没有买家过滤；租户由 RLS 管）。
 -- store_id 一起带出来：后台判权按订单的履约门店（与发货同一个判据）。
-SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, p.payment_no, r.user_id,
+SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, COALESCE(p.payment_no, '')::text AS payment_no, COALESCE(r.user_id, 0)::bigint AS user_id,
        r.refund_type, r.reason_code, r.reason_text, r.evidence_urls,
        r.goods_amount_cents, r.freight_cents, r.amount_cents, r.status, r.channel,
        r.channel_refund_id, r.reject_reason, r.audited_at, r.refunded_at,
@@ -135,13 +137,13 @@ SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, p.payment_no, r.us
        r.return_carrier_code, r.return_tracking_no, r.return_submitted_at
   FROM refunds r
   JOIN orders o   ON o.id = r.order_id
-  JOIN payments p ON p.id = r.payment_id
+  LEFT JOIN payments p ON p.id = r.payment_id
  WHERE r.refund_no = $1;
 
 -- name: GetUserRefundByNo :one
 -- 买家读自己的退款单。查不到与「不是你的」回同一个 404（refund_no 不可枚举，
 -- 分开报会把它变成一个存在性判定器）。
-SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, p.payment_no, r.user_id,
+SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, COALESCE(p.payment_no, '')::text AS payment_no, COALESCE(r.user_id, 0)::bigint AS user_id,
        r.refund_type, r.reason_code, r.reason_text, r.evidence_urls,
        r.goods_amount_cents, r.freight_cents, r.amount_cents, r.status, r.channel,
        r.channel_refund_id, r.reject_reason, r.audited_at, r.refunded_at,
@@ -149,9 +151,9 @@ SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, p.payment_no, r.us
        r.return_carrier_code, r.return_tracking_no, r.return_submitted_at
   FROM refunds r
   JOIN orders o   ON o.id = r.order_id
-  JOIN payments p ON p.id = r.payment_id
- WHERE r.refund_no = $1
-   AND r.user_id = $2;
+  LEFT JOIN payments p ON p.id = r.payment_id
+ WHERE r.refund_no = sqlc.arg(refund_no)
+   AND r.user_id = sqlc.arg(user_id)::bigint;
 
 -- name: LockRefundStatus :one
 -- 在订单行锁之下锁住退款单并读回它**此刻**的状态（见文件头「锁的顺序」）。
@@ -169,7 +171,7 @@ SELECT ri.refund_id, ri.order_item_id, oi.sku_id, ri.quantity, ri.amount_cents,
 -- name: ListOrderRefunds :many
 -- 一个订单的全部退款单，按申请时间倒序（契约 GET /orders/{order_no}/refunds
 -- 与 OrderDetail.refunds）。同一毫秒的两张按 id 倒序，顺序才是确定的。
-SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, p.payment_no, r.user_id,
+SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, COALESCE(p.payment_no, '')::text AS payment_no, COALESCE(r.user_id, 0)::bigint AS user_id,
        r.refund_type, r.reason_code, r.reason_text, r.evidence_urls,
        r.goods_amount_cents, r.freight_cents, r.amount_cents, r.status, r.channel,
        r.channel_refund_id, r.reject_reason, r.audited_at, r.refunded_at,
@@ -177,14 +179,14 @@ SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, p.payment_no, r.us
        r.return_carrier_code, r.return_tracking_no, r.return_submitted_at
   FROM refunds r
   JOIN orders o   ON o.id = r.order_id
-  JOIN payments p ON p.id = r.payment_id
+  LEFT JOIN payments p ON p.id = r.payment_id
  WHERE r.order_id = $1
  ORDER BY r.created_at DESC, r.id DESC;
 
 -- name: ListUserRefunds :many
 -- 我的退款单，一页。status 用可空参数：传 NULL 就是不筛，
 -- 与 CountUserRefunds 共用同一套谓词（理由同 ListUserOrders）。
-SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, p.payment_no, r.user_id,
+SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, COALESCE(p.payment_no, '')::text AS payment_no, COALESCE(r.user_id, 0)::bigint AS user_id,
        r.refund_type, r.reason_code, r.reason_text, r.evidence_urls,
        r.goods_amount_cents, r.freight_cents, r.amount_cents, r.status, r.channel,
        r.channel_refund_id, r.reject_reason, r.audited_at, r.refunded_at,
@@ -192,8 +194,8 @@ SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, p.payment_no, r.us
        r.return_carrier_code, r.return_tracking_no, r.return_submitted_at
   FROM refunds r
   JOIN orders o   ON o.id = r.order_id
-  JOIN payments p ON p.id = r.payment_id
- WHERE r.user_id = sqlc.arg(user_id)
+  LEFT JOIN payments p ON p.id = r.payment_id
+ WHERE r.user_id = sqlc.arg(user_id)::bigint
    AND (sqlc.narg(status)::smallint IS NULL OR r.status = sqlc.narg(status)::smallint)
  ORDER BY r.created_at DESC, r.id DESC
  LIMIT sqlc.arg(page_limit) OFFSET sqlc.arg(page_offset);
@@ -201,7 +203,7 @@ SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, p.payment_no, r.us
 -- name: CountUserRefunds :one
 SELECT count(*)
   FROM refunds r
- WHERE r.user_id = sqlc.arg(user_id)
+ WHERE r.user_id = sqlc.arg(user_id)::bigint
    AND (sqlc.narg(status)::smallint IS NULL OR r.status = sqlc.narg(status)::smallint);
 
 -- ---------------------------------------------------------------------------
@@ -218,13 +220,13 @@ UPDATE refunds
    SET return_carrier_code = sqlc.arg(carrier_code),
        return_tracking_no  = sqlc.arg(tracking_no),
        return_submitted_at = now()
- WHERE id = sqlc.arg(id) AND user_id = sqlc.arg(user_id)
+ WHERE id = sqlc.arg(id) AND user_id = sqlc.arg(user_id)::bigint
    AND refund_type = 2 AND status = 20;
 
 -- name: CancelRefund :execrows
 -- 买家撤回：10 待审核 / 20 待买家退货 → 60 已取消。30 退款中撤不回来（钱在路上）。
 UPDATE refunds SET status = 60
- WHERE id = $1 AND user_id = $2 AND status IN (10, 20);
+ WHERE id = sqlc.arg(id) AND user_id = sqlc.arg(user_id)::bigint AND status IN (10, 20);
 
 -- name: ListReturnOverdueRefunds :many
 -- 退货超时未寄回的候选（service/return_timeout.go，00059）：退货退款、停在 20 待买家退货、
@@ -331,3 +333,39 @@ UPDATE user_coupons
 SELECT COALESCE(SUM(freight_cents), 0)::bigint
   FROM refunds
  WHERE order_id = $1 AND id <> $2 AND status IN (10, 20, 30, 40);
+
+-- ---------------------------------------------------------------------------
+-- 渠道退款（00323）：平台上已经退了钱，keel 只记账
+-- ---------------------------------------------------------------------------
+
+-- name: InsertChannelRefund :one
+-- 落一张**已成功**的渠道退款单（40，不经审核与支付渠道）：没有买家、没有 payments 行（chk_refund_payer）。
+-- channel_refund_id 是幂等键（uk_refunds_channel_txn），调用方先 ChannelRefundExists 再插，撞键原样上浮。
+-- 直接以 40 落行不过状态触发器（它只管 UPDATE），chk_refund_state 要的 audited_at / refunded_at 一并写上。
+INSERT INTO refunds (refund_no, order_id, refund_type, reason_code, reason_text,
+                     goods_amount_cents, freight_cents, amount_cents, status, channel,
+                     channel_refund_id, audited_at, refunded_at)
+VALUES (sqlc.arg(refund_no), sqlc.arg(order_id), 1, 5, sqlc.arg(reason_text),
+        sqlc.arg(goods_amount_cents), sqlc.arg(freight_cents),
+        sqlc.arg(goods_amount_cents)::bigint + sqlc.arg(freight_cents)::bigint, 40, 10,
+        sqlc.arg(channel_refund_id), now(), sqlc.arg(refunded_at))
+RETURNING id;
+
+-- name: ChannelRefundExists :one
+-- 这个幂等键的渠道退款单记过没有。
+SELECT EXISTS (SELECT 1 FROM refunds WHERE channel = 10 AND channel_refund_id = sqlc.arg(channel_refund_id)::text);
+
+-- name: AddChannelRefundedCents :exec
+-- 渠道退款入账：累加已退金额并在**同一条语句**里对齐 refund_status。自营退款入账时订单已经在 1 退款中
+-- （申请那一刻 RecomputeOrderRefundStatus 推上去的），先累加再重算过得了 chk_refund_status；渠道退款单
+-- 直接落 40，没有「退款中」那一步，分两条写的话累加那一条就撞 chk_refund_status（0 却退过钱）。
+-- 规则与 RecomputeOrderRefundStatus 同一份（在途 → 1、退满实收 → 3、其余 → 2）。
+UPDATE orders o
+   SET refunded_cents = o.refunded_cents + sqlc.arg(amount)::bigint,
+       refund_status = CASE
+         WHEN EXISTS (SELECT 1 FROM refunds r
+                       WHERE r.order_id = o.id AND r.status IN (10, 20, 30)) THEN 1
+         WHEN o.refunded_cents + sqlc.arg(amount)::bigint = o.paid_cents THEN 3
+         ELSE 2
+       END
+ WHERE o.id = sqlc.arg(id);

@@ -636,7 +636,7 @@ func (s *OrderService) placeDraft(ctx context.Context, tx repository.Tx,
 	}
 	draft, err := tx.CreateOrderDraft(ctx, repository.NewOrderDraft{
 		OrderNo:          orderNo,
-		UserID:           userID,
+		UserID:           &userID,
 		StoreID:          sc.StoreID,
 		GoodsAmountCents: q.GoodsAmountCents,
 		FreightCents:     q.FreightCents,

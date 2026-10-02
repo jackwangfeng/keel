@@ -11,6 +11,7 @@ import { Refresh, Search } from "@element-plus/icons-vue";
 import { keel, type AdminRefund, type AdminRefundPage, type AdminStore } from "../../api/client.ts";
 import { listAllStores } from "../../api/stores.ts";
 import { REFUND_STATUS, REFUND_TYPE, refundQuery, type RefundFilterForm } from "../../api/orderRules.ts";
+import { isChannelRefund } from "../../api/channelRules.ts";
 import { datetime, yuan } from "../../ui/format.ts";
 import { notifyError } from "../../ui/notify.ts";
 import { useMobile } from "../../ui/useMobile.ts";
@@ -146,7 +147,11 @@ const activeFilterCount = computed(() => {
             <el-table-column label="退款单号" min-width="220">
                 <template #default="{ row }">
                     <el-link type="primary">{{ row.refund_no }}</el-link>
-                    <div class="hint">订单 {{ row.order_no }}</div>
+                    <el-tag v-if="isChannelRefund(row)" size="small" type="warning" class="ml4">渠道退款</el-tag>
+                    <div class="hint">
+                    订单 {{ row.order_no }}
+                    <el-tag v-if="isChannelRefund(row)" size="small" type="warning" class="ml4">渠道退款</el-tag>
+                </div>
                 </template>
             </el-table-column>
             <el-table-column label="状态" width="120">
@@ -218,6 +223,9 @@ const activeFilterCount = computed(() => {
 </template>
 
 <style scoped>
+.ml4 {
+    margin-left: 4px;
+}
 .filters {
     margin-bottom: 4px;
 }

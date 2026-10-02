@@ -47,6 +47,119 @@ func (q *Queries) ChannelManagedProducts(ctx context.Context, productIds []int64
 	return items, nil
 }
 
+const channelOrderKeelStatuses = `-- name: ChannelOrderKeelStatuses :many
+SELECT order_no, status FROM orders WHERE order_no = ANY($1::text[])
+`
+
+type ChannelOrderKeelStatusesRow struct {
+	OrderNo string
+	Status  int16
+}
+
+// 后台渠道单列表 / 详情的 retryable：这一页渠道单指着的 keel 订单此刻的状态（一次查询）。
+func (q *Queries) ChannelOrderKeelStatuses(ctx context.Context, orderNos []string) ([]ChannelOrderKeelStatusesRow, error) {
+	rows, err := q.db.Query(ctx, channelOrderKeelStatuses, orderNos)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ChannelOrderKeelStatusesRow
+	for rows.Next() {
+		var i ChannelOrderKeelStatusesRow
+		if err := rows.Scan(&i.OrderNo, &i.Status); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const channelOrderRefs = `-- name: ChannelOrderRefs :many
+SELECT co.id, co.external_order_name, b.channel, b.name AS binding_name
+  FROM channel_orders co
+  JOIN channel_bindings b ON b.id = co.binding_id
+ WHERE co.id = ANY($1::bigint[])
+`
+
+type ChannelOrderRefsRow struct {
+	ID                int64
+	ExternalOrderName string
+	Channel           string
+	BindingName       string
+}
+
+// 后台订单列表 / 详情的「来自 Shopify #1001」：这一页有渠道单（source = 1）时按 channel_order_id 补查一次
+// （订单列表不 JOIN，见第三期计划 Task 1 的执行中修正）。
+func (q *Queries) ChannelOrderRefs(ctx context.Context, ids []int64) ([]ChannelOrderRefsRow, error) {
+	rows, err := q.db.Query(ctx, channelOrderRefs, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ChannelOrderRefsRow
+	for rows.Next() {
+		var i ChannelOrderRefsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ExternalOrderName,
+			&i.Channel,
+			&i.BindingName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const channelOrderSKUs = `-- name: ChannelOrderSKUs :many
+SELECT s.id, s.product_id, s.spec_values, s.image_url, p.title
+  FROM skus s
+  JOIN products p ON p.id = s.product_id
+ WHERE s.id = ANY($1::bigint[]) AND s.deleted_at IS NULL AND p.deleted_at IS NULL
+`
+
+type ChannelOrderSKUsRow struct {
+	ID         int64
+	ProductID  int64
+	SpecValues []byte
+	ImageUrl   *string
+	Title      string
+}
+
+// 渠道单建 keel 订单行要的 SKU 快照（商品名、规格、图）。删了的 SKU / 商品不列：映射指向它时按「没映射」处理。
+func (q *Queries) ChannelOrderSKUs(ctx context.Context, skuIds []int64) ([]ChannelOrderSKUsRow, error) {
+	rows, err := q.db.Query(ctx, channelOrderSKUs, skuIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ChannelOrderSKUsRow
+	for rows.Next() {
+		var i ChannelOrderSKUsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProductID,
+			&i.SpecValues,
+			&i.ImageUrl,
+			&i.Title,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const channelSKUExists = `-- name: ChannelSKUExists :one
 SELECT EXISTS (SELECT 1 FROM skus WHERE id = $1::bigint AND deleted_at IS NULL)
 `
@@ -175,6 +288,44 @@ func (q *Queries) CountActiveOutletBindings(ctx context.Context) (int64, error) 
 	return count, err
 }
 
+const countChannelOrders = `-- name: CountChannelOrders :one
+SELECT count(*)::bigint
+  FROM channel_orders
+ WHERE ($1::bigint IS NULL OR binding_id = $1::bigint)
+   AND ($2::bigint IS NULL OR store_id = $2::bigint)
+   AND ($3::smallint IS NULL OR status = $3::smallint)
+   AND (NOT $4::boolean OR exception IS NOT NULL)
+   AND ($5::bigint[] IS NULL
+        OR store_id IN (SELECT st.id FROM stores st
+                         WHERE st.region_id = ANY($5::bigint[])))
+   AND ($6::bigint[] IS NULL
+        OR store_id = ANY($6::bigint[]))
+`
+
+type CountChannelOrdersParams struct {
+	BindingID     *int64
+	StoreID       *int64
+	Status        *int16
+	ExceptionOnly bool
+	OnlyRegionIds []int64
+	OnlyStoreIds  []int64
+}
+
+// 与 ListChannelOrders 同一组筛选的总条数（后台分页）。
+func (q *Queries) CountChannelOrders(ctx context.Context, arg CountChannelOrdersParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countChannelOrders,
+		arg.BindingID,
+		arg.StoreID,
+		arg.Status,
+		arg.ExceptionOnly,
+		arg.OnlyRegionIds,
+		arg.OnlyStoreIds,
+	)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const createChannelBinding = `-- name: CreateChannelBinding :one
 
 INSERT INTO channel_bindings (channel, external_account, name, roles, status, config)
@@ -230,6 +381,53 @@ func (q *Queries) CreateChannelBinding(ctx context.Context, arg CreateChannelBin
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const decideChannelOrderRequest = `-- name: DecideChannelOrderRequest :execrows
+UPDATE channel_order_requests
+   SET status = $1::smallint, decided_by = $2::bigint, decided_at = now()
+ WHERE id = $3::bigint AND status = 1
+`
+
+type DecideChannelOrderRequestParams struct {
+	Status    int16
+	DecidedBy *int64
+	ID        int64
+}
+
+// 处置一个待处理（1）的申请：2 同意 / 3 拒绝 / 4 超时自动同意 / 5 平台已撤销。decided_by 是员工（自动策略、超时、撤销为空）。
+// 只改待处理的：返回 0 = 已经处置过了。
+func (q *Queries) DecideChannelOrderRequest(ctx context.Context, arg DecideChannelOrderRequestParams) (int64, error) {
+	result, err := q.db.Exec(ctx, decideChannelOrderRequest, arg.Status, arg.DecidedBy, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const decrementChannelListingBaseline = `-- name: DecrementChannelListingBaseline :exec
+UPDATE channel_listings
+   SET published_qty = GREATEST(published_qty - $1::int, 0), version = version + 1
+ WHERE binding_id = $2::bigint AND store_id = $3::bigint AND sku_id = $4::bigint
+`
+
+type DecrementChannelListingBaselineParams struct {
+	Qty       int32
+	BindingID int64
+	StoreID   int64
+	SkuID     int64
+}
+
+// 接单成功：平台卖出时已经自己减了平台上的数，推送基线跟着减（下限 0），下一次推送的 CAS 才对得上
+// （Review Focus 3）。version 加一：基线变了，下一次推送换一个幂等键。没推过的格子没有行，不建。
+func (q *Queries) DecrementChannelListingBaseline(ctx context.Context, arg DecrementChannelListingBaselineParams) error {
+	_, err := q.db.Exec(ctx, decrementChannelListingBaseline,
+		arg.Qty,
+		arg.BindingID,
+		arg.StoreID,
+		arg.SkuID,
+	)
+	return err
 }
 
 const deleteChannelItemLink = `-- name: DeleteChannelItemLink :execrows
@@ -300,6 +498,104 @@ func (q *Queries) DeleteChannelStoreLink(ctx context.Context, arg DeleteChannelS
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const dueAcceptReminders = `-- name: DueAcceptReminders :many
+SELECT co.id, co.store_id::bigint AS store_id, co.external_order_name, co.accept_deadline
+  FROM channel_orders co
+  JOIN channel_bindings b ON b.id = co.binding_id
+ WHERE co.status = 2 AND co.order_no IS NULL AND co.exception IS NULL AND co.store_id IS NOT NULL
+   AND co.accept_deadline > now()
+   AND co.accept_deadline <= now() + make_interval(mins => COALESCE(
+         CASE WHEN jsonb_typeof(b.config -> 'accept_remind_minutes') = 'number'
+              THEN (b.config ->> 'accept_remind_minutes')::numeric::int END, 3))
+   AND NOT EXISTS (SELECT 1 FROM notifications n
+                    WHERE n.dedupe_key = 'merchant_channel_order_pending:accept_remind:' || co.id)
+ ORDER BY co.accept_deadline
+ LIMIT $1::int
+`
+
+type DueAcceptRemindersRow struct {
+	ID                int64
+	StoreID           int64
+	ExternalOrderName string
+	AcceptDeadline    pgtype.Timestamptz
+}
+
+// 等人接单、离接单截止不到 accept_remind_minutes（binding config，缺省 3）分钟、还没提醒过的渠道单。
+// 「提醒过」就是通知表里有那一条（去重键与 service/channel_order_request.go 的 acceptRemindDedupe 逐字一致），
+// 不另记一列。没映射到 keel 门店的单（store_id 空）发不了门店通知、也接不了单，不列。
+func (q *Queries) DueAcceptReminders(ctx context.Context, lim int32) ([]DueAcceptRemindersRow, error) {
+	rows, err := q.db.Query(ctx, dueAcceptReminders, lim)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []DueAcceptRemindersRow
+	for rows.Next() {
+		var i DueAcceptRemindersRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.StoreID,
+			&i.ExternalOrderName,
+			&i.AcceptDeadline,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const expiredChannelOrderRequests = `-- name: ExpiredChannelOrderRequests :many
+SELECT r.id, r.channel_order_id, r.kind, r.amount_cents, co.store_id, co.order_no, co.external_order_name
+  FROM channel_order_requests r
+  JOIN channel_orders co ON co.id = r.channel_order_id
+ WHERE r.status = 1 AND r.deadline <= now()
+ ORDER BY r.deadline
+ LIMIT $1::int
+`
+
+type ExpiredChannelOrderRequestsRow struct {
+	ID                int64
+	ChannelOrderID    int64
+	Kind              int16
+	AmountCents       int64
+	StoreID           *int64
+	OrderNo           *string
+	ExternalOrderName string
+}
+
+// 过了平台截止还没处置的申请（截止扫描把它们记成 4 超时自动同意）。走 idx_channel_order_requests_pending。
+func (q *Queries) ExpiredChannelOrderRequests(ctx context.Context, lim int32) ([]ExpiredChannelOrderRequestsRow, error) {
+	rows, err := q.db.Query(ctx, expiredChannelOrderRequests, lim)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ExpiredChannelOrderRequestsRow
+	for rows.Next() {
+		var i ExpiredChannelOrderRequestsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ChannelOrderID,
+			&i.Kind,
+			&i.AmountCents,
+			&i.StoreID,
+			&i.OrderNo,
+			&i.ExternalOrderName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const getChannelBinding = `-- name: GetChannelBinding :one
@@ -471,6 +767,72 @@ func (q *Queries) GetChannelListings(ctx context.Context, arg GetChannelListings
 	return items, nil
 }
 
+const getChannelOrder = `-- name: GetChannelOrder :one
+SELECT id, binding_id, external_order_id, external_order_name, store_id, order_no, platform_status, status, exception,
+       accept_deadline, delivery_mode, amounts, lines, receiver, version, last_payload, test, created_at, updated_at
+  FROM channel_orders WHERE id = $1::bigint
+`
+
+type GetChannelOrderRow struct {
+	ID                int64
+	BindingID         int64
+	ExternalOrderID   string
+	ExternalOrderName string
+	StoreID           *int64
+	OrderNo           *string
+	PlatformStatus    string
+	Status            int16
+	Exception         *string
+	AcceptDeadline    pgtype.Timestamptz
+	DeliveryMode      int16
+	Amounts           []byte
+	Lines             []byte
+	Receiver          []byte
+	Version           int64
+	LastPayload       []byte
+	Test              bool
+	CreatedAt         pgtype.Timestamptz
+	UpdatedAt         pgtype.Timestamptz
+}
+
+func (q *Queries) GetChannelOrder(ctx context.Context, id int64) (GetChannelOrderRow, error) {
+	row := q.db.QueryRow(ctx, getChannelOrder, id)
+	var i GetChannelOrderRow
+	err := row.Scan(
+		&i.ID,
+		&i.BindingID,
+		&i.ExternalOrderID,
+		&i.ExternalOrderName,
+		&i.StoreID,
+		&i.OrderNo,
+		&i.PlatformStatus,
+		&i.Status,
+		&i.Exception,
+		&i.AcceptDeadline,
+		&i.DeliveryMode,
+		&i.Amounts,
+		&i.Lines,
+		&i.Receiver,
+		&i.Version,
+		&i.LastPayload,
+		&i.Test,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getChannelOrderKeelBasis = `-- name: GetChannelOrderKeelBasis :one
+SELECT keel_basis FROM channel_orders WHERE id = $1::bigint
+`
+
+func (q *Queries) GetChannelOrderKeelBasis(ctx context.Context, id int64) ([]byte, error) {
+	row := q.db.QueryRow(ctx, getChannelOrderKeelBasis, id)
+	var keel_basis []byte
+	err := row.Scan(&keel_basis)
+	return keel_basis, err
+}
+
 const insertChannelInboundEvent = `-- name: InsertChannelInboundEvent :one
 INSERT INTO channel_inbound_events (binding_id, external_event_id, topic, payload, status)
 VALUES ($1::bigint, $2::text, $3::text, $4::jsonb, $5::smallint)
@@ -498,6 +860,177 @@ func (q *Queries) InsertChannelInboundEvent(ctx context.Context, arg InsertChann
 	var id int64
 	err := row.Scan(&id)
 	return id, err
+}
+
+const insertChannelOrder = `-- name: InsertChannelOrder :one
+
+INSERT INTO channel_orders (binding_id, external_order_id, external_order_name, store_id, platform_status, status,
+                            accept_deadline, delivery_mode, amounts, lines, receiver, version, last_payload, test)
+VALUES ($1::bigint, $2::text, $3::text, $4::bigint,
+        $5::text, $6::smallint, $7::timestamptz, $8::smallint,
+        $9::jsonb, $10::jsonb, $11::jsonb, $12::bigint, $13::jsonb, $14::boolean)
+ON CONFLICT ON CONSTRAINT uk_channel_orders_external DO NOTHING
+RETURNING id, binding_id, external_order_id, external_order_name, store_id, order_no, platform_status, status, exception,
+          accept_deadline, delivery_mode, amounts, lines, receiver, version, last_payload, test, created_at, updated_at
+`
+
+type InsertChannelOrderParams struct {
+	BindingID         int64
+	ExternalOrderID   string
+	ExternalOrderName string
+	StoreID           *int64
+	PlatformStatus    string
+	Status            int16
+	AcceptDeadline    pgtype.Timestamptz
+	DeliveryMode      int16
+	Amounts           []byte
+	Lines             []byte
+	Receiver          []byte
+	Version           int64
+	LastPayload       []byte
+	Test              bool
+}
+
+type InsertChannelOrderRow struct {
+	ID                int64
+	BindingID         int64
+	ExternalOrderID   string
+	ExternalOrderName string
+	StoreID           *int64
+	OrderNo           *string
+	PlatformStatus    string
+	Status            int16
+	Exception         *string
+	AcceptDeadline    pgtype.Timestamptz
+	DeliveryMode      int16
+	Amounts           []byte
+	Lines             []byte
+	Receiver          []byte
+	Version           int64
+	LastPayload       []byte
+	Test              bool
+	CreatedAt         pgtype.Timestamptz
+	UpdatedAt         pgtype.Timestamptz
+}
+
+// ---------------------------------------------------------------------------
+// 渠道订单（00320，第三期）。编排在 service/channel_order.go / channel_order_saga.go。
+// ---------------------------------------------------------------------------
+// 第一次见到这张平台单。并发的第二条（同一张单的另一条回调）撞 uk_channel_orders_external、等第一条提交后什么都不做
+// （没有行返回），调用方转去 LockChannelOrderByExternal —— 于是只有一个事务「新建」了它。
+func (q *Queries) InsertChannelOrder(ctx context.Context, arg InsertChannelOrderParams) (InsertChannelOrderRow, error) {
+	row := q.db.QueryRow(ctx, insertChannelOrder,
+		arg.BindingID,
+		arg.ExternalOrderID,
+		arg.ExternalOrderName,
+		arg.StoreID,
+		arg.PlatformStatus,
+		arg.Status,
+		arg.AcceptDeadline,
+		arg.DeliveryMode,
+		arg.Amounts,
+		arg.Lines,
+		arg.Receiver,
+		arg.Version,
+		arg.LastPayload,
+		arg.Test,
+	)
+	var i InsertChannelOrderRow
+	err := row.Scan(
+		&i.ID,
+		&i.BindingID,
+		&i.ExternalOrderID,
+		&i.ExternalOrderName,
+		&i.StoreID,
+		&i.OrderNo,
+		&i.PlatformStatus,
+		&i.Status,
+		&i.Exception,
+		&i.AcceptDeadline,
+		&i.DeliveryMode,
+		&i.Amounts,
+		&i.Lines,
+		&i.Receiver,
+		&i.Version,
+		&i.LastPayload,
+		&i.Test,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const insertChannelOrderRequest = `-- name: InsertChannelOrderRequest :one
+
+INSERT INTO channel_order_requests (channel_order_id, external_request_id, kind, lines, amount_cents, reason,
+                                    status, deadline)
+VALUES ($1::bigint, $2::text, $3::smallint, $4::jsonb, $5::bigint,
+        $6::text, $7::smallint, $8::timestamptz)
+ON CONFLICT ON CONSTRAINT uk_channel_order_requests_external DO NOTHING
+RETURNING id, channel_order_id, external_request_id, kind, lines, amount_cents, reason, status, deadline,
+          decided_by, decided_at, created_at, updated_at
+`
+
+type InsertChannelOrderRequestParams struct {
+	ChannelOrderID    int64
+	ExternalRequestID string
+	Kind              int16
+	Lines             []byte
+	AmountCents       int64
+	Reason            string
+	Status            int16
+	Deadline          pgtype.Timestamptz
+}
+
+type InsertChannelOrderRequestRow struct {
+	ID                int64
+	ChannelOrderID    int64
+	ExternalRequestID string
+	Kind              int16
+	Lines             []byte
+	AmountCents       int64
+	Reason            string
+	Status            int16
+	Deadline          pgtype.Timestamptz
+	DecidedBy         *int64
+	DecidedAt         pgtype.Timestamptz
+	CreatedAt         pgtype.Timestamptz
+	UpdatedAt         pgtype.Timestamptz
+}
+
+// ---------------------------------------------------------------------------
+// 平台发起的申请（channel_order_requests，00320；第三期 Task 6）。编排在 service/channel_order_request.go。
+// ---------------------------------------------------------------------------
+// 第一次见到这个申请。同一个申请的重复回调撞 uk_channel_order_requests_external、没有行返回，
+// 调用方转去 LockChannelOrderRequestByExternal（调用方已经锁着渠道单行，不会有并发的第二条插入）。
+func (q *Queries) InsertChannelOrderRequest(ctx context.Context, arg InsertChannelOrderRequestParams) (InsertChannelOrderRequestRow, error) {
+	row := q.db.QueryRow(ctx, insertChannelOrderRequest,
+		arg.ChannelOrderID,
+		arg.ExternalRequestID,
+		arg.Kind,
+		arg.Lines,
+		arg.AmountCents,
+		arg.Reason,
+		arg.Status,
+		arg.Deadline,
+	)
+	var i InsertChannelOrderRequestRow
+	err := row.Scan(
+		&i.ID,
+		&i.ChannelOrderID,
+		&i.ExternalRequestID,
+		&i.Kind,
+		&i.Lines,
+		&i.AmountCents,
+		&i.Reason,
+		&i.Status,
+		&i.Deadline,
+		&i.DecidedBy,
+		&i.DecidedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const listActiveOutletBindingsForStore = `-- name: ListActiveOutletBindingsForStore :many
@@ -715,6 +1248,167 @@ func (q *Queries) ListChannelListingsPage(ctx context.Context, arg ListChannelLi
 			&i.LastError,
 			&i.SkuCode,
 			&i.ProductTitle,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listChannelOrderRequests = `-- name: ListChannelOrderRequests :many
+SELECT id, channel_order_id, external_request_id, kind, lines, amount_cents, reason, status, deadline,
+       decided_by, decided_at, created_at, updated_at
+  FROM channel_order_requests WHERE channel_order_id = $1::bigint
+ ORDER BY id DESC
+`
+
+type ListChannelOrderRequestsRow struct {
+	ID                int64
+	ChannelOrderID    int64
+	ExternalRequestID string
+	Kind              int16
+	Lines             []byte
+	AmountCents       int64
+	Reason            string
+	Status            int16
+	Deadline          pgtype.Timestamptz
+	DecidedBy         *int64
+	DecidedAt         pgtype.Timestamptz
+	CreatedAt         pgtype.Timestamptz
+	UpdatedAt         pgtype.Timestamptz
+}
+
+// 一张渠道单上的申请（后台详情）：新的在前。
+func (q *Queries) ListChannelOrderRequests(ctx context.Context, channelOrderID int64) ([]ListChannelOrderRequestsRow, error) {
+	rows, err := q.db.Query(ctx, listChannelOrderRequests, channelOrderID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListChannelOrderRequestsRow
+	for rows.Next() {
+		var i ListChannelOrderRequestsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ChannelOrderID,
+			&i.ExternalRequestID,
+			&i.Kind,
+			&i.Lines,
+			&i.AmountCents,
+			&i.Reason,
+			&i.Status,
+			&i.Deadline,
+			&i.DecidedBy,
+			&i.DecidedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listChannelOrders = `-- name: ListChannelOrders :many
+SELECT id, binding_id, external_order_id, external_order_name, store_id, order_no, platform_status, status, exception,
+       accept_deadline, delivery_mode, amounts, lines, receiver, version, last_payload, test, created_at, updated_at
+  FROM channel_orders
+ WHERE ($1::bigint IS NULL OR binding_id = $1::bigint)
+   AND ($2::bigint IS NULL OR store_id = $2::bigint)
+   AND ($3::smallint IS NULL OR status = $3::smallint)
+   AND (NOT $4::boolean OR exception IS NOT NULL)
+   AND ($5::bigint[] IS NULL
+        OR store_id IN (SELECT st.id FROM stores st
+                         WHERE st.region_id = ANY($5::bigint[])))
+   AND ($6::bigint[] IS NULL
+        OR store_id = ANY($6::bigint[]))
+ ORDER BY id DESC
+ LIMIT $8::int OFFSET $7::int
+`
+
+type ListChannelOrdersParams struct {
+	BindingID     *int64
+	StoreID       *int64
+	Status        *int16
+	ExceptionOnly bool
+	OnlyRegionIds []int64
+	OnlyStoreIds  []int64
+	Off           int32
+	Lim           int32
+}
+
+type ListChannelOrdersRow struct {
+	ID                int64
+	BindingID         int64
+	ExternalOrderID   string
+	ExternalOrderName string
+	StoreID           *int64
+	OrderNo           *string
+	PlatformStatus    string
+	Status            int16
+	Exception         *string
+	AcceptDeadline    pgtype.Timestamptz
+	DeliveryMode      int16
+	Amounts           []byte
+	Lines             []byte
+	Receiver          []byte
+	Version           int64
+	LastPayload       []byte
+	Test              bool
+	CreatedAt         pgtype.Timestamptz
+	UpdatedAt         pgtype.Timestamptz
+}
+
+// 后台的渠道单列表：可按 binding、门店（通知跳过来只带门店）、状态筛，可只看异常；新的在前。
+// only_region_ids / only_store_ids 是员工的范围（service 的 orderListScope，同后台订单列表）：NULL 不限，
+// 空数组一个都不给；没映射门店的渠道单（store_id 空）只有不限范围的人看得见。
+// 渠道单表是一家店的渠道单（量远小于 orders），可空筛选在这里不构成 generic plan 的问题。
+func (q *Queries) ListChannelOrders(ctx context.Context, arg ListChannelOrdersParams) ([]ListChannelOrdersRow, error) {
+	rows, err := q.db.Query(ctx, listChannelOrders,
+		arg.BindingID,
+		arg.StoreID,
+		arg.Status,
+		arg.ExceptionOnly,
+		arg.OnlyRegionIds,
+		arg.OnlyStoreIds,
+		arg.Off,
+		arg.Lim,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListChannelOrdersRow
+	for rows.Next() {
+		var i ListChannelOrdersRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.BindingID,
+			&i.ExternalOrderID,
+			&i.ExternalOrderName,
+			&i.StoreID,
+			&i.OrderNo,
+			&i.PlatformStatus,
+			&i.Status,
+			&i.Exception,
+			&i.AcceptDeadline,
+			&i.DeliveryMode,
+			&i.Amounts,
+			&i.Lines,
+			&i.Receiver,
+			&i.Version,
+			&i.LastPayload,
+			&i.Test,
+			&i.CreatedAt,
+			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -945,6 +1639,218 @@ func (q *Queries) LockChannelMerchant(ctx context.Context) error {
 	return err
 }
 
+const lockChannelOrder = `-- name: LockChannelOrder :one
+SELECT id, binding_id, external_order_id, external_order_name, store_id, order_no, platform_status, status, exception,
+       accept_deadline, delivery_mode, amounts, lines, receiver, version, last_payload, test, created_at, updated_at
+  FROM channel_orders WHERE id = $1::bigint
+   FOR UPDATE
+`
+
+type LockChannelOrderRow struct {
+	ID                int64
+	BindingID         int64
+	ExternalOrderID   string
+	ExternalOrderName string
+	StoreID           *int64
+	OrderNo           *string
+	PlatformStatus    string
+	Status            int16
+	Exception         *string
+	AcceptDeadline    pgtype.Timestamptz
+	DeliveryMode      int16
+	Amounts           []byte
+	Lines             []byte
+	Receiver          []byte
+	Version           int64
+	LastPayload       []byte
+	Test              bool
+	CreatedAt         pgtype.Timestamptz
+	UpdatedAt         pgtype.Timestamptz
+}
+
+func (q *Queries) LockChannelOrder(ctx context.Context, id int64) (LockChannelOrderRow, error) {
+	row := q.db.QueryRow(ctx, lockChannelOrder, id)
+	var i LockChannelOrderRow
+	err := row.Scan(
+		&i.ID,
+		&i.BindingID,
+		&i.ExternalOrderID,
+		&i.ExternalOrderName,
+		&i.StoreID,
+		&i.OrderNo,
+		&i.PlatformStatus,
+		&i.Status,
+		&i.Exception,
+		&i.AcceptDeadline,
+		&i.DeliveryMode,
+		&i.Amounts,
+		&i.Lines,
+		&i.Receiver,
+		&i.Version,
+		&i.LastPayload,
+		&i.Test,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const lockChannelOrderByExternal = `-- name: LockChannelOrderByExternal :one
+SELECT id, binding_id, external_order_id, external_order_name, store_id, order_no, platform_status, status, exception,
+       accept_deadline, delivery_mode, amounts, lines, receiver, version, last_payload, test, created_at, updated_at
+  FROM channel_orders
+ WHERE binding_id = $1::bigint AND external_order_id = $2::text
+   FOR UPDATE
+`
+
+type LockChannelOrderByExternalParams struct {
+	BindingID       int64
+	ExternalOrderID string
+}
+
+type LockChannelOrderByExternalRow struct {
+	ID                int64
+	BindingID         int64
+	ExternalOrderID   string
+	ExternalOrderName string
+	StoreID           *int64
+	OrderNo           *string
+	PlatformStatus    string
+	Status            int16
+	Exception         *string
+	AcceptDeadline    pgtype.Timestamptz
+	DeliveryMode      int16
+	Amounts           []byte
+	Lines             []byte
+	Receiver          []byte
+	Version           int64
+	LastPayload       []byte
+	Test              bool
+	CreatedAt         pgtype.Timestamptz
+	UpdatedAt         pgtype.Timestamptz
+}
+
+func (q *Queries) LockChannelOrderByExternal(ctx context.Context, arg LockChannelOrderByExternalParams) (LockChannelOrderByExternalRow, error) {
+	row := q.db.QueryRow(ctx, lockChannelOrderByExternal, arg.BindingID, arg.ExternalOrderID)
+	var i LockChannelOrderByExternalRow
+	err := row.Scan(
+		&i.ID,
+		&i.BindingID,
+		&i.ExternalOrderID,
+		&i.ExternalOrderName,
+		&i.StoreID,
+		&i.OrderNo,
+		&i.PlatformStatus,
+		&i.Status,
+		&i.Exception,
+		&i.AcceptDeadline,
+		&i.DeliveryMode,
+		&i.Amounts,
+		&i.Lines,
+		&i.Receiver,
+		&i.Version,
+		&i.LastPayload,
+		&i.Test,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const lockChannelOrderRequest = `-- name: LockChannelOrderRequest :one
+SELECT id, channel_order_id, external_request_id, kind, lines, amount_cents, reason, status, deadline,
+       decided_by, decided_at, created_at, updated_at
+  FROM channel_order_requests WHERE id = $1::bigint
+   FOR UPDATE
+`
+
+type LockChannelOrderRequestRow struct {
+	ID                int64
+	ChannelOrderID    int64
+	ExternalRequestID string
+	Kind              int16
+	Lines             []byte
+	AmountCents       int64
+	Reason            string
+	Status            int16
+	Deadline          pgtype.Timestamptz
+	DecidedBy         *int64
+	DecidedAt         pgtype.Timestamptz
+	CreatedAt         pgtype.Timestamptz
+	UpdatedAt         pgtype.Timestamptz
+}
+
+func (q *Queries) LockChannelOrderRequest(ctx context.Context, id int64) (LockChannelOrderRequestRow, error) {
+	row := q.db.QueryRow(ctx, lockChannelOrderRequest, id)
+	var i LockChannelOrderRequestRow
+	err := row.Scan(
+		&i.ID,
+		&i.ChannelOrderID,
+		&i.ExternalRequestID,
+		&i.Kind,
+		&i.Lines,
+		&i.AmountCents,
+		&i.Reason,
+		&i.Status,
+		&i.Deadline,
+		&i.DecidedBy,
+		&i.DecidedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const lockChannelOrderRequestByExternal = `-- name: LockChannelOrderRequestByExternal :one
+SELECT id, channel_order_id, external_request_id, kind, lines, amount_cents, reason, status, deadline,
+       decided_by, decided_at, created_at, updated_at
+  FROM channel_order_requests
+ WHERE channel_order_id = $1::bigint AND external_request_id = $2::text
+   FOR UPDATE
+`
+
+type LockChannelOrderRequestByExternalParams struct {
+	ChannelOrderID    int64
+	ExternalRequestID string
+}
+
+type LockChannelOrderRequestByExternalRow struct {
+	ID                int64
+	ChannelOrderID    int64
+	ExternalRequestID string
+	Kind              int16
+	Lines             []byte
+	AmountCents       int64
+	Reason            string
+	Status            int16
+	Deadline          pgtype.Timestamptz
+	DecidedBy         *int64
+	DecidedAt         pgtype.Timestamptz
+	CreatedAt         pgtype.Timestamptz
+	UpdatedAt         pgtype.Timestamptz
+}
+
+func (q *Queries) LockChannelOrderRequestByExternal(ctx context.Context, arg LockChannelOrderRequestByExternalParams) (LockChannelOrderRequestByExternalRow, error) {
+	row := q.db.QueryRow(ctx, lockChannelOrderRequestByExternal, arg.ChannelOrderID, arg.ExternalRequestID)
+	var i LockChannelOrderRequestByExternalRow
+	err := row.Scan(
+		&i.ID,
+		&i.ChannelOrderID,
+		&i.ExternalRequestID,
+		&i.Kind,
+		&i.Lines,
+		&i.AmountCents,
+		&i.Reason,
+		&i.Status,
+		&i.Deadline,
+		&i.DecidedBy,
+		&i.DecidedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const markChannelInboundEvent = `-- name: MarkChannelInboundEvent :exec
 UPDATE channel_inbound_events
    SET status = $1::smallint, error = $2::text, processed_at = now()
@@ -998,6 +1904,63 @@ func (q *Queries) SetChannelListingError(ctx context.Context, arg SetChannelList
 		arg.StoreID,
 		arg.SkuID,
 	)
+	return err
+}
+
+const setChannelOrderKeelBasis = `-- name: SetChannelOrderKeelBasis :exec
+UPDATE channel_orders SET keel_basis = $1::jsonb WHERE id = $2::bigint
+`
+
+type SetChannelOrderKeelBasisParams struct {
+	KeelBasis []byte
+	ID        int64
+}
+
+// 建 keel 草稿时写下依据（00326：平台行 → keel 订单行、当时已吸收的平台退款）。
+func (q *Queries) SetChannelOrderKeelBasis(ctx context.Context, arg SetChannelOrderKeelBasisParams) error {
+	_, err := q.db.Exec(ctx, setChannelOrderKeelBasis, arg.KeelBasis, arg.ID)
+	return err
+}
+
+const setChannelOrderState = `-- name: SetChannelOrderState :exec
+UPDATE channel_orders
+   SET status = $1::smallint, order_no = $2::text, exception = $3::text,
+       accept_deadline = $4::timestamptz
+ WHERE id = $5::bigint
+`
+
+type SetChannelOrderStateParams struct {
+	Status         int16
+	OrderNo        *string
+	Exception      *string
+	AcceptDeadline pgtype.Timestamptz
+	ID             int64
+}
+
+// keel 这一侧对渠道单的处置：规整状态、关联的 keel 订单、异常、接单截止。四列一起写（调用方给全值）。
+func (q *Queries) SetChannelOrderState(ctx context.Context, arg SetChannelOrderStateParams) error {
+	_, err := q.db.Exec(ctx, setChannelOrderState,
+		arg.Status,
+		arg.OrderNo,
+		arg.Exception,
+		arg.AcceptDeadline,
+		arg.ID,
+	)
+	return err
+}
+
+const touchChannelOrderPayload = `-- name: TouchChannelOrderPayload :exec
+UPDATE channel_orders SET last_payload = $1::jsonb WHERE id = $2::bigint
+`
+
+type TouchChannelOrderPayloadParams struct {
+	LastPayload []byte
+	ID          int64
+}
+
+// 旧版本（或同版本）的快照只留档、不改状态（Review Focus 2）。
+func (q *Queries) TouchChannelOrderPayload(ctx context.Context, arg TouchChannelOrderPayloadParams) error {
+	_, err := q.db.Exec(ctx, touchChannelOrderPayload, arg.LastPayload, arg.ID)
 	return err
 }
 
@@ -1055,6 +2018,52 @@ func (q *Queries) UpdateChannelBinding(ctx context.Context, arg UpdateChannelBin
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const updateChannelOrderSnapshot = `-- name: UpdateChannelOrderSnapshot :exec
+UPDATE channel_orders
+   SET external_order_name = $1::text, store_id = $2::bigint,
+       platform_status = $3::text, status = $4::smallint,
+       accept_deadline = $5::timestamptz, delivery_mode = $6::smallint,
+       amounts = $7::jsonb, lines = $8::jsonb, receiver = $9::jsonb,
+       version = GREATEST(version, $10::bigint), last_payload = $11::jsonb, test = $12::boolean
+ WHERE id = $13::bigint
+`
+
+type UpdateChannelOrderSnapshotParams struct {
+	ExternalOrderName string
+	StoreID           *int64
+	PlatformStatus    string
+	Status            int16
+	AcceptDeadline    pgtype.Timestamptz
+	DeliveryMode      int16
+	Amounts           []byte
+	Lines             []byte
+	Receiver          []byte
+	Version           int64
+	LastPayload       []byte
+	Test              bool
+	ID                int64
+}
+
+// 新版本的平台快照（版本守卫在调用方：只在 version 更大、或「重试」强制时调）。
+func (q *Queries) UpdateChannelOrderSnapshot(ctx context.Context, arg UpdateChannelOrderSnapshotParams) error {
+	_, err := q.db.Exec(ctx, updateChannelOrderSnapshot,
+		arg.ExternalOrderName,
+		arg.StoreID,
+		arg.PlatformStatus,
+		arg.Status,
+		arg.AcceptDeadline,
+		arg.DeliveryMode,
+		arg.Amounts,
+		arg.Lines,
+		arg.Receiver,
+		arg.Version,
+		arg.LastPayload,
+		arg.Test,
+		arg.ID,
+	)
+	return err
 }
 
 const upsertChannelItemLink = `-- name: UpsertChannelItemLink :exec

@@ -32,10 +32,18 @@ test("库存提醒跳那家门店的库存页签", () => {
     });
 });
 
+test("渠道订单提醒跳渠道页的订单视图、按门店筛", () => {
+    assert.deepEqual(notificationLocation(target({ type: "channel_orders", store_id: 7 })), {
+        path: "/channels",
+        query: { view: "orders", store_id: "7" },
+    });
+});
+
 test("定位字段缺了就不跳（只标已读），而不是跳到一个空页面", () => {
     assert.equal(notificationLocation(target({ type: "order" })), null);
     assert.equal(notificationLocation(target({ type: "refund", order_no: "O1" })), null);
     assert.equal(notificationLocation(target({ type: "inventory", sku_id: 3 })), null);
+    assert.equal(notificationLocation(target({ type: "channel_orders" })), null);
 });
 
 test("角标：0 不显示，超过 99 写 99+", () => {

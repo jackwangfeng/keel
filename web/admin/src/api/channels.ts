@@ -1,6 +1,14 @@
 // 渠道管理页的取数。对 client.ts 的薄封装：类型全从契约来（client.ts 的别名），请求都走 `keel`。
 
-import { ProblemError, UnexpectedResponseError, keel, onSessionChange, type ChannelListing } from "./client.ts";
+import {
+    ProblemError,
+    UnexpectedResponseError,
+    keel,
+    onSessionChange,
+    type ChannelListing,
+    type ChannelOrderDetail,
+    type ChannelOrderPage,
+} from "./client.ts";
 import { channelsAvailable } from "./channelRules.ts";
 import { sectionVisible } from "../auth/permissions.ts";
 
@@ -31,8 +39,8 @@ onSessionChange(() => {
 });
 
 export function channelSectionAvailable(): Promise<boolean> {
-    // 当前角色本来就看不见「渠道」分区（服务端 requireMerchantWide）：不用为一个
-    // 注定不显示的菜单项打请求。
+    // 当前角色本来就看不见「渠道」分区：不用为一个注定不显示的菜单项打请求。
+    // （channel-kinds 所有员工可读，门店范围的员工也用它探渠道层开没开。）
     if (!sectionVisible("channels")) return Promise.resolve(false);
     cached ??= (async () => {
         const { available, cacheable } = await channelsAvailable(probeChannelKinds);
@@ -59,4 +67,55 @@ export async function listListings(
         },
     });
     return { items: res.items, hasMore: res.items.length >= LISTING_PAGE_SIZE };
+}
+
+/** 渠道订单一页（GET /admin/channel-orders）。null 的筛选不带。 */
+export const CHANNEL_ORDER_PAGE_SIZE = 20;
+
+export async function listChannelOrders(opts: {
+    bindingId: number | null;
+    storeId: number | null;
+    status: number | null;
+    exceptionOnly: boolean;
+    page: number;
+    pageSize?: number;
+}): Promise<ChannelOrderPage> {
+    return keel.request("get", "/admin/channel-orders", {
+        query: {
+            page: opts.page,
+            page_size: opts.pageSize ?? CHANNEL_ORDER_PAGE_SIZE,
+            ...(opts.bindingId === null ? {} : { binding_id: opts.bindingId }),
+            ...(opts.storeId === null ? {} : { store_id: opts.storeId }),
+            ...(opts.status === null ? {} : { status: opts.status as ChannelOrderDetail["status"] }),
+            ...(opts.exceptionOnly ? { exception_only: true } : {}),
+        },
+    });
+}
+
+export function getChannelOrder(id: number): Promise<ChannelOrderDetail> {
+    return keel.request("get", "/admin/channel-orders/{channel_order_id}", { path: { channel_order_id: id } });
+}
+
+/** 重试 / 接单 / 拒单：都回处理之后的渠道单。 */
+export function channelOrderAction(id: number, action: "retry" | "accept" | "reject", reason?: string): Promise<ChannelOrderDetail> {
+    const path = { channel_order_id: id };
+    switch (action) {
+        case "retry":
+            return keel.request("post", "/admin/channel-orders/{channel_order_id}/retry", { path });
+        case "accept":
+            return keel.request("post", "/admin/channel-orders/{channel_order_id}/accept", { path });
+        case "reject":
+            return keel.request("post", "/admin/channel-orders/{channel_order_id}/reject", {
+                path,
+                body: reason === undefined || reason === "" ? {} : { reason },
+            });
+    }
+}
+
+/** 同意 / 拒绝平台申请：回申请所在的渠道单。 */
+export function decideChannelOrderRequest(requestId: number, agree: boolean): Promise<ChannelOrderDetail> {
+    return keel.request("post", "/admin/channel-order-requests/{request_id}/decision", {
+        path: { request_id: requestId },
+        body: { agree },
+    });
 }

@@ -11,6 +11,32 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const addChannelRefundedCents = `-- name: AddChannelRefundedCents :exec
+UPDATE orders o
+   SET refunded_cents = o.refunded_cents + $1::bigint,
+       refund_status = CASE
+         WHEN EXISTS (SELECT 1 FROM refunds r
+                       WHERE r.order_id = o.id AND r.status IN (10, 20, 30)) THEN 1
+         WHEN o.refunded_cents + $1::bigint = o.paid_cents THEN 3
+         ELSE 2
+       END
+ WHERE o.id = $2
+`
+
+type AddChannelRefundedCentsParams struct {
+	Amount int64
+	ID     int64
+}
+
+// 渠道退款入账：累加已退金额并在**同一条语句**里对齐 refund_status。自营退款入账时订单已经在 1 退款中
+// （申请那一刻 RecomputeOrderRefundStatus 推上去的），先累加再重算过得了 chk_refund_status；渠道退款单
+// 直接落 40，没有「退款中」那一步，分两条写的话累加那一条就撞 chk_refund_status（0 却退过钱）。
+// 规则与 RecomputeOrderRefundStatus 同一份（在途 → 1、退满实收 → 3、其余 → 2）。
+func (q *Queries) AddChannelRefundedCents(ctx context.Context, arg AddChannelRefundedCentsParams) error {
+	_, err := q.db.Exec(ctx, addChannelRefundedCents, arg.Amount, arg.ID)
+	return err
+}
+
 const addOrderRefundedCents = `-- name: AddOrderRefundedCents :exec
 UPDATE orders SET refunded_cents = refunded_cents + $2 WHERE id = $1
 `
@@ -60,7 +86,7 @@ func (q *Queries) ApproveRefund(ctx context.Context, arg ApproveRefundParams) (i
 
 const cancelRefund = `-- name: CancelRefund :execrows
 UPDATE refunds SET status = 60
- WHERE id = $1 AND user_id = $2 AND status IN (10, 20)
+ WHERE id = $1 AND user_id = $2::bigint AND status IN (10, 20)
 `
 
 type CancelRefundParams struct {
@@ -75,6 +101,18 @@ func (q *Queries) CancelRefund(ctx context.Context, arg CancelRefundParams) (int
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const channelRefundExists = `-- name: ChannelRefundExists :one
+SELECT EXISTS (SELECT 1 FROM refunds WHERE channel = 10 AND channel_refund_id = $1::text)
+`
+
+// 这个幂等键的渠道退款单记过没有。
+func (q *Queries) ChannelRefundExists(ctx context.Context, channelRefundID string) (bool, error) {
+	row := q.db.QueryRow(ctx, channelRefundExists, channelRefundID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
 }
 
 const completeRefund = `-- name: CompleteRefund :execrows
@@ -123,7 +161,7 @@ func (q *Queries) CountOrderItemsNotFullyRefunded(ctx context.Context, orderID i
 const countUserRefunds = `-- name: CountUserRefunds :one
 SELECT count(*)
   FROM refunds r
- WHERE r.user_id = $1
+ WHERE r.user_id = $1::bigint
    AND ($2::smallint IS NULL OR r.status = $2::smallint)
 `
 
@@ -209,7 +247,7 @@ func (q *Queries) FinishWholeOrderRefund(ctx context.Context, id int64) (int64, 
 
 const getRefundByNo = `-- name: GetRefundByNo :one
 
-SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, p.payment_no, r.user_id,
+SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, COALESCE(p.payment_no, '')::text AS payment_no, COALESCE(r.user_id, 0)::bigint AS user_id,
        r.refund_type, r.reason_code, r.reason_text, r.evidence_urls,
        r.goods_amount_cents, r.freight_cents, r.amount_cents, r.status, r.channel,
        r.channel_refund_id, r.reject_reason, r.audited_at, r.refunded_at,
@@ -217,7 +255,7 @@ SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, p.payment_no, r.us
        r.return_carrier_code, r.return_tracking_no, r.return_submitted_at
   FROM refunds r
   JOIN orders o   ON o.id = r.order_id
-  JOIN payments p ON p.id = r.payment_id
+  LEFT JOIN payments p ON p.id = r.payment_id
  WHERE r.refund_no = $1
 `
 
@@ -288,7 +326,7 @@ func (q *Queries) GetRefundByNo(ctx context.Context, refundNo string) (GetRefund
 }
 
 const getUserRefundByNo = `-- name: GetUserRefundByNo :one
-SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, p.payment_no, r.user_id,
+SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, COALESCE(p.payment_no, '')::text AS payment_no, COALESCE(r.user_id, 0)::bigint AS user_id,
        r.refund_type, r.reason_code, r.reason_text, r.evidence_urls,
        r.goods_amount_cents, r.freight_cents, r.amount_cents, r.status, r.channel,
        r.channel_refund_id, r.reject_reason, r.audited_at, r.refunded_at,
@@ -296,9 +334,9 @@ SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, p.payment_no, r.us
        r.return_carrier_code, r.return_tracking_no, r.return_submitted_at
   FROM refunds r
   JOIN orders o   ON o.id = r.order_id
-  JOIN payments p ON p.id = r.payment_id
+  LEFT JOIN payments p ON p.id = r.payment_id
  WHERE r.refund_no = $1
-   AND r.user_id = $2
+   AND r.user_id = $2::bigint
 `
 
 type GetUserRefundByNoParams struct {
@@ -369,6 +407,49 @@ func (q *Queries) GetUserRefundByNo(ctx context.Context, arg GetUserRefundByNoPa
 	return i, err
 }
 
+const insertChannelRefund = `-- name: InsertChannelRefund :one
+
+INSERT INTO refunds (refund_no, order_id, refund_type, reason_code, reason_text,
+                     goods_amount_cents, freight_cents, amount_cents, status, channel,
+                     channel_refund_id, audited_at, refunded_at)
+VALUES ($1, $2, 1, 5, $3,
+        $4, $5,
+        $4::bigint + $5::bigint, 40, 10,
+        $6, now(), $7)
+RETURNING id
+`
+
+type InsertChannelRefundParams struct {
+	RefundNo         string
+	OrderID          int64
+	ReasonText       *string
+	GoodsAmountCents int64
+	FreightCents     int64
+	ChannelRefundID  *string
+	RefundedAt       pgtype.Timestamptz
+}
+
+// ---------------------------------------------------------------------------
+// 渠道退款（00323）：平台上已经退了钱，keel 只记账
+// ---------------------------------------------------------------------------
+// 落一张**已成功**的渠道退款单（40，不经审核与支付渠道）：没有买家、没有 payments 行（chk_refund_payer）。
+// channel_refund_id 是幂等键（uk_refunds_channel_txn），调用方先 ChannelRefundExists 再插，撞键原样上浮。
+// 直接以 40 落行不过状态触发器（它只管 UPDATE），chk_refund_state 要的 audited_at / refunded_at 一并写上。
+func (q *Queries) InsertChannelRefund(ctx context.Context, arg InsertChannelRefundParams) (int64, error) {
+	row := q.db.QueryRow(ctx, insertChannelRefund,
+		arg.RefundNo,
+		arg.OrderID,
+		arg.ReasonText,
+		arg.GoodsAmountCents,
+		arg.FreightCents,
+		arg.ChannelRefundID,
+		arg.RefundedAt,
+	)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
+}
+
 const insertRefund = `-- name: InsertRefund :one
 INSERT INTO refunds (refund_no, order_id, payment_id, user_id, refund_type, reason_code,
                      reason_text, evidence_urls, goods_amount_cents, freight_cents,
@@ -380,8 +461,8 @@ RETURNING id
 type InsertRefundParams struct {
 	RefundNo         string
 	OrderID          int64
-	PaymentID        int64
-	UserID           int64
+	PaymentID        *int64
+	UserID           *int64
 	RefundType       int16
 	ReasonCode       int16
 	ReasonText       *string
@@ -486,7 +567,7 @@ func (q *Queries) ListOrderItemsForRefund(ctx context.Context, orderID int64) ([
 }
 
 const listOrderRefunds = `-- name: ListOrderRefunds :many
-SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, p.payment_no, r.user_id,
+SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, COALESCE(p.payment_no, '')::text AS payment_no, COALESCE(r.user_id, 0)::bigint AS user_id,
        r.refund_type, r.reason_code, r.reason_text, r.evidence_urls,
        r.goods_amount_cents, r.freight_cents, r.amount_cents, r.status, r.channel,
        r.channel_refund_id, r.reject_reason, r.audited_at, r.refunded_at,
@@ -494,7 +575,7 @@ SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, p.payment_no, r.us
        r.return_carrier_code, r.return_tracking_no, r.return_submitted_at
   FROM refunds r
   JOIN orders o   ON o.id = r.order_id
-  JOIN payments p ON p.id = r.payment_id
+  LEFT JOIN payments p ON p.id = r.payment_id
  WHERE r.order_id = $1
  ORDER BY r.created_at DESC, r.id DESC
 `
@@ -668,7 +749,7 @@ func (q *Queries) ListReturnOverdueRefunds(ctx context.Context, arg ListReturnOv
 }
 
 const listUserRefunds = `-- name: ListUserRefunds :many
-SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, p.payment_no, r.user_id,
+SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, COALESCE(p.payment_no, '')::text AS payment_no, COALESCE(r.user_id, 0)::bigint AS user_id,
        r.refund_type, r.reason_code, r.reason_text, r.evidence_urls,
        r.goods_amount_cents, r.freight_cents, r.amount_cents, r.status, r.channel,
        r.channel_refund_id, r.reject_reason, r.audited_at, r.refunded_at,
@@ -676,8 +757,8 @@ SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, p.payment_no, r.us
        r.return_carrier_code, r.return_tracking_no, r.return_submitted_at
   FROM refunds r
   JOIN orders o   ON o.id = r.order_id
-  JOIN payments p ON p.id = r.payment_id
- WHERE r.user_id = $1
+  LEFT JOIN payments p ON p.id = r.payment_id
+ WHERE r.user_id = $1::bigint
    AND ($2::smallint IS NULL OR r.status = $2::smallint)
  ORDER BY r.created_at DESC, r.id DESC
  LIMIT $4 OFFSET $3
@@ -776,7 +857,8 @@ SELECT id, order_no, user_id, store_id, region_id, status,
        goods_amount_cents, freight_cents, freight_discount_cents,
        discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
        expire_at, paid_at, shipped_at, finished_at, created_at, user_coupon_id,
-       coupon_name, promotion_discount_cents, promotions
+       coupon_name, promotion_discount_cents, promotions,
+       source, channel_order_id  -- 00320
   FROM orders
  WHERE id = $1
    FOR UPDATE
@@ -785,7 +867,7 @@ SELECT id, order_no, user_id, store_id, region_id, status,
 type LockOrderByIDRow struct {
 	ID                     int64
 	OrderNo                string
-	UserID                 int64
+	UserID                 *int64
 	StoreID                int64
 	RegionID               int64
 	Status                 int16
@@ -806,6 +888,8 @@ type LockOrderByIDRow struct {
 	CouponName             *string
 	PromotionDiscountCents int64
 	Promotions             []byte
+	Source                 int16
+	ChannelOrderID         *int64
 }
 
 // 审核、撤回、入账改订单之前先锁它（见文件头「锁的顺序」）。
@@ -836,6 +920,8 @@ func (q *Queries) LockOrderByID(ctx context.Context, id int64) (LockOrderByIDRow
 		&i.CouponName,
 		&i.PromotionDiscountCents,
 		&i.Promotions,
+		&i.Source,
+		&i.ChannelOrderID,
 	)
 	return i, err
 }
@@ -859,7 +945,8 @@ SELECT id, order_no, user_id, store_id, region_id, status,
        goods_amount_cents, freight_cents, freight_discount_cents,
        discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
        expire_at, paid_at, shipped_at, finished_at, created_at, user_coupon_id,
-       coupon_name, promotion_discount_cents, promotions
+       coupon_name, promotion_discount_cents, promotions,
+       source, channel_order_id  -- 00320
   FROM orders
  WHERE order_no = $1
    AND user_id = $2
@@ -869,13 +956,13 @@ SELECT id, order_no, user_id, store_id, region_id, status,
 
 type LockUserOrderByNoParams struct {
 	OrderNo string
-	UserID  int64
+	UserID  *int64
 }
 
 type LockUserOrderByNoRow struct {
 	ID                     int64
 	OrderNo                string
-	UserID                 int64
+	UserID                 *int64
 	StoreID                int64
 	RegionID               int64
 	Status                 int16
@@ -896,6 +983,8 @@ type LockUserOrderByNoRow struct {
 	CouponName             *string
 	PromotionDiscountCents int64
 	Promotions             []byte
+	Source                 int16
+	ChannelOrderID         *int64
 }
 
 // 退款与售后（数据模型 §11）：申请、撤回、审核、确认收到退货、渠道回调入账，
@@ -947,6 +1036,8 @@ func (q *Queries) LockUserOrderByNo(ctx context.Context, arg LockUserOrderByNoPa
 		&i.CouponName,
 		&i.PromotionDiscountCents,
 		&i.Promotions,
+		&i.Source,
+		&i.ChannelOrderID,
 	)
 	return i, err
 }
@@ -1143,7 +1234,7 @@ UPDATE refunds
    SET return_carrier_code = $1,
        return_tracking_no  = $2,
        return_submitted_at = now()
- WHERE id = $3 AND user_id = $4
+ WHERE id = $3 AND user_id = $4::bigint
    AND refund_type = 2 AND status = 20
 `
 

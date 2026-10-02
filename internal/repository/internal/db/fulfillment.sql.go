@@ -19,7 +19,7 @@ UPDATE orders SET status = 90
 
 type CancelPendingOrderParams struct {
 	OrderNo string
-	UserID  int64
+	UserID  *int64
 }
 
 // 订单后半程的履约维度：买家取消、后台发货、买家确认收货（数据模型 §5）。
@@ -55,7 +55,7 @@ UPDATE orders SET status = 40, finished_at = now()
 
 type ConfirmOrderReceiptParams struct {
 	OrderNo string
-	UserID  int64
+	UserID  *int64
 }
 
 // 买家确认收货：30 已发货 → 40 已完成，记下完成时间。
@@ -63,6 +63,22 @@ type ConfirmOrderReceiptParams struct {
 // 不看 refund_status：部分退款进行中不阻断确认收货（契约明写，两个维度正交）。
 func (q *Queries) ConfirmOrderReceipt(ctx context.Context, arg ConfirmOrderReceiptParams) (int64, error) {
 	result, err := q.db.Exec(ctx, confirmOrderReceipt, arg.OrderNo, arg.UserID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const finishChannelOrder = `-- name: FinishChannelOrder :execrows
+UPDATE orders SET status = 40, finished_at = now()
+ WHERE id = $1 AND source = 1 AND status = 30
+`
+
+// 渠道单（00320）的 30 → 40：没有 keel 买家，ConfirmOrderReceipt 的 user_id = $2 永远匹配不上，
+// 所以自动确认收货对渠道单走这一条（auto_confirm.go 按 order.Source 分支）。
+// source = 1 在谓词里：这条语句碰不到自营单。
+func (q *Queries) FinishChannelOrder(ctx context.Context, id int64) (int64, error) {
+	result, err := q.db.Exec(ctx, finishChannelOrder, id)
 	if err != nil {
 		return 0, err
 	}
@@ -134,7 +150,7 @@ type ListAutoConfirmableOrdersParams struct {
 type ListAutoConfirmableOrdersRow struct {
 	ID      int64
 	OrderNo string
-	UserID  int64
+	UserID  *int64
 }
 
 // ---------------------------------------------------------------------------

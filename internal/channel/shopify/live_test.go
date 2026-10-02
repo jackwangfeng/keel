@@ -2,7 +2,7 @@ package shopify_test
 
 // 对真实开发店的联调（KEEL_SHOPIFY_LIVE=1 才跑）。凭据从 ~/.config/keel/shopify-dev 读
 // （SHOPIFY_SHOP / SHOPIFY_CLIENT_ID / SHOPIFY_CLIENT_SECRET），不打印。**不改开发店的任何数据**：
-// 推送只做两件事——一次必然冲突的 CAS（不生效）、一次值不变的空操作。
+// 推送只做两件事——一次必然冲突的 CAS（不生效）、一次值不变的空操作；订单只读（取最近一张并规整）。
 
 import (
 	"bufio"
@@ -103,5 +103,29 @@ func TestLiveDevStore(t *testing.T) {
 	_ = json.Unmarshal(pick.Extra, &ex)
 	if q, ok, err := a.Available(ctx, b, ex.InventoryItemID, lvl.ExternalStoreID); err != nil || !ok || q != cur {
 		t.Fatalf("回读 = %d %v %v，期望 %d（开发店的数被改了！）", q, ok, err, cur)
+	}
+}
+
+// TestLiveFetchLatestOrder 只读：取开发店最近一张订单并规整（店里没有订单就 Skip）。
+func TestLiveFetchLatestOrder(t *testing.T) {
+	b := liveBinding(t)
+	a := shopify.New(shopify.Options{})
+	ctx := context.Background()
+	id, err := shopify.LatestOrderID(ctx, a, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id == "" {
+		t.Skip("开发店里没有订单")
+	}
+	o, err := a.FetchOrder(ctx, b, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("订单 %s：状态 %d（%s）版本 %d 门店 %q %s 行 %d 金额 %+v 收货人为空 %v 发货 %d 退款 %d",
+		o.ExternalOrderName, o.Status, o.PlatformStatus, o.Version, o.ExternalStoreID, o.StoreError, len(o.Lines),
+		o.Amounts, o.Receiver == (channel.Receiver{}), len(o.Shipments), len(o.Refunds))
+	if o.ExternalOrderID != id || o.Version == 0 || o.Status == 0 {
+		t.Fatalf("规整结果不对：%+v", o)
 	}
 }

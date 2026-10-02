@@ -6,7 +6,7 @@
 // 别的状态服务端回 409。
 
 import { computed, onMounted, ref } from "vue";
-import { useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { ArrowLeft, CopyDocument, Edit, Key, Refresh } from "@element-plus/icons-vue";
 import { ElMessageBox } from "element-plus";
 import { keel, type AdminCategory, type AdminStore, type ChannelBinding, type ChannelKind } from "../../api/client.ts";
@@ -23,10 +23,12 @@ import ChannelSecretsDialog from "./ChannelSecretsDialog.vue";
 import ChannelStoreLinks from "./ChannelStoreLinks.vue";
 import ChannelRules from "./ChannelRules.vue";
 import ChannelListings from "./ChannelListings.vue";
+import ChannelOrders from "./ChannelOrders.vue";
 import { useMobile } from "../../ui/useMobile.ts";
 
 const props = defineProps<{ bindingId: string }>();
 const router = useRouter();
+const route = useRoute();
 const id = computed(() => Number(props.bindingId));
 const canWrite = computed(() => can.manageChannels());
 const mobile = useMobile();
@@ -38,7 +40,8 @@ const kinds = ref<ChannelKind[]>([]);
 const stores = ref<AdminStore[]>([]);
 const categories = ref<AdminCategory[]>([]);
 const linkCount = ref<number | null>(null);
-const tab = ref("stores");
+// ?tab=orders 直接打开订单页签（从渠道单相关的链接跳过来）。
+const tab = ref(route.query.tab === "orders" ? "orders" : "stores");
 
 async function load(): Promise<void> {
     loading.value = true;
@@ -231,6 +234,9 @@ async function onSecretsSaved(): Promise<void> {
                 </el-tab-pane>
                 <el-tab-pane label="推送状态" name="listings" lazy>
                     <ChannelListings :binding-id="binding.id" :stores="stores" />
+                </el-tab-pane>
+                <el-tab-pane label="订单" name="orders" lazy>
+                    <ChannelOrders :binding-id="binding.id" :bindings="[binding]" :kinds="kinds" :stores="stores" />
                 </el-tab-pane>
             </el-tabs>
 

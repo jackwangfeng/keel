@@ -34,9 +34,10 @@ func NewAdminChannelService(ch *ChannelService) *AdminChannelService {
 	return &AdminChannelService{ch: ch}
 }
 
-// Kinds 是编进来的渠道与各自的能力。
+// Kinds 是编进来的渠道与各自的能力。所有员工都能读（只是编进来的适配器与能力，不含任何账号）：门店范围的员工
+// 处理自己门店的渠道单时，界面靠它判断这个渠道要不要接单（AcceptRequired），后台也用它探渠道层开没开。
 func (s *AdminChannelService) Kinds(ctx context.Context) ([]channel.Adapter, error) {
-	if _, err := requireMerchantWide(ctx); err != nil {
+	if _, err := requireStaff(ctx); err != nil {
 		return nil, err
 	}
 	var out []channel.Adapter

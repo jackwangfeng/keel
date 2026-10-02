@@ -207,3 +207,193 @@ SELECT DISTINCT ON (l.keel_id) l.keel_id AS product_id, b.channel
 SELECT id, product_id, sku_code, (deleted_at IS NOT NULL)::boolean AS deleted
   FROM skus
  WHERE sku_code = ANY(@codes::text[]);
+
+-- ---------------------------------------------------------------------------
+-- 渠道订单（00320，第三期）。编排在 service/channel_order.go / channel_order_saga.go。
+-- ---------------------------------------------------------------------------
+
+-- name: InsertChannelOrder :one
+-- 第一次见到这张平台单。并发的第二条（同一张单的另一条回调）撞 uk_channel_orders_external、等第一条提交后什么都不做
+-- （没有行返回），调用方转去 LockChannelOrderByExternal —— 于是只有一个事务「新建」了它。
+INSERT INTO channel_orders (binding_id, external_order_id, external_order_name, store_id, platform_status, status,
+                            accept_deadline, delivery_mode, amounts, lines, receiver, version, last_payload, test)
+VALUES (@binding_id::bigint, @external_order_id::text, @external_order_name::text, sqlc.narg(store_id)::bigint,
+        @platform_status::text, @status::smallint, sqlc.narg(accept_deadline)::timestamptz, @delivery_mode::smallint,
+        @amounts::jsonb, @lines::jsonb, @receiver::jsonb, @version::bigint, @last_payload::jsonb, @test::boolean)
+ON CONFLICT ON CONSTRAINT uk_channel_orders_external DO NOTHING
+RETURNING id, binding_id, external_order_id, external_order_name, store_id, order_no, platform_status, status, exception,
+          accept_deadline, delivery_mode, amounts, lines, receiver, version, last_payload, test, created_at, updated_at;
+
+-- name: LockChannelOrderByExternal :one
+SELECT id, binding_id, external_order_id, external_order_name, store_id, order_no, platform_status, status, exception,
+       accept_deadline, delivery_mode, amounts, lines, receiver, version, last_payload, test, created_at, updated_at
+  FROM channel_orders
+ WHERE binding_id = @binding_id::bigint AND external_order_id = @external_order_id::text
+   FOR UPDATE;
+
+-- name: LockChannelOrder :one
+SELECT id, binding_id, external_order_id, external_order_name, store_id, order_no, platform_status, status, exception,
+       accept_deadline, delivery_mode, amounts, lines, receiver, version, last_payload, test, created_at, updated_at
+  FROM channel_orders WHERE id = @id::bigint
+   FOR UPDATE;
+
+-- name: GetChannelOrder :one
+SELECT id, binding_id, external_order_id, external_order_name, store_id, order_no, platform_status, status, exception,
+       accept_deadline, delivery_mode, amounts, lines, receiver, version, last_payload, test, created_at, updated_at
+  FROM channel_orders WHERE id = @id::bigint;
+
+-- name: UpdateChannelOrderSnapshot :exec
+-- 新版本的平台快照（版本守卫在调用方：只在 version 更大、或「重试」强制时调）。
+UPDATE channel_orders
+   SET external_order_name = @external_order_name::text, store_id = sqlc.narg(store_id)::bigint,
+       platform_status = @platform_status::text, status = @status::smallint,
+       accept_deadline = sqlc.narg(accept_deadline)::timestamptz, delivery_mode = @delivery_mode::smallint,
+       amounts = @amounts::jsonb, lines = @lines::jsonb, receiver = @receiver::jsonb,
+       version = GREATEST(version, @version::bigint), last_payload = @last_payload::jsonb, test = @test::boolean
+ WHERE id = @id::bigint;
+
+-- name: TouchChannelOrderPayload :exec
+-- 旧版本（或同版本）的快照只留档、不改状态（Review Focus 2）。
+UPDATE channel_orders SET last_payload = @last_payload::jsonb WHERE id = @id::bigint;
+
+-- name: SetChannelOrderKeelBasis :exec
+-- 建 keel 草稿时写下依据（00326：平台行 → keel 订单行、当时已吸收的平台退款）。
+UPDATE channel_orders SET keel_basis = @keel_basis::jsonb WHERE id = @id::bigint;
+
+-- name: GetChannelOrderKeelBasis :one
+SELECT keel_basis FROM channel_orders WHERE id = @id::bigint;
+
+-- name: SetChannelOrderState :exec
+-- keel 这一侧对渠道单的处置：规整状态、关联的 keel 订单、异常、接单截止。四列一起写（调用方给全值）。
+UPDATE channel_orders
+   SET status = @status::smallint, order_no = sqlc.narg(order_no)::text, exception = sqlc.narg(exception)::text,
+       accept_deadline = sqlc.narg(accept_deadline)::timestamptz
+ WHERE id = @id::bigint;
+
+-- name: ListChannelOrders :many
+-- 后台的渠道单列表：可按 binding、门店（通知跳过来只带门店）、状态筛，可只看异常；新的在前。
+-- only_region_ids / only_store_ids 是员工的范围（service 的 orderListScope，同后台订单列表）：NULL 不限，
+-- 空数组一个都不给；没映射门店的渠道单（store_id 空）只有不限范围的人看得见。
+-- 渠道单表是一家店的渠道单（量远小于 orders），可空筛选在这里不构成 generic plan 的问题。
+SELECT id, binding_id, external_order_id, external_order_name, store_id, order_no, platform_status, status, exception,
+       accept_deadline, delivery_mode, amounts, lines, receiver, version, last_payload, test, created_at, updated_at
+  FROM channel_orders
+ WHERE (sqlc.narg(binding_id)::bigint IS NULL OR binding_id = sqlc.narg(binding_id)::bigint)
+   AND (sqlc.narg(store_id)::bigint IS NULL OR store_id = sqlc.narg(store_id)::bigint)
+   AND (sqlc.narg(status)::smallint IS NULL OR status = sqlc.narg(status)::smallint)
+   AND (NOT @exception_only::boolean OR exception IS NOT NULL)
+   AND (sqlc.narg(only_region_ids)::bigint[] IS NULL
+        OR store_id IN (SELECT st.id FROM stores st
+                         WHERE st.region_id = ANY(sqlc.narg(only_region_ids)::bigint[])))
+   AND (sqlc.narg(only_store_ids)::bigint[] IS NULL
+        OR store_id = ANY(sqlc.narg(only_store_ids)::bigint[]))
+ ORDER BY id DESC
+ LIMIT @lim::int OFFSET @off::int;
+
+-- name: CountChannelOrders :one
+-- 与 ListChannelOrders 同一组筛选的总条数（后台分页）。
+SELECT count(*)::bigint
+  FROM channel_orders
+ WHERE (sqlc.narg(binding_id)::bigint IS NULL OR binding_id = sqlc.narg(binding_id)::bigint)
+   AND (sqlc.narg(store_id)::bigint IS NULL OR store_id = sqlc.narg(store_id)::bigint)
+   AND (sqlc.narg(status)::smallint IS NULL OR status = sqlc.narg(status)::smallint)
+   AND (NOT @exception_only::boolean OR exception IS NOT NULL)
+   AND (sqlc.narg(only_region_ids)::bigint[] IS NULL
+        OR store_id IN (SELECT st.id FROM stores st
+                         WHERE st.region_id = ANY(sqlc.narg(only_region_ids)::bigint[])))
+   AND (sqlc.narg(only_store_ids)::bigint[] IS NULL
+        OR store_id = ANY(sqlc.narg(only_store_ids)::bigint[]));
+
+-- name: ChannelOrderKeelStatuses :many
+-- 后台渠道单列表 / 详情的 retryable：这一页渠道单指着的 keel 订单此刻的状态（一次查询）。
+SELECT order_no, status FROM orders WHERE order_no = ANY(@order_nos::text[]);
+
+-- name: ChannelOrderRefs :many
+-- 后台订单列表 / 详情的「来自 Shopify #1001」：这一页有渠道单（source = 1）时按 channel_order_id 补查一次
+-- （订单列表不 JOIN，见第三期计划 Task 1 的执行中修正）。
+SELECT co.id, co.external_order_name, b.channel, b.name AS binding_name
+  FROM channel_orders co
+  JOIN channel_bindings b ON b.id = co.binding_id
+ WHERE co.id = ANY(@ids::bigint[]);
+
+-- name: DecrementChannelListingBaseline :exec
+-- 接单成功：平台卖出时已经自己减了平台上的数，推送基线跟着减（下限 0），下一次推送的 CAS 才对得上
+-- （Review Focus 3）。version 加一：基线变了，下一次推送换一个幂等键。没推过的格子没有行，不建。
+UPDATE channel_listings
+   SET published_qty = GREATEST(published_qty - @qty::int, 0), version = version + 1
+ WHERE binding_id = @binding_id::bigint AND store_id = @store_id::bigint AND sku_id = @sku_id::bigint;
+
+-- name: ChannelOrderSKUs :many
+-- 渠道单建 keel 订单行要的 SKU 快照（商品名、规格、图）。删了的 SKU / 商品不列：映射指向它时按「没映射」处理。
+SELECT s.id, s.product_id, s.spec_values, s.image_url, p.title
+  FROM skus s
+  JOIN products p ON p.id = s.product_id
+ WHERE s.id = ANY(@sku_ids::bigint[]) AND s.deleted_at IS NULL AND p.deleted_at IS NULL;
+
+-- ---------------------------------------------------------------------------
+-- 平台发起的申请（channel_order_requests，00320；第三期 Task 6）。编排在 service/channel_order_request.go。
+-- ---------------------------------------------------------------------------
+
+-- name: InsertChannelOrderRequest :one
+-- 第一次见到这个申请。同一个申请的重复回调撞 uk_channel_order_requests_external、没有行返回，
+-- 调用方转去 LockChannelOrderRequestByExternal（调用方已经锁着渠道单行，不会有并发的第二条插入）。
+INSERT INTO channel_order_requests (channel_order_id, external_request_id, kind, lines, amount_cents, reason,
+                                    status, deadline)
+VALUES (@channel_order_id::bigint, @external_request_id::text, @kind::smallint, @lines::jsonb, @amount_cents::bigint,
+        @reason::text, @status::smallint, sqlc.narg(deadline)::timestamptz)
+ON CONFLICT ON CONSTRAINT uk_channel_order_requests_external DO NOTHING
+RETURNING id, channel_order_id, external_request_id, kind, lines, amount_cents, reason, status, deadline,
+          decided_by, decided_at, created_at, updated_at;
+
+-- name: LockChannelOrderRequestByExternal :one
+SELECT id, channel_order_id, external_request_id, kind, lines, amount_cents, reason, status, deadline,
+       decided_by, decided_at, created_at, updated_at
+  FROM channel_order_requests
+ WHERE channel_order_id = @channel_order_id::bigint AND external_request_id = @external_request_id::text
+   FOR UPDATE;
+
+-- name: LockChannelOrderRequest :one
+SELECT id, channel_order_id, external_request_id, kind, lines, amount_cents, reason, status, deadline,
+       decided_by, decided_at, created_at, updated_at
+  FROM channel_order_requests WHERE id = @id::bigint
+   FOR UPDATE;
+
+-- name: ListChannelOrderRequests :many
+-- 一张渠道单上的申请（后台详情）：新的在前。
+SELECT id, channel_order_id, external_request_id, kind, lines, amount_cents, reason, status, deadline,
+       decided_by, decided_at, created_at, updated_at
+  FROM channel_order_requests WHERE channel_order_id = @channel_order_id::bigint
+ ORDER BY id DESC;
+
+-- name: DecideChannelOrderRequest :execrows
+-- 处置一个待处理（1）的申请：2 同意 / 3 拒绝 / 4 超时自动同意 / 5 平台已撤销。decided_by 是员工（自动策略、超时、撤销为空）。
+-- 只改待处理的：返回 0 = 已经处置过了。
+UPDATE channel_order_requests
+   SET status = @status::smallint, decided_by = sqlc.narg(decided_by)::bigint, decided_at = now()
+ WHERE id = @id::bigint AND status = 1;
+
+-- name: ExpiredChannelOrderRequests :many
+-- 过了平台截止还没处置的申请（截止扫描把它们记成 4 超时自动同意）。走 idx_channel_order_requests_pending。
+SELECT r.id, r.channel_order_id, r.kind, r.amount_cents, co.store_id, co.order_no, co.external_order_name
+  FROM channel_order_requests r
+  JOIN channel_orders co ON co.id = r.channel_order_id
+ WHERE r.status = 1 AND r.deadline <= now()
+ ORDER BY r.deadline
+ LIMIT @lim::int;
+
+-- name: DueAcceptReminders :many
+-- 等人接单、离接单截止不到 accept_remind_minutes（binding config，缺省 3）分钟、还没提醒过的渠道单。
+-- 「提醒过」就是通知表里有那一条（去重键与 service/channel_order_request.go 的 acceptRemindDedupe 逐字一致），
+-- 不另记一列。没映射到 keel 门店的单（store_id 空）发不了门店通知、也接不了单，不列。
+SELECT co.id, co.store_id::bigint AS store_id, co.external_order_name, co.accept_deadline
+  FROM channel_orders co
+  JOIN channel_bindings b ON b.id = co.binding_id
+ WHERE co.status = 2 AND co.order_no IS NULL AND co.exception IS NULL AND co.store_id IS NOT NULL
+   AND co.accept_deadline > now()
+   AND co.accept_deadline <= now() + make_interval(mins => COALESCE(
+         CASE WHEN jsonb_typeof(b.config -> 'accept_remind_minutes') = 'number'
+              THEN (b.config ->> 'accept_remind_minutes')::numeric::int END, 3))
+   AND NOT EXISTS (SELECT 1 FROM notifications n
+                    WHERE n.dedupe_key = 'merchant_channel_order_pending:accept_remind:' || co.id)
+ ORDER BY co.accept_deadline
+ LIMIT @lim::int;

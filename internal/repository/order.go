@@ -90,10 +90,23 @@ type Address struct {
 // 风格的不一致，是列本身的语义：DDL 上前两列 NOT NULL，后三列可空。用零值
 // time.Time 表示「还没发生」会让 handler 分不清「没付款」与「在 0001-01-01
 // 付的款」，而契约里 paid_at 这类字段的缺席正是「这件事还没发生」的唯一表达。
+// 订单来源（orders.source，00320）。
+const (
+	OrderSourceSelf    int16 = 0 // 自营：keel 自己的买家下的单，user_id 必填
+	OrderSourceChannel int16 = 1 // 渠道单：平台上卖出、由渠道层收进来的单，没有 keel 买家
+)
+
 type Order struct {
 	ID      int64
 	OrderNo string
-	UserID  int64
+	// UserID 是下单的买家。渠道单（Source = 1，00320）没有 keel 买家，为 nil；
+	// 自营单（Source = 0）恒非空（chk_order_buyer）。用它的地方（限购、券、
+	// 买家通知、取消 / 确认收货）nil 时跳过买家那一部分。
+	UserID *int64
+	// Source 是订单来源（00320）：0 自营、1 渠道单。ChannelOrderID 指回 channel_orders，
+	// 只有渠道单有。
+	Source         int16
+	ChannelOrderID *int64
 	// StoreID / RegionID 是**履约门店**与下单时它所属的大区。两列都 NOT NULL
 	// （数据模型 §5）：SAGA 分支读回订单行拿到 NULL 时无路可走 —— 既不能猜
 	// 默认店（那会把单扣到另一家店去），也不能失败（订单已经落库了）。
@@ -166,7 +179,7 @@ type OrderLine struct {
 // 调用方没有那个参数可以传错。
 type NewOrderDraft struct {
 	OrderNo string
-	UserID  int64
+	UserID  *int64
 	// StoreID 是本次请求解析到的那家门店。region_id 与 store_snapshot 都由
 	// 那条 INSERT ... SELECT FROM stores 从**同一行**取，不从这里传：
 	// 应用先查一次门店再把字段拼进 INSERT，两步之间那家店可以改名，
@@ -541,6 +554,8 @@ func (t tenantTx) FindOrderByNo(ctx context.Context, orderNo string) (Order, err
 		CouponName:             r.CouponName,
 		PromotionDiscountCents: r.PromotionDiscountCents,
 		Promotions:             r.Promotions,
+		Source:                 r.Source,
+		ChannelOrderID:         r.ChannelOrderID,
 	}, nil
 }
 

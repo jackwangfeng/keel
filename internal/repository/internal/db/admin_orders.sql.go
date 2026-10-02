@@ -196,7 +196,7 @@ SELECT o.id, o.order_no, o.user_id, o.store_id, o.region_id, o.status,
        o.discount_cents, o.payable_cents,
        o.paid_cents, o.refunded_cents, o.refund_status, o.expire_at, o.paid_at,
        o.shipped_at, o.finished_at, o.created_at, o.user_coupon_id, o.coupon_name,
-       o.promotion_discount_cents, o.promotions,
+       o.promotion_discount_cents, o.promotions, o.source, o.channel_order_id,
        o.receiver_snapshot, o.store_snapshot,
        EXISTS (SELECT 1 FROM refunds r
                 WHERE r.order_id = o.id AND r.status IN (10, 20, 30)) AS has_open_refund
@@ -208,7 +208,7 @@ SELECT o.id, o.order_no, o.user_id, o.store_id, o.region_id, o.status,
 type AdminGetOrderByNoRow struct {
 	ID                     int64
 	OrderNo                string
-	UserID                 int64
+	UserID                 *int64
 	StoreID                int64
 	RegionID               int64
 	Status                 int16
@@ -229,6 +229,8 @@ type AdminGetOrderByNoRow struct {
 	CouponName             *string
 	PromotionDiscountCents int64
 	Promotions             []byte
+	Source                 int16
+	ChannelOrderID         *int64
 	ReceiverSnapshot       []byte
 	StoreSnapshot          []byte
 	HasOpenRefund          bool
@@ -263,6 +265,8 @@ func (q *Queries) AdminGetOrderByNo(ctx context.Context, orderNo string) (AdminG
 		&i.CouponName,
 		&i.PromotionDiscountCents,
 		&i.Promotions,
+		&i.Source,
+		&i.ChannelOrderID,
 		&i.ReceiverSnapshot,
 		&i.StoreSnapshot,
 		&i.HasOpenRefund,
@@ -271,7 +275,7 @@ func (q *Queries) AdminGetOrderByNo(ctx context.Context, orderNo string) (AdminG
 }
 
 const adminGetRefundByNo = `-- name: AdminGetRefundByNo :one
-SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, p.payment_no, r.user_id,
+SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, COALESCE(p.payment_no, '')::text AS payment_no, COALESCE(r.user_id, 0)::bigint AS user_id,
        r.refund_type, r.reason_code, r.reason_text, r.evidence_urls,
        r.goods_amount_cents, r.freight_cents, r.amount_cents, r.status, r.channel,
        r.channel_refund_id, r.reject_reason, r.audited_at, r.refunded_at,
@@ -282,7 +286,7 @@ SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, p.payment_no, r.us
        r.received_at, r.received_by, sr.name AS received_by_name
   FROM refunds r
   JOIN orders o   ON o.id = r.order_id
-  JOIN payments p ON p.id = r.payment_id
+  LEFT JOIN payments p ON p.id = r.payment_id
   LEFT JOIN staff sa ON sa.id = r.audited_by
   LEFT JOIN staff sr ON sr.id = r.received_by
  WHERE r.refund_no = $1
@@ -367,7 +371,7 @@ func (q *Queries) AdminGetRefundByNo(ctx context.Context, refundNo string) (Admi
 }
 
 const adminListOrderRefunds = `-- name: AdminListOrderRefunds :many
-SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, p.payment_no, r.user_id,
+SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, COALESCE(p.payment_no, '')::text AS payment_no, COALESCE(r.user_id, 0)::bigint AS user_id,
        r.refund_type, r.reason_code, r.reason_text, r.evidence_urls,
        r.goods_amount_cents, r.freight_cents, r.amount_cents, r.status, r.channel,
        r.channel_refund_id, r.reject_reason, r.audited_at, r.refunded_at,
@@ -378,7 +382,7 @@ SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, p.payment_no, r.us
        r.received_at, r.received_by, sr.name AS received_by_name
   FROM refunds r
   JOIN orders o   ON o.id = r.order_id
-  JOIN payments p ON p.id = r.payment_id
+  LEFT JOIN payments p ON p.id = r.payment_id
   LEFT JOIN staff sa ON sa.id = r.audited_by
   LEFT JOIN staff sr ON sr.id = r.received_by
  WHERE r.order_id = $1
@@ -483,7 +487,7 @@ SELECT o.id, o.order_no, o.user_id, o.store_id, o.region_id, o.status,
        o.discount_cents, o.payable_cents,
        o.paid_cents, o.refunded_cents, o.refund_status, o.expire_at, o.paid_at,
        o.shipped_at, o.finished_at, o.created_at, o.user_coupon_id, o.coupon_name,
-       o.promotion_discount_cents, o.promotions,
+       o.promotion_discount_cents, o.promotions, o.source, o.channel_order_id,
        o.receiver_snapshot, o.store_snapshot,
        EXISTS (SELECT 1 FROM refunds r
                 WHERE r.order_id = o.id AND r.status IN (10, 20, 30)) AS has_open_refund
@@ -523,7 +527,7 @@ type AdminListOrdersParams struct {
 type AdminListOrdersRow struct {
 	ID                     int64
 	OrderNo                string
-	UserID                 int64
+	UserID                 *int64
 	StoreID                int64
 	RegionID               int64
 	Status                 int16
@@ -544,6 +548,8 @@ type AdminListOrdersRow struct {
 	CouponName             *string
 	PromotionDiscountCents int64
 	Promotions             []byte
+	Source                 int16
+	ChannelOrderID         *int64
 	ReceiverSnapshot       []byte
 	StoreSnapshot          []byte
 	HasOpenRefund          bool
@@ -621,6 +627,8 @@ func (q *Queries) AdminListOrders(ctx context.Context, arg AdminListOrdersParams
 			&i.CouponName,
 			&i.PromotionDiscountCents,
 			&i.Promotions,
+			&i.Source,
+			&i.ChannelOrderID,
 			&i.ReceiverSnapshot,
 			&i.StoreSnapshot,
 			&i.HasOpenRefund,
@@ -642,7 +650,7 @@ SELECT o.id, o.order_no, o.user_id, o.store_id, o.region_id, o.status,
        o.discount_cents, o.payable_cents,
        o.paid_cents, o.refunded_cents, o.refund_status, o.expire_at, o.paid_at,
        o.shipped_at, o.finished_at, o.created_at, o.user_coupon_id, o.coupon_name,
-       o.promotion_discount_cents, o.promotions,
+       o.promotion_discount_cents, o.promotions, o.source, o.channel_order_id,
        o.receiver_snapshot, o.store_snapshot,
        EXISTS (SELECT 1 FROM refunds r
                 WHERE r.order_id = o.id AND r.status IN (10, 20, 30)) AS has_open_refund
@@ -682,7 +690,7 @@ type AdminListOrdersByNoParams struct {
 type AdminListOrdersByNoRow struct {
 	ID                     int64
 	OrderNo                string
-	UserID                 int64
+	UserID                 *int64
 	StoreID                int64
 	RegionID               int64
 	Status                 int16
@@ -703,6 +711,8 @@ type AdminListOrdersByNoRow struct {
 	CouponName             *string
 	PromotionDiscountCents int64
 	Promotions             []byte
+	Source                 int16
+	ChannelOrderID         *int64
 	ReceiverSnapshot       []byte
 	StoreSnapshot          []byte
 	HasOpenRefund          bool
@@ -772,6 +782,8 @@ func (q *Queries) AdminListOrdersByNo(ctx context.Context, arg AdminListOrdersBy
 			&i.CouponName,
 			&i.PromotionDiscountCents,
 			&i.Promotions,
+			&i.Source,
+			&i.ChannelOrderID,
 			&i.ReceiverSnapshot,
 			&i.StoreSnapshot,
 			&i.HasOpenRefund,
@@ -792,7 +804,7 @@ SELECT o.id, o.order_no, o.user_id, o.store_id, o.region_id, o.status,
        o.discount_cents, o.payable_cents,
        o.paid_cents, o.refunded_cents, o.refund_status, o.expire_at, o.paid_at,
        o.shipped_at, o.finished_at, o.created_at, o.user_coupon_id, o.coupon_name,
-       o.promotion_discount_cents, o.promotions,
+       o.promotion_discount_cents, o.promotions, o.source, o.channel_order_id,
        o.receiver_snapshot, o.store_snapshot,
        EXISTS (SELECT 1 FROM refunds r
                 WHERE r.order_id = o.id AND r.status IN (10, 20, 30)) AS has_open_refund
@@ -829,7 +841,7 @@ type AdminListOrdersByPhoneParams struct {
 type AdminListOrdersByPhoneRow struct {
 	ID                     int64
 	OrderNo                string
-	UserID                 int64
+	UserID                 *int64
 	StoreID                int64
 	RegionID               int64
 	Status                 int16
@@ -850,6 +862,8 @@ type AdminListOrdersByPhoneRow struct {
 	CouponName             *string
 	PromotionDiscountCents int64
 	Promotions             []byte
+	Source                 int16
+	ChannelOrderID         *int64
 	ReceiverSnapshot       []byte
 	StoreSnapshot          []byte
 	HasOpenRefund          bool
@@ -899,6 +913,8 @@ func (q *Queries) AdminListOrdersByPhone(ctx context.Context, arg AdminListOrder
 			&i.CouponName,
 			&i.PromotionDiscountCents,
 			&i.Promotions,
+			&i.Source,
+			&i.ChannelOrderID,
 			&i.ReceiverSnapshot,
 			&i.StoreSnapshot,
 			&i.HasOpenRefund,
@@ -914,7 +930,7 @@ func (q *Queries) AdminListOrdersByPhone(ctx context.Context, arg AdminListOrder
 }
 
 const adminListRefunds = `-- name: AdminListRefunds :many
-SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, p.payment_no, r.user_id,
+SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, COALESCE(p.payment_no, '')::text AS payment_no, COALESCE(r.user_id, 0)::bigint AS user_id,
        r.refund_type, r.reason_code, r.reason_text, r.evidence_urls,
        r.goods_amount_cents, r.freight_cents, r.amount_cents, r.status, r.channel,
        r.channel_refund_id, r.reject_reason, r.audited_at, r.refunded_at,
@@ -925,7 +941,7 @@ SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, p.payment_no, r.us
        r.received_at, r.received_by, sr.name AS received_by_name
   FROM refunds r
   JOIN orders o   ON o.id = r.order_id
-  JOIN payments p ON p.id = r.payment_id
+  LEFT JOIN payments p ON p.id = r.payment_id
   LEFT JOIN staff sa ON sa.id = r.audited_by
   LEFT JOIN staff sr ON sr.id = r.received_by
  WHERE ($1::smallint IS NULL OR r.status = $1::smallint)

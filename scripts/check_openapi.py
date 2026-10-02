@@ -196,6 +196,13 @@ IDEMPOTENCY_EXEMPT = {
     '/admin/agent-proposals/{proposal_id}/reject':  '只有待处理（10）的能驳回，条件 UPDATE；重复驳回回 409',
     '/admin/agents/{staff_id}/keys': '接入密钥明文只在创建响应里出现一次；存档重放会让明文进库、再交出去一次。'
                                      '重复调用 = 多一把密钥，列表里看得见、可吊销（与 login-token 同一理由）',
+    # 渠道订单的后台动作（第三期）：渠道单 / 申请的状态就是幂等闸门（与 agent-proposals 同一理由）。
+    '/admin/channel-orders/{channel_order_id}/accept': '只有等接单（新单、无异常、没成单）的能接，锁渠道单行判；'
+                                                       '建单的 SAGA gid 由渠道单 id 决定，重复接单回 409、不会建第二张',
+    '/admin/channel-orders/{channel_order_id}/reject': '只有等接单的能拒（锁渠道单行改成已拒单）；重复拒单回 409',
+    '/admin/channel-orders/{channel_order_id}/retry':  '只对有异常、且没有活着的 keel 订单的单；成单之后再点回 409，'
+                                                       '又失败时再点等于再试一次（SAGA gid 由渠道单 id 决定，不重复建单）',
+    '/admin/channel-order-requests/{request_id}/decision': '只有待处理（1）的能决定，条件 UPDATE；重复决定回 409',
     '/assistant/chat':    '无副作用；会话状态由 session_id 承载',
     '/search/events':     '天然幂等：每一列首次写入为准、不覆盖，重放与首次效果相同；'
                           '且是公开接口，幂等键的 (scope, user_id, key) 作用域在这里没有 user_id',

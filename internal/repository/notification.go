@@ -76,7 +76,7 @@ type NotificationForDelivery struct {
 type AutoConfirmReminder struct {
 	ID        int64
 	OrderNo   string
-	UserID    int64
+	UserID    *int64 // 渠道单为 nil（00320）
 	ShippedAt time.Time
 }
 

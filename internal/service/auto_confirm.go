@@ -236,7 +236,25 @@ func (s *AutoConfirmService) confirmOne(ctx context.Context, log *slog.Logger,
 		if open {
 			return errAutoConfirmPaused
 		}
-		ok, err := tx.ConfirmOrderReceipt(ctx, order.OrderNo, order.UserID)
+		if order.Source == repository.OrderSourceChannel {
+			// 渠道单（00320）没有 keel 买家：不走买家确认收货那条（谓词里有 user_id），
+			// 也不发买家通知（平台自己通知顾客）。
+			ok, err := tx.FinishChannelOrder(ctx, order.ID)
+			if errors.Is(err, repository.ErrIllegalOrderTransition) {
+				ok, err = false, nil
+			}
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return fmt.Errorf("渠道单 %s 在行锁之下从 30 推 40 失败", o.OrderNo)
+			}
+			return nil
+		}
+		if order.UserID == nil {
+			return fmt.Errorf("自营订单 %s 没有买家（chk_order_buyer 应当挡住）", o.OrderNo)
+		}
+		ok, err := tx.ConfirmOrderReceipt(ctx, order.OrderNo, *order.UserID)
 		if errors.Is(err, repository.ErrIllegalOrderTransition) {
 			ok, err = false, nil
 		}

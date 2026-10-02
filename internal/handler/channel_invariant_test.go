@@ -2,7 +2,7 @@ package handler_test
 
 // 不变量「不配渠道零开销」（docs/superpowers/specs/2026-10-02-channel-adapter-design.md §2、§8）：
 //
-//   - KEEL_CHANNELS 关：下单、取消（回补库存）、后台改库存走一遍，库存服务一条 stock.changed 都不发、
+//   - KEEL_CHANNELS 关：下单、取消（回补库存）、后台改库存、后台发货走一遍，库存服务一条 stock.changed 都不发、
 //     闸门一次库都不查，jobs 里没有任何 channel.* 任务，渠道表一行都没有；
 //   - KEEL_CHANNELS 开、但这家店没接任何渠道：同样不发、不入队、不落行；闸门对这家店只查一次（之后走缓存）。
 //
@@ -67,6 +67,9 @@ func runChannelInvariant(t *testing.T, channelsOn bool) {
 	wantStatus(t, postIdem(t, cs.Host, "/api/v1/orders/"+o.OrderNo+"/cancel", "", b.Token), http.StatusOK, "取消")
 	adjust(t, local, cs.MerchantID, cs.NorthStore, cs.DressSKU, -1)
 	adjust(t, local, cs.MerchantID, cs.NorthStore, cs.DressSKU, +1)
+	// 第三期：后台发货一张自营单 —— 不是渠道单（source = 0），不入队任何回传。
+	p := cs.placePaid(t, b, cs.NorthStore, cs.DressSKU, 1, nil)
+	wantStatus(t, cs.ship(t, p.OrderNo, "sf", "SF"+uniqueKey()), http.StatusCreated, "发货")
 	if chSvc != nil {
 		if err := chSvc.Drain(t.Context()); err != nil {
 			t.Fatal(err)

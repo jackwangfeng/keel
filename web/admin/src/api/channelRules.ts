@@ -236,3 +236,134 @@ export function managedLabel(channel: string | null | undefined): string | null 
     if (channel === null || channel === undefined || channel === "") return null;
     return `由 ${channelLabel(channel)} 管理`;
 }
+
+// ------------------------------------------------------------ 渠道订单（第三期）
+
+type TagType = "success" | "info" | "warning" | "danger" | "primary";
+
+/** 渠道单的规整状态（契约 ChannelOrderStatus）：1 待付款 … 7 已拒单。异常不是状态，另外标红。 */
+export function channelOrderStatusLabel(s: number): { text: string; type: TagType } {
+    switch (s) {
+        case 1:
+            return { text: "待付款", type: "info" };
+        case 2:
+            return { text: "新单", type: "warning" };
+        case 3:
+            return { text: "已接单", type: "primary" };
+        case 4:
+            return { text: "已发货", type: "primary" };
+        case 5:
+            return { text: "已完成", type: "success" };
+        case 6:
+            return { text: "已取消", type: "info" };
+        case 7:
+            return { text: "已拒单", type: "danger" };
+        default:
+            return { text: `状态 ${s}`, type: "info" };
+    }
+}
+
+/** 列表筛选用的状态选项。 */
+export const CHANNEL_ORDER_STATUS_OPTIONS = [1, 2, 3, 4, 5, 6, 7].map((s) => ({ value: s, text: channelOrderStatusLabel(s).text }));
+
+/**
+ * 一张渠道单此刻能点哪些按钮（服务端是准绳，不满足时回 409；这里只是不让人点注定失败的）：
+ *   重试 —— 只看服务端的 retryable（有异常且没有活着的 keel 订单 / keel 草稿卡住 / 草稿被清扫关掉；
+ *           有活着订单的异常多半是发货后平台取消，要人去订单 / 售后处理，不是重试能解决的）；
+ *   接单 / 拒单 —— 渠道要求接单（ChannelKind.accept_required）、新单、没异常、还没成单。
+ */
+export function channelOrderActions(
+    o: { status: number; exception?: string | null; order_no?: string | null; retryable?: boolean },
+    acceptRequired: boolean,
+): { retry: boolean; accept: boolean; reject: boolean } {
+    const hasException = o.exception !== undefined && o.exception !== null;
+    const hasOrder = o.order_no !== undefined && o.order_no !== null;
+    const awaiting = acceptRequired && o.status === 2 && !hasException && !hasOrder;
+    // 「重试」只看服务端算好的 retryable（与 POST …/retry 同一个判据：含 keel 草稿卡住、被清扫关掉的情形，
+    // 那些单有单号、没异常，前端自己判不出来）。
+    return { retry: o.retryable === true, accept: awaiting, reject: awaiting };
+}
+
+/**
+ * 金额拆解：keel 实付 = 顾客实付（buyer_paid）。价外税（taxes_included 假，美国店的常态）：平台总价 = 实付 + 税，
+ * 税不进 keel 订单；价内税（taxes_included 真）：行价已经含税，平台总价 = 实付，税只是其中的税额。
+ * 补贴合计 = 平台补贴 + 商家补贴（keel 订单的 discount）。
+ */
+export function channelOrderTotals(a: {
+    buyer_paid: number;
+    tax: number;
+    platform_subsidy: number;
+    merchant_subsidy: number;
+    taxes_included?: boolean;
+}): {
+    paid: number;
+    tax: number;
+    platformTotal: number;
+    subsidy: number;
+    taxesIncluded: boolean;
+} {
+    const included = a.taxes_included === true;
+    return {
+        paid: a.buyer_paid,
+        tax: a.tax,
+        platformTotal: included ? a.buyer_paid : a.buyer_paid + a.tax,
+        subsidy: a.platform_subsidy + a.merchant_subsidy,
+        taxesIncluded: included,
+    };
+}
+
+/** 平台申请的类别（契约 ChannelOrderRequest.kind）。 */
+export function requestKindLabel(k: number): string {
+    switch (k) {
+        case 1:
+            return "取消订单";
+        case 2:
+            return "部分退款";
+        case 3:
+            return "缺货调整";
+        default:
+            return `申请 ${k}`;
+    }
+}
+
+/** 平台申请的状态（契约 ChannelOrderRequest.status）。 */
+export function requestStatusLabel(s: number): { text: string; type: TagType } {
+    switch (s) {
+        case 1:
+            return { text: "待处理", type: "warning" };
+        case 2:
+            return { text: "已同意", type: "success" };
+        case 3:
+            return { text: "已拒绝", type: "danger" };
+        case 4:
+            return { text: "超时自动同意", type: "info" };
+        case 5:
+            return { text: "平台已撤销", type: "info" };
+        default:
+            return { text: `状态 ${s}`, type: "info" };
+    }
+}
+
+/** 渠道单收货地址拼一行（国家放最后，空段跳过）。 */
+export function channelAddressText(a: { province: string; city: string; district: string; address: string; zip: string; country: string }): string {
+    const head = [a.province, a.city, a.district, a.address].filter((x) => x !== "").join(" ");
+    const tail = [a.zip, a.country].filter((x) => x !== "").join(" ");
+    return [head, tail].filter((x) => x !== "").join("，") || "—";
+}
+
+/** 后台订单的来源徽标：渠道单「来自 Shopify #1001」，自营单 null。 */
+export function orderSourceBadge(o: { source?: number; channel?: { kind: string; external_order_name: string } | null }): string | null {
+    if (o.source !== 1) return null;
+    if (o.channel === undefined || o.channel === null) return "来自渠道";
+    return `来自 ${channelLabel(o.channel.kind)} ${o.channel.external_order_name}`.trim();
+}
+
+/** 后台订单的「买家」：渠道单没有 keel 买家，统一叫「渠道顾客」。 */
+export function orderBuyerLabel(o: { source?: number }): string | null {
+    return o.source === 1 ? "渠道顾客" : null;
+}
+
+/** 渠道退款（第三期 Task 5 直接写成功的退款行，没有支付单）：服务端总带 payment_no，渠道退款是空串。 */
+export function isChannelRefund(r: { payment_no?: string | null }): boolean {
+    return r.payment_no === "";
+}

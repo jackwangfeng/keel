@@ -32,7 +32,7 @@ SELECT o.id, o.order_no, o.user_id, o.store_id, o.region_id, o.status,
        o.discount_cents, o.payable_cents,
        o.paid_cents, o.refunded_cents, o.refund_status, o.expire_at, o.paid_at,
        o.shipped_at, o.finished_at, o.created_at, o.user_coupon_id, o.coupon_name,
-       o.promotion_discount_cents, o.promotions,
+       o.promotion_discount_cents, o.promotions, o.source, o.channel_order_id,
        o.receiver_snapshot, o.store_snapshot,
        EXISTS (SELECT 1 FROM refunds r
                 WHERE r.order_id = o.id AND r.status IN (10, 20, 30)) AS has_open_refund
@@ -102,7 +102,7 @@ SELECT o.id, o.order_no, o.user_id, o.store_id, o.region_id, o.status,
        o.discount_cents, o.payable_cents,
        o.paid_cents, o.refunded_cents, o.refund_status, o.expire_at, o.paid_at,
        o.shipped_at, o.finished_at, o.created_at, o.user_coupon_id, o.coupon_name,
-       o.promotion_discount_cents, o.promotions,
+       o.promotion_discount_cents, o.promotions, o.source, o.channel_order_id,
        o.receiver_snapshot, o.store_snapshot,
        EXISTS (SELECT 1 FROM refunds r
                 WHERE r.order_id = o.id AND r.status IN (10, 20, 30)) AS has_open_refund
@@ -152,7 +152,7 @@ SELECT o.id, o.order_no, o.user_id, o.store_id, o.region_id, o.status,
        o.discount_cents, o.payable_cents,
        o.paid_cents, o.refunded_cents, o.refund_status, o.expire_at, o.paid_at,
        o.shipped_at, o.finished_at, o.created_at, o.user_coupon_id, o.coupon_name,
-       o.promotion_discount_cents, o.promotions,
+       o.promotion_discount_cents, o.promotions, o.source, o.channel_order_id,
        o.receiver_snapshot, o.store_snapshot,
        EXISTS (SELECT 1 FROM refunds r
                 WHERE r.order_id = o.id AND r.status IN (10, 20, 30)) AS has_open_refund
@@ -199,7 +199,7 @@ SELECT o.id, o.order_no, o.user_id, o.store_id, o.region_id, o.status,
        o.discount_cents, o.payable_cents,
        o.paid_cents, o.refunded_cents, o.refund_status, o.expire_at, o.paid_at,
        o.shipped_at, o.finished_at, o.created_at, o.user_coupon_id, o.coupon_name,
-       o.promotion_discount_cents, o.promotions,
+       o.promotion_discount_cents, o.promotions, o.source, o.channel_order_id,
        o.receiver_snapshot, o.store_snapshot,
        EXISTS (SELECT 1 FROM refunds r
                 WHERE r.order_id = o.id AND r.status IN (10, 20, 30)) AS has_open_refund
@@ -217,7 +217,7 @@ SELECT st.region_id FROM stores st WHERE st.id = $1;
 -- 后台退款单列表，一页。门店、订单状态、门店快照从所属订单带出来；
 -- 审核人与收货人的名字 LEFT JOIN staff —— 平台级员工在租户作用域里读不到（RLS），
 -- 那时只剩 id。
-SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, p.payment_no, r.user_id,
+SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, COALESCE(p.payment_no, '')::text AS payment_no, COALESCE(r.user_id, 0)::bigint AS user_id,
        r.refund_type, r.reason_code, r.reason_text, r.evidence_urls,
        r.goods_amount_cents, r.freight_cents, r.amount_cents, r.status, r.channel,
        r.channel_refund_id, r.reject_reason, r.audited_at, r.refunded_at,
@@ -228,7 +228,7 @@ SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, p.payment_no, r.us
        r.received_at, r.received_by, sr.name AS received_by_name
   FROM refunds r
   JOIN orders o   ON o.id = r.order_id
-  JOIN payments p ON p.id = r.payment_id
+  LEFT JOIN payments p ON p.id = r.payment_id
   LEFT JOIN staff sa ON sa.id = r.audited_by
   LEFT JOIN staff sr ON sr.id = r.received_by
  WHERE (sqlc.narg(status)::smallint IS NULL OR r.status = sqlc.narg(status)::smallint)
@@ -260,7 +260,7 @@ SELECT count(*)
 
 -- name: AdminGetRefundByNo :one
 -- 后台按编号取一张退款单。列与 AdminListRefunds 逐一对齐。
-SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, p.payment_no, r.user_id,
+SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, COALESCE(p.payment_no, '')::text AS payment_no, COALESCE(r.user_id, 0)::bigint AS user_id,
        r.refund_type, r.reason_code, r.reason_text, r.evidence_urls,
        r.goods_amount_cents, r.freight_cents, r.amount_cents, r.status, r.channel,
        r.channel_refund_id, r.reject_reason, r.audited_at, r.refunded_at,
@@ -271,14 +271,14 @@ SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, p.payment_no, r.us
        r.received_at, r.received_by, sr.name AS received_by_name
   FROM refunds r
   JOIN orders o   ON o.id = r.order_id
-  JOIN payments p ON p.id = r.payment_id
+  LEFT JOIN payments p ON p.id = r.payment_id
   LEFT JOIN staff sa ON sa.id = r.audited_by
   LEFT JOIN staff sr ON sr.id = r.received_by
  WHERE r.refund_no = $1;
 
 -- name: AdminListOrderRefunds :many
 -- 一个订单的全部退款单（后台视角，带审核记录），按申请时间倒序。
-SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, p.payment_no, r.user_id,
+SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, COALESCE(p.payment_no, '')::text AS payment_no, COALESCE(r.user_id, 0)::bigint AS user_id,
        r.refund_type, r.reason_code, r.reason_text, r.evidence_urls,
        r.goods_amount_cents, r.freight_cents, r.amount_cents, r.status, r.channel,
        r.channel_refund_id, r.reject_reason, r.audited_at, r.refunded_at,
@@ -289,7 +289,7 @@ SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, p.payment_no, r.us
        r.received_at, r.received_by, sr.name AS received_by_name
   FROM refunds r
   JOIN orders o   ON o.id = r.order_id
-  JOIN payments p ON p.id = r.payment_id
+  LEFT JOIN payments p ON p.id = r.payment_id
   LEFT JOIN staff sa ON sa.id = r.audited_by
   LEFT JOIN staff sr ON sr.id = r.received_by
  WHERE r.order_id = $1

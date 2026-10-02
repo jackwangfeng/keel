@@ -225,7 +225,8 @@ func (o *inventoryOutbox) run(ctx context.Context, payload []byte) (int32, error
 			// 每一行按哪个活动价成交：未发货的退款把那部分活动配额一起放回（库存服务那边），
 			// 否则货回到门店库存了、活动的「已售」却还算着它，配额凭空少掉（2026-09-28 破坏性测试遗留）。
 			// 每人限购不放回（在 core 的 promotion_purchases，这里不碰）：防「特价买了退、退了再买」。
-			// 一单里同一个 SKU 至多一行（pricing 拒重复），按 SKU 对上。
+			// 自营单里同一个 SKU 至多一行（pricing 拒重复），按 SKU 对上；渠道单同一个 SKU 可以占几行（都没有活动），
+			// 退款行按 SKU 并起来再给库存服务。
 			ol, err := tx.ListOrderLines(ctx, order.ID)
 			if err != nil {
 				return err
@@ -238,6 +239,7 @@ func (o *inventoryOutbox) run(ctx context.Context, payload []byte) (int32, error
 			for _, it := range r.Items {
 				req.Lines = append(req.Lines, inventory.OrderLine{SKUID: it.SKUID, Qty: it.Quantity, PromotionID: promo[it.SKUID]})
 			}
+			req.Lines = mergeSKULines(req.Lines)
 			return nil
 		})
 		if err != nil {
@@ -253,11 +255,28 @@ func (o *inventoryOutbox) run(ctx context.Context, payload []byte) (int32, error
 	}
 }
 
-// orderLinesOf 把订单行变成库存服务的行（扣减载荷与关单释放共用）。
+// orderLinesOf 把订单行变成库存服务的行（扣减载荷与关单释放共用）。同一个 SKU 的几行并成一行（mergeSKULines）。
 func orderLinesOf(lines []repository.OrderLine) []inventory.OrderLine {
 	out := make([]inventory.OrderLine, 0, len(lines))
 	for _, ln := range lines {
 		out = append(out, inventory.OrderLine{SKUID: ln.SKUID, Qty: ln.Quantity, PromotionID: ln.PricePromotionID})
+	}
+	return mergeSKULines(out)
+}
+
+// mergeSKULines 把同一个 SKU 的几行并成一行（件数相加，活动取第一行的），保持首次出现的顺序。
+// 库存服务拒收同一个 SKU 出现两次的请求（inventory.normalizeLines）；自营单一个 SKU 至多一行（pricing 拒重复），
+// 这里什么都不变；渠道单照平台的行建，同一个变体可以占两行（价不同 / 分开加购，第三期审查修复）。
+func mergeSKULines(lines []inventory.OrderLine) []inventory.OrderLine {
+	at := make(map[int64]int, len(lines))
+	out := make([]inventory.OrderLine, 0, len(lines))
+	for _, ln := range lines {
+		if i, ok := at[ln.SKUID]; ok {
+			out[i].Qty += ln.Qty
+			continue
+		}
+		at[ln.SKUID] = len(out)
+		out = append(out, ln)
 	}
 	return out
 }

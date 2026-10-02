@@ -95,18 +95,10 @@ func parseBinding(b channel.Binding) (string, secrets, error) {
 	return b.ExternalAccount, s, nil
 }
 
-// 本期不做的销售渠道动作（订单在第三期、对账在第五期）；商品方向是进，不往 Shopify 建商品。
+// 不做的销售渠道动作（拉单补漏、对账在第五期）；商品方向是进，不往 Shopify 建商品。订单见 order.go。
 
 func (a *Adapter) PushCatalog(context.Context, channel.Binding, []channel.CatalogItem) error {
 	return channel.ErrUnsupported
-}
-
-func (a *Adapter) Act(context.Context, channel.Binding, channel.OrderRef, channel.Action) error {
-	return channel.ErrUnsupported
-}
-
-func (a *Adapter) FetchOrder(context.Context, channel.Binding, string) (channel.ChannelOrder, error) {
-	return channel.ChannelOrder{}, channel.ErrUnsupported
 }
 
 func (a *Adapter) ListOrders(context.Context, channel.Binding, time.Time) iter.Seq2[channel.ChannelOrder, error] {

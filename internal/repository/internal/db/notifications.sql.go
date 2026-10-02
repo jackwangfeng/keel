@@ -245,6 +245,7 @@ const listAutoConfirmReminders = `-- name: ListAutoConfirmReminders :many
 SELECT o.id, o.order_no, o.user_id, o.shipped_at
   FROM orders o
  WHERE o.status = 30 AND o.shipped_at < $1
+   AND o.user_id IS NOT NULL
    AND NOT EXISTS (SELECT 1 FROM refunds r
                     WHERE r.order_id = o.id AND r.status IN (10, 20, 30))
    AND NOT EXISTS (SELECT 1 FROM notifications n
@@ -261,7 +262,7 @@ type ListAutoConfirmRemindersParams struct {
 type ListAutoConfirmRemindersRow struct {
 	ID        int64
 	OrderNo   string
-	UserID    int64
+	UserID    *int64
 	ShippedAt pgtype.Timestamptz
 }
 
@@ -272,6 +273,8 @@ type ListAutoConfirmRemindersRow struct {
 // service/notification.go 里 notifyAutoConfirmSoon 写的那一个逐字一致。
 // 有在途售后的单不提醒：自动确认对它是暂停的（service/auto_confirm.go 文件头），
 // 告诉买家「明天要自动确认了」是一句假话。
+// 渠道单（00320，user_id 为空）没有 keel 买家可提醒，排除掉：否则它每轮都是候选、
+// 却永远写不出那条去重通知，白占批次。
 func (q *Queries) ListAutoConfirmReminders(ctx context.Context, arg ListAutoConfirmRemindersParams) ([]ListAutoConfirmRemindersRow, error) {
 	rows, err := q.db.Query(ctx, listAutoConfirmReminders, arg.RemindBefore, arg.Batch)
 	if err != nil {

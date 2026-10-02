@@ -32,6 +32,7 @@ import {
     refundActions,
 } from "../../api/orderRules.ts";
 import { can } from "../../auth/permissions.ts";
+import { isChannelRefund, orderSourceBadge } from "../../api/channelRules.ts";
 import { datetime, yuan } from "../../ui/format.ts";
 import { notifyOk } from "../../ui/notify.ts";
 import { useMobile } from "../../ui/useMobile.ts";
@@ -274,8 +275,14 @@ async function submitReceive(): Promise<void> {
                     <el-descriptions-item label="原因">
                         {{ refund.reason_code ? REFUND_REASON[refund.reason_code] : "—" }}
                     </el-descriptions-item>
-                    <el-descriptions-item label="退款渠道">{{ refund.channel ?? "—" }}</el-descriptions-item>
-                    <el-descriptions-item label="买家说明" :span="2">{{ refund.reason_text || "—" }}</el-descriptions-item>
+                    <el-descriptions-item label="退款渠道">
+                        <template v-if="isChannelRefund(refund)">渠道退款（平台已退给顾客，没有 keel 支付单）</template>
+                        <template v-else>{{ refund.channel ?? "—" }}</template>
+                    </el-descriptions-item>
+                    <el-descriptions-item v-if="orderSourceBadge(refund.order)" label="来源">
+                        {{ orderSourceBadge(refund.order) }} · 买家：渠道顾客
+                    </el-descriptions-item>
+                    <el-descriptions-item :label="isChannelRefund(refund) ? '原因说明' : '买家说明'" :span="2">{{ refund.reason_text || "—" }}</el-descriptions-item>
                 </el-descriptions>
 
                 <h4>退哪些（每一行的金额由服务端按优惠分摊算好）</h4>

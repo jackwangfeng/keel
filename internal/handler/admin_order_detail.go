@@ -81,7 +81,16 @@ func apiAdminOrderSummary(s service.AdminOrderSummary) api.AdminOrderSummary {
 		Receiver:      apiReceiver(s.Receiver),
 		Store:         apiStoreSnapshot(s.Store),
 		HasOpenRefund: s.Order.HasOpenRefund,
+		Source:        int32(s.Order.Source),
+		Channel:       apiChannelOrderRef(s.Channel),
 	}
+}
+
+func apiChannelOrderRef(r *repository.ChannelOrderRef) *api.ChannelOrderRef {
+	if r == nil {
+		return nil
+	}
+	return &api.ChannelOrderRef{Kind: r.Channel, BindingName: r.BindingName, ExternalOrderName: r.ExternalOrderName}
 }
 
 func apiAdminOrderDetail(d service.AdminOrderDetail) api.AdminOrderDetail {
@@ -119,6 +128,8 @@ func apiAdminOrderDetail(d service.AdminOrderDetail) api.AdminOrderDetail {
 		Receiver:               s.Receiver,
 		Store:                  s.Store,
 		HasOpenRefund:          s.HasOpenRefund,
+		Source:                 s.Source,
+		Channel:                s.Channel,
 		PromotionDiscountCents: s.PromotionDiscountCents,
 		Promotions:             s.Promotions,
 

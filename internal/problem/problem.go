@@ -104,7 +104,11 @@ const (
 	TypeOrderHasPendingFullRefund = "https://keel.dev/problems/order-has-pending-full-refund"
 	TypeTrackingNoDuplicated      = "https://keel.dev/problems/tracking-no-duplicated"
 	// TypeChannelDuplicate：同一渠道同一外部账号已经接过，或渠道门店已经映射给了别的门店（409）。
-	TypeChannelDuplicate          = "https://keel.dev/problems/channel-duplicate"
+	TypeChannelDuplicate = "https://keel.dev/problems/channel-duplicate"
+	// TypeChannelOrderState：渠道单 / 平台申请此刻不能做这个动作（不用重试、不在等接单、申请已处理过；409）。
+	TypeChannelOrderState = "https://keel.dev/problems/channel-order-state"
+	// TypeChannelOrderAcceptFailed：接了但没成单（缺货 / 映射不全），detail 写原因（422）。
+	TypeChannelOrderAcceptFailed = "https://keel.dev/problems/channel-order-accept-failed"
 	// TypeManagedByChannel：后台改了由渠道（启用中的商品源）管理的商品字段 —— 标题、详情、图片、SKU 规格（409）。
 	// 这些字段下一次同步会被渠道覆盖，所以拒绝而不是收下；detail 带渠道名。停用渠道账号即放开。
 	TypeManagedByChannel          = "https://keel.dev/problems/managed-by-channel"

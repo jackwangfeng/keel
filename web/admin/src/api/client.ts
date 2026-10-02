@@ -148,6 +148,11 @@ export type ChannelStockRuleInput = S["ChannelStockRuleInput"];
 export type ChannelPriceRule = S["ChannelPriceRule"];
 export type ChannelPriceRuleInput = S["ChannelPriceRuleInput"];
 export type ChannelListing = S["ChannelListing"];
+export type ChannelOrder = S["ChannelOrder"];
+export type ChannelOrderDetail = S["ChannelOrderDetail"];
+export type ChannelOrderRequest = S["ChannelOrderRequest"];
+/** `GET /admin/channel-orders` 的响应体（PageMeta + items）。 */
+export type ChannelOrderPage = ResponseBodyOf<"/admin/channel-orders", "get">;
 
 /** `GET /admin/products` 的响应体（PageMeta 三个字段 + items）。 */
 export type AdminProductPage = ResponseBodyOf<"/admin/products", "get">;
