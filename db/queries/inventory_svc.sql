@@ -428,3 +428,17 @@ VALUES (sqlc.arg(promotion_id), sqlc.arg(rev))
 ON CONFLICT ON CONSTRAINT activity_sync_revs_pkey DO UPDATE
    SET rev = EXCLUDED.rev
  WHERE activity_sync_revs.rev < EXCLUDED.rev;
+
+-- ---------------------------------------------------------------------------
+-- 开了渠道的商家（00300）。写由库存服务的接收分支做（inventory/channel_msg.go），
+-- 读由 inventory.ChannelGate 做（进程内缓存，KEEL_CHANNELS 关闭时一次都不读）。
+
+-- name: InvEnableChannelMerchant :exec
+INSERT INTO channel_merchants DEFAULT VALUES
+ON CONFLICT ON CONSTRAINT channel_merchants_pkey DO NOTHING;
+
+-- name: InvDisableChannelMerchant :exec
+DELETE FROM channel_merchants WHERE merchant_id = current_merchant();
+
+-- name: InvChannelMerchantEnabled :one
+SELECT EXISTS (SELECT 1 FROM channel_merchants WHERE merchant_id = current_merchant());

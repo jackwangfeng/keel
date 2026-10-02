@@ -1,0 +1,133 @@
+-- 渠道适配层（00301）。编排在 service/channel*.go；表结构与取舍见数据模型文档第十七节。
+-- secrets 列只有 GetChannelBindingSecrets / SetChannelBindingSecrets 两条碰它：其余读路径一律不选，接口不回显。
+
+-- name: CreateChannelBinding :one
+INSERT INTO channel_bindings (channel, external_account, name, roles, status, config)
+VALUES (@channel::text, @external_account::text, @name::text, @roles::smallint, @status::smallint, @config::jsonb)
+RETURNING id, channel, external_account, name, roles, status, config, created_at, updated_at;
+
+-- name: GetChannelBinding :one
+SELECT id, channel, external_account, name, roles, status, config, created_at, updated_at
+  FROM channel_bindings WHERE id = @id::bigint;
+
+-- name: ListChannelBindings :many
+SELECT id, channel, external_account, name, roles, status, config, created_at, updated_at
+  FROM channel_bindings ORDER BY id;
+
+-- name: UpdateChannelBinding :one
+-- 只改传了的字段（sqlc.narg 为空即不改）。secrets 不经这里。
+UPDATE channel_bindings
+   SET name   = COALESCE(sqlc.narg(name)::text, name),
+       roles  = COALESCE(sqlc.narg(roles)::smallint, roles),
+       status = COALESCE(sqlc.narg(status)::smallint, status),
+       config = COALESCE(sqlc.narg(config)::jsonb, config)
+ WHERE id = @id::bigint
+RETURNING id, channel, external_account, name, roles, status, config, created_at, updated_at;
+
+-- name: GetChannelBindingSecrets :one
+SELECT secrets FROM channel_bindings WHERE id = @id::bigint;
+
+-- name: SetChannelBindingSecrets :execrows
+UPDATE channel_bindings SET secrets = @secrets::jsonb WHERE id = @id::bigint;
+
+-- name: CountActiveOutletBindings :one
+-- 这家店启用中的销售渠道 binding 数（roles 位 4）。决定库存服务要不要为它发 stock.changed。
+SELECT count(*) FROM channel_bindings WHERE status = 1 AND (roles & 4) <> 0;
+
+-- name: ListActiveOutletBindingsForStore :many
+-- 这家门店映射过、启用中的销售渠道 binding，连同渠道门店 ID。
+SELECT b.id, b.channel, b.external_account, b.name, b.roles, b.status, b.config, b.created_at, b.updated_at,
+       l.external_store_id
+  FROM channel_bindings b
+  JOIN channel_store_links l ON l.binding_id = b.id
+ WHERE l.store_id = @store_id::bigint AND b.status = 1 AND (b.roles & 4) <> 0
+ ORDER BY b.id;
+
+-- name: UpsertChannelStoreLink :exec
+INSERT INTO channel_store_links (binding_id, store_id, external_store_id)
+VALUES (@binding_id::bigint, @store_id::bigint, @external_store_id::text)
+ON CONFLICT ON CONSTRAINT channel_store_links_pkey DO UPDATE SET external_store_id = EXCLUDED.external_store_id;
+
+-- name: DeleteChannelStoreLink :execrows
+DELETE FROM channel_store_links WHERE binding_id = @binding_id::bigint AND store_id = @store_id::bigint;
+
+-- name: ListChannelStoreLinks :many
+SELECT binding_id, store_id, external_store_id, created_at
+  FROM channel_store_links WHERE binding_id = @binding_id::bigint ORDER BY store_id;
+
+-- name: UpsertChannelStockRule :one
+INSERT INTO channel_stock_rules (binding_id, store_id, sku_id, ratio_bp, safety_qty, cap_qty)
+VALUES (@binding_id::bigint, sqlc.narg(store_id)::bigint, sqlc.narg(sku_id)::bigint,
+        @ratio_bp::int, @safety_qty::int, sqlc.narg(cap_qty)::int)
+ON CONFLICT ON CONSTRAINT uk_channel_stock_rules_scope
+DO UPDATE SET ratio_bp = EXCLUDED.ratio_bp, safety_qty = EXCLUDED.safety_qty, cap_qty = EXCLUDED.cap_qty
+RETURNING id, binding_id, store_id, sku_id, ratio_bp, safety_qty, cap_qty, updated_at;
+
+-- name: DeleteChannelStockRule :execrows
+DELETE FROM channel_stock_rules WHERE binding_id = @binding_id::bigint AND id = @id::bigint;
+
+-- name: ListChannelStockRules :many
+SELECT id, binding_id, store_id, sku_id, ratio_bp, safety_qty, cap_qty, updated_at
+  FROM channel_stock_rules WHERE binding_id = @binding_id::bigint ORDER BY id;
+
+-- name: ListChannelStockRulesForStore :many
+-- 算对外可售数用：渠道级 + 这家门店的（门店级与门店 × SKU 级）。
+SELECT id, binding_id, store_id, sku_id, ratio_bp, safety_qty, cap_qty, updated_at
+  FROM channel_stock_rules
+ WHERE binding_id = @binding_id::bigint AND (store_id IS NULL OR store_id = @store_id::bigint);
+
+-- name: UpsertChannelPriceRule :one
+INSERT INTO channel_price_rules (binding_id, sku_id, markup_bp, fixed_cents)
+VALUES (@binding_id::bigint, sqlc.narg(sku_id)::bigint, @markup_bp::int, sqlc.narg(fixed_cents)::bigint)
+ON CONFLICT ON CONSTRAINT uk_channel_price_rules_scope
+DO UPDATE SET markup_bp = EXCLUDED.markup_bp, fixed_cents = EXCLUDED.fixed_cents
+RETURNING id, binding_id, sku_id, markup_bp, fixed_cents, updated_at;
+
+-- name: DeleteChannelPriceRule :execrows
+DELETE FROM channel_price_rules WHERE binding_id = @binding_id::bigint AND id = @id::bigint;
+
+-- name: ListChannelPriceRules :many
+SELECT id, binding_id, sku_id, markup_bp, fixed_cents, updated_at
+  FROM channel_price_rules WHERE binding_id = @binding_id::bigint ORDER BY id;
+
+-- name: GetChannelListings :many
+SELECT binding_id, store_id, sku_id, published_qty, published_cents, version, pushed_at, last_error
+  FROM channel_listings
+ WHERE binding_id = @binding_id::bigint AND store_id = @store_id::bigint AND sku_id = ANY(@sku_ids::bigint[]);
+
+-- name: UpsertChannelListing :one
+-- 推送成功后记下推出去的值；version 每次成功加一（幂等键 binding:store:sku:version）。
+INSERT INTO channel_listings (binding_id, store_id, sku_id, published_qty, published_cents)
+VALUES (@binding_id::bigint, @store_id::bigint, @sku_id::bigint, @published_qty::int, @published_cents::bigint)
+ON CONFLICT ON CONSTRAINT channel_listings_pkey
+DO UPDATE SET published_qty = EXCLUDED.published_qty, published_cents = EXCLUDED.published_cents,
+              version = channel_listings.version + 1, pushed_at = now(), last_error = NULL
+RETURNING version;
+
+-- name: SetChannelListingError :exec
+UPDATE channel_listings SET last_error = @last_error::text
+ WHERE binding_id = @binding_id::bigint AND store_id = @store_id::bigint AND sku_id = @sku_id::bigint;
+
+-- name: ListChannelListingsPage :many
+SELECT binding_id, store_id, sku_id, published_qty, published_cents, version, pushed_at, last_error
+  FROM channel_listings
+ WHERE binding_id = @binding_id::bigint
+   AND (sqlc.narg(store_id)::bigint IS NULL OR store_id = sqlc.narg(store_id)::bigint)
+ ORDER BY store_id, sku_id
+ LIMIT @lim::int OFFSET @off::int;
+
+-- name: InsertChannelInboundEvent :one
+-- 重复投递（同一外部事件 ID）不插、不报错：没有行返回即重复（调用方当 inserted=false）。
+INSERT INTO channel_inbound_events (binding_id, external_event_id, topic, payload, status)
+VALUES (@binding_id::bigint, @external_event_id::text, @topic::text, @payload::jsonb, @status::smallint)
+ON CONFLICT ON CONSTRAINT uk_channel_inbound_events_external DO NOTHING
+RETURNING id;
+
+-- name: GetChannelInboundEvent :one
+SELECT id, binding_id, external_event_id, topic, payload, status, error, received_at, processed_at
+  FROM channel_inbound_events WHERE id = @id::bigint;
+
+-- name: MarkChannelInboundEvent :exec
+UPDATE channel_inbound_events
+   SET status = @status::smallint, error = sqlc.narg(error)::text, processed_at = now()
+ WHERE id = @id::bigint;
