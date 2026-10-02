@@ -330,4 +330,3 @@ func (s *ChannelService) workInbound(ctx context.Context) (int, error) {
 	}
 	return len(jobs), nil
 }
-
