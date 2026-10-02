@@ -2560,7 +2560,7 @@ class ChannelListing {
 /// 渠道单的规整状态：1 待付款（不接单）、2 新单（等接单 / 待处理）、3 已接单、4 已发货、5 已完成、6 已取消、7 已拒单。
 typedef ChannelOrderStatus = int;
 
-/// 平台快照里的金额（分）。keel 订单实付 = `buyer_paid`（商品 + 运费 − 平台补贴 − 商家补贴，**不含税**）；
+/// 平台快照里的金额（分）。keel 订单实付 = `buyer_paid`（商品 + 运费 − 平台补贴 − 商家补贴）。
 class ChannelOrderAmounts {
   final int goods;
   final int freight;
@@ -2571,7 +2571,8 @@ class ChannelOrderAmounts {
   final int merchantReceivable;
   final int buyerPaid;
   final int refunded;
-  const ChannelOrderAmounts({required this.goods, required this.freight, required this.platformSubsidy, required this.merchantSubsidy, required this.commission, required this.tax, required this.merchantReceivable, required this.buyerPaid, required this.refunded});
+  final bool taxesIncluded;
+  const ChannelOrderAmounts({required this.goods, required this.freight, required this.platformSubsidy, required this.merchantSubsidy, required this.commission, required this.tax, required this.merchantReceivable, required this.buyerPaid, required this.refunded, required this.taxesIncluded});
   factory ChannelOrderAmounts.fromJson(Map<String, dynamic> j) => ChannelOrderAmounts(
         goods: (j['goods'] as num).toInt(),
         freight: (j['freight'] as num).toInt(),
@@ -2582,6 +2583,7 @@ class ChannelOrderAmounts {
         merchantReceivable: (j['merchant_receivable'] as num).toInt(),
         buyerPaid: (j['buyer_paid'] as num).toInt(),
         refunded: (j['refunded'] as num).toInt(),
+        taxesIncluded: j['taxes_included'] as bool,
       );
   Map<String, dynamic> toJson() => {
         'goods': goods,
@@ -2593,6 +2595,7 @@ class ChannelOrderAmounts {
         'merchant_receivable': merchantReceivable,
         'buyer_paid': buyerPaid,
         'refunded': refunded,
+        'taxes_included': taxesIncluded,
       };
 }
 
@@ -2672,6 +2675,8 @@ class ChannelOrderReceiver {
 class ChannelOrder {
   final int id;
   final int bindingId;
+  final String channel;
+  final String bindingName;
   final String externalOrderId;
   final String externalOrderName;
   final int? storeId;
@@ -2687,10 +2692,12 @@ class ChannelOrder {
   final bool test;
   final String createdAt;
   final String updatedAt;
-  const ChannelOrder({required this.id, required this.bindingId, required this.externalOrderId, required this.externalOrderName, this.storeId, this.orderNo, required this.platformStatus, required this.status, this.exception, this.acceptDeadline, required this.deliveryMode, required this.amounts, required this.lines, required this.receiver, required this.test, required this.createdAt, required this.updatedAt});
+  const ChannelOrder({required this.id, required this.bindingId, required this.channel, required this.bindingName, required this.externalOrderId, required this.externalOrderName, this.storeId, this.orderNo, required this.platformStatus, required this.status, this.exception, this.acceptDeadline, required this.deliveryMode, required this.amounts, required this.lines, required this.receiver, required this.test, required this.createdAt, required this.updatedAt});
   factory ChannelOrder.fromJson(Map<String, dynamic> j) => ChannelOrder(
         id: (j['id'] as num).toInt(),
         bindingId: (j['binding_id'] as num).toInt(),
+        channel: j['channel'] as String,
+        bindingName: j['binding_name'] as String,
         externalOrderId: j['external_order_id'] as String,
         externalOrderName: j['external_order_name'] as String,
         storeId: (j['store_id'] as num?)?.toInt(),
@@ -2710,6 +2717,8 @@ class ChannelOrder {
   Map<String, dynamic> toJson() => {
         'id': id,
         'binding_id': bindingId,
+        'channel': channel,
+        'binding_name': bindingName,
         'external_order_id': externalOrderId,
         'external_order_name': externalOrderName,
         if (storeId != null) 'store_id': storeId,
@@ -2787,6 +2796,8 @@ class ChannelOrderRequest {
 class ChannelOrderDetail {
   final int id;
   final int bindingId;
+  final String channel;
+  final String bindingName;
   final String externalOrderId;
   final String externalOrderName;
   final int? storeId;
@@ -2803,10 +2814,12 @@ class ChannelOrderDetail {
   final String createdAt;
   final String updatedAt;
   final List<ChannelOrderRequest> requests;
-  const ChannelOrderDetail({required this.id, required this.bindingId, required this.externalOrderId, required this.externalOrderName, this.storeId, this.orderNo, required this.platformStatus, required this.status, this.exception, this.acceptDeadline, required this.deliveryMode, required this.amounts, required this.lines, required this.receiver, required this.test, required this.createdAt, required this.updatedAt, required this.requests});
+  const ChannelOrderDetail({required this.id, required this.bindingId, required this.channel, required this.bindingName, required this.externalOrderId, required this.externalOrderName, this.storeId, this.orderNo, required this.platformStatus, required this.status, this.exception, this.acceptDeadline, required this.deliveryMode, required this.amounts, required this.lines, required this.receiver, required this.test, required this.createdAt, required this.updatedAt, required this.requests});
   factory ChannelOrderDetail.fromJson(Map<String, dynamic> j) => ChannelOrderDetail(
         id: (j['id'] as num).toInt(),
         bindingId: (j['binding_id'] as num).toInt(),
+        channel: j['channel'] as String,
+        bindingName: j['binding_name'] as String,
         externalOrderId: j['external_order_id'] as String,
         externalOrderName: j['external_order_name'] as String,
         storeId: (j['store_id'] as num?)?.toInt(),
@@ -2827,6 +2840,8 @@ class ChannelOrderDetail {
   Map<String, dynamic> toJson() => {
         'id': id,
         'binding_id': bindingId,
+        'channel': channel,
+        'binding_name': bindingName,
         'external_order_id': externalOrderId,
         'external_order_name': externalOrderName,
         if (storeId != null) 'store_id': storeId,
