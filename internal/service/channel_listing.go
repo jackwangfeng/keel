@@ -97,19 +97,70 @@ func (s *ChannelService) StockChangedBranch() dtm.BranchFuncEx {
 }
 
 // listingTarget 是一格（binding, 门店, SKU）现在应当推出去的值。
+// carriesPrice：这家门店是不是这个 binding 的价格出处（渠道按门店定价时每家都是；全渠道一个价时只有价格源门店是）。
 type listingTarget struct {
-	binding  repository.OutletBinding
-	skuID    int64
-	qty      int32
-	price    int64
-	external repository.ChannelItemLink
-	prev     *repository.ChannelListing
+	binding      repository.OutletBinding
+	skuID        int64
+	qty          int32
+	price        int64
+	carriesPrice bool
+	external     repository.ChannelItemLink
+	prev         *repository.ChannelListing
 }
 
 // unchanged：上次推出去的就是这个值，而且那一次是成功的。上次失败（last_error 非空，比如 CAS 冲突时记下的是
-// 渠道上的数、价格并没有推上去）一律当作要推。
+// 渠道上的数、价格并没有推上去）一律当作要推。不出价格的门店只比可售数：它的价格变了不用推任何东西。
 func (t listingTarget) unchanged() bool {
-	return t.prev != nil && t.prev.LastError == nil && t.prev.PublishedQty == t.qty && t.prev.PublishedCents == t.price
+	if t.prev == nil || t.prev.LastError != nil || t.prev.PublishedQty != t.qty {
+		return false
+	}
+	return !t.carriesPrice || t.prev.PublishedCents == t.price
+}
+
+// pushPrice：这一格这次要不要连价格一起推。
+func (t listingTarget) pushPrice() bool {
+	return t.carriesPrice && (t.prev == nil || t.prev.LastError != nil || t.prev.PublishedCents != t.price)
+}
+
+// channelBindingConfig 是 channel_bindings.config 里渠道层认的字段（其余字段归适配器或以后的期数）。
+type channelBindingConfig struct {
+	DefaultCategoryID int64  `json:"default_category_id"` // 商品源拉进来的新商品挂哪个类目
+	PriceStoreID      int64  `json:"price_store_id"`      // 全渠道一个价时价格从哪家门店出
+	WebhookBaseURL    string `json:"webhook_base_url"`    // 回调地址前缀（https://演示站域名），首拉时据此装 webhook
+}
+
+func parseBindingConfig(raw json.RawMessage) channelBindingConfig {
+	var c channelBindingConfig
+	if len(raw) > 0 {
+		_ = json.Unmarshal(raw, &c) // 配错的字段按没配处理；后台写 config 时只校验是 JSON 对象
+	}
+	return c
+}
+
+// carriesPrice 判断 storeID 是不是 binding b 的价格出处（见 listingTarget）。
+func (s *ChannelService) carriesPrice(ctx context.Context, tx repository.Tx, b repository.OutletBinding, storeID int64) (bool, error) {
+	if a, ok := s.reg.Lookup(b.Channel); ok && a.Caps().PricePerStore {
+		return true, nil
+	}
+	links, err := tx.ListChannelStoreLinks(ctx, b.ID)
+	if err != nil {
+		return false, err
+	}
+	want := parseBindingConfig(b.Config).PriceStoreID
+	var lowest int64
+	for _, l := range links {
+		if l.StoreID == want {
+			return storeID == want, nil
+		}
+		if lowest == 0 || l.StoreID < lowest {
+			lowest = l.StoreID
+		}
+	}
+	if want != 0 {
+		s.log.WarnContext(ctx, "binding 的 price_store_id 不在它的门店映射里，改用 id 最小的映射门店出价", "binding_id", b.ID,
+			"price_store_id", want, "fallback_store_id", lowest)
+	}
+	return storeID == lowest, nil
 }
 
 // computeTargets 算一家门店一批 SKU 在各启用中的销售渠道上现在应当推的值。onlyBinding 非 0 时只算那一个。
@@ -173,6 +224,10 @@ func (s *ChannelService) computeTargets(ctx context.Context, storeID int64, skuI
 			for i := range prev {
 				prevBy[prev[i].SKUID] = &prev[i]
 			}
+			carries, err := s.carriesPrice(ctx, tx, b, storeID)
+			if err != nil {
+				return err
+			}
 			stockRules, priceRules := toStockRules(srules), toPriceRules(prules)
 			for _, sku := range skuIDs {
 				link, ok := links[sku]
@@ -185,11 +240,12 @@ func (s *ChannelService) computeTargets(ctx context.Context, storeID int64, skuI
 					continue
 				}
 				var qty int32
-				if offer.Sellable {
+				if offer.Sellable(channel.Role(b.Roles)&channel.RoleCatalogSource != 0) {
 					qty = channel.PublishedQty(levels[sku].Available, channel.ResolveStockRule(stockRules, storeID, sku))
 				}
 				price := channel.PublishedPrice(offer.PriceCents, channel.ResolvePriceRule(priceRules, sku))
-				out = append(out, listingTarget{binding: b, skuID: sku, qty: qty, price: price, external: link, prev: prevBy[sku]})
+				out = append(out, listingTarget{binding: b, skuID: sku, qty: qty, price: price, carriesPrice: carries,
+					external: link, prev: prevBy[sku]})
 			}
 		}
 		return nil
@@ -252,4 +308,67 @@ func toPriceRules(rs []repository.ChannelPriceRule) []channel.PriceRule {
 		out[i] = channel.PriceRule{SKUID: r.SKUID, MarkupBP: r.MarkupBP, FixedCents: r.FixedCents}
 	}
 	return out
+}
+
+// SKUsChanged：keel 里改了这些 SKU 的价格或能不能卖（门店价 / 大区价 / 基准价、SKU 停售或删除、商品上下架或删除）。
+// 写提交之后调，尽力而为：对每家映射到启用中销售渠道的门店重算这批 SKU，和上次推的不同就入队。
+// 失败只记日志 —— 写已经提交，不能让后台那次改价报错；这一格在下一次库存变化或整店重算时会补上。
+//
+// 调用方持有的是可能为 nil 的 *ChannelService（KEEL_CHANNELS 关着时），nil 接收者直接返回：开关关闭时零开销。
+func (s *ChannelService) SKUsChanged(ctx context.Context, skuIDs []int64) {
+	if s == nil || len(skuIDs) == 0 {
+		return
+	}
+	stores := map[int64]bool{}
+	var order []int64
+	err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+		bs, err := tx.ListChannelBindings(ctx)
+		if err != nil {
+			return err
+		}
+		for _, b := range bs {
+			if !b.IsActiveOutlet() {
+				continue
+			}
+			links, err := tx.ListChannelStoreLinks(ctx, b.ID)
+			if err != nil {
+				return err
+			}
+			for _, l := range links {
+				if !stores[l.StoreID] {
+					stores[l.StoreID] = true
+					order = append(order, l.StoreID)
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		s.log.WarnContext(ctx, "改价 / 改在售之后没能重算渠道可售数（下一次变化会补上）", "err", err)
+		return
+	}
+	for _, st := range order {
+		if err := s.RecomputeListings(ctx, st, skuIDs, 0); err != nil {
+			s.log.WarnContext(ctx, "改价 / 改在售之后重算渠道可售数失败（下一次变化会补上）", "store_id", st, "err", err)
+		}
+	}
+}
+
+// ProductChanged 同 SKUsChanged，按商品取它的全部 SKU（上下架、删商品）。
+func (s *ChannelService) ProductChanged(ctx context.Context, productID int64) {
+	if s == nil {
+		return
+	}
+	var ids []int64
+	if err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+		skus, err := tx.AdminListProductSKUs(ctx, productID)
+		for _, k := range skus {
+			ids = append(ids, k.ID)
+		}
+		return err
+	}); err != nil {
+		s.log.WarnContext(ctx, "商品上下架之后没能列出它的 SKU 去重算渠道可售数", "product_id", productID, "err", err)
+		return
+	}
+	s.SKUsChanged(ctx, ids)
 }

@@ -98,7 +98,7 @@ func (a *Adapter) FailNextWith(n int, err error) {
 	a.mu.Unlock()
 }
 
-// LastPrice 是渠道上 (store, sku) 当前的价格（最近一次生效的推送）。
+// LastPrice 是渠道上 (store, sku) 当前的价格（最近一次生效、且 PushPrice 为真的推送）。
 func (a *Adapter) LastPrice(store, sku int64) (int64, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -170,6 +170,9 @@ func (a *Adapter) PushListings(_ context.Context, _ channel.Binding, ls []channe
 			a.applied = map[[2]int64]int32{}
 		}
 		a.applied[k] = l.Qty
+		if !l.PushPrice {
+			continue
+		}
 		if a.prices == nil {
 			a.prices = map[[2]int64]int64{}
 		}

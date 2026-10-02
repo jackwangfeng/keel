@@ -269,7 +269,7 @@ func (s *ChannelService) pushStore(ctx context.Context, outlet channel.Outlet, a
 		}
 		ls = append(ls, channel.Listing{StoreID: storeID, SKUID: t.skuID, ExternalStoreID: t.binding.ExternalStoreID,
 			ExternalSKUID: t.external.ExternalID, Extra: t.external.Extra, Qty: t.qty, PrevQty: prevQty, PriceCents: t.price,
-			IdemKey: fmt.Sprintf("%d:%d:%d:%d", ab.ID, storeID, t.skuID, version)})
+			PushPrice: t.pushPrice(), IdemKey: fmt.Sprintf("%d:%d:%d:%d", ab.ID, storeID, t.skuID, version)})
 		pending = append(pending, t)
 	}
 	// 算不出来的格子（门店映射删了、SKU 映射删了）：没东西可推。

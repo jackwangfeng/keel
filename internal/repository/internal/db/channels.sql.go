@@ -24,7 +24,9 @@ func (q *Queries) ChannelSKUExists(ctx context.Context, skuID int64) (bool, erro
 
 const channelSKUOffers = `-- name: ChannelSKUOffers :many
 SELECT v.sku_id, v.price_cents,
-       (p.status = 1 AND p.deleted_at IS NULL AND s.status = 1 AND s.deleted_at IS NULL)::boolean AS sellable
+       (s.status = 1 AND s.deleted_at IS NULL)::boolean AS sku_active,
+       (p.deleted_at IS NULL)::boolean                  AS product_live,
+       (p.status = 1)::boolean                          AS product_published
   FROM sku_prices_by_store v
   JOIN skus s     ON s.id = v.sku_id
   JOIN products p ON p.id = s.product_id
@@ -37,13 +39,16 @@ type ChannelSKUOffersParams struct {
 }
 
 type ChannelSKUOffersRow struct {
-	SkuID      int64
-	PriceCents int64
-	Sellable   bool
+	SkuID            int64
+	PriceCents       int64
+	SkuActive        bool
+	ProductLive      bool
+	ProductPublished bool
 }
 
-// 推给渠道的基准价（门店就近生效价，sku_prices_by_store 是唯一实现）与「能不能卖」：
-// 商品在售且没删、SKU 启用且没删。不能卖的 SKU 对外可售按 0 推。
+// 推给渠道的基准价（门店就近生效价，sku_prices_by_store 是唯一实现）与「能不能卖」的三个因素：
+// SKU 启用且没删、商品没删、商品已上架。不能卖的 SKU 对外可售按 0 推；「上架」这一条对商品源 binding
+// 不看（上下架归商品源管，见 repository.SKUOffer.Sellable）。
 func (q *Queries) ChannelSKUOffers(ctx context.Context, arg ChannelSKUOffersParams) ([]ChannelSKUOffersRow, error) {
 	rows, err := q.db.Query(ctx, channelSKUOffers, arg.StoreID, arg.SkuIds)
 	if err != nil {
@@ -53,7 +58,13 @@ func (q *Queries) ChannelSKUOffers(ctx context.Context, arg ChannelSKUOffersPara
 	var items []ChannelSKUOffersRow
 	for rows.Next() {
 		var i ChannelSKUOffersRow
-		if err := rows.Scan(&i.SkuID, &i.PriceCents, &i.Sellable); err != nil {
+		if err := rows.Scan(
+			&i.SkuID,
+			&i.PriceCents,
+			&i.SkuActive,
+			&i.ProductLive,
+			&i.ProductPublished,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

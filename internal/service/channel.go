@@ -181,7 +181,8 @@ func (s *ChannelService) UpdateBinding(ctx context.Context, id int64, p ChannelB
 			return false, err
 		}
 		flipped := before.IsActiveOutlet() != b.IsActiveOutlet()
-		if flipped && b.IsActiveOutlet() {
+		// 变成启用、或启用中改了 config（价格源门店之类）：整店重算一遍。
+		if b.IsActiveOutlet() && (flipped || p.Config != nil) {
 			if err := s.enqueueRecomputeBinding(ctx, tx, b.ID); err != nil {
 				return false, err
 			}

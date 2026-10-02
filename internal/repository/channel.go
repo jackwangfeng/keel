@@ -196,10 +196,19 @@ type ChannelItemLink struct {
 	SyncedAt   time.Time
 }
 
-// SKUOffer 是一个 SKU 在一家门店的就近生效价与能不能卖（商品在售没删、SKU 启用没删）。
+// SKUOffer 是一个 SKU 在一家门店的就近生效价与能不能卖的三个因素。
 type SKUOffer struct {
-	PriceCents int64
-	Sellable   bool
+	PriceCents       int64
+	SKUActive        bool // SKU 启用且没删
+	ProductLive      bool // 商品没删
+	ProductPublished bool // 商品已上架
+}
+
+// Sellable：这个 SKU 能不能在渠道上卖。catalogOwned 为真（binding 本身就是这件商品的商品源，比如 Shopify）时
+// 不看 keel 的上架状态 —— 上下架归商品源管（拉商品时同步过来），否则 keel 里一件还没上架的商品
+// 会把商品源上的现货推成 0。
+func (o SKUOffer) Sellable(catalogOwned bool) bool {
+	return o.SKUActive && o.ProductLive && (o.ProductPublished || catalogOwned)
 }
 
 func bindingFrom(id int64, channel, account, name string, roles, status int16, config []byte,
@@ -526,7 +535,8 @@ func (t tenantTx) ChannelSKUOffers(ctx context.Context, storeID int64, skuIDs []
 		return nil, err
 	}
 	for _, r := range rows {
-		out[r.SkuID] = SKUOffer{PriceCents: r.PriceCents, Sellable: r.Sellable}
+		out[r.SkuID] = SKUOffer{PriceCents: r.PriceCents, SKUActive: r.SkuActive, ProductLive: r.ProductLive,
+			ProductPublished: r.ProductPublished}
 	}
 	return out, nil
 }
