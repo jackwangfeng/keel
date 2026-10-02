@@ -9,25 +9,29 @@
 -- 一直攥着 ADD 拿的 ACCESS EXCLUSIVE（理由同 00322），这里逐句提交，于是一个文件里就能做完。
 -- 新约束比旧的宽（旧的三种照旧），存量行校验必过。
 -- +goose NO TRANSACTION
+-- 逐句提交也就意味着中途失败会留下半截（v2 加上了 / 旧的删掉了 / 已经改名了）：每一句都写成可重跑的，
+-- 先删可能残留的 v2、删旧约束带 IF EXISTS —— 从任何一步断掉之后整个文件重跑都能走完。
 -- +goose Up
+ALTER TABLE notifications DROP CONSTRAINT IF EXISTS chk_notification_target_v2;
 ALTER TABLE notifications ADD CONSTRAINT chk_notification_target_v2 CHECK (
     (target_type = 'order'     AND order_no IS NOT NULL)
     OR (target_type = 'refund' AND refund_no IS NOT NULL)
     OR (target_type = 'inventory' AND store_id IS NOT NULL AND sku_id IS NOT NULL)
     OR (target_type = 'channel_orders' AND store_id IS NOT NULL)
 ) NOT VALID;
-ALTER TABLE notifications DROP CONSTRAINT chk_notification_target;
+ALTER TABLE notifications DROP CONSTRAINT IF EXISTS chk_notification_target;
 ALTER TABLE notifications VALIDATE CONSTRAINT chk_notification_target_v2;
 ALTER TABLE notifications RENAME CONSTRAINT chk_notification_target_v2 TO chk_notification_target;
 
 -- +goose Down
 DELETE FROM notification_deliveries WHERE notification_id IN (SELECT id FROM notifications WHERE target_type = 'channel_orders');
 DELETE FROM notifications WHERE target_type = 'channel_orders';
+ALTER TABLE notifications DROP CONSTRAINT IF EXISTS chk_notification_target_v1;
 ALTER TABLE notifications ADD CONSTRAINT chk_notification_target_v1 CHECK (
     (target_type = 'order'     AND order_no IS NOT NULL)
     OR (target_type = 'refund' AND refund_no IS NOT NULL)
     OR (target_type = 'inventory' AND store_id IS NOT NULL AND sku_id IS NOT NULL)
 ) NOT VALID;
-ALTER TABLE notifications DROP CONSTRAINT chk_notification_target;
+ALTER TABLE notifications DROP CONSTRAINT IF EXISTS chk_notification_target;
 ALTER TABLE notifications VALIDATE CONSTRAINT chk_notification_target_v1;
 ALTER TABLE notifications RENAME CONSTRAINT chk_notification_target_v1 TO chk_notification_target;
