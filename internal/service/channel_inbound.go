@@ -133,12 +133,16 @@ func (s *ChannelService) handleInbound(ctx context.Context, j repository.Job) {
 	}
 	var stored repository.ChannelInboundEvent
 	var b repository.ChannelBinding
+	var secrets json.RawMessage
 	err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
 		var e error
 		if stored, e = tx.GetChannelInboundEvent(ctx, p.EventID); e != nil {
 			return e
 		}
-		b, e = tx.GetChannelBinding(ctx, stored.BindingID)
+		if b, e = tx.GetChannelBinding(ctx, stored.BindingID); e != nil {
+			return e
+		}
+		secrets, e = tx.ChannelBindingSecrets(ctx, b.ID) // 只用来给处理器的错误脱敏
 		return e
 	})
 	if errors.Is(err, repository.ErrChannelNotFound) {
@@ -174,6 +178,7 @@ func (s *ChannelService) handleInbound(ctx context.Context, j repository.Job) {
 		return
 	}
 	if err := h(ctx, b, ev); err != nil {
+		err = channel.RedactError(err, secrets)
 		msg := err.Error()
 		mark(repository.ChannelEventFailed, &msg)
 		s.retry(ctx, j, err)

@@ -1201,18 +1201,19 @@ type StoreSkuPrice struct {
 }
 
 type Upload struct {
-	ID          int64
-	MerchantID  int64
-	UserID      *int64
-	StaffID     *int64
-	Purpose     int16
-	Driver      int16
-	StorageKey  string
-	ContentType string
-	SizeBytes   int64
-	Sha256      string
-	Referenced  bool
-	CreatedAt   pgtype.Timestamptz
+	ID               int64
+	MerchantID       int64
+	UserID           *int64
+	StaffID          *int64
+	Purpose          int16
+	Driver           int16
+	StorageKey       string
+	ContentType      string
+	SizeBytes        int64
+	Sha256           string
+	Referenced       bool
+	CreatedAt        pgtype.Timestamptz
+	ChannelBindingID *int64
 }
 
 type User struct {

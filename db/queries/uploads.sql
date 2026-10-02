@@ -131,3 +131,14 @@ SELECT u.id, u.storage_key, u.content_type, u.size_bytes, u.sha256
 -- 两个迁移进程同时跑时第二个改不到（0 行），不会把已经改过的再改一遍。
 UPDATE uploads SET driver = sqlc.arg(to_driver)
  WHERE id = sqlc.arg(id) AND driver = sqlc.arg(from_driver);
+
+-- name: CreateChannelUpload :one
+-- 渠道适配层从商品源下载的商品图（00302）：上传者记 channel_binding_id，不记员工 —— 没有哪个员工传过它。
+-- purpose 固定 1 商品图。referenced 同 CreateStaffUpload，由挂接那一步置位。
+INSERT INTO uploads (channel_binding_id, purpose, driver, storage_key,
+                     content_type, size_bytes, sha256)
+VALUES (sqlc.arg(channel_binding_id), 1, sqlc.arg(driver),
+        sqlc.arg(storage_key), sqlc.arg(content_type), sqlc.arg(size_bytes),
+        sqlc.arg(sha256))
+RETURNING id, user_id, staff_id, purpose, driver, storage_key,
+          content_type, size_bytes, sha256, referenced, created_at;

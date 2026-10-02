@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/keel/keel/internal/channel"
+	"github.com/keel/keel/internal/channel/shopify"
 	"github.com/keel/keel/internal/dtm"
 	"github.com/keel/keel/internal/inventory"
 	"github.com/keel/keel/internal/repository"
@@ -33,9 +34,11 @@ func channelsFromEnv() (bool, error) {
 	}
 }
 
-// channelRegistry 是这个进程编进来的渠道适配器。第一期没有真实适配器（第二期起登记 Shopify）。
+// channelRegistry 是这个进程编进来的渠道适配器。
 func channelRegistry() *channel.Registry {
-	return channel.NewRegistry()
+	r := channel.NewRegistry()
+	r.Register(shopify.New(shopify.Options{}))
+	return r
 }
 
 // channelStockAction 是 stock.changed 的投递目标：嵌入式协调器投到 core 的进程内分支，独立协调器发到主题。

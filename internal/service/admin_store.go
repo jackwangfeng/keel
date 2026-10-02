@@ -59,10 +59,18 @@ type AdminStoreService struct {
 	repo AdminStoreRepository
 	// inv 是库存服务（微服务拆分阶段 1a）：门店库存清单的水位与两条改库存都经它。
 	inv inventory.Service
+	// channels 是渠道层（KEEL_CHANNELS 关着时为 nil）：改门店价 / 大区价之后让它重算对外价格。
+	channels *ChannelService
 }
 
 func NewAdminStoreService(r AdminStoreRepository, inv inventory.Service) *AdminStoreService {
 	return &AdminStoreService{repo: r, inv: inv}
+}
+
+// WithChannels 接上渠道层（nil 即不接）。
+func (s *AdminStoreService) WithChannels(c *ChannelService) *AdminStoreService {
+	s.channels = c
+	return s
 }
 
 // ---------------------------------------------------------------------------
@@ -556,6 +564,9 @@ func (s *AdminStoreService) SetStorePrice(ctx context.Context, storeID, skuID, c
 		out, e = tx.SetStorePrice(ctx, storeID, skuID, cents)
 		return e
 	})
+	if err == nil {
+		s.channels.SKUsChanged(ctx, []int64{skuID})
+	}
 	return out, err
 }
 
@@ -565,7 +576,7 @@ func (s *AdminStoreService) SetStorePrice(ctx context.Context, storeID, skuID, c
 // 自己的价」，那个意图在两种情况下都已经达成。404 留给「门店或 SKU 根本不
 // 存在」，而那一条由 repository 在删之前单独确认。
 func (s *AdminStoreService) ClearStorePrice(ctx context.Context, storeID, skuID int64) error {
-	return s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+	err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
 		if _, e := authorizeStore(ctx, tx, storeID, storeOperate); e != nil {
 			return e
 		}
@@ -584,6 +595,10 @@ func (s *AdminStoreService) ClearStorePrice(ctx context.Context, storeID, skuID 
 		}
 		return tx.ClearStorePrice(ctx, storeID, skuID)
 	})
+	if err == nil {
+		s.channels.SKUsChanged(ctx, []int64{skuID})
+	}
+	return err
 }
 
 // SetRegionPrice 实现 PUT /admin/regions/{region_id}/skus/{sku_id}/price。
@@ -602,6 +617,9 @@ func (s *AdminStoreService) SetRegionPrice(ctx context.Context, regionID, skuID,
 		out, e = tx.SetRegionPrice(ctx, regionID, skuID, cents)
 		return e
 	})
+	if err == nil {
+		s.channels.SKUsChanged(ctx, []int64{skuID})
+	}
 	return out, err
 }
 
@@ -613,7 +631,7 @@ func (s *AdminStoreService) ClearRegionPrice(ctx context.Context, regionID, skuI
 	if _, err := authorizeRegion(ctx, regionID); err != nil {
 		return err
 	}
-	return s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+	err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
 		// 同 ClearStorePrice：DELETE 分不开「没有覆盖」与「大区不存在」，
 		// 而契约把它们分成 204 与 404。
 		if _, e := tx.FindRegion(ctx, regionID); e != nil {
@@ -624,6 +642,10 @@ func (s *AdminStoreService) ClearRegionPrice(ctx context.Context, regionID, skuI
 		}
 		return tx.ClearRegionPrice(ctx, regionID, skuID)
 	})
+	if err == nil {
+		s.channels.SKUsChanged(ctx, []int64{skuID})
+	}
+	return err
 }
 
 // ---------------------------------------------------------------------------

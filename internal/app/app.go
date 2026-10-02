@@ -542,7 +542,7 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	}
 
 	cat := handler.NewAdminCatalogHandler(
-		service.NewAdminCatalogService(repo, store, inv))
+		service.NewAdminCatalogService(repo, store, inv).WithChannels(ro.channels))
 
 	v1.POST("/admin/uploads", staffAuth, cat.CreateUpload)
 
@@ -617,7 +617,7 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	//   · internal/handler 的 TestAdminStoreRoutesAllRequireStaffSession
 	//     **逐条**不带令牌打一次，断言它们全是 401。只核路径的话，
 	//     把这一行的 staffAuth 删掉，路由表一个字都不会变。
-	st := handler.NewAdminStoreHandler(service.NewAdminStoreService(repo, inv))
+	st := handler.NewAdminStoreHandler(service.NewAdminStoreService(repo, inv).WithChannels(ro.channels))
 
 	v1.GET("/admin/regions", staffAuth, st.ListRegions)
 	v1.POST("/admin/regions", staffAuth, st.CreateRegion)
@@ -716,10 +716,10 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	// 鉴权是 agentAuth（kagt_ 密钥，租户按 Host）。工具调用的 service 与后台接口是同一批构造（无状态，
 	// 多构造一份不共享任何东西）。
 	// AI 员工的提案（M9 任务 4）：AI 员工经 MCP 提，人在后台批准 / 驳回。
-	proposals := service.NewAgentProposalService(repo, inv, service.NewAdminStoreService(repo, inv), nil)
+	proposals := service.NewAgentProposalService(repo, inv, service.NewAdminStoreService(repo, inv).WithChannels(ro.channels), nil)
 	// M10 的四种提案批准后以 AI 员工身份调这几个 service（与后台接口同一批构造，无状态）。
 	proposals.SetExecutors(service.NewAdminPromotionService(repo, inv).WithQuotaSync(ro.quotaSync), service.NewAdminCouponService(repo),
-		service.NewAdminCatalogService(repo, store, inv), refunds)
+		service.NewAdminCatalogService(repo, store, inv).WithChannels(ro.channels), refunds)
 	aph := handler.NewAgentProposalHandler(proposals)
 	v1.GET("/admin/agent-proposals", staffAuth, aph.List)
 	v1.GET("/admin/agent-proposals/:proposal_id", staffAuth, aph.Get)
@@ -741,14 +741,14 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 		},
 		Staff:           staffSvc,
 		Reports:         service.NewReportService(repo, inv),
-		Stores:          service.NewAdminStoreService(repo, inv),
-		Catalog:         service.NewAdminCatalogService(repo, store, inv),
+		Stores:          service.NewAdminStoreService(repo, inv).WithChannels(ro.channels),
+		Catalog:         service.NewAdminCatalogService(repo, store, inv).WithChannels(ro.channels),
 		Orders:          service.NewAdminOrderService(repo),
-		Restock:         service.NewRestockService(repo, inv, service.NewAdminStoreService(repo, inv)),
+		Restock:         service.NewRestockService(repo, inv, service.NewAdminStoreService(repo, inv).WithChannels(ro.channels)),
 		Proposals:       proposals,
 		Briefs:          briefs,
 		Events:          agentEvents,
-		SlowMovers:      service.NewSlowMoversService(repo, inv, service.NewAdminStoreService(repo, inv)),
+		SlowMovers:      service.NewSlowMoversService(repo, inv, service.NewAdminStoreService(repo, inv).WithChannels(ro.channels)),
 		PromotionReview: service.NewPromotionReviewService(repo),
 		Version:         buildinfo.Get().Version,
 	})
@@ -995,6 +995,8 @@ func Run(ctx context.Context, listen ListenFunc) error {
 		if channels, err = newChannelService(cfg.Split, pool, inv, self); err != nil {
 			return err
 		}
+		// 商品源（Shopify）的商品图下载进同一个上传存储；只放行 Shopify 的 CDN。
+		channels.WithImages(uploads, nil, service.ShopifyCDN)
 		var chLocal *inventory.Local
 		if cfg.Split.Role != RoleCore {
 			chLocal = inventory.NewLocal(repository.NewInventoryStore(invPool)).WithStockNotifier(stockNotifier)

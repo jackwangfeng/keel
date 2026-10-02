@@ -11,6 +11,67 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const createChannelUpload = `-- name: CreateChannelUpload :one
+INSERT INTO uploads (channel_binding_id, purpose, driver, storage_key,
+                     content_type, size_bytes, sha256)
+VALUES ($1, 1, $2,
+        $3, $4, $5,
+        $6)
+RETURNING id, user_id, staff_id, purpose, driver, storage_key,
+          content_type, size_bytes, sha256, referenced, created_at
+`
+
+type CreateChannelUploadParams struct {
+	ChannelBindingID *int64
+	Driver           int16
+	StorageKey       string
+	ContentType      string
+	SizeBytes        int64
+	Sha256           string
+}
+
+type CreateChannelUploadRow struct {
+	ID          int64
+	UserID      *int64
+	StaffID     *int64
+	Purpose     int16
+	Driver      int16
+	StorageKey  string
+	ContentType string
+	SizeBytes   int64
+	Sha256      string
+	Referenced  bool
+	CreatedAt   pgtype.Timestamptz
+}
+
+// 渠道适配层从商品源下载的商品图（00302）：上传者记 channel_binding_id，不记员工 —— 没有哪个员工传过它。
+// purpose 固定 1 商品图。referenced 同 CreateStaffUpload，由挂接那一步置位。
+func (q *Queries) CreateChannelUpload(ctx context.Context, arg CreateChannelUploadParams) (CreateChannelUploadRow, error) {
+	row := q.db.QueryRow(ctx, createChannelUpload,
+		arg.ChannelBindingID,
+		arg.Driver,
+		arg.StorageKey,
+		arg.ContentType,
+		arg.SizeBytes,
+		arg.Sha256,
+	)
+	var i CreateChannelUploadRow
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.StaffID,
+		&i.Purpose,
+		&i.Driver,
+		&i.StorageKey,
+		&i.ContentType,
+		&i.SizeBytes,
+		&i.Sha256,
+		&i.Referenced,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const createStaffUpload = `-- name: CreateStaffUpload :one
 
 INSERT INTO uploads (staff_id, purpose, driver, storage_key,

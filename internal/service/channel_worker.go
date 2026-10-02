@@ -53,7 +53,7 @@ func (s *ChannelService) RunWorkers(ctx context.Context) {
 }
 
 func (s *ChannelService) housekeep(ctx context.Context) {
-	for _, q := range []string{QueueChannelListingPush, QueueChannelListingRecompute, QueueChannelInbound} {
+	for _, q := range []string{QueueChannelListingPush, QueueChannelListingRecompute, QueueChannelInbound, QueueChannelCatalogPull} {
 		if n, err := s.repo.ReapStuckJobs(ctx, q, channelStuckAfter); err != nil {
 			s.log.ErrorContext(ctx, "回收卡死的渠道任务失败", "queue", q, "err", err)
 		} else if n > 0 {
@@ -68,7 +68,7 @@ func (s *ChannelService) housekeep(ctx context.Context) {
 // WorkOnce 各队列取一批跑完，返回处理的任务数。导出给测试驱动（不等轮询）。
 func (s *ChannelService) WorkOnce(ctx context.Context) (int, error) {
 	total := 0
-	for _, step := range []func(context.Context) (int, error){s.workRecompute, s.workPush, s.workInbound} {
+	for _, step := range []func(context.Context) (int, error){s.workCatalog, s.workRecompute, s.workPush, s.workInbound} {
 		n, err := step(ctx)
 		total += n
 		if err != nil {
@@ -103,9 +103,23 @@ func (s *ChannelService) finish(ctx context.Context, ids ...int64) {
 	}
 }
 
+// retry 把一条失败的任务放回队列。cause 若来自适配器，调用方先过 channel.RedactError（错误文本会写进 jobs.last_error）。
+//
+// 平台限流（RetryableError.RateLimited）不算失败：按平台给的等待时间放回、不计次（DeferJob），
+// 否则一阵持续的限流就能把任务耗进死信。
 func (s *ChannelService) retry(ctx context.Context, j repository.Job, cause error) {
-	err := s.repo.RetryJobCapped(ctx, j.ID, cause.Error(), channelMaxBackoff)
 	log := s.log.With("merchant_id", j.MerchantID, "job_id", j.ID, "queue", j.Queue, "job_key", j.JobKey, "attempt", j.Attempts)
+	var re *channel.RetryableError
+	if errors.As(cause, &re) && re.RateLimited {
+		after := min(max(re.After, time.Second), channelMaxBackoff)
+		if err := s.repo.DeferJob(ctx, j.ID, cause.Error(), after); err != nil {
+			log.ErrorContext(ctx, "渠道任务被限流、放回队列失败（回收任务会接手）", "err", cause, "retry_err", err)
+			return
+		}
+		log.InfoContext(ctx, "渠道限流，稍后再推（不计失败次数）", "after", after)
+		return
+	}
+	err := s.repo.RetryJobCapped(ctx, j.ID, cause.Error(), channelMaxBackoff)
 	switch {
 	case errors.Is(err, repository.ErrJobDeadLettered):
 		log.ErrorContext(ctx, "渠道任务重试次数用尽，已转死信 —— 这一格没有推上去，请人工处理", "err", cause)
@@ -255,7 +269,7 @@ func (s *ChannelService) pushStore(ctx context.Context, outlet channel.Outlet, a
 		}
 		ls = append(ls, channel.Listing{StoreID: storeID, SKUID: t.skuID, ExternalStoreID: t.binding.ExternalStoreID,
 			ExternalSKUID: t.external.ExternalID, Extra: t.external.Extra, Qty: t.qty, PrevQty: prevQty, PriceCents: t.price,
-			IdemKey: fmt.Sprintf("%d:%d:%d:%d", ab.ID, storeID, t.skuID, version)})
+			PushPrice: t.pushPrice(), IdemKey: fmt.Sprintf("%d:%d:%d:%d", ab.ID, storeID, t.skuID, version)})
 		pending = append(pending, t)
 	}
 	// 算不出来的格子（门店映射删了、SKU 映射删了）：没东西可推。
@@ -269,6 +283,7 @@ func (s *ChannelService) pushStore(ctx context.Context, outlet channel.Outlet, a
 		return
 	}
 	results, err := outlet.PushListings(ctx, ab, ls)
+	err = channel.RedactError(err, ab.Secrets)
 	if err == nil && len(results) != len(ls) {
 		err = fmt.Errorf("适配器回了 %d 条结果，推了 %d 条", len(results), len(ls))
 	}
@@ -286,7 +301,7 @@ func (s *ChannelService) pushStore(ctx context.Context, outlet channel.Outlet, a
 		if r.Err == nil {
 			if werr := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
 				_, e := tx.RecordChannelListing(ctx, repository.ChannelListing{BindingID: ab.ID, StoreID: storeID,
-					SKUID: t.skuID, PublishedQty: t.qty, PublishedCents: t.price})
+					SKUID: t.skuID, PublishedQty: t.qty, PublishedCents: t.publishedCents()})
 				return e
 			}); werr != nil {
 				// 推上去了但没记下：重推一次同样的值（幂等键相同），无害。
@@ -296,7 +311,7 @@ func (s *ChannelService) pushStore(ctx context.Context, outlet channel.Outlet, a
 			s.finish(ctx, j.ID)
 			continue
 		}
-		msg := r.Err.Error()
+		msg := channel.Redact(r.Err.Error(), ab.Secrets)
 		if r.Conflict && r.ObservedQty != nil {
 			// 渠道上的数被人改过：记下渠道上的现值（下一次 CAS 以它为准），对销售渠道 keel 是权威，重推覆盖。
 			msg = fmt.Sprintf("渠道上的可售数被改成了 %d，按 keel 的 %d 覆盖", *r.ObservedQty, t.qty)
@@ -312,7 +327,11 @@ func (s *ChannelService) pushStore(ctx context.Context, outlet channel.Outlet, a
 				return tx.SetChannelListingError(ctx, ab.ID, storeID, t.skuID, msg)
 			})
 		}
-		s.retry(ctx, j, errors.New(msg))
+		cause := channel.RedactError(r.Err, ab.Secrets) // 保住错误的类型：逐条的限流也不计失败次数
+		if r.Conflict {
+			cause = errors.New(msg)
+		}
+		s.retry(ctx, j, cause)
 	}
 }
 
@@ -334,6 +353,22 @@ func (s *ChannelService) workInbound(ctx context.Context) (int, error) {
 	}
 	for _, j := range jobs {
 		s.handleInbound(tenant.NewContext(ctx, j.MerchantID), j)
+	}
+	return len(jobs), nil
+}
+
+// workCatalog 跑一批拉商品任务（channel_catalog.go）。
+func (s *ChannelService) workCatalog(ctx context.Context) (int, error) {
+	jobs, err := s.dequeue(ctx, QueueChannelCatalogPull)
+	if err != nil {
+		return 0, err
+	}
+	for _, j := range jobs {
+		if err := s.pullCatalogPage(tenant.NewContext(ctx, j.MerchantID), j.Payload); err != nil {
+			s.retry(ctx, j, err)
+			continue
+		}
+		s.finish(ctx, j.ID)
 	}
 	return len(jobs), nil
 }

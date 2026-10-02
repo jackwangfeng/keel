@@ -58,6 +58,10 @@ type Caps struct {
 	OutOfOrderInbound   bool          // 回调可能乱序 / 只是提示：收到后要 FetchOrder 回读权威状态
 
 	ListingBatch int // PushListings 单次最多几条（适配器自己再分批也行；0 = 不限）
+
+	// PricePerStore：渠道上的价格按门店分（美团每家门店一个价）。false = 全渠道一个价（Shopify 价格挂在变体上），
+	// 这时只有 binding 的价格源门店（config.price_store_id，缺省为映射门店里 id 最小的那家）推价格。
+	PricePerStore bool
 }
 
 // Binding 是适配器看到的 binding：一个商家接的一个渠道账号，连同它的配置与凭据。
@@ -113,7 +117,10 @@ type Listing struct {
 	Qty             int32
 	PrevQty         *int32
 	PriceCents      int64
-	IdemKey         string
+	// PushPrice：这一条要不要推价格（全渠道一个价时只有价格源门店的那条为真，且价格和上次推的不同）。
+	// 为假时适配器只推可售数，PriceCents 不用看。
+	PushPrice bool
+	IdemKey   string
 }
 
 // ListingResult 是一条 Listing 的推送结果。Err 为空即成功。
@@ -171,17 +178,53 @@ type ChannelOrder struct {
 	Raw             json.RawMessage
 }
 
-// CatalogPage 是商品源的一页（第二期充实）。
+// CatalogPage 是商品源的一页。
 type CatalogPage struct {
 	Items      []CatalogItem
-	NextCursor string // 空 = 没有下一页
+	Skipped    []CatalogSkip // 这一页里读不懂的商品（价格格式不对之类）：跳过、不让整页失败
+	NextCursor string        // 空 = 没有下一页
+}
+
+// CatalogSkip 是一件被跳过的商品与原因。
+type CatalogSkip struct {
+	ExternalID, Reason string
 }
 
 // CatalogItem 是商品源上的一件商品（含规格），或推给渠道的一件商品。
 type CatalogItem struct {
+	ExternalID  string
+	Title       string
+	Description string // 富文本（HTML），与 keel 商品详情同一种
+	Status      CatalogStatus
+	ImageURLs   []string // 按顺序，第一张是主图
+	Variants    []CatalogVariant
+	Raw         json.RawMessage
+}
+
+// CatalogStatus 是商品在商品源上的状态。
+type CatalogStatus int8
+
+const (
+	CatalogActive   CatalogStatus = iota + 1 // 在卖
+	CatalogDraft                             // 草稿（没上架过）
+	CatalogArchived                          // 归档 / 下架
+)
+
+// CatalogVariant 是商品源上的一个规格（keel 的一个 SKU）。
+type CatalogVariant struct {
 	ExternalID string
-	Title      string
-	Raw        json.RawMessage
+	SKUCode    string            // 渠道上的货号，可能为空
+	Options    map[string]string // 规格名 → 值；只有一个默认规格的商品为空 map
+	PriceCents int64
+	ImageURL   string
+	Extra      json.RawMessage // 存进 channel_item_links.extra（Shopify：inventory_item_id / product_id / tracked）
+	Levels     []StockLevel    // 渠道上各门店的当前可售数：首次接上时作 keel 的初始库存与推送基线
+}
+
+// StockLevel 是渠道上一家门店的可售数。
+type StockLevel struct {
+	ExternalStoreID string
+	Qty             int32
 }
 
 // OnHand 是库存源（ERP）上一个（门店, SKU）的在手数。

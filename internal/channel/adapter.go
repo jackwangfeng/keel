@@ -23,6 +23,17 @@ type CatalogSource interface {
 	PullCatalog(ctx context.Context, b Binding, cursor string) (CatalogPage, error)
 }
 
+// CatalogItemSource：按外部 ID 拉一件商品（回调往往只给了 ID）。found = false 表示渠道上已经没有这件了（删了）。
+type CatalogItemSource interface {
+	PullItem(ctx context.Context, b Binding, externalID string) (item CatalogItem, found bool, err error)
+}
+
+// WebhookInstaller：把这个 binding 需要的回调订阅装到渠道上（幂等：已有同主题同地址的不重复建）。
+// 平台要靠后台手工配回调的渠道不实现它。
+type WebhookInstaller interface {
+	EnsureWebhooks(ctx context.Context, b Binding, callbackURL string) error
+}
+
 // StockSource：库存数据源（ERP，只读从库或视图）。
 type StockSource interface {
 	PullOnHand(ctx context.Context, b Binding, stores []StoreLink) ([]OnHand, error)

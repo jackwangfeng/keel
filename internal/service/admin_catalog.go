@@ -103,6 +103,9 @@ type AdminCatalogService struct {
 	repo  AdminCatalogRepository
 	store UploadStore
 
+	// channels 是渠道层（KEEL_CHANNELS 关着时为 nil）：改基准价、SKU 停售、商品上下架或删除之后让它重算。
+	channels *ChannelService
+
 	// inv 是库存服务（微服务拆分阶段 1a）：后台商品 / SKU 页的库存数、单店捷径的两条
 	// 改库存、建 SKU 的初始库存都经它。
 	inv inventory.Service
@@ -374,9 +377,19 @@ func (s *AdminCatalogService) DeleteProduct(ctx context.Context, id int64) error
 	if _, err := requireMerchantWide(ctx); err != nil {
 		return err
 	}
-	return s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+	err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
 		return tx.SoftDeleteProduct(ctx, id)
 	})
+	if err == nil {
+		s.channels.ProductChanged(ctx, id)
+	}
+	return err
+}
+
+// WithChannels 接上渠道层（nil 即不接）。
+func (s *AdminCatalogService) WithChannels(c *ChannelService) *AdminCatalogService {
+	s.channels = c
+	return s
 }
 
 // SetPublication 实现 POST /admin/products/{product_id}/publication。
@@ -428,6 +441,9 @@ func (s *AdminCatalogService) SetPublication(ctx context.Context, id int64, publ
 		})
 	if err != nil {
 		return repository.AdminProduct{}, false, err
+	}
+	if !replayed {
+		s.channels.ProductChanged(ctx, id)
 	}
 	// total_stock 在存档**之外**现取：存档里的是写那一刻的商品，库存数每次重放都按
 	// 当前值回（存档里本来也没有它 —— 它不在写事务里算）。
@@ -635,6 +651,9 @@ func (s *AdminCatalogService) UpdateSKU(ctx context.Context, skuID int64,
 	if err != nil {
 		return repository.AdminSKU{}, err
 	}
+	if in.PriceCents != nil || in.Status != nil {
+		s.channels.SKUsChanged(ctx, []int64{skuID})
+	}
 	// 回显里的库存数（跨门店合计）由库存服务给；写已提交，取不到按 0 回显并喊 WARN。
 	skus := []repository.AdminSKU{out}
 	echoStockBestEffort(ctx, "PATCH /admin/skus/{id}", fillSKUStock(ctx, s.inv, skus))
@@ -646,10 +665,14 @@ func (s *AdminCatalogService) DeleteSKU(ctx context.Context, skuID int64) error 
 	if _, err := requireMerchantWide(ctx); err != nil {
 		return err
 	}
-	return s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+	err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
 		_, e := tx.SoftDeleteSKU(ctx, skuID)
 		return e
 	})
+	if err == nil {
+		s.channels.SKUsChanged(ctx, []int64{skuID})
+	}
+	return err
 }
 
 // SetInventory 实现 PUT /admin/skus/{sku_id}/inventory。

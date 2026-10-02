@@ -50,6 +50,7 @@ type Adapter struct {
 	mu       sync.Mutex
 	pushes   [][]channel.Listing
 	failNext int                // 接下来几次 PushListings 整批返回可重试错误
+	failErr  error              // 编排的失败用哪个错误（nil = 一个普通的可重试错误）
 	conflict map[[2]int64]int32 // (门店, SKU) → 渠道上「被人改过」的现值，下一次推送报一次冲突
 	applied  map[[2]int64]int32 // 渠道上当前的可售数（只有生效的推送改它；冲突的那一次是被人改成的数）
 	prices   map[[2]int64]int64 // 渠道上当前的价格（同 applied）
@@ -88,9 +89,16 @@ func (a *Adapter) ParseInbound(b channel.Binding, r *http.Request, body []byte) 
 func mustHex(s string) []byte { b, _ := hex.DecodeString(s); return b }
 
 // FailNext 让接下来 n 次 PushListings 整批返回可重试错误。
-func (a *Adapter) FailNext(n int) { a.mu.Lock(); a.failNext = n; a.mu.Unlock() }
+func (a *Adapter) FailNext(n int) { a.FailNextWith(n, nil) }
 
-// LastPrice 是渠道上 (store, sku) 当前的价格（最近一次生效的推送）。
+// FailNextWith 让接下来 n 次 PushListings 整批返回 err（nil = 一个普通的可重试错误）。
+func (a *Adapter) FailNextWith(n int, err error) {
+	a.mu.Lock()
+	a.failNext, a.failErr = n, err
+	a.mu.Unlock()
+}
+
+// LastPrice 是渠道上 (store, sku) 当前的价格（最近一次生效、且 PushPrice 为真的推送）。
 func (a *Adapter) LastPrice(store, sku int64) (int64, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -136,6 +144,9 @@ func (a *Adapter) PushListings(_ context.Context, _ channel.Binding, ls []channe
 	defer a.mu.Unlock()
 	if a.failNext > 0 {
 		a.failNext--
+		if a.failErr != nil {
+			return nil, a.failErr
+		}
 		return nil, &channel.RetryableError{Err: errors.New("假渠道：编排的失败")}
 	}
 	cp := append([]channel.Listing(nil), ls...)
@@ -159,6 +170,9 @@ func (a *Adapter) PushListings(_ context.Context, _ channel.Binding, ls []channe
 			a.applied = map[[2]int64]int32{}
 		}
 		a.applied[k] = l.Qty
+		if !l.PushPrice {
+			continue
+		}
 		if a.prices == nil {
 			a.prices = map[[2]int64]int64{}
 		}

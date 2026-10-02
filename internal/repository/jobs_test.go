@@ -655,3 +655,95 @@ func TestPurgeRemovesOldDoneJobsButKeepsDeadLetters(t *testing.T) {
 			"排查「这件商品刚才为什么没索引」时没有任何痕迹可看", n)
 	}
 }
+
+// 限流不算失败：DeferJob 放回队列、撤回占位时那一次 attempts，于是一条一直被限流的任务永远不会进死信；
+// 限流解除后的真失败照旧计次。
+func TestDeferJobDoesNotSpendAttempts(t *testing.T) {
+	f := newJobsFixture(t, "defer", 1)
+	q := f.queueOf("defer")
+	ctx := context.Background()
+	if _, err := f.admin.Exec(ctx, `INSERT INTO jobs (merchant_id, queue, job_key, payload, max_attempts)
+		VALUES ($1, $2, 'k', '{}', 2)`, f.merchants[0], q); err != nil {
+		t.Fatal(err)
+	}
+	take := func(i int) int64 {
+		t.Helper()
+		jobs, err := f.repo.DequeueJobs(ctx, repository.DequeueRequest{Queue: q, Limit: 1, PerTenantInflight: 1, WorkerID: "w1"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(jobs) != 1 {
+			t.Fatalf("第 %d 次出队拿到 %d 条，期望 1 条", i, len(jobs))
+		}
+		return jobs[0].ID
+	}
+	var id int64
+	for i := 0; i < 5; i++ {
+		id = take(i)
+		if err := f.repo.DeferJob(ctx, id, "限流", 0); err != nil {
+			t.Fatalf("第 %d 次 DeferJob: %v", i, err)
+		}
+		status, attempts, lastErr, _, lockedBy := f.row(t, id)
+		if status != 0 || attempts != 0 || lockedBy != nil {
+			t.Fatalf("第 %d 次 DeferJob 之后 status=%d attempts=%d locked_by=%v，期望 0 / 0 / nil", i, status, attempts, lockedBy)
+		}
+		if lastErr == nil || *lastErr != "限流" {
+			t.Fatalf("last_error = %v，期望「限流」", lastErr)
+		}
+	}
+	// 真失败照旧计次：max_attempts = 2，第二次失败进死信。
+	id = take(5)
+	if err := f.repo.RetryJobCapped(ctx, id, "失败 1", time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.admin.Exec(ctx, `UPDATE jobs SET run_after = now() - interval '1 second' WHERE id = $1`, id); err != nil {
+		t.Fatal(err)
+	}
+	id = take(6)
+	if err := f.repo.RetryJobCapped(ctx, id, "失败 2", time.Millisecond); !errors.Is(err, repository.ErrJobDeadLettered) {
+		t.Fatalf("第二次真失败返回 %v，期望 ErrJobDeadLettered", err)
+	}
+}
+
+// DeferJob 的 after 生效：放回之后在 after 之前不出队。
+func TestDeferJobHonorsAfter(t *testing.T) {
+	f := newJobsFixture(t, "defer-after", 1)
+	q := f.queueOf("defer-after")
+	f.enqueueTo(t, f.merchants[0], q, "k")
+	ctx := context.Background()
+	jobs, err := f.repo.DequeueJobs(ctx, repository.DequeueRequest{Queue: q, Limit: 1, PerTenantInflight: 1, WorkerID: "w1"})
+	if err != nil || len(jobs) != 1 {
+		t.Fatalf("出队: %v / %d 条", err, len(jobs))
+	}
+	if err := f.repo.DeferJob(ctx, jobs[0].ID, "限流", time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	again, err := f.repo.DequeueJobs(ctx, repository.DequeueRequest{Queue: q, Limit: 1, PerTenantInflight: 1, WorkerID: "w1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(again) != 0 {
+		t.Fatal("DeferJob(1 小时) 之后马上又出队了")
+	}
+}
+
+// 审查 8：DeferJob 只动执行中的任务 —— 已经被回收、做完或进了死信的不能被老 worker 复活。
+func TestDeferJobLeavesNonRunningJobsAlone(t *testing.T) {
+	f := newJobsFixture(t, "defer-dead", 1)
+	q := f.queueOf("defer-dead")
+	f.enqueueTo(t, f.merchants[0], q, "k")
+	ctx := context.Background()
+	jobs, err := f.repo.DequeueJobs(ctx, repository.DequeueRequest{Queue: q, Limit: 1, PerTenantInflight: 1, WorkerID: "w1"})
+	if err != nil || len(jobs) != 1 {
+		t.Fatalf("出队: %v / %d 条", err, len(jobs))
+	}
+	if _, err := f.admin.Exec(ctx, `UPDATE jobs SET status = 3 WHERE id = $1`, jobs[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.repo.DeferJob(ctx, jobs[0].ID, "限流", 0); err != nil {
+		t.Fatal(err)
+	}
+	if status, _, _, _, _ := f.row(t, jobs[0].ID); status != 3 {
+		t.Fatalf("死信被 DeferJob 改成了 status=%d", status)
+	}
+}
