@@ -58,8 +58,22 @@ interface MenuItem {
     icon: (typeof sections)[number]["icon"];
 }
 
+// 有 available 的分区（例如渠道，按服务端开关）：挂载时各求一次，求出 true 之前不进菜单。
+// 失败一律当不可用，不弹错——菜单少一项不该让框架报错。
+const sectionAvailable = ref<Record<string, boolean>>({});
+for (const s of sections) {
+    if (s.available === undefined) continue;
+    s.available().then(
+        (ok) => {
+            sectionAvailable.value = { ...sectionAvailable.value, [s.key]: ok };
+        },
+        () => undefined,
+    );
+}
+
 const menu = computed<MenuItem[]>(() =>
     sections
+        .filter((s) => s.available === undefined || sectionAvailable.value[s.key] === true)
         .filter((s) => (s.platformOnly !== true || isPlatform.value) && sectionVisible(s.key))
         .flatMap((s) =>
             s.routes

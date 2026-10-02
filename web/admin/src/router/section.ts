@@ -34,6 +34,11 @@ export interface AdminSection {
      * 商家级操作员看到一个自己点不动的菜单项没有意义，而服务端那边是 403。
      */
     platformOnly?: boolean;
+    /**
+     * 这个分区在当前部署里开没开（例如渠道层由 KEEL_CHANNELS 开关）。不写 = 总是开。
+     * 主框架在渲染菜单前求一次；求出来之前、返回 false、或抛错都按不可用 —— 不弹错。
+     */
+    available?: () => Promise<boolean>;
 }
 
 /** 路由 meta 的形状。写成 interface 而不是散装字段，免得拼错了没人发现。 */

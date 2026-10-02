@@ -101,6 +101,8 @@ export const can = {
     seeStaffSection: (): boolean => role() !== ROLE.storeManager,
     /** 加 / 改 AI 员工、发 / 吊销密钥：只有本店管理员（AI 经营 M9）。 */
     manageAgents: (): boolean => role() === ROLE.admin,
+    /** 渠道账号、凭据、门店映射、规则、重新同步：只有管理员（服务端 requireMerchantAdmin）。 */
+    manageChannels: (): boolean => role() === ROLE.admin,
     /** 读经营简报：只有全店范围的人（管理员 / 操作员），与经营报表同一条线。 */
     seeAgentBriefs: (): boolean => merchantWide(),
     /** 读 AI 员工成绩单（AI 经营 M10 §4）：全店范围的人，与简报同一条线——店长据此决定要不要放手（M11 自动执行）。 */
