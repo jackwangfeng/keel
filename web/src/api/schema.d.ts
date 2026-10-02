@@ -15883,6 +15883,89 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/webhooks/channels/{binding_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 渠道回调（Shopify / 美团 / 饿了么……）
+         * @description 渠道适配层的统一回调入口：每个 binding（商家接的一个渠道账号）一个地址，
+         *     配在渠道后台的回调设置里。租户照旧从 Host 定，验签由该渠道的适配器做
+         *     （Shopify 的 `X-Shopify-Hmac-SHA256`、美团的 md5 签名……），请求体与头
+         *     原样交给适配器，所以这里不约束它们的形状。
+         *
+         *     事件按外部事件 ID 去重入库后**异步处理**，这里只负责尽快应答。
+         *     服务端未开启渠道层（`KEEL_CHANNELS` 关闭）时这条接口不存在（404）。
+         *
+         *     binding 不存在、验签失败、没配密钥一律返回空的 401，不泄露任何内部状态。
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    binding_id: number;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                    "application/x-www-form-urlencoded": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            responses: {
+                /**
+                 * @description 已受理（无论首次还是重复）。响应体是该渠道要求的应答
+                 *     （Shopify 为空，美团为 `{"code":0}`，各渠道不同）。
+                 *
+                 *     **验签通过之后的业务性结论也回 200**（事件解不开、binding 已停用）：
+                 *     渠道重推也没用，结论在服务端留日志。
+                 */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            [key: string]: unknown;
+                        };
+                        "text/plain": string;
+                    };
+                };
+                /** @description binding 不存在、签名验证失败或未配置密钥（不区分） */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description 未能入库，**请渠道重推**（基础设施故障）。 */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/coupons": {
         parameters: {
             query?: never;

@@ -183,6 +183,13 @@ var routes = []route{
 		// freight_cents 的挂账 00056 划掉了：下单时算好写进订单。
 	},
 	{
+		ContractPath:   "/webhooks/channels/{binding_id}",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "webhook_channel.go",
+		NoQueryParams: "binding 在路径里，报文与签名头原样交给该渠道的适配器验签（Shopify / 美团的签名都不在 query 里）",
+	},
+	{
 		ContractPath:   "/webhooks/payments/{channel}",
 		ContractMethod: "post",
 		HTTPMethod:     http.MethodPost,

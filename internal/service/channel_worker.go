@@ -319,4 +319,15 @@ func (s *ChannelService) markCredentialsBroken(ctx context.Context, bindingID in
 	s.log.ErrorContext(ctx, "渠道凭据失效，已停推送，请重新配置凭据后启用", "binding_id", bindingID, "err", cause)
 }
 
-// workInbound 在 channel_inbound.go。
+// workInbound 取一批回调事件按类别分发。
+func (s *ChannelService) workInbound(ctx context.Context) (int, error) {
+	jobs, err := s.dequeue(ctx, QueueChannelInbound)
+	if err != nil {
+		return 0, err
+	}
+	for _, j := range jobs {
+		s.handleInbound(tenant.NewContext(ctx, j.MerchantID), j)
+	}
+	return len(jobs), nil
+}
+

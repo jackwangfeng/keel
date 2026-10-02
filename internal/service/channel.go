@@ -61,6 +61,7 @@ type ChannelService struct {
 	tc        atomic.Value
 
 	workerID string
+	handlers map[channel.EventKind]InboundHandler
 }
 
 type channelCoord struct{ c dtm.Coordinator }

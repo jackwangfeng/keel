@@ -448,6 +448,10 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	// 退款回调：与支付回调同构（Host 定租户、HMAC 定真假、渠道流水号唯一）。
 	v1.POST("/webhooks/refunds/:channel",
 		handler.NewRefundWebhookHandler(refunds).Notify)
+	// 渠道回调（渠道适配层）：与支付回调同构。KEEL_CHANNELS 关闭时不注册（不变量「不配渠道零开销」）。
+	if ro.channels != nil {
+		v1.POST("/webhooks/channels/:binding_id", handler.NewChannelWebhookHandler(ro.channels).Notify)
+	}
 
 	// -----------------------------------------------------------------------
 	// 后台（契约约定 6：后台接口一律挂在 /admin/ 前缀下，与前台分开鉴权）

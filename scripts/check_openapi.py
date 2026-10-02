@@ -209,6 +209,8 @@ IDEMPOTENCY_EXEMPT = {
     '/webhooks/payments/{channel}': '渠道不会带我们的幂等头；幂等由 '
                                     '(channel, channel_txn_id) 唯一索引兜底',
     '/webhooks/refunds/{channel}':  '同上，靠 (channel, channel_refund_id)',
+    '/webhooks/channels/{binding_id}': '渠道（Shopify / 美团……）不会带我们的幂等头；幂等靠 '
+                                       'channel_inbound_events 的 (binding, 外部事件 ID) 唯一',
     '/admin/product-imports/preview': '无副作用；只解析与校验上传的表格，不写库。'
                                       '用 POST 只因要传文件（multipart）',
     # 消息通知的四条「标已读」：已读是一次**设置**（read_at 从空到有，已有则不动），

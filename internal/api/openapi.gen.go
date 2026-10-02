@@ -12201,6 +12201,13 @@ type GetUploadsUploadIdParams struct {
 	W *int `form:"w,omitempty" json:"w,omitempty"`
 }
 
+// PostWebhooksChannelsBindingIdJSONBody defines parameters for PostWebhooksChannelsBindingId.
+type PostWebhooksChannelsBindingIdJSONBody map[string]interface{}
+
+// PostWebhooksChannelsBindingIdFormdataBody defines parameters for PostWebhooksChannelsBindingId.
+type PostWebhooksChannelsBindingIdFormdataBody struct {
+}
+
 // PostWebhooksPaymentsChannelJSONBody defines parameters for PostWebhooksPaymentsChannel.
 type PostWebhooksPaymentsChannelJSONBody map[string]interface{}
 
@@ -12437,6 +12444,12 @@ type PostSearchEventsJSONRequestBody PostSearchEventsJSONBody
 
 // PostUploadsMultipartRequestBody defines body for PostUploads for multipart/form-data ContentType.
 type PostUploadsMultipartRequestBody PostUploadsMultipartBody
+
+// PostWebhooksChannelsBindingIdJSONRequestBody defines body for PostWebhooksChannelsBindingId for application/json ContentType.
+type PostWebhooksChannelsBindingIdJSONRequestBody PostWebhooksChannelsBindingIdJSONBody
+
+// PostWebhooksChannelsBindingIdFormdataRequestBody defines body for PostWebhooksChannelsBindingId for application/x-www-form-urlencoded ContentType.
+type PostWebhooksChannelsBindingIdFormdataRequestBody PostWebhooksChannelsBindingIdFormdataBody
 
 // PostWebhooksPaymentsChannelJSONRequestBody defines body for PostWebhooksPaymentsChannel for application/json ContentType.
 type PostWebhooksPaymentsChannelJSONRequestBody PostWebhooksPaymentsChannelJSONBody

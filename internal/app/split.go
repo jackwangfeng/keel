@@ -305,6 +305,12 @@ type routerOptions struct {
 	inventory inventory.Service
 	quotaSync *service.QuotaSync
 	uploads   service.UploadStore
+	channels  *service.ChannelService
+}
+
+// WithChannels 打开渠道层的路由（回调入口与后台渠道管理）。不给（KEEL_CHANNELS 关闭）时一条渠道路由都不注册。
+func WithChannels(c *service.ChannelService) RouterOption {
+	return func(o *routerOptions) { o.channels = c }
 }
 
 // WithInventory 指定公网路由用的库存服务实现。不给时是建在业务池上的进程内实现。
