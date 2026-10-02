@@ -66,11 +66,28 @@ func (s *AdminChannelService) GetChannelOrder(ctx context.Context, id int64) (Ch
 	if _, err := requireMerchantWide(ctx); err != nil {
 		return ChannelOrderView{}, err
 	}
+	return s.readChannelOrder(ctx, id, nil)
+}
+
+// actedChannelOrder 是动作（重试 / 接单 / 拒单 / 申请决定）之后的回包：与动作同一个门店范围判据，
+// 不套详情的全店范围 —— 否则门店管理员的动作已经生效了，回包却是 403。
+func (s *AdminChannelService) actedChannelOrder(ctx context.Context, id int64) (ChannelOrderView, error) {
+	return s.readChannelOrder(ctx, id, s.authorizeChannelOrder)
+}
+
+// readChannelOrder 读一张渠道单与它的申请；authorize 非空时在同一个事务里先判权限。
+func (s *AdminChannelService) readChannelOrder(ctx context.Context, id int64,
+	authorize func(context.Context, repository.Tx, repository.ChannelOrder) error) (ChannelOrderView, error) {
 	var v ChannelOrderView
 	err := s.ch.repo.WithTenant(ctx, func(tx repository.Tx) error {
 		co, err := tx.GetChannelOrder(ctx, id)
 		if err != nil {
 			return err
+		}
+		if authorize != nil {
+			if err := authorize(ctx, tx, co); err != nil {
+				return err
+			}
 		}
 		v = channelOrderView(co)
 		v.Requests, err = tx.ListChannelOrderRequests(ctx, id)
@@ -113,7 +130,7 @@ func (s *AdminChannelService) RetryChannelOrder(ctx context.Context, id int64) (
 	if err := s.ch.RetryChannelOrder(ctx, id); err != nil {
 		return ChannelOrderView{}, err
 	}
-	return s.GetChannelOrder(ctx, id)
+	return s.actedChannelOrder(ctx, id)
 }
 
 // AcceptChannelOrder 是「接单」（ErrChannelOrderNotAcceptable → 409，ErrChannelOrderAcceptFailed → 422）。
@@ -124,7 +141,7 @@ func (s *AdminChannelService) AcceptChannelOrder(ctx context.Context, id int64) 
 	if err := s.ch.AcceptChannelOrder(ctx, id); err != nil {
 		return ChannelOrderView{}, err
 	}
-	return s.GetChannelOrder(ctx, id)
+	return s.actedChannelOrder(ctx, id)
 }
 
 // RejectChannelOrder 是「拒单」（ErrChannelOrderNotAcceptable → 409）。
@@ -135,7 +152,7 @@ func (s *AdminChannelService) RejectChannelOrder(ctx context.Context, id int64, 
 	if err := s.ch.RejectChannelOrder(ctx, id, reason); err != nil {
 		return ChannelOrderView{}, err
 	}
-	return s.GetChannelOrder(ctx, id)
+	return s.actedChannelOrder(ctx, id)
 }
 
 // DecideChannelOrderRequest 是对平台申请的同意 / 拒绝（ErrChannelRequestDecided → 409）。返回申请所在的渠道单。
@@ -162,5 +179,5 @@ func (s *AdminChannelService) DecideChannelOrderRequest(ctx context.Context, req
 	if err := s.ch.DecideRequest(ctx, requestID, agree, staff.StaffID); err != nil {
 		return ChannelOrderView{}, err
 	}
-	return s.GetChannelOrder(ctx, channelOrderID)
+	return s.actedChannelOrder(ctx, channelOrderID)
 }

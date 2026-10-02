@@ -169,3 +169,35 @@ func TestAdminChannelOrders(t *testing.T) {
 		}
 	})
 }
+
+// 审查 5：门店管理员（只管北店）对北店的渠道单动作（按门店判权限）成功之后，回包读同一个门店范围 —— 200 带渠道单，
+// 而不是动作已经生效了却因为「详情要全店范围」回 403。
+func TestAdminChannelOrderStoreScopedActionResponse(t *testing.T) {
+	r := newFakeOrderRig(t, needsAccept, nil)
+	useEngine(t, app.Router(testPool, tenant.NewResolver(testPool, tenant.Config{BaseDomain: baseDomain}), testSigner,
+		testOrders, service.PaymentConfig{Sandbox: true}, conceptEmbedder{}, app.WithChannels(r.svc)))
+	host := r.cs.Host
+	var st api.Staff
+	decodeInto(t, postIdem(t, host, "/api/v1/admin/staff",
+		staffBody(fmt.Sprintf("co-store-%d@keel.test", r.b.ID), 4, nil, []int64{r.cs.NorthStore}), r.cs.Token),
+		http.StatusCreated, "建门店管理员", &st)
+	tok := staffSession(t, host, st.Id).Token
+	base := v1 + "/admin/channel-orders"
+
+	co1 := r.putAwaiting(t, "m-1", 1, 5*time.Minute)
+	co2 := r.putAwaiting(t, "m-2", 1, 5*time.Minute)
+	var d api.ChannelOrderDetail
+	decodeInto(t, reqAs(t, http.MethodPost, host, fmt.Sprintf("%s/%d/accept", base, co1), "", tok), http.StatusOK, "门店管理员接单", &d)
+	if d.Id != co1 {
+		t.Fatalf("接单回包 %+v", d)
+	}
+	decodeInto(t, reqAs(t, http.MethodPost, host, fmt.Sprintf("%s/%d/reject", base, co2), `{"reason":"打烊"}`, tok),
+		http.StatusOK, "门店管理员拒单", &d)
+	if d.Id != co2 || d.Status != 7 {
+		t.Fatalf("拒单回包 id=%d status=%d", d.Id, d.Status)
+	}
+	// 读的权限没变：门店管理员看详情仍是 403（待用户定）。
+	if w := getAs(t, host, fmt.Sprintf("%s/%d", base, co1), tok); w.Code != http.StatusForbidden {
+		t.Fatalf("门店管理员看详情：%d，期望 403（读的权限本次不改）", w.Code)
+	}
+}
