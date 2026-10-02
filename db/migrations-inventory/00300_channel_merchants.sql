@@ -23,6 +23,11 @@ BEGIN
         CREATE POLICY tenant ON channel_merchants
           USING (merchant_id = current_merchant()) WITH CHECK (merchant_id = current_merchant());
     END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'touch_channel_merchants_updated_at'
+                    AND tgrelid = 'channel_merchants'::regclass) THEN
+        CREATE TRIGGER touch_channel_merchants_updated_at
+            BEFORE UPDATE ON channel_merchants FOR EACH ROW EXECUTE FUNCTION touch_updated_at();
+    END IF;
     EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON channel_merchants TO %I', r);
 END $$;
 -- +goose StatementEnd

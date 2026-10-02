@@ -21,6 +21,8 @@ ALTER TABLE channel_merchants ENABLE ROW LEVEL SECURITY;
 ALTER TABLE channel_merchants FORCE  ROW LEVEL SECURITY;
 CREATE POLICY tenant ON channel_merchants
   USING (merchant_id = current_merchant()) WITH CHECK (merchant_id = current_merchant());
+CREATE TRIGGER touch_channel_merchants_updated_at
+    BEFORE UPDATE ON channel_merchants FOR EACH ROW EXECUTE FUNCTION touch_updated_at();
 GRANT SELECT, INSERT, UPDATE, DELETE ON channel_merchants TO keel_app;
 
 -- +goose Down
