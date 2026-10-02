@@ -371,3 +371,12 @@
 - 定时全量拉商品（只有启用时首拉 + 回调；回调丢了靠停用再启用补，第五期对账再做定时）。
 - `inventory_levels/update`（店员在 Shopify 改数）：只留档；CAS 冲突时会被 keel 覆盖，差异记在 `last_error`。
 - 订单、履约（第三期）。
+
+## 执行中偏离计划的地方（2026-10-02）
+
+- **商品源 binding 推送不看 keel 的上架状态**（Task 2 补）：`ChannelSKUOffers` 原先把「商品已上架」算进能不能卖，而拉进来的新商品在 keel 是草稿 —— 第一次推送就会把 Shopify 现货推成 0。改为返回三个因素（SKU 启用 / 商品没删 / 已上架），`SKUOffer.Sellable(catalogOwned)` 对商品源 binding 不看上架。keel 的上架仍由 keel 决定（上架要过广告法检查，不能被同步绕过）；Shopify 归档 / 删除 → keel 下架。
+- **改价 / 停售 / 上下架触发重算**（Task 2 补）：第一期只有改渠道规则会重算，keel 里改门店价、大区价、基准价、SKU 停售、商品上下架或删除都不会。加 `ChannelService.SKUsChanged / ProductChanged`，`AdminStoreService` / `AdminCatalogService` 经 `WithChannels` 接上（KEEL_CHANNELS 关着时为 nil，nil 接收者直接返回）。启用中的 binding 改 config 也整店重算（价格源门店可能变了）。
+- **各门店可售数单独查**（Task 5 补）：实测 products 带 inventoryLevels 一页 10 件就 710 点（单条上限 1000），改为 products 不带水位（25 件 308 点）+ `nodes(ids:)` 每 50 个 item 一条（15 点）。默认页大小 25。
+- **迁移 00302**（Task 8 补）：`uploads.chk_upload_owner` 只允许员工 / 买家二选一，系统下载的图没有上传者。加 `channel_binding_id`（复合外键），约束改为 `num_nonnulls(...) = 1`；数据模型文档同步。
+- 模拟平台没有单独的 `server_test.go`：它被适配器测试全覆盖（每个操作都有用例）。
+- 改价同组有一条出错时按整组没生效处理（同库存），其余条目记「同批出错」重推。

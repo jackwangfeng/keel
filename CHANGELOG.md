@@ -39,7 +39,8 @@ so "which one is running?" never depends on anyone's memory.
 
 ## [Unreleased]
 
-Core migrations `00300` (`channel_merchants`, also in the inventory database) and `00301` (channel tables).
+Core migrations `00300` (`channel_merchants`, also in the inventory database), `00301` (channel tables) and
+`00302` (`uploads.channel_binding_id`: an upload's owner may now be a channel account).
 
 ### Added
 
@@ -47,7 +48,7 @@ Core migrations `00300` (`channel_merchants`, also in the inventory database) an
   designed for the union of what Shopify, Meituan Shangou and Ele.me Retail need (and, later, a supermarket ERP),
   split by role — catalog source, stock source, sales outlet, sales sink — with capability flags so the generic
   code never branches on a channel's name. Design: `docs/superpowers/specs/2026-10-02-channel-adapter-design.md`.
-  No real adapter ships yet; Shopify is next.
+  Phase 1 shipped no real adapter; Shopify arrives in phase 2 below.
 - One stock, per-channel views: each channel publishes `clamp(floor(available × ratio) − safety stock, 0, cap)`,
   configurable per channel, per store and per SKU, plus per-channel pricing (markup or a fixed SKU price) on top
   of the store's effective price. When a SKU's sellable quantity changes, the inventory service sends a dtmrs
@@ -60,6 +61,28 @@ Core migrations `00300` (`channel_merchants`, also in the inventory database) an
 - Admin API under `/admin/channel-kinds` and `/admin/channel-bindings`: accounts, write-only credentials, store and
   SKU mappings, stock allocation and price rules, and the last values pushed. Reads need a shop-wide role, writes
   need an administrator.
+
+- **Sales-channel adapter layer, phase 2: Shopify catalog and stock.** A Shopify adapter (Admin GraphQL
+  `2026-10`, client-credentials tokens renewed before their 24-hour expiry) acting as both catalog source and sales
+  outlet. Enabling a Shopify account pulls its products into keel (new products are created as drafts under the
+  account's `default_category_id`; variants whose SKU code already exists in keel are adopted instead of
+  duplicated), takes each new SKU's initial stock from Shopify so the first push is a no-op rather than a wipe,
+  downloads product images from Shopify's CDN, installs the webhooks it needs, and follows `products/*` callbacks.
+  From then on keel is authoritative for stock and price: quantities go out through `inventorySetQuantities` with
+  compare-and-set (a conflicting row is re-read and overwritten; the rest of its batch is resubmitted in the same
+  call), prices through `productVariantsBulkUpdate` from one designated store per account.
+- Changing a store, region or base price, disabling a SKU, or publishing / unpublishing / deleting a product now
+  re-evaluates what every sales channel shows (previously only channel rules did).
+- Rate limiting by a platform no longer counts towards a channel job's retry budget, and adapter error text is
+  scrubbed of the account's credentials before it is stored or logged.
+- A test-only Shopify simulator (`internal/channel/shopify/shopifytest`) and opt-in tests against a real
+  development store (`KEEL_SHOPIFY_LIVE=1`).
+
+### Known limitations
+
+- Shopify orders are not imported yet (phase 3): a sale made on Shopify is overwritten by keel's next push for that
+  SKU. Prices are pushed as-is, with no currency conversion. Fields managed by Shopify are not yet locked in the
+  admin UI — an edit there is overwritten by the next sync.
 
 ### Invariant
 

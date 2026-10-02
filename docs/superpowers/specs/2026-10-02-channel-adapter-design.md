@@ -250,7 +250,7 @@ core：对每个启用的销售渠道 binding 按规则算对外可售数
 - **美团闪购服务商通道**：二手资料称已对服务商关闭对接，未核实；对外只说「接口对齐、有模拟适配器」。
 - **美团 / 饿了么接口细节**：文档站需登录，公网拿不到正文；签名原文、回调验签字段、状态码全集、批量与 QPS 限制、部分退款 API、店铺绑定流程都待拿到账号后核实。饿了么零售已更名「淘宝闪购零售开放平台」，很多二手资料基于旧外卖 openapi。
 - **美团配送回调与订单回调是两套平台**（青云聚信 dap.meituan.com vs 闪购）；如果以后接美团配送，单独一个适配器角色，不假设一家平台一套签名。
-- **Shopify 未完全核实**：Dev Dashboard 应用 token 24 小时过期（二手）；`inventorySetQuantities` 单次条数上限（二手称 250）；webhook 重试次数与时长；开发店限流档位。实现按保守值（每批 250、按 `throttleStatus` 退避、token 按过期续期）。
+- **Shopify（2026-10-02 在开发店上实测，第二期按此实现）**：client credentials 换的 token `expires_in = 86399`（24 小时）；`inventorySetQuantities` 冲突码 `CHANGE_FROM_QUANTITY_STALE`、**一批里一条出错整批不生效**、`changeFromQuantity: null` 跳过比对；限流桶 4000 点、每秒回 200；单条查询成本上限 1000（products 带 inventoryLevels 一页 10 件就 710 点，所以水位改用 `nodes(ids:)` 单查）；webhook 订阅字段是 `uri`。仍未核实：`inventorySetQuantities` 单次条数上限（按 250）、webhook 重试次数与时长。
 
 ## 14. 调研依据
 
@@ -263,4 +263,4 @@ core：对每个启用的销售渠道 binding 按规则算对外可售数
 2. 在 Dev Dashboard 建应用，装到这家开发店；scope：`read_products`、`write_inventory`、`read_locations`、`read_orders`、`write_fulfillments`（写 scope 含读）。
 3. 在 API access requests 里勾选订单收货人所需的受保护客户数据字段。
 4. 把 Client ID / Client Secret / 店铺域名写进本机 `~/.config/keel/shopify-dev`（0600），不经对话传递。
-5. webhook 回调地址用演示站公网域名（第二期接入时给出具体路径）。
+5. webhook 回调地址：`https://<演示站域名>/api/v1/webhooks/channels/<binding_id>`。在 binding 的 `config` 里配 `webhook_base_url`（`https://<演示站域名>`），启用时首拉商品顺带自动装订阅（`PRODUCTS_*`、`INVENTORY_LEVELS_UPDATE`、`APP_UNINSTALLED`）。binding 其余约定：`external_account` = 店铺域名，`secrets` = `{"client_id","client_secret"}`，`config.default_category_id` 必填（新商品挂哪个类目），`config.price_store_id` 可选（价格从哪家门店出，缺省为映射门店里 id 最小的）。
