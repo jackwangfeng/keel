@@ -41,6 +41,7 @@ type AgentAutoPolicy struct {
 	UpdatedBy        *int64
 	CreatedAt        pgtype.Timestamptz
 	UpdatedAt        pgtype.Timestamptz
+	MaxRatioStepBp   int32
 }
 
 // AI 员工写的经营简报（00092，AI 经营 M9）。

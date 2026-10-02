@@ -122,8 +122,8 @@ func TestAutoPolicyExecutesWithinLimits(t *testing.T) {
 	}
 	decodeInto(t, getAs(t, cs.Host, fmt.Sprintf("/api/v1/admin/agents/%d/auto-policies", a.Id), cs.Token),
 		http.StatusOK, "策略列表", &list)
-	if len(list.Items) != 4 {
-		t.Fatalf("四种可自动执行的种类都应列出：%+v", list.Items)
+	if len(list.Items) != 5 {
+		t.Fatalf("五种可自动执行的种类都应列出：%+v", list.Items)
 	}
 }
 

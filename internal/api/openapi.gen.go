@@ -380,15 +380,18 @@ func (e AdminStoreStatus) Valid() bool {
 
 // Defines values for AgentAutoPolicyKind.
 const (
-	AgentAutoPolicyKindCoupon          AgentAutoPolicyKind = "coupon"
-	AgentAutoPolicyKindFlashPrice      AgentAutoPolicyKind = "flash_price"
-	AgentAutoPolicyKindInventoryAdjust AgentAutoPolicyKind = "inventory_adjust"
-	AgentAutoPolicyKindProductCopy     AgentAutoPolicyKind = "product_copy"
+	AgentAutoPolicyKindChannelStockRule AgentAutoPolicyKind = "channel_stock_rule"
+	AgentAutoPolicyKindCoupon           AgentAutoPolicyKind = "coupon"
+	AgentAutoPolicyKindFlashPrice       AgentAutoPolicyKind = "flash_price"
+	AgentAutoPolicyKindInventoryAdjust  AgentAutoPolicyKind = "inventory_adjust"
+	AgentAutoPolicyKindProductCopy      AgentAutoPolicyKind = "product_copy"
 )
 
 // Valid indicates whether the value is a known member of the AgentAutoPolicyKind enum.
 func (e AgentAutoPolicyKind) Valid() bool {
 	switch e {
+	case AgentAutoPolicyKindChannelStockRule:
+		return true
 	case AgentAutoPolicyKindCoupon:
 		return true
 	case AgentAutoPolicyKindFlashPrice:
@@ -425,16 +428,19 @@ func (e AgentCreateRequestRole) Valid() bool {
 
 // Defines values for AgentProposalKind.
 const (
-	AgentProposalKindCoupon          AgentProposalKind = "coupon"
-	AgentProposalKindFlashPrice      AgentProposalKind = "flash_price"
-	AgentProposalKindInventoryAdjust AgentProposalKind = "inventory_adjust"
-	AgentProposalKindProductCopy     AgentProposalKind = "product_copy"
-	AgentProposalKindRefundDecision  AgentProposalKind = "refund_decision"
+	AgentProposalKindChannelStockRule AgentProposalKind = "channel_stock_rule"
+	AgentProposalKindCoupon           AgentProposalKind = "coupon"
+	AgentProposalKindFlashPrice       AgentProposalKind = "flash_price"
+	AgentProposalKindInventoryAdjust  AgentProposalKind = "inventory_adjust"
+	AgentProposalKindProductCopy      AgentProposalKind = "product_copy"
+	AgentProposalKindRefundDecision   AgentProposalKind = "refund_decision"
 )
 
 // Valid indicates whether the value is a known member of the AgentProposalKind enum.
 func (e AgentProposalKind) Valid() bool {
 	switch e {
+	case AgentProposalKindChannelStockRule:
+		return true
 	case AgentProposalKindCoupon:
 		return true
 	case AgentProposalKindFlashPrice:
@@ -2234,16 +2240,19 @@ func (e GetAdminAgentProposalsParamsStatus) Valid() bool {
 
 // Defines values for GetAdminAgentProposalsParamsKind.
 const (
-	GetAdminAgentProposalsParamsKindCoupon          GetAdminAgentProposalsParamsKind = "coupon"
-	GetAdminAgentProposalsParamsKindFlashPrice      GetAdminAgentProposalsParamsKind = "flash_price"
-	GetAdminAgentProposalsParamsKindInventoryAdjust GetAdminAgentProposalsParamsKind = "inventory_adjust"
-	GetAdminAgentProposalsParamsKindProductCopy     GetAdminAgentProposalsParamsKind = "product_copy"
-	GetAdminAgentProposalsParamsKindRefundDecision  GetAdminAgentProposalsParamsKind = "refund_decision"
+	GetAdminAgentProposalsParamsKindChannelStockRule GetAdminAgentProposalsParamsKind = "channel_stock_rule"
+	GetAdminAgentProposalsParamsKindCoupon           GetAdminAgentProposalsParamsKind = "coupon"
+	GetAdminAgentProposalsParamsKindFlashPrice       GetAdminAgentProposalsParamsKind = "flash_price"
+	GetAdminAgentProposalsParamsKindInventoryAdjust  GetAdminAgentProposalsParamsKind = "inventory_adjust"
+	GetAdminAgentProposalsParamsKindProductCopy      GetAdminAgentProposalsParamsKind = "product_copy"
+	GetAdminAgentProposalsParamsKindRefundDecision   GetAdminAgentProposalsParamsKind = "refund_decision"
 )
 
 // Valid indicates whether the value is a known member of the GetAdminAgentProposalsParamsKind enum.
 func (e GetAdminAgentProposalsParamsKind) Valid() bool {
 	switch e {
+	case GetAdminAgentProposalsParamsKindChannelStockRule:
+		return true
 	case GetAdminAgentProposalsParamsKindCoupon:
 		return true
 	case GetAdminAgentProposalsParamsKindFlashPrice:
@@ -3825,10 +3834,13 @@ type AgentAutoPolicy struct {
 	Enabled          bool                `json:"enabled"`
 	Kind             AgentAutoPolicyKind `json:"kind"`
 	MaxDiscountCents int64               `json:"max_discount_cents"`
-	MaxUnits         int32               `json:"max_units"`
-	MinDiscountRate  int32               `json:"min_discount_rate"`
-	UpdatedAt        *time.Time          `json:"updated_at,omitempty"`
-	UpdatedBy        *int64              `json:"updated_by,omitempty"`
+
+	// MaxRatioStepBp channel_stock_rule 每条改动的比例变化上限（万分比，00332）；不给 = 0 = 不自动执行这种提案
+	MaxRatioStepBp  *int32     `json:"max_ratio_step_bp,omitempty"`
+	MaxUnits        int32      `json:"max_units"`
+	MinDiscountRate int32      `json:"min_discount_rate"`
+	UpdatedAt       *time.Time `json:"updated_at,omitempty"`
+	UpdatedBy       *int64     `json:"updated_by,omitempty"`
 }
 
 // AgentAutoPolicyKind defines model for AgentAutoPolicy.Kind.
@@ -3839,8 +3851,11 @@ type AgentAutoPolicyInput struct {
 	DailyLimit       int32 `json:"daily_limit"`
 	Enabled          bool  `json:"enabled"`
 	MaxDiscountCents int64 `json:"max_discount_cents"`
-	MaxUnits         int32 `json:"max_units"`
-	MinDiscountRate  int32 `json:"min_discount_rate"`
+
+	// MaxRatioStepBp channel_stock_rule 每条改动的比例变化上限（万分比，00332）；不给 = 0 = 不自动执行这种提案
+	MaxRatioStepBp  *int32 `json:"max_ratio_step_bp,omitempty"`
+	MaxUnits        int32  `json:"max_units"`
+	MinDiscountRate int32  `json:"min_discount_rate"`
 }
 
 // AgentBrief defines model for AgentBrief.
@@ -3932,10 +3947,13 @@ type AgentProposal struct {
 	Id             int64      `json:"id"`
 
 	// Kind `inventory_adjust` 加库存（M9）；M10：`flash_price` 限时折扣、`coupon` 发券、`product_copy` 改标题 / 副标题、
-	// `refund_decision` 售后审核（同意 / 驳回）。营销与商品类是全店的（没有 `store_id`），批准要全店范围
+	// `refund_decision` 售后审核（同意 / 驳回）；`channel_stock_rule` 调一个销售渠道在一家门店的库存分配规则。
+	// 营销、商品与渠道分配类是全店的（没有 `store_id`），批准要全店范围
 	Kind AgentProposalKind `json:"kind"`
 
-	// Outcome 执行后复盘（00122）：{verdict: positive|neutral|negative, explanation, 各种类的指标…}。还没到点时不出现
+	// Outcome 执行后复盘（00122）：{verdict: positive|neutral|negative, explanation, 各种类的指标…}。还没到点时不出现。
+	// `channel_stock_rule` 另有 cells: [{binding_id, store_id, sku_id, direction: up|down|same, before: {held_zero_hours,
+	// empty_zero_hours, stockout_rejects, sold, net_cents}, after: {…}, excluded_reason?}]
 	Outcome   *map[string]interface{} `json:"outcome,omitempty"`
 	OutcomeAt *time.Time              `json:"outcome_at,omitempty"`
 
@@ -3943,12 +3961,16 @@ type AgentProposal struct {
 	// `flash_price` {name, store_id?, items: [{sku_id, discount_rate}], starts_at, ends_at}；
 	// `coupon` {name, coupon_type, threshold_cents, discount_cents, discount_rate, max_discount_cents,
 	// valid_days, total_count, per_user_limit, claimable}；`product_copy` {product_id, title?, subtitle?,
-	// before_title, before_subtitle?}；`refund_decision` {refund_no, action, reject_reason?, amount_cents}
+	// before_title, before_subtitle?}；`refund_decision` {refund_no, action, reject_reason?, amount_cents}；
+	// `channel_stock_rule` {binding_id, binding_name, store_id, store_name, changes: [{sku_id?（空 = 门店级）, ratio_bp,
+	// safety_qty, cap_qty?, prev: {ratio_bp, safety_qty, cap_qty?, level}}], preview: [{sku_id, available,
+	// before_qty, after_qty}]（提案时按当时 keel 可售试算的对外可售数，至多 40 格）}
 	Payload      map[string]interface{} `json:"payload"`
 	RejectReason *string                `json:"reject_reason,omitempty"`
 
 	// Result 执行结果：加库存 {before_available, after_available}；M10 各种提案 {detail: {promotion_id | coupon_template_id |
-	// before_title/after_title | refund_status …}}；失败 {error_type, error}
+	// before_title/after_title | refund_status | channel_stock_rule 的 {binding_id, store_id, applied, already}…}}；
+	// 失败 {error_type, error}（`stale` = 提案依据的规则已被人改过，error 里写明是哪一格）
 	Result *map[string]interface{} `json:"result,omitempty"`
 	SkuId  *int64                  `json:"sku_id,omitempty"`
 
@@ -3965,7 +3987,8 @@ type AgentProposal struct {
 }
 
 // AgentProposalKind `inventory_adjust` 加库存（M9）；M10：`flash_price` 限时折扣、`coupon` 发券、`product_copy` 改标题 / 副标题、
-// `refund_decision` 售后审核（同意 / 驳回）。营销与商品类是全店的（没有 `store_id`），批准要全店范围
+// `refund_decision` 售后审核（同意 / 驳回）；`channel_stock_rule` 调一个销售渠道在一家门店的库存分配规则。
+// 营销、商品与渠道分配类是全店的（没有 `store_id`），批准要全店范围
 type AgentProposalKind string
 
 // AgentProposalStatus 10 待处理 / 15 执行中 / 20 已执行 / 30 已驳回 / 40 执行失败 / 50 已过期

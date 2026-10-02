@@ -2143,6 +2143,248 @@
     }
   },
   {
+    "description": "提一条调渠道库存分配的提案：改一个销售渠道在一家门店（或门店 × SKU）的分配比例 / 安全库存 / 封顶。先调 channel_allocation_review，把它给的 rule 与 rule_level 原样填进 prev（依据变了会被拒，409）。不会立即执行：人批准后 Keel 改规则并重新推送对外可售数；提案详情里有按当前可售试算的对外可售数前后对比。需要全店范围的 AI 员工；渠道层没开时拒收（409）。keel 自己缺货的 SKU 不要调分配——缺的是货。",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "binding_id": {
+          "description": "销售渠道（channel_allocation_review 的 binding_id）",
+          "type": "integer"
+        },
+        "changes": {
+          "description": "改动，1–20 条",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "cap_qty": {
+                "description": "对外至多挂多少件；不给 = 不封顶",
+                "maximum": 2147483647,
+                "minimum": -2147483648,
+                "type": [
+                  "null",
+                  "integer"
+                ]
+              },
+              "prev": {
+                "additionalProperties": false,
+                "description": "你看到的当前生效规则（channel_allocation_review 的 rule 与 rule_level）；与现在不一致会被拒（409），重新调工具",
+                "properties": {
+                  "cap_qty": {
+                    "maximum": 2147483647,
+                    "minimum": -2147483648,
+                    "type": [
+                      "null",
+                      "integer"
+                    ]
+                  },
+                  "level": {
+                    "description": "binding / store / sku / default：照抄 channel_allocation_review 那一行的 rule_level",
+                    "type": "string"
+                  },
+                  "ratio_bp": {
+                    "maximum": 2147483647,
+                    "minimum": -2147483648,
+                    "type": "integer"
+                  },
+                  "safety_qty": {
+                    "maximum": 2147483647,
+                    "minimum": -2147483648,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "ratio_bp",
+                  "safety_qty",
+                  "level"
+                ],
+                "type": "object"
+              },
+              "ratio_bp": {
+                "description": "分给这个渠道的比例，万分比 0–10000（9000 = 90%）",
+                "maximum": 2147483647,
+                "minimum": -2147483648,
+                "type": "integer"
+              },
+              "safety_qty": {
+                "description": "安全库存：对外可售再减去这么多件，0–100000",
+                "maximum": 2147483647,
+                "minimum": -2147483648,
+                "type": "integer"
+              },
+              "sku_id": {
+                "description": "改这个 SKU 在这家门店的分配；不给 = 改门店级（这家门店在这个渠道上的默认分配）",
+                "type": [
+                  "null",
+                  "integer"
+                ]
+              }
+            },
+            "required": [
+              "ratio_bp",
+              "safety_qty",
+              "prev"
+            ],
+            "type": "object"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        },
+        "evidence": {
+          "description": "证据（markdown）：引用工具返回的数字，能被人复现；10–8000 字",
+          "type": "string"
+        },
+        "expected_impact": {
+          "description": "预计影响，≤2000 字",
+          "type": "string"
+        },
+        "store_id": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "binding_id",
+        "store_id",
+        "changes",
+        "evidence"
+      ],
+      "type": "object"
+    },
+    "name": "propose_channel_stock_rule",
+    "outputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "agent_name": {
+          "type": "string"
+        },
+        "agent_staff_id": {
+          "type": "integer"
+        },
+        "auto_approved": {
+          "type": [
+            "null",
+            "boolean"
+          ]
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "decided_at": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "decided_by": {
+          "type": [
+            "null",
+            "integer"
+          ]
+        },
+        "decided_by_name": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "evidence": {
+          "type": "string"
+        },
+        "executed_at": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "expected_impact": {
+          "type": "string"
+        },
+        "expires_at": {
+          "type": "string"
+        },
+        "id": {
+          "type": "integer"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "outcome": {
+          "additionalProperties": true,
+          "type": [
+            "null",
+            "object"
+          ]
+        },
+        "outcome_at": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "reject_reason": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "result": {
+          "additionalProperties": true,
+          "type": [
+            "null",
+            "object"
+          ]
+        },
+        "sku_id": {
+          "type": [
+            "null",
+            "integer"
+          ]
+        },
+        "status": {
+          "type": "integer"
+        },
+        "store_id": {
+          "type": [
+            "null",
+            "integer"
+          ]
+        },
+        "store_name": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "title": {
+          "type": "string"
+        },
+        "updated_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "agent_name",
+        "agent_staff_id",
+        "created_at",
+        "evidence",
+        "expected_impact",
+        "expires_at",
+        "id",
+        "kind",
+        "payload",
+        "status",
+        "title",
+        "updated_at"
+      ],
+      "type": "object"
+    }
+  },
+  {
     "description": "提一条发券提案：建一张券（满减 / 折扣 / 立减），可放进领券中心。有效期二选一：领取后 N 天（valid_days），或固定时段（valid_start_at + valid_end_at，比如只在国庆 7 天能用）。不会立即执行：人批准后 Keel 建券。需要全店范围的 AI 员工。面额至多 100 元、发行量至多 10000。",
     "inputSchema": {
       "additionalProperties": false,

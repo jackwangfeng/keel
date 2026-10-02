@@ -570,6 +570,8 @@ func (s *AgentProposalService) execute(ctx context.Context, p repository.AgentPr
 		return s.execProductCopy(ctx, p)
 	case ProposalKindRefundDecision:
 		return s.execRefundDecision(ctx, p)
+	case ProposalKindChannelStockRule:
+		return s.execChannelStockRule(ctx, p)
 	}
 	return ProposalResult{}, fmt.Errorf("%w: 不认识的提案种类 %q", ErrProposalBadRequest, p.Kind)
 }

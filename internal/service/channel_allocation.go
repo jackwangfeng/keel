@@ -146,10 +146,10 @@ func (s *ChannelService) AllocationReviewAt(ctx context.Context, in AllocationRe
 			}
 			rules[b.ID] = toStockRules(rs)
 		}
-		if sold, err = tx.ChannelSoldBySource(ctx, in.StoreID, since); err != nil {
+		if sold, err = tx.ChannelSoldBySource(ctx, in.StoreID, since, now); err != nil {
 			return err
 		}
-		if rejects, err = tx.ChannelStockoutRejects(ctx, in.StoreID, since); err != nil {
+		if rejects, err = tx.ChannelStockoutRejects(ctx, in.StoreID, since, now); err != nil {
 			return err
 		}
 		if len(skuIDs) == 0 {

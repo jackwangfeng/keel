@@ -14,15 +14,16 @@ import {
     safeRatePercent,
 } from "./agentProposalRules.ts";
 
-test("提案种类标签：五种都有，且不撞", () => {
+test("提案种类标签：六种都有，且不撞", () => {
     assert.deepEqual(Object.keys(KIND_LABEL).sort(), [
+        "channel_stock_rule",
         "coupon",
         "flash_price",
         "inventory_adjust",
         "product_copy",
         "refund_decision",
     ]);
-    assert.equal(new Set(Object.values(KIND_LABEL)).size, 5);
+    assert.equal(new Set(Object.values(KIND_LABEL)).size, 6);
 });
 
 test("verdict 标签三档颜色不同", () => {

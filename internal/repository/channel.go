@@ -185,10 +185,10 @@ type ChannelTx interface {
 	PurgeChannelZeroSpans(ctx context.Context, before time.Time, limit int) (int64, error)
 	// ChannelZeroSpanSKUs：这家门店 from 之后在任一渠道挂过零的 SKU。
 	ChannelZeroSpanSKUs(ctx context.Context, storeID int64, from time.Time) ([]int64, error)
-	// ChannelSoldBySource：这家门店 since 以来各渠道卖出的件数（自营 BindingID = 0），口径同 StoreSKUSales。
-	ChannelSoldBySource(ctx context.Context, storeID int64, since time.Time) ([]ChannelSKUQty, error)
-	// ChannelStockoutRejects：这家门店 since 以来渠道单因缺货没接成的件数（判据见 db/queries/channels.sql）。
-	ChannelStockoutRejects(ctx context.Context, storeID int64, since time.Time) ([]ChannelSKUQty, error)
+	// ChannelSoldBySource：这家门店 [from, to) 里各渠道卖出的件数（自营 BindingID = 0），口径同 StoreSKUSales。
+	ChannelSoldBySource(ctx context.Context, storeID int64, from, to time.Time) ([]ChannelSKUQty, error)
+	// ChannelStockoutRejects：这家门店 [from, to) 里渠道单因缺货没接成的件数（判据见 db/queries/channels.sql）。
+	ChannelStockoutRejects(ctx context.Context, storeID int64, from, to time.Time) ([]ChannelSKUQty, error)
 	// ChannelAllocationSKUs：渠道分配要的 SKU 信息（名字、成本价、上架时间），删了的不列。
 	ChannelAllocationSKUs(ctx context.Context, skuIDs []int64) ([]ChannelAllocationSKU, error)
 
@@ -577,8 +577,9 @@ func (t tenantTx) ChannelZeroSpanSKUs(ctx context.Context, storeID int64, from t
 	return t.q.ChannelZeroSpanSKUs(ctx, db.ChannelZeroSpanSKUsParams{StoreID: storeID, FromAt: pgtype.Timestamptz{Time: from, Valid: true}})
 }
 
-func (t tenantTx) ChannelSoldBySource(ctx context.Context, storeID int64, since time.Time) ([]ChannelSKUQty, error) {
-	rows, err := t.q.ChannelSoldBySource(ctx, db.ChannelSoldBySourceParams{StoreID: storeID, Since: pgtype.Timestamptz{Time: since, Valid: true}})
+func (t tenantTx) ChannelSoldBySource(ctx context.Context, storeID int64, from, to time.Time) ([]ChannelSKUQty, error) {
+	rows, err := t.q.ChannelSoldBySource(ctx, db.ChannelSoldBySourceParams{StoreID: storeID, Since: pgtype.Timestamptz{Time: from, Valid: true},
+		Until: pgtype.Timestamptz{Time: to, Valid: true}})
 	if err != nil {
 		return nil, err
 	}
@@ -589,8 +590,9 @@ func (t tenantTx) ChannelSoldBySource(ctx context.Context, storeID int64, since 
 	return out, nil
 }
 
-func (t tenantTx) ChannelStockoutRejects(ctx context.Context, storeID int64, since time.Time) ([]ChannelSKUQty, error) {
-	rows, err := t.q.ChannelStockoutRejects(ctx, db.ChannelStockoutRejectsParams{StoreID: storeID, Since: pgtype.Timestamptz{Time: since, Valid: true}})
+func (t tenantTx) ChannelStockoutRejects(ctx context.Context, storeID int64, from, to time.Time) ([]ChannelSKUQty, error) {
+	rows, err := t.q.ChannelStockoutRejects(ctx, db.ChannelStockoutRejectsParams{StoreID: storeID, Since: pgtype.Timestamptz{Time: from, Valid: true},
+		Until: pgtype.Timestamptz{Time: to, Valid: true}})
 	if err != nil {
 		return nil, err
 	}

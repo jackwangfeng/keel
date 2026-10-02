@@ -30,6 +30,7 @@ export const KIND_LABEL: Record<AgentProposalKind, string> = {
     coupon: "发券",
     product_copy: "改文案",
     refund_decision: "售后审核",
+    channel_stock_rule: "调渠道分配",
 };
 
 /** 执行后复盘的结论（outcome.verdict，00122）。 */

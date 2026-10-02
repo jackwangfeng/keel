@@ -87,6 +87,8 @@ type AgentProposalService struct {
 	coupons *AdminCouponService
 	catalog *AdminCatalogService
 	refunds *RefundService
+	// channels 是渠道层（channel_stock_rule 的执行者，SetChannels）；KEEL_CHANNELS 关着时为 nil。
+	channels *ChannelService
 }
 
 // SetExecutors 接上 M10 提案的执行者（装配时调用；没接上的种类提得出、批准时执行失败并说明原因）。
@@ -433,6 +435,10 @@ func proposalErrorType(err error) string {
 		return "role-forbidden"
 	case errors.Is(err, repository.ErrSKUNotSoldInStore), errors.Is(err, repository.ErrCatalogNotFound):
 		return "sku-not-sold-in-store"
+	case errors.Is(err, ErrProposalStale):
+		return "stale"
+	case errors.Is(err, ErrChannelsDisabled):
+		return "channels-disabled"
 	default:
 		return "rejected"
 	}

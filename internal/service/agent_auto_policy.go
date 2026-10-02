@@ -22,9 +22,9 @@ var ErrAutoPolicyBadRequest = errors.New("自动执行策略不成立")
 
 // autoKinds 是能自动执行的种类。
 var autoKinds = map[string]bool{ProposalKindInventoryAdjust: true, ProposalKindFlashPrice: true,
-	ProposalKindCoupon: true, ProposalKindProductCopy: true}
+	ProposalKindCoupon: true, ProposalKindProductCopy: true, ProposalKindChannelStockRule: true}
 
-// ListAutoPolicies 实现 GET /admin/agents/{staff_id}/auto-policies：四种都列出来，没配过的给默认（关）。
+// ListAutoPolicies 实现 GET /admin/agents/{staff_id}/auto-policies：能自动执行的种类都列出来，没配过的给默认（关）。
 func (s *AgentProposalService) ListAutoPolicies(ctx context.Context, agentStaffID int64) ([]repository.AgentAutoPolicy, error) {
 	if _, err := requireShopAdmin(ctx); err != nil {
 		return nil, err
@@ -42,7 +42,8 @@ func (s *AgentProposalService) ListAutoPolicies(ctx context.Context, agentStaffI
 		for _, p := range got {
 			have[p.Kind] = p
 		}
-		for _, k := range []string{ProposalKindInventoryAdjust, ProposalKindFlashPrice, ProposalKindCoupon, ProposalKindProductCopy} {
+		for _, k := range []string{ProposalKindInventoryAdjust, ProposalKindFlashPrice, ProposalKindCoupon, ProposalKindProductCopy,
+			ProposalKindChannelStockRule} {
 			if p, ok := have[k]; ok {
 				out = append(out, p)
 			} else {
@@ -64,7 +65,7 @@ func (s *AgentProposalService) PutAutoPolicy(ctx context.Context, p repository.A
 		return repository.AgentAutoPolicy{}, err
 	}
 	if !autoKinds[p.Kind] {
-		return repository.AgentAutoPolicy{}, fmt.Errorf("%w: kind 取 inventory_adjust / flash_price / coupon / product_copy"+
+		return repository.AgentAutoPolicy{}, fmt.Errorf("%w: kind 取 inventory_adjust / flash_price / coupon / product_copy / channel_stock_rule"+
 			"（售后审核不许自动执行）", ErrAutoPolicyBadRequest)
 	}
 	switch {
@@ -76,6 +77,8 @@ func (s *AgentProposalService) PutAutoPolicy(ctx context.Context, p repository.A
 		return repository.AgentAutoPolicy{}, fmt.Errorf("%w: max_discount_cents 取 0–%d", ErrAutoPolicyBadRequest, couponMaxDiscount)
 	case p.DailyLimit < 0 || p.DailyLimit > 100:
 		return repository.AgentAutoPolicy{}, fmt.Errorf("%w: daily_limit 取 0–100", ErrAutoPolicyBadRequest)
+	case p.MaxRatioStepBP < 0 || p.MaxRatioStepBP > 10000:
+		return repository.AgentAutoPolicy{}, fmt.Errorf("%w: max_ratio_step_bp 取 0–10000", ErrAutoPolicyBadRequest)
 	}
 	by := id.StaffID
 	p.UpdatedBy = &by
@@ -126,6 +129,8 @@ func withinPolicy(pol repository.AgentAutoPolicy, p repository.AgentProposal) bo
 		return face <= pol.MaxDiscountCents
 	case ProposalKindProductCopy:
 		return true
+	case ProposalKindChannelStockRule:
+		return withinChannelPolicy(pol, p)
 	}
 	return false
 }

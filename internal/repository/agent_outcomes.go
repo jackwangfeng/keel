@@ -131,7 +131,9 @@ type AgentAutoPolicy struct {
 	MinDiscountRate  int16
 	MaxDiscountCents int64
 	DailyLimit       int32
-	UpdatedBy        *int64
+	// MaxRatioStepBP 是 channel_stock_rule 每条改动的比例变化上限（万分比，00332）；0 = 不自动执行。
+	MaxRatioStepBP int32
+	UpdatedBy      *int64
 	UpdatedAt        *time.Time
 }
 
@@ -159,7 +161,7 @@ func (t tenantTx) ListAgentAutoPolicies(ctx context.Context, agentStaffID int64)
 	for _, r := range rows {
 		out = append(out, AgentAutoPolicy{AgentStaffID: r.AgentStaffID, Kind: r.Kind, Enabled: r.Enabled,
 			MaxUnits: r.MaxUnits, MinDiscountRate: r.MinDiscountRate, MaxDiscountCents: r.MaxDiscountCents,
-			DailyLimit: r.DailyLimit, UpdatedBy: r.UpdatedBy, UpdatedAt: tsPtr(r.UpdatedAt)})
+			DailyLimit: r.DailyLimit, MaxRatioStepBP: r.MaxRatioStepBp, UpdatedBy: r.UpdatedBy, UpdatedAt: tsPtr(r.UpdatedAt)})
 	}
 	return out, nil
 }
@@ -175,7 +177,7 @@ func (t tenantTx) LockAgentAutoPolicy(ctx context.Context, agentStaffID int64, k
 	}
 	return AgentAutoPolicy{AgentStaffID: r.AgentStaffID, Kind: r.Kind, Enabled: r.Enabled, MaxUnits: r.MaxUnits,
 		MinDiscountRate: r.MinDiscountRate, MaxDiscountCents: r.MaxDiscountCents, DailyLimit: r.DailyLimit,
-		UpdatedBy: r.UpdatedBy, UpdatedAt: tsPtr(r.UpdatedAt)}, nil
+		MaxRatioStepBP: r.MaxRatioStepBp, UpdatedBy: r.UpdatedBy, UpdatedAt: tsPtr(r.UpdatedAt)}, nil
 }
 
 func (t tenantTx) FindAgentAutoPolicy(ctx context.Context, agentStaffID int64, kind string) (AgentAutoPolicy, error) {
@@ -188,13 +190,13 @@ func (t tenantTx) FindAgentAutoPolicy(ctx context.Context, agentStaffID int64, k
 	}
 	return AgentAutoPolicy{AgentStaffID: r.AgentStaffID, Kind: r.Kind, Enabled: r.Enabled, MaxUnits: r.MaxUnits,
 		MinDiscountRate: r.MinDiscountRate, MaxDiscountCents: r.MaxDiscountCents, DailyLimit: r.DailyLimit,
-		UpdatedBy: r.UpdatedBy, UpdatedAt: tsPtr(r.UpdatedAt)}, nil
+		MaxRatioStepBP: r.MaxRatioStepBp, UpdatedBy: r.UpdatedBy, UpdatedAt: tsPtr(r.UpdatedAt)}, nil
 }
 
 func (t tenantTx) UpsertAgentAutoPolicy(ctx context.Context, p AgentAutoPolicy) error {
 	return t.q.UpsertAgentAutoPolicy(ctx, db.UpsertAgentAutoPolicyParams{AgentStaffID: p.AgentStaffID, Kind: p.Kind,
 		Enabled: p.Enabled, MaxUnits: p.MaxUnits, MinDiscountRate: p.MinDiscountRate,
-		MaxDiscountCents: p.MaxDiscountCents, DailyLimit: p.DailyLimit, UpdatedBy: p.UpdatedBy})
+		MaxDiscountCents: p.MaxDiscountCents, DailyLimit: p.DailyLimit, MaxRatioStepBp: p.MaxRatioStepBP, UpdatedBy: p.UpdatedBy})
 }
 
 func (t tenantTx) CountAutoApprovedSince(ctx context.Context, agentStaffID int64, kind string, since time.Time) (int64, error) {

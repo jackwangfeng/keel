@@ -319,6 +319,7 @@ SELECT (CASE WHEN o.source = 0 THEN 0 ELSE co.binding_id END)::bigint AS binding
  WHERE o.store_id = $1::bigint
    AND o.status IN (20, 30, 40, 50)
    AND o.paid_at >= $2::timestamptz
+   AND o.paid_at < $3::timestamptz
    AND (o.source = 0 OR co.id IS NOT NULL)
  GROUP BY 1, 2
 `
@@ -326,6 +327,7 @@ SELECT (CASE WHEN o.source = 0 THEN 0 ELSE co.binding_id END)::bigint AS binding
 type ChannelSoldBySourceParams struct {
 	StoreID int64
 	Since   pgtype.Timestamptz
+	Until   pgtype.Timestamptz
 }
 
 type ChannelSoldBySourceRow struct {
@@ -334,10 +336,10 @@ type ChannelSoldBySourceRow struct {
 	Qty       int64
 }
 
-// 这家门店自 since 以来各渠道卖出的件数，按（binding, SKU）：自营（source 0）binding_id 记 0。
+// 这家门店 [since, until) 里各渠道卖出的件数，按（binding, SKU）：自营（source 0）binding_id 记 0。
 // 「卖出」与 StoreSKUSales（restock.sql）同一口径：20 / 30 / 40 / 50 算，10 待支付、90 已关闭、60 整单退款不算。
 func (q *Queries) ChannelSoldBySource(ctx context.Context, arg ChannelSoldBySourceParams) ([]ChannelSoldBySourceRow, error) {
-	rows, err := q.db.Query(ctx, channelSoldBySource, arg.StoreID, arg.Since)
+	rows, err := q.db.Query(ctx, channelSoldBySource, arg.StoreID, arg.Since, arg.Until)
 	if err != nil {
 		return nil, err
 	}
@@ -363,6 +365,7 @@ WITH rej AS (
       JOIN orders o ON o.channel_order_id = co.id AND o.source = 1 AND o.status = 90
      WHERE co.store_id = $1::bigint
        AND co.created_at >= $2::timestamptz
+       AND co.created_at < $3::timestamptz
        AND co.order_no IS NULL
        AND (co.exception LIKE '缺货%' OR co.status = 7)
      ORDER BY co.id, o.id DESC
@@ -376,6 +379,7 @@ SELECT rej.binding_id, oi.sku_id, sum(oi.quantity)::bigint AS qty
 type ChannelStockoutRejectsParams struct {
 	StoreID int64
 	Since   pgtype.Timestamptz
+	Until   pgtype.Timestamptz
 }
 
 type ChannelStockoutRejectsRow struct {
@@ -384,7 +388,7 @@ type ChannelStockoutRejectsRow struct {
 	Qty       int64
 }
 
-// 这家门店自 since 以来渠道单因缺货没接成的件数，按（binding, SKU）。判据三条同时成立：
+// 这家门店 [since, until) 里建的渠道单因缺货没接成的件数，按（binding, SKU）。判据三条同时成立：
 //
 //	有一张来源 1、已关闭（90）的 keel 订单指着它（接单 SAGA 走了补偿）；
 //	现在没有挂着 keel 订单（order_no 为空 = 最终没接成；补货后重试成功的不算拒单）；
@@ -394,7 +398,7 @@ type ChannelStockoutRejectsRow struct {
 // 件数取那张 90 订单的行（渠道单行里的 sku_id 不回写，映射在建 keel 订单时才解析）；一张渠道单重试过多次
 // 也只算最后那张 90 的订单。
 func (q *Queries) ChannelStockoutRejects(ctx context.Context, arg ChannelStockoutRejectsParams) ([]ChannelStockoutRejectsRow, error) {
-	rows, err := q.db.Query(ctx, channelStockoutRejects, arg.StoreID, arg.Since)
+	rows, err := q.db.Query(ctx, channelStockoutRejects, arg.StoreID, arg.Since, arg.Until)
 	if err != nil {
 		return nil, err
 	}

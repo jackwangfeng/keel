@@ -19,6 +19,7 @@ export const AUTO_POLICY_KIND_LABEL: Record<AutoPolicyKind, string> = {
     flash_price: "限时折扣",
     coupon: "发券",
     product_copy: "改文案",
+    channel_stock_rule: "调渠道分配",
 };
 
 export type CapField = "max_units" | "min_discount_rate" | "max_discount_cents" | null;
@@ -33,6 +34,8 @@ export function capFieldOf(kind: AutoPolicyKind): CapField {
         case "coupon":
             return "max_discount_cents";
         case "product_copy":
+            return null;
+        case "channel_stock_rule": // 单笔上限是 max_ratio_step_bp + max_units，界面在 Task 4 补（暂不在 AUTO_POLICY_KINDS 里）
             return null;
     }
 }

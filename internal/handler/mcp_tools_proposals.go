@@ -58,6 +58,28 @@ type mcpProductCopyIn struct {
 	mcpProposalMetaIn
 }
 
+type mcpChannelRulePrevIn struct {
+	RatioBP   int32  `json:"ratio_bp"`
+	SafetyQty int32  `json:"safety_qty"`
+	CapQty    *int32 `json:"cap_qty,omitempty"`
+	Level     string `json:"level" jsonschema:"binding / store / sku / default：照抄 channel_allocation_review 那一行的 rule_level"`
+}
+
+type mcpChannelRuleChangeIn struct {
+	SKUID     *int64               `json:"sku_id,omitempty" jsonschema:"改这个 SKU 在这家门店的分配；不给 = 改门店级（这家门店在这个渠道上的默认分配）"`
+	RatioBP   int32                `json:"ratio_bp" jsonschema:"分给这个渠道的比例，万分比 0–10000（9000 = 90%）"`
+	SafetyQty int32                `json:"safety_qty" jsonschema:"安全库存：对外可售再减去这么多件，0–100000"`
+	CapQty    *int32               `json:"cap_qty,omitempty" jsonschema:"对外至多挂多少件；不给 = 不封顶"`
+	Prev      mcpChannelRulePrevIn `json:"prev" jsonschema:"你看到的当前生效规则（channel_allocation_review 的 rule 与 rule_level）；与现在不一致会被拒（409），重新调工具"`
+}
+
+type mcpChannelStockRuleIn struct {
+	BindingID int64                    `json:"binding_id" jsonschema:"销售渠道（channel_allocation_review 的 binding_id）"`
+	StoreID   int64                    `json:"store_id"`
+	Changes   []mcpChannelRuleChangeIn `json:"changes" jsonschema:"改动，1–20 条"`
+	mcpProposalMetaIn
+}
+
 type mcpRefundDecisionIn struct {
 	RefundNo     string  `json:"refund_no"`
 	Action       string  `json:"action" jsonschema:"approve 同意 / reject 驳回"`
@@ -111,6 +133,25 @@ func registerMCPProposalTools(srv *mcp.Server, d *MCPDeps) {
 			"需要全店范围的 AI 员工。",
 		writeProposalError, func(ctx context.Context, in mcpProductCopyIn) (api.AgentProposal, error) {
 			p, err := d.Proposals.ProposeProductCopy(ctx, in.ProductID, in.Title, in.Subtitle, in.meta())
+			if err != nil {
+				return api.AgentProposal{}, err
+			}
+			return apiAgentProposal(p), nil
+		})
+	mcpTool(srv, d, "propose_channel_stock_rule",
+		"提一条调渠道库存分配的提案：改一个销售渠道在一家门店（或门店 × SKU）的分配比例 / 安全库存 / 封顶。"+
+			"先调 channel_allocation_review，把它给的 rule 与 rule_level 原样填进 prev（依据变了会被拒，409）。"+
+			"不会立即执行：人批准后 Keel 改规则并重新推送对外可售数；提案详情里有按当前可售试算的对外可售数前后对比。"+
+			"需要全店范围的 AI 员工；渠道层没开时拒收（409）。keel 自己缺货的 SKU 不要调分配——缺的是货。",
+		writeProposalError, func(ctx context.Context, in mcpChannelStockRuleIn) (api.AgentProposal, error) {
+			changes := make([]service.ChannelStockRuleChange, 0, len(in.Changes))
+			for _, c := range in.Changes {
+				changes = append(changes, service.ChannelStockRuleChange{SKUID: c.SKUID, RatioBP: c.RatioBP,
+					SafetyQty: c.SafetyQty, CapQty: c.CapQty, Prev: service.ChannelRuleSnapshot{RatioBP: c.Prev.RatioBP,
+						SafetyQty: c.Prev.SafetyQty, CapQty: c.Prev.CapQty, Level: c.Prev.Level}})
+			}
+			p, err := d.Proposals.ProposeChannelStockRule(ctx, service.ChannelStockRulePayload{BindingID: in.BindingID,
+				StoreID: in.StoreID, Changes: changes}, in.meta())
 			if err != nil {
 				return api.AgentProposal{}, err
 			}

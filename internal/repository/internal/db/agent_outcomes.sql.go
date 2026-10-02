@@ -243,7 +243,8 @@ func (q *Queries) DueAgentProposalOutcomes(ctx context.Context) ([]DueAgentPropo
 }
 
 const getAgentAutoPolicy = `-- name: GetAgentAutoPolicy :one
-SELECT agent_staff_id, kind, enabled, max_units, min_discount_rate, max_discount_cents, daily_limit, updated_by, updated_at
+SELECT agent_staff_id, kind, enabled, max_units, min_discount_rate, max_discount_cents, daily_limit, max_ratio_step_bp,
+       updated_by, updated_at
   FROM agent_auto_policies
  WHERE agent_staff_id = $1 AND kind = $2
 `
@@ -261,6 +262,7 @@ type GetAgentAutoPolicyRow struct {
 	MinDiscountRate  int16
 	MaxDiscountCents int64
 	DailyLimit       int32
+	MaxRatioStepBp   int32
 	UpdatedBy        *int64
 	UpdatedAt        pgtype.Timestamptz
 }
@@ -276,6 +278,7 @@ func (q *Queries) GetAgentAutoPolicy(ctx context.Context, arg GetAgentAutoPolicy
 		&i.MinDiscountRate,
 		&i.MaxDiscountCents,
 		&i.DailyLimit,
+		&i.MaxRatioStepBp,
 		&i.UpdatedBy,
 		&i.UpdatedAt,
 	)
@@ -299,7 +302,8 @@ func (q *Queries) GetPublicAILog(ctx context.Context) (bool, error) {
 
 const listAgentAutoPolicies = `-- name: ListAgentAutoPolicies :many
 
-SELECT agent_staff_id, kind, enabled, max_units, min_discount_rate, max_discount_cents, daily_limit, updated_by, updated_at
+SELECT agent_staff_id, kind, enabled, max_units, min_discount_rate, max_discount_cents, daily_limit, max_ratio_step_bp,
+       updated_by, updated_at
   FROM agent_auto_policies
  WHERE agent_staff_id = $1
  ORDER BY kind
@@ -313,6 +317,7 @@ type ListAgentAutoPoliciesRow struct {
 	MinDiscountRate  int16
 	MaxDiscountCents int64
 	DailyLimit       int32
+	MaxRatioStepBp   int32
 	UpdatedBy        *int64
 	UpdatedAt        pgtype.Timestamptz
 }
@@ -337,6 +342,7 @@ func (q *Queries) ListAgentAutoPolicies(ctx context.Context, agentStaffID int64)
 			&i.MinDiscountRate,
 			&i.MaxDiscountCents,
 			&i.DailyLimit,
+			&i.MaxRatioStepBp,
 			&i.UpdatedBy,
 			&i.UpdatedAt,
 		); err != nil {
@@ -351,7 +357,8 @@ func (q *Queries) ListAgentAutoPolicies(ctx context.Context, agentStaffID int64)
 }
 
 const lockAgentAutoPolicy = `-- name: LockAgentAutoPolicy :one
-SELECT agent_staff_id, kind, enabled, max_units, min_discount_rate, max_discount_cents, daily_limit, updated_by, updated_at
+SELECT agent_staff_id, kind, enabled, max_units, min_discount_rate, max_discount_cents, daily_limit, max_ratio_step_bp,
+       updated_by, updated_at
   FROM agent_auto_policies
  WHERE agent_staff_id = $1 AND kind = $2
    FOR UPDATE
@@ -370,6 +377,7 @@ type LockAgentAutoPolicyRow struct {
 	MinDiscountRate  int16
 	MaxDiscountCents int64
 	DailyLimit       int32
+	MaxRatioStepBp   int32
 	UpdatedBy        *int64
 	UpdatedAt        pgtype.Timestamptz
 }
@@ -388,6 +396,7 @@ func (q *Queries) LockAgentAutoPolicy(ctx context.Context, arg LockAgentAutoPoli
 		&i.MinDiscountRate,
 		&i.MaxDiscountCents,
 		&i.DailyLimit,
+		&i.MaxRatioStepBp,
 		&i.UpdatedBy,
 		&i.UpdatedAt,
 	)
@@ -589,13 +598,13 @@ func (q *Queries) SetPublicAILog(ctx context.Context, enabled bool) error {
 
 const upsertAgentAutoPolicy = `-- name: UpsertAgentAutoPolicy :exec
 INSERT INTO agent_auto_policies (agent_staff_id, kind, enabled, max_units, min_discount_rate, max_discount_cents,
-                                 daily_limit, updated_by)
+                                 daily_limit, max_ratio_step_bp, updated_by)
 VALUES ($1, $2, $3, $4, $5,
-        $6, $7, $8)
+        $6, $7, $8, $9)
 ON CONFLICT ON CONSTRAINT agent_auto_policies_pkey DO UPDATE
    SET enabled = EXCLUDED.enabled, max_units = EXCLUDED.max_units, min_discount_rate = EXCLUDED.min_discount_rate,
        max_discount_cents = EXCLUDED.max_discount_cents, daily_limit = EXCLUDED.daily_limit,
-       updated_by = EXCLUDED.updated_by
+       max_ratio_step_bp = EXCLUDED.max_ratio_step_bp, updated_by = EXCLUDED.updated_by
 `
 
 type UpsertAgentAutoPolicyParams struct {
@@ -606,6 +615,7 @@ type UpsertAgentAutoPolicyParams struct {
 	MinDiscountRate  int16
 	MaxDiscountCents int64
 	DailyLimit       int32
+	MaxRatioStepBp   int32
 	UpdatedBy        *int64
 }
 
@@ -618,6 +628,7 @@ func (q *Queries) UpsertAgentAutoPolicy(ctx context.Context, arg UpsertAgentAuto
 		arg.MinDiscountRate,
 		arg.MaxDiscountCents,
 		arg.DailyLimit,
+		arg.MaxRatioStepBp,
 		arg.UpdatedBy,
 	)
 	return err

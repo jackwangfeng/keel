@@ -727,6 +727,9 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	// M10 的四种提案批准后以 AI 员工身份调这几个 service（与后台接口同一批构造，无状态）。
 	proposals.SetExecutors(service.NewAdminPromotionService(repo, inv).WithQuotaSync(ro.quotaSync), service.NewAdminCouponService(repo),
 		service.NewAdminCatalogService(repo, store, inv).WithChannels(ro.channels), refunds)
+	if ro.channels != nil { // 渠道分配提案（channel_stock_rule）的执行者；关着时这种提案拒收
+		proposals.SetChannels(ro.channels)
+	}
 	aph := handler.NewAgentProposalHandler(proposals)
 	v1.GET("/admin/agent-proposals", staffAuth, aph.List)
 	v1.GET("/admin/agent-proposals/:proposal_id", staffAuth, aph.Get)

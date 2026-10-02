@@ -228,6 +228,7 @@ def verify(secret: str, body: bytes, header: str) -> bool:
 | 2026-10-01 | 工具错误新增 `busy`（503）：数据库等锁 / 语句超时，这次调用确定没有生效，稍后原样重试。之前同样的情况报 `internal` |
 | 2026-10-02 | 商品出参（`list_products` `get_product`）加 `managed_by`：由渠道（如 `shopify`）管理的商品，标题、详情、图片、SKU 规格改不了（后台 409 `managed-by-channel`，`propose_product_copy` 改标题的提案批准执行时同样失败）；null / 缺席 = keel 自己管 |
 | 2026-10-03 | 加 `channel_allocation_review`（渠道库存分配的事实与基线建议，只读，判权同 `slow_movers`）；`query_sql` 可读视图加 `channel_bindings` `channel_orders` `channel_stock_rules` `channel_listing_zero_spans`，`orders` 加 `source`（0 自营 / 1 渠道单）与 `channel_order_id`（视图不含渠道凭据、配置与收货人） |
+| 2026-10-03 | 加 `propose_channel_stock_rule`（调一个销售渠道在一家门店 / 门店 × SKU 的分配比例、安全库存、封顶；`prev` 照抄 `channel_allocation_review` 的 `rule` 与 `rule_level`，与当前规则不一致 409；提案详情 `payload.preview` 是按当时可售的对外可售数试算；执行时规则被人改过 → 执行失败 `stale`，不覆盖；需全店范围；渠道层没开 409）。自动执行策略加 `max_ratio_step_bp`（默认 0 = 不自动执行，永远不自动把比例调到 0）；复盘 `outcome.cells` 逐格比执行前后 7 天 |
 
 ## 接入方式举例
 

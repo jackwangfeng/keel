@@ -52,7 +52,7 @@ func (h *AgentProposalHandler) PutAutoPolicy(c *gin.Context) {
 	}
 	p, err := h.svc.PutAutoPolicy(c.Request.Context(), repository.AgentAutoPolicy{AgentStaffID: id, Kind: c.Param("kind"),
 		Enabled: req.Enabled, MaxUnits: req.MaxUnits, MinDiscountRate: int16(req.MinDiscountRate),
-		MaxDiscountCents: req.MaxDiscountCents, DailyLimit: req.DailyLimit})
+		MaxDiscountCents: req.MaxDiscountCents, DailyLimit: req.DailyLimit, MaxRatioStepBP: derefInt32(req.MaxRatioStepBp)})
 	if err != nil {
 		writeAutoPolicyError(c, err)
 		return
@@ -63,5 +63,12 @@ func (h *AgentProposalHandler) PutAutoPolicy(c *gin.Context) {
 func apiAutoPolicy(p repository.AgentAutoPolicy) api.AgentAutoPolicy {
 	return api.AgentAutoPolicy{Kind: api.AgentAutoPolicyKind(p.Kind), Enabled: p.Enabled, MaxUnits: p.MaxUnits,
 		MinDiscountRate: int32(p.MinDiscountRate), MaxDiscountCents: p.MaxDiscountCents, DailyLimit: p.DailyLimit,
-		UpdatedBy: p.UpdatedBy, UpdatedAt: p.UpdatedAt}
+		MaxRatioStepBp: &p.MaxRatioStepBP, UpdatedBy: p.UpdatedBy, UpdatedAt: p.UpdatedAt}
+}
+
+func derefInt32(p *int32) int32 {
+	if p == nil {
+		return 0
+	}
+	return *p
 }

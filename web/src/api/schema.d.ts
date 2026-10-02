@@ -1169,7 +1169,7 @@ export interface paths {
                     /** @description 只看这名 AI 员工提的 */
                     agent_staff_id?: number;
                     /** @description 只看这一种提案 */
-                    kind?: "inventory_adjust" | "flash_price" | "coupon" | "product_copy" | "refund_decision";
+                    kind?: "inventory_adjust" | "flash_price" | "coupon" | "product_copy" | "refund_decision" | "channel_stock_rule";
                     page?: components["parameters"]["Page"];
                     page_size?: components["parameters"]["PageSize"];
                 };
@@ -1942,7 +1942,7 @@ export interface paths {
             header?: never;
             path: {
                 staff_id: number;
-                kind: "inventory_adjust" | "flash_price" | "coupon" | "product_copy";
+                kind: "inventory_adjust" | "flash_price" | "coupon" | "product_copy" | "channel_stock_rule";
             };
             cookie?: never;
         };
@@ -1951,7 +1951,9 @@ export interface paths {
          * 设置一种提案的自动执行策略
          * @description 单笔上限按种类取不同的字段：`inventory_adjust` 用 `max_units`（一条至多加多少件）；`flash_price` 用
          *     `min_discount_rate`（每个 SKU 的折扣率不低于它，千分比，900 = 最多打九折）；`coupon` 用 `max_discount_cents`
-         *     （面额，折扣券为封顶）；`product_copy` 只有条数上限。`daily_limit` 是近 24 小时至多自动执行几条（0 = 不自动执行）。
+         *     （面额，折扣券为封顶）；`product_copy` 只有条数上限；`channel_stock_rule` 用 `max_ratio_step_bp`（每条改动的比例
+         *     变化绝对值不超过它，万分比；0 = 不自动执行）与 `max_units`（安全库存变化不超过它），且永远不自动把比例调到 0。
+         *     `daily_limit` 是近 24 小时至多自动执行几条（0 = 不自动执行）。
          */
         put: {
             parameters: {
@@ -1985,7 +1987,7 @@ export interface paths {
                 };
                 path: {
                     staff_id: number;
-                    kind: "inventory_adjust" | "flash_price" | "coupon" | "product_copy";
+                    kind: "inventory_adjust" | "flash_price" | "coupon" | "product_copy" | "channel_stock_rule";
                 };
                 cookie?: never;
             };
@@ -20642,10 +20644,11 @@ export interface components {
             agent_name: string;
             /**
              * @description `inventory_adjust` 加库存（M9）；M10：`flash_price` 限时折扣、`coupon` 发券、`product_copy` 改标题 / 副标题、
-             *     `refund_decision` 售后审核（同意 / 驳回）。营销与商品类是全店的（没有 `store_id`），批准要全店范围
+             *     `refund_decision` 售后审核（同意 / 驳回）；`channel_stock_rule` 调一个销售渠道在一家门店的库存分配规则。
+             *     营销、商品与渠道分配类是全店的（没有 `store_id`），批准要全店范围
              * @enum {string}
              */
-            kind: "inventory_adjust" | "flash_price" | "coupon" | "product_copy" | "refund_decision";
+            kind: "inventory_adjust" | "flash_price" | "coupon" | "product_copy" | "refund_decision" | "channel_stock_rule";
             /**
              * Format: int64
              * @description 门店类提案（加库存、售后审核）才有
@@ -20659,7 +20662,10 @@ export interface components {
              *     `flash_price` {name, store_id?, items: [{sku_id, discount_rate}], starts_at, ends_at}；
              *     `coupon` {name, coupon_type, threshold_cents, discount_cents, discount_rate, max_discount_cents,
              *     valid_days, total_count, per_user_limit, claimable}；`product_copy` {product_id, title?, subtitle?,
-             *     before_title, before_subtitle?}；`refund_decision` {refund_no, action, reject_reason?, amount_cents}
+             *     before_title, before_subtitle?}；`refund_decision` {refund_no, action, reject_reason?, amount_cents}；
+             *     `channel_stock_rule` {binding_id, binding_name, store_id, store_name, changes: [{sku_id?（空 = 门店级）, ratio_bp,
+             *     safety_qty, cap_qty?, prev: {ratio_bp, safety_qty, cap_qty?, level}}], preview: [{sku_id, available,
+             *     before_qty, after_qty}]（提案时按当时 keel 可售试算的对外可售数，至多 40 格）}
              */
             payload: {
                 [key: string]: unknown;
@@ -20682,7 +20688,8 @@ export interface components {
             reject_reason?: string;
             /**
              * @description 执行结果：加库存 {before_available, after_available}；M10 各种提案 {detail: {promotion_id | coupon_template_id |
-             *     before_title/after_title | refund_status …}}；失败 {error_type, error}
+             *     before_title/after_title | refund_status | channel_stock_rule 的 {binding_id, store_id, applied, already}…}}；
+             *     失败 {error_type, error}（`stale` = 提案依据的规则已被人改过，error 里写明是哪一格）
              */
             result?: {
                 [key: string]: unknown;
@@ -20698,7 +20705,11 @@ export interface components {
              * @description 执行成功的时间（00122）
              */
             executed_at?: string;
-            /** @description 执行后复盘（00122）：{verdict: positive|neutral|negative, explanation, 各种类的指标…}。还没到点时不出现 */
+            /**
+             * @description 执行后复盘（00122）：{verdict: positive|neutral|negative, explanation, 各种类的指标…}。还没到点时不出现。
+             *     `channel_stock_rule` 另有 cells: [{binding_id, store_id, sku_id, direction: up|down|same, before: {held_zero_hours,
+             *     empty_zero_hours, stockout_rejects, sold, net_cents}, after: {…}, excluded_reason?}]
+             */
             outcome?: {
                 [key: string]: unknown;
             };
@@ -20783,10 +20794,15 @@ export interface components {
             max_discount_cents: number;
             /** Format: int32 */
             daily_limit: number;
+            /**
+             * Format: int32
+             * @description channel_stock_rule 每条改动的比例变化上限（万分比，00332）；不给 = 0 = 不自动执行这种提案
+             */
+            max_ratio_step_bp?: number;
         };
         AgentAutoPolicy: components["schemas"]["AgentAutoPolicyInput"] & {
             /** @enum {string} */
-            kind: "inventory_adjust" | "flash_price" | "coupon" | "product_copy";
+            kind: "inventory_adjust" | "flash_price" | "coupon" | "product_copy" | "channel_stock_rule";
             /** Format: int64 */
             updated_by?: number;
             /** Format: date-time */
