@@ -36,7 +36,7 @@ type channelRecomputeJob struct {
 	StoreID   int64 `json:"store_id"`
 }
 
-// 推送任务的重试：库存迟早要推上去，比默认 5 次多给；退避封顶 10 分钟。
+// 渠道任务（推送、整店重算、回调处理）的重试：迟早要做成，比默认 5 次多给；退避封顶 10 分钟。
 const (
 	channelPushMaxAttempts = 20
 	recomputePageSize      = 200
@@ -52,7 +52,7 @@ func (s *ChannelService) enqueueListingPush(ctx context.Context, tx repository.T
 func (s *ChannelService) enqueueRecompute(ctx context.Context, tx repository.Tx, bindingID, storeID int64) error {
 	payload, _ := json.Marshal(channelRecomputeJob{BindingID: bindingID, StoreID: storeID})
 	_, err := tx.EnqueueJob(ctx, repository.NewJob{Queue: QueueChannelListingRecompute,
-		JobKey: fmt.Sprintf("%d:%d", bindingID, storeID), Payload: payload})
+		JobKey: fmt.Sprintf("%d:%d", bindingID, storeID), Payload: payload, MaxAttempts: channelPushMaxAttempts})
 	return err
 }
 
@@ -106,8 +106,10 @@ type listingTarget struct {
 	prev     *repository.ChannelListing
 }
 
+// unchanged：上次推出去的就是这个值，而且那一次是成功的。上次失败（last_error 非空，比如 CAS 冲突时记下的是
+// 渠道上的数、价格并没有推上去）一律当作要推。
 func (t listingTarget) unchanged() bool {
-	return t.prev != nil && t.prev.PublishedQty == t.qty && t.prev.PublishedCents == t.price
+	return t.prev != nil && t.prev.LastError == nil && t.prev.PublishedQty == t.qty && t.prev.PublishedCents == t.price
 }
 
 // computeTargets 算一家门店一批 SKU 在各启用中的销售渠道上现在应当推的值。onlyBinding 非 0 时只算那一个。
@@ -177,7 +179,11 @@ func (s *ChannelService) computeTargets(ctx context.Context, storeID int64, skuI
 				if !ok {
 					continue
 				}
-				offer := offers[sku]
+				offer, ok := offers[sku]
+				if !ok {
+					// 拿不到门店价（SKU 不存在、不属于本店）：不推 —— 推出去就是一个 0 元的商品。
+					continue
+				}
 				var qty int32
 				if offer.Sellable {
 					qty = channel.PublishedQty(levels[sku].Available, channel.ResolveStockRule(stockRules, storeID, sku))

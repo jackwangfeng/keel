@@ -78,6 +78,9 @@ func TestAdminChannelBindings(t *testing.T) {
 		if w.Code != http.StatusOK {
 			t.Fatalf("映射门店：%d %s", w.Code, w.Body.String())
 		}
+		if w := reqAs(t, http.MethodPut, sh.Host, path+"/sku-links/999999999", `{"external_id":"ghost"}`, sh.Token); w.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("映射不存在的 SKU：%d，期望 422", w.Code)
+		}
 		w = reqAs(t, http.MethodPut, sh.Host, path+"/stock-rules", `{"sku_id":1,"ratio_bp":5000}`, sh.Token)
 		if w.Code != http.StatusUnprocessableEntity {
 			t.Fatalf("只给 SKU 不给门店：%d，期望 422", w.Code)

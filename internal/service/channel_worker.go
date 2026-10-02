@@ -230,6 +230,13 @@ func (s *ChannelService) pushStore(ctx context.Context, outlet channel.Outlet, a
 		}
 		return
 	}
+	// 这批任务标完成之后对这些格子再核对一次：推送进行中（任务 status = 1）发生的变化，入队会被这个同 key 的在途任务挡掉，
+	// 不核对的话渠道上就停在旧值，直到这个 SKU 下一次变化。只在有差异时入队，所以不会自己推自己。
+	defer func() {
+		if err := s.RecomputeListings(ctx, storeID, skus, ab.ID); err != nil {
+			s.log.WarnContext(ctx, "推送之后的核对没做完（下一次变化会补上）", "binding_id", ab.ID, "store_id", storeID, "err", err)
+		}
+	}()
 	var ls []channel.Listing
 	var pending []listingTarget
 	var done []int64

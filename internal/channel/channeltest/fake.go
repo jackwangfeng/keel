@@ -44,11 +44,15 @@ func Sign(secret string, body []byte) string {
 type Adapter struct {
 	CapsValue channel.Caps
 
+	// OnPush 非空时在每次 PushListings 处理之前调用（不持锁）：测试用它在「推送进行中」制造并发变化。
+	OnPush func(ls []channel.Listing)
+
 	mu       sync.Mutex
 	pushes   [][]channel.Listing
 	failNext int                // 接下来几次 PushListings 整批返回可重试错误
 	conflict map[[2]int64]int32 // (门店, SKU) → 渠道上「被人改过」的现值，下一次推送报一次冲突
 	applied  map[[2]int64]int32 // 渠道上当前的可售数（只有生效的推送改它；冲突的那一次是被人改成的数）
+	prices   map[[2]int64]int64 // 渠道上当前的价格（同 applied）
 	actions  []channel.Action
 }
 
@@ -86,6 +90,14 @@ func mustHex(s string) []byte { b, _ := hex.DecodeString(s); return b }
 // FailNext 让接下来 n 次 PushListings 整批返回可重试错误。
 func (a *Adapter) FailNext(n int) { a.mu.Lock(); a.failNext = n; a.mu.Unlock() }
 
+// LastPrice 是渠道上 (store, sku) 当前的价格（最近一次生效的推送）。
+func (a *Adapter) LastPrice(store, sku int64) (int64, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	p, ok := a.prices[[2]int64{store, sku}]
+	return p, ok
+}
+
 // FailuresLeft 是还没用掉的编排失败次数。
 func (a *Adapter) FailuresLeft() int { a.mu.Lock(); defer a.mu.Unlock(); return a.failNext }
 
@@ -117,6 +129,9 @@ func (a *Adapter) LastQty(store, sku int64) (int32, bool) {
 }
 
 func (a *Adapter) PushListings(_ context.Context, _ channel.Binding, ls []channel.Listing) ([]channel.ListingResult, error) {
+	if a.OnPush != nil {
+		a.OnPush(ls)
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.failNext > 0 {
@@ -144,6 +159,10 @@ func (a *Adapter) PushListings(_ context.Context, _ channel.Binding, ls []channe
 			a.applied = map[[2]int64]int32{}
 		}
 		a.applied[k] = l.Qty
+		if a.prices == nil {
+			a.prices = map[[2]int64]int64{}
+		}
+		a.prices[k] = l.PriceCents
 	}
 	return out, nil
 }

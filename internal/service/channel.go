@@ -35,6 +35,9 @@ const BranchChannelMerchantQuery = "channel_merchant_msg_query"
 
 const channelMsgGraceSecs = 30
 
+// ChannelMerchantLockKey 是「这家店的渠道启停」事务级 advisory lock 的第一段键（第二段是商家 id）。
+const ChannelMerchantLockKey = 7340301
+
 // 渠道层的任务队列（jobs.queue）。
 const (
 	QueueChannelListingPush      = "channel.listing.push"
@@ -62,7 +65,11 @@ type ChannelService struct {
 
 	workerID string
 	handlers map[channel.EventKind]InboundHandler
+	msgGID   func(merchantID int64) (string, error) // 开关渠道消息的 gid；测试可替换（SetMerchantMsgGIDForTest）
 }
+
+// SetMerchantMsgGIDForTest 替换开关渠道消息的 gid 生成（测试用：让一条 gid 先被回查作废）。
+func (s *ChannelService) SetMerchantMsgGIDForTest(f func(int64) (string, error)) { s.msgGID = f }
 
 type channelCoord struct{ c dtm.Coordinator }
 
@@ -210,54 +217,86 @@ func (s *ChannelService) withMerchantSync(ctx context.Context, fn func(tx reposi
 		return err
 	}
 	var gid string
+	lost := false
 	err = s.repo.WithTenant(ctx, func(tx repository.Tx) error {
-		gid = ""
+		gid, lost = "", false
 		flipped, err := fn(tx)
 		if err != nil || !flipped {
 			return err
 		}
-		gid, err = s.prepareMerchantMsg(ctx, tx, merchantID)
+		gid, lost, err = s.prepareMerchantMsg(ctx, tx, merchantID)
 		return err
 	})
 	s.finishMsg(ctx, gid, err == nil)
+	if err == nil && lost {
+		s.resendMerchantMsg(ctx, merchantID)
+	}
 	return err
 }
 
-func (s *ChannelService) prepareMerchantMsg(ctx context.Context, tx repository.Tx, merchantID int64) (string, error) {
+// prepareMerchantMsg 在调用方的事务里登记一条开关渠道消息：先拿这家店的渠道锁，再数、再取版本（锁让版本的先后
+// 等于提交的先后）。lost 为真：回查抢先把这条 gid 判成了「没提交」，事务照常提交，调用方提交之后 resendMerchantMsg。
+func (s *ChannelService) prepareMerchantMsg(ctx context.Context, tx repository.Tx, merchantID int64) (gid string, lost bool, err error) {
 	tc := s.coord()
 	if tc == nil {
 		// 只有部分测试的装配会走到：app 里协调器总是先接上再开始服务请求。
 		s.log.WarnContext(ctx, "协调器还没接上，这次不通知库存服务开关渠道")
-		return "", nil
+		return "", false, nil
+	}
+	if err := tx.LockChannelMerchant(ctx); err != nil {
+		return "", false, err
 	}
 	n, err := tx.CountActiveOutletBindings(ctx)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	rev, err := tx.ChannelSyncRev(ctx)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
-	gid, err := inventory.ChannelMerchantMsgGID(merchantID)
-	if err != nil {
-		return "", err
+	newGID := s.msgGID
+	if newGID == nil {
+		newGID = inventory.ChannelMerchantMsgGID
+	}
+	if gid, err = newGID(merchantID); err != nil {
+		return "", false, err
 	}
 	payload, _ := json.Marshal(inventory.ChannelMerchantPayload{Enabled: n > 0, Rev: rev})
 	if err := tc.PrepareMsgEx(gid, []string{s.msgAction}, []string{string(payload)}, s.msgQuery, channelMsgGraceSecs, false); err != nil {
-		return "", err
+		return "", false, err
 	}
 	ok, err := tx.MarkMsgPrepared(ctx, gid)
 	if err != nil {
 		_ = tc.AbortMsg(gid)
-		return "", err
+		return "", false, err
 	}
 	if !ok {
-		// 回查抢先判了「没提交」：这一条作废。状态以库为准，下一次启停会带着完整状态再发；
-		// 在那之前库存服务可能少发 / 多发 stock.changed，对账会报出差异。
-		s.log.ErrorContext(ctx, "开关渠道消息被回查抢先作废", "gid", gid)
-		return "", nil
+		s.log.WarnContext(ctx, "开关渠道消息被回查抢先作废，提交之后换新 gid 补发", "gid", gid)
+		return "", true, nil
 	}
-	return gid, nil
+	return gid, false, nil
+}
+
+// resendMerchantMsg 在一个只登记消息的小事务里补发一条（「以库里当前的启用状态为准」，不需要知道上一条说了什么）。
+func (s *ChannelService) resendMerchantMsg(ctx context.Context, merchantID int64) {
+	for attempt := 0; attempt < 3; attempt++ {
+		var gid string
+		lost := false
+		err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+			var e error
+			gid, lost, e = s.prepareMerchantMsg(ctx, tx, merchantID)
+			return e
+		})
+		s.finishMsg(ctx, gid, err == nil)
+		if err != nil {
+			s.log.ErrorContext(ctx, "补发开关渠道消息失败（下一次启停会带着完整状态再发）", "err", err)
+			return
+		}
+		if !lost {
+			return
+		}
+	}
+	s.log.ErrorContext(ctx, "开关渠道消息连续三次被回查抢先作废，放弃补发（下一次启停会带着完整状态再发）")
 }
 
 func (s *ChannelService) finishMsg(ctx context.Context, gid string, committed bool) {

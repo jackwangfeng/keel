@@ -106,7 +106,7 @@ func (s *ChannelService) Inbound(ctx context.Context, bindingID int64, r *http.R
 			}
 			payload, _ := json.Marshal(channelInboundJob{EventID: id})
 			if _, err := tx.EnqueueJob(ctx, repository.NewJob{Queue: QueueChannelInbound,
-				JobKey: fmt.Sprintf("evt:%d", id), Payload: payload}); err != nil {
+				JobKey: fmt.Sprintf("evt:%d", id), Payload: payload, MaxAttempts: channelPushMaxAttempts}); err != nil {
 				return err
 			}
 		}

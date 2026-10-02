@@ -24,7 +24,9 @@ var ErrChannelBadRequest = errors.New("渠道配置不成立")
 // AdminChannelService 是后台渠道管理。
 type AdminChannelService struct{ ch *ChannelService }
 
-func NewAdminChannelService(ch *ChannelService) *AdminChannelService { return &AdminChannelService{ch: ch} }
+func NewAdminChannelService(ch *ChannelService) *AdminChannelService {
+	return &AdminChannelService{ch: ch}
+}
 
 // Kinds 是编进来的渠道与各自的能力。
 func (s *AdminChannelService) Kinds(ctx context.Context) ([]channel.Adapter, error) {
@@ -78,18 +80,22 @@ func (s *AdminChannelService) Create(ctx context.Context, in ChannelBindingCreat
 		status = repository.ChannelBindingDisabled
 	}
 	var gid string
+	lost := false
 	b, replayed, err := idempotentTx(ctx, s.ch.repo, repository.StaffSubject(id.StaffID), scopeAdminChannelBindingCreate, idemKey, hash,
 		archivedCreated, func(tx repository.Tx) (repository.ChannelBinding, error) {
-			gid = ""
+			gid, lost = "", false
 			b, err := tx.CreateChannelBinding(ctx, repository.ChannelBindingInput{Channel: in.Channel,
 				ExternalAccount: in.ExternalAccount, Name: in.Name, Roles: int16(in.Roles), Status: status, Config: in.Config})
 			if err != nil || !b.IsActiveOutlet() {
 				return b, err
 			}
-			gid, err = s.ch.prepareMerchantMsg(ctx, tx, merchantID)
+			gid, lost, err = s.ch.prepareMerchantMsg(ctx, tx, merchantID)
 			return b, err
 		})
 	s.ch.finishMsg(ctx, gid, err == nil)
+	if err == nil && lost {
+		s.ch.resendMerchantMsg(ctx, merchantID)
+	}
 	return b, replayed, err
 }
 
@@ -155,6 +161,17 @@ func (s *AdminChannelService) PutSKULink(ctx context.Context, l repository.Chann
 	}
 	if _, err := s.ch.GetBinding(ctx, l.BindingID); err != nil {
 		return err
+	}
+	var exists bool
+	if err := s.ch.repo.WithTenant(ctx, func(tx repository.Tx) error {
+		var e error
+		exists, e = tx.ChannelSKUExists(ctx, l.KeelID)
+		return e
+	}); err != nil {
+		return err
+	}
+	if !exists {
+		return repository.ErrChannelRefInvalid
 	}
 	return s.ch.LinkSKU(ctx, l)
 }

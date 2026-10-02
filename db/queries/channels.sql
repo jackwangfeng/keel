@@ -162,3 +162,11 @@ SELECT binding_id, kind, keel_id, external_id, extra, synced_at
 SELECT keel_id FROM channel_item_links
  WHERE binding_id = @binding_id::bigint AND kind = 2 AND keel_id > @after::bigint
  ORDER BY keel_id LIMIT @lim::int;
+
+-- name: LockChannelMerchant :exec
+-- 这家店的渠道启停串行化（事务级 advisory lock，提交 / 回滚即释放）。拿着它再数启用中的销售渠道、取版本，
+-- 版本的先后就等于提交的先后（并发启停 A、停用 B 时不会停在错误的「关」）。第一段键见 service.ChannelMerchantLockKey。
+SELECT pg_advisory_xact_lock(7340301, current_merchant()::int);
+
+-- name: ChannelSKUExists :one
+SELECT EXISTS (SELECT 1 FROM skus WHERE id = @sku_id::bigint AND deleted_at IS NULL);

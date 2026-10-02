@@ -11,6 +11,17 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const channelSKUExists = `-- name: ChannelSKUExists :one
+SELECT EXISTS (SELECT 1 FROM skus WHERE id = $1::bigint AND deleted_at IS NULL)
+`
+
+func (q *Queries) ChannelSKUExists(ctx context.Context, skuID int64) (bool, error) {
+	row := q.db.QueryRow(ctx, channelSKUExists, skuID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const channelSKUOffers = `-- name: ChannelSKUOffers :many
 SELECT v.sku_id, v.price_cents,
        (p.status = 1 AND p.deleted_at IS NULL AND s.status = 1 AND s.deleted_at IS NULL)::boolean AS sellable
@@ -758,6 +769,17 @@ func (q *Queries) ListLinkedSKUIDsPage(ctx context.Context, arg ListLinkedSKUIDs
 		return nil, err
 	}
 	return items, nil
+}
+
+const lockChannelMerchant = `-- name: LockChannelMerchant :exec
+SELECT pg_advisory_xact_lock(7340301, current_merchant()::int)
+`
+
+// 这家店的渠道启停串行化（事务级 advisory lock，提交 / 回滚即释放）。拿着它再数启用中的销售渠道、取版本，
+// 版本的先后就等于提交的先后（并发启停 A、停用 B 时不会停在错误的「关」）。第一段键见 service.ChannelMerchantLockKey。
+func (q *Queries) LockChannelMerchant(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, lockChannelMerchant)
+	return err
 }
 
 const markChannelInboundEvent = `-- name: MarkChannelInboundEvent :exec

@@ -176,6 +176,9 @@ type ChannelTx interface {
 	UpsertChannelItemLink(ctx context.Context, l ChannelItemLink) error
 	ChannelItemLinks(ctx context.Context, bindingID int64, kind int16, keelIDs []int64) (map[int64]ChannelItemLink, error)
 	LinkedSKUIDsPage(ctx context.Context, bindingID, after int64, limit int32) ([]int64, error)
+	// LockChannelMerchant 在本事务里拿这家店的渠道启停锁（提交即释放）。
+	LockChannelMerchant(ctx context.Context) error
+	ChannelSKUExists(ctx context.Context, skuID int64) (bool, error)
 }
 
 // channel_item_links.kind
@@ -552,4 +555,10 @@ func (t tenantTx) ChannelItemLinks(ctx context.Context, bindingID int64, kind in
 
 func (t tenantTx) LinkedSKUIDsPage(ctx context.Context, bindingID, after int64, limit int32) ([]int64, error) {
 	return t.q.ListLinkedSKUIDsPage(ctx, db.ListLinkedSKUIDsPageParams{BindingID: bindingID, After: after, Lim: limit})
+}
+
+func (t tenantTx) LockChannelMerchant(ctx context.Context) error { return t.q.LockChannelMerchant(ctx) }
+
+func (t tenantTx) ChannelSKUExists(ctx context.Context, skuID int64) (bool, error) {
+	return t.q.ChannelSKUExists(ctx, skuID)
 }
