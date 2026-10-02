@@ -103,9 +103,23 @@ func (s *ChannelService) finish(ctx context.Context, ids ...int64) {
 	}
 }
 
+// retry 把一条失败的任务放回队列。cause 若来自适配器，调用方先过 channel.RedactError（错误文本会写进 jobs.last_error）。
+//
+// 平台限流（RetryableError.RateLimited）不算失败：按平台给的等待时间放回、不计次（DeferJob），
+// 否则一阵持续的限流就能把任务耗进死信。
 func (s *ChannelService) retry(ctx context.Context, j repository.Job, cause error) {
-	err := s.repo.RetryJobCapped(ctx, j.ID, cause.Error(), channelMaxBackoff)
 	log := s.log.With("merchant_id", j.MerchantID, "job_id", j.ID, "queue", j.Queue, "job_key", j.JobKey, "attempt", j.Attempts)
+	var re *channel.RetryableError
+	if errors.As(cause, &re) && re.RateLimited {
+		after := min(max(re.After, time.Second), channelMaxBackoff)
+		if err := s.repo.DeferJob(ctx, j.ID, cause.Error(), after); err != nil {
+			log.ErrorContext(ctx, "渠道任务被限流、放回队列失败（回收任务会接手）", "err", cause, "retry_err", err)
+			return
+		}
+		log.InfoContext(ctx, "渠道限流，稍后再推（不计失败次数）", "after", after)
+		return
+	}
+	err := s.repo.RetryJobCapped(ctx, j.ID, cause.Error(), channelMaxBackoff)
 	switch {
 	case errors.Is(err, repository.ErrJobDeadLettered):
 		log.ErrorContext(ctx, "渠道任务重试次数用尽，已转死信 —— 这一格没有推上去，请人工处理", "err", cause)
@@ -269,6 +283,7 @@ func (s *ChannelService) pushStore(ctx context.Context, outlet channel.Outlet, a
 		return
 	}
 	results, err := outlet.PushListings(ctx, ab, ls)
+	err = channel.RedactError(err, ab.Secrets)
 	if err == nil && len(results) != len(ls) {
 		err = fmt.Errorf("适配器回了 %d 条结果，推了 %d 条", len(results), len(ls))
 	}
@@ -296,7 +311,7 @@ func (s *ChannelService) pushStore(ctx context.Context, outlet channel.Outlet, a
 			s.finish(ctx, j.ID)
 			continue
 		}
-		msg := r.Err.Error()
+		msg := channel.Redact(r.Err.Error(), ab.Secrets)
 		if r.Conflict && r.ObservedQty != nil {
 			// 渠道上的数被人改过：记下渠道上的现值（下一次 CAS 以它为准），对销售渠道 keel 是权威，重推覆盖。
 			msg = fmt.Sprintf("渠道上的可售数被改成了 %d，按 keel 的 %d 覆盖", *r.ObservedQty, t.qty)

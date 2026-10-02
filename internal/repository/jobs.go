@@ -355,6 +355,24 @@ func (r *Repo) RetryJobCapped(ctx context.Context, id int64, reason string, maxB
 	return nil
 }
 
+// DeferJob 把占着的任务放回队列、run_after = now() + after，并**撤回占位时加的那一次 attempts**。
+//
+// 为渠道推送的限流而加（第二期）：平台限流（Shopify throttleStatus、HTTP 429）不是失败，
+// 只是「晚点再来」。照 RetryJobCapped 计次的话，一阵持续的限流会把 max_attempts 耗光、任务进死信 ——
+// 而那一格从此没人推，渠道上一直是旧数。撤回那一次占位，限流多久都不会进死信；
+// 限流解除后的真失败照旧计次。
+func (r *Repo) DeferJob(ctx context.Context, id int64, reason string, after time.Duration) error {
+	_, err := r.poolFor(ctx, "DeferJob").Exec(ctx, `
+		UPDATE jobs
+		   SET status     = 0,
+		       attempts   = GREATEST(attempts - 1, 0),
+		       run_after  = now() + (interval '1 second' * $3::float8),
+		       last_error = $2,
+		       locked_by  = NULL, locked_at = NULL
+		 WHERE id = $1`, id, reason, after.Seconds())
+	return err
+}
+
 // ClaimJobByKey 按 (租户, 队列, job_key) 占下一条**还没被 worker 取走**（status = 0）的任务：
 // 与 DequeueJobs 同一个占位（status = 1、attempts + 1、记下 locked_by），只是点名要哪一条。
 // 没有这条（从没入过队、已经被 worker 取走、已经做完）返回 ok = false。
