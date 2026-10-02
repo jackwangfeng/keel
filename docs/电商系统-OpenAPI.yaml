@@ -145,6 +145,8 @@ tags:
     description: |
       经营报表（后台只读）：经营概览、销售趋势、商品排行、门店 / 大区对比、库存预警、搜索概况。
       固定口径、现场聚合，不走 AI。口径见 `ReportWindow` 与 `ReportMetrics`。
+  - name: Channel
+    description: 渠道适配层（Shopify / 美团闪购 / 饿了么零售……）：回调入口与后台的渠道管理
 
 # =============================================================================
 paths:
@@ -3411,6 +3413,453 @@ paths:
               schema: { $ref: '#/components/schemas/AdminLocalDelivery' }
         '404':
           description: 门店不存在或不属于当前租户。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /admin/channel-kinds:
+    get:
+      tags: [Admin, Channel]
+      summary: 这个服务编进来的渠道适配器
+      description: |
+        建 binding 时可选的渠道（`channel` 取值）与各自能当的角色、能力声明。
+        全店范围的员工（管理员、操作员）可读。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/ChannelKind' }
+        default: { $ref: '#/components/responses/Problem' }
+  /admin/channel-bindings:
+    get:
+      tags: [Admin, Channel]
+      summary: 渠道账号（binding）列表
+      description: |
+        一个 binding 是商家接的一个渠道账号（一家 Shopify 店、一个美团开发者账号……）。
+        **响应里永远没有凭据**（`PUT …/secrets` 只写不读）。不分页（一家店至多几个）。全店范围的员工可读。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/ChannelBinding' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Admin, Channel]
+      summary: 接一个渠道账号
+      description: |
+        `status` 不给时建成停用：先配凭据、门店映射，再 `PATCH` 成启用。
+        建成即启用的销售渠道会立刻通知库存服务这家店开了渠道。只有管理员能写。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ChannelBindingInput' }
+      responses:
+        '201':
+          description: 已创建
+          headers:
+            Idempotency-Replayed: { $ref: '#/components/headers/IdempotencyReplayed' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ChannelBinding' }
+        '409':
+          description: |
+            同一渠道同一外部账号已经接过（`https://keel.dev/problems/channel-duplicate`）；
+            同一 Idempotency-Key 正在处理中（`https://keel.dev/problems/idempotency-key-in-flight`）。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: 没有这个渠道、角色当不了，或同一 Idempotency-Key 配了不同的请求体（`https://keel.dev/problems/invalid-request`）。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /admin/channel-bindings/{binding_id}:
+    parameters:
+      - $ref: '#/components/parameters/ChannelBindingId'
+    get:
+      tags: [Admin, Channel]
+      summary: 一个渠道账号
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ChannelBinding' }
+        '404':
+          description: binding（或规则 / 门店映射）在本店不存在（`https://keel.dev/problems/not-found`）
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+    patch:
+      tags: [Admin, Channel]
+      summary: 改渠道账号（名称 / 角色 / 启停 / 配置）
+      description: |
+        只改给了的字段。从停用变成启用的销售渠道会给它映射的每家门店整店推一遍对外可售数与价格；
+        「启用中的销售渠道」状态翻转时通知库存服务。只有管理员能写。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ChannelBindingPatch' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ChannelBinding' }
+        '404':
+          description: binding（或规则 / 门店映射）在本店不存在（`https://keel.dev/problems/not-found`）
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: 角色当不了（`https://keel.dev/problems/invalid-request`）
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /admin/channel-bindings/{binding_id}/secrets:
+    parameters:
+      - $ref: '#/components/parameters/ChannelBindingId'
+    put:
+      tags: [Admin, Channel]
+      summary: 设渠道凭据（只写不读）
+      description: |
+        整体替换。形状由渠道决定（Shopify 的 client id / secret、美团的 app secret……）。
+        **没有任何接口会把它读出来**。只有管理员能写。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        '204': { description: 已保存 }
+        '404':
+          description: binding（或规则 / 门店映射）在本店不存在（`https://keel.dev/problems/not-found`）
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: 不是 JSON 对象（`https://keel.dev/problems/invalid-request`）
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /admin/channel-bindings/{binding_id}/store-links:
+    parameters:
+      - $ref: '#/components/parameters/ChannelBindingId'
+    get:
+      tags: [Admin, Channel]
+      summary: 门店映射（keel 门店 ↔ 渠道门店）
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/ChannelStoreLink' }
+        '404':
+          description: binding（或规则 / 门店映射）在本店不存在（`https://keel.dev/problems/not-found`）
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /admin/channel-bindings/{binding_id}/store-links/{store_id}:
+    parameters:
+      - $ref: '#/components/parameters/ChannelBindingId'
+      - $ref: '#/components/parameters/StoreId'
+    put:
+      tags: [Admin, Channel]
+      summary: 把一家门店映射到渠道门店
+      description: 映射之后这家门店会整店推一遍。只有管理员能写。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [external_store_id]
+              properties:
+                external_store_id: { type: string, minLength: 1, maxLength: 200, description: 渠道上的门店 ID（Shopify location gid / 美团 app_poi_code） }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ChannelStoreLink' }
+        '404':
+          description: binding（或规则 / 门店映射）在本店不存在（`https://keel.dev/problems/not-found`）
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '409':
+          description: 这个渠道门店已经映射给了别的门店（`https://keel.dev/problems/channel-duplicate`）
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+    delete:
+      tags: [Admin, Channel]
+      summary: 取消门店映射
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+      responses:
+        '204': { description: 已取消 }
+        '404':
+          description: binding（或规则 / 门店映射）在本店不存在（`https://keel.dev/problems/not-found`）
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /admin/channel-bindings/{binding_id}/sku-links/{sku_id}:
+    parameters:
+      - $ref: '#/components/parameters/ChannelBindingId'
+      - $ref: '#/components/parameters/SkuId'
+    put:
+      tags: [Admin, Channel]
+      summary: 登记一个 SKU 在渠道上的外部 ID
+      description: |
+        只有映射过的 SKU 才会推给销售渠道（渠道上没有对应商品就无处可推）。
+        商品源同步（Shopify）会自动写；往外推商品的渠道（美团 / 饿了么）也可以在这里手工对上。只有管理员能写。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [external_id]
+              properties:
+                external_id: { type: string, minLength: 1, maxLength: 200 }
+                extra:
+                  type: object
+                  additionalProperties: true
+                  description: 渠道附带的 ID（如 Shopify 的 inventoryItem gid）
+      responses:
+        '204': { description: 已保存 }
+        '404':
+          description: binding（或规则 / 门店映射）在本店不存在（`https://keel.dev/problems/not-found`）
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /admin/channel-bindings/{binding_id}/stock-rules:
+    parameters:
+      - $ref: '#/components/parameters/ChannelBindingId'
+    get:
+      tags: [Admin, Channel]
+      summary: 库存分配规则
+      description: |
+        对外可售数 = clamp(floor(可售 × ratio_bp / 10000) − safety_qty, 0, cap_qty)。
+        粒度：渠道（store_id、sku_id 都空）/ 渠道 × 门店 / 渠道 × 门店 × SKU，最具体的生效；一条都没有 = 全量。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/ChannelStockRule' }
+        '404':
+          description: binding（或规则 / 门店映射）在本店不存在（`https://keel.dev/problems/not-found`）
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+    put:
+      tags: [Admin, Channel]
+      summary: 设一条库存分配规则（按作用域覆盖）
+      description: 同一作用域（store_id × sku_id）只有一条，再设即覆盖。设完对映射的门店重推。只有管理员能写。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ChannelStockRuleInput' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ChannelStockRule' }
+        '404':
+          description: binding（或规则 / 门店映射）在本店不存在（`https://keel.dev/problems/not-found`）
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: 门店 / SKU 不存在，或只给了 SKU 没给门店（`https://keel.dev/problems/invalid-request`）
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /admin/channel-bindings/{binding_id}/stock-rules/{rule_id}:
+    parameters:
+      - $ref: '#/components/parameters/ChannelBindingId'
+      - $ref: '#/components/parameters/ChannelRuleId'
+    delete:
+      tags: [Admin, Channel]
+      summary: 删一条库存分配规则
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+      responses:
+        '204': { description: 已删除 }
+        '404':
+          description: binding（或规则 / 门店映射）在本店不存在（`https://keel.dev/problems/not-found`）
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /admin/channel-bindings/{binding_id}/price-rules:
+    parameters:
+      - $ref: '#/components/parameters/ChannelBindingId'
+    get:
+      tags: [Admin, Channel]
+      summary: 渠道价格规则
+      description: |
+        渠道级加价（sku_id 空，只用 markup_bp）+ SKU 级覆盖（fixed_cents 优先于 markup_bp）。
+        基准是门店就近生效价（门店价 → 大区价 → 基准价）。加价四舍五入到分。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/ChannelPriceRule' }
+        '404':
+          description: binding（或规则 / 门店映射）在本店不存在（`https://keel.dev/problems/not-found`）
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+    put:
+      tags: [Admin, Channel]
+      summary: 设一条渠道价格规则（按作用域覆盖）
+      description: 同一作用域（sku_id）只有一条，再设即覆盖。只有管理员能写。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ChannelPriceRuleInput' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ChannelPriceRule' }
+        '404':
+          description: binding（或规则 / 门店映射）在本店不存在（`https://keel.dev/problems/not-found`）
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: SKU 不存在，或渠道级规则给了固定价（`https://keel.dev/problems/invalid-request`）
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /admin/channel-bindings/{binding_id}/price-rules/{rule_id}:
+    parameters:
+      - $ref: '#/components/parameters/ChannelBindingId'
+      - $ref: '#/components/parameters/ChannelRuleId'
+    delete:
+      tags: [Admin, Channel]
+      summary: 删一条渠道价格规则
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+      responses:
+        '204': { description: 已删除 }
+        '404':
+          description: binding（或规则 / 门店映射）在本店不存在（`https://keel.dev/problems/not-found`）
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /admin/channel-bindings/{binding_id}/listings:
+    parameters:
+      - $ref: '#/components/parameters/ChannelBindingId'
+    get:
+      tags: [Admin, Channel]
+      summary: 最近一次推给渠道的对外可售数与价格
+      description: 每个（门店, SKU）一行，`last_error` 非空表示最近一次推送没成功（会退避重试）。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+        - name: store_id
+          in: query
+          required: false
+          schema: { type: integer, format: int64, minimum: 1 }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/ChannelListing' }
+        '404':
+          description: binding（或规则 / 门店映射）在本店不存在（`https://keel.dev/problems/not-found`）
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
@@ -7621,6 +8070,54 @@ paths:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
 
+  /webhooks/channels/{binding_id}:
+    post:
+      tags: [Channel]
+      summary: 渠道回调（Shopify / 美团 / 饿了么……）
+      description: |
+        渠道适配层的统一回调入口：每个 binding（商家接的一个渠道账号）一个地址，
+        配在渠道后台的回调设置里。租户照旧从 Host 定，验签由该渠道的适配器做
+        （Shopify 的 `X-Shopify-Hmac-SHA256`、美团的 md5 签名……），请求体与头
+        原样交给适配器，所以这里不约束它们的形状。
+
+        事件按外部事件 ID 去重入库后**异步处理**，这里只负责尽快应答。
+        服务端未开启渠道层（`KEEL_CHANNELS` 关闭）时这条接口不存在（404）。
+
+        binding 不存在、验签失败、没配密钥一律返回空的 401，不泄露任何内部状态。
+      security: []
+      parameters:
+        - name: binding_id
+          in: path
+          required: true
+          schema: { type: integer, format: int64, minimum: 1 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+          application/x-www-form-urlencoded:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        '200':
+          description: |
+            已受理（无论首次还是重复）。响应体是该渠道要求的应答
+            （Shopify 为空，美团为 `{"code":0}`，各渠道不同）。
+
+            **验签通过之后的业务性结论也回 200**（事件解不开、binding 已停用）：
+            渠道重推也没用，结论在服务端留日志。
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+            text/plain:
+              schema: { type: string }
+        '401':
+          description: binding 不存在、签名验证失败或未配置密钥（不区分）
+        default:
+          description: 未能入库，**请渠道重推**（基础设施故障）。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
   # ---------------------------------------------------------------- Coupon
   /coupons:
     get:
@@ -7788,6 +8285,16 @@ components:
       bearerFormat: JWT
 
   parameters:
+    ChannelBindingId:
+      name: binding_id
+      in: path
+      required: true
+      schema: { type: integer, format: int64, minimum: 1 }
+    ChannelRuleId:
+      name: rule_id
+      in: path
+      required: true
+      schema: { type: integer, format: int64, minimum: 1 }
     Page:
       name: page
       in: query
@@ -8061,6 +8568,110 @@ components:
           schema: { $ref: '#/components/schemas/Problem' }
 
   schemas:
+    ChannelKind:
+      type: object
+      description: 一个编进来的渠道适配器。
+      required: [channel, roles, catalog_direction, accept_required, refund_needs_approval, partial_refund, stockout_adjust]
+      properties:
+        channel: { type: string, description: '`channel_bindings.channel` 的取值，如 shopify / meituan' }
+        roles:
+          type: integer
+          format: int32
+          description: 能当的角色（位）：1 商品源、2 库存源、4 销售渠道
+        catalog_direction:
+          type: string
+          enum: [off, inbound, outbound]
+          description: 商品同步方向：inbound 渠道 → keel（Shopify）、outbound keel → 渠道（美团 / 饿了么）、off 不同步
+        accept_required: { type: boolean, description: 订单要商家接单（外卖平台） }
+        refund_needs_approval: { type: boolean }
+        partial_refund: { type: boolean }
+        stockout_adjust: { type: boolean }
+    ChannelBinding:
+      type: object
+      description: 商家接的一个渠道账号。**没有凭据字段**（只写不读）。
+      required: [id, channel, external_account, name, roles, status, config, webhook_path, created_at, updated_at]
+      properties:
+        id: { type: integer, format: int64 }
+        channel: { type: string }
+        external_account: { type: string, description: 渠道上的账号（Shopify 店铺域名、美团开发者 app_id……） }
+        name: { type: string }
+        roles: { type: integer, format: int32, description: 1 商品源、2 库存源、4 销售渠道（位） }
+        status:
+          type: integer
+          format: int32
+          enum: [1, 2, 3]
+          description: 1 启用、2 停用、3 凭据失效（续期失败，已停推送）
+        config: { type: object, additionalProperties: true }
+        webhook_path: { type: string, description: '配到渠道后台的回调路径（`/api/v1/webhooks/channels/{id}`），前面接本店域名' }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    ChannelBindingInput:
+      type: object
+      required: [channel, external_account, name, roles]
+      properties:
+        channel: { type: string, minLength: 1, maxLength: 32 }
+        external_account: { type: string, minLength: 1, maxLength: 200 }
+        name: { type: string, minLength: 1, maxLength: 60 }
+        roles: { type: integer, format: int32, minimum: 1, maximum: 7 }
+        status: { type: integer, format: int32, enum: [1, 2], description: 不给 = 2 停用 }
+        config: { type: object, additionalProperties: true }
+    ChannelBindingPatch:
+      type: object
+      description: 只改给了的字段。
+      properties:
+        name: { type: string, minLength: 1, maxLength: 60 }
+        roles: { type: integer, format: int32, minimum: 1, maximum: 7 }
+        status: { type: integer, format: int32, enum: [1, 2] }
+        config: { type: object, additionalProperties: true }
+    ChannelStoreLink:
+      type: object
+      required: [store_id, external_store_id, created_at]
+      properties:
+        store_id: { type: integer, format: int64 }
+        external_store_id: { type: string }
+        created_at: { type: string, format: date-time }
+    ChannelStockRuleInput:
+      type: object
+      required: [ratio_bp]
+      properties:
+        store_id: { type: [integer, 'null'], format: int64, description: 空 = 渠道级 }
+        sku_id: { type: [integer, 'null'], format: int64, description: 非空时 store_id 也必须给 }
+        ratio_bp: { type: integer, format: int32, minimum: 0, maximum: 10000, description: 可售比例（万分比），10000 = 全量 }
+        safety_qty: { type: integer, format: int32, minimum: 0, description: 安全库存，默认 0 }
+        cap_qty: { type: [integer, 'null'], format: int32, minimum: 0, description: 上限，空 = 不封顶；0 = 在这个渠道下架 }
+    ChannelStockRule:
+      allOf:
+        - $ref: '#/components/schemas/ChannelStockRuleInput'
+        - type: object
+          required: [id, safety_qty, updated_at]
+          properties:
+            id: { type: integer, format: int64 }
+            updated_at: { type: string, format: date-time }
+    ChannelPriceRuleInput:
+      type: object
+      properties:
+        sku_id: { type: [integer, 'null'], format: int64, description: 空 = 渠道级加价 }
+        markup_bp: { type: integer, format: int32, minimum: -9000, maximum: 100000, description: 加价（万分比），1500 = +15% }
+        fixed_cents: { type: [integer, 'null'], format: int64, minimum: 1, description: SKU 级固定价，优先于加价 }
+    ChannelPriceRule:
+      allOf:
+        - $ref: '#/components/schemas/ChannelPriceRuleInput'
+        - type: object
+          required: [id, markup_bp, updated_at]
+          properties:
+            id: { type: integer, format: int64 }
+            updated_at: { type: string, format: date-time }
+    ChannelListing:
+      type: object
+      required: [store_id, sku_id, published_qty, published_cents, version, pushed_at]
+      properties:
+        store_id: { type: integer, format: int64 }
+        sku_id: { type: integer, format: int64 }
+        published_qty: { type: integer, format: int32 }
+        published_cents: { type: integer, format: int64 }
+        version: { type: integer, format: int64 }
+        pushed_at: { type: string, format: date-time }
+        last_error: { type: [string, 'null'] }
 
     # ---- 通用 ----
     Problem:

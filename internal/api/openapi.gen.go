@@ -630,6 +630,84 @@ func (e CategoryUpdateRequestStatus) Valid() bool {
 	}
 }
 
+// Defines values for ChannelBindingStatus.
+const (
+	ChannelBindingStatusN1 ChannelBindingStatus = 1
+	ChannelBindingStatusN2 ChannelBindingStatus = 2
+	ChannelBindingStatusN3 ChannelBindingStatus = 3
+)
+
+// Valid indicates whether the value is a known member of the ChannelBindingStatus enum.
+func (e ChannelBindingStatus) Valid() bool {
+	switch e {
+	case ChannelBindingStatusN1:
+		return true
+	case ChannelBindingStatusN2:
+		return true
+	case ChannelBindingStatusN3:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChannelBindingInputStatus.
+const (
+	ChannelBindingInputStatusN1 ChannelBindingInputStatus = 1
+	ChannelBindingInputStatusN2 ChannelBindingInputStatus = 2
+)
+
+// Valid indicates whether the value is a known member of the ChannelBindingInputStatus enum.
+func (e ChannelBindingInputStatus) Valid() bool {
+	switch e {
+	case ChannelBindingInputStatusN1:
+		return true
+	case ChannelBindingInputStatusN2:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChannelBindingPatchStatus.
+const (
+	ChannelBindingPatchStatusN1 ChannelBindingPatchStatus = 1
+	ChannelBindingPatchStatusN2 ChannelBindingPatchStatus = 2
+)
+
+// Valid indicates whether the value is a known member of the ChannelBindingPatchStatus enum.
+func (e ChannelBindingPatchStatus) Valid() bool {
+	switch e {
+	case ChannelBindingPatchStatusN1:
+		return true
+	case ChannelBindingPatchStatusN2:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChannelKindCatalogDirection.
+const (
+	Inbound  ChannelKindCatalogDirection = "inbound"
+	Off      ChannelKindCatalogDirection = "off"
+	Outbound ChannelKindCatalogDirection = "outbound"
+)
+
+// Valid indicates whether the value is a known member of the ChannelKindCatalogDirection enum.
+func (e ChannelKindCatalogDirection) Valid() bool {
+	switch e {
+	case Inbound:
+		return true
+	case Off:
+		return true
+	case Outbound:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ChatReplyActionType.
 const (
 	NavigateAddress ChatReplyActionType = "navigate_address"
@@ -4104,6 +4182,160 @@ type CategoryUpdateRequest struct {
 // CategoryUpdateRequestStatus 0 停用 / 1 启用
 type CategoryUpdateRequestStatus int
 
+// ChannelBinding 商家接的一个渠道账号。**没有凭据字段**（只写不读）。
+type ChannelBinding struct {
+	Channel   string                 `json:"channel"`
+	Config    map[string]interface{} `json:"config"`
+	CreatedAt time.Time              `json:"created_at"`
+
+	// ExternalAccount 渠道上的账号（Shopify 店铺域名、美团开发者 app_id……）
+	ExternalAccount string `json:"external_account"`
+	Id              int64  `json:"id"`
+	Name            string `json:"name"`
+
+	// Roles 1 商品源、2 库存源、4 销售渠道（位）
+	Roles int32 `json:"roles"`
+
+	// Status 1 启用、2 停用、3 凭据失效（续期失败，已停推送）
+	Status    ChannelBindingStatus `json:"status"`
+	UpdatedAt time.Time            `json:"updated_at"`
+
+	// WebhookPath 配到渠道后台的回调路径（`/api/v1/webhooks/channels/{id}`），前面接本店域名
+	WebhookPath string `json:"webhook_path"`
+}
+
+// ChannelBindingStatus 1 启用、2 停用、3 凭据失效（续期失败，已停推送）
+type ChannelBindingStatus int32
+
+// ChannelBindingInput defines model for ChannelBindingInput.
+type ChannelBindingInput struct {
+	Channel         string                  `json:"channel"`
+	Config          *map[string]interface{} `json:"config,omitempty"`
+	ExternalAccount string                  `json:"external_account"`
+	Name            string                  `json:"name"`
+	Roles           int32                   `json:"roles"`
+
+	// Status 不给 = 2 停用
+	Status *ChannelBindingInputStatus `json:"status,omitempty"`
+}
+
+// ChannelBindingInputStatus 不给 = 2 停用
+type ChannelBindingInputStatus int32
+
+// ChannelBindingPatch 只改给了的字段。
+type ChannelBindingPatch struct {
+	Config *map[string]interface{}    `json:"config,omitempty"`
+	Name   *string                    `json:"name,omitempty"`
+	Roles  *int32                     `json:"roles,omitempty"`
+	Status *ChannelBindingPatchStatus `json:"status,omitempty"`
+}
+
+// ChannelBindingPatchStatus defines model for ChannelBindingPatch.Status.
+type ChannelBindingPatchStatus int32
+
+// ChannelKind 一个编进来的渠道适配器。
+type ChannelKind struct {
+	// AcceptRequired 订单要商家接单（外卖平台）
+	AcceptRequired bool `json:"accept_required"`
+
+	// CatalogDirection 商品同步方向：inbound 渠道 → keel（Shopify）、outbound keel → 渠道（美团 / 饿了么）、off 不同步
+	CatalogDirection ChannelKindCatalogDirection `json:"catalog_direction"`
+
+	// Channel `channel_bindings.channel` 的取值，如 shopify / meituan
+	Channel             string `json:"channel"`
+	PartialRefund       bool   `json:"partial_refund"`
+	RefundNeedsApproval bool   `json:"refund_needs_approval"`
+
+	// Roles 能当的角色（位）：1 商品源、2 库存源、4 销售渠道
+	Roles          int32 `json:"roles"`
+	StockoutAdjust bool  `json:"stockout_adjust"`
+}
+
+// ChannelKindCatalogDirection 商品同步方向：inbound 渠道 → keel（Shopify）、outbound keel → 渠道（美团 / 饿了么）、off 不同步
+type ChannelKindCatalogDirection string
+
+// ChannelListing defines model for ChannelListing.
+type ChannelListing struct {
+	LastError      *string   `json:"last_error,omitempty"`
+	PublishedCents int64     `json:"published_cents"`
+	PublishedQty   int32     `json:"published_qty"`
+	PushedAt       time.Time `json:"pushed_at"`
+	SkuId          int64     `json:"sku_id"`
+	StoreId        int64     `json:"store_id"`
+	Version        int64     `json:"version"`
+}
+
+// ChannelPriceRule defines model for ChannelPriceRule.
+type ChannelPriceRule struct {
+	// FixedCents SKU 级固定价，优先于加价
+	FixedCents *int64 `json:"fixed_cents,omitempty"`
+	Id         int64  `json:"id"`
+
+	// MarkupBp 加价（万分比），1500 = +15%
+	MarkupBp int32 `json:"markup_bp"`
+
+	// SkuId 空 = 渠道级加价
+	SkuId     *int64    `json:"sku_id,omitempty"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// ChannelPriceRuleInput defines model for ChannelPriceRuleInput.
+type ChannelPriceRuleInput struct {
+	// FixedCents SKU 级固定价，优先于加价
+	FixedCents *int64 `json:"fixed_cents,omitempty"`
+
+	// MarkupBp 加价（万分比），1500 = +15%
+	MarkupBp *int32 `json:"markup_bp,omitempty"`
+
+	// SkuId 空 = 渠道级加价
+	SkuId *int64 `json:"sku_id,omitempty"`
+}
+
+// ChannelStockRule defines model for ChannelStockRule.
+type ChannelStockRule struct {
+	// CapQty 上限，空 = 不封顶；0 = 在这个渠道下架
+	CapQty *int32 `json:"cap_qty,omitempty"`
+	Id     int64  `json:"id"`
+
+	// RatioBp 可售比例（万分比），10000 = 全量
+	RatioBp int32 `json:"ratio_bp"`
+
+	// SafetyQty 安全库存，默认 0
+	SafetyQty int32 `json:"safety_qty"`
+
+	// SkuId 非空时 store_id 也必须给
+	SkuId *int64 `json:"sku_id,omitempty"`
+
+	// StoreId 空 = 渠道级
+	StoreId   *int64    `json:"store_id,omitempty"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// ChannelStockRuleInput defines model for ChannelStockRuleInput.
+type ChannelStockRuleInput struct {
+	// CapQty 上限，空 = 不封顶；0 = 在这个渠道下架
+	CapQty *int32 `json:"cap_qty,omitempty"`
+
+	// RatioBp 可售比例（万分比），10000 = 全量
+	RatioBp int32 `json:"ratio_bp"`
+
+	// SafetyQty 安全库存，默认 0
+	SafetyQty *int32 `json:"safety_qty,omitempty"`
+
+	// SkuId 非空时 store_id 也必须给
+	SkuId *int64 `json:"sku_id,omitempty"`
+
+	// StoreId 空 = 渠道级
+	StoreId *int64 `json:"store_id,omitempty"`
+}
+
+// ChannelStoreLink defines model for ChannelStoreLink.
+type ChannelStoreLink struct {
+	CreatedAt       time.Time `json:"created_at"`
+	ExternalStoreId string    `json:"external_store_id"`
+	StoreId         int64     `json:"store_id"`
+}
+
 // ChatReply defines model for ChatReply.
 type ChatReply struct {
 	// Action 写操作路由指令。前端据此跳转到对应表单并预填参数，
@@ -7506,6 +7738,12 @@ type CartStoreId = int64
 // CategoryId defines model for CategoryId.
 type CategoryId = int64
 
+// ChannelBindingId defines model for ChannelBindingId.
+type ChannelBindingId = int64
+
+// ChannelRuleId defines model for ChannelRuleId.
+type ChannelRuleId = int64
+
 // CouponTemplateId defines model for CouponTemplateId.
 type CouponTemplateId = int64
 
@@ -8306,6 +8544,502 @@ type DeleteAdminCategoriesCategoryIdParams struct {
 
 // PatchAdminCategoriesCategoryIdParams defines parameters for PatchAdminCategoriesCategoryId.
 type PatchAdminCategoriesCategoryIdParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// GetAdminChannelBindingsParams defines parameters for GetAdminChannelBindings.
+type GetAdminChannelBindingsParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// PostAdminChannelBindingsParams defines parameters for PostAdminChannelBindings.
+type PostAdminChannelBindingsParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+
+	// IdempotencyKey 客户端生成的 UUID。幂等作用域为 `(接口 scope, user_id, key)`，
+	// 有效期 24h，过期后同一 key 可复用（见数据模型文档 §11）。
+	//
+	// · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
+	//   并带 `Idempotency-Replayed: true` 响应头
+	// · **同 key 正在处理中**：`409` + `Retry-After`，
+	//   type=https://keel.dev/problems/idempotency-key-in-flight，
+	//   客户端应退避重试，不要当成业务失败
+	// · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
+	//   type=https://keel.dev/problems/idempotency-key-reused。
+	//   宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
+	//   那会让用户以为下单成功了而实际什么都没发生
+	// · 首次执行失败（存档为失败态）时同样回放该失败响应；
+	//   确需重试的场景请换一个新 key
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// GetAdminChannelBindingsBindingIdParams defines parameters for GetAdminChannelBindingsBindingId.
+type GetAdminChannelBindingsBindingIdParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// PatchAdminChannelBindingsBindingIdParams defines parameters for PatchAdminChannelBindingsBindingId.
+type PatchAdminChannelBindingsBindingIdParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// GetAdminChannelBindingsBindingIdListingsParams defines parameters for GetAdminChannelBindingsBindingIdListings.
+type GetAdminChannelBindingsBindingIdListingsParams struct {
+	StoreId  *int64    `form:"store_id,omitempty" json:"store_id,omitempty"`
+	Page     *Page     `form:"page,omitempty" json:"page,omitempty"`
+	PageSize *PageSize `form:"page_size,omitempty" json:"page_size,omitempty"`
+
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// GetAdminChannelBindingsBindingIdPriceRulesParams defines parameters for GetAdminChannelBindingsBindingIdPriceRules.
+type GetAdminChannelBindingsBindingIdPriceRulesParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// PutAdminChannelBindingsBindingIdPriceRulesParams defines parameters for PutAdminChannelBindingsBindingIdPriceRules.
+type PutAdminChannelBindingsBindingIdPriceRulesParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// DeleteAdminChannelBindingsBindingIdPriceRulesRuleIdParams defines parameters for DeleteAdminChannelBindingsBindingIdPriceRulesRuleId.
+type DeleteAdminChannelBindingsBindingIdPriceRulesRuleIdParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// PutAdminChannelBindingsBindingIdSecretsJSONBody defines parameters for PutAdminChannelBindingsBindingIdSecrets.
+type PutAdminChannelBindingsBindingIdSecretsJSONBody map[string]interface{}
+
+// PutAdminChannelBindingsBindingIdSecretsParams defines parameters for PutAdminChannelBindingsBindingIdSecrets.
+type PutAdminChannelBindingsBindingIdSecretsParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// PutAdminChannelBindingsBindingIdSkuLinksSkuIdJSONBody defines parameters for PutAdminChannelBindingsBindingIdSkuLinksSkuId.
+type PutAdminChannelBindingsBindingIdSkuLinksSkuIdJSONBody struct {
+	ExternalId string `json:"external_id"`
+
+	// Extra 渠道附带的 ID（如 Shopify 的 inventoryItem gid）
+	Extra *map[string]interface{} `json:"extra,omitempty"`
+}
+
+// PutAdminChannelBindingsBindingIdSkuLinksSkuIdParams defines parameters for PutAdminChannelBindingsBindingIdSkuLinksSkuId.
+type PutAdminChannelBindingsBindingIdSkuLinksSkuIdParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// GetAdminChannelBindingsBindingIdStockRulesParams defines parameters for GetAdminChannelBindingsBindingIdStockRules.
+type GetAdminChannelBindingsBindingIdStockRulesParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// PutAdminChannelBindingsBindingIdStockRulesParams defines parameters for PutAdminChannelBindingsBindingIdStockRules.
+type PutAdminChannelBindingsBindingIdStockRulesParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// DeleteAdminChannelBindingsBindingIdStockRulesRuleIdParams defines parameters for DeleteAdminChannelBindingsBindingIdStockRulesRuleId.
+type DeleteAdminChannelBindingsBindingIdStockRulesRuleIdParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// GetAdminChannelBindingsBindingIdStoreLinksParams defines parameters for GetAdminChannelBindingsBindingIdStoreLinks.
+type GetAdminChannelBindingsBindingIdStoreLinksParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// DeleteAdminChannelBindingsBindingIdStoreLinksStoreIdParams defines parameters for DeleteAdminChannelBindingsBindingIdStoreLinksStoreId.
+type DeleteAdminChannelBindingsBindingIdStoreLinksStoreIdParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// PutAdminChannelBindingsBindingIdStoreLinksStoreIdJSONBody defines parameters for PutAdminChannelBindingsBindingIdStoreLinksStoreId.
+type PutAdminChannelBindingsBindingIdStoreLinksStoreIdJSONBody struct {
+	// ExternalStoreId 渠道上的门店 ID（Shopify location gid / 美团 app_poi_code）
+	ExternalStoreId string `json:"external_store_id"`
+}
+
+// PutAdminChannelBindingsBindingIdStoreLinksStoreIdParams defines parameters for PutAdminChannelBindingsBindingIdStoreLinksStoreId.
+type PutAdminChannelBindingsBindingIdStoreLinksStoreIdParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// GetAdminChannelKindsParams defines parameters for GetAdminChannelKinds.
+type GetAdminChannelKindsParams struct {
 	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
 	//
 	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
@@ -12201,6 +12935,13 @@ type GetUploadsUploadIdParams struct {
 	W *int `form:"w,omitempty" json:"w,omitempty"`
 }
 
+// PostWebhooksChannelsBindingIdJSONBody defines parameters for PostWebhooksChannelsBindingId.
+type PostWebhooksChannelsBindingIdJSONBody map[string]interface{}
+
+// PostWebhooksChannelsBindingIdFormdataBody defines parameters for PostWebhooksChannelsBindingId.
+type PostWebhooksChannelsBindingIdFormdataBody struct {
+}
+
 // PostWebhooksPaymentsChannelJSONBody defines parameters for PostWebhooksPaymentsChannel.
 type PostWebhooksPaymentsChannelJSONBody map[string]interface{}
 
@@ -12254,6 +12995,27 @@ type PostAdminCategoriesJSONRequestBody = CategoryCreateRequest
 
 // PatchAdminCategoriesCategoryIdJSONRequestBody defines body for PatchAdminCategoriesCategoryId for application/json ContentType.
 type PatchAdminCategoriesCategoryIdJSONRequestBody = CategoryUpdateRequest
+
+// PostAdminChannelBindingsJSONRequestBody defines body for PostAdminChannelBindings for application/json ContentType.
+type PostAdminChannelBindingsJSONRequestBody = ChannelBindingInput
+
+// PatchAdminChannelBindingsBindingIdJSONRequestBody defines body for PatchAdminChannelBindingsBindingId for application/json ContentType.
+type PatchAdminChannelBindingsBindingIdJSONRequestBody = ChannelBindingPatch
+
+// PutAdminChannelBindingsBindingIdPriceRulesJSONRequestBody defines body for PutAdminChannelBindingsBindingIdPriceRules for application/json ContentType.
+type PutAdminChannelBindingsBindingIdPriceRulesJSONRequestBody = ChannelPriceRuleInput
+
+// PutAdminChannelBindingsBindingIdSecretsJSONRequestBody defines body for PutAdminChannelBindingsBindingIdSecrets for application/json ContentType.
+type PutAdminChannelBindingsBindingIdSecretsJSONRequestBody PutAdminChannelBindingsBindingIdSecretsJSONBody
+
+// PutAdminChannelBindingsBindingIdSkuLinksSkuIdJSONRequestBody defines body for PutAdminChannelBindingsBindingIdSkuLinksSkuId for application/json ContentType.
+type PutAdminChannelBindingsBindingIdSkuLinksSkuIdJSONRequestBody PutAdminChannelBindingsBindingIdSkuLinksSkuIdJSONBody
+
+// PutAdminChannelBindingsBindingIdStockRulesJSONRequestBody defines body for PutAdminChannelBindingsBindingIdStockRules for application/json ContentType.
+type PutAdminChannelBindingsBindingIdStockRulesJSONRequestBody = ChannelStockRuleInput
+
+// PutAdminChannelBindingsBindingIdStoreLinksStoreIdJSONRequestBody defines body for PutAdminChannelBindingsBindingIdStoreLinksStoreId for application/json ContentType.
+type PutAdminChannelBindingsBindingIdStoreLinksStoreIdJSONRequestBody PutAdminChannelBindingsBindingIdStoreLinksStoreIdJSONBody
 
 // PostAdminCouponTemplatesJSONRequestBody defines body for PostAdminCouponTemplates for application/json ContentType.
 type PostAdminCouponTemplatesJSONRequestBody = CouponTemplateCreateRequest
@@ -12437,6 +13199,12 @@ type PostSearchEventsJSONRequestBody PostSearchEventsJSONBody
 
 // PostUploadsMultipartRequestBody defines body for PostUploads for multipart/form-data ContentType.
 type PostUploadsMultipartRequestBody PostUploadsMultipartBody
+
+// PostWebhooksChannelsBindingIdJSONRequestBody defines body for PostWebhooksChannelsBindingId for application/json ContentType.
+type PostWebhooksChannelsBindingIdJSONRequestBody PostWebhooksChannelsBindingIdJSONBody
+
+// PostWebhooksChannelsBindingIdFormdataRequestBody defines body for PostWebhooksChannelsBindingId for application/x-www-form-urlencoded ContentType.
+type PostWebhooksChannelsBindingIdFormdataRequestBody PostWebhooksChannelsBindingIdFormdataBody
 
 // PostWebhooksPaymentsChannelJSONRequestBody defines body for PostWebhooksPaymentsChannel for application/json ContentType.
 type PostWebhooksPaymentsChannelJSONRequestBody PostWebhooksPaymentsChannelJSONBody

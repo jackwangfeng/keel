@@ -39,6 +39,35 @@ so "which one is running?" never depends on anyone's memory.
 
 ## [Unreleased]
 
+Core migrations `00300` (`channel_merchants`, also in the inventory database) and `00301` (channel tables).
+
+### Added
+
+- **Sales-channel adapter layer, phase 1: the skeleton** (`KEEL_CHANNELS=on`, off by default). One interface
+  designed for the union of what Shopify, Meituan Shangou and Ele.me Retail need (and, later, a supermarket ERP),
+  split by role — catalog source, stock source, sales outlet, sales sink — with capability flags so the generic
+  code never branches on a channel's name. Design: `docs/superpowers/specs/2026-10-02-channel-adapter-design.md`.
+  No real adapter ships yet; Shopify is next.
+- One stock, per-channel views: each channel publishes `clamp(floor(available × ratio) − safety stock, 0, cap)`,
+  configurable per channel, per store and per SKU, plus per-channel pricing (markup or a fixed SKU price) on top
+  of the store's effective price. When a SKU's sellable quantity changes, the inventory service sends a dtmrs
+  two-phase message (`stock.changed`, keys only); core recomputes and pushes absolute quantities, coalescing bursts,
+  retrying with backoff, and overwriting the channel (keel is authoritative) when a compare-and-set reports that
+  someone changed the number on the platform.
+- `POST /webhooks/channels/{binding_id}`: one callback address per channel account, verified by the channel's
+  adapter, deduplicated by the platform's event id, processed asynchronously. Unknown binding, bad signature and
+  missing secret are the same empty 401.
+- Admin API under `/admin/channel-kinds` and `/admin/channel-bindings`: accounts, write-only credentials, store and
+  SKU mappings, stock allocation and price rules, and the last values pushed. Reads need a shop-wide role, writes
+  need an administrator.
+
+### Invariant
+
+- **With `KEEL_CHANNELS` off nothing changes**: no channel route, branch or background task exists, and the
+  inventory service never queries `channel_merchants`. With it on, only merchants that have an active sales
+  channel send `stock.changed`; for everyone else the stock write path is unchanged. Both are pinned by tests.
+  In split deployments core and the inventory service must use the same value.
+
 ## [0.7.0] - 2026-10-02
 
 Core migrations `00170`–`00173` (`orders.receiver_phone` and its backfill, keyword search as a definer function,

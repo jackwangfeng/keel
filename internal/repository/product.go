@@ -69,6 +69,7 @@ func mainImageOf(uploadID int64) *int64 {
 // 同一批行。拆开之后每条任务加自己那个文件里的方法，这里只多一行嵌入。
 type Tx interface {
 	ProductTx
+	ChannelTx
 	UserTx
 	OrderTx
 	OrderQueryTx

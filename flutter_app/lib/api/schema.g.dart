@@ -2385,6 +2385,260 @@ class CategoryUpdateRequest {
       };
 }
 
+/// 商家接的一个渠道账号。**没有凭据字段**（只写不读）。
+class ChannelBinding {
+  final int id;
+  final String channel;
+  final String externalAccount;
+  final String name;
+  final int roles;
+  final int status;
+  final Map<String, dynamic> config;
+  final String webhookPath;
+  final String createdAt;
+  final String updatedAt;
+  const ChannelBinding({required this.id, required this.channel, required this.externalAccount, required this.name, required this.roles, required this.status, required this.config, required this.webhookPath, required this.createdAt, required this.updatedAt});
+  factory ChannelBinding.fromJson(Map<String, dynamic> j) => ChannelBinding(
+        id: (j['id'] as num).toInt(),
+        channel: j['channel'] as String,
+        externalAccount: j['external_account'] as String,
+        name: j['name'] as String,
+        roles: (j['roles'] as num).toInt(),
+        status: (j['status'] as num).toInt(),
+        config: j['config'] as Map<String, dynamic>,
+        webhookPath: j['webhook_path'] as String,
+        createdAt: j['created_at'] as String,
+        updatedAt: j['updated_at'] as String,
+      );
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'channel': channel,
+        'external_account': externalAccount,
+        'name': name,
+        'roles': roles,
+        'status': status,
+        'config': config,
+        'webhook_path': webhookPath,
+        'created_at': createdAt,
+        'updated_at': updatedAt,
+      };
+}
+
+class ChannelBindingInput {
+  final String channel;
+  final String externalAccount;
+  final String name;
+  final int roles;
+  final int? status;
+  final Map<String, dynamic>? config;
+  const ChannelBindingInput({required this.channel, required this.externalAccount, required this.name, required this.roles, this.status, this.config});
+  factory ChannelBindingInput.fromJson(Map<String, dynamic> j) => ChannelBindingInput(
+        channel: j['channel'] as String,
+        externalAccount: j['external_account'] as String,
+        name: j['name'] as String,
+        roles: (j['roles'] as num).toInt(),
+        status: (j['status'] as num?)?.toInt(),
+        config: j['config'] as Map<String, dynamic>?,
+      );
+  Map<String, dynamic> toJson() => {
+        'channel': channel,
+        'external_account': externalAccount,
+        'name': name,
+        'roles': roles,
+        if (status != null) 'status': status,
+        if (config != null) 'config': config,
+      };
+}
+
+/// 只改给了的字段。
+class ChannelBindingPatch {
+  final String? name;
+  final int? roles;
+  final int? status;
+  final Map<String, dynamic>? config;
+  const ChannelBindingPatch({this.name, this.roles, this.status, this.config});
+  factory ChannelBindingPatch.fromJson(Map<String, dynamic> j) => ChannelBindingPatch(
+        name: j['name'] as String?,
+        roles: (j['roles'] as num?)?.toInt(),
+        status: (j['status'] as num?)?.toInt(),
+        config: j['config'] as Map<String, dynamic>?,
+      );
+  Map<String, dynamic> toJson() => {
+        if (name != null) 'name': name,
+        if (roles != null) 'roles': roles,
+        if (status != null) 'status': status,
+        if (config != null) 'config': config,
+      };
+}
+
+/// 一个编进来的渠道适配器。
+class ChannelKind {
+  final String channel;
+  final int roles;
+  final String catalogDirection;
+  final bool acceptRequired;
+  final bool refundNeedsApproval;
+  final bool partialRefund;
+  final bool stockoutAdjust;
+  const ChannelKind({required this.channel, required this.roles, required this.catalogDirection, required this.acceptRequired, required this.refundNeedsApproval, required this.partialRefund, required this.stockoutAdjust});
+  factory ChannelKind.fromJson(Map<String, dynamic> j) => ChannelKind(
+        channel: j['channel'] as String,
+        roles: (j['roles'] as num).toInt(),
+        catalogDirection: j['catalog_direction'] as String,
+        acceptRequired: j['accept_required'] as bool,
+        refundNeedsApproval: j['refund_needs_approval'] as bool,
+        partialRefund: j['partial_refund'] as bool,
+        stockoutAdjust: j['stockout_adjust'] as bool,
+      );
+  Map<String, dynamic> toJson() => {
+        'channel': channel,
+        'roles': roles,
+        'catalog_direction': catalogDirection,
+        'accept_required': acceptRequired,
+        'refund_needs_approval': refundNeedsApproval,
+        'partial_refund': partialRefund,
+        'stockout_adjust': stockoutAdjust,
+      };
+}
+
+class ChannelListing {
+  final int storeId;
+  final int skuId;
+  final int publishedQty;
+  final int publishedCents;
+  final int version;
+  final String pushedAt;
+  final String? lastError;
+  const ChannelListing({required this.storeId, required this.skuId, required this.publishedQty, required this.publishedCents, required this.version, required this.pushedAt, this.lastError});
+  factory ChannelListing.fromJson(Map<String, dynamic> j) => ChannelListing(
+        storeId: (j['store_id'] as num).toInt(),
+        skuId: (j['sku_id'] as num).toInt(),
+        publishedQty: (j['published_qty'] as num).toInt(),
+        publishedCents: (j['published_cents'] as num).toInt(),
+        version: (j['version'] as num).toInt(),
+        pushedAt: j['pushed_at'] as String,
+        lastError: j['last_error'] as String?,
+      );
+  Map<String, dynamic> toJson() => {
+        'store_id': storeId,
+        'sku_id': skuId,
+        'published_qty': publishedQty,
+        'published_cents': publishedCents,
+        'version': version,
+        'pushed_at': pushedAt,
+        if (lastError != null) 'last_error': lastError,
+      };
+}
+
+class ChannelPriceRule {
+  final int? skuId;
+  final int markupBp;
+  final int? fixedCents;
+  final int id;
+  final String updatedAt;
+  const ChannelPriceRule({this.skuId, required this.markupBp, this.fixedCents, required this.id, required this.updatedAt});
+  factory ChannelPriceRule.fromJson(Map<String, dynamic> j) => ChannelPriceRule(
+        skuId: (j['sku_id'] as num?)?.toInt(),
+        markupBp: (j['markup_bp'] as num).toInt(),
+        fixedCents: (j['fixed_cents'] as num?)?.toInt(),
+        id: (j['id'] as num).toInt(),
+        updatedAt: j['updated_at'] as String,
+      );
+  Map<String, dynamic> toJson() => {
+        if (skuId != null) 'sku_id': skuId,
+        'markup_bp': markupBp,
+        if (fixedCents != null) 'fixed_cents': fixedCents,
+        'id': id,
+        'updated_at': updatedAt,
+      };
+}
+
+class ChannelPriceRuleInput {
+  final int? skuId;
+  final int? markupBp;
+  final int? fixedCents;
+  const ChannelPriceRuleInput({this.skuId, this.markupBp, this.fixedCents});
+  factory ChannelPriceRuleInput.fromJson(Map<String, dynamic> j) => ChannelPriceRuleInput(
+        skuId: (j['sku_id'] as num?)?.toInt(),
+        markupBp: (j['markup_bp'] as num?)?.toInt(),
+        fixedCents: (j['fixed_cents'] as num?)?.toInt(),
+      );
+  Map<String, dynamic> toJson() => {
+        if (skuId != null) 'sku_id': skuId,
+        if (markupBp != null) 'markup_bp': markupBp,
+        if (fixedCents != null) 'fixed_cents': fixedCents,
+      };
+}
+
+class ChannelStockRule {
+  final int? storeId;
+  final int? skuId;
+  final int ratioBp;
+  final int safetyQty;
+  final int? capQty;
+  final int id;
+  final String updatedAt;
+  const ChannelStockRule({this.storeId, this.skuId, required this.ratioBp, required this.safetyQty, this.capQty, required this.id, required this.updatedAt});
+  factory ChannelStockRule.fromJson(Map<String, dynamic> j) => ChannelStockRule(
+        storeId: (j['store_id'] as num?)?.toInt(),
+        skuId: (j['sku_id'] as num?)?.toInt(),
+        ratioBp: (j['ratio_bp'] as num).toInt(),
+        safetyQty: (j['safety_qty'] as num).toInt(),
+        capQty: (j['cap_qty'] as num?)?.toInt(),
+        id: (j['id'] as num).toInt(),
+        updatedAt: j['updated_at'] as String,
+      );
+  Map<String, dynamic> toJson() => {
+        if (storeId != null) 'store_id': storeId,
+        if (skuId != null) 'sku_id': skuId,
+        'ratio_bp': ratioBp,
+        'safety_qty': safetyQty,
+        if (capQty != null) 'cap_qty': capQty,
+        'id': id,
+        'updated_at': updatedAt,
+      };
+}
+
+class ChannelStockRuleInput {
+  final int? storeId;
+  final int? skuId;
+  final int ratioBp;
+  final int? safetyQty;
+  final int? capQty;
+  const ChannelStockRuleInput({this.storeId, this.skuId, required this.ratioBp, this.safetyQty, this.capQty});
+  factory ChannelStockRuleInput.fromJson(Map<String, dynamic> j) => ChannelStockRuleInput(
+        storeId: (j['store_id'] as num?)?.toInt(),
+        skuId: (j['sku_id'] as num?)?.toInt(),
+        ratioBp: (j['ratio_bp'] as num).toInt(),
+        safetyQty: (j['safety_qty'] as num?)?.toInt(),
+        capQty: (j['cap_qty'] as num?)?.toInt(),
+      );
+  Map<String, dynamic> toJson() => {
+        if (storeId != null) 'store_id': storeId,
+        if (skuId != null) 'sku_id': skuId,
+        'ratio_bp': ratioBp,
+        if (safetyQty != null) 'safety_qty': safetyQty,
+        if (capQty != null) 'cap_qty': capQty,
+      };
+}
+
+class ChannelStoreLink {
+  final int storeId;
+  final String externalStoreId;
+  final String createdAt;
+  const ChannelStoreLink({required this.storeId, required this.externalStoreId, required this.createdAt});
+  factory ChannelStoreLink.fromJson(Map<String, dynamic> j) => ChannelStoreLink(
+        storeId: (j['store_id'] as num).toInt(),
+        externalStoreId: j['external_store_id'] as String,
+        createdAt: j['created_at'] as String,
+      );
+  Map<String, dynamic> toJson() => {
+        'store_id': storeId,
+        'external_store_id': externalStoreId,
+        'created_at': createdAt,
+      };
+}
+
 /// 商品当前生效的活动标签（商品列表 / 详情）。按响应里 `store` 那家门店判：
 class PromotionTag {
   final int promotionId;

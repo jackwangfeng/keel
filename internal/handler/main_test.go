@@ -15,6 +15,8 @@ import (
 
 	"github.com/keel/keel/internal/app"
 	"github.com/keel/keel/internal/auth"
+	"github.com/keel/keel/internal/channel"
+	"github.com/keel/keel/internal/channel/channeltest"
 	"github.com/keel/keel/internal/db"
 	"github.com/keel/keel/internal/dtm"
 	"github.com/keel/keel/internal/inventory"
@@ -54,6 +56,11 @@ var (
 	// testQuotaSync 是包级路由上活动配额同步的发送方（二阶段消息，service/promotion_quota_msg.go）：
 	// 回查与接收分支都注册在 testTC 上，与单体的 app.Run 同一个装法 —— 于是既有的活动测试全部走消息那条路。
 	testQuotaSync *service.QuotaSync
+
+	// testChannels / testFakeChannel：包级路由上的渠道层（回调入口、后台渠道管理）与它登记的假渠道。
+	// 包级库存实现不发 stock.changed（同它不发跨 0 通知的理由）；要全链路的测试自己装（channel_listing_test.go）。
+	testChannels    *service.ChannelService
+	testFakeChannel *channeltest.Adapter
 
 	// testSigner 是路由里那一个 —— **同一个实例**，不是一份长得一样的复制品。
 	// 测试要用它签出「过期的」「别家店的」「类型不对的」令牌，而那些令牌必须
@@ -146,6 +153,15 @@ func setup(ctx context.Context) error {
 		exBranches[name] = fn
 	}
 
+	// 渠道层：开关渠道的回查与接收、stock.changed 的接收。
+	chReg := channel.NewRegistry()
+	testFakeChannel = channeltest.New()
+	chReg.Register(testFakeChannel)
+	testChannels = service.NewChannelService(repository.New(pool), invLocal, chReg, dtm.BranchResolver{}, dtm.BranchResolver{})
+	exBranches[service.BranchChannelMerchantQuery] = dtm.Ex(testChannels.MerchantQueryBranch())
+	exBranches[inventory.BranchChannelMerchantSync] = invLocal.ChannelMerchantSyncBranch(nil)
+	exBranches[inventory.BranchChannelStockChanged] = testChannels.StockChangedBranch()
+
 	// 库存的两个分支（带载荷）与配额同步（载荷带定义）与单体一样注册在进程内。
 	tc, err := dtm.StartEx("sqlite:"+filepath.Join(dtmDir, "dtm.db"), 0, branches, exBranches)
 	if err != nil {
@@ -154,6 +170,7 @@ func setup(ctx context.Context) error {
 	testTC = tc
 	testOrders.AttachCoordinator(tc)
 	testQuotaSync.Attach(tc)
+	testChannels.Attach(tc)
 
 	// 刻意不配默认商家：跨租户测试要走 Host 解析那条真实路径。
 	gin.SetMode(gin.TestMode)
@@ -199,7 +216,8 @@ func setup(ctx context.Context) error {
 
 	testEngine = app.Router(pool,
 		tenant.NewResolver(pool, tenant.Config{BaseDomain: baseDomain}), testSigner, testOrders,
-		service.PaymentConfig{Sandbox: true}, conceptEmbedder{}, app.WithQuotaSync(testQuotaSync))
+		service.PaymentConfig{Sandbox: true}, conceptEmbedder{}, app.WithQuotaSync(testQuotaSync),
+		app.WithChannels(testChannels))
 	return nil
 }
 

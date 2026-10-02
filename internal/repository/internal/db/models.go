@@ -381,6 +381,92 @@ type Category struct {
 	UpdatedAt  pgtype.Timestamptz
 }
 
+type ChannelBinding struct {
+	ID              int64
+	MerchantID      int64
+	Channel         string
+	ExternalAccount string
+	Name            string
+	Roles           int16
+	Status          int16
+	Config          []byte
+	Secrets         []byte
+	CreatedAt       pgtype.Timestamptz
+	UpdatedAt       pgtype.Timestamptz
+}
+
+type ChannelInboundEvent struct {
+	ID              int64
+	MerchantID      int64
+	BindingID       int64
+	ExternalEventID string
+	Topic           string
+	Payload         []byte
+	Status          int16
+	Error           *string
+	ReceivedAt      pgtype.Timestamptz
+	ProcessedAt     pgtype.Timestamptz
+}
+
+type ChannelItemLink struct {
+	MerchantID int64
+	BindingID  int64
+	Kind       int16
+	KeelID     int64
+	ExternalID string
+	Extra      []byte
+	SyncedAt   pgtype.Timestamptz
+}
+
+type ChannelListing struct {
+	MerchantID     int64
+	BindingID      int64
+	StoreID        int64
+	SkuID          int64
+	PublishedQty   int32
+	PublishedCents int64
+	Version        int64
+	PushedAt       pgtype.Timestamptz
+	LastError      *string
+}
+
+type ChannelMerchant struct {
+	MerchantID int64
+	Enabled    bool
+	Rev        int64
+	UpdatedAt  pgtype.Timestamptz
+}
+
+type ChannelPriceRule struct {
+	ID         int64
+	MerchantID int64
+	BindingID  int64
+	SkuID      *int64
+	MarkupBp   int32
+	FixedCents *int64
+	UpdatedAt  pgtype.Timestamptz
+}
+
+type ChannelStockRule struct {
+	ID         int64
+	MerchantID int64
+	BindingID  int64
+	StoreID    *int64
+	SkuID      *int64
+	RatioBp    int32
+	SafetyQty  int32
+	CapQty     *int32
+	UpdatedAt  pgtype.Timestamptz
+}
+
+type ChannelStoreLink struct {
+	MerchantID      int64
+	BindingID       int64
+	StoreID         int64
+	ExternalStoreID string
+	CreatedAt       pgtype.Timestamptz
+}
+
 type CouponScope struct {
 	ID         int64
 	MerchantID int64

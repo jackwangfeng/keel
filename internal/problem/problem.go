@@ -103,6 +103,8 @@ const (
 	TypeOrderStatusNotShippable   = "https://keel.dev/problems/order-status-not-shippable"
 	TypeOrderHasPendingFullRefund = "https://keel.dev/problems/order-has-pending-full-refund"
 	TypeTrackingNoDuplicated      = "https://keel.dev/problems/tracking-no-duplicated"
+	// TypeChannelDuplicate：同一渠道同一外部账号已经接过，或渠道门店已经映射给了别的门店（409）。
+	TypeChannelDuplicate          = "https://keel.dev/problems/channel-duplicate"
 	TypeOrderNotFound             = "https://keel.dev/problems/order-not-found"
 	TypeOrderStatusNotRefundable  = "https://keel.dev/problems/order-status-not-refundable"
 	TypeAfterSaleWindowClosed     = "https://keel.dev/problems/after-sale-window-closed"

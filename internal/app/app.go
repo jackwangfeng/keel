@@ -448,6 +448,10 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	// 退款回调：与支付回调同构（Host 定租户、HMAC 定真假、渠道流水号唯一）。
 	v1.POST("/webhooks/refunds/:channel",
 		handler.NewRefundWebhookHandler(refunds).Notify)
+	// 渠道回调（渠道适配层）：与支付回调同构。KEEL_CHANNELS 关闭时不注册（不变量「不配渠道零开销」）。
+	if ro.channels != nil {
+		v1.POST("/webhooks/channels/:binding_id", handler.NewChannelWebhookHandler(ro.channels).Notify)
+	}
 
 	// -----------------------------------------------------------------------
 	// 后台（契约约定 6：后台接口一律挂在 /admin/ 前缀下，与前台分开鉴权）
@@ -637,6 +641,27 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	v1.GET("/admin/stores/:store_id/local-delivery", staffAuth, st.GetLocalDelivery)
 	v1.PUT("/admin/stores/:store_id/local-delivery", staffAuth, st.PutLocalDelivery)
 	v1.DELETE("/admin/stores/:store_id/local-delivery", staffAuth, st.ResetLocalDelivery)
+	// 渠道管理（渠道适配层）。KEEL_CHANNELS 关闭时不注册：后台据 404 不显示「渠道」菜单。
+	if ro.channels != nil {
+		ch := handler.NewAdminChannelHandler(service.NewAdminChannelService(ro.channels))
+		v1.GET("/admin/channel-kinds", staffAuth, ch.ListKinds)
+		v1.GET("/admin/channel-bindings", staffAuth, ch.List)
+		v1.POST("/admin/channel-bindings", staffAuth, ch.Create)
+		v1.GET("/admin/channel-bindings/:binding_id", staffAuth, ch.Get)
+		v1.PATCH("/admin/channel-bindings/:binding_id", staffAuth, ch.Patch)
+		v1.PUT("/admin/channel-bindings/:binding_id/secrets", staffAuth, ch.PutSecrets)
+		v1.GET("/admin/channel-bindings/:binding_id/store-links", staffAuth, ch.ListStoreLinks)
+		v1.PUT("/admin/channel-bindings/:binding_id/store-links/:store_id", staffAuth, ch.PutStoreLink)
+		v1.DELETE("/admin/channel-bindings/:binding_id/store-links/:store_id", staffAuth, ch.DeleteStoreLink)
+		v1.PUT("/admin/channel-bindings/:binding_id/sku-links/:sku_id", staffAuth, ch.PutSKULink)
+		v1.GET("/admin/channel-bindings/:binding_id/stock-rules", staffAuth, ch.ListStockRules)
+		v1.PUT("/admin/channel-bindings/:binding_id/stock-rules", staffAuth, ch.PutStockRule)
+		v1.DELETE("/admin/channel-bindings/:binding_id/stock-rules/:rule_id", staffAuth, ch.DeleteStockRule)
+		v1.GET("/admin/channel-bindings/:binding_id/price-rules", staffAuth, ch.ListPriceRules)
+		v1.PUT("/admin/channel-bindings/:binding_id/price-rules", staffAuth, ch.PutPriceRule)
+		v1.DELETE("/admin/channel-bindings/:binding_id/price-rules/:rule_id", staffAuth, ch.DeletePriceRule)
+		v1.GET("/admin/channel-bindings/:binding_id/listings", staffAuth, ch.ListListings)
+	}
 	v1.GET("/admin/local-delivery-templates", staffAuth, st.ListLocalDeliveryTemplates)
 	v1.POST("/admin/local-delivery-templates", staffAuth, st.CreateLocalDeliveryTemplate)
 	v1.PUT("/admin/local-delivery-templates/:template_id", staffAuth, st.UpdateLocalDeliveryTemplate)
@@ -922,6 +947,13 @@ func Run(ctx context.Context, listen ListenFunc) error {
 		return fmt.Errorf("%s: %w", EnvSelfURL, err)
 	}
 	stockNotifier := newStockNotifier(cfg.Split, invPool, self)
+	// 渠道适配层（app/channels.go）：开关关着时 channelGate 不放行、下面一个渠道对象都不建。
+	channelsOn, err := channelsFromEnv()
+	if err != nil {
+		return fmt.Errorf("拒绝启动: %w", err)
+	}
+	channelGate := inventory.NewChannelGate(channelsOn)
+	withChannels(stockNotifier, channelGate, cfg.Split)
 	inv, err := inventoryService(cfg.Split, invPool, stockNotifier)
 	if err != nil {
 		return err
@@ -957,8 +989,21 @@ func Run(ctx context.Context, listen ListenFunc) error {
 		quotaLocal = inventory.NewLocal(repository.NewInventoryStore(invPool)).WithStockNotifier(stockNotifier)
 	}
 
+	var channels *service.ChannelService
+	var channelBranches map[string]dtm.BranchFuncEx
+	if channelsOn {
+		if channels, err = newChannelService(cfg.Split, pool, inv, self); err != nil {
+			return err
+		}
+		var chLocal *inventory.Local
+		if cfg.Split.Role != RoleCore {
+			chLocal = inventory.NewLocal(repository.NewInventoryStore(invPool)).WithStockNotifier(stockNotifier)
+		}
+		channelBranches = ChannelBranches(channels, chLocal, channelGate)
+	}
+
 	branches := mergeEx(exBranches(Branches(orders)), StockMsgBranches(stockNotifier, stockFlags),
-		QuotaSyncBranches(quotaSync, quotaLocal, quotaSrc), invBranches)
+		QuotaSyncBranches(quotaSync, quotaLocal, quotaSrc), invBranches, channelBranches)
 	var tc dtm.Coordinator
 	var selfBranches map[string]dtm.BranchFuncEx
 	if cfg.Split.remoteDTM() {
@@ -978,6 +1023,11 @@ func Run(ctx context.Context, listen ListenFunc) error {
 		// 订阅跨 0 通知（库存发到主题，不知道谁在听）。后台重试，不挡启动。
 		subscribeUntilDone(context.WithoutCancel(ctx), r, inventory.TopicStockZeroCrossing,
 			self.BranchURL(inventory.BranchStockChanged), "keel-core")
+		if channelsOn {
+			// 渠道层的库存变化通知（stock.changed）同理。
+			subscribeUntilDone(context.WithoutCancel(ctx), r, inventory.TopicStockChanged,
+				self.BranchURL(inventory.BranchChannelStockChanged), "keel-core-channels")
+		}
 	} else {
 		etc, err := dtm.StartEx(cfg.DTMDSN, 0, nil, branches)
 		if err != nil {
@@ -989,6 +1039,9 @@ func Run(ctx context.Context, listen ListenFunc) error {
 	orders.AttachCoordinator(tc)
 	attachStockNotifier(stockNotifier, tc)
 	quotaSync.Attach(tc)
+	if channels != nil {
+		channels.Attach(tc)
+	}
 
 	// 超时补偿定时任务（Task 6）。
 	//
@@ -1089,6 +1142,10 @@ func Run(ctx context.Context, listen ListenFunc) error {
 	notifier := service.NewNotificationDeliveryService(repository.New(pool), nil,
 		service.NotificationDeliveryConfig{}, nil)
 	bg.Go("notification_delivery", notifier.Run)
+	// 渠道层的任务循环（推对外可售数、整店重算、回调处理）。多实例并行安全（SKIP LOCKED）。开关关着时不起。
+	if channels != nil {
+		bg.Go("channel_workers", channels.RunWorkers)
+	}
 
 	// 派生数据入库的增量任务（M3 Task 3）：商品变了就把文本向量与 bigram 串重算。
 	//
@@ -1176,7 +1233,7 @@ func Run(ctx context.Context, listen ListenFunc) error {
 	bg.Start(bgCtx)
 
 	public := Router(pool, res, signer, orders, cfg.Payment, searchEmbedder, WithInventory(inv), WithQuotaSync(quotaSync),
-		WithUploadStore(uploads))
+		WithUploadStore(uploads), WithChannels(channels))
 	if cfg.Split.InternalAddr == "" {
 		return listen(ctx, cfg.Addr, public)
 	}

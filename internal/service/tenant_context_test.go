@@ -134,6 +134,9 @@ func TestServiceNeverBuildsATenantContextByHand(t *testing.T) {
 // **每一条都要写清楚「为什么这里没有 gid 也没有 Host」**，因为那是豁免的全部
 // 依据。默认答案是「租户从 gid 来」——想加一行之前先确认真的不是这种情况。
 var tenantContextAllowed = map[string]string{
+	"channel_worker.go": "渠道层的任务循环（推对外可售数、整店重算、回调处理），与 inventory_outbox.go 同一处境：" +
+		"跑在任何 HTTP 请求之外，没有 Host 也没有 gid。按出队那一行的 jobs.merchant_id 建上下文 —— 那一列由入队时的 " +
+		"current_merchant() 写下，写不出别家的租户（00022）。它不是 SAGA 分支。",
 	"inventory_outbox.go": "库存 outbox 的 worker（关单释放、退款回补，微服务拆分阶段 1b），与 notification_delivery.go 同一处境：" +
 		"跑在任何 HTTP 请求之外，没有 Host 也没有 gid。按出队（或按 job_key 点名占下）那一行的 jobs.merchant_id " +
 		"进 WithTenant 与调库存服务 —— 那一列由入队时的 current_merchant() 写下，写不出别家的租户（00022）。它不是 SAGA 分支。",

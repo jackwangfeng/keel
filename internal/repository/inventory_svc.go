@@ -245,6 +245,12 @@ type InventoryStoreTx interface {
 
 	// MarkMsgPrepared 在本事务里占下这条消息的回查屏障；假表示回查已经抢先判了「没提交」。
 	MarkMsgPrepared(ctx context.Context, gid string) (bool, error)
+
+	// —— 开了渠道的商家（00300，repository/channel.go）
+
+	// SetChannelMerchant 记下 ctx 那家商家「开没开渠道」（版本 rev 不比已记录的新就不改，返回 false）。
+	SetChannelMerchant(ctx context.Context, enabled bool, rev int64) (applied bool, err error)
+	ChannelMerchantEnabled(ctx context.Context) (bool, error)
 }
 
 // StockKey 是一行库存的主键。

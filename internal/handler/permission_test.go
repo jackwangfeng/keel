@@ -435,6 +435,70 @@ var permMatrix = []permRoute{
 	{"DELETE", v1 + "/admin/stores/:store_id/local-delivery", storeOperate, func(t *testing.T, fx *permFixture, c permCase) permReq {
 		return permReq{Method: "DELETE", Path: fmt.Sprintf(v1+"/admin/stores/%d/local-delivery", fx.store(c)), OK: http.StatusOK}
 	}},
+	// —— 渠道管理（渠道适配层）：读要全店范围，写只许管理员
+	{"GET", v1 + "/admin/channel-kinds", merchantWide, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permGet(v1 + "/admin/channel-kinds")
+	}},
+	{"GET", v1 + "/admin/channel-bindings", merchantWide, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permGet(v1 + "/admin/channel-bindings")
+	}},
+	{"POST", v1 + "/admin/channel-bindings", adminOnly, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permReq{Method: "POST", Path: v1 + "/admin/channel-bindings", OK: http.StatusCreated,
+			Body: fmt.Sprintf(`{"channel":"fake","external_account":"perm-%s","name":"权限矩阵","roles":4}`, fx.next())}
+	}},
+	{"GET", v1 + "/admin/channel-bindings/:binding_id", merchantWide, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permGet(fmt.Sprintf(v1+"/admin/channel-bindings/%d", permChannelBinding(t, fx)))
+	}},
+	{"PATCH", v1 + "/admin/channel-bindings/:binding_id", adminOnly, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permReq{Method: "PATCH", Path: fmt.Sprintf(v1+"/admin/channel-bindings/%d", permChannelBinding(t, fx)), Body: `{"name":"改名"}`, OK: http.StatusOK}
+	}},
+	{"PUT", v1 + "/admin/channel-bindings/:binding_id/secrets", adminOnly, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permReq{Method: "PUT", Path: fmt.Sprintf(v1+"/admin/channel-bindings/%d/secrets", permChannelBinding(t, fx)), Body: `{"k":"v"}`, OK: http.StatusNoContent}
+	}},
+	{"GET", v1 + "/admin/channel-bindings/:binding_id/store-links", merchantWide, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permGet(fmt.Sprintf(v1+"/admin/channel-bindings/%d/store-links", permChannelBinding(t, fx)))
+	}},
+	{"PUT", v1 + "/admin/channel-bindings/:binding_id/store-links/:store_id", adminOnly, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permReq{Method: "PUT", Path: fmt.Sprintf(v1+"/admin/channel-bindings/%d/store-links/%d", permChannelBinding(t, fx), fx.N1),
+			Body: fmt.Sprintf(`{"external_store_id":"loc-%s"}`, fx.next()), OK: http.StatusOK}
+	}},
+	{"DELETE", v1 + "/admin/channel-bindings/:binding_id/store-links/:store_id", adminOnly, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		b := permChannelBinding(t, fx)
+		adminExec(t, `INSERT INTO channel_store_links (merchant_id, binding_id, store_id, external_store_id) VALUES ($1, $2, $3, $4)`,
+			fx.sh.MerchantID, b, fx.N2, "loc-del-"+fx.next())
+		return permReq{Method: "DELETE", Path: fmt.Sprintf(v1+"/admin/channel-bindings/%d/store-links/%d", b, fx.N2), OK: http.StatusNoContent}
+	}},
+	{"PUT", v1 + "/admin/channel-bindings/:binding_id/sku-links/:sku_id", adminOnly, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permReq{Method: "PUT", Path: fmt.Sprintf(v1+"/admin/channel-bindings/%d/sku-links/%d", permChannelBinding(t, fx), fx.SKUID),
+			Body: fmt.Sprintf(`{"external_id":"var-%s"}`, fx.next()), OK: http.StatusNoContent}
+	}},
+	{"GET", v1 + "/admin/channel-bindings/:binding_id/stock-rules", merchantWide, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permGet(fmt.Sprintf(v1+"/admin/channel-bindings/%d/stock-rules", permChannelBinding(t, fx)))
+	}},
+	{"PUT", v1 + "/admin/channel-bindings/:binding_id/stock-rules", adminOnly, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permReq{Method: "PUT", Path: fmt.Sprintf(v1+"/admin/channel-bindings/%d/stock-rules", permChannelBinding(t, fx)), Body: `{"ratio_bp":8000}`, OK: http.StatusOK}
+	}},
+	{"DELETE", v1 + "/admin/channel-bindings/:binding_id/stock-rules/:rule_id", adminOnly, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		b := permChannelBinding(t, fx)
+		id := adminQueryInt64(t, `INSERT INTO channel_stock_rules (merchant_id, binding_id, store_id, ratio_bp) VALUES ($1, $2, $3, 5000) RETURNING id`,
+			fx.sh.MerchantID, b, fx.E1)
+		return permReq{Method: "DELETE", Path: fmt.Sprintf(v1+"/admin/channel-bindings/%d/stock-rules/%d", b, id), OK: http.StatusNoContent}
+	}},
+	{"GET", v1 + "/admin/channel-bindings/:binding_id/price-rules", merchantWide, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permGet(fmt.Sprintf(v1+"/admin/channel-bindings/%d/price-rules", permChannelBinding(t, fx)))
+	}},
+	{"PUT", v1 + "/admin/channel-bindings/:binding_id/price-rules", adminOnly, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permReq{Method: "PUT", Path: fmt.Sprintf(v1+"/admin/channel-bindings/%d/price-rules", permChannelBinding(t, fx)), Body: `{"markup_bp":1500}`, OK: http.StatusOK}
+	}},
+	{"DELETE", v1 + "/admin/channel-bindings/:binding_id/price-rules/:rule_id", adminOnly, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		b := permChannelBinding(t, fx)
+		id := adminQueryInt64(t, `INSERT INTO channel_price_rules (merchant_id, binding_id, sku_id, markup_bp) VALUES ($1, $2, $3, 100) RETURNING id`,
+			fx.sh.MerchantID, b, fx.SKUID)
+		return permReq{Method: "DELETE", Path: fmt.Sprintf(v1+"/admin/channel-bindings/%d/price-rules/%d", b, id), OK: http.StatusNoContent}
+	}},
+	{"GET", v1 + "/admin/channel-bindings/:binding_id/listings", merchantWide, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permGet(fmt.Sprintf(v1+"/admin/channel-bindings/%d/listings", permChannelBinding(t, fx)))
+	}},
 	{"GET", v1 + "/admin/local-delivery-templates", everyone, func(t *testing.T, fx *permFixture, c permCase) permReq {
 		return permGet(v1 + "/admin/local-delivery-templates")
 	}},
@@ -1000,4 +1064,11 @@ func permLocalDeliveryTemplate(t *testing.T, fx *permFixture) int64 {
 	t.Helper()
 	return adminQueryInt64(t, `INSERT INTO local_delivery_templates (merchant_id, name) VALUES ($1, $2) RETURNING id`,
 		fx.sh.MerchantID, "perm-tpl-"+fx.next())
+}
+
+// permChannelBinding 是这家连锁的一个假渠道 binding（停用；每次新建，各行各角色互不影响）。
+func permChannelBinding(t *testing.T, fx *permFixture) int64 {
+	t.Helper()
+	return adminQueryInt64(t, `INSERT INTO channel_bindings (merchant_id, channel, external_account, name, roles)
+		VALUES ($1, 'fake', $2, '权限矩阵', 4) RETURNING id`, fx.sh.MerchantID, "perm-b-"+fx.next())
 }

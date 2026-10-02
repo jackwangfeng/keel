@@ -217,6 +217,12 @@ func internalRouter(s SplitConfig, inv *pgxpool.Pool, x internalExtras) *gin.Eng
 		// 库存的 SAGA 分支（阶段 1b）：core 的协调器经 http://…/internal/v1/saga/<名字> 调它们，
 		// 分支令牌准入（rpc.Routes.Saga）。屏障记在库存池指向的库里。
 		inventory.MountSaga(routes.Saga, local)
+		if s.Role == RoleInventory && x.channelGate.Enabled() {
+			// 渠道层：core 启停销售渠道时经独立协调器投到这里（KEEL_CHANNELS 两边要配同一个值）。
+			dtm.MountBranches(routes.Saga, map[string]dtm.BranchFuncEx{
+				inventory.BranchChannelMerchantSync: local.ChannelMerchantSyncBranch(x.channelGate),
+			})
+		}
 		if s.Role == RoleInventory {
 			// 配额同步的接收分支：core 的协调器经 http://…/internal/v1/saga/inventory_activity_sync 投递
 			// （单体走进程内 local://，不挂）。回源读定义经 KEEL_CORE_URL；没配时分支一律 Unknown 并喊出来。
@@ -236,6 +242,7 @@ func internalRouter(s SplitConfig, inv *pgxpool.Pool, x internalExtras) *gin.Eng
 type internalExtras struct {
 	notifier     *inventory.StockNotifier
 	selfBranches map[string]dtm.BranchFuncEx
+	channelGate  *inventory.ChannelGate // 渠道层的闸门（KEEL_CHANNELS 关闭时为 nil 或不放行）
 }
 
 // inventoryService 按角色选库存服务的实现：core 走 HTTP（KEEL_INVENTORY_URL，validate 已经
@@ -305,6 +312,12 @@ type routerOptions struct {
 	inventory inventory.Service
 	quotaSync *service.QuotaSync
 	uploads   service.UploadStore
+	channels  *service.ChannelService
+}
+
+// WithChannels 打开渠道层的路由（回调入口与后台渠道管理）。不给（KEEL_CHANNELS 关闭）时一条渠道路由都不注册。
+func WithChannels(c *service.ChannelService) RouterOption {
+	return func(o *routerOptions) { o.channels = c }
 }
 
 // WithInventory 指定公网路由用的库存服务实现。不给时是建在业务池上的进程内实现。
@@ -331,6 +344,11 @@ func runInventory(ctx context.Context, s SplitConfig, listen ListenFunc) error {
 
 	// 跨 0 通知（stock_msg.go）：配了 KEEL_CORE_URL 才起自己的协调器。它只注册一个分支 —— 回查，
 	// 回答「本地事务提交了没有」，所以必须在本进程；投递目标是 core 的内网分支。
+	channelsOn, err := channelsFromEnv()
+	if err != nil {
+		return fmt.Errorf("拒绝启动: %w", err)
+	}
+	channelGate := inventory.NewChannelGate(channelsOn)
 	var notifier *inventory.StockNotifier
 	var self map[string]dtm.BranchFuncEx
 	if s.remoteDTM() {
@@ -345,6 +363,7 @@ func runInventory(ctx context.Context, s SplitConfig, listen ListenFunc) error {
 		// 跨 0 通知发到主题：库存只认主题名，不知道谁在听（core 启动时订阅）。回查分支挂在本服务内网上。
 		notifier = inventory.NewStockNotifier(repository.NewInventoryStore(inv),
 			dtm.TopicPrefix+inventory.TopicStockZeroCrossing, res.BranchURL(inventory.BranchStockMsgQuery))
+		withChannels(notifier, channelGate, s)
 		notifier.Attach(r)
 		self = map[string]dtm.BranchFuncEx{inventory.BranchStockMsgQuery: dtm.Ex(notifier.QueryBranch())}
 	} else {
@@ -352,8 +371,8 @@ func runInventory(ctx context.Context, s SplitConfig, listen ListenFunc) error {
 			EnvStockFlagInterval+"，默认 1 小时）")
 	}
 	slog.InfoContext(ctx, "以 "+EnvRole+"=inventory 启动：只监听内网服务，没有公网接口与后台任务",
-		"internal_addr", s.InternalAddr, "version", buildinfo.String(), "stock_notify", notifier != nil)
-	return listen(ctx, s.InternalAddr, internalRouter(s, inv, internalExtras{notifier: notifier, selfBranches: self}))
+		"internal_addr", s.InternalAddr, "version", buildinfo.String(), "stock_notify", notifier != nil, "channels", channelsOn)
+	return listen(ctx, s.InternalAddr, internalRouter(s, inv, internalExtras{notifier: notifier, selfBranches: self, channelGate: channelGate}))
 }
 
 // serveBoth 同时监听公网与内网两个端口，任何一个返回就让另一个也停下，两个都返回后才返回。
