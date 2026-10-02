@@ -124,6 +124,8 @@ func newAdminShop(t *testing.T) adminShop {
 			// ON DELETE CASCADE，这一句不写也删得掉；写出来是为了让这张清单
 			// 仍然是「这家店名下有哪些表」的完整答案。
 			`DELETE FROM staff_scopes WHERE merchant_id = $1`,
+			// 渠道单（00320）指向门店（不级联）：权限矩阵每格建一张，排在 stores 之前删（申请随之级联）。
+			`DELETE FROM channel_orders WHERE merchant_id = $1`,
 			`DELETE FROM stores WHERE merchant_id = $1`,
 			`DELETE FROM regions WHERE merchant_id = $1`,
 			`DELETE FROM uploads WHERE merchant_id = $1`,

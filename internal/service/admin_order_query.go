@@ -37,6 +37,34 @@ type AdminOrderSummary struct {
 	Order    repository.AdminOrder
 	Receiver ReceiverSnapshot
 	Store    StoreSnapshot
+	// Channel 是渠道单（Source = 1）的来源说明，自营单为 nil。
+	Channel *repository.ChannelOrderRef
+}
+
+// attachChannelRefs 给这一页的渠道单补上来源说明：有 source = 1 的行时按 channel_order_id 补查一次
+// （订单列表不 JOIN 渠道表，第三期计划 Task 1 的执行中修正）；全是自营单时一条语句都不多发。
+func attachChannelRefs(ctx context.Context, tx repository.Tx, items []AdminOrderSummary) error {
+	var ids []int64
+	for _, it := range items {
+		if it.Order.Source == 1 && it.Order.ChannelOrderID != nil {
+			ids = append(ids, *it.Order.ChannelOrderID)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	refs, err := tx.ChannelOrderRefs(ctx, ids)
+	if err != nil {
+		return err
+	}
+	for i := range items {
+		if id := items[i].Order.ChannelOrderID; items[i].Order.Source == 1 && id != nil {
+			if r, ok := refs[*id]; ok {
+				items[i].Channel = &r
+			}
+		}
+	}
+	return nil
 }
 
 // AdminOrderPage 是后台订单列表的一页，带钳制之后的分页参数（同 OrderList 的理由）。
@@ -107,7 +135,7 @@ func (s *AdminOrderService) ListOrders(ctx context.Context, f repository.AdminOr
 			}
 			out.Items = append(out.Items, sum)
 		}
-		return nil
+		return attachChannelRefs(ctx, tx, out.Items)
 	})
 	if err != nil {
 		return AdminOrderPage{}, err
@@ -132,6 +160,11 @@ func (s *AdminOrderService) OrderDetail(ctx context.Context, orderNo string) (Ad
 		if out.AdminOrderSummary, err = summarizeOrder(o); err != nil {
 			return err
 		}
+		one := []AdminOrderSummary{out.AdminOrderSummary}
+		if err := attachChannelRefs(ctx, tx, one); err != nil {
+			return err
+		}
+		out.AdminOrderSummary = one[0]
 		if out.Freight, err = loadFreightSnapshot(ctx, tx, o.ID, o.OrderNo); err != nil {
 			return err
 		}
@@ -219,8 +252,15 @@ func (s *AdminOrderService) RefundDetail(ctx context.Context, refundNo string) (
 			// （而草稿不可能有退款单）。按内部错误报，不要伪装成 404。
 			return fmt.Errorf("退款单 %s 所属的订单 %s 读不出来: %w", refundNo, r.OrderNo, err)
 		}
-		out.Order, err = summarizeOrder(o)
-		return err
+		if out.Order, err = summarizeOrder(o); err != nil {
+			return err
+		}
+		one := []AdminOrderSummary{out.Order}
+		if err := attachChannelRefs(ctx, tx, one); err != nil {
+			return err
+		}
+		out.Order = one[0]
+		return nil
 	})
 	if err != nil {
 		return AdminRefundDetail{}, err

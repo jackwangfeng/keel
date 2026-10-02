@@ -14,6 +14,7 @@ import { keel, type AdminOrderPage, type AdminOrderSummary, type AdminStore } fr
 import { listAllStores } from "../../api/stores.ts";
 import { ORDER_REFUND_STATUS, ORDER_STATUS, orderQuery, shipAction, type OrderFilterForm } from "../../api/orderRules.ts";
 import { can } from "../../auth/permissions.ts";
+import { orderBuyerLabel, orderSourceBadge } from "../../api/channelRules.ts";
 import { datetime, yuan } from "../../ui/format.ts";
 import { notifyError, notifyOk } from "../../ui/notify.ts";
 import { useMobile } from "../../ui/useMobile.ts";
@@ -178,6 +179,7 @@ const activeFilterCount = computed(() => {
             <el-table-column label="单号" min-width="220">
                 <template #default="{ row }">
                     <el-link type="primary">{{ row.order_no }}</el-link>
+                    <div v-if="orderSourceBadge(row)"><el-tag size="small" type="warning">{{ orderSourceBadge(row) }}</el-tag></div>
                 </template>
             </el-table-column>
             <el-table-column label="状态" width="210">
@@ -200,6 +202,7 @@ const activeFilterCount = computed(() => {
                 <template #default="{ row }">
                     {{ row.receiver.receiver_name }}
                     <div class="hint">{{ row.receiver.phone }}</div>
+                    <div v-if="orderBuyerLabel(row)" class="hint">买家：{{ orderBuyerLabel(row) }}</div>
                 </template>
             </el-table-column>
             <el-table-column label="门店" min-width="120">
@@ -238,6 +241,7 @@ const activeFilterCount = computed(() => {
                     <el-tag size="small" :type="ORDER_STATUS[row.status as keyof typeof ORDER_STATUS].tag">
                         {{ ORDER_STATUS[row.status as keyof typeof ORDER_STATUS].text }}
                     </el-tag>
+                    <el-tag v-if="orderSourceBadge(row)" size="small" type="warning">{{ orderSourceBadge(row) }}</el-tag>
                     <el-tag v-if="row.has_open_refund" size="small" type="danger">售后中</el-tag>
                     <el-tag
                         v-else-if="row.refund_status !== 0"
@@ -249,6 +253,7 @@ const activeFilterCount = computed(() => {
                 </div>
                 <div class="oc-info">
                     <span>{{ row.receiver.receiver_name }} · {{ row.receiver.phone }}</span>
+                    <span v-if="orderBuyerLabel(row)">买家：{{ orderBuyerLabel(row) }}</span>
                     <span>{{ row.store.store_name || `门店 #${row.store_id}` }}</span>
                     <span>{{ datetime(row.created_at) }}</span>
                 </div>

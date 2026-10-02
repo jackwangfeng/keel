@@ -2,6 +2,15 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
     bindingStatusLabel,
+    channelAddressText,
+    channelOrderActions,
+    channelOrderStatusLabel,
+    channelOrderTotals,
+    isChannelRefund,
+    orderBuyerLabel,
+    orderSourceBadge,
+    requestKindLabel,
+    requestStatusLabel,
     bitsFromRoles,
     bpToPercent,
     channelProbeOutcome,
@@ -138,4 +147,64 @@ test("由渠道管理的标注", () => {
     assert.equal(managedLabel(null), null);
     assert.equal(managedLabel(undefined), null);
     assert.equal(managedLabel(""), null);
+});
+
+// ------------------------------------------------------------ 渠道订单
+
+test("渠道单状态文案", () => {
+    assert.equal(channelOrderStatusLabel(2).text, "新单");
+    assert.equal(channelOrderStatusLabel(7).type, "danger");
+    assert.equal(channelOrderStatusLabel(9).text, "状态 9");
+});
+
+test("渠道单按钮：重试只给有异常且没成单的，接单 / 拒单只给要接单渠道上的干净新单", () => {
+    assert.deepEqual(channelOrderActions({ status: 2, exception: null, order_no: null }, true), { retry: false, accept: true, reject: true });
+    assert.deepEqual(channelOrderActions({ status: 2 }, false), { retry: false, accept: false, reject: false });
+    assert.deepEqual(channelOrderActions({ status: 2, exception: "缺货" }, true), { retry: true, accept: false, reject: false });
+    // 发货后平台取消：有订单号的异常不是重试能解决的
+    assert.deepEqual(channelOrderActions({ status: 6, exception: "已发货后取消", order_no: "K1" }, false), {
+        retry: false,
+        accept: false,
+        reject: false,
+    });
+    assert.deepEqual(channelOrderActions({ status: 3, order_no: "K1" }, true), { retry: false, accept: false, reject: false });
+});
+
+test("金额：平台总价 = 实付 + 税，补贴两项相加", () => {
+    assert.deepEqual(channelOrderTotals({ buyer_paid: 10000, tax: 875, platform_subsidy: 300, merchant_subsidy: 200 }), {
+        paid: 10000,
+        tax: 875,
+        platformTotal: 10875,
+        subsidy: 500,
+    });
+});
+
+test("申请文案", () => {
+    assert.equal(requestKindLabel(1), "取消订单");
+    assert.equal(requestKindLabel(3), "缺货调整");
+    assert.equal(requestStatusLabel(1).text, "待处理");
+    assert.equal(requestStatusLabel(4).text, "超时自动同意");
+});
+
+test("地址拼一行，空段跳过", () => {
+    assert.equal(
+        channelAddressText({ province: "CA", city: "San Jose", district: "", address: "1 Main St", zip: "95112", country: "US" }),
+        "CA San Jose 1 Main St，95112 US",
+    );
+    assert.equal(channelAddressText({ province: "", city: "", district: "", address: "", zip: "", country: "" }), "—");
+});
+
+test("订单来源徽标与买家", () => {
+    assert.equal(orderSourceBadge({ source: 1, channel: { kind: "shopify", external_order_name: "#1001" } }), "来自 Shopify #1001");
+    assert.equal(orderSourceBadge({ source: 1, channel: null }), "来自渠道");
+    assert.equal(orderSourceBadge({ source: 0, channel: null }), null);
+    assert.equal(orderSourceBadge({}), null);
+    assert.equal(orderBuyerLabel({ source: 1 }), "渠道顾客");
+    assert.equal(orderBuyerLabel({ source: 0 }), null);
+});
+
+test("渠道退款：payment_no 空串", () => {
+    assert.equal(isChannelRefund({ payment_no: "" }), true);
+    assert.equal(isChannelRefund({ payment_no: "P123" }), false);
+    assert.equal(isChannelRefund({}), false);
 });

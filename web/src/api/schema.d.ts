@@ -8483,6 +8483,550 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/channel-orders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 渠道订单列表
+         * @description 从销售渠道（Shopify / 美团……）收进来的平台订单，新的在前。可按渠道账号、keel 门店（通知「渠道订单」跳过来只带门店）、
+         *     规整状态筛，`exception_only=true` 只看有异常的（缺货、映射不全、发货后平台取消……）。
+         *     读与渠道页同一个权限（全店范围：管理员、操作员）。
+         */
+        get: {
+            parameters: {
+                query?: {
+                    binding_id?: number;
+                    store_id?: number;
+                    status?: components["schemas"]["ChannelOrderStatus"];
+                    /** @description 只看有异常的渠道单 */
+                    exception_only?: boolean;
+                    page?: components["parameters"]["Page"];
+                    page_size?: components["parameters"]["PageSize"];
+                };
+                header?: {
+                    /**
+                     * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+                     *
+                     *     它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+                     *     而例外成立的前提是平台级鉴权：
+                     *
+                     *     · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+                     *       读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+                     *       行级安全落在这家店上。
+                     *     · **商家级员工带了这个头：403**
+                     *       （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+                     *       静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+                     *     · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+                     *       **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+                     *       实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+                     *       请求其余部分指名的东西不存在是 422。
+                     *     · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+                     *       买家侧对它照旧 404。
+                     *     · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+                     *       （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+                     *
+                     *     后台每一条挂后台会话的操作都声明了它（机械核对：
+                     *     `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+                     */
+                    "X-Keel-Merchant"?: components["parameters"]["KeelMerchant"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PageMeta"] & {
+                            items: components["schemas"]["ChannelOrder"][];
+                        };
+                    };
+                };
+                /** @description 给了 `binding_id` 而这个渠道账号在本店不存在（`https://keel.dev/problems/not-found`） */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/channel-orders/{channel_order_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                channel_order_id: components["parameters"]["ChannelOrderId"];
+            };
+            cookie?: never;
+        };
+        /** 渠道订单详情（含平台申请） */
+        get: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /**
+                     * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+                     *
+                     *     它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+                     *     而例外成立的前提是平台级鉴权：
+                     *
+                     *     · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+                     *       读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+                     *       行级安全落在这家店上。
+                     *     · **商家级员工带了这个头：403**
+                     *       （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+                     *       静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+                     *     · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+                     *       **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+                     *       实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+                     *       请求其余部分指名的东西不存在是 422。
+                     *     · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+                     *       买家侧对它照旧 404。
+                     *     · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+                     *       （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+                     *
+                     *     后台每一条挂后台会话的操作都声明了它（机械核对：
+                     *     `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+                     */
+                    "X-Keel-Merchant"?: components["parameters"]["KeelMerchant"];
+                };
+                path: {
+                    channel_order_id: components["parameters"]["ChannelOrderId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ChannelOrderDetail"];
+                    };
+                };
+                /** @description 渠道单在本店不存在（`https://keel.dev/problems/not-found`） */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/channel-orders/{channel_order_id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                channel_order_id: components["parameters"]["ChannelOrderId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 重试一张有异常的渠道单
+         * @description 补了库存 / 映射之后重新回读平台、重走接单：成单时清掉异常，又失败时换成新的原因（看返回的 `exception`）。
+         *     只对有异常、且没有活着的 keel 订单的渠道单。权限同发货（按渠道单映射到的 keel 门店判范围；没映射门店的要全店范围）。
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /**
+                     * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+                     *
+                     *     它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+                     *     而例外成立的前提是平台级鉴权：
+                     *
+                     *     · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+                     *       读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+                     *       行级安全落在这家店上。
+                     *     · **商家级员工带了这个头：403**
+                     *       （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+                     *       静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+                     *     · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+                     *       **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+                     *       实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+                     *       请求其余部分指名的东西不存在是 422。
+                     *     · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+                     *       买家侧对它照旧 404。
+                     *     · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+                     *       （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+                     *
+                     *     后台每一条挂后台会话的操作都声明了它（机械核对：
+                     *     `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+                     */
+                    "X-Keel-Merchant"?: components["parameters"]["KeelMerchant"];
+                };
+                path: {
+                    channel_order_id: components["parameters"]["ChannelOrderId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description 处理之后的渠道单 */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ChannelOrderDetail"];
+                    };
+                };
+                /** @description 渠道单在本店不存在（`https://keel.dev/problems/not-found`） */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /** @description 这张渠道单没有异常，或已经有 keel 订单，不用重试（`https://keel.dev/problems/channel-order-state`） */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/channel-orders/{channel_order_id}/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                channel_order_id: components["parameters"]["ChannelOrderId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 接单
+         * @description 只对要求商家接单的渠道（`ChannelKind.accept_required`）上还在等人接的单：回读平台权威状态再建 keel 订单、扣库存。
+         *     权限同发货。
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /**
+                     * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+                     *
+                     *     它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+                     *     而例外成立的前提是平台级鉴权：
+                     *
+                     *     · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+                     *       读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+                     *       行级安全落在这家店上。
+                     *     · **商家级员工带了这个头：403**
+                     *       （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+                     *       静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+                     *     · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+                     *       **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+                     *       实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+                     *       请求其余部分指名的东西不存在是 422。
+                     *     · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+                     *       买家侧对它照旧 404。
+                     *     · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+                     *       （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+                     *
+                     *     后台每一条挂后台会话的操作都声明了它（机械核对：
+                     *     `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+                     */
+                    "X-Keel-Merchant"?: components["parameters"]["KeelMerchant"];
+                };
+                path: {
+                    channel_order_id: components["parameters"]["ChannelOrderId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description 接单之后的渠道单（成单了，或 SAGA 还没落定） */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ChannelOrderDetail"];
+                    };
+                };
+                /** @description 渠道单在本店不存在（`https://keel.dev/problems/not-found`） */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /** @description 这张渠道单不在等待接单（已接 / 已拒 / 已取消 / 有异常 / 渠道不要求接单）（`https://keel.dev/problems/channel-order-state`） */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /**
+                 * @description 接了但没成单（缺货 / 映射不全），`detail` 写原因；渠道单已标异常，缺货时已自动向平台拒单
+                 *     （`https://keel.dev/problems/channel-order-accept-failed`）。
+                 */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/channel-orders/{channel_order_id}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                channel_order_id: components["parameters"]["ChannelOrderId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 拒单
+         * @description 只对还在等人接的单：渠道单记为已拒单，排队向平台拒单。权限同发货。
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /**
+                     * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+                     *
+                     *     它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+                     *     而例外成立的前提是平台级鉴权：
+                     *
+                     *     · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+                     *       读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+                     *       行级安全落在这家店上。
+                     *     · **商家级员工带了这个头：403**
+                     *       （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+                     *       静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+                     *     · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+                     *       **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+                     *       实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+                     *       请求其余部分指名的东西不存在是 422。
+                     *     · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+                     *       买家侧对它照旧 404。
+                     *     · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+                     *       （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+                     *
+                     *     后台每一条挂后台会话的操作都声明了它（机械核对：
+                     *     `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+                     */
+                    "X-Keel-Merchant"?: components["parameters"]["KeelMerchant"];
+                };
+                path: {
+                    channel_order_id: components["parameters"]["ChannelOrderId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /** @description 拒单原因，空 = 「商家拒单」 */
+                        reason?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description 拒单之后的渠道单 */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ChannelOrderDetail"];
+                    };
+                };
+                /** @description 渠道单在本店不存在（`https://keel.dev/problems/not-found`） */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /** @description 这张渠道单不在等待接单（`https://keel.dev/problems/channel-order-state`） */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/channel-order-requests/{request_id}/decision": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                request_id: number;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 同意 / 拒绝平台发起的申请
+         * @description 对一个待处理的平台申请（取消 / 部分退款 / 缺货调整）表态，排队回给平台。**keel 订单不动**：
+         *     要等平台确认（回调）之后才按平台事实处理。权限同发货（按申请所在渠道单的门店）。
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /**
+                     * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+                     *
+                     *     它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+                     *     而例外成立的前提是平台级鉴权：
+                     *
+                     *     · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+                     *       读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+                     *       行级安全落在这家店上。
+                     *     · **商家级员工带了这个头：403**
+                     *       （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+                     *       静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+                     *     · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+                     *       **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+                     *       实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+                     *       请求其余部分指名的东西不存在是 422。
+                     *     · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+                     *       买家侧对它照旧 404。
+                     *     · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+                     *       （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+                     *
+                     *     后台每一条挂后台会话的操作都声明了它（机械核对：
+                     *     `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+                     */
+                    "X-Keel-Merchant"?: components["parameters"]["KeelMerchant"];
+                };
+                path: {
+                    request_id: number;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @description true 同意，false 拒绝 */
+                        agree: boolean;
+                    };
+                };
+            };
+            responses: {
+                /** @description 申请所在的渠道单（含申请） */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ChannelOrderDetail"];
+                    };
+                };
+                /** @description 申请在本店不存在（`https://keel.dev/problems/not-found`） */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /** @description 这个申请已经处理过了（`https://keel.dev/problems/channel-order-state`） */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/local-delivery-templates": {
         parameters: {
             query?: never;
@@ -17902,6 +18446,168 @@ export interface components {
             pushed_at: string;
             last_error?: string | null;
         };
+        /**
+         * Format: int32
+         * @description 渠道单的规整状态：1 待付款（不接单）、2 新单（等接单 / 待处理）、3 已接单、4 已发货、5 已完成、6 已取消、7 已拒单。
+         *     异常不是一个状态，看 `exception`。
+         * @enum {integer}
+         */
+        ChannelOrderStatus: 1 | 2 | 3 | 4 | 5 | 6 | 7;
+        /**
+         * @description 平台快照里的金额（分）。keel 订单实付 = `buyer_paid`（商品 + 运费 − 平台补贴 − 商家补贴，**不含税**）；
+         *     平台总价 = `buyer_paid + tax`（美国店价外税，税不进 keel 订单）。
+         */
+        ChannelOrderAmounts: {
+            /** Format: int64 */
+            goods: number;
+            /** Format: int64 */
+            freight: number;
+            /** Format: int64 */
+            platform_subsidy: number;
+            /** Format: int64 */
+            merchant_subsidy: number;
+            /**
+             * Format: int64
+             * @description 平台佣金
+             */
+            commission: number;
+            /** Format: int64 */
+            tax: number;
+            /**
+             * Format: int64
+             * @description 商家应收
+             */
+            merchant_receivable: number;
+            /**
+             * Format: int64
+             * @description 顾客实付（不含税）
+             */
+            buyer_paid: number;
+            /** Format: int64 */
+            refunded: number;
+        };
+        ChannelOrderLine: {
+            external_line_id: string;
+            external_sku_id: string;
+            title: string;
+            /** Format: int32 */
+            qty: number;
+            /** Format: int64 */
+            price_cents: number;
+            /** Format: int32 */
+            refunded_qty: number;
+        };
+        ChannelOrderReceiver: {
+            name: string;
+            phone: string;
+            /**
+             * Format: int32
+             * @description 0 真实号码，1 平台隐私号
+             */
+            phone_kind: number;
+            address: {
+                province: string;
+                city: string;
+                district: string;
+                address: string;
+                zip: string;
+                country: string;
+            };
+        };
+        /** @description 一张平台订单在 keel 这边的记录（金额、行、收货人都是平台快照，不重新算价）。 */
+        ChannelOrder: {
+            /** Format: int64 */
+            id: number;
+            /** Format: int64 */
+            binding_id: number;
+            external_order_id: string;
+            /** @description 平台上给人看的单号，如 Shopify 的 `#1001` */
+            external_order_name: string;
+            /**
+             * Format: int64
+             * @description 映射到的 keel 门店；空 = 渠道门店没映射
+             */
+            store_id?: number | null;
+            /** @description 建出来的 keel 订单号；空 = 还没成单 */
+            order_no?: string | null;
+            /** @description 平台原样的状态（排障用） */
+            platform_status: string;
+            status: components["schemas"]["ChannelOrderStatus"];
+            /** @description 异常原因（缺货、某一行没映射……）；空 = 没有异常 */
+            exception?: string | null;
+            /**
+             * Format: date-time
+             * @description 接单截止（要求接单的渠道）
+             */
+            accept_deadline?: string | null;
+            /**
+             * Format: int32
+             * @description 配送方式（位）：1 快递、2 本地配送、4 平台骑手、8 商家自配送
+             */
+            delivery_mode: number;
+            amounts: components["schemas"]["ChannelOrderAmounts"];
+            lines: components["schemas"]["ChannelOrderLine"][];
+            receiver: components["schemas"]["ChannelOrderReceiver"];
+            /** @description 平台的测试单 */
+            test: boolean;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        /** @description 平台发起的申请（取消 / 部分退款 / 缺货调整）。 */
+        ChannelOrderRequest: {
+            /** Format: int64 */
+            id: number;
+            external_request_id: string;
+            /**
+             * Format: int32
+             * @description 1 取消（整单）、2 部分退款、3 缺货调整
+             * @enum {integer}
+             */
+            kind: 1 | 2 | 3;
+            lines: {
+                external_sku_id: string;
+                /** Format: int32 */
+                qty: number;
+            }[];
+            /** Format: int64 */
+            amount_cents: number;
+            reason: string;
+            /**
+             * Format: int32
+             * @description 1 待处理、2 已同意、3 已拒绝、4 超时自动同意、5 平台已撤销
+             * @enum {integer}
+             */
+            status: 1 | 2 | 3 | 4 | 5;
+            /**
+             * Format: date-time
+             * @description 平台的处理时限
+             */
+            deadline?: string | null;
+            /**
+             * Format: int64
+             * @description 处置的员工；自动策略、超时、撤销为空
+             */
+            decided_by?: number | null;
+            /** Format: date-time */
+            decided_at?: string | null;
+            /** Format: date-time */
+            created_at: string;
+        };
+        ChannelOrderDetail: components["schemas"]["ChannelOrder"] & {
+            /** @description 这张单上的平台申请，新的在前 */
+            requests: components["schemas"]["ChannelOrderRequest"][];
+        };
+        /** @description 渠道单的来源说明（后台订单的「来自 Shopify */
+        ChannelOrderRef: {
+            /** @description 渠道种类（同 `ChannelBinding.channel`，如 `shopify`） */
+            kind: string;
+            /** @description 渠道账号的名字 */
+            binding_name: string;
+            /** @description 平台上给人看的单号 */
+            external_order_name: string;
+        };
         /** @description RFC 9457 Problem Details */
         Problem: {
             /**
@@ -19733,6 +20439,13 @@ export interface components {
             store: components["schemas"]["OrderStoreSnapshot"];
             /** @description 有没有处于 10 待审核 / 20 待买家退货 / 30 退款中的退款单 */
             has_open_refund: boolean;
+            /**
+             * Format: int32
+             * @description 订单来源：0 自营（小程序 / H5 / App）、1 渠道单（从 Shopify 等销售渠道收进来，没有 keel 买家）
+             */
+            source: number;
+            /** @description 渠道单（`source = 1`）的来源说明；自营单为 null 或缺席 */
+            channel?: components["schemas"]["ChannelOrderRef"] | null;
         };
         AdminOrderDetail: components["schemas"]["AdminOrderSummary"] & {
             /** @description 下单那一刻的运费计算明细快照，同买家侧 `OrderDetail.freight` */
@@ -21778,6 +22491,7 @@ export interface components {
     };
     parameters: {
         ChannelBindingId: number;
+        ChannelOrderId: number;
         ChannelRuleId: number;
         Page: number;
         PageSize: number;

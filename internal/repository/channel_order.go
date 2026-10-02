@@ -76,12 +76,20 @@ type ChannelOrderState struct {
 	AcceptDeadline *time.Time
 }
 
-// ChannelOrderFilter 是后台渠道单列表的筛选。
+// ChannelOrderFilter 是后台渠道单列表的筛选（BindingID / StoreID / Status 为空 = 不限）。
 type ChannelOrderFilter struct {
-	BindingID     int64
+	BindingID     *int64
+	StoreID       *int64
 	Status        *int16
 	ExceptionOnly bool
 	Limit, Offset int32
+}
+
+// ChannelOrderRef 是一张渠道单的来源说明（后台订单的「来自 Shopify #1001」）。
+type ChannelOrderRef struct {
+	Channel           string // 渠道种类（binding.channel，如 shopify）
+	BindingName       string
+	ExternalOrderName string
 }
 
 // ChannelOrderSKU 是建 keel 订单行要的 SKU 快照。
@@ -118,6 +126,9 @@ type ChannelOrderTx interface {
 	TouchChannelOrderPayload(ctx context.Context, id int64, payload json.RawMessage) error
 	SetChannelOrderState(ctx context.Context, id int64, st ChannelOrderState) error
 	ListChannelOrders(ctx context.Context, f ChannelOrderFilter) ([]ChannelOrder, error)
+	CountChannelOrders(ctx context.Context, f ChannelOrderFilter) (int64, error)
+	// ChannelOrderRefs：后台订单列表 / 详情里渠道单的来源说明（渠道、账号名、平台单号），按渠道单 id。
+	ChannelOrderRefs(ctx context.Context, ids []int64) (map[int64]ChannelOrderRef, error)
 	DecrementChannelListingBaseline(ctx context.Context, bindingID, storeID, skuID int64, qty int32) error
 	ChannelOrderSKUs(ctx context.Context, skuIDs []int64) (map[int64]ChannelOrderSKU, error)
 	CreateChannelOrderDraft(ctx context.Context, d NewChannelOrderDraft) (Order, error)
@@ -185,14 +196,34 @@ func (t tenantTx) SetChannelOrderState(ctx context.Context, id int64, st Channel
 }
 
 func (t tenantTx) ListChannelOrders(ctx context.Context, f ChannelOrderFilter) ([]ChannelOrder, error) {
-	rows, err := t.q.ListChannelOrders(ctx, db.ListChannelOrdersParams{BindingID: f.BindingID, Status: f.Status,
-		ExceptionOnly: f.ExceptionOnly, Lim: f.Limit, Off: f.Offset})
+	rows, err := t.q.ListChannelOrders(ctx, db.ListChannelOrdersParams{BindingID: f.BindingID, StoreID: f.StoreID,
+		Status: f.Status, ExceptionOnly: f.ExceptionOnly, Lim: f.Limit, Off: f.Offset})
 	if err != nil {
 		return nil, err
 	}
 	out := make([]ChannelOrder, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, channelOrderFrom(db.GetChannelOrderRow(r)))
+	}
+	return out, nil
+}
+
+func (t tenantTx) CountChannelOrders(ctx context.Context, f ChannelOrderFilter) (int64, error) {
+	return t.q.CountChannelOrders(ctx, db.CountChannelOrdersParams{BindingID: f.BindingID, StoreID: f.StoreID,
+		Status: f.Status, ExceptionOnly: f.ExceptionOnly})
+}
+
+func (t tenantTx) ChannelOrderRefs(ctx context.Context, ids []int64) (map[int64]ChannelOrderRef, error) {
+	out := map[int64]ChannelOrderRef{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := t.q.ChannelOrderRefs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range rows {
+		out[r.ID] = ChannelOrderRef{Channel: r.Channel, BindingName: r.BindingName, ExternalOrderName: r.ExternalOrderName}
 	}
 	return out, nil
 }

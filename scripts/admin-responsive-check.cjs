@@ -61,6 +61,8 @@ const PAGES = [
     { path: "/refunds" },
     { path: "/payment-returns" },
     { path: "/channels", detail: /\/admin\/channels\/\d+$/ },
+    // 渠道订单视图（通知「渠道订单」跳过来的地址；/channels 上的「订单」标签页也会被点到）。
+    { path: "/channels?view=orders" },
     { path: "/coupons" },
     { path: "/promotions" },
     { path: "/freight-templates" },

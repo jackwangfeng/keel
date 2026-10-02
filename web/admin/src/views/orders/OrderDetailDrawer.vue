@@ -19,6 +19,7 @@ import {
     shipAction,
 } from "../../api/orderRules.ts";
 import { can } from "../../auth/permissions.ts";
+import { orderBuyerLabel, orderSourceBadge } from "../../api/channelRules.ts";
 import { datetime, yuan } from "../../ui/format.ts";
 import { notifyOk } from "../../ui/notify.ts";
 import { useMobile } from "../../ui/useMobile.ts";
@@ -100,6 +101,7 @@ function openRefund(refundNo: string): void {
                     <el-tag v-if="order.refund_status !== 0" :type="ORDER_REFUND_STATUS[order.refund_status].tag">
                         {{ ORDER_REFUND_STATUS[order.refund_status].text }}
                     </el-tag>
+                    <el-tag v-if="orderSourceBadge(order)" type="warning">{{ orderSourceBadge(order) }}</el-tag>
                     <span class="grow" />
                     <el-button
                         v-if="ship?.visible"
@@ -139,6 +141,10 @@ function openRefund(refundNo: string): void {
                         <span v-if="order.store.region_name" class="hint">（{{ order.store.region_name }}）</span>
                     </el-descriptions-item>
                     <el-descriptions-item label="用券">{{ order.coupon_name ?? "—" }}</el-descriptions-item>
+                    <el-descriptions-item v-if="orderBuyerLabel(order)" label="买家">
+                        {{ orderBuyerLabel(order) }}
+                        <span v-if="order.channel" class="hint">（{{ order.channel.binding_name }}，平台单号 {{ order.channel.external_order_name }}）</span>
+                    </el-descriptions-item>
                     <el-descriptions-item label="收货人" :span="2">
                         {{ order.receiver.receiver_name }} · {{ order.receiver.phone }}
                         <div class="hint">

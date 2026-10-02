@@ -708,6 +708,87 @@ func (e ChannelKindCatalogDirection) Valid() bool {
 	}
 }
 
+// Defines values for ChannelOrderRequestKind.
+const (
+	ChannelOrderRequestKindN1 ChannelOrderRequestKind = 1
+	ChannelOrderRequestKindN2 ChannelOrderRequestKind = 2
+	ChannelOrderRequestKindN3 ChannelOrderRequestKind = 3
+)
+
+// Valid indicates whether the value is a known member of the ChannelOrderRequestKind enum.
+func (e ChannelOrderRequestKind) Valid() bool {
+	switch e {
+	case ChannelOrderRequestKindN1:
+		return true
+	case ChannelOrderRequestKindN2:
+		return true
+	case ChannelOrderRequestKindN3:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChannelOrderRequestStatus.
+const (
+	ChannelOrderRequestStatusN1 ChannelOrderRequestStatus = 1
+	ChannelOrderRequestStatusN2 ChannelOrderRequestStatus = 2
+	ChannelOrderRequestStatusN3 ChannelOrderRequestStatus = 3
+	ChannelOrderRequestStatusN4 ChannelOrderRequestStatus = 4
+	ChannelOrderRequestStatusN5 ChannelOrderRequestStatus = 5
+)
+
+// Valid indicates whether the value is a known member of the ChannelOrderRequestStatus enum.
+func (e ChannelOrderRequestStatus) Valid() bool {
+	switch e {
+	case ChannelOrderRequestStatusN1:
+		return true
+	case ChannelOrderRequestStatusN2:
+		return true
+	case ChannelOrderRequestStatusN3:
+		return true
+	case ChannelOrderRequestStatusN4:
+		return true
+	case ChannelOrderRequestStatusN5:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChannelOrderStatus.
+const (
+	ChannelOrderStatusN1 ChannelOrderStatus = 1
+	ChannelOrderStatusN2 ChannelOrderStatus = 2
+	ChannelOrderStatusN3 ChannelOrderStatus = 3
+	ChannelOrderStatusN4 ChannelOrderStatus = 4
+	ChannelOrderStatusN5 ChannelOrderStatus = 5
+	ChannelOrderStatusN6 ChannelOrderStatus = 6
+	ChannelOrderStatusN7 ChannelOrderStatus = 7
+)
+
+// Valid indicates whether the value is a known member of the ChannelOrderStatus enum.
+func (e ChannelOrderStatus) Valid() bool {
+	switch e {
+	case ChannelOrderStatusN1:
+		return true
+	case ChannelOrderStatusN2:
+		return true
+	case ChannelOrderStatusN3:
+		return true
+	case ChannelOrderStatusN4:
+		return true
+	case ChannelOrderStatusN5:
+		return true
+	case ChannelOrderStatusN6:
+		return true
+	case ChannelOrderStatusN7:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ChatReplyActionType.
 const (
 	NavigateAddress ChatReplyActionType = "navigate_address"
@@ -2973,6 +3054,9 @@ type AdminLocalDeliverySource string
 
 // AdminOrderDetail defines model for AdminOrderDetail.
 type AdminOrderDetail struct {
+	// Channel 渠道单（`source = 1`）的来源说明；自营单为 null 或缺席
+	Channel *ChannelOrderRef `json:"channel,omitempty"`
+
 	// CouponName 这一单用的券的名字，**下单时的快照**。没用券时不出现（与 `user_coupon_id` 同进同出）。
 	//
 	// 它存在订单上，不从券模板现读：模板后来改名，历史订单仍显示下单那一刻的名字 ——
@@ -3046,6 +3130,9 @@ type AdminOrderDetail struct {
 	// ShippedAt 发货时间。「发货后 N 天自动确认收货」的倒计时从这里算
 	ShippedAt *time.Time `json:"shipped_at,omitempty"`
 
+	// Source 订单来源：0 自营（小程序 / H5 / App）、1 渠道单（从 Shopify 等销售渠道收进来，没有 keel 买家）
+	Source int32 `json:"source"`
+
 	// Status **履约维度** —— 货走到哪儿了。资金维度另见 `Order.refund_status`。
 	//
 	// 10 待支付 / 20 已支付 / 30 已发货 / 40 已完成
@@ -3082,6 +3169,9 @@ type AdminOrderDetail struct {
 // （`EXISTS` 一张 `10/20/30` 的退款单），列表上据此挂「售后中」标签、
 // 提醒发货前先看一眼退款单。
 type AdminOrderSummary struct {
+	// Channel 渠道单（`source = 1`）的来源说明；自营单为 null 或缺席
+	Channel *ChannelOrderRef `json:"channel,omitempty"`
+
 	// CouponName 这一单用的券的名字，**下单时的快照**。没用券时不出现（与 `user_coupon_id` 同进同出）。
 	//
 	// 它存在订单上，不从券模板现读：模板后来改名，历史订单仍显示下单那一刻的名字 ——
@@ -3141,6 +3231,9 @@ type AdminOrderSummary struct {
 
 	// ShippedAt 发货时间。「发货后 N 天自动确认收货」的倒计时从这里算
 	ShippedAt *time.Time `json:"shipped_at,omitempty"`
+
+	// Source 订单来源：0 自营（小程序 / H5 / App）、1 渠道单（从 Shopify 等销售渠道收进来，没有 keel 买家）
+	Source int32 `json:"source"`
 
 	// Status **履约维度** —— 货走到哪儿了。资金维度另见 `Order.refund_status`。
 	//
@@ -4296,6 +4389,187 @@ type ChannelListing struct {
 	StoreId int64  `json:"store_id"`
 	Version int64  `json:"version"`
 }
+
+// ChannelOrder 一张平台订单在 keel 这边的记录（金额、行、收货人都是平台快照，不重新算价）。
+type ChannelOrder struct {
+	// AcceptDeadline 接单截止（要求接单的渠道）
+	AcceptDeadline *time.Time `json:"accept_deadline,omitempty"`
+
+	// Amounts 平台快照里的金额（分）。keel 订单实付 = `buyer_paid`（商品 + 运费 − 平台补贴 − 商家补贴，**不含税**）；
+	// 平台总价 = `buyer_paid + tax`（美国店价外税，税不进 keel 订单）。
+	Amounts   ChannelOrderAmounts `json:"amounts"`
+	BindingId int64               `json:"binding_id"`
+	CreatedAt time.Time           `json:"created_at"`
+
+	// DeliveryMode 配送方式（位）：1 快递、2 本地配送、4 平台骑手、8 商家自配送
+	DeliveryMode int32 `json:"delivery_mode"`
+
+	// Exception 异常原因（缺货、某一行没映射……）；空 = 没有异常
+	Exception       *string `json:"exception,omitempty"`
+	ExternalOrderId string  `json:"external_order_id"`
+
+	// ExternalOrderName 平台上给人看的单号，如 Shopify 的 `#1001`
+	ExternalOrderName string             `json:"external_order_name"`
+	Id                int64              `json:"id"`
+	Lines             []ChannelOrderLine `json:"lines"`
+
+	// OrderNo 建出来的 keel 订单号；空 = 还没成单
+	OrderNo *string `json:"order_no,omitempty"`
+
+	// PlatformStatus 平台原样的状态（排障用）
+	PlatformStatus string               `json:"platform_status"`
+	Receiver       ChannelOrderReceiver `json:"receiver"`
+
+	// Status 渠道单的规整状态：1 待付款（不接单）、2 新单（等接单 / 待处理）、3 已接单、4 已发货、5 已完成、6 已取消、7 已拒单。
+	// 异常不是一个状态，看 `exception`。
+	Status ChannelOrderStatus `json:"status"`
+
+	// StoreId 映射到的 keel 门店；空 = 渠道门店没映射
+	StoreId *int64 `json:"store_id,omitempty"`
+
+	// Test 平台的测试单
+	Test      bool      `json:"test"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// ChannelOrderAmounts 平台快照里的金额（分）。keel 订单实付 = `buyer_paid`（商品 + 运费 − 平台补贴 − 商家补贴，**不含税**）；
+// 平台总价 = `buyer_paid + tax`（美国店价外税，税不进 keel 订单）。
+type ChannelOrderAmounts struct {
+	// BuyerPaid 顾客实付（不含税）
+	BuyerPaid int64 `json:"buyer_paid"`
+
+	// Commission 平台佣金
+	Commission int64 `json:"commission"`
+	Freight    int64 `json:"freight"`
+	Goods      int64 `json:"goods"`
+
+	// MerchantReceivable 商家应收
+	MerchantReceivable int64 `json:"merchant_receivable"`
+	MerchantSubsidy    int64 `json:"merchant_subsidy"`
+	PlatformSubsidy    int64 `json:"platform_subsidy"`
+	Refunded           int64 `json:"refunded"`
+	Tax                int64 `json:"tax"`
+}
+
+// ChannelOrderDetail defines model for ChannelOrderDetail.
+type ChannelOrderDetail struct {
+	// AcceptDeadline 接单截止（要求接单的渠道）
+	AcceptDeadline *time.Time `json:"accept_deadline,omitempty"`
+
+	// Amounts 平台快照里的金额（分）。keel 订单实付 = `buyer_paid`（商品 + 运费 − 平台补贴 − 商家补贴，**不含税**）；
+	// 平台总价 = `buyer_paid + tax`（美国店价外税，税不进 keel 订单）。
+	Amounts   ChannelOrderAmounts `json:"amounts"`
+	BindingId int64               `json:"binding_id"`
+	CreatedAt time.Time           `json:"created_at"`
+
+	// DeliveryMode 配送方式（位）：1 快递、2 本地配送、4 平台骑手、8 商家自配送
+	DeliveryMode int32 `json:"delivery_mode"`
+
+	// Exception 异常原因（缺货、某一行没映射……）；空 = 没有异常
+	Exception       *string `json:"exception,omitempty"`
+	ExternalOrderId string  `json:"external_order_id"`
+
+	// ExternalOrderName 平台上给人看的单号，如 Shopify 的 `#1001`
+	ExternalOrderName string             `json:"external_order_name"`
+	Id                int64              `json:"id"`
+	Lines             []ChannelOrderLine `json:"lines"`
+
+	// OrderNo 建出来的 keel 订单号；空 = 还没成单
+	OrderNo *string `json:"order_no,omitempty"`
+
+	// PlatformStatus 平台原样的状态（排障用）
+	PlatformStatus string               `json:"platform_status"`
+	Receiver       ChannelOrderReceiver `json:"receiver"`
+
+	// Requests 这张单上的平台申请，新的在前
+	Requests []ChannelOrderRequest `json:"requests"`
+
+	// Status 渠道单的规整状态：1 待付款（不接单）、2 新单（等接单 / 待处理）、3 已接单、4 已发货、5 已完成、6 已取消、7 已拒单。
+	// 异常不是一个状态，看 `exception`。
+	Status ChannelOrderStatus `json:"status"`
+
+	// StoreId 映射到的 keel 门店；空 = 渠道门店没映射
+	StoreId *int64 `json:"store_id,omitempty"`
+
+	// Test 平台的测试单
+	Test      bool      `json:"test"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// ChannelOrderLine defines model for ChannelOrderLine.
+type ChannelOrderLine struct {
+	ExternalLineId string `json:"external_line_id"`
+	ExternalSkuId  string `json:"external_sku_id"`
+	PriceCents     int64  `json:"price_cents"`
+	Qty            int32  `json:"qty"`
+	RefundedQty    int32  `json:"refunded_qty"`
+	Title          string `json:"title"`
+}
+
+// ChannelOrderReceiver defines model for ChannelOrderReceiver.
+type ChannelOrderReceiver struct {
+	Address struct {
+		Address  string `json:"address"`
+		City     string `json:"city"`
+		Country  string `json:"country"`
+		District string `json:"district"`
+		Province string `json:"province"`
+		Zip      string `json:"zip"`
+	} `json:"address"`
+	Name  string `json:"name"`
+	Phone string `json:"phone"`
+
+	// PhoneKind 0 真实号码，1 平台隐私号
+	PhoneKind int32 `json:"phone_kind"`
+}
+
+// ChannelOrderRef 渠道单的来源说明（后台订单的「来自 Shopify
+type ChannelOrderRef struct {
+	// BindingName 渠道账号的名字
+	BindingName string `json:"binding_name"`
+
+	// ExternalOrderName 平台上给人看的单号
+	ExternalOrderName string `json:"external_order_name"`
+
+	// Kind 渠道种类（同 `ChannelBinding.channel`，如 `shopify`）
+	Kind string `json:"kind"`
+}
+
+// ChannelOrderRequest 平台发起的申请（取消 / 部分退款 / 缺货调整）。
+type ChannelOrderRequest struct {
+	AmountCents int64     `json:"amount_cents"`
+	CreatedAt   time.Time `json:"created_at"`
+
+	// Deadline 平台的处理时限
+	Deadline  *time.Time `json:"deadline,omitempty"`
+	DecidedAt *time.Time `json:"decided_at,omitempty"`
+
+	// DecidedBy 处置的员工；自动策略、超时、撤销为空
+	DecidedBy         *int64 `json:"decided_by,omitempty"`
+	ExternalRequestId string `json:"external_request_id"`
+	Id                int64  `json:"id"`
+
+	// Kind 1 取消（整单）、2 部分退款、3 缺货调整
+	Kind  ChannelOrderRequestKind `json:"kind"`
+	Lines []struct {
+		ExternalSkuId string `json:"external_sku_id"`
+		Qty           int32  `json:"qty"`
+	} `json:"lines"`
+	Reason string `json:"reason"`
+
+	// Status 1 待处理、2 已同意、3 已拒绝、4 超时自动同意、5 平台已撤销
+	Status ChannelOrderRequestStatus `json:"status"`
+}
+
+// ChannelOrderRequestKind 1 取消（整单）、2 部分退款、3 缺货调整
+type ChannelOrderRequestKind int32
+
+// ChannelOrderRequestStatus 1 待处理、2 已同意、3 已拒绝、4 超时自动同意、5 平台已撤销
+type ChannelOrderRequestStatus int32
+
+// ChannelOrderStatus 渠道单的规整状态：1 待付款（不接单）、2 新单（等接单 / 待处理）、3 已接单、4 已发货、5 已完成、6 已取消、7 已拒单。
+// 异常不是一个状态，看 `exception`。
+type ChannelOrderStatus int32
 
 // ChannelPriceRule defines model for ChannelPriceRule.
 type ChannelPriceRule struct {
@@ -7789,6 +8063,9 @@ type CategoryId = int64
 // ChannelBindingId defines model for ChannelBindingId.
 type ChannelBindingId = int64
 
+// ChannelOrderId defines model for ChannelOrderId.
+type ChannelOrderId = int64
+
 // ChannelRuleId defines model for ChannelRuleId.
 type ChannelRuleId = int64
 
@@ -9134,6 +9411,189 @@ type PutAdminChannelBindingsBindingIdStoreLinksStoreIdParams struct {
 
 // GetAdminChannelKindsParams defines parameters for GetAdminChannelKinds.
 type GetAdminChannelKindsParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// PostAdminChannelOrderRequestsRequestIdDecisionJSONBody defines parameters for PostAdminChannelOrderRequestsRequestIdDecision.
+type PostAdminChannelOrderRequestsRequestIdDecisionJSONBody struct {
+	// Agree true 同意，false 拒绝
+	Agree bool `json:"agree"`
+}
+
+// PostAdminChannelOrderRequestsRequestIdDecisionParams defines parameters for PostAdminChannelOrderRequestsRequestIdDecision.
+type PostAdminChannelOrderRequestsRequestIdDecisionParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// GetAdminChannelOrdersParams defines parameters for GetAdminChannelOrders.
+type GetAdminChannelOrdersParams struct {
+	BindingId *int64              `form:"binding_id,omitempty" json:"binding_id,omitempty"`
+	StoreId   *int64              `form:"store_id,omitempty" json:"store_id,omitempty"`
+	Status    *ChannelOrderStatus `form:"status,omitempty" json:"status,omitempty"`
+
+	// ExceptionOnly 只看有异常的渠道单
+	ExceptionOnly *bool     `form:"exception_only,omitempty" json:"exception_only,omitempty"`
+	Page          *Page     `form:"page,omitempty" json:"page,omitempty"`
+	PageSize      *PageSize `form:"page_size,omitempty" json:"page_size,omitempty"`
+
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// GetAdminChannelOrdersChannelOrderIdParams defines parameters for GetAdminChannelOrdersChannelOrderId.
+type GetAdminChannelOrdersChannelOrderIdParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// PostAdminChannelOrdersChannelOrderIdAcceptParams defines parameters for PostAdminChannelOrdersChannelOrderIdAccept.
+type PostAdminChannelOrdersChannelOrderIdAcceptParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// PostAdminChannelOrdersChannelOrderIdRejectJSONBody defines parameters for PostAdminChannelOrdersChannelOrderIdReject.
+type PostAdminChannelOrdersChannelOrderIdRejectJSONBody struct {
+	// Reason 拒单原因，空 = 「商家拒单」
+	Reason *string `json:"reason,omitempty"`
+}
+
+// PostAdminChannelOrdersChannelOrderIdRejectParams defines parameters for PostAdminChannelOrdersChannelOrderIdReject.
+type PostAdminChannelOrdersChannelOrderIdRejectParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// PostAdminChannelOrdersChannelOrderIdRetryParams defines parameters for PostAdminChannelOrdersChannelOrderIdRetry.
+type PostAdminChannelOrdersChannelOrderIdRetryParams struct {
 	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
 	//
 	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
@@ -13110,6 +13570,12 @@ type PutAdminChannelBindingsBindingIdStockRulesJSONRequestBody = ChannelStockRul
 
 // PutAdminChannelBindingsBindingIdStoreLinksStoreIdJSONRequestBody defines body for PutAdminChannelBindingsBindingIdStoreLinksStoreId for application/json ContentType.
 type PutAdminChannelBindingsBindingIdStoreLinksStoreIdJSONRequestBody PutAdminChannelBindingsBindingIdStoreLinksStoreIdJSONBody
+
+// PostAdminChannelOrderRequestsRequestIdDecisionJSONRequestBody defines body for PostAdminChannelOrderRequestsRequestIdDecision for application/json ContentType.
+type PostAdminChannelOrderRequestsRequestIdDecisionJSONRequestBody PostAdminChannelOrderRequestsRequestIdDecisionJSONBody
+
+// PostAdminChannelOrdersChannelOrderIdRejectJSONRequestBody defines body for PostAdminChannelOrdersChannelOrderIdReject for application/json ContentType.
+type PostAdminChannelOrdersChannelOrderIdRejectJSONRequestBody PostAdminChannelOrdersChannelOrderIdRejectJSONBody
 
 // PostAdminCouponTemplatesJSONRequestBody defines body for PostAdminCouponTemplates for application/json ContentType.
 type PostAdminCouponTemplatesJSONRequestBody = CouponTemplateCreateRequest

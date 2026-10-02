@@ -264,15 +264,34 @@ UPDATE channel_orders
  WHERE id = @id::bigint;
 
 -- name: ListChannelOrders :many
--- 后台的渠道单列表：按 binding，可按状态、只看异常；新的在前。
+-- 后台的渠道单列表：可按 binding、门店（通知跳过来只带门店）、状态筛，可只看异常；新的在前。
+-- 渠道单表是一家店的渠道单（量远小于 orders），可空筛选在这里不构成 generic plan 的问题。
 SELECT id, binding_id, external_order_id, external_order_name, store_id, order_no, platform_status, status, exception,
        accept_deadline, delivery_mode, amounts, lines, receiver, version, last_payload, test, created_at, updated_at
   FROM channel_orders
- WHERE binding_id = @binding_id::bigint
+ WHERE (sqlc.narg(binding_id)::bigint IS NULL OR binding_id = sqlc.narg(binding_id)::bigint)
+   AND (sqlc.narg(store_id)::bigint IS NULL OR store_id = sqlc.narg(store_id)::bigint)
    AND (sqlc.narg(status)::smallint IS NULL OR status = sqlc.narg(status)::smallint)
    AND (NOT @exception_only::boolean OR exception IS NOT NULL)
  ORDER BY id DESC
  LIMIT @lim::int OFFSET @off::int;
+
+-- name: CountChannelOrders :one
+-- 与 ListChannelOrders 同一组筛选的总条数（后台分页）。
+SELECT count(*)::bigint
+  FROM channel_orders
+ WHERE (sqlc.narg(binding_id)::bigint IS NULL OR binding_id = sqlc.narg(binding_id)::bigint)
+   AND (sqlc.narg(store_id)::bigint IS NULL OR store_id = sqlc.narg(store_id)::bigint)
+   AND (sqlc.narg(status)::smallint IS NULL OR status = sqlc.narg(status)::smallint)
+   AND (NOT @exception_only::boolean OR exception IS NOT NULL);
+
+-- name: ChannelOrderRefs :many
+-- 后台订单列表 / 详情的「来自 Shopify #1001」：这一页有渠道单（source = 1）时按 channel_order_id 补查一次
+-- （订单列表不 JOIN，见第三期计划 Task 1 的执行中修正）。
+SELECT co.id, co.external_order_name, b.channel, b.name AS binding_name
+  FROM channel_orders co
+  JOIN channel_bindings b ON b.id = co.binding_id
+ WHERE co.id = ANY(@ids::bigint[]);
 
 -- name: DecrementChannelListingBaseline :exec
 -- 接单成功：平台卖出时已经自己减了平台上的数，推送基线跟着减（下限 0），下一次推送的 CAS 才对得上

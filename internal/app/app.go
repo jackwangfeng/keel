@@ -662,6 +662,12 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 		v1.DELETE("/admin/channel-bindings/:binding_id/price-rules/:rule_id", staffAuth, ch.DeletePriceRule)
 		v1.GET("/admin/channel-bindings/:binding_id/listings", staffAuth, ch.ListListings)
 		v1.POST("/admin/channel-bindings/:binding_id/catalog-pulls", staffAuth, ch.RequestCatalogPull)
+		v1.GET("/admin/channel-orders", staffAuth, ch.ListChannelOrders)
+		v1.GET("/admin/channel-orders/:channel_order_id", staffAuth, ch.GetChannelOrder)
+		v1.POST("/admin/channel-orders/:channel_order_id/retry", staffAuth, ch.RetryChannelOrder)
+		v1.POST("/admin/channel-orders/:channel_order_id/accept", staffAuth, ch.AcceptChannelOrder)
+		v1.POST("/admin/channel-orders/:channel_order_id/reject", staffAuth, ch.RejectChannelOrder)
+		v1.POST("/admin/channel-order-requests/:request_id/decision", staffAuth, ch.DecideChannelOrderRequest)
 	}
 	v1.GET("/admin/local-delivery-templates", staffAuth, st.ListLocalDeliveryTemplates)
 	v1.POST("/admin/local-delivery-templates", staffAuth, st.CreateLocalDeliveryTemplate)

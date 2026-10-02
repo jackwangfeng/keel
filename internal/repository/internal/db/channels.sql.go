@@ -47,6 +47,47 @@ func (q *Queries) ChannelManagedProducts(ctx context.Context, productIds []int64
 	return items, nil
 }
 
+const channelOrderRefs = `-- name: ChannelOrderRefs :many
+SELECT co.id, co.external_order_name, b.channel, b.name AS binding_name
+  FROM channel_orders co
+  JOIN channel_bindings b ON b.id = co.binding_id
+ WHERE co.id = ANY($1::bigint[])
+`
+
+type ChannelOrderRefsRow struct {
+	ID                int64
+	ExternalOrderName string
+	Channel           string
+	BindingName       string
+}
+
+// 后台订单列表 / 详情的「来自 Shopify #1001」：这一页有渠道单（source = 1）时按 channel_order_id 补查一次
+// （订单列表不 JOIN，见第三期计划 Task 1 的执行中修正）。
+func (q *Queries) ChannelOrderRefs(ctx context.Context, ids []int64) ([]ChannelOrderRefsRow, error) {
+	rows, err := q.db.Query(ctx, channelOrderRefs, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ChannelOrderRefsRow
+	for rows.Next() {
+		var i ChannelOrderRefsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ExternalOrderName,
+			&i.Channel,
+			&i.BindingName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const channelOrderSKUs = `-- name: ChannelOrderSKUs :many
 SELECT s.id, s.product_id, s.spec_values, s.image_url, p.title
   FROM skus s
@@ -215,6 +256,35 @@ func (q *Queries) CountActiveOutletBindings(ctx context.Context) (int64, error) 
 	var count int64
 	err := row.Scan(&count)
 	return count, err
+}
+
+const countChannelOrders = `-- name: CountChannelOrders :one
+SELECT count(*)::bigint
+  FROM channel_orders
+ WHERE ($1::bigint IS NULL OR binding_id = $1::bigint)
+   AND ($2::bigint IS NULL OR store_id = $2::bigint)
+   AND ($3::smallint IS NULL OR status = $3::smallint)
+   AND (NOT $4::boolean OR exception IS NOT NULL)
+`
+
+type CountChannelOrdersParams struct {
+	BindingID     *int64
+	StoreID       *int64
+	Status        *int16
+	ExceptionOnly bool
+}
+
+// 与 ListChannelOrders 同一组筛选的总条数（后台分页）。
+func (q *Queries) CountChannelOrders(ctx context.Context, arg CountChannelOrdersParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countChannelOrders,
+		arg.BindingID,
+		arg.StoreID,
+		arg.Status,
+		arg.ExceptionOnly,
+	)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
 }
 
 const createChannelBinding = `-- name: CreateChannelBinding :one
@@ -1201,15 +1271,17 @@ const listChannelOrders = `-- name: ListChannelOrders :many
 SELECT id, binding_id, external_order_id, external_order_name, store_id, order_no, platform_status, status, exception,
        accept_deadline, delivery_mode, amounts, lines, receiver, version, last_payload, test, created_at, updated_at
   FROM channel_orders
- WHERE binding_id = $1::bigint
-   AND ($2::smallint IS NULL OR status = $2::smallint)
-   AND (NOT $3::boolean OR exception IS NOT NULL)
+ WHERE ($1::bigint IS NULL OR binding_id = $1::bigint)
+   AND ($2::bigint IS NULL OR store_id = $2::bigint)
+   AND ($3::smallint IS NULL OR status = $3::smallint)
+   AND (NOT $4::boolean OR exception IS NOT NULL)
  ORDER BY id DESC
- LIMIT $5::int OFFSET $4::int
+ LIMIT $6::int OFFSET $5::int
 `
 
 type ListChannelOrdersParams struct {
-	BindingID     int64
+	BindingID     *int64
+	StoreID       *int64
 	Status        *int16
 	ExceptionOnly bool
 	Off           int32
@@ -1238,10 +1310,12 @@ type ListChannelOrdersRow struct {
 	UpdatedAt         pgtype.Timestamptz
 }
 
-// 后台的渠道单列表：按 binding，可按状态、只看异常；新的在前。
+// 后台的渠道单列表：可按 binding、门店（通知跳过来只带门店）、状态筛，可只看异常；新的在前。
+// 渠道单表是一家店的渠道单（量远小于 orders），可空筛选在这里不构成 generic plan 的问题。
 func (q *Queries) ListChannelOrders(ctx context.Context, arg ListChannelOrdersParams) ([]ListChannelOrdersRow, error) {
 	rows, err := q.db.Query(ctx, listChannelOrders,
 		arg.BindingID,
+		arg.StoreID,
 		arg.Status,
 		arg.ExceptionOnly,
 		arg.Off,

@@ -989,12 +989,14 @@ class AdminOrderDetail {
   final ReceiverSnapshot receiver;
   final OrderStoreSnapshot store;
   final bool hasOpenRefund;
+  final int source;
+  final dynamic channel;
   final FreightBreakdown? freight;
   final List<OrderItem> items;
   final List<PaymentRecord> payments;
   final List<Shipment> shipments;
   final List<AdminRefund> refunds;
-  const AdminOrderDetail({required this.orderNo, required this.storeId, this.regionId, required this.status, required this.refundStatus, this.goodsAmountCents, this.freightCents, this.freightDiscountCents, this.discountCents, this.userCouponId, this.couponName, this.promotionDiscountCents, this.promotions, required this.payableCents, this.paidCents, this.refundedCents, this.expireAt, required this.createdAt, this.paidAt, this.shippedAt, this.finishedAt, required this.receiver, required this.store, required this.hasOpenRefund, this.freight, required this.items, required this.payments, required this.shipments, required this.refunds});
+  const AdminOrderDetail({required this.orderNo, required this.storeId, this.regionId, required this.status, required this.refundStatus, this.goodsAmountCents, this.freightCents, this.freightDiscountCents, this.discountCents, this.userCouponId, this.couponName, this.promotionDiscountCents, this.promotions, required this.payableCents, this.paidCents, this.refundedCents, this.expireAt, required this.createdAt, this.paidAt, this.shippedAt, this.finishedAt, required this.receiver, required this.store, required this.hasOpenRefund, required this.source, this.channel, this.freight, required this.items, required this.payments, required this.shipments, required this.refunds});
   factory AdminOrderDetail.fromJson(Map<String, dynamic> j) => AdminOrderDetail(
         orderNo: j['order_no'] as String,
         storeId: (j['store_id'] as num).toInt(),
@@ -1020,6 +1022,8 @@ class AdminOrderDetail {
         receiver: ReceiverSnapshot.fromJson(j['receiver'] as Map<String, dynamic>),
         store: OrderStoreSnapshot.fromJson(j['store'] as Map<String, dynamic>),
         hasOpenRefund: j['has_open_refund'] as bool,
+        source: (j['source'] as num).toInt(),
+        channel: j['channel'],
         freight: j['freight'] == null ? null : FreightBreakdown.fromJson(j['freight'] as Map<String, dynamic>),
         items: (j['items'] as List).map((e) => OrderItem.fromJson(e as Map<String, dynamic>)).toList(),
         payments: (j['payments'] as List).map((e) => PaymentRecord.fromJson(e as Map<String, dynamic>)).toList(),
@@ -1051,6 +1055,8 @@ class AdminOrderDetail {
         'receiver': receiver.toJson(),
         'store': store.toJson(),
         'has_open_refund': hasOpenRefund,
+        'source': source,
+        if (channel != null) 'channel': channel,
         if (freight != null) 'freight': freight!.toJson(),
         'items': items.map((e) => e.toJson()).toList(),
         'payments': payments.map((e) => e.toJson()).toList(),
@@ -1085,7 +1091,9 @@ class AdminOrderSummary {
   final ReceiverSnapshot receiver;
   final OrderStoreSnapshot store;
   final bool hasOpenRefund;
-  const AdminOrderSummary({required this.orderNo, required this.storeId, this.regionId, required this.status, required this.refundStatus, this.goodsAmountCents, this.freightCents, this.freightDiscountCents, this.discountCents, this.userCouponId, this.couponName, this.promotionDiscountCents, this.promotions, required this.payableCents, this.paidCents, this.refundedCents, this.expireAt, required this.createdAt, this.paidAt, this.shippedAt, this.finishedAt, required this.receiver, required this.store, required this.hasOpenRefund});
+  final int source;
+  final dynamic channel;
+  const AdminOrderSummary({required this.orderNo, required this.storeId, this.regionId, required this.status, required this.refundStatus, this.goodsAmountCents, this.freightCents, this.freightDiscountCents, this.discountCents, this.userCouponId, this.couponName, this.promotionDiscountCents, this.promotions, required this.payableCents, this.paidCents, this.refundedCents, this.expireAt, required this.createdAt, this.paidAt, this.shippedAt, this.finishedAt, required this.receiver, required this.store, required this.hasOpenRefund, required this.source, this.channel});
   factory AdminOrderSummary.fromJson(Map<String, dynamic> j) => AdminOrderSummary(
         orderNo: j['order_no'] as String,
         storeId: (j['store_id'] as num).toInt(),
@@ -1111,6 +1119,8 @@ class AdminOrderSummary {
         receiver: ReceiverSnapshot.fromJson(j['receiver'] as Map<String, dynamic>),
         store: OrderStoreSnapshot.fromJson(j['store'] as Map<String, dynamic>),
         hasOpenRefund: j['has_open_refund'] as bool,
+        source: (j['source'] as num).toInt(),
+        channel: j['channel'],
       );
   Map<String, dynamic> toJson() => {
         'order_no': orderNo,
@@ -1137,6 +1147,8 @@ class AdminOrderSummary {
         'receiver': receiver.toJson(),
         'store': store.toJson(),
         'has_open_refund': hasOpenRefund,
+        'source': source,
+        if (channel != null) 'channel': channel,
       };
 }
 
@@ -2542,6 +2554,313 @@ class ChannelListing {
         'version': version,
         'pushed_at': pushedAt,
         if (lastError != null) 'last_error': lastError,
+      };
+}
+
+/// 渠道单的规整状态：1 待付款（不接单）、2 新单（等接单 / 待处理）、3 已接单、4 已发货、5 已完成、6 已取消、7 已拒单。
+typedef ChannelOrderStatus = int;
+
+/// 平台快照里的金额（分）。keel 订单实付 = `buyer_paid`（商品 + 运费 − 平台补贴 − 商家补贴，**不含税**）；
+class ChannelOrderAmounts {
+  final int goods;
+  final int freight;
+  final int platformSubsidy;
+  final int merchantSubsidy;
+  final int commission;
+  final int tax;
+  final int merchantReceivable;
+  final int buyerPaid;
+  final int refunded;
+  const ChannelOrderAmounts({required this.goods, required this.freight, required this.platformSubsidy, required this.merchantSubsidy, required this.commission, required this.tax, required this.merchantReceivable, required this.buyerPaid, required this.refunded});
+  factory ChannelOrderAmounts.fromJson(Map<String, dynamic> j) => ChannelOrderAmounts(
+        goods: (j['goods'] as num).toInt(),
+        freight: (j['freight'] as num).toInt(),
+        platformSubsidy: (j['platform_subsidy'] as num).toInt(),
+        merchantSubsidy: (j['merchant_subsidy'] as num).toInt(),
+        commission: (j['commission'] as num).toInt(),
+        tax: (j['tax'] as num).toInt(),
+        merchantReceivable: (j['merchant_receivable'] as num).toInt(),
+        buyerPaid: (j['buyer_paid'] as num).toInt(),
+        refunded: (j['refunded'] as num).toInt(),
+      );
+  Map<String, dynamic> toJson() => {
+        'goods': goods,
+        'freight': freight,
+        'platform_subsidy': platformSubsidy,
+        'merchant_subsidy': merchantSubsidy,
+        'commission': commission,
+        'tax': tax,
+        'merchant_receivable': merchantReceivable,
+        'buyer_paid': buyerPaid,
+        'refunded': refunded,
+      };
+}
+
+class ChannelOrderLine {
+  final String externalLineId;
+  final String externalSkuId;
+  final String title;
+  final int qty;
+  final int priceCents;
+  final int refundedQty;
+  const ChannelOrderLine({required this.externalLineId, required this.externalSkuId, required this.title, required this.qty, required this.priceCents, required this.refundedQty});
+  factory ChannelOrderLine.fromJson(Map<String, dynamic> j) => ChannelOrderLine(
+        externalLineId: j['external_line_id'] as String,
+        externalSkuId: j['external_sku_id'] as String,
+        title: j['title'] as String,
+        qty: (j['qty'] as num).toInt(),
+        priceCents: (j['price_cents'] as num).toInt(),
+        refundedQty: (j['refunded_qty'] as num).toInt(),
+      );
+  Map<String, dynamic> toJson() => {
+        'external_line_id': externalLineId,
+        'external_sku_id': externalSkuId,
+        'title': title,
+        'qty': qty,
+        'price_cents': priceCents,
+        'refunded_qty': refundedQty,
+      };
+}
+
+class ChannelOrderReceiverAddress {
+  final String province;
+  final String city;
+  final String district;
+  final String address;
+  final String zip;
+  final String country;
+  const ChannelOrderReceiverAddress({required this.province, required this.city, required this.district, required this.address, required this.zip, required this.country});
+  factory ChannelOrderReceiverAddress.fromJson(Map<String, dynamic> j) => ChannelOrderReceiverAddress(
+        province: j['province'] as String,
+        city: j['city'] as String,
+        district: j['district'] as String,
+        address: j['address'] as String,
+        zip: j['zip'] as String,
+        country: j['country'] as String,
+      );
+  Map<String, dynamic> toJson() => {
+        'province': province,
+        'city': city,
+        'district': district,
+        'address': address,
+        'zip': zip,
+        'country': country,
+      };
+}
+
+class ChannelOrderReceiver {
+  final String name;
+  final String phone;
+  final int phoneKind;
+  final ChannelOrderReceiverAddress address;
+  const ChannelOrderReceiver({required this.name, required this.phone, required this.phoneKind, required this.address});
+  factory ChannelOrderReceiver.fromJson(Map<String, dynamic> j) => ChannelOrderReceiver(
+        name: j['name'] as String,
+        phone: j['phone'] as String,
+        phoneKind: (j['phone_kind'] as num).toInt(),
+        address: ChannelOrderReceiverAddress.fromJson(j['address'] as Map<String, dynamic>),
+      );
+  Map<String, dynamic> toJson() => {
+        'name': name,
+        'phone': phone,
+        'phone_kind': phoneKind,
+        'address': address.toJson(),
+      };
+}
+
+/// 一张平台订单在 keel 这边的记录（金额、行、收货人都是平台快照，不重新算价）。
+class ChannelOrder {
+  final int id;
+  final int bindingId;
+  final String externalOrderId;
+  final String externalOrderName;
+  final int? storeId;
+  final String? orderNo;
+  final String platformStatus;
+  final ChannelOrderStatus status;
+  final String? exception;
+  final String? acceptDeadline;
+  final int deliveryMode;
+  final ChannelOrderAmounts amounts;
+  final List<ChannelOrderLine> lines;
+  final ChannelOrderReceiver receiver;
+  final bool test;
+  final String createdAt;
+  final String updatedAt;
+  const ChannelOrder({required this.id, required this.bindingId, required this.externalOrderId, required this.externalOrderName, this.storeId, this.orderNo, required this.platformStatus, required this.status, this.exception, this.acceptDeadline, required this.deliveryMode, required this.amounts, required this.lines, required this.receiver, required this.test, required this.createdAt, required this.updatedAt});
+  factory ChannelOrder.fromJson(Map<String, dynamic> j) => ChannelOrder(
+        id: (j['id'] as num).toInt(),
+        bindingId: (j['binding_id'] as num).toInt(),
+        externalOrderId: j['external_order_id'] as String,
+        externalOrderName: j['external_order_name'] as String,
+        storeId: (j['store_id'] as num?)?.toInt(),
+        orderNo: j['order_no'] as String?,
+        platformStatus: j['platform_status'] as String,
+        status: (j['status'] as num).toInt(),
+        exception: j['exception'] as String?,
+        acceptDeadline: j['accept_deadline'] as String?,
+        deliveryMode: (j['delivery_mode'] as num).toInt(),
+        amounts: ChannelOrderAmounts.fromJson(j['amounts'] as Map<String, dynamic>),
+        lines: (j['lines'] as List).map((e) => ChannelOrderLine.fromJson(e as Map<String, dynamic>)).toList(),
+        receiver: ChannelOrderReceiver.fromJson(j['receiver'] as Map<String, dynamic>),
+        test: j['test'] as bool,
+        createdAt: j['created_at'] as String,
+        updatedAt: j['updated_at'] as String,
+      );
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'binding_id': bindingId,
+        'external_order_id': externalOrderId,
+        'external_order_name': externalOrderName,
+        if (storeId != null) 'store_id': storeId,
+        if (orderNo != null) 'order_no': orderNo,
+        'platform_status': platformStatus,
+        'status': status,
+        if (exception != null) 'exception': exception,
+        if (acceptDeadline != null) 'accept_deadline': acceptDeadline,
+        'delivery_mode': deliveryMode,
+        'amounts': amounts.toJson(),
+        'lines': lines.map((e) => e.toJson()).toList(),
+        'receiver': receiver.toJson(),
+        'test': test,
+        'created_at': createdAt,
+        'updated_at': updatedAt,
+      };
+}
+
+class ChannelOrderRequestLinesItem {
+  final String externalSkuId;
+  final int qty;
+  const ChannelOrderRequestLinesItem({required this.externalSkuId, required this.qty});
+  factory ChannelOrderRequestLinesItem.fromJson(Map<String, dynamic> j) => ChannelOrderRequestLinesItem(
+        externalSkuId: j['external_sku_id'] as String,
+        qty: (j['qty'] as num).toInt(),
+      );
+  Map<String, dynamic> toJson() => {
+        'external_sku_id': externalSkuId,
+        'qty': qty,
+      };
+}
+
+/// 平台发起的申请（取消 / 部分退款 / 缺货调整）。
+class ChannelOrderRequest {
+  final int id;
+  final String externalRequestId;
+  final int kind;
+  final List<ChannelOrderRequestLinesItem> lines;
+  final int amountCents;
+  final String reason;
+  final int status;
+  final String? deadline;
+  final int? decidedBy;
+  final String? decidedAt;
+  final String createdAt;
+  const ChannelOrderRequest({required this.id, required this.externalRequestId, required this.kind, required this.lines, required this.amountCents, required this.reason, required this.status, this.deadline, this.decidedBy, this.decidedAt, required this.createdAt});
+  factory ChannelOrderRequest.fromJson(Map<String, dynamic> j) => ChannelOrderRequest(
+        id: (j['id'] as num).toInt(),
+        externalRequestId: j['external_request_id'] as String,
+        kind: (j['kind'] as num).toInt(),
+        lines: (j['lines'] as List).map((e) => ChannelOrderRequestLinesItem.fromJson(e as Map<String, dynamic>)).toList(),
+        amountCents: (j['amount_cents'] as num).toInt(),
+        reason: j['reason'] as String,
+        status: (j['status'] as num).toInt(),
+        deadline: j['deadline'] as String?,
+        decidedBy: (j['decided_by'] as num?)?.toInt(),
+        decidedAt: j['decided_at'] as String?,
+        createdAt: j['created_at'] as String,
+      );
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'external_request_id': externalRequestId,
+        'kind': kind,
+        'lines': lines.map((e) => e.toJson()).toList(),
+        'amount_cents': amountCents,
+        'reason': reason,
+        'status': status,
+        if (deadline != null) 'deadline': deadline,
+        if (decidedBy != null) 'decided_by': decidedBy,
+        if (decidedAt != null) 'decided_at': decidedAt,
+        'created_at': createdAt,
+      };
+}
+
+class ChannelOrderDetail {
+  final int id;
+  final int bindingId;
+  final String externalOrderId;
+  final String externalOrderName;
+  final int? storeId;
+  final String? orderNo;
+  final String platformStatus;
+  final ChannelOrderStatus status;
+  final String? exception;
+  final String? acceptDeadline;
+  final int deliveryMode;
+  final ChannelOrderAmounts amounts;
+  final List<ChannelOrderLine> lines;
+  final ChannelOrderReceiver receiver;
+  final bool test;
+  final String createdAt;
+  final String updatedAt;
+  final List<ChannelOrderRequest> requests;
+  const ChannelOrderDetail({required this.id, required this.bindingId, required this.externalOrderId, required this.externalOrderName, this.storeId, this.orderNo, required this.platformStatus, required this.status, this.exception, this.acceptDeadline, required this.deliveryMode, required this.amounts, required this.lines, required this.receiver, required this.test, required this.createdAt, required this.updatedAt, required this.requests});
+  factory ChannelOrderDetail.fromJson(Map<String, dynamic> j) => ChannelOrderDetail(
+        id: (j['id'] as num).toInt(),
+        bindingId: (j['binding_id'] as num).toInt(),
+        externalOrderId: j['external_order_id'] as String,
+        externalOrderName: j['external_order_name'] as String,
+        storeId: (j['store_id'] as num?)?.toInt(),
+        orderNo: j['order_no'] as String?,
+        platformStatus: j['platform_status'] as String,
+        status: (j['status'] as num).toInt(),
+        exception: j['exception'] as String?,
+        acceptDeadline: j['accept_deadline'] as String?,
+        deliveryMode: (j['delivery_mode'] as num).toInt(),
+        amounts: ChannelOrderAmounts.fromJson(j['amounts'] as Map<String, dynamic>),
+        lines: (j['lines'] as List).map((e) => ChannelOrderLine.fromJson(e as Map<String, dynamic>)).toList(),
+        receiver: ChannelOrderReceiver.fromJson(j['receiver'] as Map<String, dynamic>),
+        test: j['test'] as bool,
+        createdAt: j['created_at'] as String,
+        updatedAt: j['updated_at'] as String,
+        requests: (j['requests'] as List).map((e) => ChannelOrderRequest.fromJson(e as Map<String, dynamic>)).toList(),
+      );
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'binding_id': bindingId,
+        'external_order_id': externalOrderId,
+        'external_order_name': externalOrderName,
+        if (storeId != null) 'store_id': storeId,
+        if (orderNo != null) 'order_no': orderNo,
+        'platform_status': platformStatus,
+        'status': status,
+        if (exception != null) 'exception': exception,
+        if (acceptDeadline != null) 'accept_deadline': acceptDeadline,
+        'delivery_mode': deliveryMode,
+        'amounts': amounts.toJson(),
+        'lines': lines.map((e) => e.toJson()).toList(),
+        'receiver': receiver.toJson(),
+        'test': test,
+        'created_at': createdAt,
+        'updated_at': updatedAt,
+        'requests': requests.map((e) => e.toJson()).toList(),
+      };
+}
+
+/// 渠道单的来源说明（后台订单的「来自 Shopify
+class ChannelOrderRef {
+  final String kind;
+  final String bindingName;
+  final String externalOrderName;
+  const ChannelOrderRef({required this.kind, required this.bindingName, required this.externalOrderName});
+  factory ChannelOrderRef.fromJson(Map<String, dynamic> j) => ChannelOrderRef(
+        kind: j['kind'] as String,
+        bindingName: j['binding_name'] as String,
+        externalOrderName: j['external_order_name'] as String,
+      );
+  Map<String, dynamic> toJson() => {
+        'kind': kind,
+        'binding_name': bindingName,
+        'external_order_name': externalOrderName,
       };
 }
 
