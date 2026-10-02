@@ -190,6 +190,36 @@ func TestActShip(t *testing.T) {
 	}
 }
 
+// 审查修复 4：FO 暂停 / 预约 / 不完整（ON_HOLD / SCHEDULED / INCOMPLETE）不是「已经发过了」：回可重试（不算限流，
+// 计入死信次数），原因写清是哪张 FO、什么状态，一条都不发；放开之后照常发。
+func TestActShipHeldFulfillmentOrderIsRetryable(t *testing.T) {
+	r := newOrderRig(t)
+	ctx := context.Background()
+	for _, st := range []string{"ON_HOLD", "SCHEDULED", "INCOMPLETE"} {
+		id := r.sim.AddOrder(r.spec())
+		fo := r.sim.FulfillmentOrders(id)[0]
+		r.sim.SetFulfillmentOrderStatus(fo.ID, st)
+		ref := channel.OrderRef{ExternalOrderID: id}
+		ship := channel.Action{Kind: channel.ActShip, TrackingCompany: "UPS", TrackingNo: "1Z-" + st, IdemKey: "k-" + st}
+		calls := r.sim.Calls("FulfillmentCreate")
+		err := r.a.Act(ctx, r.b, ref, ship)
+		var re *channel.RetryableError
+		if !errors.As(err, &re) || re.RateLimited || !strings.Contains(err.Error(), st) {
+			t.Fatalf("%s → %v，期望不算限流的可重试错误、写明状态", st, err)
+		}
+		if n := r.sim.Calls("FulfillmentCreate") - calls; n != 0 || len(r.sim.Fulfillments(id)) != 0 {
+			t.Fatalf("%s：调了 %d 次 fulfillmentCreate", st, n)
+		}
+		r.sim.SetFulfillmentOrderStatus(fo.ID, "OPEN")
+		if err := r.a.Act(ctx, r.b, ref, ship); err != nil {
+			t.Fatalf("%s 放开之后：%v", st, err)
+		}
+		if fs := r.sim.Fulfillments(id); len(fs) != 1 {
+			t.Fatalf("%s 放开之后 fulfillment %d 条", st, len(fs))
+		}
+	}
+}
+
 // 审查 6：第一次 fulfillmentCreate 平台做了、回 5xx → 重试不建第二条。
 func TestActShipRetryAfterLostResponse(t *testing.T) {
 	r := newOrderRig(t)

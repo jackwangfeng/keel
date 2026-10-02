@@ -456,6 +456,17 @@ func (s *Server) FulfillmentOrders(orderID string) []FulfillmentOrderInfo {
 	return out
 }
 
+// SetFulfillmentOrderStatus 改一张 FO 的状态（ON_HOLD / SCHEDULED / INCOMPLETE / OPEN …，模拟店员在后台暂停、预约等）。
+func (s *Server) SetFulfillmentOrderStatus(foGID, status string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	fo, o := s.findFO(foGID)
+	if fo == nil {
+		panic("shopifytest：没有 fulfillment order " + foGID)
+	}
+	fo.status, o.updatedAt = status, s.tick()
+}
+
 // UpdatedAt 是订单当前的 updatedAt。
 func (s *Server) UpdatedAt(orderID string) time.Time {
 	s.mu.Lock()

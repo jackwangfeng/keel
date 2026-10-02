@@ -10,8 +10,9 @@ package shopify
 //   - Version = updatedAt 的 Unix 毫秒。
 //   - 收货人：shippingAddress 为 null（没开受保护客户数据、或不需要发货）时全空，不报错。
 //
-// 发货回传的幂等（Review Focus 6）：先读这张单的 FO，已经没有 OPEN / IN_PROGRESS 的就当成功——超时重试时上一次
+// 发货回传的幂等（Review Focus 6）：先读这张单的 FO，没被取消的全是 CLOSED 才当成功——超时重试时上一次
 // 其实已经生效，不再建第二条 fulfillment；mutation 本身还带 @idempotent(key: Action.IdemKey)。
+// 有 FO 处在 ON_HOLD / SCHEDULED / INCOMPLETE 等（不是 OPEN / IN_PROGRESS / CLOSED / CANCELLED）时回可重试错误、一条都不发。
 
 import (
 	"context"
@@ -339,9 +340,18 @@ func (a *Adapter) ship(ctx context.Context, b channel.Binding, orderID string, a
 		return fmt.Errorf("Shopify 上没有订单 %s", orderID)
 	}
 	groups := map[string][]string{}
-	var order []string
+	var order, held []string
+	live := 0
 	for _, fo := range out.Order.FulfillmentOrders.Nodes {
+		if !foLive(fo.Status) {
+			continue
+		}
+		live++
+		if fo.Status == "CLOSED" {
+			continue
+		}
 		if !foShippable(fo.Status) {
+			held = append(held, fo.ID+"（"+fo.Status+"）")
 			continue
 		}
 		l := fo.location()
@@ -350,8 +360,16 @@ func (a *Adapter) ship(ctx context.Context, b channel.Binding, orderID string, a
 		}
 		groups[l] = append(groups[l], fo.ID)
 	}
-	if len(order) == 0 {
-		return nil // 没有可发的：上一次已经生效（或在 Shopify 后台发过了）
+	switch {
+	case len(held) > 0:
+		// 暂停 / 预约 / 不完整：现在发不了，也不是发过了。一条都不发（keel 只认整单发货），等店员在 Shopify 后台放开；
+		// 一直放不开就进死信，渠道单标异常「发货没回传上」。不算限流，计入重试次数。
+		return &channel.RetryableError{Err: fmt.Errorf("Shopify 上的 fulfillment order %s 现在不能发货（暂停 / 预约 / 不完整），"+
+			"请在 Shopify 后台放开后等 keel 重试", strings.Join(held, "、"))}
+	case len(order) == 0 && live == 0:
+		return &channel.RetryableError{Err: fmt.Errorf("Shopify 上订单 %s 没有有效的 fulfillment order，发不了货", orderID)}
+	case len(order) == 0:
+		return nil // 没被取消的 FO 全是 CLOSED：上一次已经生效（或在 Shopify 后台发过了）
 	}
 	base := act.IdemKey
 	if base == "" {

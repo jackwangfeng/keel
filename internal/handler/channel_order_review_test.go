@@ -4,6 +4,7 @@ package handler_test
 
 import (
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -161,4 +162,22 @@ func TestChannelOrderSameSecondChangesAndReplays(t *testing.T) {
 	r.restock(t)
 	cancelled("取消重放后")
 	paidState("取消重放后（扣库存、成单通知）")
+}
+
+// 审查 4：Shopify 上的 FO 被暂停（ON_HOLD）→ 回传一直可重试、用尽进死信 → 渠道单标异常「发货没回传上」写明 FO 状态。
+func TestShipmentPushHeldFulfillmentOrderDeadLetters(t *testing.T) {
+	r := newOrderRig(t, false, 7)
+	gid, co, no := r.paidChannelOrder(t)
+	r.sim.SetFulfillmentOrderStatus(r.sim.FulfillmentOrders(gid)[0].ID, "ON_HOLD")
+	r.shipInKeel(t, no, "sf", "SF0000001")
+	adminExec(t, `UPDATE jobs SET max_attempts = 1 WHERE queue = $1 AND job_key = $2`, service.QueueChannelOrderAction,
+		"act:"+itoa(co)+":ship")
+	r.drain(t)
+	if n := len(r.sim.Fulfillments(gid)); n != 0 {
+		t.Fatalf("FO 暂停着却建了 %d 条 fulfillment", n)
+	}
+	if got := adminQueryString(t, `SELECT coalesce(exception, '') FROM channel_orders WHERE id = $1`, co); !strings.Contains(got, "发货没回传上") ||
+		!strings.Contains(got, "ON_HOLD") {
+		t.Fatalf("渠道单异常 %q，期望「发货没回传上」且写明 ON_HOLD", got)
+	}
 }
