@@ -433,12 +433,12 @@ ON CONFLICT ON CONSTRAINT activity_sync_revs_pkey DO UPDATE
 -- 开了渠道的商家（00300）。写由库存服务的接收分支做（inventory/channel_msg.go），
 -- 读由 inventory.ChannelGate 做（进程内缓存，KEEL_CHANNELS 关闭时一次都不读）。
 
--- name: InvEnableChannelMerchant :exec
-INSERT INTO channel_merchants DEFAULT VALUES
-ON CONFLICT ON CONSTRAINT channel_merchants_pkey DO NOTHING;
-
--- name: InvDisableChannelMerchant :exec
-DELETE FROM channel_merchants;
+-- name: InvSetChannelMerchant :execrows
+-- 只接受比已记录的更新的版本（乱序、重复的消息改不动它）；返回 0 = 旧消息。
+INSERT INTO channel_merchants (enabled, rev) VALUES (@enabled::boolean, @rev::bigint)
+ON CONFLICT ON CONSTRAINT channel_merchants_pkey
+DO UPDATE SET enabled = EXCLUDED.enabled, rev = EXCLUDED.rev, updated_at = now()
+ WHERE channel_merchants.rev < EXCLUDED.rev;
 
 -- name: InvChannelMerchantEnabled :one
-SELECT EXISTS (SELECT 1 FROM channel_merchants);
+SELECT EXISTS (SELECT 1 FROM channel_merchants WHERE enabled);

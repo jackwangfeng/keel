@@ -360,7 +360,7 @@ func (q *Queries) InvBizTrail(ctx context.Context, bizID string) ([]InvBizTrailR
 }
 
 const invChannelMerchantEnabled = `-- name: InvChannelMerchantEnabled :one
-SELECT EXISTS (SELECT 1 FROM channel_merchants)
+SELECT EXISTS (SELECT 1 FROM channel_merchants WHERE enabled)
 `
 
 func (q *Queries) InvChannelMerchantEnabled(ctx context.Context) (bool, error) {
@@ -435,29 +435,6 @@ func (q *Queries) InvDeleteActivityExcept(ctx context.Context, arg InvDeleteActi
 		return 0, err
 	}
 	return result.RowsAffected(), nil
-}
-
-const invDisableChannelMerchant = `-- name: InvDisableChannelMerchant :exec
-DELETE FROM channel_merchants
-`
-
-func (q *Queries) InvDisableChannelMerchant(ctx context.Context) error {
-	_, err := q.db.Exec(ctx, invDisableChannelMerchant)
-	return err
-}
-
-const invEnableChannelMerchant = `-- name: InvEnableChannelMerchant :exec
-
-INSERT INTO channel_merchants DEFAULT VALUES
-ON CONFLICT ON CONSTRAINT channel_merchants_pkey DO NOTHING
-`
-
-// ---------------------------------------------------------------------------
-// 开了渠道的商家（00300）。写由库存服务的接收分支做（inventory/channel_msg.go），
-// 读由 inventory.ChannelGate 做（进程内缓存，KEEL_CHANNELS 关闭时一次都不读）。
-func (q *Queries) InvEnableChannelMerchant(ctx context.Context) error {
-	_, err := q.db.Exec(ctx, invEnableChannelMerchant)
-	return err
 }
 
 const invFindManualLog = `-- name: InvFindManualLog :one
@@ -893,6 +870,31 @@ func (q *Queries) InvSKUTotals(ctx context.Context, skuIds []int64) ([]InvSKUTot
 		return nil, err
 	}
 	return items, nil
+}
+
+const invSetChannelMerchant = `-- name: InvSetChannelMerchant :execrows
+
+INSERT INTO channel_merchants (enabled, rev) VALUES ($1::boolean, $2::bigint)
+ON CONFLICT ON CONSTRAINT channel_merchants_pkey
+DO UPDATE SET enabled = EXCLUDED.enabled, rev = EXCLUDED.rev, updated_at = now()
+ WHERE channel_merchants.rev < EXCLUDED.rev
+`
+
+type InvSetChannelMerchantParams struct {
+	Enabled bool
+	Rev     int64
+}
+
+// ---------------------------------------------------------------------------
+// 开了渠道的商家（00300）。写由库存服务的接收分支做（inventory/channel_msg.go），
+// 读由 inventory.ChannelGate 做（进程内缓存，KEEL_CHANNELS 关闭时一次都不读）。
+// 只接受比已记录的更新的版本（乱序、重复的消息改不动它）；返回 0 = 旧消息。
+func (q *Queries) InvSetChannelMerchant(ctx context.Context, arg InvSetChannelMerchantParams) (int64, error) {
+	result, err := q.db.Exec(ctx, invSetChannelMerchant, arg.Enabled, arg.Rev)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const invSetStock = `-- name: InvSetStock :one

@@ -473,11 +473,9 @@ func (t tenantTx) MarkChannelInboundEvent(ctx context.Context, id int64, status 
 
 // —— 库存库：开了渠道的商家（00300）
 
-func (t invTx) SetChannelMerchant(ctx context.Context, enabled bool) error {
-	if enabled {
-		return t.q.InvEnableChannelMerchant(ctx)
-	}
-	return t.q.InvDisableChannelMerchant(ctx)
+func (t invTx) SetChannelMerchant(ctx context.Context, enabled bool, rev int64) (bool, error) {
+	n, err := t.q.InvSetChannelMerchant(ctx, db.InvSetChannelMerchantParams{Enabled: enabled, Rev: rev})
+	return n > 0, err
 }
 
 func (t invTx) ChannelMerchantEnabled(ctx context.Context) (bool, error) {

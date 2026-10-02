@@ -4,12 +4,17 @@
 -- 其余商家的库存写路径与没有渠道层时完全一样（不变量「不配渠道零开销」）。行由 core 在启用 / 停用
 -- 销售渠道 binding 时经二阶段消息维护（service/channel.go → inventory/channel_msg.go），库存服务进程内缓存。
 --
+-- 消息会乱序到达（先关后开被倒着处理），所以行里记 core 发消息时的版本 rev，只接受更新的版本；
+-- 关闭也是一行（enabled = false），不删 —— 删了就丢了版本，晚到的旧「开」会把它翻回来。
+--
 -- 与 db/migrations-inventory/00300 逐字一致（那个目录的规矩，见其 00001 文件头）：单体库上先由这里建，
 -- 拆分部署的库存库上由那一份建。
 -- +goose Up
 CREATE TABLE IF NOT EXISTS channel_merchants (
     merchant_id BIGINT      NOT NULL DEFAULT current_merchant(),
-    enabled_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    enabled     BOOLEAN     NOT NULL,
+    rev         BIGINT      NOT NULL,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT channel_merchants_pkey PRIMARY KEY (merchant_id)
 );
 ALTER TABLE channel_merchants ENABLE ROW LEVEL SECURITY;

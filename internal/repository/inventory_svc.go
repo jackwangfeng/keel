@@ -248,8 +248,8 @@ type InventoryStoreTx interface {
 
 	// —— 开了渠道的商家（00300，repository/channel.go）
 
-	// SetChannelMerchant 登记 / 撤销 ctx 那家商家「开了渠道」（幂等）。
-	SetChannelMerchant(ctx context.Context, enabled bool) error
+	// SetChannelMerchant 记下 ctx 那家商家「开没开渠道」（版本 rev 不比已记录的新就不改，返回 false）。
+	SetChannelMerchant(ctx context.Context, enabled bool, rev int64) (applied bool, err error)
 	ChannelMerchantEnabled(ctx context.Context) (bool, error)
 }
 

@@ -215,6 +215,27 @@ func (c *stockCrossings) crossed() map[int64][]int64 {
 	return out
 }
 
+// changed 按门店分组返回可售数有变化的 SKU（首前值 ≠ 末后值），给渠道层的 stock.changed 用（channel_gate.go）。
+func (c *stockCrossings) changed() map[int64][]int64 {
+	if c == nil {
+		return nil
+	}
+	var out map[int64][]int64
+	for _, k := range c.order {
+		if v := c.m[k]; v[0] == v[1] {
+			continue
+		}
+		if out == nil {
+			out = map[int64][]int64{}
+		}
+		out[k[0]] = append(out[k[0]], k[1])
+	}
+	for _, ids := range out {
+		sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	}
+	return out
+}
+
 // StockNotifier 负责登记、提交跨 0 通知，并实现回查分支。一个进程一个，所有 Local 共用
 // （WithStockNotifier）。nil 表示不发通知 —— 测试与没配通知的拆分部署走这一支，有货标记只靠 core 的
 // 低频全量刷新兜底（service.DefaultStockFlagInterval）。
@@ -224,6 +245,12 @@ type StockNotifier struct {
 	query  string       // 回查地址：单体 local://…；微服务是库存服务自己内网上的 HTTP 地址
 	tc     atomic.Value // coordBox
 	sent   atomic.Int64
+
+	// 渠道层（channel_gate.go）：开了渠道的商家，可售数每次变化（不只是跨 0）另发一条 stock.changed。
+	// gate 为 nil 或进程开关关闭时，这一支一行代码都不走、一次库都不查。
+	gate          *ChannelGate
+	changedAction string // 单体 local://channel_stock_changed；微服务 topic://stock.changed
+	changedSent   atomic.Int64
 }
 
 // coordBox 让 atomic.Value 里永远是同一个具体类型（atomic.Value 不许换类型）。
@@ -237,6 +264,26 @@ type coordBox struct{ c dtm.Coordinator }
 // 那段时间进程还没开始监听，正常路径上走不到。
 func NewStockNotifier(store *repository.InventoryStore, action, query string) *StockNotifier {
 	return &StockNotifier{store: store, action: action, query: query}
+}
+
+// 渠道层的库存变化通知：主题（微服务）与 core 的接收分支名（单体 local://）。
+const (
+	TopicStockChanged         = "stock.changed"
+	BranchChannelStockChanged = "channel_stock_changed"
+)
+
+// WithChannels 打开渠道层的 stock.changed：gate 决定哪些商家发，action 是投递目标。
+func (n *StockNotifier) WithChannels(g *ChannelGate, action string) *StockNotifier {
+	n.gate, n.changedAction = g, action
+	return n
+}
+
+// ChangedSent 是登记成功的 stock.changed 条数，只为可观察。
+func (n *StockNotifier) ChangedSent() int64 {
+	if n == nil {
+		return 0
+	}
+	return n.changedSent.Load()
 }
 
 // TopicStockZeroCrossing 是跨 0 通知的主题（微服务形态）：库存只认这个名字，不知道谁在听；core 启动时订阅。
@@ -286,55 +333,89 @@ func (n *StockNotifier) QueryBranch() dtm.BranchFunc {
 // 登记失败（协调器的存储不可用）返回错误，让**整个库存事务回滚** —— 这是二阶段消息的本义：宁可这一次
 // 改库存失败（SAGA 分支会重试，后台写回错让人再点一次），也不要改了而通知丢了。
 func (n *StockNotifier) prepare(ctx context.Context, tx repository.InventoryStoreTx, c *stockCrossings) ([]string, error) {
+	if n == nil {
+		return nil, nil
+	}
 	crossed := c.crossed()
-	if n == nil || len(crossed) == 0 {
+	var changed map[int64][]int64
+	if n.gate.Enabled() {
+		if ch := c.changed(); len(ch) > 0 {
+			merchantID, err := tenant.FromContext(ctx)
+			if err != nil {
+				return nil, err
+			}
+			ok, err := n.gate.allows(ctx, tx, merchantID)
+			if err != nil {
+				return nil, err
+			}
+			if ok {
+				changed = ch
+			}
+		}
+	}
+	if len(crossed) == 0 && len(changed) == 0 {
 		return nil, nil
 	}
 	tc := n.coord()
 	if tc == nil {
-		slog.WarnContext(ctx, "可售数跨过了 0，但协调器还没接上，这次不发通知（有货标记等全量刷新兜底）")
+		slog.WarnContext(ctx, "可售数变了，但协调器还没接上，这次不发通知（有货标记等全量刷新兜底，渠道等对账兜底）")
 		return nil, nil
 	}
 	merchantID, err := tenant.FromContext(ctx)
 	if err != nil {
 		return nil, err
 	}
-	stores := make([]int64, 0, len(crossed))
-	for s := range crossed {
+	var gids []string
+	if err := n.register(ctx, tc, tx, merchantID, crossed, n.action, &gids); err != nil {
+		return nil, err
+	}
+	sentCrossed := len(gids)
+	if err := n.register(ctx, tc, tx, merchantID, changed, n.changedAction, &gids); err != nil {
+		return nil, err
+	}
+	n.sent.Add(int64(sentCrossed))
+	n.changedSent.Add(int64(len(gids) - sentCrossed))
+	return gids, nil
+}
+
+// register 为每家门店登记一条消息（载荷只有门店与 SKU 的键），投到 action，并在本事务里占下回查屏障。
+// 两种通知（跨 0、stock.changed）共用 gid 形状与回查分支：回查只问「本地事务提交了没有」，与内容无关。
+func (n *StockNotifier) register(ctx context.Context, tc dtm.Coordinator, tx repository.InventoryStoreTx,
+	merchantID int64, byStore map[int64][]int64, action string, gids *[]string) error {
+	stores := make([]int64, 0, len(byStore))
+	for s := range byStore {
 		stores = append(stores, s)
 	}
 	sort.Slice(stores, func(i, j int) bool { return stores[i] < stores[j] })
-	var gids []string
 	for _, storeID := range stores {
 		gid, err := stockMsgGID(merchantID)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		payload, err := json.Marshal(StockMsgPayload{StoreID: storeID, SKUIDs: crossed[storeID]})
+		payload, err := json.Marshal(StockMsgPayload{StoreID: storeID, SKUIDs: byStore[storeID]})
 		if err != nil {
-			return nil, err
+			return err
 		}
-		// 发到主题时打开 allow_empty_topic：core 还没订阅上（刚起、或订阅被误删）不该挡住扣库存；漏的由全量刷新兜住。
-		allowEmpty := strings.HasPrefix(n.action, dtm.TopicPrefix)
-		if err := tc.PrepareMsgEx(gid, []string{n.action}, []string{string(payload)}, n.query, stockMsgGraceSecs, allowEmpty); err != nil {
-			n.abort(ctx, tc, gids)
-			return nil, err
+		// 发到主题时打开 allow_empty_topic：订阅方还没订阅上（刚起、或订阅被误删）不该挡住扣库存；漏的由兜底补。
+		allowEmpty := strings.HasPrefix(action, dtm.TopicPrefix)
+		if err := tc.PrepareMsgEx(gid, []string{action}, []string{string(payload)}, n.query, stockMsgGraceSecs, allowEmpty); err != nil {
+			n.abort(ctx, tc, *gids)
+			return err
 		}
-		gids = append(gids, gid)
+		*gids = append(*gids, gid)
 		ok, err := tx.MarkMsgPrepared(ctx, gid)
 		if err != nil {
-			n.abort(ctx, tc, gids)
-			return nil, err
+			n.abort(ctx, tc, *gids)
+			return err
 		}
 		if !ok {
 			// 回查抢在我们之前判了「没提交」（登记之后 30 秒这个事务还没走到这里 —— 不正常，但可能）。
 			// 这条消息已经作废，而库存变动照样要提交：回滚整个事务去保一条通知是本末倒置。
 			// 换一个新 gid 在提交之后单独发一次（sendAfterCommit），通知不丢。
-			return nil, fmt.Errorf("%w: %s", errMsgLostToQuery, gid)
+			return fmt.Errorf("%w: %s", errMsgLostToQuery, gid)
 		}
 	}
-	n.sent.Add(int64(len(gids)))
-	return gids, nil
+	return nil
 }
 
 var errMsgLostToQuery = errors.New("跨 0 通知的回查屏障已被回查抢占")

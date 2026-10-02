@@ -222,10 +222,16 @@ func TestChannelMerchantFlagInInventoryStore(t *testing.T) {
 	idA, _ := seedTwoTenants(t)
 	s := repository.NewInventoryStore(pool(t))
 	ctx := tenant.NewContext(context.Background(), idA)
-	set := func(on bool) {
-		if err := s.WithTenant(ctx, func(tx repository.InventoryStoreTx) error { return tx.SetChannelMerchant(ctx, on) }); err != nil {
+	set := func(on bool, rev int64) bool {
+		var applied bool
+		if err := s.WithTenant(ctx, func(tx repository.InventoryStoreTx) error {
+			var e error
+			applied, e = tx.SetChannelMerchant(ctx, on, rev)
+			return e
+		}); err != nil {
 			t.Fatal(err)
 		}
+		return applied
 	}
 	get := func() bool {
 		var on bool
@@ -241,13 +247,16 @@ func TestChannelMerchantFlagInInventoryStore(t *testing.T) {
 	if get() {
 		t.Fatal("新商家默认就开了渠道")
 	}
-	set(true)
-	set(true) // 幂等
-	if !get() {
-		t.Error("登记之后仍是未开")
+	if !set(true, 10) || !get() {
+		t.Fatal("rev 10 开：没生效")
 	}
-	set(false)
-	if get() {
-		t.Error("撤销之后仍是开")
+	if set(true, 10) {
+		t.Error("同一版本重复投递又生效了一次")
+	}
+	if !set(false, 20) || get() {
+		t.Fatal("rev 20 关：没生效")
+	}
+	if set(true, 15) || get() {
+		t.Error("晚到的旧消息（rev 15 开）把 rev 20 的关翻回来了")
 	}
 }

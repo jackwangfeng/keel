@@ -7,7 +7,9 @@ SET LOCAL keel.inventory_role = '${KEEL_INVENTORY_ROLE:-keel_app}';
 -- +goose ENVSUB OFF
 CREATE TABLE IF NOT EXISTS channel_merchants (
     merchant_id BIGINT      NOT NULL DEFAULT current_merchant(),
-    enabled_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    enabled     BOOLEAN     NOT NULL,
+    rev         BIGINT      NOT NULL,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT channel_merchants_pkey PRIMARY KEY (merchant_id)
 );
 ALTER TABLE channel_merchants ENABLE ROW LEVEL SECURITY;

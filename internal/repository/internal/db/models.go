@@ -432,7 +432,9 @@ type ChannelListing struct {
 
 type ChannelMerchant struct {
 	MerchantID int64
-	EnabledAt  pgtype.Timestamptz
+	Enabled    bool
+	Rev        int64
+	UpdatedAt  pgtype.Timestamptz
 }
 
 type ChannelPriceRule struct {
