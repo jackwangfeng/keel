@@ -232,16 +232,7 @@ func (a *Adapter) setPrices(ctx context.Context, b channel.Binding, ls []channel
 func (a *Adapter) Available(ctx context.Context, b channel.Binding, inventoryItemID, locationID string) (int32, bool, error) {
 	var out struct {
 		Item *struct {
-			Levels struct {
-				Nodes []struct {
-					Location struct {
-						ID string `json:"id"`
-					} `json:"location"`
-					Quantities []struct {
-						Quantity int32 `json:"quantity"`
-					} `json:"quantities"`
-				} `json:"nodes"`
-			} `json:"inventoryLevels"`
+			Levels levelNodes `json:"inventoryLevels"`
 		} `json:"inventoryItem"`
 	}
 	if err := a.gql(ctx, b, "Levels", queryLevels, map[string]any{"id": inventoryItemID}, &out); err != nil {
@@ -250,9 +241,9 @@ func (a *Adapter) Available(ctx context.Context, b channel.Binding, inventoryIte
 	if out.Item == nil {
 		return 0, false, nil
 	}
-	for _, n := range out.Item.Levels.Nodes {
-		if n.Location.ID == locationID && len(n.Quantities) > 0 {
-			return n.Quantities[0].Quantity, true, nil
+	for _, l := range out.Item.Levels.levels() {
+		if l.ExternalStoreID == locationID {
+			return l.Qty, true, nil
 		}
 	}
 	return 0, false, nil

@@ -10,18 +10,26 @@ import (
 	"github.com/keel/keel/internal/channel"
 )
 
-// 拉商品：分页 products（每件最多 100 个变体、每个变体最多 10 个 location；联调发现不够再分页）。礼品卡滤掉 ——
-// keel 卖的是实物，礼品卡在 Shopify 上也不跟踪库存。
+// 拉商品：分页 products（每件最多 100 个变体），礼品卡滤掉 —— keel 卖的是实物，礼品卡在 Shopify 上也不跟踪库存。
+//
+// 各门店的可售数单独查：Shopify 单条查询的成本上限是 1000 点，实测（2026-10-02）products 带上 inventoryLevels
+// 一页 10 件就要 710 点，不带只要 25 件 308 点；而 nodes(ids:) 一次 50 个 inventory item 连水位只要 15 点。
+// 所以一页商品 = 一条 Products + 每 50 个跟踪库存的 item 一条 ItemLevels。每个 item 最多取 10 个 location。
 
 const productFields = `id title descriptionHtml status isGiftCard
   media(first:20){ nodes{ ... on MediaImage { image{ url } } } }
   variants(first:100){ nodes{ id sku price selectedOptions{ name value } image{ url }
-    inventoryItem{ id tracked inventoryLevels(first:10){ nodes{ location{ id } quantities(names:["available"]){ quantity } } } } } }`
+    inventoryItem{ id tracked } } }`
 
 const queryProducts = `query Products($first:Int!,$after:String){ products(first:$first, after:$after){
   pageInfo{ hasNextPage endCursor } nodes{ ` + productFields + ` } } }`
 
 const queryProduct = `query Product($id:ID!){ product(id:$id){ ` + productFields + ` } }`
+
+const queryItemLevels = `query ItemLevels($ids:[ID!]!){ nodes(ids:$ids){ ... on InventoryItem { id
+  inventoryLevels(first:10){ nodes{ location{ id } quantities(names:["available"]){ quantity } } } } } }`
+
+const levelsChunk = 50
 
 type productNode struct {
 	ID              string `json:"id"`
@@ -53,19 +61,30 @@ type variantNode struct {
 		URL string `json:"url"`
 	} `json:"image"`
 	InventoryItem struct {
-		ID              string `json:"id"`
-		Tracked         bool   `json:"tracked"`
-		InventoryLevels struct {
-			Nodes []struct {
-				Location struct {
-					ID string `json:"id"`
-				} `json:"location"`
-				Quantities []struct {
-					Quantity int32 `json:"quantity"`
-				} `json:"quantities"`
-			} `json:"nodes"`
-		} `json:"inventoryLevels"`
+		ID      string `json:"id"`
+		Tracked bool   `json:"tracked"`
 	} `json:"inventoryItem"`
+}
+
+type levelNodes struct {
+	Nodes []struct {
+		Location struct {
+			ID string `json:"id"`
+		} `json:"location"`
+		Quantities []struct {
+			Quantity int32 `json:"quantity"`
+		} `json:"quantities"`
+	} `json:"nodes"`
+}
+
+func (l levelNodes) levels() []channel.StockLevel {
+	var out []channel.StockLevel
+	for _, n := range l.Nodes {
+		if len(n.Quantities) > 0 {
+			out = append(out, channel.StockLevel{ExternalStoreID: n.Location.ID, Qty: n.Quantities[0].Quantity})
+		}
+	}
+	return out
 }
 
 // variantExtra 是存进 channel_item_links.extra 的变体附带 ID（推库存 / 改价要用）。
@@ -103,6 +122,9 @@ func (a *Adapter) PullCatalog(ctx context.Context, b channel.Binding, cursor str
 			page.Items = append(page.Items, item)
 		}
 	}
+	if err := a.fillLevels(ctx, b, page.Items); err != nil {
+		return channel.CatalogPage{}, err
+	}
 	if out.Products.PageInfo.HasNextPage {
 		page.NextCursor = out.Products.PageInfo.EndCursor
 	}
@@ -120,7 +142,53 @@ func (a *Adapter) PullItem(ctx context.Context, b channel.Binding, externalID st
 	if out.Product == nil {
 		return channel.CatalogItem{}, false, nil
 	}
-	return toItem(*out.Product)
+	item, ok, err := toItem(*out.Product)
+	if err != nil || !ok {
+		return channel.CatalogItem{}, false, err
+	}
+	items := []channel.CatalogItem{item}
+	if err := a.fillLevels(ctx, b, items); err != nil {
+		return channel.CatalogItem{}, false, err
+	}
+	return items[0], true, nil
+}
+
+// fillLevels 给跟踪库存的变体填各门店的可售数（文件头：单独查、每 50 个 item 一条）。
+func (a *Adapter) fillLevels(ctx context.Context, b channel.Binding, items []channel.CatalogItem) error {
+	type ref struct{ item, variant int }
+	byItem := map[string]ref{}
+	var ids []string
+	for i := range items {
+		for j := range items[i].Variants {
+			var ex variantExtra
+			_ = json.Unmarshal(items[i].Variants[j].Extra, &ex)
+			if ex.InventoryItemID == "" || (ex.Tracked != nil && !*ex.Tracked) {
+				continue
+			}
+			byItem[ex.InventoryItemID] = ref{i, j}
+			ids = append(ids, ex.InventoryItemID)
+		}
+	}
+	for start := 0; start < len(ids); start += levelsChunk {
+		var out struct {
+			Nodes []*struct {
+				ID     string     `json:"id"`
+				Levels levelNodes `json:"inventoryLevels"`
+			} `json:"nodes"`
+		}
+		if err := a.gql(ctx, b, "ItemLevels", queryItemLevels, map[string]any{"ids": ids[start:min(start+levelsChunk, len(ids))]}, &out); err != nil {
+			return err
+		}
+		for _, n := range out.Nodes {
+			if n == nil {
+				continue
+			}
+			if r, ok := byItem[n.ID]; ok {
+				items[r.item].Variants[r.variant].Levels = n.Levels.levels()
+			}
+		}
+	}
+	return nil
 }
 
 func toItem(n productNode) (channel.CatalogItem, bool, error) {
@@ -161,12 +229,6 @@ func toItem(n productNode) (channel.CatalogItem, bool, error) {
 		}
 		tracked := v.InventoryItem.Tracked
 		cv.Extra, _ = json.Marshal(variantExtra{InventoryItemID: v.InventoryItem.ID, ProductID: n.ID, Tracked: &tracked})
-		for _, l := range v.InventoryItem.InventoryLevels.Nodes {
-			if len(l.Quantities) == 0 {
-				continue
-			}
-			cv.Levels = append(cv.Levels, channel.StockLevel{ExternalStoreID: l.Location.ID, Qty: l.Quantities[0].Quantity})
-		}
 		item.Variants = append(item.Variants, cv)
 	}
 	return item, true, nil

@@ -258,7 +258,11 @@ func (s *Server) Webhooks() []WebhookSub {
 }
 
 // AddWebhook 预先装一条订阅（测「已有不同地址」）。
-func (s *Server) AddWebhook(w WebhookSub) { s.mu.Lock(); s.webhooks = append(s.webhooks, w); s.mu.Unlock() }
+func (s *Server) AddWebhook(w WebhookSub) {
+	s.mu.Lock()
+	s.webhooks = append(s.webhooks, w)
+	s.mu.Unlock()
+}
 
 // Calls 是某个操作被调用的次数（GraphQL 按 operationName；换 token 是 "tokens"）。
 func (s *Server) Calls(op string) int { s.mu.Lock(); defer s.mu.Unlock(); return s.calls[op] }
@@ -416,6 +420,24 @@ func (s *Server) dispatch(req gqlReq) (any, error) {
 			return map[string]any{"inventoryItem": nil}, nil
 		}
 		return map[string]any{"inventoryItem": map[string]any{"inventoryLevels": map[string]any{"nodes": levelsJSON(it)}}}, nil
+	case "ItemLevels":
+		var v struct {
+			IDs []string `json:"ids"`
+		}
+		_ = json.Unmarshal(req.Variables, &v)
+		if len(v.IDs) > 250 {
+			return nil, fmt.Errorf("nodes(ids:) 最多 250 个")
+		}
+		nodes := []any{}
+		for _, id := range v.IDs {
+			it := s.items[id]
+			if it == nil {
+				nodes = append(nodes, nil)
+				continue
+			}
+			nodes = append(nodes, map[string]any{"id": id, "inventoryLevels": map[string]any{"nodes": levelsJSON(it)}})
+		}
+		return map[string]any{"nodes": nodes}, nil
 	case "SetQty":
 		return s.setQty(req.Variables)
 	case "SetPrices":
@@ -482,8 +504,7 @@ func (s *Server) productJSON(pr *product) map[string]any {
 		}
 		it := s.items[v.itemGID]
 		vs = append(vs, map[string]any{"id": g, "sku": sku, "price": v.v.Price, "selectedOptions": opts, "image": nil,
-			"inventoryItem": map[string]any{"id": v.itemGID, "tracked": it.tracked,
-				"inventoryLevels": map[string]any{"nodes": levelsJSON(it)}}})
+			"inventoryItem": map[string]any{"id": v.itemGID, "tracked": it.tracked}})
 	}
 	return map[string]any{"id": pr.gid, "title": pr.p.Title, "descriptionHtml": pr.p.Description, "status": status,
 		"isGiftCard": pr.p.GiftCard, "media": map[string]any{"nodes": media}, "variants": map[string]any{"nodes": vs}}

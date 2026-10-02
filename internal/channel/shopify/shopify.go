@@ -38,7 +38,7 @@ type Options struct {
 	BaseURL    func(shop string) string // 默认 "https://" + shop
 	HTTPClient *http.Client             // 默认 15 秒超时
 	Now        func() time.Time
-	PageSize   int // 拉商品每页几件，默认 50
+	PageSize   int // 拉商品每页几件，默认 25（查询成本见 catalog.go 文件头）
 }
 
 // Adapter 是 Shopify 适配器。一个进程一个，按 binding 缓存 token。
@@ -58,7 +58,7 @@ func New(o Options) *Adapter {
 		o.Now = time.Now
 	}
 	if o.PageSize <= 0 {
-		o.PageSize = 50
+		o.PageSize = 25
 	}
 	return &Adapter{o: o, tokens: tokenCache{m: map[int64]tokenEntry{}}}
 }
@@ -110,7 +110,9 @@ func (a *Adapter) FetchOrder(context.Context, channel.Binding, string) (channel.
 }
 
 func (a *Adapter) ListOrders(context.Context, channel.Binding, time.Time) iter.Seq2[channel.ChannelOrder, error] {
-	return func(yield func(channel.ChannelOrder, error) bool) { yield(channel.ChannelOrder{}, channel.ErrUnsupported) }
+	return func(yield func(channel.ChannelOrder, error) bool) {
+		yield(channel.ChannelOrder{}, channel.ErrUnsupported)
+	}
 }
 
 func (a *Adapter) ListListings(context.Context, channel.Binding, channel.StoreLink) iter.Seq2[channel.Listing, error] {
