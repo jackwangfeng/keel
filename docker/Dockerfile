@@ -93,6 +93,10 @@ RUN CGO_ENABLED=1 go build -trimpath \
                   -X github.com/keel/keel/internal/buildinfo.Date=${KEEL_DATE}" \
         -o /out/keel ./cmd/keel
 
+# 上传文件的存量迁移工具（cmd/keel-uploads migrate：本地磁盘 → 对象存储）随 app 镜像一起发，
+# 在容器里就能跑：docker compose exec app /keel-uploads migrate -dry-run
+RUN CGO_ENABLED=1 go build -trimpath -o /out/keel-uploads ./cmd/keel-uploads
+
 # goose 从 tools/ 编译，版本由 tools/go.mod 锁定 —— 和 `make migrate` 用的是
 # 同一个版本。镜像里 go install @latest 的话，本地与容器会在某天装到两个版本的
 # 迁移工具，代价是生产库上一次不一致的 schema。
@@ -173,6 +177,7 @@ COPY --from=dtmrs /dtmrs/lib/libdtmrs.so /usr/local/lib/
 RUN ldconfig
 
 COPY --from=build /out/keel /keel
+COPY --from=build /out/keel-uploads /keel-uploads
 
 # 非 root 运行。65532 是 distroless 的 nonroot，沿用它 —— 但 debian 的
 # /etc/passwd 里没有这个 uid，所以这里显式建出来，好让 user.Current() 能用。

@@ -1,0 +1,69 @@
+# 上传文件存对象存储（数据模型 §13 的 driver 2，service/upload_s3.go）。叠加在任意一种形态上：
+#
+#     export KEEL_S3_ACCESS_KEY=keel KEEL_S3_SECRET_KEY=$(openssl rand -hex 24)
+#     docker compose -f compose.yaml [-f compose.split.yaml] -f compose.s3.yaml up -d --build
+#
+# 对象存储用 SeaweedFS（Apache-2.0，单容器起 S3 服务，能扩成集群）。不用 MinIO：它的社区版 2025 年起不再发
+# 二进制与镜像、仓库进了维护模式（部署指南「对象存储」一节有出处）。上云直接用阿里云 OSS / 腾讯云 COS / AWS S3，
+# 不需要这个叠加层，只配 KEEL_S3_* 即可（OSS / COS 的 KEEL_S3_ADDRESS_STYLE 用 virtual 或 auto）。
+#
+# 已有的本地图片怎么办：app 照旧挂着 uploads 卷、KEEL_UPLOAD_ROOT 不撤，老图按行的 driver 从磁盘读；
+# 再用 cmd/keel-uploads migrate 搬进桶（可中断重跑），见部署指南。
+#
+# 版本钉死（4.48）：对象存储的升级要单独评估，不跟着 latest 漂。
+services:
+  seaweedfs:
+    image: chrislusf/seaweedfs:4.48
+    # S3 的访问凭据由 KEEL_S3_* 生成成 SeaweedFS 的 identities 文件；只放一个身份，权限够 Keel 用（读写列删）。
+    entrypoint: ["sh", "-c"]
+    command:
+      - >-
+        printf '{"identities":[{"name":"keel","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Read","Write","List","Tagging","Admin"]}]}'
+        "$$KEEL_S3_ACCESS_KEY" "$$KEEL_S3_SECRET_KEY" > /tmp/s3.json &&
+        exec weed server -dir=/data -s3 -s3.port=8333 -s3.config=/tmp/s3.json -master.volumeSizeLimitMB=1024 -volume.max=0
+    environment:
+      KEEL_S3_ACCESS_KEY: ${KEEL_S3_ACCESS_KEY:?要设 KEEL_S3_ACCESS_KEY}
+      KEEL_S3_SECRET_KEY: ${KEEL_S3_SECRET_KEY:?要设 KEEL_S3_SECRET_KEY（openssl rand -hex 24）}
+    volumes:
+      - s3data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9333/cluster/status >/dev/null"]
+      interval: 2s
+      timeout: 3s
+      retries: 60
+    restart: unless-stopped
+
+  # 建桶（只建一次：已经有了就跳过）。Keel 自己不建桶——桶的地域、权限、生命周期是运维要定的。
+  seaweedfs-init:
+    image: chrislusf/seaweedfs:4.48
+    entrypoint: ["sh", "-c"]
+    command:
+      - >-
+        for i in $$(seq 1 60); do
+          if echo "s3.bucket.list" | weed shell -master=seaweedfs:9333 2>/dev/null | grep -qw "$$BUCKET"; then echo "桶 $$BUCKET 已存在"; exit 0; fi;
+          echo "s3.bucket.create -name $$BUCKET" | weed shell -master=seaweedfs:9333 2>/dev/null | grep -q "created bucket" && { echo "已建桶 $$BUCKET"; exit 0; };
+          sleep 1;
+        done; echo "建桶失败"; exit 1
+    environment:
+      BUCKET: ${KEEL_S3_BUCKET:-keel}
+    depends_on:
+      seaweedfs:
+        condition: service_healthy
+
+  app:
+    environment:
+      KEEL_UPLOAD_DRIVER: s3
+      KEEL_S3_ENDPOINT: http://seaweedfs:8333
+      KEEL_S3_BUCKET: ${KEEL_S3_BUCKET:-keel}
+      KEEL_S3_ACCESS_KEY: ${KEEL_S3_ACCESS_KEY:?要设 KEEL_S3_ACCESS_KEY}
+      KEEL_S3_SECRET_KEY: ${KEEL_S3_SECRET_KEY:?要设 KEEL_S3_SECRET_KEY（openssl rand -hex 24）}
+      KEEL_S3_ADDRESS_STYLE: path
+      # 浏览器能访问到的对象存储地址；配了就让图片 302 直连对象存储（字节不经过应用）。SeaweedFS 默认不对外，
+      # 这里留空：图片照旧由应用读出（桶完全私有）。
+      KEEL_S3_PRESIGN_ENDPOINT: ${KEEL_S3_PRESIGN_ENDPOINT:-}
+    depends_on:
+      seaweedfs-init:
+        condition: service_completed_successfully
+
+volumes:
+  s3data:

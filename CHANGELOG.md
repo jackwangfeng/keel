@@ -39,6 +39,18 @@ so "which one is running?" never depends on anyone's memory.
 
 ## [Unreleased]
 
+### Added
+
+- **Uploads can live in S3-compatible object storage** (`KEEL_UPLOAD_DRIVER=s3`, `KEEL_S3_*`): AWS S3,
+  Alibaba Cloud OSS, Tencent COS, or self-hosted SeaweedFS (`compose.s3.yaml`). Required for multi-instance,
+  Kubernetes and serverless deployments. Local disk stays the default.
+- Reads, deletes, thumbnails and orphan cleanup follow each row's `uploads.driver`, so switching storage needs
+  no downtime: new files go to the bucket while existing ones keep being served from disk.
+- `keel-uploads migrate` (shipped in the app image) moves existing files to the bucket, verifying sha256 and
+  size before repointing each row; resumable, with `-dry-run` and `-delete-source`.
+- Optional presigned redirects (`KEEL_S3_PRESIGN_ENDPOINT`): image requests 302 straight to the object store,
+  so bytes no longer pass through the app.
+
 ### Changed (split deployment)
 
 - **The transaction coordinator now runs as its own service in the split (tier C) deployment.**
