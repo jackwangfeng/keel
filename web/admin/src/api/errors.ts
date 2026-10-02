@@ -101,6 +101,8 @@ export function problemHint(type: string): string {
             return "只认 xlsx 与 csv。老式 .xls 或加了密码的工作簿请在 Excel 里另存为不加密的 .xlsx。";
         case ProblemType.importFileInvalid:
             return "整份文件不成立，上面逐条列了原因（缺列、超过 2000 行、表头合并……）。改好文件再传；从「下载模板」开始最省事。";
+        case ProblemType.managedByChannel:
+            return "这件商品的标题、详情、图片与规格由渠道同步，在这里改不了（改了也会被下次同步覆盖）。到渠道后台改；价格、库存、类目仍在这里改。";
         case ProblemType.importNothingToImport:
             return "没有一件商品能导入：每件要么有红色的错误行，要么还没选类目。回到预检结果改完再确认。";
         default:

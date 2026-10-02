@@ -63,7 +63,12 @@ NEEDLE = 'merchant_id'
 
 # 确实需要在应用层写 merchant_id 的查询，按「文件名:查询名」豁免，每条写明理由。
 # 眼下是空的 —— 空着本身就是当前的结论。
-ALLOW = {}
+ALLOW = {
+    # jobs 没有 RLS（00022 文件头第一节：出队要跨租户），读本租户的任务只能显式按 current_merchant() 过滤；
+    # 这里没有 RLS 可以「测不出来」。
+    'jobs.sql:HasUnfinishedJobWithPrefix': 'jobs 无 RLS，按 current_merchant() 过滤是唯一的租户边界',
+    'jobs.sql.go:HasUnfinishedJobWithPrefix': '同上（sqlc 产物）',
+}
 
 # 三层定价的两张底表。读它们一律走 sku_prices_by_store 视图（数据模型 §4）。
 PRICE_TABLES = ('store_sku_prices', 'region_sku_prices')

@@ -101,6 +101,7 @@ func apiAdminProductDetail(d service.AdminProductDetail) api.AdminProductDetail 
 		PublishedAt: base.PublishedAt, DeletedAt: base.DeletedAt,
 		CreatedAt: base.CreatedAt, UpdatedAt: base.UpdatedAt,
 		FreightTemplateId: base.FreightTemplateId,
+		ManagedBy:         base.ManagedBy,
 		Skus:              skus,
 		Images:            apiProductImages(d.Images),
 	}

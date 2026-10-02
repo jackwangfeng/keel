@@ -54,6 +54,7 @@ type ChannelBinding struct {
 	Roles           int16
 	Status          int16
 	Config          json.RawMessage
+	HasSecrets      bool // 配过凭据没有（只有这个标志；值只经 ChannelBindingSecrets 读）
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 }
@@ -116,6 +117,7 @@ type ChannelListing struct {
 	Version                   int64
 	PushedAt                  time.Time
 	LastError                 *string
+	SKUCode, ProductTitle     string // 只有 ListChannelListingsPage（后台）填
 }
 
 type ChannelInboundEventInput struct {
@@ -167,7 +169,7 @@ type ChannelTx interface {
 	// RecordChannelListing 记下一次成功推送的值，返回新版本号。
 	RecordChannelListing(ctx context.Context, l ChannelListing) (int64, error)
 	SetChannelListingError(ctx context.Context, bindingID, storeID, skuID int64, msg string) error
-	ListChannelListingsPage(ctx context.Context, bindingID int64, storeID *int64, limit, offset int32) ([]ChannelListing, error)
+	ListChannelListingsPage(ctx context.Context, bindingID int64, storeID *int64, errorsOnly bool, limit, offset int32) ([]ChannelListing, error)
 
 	// InsertChannelInboundEvent：重复的外部事件 ID 返回 inserted=false、不报错。
 	InsertChannelInboundEvent(ctx context.Context, in ChannelInboundEventInput) (id int64, inserted bool, err error)
@@ -189,6 +191,8 @@ type ChannelTx interface {
 	// LockChannelMerchant 在本事务里拿这家店的渠道启停锁（提交即释放）。
 	LockChannelMerchant(ctx context.Context) error
 	ChannelSKUExists(ctx context.Context, skuID int64) (bool, error)
+	// ChannelManagedProducts：这批商品里由启用中的商品源管理的那些 → 渠道（kind）。不在结果里 = keel 自己管。
+	ChannelManagedProducts(ctx context.Context, productIDs []int64) (map[int64]string, error)
 }
 
 // channel_item_links.kind
@@ -228,10 +232,10 @@ func (o SKUOffer) Sellable(catalogOwned bool) bool {
 	return o.SKUActive && o.ProductLive && (o.ProductPublished || catalogOwned)
 }
 
-func bindingFrom(id int64, channel, account, name string, roles, status int16, config []byte,
+func bindingFrom(id int64, channel, account, name string, roles, status int16, config []byte, hasSecrets bool,
 	created, updated pgtype.Timestamptz) ChannelBinding {
 	return ChannelBinding{ID: id, Channel: channel, ExternalAccount: account, Name: name, Roles: roles,
-		Status: status, Config: json.RawMessage(config), CreatedAt: created.Time, UpdatedAt: updated.Time}
+		Status: status, Config: json.RawMessage(config), HasSecrets: hasSecrets, CreatedAt: created.Time, UpdatedAt: updated.Time}
 }
 
 func notFound(err error) error {
@@ -269,7 +273,7 @@ func (t tenantTx) CreateChannelBinding(ctx context.Context, in ChannelBindingInp
 	if err != nil {
 		return ChannelBinding{}, channelWriteErr(err)
 	}
-	return bindingFrom(r.ID, r.Channel, r.ExternalAccount, r.Name, r.Roles, r.Status, r.Config, r.CreatedAt, r.UpdatedAt), nil
+	return bindingFrom(r.ID, r.Channel, r.ExternalAccount, r.Name, r.Roles, r.Status, r.Config, r.HasSecrets, r.CreatedAt, r.UpdatedAt), nil
 }
 
 func (t tenantTx) GetChannelBinding(ctx context.Context, id int64) (ChannelBinding, error) {
@@ -277,7 +281,7 @@ func (t tenantTx) GetChannelBinding(ctx context.Context, id int64) (ChannelBindi
 	if err != nil {
 		return ChannelBinding{}, notFound(err)
 	}
-	return bindingFrom(r.ID, r.Channel, r.ExternalAccount, r.Name, r.Roles, r.Status, r.Config, r.CreatedAt, r.UpdatedAt), nil
+	return bindingFrom(r.ID, r.Channel, r.ExternalAccount, r.Name, r.Roles, r.Status, r.Config, r.HasSecrets, r.CreatedAt, r.UpdatedAt), nil
 }
 
 func (t tenantTx) ListChannelBindings(ctx context.Context) ([]ChannelBinding, error) {
@@ -287,7 +291,7 @@ func (t tenantTx) ListChannelBindings(ctx context.Context) ([]ChannelBinding, er
 	}
 	out := make([]ChannelBinding, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, bindingFrom(r.ID, r.Channel, r.ExternalAccount, r.Name, r.Roles, r.Status, r.Config, r.CreatedAt, r.UpdatedAt))
+		out = append(out, bindingFrom(r.ID, r.Channel, r.ExternalAccount, r.Name, r.Roles, r.Status, r.Config, r.HasSecrets, r.CreatedAt, r.UpdatedAt))
 	}
 	return out, nil
 }
@@ -303,7 +307,7 @@ func (t tenantTx) UpdateChannelBinding(ctx context.Context, id int64, p ChannelB
 	if err != nil {
 		return ChannelBinding{}, channelWriteErr(err)
 	}
-	return bindingFrom(r.ID, r.Channel, r.ExternalAccount, r.Name, r.Roles, r.Status, r.Config, r.CreatedAt, r.UpdatedAt), nil
+	return bindingFrom(r.ID, r.Channel, r.ExternalAccount, r.Name, r.Roles, r.Status, r.Config, r.HasSecrets, r.CreatedAt, r.UpdatedAt), nil
 }
 
 func (t tenantTx) ChannelBindingSecrets(ctx context.Context, id int64) (json.RawMessage, error) {
@@ -337,7 +341,7 @@ func (t tenantTx) ListActiveOutletBindingsForStore(ctx context.Context, storeID 
 	out := make([]OutletBinding, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, OutletBinding{
-			ChannelBinding:  bindingFrom(r.ID, r.Channel, r.ExternalAccount, r.Name, r.Roles, r.Status, r.Config, r.CreatedAt, r.UpdatedAt),
+			ChannelBinding:  bindingFrom(r.ID, r.Channel, r.ExternalAccount, r.Name, r.Roles, r.Status, r.Config, r.HasSecrets, r.CreatedAt, r.UpdatedAt),
 			ExternalStoreID: r.ExternalStoreID,
 		})
 	}
@@ -490,14 +494,17 @@ func (t tenantTx) SetChannelListingError(ctx context.Context, bindingID, storeID
 	return t.q.SetChannelListingError(ctx, db.SetChannelListingErrorParams{BindingID: bindingID, StoreID: storeID, SkuID: skuID, LastError: msg})
 }
 
-func (t tenantTx) ListChannelListingsPage(ctx context.Context, bindingID int64, storeID *int64, limit, offset int32) ([]ChannelListing, error) {
-	rows, err := t.q.ListChannelListingsPage(ctx, db.ListChannelListingsPageParams{BindingID: bindingID, StoreID: storeID, Lim: limit, Off: offset})
+func (t tenantTx) ListChannelListingsPage(ctx context.Context, bindingID int64, storeID *int64, errorsOnly bool, limit, offset int32) ([]ChannelListing, error) {
+	rows, err := t.q.ListChannelListingsPage(ctx, db.ListChannelListingsPageParams{BindingID: bindingID, StoreID: storeID,
+		ErrorsOnly: errorsOnly, Lim: limit, Off: offset})
 	if err != nil {
 		return nil, err
 	}
 	out := make([]ChannelListing, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, listingFrom(r.BindingID, r.StoreID, r.SkuID, r.PublishedQty, r.PublishedCents, r.Version, r.PushedAt, r.LastError))
+		l := listingFrom(r.BindingID, r.StoreID, r.SkuID, r.PublishedQty, r.PublishedCents, r.Version, r.PushedAt, r.LastError)
+		l.SKUCode, l.ProductTitle = r.SkuCode, r.ProductTitle
+		out = append(out, l)
 	}
 	return out, nil
 }
@@ -616,6 +623,21 @@ func (t tenantTx) ChannelSKUsByCodes(ctx context.Context, codes []string) (map[s
 	}
 	for _, r := range rows {
 		out[r.SkuCode] = CodedSKU{ID: r.ID, ProductID: r.ProductID, Code: r.SkuCode, Deleted: r.Deleted}
+	}
+	return out, nil
+}
+
+func (t tenantTx) ChannelManagedProducts(ctx context.Context, productIDs []int64) (map[int64]string, error) {
+	if len(productIDs) == 0 {
+		return map[int64]string{}, nil
+	}
+	rows, err := t.q.ChannelManagedProducts(ctx, productIDs)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[int64]string, len(rows))
+	for _, r := range rows {
+		out[r.ProductID] = r.Channel
 	}
 	return out, nil
 }

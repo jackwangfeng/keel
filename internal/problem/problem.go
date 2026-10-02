@@ -105,6 +105,9 @@ const (
 	TypeTrackingNoDuplicated      = "https://keel.dev/problems/tracking-no-duplicated"
 	// TypeChannelDuplicate：同一渠道同一外部账号已经接过，或渠道门店已经映射给了别的门店（409）。
 	TypeChannelDuplicate          = "https://keel.dev/problems/channel-duplicate"
+	// TypeManagedByChannel：后台改了由渠道（启用中的商品源）管理的商品字段 —— 标题、详情、图片、SKU 规格（409）。
+	// 这些字段下一次同步会被渠道覆盖，所以拒绝而不是收下；detail 带渠道名。停用渠道账号即放开。
+	TypeManagedByChannel          = "https://keel.dev/problems/managed-by-channel"
 	TypeOrderNotFound             = "https://keel.dev/problems/order-not-found"
 	TypeOrderStatusNotRefundable  = "https://keel.dev/problems/order-status-not-refundable"
 	TypeAfterSaleWindowClosed     = "https://keel.dev/problems/after-sale-window-closed"

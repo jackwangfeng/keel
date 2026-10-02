@@ -177,6 +177,9 @@ func writeCatalogError(c *gin.Context, err error) {
 
 	case writeAdminIdempotencyError(c, err):
 
+	case errors.Is(err, service.ErrManagedByChannel):
+		writeProblemDetail(c, http.StatusConflict, problem.TypeManagedByChannel, "这个字段由渠道管理", err)
+
 	case errors.Is(err, service.ErrCatalogBadRequest):
 		// err.Error() 而不是硬编码的「请求参数不合法」：ErrCatalogBadRequest
 		// 在 service 层全部是 `fmt.Errorf("%w: 具体原因", ErrCatalogBadRequest)`
@@ -314,6 +317,7 @@ func apiAdminProduct(p repository.AdminProduct) api.AdminProduct {
 		BrandId:    p.BrandID,
 		// 单独挂的运费模板（00055）；nil 整个不出现 = 不单独挂。
 		FreightTemplateId: p.FreightTemplateID,
+		ManagedBy:         p.ManagedBy,
 		Title:             p.Title,
 		Subtitle:          p.Subtitle,
 		Description:       p.Description,

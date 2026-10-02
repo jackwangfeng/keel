@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"reflect"
 	"sync/atomic"
 
 	"github.com/keel/keel/internal/channel"
@@ -189,7 +190,7 @@ func (s *ChannelService) UpdateBinding(ctx context.Context, id int64, p ChannelB
 		}
 		flipped := before.IsActiveOutlet() != b.IsActiveOutlet()
 		// 变成启用、或启用中改了 config（价格源门店之类）：整店重算一遍。
-		if b.IsActiveOutlet() && (flipped || p.Config != nil) {
+		if b.IsActiveOutlet() && (flipped || (p.Config != nil && !jsonEqual(before.Config, b.Config))) {
 			if err := s.enqueueRecomputeBinding(ctx, tx, b.ID); err != nil {
 				return false, err
 			}
@@ -422,15 +423,60 @@ func (s *ChannelService) ListPriceRules(ctx context.Context, bindingID int64) (o
 	return out, err
 }
 
-func (s *ChannelService) ListListings(ctx context.Context, bindingID int64, storeID *int64, limit, offset int32) (out []repository.ChannelListing, err error) {
+func (s *ChannelService) ListListings(ctx context.Context, bindingID int64, storeID *int64, errorsOnly bool, limit, offset int32) (out []repository.ChannelListing, err error) {
 	err = s.repo.WithTenant(ctx, func(tx repository.Tx) error {
 		if _, err = tx.GetChannelBinding(ctx, bindingID); err != nil {
 			return err
 		}
-		out, err = tx.ListChannelListingsPage(ctx, bindingID, storeID, limit, offset)
+		out, err = tx.ListChannelListingsPage(ctx, bindingID, storeID, errorsOnly, limit, offset)
 		return err
 	})
 	return out, err
+}
+
+// ErrManagedByChannel：后台改了由渠道管理的商品字段（标题、详情、图片、SKU 规格）。→ 409 managed-by-channel，
+// 错误串里带渠道名（ManagedFieldError）。
+var ErrManagedByChannel = errors.New("这个字段由渠道管理")
+
+// ManagedFieldError 是「field 由 channel 管理」的 ErrManagedByChannel。
+func ManagedFieldError(channel, field string) error {
+	return fmt.Errorf("%w：%s由 %s 同步，请在 %s 后台修改（价格、库存、类目仍在这里改）", ErrManagedByChannel, field, channel, channel)
+}
+
+// ManagedBy：这批商品里由启用中的商品源管理的那些 → 渠道。在调用方的事务里读（与随后的写同一个快照）。
+// nil 接收者（KEEL_CHANNELS 关闭）返回空、不查库。
+func (s *ChannelService) ManagedBy(ctx context.Context, tx repository.Tx, productIDs []int64) (map[int64]string, error) {
+	if s == nil || len(productIDs) == 0 {
+		return nil, nil
+	}
+	return tx.ChannelManagedProducts(ctx, productIDs)
+}
+
+// ErrChannelNotCatalogSource：要从一个不是启用中商品源的 binding 拉商品（409）。
+var ErrChannelNotCatalogSource = errors.New("这个渠道账号不是启用中的商品源，没有可拉的商品")
+
+// RequestCatalogPull 给启用中的商品源排一次整店重拉（首页顺带重装回调订阅）。已有一次在排队或在跑时不重复排
+// （jobs 的 uk_jobs_pending）。
+func (s *ChannelService) RequestCatalogPull(ctx context.Context, bindingID int64) error {
+	return s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+		return s.requestCatalogPullTx(ctx, tx, bindingID)
+	})
+}
+
+func (s *ChannelService) requestCatalogPullTx(ctx context.Context, tx repository.Tx, bindingID int64) error {
+	b, err := tx.GetChannelBinding(ctx, bindingID)
+	if err != nil {
+		return err
+	}
+	if !b.IsActiveCatalogSource() {
+		return ErrChannelNotCatalogSource
+	}
+	// 一条整店拉取链还没走完（哪一页都算）就不再排：否则两条链并发拉同一家店。
+	busy, err := tx.HasUnfinishedJobWithPrefix(ctx, QueueChannelCatalogPull, fmt.Sprintf("pull:%d:", b.ID))
+	if err != nil || busy {
+		return err
+	}
+	return s.enqueueCatalogPull(ctx, tx, b.ID, "", true)
 }
 
 // LinkSKU 登记一个 SKU 在渠道上的外部 ID（第二期由商品同步写；后台与测试也可以直接写）。
@@ -466,4 +512,13 @@ func adapterBinding(ctx context.Context, tx repository.Tx, merchantID int64, b r
 func channelWorkerID() string {
 	host, _ := os.Hostname()
 	return fmt.Sprintf("channel@%s:%d", host, os.Getpid())
+}
+
+// jsonEqual：两段 JSON 语义相同（键序、空白不算）。解不开的按不同。
+func jsonEqual(a, b json.RawMessage) bool {
+	var x, y any
+	if json.Unmarshal(a, &x) != nil || json.Unmarshal(b, &y) != nil {
+		return false
+	}
+	return reflect.DeepEqual(x, y)
 }

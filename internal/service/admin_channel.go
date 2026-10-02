@@ -16,7 +16,13 @@ import (
 	"github.com/keel/keel/internal/tenant"
 )
 
-const scopeAdminChannelBindingCreate = "admin.channel-bindings.create"
+const (
+	scopeAdminChannelBindingCreate = "admin.channel-bindings.create"
+	scopeAdminChannelCatalogPull   = "admin.channel-bindings.catalog-pulls"
+)
+
+// archivedAccepted：手动重拉商品的 202（无体）。
+const archivedAccepted int32 = 202
 
 // ErrChannelBadRequest：后台写的参数不成立（422）。
 var ErrChannelBadRequest = errors.New("渠道配置不成立")
@@ -230,9 +236,26 @@ func (s *AdminChannelService) DeletePriceRule(ctx context.Context, bindingID, id
 	return s.ch.DeletePriceRule(ctx, bindingID, id)
 }
 
-func (s *AdminChannelService) Listings(ctx context.Context, bindingID int64, storeID *int64, limit, offset int32) ([]repository.ChannelListing, error) {
+func (s *AdminChannelService) Listings(ctx context.Context, bindingID int64, storeID *int64, errorsOnly bool, limit, offset int32) ([]repository.ChannelListing, error) {
 	if _, err := requireMerchantWide(ctx); err != nil {
 		return nil, err
 	}
-	return s.ch.ListListings(ctx, bindingID, storeID, limit, offset)
+	return s.ch.ListListings(ctx, bindingID, storeID, errorsOnly, limit, offset)
+}
+
+// RequestCatalogPull 手动重拉商品（幂等，Idempotency-Key 必填）。返回是否重放。
+func (s *AdminChannelService) RequestCatalogPull(ctx context.Context, bindingID int64, idemKey string) (bool, error) {
+	id, err := requireMerchantAdmin(ctx)
+	if err != nil {
+		return false, err
+	}
+	hash, err := adminRequestHash([]int64{bindingID}, nil)
+	if err != nil {
+		return false, err
+	}
+	_, replayed, err := idempotentTx(ctx, s.ch.repo, repository.StaffSubject(id.StaffID), scopeAdminChannelCatalogPull, idemKey, hash,
+		archivedAccepted, func(tx repository.Tx) (struct{}, error) {
+			return struct{}{}, s.ch.requestCatalogPullTx(ctx, tx, bindingID)
+		})
+	return replayed, err
 }

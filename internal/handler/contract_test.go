@@ -301,6 +301,13 @@ var routes = []route{
 		HandlerFile:    "admin_channel_listing.go",
 	},
 	{
+		ContractPath:   "/admin/channel-bindings/{binding_id}/catalog-pulls",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "admin_channel.go",
+		NoQueryParams:  "渠道管理的参数都在路径与请求体里",
+	},
+	{
 		ContractPath:   "/webhooks/channels/{binding_id}",
 		ContractMethod: "post",
 		HTTPMethod:     http.MethodPost,

@@ -10,7 +10,7 @@ import (
 	"github.com/keel/keel/internal/problem"
 )
 
-// 单独一个文件：渠道管理里只有这一条读 query 参数（store_id / page / page_size），
+// 单独一个文件：渠道管理里只有这一条读 query 参数（store_id / errors_only / page / page_size），
 // 契约测试按文件清点 handler 读了哪些参数。
 
 // ListListings 实现 GET /api/v1/admin/channel-bindings/{binding_id}/listings。
@@ -36,14 +36,23 @@ func (h *AdminChannelHandler) ListListings(c *gin.Context) {
 		}
 		store = &s
 	}
-	ls, err := h.svc.Listings(c.Request.Context(), id, store, int32(pageSize), int32((page-1)*pageSize))
+	errorsOnly := false
+	if v := c.Query("errors_only"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			problem.Write(c, http.StatusUnprocessableEntity, problem.TypeInvalidRequest, "errors_only 只能是 true / false")
+			return
+		}
+		errorsOnly = b
+	}
+	ls, err := h.svc.Listings(c.Request.Context(), id, store, errorsOnly, int32(pageSize), int32((page-1)*pageSize))
 	if err != nil {
 		writeChannelError(c, err)
 		return
 	}
 	items := make([]api.ChannelListing, 0, len(ls))
 	for _, l := range ls {
-		items = append(items, api.ChannelListing{StoreId: l.StoreID, SkuId: l.SKUID, PublishedQty: l.PublishedQty,
+		items = append(items, api.ChannelListing{StoreId: l.StoreID, SkuId: l.SKUID, SkuCode: l.SKUCode, ProductTitle: l.ProductTitle, PublishedQty: l.PublishedQty,
 			PublishedCents: l.PublishedCents, Version: l.Version, PushedAt: l.PushedAt, LastError: l.LastError})
 	}
 	c.JSON(http.StatusOK, gin.H{"items": items})

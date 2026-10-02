@@ -1,17 +1,18 @@
 -- 渠道适配层（00301）。编排在 service/channel*.go；表结构与取舍见数据模型文档第十七节。
--- secrets 列只有 GetChannelBindingSecrets / SetChannelBindingSecrets 两条碰它：其余读路径一律不选，接口不回显。
+-- secrets 列的值只有 GetChannelBindingSecrets / SetChannelBindingSecrets 两条碰它：其余读路径只选「配过没有」
+-- （has_secrets = secrets <> '{}'，后台显示「已配置 / 未配置」），接口不回显值。
 
 -- name: CreateChannelBinding :one
 INSERT INTO channel_bindings (channel, external_account, name, roles, status, config)
 VALUES (@channel::text, @external_account::text, @name::text, @roles::smallint, @status::smallint, @config::jsonb)
-RETURNING id, channel, external_account, name, roles, status, config, created_at, updated_at;
+RETURNING id, channel, external_account, name, roles, status, config, (secrets <> '{}'::jsonb)::boolean AS has_secrets, created_at, updated_at;
 
 -- name: GetChannelBinding :one
-SELECT id, channel, external_account, name, roles, status, config, created_at, updated_at
+SELECT id, channel, external_account, name, roles, status, config, (secrets <> '{}'::jsonb)::boolean AS has_secrets, created_at, updated_at
   FROM channel_bindings WHERE id = @id::bigint;
 
 -- name: ListChannelBindings :many
-SELECT id, channel, external_account, name, roles, status, config, created_at, updated_at
+SELECT id, channel, external_account, name, roles, status, config, (secrets <> '{}'::jsonb)::boolean AS has_secrets, created_at, updated_at
   FROM channel_bindings ORDER BY id;
 
 -- name: UpdateChannelBinding :one
@@ -22,7 +23,7 @@ UPDATE channel_bindings
        status = COALESCE(sqlc.narg(status)::smallint, status),
        config = COALESCE(sqlc.narg(config)::jsonb, config)
  WHERE id = @id::bigint
-RETURNING id, channel, external_account, name, roles, status, config, created_at, updated_at;
+RETURNING id, channel, external_account, name, roles, status, config, (secrets <> '{}'::jsonb)::boolean AS has_secrets, created_at, updated_at;
 
 -- name: GetChannelBindingSecrets :one
 SELECT secrets FROM channel_bindings WHERE id = @id::bigint;
@@ -36,7 +37,8 @@ SELECT count(*) FROM channel_bindings WHERE status = 1 AND (roles & 4) <> 0;
 
 -- name: ListActiveOutletBindingsForStore :many
 -- 这家门店映射过、启用中的销售渠道 binding，连同渠道门店 ID。
-SELECT b.id, b.channel, b.external_account, b.name, b.roles, b.status, b.config, b.created_at, b.updated_at,
+SELECT b.id, b.channel, b.external_account, b.name, b.roles, b.status, b.config,
+       (b.secrets <> '{}'::jsonb)::boolean AS has_secrets, b.created_at, b.updated_at,
        l.external_store_id
   FROM channel_bindings b
   JOIN channel_store_links l ON l.binding_id = b.id
@@ -109,11 +111,16 @@ UPDATE channel_listings SET last_error = @last_error::text
  WHERE binding_id = @binding_id::bigint AND store_id = @store_id::bigint AND sku_id = @sku_id::bigint;
 
 -- name: ListChannelListingsPage :many
-SELECT binding_id, store_id, sku_id, published_qty, published_cents, version, pushed_at, last_error
-  FROM channel_listings
- WHERE binding_id = @binding_id::bigint
-   AND (sqlc.narg(store_id)::bigint IS NULL OR store_id = sqlc.narg(store_id)::bigint)
- ORDER BY store_id, sku_id
+-- 后台的推送状态：带 SKU 货号与商品名（删了的 SKU 也照列，行还在就说明推过）；errors_only 只看出错的。
+SELECT l.binding_id, l.store_id, l.sku_id, l.published_qty, l.published_cents, l.version, l.pushed_at, l.last_error,
+       s.sku_code, p.title AS product_title
+  FROM channel_listings l
+  JOIN skus s     ON s.id = l.sku_id
+  JOIN products p ON p.id = s.product_id
+ WHERE l.binding_id = @binding_id::bigint
+   AND (sqlc.narg(store_id)::bigint IS NULL OR l.store_id = sqlc.narg(store_id)::bigint)
+   AND (NOT @errors_only::boolean OR l.last_error IS NOT NULL)
+ ORDER BY l.store_id, l.sku_id
  LIMIT @lim::int OFFSET @off::int;
 
 -- name: InsertChannelInboundEvent :one
@@ -183,6 +190,16 @@ SELECT binding_id, kind, keel_id, external_id, extra, synced_at
 -- name: DeleteChannelItemLink :execrows
 DELETE FROM channel_item_links
  WHERE binding_id = @binding_id::bigint AND kind = @kind::smallint AND keel_id = @keel_id::bigint;
+
+-- name: ChannelManagedProducts :many
+-- 这批商品里由启用中的商品源管理的那些（商品级映射 kind 1），连同渠道。后台据此标「由 … 管理」并锁字段；
+-- 停用 / 凭据失效的 binding 不算（不再同步，字段放开）。挂在多个商品源上时取 binding id 最小的那个。
+SELECT DISTINCT ON (l.keel_id) l.keel_id AS product_id, b.channel
+  FROM channel_item_links l
+  JOIN channel_bindings b ON b.id = l.binding_id
+ WHERE l.kind = 1 AND l.keel_id = ANY(@product_ids::bigint[])
+   AND b.status = 1 AND (b.roles & 1) <> 0
+ ORDER BY l.keel_id, b.id;
 
 -- name: ChannelSKUsByCodes :many
 -- 按货号找 keel 的 SKU（商品源拉商品时认领同货号的已有 SKU）。删了的也列出来：uk_skus_code 不分删没删，

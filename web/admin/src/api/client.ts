@@ -137,6 +137,18 @@ export type ReportStoreComparison = S["ReportStoreComparison"];
 export type ReportInventoryAlerts = S["ReportInventoryAlerts"];
 export type ReportSearchOverview = S["ReportSearchOverview"];
 
+// 渠道（契约 Channel tag）：商家接的 Shopify / 美团……账号。凭据只写不读，ChannelBinding 只有 has_secrets。
+export type ChannelKind = S["ChannelKind"];
+export type ChannelBinding = S["ChannelBinding"];
+export type ChannelBindingInput = S["ChannelBindingInput"];
+export type ChannelBindingPatch = S["ChannelBindingPatch"];
+export type ChannelStoreLink = S["ChannelStoreLink"];
+export type ChannelStockRule = S["ChannelStockRule"];
+export type ChannelStockRuleInput = S["ChannelStockRuleInput"];
+export type ChannelPriceRule = S["ChannelPriceRule"];
+export type ChannelPriceRuleInput = S["ChannelPriceRuleInput"];
+export type ChannelListing = S["ChannelListing"];
+
 /** `GET /admin/products` 的响应体（PageMeta 三个字段 + items）。 */
 export type AdminProductPage = ResponseBodyOf<"/admin/products", "get">;
 /** `GET /admin/staff` 的响应体。 */
@@ -205,6 +217,17 @@ export function currentSession(): StaffSession | null {
     return session;
 }
 
+/**
+ * 「会话变了」的订阅点：登录、登出、`refreshIdentity` 刷身份，一律走 `setSession`，
+ * 一律在这里广播一次。谁依赖「当前这个会话」缓存了点什么（比如渠道菜单的开关探测
+ * 结果），订阅这个就不用在登录页、登出按钮、身份刷新三处分别记得去清。
+ */
+const sessionChangeListeners = new Set<() => void>();
+export function onSessionChange(fn: () => void): () => void {
+    sessionChangeListeners.add(fn);
+    return () => sessionChangeListeners.delete(fn);
+}
+
 export function setSession(next: StaffSession | null): void {
     session = next;
     try {
@@ -214,6 +237,7 @@ export function setSession(next: StaffSession | null): void {
         // 隐私模式下 sessionStorage 会抛。内存里那一份仍然有效，
         // 代价只是刷新页面要重新登录 —— 比整个后台打不开好。
     }
+    for (const fn of sessionChangeListeners) fn();
 }
 
 // ---------------------------------------------------------------------------
@@ -491,6 +515,8 @@ export const ProblemType = {
     importUnsupportedFormat: `${P}import-unsupported-format`,
     importFileInvalid: `${P}import-file-invalid`,
     importNothingToImport: `${P}import-nothing-to-import`,
+    // 渠道：商品源管理的字段（标题、详情、图片、规格）在后台改不了，detail 带渠道名。
+    managedByChannel: `${P}managed-by-channel`,
 } as const;
 
 /** 这个错误是不是某个 type 的 Problem。 */

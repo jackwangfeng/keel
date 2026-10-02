@@ -59,3 +59,14 @@ ON CONFLICT DO NOTHING;
 INSERT INTO jobs (queue, job_key, payload, priority, max_attempts)
 VALUES (@queue, @job_key, @payload, @priority, @max_attempts)
 ON CONFLICT DO NOTHING;
+
+-- name: HasUnfinishedJobWithPrefix :one
+-- 这家商家这个队列里有没有 job_key 以 prefix 开头、还没做完（待跑或在跑）的任务。
+-- 为渠道「手动重新同步商品」而加：整店拉取一页一个任务、键各不相同（pull:<binding>:<游标>），
+-- uk_jobs_pending 只挡得住同一个键，挡不住「第 3 页还在跑时又从第 1 页排一条链」。
+-- jobs 没有 RLS（文件头），租户靠 current_merchant() —— 与入队那两条的列默认值同一个来源。
+SELECT EXISTS (
+    SELECT 1 FROM jobs
+     WHERE merchant_id = current_merchant() AND queue = @queue::text
+       AND status IN (0, 1) AND starts_with(job_key, @prefix::text)
+)::boolean AS busy;

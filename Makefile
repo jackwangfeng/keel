@@ -192,7 +192,7 @@ admin-type-check:
 # node_modules。别往 geo.ts 里加运行时 import，否则这里会以
 # ERR_MODULE_NOT_FOUND 失败。
 admin-test:
-	cd $(ROOT)/web/admin && node --test src/api/geo.test.ts src/api/money.test.ts src/api/orderRules.test.ts src/api/notifications.test.ts src/api/importRules.test.ts src/api/freightRules.test.ts src/api/reports.test.ts src/api/promotionRules.test.ts src/api/shopSettings.test.ts src/api/localDeliveryRules.test.ts src/api/agentProposalRules.test.ts src/api/agentPolicyRules.test.ts src/api/paymentReturnRules.test.ts src/api/mapTiles.test.ts
+	cd $(ROOT)/web/admin && node --test src/api/geo.test.ts src/api/money.test.ts src/api/orderRules.test.ts src/api/notifications.test.ts src/api/importRules.test.ts src/api/freightRules.test.ts src/api/reports.test.ts src/api/promotionRules.test.ts src/api/shopSettings.test.ts src/api/localDeliveryRules.test.ts src/api/agentProposalRules.test.ts src/api/agentPolicyRules.test.ts src/api/paymentReturnRules.test.ts src/api/mapTiles.test.ts src/api/channelRules.test.ts
 
 # 后台布局检查：每个页面（含标签页、「新建」弹窗）按手机 390px 与电脑 1440px 各打开一次，查横向撑破、控件出屏、
 # 点击目标过小、按钮文字截断、控制台报错，并截图。只读。报告在 tmp/responsive/report.md。

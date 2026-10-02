@@ -225,6 +225,7 @@ def verify(secret: str, body: bytes, header: str) -> bool:
 | 2026-09-28 | 检索加相关度下限：`search_insights` 的无结果词与 `search_zero_spike` 把「只回了低于下限的猜你想要」（fallback）也算作无结果；之前向量召回永远凑满，这两样恒为 0 |
 | 2026-09-28 | 演示站实跑验收修两处：全部工具输出里的时刻改为**店铺时区**（带偏移的 RFC 3339，如 `+08:00`；之前是 UTC，AI 店长把它当北京时间写进简报）；`list_refunds` 加 `order_shipped_at`（没发过货时缺席），判发没发货看它，不看 `order_status`（50 / 60 是未发货的整单退款） |
 | 2026-10-01 | 工具错误新增 `busy`（503）：数据库等锁 / 语句超时，这次调用确定没有生效，稍后原样重试。之前同样的情况报 `internal` |
+| 2026-10-02 | 商品出参（`list_products` `get_product`）加 `managed_by`：由渠道（如 `shopify`）管理的商品，标题、详情、图片、SKU 规格改不了（后台 409 `managed-by-channel`，`propose_product_copy` 改标题的提案批准执行时同样失败）；null / 缺席 = keel 自己管 |
 
 ## 接入方式举例
 

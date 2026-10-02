@@ -455,6 +455,10 @@ var permMatrix = []permRoute{
 	{"PUT", v1 + "/admin/channel-bindings/:binding_id/secrets", adminOnly, func(t *testing.T, fx *permFixture, c permCase) permReq {
 		return permReq{Method: "PUT", Path: fmt.Sprintf(v1+"/admin/channel-bindings/%d/secrets", permChannelBinding(t, fx)), Body: `{"k":"v"}`, OK: http.StatusNoContent}
 	}},
+	{"POST", v1 + "/admin/channel-bindings/:binding_id/catalog-pulls", adminOnly, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		// 矩阵用的是假渠道（只当销售渠道）：过了权限就是 409「不是启用中的商品源」，不是 403。
+		return permReq{Method: "POST", Path: fmt.Sprintf(v1+"/admin/channel-bindings/%d/catalog-pulls", permChannelBinding(t, fx)), OK: http.StatusConflict}
+	}},
 	{"GET", v1 + "/admin/channel-bindings/:binding_id/store-links", merchantWide, func(t *testing.T, fx *permFixture, c permCase) permReq {
 		return permGet(fmt.Sprintf(v1+"/admin/channel-bindings/%d/store-links", permChannelBinding(t, fx)))
 	}},

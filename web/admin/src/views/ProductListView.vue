@@ -18,6 +18,7 @@ import {
     type ProductCreateRequest,
 } from "../api/client.ts";
 import { indentedLabel, listCategories } from "../api/catalog.ts";
+import { managedLabel } from "../api/channelRules.ts";
 import { IdempotentSubmission, withIdempotency } from "../api/idempotency.ts";
 import { datetime, PRODUCT_STATUS, priceRange } from "../ui/format.ts";
 import { notifyError, notifyOk } from "../ui/notify.ts";
@@ -230,6 +231,7 @@ async function removeProduct(row: AdminProduct): Promise<void> {
                 <div class="card-top">
                     <div class="card-main">
                         <div class="card-title">{{ row.title }}</div>
+                        <el-tag v-if="managedLabel(row.managed_by)" type="warning" size="small">{{ managedLabel(row.managed_by) }}</el-tag>
                         <div v-if="row.subtitle" class="hint">{{ row.subtitle }}</div>
                         <div class="card-price">{{ priceRange(row.min_price_cents, row.max_price_cents) }}</div>
                         <div class="card-meta">
@@ -272,6 +274,7 @@ async function removeProduct(row: AdminProduct): Promise<void> {
                     <router-link :to="{ name: 'product-detail', params: { productId: row.id } }">
                         {{ row.title }}
                     </router-link>
+                    <el-tag v-if="managedLabel(row.managed_by)" type="warning" size="small" class="managed-tag">{{ managedLabel(row.managed_by) }}</el-tag>
                     <div v-if="row.subtitle" class="hint">{{ row.subtitle }}</div>
                 </template>
             </el-table-column>
@@ -379,6 +382,9 @@ async function removeProduct(row: AdminProduct): Promise<void> {
 </template>
 
 <style scoped>
+.managed-tag {
+    margin-left: 6px;
+}
 .pager {
     margin-top: 12px;
     justify-content: flex-end;

@@ -11,6 +11,42 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const channelManagedProducts = `-- name: ChannelManagedProducts :many
+SELECT DISTINCT ON (l.keel_id) l.keel_id AS product_id, b.channel
+  FROM channel_item_links l
+  JOIN channel_bindings b ON b.id = l.binding_id
+ WHERE l.kind = 1 AND l.keel_id = ANY($1::bigint[])
+   AND b.status = 1 AND (b.roles & 1) <> 0
+ ORDER BY l.keel_id, b.id
+`
+
+type ChannelManagedProductsRow struct {
+	ProductID int64
+	Channel   string
+}
+
+// 这批商品里由启用中的商品源管理的那些（商品级映射 kind 1），连同渠道。后台据此标「由 … 管理」并锁字段；
+// 停用 / 凭据失效的 binding 不算（不再同步，字段放开）。挂在多个商品源上时取 binding id 最小的那个。
+func (q *Queries) ChannelManagedProducts(ctx context.Context, productIds []int64) ([]ChannelManagedProductsRow, error) {
+	rows, err := q.db.Query(ctx, channelManagedProducts, productIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ChannelManagedProductsRow
+	for rows.Next() {
+		var i ChannelManagedProductsRow
+		if err := rows.Scan(&i.ProductID, &i.Channel); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const channelSKUExists = `-- name: ChannelSKUExists :one
 SELECT EXISTS (SELECT 1 FROM skus WHERE id = $1::bigint AND deleted_at IS NULL)
 `
@@ -143,7 +179,7 @@ const createChannelBinding = `-- name: CreateChannelBinding :one
 
 INSERT INTO channel_bindings (channel, external_account, name, roles, status, config)
 VALUES ($1::text, $2::text, $3::text, $4::smallint, $5::smallint, $6::jsonb)
-RETURNING id, channel, external_account, name, roles, status, config, created_at, updated_at
+RETURNING id, channel, external_account, name, roles, status, config, (secrets <> '{}'::jsonb)::boolean AS has_secrets, created_at, updated_at
 `
 
 type CreateChannelBindingParams struct {
@@ -163,12 +199,14 @@ type CreateChannelBindingRow struct {
 	Roles           int16
 	Status          int16
 	Config          []byte
+	HasSecrets      bool
 	CreatedAt       pgtype.Timestamptz
 	UpdatedAt       pgtype.Timestamptz
 }
 
 // 渠道适配层（00301）。编排在 service/channel*.go；表结构与取舍见数据模型文档第十七节。
-// secrets 列只有 GetChannelBindingSecrets / SetChannelBindingSecrets 两条碰它：其余读路径一律不选，接口不回显。
+// secrets 列的值只有 GetChannelBindingSecrets / SetChannelBindingSecrets 两条碰它：其余读路径只选「配过没有」
+// （has_secrets = secrets <> '{}'，后台显示「已配置 / 未配置」），接口不回显值。
 func (q *Queries) CreateChannelBinding(ctx context.Context, arg CreateChannelBindingParams) (CreateChannelBindingRow, error) {
 	row := q.db.QueryRow(ctx, createChannelBinding,
 		arg.Channel,
@@ -187,6 +225,7 @@ func (q *Queries) CreateChannelBinding(ctx context.Context, arg CreateChannelBin
 		&i.Roles,
 		&i.Status,
 		&i.Config,
+		&i.HasSecrets,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -264,7 +303,7 @@ func (q *Queries) DeleteChannelStoreLink(ctx context.Context, arg DeleteChannelS
 }
 
 const getChannelBinding = `-- name: GetChannelBinding :one
-SELECT id, channel, external_account, name, roles, status, config, created_at, updated_at
+SELECT id, channel, external_account, name, roles, status, config, (secrets <> '{}'::jsonb)::boolean AS has_secrets, created_at, updated_at
   FROM channel_bindings WHERE id = $1::bigint
 `
 
@@ -276,6 +315,7 @@ type GetChannelBindingRow struct {
 	Roles           int16
 	Status          int16
 	Config          []byte
+	HasSecrets      bool
 	CreatedAt       pgtype.Timestamptz
 	UpdatedAt       pgtype.Timestamptz
 }
@@ -291,6 +331,7 @@ func (q *Queries) GetChannelBinding(ctx context.Context, id int64) (GetChannelBi
 		&i.Roles,
 		&i.Status,
 		&i.Config,
+		&i.HasSecrets,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -460,7 +501,8 @@ func (q *Queries) InsertChannelInboundEvent(ctx context.Context, arg InsertChann
 }
 
 const listActiveOutletBindingsForStore = `-- name: ListActiveOutletBindingsForStore :many
-SELECT b.id, b.channel, b.external_account, b.name, b.roles, b.status, b.config, b.created_at, b.updated_at,
+SELECT b.id, b.channel, b.external_account, b.name, b.roles, b.status, b.config,
+       (b.secrets <> '{}'::jsonb)::boolean AS has_secrets, b.created_at, b.updated_at,
        l.external_store_id
   FROM channel_bindings b
   JOIN channel_store_links l ON l.binding_id = b.id
@@ -476,6 +518,7 @@ type ListActiveOutletBindingsForStoreRow struct {
 	Roles           int16
 	Status          int16
 	Config          []byte
+	HasSecrets      bool
 	CreatedAt       pgtype.Timestamptz
 	UpdatedAt       pgtype.Timestamptz
 	ExternalStoreID string
@@ -499,6 +542,7 @@ func (q *Queries) ListActiveOutletBindingsForStore(ctx context.Context, storeID 
 			&i.Roles,
 			&i.Status,
 			&i.Config,
+			&i.HasSecrets,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.ExternalStoreID,
@@ -514,7 +558,7 @@ func (q *Queries) ListActiveOutletBindingsForStore(ctx context.Context, storeID 
 }
 
 const listChannelBindings = `-- name: ListChannelBindings :many
-SELECT id, channel, external_account, name, roles, status, config, created_at, updated_at
+SELECT id, channel, external_account, name, roles, status, config, (secrets <> '{}'::jsonb)::boolean AS has_secrets, created_at, updated_at
   FROM channel_bindings ORDER BY id
 `
 
@@ -526,6 +570,7 @@ type ListChannelBindingsRow struct {
 	Roles           int16
 	Status          int16
 	Config          []byte
+	HasSecrets      bool
 	CreatedAt       pgtype.Timestamptz
 	UpdatedAt       pgtype.Timestamptz
 }
@@ -547,6 +592,7 @@ func (q *Queries) ListChannelBindings(ctx context.Context) ([]ListChannelBinding
 			&i.Roles,
 			&i.Status,
 			&i.Config,
+			&i.HasSecrets,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
@@ -609,19 +655,24 @@ func (q *Queries) ListChannelItemLinks(ctx context.Context, arg ListChannelItemL
 }
 
 const listChannelListingsPage = `-- name: ListChannelListingsPage :many
-SELECT binding_id, store_id, sku_id, published_qty, published_cents, version, pushed_at, last_error
-  FROM channel_listings
- WHERE binding_id = $1::bigint
-   AND ($2::bigint IS NULL OR store_id = $2::bigint)
- ORDER BY store_id, sku_id
- LIMIT $4::int OFFSET $3::int
+SELECT l.binding_id, l.store_id, l.sku_id, l.published_qty, l.published_cents, l.version, l.pushed_at, l.last_error,
+       s.sku_code, p.title AS product_title
+  FROM channel_listings l
+  JOIN skus s     ON s.id = l.sku_id
+  JOIN products p ON p.id = s.product_id
+ WHERE l.binding_id = $1::bigint
+   AND ($2::bigint IS NULL OR l.store_id = $2::bigint)
+   AND (NOT $3::boolean OR l.last_error IS NOT NULL)
+ ORDER BY l.store_id, l.sku_id
+ LIMIT $5::int OFFSET $4::int
 `
 
 type ListChannelListingsPageParams struct {
-	BindingID int64
-	StoreID   *int64
-	Off       int32
-	Lim       int32
+	BindingID  int64
+	StoreID    *int64
+	ErrorsOnly bool
+	Off        int32
+	Lim        int32
 }
 
 type ListChannelListingsPageRow struct {
@@ -633,12 +684,16 @@ type ListChannelListingsPageRow struct {
 	Version        int64
 	PushedAt       pgtype.Timestamptz
 	LastError      *string
+	SkuCode        string
+	ProductTitle   string
 }
 
+// 后台的推送状态：带 SKU 货号与商品名（删了的 SKU 也照列，行还在就说明推过）；errors_only 只看出错的。
 func (q *Queries) ListChannelListingsPage(ctx context.Context, arg ListChannelListingsPageParams) ([]ListChannelListingsPageRow, error) {
 	rows, err := q.db.Query(ctx, listChannelListingsPage,
 		arg.BindingID,
 		arg.StoreID,
+		arg.ErrorsOnly,
 		arg.Off,
 		arg.Lim,
 	)
@@ -658,6 +713,8 @@ func (q *Queries) ListChannelListingsPage(ctx context.Context, arg ListChannelLi
 			&i.Version,
 			&i.PushedAt,
 			&i.LastError,
+			&i.SkuCode,
+			&i.ProductTitle,
 		); err != nil {
 			return nil, err
 		}
@@ -951,7 +1008,7 @@ UPDATE channel_bindings
        status = COALESCE($3::smallint, status),
        config = COALESCE($4::jsonb, config)
  WHERE id = $5::bigint
-RETURNING id, channel, external_account, name, roles, status, config, created_at, updated_at
+RETURNING id, channel, external_account, name, roles, status, config, (secrets <> '{}'::jsonb)::boolean AS has_secrets, created_at, updated_at
 `
 
 type UpdateChannelBindingParams struct {
@@ -970,6 +1027,7 @@ type UpdateChannelBindingRow struct {
 	Roles           int16
 	Status          int16
 	Config          []byte
+	HasSecrets      bool
 	CreatedAt       pgtype.Timestamptz
 	UpdatedAt       pgtype.Timestamptz
 }
@@ -992,6 +1050,7 @@ func (q *Queries) UpdateChannelBinding(ctx context.Context, arg UpdateChannelBin
 		&i.Roles,
 		&i.Status,
 		&i.Config,
+		&i.HasSecrets,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
