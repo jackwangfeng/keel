@@ -192,6 +192,9 @@ func (s *AdminCatalogService) ListProducts(ctx context.Context, page, pageSize i
 		if err != nil {
 			return err
 		}
+		if err := s.fillManagedBy(ctx, tx, items); err != nil {
+			return err
+		}
 		out.Total, out.Items = total, items
 		return nil
 	})
@@ -234,7 +237,11 @@ func (s *AdminCatalogService) FindProduct(ctx context.Context, id int64) (AdminP
 		if err != nil {
 			return err
 		}
-		out = AdminProductDetail{Product: p, SKUs: skus, Images: imgs}
+		ps := []repository.AdminProduct{p}
+		if err := s.fillManagedBy(ctx, tx, ps); err != nil {
+			return err
+		}
+		out = AdminProductDetail{Product: ps[0], SKUs: skus, Images: imgs}
 		return nil
 	})
 	if err != nil {
@@ -314,6 +321,14 @@ func (s *AdminCatalogService) UpdateProduct(ctx context.Context, id int64,
 	}
 	var out repository.AdminProduct
 	err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+		// 由渠道管的字段（标题、详情）先于写入拒掉：同一个事务里读映射与 binding 状态。
+		managed, e := s.channels.ManagedBy(ctx, tx, []int64{id})
+		if e != nil {
+			return e
+		}
+		if ch, ok := managed[id]; ok && (p.Title != nil || p.Description != nil) {
+			return ManagedFieldError(ch, "标题与详情")
+		}
 		if p.SetFreightTemplateID {
 			if e := lockFreightTemplateForLink(ctx, tx, p.FreightTemplateID); e != nil {
 				return e
@@ -322,6 +337,9 @@ func (s *AdminCatalogService) UpdateProduct(ctx context.Context, id int64,
 		updated, e := tx.UpdateProduct(ctx, id, p)
 		if e != nil {
 			return e
+		}
+		if ch, ok := managed[id]; ok {
+			updated.ManagedBy = &ch
 		}
 		// **在架商品的文案改动也要过合规检查**，草稿与已下架的不过。
 		//
@@ -345,6 +363,27 @@ func (s *AdminCatalogService) UpdateProduct(ctx context.Context, id int64,
 		return repository.AdminProduct{}, err
 	}
 	return s.withProductStock(ctx, "PATCH /admin/products/{id}", out), nil
+}
+
+// fillManagedBy 给这批商品填 ManagedBy（一次批量查询，不逐件）。渠道层关着时什么都不做、不查库。
+func (s *AdminCatalogService) fillManagedBy(ctx context.Context, tx repository.Tx, items []repository.AdminProduct) error {
+	if s.channels == nil || len(items) == 0 {
+		return nil
+	}
+	ids := make([]int64, len(items))
+	for i, p := range items {
+		ids[i] = p.ID
+	}
+	managed, err := s.channels.ManagedBy(ctx, tx, ids)
+	if err != nil {
+		return err
+	}
+	for i := range items {
+		if ch, ok := managed[items[i].ID]; ok {
+			items[i].ManagedBy = &ch
+		}
+	}
+	return nil
 }
 
 // lockFreightTemplateForLink 是「商品挂运费模板」的那道校验（00055）：只能挂一个
@@ -474,7 +513,13 @@ func (s *AdminCatalogService) ReplaceImages(ctx context.Context, productID int64
 	// 而且它对这三条各有一个 sentinel。
 	var out []repository.ProductImage
 	err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
-		var e error
+		managed, e := s.channels.ManagedBy(ctx, tx, []int64{productID})
+		if e != nil {
+			return e
+		}
+		if ch, ok := managed[productID]; ok {
+			return ManagedFieldError(ch, "商品图")
+		}
 		out, e = tx.ReplaceProductImages(ctx, productID, uploadIDs)
 		return e
 	})
@@ -628,6 +673,20 @@ func (s *AdminCatalogService) UpdateSKU(ctx context.Context, skuID int64,
 
 	var out repository.AdminSKU
 	err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+		// 规格（spec_values）由渠道管：先于写入拒掉。只在改规格、且开着渠道层时才多查。
+		if spec != nil && s.channels != nil {
+			pid, e := tx.ProductOfSKU(ctx, skuID)
+			if e != nil {
+				return e
+			}
+			managed, e := s.channels.ManagedBy(ctx, tx, []int64{pid})
+			if e != nil {
+				return e
+			}
+			if ch, ok := managed[pid]; ok {
+				return ManagedFieldError(ch, "规格")
+			}
+		}
 		p := repository.SKUPatch{
 			SKUCode:     in.SKUCode,
 			SpecValues:  spec,

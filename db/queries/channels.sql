@@ -191,6 +191,16 @@ SELECT binding_id, kind, keel_id, external_id, extra, synced_at
 DELETE FROM channel_item_links
  WHERE binding_id = @binding_id::bigint AND kind = @kind::smallint AND keel_id = @keel_id::bigint;
 
+-- name: ChannelManagedProducts :many
+-- 这批商品里由启用中的商品源管理的那些（商品级映射 kind 1），连同渠道。后台据此标「由 … 管理」并锁字段；
+-- 停用 / 凭据失效的 binding 不算（不再同步，字段放开）。挂在多个商品源上时取 binding id 最小的那个。
+SELECT DISTINCT ON (l.keel_id) l.keel_id AS product_id, b.channel
+  FROM channel_item_links l
+  JOIN channel_bindings b ON b.id = l.binding_id
+ WHERE l.kind = 1 AND l.keel_id = ANY(@product_ids::bigint[])
+   AND b.status = 1 AND (b.roles & 1) <> 0
+ ORDER BY l.keel_id, b.id;
+
 -- name: ChannelSKUsByCodes :many
 -- 按货号找 keel 的 SKU（商品源拉商品时认领同货号的已有 SKU）。删了的也列出来：uk_skus_code 不分删没删，
 -- 撞上一个删了的货号也建不出新的。

@@ -107,6 +107,12 @@
             "array"
           ]
         },
+        "managed_by": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
         "max_price_cents": {
           "type": "integer"
         },
@@ -681,6 +687,12 @@
               },
               "id": {
                 "type": "integer"
+              },
+              "managed_by": {
+                "type": [
+                  "null",
+                  "string"
+                ]
               },
               "max_price_cents": {
                 "type": "integer"

@@ -2165,8 +2165,12 @@ paths:
               schema: { $ref: '#/components/schemas/Problem' }
         '409':
           description: |
-            商品已软删，不接受修改——
-            `type` 为 `https://keel.dev/problems/product-deleted`。
+            按 Problem `type` 区分：
+
+            · 商品已软删，不接受修改——`https://keel.dev/problems/product-deleted`
+            · 改了由渠道管理的字段（`title`、`description`；见 `AdminProduct.managed_by`）——
+              `https://keel.dev/problems/managed-by-channel`，`detail` 带渠道名。
+              类目、品牌、副标题、运费模板不锁。
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
@@ -2398,6 +2402,13 @@ paths:
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
+        '409':
+          description: |
+            商品图由渠道管理（见 `AdminProduct.managed_by`）——
+            `type` 为 `https://keel.dev/problems/managed-by-channel`，`detail` 带渠道名。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
         '422':
           description: |
             按 Problem `type` 区分：
@@ -2523,8 +2534,12 @@ paths:
               schema: { $ref: '#/components/schemas/Problem' }
         '409':
           description: |
-            该租户内已有同一个 `sku_code`——
-            `type` 为 `https://keel.dev/problems/sku-code-duplicated`。
+            按 Problem `type` 区分：
+
+            · 该租户内已有同一个 `sku_code`——`https://keel.dev/problems/sku-code-duplicated`
+            · 改了由渠道管理的字段（`spec_values`；见 `AdminProduct.managed_by`）——
+              `https://keel.dev/problems/managed-by-channel`，`detail` 带渠道名。
+              价格、成本、重量、状态、货号、图不锁。
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
@@ -8932,6 +8947,14 @@ components:
         sales_count:
           type: integer
           description: 冗余字段，由订单变更时同步。不接受写入。
+        managed_by:
+          type: [string, 'null']
+          description: |
+            这件商品由哪个渠道管理（启用中的商品源渠道账号的 `channel`，如 `shopify`）。
+            非空时标题、详情、图片与 SKU 规格从渠道同步，后台改这些回 409
+            `https://keel.dev/problems/managed-by-channel`；类目、价格、库存、上下架等照常可改。
+            缺席或 null = keel 自己管（含渠道账号停用之后）。商品列表、详情与 `PATCH` 回显里给出；
+            其余写接口的回显不带。
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
 

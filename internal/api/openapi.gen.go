@@ -3179,6 +3179,13 @@ type AdminProduct struct {
 	FreightTemplateId *int64 `json:"freight_template_id,omitempty"`
 	Id                int64  `json:"id"`
 
+	// ManagedBy 这件商品由哪个渠道管理（启用中的商品源渠道账号的 `channel`，如 `shopify`）。
+	// 非空时标题、详情、图片与 SKU 规格从渠道同步，后台改这些回 409
+	// `https://keel.dev/problems/managed-by-channel`；类目、价格、库存、上下架等照常可改。
+	// 缺席或 null = keel 自己管（含渠道账号停用之后）。商品列表、详情与 `PATCH` 回显里给出；
+	// 其余写接口的回显不带。
+	ManagedBy *string `json:"managed_by,omitempty"`
+
 	// MaxPriceCents 同 `min_price_cents`，上界。
 	MaxPriceCents Money `json:"max_price_cents"`
 
@@ -3228,6 +3235,13 @@ type AdminProductDetail struct {
 
 	// Images 按展示顺序，`images[0]` 是主图。
 	Images []ProductImage `json:"images"`
+
+	// ManagedBy 这件商品由哪个渠道管理（启用中的商品源渠道账号的 `channel`，如 `shopify`）。
+	// 非空时标题、详情、图片与 SKU 规格从渠道同步，后台改这些回 409
+	// `https://keel.dev/problems/managed-by-channel`；类目、价格、库存、上下架等照常可改。
+	// 缺席或 null = keel 自己管（含渠道账号停用之后）。商品列表、详情与 `PATCH` 回显里给出；
+	// 其余写接口的回显不带。
+	ManagedBy *string `json:"managed_by,omitempty"`
 
 	// MaxPriceCents 同 `min_price_cents`，上界。
 	MaxPriceCents Money `json:"max_price_cents"`

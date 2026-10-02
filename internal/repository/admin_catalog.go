@@ -143,6 +143,10 @@ type AdminProduct struct {
 
 	// FreightTemplateID 是商品单独挂的运费模板（00055）；nil = 不单独挂。
 	FreightTemplateID *int64
+
+	// ManagedBy 是管这件商品的渠道（启用中的商品源，契约 AdminProduct.managed_by）。仓储不填：
+	// service 在列表 / 详情 / PATCH 里经 ChannelService.ManagedBy 填上；nil = keel 自己管。
+	ManagedBy *string
 }
 
 // AdminSKU 是后台视角的规格（契约 AdminSku）。

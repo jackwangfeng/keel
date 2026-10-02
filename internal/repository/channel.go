@@ -191,6 +191,8 @@ type ChannelTx interface {
 	// LockChannelMerchant 在本事务里拿这家店的渠道启停锁（提交即释放）。
 	LockChannelMerchant(ctx context.Context) error
 	ChannelSKUExists(ctx context.Context, skuID int64) (bool, error)
+	// ChannelManagedProducts：这批商品里由启用中的商品源管理的那些 → 渠道（kind）。不在结果里 = keel 自己管。
+	ChannelManagedProducts(ctx context.Context, productIDs []int64) (map[int64]string, error)
 }
 
 // channel_item_links.kind
@@ -621,6 +623,21 @@ func (t tenantTx) ChannelSKUsByCodes(ctx context.Context, codes []string) (map[s
 	}
 	for _, r := range rows {
 		out[r.SkuCode] = CodedSKU{ID: r.ID, ProductID: r.ProductID, Code: r.SkuCode, Deleted: r.Deleted}
+	}
+	return out, nil
+}
+
+func (t tenantTx) ChannelManagedProducts(ctx context.Context, productIDs []int64) (map[int64]string, error) {
+	if len(productIDs) == 0 {
+		return map[int64]string{}, nil
+	}
+	rows, err := t.q.ChannelManagedProducts(ctx, productIDs)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[int64]string, len(rows))
+	for _, r := range rows {
+		out[r.ProductID] = r.Channel
 	}
 	return out, nil
 }

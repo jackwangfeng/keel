@@ -11,6 +11,42 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const channelManagedProducts = `-- name: ChannelManagedProducts :many
+SELECT DISTINCT ON (l.keel_id) l.keel_id AS product_id, b.channel
+  FROM channel_item_links l
+  JOIN channel_bindings b ON b.id = l.binding_id
+ WHERE l.kind = 1 AND l.keel_id = ANY($1::bigint[])
+   AND b.status = 1 AND (b.roles & 1) <> 0
+ ORDER BY l.keel_id, b.id
+`
+
+type ChannelManagedProductsRow struct {
+	ProductID int64
+	Channel   string
+}
+
+// 这批商品里由启用中的商品源管理的那些（商品级映射 kind 1），连同渠道。后台据此标「由 … 管理」并锁字段；
+// 停用 / 凭据失效的 binding 不算（不再同步，字段放开）。挂在多个商品源上时取 binding id 最小的那个。
+func (q *Queries) ChannelManagedProducts(ctx context.Context, productIds []int64) ([]ChannelManagedProductsRow, error) {
+	rows, err := q.db.Query(ctx, channelManagedProducts, productIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ChannelManagedProductsRow
+	for rows.Next() {
+		var i ChannelManagedProductsRow
+		if err := rows.Scan(&i.ProductID, &i.Channel); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const channelSKUExists = `-- name: ChannelSKUExists :one
 SELECT EXISTS (SELECT 1 FROM skus WHERE id = $1::bigint AND deleted_at IS NULL)
 `

@@ -433,6 +433,24 @@ func (s *ChannelService) ListListings(ctx context.Context, bindingID int64, stor
 	return out, err
 }
 
+// ErrManagedByChannel：后台改了由渠道管理的商品字段（标题、详情、图片、SKU 规格）。→ 409 managed-by-channel，
+// 错误串里带渠道名（ManagedFieldError）。
+var ErrManagedByChannel = errors.New("这个字段由渠道管理")
+
+// ManagedFieldError 是「field 由 channel 管理」的 ErrManagedByChannel。
+func ManagedFieldError(channel, field string) error {
+	return fmt.Errorf("%w：%s由 %s 同步，请在 %s 后台修改（价格、库存、类目仍在这里改）", ErrManagedByChannel, field, channel, channel)
+}
+
+// ManagedBy：这批商品里由启用中的商品源管理的那些 → 渠道。在调用方的事务里读（与随后的写同一个快照）。
+// nil 接收者（KEEL_CHANNELS 关闭）返回空、不查库。
+func (s *ChannelService) ManagedBy(ctx context.Context, tx repository.Tx, productIDs []int64) (map[int64]string, error) {
+	if s == nil || len(productIDs) == 0 {
+		return nil, nil
+	}
+	return tx.ChannelManagedProducts(ctx, productIDs)
+}
+
 // ErrChannelNotCatalogSource：要从一个不是启用中商品源的 binding 拉商品（409）。
 var ErrChannelNotCatalogSource = errors.New("这个渠道账号不是启用中的商品源，没有可拉的商品")
 
