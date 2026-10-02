@@ -83,6 +83,9 @@ func TestChannelManagedProductFields(t *testing.T) {
 		}
 		ok(t, http.MethodPatch, skuPath, `{"price_cents":3500}`, "PATCH sku price_cents")
 		ok(t, http.MethodPatch, skuPath, `{"weight_gram":200,"status":1}`, "PATCH sku weight/status")
+		// 原样回传当前值（AI 员工 / MCP 发整份请求体）不算改：放行。
+		ok(t, http.MethodPatch, prod, `{"title":"Shopify 帽子","description":"<p>毛线</p>","subtitle":"整份回传"}`, "PATCH 原样回传 title/description")
+		ok(t, http.MethodPatch, skuPath, `{"spec_values":{"颜色":"黑"},"price_cents":3600}`, "PATCH sku 原样回传 spec_values")
 	})
 
 	t.Run("详情与列表标出_自建商品不标", func(t *testing.T) {

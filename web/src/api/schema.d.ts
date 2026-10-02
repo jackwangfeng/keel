@@ -4406,7 +4406,7 @@ export interface paths {
                  *
                  *     · 商品已软删，不接受修改——`https://keel.dev/problems/product-deleted`
                  *     · 改了由渠道管理的字段（`title`、`description`；见 `AdminProduct.managed_by`）——
-                 *       `https://keel.dev/problems/managed-by-channel`，`detail` 带渠道名。
+                 *       `https://keel.dev/problems/managed-by-channel`，`detail` 带渠道名。只在值真变了时拒：原样回传当前值照常放行。
                  *       类目、品牌、副标题、运费模板不锁。
                  */
                 409: {
@@ -5121,7 +5121,7 @@ export interface paths {
                  *
                  *     · 该租户内已有同一个 `sku_code`——`https://keel.dev/problems/sku-code-duplicated`
                  *     · 改了由渠道管理的字段（`spec_values`；见 `AdminProduct.managed_by`）——
-                 *       `https://keel.dev/problems/managed-by-channel`，`detail` 带渠道名。
+                 *       `https://keel.dev/problems/managed-by-channel`，`detail` 带渠道名。只在值真变了时拒：原样回传当前值照常放行。
                  *       价格、成本、重量、状态、货号、图不锁。
                  */
                 409: {

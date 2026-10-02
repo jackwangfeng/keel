@@ -327,7 +327,18 @@ func (s *AdminCatalogService) UpdateProduct(ctx context.Context, id int64,
 			return e
 		}
 		if ch, ok := managed[id]; ok && (p.Title != nil || p.Description != nil) {
-			return ManagedFieldError(ch, "标题与详情")
+			// 值真变了才拒：原样回传当前值（AI 员工、MCP 工具常发整份请求体）照常放行。
+			cur, e := tx.AdminFindProduct(ctx, id)
+			if e != nil {
+				return e
+			}
+			curDesc := ""
+			if cur.Description != nil {
+				curDesc = *cur.Description
+			}
+			if (p.Title != nil && *p.Title != cur.Title) || (p.Description != nil && *p.Description != curDesc) {
+				return ManagedFieldError(ch, "标题与详情")
+			}
 		}
 		if p.SetFreightTemplateID {
 			if e := lockFreightTemplateForLink(ctx, tx, p.FreightTemplateID); e != nil {
@@ -684,7 +695,15 @@ func (s *AdminCatalogService) UpdateSKU(ctx context.Context, skuID int64,
 				return e
 			}
 			if ch, ok := managed[pid]; ok {
-				return ManagedFieldError(ch, "规格")
+				cur, e := tx.AdminFindSKU(ctx, skuID)
+				if e != nil {
+					return e
+				}
+				var want map[string]string
+				_ = json.Unmarshal(spec, &want)
+				if !sameSpec(cur.SpecValues, want) { // 值真变了才拒，同标题那一条
+					return ManagedFieldError(ch, "规格")
+				}
 			}
 		}
 		p := repository.SKUPatch{
