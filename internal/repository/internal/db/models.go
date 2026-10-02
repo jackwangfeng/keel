@@ -430,6 +430,17 @@ type ChannelListing struct {
 	LastError      *string
 }
 
+type ChannelListingZeroSpan struct {
+	ID         int64
+	MerchantID int64
+	BindingID  int64
+	StoreID    int64
+	SkuID      int64
+	Held       bool
+	StartedAt  pgtype.Timestamptz
+	EndedAt    pgtype.Timestamptz
+}
+
 type ChannelMerchant struct {
 	MerchantID int64
 	Enabled    bool

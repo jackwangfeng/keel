@@ -110,6 +110,47 @@ RETURNING version;
 UPDATE channel_listings SET last_error = @last_error::text
  WHERE binding_id = @binding_id::bigint AND store_id = @store_id::bigint AND sku_id = @sku_id::bigint;
 
+-- name: CloseChannelZeroSpan :exec
+-- 关掉这个格子还挂着的那段挂零时段。only_held_not 非空时只关 held 与它不同的那段（挂零但 held 变了：关旧开新）。
+-- GREATEST：时钟回拨也不违反 ended_at >= started_at。
+UPDATE channel_listing_zero_spans SET ended_at = GREATEST(@at::timestamptz, started_at)
+ WHERE binding_id = @binding_id::bigint AND store_id = @store_id::bigint AND sku_id = @sku_id::bigint
+   AND ended_at IS NULL
+   AND (sqlc.narg(only_held_not)::boolean IS NULL OR held <> sqlc.narg(only_held_not)::boolean);
+
+-- name: OpenChannelZeroSpan :exec
+-- 开一段挂零时段；已有一段还挂着（held 相同）时什么都不做：撞上部分唯一索引 uk_channel_listing_zero_spans_open
+-- 就不插（表上唯一的另一条唯一约束是自增主键），并发的两次开段也只留一段。
+INSERT INTO channel_listing_zero_spans (binding_id, store_id, sku_id, held, started_at)
+VALUES (@binding_id::bigint, @store_id::bigint, @sku_id::bigint, @held::boolean, @at::timestamptz)
+ON CONFLICT DO NOTHING;
+
+-- name: OpenChannelZeroSpansHeld :many
+-- 这个 binding 在这家门店这批 SKU 上还挂着的挂零时段的 held（重算时判断「一直是 0 但 held 变了」）。
+SELECT sku_id, held FROM channel_listing_zero_spans
+ WHERE binding_id = @binding_id::bigint AND store_id = @store_id::bigint AND sku_id = ANY(@sku_ids::bigint[])
+   AND ended_at IS NULL;
+
+-- name: SumChannelZeroHours :many
+-- 挂零时段与 [from, to) 的交集小时数，按 (binding, 门店, SKU) 分 held / 非 held 汇总；还挂着的段截到 to。
+SELECT binding_id, store_id, sku_id,
+       (COALESCE(SUM(EXTRACT(EPOCH FROM LEAST(COALESCE(ended_at, @to_at::timestamptz), @to_at::timestamptz)
+                                     - GREATEST(started_at, @from_at::timestamptz))) FILTER (WHERE held), 0) / 3600)::float8 AS held_hours,
+       (COALESCE(SUM(EXTRACT(EPOCH FROM LEAST(COALESCE(ended_at, @to_at::timestamptz), @to_at::timestamptz)
+                                     - GREATEST(started_at, @from_at::timestamptz))) FILTER (WHERE NOT held), 0) / 3600)::float8 AS empty_hours
+  FROM channel_listing_zero_spans
+ WHERE store_id = @store_id::bigint AND sku_id = ANY(@sku_ids::bigint[])
+   AND started_at < @to_at::timestamptz AND (ended_at IS NULL OR ended_at > @from_at::timestamptz)
+ GROUP BY binding_id, store_id, sku_id
+ ORDER BY binding_id, sku_id;
+
+-- name: PurgeChannelZeroSpans :execrows
+-- 保留期清理：删掉 before 之前就结束了的段，一次至多 lim 条（有界 DELETE，同 PurgeExpiredNotifications）。
+DELETE FROM channel_listing_zero_spans
+ WHERE id IN (SELECT id FROM channel_listing_zero_spans
+               WHERE ended_at < @before::timestamptz
+               LIMIT @lim::int);
+
 -- name: ListChannelListingsPage :many
 -- 后台的推送状态：带 SKU 货号与商品名（删了的 SKU 也照列，行还在就说明推过）；errors_only 只看出错的。
 SELECT l.binding_id, l.store_id, l.sku_id, l.published_qty, l.published_cents, l.version, l.pushed_at, l.last_error,

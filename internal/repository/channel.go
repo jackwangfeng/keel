@@ -173,6 +173,16 @@ type ChannelTx interface {
 	RecordChannelListing(ctx context.Context, l ChannelListing) (int64, error)
 	SetChannelListingError(ctx context.Context, bindingID, storeID, skuID int64, msg string) error
 	ListChannelListingsPage(ctx context.Context, bindingID int64, storeID *int64, errorsOnly bool, limit, offset int32) ([]ChannelListing, error)
+	// RecordChannelListingZero 在推送成功回写 channel_listings 的同一事务里记挂零时段（00330）：newQty > 0 关掉还挂着的段；
+	// newQty == 0 时有一段还挂着且 held 相同不动、held 不同关旧开新、没有就开一段。prevQty 是上次推送值（nil = 第一次推），
+	// 只供调用方记录，判断只看还挂着的那段。
+	RecordChannelListingZero(ctx context.Context, bindingID, storeID, skuID int64, prevQty *int32, newQty int32, held bool, at time.Time) error
+	// OpenChannelZeroHeld：这个 binding 在这家门店这批 SKU 上还挂着的挂零时段 → held。不在结果里 = 没有挂着的段。
+	OpenChannelZeroHeld(ctx context.Context, bindingID, storeID int64, skuIDs []int64) (map[int64]bool, error)
+	// ChannelZeroHours：挂零时段与 [from, to) 的交集小时数（还挂着的段截到 to），按 (binding, 门店, SKU) 汇总；没挂过零的格子不在结果里。
+	ChannelZeroHours(ctx context.Context, storeID int64, skuIDs []int64, from, to time.Time) ([]ChannelZeroHours, error)
+	// PurgeChannelZeroSpans 删 before 之前结束的挂零时段，一次至多 limit 条。
+	PurgeChannelZeroSpans(ctx context.Context, before time.Time, limit int) (int64, error)
 
 	// InsertChannelInboundEvent：重复的外部事件 ID 返回 inserted=false、不报错。
 	InsertChannelInboundEvent(ctx context.Context, in ChannelInboundEventInput) (id int64, inserted bool, err error)
@@ -491,6 +501,61 @@ func (t tenantTx) RecordChannelListing(ctx context.Context, l ChannelListing) (i
 		BindingID: l.BindingID, StoreID: l.StoreID, SkuID: l.SKUID, PublishedQty: l.PublishedQty, PublishedCents: l.PublishedCents,
 	})
 	return v, channelWriteErr(err)
+}
+
+// ChannelZeroHours 是一个格子在窗口里挂零的小时数：HeldHours = keel 有货但规则算 0，EmptyHours = keel 自己没货。
+type ChannelZeroHours struct {
+	BindingID, StoreID, SKUID int64
+	HeldHours, EmptyHours     float64
+}
+
+func (t tenantTx) RecordChannelListingZero(ctx context.Context, bindingID, storeID, skuID int64, _ *int32, newQty int32, held bool, at time.Time) error {
+	cl := db.CloseChannelZeroSpanParams{At: pgtype.Timestamptz{Time: at, Valid: true}, BindingID: bindingID, StoreID: storeID, SkuID: skuID}
+	if newQty > 0 {
+		return t.q.CloseChannelZeroSpan(ctx, cl)
+	}
+	cl.OnlyHeldNot = &held
+	if err := t.q.CloseChannelZeroSpan(ctx, cl); err != nil {
+		return err
+	}
+	return channelWriteErr(t.q.OpenChannelZeroSpan(ctx, db.OpenChannelZeroSpanParams{BindingID: bindingID, StoreID: storeID,
+		SkuID: skuID, Held: held, At: pgtype.Timestamptz{Time: at, Valid: true}}))
+}
+
+func (t tenantTx) OpenChannelZeroHeld(ctx context.Context, bindingID, storeID int64, skuIDs []int64) (map[int64]bool, error) {
+	rows, err := t.q.OpenChannelZeroSpansHeld(ctx, db.OpenChannelZeroSpansHeldParams{BindingID: bindingID, StoreID: storeID, SkuIds: skuIDs})
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[int64]bool, len(rows))
+	for _, r := range rows {
+		out[r.SkuID] = r.Held
+	}
+	return out, nil
+}
+
+func (t tenantTx) ChannelZeroHours(ctx context.Context, storeID int64, skuIDs []int64, from, to time.Time) ([]ChannelZeroHours, error) {
+	if len(skuIDs) == 0 || !to.After(from) {
+		return nil, nil
+	}
+	rows, err := t.q.SumChannelZeroHours(ctx, db.SumChannelZeroHoursParams{StoreID: storeID, SkuIds: skuIDs,
+		FromAt: pgtype.Timestamptz{Time: from, Valid: true}, ToAt: pgtype.Timestamptz{Time: to, Valid: true}})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ChannelZeroHours, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, ChannelZeroHours{BindingID: r.BindingID, StoreID: r.StoreID, SKUID: r.SkuID,
+			HeldHours: r.HeldHours, EmptyHours: r.EmptyHours})
+	}
+	return out, nil
+}
+
+func (t tenantTx) PurgeChannelZeroSpans(ctx context.Context, before time.Time, limit int) (int64, error) {
+	if limit <= 0 {
+		return 0, nil
+	}
+	return t.q.PurgeChannelZeroSpans(ctx, db.PurgeChannelZeroSpansParams{Before: pgtype.Timestamptz{Time: before, Valid: true}, Lim: int32(limit)})
 }
 
 func (t tenantTx) SetChannelListingError(ctx context.Context, bindingID, storeID, skuID int64, msg string) error {

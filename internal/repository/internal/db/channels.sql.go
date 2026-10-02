@@ -276,6 +276,34 @@ func (q *Queries) ChannelSyncRev(ctx context.Context) (int64, error) {
 	return rev, err
 }
 
+const closeChannelZeroSpan = `-- name: CloseChannelZeroSpan :exec
+UPDATE channel_listing_zero_spans SET ended_at = GREATEST($1::timestamptz, started_at)
+ WHERE binding_id = $2::bigint AND store_id = $3::bigint AND sku_id = $4::bigint
+   AND ended_at IS NULL
+   AND ($5::boolean IS NULL OR held <> $5::boolean)
+`
+
+type CloseChannelZeroSpanParams struct {
+	At          pgtype.Timestamptz
+	BindingID   int64
+	StoreID     int64
+	SkuID       int64
+	OnlyHeldNot *bool
+}
+
+// 关掉这个格子还挂着的那段挂零时段。only_held_not 非空时只关 held 与它不同的那段（挂零但 held 变了：关旧开新）。
+// GREATEST：时钟回拨也不违反 ended_at >= started_at。
+func (q *Queries) CloseChannelZeroSpan(ctx context.Context, arg CloseChannelZeroSpanParams) error {
+	_, err := q.db.Exec(ctx, closeChannelZeroSpan,
+		arg.At,
+		arg.BindingID,
+		arg.StoreID,
+		arg.SkuID,
+		arg.OnlyHeldNot,
+	)
+	return err
+}
+
 const countActiveOutletBindings = `-- name: CountActiveOutletBindings :one
 SELECT count(*) FROM channel_bindings WHERE status = 1 AND (roles & 4) <> 0
 `
@@ -1868,6 +1896,92 @@ func (q *Queries) MarkChannelInboundEvent(ctx context.Context, arg MarkChannelIn
 	return err
 }
 
+const openChannelZeroSpan = `-- name: OpenChannelZeroSpan :exec
+INSERT INTO channel_listing_zero_spans (binding_id, store_id, sku_id, held, started_at)
+VALUES ($1::bigint, $2::bigint, $3::bigint, $4::boolean, $5::timestamptz)
+ON CONFLICT DO NOTHING
+`
+
+type OpenChannelZeroSpanParams struct {
+	BindingID int64
+	StoreID   int64
+	SkuID     int64
+	Held      bool
+	At        pgtype.Timestamptz
+}
+
+// 开一段挂零时段；已有一段还挂着（held 相同）时什么都不做：撞上部分唯一索引 uk_channel_listing_zero_spans_open
+// 就不插（表上唯一的另一条唯一约束是自增主键），并发的两次开段也只留一段。
+func (q *Queries) OpenChannelZeroSpan(ctx context.Context, arg OpenChannelZeroSpanParams) error {
+	_, err := q.db.Exec(ctx, openChannelZeroSpan,
+		arg.BindingID,
+		arg.StoreID,
+		arg.SkuID,
+		arg.Held,
+		arg.At,
+	)
+	return err
+}
+
+const openChannelZeroSpansHeld = `-- name: OpenChannelZeroSpansHeld :many
+SELECT sku_id, held FROM channel_listing_zero_spans
+ WHERE binding_id = $1::bigint AND store_id = $2::bigint AND sku_id = ANY($3::bigint[])
+   AND ended_at IS NULL
+`
+
+type OpenChannelZeroSpansHeldParams struct {
+	BindingID int64
+	StoreID   int64
+	SkuIds    []int64
+}
+
+type OpenChannelZeroSpansHeldRow struct {
+	SkuID int64
+	Held  bool
+}
+
+// 这个 binding 在这家门店这批 SKU 上还挂着的挂零时段的 held（重算时判断「一直是 0 但 held 变了」）。
+func (q *Queries) OpenChannelZeroSpansHeld(ctx context.Context, arg OpenChannelZeroSpansHeldParams) ([]OpenChannelZeroSpansHeldRow, error) {
+	rows, err := q.db.Query(ctx, openChannelZeroSpansHeld, arg.BindingID, arg.StoreID, arg.SkuIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []OpenChannelZeroSpansHeldRow
+	for rows.Next() {
+		var i OpenChannelZeroSpansHeldRow
+		if err := rows.Scan(&i.SkuID, &i.Held); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const purgeChannelZeroSpans = `-- name: PurgeChannelZeroSpans :execrows
+DELETE FROM channel_listing_zero_spans
+ WHERE id IN (SELECT id FROM channel_listing_zero_spans
+               WHERE ended_at < $1::timestamptz
+               LIMIT $2::int)
+`
+
+type PurgeChannelZeroSpansParams struct {
+	Before pgtype.Timestamptz
+	Lim    int32
+}
+
+// 保留期清理：删掉 before 之前就结束了的段，一次至多 lim 条（有界 DELETE，同 PurgeExpiredNotifications）。
+func (q *Queries) PurgeChannelZeroSpans(ctx context.Context, arg PurgeChannelZeroSpansParams) (int64, error) {
+	result, err := q.db.Exec(ctx, purgeChannelZeroSpans, arg.Before, arg.Lim)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const setChannelBindingSecrets = `-- name: SetChannelBindingSecrets :execrows
 UPDATE channel_bindings SET secrets = $1::jsonb WHERE id = $2::bigint
 `
@@ -1947,6 +2061,66 @@ func (q *Queries) SetChannelOrderState(ctx context.Context, arg SetChannelOrderS
 		arg.ID,
 	)
 	return err
+}
+
+const sumChannelZeroHours = `-- name: SumChannelZeroHours :many
+SELECT binding_id, store_id, sku_id,
+       (COALESCE(SUM(EXTRACT(EPOCH FROM LEAST(COALESCE(ended_at, $1::timestamptz), $1::timestamptz)
+                                     - GREATEST(started_at, $2::timestamptz))) FILTER (WHERE held), 0) / 3600)::float8 AS held_hours,
+       (COALESCE(SUM(EXTRACT(EPOCH FROM LEAST(COALESCE(ended_at, $1::timestamptz), $1::timestamptz)
+                                     - GREATEST(started_at, $2::timestamptz))) FILTER (WHERE NOT held), 0) / 3600)::float8 AS empty_hours
+  FROM channel_listing_zero_spans
+ WHERE store_id = $3::bigint AND sku_id = ANY($4::bigint[])
+   AND started_at < $1::timestamptz AND (ended_at IS NULL OR ended_at > $2::timestamptz)
+ GROUP BY binding_id, store_id, sku_id
+ ORDER BY binding_id, sku_id
+`
+
+type SumChannelZeroHoursParams struct {
+	ToAt    pgtype.Timestamptz
+	FromAt  pgtype.Timestamptz
+	StoreID int64
+	SkuIds  []int64
+}
+
+type SumChannelZeroHoursRow struct {
+	BindingID  int64
+	StoreID    int64
+	SkuID      int64
+	HeldHours  float64
+	EmptyHours float64
+}
+
+// 挂零时段与 [from, to) 的交集小时数，按 (binding, 门店, SKU) 分 held / 非 held 汇总；还挂着的段截到 to。
+func (q *Queries) SumChannelZeroHours(ctx context.Context, arg SumChannelZeroHoursParams) ([]SumChannelZeroHoursRow, error) {
+	rows, err := q.db.Query(ctx, sumChannelZeroHours,
+		arg.ToAt,
+		arg.FromAt,
+		arg.StoreID,
+		arg.SkuIds,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SumChannelZeroHoursRow
+	for rows.Next() {
+		var i SumChannelZeroHoursRow
+		if err := rows.Scan(
+			&i.BindingID,
+			&i.StoreID,
+			&i.SkuID,
+			&i.HeldHours,
+			&i.EmptyHours,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const touchChannelOrderPayload = `-- name: TouchChannelOrderPayload :exec
