@@ -197,7 +197,7 @@ async function submitReject(): Promise<void> {
                         </template>
                         <template v-if="row.executed_at">
                             <h4>执行后复盘</h4>
-                            <ProposalOutcomeView :outcome="row.outcome" :executed-at="row.executed_at" :outcome-at="row.outcome_at" />
+                            <ProposalOutcomeView :kind="row.kind" :outcome="row.outcome" :executed-at="row.executed_at" :outcome-at="row.outcome_at" />
                         </template>
                         <template v-if="row.status === 30">
                             <h4>驳回理由</h4>
@@ -280,7 +280,7 @@ async function submitReject(): Promise<void> {
                     </template>
                     <template v-if="row.executed_at">
                         <h4>执行后复盘</h4>
-                        <ProposalOutcomeView :outcome="row.outcome" :executed-at="row.executed_at" :outcome-at="row.outcome_at" />
+                        <ProposalOutcomeView :kind="row.kind" :outcome="row.outcome" :executed-at="row.executed_at" :outcome-at="row.outcome_at" />
                     </template>
                     <template v-if="row.status === 30">
                         <h4>驳回理由</h4>

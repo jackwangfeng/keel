@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
     KIND_LABEL,
     VERDICT,
+    channelStockRulePayload,
     couponPayload,
     describeOutcome,
     describeResult,
@@ -115,6 +116,37 @@ test("售后审核 payload：同意 / 驳回", () => {
     assert.equal(rejected.amountText, "¥2");
 });
 
+test("调渠道分配 payload：门店级 / SKU 级改动、旧规则→新规则、试算前后可售", () => {
+    const v = channelStockRulePayload({
+        binding_id: 5,
+        binding_name: "美团外卖",
+        store_id: 3,
+        store_name: "示例小店",
+        changes: [
+            { sku_id: 12, ratio_bp: 9000, safety_qty: 2, prev: { ratio_bp: 8000, safety_qty: 5, level: "sku" } },
+            { ratio_bp: 7000, safety_qty: 3, cap_qty: 50, prev: { ratio_bp: 6000, safety_qty: 3, level: "store" } },
+        ],
+        preview: [{ sku_id: 12, available: 20, before_qty: 16, after_qty: 18 }],
+    });
+    assert.equal(v.bindingText, "美团外卖");
+    assert.equal(v.storeText, "示例小店");
+    assert.equal(v.changes[0]?.cellText, "SKU #12");
+    assert.equal(v.changes[0]?.prevText, "比例 80% · 安全库存 5 件 · 不封顶");
+    assert.equal(v.changes[0]?.nextText, "比例 90% · 安全库存 2 件 · 不封顶");
+    assert.equal(v.changes[1]?.cellText, "门店级");
+    assert.equal(v.changes[1]?.nextText, "比例 70% · 安全库存 3 件 · 封顶 50");
+    assert.equal(v.preview[0]?.skuText, "SKU #12");
+    assert.equal(v.preview[0]?.beforeText, "16 件");
+    assert.equal(v.preview[0]?.afterText, "18 件");
+});
+
+test("调渠道分配 payload：缺字段 / 没有 binding_name 时退到 id 或 —", () => {
+    const v = channelStockRulePayload({ binding_id: 5, store_id: 3, changes: [], preview: [] });
+    assert.equal(v.bindingText, "渠道 #5");
+    assert.equal(v.storeText, "门店 #3");
+    assert.equal(channelStockRulePayload({}).bindingText, "—");
+});
+
 test("结果：加库存是 before/after，不落进 lines", () => {
     const v = describeResult("inventory_adjust", { before_available: 10, after_available: 50 });
     assert.deepEqual(v.beforeAfter, { before: 10, after: 50 });
@@ -134,6 +166,11 @@ test("结果：M10 各种类落进 detail.xxx_id，给列表页入口", () => {
 
     const refund = describeResult("refund_decision", { detail: { refund_no: "RF9", refund_status: 40 } });
     assert.match(refund.lines[0]?.value ?? "", /RF9/);
+
+    const channelRule = describeResult("channel_stock_rule", { detail: { binding_id: 5, store_id: 3, applied: 2, already: 1 } });
+    assert.equal(channelRule.lines[0]?.value, "2 格（另有 1 格本来就是目标值）");
+    const channelRuleNoAlready = describeResult("channel_stock_rule", { detail: { binding_id: 5, store_id: 3, applied: 2, already: 0 } });
+    assert.equal(channelRuleNoAlready.lines[0]?.value, "2 格");
 });
 
 test("结果：失败态不落进 lines，走 failure", () => {
@@ -148,7 +185,7 @@ test("结果：还没有 result 时给空", () => {
 });
 
 test("复盘：verdict + explanation + 认识的指标", () => {
-    const o = describeOutcome({ verdict: "positive", explanation: "补货后没断货", sold_qty: 12, stockout_days: 0, delta_qty: 40 });
+    const o = describeOutcome("inventory_adjust", { verdict: "positive", explanation: "补货后没断货", sold_qty: 12, stockout_days: 0, delta_qty: 40 });
     assert.equal(o.verdict, "positive");
     assert.equal(o.explanation, "补货后没断货");
     assert.deepEqual(o.metrics, [
@@ -156,10 +193,11 @@ test("复盘：verdict + explanation + 认识的指标", () => {
         { label: "断货天数", value: "0 天" },
         { label: "补货件数", value: "40 件" },
     ]);
+    assert.deepEqual(o.cells, []);
 });
 
 test("复盘：核销率格式化成百分比、销售额格式化成元", () => {
-    const o = describeOutcome({ verdict: "neutral", use_rate: 0.256, amount_during_cents: 123456 });
+    const o = describeOutcome("coupon", { verdict: "neutral", use_rate: 0.256, amount_during_cents: 123456 });
     assert.deepEqual(o.metrics, [
         { label: "期间销售额", value: "¥1234.56" },
         { label: "核销率", value: "25.6%" },
@@ -167,7 +205,48 @@ test("复盘：核销率格式化成百分比、销售额格式化成元", () =>
 });
 
 test("复盘：还没到点（没有 outcome）时给空", () => {
-    assert.deepEqual(describeOutcome(undefined), { metrics: [] });
+    assert.deepEqual(describeOutcome("coupon", undefined), { metrics: [], cells: [] });
+});
+
+test("复盘：调渠道分配走逐格对比，不走通用指标列表", () => {
+    const o = describeOutcome("channel_stock_rule", {
+        verdict: "negative",
+        explanation: "SKU 12 的缺货拒单从 0 件增加到 3 件",
+        window_start: "2026-09-26T00:00:00Z",
+        window_end: "2026-10-03T00:00:00Z",
+        comparison_start: "2026-09-19T00:00:00Z",
+        cells: [
+            {
+                binding_id: 5,
+                store_id: 3,
+                sku_id: 12,
+                direction: "up",
+                before: { held_zero_hours: 40, empty_zero_hours: 0, stockout_rejects: 0, sold: 30, net_cents: 12000 },
+                after: { held_zero_hours: 5, empty_zero_hours: 0, stockout_rejects: 3, sold: 45, net_cents: 18000 },
+            },
+            {
+                binding_id: 5,
+                store_id: 3,
+                sku_id: 13,
+                direction: "same",
+                before: { held_zero_hours: 0, empty_zero_hours: 60, stockout_rejects: 0, sold: 10, net_cents: 4000 },
+                after: { held_zero_hours: 0, empty_zero_hours: 60, stockout_rejects: 0, sold: 10, net_cents: 4000 },
+                excluded_reason: "窗口里 keel 自己断货超过 2 天：缺的是货，不是分配",
+            },
+        ],
+    });
+    assert.equal(o.verdict, "negative");
+    assert.deepEqual(o.metrics, []);
+    assert.equal(o.cells.length, 2);
+    assert.equal(o.cells[0]?.skuText, "SKU #12");
+    assert.equal(o.cells[0]?.directionText, "上调");
+    assert.equal(o.cells[0]?.heldZeroText, "40 小时 → 5 小时");
+    assert.equal(o.cells[0]?.rejectsText, "0 → 3");
+    assert.equal(o.cells[0]?.soldText, "30 → 45");
+    assert.equal(o.cells[0]?.netText, "¥120 → ¥180");
+    assert.equal(o.cells[0]?.excludedReason, undefined);
+    assert.equal(o.cells[1]?.directionText, "不变");
+    assert.equal(o.cells[1]?.excludedReason, "窗口里 keel 自己断货超过 2 天：缺的是货，不是分配");
 });
 
 test("安全除法百分比：分母为 0 给 —，不给 0% / NaN", () => {

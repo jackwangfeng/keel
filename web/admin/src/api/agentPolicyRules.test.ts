@@ -13,15 +13,16 @@ import {
 
 const base = { enabled: true, max_units: 0, min_discount_rate: 0, max_discount_cents: 0, daily_limit: 0 };
 
-test("四种可自动执行的种类，固定顺序", () => {
-    assert.deepEqual(AUTO_POLICY_KINDS, ["inventory_adjust", "flash_price", "coupon", "product_copy"]);
+test("五种可自动执行的种类，固定顺序", () => {
+    assert.deepEqual(AUTO_POLICY_KINDS, ["inventory_adjust", "flash_price", "coupon", "product_copy", "channel_stock_rule"]);
 });
 
-test("单笔上限字段按种类：加库存件数 / 折扣不低于 / 券面额封顶 / 改文案没有", () => {
+test("单笔上限字段按种类：加库存件数 / 折扣不低于 / 券面额封顶 / 改文案没有 / 调渠道分配比例步长", () => {
     assert.equal(capFieldOf("inventory_adjust"), "max_units");
     assert.equal(capFieldOf("flash_price"), "min_discount_rate");
     assert.equal(capFieldOf("coupon"), "max_discount_cents");
     assert.equal(capFieldOf("product_copy"), null);
+    assert.equal(capFieldOf("channel_stock_rule"), "max_ratio_step_bp");
 });
 
 test("单笔上限文案", () => {
@@ -29,6 +30,8 @@ test("单笔上限文案", () => {
     assert.equal(capLabel("flash_price", { ...base, min_discount_rate: 850 }), "折扣不低于 8.5 折");
     assert.equal(capLabel("coupon", { ...base, max_discount_cents: 5000 }), "面额不超过 ¥50");
     assert.equal(capLabel("product_copy", base), "没有单笔上限");
+    assert.equal(capLabel("channel_stock_rule", { ...base, max_ratio_step_bp: 500 }), "单次比例变化至多 5 个百分点");
+    assert.equal(capLabel("channel_stock_rule", { ...base, max_ratio_step_bp: 0 }), "0（不自动执行）");
 });
 
 test("条数上限：0 = 不自动执行", () => {
@@ -49,6 +52,12 @@ test("解析单笔上限输入：件数、折扣（不低于五折）、面额",
     assert.equal(parseCap("coupon", "0").ok, false);
 
     assert.equal(parseCap("product_copy", "1").ok, false);
+
+    assert.deepEqual(parseCap("channel_stock_rule", "5"), { ok: true, value: 500 });
+    assert.deepEqual(parseCap("channel_stock_rule", "5.5"), { ok: true, value: 550 });
+    assert.deepEqual(parseCap("channel_stock_rule", "0"), { ok: true, value: 0 }, "0 对这一种是合法值：不自动执行");
+    assert.equal(parseCap("channel_stock_rule", "100.01").ok, false);
+    assert.equal(parseCap("channel_stock_rule", "-1").ok, false);
 });
 
 test("回显与解析互逆", () => {
@@ -58,6 +67,8 @@ test("回显与解析互逆", () => {
     assert.equal(capInputText("flash_price", p2), "8.5");
     const p3 = withCap("coupon", base, 5000);
     assert.equal(capInputText("coupon", p3), "50");
+    const p4 = withCap("channel_stock_rule", base, 550);
+    assert.equal(capInputText("channel_stock_rule", p4), "5.5");
 });
 
 test("withCap 只改相关字段，其余原样保留", () => {
