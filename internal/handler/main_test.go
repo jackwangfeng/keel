@@ -140,13 +140,14 @@ func setup(ctx context.Context) error {
 	branches["test_always_fail_undo"] = func(string, string, string) int { return dtm.Success }
 
 	// 活动配额同步：回查 + 接收（库存在进程内，回源是进程内实现）。
-	testQuotaSync = service.NewQuotaSync(repository.New(pool), dtm.BranchResolver{})
+	testQuotaSync = service.NewQuotaSync(repository.New(pool), dtm.BranchResolver{}, dtm.BranchResolver{})
+	exBranches := app.InventoryBranches(invLocal)
 	for name, fn := range app.QuotaSyncBranches(testQuotaSync, invLocal, service.NewPromotionQuotaSource(repository.New(pool))) {
-		branches[name] = fn
+		exBranches[name] = fn
 	}
 
-	// 库存的两个分支（带载荷）与单体一样注册在进程内（app.InventoryBranches）。
-	tc, err := dtm.StartEx("sqlite:"+filepath.Join(dtmDir, "dtm.db"), 0, branches, app.InventoryBranches(invLocal))
+	// 库存的两个分支（带载荷）与配额同步（载荷带定义）与单体一样注册在进程内。
+	tc, err := dtm.StartEx("sqlite:"+filepath.Join(dtmDir, "dtm.db"), 0, branches, exBranches)
 	if err != nil {
 		return fmt.Errorf("起协调器失败: %w", err)
 	}

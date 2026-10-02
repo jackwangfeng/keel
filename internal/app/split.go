@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -42,18 +41,9 @@ const (
 	EnvInventoryURL           = rpc.EnvInventoryURL
 )
 
-// EnvCoreURL 是库存服务找 core 内网端口的地址（如 http://app:8091），只在 KEEL_ROLE=inventory 时用，两件事：
-//
-//   - 可售数跨过 0 时，库存进程自己的协调器把二阶段消息投递到 <它>/internal/v1/saga/stock_changed
-//     （inventory 包 stock_msg.go、service/stock_flags.go）。所以配了它就必须同时配 KEEL_DTM_DSN（库存进程的
-//     协调器存储）；
-//   - 活动配额同步消息（core 发、库存收）的接收分支经它回源读 core 的配额定义（inventory 包 activity_msg.go）。
-//
-// 不配：库存服务不发跨 0 通知（有货排序只靠 core 的低频全量刷新），配额同步消息读不到定义、一直重试
-// （活动上线那一刻 core 仍会直接同步配额，上线的活动不受影响）。
-//
-// 它让「inventory 不回调 core」那条边界（拆分方案「服务边界」）多了一个例外，但只是一个方向很窄的例外：
-// 库存服务从不**等** core —— 投递是协调器异步做的、带重试，core 不在时库存照常扣减，通知晚到而已。
+// EnvCoreURL 已停用（2026-10-02，docs/电商系统-微服务部署方案.md 4.1）：库存服务不再知道 core。跨 0 通知发到主题
+// （inventory.TopicStockZeroCrossing），由 core 在独立部署的协调器上订阅；配额同步的定义与版本随消息带来，不回 core 读。
+// 配了就拒绝启动（validate），免得旧部署以为它还在起作用。
 const EnvCoreURL = "KEEL_CORE_URL"
 
 // Role 是本进程在部署里扮演的角色。**同一个二进制**，靠它决定起哪些东西。
@@ -64,8 +54,8 @@ const EnvCoreURL = "KEEL_CORE_URL"
 //	             在阶段 1b 之前仍在进程内。
 //	inventory    拆分形态里的库存服务。只起内网服务（KEEL_INTERNAL_ADDR）：
 //	             /healthz、/version、/readyz 与 /internal/v1/...；
-//	             不挂任何公网业务路由，不跑任何后台任务。下单 SAGA 的协调器在 core，库存分支是被它
-//	             远程调用的一方；配了 KEEL_CORE_URL 时另起一个**只发跨 0 通知**的协调器（EnvCoreURL）。
+//	             不挂任何公网业务路由，不跑任何后台任务。下单 SAGA 由独立部署的协调器推进，库存分支是被它
+//	             远程调用的一方；跨 0 通知经同一个协调器发到主题（KEEL_DTM_SERVER，coordinator.go）。
 //	             阶段 1a 起 /internal/v1/inventory/... 挂着库存服务的读与后台写；
 //	             SAGA 库存分支在阶段 1b 挂上。
 //
@@ -98,11 +88,13 @@ type SplitConfig struct {
 	// 的注释里的轮换步骤。空 = 不在轮换（今天的行为）。
 	InternalSecretPrevious string
 	InventoryURL           string
-	// CoreURL 是 KEEL_CORE_URL（只在 inventory 角色上有意义）。
-	CoreURL string
-	// DTMDSN 是 KEEL_DTM_DSN 的一份副本：inventory 角色配了 CoreURL 时要起自己的协调器（runInventory），
-	// 而那条启动路径只拿得到 SplitConfig。
+	// DTMDSN 是 KEEL_DTM_DSN 的一份副本（嵌入式协调器的存储，只有单体用）。
 	DTMDSN string
+
+	// DTMServer / DTMToken / SelfURL 是独立部署的协调器（coordinator.go）。
+	DTMServer string
+	DTMToken  string
+	SelfURL   string
 }
 
 func splitConfigFromEnv() SplitConfig {
@@ -113,8 +105,10 @@ func splitConfigFromEnv() SplitConfig {
 		InternalSecret:         os.Getenv(EnvInternalSecret),
 		InternalSecretPrevious: os.Getenv(EnvInternalSecretPrevious),
 		InventoryURL:           strings.TrimSpace(os.Getenv(EnvInventoryURL)),
-		CoreURL:                strings.TrimRight(strings.TrimSpace(os.Getenv(EnvCoreURL)), "/"),
 		DTMDSN:                 os.Getenv(EnvDTMDSN),
+		DTMServer:              strings.TrimSpace(os.Getenv(EnvDTMServer)),
+		DTMToken:               os.Getenv(EnvDTMToken),
+		SelfURL:                strings.TrimRight(strings.TrimSpace(os.Getenv(EnvSelfURL)), "/"),
 	}
 }
 
@@ -153,26 +147,18 @@ func (s SplitConfig) validate() error {
 				EnvRole, EnvInventoryURL)
 		}
 	}
-	if s.CoreURL != "" {
-		if s.Role != RoleInventory {
-			// core / all 自己就是这个地址指向的一方（all 的通知走进程内 local://）。
-			return fmt.Errorf("%s 只在 %s=inventory 时配（它是库存服务投递跨 0 通知的目标）", EnvCoreURL, EnvRole)
-		}
-		if s.DTMDSN == "" {
-			return fmt.Errorf("%s=inventory 配了 %s 就必须配 %s：跨 0 通知由库存进程自己的协调器投递，"+
-				"它要一份自己的存储（与 core 那份分开，比如挂在卷上的 sqlite:/var/lib/keel/inventory-dtm.db）",
-				EnvRole, EnvCoreURL, EnvDTMDSN)
-		}
-		if u, err := url.Parse(s.CoreURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") ||
-			u.Host == "" || u.RawQuery != "" {
-			return fmt.Errorf("%s=%q 不是 http(s)://host[:port] 形式（不带 query）", EnvCoreURL, s.CoreURL)
-		}
+	if strings.TrimSpace(os.Getenv(EnvCoreURL)) != "" {
+		return fmt.Errorf("%s 已不再使用，删掉它：库存服务不再知道 core（跨 0 通知发到主题、由 core 订阅；配额同步的定义随消息带来），"+
+			"docs/电商系统-微服务部署方案.md 4.1", EnvCoreURL)
 	}
-	if (s.InternalAddr != "" || s.InventoryURL != "" || s.CoreURL != "") && len(s.InternalSecret) < rpc.MinSecretLen {
+	if err := s.validateDTM(); err != nil {
+		return err
+	}
+	if (s.InternalAddr != "" || s.InventoryURL != "" || s.DTMServer != "") && len(s.InternalSecret) < rpc.MinSecretLen {
 		// 内网服务不验签就是一个对任意租户开放的写接口；远端客户端没有密钥就签不了名。
 		// 两种情况都不是「降级能跑」，所以拒绝启动。
 		return fmt.Errorf("配了 %s、%s 或 %s 就必须配 %s（至少 %d 字节，所有进程同一个值；"+
-			"例如 openssl rand -base64 48）", EnvInternalAddr, EnvInventoryURL, EnvCoreURL,
+			"例如 openssl rand -base64 48）", EnvInternalAddr, EnvInventoryURL, EnvDTMServer,
 			EnvInternalSecret, rpc.MinSecretLen)
 	}
 	if _, err := rpc.ParsePreviousSecrets(s.InternalSecretPrevious); err != nil {
@@ -220,16 +206,10 @@ func internalRouter(s SplitConfig, inv *pgxpool.Pool, x internalExtras) *gin.Eng
 		PreviousSecrets: s.previousSecrets(),
 		Ready:           inv.Ping,
 	})
-	if s.Role == RoleCore {
-		// 拆分形态下库存进程发来的两样：跨 0 通知的投递（分支令牌准入），配额同步回源读定义（验签 + 租户头）。
-		if x.flags != nil {
-			dtm.MountBranches(routes.Saga, map[string]dtm.BranchFuncEx{
-				inventory.BranchStockChanged: dtm.Ex(x.flags.StockMsgBranch()),
-			})
-		}
-		if x.quotaSrc != nil {
-			inventory.MountQuotaSource(routes.Tenant, x.quotaSrc)
-		}
+	// 本服务自己的分支（独立部署的协调器经内网回调它们，分支令牌准入）：core 的下单四步与回查、跨 0 通知的接收；
+	// 库存服务的跨 0 通知回查。嵌入式协调器时这张表是空的（分支是 local:// 函数）。
+	if len(x.selfBranches) > 0 {
+		dtm.MountBranches(routes.Saga, x.selfBranches)
 	}
 	if s.Role == RoleInventory || s.Role == RoleAll {
 		local := inventory.NewLocal(repository.NewInventoryStore(inv)).WithStockNotifier(x.notifier)
@@ -241,22 +221,21 @@ func internalRouter(s SplitConfig, inv *pgxpool.Pool, x internalExtras) *gin.Eng
 			// 配额同步的接收分支：core 的协调器经 http://…/internal/v1/saga/inventory_activity_sync 投递
 			// （单体走进程内 local://，不挂）。回源读定义经 KEEL_CORE_URL；没配时分支一律 Unknown 并喊出来。
 			dtm.MountBranches(routes.Saga, map[string]dtm.BranchFuncEx{
-				inventory.BranchActivitySync: dtm.Ex(local.ActivitySyncBranch(x.quotaSrc)),
+				// 微服务形态没有定义来源（nil）：定义随载荷来；没有载荷的旧消息只能丢掉、由对账报出。
+				inventory.BranchActivitySync: local.ActivitySyncBranch(nil),
 			})
 		}
 	}
 	return r
 }
 
-// internalExtras 是内网路由上除库存接口之外的那几样 —— 两条二阶段消息的端点（app/stock_flags.go、quota_sync.go）：
+// internalExtras 是内网路由上除库存接口之外的那几样。
 //
-//	notifier  inventory / all：本进程 Local 共用的跨 0 通知器（nil = 不发）
-//	flags     core：跨 0 通知的接收方
-//	quotaSrc  core：挂出去给库存服务回源读活动配额定义；inventory：配额同步分支回源用（经 KEEL_CORE_URL）
+//	notifier      库存的跨 0 通知器（库存接口在进程内时由它在跨 0 时发消息）
+//	selfBranches  本服务自己的分支，独立部署的协调器经内网回调（coordinator.go）
 type internalExtras struct {
-	notifier *inventory.StockNotifier
-	flags    *service.StockFlagService
-	quotaSrc inventory.QuotaSource
+	notifier     *inventory.StockNotifier
+	selfBranches map[string]dtm.BranchFuncEx
 }
 
 // inventoryService 按角色选库存服务的实现：core 走 HTTP（KEEL_INVENTORY_URL，validate 已经
@@ -352,33 +331,28 @@ func runInventory(ctx context.Context, s SplitConfig, listen ListenFunc) error {
 	// 跨 0 通知（stock_msg.go）：配了 KEEL_CORE_URL 才起自己的协调器。它只注册一个分支 —— 回查，
 	// 回答「本地事务提交了没有」，所以必须在本进程；投递目标是 core 的内网分支。
 	var notifier *inventory.StockNotifier
-	var quotaSrc inventory.QuotaSource
-	if s.CoreURL != "" {
-		c, err := rpc.NewClient(s.CoreURL, s.InternalSecret, 0)
+	var self map[string]dtm.BranchFuncEx
+	if s.remoteDTM() {
+		r, err := s.remoteCoordinator()
 		if err != nil {
-			return fmt.Errorf("%s: %w", EnvCoreURL, err)
+			return fmt.Errorf("%s: %w", EnvDTMServer, err)
 		}
-		quotaSrc = inventory.NewRemoteQuotaSource(c)
-		res, err := dtm.NewBranchResolver(s.CoreURL, s.InternalSecret)
+		res, err := s.selfResolver()
 		if err != nil {
-			return fmt.Errorf("%s: %w", EnvCoreURL, err)
+			return fmt.Errorf("%s: %w", EnvSelfURL, err)
 		}
-		notifier = inventory.NewStockNotifier(repository.NewInventoryStore(inv), res.BranchURL(inventory.BranchStockChanged))
-		tc, err := dtm.Start(s.DTMDSN, 0, map[string]dtm.BranchFunc{inventory.BranchStockMsgQuery: notifier.QueryBranch()})
-		if err != nil {
-			return fmt.Errorf("启动库存进程的事务协调器失败（%s）: %w", EnvDTMDSN, err)
-		}
-		defer tc.Close()
-		notifier.Attach(tc)
+		// 跨 0 通知发到主题：库存只认主题名，不知道谁在听（core 启动时订阅）。回查分支挂在本服务内网上。
+		notifier = inventory.NewStockNotifier(repository.NewInventoryStore(inv),
+			dtm.TopicPrefix+inventory.TopicStockZeroCrossing, res.BranchURL(inventory.BranchStockMsgQuery))
+		notifier.Attach(r)
+		self = map[string]dtm.BranchFuncEx{inventory.BranchStockMsgQuery: dtm.Ex(notifier.QueryBranch())}
 	} else {
-		slog.WarnContext(ctx, "没有配 "+EnvCoreURL+"：可售数跨 0 时不通知 core，商品列表的有货排序只靠 core 的全量刷新（"+
-			EnvStockFlagInterval+"，默认 1 小时）；活动配额的同步消息读不到 core 的定义、会一直重试，"+
-			"配额只在活动上线那一刻由 core 直接同步")
+		slog.WarnContext(ctx, "没有配 "+EnvDTMServer+"：可售数跨 0 时不发通知，商品列表的有货排序只靠 core 的全量刷新（"+
+			EnvStockFlagInterval+"，默认 1 小时）")
 	}
-
 	slog.InfoContext(ctx, "以 "+EnvRole+"=inventory 启动：只监听内网服务，没有公网接口与后台任务",
 		"internal_addr", s.InternalAddr, "version", buildinfo.String(), "stock_notify", notifier != nil)
-	return listen(ctx, s.InternalAddr, internalRouter(s, inv, internalExtras{notifier: notifier, quotaSrc: quotaSrc}))
+	return listen(ctx, s.InternalAddr, internalRouter(s, inv, internalExtras{notifier: notifier, selfBranches: self}))
 }
 
 // serveBoth 同时监听公网与内网两个端口，任何一个返回就让另一个也停下，两个都返回后才返回。

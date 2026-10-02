@@ -7,7 +7,7 @@ package handler_test
 //   - 新建 / 修改活动商品：活动与消息同一个事务，写接口返回时库存服务里的配额已经是定义的样子；
 //   - 库存服务（单体里是接收方回源那一步）暂时不可用：活动照样保存，回来之后配额最终一致；
 //   - 同一条消息投递两次：第二次被屏障挡住，结果不变；
-//   - 两条消息乱序到达：结果以处理那一刻 core 的定义为准；
+//   - 两条消息乱序到达：定义与版本随载荷来（00240），版本小的那条被挡住，结果是版本大的那份；
 //   - 投递时才发现违反已售规则：钳到不变量上（配额抬到已售、卖出过的 SKU 留着）。
 //
 // DTMRS_RETRY_INTERVAL 调到 1 秒：dtmrs 的首次重试默认 10 秒，「回来之后最终一致」要等它。
@@ -34,7 +34,7 @@ import (
 type quotaMsgRig struct {
 	engine  *gin.Engine
 	setDown func(bool)
-	deliver func(gid string) int
+	deliver func(gid, payload string) int
 	invExec func(t *testing.T, sql string, args ...any)
 	invInt  func(t *testing.T, sql string, args ...any) int64
 }
@@ -59,12 +59,12 @@ func TestQuotaMsgMonolith(t *testing.T) {
 	local := inventory.NewLocal(store)
 	orders := service.NewOrderService(repository.New(testPool), local, nil, nil)
 	src := &flakySource{inner: service.NewPromotionQuotaSource(repository.New(testPool))}
-	q := service.NewQuotaSync(repository.New(testPool), dtm.BranchResolver{})
-	branches := app.Branches(orders)
+	q := service.NewQuotaSync(repository.New(testPool), dtm.BranchResolver{}, dtm.BranchResolver{})
+	ex := app.InventoryBranches(local)
 	for name, fn := range app.QuotaSyncBranches(q, local, src) {
-		branches[name] = fn
+		ex[name] = fn
 	}
-	tc, err := dtm.StartEx("sqlite:"+filepath.Join(t.TempDir(), "dtm.db"), 0, branches, app.InventoryBranches(local))
+	tc, err := dtm.StartEx("sqlite:"+filepath.Join(t.TempDir(), "dtm.db"), 0, app.Branches(orders), ex)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestQuotaMsgMonolith(t *testing.T) {
 	exerciseQuotaMsg(t, cs, quotaMsgRig{
 		engine:  engine,
 		setDown: func(d bool) { src.down.Store(d) },
-		deliver: func(gid string) int { return recv(gid, "01", "action") },
+		deliver: func(gid, payload string) int { return recv(gid, "01", "action", payload) },
 		invExec: func(t *testing.T, sql string, args ...any) { t.Helper(); adminExec(t, sql, args...) },
 		invInt:  func(t *testing.T, sql string, args ...any) int64 { t.Helper(); return adminQueryInt64(t, sql, args...) },
 	})
@@ -101,7 +101,7 @@ func TestQuotaMsgTwoDatabases(t *testing.T) {
 	exerciseQuotaMsg(t, cs, quotaMsgRig{
 		engine:  e.engine,
 		setDown: func(d bool) { e.down.Store(d) },
-		deliver: func(gid string) int { return recv(gid, "01", "action", "") },
+		deliver: func(gid, payload string) int { return recv(gid, "01", "action", payload) },
 		invExec: func(t *testing.T, sql string, args ...any) {
 			t.Helper()
 			if _, err := e.invAdmin.Exec(context.Background(), sql, args...); err != nil {
@@ -136,11 +136,19 @@ func exerciseQuotaMsg(t *testing.T, cs couponShop, rig quotaMsgRig) {
 	skusJSON := func(q int) string {
 		return fmt.Sprintf(`"skus":[{"sku_id":%d,"promo_price_cents":990,"stock_qty":%d}]`, sku, q)
 	}
-	deliver := func(t *testing.T, gid string) {
+	deliver := func(t *testing.T, gid, payload string) {
 		t.Helper()
-		if got := rig.deliver(gid); got != dtm.Success {
+		if got := rig.deliver(gid, payload); got != dtm.Success {
 			t.Fatalf("接收分支对 %s 返回 %d", gid, got)
 		}
+	}
+	// payload 是手投消息的载荷（00240：定义 + 版本随消息来）。版本取 1000 起，远大于写接口已经发过的那几条。
+	payload := func(rev int64, q int, withSKU bool) string {
+		items := fmt.Sprintf(`[{"sku_id":%d,"quota":%d}]`, sku, q)
+		if !withSKU {
+			items = `[]`
+		}
+		return fmt.Sprintf(`{"promotion_id":%d,"rev":%d,"found":true,"items":%s,"keep":[]}`, pid, rev, items)
 	}
 	gidOf := func(tag string) string {
 		return fmt.Sprintf("%s%d-%d-%s", inventory.ActivityMsgGIDPrefix, cs.MerchantID, pid, tag)
@@ -177,8 +185,9 @@ func exerciseQuotaMsg(t *testing.T, cs couponShop, rig quotaMsgRig) {
 
 	t.Run("重复投递_结果不变", func(t *testing.T) {
 		gid := gidOf("00000000000000d1")
-		deliver(t, gid)
-		deliver(t, gid)
+		pl := payload(1000, int(definition(t)), true)
+		deliver(t, gid, pl)
+		deliver(t, gid, pl)
 		if q := quota(t); q != definition(t) {
 			t.Fatalf("配额 %d 与定义 %d 不一致", q, definition(t))
 		}
@@ -187,19 +196,15 @@ func exerciseQuotaMsg(t *testing.T, cs couponShop, rig quotaMsgRig) {
 		}
 	})
 
-	t.Run("乱序投递_以当前定义为准", func(t *testing.T) {
-		// 两次改定义（直接改库，不经写接口 —— 消息由测试手投，好控制顺序）：先 11（消息 A），再 12（消息 B）。
-		adminExec(t, `UPDATE promotion_skus SET quota_qty = 11 WHERE promotion_id = $1 AND sku_id = $2`, pid, sku)
-		a := gidOf("00000000000000a1")
-		adminExec(t, `UPDATE promotion_skus SET quota_qty = 12 WHERE promotion_id = $1 AND sku_id = $2`, pid, sku)
-		b := gidOf("00000000000000b1")
-		deliver(t, b)
+	t.Run("乱序投递_版本大的为准", func(t *testing.T) {
+		// 两份定义：A（版本 1001，配额 11）、B（版本 1002，配额 12）。B 先到，A 迟到。
+		deliver(t, gidOf("00000000000000b1"), payload(1002, 12, true))
 		if q := quota(t); q != 12 {
 			t.Fatalf("B 先到之后配额 %d，期望 12", q)
 		}
-		deliver(t, a) // A 迟到：接收方不信它，按当前定义（12）设
+		deliver(t, gidOf("00000000000000a1"), payload(1001, 11, true)) // A 迟到：版本更小，被挡住
 		if q := quota(t); q != 12 {
-			t.Fatalf("迟到的 A 把配额改成了 %d", q)
+			t.Fatalf("迟到的 A（版本更小）把配额改成了 %d", q)
 		}
 	})
 
@@ -207,14 +212,12 @@ func exerciseQuotaMsg(t *testing.T, cs couponShop, rig quotaMsgRig) {
 		rig.invExec(t, `UPDATE activity_stocks SET sold = 4 WHERE promotion_id = $1 AND sku_id = $2`, pid, sku)
 		defer rig.invExec(t, `UPDATE activity_stocks SET sold = 0 WHERE promotion_id = $1 AND sku_id = $2`, pid, sku)
 		// 定义低于已售：抬到已售。
-		adminExec(t, `UPDATE promotion_skus SET quota_qty = 2 WHERE promotion_id = $1 AND sku_id = $2`, pid, sku)
-		deliver(t, gidOf("00000000000000c1"))
+		deliver(t, gidOf("00000000000000c1"), payload(1003, 2, true))
 		if q := quota(t); q != 4 {
 			t.Fatalf("定义 2 < 已售 4，配额应当抬到 4，实得 %d", q)
 		}
 		// 定义里去掉了卖出过的 SKU：那一行留着。
-		adminExec(t, `DELETE FROM promotion_skus WHERE promotion_id = $1 AND sku_id = $2`, pid, sku)
-		deliver(t, gidOf("00000000000000c2"))
+		deliver(t, gidOf("00000000000000c2"), payload(1004, 0, false))
 		if q := quota(t); q != 4 {
 			t.Fatalf("卖出过的 SKU 被移出了活动（配额 %d）", q)
 		}

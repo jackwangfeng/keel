@@ -275,3 +275,10 @@ SELECT id FROM skus WHERE id = ANY(sqlc.arg(ids)::bigint[]) AND deleted_at IS NU
 -- name: LiveCouponTemplateIDs :many
 -- 新人礼的券模板归属校验。
 SELECT id FROM coupon_templates WHERE id = ANY(sqlc.arg(ids)::bigint[]);
+
+-- name: BumpPromotionQuotaRev :one
+-- 配额同步消息的版本 +1（00240），与登记消息同一个事务。这条 UPDATE 锁住活动行：并发改同一场活动的两个事务
+-- 按提交顺序拿到递增的版本，后提交的那份定义一定包含先提交的改动。活动不存在时没有行（调用方当 Found=false）。
+UPDATE promotions SET quota_rev = quota_rev + 1
+ WHERE id = sqlc.arg(promotion_id)
+RETURNING quota_rev;

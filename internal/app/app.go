@@ -892,8 +892,8 @@ func Run(ctx context.Context, listen ListenFunc) error {
 		return fmt.Errorf("启动自检未通过，拒绝启动: %w", err)
 	}
 
-	if cfg.DTMDSN == "" {
-		return fmt.Errorf("没有配置 %s，拒绝启动：事务协调器的存储必须显式指定。"+
+	if cfg.DTMDSN == "" && !cfg.Split.remoteDTM() {
+		return fmt.Errorf("没有配置 %s（或独立部署的协调器 "+EnvDTMServer+"），拒绝启动：事务协调器的存储必须显式指定。"+
 			"单机形态用挂在卷上的 sqlite（%s=sqlite:/var/lib/keel/dtm.db），"+
 			"多实例形态换成 Postgres/MySQL/Redis 并给它自己的角色 —— "+
 			"它不能用业务库那份凭据（keel_app 没有建表权限，而管理员角色会让"+
@@ -908,7 +908,11 @@ func Run(ctx context.Context, listen ListenFunc) error {
 	// 库存服务（微服务拆分阶段 1a / 1b）：all 是建在库存池上的进程内实现，core 是 HTTP 实现。
 	// 下单服务、超时补偿、库存 outbox 与 Router 用的是同一个。
 	// 跨 0 通知（二阶段消息，app/stock_flags.go）：通知器接在本进程的每一个进程内库存实现上。
-	stockNotifier := newStockNotifier(cfg.Split, invPool)
+	self, err := cfg.Split.selfResolver()
+	if err != nil {
+		return fmt.Errorf("%s: %w", EnvSelfURL, err)
+	}
+	stockNotifier := newStockNotifier(cfg.Split, invPool, self)
 	inv, err := inventoryService(cfg.Split, invPool, stockNotifier)
 	if err != nil {
 		return err
@@ -918,6 +922,7 @@ func Run(ctx context.Context, listen ListenFunc) error {
 	// 服务又要在 Start 之后才能拿到协调器 —— 这个环在
 	// service.OrderService.AttachCoordinator 那里被打开，理由写在那儿。
 	orders := service.NewOrderService(repository.New(pool), inv, nil, nil)
+	orders.UseSelfResolver(self)
 	// 库存分支的地址：单体进程内（local://），core 指向库存服务（http://，带分支令牌）。
 	// 单体注册库存的两个分支，core 不注册（它们在库存进程里，挂在内网端口上）。
 	var invBranches map[string]dtm.BranchFuncEx
@@ -933,7 +938,7 @@ func Run(ctx context.Context, listen ListenFunc) error {
 	// 跨 0 通知的接收方就是有货标记的全量刷新服务（它的 Run 在下面的后台任务里起）；单体把接收与回查注册进协调器。
 	stockFlags := service.NewStockFlagService(repository.New(pool), inv, stockFlagIntervalFromEnv(), nil)
 	// 活动配额同步（二阶段消息，app/quota_sync.go）：core 发、库存收；回查在 core，单体把接收也注册进来。
-	quotaSync, err := newQuotaSync(cfg.Split, pool)
+	quotaSync, err := newQuotaSync(cfg.Split, pool, self)
 	if err != nil {
 		return err
 	}
@@ -943,18 +948,38 @@ func Run(ctx context.Context, listen ListenFunc) error {
 		quotaLocal = inventory.NewLocal(repository.NewInventoryStore(invPool)).WithStockNotifier(stockNotifier)
 	}
 
-	tc, err := dtm.StartEx(cfg.DTMDSN, 0, withBranches(withBranches(Branches(orders), StockMsgBranches(stockNotifier, stockFlags)),
-		QuotaSyncBranches(quotaSync, quotaLocal, quotaSrc)), invBranches)
-	if err != nil {
-		return fmt.Errorf("启动事务协调器失败（%s）: %w", EnvDTMDSN, err)
+	branches := mergeEx(exBranches(Branches(orders)), StockMsgBranches(stockNotifier, stockFlags),
+		QuotaSyncBranches(quotaSync, quotaLocal, quotaSrc), invBranches)
+	var tc dtm.Coordinator
+	var selfBranches map[string]dtm.BranchFuncEx
+	if cfg.Split.remoteDTM() {
+		// 独立部署的协调器：本进程只是客户端，分支挂到内网端口上让它回调（coordinator.go）。
+		// 库存在本进程（all）时它的 SAGA 分支已经由 internalRouter 按库存接口挂上，这里不重复挂。
+		r, err := cfg.Split.remoteCoordinator()
+		if err != nil {
+			return fmt.Errorf("%s: %w", EnvDTMServer, err)
+		}
+		tc = r
+		selfBranches = map[string]dtm.BranchFuncEx{}
+		for k, fn := range branches {
+			if _, inv := invBranches[k]; !inv {
+				selfBranches[k] = fn
+			}
+		}
+		// 订阅跨 0 通知（库存发到主题，不知道谁在听）。后台重试，不挡启动。
+		subscribeUntilDone(context.WithoutCancel(ctx), r, inventory.TopicStockZeroCrossing,
+			self.BranchURL(inventory.BranchStockChanged), "keel-core")
+	} else {
+		etc, err := dtm.StartEx(cfg.DTMDSN, 0, nil, branches)
+		if err != nil {
+			return fmt.Errorf("启动事务协调器失败（%s）: %w", EnvDTMDSN, err)
+		}
+		defer etc.Close()
+		tc = etc
 	}
 	orders.AttachCoordinator(tc)
 	attachStockNotifier(stockNotifier, tc)
 	quotaSync.Attach(tc)
-	// 干净收尾：listen 返回（不论正常还是出错）之后把协调器关掉，
-	// 它才有机会把 tokio 运行时停下来、把注册分支的 cgo.Handle 还回去。
-	// Close 是幂等的，所以这条 defer 与将来可能加的显式收尾不会撞车。
-	defer tc.Close()
 
 	// 超时补偿定时任务（Task 6）。
 	//
@@ -1145,7 +1170,7 @@ func Run(ctx context.Context, listen ListenFunc) error {
 	if cfg.Split.InternalAddr == "" {
 		return listen(ctx, cfg.Addr, public)
 	}
-	return serveBoth(ctx, listen, cfg.Addr, public, cfg.Split.InternalAddr, internalRouter(cfg.Split, invPool, internalExtras{notifier: stockNotifier, flags: stockFlags, quotaSrc: quotaSrc}))
+	return serveBoth(ctx, listen, cfg.Addr, public, cfg.Split.InternalAddr, internalRouter(cfg.Split, invPool, internalExtras{notifier: stockNotifier, selfBranches: selfBranches}))
 }
 
 // bootstrapStaff 在库里一个在岗平台级管理员都没有时，建一个并把那串一次性

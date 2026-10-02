@@ -275,7 +275,9 @@
     "inventories.store_id": "库存表归库存服务（微服务拆分阶段 1b，00076 删掉了这条外键）：拆分部署下 stores 在 core 库、这张表在库存库，外键建不出来；单体库里一起删，两种部署跑同一套约束。一致性由应用层守：core 只拿自己租户里判过的 id 调库存服务（建 SKU 时建行、下单只扣定价阶段判过在架且本店可售的 SKU），RLS 按 merchant_id 挡跨租户，对账任务报孤儿（数据模型 §4）。",
     "inventory_logs.sku_id": "库存表归库存服务（微服务拆分阶段 1b，00076 删掉了这条外键）：拆分部署下 skus 在 core 库、这张表在库存库，外键建不出来；单体库里一起删，两种部署跑同一套约束。一致性由应用层守：core 只拿自己租户里判过的 id 调库存服务（建 SKU 时建行、下单只扣定价阶段判过在架且本店可售的 SKU），RLS 按 merchant_id 挡跨租户，对账任务报孤儿（数据模型 §4）。",
     "inventory_logs.store_id": "库存表归库存服务（微服务拆分阶段 1b，00076 删掉了这条外键）：拆分部署下 stores 在 core 库、这张表在库存库，外键建不出来；单体库里一起删，两种部署跑同一套约束。一致性由应用层守：core 只拿自己租户里判过的 id 调库存服务（建 SKU 时建行、下单只扣定价阶段判过在架且本店可售的 SKU），RLS 按 merchant_id 挡跨租户，对账任务报孤儿（数据模型 §4）。",
-    "search_logs.user_id": "搜索日志要能记录未登录访客（该列可空），且日志表不该因为用户注销而卡住删除顺序（数据模型 §8）。"
+    "search_logs.user_id": "搜索日志要能记录未登录访客（该列可空），且日志表不该因为用户注销而卡住删除顺序（数据模型 §8）。",
+    "activity_sync_revs.merchant_id": "与 activity_stocks.merchant_id 同一个理由（00240）：库存服务的表，拆分部署下库存库里没有 merchants 表，外键建不出来；租户隔离靠 RLS。",
+    "activity_sync_revs.promotion_id": "activity_sync_revs 归库存服务（00240）：promotions 在 core 库，拆分部署下外键建不出来。行只记「已应用到的版本」，活动删了留着一行无害。"
   },
   "fk_single_column_ok": {
     "_readme": [

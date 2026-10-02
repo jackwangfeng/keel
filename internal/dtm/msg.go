@@ -64,6 +64,68 @@ func (t *TC) PrepareMsg(gid string, actions []string, queryPrepared string, grac
 //
 // 它失败（协调器的存储一时不可用）不要紧：消息停在 prepared，grace 秒后回查会看到本地屏障那一行，
 // 照样投递。所以调用方只记日志，不回错 —— 本地事务已经提交了，回错只会让调用方以为没改成。
+// PrepareMsgEx 是带载荷与「允许空主题」的 PrepareMsg（dtmrs 0.12，dtmrs_msg_prepare_ex）。
+//
+// payloads 为 nil 表示都不带；否则与 actions 等长，每个元素是一段 JSON 文本，作为对应分支的请求体。
+// allowEmptyTopic：actions 里的 topic:// 没有订阅者时照常成功（那一步没人收）而不是报错——通知类消息用，
+// 订阅方没到位不该挡住发送方的业务事务；漏的由低频对账兜住。
+func (t *TC) PrepareMsgEx(gid string, actions, payloads []string, queryPrepared string, graceSecs int,
+	allowEmptyTopic bool) error {
+	if err := checkMsg(actions, payloads, queryPrepared); err != nil {
+		return err
+	}
+	js, err := json.Marshal(actions)
+	if err != nil {
+		return err
+	}
+	var pl *C.char
+	if payloads != nil {
+		pj, err := json.Marshal(payloads)
+		if err != nil {
+			return err
+		}
+		pl = cstr(string(pj))
+		defer C.free(unsafe.Pointer(pl))
+	}
+	flags := C.int(0)
+	if allowEmptyTopic {
+		flags = C.DTMRS_MSG_ALLOW_EMPTY_TOPIC
+	}
+	t.acquireMsg()
+	defer t.releaseMsg()
+
+	g, a, q := cstr(gid), cstr(string(js)), cstr(queryPrepared)
+	defer C.free(unsafe.Pointer(g))
+	defer C.free(unsafe.Pointer(a))
+	defer C.free(unsafe.Pointer(q))
+	if C.dtmrs_msg_prepare_ex(t.p, g, a, pl, q, C.int(graceSecs), flags) != C.DTMRS_OK {
+		return fmt.Errorf("登记消息 %s 失败: %s", gid, lastError())
+	}
+	return nil
+}
+
+// checkMsg 是两种实现共用的入参检查。
+func checkMsg(actions, payloads []string, queryPrepared string) error {
+	if len(actions) == 0 {
+		return errors.New("二阶段消息至少要有一个目标地址")
+	}
+	if queryPrepared == "" {
+		return errors.New("二阶段消息必须给回查地址（dtmrs 在崩溃之后靠它决断）")
+	}
+	if payloads != nil && len(payloads) != len(actions) {
+		return fmt.Errorf("二阶段消息的载荷有 %d 份、目标地址有 %d 个，必须一一对应", len(payloads), len(actions))
+	}
+	for i, p := range payloads {
+		if !json.Valid([]byte(p)) {
+			return fmt.Errorf("二阶段消息第 %d 份载荷不是合法 JSON", i+1)
+		}
+	}
+	return nil
+}
+
+// EmptyTopicCount 是 allowEmptyTopic 放行了多少次「主题没有订阅者」（进程内累计，只有嵌入式读得到）。
+func (t *TC) EmptyTopicCount() uint64 { return uint64(C.dtmrs_empty_topic_count(t.p)) }
+
 func (t *TC) SubmitMsg(gid string) error {
 	t.acquireMsg()
 	defer t.releaseMsg()

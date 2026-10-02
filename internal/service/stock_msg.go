@@ -16,18 +16,20 @@ import (
 // StockMsgBranch 是跨 0 通知的接收分支（inventory.BranchStockChanged）：单体注册成 local://stock_changed，
 // 拆分挂在 core 的内网端口上（dtm.MountBranches 到 rpc.Routes.Saga）。
 //
-// 消息只告诉我们「哪家店、哪几个 SKU 跨过了 0」（全在 gid 里，inventory.ParseStockMsgGID）；
+// 消息只告诉我们「哪家店、哪几个 SKU 跨过了 0」（载荷里，inventory.DecodeStockMsg；0.12 之前的消息编在 gid 里）；
 // 这里回源：SKU → 商品 → 那几件商品当前的在售 SKU → 问库存服务当前水位 → 重算、写、复读核对（refreshStore）。
 // 第一次写与子事务屏障同一个事务：同一条消息投递两次，第二次被屏障判成重复，什么都不做。
 // 两条消息谁先到都一样：两次都按当时的水位算。
-func (s *StockFlagService) StockMsgBranch() dtm.BranchFunc {
-	return func(gid, branchID, op string) int {
+//
+// 微服务形态下它订阅在主题 inventory.TopicStockZeroCrossing 上，分支号是 01 或 01-0n（扇出），屏障按 gid + branch_id 去重。
+func (s *StockFlagService) StockMsgBranch() dtm.BranchFuncEx {
+	return func(gid, branchID, op, payload string) int {
 		log := s.log.With("gid", gid, "branch_id", branchID, "op", op)
 		if op != "action" {
 			log.Error("跨 0 通知的接收分支收到的 op 不是 action")
 			return dtm.Unknown
 		}
-		m, err := inventory.ParseStockMsgGID(gid)
+		m, err := inventory.DecodeStockMsg(gid, payload)
 		var ctx context.Context
 		if err == nil {
 			// 租户只从 gid 来，经 dtm 的那一个产生者（tenant_context_test.go）。
@@ -36,7 +38,7 @@ func (s *StockFlagService) StockMsgBranch() dtm.BranchFunc {
 		if err != nil {
 			// 二阶段消息的目标分支没有「失败」可言：dtmrs 对失败的 action 也是重试（msg_advance）。
 			// 一条解不开的 gid 重试一万次也解不开，记下来、吞掉。
-			log.Error("跨 0 通知的 gid 解不开，丢弃", "err", err)
+			log.Error("跨 0 通知解不开（gid 或载荷），丢弃", "err", err, "payload", payload)
 			return dtm.Success
 		}
 		if err := s.refreshNotified(ctx, gid, branchID, op, m); err != nil {

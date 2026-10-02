@@ -229,6 +229,9 @@ type InventoryStoreTx interface {
 	ActivityByPromotions(ctx context.Context, promotionIDs []int64) ([]ActivityRow, error)
 	// LockPromotionActivity 锁住一个活动现有的全部配额行（整组设配额的第一步）。
 	LockPromotionActivity(ctx context.Context, promotionID int64) ([]ActivityRow, error)
+	// AdvanceActivitySyncRev 把这场活动已应用的配额定义版本推进到 rev（00240）：true = 比已记的新、该应用；
+	// false = 不新（乱序或重复的消息）。同一场活动的这一行被锁到事务结束，两份定义串行应用。
+	AdvanceActivitySyncRev(ctx context.Context, promotionID, rev int64) (bool, error)
 	UpsertActivityQuota(ctx context.Context, promotionID, skuID int64, quota int32) error
 	// DeleteActivityExcept 删掉不在 keep 里、且没卖过的配额行，返回删了几行。
 	DeleteActivityExcept(ctx context.Context, promotionID int64, keep []int64) (int64, error)

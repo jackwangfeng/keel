@@ -210,6 +210,30 @@ func (q *Queries) InvAdjustStock(ctx context.Context, arg InvAdjustStockParams) 
 	return i, err
 }
 
+const invAdvanceActivitySyncRev = `-- name: InvAdvanceActivitySyncRev :execrows
+INSERT INTO activity_sync_revs (promotion_id, rev)
+VALUES ($1, $2)
+ON CONFLICT ON CONSTRAINT activity_sync_revs_pkey DO UPDATE
+   SET rev = EXCLUDED.rev
+ WHERE activity_sync_revs.rev < EXCLUDED.rev
+`
+
+type InvAdvanceActivitySyncRevParams struct {
+	PromotionID int64
+	Rev         int64
+}
+
+// 把一场活动已应用的配额定义版本推进到 @rev（00240）。只在比已记的新时写：返回 1 = 这份定义更新、该应用；
+// 0 = 不比已应用的新（乱序或重复的消息），什么都不做。ON CONFLICT 那一支即使 WHERE 不成立也锁住那一行，
+// 同一场活动的两份定义因此串行应用，不会旧的覆盖新的。
+func (q *Queries) InvAdvanceActivitySyncRev(ctx context.Context, arg InvAdvanceActivitySyncRevParams) (int64, error) {
+	result, err := q.db.Exec(ctx, invAdvanceActivitySyncRev, arg.PromotionID, arg.Rev)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const invAppendBizLog = `-- name: InvAppendBizLog :exec
 INSERT INTO inventory_logs (sku_id, store_id, change_qty, biz_type, biz_id,
                             before_available, after_available, reason)

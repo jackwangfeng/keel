@@ -176,6 +176,9 @@ type OrderService struct {
 	// 取消之后就地放回库存（ob）。res 决定库存分支的地址（单体 local://，拆分 http://）。
 	inv inventory.Service
 	res dtm.BranchResolver
+	// self 解析 core 自己的四步（建单、核销券、收尾及其补偿）：嵌入式协调器是 local://；独立部署的协调器
+	// 要经 HTTP 回调本服务的内网端口（部署方案第四节）。零值 = 进程内。
+	self dtm.BranchResolver
 	ob  *inventoryOutbox
 
 	// now 可替换，好让测试构造「已过期」这类时间相关的场景。
@@ -214,6 +217,9 @@ func NewOrderService(r OrderRepository, inv inventory.Service, tc Coordinator, l
 // UseBranchResolver 决定库存分支的地址（dtm.NewBranchResolver(KEEL_INVENTORY_URL, secret)）。
 // 必须在第一次下单之前调；零值是全部进程内。
 func (s *OrderService) UseBranchResolver(res dtm.BranchResolver) { s.res = res }
+
+// UseSelfResolver 让 core 自己的 SAGA 步骤走 self 解析出的地址（独立部署的协调器用）。
+func (s *OrderService) UseSelfResolver(self dtm.BranchResolver) { s.self = self }
 
 // CreateRequest 是 OrderCreateRequest 在 service 边界上的形状。
 //

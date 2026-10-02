@@ -52,15 +52,15 @@ type stockMsgRig struct {
 func newMonolithStockMsgRig(t *testing.T) stockMsgRig {
 	t.Helper()
 	store := repository.NewInventoryStore(testPool)
-	n := inventory.NewStockNotifier(store, "local://"+inventory.BranchStockChanged)
+	n := inventory.NewStockNotifier(store, "local://"+inventory.BranchStockChanged, "local://"+inventory.BranchStockMsgQuery)
 	local := inventory.NewLocal(store).WithStockNotifier(n)
 	orders := service.NewOrderService(repository.New(testPool), local, nil, nil)
 	flags := service.NewStockFlagService(repository.New(testPool), local, 0, nil)
-	branches := app.Branches(orders)
+	ex := app.InventoryBranches(local)
 	for name, fn := range app.StockMsgBranches(n, flags) {
-		branches[name] = fn
+		ex[name] = fn
 	}
-	tc, err := dtm.StartEx("sqlite:"+filepath.Join(t.TempDir(), "dtm.db"), 0, branches, app.InventoryBranches(local))
+	tc, err := dtm.StartEx("sqlite:"+filepath.Join(t.TempDir(), "dtm.db"), 0, app.Branches(orders), ex)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +147,8 @@ func exerciseStockMsg(t *testing.T, cs couponShop, rig stockMsgRig) {
 	}
 	deliver := func(t *testing.T, gid string) {
 		t.Helper()
-		if got := rig.flags.StockMsgBranch()(gid, "01", "action"); got != dtm.Success {
+		// 手投用 0.12 之前的旧形状（门店与 SKU 编在 gid 里、没有载荷）：升级时还在途的消息照样能处理。
+		if got := rig.flags.StockMsgBranch()(gid, "01", "action", ""); got != dtm.Success {
 			t.Fatalf("接收分支对 %s 返回 %d", gid, got)
 		}
 	}
@@ -181,7 +182,7 @@ func exerciseStockMsg(t *testing.T, cs couponShop, rig stockMsgRig) {
 		waitFlag(t, false, "扣到 0 之后")
 		// 回查屏障记在库存所在的库里，与扣减同一个事务提交。
 		if n := rig.invInt(t, `SELECT count(*) FROM barrier WHERE trans_type = 'msg' AND gid LIKE $1`,
-			fmt.Sprintf("%s%d-%d-%%", inventory.StockMsgGIDPrefix, cs.MerchantID, store)); n != 1 {
+			fmt.Sprintf("%s%d-%%", inventory.StockMsgGIDPrefix, cs.MerchantID)); n != 1 { // 0.12 起 gid 只有商家，门店在载荷里
 			t.Fatalf("库存库里这家店的消息屏障 %d 行，期望 1", n)
 		}
 	})

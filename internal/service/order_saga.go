@@ -95,11 +95,11 @@ func (s *OrderService) sagaStepsFor(orderNo string, storeID int64, lines []inven
 		return "", err
 	}
 	return dtm.StepsJSON(
-		dtm.Step{Action: "local://" + BranchOrderCreate, Compensate: "local://" + BranchOrderCreateUndo},
-		dtm.Step{Action: "local://" + BranchOrderCoupon, Compensate: "local://" + BranchOrderCouponUndo},
+		dtm.Step{Action: s.self.BranchURL(BranchOrderCreate), Compensate: s.self.BranchURL(BranchOrderCreateUndo)},
+		dtm.Step{Action: s.self.BranchURL(BranchOrderCoupon), Compensate: s.self.BranchURL(BranchOrderCouponUndo)},
 		dtm.Step{Action: s.res.BranchURL(inventory.BranchDeduct), Compensate: s.res.BranchURL(inventory.BranchRestore),
 			Payload: payload},
-		dtm.Step{Action: "local://" + BranchOrderFinish, Compensate: "local://" + BranchOrderFinishUndo},
+		dtm.Step{Action: s.self.BranchURL(BranchOrderFinish), Compensate: s.self.BranchURL(BranchOrderFinishUndo)},
 	)
 }
 

@@ -1,6 +1,7 @@
 package inventory
 
 import (
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -28,40 +29,43 @@ func TestStockCrossingsOnlyReportsZeroCrossings(t *testing.T) {
 	}
 }
 
-func TestStockMsgGIDRoundTripAndChunking(t *testing.T) {
-	ids := make([]int64, 0, 40)
-	for i := int64(0); i < 40; i++ {
+// 0.12 起门店与 SKU 在载荷里，gid 只有 stock-商家-随机串：SKU 再多也是一条消息，不再按 128 字节拆条。
+func TestStockMsgPayloadRoundTrip(t *testing.T) {
+	ids := make([]int64, 0, 400)
+	for i := int64(0); i < 400; i++ {
 		ids = append(ids, 1_000_000_000+i)
 	}
-	gids, err := stockMsgGIDs(9_000_000_000_000_000_000, 8_000_000_000_000_000_000, ids)
+	gid, err := stockMsgGID(9_000_000_000_000_000_000)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(gids) < 2 {
-		t.Fatalf("40 个十位数的 SKU 应当拆成几条，实得 %d 条", len(gids))
+	if len(gid) > 128 {
+		t.Fatalf("gid 超过 128 字节：%d", len(gid))
 	}
-	var back []int64
-	for _, g := range gids {
-		if len(g) > 128 {
-			t.Fatalf("gid 超过 128 字节：%d %q", len(g), g)
-		}
-		m, err := ParseStockMsgGID(g)
-		if err != nil {
-			t.Fatalf("解不回来 %q: %v", g, err)
-		}
-		if m.MerchantID != 9_000_000_000_000_000_000 || m.StoreID != 8_000_000_000_000_000_000 {
-			t.Fatalf("租户 / 门店解错了：%+v", m)
-		}
-		back = append(back, m.SKUIDs...)
+	payload, _ := json.Marshal(StockMsgPayload{StoreID: 8_000_000_000_000_000_000, SKUIDs: ids})
+	m, err := DecodeStockMsg(gid, string(payload))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(back, ids) {
-		t.Fatalf("拆开再拼回来的 SKU 不一致：%v", back)
+	if m.MerchantID != 9_000_000_000_000_000_000 || m.StoreID != 8_000_000_000_000_000_000 || !reflect.DeepEqual(m.SKUIDs, ids) {
+		t.Fatalf("解回来不一致：商家 %d 门店 %d SKU %d 个", m.MerchantID, m.StoreID, len(m.SKUIDs))
 	}
 	// 每次跨 0 都是一条新消息：同样的键两次编出来的 gid 不同。
-	a, _ := stockMsgGIDs(1, 2, []int64{3})
-	b, _ := stockMsgGIDs(1, 2, []int64{3})
-	if a[0] == b[0] {
-		t.Fatalf("两次跨 0 编出了同一个 gid %q：第二条会被协调器当成第一条的重试", a[0])
+	a, _ := stockMsgGID(1)
+	b, _ := stockMsgGID(1)
+	if a == b {
+		t.Fatalf("两次跨 0 编出了同一个 gid %q：第二条会被协调器当成第一条的重试", a)
+	}
+	// 旧形状（0.12 之前登记、升级时在途）没有载荷，从 gid 里解。
+	old, err := DecodeStockMsg("stock-12-3-abcd-5.6", "{}")
+	if err != nil || old.StoreID != 3 || !reflect.DeepEqual(old.SKUIDs, []int64{5, 6}) {
+		t.Fatalf("旧形状解错了：%+v %v", old, err)
+	}
+	// 新形状却没有载荷 / 载荷缺字段：解不出门店与 SKU，报错（接收方记下来、吞掉）。
+	for _, pl := range []string{"", "{}", `{"store_id":3}`, `{"sku_ids":[1]}`, `not json`} {
+		if _, err := DecodeStockMsg(gid, pl); err == nil {
+			t.Errorf("新形状配载荷 %q 应当报错", pl)
+		}
 	}
 }
 
@@ -69,6 +73,7 @@ func TestParseStockMsgGIDIsStrict(t *testing.T) {
 	for _, g := range []string{
 		"stock-12-3-abcd-5",
 		"stock-12-3-abcd-5.6",
+		"stock-12-abcd", // 0.12 起的短形状：内容在载荷里
 	} {
 		if _, err := ParseStockMsgGID(g); err != nil {
 			t.Errorf("%q 应当合法：%v", g, err)
@@ -83,7 +88,7 @@ func TestParseStockMsgGIDIsStrict(t *testing.T) {
 		"stock-12-3-abcd-",   // 没有 SKU
 		"stock-12-3-abcd-5..6",
 		"stock-12-3-abcd-05",
-		"stock-12-3",
+		"stock-12-",
 		"stock-12-3-abcd-" + strings.Repeat("9", 130),
 	} {
 		if _, err := ParseStockMsgGID(g); err == nil {

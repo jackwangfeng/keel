@@ -274,6 +274,21 @@ func (q *Queries) AdminUpdatePromotion(ctx context.Context, arg AdminUpdatePromo
 	return result.RowsAffected(), nil
 }
 
+const bumpPromotionQuotaRev = `-- name: BumpPromotionQuotaRev :one
+UPDATE promotions SET quota_rev = quota_rev + 1
+ WHERE id = $1
+RETURNING quota_rev
+`
+
+// 配额同步消息的版本 +1（00240），与登记消息同一个事务。这条 UPDATE 锁住活动行：并发改同一场活动的两个事务
+// 按提交顺序拿到递增的版本，后提交的那份定义一定包含先提交的改动。活动不存在时没有行（调用方当 Found=false）。
+func (q *Queries) BumpPromotionQuotaRev(ctx context.Context, promotionID int64) (int64, error) {
+	row := q.db.QueryRow(ctx, bumpPromotionQuotaRev, promotionID)
+	var quota_rev int64
+	err := row.Scan(&quota_rev)
+	return quota_rev, err
+}
+
 const countGiftGrants = `-- name: CountGiftGrants :many
 SELECT promotion_id, count(*)::int AS granted
   FROM promotion_gift_grants

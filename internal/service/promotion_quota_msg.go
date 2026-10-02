@@ -1,19 +1,19 @@
 package service
 
-// 活动配额同步的发送方：写活动的本地事务里登记一条 dtmrs 二阶段消息，库存服务收到后回源读 core 的定义、
-// 整组设配额（接收方在 inventory 包 activity_msg.go）。约定见 docs/电商系统-总体架构.md「派生数据同步约定」，
-// 为什么改、改了之后各条路径怎么走见 admin_promotion.go 的文件头。
+// 活动配额同步的发送方：写活动的本地事务里把版本 +1、读出定义，连同定义登记一条 dtmrs 二阶段消息；库存服务收到后
+// 按版本只接受更新的那份、整组设配额（接收方在 inventory 包 activity_msg.go）。约定见 docs/电商系统-总体架构.md
+// 「派生数据同步约定」；为什么定义随载荷来而不是让库存回 core 读，见 docs/电商系统-微服务部署方案.md 4.1（下层不调上层）。
 //
 // 这一侧有三样东西：
 //
-//   - QuotaSync：登记 / 提交 / 作废消息，外加回查分支（local://promotion_quota_msg_query，永远在 core 进程里 ——
-//     它回答「写活动的那个本地事务提交了没有」，屏障记在业务库）；
-//   - PromotionQuotaSource：inventory.QuotaSource 的 core 实现，接收方回源读的就是它（单体进程内直接调，
-//     拆分时挂在 core 的内网端口上，inventory.MountQuotaSource）；
+//   - QuotaSync：登记 / 提交 / 作废消息，外加回查分支（promotion_quota_msg_query，永远在 core 这一侧 ——
+//     它回答「写活动的那个本地事务提交了没有」，屏障记在业务库；嵌入式协调器 local://，独立协调器经 core 内网回调）；
+//   - PromotionQuotaSource：inventory.QuotaSource 的 core 实现，只剩单体用（升级前登记、没有载荷的旧消息还能回源读）；
 //   - 目标地址：单体 local://inventory_activity_sync，拆分 <KEEL_INVENTORY_URL>/internal/v1/saga/…（dtm.BranchResolver）。
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"sync/atomic"
 
@@ -39,19 +39,30 @@ const (
 type QuotaSync struct {
 	repo   *repository.Repo
 	action string
-	tc     atomic.Pointer[dtm.TC]
+	query  string
+	tc     atomic.Value // quotaCoord
 }
+
+type quotaCoord struct{ c dtm.Coordinator }
 
 // NewQuotaSync 建发送方。repo 是业务库上的仓储（回查屏障记在那里），res 决定接收分支的地址。
 // 协调器 Start 之后再 Attach —— 回查分支要在 Start 之前注册，与 StockNotifier 同一个环。
-func NewQuotaSync(repo *repository.Repo, res dtm.BranchResolver) *QuotaSync {
-	return &QuotaSync{repo: repo, action: res.BranchURL(inventory.BranchActivitySync)}
+// res 解析库存服务的接收分支（单体 local://，拆分 http://）；self 解析本服务自己的回查分支（嵌入式协调器 local://，
+// 独立协调器时是本服务内网上的 HTTP 地址）。
+func NewQuotaSync(repo *repository.Repo, res, self dtm.BranchResolver) *QuotaSync {
+	return &QuotaSync{repo: repo, action: res.BranchURL(inventory.BranchActivitySync),
+		query: self.BranchURL(BranchPromotionQuotaQuery)}
 }
 
 // Attach 接上已经启动的协调器。
-func (q *QuotaSync) Attach(tc *dtm.TC) { q.tc.Store(tc) }
+func (q *QuotaSync) Attach(tc dtm.Coordinator) { q.tc.Store(quotaCoord{tc}) }
 
-func (q *QuotaSync) ready() bool { return q != nil && q.tc.Load() != nil }
+func (q *QuotaSync) coord() dtm.Coordinator {
+	b, _ := q.tc.Load().(quotaCoord)
+	return b.c
+}
+
+func (q *QuotaSync) ready() bool { return q != nil && q.coord() != nil }
 
 // QueryBranch 是回查分支：写活动的本地事务提交了没有。
 func (q *QuotaSync) QueryBranch() dtm.BranchFunc {
@@ -84,8 +95,12 @@ func (q *QuotaSync) prepare(ctx context.Context, tx repository.Tx, merchantID, p
 	if err != nil {
 		return "", false, err
 	}
-	tc := q.tc.Load()
-	if err := tc.PrepareMsg(gid, []string{q.action}, "local://"+BranchPromotionQuotaQuery, quotaMsgGraceSecs); err != nil {
+	payload, err := quotaPayload(ctx, tx, promotionID)
+	if err != nil {
+		return "", false, err
+	}
+	tc := q.coord()
+	if err := tc.PrepareMsgEx(gid, []string{q.action}, []string{payload}, q.query, quotaMsgGraceSecs, false); err != nil {
 		return "", false, err
 	}
 	ok, err := tx.MarkMsgPrepared(ctx, gid)
@@ -104,7 +119,7 @@ func (q *QuotaSync) finish(ctx context.Context, gid string, committed bool) {
 	if gid == "" || !q.ready() {
 		return
 	}
-	tc := q.tc.Load()
+	tc := q.coord()
 	if !committed {
 		if err := tc.AbortMsg(gid); err != nil {
 			slog.DebugContext(ctx, "作废配额同步消息失败，交给回查", "gid", gid, "err", err)
@@ -138,6 +153,31 @@ func (q *QuotaSync) resync(ctx context.Context, merchantID, promotionID int64) {
 }
 
 // PromotionQuotaSource 是 inventory.QuotaSource 的 core 实现：一场活动当前的配额定义（promotion_skus.quota_qty，00180）。
+// quotaPayload 在写活动的同一个事务里把版本 +1、读出当前定义，编成消息载荷（00240，部署方案 4.1）。
+// 库存服务按版本只接受更新的那份，不再回 core 读——那是下层调上层。
+func quotaPayload(ctx context.Context, tx repository.Tx, promotionID int64) (string, error) {
+	rev, found, err := tx.BumpPromotionQuotaRev(ctx, promotionID)
+	if err != nil {
+		return "", err
+	}
+	p := inventory.QuotaSyncPayload{PromotionID: promotionID, Rev: rev, Found: found, Items: []inventory.QuotaSyncItem{}, Keep: []int64{}}
+	if found {
+		_, items, err := tx.PromotionQuotaDefinition(ctx, promotionID)
+		if err != nil {
+			return "", err
+		}
+		for _, it := range items {
+			if it.Quota == nil {
+				p.Keep = append(p.Keep, it.SKUID)
+				continue
+			}
+			p.Items = append(p.Items, inventory.QuotaSyncItem{SKUID: it.SKUID, Quota: *it.Quota})
+		}
+	}
+	b, err := json.Marshal(p)
+	return string(b), err
+}
+
 type PromotionQuotaSource struct{ repo CouponRepository }
 
 func NewPromotionQuotaSource(r CouponRepository) *PromotionQuotaSource {

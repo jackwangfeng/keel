@@ -22,45 +22,31 @@ const EnvStockFlagInterval = "KEEL_STOCK_FLAG_INTERVAL"
 // 以下三个是「库存跨 0 → 有货标记」这条二阶段消息在 Run 里的装配（service/stock_flags.go、inventory 包
 // stock_msg.go）。集中在这里，Run 里只剩几行调用（都标了「跨 0 通知」）。
 
-// newStockNotifier 建本进程的跨 0 通知器。all（单体）：通知器在进程内，目标是 local://stock_changed；
-// core：返回 nil —— core 不改库存，通知由库存进程发、经内网端口送进来，所以 core 没配内网端口时喊一声。
-// （inventory 角色不走这里，见 runInventory。）
-func newStockNotifier(s SplitConfig, invPool *pgxpool.Pool) *inventory.StockNotifier {
+// newStockNotifier 建库存在本进程里时的跨 0 通知器（core 角色没有：库存在远端）。
+// 嵌入式协调器：投到 local://stock_changed、回查 local://…；独立部署的协调器：发到主题（core 自己也订阅它）、
+// 回查走本服务内网地址。
+func newStockNotifier(s SplitConfig, invPool *pgxpool.Pool, self dtm.BranchResolver) *inventory.StockNotifier {
 	if s.Role == RoleCore {
-		if s.InternalAddr == "" {
-			slog.Warn(EnvRole + "=core 没有配 " + EnvInternalAddr + "：库存服务的跨 0 通知送不进来（投递会一直重试），" +
-				"商品列表的有货排序只靠全量刷新（" + EnvStockFlagInterval + "）")
-		}
 		return nil
 	}
-	return inventory.NewStockNotifier(repository.NewInventoryStore(invPool), "local://"+inventory.BranchStockChanged)
+	action := "local://" + inventory.BranchStockChanged
+	if s.remoteDTM() {
+		action = dtm.TopicPrefix + inventory.TopicStockZeroCrossing
+	}
+	return inventory.NewStockNotifier(repository.NewInventoryStore(invPool), action, self.BranchURL(inventory.BranchStockMsgQuery))
 }
 
-// StockMsgBranches 是跨 0 通知要注册到本进程协调器上的两个分支：接收（core 的 stock_changed）与回查
-// （库存的 inventory_stock_msg_query）。只有单体两个都在本进程；n 为 nil（core）时返回空。
-// 导出给测试：handler 包的协调器照 Run 的样子注册。
-func StockMsgBranches(n *inventory.StockNotifier, flags *service.StockFlagService) map[string]dtm.BranchFunc {
-	if n == nil {
-		return nil
+// StockMsgBranches 是跨 0 通知要注册的分支：core 的接收分支一定有（拆分时库存远端发、core 收）；
+// 回查分支只在库存也在本进程（n != nil）时有。
+func StockMsgBranches(n *inventory.StockNotifier, flags *service.StockFlagService) map[string]dtm.BranchFuncEx {
+	out := map[string]dtm.BranchFuncEx{inventory.BranchStockChanged: flags.StockMsgBranch()}
+	if n != nil {
+		out[inventory.BranchStockMsgQuery] = dtm.Ex(n.QueryBranch())
 	}
-	return map[string]dtm.BranchFunc{
-		inventory.BranchStockChanged:  flags.StockMsgBranch(),
-		inventory.BranchStockMsgQuery: n.QueryBranch(),
-	}
+	return out
 }
 
-// withBranches 把 extra 并进 base（同名时 dtm.StartEx 那边不会发现 —— 两组都是 BranchFunc —— 所以这里拒绝）。
-func withBranches(base, extra map[string]dtm.BranchFunc) map[string]dtm.BranchFunc {
-	for name, fn := range extra {
-		if _, dup := base[name]; dup {
-			panic("分支 " + name + " 重名")
-		}
-		base[name] = fn
-	}
-	return base
-}
-
-func attachStockNotifier(n *inventory.StockNotifier, tc *dtm.TC) {
+func attachStockNotifier(n *inventory.StockNotifier, tc dtm.Coordinator) {
 	if n != nil {
 		n.Attach(tc)
 	}

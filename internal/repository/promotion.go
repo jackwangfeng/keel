@@ -185,6 +185,8 @@ type PromotionTx interface {
 	// PromotionQuotaDefinition 是一场活动当前的配额定义（二阶段消息的接收方回源读它）。
 	// found 为假表示本租户没有这场活动。Quota 为 nil 的项写于 00180 之前。
 	PromotionQuotaDefinition(ctx context.Context, promotionID int64) (found bool, items []PromotionQuota, err error)
+	// BumpPromotionQuotaRev 把活动的配额同步版本 +1 并返回新值（00240，锁住活动行）；活动不存在时 found=false。
+	BumpPromotionQuotaRev(ctx context.Context, promotionID int64) (rev int64, found bool, err error)
 	ListPromotionSkus(ctx context.Context, promotionIDs []int64) (map[int64][]PromotionSku, error)
 	CountGiftGrants(ctx context.Context, promotionIDs []int64) (map[int64]int32, error)
 	// LiveSkuIDs 返回 ids 里在本租户存在且未软删的 SKU。
@@ -610,4 +612,15 @@ func (t tenantTx) LiveCouponTemplateIDs(ctx context.Context, ids []int64) ([]int
 		return nil, nil
 	}
 	return t.q.LiveCouponTemplateIDs(ctx, ids)
+}
+
+func (t tenantTx) BumpPromotionQuotaRev(ctx context.Context, promotionID int64) (int64, bool, error) {
+	rev, err := t.q.BumpPromotionQuotaRev(ctx, promotionID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	return rev, true, nil
 }

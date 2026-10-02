@@ -20,6 +20,14 @@ type ActivityStock struct {
 	UpdatedAt   pgtype.Timestamptz
 }
 
+// 库存服务已应用到的活动配额定义版本（00240）：载荷里的版本不大于它的消息直接忽略（乱序、重复）。
+type ActivitySyncRev struct {
+	MerchantID  int64
+	PromotionID int64
+	Rev         int64
+	UpdatedAt   pgtype.Timestamptz
+}
+
 // AI 员工按提案种类的自动执行策略（00130，AI 经营 M11）。
 type AgentAutoPolicy struct {
 	MerchantID       int64
@@ -782,6 +790,8 @@ type Promotion struct {
 	Status          int16
 	CreatedAt       pgtype.Timestamptz
 	UpdatedAt       pgtype.Timestamptz
+	// 配额同步消息的版本：每登记一次 +1（00240），库存服务按它只接受更新的定义
+	QuotaRev int64
 }
 
 type PromotionGiftGrant struct {

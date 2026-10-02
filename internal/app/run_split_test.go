@@ -2,7 +2,9 @@ package app_test
 
 import (
 	"context"
+	"io"
 	"net/http"
+	"net/url"
 	"net/http/httptest"
 	"strings"
 	"sync"
@@ -11,6 +13,10 @@ import (
 
 	"github.com/keel/keel/internal/app"
 	"github.com/keel/keel/internal/db"
+	"github.com/keel/keel/internal/dtm/dtmserver"
+	"github.com/keel/keel/internal/inventory"
+	"github.com/keel/keel/internal/rpc"
+	"github.com/keel/keel/internal/service"
 )
 
 // 拆分部署（KEEL_ROLE 等）的启动路径。阶段 0 的承诺是两条：
@@ -148,6 +154,28 @@ func TestRunRefusesBadSplitConfig(t *testing.T) {
 		{"inventory 配了远端地址", map[string]string{app.EnvRole: "inventory", app.EnvInternalAddr: "127.0.0.1:18092",
 			app.EnvInternalSecret: internalSecret, app.EnvInventoryURL: "http://inventory:8090"},
 			[]string{app.EnvInventoryURL}},
+
+		// 独立部署的协调器（docs/电商系统-微服务部署方案.md）。
+		{"core 用嵌入式协调器", map[string]string{app.EnvRole: "core", app.EnvInventoryURL: "http://inventory:8090",
+			app.EnvInternalSecret: internalSecret},
+			[]string{app.EnvDTMServer}},
+		{"inventory 还配着嵌入式协调器的存储", map[string]string{app.EnvRole: "inventory", app.EnvInternalAddr: "127.0.0.1:18092",
+			app.EnvInternalSecret: internalSecret, app.EnvDTMDSN: "sqlite:/tmp/x.db"},
+			[]string{app.EnvDTMDSN}},
+		{"两种协调器都配了", map[string]string{app.EnvDTMServer: "http://dtmrs:36789", app.EnvDTMToken: "t"},
+			[]string{app.EnvDTMServer, app.EnvDTMDSN}},
+		{"独立协调器没有令牌", map[string]string{app.EnvDTMDSN: "", app.EnvDTMServer: "http://dtmrs:36789",
+			app.EnvInternalAddr: "127.0.0.1:18092", app.EnvInternalSecret: internalSecret, app.EnvSelfURL: "http://app:8091"},
+			[]string{app.EnvDTMToken}},
+		{"独立协调器没有本服务地址", map[string]string{app.EnvDTMDSN: "", app.EnvDTMServer: "http://dtmrs:36789", app.EnvDTMToken: "t",
+			app.EnvInternalAddr: "127.0.0.1:18092", app.EnvInternalSecret: internalSecret},
+			[]string{app.EnvSelfURL}},
+		{"独立协调器没有内网端口", map[string]string{app.EnvDTMDSN: "", app.EnvDTMServer: "http://dtmrs:36789", app.EnvDTMToken: "t",
+			app.EnvInternalSecret: internalSecret, app.EnvSelfURL: "http://app:8091"},
+			[]string{app.EnvInternalAddr}},
+		{"还配着已停用的 KEEL_CORE_URL", map[string]string{app.EnvRole: "inventory", app.EnvInternalAddr: "127.0.0.1:18092",
+			app.EnvInternalSecret: internalSecret, app.EnvDTMDSN: "", app.EnvCoreURL: "http://app:8091"},
+			[]string{app.EnvCoreURL}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -184,4 +212,64 @@ func TestRunRefusesRLSBypassingInventoryDSN(t *testing.T) {
 	if s.called {
 		t.Fatal("拒绝启动之前已经开始监听")
 	}
+}
+
+// KEEL_ROLE=core + 独立部署的协调器（真起一个 dtmrs）：不嵌协调器，下单四步与回查、跨 0 通知的接收都挂在内网端口上
+// 让协调器回调；启动后在协调器上订阅跨 0 通知的主题（后台，不挡启动）。
+func TestRunCoreRoleUsesIndependentCoordinator(t *testing.T) {
+	r, server := dtmserver.Start(t)
+	env(t, "", "example.com")
+	t.Setenv(app.EnvDTMDSN, "")
+	t.Setenv(app.EnvRole, "core")
+	t.Setenv(app.EnvInventoryURL, "http://127.0.0.1:1")
+	t.Setenv(app.EnvInternalAddr, "127.0.0.1:18093")
+	t.Setenv(app.EnvInternalSecret, internalSecret)
+	t.Setenv(app.EnvDTMServer, server)
+	t.Setenv(app.EnvDTMToken, dtmserver.Token)
+	t.Setenv(app.EnvSelfURL, "http://core-internal:8091")
+	t.Setenv(app.EnvBackground, "off")
+
+	s := newMultiSpy(2)
+	if err := app.Run(context.Background(), s.listen); err != nil {
+		t.Fatalf("启动失败：%v", err)
+	}
+	in := s.get("127.0.0.1:18093")
+	if in == nil {
+		t.Fatal("内网端口没有监听")
+	}
+	post := func(path string) int {
+		w := httptest.NewRecorder()
+		in.ServeHTTP(w, httptest.NewRequest(http.MethodPost, path, strings.NewReader("{}")))
+		return w.Code
+	}
+	bt := url.QueryEscape(rpc.BranchToken(internalSecret))
+	if c := post(rpc.SagaPrefix + "/no_such_branch?bt=" + bt + "&gid=x&branch_id=01&op=action"); c != http.StatusNotFound {
+		t.Fatalf("不存在的分支得到 %d，期望 404（对照组）", c)
+	}
+	for _, name := range []string{service.BranchOrderCreate, service.BranchPromotionQuotaQuery, inventory.BranchStockChanged} {
+		if c := post(rpc.SagaPrefix + "/" + name + "?bt=" + bt + "&gid=x&branch_id=01&op=action"); c == http.StatusNotFound {
+			t.Errorf("分支 %s 没挂在内网端口上（协调器回调不到它）", name)
+		}
+	}
+
+	// 订阅在后台做：等它出现在协调器上。
+	want := "http://core-internal:8091" + rpc.SagaPrefix + "/" + inventory.BranchStockChanged
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		req, _ := http.NewRequest(http.MethodGet, server+"/api/dtmsvr/queryKV?cat=topics&key="+inventory.TopicStockZeroCrossing, nil)
+		req.Header.Set("Authorization", "Bearer "+dtmserver.Token)
+		resp, err := http.DefaultClient.Do(req)
+		if err == nil {
+			b, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if strings.Contains(string(b), strings.ReplaceAll(want, "/", "\\/")) || strings.Contains(string(b), want) {
+				break
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("10 秒内没在协调器上看到订阅 %s", want)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	_ = r
 }

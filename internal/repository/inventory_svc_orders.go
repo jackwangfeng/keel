@@ -163,3 +163,8 @@ func (t invTx) DeleteActivityExcept(ctx context.Context, promotionID int64, keep
 		PromotionID: promotionID, KeepSkuIds: nonNil(keep),
 	})
 }
+
+func (t invTx) AdvanceActivitySyncRev(ctx context.Context, promotionID, rev int64) (bool, error) {
+	n, err := t.q.InvAdvanceActivitySyncRev(ctx, db.InvAdvanceActivitySyncRevParams{PromotionID: promotionID, Rev: rev})
+	return n == 1, err
+}

@@ -28,19 +28,15 @@ package inventory
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"sort"
 	"strconv"
 	"strings"
 
-	"github.com/gin-gonic/gin"
-
 	"github.com/keel/keel/internal/dtm"
-	"github.com/keel/keel/internal/problem"
 	"github.com/keel/keel/internal/repository"
-	"github.com/keel/keel/internal/rpc"
 )
 
 // BranchActivitySync 是库存服务的配额同步分支：单体 local://inventory_activity_sync，
@@ -107,14 +103,41 @@ func (d QuotaDefinition) equal(o QuotaDefinition) bool {
 
 // QuotaSource 是「回源」：读 core 里一场活动当前的配额定义。单体是进程内实现（service.PromotionQuotaSource），
 // 拆分是 RemoteQuotaSource（经 KEEL_CORE_URL 调 core 的内网接口）。ctx 带租户。
+// QuotaSyncPayload 是配额同步消息的载荷（00240）：core 在写活动的同一个事务里把版本 +1、读出定义一起放进来。
+// 接收方按 Rev 只接受比已应用的新的那份（AdvanceActivitySyncRev），不回 core 读——下层不调上层（部署方案 4.1）。
+type QuotaSyncPayload struct {
+	PromotionID int64           `json:"promotion_id"`
+	Rev         int64           `json:"rev"`
+	Found       bool            `json:"found"`
+	Items       []QuotaSyncItem `json:"items"`
+	Keep        []int64         `json:"keep"`
+}
+
+// QuotaSyncItem 是载荷里一个 SKU 的配额。
+type QuotaSyncItem struct {
+	SKUID int64 `json:"sku_id"`
+	Quota int32 `json:"quota"`
+}
+
+func (p QuotaSyncPayload) definition() QuotaDefinition {
+	d := QuotaDefinition{Found: p.Found, Keep: p.Keep}
+	for _, it := range p.Items {
+		d.Items = append(d.Items, ActivityQuota{SKUID: it.SKUID, Quota: it.Quota})
+	}
+	if len(d.Keep) == 0 {
+		d.Keep = nil
+	}
+	return d
+}
+
 type QuotaSource interface {
 	QuotaDefinition(ctx context.Context, promotionID int64) (QuotaDefinition, error)
 }
 
 // ActivitySyncBranch 是配额同步的接收分支。src 为 nil（拆分部署没配 KEEL_CORE_URL）时一律 Unknown 并喊出来：
 // 消息会一直重试到配上为止；活动上线那一刻 core 还会直接同步一次（admin_promotion.go），所以上线的活动不受影响。
-func (l *Local) ActivitySyncBranch(src QuotaSource) dtm.BranchFunc {
-	return func(gid, branchID, op string) int {
+func (l *Local) ActivitySyncBranch(src QuotaSource) dtm.BranchFuncEx {
+	return func(gid, branchID, op, payload string) int {
 		log := slog.Default().With("gid", gid, "branch_id", branchID, "op", op, "branch", BranchActivitySync)
 		if op != "action" {
 			log.Error("配额同步分支收到的 op 不是 action")
@@ -126,13 +149,27 @@ func (l *Local) ActivitySyncBranch(src QuotaSource) dtm.BranchFunc {
 			ctx, _, err = dtm.TenantContextFromTenantGID(context.Background(), ActivityMsgGIDPrefix, gid)
 		}
 		if err != nil {
-			// 解不开的 gid 重试也解不开（目标分支失败也是重试），记下来、吞掉。
 			log.Error("配额同步消息的 gid 解不开，丢弃", "err", err)
 			return dtm.Success
 		}
+		if p := strings.TrimSpace(payload); p != "" && p != "{}" {
+			var pl QuotaSyncPayload
+			if err := json.Unmarshal([]byte(p), &pl); err != nil || pl.PromotionID != pid || pl.Rev <= 0 {
+				// 解不开、对不上 gid 里的活动、或没有版本：重试一万次也一样，记下来、吞掉（库存对账会报出差异）。
+				log.Error("配额同步消息的载荷不成立，丢弃", "promotion_id", pid, "payload", p, "err", err)
+				return dtm.Success
+			}
+			if err := l.applyVersioned(ctx, gid, branchID, op, pl); err != nil {
+				log.Warn("配额同步没做完，按 Unknown 让协调器重试", "promotion_id", pid, "rev", pl.Rev, "err", err)
+				return dtm.Unknown
+			}
+			return dtm.Success
+		}
+		// 没有载荷：00240 之前登记、升级时还在途的消息。单体里定义就在本进程（src），照旧回源读；
+		// 微服务形态没有 src（库存服务不再知道 core），这条只能丢掉，由库存对账报出差异、下一次改活动时补齐。
 		if src == nil {
-			log.Error("配额同步读不到 core 的定义：库存服务没有配 KEEL_CORE_URL，消息会一直重试")
-			return dtm.Unknown
+			log.Error("配额同步消息没有载荷（升级前登记的旧消息），本进程读不到定义，丢弃", "promotion_id", pid)
+			return dtm.Success
 		}
 		if err := l.syncActivity(ctx, gid, branchID, op, pid, src); err != nil {
 			log.Warn("配额同步没做完，按 Unknown 让协调器重试", "promotion_id", pid, "err", err)
@@ -140,6 +177,19 @@ func (l *Local) ActivitySyncBranch(src QuotaSource) dtm.BranchFunc {
 		}
 		return dtm.Success
 	}
+}
+
+// applyVersioned 应用载荷里的定义：版本不比已应用的新就什么都不做（乱序、重复）。版本推进与应用定义、
+// 子事务屏障同一个事务——同一条消息投两次，第二次被屏障判成重复；两条消息乱序到达，旧的那条被版本挡住。
+func (l *Local) applyVersioned(ctx context.Context, gid, branchID, op string, p QuotaSyncPayload) error {
+	_, err := l.store.WithSagaBranch(ctx, gid, branchID, op, func(tx repository.InventoryStoreTx) error {
+		newer, err := tx.AdvanceActivitySyncRev(ctx, p.PromotionID, p.Rev)
+		if err != nil || !newer {
+			return err
+		}
+		return applyQuotaDefinition(ctx, tx, p.PromotionID, p.definition())
+	})
+	return err
 }
 
 func (l *Local) syncActivity(ctx context.Context, gid, branchID, op string, promotionID int64, src QuotaSource) error {
@@ -231,71 +281,3 @@ func applyQuotaDefinition(ctx context.Context, tx repository.InventoryStoreTx, p
 }
 
 // ---------------------------------------------------------------------------
-// 回源的 HTTP 两端：core 的内网接口（MountQuotaSource）与库存服务的客户端（RemoteQuotaSource）
-// ---------------------------------------------------------------------------
-
-const pathQuotaDefinition = "/promotions/quota-definition"
-
-type quotaDefReq struct {
-	PromotionID int64 `json:"promotion_id"`
-}
-
-type quotaDefResp struct {
-	Found bool           `json:"found"`
-	Items []quotaItemDTO `json:"items"`
-	Keep  []int64        `json:"keep"`
-}
-
-type quotaItemDTO struct {
-	SKUID int64 `json:"sku_id"`
-	Quota int32 `json:"quota"`
-}
-
-// MountQuotaSource 把「读一场活动的配额定义」挂到 core 的内网端口上。g 必须是 rpc.Routes.Tenant
-// （验签 + 租户头）：租户由库存服务按 gid 解出来放进请求头。
-func MountQuotaSource(g *gin.RouterGroup, src QuotaSource) {
-	g.POST(pathQuotaDefinition, func(c *gin.Context) {
-		var in quotaDefReq
-		if err := c.ShouldBindJSON(&in); err != nil || in.PromotionID <= 0 {
-			problem.Write(c, http.StatusBadRequest, problem.TypeInvalidRequest, "缺 promotion_id")
-			return
-		}
-		d, err := src.QuotaDefinition(c.Request.Context(), in.PromotionID)
-		if err != nil {
-			slog.ErrorContext(c.Request.Context(), "读活动配额定义失败", "promotion_id", in.PromotionID, "err", err)
-			problem.Write(c, http.StatusInternalServerError, problem.TypeInternal, "读活动配额定义失败")
-			return
-		}
-		out := quotaDefResp{Found: d.Found, Items: make([]quotaItemDTO, 0, len(d.Items)), Keep: d.Keep}
-		for _, it := range d.Items {
-			out.Items = append(out.Items, quotaItemDTO{SKUID: it.SKUID, Quota: it.Quota})
-		}
-		if out.Keep == nil {
-			out.Keep = []int64{}
-		}
-		c.JSON(http.StatusOK, out)
-	})
-}
-
-// RemoteQuotaSource 经 core 的内网接口读配额定义（拆分部署的库存进程用，c 由 rpc.NewClient(KEEL_CORE_URL, …) 建）。
-type RemoteQuotaSource struct{ c *rpc.Client }
-
-func NewRemoteQuotaSource(c *rpc.Client) *RemoteQuotaSource { return &RemoteQuotaSource{c: c} }
-
-func (r *RemoteQuotaSource) QuotaDefinition(ctx context.Context, promotionID int64) (QuotaDefinition, error) {
-	var out quotaDefResp
-	if err := r.c.PostJSON(ctx, rpc.Prefix+pathQuotaDefinition, quotaDefReq{PromotionID: promotionID}, &out); err != nil {
-		if rpc.IsUnknown(err) {
-			return QuotaDefinition{}, fmt.Errorf("%w: core 暂时不可达: %v", ErrUnavailable, err)
-		}
-		return QuotaDefinition{}, fmt.Errorf("core 拒绝了读配额定义: %w", err)
-	}
-	d := QuotaDefinition{Found: out.Found, Keep: out.Keep}
-	for _, it := range out.Items {
-		d.Items = append(d.Items, ActivityQuota{SKUID: it.SKUID, Quota: it.Quota})
-	}
-	if len(d.Keep) == 0 {
-		d.Keep = nil
-	}
-	return d, nil
-}

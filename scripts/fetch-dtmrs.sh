@@ -23,7 +23,7 @@ DEST="$(cd "$DEST" && pwd)"
 
 REPO="${DTMRS_REPO:-https://github.com/jackwangfeng/dtmrs}"
 # 钉死版本。上游改了 C ABI 而这里悄悄跟着变，是最难查的一类问题。
-REF="${DTMRS_REF:-v0.11.1}"
+REF="${DTMRS_REF:-v0.12.0}"
 SRC="${DTMRS_SRC:-$DEST/.dtmrs-src}"
 
 # 下限是 **1.88**，不是 dtmrs 自己声明的 1.82。
@@ -67,6 +67,13 @@ for f in libdtmrs.so libdtmrs.a libdtmrs.dylib; do
     [ -f "$SRC/target/release/$f" ] && cp "$SRC/target/release/$f" "$DEST/lib/"
 done
 cp "$SRC/crates/dtmrs-ffi/dtmrs.h" "$DEST/include/"
+
+# 独立部署形态（微服务）用的协调器二进制：internal/dtm 的远程客户端测试真起一个它来跑，
+# compose.split.yaml 的 dtmrs 服务也从同一个 tag 构建（deploy/dtmrs/Dockerfile）。
+echo "==> cargo build --release -p dtmrs（协调器服务端）"
+cargo build --release --manifest-path "$SRC/Cargo.toml" -p dtmrs
+mkdir -p "$DEST/bin"
+cp "$SRC/target/release/dtmrs" "$DEST/bin/"
 
 echo
 echo "==> 完成：$DEST"
