@@ -255,3 +255,45 @@ func TestRemoteRejectsBadTokenAndBadConfig(t *testing.T) {
 		t.Error("载荷与地址个数不等应当报错")
 	}
 }
+
+// 在途请求一多，连接要复用，不能每条都新建（默认 Transport 每个 host 只留 2 条空闲连接，
+// 拆分形态压测下单 c=32 / 64 时把临时端口耗光，见 remoteTransport 的注释）。
+// 8 路并发、每路 50 次查询：新建的连接数应停在并发数附近，而不是随请求数涨到上百。
+func TestRemoteReusesConnectionsUnderConcurrency(t *testing.T) {
+	var mu sync.Mutex
+	conns := 0
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(time.Millisecond)
+		_, _ = io.WriteString(w, `{"status":"succeed"}`)
+	}))
+	srv.Config.ConnState = func(_ net.Conn, s http.ConnState) {
+		if s == http.StateNew {
+			mu.Lock()
+			conns++
+			mu.Unlock()
+		}
+	}
+	srv.Start()
+	defer srv.Close()
+	r, err := NewRemote(RemoteConfig{Endpoint: srv.URL, Token: remoteTestToken, MaxInflight: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 50; j++ {
+				if _, err := r.Status(fmt.Sprintf("g-%d", j)); err != nil {
+					t.Error(err)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	if conns > 16 {
+		t.Fatalf("400 次查询新建了 %d 条连接（应 ≤ 16）：连接没有复用", conns)
+	}
+}

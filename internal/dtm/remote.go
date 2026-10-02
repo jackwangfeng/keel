@@ -60,10 +60,24 @@ func NewRemote(cfg RemoteConfig) (*Remote, error) {
 		if t <= 0 {
 			t = 10 * time.Second
 		}
-		hc = &http.Client{Timeout: t}
+		hc = &http.Client{Timeout: t, Transport: remoteTransport(2 * cfg.MaxInflight)}
 	}
 	return &Remote{base: u.String(), token: cfg.Token, hc: hc,
 		sem: make(chan struct{}, cfg.MaxInflight), msgSem: make(chan struct{}, cfg.MaxInflight)}, nil
+}
+
+// remoteTransport 给协调器客户端一个够大的空闲连接池。
+//
+// 默认 Transport 每个 host 只留 2 条空闲连接：在途请求一多（两个信号量合起来最多 2×MaxInflight 条），
+// 用完的连接大半被关掉、下一条再新建，关掉的那一头进 TIME_WAIT。拆分形态压测下单 c=32 / 64 时，
+// 本机临时端口被耗光（dial: cannot assign requested address），最多 8% 的下单回 500
+// （docs/性能压测-2026-10.md 第十二节）。空闲池按在途上限开，连接就一直复用。
+// 代理行为与默认 Transport 相同（认 HTTP(S)_PROXY / NO_PROXY），与 rpc.newTransport 同一个写法。
+func remoteTransport(perHost int) *http.Transport {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.MaxIdleConnsPerHost = perHost
+	t.MaxIdleConns = perHost
+	return t
 }
 
 type dtmResult struct {
