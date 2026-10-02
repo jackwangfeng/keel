@@ -3,7 +3,8 @@ package service
 // 渠道订单的收单（第三期，spec §5.2、§7.1）：回调 → 回读权威状态 → 版本守卫 → 落 channel_orders → 按状态决定动作。
 //
 //	orderChanged（EventOrderChanged 的处理器）
-//	  └─ Caps.OutOfOrderInbound：FetchOrder 回读（回调只是提示）；否则第四期从事件载荷规整（今天也回读）
+//	  └─ Caps.OutOfOrderInbound：FetchOrder 回读（回调只是提示）；否则（推送带完整状态）适配器在 ParseInbound 里填了
+//	     Event.Order 就直接用、不回读，没填照样回读。两条路进同一个 applyChannelOrder，版本守卫一样
 //	applyChannelOrder（一个事务，channel_orders 行 FOR UPDATE）
 //	  ├─ version < 已存（或同版本而状态反倒更靠前）：只更新 last_payload（Review Focus 2：旧状态不覆盖新状态、不触发动作）；
 //	  │    同版本照样往下走（Shopify updatedAt 只到秒；上次没做完的靠重放补上），往下的每一步都幂等
@@ -160,6 +161,13 @@ func (s *ChannelService) orderChanged(ctx context.Context, b repository.ChannelB
 		s.log.WarnContext(ctx, "订单回调没带订单号，丢弃", "binding_id", b.ID, "topic", ev.Topic)
 		return nil
 	}
+	if a, ok := s.reg.Lookup(b.Channel); ok && !a.Caps().OutOfOrderInbound && ev.Order != nil {
+		o := *ev.Order
+		if o.ExternalOrderID == "" {
+			o.ExternalOrderID = ev.ExternalOrderID
+		}
+		return s.applyChannelOrder(ctx, b, o)
+	}
 	o, err := s.fetchChannelOrder(ctx, b, ev.ExternalOrderID)
 	if err != nil || o == nil {
 		return err
@@ -169,8 +177,9 @@ func (s *ChannelService) orderChanged(ctx context.Context, b repository.ChannelB
 
 // fetchChannelOrder 回读一张订单的权威状态。适配器不是销售渠道时返回 nil（记一笔、不重试）。
 //
-// Caps.OutOfOrderInbound 的渠道（Shopify）回调只是提示，必须回读；其余渠道第四期改为从事件载荷规整，
-// 今天一律回读（权威状态总是对的，只是多一次调用）。
+// Caps.OutOfOrderInbound 的渠道（Shopify）回调只是提示，必须回读；推送带完整状态的渠道收单走载荷（orderChanged），
+// 这里只剩人工接单 / 重试 / 申请先于订单到的回读。这类渠道不支持回读（FetchOrder 返回 ErrUnsupported）时，
+// 用渠道单上存着的最近一次规整订单（last_payload）：它就是平台推来的最新完整状态。
 func (s *ChannelService) fetchChannelOrder(ctx context.Context, b repository.ChannelBinding, externalID string) (*channel.ChannelOrder, error) {
 	_, ab, err := s.loadBinding(ctx, b.ID)
 	if err != nil {
@@ -183,11 +192,33 @@ func (s *ChannelService) fetchChannelOrder(ctx context.Context, b repository.Cha
 		return nil, nil
 	}
 	o, err := out.FetchOrder(ctx, ab, externalID)
+	if errors.Is(err, channel.ErrUnsupported) && !a.Caps().OutOfOrderInbound {
+		return s.storedChannelOrder(ctx, b.ID, externalID)
+	}
 	if errors.Is(err, channel.ErrCredentials) {
 		s.markCredentialsBroken(ctx, b.ID, channel.RedactError(err, ab.Secrets))
 	}
 	if err != nil {
 		return nil, channel.RedactError(err, ab.Secrets)
+	}
+	return &o, nil
+}
+
+// storedChannelOrder 读渠道单 last_payload 里的规整订单（不支持回读的渠道用，见 fetchChannelOrder）。
+func (s *ChannelService) storedChannelOrder(ctx context.Context, bindingID int64, externalID string) (*channel.ChannelOrder, error) {
+	var o channel.ChannelOrder
+	err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+		co, err := tx.LockChannelOrderByExternal(ctx, bindingID, externalID)
+		if err != nil {
+			return err
+		}
+		if err := json.Unmarshal(co.LastPayload, &o); err != nil || o.ExternalOrderID == "" {
+			return fmt.Errorf("渠道单 %s 没有可用的载荷（渠道不支持回读）", externalID)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	return &o, nil
 }

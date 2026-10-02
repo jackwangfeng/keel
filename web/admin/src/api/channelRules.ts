@@ -69,6 +69,8 @@ export function channelLabel(channel: string): string {
             return "美团";
         case "eleme":
             return "饿了么";
+        case "demo_takeout":
+            return "演示外卖（模拟）";
         case "fake":
             return "测试渠道";
         default:

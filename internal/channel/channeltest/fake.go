@@ -57,6 +57,20 @@ func RequestWebhook(secret, eventID, externalOrderID string, req channel.OrderRe
 	return r, body
 }
 
+// TopicOrderPayload 是带完整订单的回调主题（推送带完整状态的渠道，Caps.OutOfOrderInbound = false）：
+// 正文就是一张 channel.ChannelOrder 的 JSON，事件的 Order 填它。
+const TopicOrderPayload = "order_payload"
+
+// OrderPayloadWebhook 造一条签好名、正文带整张订单的回调。eventID 是去重键。
+func OrderPayloadWebhook(secret, eventID string, o channel.ChannelOrder) (*http.Request, []byte) {
+	body, _ := json.Marshal(o)
+	r := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
+	r.Header.Set(HeaderSignature, Sign(secret, body))
+	r.Header.Set(HeaderEventID, eventID)
+	r.Header.Set(HeaderTopic, TopicOrderPayload)
+	return r, body
+}
+
 // Secrets 是假渠道 binding 的 secrets 形状。
 type Secrets struct {
 	WebhookSecret string `json:"webhook_secret"`
@@ -94,6 +108,10 @@ type Adapter struct {
 	actFailErr error // 失败用哪个错误（nil = 一个普通的可重试错误）
 	orders     map[string]channel.ChannelOrder
 	orderOrder []string // PutOrder 的先后（ListOrders 按它）
+	fetches    int      // FetchOrder 被调了几次
+
+	// FetchErr 非空时 FetchOrder 一律返回它（照「不支持回读」的渠道，如 channel.ErrUnsupported）。
+	FetchErr error
 }
 
 // ActCall 是一次 Act 调用的记录（失败的也记，Err 是返回给调用方的错误）。
@@ -132,6 +150,13 @@ func (a *Adapter) ParseInbound(b channel.Binding, r *http.Request, body []byte) 
 		}
 		_ = json.Unmarshal(body, &p)
 		ev.Kind, ev.ExternalOrderID = channel.EventOrderChanged, p.OrderID
+	}
+	if topic == TopicOrderPayload {
+		var o channel.ChannelOrder
+		if err := json.Unmarshal(body, &o); err != nil {
+			return nil, nil, fmt.Errorf("假渠道订单回调解不开: %w", err)
+		}
+		ev.Kind, ev.ExternalOrderID, ev.Order = channel.EventOrderChanged, o.ExternalOrderID, &o
 	}
 	if topic == TopicRequest {
 		var p struct {
@@ -323,12 +348,19 @@ func (a *Adapter) Act(_ context.Context, _ channel.Binding, o channel.OrderRef, 
 func (a *Adapter) FetchOrder(_ context.Context, _ channel.Binding, id string) (channel.ChannelOrder, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	a.fetches++
+	if a.FetchErr != nil {
+		return channel.ChannelOrder{}, a.FetchErr
+	}
 	o, ok := a.orders[id]
 	if !ok {
 		return channel.ChannelOrder{}, ErrOrderNotFound
 	}
 	return o, nil
 }
+
+// FetchCalls 是 FetchOrder 被调过的次数。
+func (a *Adapter) FetchCalls() int { a.mu.Lock(); defer a.mu.Unlock(); return a.fetches }
 
 // ErrOrderNotFound：假渠道上没有这张单。
 var ErrOrderNotFound = errors.New("假渠道：没有这张订单")
