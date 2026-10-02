@@ -145,6 +145,26 @@ func TestChannelZeroSpans(t *testing.T) {
 		waitZeroSpans(t, ctx, rig, b.ID, store, sku, "true:false,false:false,true:false,true:true", "失败重试之后")
 	})
 
+	// 上线前就是 0（或段被清理掉了）：上次成功推的是 0、这次还是 0，但没有挂着的段 → 重算也要补推一次 0 开段。
+	t.Run("一直是0但没有挂着的段_补开", func(t *testing.T) {
+		adminExec(t, `DELETE FROM channel_listing_zero_spans WHERE binding_id = $1 AND store_id = $2 AND sku_id = $3 AND ended_at IS NULL`,
+			b.ID, store, sku)
+		if err := rig.svc.RecomputeListings(ctx, store, []int64{sku}, 0); err != nil {
+			t.Fatal(err)
+		}
+		waitZeroSpans(t, ctx, rig, b.ID, store, sku, "true:false,false:false,true:false,true:true", "没有挂着的段、重算之后")
+		before := len(rig.fake.Pushes())
+		if err := rig.svc.RecomputeListings(ctx, store, []int64{sku}, 0); err != nil {
+			t.Fatal(err)
+		}
+		if err := rig.svc.Drain(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if n := len(rig.fake.Pushes()); n != before {
+			t.Fatalf("段已经开了，再重算不该再推（多推了 %d 次）", n-before)
+		}
+	})
+
 	repo := repository.New(testPool)
 	t.Run("连推0_0_5_0_两段_第一段已关", func(t *testing.T) {
 		cell := cs.ShirtSKU

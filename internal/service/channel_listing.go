@@ -110,6 +110,9 @@ type listingTarget struct {
 	held bool
 	// zeroHeld：上次推的就是 0 时，那段还挂着的挂零时段的 held；nil = 没有挂着的段或没去查。
 	zeroHeld *bool
+	// zeroSpanMissing：上次成功推的是 0、这次还是 0，却没有挂着的段（上线前就是 0 的格子、段被清理过）。
+	// 再推一次同样的 0，让推送成功的事务开段 —— 挂零时段只在那个事务里写（00330 文件头）。
+	zeroSpanMissing bool
 }
 
 // unchanged：上次推出去的就是这个值，而且那一次是成功的。上次失败（last_error 非空，比如 CAS 冲突时记下的是
@@ -119,7 +122,7 @@ func (t listingTarget) unchanged() bool {
 		return false
 	}
 	// 一直是 0 但 held 变了（keel 补了货但规则仍算 0，或反过来）：再推一次同样的 0，让推送成功的事务关旧段开新段。
-	if t.qty == 0 && t.zeroHeld != nil && *t.zeroHeld != t.held {
+	if t.qty == 0 && (t.zeroSpanMissing || (t.zeroHeld != nil && *t.zeroHeld != t.held)) {
 		return false
 	}
 	return !t.carriesPrice || t.prev.PublishedCents == t.price
@@ -291,8 +294,9 @@ func (s *ChannelService) computeTargets(ctx context.Context, storeID int64, skuI
 	return out, err
 }
 
-// loadZeroHeld 给「上次成功推的是 0、这次还是 0」的格子（只看 binding 这一组）补上还挂着的挂零时段的 held。
-// 只有这种格子才需要查：别的格子值变了本来就要推。没有这种格子时不发查询。
+// loadZeroHeld 给「上次成功推的是 0、这次还是 0」的格子（只看 binding 这一组）补上还挂着的挂零时段的 held；
+// 没有挂着的段的标 zeroSpanMissing（要补推一次开段）。只有这种格子才需要查：别的格子值变了本来就要推。
+// 没有这种格子时不发查询。
 func loadZeroHeld(ctx context.Context, tx repository.Tx, bindingID, storeID int64, ts []listingTarget) error {
 	var skus []int64
 	for _, t := range ts {
@@ -308,8 +312,14 @@ func loadZeroHeld(ctx context.Context, tx repository.Tx, bindingID, storeID int6
 		return err
 	}
 	for i := range ts {
-		if h, ok := open[ts[i].skuID]; ok && ts[i].binding.ID == bindingID && ts[i].qty == 0 {
-			ts[i].zeroHeld = &h
+		t := &ts[i]
+		if t.binding.ID != bindingID || t.qty != 0 || t.prev == nil || t.prev.LastError != nil || t.prev.PublishedQty != 0 {
+			continue
+		}
+		if h, ok := open[t.skuID]; ok {
+			t.zeroHeld = &h
+		} else {
+			t.zeroSpanMissing = true
 		}
 	}
 	return nil
