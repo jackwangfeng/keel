@@ -327,7 +327,11 @@ func (s *ChannelService) pushStore(ctx context.Context, outlet channel.Outlet, a
 				return tx.SetChannelListingError(ctx, ab.ID, storeID, t.skuID, msg)
 			})
 		}
-		s.retry(ctx, j, errors.New(msg))
+		cause := channel.RedactError(r.Err, ab.Secrets) // 保住错误的类型：逐条的限流也不计失败次数
+		if r.Conflict {
+			cause = errors.New(msg)
+		}
+		s.retry(ctx, j, cause)
 	}
 }
 
