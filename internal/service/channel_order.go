@@ -384,8 +384,10 @@ func (s *ChannelService) applyPlatformFacts(ctx context.Context, tx repository.T
 			kicks = append(kicks, k)
 		}
 	}
+	// 平台说已发货 / 已完成就跟着发：Shopify 的「已发货」本来就以有 fulfillment 为准；平台骑手配送的渠道
+	// （外卖）报「骑手已取货」时没有物流单号，platformShipped 用平台单号占位。
 	if (co.Status == repository.ChannelOrderShipped || co.Status == repository.ChannelOrderCompleted) &&
-		order.Status == orderStatusPaid && len(o.Shipments) > 0 {
+		order.Status == orderStatusPaid {
 		if err := s.platformShipped(ctx, tx, b, order, o); err != nil {
 			return nil, err
 		}
@@ -707,7 +709,10 @@ func (s *ChannelService) raiseBaselineForPlatformRestock(ctx context.Context, tx
 // 不入队回传（那就是回声）。买家通知不发：渠道单无 keel 买家，平台自己通知顾客。
 func (s *ChannelService) platformShipped(ctx context.Context, tx repository.Tx, b repository.ChannelBinding,
 	order repository.Order, o channel.ChannelOrder) error {
-	sh := o.Shipments[0]
+	var sh channel.Shipment
+	if len(o.Shipments) > 0 {
+		sh = o.Shipments[0]
+	}
 	for _, x := range o.Shipments {
 		if x.TrackingNo != "" {
 			sh = x

@@ -112,3 +112,21 @@ func TestChannelOrderPayloadManualAcceptUsesStored(t *testing.T) {
 		t.Fatalf("人工接单后已支付的 keel 订单 %d 张，期望 1", n)
 	}
 }
+
+// 平台骑手配送的渠道报「已发货」时不带物流单号：keel 照样 20 → 30（单号用平台单号占位），且不入队回传（回声）。
+func TestChannelOrderPayloadShippedWithoutTracking(t *testing.T) {
+	r := newFakeOrderRig(t, payloadChannel, map[string]any{"auto_accept": true})
+	r.fake.FetchErr = channel.ErrUnsupported
+	r.putPayload(t, r.dressOrder("p-ship", 1, channel.OrderNew, 1))
+	co := r.channelOrderID(t, "p-ship")
+	r.putPayload(t, r.dressOrder("p-ship", 2, channel.OrderShipped, 1))
+	if n := adminQueryInt64(t, `SELECT count(*) FROM orders WHERE channel_order_id = $1 AND status = 30`, co); n != 1 {
+		t.Fatalf("平台报已发货后 keel 订单没到 30")
+	}
+	if got := adminQueryString(t, `SELECT s.tracking_no FROM shipments s JOIN orders o ON o.id = s.order_id WHERE o.channel_order_id = $1`, co); got != "p-ship" {
+		t.Fatalf("发货单号 %q，期望用平台单号 p-ship 占位", got)
+	}
+	if acts := r.fake.ActsOf(channel.ActShip); len(acts) != 0 {
+		t.Fatalf("平台自己发的货又回传了 %d 次", len(acts))
+	}
+}
