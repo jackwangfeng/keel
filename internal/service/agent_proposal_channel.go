@@ -368,7 +368,8 @@ func equalInt64Ptr(a, b *int64) bool {
 	return *a == *b
 }
 
-// execChannelStockRule 以 AI 员工的身份执行：同一事务里逐条核对 prev → upsert → 入队重算推送。
+// execChannelStockRule 以 AI 员工的身份执行：同一事务里先拿 binding 的规则锁（与后台改 / 删规则串行，
+// 否则 READ COMMITTED 下核对 prev 与 upsert 之间提交的人工修改会被覆盖），再逐条核对 prev → upsert → 入队重算推送。
 // 有一条被人改过 → 整条失败（一条都不写），结果说明是哪一格；已经是目标值的条目算已生效（重放幂等）。
 func (s *AgentProposalService) execChannelStockRule(ctx context.Context, p repository.AgentProposal) (ProposalResult, error) {
 	if s.channels == nil {
@@ -383,6 +384,12 @@ func (s *AgentProposalService) execChannelStockRule(ctx context.Context, p repos
 	}
 	applied, already := 0, 0
 	err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+		if err := tx.LockChannelBindingRules(ctx, pl.BindingID); err != nil {
+			if errors.Is(err, repository.ErrChannelNotFound) {
+				return badProposal("binding_id=%d 不存在", pl.BindingID)
+			}
+			return err
+		}
 		if _, err := channelTarget(ctx, tx, pl.BindingID, pl.StoreID); err != nil {
 			return err
 		}

@@ -1841,6 +1841,19 @@ func (q *Queries) ListLinkedSKUIDsPage(ctx context.Context, arg ListLinkedSKUIDs
 	return items, nil
 }
 
+const lockChannelBindingRules = `-- name: LockChannelBindingRules :one
+SELECT id FROM channel_bindings WHERE id = $1::bigint FOR NO KEY UPDATE
+`
+
+// 库存规则按 binding 串行（后台改 / 删规则与执行 AI 的调分配提案）：拿 binding 这一行的 FOR NO KEY UPDATE，
+// 拿到之后再读规则。NO KEY：不挡子表（规则、挂零时段……）插入时外键检查要的 KEY SHARE。
+func (q *Queries) LockChannelBindingRules(ctx context.Context, id int64) (int64, error) {
+	row := q.db.QueryRow(ctx, lockChannelBindingRules, id)
+	var id_2 int64
+	err := row.Scan(&id_2)
+	return id_2, err
+}
+
 const lockChannelMerchant = `-- name: LockChannelMerchant :exec
 SELECT pg_advisory_xact_lock(7340301, current_merchant()::int)
 `

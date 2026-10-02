@@ -11,6 +11,11 @@ RETURNING id, channel, external_account, name, roles, status, config, (secrets <
 SELECT id, channel, external_account, name, roles, status, config, (secrets <> '{}'::jsonb)::boolean AS has_secrets, created_at, updated_at
   FROM channel_bindings WHERE id = @id::bigint;
 
+-- name: LockChannelBindingRules :one
+-- 库存规则按 binding 串行（后台改 / 删规则与执行 AI 的调分配提案）：拿 binding 这一行的 FOR NO KEY UPDATE，
+-- 拿到之后再读规则。NO KEY：不挡子表（规则、挂零时段……）插入时外键检查要的 KEY SHARE。
+SELECT id FROM channel_bindings WHERE id = @id::bigint FOR NO KEY UPDATE;
+
 -- name: ListChannelBindings :many
 SELECT id, channel, external_account, name, roles, status, config, (secrets <> '{}'::jsonb)::boolean AS has_secrets, created_at, updated_at
   FROM channel_bindings ORDER BY id;

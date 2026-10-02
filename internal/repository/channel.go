@@ -146,6 +146,8 @@ type ChannelTx interface {
 
 	CreateChannelBinding(ctx context.Context, in ChannelBindingInput) (ChannelBinding, error)
 	GetChannelBinding(ctx context.Context, id int64) (ChannelBinding, error)
+	// LockChannelBindingRules 拿 binding 这一行的锁，让同一 binding 的库存规则读改写串行；不存在时 ErrChannelNotFound。
+	LockChannelBindingRules(ctx context.Context, id int64) error
 	ListChannelBindings(ctx context.Context) ([]ChannelBinding, error)
 	UpdateChannelBinding(ctx context.Context, id int64, p ChannelBindingPatch) (ChannelBinding, error)
 	// ChannelBindingSecrets 只给适配器用（验签、调平台 API），不许出现在任何响应里。
@@ -303,6 +305,11 @@ func (t tenantTx) GetChannelBinding(ctx context.Context, id int64) (ChannelBindi
 		return ChannelBinding{}, notFound(err)
 	}
 	return bindingFrom(r.ID, r.Channel, r.ExternalAccount, r.Name, r.Roles, r.Status, r.Config, r.HasSecrets, r.CreatedAt, r.UpdatedAt), nil
+}
+
+func (t tenantTx) LockChannelBindingRules(ctx context.Context, id int64) error {
+	_, err := t.q.LockChannelBindingRules(ctx, id)
+	return notFound(err)
 }
 
 func (t tenantTx) ListChannelBindings(ctx context.Context) ([]ChannelBinding, error) {

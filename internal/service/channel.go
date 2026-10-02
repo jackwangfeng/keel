@@ -371,6 +371,10 @@ func (s *ChannelService) ListStoreLinks(ctx context.Context, bindingID int64) (o
 
 func (s *ChannelService) UpsertStockRule(ctx context.Context, r repository.ChannelStockRule) (out repository.ChannelStockRule, err error) {
 	err = s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+		// 与执行 AI 的调分配提案串行（execChannelStockRule）：它核对 prev 之后写，不能夹在中间被这里覆盖或覆盖这里。
+		if err := tx.LockChannelBindingRules(ctx, r.BindingID); err != nil {
+			return err
+		}
 		if out, err = tx.UpsertChannelStockRule(ctx, r); err != nil {
 			return err
 		}
@@ -381,6 +385,9 @@ func (s *ChannelService) UpsertStockRule(ctx context.Context, r repository.Chann
 
 func (s *ChannelService) DeleteStockRule(ctx context.Context, bindingID, id int64) error {
 	return s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+		if err := tx.LockChannelBindingRules(ctx, bindingID); err != nil {
+			return err
+		}
 		if err := tx.DeleteChannelStockRule(ctx, bindingID, id); err != nil {
 			return err
 		}

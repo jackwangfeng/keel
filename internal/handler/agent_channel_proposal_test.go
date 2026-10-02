@@ -4,6 +4,7 @@ package handler_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
 	"net/http"
@@ -337,5 +338,83 @@ func TestChannelStockRuleProposalChannelsOff(t *testing.T) {
 		"evidence": "channel_allocation_review：挂零 48 小时"})
 	if !res.IsError || mcpProblemStatus(res) != 409 || !strings.Contains(mcpText(res), "没有启用的销售渠道") {
 		t.Fatalf("渠道关着应 409「没有启用的销售渠道」：%v %q", mcpProblemStatus(res), mcpText(res))
+	}
+}
+
+// 审查修复 2：执行提案与后台改规则按 binding 串行（channel_bindings 那一行 FOR NO KEY UPDATE）。
+// 一个事务拿着这把锁时，提案执行要等它提交；等到之后读到的是人刚改的规则 → 失败（stale），不覆盖人的修改。
+func TestChannelStockRuleExecSerializesWithRuleWrites(t *testing.T) {
+	r := newChRuleRig(t)
+	cs := r.cs
+	dress := cs.DressSKU
+	_, p := r.propose(t, change(&dress, 9000, 0, prevRule(8000, 0, channel.RuleLevelBinding)))
+	id := int64(p["id"].(float64))
+
+	conn := admin(t)
+	tx, err := conn.Begin(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(context.Background())
+	if _, err := tx.Exec(context.Background(), `SELECT 1 FROM channel_bindings WHERE id = $1 FOR NO KEY UPDATE`, r.b.ID); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan api.AgentProposal, 1)
+	go func() {
+		var ap api.AgentProposal
+		w := postWithKey(t, cs.Host, fmt.Sprintf("/api/v1/admin/agent-proposals/%d/approve", id), "", cs.Token, freshIdemKey())
+		_ = json.Unmarshal(w.Body.Bytes(), &ap)
+		done <- ap
+	}()
+	select {
+	case ap := <-done:
+		t.Fatalf("有事务拿着 binding 的锁时提案执行没有等：%+v", ap)
+	case <-time.After(500 * time.Millisecond):
+	}
+	// 人在这个事务里把连衣裙改成 60%，提交。
+	if _, err := tx.Exec(context.Background(), `INSERT INTO channel_stock_rules (merchant_id, binding_id, store_id, sku_id, ratio_bp, safety_qty)
+		VALUES ($1, $2, $3, $4, 6000, 0)`, cs.MerchantID, r.b.ID, cs.NorthStore, dress); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var ap api.AgentProposal
+	select {
+	case ap = <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("锁放开 10 秒了提案执行还没回来")
+	}
+	if ap.Status != 40 || ap.Result == nil || (*ap.Result)["error_type"] != "stale" {
+		t.Fatalf("等到锁之后应读到人改的规则、执行失败（stale）：%+v", ap)
+	}
+	if got := r.skuRule(t, cs.NorthStore, &dress); got != "6000/0" {
+		t.Fatalf("规则应保持人改的 6000/0，实得 %q", got)
+	}
+
+	// 后台改规则也拿同一把锁。
+	tx2, err := conn.Begin(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx2.Rollback(context.Background())
+	if _, err := tx2.Exec(context.Background(), `SELECT 1 FROM channel_bindings WHERE id = $1 FOR NO KEY UPDATE`, r.b.ID); err != nil {
+		t.Fatal(err)
+	}
+	upserted := make(chan error, 1)
+	go func() {
+		_, e := r.svc.UpsertStockRule(r.ctx, repository.ChannelStockRule{BindingID: r.b.ID, RatioBP: 7000})
+		upserted <- e
+	}()
+	select {
+	case e := <-upserted:
+		t.Fatalf("有事务拿着 binding 的锁时后台改规则没有等（err=%v）", e)
+	case <-time.After(500 * time.Millisecond):
+	}
+	if err := tx2.Rollback(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if e := <-upserted; e != nil {
+		t.Fatal(e)
 	}
 }
