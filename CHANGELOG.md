@@ -25,7 +25,7 @@ Until `1.0.0`, **the API contract may break in a minor release.** What that mean
 in practice:
 
 - `0.x.y` → `0.x.(y+1)` — bug fixes, no contract change. The generated clients
-  in `internal/api/`, `web/src/api/` and `app/src/api/` stay compatible.
+  in `internal/api/`, `web/src/api/` and `flutter_app/lib/api/` stay compatible.
 - `0.x.y` → `0.(x+1).0` — may add, rename or remove operations in
   `docs/电商系统-OpenAPI.yaml`. Regenerate your client.
 - Database migrations are **forward-only**. Every release states which migration
@@ -39,8 +39,52 @@ so "which one is running?" never depends on anyone's memory.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-02
+
+Core migrations `00170`–`00173` (`orders.receiver_phone` and its backfill, keyword search as a definer function,
+`inventory_logs` created-at index), `00180` (`promotion_skus.quota_qty`), `00190` (store fence geometry index),
+`00200` (product listing category and in-stock indexes), `00210` and `00220` (`search_logs` keyword recall
+columns), `00230` (`search_relevance_judgments`) and `00240` (promotion quota revision); the core database lands
+on `00240`. The inventory database (split deployment) gains `00173` and `00240` (`activity_sync_revs`) and lands
+on `00240`.
+
+**Highlights.** The split deployment grows up: the transaction coordinator runs as its own service and the
+inventory service no longer calls back into core — every cross-service effect is a dtmrs two-phase message.
+Uploads can live in any S3-compatible bucket, which removes the last thing pinning the app to one machine.
+Search learns to tell relevant from merely similar: an offline evaluation showed a cosine floor cannot separate
+the two (precision 0.13 at `0.40`), so hot queries now get their vector-only candidates judged in the
+background by a discriminative model. A load-testing round found and fixed nine bottlenecks (small-category
+listing 57×, admin reads 5.7–24×, mixed-load ceiling from ~400 to 1150+ RPS). The frozen uni-app x client is
+gone; Flutter is the only buyer app.
+
 ### Added
 
+- **Search relevance pre-judging with a discriminative model** (`KEEL_SYSTEMONE_ENDPOINT` +
+  `KEEL_SYSTEMONE_TOKEN`, any engine speaking `/v1/systemone`, such as Kev, Jev or infero). Once an hour (one
+  elected instance), queries searched at least 3 times in the last 7 days have their vector-only candidates
+  judged for relevance; results land in `search_relevance_judgments` (migration 00230). Search then keeps a judged
+  candidate when P(relevant) ≥ 0.3 and drops it otherwise; unjudged candidates still go through the cosine floor.
+  On the demo site the first pass judged 528 pairs for 23 hot queries in 5 seconds: "dress" stops pulling in
+  cardigans, coats and jeans, and a query for something the shop does not sell ("vacuum flask") now gets the
+  "you might want" fallback instead of six coffee accessories posing as hits. Off unless configured.
+  Online judging is not used: at ~25 ms + 14 ms per candidate it cannot sit in front of a search request.
+- **Offline search evaluation** (`keel-searcheval sample → label → calibrate`): samples candidate pairs from
+  real search logs, labels them with the same discriminative model (47/50 agreement with a human reference),
+  and calibrates the relevance floor against the labels. This is how the cosine floor was shown not to work.
+- Keyword recall is recorded per search (`search_logs`, migrations 00210 / 00220) and exposed in the explain
+  diagnostics header: AND only, AND then OR, or AND plus vector.
+- **Map picker in the buyer app** (`flutter_map`): `GET /geo/map` says whether a basemap is configured and which
+  layers to stack; `GET /geo/tiles/{layer}/{z}/{x}/{y}` proxies Tianditu or OSM tiles (`KEEL_TILE_PROXY` for an
+  egress proxy where OSM is unreachable). The admin fence editor also shows the shop's other stores and fences.
+- The address book knows the store: `GET /addresses?store_id=` marks each address `in_service_area`, and
+  checkout picks the default address inside the delivery fence automatically.
+- Retention cleanup service (expired idempotency records and other aged rows), run by one elected instance.
+- Graceful shutdown on SIGTERM / SIGINT, `/readyz`, and pool-level `statement_timeout` (15 s) /
+  `idle_in_transaction_session_timeout` defaults.
+- Load-testing kit: `cmd/keel-loadtest`, seed scripts in `scripts/loadtest`, and the report in
+  `docs/性能压测-2026-10.md`.
+- `compose.infero-cpu.yaml`: semantic search without a GPU (CPU build of infero; plan for 4–8 dedicated cores).
+- **Uploads can live in S3-compatible object storage** (`KEEL_UPLOAD_DRIVER=s3`, `KEEL_S3_*`): AWS S3,
 - **Uploads can live in S3-compatible object storage** (`KEEL_UPLOAD_DRIVER=s3`, `KEEL_S3_*`): AWS S3,
   Alibaba Cloud OSS, Tencent COS, or self-hosted SeaweedFS (`compose.s3.yaml`). Required for multi-instance,
   Kubernetes and serverless deployments. Local disk stays the default.
@@ -72,9 +116,9 @@ so "which one is running?" never depends on anyone's memory.
   restocks it, an admin sets or adjusts it), the inventory service registers a dtmrs two-phase
   message in the same local transaction; the core re-reads live stock for the affected products
   and rewrites `product_store_stock`. Changes that do not cross zero send nothing. The full pass
-  becomes a safety net: `KEEL_STOCK_FLAG_INTERVAL` now defaults to `1h`. Split deployments need
-  `KEEL_CORE_URL` plus its own `KEEL_DTM_DSN` on the inventory process and `KEEL_INTERNAL_ADDR`
-  on the core (`compose.split.yaml` sets them); without them ordering falls back to the hourly pass.
+  becomes a safety net: `KEEL_STOCK_FLAG_INTERVAL` now defaults to `1h`. In the split deployment
+  the message goes through the standalone coordinator (topic `stock.zero_crossing`, see above;
+  `compose.split.yaml` wires it); without a coordinator, ordering falls back to the hourly pass.
 - **Promotion quotas sync through a two-phase message instead of a call before the write.** The
   quota an operator configures is now stored in the core (`promotion_skus.quota_qty`, migration
   00180); creating a promotion or replacing its SKUs registers a dtmrs message in the same
@@ -85,6 +129,54 @@ so "which one is running?" never depends on anyone's memory.
   violations discovered only at delivery are clamped (the sold SKU stays, the quota is raised to
   what was sold). Going live still syncs directly first, so a promotion never goes live on a
   stale quota.
+
+- Lock and statement timeouts return `503 busy` with `Retry-After` instead of a bare 500, and only when the
+  operation definitely did not take effect. An open inventory circuit breaker fails the order immediately with
+  503 instead of a 409 after 15 seconds.
+- Request bodies that fail to decode distinguish a syntax error from a wrong field type; 422 names the field.
+- Contract: coordinates, fence points and distances are `format: double`; `POST /search` rejects `size`
+  outside 1–100 with 422; product subtitles and the shop's service phone are validated.
+- Fence checks use planar geometry (`ST_Intersects(fence::geometry, point)`), matching the straight edges the
+  admin map draws; fences read back bit-for-bit (`ST_AsGeoJSON(..., 24)`).
+- The admin console is usable on a phone (≤768 px: drawer menu, single-column forms).
+- Compose overlays (`compose.split.yaml`, `compose.split-b.yaml`, `compose.multi.yaml`) prefix their volume
+  names with the project name, so stacks started with different `-p` no longer share volumes. Under the default
+  project name the volume names are unchanged.
+
+### Performance
+
+- Product listing: small categories page through a category index instead of filtering the whole catalogue
+  (57–58×); deep pages pick the page before computing prices; totals are cached in-process for 30 s per
+  (merchant, store, category, in-stock-only); the in-stock count starts from a partial index (00200).
+- Keyword search truncates by relevance before loading prices and images; multi-word queries try AND first and
+  only fall back to OR when a page is not filled; vector hits that fill a page skip OR entirely; the OR hit set
+  is capped at 1000. Without an embedding engine, p95 at 16 / 32 / 64 concurrent is 51 / 99 / 170 ms.
+- Admin sessions write `last_seen_at` at most once a minute instead of on every request (admin reads 5.7–24×).
+- Notifications with no external channel configured no longer enqueue delivery jobs (in-app messages only).
+- The application pool starts with `jit=off` (`KEEL_DB_JIT` turns it back on): deep listing queries were spending
+  ~200 ms compiling for a 12 ms execution.
+- Overdue-order closing keeps running while a pass is full (up to 20 passes per wake-up) instead of a fixed 500
+  orders per minute.
+
+### Removed
+
+- **The uni-app x buyer client (`app/`)** and its tooling (`generate-uts`, `app-*` make targets, UTS contract
+  checks). It had been frozen since Flutter took over; the last state is tagged `uniapp-final`.
+- `KEEL_CORE_URL` (split deployment; see above). Startup refuses it.
+
+### Fixed
+
+- Category listing computed the inner `LIMIT` as `offset + limit` in int4 and could overflow; now bigint.
+- Three RLS predicates that were not leakproof stopped using indexes (order receiver phone among them); the
+  phone moved to a redundant indexed column (00170 / 00171).
+- Refund review, receipt and over-collection returns read the callback secret on the transaction's own
+  connection instead of a second pooled one (a test now fails on any such second connection).
+- Activating a promotion always registers a quota sync message in the same transaction, closing a race with a
+  concurrent SKU change.
+- Missing in-stock flag rows are treated as out of stock, and flags are filled in right after creating a store,
+  a SKU or an import.
+- Leader election detects a frozen or partitioned leader (server-side `idle_session_timeout`).
+- Buyer app: errors shown to buyers no longer expose HTTP details.
 
 ## [0.6.0] - 2026-09-28
 
@@ -1470,7 +1562,8 @@ Listed because a changelog that only lists wins is an advertisement.
   show why a product was rejected last time; the merchant only ever saw it in
   that one response.
 
-[Unreleased]: https://github.com/jackwangfeng/keel/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/jackwangfeng/keel/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/jackwangfeng/keel/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/jackwangfeng/keel/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/jackwangfeng/keel/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/jackwangfeng/keel/compare/v0.3.1...v0.4.0
