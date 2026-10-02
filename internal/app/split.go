@@ -304,6 +304,7 @@ type RouterOption func(*routerOptions)
 type routerOptions struct {
 	inventory inventory.Service
 	quotaSync *service.QuotaSync
+	uploads   service.UploadStore
 }
 
 // WithInventory 指定公网路由用的库存服务实现。不给时是建在业务池上的进程内实现。

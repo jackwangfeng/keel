@@ -532,7 +532,10 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	// 根目录（uploadStoreFromEnv 没配环境变量时会落一个临时目录），
 	// 于是「写进 A 目录、从 B 目录读」—— 症状是每一张刚传上去的图都 500，
 	// 而两边的配置看上去都对。
-	store := uploadStoreFromEnv()
+	var store service.UploadStore = ro.uploads
+	if store == nil {
+		store = uploadStoreFromEnv()
+	}
 
 	cat := handler.NewAdminCatalogHandler(
 		service.NewAdminCatalogService(repo, store, inv))
@@ -904,6 +907,12 @@ func Run(ctx context.Context, listen ListenFunc) error {
 	if err != nil {
 		return err
 	}
+	// 上传存储建一次、交给路由与孤儿回收两边（同一个实例：理由见 Router 里 store 那一段）。
+	// 对象存储连不上、桶不存在就拒绝启动。
+	uploads, err := uploadStorageFromEnv(ctx)
+	if err != nil {
+		return fmt.Errorf("拒绝启动: %w", err)
+	}
 
 	// 库存服务（微服务拆分阶段 1a / 1b）：all 是建在库存池上的进程内实现，core 是 HTTP 实现。
 	// 下单服务、超时补偿、库存 outbox 与 Router 用的是同一个。
@@ -1054,7 +1063,7 @@ func Run(ctx context.Context, listen ListenFunc) error {
 
 	// 孤儿上传文件回收（数据模型 §13 的 24 小时规则）：没被引用、创建超过 24 小时的文件，
 	// 删记录再删文件。存储与 Router 里写文件的是同一个 driver（同一个 KEEL_UPLOAD_ROOT）。
-	uploadGC := service.NewUploadGCService(repository.New(pool), uploadStoreFromEnv(), service.SweepConfig{}, nil)
+	uploadGC := service.NewUploadGCService(repository.New(pool), uploads, service.SweepConfig{}, nil)
 	bg.Leader("upload_gc", uploadGC.Run)
 	// 只增不删的表的保留期清理（service/retention.go）：检索日志、AI 工具调用、幂等存档、库存流水，
 	// 每小时一轮、分批删。拆分部署（role=core）时库存流水在库存库里，这里不管（inv 传 nil）；
@@ -1166,7 +1175,8 @@ func Run(ctx context.Context, listen ListenFunc) error {
 
 	bg.Start(bgCtx)
 
-	public := Router(pool, res, signer, orders, cfg.Payment, searchEmbedder, WithInventory(inv), WithQuotaSync(quotaSync))
+	public := Router(pool, res, signer, orders, cfg.Payment, searchEmbedder, WithInventory(inv), WithQuotaSync(quotaSync),
+		WithUploadStore(uploads))
 	if cfg.Split.InternalAddr == "" {
 		return listen(ctx, cfg.Addr, public)
 	}

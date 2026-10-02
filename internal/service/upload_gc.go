@@ -154,24 +154,39 @@ func (s *UploadGCService) collectTenant(ctx context.Context, merchantID int64, l
 	log := s.log.With("merchant_id", merchantID)
 	cutoff := s.now().Add(-UploadOrphanGrace)
 
-	var due []repository.OrphanUpload
-	if err := s.repo.WithTenant(tctx, func(tx repository.Tx) error {
-		var err error
-		due, err = tx.ListOrphanUploads(tctx, s.store.Driver(), cutoff, int32(limit))
-		return err
-	}); err != nil {
-		log.ErrorContext(ctx, "扫描孤儿文件失败", "err", err)
-		rep.Failed++
-		return 0
+	// 每个配了的 driver 各扫一遍（UploadStorage：换存储的过渡期里两个 driver 上都可能有孤儿），
+	// 删文件用写它的那个 driver。预算按 driver 依次用，总数不超过 limit。
+	done := 0
+	for _, d := range storeDrivers(s.store) {
+		if done >= limit {
+			break
+		}
+		st, err := storeFor(s.store, d)
+		if err != nil {
+			log.ErrorContext(ctx, "孤儿回收拿不到 driver", "driver", d, "err", err)
+			rep.Failed++
+			continue
+		}
+		var due []repository.OrphanUpload
+		if err := s.repo.WithTenant(tctx, func(tx repository.Tx) error {
+			var err error
+			due, err = tx.ListOrphanUploads(tctx, d, cutoff, int32(limit-done))
+			return err
+		}); err != nil {
+			log.ErrorContext(ctx, "扫描孤儿文件失败", "driver", d, "err", err)
+			rep.Failed++
+			continue
+		}
+		for _, u := range due {
+			s.collectOne(tctx, log, st, u, cutoff, rep)
+		}
+		done += len(due)
 	}
-	for _, u := range due {
-		s.collectOne(tctx, log, u, cutoff, rep)
-	}
-	return len(due)
+	return done
 }
 
 // collectOne 删一条：事务里条件删除记录（与引用赛跑的裁判），提交之后删文件。
-func (s *UploadGCService) collectOne(ctx context.Context, log *slog.Logger, u repository.OrphanUpload,
+func (s *UploadGCService) collectOne(ctx context.Context, log *slog.Logger, st UploadStore, u repository.OrphanUpload,
 	cutoff time.Time, rep *UploadGCReport) {
 	var key string
 	var ok bool
@@ -189,7 +204,7 @@ func (s *UploadGCService) collectOne(ctx context.Context, log *slog.Logger, u re
 		log.InfoContext(ctx, "孤儿文件在删之前被引用了（多半是刚提交的售后申请），留着", "upload_id", u.ID)
 		return
 	}
-	if err := s.store.Remove(key); err != nil {
+	if err := st.Remove(key); err != nil {
 		rep.FileErrors++
 		log.ErrorContext(ctx, "孤儿文件的记录已删，存储里的文件没删掉 —— 留下一个没人认识的文件，请人工清理",
 			"upload_id", u.ID, "storage_key", key, "err", err)

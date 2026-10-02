@@ -63,6 +63,11 @@ type UploadTx interface {
 	// DeleteOrphanUpload 删一条孤儿记录，返回它的 storage_key。谓词在行锁之下重判「没被引用、
 	// 早于 cutoff」，不再成立（刚被引用了）时返回 ok = false、什么也不删。
 	DeleteOrphanUpload(ctx context.Context, id int64, cutoff time.Time) (storageKey string, ok bool, err error)
+
+	// UploadsByDriver 是存量迁移（cmd/keel-uploads）的翻页：本店写在 driver 上、id 大于 afterID 的文件，至多 limit 条。
+	UploadsByDriver(ctx context.Context, driver int16, afterID int64, limit int32) ([]StoredUpload, error)
+	// MoveUploadDriver 把一行从 from 改指到 to（字节已经拷过去并核对过）。返回 false = 这一行已经不在 from 上了。
+	MoveUploadDriver(ctx context.Context, id int64, from, to int16) (bool, error)
 }
 
 // OrphanUpload 是孤儿回收扫到的一条文件记录。
@@ -221,4 +226,31 @@ func (t tenantTx) DeleteOrphanUpload(ctx context.Context, id int64, cutoff time.
 		return "", false, err
 	}
 	return key, true, nil
+}
+
+// StoredUpload 是迁移要的那几列。
+type StoredUpload struct {
+	ID          int64
+	StorageKey  string
+	ContentType string
+	SizeBytes   int64
+	SHA256      string
+}
+
+func (t tenantTx) UploadsByDriver(ctx context.Context, driver int16, afterID int64, limit int32) ([]StoredUpload, error) {
+	rows, err := t.q.ListUploadsByDriver(ctx, db.ListUploadsByDriverParams{Driver: driver, AfterID: afterID, PageLimit: limit})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]StoredUpload, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, StoredUpload{ID: r.ID, StorageKey: r.StorageKey, ContentType: r.ContentType,
+			SizeBytes: r.SizeBytes, SHA256: r.Sha256})
+	}
+	return out, nil
+}
+
+func (t tenantTx) MoveUploadDriver(ctx context.Context, id int64, from, to int16) (bool, error) {
+	n, err := t.q.MoveUploadDriver(ctx, db.MoveUploadDriverParams{ID: id, FromDriver: from, ToDriver: to})
+	return n == 1, err
 }

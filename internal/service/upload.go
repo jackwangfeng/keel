@@ -140,6 +140,10 @@ func (s *UploadService) WithClock(now func() time.Time) *UploadService {
 //	用途不在准入表里      → ErrUploadForbidden           → 403
 //	其余                  → 一个 5 分钟后失效的地址       → 302
 func (s *UploadService) RedirectTarget(ctx context.Context, uploadID int64) (string, error) {
+	return s.redirectTarget(ctx, uploadID, 0)
+}
+
+func (s *UploadService) redirectTarget(ctx context.Context, uploadID int64, w int) (string, error) {
 	if uploadID <= 0 {
 		return "", fmt.Errorf("%w: upload_id 必须是正整数", ErrCatalogBadRequest)
 	}
@@ -161,9 +165,38 @@ func (s *UploadService) RedirectTarget(ctx context.Context, uploadID int64) (str
 		if !ownerMayRead(ctx, up) {
 			return "", fmt.Errorf("%w: purpose=%d", ErrUploadForbidden, up.Purpose)
 		}
-		return s.blobLink(merchantID, up.ID, uploadBlobPrivateDomain), nil
+		return s.linkFor(ctx, merchantID, up, w, uploadBlobPrivateDomain), nil
 	}
-	return s.blobLink(merchantID, up.ID, uploadBlobDomain), nil
+	return s.linkFor(ctx, merchantID, up, w, uploadBlobDomain), nil
+}
+
+// linkFor 是第一跳回的地址：这一行的 driver 能预签名（对象存储配了对外地址）时直接给对象存储的限时地址，
+// 字节不经过应用；否则给站内第二跳（带签名与过期时间）。两者寿命相同（uploadBlobTTL），归属校验都已经在
+// 调用方判过——预签名改变的只是「第二跳由谁来做」。
+//
+// 缩略图（w > 0）只给公开的两类；那一档还没生成时预签名不成立，照旧走站内第二跳现算并缓存，下一次就能直连。
+// 预签名失败（对象存储暂时不可达）不让请求失败：退回站内第二跳，由它去读、读不到再报。
+func (s *UploadService) linkFor(ctx context.Context, merchantID int64, up repository.Upload, w int, domain string) string {
+	if w = SnapThumbWidth(w); w > 0 && !publicPurposes[up.Purpose] {
+		w = 0
+	}
+	if s.store == nil {
+		// 没配存储：第二跳会报出来（BlobFor），第一跳照样签站内地址。
+	} else if st, err := storeFor(s.store, up.Driver); err == nil {
+		if p, ok := st.(Presigner); ok {
+			u, ok, err := p.PresignGet(up.StorageKey, w, up.ContentType, uploadBlobTTL)
+			if err != nil {
+				slog.WarnContext(ctx, "对象存储预签名失败，这次走站内第二跳", "upload_id", up.ID, "err", err)
+			} else if ok {
+				return u
+			}
+		}
+	}
+	link := s.blobLink(merchantID, up.ID, domain)
+	if w > 0 {
+		link += "&w=" + strconv.Itoa(w)
+	}
+	return link
 }
 
 // ownerMayRead：这个请求带着上传者本人的买家身份。
@@ -235,9 +268,9 @@ func (s *UploadService) AdminRedirectTarget(ctx context.Context, uploadID int64)
 		return "", err
 	}
 	if publicPurposes[up.Purpose] {
-		return s.blobLink(merchantID, up.ID, uploadBlobDomain), nil
+		return s.linkFor(ctx, merchantID, up, 0, uploadBlobDomain), nil
 	}
-	return s.blobLink(merchantID, up.ID, uploadBlobPrivateDomain), nil
+	return s.linkFor(ctx, merchantID, up, 0, uploadBlobPrivateDomain), nil
 }
 
 // BlobFor 是第二跳：只认签名与过期时间，然后把字节交出来。
@@ -261,14 +294,7 @@ func (s *UploadService) BlobFor(ctx context.Context, uploadID int64, exp, sig st
 // RedirectTargetWidth 是带 ?w= 的第一跳：判权与 RedirectTarget 完全相同，限时地址后面带上归档后的 w。
 // w 不进签名：它只决定缩略图的档位（已归到固定档），改它拿到的仍是同一个文件，不越权。
 func (s *UploadService) RedirectTargetWidth(ctx context.Context, uploadID int64, w int) (string, error) {
-	target, err := s.RedirectTarget(ctx, uploadID)
-	if err != nil {
-		return "", err
-	}
-	if w = SnapThumbWidth(w); w > 0 {
-		target += "&w=" + strconv.Itoa(w)
-	}
-	return target, nil
+	return s.redirectTarget(ctx, uploadID, w)
 }
 
 // BlobForWidth 是 BlobFor 带缩略图档位的版本（upload_thumb.go）。w <= 0 即原图。
@@ -317,14 +343,19 @@ func (s *UploadService) BlobForWidth(ctx context.Context, uploadID int64, exp, s
 	if s.store == nil {
 		return UploadBlob{}, errors.New("没有配置文件存储 driver，GET /uploads/{upload_id} 不可用")
 	}
+	// 按这一行当初写它的 driver 读（UploadStorage）：换存储的过渡期里新旧 driver 的文件并存。
+	st, err := storeFor(s.store, up.Driver)
+	if err != nil {
+		return UploadBlob{}, err
+	}
 	if w = SnapThumbWidth(w); w > 0 && publicPurposes[up.Purpose] {
-		if blob, ok, err := s.thumbBlob(up.StorageKey, w); err != nil {
+		if blob, ok, err := s.thumbBlob(st, up.StorageKey, w); err != nil {
 			return UploadBlob{}, err
 		} else if ok {
 			return blob, nil
 		}
 	}
-	body, err := s.store.Open(up.StorageKey)
+	body, err := st.Open(up.StorageKey)
 	if err != nil {
 		return UploadBlob{}, err
 	}

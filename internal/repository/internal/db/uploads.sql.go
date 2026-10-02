@@ -312,6 +312,56 @@ func (q *Queries) ListOrphanUploads(ctx context.Context, arg ListOrphanUploadsPa
 	return items, nil
 }
 
+const listUploadsByDriver = `-- name: ListUploadsByDriver :many
+SELECT u.id, u.storage_key, u.content_type, u.size_bytes, u.sha256
+  FROM uploads u
+ WHERE u.driver = $1
+   AND u.id > $2
+ ORDER BY u.id
+ LIMIT $3::int
+`
+
+type ListUploadsByDriverParams struct {
+	Driver    int16
+	AfterID   int64
+	PageLimit int32
+}
+
+type ListUploadsByDriverRow struct {
+	ID          int64
+	StorageKey  string
+	ContentType string
+	SizeBytes   int64
+	Sha256      string
+}
+
+// 存量迁移（cmd/keel-uploads migrate）：本店写在 @driver 上的文件，按 id 往后翻页（id > @after_id）。
+func (q *Queries) ListUploadsByDriver(ctx context.Context, arg ListUploadsByDriverParams) ([]ListUploadsByDriverRow, error) {
+	rows, err := q.db.Query(ctx, listUploadsByDriver, arg.Driver, arg.AfterID, arg.PageLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListUploadsByDriverRow
+	for rows.Next() {
+		var i ListUploadsByDriverRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.StorageKey,
+			&i.ContentType,
+			&i.SizeBytes,
+			&i.Sha256,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const markUploadReferenced = `-- name: MarkUploadReferenced :execrows
 UPDATE uploads SET referenced = TRUE
  WHERE id = $1
@@ -331,6 +381,27 @@ UPDATE uploads SET referenced = TRUE
 // 一个静默的 0 行会让 referenced 永远停在 FALSE，然后 24 小时后被回收掉。
 func (q *Queries) MarkUploadReferenced(ctx context.Context, id int64) (int64, error) {
 	result, err := q.db.Exec(ctx, markUploadReferenced, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const moveUploadDriver = `-- name: MoveUploadDriver :execrows
+UPDATE uploads SET driver = $1
+ WHERE id = $2 AND driver = $3
+`
+
+type MoveUploadDriverParams struct {
+	ToDriver   int16
+	ID         int64
+	FromDriver int16
+}
+
+// 存量迁移的最后一步：字节已经拷到新 driver、核对过了，把这一行改指过去。条件带上旧 driver：
+// 两个迁移进程同时跑时第二个改不到（0 行），不会把已经改过的再改一遍。
+func (q *Queries) MoveUploadDriver(ctx context.Context, arg MoveUploadDriverParams) (int64, error) {
+	result, err := q.db.Exec(ctx, moveUploadDriver, arg.ToDriver, arg.ID, arg.FromDriver)
 	if err != nil {
 		return 0, err
 	}

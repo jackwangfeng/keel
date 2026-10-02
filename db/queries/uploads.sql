@@ -116,3 +116,18 @@ RETURNING storage_key;
 -- 创建超过 24 小时即由 upload_gc 回收。只动这个买家自己传的头像：别人的、别的用途的不碰。
 UPDATE uploads SET referenced = FALSE
  WHERE id = sqlc.arg(id) AND user_id = sqlc.arg(user_id) AND purpose = 2;
+
+-- name: ListUploadsByDriver :many
+-- 存量迁移（cmd/keel-uploads migrate）：本店写在 @driver 上的文件，按 id 往后翻页（id > @after_id）。
+SELECT u.id, u.storage_key, u.content_type, u.size_bytes, u.sha256
+  FROM uploads u
+ WHERE u.driver = sqlc.arg(driver)
+   AND u.id > sqlc.arg(after_id)
+ ORDER BY u.id
+ LIMIT sqlc.arg(page_limit)::int;
+
+-- name: MoveUploadDriver :execrows
+-- 存量迁移的最后一步：字节已经拷到新 driver、核对过了，把这一行改指过去。条件带上旧 driver：
+-- 两个迁移进程同时跑时第二个改不到（0 行），不会把已经改过的再改一遍。
+UPDATE uploads SET driver = sqlc.arg(to_driver)
+ WHERE id = sqlc.arg(id) AND driver = sqlc.arg(from_driver);

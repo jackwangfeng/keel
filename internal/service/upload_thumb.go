@@ -104,14 +104,16 @@ func (s *LocalDiskStore) PutThumb(key string, w int, data []byte) error {
 }
 
 // thumbBlob 给这个文件出 w 档的缩略图。不需要缩（原图不比 w 宽、解不开）时 ok 为 false，调用方照给原图。
-func (s *UploadService) thumbBlob(storageKey string, w int) (UploadBlob, bool, error) {
-	cache, _ := s.store.(ThumbCache)
+//
+// st 是这一行的 driver（storeFor）：缩略图缓存在原图所在的那个 driver 里。
+func (s *UploadService) thumbBlob(st UploadStore, storageKey string, w int) (UploadBlob, bool, error) {
+	cache, _ := st.(ThumbCache)
 	if cache != nil {
 		if rc, n, err := cache.OpenThumb(storageKey, w); err == nil {
 			return UploadBlob{ContentType: "image/jpeg", SizeBytes: n, Body: rc}, true, nil
 		}
 	}
-	rc, err := s.store.Open(storageKey)
+	rc, err := st.Open(storageKey)
 	if err != nil {
 		return UploadBlob{}, false, err
 	}

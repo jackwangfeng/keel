@@ -103,14 +103,10 @@ func (s *LocalDiskStore) Put(merchantID int64, ext string, r io.Reader, limit in
 	if s.root == "" {
 		return "", 0, "", errors.New("本地磁盘 driver 没有配置根目录")
 	}
-	var buf [storageKeyRandomBytes]byte
-	if _, err := rand.Read(buf[:]); err != nil {
+	key, err := newStorageKey(merchantID, ext)
+	if err != nil {
 		return "", 0, "", err
 	}
-	name := hex.EncodeToString(buf[:]) + ext
-	// merchant_id 前缀（§13），外加一层两字符的散列目录：一个租户传几万张图
-	// 之后单目录下的文件数会让 ls 和备份都变慢，而这一层是免费的。
-	key := strconv.FormatInt(merchantID, 10) + "/" + name[:2] + "/" + name
 
 	full := filepath.Join(s.root, filepath.FromSlash(key))
 	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
@@ -150,6 +146,23 @@ func (s *LocalDiskStore) Put(merchantID int64, ext string, r io.Reader, limit in
 	}
 	ok = true
 	return key, n, hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// newStorageKey 生成一个 storage_key（两种 driver 共用同一个形状，存量迁移时 key 不变）。
+// merchant_id 前缀（§13），外加一层两字符的散列目录：一个租户传几万张图之后单目录下的文件数会让
+// ls 和备份都变慢，而这一层是免费的。
+func newStorageKey(merchantID int64, ext string) (string, error) {
+	var buf [storageKeyRandomBytes]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		return "", err
+	}
+	name := hex.EncodeToString(buf[:]) + ext
+	return strconv.FormatInt(merchantID, 10) + "/" + name[:2] + "/" + name, nil
+}
+
+// storageKeyValid 是两种 driver 共用的 key 形状检查：不空、不以 / 开头、不含 ..（路径穿越 / 越权删）。
+func storageKeyValid(key string) bool {
+	return key != "" && !strings.HasPrefix(key, "/") && !strings.Contains(key, "..")
 }
 
 // uploadExtensions 是契约允许的三种 content_type 与它们的扩展名。

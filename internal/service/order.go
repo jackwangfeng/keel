@@ -179,7 +179,7 @@ type OrderService struct {
 	// self 解析 core 自己的四步（建单、核销券、收尾及其补偿）：嵌入式协调器是 local://；独立部署的协调器
 	// 要经 HTTP 回调本服务的内网端口（部署方案第四节）。零值 = 进程内。
 	self dtm.BranchResolver
-	ob  *inventoryOutbox
+	ob   *inventoryOutbox
 
 	// now 可替换，好让测试构造「已过期」这类时间相关的场景。
 	now func() time.Time
