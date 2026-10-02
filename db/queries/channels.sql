@@ -256,6 +256,13 @@ UPDATE channel_orders
 -- 旧版本（或同版本）的快照只留档、不改状态（Review Focus 2）。
 UPDATE channel_orders SET last_payload = @last_payload::jsonb WHERE id = @id::bigint;
 
+-- name: SetChannelOrderKeelBasis :exec
+-- 建 keel 草稿时写下依据（00326：平台行 → keel 订单行、当时已吸收的平台退款）。
+UPDATE channel_orders SET keel_basis = @keel_basis::jsonb WHERE id = @id::bigint;
+
+-- name: GetChannelOrderKeelBasis :one
+SELECT keel_basis FROM channel_orders WHERE id = @id::bigint;
+
 -- name: SetChannelOrderState :exec
 -- keel 这一侧对渠道单的处置：规整状态、关联的 keel 订单、异常、接单截止。四列一起写（调用方给全值）。
 UPDATE channel_orders

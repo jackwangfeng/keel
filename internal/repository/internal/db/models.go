@@ -460,6 +460,7 @@ type ChannelOrder struct {
 	Test              bool
 	CreatedAt         pgtype.Timestamptz
 	UpdatedAt         pgtype.Timestamptz
+	KeelBasis         []byte
 }
 
 type ChannelOrderRequest struct {

@@ -190,9 +190,12 @@ type Action struct {
 	IdemKey           string
 }
 
+// ActionLine 是动作 / 退款涉及的一行。ExternalLineID 是平台上的行（Shopify LineItem gid），同一个变体在一张单上
+// 可以占几行，渠道层按它落到 keel 订单行；适配器给不出时为空，渠道层退回按 SKU 找。
 type ActionLine struct {
-	ExternalSKUID string
-	Qty           int32
+	ExternalLineID string
+	ExternalSKUID  string
+	Qty            int32
 }
 
 // OrderStatus 是渠道订单的规整状态（与 channel_orders.status 同一套数）。
@@ -235,7 +238,8 @@ type ChannelOrder struct {
 }
 
 // OrderLine 是渠道订单的一行。ExternalSKUID 是渠道上的 SKU（Shopify 变体 gid），渠道层据此找 keel SKU。
-// Qty 是下单数量（不随退款减少），RefundedQty 是已退 / 已移除的数量。
+// Qty 是下单数量（不随退款减少），RefundedQty 是已退 / 已移除的数量（Shopify quantity − currentQuantity）。
+// keel 建订单时每行取当时的剩余件数 Qty − RefundedQty（为 0 的行不进 keel 订单）；金额校验仍按 Qty（平台快照的 Goods）。
 type OrderLine struct {
 	ExternalLineID, ExternalSKUID, Title string
 	Qty                                  int32

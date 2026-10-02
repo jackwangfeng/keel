@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/keel/keel/internal/channel"
 	"github.com/keel/keel/internal/channel/shopify/shopifytest"
@@ -196,5 +197,144 @@ func TestChannelOrderTaxesIncluded(t *testing.T) {
 	if got := adminQueryString(t, `SELECT (amounts->>'tax') || ':' || (amounts->>'taxes_included') || ':' || (amounts->>'buyer_paid')
 	                                 FROM channel_orders WHERE id = $1`, co); got != "380:true:4180" {
 		t.Fatalf("渠道单金额 税:价内税:实付 = %q", got)
+	}
+}
+
+func (r *orderRig) keelOrderNo(t *testing.T, co int64) string {
+	t.Helper()
+	return adminQueryString(t, `SELECT order_no FROM orders WHERE channel_order_id = $1 AND status <> 90`, co)
+}
+
+// itemsOf：keel 订单行「单价:件数:已退件数:已退金额」，按行 id。
+func itemsOf(t *testing.T, orderNo string) string {
+	t.Helper()
+	return adminQueryString(t, `SELECT coalesce(string_agg(oi.price_cents || ':' || oi.quantity || ':' || oi.refunded_qty || ':' || oi.refunded_cents,
+	        ',' ORDER BY oi.id), '') FROM order_items oi JOIN orders o ON o.id = oi.order_id WHERE o.order_no = $1`, orderNo)
+}
+
+// refundsOf：keel 退款单「货款:运费:总额:Σ退款行」，按退款单 id。
+func refundsOf(t *testing.T, orderNo string) string {
+	t.Helper()
+	return adminQueryString(t, `SELECT coalesce(string_agg(r.goods_amount_cents || ':' || r.freight_cents || ':' || r.amount_cents || ':' ||
+	        (SELECT coalesce(sum(ri.amount_cents), 0) FROM refund_items ri WHERE ri.refund_id = r.id), ',' ORDER BY r.id), '')
+	   FROM refunds r JOIN orders o ON o.id = r.order_id WHERE o.order_no = $1`, orderNo)
+}
+
+// 审查 8（一）：同一个变体占两行（价不同）—— 平台按行退款，keel 按平台行落到各自的订单行，不会都算到同一行上。
+func TestChannelRefundDuplicateVariantLines(t *testing.T) {
+	r := newOrderRig(t, false, 7)
+	gid := r.sim.AddOrder(shopifytest.OrderSpec{Location: r.loc, Lines: []shopifytest.OrderLineSpec{
+		{Variant: r.variant, Qty: 2}, {Variant: r.variant, Qty: 1, Price: "9.90"}}})
+	r.orderWebhook(t, gid, "orders/create")
+	co := r.channelOrderID(t, gid)
+	no := r.keelOrderNo(t, co)
+	if got := itemsOf(t, no); got != "1990:2:0:0,990:1:0:0" {
+		t.Fatalf("keel 订单行 %q", got)
+	}
+	lids := r.sim.LineItemIDs(gid)
+	r.sim.Refund(gid, []shopifytest.RefundLine{{LineItem: lids[0], Qty: 1}, {LineItem: lids[1], Qty: 1}}, "", true)
+	r.orderWebhook(t, gid, "orders/updated")
+	r.restock(t)
+	if got := itemsOf(t, no); got != "1990:2:1:1990,990:1:1:990" {
+		t.Fatalf("退款后 keel 订单行（单价:件数:已退件数:已退金额）%q，期望两行各退 1 件", got)
+	}
+	if got := refundsOf(t, no); got != "2980:0:2980:2980" {
+		t.Fatalf("退款单 %q", got)
+	}
+	if got := r.stock(t, r.sku); got != 6 {
+		t.Fatalf("keel 库存 %d，期望 7 − 3 + 2 = 6", got)
+	}
+}
+
+// 审查 8（二）：keel 建单前平台上已经退掉 / 移除了一些件（缺货标异常 → 商家在 Shopify 上把缺的那行退了 → 重试）：
+// keel 订单按剩余件数建（剩 0 的行不进来），只扣剩下的库存；当时已有的那笔退款不再记成 keel 退款单；之后的取消照常整单退。
+func TestChannelOrderOpensWithCurrentQuantity(t *testing.T) {
+	r := newOrderRig(t, false, 7)
+	adjust(t, r.local, r.cs.MerchantID, r.cs.NorthStore, r.sku, -6) // keel 只剩 1
+	deadline := time.Now().Add(15 * time.Second)
+	for q, _ := r.sim.Available(r.item, r.loc); q != 1; q, _ = r.sim.Available(r.item, r.loc) {
+		if time.Now().After(deadline) {
+			t.Fatalf("keel 减到 1 后模拟店仍是 %d", q)
+		}
+		r.drain(t)
+		time.Sleep(20 * time.Millisecond)
+	}
+	gid := r.sim.AddOrder(shopifytest.OrderSpec{Location: r.loc, Lines: []shopifytest.OrderLineSpec{
+		{Variant: r.variant, Qty: 2}, {Variant: r.variant, Qty: 1, Price: "9.90"}}})
+	r.orderWebhook(t, gid, "orders/create")
+	co := r.channelOrderID(t, gid)
+	if exc := adminQueryString(t, `SELECT coalesce(exception, '') FROM channel_orders WHERE id = $1`, co); !strings.HasPrefix(exc, "缺货：") {
+		t.Fatalf("渠道单异常 %q，期望缺货", exc)
+	}
+	r.sim.Refund(gid, []shopifytest.RefundLine{{LineItem: r.sim.LineItemIDs(gid)[0], Qty: 2}}, "", true)
+	r.orderWebhook(t, gid, "orders/updated")
+	if err := r.svc.RetryChannelOrder(r.ctx, co); err != nil {
+		t.Fatal(err)
+	}
+	r.drain(t)
+	no := r.keelOrderNo(t, co)
+	if got := adminQueryString(t, `SELECT status || ':' || goods_amount_cents || ':' || paid_cents FROM orders WHERE order_no = $1`, no); got != "20:990:990" {
+		t.Fatalf("keel 订单 状态:货款:实付 = %q，期望 20:990:990（只剩第二行的 1 件）", got)
+	}
+	if got := itemsOf(t, no); got != "990:1:0:0" {
+		t.Fatalf("keel 订单行 %q，期望只有第二行 1 件", got)
+	}
+	if got := r.stock(t, r.sku); got != 0 {
+		t.Fatalf("keel 库存 %d，期望 1 − 1 = 0", got)
+	}
+	r.orderWebhook(t, gid, "orders/updated")
+	if got := refundsOf(t, no); got != "" {
+		t.Fatalf("建单前就有的平台退款又记成了 keel 退款单：%q", got)
+	}
+	r.noListingConflict(t, "按剩余件数建单后")
+
+	r.sim.Cancel(gid, true)
+	r.orderWebhook(t, gid, "orders/cancelled")
+	r.restock(t)
+	if got := adminQueryString(t, `SELECT status || ':' || refunded_cents FROM orders WHERE order_no = $1`, no); got != "60:990" {
+		t.Fatalf("取消后 keel 订单 状态:已退 = %q", got)
+	}
+	if got := refundsOf(t, no); got != "990:0:990:990" {
+		t.Fatalf("取消后退款单 %q", got)
+	}
+	if got := r.stock(t, r.sku); got != 1 {
+		t.Fatalf("取消后 keel 库存 %d，期望回补到 1", got)
+	}
+	r.noListingConflict(t, "取消后")
+}
+
+// 审查 7、6：没有退款行的平台退款（只退钱）—— 价外税的店先剥掉税那一份，运费部分不超过还能退的运费，其余记货款；
+// 之后整单取消时剩下的实收比各行剩余净额少，行退款按比例收紧，Σ 退款行 = 退款单货款，行的已退金额不虚高。
+func TestChannelMoneyOnlyRefundThenCancel(t *testing.T) {
+	r := newOrderRig(t, false, 7)
+	gid := r.sim.AddOrder(shopifytest.OrderSpec{Location: r.loc, Lines: []shopifytest.OrderLineSpec{{Variant: r.variant, Qty: 2}},
+		Shipping: "5.00", Tax: "2.50"})
+	r.orderWebhook(t, gid, "orders/create")
+	co := r.channelOrderID(t, gid)
+	no := r.keelOrderNo(t, co)
+	// 平台总价 47.30（keel 实付 44.80 + 税 2.50）。只退 10.00：不含税那一份 = 1000 × 4480 / 4730 = 947（取整）；
+	// 运费最多 500，其余 447 记货款（对不上哪一件，不落行）。
+	r.sim.Refund(gid, nil, "10.00", false)
+	r.orderWebhook(t, gid, "orders/updated")
+	if got := refundsOf(t, no); got != "447:500:947:0" {
+		t.Fatalf("只退钱的退款单（货款:运费:总额:Σ行）%q，期望 447:500:947:0", got)
+	}
+	r.orderWebhook(t, gid, "orders/updated") // 重放不重复记
+	if got := adminQueryString(t, `SELECT refunded_cents || '/' || paid_cents FROM orders WHERE order_no = $1`, no); got != "947/4480" {
+		t.Fatalf("keel 已退/实付 = %q", got)
+	}
+
+	r.sim.Cancel(gid, true)
+	r.orderWebhook(t, gid, "orders/cancelled")
+	r.restock(t)
+	// 还没退的实收 4480 − 947 = 3533 < 行净额 3980：行退款收紧到 3533，运费 0。
+	if got := refundsOf(t, no); got != "447:500:947:0,3533:0:3533:3533" {
+		t.Fatalf("取消后的退款单 %q，期望第二张 3533:0:3533:3533", got)
+	}
+	if got := itemsOf(t, no); got != "1990:2:2:3533" {
+		t.Fatalf("取消后 keel 订单行 %q，期望已退金额 = Σ 退款行 3533", got)
+	}
+	if got := adminQueryString(t, `SELECT status || ':' || refunded_cents FROM orders WHERE order_no = $1`, no); got != "60:4480" {
+		t.Fatalf("取消后 keel 订单 状态:已退 = %q", got)
 	}
 }

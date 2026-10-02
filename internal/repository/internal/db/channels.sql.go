@@ -783,6 +783,17 @@ func (q *Queries) GetChannelOrder(ctx context.Context, id int64) (GetChannelOrde
 	return i, err
 }
 
+const getChannelOrderKeelBasis = `-- name: GetChannelOrderKeelBasis :one
+SELECT keel_basis FROM channel_orders WHERE id = $1::bigint
+`
+
+func (q *Queries) GetChannelOrderKeelBasis(ctx context.Context, id int64) ([]byte, error) {
+	row := q.db.QueryRow(ctx, getChannelOrderKeelBasis, id)
+	var keel_basis []byte
+	err := row.Scan(&keel_basis)
+	return keel_basis, err
+}
+
 const insertChannelInboundEvent = `-- name: InsertChannelInboundEvent :one
 INSERT INTO channel_inbound_events (binding_id, external_event_id, topic, payload, status)
 VALUES ($1::bigint, $2::text, $3::text, $4::jsonb, $5::smallint)
@@ -1843,6 +1854,21 @@ func (q *Queries) SetChannelListingError(ctx context.Context, arg SetChannelList
 		arg.StoreID,
 		arg.SkuID,
 	)
+	return err
+}
+
+const setChannelOrderKeelBasis = `-- name: SetChannelOrderKeelBasis :exec
+UPDATE channel_orders SET keel_basis = $1::jsonb WHERE id = $2::bigint
+`
+
+type SetChannelOrderKeelBasisParams struct {
+	KeelBasis []byte
+	ID        int64
+}
+
+// 建 keel 草稿时写下依据（00326：平台行 → keel 订单行、当时已吸收的平台退款）。
+func (q *Queries) SetChannelOrderKeelBasis(ctx context.Context, arg SetChannelOrderKeelBasisParams) error {
+	_, err := q.db.Exec(ctx, setChannelOrderKeelBasis, arg.KeelBasis, arg.ID)
 	return err
 }
 

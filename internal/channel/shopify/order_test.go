@@ -159,14 +159,14 @@ func TestFetchOrderStatuses(t *testing.T) {
 		t.Fatalf("取消 = %v / %+v", o.Status, o.Refunds)
 	}
 
-	// 未发货、全额退款（没取消）→ 取消；退款行按变体记
+	// 未发货、全额退款（没取消）→ 取消；退款行带平台行与变体
 	id3 := r.sim.AddOrder(r.spec())
 	r.sim.Refund(id3, []shopifytest.RefundLine{{LineItem: r.va, Qty: 2}, {LineItem: r.vb, Qty: 1}}, "854.83", false)
 	o = status(id3)
 	if o.Status != channel.OrderCancelled || len(o.Refunds) != 1 || o.Refunds[0].Restock {
 		t.Fatalf("全额退款 = %v / %+v", o.Status, o.Refunds)
 	}
-	if ls := o.Refunds[0].Lines; len(ls) != 2 || ls[0] != (channel.ActionLine{ExternalSKUID: r.va, Qty: 2}) {
+	if ls := o.Refunds[0].Lines; len(ls) != 2 || ls[0] != (channel.ActionLine{ExternalLineID: r.sim.LineItemIDs(id3)[0], ExternalSKUID: r.va, Qty: 2}) {
 		t.Fatalf("退款行 = %+v", ls)
 	}
 	if o.Lines[0].RefundedQty != 2 || o.Lines[0].Qty != 2 {

@@ -286,7 +286,8 @@ func normalizeOrder(n orderNode, raw json.RawMessage) (channel.ChannelOrder, err
 		}
 		rf := channel.Refund{ExternalID: r.ID, AmountCents: amt, At: r.CreatedAt}
 		for _, rl := range r.RefundLineItems.Nodes {
-			rf.Lines = append(rf.Lines, channel.ActionLine{ExternalSKUID: variantOf[rl.LineItem.ID], Qty: rl.Quantity})
+			rf.Lines = append(rf.Lines, channel.ActionLine{ExternalLineID: rl.LineItem.ID, ExternalSKUID: variantOf[rl.LineItem.ID],
+				Qty: rl.Quantity})
 			switch rl.RestockType {
 			case "RETURN", "CANCEL", "LEGACY_RESTOCK":
 				rf.Restock = true

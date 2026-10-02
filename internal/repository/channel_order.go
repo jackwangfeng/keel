@@ -124,6 +124,9 @@ type ChannelOrderTx interface {
 	GetChannelOrder(ctx context.Context, id int64) (ChannelOrder, error)
 	UpdateChannelOrderSnapshot(ctx context.Context, id int64, s ChannelOrderSnapshot) error
 	TouchChannelOrderPayload(ctx context.Context, id int64, payload json.RawMessage) error
+	// SetChannelOrderKeelBasis / GetChannelOrderKeelBasis：建 keel 订单时的依据（00326，形状由 service 定）。
+	SetChannelOrderKeelBasis(ctx context.Context, id int64, basis json.RawMessage) error
+	GetChannelOrderKeelBasis(ctx context.Context, id int64) (json.RawMessage, error)
 	SetChannelOrderState(ctx context.Context, id int64, st ChannelOrderState) error
 	ListChannelOrders(ctx context.Context, f ChannelOrderFilter) ([]ChannelOrder, error)
 	CountChannelOrders(ctx context.Context, f ChannelOrderFilter) (int64, error)
@@ -188,6 +191,18 @@ func (t tenantTx) UpdateChannelOrderSnapshot(ctx context.Context, id int64, s Ch
 
 func (t tenantTx) TouchChannelOrderPayload(ctx context.Context, id int64, payload json.RawMessage) error {
 	return t.q.TouchChannelOrderPayload(ctx, db.TouchChannelOrderPayloadParams{LastPayload: jsonOrEmpty(payload), ID: id})
+}
+
+func (t tenantTx) SetChannelOrderKeelBasis(ctx context.Context, id int64, basis json.RawMessage) error {
+	return t.q.SetChannelOrderKeelBasis(ctx, db.SetChannelOrderKeelBasisParams{KeelBasis: jsonOrEmpty(basis), ID: id})
+}
+
+func (t tenantTx) GetChannelOrderKeelBasis(ctx context.Context, id int64) (json.RawMessage, error) {
+	b, err := t.q.GetChannelOrderKeelBasis(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, fmt.Errorf("渠道单 %d: %w", id, ErrChannelNotFound)
+	}
+	return b, err
 }
 
 func (t tenantTx) SetChannelOrderState(ctx context.Context, id int64, st ChannelOrderState) error {

@@ -330,15 +330,22 @@ func (s *ChannelService) applyPlatformFacts(ctx context.Context, tx repository.T
 	if err != nil {
 		return nil, err
 	}
+	basis, err := keelBasisOf(ctx, tx, co.ID, order.OrderNo)
+	if err != nil {
+		return nil, err
+	}
 	switch co.Status {
 	case repository.ChannelOrderCancelled:
-		return s.platformCancelled(ctx, tx, b, co, order, o)
+		return s.platformCancelled(ctx, tx, b, co, order, o, basis)
 	case repository.ChannelOrderRejected, repository.ChannelOrderPendingPayment:
 		return nil, nil
 	}
 	var kicks []string
 	for _, rf := range o.Refunds {
-		k, err := s.platformRefund(ctx, tx, b, &order, rf)
+		if basis.absorbed(rf.ExternalID) {
+			continue // 建 keel 订单时已经按剩余件数吸收了
+		}
+		k, err := s.platformRefund(ctx, tx, b, &order, rf, o.Amounts, basis)
 		if err != nil {
 			return nil, err
 		}
@@ -359,10 +366,10 @@ const channelCancelAfterShip = "平台在 keel 发货后取消了订单"
 
 // platformCancelled：平台取消了订单。
 func (s *ChannelService) platformCancelled(ctx context.Context, tx repository.Tx, b repository.ChannelBinding,
-	co repository.ChannelOrder, order repository.Order, o channel.ChannelOrder) ([]string, error) {
+	co repository.ChannelOrder, order repository.Order, o channel.ChannelOrder, basis *channelKeelBasis) ([]string, error) {
 	switch order.Status {
 	case orderStatusPaid:
-		k, err := s.refundWholeChannelOrder(ctx, tx, b, co, order, o)
+		k, err := s.refundWholeChannelOrder(ctx, tx, b, co, order, o, basis)
 		if err != nil || k == "" {
 			return nil, err
 		}
@@ -385,9 +392,10 @@ func (s *ChannelService) platformCancelled(ctx context.Context, tx repository.Tx
 }
 
 // refundWholeChannelOrder：keel 订单 20 → 50 → 60，记一张成功的退款单（金额 = 还没退的实收，每行退掉剩下的件数），
-// 回补库存（返回任务键）。不调支付渠道：钱是平台退的。
+// 回补库存（返回任务键）。不调支付渠道：钱是平台退的。还没退的实收比各行剩余净额少（之前有只退钱、记成货款的
+// 平台退款）时，行退款从后往前收紧到实收（同 platformRefund），Σ 退款行 = 退款单货款，行的已退金额不虚高。
 func (s *ChannelService) refundWholeChannelOrder(ctx context.Context, tx repository.Tx, b repository.ChannelBinding,
-	co repository.ChannelOrder, order repository.Order, o channel.ChannelOrder) (string, error) {
+	co repository.ChannelOrder, order repository.Order, o channel.ChannelOrder, basis *channelKeelBasis) (string, error) {
 	key := fmt.Sprintf("channel_refund:%d:%s:cancel", b.ID, co.ExternalOrderID)
 	if done, err := tx.ChannelRefundExists(ctx, key); err != nil || done {
 		return "", err
@@ -395,8 +403,8 @@ func (s *ChannelService) refundWholeChannelOrder(ctx context.Context, tx reposit
 	// 平台取消时自己放回了库存（取消带的退款行）：推送基线跟着加，理由同下面 platformRefund。
 	// 单笔记过的部分退款（它们的基线当时已经调过）不再算。
 	for _, rf := range o.Refunds {
-		if !rf.Restock || rf.ExternalID == "" {
-			continue
+		if !rf.Restock || rf.ExternalID == "" || basis.absorbed(rf.ExternalID) {
+			continue // 建单时吸收的退款：那几件没扣过 keel 库存，接单时基线也只减了剩余件数
 		}
 		if done, err := tx.ChannelRefundExists(ctx, fmt.Sprintf("channel_refund:%d:%s", b.ID, rf.ExternalID)); err != nil {
 			return "", err
@@ -429,7 +437,7 @@ func (s *ChannelService) refundWholeChannelOrder(ctx context.Context, tx reposit
 		goods += amt
 	}
 	total := order.PaidCents - order.RefundedCents
-	goods = min(goods, total)
+	goods = trimRefundLines(lines, goods, max(total, 0))
 	refundNo := ""
 	if total > 0 {
 		if refundNo, err = newRefundNo(time.Now()); err != nil {
@@ -471,10 +479,17 @@ func (s *ChannelService) refundWholeChannelOrder(ctx context.Context, tx reposit
 }
 
 // platformRefund：平台上的一笔退款（全部列出，按 ExternalID 幂等）。order 随之更新已退金额。
-// 金额：有退款行时按 keel 订单行的实付（行金额 − 行优惠）× 件数 / 下单件数，平台金额更少时（扣了手续费）按平台的、
-// 更多时（含税，税不进 keel 订单）按行算的；没有退款行（只退运费之类）记成运费退款。都不超过还没退的实收。
+//
+// 金额：先把平台金额换成 keel 口径 —— 价外税的店平台退款含税、税不进 keel 订单，按 BuyerPaid / (BuyerPaid + Tax)
+// 剥掉税那一份（价内税的店不剥）。有退款行时按 keel 订单行的实付（行金额 − 行优惠）× 件数 / 下单件数，平台金额更少时
+// （扣了手续费）按平台的、更多时按行算的；没有退款行（只退钱）时先记运费（不超过还能退的运费 = 实付运费 − 已退运费），
+// 其余记货款、不落行（refund_items 要件数 > 0，这笔钱对不上哪一件）。都不超过还没退的实收。
+//
+// 退款行落到 keel 订单行：按平台行 ID（建单依据 basis.Items，同一个变体占两行也分得开）；依据里没有的平台行
+// （建单时已经剩 0 件、没进 keel 订单）不记件数。没有依据（或适配器不给平台行 ID）时退回按 SKU 找，同一个 SKU 的几行
+// 按顺序分。
 func (s *ChannelService) platformRefund(ctx context.Context, tx repository.Tx, b repository.ChannelBinding,
-	order *repository.Order, rf channel.Refund) (string, error) {
+	order *repository.Order, rf channel.Refund, am channel.OrderAmounts, basis *channelKeelBasis) (string, error) {
 	if rf.ExternalID == "" || order.Status == orderStatusRefunding || order.Status == orderStatusRefunded {
 		return "", nil
 	}
@@ -486,32 +501,18 @@ func (s *ChannelService) platformRefund(ctx context.Context, tx repository.Tx, b
 	if err != nil {
 		return "", err
 	}
-	bySKU := map[int64]*repository.RefundableItem{}
+	byID := map[int64]*repository.RefundableItem{}
+	bySKU := map[int64][]*repository.RefundableItem{}
 	for i := range items {
-		bySKU[items[i].SKUID] = &items[i]
+		byID[items[i].ID] = &items[i]
+		bySKU[items[i].SKUID] = append(bySKU[items[i].SKUID], &items[i])
 	}
 	var lines []repository.NewRefundItem
 	var goods int64
-	for _, l := range rf.Lines {
-		if l.Qty <= 0 {
-			continue
-		}
-		link, err := tx.ChannelItemLinkByExternal(ctx, b.ID, repository.ChannelItemSKU, l.ExternalSKUID)
-		if errors.Is(err, repository.ErrChannelNotFound) {
-			s.log.WarnContext(ctx, "平台退款里有一行对不上 keel 的 SKU，这一行不记件数", "order_no", order.OrderNo,
-				"external_sku_id", l.ExternalSKUID)
-			continue
-		}
-		if err != nil {
-			return "", err
-		}
-		it := bySKU[link.KeelID]
-		if it == nil {
-			continue
-		}
-		qty := min(l.Qty, it.Quantity-it.RefundedQty)
+	take := func(it *repository.RefundableItem, want int32) int32 {
+		qty := min(want, it.Quantity-it.RefundedQty)
 		if qty <= 0 {
-			continue
+			return 0
 		}
 		net := it.AmountCents - it.DiscountCents
 		amt := min(net*int64(qty)/int64(it.Quantity), net-it.RefundedCents)
@@ -522,18 +523,49 @@ func (s *ChannelService) platformRefund(ctx context.Context, tx repository.Tx, b
 		it.RefundedCents += amt
 		lines = append(lines, repository.NewRefundItem{OrderItemID: it.ID, Quantity: qty, AmountCents: amt})
 		goods += amt
+		return qty
 	}
+	for _, l := range rf.Lines {
+		if l.Qty <= 0 {
+			continue
+		}
+		if basis != nil && l.ExternalLineID != "" && len(basis.Items) > 0 {
+			if it := byID[basis.Items[l.ExternalLineID]]; it != nil {
+				take(it, l.Qty)
+			}
+			continue // 依据里没有：建单时这一行已经剩 0 件
+		}
+		link, err := tx.ChannelItemLinkByExternal(ctx, b.ID, repository.ChannelItemSKU, l.ExternalSKUID)
+		if errors.Is(err, repository.ErrChannelNotFound) {
+			s.log.WarnContext(ctx, "平台退款里有一行对不上 keel 的 SKU，这一行不记件数", "order_no", order.OrderNo,
+				"external_sku_id", l.ExternalSKUID)
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		want := l.Qty
+		for _, it := range bySKU[link.KeelID] {
+			if want <= 0 {
+				break
+			}
+			want -= take(it, want)
+		}
+	}
+	// 合并同一个 keel 订单行的退款行（uk_refund_items：一张退款单每行只能出现一次）。
+	lines = mergeRefundLines(lines)
 	remain := order.PaidCents - order.RefundedCents
-	total := min(rf.AmountCents, remain)
+	total := min(keelRefundCents(rf.AmountCents, am), remain)
 	if len(lines) > 0 {
 		total = min(total, goods)
-		for i := len(lines) - 1; i >= 0 && goods > total; i-- {
-			d := min(goods-total, lines[i].AmountCents)
-			lines[i].AmountCents -= d
-			goods -= d
-		}
+		goods = trimRefundLines(lines, goods, max(total, 0))
 	} else {
-		goods = 0
+		refundedFreight, err := tx.OtherRefundFreight(ctx, order.ID, 0)
+		if err != nil {
+			return "", err
+		}
+		freight := min(max(total, 0), max(order.FreightPaidCents()-refundedFreight, 0))
+		goods = total - freight
 	}
 	if total <= 0 {
 		return "", nil
@@ -579,6 +611,42 @@ func (s *ChannelService) platformRefund(ctx context.Context, tx repository.Tx, b
 			order.OrderNo, yuanText(total))
 	}
 	return kick, notifyChannelOrderAttention(ctx, tx, *order, "refund:"+rf.ExternalID, "渠道订单在平台上退了款", hint)
+}
+
+// keelRefundCents 把平台退款金额换成 keel 口径：价外税的店剥掉税那一份（按 BuyerPaid / (BuyerPaid + Tax)，向下取整），
+// 价内税的店（税在商品价里）原样。
+func keelRefundCents(platform int64, am channel.OrderAmounts) int64 {
+	if am.TaxesIncluded || am.TaxCents <= 0 || am.BuyerPaidCents <= 0 {
+		return platform
+	}
+	return platform * am.BuyerPaidCents / (am.BuyerPaidCents + am.TaxCents)
+}
+
+// trimRefundLines 把退款行金额从后往前减，直到合计 = want（want < sum 时）；返回收紧后的合计。
+// 行的件数不变（货确实退了），只是这几件实际退回的钱更少（平台扣了手续费、或之前只退钱的那笔已经占掉了一部分）。
+func trimRefundLines(lines []repository.NewRefundItem, sum, want int64) int64 {
+	for i := len(lines) - 1; i >= 0 && sum > want; i-- {
+		d := min(sum-want, lines[i].AmountCents)
+		lines[i].AmountCents -= d
+		sum -= d
+	}
+	return sum
+}
+
+// mergeRefundLines 把落到同一个 keel 订单行上的退款行并成一行（按第一次出现的顺序）。
+func mergeRefundLines(lines []repository.NewRefundItem) []repository.NewRefundItem {
+	at := map[int64]int{}
+	out := lines[:0:0]
+	for _, l := range lines {
+		if i, ok := at[l.OrderItemID]; ok {
+			out[i].Quantity += l.Quantity
+			out[i].AmountCents += l.AmountCents
+			continue
+		}
+		at[l.OrderItemID] = len(out)
+		out = append(out, l)
+	}
+	return out
 }
 
 // raiseBaselineForPlatformRestock：平台退款时自己把货放回了平台上的库存（Shopify restockType CANCEL / RETURN），
@@ -714,6 +782,44 @@ func (s *ChannelService) mappedStore(ctx context.Context, tx repository.Tx, bind
 	return nil, nil
 }
 
+// channelKeelBasis 是 channel_orders.keel_basis（00326）：建 keel 订单时的依据。
+type channelKeelBasis struct {
+	OrderNo         string           `json:"order_no"`
+	Items           map[string]int64 `json:"items"`            // 平台行 ID → order_items.id
+	AbsorbedRefunds []string         `json:"absorbed_refunds"` // 建单时已有的带行退款（已按剩余件数吸收）
+}
+
+// keelBasisOf 读渠道单的建单依据；不是 orderNo 这张 keel 订单的（没写过、或属于之前关掉的草稿）返回 nil。
+func keelBasisOf(ctx context.Context, tx repository.Tx, channelOrderID int64, orderNo string) (*channelKeelBasis, error) {
+	raw, err := tx.GetChannelOrderKeelBasis(ctx, channelOrderID)
+	if err != nil {
+		return nil, err
+	}
+	var b channelKeelBasis
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &b); err != nil {
+			return nil, fmt.Errorf("渠道单 %d 的 keel_basis 解不开：%w", channelOrderID, err)
+		}
+	}
+	if b.OrderNo == "" || b.OrderNo != orderNo {
+		return nil, nil
+	}
+	return &b, nil
+}
+
+// absorbed：这笔平台退款在建 keel 订单时已经吸收（不再记）。
+func (b *channelKeelBasis) absorbed(externalRefundID string) bool {
+	if b == nil {
+		return false
+	}
+	for _, id := range b.AbsorbedRefunds {
+		if id == externalRefundID {
+			return true
+		}
+	}
+	return false
+}
+
 // channelSaga 是提交之后要跑的接单 SAGA。
 type channelSaga struct {
 	orderNo string
@@ -744,15 +850,24 @@ func (s *ChannelService) openChannelOrderTx(ctx context.Context, tx repository.T
 	case co.StoreID == nil:
 		return fail("门店：平台门店 %s 没有映射到 keel 门店", o.ExternalStoreID)
 	}
+	// 每行按当时的剩余件数（Qty − RefundedQty）进 keel 订单：建单前平台上已经退掉 / 移除的件不扣库存、不发货，
+	// 剩 0 的行不进来（也就不要求它链到 keel SKU）。金额校验仍按下单件数（平台快照的 Goods）。
 	type keelLine struct {
-		sku   int64
-		title string
-		qty   int32
-		price int64
+		extLine     string
+		sku         int64
+		title       string
+		qty, placed int32 // 剩余件数、下单件数
+		price       int64
 	}
 	var lines []keelLine
+	var placedGoods int64
 	for i, l := range o.Lines {
 		if l.Qty <= 0 {
+			continue
+		}
+		placedGoods += l.PriceCents * int64(l.Qty)
+		cur := l.Qty - max(0, l.RefundedQty)
+		if cur <= 0 {
 			continue
 		}
 		link, err := tx.ChannelItemLinkByExternal(ctx, b.ID, repository.ChannelItemSKU, l.ExternalSKUID)
@@ -762,10 +877,11 @@ func (s *ChannelService) openChannelOrderTx(ctx context.Context, tx repository.T
 		if err != nil {
 			return nil, err
 		}
-		lines = append(lines, keelLine{sku: link.KeelID, title: l.Title, qty: l.Qty, price: l.PriceCents})
+		lines = append(lines, keelLine{extLine: l.ExternalLineID, sku: link.KeelID, title: l.Title, qty: cur, placed: l.Qty,
+			price: l.PriceCents})
 	}
 	if len(lines) == 0 {
-		return fail("订单里没有商品行")
+		return fail("订单里没有还要发的商品行")
 	}
 	ids := make([]int64, 0, len(lines))
 	for _, l := range lines {
@@ -783,29 +899,42 @@ func (s *ChannelService) openChannelOrderTx(ctx context.Context, tx repository.T
 
 	am := o.Amounts
 	discount := am.PlatformSubsidyCents + am.MerchantSubsidyCents
-	var goods int64
-	for _, l := range lines {
-		goods += l.price * int64(l.qty)
-	}
 	switch {
-	case goods != am.GoodsCents:
-		return fail("金额：商品行合计 %d 分，平台给的商品金额 %d 分", goods, am.GoodsCents)
+	case placedGoods != am.GoodsCents:
+		return fail("金额：商品行合计 %d 分，平台给的商品金额 %d 分", placedGoods, am.GoodsCents)
 	case am.BuyerPaidCents != am.GoodsCents+am.FreightCents-discount || discount < 0 || am.FreightCents < 0:
 		return fail("金额：平台快照对不上（商品 %d + 运费 %d − 优惠 %d ≠ 实付 %d，单位分）",
 			am.GoodsCents, am.FreightCents, discount, am.BuyerPaidCents)
 	}
-	// 优惠按行金额比例摊（最大余数），摊不进的记运费优惠。
-	shares := make([]int64, len(lines))
-	lineDiscount := min(discount, goods)
-	if goods > 0 {
-		var given int64
-		for i, l := range lines {
-			shares[i] = lineDiscount * l.price * int64(l.qty) / goods
-			given += shares[i]
+	// 优惠按下单时的行金额比例摊到平台的每一行（最大余数），摊不进的记运费优惠；剩余件数少于下单件数的行按件数比例
+	// 留下它那一份（退掉 / 移除的件带走它们的优惠）。没有退掉的件时 keel 实付 = BuyerPaid。
+	type placedLine struct {
+		amount int64
+		kept   int // lines 里的下标，-1 = 剩 0 件、没进 keel 订单
+	}
+	var placed []placedLine
+	k := 0
+	for _, l := range o.Lines {
+		if l.Qty <= 0 {
+			continue
 		}
-		for i := 0; given < lineDiscount; i = (i + 1) % len(lines) {
-			if shares[i] < lines[i].price*int64(lines[i].qty) {
-				shares[i]++
+		pl := placedLine{amount: l.PriceCents * int64(l.Qty), kept: -1}
+		if l.Qty-max(0, l.RefundedQty) > 0 {
+			pl.kept, k = k, k+1
+		}
+		placed = append(placed, pl)
+	}
+	lineDiscount := min(discount, placedGoods)
+	all := make([]int64, len(placed))
+	if placedGoods > 0 {
+		var given int64
+		for i, pl := range placed {
+			all[i] = lineDiscount * pl.amount / placedGoods
+			given += all[i]
+		}
+		for i := 0; given < lineDiscount; i = (i + 1) % len(placed) {
+			if all[i] < placed[i].amount {
+				all[i]++
 				given++
 			}
 		}
@@ -813,6 +942,29 @@ func (s *ChannelService) openChannelOrderTx(ctx context.Context, tx repository.T
 	freightDiscount := discount - lineDiscount
 	if freightDiscount > am.FreightCents {
 		return fail("金额：优惠 %d 分超过了商品与运费的合计", discount)
+	}
+	shares := make([]int64, len(lines))
+	for i, pl := range placed {
+		if pl.kept >= 0 {
+			l := lines[pl.kept]
+			shares[pl.kept] = all[i] * int64(l.qty) / int64(l.placed)
+		}
+	}
+	var goods, keptDiscount int64
+	for i, l := range lines {
+		goods += l.price * int64(l.qty)
+		keptDiscount += shares[i]
+	}
+	keelDiscount := keptDiscount + freightDiscount
+	payable := goods + am.FreightCents - keelDiscount
+	// 建单时平台上已有的带行退款：退掉的件已经不在 keel 订单里（上面按剩余件数建），之后不再记成 keel 退款单。
+	// 推送基线：接单时只减剩余件数；平台那边是「减下单件数、再加回退款放回的件数」，放回了就对得上，
+	// 没放回（NO_RESTOCK）就差这几件，下一次推送记一条差异、按 keel 的数覆盖。只退钱的退款（没有行）不吸收，接单后照常记。
+	basis := channelKeelBasis{Items: map[string]int64{}, AbsorbedRefunds: []string{}}
+	for _, rf := range o.Refunds {
+		if rf.ExternalID != "" && len(rf.Lines) > 0 {
+			basis.AbsorbedRefunds = append(basis.AbsorbedRefunds, rf.ExternalID)
+		}
 	}
 
 	now := time.Now()
@@ -830,8 +982,8 @@ func (s *ChannelService) openChannelOrderTx(ctx context.Context, tx repository.T
 	recvJSON, _ := json.Marshal(recv)
 	remark := fmt.Sprintf("%s %s", b.Channel, o.ExternalOrderName)
 	draft, err := tx.CreateChannelOrderDraft(ctx, repository.NewChannelOrderDraft{OrderNo: orderNo, ChannelOrderID: co.ID,
-		StoreID: *co.StoreID, GoodsAmountCents: am.GoodsCents, FreightCents: am.FreightCents,
-		FreightDiscountCents: freightDiscount, DiscountCents: discount, PayableCents: am.BuyerPaidCents,
+		StoreID: *co.StoreID, GoodsAmountCents: goods, FreightCents: am.FreightCents,
+		FreightDiscountCents: freightDiscount, DiscountCents: keelDiscount, PayableCents: payable,
 		ReceiverSnapshot: recvJSON, Remark: &remark, ExpireAt: now.Add(channelOrderDraftTTL)})
 	if errors.Is(err, repository.ErrCatalogBadReference) {
 		return fail("门店：keel 门店 %d 不存在或已删除", *co.StoreID)
@@ -850,6 +1002,24 @@ func (s *ChannelService) openChannelOrderTx(ctx context.Context, tx repository.T
 			return nil, err
 		}
 		deduct[l.sku] += l.qty
+	}
+	// 平台行 → keel 订单行：同一个事务里按插入顺序建的，ListRefundableItems 按 id 排，一一对应。
+	items, err := tx.ListRefundableItems(ctx, draft.ID)
+	if err != nil {
+		return nil, err
+	}
+	if len(items) != len(lines) {
+		return nil, fmt.Errorf("渠道单 %d 的 keel 草稿 %s 建了 %d 行，读回来 %d 行", co.ID, orderNo, len(lines), len(items))
+	}
+	for i, l := range lines {
+		if l.extLine != "" {
+			basis.Items[l.extLine] = items[i].ID
+		}
+	}
+	basis.OrderNo = orderNo
+	basisJSON, _ := json.Marshal(basis)
+	if err := tx.SetChannelOrderKeelBasis(ctx, co.ID, basisJSON); err != nil {
+		return nil, err
 	}
 	if err := tx.SetChannelOrderState(ctx, co.ID, repository.ChannelOrderState{Status: co.Status, OrderNo: &orderNo,
 		Exception: nil, AcceptDeadline: co.AcceptDeadline}); err != nil {
@@ -880,6 +1050,9 @@ func resumeChannelSaga(ctx context.Context, tx repository.Tx, order repository.O
 	for _, l := range lines {
 		saga.lines = append(saga.lines, inventory.OrderLine{SKUID: l.SKUID, Qty: l.Quantity})
 	}
+	// 同一个变体在平台单上占两行时 keel 订单也是两行，扣减按 SKU 并起来（同 openChannelOrderTx 的 deduct）。
+	saga.lines = mergeSKULines(saga.lines)
+	sort.Slice(saga.lines, func(i, j int) bool { return saga.lines[i].SKUID < saga.lines[j].SKUID })
 	return saga, nil
 }
 
