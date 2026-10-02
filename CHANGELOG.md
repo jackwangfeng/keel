@@ -42,9 +42,26 @@ so "which one is running?" never depends on anyone's memory.
 Core migrations `00300` (`channel_merchants`, also in the inventory database), `00301` (channel tables),
 `00302` (`uploads.channel_binding_id`: an upload's owner may now be a channel account), and `00320`–`00326`
 (channel orders: `orders.source`/`channel_order_id`, `channel_orders`/`channel_order_requests`, nullable
-`refunds.user_id`/`payment_id`, a `channel_orders` notification target, and the per-order keel-build basis).
+`refunds.user_id`/`payment_id`, a `channel_orders` notification target, and the per-order keel-build basis),
+and `00330`–`00332` (AI channel allocation: `channel_listing_zero_spans`, `agent_ro` channel views and
+`orders.source`, `agent_auto_policies.max_ratio_step_bp`).
 
 ### Added
+
+- **AI employee: channel stock allocation.** A new MCP compute tool, `channel_allocation_review`, gives the agent,
+  per store × SKU × sales channel, the rule in force, the published quantity, units sold, daily velocity while in
+  stock, hours the channel sat at zero (split into "keel had stock but the rule published 0" and "keel was out"),
+  stock-out rejections and net revenue per unit (channel price minus `commission_bp` minus SKU cost), plus
+  rule-based baseline suggestions. A new proposal kind, `channel_stock_rule`, changes a channel's ratio / safety
+  stock / cap for a store or store × SKU: the agent must quote the current rule (`prev`), checked again under a
+  per-binding lock at execution so a human edit is never overwritten; proposals carry a preview of the published
+  quantity before and after; auto-execution is capped by `max_ratio_step_bp` and never zeroes a channel; a 7-day
+  before/after review lands in the scorecard. Zero periods are recorded from push results
+  (`channel_listing_zero_spans`). Playbook: `agent/skills/渠道库存分配.md`. Design:
+  `docs/superpowers/specs/2026-10-03-ai-channel-allocation-design.md`.
+- Channels whose callbacks carry the full order state are ingested straight from the payload (no read-back);
+  a demo-only simulated takeout channel (`demo_takeout`, registered only with `KEEL_CHANNEL_DEMO=on`) drives the
+  allocation loop on the demo site. It is a simulation, not a Meituan or Ele.me integration.
 
 - **Sales-channel adapter layer, phase 1: the skeleton** (`KEEL_CHANNELS=on`, off by default). One interface
   designed for the union of what Shopify, Meituan Shangou and Ele.me Retail need (and, later, a supermarket ERP),

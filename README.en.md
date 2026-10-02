@@ -73,6 +73,12 @@ sales with stock-out days removed from the denominator, days of cover, suggested
 a confidence flag. Approve one in the console and the stock goes up; reject it with a
 reason and the agent reads that reason next time.
 
+For a shop selling on several channels, the AI manager also looks at **how one stock is split across
+them**: each channel's sell-through, the hours it sat at zero on the platform while keel still had stock,
+stock-out rejections and net revenue per unit, and proposes changes to allocation ratios and safety stock;
+approved changes take effect and are reviewed seven days later on the same measures
+([design](./docs/superpowers/specs/2026-10-03-ai-channel-allocation-design.md), in Chinese).
+
 Most platforms put their AI on the demand side (search, recommendations, chat). **Almost
 nobody applies it to replenishment, pricing, promotions or after-sales** — where merchants
 spend their hours. The hard part is not wiring up a model, it is being willing to hand
@@ -393,10 +399,10 @@ the remaining gaps are under "Not in the box yet" above.
   attribute extraction are not built yet — attribute extraction waits for the
   inference engine's generate endpoint; see "Later" in the roadmap.
 - **Compliance checks** — catch prohibited advertising claims before publish.
-- **AI staff** — shipped (M9–M11): staff accounts and `kagt_` access keys; 24 MCP tools
+- **AI staff** — shipped (M9–M11): staff accounts and `kagt_` access keys; 26 MCP tools
   (reports, inventory, search, catalog, after-sales reads; `restock_plan`, `slow_movers`,
   `promotion_review`; read-only SQL over curated views; proposals for restocks, limited-time
-  discounts, coupons, product copy and after-sales decisions; events; briefs; scorecard); a
+  discounts, coupons, product copy, after-sales decisions and channel stock allocation; events; briefs; scorecard); a
   proposal queue approved in the console, with per-kind auto-execution policies under caps;
   events by pull or signed webhook; every executed proposal reviewed after the fact;
   per-call audit; playbooks and reference runners. See "AI staff" and "Open to any agent
