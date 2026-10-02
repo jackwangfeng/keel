@@ -197,13 +197,19 @@ func TestChannelStockRuleProposal(t *testing.T) {
 	}
 
 	// 执行时规则被人改过：门店级 80% → 90% 的提案提了之后，店长在后台把门店级改成 60% → 批准 → 失败、规则保持 60%。
+	// 衬衫也映射上（没有单独规则），推过一次之后有推送记录。
+	if err := r.svc.LinkSKU(r.ctx, repository.ChannelItemLink{BindingID: r.b.ID, KeelID: cs.ShirtSKU, ExternalID: "var-2"}); err != nil {
+		t.Fatal(err)
+	}
+	r.drain(t)
 	res, p2 := r.propose(t, change(nil, 9000, 0, bindingPrev))
 	if res.IsError {
 		t.Fatalf("门店级提案出错：%s", mcpText(res))
 	}
-	if pv := p2["payload"].(map[string]any)["preview"].([]any); len(pv) != 1 ||
-		pv[0].(map[string]any)["before_qty"] != pv[0].(map[string]any)["after_qty"] {
-		t.Fatalf("门店级试算：连衣裙有自己的规则，门店级改动不影响它（前后相等）：%v", pv)
+	// 审查修复 6：连衣裙有自己的门店 × SKU 级规则，门店级改动不影响它 —— 试算（也就是复盘的格子）里不该有它。
+	if pv, _ := p2["payload"].(map[string]any)["preview"].([]any); len(pv) != 1 ||
+		int64(pv[0].(map[string]any)["sku_id"].(float64)) != cs.ShirtSKU {
+		t.Fatalf("门店级试算应只有没有单独规则的衬衫：%v", pv)
 	}
 	north := cs.NorthStore
 	if _, err := r.svc.UpsertStockRule(r.ctx, repository.ChannelStockRule{BindingID: r.b.ID, StoreID: &north, RatioBP: 6000}); err != nil {

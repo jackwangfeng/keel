@@ -34,6 +34,7 @@ const (
 	channelRuleMaxChanges = 20
 	channelRuleMaxSafety  = 100000
 	channelPreviewMax     = 40
+	channelPreviewScan    = int32(50) // 门店级试算按页找没有单独规则的已推格子，每页条数
 	// 复盘：窗口里 keel 自己没货（挂零时段 held = false）超过这么多小时的格子不计 —— 缺的是货，不是分配。
 	channelOutcomeStockoutHours = 48
 )
@@ -257,15 +258,28 @@ func (s *AgentProposalService) ProposeChannelStockRule(ctx context.Context, pl C
 				return badProposal("%s 的比例、安全库存、封顶都没变，没有改动", c.cell())
 			}
 		}
-		// 门店级的改动影响这家门店在这个渠道上没有单独规则的 SKU：拿已推过的格子试算（至多 20 个）。
+		// 门店级的改动只影响这家门店在这个渠道上没有单独（门店 × SKU 级）规则的 SKU：拿已推过的这种格子试算（至多 20 个）。
+		// 有单独规则的不进试算 —— 试算就是复盘量的格子（channelStockRuleOutcome），把不受影响的格子算进去会让无关的变化
+		// 左右复盘结论。
 		if storeLevel {
-			ls, err := tx.ListChannelListingsPage(ctx, pl.BindingID, &pl.StoreID, false, 20, 0)
-			if err != nil {
-				return err
+			own := map[int64]bool{}
+			for _, r := range rules {
+				if r.StoreID != nil && *r.StoreID == pl.StoreID && r.SKUID != nil {
+					own[*r.SKUID] = true
+				}
 			}
-			for _, l := range ls {
-				if !slices.Contains(preview, l.SKUID) && len(preview) < channelPreviewMax {
-					preview = append(preview, l.SKUID)
+			for off := int32(0); len(preview) < channelPreviewMax; off += channelPreviewScan {
+				ls, err := tx.ListChannelListingsPage(ctx, pl.BindingID, &pl.StoreID, false, channelPreviewScan, off)
+				if err != nil {
+					return err
+				}
+				for _, l := range ls {
+					if !own[l.SKUID] && !slices.Contains(preview, l.SKUID) && len(preview) < channelPreviewMax {
+						preview = append(preview, l.SKUID)
+					}
+				}
+				if len(ls) < int(channelPreviewScan) || off >= 4*channelPreviewScan {
+					break // 至多翻 5 页
 				}
 			}
 		}
@@ -589,7 +603,7 @@ func channelUnitNet(ctx context.Context, tx repository.Tx, bindingID, storeID in
 }
 
 // channelStockRuleOutcome 量一条 channel_stock_rule 提案：执行前 7 天 vs 执行后 7 天，逐格。
-// 门店级改动的格子取提案时试算过的 SKU（没有单独改的那些）。
+// 门店级改动的格子取提案时试算过的 SKU（提案时这家门店在这个渠道上没有单独规则的那些，存在载荷的 preview 里）。
 func channelStockRuleOutcome(ctx context.Context, tx repository.Tx, d repository.DueProposalOutcome) (ProposalOutcome, error) {
 	var pl ChannelStockRulePayload
 	if err := json.Unmarshal(d.Payload, &pl); err != nil {
