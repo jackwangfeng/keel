@@ -1156,9 +1156,10 @@ class AdminProduct {
   final Money maxPriceCents;
   final int totalStock;
   final int salesCount;
+  final String? managedBy;
   final String createdAt;
   final String? updatedAt;
-  const AdminProduct({required this.id, required this.title, this.subtitle, this.description, required this.categoryId, this.brandId, this.freightTemplateId, required this.status, this.publishedAt, this.deletedAt, required this.minPriceCents, required this.maxPriceCents, required this.totalStock, required this.salesCount, required this.createdAt, this.updatedAt});
+  const AdminProduct({required this.id, required this.title, this.subtitle, this.description, required this.categoryId, this.brandId, this.freightTemplateId, required this.status, this.publishedAt, this.deletedAt, required this.minPriceCents, required this.maxPriceCents, required this.totalStock, required this.salesCount, this.managedBy, required this.createdAt, this.updatedAt});
   factory AdminProduct.fromJson(Map<String, dynamic> j) => AdminProduct(
         id: (j['id'] as num).toInt(),
         title: j['title'] as String,
@@ -1174,6 +1175,7 @@ class AdminProduct {
         maxPriceCents: (j['max_price_cents'] as num).toInt(),
         totalStock: (j['total_stock'] as num).toInt(),
         salesCount: (j['sales_count'] as num).toInt(),
+        managedBy: j['managed_by'] as String?,
         createdAt: j['created_at'] as String,
         updatedAt: j['updated_at'] as String?,
       );
@@ -1192,6 +1194,7 @@ class AdminProduct {
         'max_price_cents': maxPriceCents,
         'total_stock': totalStock,
         'sales_count': salesCount,
+        if (managedBy != null) 'managed_by': managedBy,
         'created_at': createdAt,
         if (updatedAt != null) 'updated_at': updatedAt,
       };
@@ -1278,11 +1281,12 @@ class AdminProductDetail {
   final Money maxPriceCents;
   final int totalStock;
   final int salesCount;
+  final String? managedBy;
   final String createdAt;
   final String? updatedAt;
   final List<AdminSku> skus;
   final List<ProductImage> images;
-  const AdminProductDetail({required this.id, required this.title, this.subtitle, this.description, required this.categoryId, this.brandId, this.freightTemplateId, required this.status, this.publishedAt, this.deletedAt, required this.minPriceCents, required this.maxPriceCents, required this.totalStock, required this.salesCount, required this.createdAt, this.updatedAt, required this.skus, required this.images});
+  const AdminProductDetail({required this.id, required this.title, this.subtitle, this.description, required this.categoryId, this.brandId, this.freightTemplateId, required this.status, this.publishedAt, this.deletedAt, required this.minPriceCents, required this.maxPriceCents, required this.totalStock, required this.salesCount, this.managedBy, required this.createdAt, this.updatedAt, required this.skus, required this.images});
   factory AdminProductDetail.fromJson(Map<String, dynamic> j) => AdminProductDetail(
         id: (j['id'] as num).toInt(),
         title: j['title'] as String,
@@ -1298,6 +1302,7 @@ class AdminProductDetail {
         maxPriceCents: (j['max_price_cents'] as num).toInt(),
         totalStock: (j['total_stock'] as num).toInt(),
         salesCount: (j['sales_count'] as num).toInt(),
+        managedBy: j['managed_by'] as String?,
         createdAt: j['created_at'] as String,
         updatedAt: j['updated_at'] as String?,
         skus: (j['skus'] as List).map((e) => AdminSku.fromJson(e as Map<String, dynamic>)).toList(),
@@ -1318,6 +1323,7 @@ class AdminProductDetail {
         'max_price_cents': maxPriceCents,
         'total_stock': totalStock,
         'sales_count': salesCount,
+        if (managedBy != null) 'managed_by': managedBy,
         'created_at': createdAt,
         if (updatedAt != null) 'updated_at': updatedAt,
         'skus': skus.map((e) => e.toJson()).toList(),
@@ -2394,10 +2400,11 @@ class ChannelBinding {
   final int roles;
   final int status;
   final Map<String, dynamic> config;
+  final bool hasSecrets;
   final String webhookPath;
   final String createdAt;
   final String updatedAt;
-  const ChannelBinding({required this.id, required this.channel, required this.externalAccount, required this.name, required this.roles, required this.status, required this.config, required this.webhookPath, required this.createdAt, required this.updatedAt});
+  const ChannelBinding({required this.id, required this.channel, required this.externalAccount, required this.name, required this.roles, required this.status, required this.config, required this.hasSecrets, required this.webhookPath, required this.createdAt, required this.updatedAt});
   factory ChannelBinding.fromJson(Map<String, dynamic> j) => ChannelBinding(
         id: (j['id'] as num).toInt(),
         channel: j['channel'] as String,
@@ -2406,6 +2413,7 @@ class ChannelBinding {
         roles: (j['roles'] as num).toInt(),
         status: (j['status'] as num).toInt(),
         config: j['config'] as Map<String, dynamic>,
+        hasSecrets: j['has_secrets'] as bool,
         webhookPath: j['webhook_path'] as String,
         createdAt: j['created_at'] as String,
         updatedAt: j['updated_at'] as String,
@@ -2418,6 +2426,7 @@ class ChannelBinding {
         'roles': roles,
         'status': status,
         'config': config,
+        'has_secrets': hasSecrets,
         'webhook_path': webhookPath,
         'created_at': createdAt,
         'updated_at': updatedAt,
@@ -2504,15 +2513,19 @@ class ChannelKind {
 class ChannelListing {
   final int storeId;
   final int skuId;
+  final String skuCode;
+  final String productTitle;
   final int publishedQty;
   final int publishedCents;
   final int version;
   final String pushedAt;
   final String? lastError;
-  const ChannelListing({required this.storeId, required this.skuId, required this.publishedQty, required this.publishedCents, required this.version, required this.pushedAt, this.lastError});
+  const ChannelListing({required this.storeId, required this.skuId, required this.skuCode, required this.productTitle, required this.publishedQty, required this.publishedCents, required this.version, required this.pushedAt, this.lastError});
   factory ChannelListing.fromJson(Map<String, dynamic> j) => ChannelListing(
         storeId: (j['store_id'] as num).toInt(),
         skuId: (j['sku_id'] as num).toInt(),
+        skuCode: j['sku_code'] as String,
+        productTitle: j['product_title'] as String,
         publishedQty: (j['published_qty'] as num).toInt(),
         publishedCents: (j['published_cents'] as num).toInt(),
         version: (j['version'] as num).toInt(),
@@ -2522,6 +2535,8 @@ class ChannelListing {
   Map<String, dynamic> toJson() => {
         'store_id': storeId,
         'sku_id': skuId,
+        'sku_code': skuCode,
+        'product_title': productTitle,
         'published_qty': publishedQty,
         'published_cents': publishedCents,
         'version': version,
