@@ -185,3 +185,12 @@ export async function channelsAvailable(probe: () => Promise<{ status: number }>
     }
 }
 
+
+/**
+ * 商品由哪个渠道管理时的标注（AdminProduct.managed_by）。null / 空 → null（不标）。
+ * "shopify" → "由 Shopify 管理"；不认识的渠道原样："由 <渠道> 管理"。
+ */
+export function managedLabel(channel: string | null | undefined): string | null {
+    if (channel === null || channel === undefined || channel === "") return null;
+    return `由 ${channelLabel(channel)} 管理`;
+}

@@ -5,6 +5,7 @@ import {
     bitsFromRoles,
     bpToPercent,
     channelsAvailable,
+    managedLabel,
     percentToBp,
     priceRuleBody,
     priceRuleSummary,
@@ -105,4 +106,12 @@ test("Shopify 店铺域名", () => {
     assert.equal(shopifyDomainOk("https://keel-demo.myshopify.com"), false);
     assert.equal(shopifyDomainOk("Keel.myshopify.com"), false);
     assert.equal(shopifyDomainOk(".myshopify.com"), false);
+});
+
+test("由渠道管理的标注", () => {
+    assert.equal(managedLabel("shopify"), "由 Shopify 管理");
+    assert.equal(managedLabel("douyin"), "由 douyin 管理");
+    assert.equal(managedLabel(null), null);
+    assert.equal(managedLabel(undefined), null);
+    assert.equal(managedLabel(""), null);
 });

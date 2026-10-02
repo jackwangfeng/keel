@@ -18,7 +18,9 @@ import { ArrowLeft, Delete, Plus, Top } from "@element-plus/icons-vue";
 import { ElMessageBox } from "element-plus";
 import {
     asComplianceRejection,
+    isProblemType,
     keel,
+    ProblemType,
     uploadProductImage,
     type AdminCategory,
     type AdminInventory,
@@ -34,6 +36,7 @@ import { indentedLabel, listCategories } from "../api/catalog.ts";
 import { CHARGE_MODE, listAllFreightTemplates, type AdminFreightTemplate } from "../api/freight.ts";
 import { IdempotentSubmission, withIdempotency } from "../api/idempotency.ts";
 import { fieldErrorsOf } from "../api/errors.ts";
+import { channelLabel, managedLabel } from "../api/channelRules.ts";
 import { datetime, PRODUCT_STATUS, SKU_STATUS, yuan } from "../ui/format.ts";
 import { notifyError, notifyOk } from "../ui/notify.ts";
 import { can, NO_PERMISSION } from "../auth/permissions.ts";
@@ -55,6 +58,23 @@ const categories = ref<AdminCategory[]>([]);
 /** 商品能单独挂的运费模板：只有全店模板（门店模板不能挂在商品上，服务端 422）。 */
 const freightTemplates = ref<AdminFreightTemplate[]>([]);
 const tab = ref("basic");
+
+// ------------------------------------------------------ 由渠道管理的字段
+//
+// managed_by 非空 = 这件商品由启用中的商品源（如 Shopify）管理：标题、详情、图片、SKU 规格从渠道同步，
+// 在这里改会被服务端 409 managed-by-channel 拒绝（下次同步也会被覆盖）。界面把这几处禁用并说明；
+// 请求体里也不带这些字段（服务端按「出现即拒」判，原样回传未改的标题同样会 409）。
+const managedText = computed(() => managedLabel(product.value?.managed_by));
+const managed = computed(() => managedText.value !== null);
+const managedChannel = computed(() => channelLabel(product.value?.managed_by ?? ""));
+
+/** 万一仍收到 409 managed-by-channel（比如刚好同步进来、渠道刚启用）：错误照样摊开，并刷新详情拿到 managed_by。 */
+/** 改 SKU 时规格锁住（加 SKU 不锁：服务端只拒绝 PATCH 里的 spec_values）。 */
+const specLocked = computed(() => managed.value && skuEditing.value !== null);
+
+function reloadIfManaged(err: unknown): void {
+    if (isProblemType(err, ProblemType.managedByChannel)) void load();
+}
 
 async function load(): Promise<void> {
     loading.value = true;
@@ -108,9 +128,14 @@ async function saveBasic(): Promise<void> {
     saveError.value = null;
     complianceHits.value = [];
     try {
+        const body: ProductUpdateRequest = { ...form.value };
+        if (managed.value) {
+            delete body.title;
+            delete body.description;
+        }
         const updated = await keel.request("patch", "/admin/products/{product_id}", {
             path: { product_id: id.value },
-            body: form.value,
+            body,
         });
         // PATCH 返回 AdminProduct（不含 skus / images），所以只合并它给的那些字段。
         const p = product.value;
@@ -118,6 +143,7 @@ async function saveBasic(): Promise<void> {
         notifyOk("已保存");
     } catch (err) {
         saveError.value = err;
+        reloadIfManaged(err);
         const rejection = asComplianceRejection(err);
         if (rejection !== null) complianceHits.value = rejection.errors ?? [];
     } finally {
@@ -257,6 +283,7 @@ async function saveImages(): Promise<void> {
         notifyOk("商品图已替换");
     } catch (err) {
         imagesError.value = err;
+        reloadIfManaged(err);
     } finally {
         imagesSaving.value = false;
     }
@@ -351,7 +378,8 @@ async function submitSku(): Promise<void> {
         } else {
             const body: SkuUpdateRequest = {
                 sku_code: skuForm.value.sku_code.trim(),
-                spec_values: specValues(),
+                // 由渠道管理的商品不带规格：服务端见到 spec_values 就 409。
+                ...(managed.value ? {} : { spec_values: specValues() }),
                 price_cents: skuForm.value.price_cents,
                 cost_cents: skuForm.value.cost_cents,
                 weight_gram: skuForm.value.weight_gram,
@@ -364,6 +392,7 @@ async function submitSku(): Promise<void> {
         await load();
     } catch (err) {
         skuError.value = err;
+        reloadIfManaged(err);
     } finally {
         skuBusy.value = false;
     }
@@ -427,6 +456,7 @@ function onInventoryUpdated(inv: AdminInventory): void {
             <div class="page-toolbar">
                 <el-button :icon="ArrowLeft" @click="router.push({ name: 'products' })">返回列表</el-button>
                 <span class="title">{{ product.title }}</span>
+                <el-tag v-if="managedText" type="warning" size="small">{{ managedText }}</el-tag>
                 <el-tag :type="PRODUCT_STATUS[product.status].tag" size="small">
                     {{ PRODUCT_STATUS[product.status].text }}
                 </el-tag>
@@ -440,6 +470,9 @@ function onInventoryUpdated(inv: AdminInventory): void {
             </div>
 
             <ProblemAlert v-if="publishError" :error="publishError" />
+            <el-alert v-if="managedText" type="warning" :closable="false" show-icon class="mb12" :title="managedText">
+                标题、详情、商品图与 SKU 规格从 {{ managedChannel }} 同步，请在 {{ managedChannel }} 后台修改；价格、库存、类目仍在这里改。
+            </el-alert>
 
             <el-tabs v-model="tab" type="border-card">
                 <!-- ------------------------------------------------ 基本信息 -->
@@ -458,7 +491,7 @@ function onInventoryUpdated(inv: AdminInventory): void {
 
                     <el-form label-width="90px" style="max-width: 760px" @submit.prevent>
                         <el-form-item label="标题">
-                            <el-input v-model="form.title" maxlength="200" show-word-limit />
+                            <el-input v-model="form.title" maxlength="200" show-word-limit :disabled="managed" />
                             <HighlightedText
                                 v-if="hitsFor('title').length > 0"
                                 :text="form.title ?? ''"
@@ -474,7 +507,7 @@ function onInventoryUpdated(inv: AdminInventory): void {
                             />
                         </el-form-item>
                         <el-form-item label="详情">
-                            <el-input v-model="form.description" type="textarea" :rows="6" />
+                            <el-input v-model="form.description" type="textarea" :rows="6" :disabled="managed" />
                             <HighlightedText
                                 v-if="hitsFor('description').length > 0"
                                 :text="form.description ?? ''"
@@ -526,6 +559,7 @@ function onInventoryUpdated(inv: AdminInventory): void {
                 <!-- -------------------------------------------------- 商品图 -->
                 <el-tab-pane :label="`商品图（${draftImages.length}）`" name="images">
                     <ProblemAlert v-if="imagesError" :error="imagesError" />
+                    <p v-if="managedText" class="hint">商品图从 {{ managedChannel }} 同步，在这里不能改。</p>
                     <p class="hint">
                         一次调用替换整组，<strong>第一张就是主图</strong>，没有 is_primary 布尔。
                         先上传、排好序，再点保存。传空即清空全部图片。
@@ -537,11 +571,11 @@ function onInventoryUpdated(inv: AdminInventory): void {
                             :before-upload="beforeUpload"
                             accept="image/jpeg,image/png,image/webp"
                         >
-                            <el-button :icon="Plus" :loading="uploading" :disabled="!can.editCatalog()" :title="can.editCatalog() ? '' : NO_PERMISSION">上传图片</el-button>
+                            <el-button :icon="Plus" :loading="uploading" :disabled="!can.editCatalog() || managed" :title="can.editCatalog() ? '' : NO_PERMISSION">上传图片</el-button>
                         </el-upload>
                         <span class="hint">单文件不超过 10 MB，只接受 jpeg / png / webp（服务端判据）</span>
                         <span class="grow" />
-                        <el-button type="primary" :loading="imagesSaving" :disabled="!imagesDirty || !can.editCatalog()" @click="saveImages">
+                        <el-button type="primary" :loading="imagesSaving" :disabled="!imagesDirty || !can.editCatalog() || managed" @click="saveImages">
                             保存图片顺序
                         </el-button>
                     </div>
@@ -554,10 +588,10 @@ function onInventoryUpdated(inv: AdminInventory): void {
                                 <span class="hint">upload_id {{ img.upload_id }}</span>
                             </div>
                             <div class="image-actions">
-                                <el-button link size="small" :icon="Top" :disabled="i === 0" @click="moveImageToFront(i)">
+                                <el-button link size="small" :icon="Top" :disabled="i === 0 || managed" @click="moveImageToFront(i)">
                                     设为主图
                                 </el-button>
-                                <el-button link size="small" type="danger" @click="removeImage(i)">移除</el-button>
+                                <el-button link size="small" type="danger" :disabled="managed" @click="removeImage(i)">移除</el-button>
                             </div>
                         </div>
                         <el-empty v-if="draftImages.length === 0" description="还没有图片" :image-size="80" />
@@ -658,11 +692,12 @@ function onInventoryUpdated(inv: AdminInventory): void {
                 <el-form-item label="规格">
                     <div class="spec-rows">
                         <div v-for="(row, i) in specRows" :key="i" class="spec-row">
-                            <el-input v-model="row.key" placeholder="键，如 颜色" />
-                            <el-input v-model="row.value" placeholder="值，如 黑" />
-                            <el-button link type="danger" @click="specRows.splice(i, 1)">删</el-button>
+                            <el-input v-model="row.key" placeholder="键，如 颜色" :disabled="specLocked" />
+                            <el-input v-model="row.value" placeholder="值，如 黑" :disabled="specLocked" />
+                            <el-button link type="danger" :disabled="specLocked" @click="specRows.splice(i, 1)">删</el-button>
                         </div>
-                        <el-button link type="primary" @click="specRows.push({ key: '', value: '' })">
+                        <p v-if="specLocked" class="hint">规格从 {{ managedChannel }} 同步，在这里不能改。</p>
+                        <el-button v-if="!specLocked" link type="primary" @click="specRows.push({ key: '', value: '' })">
                             加一行
                         </el-button>
                     </div>
