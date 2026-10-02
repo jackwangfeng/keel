@@ -17,6 +17,7 @@
 - **退款**：`RefundService.Create` 要买家身份和 payments 行；整单未发货退款是 `tx.StartWholeOrderRefund`（20→50）+ `tx.FinishWholeOrderRefund`（50→60），回补库存 `enqueueRefundRestock`（outbox）。渠道单退款不调支付渠道，直接走仓储写退款行。
 - **通知**：状态变化与通知同事务；`TestEveryStateTransitionNotifiesOrSaysWhyNot`（notification_policy_test.go）要求每个改状态的调用点登记「发哪条通知 / 为什么不发」。
 - **Shopify（开发店 2026-10-02 只读核实）**：token scope 有 `write_orders`、`write_assigned_fulfillment_orders`，**没有** `read/write_merchant_managed_fulfillment_orders`（商家自管 location 上的 `fulfillmentCreate` 一般要它，未实测，联调时确认，见 Task 9）。店铺币种 USD、时区 America/New_York。`FulfillmentInput{trackingInfo{company,number,url}, notifyCustomer, lineItemsByFulfillmentOrder:[{fulfillmentOrderId, fulfillmentOrderLineItems}]}`；`FulfillmentOrderStatus` = OPEN/IN_PROGRESS/CANCELLED/INCOMPLETE/CLOSED/SCHEDULED/ON_HOLD；`OrderDisplayFinancialStatus` = PENDING/AUTHORIZED/PARTIALLY_PAID/PARTIALLY_REFUNDED/VOIDED/PAID/REFUNDED/EXPIRED。Order 字段有 `cancelledAt`、`updatedAt`、`test`、`currentTotalPriceSet`、`totalShippingPriceSet`、`totalDiscountsSet`、`totalTaxSet`、`totalRefundedSet`、`refunds`、`fulfillmentOrders`、`fulfillments`、`shippingAddress`、`phone`、`email`。回调主题有 `ORDERS_CREATE/UPDATED/CANCELLED/PAID/FULFILLED`、`REFUNDS_CREATE`、`FULFILLMENTS_CREATE`。
+- **补充只读探查（2026-10-02）**：没有 `read_customers`（查 customers 回 ACCESS_DENIED）；两个 location 都是商家自管（`fulfillmentService` 为空）；`fulfillmentCreate` 用不存在的 FO 试回 userError「Fulfillment order does not exist.」（不是 ACCESS_DENIED），接受 `@idempotent(key:)`，`fulfillmentOrderLineItems` 可省（= 剩余全部行）；单张订单完整取单查询成本 149 点；`orderCancel` 异步、`reason` 与 `restock` 必填；退款行 `restockType` = RETURN / CANCEL / LEGACY_RESTOCK / NO_RESTOCK；`write_orders` 下有 `orderCreate`（可 `test:true`、`financialStatus:PAID`、`options.inventoryBehaviour`），联调可用它建测试单——**写操作，要用户同意**。开发店现有 0 张订单。
 - **未核实、按文档写、联调确认**：在开发店下单（被权限拦了，要用户在开发店下一单或批准用 Admin API 建测试单）；`refunds/create` 与 `fulfillments/create` 回调体里订单 ID 字段为 `order_id`（数字）；受保护客户数据没开时 `shippingAddress` 为 null 还是报错。
 
 ## Global Constraints
@@ -101,6 +102,8 @@ CREATE TABLE channel_order_requests (
 -- 两张表 ENABLE + FORCE RLS（照 00301 的写法），索引：channel_orders(binding_id, status)、channel_orders(merchant_id) WHERE exception IS NOT NULL、
 -- channel_order_requests(status, deadline) WHERE status = 1
 ```
+**执行中修正（审查发现）**：`scripts/check_migrations.py` 规定 00151 之后在大表（含 orders）建索引必须 `CONCURRENTLY` + `-- +goose NO TRANSACTION`，且 `NOT VALID` 后同一事务 `VALIDATE` 等于白写。拆成三份：**00320** 建表、加列、约束 `NOT VALID`（含 `chk_discount_sources` 重建为「`source = 1` 或原条件」）；**00321** `idx_orders_channel` CONCURRENTLY；**00322** 单独 VALIDATE。另：`ConfirmOrderReceipt` 的 WHERE 带 `user_id`，渠道单永远匹配不上 → 渠道单另写一条 30→40 语句（`WHERE source = 1`），登记进通知策略；`ListAutoConfirmReminders` 排除 `user_id IS NULL`。后台订单列表**不加 JOIN、不加可空筛选参数**（generic plan 退化，压测文档 ⑨），只多带 `source`、`channel_order_id` 两列；渠道信息在这一页有 `source = 1` 的行时按 id 补查一次。
+
 Down 反向（先删 orders 的 FK 与列、恢复 NOT NULL 前先确认没有 source=1 的行——Down 里 `DELETE` 不做，直接失败即可，写注释）。
 
 - [ ] **Step 1**：写迁移；`make migrate-check`（或 Makefile 里等价的迁移检查 / 租户检查脚本，看 `make help`）通过；`db/tenancy.json` 登记两张新表。
@@ -245,11 +248,15 @@ func (s *ChannelService) sweepChannelDeadlines(ctx context.Context) // 接单截
 - 权限：查看同渠道页；重试 / 接单 / 拒单 / 申请决定需「订单处理」权限（照 `Ship` 的门店范围校验）。
 - [ ] **Step 1**：契约 + handler 测试；**Step 2**：前端；**Step 3**：`make check-all`、`make admin-responsive-check`（手机 / 电脑全过并**看截图内容**）；**Step 4**：提交 `渠道订单后台：渠道单列表与详情（异常、重试、接单 / 拒单、申请决定）、订单列表标来源`
 
-### Task 8: 装配、不变量、联调、文档
+### Task 8: 压测对照（第一期挪过来的）
+
+- [ ] 拿 `v0.7.0`（`b9a372a`，第一期合并之前）与第三期合并后、`KEEL_CHANNELS` 不开的版本，在同一套拆分形态的栈上跑 `keel-loadtest` 的 `order`、`list-default`、`admin-orders` 三个场景，p95 差距应在噪声内；结果写进 `docs/性能压测-2026-10.md` 新一节。差距超出噪声就先查原因再合并。
+
+### Task 9: 装配、不变量、联调、文档
 
 - [ ] **Step 1**：`internal/app/channels.go` 装配新处理器与 SAGA 分支；开关关着时不注册分支、不登记处理器；第一期不变量测试补断言「`orders.source` 全 0、`channel_orders` 空」。
 - [ ] **Step 2**：`make test-db`（全量）、`make check-all`。
-- [ ] **Step 3**：只读联调 `KEEL_SHOPIFY_LIVE=1`：适配器取单（开发店有单才跑）。**下单联调需要用户**：在开发店下一张测试单（或批准用 Admin API `orderCreate` 建 test 单）→ 演示站收单、接单、扣库存 → 后台发货 → Shopify 上看到单号；确认 fulfillment 的 scope 够不够（不够就请用户在 Dev Dashboard 加 `read/write_merchant_managed_fulfillment_orders` 并重装）。
+- [ ] **Step 3**：只读联调 `KEEL_SHOPIFY_LIVE=1`：适配器取单（开发店有单才跑）。**下单联调需要用户**：在开发店下一张测试单（或批准用 Admin API `orderCreate` 建 test 单）→ 演示站收单、接单、扣库存 → 后台发货 → Shopify 上看到单号；确认 fulfillment 的 scope 够不够（大概率要请用户在 Dev Dashboard 加 `read/write_merchant_managed_fulfillment_orders`、勾受保护客户数据字段并重装；spec §15 的 `write_fulfillments` 是旧写法，一并改）。
 - [ ] **Step 4**：spec §13 补订单部分实测结论；CHANGELOG；PROGRESS；数据模型文档。
 - [ ] **Step 5**：演示站：备份 → 迁移副本试跑 → 部署 core / inventory / console + `publish-frontend.sh admin` → binding 1 点「重新同步商品」装订单回调。
 
