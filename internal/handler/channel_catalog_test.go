@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -280,4 +281,63 @@ func adminQueryString(t *testing.T, sql string, args ...any) string {
 		t.Fatal(err)
 	}
 	return out
+}
+
+// 1×1 的 PNG。
+var onePixelPNG = []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+	0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4, 0x89, 0x00, 0x00, 0x00,
+	0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0xf8, 0xcf, 0xc0, 0xf0, 0x1f, 0x00, 0x05, 0x00, 0x01, 0xff, 0x89, 0x99,
+	0x3d, 0x1d, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82}
+
+func TestShopifyCatalogImages(t *testing.T) {
+	r := newShopifyRig(t, map[string]any{})
+	adminExec(t, `UPDATE channel_bindings SET config = jsonb_build_object('default_category_id', $1::bigint) WHERE id = $2`, r.cs.ChildCat, r.b.ID)
+	r.svc.WithImages(service.NewLocalDiskStore(t.TempDir()), nil, func(u *url.URL) bool { return u.Hostname() == "127.0.0.1" })
+	img1, img2 := r.sim.ImageURL("a.png", onePixelPNG), r.sim.ImageURL("b.png", onePixelPNG)
+	pg := r.sim.AddProduct(shopifytest.Product{Title: "带图", Images: []string{img1, img2}, Variants: []shopifytest.Variant{
+		{SKU: fmt.Sprintf("IMG-%d", r.b.ID), Price: "1.00", Tracked: true, Levels: map[string]int32{r.loc: 1}}}})
+	r.activate(t)
+	sku := r.keelSKU(t, r.sim.VariantIDs(pg)[0])
+	pid := adminQueryInt64(t, `SELECT product_id FROM skus WHERE id = $1`, sku)
+	imgs := func() int64 {
+		return adminQueryInt64(t, `SELECT count(*) FROM product_images i JOIN uploads u ON u.id = i.upload_id
+			WHERE i.product_id = $1 AND u.purpose = 1 AND u.referenced AND u.channel_binding_id = $2`, pid, r.b.ID)
+	}
+	if n := imgs(); n != 2 {
+		t.Fatalf("商品图 %d 张，期望 2（purpose 1、已引用、上传者是 binding）", n)
+	}
+	hits := r.sim.ImageHits()
+
+	t.Run("图没变_不重下", func(t *testing.T) {
+		r.webhook(t, "products/update", map[string]any{"admin_graphql_api_id": pg})
+		if r.sim.ImageHits() != hits {
+			t.Fatalf("图没变又下载了 %d 次", r.sim.ImageHits()-hits)
+		}
+	})
+	t.Run("换图_替换", func(t *testing.T) {
+		r.sim.SetImages(pg, []string{img2})
+		r.webhook(t, "products/update", map[string]any{"admin_graphql_api_id": pg})
+		if n := imgs(); n != 1 {
+			t.Fatalf("换成 1 张之后商品图 %d 张", n)
+		}
+	})
+	t.Run("图下载失败_商品照样同步_图不动", func(t *testing.T) {
+		r.sim.SetImages(pg, []string{r.sim.URL + "/images/missing.png"})
+		r.sim.SetTitle(pg, "带图（改）")
+		r.webhook(t, "products/update", map[string]any{"admin_graphql_api_id": pg})
+		if got := adminQueryString(t, `SELECT title FROM products WHERE id = $1`, pid); got != "带图（改）" {
+			t.Fatalf("图失败挡住了商品同步：标题 %q", got)
+		}
+		if n := imgs(); n != 1 {
+			t.Fatalf("图失败之后商品图 %d 张，期望保持 1", n)
+		}
+	})
+	t.Run("不放行的主机_不下载", func(t *testing.T) {
+		before := r.sim.ImageHits()
+		r.sim.SetImages(pg, []string{"https://evil.example/x.png"})
+		r.webhook(t, "products/update", map[string]any{"admin_graphql_api_id": pg})
+		if r.sim.ImageHits() != before || imgs() != 1 {
+			t.Fatal("不放行的地址被下载或替换了图")
+		}
+	})
 }

@@ -23,6 +23,8 @@ type UploadTx interface {
 	// CreateStaffUpload 登记一个后台操作员上传的商品图。
 	// purpose 固定为 1 商品图，不是入参 —— 路径已经决定了它。
 	CreateStaffUpload(ctx context.Context, n NewUpload) (Upload, error)
+	// CreateChannelUpload 登记一张渠道适配层从商品源下载的商品图（上传者是 binding，00302）。
+	CreateChannelUpload(ctx context.Context, n NewChannelUpload) (Upload, error)
 
 	// CreateUserUpload 登记一个 C 端买家上传的头像或退款凭证（契约 POST /uploads）。
 	// purpose 只收 2 / 3，其余返回错误 —— 商品图走 CreateStaffUpload。
@@ -113,6 +115,34 @@ func (t tenantTx) CreateStaffUpload(ctx context.Context, n NewUpload) (Upload, e
 	// 两个查询的列清单逐字相同，所以两种行类型的字段名、顺序、类型也相同，
 	// Go 允许它们之间直接转换。哪天有人动了其中一边的 SELECT，这一行会**编译
 	// 失败** —— 那正是想要的：两条查询回传的形状不一样时，要有人来决定怎么办。
+	return uploadFrom(db.GetUploadRow(r)), nil
+}
+
+// NewChannelUpload 是登记一张渠道适配层从商品源下载的商品图的入参（00302）。
+type NewChannelUpload struct {
+	BindingID   int64
+	Driver      int16
+	StorageKey  string
+	ContentType string
+	SizeBytes   int64
+	SHA256      string
+}
+
+func (t tenantTx) CreateChannelUpload(ctx context.Context, n NewChannelUpload) (Upload, error) {
+	if n.SizeBytes <= 0 {
+		return Upload{}, fmt.Errorf("文件大小 %d 必须为正", n.SizeBytes)
+	}
+	r, err := t.q.CreateChannelUpload(ctx, db.CreateChannelUploadParams{
+		ChannelBindingID: &n.BindingID,
+		Driver:           n.Driver,
+		StorageKey:       n.StorageKey,
+		ContentType:      n.ContentType,
+		SizeBytes:        n.SizeBytes,
+		Sha256:           n.SHA256,
+	})
+	if err != nil {
+		return Upload{}, err
+	}
 	return uploadFrom(db.GetUploadRow(r)), nil
 }
 

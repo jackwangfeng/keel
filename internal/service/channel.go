@@ -66,6 +66,7 @@ type ChannelService struct {
 
 	workerID string
 	handlers map[channel.EventKind]InboundHandler
+	images   *channelImages // 商品源的商品图下载（WithImages；nil = 不下载）
 	msgGID   func(merchantID int64) (string, error) // 开关渠道消息的 gid；测试可替换（SetMerchantMsgGIDForTest）
 }
 

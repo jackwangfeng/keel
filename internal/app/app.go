@@ -995,6 +995,8 @@ func Run(ctx context.Context, listen ListenFunc) error {
 		if channels, err = newChannelService(cfg.Split, pool, inv, self); err != nil {
 			return err
 		}
+		// 商品源（Shopify）的商品图下载进同一个上传存储；只放行 Shopify 的 CDN。
+		channels.WithImages(uploads, nil, service.ShopifyCDN)
 		var chLocal *inventory.Local
 		if cfg.Split.Role != RoleCore {
 			chLocal = inventory.NewLocal(repository.NewInventoryStore(invPool)).WithStockNotifier(stockNotifier)

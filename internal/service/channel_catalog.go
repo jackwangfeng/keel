@@ -391,6 +391,10 @@ func (s *ChannelService) syncCatalogItem(ctx context.Context, b repository.Chann
 	if created {
 		seedProductStockFlags(ctx, s.repo, s.inv, []int64{productID})
 	}
+	if err := s.syncImages(ctx, b, productID, item.ExternalID, item.ImageURLs); err != nil {
+		s.log.WarnContext(ctx, "商品图没同步上（商品照常同步，图保持原样；下次同步再试）", "binding_id", b.ID,
+			"product_id", productID, "err", err)
+	}
 	for _, l := range stores {
 		if err := s.RecomputeListings(ctx, l.StoreID, touched, b.ID); err != nil {
 			return err
