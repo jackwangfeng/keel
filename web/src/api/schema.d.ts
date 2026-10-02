@@ -8268,12 +8268,15 @@ export interface paths {
         };
         /**
          * 最近一次推给渠道的对外可售数与价格
-         * @description 每个（门店, SKU）一行，`last_error` 非空表示最近一次推送没成功（会退避重试）。
+         * @description 每个（门店, SKU）一行，带 SKU 货号与商品名；`last_error` 非空表示最近一次推送没成功（会退避重试）。
+         *     `errors_only=true` 只回 `last_error` 非空的行。
          */
         get: {
             parameters: {
                 query?: {
                     store_id?: number;
+                    /** @description 只看最近一次推送出错的行 */
+                    errors_only?: boolean;
                     page?: components["parameters"]["Page"];
                     page_size?: components["parameters"]["PageSize"];
                 };
@@ -8336,6 +8339,124 @@ export interface paths {
         };
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/channel-bindings/{binding_id}/catalog-pulls": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                binding_id: components["parameters"]["ChannelBindingId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 手动重新同步商品（从商品源整店重拉一遍）
+         * @description 给启用中的商品源 binding 排一次整店拉商品（后台任务，按页拉；顺带重装回调订阅），立即返回 202。
+         *     已经有一次在排队或在跑时不重复排。只有管理员能调。
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /**
+                     * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+                     *
+                     *     它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+                     *     而例外成立的前提是平台级鉴权：
+                     *
+                     *     · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+                     *       读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+                     *       行级安全落在这家店上。
+                     *     · **商家级员工带了这个头：403**
+                     *       （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+                     *       静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+                     *     · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+                     *       **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+                     *       实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+                     *       请求其余部分指名的东西不存在是 422。
+                     *     · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+                     *       买家侧对它照旧 404。
+                     *     · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+                     *       （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+                     *
+                     *     后台每一条挂后台会话的操作都声明了它（机械核对：
+                     *     `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+                     */
+                    "X-Keel-Merchant"?: components["parameters"]["KeelMerchant"];
+                    /**
+                     * @description 客户端生成的 UUID。幂等作用域为 `(接口 scope, user_id, key)`，
+                     *     有效期 24h，过期后同一 key 可复用（见数据模型文档 §11）。
+                     *
+                     *     · **重放命中成功记录**：返回首次的存档响应（状态码与响应体都是存档的那一份），
+                     *       并带 `Idempotency-Replayed: true` 响应头
+                     *     · **同 key 正在处理中**：`409` + `Retry-After`，
+                     *       type=https://keel.dev/problems/idempotency-key-in-flight，
+                     *       客户端应退避重试，不要当成业务失败
+                     *     · **同 key 但请求体不同**（`request_hash` 不一致）：`422`，
+                     *       type=https://keel.dev/problems/idempotency-key-reused。
+                     *       宁可显式失败，也不把不同的请求当成重放静默吞掉 ——
+                     *       那会让用户以为下单成功了而实际什么都没发生
+                     *     · 首次执行失败（存档为失败态）时同样回放该失败响应；
+                     *       确需重试的场景请换一个新 key
+                     */
+                    "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    binding_id: components["parameters"]["ChannelBindingId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description 已排队 */
+                202: {
+                    headers: {
+                        "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description binding 在本店不存在（`https://keel.dev/problems/not-found`） */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /**
+                 * @description 这个 binding 不是启用中的商品源（停用、凭据失效，或只当销售渠道），没有可拉的
+                 *     （`https://keel.dev/problems/invalid-request`）；
+                 *     同一 Idempotency-Key 正在处理中（`https://keel.dev/problems/idempotency-key-in-flight`）。
+                 */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /** @description 缺少 Idempotency-Key，或同一 Idempotency-Key 配了不同的请求（`https://keel.dev/problems/invalid-request`）。 */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
         delete?: never;
         options?: never;
         head?: never;
@@ -17640,6 +17761,8 @@ export interface components {
             config: {
                 [key: string]: unknown;
             };
+            /** @description 配过凭据没有（`PUT …/secrets` 写过非空对象）。只有这个标志，凭据本身永不回显 */
+            has_secrets: boolean;
             /** @description 配到渠道后台的回调路径（`/api/v1/webhooks/channels/{id}`），前面接本店域名 */
             webhook_path: string;
             /** Format: date-time */
@@ -17745,6 +17868,10 @@ export interface components {
             store_id: number;
             /** Format: int64 */
             sku_id: number;
+            /** @description SKU 货号 */
+            sku_code: string;
+            /** @description SKU 所属商品的标题 */
+            product_title: string;
             /** Format: int32 */
             published_qty: number;
             /** Format: int64 */

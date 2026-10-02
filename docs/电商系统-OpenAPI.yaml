@@ -3837,13 +3837,20 @@ paths:
     get:
       tags: [Admin, Channel]
       summary: 最近一次推给渠道的对外可售数与价格
-      description: 每个（门店, SKU）一行，`last_error` 非空表示最近一次推送没成功（会退避重试）。
+      description: |
+        每个（门店, SKU）一行，带 SKU 货号与商品名；`last_error` 非空表示最近一次推送没成功（会退避重试）。
+        `errors_only=true` 只回 `last_error` 非空的行。
       parameters:
         - $ref: '#/components/parameters/KeelMerchant'
         - name: store_id
           in: query
           required: false
           schema: { type: integer, format: int64, minimum: 1 }
+        - name: errors_only
+          in: query
+          required: false
+          description: 只看最近一次推送出错的行
+          schema: { type: boolean, default: false }
         - $ref: '#/components/parameters/Page'
         - $ref: '#/components/parameters/PageSize'
       responses:
@@ -3860,6 +3867,42 @@ paths:
                     items: { $ref: '#/components/schemas/ChannelListing' }
         '404':
           description: binding（或规则 / 门店映射）在本店不存在（`https://keel.dev/problems/not-found`）
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+  /admin/channel-bindings/{binding_id}/catalog-pulls:
+    parameters:
+      - $ref: '#/components/parameters/ChannelBindingId'
+    post:
+      tags: [Admin, Channel]
+      summary: 手动重新同步商品（从商品源整店重拉一遍）
+      description: |
+        给启用中的商品源 binding 排一次整店拉商品（后台任务，按页拉；顺带重装回调订阅），立即返回 202。
+        已经有一次在排队或在跑时不重复排。只有管理员能调。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '202':
+          description: 已排队
+          headers:
+            Idempotency-Replayed: { $ref: '#/components/headers/IdempotencyReplayed' }
+        '404':
+          description: binding 在本店不存在（`https://keel.dev/problems/not-found`）
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '409':
+          description: |
+            这个 binding 不是启用中的商品源（停用、凭据失效，或只当销售渠道），没有可拉的
+            （`https://keel.dev/problems/invalid-request`）；
+            同一 Idempotency-Key 正在处理中（`https://keel.dev/problems/idempotency-key-in-flight`）。
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: 缺少 Idempotency-Key，或同一 Idempotency-Key 配了不同的请求（`https://keel.dev/problems/invalid-request`）。
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
@@ -8589,7 +8632,7 @@ components:
     ChannelBinding:
       type: object
       description: 商家接的一个渠道账号。**没有凭据字段**（只写不读）。
-      required: [id, channel, external_account, name, roles, status, config, webhook_path, created_at, updated_at]
+      required: [id, channel, external_account, name, roles, status, config, has_secrets, webhook_path, created_at, updated_at]
       properties:
         id: { type: integer, format: int64 }
         channel: { type: string }
@@ -8602,6 +8645,7 @@ components:
           enum: [1, 2, 3]
           description: 1 启用、2 停用、3 凭据失效（续期失败，已停推送）
         config: { type: object, additionalProperties: true }
+        has_secrets: { type: boolean, description: '配过凭据没有（`PUT …/secrets` 写过非空对象）。只有这个标志，凭据本身永不回显' }
         webhook_path: { type: string, description: '配到渠道后台的回调路径（`/api/v1/webhooks/channels/{id}`），前面接本店域名' }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
@@ -8663,10 +8707,12 @@ components:
             updated_at: { type: string, format: date-time }
     ChannelListing:
       type: object
-      required: [store_id, sku_id, published_qty, published_cents, version, pushed_at]
+      required: [store_id, sku_id, sku_code, product_title, published_qty, published_cents, version, pushed_at]
       properties:
         store_id: { type: integer, format: int64 }
         sku_id: { type: integer, format: int64 }
+        sku_code: { type: string, description: SKU 货号 }
+        product_title: { type: string, description: SKU 所属商品的标题 }
         published_qty: { type: integer, format: int32 }
         published_cents: { type: integer, format: int64 }
         version: { type: integer, format: int64 }

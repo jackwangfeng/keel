@@ -29,6 +29,7 @@ import (
 //	GET / PUT    /api/v1/admin/channel-bindings/{binding_id}/price-rules
 //	DELETE       /api/v1/admin/channel-bindings/{binding_id}/price-rules/{rule_id}
 //	GET          /api/v1/admin/channel-bindings/{binding_id}/listings
+//	POST         /api/v1/admin/channel-bindings/{binding_id}/catalog-pulls    （手动重拉商品，202）
 //
 // KEEL_CHANNELS 关闭时这些路由都不注册（404），后台据此不显示「渠道」菜单。
 
@@ -45,6 +46,8 @@ func writeChannelError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, repository.ErrChannelNotFound):
 		problem.Write(c, http.StatusNotFound, problem.TypeNotFound, "渠道账号（或规则 / 映射）不存在")
+	case errors.Is(err, service.ErrChannelNotCatalogSource):
+		writeProblemDetail(c, http.StatusConflict, problem.TypeInvalidRequest, "这个渠道账号现在不能拉商品", err)
 	case errors.Is(err, repository.ErrChannelDuplicate):
 		problem.Write(c, http.StatusConflict, problem.TypeChannelDuplicate, "已经接过这个渠道账号，或这个渠道门店已映射给别的门店")
 	case errors.Is(err, repository.ErrChannelRefInvalid), errors.Is(err, service.ErrChannelBadRequest),
@@ -75,7 +78,7 @@ func rawObject(m *map[string]interface{}) json.RawMessage {
 
 func apiChannelBinding(b repository.ChannelBinding) api.ChannelBinding {
 	return api.ChannelBinding{Id: b.ID, Channel: b.Channel, ExternalAccount: b.ExternalAccount, Name: b.Name,
-		Roles: int32(b.Roles), Status: api.ChannelBindingStatus(b.Status), Config: channelJSONObject(b.Config),
+		Roles: int32(b.Roles), Status: api.ChannelBindingStatus(b.Status), Config: channelJSONObject(b.Config), HasSecrets: b.HasSecrets,
 		WebhookPath: fmt.Sprintf("/api/v1/webhooks/channels/%d", b.ID), CreatedAt: b.CreatedAt, UpdatedAt: b.UpdatedAt}
 }
 
@@ -405,4 +408,19 @@ func (h *AdminChannelHandler) DeletePriceRule(c *gin.Context) {
 		return
 	}
 	c.Status(http.StatusNoContent)
+}
+
+// RequestCatalogPull 实现 POST /api/v1/admin/channel-bindings/{binding_id}/catalog-pulls。
+func (h *AdminChannelHandler) RequestCatalogPull(c *gin.Context) {
+	id, ok := pathID(c, "binding_id")
+	if !ok {
+		return
+	}
+	replayed, err := h.svc.RequestCatalogPull(c.Request.Context(), id, idemKeyOf(c))
+	if err != nil {
+		writeChannelError(c, err)
+		return
+	}
+	markReplayed(c, replayed)
+	c.Status(http.StatusAccepted)
 }

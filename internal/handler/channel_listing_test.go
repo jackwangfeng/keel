@@ -157,7 +157,7 @@ func TestChannelListingsFollowStock(t *testing.T) {
 		adjust(t, rig.local, cs.MerchantID, store, sku, -1)
 		rig.waitPushed(t, ctx, store, sku, want, "冲突重推之后")
 		var ls []repository.ChannelListing
-		ls, err := rig.svc.ListListings(ctx, b.ID, &store, 10, 0)
+		ls, err := rig.svc.ListListings(ctx, b.ID, &store, false, 10, 0)
 		if err != nil {
 			t.Fatal(err)
 		}

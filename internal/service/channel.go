@@ -422,15 +422,37 @@ func (s *ChannelService) ListPriceRules(ctx context.Context, bindingID int64) (o
 	return out, err
 }
 
-func (s *ChannelService) ListListings(ctx context.Context, bindingID int64, storeID *int64, limit, offset int32) (out []repository.ChannelListing, err error) {
+func (s *ChannelService) ListListings(ctx context.Context, bindingID int64, storeID *int64, errorsOnly bool, limit, offset int32) (out []repository.ChannelListing, err error) {
 	err = s.repo.WithTenant(ctx, func(tx repository.Tx) error {
 		if _, err = tx.GetChannelBinding(ctx, bindingID); err != nil {
 			return err
 		}
-		out, err = tx.ListChannelListingsPage(ctx, bindingID, storeID, limit, offset)
+		out, err = tx.ListChannelListingsPage(ctx, bindingID, storeID, errorsOnly, limit, offset)
 		return err
 	})
 	return out, err
+}
+
+// ErrChannelNotCatalogSource：要从一个不是启用中商品源的 binding 拉商品（409）。
+var ErrChannelNotCatalogSource = errors.New("这个渠道账号不是启用中的商品源，没有可拉的商品")
+
+// RequestCatalogPull 给启用中的商品源排一次整店重拉（首页顺带重装回调订阅）。已有一次在排队或在跑时不重复排
+// （jobs 的 uk_jobs_pending）。
+func (s *ChannelService) RequestCatalogPull(ctx context.Context, bindingID int64) error {
+	return s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+		return s.requestCatalogPullTx(ctx, tx, bindingID)
+	})
+}
+
+func (s *ChannelService) requestCatalogPullTx(ctx context.Context, tx repository.Tx, bindingID int64) error {
+	b, err := tx.GetChannelBinding(ctx, bindingID)
+	if err != nil {
+		return err
+	}
+	if !b.IsActiveCatalogSource() {
+		return ErrChannelNotCatalogSource
+	}
+	return s.enqueueCatalogPull(ctx, tx, b.ID, "", true)
 }
 
 // LinkSKU 登记一个 SKU 在渠道上的外部 ID（第二期由商品同步写；后台与测试也可以直接写）。
