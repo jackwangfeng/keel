@@ -11823,6 +11823,8 @@ components:
         · `merchant_return_shipped` —— 买家填了（或改了）退货寄回物流
         · `merchant_inventory_low` —— 下单扣减后门店库存降到预警线（`warning_qty`）或以下；
           扣到 0 时标题是「已售罄」
+        · `merchant_channel_order_exception` —— 渠道（Shopify 等）上卖出的订单没能在 keel 成单
+          （缺货：keel 订单已关闭，正文写明哪件商品差几件）；补货后在渠道订单页「重试」
       enum:
         - order_paid
         - order_shipped
@@ -11837,6 +11839,7 @@ components:
         - merchant_refund_requested
         - merchant_return_shipped
         - merchant_inventory_low
+        - merchant_channel_order_exception
 
     NotificationTarget:
       type: object

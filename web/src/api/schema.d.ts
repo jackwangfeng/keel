@@ -20738,9 +20738,11 @@ export interface components {
          *     · `merchant_return_shipped` —— 买家填了（或改了）退货寄回物流
          *     · `merchant_inventory_low` —— 下单扣减后门店库存降到预警线（`warning_qty`）或以下；
          *       扣到 0 时标题是「已售罄」
+         *     · `merchant_channel_order_exception` —— 渠道（Shopify 等）上卖出的订单没能在 keel 成单
+         *       （缺货：keel 订单已关闭，正文写明哪件商品差几件）；补货后在渠道订单页「重试」
          * @enum {string}
          */
-        NotificationKind: "order_paid" | "order_shipped" | "order_auto_confirm_soon" | "order_finished" | "order_timeout_closed" | "refund_approved" | "refund_rejected" | "refund_succeeded" | "refund_return_expired" | "merchant_order_paid" | "merchant_refund_requested" | "merchant_return_shipped" | "merchant_inventory_low";
+        NotificationKind: "order_paid" | "order_shipped" | "order_auto_confirm_soon" | "order_finished" | "order_timeout_closed" | "refund_approved" | "refund_rejected" | "refund_succeeded" | "refund_return_expired" | "merchant_order_paid" | "merchant_refund_requested" | "merchant_return_shipped" | "merchant_inventory_low" | "merchant_channel_order_exception";
         /**
          * @description 点了这条通知跳到哪里。四个定位字段都一定出现，用不上的是 `null`：
          *     · `order` —— `order_no` 非空，跳订单详情；

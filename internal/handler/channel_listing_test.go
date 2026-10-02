@@ -6,6 +6,7 @@ package handler_test
 import (
 	"context"
 	"encoding/json"
+	"net/http/httptest"
 	"path/filepath"
 	"testing"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/keel/keel/internal/dtm"
 	"github.com/keel/keel/internal/inventory"
 	"github.com/keel/keel/internal/repository"
+	"github.com/keel/keel/internal/rpc"
 	"github.com/keel/keel/internal/service"
 	"github.com/keel/keel/internal/tenant"
 )
@@ -32,6 +34,13 @@ func newChannelRig(t *testing.T) channelRig { t.Helper(); return newChannelRigWi
 // newChannelRigWith 同 newChannelRig，另外登记 extra 里的适配器（Shopify 打模拟平台）。
 func newChannelRigWith(t *testing.T, extra ...channel.Adapter) channelRig {
 	t.Helper()
+	return newChannelRigOpts(t, false, extra...)
+}
+
+// newChannelRigOpts：split 为真时库存走拆分形态（库存接口与 SAGA 分支挂在一个 httptest 内网服务上，
+// core 用 HTTP 实现、接单 SAGA 的库存步骤指向它）；同一个测试库，协调器仍是嵌入式。
+func newChannelRigOpts(t *testing.T, split bool, extra ...channel.Adapter) channelRig {
+	t.Helper()
 	store := repository.NewInventoryStore(testPool)
 	gate := inventory.NewChannelGate(true)
 	n := inventory.NewStockNotifier(store, "local://"+inventory.BranchStockChanged, "local://"+inventory.BranchStockMsgQuery).
@@ -43,13 +52,37 @@ func newChannelRigWith(t *testing.T, extra ...channel.Adapter) channelRig {
 	for _, a := range extra {
 		reg.Register(a)
 	}
-	svc := service.NewChannelService(repository.New(testPool), local, reg, dtm.BranchResolver{}, dtm.BranchResolver{})
-	ex := app.InventoryBranches(local)
+	var inv inventory.Service = local
+	res := dtm.BranchResolver{}
+	ex := map[string]dtm.BranchFuncEx{}
+	if split {
+		r, routes := rpc.NewRouter(rpc.ServerConfig{Secret: remoteInventorySecret})
+		inventory.Mount(routes.Tenant, local)
+		inventory.MountSaga(routes.Saga, local)
+		dtm.MountBranches(routes.Saga, map[string]dtm.BranchFuncEx{
+			inventory.BranchChannelMerchantSync: local.ChannelMerchantSyncBranch(gate)})
+		srv := httptest.NewServer(r)
+		t.Cleanup(srv.Close)
+		c, err := rpc.NewClient(srv.URL, remoteInventorySecret, 5*time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		inv = inventory.NewRemote(c)
+		if res, err = dtm.NewBranchResolver(srv.URL, remoteInventorySecret); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		ex = app.InventoryBranches(local)
+		ex[inventory.BranchChannelMerchantSync] = local.ChannelMerchantSyncBranch(gate)
+	}
+	svc := service.NewChannelService(repository.New(testPool), inv, reg, res, dtm.BranchResolver{})
 	ex[inventory.BranchStockMsgQuery] = dtm.Ex(n.QueryBranch())
 	ex[inventory.BranchStockChanged] = func(string, string, string, string) int { return dtm.Success }
 	ex[inventory.BranchChannelStockChanged] = svc.StockChangedBranch()
-	ex[inventory.BranchChannelMerchantSync] = local.ChannelMerchantSyncBranch(gate)
 	ex[service.BranchChannelMerchantQuery] = dtm.Ex(svc.MerchantQueryBranch())
+	for name, fn := range svc.OrderBranches() {
+		ex[name] = dtm.Ex(fn)
+	}
 	tc, err := dtm.StartEx("sqlite:"+filepath.Join(t.TempDir(), "dtm.db"), 0, nil, ex)
 	if err != nil {
 		t.Fatal(err)

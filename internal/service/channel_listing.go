@@ -139,6 +139,7 @@ type channelBindingConfig struct {
 	DefaultCategoryID int64  `json:"default_category_id"` // 商品源拉进来的新商品挂哪个类目
 	PriceStoreID      int64  `json:"price_store_id"`      // 全渠道一个价时价格从哪家门店出
 	WebhookBaseURL    string `json:"webhook_base_url"`    // 回调地址前缀（https://演示站域名），首拉时据此装 webhook
+	AutoAccept        bool   `json:"auto_accept"`         // 要商家接单的渠道（AcceptRequired）自动接单（第三期）
 }
 
 func parseBindingConfig(raw json.RawMessage) channelBindingConfig {

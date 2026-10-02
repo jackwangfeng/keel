@@ -140,6 +140,99 @@ func (q *Queries) CountUserOrders(ctx context.Context, arg CountUserOrdersParams
 	return count, err
 }
 
+const createChannelOrderDraft = `-- name: CreateChannelOrderDraft :one
+INSERT INTO orders (order_no, user_id, source, channel_order_id, store_id, region_id, store_snapshot,
+                    status, goods_amount_cents, freight_cents, freight_discount_cents,
+                    discount_cents, payable_cents, receiver_snapshot, remark, expire_at,
+                    promotion_discount_cents)
+SELECT $1, NULL, 1, $2::bigint, st.id, st.region_id,
+       jsonb_build_object('store_name', st.name, 'region_name', r.name,
+                          'address', st.address, 'phone', st.phone),
+       0, $3, $4, $5,
+       $6, $7,
+       $8, $9, $10,
+       $6
+  FROM stores st
+  JOIN regions r ON r.id = st.region_id
+ WHERE st.id = $11 AND st.deleted_at IS NULL
+RETURNING id, order_no, store_id, region_id, status, goods_amount_cents, freight_cents,
+          freight_discount_cents, discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
+          expire_at, created_at, promotion_discount_cents
+`
+
+type CreateChannelOrderDraftParams struct {
+	OrderNo              string
+	ChannelOrderID       int64
+	GoodsAmountCents     int64
+	FreightCents         int64
+	FreightDiscountCents int64
+	DiscountCents        int64
+	PayableCents         int64
+	ReceiverSnapshot     []byte
+	Remark               *string
+	ExpireAt             pgtype.Timestamptz
+	StoreID              int64
+}
+
+type CreateChannelOrderDraftRow struct {
+	ID                     int64
+	OrderNo                string
+	StoreID                int64
+	RegionID               int64
+	Status                 int16
+	GoodsAmountCents       int64
+	FreightCents           int64
+	FreightDiscountCents   int64
+	DiscountCents          int64
+	PayableCents           int64
+	PaidCents              int64
+	RefundedCents          int64
+	RefundStatus           int16
+	ExpireAt               pgtype.Timestamptz
+	CreatedAt              pgtype.Timestamptz
+	PromotionDiscountCents int64
+}
+
+// 渠道单（00320）的 keel 订单草稿（status 0，渠道单 SAGA 的第一步把它推到 10）。与 CreateOrderDraft 同一个写法
+// （门店快照与外键取自同一行 stores），差别：source = 1、user_id 为空、channel_order_id 指回渠道单；
+// 金额全是平台快照（discount = promotion_discount = 平台补贴 + 商家补贴，没有券，chk_discount_sources 对
+// source = 1 放开）；promotions 为空数组（不是 keel 的活动）。
+func (q *Queries) CreateChannelOrderDraft(ctx context.Context, arg CreateChannelOrderDraftParams) (CreateChannelOrderDraftRow, error) {
+	row := q.db.QueryRow(ctx, createChannelOrderDraft,
+		arg.OrderNo,
+		arg.ChannelOrderID,
+		arg.GoodsAmountCents,
+		arg.FreightCents,
+		arg.FreightDiscountCents,
+		arg.DiscountCents,
+		arg.PayableCents,
+		arg.ReceiverSnapshot,
+		arg.Remark,
+		arg.ExpireAt,
+		arg.StoreID,
+	)
+	var i CreateChannelOrderDraftRow
+	err := row.Scan(
+		&i.ID,
+		&i.OrderNo,
+		&i.StoreID,
+		&i.RegionID,
+		&i.Status,
+		&i.GoodsAmountCents,
+		&i.FreightCents,
+		&i.FreightDiscountCents,
+		&i.DiscountCents,
+		&i.PayableCents,
+		&i.PaidCents,
+		&i.RefundedCents,
+		&i.RefundStatus,
+		&i.ExpireAt,
+		&i.CreatedAt,
+		&i.PromotionDiscountCents,
+	)
+	return i, err
+}
+
 const createOrderDraft = `-- name: CreateOrderDraft :one
 INSERT INTO orders (order_no, user_id, store_id, region_id, store_snapshot,
                     status, goods_amount_cents, freight_cents, freight_discount_cents,

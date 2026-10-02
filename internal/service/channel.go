@@ -61,8 +61,9 @@ type ChannelService struct {
 	reg  *channel.Registry
 	log  *slog.Logger
 
-	msgAction string // 库存服务的接收分支（单体 local://，拆分 http://）
-	msgQuery  string // 本服务的回查分支
+	msgAction string             // 库存服务的接收分支（单体 local://，拆分 http://）
+	msgQuery  string             // 本服务的回查分支
+	res, self dtm.BranchResolver // 接单 SAGA 的库存分支地址 / 本服务分支地址（channel_order_saga.go）
 	tc        atomic.Value
 
 	workerID string
@@ -81,8 +82,10 @@ func NewChannelService(repo *repository.Repo, inv inventory.Service, reg *channe
 	s := &ChannelService{repo: repo, inv: inv, reg: reg, log: slog.Default().With("component", "channel"),
 		msgAction: res.BranchURL(inventory.BranchChannelMerchantSync),
 		msgQuery:  self.BranchURL(BranchChannelMerchantQuery),
-		workerID:  channelWorkerID()}
+		res:       res, self: self,
+		workerID: channelWorkerID()}
 	s.OnInbound(channel.EventCatalogChanged, s.catalogChanged)
+	s.OnInbound(channel.EventOrderChanged, s.orderChanged)
 	return s
 }
 

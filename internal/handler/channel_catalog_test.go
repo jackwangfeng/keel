@@ -37,10 +37,16 @@ const simSecret = "sim-client-secret-123456"
 // newShopifyRig 建一个停用的 Shopify binding（映射北店 ↔ 模拟店的 location），config 由调用方给。
 func newShopifyRig(t *testing.T, config map[string]any) *shopifyRig {
 	t.Helper()
+	return newShopifyRigOpts(t, config, false)
+}
+
+// newShopifyRigOpts：split 为真时库存走拆分形态（newChannelRigOpts）。
+func newShopifyRigOpts(t *testing.T, config map[string]any, split bool) *shopifyRig {
+	t.Helper()
 	cs := newCouponShop(t)
 	shop := fmt.Sprintf("s%d.myshopify.com", time.Now().UnixNano())
 	sim := shopifytest.New(t, shop, "sim-client-id", simSecret)
-	rig := newChannelRigWith(t, shopify.New(shopify.Options{BaseURL: sim.BaseURL}))
+	rig := newChannelRigOpts(t, split, shopify.New(shopify.Options{BaseURL: sim.BaseURL}))
 	ctx := tenant.NewContext(context.Background(), cs.MerchantID)
 	t.Cleanup(func() { adminExec(t, `DELETE FROM channel_merchants WHERE merchant_id = $1`, cs.MerchantID) })
 	r := &shopifyRig{channelRig: rig, sim: sim, cs: cs, ctx: ctx, loc: sim.AddLocation("Shop location")}

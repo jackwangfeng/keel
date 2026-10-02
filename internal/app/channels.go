@@ -69,12 +69,17 @@ func newChannelService(s SplitConfig, pool *pgxpool.Pool, inv inventory.Service,
 	return service.NewChannelService(repository.New(pool), inv, channelRegistry(), res, self), nil
 }
 
-// ChannelBranches 是渠道层要注册的分支：core 的开关渠道回查、stock.changed 接收；库存在本进程（local 非 nil）时
+// ChannelBranches 是渠道层要注册的分支：core 的开关渠道回查、stock.changed 接收、渠道单接单 SAGA；库存在本进程（local 非 nil）时
 // 再加库存这一侧的开关渠道接收。
 func ChannelBranches(ch *service.ChannelService, local *inventory.Local, gate *inventory.ChannelGate) map[string]dtm.BranchFuncEx {
 	out := map[string]dtm.BranchFuncEx{
 		service.BranchChannelMerchantQuery:  dtm.Ex(ch.MerchantQueryBranch()),
 		inventory.BranchChannelStockChanged: ch.StockChangedBranch(),
+	}
+	// 渠道单的接单 SAGA（core 的三步 + 空补偿）。库存那一步复用自营下单的 inventory_deduct / restore：
+	// 单体已由 InventoryBranches 注册，拆分时地址指向库存服务（newChannelService 的 res）。
+	for name, fn := range ch.OrderBranches() {
+		out[name] = dtm.Ex(fn)
 	}
 	if local != nil {
 		out[inventory.BranchChannelMerchantSync] = local.ChannelMerchantSyncBranch(gate)

@@ -49,22 +49,24 @@ import (
 
 // 通知种类（契约 NotificationKind，逐字一致；notification_policy_test.go 核对）。
 const (
-	KindOrderPaid               = "order_paid"
-	KindOrderShipped            = "order_shipped"
-	KindOrderAutoConfirmSoon    = "order_auto_confirm_soon"
-	KindOrderFinished           = "order_finished"
-	KindOrderTimeoutClosed      = "order_timeout_closed"
-	KindRefundApproved          = "refund_approved"
-	KindRefundRejected          = "refund_rejected"
-	KindRefundSucceeded         = "refund_succeeded"
-	KindRefundReturnExpired     = "refund_return_expired"
-	KindMerchantOrderPaid       = "merchant_order_paid"
-	KindMerchantRefundRequest   = "merchant_refund_requested"
-	KindMerchantReturnShipped   = "merchant_return_shipped"
-	KindMerchantInventoryLow    = "merchant_inventory_low"
-	notificationTargetOrder     = "order"
-	notificationTargetRefund    = "refund"
-	notificationTargetInventory = "inventory"
+	KindOrderPaid             = "order_paid"
+	KindOrderShipped          = "order_shipped"
+	KindOrderAutoConfirmSoon  = "order_auto_confirm_soon"
+	KindOrderFinished         = "order_finished"
+	KindOrderTimeoutClosed    = "order_timeout_closed"
+	KindRefundApproved        = "refund_approved"
+	KindRefundRejected        = "refund_rejected"
+	KindRefundSucceeded       = "refund_succeeded"
+	KindRefundReturnExpired   = "refund_return_expired"
+	KindMerchantOrderPaid     = "merchant_order_paid"
+	KindMerchantRefundRequest = "merchant_refund_requested"
+	KindMerchantReturnShipped = "merchant_return_shipped"
+	KindMerchantInventoryLow  = "merchant_inventory_low"
+	// KindMerchantChannelOrderException：渠道上卖出的单没能在 keel 成单（缺货），keel 订单已关到 90（第三期）。
+	KindMerchantChannelOrderException = "merchant_channel_order_exception"
+	notificationTargetOrder           = "order"
+	notificationTargetRefund          = "refund"
+	notificationTargetInventory       = "inventory"
 )
 
 // notifyParams 是模板能用到的全部字段。一个结构体而不是每种一个：
@@ -141,6 +143,9 @@ var notificationTemplates = map[string]notificationTemplate{
 	KindMerchantInventoryLow: {repository.NotificationAudienceMerchant, notificationTargetInventory,
 		"{{if eq .Left 0}}商品已售罄{{else}}库存预警{{end}}",
 		"{{.ProductTitle}}{{.SpecLabel}} 在{{.StoreName}}剩 {{.Left}} 件（预警线 {{.Warning}} 件）。"},
+	KindMerchantChannelOrderException: {repository.NotificationAudienceMerchant, notificationTargetOrder,
+		"渠道订单没能接单",
+		"{{.Reason}}。keel 订单 {{.OrderNo}} 已关闭；补货后请在渠道订单页点「重试」。"},
 }
 
 // carrierNames 是常见承运商代码的中文名。认不出的原样显示代码 —— 发货时填什么
@@ -302,6 +307,13 @@ func notifyOrderPaid(ctx context.Context, tx repository.Tx, order repository.Ord
 	}
 	return emitNotification(ctx, tx, outgoing{Kind: KindMerchantOrderPaid, StoreID: order.StoreID,
 		Params: p, Dedupe: order.OrderNo})
+}
+
+// notifyChannelOrderException 渠道上卖出的单没能在 keel 成单（缺货，keel 订单已关到 90）：告诉履约门店。
+// 没有 keel 买家，买家侧本来就没有这一条。
+func notifyChannelOrderException(ctx context.Context, tx repository.Tx, order repository.Order, reason string) error {
+	return emitNotification(ctx, tx, outgoing{Kind: KindMerchantChannelOrderException, StoreID: order.StoreID,
+		Params: notifyParams{OrderNo: order.OrderNo, Reason: reason}, Dedupe: order.OrderNo})
 }
 
 // notifyOrderShipped 已发货，正文带物流。

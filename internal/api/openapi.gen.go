@@ -1076,24 +1076,27 @@ func (e MerchantUpdateRequestStatus) Valid() bool {
 
 // Defines values for NotificationKind.
 const (
-	MerchantInventoryLow    NotificationKind = "merchant_inventory_low"
-	MerchantOrderPaid       NotificationKind = "merchant_order_paid"
-	MerchantRefundRequested NotificationKind = "merchant_refund_requested"
-	MerchantReturnShipped   NotificationKind = "merchant_return_shipped"
-	OrderAutoConfirmSoon    NotificationKind = "order_auto_confirm_soon"
-	OrderFinished           NotificationKind = "order_finished"
-	OrderPaid               NotificationKind = "order_paid"
-	OrderShipped            NotificationKind = "order_shipped"
-	OrderTimeoutClosed      NotificationKind = "order_timeout_closed"
-	RefundApproved          NotificationKind = "refund_approved"
-	RefundRejected          NotificationKind = "refund_rejected"
-	RefundReturnExpired     NotificationKind = "refund_return_expired"
-	RefundSucceeded         NotificationKind = "refund_succeeded"
+	MerchantChannelOrderException NotificationKind = "merchant_channel_order_exception"
+	MerchantInventoryLow          NotificationKind = "merchant_inventory_low"
+	MerchantOrderPaid             NotificationKind = "merchant_order_paid"
+	MerchantRefundRequested       NotificationKind = "merchant_refund_requested"
+	MerchantReturnShipped         NotificationKind = "merchant_return_shipped"
+	OrderAutoConfirmSoon          NotificationKind = "order_auto_confirm_soon"
+	OrderFinished                 NotificationKind = "order_finished"
+	OrderPaid                     NotificationKind = "order_paid"
+	OrderShipped                  NotificationKind = "order_shipped"
+	OrderTimeoutClosed            NotificationKind = "order_timeout_closed"
+	RefundApproved                NotificationKind = "refund_approved"
+	RefundRejected                NotificationKind = "refund_rejected"
+	RefundReturnExpired           NotificationKind = "refund_return_expired"
+	RefundSucceeded               NotificationKind = "refund_succeeded"
 )
 
 // Valid indicates whether the value is a known member of the NotificationKind enum.
 func (e NotificationKind) Valid() bool {
 	switch e {
+	case MerchantChannelOrderException:
+		return true
 	case MerchantInventoryLow:
 		return true
 	case MerchantOrderPaid:
@@ -5049,6 +5052,8 @@ type Notification struct {
 	// · `merchant_return_shipped` —— 买家填了（或改了）退货寄回物流
 	// · `merchant_inventory_low` —— 下单扣减后门店库存降到预警线（`warning_qty`）或以下；
 	//   扣到 0 时标题是「已售罄」
+	// · `merchant_channel_order_exception` —— 渠道（Shopify 等）上卖出的订单没能在 keel 成单
+	//   （缺货：keel 订单已关闭，正文写明哪件商品差几件）；补货后在渠道订单页「重试」
 	Kind NotificationKind `json:"kind"`
 
 	// ReadAt 已读时间；`null` 即未读。后台是**调用者自己**的已读时间。
@@ -5093,6 +5098,10 @@ type Notification struct {
 // · `merchant_inventory_low` —— 下单扣减后门店库存降到预警线（`warning_qty`）或以下；
 //
 //	扣到 0 时标题是「已售罄」
+//
+// · `merchant_channel_order_exception` —— 渠道（Shopify 等）上卖出的订单没能在 keel 成单
+//
+//	（缺货：keel 订单已关闭，正文写明哪件商品差几件）；补货后在渠道订单页「重试」
 type NotificationKind string
 
 // NotificationList defines model for NotificationList.

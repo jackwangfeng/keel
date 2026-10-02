@@ -52,6 +52,7 @@ export const NOTIFICATION_TAG: Record<NotificationKind, "warning" | "danger" | "
     merchant_refund_requested: "danger",
     merchant_return_shipped: "primary",
     merchant_inventory_low: "danger",
+    merchant_channel_order_exception: "danger",
     order_paid: "info",
     order_shipped: "info",
     order_auto_confirm_soon: "info",

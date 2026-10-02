@@ -116,7 +116,8 @@ func TestChannelWebhook(t *testing.T) {
 		}
 	})
 
-	t.Run("没有处理器的类别_处理时标忽略", func(t *testing.T) {
+	// 第三期起订单事件有处理器（channel_order.go）；这条回调的正文没有 order_id，处理器丢弃它、事件标完成。
+	t.Run("订单事件没带订单号_处理完不建单", func(t *testing.T) {
 		if err := testChannels.Drain(context.Background()); err != nil {
 			t.Fatal(err)
 		}
@@ -127,8 +128,11 @@ func TestChannelWebhook(t *testing.T) {
 		if err := row.Scan(&status, &msg); err != nil {
 			t.Fatal(err)
 		}
-		if status != int64(repository.ChannelEventIgnored) || !strings.Contains(msg, "处理器") {
-			t.Fatalf("事件处理后 status=%d error=%q，期望忽略（没有处理器）", status, msg)
+		if status != int64(repository.ChannelEventDone) || msg != "" {
+			t.Fatalf("事件处理后 status=%d error=%q，期望完成", status, msg)
+		}
+		if n := adminQueryInt64(t, `SELECT count(*) FROM channel_orders WHERE binding_id = $1`, b.ID); n != 0 {
+			t.Fatalf("没带订单号的回调建了 %d 张渠道单", n)
 		}
 	})
 }

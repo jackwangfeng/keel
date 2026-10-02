@@ -26,6 +26,11 @@ var notificationCallSites = map[string]notifyPolicy{
 		"「下单成功」由那次响应告诉他；此刻订单号还没对外返回（order_saga.go 的 closeOrder 注释）"},
 	"closeOrder/CloseOrder": {Silent: "下单 SAGA 的全局补偿（0/10 → 90）：POST /orders 同步回的是失败（库存不足、券不可用），" +
 		"那一单从没对买家「存在」过"},
+	// 渠道单（第三期）的接单 SAGA：channel_order_saga.go。
+	"ChannelService.channelOrderOpenBranch/PromoteOrderDraft": {Silent: "渠道单接单 SAGA 的建单分支（0 → 10）：" +
+		"渠道单无 keel 买家，平台自己通知顾客；门店的「新订单待发货」在收尾分支 10 → 20 时发，这里再发就是同一件事说两遍"},
+	"ChannelService.channelOrderOpenUndoBranch/CloseOrder": {Notify: "notifyChannelOrderException"},
+	"ChannelService.channelOrderFinishBranch/SettleOrder":  {Notify: "notifyOrderPaid"},
 	"SweepService.closeDraft/CloseExpiredDraftOrder": {Silent: "孤儿草稿（0 → 90）：进程在建单与 SAGA 之间死掉留下的，" +
 		"买家那次下单已经拿到了失败或超时，订单号从没对外返回过"},
 
