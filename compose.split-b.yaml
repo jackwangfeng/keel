@@ -77,10 +77,14 @@ services:
       split-data:
         condition: service_completed_successfully
 
+# 卷名：`<项目名>_<卷>_split_b`。后缀与单体形态的卷错开（同一个项目名下不串库）；
+# 前缀用 `${COMPOSE_PROJECT_NAME}` 让 `-p` 不同的两套栈互不共用（显式 `name:` 不会自动加项目名，
+# 写成字面量 `keel_` 时两套栈挂的是同一批卷）。默认项目名下仍是 `keel_<卷>_split_b`。
+# 想沿用单体的卷原地迁过来（演示站就是），在自己的叠加层里把 name 改回去。
 volumes:
   pgdata:
-    name: keel_pgdata_split_b
+    name: ${COMPOSE_PROJECT_NAME}_pgdata_split_b
   dtmdata:
-    name: keel_dtmdata_split_b
+    name: ${COMPOSE_PROJECT_NAME}_dtmdata_split_b
   uploads:
-    name: keel_uploads_split_b
+    name: ${COMPOSE_PROJECT_NAME}_uploads_split_b

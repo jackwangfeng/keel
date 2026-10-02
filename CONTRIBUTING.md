@@ -204,7 +204,7 @@ docker compose -f compose.yaml -f compose.multi.yaml up -d --build
 KEEL_SMOKE_HOST=shop-a.example.com ./scripts/smoke.sh
 ```
 
-叠加层用的是**自己的数据卷**（`keel_pgdata_multi`），两种形态可以来回切，
+叠加层用的是**自己的数据卷**（`<项目名>_pgdata_multi`，默认即 `keel_pgdata_multi`），两种形态可以来回切，
 不需要 `docker compose down -v`。共用一个卷的话，`single → multi` 这个方向会静默出错：
 两份种子都是增量式的，dev.sql 叠在 `demo` 上会变成 7 家商家，而多商家模式的 Preflight
 不检查「有几家」，于是应用照常起、冒烟照常绿，只是库里多了一家本不该存在的店。
