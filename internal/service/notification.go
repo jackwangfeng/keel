@@ -210,8 +210,10 @@ func renderNotification(kind string, p notifyParams) (compiledTemplate, string, 
 
 // outgoing 是一条要写的通知：种类、收件人、定位、参数、去重后缀。
 type outgoing struct {
-	Kind    string
-	UserID  int64 // 发给买家时
+	Kind string
+	// UserID 发给买家时用。渠道单（00320）没有 keel 买家，为 nil：买家通知不发，
+	// 平台自己通知顾客（emitNotification 里跳过）；员工侧通知照发。
+	UserID  *int64
 	StoreID int64 // 发给商家时；库存预警的定位也用它
 	SKUID   int64 // 库存预警的定位
 	Params  notifyParams
@@ -250,7 +252,10 @@ func emitNotification(ctx context.Context, tx repository.Tx, o outgoing) error {
 		TargetType: t.Target, DedupeKey: o.Kind + ":" + o.Dedupe,
 	}
 	if t.Audience == repository.NotificationAudienceBuyer {
-		n.UserID = &o.UserID
+		if o.UserID == nil {
+			return nil // 渠道单无 keel 买家，平台自己通知顾客
+		}
+		n.UserID = o.UserID
 	} else {
 		n.StoreID = &o.StoreID
 	}
@@ -347,7 +352,7 @@ func notifyRefundApproved(ctx context.Context, tx repository.Tx, refundNo string
 	if err != nil {
 		return err
 	}
-	return emitNotification(ctx, tx, outgoing{Kind: KindRefundApproved, UserID: r.UserID,
+	return emitNotification(ctx, tx, outgoing{Kind: KindRefundApproved, UserID: &r.UserID,
 		Params: notifyParams{OrderNo: r.OrderNo, RefundNo: r.RefundNo, AmountCents: r.AmountCents,
 			RefundType: r.RefundType},
 		Dedupe: r.RefundNo})
@@ -363,7 +368,7 @@ func notifyRefundRejected(ctx context.Context, tx repository.Tx, refundNo string
 	if r.RejectReason != nil {
 		reason = *r.RejectReason
 	}
-	return emitNotification(ctx, tx, outgoing{Kind: KindRefundRejected, UserID: r.UserID,
+	return emitNotification(ctx, tx, outgoing{Kind: KindRefundRejected, UserID: &r.UserID,
 		Params: notifyParams{OrderNo: r.OrderNo, RefundNo: r.RefundNo, Reason: reason},
 		Dedupe: r.RefundNo})
 }
@@ -387,14 +392,14 @@ func notifyRefundReturnExpired(ctx context.Context, tx repository.Tx, refundNo s
 	if err != nil {
 		return err
 	}
-	return emitNotification(ctx, tx, outgoing{Kind: KindRefundReturnExpired, UserID: r.UserID,
+	return emitNotification(ctx, tx, outgoing{Kind: KindRefundReturnExpired, UserID: &r.UserID,
 		Params: notifyParams{OrderNo: r.OrderNo, RefundNo: r.RefundNo, Days: days},
 		Dedupe: r.RefundNo})
 }
 
 // notifyRefundSucceeded 退款到账。
 func notifyRefundSucceeded(ctx context.Context, tx repository.Tx, r repository.Refund) error {
-	return emitNotification(ctx, tx, outgoing{Kind: KindRefundSucceeded, UserID: r.UserID,
+	return emitNotification(ctx, tx, outgoing{Kind: KindRefundSucceeded, UserID: &r.UserID,
 		Params: notifyParams{OrderNo: r.OrderNo, RefundNo: r.RefundNo, AmountCents: r.AmountCents},
 		Dedupe: r.RefundNo})
 }

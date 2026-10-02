@@ -776,7 +776,8 @@ SELECT id, order_no, user_id, store_id, region_id, status,
        goods_amount_cents, freight_cents, freight_discount_cents,
        discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
        expire_at, paid_at, shipped_at, finished_at, created_at, user_coupon_id,
-       coupon_name, promotion_discount_cents, promotions
+       coupon_name, promotion_discount_cents, promotions,
+       source, channel_order_id  -- 00320
   FROM orders
  WHERE id = $1
    FOR UPDATE
@@ -785,7 +786,7 @@ SELECT id, order_no, user_id, store_id, region_id, status,
 type LockOrderByIDRow struct {
 	ID                     int64
 	OrderNo                string
-	UserID                 int64
+	UserID                 *int64
 	StoreID                int64
 	RegionID               int64
 	Status                 int16
@@ -806,6 +807,8 @@ type LockOrderByIDRow struct {
 	CouponName             *string
 	PromotionDiscountCents int64
 	Promotions             []byte
+	Source                 int16
+	ChannelOrderID         *int64
 }
 
 // 审核、撤回、入账改订单之前先锁它（见文件头「锁的顺序」）。
@@ -836,6 +839,8 @@ func (q *Queries) LockOrderByID(ctx context.Context, id int64) (LockOrderByIDRow
 		&i.CouponName,
 		&i.PromotionDiscountCents,
 		&i.Promotions,
+		&i.Source,
+		&i.ChannelOrderID,
 	)
 	return i, err
 }
@@ -859,7 +864,8 @@ SELECT id, order_no, user_id, store_id, region_id, status,
        goods_amount_cents, freight_cents, freight_discount_cents,
        discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
        expire_at, paid_at, shipped_at, finished_at, created_at, user_coupon_id,
-       coupon_name, promotion_discount_cents, promotions
+       coupon_name, promotion_discount_cents, promotions,
+       source, channel_order_id  -- 00320
   FROM orders
  WHERE order_no = $1
    AND user_id = $2
@@ -869,13 +875,13 @@ SELECT id, order_no, user_id, store_id, region_id, status,
 
 type LockUserOrderByNoParams struct {
 	OrderNo string
-	UserID  int64
+	UserID  *int64
 }
 
 type LockUserOrderByNoRow struct {
 	ID                     int64
 	OrderNo                string
-	UserID                 int64
+	UserID                 *int64
 	StoreID                int64
 	RegionID               int64
 	Status                 int16
@@ -896,6 +902,8 @@ type LockUserOrderByNoRow struct {
 	CouponName             *string
 	PromotionDiscountCents int64
 	Promotions             []byte
+	Source                 int16
+	ChannelOrderID         *int64
 }
 
 // 退款与售后（数据模型 §11）：申请、撤回、审核、确认收到退货、渠道回调入账，
@@ -947,6 +955,8 @@ func (q *Queries) LockUserOrderByNo(ctx context.Context, arg LockUserOrderByNoPa
 		&i.CouponName,
 		&i.PromotionDiscountCents,
 		&i.Promotions,
+		&i.Source,
+		&i.ChannelOrderID,
 	)
 	return i, err
 }

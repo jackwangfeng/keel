@@ -201,7 +201,8 @@ SELECT id, order_no, user_id, store_id, region_id, status,
        goods_amount_cents, freight_cents, freight_discount_cents,
        discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
        expire_at, paid_at, shipped_at, finished_at, created_at, user_coupon_id,
-       coupon_name, promotion_discount_cents, promotions
+       coupon_name, promotion_discount_cents, promotions,
+       source, channel_order_id  -- 00320：来源与渠道单（渠道单 user_id 为空）
   FROM orders
  WHERE order_no = $1;
 

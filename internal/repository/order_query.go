@@ -123,7 +123,7 @@ func (t tenantTx) ListUserOrders(ctx context.Context, userID int64, f OrderFilte
 	}
 
 	rows, err := t.q.ListUserOrders(ctx, db.ListUserOrdersParams{
-		UserID:       userID,
+		UserID:       &userID,
 		Status:       f.Status,
 		RefundStatus: f.RefundStatus,
 		PageLimit:    int32(limit),
@@ -165,14 +165,14 @@ func (t tenantTx) ListUserOrders(ctx context.Context, userID int64, f OrderFilte
 
 func (t tenantTx) CountUserOrders(ctx context.Context, userID int64, f OrderFilter) (int64, error) {
 	return t.q.CountUserOrders(ctx, db.CountUserOrdersParams{
-		UserID:       userID,
+		UserID:       &userID,
 		Status:       f.Status,
 		RefundStatus: f.RefundStatus,
 	})
 }
 
 func (t tenantTx) FindUserOrderByNo(ctx context.Context, orderNo string, userID int64) (Order, error) {
-	r, err := t.q.GetUserOrderByNo(ctx, db.GetUserOrderByNoParams{OrderNo: orderNo, UserID: userID})
+	r, err := t.q.GetUserOrderByNo(ctx, db.GetUserOrderByNoParams{OrderNo: orderNo, UserID: &userID})
 	if errors.Is(err, pgx.ErrNoRows) {
 		// 刻意不区分「没有这一单」与「这一单是别人的」，理由写在查询上：
 		// 分开报会把这个接口变成一个单号存在性判定器。

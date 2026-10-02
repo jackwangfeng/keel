@@ -283,7 +283,7 @@
   "fk_single_column_ok": {
     "_readme": [
       "规矩二的豁免：两端都带 merchant_id、却只能用单列外键的那些引用。",
-      "键是 表名(列名)。这几条全部指向 staff，理由是同一个。"
+      "键是 表名(列名)。除 channel_orders(order_no) 外全部指向 staff，理由是同一个。"
     ],
     "staff(created_by)": "staff 是全文唯一一张 merchant_id 可空的表（平台级操作员为 NULL）。复合外键要求父子两边 merchant_id 相等，而 NULL 下 MATCH SIMPLE 直接跳过检查，于是「平台管理员创建某家店的管理员」写不进去 —— 那正是认证流程 ② 的主路径（数据模型 §14）。",
     "shipments(created_by)": "同上，指向 staff。审计字段，不在资金与库存的主链路上。",
@@ -293,7 +293,9 @@
     "store_product_overrides(updated_by)": "同上，指向 staff。审计字段：记「谁在什么时候把这件商品在这家店下架了」，不在资金与库存的主链路上（数据模型 §4）。",
     "region_product_overrides(updated_by)": "同上，指向 staff。大区那一层的同一个字段。",
     "product_import_batches(staff_id)": "同上，指向 staff。谁确认的批量导入（00054）；平台级员工经 X-Keel-Merchant 切进来替店里导入时 merchant_id 为 NULL，复合外键写不进去。",
-    "notification_reads(staff_id)": "同上，指向 staff。后台铃铛的每员工已读状态（00053）：平台级员工用 X-Keel-Merchant 切进一家店读提醒时 merchant_id 为 NULL，复合外键写不进去；而他的已读状态同样要记。"
+    "notification_reads(staff_id)": "同上，指向 staff。后台铃铛的每员工已读状态（00053）：平台级员工用 X-Keel-Merchant 切进一家店读提醒时 merchant_id 为 NULL，复合外键写不进去；而他的已读状态同样要记。",
+    "channel_order_requests(decided_by)": "同上，指向 staff。谁处理的平台申请（00320）；平台级员工切进来替店里处理时 merchant_id 为 NULL，复合外键写不进去。",
+    "channel_orders(order_no)": "不指向 staff，理由不同：orders 没有 (order_no, merchant_id) 唯一键，为这一条外键在大表 orders 上多建一条唯一索引不划算；order_no 本身全局唯一（unique_global_ok 的 orders(order_no)），跨租户挂错由写入方守（渠道单与 keel 订单在同一个租户事务里建），RLS 挡读。反向的 orders.channel_order_id 是复合外键。"
   },
   "unique_global_ok": {
     "_readme": [

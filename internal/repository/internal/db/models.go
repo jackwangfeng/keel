@@ -437,6 +437,48 @@ type ChannelMerchant struct {
 	UpdatedAt  pgtype.Timestamptz
 }
 
+type ChannelOrder struct {
+	ID                int64
+	MerchantID        int64
+	BindingID         int64
+	ExternalOrderID   string
+	ExternalOrderName string
+	StoreID           *int64
+	OrderNo           *string
+	PlatformStatus    string
+	Status            int16
+	Exception         *string
+	AcceptDeadline    pgtype.Timestamptz
+	PickDeadline      pgtype.Timestamptz
+	DeliveryMode      int16
+	Rider             []byte
+	Amounts           []byte
+	Lines             []byte
+	Receiver          []byte
+	Version           int64
+	LastPayload       []byte
+	Test              bool
+	CreatedAt         pgtype.Timestamptz
+	UpdatedAt         pgtype.Timestamptz
+}
+
+type ChannelOrderRequest struct {
+	ID                int64
+	MerchantID        int64
+	ChannelOrderID    int64
+	ExternalRequestID string
+	Kind              int16
+	Lines             []byte
+	AmountCents       int64
+	Reason            string
+	Status            int16
+	Deadline          pgtype.Timestamptz
+	DecidedBy         *int64
+	DecidedAt         pgtype.Timestamptz
+	CreatedAt         pgtype.Timestamptz
+	UpdatedAt         pgtype.Timestamptz
+}
+
 type ChannelPriceRule struct {
 	ID         int64
 	MerchantID int64
@@ -666,7 +708,7 @@ type Order struct {
 	ID                     int64
 	MerchantID             int64
 	OrderNo                string
-	UserID                 int64
+	UserID                 *int64
 	Status                 int16
 	RefundStatus           int16
 	GoodsAmountCents       int64
@@ -694,7 +736,9 @@ type Order struct {
 	Promotions             []byte
 	PlacedAt               pgtype.Timestamptz
 	// 收货人手机号，= receiver_snapshot->>'phone'，由触发器维护（00170），应用不写。存在的理由：->> 非 leakproof，RLS 下走不了表达式索引；text 的 = 是 leakproof。
-	ReceiverPhone *string
+	ReceiverPhone  *string
+	Source         int16
+	ChannelOrderID *int64
 }
 
 type OrderItem struct {

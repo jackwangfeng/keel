@@ -69,6 +69,8 @@ type FulfillmentTx interface {
 
 	// ConfirmOrderReceipt 买家确认收货：30 → 40。
 	ConfirmOrderReceipt(ctx context.Context, orderNo string, userID int64) (bool, error)
+	// FinishChannelOrder 渠道单（00320，没有 keel 买家）的 30 → 40，自动确认收货用。
+	FinishChannelOrder(ctx context.Context, orderID int64) (bool, error)
 
 	// ShipOrder 后台发货：20 → 30。
 	ShipOrder(ctx context.Context, orderID int64) (bool, error)
@@ -96,7 +98,7 @@ type FulfillmentTx interface {
 type AutoConfirmCandidate struct {
 	ID      int64
 	OrderNo string
-	UserID  int64
+	UserID  *int64 // 渠道单为 nil（00320）
 }
 
 // transitionErr 把状态机触发器的 23514 挑成 ErrIllegalOrderTransition，
@@ -110,7 +112,15 @@ func transitionErr(err error) error {
 }
 
 func (t tenantTx) CancelPendingOrder(ctx context.Context, orderNo string, userID int64) (bool, error) {
-	n, err := t.q.CancelPendingOrder(ctx, db.CancelPendingOrderParams{OrderNo: orderNo, UserID: userID})
+	n, err := t.q.CancelPendingOrder(ctx, db.CancelPendingOrderParams{OrderNo: orderNo, UserID: &userID})
+	if err != nil {
+		return false, transitionErr(err)
+	}
+	return n == 1, nil
+}
+
+func (t tenantTx) FinishChannelOrder(ctx context.Context, orderID int64) (bool, error) {
+	n, err := t.q.FinishChannelOrder(ctx, orderID)
 	if err != nil {
 		return false, transitionErr(err)
 	}
@@ -118,7 +128,7 @@ func (t tenantTx) CancelPendingOrder(ctx context.Context, orderNo string, userID
 }
 
 func (t tenantTx) ConfirmOrderReceipt(ctx context.Context, orderNo string, userID int64) (bool, error) {
-	n, err := t.q.ConfirmOrderReceipt(ctx, db.ConfirmOrderReceiptParams{OrderNo: orderNo, UserID: userID})
+	n, err := t.q.ConfirmOrderReceipt(ctx, db.ConfirmOrderReceiptParams{OrderNo: orderNo, UserID: &userID})
 	if err != nil {
 		return false, transitionErr(err)
 	}

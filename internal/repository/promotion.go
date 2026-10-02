@@ -388,7 +388,7 @@ func (t tenantTx) ReleasePromotionLimit(ctx context.Context, promotionID, skuID,
 }
 
 func (t tenantTx) UserHasPlacedOrder(ctx context.Context, userID int64) (bool, error) {
-	return t.q.UserHasPlacedOrder(ctx, userID)
+	return t.q.UserHasPlacedOrder(ctx, &userID)
 }
 
 func (t tenantTx) HasGiftGrant(ctx context.Context, promotionID, userID int64) (bool, error) {

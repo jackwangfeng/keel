@@ -238,11 +238,13 @@ func orderFromRow(r db.GetOrderByNoRow) Order {
 		CouponName:             r.CouponName,
 		PromotionDiscountCents: r.PromotionDiscountCents,
 		Promotions:             r.Promotions,
+		Source:                 r.Source,
+		ChannelOrderID:         r.ChannelOrderID,
 	}
 }
 
 func (t tenantTx) LockUserOrderByNo(ctx context.Context, orderNo string, userID int64) (Order, error) {
-	r, err := t.q.LockUserOrderByNo(ctx, db.LockUserOrderByNoParams{OrderNo: orderNo, UserID: userID})
+	r, err := t.q.LockUserOrderByNo(ctx, db.LockUserOrderByNoParams{OrderNo: orderNo, UserID: &userID})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Order{}, fmt.Errorf("order %s: %w", orderNo, ErrOrderNotFound)
 	}

@@ -196,7 +196,7 @@ SELECT o.id, o.order_no, o.user_id, o.store_id, o.region_id, o.status,
        o.discount_cents, o.payable_cents,
        o.paid_cents, o.refunded_cents, o.refund_status, o.expire_at, o.paid_at,
        o.shipped_at, o.finished_at, o.created_at, o.user_coupon_id, o.coupon_name,
-       o.promotion_discount_cents, o.promotions,
+       o.promotion_discount_cents, o.promotions, o.source, o.channel_order_id,
        o.receiver_snapshot, o.store_snapshot,
        EXISTS (SELECT 1 FROM refunds r
                 WHERE r.order_id = o.id AND r.status IN (10, 20, 30)) AS has_open_refund
@@ -208,7 +208,7 @@ SELECT o.id, o.order_no, o.user_id, o.store_id, o.region_id, o.status,
 type AdminGetOrderByNoRow struct {
 	ID                     int64
 	OrderNo                string
-	UserID                 int64
+	UserID                 *int64
 	StoreID                int64
 	RegionID               int64
 	Status                 int16
@@ -229,6 +229,8 @@ type AdminGetOrderByNoRow struct {
 	CouponName             *string
 	PromotionDiscountCents int64
 	Promotions             []byte
+	Source                 int16
+	ChannelOrderID         *int64
 	ReceiverSnapshot       []byte
 	StoreSnapshot          []byte
 	HasOpenRefund          bool
@@ -263,6 +265,8 @@ func (q *Queries) AdminGetOrderByNo(ctx context.Context, orderNo string) (AdminG
 		&i.CouponName,
 		&i.PromotionDiscountCents,
 		&i.Promotions,
+		&i.Source,
+		&i.ChannelOrderID,
 		&i.ReceiverSnapshot,
 		&i.StoreSnapshot,
 		&i.HasOpenRefund,
@@ -483,7 +487,7 @@ SELECT o.id, o.order_no, o.user_id, o.store_id, o.region_id, o.status,
        o.discount_cents, o.payable_cents,
        o.paid_cents, o.refunded_cents, o.refund_status, o.expire_at, o.paid_at,
        o.shipped_at, o.finished_at, o.created_at, o.user_coupon_id, o.coupon_name,
-       o.promotion_discount_cents, o.promotions,
+       o.promotion_discount_cents, o.promotions, o.source, o.channel_order_id,
        o.receiver_snapshot, o.store_snapshot,
        EXISTS (SELECT 1 FROM refunds r
                 WHERE r.order_id = o.id AND r.status IN (10, 20, 30)) AS has_open_refund
@@ -523,7 +527,7 @@ type AdminListOrdersParams struct {
 type AdminListOrdersRow struct {
 	ID                     int64
 	OrderNo                string
-	UserID                 int64
+	UserID                 *int64
 	StoreID                int64
 	RegionID               int64
 	Status                 int16
@@ -544,6 +548,8 @@ type AdminListOrdersRow struct {
 	CouponName             *string
 	PromotionDiscountCents int64
 	Promotions             []byte
+	Source                 int16
+	ChannelOrderID         *int64
 	ReceiverSnapshot       []byte
 	StoreSnapshot          []byte
 	HasOpenRefund          bool
@@ -621,6 +627,8 @@ func (q *Queries) AdminListOrders(ctx context.Context, arg AdminListOrdersParams
 			&i.CouponName,
 			&i.PromotionDiscountCents,
 			&i.Promotions,
+			&i.Source,
+			&i.ChannelOrderID,
 			&i.ReceiverSnapshot,
 			&i.StoreSnapshot,
 			&i.HasOpenRefund,
@@ -642,7 +650,7 @@ SELECT o.id, o.order_no, o.user_id, o.store_id, o.region_id, o.status,
        o.discount_cents, o.payable_cents,
        o.paid_cents, o.refunded_cents, o.refund_status, o.expire_at, o.paid_at,
        o.shipped_at, o.finished_at, o.created_at, o.user_coupon_id, o.coupon_name,
-       o.promotion_discount_cents, o.promotions,
+       o.promotion_discount_cents, o.promotions, o.source, o.channel_order_id,
        o.receiver_snapshot, o.store_snapshot,
        EXISTS (SELECT 1 FROM refunds r
                 WHERE r.order_id = o.id AND r.status IN (10, 20, 30)) AS has_open_refund
@@ -682,7 +690,7 @@ type AdminListOrdersByNoParams struct {
 type AdminListOrdersByNoRow struct {
 	ID                     int64
 	OrderNo                string
-	UserID                 int64
+	UserID                 *int64
 	StoreID                int64
 	RegionID               int64
 	Status                 int16
@@ -703,6 +711,8 @@ type AdminListOrdersByNoRow struct {
 	CouponName             *string
 	PromotionDiscountCents int64
 	Promotions             []byte
+	Source                 int16
+	ChannelOrderID         *int64
 	ReceiverSnapshot       []byte
 	StoreSnapshot          []byte
 	HasOpenRefund          bool
@@ -772,6 +782,8 @@ func (q *Queries) AdminListOrdersByNo(ctx context.Context, arg AdminListOrdersBy
 			&i.CouponName,
 			&i.PromotionDiscountCents,
 			&i.Promotions,
+			&i.Source,
+			&i.ChannelOrderID,
 			&i.ReceiverSnapshot,
 			&i.StoreSnapshot,
 			&i.HasOpenRefund,
@@ -792,7 +804,7 @@ SELECT o.id, o.order_no, o.user_id, o.store_id, o.region_id, o.status,
        o.discount_cents, o.payable_cents,
        o.paid_cents, o.refunded_cents, o.refund_status, o.expire_at, o.paid_at,
        o.shipped_at, o.finished_at, o.created_at, o.user_coupon_id, o.coupon_name,
-       o.promotion_discount_cents, o.promotions,
+       o.promotion_discount_cents, o.promotions, o.source, o.channel_order_id,
        o.receiver_snapshot, o.store_snapshot,
        EXISTS (SELECT 1 FROM refunds r
                 WHERE r.order_id = o.id AND r.status IN (10, 20, 30)) AS has_open_refund
@@ -829,7 +841,7 @@ type AdminListOrdersByPhoneParams struct {
 type AdminListOrdersByPhoneRow struct {
 	ID                     int64
 	OrderNo                string
-	UserID                 int64
+	UserID                 *int64
 	StoreID                int64
 	RegionID               int64
 	Status                 int16
@@ -850,6 +862,8 @@ type AdminListOrdersByPhoneRow struct {
 	CouponName             *string
 	PromotionDiscountCents int64
 	Promotions             []byte
+	Source                 int16
+	ChannelOrderID         *int64
 	ReceiverSnapshot       []byte
 	StoreSnapshot          []byte
 	HasOpenRefund          bool
@@ -899,6 +913,8 @@ func (q *Queries) AdminListOrdersByPhone(ctx context.Context, arg AdminListOrder
 			&i.CouponName,
 			&i.PromotionDiscountCents,
 			&i.Promotions,
+			&i.Source,
+			&i.ChannelOrderID,
 			&i.ReceiverSnapshot,
 			&i.StoreSnapshot,
 			&i.HasOpenRefund,

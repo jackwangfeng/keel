@@ -122,7 +122,7 @@ SELECT count(*)
 `
 
 type CountUserOrdersParams struct {
-	UserID       int64
+	UserID       *int64
 	Status       *int16
 	RefundStatus *int16
 }
@@ -171,7 +171,7 @@ RETURNING id, order_no, store_id, region_id, status, goods_amount_cents, freight
 
 type CreateOrderDraftParams struct {
 	OrderNo                string
-	UserID                 int64
+	UserID                 *int64
 	GoodsAmountCents       int64
 	FreightCents           int64
 	FreightDiscountCents   int64
@@ -408,7 +408,8 @@ SELECT id, order_no, user_id, store_id, region_id, status,
        goods_amount_cents, freight_cents, freight_discount_cents,
        discount_cents, payable_cents, paid_cents, refunded_cents, refund_status,
        expire_at, paid_at, shipped_at, finished_at, created_at, user_coupon_id,
-       coupon_name, promotion_discount_cents, promotions
+       coupon_name, promotion_discount_cents, promotions,
+       source, channel_order_id  -- 00320：来源与渠道单（渠道单 user_id 为空）
   FROM orders
  WHERE order_no = $1
 `
@@ -416,7 +417,7 @@ SELECT id, order_no, user_id, store_id, region_id, status,
 type GetOrderByNoRow struct {
 	ID                     int64
 	OrderNo                string
-	UserID                 int64
+	UserID                 *int64
 	StoreID                int64
 	RegionID               int64
 	Status                 int16
@@ -437,6 +438,8 @@ type GetOrderByNoRow struct {
 	CouponName             *string
 	PromotionDiscountCents int64
 	Promotions             []byte
+	Source                 int16
+	ChannelOrderID         *int64
 }
 
 // 按对外编号取订单。SAGA 的两个分支都靠它把「自己要处理哪一单」找回来 ——
@@ -481,6 +484,8 @@ func (q *Queries) GetOrderByNo(ctx context.Context, orderNo string) (GetOrderByN
 		&i.CouponName,
 		&i.PromotionDiscountCents,
 		&i.Promotions,
+		&i.Source,
+		&i.ChannelOrderID,
 	)
 	return i, err
 }
@@ -660,13 +665,13 @@ SELECT id, order_no, user_id, store_id, region_id, status,
 
 type GetUserOrderByNoParams struct {
 	OrderNo string
-	UserID  int64
+	UserID  *int64
 }
 
 type GetUserOrderByNoRow struct {
 	ID                     int64
 	OrderNo                string
-	UserID                 int64
+	UserID                 *int64
 	StoreID                int64
 	RegionID               int64
 	Status                 int16
@@ -800,7 +805,7 @@ type ListExpiredDraftOrdersRow struct {
 	ID      int64
 	OrderNo string
 	StoreID int64
-	UserID  int64
+	UserID  *int64
 }
 
 // 第二类：孤儿草稿（00013 文件头那笔明写的欠账）。它们**没进过 SAGA**，
@@ -846,7 +851,7 @@ type ListExpiredPendingOrdersRow struct {
 	ID      int64
 	OrderNo string
 	StoreID int64
-	UserID  int64
+	UserID  *int64
 }
 
 // ---------------------------------------------------------------------------
@@ -1195,7 +1200,7 @@ SELECT id, order_no, user_id, store_id, region_id, status,
 `
 
 type ListUserOrdersParams struct {
-	UserID       int64
+	UserID       *int64
 	Status       *int16
 	RefundStatus *int16
 	PageOffset   int32
@@ -1205,7 +1210,7 @@ type ListUserOrdersParams struct {
 type ListUserOrdersRow struct {
 	ID                     int64
 	OrderNo                string
-	UserID                 int64
+	UserID                 *int64
 	StoreID                int64
 	RegionID               int64
 	Status                 int16

@@ -259,12 +259,15 @@ func promoteOrder(ctx context.Context, tx repository.Tx, order repository.Order)
 	if err != nil {
 		return err
 	}
+	if order.UserID == nil {
+		return nil // 渠道单（00320）没有 keel 买家：每人限购按买家记，无从累计
+	}
 	for _, ln := range lines {
 		if ln.PricePromotionID == nil {
 			continue
 		}
 		// 超限返回 ErrPromotionLimitReached → Failure；整个事务回滚，订单留在 0（文件头的代价）。
-		if err := tx.ReservePromotionLimit(ctx, *ln.PricePromotionID, ln.SKUID, order.UserID, ln.Quantity); err != nil {
+		if err := tx.ReservePromotionLimit(ctx, *ln.PricePromotionID, ln.SKUID, *order.UserID, ln.Quantity); err != nil {
 			return err
 		}
 	}
@@ -273,12 +276,16 @@ func promoteOrder(ctx context.Context, tx repository.Tx, order repository.Order)
 
 // releasePromotionLimits 把一单累计的每人限购放回（建单补偿、超时关单、买家取消）。
 // 调用方保证这一单的限购确实累计过（它是 10，或刚从 10 被关掉）。
-func releasePromotionLimits(ctx context.Context, tx repository.Tx, lines []repository.OrderLine, userID int64) error {
+// userID 为 nil 是渠道单（00320）：建单时就没累计过（reservePromotionLimits 同样跳过）。
+func releasePromotionLimits(ctx context.Context, tx repository.Tx, lines []repository.OrderLine, userID *int64) error {
+	if userID == nil {
+		return nil
+	}
 	for _, ln := range lines {
 		if ln.PricePromotionID == nil {
 			continue
 		}
-		if err := tx.ReleasePromotionLimit(ctx, *ln.PricePromotionID, ln.SKUID, userID, ln.Quantity); err != nil {
+		if err := tx.ReleasePromotionLimit(ctx, *ln.PricePromotionID, ln.SKUID, *userID, ln.Quantity); err != nil {
 			return err
 		}
 	}
@@ -354,7 +361,11 @@ func lockCoupon(ctx context.Context, tx repository.Tx, order repository.Order) e
 	if order.UserCouponID == nil {
 		return nil
 	}
-	n, err := tx.LockUserCoupon(ctx, *order.UserCouponID, order.UserID, order.ID)
+	if order.UserID == nil {
+		// 券是买家的；渠道单（00320）没有买家也不会挂券。真出现了是数据坏了，不猜。
+		return fmt.Errorf("订单 %s 挂了券 %d 却没有买家", order.OrderNo, *order.UserCouponID)
+	}
+	n, err := tx.LockUserCoupon(ctx, *order.UserCouponID, *order.UserID, order.ID)
 	if err != nil {
 		return err
 	}

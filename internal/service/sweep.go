@@ -551,7 +551,7 @@ func (s *SweepService) assertNoInventoryTrail(ctx context.Context, orderNo strin
 // 「10 ⇒ 库存已扣」**不成立**（库存分支可能还在重试），所以库存按流水放、放多少由库存服务算。
 // 孤儿草稿（status 0）走 closeDraft，不走这里。
 func releaseClosedOrder(ctx context.Context, tx repository.Tx, orderID int64,
-	orderNo string, userID int64, bizType int16) error {
+	orderNo string, userID *int64, bizType int16) error {
 	lines, err := tx.ListOrderLines(ctx, orderID)
 	if err != nil {
 		return err

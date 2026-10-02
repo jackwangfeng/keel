@@ -232,6 +232,8 @@ func adminOrderFromRow(r db.AdminGetOrderByNoRow) AdminOrder {
 			CouponName:             r.CouponName,
 			PromotionDiscountCents: r.PromotionDiscountCents,
 			Promotions:             r.Promotions,
+			Source:                 r.Source,
+			ChannelOrderID:         r.ChannelOrderID,
 		},
 		ReceiverSnapshot: r.ReceiverSnapshot,
 		StoreSnapshot:    r.StoreSnapshot,

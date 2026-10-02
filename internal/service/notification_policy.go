@@ -17,6 +17,7 @@ var notificationCallSites = map[string]notifyPolicy{
 	"settleFreeOrder/SettleOrder":                       {Notify: "notifyOrderPaid"},
 	"AdminOrderService.Ship/ShipOrder":                  {Notify: "notifyOrderShipped"},
 	"AutoConfirmService.confirmOne/ConfirmOrderReceipt": {Notify: "notifyOrderAutoFinished"},
+	"AutoConfirmService.confirmOne/FinishChannelOrder":  {Silent: "渠道单（00320）无 keel 买家，平台自己通知顾客"},
 	"OrderService.Confirm/ConfirmOrderReceipt": {Silent: "买家自己点的确认收货：动作是他做的，" +
 		"响应里就是完成后的订单，不需要再发一条「订单已完成」告诉他"},
 	"SweepService.releasePending/ClaimExpiredPendingOrder": {Notify: "notifyOrderTimeoutClosed"},
@@ -87,7 +88,7 @@ var stateEdges = map[string][]string{
 	"order:10->90": {"CancelPendingOrder", "ClaimExpiredPendingOrder", "CloseOrder"},
 	"order:20->30": {"ShipOrder"},
 	"order:20->50": {"StartWholeOrderRefund"},
-	"order:30->40": {"ConfirmOrderReceipt"},
+	"order:30->40": {"ConfirmOrderReceipt", "FinishChannelOrder"},
 	"order:50->20": {"RevertWholeOrderRefund"},
 	"order:50->60": {"FinishWholeOrderRefund"},
 

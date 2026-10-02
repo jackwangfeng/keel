@@ -28,6 +28,13 @@ UPDATE orders SET status = 90
 UPDATE orders SET status = 40, finished_at = now()
  WHERE order_no = $1 AND user_id = $2 AND status = 30;
 
+-- name: FinishChannelOrder :execrows
+-- 渠道单（00320）的 30 → 40：没有 keel 买家，ConfirmOrderReceipt 的 user_id = $2 永远匹配不上，
+-- 所以自动确认收货对渠道单走这一条（auto_confirm.go 按 order.Source 分支）。
+-- source = 1 在谓词里：这条语句碰不到自营单。
+UPDATE orders SET status = 40, finished_at = now()
+ WHERE id = $1 AND source = 1 AND status = 30;
+
 -- name: ShipOrder :execrows
 -- 后台发货：20 已支付 → 30 已发货，记下发货时间。
 --
