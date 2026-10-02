@@ -78,6 +78,16 @@ Core migrations `00300` (`channel_merchants`, also in the inventory database), `
 - A test-only Shopify simulator (`internal/channel/shopify/shopifytest`) and opt-in tests against a real
   development store (`KEEL_SHOPIFY_LIVE=1`).
 
+- **Channel admin pages.** The merchant console gets a "Channels" section (shown only when `KEEL_CHANNELS` is on and
+  the operator is shop-wide): channel accounts with write-only credentials, store mappings, stock allocation and
+  price rules, the last values pushed to each channel (filterable to errors), and a manual "re-sync products".
+  Products whose catalog comes from a channel are marked "managed by Shopify"; their title, description, images and
+  variant specs are locked — `PATCH`/`PUT` that would change them returns `409` with the new problem type
+  `https://keel.dev/problems/managed-by-channel` (re-sending the current values is still accepted), and the lock
+  lifts when the channel account is disabled. New contract fields: `ChannelBinding.has_secrets`,
+  `ChannelListing.sku_code` / `product_title`, `AdminProduct.managed_by`; new operation
+  `POST /admin/channel-bindings/{binding_id}/catalog-pulls`.
+
 ### Known limitations
 
 - Shopify orders are not imported yet (phase 3): a sale made on Shopify is overwritten by keel's next push for that
