@@ -210,8 +210,8 @@ const (
 
 // ChannelOrder 是渠道上一张订单的权威状态，由适配器从平台数据规整出来。
 //
-// 金额全用平台快照（不变量 5：渠道单不重新算价）。BuyerPaidCents 不含税
-// （= Goods + Freight − PlatformSubsidy − MerchantSubsidy）；平台总价 = BuyerPaid + Tax。
+// 金额全用平台快照（不变量 5：渠道单不重新算价）。BuyerPaidCents = Goods + Freight − PlatformSubsidy − MerchantSubsidy，
+// 是 keel 订单的实付；税进不进它看 Amounts.TaxesIncluded（见 OrderAmounts）。
 // Shopify 没有平台补贴与佣金：Platform / Commission 为 0，折扣全记 MerchantSubsidy。
 type ChannelOrder struct {
 	ExternalOrderID   string
@@ -244,9 +244,15 @@ type OrderLine struct {
 }
 
 // OrderAmounts 是渠道订单的金额快照（分）。
+//
+// BuyerPaidCents = Goods + Freight − PlatformSubsidy − MerchantSubsidy，就是 keel 订单的实付（payable = paid）。
+// 税：TaxesIncluded 为假（价外税，美国店的常态）时行价与运费都不含税，平台总价 = BuyerPaid + Tax，税不进 keel 订单；
+// 为真（价内税，Shopify taxesIncluded）时行价已经含税，平台总价 = BuyerPaid，税在商品金额里面。两种情形
+// TaxCents 都照记平台的税额，只供参考（退款时价外税的店要把税那一份剥掉）。
 type OrderAmounts struct {
 	GoodsCents, FreightCents, PlatformSubsidyCents, MerchantSubsidyCents, CommissionCents, TaxCents,
 	MerchantReceivableCents, BuyerPaidCents, RefundedCents int64
+	TaxesIncluded bool
 }
 
 // Receiver 是收货人。PhoneVirtual 为真表示是平台的隐私号。平台不给收货地址时全空。

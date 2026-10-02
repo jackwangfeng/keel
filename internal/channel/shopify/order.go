@@ -4,8 +4,9 @@ package shopify
 //
 // 规整约定：
 //   - 金额是平台快照（字符串元 → 分，不走浮点）。Goods = Σ 原单价 × 下单数量；Freight = totalShippingPriceSet；
-//     折扣（totalDiscountsSet）全记 MerchantSubsidy（Shopify 没有平台补贴与佣金）；BuyerPaid 不含税
-//     = Goods + Freight − 折扣，税单独记 Tax；MerchantReceivable = BuyerPaid；Refunded = totalRefundedSet。
+//     折扣（totalDiscountsSet）全记 MerchantSubsidy（Shopify 没有平台补贴与佣金）；BuyerPaid = Goods + Freight − 折扣，
+//     税额单独记 Tax；TaxesIncluded = taxesIncluded（价内税的店行价已经含税，BuyerPaid 就是顾客付的总价；
+//     价外税的店 BuyerPaid 不含税，平台总价 = BuyerPaid + Tax）；MerchantReceivable = BuyerPaid；Refunded = totalRefundedSet。
 //   - 门店 = 未取消的 fulfillment order 的 assignedLocation；分到多个 location（或一个 FO 都没有）时为空，原因写 StoreError。
 //   - Version = updatedAt 的 Unix 毫秒。
 //   - 收货人：shippingAddress 为 null（没开受保护客户数据、或不需要发货）时全空，不报错。
@@ -30,7 +31,7 @@ import (
 const moneyFields = `shopMoney{ amount }`
 
 const queryOrder = `query Order($id:ID!){ order(id:$id){
-  id name createdAt updatedAt test cancelledAt displayFinancialStatus displayFulfillmentStatus phone email
+  id name createdAt updatedAt test cancelledAt taxesIncluded displayFinancialStatus displayFulfillmentStatus phone email
   totalShippingPriceSet{ ` + moneyFields + ` } totalDiscountsSet{ ` + moneyFields + ` }
   totalTaxSet{ ` + moneyFields + ` } totalRefundedSet{ ` + moneyFields + ` }
   shippingAddress{ name phone address1 address2 city province zip countryCodeV2 }
@@ -78,6 +79,7 @@ type orderNode struct {
 	UpdatedAt       time.Time  `json:"updatedAt"`
 	Test            bool       `json:"test"`
 	CancelledAt     *time.Time `json:"cancelledAt"`
+	TaxesIncluded   bool       `json:"taxesIncluded"`
 	Financial       string     `json:"displayFinancialStatus"`
 	Fulfillment     string     `json:"displayFulfillmentStatus"`
 	Phone           *string    `json:"phone"`
@@ -208,6 +210,7 @@ func normalizeOrder(n orderNode, raw json.RawMessage) (channel.ChannelOrder, err
 	if am.RefundedCents, err = amount("已退金额", n.TotalRefunded); err != nil {
 		return channel.ChannelOrder{}, err
 	}
+	am.TaxesIncluded = n.TaxesIncluded
 	am.BuyerPaidCents = am.GoodsCents + am.FreightCents - am.MerchantSubsidyCents
 	am.MerchantReceivableCents = am.BuyerPaidCents
 

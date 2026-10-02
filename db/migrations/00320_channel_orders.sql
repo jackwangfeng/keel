@@ -28,7 +28,8 @@ ALTER TABLE orders ADD CONSTRAINT chk_discount_sources CHECK (
 -- 平台订单。status 是规整状态：1 待付款 2 新单 3 已接单 4 已发货 5 已完成 6 已取消 7 已拒单。
 -- version 单调（Shopify 用 updatedAt 毫秒）：旧版本只留档不改状态。
 -- exception 是需要人处理的原因（缺货 / 行没映射 / 发货后被取消……），处理掉清空。
--- amounts：{goods,freight,platform_subsidy,merchant_subsidy,commission,tax,merchant_receivable,buyer_paid,refunded}（分）；
+-- amounts：{goods,freight,platform_subsidy,merchant_subsidy,commission,tax,merchant_receivable,buyer_paid,refunded}（分）
+--   + taxes_included（价内税：行价已含税，keel 实付 = 顾客付的总价）；
 -- lines：[{external_line_id, external_sku_id, sku_id|null, title, qty, price_cents, refunded_qty}]；
 -- receiver：{name, phone, phone_kind(0 真实 1 隐私号), address{...}}。
 -- order_no 引用 orders(order_no) 是单列外键（order_no 全局唯一，见 db/tenancy.json fk_single_column_ok）。

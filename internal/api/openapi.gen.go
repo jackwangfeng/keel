@@ -4395,8 +4395,9 @@ type ChannelOrder struct {
 	// AcceptDeadline 接单截止（要求接单的渠道）
 	AcceptDeadline *time.Time `json:"accept_deadline,omitempty"`
 
-	// Amounts 平台快照里的金额（分）。keel 订单实付 = `buyer_paid`（商品 + 运费 − 平台补贴 − 商家补贴，**不含税**）；
-	// 平台总价 = `buyer_paid + tax`（美国店价外税，税不进 keel 订单）。
+	// Amounts 平台快照里的金额（分）。keel 订单实付 = `buyer_paid`（商品 + 运费 − 平台补贴 − 商家补贴）。
+	// `taxes_included` 为假（价外税，美国店的常态）：行价不含税，平台总价 = `buyer_paid + tax`，税不进 keel 订单；
+	// 为真（价内税）：行价已经含税，平台总价 = `buyer_paid`，`tax` 只是其中的税额，供参考。
 	Amounts   ChannelOrderAmounts `json:"amounts"`
 	BindingId int64               `json:"binding_id"`
 	CreatedAt time.Time           `json:"created_at"`
@@ -4432,10 +4433,11 @@ type ChannelOrder struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
-// ChannelOrderAmounts 平台快照里的金额（分）。keel 订单实付 = `buyer_paid`（商品 + 运费 − 平台补贴 − 商家补贴，**不含税**）；
-// 平台总价 = `buyer_paid + tax`（美国店价外税，税不进 keel 订单）。
+// ChannelOrderAmounts 平台快照里的金额（分）。keel 订单实付 = `buyer_paid`（商品 + 运费 − 平台补贴 − 商家补贴）。
+// `taxes_included` 为假（价外税，美国店的常态）：行价不含税，平台总价 = `buyer_paid + tax`，税不进 keel 订单；
+// 为真（价内税）：行价已经含税，平台总价 = `buyer_paid`，`tax` 只是其中的税额，供参考。
 type ChannelOrderAmounts struct {
-	// BuyerPaid 顾客实付（不含税）
+	// BuyerPaid 顾客实付（= keel 实付；价外税的店不含税）
 	BuyerPaid int64 `json:"buyer_paid"`
 
 	// Commission 平台佣金
@@ -4449,6 +4451,9 @@ type ChannelOrderAmounts struct {
 	PlatformSubsidy    int64 `json:"platform_subsidy"`
 	Refunded           int64 `json:"refunded"`
 	Tax                int64 `json:"tax"`
+
+	// TaxesIncluded 价内税（行价已含税）
+	TaxesIncluded bool `json:"taxes_included"`
 }
 
 // ChannelOrderDetail defines model for ChannelOrderDetail.
@@ -4456,8 +4461,9 @@ type ChannelOrderDetail struct {
 	// AcceptDeadline 接单截止（要求接单的渠道）
 	AcceptDeadline *time.Time `json:"accept_deadline,omitempty"`
 
-	// Amounts 平台快照里的金额（分）。keel 订单实付 = `buyer_paid`（商品 + 运费 − 平台补贴 − 商家补贴，**不含税**）；
-	// 平台总价 = `buyer_paid + tax`（美国店价外税，税不进 keel 订单）。
+	// Amounts 平台快照里的金额（分）。keel 订单实付 = `buyer_paid`（商品 + 运费 − 平台补贴 − 商家补贴）。
+	// `taxes_included` 为假（价外税，美国店的常态）：行价不含税，平台总价 = `buyer_paid + tax`，税不进 keel 订单；
+	// 为真（价内税）：行价已经含税，平台总价 = `buyer_paid`，`tax` 只是其中的税额，供参考。
 	Amounts   ChannelOrderAmounts `json:"amounts"`
 	BindingId int64               `json:"binding_id"`
 	CreatedAt time.Time           `json:"created_at"`

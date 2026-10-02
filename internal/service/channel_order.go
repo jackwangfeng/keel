@@ -34,7 +34,8 @@ package service
 // # 渠道单的 keel 订单金额（不变量 5：不重新算价）
 //
 // goods = 平台的 Goods（Σ 行价 × 数量）、freight = 买家付的运费、discount = promotion_discount = 平台补贴 + 商家补贴
-// （没有券）、payable = BuyerPaid（不含税）；接单成功时 paid = payable。税只记在 channel_orders.amounts.tax。
+// （没有券）、payable = BuyerPaid；接单成功时 paid = payable。价外税的店 BuyerPaid 不含税、税不进 keel 订单；
+// 价内税的店（amounts.taxes_included）行价已经含税，BuyerPaid 就是顾客付的总价。税额都记在 channel_orders.amounts.tax。
 // 平台快照自己对不上（payable ≠ goods + freight − discount）就标异常不建单：建出来也过不了 chk_amount。
 // 优惠按行金额比例摊到订单行（discount_cents = promotion_discount_cents，第五期按行退款的上限要它），
 // 摊不进行金额的部分记成运费优惠（freight_discount_cents，不超过运费）。
@@ -88,6 +89,8 @@ type channelOrderAmounts struct {
 	MerchantReceivable int64 `json:"merchant_receivable"`
 	BuyerPaid          int64 `json:"buyer_paid"`
 	Refunded           int64 `json:"refunded"`
+	// TaxesIncluded：价内税（行价已经含税，keel 实付 = 顾客付的总价）；假 = 价外税，税不进 keel 订单。见 channel.OrderAmounts。
+	TaxesIncluded bool `json:"taxes_included"`
 }
 
 type channelOrderLine struct {
@@ -122,7 +125,8 @@ func channelOrderSnapshot(bindingID int64, storeID *int64, o channel.ChannelOrde
 	a := o.Amounts
 	amounts, _ := json.Marshal(channelOrderAmounts{Goods: a.GoodsCents, Freight: a.FreightCents,
 		PlatformSubsidy: a.PlatformSubsidyCents, MerchantSubsidy: a.MerchantSubsidyCents, Commission: a.CommissionCents,
-		Tax: a.TaxCents, MerchantReceivable: a.MerchantReceivableCents, BuyerPaid: a.BuyerPaidCents, Refunded: a.RefundedCents})
+		Tax: a.TaxCents, MerchantReceivable: a.MerchantReceivableCents, BuyerPaid: a.BuyerPaidCents, Refunded: a.RefundedCents,
+		TaxesIncluded: a.TaxesIncluded})
 	lines := make([]channelOrderLine, 0, len(o.Lines))
 	for _, l := range o.Lines {
 		lines = append(lines, channelOrderLine{ExternalLineID: l.ExternalLineID, ExternalSKUID: l.ExternalSKUID,

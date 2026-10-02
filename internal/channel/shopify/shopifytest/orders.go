@@ -30,11 +30,13 @@ type OrderSpec struct {
 	Shipping  string
 	Discount  string
 	Tax       string
-	Currency  string   // 空 = USD
-	Address   *Address // nil = shippingAddress 为 null
-	Phone     string
-	Email     string
-	Test      bool
+	// TaxesIncluded：价内税（行价、运费已经含税，Tax 只是其中的税额，不另加进总价）。
+	TaxesIncluded bool
+	Currency      string   // 空 = USD
+	Address       *Address // nil = shippingAddress 为 null
+	Phone         string
+	Email         string
+	Test          bool
 }
 
 // OrderLineSpec 是一行。Price 空 = 变体当前价。Location 空 = OrderSpec.Location。
@@ -72,6 +74,7 @@ type simOrder struct {
 	cancelledAt             *time.Time
 	financial, currency     string
 	shipping, discount, tax int64
+	taxesIncluded           bool
 	refunded                int64
 	test                    bool
 	addr                    *Address
@@ -173,7 +176,7 @@ func (s *Server) AddOrder(sp OrderSpec) string {
 	now := s.tick()
 	o := &simOrder{gid: s.id("Order"), name: sp.Name, createdAt: now, updatedAt: now, financial: sp.Financial,
 		currency: sp.Currency, shipping: cents(sp.Shipping), discount: cents(sp.Discount), tax: cents(sp.Tax),
-		test: sp.Test, addr: sp.Address, phone: sp.Phone, email: sp.Email}
+		taxesIncluded: sp.TaxesIncluded, test: sp.Test, addr: sp.Address, phone: sp.Phone, email: sp.Email}
 	if o.name == "" {
 		o.name = fmt.Sprintf("#%d", 1001+len(s.orderSeq))
 	}
@@ -230,6 +233,9 @@ func (o *simOrder) total() int64 {
 	var g int64
 	for _, l := range o.lines {
 		g += l.price * int64(l.qty)
+	}
+	if o.taxesIncluded {
+		return g - o.discount + o.shipping
 	}
 	return g - o.discount + o.shipping + o.tax
 }
@@ -604,7 +610,7 @@ func (s *Server) orderJSON(o *simOrder) map[string]any {
 			"city": a.City, "province": a.Province, "zip": a.Zip, "countryCodeV2": a.CountryCode}
 	}
 	return map[string]any{"id": o.gid, "name": o.name, "createdAt": o.createdAt.Format(time.RFC3339),
-		"updatedAt": o.updatedAt.Format(time.RFC3339), "test": o.test, "cancelledAt": cancelled,
+		"updatedAt": o.updatedAt.Format(time.RFC3339), "test": o.test, "cancelledAt": cancelled, "taxesIncluded": o.taxesIncluded,
 		"displayFinancialStatus": o.financial, "displayFulfillmentStatus": o.fulfillmentStatus(),
 		"currentTotalPriceSet": o.moneySet(max(0, o.total()-o.refunded)), "totalShippingPriceSet": o.moneySet(o.shipping),
 		"totalDiscountsSet": o.moneySet(o.discount), "totalTaxSet": o.moneySet(o.tax), "totalRefundedSet": o.moneySet(o.refunded),

@@ -282,16 +282,31 @@ export function channelOrderActions(
 }
 
 /**
- * 金额拆解：keel 实付 = 顾客实付（buyer_paid，不含税）；平台总价 = 实付 + 税（美国店价外税，税不进 keel 订单）。
+ * 金额拆解：keel 实付 = 顾客实付（buyer_paid）。价外税（taxes_included 假，美国店的常态）：平台总价 = 实付 + 税，
+ * 税不进 keel 订单；价内税（taxes_included 真）：行价已经含税，平台总价 = 实付，税只是其中的税额。
  * 补贴合计 = 平台补贴 + 商家补贴（keel 订单的 discount）。
  */
-export function channelOrderTotals(a: { buyer_paid: number; tax: number; platform_subsidy: number; merchant_subsidy: number }): {
+export function channelOrderTotals(a: {
+    buyer_paid: number;
+    tax: number;
+    platform_subsidy: number;
+    merchant_subsidy: number;
+    taxes_included?: boolean;
+}): {
     paid: number;
     tax: number;
     platformTotal: number;
     subsidy: number;
+    taxesIncluded: boolean;
 } {
-    return { paid: a.buyer_paid, tax: a.tax, platformTotal: a.buyer_paid + a.tax, subsidy: a.platform_subsidy + a.merchant_subsidy };
+    const included = a.taxes_included === true;
+    return {
+        paid: a.buyer_paid,
+        tax: a.tax,
+        platformTotal: included ? a.buyer_paid : a.buyer_paid + a.tax,
+        subsidy: a.platform_subsidy + a.merchant_subsidy,
+        taxesIncluded: included,
+    };
 }
 
 /** 平台申请的类别（契约 ChannelOrderRequest.kind）。 */

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// 一张渠道单的详情（GET /admin/channel-orders/{id}）：平台快照的行、金额（税单列：平台总价 = 实付 + 税）、
+// 一张渠道单的详情（GET /admin/channel-orders/{id}）：平台快照的行、金额（税单列：价外税平台总价 = 实付 + 税，价内税 = 实付）、
 // 收货人、平台申请（待处理的可同意 / 拒绝）；操作同列表（重试 / 接单 / 拒单）。
 // 同意申请不动 keel 订单：要等平台确认之后按平台事实处理（服务端 DecideRequest 的约定），这里写在提示里。
 
@@ -241,10 +241,12 @@ function deliveryText(mode: number): string {
                     <el-descriptions-item label="实付（keel 订单）">
                         <strong>{{ yuan(totals.paid) }}</strong>
                     </el-descriptions-item>
-                    <el-descriptions-item label="税（不进 keel 订单）">{{ yuan(totals.tax) }}</el-descriptions-item>
+                    <el-descriptions-item :label="totals.taxesIncluded ? '税（已含在商品价里）' : '税（不进 keel 订单）'">{{
+                        yuan(totals.tax)
+                    }}</el-descriptions-item>
                     <el-descriptions-item label="平台总价">
                         <strong>{{ yuan(totals.platformTotal) }}</strong>
-                        <div class="hint">= 实付 + 税</div>
+                        <div class="hint">{{ totals.taxesIncluded ? "= 实付（价内税）" : "= 实付 + 税" }}</div>
                     </el-descriptions-item>
                     <el-descriptions-item label="平台佣金">{{ yuan(co.amounts.commission) }}</el-descriptions-item>
                     <el-descriptions-item label="商家应收">{{ yuan(co.amounts.merchant_receivable) }}</el-descriptions-item>

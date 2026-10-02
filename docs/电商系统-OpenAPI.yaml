@@ -8954,9 +8954,10 @@ components:
     ChannelOrderAmounts:
       type: object
       description: |
-        平台快照里的金额（分）。keel 订单实付 = `buyer_paid`（商品 + 运费 − 平台补贴 − 商家补贴，**不含税**）；
-        平台总价 = `buyer_paid + tax`（美国店价外税，税不进 keel 订单）。
-      required: [goods, freight, platform_subsidy, merchant_subsidy, commission, tax, merchant_receivable, buyer_paid, refunded]
+        平台快照里的金额（分）。keel 订单实付 = `buyer_paid`（商品 + 运费 − 平台补贴 − 商家补贴）。
+        `taxes_included` 为假（价外税，美国店的常态）：行价不含税，平台总价 = `buyer_paid + tax`，税不进 keel 订单；
+        为真（价内税）：行价已经含税，平台总价 = `buyer_paid`，`tax` 只是其中的税额，供参考。
+      required: [goods, freight, platform_subsidy, merchant_subsidy, commission, tax, merchant_receivable, buyer_paid, refunded, taxes_included]
       properties:
         goods: { type: integer, format: int64 }
         freight: { type: integer, format: int64 }
@@ -8965,8 +8966,9 @@ components:
         commission: { type: integer, format: int64, description: 平台佣金 }
         tax: { type: integer, format: int64 }
         merchant_receivable: { type: integer, format: int64, description: 商家应收 }
-        buyer_paid: { type: integer, format: int64, description: 顾客实付（不含税） }
+        buyer_paid: { type: integer, format: int64, description: 顾客实付（= keel 实付；价外税的店不含税） }
         refunded: { type: integer, format: int64 }
+        taxes_included: { type: boolean, description: 价内税（行价已含税） }
     ChannelOrderLine:
       type: object
       required: [external_line_id, external_sku_id, title, qty, price_cents, refunded_qty]

@@ -77,6 +77,23 @@ func TestFetchOrderNormalizes(t *testing.T) {
 	}
 }
 
+// 审查修复 3：价内税的店（taxesIncluded）—— 行价已经含税，BuyerPaid 就是顾客付的总价，税额只记下来、打上 TaxesIncluded。
+func TestFetchOrderTaxesIncluded(t *testing.T) {
+	r := newOrderRig(t)
+	sp := r.spec()
+	sp.TaxesIncluded = true
+	id := r.sim.AddOrder(sp)
+	o, err := r.a.FetchOrder(context.Background(), r.b, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := channel.OrderAmounts{GoodsCents: 78595, FreightCents: 1000, MerchantSubsidyCents: 500, TaxCents: 6288,
+		BuyerPaidCents: 79095, MerchantReceivableCents: 79095, TaxesIncluded: true}
+	if o.Amounts != want {
+		t.Fatalf("金额 = %+v\n期望 %+v", o.Amounts, want)
+	}
+}
+
 func TestFetchOrderNoAddressAndMultiLocation(t *testing.T) {
 	r := newOrderRig(t)
 	ctx := context.Background()

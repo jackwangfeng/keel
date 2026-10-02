@@ -18454,8 +18454,9 @@ export interface components {
          */
         ChannelOrderStatus: 1 | 2 | 3 | 4 | 5 | 6 | 7;
         /**
-         * @description 平台快照里的金额（分）。keel 订单实付 = `buyer_paid`（商品 + 运费 − 平台补贴 − 商家补贴，**不含税**）；
-         *     平台总价 = `buyer_paid + tax`（美国店价外税，税不进 keel 订单）。
+         * @description 平台快照里的金额（分）。keel 订单实付 = `buyer_paid`（商品 + 运费 − 平台补贴 − 商家补贴）。
+         *     `taxes_included` 为假（价外税，美国店的常态）：行价不含税，平台总价 = `buyer_paid + tax`，税不进 keel 订单；
+         *     为真（价内税）：行价已经含税，平台总价 = `buyer_paid`，`tax` 只是其中的税额，供参考。
          */
         ChannelOrderAmounts: {
             /** Format: int64 */
@@ -18480,11 +18481,13 @@ export interface components {
             merchant_receivable: number;
             /**
              * Format: int64
-             * @description 顾客实付（不含税）
+             * @description 顾客实付（= keel 实付；价外税的店不含税）
              */
             buyer_paid: number;
             /** Format: int64 */
             refunded: number;
+            /** @description 价内税（行价已含税） */
+            taxes_included: boolean;
         };
         ChannelOrderLine: {
             external_line_id: string;

@@ -176,7 +176,15 @@ test("金额：平台总价 = 实付 + 税，补贴两项相加", () => {
         tax: 875,
         platformTotal: 10875,
         subsidy: 500,
+        taxesIncluded: false,
     });
+});
+
+test("金额：价内税的店平台总价 = 实付，税在商品价里", () => {
+    assert.deepEqual(
+        channelOrderTotals({ buyer_paid: 10000, tax: 875, platform_subsidy: 300, merchant_subsidy: 200, taxes_included: true }),
+        { paid: 10000, tax: 875, platformTotal: 10000, subsidy: 500, taxesIncluded: true },
+    );
 });
 
 test("申请文案", () => {

@@ -181,3 +181,20 @@ func TestShipmentPushHeldFulfillmentOrderDeadLetters(t *testing.T) {
 		t.Fatalf("渠道单异常 %q，期望「发货没回传上」且写明 ON_HOLD", got)
 	}
 }
+
+// 审查 3：价内税的店 —— keel 实付 = 顾客付的总价（税在商品金额里），税额照记、渠道单金额标上 taxes_included。
+func TestChannelOrderTaxesIncluded(t *testing.T) {
+	r := newOrderRig(t, false, 7)
+	gid := r.sim.AddOrder(shopifytest.OrderSpec{Location: r.loc, Lines: []shopifytest.OrderLineSpec{{Variant: r.variant, Qty: 2}},
+		Shipping: "5.00", Discount: "3.00", Tax: "3.80", TaxesIncluded: true})
+	r.orderWebhook(t, gid, "orders/create")
+	co := r.channelOrderID(t, gid)
+	// 顾客付 39.80 + 5.00 − 3.00 = 41.80，其中含税 3.80。
+	if got := adminQueryString(t, `SELECT status || ':' || payable_cents || ':' || paid_cents FROM orders WHERE channel_order_id = $1`, co); got != "20:4180:4180" {
+		t.Fatalf("keel 订单 状态:应付:实付 = %q，期望 20:4180:4180", got)
+	}
+	if got := adminQueryString(t, `SELECT (amounts->>'tax') || ':' || (amounts->>'taxes_included') || ':' || (amounts->>'buyer_paid')
+	                                 FROM channel_orders WHERE id = $1`, co); got != "380:true:4180" {
+		t.Fatalf("渠道单金额 税:价内税:实付 = %q", got)
+	}
+}
