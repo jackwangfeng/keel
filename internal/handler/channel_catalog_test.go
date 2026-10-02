@@ -265,8 +265,9 @@ func TestShopifyWebhooksInstalledOnFirstPull(t *testing.T) {
 	adminExec(t, `UPDATE channel_bindings SET config = config || jsonb_build_object('default_category_id', $1::bigint) WHERE id = $2`, r.cs.ChildCat, r.b.ID)
 	r.activate(t)
 	want := fmt.Sprintf("https://demo.test/api/v1/webhooks/channels/%d", r.b.ID)
+	// 商品 3 + 库存 1 + 卸载 1 + 订单 6（第三期）
 	ws := r.sim.Webhooks()
-	if len(ws) != 5 {
+	if len(ws) != 11 {
 		t.Fatalf("装了 %d 条订阅：%+v", len(ws), ws)
 	}
 	for _, w := range ws {
