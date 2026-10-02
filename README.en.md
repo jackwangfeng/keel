@@ -412,6 +412,30 @@ the remaining gaps are under "Not in the box yet" above.
 
 ---
 
+## Third-party sales channels
+
+Keel has a channel adapter layer that plugs outside sales channels into the same
+inventory and order pipeline as your own storefront:
+
+- **Shopify is shipped**: products sync from Shopify into keel, keel's stock and
+  price push out to Shopify, Shopify orders flow into keel through the normal
+  fulfillment and after-sales path, and keel pushes tracking numbers back to
+  Shopify once an order ships.
+- **One pool of inventory, not a carved-out slice**: storefront and every channel
+  share the same sellable stock, with a per-channel sellable ratio / safety stock /
+  cap — stock isn't split off into a separate pool for channels.
+- The adapter interface splits channels into catalog-source / stock-source /
+  sales-outlet roles and is already designed around the capability shape of
+  **Meituan Shangou and Ele.me Retail** (a `Caps` capability declaration), but
+  **neither of those is actually integrated yet** — Shopify is the only one
+  that runs today.
+
+Setting up a Shopify store: [渠道接入：Shopify](./docs/渠道接入-Shopify.md) (Chinese).
+Design rationale: [渠道适配层设计](./docs/superpowers/specs/2026-10-02-channel-adapter-design.md)
+(Chinese).
+
+---
+
 ## Clients
 
 Keel ships with its clients, not just an API.
@@ -486,11 +510,17 @@ Clients (Web · Mini Program · App · Admin)
                    └─────────────┘
 ```
 
+One layer not in the diagram: the channel adapter sits beside Services, pushing
+stock and price out to Shopify and similar channels and pulling channel orders
+back into keel asynchronously — it is not on the synchronous call path above.
+See "Third-party sales channels" above.
+
 Full details: [Architecture](./docs/电商系统-总体架构.md) ·
 [Design principles and a hardening pass](./docs/架构-设计与加固.md) (Chinese) ·
 [Data model](./docs/电商系统-数据模型设计.md) ·
 [Search layer](./docs/电商系统-语义检索层设计.md) ·
-[Product understanding](./docs/电商系统-商品理解服务设计.md)
+[Product understanding](./docs/电商系统-商品理解服务设计.md) ·
+[Channel adapter design](./docs/superpowers/specs/2026-10-02-channel-adapter-design.md) (Chinese)
 
 ---
 

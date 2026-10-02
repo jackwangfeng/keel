@@ -251,6 +251,7 @@ core：对每个启用的销售渠道 binding 按规则算对外可售数
 - **美团 / 饿了么接口细节**：文档站需登录，公网拿不到正文；签名原文、回调验签字段、状态码全集、批量与 QPS 限制、部分退款 API、店铺绑定流程都待拿到账号后核实。饿了么零售已更名「淘宝闪购零售开放平台」，很多二手资料基于旧外卖 openapi。
 - **美团配送回调与订单回调是两套平台**（青云聚信 dap.meituan.com vs 闪购）；如果以后接美团配送，单独一个适配器角色，不假设一家平台一套签名。
 - **Shopify（2026-10-02 在开发店上实测，第二期按此实现）**：client credentials 换的 token `expires_in = 86399`（24 小时）；`inventorySetQuantities` 冲突码 `CHANGE_FROM_QUANTITY_STALE`、**一批里一条出错整批不生效**、`changeFromQuantity: null` 跳过比对；限流桶 4000 点、每秒回 200；单条查询成本上限 1000（products 带 inventoryLevels 一页 10 件就 710 点，所以水位改用 `nodes(ids:)` 单查）；webhook 订阅字段是 `uri`。仍未核实：`inventorySetQuantities` 单次条数上限（按 250）、webhook 重试次数与时长。
+- **Shopify 订单部分（2026-10-02 在开发店上只读核实，第三期按此实现）**：token scope 当时有 `write_orders`、`write_assigned_fulfillment_orders`，**没有** `read/write_merchant_managed_fulfillment_orders`（两个 location 都是商家自管，`fulfillmentCreate` 一般要这一对 scope；见 §15 的更新）；没有 `read_customers`（查 customers 回 `ACCESS_DENIED`）；`fulfillmentCreate` 用不存在的 FO 试回 userError「Fulfillment order does not exist.」而不是 `ACCESS_DENIED`，接受 `@idempotent(key:)`，`fulfillmentOrderLineItems` 可省（= 剩余全部行）；单张订单完整取单查询成本 149 点；`orderCancel` 异步、`reason` 与 `restock` 必填；退款行 `restockType` = RETURN / CANCEL / LEGACY_RESTOCK / NO_RESTOCK；`write_orders` 下有 `orderCreate`（可 `test:true`、`financialStatus:PAID`、`options.inventoryBehaviour`），联调建测试单用得上，但是写操作要用户同意；`FulfillmentOrderStatus` = OPEN/IN_PROGRESS/CANCELLED/INCOMPLETE/CLOSED/SCHEDULED/ON_HOLD；`OrderDisplayFinancialStatus` = PENDING/AUTHORIZED/PARTIALLY_PAID/PARTIALLY_REFUNDED/VOIDED/PAID/REFUNDED/EXPIRED；回调主题有 `ORDERS_CREATE/UPDATED/CANCELLED/PAID/FULFILLED`、`REFUNDS_CREATE`、`FULFILLMENTS_CREATE`；开发店当时 0 张订单。**仍未核实**：在开发店实际下单联调（需要用户在店里下一单，或批准用 Admin API `orderCreate` 建测试单）；`refunds/create` 与 `fulfillments/create` 回调体里订单 ID 字段是否为 `order_id`（数字）；受保护客户数据没开时 `shippingAddress` 是 null 还是直接报错。
 
 ## 14. 调研依据
 
@@ -260,7 +261,9 @@ core：对每个启用的销售渠道 binding 按规则算对外可售数
 ## 15. Shopify 开发店准备（用户操作）
 
 1. 注册 Shopify Partner（免费），建一家 development store。
-2. 在 Dev Dashboard 建应用，装到这家开发店；scope：`read_products`、`write_inventory`、`read_locations`、`read_orders`、`write_fulfillments`（写 scope 含读）。
-3. 在 API access requests 里勾选订单收货人所需的受保护客户数据字段。
+2. 在 Dev Dashboard 建应用，装到这家开发店；scope：`read_products`、`write_products`、`write_inventory`、`read_locations`、`read_orders`、`write_orders`、`read_merchant_managed_fulfillment_orders`、`write_merchant_managed_fulfillment_orders`（商家自管 location 上的 `fulfillmentCreate` 要这一对；Shopify 旧文档里的 `write_fulfillments` 是过时写法，不要用）。**改了 scope 之后要在 Dev Dashboard 的 Versions 里发布新版本，再回店铺重新安装 / 更新应用，权限才生效**——只改 scope 不发布、不重装，联调时会一直卡在权限不够。
+3. 受保护客户数据（订单收货人姓名 / 地址 / 电话 / 邮箱）**不在 Dev Dashboard 里配**：去 Partner Dashboard（<https://partners.shopify.com> → Apps → 选中这个应用），没选过分发方式的话先选 Custom distribution，再进 API access requests → Protected customer data access → Request access，勾选 Protected customer data 与姓名 / 地址 / 电话 / 邮箱字段，按提示填 Data protection details。**开发店不需要审核，保存即生效**；没开这一步时读订单会报 `This app is not approved to access the Order object`。
 4. 把 Client ID / Client Secret / 店铺域名写进本机 `~/.config/keel/shopify-dev`（0600），不经对话传递。
-5. webhook 回调地址：`https://<演示站域名>/api/v1/webhooks/channels/<binding_id>`。在 binding 的 `config` 里配 `webhook_base_url`（`https://<演示站域名>`），启用时首拉商品顺带自动装订阅（`PRODUCTS_*`、`INVENTORY_LEVELS_UPDATE`、`APP_UNINSTALLED`）。binding 其余约定：`external_account` = 店铺域名，`secrets` = `{"client_id","client_secret"}`，`config.default_category_id` 必填（新商品挂哪个类目），`config.price_store_id` 可选（价格从哪家门店出，缺省为映射门店里 id 最小的）。
+5. webhook 回调地址：`https://<演示站域名>/api/v1/webhooks/channels/<binding_id>`。在 binding 的 `config` 里配 `webhook_base_url`（`https://<演示站域名>`），启用时首拉商品顺带自动装订阅（`PRODUCTS_CREATE/UPDATE/DELETE`、`INVENTORY_LEVELS_UPDATE`、
+`APP_UNINSTALLED`、`ORDERS_CREATE/UPDATED/CANCELLED/PAID`、`REFUNDS_CREATE`、`FULFILLMENTS_CREATE`，共 11 个主题；
+第三期之前建的 binding 升级后要点一次「重新同步商品」补装订单相关的几个）。binding 其余约定：`external_account` = 店铺域名，`secrets` = `{"client_id","client_secret"}`，`config.default_category_id` 必填（新商品挂哪个类目），`config.price_store_id` 可选（价格从哪家门店出，缺省为映射门店里 id 最小的）。
