@@ -360,7 +360,7 @@ func (q *Queries) InvBizTrail(ctx context.Context, bizID string) ([]InvBizTrailR
 }
 
 const invChannelMerchantEnabled = `-- name: InvChannelMerchantEnabled :one
-SELECT EXISTS (SELECT 1 FROM channel_merchants WHERE merchant_id = current_merchant())
+SELECT EXISTS (SELECT 1 FROM channel_merchants)
 `
 
 func (q *Queries) InvChannelMerchantEnabled(ctx context.Context) (bool, error) {
@@ -438,7 +438,7 @@ func (q *Queries) InvDeleteActivityExcept(ctx context.Context, arg InvDeleteActi
 }
 
 const invDisableChannelMerchant = `-- name: InvDisableChannelMerchant :exec
-DELETE FROM channel_merchants WHERE merchant_id = current_merchant()
+DELETE FROM channel_merchants
 `
 
 func (q *Queries) InvDisableChannelMerchant(ctx context.Context) error {

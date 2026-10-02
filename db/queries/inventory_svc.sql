@@ -438,7 +438,7 @@ INSERT INTO channel_merchants DEFAULT VALUES
 ON CONFLICT ON CONSTRAINT channel_merchants_pkey DO NOTHING;
 
 -- name: InvDisableChannelMerchant :exec
-DELETE FROM channel_merchants WHERE merchant_id = current_merchant();
+DELETE FROM channel_merchants;
 
 -- name: InvChannelMerchantEnabled :one
-SELECT EXISTS (SELECT 1 FROM channel_merchants WHERE merchant_id = current_merchant());
+SELECT EXISTS (SELECT 1 FROM channel_merchants);
