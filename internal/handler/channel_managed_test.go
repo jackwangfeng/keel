@@ -68,7 +68,8 @@ func TestChannelManagedProductFields(t *testing.T) {
 		locked(t, http.MethodPatch, prod, `{"description":"商家改的详情"}`, "PATCH description")
 		locked(t, http.MethodPatch, prod, `{"title":"x","category_id":1}`, "PATCH title + category_id")
 		locked(t, http.MethodPatch, skuPath, `{"spec_values":{"颜色":"白"}}`, "PATCH sku spec_values")
-		locked(t, http.MethodPut, prod+"/images", `{"images":[]}`, "PUT images")
+		locked(t, http.MethodPut, prod+"/images", `{"images":[{"upload_id":999999999}]}`, "PUT images（换图）")
+		ok(t, http.MethodPut, prod+"/images", `{"images":[]}`, "PUT images 原样回传（Shopify 上这件没图）")
 		if got := adminQueryString(t, `SELECT title FROM products WHERE id = $1`, pid); got != "Shopify 帽子" {
 			t.Fatalf("被拒之后标题成了 %q", got)
 		}

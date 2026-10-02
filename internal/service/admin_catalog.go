@@ -529,7 +529,20 @@ func (s *AdminCatalogService) ReplaceImages(ctx context.Context, productID int64
 			return e
 		}
 		if ch, ok := managed[productID]; ok {
-			return ManagedFieldError(ch, "商品图")
+			// 同标题：原样回传当前那组图（同样的 upload、同样的顺序）不算改，直接回当前的图。
+			cur, e := tx.ListProductImages(ctx, productID)
+			if e != nil {
+				return e
+			}
+			same := len(cur) == len(uploadIDs)
+			for i := 0; same && i < len(cur); i++ {
+				same = cur[i].UploadID == uploadIDs[i]
+			}
+			if !same {
+				return ManagedFieldError(ch, "商品图")
+			}
+			out = cur
+			return nil
 		}
 		out, e = tx.ReplaceProductImages(ctx, productID, uploadIDs)
 		return e

@@ -114,3 +114,27 @@ func (q *Queries) EnqueueJobWithMaxAttempts(ctx context.Context, arg EnqueueJobW
 	}
 	return result.RowsAffected(), nil
 }
+
+const hasUnfinishedJobWithPrefix = `-- name: HasUnfinishedJobWithPrefix :one
+SELECT EXISTS (
+    SELECT 1 FROM jobs
+     WHERE merchant_id = current_merchant() AND queue = $1::text
+       AND status IN (0, 1) AND starts_with(job_key, $2::text)
+)::boolean AS busy
+`
+
+type HasUnfinishedJobWithPrefixParams struct {
+	Queue  string
+	Prefix string
+}
+
+// 这家商家这个队列里有没有 job_key 以 prefix 开头、还没做完（待跑或在跑）的任务。
+// 为渠道「手动重新同步商品」而加：整店拉取一页一个任务、键各不相同（pull:<binding>:<游标>），
+// uk_jobs_pending 只挡得住同一个键，挡不住「第 3 页还在跑时又从第 1 页排一条链」。
+// jobs 没有 RLS（文件头），租户靠 current_merchant() —— 与入队那两条的列默认值同一个来源。
+func (q *Queries) HasUnfinishedJobWithPrefix(ctx context.Context, arg HasUnfinishedJobWithPrefixParams) (bool, error) {
+	row := q.db.QueryRow(ctx, hasUnfinishedJobWithPrefix, arg.Queue, arg.Prefix)
+	var busy bool
+	err := row.Scan(&busy)
+	return busy, err
+}

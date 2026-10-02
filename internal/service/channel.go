@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"reflect"
 	"sync/atomic"
 
 	"github.com/keel/keel/internal/channel"
@@ -189,7 +190,7 @@ func (s *ChannelService) UpdateBinding(ctx context.Context, id int64, p ChannelB
 		}
 		flipped := before.IsActiveOutlet() != b.IsActiveOutlet()
 		// 变成启用、或启用中改了 config（价格源门店之类）：整店重算一遍。
-		if b.IsActiveOutlet() && (flipped || p.Config != nil) {
+		if b.IsActiveOutlet() && (flipped || (p.Config != nil && !jsonEqual(before.Config, b.Config))) {
 			if err := s.enqueueRecomputeBinding(ctx, tx, b.ID); err != nil {
 				return false, err
 			}
@@ -470,6 +471,11 @@ func (s *ChannelService) requestCatalogPullTx(ctx context.Context, tx repository
 	if !b.IsActiveCatalogSource() {
 		return ErrChannelNotCatalogSource
 	}
+	// 一条整店拉取链还没走完（哪一页都算）就不再排：否则两条链并发拉同一家店。
+	busy, err := tx.HasUnfinishedJobWithPrefix(ctx, QueueChannelCatalogPull, fmt.Sprintf("pull:%d:", b.ID))
+	if err != nil || busy {
+		return err
+	}
 	return s.enqueueCatalogPull(ctx, tx, b.ID, "", true)
 }
 
@@ -506,4 +512,13 @@ func adapterBinding(ctx context.Context, tx repository.Tx, merchantID int64, b r
 func channelWorkerID() string {
 	host, _ := os.Hostname()
 	return fmt.Sprintf("channel@%s:%d", host, os.Getpid())
+}
+
+// jsonEqual：两段 JSON 语义相同（键序、空白不算）。解不开的按不同。
+func jsonEqual(a, b json.RawMessage) bool {
+	var x, y any
+	if json.Unmarshal(a, &x) != nil || json.Unmarshal(b, &y) != nil {
+		return false
+	}
+	return reflect.DeepEqual(x, y)
 }

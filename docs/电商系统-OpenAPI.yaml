@@ -3865,7 +3865,7 @@ paths:
           in: query
           required: false
           description: 只看最近一次推送出错的行
-          schema: { type: boolean, default: false }
+          schema: { type: boolean }
         - $ref: '#/components/parameters/Page'
         - $ref: '#/components/parameters/PageSize'
       responses:

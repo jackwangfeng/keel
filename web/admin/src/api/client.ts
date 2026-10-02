@@ -217,6 +217,17 @@ export function currentSession(): StaffSession | null {
     return session;
 }
 
+/**
+ * 「会话变了」的订阅点：登录、登出、`refreshIdentity` 刷身份，一律走 `setSession`，
+ * 一律在这里广播一次。谁依赖「当前这个会话」缓存了点什么（比如渠道菜单的开关探测
+ * 结果），订阅这个就不用在登录页、登出按钮、身份刷新三处分别记得去清。
+ */
+const sessionChangeListeners = new Set<() => void>();
+export function onSessionChange(fn: () => void): () => void {
+    sessionChangeListeners.add(fn);
+    return () => sessionChangeListeners.delete(fn);
+}
+
 export function setSession(next: StaffSession | null): void {
     session = next;
     try {
@@ -226,6 +237,7 @@ export function setSession(next: StaffSession | null): void {
         // 隐私模式下 sessionStorage 会抛。内存里那一份仍然有效，
         // 代价只是刷新页面要重新登录 —— 比整个后台打不开好。
     }
+    for (const fn of sessionChangeListeners) fn();
 }
 
 // ---------------------------------------------------------------------------

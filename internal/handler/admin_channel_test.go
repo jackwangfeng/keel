@@ -211,6 +211,14 @@ func TestAdminChannelCatalogPull(t *testing.T) {
 	if w.Code != http.StatusAccepted || w.Header().Get("Idempotency-Replayed") != "true" {
 		t.Fatalf("同一把钥匙再拉：%d replayed=%q，期望 202 重放", w.Code, w.Header().Get("Idempotency-Replayed"))
 	}
+	// 一条拉取链还在中途（第 2 页以后在排队，键各不相同）：再点重拉不另起一条链。
+	adminExec(t, `UPDATE jobs SET job_key = job_key || 'page2' WHERE merchant_id = $1 AND queue = 'channel.catalog.pull' AND status IN (0, 1)`, r.cs.MerchantID)
+	if w := postIdem(t, r.cs.Host, path, "", r.cs.Token); w.Code != http.StatusAccepted {
+		t.Fatalf("链还在中途时重拉：%d %s，期望 202", w.Code, w.Body.String())
+	}
+	if n := pending(); n != 1 {
+		t.Fatalf("链还在中途时重拉之后有 %d 个待跑的拉商品任务，期望仍是 1", n)
+	}
 	if w := postWithKey(t, r.cs.Host, path, "", r.cs.Token, ""); w.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("不带 Idempotency-Key：%d，期望 422", w.Code)
 	}

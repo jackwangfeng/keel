@@ -108,6 +108,12 @@ type JobTx interface {
 	// 这条是正常路径而不是错误 —— uk_jobs_pending 存在的全部意义就是让调用方
 	// 不必记得「我上一轮已经入过了」。
 	EnqueueJob(ctx context.Context, j NewJob) (bool, error)
+	// HasUnfinishedJobWithPrefix：本租户这个队列里有没有 job_key 以 prefix 开头、待跑或在跑的任务。
+	HasUnfinishedJobWithPrefix(ctx context.Context, queue, prefix string) (bool, error)
+}
+
+func (t tenantTx) HasUnfinishedJobWithPrefix(ctx context.Context, queue, prefix string) (bool, error) {
+	return t.q.HasUnfinishedJobWithPrefix(ctx, db.HasUnfinishedJobWithPrefixParams{Queue: queue, Prefix: prefix})
 }
 
 func (t tenantTx) EnqueueJob(ctx context.Context, j NewJob) (bool, error) {
