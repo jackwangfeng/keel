@@ -123,6 +123,13 @@ UPDATE channel_listing_zero_spans SET ended_at = GREATEST(@at::timestamptz, star
    AND ended_at IS NULL
    AND (sqlc.narg(only_held_not)::boolean IS NULL OR held <> sqlc.narg(only_held_not)::boolean);
 
+-- name: CloseChannelZeroSpansScope :exec
+-- 格子不再算了（binding 停用、门店映射删了、SKU 映射删了）：关掉这个范围里还挂着的段，store_id / sku_id 为空 = 不限。
+UPDATE channel_listing_zero_spans SET ended_at = GREATEST(@at::timestamptz, started_at)
+ WHERE binding_id = @binding_id::bigint AND ended_at IS NULL
+   AND (sqlc.narg(store_id)::bigint IS NULL OR store_id = sqlc.narg(store_id)::bigint)
+   AND (sqlc.narg(sku_id)::bigint IS NULL OR sku_id = sqlc.narg(sku_id)::bigint);
+
 -- name: OpenChannelZeroSpan :exec
 -- 开一段挂零时段；已有一段还挂着（held 相同）时什么都不做：撞上部分唯一索引 uk_channel_listing_zero_spans_open
 -- 就不插（表上唯一的另一条唯一约束是自增主键），并发的两次开段也只留一段。

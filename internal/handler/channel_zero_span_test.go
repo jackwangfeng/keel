@@ -6,7 +6,9 @@ package handler_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -254,5 +256,103 @@ func TestChannelZeroSpansOffByDefault(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	if n := adminQueryInt64(t, `SELECT count(*) FROM channel_listing_zero_spans WHERE merchant_id = $1`, cs.MerchantID); n != 0 {
 		t.Fatalf("渠道开关关着却写了 %d 段挂零时段", n)
+	}
+}
+
+// 审查修复 3：格子不再算（SKU 映射删了、门店映射删了、binding 停用）时，还挂着的段在同一事务里关掉，
+// 不然以后的复盘 / 分配建议会把它一直算成挂零。
+func TestChannelZeroSpansClosedWhenCellGoesAway(t *testing.T) {
+	cs := newCouponShop(t)
+	rig := newChannelRig(t)
+	ctx := tenant.NewContext(context.Background(), cs.MerchantID)
+	t.Cleanup(func() { adminExec(t, `DELETE FROM channel_merchants WHERE merchant_id = $1`, cs.MerchantID) })
+	b, err := rig.svc.CreateBinding(ctx, service.ChannelBindingCreate{Channel: channeltest.Kind, ExternalAccount: "zero-gone",
+		Name: "假渠道", Roles: channel.RoleOutlet})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sec, _ := json.Marshal(channeltest.Secrets{WebhookSecret: "k"})
+	if err := rig.svc.SetSecrets(ctx, b.ID, sec); err != nil {
+		t.Fatal(err)
+	}
+	for i, st := range []int64{cs.NorthStore, cs.SouthStore} {
+		if err := rig.svc.UpsertStoreLink(ctx, repository.ChannelStoreLink{BindingID: b.ID, StoreID: st,
+			ExternalStoreID: fmt.Sprintf("loc-%d", i+1)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i, sku := range []int64{cs.DressSKU, cs.ShirtSKU} {
+		if err := rig.svc.LinkSKU(ctx, repository.ChannelItemLink{BindingID: b.ID, KeelID: sku, ExternalID: fmt.Sprintf("var-%d", i+1)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	active := repository.ChannelBindingActive
+	if _, err := rig.svc.UpdateBinding(ctx, b.ID, service.ChannelBindingUpdate{Status: &active}); err != nil {
+		t.Fatal(err)
+	}
+	if err := rig.svc.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	repo := repository.New(testPool)
+	at := time.Now().Add(-10 * time.Hour)
+	cells := [][2]int64{{cs.NorthStore, cs.DressSKU}, {cs.NorthStore, cs.ShirtSKU}, {cs.SouthStore, cs.DressSKU}}
+	for _, c := range cells {
+		if err := repo.WithTenant(ctx, func(tx repository.Tx) error {
+			return tx.RecordChannelListingZero(ctx, b.ID, c[0], c[1], nil, 0, true, at)
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	open := func() string {
+		return adminQueryString(t, `SELECT COALESCE(string_agg(store_id || '/' || sku_id, ',' ORDER BY store_id, sku_id), '')
+			  FROM channel_listing_zero_spans WHERE binding_id = $1 AND ended_at IS NULL`, b.ID)
+	}
+	want := func(cs ...[2]int64) string {
+		var parts []string
+		for _, c := range cs {
+			parts = append(parts, fmt.Sprintf("%d/%d", c[0], c[1]))
+		}
+		return strings.Join(parts, ",")
+	}
+	nd, sd := cells[0], cells[2]
+	if cs.SouthStore < cs.NorthStore {
+		t.Skip("夹具假设北店 id 小于南店")
+	}
+
+	// SKU 映射删了：它在每家门店的段都关。
+	if err := repo.WithTenant(ctx, func(tx repository.Tx) error {
+		return tx.DeleteChannelItemLink(ctx, b.ID, repository.ChannelItemSKU, cs.ShirtSKU)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := open(); got != want(nd, sd) {
+		t.Fatalf("删 SKU 映射之后还挂着的段 %q，期望 %q", got, want(nd, sd))
+	}
+	// 门店映射删了。
+	if err := rig.svc.DeleteStoreLink(ctx, b.ID, cs.SouthStore); err != nil {
+		t.Fatal(err)
+	}
+	if got := open(); got != want(nd) {
+		t.Fatalf("删门店映射之后还挂着的段 %q，期望 %q", got, want(nd))
+	}
+	// binding 停用。
+	off := repository.ChannelBindingDisabled
+	if _, err := rig.svc.UpdateBinding(ctx, b.ID, service.ChannelBindingUpdate{Status: &off}); err != nil {
+		t.Fatal(err)
+	}
+	if got := open(); got != "" {
+		t.Fatalf("停用之后还挂着的段 %q，期望全关", got)
+	}
+	// 关在「现在」：截到那一刻的小时数约 10，以后不再涨。
+	var hs []repository.ChannelZeroHours
+	if err := repo.WithTenant(ctx, func(tx repository.Tx) error {
+		var e error
+		hs, e = tx.ChannelZeroHours(ctx, cs.NorthStore, []int64{cs.DressSKU}, at.Add(-time.Hour), time.Now().Add(48*time.Hour))
+		return e
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(hs) != 1 || math.Abs(hs[0].HeldHours-10) > 0.1 {
+		t.Fatalf("停用后挂零小时数 %+v，期望约 10（关在停用那一刻）", hs)
 	}
 }

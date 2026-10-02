@@ -148,6 +148,7 @@ type ChannelTx interface {
 	GetChannelBinding(ctx context.Context, id int64) (ChannelBinding, error)
 	// LockChannelBindingRules 拿 binding 这一行的锁，让同一 binding 的库存规则读改写串行；不存在时 ErrChannelNotFound。
 	LockChannelBindingRules(ctx context.Context, id int64) error
+	CloseChannelZeroSpans(ctx context.Context, bindingID int64, storeID, skuID *int64, at time.Time) error
 	ListChannelBindings(ctx context.Context) ([]ChannelBinding, error)
 	UpdateChannelBinding(ctx context.Context, id int64, p ChannelBindingPatch) (ChannelBinding, error)
 	// ChannelBindingSecrets 只给适配器用（验签、调平台 API），不许出现在任何响应里。
@@ -390,7 +391,9 @@ func (t tenantTx) DeleteChannelStoreLink(ctx context.Context, bindingID, storeID
 	if n == 0 {
 		return ErrChannelNotFound
 	}
-	return nil
+	// 这家门店在这个渠道上的格子不再算了：还挂着的挂零时段关在现在（不然以后的复盘、分配建议会一直把它算成挂零）。
+	store := storeID
+	return t.CloseChannelZeroSpans(ctx, bindingID, &store, nil, time.Now())
 }
 
 func (t tenantTx) ListChannelStoreLinks(ctx context.Context, bindingID int64) ([]ChannelStoreLink, error) {
@@ -751,8 +754,20 @@ func (t tenantTx) ChannelItemLinkByExternal(ctx context.Context, bindingID int64
 }
 
 func (t tenantTx) DeleteChannelItemLink(ctx context.Context, bindingID int64, kind int16, keelID int64) error {
-	_, err := t.q.DeleteChannelItemLink(ctx, db.DeleteChannelItemLinkParams{BindingID: bindingID, Kind: kind, KeelID: keelID})
-	return err
+	n, err := t.q.DeleteChannelItemLink(ctx, db.DeleteChannelItemLinkParams{BindingID: bindingID, Kind: kind, KeelID: keelID})
+	if err != nil || n == 0 || kind != ChannelItemSKU {
+		return err
+	}
+	// SKU 映射删了：它在每家门店的格子不再算了，还挂着的挂零时段关在现在（同 DeleteChannelStoreLink）。
+	sku := keelID
+	return t.CloseChannelZeroSpans(ctx, bindingID, nil, &sku, time.Now())
+}
+
+// CloseChannelZeroSpans 关掉 binding 在这个范围里还挂着的挂零时段（storeID / skuID 为 nil = 不限）。
+// 用在格子不再算的那一刻（停用 binding、删门店 / SKU 映射）。
+func (t tenantTx) CloseChannelZeroSpans(ctx context.Context, bindingID int64, storeID, skuID *int64, at time.Time) error {
+	return t.q.CloseChannelZeroSpansScope(ctx, db.CloseChannelZeroSpansScopeParams{At: pgtype.Timestamptz{Time: at, Valid: true},
+		BindingID: bindingID, StoreID: storeID, SkuID: skuID})
 }
 
 func (t tenantTx) ChannelSKUsByCodes(ctx context.Context, codes []string) (map[string]CodedSKU, error) {

@@ -489,6 +489,31 @@ func (q *Queries) CloseChannelZeroSpan(ctx context.Context, arg CloseChannelZero
 	return err
 }
 
+const closeChannelZeroSpansScope = `-- name: CloseChannelZeroSpansScope :exec
+UPDATE channel_listing_zero_spans SET ended_at = GREATEST($1::timestamptz, started_at)
+ WHERE binding_id = $2::bigint AND ended_at IS NULL
+   AND ($3::bigint IS NULL OR store_id = $3::bigint)
+   AND ($4::bigint IS NULL OR sku_id = $4::bigint)
+`
+
+type CloseChannelZeroSpansScopeParams struct {
+	At        pgtype.Timestamptz
+	BindingID int64
+	StoreID   *int64
+	SkuID     *int64
+}
+
+// 格子不再算了（binding 停用、门店映射删了、SKU 映射删了）：关掉这个范围里还挂着的段，store_id / sku_id 为空 = 不限。
+func (q *Queries) CloseChannelZeroSpansScope(ctx context.Context, arg CloseChannelZeroSpansScopeParams) error {
+	_, err := q.db.Exec(ctx, closeChannelZeroSpansScope,
+		arg.At,
+		arg.BindingID,
+		arg.StoreID,
+		arg.SkuID,
+	)
+	return err
+}
+
 const countActiveOutletBindings = `-- name: CountActiveOutletBindings :one
 SELECT count(*) FROM channel_bindings WHERE status = 1 AND (roles & 4) <> 0
 `

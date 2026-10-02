@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 	"log/slog"
 	"os"
 	"reflect"
@@ -195,6 +196,12 @@ func (s *ChannelService) UpdateBinding(ctx context.Context, id int64, p ChannelB
 			return false, err
 		}
 		flipped := before.IsActiveOutlet() != b.IsActiveOutlet()
+		if before.IsActiveOutlet() && !b.IsActiveOutlet() {
+			// 不再是启用中的销售渠道：它的格子不再推、不再算，还挂着的挂零时段关在现在。
+			if err := tx.CloseChannelZeroSpans(ctx, b.ID, nil, nil, time.Now()); err != nil {
+				return false, err
+			}
+		}
 		// 变成启用、或启用中改了 config（价格源门店之类）：整店重算一遍。
 		if b.IsActiveOutlet() && (flipped || (p.Config != nil && !jsonEqual(before.Config, b.Config))) {
 			if err := s.enqueueRecomputeBinding(ctx, tx, b.ID); err != nil {
