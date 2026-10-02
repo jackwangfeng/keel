@@ -979,8 +979,8 @@ type Refund struct {
 	MerchantID        int64
 	RefundNo          string
 	OrderID           int64
-	PaymentID         int64
-	UserID            int64
+	PaymentID         *int64
+	UserID            *int64
 	RefundType        int16
 	ReasonCode        int16
 	ReasonText        *string

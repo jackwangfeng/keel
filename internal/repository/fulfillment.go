@@ -56,6 +56,7 @@ type NewShipment struct {
 	CarrierCode string
 	TrackingNo  string
 	// CreatedBy 是发货的操作员（staff.id）。审计字段，单列外键（§5）。
+	// 0 = 不是人发的（渠道单在平台上发了货，channel_order.go 的 applyPlatformFacts），落库为空。
 	CreatedBy int64
 }
 
@@ -144,12 +145,16 @@ func (t tenantTx) ShipOrder(ctx context.Context, orderID int64) (bool, error) {
 }
 
 func (t tenantTx) InsertShipment(ctx context.Context, s NewShipment) (Shipment, error) {
-	by := s.CreatedBy
+	var by *int64
+	if s.CreatedBy != 0 {
+		v := s.CreatedBy
+		by = &v
+	}
 	row, err := t.q.InsertShipment(ctx, db.InsertShipmentParams{
 		OrderID:     s.OrderID,
 		CarrierCode: s.CarrierCode,
 		TrackingNo:  s.TrackingNo,
-		CreatedBy:   &by,
+		CreatedBy:   by,
 	})
 	if err != nil {
 		var pgErr *pgconn.PgError

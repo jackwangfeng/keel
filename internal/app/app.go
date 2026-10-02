@@ -690,7 +690,7 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	// 本期只放商家级的管理员与操作员（role 1、2），见 service/admin_coupon.go 的文件头。
 	// 订单后半程：发货（00033）、退款审核与确认收到退货（00034）。
 	// 判权一律按订单的履约门店、取门店库存那一行（service/order_fulfillment.go 的 Ship 上）。
-	aoh := handler.NewAdminOrderHandler(service.NewAdminOrderService(repo), refunds)
+	aoh := handler.NewAdminOrderHandler(service.NewAdminOrderService(repo).WithChannels(ro.channels), refunds)
 	v1.POST("/admin/orders/:order_no/shipments", staffAuth, aoh.Ship)
 	v1.POST("/admin/refunds/:refund_no/audit", staffAuth, aoh.Audit)
 	v1.POST("/admin/refunds/:refund_no/receipt", staffAuth, aoh.Receive)
@@ -744,7 +744,7 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 		Reports:         service.NewReportService(repo, inv),
 		Stores:          service.NewAdminStoreService(repo, inv).WithChannels(ro.channels),
 		Catalog:         service.NewAdminCatalogService(repo, store, inv).WithChannels(ro.channels),
-		Orders:          service.NewAdminOrderService(repo),
+		Orders:          service.NewAdminOrderService(repo).WithChannels(ro.channels),
 		Restock:         service.NewRestockService(repo, inv, service.NewAdminStoreService(repo, inv).WithChannels(ro.channels)),
 		Proposals:       proposals,
 		Briefs:          briefs,

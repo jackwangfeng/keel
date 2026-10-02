@@ -45,8 +45,8 @@ import (
 	"github.com/keel/keel/internal/repository"
 )
 
-// QueueChannelOrderAction 是 keel 对渠道订单的动作（接单 / 拒单 / 发货回传）。worker 在第五期（channel_order_action.go）；
-// 本期只有接单 SAGA 往里放接单 / 拒单。
+// QueueChannelOrderAction 是 keel 对渠道订单的动作（接单 / 拒单 / 发货回传）。worker 在 channel_order_action.go；
+// 接单 SAGA 往里放接单 / 拒单，后台发货（EnqueueShipTx）放发货回传。
 const QueueChannelOrderAction = "channel.order.action"
 
 // channelActionJob 是 channel.order.action 的载荷。job_key = act:<channel_order_id>:<kind>。
@@ -198,8 +198,9 @@ func (s *ChannelService) applyChannelOrderOpts(ctx context.Context, b repository
 	caps := a.Caps()
 	autoAccept := parseBindingConfig(b.Config).AutoAccept
 	var saga *channelSaga
+	var kicks []string
 	err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
-		saga = nil
+		saga, kicks = nil, nil
 		storeID, err := s.mappedStore(ctx, tx, b.ID, o.ExternalStoreID)
 		if err != nil {
 			return err
@@ -237,7 +238,10 @@ func (s *ChannelService) applyChannelOrderOpts(ctx context.Context, b repository
 				if live.Status == orderStatusDraft {
 					// 草稿还在 0：上次提交 SAGA 失败或进程死在提交之前。再提交一次（同一个 gid，协调器去重）。
 					saga, err = resumeChannelSaga(ctx, tx, *live)
+					return err
 				}
+				// 已经成单：平台上的部分退款（Shopify 部分退款后仍是新单）照样要记。
+				kicks, err = s.applyPlatformFacts(ctx, tx, b, co, o, live)
 				return err
 			}
 			if co.Exception != nil && !opt.force {
@@ -249,20 +253,352 @@ func (s *ChannelService) applyChannelOrderOpts(ctx context.Context, b repository
 			saga, err = s.openChannelOrderTx(ctx, tx, b, co, o)
 			return err
 		default:
-			return s.applyPlatformFacts(ctx, tx, b, co, o, live)
+			kicks, err = s.applyPlatformFacts(ctx, tx, b, co, o, live)
+			return err
 		}
 	})
-	if err != nil || saga == nil {
+	if err != nil {
 		return err
+	}
+	// 退款回补：提交之后就地跑一次 outbox 任务，库存服务不在时留给 worker（同 RefundService 的 kickRestock）。
+	for _, k := range kicks {
+		s.ob.kick(ctx, k)
+	}
+	if saga == nil {
+		return nil
 	}
 	return s.submitChannelSaga(ctx, *saga)
 }
 
-// applyPlatformFacts 把平台上的取消 / 发货 / 退款转成 keel 订单上的动作（第五期）。
-// 本期只把状态记进渠道单（applyChannelOrderOpts 已经写了快照），不动 keel 订单。
+// applyPlatformFacts 把平台上的取消 / 退款 / 发货转成 keel 订单上的动作（applyChannelOrderOpts 的事务里，渠道单行已锁）。
+// 返回提交之后要就地跑的库存回补任务键（restock:<退款单号>）。
+//
+//	没有活着的 keel 订单：只记渠道单状态（已经写了快照）。
+//	keel 订单还在 0 / 10（接单 SAGA 在途）：同上 —— 收尾分支锁渠道单看到已取消就判失败，协调器补偿（库存按流水放回、关到 90）。
+//	已取消：keel 20 → 整单退款（20 → 50 → 60，退款单直接成功、不经支付渠道，回补库存）；keel 30 / 40 → 不动，渠道单标异常。
+//	其余：平台上新出现的退款（按平台退款 ID 幂等）记成功退款单与行退款数，未发货且平台放回了库存的回补；
+//	      平台上发了货（整单）而 keel 还在 20 → keel 发货 20 → 30，承运商与单号用平台的，不入队回传（不回声）。
+//
+// 幂等：退款单的 channel_refund_id = channel_refund:<binding>:<平台退款 ID>（整单取消 …:<外部单号>:cancel），
+// uk_refunds_channel_txn 唯一；重放同一事件（或平台上的新版本带着同样的退款）先查它，记过就跳过（Review Focus 5）。
 func (s *ChannelService) applyPlatformFacts(ctx context.Context, tx repository.Tx, b repository.ChannelBinding,
-	co repository.ChannelOrder, o channel.ChannelOrder, live *repository.Order) error {
+	co repository.ChannelOrder, o channel.ChannelOrder, live *repository.Order) ([]string, error) {
+	if live == nil || live.Status == orderStatusDraft || live.Status == orderStatusPending {
+		return nil, nil
+	}
+	order, err := tx.LockOrderByID(ctx, live.ID)
+	if err != nil {
+		return nil, err
+	}
+	switch co.Status {
+	case repository.ChannelOrderCancelled:
+		return s.platformCancelled(ctx, tx, b, co, order, o)
+	case repository.ChannelOrderRejected, repository.ChannelOrderPendingPayment:
+		return nil, nil
+	}
+	var kicks []string
+	for _, rf := range o.Refunds {
+		k, err := s.platformRefund(ctx, tx, b, &order, rf)
+		if err != nil {
+			return nil, err
+		}
+		if k != "" {
+			kicks = append(kicks, k)
+		}
+	}
+	if (co.Status == repository.ChannelOrderShipped || co.Status == repository.ChannelOrderCompleted) &&
+		order.Status == orderStatusPaid && len(o.Shipments) > 0 {
+		if err := s.platformShipped(ctx, tx, b, order, o); err != nil {
+			return nil, err
+		}
+	}
+	return kicks, nil
+}
+
+const channelCancelAfterShip = "平台在 keel 发货后取消了订单"
+
+// platformCancelled：平台取消了订单。
+func (s *ChannelService) platformCancelled(ctx context.Context, tx repository.Tx, b repository.ChannelBinding,
+	co repository.ChannelOrder, order repository.Order, o channel.ChannelOrder) ([]string, error) {
+	switch order.Status {
+	case orderStatusPaid:
+		k, err := s.refundWholeChannelOrder(ctx, tx, b, co, order, o)
+		if err != nil || k == "" {
+			return nil, err
+		}
+		return []string{k}, nil
+	case orderStatusShipped, orderStatusFinished:
+		if co.Exception != nil && *co.Exception == channelCancelAfterShip {
+			return nil, nil // 重放
+		}
+		reason := channelCancelAfterShip
+		s.log.WarnContext(ctx, "渠道单在 keel 发货后被平台取消，标异常", "channel_order_id", co.ID, "order_no", order.OrderNo)
+		if err := tx.SetChannelOrderState(ctx, co.ID, repository.ChannelOrderState{Status: co.Status, OrderNo: co.OrderNo,
+			Exception: &reason, AcceptDeadline: co.AcceptDeadline}); err != nil {
+			return nil, err
+		}
+		return nil, notifyChannelOrderAttention(ctx, tx, order, "cancel", reason,
+			"keel 订单 "+order.OrderNo+" 的货已经发出，请联系顾客处理退货。")
+	default:
+		return nil, nil // 50 / 60：已经整单退过（重放）
+	}
+}
+
+// refundWholeChannelOrder：keel 订单 20 → 50 → 60，记一张成功的退款单（金额 = 还没退的实收，每行退掉剩下的件数），
+// 回补库存（返回任务键）。不调支付渠道：钱是平台退的。
+func (s *ChannelService) refundWholeChannelOrder(ctx context.Context, tx repository.Tx, b repository.ChannelBinding,
+	co repository.ChannelOrder, order repository.Order, o channel.ChannelOrder) (string, error) {
+	key := fmt.Sprintf("channel_refund:%d:%s:cancel", b.ID, co.ExternalOrderID)
+	if done, err := tx.ChannelRefundExists(ctx, key); err != nil || done {
+		return "", err
+	}
+	// 平台取消时自己放回了库存（取消带的退款行）：推送基线跟着加，理由同下面 platformRefund。
+	// 单笔记过的部分退款（它们的基线当时已经调过）不再算。
+	for _, rf := range o.Refunds {
+		if !rf.Restock || rf.ExternalID == "" {
+			continue
+		}
+		if done, err := tx.ChannelRefundExists(ctx, fmt.Sprintf("channel_refund:%d:%s", b.ID, rf.ExternalID)); err != nil {
+			return "", err
+		} else if !done {
+			if err := s.raiseBaselineForPlatformRestock(ctx, tx, b.ID, order.StoreID, rf.Lines); err != nil {
+				return "", err
+			}
+		}
+	}
+	ok, err := tx.StartWholeOrderRefund(ctx, order.ID)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return "", fmt.Errorf("渠道单 %d 的 keel 订单 %s 在行锁之下从 20 推 50 失败", co.ID, order.OrderNo)
+	}
+	items, err := tx.ListRefundableItems(ctx, order.ID)
+	if err != nil {
+		return "", err
+	}
+	var lines []repository.NewRefundItem
+	var goods int64
+	for _, it := range items {
+		qty := it.Quantity - it.RefundedQty
+		if qty <= 0 {
+			continue
+		}
+		amt := it.AmountCents - it.DiscountCents - it.RefundedCents
+		lines = append(lines, repository.NewRefundItem{OrderItemID: it.ID, Quantity: qty, AmountCents: amt})
+		goods += amt
+	}
+	total := order.PaidCents - order.RefundedCents
+	goods = min(goods, total)
+	refundNo := ""
+	if total > 0 {
+		if refundNo, err = newRefundNo(time.Now()); err != nil {
+			return "", err
+		}
+		if _, err := tx.InsertChannelRefund(ctx, repository.NewChannelRefund{RefundNo: refundNo, OrderID: order.ID,
+			ReasonText: "平台取消了订单（" + b.Channel + " " + co.ExternalOrderName + "）", GoodsAmountCents: goods,
+			FreightCents: total - goods, ChannelRefundID: key, RefundedAt: time.Now(), Items: lines}); err != nil {
+			return "", err
+		}
+		for _, l := range lines {
+			if err := tx.WriteBackOrderItemRefund(ctx, l.OrderItemID, l.Quantity, l.AmountCents); err != nil {
+				return "", err
+			}
+		}
+		if err := tx.AddChannelRefundedCents(ctx, order.ID, total); err != nil {
+			return "", err
+		}
+	}
+	if ok, err := tx.FinishWholeOrderRefund(ctx, order.ID); err != nil {
+		return "", err
+	} else if !ok {
+		return "", fmt.Errorf("渠道单 %d 的 keel 订单 %s 在行锁之下从 50 推 60 失败", co.ID, order.OrderNo)
+	}
+	if err := tx.RecomputeOrderRefundStatus(ctx, order.ID); err != nil {
+		return "", err
+	}
+	hint := fmt.Sprintf("keel 订单 %s 已整单退款（%s，钱由平台退给顾客），不用发货。", order.OrderNo, yuanText(total))
+	kick := ""
+	if refundNo != "" && len(lines) > 0 {
+		// 没发过货（20）：货还在门店，按退款单回补（与自营退款同一个 outbox 任务）。
+		if err := enqueueRefundRestock(ctx, tx, refundNo); err != nil {
+			return "", err
+		}
+		kick = restockJobKey(refundNo)
+		hint = fmt.Sprintf("keel 订单 %s 已整单退款（%s，钱由平台退给顾客）并回补库存，不用发货。", order.OrderNo, yuanText(total))
+	}
+	return kick, notifyChannelOrderAttention(ctx, tx, order, "cancel", "平台取消了渠道订单 "+co.ExternalOrderName, hint)
+}
+
+// platformRefund：平台上的一笔退款（全部列出，按 ExternalID 幂等）。order 随之更新已退金额。
+// 金额：有退款行时按 keel 订单行的实付（行金额 − 行优惠）× 件数 / 下单件数，平台金额更少时（扣了手续费）按平台的、
+// 更多时（含税，税不进 keel 订单）按行算的；没有退款行（只退运费之类）记成运费退款。都不超过还没退的实收。
+func (s *ChannelService) platformRefund(ctx context.Context, tx repository.Tx, b repository.ChannelBinding,
+	order *repository.Order, rf channel.Refund) (string, error) {
+	if rf.ExternalID == "" || order.Status == orderStatusRefunding || order.Status == orderStatusRefunded {
+		return "", nil
+	}
+	key := fmt.Sprintf("channel_refund:%d:%s", b.ID, rf.ExternalID)
+	if done, err := tx.ChannelRefundExists(ctx, key); err != nil || done {
+		return "", err
+	}
+	items, err := tx.ListRefundableItems(ctx, order.ID)
+	if err != nil {
+		return "", err
+	}
+	bySKU := map[int64]*repository.RefundableItem{}
+	for i := range items {
+		bySKU[items[i].SKUID] = &items[i]
+	}
+	var lines []repository.NewRefundItem
+	var goods int64
+	for _, l := range rf.Lines {
+		if l.Qty <= 0 {
+			continue
+		}
+		link, err := tx.ChannelItemLinkByExternal(ctx, b.ID, repository.ChannelItemSKU, l.ExternalSKUID)
+		if errors.Is(err, repository.ErrChannelNotFound) {
+			s.log.WarnContext(ctx, "平台退款里有一行对不上 keel 的 SKU，这一行不记件数", "order_no", order.OrderNo,
+				"external_sku_id", l.ExternalSKUID)
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		it := bySKU[link.KeelID]
+		if it == nil {
+			continue
+		}
+		qty := min(l.Qty, it.Quantity-it.RefundedQty)
+		if qty <= 0 {
+			continue
+		}
+		net := it.AmountCents - it.DiscountCents
+		amt := min(net*int64(qty)/int64(it.Quantity), net-it.RefundedCents)
+		if qty == it.Quantity-it.RefundedQty {
+			amt = net - it.RefundedCents // 最后几件把零头带走
+		}
+		it.RefundedQty += qty
+		it.RefundedCents += amt
+		lines = append(lines, repository.NewRefundItem{OrderItemID: it.ID, Quantity: qty, AmountCents: amt})
+		goods += amt
+	}
+	remain := order.PaidCents - order.RefundedCents
+	total := min(rf.AmountCents, remain)
+	if len(lines) > 0 {
+		total = min(total, goods)
+		for i := len(lines) - 1; i >= 0 && goods > total; i-- {
+			d := min(goods-total, lines[i].AmountCents)
+			lines[i].AmountCents -= d
+			goods -= d
+		}
+	} else {
+		goods = 0
+	}
+	if total <= 0 {
+		return "", nil
+	}
+	refundNo, err := newRefundNo(time.Now())
+	if err != nil {
+		return "", err
+	}
+	at := rf.At
+	if at.IsZero() {
+		at = time.Now()
+	}
+	if _, err := tx.InsertChannelRefund(ctx, repository.NewChannelRefund{RefundNo: refundNo, OrderID: order.ID,
+		ReasonText: "平台上的退款（" + b.Channel + " " + rf.ExternalID + "）", GoodsAmountCents: goods,
+		FreightCents: total - goods, ChannelRefundID: key, RefundedAt: at, Items: lines}); err != nil {
+		return "", err
+	}
+	for _, l := range lines {
+		if err := tx.WriteBackOrderItemRefund(ctx, l.OrderItemID, l.Quantity, l.AmountCents); err != nil {
+			return "", err
+		}
+	}
+	if err := tx.AddChannelRefundedCents(ctx, order.ID, total); err != nil {
+		return "", err
+	}
+	order.RefundedCents += total
+	if err := tx.RecomputeOrderRefundStatus(ctx, order.ID); err != nil {
+		return "", err
+	}
+	if rf.Restock {
+		if err := s.raiseBaselineForPlatformRestock(ctx, tx, b.ID, order.StoreID, rf.Lines); err != nil {
+			return "", err
+		}
+	}
+	kick := ""
+	hint := fmt.Sprintf("keel 订单 %s 已记一笔退款 %s（钱由平台退给顾客）。", order.OrderNo, yuanText(total))
+	if rf.Restock && order.ShippedAt == nil && len(lines) > 0 {
+		if err := enqueueRefundRestock(ctx, tx, refundNo); err != nil {
+			return "", err
+		}
+		kick = restockJobKey(refundNo)
+		hint = fmt.Sprintf("keel 订单 %s 已记一笔退款 %s（钱由平台退给顾客），退掉的件数已回补库存，发货时少发这几件。",
+			order.OrderNo, yuanText(total))
+	}
+	return kick, notifyChannelOrderAttention(ctx, tx, *order, "refund:"+rf.ExternalID, "渠道订单在平台上退了款", hint)
+}
+
+// raiseBaselineForPlatformRestock：平台退款时自己把货放回了平台上的库存（Shopify restockType CANCEL / RETURN），
+// 平台上的数就比上次推出去的多了这几件。推送基线跟着加（Review Focus 3 的反方向，DecrementChannelListingBaseline
+// 传负数），keel 回补之后的那次推送才是一次正常的 CAS，不会每笔退款撞一次冲突、记一条差异。
+func (s *ChannelService) raiseBaselineForPlatformRestock(ctx context.Context, tx repository.Tx, bindingID, storeID int64,
+	lines []channel.ActionLine) error {
+	for _, l := range lines {
+		if l.Qty <= 0 {
+			continue
+		}
+		link, err := tx.ChannelItemLinkByExternal(ctx, bindingID, repository.ChannelItemSKU, l.ExternalSKUID)
+		if errors.Is(err, repository.ErrChannelNotFound) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if err := tx.DecrementChannelListingBaseline(ctx, bindingID, storeID, link.KeelID, -l.Qty); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// platformShipped：平台上整单发了货、keel 还在 20 → keel 发货 20 → 30（承运商 / 单号用平台的，created_by 空），
+// 不入队回传（那就是回声）。买家通知不发：渠道单无 keel 买家，平台自己通知顾客。
+func (s *ChannelService) platformShipped(ctx context.Context, tx repository.Tx, b repository.ChannelBinding,
+	order repository.Order, o channel.ChannelOrder) error {
+	sh := o.Shipments[0]
+	for _, x := range o.Shipments {
+		if x.TrackingNo != "" {
+			sh = x
+			break
+		}
+	}
+	carrier, tracking := strings.TrimSpace(sh.Company), strings.TrimSpace(sh.TrackingNo)
+	if carrier == "" {
+		carrier = b.Channel
+	}
+	if tracking == "" {
+		tracking = o.ExternalOrderID // 平台上发货没填单号：用平台单号占位（shipments 不收空串）
+	}
+	ok, err := tx.ShipOrder(ctx, order.ID)
+	if errors.Is(err, repository.ErrIllegalOrderTransition) {
+		ok, err = false, nil
+	}
+	if err != nil || !ok {
+		return err
+	}
+	if _, err := tx.InsertShipment(ctx, repository.NewShipment{OrderID: order.ID, CarrierCode: truncateRunes(carrier, 64),
+		TrackingNo: truncateRunes(tracking, 64)}); err != nil {
+		return fmt.Errorf("渠道单 %s 在平台上发了货，keel 记发货失败: %w", o.ExternalOrderID, err)
+	}
+	return nil
+}
+
+// yuanText 把分写成「¥12.30」（通知正文里的金额，与模板的 yuan 同一种写法）。
+func yuanText(cents int64) string {
+	return fmt.Sprintf("¥%d.%02d", cents/100, cents%100)
 }
 
 // RetryChannelOrder 是后台「重试」：只对有异常、且没有活着（非 90）的 keel 订单的渠道单。重新回读平台、强制重走接单

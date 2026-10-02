@@ -166,6 +166,8 @@ func findBuyerOrder(ctx context.Context, tx repository.Tx, orderNo string, userI
 // AdminOrderService 实现后台的订单与售后写操作（发货、退款审核、确认收到退货）。
 type AdminOrderService struct {
 	repo adminOrderRepo
+	// channels 是渠道层（KEEL_CHANNELS 关着时为 nil）：渠道单发货后入队回传平台（EnqueueShipTx）。
+	channels *ChannelService
 }
 
 // adminOrderRepo 是后台订单服务要的仓库：租户事务，外加店铺时区（列表「按天选」按它切天）。
@@ -177,6 +179,12 @@ type adminOrderRepo interface {
 // NewAdminOrderService 建后台订单服务。
 func NewAdminOrderService(r adminOrderRepo) *AdminOrderService {
 	return &AdminOrderService{repo: r}
+}
+
+// WithChannels 接上渠道层（nil 即不接）。
+func (s *AdminOrderService) WithChannels(c *ChannelService) *AdminOrderService {
+	s.channels = c
+	return s
 }
 
 // ShipRequest 是 ShipmentCreateRequest 在 service 边界上的形状。
@@ -270,7 +278,14 @@ func (s *AdminOrderService) Ship(ctx context.Context, orderNo string, req ShipRe
 			if err != nil {
 				return repository.Shipment{}, err
 			}
-			// 通知与 20 → 30 同一个事务（数据模型 §16）。
+			// 渠道单（第三期）：同一个事务里入队回传平台。判据只读已经取出来的订单行，自营单不多一次查询；
+			// 渠道层没开（nil）时 EnqueueShipTx 什么都不做。
+			if order.Source == repository.OrderSourceChannel {
+				if err := s.channels.EnqueueShipTx(ctx, tx, order, carrierCompany(req.CarrierCode), req.TrackingNo); err != nil {
+					return repository.Shipment{}, err
+				}
+			}
+			// 通知与 20 → 30 同一个事务（数据模型 §16）。渠道单没有 keel 买家，买家通知在 emitNotification 里跳过。
 			return sh, notifyOrderShipped(ctx, tx, order, req.CarrierCode, req.TrackingNo)
 		})
 }

@@ -31,6 +31,14 @@ var notificationCallSites = map[string]notifyPolicy{
 		"渠道单无 keel 买家，平台自己通知顾客；门店的「新订单待发货」在收尾分支 10 → 20 时发，这里再发就是同一件事说两遍"},
 	"ChannelService.channelOrderOpenUndoBranch/CloseOrder": {Notify: "notifyChannelOrderException"},
 	"ChannelService.channelOrderFinishBranch/SettleOrder":  {Notify: "notifyOrderPaid"},
+	// 平台事实转 keel 动作（第三期 Task 5，channel_order.go 的 applyPlatformFacts）：渠道单无 keel 买家，
+	// 买家侧一律不发（平台自己通知顾客）；门店收「渠道订单要处理」（merchant_channel_order_exception 带 Hint）。
+	"ChannelService.refundWholeChannelOrder/StartWholeOrderRefund":  {Notify: "notifyChannelOrderAttention"},
+	"ChannelService.refundWholeChannelOrder/InsertChannelRefund":    {Notify: "notifyChannelOrderAttention"},
+	"ChannelService.refundWholeChannelOrder/FinishWholeOrderRefund": {Notify: "notifyChannelOrderAttention"},
+	"ChannelService.platformRefund/InsertChannelRefund":             {Notify: "notifyChannelOrderAttention"},
+	"ChannelService.platformShipped/ShipOrder": {Silent: "货是在平台后台发的（20 → 30）：渠道单无 keel 买家，平台自己通知顾客；" +
+		"发货的就是门店自己，不用再告诉它"},
 	"SweepService.closeDraft/CloseExpiredDraftOrder": {Silent: "孤儿草稿（0 → 90）：进程在建单与 SAGA 之间死掉留下的，" +
 		"买家那次下单已经拿到了失败或超时，订单号从没对外返回过"},
 

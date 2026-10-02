@@ -62,7 +62,8 @@ const (
 	KindMerchantRefundRequest = "merchant_refund_requested"
 	KindMerchantReturnShipped = "merchant_return_shipped"
 	KindMerchantInventoryLow  = "merchant_inventory_low"
-	// KindMerchantChannelOrderException：渠道上卖出的单没能在 keel 成单（缺货），keel 订单已关到 90（第三期）。
+	// KindMerchantChannelOrderException：渠道上卖出的单没能在 keel 成单（缺货），keel 订单已关到 90（第三期）；
+	// 第三期 Task 5 起也用于其余要门店知道 / 处理的渠道单事实（平台取消、发货没回传上……），正文带 Hint。
 	KindMerchantChannelOrderException = "merchant_channel_order_exception"
 	notificationTargetOrder           = "order"
 	notificationTargetRefund          = "refund"
@@ -85,6 +86,8 @@ type notifyParams struct {
 	StoreName    string
 	Left         int32
 	Warning      int32
+	// Hint 是渠道订单要人处理时的下一步提示（notifyChannelOrderAttention）；为空是缺货关单那一种。
+	Hint string
 }
 
 // notificationTemplate 是一种通知的全部静态属性：发给谁、点了跳哪、标题与正文怎么写。
@@ -144,8 +147,8 @@ var notificationTemplates = map[string]notificationTemplate{
 		"{{if eq .Left 0}}商品已售罄{{else}}库存预警{{end}}",
 		"{{.ProductTitle}}{{.SpecLabel}} 在{{.StoreName}}剩 {{.Left}} 件（预警线 {{.Warning}} 件）。"},
 	KindMerchantChannelOrderException: {repository.NotificationAudienceMerchant, notificationTargetOrder,
-		"渠道订单没能接单",
-		"{{.Reason}}。keel 订单 {{.OrderNo}} 已关闭；补货后请在渠道订单页点「重试」。"},
+		"{{if .Hint}}渠道订单要处理{{else}}渠道订单没能接单{{end}}",
+		"{{.Reason}}。{{if .Hint}}{{.Hint}}{{else}}keel 订单 {{.OrderNo}} 已关闭；补货后请在渠道订单页点「重试」。{{end}}"},
 }
 
 // carrierNames 是常见承运商代码的中文名。认不出的原样显示代码 —— 发货时填什么
@@ -314,6 +317,13 @@ func notifyOrderPaid(ctx context.Context, tx repository.Tx, order repository.Ord
 func notifyChannelOrderException(ctx context.Context, tx repository.Tx, order repository.Order, reason string) error {
 	return emitNotification(ctx, tx, outgoing{Kind: KindMerchantChannelOrderException, StoreID: order.StoreID,
 		Params: notifyParams{OrderNo: order.OrderNo, Reason: reason}, Dedupe: order.OrderNo})
+}
+
+// notifyChannelOrderAttention 渠道单上发生了要门店知道或处理的事（平台取消已整单退款、平台在 keel 发货后取消、
+// 发货没回传上……）。tag 区分同一张单上的不同事（去重键 = 单号:tag）。
+func notifyChannelOrderAttention(ctx context.Context, tx repository.Tx, order repository.Order, tag, reason, hint string) error {
+	return emitNotification(ctx, tx, outgoing{Kind: KindMerchantChannelOrderException, StoreID: order.StoreID,
+		Params: notifyParams{OrderNo: order.OrderNo, Reason: reason, Hint: hint}, Dedupe: order.OrderNo + ":" + tag})
 }
 
 // notifyOrderShipped 已发货，正文带物流。

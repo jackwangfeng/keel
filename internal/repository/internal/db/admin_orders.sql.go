@@ -275,7 +275,7 @@ func (q *Queries) AdminGetOrderByNo(ctx context.Context, orderNo string) (AdminG
 }
 
 const adminGetRefundByNo = `-- name: AdminGetRefundByNo :one
-SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, p.payment_no, r.user_id,
+SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, COALESCE(p.payment_no, '')::text AS payment_no, COALESCE(r.user_id, 0)::bigint AS user_id,
        r.refund_type, r.reason_code, r.reason_text, r.evidence_urls,
        r.goods_amount_cents, r.freight_cents, r.amount_cents, r.status, r.channel,
        r.channel_refund_id, r.reject_reason, r.audited_at, r.refunded_at,
@@ -286,7 +286,7 @@ SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, p.payment_no, r.us
        r.received_at, r.received_by, sr.name AS received_by_name
   FROM refunds r
   JOIN orders o   ON o.id = r.order_id
-  JOIN payments p ON p.id = r.payment_id
+  LEFT JOIN payments p ON p.id = r.payment_id
   LEFT JOIN staff sa ON sa.id = r.audited_by
   LEFT JOIN staff sr ON sr.id = r.received_by
  WHERE r.refund_no = $1
@@ -371,7 +371,7 @@ func (q *Queries) AdminGetRefundByNo(ctx context.Context, refundNo string) (Admi
 }
 
 const adminListOrderRefunds = `-- name: AdminListOrderRefunds :many
-SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, p.payment_no, r.user_id,
+SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, COALESCE(p.payment_no, '')::text AS payment_no, COALESCE(r.user_id, 0)::bigint AS user_id,
        r.refund_type, r.reason_code, r.reason_text, r.evidence_urls,
        r.goods_amount_cents, r.freight_cents, r.amount_cents, r.status, r.channel,
        r.channel_refund_id, r.reject_reason, r.audited_at, r.refunded_at,
@@ -382,7 +382,7 @@ SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, p.payment_no, r.us
        r.received_at, r.received_by, sr.name AS received_by_name
   FROM refunds r
   JOIN orders o   ON o.id = r.order_id
-  JOIN payments p ON p.id = r.payment_id
+  LEFT JOIN payments p ON p.id = r.payment_id
   LEFT JOIN staff sa ON sa.id = r.audited_by
   LEFT JOIN staff sr ON sr.id = r.received_by
  WHERE r.order_id = $1
@@ -930,7 +930,7 @@ func (q *Queries) AdminListOrdersByPhone(ctx context.Context, arg AdminListOrder
 }
 
 const adminListRefunds = `-- name: AdminListRefunds :many
-SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, p.payment_no, r.user_id,
+SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, COALESCE(p.payment_no, '')::text AS payment_no, COALESCE(r.user_id, 0)::bigint AS user_id,
        r.refund_type, r.reason_code, r.reason_text, r.evidence_urls,
        r.goods_amount_cents, r.freight_cents, r.amount_cents, r.status, r.channel,
        r.channel_refund_id, r.reject_reason, r.audited_at, r.refunded_at,
@@ -941,7 +941,7 @@ SELECT r.id, r.refund_no, r.order_id, o.order_no, o.store_id, p.payment_no, r.us
        r.received_at, r.received_by, sr.name AS received_by_name
   FROM refunds r
   JOIN orders o   ON o.id = r.order_id
-  JOIN payments p ON p.id = r.payment_id
+  LEFT JOIN payments p ON p.id = r.payment_id
   LEFT JOIN staff sa ON sa.id = r.audited_by
   LEFT JOIN staff sr ON sr.id = r.received_by
  WHERE ($1::smallint IS NULL OR r.status = $1::smallint)

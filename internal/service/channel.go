@@ -69,6 +69,7 @@ type ChannelService struct {
 	workerID string
 	handlers map[channel.EventKind]InboundHandler
 	images   *channelImages                         // 商品源的商品图下载（WithImages；nil = 不下载）
+	ob       *inventoryOutbox                       // 平台退款之后的库存回补：提交后就地跑（channel_order.go）
 	msgGID   func(merchantID int64) (string, error) // 开关渠道消息的 gid；测试可替换（SetMerchantMsgGIDForTest）
 }
 
@@ -84,6 +85,7 @@ func NewChannelService(repo *repository.Repo, inv inventory.Service, reg *channe
 		msgQuery:  self.BranchURL(BranchChannelMerchantQuery),
 		res:       res, self: self,
 		workerID: channelWorkerID()}
+	s.ob = newInventoryOutbox(repo, inv, s.log)
 	s.OnInbound(channel.EventCatalogChanged, s.catalogChanged)
 	s.OnInbound(channel.EventOrderChanged, s.orderChanged)
 	return s
