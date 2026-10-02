@@ -1,5 +1,6 @@
 # C 档：物理拆分（docs/电商系统-微服务拆分方案.md「部署档位」）。用法：
 #     export KEEL_INTERNAL_SECRET=$(openssl rand -base64 48)
+#     export KEEL_DTM_TOKEN=$(openssl rand -hex 24)
 #     docker compose -f compose.yaml -f compose.split.yaml up -d --build
 #     ./scripts/smoke.sh
 #
@@ -16,8 +17,8 @@
 # 共用单体的卷的话，切回单体形态时下单当场 42501。要把一个真实的单体库迁过来，照部署指南
 # 「从单体迁到拆分」一节手工跑 split-migrate.sh，而不是指望这个叠加层替你迁。
 #
-# 下单 SAGA 的协调器在 core 进程里（sqlite，单实例）。多实例 core 要换成 Postgres 存储，见部署指南。
-# 库存进程另有一个只发「可售数跨 0」通知的协调器（自己的 sqlite 卷），投到 core 的内网端口 8091。
+# 事务协调器独立部署（dtmrs 服务 + 它自己的库 postgres-dtm，docs/电商系统-微服务部署方案.md）：core 与库存都只是它的客户端，
+# 各自的分支挂在各自的内网端口上由它回调；库存把跨 0 通知发到主题、core 订阅，库存不知道 core 的地址。
 services:
   postgres-inventory:
     build:
@@ -84,35 +85,76 @@ services:
       KEEL_ROLE: inventory
       KEEL_INVENTORY_DSN: postgres://keel_inventory:${KEEL_INVENTORY_PASSWORD:-keel_inventory}@postgres-inventory:5432/keel_inventory?sslmode=disable
       KEEL_INTERNAL_ADDR: ":8090"
-      # 可售数跨 0 时通知 core 重算有货排序（二阶段消息，service/stock_flags.go）：投到 core 的内网端口，
-      # 由库存进程自己的协调器投递 —— 它的存储与 core 那份分开（inventory-dtm.db，挂 invdtmdata 卷）。
-      # 活动配额同步消息的接收方也经这个地址回源读 core 的配额定义。
-      KEEL_CORE_URL: http://app:8091
-      KEEL_DTM_DSN: sqlite:/var/lib/keel/inventory-dtm.db
+      # 独立部署的协调器（下面的 dtmrs）：库存经它把跨 0 通知发到主题 stock.zero_crossing，不知道谁在听；
+      # 活动配额同步的定义随消息带来，库存不回 core 读（docs/电商系统-微服务部署方案.md 4.1）。
+      # KEEL_SELF_URL 是协调器回调本服务分支（跨 0 通知的回查）用的地址，写服务名。
+      KEEL_DTM_SERVER: http://dtmrs:36789
+      KEEL_DTM_TOKEN: ${KEEL_DTM_TOKEN:?C 档要设 KEEL_DTM_TOKEN（协调器的令牌，openssl rand -hex 24）}
+      KEEL_SELF_URL: http://inventory:8090
       KEEL_INTERNAL_SECRET: ${KEEL_INTERNAL_SECRET:?C 档要设 KEEL_INTERNAL_SECRET（openssl rand -base64 48）}
       KEEL_INTERNAL_SECRET_PREVIOUS: ${KEEL_INTERNAL_SECRET_PREVIOUS:-}
       KEEL_DB_MAX_CONNS: ${KEEL_DB_MAX_CONNS:-}
       GIN_MODE: release
-    volumes:
-      - invdtmdata:/var/lib/keel
     depends_on:
       split-data:
         condition: service_completed_successfully
+      dtmrs:
+        condition: service_started
 
   app:
     environment:
       KEEL_ROLE: core
       KEEL_INVENTORY_URL: http://inventory:8090
-      # core 的内网端口：接库存服务的跨 0 通知（/internal/v1/saga/stock_changed）、给它回源读活动配额定义，不映射到宿主机。
+      # core 的内网端口：协调器经它回调 core 自己的分支（下单四步、配额同步的回查、跨 0 通知的接收），不映射到宿主机。
       KEEL_INTERNAL_ADDR: ":8091"
       KEEL_INTERNAL_SECRET: ${KEEL_INTERNAL_SECRET:?C 档要设 KEEL_INTERNAL_SECRET（openssl rand -base64 48）}
       KEEL_INTERNAL_SECRET_PREVIOUS: ${KEEL_INTERNAL_SECRET_PREVIOUS:-}
+      # 微服务形态不嵌协调器：清掉 compose.yaml 里单体用的 KEEL_DTM_DSN，改连独立部署的 dtmrs。
+      KEEL_DTM_DSN: ""
+      KEEL_DTM_SERVER: http://dtmrs:36789
+      KEEL_DTM_TOKEN: ${KEEL_DTM_TOKEN:?C 档要设 KEEL_DTM_TOKEN（协调器的令牌，openssl rand -hex 24）}
+      KEEL_SELF_URL: http://app:8091
     depends_on:
       split-data:
         condition: service_completed_successfully
       # 只等启动：库存服务暂时不在时 core 照样能起，读接口按降级处理，下单的 SAGA 重试到它回来。
       inventory:
         condition: service_started
+      dtmrs:
+        condition: service_started
+
+  # 独立部署的事务协调器（docs/电商系统-微服务部署方案.md）。无状态：事务、租约、主题订阅都在 postgres-dtm 里，
+  # 挂了重启即可，没推完的事务租约到期后接着推；要滚动升级不停服就多开一个实例（同一个库）。
+  # 管理台在 http://dtmrs:36789/（只在内网，不映射端口）。
+  dtmrs:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: dtmrs-server
+    image: keel-dtmrs:${KEEL_VERSION:-dev}
+    environment:
+      DTMRS_DB: postgres://keel:${KEEL_ADMIN_PASSWORD:-keel}@postgres-dtm:5432/dtmrs
+      DTMRS_AUTH_TOKEN: ${KEEL_DTM_TOKEN:?C 档要设 KEEL_DTM_TOKEN（协调器的令牌，openssl rand -hex 24）}
+    depends_on:
+      postgres-dtm:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # 协调器自己的库。compose 里单独一个容器只是为了起得简单；生产上放在业务库同一套 Postgres 主备上、
+  # 用不同的库和账号即可（部署方案第九节）。
+  postgres-dtm:
+    image: keel-postgres:16
+    environment:
+      POSTGRES_USER: keel
+      POSTGRES_PASSWORD: ${KEEL_ADMIN_PASSWORD:-keel}
+      POSTGRES_DB: dtmrs
+    volumes:
+      - pgdtmdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 -U keel -d dtmrs"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
 
 volumes:
   pgdata:
@@ -123,5 +165,5 @@ volumes:
     name: keel_uploads_split
   pginvdata:
     name: keel_pginvdata_split
-  invdtmdata:
-    name: keel_invdtmdata_split
+  pgdtmdata:
+    name: keel_pgdtmdata_split

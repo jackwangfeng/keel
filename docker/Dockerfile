@@ -36,7 +36,7 @@ RUN apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=30 \
 
 WORKDIR /src
 COPY scripts/fetch-dtmrs.sh ./scripts/
-# 版本（v0.11.1）钉在脚本里，不是 @latest —— 上游改了 C ABI 而这里悄悄跟着变，
+# 版本（v0.12.0）钉在脚本里，不是 @latest —— 上游改了 C ABI 而这里悄悄跟着变，
 # 是最难查的一类失败。产物是 /dtmrs/lib/libdtmrs.so 与 /dtmrs/include/dtmrs.h。
 RUN ./scripts/fetch-dtmrs.sh /dtmrs
 
@@ -114,6 +114,19 @@ ENV GOOSE_DRIVER=postgres \
 ENTRYPOINT ["/goose"]
 CMD ["up"]
 
+# ---------- 独立部署的事务协调器（微服务形态，docs/电商系统-微服务部署方案.md） ----------
+#
+# 与 app 嵌入的 libdtmrs 出自同一个 dtmrs 阶段、同一个 tag（scripts/fetch-dtmrs.sh 的 DTMRS_REF），
+# 版本不会错开。它无状态：事务、租约、主题订阅全在 DTMRS_DB 指的库里，挂了重启、多开几个实例都行。
+# 配置见 dtmrs 的 docs/deployment.md：DTMRS_DB、DTMRS_ADDR、DTMRS_AUTH_TOKEN（必须设，Keel 拒绝连没开认证的协调器）。
+FROM debian:trixie-slim AS dtmrs-server
+COPY --from=dtmrs /dtmrs/bin/dtmrs /usr/local/bin/dtmrs
+RUN groupadd -g 65532 nonroot && useradd -u 65532 -g 65532 -M -s /usr/sbin/nologin nonroot
+USER 65532:65532
+ENV DTMRS_ADDR=0.0.0.0:36789
+EXPOSE 36789
+ENTRYPOINT ["/usr/local/bin/dtmrs"]
+
 # ---------- 应用 ----------
 # 底座从 scratch 换成 debian:trixie-slim。
 #
@@ -178,3 +191,4 @@ USER 65532:65532
 
 EXPOSE 8080
 ENTRYPOINT ["/keel"]
+

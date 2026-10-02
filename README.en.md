@@ -544,8 +544,9 @@ docker compose up -d
 # Split, one Postgres: inventory in its own schema under its own role (tier B)
 docker compose -f compose.yaml -f compose.split-b.yaml up -d --build
 
-# Split, two processes and two databases (tier C)
+# Split, two processes and two databases, transaction coordinator (dtmrs) deployed on its own (tier C)
 export KEEL_INTERNAL_SECRET=$(openssl rand -base64 48)
+export KEEL_DTM_TOKEN=$(openssl rand -hex 24)
 docker compose -f compose.yaml -f compose.split.yaml up -d --build
 
 ./scripts/smoke.sh

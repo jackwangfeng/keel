@@ -25,7 +25,12 @@ core "SELECT coalesce(state, '?'), count(*) FROM pg_stat_activity WHERE datname 
 inv "SELECT coalesce(state, '?'), count(*) FROM pg_stat_activity WHERE datname = 'keel_inventory' GROUP BY 1"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-for spec in "app:/var/lib/keel/dtm.db" "inventory:/var/lib/keel/inventory-dtm.db"; do
+# 协调器：拆分（C 档）是独立部署的 dtmrs，状态在 postgres-dtm 的 dtmrs 库里；单体是 app 容器里嵌入式的 sqlite。
+if docker inspect "$P-postgres-dtm-1" >/dev/null 2>&1; then
+    echo "-- 协调器（独立部署）：全局事务按状态"
+    docker exec "$P-postgres-dtm-1" psql -U keel -d dtmrs -tAc "SELECT status, count(*) FROM trans_global GROUP BY 1 ORDER BY 1" || true
+fi
+for spec in "app:/var/lib/keel/dtm.db"; do
     c=${spec%%:*} f=${spec#*:}
     mkdir -p "$tmp/$c"
     for suf in "" -wal -shm; do docker cp -q "$P-$c-1:$f$suf" "$tmp/$c/" 2>/dev/null || true; done

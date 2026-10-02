@@ -339,7 +339,7 @@ TEST_PKGS ?= ./...
 # CI job 的 timeout-minutes、最后只留下一句「超时」。
 TEST_TIMEOUT ?= 5m
 
-test-db: $(DTMRS_LIB) goose-bin
+test-db: $(DTMRS_LIB) $(DTMRS_BIN) goose-bin
 	go test -count=1 -timeout=$(TEST_TIMEOUT) $(TEST_PKGS)
 	@echo "==> 替身那一组（-tags keel_fake_embedder）"
 	go test -count=1 -timeout=$(TEST_TIMEOUT) -tags keel_fake_embedder ./internal/inference/...
@@ -405,11 +405,14 @@ test-engine: goose-bin
 # 产物不入库（.gitignore 里 /third_party/）：.so 是平台相关的，而头文件必须与
 # .so 同版本，分开管理迟早对不上。
 #
-# 版本钉在 scripts/fetch-dtmrs.sh 里（v0.11.1），examples/dtmrs-embedded 调的
+# 版本钉在 scripts/fetch-dtmrs.sh 里（v0.12.0），examples/dtmrs-embedded 调的
 # 也是同一份脚本 —— 两份脚本就是两个版本，而它们错开时的症状是
 # 「例子绿、服务红」，报错停在 C ABI 的某个符号上，不指向真因。
 DTMRS_DIR := $(ROOT)/third_party/dtmrs
 DTMRS_LIB := $(DTMRS_DIR)/lib/libdtmrs.so
+# 独立部署形态的协调器二进制（同一个脚本、同一个 tag 编出来）：远程客户端与两库测试真起一个它
+# （internal/dtm/dtmserver）。
+DTMRS_BIN := $(DTMRS_DIR)/bin/dtmrs
 
 dtmrs-deps:
 	$(ROOT)/scripts/fetch-dtmrs.sh $(DTMRS_DIR)
@@ -421,6 +424,10 @@ dtmrs-deps:
 # -ldtmrs`，再去翻文档找到该跑哪个目标。
 $(DTMRS_LIB):
 	@echo "==> 没找到 $(DTMRS_LIB)，先建它（需要 Rust 1.88+，约 1 分钟）"
+	@$(MAKE) dtmrs-deps
+
+$(DTMRS_BIN):
+	@echo "==> 没找到 $(DTMRS_BIN)（0.12 起测试要真起一个独立部署的协调器），重新跑一遍 dtmrs-deps"
 	@$(MAKE) dtmrs-deps
 
 # ---------------------------------------------------------------------------

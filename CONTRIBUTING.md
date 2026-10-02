@@ -46,7 +46,7 @@
 > 跑一次 `make dtmrs-deps`（本机实测约 1 分钟），而那一步缺 cargo 会打印
 > 一句指名道姓的中文提示。
 >
-> 版本钉在 `scripts/fetch-dtmrs.sh` 里（v0.11.1），**只有那一处** ——
+> 版本钉在 `scripts/fetch-dtmrs.sh` 里（v0.12.0），**只有那一处** ——
 > `examples/dtmrs-embedded` 的 `make deps` 调的也是它。
 >
 > 如果你不想装 Rust，也可以用独立 TC 进程的部署形态开发，

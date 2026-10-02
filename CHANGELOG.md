@@ -39,6 +39,20 @@ so "which one is running?" never depends on anyone's memory.
 
 ## [Unreleased]
 
+### Changed (split deployment)
+
+- **The transaction coordinator now runs as its own service in the split (tier C) deployment.**
+  `core` and `inventory` no longer embed dtmrs; they talk to a standalone dtmrs 0.12 cluster
+  (`KEEL_DTM_SERVER` + `KEEL_DTM_TOKEN`), which calls their branches back over the internal port
+  (`KEEL_SELF_URL`). `compose.split.yaml` gains a `dtmrs` service and its own `postgres-dtm`.
+  The monolith (`KEEL_ROLE=all`) still embeds the coordinator (`KEEL_DTM_DSN`).
+- **Inventory no longer calls core.** Zero-crossing stock notifications are published to the topic
+  `stock.zero_crossing` and core subscribes; activity quota sync carries the definition plus a
+  monotonic version in the message payload (migration 00240) instead of having inventory read it back.
+  `KEEL_CORE_URL` is retired and refused at startup.
+- Upgrading a running tier-C deployment: stop taking orders, wait until both embedded coordinators have
+  no unfinished transactions, then switch the configuration. In-flight transactions are not migrated.
+
 ### Changed
 
 - **In-stock ordering follows stock changes immediately instead of once a minute.** When a

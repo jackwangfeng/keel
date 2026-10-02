@@ -454,8 +454,9 @@ docker compose up -d
 # 拆分：同一个 Postgres，库存用独立的 schema 与账号（B 档）
 docker compose -f compose.yaml -f compose.split-b.yaml up -d --build
 
-# 拆分：两个进程、两个库（C 档）
+# 拆分：两个进程、两个库，事务协调器（dtmrs）独立部署（C 档）
 export KEEL_INTERNAL_SECRET=$(openssl rand -base64 48)
+export KEEL_DTM_TOKEN=$(openssl rand -hex 24)
 docker compose -f compose.yaml -f compose.split.yaml up -d --build
 
 ./scripts/smoke.sh
@@ -468,8 +469,8 @@ B 档下 core 的数据库账号连 `inventory` schema 都看不见，跨模块 
 **可用性。**
 
 - 每个角色都可以多实例挂在同一个地址后面。状态全在库里：行锁、advisory lock、outbox 任务。
-  健康检查是内网端口上的 `/healthz` 与 `/readyz`。`core` 多实例时协调器还要从默认的 SQLite 换成 Postgres
-  存储（见部署指南）。
+  健康检查是内网端口上的 `/healthz` 与 `/readyz`。C 档的事务协调器（dtmrs）独立部署、无状态，状态在它自己的
+  Postgres 库里，挂了重启即可；服务进程里不嵌协调器（[微服务部署方案](./docs/电商系统-微服务部署方案.md)）。
 - 库存服务不在时：
   - 浏览与检索照常（不带有货标记）；
   - 离不开水位的接口回 503；
