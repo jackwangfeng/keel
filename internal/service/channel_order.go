@@ -214,12 +214,15 @@ func (s *ChannelService) applyChannelOrderOpts(ctx context.Context, b repository
 			return err
 		}
 		if !inserted {
-			if !opt.force && o.Version <= co.Version {
+			// 人工接单（accept）回读到的多半就是已存的那个版本：同版本照样往下走，更旧的仍只留档。
+			if !opt.force && (o.Version < co.Version || (o.Version == co.Version && !opt.accept)) {
 				return tx.TouchChannelOrderPayload(ctx, co.ID, snap.LastPayload)
 			}
-			// keel 这一侧走过的「已接单」不被平台的「新单」盖回去（Shopify 没有接单这一步，平台上永远是新单）。
-			if snap.Status == repository.ChannelOrderNew && co.Status == repository.ChannelOrderAccepted {
-				snap.Status = repository.ChannelOrderAccepted
+			// keel 这一侧走过的「已接单」「已拒单」不被平台的「新单」盖回去（Shopify 没有接单这一步，平台上永远是新单；
+			// 拒单回传之前平台上也还是新单）。
+			if snap.Status == repository.ChannelOrderNew &&
+				(co.Status == repository.ChannelOrderAccepted || co.Status == repository.ChannelOrderRejected) {
+				snap.Status = co.Status
 			}
 			if err := tx.UpdateChannelOrderSnapshot(ctx, co.ID, snap); err != nil {
 				return err
@@ -862,14 +865,19 @@ func (s *ChannelService) submitChannelSaga(ctx context.Context, saga channelSaga
 	return nil
 }
 
-// enqueueChannelAction 入队一个对渠道订单的动作（同一张单同一种动作只排一次）。
+// enqueueChannelAction 入队一个对渠道订单的动作（同一张单同一种动作只排一次；对申请的动作按申请各排一次：
+// job_key = act:<id>:<kind>[:<外部申请 ID>]）。
 func enqueueChannelAction(ctx context.Context, tx repository.Tx, channelOrderID int64, a channel.Action) error {
+	key := "act:" + strconv.FormatInt(channelOrderID, 10) + ":" + string(a.Kind)
+	if a.ExternalRequestID != "" {
+		key += ":" + a.ExternalRequestID
+	}
 	if a.IdemKey == "" {
-		a.IdemKey = "act:" + strconv.FormatInt(channelOrderID, 10) + ":" + string(a.Kind)
+		a.IdemKey = key
 	}
 	payload, _ := json.Marshal(channelActionJob{ChannelOrderID: channelOrderID, Action: a})
 	_, err := tx.EnqueueJob(ctx, repository.NewJob{Queue: QueueChannelOrderAction,
-		JobKey: fmt.Sprintf("act:%d:%s", channelOrderID, a.Kind), Payload: payload, MaxAttempts: channelPushMaxAttempts})
+		JobKey: key, Payload: payload, MaxAttempts: channelPushMaxAttempts})
 	return err
 }
 

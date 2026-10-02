@@ -142,6 +142,7 @@ type ChannelInboundEvent struct {
 // ChannelTx 是渠道表在一个租户事务里的读写。
 type ChannelTx interface {
 	ChannelOrderTx
+	ChannelOrderRequestTx
 
 	CreateChannelBinding(ctx context.Context, in ChannelBindingInput) (ChannelBinding, error)
 	GetChannelBinding(ctx context.Context, id int64) (ChannelBinding, error)

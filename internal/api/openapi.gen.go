@@ -1077,6 +1077,7 @@ func (e MerchantUpdateRequestStatus) Valid() bool {
 // Defines values for NotificationKind.
 const (
 	MerchantChannelOrderException NotificationKind = "merchant_channel_order_exception"
+	MerchantChannelOrderPending   NotificationKind = "merchant_channel_order_pending"
 	MerchantInventoryLow          NotificationKind = "merchant_inventory_low"
 	MerchantOrderPaid             NotificationKind = "merchant_order_paid"
 	MerchantRefundRequested       NotificationKind = "merchant_refund_requested"
@@ -1096,6 +1097,8 @@ const (
 func (e NotificationKind) Valid() bool {
 	switch e {
 	case MerchantChannelOrderException:
+		return true
+	case MerchantChannelOrderPending:
 		return true
 	case MerchantInventoryLow:
 		return true
@@ -1130,14 +1133,17 @@ func (e NotificationKind) Valid() bool {
 
 // Defines values for NotificationTargetType.
 const (
-	NotificationTargetTypeInventory NotificationTargetType = "inventory"
-	NotificationTargetTypeOrder     NotificationTargetType = "order"
-	NotificationTargetTypeRefund    NotificationTargetType = "refund"
+	NotificationTargetTypeChannelOrders NotificationTargetType = "channel_orders"
+	NotificationTargetTypeInventory     NotificationTargetType = "inventory"
+	NotificationTargetTypeOrder         NotificationTargetType = "order"
+	NotificationTargetTypeRefund        NotificationTargetType = "refund"
 )
 
 // Valid indicates whether the value is a known member of the NotificationTargetType enum.
 func (e NotificationTargetType) Valid() bool {
 	switch e {
+	case NotificationTargetTypeChannelOrders:
+		return true
 	case NotificationTargetTypeInventory:
 		return true
 	case NotificationTargetTypeOrder:
@@ -5054,6 +5060,9 @@ type Notification struct {
 	//   扣到 0 时标题是「已售罄」
 	// · `merchant_channel_order_exception` —— 渠道（Shopify 等）上卖出的订单没能在 keel 成单
 	//   （缺货：keel 订单已关闭，正文写明哪件商品差几件）；补货后在渠道订单页「重试」
+	// · `merchant_channel_order_pending` —— 渠道订单等门店处理：快到接单截止还没接单（截止前
+	//   `accept_remind_minutes` 分钟，每单一次）、平台发来取消 / 退款 / 缺货调整申请、申请过了截止
+	//   （平台按自己的规则处理）。跳门店的渠道订单页（`target.type = channel_orders`）
 	Kind NotificationKind `json:"kind"`
 
 	// ReadAt 已读时间；`null` 即未读。后台是**调用者自己**的已读时间。
@@ -5062,7 +5071,8 @@ type Notification struct {
 	// Target 点了这条通知跳到哪里。四个定位字段都一定出现，用不上的是 `null`：
 	// · `order` —— `order_no` 非空，跳订单详情；
 	// · `refund` —— `refund_no` 非空（`order_no` 也给出所属订单），跳售后详情；
-	// · `inventory` —— `store_id` 与 `sku_id` 非空，跳那家门店的库存（只出现在后台）。
+	// · `inventory` —— `store_id` 与 `sku_id` 非空，跳那家门店的库存（只出现在后台）；
+	// · `channel_orders` —— `store_id` 非空，跳那家门店的渠道订单（只出现在后台；等接单的渠道单还没有 keel 订单号）。
 	Target NotificationTarget `json:"target"`
 
 	// Title 服务端渲染好的中文标题，原样展示
@@ -5102,6 +5112,11 @@ type Notification struct {
 // · `merchant_channel_order_exception` —— 渠道（Shopify 等）上卖出的订单没能在 keel 成单
 //
 //	（缺货：keel 订单已关闭，正文写明哪件商品差几件）；补货后在渠道订单页「重试」
+//
+// · `merchant_channel_order_pending` —— 渠道订单等门店处理：快到接单截止还没接单（截止前
+//
+//	`accept_remind_minutes` 分钟，每单一次）、平台发来取消 / 退款 / 缺货调整申请、申请过了截止
+//	（平台按自己的规则处理）。跳门店的渠道订单页（`target.type = channel_orders`）
 type NotificationKind string
 
 // NotificationList defines model for NotificationList.
@@ -5118,7 +5133,8 @@ type NotificationList struct {
 // NotificationTarget 点了这条通知跳到哪里。四个定位字段都一定出现，用不上的是 `null`：
 // · `order` —— `order_no` 非空，跳订单详情；
 // · `refund` —— `refund_no` 非空（`order_no` 也给出所属订单），跳售后详情；
-// · `inventory` —— `store_id` 与 `sku_id` 非空，跳那家门店的库存（只出现在后台）。
+// · `inventory` —— `store_id` 与 `sku_id` 非空，跳那家门店的库存（只出现在后台）；
+// · `channel_orders` —— `store_id` 非空，跳那家门店的渠道订单（只出现在后台；等接单的渠道单还没有 keel 订单号）。
 type NotificationTarget struct {
 	OrderNo  *string                `json:"order_no"`
 	RefundNo *string                `json:"refund_no"`

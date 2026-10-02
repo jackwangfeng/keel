@@ -65,9 +65,14 @@ const (
 	// KindMerchantChannelOrderException：渠道上卖出的单没能在 keel 成单（缺货），keel 订单已关到 90（第三期）；
 	// 第三期 Task 5 起也用于其余要门店知道 / 处理的渠道单事实（平台取消、发货没回传上……），正文带 Hint。
 	KindMerchantChannelOrderException = "merchant_channel_order_exception"
-	notificationTargetOrder           = "order"
-	notificationTargetRefund          = "refund"
-	notificationTargetInventory       = "inventory"
+	// KindMerchantChannelOrderPending：渠道单等门店处理（第三期 Task 6）：快到接单截止还没接单、平台发来申请、
+	// 申请过了截止。等接单的单还没有 keel 订单，所以跳的是门店的渠道订单页（00325 的 channel_orders 目标），
+	// 正文写明是哪张平台单。
+	KindMerchantChannelOrderPending = "merchant_channel_order_pending"
+	notificationTargetOrder         = "order"
+	notificationTargetRefund        = "refund"
+	notificationTargetInventory     = "inventory"
+	notificationTargetChannelOrders = "channel_orders"
 )
 
 // notifyParams 是模板能用到的全部字段。一个结构体而不是每种一个：
@@ -149,6 +154,9 @@ var notificationTemplates = map[string]notificationTemplate{
 	KindMerchantChannelOrderException: {repository.NotificationAudienceMerchant, notificationTargetOrder,
 		"{{if .Hint}}渠道订单要处理{{else}}渠道订单没能接单{{end}}",
 		"{{.Reason}}。{{if .Hint}}{{.Hint}}{{else}}keel 订单 {{.OrderNo}} 已关闭；补货后请在渠道订单页点「重试」。{{end}}"},
+	KindMerchantChannelOrderPending: {repository.NotificationAudienceMerchant, notificationTargetChannelOrders,
+		"渠道订单待处理",
+		"{{.Reason}}。{{if .Hint}}{{.Hint}}{{else}}请到渠道订单页处理。{{end}}"},
 }
 
 // carrierNames 是常见承运商代码的中文名。认不出的原样显示代码 —— 发货时填什么

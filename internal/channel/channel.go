@@ -104,6 +104,31 @@ type Event struct {
 	ExternalOrderID string
 	ExternalItemIDs []string
 	Payload         json.RawMessage
+	// Request 是 EventOrderRequest 的规整内容（其余类别为 nil）。适配器在 ParseInbound 里填好，
+	// 渠道层不再解析平台原文。
+	Request *OrderRequest `json:",omitempty"`
+}
+
+// RequestKind 是平台发起的申请的类别（与 channel_order_requests.kind 同一套数）。
+type RequestKind int8
+
+const (
+	RequestCancel        RequestKind = iota + 1 // 取消（整单）
+	RequestPartialRefund                        // 部分退款
+	RequestStockout                             // 缺货调整
+)
+
+// OrderRequest 是平台发起的一个申请（取消 / 部分退款 / 缺货调整），由适配器从回调规整出来。
+// ExternalRequestID 在同一张渠道单下唯一（幂等键）；Deadline 是平台的处理时限（过了平台自己按规则处理）；
+// Withdrawn 为真表示平台（顾客）撤销了这个申请。
+type OrderRequest struct {
+	ExternalRequestID string
+	Kind              RequestKind
+	Lines             []ActionLine
+	AmountCents       int64
+	Reason            string
+	Deadline          *time.Time
+	Withdrawn         bool
 }
 
 // Listing 是推给销售渠道的一条（门店, SKU）：绝对可售数 + 价格。

@@ -65,6 +65,22 @@ func (s *ChannelService) housekeep(ctx context.Context) {
 			s.log.ErrorContext(ctx, "清理过期的渠道任务失败", "queue", q, "err", err)
 		}
 	}
+	s.SweepChannelDeadlines(ctx)
+}
+
+// SweepChannelDeadlines 是接单与申请的截止扫描（channel_order_request.go 文件头），housekeep 每分钟一次；导出给测试驱动。
+// 没有任务行可取租户：枚举活跃商家（merchants 没有 RLS）再逐家进，同 sweep.go。没接渠道的商家两条查询都是空的索引区间。
+func (s *ChannelService) SweepChannelDeadlines(ctx context.Context) {
+	merchants, err := s.repo.ActiveMerchants(ctx)
+	if err != nil {
+		s.log.ErrorContext(ctx, "截止扫描读不到商家列表", "err", err)
+		return
+	}
+	for _, m := range merchants {
+		if err := s.sweepTenantDeadlines(tenant.NewContext(ctx, m)); err != nil {
+			s.log.ErrorContext(ctx, "渠道单截止扫描失败", "merchant_id", m, "err", err)
+		}
+	}
 }
 
 // WorkOnce 各队列取一批跑完，返回处理的任务数。导出给测试驱动（不等轮询）。

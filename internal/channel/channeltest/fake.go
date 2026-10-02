@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"iter"
 	"net/http"
 	"net/http/httptest"
@@ -40,6 +41,19 @@ func OrderWebhook(secret, eventID, externalOrderID string) (*http.Request, []byt
 	r.Header.Set(HeaderSignature, Sign(secret, body))
 	r.Header.Set(HeaderEventID, eventID)
 	r.Header.Set(HeaderTopic, TopicOrder)
+	return r, body
+}
+
+// TopicRequest 是平台申请的回调主题；正文 {"order_id": …, "request": channel.OrderRequest}。
+const TopicRequest = "request"
+
+// RequestWebhook 造一条签好名的平台申请回调（取消 / 部分退款 / 缺货调整）。eventID 是去重键。
+func RequestWebhook(secret, eventID, externalOrderID string, req channel.OrderRequest) (*http.Request, []byte) {
+	body, _ := json.Marshal(map[string]any{"order_id": externalOrderID, "request": req})
+	r := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
+	r.Header.Set(HeaderSignature, Sign(secret, body))
+	r.Header.Set(HeaderEventID, eventID)
+	r.Header.Set(HeaderTopic, TopicRequest)
 	return r, body
 }
 
@@ -118,6 +132,16 @@ func (a *Adapter) ParseInbound(b channel.Binding, r *http.Request, body []byte) 
 		}
 		_ = json.Unmarshal(body, &p)
 		ev.Kind, ev.ExternalOrderID = channel.EventOrderChanged, p.OrderID
+	}
+	if topic == TopicRequest {
+		var p struct {
+			OrderID string               `json:"order_id"`
+			Request channel.OrderRequest `json:"request"`
+		}
+		if err := json.Unmarshal(body, &p); err != nil {
+			return nil, nil, fmt.Errorf("假渠道申请回调解不开: %w", err)
+		}
+		ev.Kind, ev.ExternalOrderID, ev.Request = channel.EventOrderRequest, p.OrderID, &p.Request
 	}
 	return []channel.Event{ev}, []byte("ok"), nil
 }

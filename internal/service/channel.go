@@ -88,6 +88,7 @@ func NewChannelService(repo *repository.Repo, inv inventory.Service, reg *channe
 	s.ob = newInventoryOutbox(repo, inv, s.log)
 	s.OnInbound(channel.EventCatalogChanged, s.catalogChanged)
 	s.OnInbound(channel.EventOrderChanged, s.orderChanged)
+	s.OnInbound(channel.EventOrderRequest, s.orderRequest)
 	return s
 }
 

@@ -287,3 +287,71 @@ SELECT s.id, s.product_id, s.spec_values, s.image_url, p.title
   FROM skus s
   JOIN products p ON p.id = s.product_id
  WHERE s.id = ANY(@sku_ids::bigint[]) AND s.deleted_at IS NULL AND p.deleted_at IS NULL;
+
+-- ---------------------------------------------------------------------------
+-- 平台发起的申请（channel_order_requests，00320；第三期 Task 6）。编排在 service/channel_order_request.go。
+-- ---------------------------------------------------------------------------
+
+-- name: InsertChannelOrderRequest :one
+-- 第一次见到这个申请。同一个申请的重复回调撞 uk_channel_order_requests_external、没有行返回，
+-- 调用方转去 LockChannelOrderRequestByExternal（调用方已经锁着渠道单行，不会有并发的第二条插入）。
+INSERT INTO channel_order_requests (channel_order_id, external_request_id, kind, lines, amount_cents, reason,
+                                    status, deadline)
+VALUES (@channel_order_id::bigint, @external_request_id::text, @kind::smallint, @lines::jsonb, @amount_cents::bigint,
+        @reason::text, @status::smallint, sqlc.narg(deadline)::timestamptz)
+ON CONFLICT ON CONSTRAINT uk_channel_order_requests_external DO NOTHING
+RETURNING id, channel_order_id, external_request_id, kind, lines, amount_cents, reason, status, deadline,
+          decided_by, decided_at, created_at, updated_at;
+
+-- name: LockChannelOrderRequestByExternal :one
+SELECT id, channel_order_id, external_request_id, kind, lines, amount_cents, reason, status, deadline,
+       decided_by, decided_at, created_at, updated_at
+  FROM channel_order_requests
+ WHERE channel_order_id = @channel_order_id::bigint AND external_request_id = @external_request_id::text
+   FOR UPDATE;
+
+-- name: LockChannelOrderRequest :one
+SELECT id, channel_order_id, external_request_id, kind, lines, amount_cents, reason, status, deadline,
+       decided_by, decided_at, created_at, updated_at
+  FROM channel_order_requests WHERE id = @id::bigint
+   FOR UPDATE;
+
+-- name: ListChannelOrderRequests :many
+-- 一张渠道单上的申请（后台详情）：新的在前。
+SELECT id, channel_order_id, external_request_id, kind, lines, amount_cents, reason, status, deadline,
+       decided_by, decided_at, created_at, updated_at
+  FROM channel_order_requests WHERE channel_order_id = @channel_order_id::bigint
+ ORDER BY id DESC;
+
+-- name: DecideChannelOrderRequest :execrows
+-- 处置一个待处理（1）的申请：2 同意 / 3 拒绝 / 4 超时自动同意 / 5 平台已撤销。decided_by 是员工（自动策略、超时、撤销为空）。
+-- 只改待处理的：返回 0 = 已经处置过了。
+UPDATE channel_order_requests
+   SET status = @status::smallint, decided_by = sqlc.narg(decided_by)::bigint, decided_at = now()
+ WHERE id = @id::bigint AND status = 1;
+
+-- name: ExpiredChannelOrderRequests :many
+-- 过了平台截止还没处置的申请（截止扫描把它们记成 4 超时自动同意）。走 idx_channel_order_requests_pending。
+SELECT r.id, r.channel_order_id, r.kind, r.amount_cents, co.store_id, co.order_no, co.external_order_name
+  FROM channel_order_requests r
+  JOIN channel_orders co ON co.id = r.channel_order_id
+ WHERE r.status = 1 AND r.deadline <= now()
+ ORDER BY r.deadline
+ LIMIT @lim::int;
+
+-- name: DueAcceptReminders :many
+-- 等人接单、离接单截止不到 accept_remind_minutes（binding config，缺省 3）分钟、还没提醒过的渠道单。
+-- 「提醒过」就是通知表里有那一条（去重键与 service/channel_order_request.go 的 acceptRemindDedupe 逐字一致），
+-- 不另记一列。没映射到 keel 门店的单（store_id 空）发不了门店通知、也接不了单，不列。
+SELECT co.id, co.store_id::bigint AS store_id, co.external_order_name, co.accept_deadline
+  FROM channel_orders co
+  JOIN channel_bindings b ON b.id = co.binding_id
+ WHERE co.status = 2 AND co.order_no IS NULL AND co.exception IS NULL AND co.store_id IS NOT NULL
+   AND co.accept_deadline > now()
+   AND co.accept_deadline <= now() + make_interval(mins => COALESCE(
+         CASE WHEN jsonb_typeof(b.config -> 'accept_remind_minutes') = 'number'
+              THEN (b.config ->> 'accept_remind_minutes')::numeric::int END, 3))
+   AND NOT EXISTS (SELECT 1 FROM notifications n
+                    WHERE n.dedupe_key = 'merchant_channel_order_pending:accept_remind:' || co.id)
+ ORDER BY co.accept_deadline
+ LIMIT @lim::int;

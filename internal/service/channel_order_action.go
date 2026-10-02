@@ -117,6 +117,10 @@ func actionLabel(k channel.ActionKind) string {
 		return "接单没回传上"
 	case channel.ActReject:
 		return "拒单没回传上"
+	case channel.ActAgreeRequest:
+		return "同意平台申请没回传上"
+	case channel.ActRejectRequest:
+		return "拒绝平台申请没回传上"
 	default:
 		return fmt.Sprintf("对平台的动作 %s 没做成", k)
 	}

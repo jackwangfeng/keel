@@ -20740,18 +20740,22 @@ export interface components {
          *       扣到 0 时标题是「已售罄」
          *     · `merchant_channel_order_exception` —— 渠道（Shopify 等）上卖出的订单没能在 keel 成单
          *       （缺货：keel 订单已关闭，正文写明哪件商品差几件）；补货后在渠道订单页「重试」
+         *     · `merchant_channel_order_pending` —— 渠道订单等门店处理：快到接单截止还没接单（截止前
+         *       `accept_remind_minutes` 分钟，每单一次）、平台发来取消 / 退款 / 缺货调整申请、申请过了截止
+         *       （平台按自己的规则处理）。跳门店的渠道订单页（`target.type = channel_orders`）
          * @enum {string}
          */
-        NotificationKind: "order_paid" | "order_shipped" | "order_auto_confirm_soon" | "order_finished" | "order_timeout_closed" | "refund_approved" | "refund_rejected" | "refund_succeeded" | "refund_return_expired" | "merchant_order_paid" | "merchant_refund_requested" | "merchant_return_shipped" | "merchant_inventory_low" | "merchant_channel_order_exception";
+        NotificationKind: "order_paid" | "order_shipped" | "order_auto_confirm_soon" | "order_finished" | "order_timeout_closed" | "refund_approved" | "refund_rejected" | "refund_succeeded" | "refund_return_expired" | "merchant_order_paid" | "merchant_refund_requested" | "merchant_return_shipped" | "merchant_inventory_low" | "merchant_channel_order_exception" | "merchant_channel_order_pending";
         /**
          * @description 点了这条通知跳到哪里。四个定位字段都一定出现，用不上的是 `null`：
          *     · `order` —— `order_no` 非空，跳订单详情；
          *     · `refund` —— `refund_no` 非空（`order_no` 也给出所属订单），跳售后详情；
-         *     · `inventory` —— `store_id` 与 `sku_id` 非空，跳那家门店的库存（只出现在后台）。
+         *     · `inventory` —— `store_id` 与 `sku_id` 非空，跳那家门店的库存（只出现在后台）；
+         *     · `channel_orders` —— `store_id` 非空，跳那家门店的渠道订单（只出现在后台；等接单的渠道单还没有 keel 订单号）。
          */
         NotificationTarget: {
             /** @enum {string} */
-            type: "order" | "refund" | "inventory";
+            type: "order" | "refund" | "inventory" | "channel_orders";
             order_no: string | null;
             refund_no: string | null;
             /** Format: int64 */
