@@ -81,7 +81,8 @@ Core migrations `00300` (`channel_merchants`, also in the inventory database), `
 ### Known limitations
 
 - Shopify orders are not imported yet (phase 3): a sale made on Shopify is overwritten by keel's next push for that
-  SKU. Prices are pushed as-is, with no currency conversion. Fields managed by Shopify are not yet locked in the
+  SKU. Prices are pushed as-is, with no currency conversion. A negative quantity on Shopify (oversold) is overwritten
+  with keel's non-negative number. Fields managed by Shopify are not yet locked in the
   admin UI — an edit there is overwritten by the next sync.
 
 ### Invariant
