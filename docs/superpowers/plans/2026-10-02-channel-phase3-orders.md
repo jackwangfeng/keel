@@ -258,6 +258,7 @@ func (s *ChannelService) sweepChannelDeadlines(ctx context.Context) // 接单截
 - [ ] **Step 2**：`make test-db`（全量）、`make check-all`。
 - [ ] **Step 3**：只读联调 `KEEL_SHOPIFY_LIVE=1`：适配器取单（开发店有单才跑）。**下单联调需要用户**：在开发店下一张测试单（或批准用 Admin API `orderCreate` 建 test 单）→ 演示站收单、接单、扣库存 → 后台发货 → Shopify 上看到单号；确认 fulfillment 的 scope 够不够（大概率要请用户在 Dev Dashboard 加 `read/write_merchant_managed_fulfillment_orders`、勾受保护客户数据字段并重装；spec §15 的 `write_fulfillments` 是旧写法，一并改）。
 - [ ] **Step 4**：spec §13 补订单部分实测结论；CHANGELOG；PROGRESS；数据模型文档。
+- [ ] **Step 4b（用户要求）**：写 `docs/渠道接入-Shopify.md` 给商家看：开店（Partner + 开发店 / 正式店）→ Dev Dashboard 建应用、scope 清单（`read/write_products`、`write_inventory`、`read_locations`、`read/write_orders`、`read/write_merchant_managed_fulfillment_orders`）、发新版本 + 重装才生效 → 受保护客户数据（Dev Dashboard 里没有入口，要到 Partner Dashboard 的「API access requests」申请，勾姓名 / 地址 / 电话 / 邮箱；开发店不用审核）→ keel 后台建渠道账号（店铺域名、Client ID / Secret、默认类目、回调地址）、门店映射、库存与价格规则、启用首拉 → 日常：订单进来、发货、异常单重试、已知限制（币种不换算、一单不拆多店、税不进 keel 订单）。docs 索引里加一行。
 - [ ] **Step 5**：演示站：备份 → 迁移副本试跑 → 部署 core / inventory / console + `publish-frontend.sh admin` → binding 1 点「重新同步商品」装订单回调。
 
 ## 不在本期
