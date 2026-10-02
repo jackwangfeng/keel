@@ -147,6 +147,9 @@ func (s *ChannelService) CreateBinding(ctx context.Context, in ChannelBindingCre
 	if err := s.checkKind(in.Channel, in.Roles); err != nil {
 		return repository.ChannelBinding{}, err
 	}
+	if err := checkBindingConfig(in.Config); err != nil {
+		return repository.ChannelBinding{}, err
+	}
 	status := in.Status
 	if status == 0 {
 		status = repository.ChannelBindingDisabled
@@ -174,6 +177,9 @@ type ChannelBindingUpdate struct {
 
 // UpdateBinding 改 binding。「启用中的销售渠道」状态翻转时登记开关渠道消息；变成启用时给它映射的每家门店排一次整店重算。
 func (s *ChannelService) UpdateBinding(ctx context.Context, id int64, p ChannelBindingUpdate) (repository.ChannelBinding, error) {
+	if err := checkBindingConfig(p.Config); err != nil {
+		return repository.ChannelBinding{}, err
+	}
 	var b repository.ChannelBinding
 	err := s.withMerchantSync(ctx, func(tx repository.Tx) (bool, error) {
 		before, err := tx.GetChannelBinding(ctx, id)

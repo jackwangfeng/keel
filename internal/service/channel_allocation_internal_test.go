@@ -1,6 +1,8 @@
 package service
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/keel/keel/internal/channel"
@@ -88,6 +90,45 @@ func TestSuggestAllocationShortageLowersLowestNet(t *testing.T) {
 	sku.Available = 40
 	if got := suggestAllocation(sku, 14); len(got) != 0 {
 		t.Fatalf("可售 40 够分，不该有建议：%+v", got)
+	}
+}
+
+// 审查修复 7：货不够分时最低净收入的渠道至多降到 10%，不建议调到 0（下架这个渠道交给人决定）。
+func TestSuggestAllocationShortageFloorsRatio(t *testing.T) {
+	// 可售 12；三个渠道日均各 2 → 先保自营与 A 各 6，B 剩 0 件 → 原来会建议比例 0。
+	sku := AllocationSKU{SKUID: 11, Available: 12, Channels: []AllocationChannel{
+		allocSelf(2, 5000), allocBinding(1, 10000, 0, 2, 4000), allocBinding(2, 10000, 0, 2, 3000)}}
+	s := onlySuggestion(t, suggestAllocation(sku, 14))
+	if s.BindingID != 2 || s.RatioBP != allocationRatioFloorBP {
+		t.Fatalf("货不够分到 0：B 应只降到 %d，实得 %+v", allocationRatioFloorBP, s)
+	}
+	if !strings.Contains(s.Why, "人") {
+		t.Fatalf("降到下限时理由应说明要不要再降交给人：%q", s.Why)
+	}
+	// 已经在下限：不再建议。
+	sku.Channels[2] = allocBinding(2, allocationRatioFloorBP, 0, 2, 3000)
+	if got := suggestAllocation(sku, 14); len(got) != 0 {
+		t.Fatalf("已在下限不该再建议下调：%+v", got)
+	}
+}
+
+// 审查修复 7：commission_bp 写入时校验 0–10000，读出时夹在 0–10000。
+func TestBindingConfigCommission(t *testing.T) {
+	for _, c := range []struct {
+		raw string
+		ok  bool
+	}{{`{}`, true}, {`{"commission_bp":0}`, true}, {`{"commission_bp":10000}`, true}, {`{"commission_bp":1800,"x":1}`, true},
+		{`{"commission_bp":-1}`, false}, {`{"commission_bp":10001}`, false}, {`{"commission_bp":"18%"}`, false},
+		{`{"commission_bp":12.5}`, false}} {
+		if err := checkBindingConfig(json.RawMessage(c.raw)); (err == nil) != c.ok {
+			t.Errorf("checkBindingConfig(%s) = %v，期望 ok=%v", c.raw, err, c.ok)
+		}
+	}
+	if got := parseBindingConfig(json.RawMessage(`{"commission_bp":-5}`)).CommissionBP; got != 0 {
+		t.Errorf("负佣金率读出应夹到 0，实得 %d", got)
+	}
+	if got := parseBindingConfig(json.RawMessage(`{"commission_bp":20000}`)).CommissionBP; got != 10000 {
+		t.Errorf("超过 100%% 的佣金率读出应夹到 10000，实得 %d", got)
 	}
 }
 

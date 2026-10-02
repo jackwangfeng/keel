@@ -39,6 +39,8 @@ const (
 	// 基线建议的参数（spec §4.1）。
 	allocationHeldZeroHours = 24   // 分配造成的挂零到这么多小时才建议上调
 	allocationRatioStepBP   = 1000 // 上调 10 个百分点
+	// allocationRatioFloorBP：「货不够分」至多把比例降到 10%，不建议调到 0（那等于下架这个渠道，交给人决定）。
+	allocationRatioFloorBP = 1000
 	allocationDemandDays    = 3    // 「货够不够分」按日均 × 3 天的需求算
 )
 
@@ -400,10 +402,18 @@ func suggestAllocation(sku AllocationSKU, days int) []AllocationSuggestion {
 		target := int64(math.Max(math.Floor(rest), 0))
 		// published = floor(available × ratio / 10000) − safety ≤ target
 		ratio := int32((target + int64(lowest.safety)) * 10000 / int64(sku.Available))
+		floored := ratio < allocationRatioFloorBP
+		ratio = max(ratio, allocationRatioFloorBP)
 		if ratio < lowest.ratio {
-			lowest.why = append(lowest.why, fmt.Sprintf("货不够分：各渠道 3 天需求 %.0f 件 > 可售 %d 件，它单件净收入最低（%d 分），"+
-				"先保净收入高的渠道，它的比例下调到对外至多 %d 件", total, sku.Available, lowest.ch.UnitNetCents, target))
-			lowest.ratio = max(ratio, 0)
+			why := fmt.Sprintf("货不够分：各渠道 3 天需求 %.0f 件 > 可售 %d 件，它单件净收入最低（%d 分），"+
+				"先保净收入高的渠道，它的比例下调到对外至多 %d 件", total, sku.Available, lowest.ch.UnitNetCents, target)
+			if floored {
+				why = fmt.Sprintf("货不够分：各渠道 3 天需求 %.0f 件 > 可售 %d 件，它单件净收入最低（%d 分），按需求它一件都分不到；"+
+					"比例先降到下限 %s，要不要再降（等于下架这个渠道）交给人决定", total, sku.Available, lowest.ch.UnitNetCents,
+					bpPercent(allocationRatioFloorBP))
+			}
+			lowest.why = append(lowest.why, why)
+			lowest.ratio = ratio
 		}
 	}
 	var out []AllocationSuggestion

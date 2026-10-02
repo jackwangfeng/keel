@@ -161,9 +161,28 @@ type channelBindingConfig struct {
 func parseBindingConfig(raw json.RawMessage) channelBindingConfig {
 	var c channelBindingConfig
 	if len(raw) > 0 {
-		_ = json.Unmarshal(raw, &c) // 配错的字段按没配处理；后台写 config 时只校验是 JSON 对象
+		_ = json.Unmarshal(raw, &c) // 配错的字段按没配处理；后台写 config 时只校验是 JSON 对象与 checkBindingConfig 那几项
 	}
+	c.CommissionBP = min(max(c.CommissionBP, 0), 10000) // 校验之前写进去的越界值按边界读
 	return c
+}
+
+// checkBindingConfig 是后台写 binding config 时渠道层自己认的字段的校验（其余字段归适配器，不管）。
+func checkBindingConfig(raw json.RawMessage) error {
+	if len(raw) == 0 {
+		return nil
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return fmt.Errorf("%w：config 要是 JSON 对象", ErrChannelBadRequest)
+	}
+	if v, ok := m["commission_bp"]; ok {
+		var bp int32
+		if err := json.Unmarshal(v, &bp); err != nil || bp < 0 || bp > 10000 {
+			return fmt.Errorf("%w：commission_bp 是渠道佣金率（万分比），取 0–10000 的整数", ErrChannelBadRequest)
+		}
+	}
+	return nil
 }
 
 // carriesPrice 判断 storeID 是不是 binding b 的价格出处（见 listingTarget）。
