@@ -136,3 +136,7 @@ var ErrProposalStale = errors.New("提案依据的规则已经变了") // → 40
 - [ ] 演示站：备份两库 → 迁移在备份副本上试跑 → `migrate` → `up -d --no-deps app inventory console` → `publish-frontend.sh admin`；`demo-env.sh` 加 `KEEL_CHANNEL_DEMO=on`（备份 `.bak-demotakeout`）。
 - [ ] 演示站配置：建 binding「演示外卖（模拟）」（`config {auto_accept:true, commission_bp:1800}`、密钥写 `~/.config/keel/demo-takeout-secret` 0600 并经后台只写接口设上）、映射演示的门店、初始规则比例 60% 安全库存 5；模拟器推订单，验证收单、扣库存、对外可售数变化、挂零时段在记。
 - [ ] 手动跑一次 `agent/runner/claude-daily.sh`（演示站密钥由 cron 脚本提供，照 `cron-agent-daily.sh` 的方式），确认 AI 调了 `channel_allocation_review`；若数据不足 7 天它应不提，记下「第一批复盘约在 YYYY-MM-DD」。
+
+### 执行中偏离（审查修复，2026-10-03）
+
+审查后的七项修复与 spec 的差异都已写进 spec 对应小节（§3.2 补开段 / 关段、§3.4 佣金率校验、§4.1 比例下限 10%、§4.2 门店级试算排除单独规则、§4.3 规则锁、§4.4 不自动调到 0）。另：渠道单版本守卫里严格更旧的版本不再写 `last_payload`，`storedChannelOrder` 只用与渠道单同版本的载荷（§7.1 载荷路径）。
