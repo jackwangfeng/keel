@@ -130,3 +130,39 @@ func TestChannelOrderPayloadShippedWithoutTracking(t *testing.T) {
 		t.Fatalf("平台自己发的货又回传了 %d 次", len(acts))
 	}
 }
+
+// 审查修复 4：v1 新单缺货进异常 → v2 已取消 → 迟到的 v1 → 后台重试：不能拿迟到的旧载荷建单，渠道单仍是已取消。
+func TestChannelOrderPayloadLateOldVersionDoesNotPoisonRetry(t *testing.T) {
+	r := newFakeOrderRig(t, payloadChannel, map[string]any{"auto_accept": true})
+	r.fake.FetchErr = channel.ErrUnsupported
+	big := int32(r.dressStock(t) + 5)
+	r.putPayload(t, r.dressOrder("p-late", 1, channel.OrderNew, big))
+	co := r.channelOrderID(t, "p-late")
+	if got := adminQueryString(t, `SELECT (exception IS NOT NULL)::text FROM channel_orders WHERE id = $1`, co); got != "true" {
+		t.Fatalf("夹具不成立：缺货的新单没进异常")
+	}
+	adjust(t, r.local, r.cs.MerchantID, r.cs.NorthStore, r.cs.DressSKU, big) // 补货：重试时货够了
+	r.putPayload(t, r.dressOrder("p-late", 2, channel.OrderCancelled, big))
+	r.putPayload(t, r.dressOrder("p-late", 1, channel.OrderNew, big))
+	if got := adminQueryString(t, `SELECT (last_payload->>'Version')::text FROM channel_orders WHERE id = $1`, co); got != "2" {
+		t.Fatalf("迟到的旧版本覆盖了 last_payload（Version = %q），期望仍是 2", got)
+	}
+	_ = r.svc.RetryChannelOrder(r.ctx, co) // 能不能重试由判据定；无论如何不能建单
+	r.drain(t)
+	if n := adminQueryInt64(t, `SELECT count(*) FROM orders WHERE channel_order_id = $1 AND status <> 90`, co); n != 0 {
+		t.Fatalf("重试拿迟到的旧载荷建了 %d 张 keel 订单", n)
+	}
+	if got := adminQueryString(t, `SELECT status || ':' || version FROM channel_orders WHERE id = $1`, co); got != "6:2" {
+		t.Fatalf("渠道单 状态:版本 = %q，期望仍是 6:2", got)
+	}
+	// 兜底：last_payload 的版本和渠道单不一致（以前的版本写进去的旧载荷）时，重试不拿它建单。
+	adminExec(t, `UPDATE channel_orders SET last_payload = jsonb_set(jsonb_set(last_payload, '{Version}', '1'), '{Status}', $2::text::jsonb),
+		exception = '{"kind":"stockout"}' WHERE id = $1`, co, fmt.Sprint(int(channel.OrderNew)))
+	if err := r.svc.RetryChannelOrder(r.ctx, co); err == nil {
+		t.Fatal("载荷版本和渠道单不一致时重试应报错")
+	}
+	r.drain(t)
+	if n := adminQueryInt64(t, `SELECT count(*) FROM orders WHERE channel_order_id = $1 AND status <> 90`, co); n != 0 {
+		t.Fatalf("重试拿版本不一致的载荷建了 %d 张 keel 订单", n)
+	}
+}

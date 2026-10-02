@@ -215,6 +215,11 @@ func (s *ChannelService) storedChannelOrder(ctx context.Context, bindingID int64
 		if err := json.Unmarshal(co.LastPayload, &o); err != nil || o.ExternalOrderID == "" {
 			return fmt.Errorf("渠道单 %s 没有可用的载荷（渠道不支持回读）", externalID)
 		}
+		// 载荷必须就是渠道单当前这个版本的：拿别的版本强制重走（重试 / 接单不受版本守卫）会把状态改回去、甚至在已取消之后建单。
+		if o.Version != co.Version {
+			return fmt.Errorf("渠道单 %s 存着的载荷是版本 %d、渠道单是版本 %d，不拿它重走（渠道不支持回读，等平台再推一次）",
+				externalID, o.Version, co.Version)
+		}
 		return nil
 	})
 	if err != nil {
@@ -261,7 +266,12 @@ func (s *ChannelService) applyChannelOrderOpts(ctx context.Context, b repository
 			// 版本守卫：只有严格更旧的版本只留档。同版本照样往下走 —— 上次在这个版本上没做完的（SAGA 提交失败、
 			// 草稿还在 0）要靠重放补上；Shopify 的 updatedAt 只到秒，同一秒里的两次变化也是同一个版本。
 			// 往下走的每一步都幂等（见 sameVersionStale 与文件头）。
-			if !opt.force && (o.Version < co.Version || (o.Version == co.Version && sameVersionStale(co.Status, snap.Status))) {
+			if !opt.force && o.Version < co.Version {
+				// 严格更旧的版本不写 last_payload：不支持回读的渠道重试 / 接单就拿 last_payload 当平台最新状态
+				// （storedChannelOrder），写成迟到的旧「新单」就会在已取消之后建单。
+				return nil
+			}
+			if !opt.force && o.Version == co.Version && sameVersionStale(co.Status, snap.Status) {
 				return tx.TouchChannelOrderPayload(ctx, co.ID, snap.LastPayload)
 			}
 			// keel 这一侧走过的「已接单」「已拒单」不被平台的「新单」盖回去（Shopify 没有接单这一步，平台上永远是新单；
