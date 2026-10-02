@@ -89,11 +89,11 @@ type ChannelStoreLink struct {
 }
 
 type ChannelStockRule struct {
-	ID, BindingID     int64
-	StoreID, SKUID    *int64
+	ID, BindingID      int64
+	StoreID, SKUID     *int64
 	RatioBP, SafetyQty int32
-	CapQty            *int32
-	UpdatedAt         time.Time
+	CapQty             *int32
+	UpdatedAt          time.Time
 }
 
 type ChannelPriceRule struct {
