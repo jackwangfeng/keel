@@ -7,7 +7,7 @@ package shopifytest
 //   - 每条行分到一个 location；同一 location 的行进同一张 fulfillment order。
 //   - fulfillmentCreate 只认 OPEN / IN_PROGRESS 的 FO，行数量不得超过剩余；全发完 FO 变 CLOSED，发了一部分变 IN_PROGRESS。
 //     fulfillmentOrderLineItems 不给 = 该 FO 的全部剩余行（同真实平台）。
-//   - 每次变化 updatedAt 加 1 秒（全店一个时钟，单调）。
+//   - 每次变化 updatedAt 加 1 秒（全店一个时钟，单调）；FreezeClock 之后不再加（同一秒里的多次变化）。
 //
 // 以下是近似、未在开发店上实测：取消后 FO 变 CLOSED、行的 currentQuantity 归 0；
 // currentTotalPriceSet = 下单总价 − 已退金额（下限 0）；displayFulfillmentStatus 只取 UNFULFILLED / PARTIALLY_FULFILLED / FULFILLED。
@@ -121,13 +121,24 @@ type refundLineRec struct {
 
 var simEpoch = time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC)
 
-// tick 推进全店时钟 1 秒并返回新时刻。
+// tick 推进全店时钟 1 秒并返回新时刻（FreezeClock 之后不推进）。
 func (s *Server) tick() time.Time {
 	if s.clock.IsZero() {
 		s.clock = simEpoch
 	}
-	s.clock = s.clock.Add(time.Second)
+	if !s.frozen {
+		s.clock = s.clock.Add(time.Second)
+	}
 	return s.clock
+}
+
+// FreezeClock 让全店时钟停住（再推进一次到新的一秒后停）：之后的变化 updatedAt 都相同。
+// 真实平台的 updatedAt 只到秒（开发店实测 "2026-10-02T09:37:29Z"），同一秒里的两次变化就是这样。
+func (s *Server) FreezeClock() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tick()
+	s.frozen = true
 }
 
 func numID(gid string) int64 {

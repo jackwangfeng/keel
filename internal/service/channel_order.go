@@ -5,7 +5,8 @@ package service
 //	orderChanged（EventOrderChanged 的处理器）
 //	  └─ Caps.OutOfOrderInbound：FetchOrder 回读（回调只是提示）；否则第四期从事件载荷规整（今天也回读）
 //	applyChannelOrder（一个事务，channel_orders 行 FOR UPDATE）
-//	  ├─ version ≤ 已存：只更新 last_payload（Review Focus 2：旧状态不覆盖新状态、不触发动作）
+//	  ├─ version < 已存（或同版本而状态反倒更靠前）：只更新 last_payload（Review Focus 2：旧状态不覆盖新状态、不触发动作）；
+//	  │    同版本照样往下走（Shopify updatedAt 只到秒；上次没做完的靠重放补上），往下的每一步都幂等
 //	  ├─ 待付款：只记状态（Review Focus 8：AUTHORIZED / PENDING 不接单，之后 orders/paid 带着新版本来）
 //	  ├─ 新单 / 已接单，且没有活着的 keel 订单：
 //	  │    AcceptRequired 且没配 auto_accept → 写 accept_deadline 等人（第六期的接单接口走 accept）
@@ -18,9 +19,17 @@ package service
 //
 // orders/create、orders/paid、orders/updated 几乎同时到、被不同 worker 并发处理，三个都回读到同一个版本。
 // channel_orders 的（binding, 外部单号）唯一：第一条 INSERT 成功并持有那一行，另两条的 INSERT 撞唯一键、
-// 等第一条提交后什么都不做，转去 SELECT … FOR UPDATE 拿到第一条提交的行 —— 版本已经不比它新，只留档。
-// 建草稿与写 order_no 在第一条的同一个事务里，所以「有 order_no」与「有草稿」同生同灭；
-// 之后再来的事件看到 order_no 就不再建。gid 由订单号定（dtm.OrderGID），同一张草稿重复提交是同一笔事务。
+// 等第一条提交后什么都不做，转去 SELECT … FOR UPDATE 拿到第一条提交的行 —— 同一个版本照样往下走，但看到了
+// order_no：草稿还在 0 就再提交一次 SAGA（gid 由订单号定，dtm.OrderGID；协调器对同一个 gid 的重复提交去重，
+// 在途、已终结都一样，分支只跑一次），已经成单就只对平台事实（退款按平台退款 ID 幂等）。
+// 建草稿与写 order_no 在第一条的同一个事务里，所以「有 order_no」与「有草稿」同生同灭；之后再来的事件看到 order_no 就不再建。
+//
+// # 同版本重放为什么不重复做事
+//
+// 同一个版本会被处理多次（并发的回调、SAGA 提交失败后的退避重试、Shopify 同一秒里的两次变化），每一步各自幂等：
+// 建单看 order_no（有活着的 keel 订单就不建；有异常不建，等后台「重试」）；SAGA 按 gid 去重；收尾分支只在 10 时
+// 推 20、发「新订单」通知；退款单按 channel_refund_id 唯一（整单取消 …:cancel）、先查后记，通知随退款单一起；
+// 发货后取消的异常按原因去重；平台发货只在 keel 还是 20 时推 30；收单这条路径本身不入队对平台的动作（接单 / 拒单在 SAGA 分支里，分支只跑一次）。
 //
 // # 渠道单的 keel 订单金额（不变量 5：不重新算价）
 //
@@ -65,7 +74,7 @@ const channelSagaWaitMS = 15_000
 
 var (
 	// ErrChannelOrderNotRetryable：重试一张没有异常、或已经有活着的 keel 订单的渠道单（409）。
-	ErrChannelOrderNotRetryable = errors.New("这张渠道单没有异常，或已经有 keel 订单，不用重试")
+	ErrChannelOrderNotRetryable = errors.New("这张渠道单没有异常、也没有卡住的 keel 订单，不用重试")
 )
 
 // channelOrderAmounts / channelOrderLine / channelOrderReceiver 是 channel_orders 三个 JSONB 列的形状（00320 的注释）。
@@ -214,8 +223,10 @@ func (s *ChannelService) applyChannelOrderOpts(ctx context.Context, b repository
 			return err
 		}
 		if !inserted {
-			// 人工接单（accept）回读到的多半就是已存的那个版本：同版本照样往下走，更旧的仍只留档。
-			if !opt.force && (o.Version < co.Version || (o.Version == co.Version && !opt.accept)) {
+			// 版本守卫：只有严格更旧的版本只留档。同版本照样往下走 —— 上次在这个版本上没做完的（SAGA 提交失败、
+			// 草稿还在 0）要靠重放补上；Shopify 的 updatedAt 只到秒，同一秒里的两次变化也是同一个版本。
+			// 往下走的每一步都幂等（见 sameVersionStale 与文件头）。
+			if !opt.force && (o.Version < co.Version || (o.Version == co.Version && sameVersionStale(co.Status, snap.Status))) {
 				return tx.TouchChannelOrderPayload(ctx, co.ID, snap.LastPayload)
 			}
 			// keel 这一侧走过的「已接单」「已拒单」不被平台的「新单」盖回去（Shopify 没有接单这一步，平台上永远是新单；
@@ -271,6 +282,28 @@ func (s *ChannelService) applyChannelOrderOpts(ctx context.Context, b repository
 		return nil
 	}
 	return s.submitChannelSaga(ctx, *saga)
+}
+
+// channelStatusRank 是平台状态的先后：待付款 → 新单 / 已接单 → 已发货 → 已完成；取消 / 拒单是终态。
+func channelStatusRank(st int16) int {
+	switch st {
+	case repository.ChannelOrderPendingPayment:
+		return 1
+	case repository.ChannelOrderNew, repository.ChannelOrderAccepted:
+		return 2
+	case repository.ChannelOrderShipped:
+		return 3
+	case repository.ChannelOrderCompleted:
+		return 4
+	default: // 已取消、已拒单
+		return 5
+	}
+}
+
+// sameVersionStale：同一个版本的两次回读，后到的那次状态反倒更靠前 —— 两个 worker 在同一秒的两次变化之间各回读了一次，
+// 先回读的后提交。它不比已存的新，只留档（否则同一秒里先取消、后处理到「新单」的快照会建出 keel 订单，Review Focus 2）。
+func sameVersionStale(stored, fetched int16) bool {
+	return channelStatusRank(fetched) < channelStatusRank(stored)
 }
 
 // applyPlatformFacts 把平台上的取消 / 退款 / 发货转成 keel 订单上的动作（applyChannelOrderOpts 的事务里，渠道单行已锁）。
@@ -604,7 +637,8 @@ func yuanText(cents int64) string {
 	return fmt.Sprintf("¥%d.%02d", cents/100, cents%100)
 }
 
-// RetryChannelOrder 是后台「重试」：只对有异常、且没有活着（非 90）的 keel 订单的渠道单。重新回读平台、强制重走接单
+// RetryChannelOrder 是后台「重试」：对有异常、且没有活着（非 90）的 keel 订单的渠道单，以及 keel 草稿卡在 0 /
+// 被孤儿清扫关掉的渠道单（判据见函数里）。重新回读平台、强制重走接单
 // （不受版本守卫；成单时清掉异常，又失败时换成新的原因）。
 func (s *ChannelService) RetryChannelOrder(ctx context.Context, id int64) error {
 	var b repository.ChannelBinding
@@ -618,7 +652,12 @@ func (s *ChannelService) RetryChannelOrder(ctx context.Context, id int64) error 
 		if err != nil {
 			return err
 		}
-		if co.Exception == nil || live != nil {
+		// 能重试的三种：有异常且没有活着的 keel 订单；keel 草稿卡在 0（SAGA 提交失败、回调任务也重试完了）—— 强制重走时
+		// 再提交同一个 gid；草稿被孤儿清扫关到了 90 而渠道单没有异常（渠道单还指着那张关掉的草稿）—— 重新建单。
+		stuck := live != nil && live.Status == orderStatusDraft
+		swept := live == nil && co.OrderNo != nil &&
+			(co.Status == repository.ChannelOrderNew || co.Status == repository.ChannelOrderAccepted)
+		if !(co.Exception != nil && live == nil) && !stuck && !swept {
 			return ErrChannelOrderNotRetryable
 		}
 		externalID = co.ExternalOrderID

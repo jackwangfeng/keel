@@ -89,6 +89,7 @@ type Server struct {
 	orders   map[string]*simOrder // 订单部分见 orders.go
 	orderSeq []string
 	clock    time.Time
+	frozen   bool // FreezeClock：时钟不再走，之后的变化共用同一个 updatedAt
 	fail     map[string][]bool // operationName → 排着的 503（值：是否先落地）
 }
 

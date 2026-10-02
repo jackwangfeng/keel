@@ -30,6 +30,7 @@ type channelRig struct {
 	n     *inventory.StockNotifier
 	// beforeFinish 非空时，接单 SAGA 的收尾分支在做事之前先调它（测试用它制造「SAGA 在途时平台取消」）。
 	beforeFinish *atomic.Pointer[func()]
+	tc           dtm.Coordinator // 真协调器（测试临时换成会失败的之后用它换回来）
 }
 
 func newChannelRig(t *testing.T) channelRig { t.Helper(); return newChannelRigWith(t) }
@@ -103,7 +104,7 @@ func newChannelRigOpts(t *testing.T, split bool, extra ...channel.Adapter) chann
 	t.Cleanup(tc.Close)
 	n.Attach(tc)
 	svc.Attach(tc)
-	return channelRig{svc: svc, fake: fake, local: local, n: n, beforeFinish: beforeFinish}
+	return channelRig{svc: svc, fake: fake, local: local, n: n, beforeFinish: beforeFinish, tc: tc}
 }
 
 // waitPushed 反复跑 worker，直到假渠道上 (store, sku) 的数是 want。
