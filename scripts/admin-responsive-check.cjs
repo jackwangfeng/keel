@@ -60,6 +60,7 @@ const PAGES = [
     { path: "/orders" },
     { path: "/refunds" },
     { path: "/payment-returns" },
+    { path: "/channels", detail: /\/admin\/channels\/\d+$/ },
     { path: "/coupons" },
     { path: "/promotions" },
     { path: "/freight-templates" },

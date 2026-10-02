@@ -18,6 +18,13 @@ const section: AdminSection = {
             component: () => import("../../views/channels/ChannelListView.vue"),
             meta: { title: "渠道", menu: true },
         },
+        {
+            path: "channels/:bindingId(\\d+)",
+            name: "channel-detail",
+            component: () => import("../../views/channels/ChannelDetailView.vue"),
+            meta: { title: "渠道账号" },
+            props: true,
+        },
     ],
 };
 

@@ -125,6 +125,9 @@ export function sectionVisible(key: string): boolean {
             return can.seeStaffSection();
         case "shop-settings":
             return can.manageShopSettings();
+        case "channels":
+            // 读渠道账号要全店范围（服务端 requireMerchantWide），写要管理员。
+            return merchantWide();
         default:
             return true;
     }

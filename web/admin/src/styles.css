@@ -101,6 +101,12 @@ body {
         max-width: 94vw;
         margin-top: 4vh !important;
     }
+    /* :fullscreen="mobile" 的弹窗（渠道页）：真正铺满，不按上面的 94vw */
+    .el-dialog.is-fullscreen {
+        width: 100% !important;
+        max-width: 100%;
+        margin-top: 0 !important;
+    }
     .el-dialog__body {
         padding: 12px 14px !important;
     }
