@@ -26,6 +26,8 @@ import (
 //	coupon            执行后 7 天：领取数、使用数、使用率。使用率 ≥ 20% → positive；一张都没人用 → negative；否则 neutral。
 //	product_copy      执行后 7 天：该商品件数 vs 执行前 7 天。≥ 1.2 倍 → positive；< 0.8 倍 → negative；否则 neutral。
 //	refund_decision   不量效果（没有「效果」可言），执行时直接写 {verdict: neutral}。
+//	channel_stock_rule 执行前 7 天 vs 执行后 7 天，逐格（binding × 门店 × SKU）比挂零 / 缺货拒单 / 卖出 / 净收入，
+//	                  判据见 agent_proposal_channel.go 的 channelStockRuleVerdict。
 
 const (
 	ProposalOutcomeInterval = time.Hour
@@ -54,6 +56,8 @@ type ProposalOutcome struct {
 	WindowStart     string   `json:"window_start,omitempty"`
 	WindowEnd       string   `json:"window_end,omitempty"`
 	ComparisonStart string   `json:"comparison_start,omitempty"`
+	// Cells 是 channel_stock_rule 的逐格前后对比。
+	Cells []ChannelOutcomeCell `json:"cells,omitempty"`
 }
 
 // outcomePlan：执行成功时决定何时量效果；不量效果的种类直接给一份结果。
@@ -105,7 +109,7 @@ func verdictRatio(after, before int64, up, down float64) string {
 // （复盘在结束后 3 天，窗口本身在结束时就关了）。量不出效果的种类返回零值（不等）。
 func outcomeWindowClose(d repository.DueProposalOutcome) time.Time {
 	switch d.Kind {
-	case ProposalKindInventoryAdjust, ProposalKindProductCopy:
+	case ProposalKindInventoryAdjust, ProposalKindProductCopy, ProposalKindChannelStockRule:
 		return d.ExecutedAt.Add(outcomeWindow)
 	case ProposalKindCoupon:
 		var pl CouponPayload
@@ -242,6 +246,8 @@ func computeOutcome(ctx context.Context, tx repository.Tx, stockout map[int64]in
 		o.Explanation = map[string]string{verdictPositive: "改文案后 7 天件数是之前 7 天的 1.2 倍及以上",
 			verdictNegative: "改文案后 7 天件数不到之前的八成", verdictNeutral: "改文案前后件数相当"}[o.Verdict]
 		return o, nil
+	case ProposalKindChannelStockRule:
+		return channelStockRuleOutcome(ctx, tx, d)
 	}
 	return ProposalOutcome{Verdict: verdictNeutral, Explanation: "这种提案不量效果"}, nil
 }

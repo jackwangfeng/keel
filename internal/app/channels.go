@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/keel/keel/internal/channel"
+	"github.com/keel/keel/internal/channel/demotakeout"
 	"github.com/keel/keel/internal/channel/shopify"
 	"github.com/keel/keel/internal/dtm"
 	"github.com/keel/keel/internal/inventory"
@@ -22,23 +23,36 @@ import (
 // 「不配渠道零开销」。拆分部署时 core 与库存进程都要配同一个值（库存进程只认它来决定发不发 stock.changed）。
 const EnvChannels = "KEEL_CHANNELS"
 
+// EnvChannelDemo 打开演示站用的「演示外卖（模拟）」渠道（channel/demotakeout），默认关：关着时注册表里没有它，
+// 后台建不了这种 binding、/admin/channel-kinds 也不列它。只在 KEEL_CHANNELS 开着时有意义。
+const EnvChannelDemo = "KEEL_CHANNEL_DEMO"
+
 // channelsFromEnv 读开关：空 / 0 / false / off 为关，1 / true / on 为开，别的值拒绝启动（拼错不该静默成「关」）。
-func channelsFromEnv() (bool, error) {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv(EnvChannels))) {
+func channelsFromEnv() (bool, error) { return onOffFromEnv(EnvChannels) }
+
+func onOffFromEnv(name string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
 	case "", "0", "false", "off":
 		return false, nil
 	case "1", "true", "on":
 		return true, nil
 	default:
-		return false, fmt.Errorf("%s=%q 认不出来：写 on 或 off", EnvChannels, os.Getenv(EnvChannels))
+		return false, fmt.Errorf("%s=%q 认不出来：写 on 或 off", name, os.Getenv(name))
 	}
 }
 
-// channelRegistry 是这个进程编进来的渠道适配器。
-func channelRegistry() *channel.Registry {
+// channelRegistry 是这个进程编进来的渠道适配器。演示外卖只在 KEEL_CHANNEL_DEMO=on 时登记；开关拼错拒绝启动。
+func channelRegistry() (*channel.Registry, error) {
+	demo, err := onOffFromEnv(EnvChannelDemo)
+	if err != nil {
+		return nil, err
+	}
 	r := channel.NewRegistry()
 	r.Register(shopify.New(shopify.Options{}))
-	return r
+	if demo {
+		r.Register(demotakeout.New())
+	}
+	return r, nil
 }
 
 // channelStockAction 是 stock.changed 的投递目标：嵌入式协调器投到 core 的进程内分支，独立协调器发到主题。
@@ -66,7 +80,11 @@ func newChannelService(s SplitConfig, pool *pgxpool.Pool, inv inventory.Service,
 			return nil, err
 		}
 	}
-	return service.NewChannelService(repository.New(pool), inv, channelRegistry(), res, self), nil
+	reg, err := channelRegistry()
+	if err != nil {
+		return nil, fmt.Errorf("拒绝启动: %w", err)
+	}
+	return service.NewChannelService(repository.New(pool), inv, reg, res, self), nil
 }
 
 // ChannelBranches 是渠道层要注册的分支：core 的开关渠道回查、stock.changed 接收、渠道单接单 SAGA；库存在本进程（local 非 nil）时

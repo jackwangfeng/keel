@@ -30,6 +30,7 @@ export const KIND_LABEL: Record<AgentProposalKind, string> = {
     coupon: "发券",
     product_copy: "改文案",
     refund_decision: "售后审核",
+    channel_stock_rule: "调渠道分配",
 };
 
 /** 执行后复盘的结论（outcome.verdict，00122）。 */
@@ -205,6 +206,91 @@ export function productCopyPayload(payload: Rec): ProductCopyDiffView {
     };
 }
 
+// --------------------------------------------------------------- payload：调渠道分配
+
+export interface ChannelStockRuleChangeView {
+    /** 「门店级」或「SKU #id」。 */
+    cellText: string;
+    prevText: string;
+    nextText: string;
+}
+
+export interface ChannelStockPreviewView {
+    skuText: string;
+    availableText: string;
+    beforeText: string;
+    afterText: string;
+}
+
+export interface ChannelStockRuleView {
+    bindingText: string;
+    storeText: string;
+    changes: ChannelStockRuleChangeView[];
+    /** 提案时的试算：这些 SKU 的对外可售数从几变成几（至多 40 格，§4.3）。 */
+    preview: ChannelStockPreviewView[];
+}
+
+/** ratio_bp（万分比，10000 = 100%）→ "80%" / "80.5%"。 */
+function bpPercent(bp: number): string {
+    return `${parseFloat((bp / 100).toFixed(2))}%`;
+}
+
+function capQtyText(capQty: number | undefined): string {
+    return capQty === undefined ? "不封顶" : `封顶 ${capQty}`;
+}
+
+function channelRuleText(ratioBp: number | undefined, safetyQty: number | undefined, capQty: number | undefined): string {
+    if (ratioBp === undefined || safetyQty === undefined) return DASH;
+    return `比例 ${bpPercent(ratioBp)} · 安全库存 ${safetyQty} 件 · ${capQtyText(capQty)}`;
+}
+
+/**
+ * `channel_stock_rule` 执行参数：{binding_id, binding_name, store_id, store_name,
+ * changes: [{sku_id?（空 = 门店级）, ratio_bp, safety_qty, cap_qty?, prev: {ratio_bp, safety_qty, cap_qty?, level}}],
+ * preview: [{sku_id, available, before_qty, after_qty}]}（spec §4.2–4.3）。
+ *
+ * payload 里商品只有 `sku_id`，没有标题（与 `flash_price` 的 items 一致，这里同样直接显示
+ * 「SKU #id」，不额外拉取商品目录）。
+ */
+export function channelStockRulePayload(payload: Rec): ChannelStockRuleView {
+    const bindingName = str(payload["binding_name"]);
+    const bindingId = num(payload["binding_id"]);
+    const storeName = str(payload["store_name"]);
+    const storeId = num(payload["store_id"]);
+
+    const changes = arr(payload["changes"]).map((it) => {
+        const r = rec(it);
+        const skuId = num(r["sku_id"]);
+        const prev = rec(r["prev"]);
+        return {
+            cellText: skuId === undefined ? "门店级" : `SKU #${skuId}`,
+            prevText: channelRuleText(num(prev["ratio_bp"]), num(prev["safety_qty"]), num(prev["cap_qty"])),
+            nextText: channelRuleText(num(r["ratio_bp"]), num(r["safety_qty"]), num(r["cap_qty"])),
+        };
+    });
+
+    const preview = arr(payload["preview"]).map((it) => {
+        const r = rec(it);
+        const skuId = num(r["sku_id"]);
+        const available = num(r["available"]);
+        const beforeQty = num(r["before_qty"]);
+        const afterQty = num(r["after_qty"]);
+        return {
+            skuText: skuId === undefined ? DASH : `SKU #${skuId}`,
+            availableText: available === undefined ? DASH : `${available} 件`,
+            beforeText: beforeQty === undefined ? DASH : `${beforeQty} 件`,
+            afterText: afterQty === undefined ? DASH : `${afterQty} 件`,
+        };
+    });
+
+    return {
+        bindingText: bindingName ?? (bindingId === undefined ? DASH : `渠道 #${bindingId}`),
+        storeText: storeName ?? (storeId === undefined ? DASH : `门店 #${storeId}`),
+        changes,
+        preview,
+    };
+}
+
 // --------------------------------------------------------------- payload：售后审核
 
 export interface RefundDecisionView {
@@ -270,6 +356,13 @@ export function describeResult(kind: AgentProposalKind, result: Rec | undefined)
     const couponTemplateId = num(detail["coupon_template_id"]);
     if (promotionId !== undefined) lines.push({ label: "活动", value: `#${promotionId}` });
     if (couponTemplateId !== undefined) lines.push({ label: "券模板", value: `#${couponTemplateId}` });
+    if (kind === "channel_stock_rule") {
+        const applied = num(detail["applied"]);
+        const already = num(detail["already"]);
+        if (applied !== undefined) {
+            lines.push({ label: "已生效", value: `${applied} 格${already !== undefined && already > 0 ? `（另有 ${already} 格本来就是目标值）` : ""}` });
+        }
+    }
     const beforeTitle = str(detail["before_title"]);
     const afterTitle = str(detail["after_title"]);
     if (beforeTitle !== undefined || afterTitle !== undefined) {
@@ -295,10 +388,48 @@ export interface OutcomeMetricView {
     value: string;
 }
 
+/** `channel_stock_rule` 复盘的一格（spec §4.5）：执行前后各 7 天，挂零小时（分配造成的，不含 keel 自己断货）、
+ * 缺货拒单、卖出、渠道净收入。`excludedReason` 非空 = 这一格窗口里 keel 自己断货超过 2 天，不计进判据。 */
+export interface ChannelOutcomeCellView {
+    skuText: string;
+    directionText: string;
+    heldZeroText: string;
+    rejectsText: string;
+    soldText: string;
+    netText: string;
+    excludedReason?: string;
+}
+
 export interface OutcomeView {
     verdict?: AgentOutcomeVerdict;
     explanation?: string;
     metrics: OutcomeMetricView[];
+    /** 只有 `channel_stock_rule` 才有：逐格的前后对比表。 */
+    cells: ChannelOutcomeCellView[];
+}
+
+const DIRECTION_LABEL: Record<string, string> = { up: "上调", down: "下调", same: "不变" };
+
+function channelOutcomeCells(outcome: Rec): ChannelOutcomeCellView[] {
+    return arr(outcome["cells"]).map((it) => {
+        const c = rec(it);
+        const skuId = num(c["sku_id"]);
+        const direction = str(c["direction"]);
+        const before = rec(c["before"]);
+        const after = rec(c["after"]);
+        const hours = (v: number | undefined) => (v === undefined ? DASH : `${v} 小时`);
+        const count = (v: number | undefined) => (v === undefined ? DASH : `${v}`);
+        const net = (v: number | undefined) => (v === undefined ? DASH : yuanText(v));
+        return {
+            skuText: skuId === undefined ? DASH : `SKU #${skuId}`,
+            directionText: direction !== undefined && direction in DIRECTION_LABEL ? DIRECTION_LABEL[direction] : DASH,
+            heldZeroText: `${hours(num(before["held_zero_hours"]))} → ${hours(num(after["held_zero_hours"]))}`,
+            rejectsText: `${count(num(before["stockout_rejects"]))} → ${count(num(after["stockout_rejects"]))}`,
+            soldText: `${count(num(before["sold"]))} → ${count(num(after["sold"]))}`,
+            netText: `${net(num(before["net_cents"]))} → ${net(num(after["net_cents"]))}`,
+            excludedReason: str(c["excluded_reason"]),
+        };
+    });
 }
 
 const OUTCOME_METRIC_FIELDS: { key: string; label: string; format?: (v: number) => string }[] = [
@@ -314,21 +445,25 @@ const OUTCOME_METRIC_FIELDS: { key: string; label: string; format?: (v: number) 
     { key: "use_rate", label: "核销率", format: (v) => `${(v * 100).toFixed(1)}%` },
 ];
 
-/** `AgentProposal.outcome`：{verdict, explanation, 各种类的指标…}（00122，字段表见 docs/AI经营-M10M11设计.md §4）。 */
-export function describeOutcome(outcome: Rec | undefined): OutcomeView {
-    if (outcome === undefined) return { metrics: [] };
+/**
+ * `AgentProposal.outcome`：{verdict, explanation, 各种类的指标…}（00122，字段表见 docs/AI经营-M10M11设计.md §4）；
+ * `channel_stock_rule`（spec §4.5）另有 `cells`，逐格前后对比，不走通用的扁平指标列表。
+ */
+export function describeOutcome(kind: AgentProposalKind, outcome: Rec | undefined): OutcomeView {
+    if (outcome === undefined) return { metrics: [], cells: [] };
     const verdict = str(outcome["verdict"]);
+    const verdictOut = verdict === "positive" || verdict === "neutral" || verdict === "negative" ? verdict : undefined;
+    const explanation = str(outcome["explanation"]);
+    if (kind === "channel_stock_rule") {
+        return { verdict: verdictOut, explanation, metrics: [], cells: channelOutcomeCells(outcome) };
+    }
     const metrics: OutcomeMetricView[] = [];
     for (const f of OUTCOME_METRIC_FIELDS) {
         const v = num(outcome[f.key]);
         if (v === undefined) continue;
         metrics.push({ label: f.label, value: f.format ? f.format(v) : String(v) });
     }
-    return {
-        verdict: verdict === "positive" || verdict === "neutral" || verdict === "negative" ? verdict : undefined,
-        explanation: str(outcome["explanation"]),
-        metrics,
-    };
+    return { verdict: verdictOut, explanation, metrics, cells: [] };
 }
 
 // --------------------------------------------------------------- 成绩单（安全除法）

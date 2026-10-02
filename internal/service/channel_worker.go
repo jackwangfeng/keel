@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/keel/keel/internal/channel"
@@ -66,6 +67,39 @@ func (s *ChannelService) housekeep(ctx context.Context) {
 		}
 	}
 	s.SweepChannelDeadlines(ctx)
+	s.purgeZeroSpans(ctx)
+}
+
+// 挂零时段保留 180 天；清理一小时一轮（housekeep 每分钟一次，没必要每分钟逐家扫）。
+const (
+	channelZeroSpanRetention = 180 * 24 * time.Hour
+	channelZeroSpanPurgeGap  = time.Hour
+)
+
+var lastZeroSpanPurge atomic.Int64 // 上一轮清理的 unix 秒；进程内共享，多实例各自一小时一轮无害
+
+// purgeZeroSpans 逐家删 180 天前结束的挂零时段，每家一轮至多 channelPurge 条。没接渠道的商家是一条空索引区间的 DELETE。
+func (s *ChannelService) purgeZeroSpans(ctx context.Context) {
+	now := time.Now()
+	last := lastZeroSpanPurge.Load()
+	if now.Unix()-last < int64(channelZeroSpanPurgeGap/time.Second) || !lastZeroSpanPurge.CompareAndSwap(last, now.Unix()) {
+		return
+	}
+	merchants, err := s.repo.ActiveMerchants(ctx)
+	if err != nil {
+		s.log.ErrorContext(ctx, "清理挂零时段读不到商家列表", "err", err)
+		return
+	}
+	before := now.Add(-channelZeroSpanRetention)
+	for _, m := range merchants {
+		tctx := tenant.NewContext(ctx, m)
+		if err := s.repo.WithTenant(tctx, func(tx repository.Tx) error {
+			_, e := tx.PurgeChannelZeroSpans(tctx, before, channelPurge)
+			return e
+		}); err != nil {
+			s.log.ErrorContext(ctx, "清理过期的挂零时段失败", "merchant_id", m, "err", err)
+		}
+	}
 }
 
 // SweepChannelDeadlines 是接单与申请的截止扫描（channel_order_request.go 文件头），housekeep 每分钟一次；导出给测试驱动。
@@ -320,9 +354,16 @@ func (s *ChannelService) pushStore(ctx context.Context, outlet channel.Outlet, a
 		t, j := pending[i], jobBySKU[pending[i].skuID]
 		if r.Err == nil {
 			if werr := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
-				_, e := tx.RecordChannelListing(ctx, repository.ChannelListing{BindingID: ab.ID, StoreID: storeID,
-					SKUID: t.skuID, PublishedQty: t.qty, PublishedCents: t.publishedCents()})
-				return e
+				if _, e := tx.RecordChannelListing(ctx, repository.ChannelListing{BindingID: ab.ID, StoreID: storeID,
+					SKUID: t.skuID, PublishedQty: t.qty, PublishedCents: t.publishedCents()}); e != nil {
+					return e
+				}
+				// 挂零时段与 channel_listings 同一事务：上面的 upsert 锁着这一格，两个 worker 先后推 0 和 5 也只会一开一关。
+				var prevQty *int32
+				if t.prev != nil {
+					prevQty = &t.prev.PublishedQty
+				}
+				return tx.RecordChannelListingZero(ctx, ab.ID, storeID, t.skuID, prevQty, t.qty, t.held, time.Now())
 			}); werr != nil {
 				// 推上去了但没记下：重推一次同样的值（幂等键相同），无害。
 				s.retry(ctx, j, werr)

@@ -41,6 +41,7 @@ type AgentAutoPolicy struct {
 	UpdatedBy        *int64
 	CreatedAt        pgtype.Timestamptz
 	UpdatedAt        pgtype.Timestamptz
+	MaxRatioStepBp   int32
 }
 
 // AI 员工写的经营简报（00092，AI 经营 M9）。
@@ -127,6 +128,49 @@ type AgentRoCategory struct {
 	Status   int16
 }
 
+type AgentRoChannelBinding struct {
+	ID      int64
+	Channel string
+	Name    string
+	Status  int16
+	Roles   int16
+}
+
+type AgentRoChannelListingZeroSpan struct {
+	ID        int64
+	BindingID int64
+	StoreID   int64
+	SkuID     int64
+	Held      bool
+	StartedAt pgtype.Timestamptz
+	EndedAt   pgtype.Timestamptz
+}
+
+type AgentRoChannelOrder struct {
+	ID              int64
+	BindingID       int64
+	StoreID         *int64
+	OrderNo         *string
+	Status          int16
+	HasException    interface{}
+	GoodsCents      interface{}
+	FreightCents    interface{}
+	CommissionCents interface{}
+	BuyerPaidCents  interface{}
+	CreatedAt       pgtype.Timestamptz
+}
+
+type AgentRoChannelStockRule struct {
+	ID        int64
+	BindingID int64
+	StoreID   *int64
+	SkuID     *int64
+	RatioBp   int32
+	SafetyQty int32
+	CapQty    *int32
+	UpdatedAt pgtype.Timestamptz
+}
+
 type AgentRoCouponTemplate struct {
 	ID               int64
 	Name             string
@@ -150,7 +194,7 @@ type AgentRoCouponTemplate struct {
 type AgentRoOrder struct {
 	ID                     int64
 	OrderNo                string
-	UserID                 int64
+	UserID                 *int64
 	Status                 int16
 	RefundStatus           int16
 	StoreID                int64
@@ -168,6 +212,8 @@ type AgentRoOrder struct {
 	PaidAt                 pgtype.Timestamptz
 	ShippedAt              pgtype.Timestamptz
 	FinishedAt             pgtype.Timestamptz
+	Source                 int16
+	ChannelOrderID         *int64
 }
 
 type AgentRoOrderItem struct {
@@ -428,6 +474,17 @@ type ChannelListing struct {
 	Version        int64
 	PushedAt       pgtype.Timestamptz
 	LastError      *string
+}
+
+type ChannelListingZeroSpan struct {
+	ID         int64
+	MerchantID int64
+	BindingID  int64
+	StoreID    int64
+	SkuID      int64
+	Held       bool
+	StartedAt  pgtype.Timestamptz
+	EndedAt    pgtype.Timestamptz
 }
 
 type ChannelMerchant struct {

@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 	"log/slog"
 	"os"
 	"reflect"
@@ -146,6 +147,9 @@ func (s *ChannelService) CreateBinding(ctx context.Context, in ChannelBindingCre
 	if err := s.checkKind(in.Channel, in.Roles); err != nil {
 		return repository.ChannelBinding{}, err
 	}
+	if err := checkBindingConfig(in.Config); err != nil {
+		return repository.ChannelBinding{}, err
+	}
 	status := in.Status
 	if status == 0 {
 		status = repository.ChannelBindingDisabled
@@ -173,6 +177,9 @@ type ChannelBindingUpdate struct {
 
 // UpdateBinding 改 binding。「启用中的销售渠道」状态翻转时登记开关渠道消息；变成启用时给它映射的每家门店排一次整店重算。
 func (s *ChannelService) UpdateBinding(ctx context.Context, id int64, p ChannelBindingUpdate) (repository.ChannelBinding, error) {
+	if err := checkBindingConfig(p.Config); err != nil {
+		return repository.ChannelBinding{}, err
+	}
 	var b repository.ChannelBinding
 	err := s.withMerchantSync(ctx, func(tx repository.Tx) (bool, error) {
 		before, err := tx.GetChannelBinding(ctx, id)
@@ -195,6 +202,12 @@ func (s *ChannelService) UpdateBinding(ctx context.Context, id int64, p ChannelB
 			return false, err
 		}
 		flipped := before.IsActiveOutlet() != b.IsActiveOutlet()
+		if before.IsActiveOutlet() && !b.IsActiveOutlet() {
+			// 不再是启用中的销售渠道：它的格子不再推、不再算，还挂着的挂零时段关在现在。
+			if err := tx.CloseChannelZeroSpans(ctx, b.ID, nil, nil, time.Now()); err != nil {
+				return false, err
+			}
+		}
 		// 变成启用、或启用中改了 config（价格源门店之类）：整店重算一遍。
 		if b.IsActiveOutlet() && (flipped || (p.Config != nil && !jsonEqual(before.Config, b.Config))) {
 			if err := s.enqueueRecomputeBinding(ctx, tx, b.ID); err != nil {
@@ -371,6 +384,10 @@ func (s *ChannelService) ListStoreLinks(ctx context.Context, bindingID int64) (o
 
 func (s *ChannelService) UpsertStockRule(ctx context.Context, r repository.ChannelStockRule) (out repository.ChannelStockRule, err error) {
 	err = s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+		// 与执行 AI 的调分配提案串行（execChannelStockRule）：它核对 prev 之后写，不能夹在中间被这里覆盖或覆盖这里。
+		if err := tx.LockChannelBindingRules(ctx, r.BindingID); err != nil {
+			return err
+		}
 		if out, err = tx.UpsertChannelStockRule(ctx, r); err != nil {
 			return err
 		}
@@ -381,6 +398,9 @@ func (s *ChannelService) UpsertStockRule(ctx context.Context, r repository.Chann
 
 func (s *ChannelService) DeleteStockRule(ctx context.Context, bindingID, id int64) error {
 	return s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+		if err := tx.LockChannelBindingRules(ctx, bindingID); err != nil {
+			return err
+		}
 		if err := tx.DeleteChannelStockRule(ctx, bindingID, id); err != nil {
 			return err
 		}

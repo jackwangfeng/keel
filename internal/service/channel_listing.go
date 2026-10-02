@@ -106,12 +106,23 @@ type listingTarget struct {
 	carriesPrice bool
 	external     repository.ChannelItemLink
 	prev         *repository.ChannelListing
+	// held：keel 这格可卖且有货（available > 0）。qty 为 0 时它区分挂零时段的两种（00330）：分配规则算 0 / keel 自己没货。
+	held bool
+	// zeroHeld：上次推的就是 0 时，那段还挂着的挂零时段的 held；nil = 没有挂着的段或没去查。
+	zeroHeld *bool
+	// zeroSpanMissing：上次成功推的是 0、这次还是 0，却没有挂着的段（上线前就是 0 的格子、段被清理过）。
+	// 再推一次同样的 0，让推送成功的事务开段 —— 挂零时段只在那个事务里写（00330 文件头）。
+	zeroSpanMissing bool
 }
 
 // unchanged：上次推出去的就是这个值，而且那一次是成功的。上次失败（last_error 非空，比如 CAS 冲突时记下的是
 // 渠道上的数、价格并没有推上去）一律当作要推。不出价格的门店只比可售数：它的价格变了不用推任何东西。
 func (t listingTarget) unchanged() bool {
 	if t.prev == nil || t.prev.LastError != nil || t.prev.PublishedQty != t.qty {
+		return false
+	}
+	// 一直是 0 但 held 变了（keel 补了货但规则仍算 0，或反过来）：再推一次同样的 0，让推送成功的事务关旧段开新段。
+	if t.qty == 0 && (t.zeroSpanMissing || (t.zeroHeld != nil && *t.zeroHeld != t.held)) {
 		return false
 	}
 	return !t.carriesPrice || t.prev.PublishedCents == t.price
@@ -143,14 +154,35 @@ type channelBindingConfig struct {
 	// RequestPolicy 是平台申请的处理策略：manual（缺省，等人）/ auto_agree_unshipped（未发货的取消自动同意）。
 	// 接单提醒提前几分钟（accept_remind_minutes，缺省 3）只在 SQL 里读（db/queries/channels.sql 的 DueAcceptReminders）。
 	RequestPolicy string `json:"request_policy"`
+	// CommissionBP 是渠道佣金率（万分比，缺省 0），只用于算单件净收入（channel_allocation.go）。
+	CommissionBP int32 `json:"commission_bp"`
 }
 
 func parseBindingConfig(raw json.RawMessage) channelBindingConfig {
 	var c channelBindingConfig
 	if len(raw) > 0 {
-		_ = json.Unmarshal(raw, &c) // 配错的字段按没配处理；后台写 config 时只校验是 JSON 对象
+		_ = json.Unmarshal(raw, &c) // 配错的字段按没配处理；后台写 config 时只校验是 JSON 对象与 checkBindingConfig 那几项
 	}
+	c.CommissionBP = min(max(c.CommissionBP, 0), 10000) // 校验之前写进去的越界值按边界读
 	return c
+}
+
+// checkBindingConfig 是后台写 binding config 时渠道层自己认的字段的校验（其余字段归适配器，不管）。
+func checkBindingConfig(raw json.RawMessage) error {
+	if len(raw) == 0 {
+		return nil
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return fmt.Errorf("%w：config 要是 JSON 对象", ErrChannelBadRequest)
+	}
+	if v, ok := m["commission_bp"]; ok {
+		var bp int32
+		if err := json.Unmarshal(v, &bp); err != nil || bp < 0 || bp > 10000 {
+			return fmt.Errorf("%w：commission_bp 是渠道佣金率（万分比），取 0–10000 的整数", ErrChannelBadRequest)
+		}
+	}
+	return nil
 }
 
 // carriesPrice 判断 storeID 是不是 binding b 的价格出处（见 listingTarget）。
@@ -263,17 +295,53 @@ func (s *ChannelService) computeTargets(ctx context.Context, storeID int64, skuI
 					continue
 				}
 				var qty int32
+				held := false
 				if offer.Sellable(catalogOwned) {
 					qty = channel.PublishedQty(levels[sku].Available, channel.ResolveStockRule(stockRules, storeID, sku))
+					held = levels[sku].Available > 0
 				}
 				price := channel.PublishedPrice(offer.PriceCents, channel.ResolvePriceRule(priceRules, sku))
 				out = append(out, listingTarget{binding: b, skuID: sku, qty: qty, price: price, carriesPrice: carries,
-					external: link, prev: prevBy[sku]})
+					external: link, prev: prevBy[sku], held: held})
+			}
+			if err := loadZeroHeld(ctx, tx, b.ID, storeID, out); err != nil {
+				return err
 			}
 		}
 		return nil
 	})
 	return out, err
+}
+
+// loadZeroHeld 给「上次成功推的是 0、这次还是 0」的格子（只看 binding 这一组）补上还挂着的挂零时段的 held；
+// 没有挂着的段的标 zeroSpanMissing（要补推一次开段）。只有这种格子才需要查：别的格子值变了本来就要推。
+// 没有这种格子时不发查询。
+func loadZeroHeld(ctx context.Context, tx repository.Tx, bindingID, storeID int64, ts []listingTarget) error {
+	var skus []int64
+	for _, t := range ts {
+		if t.binding.ID == bindingID && t.qty == 0 && t.prev != nil && t.prev.LastError == nil && t.prev.PublishedQty == 0 {
+			skus = append(skus, t.skuID)
+		}
+	}
+	if len(skus) == 0 {
+		return nil
+	}
+	open, err := tx.OpenChannelZeroHeld(ctx, bindingID, storeID, skus)
+	if err != nil {
+		return err
+	}
+	for i := range ts {
+		t := &ts[i]
+		if t.binding.ID != bindingID || t.qty != 0 || t.prev == nil || t.prev.LastError != nil || t.prev.PublishedQty != 0 {
+			continue
+		}
+		if h, ok := open[t.skuID]; ok {
+			t.zeroHeld = &h
+		} else {
+			t.zeroSpanMissing = true
+		}
+	}
+	return nil
 }
 
 // RecomputeListings 重算一家门店一批 SKU，把和上次推送不同的格子入队。onlyBinding 非 0 时只算那一个 binding。

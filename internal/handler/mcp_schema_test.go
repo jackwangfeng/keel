@@ -76,13 +76,15 @@ func TestMCPEveryToolReturnsItsDeclaredShape(t *testing.T) {
 		{"ack_events", map[string]any{"up_to_id": evID}},
 		{"slow_movers", map[string]any{}},
 		{"promotion_review", map[string]any{"coupon_template_id": tpl.Id}},
+		{"channel_allocation_review", map[string]any{"store_id": cs.NorthStore}},
 	}
 	tools, err := sess.ListTools(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// propose_refund_decision 要一张待审核的售后单，另在 agent_proposal_kinds_test.go 里调；这里只算数。
-	if len(tools.Tools) != len(calls)+1 {
+	// propose_refund_decision 要一张待审核的售后单，另在 agent_proposal_kinds_test.go 里调；propose_channel_stock_rule
+	// 要渠道层开着（这个引擎没开，调了是 409），另在 agent_channel_proposal_test.go 里调。这里只算数。
+	if len(tools.Tools) != len(calls)+2 {
 		t.Fatalf("工具清单有 %d 个，这条测试调了 %d 个 —— 新工具要加进来", len(tools.Tools), len(calls))
 	}
 	for _, c := range calls {

@@ -66,7 +66,9 @@ type MCPDeps struct {
 	// 注册在 mcp_tools_compute.go。
 	SlowMovers      *service.SlowMoversService
 	PromotionReview *service.PromotionReviewService
-	Log             *slog.Logger
+	// Channels 是渠道层（channel_allocation_review）；KEEL_CHANNELS 关着时为 nil，工具返回空结果与说明。
+	Channels *service.ChannelService
+	Log      *slog.Logger
 	// Version 进 MCP 的 serverInfo，agent 能看到连的是哪个版本。
 	Version string
 	// ShopLocation 取本店时区。非 nil 时工具输出里的时刻一律改写成店铺当地时间（带偏移的 RFC 3339）：

@@ -11,6 +11,11 @@ RETURNING id, channel, external_account, name, roles, status, config, (secrets <
 SELECT id, channel, external_account, name, roles, status, config, (secrets <> '{}'::jsonb)::boolean AS has_secrets, created_at, updated_at
   FROM channel_bindings WHERE id = @id::bigint;
 
+-- name: LockChannelBindingRules :one
+-- 库存规则按 binding 串行（后台改 / 删规则与执行 AI 的调分配提案）：拿 binding 这一行的 FOR NO KEY UPDATE，
+-- 拿到之后再读规则。NO KEY：不挡子表（规则、挂零时段……）插入时外键检查要的 KEY SHARE。
+SELECT id FROM channel_bindings WHERE id = @id::bigint FOR NO KEY UPDATE;
+
 -- name: ListChannelBindings :many
 SELECT id, channel, external_account, name, roles, status, config, (secrets <> '{}'::jsonb)::boolean AS has_secrets, created_at, updated_at
   FROM channel_bindings ORDER BY id;
@@ -109,6 +114,108 @@ RETURNING version;
 -- name: SetChannelListingError :exec
 UPDATE channel_listings SET last_error = @last_error::text
  WHERE binding_id = @binding_id::bigint AND store_id = @store_id::bigint AND sku_id = @sku_id::bigint;
+
+-- name: CloseChannelZeroSpan :exec
+-- 关掉这个格子还挂着的那段挂零时段。only_held_not 非空时只关 held 与它不同的那段（挂零但 held 变了：关旧开新）。
+-- GREATEST：时钟回拨也不违反 ended_at >= started_at。
+UPDATE channel_listing_zero_spans SET ended_at = GREATEST(@at::timestamptz, started_at)
+ WHERE binding_id = @binding_id::bigint AND store_id = @store_id::bigint AND sku_id = @sku_id::bigint
+   AND ended_at IS NULL
+   AND (sqlc.narg(only_held_not)::boolean IS NULL OR held <> sqlc.narg(only_held_not)::boolean);
+
+-- name: CloseChannelZeroSpansScope :exec
+-- 格子不再算了（binding 停用、门店映射删了、SKU 映射删了）：关掉这个范围里还挂着的段，store_id / sku_id 为空 = 不限。
+UPDATE channel_listing_zero_spans SET ended_at = GREATEST(@at::timestamptz, started_at)
+ WHERE binding_id = @binding_id::bigint AND ended_at IS NULL
+   AND (sqlc.narg(store_id)::bigint IS NULL OR store_id = sqlc.narg(store_id)::bigint)
+   AND (sqlc.narg(sku_id)::bigint IS NULL OR sku_id = sqlc.narg(sku_id)::bigint);
+
+-- name: OpenChannelZeroSpan :exec
+-- 开一段挂零时段；已有一段还挂着（held 相同）时什么都不做：撞上部分唯一索引 uk_channel_listing_zero_spans_open
+-- 就不插（表上唯一的另一条唯一约束是自增主键），并发的两次开段也只留一段。
+INSERT INTO channel_listing_zero_spans (binding_id, store_id, sku_id, held, started_at)
+VALUES (@binding_id::bigint, @store_id::bigint, @sku_id::bigint, @held::boolean, @at::timestamptz)
+ON CONFLICT DO NOTHING;
+
+-- name: OpenChannelZeroSpansHeld :many
+-- 这个 binding 在这家门店这批 SKU 上还挂着的挂零时段的 held（重算时判断「一直是 0 但 held 变了」）。
+SELECT sku_id, held FROM channel_listing_zero_spans
+ WHERE binding_id = @binding_id::bigint AND store_id = @store_id::bigint AND sku_id = ANY(@sku_ids::bigint[])
+   AND ended_at IS NULL;
+
+-- name: SumChannelZeroHours :many
+-- 挂零时段与 [from, to) 的交集小时数，按 (binding, 门店, SKU) 分 held / 非 held 汇总；还挂着的段截到 to。
+SELECT binding_id, store_id, sku_id,
+       (COALESCE(SUM(EXTRACT(EPOCH FROM LEAST(COALESCE(ended_at, @to_at::timestamptz), @to_at::timestamptz)
+                                     - GREATEST(started_at, @from_at::timestamptz))) FILTER (WHERE held), 0) / 3600)::float8 AS held_hours,
+       (COALESCE(SUM(EXTRACT(EPOCH FROM LEAST(COALESCE(ended_at, @to_at::timestamptz), @to_at::timestamptz)
+                                     - GREATEST(started_at, @from_at::timestamptz))) FILTER (WHERE NOT held), 0) / 3600)::float8 AS empty_hours
+  FROM channel_listing_zero_spans
+ WHERE store_id = @store_id::bigint AND sku_id = ANY(@sku_ids::bigint[])
+   AND started_at < @to_at::timestamptz AND (ended_at IS NULL OR ended_at > @from_at::timestamptz)
+ GROUP BY binding_id, store_id, sku_id
+ ORDER BY binding_id, sku_id;
+
+-- name: ChannelZeroSpanSKUs :many
+-- 这家门店 [from, …) 里在任一渠道挂过零的 SKU（channel_allocation_review 自动挑 SKU 用）。
+SELECT DISTINCT sku_id FROM channel_listing_zero_spans
+ WHERE store_id = @store_id::bigint AND (ended_at IS NULL OR ended_at > @from_at::timestamptz)
+ ORDER BY sku_id;
+
+-- name: ChannelSoldBySource :many
+-- 这家门店 [since, until) 里各渠道卖出的件数，按（binding, SKU）：自营（source 0）binding_id 记 0。
+-- 「卖出」与 StoreSKUSales（restock.sql）同一口径：20 / 30 / 40 / 50 算，10 待支付、90 已关闭、60 整单退款不算。
+SELECT (CASE WHEN o.source = 0 THEN 0 ELSE co.binding_id END)::bigint AS binding_id, oi.sku_id,
+       sum(oi.quantity)::bigint AS qty
+  FROM order_items oi
+  JOIN orders o ON o.id = oi.order_id
+  LEFT JOIN channel_orders co ON co.id = o.channel_order_id
+ WHERE o.store_id = @store_id::bigint
+   AND o.status IN (20, 30, 40, 50)
+   AND o.paid_at >= @since::timestamptz
+   AND o.paid_at < @until::timestamptz
+   AND (o.source = 0 OR co.id IS NOT NULL)
+ GROUP BY 1, 2;
+
+-- name: ChannelStockoutRejects :many
+-- 这家门店 [since, until) 里建的渠道单因缺货没接成的件数，按（binding, SKU）。判据三条同时成立：
+--   有一张来源 1、已关闭（90）的 keel 订单指着它（接单 SAGA 走了补偿）；
+--   现在没有挂着 keel 订单（order_no 为空 = 最终没接成；补货后重试成功的不算拒单）；
+--   异常是「缺货：…」（channel_order_open_undo 写的）或已拒单（7，AcceptRequired 渠道补偿时入队拒单）。
+--   异常被人处理清空、又不是拒单的那种会漏算——只低估不高估。
+-- 件数取那张 90 订单的行（渠道单行里的 sku_id 不回写，映射在建 keel 订单时才解析）；一张渠道单重试过多次
+-- 也只算最后那张 90 的订单。
+WITH rej AS (
+    SELECT DISTINCT ON (co.id) co.binding_id, o.id AS order_id
+      FROM channel_orders co
+      JOIN orders o ON o.channel_order_id = co.id AND o.source = 1 AND o.status = 90
+     WHERE co.store_id = @store_id::bigint
+       AND co.created_at >= @since::timestamptz
+       AND co.created_at < @until::timestamptz
+       AND co.order_no IS NULL
+       AND (co.exception LIKE '缺货%' OR co.status = 7)
+     ORDER BY co.id, o.id DESC
+)
+SELECT rej.binding_id, oi.sku_id, sum(oi.quantity)::bigint AS qty
+  FROM rej
+  JOIN order_items oi ON oi.order_id = rej.order_id
+ GROUP BY 1, 2;
+
+-- name: ChannelAllocationSKUs :many
+-- 渠道分配要的 SKU 信息：人读的名字、成本价、上架时间（断货天数的窗口不早于它）。删了的不列。
+SELECT s.id, p.title AS product_title, s.sku_code, COALESCE(s.spec_values::text, '{}')::text AS spec_values,
+       s.cost_cents, s.created_at
+  FROM skus s
+  JOIN products p ON p.id = s.product_id
+ WHERE s.id = ANY(@sku_ids::bigint[]) AND s.deleted_at IS NULL AND p.deleted_at IS NULL
+ ORDER BY s.id;
+
+-- name: PurgeChannelZeroSpans :execrows
+-- 保留期清理：删掉 before 之前就结束了的段，一次至多 lim 条（有界 DELETE，同 PurgeExpiredNotifications）。
+DELETE FROM channel_listing_zero_spans
+ WHERE id IN (SELECT id FROM channel_listing_zero_spans
+               WHERE ended_at < @before::timestamptz
+               LIMIT @lim::int);
 
 -- name: ListChannelListingsPage :many
 -- 后台的推送状态：带 SKU 货号与商品名（删了的 SKU 也照列，行还在就说明推过）；errors_only 只看出错的。

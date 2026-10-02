@@ -62,7 +62,7 @@ function onStaffChange(): void {
 }
 
 function verdictOf(entry: AgentScorecardEntry): ReturnType<typeof describeOutcome> {
-    return describeOutcome(entry.outcome as Record<string, unknown>);
+    return describeOutcome(entry.kind as AgentProposalKind, entry.outcome as Record<string, unknown>);
 }
 
 function positiveRate(k: AgentScorecardKind): string {

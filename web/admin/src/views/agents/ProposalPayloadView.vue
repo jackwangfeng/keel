@@ -5,6 +5,7 @@
 // 文件头那条约定一致，纯文本框里的字符串不会被当成标签解析。
 import { computed } from "vue";
 import {
+    channelStockRulePayload,
     couponPayload,
     flashPricePayload,
     inventoryAdjustPayload,
@@ -21,6 +22,7 @@ const flash = computed(() => (props.kind === "flash_price" ? flashPricePayload(p
 const coupon = computed(() => (props.kind === "coupon" ? couponPayload(props.payload) : null));
 const copy = computed(() => (props.kind === "product_copy" ? productCopyPayload(props.payload) : null));
 const refund = computed(() => (props.kind === "refund_decision" ? refundDecisionPayload(props.payload) : null));
+const channelRule = computed(() => (props.kind === "channel_stock_rule" ? channelStockRulePayload(props.payload) : null));
 </script>
 
 <template>
@@ -47,6 +49,42 @@ const refund = computed(() => (props.kind === "refund_decision" ? refundDecision
             <p>售后 {{ refund.refundNo }}：建议{{ refund.actionText }}（{{ refund.amountText }}）</p>
             <p v-if="refund.reason" class="muted">理由：{{ refund.reason }}</p>
         </template>
+        <template v-else-if="channelRule">
+            <p>{{ channelRule.bindingText }} · {{ channelRule.storeText }}</p>
+            <table class="cells">
+                <thead>
+                    <tr>
+                        <th>商品 / 级别</th>
+                        <th>旧规则 → 新规则</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr v-for="(c, i) in channelRule.changes" :key="i">
+                        <td>{{ c.cellText }}</td>
+                        <td>{{ c.prevText }} → {{ c.nextText }}</td>
+                    </tr>
+                </tbody>
+            </table>
+            <template v-if="channelRule.preview.length > 0">
+                <p class="muted">试算（提案时按当时 keel 可售算的对外可售数，批准时可能已经变了）：</p>
+                <table class="cells">
+                    <thead>
+                        <tr>
+                            <th>商品</th>
+                            <th>keel 可售</th>
+                            <th>对外可售：前 → 后</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr v-for="(pv, i) in channelRule.preview" :key="i">
+                            <td>{{ pv.skuText }}</td>
+                            <td>{{ pv.availableText }}</td>
+                            <td>{{ pv.beforeText }} → {{ pv.afterText }}</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </template>
+        </template>
     </div>
 </template>
 
@@ -61,5 +99,20 @@ const refund = computed(() => (props.kind === "refund_decision" ? refundDecision
 }
 p {
     margin: 4px 0;
+}
+.cells {
+    margin: 4px 0;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+.cells th,
+.cells td {
+    padding: 2px 8px 2px 0;
+    text-align: left;
+    white-space: nowrap;
+}
+.cells th {
+    color: var(--el-text-color-secondary);
+    font-weight: normal;
 }
 </style>

@@ -146,6 +146,9 @@ type ChannelTx interface {
 
 	CreateChannelBinding(ctx context.Context, in ChannelBindingInput) (ChannelBinding, error)
 	GetChannelBinding(ctx context.Context, id int64) (ChannelBinding, error)
+	// LockChannelBindingRules 拿 binding 这一行的锁，让同一 binding 的库存规则读改写串行；不存在时 ErrChannelNotFound。
+	LockChannelBindingRules(ctx context.Context, id int64) error
+	CloseChannelZeroSpans(ctx context.Context, bindingID int64, storeID, skuID *int64, at time.Time) error
 	ListChannelBindings(ctx context.Context) ([]ChannelBinding, error)
 	UpdateChannelBinding(ctx context.Context, id int64, p ChannelBindingPatch) (ChannelBinding, error)
 	// ChannelBindingSecrets 只给适配器用（验签、调平台 API），不许出现在任何响应里。
@@ -173,6 +176,24 @@ type ChannelTx interface {
 	RecordChannelListing(ctx context.Context, l ChannelListing) (int64, error)
 	SetChannelListingError(ctx context.Context, bindingID, storeID, skuID int64, msg string) error
 	ListChannelListingsPage(ctx context.Context, bindingID int64, storeID *int64, errorsOnly bool, limit, offset int32) ([]ChannelListing, error)
+	// RecordChannelListingZero 在推送成功回写 channel_listings 的同一事务里记挂零时段（00330）：newQty > 0 关掉还挂着的段；
+	// newQty == 0 时有一段还挂着且 held 相同不动、held 不同关旧开新、没有就开一段。prevQty 是上次推送值（nil = 第一次推），
+	// 只供调用方记录，判断只看还挂着的那段。
+	RecordChannelListingZero(ctx context.Context, bindingID, storeID, skuID int64, prevQty *int32, newQty int32, held bool, at time.Time) error
+	// OpenChannelZeroHeld：这个 binding 在这家门店这批 SKU 上还挂着的挂零时段 → held。不在结果里 = 没有挂着的段。
+	OpenChannelZeroHeld(ctx context.Context, bindingID, storeID int64, skuIDs []int64) (map[int64]bool, error)
+	// ChannelZeroHours：挂零时段与 [from, to) 的交集小时数（还挂着的段截到 to），按 (binding, 门店, SKU) 汇总；没挂过零的格子不在结果里。
+	ChannelZeroHours(ctx context.Context, storeID int64, skuIDs []int64, from, to time.Time) ([]ChannelZeroHours, error)
+	// PurgeChannelZeroSpans 删 before 之前结束的挂零时段，一次至多 limit 条。
+	PurgeChannelZeroSpans(ctx context.Context, before time.Time, limit int) (int64, error)
+	// ChannelZeroSpanSKUs：这家门店 from 之后在任一渠道挂过零的 SKU。
+	ChannelZeroSpanSKUs(ctx context.Context, storeID int64, from time.Time) ([]int64, error)
+	// ChannelSoldBySource：这家门店 [from, to) 里各渠道卖出的件数（自营 BindingID = 0），口径同 StoreSKUSales。
+	ChannelSoldBySource(ctx context.Context, storeID int64, from, to time.Time) ([]ChannelSKUQty, error)
+	// ChannelStockoutRejects：这家门店 [from, to) 里渠道单因缺货没接成的件数（判据见 db/queries/channels.sql）。
+	ChannelStockoutRejects(ctx context.Context, storeID int64, from, to time.Time) ([]ChannelSKUQty, error)
+	// ChannelAllocationSKUs：渠道分配要的 SKU 信息（名字、成本价、上架时间），删了的不列。
+	ChannelAllocationSKUs(ctx context.Context, skuIDs []int64) ([]ChannelAllocationSKU, error)
 
 	// InsertChannelInboundEvent：重复的外部事件 ID 返回 inserted=false、不报错。
 	InsertChannelInboundEvent(ctx context.Context, in ChannelInboundEventInput) (id int64, inserted bool, err error)
@@ -287,6 +308,11 @@ func (t tenantTx) GetChannelBinding(ctx context.Context, id int64) (ChannelBindi
 	return bindingFrom(r.ID, r.Channel, r.ExternalAccount, r.Name, r.Roles, r.Status, r.Config, r.HasSecrets, r.CreatedAt, r.UpdatedAt), nil
 }
 
+func (t tenantTx) LockChannelBindingRules(ctx context.Context, id int64) error {
+	_, err := t.q.LockChannelBindingRules(ctx, id)
+	return notFound(err)
+}
+
 func (t tenantTx) ListChannelBindings(ctx context.Context) ([]ChannelBinding, error) {
 	rows, err := t.q.ListChannelBindings(ctx)
 	if err != nil {
@@ -365,7 +391,9 @@ func (t tenantTx) DeleteChannelStoreLink(ctx context.Context, bindingID, storeID
 	if n == 0 {
 		return ErrChannelNotFound
 	}
-	return nil
+	// 这家门店在这个渠道上的格子不再算了：还挂着的挂零时段关在现在（不然以后的复盘、分配建议会一直把它算成挂零）。
+	store := storeID
+	return t.CloseChannelZeroSpans(ctx, bindingID, &store, nil, time.Now())
 }
 
 func (t tenantTx) ListChannelStoreLinks(ctx context.Context, bindingID int64) ([]ChannelStoreLink, error) {
@@ -493,6 +521,121 @@ func (t tenantTx) RecordChannelListing(ctx context.Context, l ChannelListing) (i
 	return v, channelWriteErr(err)
 }
 
+// ChannelZeroHours 是一个格子在窗口里挂零的小时数：HeldHours = keel 有货但规则算 0，EmptyHours = keel 自己没货。
+type ChannelZeroHours struct {
+	BindingID, StoreID, SKUID int64
+	HeldHours, EmptyHours     float64
+}
+
+func (t tenantTx) RecordChannelListingZero(ctx context.Context, bindingID, storeID, skuID int64, _ *int32, newQty int32, held bool, at time.Time) error {
+	cl := db.CloseChannelZeroSpanParams{At: pgtype.Timestamptz{Time: at, Valid: true}, BindingID: bindingID, StoreID: storeID, SkuID: skuID}
+	if newQty > 0 {
+		return t.q.CloseChannelZeroSpan(ctx, cl)
+	}
+	cl.OnlyHeldNot = &held
+	if err := t.q.CloseChannelZeroSpan(ctx, cl); err != nil {
+		return err
+	}
+	return channelWriteErr(t.q.OpenChannelZeroSpan(ctx, db.OpenChannelZeroSpanParams{BindingID: bindingID, StoreID: storeID,
+		SkuID: skuID, Held: held, At: pgtype.Timestamptz{Time: at, Valid: true}}))
+}
+
+func (t tenantTx) OpenChannelZeroHeld(ctx context.Context, bindingID, storeID int64, skuIDs []int64) (map[int64]bool, error) {
+	rows, err := t.q.OpenChannelZeroSpansHeld(ctx, db.OpenChannelZeroSpansHeldParams{BindingID: bindingID, StoreID: storeID, SkuIds: skuIDs})
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[int64]bool, len(rows))
+	for _, r := range rows {
+		out[r.SkuID] = r.Held
+	}
+	return out, nil
+}
+
+func (t tenantTx) ChannelZeroHours(ctx context.Context, storeID int64, skuIDs []int64, from, to time.Time) ([]ChannelZeroHours, error) {
+	if len(skuIDs) == 0 || !to.After(from) {
+		return nil, nil
+	}
+	rows, err := t.q.SumChannelZeroHours(ctx, db.SumChannelZeroHoursParams{StoreID: storeID, SkuIds: skuIDs,
+		FromAt: pgtype.Timestamptz{Time: from, Valid: true}, ToAt: pgtype.Timestamptz{Time: to, Valid: true}})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ChannelZeroHours, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, ChannelZeroHours{BindingID: r.BindingID, StoreID: r.StoreID, SKUID: r.SkuID,
+			HeldHours: r.HeldHours, EmptyHours: r.EmptyHours})
+	}
+	return out, nil
+}
+
+// ChannelSKUQty 是按（binding, SKU）汇总的件数；BindingID = 0 是自营。
+type ChannelSKUQty struct {
+	BindingID, SKUID int64
+	Qty              int64
+}
+
+// ChannelAllocationSKU 是渠道分配要的 SKU 信息。SpecValues 是 JSON 文本。
+type ChannelAllocationSKU struct {
+	SKUID                             int64
+	ProductTitle, SKUCode, SpecValues string
+	CostCents                         int64
+	CreatedAt                         time.Time
+}
+
+func (t tenantTx) ChannelZeroSpanSKUs(ctx context.Context, storeID int64, from time.Time) ([]int64, error) {
+	return t.q.ChannelZeroSpanSKUs(ctx, db.ChannelZeroSpanSKUsParams{StoreID: storeID, FromAt: pgtype.Timestamptz{Time: from, Valid: true}})
+}
+
+func (t tenantTx) ChannelSoldBySource(ctx context.Context, storeID int64, from, to time.Time) ([]ChannelSKUQty, error) {
+	rows, err := t.q.ChannelSoldBySource(ctx, db.ChannelSoldBySourceParams{StoreID: storeID, Since: pgtype.Timestamptz{Time: from, Valid: true},
+		Until: pgtype.Timestamptz{Time: to, Valid: true}})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ChannelSKUQty, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, ChannelSKUQty{BindingID: r.BindingID, SKUID: r.SkuID, Qty: r.Qty})
+	}
+	return out, nil
+}
+
+func (t tenantTx) ChannelStockoutRejects(ctx context.Context, storeID int64, from, to time.Time) ([]ChannelSKUQty, error) {
+	rows, err := t.q.ChannelStockoutRejects(ctx, db.ChannelStockoutRejectsParams{StoreID: storeID, Since: pgtype.Timestamptz{Time: from, Valid: true},
+		Until: pgtype.Timestamptz{Time: to, Valid: true}})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ChannelSKUQty, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, ChannelSKUQty{BindingID: r.BindingID, SKUID: r.SkuID, Qty: r.Qty})
+	}
+	return out, nil
+}
+
+func (t tenantTx) ChannelAllocationSKUs(ctx context.Context, skuIDs []int64) ([]ChannelAllocationSKU, error) {
+	if len(skuIDs) == 0 {
+		return nil, nil
+	}
+	rows, err := t.q.ChannelAllocationSKUs(ctx, skuIDs)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ChannelAllocationSKU, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, ChannelAllocationSKU{SKUID: r.ID, ProductTitle: r.ProductTitle, SKUCode: r.SkuCode,
+			SpecValues: r.SpecValues, CostCents: r.CostCents, CreatedAt: r.CreatedAt.Time})
+	}
+	return out, nil
+}
+
+func (t tenantTx) PurgeChannelZeroSpans(ctx context.Context, before time.Time, limit int) (int64, error) {
+	if limit <= 0 {
+		return 0, nil
+	}
+	return t.q.PurgeChannelZeroSpans(ctx, db.PurgeChannelZeroSpansParams{Before: pgtype.Timestamptz{Time: before, Valid: true}, Lim: int32(limit)})
+}
+
 func (t tenantTx) SetChannelListingError(ctx context.Context, bindingID, storeID, skuID int64, msg string) error {
 	return t.q.SetChannelListingError(ctx, db.SetChannelListingErrorParams{BindingID: bindingID, StoreID: storeID, SkuID: skuID, LastError: msg})
 }
@@ -611,8 +754,20 @@ func (t tenantTx) ChannelItemLinkByExternal(ctx context.Context, bindingID int64
 }
 
 func (t tenantTx) DeleteChannelItemLink(ctx context.Context, bindingID int64, kind int16, keelID int64) error {
-	_, err := t.q.DeleteChannelItemLink(ctx, db.DeleteChannelItemLinkParams{BindingID: bindingID, Kind: kind, KeelID: keelID})
-	return err
+	n, err := t.q.DeleteChannelItemLink(ctx, db.DeleteChannelItemLinkParams{BindingID: bindingID, Kind: kind, KeelID: keelID})
+	if err != nil || n == 0 || kind != ChannelItemSKU {
+		return err
+	}
+	// SKU 映射删了：它在每家门店的格子不再算了，还挂着的挂零时段关在现在（同 DeleteChannelStoreLink）。
+	sku := keelID
+	return t.CloseChannelZeroSpans(ctx, bindingID, nil, &sku, time.Now())
+}
+
+// CloseChannelZeroSpans 关掉 binding 在这个范围里还挂着的挂零时段（storeID / skuID 为 nil = 不限）。
+// 用在格子不再算的那一刻（停用 binding、删门店 / SKU 映射）。
+func (t tenantTx) CloseChannelZeroSpans(ctx context.Context, bindingID int64, storeID, skuID *int64, at time.Time) error {
+	return t.q.CloseChannelZeroSpansScope(ctx, db.CloseChannelZeroSpansScopeParams{At: pgtype.Timestamptz{Time: at, Valid: true},
+		BindingID: bindingID, StoreID: storeID, SkuID: skuID})
 }
 
 func (t tenantTx) ChannelSKUsByCodes(ctx context.Context, codes []string) (map[string]CodedSKU, error) {

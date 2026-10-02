@@ -1671,16 +1671,18 @@ class AgentAutoPolicy {
   final int minDiscountRate;
   final int maxDiscountCents;
   final int dailyLimit;
+  final int? maxRatioStepBp;
   final String kind;
   final int? updatedBy;
   final String? updatedAt;
-  const AgentAutoPolicy({required this.enabled, required this.maxUnits, required this.minDiscountRate, required this.maxDiscountCents, required this.dailyLimit, required this.kind, this.updatedBy, this.updatedAt});
+  const AgentAutoPolicy({required this.enabled, required this.maxUnits, required this.minDiscountRate, required this.maxDiscountCents, required this.dailyLimit, this.maxRatioStepBp, required this.kind, this.updatedBy, this.updatedAt});
   factory AgentAutoPolicy.fromJson(Map<String, dynamic> j) => AgentAutoPolicy(
         enabled: j['enabled'] as bool,
         maxUnits: (j['max_units'] as num).toInt(),
         minDiscountRate: (j['min_discount_rate'] as num).toInt(),
         maxDiscountCents: (j['max_discount_cents'] as num).toInt(),
         dailyLimit: (j['daily_limit'] as num).toInt(),
+        maxRatioStepBp: (j['max_ratio_step_bp'] as num?)?.toInt(),
         kind: j['kind'] as String,
         updatedBy: (j['updated_by'] as num?)?.toInt(),
         updatedAt: j['updated_at'] as String?,
@@ -1691,6 +1693,7 @@ class AgentAutoPolicy {
         'min_discount_rate': minDiscountRate,
         'max_discount_cents': maxDiscountCents,
         'daily_limit': dailyLimit,
+        if (maxRatioStepBp != null) 'max_ratio_step_bp': maxRatioStepBp,
         'kind': kind,
         if (updatedBy != null) 'updated_by': updatedBy,
         if (updatedAt != null) 'updated_at': updatedAt,
@@ -1703,13 +1706,15 @@ class AgentAutoPolicyInput {
   final int minDiscountRate;
   final int maxDiscountCents;
   final int dailyLimit;
-  const AgentAutoPolicyInput({required this.enabled, required this.maxUnits, required this.minDiscountRate, required this.maxDiscountCents, required this.dailyLimit});
+  final int? maxRatioStepBp;
+  const AgentAutoPolicyInput({required this.enabled, required this.maxUnits, required this.minDiscountRate, required this.maxDiscountCents, required this.dailyLimit, this.maxRatioStepBp});
   factory AgentAutoPolicyInput.fromJson(Map<String, dynamic> j) => AgentAutoPolicyInput(
         enabled: j['enabled'] as bool,
         maxUnits: (j['max_units'] as num).toInt(),
         minDiscountRate: (j['min_discount_rate'] as num).toInt(),
         maxDiscountCents: (j['max_discount_cents'] as num).toInt(),
         dailyLimit: (j['daily_limit'] as num).toInt(),
+        maxRatioStepBp: (j['max_ratio_step_bp'] as num?)?.toInt(),
       );
   Map<String, dynamic> toJson() => {
         'enabled': enabled,
@@ -1717,6 +1722,7 @@ class AgentAutoPolicyInput {
         'min_discount_rate': minDiscountRate,
         'max_discount_cents': maxDiscountCents,
         'daily_limit': dailyLimit,
+        if (maxRatioStepBp != null) 'max_ratio_step_bp': maxRatioStepBp,
       };
 }
 

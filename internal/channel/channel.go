@@ -1,7 +1,7 @@
 // Package channel 是渠道适配层与 keel 其余部分无关的那一半：类型、适配器接口、注册表、规则计算。
 // 设计见 docs/superpowers/specs/2026-10-02-channel-adapter-design.md。
 //
-// 这个包不碰数据库、不知道租户、不 import keel 的任何业务包：适配器（channel/shopify、channel/meituansim……）
+// 这个包不碰数据库、不知道租户、不 import keel 的任何业务包：适配器（channel/shopify、channel/demotakeout……）
 // 只依赖它，于是写一个新渠道只要读这一个包。编排（读规则、算对外可售数、入队、回写推送状态）在
 // service/channel*.go。
 //
@@ -107,6 +107,9 @@ type Event struct {
 	// Request 是 EventOrderRequest 的规整内容（其余类别为 nil）。适配器在 ParseInbound 里填好，
 	// 渠道层不再解析平台原文。
 	Request *OrderRequest `json:",omitempty"`
+	// Order 是 EventOrderChanged 的规整订单：只有推送带完整状态的渠道（Caps.OutOfOrderInbound = false）在
+	// ParseInbound 里填它，收单时有它就直接用、不调 FetchOrder（版本守卫照旧）；乱序渠道留空，照样回读。
+	Order *ChannelOrder `json:",omitempty"`
 }
 
 // RequestKind 是平台发起的申请的类别（与 channel_order_requests.kind 同一套数）。

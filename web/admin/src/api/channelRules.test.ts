@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
     bindingStatusLabel,
     channelAddressText,
+    channelLabel,
     channelOrderActions,
     channelOrderStatusLabel,
     channelOrderTotals,
@@ -217,4 +218,10 @@ test("渠道退款：payment_no 空串", () => {
     assert.equal(isChannelRefund({ payment_no: "" }), true);
     assert.equal(isChannelRefund({ payment_no: "P123" }), false);
     assert.equal(isChannelRefund({}), false);
+});
+
+test("channelLabel：演示外卖有中文显示名，不认识的原样", () => {
+    assert.equal(channelLabel("demo_takeout"), "演示外卖（模拟）");
+    assert.equal(channelLabel("shopify"), "Shopify");
+    assert.equal(channelLabel("zzz"), "zzz");
 });

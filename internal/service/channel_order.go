@@ -3,7 +3,8 @@ package service
 // 渠道订单的收单（第三期，spec §5.2、§7.1）：回调 → 回读权威状态 → 版本守卫 → 落 channel_orders → 按状态决定动作。
 //
 //	orderChanged（EventOrderChanged 的处理器）
-//	  └─ Caps.OutOfOrderInbound：FetchOrder 回读（回调只是提示）；否则第四期从事件载荷规整（今天也回读）
+//	  └─ Caps.OutOfOrderInbound：FetchOrder 回读（回调只是提示）；否则（推送带完整状态）适配器在 ParseInbound 里填了
+//	     Event.Order 就直接用、不回读，没填照样回读。两条路进同一个 applyChannelOrder，版本守卫一样
 //	applyChannelOrder（一个事务，channel_orders 行 FOR UPDATE）
 //	  ├─ version < 已存（或同版本而状态反倒更靠前）：只更新 last_payload（Review Focus 2：旧状态不覆盖新状态、不触发动作）；
 //	  │    同版本照样往下走（Shopify updatedAt 只到秒；上次没做完的靠重放补上），往下的每一步都幂等
@@ -160,6 +161,13 @@ func (s *ChannelService) orderChanged(ctx context.Context, b repository.ChannelB
 		s.log.WarnContext(ctx, "订单回调没带订单号，丢弃", "binding_id", b.ID, "topic", ev.Topic)
 		return nil
 	}
+	if a, ok := s.reg.Lookup(b.Channel); ok && !a.Caps().OutOfOrderInbound && ev.Order != nil {
+		o := *ev.Order
+		if o.ExternalOrderID == "" {
+			o.ExternalOrderID = ev.ExternalOrderID
+		}
+		return s.applyChannelOrder(ctx, b, o)
+	}
 	o, err := s.fetchChannelOrder(ctx, b, ev.ExternalOrderID)
 	if err != nil || o == nil {
 		return err
@@ -169,8 +177,9 @@ func (s *ChannelService) orderChanged(ctx context.Context, b repository.ChannelB
 
 // fetchChannelOrder 回读一张订单的权威状态。适配器不是销售渠道时返回 nil（记一笔、不重试）。
 //
-// Caps.OutOfOrderInbound 的渠道（Shopify）回调只是提示，必须回读；其余渠道第四期改为从事件载荷规整，
-// 今天一律回读（权威状态总是对的，只是多一次调用）。
+// Caps.OutOfOrderInbound 的渠道（Shopify）回调只是提示，必须回读；推送带完整状态的渠道收单走载荷（orderChanged），
+// 这里只剩人工接单 / 重试 / 申请先于订单到的回读。这类渠道不支持回读（FetchOrder 返回 ErrUnsupported）时，
+// 用渠道单上存着的最近一次规整订单（last_payload）：它就是平台推来的最新完整状态。
 func (s *ChannelService) fetchChannelOrder(ctx context.Context, b repository.ChannelBinding, externalID string) (*channel.ChannelOrder, error) {
 	_, ab, err := s.loadBinding(ctx, b.ID)
 	if err != nil {
@@ -183,11 +192,38 @@ func (s *ChannelService) fetchChannelOrder(ctx context.Context, b repository.Cha
 		return nil, nil
 	}
 	o, err := out.FetchOrder(ctx, ab, externalID)
+	if errors.Is(err, channel.ErrUnsupported) && !a.Caps().OutOfOrderInbound {
+		return s.storedChannelOrder(ctx, b.ID, externalID)
+	}
 	if errors.Is(err, channel.ErrCredentials) {
 		s.markCredentialsBroken(ctx, b.ID, channel.RedactError(err, ab.Secrets))
 	}
 	if err != nil {
 		return nil, channel.RedactError(err, ab.Secrets)
+	}
+	return &o, nil
+}
+
+// storedChannelOrder 读渠道单 last_payload 里的规整订单（不支持回读的渠道用，见 fetchChannelOrder）。
+func (s *ChannelService) storedChannelOrder(ctx context.Context, bindingID int64, externalID string) (*channel.ChannelOrder, error) {
+	var o channel.ChannelOrder
+	err := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+		co, err := tx.LockChannelOrderByExternal(ctx, bindingID, externalID)
+		if err != nil {
+			return err
+		}
+		if err := json.Unmarshal(co.LastPayload, &o); err != nil || o.ExternalOrderID == "" {
+			return fmt.Errorf("渠道单 %s 没有可用的载荷（渠道不支持回读）", externalID)
+		}
+		// 载荷必须就是渠道单当前这个版本的：拿别的版本强制重走（重试 / 接单不受版本守卫）会把状态改回去、甚至在已取消之后建单。
+		if o.Version != co.Version {
+			return fmt.Errorf("渠道单 %s 存着的载荷是版本 %d、渠道单是版本 %d，不拿它重走（渠道不支持回读，等平台再推一次）",
+				externalID, o.Version, co.Version)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	return &o, nil
 }
@@ -230,7 +266,12 @@ func (s *ChannelService) applyChannelOrderOpts(ctx context.Context, b repository
 			// 版本守卫：只有严格更旧的版本只留档。同版本照样往下走 —— 上次在这个版本上没做完的（SAGA 提交失败、
 			// 草稿还在 0）要靠重放补上；Shopify 的 updatedAt 只到秒，同一秒里的两次变化也是同一个版本。
 			// 往下走的每一步都幂等（见 sameVersionStale 与文件头）。
-			if !opt.force && (o.Version < co.Version || (o.Version == co.Version && sameVersionStale(co.Status, snap.Status))) {
+			if !opt.force && o.Version < co.Version {
+				// 严格更旧的版本不写 last_payload：不支持回读的渠道重试 / 接单就拿 last_payload 当平台最新状态
+				// （storedChannelOrder），写成迟到的旧「新单」就会在已取消之后建单。
+				return nil
+			}
+			if !opt.force && o.Version == co.Version && sameVersionStale(co.Status, snap.Status) {
 				return tx.TouchChannelOrderPayload(ctx, co.ID, snap.LastPayload)
 			}
 			// keel 这一侧走过的「已接单」「已拒单」不被平台的「新单」盖回去（Shopify 没有接单这一步，平台上永远是新单；
@@ -353,8 +394,10 @@ func (s *ChannelService) applyPlatformFacts(ctx context.Context, tx repository.T
 			kicks = append(kicks, k)
 		}
 	}
+	// 平台说已发货 / 已完成就跟着发：Shopify 的「已发货」本来就以有 fulfillment 为准；平台骑手配送的渠道
+	// （外卖）报「骑手已取货」时没有物流单号，platformShipped 用平台单号占位。
 	if (co.Status == repository.ChannelOrderShipped || co.Status == repository.ChannelOrderCompleted) &&
-		order.Status == orderStatusPaid && len(o.Shipments) > 0 {
+		order.Status == orderStatusPaid {
 		if err := s.platformShipped(ctx, tx, b, order, o); err != nil {
 			return nil, err
 		}
@@ -676,7 +719,10 @@ func (s *ChannelService) raiseBaselineForPlatformRestock(ctx context.Context, tx
 // 不入队回传（那就是回声）。买家通知不发：渠道单无 keel 买家，平台自己通知顾客。
 func (s *ChannelService) platformShipped(ctx context.Context, tx repository.Tx, b repository.ChannelBinding,
 	order repository.Order, o channel.ChannelOrder) error {
-	sh := o.Shipments[0]
+	var sh channel.Shipment
+	if len(o.Shipments) > 0 {
+		sh = o.Shipments[0]
+	}
 	for _, x := range o.Shipments {
 		if x.TrackingNo != "" {
 			sh = x
