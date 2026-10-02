@@ -173,3 +173,20 @@ SELECT pg_advisory_xact_lock(7340301, current_merchant()::int);
 
 -- name: ChannelSKUExists :one
 SELECT EXISTS (SELECT 1 FROM skus WHERE id = @sku_id::bigint AND deleted_at IS NULL);
+
+-- name: GetChannelItemLinkByExternal :one
+-- 按外部 ID 反查映射（商品源拉进来的商品 / 规格，找它在 keel 里是哪一个）。
+SELECT binding_id, kind, keel_id, external_id, extra, synced_at
+  FROM channel_item_links
+ WHERE binding_id = @binding_id::bigint AND kind = @kind::smallint AND external_id = @external_id::text;
+
+-- name: DeleteChannelItemLink :execrows
+DELETE FROM channel_item_links
+ WHERE binding_id = @binding_id::bigint AND kind = @kind::smallint AND keel_id = @keel_id::bigint;
+
+-- name: ChannelSKUsByCodes :many
+-- 按货号找 keel 的 SKU（商品源拉商品时认领同货号的已有 SKU）。删了的也列出来：uk_skus_code 不分删没删，
+-- 撞上一个删了的货号也建不出新的。
+SELECT id, product_id, sku_code, (deleted_at IS NOT NULL)::boolean AS deleted
+  FROM skus
+ WHERE sku_code = ANY(@codes::text[]);

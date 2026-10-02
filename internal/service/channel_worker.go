@@ -53,7 +53,7 @@ func (s *ChannelService) RunWorkers(ctx context.Context) {
 }
 
 func (s *ChannelService) housekeep(ctx context.Context) {
-	for _, q := range []string{QueueChannelListingPush, QueueChannelListingRecompute, QueueChannelInbound} {
+	for _, q := range []string{QueueChannelListingPush, QueueChannelListingRecompute, QueueChannelInbound, QueueChannelCatalogPull} {
 		if n, err := s.repo.ReapStuckJobs(ctx, q, channelStuckAfter); err != nil {
 			s.log.ErrorContext(ctx, "回收卡死的渠道任务失败", "queue", q, "err", err)
 		} else if n > 0 {
@@ -68,7 +68,7 @@ func (s *ChannelService) housekeep(ctx context.Context) {
 // WorkOnce 各队列取一批跑完，返回处理的任务数。导出给测试驱动（不等轮询）。
 func (s *ChannelService) WorkOnce(ctx context.Context) (int, error) {
 	total := 0
-	for _, step := range []func(context.Context) (int, error){s.workRecompute, s.workPush, s.workInbound} {
+	for _, step := range []func(context.Context) (int, error){s.workCatalog, s.workRecompute, s.workPush, s.workInbound} {
 		n, err := step(ctx)
 		total += n
 		if err != nil {
@@ -353,6 +353,22 @@ func (s *ChannelService) workInbound(ctx context.Context) (int, error) {
 	}
 	for _, j := range jobs {
 		s.handleInbound(tenant.NewContext(ctx, j.MerchantID), j)
+	}
+	return len(jobs), nil
+}
+
+// workCatalog 跑一批拉商品任务（channel_catalog.go）。
+func (s *ChannelService) workCatalog(ctx context.Context) (int, error) {
+	jobs, err := s.dequeue(ctx, QueueChannelCatalogPull)
+	if err != nil {
+		return 0, err
+	}
+	for _, j := range jobs {
+		if err := s.pullCatalogPage(tenant.NewContext(ctx, j.MerchantID), j.Payload); err != nil {
+			s.retry(ctx, j, err)
+			continue
+		}
+		s.finish(ctx, j.ID)
 	}
 	return len(jobs), nil
 }

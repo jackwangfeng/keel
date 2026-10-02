@@ -27,7 +27,10 @@ type channelRig struct {
 	n     *inventory.StockNotifier
 }
 
-func newChannelRig(t *testing.T) channelRig {
+func newChannelRig(t *testing.T) channelRig { t.Helper(); return newChannelRigWith(t) }
+
+// newChannelRigWith 同 newChannelRig，另外登记 extra 里的适配器（Shopify 打模拟平台）。
+func newChannelRigWith(t *testing.T, extra ...channel.Adapter) channelRig {
 	t.Helper()
 	store := repository.NewInventoryStore(testPool)
 	gate := inventory.NewChannelGate(true)
@@ -37,6 +40,9 @@ func newChannelRig(t *testing.T) channelRig {
 	reg := channel.NewRegistry()
 	fake := channeltest.New()
 	reg.Register(fake)
+	for _, a := range extra {
+		reg.Register(a)
+	}
 	svc := service.NewChannelService(repository.New(testPool), local, reg, dtm.BranchResolver{}, dtm.BranchResolver{})
 	ex := app.InventoryBranches(local)
 	ex[inventory.BranchStockMsgQuery] = dtm.Ex(n.QueryBranch())

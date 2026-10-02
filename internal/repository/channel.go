@@ -63,6 +63,11 @@ func (b ChannelBinding) IsActiveOutlet() bool {
 	return b.Status == ChannelBindingActive && b.Roles&ChannelRoleOutlet != 0
 }
 
+// IsActiveCatalogSource：启用中、且当商品源（商品从它进 keel）。
+func (b ChannelBinding) IsActiveCatalogSource() bool {
+	return b.Status == ChannelBindingActive && b.Roles&ChannelRoleCatalogSource != 0
+}
+
 type ChannelBindingInput struct {
 	Channel, ExternalAccount, Name string
 	Roles, Status                  int16
@@ -176,6 +181,11 @@ type ChannelTx interface {
 	UpsertChannelItemLink(ctx context.Context, l ChannelItemLink) error
 	ChannelItemLinks(ctx context.Context, bindingID int64, kind int16, keelIDs []int64) (map[int64]ChannelItemLink, error)
 	LinkedSKUIDsPage(ctx context.Context, bindingID, after int64, limit int32) ([]int64, error)
+	// ChannelItemLinkByExternal 按外部 ID 反查映射；没有返回 ErrChannelNotFound。
+	ChannelItemLinkByExternal(ctx context.Context, bindingID int64, kind int16, externalID string) (ChannelItemLink, error)
+	DeleteChannelItemLink(ctx context.Context, bindingID int64, kind int16, keelID int64) error
+	// ChannelSKUsByCodes 按货号找 SKU（含已删的，Deleted 标出来），键是货号。
+	ChannelSKUsByCodes(ctx context.Context, codes []string) (map[string]CodedSKU, error)
 	// LockChannelMerchant 在本事务里拿这家店的渠道启停锁（提交即释放）。
 	LockChannelMerchant(ctx context.Context) error
 	ChannelSKUExists(ctx context.Context, skuID int64) (bool, error)
@@ -186,6 +196,13 @@ const (
 	ChannelItemProduct int16 = 1
 	ChannelItemSKU     int16 = 2
 )
+
+// CodedSKU 是按货号找到的一个 SKU。
+type CodedSKU struct {
+	ID, ProductID int64
+	Code          string
+	Deleted       bool
+}
 
 type ChannelItemLink struct {
 	BindingID  int64
@@ -228,7 +245,8 @@ func channelWriteErr(err error) error {
 	switch {
 	case err == nil:
 		return nil
-	case isUniqueViolation(err, "uk_channel_bindings_account"), isUniqueViolation(err, "uk_channel_store_links_external"):
+	case isUniqueViolation(err, "uk_channel_bindings_account"), isUniqueViolation(err, "uk_channel_store_links_external"),
+		isUniqueViolation(err, "uk_channel_item_links_external"):
 		return ErrChannelDuplicate
 	case isForeignKeyViolation(err):
 		return ErrChannelRefInvalid
@@ -571,4 +589,33 @@ func (t tenantTx) LockChannelMerchant(ctx context.Context) error { return t.q.Lo
 
 func (t tenantTx) ChannelSKUExists(ctx context.Context, skuID int64) (bool, error) {
 	return t.q.ChannelSKUExists(ctx, skuID)
+}
+
+func (t tenantTx) ChannelItemLinkByExternal(ctx context.Context, bindingID int64, kind int16, externalID string) (ChannelItemLink, error) {
+	r, err := t.q.GetChannelItemLinkByExternal(ctx, db.GetChannelItemLinkByExternalParams{BindingID: bindingID, Kind: kind, ExternalID: externalID})
+	if err != nil {
+		return ChannelItemLink{}, notFound(err)
+	}
+	return ChannelItemLink{BindingID: r.BindingID, Kind: r.Kind, KeelID: r.KeelID, ExternalID: r.ExternalID,
+		Extra: json.RawMessage(r.Extra), SyncedAt: r.SyncedAt.Time}, nil
+}
+
+func (t tenantTx) DeleteChannelItemLink(ctx context.Context, bindingID int64, kind int16, keelID int64) error {
+	_, err := t.q.DeleteChannelItemLink(ctx, db.DeleteChannelItemLinkParams{BindingID: bindingID, Kind: kind, KeelID: keelID})
+	return err
+}
+
+func (t tenantTx) ChannelSKUsByCodes(ctx context.Context, codes []string) (map[string]CodedSKU, error) {
+	out := make(map[string]CodedSKU, len(codes))
+	if len(codes) == 0 {
+		return out, nil
+	}
+	rows, err := t.q.ChannelSKUsByCodes(ctx, codes)
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range rows {
+		out[r.SkuCode] = CodedSKU{ID: r.ID, ProductID: r.ProductID, Code: r.SkuCode, Deleted: r.Deleted}
+	}
+	return out, nil
 }

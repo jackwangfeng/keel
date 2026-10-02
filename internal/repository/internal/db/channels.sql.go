@@ -75,6 +75,46 @@ func (q *Queries) ChannelSKUOffers(ctx context.Context, arg ChannelSKUOffersPara
 	return items, nil
 }
 
+const channelSKUsByCodes = `-- name: ChannelSKUsByCodes :many
+SELECT id, product_id, sku_code, (deleted_at IS NOT NULL)::boolean AS deleted
+  FROM skus
+ WHERE sku_code = ANY($1::text[])
+`
+
+type ChannelSKUsByCodesRow struct {
+	ID        int64
+	ProductID int64
+	SkuCode   string
+	Deleted   bool
+}
+
+// 按货号找 keel 的 SKU（商品源拉商品时认领同货号的已有 SKU）。删了的也列出来：uk_skus_code 不分删没删，
+// 撞上一个删了的货号也建不出新的。
+func (q *Queries) ChannelSKUsByCodes(ctx context.Context, codes []string) ([]ChannelSKUsByCodesRow, error) {
+	rows, err := q.db.Query(ctx, channelSKUsByCodes, codes)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ChannelSKUsByCodesRow
+	for rows.Next() {
+		var i ChannelSKUsByCodesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProductID,
+			&i.SkuCode,
+			&i.Deleted,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const channelSyncRev = `-- name: ChannelSyncRev :one
 SELECT (extract(epoch FROM clock_timestamp()) * 1000000)::bigint AS rev
 `
@@ -151,6 +191,25 @@ func (q *Queries) CreateChannelBinding(ctx context.Context, arg CreateChannelBin
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const deleteChannelItemLink = `-- name: DeleteChannelItemLink :execrows
+DELETE FROM channel_item_links
+ WHERE binding_id = $1::bigint AND kind = $2::smallint AND keel_id = $3::bigint
+`
+
+type DeleteChannelItemLinkParams struct {
+	BindingID int64
+	Kind      int16
+	KeelID    int64
+}
+
+func (q *Queries) DeleteChannelItemLink(ctx context.Context, arg DeleteChannelItemLinkParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteChannelItemLink, arg.BindingID, arg.Kind, arg.KeelID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const deleteChannelPriceRule = `-- name: DeleteChannelPriceRule :execrows
@@ -279,6 +338,42 @@ func (q *Queries) GetChannelInboundEvent(ctx context.Context, id int64) (GetChan
 		&i.Error,
 		&i.ReceivedAt,
 		&i.ProcessedAt,
+	)
+	return i, err
+}
+
+const getChannelItemLinkByExternal = `-- name: GetChannelItemLinkByExternal :one
+SELECT binding_id, kind, keel_id, external_id, extra, synced_at
+  FROM channel_item_links
+ WHERE binding_id = $1::bigint AND kind = $2::smallint AND external_id = $3::text
+`
+
+type GetChannelItemLinkByExternalParams struct {
+	BindingID  int64
+	Kind       int16
+	ExternalID string
+}
+
+type GetChannelItemLinkByExternalRow struct {
+	BindingID  int64
+	Kind       int16
+	KeelID     int64
+	ExternalID string
+	Extra      []byte
+	SyncedAt   pgtype.Timestamptz
+}
+
+// 按外部 ID 反查映射（商品源拉进来的商品 / 规格，找它在 keel 里是哪一个）。
+func (q *Queries) GetChannelItemLinkByExternal(ctx context.Context, arg GetChannelItemLinkByExternalParams) (GetChannelItemLinkByExternalRow, error) {
+	row := q.db.QueryRow(ctx, getChannelItemLinkByExternal, arg.BindingID, arg.Kind, arg.ExternalID)
+	var i GetChannelItemLinkByExternalRow
+	err := row.Scan(
+		&i.BindingID,
+		&i.Kind,
+		&i.KeelID,
+		&i.ExternalID,
+		&i.Extra,
+		&i.SyncedAt,
 	)
 	return i, err
 }

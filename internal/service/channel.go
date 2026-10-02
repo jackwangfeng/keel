@@ -43,6 +43,7 @@ const (
 	QueueChannelListingPush      = "channel.listing.push"
 	QueueChannelListingRecompute = "channel.listing.recompute"
 	QueueChannelInbound          = "channel.inbound"
+	QueueChannelCatalogPull      = "channel.catalog.pull"
 )
 
 var (
@@ -75,10 +76,12 @@ type channelCoord struct{ c dtm.Coordinator }
 
 // NewChannelService 建服务。res 解析库存服务的分支地址，self 解析本服务自己的（同 NewQuotaSync）。
 func NewChannelService(repo *repository.Repo, inv inventory.Service, reg *channel.Registry, res, self dtm.BranchResolver) *ChannelService {
-	return &ChannelService{repo: repo, inv: inv, reg: reg, log: slog.Default().With("component", "channel"),
+	s := &ChannelService{repo: repo, inv: inv, reg: reg, log: slog.Default().With("component", "channel"),
 		msgAction: res.BranchURL(inventory.BranchChannelMerchantSync),
 		msgQuery:  self.BranchURL(BranchChannelMerchantQuery),
 		workerID:  channelWorkerID()}
+	s.OnInbound(channel.EventCatalogChanged, s.catalogChanged)
+	return s
 }
 
 // Attach 接上已经启动的协调器（回查分支要在 Start 之前注册，同 QuotaSync）。
@@ -144,6 +147,9 @@ func (s *ChannelService) CreateBinding(ctx context.Context, in ChannelBindingCre
 		var e error
 		b, e = tx.CreateChannelBinding(ctx, repository.ChannelBindingInput{Channel: in.Channel,
 			ExternalAccount: in.ExternalAccount, Name: in.Name, Roles: int16(in.Roles), Status: status, Config: in.Config})
+		if e == nil && b.IsActiveCatalogSource() {
+			e = s.enqueueCatalogPull(ctx, tx, b.ID, "", true)
+		}
 		return b.IsActiveOutlet(), e
 	})
 	return b, err
@@ -184,6 +190,12 @@ func (s *ChannelService) UpdateBinding(ctx context.Context, id int64, p ChannelB
 		// 变成启用、或启用中改了 config（价格源门店之类）：整店重算一遍。
 		if b.IsActiveOutlet() && (flipped || p.Config != nil) {
 			if err := s.enqueueRecomputeBinding(ctx, tx, b.ID); err != nil {
+				return false, err
+			}
+		}
+		if b.IsActiveCatalogSource() && !before.IsActiveCatalogSource() {
+			// 变成启用中的商品源：整店首拉（停用再启用也重拉一遍，回调丢了靠它补）。
+			if err := s.enqueueCatalogPull(ctx, tx, b.ID, "", true); err != nil {
 				return false, err
 			}
 		}
