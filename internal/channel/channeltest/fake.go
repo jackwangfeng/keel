@@ -4,6 +4,7 @@
 package channeltest
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -12,6 +13,7 @@ import (
 	"errors"
 	"iter"
 	"net/http"
+	"net/http/httptest"
 	"sync"
 	"time"
 
@@ -28,6 +30,19 @@ const (
 	HeaderTopic     = "X-Fake-Topic"
 )
 
+// TopicOrder 是订单回调的主题；正文里的 order_id（字符串）是渠道订单号。
+const TopicOrder = "order"
+
+// OrderWebhook 造一条签好名的订单回调（正文 {"order_id": externalOrderID}）。eventID 是去重键。
+func OrderWebhook(secret, eventID, externalOrderID string) (*http.Request, []byte) {
+	body, _ := json.Marshal(map[string]string{"order_id": externalOrderID})
+	r := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
+	r.Header.Set(HeaderSignature, Sign(secret, body))
+	r.Header.Set(HeaderEventID, eventID)
+	r.Header.Set(HeaderTopic, TopicOrder)
+	return r, body
+}
+
 // Secrets 是假渠道 binding 的 secrets 形状。
 type Secrets struct {
 	WebhookSecret string `json:"webhook_secret"`
@@ -41,6 +56,7 @@ func Sign(secret string, body []byte) string {
 }
 
 // Adapter 是假渠道。零值可用（销售渠道、不需要接单）；字段可在测试里改。
+// CapsValue 可在测试里随意配（AcceptRequired、RefundNeedsApproval……），渠道层只按它分支。
 type Adapter struct {
 	CapsValue channel.Caps
 
@@ -54,7 +70,23 @@ type Adapter struct {
 	conflict map[[2]int64]int32 // (门店, SKU) → 渠道上「被人改过」的现值，下一次推送报一次冲突
 	applied  map[[2]int64]int32 // 渠道上当前的可售数（只有生效的推送改它；冲突的那一次是被人改成的数）
 	prices   map[[2]int64]int64 // 渠道上当前的价格（同 applied）
-	actions  []channel.Action
+
+	// OnAct 非空时在每次 Act 记录之后调用（不持锁），返回值作为 Act 的结果（编排的失败优先）：
+	// 测试用它在平台上「做出」动作的效果（比如接单后 PutOrder 一张 OrderAccepted 的单）。
+	OnAct func(o channel.OrderRef, a channel.Action) error
+
+	acts       []ActCall
+	actFail    int   // 接下来几次 Act 失败
+	actFailErr error // 失败用哪个错误（nil = 一个普通的可重试错误）
+	orders     map[string]channel.ChannelOrder
+	orderOrder []string // PutOrder 的先后（ListOrders 按它）
+}
+
+// ActCall 是一次 Act 调用的记录（失败的也记，Err 是返回给调用方的错误）。
+type ActCall struct {
+	Ref    channel.OrderRef
+	Action channel.Action
+	Err    error
 }
 
 func New() *Adapter {
@@ -79,11 +111,15 @@ func (a *Adapter) ParseInbound(b channel.Binding, r *http.Request, body []byte) 
 		return nil, nil, errors.New("假渠道回调缺事件 ID")
 	}
 	topic := r.Header.Get(HeaderTopic)
-	kind := channel.EventIgnored
-	if topic == "order" {
-		kind = channel.EventOrderChanged
+	ev := channel.Event{ExternalID: id, Kind: channel.EventIgnored, Topic: topic, Payload: json.RawMessage(body)}
+	if topic == TopicOrder {
+		var p struct {
+			OrderID string `json:"order_id"`
+		}
+		_ = json.Unmarshal(body, &p)
+		ev.Kind, ev.ExternalOrderID = channel.EventOrderChanged, p.OrderID
 	}
-	return []channel.Event{{ExternalID: id, Kind: kind, Topic: topic, Payload: json.RawMessage(body)}}, []byte("ok"), nil
+	return []channel.Event{ev}, []byte("ok"), nil
 }
 
 func mustHex(s string) []byte { b, _ := hex.DecodeString(s); return b }
@@ -185,19 +221,109 @@ func (a *Adapter) PushCatalog(context.Context, channel.Binding, []channel.Catalo
 	return channel.ErrUnsupported
 }
 
-func (a *Adapter) Act(_ context.Context, _ channel.Binding, _ channel.OrderRef, act channel.Action) error {
+// PutOrder 放（或替换）一张渠道上的订单，FetchOrder / ListOrders 返回它。
+func (a *Adapter) PutOrder(o channel.ChannelOrder) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.actions = append(a.actions, act)
-	return nil
+	if a.orders == nil {
+		a.orders = map[string]channel.ChannelOrder{}
+	}
+	if _, ok := a.orders[o.ExternalOrderID]; !ok {
+		a.orderOrder = append(a.orderOrder, o.ExternalOrderID)
+	}
+	a.orders[o.ExternalOrderID] = o
 }
 
-func (a *Adapter) FetchOrder(context.Context, channel.Binding, string) (channel.ChannelOrder, error) {
-	return channel.ChannelOrder{}, channel.ErrUnsupported
+// Order 是 PutOrder 放进去的那张单（拷贝）。
+func (a *Adapter) Order(externalOrderID string) (channel.ChannelOrder, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	o, ok := a.orders[externalOrderID]
+	return o, ok
 }
 
+// FailActNext 让接下来 n 次 Act 返回 err（nil = 一个普通的可重试错误）。失败的调用也记进 Acts。
+func (a *Adapter) FailActNext(n int, err error) {
+	a.mu.Lock()
+	a.actFail, a.actFailErr = n, err
+	a.mu.Unlock()
+}
+
+// Acts 是收到过的全部 Act 调用（按到达顺序，拷贝）。
+func (a *Adapter) Acts() []ActCall {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]ActCall(nil), a.acts...)
+}
+
+// ActsOf 是某一种动作的调用（含失败的）。
+func (a *Adapter) ActsOf(kind channel.ActionKind) []ActCall {
+	var out []ActCall
+	for _, c := range a.Acts() {
+		if c.Action.Kind == kind {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+func (a *Adapter) Act(_ context.Context, _ channel.Binding, o channel.OrderRef, act channel.Action) error {
+	a.mu.Lock()
+	if a.actFail > 0 {
+		a.actFail--
+		err := a.actFailErr
+		if err == nil {
+			err = &channel.RetryableError{Err: errors.New("假渠道：编排的动作失败")}
+		}
+		a.acts = append(a.acts, ActCall{Ref: o, Action: act, Err: err})
+		a.mu.Unlock()
+		return err
+	}
+	i := len(a.acts)
+	a.acts = append(a.acts, ActCall{Ref: o, Action: act})
+	hook := a.OnAct
+	a.mu.Unlock()
+	if hook == nil {
+		return nil
+	}
+	err := hook(o, act)
+	if err != nil {
+		a.mu.Lock()
+		a.acts[i].Err = err
+		a.mu.Unlock()
+	}
+	return err
+}
+
+// FetchOrder 返回 PutOrder 放进去的单；没有返回 ErrOrderNotFound（不可重试）。
+func (a *Adapter) FetchOrder(_ context.Context, _ channel.Binding, id string) (channel.ChannelOrder, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	o, ok := a.orders[id]
+	if !ok {
+		return channel.ChannelOrder{}, ErrOrderNotFound
+	}
+	return o, nil
+}
+
+// ErrOrderNotFound：假渠道上没有这张单。
+var ErrOrderNotFound = errors.New("假渠道：没有这张订单")
+
+// ListOrders 按 PutOrder 的先后列出全部订单（不按 day 过滤）。
 func (a *Adapter) ListOrders(context.Context, channel.Binding, time.Time) iter.Seq2[channel.ChannelOrder, error] {
-	return func(func(channel.ChannelOrder, error) bool) {}
+	a.mu.Lock()
+	out := make([]channel.ChannelOrder, 0, len(a.orderOrder))
+	for _, id := range a.orderOrder {
+		out = append(out, a.orders[id])
+	}
+	a.mu.Unlock()
+	return func(yield func(channel.ChannelOrder, error) bool) {
+		for _, o := range out {
+			if !yield(o, nil) {
+				return
+			}
+		}
+	}
 }
 
 func (a *Adapter) ListListings(context.Context, channel.Binding, channel.StoreLink) iter.Seq2[channel.Listing, error] {

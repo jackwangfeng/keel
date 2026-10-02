@@ -170,12 +170,80 @@ type ActionLine struct {
 	Qty           int32
 }
 
-// ChannelOrder 是渠道上一张订单的权威状态（第三期充实）。
+// OrderStatus 是渠道订单的规整状态（与 channel_orders.status 同一套数）。
+type OrderStatus int8
+
+const (
+	OrderPendingPayment OrderStatus = iota + 1 // 待付款（Shopify PENDING / AUTHORIZED）：不接单
+	OrderNew                                   // 新单（已付款、未接单 / 未发货）
+	OrderAccepted                              // 已接单
+	OrderShipped                               // 已发货
+	OrderCompleted                             // 已完成
+	OrderCancelled                             // 已取消（含未发货就全额退款）
+	OrderRejected                              // 已拒单
+)
+
+// ChannelOrder 是渠道上一张订单的权威状态，由适配器从平台数据规整出来。
+//
+// 金额全用平台快照（不变量 5：渠道单不重新算价）。BuyerPaidCents 不含税
+// （= Goods + Freight − PlatformSubsidy − MerchantSubsidy）；平台总价 = BuyerPaid + Tax。
+// Shopify 没有平台补贴与佣金：Platform / Commission 为 0，折扣全记 MerchantSubsidy。
 type ChannelOrder struct {
-	ExternalOrderID string
+	ExternalOrderID   string
+	ExternalOrderName string // 给人看的单号（Shopify #1001）
+	// ExternalStoreID 是订单所在的渠道门店；分到多个门店时为空，原因写在 StoreError。
 	ExternalStoreID string
-	PlatformStatus  string
+	StoreError      string
+	PlatformStatus  string // 平台状态原文（留档、给人看）
+	Status          OrderStatus
+	Version         int64 // 单调：旧版本不覆盖新版本；Shopify = updatedAt 的 Unix 毫秒
+	Test            bool
+	PlacedAt        time.Time
+	AcceptDeadline  *time.Time // AcceptRequired 的渠道：接单截止时刻
+	Delivery        DeliveryMode
+	Lines           []OrderLine
+	Amounts         OrderAmounts
+	Receiver        Receiver
+	Shipments       []Shipment // 平台上已有的发货（Shopify fulfillments 的物流单号）
+	Refunds         []Refund   // 平台上已发生的退款（累计，全部列出）
 	Raw             json.RawMessage
+}
+
+// OrderLine 是渠道订单的一行。ExternalSKUID 是渠道上的 SKU（Shopify 变体 gid），渠道层据此找 keel SKU。
+// Qty 是下单数量（不随退款减少），RefundedQty 是已退 / 已移除的数量。
+type OrderLine struct {
+	ExternalLineID, ExternalSKUID, Title string
+	Qty                                  int32
+	PriceCents                           int64 // 单价（分）
+	RefundedQty                          int32
+}
+
+// OrderAmounts 是渠道订单的金额快照（分）。
+type OrderAmounts struct {
+	GoodsCents, FreightCents, PlatformSubsidyCents, MerchantSubsidyCents, CommissionCents, TaxCents,
+	MerchantReceivableCents, BuyerPaidCents, RefundedCents int64
+}
+
+// Receiver 是收货人。PhoneVirtual 为真表示是平台的隐私号。平台不给收货地址时全空。
+type Receiver struct {
+	Name, Phone                                     string
+	PhoneVirtual                                    bool
+	Province, City, District, Address, Zip, Country string
+}
+
+// Shipment 是平台上的一次发货。
+type Shipment struct {
+	Company, TrackingNo string
+	At                  time.Time
+}
+
+// Refund 是平台上的一次退款。Lines 按 ExternalSKUID 记退了哪些行；Restock 为真表示平台把货放回了库存。
+type Refund struct {
+	ExternalID  string
+	AmountCents int64
+	Lines       []ActionLine
+	Restock     bool
+	At          time.Time
 }
 
 // CatalogPage 是商品源的一页。
