@@ -151,6 +151,8 @@ type channelBindingConfig struct {
 	// RequestPolicy 是平台申请的处理策略：manual（缺省，等人）/ auto_agree_unshipped（未发货的取消自动同意）。
 	// 接单提醒提前几分钟（accept_remind_minutes，缺省 3）只在 SQL 里读（db/queries/channels.sql 的 DueAcceptReminders）。
 	RequestPolicy string `json:"request_policy"`
+	// CommissionBP 是渠道佣金率（万分比，缺省 0），只用于算单件净收入（channel_allocation.go）。
+	CommissionBP int32 `json:"commission_bp"`
 }
 
 func parseBindingConfig(raw json.RawMessage) channelBindingConfig {

@@ -72,6 +72,7 @@ curl -H "Authorization: Bearer $KEEL_AGENT_KEY" https://<店铺域名>/api/v1/ag
 | 查数 | `query_sql` | 只读 SQL 兜底（M11）：现有工具答不了的问题自己写一条 `SELECT` / `WITH`，只能读 `agent_ro` schema 里的脱敏视图（无手机号、地址、买家原话），至多 500 行、3 秒超时；需要全店范围 |
 | 计算 | `slow_movers` | 滞销清仓：每个（门店，SKU）的库存周转天数（可售 ÷ 日均，口径同 `restock_plan`）。周转天数为 null 的是回看期内一件没卖出去的，排最前 |
 | 计算 | `promotion_review` | 活动 / 券复盘：一个活动窗口内与前一个等长窗口的销售额、单量、客单价、参与 SKU 销量对比；一张券的发出数、核销数、核销率、带来的销售额与优惠 |
+| 计算 | `channel_allocation_review` | 渠道库存分配：一家门店每个 SKU 在各销售渠道（自营 + 接入的渠道）上的分配规则、对外可售、卖出、有货时日均、挂零小时（分配造成 / keel 没货）、缺货拒单、单件净收入，及 keel 的基线建议；keel 可售为 0 的 SKU 不给建议。渠道层没开时返回空结果与说明 |
 | 提案 | `propose_inventory_adjust` | 提一条加库存提案（给某门店某 SKU 加库存） |
 | 提案 | `propose_flash_price` | 提一条限时折扣提案：若干 SKU 在一段时间内打折，批准后 Keel 建活动并上线。需要全店范围 |
 | 提案 | `propose_coupon` | 提一条发券提案：满减 / 折扣 / 立减，可选放进领券中心。需要全店范围 |
@@ -226,6 +227,7 @@ def verify(secret: str, body: bytes, header: str) -> bool:
 | 2026-09-28 | 演示站实跑验收修两处：全部工具输出里的时刻改为**店铺时区**（带偏移的 RFC 3339，如 `+08:00`；之前是 UTC，AI 店长把它当北京时间写进简报）；`list_refunds` 加 `order_shipped_at`（没发过货时缺席），判发没发货看它，不看 `order_status`（50 / 60 是未发货的整单退款） |
 | 2026-10-01 | 工具错误新增 `busy`（503）：数据库等锁 / 语句超时，这次调用确定没有生效，稍后原样重试。之前同样的情况报 `internal` |
 | 2026-10-02 | 商品出参（`list_products` `get_product`）加 `managed_by`：由渠道（如 `shopify`）管理的商品，标题、详情、图片、SKU 规格改不了（后台 409 `managed-by-channel`，`propose_product_copy` 改标题的提案批准执行时同样失败）；null / 缺席 = keel 自己管 |
+| 2026-10-03 | 加 `channel_allocation_review`（渠道库存分配的事实与基线建议，只读，判权同 `slow_movers`）；`query_sql` 可读视图加 `channel_bindings` `channel_orders` `channel_stock_rules` `channel_listing_zero_spans`，`orders` 加 `source`（0 自营 / 1 渠道单）与 `channel_order_id`（视图不含渠道凭据、配置与收货人） |
 
 ## 接入方式举例
 

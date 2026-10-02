@@ -76,6 +76,7 @@ func TestMCPEveryToolReturnsItsDeclaredShape(t *testing.T) {
 		{"ack_events", map[string]any{"up_to_id": evID}},
 		{"slow_movers", map[string]any{}},
 		{"promotion_review", map[string]any{"coupon_template_id": tpl.Id}},
+		{"channel_allocation_review", map[string]any{"store_id": cs.NorthStore}},
 	}
 	tools, err := sess.ListTools(context.Background(), nil)
 	if err != nil {

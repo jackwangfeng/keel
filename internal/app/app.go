@@ -757,6 +757,7 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 		Events:          agentEvents,
 		SlowMovers:      service.NewSlowMoversService(repo, inv, service.NewAdminStoreService(repo, inv).WithChannels(ro.channels)),
 		PromotionReview: service.NewPromotionReviewService(repo),
+		Channels:        ro.channels,
 		Version:         buildinfo.Get().Version,
 	})
 	v1.POST("/mcp", agentAuth, mcpH)

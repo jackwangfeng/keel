@@ -183,6 +183,14 @@ type ChannelTx interface {
 	ChannelZeroHours(ctx context.Context, storeID int64, skuIDs []int64, from, to time.Time) ([]ChannelZeroHours, error)
 	// PurgeChannelZeroSpans 删 before 之前结束的挂零时段，一次至多 limit 条。
 	PurgeChannelZeroSpans(ctx context.Context, before time.Time, limit int) (int64, error)
+	// ChannelZeroSpanSKUs：这家门店 from 之后在任一渠道挂过零的 SKU。
+	ChannelZeroSpanSKUs(ctx context.Context, storeID int64, from time.Time) ([]int64, error)
+	// ChannelSoldBySource：这家门店 since 以来各渠道卖出的件数（自营 BindingID = 0），口径同 StoreSKUSales。
+	ChannelSoldBySource(ctx context.Context, storeID int64, since time.Time) ([]ChannelSKUQty, error)
+	// ChannelStockoutRejects：这家门店 since 以来渠道单因缺货没接成的件数（判据见 db/queries/channels.sql）。
+	ChannelStockoutRejects(ctx context.Context, storeID int64, since time.Time) ([]ChannelSKUQty, error)
+	// ChannelAllocationSKUs：渠道分配要的 SKU 信息（名字、成本价、上架时间），删了的不列。
+	ChannelAllocationSKUs(ctx context.Context, skuIDs []int64) ([]ChannelAllocationSKU, error)
 
 	// InsertChannelInboundEvent：重复的外部事件 ID 返回 inserted=false、不报错。
 	InsertChannelInboundEvent(ctx context.Context, in ChannelInboundEventInput) (id int64, inserted bool, err error)
@@ -547,6 +555,64 @@ func (t tenantTx) ChannelZeroHours(ctx context.Context, storeID int64, skuIDs []
 	for _, r := range rows {
 		out = append(out, ChannelZeroHours{BindingID: r.BindingID, StoreID: r.StoreID, SKUID: r.SkuID,
 			HeldHours: r.HeldHours, EmptyHours: r.EmptyHours})
+	}
+	return out, nil
+}
+
+// ChannelSKUQty 是按（binding, SKU）汇总的件数；BindingID = 0 是自营。
+type ChannelSKUQty struct {
+	BindingID, SKUID int64
+	Qty              int64
+}
+
+// ChannelAllocationSKU 是渠道分配要的 SKU 信息。SpecValues 是 JSON 文本。
+type ChannelAllocationSKU struct {
+	SKUID                             int64
+	ProductTitle, SKUCode, SpecValues string
+	CostCents                         int64
+	CreatedAt                         time.Time
+}
+
+func (t tenantTx) ChannelZeroSpanSKUs(ctx context.Context, storeID int64, from time.Time) ([]int64, error) {
+	return t.q.ChannelZeroSpanSKUs(ctx, db.ChannelZeroSpanSKUsParams{StoreID: storeID, FromAt: pgtype.Timestamptz{Time: from, Valid: true}})
+}
+
+func (t tenantTx) ChannelSoldBySource(ctx context.Context, storeID int64, since time.Time) ([]ChannelSKUQty, error) {
+	rows, err := t.q.ChannelSoldBySource(ctx, db.ChannelSoldBySourceParams{StoreID: storeID, Since: pgtype.Timestamptz{Time: since, Valid: true}})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ChannelSKUQty, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, ChannelSKUQty{BindingID: r.BindingID, SKUID: r.SkuID, Qty: r.Qty})
+	}
+	return out, nil
+}
+
+func (t tenantTx) ChannelStockoutRejects(ctx context.Context, storeID int64, since time.Time) ([]ChannelSKUQty, error) {
+	rows, err := t.q.ChannelStockoutRejects(ctx, db.ChannelStockoutRejectsParams{StoreID: storeID, Since: pgtype.Timestamptz{Time: since, Valid: true}})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ChannelSKUQty, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, ChannelSKUQty{BindingID: r.BindingID, SKUID: r.SkuID, Qty: r.Qty})
+	}
+	return out, nil
+}
+
+func (t tenantTx) ChannelAllocationSKUs(ctx context.Context, skuIDs []int64) ([]ChannelAllocationSKU, error) {
+	if len(skuIDs) == 0 {
+		return nil, nil
+	}
+	rows, err := t.q.ChannelAllocationSKUs(ctx, skuIDs)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ChannelAllocationSKU, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, ChannelAllocationSKU{SKUID: r.ID, ProductTitle: r.ProductTitle, SKUCode: r.SkuCode,
+			SpecValues: r.SpecValues, CostCents: r.CostCents, CreatedAt: r.CreatedAt.Time})
 	}
 	return out, nil
 }

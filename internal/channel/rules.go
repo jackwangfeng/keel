@@ -8,18 +8,33 @@ import "math"
 //
 // StoreID / SKUID 为空表示不限；最具体的生效（门店 × SKU > 门店 > 渠道）。
 type StockRule struct {
-	StoreID, SKUID *int64
-	RatioBP        int32
-	SafetyQty      int32
-	CapQty         *int32
+	StoreID   *int64 `json:"store_id,omitempty"`
+	SKUID     *int64 `json:"sku_id,omitempty"`
+	RatioBP   int32  `json:"ratio_bp"`
+	SafetyQty int32  `json:"safety_qty"`
+	CapQty    *int32 `json:"cap_qty,omitempty"`
 }
+
+// 规则来自哪一级（ResolveStockRuleLevel）：渠道级 / 门店级 / 门店 × SKU 级 / 一条都没配（DefaultStockRule）。
+const (
+	RuleLevelBinding = "binding"
+	RuleLevelStore   = "store"
+	RuleLevelSKU     = "sku"
+	RuleLevelDefault = "default"
+)
 
 // DefaultStockRule 是没配任何规则时的分配：全量、不留安全库存、不封顶。
 var DefaultStockRule = StockRule{RatioBP: 10000}
 
 // ResolveStockRule 挑出对 (storeID, skuID) 最具体的那条规则；一条都不适用时返回 DefaultStockRule。
 func ResolveStockRule(rules []StockRule, storeID, skuID int64) StockRule {
-	best, bestRank := DefaultStockRule, -1
+	r, _ := ResolveStockRuleLevel(rules, storeID, skuID)
+	return r
+}
+
+// ResolveStockRuleLevel 同 ResolveStockRule，另外给出生效的那条来自哪一级（RuleLevel*）。
+func ResolveStockRuleLevel(rules []StockRule, storeID, skuID int64) (StockRule, string) {
+	best, bestRank, level := DefaultStockRule, -1, RuleLevelDefault
 	for _, r := range rules {
 		rank := 0
 		if r.StoreID != nil {
@@ -36,10 +51,18 @@ func ResolveStockRule(rules []StockRule, storeID, skuID int64) StockRule {
 		}
 		if rank > bestRank {
 			best, bestRank = r, rank
+			switch {
+			case r.SKUID != nil:
+				level = RuleLevelSKU
+			case r.StoreID != nil:
+				level = RuleLevelStore
+			default:
+				level = RuleLevelBinding
+			}
 		}
 	}
 	best.StoreID, best.SKUID = nil, nil
-	return best
+	return best, level
 }
 
 // PublishedQty 按规则算对外可售数。真实可售为负（超卖过）按 0。

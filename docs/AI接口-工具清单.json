@@ -30,6 +30,243 @@
     }
   },
   {
+    "description": "渠道库存分配复盘（只读）：一家门店每个 SKU 在每个销售渠道（自营 + 接入的外卖 / 电商渠道）上的当前分配规则（比例 ratio_bp、安全库存、上限，及来自哪一级）、对外可售数、窗口内卖出件数、有货时的日均销量（分母去掉挂零的时间）、挂零小时数（held_zero_hours = keel 有货但规则算成 0；empty_zero_hours = keel 自己没货）、缺货拒单件数、单件净收入（扣佣金与成本价；cost_missing 表示没填成本价、净收入没减成本）。suggestions 是 keel 按固定规则算的基线建议，可以照用、修改或不用；keel 自己可售为 0 的 SKU 不给建议——缺的是货，不是分配。",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "days": {
+          "description": "窗口天数，7–30，默认 14",
+          "type": "integer"
+        },
+        "sku_ids": {
+          "description": "只看这些 SKU，至多 50 个；不传则自动挑这家门店窗口内在任一渠道卖过或挂零过的",
+          "items": {
+            "type": "integer"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        },
+        "store_id": {
+          "description": "门店 id（必填）",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "store_id"
+      ],
+      "type": "object"
+    },
+    "name": "channel_allocation_review",
+    "outputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "days": {
+          "type": "integer"
+        },
+        "note": {
+          "type": "string"
+        },
+        "skus": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "available": {
+                "maximum": 2147483647,
+                "minimum": -2147483648,
+                "type": "integer"
+              },
+              "channels": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "binding_id": {
+                      "type": [
+                        "null",
+                        "integer"
+                      ]
+                    },
+                    "daily_velocity": {
+                      "type": "number"
+                    },
+                    "empty_zero_hours": {
+                      "type": "number"
+                    },
+                    "held_zero_hours": {
+                      "type": "number"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "published_qty": {
+                      "maximum": 2147483647,
+                      "minimum": -2147483648,
+                      "type": "integer"
+                    },
+                    "rule": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "cap_qty": {
+                          "maximum": 2147483647,
+                          "minimum": -2147483648,
+                          "type": [
+                            "null",
+                            "integer"
+                          ]
+                        },
+                        "ratio_bp": {
+                          "maximum": 2147483647,
+                          "minimum": -2147483648,
+                          "type": "integer"
+                        },
+                        "safety_qty": {
+                          "maximum": 2147483647,
+                          "minimum": -2147483648,
+                          "type": "integer"
+                        },
+                        "sku_id": {
+                          "type": [
+                            "null",
+                            "integer"
+                          ]
+                        },
+                        "store_id": {
+                          "type": [
+                            "null",
+                            "integer"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "ratio_bp",
+                        "safety_qty"
+                      ],
+                      "type": [
+                        "null",
+                        "object"
+                      ]
+                    },
+                    "rule_level": {
+                      "type": "string"
+                    },
+                    "sold": {
+                      "type": "integer"
+                    },
+                    "stockout_rejects": {
+                      "type": "integer"
+                    },
+                    "unit_net_cents": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "published_qty",
+                    "sold",
+                    "daily_velocity",
+                    "held_zero_hours",
+                    "empty_zero_hours",
+                    "stockout_rejects",
+                    "unit_net_cents"
+                  ],
+                  "type": "object"
+                },
+                "type": [
+                  "null",
+                  "array"
+                ]
+              },
+              "cost_missing": {
+                "type": "boolean"
+              },
+              "sku_id": {
+                "type": "integer"
+              },
+              "stockout_days": {
+                "type": "integer"
+              },
+              "suggestions": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "binding_id": {
+                      "type": "integer"
+                    },
+                    "cap_qty": {
+                      "maximum": 2147483647,
+                      "minimum": -2147483648,
+                      "type": [
+                        "null",
+                        "integer"
+                      ]
+                    },
+                    "ratio_bp": {
+                      "maximum": 2147483647,
+                      "minimum": -2147483648,
+                      "type": "integer"
+                    },
+                    "safety_qty": {
+                      "maximum": 2147483647,
+                      "minimum": -2147483648,
+                      "type": "integer"
+                    },
+                    "sku_id": {
+                      "type": [
+                        "null",
+                        "integer"
+                      ]
+                    },
+                    "why": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "binding_id",
+                    "ratio_bp",
+                    "safety_qty",
+                    "why"
+                  ],
+                  "type": "object"
+                },
+                "type": [
+                  "null",
+                  "array"
+                ]
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "sku_id",
+              "title",
+              "available",
+              "stockout_days",
+              "cost_missing",
+              "channels",
+              "suggestions"
+            ],
+            "type": "object"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        },
+        "store_id": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "store_id",
+        "days",
+        "skus"
+      ],
+      "type": "object"
+    }
+  },
+  {
     "description": "商品详情：全部 SKU（规格、价格、库存）与图片。",
     "inputSchema": {
       "additionalProperties": false,
@@ -2844,7 +3081,7 @@
       "additionalProperties": false,
       "properties": {
         "sql": {
-          "description": "一条 SELECT / WITH 查询，只能读 agent_ro 里的视图（不写 schema 前缀即可）：orders order_items products skus categories stores regions refunds search_logs coupon_templates user_coupons promotions promotion_skus。至多 500 行、3 秒",
+          "description": "一条 SELECT / WITH 查询，只能读 agent_ro 里的视图（不写 schema 前缀即可）：orders order_items products skus categories stores regions refunds search_logs coupon_templates user_coupons promotions promotion_skus channel_bindings channel_orders channel_stock_rules channel_listing_zero_spans（orders.source：0 自营 / 1 渠道单）。至多 500 行、3 秒",
           "type": "string"
         }
       },

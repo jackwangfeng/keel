@@ -11,6 +11,52 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const channelAllocationSKUs = `-- name: ChannelAllocationSKUs :many
+SELECT s.id, p.title AS product_title, s.sku_code, COALESCE(s.spec_values::text, '{}')::text AS spec_values,
+       s.cost_cents, s.created_at
+  FROM skus s
+  JOIN products p ON p.id = s.product_id
+ WHERE s.id = ANY($1::bigint[]) AND s.deleted_at IS NULL AND p.deleted_at IS NULL
+ ORDER BY s.id
+`
+
+type ChannelAllocationSKUsRow struct {
+	ID           int64
+	ProductTitle string
+	SkuCode      string
+	SpecValues   string
+	CostCents    int64
+	CreatedAt    pgtype.Timestamptz
+}
+
+// 渠道分配要的 SKU 信息：人读的名字、成本价、上架时间（断货天数的窗口不早于它）。删了的不列。
+func (q *Queries) ChannelAllocationSKUs(ctx context.Context, skuIds []int64) ([]ChannelAllocationSKUsRow, error) {
+	rows, err := q.db.Query(ctx, channelAllocationSKUs, skuIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ChannelAllocationSKUsRow
+	for rows.Next() {
+		var i ChannelAllocationSKUsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProductTitle,
+			&i.SkuCode,
+			&i.SpecValues,
+			&i.CostCents,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const channelManagedProducts = `-- name: ChannelManagedProducts :many
 SELECT DISTINCT ON (l.keel_id) l.keel_id AS product_id, b.channel
   FROM channel_item_links l
@@ -264,6 +310,109 @@ func (q *Queries) ChannelSKUsByCodes(ctx context.Context, codes []string) ([]Cha
 	return items, nil
 }
 
+const channelSoldBySource = `-- name: ChannelSoldBySource :many
+SELECT (CASE WHEN o.source = 0 THEN 0 ELSE co.binding_id END)::bigint AS binding_id, oi.sku_id,
+       sum(oi.quantity)::bigint AS qty
+  FROM order_items oi
+  JOIN orders o ON o.id = oi.order_id
+  LEFT JOIN channel_orders co ON co.id = o.channel_order_id
+ WHERE o.store_id = $1::bigint
+   AND o.status IN (20, 30, 40, 50)
+   AND o.paid_at >= $2::timestamptz
+   AND (o.source = 0 OR co.id IS NOT NULL)
+ GROUP BY 1, 2
+`
+
+type ChannelSoldBySourceParams struct {
+	StoreID int64
+	Since   pgtype.Timestamptz
+}
+
+type ChannelSoldBySourceRow struct {
+	BindingID int64
+	SkuID     int64
+	Qty       int64
+}
+
+// 这家门店自 since 以来各渠道卖出的件数，按（binding, SKU）：自营（source 0）binding_id 记 0。
+// 「卖出」与 StoreSKUSales（restock.sql）同一口径：20 / 30 / 40 / 50 算，10 待支付、90 已关闭、60 整单退款不算。
+func (q *Queries) ChannelSoldBySource(ctx context.Context, arg ChannelSoldBySourceParams) ([]ChannelSoldBySourceRow, error) {
+	rows, err := q.db.Query(ctx, channelSoldBySource, arg.StoreID, arg.Since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ChannelSoldBySourceRow
+	for rows.Next() {
+		var i ChannelSoldBySourceRow
+		if err := rows.Scan(&i.BindingID, &i.SkuID, &i.Qty); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const channelStockoutRejects = `-- name: ChannelStockoutRejects :many
+WITH rej AS (
+    SELECT DISTINCT ON (co.id) co.binding_id, o.id AS order_id
+      FROM channel_orders co
+      JOIN orders o ON o.channel_order_id = co.id AND o.source = 1 AND o.status = 90
+     WHERE co.store_id = $1::bigint
+       AND co.created_at >= $2::timestamptz
+       AND co.order_no IS NULL
+       AND (co.exception LIKE '缺货%' OR co.status = 7)
+     ORDER BY co.id, o.id DESC
+)
+SELECT rej.binding_id, oi.sku_id, sum(oi.quantity)::bigint AS qty
+  FROM rej
+  JOIN order_items oi ON oi.order_id = rej.order_id
+ GROUP BY 1, 2
+`
+
+type ChannelStockoutRejectsParams struct {
+	StoreID int64
+	Since   pgtype.Timestamptz
+}
+
+type ChannelStockoutRejectsRow struct {
+	BindingID int64
+	SkuID     int64
+	Qty       int64
+}
+
+// 这家门店自 since 以来渠道单因缺货没接成的件数，按（binding, SKU）。判据三条同时成立：
+//
+//	有一张来源 1、已关闭（90）的 keel 订单指着它（接单 SAGA 走了补偿）；
+//	现在没有挂着 keel 订单（order_no 为空 = 最终没接成；补货后重试成功的不算拒单）；
+//	异常是「缺货：…」（channel_order_open_undo 写的）或已拒单（7，AcceptRequired 渠道补偿时入队拒单）。
+//	异常被人处理清空、又不是拒单的那种会漏算——只低估不高估。
+//
+// 件数取那张 90 订单的行（渠道单行里的 sku_id 不回写，映射在建 keel 订单时才解析）；一张渠道单重试过多次
+// 也只算最后那张 90 的订单。
+func (q *Queries) ChannelStockoutRejects(ctx context.Context, arg ChannelStockoutRejectsParams) ([]ChannelStockoutRejectsRow, error) {
+	rows, err := q.db.Query(ctx, channelStockoutRejects, arg.StoreID, arg.Since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ChannelStockoutRejectsRow
+	for rows.Next() {
+		var i ChannelStockoutRejectsRow
+		if err := rows.Scan(&i.BindingID, &i.SkuID, &i.Qty); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const channelSyncRev = `-- name: ChannelSyncRev :one
 SELECT (extract(epoch FROM clock_timestamp()) * 1000000)::bigint AS rev
 `
@@ -274,6 +423,38 @@ func (q *Queries) ChannelSyncRev(ctx context.Context) (int64, error) {
 	var rev int64
 	err := row.Scan(&rev)
 	return rev, err
+}
+
+const channelZeroSpanSKUs = `-- name: ChannelZeroSpanSKUs :many
+SELECT DISTINCT sku_id FROM channel_listing_zero_spans
+ WHERE store_id = $1::bigint AND (ended_at IS NULL OR ended_at > $2::timestamptz)
+ ORDER BY sku_id
+`
+
+type ChannelZeroSpanSKUsParams struct {
+	StoreID int64
+	FromAt  pgtype.Timestamptz
+}
+
+// 这家门店 [from, …) 里在任一渠道挂过零的 SKU（channel_allocation_review 自动挑 SKU 用）。
+func (q *Queries) ChannelZeroSpanSKUs(ctx context.Context, arg ChannelZeroSpanSKUsParams) ([]int64, error) {
+	rows, err := q.db.Query(ctx, channelZeroSpanSKUs, arg.StoreID, arg.FromAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []int64
+	for rows.Next() {
+		var sku_id int64
+		if err := rows.Scan(&sku_id); err != nil {
+			return nil, err
+		}
+		items = append(items, sku_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const closeChannelZeroSpan = `-- name: CloseChannelZeroSpan :exec

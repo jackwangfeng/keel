@@ -129,7 +129,7 @@ func registerMCPProposalTools(srv *mcp.Server, d *MCPDeps) {
 }
 
 type mcpQuerySQLIn struct {
-	SQL string `json:"sql" jsonschema:"一条 SELECT / WITH 查询，只能读 agent_ro 里的视图（不写 schema 前缀即可）：orders order_items products skus categories stores regions refunds search_logs coupon_templates user_coupons promotions promotion_skus。至多 500 行、3 秒"`
+	SQL string `json:"sql" jsonschema:"一条 SELECT / WITH 查询，只能读 agent_ro 里的视图（不写 schema 前缀即可）：orders order_items products skus categories stores regions refunds search_logs coupon_templates user_coupons promotions promotion_skus channel_bindings channel_orders channel_stock_rules channel_listing_zero_spans（orders.source：0 自营 / 1 渠道单）。至多 500 行、3 秒"`
 }
 
 func registerMCPSQLTool(srv *mcp.Server, d *MCPDeps) {
