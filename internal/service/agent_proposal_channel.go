@@ -431,7 +431,8 @@ func (s *AgentProposalService) execChannelStockRule(ctx context.Context, p repos
 		"applied": applied, "already": already}}, nil
 }
 
-// withinChannelPolicy：每条改动比例变化 ≤ max_ratio_step_bp、安全库存变化 ≤ max_units、封顶不变，且不把比例调到 0。
+// withinChannelPolicy：每条改动比例变化 ≤ max_ratio_step_bp、安全库存变化 ≤ max_units、封顶不变，且不把渠道调到 0：
+// 比例不许是 0、封顶不许是 0，试算里也不许有格子从有货变成 0（安全库存 ≥ 可售同样等于下架这个渠道）。
 func withinChannelPolicy(pol repository.AgentAutoPolicy, p repository.AgentProposal) bool {
 	if pol.MaxRatioStepBP <= 0 {
 		return false
@@ -442,7 +443,13 @@ func withinChannelPolicy(pol repository.AgentAutoPolicy, p repository.AgentPropo
 	}
 	for _, c := range pl.Changes {
 		if c.RatioBP == 0 || absInt32(c.RatioBP-c.Prev.RatioBP) > pol.MaxRatioStepBP ||
-			absInt32(c.SafetyQty-c.Prev.SafetyQty) > pol.MaxUnits || !equalInt32Ptr(c.CapQty, c.Prev.CapQty) {
+			absInt32(c.SafetyQty-c.Prev.SafetyQty) > pol.MaxUnits || !equalInt32Ptr(c.CapQty, c.Prev.CapQty) ||
+			(c.CapQty != nil && *c.CapQty == 0) {
+			return false
+		}
+	}
+	for _, pv := range pl.Preview {
+		if pv.BeforeQty > 0 && pv.AfterQty == 0 {
 			return false
 		}
 	}

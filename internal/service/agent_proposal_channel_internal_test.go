@@ -47,6 +47,25 @@ func TestWithinChannelPolicy(t *testing.T) {
 		ChannelStockRuleChange{SKUID: p64(9), RatioBP: 0, SafetyQty: 2, Prev: prev})) {
 		t.Error("有一条调到 0，整条都不该自动执行")
 	}
+	// 审查修复 5：比例没到 0，但试算里有格子从有到 0（安全库存 ≥ 可售）也等于下架 → 不自动执行；封顶调成 0 也不行。
+	withPreview := func(pv []ChannelStockPreview, cs ...ChannelStockRuleChange) repository.AgentProposal {
+		raw, _ := json.Marshal(ChannelStockRulePayload{BindingID: 1, StoreID: 2, Changes: cs, Preview: pv})
+		return repository.AgentProposal{Kind: ProposalKindChannelStockRule, Payload: raw}
+	}
+	up := ChannelStockRuleChange{RatioBP: 8000, SafetyQty: 5, Prev: prev}
+	if withinPolicy(pol, withPreview([]ChannelStockPreview{{SKUID: 9, Available: 4, BeforeQty: 1, AfterQty: 0}}, up)) {
+		t.Error("试算里有格子从 1 变成 0，不该自动执行")
+	}
+	if !withinPolicy(pol, withPreview([]ChannelStockPreview{{SKUID: 9, Available: 0, BeforeQty: 0, AfterQty: 0}}, up)) {
+		t.Error("本来就是 0 的格子不算调到 0，应在上限内")
+	}
+	if !withinPolicy(pol, withPreview([]ChannelStockPreview{{SKUID: 9, Available: 20, BeforeQty: 14, AfterQty: 11}}, up)) {
+		t.Error("试算没有格子到 0，应在上限内")
+	}
+	capPrev := ChannelRuleSnapshot{RatioBP: 8000, SafetyQty: 2, CapQty: i32(0), Level: channel.RuleLevelStore}
+	if withinPolicy(pol, prop(ChannelStockRuleChange{RatioBP: 9000, SafetyQty: 2, CapQty: i32(0), Prev: capPrev})) {
+		t.Error("封顶是 0（对外永远 0），不该自动执行")
+	}
 }
 
 func TestChannelRuleSnapshotAndApply(t *testing.T) {
