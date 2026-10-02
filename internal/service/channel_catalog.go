@@ -85,8 +85,16 @@ func (s *ChannelService) pullCatalogPage(ctx context.Context, payload []byte) er
 	}
 	for _, item := range page.Items {
 		if err := s.syncCatalogItem(ctx, b, item); err != nil {
-			return channel.RedactError(fmt.Errorf("商品 %s：%w", item.ExternalID, err), ab.Secrets)
+			err = channel.RedactError(fmt.Errorf("商品 %s：%w", item.ExternalID, err), ab.Secrets)
+			if channel.IsRetryable(err) || errors.Is(err, channel.ErrCredentials) || errors.Is(err, ErrChannelNoDefaultCategory) {
+				return err // 整页的问题：这一页重来
+			}
+			// 一件坏商品不卡住整店：记下、跳过，照常往下一页走。它下一次变化（回调）或停用再启用时再试。
+			s.log.ErrorContext(ctx, "这件商品没同步进来，已跳过", "binding_id", b.ID, "external_id", item.ExternalID, "err", err)
 		}
+	}
+	for _, sk := range page.Skipped {
+		s.log.ErrorContext(ctx, "商品源上这件商品读不懂，已跳过", "binding_id", b.ID, "external_id", sk.ExternalID, "reason", sk.Reason)
 	}
 	if page.NextCursor == "" {
 		return nil
@@ -354,7 +362,7 @@ func (s *ChannelService) syncCatalogItem(ctx context.Context, b repository.Chann
 				}
 				// 初始库存：已有库存行的由库存服务跳过，所以每次都给（上一次提交后 InitSKUs 失败的，这次补上）。
 				initRows = append(initRows, inventory.InitRow{SKUID: skuID, StoreID: store, Available: max(lv.Qty, 0)})
-				if fresh {
+				if fresh || !hasListing(ctx, tx, b.ID, store, skuID) {
 					if _, err := tx.RecordChannelListing(ctx, repository.ChannelListing{BindingID: b.ID, StoreID: store, SKUID: skuID,
 						PublishedQty: lv.Qty, PublishedCents: v.PriceCents}); err != nil {
 						return err
@@ -401,6 +409,12 @@ func (s *ChannelService) syncCatalogItem(ctx context.Context, b repository.Chann
 		}
 	}
 	return nil
+}
+
+// hasListing：这一格有没有推送基线（channel_listings 行）。门店映射晚于拉商品时靠它补基线。
+func hasListing(ctx context.Context, tx repository.Tx, bindingID, storeID, skuID int64) bool {
+	ls, err := tx.ChannelListings(ctx, bindingID, storeID, []int64{skuID})
+	return err == nil && len(ls) > 0
 }
 
 // adoptProduct 给一件还没映射的商品找 keel 里现成的商品：第一个货号对得上、还没映射的 SKU 所在的商品

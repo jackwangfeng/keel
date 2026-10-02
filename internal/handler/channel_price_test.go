@@ -74,6 +74,20 @@ func TestChannelPriceFromPriceStoreOnly(t *testing.T) {
 			t.Fatalf("非价格源门店推过价格 %d", p)
 		}
 	})
+	t.Run("非价格源门店推数量_不把价格记成已推", func(t *testing.T) {
+		// 只推了数量（PushPrice=false）：published_cents 不能记成 8888，否则下面换价格源之后会判成「价格没变」。
+		adminExec(t, `UPDATE channel_listings SET published_qty = published_qty + 1 WHERE binding_id = $1 AND store_id = $2`, b.ID, other)
+		if err := rig.svc.RecomputeListings(ctx, other, []int64{cs.DressSKU}, b.ID); err != nil {
+			t.Fatal(err)
+		}
+		if err := rig.svc.Drain(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if c := adminQueryInt64(t, `SELECT published_cents FROM channel_listings WHERE binding_id = $1 AND store_id = $2 AND sku_id = $3`,
+			b.ID, other, cs.DressSKU); c == 8888 {
+			t.Fatal("非价格源门店推数量时把没推过的价格记成了已推")
+		}
+	})
 	t.Run("config_改价格源门店_改用那家的价", func(t *testing.T) {
 		cfg, _ := json.Marshal(map[string]int64{"price_store_id": other})
 		if _, err := rig.svc.UpdateBinding(ctx, b.ID, service.ChannelBindingUpdate{Config: cfg}); err != nil {

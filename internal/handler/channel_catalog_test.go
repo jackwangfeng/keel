@@ -67,6 +67,14 @@ func (r *shopifyRig) activate(t *testing.T) {
 	if _, err := r.svc.UpdateBinding(r.ctx, r.b.ID, service.ChannelBindingUpdate{Status: &on}); err != nil {
 		t.Fatal(err)
 	}
+	// 先等库存服务记下「这家开了渠道」：在那之前的库存写（拉商品时的初始库存）会让闸门把「没开」缓存 30 秒。
+	deadline := time.Now().Add(15 * time.Second)
+	for adminQueryInt64(t, `SELECT count(*) FROM channel_merchants WHERE merchant_id = $1 AND enabled`, r.cs.MerchantID) != 1 {
+		if time.Now().After(deadline) {
+			t.Fatal("等了 15 秒库存服务仍未记下这家商家开了渠道")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 	r.drain(t)
 }
 
@@ -340,4 +348,67 @@ func TestShopifyCatalogImages(t *testing.T) {
 			t.Fatal("不放行的地址被下载或替换了图")
 		}
 	})
+}
+
+// 审查 1：先启用（首拉）、后映射门店 —— 映射之后不能拿 keel 的 0 覆盖 Shopify 现货；基线与初始库存由重拉补上。
+func TestShopifyStoreMappedAfterFirstPull(t *testing.T) {
+	r := newShopifyRig(t, map[string]any{})
+	adminExec(t, `UPDATE channel_bindings SET config = jsonb_build_object('default_category_id', $1::bigint) WHERE id = $2`, r.cs.ChildCat, r.b.ID)
+	if err := r.svc.DeleteStoreLink(r.ctx, r.b.ID, r.cs.NorthStore); err != nil {
+		t.Fatal(err)
+	}
+	pg := r.sim.AddProduct(shopifytest.Product{Title: "后映射", Variants: []shopifytest.Variant{
+		{SKU: fmt.Sprintf("LATE-%d", r.b.ID), Price: "3.00", Tracked: true, Levels: map[string]int32{r.loc: 6}}}})
+	r.activate(t)
+	v := r.sim.VariantIDs(pg)[0]
+	sku := r.keelSKU(t, v)
+	// 映射写进去、还没重拉的那个窗口里来了一次重算（别处改价、改规则）：没有基线的格子不能推。
+	adminExec(t, `INSERT INTO channel_store_links (merchant_id, binding_id, store_id, external_store_id) VALUES ($1, $2, $3, $4)`,
+		r.cs.MerchantID, r.b.ID, r.cs.NorthStore, r.loc)
+	if err := r.svc.RecomputeListings(r.ctx, r.cs.NorthStore, []int64{sku}, 0); err != nil {
+		t.Fatal(err)
+	}
+	r.drain(t)
+	if q, _ := r.sim.Available(r.sim.InventoryItem(v), r.loc); q != 6 {
+		t.Fatalf("没有基线的格子被推了：Shopify 上变成 %d", q)
+	}
+	if err := r.svc.UpsertStoreLink(r.ctx, repository.ChannelStoreLink{BindingID: r.b.ID, StoreID: r.cs.NorthStore, ExternalStoreID: r.loc}); err != nil {
+		t.Fatal(err)
+	}
+	r.drain(t)
+	if q, _ := r.sim.Available(r.sim.InventoryItem(v), r.loc); q != 6 {
+		t.Fatalf("映射门店之后 Shopify 上变成了 %d（被 keel 的 0 覆盖）", q)
+	}
+	if r.stock(t, sku) != 6 {
+		t.Fatalf("映射门店之后 keel 库存 = %d，期望从 Shopify 补成 6", r.stock(t, sku))
+	}
+	adjust(t, r.local, r.cs.MerchantID, r.cs.NorthStore, sku, -1)
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		r.drain(t)
+		if q, _ := r.sim.Available(r.sim.InventoryItem(v), r.loc); q == 5 {
+			return
+		}
+
+		if time.Now().After(deadline) {
+			t.Fatal("补上基线之后 keel 的变化推不出去")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// 审查 5：一件读不懂的商品（价格格式坏了）不卡住整店。
+func TestShopifyBadProductDoesNotBlockPull(t *testing.T) {
+	r := newShopifyRig(t, map[string]any{})
+	adminExec(t, `UPDATE channel_bindings SET config = jsonb_build_object('default_category_id', $1::bigint) WHERE id = $2`, r.cs.ChildCat, r.b.ID)
+	r.sim.AddProduct(shopifytest.Product{Title: "坏价格", Variants: []shopifytest.Variant{{SKU: fmt.Sprintf("BAD-%d", r.b.ID), Price: "1.005"}}})
+	good := r.sim.AddProduct(shopifytest.Product{Title: "好的", Variants: []shopifytest.Variant{
+		{SKU: fmt.Sprintf("GOOD-%d", r.b.ID), Price: "2.00", Tracked: true, Levels: map[string]int32{r.loc: 1}}}})
+	r.activate(t)
+	if n := adminQueryInt64(t, `SELECT count(*) FROM channel_item_links WHERE binding_id = $1 AND kind = 1 AND external_id = $2`, r.b.ID, good); n != 1 {
+		t.Fatal("坏商品后面的好商品没拉进来")
+	}
+	if n := adminQueryInt64(t, `SELECT count(*) FROM jobs WHERE merchant_id = $1 AND queue = 'channel.catalog.pull' AND status IN (0, 3)`, r.cs.MerchantID); n != 0 {
+		t.Fatalf("拉商品任务还有 %d 条没做完 / 进了死信", n)
+	}
 }

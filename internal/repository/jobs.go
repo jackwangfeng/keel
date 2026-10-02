@@ -369,7 +369,7 @@ func (r *Repo) DeferJob(ctx context.Context, id int64, reason string, after time
 		       run_after  = now() + (interval '1 second' * $3::float8),
 		       last_error = $2,
 		       locked_by  = NULL, locked_at = NULL
-		 WHERE id = $1`, id, reason, after.Seconds())
+		 WHERE id = $1 AND status = 1`, id, reason, after.Seconds())
 	return err
 }
 

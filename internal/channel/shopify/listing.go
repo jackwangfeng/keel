@@ -29,7 +29,7 @@ const mutationSetPrices = `mutation SetPrices($pid:ID!,$vs:[ProductVariantsBulkI
   productVariantsBulkUpdate(productId:$pid, variants:$vs){ userErrors{ field message } } }`
 
 const queryLevels = `query Levels($id:ID!){ inventoryItem(id:$id){
-  inventoryLevels(first:10){ nodes{ location{ id } quantities(names:["available"]){ quantity } } } } }`
+  inventoryLevels(first:50){ nodes{ location{ id } quantities(names:["available"]){ quantity } } } } }`
 
 const staleCode = "CHANGE_FROM_QUANTITY_STALE"
 
@@ -118,7 +118,9 @@ func (a *Adapter) setQty(ctx context.Context, b channel.Binding, ls []channel.Li
 			}
 			items[j] = map[string]any{"inventoryItemId": ex[i].InventoryItemID, "locationId": ls[i].ExternalStoreID,
 				"quantity": ls[i].Qty, "changeFromQuantity": from}
-			keys[j] = ls[i].IdemKey
+			// 幂等键连数量与 CAS 前值一起编：同一个 version 带着不同的数重发（上次数量生效了、这一条却因为改价出错
+			// 没记下）时得是不同的键，否则平台把它当重放、新数推不上去。
+			keys[j] = fmt.Sprintf("%s|%d|%v", ls[i].IdemKey, ls[i].Qty, from)
 		}
 		in := map[string]any{"name": "available", "reason": "correction",
 			"referenceDocumentUri": "keel://channel/" + strconv.FormatInt(b.ID, 10), "quantities": items}

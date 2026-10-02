@@ -334,6 +334,15 @@ func (s *ChannelService) UpsertStoreLink(ctx context.Context, l repository.Chann
 		if err := tx.UpsertChannelStoreLink(ctx, l); err != nil {
 			return err
 		}
+		b, err := tx.GetChannelBinding(ctx, l.BindingID)
+		if err != nil {
+			return err
+		}
+		if b.IsActiveCatalogSource() {
+			// 商品源：这家门店的推送基线与初始库存要从平台上的现货来，重拉一遍商品（拉完会重算）。
+			// 在那之前没有基线的格子不推（computeTargets）。
+			return s.enqueueCatalogPull(ctx, tx, l.BindingID, "", false)
+		}
 		return s.enqueueRecompute(ctx, tx, l.BindingID, l.StoreID)
 	})
 }

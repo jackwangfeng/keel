@@ -14,7 +14,8 @@ import (
 //
 // 各门店的可售数单独查：Shopify 单条查询的成本上限是 1000 点，实测（2026-10-02）products 带上 inventoryLevels
 // 一页 10 件就要 710 点，不带只要 25 件 308 点；而 nodes(ids:) 一次 50 个 inventory item 连水位只要 15 点。
-// 所以一页商品 = 一条 Products + 每 50 个跟踪库存的 item 一条 ItemLevels。每个 item 最多取 10 个 location。
+// 所以一页商品 = 一条 Products + 每 50 个跟踪库存的 item 一条 ItemLevels。每个 item 最多取 50 个 location
+// （超出的 location 没有基线，渠道层不往那里推）。
 
 const productFields = `id title descriptionHtml status isGiftCard
   media(first:20){ nodes{ ... on MediaImage { image{ url } } } }
@@ -27,7 +28,7 @@ const queryProducts = `query Products($first:Int!,$after:String){ products(first
 const queryProduct = `query Product($id:ID!){ product(id:$id){ ` + productFields + ` } }`
 
 const queryItemLevels = `query ItemLevels($ids:[ID!]!){ nodes(ids:$ids){ ... on InventoryItem { id
-  inventoryLevels(first:10){ nodes{ location{ id } quantities(names:["available"]){ quantity } } } } } }`
+  inventoryLevels(first:50){ nodes{ location{ id } quantities(names:["available"]){ quantity } } } } } }`
 
 const levelsChunk = 50
 
@@ -116,7 +117,8 @@ func (a *Adapter) PullCatalog(ctx context.Context, b channel.Binding, cursor str
 	for _, n := range out.Products.Nodes {
 		item, ok, err := toItem(n)
 		if err != nil {
-			return channel.CatalogPage{}, err
+			page.Skipped = append(page.Skipped, channel.CatalogSkip{ExternalID: n.ID, Reason: err.Error()})
+			continue
 		}
 		if ok {
 			page.Items = append(page.Items, item)

@@ -301,7 +301,7 @@ func (s *ChannelService) pushStore(ctx context.Context, outlet channel.Outlet, a
 		if r.Err == nil {
 			if werr := s.repo.WithTenant(ctx, func(tx repository.Tx) error {
 				_, e := tx.RecordChannelListing(ctx, repository.ChannelListing{BindingID: ab.ID, StoreID: storeID,
-					SKUID: t.skuID, PublishedQty: t.qty, PublishedCents: t.price})
+					SKUID: t.skuID, PublishedQty: t.qty, PublishedCents: t.publishedCents()})
 				return e
 			}); werr != nil {
 				// 推上去了但没记下：重推一次同样的值（幂等键相同），无害。

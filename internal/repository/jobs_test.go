@@ -726,3 +726,24 @@ func TestDeferJobHonorsAfter(t *testing.T) {
 		t.Fatal("DeferJob(1 小时) 之后马上又出队了")
 	}
 }
+
+// 审查 8：DeferJob 只动执行中的任务 —— 已经被回收、做完或进了死信的不能被老 worker 复活。
+func TestDeferJobLeavesNonRunningJobsAlone(t *testing.T) {
+	f := newJobsFixture(t, "defer-dead", 1)
+	q := f.queueOf("defer-dead")
+	f.enqueueTo(t, f.merchants[0], q, "k")
+	ctx := context.Background()
+	jobs, err := f.repo.DequeueJobs(ctx, repository.DequeueRequest{Queue: q, Limit: 1, PerTenantInflight: 1, WorkerID: "w1"})
+	if err != nil || len(jobs) != 1 {
+		t.Fatalf("出队: %v / %d 条", err, len(jobs))
+	}
+	if _, err := f.admin.Exec(ctx, `UPDATE jobs SET status = 3 WHERE id = $1`, jobs[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.repo.DeferJob(ctx, jobs[0].ID, "限流", 0); err != nil {
+		t.Fatal(err)
+	}
+	if status, _, _, _, _ := f.row(t, jobs[0].ID); status != 3 {
+		t.Fatalf("死信被 DeferJob 改成了 status=%d", status)
+	}
+}

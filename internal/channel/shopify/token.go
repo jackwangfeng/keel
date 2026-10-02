@@ -24,8 +24,40 @@ type tokenEntry struct {
 }
 
 type tokenCache struct {
-	mu sync.Mutex // 换 token 时也攥着：同一时刻只换一次（换 token 很少发生，串行无所谓）
-	m  map[int64]tokenEntry
+	mu    sync.Mutex // 只护 m 与 locks，不跨网络调用
+	m     map[int64]tokenEntry
+	locks map[int64]*sync.Mutex // 每个 binding 一把：同一个 binding 同一时刻只换一次，一家店的 token 接口卡住不拖累别家
+}
+
+func (c *tokenCache) lockFor(id int64) *sync.Mutex {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.locks == nil {
+		c.locks = map[int64]*sync.Mutex{}
+	}
+	l, ok := c.locks[id]
+	if !ok {
+		l = &sync.Mutex{}
+		c.locks[id] = l
+	}
+	return l
+}
+
+func (c *tokenCache) get(id int64) (tokenEntry, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e, ok := c.m[id]
+	return e, ok
+}
+
+func (c *tokenCache) set(id int64, e *tokenEntry) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if e == nil {
+		delete(c.m, id)
+		return
+	}
+	c.m[id] = *e
 }
 
 func fingerprint(shop string, s secrets) string {
@@ -35,13 +67,14 @@ func fingerprint(shop string, s secrets) string {
 
 // token 取一个能用的 access token。force 为真时丢掉缓存重换（上一次用它被回了 401）。
 func (a *Adapter) token(ctx context.Context, bindingID int64, shop string, s secrets, force bool) (string, error) {
-	a.tokens.mu.Lock()
-	defer a.tokens.mu.Unlock()
+	l := a.tokens.lockFor(bindingID)
+	l.Lock()
+	defer l.Unlock()
 	fp := fingerprint(shop, s)
-	if e, ok := a.tokens.m[bindingID]; ok && !force && e.fingerprint == fp && a.o.Now().Before(e.renewAt) {
+	if e, ok := a.tokens.get(bindingID); ok && !force && e.fingerprint == fp && a.o.Now().Before(e.renewAt) {
 		return e.token, nil
 	}
-	delete(a.tokens.m, bindingID)
+	a.tokens.set(bindingID, nil)
 	body, _ := json.Marshal(map[string]string{"grant_type": "client_credentials", "client_id": s.ClientID, "client_secret": s.ClientSecret})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.o.BaseURL(shop)+"/admin/oauth/access_token", bytes.NewReader(body))
 	if err != nil {
@@ -75,6 +108,6 @@ func (a *Adapter) token(ctx context.Context, bindingID int64, shop string, s sec
 		out.ExpiresIn = 3600
 	}
 	life := time.Duration(out.ExpiresIn) * time.Second * 8 / 10
-	a.tokens.m[bindingID] = tokenEntry{token: out.AccessToken, fingerprint: fp, renewAt: a.o.Now().Add(life)}
+	a.tokens.set(bindingID, &tokenEntry{token: out.AccessToken, fingerprint: fp, renewAt: a.o.Now().Add(life)})
 	return out.AccessToken, nil
 }

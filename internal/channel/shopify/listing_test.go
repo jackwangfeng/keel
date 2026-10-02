@@ -218,3 +218,24 @@ func TestEnsureWebhooks(t *testing.T) {
 		t.Fatalf("订阅 = %+v，期望指向回调地址的 5 条 + 旧的 1 条", r.sim.Webhooks())
 	}
 }
+
+// 审查 2：同一个 IdemKey（version 没变）带着不同的数重发，必须是不同的幂等键，新数要生效。
+func TestPushListingsSameVersionDifferentQty(t *testing.T) {
+	r := newRig(t)
+	loc := r.sim.AddLocation("A")
+	cs := cells(t, r, loc, 1, 5)
+	ctx := context.Background()
+	if _, err := r.a.PushListings(ctx, r.b, listings(cs)); err != nil {
+		t.Fatal(err)
+	}
+	ls := listings(cs)
+	q := ls[0].Qty
+	ls[0].PrevQty, ls[0].Qty = &q, q-1 // 上次那个数已经生效、但渠道层没记下；之后又卖了一件
+	res, err := r.a.PushListings(ctx, r.b, ls)
+	if err != nil || res[0].Err != nil {
+		t.Fatalf("%v / %v", err, res[0].Err)
+	}
+	if got, _ := r.sim.Available(cs[0].item, loc); got != q-1 {
+		t.Fatalf("Shopify 上是 %d，期望 %d（被当成了重放）", got, q-1)
+	}
+}

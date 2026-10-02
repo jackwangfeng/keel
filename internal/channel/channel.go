@@ -181,7 +181,13 @@ type ChannelOrder struct {
 // CatalogPage 是商品源的一页。
 type CatalogPage struct {
 	Items      []CatalogItem
-	NextCursor string // 空 = 没有下一页
+	Skipped    []CatalogSkip // 这一页里读不懂的商品（价格格式不对之类）：跳过、不让整页失败
+	NextCursor string        // 空 = 没有下一页
+}
+
+// CatalogSkip 是一件被跳过的商品与原因。
+type CatalogSkip struct {
+	ExternalID, Reason string
 }
 
 // CatalogItem 是商品源上的一件商品（含规格），或推给渠道的一件商品。

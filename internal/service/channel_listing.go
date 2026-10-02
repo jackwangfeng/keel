@@ -117,6 +117,18 @@ func (t listingTarget) unchanged() bool {
 	return !t.carriesPrice || t.prev.PublishedCents == t.price
 }
 
+// publishedCents 是推成功之后记下的价格：出价格的门店记这次的价；不出价格的门店保留上次记下的（它的价从没推上去，
+// 记成 keel 价的话，以后它变成价格源时会被误判成「价格没变」而不推）。
+func (t listingTarget) publishedCents() int64 {
+	if t.carriesPrice {
+		return t.price
+	}
+	if t.prev != nil {
+		return t.prev.PublishedCents
+	}
+	return 0
+}
+
 // pushPrice：这一格这次要不要连价格一起推。
 func (t listingTarget) pushPrice() bool {
 	return t.carriesPrice && (t.prev == nil || t.prev.LastError != nil || t.prev.PublishedCents != t.price)
@@ -239,8 +251,15 @@ func (s *ChannelService) computeTargets(ctx context.Context, storeID int64, skuI
 					// 拿不到门店价（SKU 不存在、不属于本店）：不推 —— 推出去就是一个 0 元的商品。
 					continue
 				}
+				catalogOwned := channel.Role(b.Roles)&channel.RoleCatalogSource != 0
+				if catalogOwned && (prevBy[sku] == nil || !levels[sku].Exists) {
+					// 商品源 binding 上没有推送基线（商品拉进来时这家门店还没映射、或平台在那个门店没备货）、
+					// 或 keel 这家门店还没有库存行（初始库存还没写进去）的格子不推：推出去就是拿 keel 的 0
+					// 覆盖平台上的现货。基线与初始库存由下一次拉商品补上（channel_catalog.go）。
+					continue
+				}
 				var qty int32
-				if offer.Sellable(channel.Role(b.Roles)&channel.RoleCatalogSource != 0) {
+				if offer.Sellable(catalogOwned) {
 					qty = channel.PublishedQty(levels[sku].Available, channel.ResolveStockRule(stockRules, storeID, sku))
 				}
 				price := channel.PublishedPrice(offer.PriceCents, channel.ResolvePriceRule(priceRules, sku))
