@@ -40,7 +40,7 @@ func writeChannelOrderError(c *gin.Context, err error) {
 func apiChannelOrder(v service.ChannelOrderView) api.ChannelOrder {
 	co := v.Order
 	out := api.ChannelOrder{Id: co.ID, BindingId: co.BindingID, Channel: v.Channel, BindingName: v.BindingName,
-		ExternalOrderId: co.ExternalOrderID,
+		Retryable: v.Retryable, ExternalOrderId: co.ExternalOrderID,
 		ExternalOrderName: co.ExternalOrderName, StoreId: co.StoreID, OrderNo: co.OrderNo, PlatformStatus: co.PlatformStatus,
 		Status: api.ChannelOrderStatus(co.Status), Exception: co.Exception, AcceptDeadline: co.AcceptDeadline,
 		DeliveryMode: int32(co.DeliveryMode), Lines: []api.ChannelOrderLine{}, Test: co.Test,
@@ -71,7 +71,7 @@ func apiChannelOrderDetail(v service.ChannelOrderView) api.ChannelOrderDetail {
 		reqs = append(reqs, ar)
 	}
 	return api.ChannelOrderDetail{Id: o.Id, BindingId: o.BindingId, Channel: o.Channel, BindingName: o.BindingName,
-		ExternalOrderId: o.ExternalOrderId,
+		Retryable: o.Retryable, ExternalOrderId: o.ExternalOrderId,
 		ExternalOrderName: o.ExternalOrderName, StoreId: o.StoreId, OrderNo: o.OrderNo, PlatformStatus: o.PlatformStatus,
 		Status: o.Status, Exception: o.Exception, AcceptDeadline: o.AcceptDeadline, DeliveryMode: o.DeliveryMode,
 		Amounts: o.Amounts, Lines: o.Lines, Receiver: o.Receiver, Test: o.Test, CreatedAt: o.CreatedAt, UpdatedAt: o.UpdatedAt,

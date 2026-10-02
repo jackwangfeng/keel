@@ -9002,13 +9002,18 @@ components:
     ChannelOrder:
       type: object
       description: 一张平台订单在 keel 这边的记录（金额、行、收货人都是平台快照，不重新算价）。
-      required: [id, binding_id, channel, binding_name, external_order_id, external_order_name, platform_status, status, delivery_mode,
+      required: [id, binding_id, channel, binding_name, retryable, external_order_id, external_order_name, platform_status, status, delivery_mode,
                  amounts, lines, receiver, test, created_at, updated_at]
       properties:
         id: { type: integer, format: int64 }
         binding_id: { type: integer, format: int64 }
         channel: { type: string, description: 渠道种类（所属账号的 channel，如 `shopify`）；门店范围的员工看不到账号列表，靠它显示与判能力 }
         binding_name: { type: string, description: 所属渠道账号的名称 }
+        retryable:
+          type: boolean
+          description: |
+            此刻能不能「重试」（与 POST …/retry 同一个判据）：有异常且没有活着的 keel 订单；keel 草稿卡在创建中（0）；
+            草稿被孤儿清扫关掉而渠道单没有异常。
         external_order_id: { type: string }
         external_order_name: { type: string, description: 平台上给人看的单号，如 Shopify 的 `#1001` }
         store_id: { type: [integer, 'null'], format: int64, description: 映射到的 keel 门店；空 = 渠道门店没映射 }

@@ -47,6 +47,36 @@ func (q *Queries) ChannelManagedProducts(ctx context.Context, productIds []int64
 	return items, nil
 }
 
+const channelOrderKeelStatuses = `-- name: ChannelOrderKeelStatuses :many
+SELECT order_no, status FROM orders WHERE order_no = ANY($1::text[])
+`
+
+type ChannelOrderKeelStatusesRow struct {
+	OrderNo string
+	Status  int16
+}
+
+// 后台渠道单列表 / 详情的 retryable：这一页渠道单指着的 keel 订单此刻的状态（一次查询）。
+func (q *Queries) ChannelOrderKeelStatuses(ctx context.Context, orderNos []string) ([]ChannelOrderKeelStatusesRow, error) {
+	rows, err := q.db.Query(ctx, channelOrderKeelStatuses, orderNos)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ChannelOrderKeelStatusesRow
+	for rows.Next() {
+		var i ChannelOrderKeelStatusesRow
+		if err := rows.Scan(&i.OrderNo, &i.Status); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const channelOrderRefs = `-- name: ChannelOrderRefs :many
 SELECT co.id, co.external_order_name, b.channel, b.name AS binding_name
   FROM channel_orders co

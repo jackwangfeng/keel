@@ -134,6 +134,8 @@ type ChannelOrderTx interface {
 	CountChannelOrders(ctx context.Context, f ChannelOrderFilter) (int64, error)
 	// ChannelOrderRefs：后台订单列表 / 详情里渠道单的来源说明（渠道、账号名、平台单号），按渠道单 id。
 	ChannelOrderRefs(ctx context.Context, ids []int64) (map[int64]ChannelOrderRef, error)
+	// ChannelOrderKeelStatuses：按单号查 keel 订单此刻的状态（后台渠道单的 retryable）。查不到的单号不在结果里。
+	ChannelOrderKeelStatuses(ctx context.Context, orderNos []string) (map[string]int16, error)
 	DecrementChannelListingBaseline(ctx context.Context, bindingID, storeID, skuID int64, qty int32) error
 	ChannelOrderSKUs(ctx context.Context, skuIDs []int64) (map[int64]ChannelOrderSKU, error)
 	CreateChannelOrderDraft(ctx context.Context, d NewChannelOrderDraft) (Order, error)
@@ -229,6 +231,21 @@ func (t tenantTx) ListChannelOrders(ctx context.Context, f ChannelOrderFilter) (
 func (t tenantTx) CountChannelOrders(ctx context.Context, f ChannelOrderFilter) (int64, error) {
 	return t.q.CountChannelOrders(ctx, db.CountChannelOrdersParams{BindingID: f.BindingID, StoreID: f.StoreID,
 		Status: f.Status, ExceptionOnly: f.ExceptionOnly, OnlyRegionIds: f.Only.RegionIDs, OnlyStoreIds: f.Only.StoreIDs})
+}
+
+func (t tenantTx) ChannelOrderKeelStatuses(ctx context.Context, orderNos []string) (map[string]int16, error) {
+	out := make(map[string]int16, len(orderNos))
+	if len(orderNos) == 0 {
+		return out, nil
+	}
+	rows, err := t.q.ChannelOrderKeelStatuses(ctx, orderNos)
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range rows {
+		out[r.OrderNo] = r.Status
+	}
+	return out, nil
 }
 
 func (t tenantTx) ChannelOrderRefs(ctx context.Context, ids []int64) (map[int64]ChannelOrderRef, error) {

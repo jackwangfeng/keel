@@ -157,12 +157,14 @@ test("渠道单状态文案", () => {
     assert.equal(channelOrderStatusLabel(9).text, "状态 9");
 });
 
-test("渠道单按钮：重试只给有异常且没成单的，接单 / 拒单只给要接单渠道上的干净新单", () => {
+test("渠道单按钮：重试只看服务端的 retryable，接单 / 拒单只给要接单渠道上的干净新单", () => {
     assert.deepEqual(channelOrderActions({ status: 2, exception: null, order_no: null }, true), { retry: false, accept: true, reject: true });
     assert.deepEqual(channelOrderActions({ status: 2 }, false), { retry: false, accept: false, reject: false });
-    assert.deepEqual(channelOrderActions({ status: 2, exception: "缺货" }, true), { retry: true, accept: false, reject: false });
-    // 发货后平台取消：有订单号的异常不是重试能解决的
-    assert.deepEqual(channelOrderActions({ status: 6, exception: "已发货后取消", order_no: "K1" }, false), {
+    assert.deepEqual(channelOrderActions({ status: 2, exception: "缺货", retryable: true }, true), { retry: true, accept: false, reject: false });
+    // keel 草稿卡住：有单号、没异常，前端判不出来，服务端说能重试就给
+    assert.deepEqual(channelOrderActions({ status: 2, order_no: "K0", retryable: true }, false), { retry: true, accept: false, reject: false });
+    // 发货后平台取消：有活着订单的异常不是重试能解决的（retryable 假）
+    assert.deepEqual(channelOrderActions({ status: 6, exception: "已发货后取消", order_no: "K1", retryable: false }, false), {
         retry: false,
         accept: false,
         reject: false,

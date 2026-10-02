@@ -23,9 +23,11 @@ type ChannelOrderView struct {
 	Requests []repository.ChannelOrderRequest
 	// Channel / BindingName：所属账号的渠道种类与名称（门店范围的员工读不了账号列表，回包里直接带上）。
 	Channel, BindingName string
+	// Retryable：此刻能不能「重试」（channelOrderRetryable，与 RetryChannelOrder 同一个判据）。
+	Retryable bool
 }
 
-// attachChannelOrderRefs 给一组渠道单补上所属账号的渠道种类与名称（一次查询）。
+// attachChannelOrderRefs 给一组渠道单补上所属账号的渠道种类与名称、能不能重试（各一次查询）。
 func attachChannelOrderRefs(ctx context.Context, tx repository.Tx, views []ChannelOrderView) error {
 	if len(views) == 0 {
 		return nil
@@ -38,9 +40,26 @@ func attachChannelOrderRefs(ctx context.Context, tx repository.Tx, views []Chann
 	if err != nil {
 		return err
 	}
+	var nos []string
+	for _, v := range views {
+		if v.Order.OrderNo != nil {
+			nos = append(nos, *v.Order.OrderNo)
+		}
+	}
+	statuses, err := tx.ChannelOrderKeelStatuses(ctx, nos)
+	if err != nil {
+		return err
+	}
 	for i := range views {
 		r := refs[views[i].Order.ID]
 		views[i].Channel, views[i].BindingName = r.Channel, r.BindingName
+		var live *int16
+		if no := views[i].Order.OrderNo; no != nil {
+			if st, ok := statuses[*no]; ok && st != orderStatusClosed {
+				live = &st
+			}
+		}
+		views[i].Retryable = channelOrderRetryable(views[i].Order, live)
 	}
 	return nil
 }

@@ -304,6 +304,10 @@ SELECT count(*)::bigint
    AND (sqlc.narg(only_store_ids)::bigint[] IS NULL
         OR store_id = ANY(sqlc.narg(only_store_ids)::bigint[]));
 
+-- name: ChannelOrderKeelStatuses :many
+-- 后台渠道单列表 / 详情的 retryable：这一页渠道单指着的 keel 订单此刻的状态（一次查询）。
+SELECT order_no, status FROM orders WHERE order_no = ANY(@order_nos::text[]);
+
 -- name: ChannelOrderRefs :many
 -- 后台订单列表 / 详情的「来自 Shopify #1001」：这一页有渠道单（source = 1）时按 channel_order_id 补查一次
 -- （订单列表不 JOIN，见第三期计划 Task 1 的执行中修正）。

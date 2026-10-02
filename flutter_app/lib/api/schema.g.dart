@@ -2677,6 +2677,7 @@ class ChannelOrder {
   final int bindingId;
   final String channel;
   final String bindingName;
+  final bool retryable;
   final String externalOrderId;
   final String externalOrderName;
   final int? storeId;
@@ -2692,12 +2693,13 @@ class ChannelOrder {
   final bool test;
   final String createdAt;
   final String updatedAt;
-  const ChannelOrder({required this.id, required this.bindingId, required this.channel, required this.bindingName, required this.externalOrderId, required this.externalOrderName, this.storeId, this.orderNo, required this.platformStatus, required this.status, this.exception, this.acceptDeadline, required this.deliveryMode, required this.amounts, required this.lines, required this.receiver, required this.test, required this.createdAt, required this.updatedAt});
+  const ChannelOrder({required this.id, required this.bindingId, required this.channel, required this.bindingName, required this.retryable, required this.externalOrderId, required this.externalOrderName, this.storeId, this.orderNo, required this.platformStatus, required this.status, this.exception, this.acceptDeadline, required this.deliveryMode, required this.amounts, required this.lines, required this.receiver, required this.test, required this.createdAt, required this.updatedAt});
   factory ChannelOrder.fromJson(Map<String, dynamic> j) => ChannelOrder(
         id: (j['id'] as num).toInt(),
         bindingId: (j['binding_id'] as num).toInt(),
         channel: j['channel'] as String,
         bindingName: j['binding_name'] as String,
+        retryable: j['retryable'] as bool,
         externalOrderId: j['external_order_id'] as String,
         externalOrderName: j['external_order_name'] as String,
         storeId: (j['store_id'] as num?)?.toInt(),
@@ -2719,6 +2721,7 @@ class ChannelOrder {
         'binding_id': bindingId,
         'channel': channel,
         'binding_name': bindingName,
+        'retryable': retryable,
         'external_order_id': externalOrderId,
         'external_order_name': externalOrderName,
         if (storeId != null) 'store_id': storeId,
@@ -2798,6 +2801,7 @@ class ChannelOrderDetail {
   final int bindingId;
   final String channel;
   final String bindingName;
+  final bool retryable;
   final String externalOrderId;
   final String externalOrderName;
   final int? storeId;
@@ -2814,12 +2818,13 @@ class ChannelOrderDetail {
   final String createdAt;
   final String updatedAt;
   final List<ChannelOrderRequest> requests;
-  const ChannelOrderDetail({required this.id, required this.bindingId, required this.channel, required this.bindingName, required this.externalOrderId, required this.externalOrderName, this.storeId, this.orderNo, required this.platformStatus, required this.status, this.exception, this.acceptDeadline, required this.deliveryMode, required this.amounts, required this.lines, required this.receiver, required this.test, required this.createdAt, required this.updatedAt, required this.requests});
+  const ChannelOrderDetail({required this.id, required this.bindingId, required this.channel, required this.bindingName, required this.retryable, required this.externalOrderId, required this.externalOrderName, this.storeId, this.orderNo, required this.platformStatus, required this.status, this.exception, this.acceptDeadline, required this.deliveryMode, required this.amounts, required this.lines, required this.receiver, required this.test, required this.createdAt, required this.updatedAt, required this.requests});
   factory ChannelOrderDetail.fromJson(Map<String, dynamic> j) => ChannelOrderDetail(
         id: (j['id'] as num).toInt(),
         bindingId: (j['binding_id'] as num).toInt(),
         channel: j['channel'] as String,
         bindingName: j['binding_name'] as String,
+        retryable: j['retryable'] as bool,
         externalOrderId: j['external_order_id'] as String,
         externalOrderName: j['external_order_name'] as String,
         storeId: (j['store_id'] as num?)?.toInt(),
@@ -2842,6 +2847,7 @@ class ChannelOrderDetail {
         'binding_id': bindingId,
         'channel': channel,
         'binding_name': bindingName,
+        'retryable': retryable,
         'external_order_id': externalOrderId,
         'external_order_name': externalOrderName,
         if (storeId != null) 'store_id': storeId,

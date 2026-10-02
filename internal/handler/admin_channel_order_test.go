@@ -105,8 +105,13 @@ func TestAdminChannelOrders(t *testing.T) {
 		}
 		r.drain(t)
 		p := list("?exception_only=true")
-		if p.Total != 1 || p.Items[0].Id != co3 || p.Items[0].Exception == nil {
-			t.Fatalf("只看异常：%+v", p.Items)
+		if p.Total != 1 || p.Items[0].Id != co3 || p.Items[0].Exception == nil || !p.Items[0].Retryable {
+			t.Fatalf("只看异常（且能重试）：%+v", p.Items)
+		}
+		for _, it := range list("").Items {
+			if it.Id != co3 && it.Retryable {
+				t.Fatalf("渠道单 %d 没有异常、也没卡住，retryable 却是真", it.Id)
+			}
 		}
 	})
 
@@ -250,5 +255,34 @@ func TestAdminChannelOrderStoreScoped(t *testing.T) {
 	}
 	if w := getAs(t, host, v1+"/admin/channel-bindings", tok); w.Code != http.StatusForbidden {
 		t.Fatalf("门店管理员看渠道账号：%d，期望 403", w.Code)
+	}
+}
+
+// retryable 与「重试」同一个判据：keel 草稿卡在 0（没有异常）也是真，重试成单之后变假。
+func TestAdminChannelOrderRetryableStuckDraft(t *testing.T) {
+	r := newFakeOrderRig(t, nil, nil)
+	useEngine(t, app.Router(testPool, tenant.NewResolver(testPool, tenant.Config{BaseDomain: baseDomain}), testSigner,
+		testOrders, service.PaymentConfig{Sandbox: true}, conceptEmbedder{}, app.WithChannels(r.svc)))
+	host, tok := r.cs.Host, r.cs.Token
+	base := v1 + "/admin/channel-orders"
+	r.svc.Attach(failSubmits(r.tc, -1))
+	r.put(t, "rt-1", 1, channel.OrderNew, 1)
+	co := r.channelOrderID(t, "rt-1")
+	r.svc.Attach(r.tc)
+	var d api.ChannelOrderDetail
+	decodeInto(t, getAs(t, host, fmt.Sprintf("%s/%d", base, co), tok), http.StatusOK, "详情", &d)
+	if !d.Retryable || d.Exception != nil || d.OrderNo == nil {
+		t.Fatalf("草稿卡在 0：retryable=%v exception=%v order_no=%v，期望能重试", d.Retryable, d.Exception, d.OrderNo)
+	}
+	var p channelOrderPage
+	decodeInto(t, getAs(t, host, base, tok), http.StatusOK, "列表", &p)
+	if len(p.Items) != 1 || !p.Items[0].Retryable {
+		t.Fatalf("列表里的 retryable：%+v", p.Items)
+	}
+	decodeInto(t, reqAs(t, http.MethodPost, host, fmt.Sprintf("%s/%d/retry", base, co), "", tok), http.StatusOK, "重试", &d)
+	r.drain(t)
+	decodeInto(t, getAs(t, host, fmt.Sprintf("%s/%d", base, co), tok), http.StatusOK, "详情", &d)
+	if d.Retryable {
+		t.Fatal("重试成单之后 retryable 仍是真")
 	}
 }

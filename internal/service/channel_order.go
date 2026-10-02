@@ -724,12 +724,11 @@ func (s *ChannelService) RetryChannelOrder(ctx context.Context, id int64) error 
 		if err != nil {
 			return err
 		}
-		// 能重试的三种：有异常且没有活着的 keel 订单；keel 草稿卡在 0（SAGA 提交失败、回调任务也重试完了）—— 强制重走时
-		// 再提交同一个 gid；草稿被孤儿清扫关到了 90 而渠道单没有异常（渠道单还指着那张关掉的草稿）—— 重新建单。
-		stuck := live != nil && live.Status == orderStatusDraft
-		swept := live == nil && co.OrderNo != nil &&
-			(co.Status == repository.ChannelOrderNew || co.Status == repository.ChannelOrderAccepted)
-		if !(co.Exception != nil && live == nil) && !stuck && !swept {
+		var liveStatus *int16
+		if live != nil {
+			liveStatus = &live.Status
+		}
+		if !channelOrderRetryable(co, liveStatus) {
 			return ErrChannelOrderNotRetryable
 		}
 		externalID = co.ExternalOrderID
@@ -747,6 +746,20 @@ func (s *ChannelService) RetryChannelOrder(ctx context.Context, id int64) error 
 		return fmt.Errorf("binding %d 的适配器不是销售渠道，回读不了订单", b.ID)
 	}
 	return s.applyChannelOrderOpts(ctx, b, *o, applyOpts{force: true, accept: true})
+}
+
+// channelOrderRetryable 是后台「重试」的判据（RetryChannelOrder 与后台渠道单的 retryable 同一个）。
+// liveStatus 是渠道单指着的 keel 订单此刻的状态，没有活着的（没有单号、或已经关到 90）为 nil。能重试的三种：
+// 有异常且没有活着的 keel 订单；keel 草稿卡在 0（SAGA 提交失败、回调任务也重试完了）—— 强制重走时再提交同一个 gid；
+// 草稿被孤儿清扫关到了 90 而渠道单没有异常（渠道单还指着那张关掉的草稿）—— 重新建单。
+func channelOrderRetryable(co repository.ChannelOrder, liveStatus *int16) bool {
+	if liveStatus != nil {
+		return *liveStatus == orderStatusDraft
+	}
+	if co.Exception != nil {
+		return true
+	}
+	return co.OrderNo != nil && (co.Status == repository.ChannelOrderNew || co.Status == repository.ChannelOrderAccepted)
 }
 
 // liveChannelKeelOrder 是渠道单当前关联的、还活着（不是 90）的 keel 订单；没有返回 nil。

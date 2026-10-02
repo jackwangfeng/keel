@@ -268,17 +268,20 @@ export const CHANNEL_ORDER_STATUS_OPTIONS = [1, 2, 3, 4, 5, 6, 7].map((s) => ({ 
 
 /**
  * 一张渠道单此刻能点哪些按钮（服务端是准绳，不满足时回 409；这里只是不让人点注定失败的）：
- *   重试 —— 有异常、且还没有 keel 订单（有订单号的异常多半是发货后平台取消，要人去订单 / 售后处理，不是重试能解决的）；
+ *   重试 —— 只看服务端的 retryable（有异常且没有活着的 keel 订单 / keel 草稿卡住 / 草稿被清扫关掉；
+ *           有活着订单的异常多半是发货后平台取消，要人去订单 / 售后处理，不是重试能解决的）；
  *   接单 / 拒单 —— 渠道要求接单（ChannelKind.accept_required）、新单、没异常、还没成单。
  */
 export function channelOrderActions(
-    o: { status: number; exception?: string | null; order_no?: string | null },
+    o: { status: number; exception?: string | null; order_no?: string | null; retryable?: boolean },
     acceptRequired: boolean,
 ): { retry: boolean; accept: boolean; reject: boolean } {
     const hasException = o.exception !== undefined && o.exception !== null;
     const hasOrder = o.order_no !== undefined && o.order_no !== null;
     const awaiting = acceptRequired && o.status === 2 && !hasException && !hasOrder;
-    return { retry: hasException && !hasOrder, accept: awaiting, reject: awaiting };
+    // 「重试」只看服务端算好的 retryable（与 POST …/retry 同一个判据：含 keel 草稿卡住、被清扫关掉的情形，
+    // 那些单有单号、没异常，前端自己判不出来）。
+    return { retry: o.retryable === true, accept: awaiting, reject: awaiting };
 }
 
 /**

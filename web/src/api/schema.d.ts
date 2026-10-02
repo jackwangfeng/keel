@@ -18531,6 +18531,11 @@ export interface components {
             channel: string;
             /** @description 所属渠道账号的名称 */
             binding_name: string;
+            /**
+             * @description 此刻能不能「重试」（与 POST …/retry 同一个判据）：有异常且没有活着的 keel 订单；keel 草稿卡在创建中（0）；
+             *     草稿被孤儿清扫关掉而渠道单没有异常。
+             */
+            retryable: boolean;
             external_order_id: string;
             /** @description 平台上给人看的单号，如 Shopify 的 `#1001` */
             external_order_name: string;

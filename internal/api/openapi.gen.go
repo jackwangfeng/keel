@@ -4427,6 +4427,10 @@ type ChannelOrder struct {
 	PlatformStatus string               `json:"platform_status"`
 	Receiver       ChannelOrderReceiver `json:"receiver"`
 
+	// Retryable 此刻能不能「重试」（与 POST …/retry 同一个判据）：有异常且没有活着的 keel 订单；keel 草稿卡在创建中（0）；
+	// 草稿被孤儿清扫关掉而渠道单没有异常。
+	Retryable bool `json:"retryable"`
+
 	// Status 渠道单的规整状态：1 待付款（不接单）、2 新单（等接单 / 待处理）、3 已接单、4 已发货、5 已完成、6 已取消、7 已拒单。
 	// 异常不是一个状态，看 `exception`。
 	Status ChannelOrderStatus `json:"status"`
@@ -4501,6 +4505,10 @@ type ChannelOrderDetail struct {
 
 	// Requests 这张单上的平台申请，新的在前
 	Requests []ChannelOrderRequest `json:"requests"`
+
+	// Retryable 此刻能不能「重试」（与 POST …/retry 同一个判据）：有异常且没有活着的 keel 订单；keel 草稿卡在创建中（0）；
+	// 草稿被孤儿清扫关掉而渠道单没有异常。
+	Retryable bool `json:"retryable"`
 
 	// Status 渠道单的规整状态：1 待付款（不接单）、2 新单（等接单 / 待处理）、3 已接单、4 已发货、5 已完成、6 已取消、7 已拒单。
 	// 异常不是一个状态，看 `exception`。
