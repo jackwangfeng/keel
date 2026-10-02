@@ -45,8 +45,10 @@ watch(
 
 function body(): Record<string, string> | null {
     if (isShopify.value) {
-        if (shopify.clientId.trim() === "" || shopify.clientSecret === "") return null;
-        return { client_id: shopify.clientId.trim(), client_secret: shopify.clientSecret };
+        const clientId = shopify.clientId.trim();
+        const clientSecret = shopify.clientSecret.trim();
+        if (clientId === "" || clientSecret === "") return null;
+        return { client_id: clientId, client_secret: clientSecret };
     }
     const out: Record<string, string> = {};
     for (const p of pairs.value) {

@@ -4,7 +4,9 @@ import {
     bindingStatusLabel,
     bitsFromRoles,
     bpToPercent,
+    channelProbeOutcome,
     channelsAvailable,
+    deepEqual,
     managedLabel,
     percentToBp,
     priceRuleBody,
@@ -87,16 +89,38 @@ test("价格规则校验：固定价只能配 SKU", () => {
     });
 });
 
-test("开关探测：200 开，404 / 500 / 抛异常一律关且不抛", async () => {
-    assert.equal(await channelsAvailable(async () => ({ status: 200 })), true);
-    assert.equal(await channelsAvailable(async () => ({ status: 404 })), false);
-    assert.equal(await channelsAvailable(async () => ({ status: 500 })), false);
-    assert.equal(
+test("探测结果 → {available, cacheable}：200/404 可信，其余状态或抛异常都当关、但不可信", () => {
+    assert.deepEqual(channelProbeOutcome(200), { available: true, cacheable: true });
+    assert.deepEqual(channelProbeOutcome(404), { available: false, cacheable: true });
+    assert.deepEqual(channelProbeOutcome(401), { available: false, cacheable: false });
+    assert.deepEqual(channelProbeOutcome(403), { available: false, cacheable: false });
+    assert.deepEqual(channelProbeOutcome(500), { available: false, cacheable: false });
+    assert.deepEqual(channelProbeOutcome(null), { available: false, cacheable: false });
+});
+
+test("开关探测：200 开，404 / 500 / 抛异常一律关，但只有 200 / 404 可信（可缓存）", async () => {
+    assert.deepEqual(await channelsAvailable(async () => ({ status: 200 })), { available: true, cacheable: true });
+    assert.deepEqual(await channelsAvailable(async () => ({ status: 404 })), { available: false, cacheable: true });
+    assert.deepEqual(await channelsAvailable(async () => ({ status: 500 })), { available: false, cacheable: false });
+    assert.deepEqual(
         await channelsAvailable(async () => {
             throw new Error("network");
         }),
-        false,
+        { available: false, cacheable: false },
     );
+});
+
+test("deepEqual：键序无关的深度相等", () => {
+    assert.equal(deepEqual({ a: 1, b: 2 }, { b: 2, a: 1 }), true);
+    assert.equal(deepEqual({ a: 1 }, { a: 1, b: 2 }), false);
+    assert.equal(deepEqual({ a: [1, 2] }, { a: [1, 2] }), true);
+    assert.equal(deepEqual({ a: [1, 2] }, { a: [2, 1] }), false);
+    assert.equal(deepEqual(null, null), true);
+    assert.equal(deepEqual(null, {}), false);
+    assert.equal(deepEqual({ a: { b: 1 } }, { a: { b: 1 } }), true);
+    assert.equal(deepEqual({ a: { b: 1 } }, { a: { b: 2 } }), false);
+    assert.equal(deepEqual(1, "1"), false);
+    assert.equal(deepEqual("x", "x"), true);
 });
 
 test("Shopify 店铺域名", () => {

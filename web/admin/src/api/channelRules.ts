@@ -171,18 +171,60 @@ export function stockRuleLevel(r: { store_id?: number | null; sku_id?: number | 
     return "渠道级";
 }
 
+/** 探测一次 `GET /admin/channel-kinds` 的结果该怎么信。 */
+export interface ChannelProbeOutcome {
+    /** 这次该不该当作「开」。 */
+    available: boolean;
+    /** 这个结果能不能存起来、下次不再探。 */
+    cacheable: boolean;
+}
+
 /**
- * 「渠道」菜单开不开：探测 `GET /admin/channel-kinds`。
- * 200 → 开；404（KEEL_CHANNELS 关着，路由没注册）与其他任何状态 → 关；探测本身抛错 → 关。
+ * 探测结果（HTTP 状态；`null` = 探测本身抛了，没拿到状态）→ {available, cacheable}。
+ *
+ * 200 → 开，而且可信：服务端明确说这个商家开了渠道层，存下来。
+ * 404 → 关，而且可信：KEEL_CHANNELS 没开，路由根本没注册，这个状态不会因为重新登录变。
+ * 其余任何状态（401/403/5xx……）或探测本身抛错 → 当作关，但**不可信**：
+ * 这类结果多半是会话失效、网络抖一下，不是「这个商家真的没有渠道层」——
+ * 缓存成关的话，重新登录之后菜单也不会回来，所以这一类不缓存，下次再探一次。
+ */
+export function channelProbeOutcome(status: number | null): ChannelProbeOutcome {
+    if (status === 200) return { available: true, cacheable: true };
+    if (status === 404) return { available: false, cacheable: true };
+    return { available: false, cacheable: false };
+}
+
+/**
+ * 「渠道」菜单开不开：探测 `GET /admin/channel-kinds`，折成 {available, cacheable}。
  * 永不抛：菜单少一项不该让框架报错。
  */
-export async function channelsAvailable(probe: () => Promise<{ status: number }>): Promise<boolean> {
+export async function channelsAvailable(probe: () => Promise<{ status: number }>): Promise<ChannelProbeOutcome> {
     try {
         const r = await probe();
-        return r.status === 200;
+        return channelProbeOutcome(r.status);
     } catch {
-        return false;
+        return channelProbeOutcome(null);
     }
+}
+
+/**
+ * 深度相等，键序无关：用来判断一个自由对象（渠道 config）是不是**真的**变了，
+ * 还是只是「原样取出来再拼了一遍，字段顺序不一样而已」。
+ * 只认 JSON 能表达的形状（object / array / 原子值）——config 从 PATCH 请求体来，够用。
+ */
+export function deepEqual(a: unknown, b: unknown): boolean {
+    if (a === b) return true;
+    if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false;
+    if (Array.isArray(a) || Array.isArray(b)) {
+        if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+        return a.every((v, i) => deepEqual(v, b[i]));
+    }
+    const ao = a as Record<string, unknown>;
+    const bo = b as Record<string, unknown>;
+    const ak = Object.keys(ao).sort();
+    const bk = Object.keys(bo).sort();
+    if (ak.length !== bk.length || ak.some((k, i) => k !== bk[i])) return false;
+    return ak.every((k) => deepEqual(ao[k], bo[k]));
 }
 
 

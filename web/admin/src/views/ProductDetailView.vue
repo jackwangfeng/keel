@@ -138,8 +138,10 @@ async function saveBasic(): Promise<void> {
             body,
         });
         // PATCH 返回 AdminProduct（不含 skus / images），所以只合并它给的那些字段。
+        // managed_by 显式摊开：回显里没有这个键也当「没有」，不然会一直拿旧值兜底——
+        // 服务端真把这件商品从渠道解绑之后，界面却还按「由渠道管理」锁着输入框。
         const p = product.value;
-        if (p !== null) product.value = { ...p, ...updated };
+        if (p !== null) product.value = { ...p, ...updated, managed_by: updated.managed_by ?? null };
         notifyOk("已保存");
     } catch (err) {
         saveError.value = err;

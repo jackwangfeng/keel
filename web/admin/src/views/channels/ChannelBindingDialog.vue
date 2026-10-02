@@ -9,7 +9,7 @@
 import { computed, ref, watch } from "vue";
 import { keel, type AdminCategory, type AdminStore, type ChannelBinding, type ChannelKind } from "../../api/client.ts";
 import { indentedLabel, listCategories } from "../../api/catalog.ts";
-import { bitsFromRoles, channelLabel, roleOptions, rolesFromBits, shopifyDomainOk } from "../../api/channelRules.ts";
+import { bitsFromRoles, channelLabel, deepEqual, roleOptions, rolesFromBits, shopifyDomainOk } from "../../api/channelRules.ts";
 import { IdempotentSubmission, withIdempotency } from "../../api/idempotency.ts";
 import { listAllStores } from "../../api/stores.ts";
 import { useMobile } from "../../ui/useMobile.ts";
@@ -156,9 +156,19 @@ async function save(): Promise<void> {
             );
             emit("saved", b, true);
         } else {
+            // config 只在真变了（深比较，键序无关）才带上：buildConfig() 是「拆开原 config
+            // 再按表单拼回去」，哪怕三个键的值和原来一模一样，拼出来的键序也可能跟原来不同，
+            // 带一个「看起来变了、其实没变」的 config 上去会让后端把整店重算一遍
+            // （只改名字这种事也会触发）。
+            const config = buildConfig();
+            const configChanged = !deepEqual(config, props.binding.config);
             const b = await keel.request("patch", "/admin/channel-bindings/{binding_id}", {
                 path: { binding_id: props.binding.id },
-                body: { name: f.name.trim(), roles: rolesFromBits(f.roleBits), config: buildConfig() },
+                body: {
+                    name: f.name.trim(),
+                    roles: rolesFromBits(f.roleBits),
+                    ...(configChanged ? { config } : {}),
+                },
             });
             emit("saved", b, false);
         }

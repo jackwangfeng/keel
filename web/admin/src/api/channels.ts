@@ -1,7 +1,8 @@
 // 渠道管理页的取数。对 client.ts 的薄封装：类型全从契约来（client.ts 的别名），请求都走 `keel`。
 
-import { ProblemError, UnexpectedResponseError, keel, type ChannelListing } from "./client.ts";
+import { ProblemError, UnexpectedResponseError, keel, onSessionChange, type ChannelListing } from "./client.ts";
 import { channelsAvailable } from "./channelRules.ts";
+import { sectionVisible } from "../auth/permissions.ts";
 
 /**
  * 探一次 `GET /admin/channel-kinds`，把结果折成 `{status}` 交给 channelsAvailable。
@@ -17,10 +18,27 @@ async function probeChannelKinds(): Promise<{ status: number }> {
     }
 }
 
-/** 「渠道」分区的 available：整页加载内只探一次。 */
+/**
+ * 「渠道」分区的 available：只缓存可信的结果（200 / 404，见 channelRules.channelProbeOutcome）。
+ * 401/403/5xx/网络失败都不缓存，下次再探——不然重新登录之后（只 router.push，整个
+ * 模块不会重新加载）这个缓存会一直按上一次的失败结果回答，菜单永远不出现。
+ * 会话变化（登录 / 登出 / 刷新身份，见 client.ts 的 onSessionChange）时也清一次：
+ * 换了人，角色可能跟着变，旧结果不该再信。
+ */
 let cached: Promise<boolean> | null = null;
+onSessionChange(() => {
+    cached = null;
+});
+
 export function channelSectionAvailable(): Promise<boolean> {
-    cached ??= channelsAvailable(probeChannelKinds);
+    // 当前角色本来就看不见「渠道」分区（服务端 requireMerchantWide）：不用为一个
+    // 注定不显示的菜单项打请求。
+    if (!sectionVisible("channels")) return Promise.resolve(false);
+    cached ??= (async () => {
+        const { available, cacheable } = await channelsAvailable(probeChannelKinds);
+        if (!cacheable) cached = null;
+        return available;
+    })();
     return cached;
 }
 
