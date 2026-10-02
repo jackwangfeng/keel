@@ -236,6 +236,7 @@ services:
       # 渠道适配层（Shopify / 美团 / 饿了么……）的进程开关，默认关：关着时没有任何渠道路由、分支与后台任务。
       # 拆分部署时 core 与库存服务要配同一个值（compose.split.yaml 给库存服务透传）。
       KEEL_CHANNELS: ${KEEL_CHANNELS:-}
+      KEEL_CHANNEL_DEMO: ${KEEL_CHANNEL_DEMO:-}
       # 连接池上限：业务池（默认 max(4, CPU 核数)）与事务协调器的池（默认 32）。
       # 多实例共用一个 Postgres 时按「实例数 × 两者之和 + 余量 < max_connections」配，见部署指南。
       KEEL_DB_MAX_CONNS: ${KEEL_DB_MAX_CONNS:-}
