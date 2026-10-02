@@ -77,7 +77,8 @@ Keel 是一个电商系统；你通过 MCP 工具读它的数据、做计算、�
 
 定时巡店按 [skills/巡店日报.md](./skills/巡店日报.md)；其中补货部分按 [skills/补货.md](./skills/补货.md)，
 滞销清仓按 [skills/滞销清仓.md](./skills/滞销清仓.md)，搜索缺口按 [skills/搜索缺口.md](./skills/搜索缺口.md)，
-售后审核按 [skills/售后审核.md](./skills/售后审核.md)，活动 / 券复盘按 [skills/活动复盘.md](./skills/活动复盘.md)。
+售后审核按 [skills/售后审核.md](./skills/售后审核.md)，活动 / 券复盘按 [skills/活动复盘.md](./skills/活动复盘.md)，
+接了销售渠道的店，渠道分配按 [skills/渠道库存分配.md](./skills/渠道库存分配.md)。
 
 被事件唤醒（`agent/runner/claude-events.sh` 或 webhook）时按 [skills/事件处理.md](./skills/事件处理.md) 分派，
 不必每次都全量巡一遍。

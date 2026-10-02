@@ -28,7 +28,7 @@ PY
 chmod 600 "$CFG"
 
 TODAY=$(date +%Y-%m-%d)
-PROMPT="今天是 ${TODAY}。按 skills/巡店日报.md 做今天的巡店：补货部分按 skills/补货.md。只用 keel 这个 MCP 服务的工具，最后用 post_brief 写简报。"
+PROMPT="今天是 ${TODAY}。按 skills/巡店日报.md 做今天的巡店：补货部分按 skills/补货.md，渠道分配按 skills/渠道库存分配.md。只用 keel 这个 MCP 服务的工具，最后用 post_brief 写简报。"
 
 # 只放行 keel 的 MCP 工具与读本目录的手册：agent 不需要、也不该有 shell 与改文件的能力。
 "$CLAUDE" -p "$PROMPT" \
