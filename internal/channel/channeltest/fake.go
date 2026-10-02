@@ -46,8 +46,8 @@ type Adapter struct {
 
 	mu       sync.Mutex
 	pushes   [][]channel.Listing
-	failNext int                    // 接下来几次 PushListings 整批返回可重试错误
-	conflict map[[2]int64]int32     // (门店, SKU) → 渠道上「被人改过」的现值，下一次推送报一次冲突
+	failNext int                // 接下来几次 PushListings 整批返回可重试错误
+	conflict map[[2]int64]int32 // (门店, SKU) → 渠道上「被人改过」的现值，下一次推送报一次冲突
 	actions  []channel.Action
 }
 

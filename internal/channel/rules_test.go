@@ -30,10 +30,10 @@ func TestPublishedQty(t *testing.T) {
 
 func TestResolveStockRuleMostSpecificWins(t *testing.T) {
 	rules := []StockRule{
-		{RatioBP: 9000},                                  // 渠道级
-		{StoreID: i64(1), RatioBP: 8000},                 // 门店 1
-		{StoreID: i64(1), SKUID: i64(7), RatioBP: 5000},  // 门店 1 × SKU 7
-		{StoreID: i64(2), RatioBP: 1000},                 // 别的门店
+		{RatioBP: 9000},                                 // 渠道级
+		{StoreID: i64(1), RatioBP: 8000},                // 门店 1
+		{StoreID: i64(1), SKUID: i64(7), RatioBP: 5000}, // 门店 1 × SKU 7
+		{StoreID: i64(2), RatioBP: 1000},                // 别的门店
 	}
 	for _, c := range []struct {
 		store, sku int64
@@ -57,7 +57,7 @@ func TestPublishedPrice(t *testing.T) {
 	}{
 		{"没有规则 = 原价", 1999, PriceRule{}, 1999},
 		{"加价 15%，四舍五入到分", 1999, PriceRule{MarkupBP: 1500}, 2299}, // 2298.85
-		{"加价 0.5 分进位", 10, PriceRule{MarkupBP: 500}, 11},          // 10.5
+		{"加价 0.5 分进位", 10, PriceRule{MarkupBP: 500}, 11},         // 10.5
 		{"固定价优先于加价", 1999, PriceRule{MarkupBP: 1500, FixedCents: i64(2500)}, 2500},
 		{"降价", 1000, PriceRule{MarkupBP: -1000}, 900},
 	} {
