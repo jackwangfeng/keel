@@ -68,7 +68,10 @@ func NewAdminStoreService(r AdminStoreRepository, inv inventory.Service) *AdminS
 }
 
 // WithChannels 接上渠道层（nil 即不接）。
-func (s *AdminStoreService) WithChannels(c *ChannelService) *AdminStoreService { s.channels = c; return s }
+func (s *AdminStoreService) WithChannels(c *ChannelService) *AdminStoreService {
+	s.channels = c
+	return s
+}
 
 // ---------------------------------------------------------------------------
 // 分页信封

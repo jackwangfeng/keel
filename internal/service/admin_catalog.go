@@ -387,7 +387,10 @@ func (s *AdminCatalogService) DeleteProduct(ctx context.Context, id int64) error
 }
 
 // WithChannels 接上渠道层（nil 即不接）。
-func (s *AdminCatalogService) WithChannels(c *ChannelService) *AdminCatalogService { s.channels = c; return s }
+func (s *AdminCatalogService) WithChannels(c *ChannelService) *AdminCatalogService {
+	s.channels = c
+	return s
+}
 
 // SetPublication 实现 POST /admin/products/{product_id}/publication。
 //

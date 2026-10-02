@@ -13,9 +13,9 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/keel/keel/internal/channel"
-	"github.com/keel/keel/internal/db"
 	"github.com/keel/keel/internal/channel/shopify"
 	"github.com/keel/keel/internal/channel/shopify/shopifytest"
+	"github.com/keel/keel/internal/db"
 	"github.com/keel/keel/internal/repository"
 	"github.com/keel/keel/internal/service"
 	"github.com/keel/keel/internal/tenant"
