@@ -265,5 +265,5 @@ core：对每个启用的销售渠道 binding 按规则算对外可售数
 3. 受保护客户数据（订单收货人姓名 / 地址 / 电话 / 邮箱）**不在 Dev Dashboard 里配**：去 Partner Dashboard（<https://partners.shopify.com> → Apps → 选中这个应用），没选过分发方式的话先选 Custom distribution，再进 API access requests → Protected customer data access → Request access，勾选 Protected customer data 与姓名 / 地址 / 电话 / 邮箱字段，按提示填 Data protection details。**开发店不需要审核，保存即生效**；没开这一步时读订单会报 `This app is not approved to access the Order object`。
 4. 把 Client ID / Client Secret / 店铺域名写进本机 `~/.config/keel/shopify-dev`（0600），不经对话传递。
 5. webhook 回调地址：`https://<演示站域名>/api/v1/webhooks/channels/<binding_id>`。在 binding 的 `config` 里配 `webhook_base_url`（`https://<演示站域名>`），启用时首拉商品顺带自动装订阅（`PRODUCTS_CREATE/UPDATE/DELETE`、`INVENTORY_LEVELS_UPDATE`、
-`APP_UNINSTALLED`、`ORDERS_CREATE/UPDATED/CANCELLED/PAID`、`REFUNDS_CREATE`、`FULFILLMENTS_CREATE`，共 11 个主题；
+`APP_UNINSTALLED`、`ORDERS_CREATE/UPDATED/CANCELLED/PAID`、`REFUNDS_CREATE`，共 10 个主题（`FULFILLMENTS_CREATE` 实测这个应用装不上，平台发货靠 `ORDERS_UPDATED` 也能收到）；
 第三期之前建的 binding 升级后要点一次「重新同步商品」补装订单相关的几个）。binding 其余约定：`external_account` = 店铺域名，`secrets` = `{"client_id","client_secret"}`，`config.default_category_id` 必填（新商品挂哪个类目），`config.price_store_id` 可选（价格从哪家门店出，缺省为映射门店里 id 最小的）。

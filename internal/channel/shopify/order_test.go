@@ -325,7 +325,7 @@ func TestEnsureWebhooksOrderTopics(t *testing.T) {
 	for _, w := range r.sim.Webhooks() {
 		have[w.Topic]++
 	}
-	for _, tp := range []string{"ORDERS_CREATE", "ORDERS_UPDATED", "ORDERS_CANCELLED", "ORDERS_PAID", "REFUNDS_CREATE", "FULFILLMENTS_CREATE"} {
+	for _, tp := range []string{"ORDERS_CREATE", "ORDERS_UPDATED", "ORDERS_CANCELLED", "ORDERS_PAID", "REFUNDS_CREATE"} {
 		if have[tp] != 1 {
 			t.Errorf("%s 装了 %d 条", tp, have[tp])
 		}

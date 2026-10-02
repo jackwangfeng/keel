@@ -8,8 +8,13 @@ import (
 )
 
 // webhookTopics 是这个适配器要订阅的主题。
+//
+// 没有 FULFILLMENTS_CREATE：开发店上实测（2026-10-02）这个应用的 scope 下 Shopify 拒绝建这个订阅
+// （「You cannot create a webhook subscription with the specified topic」），而且它是多余的——平台上发货
+// 同样会触发 ORDERS_UPDATED，收单回读到的订单里带着 fulfillments。ParseInbound 仍认 fulfillments/create，
+// 别处手工装了也照常处理。
 var webhookTopics = []string{"PRODUCTS_CREATE", "PRODUCTS_UPDATE", "PRODUCTS_DELETE", "INVENTORY_LEVELS_UPDATE", "APP_UNINSTALLED",
-	"ORDERS_CREATE", "ORDERS_UPDATED", "ORDERS_CANCELLED", "ORDERS_PAID", "REFUNDS_CREATE", "FULFILLMENTS_CREATE"}
+	"ORDERS_CREATE", "ORDERS_UPDATED", "ORDERS_CANCELLED", "ORDERS_PAID", "REFUNDS_CREATE"}
 
 const queryWebhooks = `query Webhooks{ webhookSubscriptions(first:100){ nodes{ topic uri } } }`
 
