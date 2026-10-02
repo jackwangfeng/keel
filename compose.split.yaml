@@ -91,6 +91,8 @@ services:
       KEEL_DTM_SERVER: http://dtmrs:36789
       KEEL_DTM_TOKEN: ${KEEL_DTM_TOKEN:?C 档要设 KEEL_DTM_TOKEN（协调器的令牌，openssl rand -hex 24）}
       KEEL_SELF_URL: http://inventory:8090
+      # 渠道适配层开关：与 core 同一个值（决定库存服务给开了渠道的商家发不发 stock.changed）。
+      KEEL_CHANNELS: ${KEEL_CHANNELS:-}
       KEEL_INTERNAL_SECRET: ${KEEL_INTERNAL_SECRET:?C 档要设 KEEL_INTERNAL_SECRET（openssl rand -base64 48）}
       KEEL_INTERNAL_SECRET_PREVIOUS: ${KEEL_INTERNAL_SECRET_PREVIOUS:-}
       KEEL_DB_MAX_CONNS: ${KEEL_DB_MAX_CONNS:-}

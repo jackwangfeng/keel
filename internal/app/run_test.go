@@ -85,7 +85,7 @@ func env(t *testing.T, defaultMerchant, baseDomain string) {
 		app.EnvInternalSecret, app.EnvInventoryURL, app.EnvBackground,
 		app.EnvDTMServer, app.EnvDTMToken, app.EnvSelfURL, app.EnvCoreURL,
 		app.EnvUploadDriver, app.EnvS3Endpoint, app.EnvS3Bucket, app.EnvS3AccessKey, app.EnvS3SecretKey,
-		app.EnvS3Prefix, app.EnvS3AddressStyle, app.EnvS3PresignEndpoint, app.EnvS3Region} {
+		app.EnvS3Prefix, app.EnvS3AddressStyle, app.EnvS3PresignEndpoint, app.EnvS3Region, app.EnvChannels} {
 		t.Setenv(k, "")
 	}
 	// 走 dtmtest：它断言 Run 返回（协调器已 Close）时 sqlite 存储已经关干净。见 dtmtest 包注释。

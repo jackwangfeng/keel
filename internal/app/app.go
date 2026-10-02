@@ -947,6 +947,13 @@ func Run(ctx context.Context, listen ListenFunc) error {
 		return fmt.Errorf("%s: %w", EnvSelfURL, err)
 	}
 	stockNotifier := newStockNotifier(cfg.Split, invPool, self)
+	// 渠道适配层（app/channels.go）：开关关着时 channelGate 不放行、下面一个渠道对象都不建。
+	channelsOn, err := channelsFromEnv()
+	if err != nil {
+		return fmt.Errorf("拒绝启动: %w", err)
+	}
+	channelGate := inventory.NewChannelGate(channelsOn)
+	withChannels(stockNotifier, channelGate, cfg.Split)
 	inv, err := inventoryService(cfg.Split, invPool, stockNotifier)
 	if err != nil {
 		return err
@@ -982,8 +989,21 @@ func Run(ctx context.Context, listen ListenFunc) error {
 		quotaLocal = inventory.NewLocal(repository.NewInventoryStore(invPool)).WithStockNotifier(stockNotifier)
 	}
 
+	var channels *service.ChannelService
+	var channelBranches map[string]dtm.BranchFuncEx
+	if channelsOn {
+		if channels, err = newChannelService(cfg.Split, pool, inv, self); err != nil {
+			return err
+		}
+		var chLocal *inventory.Local
+		if cfg.Split.Role != RoleCore {
+			chLocal = inventory.NewLocal(repository.NewInventoryStore(invPool)).WithStockNotifier(stockNotifier)
+		}
+		channelBranches = ChannelBranches(channels, chLocal, channelGate)
+	}
+
 	branches := mergeEx(exBranches(Branches(orders)), StockMsgBranches(stockNotifier, stockFlags),
-		QuotaSyncBranches(quotaSync, quotaLocal, quotaSrc), invBranches)
+		QuotaSyncBranches(quotaSync, quotaLocal, quotaSrc), invBranches, channelBranches)
 	var tc dtm.Coordinator
 	var selfBranches map[string]dtm.BranchFuncEx
 	if cfg.Split.remoteDTM() {
@@ -1003,6 +1023,11 @@ func Run(ctx context.Context, listen ListenFunc) error {
 		// 订阅跨 0 通知（库存发到主题，不知道谁在听）。后台重试，不挡启动。
 		subscribeUntilDone(context.WithoutCancel(ctx), r, inventory.TopicStockZeroCrossing,
 			self.BranchURL(inventory.BranchStockChanged), "keel-core")
+		if channelsOn {
+			// 渠道层的库存变化通知（stock.changed）同理。
+			subscribeUntilDone(context.WithoutCancel(ctx), r, inventory.TopicStockChanged,
+				self.BranchURL(inventory.BranchChannelStockChanged), "keel-core-channels")
+		}
 	} else {
 		etc, err := dtm.StartEx(cfg.DTMDSN, 0, nil, branches)
 		if err != nil {
@@ -1014,6 +1039,9 @@ func Run(ctx context.Context, listen ListenFunc) error {
 	orders.AttachCoordinator(tc)
 	attachStockNotifier(stockNotifier, tc)
 	quotaSync.Attach(tc)
+	if channels != nil {
+		channels.Attach(tc)
+	}
 
 	// 超时补偿定时任务（Task 6）。
 	//
@@ -1114,6 +1142,10 @@ func Run(ctx context.Context, listen ListenFunc) error {
 	notifier := service.NewNotificationDeliveryService(repository.New(pool), nil,
 		service.NotificationDeliveryConfig{}, nil)
 	bg.Go("notification_delivery", notifier.Run)
+	// 渠道层的任务循环（推对外可售数、整店重算、回调处理）。多实例并行安全（SKIP LOCKED）。开关关着时不起。
+	if channels != nil {
+		bg.Go("channel_workers", channels.RunWorkers)
+	}
 
 	// 派生数据入库的增量任务（M3 Task 3）：商品变了就把文本向量与 bigram 串重算。
 	//
@@ -1201,7 +1233,7 @@ func Run(ctx context.Context, listen ListenFunc) error {
 	bg.Start(bgCtx)
 
 	public := Router(pool, res, signer, orders, cfg.Payment, searchEmbedder, WithInventory(inv), WithQuotaSync(quotaSync),
-		WithUploadStore(uploads))
+		WithUploadStore(uploads), WithChannels(channels))
 	if cfg.Split.InternalAddr == "" {
 		return listen(ctx, cfg.Addr, public)
 	}
