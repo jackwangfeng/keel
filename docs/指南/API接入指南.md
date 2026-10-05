@@ -72,6 +72,23 @@ X-Keel-Merchant: shop1
 
 ---
 
+## 跟踪号：`X-Trace-Id`
+
+每个响应都带 `X-Trace-Id`，32 位小写十六进制。报障时把这个值给出来，服务端日志里同一列叫 `trace_id`。
+
+- 请求里带了合法的 `X-Trace-Id`，或者 W3C `traceparent`（`00-{trace-id}-{span-id}-{flags}`），就沿用调用方的号，响应里回同一个。
+- 没带，或者带的不是 32 位十六进制，服务端自己生成一个。带换行、过长的值不会写进日志。
+- 拆分部署时，core 调库存的内网请求会带上同一个头。下单、渠道接单的事务分支地址上有 `trace=`，库存进程的日志对得上。协调器重放时不转发请求头，号留在这个参数里。
+- `/search` 响应体里的 `trace_id` 是另一次检索的归因号（点了哪件、加购了哪件），不是这个请求头。
+
+```bash
+curl -sD - -o /dev/null -H 'X-Trace-Id: 0123456789abcdef0123456789abcdef' \
+     http://localhost:8080/healthz
+# X-Trace-Id: 0123456789abcdef0123456789abcdef
+```
+
+---
+
 ## 写操作幂等：`Idempotency-Key`
 
 下单、发起支付、后台的创建类操作等写接口要求带 `Idempotency-Key` 头，值是客户端生成的 UUID。

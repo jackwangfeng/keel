@@ -32,6 +32,7 @@ import (
 	"github.com/keel/keel/internal/repository"
 	"github.com/keel/keel/internal/service"
 	"github.com/keel/keel/internal/tenant"
+	"github.com/keel/keel/internal/traceid"
 )
 
 // 环境变量名。
@@ -194,6 +195,7 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 		panic(err)
 	}
 	r.Use(gin.Recovery())
+	r.Use(traceid.Middleware())
 
 	// 必须在所有业务中间件之外：它靠 c.Next() 返回之后 drain c.Errors，
 	// 挂在里层会漏掉外层中间件（比如租户解析）记下的错误。
@@ -879,6 +881,7 @@ func InventoryBranches(l *inventory.Local) map[string]dtm.BranchFuncEx {
 // ctx 是进程的停机信号（main 里是 signal.NotifyContext）：取消之后 listen 停止接新请求、
 // 等在途请求，返回后 defer 按「后台任务 → 协调器 → 池」的顺序收尾（lifecycle.go 文件头）。
 func Run(ctx context.Context, listen ListenFunc) error {
+	traceid.Install()
 	// 版本号排在所有事情之前，包括建连接池。
 	//
 	// 启动失败的日志才是最需要它的那一份：连不上库、自检不过、协调器起不来、

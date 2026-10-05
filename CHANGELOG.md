@@ -48,6 +48,12 @@ and `00330`–`00332` (AI channel allocation: `channel_listing_zero_spans`, `age
 
 ### Added
 
+- **Request trace id.** Each public and internal HTTP request carries `X-Trace-Id`
+  (an incoming 32-hex id or W3C `traceparent` is kept, otherwise one is generated)
+  and the response echoes it. Structured logs add `trace_id`. Internal RPC forwards
+  the header. Saga branch URLs store it as a `trace` query parameter so a replayed
+  inventory branch logs the same id. This is separate from the search-attribution
+  `trace_id` on `/search`.
 - **AI employee: channel stock allocation.** A new MCP compute tool, `channel_allocation_review`, gives the agent,
   per store × SKU × sales channel, the rule in force, the published quantity, units sold, daily velocity while in
   stock, hours the channel sat at zero (split into "keel had stock but the rule published 0" and "keel was out"),

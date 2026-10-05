@@ -32,6 +32,7 @@ import (
 	"github.com/keel/keel/internal/dtm"
 	"github.com/keel/keel/internal/inventory"
 	"github.com/keel/keel/internal/repository"
+	"github.com/keel/keel/internal/traceid"
 )
 
 const (
@@ -56,16 +57,17 @@ func (s *ChannelService) OrderBranches() map[string]dtm.BranchFunc {
 }
 
 // channelSagaSteps 是编排（建单在前、库存在后，理由同 order_saga.go 的 sagaStepsFor）。
-func (s *ChannelService) channelSagaSteps(orderNo string, storeID int64, lines []inventory.OrderLine) (string, error) {
+func (s *ChannelService) channelSagaSteps(orderNo string, storeID int64, lines []inventory.OrderLine, traceID string) (string, error) {
 	payload, err := inventory.EncodeDeductPayload(inventory.DeductPayload{OrderNo: orderNo, StoreID: storeID, Lines: lines})
 	if err != nil {
 		return "", err
 	}
+	u := func(raw string) string { return traceid.Append(raw, traceID) }
 	return dtm.StepsJSON(
-		dtm.Step{Action: s.self.BranchURL(BranchChannelOrderOpen), Compensate: s.self.BranchURL(BranchChannelOrderOpenUndo)},
-		dtm.Step{Action: s.res.BranchURL(inventory.BranchDeduct), Compensate: s.res.BranchURL(inventory.BranchRestore),
+		dtm.Step{Action: u(s.self.BranchURL(BranchChannelOrderOpen)), Compensate: u(s.self.BranchURL(BranchChannelOrderOpenUndo))},
+		dtm.Step{Action: u(s.res.BranchURL(inventory.BranchDeduct)), Compensate: u(s.res.BranchURL(inventory.BranchRestore)),
 			Payload: payload},
-		dtm.Step{Action: s.self.BranchURL(BranchChannelOrderFinish), Compensate: s.self.BranchURL(BranchChannelOrderFinishUndo)},
+		dtm.Step{Action: u(s.self.BranchURL(BranchChannelOrderFinish)), Compensate: u(s.self.BranchURL(BranchChannelOrderFinishUndo))},
 	)
 }
 
@@ -86,8 +88,9 @@ func (s *ChannelService) sagaEnv(name, wantOp, gid, branchID, op string) (ctx co
 		log.Error("分支收到的 op 与它的角色不符，编排里的 action/compensate 写反了？", "want_op", wantOp)
 		return nil, "", log, dtm.Unknown, false
 	}
-	// 租户只从 gid 来（tenant_context_test.go 钉着）。
-	ctx, merchantID, orderNo, err := dtm.TenantContextFromGID(context.Background(), gid)
+	// 租户只从 gid 来（tenant_context_test.go 钉着）。跟踪号是提交时按 gid 记下的。
+	ctx, log = traceid.Branch(log, gid)
+	ctx, merchantID, orderNo, err := dtm.TenantContextFromGID(ctx, gid)
 	if err != nil {
 		log.Error("分支拿到的 gid 解析不出租户，拒绝执行", "err", err)
 		return nil, "", log, dtm.Failure, false

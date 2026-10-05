@@ -18,6 +18,7 @@ import (
 	reqoutcome "github.com/keel/keel/internal/outcome"
 	"github.com/keel/keel/internal/problem"
 	"github.com/keel/keel/internal/tenant"
+	"github.com/keel/keel/internal/traceid"
 )
 
 // Prefix 是内网接口的公共前缀。
@@ -96,6 +97,7 @@ func NewRouter(cfg ServerConfig) (*gin.Engine, Routes) {
 	}
 	r := gin.New()
 	r.Use(gin.Recovery())
+	r.Use(traceid.Middleware())
 	// 与公网 Router 同一个记录器（internal/outcome）：库存进程的接口据此判断一次语句超时 /
 	// 等锁超时能不能回「确定没生效」的 busy（inventory/http.go 的 fail）。
 	r.Use(func(c *gin.Context) {

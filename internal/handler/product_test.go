@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/keel/keel/internal/traceid"
 )
 
 // listResp 只声明断言要用到的字段，但 total / page / page_size 一个都不能少：
@@ -190,6 +192,33 @@ func TestPagingWalksThroughTheWholeList(t *testing.T) {
 	// 所以 Total: len(items) 那种实现会给 0。
 	if past.Total != wantA {
 		t.Fatalf("越过最后一页回显 total=%d，期望 %d", past.Total, wantA)
+	}
+}
+
+// 跟踪号走真实路由：没带就生成并回写，带了合法的就原样回，坏的不沿用。
+func TestTraceIDRoundTrip(t *testing.T) {
+	w := do(t, "whatever.invalid", "/healthz")
+	if got := w.Header().Get(traceid.Header); len(got) != 32 || traceid.Normalize(got) != got {
+		t.Fatalf("没带跟踪号时应回写 32 位十六进制，得到 %q", got)
+	}
+
+	want := "0123456789abcdef0123456789abcdef"
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	req.Host = "whatever.invalid"
+	req.Header.Set(traceid.Header, want)
+	rec := httptest.NewRecorder()
+	testEngine.ServeHTTP(rec, req)
+	if got := rec.Header().Get(traceid.Header); got != want {
+		t.Fatalf("合法的跟踪号应原样回写，得到 %q", got)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	req.Host = "whatever.invalid"
+	req.Header.Set(traceid.Header, "not-a-trace")
+	rec = httptest.NewRecorder()
+	testEngine.ServeHTTP(rec, req)
+	if got := rec.Header().Get(traceid.Header); got == "not-a-trace" || traceid.Normalize(got) != got {
+		t.Fatalf("不合法的跟踪号不该被沿用，得到 %q", got)
 	}
 }
 

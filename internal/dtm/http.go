@@ -12,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/keel/keel/internal/rpc"
+	"github.com/keel/keel/internal/traceid"
 )
 
 // maxBranchBody 是 HTTP 分支请求体（即步骤载荷）的上限。载荷是编排方拼的
@@ -41,6 +42,9 @@ const maxBranchBody = 64 << 10
 func HTTPBranch(fn BranchFuncEx) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		gid, branchID, op := c.Query("gid"), c.Query("branch_id"), c.Query("op")
+		if id := traceid.Query(c.Request); id != "" {
+			c.Request = c.Request.WithContext(traceid.With(c.Request.Context(), id))
+		}
 		if gid == "" || branchID == "" || (op != "action" && op != "compensate") {
 			// 不是协调器发来的形状。400 在 dtmrs 那里是 Unknown：真是协调器发的
 			// （比如将来的版本改了参数名），它会重试而不是回滚，同时这条日志会一直响。
@@ -56,6 +60,10 @@ func HTTPBranch(fn BranchFuncEx) gin.HandlerFunc {
 			return
 		}
 
+		// 协调器重放时不带当初的请求 context。号在 URL 上，这次调用期间按 gid 挂上，
+		// 分支函数自己的日志才能打出同一个 trace_id。提交方已经 Hold 过时这里不撤。
+		release := traceid.Adopt(gid, traceid.Query(c.Request))
+		defer release()
 		ret := callBranch(fn, gid, branchID, op, normalizePayload(string(body)))
 		switch ret {
 		case Success:

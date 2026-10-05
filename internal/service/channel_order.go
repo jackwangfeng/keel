@@ -54,6 +54,7 @@ import (
 	"github.com/keel/keel/internal/channel"
 	"github.com/keel/keel/internal/inventory"
 	"github.com/keel/keel/internal/repository"
+	"github.com/keel/keel/internal/traceid"
 )
 
 // QueueChannelOrderAction 是 keel 对渠道订单的动作（接单 / 拒单 / 发货回传）。worker 在 channel_order_action.go；
@@ -1126,7 +1127,8 @@ func (s *ChannelService) submitChannelSaga(ctx context.Context, saga channelSaga
 	if err != nil {
 		return err
 	}
-	steps, err := s.channelSagaSteps(saga.orderNo, saga.storeID, saga.lines)
+	defer traceid.Hold(ctx, gid)()
+	steps, err := s.channelSagaSteps(saga.orderNo, saga.storeID, saga.lines, traceid.From(ctx))
 	if err != nil {
 		return err
 	}

@@ -12,6 +12,7 @@ import (
 	"github.com/keel/keel/internal/inventory"
 	"github.com/keel/keel/internal/repository"
 	"github.com/keel/keel/internal/tenant"
+	"github.com/keel/keel/internal/traceid"
 )
 
 // 下单 SAGA 的四步（微服务拆分阶段 1b 起）：
@@ -87,19 +88,21 @@ const (
 //
 // 没带券的订单同样经过券分支，两个方向都是空操作。步骤形状对每一单都一样（分支号 01–04），
 // 排障时不必先问「这单带券了吗」；只有库存分支的载荷随订单变化。
-func (s *OrderService) sagaStepsFor(orderNo string, storeID int64, lines []inventory.OrderLine) (string, error) {
+func (s *OrderService) sagaStepsFor(orderNo string, storeID int64, lines []inventory.OrderLine, traceID string) (string, error) {
 	payload, err := inventory.EncodeDeductPayload(inventory.DeductPayload{
 		OrderNo: orderNo, StoreID: storeID, Lines: lines,
 	})
 	if err != nil {
 		return "", err
 	}
+	// 远端分支的 URL 会被协调器存下来。重放时请求头没了，号在 query 里还在。
+	u := func(raw string) string { return traceid.Append(raw, traceID) }
 	return dtm.StepsJSON(
-		dtm.Step{Action: s.self.BranchURL(BranchOrderCreate), Compensate: s.self.BranchURL(BranchOrderCreateUndo)},
-		dtm.Step{Action: s.self.BranchURL(BranchOrderCoupon), Compensate: s.self.BranchURL(BranchOrderCouponUndo)},
-		dtm.Step{Action: s.res.BranchURL(inventory.BranchDeduct), Compensate: s.res.BranchURL(inventory.BranchRestore),
+		dtm.Step{Action: u(s.self.BranchURL(BranchOrderCreate)), Compensate: u(s.self.BranchURL(BranchOrderCreateUndo))},
+		dtm.Step{Action: u(s.self.BranchURL(BranchOrderCoupon)), Compensate: u(s.self.BranchURL(BranchOrderCouponUndo))},
+		dtm.Step{Action: u(s.res.BranchURL(inventory.BranchDeduct)), Compensate: u(s.res.BranchURL(inventory.BranchRestore)),
 			Payload: payload},
-		dtm.Step{Action: s.self.BranchURL(BranchOrderFinish), Compensate: s.self.BranchURL(BranchOrderFinishUndo)},
+		dtm.Step{Action: u(s.self.BranchURL(BranchOrderFinish)), Compensate: u(s.self.BranchURL(BranchOrderFinishUndo))},
 	)
 }
 
@@ -175,9 +178,9 @@ func (s *OrderService) branch(name, wantOp string, body branchBody) dtm.BranchFu
 			return dtm.Unknown
 		}
 
-		// ①。context.Background() 是对的：分支跑在任何 HTTP 请求之外，
-		// 本来也没有别的 ctx 可用，而租户只能来自 gid。
-		ctx, merchantID, orderNo, err := dtm.TenantContextFromGID(context.Background(), gid)
+		// ①。租户只能来自 gid。跟踪号是提交时按 gid 记下的，没有就是空。
+		ctx, log := traceid.Branch(log, gid)
+		ctx, merchantID, orderNo, err := dtm.TenantContextFromGID(ctx, gid)
 		if err != nil {
 			log.Error("分支拿到的 gid 解析不出租户，拒绝执行", "err", err)
 			return dtm.Failure
@@ -425,7 +428,8 @@ func (s *OrderService) finishBranch() dtm.BranchFunc {
 			log.Error("收尾分支收到的 op 不是 action，编排写错了？")
 			return dtm.Unknown
 		}
-		ctx, merchantID, orderNo, err := dtm.TenantContextFromGID(context.Background(), gid)
+		ctx, log := traceid.Branch(log, gid)
+		ctx, merchantID, orderNo, err := dtm.TenantContextFromGID(ctx, gid)
 		if err != nil {
 			log.Error("分支拿到的 gid 解析不出租户，拒绝执行", "err", err)
 			return dtm.Failure

@@ -17,6 +17,7 @@ import (
 	"github.com/keel/keel/internal/api"
 	reqoutcome "github.com/keel/keel/internal/outcome"
 	"github.com/keel/keel/internal/tenant"
+	"github.com/keel/keel/internal/traceid"
 )
 
 // DefaultTimeout 是单次内网调用的上限。库存类调用是一两条 SQL，正常在毫秒级；
@@ -305,6 +306,9 @@ func (c *Client) do(ctx context.Context, timeout time.Duration, method, path str
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set("Accept", "application/json")
+	if id := traceid.From(ctx); id != "" {
+		req.Header.Set(traceid.Header, id)
+	}
 
 	fail := func(kind error, status int, cause error) *Error {
 		return &Error{Status: status, Method: method, Path: path, kind: kind, err: cause}

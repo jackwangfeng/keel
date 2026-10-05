@@ -54,6 +54,10 @@ info:
     与 `inventory-unavailable` 不同，后者在写接口上是「可能已经生效」。
     服务端只在能确定「这个请求此前什么都没落地」时才回 busy；同一个请求里更早的步骤已经提交过的，
     仍回 500 `internal`。
+
+    **跟踪号**。每个响应带 `X-Trace-Id`（32 位小写十六进制）。请求里带了合法的这个头，
+    或 W3C `traceparent` 的 trace-id，就沿用并回写；否则服务端生成。日志里的列名是 `trace_id`。
+    它和 `POST /search` 响应体里的 `trace_id` 不是同一个东西：后者只定位一行 `search_logs`。
   license:
     name: Apache-2.0
 servers:

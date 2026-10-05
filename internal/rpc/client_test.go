@@ -18,6 +18,7 @@ import (
 	"github.com/keel/keel/internal/repository"
 	"github.com/keel/keel/internal/rpc"
 	"github.com/keel/keel/internal/tenant"
+	"github.com/keel/keel/internal/traceid"
 )
 
 func merchantID(t *testing.T, code string) int64 {
@@ -124,6 +125,30 @@ func equal(a, b []int64) bool {
 		}
 	}
 	return true
+}
+
+// 内网调用把调用方 context 里的跟踪号带到库存服务。没带就不生成，由对面自己发一个。
+func TestClientForwardsTraceID(t *testing.T) {
+	const want = "0123456789abcdef0123456789abcdef"
+	var got string
+	r, routes := rpc.NewRouter(rpc.ServerConfig{Secret: secret})
+	routes.Signed.POST("/echo-trace", func(c *gin.Context) {
+		got = traceid.From(c.Request.Context())
+		c.Status(http.StatusNoContent)
+	})
+	srv := httptest.NewServer(r)
+	defer srv.Close()
+	cl, err := rpc.NewClient(srv.URL, secret, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := traceid.With(context.Background(), want)
+	if err := cl.PostJSON(ctx, "/internal/v1/echo-trace", map[string]int{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("库存服务看见的跟踪号是 %q，期望 %s", got, want)
+	}
 }
 
 // 错误映射：调用方必须分得清「肯定没做」和「不知道」。

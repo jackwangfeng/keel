@@ -15,6 +15,7 @@ import (
 	"github.com/keel/keel/internal/dtm"
 	"github.com/keel/keel/internal/inventory"
 	"github.com/keel/keel/internal/repository"
+	"github.com/keel/keel/internal/traceid"
 )
 
 // 下单主链路：POST /orders/preview（无副作用试算）与 POST /orders（SAGA 建单）。
@@ -461,8 +462,10 @@ func (s *OrderService) Create(ctx context.Context, req CreateRequest, idemKey st
 		return CreateResult{}, err
 	}
 	defer s.notes.drop(gid)
+	// 分支跑在协调器的 goroutine 里。号按 gid 挂着，等到终态再撤。
+	defer traceid.Hold(ctx, gid)()
 
-	steps, err := s.sagaStepsFor(draft.OrderNo, draft.StoreID, lines)
+	steps, err := s.sagaStepsFor(draft.OrderNo, draft.StoreID, lines, traceid.From(ctx))
 	if err != nil {
 		return CreateResult{}, err
 	}

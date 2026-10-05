@@ -76,6 +76,7 @@ import (
 
 	"github.com/keel/keel/internal/dtm"
 	"github.com/keel/keel/internal/repository"
+	"github.com/keel/keel/internal/traceid"
 )
 
 // 分支名：进程内是 local://<名字>，拆分部署是 <KEEL_INVENTORY_URL>/internal/v1/saga/<名字>。
@@ -166,12 +167,13 @@ type branchBody func(ctx context.Context, tx repository.InventoryStoreTx, rec *s
 func (l *Local) branch(name, wantOp string, body branchBody) dtm.BranchFuncEx {
 	return func(gid, branchID, op, payload string) int {
 		log := slog.Default().With("gid", gid, "branch_id", branchID, "op", op, "branch", name)
+		ctx, log := traceid.Branch(log, gid)
 		if op != wantOp {
 			// 编排里 action / compensate 写反了。Unknown：事务卡住看得见，跑在错误语义下的写入看不见。
 			log.Error("库存分支收到的 op 与它的角色不符，编排里的 action/compensate 写反了？", "want_op", wantOp)
 			return dtm.Unknown
 		}
-		ctx, merchantID, orderNo, err := dtm.TenantContextFromGID(context.Background(), gid)
+		ctx, merchantID, orderNo, err := dtm.TenantContextFromGID(ctx, gid)
 		if err != nil {
 			log.Error("库存分支拿到的 gid 解析不出租户，拒绝执行", "err", err)
 			return dtm.Failure

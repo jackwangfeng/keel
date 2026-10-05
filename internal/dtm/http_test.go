@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/keel/keel/internal/rpc"
+	"github.com/keel/keel/internal/traceid"
 )
 
 const testSecret = "0123456789abcdef0123456789abcdef-dtm"
@@ -113,6 +114,51 @@ func TestSagaWithLocalAndHTTPBranchCommits(t *testing.T) {
 	}
 	if _, undone := rec.find("order_undo", "compensate"); undone {
 		t.Fatal("全部成功却调了补偿")
+	}
+}
+
+// 跟踪号写在分支 URL 上，经协调器提交、由它按自己的方式再打回来。
+// 断言的是库存进程里分支函数看见的号，不是测试自己拼的请求。
+func TestTraceIDReachesHTTPBranchThroughCoordinator(t *testing.T) {
+	const want = "0123456789abcdef0123456789abcdef"
+	var got string
+	res := remote(t, map[string]BranchFuncEx{
+		"stock": func(gid, branchID, op, payload string) int {
+			ctx, _ := traceid.Branch(nil, gid)
+			got = traceid.From(ctx)
+			return Success
+		},
+		"stock_undo": func(string, string, string, string) int { return Success },
+	})
+	tc, err := StartEx(tempDSN(t), 0, nil, map[string]BranchFuncEx{
+		"order":      func(string, string, string, string) int { return Success },
+		"order_undo": func(string, string, string, string) int { return Success },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tc.Close()
+
+	gid, err := OrderGID(7, "20261005000001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = tc.SubmitSagaSteps(gid,
+		Step{Action: "local://order", Compensate: "local://order_undo"},
+		Step{Action: traceid.Append(res.BranchURL("stock"), want), Compensate: traceid.Append(res.BranchURL("stock_undo"), want)},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, err := tc.WaitFinal(gid, 15000)
+	if err != nil {
+		t.Fatalf("等待终态失败: %v", err)
+	}
+	if status != "succeed" {
+		t.Fatalf("终态 %q，期望 succeed", status)
+	}
+	if got != want {
+		t.Fatalf("库存分支看见的跟踪号是 %q，期望 %s", got, want)
 	}
 }
 
