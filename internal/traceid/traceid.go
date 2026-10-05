@@ -14,6 +14,8 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"log/slog"
+	"os"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -167,12 +169,31 @@ func Branch(log *slog.Logger, gid string) (context.Context, *slog.Logger) {
 
 // Install 让凡是带了跟踪号的 context 打日志都自动多一列 trace_id。
 // 重复调用不会套两层。
+//
+// Go 1.21 起，slog 的默认 handler 写进标准库 log，而 log 又桥回 slog。
+// 把那一层原样包起来再打第一条日志，会在同一把 log.Logger 锁上重入，进程卡死、
+// 端口也起不来。这种默认 handler 换成直接写 stderr 的，格式仍是 slog 文本。
+// 调用方已经换成自己的 handler 时，只在外面套一层，格式不动。
 func Install() {
 	h := slog.Default().Handler()
 	if _, ok := h.(*handler); ok {
 		return
 	}
+	if routesThroughStdLog(h) {
+		h = slog.NewTextHandler(os.Stderr, nil)
+	}
 	slog.SetDefault(slog.New(Wrap(h)))
+}
+
+func routesThroughStdLog(h slog.Handler) bool {
+	t := reflect.TypeOf(h)
+	if t == nil {
+		return false
+	}
+	if t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	return t.PkgPath() == "log/slog" && t.Name() == "defaultHandler"
 }
 
 // Wrap 在下一条日志上补 trace_id。已经包过的 handler 原样返回。

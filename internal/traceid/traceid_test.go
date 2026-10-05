@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -99,6 +100,23 @@ func TestMiddlewareEchoesOrGenerates(t *testing.T) {
 	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/x", nil))
 	if got := w.Header().Get(Header); len(got) != 32 || w.Body.String() != got {
 		t.Fatalf("没带时应生成并回写：头 %q 正文 %q", got, w.Body.String())
+	}
+}
+
+func TestInstallLogsWithoutDeadlock(t *testing.T) {
+	prev := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	done := make(chan struct{})
+	go func() {
+		Install()
+		slog.Info("traceid install smoke")
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Install 之后第一条日志卡住了")
 	}
 }
 

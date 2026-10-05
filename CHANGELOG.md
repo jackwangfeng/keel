@@ -53,7 +53,9 @@ and `00330`–`00332` (AI channel allocation: `channel_listing_zero_spans`, `age
   and the response echoes it. Structured logs add `trace_id`. Internal RPC forwards
   the header. Saga branch URLs store it as a `trace` query parameter so a replayed
   inventory branch logs the same id. This is separate from the search-attribution
-  `trace_id` on `/search`.
+  `trace_id` on `/search`. The log hook does not wrap slog's default handler:
+  that handler writes through the standard `log` package, which calls back into
+  slog, and wrapping it deadlocks on the first log line before the process listens.
 - **AI employee: channel stock allocation.** A new MCP compute tool, `channel_allocation_review`, gives the agent,
   per store × SKU × sales channel, the rule in force, the published quantity, units sold, daily velocity while in
   stock, hours the channel sat at zero (split into "keel had stock but the rule published 0" and "keel was out"),
