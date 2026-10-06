@@ -129,12 +129,20 @@
 - 部署演示栈：
   `export COMPOSE_PROJECT_NAME=keeldemo KEEL_HTTP_PORT=18099 KEEL_CONSOLE_PORT=18100 KEEL_AUTH_SECRET="$(cat ~/.config/keel/demo-auth-secret)" KEEL_VERSION=$(git rev-parse --short HEAD) KEEL_COMMIT=$(git rev-parse HEAD) KEEL_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) && docker compose -f compose.yaml -f compose.infero.yaml up -d --build`
 - 迁移试跑：`pg_dump` 演示库 → 恢复到临时容器 → `GOOSE_DBSTRING=... make migrate`。
+- **备份与恢复（2026-10-06 补，之前只有口头记）**：
+  - 备份：`docker exec <pg容器> pg_dump -U keel -Fc keel > ~/.local/share/keel-eshop/backup-pre-<版本>-<库>-<ts>.dump`，**core 与 inventory 两个库都要**（演示栈是两个 postgres 容器）。
+  - **恢复前先验备份里有没有 ACL**：`pg_restore -l <dump> | grep -c 'TABLE ACL'`。**实测这个数是 0** —— `pg_dump -Fc` 没导出授权，一旦schema 被清空再恢复，恢复出来的表对 `keel_app` 零授权，app 会报 `permission denied for table xxx`。同一条命令查 `SELECT count(*) FROM pg_default_acl`，**恢复后应为 2**（00003 的四权+序列、00005 的收紧），查出来 0 就是丢了。
+  - 授权补法（两条分开执行，**放同一个 heredoc 里顺序错了会把 GRANT 抵消掉**）：
+    重跑 00003 + 00005 那两段 `ALTER DEFAULT PRIVILEGES ... FOR ROLE keel IN SCHEMA public`，再 `GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA public TO keel_app`。基线核对：授权数**318 → 368**（多出的 50 张是 `jobs` / `barrier` / `goose_db_version` 等无 RLS 的基础设施表，本就该授权）。
+  - `DROP SCHEMA` / `TRUNCATE` / `DROP DATABASE` **只在副本库做**。别写进远程命令：`|| true` 只兜退出码，**不兜已经执行完的破坏** —— 2026-10-06 我在生产容器上跑了 `DROP SCHEMA public CASCADE`，演示库被清空，代码里从没有过这个操作，纯粹手滑。
+  - 恢复后必查：表数、`goose_db_version` 的 `max(version_id)`、关键表行数、`pg_default_acl` 计数、`agent_ro.*` 视图带租户上下文能读（RLS 会拦，报错说明 `current_merchant()` 生效正常，不是迁移问题）。
 - 后台代做（给客户端 e2e）：`~/.local/share/keel-eshop/bin/demo-admin.sh ship|reject|approve|receipt <no>` 或 `api METHOD PATH [JSON]`（现签 e2e 操作员的一次性 token，用完作废）。
 - 客户端会话：Remote Control「App客户端编译配置」/「订单生命周期批处理」，地址 `bridge:session_01Bon3JCdkr4yGYp8w81KQqz`（2026-09-27 晚更新，旧的 01NKFeh… 已失效；单向，它回不了消息）。**日常 e2e 一律无头 H5 全量跑**（用户 2026-09-27 定）：真机要解锁、要人在场、慢且不可复现；真机验证只留到发版前做一次，Android / iOS / 小程序平时只验证编译。
 
 ## 踩过的坑
 
 - goose 不补低号迁移（见上）。
+- **两套栈曾经共用 `.env` 这一个文件名（我引入的，`595c0fc` 已修）**：docker compose 会**自动读项目根的 `.env`**，裸 `docker compose up`（演示栈）也不例外。而 `make init` 把生产口令写在 `.env`里，于是演示栈的 migrate 拿着生产口令去连演示库，报 `password authentication failed` —— 症状完全指向「口令错了」，真因是文件名撞车，会把人引去 ALTER ROLE / 查卷 / 看 compose。改法：生产配置改名 `.env.prod`，prod 栈用 `--env-file` 显式读，`make doctor` 会报出项目根多余的 `.env`。**加任何新的环境配置前先想一遍：裸 compose 会不会自动读它。**
 - 并行 agent 同时跑 check-all 与 test-db 会互相踩（npm ci 重建 node_modules 与 go list 冲突）。
 - 主机负载高时（多路测试 + 演示栈同机），搜索日志写入可能超 200ms 被放弃 → 响应缺 trace_id。
 - 5 路 agent 齐发曾同时撞 429 额度上限（营销、报表中断）——现在并行上限 3 路；机械活（合并冲突、改号、文档）派 Sonnet。
