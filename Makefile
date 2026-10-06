@@ -82,9 +82,61 @@ GOOSE_INVENTORY := GOOSE_DRIVER=postgres GOOSE_DBSTRING="$(INVENTORY_GOOSE_DBSTR
 .PHONY: help generate generate-go generate-ts generate-sql tools-versions version search-metrics \
 	contract-check schema-check admin-install admin-type-check admin-test admin-build flutter-get flutter-generate flutter-analyze flutter-test flutter-e2e-web flutter-build flutter-build-mp flutter-ios-install flutter-android-install \
 	sdk-smoke goose-bin migrate migrate-down migrate-status migrate-inventory migrate-inventory-status test-db \
-	test-engine category-eval dtmrs-deps build
+	test-engine category-eval dtmrs-deps build \
+	init doctor prod-up prod-down prod-logs prod-config release-up release-config
+
+# ── 生产部署 ─────────────────────────────────────────────────────────
+# 演示栈是裸 `docker compose up`（不带 -f），生产栈是下面这组 target。
+# 两者项目名与数据卷都分开，同一台机器上可以并存 —— 演示栈的 COMPOSE_PROJECT_NAME
+# 是 keeldemo，这里固定 -p keel。
+#
+# 为什么要 doctor 挡在 prod-up 前面：compose 的报错指向性很差（连不上 / 401 / 全站 404），
+# 而上面那几个失败原因对应的症状几乎一模一样。让人先看到「哪一项没配」再动手。
+
+PROD_ENV        := --env-file $(ROOT)/.env
+PROD_COMPOSE    := docker compose -p keel $(PROD_ENV) -f $(ROOT)/compose.yaml -f $(ROOT)/compose.prod.yaml
+# 走预构建镜像的部署用这个，额外需要 .env 里的 KEEL_IMAGE_TAG。
+RELEASE_COMPOSE := docker compose -p keel $(PROD_ENV) -f $(ROOT)/compose.yaml -f $(ROOT)/compose.prod.yaml -f $(ROOT)/compose.release.yaml
+
+init:
+	@bash $(ROOT)/scripts/init-env.sh
+
+doctor:
+	@bash $(ROOT)/scripts/doctor.sh
+
+prod-up:
+	@$(MAKE) --no-print-directory doctor
+	$(PROD_COMPOSE) up -d
+	@echo "起了。首个平台管理员的 bootstrap token 在 app 日志里：make prod-logs"
+
+prod-down:
+	$(PROD_COMPOSE) down
+
+prod-logs:
+	$(PROD_COMPOSE) logs -f app
+
+prod-config:
+	$(PROD_COMPOSE) config
+
+# 走预构建镜像。快一个数量级：本地构建要拉 module 编 Rust，几分钟；这个是拉四个镜像，
+# 实测 4.9 秒起完整套。代价是代码冻结在那个 tag 上。
+release-up:
+	@$(MAKE) --no-print-directory doctor
+	$(RELEASE_COMPOSE) up -d
+	@echo "起了。bootstrap token 在 app 日志里：make prod-logs"
+
+release-config:
+	$(RELEASE_COMPOSE) config
 
 help:
+	@echo "make init           生成 .env（不覆盖已有的），三个密钥项自动填随机值"
+	@echo "make doctor         上线前自查：docker、.env 必填项、compose 解析、端口占用、存量数据坑"
+	@echo "make prod-up        按生产配置起栈（先自动跑 doctor）"
+	@echo "make prod-down      停掉生产栈（数据卷保留）"
+	@echo "make prod-logs      跟 app 日志，首个管理员的 bootstrap token 在里面"
+	@echo "make prod-config    打印生产栈合成后的完整 compose 配置"
+	@echo "make release-up     同 prod-up，但用 .env 里 KEEL_IMAGE_TAG 指定的预构建镜像（快一个数量级）"
+	@echo "make release-config  打印镜像版合成后的配置"
 	@echo "make generate       生成 Go + TS 两侧契约产物"
 	@echo "make generate-go    只生成 Go 侧（GO_OUT / GO_PACKAGE / GO_MODE 可覆盖）"
 	@echo "make generate-ts    只生成 TS 侧（TS_OUT 可覆盖）"

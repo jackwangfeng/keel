@@ -1,0 +1,76 @@
+# 生产部署叠加层。
+#
+# 用法（两个 -f 都给。只给 compose.yaml 起的是**演示栈**，会播商品和演示买家）：
+#   docker compose -f compose.yaml -f compose.prod.yaml up -d
+# 或者 make prod-up。
+#
+# 它做四件事，每件都对应演示栈的一个「演示行为」：
+#   一、不播演示数据：seed 服务改跑 deploy/bootstrap.sql，只建一家商家。
+#   二、强制显式配置：密钥和库口令用 ${VAR:?...}，没配就在 compose 解析阶段就报错，
+#      而不是让应用带着随机密钥跑起来（症状是每次重启全体买家被登出）。
+#   三、关掉沙箱：沙箱支付、演示外卖渠道都关。
+#   四、只绑回环：app 端口绑 127.0.0.1，对外入口交给 console 或宿主机上的 nginx/Caddy。
+#
+# **不改动 compose.yaml**，所以 `docker compose up` 的演示栈行为一个字没变。
+#
+# 镜像仍然是本地构建 —— compose.yaml 文件头有一段「不走 GHCR」的论证（怕仓库的测试
+# 基建依赖仓库之外的可变产物），这一层尊重它。要用预构建镜像的部署走
+# compose.release.yaml，它叠在这份之上。
+
+services:
+  postgres:
+    environment:
+      # 已有数据卷时改这个口令**不生效**（PostgreSQL 只在 initdb 时读一次）。
+      # 忘了改的后果是后面 migrate 用新口令连不上，报的是密码错误而不是「卷是旧的」。
+      POSTGRES_PASSWORD: ${KEEL_ADMIN_PASSWORD:?KEEL_ADMIN_PASSWORD 必须设，见 .env.example}
+
+  migrate:
+    environment:
+      # 显式重建连接串，不依赖 compose.yaml 里那一长串的默认值拼法。
+      GOOSE_DBSTRING: "postgres://keel:${KEEL_ADMIN_PASSWORD:?KEEL_ADMIN_PASSWORD 必须设}@postgres:5432/keel?sslmode=disable"
+      # 00003 用它 CREATE ROLE keel_app，**漏了这一行迁移会拿开发默认值建角色**，
+      # 而 app 连的是 .env 里那个口令 —— 首次部署必然连不上，症状是 app 反复 401/500。
+      # 那个迁移刻意只在角色不存在时设口令（重跑不动已有角色），所以这里漏了不会报错，
+      # 只会安静地把口令定成 keel_app。细节见 db/migrations/00003_app_role.sql 文件头。
+      KEEL_APP_PASSWORD: ${KEEL_APP_PASSWORD:?KEEL_APP_PASSWORD 必须设}
+
+  # 名字仍叫 seed（depends_on 链在 compose.yaml 里，改名会断链），但产物换了。
+  seed:
+    volumes:
+      - ./deploy:/seed:ro
+    environment:
+      PGPASSWORD: ${KEEL_ADMIN_PASSWORD:?KEEL_ADMIN_PASSWORD 必须设}
+      KEEL_DEFAULT_MERCHANT: ${KEEL_DEFAULT_MERCHANT:?KEEL_DEFAULT_MERCHANT 必须设}
+    # $$ 是给 compose 看的转义，容器内由 shell 展开成环境变量。
+    command: >
+      sh -c "psql -v ON_ERROR_STOP=1 -h postgres -U keel -d keel
+      -v merchant_code=$$KEEL_DEFAULT_MERCHANT
+      -v merchant_name=$$KEEL_MERCHANT_NAME
+      -f /seed/bootstrap.sql"
+
+  app:
+    # !override 不是多余的：compose 合并列表字段是**追加**，不是替换。不加它，
+    # compose.yaml 那条「0.0.0.0:18110」会留在原地，于是同一个端口被绑两次 ——
+    # 症状是 address already in use，而这个端口在宿主机上明明是空的（实测踩过）。
+    ports: !override
+      # 只绑回环。对外要 HTTPS 的话走宿主机上的 Caddy / nginx 反代到这一层。
+      - "127.0.0.1:${KEEL_HTTP_PORT:-8080}:8080"
+    environment:
+      PGUSER: keel_app
+      PGPASSWORD: ${KEEL_APP_PASSWORD:?KEEL_APP_PASSWORD 必须设}
+      KEEL_DEFAULT_MERCHANT: ${KEEL_DEFAULT_MERCHANT:?KEEL_DEFAULT_MERCHANT 必须设}
+      KEEL_AUTH_SECRET: ${KEEL_AUTH_SECRET:?KEEL_AUTH_SECRET 必须设，openssl rand -base64 48}
+      # 生产关沙箱。沙箱支付会跳过真实渠道的验签，等于任何人都能把自己标成已付款。
+      KEEL_PAYMENT_SANDBOX: "off"
+      # 演示用的模拟外卖渠道，compose.yaml 里由 KEEL_CHANNEL_DEMO 控制。
+      KEEL_CHANNEL_DEMO: "off"
+      # 前面挂了反向代理就必须配：应用拿 X-Forwarded-For 限流，不配就退化成拿代理 IP 限流，
+      # 结果是所有客人共用同一个额度。留空 = 不信任任何代理头。
+      KEEL_TRUSTED_PROXIES: ${KEEL_TRUSTED_PROXIES:-}
+      KEEL_UPLOAD_ROOT: /var/lib/keel-uploads
+
+  console:
+    # 同样必须 override：值虽然和 compose.yaml 一样，但追加出来的第二条会让 docker
+    # 以为要把同一个 published 端口绑两次。
+    ports: !override
+      - "${KEEL_CONSOLE_PORT:-8081}:80"

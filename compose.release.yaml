@@ -1,0 +1,37 @@
+# 预构建镜像层。用**已发布**的镜像代替本地构建，其余与 compose.prod.yaml 相同。
+#
+# 用法（三个 -f，顺序不能乱）：
+#   docker compose -f compose.yaml -f compose.prod.yaml -f compose.release.yaml up -d
+# 或者 make release-up KEEL_IMAGE_TAG=v0.7.0
+#
+# 为什么单独一层而不是直接改 compose.prod.yaml：compose.yaml 文件头有一段「不走 GHCR」
+# 的论证 —— 仓库的测试基建不该依赖仓库之外的可变产物。那条论证对 CI 和开发机成立，
+# 但**给客户部署**是另一回事：客户机器上源码构建要拉 GitHub 编 Rust，离线或内网环境
+# 直接卡死，而本地构建过一次要几十分钟。分层的代价是多一个 -f，收益是测试基建与发布
+# 产物互不牵连。
+#
+# 没有镜像权限的客户：跳过这一层，只用 compose.prod.yaml。
+#
+# 镜像从哪来（发布者视角）：打 vX.Y.Z 标签即触发 .github/workflows/release.yml，
+# 它会构建 app / migrate / console / postgres 四个 target 推到 ghcr.io，并建 GitHub Release。
+# 所以 tag 一打镜像就有了，不用手动 buildx：
+#   git tag v0.7.1 && git push origin v0.7.1
+# 已发布：ghcr.io/jackwangfeng/keel{,-migrate,-console,-postgres}:v0.1.0 … v0.7.0
+#
+# 拉取需要先登录（实测：包本身是公开的，匿名 REST 能读，但 docker daemon 不发匿名
+# token，不登录就是 denied）：
+#   echo "$GITHUB_TOKEN" | docker login ghcr.io -u <账号> --password-stdin
+# 注意 gh 的 oauth token（gh auth token）scope 里没有 read:packages，
+# 要用带 packages:read 的 classic PAT，或在 Settings → Developer settings 里重新授权。
+
+services:
+  postgres:
+    image: ghcr.io/jackwangfeng/keel-postgres:${KEEL_IMAGE_TAG:?KEEL_IMAGE_TAG 必须设，例如 v0.7.0}
+  migrate:
+    image: ghcr.io/jackwangfeng/keel-migrate:${KEEL_IMAGE_TAG:?KEEL_IMAGE_TAG 必须设}
+  seed:
+    image: ghcr.io/jackwangfeng/keel-postgres:${KEEL_IMAGE_TAG:?KEEL_IMAGE_TAG 必须设}
+  app:
+    image: ghcr.io/jackwangfeng/keel:${KEEL_IMAGE_TAG:?KEEL_IMAGE_TAG 必须设}
+  console:
+    image: ghcr.io/jackwangfeng/keel-console:${KEEL_IMAGE_TAG:?KEEL_IMAGE_TAG 必须设}

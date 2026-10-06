@@ -48,6 +48,22 @@ and `00330`–`00332` (AI channel allocation: `channel_listing_zero_spans`, `age
 
 ### Added
 
+- **Self-service production deployment.** `compose.prod.yaml` layers a production
+  configuration over the demo stack **without changing `compose.yaml`**, so the demo
+  stack is byte-for-byte unchanged and the two can run side by side under different
+  project names. It swaps the demo seed for `deploy/bootstrap.sql` (one merchant, no
+  catalogue, no fixed-password demo buyer), turns the payment sandbox and the demo
+  takeout channel off, binds `app` to `127.0.0.1` only, and reads every required
+  secret from `.env` through `${VAR:?}` so a missing one stops the stack at
+  compose-parse time rather than booting with a published default. The first platform
+  administrator still comes from the existing one-shot `EnsureBootstrapAdmin` token.
+  `make init` writes `.env` (three random secrets, refuses to overwrite an existing
+  file), `make doctor` checks Docker, required values, `GOPROXY` reachability, the
+  composed config, port availability and the two credential traps,
+  `make prod-up` / `prod-down` / `prod-logs` / `prod-config` drive the stack, and
+  `compose.release.yaml` is an optional layer for published ghcr images. Verified end
+  to end: migrations to 333, empty `products`, zero demo buyers, sandbox off, and the
+  demo stack still serving 200.
 - **Request trace id.** Each public and internal HTTP request carries `X-Trace-Id`
   (an incoming 32-hex id or W3C `traceparent` is kept, otherwise one is generated)
   and the response echoes it. Structured logs add `trace_id`. Internal RPC forwards
