@@ -37,14 +37,36 @@ so "which one is running?" never depends on anyone's memory.
 
 ---
 
-## [Unreleased]
+## [0.8.0] - 2026-10-06
 
 Core migrations `00300` (`channel_merchants`, also in the inventory database), `00301` (channel tables),
-`00302` (`uploads.channel_binding_id`: an upload's owner may now be a channel account), and `00320`–`00326`
+`00302` (`uploads.channel_binding_id`: an upload's owner may now be a channel account), `00320`–`00326`
 (channel orders: `orders.source`/`channel_order_id`, `channel_orders`/`channel_order_requests`, nullable
 `refunds.user_id`/`payment_id`, a `channel_orders` notification target, and the per-order keel-build basis),
-and `00330`–`00332` (AI channel allocation: `channel_listing_zero_spans`, `agent_ro` channel views and
-`orders.source`, `agent_auto_policies.max_ratio_step_bp`).
+`00330`–`00332` (AI channel allocation: `channel_listing_zero_spans`, `agent_ro` channel views and
+`orders.source`, `agent_auto_policies.max_ratio_step_bp`) and `00333` (drop the retired
+`promotion_skus.stock_qty` / `sold_qty` columns). The core database lands on `00333`.
+
+**This is a minor release: the API contract gained operations, so regenerate the generated clients** in
+`internal/api/`, `web/src/api/` and `flutter_app/lib/api/`. 22 paths are new (the sales-channel layer and the
+AI allocation tool surface); no path, method or operationId was removed — the two `admin/stores` entries that show
+up in the diff as deletions are the same operations at shifted line numbers.
+
+**Highlights.** The sales-channel layer is usable end to end: a channel can be ingested as the catalogue
+source, hold inventory, receive orders and settle refunds, with Shopify as the first real adapter and a
+simulated takeout channel for demos. An AI employee can now rebalance channel stock within the bounds a human
+set, under a per-binding lock so an operator's manual edit is never overwritten. Production deployment no
+longer needs a person to remember a six-item prose checklist: `make init` / `doctor` / `prod-up` enforce it.
+
+### Removed
+
+- **`promotion_skus.stock_qty` and `promotion_skus.sold_qty`** (migration `00333`), retired in `00075` when quotas
+  moved to `activity_stocks` and kept since only as frozen historical values. The Go side never read them —
+  `PriceOffer.StockQty` / `SoldQty` are backfilled from the inventory service — so no code changed, and the
+  `agent_ro.promotion_skus` view was rebuilt without them. Any external report or script that selected those
+  columns must be rewritten against `activity_stocks`. Note that dropping a column drops every constraint that
+  mentions it, so `chk_promotion_sku_qty` was rebuilt as `chk_promotion_sku_limit` (it still enforces
+  `per_user_limit >= 0`).
 
 ### Added
 
@@ -57,7 +79,7 @@ and `00330`–`00332` (AI channel allocation: `channel_listing_zero_spans`, `age
   secret from `.env` through `${VAR:?}` so a missing one stops the stack at
   compose-parse time rather than booting with a published default. The first platform
   administrator still comes from the existing one-shot `EnsureBootstrapAdmin` token.
-  `make init` writes `.env` (three random secrets, refuses to overwrite an existing
+  `make init` writes `.env.prod` (three random secrets, refuses to overwrite an existing
   file), `make doctor` checks Docker, required values, `GOPROXY` reachability, the
   composed config, port availability and the two credential traps,
   `make prod-up` / `prod-down` / `prod-logs` / `prod-config` drive the stack, and
@@ -67,8 +89,9 @@ and `00330`–`00332` (AI channel allocation: `channel_listing_zero_spans`, `age
   `.env`: docker compose reads a project-root `.env` automatically, so a `.env`
   holding production credentials would also be picked up by the bare
   `docker compose up` demo stack, whose migrate would then fail with
-  `password authentication failed` against the demo database. `make doctor`
-  reports a stray project-root `.env`.
+  `password authentication failed` against the demo database — the symptom points at
+  the credential while the cause is the filename. `make doctor` reports a stray
+  project-root `.env`.
 - **Request trace id.** Each public and internal HTTP request carries `X-Trace-Id`
   (an incoming 32-hex id or W3C `traceparent` is kept, otherwise one is generated)
   and the response echoes it. Structured logs add `trace_id`. Internal RPC forwards
