@@ -44,7 +44,12 @@ import (
 //
 // （今天这一格指纹还没有任何写入点，见 ComplianceCheck.Fingerprint 的挂账。
 // 先把规矩立对，比将来补一个已经错了的版本号便宜。）
-const wordlistVersion = "adlaw-v1"
+//
+// v1 → v2：加了变体那一遍（同音字归一 + 去装饰符号）。词表一个字没改，
+// 但**同一段文案的结论可能不同**（「醉佳」从放行变成拦下），而指纹回答的
+// 正是「要不要重算」。改的是匹配规则不是词表，版本号照样得动 —— 它记的是
+// 「这套规则的版本」，不是「这张表的版本」。
+const wordlistVersion = "adlaw-v2"
 
 type wordlistEntry struct {
 	term string

@@ -37,6 +37,22 @@ so "which one is running?" never depends on anyone's memory.
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- **The ad-law banned-term check now catches two families of evasive spelling:** homophone swaps of the
+  leading character (`醉佳` for `最佳`, `嘴便宜` for `最便宜`, `鼎级` for `顶级`) and decorative
+  separators inside a term (`最·好`, `最*好`). Both are reported as `绝对化用语的变体写法`, with offsets
+  that still point at the characters the merchant typed. The pass substitutes rune for rune and makes
+  **no inference call**, so the fast path keeps its 200 ms budget and keeps working when the engine is
+  down. Pure pinyin (`zuihao`) and homophones of non-leading characters (`遥遥领衔`) are deliberately
+  **not** covered: widening the set makes `神奇` collide with `神器`, and a false rejection blocks every
+  merchant from publishing. Measured before writing the code, on 156 real strings: 0 false positives.
+  The small-model fallback in the design doc is still not built; this is a narrower rule.
+
+---
+
 ## [0.8.0] - 2026-10-06
 
 Core migrations `00300` (`channel_merchants`, also in the inventory database), `00301` (channel tables),
