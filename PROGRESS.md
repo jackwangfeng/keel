@@ -126,8 +126,14 @@
 ## 常用操作
 
 - 全量测试：自起 `keel-postgres:16`（`--shm-size=1g`，唯一容器名），`env -u PGUSER -u PGPASSWORD -u PGDATABASE PGHOST=127.0.0.1 PGPORT=<port> make test-db`，结束 `docker rm -f -v`。不要与 `./scripts/check-all.sh` 同时跑。
-- 部署演示栈：
+- 部署演示栈：**见上面「只有一条正确姿势」那条。** 这条手写 export 的简化命令只适用于「只想临时起一个最简栈」，
+  完整形态要叠 5 个 compose 文件并 source 环境。
   `export COMPOSE_PROJECT_NAME=keeldemo KEEL_HTTP_PORT=18099 KEEL_CONSOLE_PORT=18100 KEEL_AUTH_SECRET="$(cat ~/.config/keel/demo-auth-secret)" KEEL_VERSION=$(git rev-parse --short HEAD) KEEL_COMMIT=$(git rev-parse HEAD) KEEL_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) && docker compose -f compose.yaml -f compose.infero.yaml up -d --build`
+- **部署演示栈只有一条正确姿势：`source ~/.local/share/keel-eshop/demo-env.sh` 然后 `"${DC[@]}" up -d`**（2026-10-06 踩过）。`DC` 叠了 **5 个** compose 文件（`compose.yaml` / `compose.infero.yaml` / `compose.split.yaml` / `compose.s3.yaml` / `compose.demo-split.yaml`），环境变量也在那个文件里export（`KEEL_MAP_TILES` / `KEEL_TILE_PROXY` / `KEEL_S3_*` / `KEEL_CHANNELS` / `KEEL_CHANNEL_DEMO` / `KEEL_SYSTEMONE_*` / `KEEL_GEO_*` / `KEEL_DTM_TOKEN` / `KEEL_INTERNAL_SECRET`）。
+  **别用本节下面那条手写 export 的简化命令** —— 我用它重建 app，结果演示栈降级成最简配置：后台报「KEEL_MAP_TILES 未配置」、**商品图片全没了**（丢了 `compose.s3.yaml`，app 退回本地卷而库里 95 条记录都指向 driver=2 的 S3），渠道层与相关度预判一并失效。症状分散在三个功能上，真因只有一个。
+- **`GRANT ... ON ALL TABLES IN SCHEMA public TO keel_app` 会破坏 C 档拆分**（2026-10-06 踩过）。cutover 故意收回 core 侧对库存表的权限（`00006` REVOKE `inventories` / `inventory_logs`；`00008` REVOKE `barrier` 后只 GRANT `INSERT`），它也是 `scripts/split-migrate.sh` 判断「已经切过」的唯一依据（`has_table_privilege('keel_app','public.inventories','SELECT')` = f）。补 ACL 时一把 `ON ALL TABLES` 把这些全还回去，后果是`split-data` 服务认定「没切过」→ 核对出源与目标行数不一致 → 退出 1 → app 卡在 `depends_on: service_completed_successfully` 起不来。
+  **正确补法是按迁移原文逐条补**，别用 `ON ALL TABLES`。基线：**授权 353 条**，`inventories` / `inventory_logs` / `activity_stocks` / `barrier` 四张表的 `has_table_privilege(...,'SELECT')` 全部为 **f**。
+  **`barrier` 只有 INSERT、没有 SELECT 是设计如此**（`00008` 明写），不是 bug：app 的屏障 SQL 用 `INSERT ... ON CONFLICT`，而 ON CONFLICT 需要 SELECT 权 —— 一旦误给它 SELECT 或误收回它，下单会全挂在「屏障 INSERT 被拒绝」，冒烟报 409 idempotency-key-in-flight。排查这症状要先看 app 日志的 barrier 报错，别只盯幂等键表。
 - 迁移试跑：`pg_dump` 演示库 → 恢复到临时容器 → `GOOSE_DBSTRING=... make migrate`。
 - **备份与恢复（2026-10-06 补，之前只有口头记）**：
   - 备份：`docker exec <pg容器> pg_dump -U keel -Fc keel > ~/.local/share/keel-eshop/backup-pre-<版本>-<库>-<ts>.dump`，**core 与 inventory 两个库都要**（演示栈是两个 postgres 容器）。
