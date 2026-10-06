@@ -8,13 +8,13 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ENV_FILE="$ROOT/.env"
-EXAMPLE="$ROOT/.env.example"
+ENV_FILE="$ROOT/.env.prod"
+EXAMPLE="$ROOT/.env.prod.example"
 
-[ -f "$EXAMPLE" ] || { echo "找不到 .env.example，先确认仓库是完整的" >&2; exit 1; }
+[ -f "$EXAMPLE" ] || { echo "找不到 .env.prod.example，先确认仓库是完整的" >&2; exit 1; }
 
 if [ -e "$ENV_FILE" ]; then
-	echo ".env 已经存在，不动它。要重新生成请先自己备份或删掉。"
+	echo ".env.prod 已经存在，不动它。要重新生成请先自己备份或删掉。"
 	exit 0
 fi
 
@@ -31,11 +31,11 @@ sed -e "s|^KEEL_ADMIN_PASSWORD=.*|KEEL_ADMIN_PASSWORD=$ADMIN_PW|" \
     -e "s|^KEEL_AUTH_SECRET=.*|KEEL_AUTH_SECRET=$AUTH_SECRET|" \
     "$EXAMPLE" > "$ENV_FILE"
 
-# .env 里有库口令和 HMAC 密钥，权限收紧。umask 挡不住显式 chmod 之后的窄权限。
+# .env.prod 里有库口令和 HMAC 密钥，权限收紧。umask 挡不住显式 chmod 之后的窄权限。
 chmod 600 "$ENV_FILE"
 
 cat <<EOF
-已生成 .env（权限 600），三个密钥项已填随机值。
+已生成 .env.prod（权限 600），三个密钥项已填随机值。
 
 还需要你填两项，它们决定「这家店是谁」：
 

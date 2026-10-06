@@ -93,7 +93,7 @@ GOOSE_INVENTORY := GOOSE_DRIVER=postgres GOOSE_DBSTRING="$(INVENTORY_GOOSE_DBSTR
 # 为什么要 doctor 挡在 prod-up 前面：compose 的报错指向性很差（连不上 / 401 / 全站 404），
 # 而上面那几个失败原因对应的症状几乎一模一样。让人先看到「哪一项没配」再动手。
 
-PROD_ENV        := --env-file $(ROOT)/.env
+PROD_ENV        := --env-file $(ROOT)/.env.prod
 PROD_COMPOSE    := docker compose -p keel $(PROD_ENV) -f $(ROOT)/compose.yaml -f $(ROOT)/compose.prod.yaml
 # 走预构建镜像的部署用这个，额外需要 .env 里的 KEEL_IMAGE_TAG。
 RELEASE_COMPOSE := docker compose -p keel $(PROD_ENV) -f $(ROOT)/compose.yaml -f $(ROOT)/compose.prod.yaml -f $(ROOT)/compose.release.yaml

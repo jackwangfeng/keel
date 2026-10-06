@@ -21,6 +21,8 @@ __pycache__/
 
 # 本地环境
 .env
+.env.prod
+.env.prod.bak
 .env.local
 *.db
 *.sqlite

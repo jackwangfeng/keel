@@ -63,7 +63,12 @@ and `00330`–`00332` (AI channel allocation: `channel_listing_zero_spans`, `age
   `make prod-up` / `prod-down` / `prod-logs` / `prod-config` drive the stack, and
   `compose.release.yaml` is an optional layer for published ghcr images. Verified end
   to end: migrations to 333, empty `products`, zero demo buyers, sandbox off, and the
-  demo stack still serving 200.
+  demo stack still serving 200. Configuration lives in `.env.prod` rather than
+  `.env`: docker compose reads a project-root `.env` automatically, so a `.env`
+  holding production credentials would also be picked up by the bare
+  `docker compose up` demo stack, whose migrate would then fail with
+  `password authentication failed` against the demo database. `make doctor`
+  reports a stray project-root `.env`.
 - **Request trace id.** Each public and internal HTTP request carries `X-Trace-Id`
   (an incoming 32-hex id or W3C `traceparent` is kept, otherwise one is generated)
   and the response echoes it. Structured logs add `trace_id`. Internal RPC forwards

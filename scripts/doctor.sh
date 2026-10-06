@@ -7,7 +7,7 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ENV_FILE="$ROOT/.env"
+ENV_FILE="$ROOT/.env.prod"
 
 fail=0
 ok()   { printf '  \033[32mok\033[0m    %s\n' "$*"; }
@@ -23,16 +23,16 @@ else
 	ok "docker 可用（$(docker version -f '{{.Server.Version}}' 2> /dev/null)）"
 fi
 
-echo "== 2. .env =="
+echo "== 2. .env.prod =="
 if [ ! -f "$ENV_FILE" ]; then
-	bad "没有 .env —— 先跑 make init"
+	bad "没有 .env.prod —— 先跑 make init"
 	echo
 	echo "还缺的话现在什么都查不了，先 make init。"
 	exit 1
 fi
 # shellcheck disable=SC1090
 set -a; . "$ENV_FILE"; set +a
-ok ".env 存在（权限 $(stat -c '%a' "$ENV_FILE")）"
+ok ".env.prod 存在（权限 $(stat -c '%a' "$ENV_FILE")）"
 
 echo "== 3. 必填项 =="
 for k in KEEL_ADMIN_PASSWORD KEEL_APP_PASSWORD KEEL_AUTH_SECRET KEEL_DEFAULT_MERCHANT KEEL_MERCHANT_NAME; do
@@ -128,9 +128,20 @@ else
 fi
 
 warn "KEEL_APP_PASSWORD 只在 keel_app 角色**首次创建**时生效（db/migrations/00003 的论证）。"
-warn "  以后要轮换：ALTER ROLE keel_app PASSWORD '...'，再同步改 .env。"
+warn "  以后要轮换：ALTER ROLE keel_app PASSWORD '...'，再同步改 .env.prod。"
 
 echo
+# 演示栈会不会被生产口令污染。裸 docker compose up 会自动读项目根的 .env，
+# 而生产口令只该在 .env.prod 里——项目根有 .env 的话，演示栈的 migrate 会拿
+# 生产口令去连演示库，报 password authentication failed，而真因是两个栈
+# 曾经共用 .env 这一个文件名。2026-10-06 真踩过：演示库整个 schema 被清空重建过。
+if [ -e "$ROOT/.env" ]; then
+	warn "项目根有 .env —— 裸 docker compose up（演示栈）会自动读它。"
+	echo "        生产口令只该放 .env.prod（make init 生成的就是那个）。"
+	echo "        症状：演示栈 migrate 报 password authentication failed，"
+	echo "        而真因是它拿到了生产口令去连演示库。删掉 .env 或改名成 .env.prod。"
+fi
+
 if [ "$fail" -eq 0 ]; then
 	echo "没有阻断项。make prod-up 起栈；起完用 make prod-logs 看 app 打出来的 bootstrap token。"
 else
