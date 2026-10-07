@@ -83,7 +83,8 @@ GOOSE_INVENTORY := GOOSE_DRIVER=postgres GOOSE_DBSTRING="$(INVENTORY_GOOSE_DBSTR
 	contract-check schema-check admin-install admin-type-check admin-test admin-build flutter-get flutter-generate flutter-analyze flutter-test flutter-e2e-web flutter-build flutter-build-mp flutter-ios-install flutter-android-install \
 	sdk-smoke goose-bin migrate migrate-down migrate-status migrate-inventory migrate-inventory-status test-db \
 	test-engine category-eval dtmrs-deps build \
-	init doctor prod-up prod-down prod-logs prod-config release-up release-config
+	init doctor prod-up prod-down prod-logs prod-config release-up release-config \
+	multi-up multi-verify multi-down multi-wipe multi-logs multi-config
 
 # ── 生产部署 ─────────────────────────────────────────────────────────
 # 演示栈是裸 `docker compose up`（不带 -f），生产栈是下面这组 target。
@@ -128,6 +129,36 @@ release-up:
 release-config:
 	$(RELEASE_COMPOSE) config
 
+# ── 多商家形态（验证用，不是部署形态） ────────────────────────────────
+# compose.yaml + compose.multi.yaml：种子换成 dev.sql（六家店），应用从「配了默认
+# 商家」换成「按 Host 在 example.com 下解析」。
+#
+# 为什么要固定成 target：这个叠加层从 M1 就在仓库里，但一直没有入口 —— CI 的 e2e
+# 只起单商家，演示站与生产栈都必填 KEEL_DEFAULT_MERCHANT，于是「开店 → 解析得到 →
+# 停用 → 买家 404」这条租户管理的路径从来没有端到端的证据。
+#
+# 项目名固定 keelmulti，端口 28185 / 28186：与演示栈（keeldemo / 18099）和生产栈
+# （-p keel）都并存。不能用默认的 keel —— compose.multi.yaml 只给**卷**加了 _multi
+# 后缀，容器名仍与那一栈同名，叠上去等于把人家原地换掉，而不是并存两套。
+
+multi-up:
+	@bash $(ROOT)/scripts/multi-up.sh
+
+multi-verify:
+	@bash $(ROOT)/scripts/multi-verify.sh
+
+multi-down:
+	@bash $(ROOT)/scripts/multi-up.sh --down
+
+multi-wipe:
+	@bash $(ROOT)/scripts/multi-up.sh --wipe
+
+multi-logs:
+	@bash $(ROOT)/scripts/multi-up.sh --logs
+
+multi-config:
+	@bash $(ROOT)/scripts/multi-up.sh --config
+
 help:
 	@echo "make init           生成 .env（不覆盖已有的），三个密钥项自动填随机值"
 	@echo "make doctor         上线前自查：docker、.env 必填项、compose 解析、端口占用、存量数据坑"
@@ -137,6 +168,12 @@ help:
 	@echo "make prod-config    打印生产栈合成后的完整 compose 配置"
 	@echo "make release-up     同 prod-up，但用 .env 里 KEEL_IMAGE_TAG 指定的预构建镜像（快一个数量级）"
 	@echo "make release-config  打印镜像版合成后的配置"
+	@echo "make multi-up         起多商家形态那一栈（dev.sql 六家店 + 按 Host 解析），起完自动验收"
+	@echo "make multi-verify     只跑多商家形态验收（栈要已在跑）"
+	@echo "make multi-down       停掉多商家形态那一栈（数据卷保留）"
+	@echo "make multi-wipe       停掉并删它自己的数据卷"
+	@echo "make multi-logs       跟它的 app 日志，首个平台管理员的 bootstrap token 在里面"
+	@echo "make multi-config     打印多商家形态合成后的完整 compose 配置"
 	@echo "make generate       生成 Go + TS 两侧契约产物"
 	@echo "make generate-go    只生成 Go 侧（GO_OUT / GO_PACKAGE / GO_MODE 可覆盖）"
 	@echo "make generate-ts    只生成 TS 侧（TS_OUT 可覆盖）"

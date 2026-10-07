@@ -21,8 +21,11 @@
 #
 # ## 没有覆盖到的（说出来，别让读者以为都盖住了）
 #
-#   - 多商家形态（compose.multi.yaml + KEEL_SMOKE_HOST）。e2e 只跑默认的单商家
-#     形态。叠加层与它自己的数据卷目前只有人手动验证过。
+#   - 多商家形态**跑进 CI 了**（e2e job 倒数第二步），但只验到 HTTP 与租户管理这一层：
+#     买家端界面在多家店之间怎么切、`MerchantListView` 那一页在多商家形态下点不点得动，
+#     仍然没有自动化。
+#     （2026-10-07 之前这一条是「只有人手动验证过」，即 compose.multi.yaml 从 M1
+#     起就在仓库里、而自动化一次都没碰过它。）
 #   - -race。make test-db 是 `go test -count=1 -timeout=5m ./...`，没有 -race；
 #     要加得先决定它属于 Makefile 还是属于这里。
 #   - examples/dtmrs-embedded 在自己的 workflow 里（example-dtmrs.yml）。
@@ -447,6 +450,30 @@ jobs:
           code=$(curl -fsS -o /dev/null -w '%{http_code}' "http://localhost:${KEEL_CONSOLE_PORT}/api/v1/products")
           echo "console 反代 /api $code"
 
+      # 多商家形态：compose.multi.yaml + dev.sql 那六家店。这一步是这条路径第一次
+      # 进自动化 —— 在此之前它只有人手动跑过，而它正好是「代码写得对、证据一条没有」
+      # 的那种功能：租户隔离的单测与闸门全绿，可 Host 解析配错了、开店之后新店铺面
+      # 打不开、停用没生效，这些都没有任何东西会红。
+      #
+      # 为什么先 down 再起，而不是并排出第二套：compose.multi.yaml 只给**卷**加了
+      # _multi 后缀，容器名仍与单商家那一栈同名（都由项目名派生）。换一个新项目名
+      # 倒是能并存，可镜像标签跟着变（keelcimulti-app），Rust + Go 两个阶段要重编一遍 ——
+      # e2e job 每个 PR 都是新机器，层缓存一次都不命中（见上面 timeout 那段），
+      # 等于每次多付一整轮构建。所以让位、复用同一批镜像。
+      #
+      # 判据在 multi-verify.sh 里，不在 up 的退出码上：`docker compose up -d` 只等到
+      # 容器启动，应用随后因 tenant.Preflight 不过而退出，它照样返回 0。
+      #
+      # 端口沿用上面那对 28180 / 28181，不换新的：单商家那一栈刚被 down 掉，这两个
+      # 端口在本 job 里已被证明可用；而每一个新端口都是一次对 runner 现状的赌注
+      # （28180 / 28181 当初就是为了躲演示站的 Caddy 才换的，见上面那两处注释）。
+      - name: 多商家形态（Host 解析、开店、停用、商家级越权）
+        run: |
+          set -euo pipefail
+          docker compose down --remove-orphans
+          COMPOSE_PROJECT_NAME=keelci KEEL_HTTP_PORT=28180 KEEL_CONSOLE_PORT=28181 \
+            ./scripts/multi-up.sh
+
       # 失败时把现场摊开。没有这一步，红了只能看到一句超时，而真因在某个
       # 已经退出的容器的日志里（compose 的依赖链是 postgres -> migrate -> seed -> app，
       # 坏在哪一段决定了该看谁）。if: failure() 不会改变这个 job 的结论。
@@ -456,10 +483,16 @@ jobs:
           docker compose ps --all
           docker compose logs --no-color --timestamps
 
-      # 自建 runner 不会替你删容器和卷。
+      # 自建 runner 不会替你删容器和卷。两条都要：
+      #   · 上面不带 -f compose.multi.yaml 的那条删不掉多商家那一栈的卷
+      #     （卷是在叠加层里声明的，`down -v` 只看它自己收到的那几个文件），
+      #     留着就是每次 CI 在 runner 上多堆一整个库；
+      #   · 反过来带叠加层的那条也删不到默认卷。所以是两条，不是一条带两个 -f。
       - name: 收拾
         if: always()
-        run: docker compose down -v --remove-orphans
+        run: |
+          docker compose down -v --remove-orphans
+          docker compose -p keelci -f compose.yaml -f compose.multi.yaml down -v --remove-orphans
 
   # ---------------------------------------------------------------------------
   # 客户端（flutter_app/，买家端主力）：依赖锁定、静态检查、单元测试、编 Web
