@@ -714,6 +714,13 @@ type Merchant struct {
 	UpdatedAt pgtype.Timestamptz
 }
 
+type MerchantDomain struct {
+	MerchantID int64
+	Domain     string
+	ChangedBy  *int64
+	CreatedAt  pgtype.Timestamptz
+}
+
 type MerchantRevision struct {
 	ID         int64
 	MerchantID int64
@@ -1169,7 +1176,6 @@ type ShopPreference struct {
 
 type ShopSetting struct {
 	MerchantID int64
-	Domain     *string
 	LogoUrl    *string
 	Currency   string
 	Extra      []byte
