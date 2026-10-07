@@ -37,6 +37,27 @@ export KEEL_CONSOLE_PORT="${KEEL_CONSOLE_PORT:-28186}"
 # smoke.sh 与 verify 都按这个 Host 打；多商家形态下不带 Host 解析不出任何店。
 export KEEL_SMOKE_HOST="${KEEL_SMOKE_HOST:-shop-a.example.com}"
 
+# 签名密钥要**跨重启稳定**，所以在这里落一份再导出。
+#
+# 不设它时 compose.yaml 那行 `${KEEL_AUTH_SECRET:-}` 会让应用每次启动随机取一把
+# （启动日志自己 WARN），后果是「重建一次这一栈 = 把所有人登出一次」：买家令牌、
+# 后台会话全作废，而 `scripts/multi-verify.sh` 缓存的平台会话也作废 —— 更糟的是它
+# **换不回来**：引导 token 只在「库里没有在岗平台管理员」时才签，而这一栈的库里已经有了，
+# 于是踩到的人只剩一条路 —— `--wipe` 删卷重来，而那正是这个脚本本要避免的破坏性动作。
+#
+# 文件在 `~/.config/keel/` 下、0600，**不进仓库也不打印**。CI 上每个 job 一份新的，
+# 与它跑在临时机器上这件事一致。
+if [ -z "${KEEL_AUTH_SECRET:-}" ]; then
+    secret_file="${KEEL_MULTI_AUTH_SECRET_FILE:-$HOME/.config/keel/multi-auth-secret}"
+    if [ ! -s "$secret_file" ]; then
+        mkdir -p "$(dirname "$secret_file")"
+        chmod 700 "$(dirname "$secret_file")"
+        (umask 077; openssl rand -base64 48 >"$secret_file")
+    fi
+    KEEL_AUTH_SECRET=$(cat "$secret_file")
+    export KEEL_AUTH_SECRET
+fi
+
 # proxy.golang.org 在本机与国内网络不通（dial i/o timeout，构建卡在 go mod download）。
 # 与 scripts/demo-up.sh 同一个处理，理由见 PROGRESS.md 的「四个坑」③。
 export GOPROXY="${GOPROXY:-https://goproxy.cn,direct}"
@@ -45,9 +66,18 @@ DC=(docker compose -p "$COMPOSE_PROJECT_NAME" -f compose.yaml -f compose.multi.y
 
 # 端口被占就先停下，别等到 compose 报 address already in use。
 # 那条报错的指向性很差：它说的是端口，而人会先去查应用。
+#
+# **这一栈自己在跑不算占。** `--build` 是原地升级这一栈的唯一路径，而它必然打在
+# 这两个端口上：早先这里无条件拒绝，「改了代码想重建」就只能先 --down，而那条前置
+# 动作没写在任何地方 —— 撞上的人只会以为脚本坏了。要挡的是别的栈（演示 18099、
+# 生产、CI 28180），它们占着才真要换端口，所以把占用者的名字一起报出来。
 check_port() {
     if ss -ltn "sport = :$1" 2>/dev/null | tail -n +2 | grep -q .; then
-        echo "宿主机端口 $1 已被占用（COMPOSE_PROJECT_NAME=$COMPOSE_PROJECT_NAME）。" >&2
+        holder=$(docker ps --filter "publish=$1" --format '{{.Names}}' 2>/dev/null | head -1)
+        case "$holder" in
+            "$COMPOSE_PROJECT_NAME"-*) return 0 ;;
+        esac
+        echo "宿主机端口 $1 已被占用（COMPOSE_PROJECT_NAME=$COMPOSE_PROJECT_NAME${holder:+，占用者 ${holder}}）。" >&2
         echo "换一个：KEEL_HTTP_PORT=xxxxx KEEL_CONSOLE_PORT=xxxxx $0" >&2
         exit 1
     fi

@@ -46,7 +46,7 @@ type Config struct {
 	// 也会解析到 shop-b —— 谁把自己的 DNS 指过来，就能在自己控制的 origin 上
 	// 提供任意一家店的店面（钓鱼、cookie、CSP 全都跟着走）。
 	//
-	// 留空则彻底不做子域名匹配，只认 shop_settings.domain 登记过的域名。
+	// 留空则彻底不做子域名匹配，只认 merchant_domains 登记过的域名。
 	// 留空且有活跃商家没登记域名时，Preflight 会拒绝启动 —— 那些店谁也访问不到。
 	BaseDomain string
 
@@ -94,8 +94,9 @@ type entry struct {
 // NewResolver 建解析器。
 //
 // pool 请用 db.NewPool 建：它把「这条连接能不能绕过 RLS」的自检挂在每条物理
-// 连接上。这里查的 merchants/shop_settings 没有 RLS，但同一个池会被 repository
-// 拿去查有 RLS 的表。
+// 连接上。这里查的 merchants 没有 RLS，merchant_domains / merchant_revisions 挂着
+// RLS 但读侧是 USING (true)，所以解析期读得到；同一个池会被 repository
+// 拿去查有租户策略的表。
 func NewResolver(pool *pgxpool.Pool, cfg Config) *Resolver {
 	if cfg.CacheTTL <= 0 {
 		cfg.CacheTTL = DefaultCacheTTL
@@ -279,13 +280,13 @@ func (r *Resolver) Preflight(ctx context.Context) error {
 		if r.baseDomain == "" {
 			return fmt.Errorf(
 				"没有配置 KEEL_BASE_DOMAIN，子域名解析被关闭，而有 %d 家活跃商家"+
-					"（%s）没有登记 shop_settings.domain —— 它们没有任何可访问的入口。"+
+					"（%s）没有登记自有域名（merchant_domains）—— 它们没有任何可访问的入口。"+
 					"请设置 KEEL_BASE_DOMAIN，或给这些商家登记域名", n, sample)
 		}
 		return fmt.Errorf(
 			"有 %d 家活跃商家（%s）的 code 不是合法的 DNS 标签"+
 				"（小写字母、数字、连字符，不以连字符开头结尾，最长 63），"+
-				"没法出现在 {code}.%s 里，而它们也没有登记 shop_settings.domain —— "+
+				"没法出现在 {code}.%s 里，而它们也没有登记自有域名 —— "+
 				"它们没有任何可访问的入口。请改 code，或给它们登记域名",
 			n, sample, r.baseDomain)
 	}
@@ -331,7 +332,7 @@ func (r *Resolver) reserved(ctx context.Context) (int64, string, error) {
 // 列前几个而不是只列一个：只报一家的话，有 N 家不可达时运维要「改一家、
 // 重启、再看下一家」，把一次修复拖成 N 轮。
 func (r *Resolver) unreachable(ctx context.Context) (int64, string, error) {
-	// 「有 s.domain 就可达」是不成立的：登记在基础域名下的 domain 永远不会被
+	// 「有 d.domain 就可达」是不成立的：登记在基础域名下的 domain 永远不会被
 	// 采纳（那片地盘只认 code），所以那种登记等于没有登记。判据必须和 Resolve
 	// 的实际行为一致，否则自检放行的正是它要消灭的那种全站 404。
 	//
@@ -341,13 +342,13 @@ func (r *Resolver) unreachable(ctx context.Context) (int64, string, error) {
 	WITH bad AS (
 	    SELECT m.code
 	      FROM ` + effectiveMerchant + `
-	      LEFT JOIN shop_settings s ON s.merchant_id = m.id
+	      LEFT JOIN merchant_domains d ON d.merchant_id = m.id
 	     WHERE m.deleted_at IS NULL
 	       AND ` + EffectiveStatus + ` = 1
 	       -- 没有可用的自定义域名入口
-	       AND (s.domain IS NULL
-	            OR ($3 <> '' AND (s.domain = $3
-	                              OR right(s.domain, length($3) + 1) = '.' || $3)))
+	       AND (d.domain IS NULL
+	            OR ($3 <> '' AND (d.domain = $3
+	                              OR right(d.domain, length($3) + 1) = '.' || $3)))
 	       -- 也没有可用的子域名入口
 	       AND ($1 OR m.code !~ $2)
 	)
@@ -406,13 +407,14 @@ func (r *Resolver) Middleware() gin.HandlerFunc {
 //	    「库里其实不止一家店」这种误配由 Preflight 在启动时挡掉，不在这里猜。
 //	没配默认商家（多商家部署）
 //	    Host 落在 BaseDomain 下   → 取第一段当 code 匹配，**只认 code**
-//	    Host 不落在 BaseDomain 下 → 只认 shop_settings.domain 登记过的完整域名
+//	    Host 不落在 BaseDomain 下 → 只认 merchant_domains 登记过的完整域名
 //	    两条都对不上就 404
 //
 // 「基础域名下只认 code」是一条隔离要求，不是优化：
-// shop_settings.domain 是商家自己填的。允许它在基础域名下生效的话，商家 C 把
-// domain 填成 `shop-b.example.com`（B 自己不需要登记，子域名是天然的），
-// 就在 B 的规范 URL 上开了自己的店。基础域名下的名字归平台，不归商家。
+// merchant_domains.domain 是一个登记值，而**登记不做归属校验**（平台运营说这个域名归
+// 这家店就归这家店，见 service/merchant_admin.go 那三道闸门）。允许它在基础域名下
+// 生效的话，把 domain 填成 `shop-b.example.com` 就占了 B 的规范 URL（B 自己不需要
+// 登记，子域名是天然的），B 的买家被领进另一家店。基础域名下的名字归平台，不归登记。
 func (r *Resolver) Resolve(ctx context.Context, host string) (int64, error) {
 	if r.cfg.DefaultCode != "" {
 		return r.byCode(ctx, r.cfg.DefaultCode)
@@ -453,6 +455,40 @@ func normalizeHost(host string) string {
 	host = strings.TrimSuffix(host, ".")
 	return strings.ToLower(host)
 }
+
+// NormalizeDomain 把「商家登记的自有域名」归一成解析器要比的那个形状，
+// 用的就是读 Host 那一个函数 —— 这句是这条接口存在的全部理由。
+//
+// 写入侧不归一化的话，登记 `ShopA.Example.COM.` 会存下一行谁也对不上的文本：
+// 解析器比的是 normalizeHost(r.Header Host)，那永远是小写、无端口、无结尾点，
+// 于是这条登记**不报错、不生效**，而运营以为自己配好了域名。两端共用一个函数，
+// 这件事就没有第二种可能。（同一处坑的另一个方向写在 underBaseDomain 的注释上。）
+func NormalizeDomain(host string) string { return normalizeHost(host) }
+
+// ValidDomain 判断一个已归一化的域名是不是一个像样的主机名：至少两段、
+// 每段都是合法 DNS 标签。它等于 baseDomainShape —— 故意共用同一个表达式：
+// 「KEEL_BASE_DOMAIN 该怎么写」与「商家能登记什么域名」如果用了两个正则，
+// 其中一个放宽了、另一个还紧着，那条宽松的就只会造出解析器采纳不了的名字。
+var domainShape = baseDomainShape
+
+func ValidDomain(name string) bool { return domainShape.MatchString(name) }
+
+// DomainUnderBase 判断一个已归一化的域名等于 base 本身或落在 base 之下。
+//
+// 导出给「登记自有域名」那条写路径（internal/service/merchant_admin.go）：它要用
+// **同一个判据**拒绝那种登记，而不是自己再抄一遍字符串比较。抄了一份的代价是
+// Resolve 那一支将来变化时，写入侧的闸门不会跟着变，于是重新放进
+// 「登记了但永远不生效」的数据 —— 正是这条闸门存在的理由。
+// base 为空（没配 KEEL_BASE_DOMAIN）时永远 false：没有那片地盘，也就没有冲突。
+func DomainUnderBase(name, base string) bool {
+	_, under := underBaseDomain(name, normalizeHost(base))
+	return under
+}
+
+// BaseDomain 返回这套部署的平台基础域名（KEEL_BASE_DOMAIN）；没配时为空串。
+// 登记自有域名那条写路径要用它拒绝「登记在基础域名之下」——解析器在那片地盘
+// 只认 code，那种登记等于写下一行永远不会被采纳的数据。
+func (r *Resolver) BaseDomain() string { return r.baseDomain }
 
 // underBaseDomain 判断 name 是不是落在 base 这片地盘里（含 base 本身），
 // 是就返回 base 之前的那一段（apex 时是空串，多级时含点）。
@@ -526,15 +562,15 @@ func (r *Resolver) ByCodeForPlatform(ctx context.Context, code string) (int64, e
 	}
 }
 
-// byDomain 按 shop_settings.domain 找商家（自定义域名形态）。
+// byDomain 按 merchant_domains 找商家（自定义域名形态，00340）。
 func (r *Resolver) byDomain(ctx context.Context, name string) (int64, error) {
 	q := `
 	SELECT m.id
 	  FROM ` + effectiveMerchant + `
-	  JOIN shop_settings s ON s.merchant_id = m.id
+	  JOIN merchant_domains d ON d.merchant_id = m.id
 	 WHERE m.deleted_at IS NULL
 	   AND ` + EffectiveStatus + ` = 1
-	   AND s.domain = $1`
+	   AND d.domain = $1`
 	return r.lookup(ctx, "domain:"+name, q, name)
 }
 

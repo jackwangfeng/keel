@@ -174,8 +174,39 @@ func checkDirectoryLogPolicies(t *testing.T, tbl string, got []policy) {
 	}
 }
 
-func policiesOf(t *testing.T, conn *pgx.Conn, tbl string) []policy {
+// checkPlatformCurrentPolicies 是 platform-current 类（merchant_domains，00340）的
+// 策略断言。它是 directory-log 的孪生，多的那一条是 DELETE：这张表是当前态而不是
+// 日志，「摘掉一家店的域名」必须能表达，而它的写法是删掉那一行。
+//
+// 三条都要逐字钉死，少任何一条都是一条静默的域名劫持路径：
+//   · 把 read 的 cmd 从 SELECT 放宽成 ALL，USING (true) 于是同时充当写谓词；
+//   · 把 insert 的 WITH CHECK 放宽成 true，商家级会话就能把自己登记成别家的域名；
+//   · 把 delete 的 USING 放宽成 true，任何一条上下文都能摘掉别家店的入口
+//     ——那是一次精确的 DoS，而且读侧一切照旧。
+// 多出第四条 permissive 策略同理（策略之间是 OR）。
+func checkPlatformCurrentPolicies(t *testing.T, tbl string, got []policy) {
 	t.Helper()
+	want := []policy{
+		// pg_policies 按 policyname 排序（policiesOf 里的 ORDER BY）。
+		{name: "platform_current_delete", permissive: "PERMISSIVE", cmd: "DELETE", qual: "platform_scope()", withCheck: ""},
+		{name: "platform_current_insert", permissive: "PERMISSIVE", cmd: "INSERT", qual: "", withCheck: "platform_scope()"},
+		{name: "platform_current_read", permissive: "PERMISSIVE", cmd: "SELECT", qual: "true", withCheck: ""},
+	}
+	if len(got) != len(want) {
+		t.Errorf("%s: 期望恰好 %d 条策略（read / insert / delete），实际 %d 条: %+v",
+			tbl, len(want), len(got), got)
+		return
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("%s: 第 %d 条策略是 %+v，期望 %+v —— 这三条里任何一条放宽，"+
+				"商家级会话就能改别人的域名入口，而按域名解析一切照旧",
+				tbl, i+1, got[i], want[i])
+		}
+	}
+}
+
+func policiesOf(t *testing.T, conn *pgx.Conn, tbl string) []policy {
 	rows, err := conn.Query(context.Background(),
 		`SELECT policyname, permissive, cmd,
 		        coalesce(qual, ''), coalesce(with_check, '')
@@ -259,6 +290,13 @@ func TestTenantPoliciesArePresentAndExact(t *testing.T) {
 			// 「租户 1 的上下文里停用租户 2」就重新写得进去——而读侧一切照旧。
 			// 多出第三条 permissive 策略同理（策略之间是 OR）。
 			checkDirectoryLogPolicies(t, tbl, got)
+			continue
+		}
+
+		if spec.Policy == "platform-current" {
+			// merchant_domains 一张表（00340）。与 directory-log 同一类形状，
+			// 三条策略逐字钉死，理由写在检查函数头上。
+			checkPlatformCurrentPolicies(t, tbl, got)
 			continue
 		}
 

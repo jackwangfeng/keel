@@ -147,7 +147,7 @@ func (h *AdminAuthHandler) CreateStaff(c *gin.Context) {
 	}
 	if replayed {
 		// 幂等重放：本次没有建人，也没有签登录链接（存档里只有 Staff，
-		// 一次性凭据的明文不进数据库）。第一次那串已经进过日志。
+		// 一次性凭据的明文不进数据库）。第一次那一串得靠重签那条拿（见下面）。
 		markReplayed(c, true)
 		c.JSON(http.StatusCreated, apiStaff(out.Staff))
 		return
@@ -155,11 +155,15 @@ func (h *AdminAuthHandler) CreateStaff(c *gin.Context) {
 
 	// 一次性登录链接的明文**不进响应体**：契约里 201 的 schema 是 Staff，
 	// 没有这个字段；而且把它回给创建者等于让任何一个管理员都能冒充他刚建的
-	// 那个人。本轮没有邮件服务，所以它进进程日志 —— 与引导 token 同一个办法。
+	// 那个人 —— 那条接口本来就把明文回给签发人，两处的取舍不同，理由见契约
+	// /admin/staff/{staff_id}/login-token 那段。**这里只登记「给谁签过」**。
+	//
+	// 拿它的办法是紧接着调一次重签（同一个权限判据），后台建号时就是这么做的；
+	// 重签会作废旧的，所以「谁也没拿到」的那一串不会留下一个活的入口。
 	//
 	// 用 c.Error 而不是直接 log：这个包里所有需要出现在日志里的东西都走
 	// logHandlerErrors 那条统一出口（internal/app/errorlog.go）。
-	_ = c.Error(&staffLoginLinkNotice{StaffID: out.Staff.ID, Token: out.LoginToken})
+	_ = c.Error(&staffLoginLinkNotice{StaffID: out.Staff.ID})
 
 	c.JSON(http.StatusCreated, apiStaff(out.Staff))
 }
@@ -193,8 +197,8 @@ func (h *AdminAuthHandler) UpdateStaff(c *gin.Context) {
 //
 // 与 CreateStaff 的差别只有一处：token 明文**进响应体**（契约 StaffLoginToken）。
 // 理由写在契约的描述里 —— 没有邮件服务时，管理员拿到它才能交给本人；签发人
-// 本来就能改这个人的角色与状态（权限判据与 PATCH 同一个）。日志照旧打一份，
-// 让「谁在什么时候给谁签过」查得出来。
+// 本来就能改这个人的角色与状态（权限判据与 PATCH 同一个）。日志记的是
+// 「谁在什么时候给谁签过」这一条事实，不再带明文（见 staffLoginLinkNotice）。
 func (h *AdminAuthHandler) ReissueLoginToken(c *gin.Context) {
 	id, err := strconv.ParseInt(c.Param("staff_id"), 10, 64)
 	if err != nil || id <= 0 {
@@ -207,18 +211,27 @@ func (h *AdminAuthHandler) ReissueLoginToken(c *gin.Context) {
 		writeStaffError(c, err)
 		return
 	}
-	_ = c.Error(&staffLoginLinkNotice{StaffID: out.StaffID, Token: out.Token, Reissued: true})
+	_ = c.Error(&staffLoginLinkNotice{StaffID: out.StaffID, Reissued: true})
 	c.JSON(http.StatusCreated, api.StaffLoginToken{
 		StaffId: out.StaffID, Token: out.Token, ExpireAt: out.ExpireAt,
 	})
 }
 
-// staffLoginLinkNotice 是「这串一次性登录链接 token 本轮只能进日志」这件事的
-// 载体。做成一个类型而不是一句 fmt.Sprintf，是为了让它在日志里认得出来 ——
-// 运维要能一眼找到它，而且要知道它为什么在那里。
+// staffLoginLinkNotice 是「给谁签过一串一次性登录链接 token」这条审计记录。
+//
+// **它只打事实，不打 token 明文。** 以前它必须带明文，因为没有第二条渠道
+// （「本项目没有接邮件服务，只能打进日志」）；现在两条路都有了 ——
+// 建员工之后用 `POST /admin/staff/{id}/login-token` 重签一串（它回明文，
+// 后台建号时当场就调，见 StaffListView），开店时凭据直接在 201 的响应体里
+// （见 admin_merchant.go 的 OpenShop）。审计要的是「谁在什么时候给谁签过」，
+// 那件事不需要明文就能说清。
+//
+// 这一条不是洁癖：日志会被采集、会进索引、会复制到不知多少地方，而一串 15 分钟的
+// 凭据落在任何一处索引里就是一个能被翻出来的登录入口。「明文凭据绝不进数据库」
+// 是仓库法律，日志不是数据库，但它是同一个抽屉。
+// 唯一的例外是引导 token —— 它没有第二条渠道，见 service/staff.go 的 EnsureBootstrapAdmin。
 type staffLoginLinkNotice struct {
 	StaffID int64
-	Token   string
 	// Reissued 为 true 表示这是给已有员工重签的（POST /admin/staff/{id}/login-token），
 	// 不是新建时那一串。运维追查时这两件事要分得开。
 	Reissued bool
@@ -226,12 +239,14 @@ type staffLoginLinkNotice struct {
 
 func (n *staffLoginLinkNotice) Error() string {
 	who := "新员工"
+	token := "要交给本人就用 POST /admin/staff/{id}/login-token 重签一串（那条回明文）"
 	if n.Reissued {
 		who = "重签给已有员工"
+		token = "明文在本次的 201 响应体里"
 	}
-	return "本项目没有接邮件服务，" + who + "的一次性登录链接 token 只能打进日志：" +
-		"staff_id=" + strconv.FormatInt(n.StaffID, 10) + " token=" + n.Token +
-		"（15 分钟有效，用掉即失效；接上 SMTP 之后这条就该消失）"
+	return "已签出一次性登录链接 token，明文不进日志：" + who +
+		" staff_id=" + strconv.FormatInt(n.StaffID, 10) +
+		"（15 分钟有效，用掉即失效；" + token + "）"
 }
 
 // apiStaff 把库里那一行装成契约的 Staff。

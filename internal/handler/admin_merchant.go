@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -64,47 +65,60 @@ func (h *AdminMerchantHandler) OpenShop(c *gin.Context) {
 		return
 	}
 	if replayed {
-		// 幂等重放：店早就开好了，本次什么都没建，也没有新的登录链接可打。
+		// 幂等重放：店早就开好了，本次什么都没建，也没有新的登录链接可给。
+		//
+		// 响应里那三个凭据字段**必须缺席**，而不是回放第一次那一串：存档落在
+		// idempotency_keys.response_body，而一次性凭据的明文不进数据库 ——
+		// 存的是 repository.Merchant，压根不含 token。所以这里想回放也没有。
 		markReplayed(c, true)
-		c.JSON(http.StatusCreated, apiMerchant(out.Merchant))
+		c.JSON(http.StatusCreated, apiMerchantOpened(out.Merchant))
 		return
 	}
 
-	// 新店第一个管理员的一次性登录链接明文**不进响应体**：契约里 201 的
-	// schema 是 Merchant，连 Staff 都没有。本轮没有邮件服务，所以它进日志，
-	// 与 CreateStaff 走同一条出口（logHandlerErrors）。
-	_ = c.Error(&shopAdminLinkNotice{
-		Code: out.Merchant.Code, StaffID: out.Admin.ID, Token: out.LoginToken,
-	})
+	// 新店第一个管理员的一次性登录凭据**进响应体**（契约 MerchantOpened）。
+	// 这条与 POST /admin/staff 相反，差别是刻意的，理由写在契约那段：平台会话
+	// 看不见商家的员工，重签那条对商家级 staff 回 404，而这家新店除了他没有别人。
+	_ = c.Error(&shopAdminLinkNotice{Code: out.Merchant.Code, StaffID: out.Admin.ID})
 
-	c.JSON(http.StatusCreated, apiMerchant(out.Merchant))
+	opened := apiMerchantOpened(out.Merchant)
+	opened.AdminStaffId = &out.Admin.ID
+	opened.AdminLoginToken = &out.LoginToken
+	opened.AdminLoginTokenExpireAt = &out.LoginTokenExpireAt
+	c.JSON(http.StatusCreated, opened)
 }
 
 // shopAdminLinkNotice 与 staffLoginLinkNotice 是同一件事的两处，
 // 分开是因为运维要分得清「某家店加了个员工」和「开了一家新店」——
 // 后者在日志里应当是显眼的。
+//
+// **它只打事实，不打 token 明文。** 这一轮之前这条日志是唯一的取用渠道
+// （「没有邮件服务，只能打进日志」），所以它带着明文；现在凭据在 201 的响应体里，
+// 日志留在这里的目的是「谁在什么时候开了哪家店、给谁签过登录凭据」，
+// 那件事不需要明文就能说清。日志会被采集、会进索引、会复制到不知多少地方，
+// 而一串 15 分钟的凭据落进任何一处索引里就是一个可被人翻出来的登录入口。
+// 引导 token 是唯一的例外，它没有第二条渠道，见 service/staff.go 的 EnsureBootstrapAdmin。
 type shopAdminLinkNotice struct {
 	Code    string
 	StaffID int64
-	Token   string
 }
 
 func (n *shopAdminLinkNotice) Error() string {
-	return "开店成功。本项目没有接邮件服务，新店第一个管理员的一次性登录链接 token " +
-		"只能打进日志：merchant_code=" + n.Code +
-		" staff_id=" + strconv.FormatInt(n.StaffID, 10) + " token=" + n.Token +
-		"（15 分钟有效，用掉即失效；接上 SMTP 之后这条就该消失）"
+	return "开店成功。已为它第一个管理员签出一次性登录链接 token，" +
+		"明文在本次的 201 响应体里（admin_login_token），不进日志也不进数据库：" +
+		"merchant_code=" + n.Code + " staff_id=" + strconv.FormatInt(n.StaffID, 10) +
+		"（15 分钟有效，用掉即失效；重放这一次响应没有那三个字段）"
 }
 
 // apiMerchant 把库里那一行装成契约的 Merchant。
 //
-// **Domain 恒为 nil**，而这不是没实现：开店这条路刻意不写 shop_settings
-// （00021 文件头「为什么不连 shop_settings 一起给」）。契约里 domain 是可选
+// 开店那条路的 **Domain 恒为 nil**，而这不是没实现：开店刻意不登记域名
+// （00021 文件头「为什么不连 shop_settings 一起给」；域名那条写路径是 00340 之后
+// 才有的，而它只开在 PATCH 这一条上）。契约里 domain 是可选
 // 字段，缺席的含义正是「这家店还没绑自定义域名」—— 它走
-// {code}.KEEL_BASE_DOMAIN 或 /s/{code}。填一个空串是另一回事：那意味着
+// {code}.KEEL_BASE_DOMAIN。填一个空串是另一回事：那意味着
 // 「绑了一个空域名」。
 //
-// 商家目录的读接口会填 Domain（从 shop_settings 读）与 UpdatedAt（最新一行修订）。
+// 商家目录的读接口会填 Domain（从 merchant_domains 读）与 UpdatedAt（最新一行修订）。
 func apiMerchant(m repository.Merchant) api.Merchant {
 	return api.Merchant{
 		Id:        m.ID,
@@ -114,6 +128,32 @@ func apiMerchant(m repository.Merchant) api.Merchant {
 		CreatedAt: m.CreatedAt,
 		Domain:    m.Domain,
 		UpdatedAt: m.RevisedAt,
+	}
+}
+
+// apiMerchantOpened 装开店那一条的 201（契约 MerchantOpened）。
+//
+// 它不是 Merchant 加三个字段的一个包装类型：契约用 allOf 把两者摊平成**一个扁平对象**
+// （老客户端读 id / code / name 的代码不用改），而摊平之后生成的是一个独立结构体，
+// 连 status 都是另一个枚举类型（MerchantOpenedStatus）。
+//
+// 所以这里从 apiMerchant 起建，而不是重抄一遍那七个字段：Domain 的「nil 就缺席」、
+// UpdatedAt 的「没改过就不给」这两条规矩只有一份实现。抄第二份的那天，
+// 这两处里的一处会和 GET / PATCH 分叉 —— 而三家店的 domain 在列表里有、在开店响应里没有，
+// 客户端看不出哪个是对的。
+//
+// 那三个凭据字段由调用点往上加，且**只有真正建店那一次加**：重放时这里给的是空结构体，
+// 因为存档里压根没有 token（一次性凭据的明文不进数据库）。
+func apiMerchantOpened(m repository.Merchant) api.MerchantOpened {
+	base := apiMerchant(m)
+	return api.MerchantOpened{
+		Id:        base.Id,
+		Code:      base.Code,
+		Name:      base.Name,
+		Status:    api.MerchantOpenedStatus(base.Status),
+		Domain:    base.Domain,
+		CreatedAt: base.CreatedAt,
+		UpdatedAt: base.UpdatedAt,
 	}
 }
 
@@ -131,25 +171,54 @@ func (h *AdminMerchantHandler) GetMerchant(c *gin.Context) {
 	c.JSON(http.StatusOK, apiMerchant(m))
 }
 
+// adminMerchantPatchRequest 是 PATCH /admin/merchants/{merchant_id} 的请求体。
+//
+// domain 的「三个态」由 bindPatchBody 返回的键集合判，不是由这个结构体判：
+// 契约在这里是三件事——**不传 = 不动**、**显式 null = 摘掉这条登记**、
+// 字符串 = 登记成这家店的域名。而 `*json.RawMessage` 里的指针在 JSON null 时
+// 被 encoding/json 置 nil（它压根不调 RawMessage 的 UnmarshalJSON），
+// 于是前两者又塌回同一个 nil —— 用它的话每一次改名都会顺手把这家店的入口摘掉，
+// 而摘掉的后果是它立刻对全部买家 404，响应却回 200。
+// 同一个坑与同一个解法见 admin_product.go 的 brand_id、admin_catalog.go 的
+// bindPatchBody。
+//
+// name / status 继续用普通指针：那两个字段「不传」与「传 null」在契约里是同一件事
+// （null 不是合法值，两种写法都不动）。
+type adminMerchantPatchRequest struct {
+	Name   *string          `json:"name"`
+	Status *int16           `json:"status"`
+	Domain *json.RawMessage `json:"domain"`
+}
+
 // UpdateMerchant 实现 PATCH /api/v1/admin/merchants/{merchant_id}。
 func (h *AdminMerchantHandler) UpdateMerchant(c *gin.Context) {
 	id, ok := merchantIDParam(c)
 	if !ok {
 		return
 	}
-	// 契约生成的类型：只有 name 与 status。没有 code（改 code 等于改这家店的域名，
-	// 本轮不开这条路），也没有 domain。
-	var req api.MerchantUpdateRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		problem.WriteBindError(c, err)
+	var req adminMerchantPatchRequest
+	present, bound := bindPatchBody(c, &req)
+	if !bound {
 		return
 	}
-	var status *int16
-	if req.Status != nil {
-		v := int16(*req.Status)
-		status = &v
+	if v, ok := present["domain"]; ok {
+		req.Domain = &v
 	}
-	m, err := h.svc.Update(c.Request.Context(), id, req.Name, status)
+	in := repository.MerchantEdit{Name: req.Name, Status: req.Status}
+	if req.Domain != nil {
+		var d *string
+		if err := json.Unmarshal(*req.Domain, &d); err != nil {
+			problem.Write(c, http.StatusUnprocessableEntity,
+				problem.TypeInvalidRequest, "domain 必须是字符串或 null")
+			return
+		}
+		if d == nil {
+			in.ClearDomain = true
+		} else {
+			in.Domain = d
+		}
+	}
+	m, err := h.svc.Update(c.Request.Context(), id, in)
 	if err != nil {
 		writeMerchantError(c, err, "只有平台级管理员能改商家")
 		return
@@ -173,9 +242,13 @@ func writeMerchantError(c *gin.Context, err error, platformOnlyTitle string) {
 	switch {
 	case errors.Is(err, service.ErrSingleMerchantMode):
 		problem.Write(c, http.StatusConflict, problem.TypeSingleMerchantMode,
-			"这是一套单商家部署（配了 KEEL_DEFAULT_MERCHANT），不能有第二家活跃商家："+
-				"新开或启用的店谁也访问不到，而且下一次重启会因为启动自检失败而起不来。"+
-				"要开多家店，请切到多商家部署：清空 KEEL_DEFAULT_MERCHANT、配置 KEEL_BASE_DOMAIN")
+			"这是一套单商家部署（配了 KEEL_DEFAULT_MERCHANT）：不能有第二家活跃商家，"+
+				"也不接受自有域名登记（单商家模式完全不解析 Host，登记了永远不会生效）。"+
+				"要开多家店或绑域名，请切到多商家部署：清空 KEEL_DEFAULT_MERCHANT、配置 KEEL_BASE_DOMAIN")
+	case errors.Is(err, service.ErrMerchantDomainTaken):
+		problem.Write(c, http.StatusConflict, problem.TypeMerchantDomainTaken,
+			"这个域名已经被另一家店登记了：一个域名只能是一家店的入口。"+
+				"换一家店重试没有用，要改的是域名")
 	case errors.Is(err, service.ErrMerchantNotFound):
 		problem.Write(c, http.StatusNotFound, problem.TypeNotFound, "商家不存在")
 	case errors.Is(err, service.ErrPlatformOnly):

@@ -511,11 +511,11 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	// 中间件：那会让同一个判据有两份实现，而中间件那一份没有任何测试盯着
 	// 「它到底挂没挂在这条路由上」。
 	//
-	// 商家管理（列表 / 详情 / 改名与停用启用）与开店共用一个 handler：开店要先过
-	// 「单商家部署不能开第二家店」那道闸（service.MerchantAdminService），而那道闸
-	// 读的是解析器的同一个配置值（res.DefaultCode）。
+	// 商家管理（列表 / 详情 / 改名与停用启用 / 自有域名登记）与开店共用一个 handler：
+	// 开店要先过「单商家部署不能开第二家店」那道闸（service.MerchantAdminService），
+	// 而那道闸与域名那道闸读的都是解析器的同一个配置值（res.DefaultCode / res.BaseDomain）。
 	mh := handler.NewAdminMerchantHandler(
-		service.NewMerchantAdminService(repo, staffSvc, res.DefaultCode()))
+		service.NewMerchantAdminService(repo, staffSvc, res.DefaultCode(), res.BaseDomain()))
 	v1.GET("/admin/merchants", staffAuth, mh.ListMerchants)
 	v1.POST("/admin/merchants", staffAuth, mh.OpenShop)
 	v1.GET("/admin/merchants/:merchant_id", staffAuth, mh.GetMerchant)

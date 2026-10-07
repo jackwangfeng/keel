@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -124,6 +125,43 @@ func bindJSON(c *gin.Context, dst any) bool {
 		return false
 	}
 	return true
+}
+
+// bindPatchBody 收「三个态」的 PATCH 请求体：绑进 dst，并且告诉调用方
+// **哪些键出现过**。
+//
+// 结构体自己表达不了第二件事，而这不是讲究：encoding/json 遇到 JSON null 进指针
+// 时把指针置 nil，压根不调 json.RawMessage 的 UnmarshalJSON。所以
+// `ParentID *json.RawMessage` 这种写法里，「显式传 null（清空）」与「没传这个字段」
+// 又塌回同一个 nil —— 而契约在这几条接口上明写了它们是两件事（admin_category.go
+// 的 parent_id：移到根 / 不动层级；admin_merchant.go 的 domain：摘掉登记 / 不动）。
+// 先例与踩坑记录在 admin_product.go 的 Update（00055 运费模板那一轮撞上的那次），
+// 那里是内联写的，这里抽出来给后面几条接口用。
+//
+// 用了它就不能再用 bindJSON：请求体已经被读掉了，第二次读是空串
+// （症状是「每个字段都没传」，而它一声不吭）。
+func bindPatchBody(c *gin.Context, dst any) (map[string]json.RawMessage, bool) {
+	raw, err := c.GetRawData()
+	if err != nil {
+		problem.Write(c, http.StatusUnprocessableEntity,
+			problem.TypeInvalidRequest, "请求体读不出来")
+		return nil, false
+	}
+	// 两次解分开判错，理由同 admin_product.go 那一处：合在一起的话，
+	// 「哪个字段类型不对」那条信息会被 bool 吃掉。
+	if err := json.Unmarshal(raw, dst); err != nil {
+		problem.WriteBindError(c, err)
+		return nil, false
+	}
+	var present map[string]json.RawMessage
+	// 这一趟还兜住「请求体不是对象」（一个数组、一个裸字符串）：
+	// 那种报文在这里就该报出去，而不是让 handler 拿着一个空 map 往下走 ——
+	// 空 map 的意思正是「哪个键都没传」。
+	if err := json.Unmarshal(raw, &present); err != nil {
+		problem.WriteBindError(c, err)
+		return nil, false
+	}
+	return present, true
 }
 
 // writeCatalogError 把业务错误翻成契约里那几种响应。

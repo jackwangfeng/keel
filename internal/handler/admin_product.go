@@ -113,26 +113,14 @@ func (h *AdminCatalogHandler) Update(c *gin.Context) {
 	if !ok {
 		return
 	}
-	// 读两遍：一遍进结构体，一遍进 map 看 brand_id / freight_template_id 这两个键**出现过没有**。
-	//
-	// 只靠 *json.RawMessage 判不出来：encoding/json 遇到 JSON null 时把指针置 nil
-	// （null 进指针一律如此，不调 RawMessage 的 UnmarshalJSON），于是「显式传 null 清空」
-	// 与「没传」又变回同一个 nil —— 运费模板那一轮（00055）写「解除挂靠」的测试时撞上的。
-	raw, err := c.GetRawData()
-	if err != nil {
-		problem.Write(c, http.StatusUnprocessableEntity, problem.TypeInvalidRequest, "请求体读不出来")
-		return
-	}
+	// 「这两个键出现过没有」只能从键的集合里读：*json.RawMessage 判不出来 ——
+	// encoding/json 遇到 JSON null 时把指针置 nil（null 进指针一律如此，不调
+	// RawMessage 的 UnmarshalJSON），于是「显式传 null 清空」与「没传」又变回同一个 nil。
+	// 运费模板那一轮（00055）写「解除挂靠」的测试时撞上，判法收在 bindPatchBody 里，
+	// 类目、SKU、商家域名三处走的是同一个函数。
 	var req adminProductPatchRequest
-	var present map[string]json.RawMessage
-	// 两次 Unmarshal 分开判错，理由同 cart.go 的 Select：合在一行的话
-	// 具体是哪个字段类型不对的 err 会被 bool 吃掉。
-	if err := json.Unmarshal(raw, &req); err != nil {
-		problem.WriteBindError(c, err)
-		return
-	}
-	if err := json.Unmarshal(raw, &present); err != nil {
-		problem.WriteBindError(c, err)
+	present, bound := bindPatchBody(c, &req)
+	if !bound {
 		return
 	}
 	if v, ok := present["brand_id"]; ok {

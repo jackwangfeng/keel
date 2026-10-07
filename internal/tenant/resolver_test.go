@@ -38,9 +38,9 @@ func multi() tenant.Config             { return tenant.Config{BaseDomain: baseDo
 // "executable file not found"，看上去像环境坏了，而不是「种子没加载」。
 // 用 Go 读文件再 Exec，依赖面只剩下已经被测试依赖的 pgx。
 //
-// 用管理员连接：种子要往带 RLS 的表里写（眼下只有 merchants/shop_settings 没有
-// RLS，但 categories/products 随时会加进来），而 keel_app 在没有租户上下文的
-// 连接上一行都插不进去。这是少数几个正当使用 AdminDSN 的地方之一。
+// 用管理员连接：种子要往带 RLS 的表里写（merchants / shop_settings 没有 RLS，
+// merchant_domains 有但读侧放开，而 categories/products 随时会加进来），而 keel_app
+// 在没有租户上下文的连接上一行都插不进去。这是少数几个正当使用 AdminDSN 的地方之一。
 //
 // 库是本包自己的（keel_test_tenant），由 testdb.Main 新建并迁移。
 // **以前这里不迁移**，只加载种子：它靠的是 `go test -p 1` 按字母序先跑完的
@@ -232,10 +232,10 @@ func newMerchant(t *testing.T, code, domain string) {
 	adminExec(t, `INSERT INTO merchants (code, name, status) VALUES ($1, $1 || ' 的店', 1)`, code)
 	t.Cleanup(func() { adminExec(t, `DELETE FROM merchants WHERE code = $1`, code) })
 	if domain != "" {
-		adminExec(t, `INSERT INTO shop_settings (merchant_id, domain)
+		adminExec(t, `INSERT INTO merchant_domains (merchant_id, domain)
 			SELECT id, $2 FROM merchants WHERE code = $1`, code, domain)
 		t.Cleanup(func() {
-			adminExec(t, `DELETE FROM shop_settings WHERE merchant_id =
+			adminExec(t, `DELETE FROM merchant_domains WHERE merchant_id =
 				(SELECT id FROM merchants WHERE code = $1)`, code)
 		})
 	}
@@ -254,19 +254,29 @@ func claimDomain(t *testing.T, code, name string) {
 
 	// 先把原值读出来照原样还原。写成「还原成 code + 基础域名」会静默改掉
 	// shop-c 的 custom.example.net，让后面的自定义域名用例测的是另一回事。
+	// 没有登记过的店要读成 NULL，所以 LEFT JOIN：这一行不存在是常态。
 	var old *string
-	if err := conn.QueryRow(ctx, `SELECT s.domain FROM shop_settings s
-		JOIN merchants m ON m.id = s.merchant_id WHERE m.code = $1`, code).Scan(&old); err != nil {
+	if err := conn.QueryRow(ctx, `SELECT d.domain FROM merchants m
+		LEFT JOIN merchant_domains d ON d.merchant_id = m.id WHERE m.code = $1`, code).Scan(&old); err != nil {
 		t.Fatalf("读 %s 的原域名失败: %v", code, err)
 	}
-	if _, err := conn.Exec(ctx, `UPDATE shop_settings SET domain = $2
-		WHERE merchant_id = (SELECT id FROM merchants WHERE code = $1)`, code, name); err != nil {
-		t.Fatal(err)
+	setDomain(t, code, &name)
+	t.Cleanup(func() { setDomain(t, code, old) })
+}
+
+// setDomain 把 code 这家店的登记改成 domain（nil = 摘掉）。
+// 表上没有那一行时要补一行 —— 登记路径本来就是「没有行 = 没登记」。
+// 用 adminExec 而不是调用方那个连接：t.Cleanup 跑在测试函数返回**之后**，
+// 那时函数里 defer 掉的控制台连接已经关了。
+func setDomain(t *testing.T, code string, domain *string) {
+	t.Helper()
+	adminExec(t, `DELETE FROM merchant_domains WHERE merchant_id =
+		(SELECT id FROM merchants WHERE code = $1)`, code)
+	if domain == nil {
+		return
 	}
-	t.Cleanup(func() {
-		adminExec(t, `UPDATE shop_settings SET domain = $2
-			WHERE merchant_id = (SELECT id FROM merchants WHERE code = $1)`, code, old)
-	})
+	adminExec(t, `INSERT INTO merchant_domains (merchant_id, domain)
+		SELECT id, $2 FROM merchants WHERE code = $1`, code, *domain)
 }
 
 // fakeClock 让 TTL 不必真的等待。
@@ -363,7 +373,7 @@ func TestSubdomainResolves(t *testing.T) {
 	}
 }
 
-// 自定义域名：域名落在基础域名之外，只能靠 shop_settings.domain 匹配。
+// 自定义域名：域名落在基础域名之外，只能靠 merchant_domains 匹配。
 //
 // shop-c 的域名是 custom.example.net，它的第一段 "custom" 不是任何商家的 code。
 // 拿子域名去比完整域名的实现会在这里 404。
@@ -420,7 +430,7 @@ func TestSubdomainMatchingIsAnchoredToBaseDomain(t *testing.T) {
 // 基础域名的 apex 不归任何商家 —— 哪怕有商家把它登记成了自己的 domain。
 //
 // 这条和「基础域名下只认 code」是同一条规则，只是往上挪了一层：
-// 判据要是「是不是恰好一级子域名」，apex 就不算，于是掉进读 shop_settings
+// 判据要是「是不是恰好一级子域名」，apex 就不算，于是掉进读 merchant_domains
 // 那一支，商家登记一个 example.com 就拿到了平台主站。
 //
 // 注意：光断言 example.com → 404 是不够的（TestSubdomainMatchingIsAnchoredToBaseDomain
@@ -460,7 +470,7 @@ func TestMultiLevelNamesUnderBaseDomainAreNeverAMerchant(t *testing.T) {
 
 // 基础域名下 code 匹配必须赢过商家自己登记的 domain。
 //
-// shop_settings.domain 是商家自己填的。允许它在基础域名下生效的话，商家 C 把
+// merchant_domains.domain 是商家自己填的。允许它在基础域名下生效的话，商家 C 把
 // domain 填成 `shop-nodomain.example.com`，就在那家店的规范 URL 上开了自己的店 ——
 // 而那家店根本不需要登记域名，子域名是天然的，于是它连「域名被占了」都察觉不到。
 func TestCodeWinsOverMerchantSuppliedDomainUnderBaseDomain(t *testing.T) {
@@ -501,7 +511,7 @@ func TestBareHostWithoutDefaultIs404(t *testing.T) {
 // 没配基础域名时，子域名匹配必须整个关掉，而不是退化成「任何域名的第一段都算」。
 func TestWithoutBaseDomainOnlyRegisteredDomainsResolve(t *testing.T) {
 	r := newRouter(t, tenant.Config{}) // 既无默认商家，也无基础域名
-	// shop-nodomain 没有 shop_settings 行，只能靠子域名匹配被找到 ——
+	// shop-nodomain 没有 merchant_domains 行，只能靠子域名匹配被找到 ——
 	// 而子域名匹配此时是关掉的。（拿 shop-b 来试没有意义：它登记过
 	// shop-b.example.com，解析成功是走的 domain 那一支，证明不了任何事。）
 	if got := do(r, "shop-nodomain.example.com").Code; got != 404 {
@@ -746,7 +756,7 @@ func TestReservedNamesAreNotServedToMerchants(t *testing.T) {
 //
 // 这家店的 code 不是合法 DNS 标签（进不了子域名那条路），domain 又登记在基础
 // 域名下（那片地盘只认 code，永远不会采纳它）。于是它全站 404，
-// 而「有 s.domain 就算可达」的自检会放行 —— 正是自检要消灭的那种症状。
+// 而「有登记的 domain 就算可达」的自检会放行 —— 正是自检要消灭的那种症状。
 func TestPreflightCountsABaseDomainRegistrationAsNoEntrance(t *testing.T) {
 	newMerchant(t, "Bad_Hole", "bad-hole."+baseDomain)
 
@@ -760,7 +770,7 @@ func TestPreflightCountsABaseDomainRegistrationAsNoEntrance(t *testing.T) {
 	err := tenant.NewResolver(newPool(t), multi()).Preflight(context.Background())
 	if err == nil {
 		t.Fatal("这家店没有任何入口，Preflight 竟然放行 —— " +
-			"判据仍然停在「有 s.domain 就可达」？")
+			"判据仍然停在「有登记就算可达」？")
 	}
 	if !strings.Contains(err.Error(), "Bad_Hole") {
 		t.Fatalf("错误信息里没有那家店：%v", err)
@@ -900,25 +910,28 @@ func TestSeedIsIdempotent(t *testing.T) {
 	if len(seeded) < 6 {
 		t.Fatalf("从种子文件里只认出 %d 个 code（%v），种子的写法是不是变了？", len(seeded), seeded)
 	}
-	count := func() (int64, int64) {
+	count := func() (int64, int64, int64) {
 		t.Helper()
-		var merchants, settings int64
+		var merchants, settings, domains int64
 		if err := conn.QueryRow(ctx, `
 			SELECT (SELECT count(*) FROM merchants WHERE code = ANY($1)),
 			       (SELECT count(*) FROM shop_settings s
-			          JOIN merchants m ON m.id = s.merchant_id WHERE m.code = ANY($1))`,
-			seeded).Scan(&merchants, &settings); err != nil {
+			          JOIN merchants m ON m.id = s.merchant_id WHERE m.code = ANY($1)),
+			       (SELECT count(*) FROM merchant_domains d
+			          JOIN merchants m ON m.id = d.merchant_id WHERE m.code = ANY($1))`,
+			seeded).Scan(&merchants, &settings, &domains); err != nil {
 			t.Fatal(err)
 		}
-		return merchants, settings
+		return merchants, settings, domains
 	}
 
-	m1, s1 := count()
+	m1, s1, d1 := count()
 	if err := loadSeed(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	m2, s2 := count()
-	if m1 != m2 || s1 != s2 {
-		t.Fatalf("重复加载种子改变了行数：merchants %d→%d，shop_settings %d→%d", m1, m2, s1, s2)
+	m2, s2, d2 := count()
+	if m1 != m2 || s1 != s2 || d1 != d2 {
+		t.Fatalf("重复加载种子改变了行数：merchants %d→%d，shop_settings %d→%d，merchant_domains %d→%d",
+			m1, m2, s1, s2, d1, d2)
 	}
 }

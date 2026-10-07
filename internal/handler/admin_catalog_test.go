@@ -548,6 +548,26 @@ func TestCategoryGatesRefuseDeleteAndCycles(t *testing.T) {
 			"「没传 parent_id」被当成了「传了 null」，于是一次改名把整棵子树挪到了根下",
 			renamed.Level, renamed.ParentId, third.Id)
 	}
+
+	// 反方向也必须成立：**显式传 null 要真的把它挪回根**。
+	// 上面那条只证明了「没传不会挪」——而 `null` 与「没传」在结构体上塌成同一个 nil
+	// 的实现（*json.RawMessage 正是如此：encoding/json 把 null 进指针置 nil，
+	// 压根不调它的 UnmarshalJSON）同样能让那条绿。契约里「移出分类树、成为一棵新根」
+	// 唯一的入口就是这一句，它静默失效时后台点下去什么也不会发生。
+	// 判据在 bindPatchBody 返回的那个键集合里。
+	var backToRoot api.AdminCategory
+	decodeInto(t, patchAs(t, sh.Host, fmt.Sprintf("/api/v1/admin/categories/%d", root.Id),
+		`{"parent_id":null}`, sh.Token), http.StatusOK, "显式 null 移回根", &backToRoot)
+	if backToRoot.Level != 1 || backToRoot.ParentId != nil {
+		t.Fatalf("传了 null 之后 level=%d parent_id=%v，期望成为一棵新根（level=1、parent 为空）",
+			backToRoot.Level, backToRoot.ParentId)
+	}
+	// 子树跟着走：新的根路径。
+	if p := adminQueryText(t, `SELECT path FROM categories WHERE id = $1`, child.Id); p !=
+		fmt.Sprintf("/%d/%d/", root.Id, child.Id) {
+		t.Fatalf("挪回根之后子节点的 path 是 %q，期望 /%d/%d/ —— 根变了而 path 没重写，"+
+			"挂在它下面的商品在新位置查不出来", p, root.Id, child.Id)
+	}
 }
 
 // 商品图那三条 422：重复的 upload_id、别家店的 upload、用途不对的 upload。
@@ -996,6 +1016,52 @@ func TestSKUPriceHasAnUpperBound(t *testing.T) {
 	if _, err := admin(t).Exec(context.Background(), `UPDATE skus SET price_cents = $2 WHERE id = $1`, sku, over); err == nil ||
 		!strings.Contains(err.Error(), "chk_price_upper") {
 		t.Fatalf("直接写库超上限应被 chk_price_upper 拒：%v", err)
+	}
+}
+
+// 小图那三个态：**换一张**、**清空这一格**、**没传这个字段**。
+//
+// 契约里 image_upload_id 是 `integer | null`，而后台「移除小图」发的就是显式 null。
+// 前后两半在修这条之前都没测过：`*json.RawMessage` 判不出 null —— encoding/json
+// 遇到 null 进指针一律置 nil，压根不调它的 UnmarshalJSON，于是「清空」退化成
+// 「什么都没改」，响应照样 200、图还挂着，而没有任何一处会报错。
+// 判据现在在 bindPatchBody 返回的那个键集合里。
+// 契约上的 image_upload_id 在库里是 skus.image_url（resolveSKUImage 把 upload id
+// 翻成 /uploads/{id} 那个地址，见 service/admin_catalog.go），所以这一格读的是 URL
+// 字符串，空串就是 NULL。断言看 URL 而不是看 id：清空那一步要验的是「这一格真的
+// 没有值了」，而不是「值变成了别的」。
+func TestClearingTheSKUPictureNeedsAnExplicitNull(t *testing.T) {
+	sh := newAdminShop(t)
+	_, sku := seedPublishedProduct(t, sh, "PICCLEAR", 1000, 5)
+	pic := func() string {
+		return adminQueryText(t, `SELECT coalesce(image_url, '') FROM skus WHERE id = $1`, sku)
+	}
+	if got := pic(); got != "" {
+		t.Fatalf("夹具建出来的 SKU 已经挂着图（%q）—— 这条测试的前提没了", got)
+	}
+
+	var up api.Upload
+	decodeInto(t, uploadImage(t, sh, "image/jpeg", []byte("thumb")),
+		http.StatusCreated, "传一张小图", &up)
+	wantStatus(t, patchAs(t, sh.Host, fmt.Sprintf("/api/v1/admin/skus/%d", sku),
+		fmt.Sprintf(`{"image_upload_id":%d}`, up.Id), sh.Token), http.StatusOK, "挂上小图")
+	if got := pic(); got != service.UploadURL(up.Id) {
+		t.Fatalf("挂图之后 image_url 是 %q，期望 %q", got, service.UploadURL(up.Id))
+	}
+
+	// 「没传这个字段」= 不动：只改价不许把小图冲掉。
+	wantStatus(t, patchAs(t, sh.Host, fmt.Sprintf("/api/v1/admin/skus/%d", sku),
+		`{"price_cents":1200}`, sh.Token), http.StatusOK, "只改价")
+	if got := pic(); got != service.UploadURL(up.Id) {
+		t.Fatalf("只改价把小图冲掉了（image_url=%q）—— 「没传」被当成了「传了 null」", got)
+	}
+
+	// 显式 null = 清空。
+	wantStatus(t, patchAs(t, sh.Host, fmt.Sprintf("/api/v1/admin/skus/%d", sku),
+		`{"image_upload_id":null}`, sh.Token), http.StatusOK, "清空小图")
+	if got := pic(); got != "" {
+		t.Fatalf("传了 null 之后 image_url 还是 %q，期望空 —— "+
+			"「显式清空」与「没传」又塌成了同一个 nil，而后台的「移除小图」点下去没反应", got)
 	}
 }
 

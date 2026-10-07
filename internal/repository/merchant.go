@@ -25,9 +25,6 @@ var ErrMerchantCodeTaken = errors.New("商家 code 已被占用")
 const merchantsCodeConstraint = "merchants_code_key"
 
 // Merchant 是 merchants 那一行在 repository 边界上的形状。
-//
-// 没有 Domain：那一列在 shop_settings 上，而开店这条路不写它
-// （00021 文件头「为什么不连 shop_settings 一起给」）。
 type Merchant struct {
 	ID        int64
 	Code      string
@@ -35,8 +32,9 @@ type Merchant struct {
 	Status    int16
 	CreatedAt time.Time
 
-	// Domain 是 shop_settings.domain（自定义域名），没绑时为 nil。
-	// 只有商家目录的读接口（merchant_directory.go）填它；开店这条路不写 shop_settings。
+	// Domain 是这家店登记的自有域名（merchant_domains，00340），没绑时为 nil。
+	// 只有商家目录的读写接口（merchant_directory.go）碰它；开店不登记域名
+	// （00021 文件头「为什么不连 shop_settings 一起给」）。
 	Domain *string
 	// RevisedAt 是最新一行 merchant_revisions 的时间；从没改过名 / 状态时为 nil。
 	RevisedAt *time.Time

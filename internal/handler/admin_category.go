@@ -62,10 +62,16 @@ func (h *AdminCatalogHandler) CreateCategory(c *gin.Context) {
 
 // adminCategoryPatchRequest 是 PATCH /admin/categories/{category_id} 的请求体。
 //
-// parent_id 收 *json.RawMessage，而契约在这一条上把理由写得最直白：
+// parent_id 是三态的，而契约在这一条上把理由写得最直白：
 // 「显式传 null 表示移到根（level 变成 1）。不传这个字段则不动层级 ——
 // null 与『没传』在这里是两件事。」生成类型上两者都是 nil，
 // 用它的话每一次改名都会顺手把这个类目连同它整棵子树挪到根下。
+//
+// 这个键**出现过没有**由 bindPatchBody 返回的键集合判，不由结构体判：
+// 字段是 *json.RawMessage 也没用 —— encoding/json 遇到 null 进指针一律置 nil，
+// 压根不调它的 UnmarshalJSON，于是「显式 null」与「没传」又是同一个 nil。
+// 这一处是 2026-10-07 修出来的：在那之前 `{"parent_id":null}` 与 `{}` 走同一条路，
+// 而契约里「移回根」只有这一个入口。
 type adminCategoryPatchRequest struct {
 	Name      *string          `json:"name"`
 	SortOrder *int32           `json:"sort_order"`
@@ -85,8 +91,14 @@ func (h *AdminCatalogHandler) UpdateCategory(c *gin.Context) {
 		return
 	}
 	var req adminCategoryPatchRequest
-	if !bindJSON(c, &req) {
+	present, bound := bindPatchBody(c, &req)
+	if !bound {
 		return
+	}
+	// 「这个键出现过吗」只能从键的集合里读，读出来再挂回结构体：
+	// null 进指针一律是 nil，结构体自己分不出「没传」与「显式传 null」。
+	if v, ok := present["parent_id"]; ok {
+		req.ParentID = &v
 	}
 	in := service.CategoryPatchInput{
 		Name: req.Name, SortOrder: req.SortOrder, Status: req.Status,

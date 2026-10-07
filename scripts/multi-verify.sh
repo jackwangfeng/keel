@@ -20,6 +20,20 @@
 # 所以买家侧那几条在本脚本里自己走 —— 而「同一个号码在两家店是两个账号」
 # 这条恰恰只有多商家形态能验。
 #
+# # 检索那一路在本栈里证不了（2026-10-07 查过，别再重复试）
+#
+# 「搜出来的东西跨不跨店」这条**看着最像该有证据**，其实拿不到：search_vector 是
+# products.search_text 的生成列（0016），而 search_text 由索引流水线写 —— 那条流水线
+# 与向量嵌入同一批，本栈没开 AI。实测：用后台接口在一家空店里建商品、配 SKU、上架，
+# 库里那一行 search_text 仍是 NULL，任何检索词都是 0 条。0 条既证明不了隔离也证明不了
+# 坏了，所以这里刻意**没有**一条检索断言 —— 加一条永远绿的检索断言比不加更糟。
+# 真实数据上的跨租户检索断言在 internal/handler/search_test.go（有 AI 的测试里跑）。
+#
+# jobs 那张表也没有 HTTP 出口：它是 tenancy.json 里明登记的 cross-tenant-queue 类
+# （policy: none，按设计不做 RLS，租户由调用方显式传 merchant_id），读它的是后台 worker
+# 与对账任务，结果只进日志与指标，没有任何一条路由按 id 暴露它。守它的是 check_tenancy
+# 与那份类清单，不是这个脚本。
+#
 # 用法：
 #   scripts/multi-verify.sh          全查（栈要已由 scripts/multi-up.sh 起好）
 set -uo pipefail
@@ -53,7 +67,15 @@ fi
 declare -a passed=() failed=()
 section() { printf '\n\033[1m== %s ==\033[0m\n' "$1"; }
 ok()  { printf '  \033[32mOK\033[0m   %s\n' "$1"; passed+=("$1"); }
-bad() { printf '  \033[31mFAIL\033[0m %s\n' "$1"; [ $# -gt 1 ] && printf '       %s\n' "$2"; failed+=("$1"); }
+bad() {
+    local name=$1
+    printf '  \033[31mFAIL\033[0m %s\n' "$name"
+    # 除了第一项名字，其余每一条都印出来（一条一句，长的那句读得动）。
+    shift
+    local note
+    for note in "$@"; do printf '       %s\n' "$note"; done
+    failed+=("$name")
+}
 expect_eq() {
     if [ "$2" = "$3" ]; then ok "$1 = $2"; else bad "$1" "期望 $3，实际 ${2:-空}"; fi
 }
@@ -71,7 +93,7 @@ expect_ge() {
 
 for a in "$@"; do
     case "$a" in
-        -h|--help) sed -n '2,29p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,38p' "$0"; exit 0 ;;
         *) echo "未知参数：$a（这个脚本没有 --quick，理由见文件头「为什么不调 smoke.sh」）" >&2; exit 2 ;;
     esac
 done
@@ -135,6 +157,16 @@ print('')
 PY
 }
 
+# 渠道回调的签名：HMAC-SHA256(原始报文, 这一店这一渠道的密钥)，十六进制小写
+# （internal/service/payment.go 的 verifyChannelSignature，头名 X-Keel-Signature）。
+# 必须对**字节**算：'{"a":1}' 与 '{"a": 1}' 是同一个对象、不同的签名。
+sign_with() {
+    python3 - "$1" "$2" <<'PY'
+import hashlib, hmac, sys
+print(hmac.new(sys.argv[1].encode(), sys.argv[2].encode(), hashlib.sha256).hexdigest())
+PY
+}
+
 # 只看条数不够：「两边各 3 件」和「两边都看到全部 3 件」是同一个观察，所以比 id 集合。
 product_ids() {
     python3 - "$tmp_body" <<'PY'
@@ -194,7 +226,7 @@ check_resolve() {
 }
 check_resolve "$A_HOST"        200 "子域名按 code 解析"
 check_resolve "$B_HOST"        200 "子域名按 code 解析"
-check_resolve "$CUSTOM_HOST"   200 "第二个匹配分支：shop_settings.domain"
+check_resolve "$CUSTOM_HOST"   200 "第二个匹配分支：merchant_domains.domain"
 check_resolve shop-nodomain.example.com 200 "没登记域名的店靠子域名可达"
 check_resolve shop-closed.example.com   404 "停用的店当不存在"
 check_resolve shop-deleted.example.com  404 "软删的店当不存在"
@@ -257,9 +289,51 @@ else
     bad "a 家的令牌打 b 家 → 401 token-tenant-mismatch" "实际 $CODE：$(head -c 200 "$tmp_body")"
 fi
 
+# --- 3.5 买家侧拿别家的 id 点查 -----------------------------------------
+section "买家侧：拿别家的 id 打这一家"
+# 第 2 节比的是**列表**（一次查一批），这一组补的是按 id 的点查 —— 那是另一批 SQL，
+# 谓词是 `WHERE id = $1`，少一句租户条件就正好是「换个 id 就能读别家」。
+# 列表配对不等于点查配对，所以点查要自己有一条。
+prod_b=$(printf '%s\n' $ids_b | head -1)
+store_b=""
+sku_b=""
+if [ -n "$prod_b" ]; then
+    call "$A_HOST" GET "${API}/products/${prod_b}" "" ""
+    if [ "$CODE" = "404" ] && ! grep -q 'shop-b 的商品' "$tmp_body"; then
+        ok "shop-b 的商品 ${prod_b} 打到 a 家 → 404（没读到别家的详情）"
+    else
+        bad "shop-b 的商品打到 a 家 → 404" "实际 $CODE：$(head -c 200 "$tmp_body" | tr -d '\n')"
+    fi
+    # 对照：同一个 id 在 b 家必须读得到。没有这一发，上面那条 404 什么都能证明 ——
+    # 包括「这个 id 压根不存在」和「详情这条路本身坏了」这两种与租户无关的情形。
+    call "$B_HOST" GET "${API}/products/${prod_b}" "" ""
+    expect_code "同一个商品 id 在 b 家读得到（上面那条 404 是隔离，不是路由坏了）" "200"
+    # 顺手 take 一个 b 家的 sku id：7.5 那组「把别家的 id 写进本店的配置」要用它当靶子。
+    sku_b=$(jval skus.0.id)
+else
+    bad "跨租户商品点查" "第 2 节没拿到 shop-b 的商品 id，这条没有靶子，不能当作通过"
+fi
+
+# 门店 id 走的是另一道闸门：GET /addresses?store_id= 先按**本租户**查这个门店，
+# 查不到就 ErrStoreNotFound → 422。422 而不是「忽略这个筛选、返回 a 家的地址簿」
+# 要紧（service/address.go:192 那段）：静默当作没传的话，调用方以为自己筛过 b 家，
+# 拿到的却是 a 家的数据。
+call "$B_HOST" GET "${API}/stores" "" ""
+store_b=$(jval items.0.id)
+if [ -n "$store_b" ]; then
+    call "$A_HOST" GET "${API}/addresses?store_id=${store_b}" "" "$buyer_a"
+    expect_code "带 b 家门店 id 打 a 家的地址簿 → 422" "422"
+else
+    bad "b 家门店 id" "GET ${API}/stores 在 b 家没读到门店，上面那条没有靶子"
+fi
+
 # --- 4. 平台级会话 ------------------------------------------------------
 section "平台级会话"
-TOKEN_CACHE=tmp/multi-verify-platform-token
+# 缓存**按项目名分开**。同一台机器上可以并存好几套多商家形态的栈（multi-up.sh 允许
+# 换 COMPOSE_PROJECT_NAME 起新的），而会话令牌是在某一套的签名密钥下签出来的：
+# 共用一个文件的话，跑过另一套之后这一套的缓存必然 401，症状是「引导 token 已用掉、
+# 缓存又失效」，看着像这条栈坏了，实际是上一条栈把钥匙换掉了。
+TOKEN_CACHE="tmp/multi-verify-platform-token.${PROJECT}"
 platform=""
 # 引导 token 只在「库里还没有在岗平台管理员」时签发，而且用掉即失效 ——
 # 第二次跑这个脚本时它已经不存在了。会话默认 7 天有效，所以缓存是唯一不自欺的办法；
@@ -279,7 +353,8 @@ if [ -z "$platform" ]; then
     fi
 fi
 if [ -z "$platform" ]; then
-    bad "拿到平台级会话" "引导 token 已用掉、缓存会话又失效。跑 ./scripts/multi-up.sh --wipe 起一份干净的库"
+    bad "拿到平台级会话" "引导 token 已用掉、缓存会话又失效。两个常见真因先排掉：" \
+        "① app 被重建过而这套栈没配 KEEL_AUTH_SECRET（应用每次启动随机取一把签名密钥，旧会话全作废；用 scripts/multi-up.sh 起就不会，它把密钥落在 ~/.config/keel/multi-auth-secret）；② 缓存文件名带项目名，别的项目名跑过一次不算这里的。两条都不是才剩 ./scripts/multi-up.sh --wipe。"
     printf '\n没有平台会话，开店 / 停用那几项没法验，判为失败而不是跳过。\n'
 else
     ok "拿到平台级会话"
@@ -324,11 +399,35 @@ new_id=$(jval id)
 expect_code "开店 201" "201"
 if [ -n "$new_id" ]; then ok "新店 id = $new_id（code=$shop）"; else bad "新店 id" "响应体：$(head -c 200 "$tmp_body")"; fi
 
+# 开店的 201 必须**当场**交出这家店第一个管理员的登录凭据（契约 MerchantOpened）。
+# 交付不了的话，开店流程今天的样子是「去 grep 容器日志」，而日志的去向不由部署的人控制：
+# 它会被采集、会进索引。平台会话又**看不见商家的员工**（重签那条对商家级 staff 是 404），
+# 所以这一串没有第二条路能到开店的人手里 —— 这一节断的就是这条路真的通了。
+new_admin_id=$(jval admin_staff_id)
+admin_link=$(jval admin_login_token)
+if [ -n "$new_admin_id" ]; then
+    ok "201 带着 admin_staff_id = $new_admin_id"
+else
+    bad "201 的 admin_staff_id" "响应体：$(head -c 200 "$tmp_body")"
+fi
+if [ -z "$admin_link" ]; then
+    bad "201 的 admin_login_token" "响应体里没有它 —— 那么这一节剩下的都无从谈起：$(head -c 200 "$tmp_body")"
+else
+    ok "201 带着一串一次性登录 token（长度 ${#admin_link}）"
+fi
+
 # 同一把幂等键重发：回放首次的 201，不建第二家店，**也不再签第二条登录链接**。
 call "$A_HOST" POST "${API}/admin/merchants" "$body" "$platform" "Idempotency-Key: $idem"
 expect_code "同幂等键重放 201" "201"
 replayed=$(grep -icE '^idempotency-replayed: *true' "$tmp_hdr")
 expect_eq "重放响应头 Idempotency-Replayed" "$([ "${replayed:-0}" -ge 1 ] && echo true || echo false)" "true"
+# 重放**不能**带凭据：带就意味着它被存下来了，而一次性凭据的明文不进数据库
+# （idempotency_keys.response_body 存的是那一份 Merchant）。
+if grep -q 'admin_login_token' "$tmp_body"; then
+    bad "重放不带一次性凭据" "响应体里出现了 admin_login_token —— 明文进过数据库才能回放它"
+else
+    ok "重放里没有凭据（第一次那一串只在那一次响应里出现过）"
+fi
 
 # 换一个键用同一个 code：必须是「code 已被占用」，而不是别的 409。
 call "$A_HOST" POST "${API}/admin/merchants" "$body" "$platform" \
@@ -348,19 +447,33 @@ expect_code "新店买家侧 200" "200"
 # 0 件这件事是有靶子的：shop-a 有 3 件。解析器认错 Host、或 RLS 没生效，这里都不会是 0。
 expect_eq "新店商品数" "$(jval total)" "0"
 
-# 新店第一个管理员的一次性登录 token 只出现在日志里（本项目没接 SMTP）——
-# 这本身就是开店流程今天真实的样子：交付方式是「去 grep 日志」。验收顺手把它抓出来用。
-admin_link=$(docker logs "$APP" 2>&1 | grep "merchant_code=$shop" \
-    | grep -oE 'token=[A-Za-z0-9_-]+' | tail -1 | cut -d= -f2)
+# 凭据走的是**响应体**，不是日志。这一句是这一节的全部重点：拿上面 201 里那一串
+# 在新店自己的 Host 上换得到会话，交付这条路就是通的（本项目没接 SMTP，
+# 而「去 grep 日志」不是一条能交给运营的路）。
 merchant_tok=""
 if [ -n "$admin_link" ]; then
     call "$shop_host" POST "${API}/admin/auth/session" "$(printf '{"token":"%s"}' "$admin_link")" ""
     merchant_tok=$(jval token)
 fi
 if [ -n "$merchant_tok" ]; then
-    ok "新店管理员用一次性链接换到商家级会话"
+    ok "新店管理员用 201 里那一串换到商家级会话"
 else
-    bad "新店管理员换会话" "日志里没有 code=$shop 的登录 token，或兑换失败"
+    bad "新店管理员换会话" "响应体里没有 token，或兑换失败（code=$shop）"
+fi
+
+# 用掉即失效：同一串第二次兑换必须 401。交付到人手里的东西如果可重放，
+# 一次嗅到就永久有效 —— 那与一个不设密码的账号等价。
+if [ -n "$admin_link" ]; then
+    call "$shop_host" POST "${API}/admin/auth/session" "$(printf '{"token":"%s"}' "$admin_link")" ""
+    expect_code "同一串凭据第二次兑换 401" "401"
+fi
+
+# 而日志里**没有**这一串的明文（签过的事实有，明文没有）。靶子是反向的：
+# 谁把凭据塞回日志，这里就红 —— 日志会被采集、会进索引，而它 15 分钟内是一扇真的门。
+if [ -n "$admin_link" ] && docker logs "$APP" 2>&1 | grep -q -- "$admin_link"; then
+    bad "应用日志里没有一次性凭据的明文" "code=$shop 那一串的明文出现在 app 日志里"
+else
+    ok "应用日志里没有一次性凭据的明文（交付只走接口）"
 fi
 
 # --- 7. 越权：商家级碰不到租户管理 --------------------------------------
@@ -403,9 +516,93 @@ if [ -n "$merchant_tok" ]; then
     expect_code "商家级开店 → 403" "403"
     call "$shop_host" PATCH "${API}/admin/merchants/${new_id}" '{"name":"改名试试"}' "$merchant_tok"
     expect_code "商家级改商家目录 → 403" "403"
+    # 按 id **读**目录条目也要查：List 与 Get 是两条闸门，而 Get 那条最容易写成
+    # 「只查调用者自己那家」—— 那样商家级会拿到 200 与别家无关的一条，而不是 403。
+    # 靶子用 1（shop-a，不是自己那家）。
+    call "$shop_host" GET "${API}/admin/merchants/1" "" "$merchant_tok"
+    expect_code "商家级按 id 读别家的目录条目 → 403" "403"
+    expect_eq "这一条 403 的 type 也是 platform-only" "$(jval type)" "https://keel.dev/problems/platform-only"
 else
     bad "商家级越权那组" "没有商家级会话可用（第 6 节没拿到），不能当作通过"
 fi
+
+# --- 7.5 平台会话切进店之后，点查与写入仍然只认这一家 -------------------
+section "按 id 碰别家的东西（读与写，平台会话切店之后也一样）"
+# 平台会话是最该测的一层：它能经 X-Keel-Merchant 进任何一家店，而切进去之后读的
+# 是**那家店的作用域**，不是平台作用域（除商家目录那几条）。如果切进 shop-a 还能
+# 按 id 读到 shop-b 的商品，说明作用域压根没设上 —— 那比买家侧泄露严重得多，
+# 因为拿着它的是后台。
+if [ -n "$platform" ] && [ -n "$prod_b" ] && [ -n "$store_b" ]; then
+    call "$A_HOST" GET "${API}/admin/products/${prod_b}" "" "$platform" "X-Keel-Merchant: shop-a"
+    expect_code "切进 shop-a 读 shop-b 的商品 id → 404" "404"
+    call "$A_HOST" GET "${API}/admin/stores/${store_b}" "" "$platform" "X-Keel-Merchant: shop-a"
+    expect_code "切进 shop-a 读 shop-b 的门店 id → 404" "404"
+    # 对照组：Host 就是 b 家时这两个 id 都读得到。缺了它，上面两条无论红绿都读不出结论。
+    call "$B_HOST" GET "${API}/admin/products/${prod_b}" "" "$platform"
+    expect_code "同一个商品 id 在 b 家的后台读得到（对照）" "200"
+    call "$B_HOST" GET "${API}/admin/stores/${store_b}" "" "$platform"
+    expect_code "同一个门店 id 在 b 家的后台读得到（对照）" "200"
+else
+    bad "按 id 的跨租户后台点查" "缺平台会话或缺 b 家的商品 / 门店 id，不能当作通过"
+fi
+
+# 写路径带别家的 id：把 b 家的 sku 挂进 a 家的限时折扣。这道闸门在 service 里
+# （checkPromotionTargets → LiveSkuIDs 读的是**本租户**的在售 sku），漏掉它的后果不是
+# 报错，而是 a 家给一件自己不存在的商品配了活动价。
+# 断的是 detail 里那句「在本店查不到」，不是光一个 422：同一个 422 有好几种来源
+# （试的时候撞到过「满减满折不带 skus」与「限时折扣不限配额」），只比状态码的话，
+# 一份写坏的报文会绿得像是隔离生效了一样。
+# 这一发被拒，所以不留数据 —— 脚本跑几遍都一样。
+if [ -n "$platform" ] && [ -n "$sku_b" ]; then
+    p_now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    p_later=$(date -u -d '+2 hours' +%Y-%m-%dT%H:%M:%SZ)
+    call "$A_HOST" POST "${API}/admin/promotions" \
+        "$(printf '{"name":"跨租户SKU靶子","promotion_type":3,"starts_at":"%s","ends_at":"%s","skus":[{"sku_id":%s,"promo_price_cents":990}]}' \
+            "$p_now" "$p_later" "$sku_b")" "$platform" "X-Keel-Merchant: shop-a" \
+        "Idempotency-Key: $(cat /proc/sys/kernel/random/uuid)"
+    expect_code "把 b 家的 sku 挂进 a 家的活动 → 422" "422"
+    if grep -q '在本店查不到' "$tmp_body"; then
+        ok "422 的 detail 说的是「本店查不到」（不是报文形状不对）"
+    else
+        bad "422 的 detail" "期望含「在本店查不到」，实际：$(head -c 220 "$tmp_body" | tr -d '\n')"
+    fi
+else
+    bad "跨租户写入靶子" "缺平台会话或缺 b 家的 sku id，不能当作通过"
+fi
+
+# --- 7.6 渠道回调：B 家的密钥签出来的报文，A 家必须不认 ------------------
+section "渠道回调的密钥是按租户取的（伪造一笔到账那条路）"
+# 全脚本后果最重的一条。回调是**未认证入口**：租户由 Host 定，「这份报文是不是真的」
+# 完全由验签定，而密钥从本租户的 shop_settings 里读。仓库里那一处的注释明写着
+# 「传错了的后果是拿 A 店的密钥去验 B 店的回调，而那正好是伪造一笔支付所需的全部条件」
+# （internal/repository/payment.go:166-171）—— 有闸，一直没有证据。
+# 两个方向都查，缺一个都是自欺：
+#   · 只查「错密钥被拒」：密钥读错、签名算法写错、报文格式不对，症状同样是 401；
+#   · 所以要补「同一份报文、对的密钥 → 不是 401」这一发对照。
+# 种子给 shop-a 与 shop-b 各播了一把可推导的 wechat 密钥（db/seed/dev.sql：
+# 'seed-wechat-secret-' || code），所以这两发都不必往库里写任何东西。
+wh_txn=$(cat /proc/sys/kernel/random/uuid)
+wh_body=$(printf '{"order_no":"NOPE-%s","channel_txn_id":"txn-%s","amount_cents":1990}' "$wh_txn" "$wh_txn")
+call "$A_HOST" POST "${API}/webhooks/payments/wechat" "$wh_body" "" \
+    "X-Keel-Signature: $(sign_with "seed-wechat-secret-shop-b" "$wh_body")"
+# 401 还得是**空 body**：契约要求验签失败「不得泄露任何内部状态」，handler 为此刻意
+# 不走 Problem（internal/handler/webhook.go:71）。把「这家店没配密钥」与「签名对不上」
+# 分开写，就做出了一个「哪家店接了支付」的探测器。
+if [ "$CODE" = "401" ] && [ ! -s "$tmp_body" ]; then
+    ok "b 家的密钥签出的回调打到 a 家 → 401，且响应体是空的"
+else
+    bad "b 家的密钥签出的回调打到 a 家 → 401 空 body" "实际 $CODE，body $(wc -c < "$tmp_body" | tr -d ' ') 字节"
+fi
+# 对照：a 家自己的密钥签同一份报文 → 不是 401。订单号是编的，于是落到「重推也没用」
+# 那一支（200 + 一条 Error 日志），而不是 401 —— 这正是「签名这一步过了」的可观测形式。
+call "$A_HOST" POST "${API}/webhooks/payments/wechat" "$wh_body" "" \
+    "X-Keel-Signature: $(sign_with "seed-wechat-secret-shop-a" "$wh_body")"
+expect_code "a 家自己的密钥签同一份报文 → 200（上面那条 401 是租户，不是签名算错了）" "200"
+# 渠道名不在白名单里也归 401：没有这个渠道的密钥就确实验不过，而且这么回
+# 不泄露「哪些渠道配了」（service/payment.go:194）。
+call "$A_HOST" POST "${API}/webhooks/payments/unionpay" "$wh_body" "" \
+    "X-Keel-Signature: $(sign_with "seed-wechat-secret-shop-a" "$wh_body")"
+expect_code "渠道名不在白名单 → 401" "401"
 
 # --- 8. 停用与启用 ------------------------------------------------------
 section "停用 / 启用（买家侧随之间断）"
@@ -442,6 +639,110 @@ if wait_for "$shop_host" 200; then
     ok "启用后买家侧回到 200（停得掉也启得回来，留下的店是活的）"
 else
     bad "启用后买家侧 200" "45 秒后仍是 $CODE"
+fi
+
+# --- 8.5 自有域名登记 ----------------------------------------------------
+section "自有域名登记（PATCH domain 的三态与那三道闸门）"
+# 域名原先住在 shop_settings.domain，而 keel_app 对那张表一个写权限都没有
+# （extra 里放着支付回调的验签密钥，那是全库最不该开放给应用角色的一列）。
+# 于是「登记自有域名」这件事从来没有 API：商家只能靠 <code>.example.com 那条路
+# 进场，种子里 custom.example.net 那一行是手工 INSERT 出来的。00340 把它搬进
+# merchant_domains（INSERT + DELETE，写侧钉在 platform_scope()），这条通路才第一次
+# 走得通。下面断的是它真通了，以及三道闸门拦的都是对的东西。
+norm_domain=$(printf 'verifyshop%d.example.org' "${new_id:-0}")
+if [ -z "$platform" ] || [ -z "$new_id" ]; then
+    bad "自有域名那一组" "没有平台会话或新店 id（第 4/5 节没成），不能当作通过"
+else
+    # 归一：大小写与尾点在服务端抹平，落库与回显的都是归一之后的形状。
+    # 故意发一个脏写法：登记成功但存的是原文的话，下面那条按归一值打 Host 会 404，
+    # 而那才是买家会撞上的症状。
+    call "$A_HOST" PATCH "${API}/admin/merchants/${new_id}" \
+        "$(printf '{"domain":"VerifyShop%s.Example.ORG."}' "$new_id")" "$platform"
+    expect_code "登记自有域名 200" "200"
+    expect_eq "响应里的 domain 已归一" "$(jval domain)" "$norm_domain"
+    if wait_for "$norm_domain" 200; then
+        ok "登记之后这个域名真的通到这家店"
+    else
+        bad "登记之后域名可达" "45 秒后打 $norm_domain 仍是 $CODE"
+    fi
+
+    # 三态里最贵的那一态：**不传 domain 不等于清空它**。
+    # 改名是后台最常用的一次调用，而 domain 与 name 混在同一个 PATCH 里；
+    # 服务端要是把「没传」当成「传了 null」，每一次改名都会顺手摘掉这家店的入口 ——
+    # 摘掉的后果是它立刻对全部买家 404，而响应回的是 200、店名也确实改了。
+    call "$A_HOST" PATCH "${API}/admin/merchants/${new_id}" '{"name":"改名不动域名"}' "$platform"
+    expect_code "只改店名 200" "200"
+    expect_eq "只改店名之后 domain 还在" "$(jval domain)" "$norm_domain"
+    if wait_for "$norm_domain" 200; then
+        ok "只改店名之后入口还是通的（「没传」没有被当成「清空」）"
+    else
+        bad "只改店名之后入口还在" "45 秒后打 $norm_domain 是 $CODE —— 改名把域名摘掉了"
+    fi
+
+    # 闸门一：落在平台基础域名之下的名字一律不收。解析器在那片地盘只认 code
+    # （merchants.code 那一支先匹配），登记了也不会被采纳 —— 与其留一条永远
+    # 无效的绑定，不如当场拒掉。
+    for under in "verify-under-base.example.com" "example.com" "a.b.example.com"; do
+        call "$A_HOST" PATCH "${API}/admin/merchants/${new_id}" \
+            "$(printf '{"domain":"%s"}' "$under")" "$platform"
+        expect_code "登记底域之下的名字被拒（$under）422" "422"
+        expect_eq "这条 422 的 type 是 invalid-request（$under）" "$(jval type)" \
+            "https://keel.dev/problems/invalid-request"
+    done
+    # 闸门二：形状不像域名（没有点、带下划线）。
+    for nope in "example" "shop_example.net"; do
+        call "$A_HOST" PATCH "${API}/admin/merchants/${new_id}" \
+            "$(printf '{"domain":"%s"}' "$nope")" "$platform"
+        expect_code "登记不像域名的东西被拒（$nope）422" "422"
+    done
+    # 两次拒完，原来的绑定必须一个字节都没动 —— 422 只说明回了 422，
+    # 不说明事务没提交。
+    call "$A_HOST" GET "${API}/admin/merchants/${new_id}" "" "$platform"
+    expect_eq "被拒若干次之后 domain 还是原来那个" "$(jval domain)" "$norm_domain"
+
+    # 闸门三：merchant_domains.domain 是**全表** UNIQUE —— 一个域名只有一个入口。
+    # custom.example.net 是 shop-c 的（种子手工登记的那一条）。抢它必须 409，
+    # 而且抢不走：换绑在库里是「DELETE + INSERT 同一个事务」，约束冲突要整笔回滚，
+    # 只留一句「这个域名归别家」。
+    call "$A_HOST" PATCH "${API}/admin/merchants/${new_id}" \
+        '{"domain":"custom.example.net"}' "$platform"
+    expect_code "抢别家已登记的域名 409" "409"
+    expect_eq "409 的 type 是 merchant-domain-taken" "$(jval type)" \
+        "https://keel.dev/problems/merchant-domain-taken"
+    if wait_for "$CUSTOM_HOST" 200; then
+        ok "抢失败的 shop-c 入口还在（DELETE 没有跑在约束之前）"
+    else
+        bad "抢失败之后 shop-c 的域名还在" "45 秒后打 $CUSTOM_HOST 是 $CODE —— 409 也把别人家的入口删掉了"
+    fi
+
+    # 商家级会话碰这条：与「商家级不能改店名」同一条闸门（tenant 管理是平台级的），
+    # 但这条更值得单独点名 —— 它改的是**入口**，一家店能登记成谁的域名。
+    if [ -n "$merchant_tok" ]; then
+        call "$shop_host" PATCH "${API}/admin/merchants/${new_id}" \
+            '{"domain":"self-service.example.org"}' "$merchant_tok"
+        expect_code "商家级登记自有域名 → 403" "403"
+        expect_eq "这一条 403 的 type 也是 platform-only" "$(jval type)" \
+            "https://keel.dev/problems/platform-only"
+    fi
+
+    # 显式 null = 摘掉。这是一个功能，不是边角：域名转让给别家之前得能先摘下来。
+    # *string 的 nil 判不出「没传」与「null」，靠的是 bindPatchBody 返回的键集合 ——
+    # 这条断言就是那个键集合在真实 HTTP 上的样子。
+    call "$A_HOST" PATCH "${API}/admin/merchants/${new_id}" '{"domain":null}' "$platform"
+    expect_code "显式 null 摘掉域名 200" "200"
+    expect_eq "摘掉之后响应里没有 domain" "$(jval domain)" ""
+    if wait_for "$norm_domain" 404; then
+        ok "摘掉之后那个入口真的关了（买家侧 404）"
+    else
+        bad "摘掉之后入口关闭" "45 秒后打 $norm_domain 仍是 $CODE"
+    fi
+    # 阳性对照：摘掉的是**域名**，不是这家店。子域名那条路必须还活着 ——
+    # 否则上面那条 404 也可以是「店没了」给的。
+    if wait_for "$shop_host" 200; then
+        ok "摘掉域名之后子域名入口照常（这家店还在，只是没了自有域名）"
+    else
+        bad "摘掉域名之后子域名入口" "45 秒后打 $shop_host 是 $CODE"
+    fi
 fi
 
 # --- 汇总 ---------------------------------------------------------------

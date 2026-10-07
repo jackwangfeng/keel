@@ -452,6 +452,11 @@ func TestMerchantDirectoryIsPlatformOnly(t *testing.T) {
 		{http.MethodGet, "/api/v1/admin/merchants", ""},
 		{http.MethodGet, fmt.Sprintf("/api/v1/admin/merchants/%d", a.MerchantID), ""},
 		{http.MethodPatch, fmt.Sprintf("/api/v1/admin/merchants/%d", a.MerchantID), `{"name":"自己改自己的店名"}`},
+		// 自有域名的登记（00340）也在这道闸门后面。商家级管理员改自己的店名
+		// 已经越权了，改自己的**入口**是同一件事里更贵的那一半：
+		// 这条接口把域名换成别家已经登记过的那个，就是 409 那条劫持。
+		{http.MethodPatch, fmt.Sprintf("/api/v1/admin/merchants/%d", a.MerchantID),
+			`{"domain":"self-served.example.net"}`},
 	} {
 		w := switchReq(t, nil, c.method, a.Host, c.path, c.body, a.Token, "")
 		if got := problemType(t, w, http.StatusForbidden, c.method+" "+c.path); got != problem.TypePlatformOnly {
@@ -460,6 +465,11 @@ func TestMerchantDirectoryIsPlatformOnly(t *testing.T) {
 	}
 	if n := adminQueryInt64(t, `SELECT count(*) FROM merchant_revisions WHERE merchant_id = $1`, a.MerchantID); n != 0 {
 		t.Fatalf("403 之后修订表里有 %d 行 —— 鉴权在写之后", n)
+	}
+	// 域名那一侧同理：403 之后一行登记都没有。闸门挪到写之后时，
+	// 商家级管理员就能给自己换一个入口（或者抢走别人那个）。
+	if n := adminQueryInt64(t, `SELECT count(*) FROM merchant_domains WHERE merchant_id = $1`, a.MerchantID); n != 0 {
+		t.Fatalf("403 之后 merchant_domains 里有 %d 行 —— 鉴权在写之后", n)
 	}
 }
 
@@ -498,6 +508,76 @@ func TestTenantScopeCannotReviseTheMerchantDirectory(t *testing.T) {
 	_, err = tx2.Exec(ctx, `UPDATE merchants SET status = 2 WHERE id = $1`, shopB)
 	if !errors.As(err, &pgErr) || pgErr.Code != "42501" {
 		t.Fatalf("keel_app UPDATE merchants 的结果是 %v，期望 42501（没有 UPDATE 权限）", err)
+	}
+
+	// merchant_domains（00340）：换绑是 DELETE + INSERT，两条写策略都钉在
+	// platform_scope()，所以租户作用域里两条都改不动别人那一行。
+	// **两条被拒的样子不一样，而两边都得看**：
+	//   INSERT 的 WITH CHECK 不过 → 当场 42501；
+	//   DELETE 的 USING 不过 → 那一行对它不存在，于是**安静地 0 行**、不报错。
+	// 后者如果只断言「没有 error」，一条把谓词改成 USING (true) 的迁移照样绿，
+	// 所以这里必须回库里看那一行还在不在。
+	//
+	// 靶子用 shop-nodomain：它是种子里唯一一家「没有 domain 那一行」的店
+	// （它存在的理由就是这个），所以「插一行进去」与「删掉那一行」都是干净的。
+	nodomain := adminQueryInt64(t, `SELECT id FROM merchants WHERE code = 'shop-nodomain'`)
+	sneaky := fmt.Sprintf("hijack%d.example.org", time.Now().UnixNano())
+	t.Cleanup(func() {
+		adminExec(t, `DELETE FROM merchant_domains WHERE merchant_id = $1`, nodomain)
+	})
+
+	tx3, err := testPool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx3.Rollback(ctx)
+	if _, err := tx3.Exec(ctx, `SELECT set_config('app.merchant_id', $1, true)`, fmt.Sprint(shopA)); err != nil {
+		t.Fatal(err)
+	}
+	_, err = tx3.Exec(ctx,
+		`INSERT INTO merchant_domains (merchant_id, domain) VALUES ($1, $2)`, nodomain, sneaky)
+	if !errors.As(err, &pgErr) || pgErr.Code != "42501" {
+		t.Fatalf("租户作用域里给别家插域名登记的点是 %v，期望 42501（RLS 拒绝）", err)
+	}
+
+	// 阳性对照：同一条语句在平台作用域里必须成。
+	// 没有它，上面那个 42501 也可能只是因为漏了 GRANT —— 那是一条会一直绿到
+	// 有人真的需要写这张表为止的测试。
+	if _, err := admin(t).Exec(ctx,
+		`INSERT INTO merchant_domains (merchant_id, domain) VALUES ($1, $2)`, nodomain, sneaky); err != nil {
+		t.Fatalf("平台连接都插不进这一行：%v", err)
+	}
+
+	// 现在这家店有了域名那一行，A 的租户上下文来删它：不报错，但 0 行，
+	// 而那一行必须还在。
+	tx4, err := testPool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx4.Rollback(ctx)
+	if _, err := tx4.Exec(ctx, `SELECT set_config('app.merchant_id', $1, true)`, fmt.Sprint(shopA)); err != nil {
+		t.Fatal(err)
+	}
+	tag, err := tx4.Exec(ctx, `DELETE FROM merchant_domains WHERE merchant_id = $1`, nodomain)
+	if err != nil {
+		t.Fatalf("租户作用域里删别家的域名报了错 %v —— 期望的是安静地删 0 行"+
+			"（DELETE 的策略是 USING 谓词，不满足的行对它不存在）", err)
+	}
+	if tag.RowsAffected() != 0 {
+		t.Fatalf("A 的租户上下文删掉了别家的 %d 行域名登记 —— RLS 的 DELETE 谓词失效，"+
+			"这正是 00005 收掉 shop_settings 写权限时实测到的那个域名劫持",
+			tag.RowsAffected())
+	}
+	if n := adminQueryInt64(t, `SELECT count(*) FROM merchant_domains WHERE merchant_id = $1`,
+		nodomain); n != 1 {
+		t.Fatalf("删过之后数到 %d 行，期望那一行还在（0 行不等于被拦住：得回库里看）", n)
+	}
+
+	// 关掉作用域闸门的方向也验一次：平台作用域里同一条 DELETE 必须删得掉。
+	// 上面那条「0 行」与这一条之间没有第三句话 —— 缺了这条，0 行可能只是
+	// 因为这张表谁都删不动。
+	if _, err := admin(t).Exec(ctx, `DELETE FROM merchant_domains WHERE merchant_id = $1`, nodomain); err != nil {
+		t.Fatalf("平台连接删不掉这一行：%v", err)
 	}
 }
 

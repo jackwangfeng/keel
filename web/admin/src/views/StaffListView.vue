@@ -7,11 +7,13 @@
 //     指定租户等于把越权做成一个入参。所以这个表单里没有那一格，
 //     而且不是「隐藏了」——契约生成的 StaffCreateRequest 根本没有这个字段。
 //   · **不设密码。** 建好后服务端生成一串一次性登录链接 token。本轮没有接
-//     邮件服务，它只进进程日志，所以这里把取它的办法写出来。
+//     邮件服务，建号那一次的响应体里也没有它（契约 201 的 schema 是 Staff），
+//     所以这里在建好之后**当场调一次重签**，把那一串显示给你 ——
+//     也就是说这个界面从头到尾不需要 app 的日志。
 //   · **会话 7 天过期后，回来的路只有「重签一次性登录 token」**（POST
 //     /admin/staff/{staff_id}/login-token）。它的 token 明文会回到签发人手里
 //     ——没有邮件服务时这是把它交给本人的唯一办法——所以弹窗里只显示一次，
-//     关掉就没了；再签一次会作废上一串。
+//     关掉就没了；再签一次会作废上一串。日志里只记「给谁签过」，不记明文。
 //
 // 分级权限（v0.1.0）：角色多了大区管理员（3）与门店管理员（4），各带管辖范围。
 // 能分配哪些角色、能选哪些大区 / 门店，由 src/auth/permissions.ts 与服务端的
@@ -113,7 +115,7 @@ async function submitCreate(): Promise<void> {
     creating.value = true;
     createError.value = null;
     try {
-        await withIdempotency(createSubmission, (key) =>
+        const created = await withIdempotency(createSubmission, (key) =>
             keel.request("post", "/admin/staff", {
                 // 范围只随对应的角色带上：角色与范围不配套时服务端回 422，
                 // 而切换角色后残留在另一个下拉里的选择不该被悄悄提交。
@@ -126,8 +128,22 @@ async function submitCreate(): Promise<void> {
             }),
         );
         createVisible.value = false;
-        notifyOk("已创建。一次性登录 token 在进程日志里：docker compose logs app | grep 登录链接");
         await load();
+        // 建好之后**当场**把登录凭据取回来给他。
+        //
+        // 建号那一次签的那一串不进 201（契约里那条的 schema 是 Staff），也不进日志。
+        // 所以这里紧接着调重签那一条 —— 它回明文，而且判据与「编辑这个人」完全相同。
+        // 作废掉刚才那一串不是浪费：那一串本来就没有送到任何人手里，
+        // 留着一个没人知道的活入口才是坏事。
+        //
+        // 只在拿得到 id 的时候这么做：取不到 id 的话这个人是谁都不知道，
+        // 弹窗只会指着上一个目标（重签会给错人，那比不签糟糕得多）。
+        if (created.id > 0) {
+            openReissue(created);
+            await submitReissue();
+        } else {
+            notifyOk("已创建。在列表里那一行点「重签登录 token」把凭据取出来。");
+        }
     } catch (err) {
         createError.value = err;
     } finally {
@@ -321,7 +337,8 @@ async function submitReissue(): Promise<void> {
             <ProblemAlert v-if="createError" :error="createError" />
             <p class="hint">
                 <strong>不设密码。</strong>建好后服务端生成一串 15 分钟有效的一次性登录 token。
-                本轮没有接邮件服务，它只进进程日志：<code>docker compose logs app | grep 登录链接</code>
+                本轮没有接邮件服务，所以<strong>建好之后这个界面会当场把它显示出来</strong>（只显示一次），
+                你通过可信渠道转交本人 —— 不需要去翻 app 的日志。
             </p>
             <el-form label-width="80px" @submit.prevent>
                 <el-form-item label="邮箱" required>
@@ -415,7 +432,8 @@ async function submitReissue(): Promise<void> {
                     「已有登录 token」那一栏换会话。<strong>他此前还没用掉的登录 token 会同时作废。</strong>
                 </p>
                 <p class="hint">
-                    本轮没有接邮件服务，token 会显示在这里（只显示这一次），也照旧打进进程日志。
+                    本轮没有接邮件服务，token 只显示在这里（只显示这一次）。日志里只记「什么时候给谁签过」，
+                    <strong>不记明文</strong> —— 别去日志里找它，那里没有。
                     请通过可信的渠道交给本人：拿着它的人能以他的身份登录一次。
                 </p>
             </template>

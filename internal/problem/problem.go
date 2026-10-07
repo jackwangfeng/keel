@@ -388,9 +388,15 @@ const (
 	//   single-merchant-mode    → 单商家部署（KEEL_DEFAULT_MERCHANT）里开店，或停用
 	//                             那唯一一家店。重试、换 code 都没有用，要改的是部署形态。
 	//                             409。
+	//   merchant-domain-taken   → 登记的自有域名已经被另一家店占着（merchant_domains.domain
+	//                             是全表 UNIQUE，见 00340）。与 merchant-code-taken 同一类：换一家店
+	//                             重试没有用，要改的是那个域名本身。客户端能据此把
+	//                             「这个域名没轮到你能用」讲清楚，而不是笼统一句「保存失败」。
+	//                             409。
 	TypeTenantSwitchForbidden = "https://keel.dev/problems/tenant-switch-forbidden"
 	TypeUnknownMerchant       = "https://keel.dev/problems/unknown-merchant"
 	TypeSingleMerchantMode    = "https://keel.dev/problems/single-merchant-mode"
+	TypeMerchantDomainTaken   = "https://keel.dev/problems/merchant-domain-taken"
 
 	// 商品批量导入（契约 /admin/product-imports）。与上传商品图那两条分开命名，
 	// 因为上限不同（5 MB 对 10 MB）、客户端要做的事也不同：

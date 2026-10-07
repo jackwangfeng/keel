@@ -353,6 +353,11 @@ export interface paths {
          *     > `docker compose up` 一条命令。Jupyter 和 Gitea 都这么做。
          *     >
          *     > 代价是容器日志里会短暂出现一个高权限凭据，所以它用掉即失效。
+         *     >
+         *     > **这是本轮唯一一个还打进日志的一次性凭据**，而它没有别的渠道：引导的作用
+         *     > 恰恰是「还没有任何人能调任何接口」。新员工与新店第一个管理员的那两串
+         *     > 都已经改走接口交付（`POST /admin/staff/{id}/login-token` 与
+         *     > `POST /admin/merchants` 的 201），日志里不再有它们的明文。
          */
         post: {
             parameters: {
@@ -664,7 +669,9 @@ export interface paths {
         put?: never;
         /**
          * 开店（仅平台级管理员）
-         * @description 建商家，并为其创建第一个商家级管理员，给该邮箱发登录链接。
+         * @description 建商家，并为其创建第一个商家级管理员。**本轮没有接邮件服务**，所以那封
+         *     「给该邮箱发登录链接」的信不会发：凭据在 201 的响应体里（`MerchantOpened`），
+         *     由开店的人通过可信渠道转交本人。
          *
          *     调用者必须是平台级（`merchant_id` 为空）且 `role = 1`，否则 403。
          *
@@ -735,14 +742,17 @@ export interface paths {
                 };
             };
             responses: {
-                /** @description 已创建 */
+                /**
+                 * @description 已创建。真正建店那一次还带上它第一个管理员的一次性登录凭据
+                 *     （`MerchantOpened`）；幂等重放只有 `Merchant` 那一份，没有凭据。
+                 */
                 201: {
                     headers: {
                         "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": components["schemas"]["Merchant"];
+                        "application/json": components["schemas"]["MerchantOpened"];
                     };
                 };
                 /** @description 调用者不是平台级管理员 */
@@ -872,7 +882,7 @@ export interface paths {
         options?: never;
         head?: never;
         /**
-         * 改名、停用或启用商家（仅平台级管理员）
+         * 改名、停用 / 启用，或登记自有域名（仅平台级管理员）
          * @description 调用者必须是平台级且 `role = 1`，否则 403（与开店同一条门槛）。
          *
          *     · **停用（`status = 2`）**：买家侧对这家店的全部请求随之 404
@@ -885,10 +895,39 @@ export interface paths {
          *     **单商家部署里停用默认商家会被拒绝**（409 `single-merchant-mode`）：
          *     那是这套部署唯一一家店，停掉之后启动自检过不了，下次重启就起不来。
          *
+         *     · **`domain`：登记这家店自有域名**（写 `merchant_domains`，00340，解析器的第二个
+         *       匹配分支）。三个态必须分清：**不传 = 不动**，**显式 `null` = 清空**，
+         *       字符串 = 登记为这家店的域名。清空之后这家店仍然可以只靠
+         *       `{code}.{KEEL_BASE_DOMAIN}` 可达（那是入口的两个来源之一，不是备胎）。
+         *       存进去之前按解析器读 Host 的同一个规矩归一化（去端口、转小写、去掉结尾的
+         *       点）—— 不归一化的话 `ShopA.Example.COM.` 与 `shopa.example.com` 是两个不同
+         *       的域名，而后者的流量一个也进不来，且没有任何地方会报错。
+         *
+         *     两条拒绝是刻意的，都指向「登记了也进不去」这件事：
+         *
+         *     · **`KEEL_BASE_DOMAIN` 本身或它下面的任何名字都不能登记到这里**（422）。
+         *       解析器在基础域名下**只认 code**，`domain` 在那片地盘上永远不生效
+         *       （理由：`domain` 是可填的内容，商家 C 填一个 `shop-b.example.com` 就在 B 的
+         *       规范 URL 上开了自己的店）。所以那种登记等于写一行永远不会被采纳的数据 ——
+         *       它不报错、不生效，只让运营以为自己给这家店配好了域名。请走 code，
+         *       基础域名下的名字归平台。
+         *     · **一个域名只能属于一家店**（409 `merchant-domain-taken`）。它是
+         *       `merchant_domains.domain` 上的全表 UNIQUE，撞了会被数据库挡下来；把它翻成 409 而不是
+         *       让 23505 冒 500。换一家店重试没有用，要改的是域名。
+         *
+         *     **这里不验证域名归属**（没有 DNS TXT 校验、没有挑战邮件）。这是刻意的取舍，
+         *     兑现它的条件是这一条**只有平台级管理员能调**：谁都能给自己控制的域名指过来，
+         *     而在登记之前那个名字谁也解析不到；商家自己碰不到这一条。真要做归属校验，
+         *     缺的是「验证状态」那一列与一套过期机制，不是在这里加一个接口。
+         *
          *     写入不改 `merchants` 那一行：应用角色在 merchants 上没有 UPDATE
          *     （给了就等于任何租户上下文都能改商家目录）。每次修改在平台作用域里
          *     追加一行 `merchant_revisions`，当前的名字与状态取最新一行 ——
          *     见数据模型 §2 与迁移 00024 的文件头。
+         *     域名写的是另一张表（`merchant_domains` 上没有 UPDATE，换绑 = 同一个事务里
+         *     先删后插），但排在**同一个事务、同一把按商家 id 的 advisory lock 里面**：
+         *     一次 PATCH 同时带 `name` 与 `domain` 时不能出现「名字改了、域名没改」这种
+         *     中间态，而撞车（409）必须把整笔回滚掉。
          */
         patch: {
             parameters: {
@@ -959,7 +998,11 @@ export interface paths {
                         "application/problem+json": components["schemas"]["Problem"];
                     };
                 };
-                /** @description 单商家部署里停用默认商家 —— `https://keel.dev/problems/single-merchant-mode`。 */
+                /**
+                 * @description 两种，按 `type` 分：
+                 *     · 单商家部署里停用默认商家 —— `https://keel.dev/problems/single-merchant-mode`。
+                 *     · 这个域名已经被另一家店登记了 —— `https://keel.dev/problems/merchant-domain-taken`。
+                 */
                 409: {
                     headers: {
                         [name: string]: unknown;
@@ -968,7 +1011,11 @@ export interface paths {
                         "application/problem+json": components["schemas"]["Problem"];
                     };
                 };
-                /** @description 一个字段都没传、名字为空，或 `status` 不是 1 / 2 */
+                /**
+                 * @description 一个字段都没传、名字为空，或 `status` 不是 1 / 2；
+                 *     或登记的 `domain` 不是一个合法主机名，或它落在 `KEEL_BASE_DOMAIN` 之下
+                 *     （那种登记永远不会被解析器采纳，见上面的说明）
+                 */
                 422: {
                     headers: {
                         [name: string]: unknown;
@@ -2921,7 +2968,12 @@ export interface paths {
          *     > 允许前端指定 `merchant_id` 等于把越权做成了一个入参。
          *     > 这条是多租户系统里最容易出事的地方，所以写在契约里而不只写在代码里。
          *
-         *     建好后给该邮箱发一次性登录链接，对方点开即完成首次登录。**不设密码。**
+         *     建好后服务端给他签一串一次性登录 token（15 分钟、用掉即失效）。**不设密码。**
+         *     本轮没有接邮件服务，所以那封信不发，而且**这一串的明文不在 201 的响应体里**
+         *     （那条的 schema 是 `Staff`）；日志里也只有「给谁签过」这条事实。
+         *     拿它的办法是紧接着调一次 `POST /admin/staff/{staff_id}/login-token` ——
+         *     同一种 token、同一条判据（能改这个人的才能给他签），而它回明文。
+         *     后台的加员工表单就是这么做的：建好当场重签、显示一次。
          *
          *     **幂等**（v0.1.0 之后）：同一个调用者拿同一把 `Idempotency-Key` 重发，
          *     回放首次的 `201` 与那一份 `Staff`，带 `Idempotency-Replayed: true`，
@@ -2985,7 +3037,7 @@ export interface paths {
                 };
             };
             responses: {
-                /** @description 已创建并已发出登录链接（重放时不再发） */
+                /** @description 已创建，并已为他签出一串一次性登录 token（明文要到重签那条接口去取；重放时不再签） */
                 201: {
                     headers: {
                         "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
@@ -3184,8 +3236,9 @@ export interface paths {
          *     > **token 明文会出现在响应体里**，这是与新建员工那条的唯一差别，而且是刻意的：
          *     > 没有邮件服务时，管理员拿到它才能通过别的渠道交给本人。代价是签发人在这
          *     > 15 分钟里能以对方的身份登录一次 —— 而签发人本来就能改对方的角色与状态，
-         *     > 权限按构造不高于签发人。它同时照旧打进进程日志，方便运维追查是谁在什么时候
-         *     > 给谁签过。接上邮件服务之后，这条接口应当改成直接发信、不再回明文。
+         *     > 权限按构造不高于签发人。日志里只有「什么时候给谁签过」这条事实，**不带明文**
+         *     > （要审计就查 `staff_tokens`，那里有每一行的哈希与失效时间）。
+         *     > 接上邮件服务之后，这条接口应当改成直接发信、不再回明文。
          */
         post: {
             parameters: {
@@ -20570,8 +20623,9 @@ export interface components {
              */
             staff_id: number;
             /**
-             * @description 一次性登录 token 明文。**服务端只存它的 sha256**，明文只在这一次响应
-             *     （和进程日志）里出现。
+             * @description 一次性登录 token 明文。**服务端只存它的 sha256**，明文只在这一次响应里出现
+             *     ——进程日志记的是「什么时候给谁签过」这条事实，不带明文（日志会被采集、
+             *     会进索引，而一串 15 分钟的凭据落在任何一处索引里就是一个能被翻出来的登录入口）。
              */
             token: string;
             /** Format: date-time */
@@ -21034,7 +21088,14 @@ export interface components {
              * @enum {integer}
              */
             status: 1 | 2 | 3;
-            /** @description 自定义域名；为空则走 `/s/{code}` 路径路由 */
+            /**
+             * @description 自有域名（`merchant_domains`，00340），解析器的第二个匹配分支。
+             *     为空不等于没有入口：`KEEL_BASE_DOMAIN` 配着的话，
+             *     `{code}.{KEEL_BASE_DOMAIN}` 这个子域名就是它的入口。
+             *     **注意它在基础域名下永远不生效**（那片地盘只认 code），所以这里读到的是一个
+             *     登记值，不保证它被采纳 —— 落在基础域名里的登记由 `PATCH /admin/merchants/{id}`
+             *     在写入时就拒掉了，历史数据里若有则不会生效。
+             */
             domain?: string;
             /** Format: date-time */
             created_at: string;
@@ -21043,6 +21104,42 @@ export interface components {
              * @description 最近一次改名或改状态的时间（最新一行 `merchant_revisions` 的时间）。从没改过时缺席。
              */
             updated_at?: string;
+        };
+        /**
+         * @description `POST /admin/merchants` 的 201：那家店，加上**它第一个管理员的一次性登录凭据**。
+         *
+         *     为什么凭据在响应体里，而不是只在日志里（这是与 `POST /admin/staff` 唯一的差别）：
+         *     开店的人拿到的是**唯一一个**能进这家新店的账号 —— 新店没有第二个管理员，
+         *     而平台会话**看不见商家的员工**（`POST /admin/staff/{id}/login-token` 对一个
+         *     商家级 staff 回 404，那条边界是刻意做的）。所以如果他拿不到这一串，
+         *     除了翻容器日志就没有第二条路把这家店的门交给店主。
+         *
+         *     代价与 `POST /admin/staff/{id}/login-token` 那条一字不差：拿到它的人在
+         *     `expire_at` 之前能以那个身份登录一次 —— 而签的人本来就能改这个人的角色与状态，
+         *     也本来就能停用这家店。
+         *
+         *     **这三个字段只在真正建店的那一次响应里出现。** 幂等重放回来的只有 `Merchant`：
+         *     存档落在 `idempotency_keys.response_body`，而一次性凭据的明文不进数据库
+         *     （那里存的是 `Merchant` 那一份，压根不含 token）。重放也不签第二串。
+         *     所以「重放里没有凭据」不是漏实现，是这条契约的一部分：客户端要看
+         *     `Idempotency-Replayed` 头，重放时凭据在第一次那一次响应里，早已作废或已被用掉。
+         */
+        MerchantOpened: components["schemas"]["Merchant"] & {
+            /**
+             * Format: int64
+             * @description 这家新店的第一个管理员（`role = 1`，`merchant_id` = 这家店）的 staff.id。
+             */
+            admin_staff_id?: number;
+            /**
+             * @description 给他的一次性登录 token 明文，15 分钟有效、用掉即失效，
+             *     拿去 `POST /admin/auth/session` 换会话。
+             */
+            admin_login_token?: string;
+            /**
+             * Format: date-time
+             * @description 上面那一串的失效时间。
+             */
+            admin_login_token_expire_at?: string;
         };
         MerchantList: components["schemas"]["PageMeta"] & {
             items: components["schemas"]["Merchant"][];
@@ -21060,6 +21157,16 @@ export interface components {
              * @enum {integer}
              */
             status?: 1 | 2;
+            /**
+             * @description 这家店的自有域名，写 `merchant_domains`。**三个态分清**：不传 = 不动；
+             *     显式 `null` = 清空（清空后仍可只靠 `{code}.{KEEL_BASE_DOMAIN}` 可达）；
+             *     字符串 = 登记。存前按解析器读 Host 的规矩归一化（去端口、小写、去结尾的点）。
+             *     两种拒绝：不是合法主机名，或它等于 / 落在 `KEEL_BASE_DOMAIN` 之下（422，
+             *     那种登记在解析器里永远不生效）；已被另一家店登记（409 `merchant-domain-taken`）。
+             *     这里**不验证域名归属** —— 兑现这个取舍的条件是这一条只有平台级管理员能调。
+             *     变更最多延迟 30 秒生效（解析结果缓存，与停用同一条）。
+             */
+            domain?: string | null;
         };
         MerchantCreateRequest: {
             code: string;

@@ -67,6 +67,12 @@ export type CategoryCreateRequest = S["CategoryCreateRequest"];
 export type CategoryUpdateRequest = S["CategoryUpdateRequest"];
 export type InventorySetRequest = S["InventorySetRequest"];
 export type MerchantCreateRequest = S["MerchantCreateRequest"];
+/**
+ * `POST /admin/merchants` 的 201：那家店，加上它第一个管理员的一次性登录凭据
+ * （`admin_staff_id` / `admin_login_token` / `admin_login_token_expire_at`）。
+ * 后台必须在**开店那一次**把这一串显示给开店的人 —— 重放没有它，日志里也没有它。
+ */
+export type MerchantOpened = S["MerchantOpened"];
 export type StaffCreateRequest = S["StaffCreateRequest"];
 export type StaffLoginToken = S["StaffLoginToken"];
 

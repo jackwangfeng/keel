@@ -70,9 +70,10 @@ func (h *AdminCatalogHandler) CreateSKU(c *gin.Context) {
 
 // adminSKUPatchRequest 是 PATCH /admin/skus/{sku_id} 的请求体。
 //
-// image_upload_id 收 *json.RawMessage，理由与 adminProductPatchRequest 的
+// image_upload_id 收 json.RawMessage，理由与 adminProductPatchRequest 的
 // brand_id 一字不差：契约里它是 `integer | null`，「清空这一格小图」与
 // 「没传这个字段」是两件事，而生成类型上两者都是 nil。
+// 键出现过没有由 bindPatchBody 返回的那个集合判 —— null 进指针也是 nil。
 type adminSKUPatchRequest struct {
 	SKUCode       *string            `json:"sku_code"`
 	SpecValues    *map[string]string `json:"spec_values"`
@@ -95,8 +96,13 @@ func (h *AdminCatalogHandler) UpdateSKU(c *gin.Context) {
 		return
 	}
 	var req adminSKUPatchRequest
-	if !bindJSON(c, &req) {
+	present, bound := bindPatchBody(c, &req)
+	if !bound {
 		return
+	}
+	// 同 admin_category.go 的 parent_id：null 进指针是 nil，只能从键的集合里读。
+	if v, ok := present["image_upload_id"]; ok {
+		req.ImageUploadID = &v
 	}
 	in := service.SKUPatchInput{
 		SKUCode:    req.SKUCode,

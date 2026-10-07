@@ -3,10 +3,12 @@ package handler_test
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/keel/keel/internal/api"
+	"github.com/keel/keel/internal/auth"
 	"github.com/keel/keel/internal/problem"
 )
 
@@ -49,6 +51,10 @@ func newPlatformAdmin(t *testing.T) string {
 //
 // 应用侧在 merchants 上**没有** DELETE（00021 只还回了 INSERT），
 // 所以清理只能走管理员连接 —— 这件事本身就是那条 GRANT 面的一次确认。
+//
+// 子表按外键一条条删，不能指望 CASCADE：merchant_revisions 与 merchant_domains
+// 都 REFERENCES merchants(id) 而没写级联删除（一张追加式日志、一份当前态，
+// 谁都不该跟着店消失而被静默清掉）。删的顺序是先子后父。
 func dropShop(t *testing.T, code string) {
 	t.Helper()
 	t.Cleanup(func() {
@@ -56,6 +62,10 @@ func dropShop(t *testing.T, code string) {
 		              (SELECT id FROM staff WHERE merchant_id =
 		                 (SELECT id FROM merchants WHERE code = $1))`, code)
 		adminExec(t, `DELETE FROM staff WHERE merchant_id =
+		              (SELECT id FROM merchants WHERE code = $1)`, code)
+		adminExec(t, `DELETE FROM merchant_revisions WHERE merchant_id =
+		              (SELECT id FROM merchants WHERE code = $1)`, code)
+		adminExec(t, `DELETE FROM merchant_domains WHERE merchant_id =
 		              (SELECT id FROM merchants WHERE code = $1)`, code)
 		adminExec(t, `DELETE FROM merchants WHERE code = $1`, code)
 	})
@@ -115,15 +125,152 @@ func TestOpeningAShopPutsItsFirstAdminInTheNewTenant(t *testing.T) {
 	// 开出来的店真的能用：这个管理员能在新店的 Host 上换到会话，
 	// 而且那串会话认得出自己属于这家店。
 	//
-	// 用我们自己造的一次性链接，而不是接口发出去的那一串：后者按设计只进
-	// 日志（契约 201 的 schema 是 Merchant，没有 token）。这里验的是
-	// 「这家店 + 这个人」这套东西成立，不是「那串 token 长什么样」。
+	// 这里用我们自己造的一次性链接，而不是 201 里那一条：后者由
+	// TestOpeningAShopHandsTheEntranceKeyToTheOpener 专门验（它验的是「那一串是真的、
+	// 且只认这家新店」）。这条验的是「这家店 + 这个人」这套东西成立。
 	host := code + "." + baseDomain
 	sess := staffSession(t, host, ownerID)
 	w := getAs(t, host, "/api/v1/admin/me", sess.Token)
 	me := staffOf(t, w, http.StatusOK)
 	if me.MerchantId == nil || *me.MerchantId != m.Id {
 		t.Fatalf("新店管理员的 /admin/me 回的 merchant_id 是 %v，期望 %d", me.MerchantId, m.Id)
+	}
+}
+
+// ===========================================================================
+// 开店把「进这家店的钥匙」交给开店的人（C：一次性 token 的交付）
+// ===========================================================================
+//
+// 这条接口给的凭据是**唯一一个能进这家新店的账号**。平台会话看不见商家的员工
+// （POST /admin/staff/{id}/login-token 对一个商家级 staff 回 404，那条边界是刻意做的，
+// 见 permission_test.go 与 TestReissueLoginTokenScopes），所以如果 201 不带这一串，
+// 开店的人除了翻容器日志就没有第二条路 —— 而日志会被采集、会进索引。
+//
+// 所以这里断言的不是「响应里多了一个字段」，而是**那一串当场能用、且只对这家新店用**：
+// 一个字段名对了但内容错了（别人家的 token、一串没入库的随机串、或者过期时间算错）
+// 在这条接口的形状上看不出来，只在第一次登录时炸。
+
+func TestOpeningAShopHandsTheEntranceKeyToTheOpener(t *testing.T) {
+	token := newPlatformAdmin(t)
+	code := fmt.Sprintf("keyshop%d", time.Now().UnixNano()%1_000_000_000)
+	dropShop(t, code)
+
+	adminEmail := code + "-boss@keel.test"
+	var out api.MerchantOpened
+	w := postWithKey(t, hostA, "/api/v1/admin/merchants",
+		fmt.Sprintf(`{"code":%q,"name":"交钥匙的店","admin_email":%q}`, code, adminEmail),
+		token, "open-"+code)
+	decodeInto(t, w, http.StatusCreated, "开店并拿到凭据", &out)
+
+	if out.AdminStaffId == nil {
+		t.Fatalf("201 里没有 admin_staff_id：%s", w.Body.String())
+	}
+	if out.AdminLoginToken == nil || *out.AdminLoginToken == "" {
+		t.Fatalf("201 里没有 admin_login_token：%s", w.Body.String())
+	}
+	if out.AdminLoginTokenExpireAt == nil {
+		t.Fatalf("201 里没有 admin_login_token_expire_at：%s", w.Body.String())
+	}
+
+	// 响应里那个 id 必须就是库里那一个人的 id。这是这条接口唯一能把「凭据」和
+	// 「人」对上的地方 —— 给错人的话，店主拿到的是别人家的门。
+	if db := adminQueryInt64(t, `SELECT id FROM staff WHERE email = $1`, adminEmail); db != *out.AdminStaffId {
+		t.Fatalf("admin_staff_id=%d，而库里这个邮箱对应的人 id=%d —— 凭据指向的不是新建的那管理员",
+			*out.AdminStaffId, db)
+	}
+
+	// 失效时间必须服务端说了算，且与那一串入库的时间一致。自己加 15 分钟的话，
+	// 响应说还有效而服务端已经拒了，客户端只会重试一个死掉的凭据。
+	want := auth.StaffEmailLinkTTL
+	if left := time.Until(*out.AdminLoginTokenExpireAt); left < want-2*time.Minute || left > want+time.Minute {
+		t.Errorf("expire_at 距今 %v，期望约 %v", left, want)
+	}
+	if n := adminQueryInt64(t, `SELECT count(*) FROM staff_tokens
+		WHERE staff_id = $1 AND kind = 2 AND expire_at > now() AND revoked_at IS NULL`,
+		*out.AdminStaffId); n != 1 {
+		t.Fatalf("这个人名下活的一次性登录链接有 %d 行，期望正好 1 行", n)
+	}
+
+	// 重点：拿响应里这一串**真的去换会话**，而且只在新店的 Host 上换得出来。
+	// 走真实的 POST /admin/auth/session，不自己签（同 staffSession 的理由）。
+	body := `{"token":"` + *out.AdminLoginToken + `"}`
+	host := code + "." + baseDomain
+	var sess api.StaffSession
+	decodeInto(t, post(t, host, "/api/v1/admin/auth/session", body, ""),
+		http.StatusOK, "用开店拿到的凭据换会话", &sess)
+	if sess.Staff.Id != *out.AdminStaffId {
+		t.Fatalf("换到的会话是 staff=%d，期望 %d", sess.Staff.Id, *out.AdminStaffId)
+	}
+	if sess.Staff.MerchantId == nil || *sess.Staff.MerchantId != out.Id {
+		t.Fatalf("换到的会话 merchant_id=%v，期望新开的店 %d", sess.Staff.MerchantId, out.Id)
+	}
+
+	// 换到会话之后 /admin/me 也认：这一串确实把人放进了他自己那家店。
+	me := staffOf(t, getAs(t, host, "/api/v1/admin/me", sess.Token), http.StatusOK)
+	if me.Id != *out.AdminStaffId {
+		t.Fatalf("新店的 /admin/me 回的是 staff=%d，期望 %d", me.Id, *out.AdminStaffId)
+	}
+
+	// 用掉即失效（与 mkEmailLink 那条同一个纪律）：这条凭据走的是同一种 token。
+	problemOf(t, post(t, host, "/api/v1/admin/auth/session", body, ""), http.StatusUnauthorized)
+}
+
+// 幂等重放**不带凭据**，而且凭据的明文**不在数据库里**。
+//
+// 这两件事是同一件事的两面，所以放在一条测试里：重放不能签第二串（那会让
+// 「同一把幂等键 = 同一件事」变成「同一把键开出两个入口」），也不能回放第一串
+// —— 回放要求它被存下来，而一次性凭据的明文不进数据库是仓库法律
+// （idempotency_keys.response_body 存的是 repository.Merchant 那一份）。
+// 有人为了「让重放也能拿到 token」把它写进存档时，这条会当场指出那串明文在库里。
+func TestReplayedOpenShopCarriesNoCredential(t *testing.T) {
+	token := newPlatformAdmin(t)
+	code := fmt.Sprintf("replayshop%d", time.Now().UnixNano()%1_000_000_000)
+	dropShop(t, code)
+
+	adminEmail := code + "-boss@keel.test"
+	req := fmt.Sprintf(`{"code":%q,"name":"重放的店","admin_email":%q}`, code, adminEmail)
+	key := "open-" + code
+
+	var first api.MerchantOpened
+	decodeInto(t, postWithKey(t, hostA, "/api/v1/admin/merchants", req, token, key),
+		http.StatusCreated, "第一次开店", &first)
+	if first.AdminLoginToken == nil {
+		t.Fatalf("第一次开店没给凭据，后面两条断言都无从谈起")
+	}
+
+	w := postWithKey(t, hostA, "/api/v1/admin/merchants", req, token, key)
+	var second api.MerchantOpened
+	decodeInto(t, w, http.StatusCreated, "同一把幂等键重放", &second)
+	if w.Header().Get("Idempotency-Replayed") != "true" {
+		t.Fatalf("重放没有带 Idempotency-Replayed: true（是 %q）—— 那么它到底重放了什么？",
+			w.Header().Get("Idempotency-Replayed"))
+	}
+	if second.Id != first.Id || second.Code != code {
+		t.Fatalf("重放回来的不是第一家店（id=%d code=%q）", second.Id, second.Code)
+	}
+	if second.AdminStaffId != nil || second.AdminLoginToken != nil || second.AdminLoginTokenExpireAt != nil {
+		t.Errorf("重放把凭据又给了一遍（%+v）—— 重放不签第二串，也不回放第一串", second)
+	}
+	// 原始字节层面也要干净：*string 为 nil 只说明解码后是 nil，
+	// 「显式回了一个 null」与「这个键不存在」对客户端是两件事。
+	if strings.Contains(w.Body.String(), "admin_login_token") {
+		t.Errorf("重放的响应体里出现了 admin_login_token 这个键：%s", w.Body.String())
+	}
+
+	// 那次重放什么都没签：这个人名下仍然只有第一次那一行 token。
+	if n := adminQueryInt64(t, `SELECT count(*) FROM staff_tokens
+		WHERE staff_id = $1 AND kind = 2`, first.AdminStaffId); n != 1 {
+		t.Errorf("重放之后这个人名下有 %d 行一次性登录链接，期望还是 1 行 —— 重放又签了一串", n)
+	}
+
+	// 而存档里没有那串明文。这一条是仓库法律的直接检查，不是风格问题。
+	archived := adminQueryText(t, `SELECT coalesce(response_body::text, '') FROM idempotency_keys
+		WHERE scope = 'admin.merchants.create' AND idem_key = $1`, key)
+	if archived == "" {
+		t.Fatal("幂等存档里读不到这一笔（scope 或键不对，还是根本没存？）")
+	}
+	if strings.Contains(archived, *first.AdminLoginToken) {
+		t.Errorf("一次性凭据的明文进了 idempotency_keys.response_body ——「明文凭据绝不进数据库」")
 	}
 }
 

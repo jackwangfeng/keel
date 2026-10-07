@@ -39,19 +39,37 @@ SELECT v.code, v.name, v.status, v.deleted_at
 
 -- 子域名形态的店铺：域名恰好是 code + 平台基础域名，解析走 merchants.code 一支。
 -- shop-nodomain 刻意不在这个列表里。
-INSERT INTO shop_settings (merchant_id, domain)
+--
+-- 这一列原先在 shop_settings 上，00340 把它搬进了这张专管域名的表：那张表上
+-- keel_app 有 INSERT / DELETE 而写侧钉在 platform_scope()，而 shop_settings 一个
+-- 写权限都没有（extra 放着支付回调的验签密钥）。
+INSERT INTO merchant_domains (merchant_id, domain)
 SELECT m.id, m.code || '.example.com'
   FROM merchants m
  WHERE m.code IN ('shop-a', 'shop-b', 'shop-closed', 'shop-deleted')
-   AND NOT EXISTS (SELECT 1 FROM shop_settings s WHERE s.merchant_id = m.id);
+   AND NOT EXISTS (SELECT 1 FROM merchant_domains d WHERE d.merchant_id = m.id);
 
--- 自定义域名形态：域名落在平台基础域名之外，只能走 shop_settings.domain 一支。
+-- 自定义域名形态：域名落在平台基础域名之外，只能走 merchant_domains 一支。
 -- 这条是给解析器的第二个匹配分支当靶子的 —— 如果那一支拿子域名（'custom'）
 -- 去比完整域名，它永远匹配不上，而只有本行这种数据能让那个 bug 现形。
-INSERT INTO shop_settings (merchant_id, domain)
+INSERT INTO merchant_domains (merchant_id, domain)
 SELECT m.id, 'custom.example.net'
   FROM merchants m
  WHERE m.code = 'shop-c'
+   AND NOT EXISTS (SELECT 1 FROM merchant_domains d WHERE d.merchant_id = m.id);
+
+-- shop_settings 那一行。
+--
+-- 00340 之前**没有这一段**：域名原先就在 shop_settings 上，上面那两条 domain 的
+-- INSERT 顺带把行建了。domain 搬走之后，「建行」这件事得显式写出来 ——
+-- 少写它不会报错，只会让下面那条给 extra 配密钥的 UPDATE 匹配 0 行，
+-- 于是每一笔支付回调都验不过签名、安静地变成 401。
+--
+-- 这份列表就是原先那两条 INSERT 覆盖的商家集合（shop-nodomain 不在里面）。
+INSERT INTO shop_settings (merchant_id)
+SELECT m.id
+  FROM merchants m
+ WHERE m.code IN ('shop-a', 'shop-b', 'shop-c', 'shop-closed', 'shop-deleted')
    AND NOT EXISTS (SELECT 1 FROM shop_settings s WHERE s.merchant_id = m.id);
 
 -- ### 支付渠道的回调验签密钥（M2 任务 7）

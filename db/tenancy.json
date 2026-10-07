@@ -187,6 +187,17 @@
         "SELECT",
         "INSERT"
       ]
+    },
+    "platform-current": {
+      "_": "merchant_domains 一张表：商家自有域名的**当前态**（00340）。它是 directory-log 的孪生，只差一件事——那一类记的是历史，这一类记的是「现在」。策略三条而不是两条：读侧 USING (true)（租户解析要在确定租户之前按域名反查它是哪家店，与 tenant-root 同一条理由），INSERT 的 WITH CHECK 与 DELETE 的 USING 都是 platform_scope()（商家级会话里换不了任何一家的域名，数据库层 42501）。keel_app 有 SELECT + INSERT + DELETE、**没有 UPDATE**：换绑 = 同一个事务里先删后插，而那两条已经被前两个谓词钉住，多给一权换不到任何东西。为什么不是「给 shop_settings 开写权限」与为什么不学 directory-log 做成追加式日志（那条路会丢掉 domain 上的全表 UNIQUE，而域名是全局物理资源），完整论证在 db/migrations/00340_merchant_domains.sql 的文件头。",
+      "merchant_id": "special",
+      "policy": "platform-current",
+      "unique_scoped": true,
+      "grants": [
+        "SELECT",
+        "INSERT",
+        "DELETE"
+      ]
     }
   },
   "tables": {
@@ -225,7 +236,7 @@
     },
     "shop_settings": {
       "class": "tenant-root",
-      "reason": "同上，解析期就要读，此时还没有 current_merchant()；主键就是 merchant_id。"
+      "reason": "同上，解析期就要读（logo_url / currency / extra），此时还没有 current_merchant()；主键就是 merchant_id。domain 原先也在这里，00340 搬去了 merchant_domains —— 留在这一类里它就得给 keel_app 开写权限，而这张表的 extra 放着支付回调的验签密钥。"
     },
     "order_status_transitions": {
       "class": "shared-reference",
@@ -259,6 +270,10 @@
     "merchant_revisions": {
       "class": "directory-log",
       "reason": "商家目录的修订日志。改名与停用不能走 UPDATE merchants（keel_app 在 merchants 上没有 UPDATE，给了就等于任何租户上下文都能改商家目录），改走平台作用域里追加一行。读侧放开、写侧钉在 platform_scope()，见 directory-log 类的说明与 00024 的文件头。"
+    },
+    "merchant_domains": {
+      "class": "platform-current",
+      "reason": "商家自有域名的当前态（00340），一家店一行、没有这一行就是没登记。它替下了 shop_settings.domain：那条列 keel_app 只有 SELECT（00005 实测的域名劫持），而契约的 PATCH /admin/merchants/{id} 要能登记它，所以把这一列搬进一张专管域名的表，换来「写侧有 RLS 钉住、而 shop_settings 的 extra（支付回调验签密钥）一权都没多」。三条策略见 platform-current 类；domain 上的全表 UNIQUE 是这条接口的安全核心（两家店绑同一个域名就是真的互相劫持），所以这张表不做成追加式日志。完整取舍在 00340 的文件头。"
     }
   },
   "fk_missing_ok": {
@@ -315,7 +330,7 @@
       "  ③ 首列已经是租户内标识（cart_id、refund_id、user_id …）—— 已经蕴含租户。"
     ],
     "merchants(code)": "① 它就是租户标识本身，全局唯一是定义。",
-    "shop_settings(domain)": "② 自定义域名是全局物理资源，两家店绑同一个域名就是真的互相劫持。",
+    "merchant_domains(domain)": "② 自定义域名是全局物理资源，两家店绑同一个域名就是真的互相劫持。这条豁免原先挂在 shop_settings(domain) 上，00340 把那一列搬进了这张表 —— 搬的是约束，不是把它放宽。",
     "orders(order_no)": "① 对外编号，要跟支付渠道对账；随机不可枚举，全局唯一不泄露任何东西（数据模型 §2）。",
     "payments(payment_no)": "① 同上。",
     "refunds(refund_no)": "① 同上。",

@@ -3736,17 +3736,59 @@ class MerchantList {
       };
 }
 
+/// `POST /admin/merchants` 的 201：那家店，加上**它第一个管理员的一次性登录凭据**。
+class MerchantOpened {
+  final int id;
+  final String code;
+  final String name;
+  final int status;
+  final String? domain;
+  final String createdAt;
+  final String? updatedAt;
+  final int? adminStaffId;
+  final String? adminLoginToken;
+  final String? adminLoginTokenExpireAt;
+  const MerchantOpened({required this.id, required this.code, required this.name, required this.status, this.domain, required this.createdAt, this.updatedAt, this.adminStaffId, this.adminLoginToken, this.adminLoginTokenExpireAt});
+  factory MerchantOpened.fromJson(Map<String, dynamic> j) => MerchantOpened(
+        id: (j['id'] as num).toInt(),
+        code: j['code'] as String,
+        name: j['name'] as String,
+        status: (j['status'] as num).toInt(),
+        domain: j['domain'] as String?,
+        createdAt: j['created_at'] as String,
+        updatedAt: j['updated_at'] as String?,
+        adminStaffId: (j['admin_staff_id'] as num?)?.toInt(),
+        adminLoginToken: j['admin_login_token'] as String?,
+        adminLoginTokenExpireAt: j['admin_login_token_expire_at'] as String?,
+      );
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'code': code,
+        'name': name,
+        'status': status,
+        if (domain != null) 'domain': domain,
+        'created_at': createdAt,
+        if (updatedAt != null) 'updated_at': updatedAt,
+        if (adminStaffId != null) 'admin_staff_id': adminStaffId,
+        if (adminLoginToken != null) 'admin_login_token': adminLoginToken,
+        if (adminLoginTokenExpireAt != null) 'admin_login_token_expire_at': adminLoginTokenExpireAt,
+      };
+}
+
 class MerchantUpdateRequest {
   final String? name;
   final int? status;
-  const MerchantUpdateRequest({this.name, this.status});
+  final String? domain;
+  const MerchantUpdateRequest({this.name, this.status, this.domain});
   factory MerchantUpdateRequest.fromJson(Map<String, dynamic> j) => MerchantUpdateRequest(
         name: j['name'] as String?,
         status: (j['status'] as num?)?.toInt(),
+        domain: j['domain'] as String?,
       );
   Map<String, dynamic> toJson() => {
         if (name != null) 'name': name,
         if (status != null) 'status': status,
+        if (domain != null) 'domain': domain,
       };
 }
 

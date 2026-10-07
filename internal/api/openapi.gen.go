@@ -1143,6 +1143,27 @@ func (e MerchantStatus) Valid() bool {
 	}
 }
 
+// Defines values for MerchantOpenedStatus.
+const (
+	MerchantOpenedStatusN1 MerchantOpenedStatus = 1
+	MerchantOpenedStatusN2 MerchantOpenedStatus = 2
+	MerchantOpenedStatusN3 MerchantOpenedStatus = 3
+)
+
+// Valid indicates whether the value is a known member of the MerchantOpenedStatus enum.
+func (e MerchantOpenedStatus) Valid() bool {
+	switch e {
+	case MerchantOpenedStatusN1:
+		return true
+	case MerchantOpenedStatusN2:
+		return true
+	case MerchantOpenedStatusN3:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for MerchantUpdateRequestStatus.
 const (
 	MerchantUpdateRequestStatusN1 MerchantUpdateRequestStatus = 1
@@ -5301,7 +5322,12 @@ type Merchant struct {
 	Code      string    `json:"code"`
 	CreatedAt time.Time `json:"created_at"`
 
-	// Domain 自定义域名；为空则走 `/s/{code}` 路径路由
+	// Domain 自有域名（`merchant_domains`，00340），解析器的第二个匹配分支。
+	// 为空不等于没有入口：`KEEL_BASE_DOMAIN` 配着的话，
+	// `{code}.{KEEL_BASE_DOMAIN}` 这个子域名就是它的入口。
+	// **注意它在基础域名下永远不生效**（那片地盘只认 code），所以这里读到的是一个
+	// 登记值，不保证它被采纳 —— 落在基础域名里的登记由 `PATCH /admin/merchants/{id}`
+	// 在写入时就拒掉了，历史数据里若有则不会生效。
 	Domain *string `json:"domain,omitempty"`
 	Id     int64   `json:"id"`
 	Name   string  `json:"name"`
@@ -5337,9 +5363,69 @@ type MerchantList struct {
 	Total              int  `json:"total"`
 }
 
+// MerchantOpened `POST /admin/merchants` 的 201：那家店，加上**它第一个管理员的一次性登录凭据**。
+//
+// 为什么凭据在响应体里，而不是只在日志里（这是与 `POST /admin/staff` 唯一的差别）：
+// 开店的人拿到的是**唯一一个**能进这家新店的账号 —— 新店没有第二个管理员，
+// 而平台会话**看不见商家的员工**（`POST /admin/staff/{id}/login-token` 对一个
+// 商家级 staff 回 404，那条边界是刻意做的）。所以如果他拿不到这一串，
+// 除了翻容器日志就没有第二条路把这家店的门交给店主。
+//
+// 代价与 `POST /admin/staff/{id}/login-token` 那条一字不差：拿到它的人在
+// `expire_at` 之前能以那个身份登录一次 —— 而签的人本来就能改这个人的角色与状态，
+// 也本来就能停用这家店。
+//
+// **这三个字段只在真正建店的那一次响应里出现。** 幂等重放回来的只有 `Merchant`：
+// 存档落在 `idempotency_keys.response_body`，而一次性凭据的明文不进数据库
+// （那里存的是 `Merchant` 那一份，压根不含 token）。重放也不签第二串。
+// 所以「重放里没有凭据」不是漏实现，是这条契约的一部分：客户端要看
+// `Idempotency-Replayed` 头，重放时凭据在第一次那一次响应里，早已作废或已被用掉。
+type MerchantOpened struct {
+	// AdminLoginToken 给他的一次性登录 token 明文，15 分钟有效、用掉即失效，
+	// 拿去 `POST /admin/auth/session` 换会话。
+	AdminLoginToken *string `json:"admin_login_token,omitempty"`
+
+	// AdminLoginTokenExpireAt 上面那一串的失效时间。
+	AdminLoginTokenExpireAt *time.Time `json:"admin_login_token_expire_at,omitempty"`
+
+	// AdminStaffId 这家新店的第一个管理员（`role = 1`，`merchant_id` = 这家店）的 staff.id。
+	AdminStaffId *int64 `json:"admin_staff_id,omitempty"`
+
+	// Code 短标识，全局唯一，用于域名或路径路由
+	Code      string    `json:"code"`
+	CreatedAt time.Time `json:"created_at"`
+
+	// Domain 自有域名（`merchant_domains`，00340），解析器的第二个匹配分支。
+	// 为空不等于没有入口：`KEEL_BASE_DOMAIN` 配着的话，
+	// `{code}.{KEEL_BASE_DOMAIN}` 这个子域名就是它的入口。
+	// **注意它在基础域名下永远不生效**（那片地盘只认 code），所以这里读到的是一个
+	// 登记值，不保证它被采纳 —— 落在基础域名里的登记由 `PATCH /admin/merchants/{id}`
+	// 在写入时就拒掉了，历史数据里若有则不会生效。
+	Domain *string `json:"domain,omitempty"`
+	Id     int64   `json:"id"`
+	Name   string  `json:"name"`
+
+	// Status 1 正常 2 停用 3 待审核
+	Status MerchantOpenedStatus `json:"status"`
+
+	// UpdatedAt 最近一次改名或改状态的时间（最新一行 `merchant_revisions` 的时间）。从没改过时缺席。
+	UpdatedAt *time.Time `json:"updated_at,omitempty"`
+}
+
+// MerchantOpenedStatus 1 正常 2 停用 3 待审核
+type MerchantOpenedStatus int
+
 // MerchantUpdateRequest defines model for MerchantUpdateRequest.
 type MerchantUpdateRequest struct {
-	Name *string `json:"name,omitempty"`
+	// Domain 这家店的自有域名，写 `merchant_domains`。**三个态分清**：不传 = 不动；
+	// 显式 `null` = 清空（清空后仍可只靠 `{code}.{KEEL_BASE_DOMAIN}` 可达）；
+	// 字符串 = 登记。存前按解析器读 Host 的规矩归一化（去端口、小写、去结尾的点）。
+	// 两种拒绝：不是合法主机名，或它等于 / 落在 `KEEL_BASE_DOMAIN` 之下（422，
+	// 那种登记在解析器里永远不生效）；已被另一家店登记（409 `merchant-domain-taken`）。
+	// 这里**不验证域名归属** —— 兑现这个取舍的条件是这一条只有平台级管理员能调。
+	// 变更最多延迟 30 秒生效（解析结果缓存，与停用同一条）。
+	Domain *string `json:"domain,omitempty"`
+	Name   *string `json:"name,omitempty"`
 
 	// Status 1 正常 2 停用。没有 3：审核流程本轮不存在。
 	Status *MerchantUpdateRequestStatus `json:"status,omitempty"`
@@ -7766,8 +7852,9 @@ type StaffLoginToken struct {
 	// StaffId 这串 token 属于谁
 	StaffId int64 `json:"staff_id"`
 
-	// Token 一次性登录 token 明文。**服务端只存它的 sha256**，明文只在这一次响应
-	// （和进程日志）里出现。
+	// Token 一次性登录 token 明文。**服务端只存它的 sha256**，明文只在这一次响应里出现
+	// ——进程日志记的是「什么时候给谁签过」这条事实，不带明文（日志会被采集、
+	// 会进索引，而一串 15 分钟的凭据落在任何一处索引里就是一个能被翻出来的登录入口）。
 	Token string `json:"token"`
 }
 

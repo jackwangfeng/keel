@@ -39,6 +39,10 @@ so "which one is running?" never depends on anyone's memory.
 
 ## [Unreleased]
 
+Core migration `00340` (`merchant_domains`): the custom-domain column moved **out of** `shop_settings`, which the
+application role has no write grant on — the reasoning, the three rejected alternatives and the security properties
+are in the Added entry below. The core database lands on `00340`.
+
 ### Added
 
 - **The multi-merchant deployment form now has an entry point and end-to-end evidence.** `compose.multi.yaml` has been
@@ -50,15 +54,16 @@ so "which one is running?" never depends on anyone's memory.
   stack in place — the overlay suffixes **volumes** with `_multi`, container names are unchanged, so a shared project
   name would have edited the developer's live stack instead of adding a second one. It always runs the verifier
   afterwards for the same reason `demo-up.sh` does: `docker compose up -d` returns 0 when the application then exits
-  because `tenant.Preflight` failed. `scripts/multi-verify.sh` (`make multi-verify`) asserts 59 concrete values:
-  ten Host-resolution cases (subdomain by code, `shop_settings.domain`, a shop with no registered domain → 200;
+  because `tenant.Preflight` failed. `scripts/multi-verify.sh` (`make multi-verify`) asserts 102 concrete values:
+  ten Host-resolution cases (subdomain by code, `merchant_domains.domain`, a shop with no registered domain → 200;
   disabled, soft-deleted, unknown code, the apex itself, the reserved `api` label, an extra subdomain level → 404
   rather than 500); tenant isolation compared by **id set** and not by row count; **the same phone number being two
   different buyer accounts in two shops**, with a token from shop A replayed against shop B rejected as
   `token-tenant-mismatch`; the platform directory listing disabled shops and hiding soft-deleted ones (compared per
   `code`, not by a total that this script itself increments on every run); opening a shop with its idempotency replay
-  and the `merchant-code-taken` collision; the new shop's first admin exchanging the one-time link scraped from the
-  application log; four merchant-level escalations returning 403 **and checked by problem type**, distinguishing
+  and the `merchant-code-taken` collision, and the new shop's first admin exchanging the token **from that 201 body**
+  for a merchant-level session (see the delivery entry below — it used to be scraped from the application log);
+  four merchant-level escalations returning 403 **and checked by problem type**, distinguishing
   `platform-only` from `tenant-switch-forbidden`; `X-Keel-Merchant` taking a `code` and not an id, rejecting a bad
   value as 422 `unknown-merchant` **without falling back** to the Host's shop; and disable/re-enable keeping the shop
   invisible to buyers while staying manageable by the platform; and the admin console's own origin still serves the same
@@ -71,7 +76,94 @@ so "which one is running?" never depends on anyone's memory.
   this, and the "not covered" note in `ci.yml` now says what remains uncovered: the buyer-facing shop switcher and
   `MerchantListView` under the multi-merchant form.
 
+- **The tenant boundary is now asserted at by-id reads and writes, not only at lists.** Fourteen assertions added to
+  `scripts/multi-verify.sh`, aimed at the places where a list being scoped says nothing about a point query being
+  scoped: a product id from shop B fetched under shop A's Host is 404 while still 200 under shop B (the control is what
+  makes the 404 mean isolation rather than a broken route); shop B's `store_id` in `GET /addresses?store_id=` is 422
+  rather than silently ignored — being ignored would hand the caller shop A's address book while it believed it had
+  filtered by shop B; a merchant-level session reading another shop's directory entry by id is 403 `platform-only`
+  (`List` and `Get` are two separate gates and only the first was covered); a **platform** session that has switched
+  into shop A via `X-Keel-Merchant` still 404s on shop B's product and store ids, with the same ids readable when the
+  Host is shop B; and binding shop B's SKU into shop A's promotion is 422 with a `detail` naming that SKU, asserted on
+  the text rather than on the status code because three different malformed bodies produce the same 422. The heaviest
+  one concerns the payment webhook, an **unauthenticated** entry where the signature is the only credential: a body
+  signed with shop B's seeded channel secret and posted to shop A's Host is 401 with an **empty body** (the contract
+  forbids leaking whether this shop configured a key at all), while the identical body signed with shop A's own secret
+  is 200 — that pair is what proves the 401 came from reading the key of the *resolved tenant*, which is exactly the
+  condition forging a payment would need. Sensitivity was checked by hand, not assumed: shop C's key and a garbage key
+  are also 401 against shop A, and only shop A's own key reaches 200.
+  Two candidates were investigated and deliberately left unasserted, with the reasons written into the script's header
+  so nobody re-attempts them: keyword search cannot prove anything on this stack (`products.search_vector` is generated
+  from `search_text`, which the indexing pipeline writes and this stack runs without AI — a product created through the
+  admin API, given a SKU and published still has `search_text IS NULL`, so every query returns zero rows, and a zero
+  that is always zero is not evidence), and the `jobs` table has no HTTP exit at all (it is the declared
+  `cross-tenant-queue` class in `db/tenancy.json` with `policy: none` by design; its by-id readers are background
+  workers and the reconciliation report, which log per-merchant counts and are guarded by `check_tenancy`, not routes).
+
+- **A shop can now be given its own domain through the API.** `PATCH /api/v1/admin/merchants/{id}`
+  accepts `domain`. The field names in the merchant directory had been documented for a long time while
+  nothing could write one: the only copy of "which custom domain belongs to which shop" lived in
+  `shop_settings.domain`, and the application role has SELECT and nothing else on that table — so the
+  endpoint would have failed at runtime with 42501 while `TestAppRoleGrantSurface` stayed green (it compares
+  the grant surface; it has no idea what the application code wants to do). Three alternatives are rejected
+  in `db/migrations/00340_merchant_domains.sql`'s header with the same sentence each time, because each made a
+  security property depend on application code remembering it: `GRANT UPDATE ON shop_settings` hands over
+  `extra` — where the payment-callback signing secrets live — along with the hijackable column, and that table
+  has no row-level security behind either (it is tenant-root, read during resolution, before `SET LOCAL`); a
+  column-level grant still leaves `WHERE merchant_id = ?` as the only barrier; and deriving "who currently uses
+  this domain" from `merchant_revisions` gives up the whole-table `UNIQUE` that makes one domain exactly one
+  entrance, replacing it with "every writer must take the same advisory lock" and turning the resolver's single
+  unique-index equality probe — on a path taken by every uncached request — into a per-shop latest-row scan.
+  So the column moved out into `merchant_domains`: one row per shop (absent row = no custom domain, readers
+  `LEFT JOIN`), `domain` globally unique, `keel_app` granted SELECT + INSERT + DELETE and **no UPDATE** —
+  rebinding is a delete and an insert inside one transaction — reads open to everyone because resolution needs
+  them, both writes pinned to `platform_scope()`. Two behaviours worth naming: registering a name that falls
+  under the platform base domain is refused, because the resolver only honours `merchants.code` there and such a
+  row could never be adopted, and the gate uses the same expression the resolver branches on
+  (`tenant.DomainUnderBase`) rather than a second copy of the rule; and a domain another shop already holds
+  returns 409 `merchant-domain-taken` without disturbing that shop's entrance. **Ownership is not verified** —
+  that was the decision, not an omission: the platform operator asserting the domain belongs to this shop is the
+  gate, and TLS certificates for a custom domain are the operator's side of that, not this service's.
+
+- **One-time login credentials are delivered through the API instead of the container log.** Until now the only way to
+  hand a new staff member — or the first admin of a newly opened shop — their login token was to grep it out of
+  `docker compose logs app`, which is not a delivery channel anyone can operate for a third party, and one no
+  deployment can safely assume stays on the machine: logs get collected, indexed and attached to tickets. Two changes,
+  deliberately different from each other:
+  `POST /api/v1/admin/merchants` now returns `MerchantOpened` — the same flat `Merchant` body plus `admin_staff_id`,
+  `admin_login_token` and `admin_login_token_expire_at`, present **only on the response that actually opened the
+  shop**. This one has to be in the body: a platform session cannot see a merchant's staff at all
+  (`POST /admin/staff/{id}/login-token` is a deliberate 404 for a merchant-level staff member, asserted in
+  `permission_test.go`), so an operator who did not catch the log line had no second route to the shop's entrance.
+  Replaying the same `Idempotency-Key` returns neither a new token nor the archived one — the idempotency record holds
+  `repository.Merchant` and a plaintext one-time credential never enters the database, which is now asserted directly
+  against `idempotency_keys.response_body`. Staff creation keeps its token out of the response (the contract said so
+  already, and returning it would let any admin impersonate the account they just made) and is delivered by
+  immediately calling the existing reissue endpoint, which the admin UI now does for you and shows once.
+  Both log notices lost their plaintext and kept the audit fact — "who was issued a link, when, for whom" needs no
+  secret to be legible — leaving the **bootstrap token as the only credential still printed to stdout**, because
+  bootstrapping is precisely the situation where nobody can call any endpoint yet. `multi-verify.sh` now exchanges the
+  token from the 201 body against the new shop's own Host, proves it is single-use, and fails if its plaintext appears
+  anywhere in the application log.
+
 ### Fixed
+
+- **A JSON `null` in a PATCH body no longer collapses into "this key was absent".** Three contract
+  fields are documented as three-state — absent / explicit null / a value — and all three read as two,
+  because `encoding/json` sets a pointer to nil for `null` and never calls `json.RawMessage`'s own
+  `UnmarshalJSON`: `*json.RawMessage` is nil in both cases, so nothing on the type can tell them apart.
+  Two features had never worked as a result, and both looked like successes: `{"parent_id": null}` on a
+  category (documented as "move it to the root", which takes the whole subtree with it) and
+  `{"image_upload_id": null}` on a SKU ("remove the picture") each returned 200 and changed nothing. The
+  new `domain` field falls into the same trap from the other direction — had its nil been read as
+  "clear", **every** rename in the admin UI would also have taken that shop's entrance away, buyers
+  going 404 behind a 200 that shows the new name. Those three handlers now decode the body twice, into
+  the struct and into `map[string]json.RawMessage`, and ask the second one whether the key was present
+  (`bindPatchBody`); a struct field cannot answer that, which is why the check lives outside it. The
+  product handler had been doing this inline since the freight-template round (00055) discovered it, so
+  that copy was folded into the same function rather than adding a fourth place to remember. Each
+  case has a regression test that fails without the fix and asserts by re-reading the row, because from
+  outside, "the field was ignored" and "the change was applied" are the same status code.
 
 - **The ad-law banned-term check now catches two families of evasive spelling:** homophone swaps of the
   leading character (`醉佳` for `最佳`, `嘴便宜` for `最便宜`, `鼎级` for `顶级`) and decorative

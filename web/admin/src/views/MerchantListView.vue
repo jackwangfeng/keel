@@ -11,11 +11,22 @@
 //   · 改名和停用在服务端是**追加一行修订**，不改 merchants 那一行
 //     （keel_app 在 merchants 上没有 UPDATE）。界面上看不出差别，但「最近修改」那一列
 //     就是那一行修订的时间。
+//   · **开店的 201 里带着这家新店第一个管理员的一次性登录 token**，这里把它显示出来
+//     一次（契约 MerchantOpened）。不显示的话，把门交给店主的唯一路子是翻 app 的日志，
+//     而日志会被采集、会进索引。这一串 15 分钟后自己失效、用一次就作废，
+//     所以它只出现一次；关了就没了。丢了也不慌：切进这家店，在「员工」页给他重签一串。
 
 import { computed, onMounted, ref } from "vue";
 import { Plus, Refresh } from "@element-plus/icons-vue";
 import { ElMessageBox } from "element-plus";
-import { currentSession, keel, type Merchant, type MerchantCreateRequest, type MerchantList } from "../api/client.ts";
+import {
+    currentSession,
+    keel,
+    type Merchant,
+    type MerchantCreateRequest,
+    type MerchantList,
+    type MerchantOpened,
+} from "../api/client.ts";
 import { IdempotentSubmission, withIdempotency } from "../api/idempotency.ts";
 import { currentMerchantScope, setMerchantScope } from "../api/merchantScope.ts";
 import { datetime } from "../ui/format.ts";
@@ -75,13 +86,40 @@ async function submitOpen(): Promise<void> {
             keel.request("post", "/admin/merchants", { body: draft.value, headers: { "Idempotency-Key": key } }),
         );
         openVisible.value = false;
-        notifyOk(`已开店「${m.name}」（${m.code}）。第一个管理员的一次性登录 token 在 app 的日志里。`);
+        showCredential(m, String(draft.value.admin_email ?? "").trim());
         await load();
     } catch (err) {
         openError.value = err;
     } finally {
         opening.value = false;
     }
+}
+
+// ---------------------------------------------------------- 那串一次性凭据
+
+/**
+ * 开店拿到的凭据。显示一次，关掉就清 —— 留在页面状态里就等于这台机器上
+ * 任何一个能读这块屏幕的人都能拿到它（会话本身放 sessionStorage 是同一个理由）。
+ */
+const credential = ref<{ code: string; email: string; staffId?: number; token?: string; expireAt?: string } | null>(
+    null,
+);
+const credentialVisible = ref(false);
+
+function showCredential(opened: MerchantOpened, adminEmail: string): void {
+    credential.value = {
+        code: opened.code,
+        email: adminEmail,
+        staffId: opened.admin_staff_id ?? undefined,
+        token: opened.admin_login_token ?? undefined,
+        expireAt: opened.admin_login_token_expire_at,
+    };
+    credentialVisible.value = true;
+}
+
+function closeCredential(): void {
+    credentialVisible.value = false;
+    credential.value = null;
 }
 
 // ---------------------------------------------------------------- 改名
@@ -249,7 +287,8 @@ function manage(m: Merchant): void {
         <el-dialog v-model="openVisible" title="开店" width="560px">
             <ProblemAlert v-if="openError" :error="openError" />
             <p class="hint">
-                建商家，并在这家新店里建出它的第一个管理员。本轮没有接邮件服务，那个管理员的一次性登录 token 只进 app 的日志。
+                建商家，并在这家新店里建出它的第一个管理员。本轮没有接邮件服务，那封「发登录链接」的信不会发 ——
+                他的<strong>一次性登录 token 会在这一次的响应里给你</strong>，开完店当场显示一次，请通过可信渠道转交本人。
                 新店的入口是 <code>{code}.KEEL_BASE_DOMAIN</code>。
             </p>
             <el-form label-width="110px" @submit.prevent>
@@ -269,6 +308,35 @@ function manage(m: Merchant): void {
                 >
                     开店
                 </el-button>
+            </template>
+        </el-dialog>
+
+        <el-dialog
+            v-model="credentialVisible"
+            :title="`新店「${credential?.code ?? ''}」的第一个管理员：登录凭据`"
+            width="620px"
+            :close-on-click-modal="false"
+            @closed="credential = null"
+        >
+            <template v-if="credential?.token">
+                <p class="hint">
+                    把这一串交给 <strong>{{ credential?.email }}</strong>，他在登录页「已有登录 token」那一栏粘进去就进了这家新店。
+                    <strong>只显示这一次</strong>：关掉窗口就没了，日志里也没有它。
+                    15 分钟有效（到 {{ datetime(credential?.expireAt) }}），用掉即失效。
+                </p>
+                <el-input :model-value="credential?.token" readonly type="textarea" :rows="2" />
+                <p class="hint">
+                    staff.id = {{ credential?.staffId }}。错过这一屏不会把这家店锁死：在列表里「切过去管理」这家店，
+                    到「员工」页给他重签一串 —— 平台会话切进店之后就落在这家店的租户作用域里，那条接口回明文。
+                </p>
+            </template>
+            <p v-else class="hint">
+                这次响应没有凭据 —— 这把幂等键之前已经开过一次店，回放的是那一次的
+                <code>Merchant</code>。一次性凭据的明文不进数据库，所以也没法回放第一串。
+                要交给本人的话：「切过去管理」这家店，到「员工」页重签登录 token（那条接口回明文）。
+            </p>
+            <template #footer>
+                <el-button type="primary" @click="closeCredential">我已转交</el-button>
             </template>
         </el-dialog>
 

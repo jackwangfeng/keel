@@ -788,7 +788,9 @@ var routes = []route{
 		ContractMethod: "patch",
 		HTTPMethod:     http.MethodPatch,
 		HandlerFile:    "admin_merchant.go",
-		NoQueryParams:  "改哪家店在路径上，改什么（名字、状态）在请求体里",
+		NoQueryParams: "改哪家店在路径上，改什么（名字、状态、自有域名）在请求体里。" +
+			"domain 那个键的「不传 / 显式 null / 字符串」三个态由 bindPatchBody 返回的键集合判，" +
+			"路径参数与请求体之外没有任何 query；清空登记是一个功能，不是漏传",
 	},
 	// —— 商家自助发布（M4 Task 3）。契约 Admin + Catalog 两个 tag 的 16 条写接口。
 	//
