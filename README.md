@@ -230,8 +230,9 @@ docker compose logs app | grep bootstrap_token
 > 按天 / 按小时的趋势线，商品排行，门店 / 大区对比，库存预警，搜索概况（热门词与无结果词）——
 > 固定口径、按店铺时区切天、按角色收窄，不走 AI。
 
-要多商家形态（由 `Host` 头决定是哪家店）：
-`docker compose -f compose.yaml -f compose.multi.yaml up -d --build`。
+要多商家形态（由 `Host` 头决定是哪家店）：`make multi-up`。它起这一形态并自动跑一遍验收
+（Host 解析、两家店互不相交、开店、停用），细节见
+[部署与配置](./docs/指南/部署与配置.md#部署形态)。
 
 种子里有一个买家账号可以直接登录：手机号 `13800000000`，密码 `keel-demo-2026`
 （本地演示用的开发种子）。完整的上手步骤见 [快速上手](./docs/指南/快速上手.md)，

@@ -39,6 +39,38 @@ so "which one is running?" never depends on anyone's memory.
 
 ## [Unreleased]
 
+### Added
+
+- **The multi-merchant deployment form now has an entry point and end-to-end evidence.** `compose.multi.yaml` has been
+  in the repository since M1, but nothing ever booted it: the e2e job only ran the single-merchant default, and both
+  the demo and production stacks set `KEEL_DEFAULT_MERCHANT`, so the whole tenant-management path — open a shop, resolve
+  it by Host, disable it, watch the buyer side go 404 — existed only as unit tests. `scripts/multi-up.sh`
+  (`make multi-up`) is now the only way to start it, under its own Compose project (`keelmulti`, host ports 28185/28186)
+  so it coexists with the demo stack, the production stack and CI rather than replacing the running single-merchant
+  stack in place — the overlay suffixes **volumes** with `_multi`, container names are unchanged, so a shared project
+  name would have edited the developer's live stack instead of adding a second one. It always runs the verifier
+  afterwards for the same reason `demo-up.sh` does: `docker compose up -d` returns 0 when the application then exits
+  because `tenant.Preflight` failed. `scripts/multi-verify.sh` (`make multi-verify`) asserts 59 concrete values:
+  ten Host-resolution cases (subdomain by code, `shop_settings.domain`, a shop with no registered domain → 200;
+  disabled, soft-deleted, unknown code, the apex itself, the reserved `api` label, an extra subdomain level → 404
+  rather than 500); tenant isolation compared by **id set** and not by row count; **the same phone number being two
+  different buyer accounts in two shops**, with a token from shop A replayed against shop B rejected as
+  `token-tenant-mismatch`; the platform directory listing disabled shops and hiding soft-deleted ones (compared per
+  `code`, not by a total that this script itself increments on every run); opening a shop with its idempotency replay
+  and the `merchant-code-taken` collision; the new shop's first admin exchanging the one-time link scraped from the
+  application log; four merchant-level escalations returning 403 **and checked by problem type**, distinguishing
+  `platform-only` from `tenant-switch-forbidden`; `X-Keel-Merchant` taking a `code` and not an id, rejecting a bad
+  value as 422 `unknown-merchant` **without falling back** to the Host's shop; and disable/re-enable keeping the shop
+  invisible to buyers while staying manageable by the platform; and the admin console's own origin still serves the same
+  merchant directory through its `/api` reverse proxy, which is how that page dies when the proxy is lost — the HTML
+  keeps loading and every click turns into network errors. `scripts/smoke.sh` is deliberately not reused, and the
+  reason is recorded in the new script's header: its last step searches for a term whose derived index `db/seed/dev.sql`
+  never populates, so reusing it would produce a red light unrelated to tenancy. Two paths were exercised, not one: a
+  bootstrap-from-empty-volumes run and a second run against the same database (which is what caught the one assertion
+  below that was really a claim about how many times the script had already run). The e2e job gained a step for all of
+  this, and the "not covered" note in `ci.yml` now says what remains uncovered: the buyer-facing shop switcher and
+  `MerchantListView` under the multi-merchant form.
+
 ### Fixed
 
 - **The ad-law banned-term check now catches two families of evasive spelling:** homophone swaps of the

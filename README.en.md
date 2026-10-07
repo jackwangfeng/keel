@@ -263,8 +263,10 @@ If 8081 is taken: `KEEL_CONSOLE_PORT=18081 docker compose up -d --build`.
 > low-stock alerts and a search summary (top queries and zero-result queries) —
 > fixed definitions, days cut in the shop's time zone, scoped by role, no AI involved.
 
-For the multi-merchant shape, where the `Host` header picks the shop:
-`docker compose -f compose.yaml -f compose.multi.yaml up -d --build`.
+For the multi-merchant form, where the `Host` header picks the shop: `make multi-up`.
+It brings the stack up and then runs its own acceptance checks (Host resolution, two shops
+that do not overlap, opening a shop, disabling one); the details are in the deployment guide
+(Chinese).
 
 The seed includes a buyer you can log in as: phone `13800000000`, password
 `keel-demo-2026` (a development seed for local demos). Step-by-step guides —
