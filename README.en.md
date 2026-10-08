@@ -169,6 +169,26 @@ back to wiring up Algolia yourself. Keel assumes you want to own your stack.
 
 ---
 
+---
+
+## Look first
+
+<div align="center">
+
+<table>
+<tr>
+<td width="50%"><img src="./docs/assets/screenshots/buyer-home.png" alt="Buyer app home" /></td>
+<td width="50%"><img src="./docs/assets/screenshots/admin-overview.png" alt="Merchant overview" /></td>
+</tr>
+<tr>
+<td align="center"><sub>Buyer app (Flutter Web) — products, stock, price and delivery fee all resolved from the store whose fence contains you</sub></td>
+<td align="center"><sub>Merchant console — overview on a fixed metric, sliced by the store's own timezone</sub></td>
+</tr>
+</table>
+
+</div>
+
+
 ## Live demo
 
 **<https://eshop.zzss.fun>** — open to everyone, no sign-up or login needed.

@@ -26,6 +26,29 @@
 
 ## 为什么还要再做一个电商系统
 
+---
+
+## 先看一眼
+
+<div align="center">
+
+<table>
+<tr>
+<td width="50%"><img src="./docs/assets/screenshots/buyer-home.png" alt="买家端首页" /></td>
+<td width="50%"><img src="./docs/assets/screenshots/admin-overview.png" alt="商家后台经营概览" /></td>
+</tr>
+<tr>
+<td align="center"><sub>买家端（Flutter Web）—— 按围栏门店给商品、给配送费</sub></td>
+<td align="center"><sub>商家后台 —— 经营概览，口径固定、按店铺时区切天</sub></td>
+</tr>
+</table>
+
+</div>
+
+上面左图：买家落在某个门店的配送围栏里，于是商品、库存、价格、配送费都是那家门店的。
+右图：同一家店的经营概览——金额恒等式与环比由数据库约束和固定口径保证，不走 AI。
+
+
 开源电商已经有不少好项目——Saleor、Medusa、Shopware、mall。
 Keel 无意成为第五十个。它存在的理由是三件别人没有的事，另外三件是让这三件
 能够放心去做的地基：
@@ -54,6 +77,17 @@ Keel 是为「从实体门店发货」的生意做的——便利店连锁、生
   一切坐标存成 WGS-84（GCJ-02 只在一处转换，有对照已知坐标点的测试）。
   没配密钥就返回 501，客户端退回手动填写加地图选点。
 
+
+
+<div align="center">
+
+<img src="./docs/assets/screenshots/admin-store.png" alt="在地图上画出门店的配送围栏" width="820" />
+
+**在地图上画出门店的配送围栏**（演示站上的佛山店）。围栏可以重叠，服务端从不替
+你悄悄挑一个；收货地址落在所选门店的围栏之外时，试算与下单都会被拒绝。
+坐标一律WGS-84，与买家端定位、库里那条`GEOGRAPHY(POLYGON, 4326)` 同一个坐标系。
+
+</div>
 ### 二、AI 员工：agent 是团队的一员，不是页面上的聊天框
 
 Keel 不内置模型。它给**你的** agent 一份工作：一个和人一样有角色与门店 /
@@ -78,6 +112,11 @@ agent 下次会读到这个理由。
 预览接口、分布式事务与审计。
 规划见 [AI 经营：规划](./docs/AI经营-规划.md)；M9 设计见
 [AI 经营 M9 设计](./docs/AI经营-M9设计.md)。
+
+
+AI 员工的提案队列——每一条都是带证据的提案，人批准后才执行。下面这张是演示站上公开的那一份：
+
+![AI 经营日志](./docs/assets/screenshots/ai-log.png)
 
 ### 三、向任何 agent harness 开放
 
