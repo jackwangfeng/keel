@@ -86,6 +86,8 @@ var notificationCallSites = map[string]notifyPolicy{
 		"这几条路径的通知由各自的调用方决定（超时关单发 order_timeout_closed，另两条不发）"},
 	"AdminPromotionService.syncQuotas/SetActivityQuotas": {Silent: "后台改活动商品时整组设配额：商家自己做的，" +
 		"理由同 setStockSole；秒杀抢光由下单时的 409 promotion-sold-out 告诉买家"},
+	"AdminPromotionService.Delete/SetActivityQuotas": {Silent: "删除活动后清掉库存侧配额行：活动本身已硬删，" +
+		"买家侧早已看不到它；清配额是收拾孤儿行，不是要通知谁的业务事件"},
 	"ChannelService.syncCatalogItem/InitSKUs": {Silent: "商品源（Shopify）拉进来的新 SKU 写初始库存：取的是商品源上那一刻的现货，" +
 		"商家自己接的渠道；与批量导入同一个理由，不是买家或员工要知道的变化"},
 	"ProductImportService.initImportStock/InitSKUs": {Silent: "批量导入时建 SKU 写初始库存：商家自己确认的导入，" +
