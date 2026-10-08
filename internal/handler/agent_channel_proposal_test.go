@@ -356,7 +356,7 @@ func TestChannelStockRuleExecSerializesWithRuleWrites(t *testing.T) {
 	_, p := r.propose(t, change(&dress, 9000, 0, prevRule(8000, 0, channel.RuleLevelBinding)))
 	id := int64(p["id"].(float64))
 
-	conn := admin(t)
+	conn := adminSession(t)
 	tx, err := conn.Begin(context.Background())
 	if err != nil {
 		t.Fatal(err)

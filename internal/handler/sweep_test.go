@@ -84,8 +84,7 @@ func placeRealOrder(t *testing.T, host, merchantCode, addrName string, qty int) 
 func dropOrder(t *testing.T, orderNo string) {
 	t.Helper()
 	ctx := context.Background()
-	conn := admin(t)
-
+	conn := adminSession(t)
 	if _, err := conn.Exec(ctx, `
 		UPDATE inventories i
 		   SET available_qty = i.available_qty - l.net

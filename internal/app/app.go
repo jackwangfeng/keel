@@ -817,6 +817,7 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	v1.POST("/admin/promotions", staffAuth, pra.Create)
 	v1.GET("/admin/promotions/:promotion_id", staffAuth, pra.Detail)
 	v1.PATCH("/admin/promotions/:promotion_id", staffAuth, pra.Update)
+	v1.DELETE("/admin/promotions/:promotion_id", staffAuth, pra.Delete)
 	return r
 }
 

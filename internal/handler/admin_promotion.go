@@ -14,10 +14,11 @@ import (
 
 // 营销活动的后台接口（契约 /admin/promotions 那一段）：
 //
-//	GET   /admin/promotions                    列表（admin_promotion_list.go）
-//	POST  /admin/promotions                    新建（下线状态）
-//	GET   /admin/promotions/{promotion_id}     详情
-//	PATCH /admin/promotions/{promotion_id}     修改 / 上线 / 下线
+//	GET    /admin/promotions                    列表（admin_promotion_list.go）
+//	POST   /admin/promotions                    新建（下线状态）
+//	GET    /admin/promotions/{promotion_id}     详情
+//	PATCH  /admin/promotions/{promotion_id}     修改 / 上线 / 下线
+//	DELETE /admin/promotions/{promotion_id}     硬删（仅下线且无成交）
 //
 // 角色检查（全店范围，与券管理同一行）在 service.AdminPromotionService，不在这里。
 // 这里没有 SQL、没有事务：只把契约类型翻成 service 的入参，再把结果翻回来。
@@ -108,6 +109,18 @@ func (h *AdminPromotionHandler) Update(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, apiAdminPromotion(out))
+}
+
+func (h *AdminPromotionHandler) Delete(c *gin.Context) {
+	id, ok := pathID(c, "promotion_id")
+	if !ok {
+		return
+	}
+	if err := h.svc.Delete(c.Request.Context(), id); err != nil {
+		writePromotionError(c, err)
+		return
+	}
+	c.Status(http.StatusNoContent)
 }
 
 // promotionRulesOf 把请求体里的三组规则翻成 service 的形状。nil 保持 nil（PATCH 里即「不改」）。
@@ -213,6 +226,8 @@ func writePromotionError(c *gin.Context, err error) {
 		problem.Write(c, http.StatusNotFound, problem.TypeNotFound, "营销活动不存在")
 	case errors.Is(err, service.ErrPromotionOnline):
 		writeProblemDetail(c, http.StatusConflict, problem.TypePromotionOnline, "活动上线中，改规则请先下线", err)
+	case errors.Is(err, service.ErrPromotionInUse):
+		writeProblemDetail(c, http.StatusConflict, problem.TypePromotionInUse, "活动已有成交或发放记录，不能删除", err)
 	case errors.Is(err, service.ErrPromotionBadRequest):
 		// detail 原样给出：运营要知道是哪一条不成立（「满 100 减 200」、哪个 SKU 查不到）。
 		writeProblemDetail(c, http.StatusUnprocessableEntity, problem.TypeInvalidRequest, "营销活动的配置不成立", err)

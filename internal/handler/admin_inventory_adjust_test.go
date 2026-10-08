@@ -62,7 +62,7 @@ type manualLog struct {
 // manualLogsOf 读一个门店 SKU 的全部手工调整流水，按写入顺序。
 func manualLogsOf(t *testing.T, storeID, skuID int64) []manualLog {
 	t.Helper()
-	rows, err := admin(t).Query(context.Background(), `
+	rows, err := adminSession(t).Query(context.Background(), `
 		SELECT change_qty, biz_id, before_available, after_available, reason
 		  FROM inventory_logs
 		 WHERE store_id = $1 AND sku_id = $2 AND biz_type = 5

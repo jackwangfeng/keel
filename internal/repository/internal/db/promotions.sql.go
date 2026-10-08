@@ -47,6 +47,46 @@ func (q *Queries) AddPromotionPurchase(ctx context.Context, arg AddPromotionPurc
 	return result.RowsAffected(), nil
 }
 
+const adminCountPromotionGiftGrants = `-- name: AdminCountPromotionGiftGrants :one
+SELECT count(*)::bigint FROM promotion_gift_grants WHERE promotion_id = $1
+`
+
+func (q *Queries) AdminCountPromotionGiftGrants(ctx context.Context, promotionID int64) (int64, error) {
+	row := q.db.QueryRow(ctx, adminCountPromotionGiftGrants, promotionID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const adminCountPromotionOrderItems = `-- name: AdminCountPromotionOrderItems :one
+
+SELECT count(*)::bigint FROM order_items WHERE price_promotion_id = $1
+`
+
+// ---------------------------------------------------------------------------
+// 后台删除活动（硬删）：仅下线且从未进过成交 / 发放路径的草稿可删。
+// ---------------------------------------------------------------------------
+// 订单行快照了 price_promotion_id；有引用就不能删（FK 也会挡，这里先给出明确 409）。
+// 列可空，sqlc 会把裸 $1 推成 *int64；用命名参数钉成 int64。
+func (q *Queries) AdminCountPromotionOrderItems(ctx context.Context, promotionID *int64) (int64, error) {
+	row := q.db.QueryRow(ctx, adminCountPromotionOrderItems, promotionID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const adminCountPromotionPurchases = `-- name: AdminCountPromotionPurchases :one
+SELECT count(*)::bigint FROM promotion_purchases WHERE promotion_id = $1 AND qty > 0
+`
+
+// qty > 0 才算「用过」；全 0 的残留行可以随活动一起清掉。
+func (q *Queries) AdminCountPromotionPurchases(ctx context.Context, promotionID int64) (int64, error) {
+	row := q.db.QueryRow(ctx, adminCountPromotionPurchases, promotionID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const adminCountPromotions = `-- name: AdminCountPromotions :one
 SELECT count(*)
   FROM promotions
@@ -98,6 +138,37 @@ func (q *Queries) AdminCreatePromotion(ctx context.Context, arg AdminCreatePromo
 	var id int64
 	err := row.Scan(&id)
 	return id, err
+}
+
+const adminDeletePromotion = `-- name: AdminDeletePromotion :execrows
+DELETE FROM promotions WHERE id = $1 AND status = 0
+`
+
+// status = 0 是第二道：上线中的行锁住之后也不会被这条删掉。
+func (q *Queries) AdminDeletePromotion(ctx context.Context, id int64) (int64, error) {
+	result, err := q.db.Exec(ctx, adminDeletePromotion, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const adminDeletePromotionPurchases = `-- name: AdminDeletePromotionPurchases :exec
+DELETE FROM promotion_purchases WHERE promotion_id = $1
+`
+
+func (q *Queries) AdminDeletePromotionPurchases(ctx context.Context, promotionID int64) error {
+	_, err := q.db.Exec(ctx, adminDeletePromotionPurchases, promotionID)
+	return err
+}
+
+const adminDeletePromotionSkus = `-- name: AdminDeletePromotionSkus :exec
+DELETE FROM promotion_skus WHERE promotion_id = $1
+`
+
+func (q *Queries) AdminDeletePromotionSkus(ctx context.Context, promotionID int64) error {
+	_, err := q.db.Exec(ctx, adminDeletePromotionSkus, promotionID)
+	return err
 }
 
 const adminGetPromotion = `-- name: AdminGetPromotion :one

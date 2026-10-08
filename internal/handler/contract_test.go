@@ -1239,6 +1239,13 @@ var routes = []route{
 		HandlerFile:    "admin_promotion.go",
 		NoQueryParams:  "改哪一个在路径上，改什么在请求体里",
 	},
+	{
+		ContractPath:   "/admin/promotions/{promotion_id}",
+		ContractMethod: "delete",
+		HTTPMethod:     http.MethodDelete,
+		HandlerFile:    "admin_promotion.go",
+		NoQueryParams:  "删哪一个在路径上",
+	},
 	// 运费模板（00055）。列表读 query，单独一个文件（同 admin_coupon_list.go）。
 	{
 		ContractPath:   "/admin/freight-templates",

@@ -69,7 +69,9 @@ import (
 //     （A → C → A 的那条 C 消息照样可能晚到），而多发一条的代价只是一次幂等的整组设。
 //   - 下线（1 → 0）、只改名：定义没变，不发（「只在有意义的变化时发」）。下线后配额行照旧留着 —— 已售是历史，
 //     关单时要放得回。
-//   - 删除：活动没有删除接口（下线即终态之一），无路径可覆盖。
+//   - 删除（Delete）：硬删。必须先下线；订单行 / 新人礼发放 / 每人限购累计 / 库存已售任一非零 → 409
+//     promotion-in-use。日常收尾仍是下线；删除只清「配错草稿 / 演示脏数据」。删成功后尽力把库存侧
+//     配额行清掉（sold 已为 0，SetActivityQuotas 空名单即可）。
 //
 // 没接协调器的装配（QuotaSync 为 nil，只有部分测试这么装）退回改之前的直接调用，行为与改之前逐字相同。
 //
@@ -83,8 +85,11 @@ var (
 	// ErrPromotionNotFound：活动在本租户查不到。404。
 	ErrPromotionNotFound = errors.New("营销活动不存在")
 
-	// ErrPromotionOnline：活动上线中却想改规则。409 promotion-online。
+	// ErrPromotionOnline：活动上线中却想改规则或删除。409 promotion-online。
 	ErrPromotionOnline = errors.New("活动上线中，改规则请先下线")
+
+	// ErrPromotionInUse：活动已有成交 / 发放 / 已售，不能硬删。409 promotion-in-use。
+	ErrPromotionInUse = errors.New("活动已有成交或发放记录，不能删除")
 )
 
 const (
@@ -457,6 +462,57 @@ func (p PromotionPatch) touchesRules() bool {
 	return p.ThresholdUnit != nil || p.StackWithCoupon != nil || p.StartsAt != nil ||
 		p.EndsAt != nil || p.GiftTemplateID != nil || p.Rules.Tiers != nil ||
 		p.Rules.Scopes != nil || p.Rules.Skus != nil
+}
+
+// Delete 实现 DELETE /admin/promotions/{promotion_id}。见文件头「删除」那一段。
+func (s *AdminPromotionService) Delete(ctx context.Context, id int64) error {
+	if _, err := requireMerchantWide(ctx); err != nil {
+		return err
+	}
+	act, err := s.inv.ActivityStock(ctx, inventory.ActivityQuery{PromotionIDs: []int64{id}})
+	if err != nil {
+		return err
+	}
+	for k, a := range act {
+		if a.Sold > 0 {
+			return fmt.Errorf("%w: 活动已有已售（sku=%d sold=%d）", ErrPromotionInUse, k.SKUID, a.Sold)
+		}
+	}
+
+	err = s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+		status, err := tx.AdminLockPromotion(ctx, id)
+		if errors.Is(err, repository.ErrPromotionNotFound) {
+			return fmt.Errorf("%w: promotion_id=%d", ErrPromotionNotFound, id)
+		}
+		if err != nil {
+			return err
+		}
+		if status != 0 {
+			return fmt.Errorf("%w: 上线中的活动请先下线再删", ErrPromotionOnline)
+		}
+		inUse, err := tx.AdminPromotionInUse(ctx, id)
+		if err != nil {
+			return err
+		}
+		if inUse {
+			return fmt.Errorf("%w: 订单 / 新人礼 / 限购累计仍引用这场活动", ErrPromotionInUse)
+		}
+		if err := tx.AdminDeletePromotion(ctx, id); err != nil {
+			if errors.Is(err, repository.ErrPromotionNotFound) {
+				return fmt.Errorf("%w: promotion_id=%d", ErrPromotionNotFound, id)
+			}
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	// 尽力清库存侧配额行（sold 已为 0）。失败只记日志：core 行已没了，对账会报孤儿。
+	if err := s.inv.SetActivityQuotas(ctx, id, nil); err != nil {
+		slog.WarnContext(ctx, "删除活动后清配额失败（库存对账会报出孤儿行）", "promotion_id", id, "err", err)
+	}
+	return nil
 }
 
 // Update 实现 PATCH /admin/promotions/{promotion_id}。

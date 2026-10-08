@@ -34,7 +34,7 @@ func TestChannelPriceFromPriceStoreOnly(t *testing.T) {
 	}
 	waitPrice := func(store, want int64, what string) {
 		t.Helper()
-		deadline := time.Now().Add(20 * time.Second)
+		deadline := time.Now().Add(channelWaitWindow)
 		for {
 			if err := rig.svc.Drain(ctx); err != nil {
 				t.Fatal(err)

@@ -249,7 +249,7 @@ func TestOldQuoteIsRejectedAfterAPriceChange(t *testing.T) {
 
 	// 涨价 100 分，测试结束后改回去。
 	ctx := context.Background()
-	conn := admin(t)
+	conn := adminSession(t)
 	var old int64
 	if err := conn.QueryRow(ctx,
 		`UPDATE skus SET price_cents = price_cents + 100 WHERE id = $1

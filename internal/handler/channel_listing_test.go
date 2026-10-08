@@ -107,10 +107,52 @@ func newChannelRigOpts(t *testing.T, split bool, extra ...channel.Adapter) chann
 	return channelRig{svc: svc, fake: fake, local: local, n: n, beforeFinish: beforeFinish, tc: tc}
 }
 
+// channelWaitWindow 是「等渠道链路上的一件事发生」的轮询窗口，包内那十来条轮询共用它。
+//
+// 原先每一条都写死 20 秒，而**它在负载重的机器上必然不够**，原因不在被测代码里：
+// 渠道推送失败走 jobs 的退避重试，1 秒 × 2^attempts、封顶 `channelMaxBackoff`，
+// 而 `max_attempts = 5`（internal/service/channel_worker.go:28、
+// internal/repository/jobs.go:340）—— 把一个任务的五次尝试用满要先等
+// 2+4+8+16 = 30 秒，**比那个窗口还长**。六个包并发跑 test-db 时应用池那 3 秒
+// lock_timeout 会真被撞到（实测 55P03，日志里那句「库存服务数据库繁忙」），
+// 一次撞车就是一次退避，于是窗口里什么都不会发生。
+//
+// 更糟的是这一族测试**是有状态的链**：TestChannelZeroSpans 每个子测试断的都是
+// 挂零时段列表**累加**到某一步的样子，所以第一次超时之后，后面几条的期望值全部错位。
+// 2026-10-07 那份日志里五条 FAIL 只有第一条是事件，其余四条是它的回声，
+// 而每一条都长得像渠道逻辑坏了 —— 这就是「假红」最贵的那种形态：它不只是让人白跑一次，
+// 它把人往错误的代码上引。
+//
+// 取 90 秒 = 三轮完整退避（30 秒）再留两倍余量。判定没有变松：真坏了照样红，
+// 而且现在带着 jobs 那一行（见 channelJobDiag）。
+const channelWaitWindow = 90 * time.Second
+
+// channelJobDiag 把这家店渠道队列里还没了结的任务抄出来，附在超时失败的信息上。
+//
+// 为什么值得多这一次查询：一句「等了 90 秒渠道上停在 5，期望 0」分不清下面三种
+// —— 任务还在退避里排着（本机负载）、任务进死信了（真 bug）、任务成功但推的是别的值
+// （真 bug）。三种在日志上是同一句话，而只有后两种需要改代码。
+// jobs 这张表没有 RLS（00022 文件头），所以这里按 merchant_id 明筛。
+func channelJobDiag(t *testing.T, ctx context.Context) string {
+	t.Helper()
+	id, err := tenant.FromContext(ctx)
+	if err != nil {
+		return "（拿不到租户，队列状态没查）"
+	}
+	return adminQueryString(t, `
+		SELECT COALESCE(string_agg(
+			       queue || ' status=' || status || ' attempts=' || attempts || '/' || max_attempts
+			         || ' 还能等=' || to_char(greatest(run_after - now(), interval '0 second'), 'MI:SS') || 's'
+			         || coalesce(' 上次错误=' || left(last_error, 160), ''),
+			       ' ｜ '), '（渠道队列里没有待执行 / 执行中 / 死信的任务）')
+		  FROM jobs
+		 WHERE merchant_id = $1 AND queue LIKE 'channel.%' AND status IN (0, 1, 3)`, id)
+}
+
 // waitPushed 反复跑 worker，直到假渠道上 (store, sku) 的数是 want。
 func (r channelRig) waitPushed(t *testing.T, ctx context.Context, store, sku int64, want int32, what string) {
 	t.Helper()
-	deadline := time.Now().Add(20 * time.Second)
+	deadline := time.Now().Add(channelWaitWindow)
 	for {
 		if err := r.svc.Drain(ctx); err != nil {
 			t.Fatal(err)
@@ -120,7 +162,8 @@ func (r channelRig) waitPushed(t *testing.T, ctx context.Context, store, sku int
 		}
 		if time.Now().After(deadline) {
 			q, ok := r.fake.LastQty(store, sku)
-			t.Fatalf("%s：等了 20 秒假渠道上是 %d（推过=%v），期望 %d", what, q, ok, want)
+			t.Fatalf("%s：等了 %s 假渠道上是 %d（推过=%v），期望 %d\n渠道队列现状：%s",
+				what, channelWaitWindow, q, ok, want, channelJobDiag(t, ctx))
 		}
 		time.Sleep(50 * time.Millisecond)
 	}

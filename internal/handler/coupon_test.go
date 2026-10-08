@@ -465,7 +465,7 @@ func TestCouponPreviewAndCreateAgree(t *testing.T) {
 			pv.PayableCents, *pv.DiscountCents)
 	}
 	// 每行分摊也要与试算一致。
-	rows, err := admin(t).Query(context.Background(), `
+	rows, err := adminSession(t).Query(context.Background(), `
 		SELECT oi.sku_id, oi.discount_cents FROM order_items oi JOIN orders o ON o.id = oi.order_id
 		 WHERE o.order_no = $1`, order.OrderNo)
 	if err != nil {

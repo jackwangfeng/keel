@@ -29,7 +29,7 @@ type kwProduct struct {
 func addKeywordProducts(t *testing.T, fx searchFixture, merchant int64, items []kwProduct) map[string]int64 {
 	t.Helper()
 	ctx := context.Background()
-	conn := admin(t)
+	conn := adminSession(t)
 	store, cat := fx.StoreA, fx.CategoryDressA
 	if merchant == fx.MerchantB {
 		store = fx.StoreB

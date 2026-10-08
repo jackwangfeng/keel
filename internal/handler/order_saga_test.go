@@ -35,8 +35,7 @@ import (
 func seedDraftOrder(t *testing.T, merchantCode string, skuID int64, qty int32) (string, int64) {
 	t.Helper()
 	ctx := context.Background()
-	conn := admin(t)
-
+	conn := adminSession(t)
 	merchantID := merchantIDOf(t, merchantCode)
 	var userID int64
 	if err := conn.QueryRow(ctx,

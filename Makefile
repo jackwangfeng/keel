@@ -81,10 +81,11 @@ GOOSE_INVENTORY := GOOSE_DRIVER=postgres GOOSE_DBSTRING="$(INVENTORY_GOOSE_DBSTR
 
 .PHONY: help generate generate-go generate-ts generate-sql tools-versions version search-metrics \
 	contract-check schema-check admin-install admin-type-check admin-test admin-build flutter-get flutter-generate flutter-analyze flutter-test flutter-e2e-web flutter-build flutter-build-mp flutter-ios-install flutter-android-install \
-	sdk-smoke goose-bin migrate migrate-down migrate-status migrate-inventory migrate-inventory-status test-db \
+	sdk-smoke goose-bin migrate migrate-down migrate-status migrate-inventory migrate-inventory-status test-db test-db-ci \
 	test-engine category-eval dtmrs-deps build gates \
 	init doctor prod-up prod-down prod-logs prod-config release-up release-config \
-	multi-up multi-verify multi-down multi-wipe multi-logs multi-config
+	multi-up multi-verify multi-down multi-wipe multi-logs multi-config \
+	demo-up demo-down demo-verify demo-config
 
 # ── 生产部署 ─────────────────────────────────────────────────────────
 # 演示栈是裸 `docker compose up`（不带 -f），生产栈是下面这组 target。
@@ -96,7 +97,7 @@ GOOSE_INVENTORY := GOOSE_DRIVER=postgres GOOSE_DBSTRING="$(INVENTORY_GOOSE_DBSTR
 
 PROD_ENV        := --env-file $(ROOT)/.env.prod
 PROD_COMPOSE    := docker compose -p keel $(PROD_ENV) -f $(ROOT)/compose.yaml -f $(ROOT)/compose.prod.yaml
-# 走预构建镜像的部署用这个，额外需要 .env 里的 KEEL_IMAGE_TAG。
+# 走预构建镜像的部署用这个，额外需要 .env.prod 里的 KEEL_IMAGE_TAG。
 RELEASE_COMPOSE := docker compose -p keel $(PROD_ENV) -f $(ROOT)/compose.yaml -f $(ROOT)/compose.prod.yaml -f $(ROOT)/compose.release.yaml
 
 init:
@@ -159,15 +160,35 @@ multi-logs:
 multi-config:
 	@bash $(ROOT)/scripts/multi-up.sh --config
 
+# ── 演示栈（环境清单在 ~/.local/share/keel-eshop/demo-env.sh，不进仓库）──
+# 唯一入口是 scripts/demo-up.sh：叠哪些 compose、哪些变量全在那份 env 里。
+# 不要手写 docker compose -f … —— 漏一层就会静默丢掉地图 / S3 / 渠道。
+
+demo-up:
+	@bash $(ROOT)/scripts/demo-up.sh
+
+demo-down:
+	@bash $(ROOT)/scripts/demo-up.sh --down
+
+demo-verify:
+	@bash $(ROOT)/scripts/verify-demo.sh
+
+demo-config:
+	@bash $(ROOT)/scripts/demo-up.sh --config
+
 help:
-	@echo "make init           生成 .env（不覆盖已有的），三个密钥项自动填随机值"
-	@echo "make doctor         上线前自查：docker、.env 必填项、compose 解析、端口占用、存量数据坑"
-	@echo "make prod-up        按生产配置起栈（先自动跑 doctor）"
+	@echo "make init           生成 .env.prod（不覆盖已有的），三个密钥项自动填随机值"
+	@echo "make doctor         上线前自查：docker、.env.prod 必填项、compose 解析、端口占用、存量数据坑"
+	@echo "make prod-up        按生产配置起栈（先自动跑 doctor；读 .env.prod）"
 	@echo "make prod-down      停掉生产栈（数据卷保留）"
 	@echo "make prod-logs      跟 app 日志，首个管理员的 bootstrap token 在里面"
 	@echo "make prod-config    打印生产栈合成后的完整 compose 配置"
-	@echo "make release-up     同 prod-up，但用 .env 里 KEEL_IMAGE_TAG 指定的预构建镜像（快一个数量级）"
+	@echo "make release-up     同 prod-up，但用 .env.prod 里 KEEL_IMAGE_TAG 指定的预构建镜像（快一个数量级）"
 	@echo "make release-config  打印镜像版合成后的配置"
+	@echo "make demo-up        起演示栈（scripts/demo-up.sh；环境在 ~/.local/share/keel-eshop/demo-env.sh）"
+	@echo "make demo-down      停掉演示栈"
+	@echo "make demo-verify    跑演示栈验收（scripts/verify-demo.sh）"
+	@echo "make demo-config    打印演示栈合成后的完整 compose 配置"
 	@echo "make multi-up         起多商家形态那一栈（dev.sql 六家店 + 按 Host 解析），起完自动验收"
 	@echo "make multi-verify     只跑多商家形态验收（栈要已在跑）"
 	@echo "make multi-down       停掉多商家形态那一栈（数据卷保留）"
@@ -194,7 +215,8 @@ help:
 	@echo "make migrate-inventory-status 打印库存库各版本的应用状态"
 	@echo "make search-metrics 按店铺 × 策略统计搜索效果（PERIOD 默认 7 days，要管理员连接）"
 	@echo "make gates        本地一条命令跑到与 CI 那道闸门等价（工具版本 + 后台依赖 + check-all.sh + go build + go vet）"
-	@echo "make test-db      跑需要数据库的测试（强制不吃缓存，含替身那一组）"
+	@echo "make test-db      跑需要数据库的测试（默认 4 片；日常开发用这个）"
+	@echo "make test-db-ci   对齐 CI 分片密度（先要共享模板库，见 target 注释）"
 	@echo "make test-engine    对真的跑着的 infero 跑三条判据（要 KEEL_EMBED_ENDPOINT + 数据库；GPU 版，CPU 版目前太慢）"
 	@echo "make category-eval  类目推荐的离线评测（Top-1 / Top-3 与阈值表，要跑着的 infero + KEEL_EMBED_ENDPOINT）"
 	@echo "make dtmrs-deps     取回 dtmrs 并编出 libdtmrs.so（需要 Rust 1.88+）"
@@ -489,6 +511,27 @@ DB_MAX_CONNS ?= 6
 
 test-db: $(DTMRS_LIB) $(DTMRS_BIN) goose-bin
 	SHARDS=$(SHARDS) TEST_TIMEOUT=$(TEST_TIMEOUT) TEST_PKGS=$(TEST_PKGS) \
+		DB_MAX_CONNS=$(DB_MAX_CONNS) bash $(ROOT)/scripts/test_db_shards.sh
+
+# 对齐 CI go 道的分片密度：handler 12 + repository 4 + worker/tenant/db。
+# 前提是本机已有迁好的共享模板库（默认名 keel_test_ci_tmpl），否则每个包仍各自 migrate，
+# 墙钟不会接近 CI。建模板一次即可：
+#
+#   createdb keel_test_ci_tmpl && PGDATABASE=keel_test_ci_tmpl make migrate
+#
+# CI 容器还开了 fsync=off；本机日常库别这么干。模板建好后：
+#
+#   make test-db-ci
+#
+# KEEL_TEST_TEMPLATE / SHARDED / SHARDS 仍可覆盖。连接预算贴着 max_connections=100
+# 时不够用——要么抬集群上限，要么把 SHARDS 压回去。
+TEST_DB_CI_TEMPLATE ?= keel_test_ci_tmpl
+test-db-ci: $(DTMRS_LIB) $(DTMRS_BIN) goose-bin
+	@psql -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='$(TEST_DB_CI_TEMPLATE)'" | grep -q 1 \
+		|| { echo "找不到共享模板库 $(TEST_DB_CI_TEMPLATE)。先：createdb $(TEST_DB_CI_TEMPLATE) && PGDATABASE=$(TEST_DB_CI_TEMPLATE) make migrate"; exit 1; }
+	KEEL_TEST_TEMPLATE=$(TEST_DB_CI_TEMPLATE) \
+		SHARDED='internal/handler:12 internal/repository:4 internal/worker:2 internal/tenant:2 internal/db:6' \
+		SHARDS=12 TEST_TIMEOUT=$(TEST_TIMEOUT) TEST_PKGS=$(TEST_PKGS) \
 		DB_MAX_CONNS=$(DB_MAX_CONNS) bash $(ROOT)/scripts/test_db_shards.sh
 
 # 类目推荐的离线评测（商品批量导入的预检用它推荐类目）。

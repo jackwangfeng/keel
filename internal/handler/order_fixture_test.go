@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -56,13 +57,65 @@ func previewOrder(t *testing.T, host, body, bearer string) *httptest.ResponseRec
 }
 
 // admin 拿一条绕过 RLS 的连接，用来核对库里真实发生了什么。
+//
+// **一条测试一条连接，同一条测试里的每次调用复用同一条。**
+// 它以前是每次调用都 pgx.Connect，而那条连接挂在 t.Cleanup 上、要到测试结束才关：
+// 于是一条调用它 12 次的测试（coupon_test.go）就同时攥着 12 条连接。
+// 2026-10-08 逐 2 秒采样 pg_stat_activity 实测，一个 handler 进程的管理端连接
+// **峰值 39 条**，而被测代码自己那条业务池只有 4 条 —— 因为 KEEL_DB_MAX_CONNS
+// 只管得到 db.NewPool 建出来的池，管不到这里。这就是分片跑不动的真正约束：
+// 片数 × 39 直接顶穿测试集群的 max_connections=100，红成
+// `sorry, too many clients already (SQLSTATE 53300)`，而那句报错一个字都不指向分片。
+// 复用之后这一项是 1。
+//
+// 只给 Exec / QueryRow 用（单条语句，用完就干净）。要拿流式 Rows、或者要开事务的，
+// 用 adminSession —— 理由见它。
 func admin(t *testing.T) *pgx.Conn {
+	t.Helper()
+	adminMu.Lock()
+	defer adminMu.Unlock()
+	if conn, ok := adminShared[t]; ok {
+		return conn
+	}
+	conn := dialAdmin(t)
+	adminShared[t] = conn
+	t.Cleanup(func() {
+		adminMu.Lock()
+		delete(adminShared, t)
+		adminMu.Unlock()
+		conn.Close(context.Background())
+	})
+	return conn
+}
+
+// adminSession 新发一条绕过 RLS 的**独占会话**，测试结束时关掉。
+//
+// 与 admin 的区别就是它是新的一条，不和本测试的核对共用：
+//   - 拿 `Query` 的流式 Rows：pgx 明确写了 Conn 不是并发安全的、Rows 不关掉之前
+//     这条连接不能再用于别的语句（pgx v5.7.1 conn.go:65 与 :703）。共用一条连接，
+//     「读着 rows 的同时再核对一条」就变成运气问题。
+//   - 开事务锁行：这类测试要的是「另一个会话在事务里锁住这一行，同时让被测代码
+//     去等那把锁」（channel_review_test.go、agent_channel_proposal_test.go）。
+//     共用连接的话，Begin 会把这条测试后面所有核对语句一起卷进同一个未提交的事务 ——
+//     锁从来没真的放开过、断言读的是事务中间的现场，两个都是**看着绿其实是假的**。
+func adminSession(t *testing.T) *pgx.Conn {
+	t.Helper()
+	conn := dialAdmin(t)
+	t.Cleanup(func() { conn.Close(context.Background()) })
+	return conn
+}
+
+var (
+	adminMu     sync.Mutex
+	adminShared = map[*testing.T]*pgx.Conn{}
+)
+
+func dialAdmin(t *testing.T) *pgx.Conn {
 	t.Helper()
 	conn, err := pgx.Connect(context.Background(), db.AdminDSN())
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { conn.Close(context.Background()) })
 	return conn
 }
 
@@ -204,7 +257,7 @@ type invLog struct {
 // 那条断言照样绿。
 func inventoryLogsOf(t *testing.T, orderNo string) []invLog {
 	t.Helper()
-	rows, err := admin(t).Query(context.Background(), `
+	rows, err := adminSession(t).Query(context.Background(), `
 		SELECT sku_id, change_qty, biz_type, before_available, after_available
 		  FROM inventory_logs WHERE biz_id = $1 ORDER BY id`, orderNo)
 	if err != nil {

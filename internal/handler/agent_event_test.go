@@ -154,7 +154,7 @@ func TestAgentEventsProposalDecided(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[int64]string{rejected: "rejected", executed: "executed", expired: "expired"}
-	rows, err := admin(t).Query(context.Background(), `SELECT (payload->>'proposal_id')::bigint, payload->>'status', store_id
+	rows, err := adminSession(t).Query(context.Background(), `SELECT (payload->>'proposal_id')::bigint, payload->>'status', store_id
 		FROM agent_events WHERE merchant_id = $1 AND type = 'proposal_decided'`, cs.MerchantID)
 	if err != nil {
 		t.Fatal(err)

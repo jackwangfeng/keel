@@ -162,7 +162,7 @@ func TestShopifyCatalogFirstPullKeepsShopifyStock(t *testing.T) {
 
 	t.Run("keel_改库存_推到_Shopify", func(t *testing.T) {
 		adjust(t, r.local, r.cs.MerchantID, r.cs.NorthStore, a, -3)
-		deadline := time.Now().Add(20 * time.Second)
+		deadline := time.Now().Add(channelWaitWindow)
 		for {
 			r.drain(t)
 			if q, _ := r.sim.Available(r.sim.InventoryItem(vs[0]), r.loc); q == 4 {
@@ -390,7 +390,7 @@ func TestShopifyStoreMappedAfterFirstPull(t *testing.T) {
 		t.Fatalf("映射门店之后 keel 库存 = %d，期望从 Shopify 补成 6", r.stock(t, sku))
 	}
 	adjust(t, r.local, r.cs.MerchantID, r.cs.NorthStore, sku, -1)
-	deadline := time.Now().Add(20 * time.Second)
+	deadline := time.Now().Add(channelWaitWindow)
 	for {
 		r.drain(t)
 		if q, _ := r.sim.Available(r.sim.InventoryItem(v), r.loc); q == 5 {

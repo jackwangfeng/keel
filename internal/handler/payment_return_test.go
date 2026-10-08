@@ -28,7 +28,7 @@ type returnRow struct {
 // returnsOf 绕过 RLS 读一笔订单的多收款退回单。
 func returnsOf(t *testing.T, orderNo string) []returnRow {
 	t.Helper()
-	rows, err := admin(t).Query(context.Background(), `
+	rows, err := adminSession(t).Query(context.Background(), `
 		SELECT r.reason, r.status, r.amount_cents, r.channel_refund_id IS NOT NULL
 		  FROM payment_returns r JOIN orders o ON o.id = r.order_id
 		 WHERE o.order_no = $1 ORDER BY r.id`, orderNo)

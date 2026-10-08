@@ -597,7 +597,7 @@ export interface paths {
         };
         /**
          * 商家列表（仅平台级）
-         * @description 平台级操作员看见的全部商家，**含停用（`status = 2`）与待审核（`status = 3`）的**。
+         * @description 平台级操作员看见的全部商家，**含停用（`status = 2`）的**。
          *     不含停用的话，平台就没有任何入口把一家停掉的店启用回来。
          *     软删的不返回 —— 一期没有恢复接口。
          *
@@ -806,7 +806,7 @@ export interface paths {
         };
         /**
          * 商家详情（仅平台级）
-         * @description 含停用与待审核的；软删的 404。商家级员工 403。
+         * @description 含停用的；软删的 404。商家级员工 403。
          */
         get: {
             parameters: {
@@ -889,8 +889,9 @@ export interface paths {
          *       （租户解析只认 `status = 1`，解析结果最多缓存 30 秒，所以生效最多延迟半分钟）。
          *       平台管理员仍然能用 `X-Keel-Merchant` 切进去 —— 要进得去才修得好、再启用。
          *     · **启用（`status = 1`）**：反过来。
-         *     · 不能把商家改成 `3 待审核`：审核流程本轮不存在，给它一条写入路径只会造出
-         *       一个谁也推不动的状态。
+         *     · `status` 只有 `1` 与 `2` 两个可传值。没有「送审」这一步：审核流程本轮不存在，
+         *       而 `3` 从来不是这条接口能写出来的状态（详见 `Merchant.status` 那一段 ——
+         *       它连库里都进不去）。
          *
          *     **单商家部署里停用默认商家会被拒绝**（409 `single-merchant-mode`）：
          *     那是这套部署唯一一家店，停掉之后启动自检过不了，下次重启就起不来。
@@ -12241,7 +12242,99 @@ export interface paths {
         };
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * 删除营销活动
+         * @description **硬删**一场活动及其阶梯 / 范围 / 活动商品。权限与列表同一行（全店范围）。
+         *
+         *     只允许删**下线**且**从未进过成交 / 发放路径**的活动：
+         *
+         *     - 上线中 → 409 `promotion-online`（先下线）
+         *     - 有订单行引用（`order_items.price_promotion_id`）、新人礼已发放、每人限购累计 > 0、
+         *       或库存服务里该活动已售 > 0 → 409 `promotion-in-use`
+         *       （订单快照与已售是历史，不能为了清列表拆掉）
+         *
+         *     下线即终态之一仍然成立：多数运营路径只下线不删。删除是给「配错草稿 / 演示脏数据」
+         *     的出口，不是日常收尾动作。
+         */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /**
+                     * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+                     *
+                     *     它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+                     *     而例外成立的前提是平台级鉴权：
+                     *
+                     *     · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+                     *       读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+                     *       行级安全落在这家店上。
+                     *     · **商家级员工带了这个头：403**
+                     *       （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+                     *       静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+                     *     · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+                     *       **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+                     *       实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+                     *       请求其余部分指名的东西不存在是 422。
+                     *     · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+                     *       买家侧对它照旧 404。
+                     *     · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+                     *       （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+                     *
+                     *     后台每一条挂后台会话的操作都声明了它（机械核对：
+                     *     `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+                     */
+                    "X-Keel-Merchant"?: components["parameters"]["KeelMerchant"];
+                };
+                path: {
+                    /** @description `promotions.id`。查不到（含属于别家店）即 404。 */
+                    promotion_id: components["parameters"]["PromotionId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description 已删除（无响应体） */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description 不是全店范围的员工。 */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /** @description 活动不存在或不属于当前租户。 */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /**
+                 * @description 上线中 —— `https://keel.dev/problems/promotion-online`；
+                 *     或已有成交 / 发放 / 已售 —— `https://keel.dev/problems/promotion-in-use`。
+                 */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                503: components["responses"]["InventoryUnavailable"];
+                default: components["responses"]["Problem"];
+            };
+        };
         options?: never;
         head?: never;
         /**
@@ -21084,10 +21177,22 @@ export interface components {
             code: string;
             name: string;
             /**
-             * @description 1 正常 2 停用 3 待审核
+             * @description 1 正常、2 停用。**没有 3 待审核。**
+             *
+             *     那个值在库里从来不可达，不是「还没实现」：`merchants` 那一行的 status 只有
+             *     seed 写得动（应用角色在 merchants 上没有 UPDATE，00005 收权 / 00021 只还回
+             *     INSERT），而当前状态是从 `merchant_revisions` 派生的，那张表的 CHECK 只收 1 和 2
+             *     （00024 文件头原话：「3 待审核没有写入路径」），`PATCH` 也在服务层拒 3。
+             *     于是契约里挂着 3 的实际后果是：**下一个读契约的人会照它写界面**——
+             *     本次就抓到一处（后台商家切换器里那条「不是 1 就显示待审核」的分支，
+             *     从写下来那天一次都没亮过）。
+             *
+             *     真要做审核流程时要一起动的不止这一行：revision 的 CHECK、开店的初值
+             *     （现在是开业即生效）、以及「谁能把它从 3 推到 1」那条接口。到那天再加回枚举，
+             *     对客户端只是多一个取值；而现在删掉它不破坏任何数据 —— 数据里根本没有 3。
              * @enum {integer}
              */
-            status: 1 | 2 | 3;
+            status: 1 | 2;
             /**
              * @description 自有域名（`merchant_domains`，00340），解析器的第二个匹配分支。
              *     为空不等于没有入口：`KEEL_BASE_DOMAIN` 配着的话，

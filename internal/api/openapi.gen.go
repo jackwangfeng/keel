@@ -1126,7 +1126,6 @@ func (e LoginResponseTokenType) Valid() bool {
 const (
 	MerchantStatusN1 MerchantStatus = 1
 	MerchantStatusN2 MerchantStatus = 2
-	MerchantStatusN3 MerchantStatus = 3
 )
 
 // Valid indicates whether the value is a known member of the MerchantStatus enum.
@@ -1135,8 +1134,6 @@ func (e MerchantStatus) Valid() bool {
 	case MerchantStatusN1:
 		return true
 	case MerchantStatusN2:
-		return true
-	case MerchantStatusN3:
 		return true
 	default:
 		return false
@@ -1147,7 +1144,6 @@ func (e MerchantStatus) Valid() bool {
 const (
 	MerchantOpenedStatusN1 MerchantOpenedStatus = 1
 	MerchantOpenedStatusN2 MerchantOpenedStatus = 2
-	MerchantOpenedStatusN3 MerchantOpenedStatus = 3
 )
 
 // Valid indicates whether the value is a known member of the MerchantOpenedStatus enum.
@@ -1156,8 +1152,6 @@ func (e MerchantOpenedStatus) Valid() bool {
 	case MerchantOpenedStatusN1:
 		return true
 	case MerchantOpenedStatusN2:
-		return true
-	case MerchantOpenedStatusN3:
 		return true
 	default:
 		return false
@@ -5332,14 +5326,38 @@ type Merchant struct {
 	Id     int64   `json:"id"`
 	Name   string  `json:"name"`
 
-	// Status 1 正常 2 停用 3 待审核
+	// Status 1 正常、2 停用。**没有 3 待审核。**
+	//
+	// 那个值在库里从来不可达，不是「还没实现」：`merchants` 那一行的 status 只有
+	// seed 写得动（应用角色在 merchants 上没有 UPDATE，00005 收权 / 00021 只还回
+	// INSERT），而当前状态是从 `merchant_revisions` 派生的，那张表的 CHECK 只收 1 和 2
+	// （00024 文件头原话：「3 待审核没有写入路径」），`PATCH` 也在服务层拒 3。
+	// 于是契约里挂着 3 的实际后果是：**下一个读契约的人会照它写界面**——
+	// 本次就抓到一处（后台商家切换器里那条「不是 1 就显示待审核」的分支，
+	// 从写下来那天一次都没亮过）。
+	//
+	// 真要做审核流程时要一起动的不止这一行：revision 的 CHECK、开店的初值
+	// （现在是开业即生效）、以及「谁能把它从 3 推到 1」那条接口。到那天再加回枚举，
+	// 对客户端只是多一个取值；而现在删掉它不破坏任何数据 —— 数据里根本没有 3。
 	Status MerchantStatus `json:"status"`
 
 	// UpdatedAt 最近一次改名或改状态的时间（最新一行 `merchant_revisions` 的时间）。从没改过时缺席。
 	UpdatedAt *time.Time `json:"updated_at,omitempty"`
 }
 
-// MerchantStatus 1 正常 2 停用 3 待审核
+// MerchantStatus 1 正常、2 停用。**没有 3 待审核。**
+//
+// 那个值在库里从来不可达，不是「还没实现」：`merchants` 那一行的 status 只有
+// seed 写得动（应用角色在 merchants 上没有 UPDATE，00005 收权 / 00021 只还回
+// INSERT），而当前状态是从 `merchant_revisions` 派生的，那张表的 CHECK 只收 1 和 2
+// （00024 文件头原话：「3 待审核没有写入路径」），`PATCH` 也在服务层拒 3。
+// 于是契约里挂着 3 的实际后果是：**下一个读契约的人会照它写界面**——
+// 本次就抓到一处（后台商家切换器里那条「不是 1 就显示待审核」的分支，
+// 从写下来那天一次都没亮过）。
+//
+// 真要做审核流程时要一起动的不止这一行：revision 的 CHECK、开店的初值
+// （现在是开业即生效）、以及「谁能把它从 3 推到 1」那条接口。到那天再加回枚举，
+// 对客户端只是多一个取值；而现在删掉它不破坏任何数据 —— 数据里根本没有 3。
 type MerchantStatus int
 
 // MerchantCreateRequest defines model for MerchantCreateRequest.
@@ -5405,14 +5423,38 @@ type MerchantOpened struct {
 	Id     int64   `json:"id"`
 	Name   string  `json:"name"`
 
-	// Status 1 正常 2 停用 3 待审核
+	// Status 1 正常、2 停用。**没有 3 待审核。**
+	//
+	// 那个值在库里从来不可达，不是「还没实现」：`merchants` 那一行的 status 只有
+	// seed 写得动（应用角色在 merchants 上没有 UPDATE，00005 收权 / 00021 只还回
+	// INSERT），而当前状态是从 `merchant_revisions` 派生的，那张表的 CHECK 只收 1 和 2
+	// （00024 文件头原话：「3 待审核没有写入路径」），`PATCH` 也在服务层拒 3。
+	// 于是契约里挂着 3 的实际后果是：**下一个读契约的人会照它写界面**——
+	// 本次就抓到一处（后台商家切换器里那条「不是 1 就显示待审核」的分支，
+	// 从写下来那天一次都没亮过）。
+	//
+	// 真要做审核流程时要一起动的不止这一行：revision 的 CHECK、开店的初值
+	// （现在是开业即生效）、以及「谁能把它从 3 推到 1」那条接口。到那天再加回枚举，
+	// 对客户端只是多一个取值；而现在删掉它不破坏任何数据 —— 数据里根本没有 3。
 	Status MerchantOpenedStatus `json:"status"`
 
 	// UpdatedAt 最近一次改名或改状态的时间（最新一行 `merchant_revisions` 的时间）。从没改过时缺席。
 	UpdatedAt *time.Time `json:"updated_at,omitempty"`
 }
 
-// MerchantOpenedStatus 1 正常 2 停用 3 待审核
+// MerchantOpenedStatus 1 正常、2 停用。**没有 3 待审核。**
+//
+// 那个值在库里从来不可达，不是「还没实现」：`merchants` 那一行的 status 只有
+// seed 写得动（应用角色在 merchants 上没有 UPDATE，00005 收权 / 00021 只还回
+// INSERT），而当前状态是从 `merchant_revisions` 派生的，那张表的 CHECK 只收 1 和 2
+// （00024 文件头原话：「3 待审核没有写入路径」），`PATCH` 也在服务层拒 3。
+// 于是契约里挂着 3 的实际后果是：**下一个读契约的人会照它写界面**——
+// 本次就抓到一处（后台商家切换器里那条「不是 1 就显示待审核」的分支，
+// 从写下来那天一次都没亮过）。
+//
+// 真要做审核流程时要一起动的不止这一行：revision 的 CHECK、开店的初值
+// （现在是开业即生效）、以及「谁能把它从 3 推到 1」那条接口。到那天再加回枚举，
+// 对客户端只是多一个取值；而现在删掉它不破坏任何数据 —— 数据里根本没有 3。
 type MerchantOpenedStatus int
 
 // MerchantUpdateRequest defines model for MerchantUpdateRequest.
@@ -11157,6 +11199,33 @@ type PostAdminPromotionsParams struct {
 	// · 首次执行失败（存档为失败态）时同样回放该失败响应；
 	//   确需重试的场景请换一个新 key
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// DeleteAdminPromotionsPromotionIdParams defines parameters for DeleteAdminPromotionsPromotionId.
+type DeleteAdminPromotionsPromotionIdParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
 }
 
 // GetAdminPromotionsPromotionIdParams defines parameters for GetAdminPromotionsPromotionId.

@@ -45,6 +45,13 @@ are in the Added entry below. The core database lands on `00340`.
 
 ### Added
 
+- **`DELETE /admin/promotions/{id}`** (no migration): hard-delete an offline promotion that has never been used in
+  an order line, gift grant, per-user purchase counter, or inventory `sold > 0`. Online → 409 `promotion-online`;
+  history → 409 `promotion-in-use`. Admin list shows Delete only when offline. Day-to-day still ends with offline.
+- **Merchant custom-domain UI** on `MerchantListView` (register / clear via the existing PATCH `domain`).
+- **Makefile**: help text says `.env.prod` (not `.env`); `make demo-up` / `demo-down` / `demo-verify` / `demo-config`;
+  `make test-db-ci` for CI-density shards against a shared template DB.
+
 - **The multi-merchant deployment form now has an entry point and end-to-end evidence.** `compose.multi.yaml` has been
   in the repository since M1, but nothing ever booted it: the e2e job only ran the single-merchant default, and both
   the demo and production stacks set `KEEL_DEFAULT_MERCHANT`, so the whole tenant-management path — open a shop, resolve

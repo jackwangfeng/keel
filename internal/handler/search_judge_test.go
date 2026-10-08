@@ -104,7 +104,7 @@ func TestSearchJudgeServiceJudgesHotQueriesOnce(t *testing.T) {
 	}
 	rows := func() []row {
 		t.Helper()
-		rs, err := admin(t).Query(context.Background(),
+		rs, err := adminSession(t).Query(context.Background(),
 			`SELECT query, product_id, relevance FROM search_relevance_judgments WHERE merchant_id = $1 ORDER BY product_id`, fx.MerchantA)
 		if err != nil {
 			t.Fatal(err)

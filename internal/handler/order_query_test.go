@@ -349,7 +349,7 @@ func TestDraftOrdersNeverShowUp(t *testing.T) {
 	no := "DRAFT-" + uniqueKey()
 
 	ctx := context.Background()
-	conn := admin(t)
+	conn := adminSession(t)
 	// store_id / region_id / store_snapshot 三列都是 NOT NULL（00020），
 	// 所以这一行靶子也得挂在一家真实的门店上 —— 取种子里那家默认店。
 	// 快照按 00020 回填段同一个形状拼：只放展示字段，不放 id。

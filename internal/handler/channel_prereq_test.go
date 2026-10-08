@@ -56,13 +56,13 @@ func TestChannelAdapterErrorsAreRedacted(t *testing.T) {
 	rig.fake.FailNextWith(1, errors.New("平台说 client_secret="+secret+" 不对"))
 	adjust(t, rig.local, cs.MerchantID, cs.NorthStore, cs.DressSKU, -1)
 	// stock.changed 经协调器异步到达：等那一次编排的失败真被用掉。
-	deadline := time.Now().Add(20 * time.Second)
+	deadline := time.Now().Add(channelWaitWindow)
 	for rig.fake.FailuresLeft() > 0 {
 		if err := rig.svc.Drain(ctx); err != nil {
 			t.Fatal(err)
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("等了 20 秒编排的失败还没被用掉")
+			t.Fatalf("等了 %s 编排的失败还没被用掉\n渠道队列现状：%s", channelWaitWindow, channelJobDiag(t, ctx))
 		}
 		time.Sleep(20 * time.Millisecond)
 	}

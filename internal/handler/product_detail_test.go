@@ -50,7 +50,7 @@ func productIDOf(t *testing.T, merchantCode, title string) int64 {
 // 而它必须以「在售、可售 0 件」的形式出现在两边，否则这条对照本身就是错的。
 func skuStockOf(t *testing.T, productID int64) map[string]int32 {
 	t.Helper()
-	rows, err := admin(t).Query(context.Background(), `
+	rows, err := adminSession(t).Query(context.Background(), `
 		SELECT s.sku_code, COALESCE(i.available_qty, 0)
 		  FROM skus s LEFT JOIN inventories i ON i.sku_id = s.id
 		 WHERE s.product_id = $1 AND s.status = 1`, productID)
@@ -142,8 +142,7 @@ func TestProductDetailCarriesEverySellableSKUWithItsRealStock(t *testing.T) {
 func TestProductDetailSaysOutOfStockWhenEverySKUIsZero(t *testing.T) {
 	id := productIDOf(t, "shop-b", "shop-b 的商品 1")
 	ctx := context.Background()
-	conn := admin(t)
-
+	conn := adminSession(t)
 	var saved []struct {
 		SKUID int64
 		Qty   int32

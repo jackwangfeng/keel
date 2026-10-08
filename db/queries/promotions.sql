@@ -268,6 +268,32 @@ DELETE FROM promotion_skus
  WHERE promotion_id = sqlc.arg(promotion_id)
    AND sku_id <> ALL(sqlc.arg(keep_sku_ids)::bigint[]);
 
+-- ---------------------------------------------------------------------------
+-- 后台删除活动（硬删）：仅下线且从未进过成交 / 发放路径的草稿可删。
+-- ---------------------------------------------------------------------------
+
+-- name: AdminCountPromotionOrderItems :one
+-- 订单行快照了 price_promotion_id；有引用就不能删（FK 也会挡，这里先给出明确 409）。
+-- 列可空，sqlc 会把裸 $1 推成 *int64；用命名参数钉成 int64。
+SELECT count(*)::bigint FROM order_items WHERE price_promotion_id = sqlc.arg(promotion_id);
+
+-- name: AdminCountPromotionGiftGrants :one
+SELECT count(*)::bigint FROM promotion_gift_grants WHERE promotion_id = $1;
+
+-- name: AdminCountPromotionPurchases :one
+-- qty > 0 才算「用过」；全 0 的残留行可以随活动一起清掉。
+SELECT count(*)::bigint FROM promotion_purchases WHERE promotion_id = $1 AND qty > 0;
+
+-- name: AdminDeletePromotionSkus :exec
+DELETE FROM promotion_skus WHERE promotion_id = $1;
+
+-- name: AdminDeletePromotionPurchases :exec
+DELETE FROM promotion_purchases WHERE promotion_id = $1;
+
+-- name: AdminDeletePromotion :execrows
+-- status = 0 是第二道：上线中的行锁住之后也不会被这条删掉。
+DELETE FROM promotions WHERE id = $1 AND status = 0;
+
 -- name: LiveSkuIDs :many
 -- 活动商品的归属校验：在本租户存在且未软删的 SKU（RLS 之下，别家的与不存在的同形）。
 SELECT id FROM skus WHERE id = ANY(sqlc.arg(ids)::bigint[]) AND deleted_at IS NULL;

@@ -78,7 +78,7 @@ func TestChannelPushDoesNotLoseChangesDuringPush(t *testing.T) {
 	}
 	adjust(t, rig.local, cs.MerchantID, cs.NorthStore, cs.DressSKU, -1)
 	// 期望值每轮现取：推送进行中那次变化发生在 waitPushed 开始之后。
-	deadline := time.Now().Add(20 * time.Second)
+	deadline := time.Now().Add(channelWaitWindow)
 	for {
 		if err := rig.svc.Drain(ctx); err != nil {
 			t.Fatal(err)
@@ -105,7 +105,7 @@ func TestChannelMerchantSyncIsSerializedPerMerchant(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	conn := admin(t)
+	conn := adminSession(t)
 	tx, err := conn.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -220,7 +220,7 @@ func TestChannelPriceIsPushedAfterConflictWithEqualQty(t *testing.T) {
 	}
 	base := adminQueryInt64(t, `SELECT price_cents FROM sku_prices_by_store WHERE store_id = $1 AND sku_id = $2`, cs.NorthStore, cs.DressSKU)
 	want := channel.PublishedPrice(base, channel.PriceRule{MarkupBP: 1000})
-	deadline := time.Now().Add(20 * time.Second)
+	deadline := time.Now().Add(channelWaitWindow)
 	for {
 		if err := rig.svc.Drain(ctx); err != nil {
 			t.Fatal(err)

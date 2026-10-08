@@ -177,6 +177,12 @@ type PromotionTx interface {
 	AdminLockPromotion(ctx context.Context, id int64) (int16, error)
 	AdminCreatePromotion(ctx context.Context, f PromotionFields) (int64, error)
 	AdminUpdatePromotion(ctx context.Context, id int64, f PromotionFields) error
+	// AdminPromotionInUse 是删除前的历史占用：订单行 / 新人礼发放 / 每人限购累计 > 0。
+	// 任一为真则不能硬删（409 promotion-in-use）；活动已售在库存服务一侧另查。
+	AdminPromotionInUse(ctx context.Context, id int64) (bool, error)
+	// AdminDeletePromotion 硬删活动及其子表（阶梯 / 范围 / 活动商品 / 零累计的限购行）。
+	// 调用方须已锁行且确认 status=0、无历史占用；本方法再以 status=0 作第二道。
+	AdminDeletePromotion(ctx context.Context, id int64) error
 	ReplacePromotionTiers(ctx context.Context, promotionID int64, tiers []PromotionTier) error
 	ReplacePromotionScopes(ctx context.Context, promotionID int64, scopes []CouponScopeInput) error
 	// ReplacePromotionSkus 整组替换活动商品：逐条 upsert 价格配置、限购与配额定义，删掉不在名单里的。
@@ -490,6 +496,52 @@ func (t tenantTx) AdminUpdatePromotion(ctx context.Context, id int64, f Promotio
 	})
 	if err != nil {
 		return promotionViolation(err)
+	}
+	if n != 1 {
+		return fmt.Errorf("promotion %d: %w", id, ErrPromotionNotFound)
+	}
+	return nil
+}
+
+func (t tenantTx) AdminPromotionInUse(ctx context.Context, id int64) (bool, error) {
+	// price_promotion_id 可空，sqlc 把比较参数推成 *int64。
+	n, err := t.q.AdminCountPromotionOrderItems(ctx, &id)
+	if err != nil {
+		return false, err
+	}
+	if n > 0 {
+		return true, nil
+	}
+	n, err = t.q.AdminCountPromotionGiftGrants(ctx, id)
+	if err != nil {
+		return false, err
+	}
+	if n > 0 {
+		return true, nil
+	}
+	n, err = t.q.AdminCountPromotionPurchases(ctx, id)
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+func (t tenantTx) AdminDeletePromotion(ctx context.Context, id int64) error {
+	if err := t.q.DeletePromotionTiers(ctx, id); err != nil {
+		return err
+	}
+	if err := t.q.DeletePromotionScopes(ctx, id); err != nil {
+		return err
+	}
+	if err := t.q.AdminDeletePromotionSkus(ctx, id); err != nil {
+		return err
+	}
+	if err := t.q.AdminDeletePromotionPurchases(ctx, id); err != nil {
+		return err
+	}
+	n, err := t.q.AdminDeletePromotion(ctx, id)
+	if err != nil {
+		return err
 	}
 	if n != 1 {
 		return fmt.Errorf("promotion %d: %w", id, ErrPromotionNotFound)

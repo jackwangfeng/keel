@@ -585,7 +585,7 @@ func TestStateRollbackLeavesNoNotificationBehind(t *testing.T) {
 // dropProbes 摘掉 table 上本测试挂的全部探针触发器。
 func dropProbes(t *testing.T, table string) {
 	t.Helper()
-	rows, err := admin(t).Query(context.Background(), `
+	rows, err := adminSession(t).Query(context.Background(), `
 		SELECT tgname FROM pg_trigger WHERE tgrelid = $1::regclass AND tgname LIKE 'notify_probe_%'`, table)
 	if err != nil {
 		t.Fatal(err)
@@ -651,7 +651,7 @@ type deliveryRow struct {
 
 func deliveriesOf(t *testing.T, notificationID int64) []deliveryRow {
 	t.Helper()
-	rows, err := admin(t).Query(context.Background(), `
+	rows, err := adminSession(t).Query(context.Background(), `
 		SELECT channel, status, attempt FROM notification_deliveries
 		 WHERE notification_id = $1 ORDER BY id`, notificationID)
 	if err != nil {

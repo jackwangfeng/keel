@@ -1,8 +1,15 @@
-# keel 进度（2026-10-07，多商家形态的入口、验收脚本、公网验证栈、自有域名登记与一次性凭据的交付）
+# keel 进度（2026-10-08，工具缺口完善：DELETE 促销 / 域名 UI / Makefile）
 
 新会话先读这份，再看 CLAUDE.md 的 token 纪律。
 
 ## 当前状态
+
+- **工具缺口完善（2026-10-08，无迁移，未提交）**：按「先补工具缺口」排的四项已落地，不是新功能。
+  - **`DELETE /admin/promotions/{id}`**：OpenAPI + service/handler/repo + 列表「删除」按钮。规则：必须下线；订单行 / 新人礼发放 / 限购累计 > 0 / 库存已售 > 0 → 409 `promotion-in-use`；上线中 → 409 `promotion-online`。日常收尾仍是下线。测：`TestAdminPromotionRulesAndLifecycle`（草稿 204、再删 404、上线 409、卖过 409）+ permission/contract 登记。
+  - **商家自有域名 UI**：`MerchantListView`「域名」对话框，走既有 PATCH `domain`（空串 → `null` 摘掉）。手册去掉「只能 curl」。
+  - **Makefile**：help 口径改为 `.env.prod`；`make demo-up/down/verify/config`；`make test-db-ci`（要对齐 CI 分片需先有 `keel_test_ci_tmpl`）。
+  - 相关：`docs/电商系统-OpenAPI.yaml`、`db/queries/promotions.sql`、`internal/{service,handler,repository,problem,app}`、`web/admin/.../{PromotionListView,MerchantListView}.vue`、`CHANGELOG`、数据模型 §7 后台规则。
+  - **未做（仍可后续）**：后台 Playwright e2e、CI 加 `test-engine`、演示栈 shop-a 脏促销可现删。
 
 - **C：一次性 token 的交付闭环打通（2026-10-07，无迁移，未提交）**：三条缺口里最后那条 ——「一次性凭据只出现在容器日志里」。开工前的计划写的是「把『重签登录 token』接到员工列表那一行 + 开店响应里回 `admin_staff_id`」，**读到代码之后这条计划改了一次**，改的理由值得记：
   - **重签那条接口与后台那个弹窗本来就有**（`POST /admin/staff/{id}/login-token` + `StaffListView.vue` 的「重签登录 token」弹窗，回明文、只显示一次）。所以员工这半边缺的只是「建完之后没人替你点那个按钮」：`submitCreate` 现在建好之后**紧接着调一次重签**并把 token 弹出来，界面上加员工这件事从此不需要日志。这里**没有**改契约（201 的 schema 还是 `Staff`，token 不进那条响应体）—— 契约里那条的取舍是有名字的：把明文回给刚建这个人的人，等于让任何一个管理员能冒充他刚建的那个人，而重签那条的判据本来就是「能改他才能签他」，权限按构造不高于签发人。顺带一个反直觉但对的副作用：重签会**作废**建号时那一串 —— 那一串本来就没人拿到，留着一扇没人知道的活门才是坏事。
@@ -15,7 +22,7 @@
   - `scripts/multi-verify.sh` 97 → **102 项**：201 带 `admin_staff_id` / 带 `admin_login_token`、重放里没有凭据、拿 201 那一串换到商家级会话、第二次换 401、**而这串明文在 `docker logs app` 里搜不到**（最后那条是反向靶子：谁把凭据塞回日志这里就红）。原来那段「从日志里 grep 出 token 再来用」删掉了 —— 它是在替一条不该存在的路打证据。实测：**102 通过 / 0 失败**，同样跑在一份空栈上（`COMPOSE_PROJECT_NAME=keelmulti3`，端口 28197/28198，**带 `--build`**：不重构建镜像跑的是旧二进制，那 102 项里新加的五条一条都不会对），跑完 `--wipe` 收掉。
   - 文档：契约四处口径（`POST /admin/staff` 那句「给该邮箱发登录链接」本来就是假的，改成「签了但不发，明文不在这条响应体里，去重签那条取」；`StaffLoginToken.token` 删掉「也进进程日志」；bootstrap 那段补「它是唯一一个还进日志的一次性凭据」）+ 数据模型 §14 那张流程图（②③④⑤ 四条的交付方式）+ 后台使用手册（登录那张表、员工那一节、开店那一节）+ 部署与配置（清单第 6 条 + 「之后加的人不再需要看日志」+ 102 项与新的五句判据）+ CHANGELOG 的 Added。
   - **仍然没有做的**：不接 SMTP，`POST /admin/auth/email-link` 保持诚实的 501（这条是决定，不是欠账）；`admin_login_token` 是**一次性的 15 分钟**，界面把它显示一次就清掉，没有做「复制按钮 + 遮罩」那种更讲究的形态；后台**开店与加员工这两个弹窗**都还没有 e2e 覆盖（CI 里那台 e2e 跑的是接口，界面那一层仍旧得靠人点）。
-  - 那三条缺口的进度：**D（按 id 的租户隔离断言）✅、B（自有域名登记）✅、C（一次性 token 的交付闭环）✅ 就是这一条。** B 那条遗留（后台界面没有 domain 那一格）与 shop-a 上删不掉的促销仍旧在。
+  - 那三条缺口的进度：**D（按 id 的租户隔离断言）✅、B（自有域名登记）✅、C（一次性 token 的交付闭环）✅。** B 的 UI 遗留与「促销删不掉」已在上面「工具缺口完善」补上。
 
 - **B：自有域名登记接口打通（2026-10-07，迁移 00340，未提交）**：缺口审查里排第二的那条 ——「后台没有任何接口能设置商家的自有域名」。查下来的结论是**这条接口不改表结构就不存在**：域名唯一的真相在 `shop_settings.domain`，而 `keel_app` 对那张表**只有 SELECT**（00005 收权时实测的第一条越权就是「租户 1 的上下文里改租户 2 的 domain」），加个 handler 会在运行期 42501，而 `TestAppRoleGrantSurface` 照样全绿 —— 它只比权限面，不知道应用代码想干什么。四条路里三条否决（理由全写在 00340 的文件头，用的是同一条判据「要紧的规矩不能只靠应用代码记得」）：① 给 `shop_settings` 开 UPDATE = 连带交出 `extra`（支付回调验签密钥），而那张表**没有 RLS**（解析要在 `SET LOCAL` 之前读它），后面一道防线都没有；② 列级 GRANT 挡得住 extra，挡不住跨租户改 domain，因为谓词只剩应用层的 `WHERE merchant_id = ?`；③ 挂到 `merchant_revisions` 最省（闸门与「当前态 = 最新一行」那套共用 SQL 全现成），但它把**全表 UNIQUE** 从数据库手里拿走 —— 两家店绑同一个域名是真的互相劫持，日志表里那个「谁当前在用」是派生值，普通唯一索引表达不了，只能退化成「每个写的人都要记得抢同一把 advisory lock」，顺带把解析器 byDomain 从一次唯一索引等值命中变成每店取最新一行再比（那是每个未命中缓存的请求都走的路）。**采用④：专管域名的当前态表 `merchant_domains`**，一家店一行（**没有这一行就是没登记**，读侧一律 LEFT JOIN）、domain 全表 UNIQUE、`keel_app` 只有 SELECT+INSERT+DELETE **没有 UPDATE**（换绑 = 同一个事务里先删后插），读侧 `USING (true)`、插与删钉在 `platform_scope()`；`shop_settings.domain` 同迁移里 **DROP**（搬不是抄，留两份真相 = 还在读旧列的地方静默按旧值跑）。三道闸门：底域之下的名字一律拒（解析器在那片只认 code，登记了永不被采纳；判据用 `tenant.DomainUnderBase`，与解析器分流那一句是同一个表达式，不另写一份）、形状不像域名拒、被别家占着 409 `merchant-domain-taken`。**不做归属校验是拍板过的决定**：平台运营说这个域名归这家店就归它，而 custom 域名的证书与 DNS 是运营那侧的事。
   - **RLS 那两条被拒的样子不一样，而这件事只能靠断言**：租户作用域里插一行是 42501（WITH CHECK 不过），**删别人那一行是安静地 0 行**（USING 不过 → 那一行对它根本不存在），不报错。所以 `TestTenantScopeCannotReviseTheMerchantDirectory` 断的是 `tag.RowsAffected()==0` **且**回库里看那一行还在不在，只看「有没有出错」这条测试是绿的也没用。
@@ -25,9 +32,9 @@
   - `scripts/multi-verify.sh` 73 → **97 项**，新增第 8.5 节把这条接口在真实栈上走一遍：脏写法登记（`VerifyShopN.Example.ORG.`）→ 响应与库内都是归一值 → 那个 Host 真打得开；只改店名不动入口；底域之下 / 不像域名 / 已被别家占着分别 422、422、409（**且 409 抢不走**：断 shop-c 的 `custom.example.net` 在抢失败之后仍然 200 —— 这是「DELETE 有没有跑在约束之前」唯一的观测点）；商家级发这个 PATCH 403 `platform-only`；`domain: null` 摘掉之后旧域名 404 而**子域名入口照常 200**（那条 200 是阳性对照，否则「404」也可以是「店没了」）。实测：**97 通过 / 0 失败**。
   - **这 97 项是在一份全新的空栈上跑出来的，不是在 `keelmulti` 那一栈上**，起因值得记：`--build` 重建把 app 容器换掉，而这一栈从来没配 `KEEL_AUTH_SECRET` → 应用重新随机取了一把签名密钥 → 所有买家令牌、后台会话与验收脚本缓存的平台会话**全部作废**，而引导通道已经关（库里没有在岗平台管理员时才签，而它有了），脚本只剩一句「跑 --wipe」。当时唯一不动数据的办法是自己起一份新栈：`COMPOSE_PROJECT_NAME=keelmulti2 KEEL_HTTP_PORT=28195 KEEL_CONSOLE_PORT=28196 ./scripts/multi-up.sh`（空库 → 00001 走到 00340 → 播种 → 引导 → 验收），跑完 `--wipe` 收掉。**`keelmulti` 那一栈（28185/28186，公网 `keelmulti.zzss.fun` 指的那套）现在处于「数据还在、平台会话失效」的状态**，下一次用新的 `multi-up.sh` 起它就会拿到持久密钥并重新引导 —— 这条我**没有**替用户动那套栈的库。
   - 因此这轮顺带修了 `scripts/multi-up.sh` 两处：① **端口检查把自己排除掉**（`--build` 是原地升级这一栈的唯一路径，而它必然打回这两个端口 —— 早先无条件拒绝，等于没人能重建自己起起来的栈）；② **签名密钥落在 `~/.config/keel/multi-auth-secret`**（0600、不进仓库、不打印，`KEEL_MULTI_AUTH_SECRET_FILE` 可换位置），否则每次重建登出一次。`scripts/multi-verify.sh` 的平台会话缓存**改成按项目名分文件**（两套栈共用一个文件时，跑过另一套就把这一套的钥匙换掉，症状长得像这条栈坏了），`bad()` 也从只印一句说明改成印全部说明。
-  - 文档：数据模型 §2 那张表 + `db/tenancy.json` 新增 `platform-current` 类（`unique_global_ok` 那条豁免从 `shop_settings(domain)` 改名到 `merchant_domains(domain)`）+ `migrate_test.go` 逐字钉三条策略；总体架构里两处「入口只有两个」的表名；后台使用手册「商家管理（仅平台级）」加了登记方式（含 curl，**界面上这一格还没有填处** —— 那是 C 之后的小项）；部署与配置 97 项与新密钥行为；CHANGELOG 的 Added（接口与四条取舍）+ Fixed（null 三态）+ Unreleased 顶部「核心库落到 00340」。
-  - 遗留没做的：**后台界面没有这一格**（今天是走 curl）；**归属校验按决定不做**；`merchant_domains` 是当前态表，**换绑的历史不在这里**（`changed_by` 只说现在这条是谁登记的，名字与状态的历史仍在 `merchant_revisions`，两处别指望互相补齐）。另外本机 `keelmulti` 那套栈的 shop-a 上还留着我早先建的一个促销（id=1「限时折扣-sku1」，**没有** `DELETE /admin/promotions` 这条路由，删不掉）。
-  - 那三条缺口的进度：**D ✅、B ✅ 就是这一条、C ✅（一次性 token 的交付闭环，见上面那一条）。**
+  - 文档：数据模型 §2 那张表 + `db/tenancy.json` 新增 `platform-current` 类（`unique_global_ok` 那条豁免从 `shop_settings(domain)` 改名到 `merchant_domains(domain)`）+ `migrate_test.go` 逐字钉三条策略；总体架构里两处「入口只有两个」的表名；后台使用手册「商家管理（仅平台级）」；部署与配置 97 项与新密钥行为；CHANGELOG。
+  - **归属校验按决定不做**；`merchant_domains` 无换绑历史。域名 UI 与促销 DELETE 见顶部「工具缺口完善」。
+  - 那三条缺口的进度：**D ✅、B ✅、C ✅。**
 
 - **多商家形态有了入口与端到端证据（2026-10-07，无迁移，已提交 main `3c1414f` + `a0125a1`）**：审查结论是**租户管理的后台本来就是完整的**（`POST/GET/PATCH /api/v1/admin/merchants*` + 后台 `MerchantListView.vue` 的开店/改名/停用/启用 + `MerchantSwitcher.vue` + 单商家形态下按钮置灰的闸门），缺的从来不是功能，是**没人把 `compose.multi.yaml` 这套形态跑起来过** —— CI 的 e2e 只起单商家，演示站与生产栈都必填 `KEEL_DEFAULT_MERCHANT`，那句「多商家形态……e2e 只跑默认的单商家」在 ci.yml 的注释里挂了几轮。这轮补的就是入口 + 判据 + 接线：
   - `scripts/multi-up.sh`（唯一入口，`make multi-up`）：项目名 `keelmulti`、端口 28185/28186，与演示栈（keeldemo/18099）、生产栈（`-p keel`）、CI（keelci/28180）互不打扰。**为什么必须单独一个项目名**：`compose.multi.yaml` 只给**卷**加了 `_multi` 后缀，容器名仍是 `keel-app-1` 那几个，用默认项目名叠它等于把人家正在跑的单商家栈原地换掉。`--down` / `--wipe`（删卷，项目名不是 `keelmulti*|keelci*` 就拒绝）/ `--config` / `--logs` / `--no-verify` / `--build`。起完自动跑验收，理由同 `demo-up.sh`：`up -d` 只等到容器启动，应用随后因 `tenant.Preflight` 不过退出它照样返回 0。

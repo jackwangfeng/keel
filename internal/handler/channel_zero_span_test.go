@@ -28,7 +28,7 @@ func zeroSpans(t *testing.T, binding, store, sku int64) string {
 
 func waitZeroSpans(t *testing.T, ctx context.Context, rig channelRig, binding, store, sku int64, want, what string) {
 	t.Helper()
-	deadline := time.Now().Add(20 * time.Second)
+	deadline := time.Now().Add(channelWaitWindow)
 	for {
 		if err := rig.svc.Drain(ctx); err != nil {
 			t.Fatal(err)
@@ -38,7 +38,8 @@ func waitZeroSpans(t *testing.T, ctx context.Context, rig channelRig, binding, s
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("%s：等了 20 秒挂零时段是 %q，期望 %q", what, got, want)
+			t.Fatalf("%s：等了 %s 挂零时段是 %q，期望 %q\n渠道队列现状：%s",
+				what, channelWaitWindow, got, want, channelJobDiag(t, ctx))
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
@@ -130,13 +131,13 @@ func TestChannelZeroSpans(t *testing.T) {
 	t.Run("推送失败_不写", func(t *testing.T) {
 		rig.fake.FailNext(1)
 		setRatio(0)
-		deadline := time.Now().Add(20 * time.Second)
+		deadline := time.Now().Add(channelWaitWindow)
 		for rig.fake.FailuresLeft() != 0 {
 			if err := rig.svc.Drain(ctx); err != nil {
 				t.Fatal(err)
 			}
 			if time.Now().After(deadline) {
-				t.Fatal("等了 20 秒编排的失败还没用掉")
+				t.Fatalf("等了 %s 编排的失败还没用掉\n渠道队列现状：%s", channelWaitWindow, channelJobDiag(t, ctx))
 			}
 			time.Sleep(20 * time.Millisecond)
 		}

@@ -83,7 +83,16 @@ func newTwoDBOpts(t *testing.T, stockMsg bool) *twoDB {
 		t.Fatal(err)
 	}
 	t.Cleanup(e.invPool.Close)
-	if e.invAdmin, err = pgxpool.New(ctx, adminDSN); err != nil {
+	// 上限要显式设：裸 pgxpool.New 用 pgxpool 的默认值 max(4, CPU 核数)，20 核的机器上
+	// 一套两库夹具就是 20 条连接攥着到测试结束（pgxpool 长到用过的峰值就留着复用），
+	// 而这条路绕在 KEEL_DB_MAX_CONNS 之外 —— 那个变量只管得到 db.NewPool 建出来的池。
+	// 夹具与最后那几条断言都是串行的单条语句，4 条用不完。
+	invAdminCfg, err := pgxpool.ParseConfig(adminDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invAdminCfg.MaxConns = 4
+	if e.invAdmin, err = pgxpool.NewWithConfig(ctx, invAdminCfg); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(e.invAdmin.Close)
@@ -188,7 +197,7 @@ func (e *twoDB) use(t *testing.T) {
 func (e *twoDB) moveStock(t *testing.T, merchantID int64) {
 	t.Helper()
 	ctx := context.Background()
-	rows, err := admin(t).Query(ctx, `SELECT sku_id, store_id, available_qty, warning_qty FROM inventories WHERE merchant_id = $1`, merchantID)
+	rows, err := adminSession(t).Query(ctx, `SELECT sku_id, store_id, available_qty, warning_qty FROM inventories WHERE merchant_id = $1`, merchantID)
 	if err != nil {
 		t.Fatal(err)
 	}

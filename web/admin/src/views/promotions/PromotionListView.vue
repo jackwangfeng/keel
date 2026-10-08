@@ -89,6 +89,28 @@ async function toggle(p: AdminPromotion): Promise<void> {
     }
     await load();
 }
+
+async function remove(p: AdminPromotion): Promise<void> {
+    if (p.status !== 0) return;
+    try {
+        await ElMessageBox.confirm(
+            `删除「${p.name}」？只有从未成交 / 发放过的下线活动能删；有历史会 409。日常收尾请用「下线」。`,
+            "确认删除",
+            { type: "warning", confirmButtonText: "删除", cancelButtonText: "取消" },
+        );
+    } catch {
+        return;
+    }
+    try {
+        await keel.request("delete", "/admin/promotions/{promotion_id}", {
+            path: { promotion_id: p.id },
+        });
+        notifyOk("已删除");
+    } catch (err) {
+        notifyError(err);
+    }
+    await load();
+}
 </script>
 
 <template>
@@ -147,12 +169,13 @@ async function toggle(p: AdminPromotion): Promise<void> {
                     <el-tag :type="PHASE[row.phase].tag" size="small">{{ PHASE[row.phase].text }}</el-tag>
                 </template>
             </el-table-column>
-            <el-table-column label="操作" width="150" fixed="right">
+            <el-table-column label="操作" width="200" fixed="right">
                 <template #default="{ row }: { row: AdminPromotion }">
                     <el-button link type="primary" @click="openEdit(row)">{{ row.status === 1 ? "改名" : "编辑" }}</el-button>
                     <el-button link :type="row.status === 1 ? 'danger' : 'success'" @click="toggle(row)">
                         {{ row.status === 1 ? "下线" : "上线" }}
                     </el-button>
+                    <el-button v-if="row.status === 0" link type="danger" @click="remove(row)">删除</el-button>
                 </template>
             </el-table-column>
         </el-table>

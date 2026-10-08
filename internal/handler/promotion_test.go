@@ -661,6 +661,17 @@ func TestAdminPromotionRulesAndLifecycle(t *testing.T) {
 		t.Fatalf("下线的满减活动应当有 2 个（草稿 + 下线的），实得 %d", page.Total)
 	}
 
+	// 下线且无成交的草稿可以硬删；上线中 / 卖过的不行。
+	wantStatus(t, reqAs(t, http.MethodDelete, cs.Host, fmt.Sprintf("/api/v1/admin/promotions/%d", draft.Id), "", cs.Token),
+		http.StatusNoContent, "删草稿")
+	wantStatus(t, reqAs(t, http.MethodDelete, cs.Host, fmt.Sprintf("/api/v1/admin/promotions/%d", draft.Id), "", cs.Token),
+		http.StatusNotFound, "再删一次 404")
+	liveAgain := cs.livePromotion(t, "还在线", fullReduction100)
+	if p := problemOf(t, reqAs(t, http.MethodDelete, cs.Host, fmt.Sprintf("/api/v1/admin/promotions/%d", liveAgain.Id), "", cs.Token),
+		http.StatusConflict); p.Type != problem.TypePromotionOnline {
+		t.Fatalf("上线中删除应当 409 promotion-online：%+v", p)
+	}
+
 	// 卖出过的 SKU 不能移出活动。
 	flash := cs.livePromotion(t, "秒杀", fmt.Sprintf(`"promotion_type":4,"skus":[{"sku_id":%d,"promo_price_cents":990,"stock_qty":3}]`, cs.ShirtSKU))
 	b := cs.newBuyer(t, "sold")
@@ -669,6 +680,10 @@ func TestAdminPromotionRulesAndLifecycle(t *testing.T) {
 	if p := problemOf(t, cs.patchPromotion(t, flash.Id, fmt.Sprintf(`{"skus":[{"sku_id":%d,"promo_price_cents":990,"stock_qty":3}]}`, cs.DressSKU)),
 		http.StatusUnprocessableEntity); p.Type != problem.TypeInvalidRequest {
 		t.Fatalf("卖出过的 SKU 移出活动应当 422：%+v", p)
+	}
+	if p := problemOf(t, reqAs(t, http.MethodDelete, cs.Host, fmt.Sprintf("/api/v1/admin/promotions/%d", flash.Id), "", cs.Token),
+		http.StatusConflict); p.Type != problem.TypePromotionInUse {
+		t.Fatalf("卖过的活动删除应当 409 promotion-in-use：%+v", p)
 	}
 }
 

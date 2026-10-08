@@ -242,6 +242,10 @@ var permMatrix = []permRoute{
 		return permReq{Method: "PATCH", Path: fmt.Sprintf(v1+"/admin/promotions/%d", permPromotion(t, fx)),
 			Body: `{"name":"改个名字"}`, OK: http.StatusOK}
 	}},
+	{"DELETE", v1 + "/admin/promotions/:promotion_id", merchantWide, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permReq{Method: "DELETE", Path: fmt.Sprintf(v1+"/admin/promotions/%d", permPromotion(t, fx)),
+			OK: http.StatusNoContent}
+	}},
 	// —— 运费模板（00055）。契约 StaffRole 矩阵「运费模板」两行：读对四种角色放行；
 	// 门店模板的写同门店价（storeOperate）—— 矩阵里打的就是门店模板，范围内 N1、范围外 E1。
 	// 全店模板的写（merchantWide）由 freight_test.go 的

@@ -15,6 +15,8 @@
 //     一次（契约 MerchantOpened）。不显示的话，把门交给店主的唯一路子是翻 app 的日志，
 //     而日志会被采集、会进索引。这一串 15 分钟后自己失效、用一次就作废，
 //     所以它只出现一次；关了就没了。丢了也不慌：切进这家店，在「员工」页给他重签一串。
+//   · **自有域名**走 PATCH domain（迁移 00340）：空串保存成 null 摘掉；底域之下 / 不像域名 /
+//     被别家占着分别 422 / 422 / 409。单商家部署一律 409。界面只是 curl 的替代，闸门全在服务端。
 
 import { computed, onMounted, ref } from "vue";
 import { Plus, Refresh } from "@element-plus/icons-vue";
@@ -191,6 +193,42 @@ function manage(m: Merchant): void {
     setMerchantScope(session.value, { code: m.code, name: m.name, disabled: m.status !== 1 });
     globalThis.location.assign("/products");
 }
+
+// ---------------------------------------------------------------- 自有域名
+
+const domainVisible = ref(false);
+const domainError = ref<unknown>(null);
+const domainSaving = ref(false);
+const domainTarget = ref<Merchant | null>(null);
+const domainDraft = ref("");
+
+function openDomain(m: Merchant): void {
+    domainTarget.value = m;
+    domainDraft.value = m.domain ?? "";
+    domainError.value = null;
+    domainVisible.value = true;
+}
+
+async function submitDomain(): Promise<void> {
+    const m = domainTarget.value;
+    if (m === null) return;
+    domainSaving.value = true;
+    domainError.value = null;
+    const trimmed = domainDraft.value.trim();
+    try {
+        await keel.request("patch", "/admin/merchants/{merchant_id}", {
+            path: { merchant_id: m.id },
+            body: { domain: trimmed === "" ? null : trimmed },
+        });
+        domainVisible.value = false;
+        notifyOk(trimmed === "" ? `已摘掉「${m.name}」的自有域名` : `已登记 ${trimmed}`);
+        await load();
+    } catch (err) {
+        domainError.value = err;
+    } finally {
+        domainSaving.value = false;
+    }
+}
 </script>
 
 <template>
@@ -252,12 +290,13 @@ function manage(m: Merchant): void {
             <el-table-column label="最近修改" width="170">
                 <template #default="{ row }: { row: Merchant }">{{ datetime(row.updated_at) }}</template>
             </el-table-column>
-            <el-table-column label="操作" width="260" fixed="right">
+            <el-table-column label="操作" width="320" fixed="right">
                 <template #default="{ row }: { row: Merchant }">
                     <el-button link type="primary" :disabled="scope?.code === row.code" @click="manage(row)">
                         切过去管理
                     </el-button>
                     <el-button link type="primary" :disabled="!isPlatformAdmin" @click="openRename(row)">改名</el-button>
+                    <el-button link type="primary" :disabled="!isPlatformAdmin" @click="openDomain(row)">域名</el-button>
                     <el-button
                         v-if="row.status === 1"
                         link
@@ -349,6 +388,27 @@ function manage(m: Merchant): void {
             <template #footer>
                 <el-button @click="renameVisible = false">取消</el-button>
                 <el-button type="primary" :loading="renaming" :disabled="newName.trim() === ''" @click="submitRename">
+                    保存
+                </el-button>
+            </template>
+        </el-dialog>
+
+        <el-dialog v-model="domainVisible" :title="`自有域名：${domainTarget?.code ?? ''}`" width="520px">
+            <ProblemAlert v-if="domainError" :error="domainError" />
+            <p class="hint">
+                登记之后，买家用这个 Host 进这家店（解析器按归一化后的小写比）。
+                底域之下的名字（例如 <code>foo.KEEL_BASE_DOMAIN</code>）一律拒——那片只认 code。
+                清空并保存 = 摘掉入口；子域名 <code>{code}.KEEL_BASE_DOMAIN</code> 不受影响。
+                单商家部署会 409。证书与 DNS 仍是运营侧的事。
+            </p>
+            <el-form label-width="90px" @submit.prevent>
+                <el-form-item label="域名">
+                    <el-input v-model="domainDraft" placeholder="例如 shop.example.org；留空即摘掉" />
+                </el-form-item>
+            </el-form>
+            <template #footer>
+                <el-button @click="domainVisible = false">取消</el-button>
+                <el-button type="primary" :loading="domainSaving" :disabled="!isPlatformAdmin" @click="submitDomain">
                     保存
                 </el-button>
             </template>
