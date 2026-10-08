@@ -98,6 +98,12 @@ func NewRouter(cfg ServerConfig) (*gin.Engine, Routes) {
 	r := gin.New()
 	r.Use(gin.Recovery())
 	r.Use(traceid.Middleware())
+	// 访问日志，与公网 Router 同一道。挂在 traceid.Middleware() 之后是为了拿到号。
+	//
+	// 内网 RPC 与公网分开算路径（这是独立的一个进程、独立的采样率），
+	// 但**白名单是同一个全局**：一条链路横跨两边时，客人报了 trace_id，
+	// 一次ForceOn 就把公网与内网那几跳全打出来 —— 否则跨进程的追踪断在一半。
+	r.Use(traceid.AccessLog())
 	// 与公网 Router 同一个记录器（internal/outcome）：库存进程的接口据此判断一次语句超时 /
 	// 等锁超时能不能回「确定没生效」的 busy（inventory/http.go 的 fail）。
 	r.Use(func(c *gin.Context) {

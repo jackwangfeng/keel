@@ -203,6 +203,11 @@ IDEMPOTENCY_EXEMPT = {
     '/admin/channel-orders/{channel_order_id}/retry':  '只对有异常、且没有活着的 keel 订单的单；成单之后再点回 409，'
                                                        '又失败时再点等于再试一次（SAGA gid 由渠道单 id 决定，不重复建单）',
     '/admin/channel-order-requests/{request_id}/decision': '只有待处理（1）的能决定，条件 UPDATE；重复决定回 409',
+    '/admin/trace-log':    '设置类操作，重复调用天然同效果（采样率设两次 25 与设一次 25 一样；'
+                          '白名单 ForceOn 幂等、ForceOff 移一个不在的号会被 422 挡下）。'
+                          '**不能做幂等存档**：它的响应体是「当前状态」，重放会回放上一次存档的那份，'
+                          '于是改完采样率后再 POST 别的字段，返回的是改完那一刻的状态而不是现在的——'
+                          '一个按定义就装不了真实状态的位置',
     '/assistant/chat':    '无副作用；会话状态由 session_id 承载',
     '/search/events':     '天然幂等：每一列首次写入为准、不覆盖，重放与首次效果相同；'
                           '且是公开接口，幂等键的 (scope, user_id, key) 作用域在这里没有 user_id',

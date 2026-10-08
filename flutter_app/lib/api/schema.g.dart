@@ -6122,6 +6122,39 @@ class StoreUpdateRequest {
       };
 }
 
+/// 访问日志开关的状态。`sample_rate` 是百分之一为单位：`25` = 25%，`100` = 全量，
+class TraceLogState {
+  final int sampleRate;
+  final int kept;
+  final int dropped;
+  final int forcedHit;
+  final List<String> forced;
+  final int slowMillis;
+  final String? sampleRateHint;
+  final String? forcedHint;
+  const TraceLogState({required this.sampleRate, required this.kept, required this.dropped, required this.forcedHit, required this.forced, required this.slowMillis, this.sampleRateHint, this.forcedHint});
+  factory TraceLogState.fromJson(Map<String, dynamic> j) => TraceLogState(
+        sampleRate: (j['sample_rate'] as num).toInt(),
+        kept: (j['kept'] as num).toInt(),
+        dropped: (j['dropped'] as num).toInt(),
+        forcedHit: (j['forced_hit'] as num).toInt(),
+        forced: (j['forced'] as List).map((e) => e as String).toList(),
+        slowMillis: (j['slow_millis'] as num).toInt(),
+        sampleRateHint: j['sample_rate_hint'] as String?,
+        forcedHint: j['forced_hint'] as String?,
+      );
+  Map<String, dynamic> toJson() => {
+        'sample_rate': sampleRate,
+        'kept': kept,
+        'dropped': dropped,
+        'forced_hit': forcedHit,
+        'forced': forced,
+        'slow_millis': slowMillis,
+        if (sampleRateHint != null) 'sample_rate_hint': sampleRateHint,
+        if (forcedHint != null) 'forced_hint': forcedHint,
+      };
+}
+
 class Upload {
   final int id;
   final String url;

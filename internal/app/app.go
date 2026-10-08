@@ -216,6 +216,13 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	r.Use(gin.Recovery())
 	r.Use(traceid.Middleware())
 
+	// 访问日志。**必须在 traceid.Middleware() 之后**：它要c.Request.Context() 里
+	// 那个号，而号是上面那道挂进去的；顺序反了这条日志就没有 trace_id 这一列。
+	//
+	// 也在 logHandlerErrors 之后 —— 它记的是「这个请求是什么」，而那道记的是
+	// 「请求里攒下了什么错」。两条都跑，先执行的这道先看到 status 之后的真相。
+	r.Use(traceid.AccessLog())
+
 	// 必须在所有业务中间件之外：它靠 c.Next() 返回之后 drain c.Errors，
 	// 挂在里层会漏掉外层中间件（比如租户解析）记下的错误。
 	r.Use(logHandlerErrors())
@@ -488,6 +495,7 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	// 一个还没有会话的人要能打到它们。「不需要令牌」不等于「不需要租户」。
 	staffSvc := service.NewStaffService(repo, signer, nil)
 	adm := handler.NewAdminAuthHandler(staffSvc)
+
 	v1.POST("/admin/auth/bootstrap", adm.Bootstrap)
 	v1.POST("/admin/auth/email-link", adm.EmailLink)
 	v1.POST("/admin/auth/session", adm.Session)
@@ -501,6 +509,12 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	// res 同时是租户切换的商家目录（平台级会话的 X-Keel-Merchant，
 	// 规则在 internal/auth/staff_tenant.go）。
 	staffAuth := auth.StaffBearer(signer, staffSvc, res, nil)
+	// 访问日志的运行时开关（internal/traceid/access.go）。挂 staffAuth：
+	// 它改的是**整个进程**的日志量（不限本店），所以更像运维动作而不是店铺设置 ——
+	// 而这个部署形态里还没有跨店铺的运维角色，先挂在店铺管理员上是够用且保守的。
+	tlh := handler.NewAdminTraceLogHandler(service.NewTraceLogService())
+	v1.GET("/admin/trace-log", staffAuth, tlh.Get)
+	v1.POST("/admin/trace-log", staffAuth, tlh.Set)
 	v1.GET("/admin/me", staffAuth, adm.Me)
 	v1.GET("/admin/staff", staffAuth, adm.ListStaff)
 	v1.POST("/admin/staff", staffAuth, adm.CreateStaff)

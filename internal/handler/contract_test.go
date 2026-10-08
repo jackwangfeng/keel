@@ -1003,6 +1003,20 @@ var routes = []route{
 	},
 	// —— AI 员工与接入密钥（AI 经营 M9，docs/AI经营-M9设计.md §2）。
 	{
+		ContractPath:   "/admin/trace-log",
+		ContractMethod: "get",
+		HTTPMethod:     http.MethodGet,
+		HandlerFile:    "admin_tracelog.go",
+		NoQueryParams:  "访问日志的运行时开关：参数全在请求体里",
+	},
+	{
+		ContractPath:   "/admin/trace-log",
+		ContractMethod: "post",
+		HTTPMethod:     http.MethodPost,
+		HandlerFile:    "admin_tracelog.go",
+		NoQueryParams:  "访问日志的运行时开关：参数全在请求体里",
+	},
+	{
 		ContractPath:   "/admin/agents",
 		ContractMethod: "get",
 		HTTPMethod:     http.MethodGet,

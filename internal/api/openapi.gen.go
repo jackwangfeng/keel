@@ -8115,6 +8115,33 @@ type StoreUpdateRequest struct {
 // StoreUpdateRequestStatus defines model for StoreUpdateRequest.Status.
 type StoreUpdateRequestStatus int
 
+// TraceLogState 访问日志开关的状态。`sample_rate` 是百分之一为单位：`25` = 25%，`100` = 全量，
+// `0` = 只记慢的、错的与被点名的（**默认值**）。
+// `forced` 是白名单（进程级，不按租户分），里面的 trace_id 无论采样率多少都全量记。
+type TraceLogState struct {
+	// Dropped 采样规则挡掉的请求数
+	Dropped int `json:"dropped"`
+
+	// Forced 白名单里的 trace_id
+	Forced []string `json:"forced"`
+
+	// ForcedHint 白名单用法的人话解释
+	ForcedHint *string `json:"forced_hint,omitempty"`
+
+	// ForcedHit 白名单命中的次数
+	ForcedHit int `json:"forced_hit"`
+
+	// Kept 记下的请求数（本次进程启动以来）
+	Kept       int `json:"kept"`
+	SampleRate int `json:"sample_rate"`
+
+	// SampleRateHint 采样率单位的人话解释
+	SampleRateHint *string `json:"sample_rate_hint,omitempty"`
+
+	// SlowMillis 慢请求门槛（毫秒）
+	SlowMillis int `json:"slow_millis"`
+}
+
 // Upload defines model for Upload.
 type Upload struct {
 	ContentType string    `json:"content_type"`
@@ -12979,6 +13006,67 @@ type PutAdminStoresStoreIdSkusSkuIdPriceParams struct {
 	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
 }
 
+// GetAdminTraceLogParams defines parameters for GetAdminTraceLog.
+type GetAdminTraceLogParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
+// PostAdminTraceLogJSONBody defines parameters for PostAdminTraceLog.
+type PostAdminTraceLogJSONBody struct {
+	Force      *bool   `json:"force,omitempty"`
+	SampleRate *int    `json:"sample_rate,omitempty"`
+	TraceId    *string `json:"trace_id,omitempty"`
+}
+
+// PostAdminTraceLogParams defines parameters for PostAdminTraceLog.
+type PostAdminTraceLogParams struct {
+	// XKeelMerchant **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+	//
+	// 它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+	// 而例外成立的前提是平台级鉴权：
+	//
+	// · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+	//   读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+	//   行级安全落在这家店上。
+	// · **商家级员工带了这个头：403**
+	//   （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+	//   静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+	// · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+	//   **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+	//   实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+	//   请求其余部分指名的东西不存在是 422。
+	// · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+	//   买家侧对它照旧 404。
+	// · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+	//   （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+	//
+	// 后台每一条挂后台会话的操作都声明了它（机械核对：
+	// `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+	XKeelMerchant *KeelMerchant `json:"X-Keel-Merchant,omitempty"`
+}
+
 // PostAdminUploadsMultipartBody defines parameters for PostAdminUploads.
 type PostAdminUploadsMultipartBody struct {
 	// File 文件内容，不超过 10 MB
@@ -13910,6 +13998,9 @@ type PostAdminStoresStoreIdSkusSkuIdInventoryAdjustmentsJSONRequestBody = Invent
 
 // PutAdminStoresStoreIdSkusSkuIdPriceJSONRequestBody defines body for PutAdminStoresStoreIdSkusSkuIdPrice for application/json ContentType.
 type PutAdminStoresStoreIdSkusSkuIdPriceJSONRequestBody = SkuPriceSetRequest
+
+// PostAdminTraceLogJSONRequestBody defines body for PostAdminTraceLog for application/json ContentType.
+type PostAdminTraceLogJSONRequestBody PostAdminTraceLogJSONBody
 
 // PostAdminUploadsMultipartRequestBody defines body for PostAdminUploads for multipart/form-data ContentType.
 type PostAdminUploadsMultipartRequestBody PostAdminUploadsMultipartBody

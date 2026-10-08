@@ -466,6 +466,82 @@ paths:
               schema: { $ref: '#/components/schemas/Staff' }
         default: { $ref: '#/components/responses/Problem' }
 
+  /admin/trace-log:
+    get:
+      tags: [Admin]
+      summary: 访问日志的当前开关（采样率、白名单、累计计数）
+      description: |
+        排障时最该做的那一步——「把这几个请求的全过程打出来」——不该需要重启进程，
+        也不该需要改环境变量。这个接口就是那个开关：`sample_rate` 是百分之一为单位
+        （`25` = 25%，`100` = 全量），改成别的值**下一次请求就生效**，没有需要重建的东西。
+
+        默认 `sample_rate` 是 `0`，而 `0` 不等于什么都不记：**出错的（`status ≥ 400`）
+        与慢的（≥ `slow_millis`）无条件记**，采样率控制的是剩下的正常请求记不记。
+        实测峰值约 500 RPS，全量记是每天几千万行，正常的那些没有排障价值。
+
+        另一个开关是白名单（`forced`）：里面的 trace_id 无论采样率多少都全量记。
+        这才是常用姿势——「客人给了个 trace_id，我只想看这一条」，它不用动全局采样率，
+        也就不会把噪声一起打开。白名单是**进程级**的，不限本店。
+
+        **只给管理员**：这两项都不按租户分，而白名单本身就是一份「有人在查什么」的清单。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+      responses:
+        '200':
+          description: 当前状态（`kept` / `dropped` 是本次进程启动以来的累计值）
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TraceLogState' }
+        '403':
+          description: 不是管理员
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Admin]
+      summary: 改采样率，或把某个 trace_id 加进/移出白名单
+      description: |
+        三个字段都可选，只有带了的那个生效。**要关回去得显式传 `"sample_rate": 0` 而不是省略。**
+        一个字段都不带时是空操作，照样回当前状态（省掉调用方再GET 一次）。
+
+        `trace_id` 必须是 32 位小写十六进制——形状不对返回 `422` 而不是静默接受，
+        因为白名单是用来查特定请求的，存进去一个查不到的东西等于给运维一个假象。
+        `force: false` 而那个号本来不在白名单里，同样返回 `422`。
+
+        **不做幂等存档**（这一条与项目里大多数 POST 不同）：响应体是「当前状态」，
+        存档重放会回放上一次存档的那份，于是改完采样率后再 POST 别的字段，
+        返回的是改完那一刻的状态而不是现在的——一个按定义就装不了真实状态的位置。
+      parameters:
+        - $ref: '#/components/parameters/KeelMerchant'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                sample_rate: { type: integer, minimum: 0, maximum: 100 }
+                trace_id: { type: string }
+                force: { type: boolean }
+      responses:
+        '200':
+          description: 改完之后的当前状态（同 GET）
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TraceLogState' }
+        '403':
+          description: 不是管理员
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: trace_id 不合法，或要移除的号不在白名单里
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
   /admin/merchants:
     get:
       tags: [Admin]
@@ -9203,6 +9279,26 @@ components:
         external_order_name: { type: string, description: 平台上给人看的单号 }
 
     # ---- 通用 ----
+    TraceLogState:
+      type: object
+      description: |
+        访问日志开关的状态。`sample_rate` 是百分之一为单位：`25` = 25%，`100` = 全量，
+        `0` = 只记慢的、错的与被点名的（**默认值**）。
+        `forced` 是白名单（进程级，不按租户分），里面的 trace_id 无论采样率多少都全量记。
+      required: [sample_rate, kept, dropped, forced_hit, forced, slow_millis]
+      properties:
+        sample_rate: { type: integer, minimum: 0, maximum: 100 }
+        kept: { type: integer, description: 记下的请求数（本次进程启动以来） }
+        dropped: { type: integer, description: 采样规则挡掉的请求数 }
+        forced_hit: { type: integer, description: 白名单命中的次数 }
+        forced:
+          type: array
+          items: { type: string }
+          description: 白名单里的 trace_id
+        slow_millis: { type: integer, description: 慢请求门槛（毫秒） }
+        sample_rate_hint: { type: string, description: 采样率单位的人话解释 }
+        forced_hint: { type: string, description: 白名单用法的人话解释 }
+
     Problem:
       type: object
       description: RFC 9457 Problem Details

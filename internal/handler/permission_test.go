@@ -607,6 +607,14 @@ var permMatrix = []permRoute{
 	{"GET", v1 + "/admin/agents", adminOnly, func(t *testing.T, fx *permFixture, c permCase) permReq {
 		return permGet(v1 + "/admin/agents")
 	}},
+	// 访问日志的开关（internal/traceid/access.go）：它改的是**整个进程**的日志量，
+	// 不限本店 —— 所以不放给运营/客服那一档，只给管理员（与 channels 同一档）。
+	{"GET", v1 + "/admin/trace-log", adminOnly, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permGet(v1 + "/admin/trace-log")
+	}},
+	{"POST", v1 + "/admin/trace-log", adminOnly, func(t *testing.T, fx *permFixture, c permCase) permReq {
+		return permReq{Method: "POST", Path: v1 + "/admin/trace-log", Body: `{"sample_rate":0}`, OK: http.StatusOK}
+	}},
 	{"POST", v1 + "/admin/agents", adminOnly, func(t *testing.T, fx *permFixture, c permCase) permReq {
 		return permReq{Method: "POST", Path: v1 + "/admin/agents", Body: `{"name":"矩阵 AI","role":2}`, OK: http.StatusCreated}
 	}},

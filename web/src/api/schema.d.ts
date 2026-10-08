@@ -588,6 +588,178 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/trace-log": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 访问日志的当前开关（采样率、白名单、累计计数）
+         * @description 排障时最该做的那一步——「把这几个请求的全过程打出来」——不该需要重启进程，
+         *     也不该需要改环境变量。这个接口就是那个开关：`sample_rate` 是百分之一为单位
+         *     （`25` = 25%，`100` = 全量），改成别的值**下一次请求就生效**，没有需要重建的东西。
+         *
+         *     默认 `sample_rate` 是 `0`，而 `0` 不等于什么都不记：**出错的（`status ≥ 400`）
+         *     与慢的（≥ `slow_millis`）无条件记**，采样率控制的是剩下的正常请求记不记。
+         *     实测峰值约 500 RPS，全量记是每天几千万行，正常的那些没有排障价值。
+         *
+         *     另一个开关是白名单（`forced`）：里面的 trace_id 无论采样率多少都全量记。
+         *     这才是常用姿势——「客人给了个 trace_id，我只想看这一条」，它不用动全局采样率，
+         *     也就不会把噪声一起打开。白名单是**进程级**的，不限本店。
+         *
+         *     **只给管理员**：这两项都不按租户分，而白名单本身就是一份「有人在查什么」的清单。
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /**
+                     * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+                     *
+                     *     它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+                     *     而例外成立的前提是平台级鉴权：
+                     *
+                     *     · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+                     *       读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+                     *       行级安全落在这家店上。
+                     *     · **商家级员工带了这个头：403**
+                     *       （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+                     *       静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+                     *     · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+                     *       **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+                     *       实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+                     *       请求其余部分指名的东西不存在是 422。
+                     *     · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+                     *       买家侧对它照旧 404。
+                     *     · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+                     *       （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+                     *
+                     *     后台每一条挂后台会话的操作都声明了它（机械核对：
+                     *     `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+                     */
+                    "X-Keel-Merchant"?: components["parameters"]["KeelMerchant"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description 当前状态（`kept` / `dropped` 是本次进程启动以来的累计值） */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["TraceLogState"];
+                    };
+                };
+                /** @description 不是管理员 */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        put?: never;
+        /**
+         * 改采样率，或把某个 trace_id 加进/移出白名单
+         * @description 三个字段都可选，只有带了的那个生效。**要关回去得显式传 `"sample_rate": 0` 而不是省略。**
+         *     一个字段都不带时是空操作，照样回当前状态（省掉调用方再GET 一次）。
+         *
+         *     `trace_id` 必须是 32 位小写十六进制——形状不对返回 `422` 而不是静默接受，
+         *     因为白名单是用来查特定请求的，存进去一个查不到的东西等于给运维一个假象。
+         *     `force: false` 而那个号本来不在白名单里，同样返回 `422`。
+         *
+         *     **不做幂等存档**（这一条与项目里大多数 POST 不同）：响应体是「当前状态」，
+         *     存档重放会回放上一次存档的那份，于是改完采样率后再 POST 别的字段，
+         *     返回的是改完那一刻的状态而不是现在的——一个按定义就装不了真实状态的位置。
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /**
+                     * @description **平台级会话**切换「这一次请求管的是哪家店」。值是商家的 `code`。
+                     *
+                     *     它是 `servers` 那句「请求不携带任何标识租户的头」的**唯一例外**，
+                     *     而例外成立的前提是平台级鉴权：
+                     *
+                     *     · 只在**已经通过后台会话校验、且会话是平台级**的请求上读它；
+                     *       读到之后用它指定的商家**替换**由 Host 解析出的租户，之后这个请求的
+                     *       行级安全落在这家店上。
+                     *     · **商家级员工带了这个头：403**
+                     *       （`https://keel.dev/problems/tenant-switch-forbidden`），不生效，也不静默忽略。
+                     *       静默忽略的话，一个以为自己切过去了的客户端会往错的店里写数据。
+                     *     · **code 不存在或已软删：422**（`https://keel.dev/problems/unknown-merchant`），
+                     *       **不回落**到 Host 解析出的那家 —— 回落意味着运营以为在管 B 店，
+                     *       实际改的是 A 店。按本契约的分法：路径里指名的资源不存在是 404，
+                     *       请求其余部分指名的东西不存在是 422。
+                     *     · **停用的商家可以切进去**（要进得去才修得好、再启用）；
+                     *       买家侧对它照旧 404。
+                     *     · 公开接口、买家接口、以及三条未认证的 `/admin/auth/*` **一律不读**这个头
+                     *       （契约里也不声明）：它们没有平台级鉴权可以作为前提。
+                     *
+                     *     后台每一条挂后台会话的操作都声明了它（机械核对：
+                     *     `internal/handler/contract_test.go` 的 `TestKeelMerchantHeaderDeclaredExactlyOnStaffOperations`）。
+                     */
+                    "X-Keel-Merchant"?: components["parameters"]["KeelMerchant"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        sample_rate?: number;
+                        trace_id?: string;
+                        force?: boolean;
+                    };
+                };
+            };
+            responses: {
+                /** @description 改完之后的当前状态（同 GET） */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["TraceLogState"];
+                    };
+                };
+                /** @description 不是管理员 */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                /** @description trace_id 不合法，或要移除的号不在白名单里 */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                default: components["responses"]["Problem"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/merchants": {
         parameters: {
             query?: never;
@@ -18800,6 +18972,28 @@ export interface components {
             binding_name: string;
             /** @description 平台上给人看的单号 */
             external_order_name: string;
+        };
+        /**
+         * @description 访问日志开关的状态。`sample_rate` 是百分之一为单位：`25` = 25%，`100` = 全量，
+         *     `0` = 只记慢的、错的与被点名的（**默认值**）。
+         *     `forced` 是白名单（进程级，不按租户分），里面的 trace_id 无论采样率多少都全量记。
+         */
+        TraceLogState: {
+            sample_rate: number;
+            /** @description 记下的请求数（本次进程启动以来） */
+            kept: number;
+            /** @description 采样规则挡掉的请求数 */
+            dropped: number;
+            /** @description 白名单命中的次数 */
+            forced_hit: number;
+            /** @description 白名单里的 trace_id */
+            forced: string[];
+            /** @description 慢请求门槛（毫秒） */
+            slow_millis: number;
+            /** @description 采样率单位的人话解释 */
+            sample_rate_hint?: string;
+            /** @description 白名单用法的人话解释 */
+            forced_hint?: string;
         };
         /** @description RFC 9457 Problem Details */
         Problem: {
