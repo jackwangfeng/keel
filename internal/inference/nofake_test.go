@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // 这两条守的是同一句话：**替身不许能在生产路径上被默认选中。**
@@ -66,16 +67,28 @@ func productionMainPackages(t *testing.T, tags string) []string {
 // job 就是），go 会往 stderr 打 `go: downloading ...`，用 CombinedOutput 的话这一行
 // 会混进包列表，下一次 go list 把它当成包路径 —— "malformed import path ... invalid
 // char ':'"。这条测试就这样在冷缓存上红了，而它守的那件事其实完好。
+//
+// 会重试几次：CI 的 test-db 把 handler 切十几片同时编，fake-embedder 那组也在同时
+// 跑，偶发 `go list … github.com/keel/keel/...` 回一句光秃秃的 `cannot find package`
+// （exit 1、没有包路径）。判据本身没坏，是工具在写缓存高峰上绊了一跤——
+// 2026-10-08 加 cmd/keel-admin 之后 CI 红过一次，本机单跑复现不出来。
 func goList(t *testing.T, args ...string) string {
 	t.Helper()
-	cmd := exec.Command("go", append([]string{"list"}, args...)...)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
-	if err != nil {
-		t.Fatalf("go list %v 失败: %v\n%s%s", args, err, out, stderr.String())
+	var out, stderrBytes []byte
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		cmd := exec.Command("go", append([]string{"list"}, args...)...)
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		out, err = cmd.Output()
+		stderrBytes = stderr.Bytes()
+		if err == nil {
+			return string(out)
+		}
+		time.Sleep(time.Duration(attempt+1) * 300 * time.Millisecond)
 	}
-	return string(out)
+	t.Fatalf("go list %v 失败: %v\n%s%s", args, err, out, stderrBytes)
+	return ""
 }
 
 // 默认构建里，替身包只有 doc.go（一个包声明），实现文件不在。
@@ -122,30 +135,32 @@ func TestFakeEmbedderIsExcludedFromDefaultBuild(t *testing.T) {
 //   - internal/inference 是客户端自己。这一半守的是另一个方向：
 //     客户端反过来依赖替身（比如「找不到引擎就退回替身」这种好心）。
 func TestProductionBinaryDoesNotDependOnFake(t *testing.T) {
+	// main 包名单只枚举一次（默认构建）：本仓库没有「只在带标签时才存在的 main」，
+	// 带着 keel_fake_embedder 再 list 一遍整个模块，只是多一次写缓存高峰上的 go list，
+	// 判据不变、失败面却翻倍。依赖闭包仍然对两种 tags 各查一次——那才是要守的。
+	mains := productionMainPackages(t, "")
+
+	// 自证：枚举真的枚举到了东西，而且包含今天已知的那两个二进制。
+	//
+	// 少了这一段，把 modulePattern 写错（或者 go list 的 -f 模板被改坏）
+	// 会让 mains 变成空列表，而**空列表上的循环永远不会失败**——
+	// 这条测试于是在看上去最正常的样子下彻底失去牙齿。
+	if len(mains) == 0 {
+		t.Fatal("一个 main 包都没枚举到 —— go list 的模式或 -f 模板坏了，这条测试正在空跑")
+	}
+	for _, want := range []string{
+		"github.com/keel/keel/cmd/keel",
+		"github.com/keel/keel/cmd/keel-index",
+	} {
+		if !slices.Contains(mains, want) {
+			t.Fatalf("枚举出的 main 包 %v 里没有 %s —— "+
+				"要么这个二进制被删了（那这里该跟着改），"+
+				"要么枚举漏了它（那这条测试正在漏掉一个生产二进制）",
+				mains, want)
+		}
+	}
+
 	for _, tags := range []string{"", "keel_fake_embedder"} {
-		mains := productionMainPackages(t, tags)
-
-		// 自证：枚举真的枚举到了东西，而且包含今天已知的那两个二进制。
-		//
-		// 少了这一段，把 modulePattern 写错（或者 go list 的 -f 模板被改坏）
-		// 会让 mains 变成空列表，而**空列表上的循环永远不会失败**——
-		// 这条测试于是在看上去最正常的样子下彻底失去牙齿。
-		if len(mains) == 0 {
-			t.Fatalf("一个 main 包都没枚举到（-tags %q）—— "+
-				"go list 的模式或 -f 模板坏了，这条测试正在空跑", tags)
-		}
-		for _, want := range []string{
-			"github.com/keel/keel/cmd/keel",
-			"github.com/keel/keel/cmd/keel-index",
-		} {
-			if !slices.Contains(mains, want) {
-				t.Fatalf("枚举出的 main 包 %v 里没有 %s（-tags %q）—— "+
-					"要么这个二进制被删了（那这里该跟着改），"+
-					"要么枚举漏了它（那这条测试正在漏掉一个生产二进制）",
-					mains, want, tags)
-			}
-		}
-
 		for _, pkg := range append(slices.Clone(mains), embedderPkg) {
 			args := []string{"-deps", "-f", "{{.ImportPath}}"}
 			if tags != "" {
