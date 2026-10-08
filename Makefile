@@ -84,8 +84,9 @@ GOOSE_INVENTORY := GOOSE_DRIVER=postgres GOOSE_DBSTRING="$(INVENTORY_GOOSE_DBSTR
 	sdk-smoke goose-bin migrate migrate-down migrate-status migrate-inventory migrate-inventory-status test-db test-db-ci \
 	test-engine category-eval dtmrs-deps build gates \
 	init doctor prod-up prod-down prod-logs prod-config release-up release-config \
-	multi-up multi-verify multi-down multi-wipe multi-logs multi-config \
-	demo-up demo-down demo-verify demo-config
+	multi-up multi-verify multi-down multi-wipe multi-logs multi-config multi-login \
+	demo-up demo-down demo-verify demo-config demo-login \
+	issue-login
 
 # ── 生产部署 ─────────────────────────────────────────────────────────
 # 演示栈是裸 `docker compose up`（不带 -f），生产栈是下面这组 target。
@@ -176,6 +177,25 @@ demo-verify:
 demo-config:
 	@bash $(ROOT)/scripts/demo-up.sh --config
 
+# 运维签发一次性登录 token（破损恢复：会话过期又没人能重签时）。
+# STAFF=id 或 EMAIL=addr；商家级 EMAIL 要加 MERCHANT=code。
+# 明文打 stdout；连哪套库看脚本头（默认当前 PG*，multi/demo 指到对应容器）。
+STAFF ?=
+EMAIL ?=
+MERCHANT ?=
+issue-login:
+	@if [ -z "$(STAFF)" ] && [ -z "$(EMAIL)" ]; then echo "要 STAFF=id 或 EMAIL=addr（商家级加 MERCHANT=code）"; exit 2; fi
+	@bash $(ROOT)/scripts/issue-login-token.sh \
+		$(if $(STAFF),-staff $(STAFF)) \
+		$(if $(EMAIL),-email $(EMAIL)) \
+		$(if $(MERCHANT),-merchant $(MERCHANT))
+
+multi-login:
+	@COMPOSE_PROJECT_NAME=$${COMPOSE_PROJECT_NAME:-keelmulti} $(MAKE) --no-print-directory issue-login STAFF="$(STAFF)" EMAIL="$(EMAIL)" MERCHANT="$(MERCHANT)"
+
+demo-login:
+	@COMPOSE_PROJECT_NAME=$${COMPOSE_PROJECT_NAME:-keeldemo} $(MAKE) --no-print-directory issue-login STAFF="$(STAFF)" EMAIL="$(EMAIL)" MERCHANT="$(MERCHANT)"
+
 help:
 	@echo "make init           生成 .env.prod（不覆盖已有的），三个密钥项自动填随机值"
 	@echo "make doctor         上线前自查：docker、.env.prod 必填项、compose 解析、端口占用、存量数据坑"
@@ -195,6 +215,9 @@ help:
 	@echo "make multi-wipe       停掉并删它自己的数据卷"
 	@echo "make multi-logs       跟它的 app 日志，首个平台管理员的 bootstrap token 在里面"
 	@echo "make multi-config     打印多商家形态合成后的完整 compose 配置"
+	@echo "make multi-login      给多商家栈签一串登录 token（STAFF=1 或 EMAIL=…；破损恢复）"
+	@echo "make demo-login       给演示栈签一串登录 token（同上）"
+	@echo "make issue-login      对当前 PG* / 指定 COMPOSE_PROJECT_NAME 签登录 token"
 	@echo "make generate       生成 Go + TS 两侧契约产物"
 	@echo "make generate-go    只生成 Go 侧（GO_OUT / GO_PACKAGE / GO_MODE 可覆盖）"
 	@echo "make generate-ts    只生成 TS 侧（TS_OUT 可覆盖）"

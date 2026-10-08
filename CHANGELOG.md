@@ -51,6 +51,9 @@ are in the Added entry below. The core database lands on `00340`.
 - **Merchant custom-domain UI** on `MerchantListView` (register / clear via the existing PATCH `domain`).
 - **Makefile**: help text says `.env.prod` (not `.env`); `make demo-up` / `demo-down` / `demo-verify` / `demo-config`;
   `make test-db-ci` for CI-density shards against a shared template DB.
+- **Ops login recovery**: `cmd/keel-admin issue-login` + `make multi-login` / `demo-login` / `issue-login` mints a
+  15-minute one-time staff login token via the admin DB role (no HTTP session, no app logs). For when every session
+  expired and bootstrap will not re-fire.
 
 - **The multi-merchant deployment form now has an entry point and end-to-end evidence.** `compose.multi.yaml` has been
   in the repository since M1, but nothing ever booted it: the e2e job only ran the single-merchant default, and both

@@ -4,6 +4,9 @@
 
 ## 当前状态
 
+- **运维登录破损恢复（2026-10-08，无迁移）**：`cmd/keel-admin issue-login` + `scripts/issue-login-token.sh` +
+  `make multi-login` / `demo-login` / `issue-login`。会话全过期且引导已关时，用维护库签 kind=2 一次性 token（stdout 明文，不进 app 日志）。验：`make multi-login STAFF=1` 对 keelmulti 签出一串，粘登录页可换会话。
+
 - **工具缺口完善（2026-10-08，无迁移，未提交）**：按「先补工具缺口」排的四项已落地，不是新功能。
   - **`DELETE /admin/promotions/{id}`**：OpenAPI + service/handler/repo + 列表「删除」按钮。规则：必须下线；订单行 / 新人礼发放 / 限购累计 > 0 / 库存已售 > 0 → 409 `promotion-in-use`；上线中 → 409 `promotion-online`。日常收尾仍是下线。测：`TestAdminPromotionRulesAndLifecycle`（草稿 204、再删 404、上线 409、卖过 409）+ permission/contract 登记。
   - **商家自有域名 UI**：`MerchantListView`「域名」对话框，走既有 PATCH `domain`（空串 → `null` 摘掉）。手册去掉「只能 curl」。
