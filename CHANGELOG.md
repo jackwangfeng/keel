@@ -39,6 +39,10 @@ so "which one is running?" never depends on anyone's memory.
 
 ## [Unreleased]
 
+---
+
+## [0.9.0] - 2026-10-09
+
 ### Fixed
 
 - **`POST /orders` could permanently lock an `Idempotency-Key`, which meant duplicate orders and double charges.**
@@ -67,6 +71,16 @@ so "which one is running?" never depends on anyone's memory.
 Core migration `00340` (`merchant_domains`): the custom-domain column moved **out of** `shop_settings`, which the
 application role has no write grant on — the reasoning, the three rejected alternatives and the security properties
 are in the Added entry below. The core database lands on `00340`.
+
+
+**This is a minor release: the API contract gained operations, so regenerate the generated clients** in
+`internal/api/`, `web/src/api/` and `flutter_app/lib/api/`. `/admin/trace-log` is a new path and
+`DELETE /admin/promotions/{id}` is a new method; no path, method or operationId was removed or renamed.
+
+**Upgrading from 0.8.0? Read the two order fixes first.** An `Idempotency-Key` could stay locked forever
+(duplicate orders, double charges), and an unreachable transaction coordinator answered a bare `500` no client
+could act on. Both were found by destructive testing on 2026-10-08; the idempotency defect dates from
+2026-09-26 and only became reachable at concurrency once the coordinator moved out of process.
 
 ### Added
 
@@ -180,8 +194,6 @@ are in the Added entry below. The core database lands on `00340`.
   bootstrapping is precisely the situation where nobody can call any endpoint yet. `multi-verify.sh` now exchanges the
   token from the 201 body against the new shop's own Host, proves it is single-use, and fails if its plaintext appears
   anywhere in the application log.
-
-### Fixed
 
 - **A JSON `null` in a PATCH body no longer collapses into "this key was absent".** Three contract
   fields are documented as three-state — absent / explicit null / a value — and all three read as two,
@@ -1912,7 +1924,9 @@ Listed because a changelog that only lists wins is an advertisement.
   show why a product was rejected last time; the merchant only ever saw it in
   that one response.
 
-[Unreleased]: https://github.com/jackwangfeng/keel/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/jackwangfeng/keel/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/jackwangfeng/keel/compare/v0.8.0...v0.9.0
+[0.8.0]: https://github.com/jackwangfeng/keel/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/jackwangfeng/keel/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/jackwangfeng/keel/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/jackwangfeng/keel/compare/v0.4.0...v0.5.0
