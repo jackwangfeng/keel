@@ -15211,7 +15211,36 @@ export interface paths {
                         "application/problem+json": components["schemas"]["Problem"];
                     };
                 };
-                503: components["responses"]["InventoryUnavailable"];
+                /**
+                 * @description 依赖此刻不可用，两个 type，处置相同（带 `Retry-After` 退避后
+                 *     **带同一个 Idempotency-Key 原样重试**）：
+                 *
+                 *     · `https://keel.dev/problems/inventory-unavailable` ——
+                 *       库存服务没回答。**确定没有下单**（熔断器已打开，当场拒单）。
+                 *     · `https://keel.dev/problems/coordinator-unavailable` ——
+                 *       事务协调器没回答（微服务形态下才会出现：`compose.split.yaml`
+                 *       把内嵌协调器换成独立 dtmrs 之后）。**这一笔可能已经在推进** ——
+                 *       协调器可能落库之后才断的连接，而服务端保证同键重试不会重复生效。
+                 *     · `https://keel.dev/problems/order-outcome-unknown` ——
+                 *       **结果已经确定是不成功**（那一单已被补偿关闭：商品没卖出去、
+                 *       库存已回补、没有重复下单），但它失败的具体原因查不到。
+                 *       出现在同一把 `Idempotency-Key` 的重试上：分支记下的失败原因
+                 *       只活在那一次请求的进程内存里，请求返回后即释放，而重试发生在之后。
+                 *       退避后带同一把键再试一次，那时会得到一条明确的成功或失败。
+                 *
+                 *     三者都不是 `internal`（500）：那个 type 的语义是「服务端写错了代码，
+                 *     重试也不会好」，而这三种都会自己恢复。
+                 */
+                503: {
+                    headers: {
+                        /** @description 建议退避秒数 */
+                        "Retry-After"?: number;
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
                 default: components["responses"]["Problem"];
             };
         };

@@ -274,18 +274,57 @@ UPDATE orders SET status = 90 WHERE order_no = $1 AND status IN (0, 10);
 --
 -- 24 小时足够覆盖客户端的重试窗口（§12）。
 --
+-- **ON CONFLICT 上那个 DO UPDATE WHERE 只在一种情况下动手**（2026-10-08 破坏性测试）：
+-- 已存在、仍处理中、且已过期（expire_at < now()）。那种行是 SAGA 等待超时后
+-- 再没人回填的遗留 —— 留着它就是把一把钥匙锁死，而幂等协议恰恰要求客户端
+-- 拿同一把钥匙重试。其余情况（成功 / 失败存档 / 未过期的处理中）一律 DO NOTHING，
+-- 原样落回三态判定。
+--
+-- 只回收**过期**的那一种，不回收未过期的：未过期的处理中是真的有人在跑
+-- （同一笔 SAGA 还活着），换一把钥匙建第二单才是重复下单。
+-- expire_at 由这里自己推进到 now()+24h，与首次插入一致。
+--
 -- 主体是 (subject_kind, subject_id)，不是 user_id：1 买家 users.id /
 -- 2 后台 staff.id。两张表的 id 来自同一种自增序列，共用一列的话
 -- staff_id = 7 与 user_id = 7 会撞在同一行上（00023 的文件头）。
 INSERT INTO idempotency_keys (scope, subject_kind, subject_id, idem_key, request_hash, expire_at)
 VALUES ($1, $2, $3, $4, $5, now() + interval '24 hours')
-ON CONFLICT (scope, subject_kind, subject_id, idem_key) DO NOTHING;
+ON CONFLICT (scope, subject_kind, subject_id, idem_key) DO UPDATE
+   SET request_hash = EXCLUDED.request_hash,
+       expire_at    = EXCLUDED.expire_at,
+       updated_at   = now()
+ WHERE idempotency_keys.status = 0
+   AND idempotency_keys.expire_at < now();
 
 -- name: GetIdempotencyKey :one
 -- 读出已存在的那一行，用于判定重放 / 409 处理中 / 422 键被复用。
-SELECT request_hash, status, response_code, response_body
+--
+-- expire_at 一起取出来：处理中那一档要靠它判断「真的有人在跑」还是
+-- 「一把没人管的过期钥匙」（2026-10-08，见ClaimIdempotencyKey 上那段）。
+SELECT request_hash, status, response_code, response_body, expire_at
   FROM idempotency_keys
  WHERE scope = $1 AND subject_kind = $2 AND subject_id = $3 AND idem_key = $4;
+
+-- name: MarkIdempotencyInFlightOrder :execrows
+-- 把「这笔逻辑请求对应哪个草稿单号」记进处理中那一行（2026-10-08 破坏性测试）。
+--
+-- 它写的是 response_body，但 status 仍是 0：那一列在这里临时当**「还没最终」的
+-- 暂存位**用，与「存档」是两件事（存档只写 status 1/2）。读回方看到 status=0
+-- 却带着 order_no，就知道这一单已经落库、只是等 SAGA 的结果。
+--
+-- 为什么要这一列：SAGA 等到 15 秒还没终态时，请求已经带着 409 返回了，
+-- 而 SAGA 之后**可能成功**。没有这一列，那个成功没人回填，这把钥匙在
+-- 24 小时里一直回 409 —— 客户端被迫换钥匙，于是重复下单。
+-- 记下单号之后，重试方能自己查库定论，不必依赖当时那个请求还活着
+-- （它也可能已经随进程崩了，这一条同样能治）。
+--
+-- 只在 status 仍是 0 时动手：已经被写成成功/失败存档的行不再抢。
+-- 返回 0 行说明这一行已经不在处理中，调用方按「有人已经回填过」处理。
+UPDATE idempotency_keys
+   SET response_body = $5::jsonb,
+       updated_at   = now()
+ WHERE scope = $1 AND subject_kind = $2 AND subject_id = $3 AND idem_key = $4
+   AND status = 0;
 
 -- name: FinishIdempotencyKey :exec
 -- 把存档写回去。status：1 成功 / 2 失败。

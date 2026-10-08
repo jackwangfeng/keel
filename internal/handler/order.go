@@ -35,6 +35,12 @@ const idempotencyReplayedHeader = "Idempotency-Replayed"
 // 立刻就能拿到重放结果，而不是空等一个固定的长间隔。
 const retryAfterSeconds = 2
 
+// coordinatorRetryAfterSeconds 是协调器不可用时的建议退避秒数。
+//
+// 比幂等键处理中那 2 秒长：协调器重启通常要十几秒，而客户端拿到这把钥匙
+// 重试时还会先撞一次「处理中」，退太快只是白跑一趟。
+const coordinatorRetryAfterSeconds = 10
+
 type OrderHandler struct{ svc *service.OrderService }
 
 func NewOrderHandler(s *service.OrderService) *OrderHandler { return &OrderHandler{svc: s} }
@@ -228,6 +234,36 @@ func writeOrderError(c *gin.Context, err error) {
 		detail := "库存服务暂时不可用，请稍后再试。这次没有下单，稍后用同一个 Idempotency-Key 原样重试即可"
 		problem.WriteValue(c, http.StatusServiceUnavailable, api.Problem{
 			Type: problem.TypeInventoryUnavailable, Title: "库存服务暂时不可用",
+			Status: http.StatusServiceUnavailable, Detail: &detail,
+		})
+
+	case errors.Is(err, service.ErrArchivedReasonUnknown):
+		// 那一单确实已被补偿关闭（库存已回补、没有重复下单），但分支当时留下的
+		// 失败原因没活到自愈的时候（branchNotes 是进程内 map，原始请求返回即drop）。
+		//
+		// **503 而不是 409/500**：原因查不到不等于「原因是什么」，
+		// 也不等于「服务端坏了」。退避后让客户端带同一把键重试，
+		// 那时这一单已经是终态，重试会回放一条明确的成功或失败，
+		// 而不是让它一直停在一个查不出原因的结果上。
+		c.Header("Retry-After", strconv.Itoa(retryAfterSeconds))
+		detail := "这一笔下单已被关闭（商品未售出，库存已回补），但具体原因暂时无法查证。" +
+			"稍后用同一个 Idempotency-Key 重试即可查到最终结果"
+		problem.WriteValue(c, http.StatusServiceUnavailable, api.Problem{
+			Type: problem.TypeOrderOutcomeUnknown, Title: "下单结果暂时无法查证",
+			Status: http.StatusServiceUnavailable, Detail: &detail,
+		})
+
+	case errors.Is(err, service.ErrCoordinatorUnavailable):
+		// 协调器联系不上（微服务形态）：503 + Retry-After，**不是 500**。
+		// 500 的 type 是 internal，客户端读作「服务端 bug，重试也不会好」，
+		// 而协调器挂掉会自己恢复 —— 退避后原样重试才是对的处置。
+		// detail 里写明「可能已经下过单」：它确实可能（协调器落库后才断的连接），
+		// 让客户端以为「这次一定没下」而去换一把新键，那才是重复下单。
+		c.Header("Retry-After", strconv.Itoa(coordinatorRetryAfterSeconds))
+		detail := "下单事务暂时无法确认，稍后用同一个 Idempotency-Key 原样重试即可。" +
+			"这一笔可能已经在推进，服务端保证重试不会重复下单"
+		problem.WriteValue(c, http.StatusServiceUnavailable, api.Problem{
+			Type: problem.TypeCoordinatorUnavailable, Title: "下单事务暂时无法确认",
 			Status: http.StatusServiceUnavailable, Detail: &detail,
 		})
 

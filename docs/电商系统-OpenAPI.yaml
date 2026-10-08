@@ -45,6 +45,14 @@ info:
       库存服务已经连续没有回答（core 一侧的熔断器打开）时，`POST /orders` 当场回 503
       `inventory-unavailable`（带 `Retry-After`）——这一种**确定没有下单**（detail 里写明），
       同一个 Idempotency-Key 稍后原样重试是一次全新的尝试。
+    · **事务协调器没回答时**（微服务形态：`compose.split.yaml` 把内嵌协调器换成
+      独立 dtmrs 之后；单体形态不存在这一档），`POST /orders` 回 503
+      `https://keel.dev/problems/coordinator-unavailable`（带 `Retry-After`）——
+      **这一笔可能已经在推进**（协调器可能落库之后才断的连接），
+      带同一个 Idempotency-Key 退避后原样重试，服务端保证不会重复生效。
+      它刻意不是 500 `internal`：那读作「服务端写错了代码」，而协调器挂掉会自己恢复
+      （2026-10-08 破坏性测试实测：停掉 dtmrs 后下单拿到的曾是裸 500、没有 Retry-After，
+      与同一故障域里库存挂的 503/409 语义互斥）。
 
     **数据库繁忙时（任何部署形态）**。一条写请求等行锁超时、或语句跑过了服务端的语句超时
     （典型：两个人同时审同一张退款单，前一个人的事务还没提交），回 503
@@ -7140,7 +7148,33 @@ paths:
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
-        '503': { $ref: '#/components/responses/InventoryUnavailable' }
+        '503':
+          description: |
+            依赖此刻不可用，两个 type，处置相同（带 `Retry-After` 退避后
+            **带同一个 Idempotency-Key 原样重试**）：
+
+            · `https://keel.dev/problems/inventory-unavailable` ——
+              库存服务没回答。**确定没有下单**（熔断器已打开，当场拒单）。
+            · `https://keel.dev/problems/coordinator-unavailable` ——
+              事务协调器没回答（微服务形态下才会出现：`compose.split.yaml`
+              把内嵌协调器换成独立 dtmrs 之后）。**这一笔可能已经在推进** ——
+              协调器可能落库之后才断的连接，而服务端保证同键重试不会重复生效。
+            · `https://keel.dev/problems/order-outcome-unknown` ——
+              **结果已经确定是不成功**（那一单已被补偿关闭：商品没卖出去、
+              库存已回补、没有重复下单），但它失败的具体原因查不到。
+              出现在同一把 `Idempotency-Key` 的重试上：分支记下的失败原因
+              只活在那一次请求的进程内存里，请求返回后即释放，而重试发生在之后。
+              退避后带同一把键再试一次，那时会得到一条明确的成功或失败。
+
+            三者都不是 `internal`（500）：那个 type 的语义是「服务端写错了代码，
+            重试也不会好」，而这三种都会自己恢复。
+          headers:
+            Retry-After:
+              description: 建议退避秒数
+              schema: { type: integer }
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
         default: { $ref: '#/components/responses/Problem' }
     get:
       tags: [Order]

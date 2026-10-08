@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -257,6 +258,29 @@ type IdempotencyRecord struct {
 	Status       int16 // 0 处理中 / 1 成功 / 2 失败
 	ResponseCode *int32
 	ResponseBody []byte
+	// ExpireAt 是这把钥匙的过期时刻。**处理中那一档要靠它区分两种情况**：
+	// 还在期内 = 真的有人在跑这一笔；已经过期 = 一把没人管的遗留
+	//（SAGA 等超时后请求早已返回，没人再回填结果），此时必须让重试能接手，
+	// 而不是一直回 409（2026-10-08 破坏性测试）。
+	ExpireAt time.Time
+}
+
+// PendingOrderNo 从「处理中」那一行的暂存位里取草稿单号。
+//
+// **空串有两个含义，分不开：真的没记，以及记的是空串。** 后者不可能发生
+// （单号是订单表的自增编号，非空），所以按「没记」处理是对的。
+// 调用方（replay 的处理中分支）拿它去查库定论：查得到就说明这一单已经落库。
+func (r IdempotencyRecord) PendingOrderNo() string {
+	if r.Status != IdempotencyInFlight || len(r.ResponseBody) == 0 {
+		return ""
+	}
+	var pending struct {
+		OrderNo string `json:"order_no"`
+	}
+	if err := json.Unmarshal(r.ResponseBody, &pending); err != nil {
+		return ""
+	}
+	return pending.OrderNo
 }
 
 // 幂等记录的三态。同上：常量，不是散落的字面量。
@@ -352,6 +376,13 @@ type OrderTx interface {
 	// 它只对**处理中**的记录生效（status = 0）。返回 false 表示这把钥匙上的
 	// 记录已经不是「处理中」了 —— 那时撤销不该发生，也没有发生。
 	ReleaseIdempotencyKey(ctx context.Context, scope string, subj IdempotencySubject, key string) (bool, error)
+
+	// MarkIdempotencyInFlightOrder 把草稿单号记进处理中那一行，返回是否写进去了。
+	//
+	// 返回 false 表示这一行已经不是「处理中」—— 那说明已经有人把结果存档了，
+	// 调用方不要覆盖它（2026-10-08 破坏性测试，见 db/queries/orders.sql 上的说明）。
+	MarkIdempotencyInFlightOrder(ctx context.Context, scope string, subj IdempotencySubject,
+		key, orderNo string) (bool, error)
 }
 
 // IdempotencyTx 是幂等存档的「抢占 → 读 → 存档」三步（数据模型 §12）。
@@ -605,12 +636,18 @@ func (t tenantTx) FindIdempotencyKey(ctx context.Context, scope string, subj Ide
 	if err != nil {
 		return IdempotencyRecord{}, err
 	}
-	return IdempotencyRecord{
+	rec := IdempotencyRecord{
 		RequestHash:  r.RequestHash,
 		Status:       r.Status,
 		ResponseCode: r.ResponseCode,
 		ResponseBody: r.ResponseBody,
-	}, nil
+	}
+	// expire_at 是 not null 列，所以 Valid 恒为真；仍按库的约定判一次，
+	// 拿不到就留零值（零时间在「已过期」那一侧，读方不必特判 null）。
+	if r.ExpireAt.Valid {
+		rec.ExpireAt = r.ExpireAt.Time
+	}
+	return rec, nil
 }
 
 func (t tenantTx) FinishIdempotencyKey(ctx context.Context, scope string, subj IdempotencySubject,
@@ -630,6 +667,30 @@ func (t tenantTx) ReleaseIdempotencyKey(ctx context.Context, scope string, subj 
 	key string) (bool, error) {
 	n, err := t.q.ReleaseIdempotencyKey(ctx, db.ReleaseIdempotencyKeyParams{
 		Scope: scope, SubjectKind: subj.kind, SubjectID: subj.id, IdemKey: key,
+	})
+	if err != nil {
+		return false, err
+	}
+	return n == 1, nil
+}
+
+func (t tenantTx) MarkIdempotencyInFlightOrder(ctx context.Context, scope string, subj IdempotencySubject,
+	key, orderNo string) (bool, error) {
+	// response_body 是 jsonb，暂存位的形状由 service 定（{"order_no": "..."}）。
+	// 序列化成字节传过去，SQL 侧只做类型转换——jsonb 的形状不进SQL，
+	// 就不会在两处各写一遍。
+	pending, err := json.Marshal(struct {
+		OrderNo string `json:"order_no"`
+	}{OrderNo: orderNo})
+	if err != nil {
+		return false, err
+	}
+	n, err := t.q.MarkIdempotencyInFlightOrder(ctx, db.MarkIdempotencyInFlightOrderParams{
+		Scope:       scope,
+		SubjectKind: subj.kind,
+		SubjectID:   subj.id,
+		IdemKey:     key,
+		Column5:     pending,
 	})
 	if err != nil {
 		return false, err

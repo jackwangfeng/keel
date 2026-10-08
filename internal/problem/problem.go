@@ -207,7 +207,24 @@ const (
 	// 服务端保证重试不会多加一遍。与 internal 的 500 分开：这不是谁写错了代码，是一个会自己
 	// 好的依赖暂时不在，503 + 退避重试是它在 HTTP 上的准确说法。
 	TypeInventoryUnavailable = "https://keel.dev/problems/inventory-unavailable"
-	TypeUploadNotFound       = "https://keel.dev/problems/upload-not-found"
+	// coordinator-unavailable 是 503：事务协调器此刻联系不上（微服务形态下才会出现，
+	// compose.split.yaml 把内嵌协调器换成独立 dtmrs 之后）。
+	// **写接口上这一笔可能已经提交也可能没有** —— 协调器可能落库之后才断的连接。
+	// 客户端带同一个 Idempotency-Key 退避后原样重试，服务端保证不会重复生效。
+	//
+	// 与 inventory-unavailable 同一处置（都是会自己好的依赖故障），
+	// 但**刻意不复用那一个 type**：契约里逐个写明了哪些接口在什么条件下回哪一个，
+	// 客户端按 type 分流，两种依赖要能分别告警与分别降级。
+	// 与 internal 的 500 分开：那是「服务端写错了代码」，这是「依赖暂时不在」。
+	TypeCoordinatorUnavailable = "https://keel.dev/problems/coordinator-unavailable"
+	// order-outcome-unknown 是 503：这一笔下单**已经被补偿关闭**（商品没卖出去、
+	// 库存已回补、没有重复下单），但它失败的具体原因查不到。
+	//
+	// 单独一个 type 而不是复用 coordinator-unavailable：那一档是「问不到协调器，
+	// 不知道结果」，这一档是「结果确定是不成功，原因不明」——一个可能、一个确定。
+	// 客户端该分别降级：前者不能下单，后者是「这次没买到，可以重试」。
+	TypeOrderOutcomeUnknown = "https://keel.dev/problems/order-outcome-unknown"
+	TypeUploadNotFound      = "https://keel.dev/problems/upload-not-found"
 	// upload-forbidden 是**读**那条路上的 403：文件在、也属于这家店，
 	// 但它的 purpose 不是「所有人可读」的那一类（典型：别人的退款凭证）。
 	// 契约在 GET /uploads/{upload_id} 上明写这里不能用 404 掩盖存在性。

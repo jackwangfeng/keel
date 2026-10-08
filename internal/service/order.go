@@ -105,6 +105,20 @@ var (
 	// 契约：409 + Retry-After，客户端应退避重试而不是当成业务失败弹窗。
 	ErrIdempotencyInFlight = errors.New("同一个幂等键正在处理中")
 
+	// ErrCoordinatorUnavailable 是「事务协调器此刻联系不上」。
+	//
+	// **它与业务失败互斥，处置也相反**（2026-10-08 破坏性测试）：
+	// 停掉协调器后 POST /orders 原来回的是裸 500 problems/internal ——
+	// 那个 type 的语义是「服务端写错了代码，换个请求重试也不会好」，
+	// 而协调器挂掉是一个会自己恢复的依赖故障，客户端退避重试是对的。
+	// 同一故障域里库存服务不可用回 503 + Retry-After，两者的自愈性完全一样，
+	// 却给出互斥的语义，客户端没法用一套逻辑处理。
+	//
+	// 它**不**保证「这笔订单一定没下」：协调器可能在落库之后才断的连接。
+	// 所以 detail 里要写明客户端该带同一把 Idempotency-Key 原样重试，
+	// 服务端保证不会重复生效（与 inventory-unavailable 同一处置）。
+	ErrCoordinatorUnavailable = errors.New("事务协调器暂时不可用")
+
 	// ErrIdempotencyKeyReused：同一个键配了不同的请求体（request_hash 不一致）。
 	// 契约：422。数据模型 §12 写得很清楚 —— 宁可显式失败，也不把不同的请求
 	// 当成重放静默吞掉，那会让用户以为下单成功了而实际什么都没发生。
@@ -118,6 +132,20 @@ var (
 	// 下单在抢到幂等键之后、落草稿之前就判了，整个事务回滚 —— **确定没有下单**，
 	// 幂等键也没被占住。handler 回 503 inventory-unavailable，客户端稍后原样重试。
 	ErrInventoryCircuitOpen = errors.New("库存服务暂时不可用（熔断中），这次没有下单")
+
+	// ErrArchivedReasonUnknown 是**自愈专用**的：那一单已被补偿关掉，
+	// 但分支当时留下的失败原因已经查不到了。
+	//
+	// 查不到的原因很具体：branchNotes 是进程内的 map，原始请求返回时
+	// 就drop 掉了那一条（见 Create 第二段那个 defer），而自愈发生在之后 ——
+	// 进程也可能重启过。所以这不是「分支弄丢了原因」（那是 ErrOrderSagaFailed），
+	// 而是「原因本来只活在那一次请求里，没活到自愈的时候」。
+	//
+	// **刻意不是 500**：500 读作「服务端写错了代码」。这一单确实没下成，
+	// 而原因暂时查不到；退避之后客户端重试，能从自己的后续请求里看到结果
+	//（那一单已被补偿、库存已回补）。编一个业务原因报出去更糟——
+	// 那会让客户端显示一条它无法处理的错误。
+	ErrArchivedReasonUnknown = errors.New("那一单已被补偿关闭，但失败原因已无法查证")
 )
 
 // idempotencyScope 是这条接口在 idempotency_keys 里的作用域（数据模型 §12）。
@@ -440,7 +468,28 @@ func (s *OrderService) Create(ctx context.Context, req CreateRequest, idemKey st
 				return ErrInventoryCircuitOpen
 			}
 			draft, lines, err = s.placeDraft(ctx, tx, id.UserID, req, quotas)
-			return err
+			if err != nil {
+				return err
+			}
+			// 把草稿单号记进「处理中」那一行，与抢键/落草稿同一个事务。
+			//
+			// **这一行是 2026-10-08 那次破坏性测试逼出来的**：SAGA 等待超时后请求
+			// 已经返回，那把钥匙此前没有任何地方记着「它对应哪一单」，于是 SAGA
+			// 之后成功了也没人回填 → 客户端被迫换钥匙 → 重复下单。记下单号之后，
+			// 重试方能自己查库定论，而这个办法**不依赖当时那个请求还活着**：
+			// 进程崩了、SAGA 还在跑、客户端隔天才重试，都能自愈。
+			//
+			// 写不进去（已经不是处理中）不算错：那说明结果已经被回填了，
+			// 后面第三段会读到它。
+			if marked, mErr := tx.MarkIdempotencyInFlightOrder(ctx, idempotencyScope,
+				repository.BuyerSubject(id.UserID), idemKey, draft.OrderNo); mErr != nil {
+				s.log.WarnContext(ctx, "记幂等键的草稿单号失败，超时后这把钥匙可能锁死",
+					"order_no", draft.OrderNo, "err", mErr)
+			} else if !marked {
+				s.log.InfoContext(ctx, "幂等键已不是处理中，没有记草稿单号",
+					"order_no", draft.OrderNo)
+			}
+			return nil
 		})
 	})
 	if err != nil {
@@ -499,6 +548,15 @@ func (s *OrderService) Create(ctx context.Context, req CreateRequest, idemKey st
 			s.log.ErrorContext(ctx, "撤销幂等键抢占失败，这把键会一直返回 409 处理中直到过期",
 				"gid", gid, "err", relErr)
 		}
+		// 协调器联系不上 → 503 + Retry-After，不是 500。
+		//
+		// 分支一个都没跑过，钥匙也撤了，客户端带同一把键重试是一次**全新的尝试** ——
+		// 这里比协调器「拒绝」那档更干净：没有半截状态需要交代。
+		// 判据是网络层的「联系不上」（dtm.IsUnavailable），不是解析错误字符串。
+		if dtm.IsUnavailable(err) {
+			return CreateResult{}, fmt.Errorf("%w（提交时，gid=%s）: %w",
+				ErrCoordinatorUnavailable, gid, err)
+		}
 		return CreateResult{}, fmt.Errorf("提交下单事务失败（gid=%s）: %w", gid, err)
 	}
 
@@ -527,6 +585,14 @@ func (s *OrderService) Create(ctx context.Context, req CreateRequest, idemKey st
 		// 90。库存不会漏，订单不会重复。退化的只是那一把钥匙，客户端换一把新的
 		// 就能继续下单。
 		s.log.WarnContext(ctx, "等待下单事务终态超时", "gid", gid, "err", waitErr)
+		// 协调器中途失联：不是「这一笔还在推进」，是**问不到它了**。
+		// 报 409 处理中会让客户端一直退避重试一把永远不会翻面的钥匙，
+		// 而正确处置是告诉它「依赖故障，稍后再来」（503 + Retry-After）。
+		// 钥匙这一路不动：SAGA 可能还活着，回填与自愈仍然要留着。
+		if dtm.IsUnavailable(waitErr) {
+			return CreateResult{}, fmt.Errorf("%w（等待终态时，gid=%s）: %w",
+				ErrCoordinatorUnavailable, gid, waitErr)
+		}
 		return CreateResult{}, fmt.Errorf("%w（gid=%s）: %v", ErrIdempotencyInFlight, gid, waitErr)
 	}
 
@@ -702,7 +768,61 @@ func (s *OrderService) replay(ctx context.Context, tx repository.Tx, userID int6
 	}
 	switch rec.Status {
 	case repository.IdempotencyInFlight:
-		return nil, fmt.Errorf("%w: 另一个并发请求抢先占住了这个键", ErrIdempotencyInFlight), nil
+		// 「处理中」原来只有 409 一个出口，那正是钥匙被锁死的地方（2026-10-08 破坏性测试）。
+		// 一个 SAGA 等到 15 秒还没终态时，请求已经带着这个 409 返回给客户端了，
+		// 而 SAGA 之后**可能成功** —— 成功了就再没人数得上有谁欠这次回填。
+		// 于是那把钥匙在 24 小时里一直回 409，客户端只能换一把新的，
+		// 而换钥匙恰恰是幂等协议要它别做的：结果是重复下单、重复收款。
+		//
+		// 现在这一档自己查库定论，分三种：
+		//   · 记着草稿单号 → 那一单已经落库，按它的真实状态回放或继续等；
+		//   · 单号已落库但状态还是 0 → SAGA 真在跑，409 是正确答案；
+		//   · 没有单号（抢占之后、草稿还没提交就崩了）→ 同上。
+		// 过期那一支由 ClaimIdempotencyKey 的回收分支处理：真过期时它已经把
+		// 这一行收走了，走不到这里（2026-10-08，见 db/queries/orders.sql）。
+		orderNo := rec.PendingOrderNo()
+		if orderNo == "" {
+			return nil, fmt.Errorf("%w: 另一个并发请求抢先占住了这个键", ErrIdempotencyInFlight), nil
+		}
+		order, err := tx.FindOrderByNo(ctx, orderNo)
+		if err != nil {
+			if errors.Is(err, repository.ErrOrderNotFound) {
+				// 记了单号却查不到：那一行草稿被别的路径删掉了。这一档已经不值得
+				// 再等 —— 撤掉这把钥匙，客户端下一次重试就是一次全新的尝试。
+				s.log.WarnContext(ctx, "幂等键记着草稿单号，但那一单已经不在库里",
+					"order_no", orderNo, "idem_key", idemKey)
+				return nil, s.releaseInFlight(ctx, tx, idemKey,
+					fmt.Errorf("%w: 这一笔的草稿订单已不存在", ErrIdempotencyInFlight)), nil
+			}
+			return nil, nil, err
+		}
+		// 草稿还停在 0：SAGA 还没推动它。这一单真的在路上，409 是对的。
+		if order.Status == orderStatusDraft {
+			return nil, fmt.Errorf("%w: 另一笔下单事务还在推进（单号 %s）",
+				ErrIdempotencyInFlight, orderNo), nil
+		}
+		// 已经不是草稿了 —— 说明 SAGA 推到了 10（待支付）或 20（已支付），
+		// 或者补偿关到了 90。三种都要按订单的真实状态回放，而不是回 409。
+		if order.Status == orderStatusClosed {
+			// 被补偿关掉了：这是一次**业务失败**，按 §12 存失败存档，
+			// 之后同键重试回放的是这个失败，而不是永远 409。
+			// 原因要**先问分支**（branchNotes 里存着「库存不足」「券不可用」这类
+			// sentinel），拿不到才用兜底。不能直接拿 ErrOrderSagaFailed 兜：
+			// 那个 sentinel 的注释写着「出现它意味着分支把失败原因弄丢了」，
+			// 用它回答「这一单被补偿关掉了」会把一次正常的库存不足报成 500 ——
+			// 而 notification_policy.go 上明写着关到 90 时
+			// 「POST /orders 同步回的是失败（库存不足、券不可用）」。
+			//
+			// 问不到是**正常情况**：notes 是进程内的 map（不落库，见它自己的注释），
+			// 原始请求早已返回并 drop 掉了那一条，而进程也可能重启过。
+			bizErr := s.archivedBizErrFor(ctx, orderNo)
+			s.archiveFailureTx(ctx, tx, userID, idemKey, bizErr)
+			return nil, bizErr, nil
+		}
+		// 10 / 20：这一单真的成了，把成功存档补上（**这是根治的那一步**——
+		// 补上之后这把钥匙回到「成功」档，重试直接回放，不再有重复下单）。
+		s.archiveSuccessTx(ctx, tx, userID, idemKey, order)
+		return &CreateResult{Order: order, Replayed: true}, nil, nil
 	case repository.IdempotencySucceeded:
 		var order repository.Order
 		if err := json.Unmarshal(rec.ResponseBody, &order); err != nil {
@@ -750,6 +870,62 @@ func (s *OrderService) archiveSuccess(ctx context.Context, userID int64, idemKey
 	}
 }
 
+// archivedBizErrFor 为「那一单被补偿关掉了」取一个该存档的失败原因。
+//
+// 优先问分支留下的 sentinel（库存不足 → 409、券不可用 → 409……），
+// 问不到才落 ErrOrderSagaFailed（500）。分派不了的失败会走 handler 的兜底分支，
+// 而那条分支留一条 Error 日志 —— 所以「原因丢了」这件事本身仍然查得到，
+// 不会因为这次自愈而被吞掉。
+//
+// 这一档是**自愈专用**：原始请求那一路（Create 第三段）自己拿得到 notes，
+// 不需要这个函数。它在这里存在是因为自愈可能发生在原始请求早已返回、
+// notes 已被 drop 之后 —— 那种时候 notes.get 返回 nil。
+func (s *OrderService) archivedBizErrFor(ctx context.Context, orderNo string) error {
+	if gid, err := orderGID(ctx, orderNo); err == nil {
+		if noted := s.notes.get(gid); noted != nil {
+			return noted
+		}
+	}
+	return fmt.Errorf("%w（单号 %s）", ErrArchivedReasonUnknown, orderNo)
+}
+
+// archiveSuccessTx / archiveFailureTx 是 archiveSuccess / archiveFailure 的**事务内**版本。
+//
+// 为什么要有两套：replay 跑在 Create 第一段那个事务里，而 archiveSuccess 走
+// finishKey → s.repo.WithTenant，后者会**再开一个事务**。在同一个连接上嵌套开事务
+// 会死锁自己 —— 实测是 panic: reportSecondConn（第一次写这条注释时的现场）。
+//
+// 所以凡是已经在事务里的调用点，都必须用 Tx 版。两者只能差一个事务句柄，
+// 序列化与「写失败只记日志不返回」的处置完全一致（照抄的那部分见各自原函数）。
+func (s *OrderService) archiveSuccessTx(ctx context.Context, tx repository.Tx,
+	userID int64, idemKey string, o repository.Order) {
+	body, err := json.Marshal(o)
+	if err != nil {
+		s.log.ErrorContext(ctx, "序列化幂等存档失败", "order_no", o.OrderNo, "err", err)
+		return
+	}
+	code := archivedCreateStatus
+	if err := tx.FinishIdempotencyKey(ctx, idempotencyScope,
+		repository.BuyerSubject(userID), idemKey, repository.IdempotencySucceeded, &code, body); err != nil {
+		s.log.ErrorContext(ctx, "写幂等存档失败，同一个键的重试会拿到 409 处理中",
+			"order_no", o.OrderNo, "err", err)
+	}
+}
+
+// archiveFailureTx 是 archiveFailure 的事务内版本，理由见 archiveSuccessTx。
+func (s *OrderService) archiveFailureTx(ctx context.Context, tx repository.Tx,
+	userID int64, idemKey string, bizErr error) {
+	body, err := json.Marshal(encodeArchivedFailure(bizErr))
+	if err != nil {
+		s.log.ErrorContext(ctx, "序列化失败存档失败", "err", err)
+		return
+	}
+	if err := tx.FinishIdempotencyKey(ctx, idempotencyScope,
+		repository.BuyerSubject(userID), idemKey, repository.IdempotencyFailed, nil, body); err != nil {
+		s.log.ErrorContext(ctx, "写失败存档失败", "err", err)
+	}
+}
+
 // archiveFailure 把失败存档写回去（§12：失败也回放，最保守，绝不会重复扣款）。
 func (s *OrderService) archiveFailure(ctx context.Context, userID int64, idemKey string, bizErr error) {
 	body, err := json.Marshal(encodeArchivedFailure(bizErr))
@@ -762,6 +938,45 @@ func (s *OrderService) archiveFailure(ctx context.Context, userID int64, idemKey
 	if err := s.finishKey(ctx, userID, idemKey, repository.IdempotencyFailed, nil, body); err != nil {
 		s.log.ErrorContext(ctx, "写失败存档失败", "err", err)
 	}
+}
+
+// releaseInFlight 在**已有的事务里**撤销一把「处理中」的钥匙，返回要报给客户端的错误。
+//
+// 与 releaseKey 的区别只有两点，但两点都要紧：它复用 replay 所在的那个事务
+// （不能自己再开一个 —— 那是另一个快照，会与当前读到的行对不上），
+// 以及它**撤销之前先判状态**，只撤 status=0 的那些。
+//
+// 为什么需要它：处理中那一档自愈时发现草稿单已经不在库里（别的路径关掉并删了），
+// 那一行就是个纯遗留 —— 再没有 SAGA 会来推动它，也再没有订单可等。留着它
+// 就是把一把钥匙锁死到过期，而客户端已经拿过一次 409 了。
+func (s *OrderService) releaseInFlight(ctx context.Context, tx repository.Tx,
+	idemKey string, report error) error {
+	released, err := tx.ReleaseIdempotencyKey(ctx, idempotencyScope,
+		repository.BuyerSubject(s.pendingSubjectID(ctx)), idemKey)
+	if err != nil {
+		// 撤不掉不是客户端的事：报撤销失败，客户端带同一把钥匙重试，
+		// 而下一次 replay 会再走一遍这里的判断（那时多半已经过期被回收了）。
+		return fmt.Errorf("%v（撤销这把过期的幂等键也失败了: %w）", report, err)
+	}
+	if !released {
+		// 已经不是处理中了 —— 说明在读到它与此刻之间，有人把结果回填了。
+		// 那把钥匙现在是好的，不该撤，让客户端下一次重试回放那个结果。
+		s.log.InfoContext(ctx, "处理中的幂等键已被回填，没有撤销", "idem_key", idemKey)
+	}
+	return report
+}
+
+// pendingSubjectID 取这次请求的买家 id。
+//
+// replay 里手上已经有 userID 参数，本可以一路传下来；单独取是为了让
+// releaseInFlight 这个函数的签名只依赖 ctx —— 它开的是一把「谁的钥匙」
+// 相关的写操作，而那件事只有 ctx 里有。
+func (s *OrderService) pendingSubjectID(ctx context.Context) int64 {
+	id, err := auth.FromContext(ctx)
+	if err != nil {
+		return 0
+	}
+	return id.UserID
 }
 
 // releaseKey 撤销一次幂等键抢占。只在 SubmitSaga 失败那一路调用。

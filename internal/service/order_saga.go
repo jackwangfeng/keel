@@ -608,6 +608,11 @@ var replayableFailures = map[string]error{
 	"coupon_not_applicable": ErrCouponNotApplicable,
 	"promotion_sold_out":    ErrPromotionSoldOut,
 	"promotion_limit":       ErrPromotionLimitExceeded,
+	// 自愈那一档：原因查不到（见 ErrArchivedReasonUnknown）。
+	// 它进这张表是为了让 encode/decode 认得这个名字 ——
+	// 不进的话会被 encodeArchivedFailure 的兜底写成 "saga_failed"，
+	// 于是回放时变成 500，而这一档报的是 503。
+	"outcome_unknown": ErrArchivedReasonUnknown,
 }
 
 func encodeArchivedFailure(err error) archivedFailure {

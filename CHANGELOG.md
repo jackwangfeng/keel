@@ -39,6 +39,31 @@ so "which one is running?" never depends on anyone's memory.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`POST /orders` could permanently lock an `Idempotency-Key`, which meant duplicate orders and double charges.**
+  The `orders.create` scope had a `DO NOTHING` claim, so when the order-service SAGA failed or timed out the key row
+  stayed `status = 0` (in-flight). The 15-second wait budget returned `409 idempotency-key-in-flight` with
+  `Retry-After`, and the client was told to retry with the same key — but nothing ever filled that row in once the
+  SAGA itself succeeded: the request had already returned, and no callback wrote the archive. Same-key retries then
+  returned `409` forever (measured, including with `expire_at` moved into the past — so it was permanent, not 24
+  hours), while a new key created a **second** order for the same basket. `ClaimIdempotencyKey` now takes over an
+  expired in-flight row, and `MarkIdempotencyInFlightOrder` records the draft `order_no` in the same transaction that
+  claimed the key, so a retry can settle the outcome by reading the order instead of trusting a request that is
+  already gone — which also covers the case where that process crashed. Replay is now decided per state: `status =
+  10` / `20` archives the success and replays that order (`Idempotency-Replayed: true`), `status = 90` archives the
+  failure instead of answering `409` forever, and a missing draft releases the key so the next attempt starts clean.
+  Found by destructive testing on 2026-10-08; the gap dates from the SAGA two-branch commit of 2026-09-26, and only
+  became reachable at high concurrency once `compose.split.yaml` moved the coordinator out of process.
+- **`POST /orders` answered `500 problems/internal` with no `Retry-After` when the transaction coordinator was
+  unreachable.** A stopped `dtmrs` produced a bare internal problem, whose meaning is "the server wrote something
+  wrong, retrying will not help" — while an unavailable inventory service in the same fault domain answers `409`/`503`
+  and recovers on its own. It now answers `503 coordinator-unavailable` with `Retry-After: 10` and a detail telling
+  the client to retry the same key. The 503 does **not** claim the order was not placed: the coordinator may have
+  committed before the connection broke, which is why the same-key retry is what the contract prescribes. Network-level
+  failures are separated from "the coordinator rejected this" by `dtm.IsUnavailable`, which never parses error strings.
+
+
 Core migration `00340` (`merchant_domains`): the custom-domain column moved **out of** `shop_settings`, which the
 application role has no write grant on — the reasoning, the three rejected alternatives and the security properties
 are in the Added entry below. The core database lands on `00340`.

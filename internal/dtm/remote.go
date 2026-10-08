@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -86,6 +87,40 @@ type dtmResult struct {
 }
 
 // do 发一次请求。2xx 且（有 dtm_result 时）不是 FAILURE 才算成功；out 非 nil 时把响应体解进去。
+// ErrUnavailable 是「协调器此刻联系不上」（网络层失败：连不上、超时、连接被断）。
+//
+// 与「协调器拒绝了」分开，是因为两者的正确处置相反：
+//
+//	· 联系不上 → 服务端**无法判定**那一笔事务的下落，所以不能报 500
+//	  （那读作「我们写错了代码，重试也不会好」），要报 503 + 退避重试。
+//	  契约把结果分成三态，无法判定的那一态是「退避后原样重试」。
+//	· 协调器拒绝了（HTTP 4xx/5xx、Result=FAILURE）→ 协调器在，它说不。
+//	  那时报什么由业务决定，不该一律当成依赖故障。
+//
+// 2026-10-08 破坏性测试：停掉 dtmrs 之后 POST /orders 返回裸 500
+// problems/internal，没有 Retry-After —— 而同一故障域里库存服务不可用回的是
+// 409/503，语义互相矛盾。
+var ErrUnavailable = errors.New("协调器此刻联系不上")
+
+// IsUnavailable 判断一个协调器错误是不是「联系不上」。
+//
+// 判据是 net.Error 与 context 的两类超时，外加一条明确标记：
+// do() 在网络失败那条路上会用 %w 包 ErrUnavailable，所以 errors.Is 命中它
+// 就算。**故意不解析错误字符串** —— 那是最容易在重构时静默失效的做法。
+func IsUnavailable(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrUnavailable) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return true
+	}
+	return errors.Is(err, context.DeadlineExceeded)
+}
+
 func (r *Remote) do(method, path string, body any, out any) (int, error) {
 	var rd io.Reader
 	if body != nil {
@@ -105,7 +140,7 @@ func (r *Remote) do(method, path string, body any, out any) (int, error) {
 	}
 	resp, err := r.hc.Do(req)
 	if err != nil {
-		return 0, fmt.Errorf("调协调器 %s %s 失败: %w", method, path, err)
+		return 0, fmt.Errorf("%w: 调协调器 %s %s 失败: %w", ErrUnavailable, method, path, err)
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
