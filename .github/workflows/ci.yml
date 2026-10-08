@@ -8,11 +8,13 @@
 # 都要先花时间分辨是代码错了还是两份实现错开了。把判据留在仓库里那一份，
 # 贡献者在本地跑的和 CI 跑的就是同一段代码，对不上的时候只有一个嫌疑人。
 #
-# ## 为什么分成四个 job
+# ## 为什么是一个 job 里的四路，而不是四个 job
 #
 # 前置条件不相交：gates 只要 Go 工具链 + Node，go 要一个 PostgreSQL，
-# e2e 要 Docker，flutter 要 Flutter SDK 与 pub 依赖。串成一个 job 的话，最慢的那段（compose 建镜像，分钟级）
-# 会挡住最快的那段（文档校验，本机实测 2.4 秒），而 PR 上最常红的恰恰是最快那段。
+# e2e 要 Docker，flutter 要 Flutter SDK 与 pub 依赖。曾经拆成四个 job，好让最快的
+# 文档闸门不必等最慢的镜像构建。但这台机器只有一个 keel runner，四个 job 实际是排队，
+# 2026-10-07 实测墙钟 9 分 50 秒，等于各段相加。scripts/ci_parallel.sh 把这四路
+# 放进同一个 job 同时跑，墙钟变成最慢的那一路。哪一路红了，日志按路分开。
 #
 # （曾经有第五个 job：inference，跑真模型。M4 换引擎之后它没有执行者了，
 # 已经删掉 —— 理由与后果见下面「没有覆盖到的」第一条。）
@@ -26,7 +28,7 @@
 #     仍然没有自动化。
 #     （2026-10-07 之前这一条是「只有人手动验证过」，即 compose.multi.yaml 从 M1
 #     起就在仓库里、而自动化一次都没碰过它。）
-#   - -race。make test-db 是 `go test -count=1 -timeout=5m ./...`，没有 -race；
+#   - -race。make test-db 是 `go test -count=1 -timeout=$(TEST_TIMEOUT) ./...`，没有 -race；
 #     要加得先决定它属于 Makefile 还是属于这里。
 #   - examples/dtmrs-embedded 在自己的 workflow 里（example-dtmrs.yml）。
 #     它跑的是那个例子自己的五项验证（TCC、拉取式分支、崩溃恢复…），
@@ -119,7 +121,10 @@ permissions:
 #   · 不用宿主机上已被占的端口（5432 有 quant_postgres，8080 有别的服务）；
 #   · 名字带 keelci 前缀，和同机的演示环境（COMPOSE_PROJECT_NAME=keeldemo，18099）隔开；
 #   · 开始前、结束后都清理（结束后 if: always()），上一次残留不会让下一次重名失败。
-# 只有一个 keel runner，job 串行，所以固定名字就够；要并行得先把这些名字与端口参数化。
+# 只有一个 keel runner。四路在同一个 job 里并发，容器名和端口在脚本里就分开了
+# （测试库 15432 / keelci-pg，单商家 28180，多商家 29185），不会互相占。
+# 29185 不是开发机上那套 keelmulti（28185）：那套可能正开着，CI 不能占它的端口。
+# 不同 ref 的两次 CI 仍由下面的 concurrency 排队，所以这些固定名字不会撞车。
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   # 只在 PR 上取消。往 PR 连推三次，没必要让三个 e2e 同时建镜像——有意义的
@@ -128,431 +133,19 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # ---------------------------------------------------------------------------
-  # 文档、契约、以及入库的生成产物有没有漂移
-  # ---------------------------------------------------------------------------
-  gates:
-    name: 文档与契约闸门
+  ci:
+    name: CI
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, keel]
-    # 这一段本机 2.4 秒。给 15 分钟是留给 npx 首次下载与 Go 模块下载的，
-    # 不是留给「卡住也没关系」——真卡住时，六小时的默认上限会把 runner 额度
-    # 烧光，而失败信息还是那句超时。
     timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-
-      # Go 用 runner 本机装好的那一份，不用 actions/setup-go：在这台国内的自建 runner 上，
-      # setup-go 每个 job 要吃掉 6～7 分钟（下载工具链 + 上传下载 GitHub 依赖缓存），
-      # 比整个全量测试还慢。实测数据与理由在脚本文件头。
-      - name: Go 工具链（runner 本机）
-        run: scripts/ci_go_toolchain.sh
-
-      - uses: actions/setup-node@v4
-        with:
-          # check-all.sh 的漂移比对要 npx openapi-typescript，schema-check 要 npx tsc。
-          # 没有 Node 时那两步会失败，而那是**诚实的失败**（契约产物确实没被验证过），
-          # 所以这里必须真的把 Node 装上，不能改成「没有就跳过」。
-          # 下限 22.18（Node 自带类型剥离），CONTRIBUTING 记的已验证版本是 24.10.0。
-          node-version: '24'
-
-      # 先打印版本再跑闸门：contract-check 红的时候，第一个要问的问题就是
-      # 「两边的生成器是不是同一个版本」，答案应该已经在日志上面几行。
-      - name: 钉住的工具版本
-        run: make tools-versions
-
-      # 商家后台那道类型闸门（admin-type-check）要 web/admin/node_modules：
-      # vue-tsc 才认 .vue，而 npx 拉不到一个能用的 vue-tsc + vue 组合。
-      # 约 130 个包、本机实测 5 秒；版本由入库的 package-lock.json 锁死。
-      #
-      # **不能改成「没装就跳过」**：那会让「后台的类型检查跑过了」这句话
-      # 在 CI 上是假的，而它看起来是真的。理由与上面 Node 那一步一字不差。
-      - name: 商家后台依赖
-        run: make admin-install
-
-      # 六个 python 校验 + 契约产物漂移比对 + schema-check，一条命令。
-      # 漂移比对是生成到临时目录再 diff，对工作区只读——CI 上不会出现
-      # 「检查跑完工作区被改了」这种要额外一步 git diff --exit-code 去收尾的事。
-      - name: 全部闸门
-        run: ./scripts/check-all.sh
-
-  # ---------------------------------------------------------------------------
-  # Go 侧：编译、vet、以及碰数据库的测试
-  # ---------------------------------------------------------------------------
-  go:
-    name: Go 构建与测试
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, keel]
-    env:
-      PGPORT: "15432"
-    # 20 分钟是按最坏的冷路径算的，不是按平常：镜像层缓存被清掉时 docker build
-    # 约 90 秒、libdtmrs 缓存不命中时 cargo 冷编要几分钟，再加上「数据库测试」
-    # 那一步自己的 12 分钟上限。平常（缓存都在）整个 job 两三分钟。
-    timeout-minutes: 20
-    # 没有 services.postgres 这一段了。**这不是疏忽，是没得选。**
-    #
-    # 00020 的电子围栏要 PostGIS，00016 的向量要 pgvector，而没有任何一个
-    # 官方镜像同时带这两样（完整论证在 compose.yaml 的 postgres 服务上方与
-    # 数据模型 §4）。仓库因此自建 docker/postgres/Dockerfile —— 而
-    # `services.<id>.image` **只吃一个能 pull 下来的标签，不接受 build**。
-    #
-    # 于是这个 job 自己起库：下面「数据库」那一步 docker build + docker run，
-    # 端口、环境变量与原来那段 services 逐项相同，健康检查用同一条 pg_isready。
-    # 对后面每一步来说，这与 services 那段是同一件事。
-    #
-    # **成本这一段跟着 runner 改了，别照抄托管 runner 时代的算法。**
-    # 托管 runner 每次都是新虚拟机，那时 docker build 是每次必付的 90 秒，
-    # 于是当时写了两段论证「为什么不推 GHCR、为什么不用 actions/cache」。
-    # 现在全部 job 跑在 lenserver 上，**镜像层留在这台机器的本地 image store 里**：
-    # 首次构建付一次全价，之后只要 docker/postgres 下面没动，每一步都是
-    # `CACHED`，实测整步在秒级。所以：
-    #   · 不推 GHCR —— 原来的理由（要一条发布 workflow、packages:write、一份
-    #     此刻不存在的凭据，换来让测试基建依赖仓库之外的可变产物）还成立，
-    #     而它原本要买的那点速度，本地层缓存已经白送了。
-    #   · 不用 actions/cache —— 在自建 runner 上它是**纯负收益**：docker
-    #     save/load 一个 648 MB 的镜像，再加一次缓存的上传下载，去替换一个
-    #     本来就在本地磁盘上的层缓存。
-    # 真要让它变慢只有一种情况：有人在这台机器上 docker system prune。
-    # 那时症状只是这一步慢回 90 秒，不会错。
-    steps:
-      - uses: actions/checkout@v4
-
-      # 数据库。与 compose.yaml 的 postgres 服务**同一个 Dockerfile** ——
-      # 两边只要有一处还指着旧镜像，症状就是最难查的那种：本地 compose 绿、
-      # CI 红（或反过来），而两边跑的是同一份迁移，谁都不会先怀疑镜像。
-      - name: 数据库（PostGIS + pgvector，自建镜像）
-        run: |
-          # 上一次的残留。自建 runner 不像托管 runner 那样每次给新机器，
-          # 上一跑要是没走到「收拾」那一步（job 被取消、runner 重启），
-          # 这里会因为重名直接失败，而那句报错完全不指向真因。
-          # -v：postgres 镜像的数据目录是匿名卷，不带 -v 删容器会把卷漏在机器上。
-          docker rm -f -v keelci-pg >/dev/null 2>&1 || true
-
-          # 要 apt 装 PostGIS / pgvector，国内直连 apt.postgresql.org 常常超时，
-          # 与 e2e 那一步同一个代理（scripts/ci_build_proxy_args.sh）。
-          # shellcheck disable=SC2046
-          docker build $(scripts/ci_build_proxy_args.sh) -t keel-postgres:16 docker/postgres
-          docker run -d --name keelci-pg --shm-size=1g \
-            -e POSTGRES_USER=keel -e POSTGRES_PASSWORD=keel -e POSTGRES_DB=keel \
-            -p 15432:5432 keel-postgres:16
-          # --shm-size=1g：internal/repository 的 HNSW 测试并行建索引，pgvector
-          # 把整张图放在一块大小等于 maintenance_work_mem（256MB）的动态共享内存里，
-          # 而 Docker 默认的 /dev/shm 只有 64MB。不给的话那条测试会退回串行建
-          # （结果一样，慢二十秒左右，日志里有一句说明）。理由与实测数据在
-          # internal/repository/search_hnsw_test.go 的 buildHNSWIndex 上。
-          # keel / keel / keel 与 internal/db.AdminDSN() 的默认值逐项对应，
-          # 迁移用的就是这个角色。对上之后这个 job 除了 PGPORT 一个 PG* 环境
-          # 变量都不用配，少一处「Makefile、compose、workflow 三份连接串各说
-          # 各话」的机会。应用与测试连的是 keel_app，它由 00003_app_role.sql
-          # 在迁移里建出来。
-          #
-          # 端口：托管 runner 时代映的是 5432，好让 internal/db 的默认 PGPORT
-          # 直接成立。这台机器上 5432 被 quant_postgres 占着，所以映 15432，
-          # job 级的 PGPORT 跟着改（internal/db/dsn.go 与 Makefile 的
-          # GOOSE_DBSTRING 都读它）。容器名同理带 keelci 前缀，和演示栈隔开。
-          #
-          # 等健康：原先那段 services 用 --health-cmd 让 runner 替我们等，
-          # 自己起容器就得自己等。判据用同一条 pg_isready，-h 127.0.0.1 同样
-          # 不能省（理由写在 compose.yaml 的 healthcheck 上：initdb 期间镜像会先
-          # 起一个只听 unix socket 的临时服务器，不带 -h 的 pg_isready 走的正是
-          # 那个 socket，于是它会在库还没真的可连时就报 ready）。
-          for i in $(seq 1 60); do
-            if docker exec keelci-pg pg_isready -h 127.0.0.1 -U keel -d keel >/dev/null 2>&1; then
-              echo "数据库就绪（第 ${i} 次探测）"
-              exit 0
-            fi
-            sleep 2
-          done
-          echo "::error::数据库 120 秒内没有就绪"
-          docker logs keelci-pg
-          exit 1
-
-      # Go 用 runner 本机装好的那一份，不用 actions/setup-go：在这台国内的自建 runner 上，
-      # setup-go 每个 job 要吃掉 6～7 分钟（下载工具链 + 上传下载 GitHub 依赖缓存），
-      # 比整个全量测试还慢。实测数据与理由在脚本文件头。
-      - name: Go 工具链（runner 本机）
-        run: scripts/ci_go_toolchain.sh
-
-      # libdtmrs.so —— 主模块经 cgo 嵌入 dtmrs，没有它 `go build ./...` 停在
-      # 链接器的一句 `cannot find -ldtmrs` 上，那句话不指向任何该做的事。
-      #
-      # 缓存键取 scripts/fetch-dtmrs.sh 的内容哈希：dtmrs 的版本（v0.12.0）就钉在
-      # 那个脚本里，改版本必然改脚本，缓存自然失效。命中时整段 Rust 都不跑。
-      - uses: actions/cache@v4
-        id: libdtmrs
-        with:
-          path: |
-            third_party/dtmrs/lib
-            third_party/dtmrs/include
-            third_party/dtmrs/bin
-          key: libdtmrs-${{ runner.os }}-${{ hashFiles('scripts/fetch-dtmrs.sh') }}
-
-      # 先确认工具链在，再去构建。
-      #
-      # 没有这一步的话，缺 Rust 时报出来的是 fetch-dtmrs.sh 里那句中文提示
-      # 混在 make 的输出里 —— 已经不错了，但它出现在「构建 libdtmrs」这一步，
-      # 读的人第一反应是 dtmrs 出了问题。单独一步、名字就叫工具链，
-      # 让失败信息在 job 的步骤列表里就指向真因。
-      #
-      # **这一步同时是那条未验证假设的兜底**：「ubuntu-latest 自带 rustup 与
-      # stable 工具链」从来没有在真 runner 上验证过（本机验证不了 runner 镜像
-      # 装了什么）。哪天它不成立，红的是这一步，而修法只有一行：在它前面加
-      # `- uses: dtolnay/rust-toolchain@stable`。
-      - name: Rust 工具链
-        if: steps.libdtmrs.outputs.cache-hit != 'true'
-        run: |
-          # runner 作为 systemd 服务跑，PATH 里没有 rustup 装的 ~/.cargo/bin。
-          if [ -x "$HOME/.cargo/bin/cargo" ]; then
-            export PATH="$HOME/.cargo/bin:$PATH"
-            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-          fi
-          command -v cargo >/dev/null || {
-            echo "::error::runner 上没有 cargo。dtmrs 是 Rust 实现，Keel 自 M2 起经 cgo 嵌入它。修法：在这一步前面加 - uses: dtolnay/rust-toolchain@stable"
-            exit 1
-          }
-          cargo --version
-          rustc --version
-
-      - name: 构建 libdtmrs
-        if: steps.libdtmrs.outputs.cache-hit != 'true'
-        run: make dtmrs-deps
-
-      - run: go build ./...
-
-      - run: go vet ./...
-
-      # make test-db，不是裸 go test。Makefile 里那几个参数都是闸门的一部分：
-      #   -count=1   这些测试真正的输入是数据库状态，在 Go 的视野之外；不禁缓存的话
-      #              把 RLS 策略删掉也照样 `ok (cached)`。
-      #   -timeout   每个包 5 分钟。卡住的测试在那之内带着栈失败，不陪着等满
-      #              下面的 timeout-minutes。
-      #
-      # 以前这里还有 -p 1（各包的 TestMain 对同一个库跑 goose，并行会撞）。现在
-      # 每个包经 internal/testdb 建自己的库 keel_test_<包名>，包之间可以并行，
-      # 理由与剩下那两处跨库共享（keel_app 角色、库名）的处理见 Makefile 的 test-db。
-      #
-      # 仍然刻意不做任何「跨运行复用一个已迁移的库」的优化：容器每次都是全新空库，
-      # 每个包都在自己的新库上从空迁移一遍。库是暖的必绿、库是冷的必红那一类问题，
-      # CI 是唯一每次都会踩到的地方。为了跑得快去缓存它，等于把这个 job 换成一个
-      # 只在该报警时失灵的 job。
-      #
-      # 步骤级的 timeout-minutes：make test-db 里两次 go test，每次每个包最多 5 分钟，
-      # 最坏 10 分钟。给这一步单独一个上限，卡住时红的是这一步、名字就说明了在哪卡住，
-      # 而不是整个 job 的一句超时。正常耗时本机实测一分钟以内。
-      - name: 数据库测试（每次都是冷库）
-        timeout-minutes: 12
-        run: make test-db
-
-      # 失败时把库的日志摊开。迁移在 TestMain 里跑，红了以后 Go 那侧只会说
-      # 某条 SQL 报了什么，而「为什么报」常常在 postgres 的日志里
-      # （扩展没装上、initdb 脚本半路失败）。
-      - name: 失败时打印数据库日志
-        if: failure()
-        run: docker logs --timestamps keelci-pg || true
-
-      # 自建 runner 不会替你删容器。不删的话下一跑在 docker run 那里重名失败。
-      # 卷是匿名的，跟着 -v 一起走 —— 这也是「每次都是冷库」赖以成立的前提。
-      - name: 收拾
-        if: always()
-        run: docker rm -f -v keelci-pg || true
-
-  # ---------------------------------------------------------------------------
-  # 端到端：起全栈，再从外面打进去
-  # ---------------------------------------------------------------------------
-  #
-  # 这个 job 是 db/seed/single.sql 唯一的自动化覆盖。单元测试用的是 dev.sql，
-  # single.sql 此前零覆盖——它播的那家 demo 店对不上 KEEL_DEFAULT_MERCHANT 时，
-  # 只有这条链路会红。
-  e2e:
-    name: 端到端（compose + smoke + SDK）
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, keel]
-    env:
-      # 和同机演示环境（keeldemo / 18099）隔开；宿主机 8080 被占。
-      # smoke.sh 与 web/src/api/smoke.mts 都读 KEEL_HTTP_PORT。
-      # 18180 / 18181 自 2026-09-27 起被演示站的 Caddy 网关（127.0.0.1:18180）占着，
-      # 这一步从那天起每次都在「起全栈」上 bind 失败 —— 换到 28180 / 28181（本机无人监听）。
-      COMPOSE_PROJECT_NAME: keelci
-      KEEL_HTTP_PORT: "28180"
-      # 商家后台的宿主机端口。默认 8081 在这台自建 runner 上被别的东西占着
-      # （实测 127.0.0.1:8081 有监听），不换的话 console 容器会起不来，
-      # 而症状是 `docker compose up` 之后 smoke 照样绿、只有后台是死的。
-      KEEL_CONSOLE_PORT: "28181"
-    # 比另外两个宽：这里要在 runner 上从零建两个镜像，Go 依赖在容器里重下一遍。
-    #
-    # M2 又加了一段：镜像里多一个 Rust 阶段（装 cargo/rustc、clone dtmrs、
-    # cargo build --release）。本机实测那一段 47 秒（cargo registry 是暖的），
-    # runner 上是冷的，而且 docker build 的层缓存在 runner 上**一次都不会命中**
-    # （每个 job 都是新机器，这里也没有配 buildx 的远端缓存）。所以它是每次
-    # 都要付的固定成本，30 分钟对它还够，但余量比 M1 时薄了。
-    # 真顶到上限的话，第一件该做的事是给 docker build 配 GHA 缓存后端，
-    # 而不是继续往上加分钟数。
-    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
-          # 只为 make sdk-smoke —— 它 `node web/src/api/smoke.mts` 直接跑 .mts，
-          # 靠 Node 自带的类型剥离，没有构建步骤也没有 node_modules。
+          # 下限 22.18（Node 自带类型剥离）。闸门的漂移比对要 npx，sdk-smoke 直接跑 .mts。
           node-version: '24'
 
-      # 端口刻意用默认的 8080，不换。这一整段就是 README 快速开始里那三行命令，
-      # 一字不改地跑一遍——换了端口，CI 验证的就不再是 README 让读者跑的那件事。
-      - name: 清掉上一次的残留
-        run: docker compose down -v --remove-orphans || true
-
-      # 镜像构建里要 git clone GitHub（scripts/fetch-dtmrs.sh）、拉 Go 依赖。自建 runner 在国内，
-      # 直连 GitHub 常常断（实测："Error in the HTTP2 framing layer"，这一步 12 秒就红了）。
-      # runner 的 .env 里配了 KEEL_CI_BUILD_PROXY 就经它构建：只作为 --build-arg 传给构建阶段
-      # （HTTP_PROXY 这几个是 Docker 预定义的 ARG，不进镜像历史），跑起来的容器里没有代理 ——
-      # 不写进全局的 ~/.docker/config.json，那会给同机演示环境的每个容器都塞上代理。
-      # 构建容器里 127.0.0.1 是容器自己，所以那个地址是宿主机的局域网 IP。没配就照原样直连。
-      - name: 起全栈
-        # 代理参数由 scripts/ci_build_proxy_args.sh 统一给（没配就是空），
-        # 另外两处构建（go job 的 keel-postgres、release.yml）调的是同一个脚本。
-        run: |
-          # shellcheck disable=SC2046  # 要的就是按空格拆成多个参数
-          docker compose build $(scripts/ci_build_proxy_args.sh)
-          docker compose up -d
-
-      # **判据在这一步，不在上一步。**
-      #
-      # `docker compose up -d` 只等到容器**启动**：应用随后因为 tenant.Preflight
-      # 自检不过而退出，它照样返回 0（本机实测过）。所以单跑 up 等于没跑，
-      # 这两步必须都在、且都不能被 `|| true`、管道或 continue-on-error 吃掉——
-      # 一个永远不会红的 e2e job 比没有 e2e job 更糟，它还会让人放心。
-      - name: 冒烟（HTTP 一路通到种子数据）
-        run: ./scripts/smoke.sh
-
-      # 与上一步不重复：smoke.sh 用 curl 证明链路通，这个证明**从契约推出来的
-      # TS SDK 自己**能把契约描述的响应在真实网络、真实响应头下读出来。
-      # tsc 只知道服务端答应返回什么。
-      - name: SDK 冒烟
-        run: make sdk-smoke
-
-      # 商家后台跟着这一栈起来了没有。
-      #
-      # 两条都要：
-      #   · 首页是 200 —— nginx 托管的静态产物在（镜像的 vite build 真的产出了东西）；
-      #   · 经后台这个源打 /api 也是 200 —— 反代通了。**这一条才是关键**：
-      #     后台与 API 同源全靠它，而它坏掉的时候首页照样是 200，
-      #     界面打得开、一登录就全是网络错误。
-      #
-      # 不跑浏览器：那要 Chrome 与一棵 puppeteer 依赖树，而这一步要回答的
-      # 「后台在不在这一栈里」两条 curl 就答完了。界面本身的类型由
-      # gates job 的 admin-type-check 守着。
-      - name: 商家后台起来了没有
-        run: |
-          set -euo pipefail
-          code=$(curl -fsS -o /dev/null -w '%{http_code}' "http://localhost:${KEEL_CONSOLE_PORT}/")
-          echo "console 首页 $code"
-          code=$(curl -fsS -o /dev/null -w '%{http_code}' "http://localhost:${KEEL_CONSOLE_PORT}/api/v1/products")
-          echo "console 反代 /api $code"
-
-      # 多商家形态：compose.multi.yaml + dev.sql 那六家店。这一步是这条路径第一次
-      # 进自动化 —— 在此之前它只有人手动跑过，而它正好是「代码写得对、证据一条没有」
-      # 的那种功能：租户隔离的单测与闸门全绿，可 Host 解析配错了、开店之后新店铺面
-      # 打不开、停用没生效，这些都没有任何东西会红。
-      #
-      # 为什么先 down 再起，而不是并排出第二套：compose.multi.yaml 只给**卷**加了
-      # _multi 后缀，容器名仍与单商家那一栈同名（都由项目名派生）。换一个新项目名
-      # 倒是能并存，可镜像标签跟着变（keelcimulti-app），Rust + Go 两个阶段要重编一遍 ——
-      # e2e job 每个 PR 都是新机器，层缓存一次都不命中（见上面 timeout 那段），
-      # 等于每次多付一整轮构建。所以让位、复用同一批镜像。
-      #
-      # 判据在 multi-verify.sh 里，不在 up 的退出码上：`docker compose up -d` 只等到
-      # 容器启动，应用随后因 tenant.Preflight 不过而退出，它照样返回 0。
-      #
-      # 端口沿用上面那对 28180 / 28181，不换新的：单商家那一栈刚被 down 掉，这两个
-      # 端口在本 job 里已被证明可用；而每一个新端口都是一次对 runner 现状的赌注
-      # （28180 / 28181 当初就是为了躲演示站的 Caddy 才换的，见上面那两处注释）。
-      - name: 多商家形态（Host 解析、开店、停用、商家级越权）
-        run: |
-          set -euo pipefail
-          docker compose down --remove-orphans
-          COMPOSE_PROJECT_NAME=keelci KEEL_HTTP_PORT=28180 KEEL_CONSOLE_PORT=28181 \
-            ./scripts/multi-up.sh
-
-      # 失败时把现场摊开。没有这一步，红了只能看到一句超时，而真因在某个
-      # 已经退出的容器的日志里（compose 的依赖链是 postgres -> migrate -> seed -> app，
-      # 坏在哪一段决定了该看谁）。if: failure() 不会改变这个 job 的结论。
-      - name: 失败时打印容器状态与日志
-        if: failure()
-        run: |
-          docker compose ps --all
-          docker compose logs --no-color --timestamps
-
-      # 自建 runner 不会替你删容器和卷。两条都要：
-      #   · 上面不带 -f compose.multi.yaml 的那条删不掉多商家那一栈的卷
-      #     （卷是在叠加层里声明的，`down -v` 只看它自己收到的那几个文件），
-      #     留着就是每次 CI 在 runner 上多堆一整个库；
-      #   · 反过来带叠加层的那条也删不到默认卷。所以是两条，不是一条带两个 -f。
-      - name: 收拾
-        if: always()
-        run: |
-          docker compose down -v --remove-orphans
-          docker compose -p keelci -f compose.yaml -f compose.multi.yaml down -v --remove-orphans
-
-  # ---------------------------------------------------------------------------
-  # 客户端（flutter_app/，买家端主力）：依赖锁定、静态检查、单元测试、编 Web
-  # ---------------------------------------------------------------------------
-  #
-  # Flutter 这边的契约漂移（check_dart_contract）与「页面不许直接 import 生成类型」
-  # （check_flutter_pages）也在 gates 里 —— 这个 job 只管那两条管不到的：代码本身
-  # 编不编得过、测试过不过。
-  #
-  # SDK 用 runner 本机的 ~/development/flutter（Makefile 的 FLUTTER 默认值，与本地开发
-  # 同一份），不用 setup 类 action 现下：这台机器上从 Google 拉 SDK 要走代理、分钟级。
-  # PUB_HOSTED_URL / FLUTTER_STORAGE_BASE_URL 与开发机一致（pubspec.lock 里记的是
-  # pub.flutter-io.cn，源不一致时 --enforce-lockfile 会判成锁文件不符）。
-  #
-  # SDK 版本钉在 3.41.9：小程序构建（mp-flutter）目前只支持这一版（它的 version_matrix），
-  # 开发机、runner、演示站发布脚本都用同一份，锁文件才对得上。要升 SDK，先等 mp-flutter 支持新版本，
-  # 再把这里、flutter_app/.flutter-version 与各台机器的 ~/development/flutter 一起升，重新生成 pubspec.lock。
-  #
-  # 本机实测（2026-09-29）：pub get + analyze + 165 条测试约 20 秒，编 Web 约 46 秒。
-  flutter:
-    name: 客户端（Flutter：分析、测试、编 Web）
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, keel]
-    timeout-minutes: 15
-    env:
-      PUB_HOSTED_URL: https://pub.flutter-io.cn
-      FLUTTER_STORAGE_BASE_URL: https://storage.flutter-io.cn
-    steps:
-      - uses: actions/checkout@v4
-
-      # --enforce-lockfile：锁文件与 pubspec 对不上就失败，而不是悄悄换一套依赖版本去测。
-      # SDK 升级后 flutter_test 钉的 meta / matcher 会变，那时本地 `make flutter-get`
-      # 更新 pubspec.lock 一起提交。
-      # 版本不对就在这里说清楚，别等 --enforce-lockfile 报一句看不出原因的「锁文件不符」。
-      - name: SDK 版本（与 flutter_app/.flutter-version 一致）
-        working-directory: flutter_app
-        run: |
-          want=$(cat .flutter-version)
-          got=$(PATH="$HOME/development/flutter/bin:$PATH" FLUTTER_GIT_URL= flutter --version --machine | python3 -c 'import sys,json;print(json.load(sys.stdin)["frameworkVersion"])')
-          if [ "$got" != "$want" ]; then
-            echo "::error::runner 的 ~/development/flutter 是 $got，要 $want（cd ~/development/flutter && git fetch --tags && git checkout $want && flutter --version）"
-            exit 1
-          fi
-      - name: 依赖（按锁文件）
-        working-directory: flutter_app
-        run: PATH="$HOME/development/flutter/bin:$PATH" FLUTTER_GIT_URL= flutter pub get --enforce-lockfile
-
-      - name: 静态检查
-        run: make flutter-analyze
-
-      - name: 单元与组件测试
-        run: make flutter-test
-
-      # 与演示站同一种构建（同源部署，不需要 KEEL_API_BASE）。
-      # Android / iOS 不在这里编：Gradle 在这台 runner 上拉依赖要另配代理（实测挂在
-      # assembleDebug 十几分钟没有输出），iOS 要 macOS。发版前按 flutter_app/README.md 手动编。
-      - name: 编 Web
-        working-directory: flutter_app
-        run: PATH="$HOME/development/flutter/bin:$PATH" FLUTTER_GIT_URL= flutter build web
-
-      # 工具（pub get 的迁移器之类）改了入库文件 = 仓库里的版本已经过时，要提交更新后的。
-      - name: 工作区没有被改脏
-        run: git diff --exit-code -- flutter_app
+      # 四路同时跑：Go 测试、Flutter、文档闸门、端到端。时间账和端口写在脚本文件头。
+      - name: 四路并行
+        run: bash scripts/ci_parallel.sh

@@ -58,16 +58,28 @@ WORKDIR /src
 # 不必重下整棵依赖树。tools/ 是独立模块（sqlc 会拖进 270+ 个模块，
 # 那正是它不在主模块里的原因），所以要分别下。
 COPY go.mod go.sum ./
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
 COPY tools/go.mod tools/go.sum ./tools/
-RUN go -C tools mod download
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go -C tools mod download
+
+# goose 只依赖 tools 模块，不读业务代码。放在 COPY . . 之前：改一行 Go
+# 不会把这一层打掉。以前它排在 COPY . . 后面，每次 CI 都重编一遍（实测 35 秒），
+# 而 tools/go.mod 根本没动。
+# 模块与编译缓存挂在 BuildKit 的 cache 上，不写进镜像层；下面每个 go 命令
+# 都要挂同一对，否则这一层看不到刚下好的模块。
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 go -C tools build -trimpath \
+        -o /out/goose github.com/pressly/goose/v3/cmd/goose
+
+# .so 排在 COPY . . 前面，同一理由：dtmrs 阶段的产物跟业务代码无关，
+# 不该跟着每次提交重拷一遍（实测 6 秒）。third_party 在 .dockerignore 里，
+# 后面的 COPY . . 不会把这个目录盖掉。
+COPY --from=dtmrs /dtmrs /src/third_party/dtmrs
 
 COPY . .
-
-# .so 与头文件从 dtmrs 阶段取，落到 internal/dtm 的 #cgo 指令指的那个路径。
-# 排在 `COPY . .` 后面：反过来的话，构建上下文里万一有同名文件会把它盖掉
-# （third_party 在 .dockerignore 里，正常不会有，但顺序不该依赖那一条）。
-COPY --from=dtmrs /dtmrs /src/third_party/dtmrs
 
 # CGO_ENABLED=1 —— M1 那行 `CGO_ENABLED=0` 在这里被 M2 改掉了，它的时机
 # 就写在它自己的注释里：接入嵌入式事务协调器的那一刻。
@@ -87,7 +99,10 @@ ARG KEEL_VERSION=dev
 ARG KEEL_COMMIT=
 ARG KEEL_DATE=
 
-RUN CGO_ENABLED=1 go build -trimpath \
+# 编译缓存跨构建保留：业务代码变了这一层仍会重跑，但没改的包不必重编。
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=1 go build -trimpath \
         -ldflags "-X github.com/keel/keel/internal/buildinfo.Version=${KEEL_VERSION} \
                   -X github.com/keel/keel/internal/buildinfo.Commit=${KEEL_COMMIT} \
                   -X github.com/keel/keel/internal/buildinfo.Date=${KEEL_DATE}" \
@@ -95,16 +110,14 @@ RUN CGO_ENABLED=1 go build -trimpath \
 
 # 上传文件的存量迁移工具（cmd/keel-uploads migrate：本地磁盘 → 对象存储）随 app 镜像一起发，
 # 在容器里就能跑：docker compose exec app /keel-uploads migrate -dry-run
-RUN CGO_ENABLED=1 go build -trimpath -o /out/keel-uploads ./cmd/keel-uploads
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=1 go build -trimpath -o /out/keel-uploads ./cmd/keel-uploads
 
-# goose 从 tools/ 编译，版本由 tools/go.mod 锁定 —— 和 `make migrate` 用的是
-# 同一个版本。镜像里 go install @latest 的话，本地与容器会在某天装到两个版本的
-# 迁移工具，代价是生产库上一次不一致的 schema。
-#
-# 它仍然是 CGO_ENABLED=0：goose 是纯 Go，静态编译可用，于是迁移器镜像还能留在
-# scratch 上。只有应用被 cgo 传染，没必要让迁移器陪着换底座。
-RUN CGO_ENABLED=0 go -C tools build -trimpath \
-        -o /out/goose github.com/pressly/goose/v3/cmd/goose
+# goose 的编译在 COPY . . 之前（见上）。版本由 tools/go.mod 锁定，和
+# `make migrate` 用的是同一个。镜像里 go install @latest 的话，本地与容器
+# 会在某天装到两个版本的迁移工具，代价是生产库上一次不一致的 schema。
+# CGO_ENABLED=0：goose 是纯 Go，迁移器镜像还能留在 scratch 上。
 
 # ---------- 迁移器 ----------
 # 只有 goose 和迁移文件。它跑完就退出，compose 里的应用等它成功。

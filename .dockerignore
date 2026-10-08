@@ -34,3 +34,10 @@ third_party
 data
 .env
 .env.local
+
+# 镜像不编译这些。留在上下文里的话，Flutter 一次 build web 的产物
+# （build/ 与 .dart_tool，实测各几百 MB）会让下一次 COPY . . 多传一遍。
+flutter_app
+examples
+bin
+tmp

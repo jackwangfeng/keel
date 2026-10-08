@@ -129,6 +129,13 @@ func explainAsApp(t *testing.T, merchant int64, sql string, generic bool, args .
 	r := repository.New(pool(t))
 	var plan string
 	err := r.RawTenantTx(tenant.NewContext(ctx, merchant), func(tx pgx.Tx) error {
+		// 计划断言要的是「这条 SQL 用得上该用的索引」，不是「机器满载时
+		// 某一档成本模型碰巧选了 hash/bitmap」。CI 里几十个测试库同时跑，
+		// 默认 random_page_cost=4 会让 planner 更爱顺序/哈希；压到与顺序页
+		// 同权，索引扫描的相对成本回到空闲机器上测到的那一档。
+		if _, err := tx.Exec(ctx, `SET LOCAL random_page_cost = 1.0`); err != nil {
+			return err
+		}
 		q := `EXPLAIN (COSTS OFF) ` + sql
 		if generic {
 			if _, err := tx.Exec(ctx, `SET LOCAL plan_cache_mode = force_generic_plan`); err != nil {

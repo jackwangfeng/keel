@@ -82,7 +82,7 @@ GOOSE_INVENTORY := GOOSE_DRIVER=postgres GOOSE_DBSTRING="$(INVENTORY_GOOSE_DBSTR
 .PHONY: help generate generate-go generate-ts generate-sql tools-versions version search-metrics \
 	contract-check schema-check admin-install admin-type-check admin-test admin-build flutter-get flutter-generate flutter-analyze flutter-test flutter-e2e-web flutter-build flutter-build-mp flutter-ios-install flutter-android-install \
 	sdk-smoke goose-bin migrate migrate-down migrate-status migrate-inventory migrate-inventory-status test-db \
-	test-engine category-eval dtmrs-deps build \
+	test-engine category-eval dtmrs-deps build gates \
 	init doctor prod-up prod-down prod-logs prod-config release-up release-config \
 	multi-up multi-verify multi-down multi-wipe multi-logs multi-config
 
@@ -193,6 +193,7 @@ help:
 	@echo "make migrate-inventory 把 db/migrations-inventory 迁到最新（INVENTORY_GOOSE_DBSTRING 可覆盖，默认同 GOOSE_DBSTRING）"
 	@echo "make migrate-inventory-status 打印库存库各版本的应用状态"
 	@echo "make search-metrics 按店铺 × 策略统计搜索效果（PERIOD 默认 7 days，要管理员连接）"
+	@echo "make gates        本地一条命令跑到与 CI 那道闸门等价（工具版本 + 后台依赖 + check-all.sh + go build + go vet）"
 	@echo "make test-db      跑需要数据库的测试（强制不吃缓存，含替身那一组）"
 	@echo "make test-engine    对真的跑着的 infero 跑三条判据（要 KEEL_EMBED_ENDPOINT + 数据库；GPU 版，CPU 版目前太慢）"
 	@echo "make category-eval  类目推荐的离线评测（Top-1 / Top-3 与阈值表，要跑着的 infero + KEEL_EMBED_ENDPOINT）"
@@ -276,12 +277,45 @@ admin-type-check:
 # 守的是「偏了不会报错」那一类错：经纬度写反、坐标系没换，服务端都会收下一个
 # **合法**的多边形，只是位置偏了几百米，买家被判进错的门店。
 #
-# `node --test` 直接跑 .ts（Node 24 的类型剥离），不引入测试框架：被测文件
+# `node --test` 直接跑 .ts（Node 的类型剥离），不引入测试框架：被测文件
 # （src/api/geo.ts）刻意只有 import type，没有运行时依赖，所以这一步**不需要**
 # node_modules。别往 geo.ts 里加运行时 import，否则这里会以
 # ERR_MODULE_NOT_FOUND 失败。
+#
+# NODE_STRIP 那一条 flag 是为了让**本机与 CI 跑到同一道闸门**。原先这里写着
+# 「Node 24 自带类型剥离」，于是它只在 ≥22.18 上是绿的：22.18 之前剥离不是默认
+# 行为，缺 flag 就报 ERR_UNKNOWN_FILE_EXTENSION —— 一句看起来像测试挂了、
+# 实际上与测试毫无关系的错。CI 钉 24 所以永远绿，本机是 22.14，
+# 结果这道闸门在本机长期当摆设（2026-10-08 收短板时实测确认）。
+# 带上 flag 之后：22.14 与 24 都能跑，两边都只多一句 ExperimentalWarning。
+# 不引入 tsx / ts-node：那会多一个第三方版本要钉，而这里要的只是剥离类型注解。
+NODE_STRIP ?= --experimental-strip-types
+
+# 本地一条命令跑到与 CI 那道闸门等价。
+#
+# 为什么要有这一条：CI 红过一次「sqlc 生成物落后一个迁移」，而本机全绿 ——
+# 因为「跑闸门」这句话在每个人那里指的是不同的东西。当时我在本机逐个跑
+# check_* 脚本，恰好没跑 check-all.sh 里的 sqlc-check 那一段，于是
+# 「本机全绿」这句话是假的，而它长得足够像真的。
+#
+# 这里的顺序与 .github/workflows/ci.yml 那个「文档与契约闸门」job 一致：
+# 先 tools-versions 与 admin-install（check-all.sh 里 admin-type-check
+# 要 node_modules，缺了它会**失败**而不是跳过），再 check-all.sh
+# （九个 python 闸门 + 契约漂移 + sqlc 漂移 + schema/admin 两道 TS 闸门
+# + admin-test），最后补上 check-all.sh 里没有、但 CI 在同一步跑的两条：
+# `go build ./...` 与 `go vet ./...`。
+#
+# **不包含** make test-db 与 multi-verify：那两条要数据库 / 要起着栈，
+# 而「我刚改完想快速确认没弄坏契约」是本条的目标场景。要全量就三条一起跑，
+# CI 的 job 划分就是这个意思，这里不越俎代庖合成一条。
+gates:
+	@echo "== 1/4 工具版本 =="; $(MAKE) --no-print-directory tools-versions
+	@echo "== 2/4 后台依赖 =="; $(MAKE) --no-print-directory admin-install
+	@echo "== 3/4 check-all.sh =="; bash $(ROOT)/scripts/check-all.sh
+	@echo "== 4/4 go build + go vet =="; go build ./... && go vet ./...
+
 admin-test:
-	cd $(ROOT)/web/admin && node --test src/api/geo.test.ts src/api/money.test.ts src/api/orderRules.test.ts src/api/notifications.test.ts src/api/importRules.test.ts src/api/freightRules.test.ts src/api/reports.test.ts src/api/promotionRules.test.ts src/api/shopSettings.test.ts src/api/localDeliveryRules.test.ts src/api/agentProposalRules.test.ts src/api/agentPolicyRules.test.ts src/api/paymentReturnRules.test.ts src/api/mapTiles.test.ts src/api/channelRules.test.ts
+	cd $(ROOT)/web/admin && node $(NODE_STRIP) --test src/api/geo.test.ts src/api/money.test.ts src/api/orderRules.test.ts src/api/notifications.test.ts src/api/importRules.test.ts src/api/freightRules.test.ts src/api/reports.test.ts src/api/promotionRules.test.ts src/api/shopSettings.test.ts src/api/localDeliveryRules.test.ts src/api/agentProposalRules.test.ts src/api/agentPolicyRules.test.ts src/api/paymentReturnRules.test.ts src/api/mapTiles.test.ts src/api/channelRules.test.ts
 
 # 后台布局检查：每个页面（含标签页、「新建」弹窗）按手机 390px 与电脑 1440px 各打开一次，查横向撑破、控件出屏、
 # 点击目标过小、按钮文字截断、控制台报错，并截图。只读。报告在 tmp/responsive/report.md。
@@ -300,10 +334,11 @@ admin-build:
 # 需要栈起着：`docker compose up -d --build`。它与 scripts/smoke.sh 不重复 ——
 # 那个用 curl 证明链路通，这个证明 SDK 自己能把契约描述的响应在真实网络上读出来。
 #
-# 直接 `node xxx.ts`：Node 24 自带类型剥离，不需要 tsx、不需要构建步骤，
+# 直接 `node xxx.ts`：用类型剥离，不需要 tsx、不需要构建步骤，
 # 也就不需要一个 package.json。类型由上面的 schema-check 检查，这里只管跑。
+# flag 的来由与上面 admin-test 一样：让 22.14 的本机也能跑这道 CI 钉 24 的闸门。
 sdk-smoke:
-	node $(ROOT)/web/src/api/smoke.mts
+	node $(NODE_STRIP) $(ROOT)/web/src/api/smoke.mts
 
 # sqlc 的配置路径必须是绝对的，理由同 MIGRATIONS：GORUN 用 `go -C $(TOOLS)`，
 # sqlc 的工作目录是 tools/，裸 `sqlc generate` 会在那里找 sqlc.yaml 并报找不到。
@@ -422,16 +457,39 @@ TEST_PKGS ?= ./...
 # test-db 先编好 goose（goose-bin）再起 go test：各包的 TestMain 都会经
 # make migrate 用到它，先编好就不会有几个包同时去链接同一个输出文件。
 #
-# -timeout：go test 默认 10 分钟，而且是**每个包**各自计时。并行化之后最慢的包
-# 本机实测在 30 秒以内（见提交说明），负载重的时候观察到过三倍的抖动；
-# 给 5 分钟，真卡住时 5 分钟内会带着各 goroutine 的栈失败，而不是陪着等满
-# CI job 的 timeout-minutes、最后只留下一句「超时」。
-TEST_TIMEOUT ?= 5m
+# -timeout：go test 默认 10 分钟，而且是**每个包**各自计时。
+#
+# 这里原先写的是 5m，理由那一句是「并行化之后最慢的包本机实测在 30 秒以内」——
+# **那句话现在不成立了**：handler 包独自跑就要 241 秒（2026-10-08 实测），
+# 六个包一起跑还要再加负载。而渠道那一族测试的等待窗口同一天从 20 秒提到 90 秒
+# （`internal/handler/channel_listing_test.go` 的 `channelWaitWindow` 写着为什么），
+# 一次窗口用满就是 +70 秒，两条链撞上就是 +140 秒 —— 贴着 5m 那条线，
+# 症状会从「哪条断言红了」变成「整个包 panic 在 test timed out」，
+# 后者把前面所有断言的现场一起抹掉，是更没用的失败。
+#
+# 提到 8m：仍然远小于 CI job 的 timeout-minutes（12），所以「真卡死」还是会在
+# 带着各 goroutine 的栈失败、而不是陪着等满 job 超时；但它给两条满载窗口留了余量。
+#
+# 8m 是**每一片**的上限，不是总时长：分片之后每个 go test 进程各自计时。
+TEST_TIMEOUT ?= 8m
+
+# internal/handler 切成几份并发跑（1 = 不切），以及每份的池上限。
+#
+# 为什么切片值得进闸门：`go test` 的并行单位是包，一个包内部永远串行，而
+# 2026-10-08 实测 handler 一包 296 秒、第二慢的包 76 秒 —— test-db 那 262 秒九成是它，
+# 包级并行对这种形状没有用（并起来的长度还是最长那条）。切片的唯一前提是同包内的
+# 测试不依赖彼此的顺序：那条验证过（-shuffle=on 全绿），而且脚本每片都带着这个开关，
+# 谁把顺序依赖写回来就先在这里红。
+#
+# 片数不是按 CPU 定的，是按测试集群的 max_connections 定的 —— 一个测试进程会攥着
+# 十几条 idle 连接不放。两个数怎么来的、顶穿了是什么症状、想再多开该怎么办，
+# 全写在脚本文件头那笔预算账上。
+SHARDS ?= 4
+DB_MAX_CONNS ?= 6
 
 test-db: $(DTMRS_LIB) $(DTMRS_BIN) goose-bin
-	go test -count=1 -timeout=$(TEST_TIMEOUT) $(TEST_PKGS)
-	@echo "==> 替身那一组（-tags keel_fake_embedder）"
-	go test -count=1 -timeout=$(TEST_TIMEOUT) -tags keel_fake_embedder ./internal/inference/...
+	SHARDS=$(SHARDS) TEST_TIMEOUT=$(TEST_TIMEOUT) TEST_PKGS=$(TEST_PKGS) \
+		DB_MAX_CONNS=$(DB_MAX_CONNS) bash $(ROOT)/scripts/test_db_shards.sh
 
 # 类目推荐的离线评测（商品批量导入的预检用它推荐类目）。
 #

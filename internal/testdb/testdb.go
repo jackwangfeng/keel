@@ -108,6 +108,9 @@ var (
 
 func templateName() string { return dbName + "_tmpl" }
 
+// 分片库名的环境变量。见 Makefile 的 test-db 为什么要把一个包拆成几份并发跑。
+const envDBSuffix = "KEEL_TEST_DB_SUFFIX"
+
 // Main 是 TestMain 的全部内容：
 //
 //	func TestMain(m *testing.M) {
@@ -133,6 +136,17 @@ func run(m *testing.M, p Package) (int, error) {
 	ctx := context.Background()
 	current = p
 	dbName = "keel_test_" + p.Name
+	// 分片：同一个包的同一个 Name 可以在这个集群上开 N 份，各占一个库
+	// （keel_test_<name>_<suffix>），互不干扰 —— 库名锁、迁移、种子、删库
+	// 全部按库区分，所以一个包内并行的唯一前提是「测试之间不互相依赖顺序」，
+	// 那一条由 Makefile 的 test-db 带上的 -shuffle=on 持续验证着。
+	// 后缀与 Name 用同一把正则：拼进库名的东西不能带别的东西。
+	if s := os.Getenv(envDBSuffix); s != "" {
+		if !validName.MatchString(s) {
+			return 1, fmt.Errorf("分片后缀 %q 不合法：只许小写字母、数字、下划线", s)
+		}
+		dbName += "_" + s
+	}
 	maintenanceDSN = db.AdminDSN()
 
 	ctl, err := pgx.Connect(ctx, maintenanceDSN)
@@ -154,27 +168,48 @@ func run(m *testing.M, p Package) (int, error) {
 			"同时跑在这个集群上。前者改名字，后者等另一个跑完", dbName)
 	}
 
-	if err := recreate(ctx, ctl, dbName, ""); err != nil {
-		return 1, err
-	}
-	if p.Template {
-		defer dropQuiet(ctl, templateName())
-	}
-	defer dropQuiet(ctl, dbName)
-
 	if err := os.Setenv("PGDATABASE", dbName); err != nil {
 		return 1, err
 	}
 
-	if out, err := Migrate(ctx); err != nil {
-		return 1, fmt.Errorf("迁移失败: %w\n%s", err, out)
-	}
-
-	if p.Template {
-		// 迁移刚跑完，goose 进程已经退出，这个库上没有连接 —— 这正是
-		// CREATE DATABASE ... TEMPLATE 的前提（源库上有连接它会拒绝）。
-		if err := recreate(ctx, ctl, templateName(), dbName); err != nil {
+	// KEEL_TEST_TEMPLATE 是同一次运行里刚迁好的库。从它克隆，而不是每个包
+	// 再跑一遍 goose：迁移在集群里是串行的（00003 建角色会撞），十几个包
+	// 排队迁，墙钟几乎全耗在这里。克隆是物理拷贝，和「空库 + 当前迁移」
+	// 逐字节相同，而且模板不跨运行复用，所以改了迁移文件不会假绿。
+	// 没设这个变量时仍走下面那条「每个包自己迁」的路。
+	if shared := os.Getenv("KEEL_TEST_TEMPLATE"); shared != "" {
+		if !validName.MatchString(shared) {
+			return 1, fmt.Errorf("KEEL_TEST_TEMPLATE=%q 不合法", shared)
+		}
+		if err := recreate(ctx, ctl, dbName, shared); err != nil {
 			return 1, err
+		}
+		defer dropQuiet(ctl, dbName)
+		if p.Template {
+			defer dropQuiet(ctl, templateName())
+			if err := recreate(ctx, ctl, templateName(), dbName); err != nil {
+				return 1, err
+			}
+		}
+	} else {
+		if err := recreate(ctx, ctl, dbName, ""); err != nil {
+			return 1, err
+		}
+		if p.Template {
+			defer dropQuiet(ctl, templateName())
+		}
+		defer dropQuiet(ctl, dbName)
+
+		if out, err := Migrate(ctx); err != nil {
+			return 1, fmt.Errorf("迁移失败: %w\n%s", err, out)
+		}
+
+		if p.Template {
+			// 迁移刚跑完，goose 进程已经退出，这个库上没有连接 —— 这正是
+			// CREATE DATABASE ... TEMPLATE 的前提（源库上有连接它会拒绝）。
+			if err := recreate(ctx, ctl, templateName(), dbName); err != nil {
+				return 1, err
+			}
 		}
 	}
 

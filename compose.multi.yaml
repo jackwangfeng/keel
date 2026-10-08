@@ -31,6 +31,9 @@ services:
       KEEL_DEFAULT_MERCHANT: ""
       # 与 dev.sql 里登记的域名一致（shop-a.example.com 这些）。
       KEEL_BASE_DOMAIN: example.com
+      # 空着就是解析器默认的 30 秒。CI 把它设成 1s：验收要等停用和摘域名
+      # 穿透这层缓存，默认值会让这一步干等将近一分钟。
+      KEEL_TENANT_CACHE_TTL: ${KEEL_TENANT_CACHE_TTL:-}
 
 # 卷名显式带 `_multi` 后缀，而不是让 compose 按项目名自动生成 `keel_pgdata`：
 # 两个 compose 文件叠在一起时项目名仍是 keel，不加后缀的话它和默认形态的卷是同一个。

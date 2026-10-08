@@ -47,7 +47,10 @@ const (
 	// 没配就落临时目录并告警，完整论证在 uploadStoreFromEnv 上。
 	EnvUploadRoot = "KEEL_UPLOAD_ROOT"
 	EnvBaseDomain = "KEEL_BASE_DOMAIN"
-	EnvAddr       = "KEEL_ADDR"
+	// EnvTenantCacheTTL 缩短租户解析缓存。空着用默认 30 秒。
+	// CI 的多商家验收要等「停用 / 摘域名」穿透这层缓存，所以那一栈把它设成 1s。
+	EnvTenantCacheTTL = "KEEL_TENANT_CACHE_TTL"
+	EnvAddr           = "KEEL_ADDR"
 
 	// EnvDTMDSN 是嵌入式事务协调器自己的存储。**没有默认值，空着就拒绝启动。**
 	//
@@ -120,6 +123,22 @@ type Config struct {
 	Payment    service.PaymentConfig
 	// Split 是拆分部署的那几项（KEEL_ROLE 等，见 split.go）。全空 = 单体。
 	Split SplitConfig
+}
+
+// applyTenantCacheTTL 读 KEEL_TENANT_CACHE_TTL。空着不动（解析器用默认 30 秒）。
+// 写了就必须是一段正的时长：写错若被当成「没配」，CI 会悄悄退回等满 30 秒，
+// 而人看到的只是验收变慢，不会怀疑这个变量。
+func applyTenantCacheTTL(cfg *Config) error {
+	s := strings.TrimSpace(os.Getenv(EnvTenantCacheTTL))
+	if s == "" {
+		return nil
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil || d <= 0 {
+		return fmt.Errorf("%s=%q 要是一段正的时长（例如 1s）", EnvTenantCacheTTL, s)
+	}
+	cfg.Tenant.CacheTTL = d
+	return nil
 }
 
 // ConfigFromEnv 从环境变量读配置。
@@ -890,6 +909,9 @@ func Run(ctx context.Context, listen ListenFunc) error {
 	slog.InfoContext(ctx, "keel "+buildinfo.String())
 
 	cfg := ConfigFromEnv()
+	if err := applyTenantCacheTTL(&cfg); err != nil {
+		return fmt.Errorf("拒绝启动: %w", err)
+	}
 
 	// 拆分部署的配置排在一切之前：它只查配置本身，而一个拼错的 KEEL_ROLE
 	// 决定的是「这个进程该起哪些东西」—— 不能先按单体起一半再发现。
