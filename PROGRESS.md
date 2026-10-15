@@ -1,4 +1,4 @@
-# keel 进度（2026-10-15）
+# keel 进度（2026-10-16）
 
 新会话先读这份，再看 CLAUDE.md 的 token 纪律。**这份文件控制在 8KB 以内**：
 只写现状、待办、关键决策、常用操作。做完的事一条一行，细节写进 commit 或 docs，
@@ -17,14 +17,24 @@
 - **客户端**：Flutter 买家端（`flutter_app/`，H5 + 小程序 + 原生）；后台 Vue 3（`web/admin`）。
   uni-app x 已下线（tag `uniapp-final`）。小程序真机输入阻塞未解（mp-flutter 侧），先别提审。
 
-## 待办（按顺序，2026-10-15 用户认可）
+## 待办
 
-1. ~~清掉本机残留的 keelchaos 压测栈~~ → 自动权限拦下，**等用户手动执行**（见「待用户处理」）。
-2. ✅ PROGRESS 瘦身（本文件；旧版归档）。
-3. **AI 调渠道库存分配设计稿等用户审**：`docs/superpowers/specs/2026-10-03-ai-channel-allocation-design.md`，
-   重点是复盘口径（少缺货、毛利），这些数字要进对外素材。
-4. **按客户门店生成演示店**：客户商品清单 → 一条命令建店 + 模拟订单 → AI 提案 / 复盘有数可讲。
-5. **Playwright 关键流程测试进 CI**（后台 + H5 约十条）；`make test-engine` 在 CI 仍无执行者（`ci.yml` 第 40 行）。
+2026-10-15 夜那一轮（用户认可的顺序）：
+1. ~~清 keelchaos 残留~~ → 自动权限拦下，**等用户手动**（见下）。
+2. ✅ PROGRESS 瘦身（`cdc4eec`）。
+3. **AI 调渠道库存分配设计稿等用户审**：`docs/superpowers/specs/2026-10-03-ai-channel-allocation-design.md`。
+4. ✅ 客户演示店 `make prospect-demo`（`7daf36e`，`docs/指南/客户演示店.md`）：示例清单 14 天约 2 分钟，
+   AI 员工巡店出 10 条补货提案 + 日报。
+5. ✅ 后台关键流程浏览器测试 10 条进 CI（`4fc84ec`，`make admin-e2e`）；顺带修了改价只能填整元（`23e2ff8`）。
+   未做：H5（Flutter Web 已有 25 条无头用例 `make flutter-e2e-web`）还没进 CI；`make test-engine` 在 CI 仍无执行者。
+
+2026-10-16 用户给的下一批（AI 方向，都走 提案 → 审批 → 执行 → 复盘）：
+1. **上新整理**（服务卖 keel，与演示店同一条线）
+2. **补货准确率复盘**（成本低，出可讲的数字）
+3. **券的精准发放 / 调价**（证明 AI 运营比人好）
+
+已知缺口：买家侧订单详情没有运单号（契约 OrderDetail 无 shipments），发货后买家只看到「已发货」。
+infero（推理引擎 18081）2026-10-16 凌晨没在跑：演示站新品搜不到，需要的话 `scripts/infero-up.sh`。
 
 后备（AI 方向）：渠道异常单 AI 处理建议、对账 AI 解释差异（库存对账还没比 `quota_qty`）。
 不做：拼团、循环满减、拍照搜同款、大规模秒杀（方案在 `docs/大规模秒杀-方案备忘.md`）。
