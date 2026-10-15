@@ -39,6 +39,10 @@ so "which one is running?" never depends on anyone's memory.
 
 ## [Unreleased]
 
+---
+
+## [0.10.0] - 2026-10-16
+
 ### Added
 
 - **AI onboarding cleanup: `catalog_issues`.** A read-only MCP tool that checks every product and lists only the ones
@@ -77,7 +81,7 @@ so "which one is running?" never depends on anyone's memory.
   foreign key points at shop staff). It now gets `403 role-forbidden`, the same rule as managing AI staff.
 
 Core migration `00350` (`coupon_target_members`, plus a `(id, merchant_id)` unique key on `agent_proposals` for the
-composite foreign key).
+composite foreign key). The core database lands on `00350`; the inventory database is unchanged at `00300`.
 
 ---
 
@@ -1964,7 +1968,8 @@ Listed because a changelog that only lists wins is an advertisement.
   show why a product was rejected last time; the merchant only ever saw it in
   that one response.
 
-[Unreleased]: https://github.com/jackwangfeng/keel/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/jackwangfeng/keel/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/jackwangfeng/keel/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/jackwangfeng/keel/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/jackwangfeng/keel/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/jackwangfeng/keel/compare/v0.6.0...v0.7.0
