@@ -197,17 +197,17 @@ def make_image(title, idx):
 
 SIM_BUYERS_SQL = """
 INSERT INTO users (merchant_id, phone, password_hash, nickname, status)
-SELECT :mid, '139000001' || lpad(g::text, 2, '0'),
+SELECT :mid, '13900' || lpad(g::text, 6, '0'),
        (SELECT password_hash FROM users WHERE phone = :'ref' AND password_hash IS NOT NULL ORDER BY id LIMIT 1),
        '模拟顾客 ' || g, 1
   FROM generate_series(1, :n) g
- WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.merchant_id = :mid AND u.phone = '139000001' || lpad(g::text, 2, '0'));
+ WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.merchant_id = :mid AND u.phone = '13900' || lpad(g::text, 6, '0'));
 INSERT INTO user_addresses (merchant_id, user_id, receiver_name, phone, province, city, district, street, detail, region_code, is_default)
-SELECT u.merchant_id, u.id, '模拟收件人', u.phone, '浙江省', '杭州市', '西湖区', '文三路', '模拟 ' || right(u.phone, 2) || ' 号', '330106', TRUE
+SELECT u.merchant_id, u.id, '模拟收件人', u.phone, '浙江省', '杭州市', '西湖区', '文三路', '模拟 ' || right(u.phone, 3) || ' 号', '330106', TRUE
   FROM users u
- WHERE u.merchant_id = :mid AND u.phone LIKE '139000001__'
+ WHERE u.merchant_id = :mid AND u.phone LIKE '13900______'
    AND NOT EXISTS (SELECT 1 FROM user_addresses a WHERE a.user_id = u.id);
-SELECT count(*) FROM users WHERE merchant_id = :mid AND phone LIKE '139000001__';
+SELECT count(*) FROM users WHERE merchant_id = :mid AND phone LIKE '13900______';
 """
 
 
@@ -341,7 +341,7 @@ def create(a):
     backdate_catalog(db, st, a.days)
 
     print("⑨ 补 %d 天经营" % a.days)
-    backfill(a, api, db, st, rnd)
+    backfill(a, api, db, st, rnd, tok)
 
     _, lt = api.call("POST", "/admin/staff/%d/login-token" % admin_staff, {}, token=tok) if admin_staff else (0, {})
     report(a, api, db, st)
@@ -364,7 +364,7 @@ def wait_searchable(db, mid, timeout=90):
 # ---------- 模拟经营 ----------
 
 def buyers(db, st):
-    return db.q("core", "SELECT phone FROM users WHERE merchant_id = :mid AND phone LIKE '139000001__' ORDER BY phone",
+    return db.q("core", "SELECT phone FROM users WHERE merchant_id = :mid AND phone LIKE '13900______' ORDER BY phone",
                 mid=st["merchant_id"]).split()
 
 
@@ -430,11 +430,28 @@ def search_some(api, skus, rnd, n):
         api.call("POST", "/search", {"query": q, "size": 10}, ok=None)
 
 
-def run_day(a, api, db, st, rnd, n_orders, pw, phones):
+def buyer_role(phone):
+    """顾客结构（按手机号尾号稳定分配）：三成会流失（只在模拟期最早的三分之一里买）、两成只买一次、其余是常客。
+    真店就是这样 —— 全是常客的话，「沉睡顾客」「只买过一次」这些人群是空的，精准发券无从演起。"""
+    k = int(phone[-6:]) % 10
+    return "churned" if k in (0, 1, 2) else "one_time" if k in (3, 4) else "regular"
+
+
+def run_day(a, api, db, st, rnd, n_orders, pw, phones, day=None, bought=None):
     skus = catalog(api, st, rnd)
     toks, placed = {}, []
+    if day is not None:  # 补历史时按顾客结构挑人；「现在」的模拟不分（谁都可能来）
+        early = a.days * 2 / 3  # 45 天的历史里，流失的人最后一单在 30 天前 —— 「沉睡顾客」的默认口径
+        phones = [ph for ph in phones
+                  if (buyer_role(ph) == "regular")
+                  or (buyer_role(ph) == "churned" and day > early)
+                  or (buyer_role(ph) == "one_time" and ph not in bought)] or phones
     for _ in range(n_orders):
         ph = rnd.choice(phones)
+        if bought is not None and buyer_role(ph) == "one_time":
+            if ph in bought:
+                continue
+            bought.add(ph)
         if ph not in toks:
             toks[ph] = login(api, ph, pw)
         no = place(api, toks[ph], st, skus, rnd)
@@ -499,14 +516,45 @@ def set_warnings(api, tok, st, rnd):
                  {"expected_available_qty": avail, "available_qty": avail, "warning_qty": max(3, avail // 8)}, token=tok)
 
 
-def backfill(a, api, db, st, rnd):
+RESTOCK_QUIET_DAYS = 5  # 最后几天不补货：留一些快卖断的货，给 AI 员工提补货
+
+
+def restock_morning(a, api, db, st, rnd, tok, day):
+    """开门前补货：低于 8 件的货补 40 件，补货流水挪到那天早上 7:30（与订单流水同一个时间轴）。
+    真店会补货；不补的话长历史的模拟到一半就全店卖空，后面的日子没有订单，人人都成了「沉睡顾客」。"""
+    since = db.q("core", "SELECT now()")
+    n = 0
+    for sku_id, avail, _, _ in catalog(api, st, rnd):
+        if avail < 8:
+            api.call("PUT", "/admin/stores/%d/skus/%d/inventory" % (st["store_id"], sku_id),
+                     {"expected_available_qty": avail, "available_qty": avail + 40}, token=tok, ok=None)
+            n += 1
+    if n:
+        db.q("inv", """UPDATE inventory_logs SET created_at = ((now() AT TIME ZONE '%s')::date - %d + time '07:30') AT TIME ZONE '%s'
+                        WHERE merchant_id = :mid AND created_at >= '%s'""" % (TZ, day, TZ, since), mid=st["merchant_id"])
+    return n
+
+
+def backfill(a, api, db, st, rnd, tok=None):
     pw, phones = a.buyer_password, buyers(db, st)
+    bought = set()
     for d in range(a.days, 0, -1):
+        if tok and d > RESTOCK_QUIET_DAYS:
+            restock_morning(a, api, db, st, rnd, tok, d)
         since = db.q("core", "SELECT now()")
         lo, hi = a.orders_per_day
-        nos = run_day(a, api, db, st, rnd, rnd.randint(lo, hi), pw, phones)
+        nos = run_day(a, api, db, st, rnd, rnd.randint(lo, hi), pw, phones, day=d, bought=bought)
         shift(db, st, nos, since, d, rnd)
         print("  第 -%2d 天：%d 单" % (d, len(nos)))
+    # 加购不买：一成顾客最近往购物车里放了东西就走了（「加购未买」这个人群就是他们）
+    skus = [x for x in catalog(api, st, rnd) if x[1] > 0]
+    quitters = [ph for ph in phones if int(ph[-6:]) % 10 == 9]
+    for ph in quitters:
+        tok = login(api, ph, pw)
+        s = rnd.choice(skus)
+        api.call("POST", "/cart/items", {"sku_id": s[0], "quantity": 1, "store_id": st["store_id"]}, token=tok, ok=None)
+    if quitters:
+        print("  加购未买：%d 人" % len(quitters))
 
 
 def simulate(a):
@@ -545,6 +593,15 @@ def mcp_tool(api, st, name, args):
 ISSUE_NAMES = {"title_noise": "标题有噪音", "title_too_long": "标题过长", "no_subtitle": "缺副标题",
                "forbidden_words": "违禁词", "uncategorized": "未分类", "no_image": "缺图", "price_outlier": "价格异常",
                "duplicate_title": "疑似重复", "zero_stock": "无库存"}
+
+
+def segments_summary(api, st):
+    try:
+        r = mcp_tool(api, st, "customer_segments", {"days": 7})
+    except Exception as e:
+        return "顾客人群：调 customer_segments 失败（%s）" % e
+    parts = "、".join("%s %d 人" % (x["label"], x["size"]) for x in r.get("segments") or [])
+    return "顾客人群（共 %d 人，沉睡按 7 天算）：%s" % (r.get("total_customers", 0), parts)
 
 
 def catalog_summary(api, st):
@@ -598,6 +655,7 @@ def report(a, api=None, db=None, st=None):
         print("搜了没有的词 %s 次：%s" % (rows["nores"][0], "、".join(
             "「%s」%s 次" % tuple(t.split("\t")) for t in terms.splitlines() if t) or "无"))
     print(catalog_summary(api, st))
+    print(segments_summary(api, st))
     print("→ 让 AI 员工巡一次店：%s run-agent --code %s（整理商品加 --skill 上新整理）" % (os.path.relpath(__file__, ROOT), st["code"]))
 
 
@@ -630,7 +688,7 @@ def main():
             p.add_argument("--name", required=True)
             p.add_argument("--days", type=int, default=14)
             p.add_argument("--orders-per-day", type=lambda s: tuple(map(int, s.split("-"))), default=(12, 25))
-            p.add_argument("--buyers", type=int, default=20)
+            p.add_argument("--buyers", type=int, default=120)
             p.add_argument("--ref-buyer", default="13800000001", help="抄口令哈希的买家手机号（种子里 shop-a 的买家）")
             p.add_argument("--seed", type=int, default=7)
             p.add_argument("--store-address", default="浙江省,杭州市,西湖区,文三路 90 号",
