@@ -128,9 +128,8 @@ async function doEmailLink(): Promise<void> {
 
                 <el-tab-pane label="已有登录 token" name="token">
                     <p class="hint">
-                        管理员用「员工 → 新建」加人时，服务端会生成一串 15 分钟有效的一次性登录
-                        token。本轮没有接邮件服务，它同样只出现在进程日志里
-                        （<code>docker compose logs app | grep 登录链接</code>）。
+                        管理员在「员工」页加人或点「重签登录 token」时，界面上会弹出一串
+                        15 分钟有效的一次性登录 token，只显示那一次，交给本人粘到这里。
                     </p>
                     <el-form label-width="96px" @submit.prevent>
                         <el-form-item label="登录 token">

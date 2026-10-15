@@ -80,7 +80,7 @@ GOOSE_INVENTORY := GOOSE_DRIVER=postgres GOOSE_DBSTRING="$(INVENTORY_GOOSE_DBSTR
 	$(GOOSE_BIN) -table goose_db_version_inventory
 
 .PHONY: help generate generate-go generate-ts generate-sql tools-versions version search-metrics \
-	contract-check schema-check admin-install admin-type-check admin-test admin-build flutter-get flutter-generate flutter-analyze flutter-test flutter-e2e-web flutter-build flutter-build-mp flutter-ios-install flutter-android-install \
+	contract-check schema-check admin-install admin-type-check admin-test admin-e2e admin-build flutter-get flutter-generate flutter-analyze flutter-test flutter-e2e-web flutter-build flutter-build-mp flutter-ios-install flutter-android-install \
 	sdk-smoke goose-bin migrate migrate-down migrate-status migrate-inventory migrate-inventory-status test-db test-db-ci \
 	test-engine category-eval dtmrs-deps build gates \
 	init doctor prod-up prod-down prod-logs prod-config release-up release-config \
@@ -222,6 +222,7 @@ help:
 	@echo "make multi-logs       跟它的 app 日志，首个平台管理员的 bootstrap token 在里面"
 	@echo "make multi-config     打印多商家形态合成后的完整 compose 配置"
 	@echo "make multi-login      给多商家栈签一串登录 token（STAFF=1 或 EMAIL=…；破损恢复）"
+	@echo "make admin-e2e        后台关键流程浏览器测试（十条，打已起好的栈，KEEL_E2E_ADMIN_URL）"
 	@echo "make prospect-demo    按客户商品清单开演示店 + 模拟经营（CATALOG= CODE= NAME= [DAYS=14]）"
 	@echo "make demo-login       给演示栈签一串登录 token（同上）"
 	@echo "make issue-login      对当前 PG* / 指定 COMPOSE_PROJECT_NAME 签登录 token"
@@ -368,6 +369,13 @@ gates:
 
 admin-test:
 	cd $(ROOT)/web/admin && node $(NODE_STRIP) --test src/api/geo.test.ts src/api/money.test.ts src/api/orderRules.test.ts src/api/notifications.test.ts src/api/importRules.test.ts src/api/freightRules.test.ts src/api/reports.test.ts src/api/promotionRules.test.ts src/api/shopSettings.test.ts src/api/localDeliveryRules.test.ts src/api/agentProposalRules.test.ts src/api/agentPolicyRules.test.ts src/api/paymentReturnRules.test.ts src/api/mapTiles.test.ts src/api/channelRules.test.ts
+
+# 后台关键流程的浏览器测试（Playwright，web/admin/e2e/，十条：登录、概览、上新、导入、发货、售后、
+# 营销、优惠券、员工、AI 提案审批）。打一套已经起好的单商家栈，默认 CI 那一栈的 console 端口 28181；
+# 本机换栈：KEEL_E2E_ADMIN_URL=http://127.0.0.1:<console 端口> KEEL_E2E_COMPOSE_PROJECT=<项目名>。
+# 用本机 Chrome（channel: chrome），不下载 Playwright 的浏览器。失败的 trace 在 web/admin/e2e-results/。
+admin-e2e:
+	cd $(ROOT)/web/admin && npx playwright test
 
 # 后台布局检查：每个页面（含标签页、「新建」弹窗）按手机 390px 与电脑 1440px 各打开一次，查横向撑破、控件出屏、
 # 点击目标过小、按钮文字截断、控制台报错，并截图。只读。报告在 tmp/responsive/report.md。

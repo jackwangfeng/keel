@@ -16,6 +16,8 @@
 #
 # 端到端慢在单商家栈和多商家栈串行，而且第二遍还把第一遍拆掉再建。
 # 镜像只编一次，两套栈用不同的项目名和端口同时起来。
+# 单商家栈起来后还跑后台关键流程的浏览器测试（make admin-e2e，十条约 20 秒），
+# 它等 gates 那一路装完 web/admin 依赖（记号文件 $logdir/admin-installed）。
 set -uo pipefail
 
 cd "$(dirname "$0")/.."
@@ -164,6 +166,9 @@ gates_lane() {
     source scripts/ci_go_toolchain.sh
     make tools-versions
     make admin-install
+    # e2e 那一路的后台浏览器测试要用同一份 node_modules：npm ci 会整个删了重建，
+    # 两边同时进行会互相踩（踩过的同类坑见 PROGRESS「踩过的坑」）。装完留个记号，那边等它。
+    touch "$logdir/admin-installed"
     ./scripts/check-all.sh
 }
 
@@ -220,6 +225,15 @@ e2e_lane() {
         echo "console 首页 $code"
         code=$(curl -fsS -o /dev/null -w '%{http_code}' "http://localhost:${KEEL_CONSOLE_PORT}/api/v1/products")
         echo "console 反代 /api $code"
+        # 后台关键流程的浏览器测试（web/admin/e2e/），打这一栈的 console。等 gates 那一路装完依赖。
+        local i
+        for i in $(seq 1 300); do
+            [ -e "$logdir/admin-installed" ] && break
+            sleep 1
+        done
+        [ -e "$logdir/admin-installed" ] || { echo "::error::等了 300 秒 gates 还没装完 web/admin 依赖"; exit 1; }
+        CI=1 KEEL_E2E_ADMIN_URL="http://127.0.0.1:${KEEL_CONSOLE_PORT}" KEEL_E2E_COMPOSE_PROJECT=keelci make admin-e2e \
+            || { echo "::error::后台浏览器测试失败，trace 在 web/admin/e2e-results/（npx playwright show-trace <zip>）"; exit 1; }
     ) &
     local single_pid=$!
     KEEL_AUTH_SECRET="$secret" COMPOSE_PROJECT_NAME=keelcimulti \
