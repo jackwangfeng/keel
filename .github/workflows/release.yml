@@ -121,6 +121,8 @@ jobs:
           # 国内的自建 runner 要经代理才拉得到 GitHub（dtmrs 那一层要 git clone）。
           # 第一版这里没带：ci.yml 的 e2e 修了，这里漏了，打 v0.1.0 标签的那一刻
           # 发布流水线就会卡在这一步。代理参数与 ci.yml 共用一个脚本。
+          # 先预拉基础镜像：镜像源 502 时 BuildKit 不会换源，v0.10.0 的发布就卡在这一步过一次。
+          scripts/prepull-base-images.sh
           # shellcheck disable=SC2046
           docker build $(scripts/ci_build_proxy_args.sh) \
             -f docker/Dockerfile --target app \

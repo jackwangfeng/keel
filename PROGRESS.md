@@ -83,10 +83,9 @@ infero（推理引擎 18081）2026-10-16 凌晨没在跑：演示站新品搜不
 
 ## 踩过的坑（只留会再踩的）
 
-- **镜像源 502 时构建不会自动换源**：`/etc/docker/daemon.json` 配了 4 个源（2026-10-16），`docker pull` 会依次换，
-  但 BuildKit 解析 `FROM` 时第一个源（daocloud）回 502 就直接失败。绕法：先 `docker pull` 把基础镜像拉到本地
-  （debian:trixie-slim / golang:1.26 / nginx:1.29-alpine / node:24.10-alpine / rust:1.90-slim-trixie）再构建。
-
+- **镜像源 502 时构建不会自动换源**：`docker pull` 会在 daemon.json 的几个源之间换，BuildKit 解析 `FROM` 只认第一个。
+  已自动化：`scripts/prepull-base-images.sh`（从 Dockerfile 的 FROM 现取清单）接在 demo-up / multi-up 的 `--build`、
+  CI 的 e2e 与 Go 两路、发版流水线的构建之前。
 - 裸 `docker compose up` 会自动读项目根 `.env` —— 生产配置叫 `.env.prod`，别改回来。
 - compose 合并 `ports` 是追加，覆盖要写 `!override`。
 - 并行 agent 同时跑 check-all 与 test-db 会互相踩；并行上限 3 路，机械活派 Sonnet。

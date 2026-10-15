@@ -111,6 +111,8 @@ case "$mode" in
         exit 0
         ;;
     up)
+        # 构建前先预拉基础镜像：镜像源 502 时 BuildKit 不会换源（见 scripts/prepull-base-images.sh 文件头）
+        case " ${extra[*]} " in *" --build "*) scripts/prepull-base-images.sh ;; esac
         "${DC[@]}" up -d "${extra[@]}"
         ;;
 esac

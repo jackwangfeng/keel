@@ -126,6 +126,8 @@ case "$mode" in
     up)
         check_port "$KEEL_HTTP_PORT"
         check_port "$KEEL_CONSOLE_PORT"
+        # 构建前先预拉基础镜像：镜像源 502 时 BuildKit 不会换源（见 scripts/prepull-base-images.sh 文件头）
+        [ -n "$build" ] && scripts/prepull-base-images.sh
         "${DC[@]}" up -d ${build:+--build}
         ;;
 esac

@@ -54,6 +54,7 @@ go_lane() {
     (
         set -euo pipefail
         # shellcheck disable=SC2046
+        scripts/prepull-base-images.sh docker/postgres/Dockerfile
         docker build $(scripts/ci_build_proxy_args.sh) -t keel-postgres:16 docker/postgres
         # fsync/full_page_writes 关掉：测试库跑完就扔，崩溃一致性无意义；
         # 迁移与几百次模板克隆的墙钟会少一大截。
@@ -187,6 +188,7 @@ e2e_lane() {
     trap cleanup EXIT
     cleanup
     # shellcheck disable=SC2046
+    scripts/prepull-base-images.sh docker/Dockerfile docker/Dockerfile.admin
     docker compose -p keelci build $(scripts/ci_build_proxy_args.sh)
     local s
     for s in app console migrate; do
