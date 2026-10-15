@@ -44,7 +44,7 @@ infero（推理引擎 18081）2026-10-16 凌晨没在跑：演示站新品搜不
 不做：拼团、循环满减、拍照搜同款、大规模秒杀（方案在 `docs/大规模秒杀-方案备忘.md`）。
 小尾巴：下一版删 `promotion_skus.stock_qty / sold_qty`；dtmrs barrier 表未清理。
 
-**演示站 2026-10-16 已部署到 `2d91bc0`**（库 00350；部署前备份 `~/.local/share/keel-eshop/backup-pre-00350-{core,inv}-202610160341.dump`，
+**演示站 2026-10-16 已部署到 `b7adb27`（买家运单号）**；之前一次部署 `2d91bc0`（库 00350；部署前备份 `~/.local/share/keel-eshop/backup-pre-00350-{core,inv}-202610160341.dump`，
 迁移先在备份副本上试跑过）。基线 35/35。模拟器加了 150 个结构化买家（`simulate.py` 的 MORE，原文件备份 `.bak-segments`），
 一周后演示站上会有沉睡 / 只买一次人群；补货复盘的数字执行满 7 天后出现。
 定时任务：每周一 09:00 `cron-agent-coupon.sh`（精准发券手册，日志 `logs/agent-coupon.log`；改前 crontab 备份 `crontab.bak-20261016`）。
@@ -82,6 +82,10 @@ infero（推理引擎 18081）2026-10-16 凌晨没在跑：演示站新品搜不
 - `DROP SCHEMA / TRUNCATE / DROP DATABASE` 只在副本库做。
 
 ## 踩过的坑（只留会再踩的）
+
+- **镜像源 502 时构建不会自动换源**：`/etc/docker/daemon.json` 配了 4 个源（2026-10-16），`docker pull` 会依次换，
+  但 BuildKit 解析 `FROM` 时第一个源（daocloud）回 502 就直接失败。绕法：先 `docker pull` 把基础镜像拉到本地
+  （debian:trixie-slim / golang:1.26 / nginx:1.29-alpine / node:24.10-alpine / rust:1.90-slim-trixie）再构建。
 
 - 裸 `docker compose up` 会自动读项目根 `.env` —— 生产配置叫 `.env.prod`，别改回来。
 - compose 合并 `ports` 是追加，覆盖要写 `!override`。
