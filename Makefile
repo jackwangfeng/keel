@@ -84,7 +84,7 @@ GOOSE_INVENTORY := GOOSE_DRIVER=postgres GOOSE_DBSTRING="$(INVENTORY_GOOSE_DBSTR
 	sdk-smoke goose-bin migrate migrate-down migrate-status migrate-inventory migrate-inventory-status test-db test-db-ci \
 	test-engine category-eval dtmrs-deps build gates \
 	init doctor prod-up prod-down prod-logs prod-config release-up release-config \
-	multi-up multi-verify multi-down multi-wipe multi-logs multi-config multi-login \
+	multi-up multi-verify multi-down multi-wipe multi-logs multi-config multi-login prospect-demo \
 	demo-up demo-down demo-verify demo-config demo-login \
 	issue-login
 
@@ -161,6 +161,12 @@ multi-logs:
 multi-config:
 	@bash $(ROOT)/scripts/multi-up.sh --config
 
+# 按客户的商品清单在多商家栈上开一家演示店，补 DAYS 天模拟经营（见 docs/指南/客户演示店.md）。
+#   make prospect-demo CATALOG=清单.xlsx CODE=xinhui NAME=鑫惠超市 [DAYS=14]
+prospect-demo:
+	@test -n "$(CATALOG)" -a -n "$(CODE)" -a -n "$(NAME)" || { echo "要 CATALOG= CODE= NAME=（示例清单 deploy/prospect/示例-社区超市.csv）"; exit 2; }
+	@python3 $(ROOT)/scripts/prospect-demo.py create --catalog "$(CATALOG)" --code "$(CODE)" --name "$(NAME)" --days "$(or $(DAYS),14)"
+
 # ── 演示栈（环境清单在 ~/.local/share/keel-eshop/demo-env.sh，不进仓库）──
 # 唯一入口是 scripts/demo-up.sh：叠哪些 compose、哪些变量全在那份 env 里。
 # 不要手写 docker compose -f … —— 漏一层就会静默丢掉地图 / S3 / 渠道。
@@ -216,6 +222,7 @@ help:
 	@echo "make multi-logs       跟它的 app 日志，首个平台管理员的 bootstrap token 在里面"
 	@echo "make multi-config     打印多商家形态合成后的完整 compose 配置"
 	@echo "make multi-login      给多商家栈签一串登录 token（STAFF=1 或 EMAIL=…；破损恢复）"
+	@echo "make prospect-demo    按客户商品清单开演示店 + 模拟经营（CATALOG= CODE= NAME= [DAYS=14]）"
 	@echo "make demo-login       给演示栈签一串登录 token（同上）"
 	@echo "make issue-login      对当前 PG* / 指定 COMPOSE_PROJECT_NAME 签登录 token"
 	@echo "make generate       生成 Go + TS 两侧契约产物"
