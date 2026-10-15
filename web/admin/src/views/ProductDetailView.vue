@@ -706,12 +706,14 @@ function onInventoryUpdated(inv: AdminInventory): void {
                     <p class="hint">一期不校验同一商品下各 SKU 的规格键是否一致（没有规格模板的表）。</p>
                 </el-form-item>
                 <el-form-item label="售价（分）">
-                    <!-- 单位是分（契约里的 price_cents 是整数），不是元，不能有小数。 -->
-                    <el-input-number v-model="skuForm.price_cents" :min="0" :step="100" :precision="0" step-strictly />
+                    <!-- 单位是分（契约里的 price_cents 是整数），不是元，不能有小数。
+                         step 100 只管加减按钮一下一元；**不能 step-strictly**：那会把输入强制取整到
+                         100 的倍数，填 1990（¥19.90）被悄悄存成 2000 —— 超市 x.9 元的价全被改掉（e2e 抓到的）。 -->
+                    <el-input-number v-model="skuForm.price_cents" :min="0" :step="100" :precision="0" />
                     <span class="hint ml8">{{ yuan(skuForm.price_cents) }}</span>
                 </el-form-item>
                 <el-form-item label="成本（分）">
-                    <el-input-number v-model="skuForm.cost_cents" :min="0" :step="100" :precision="0" step-strictly />
+                    <el-input-number v-model="skuForm.cost_cents" :min="0" :step="100" :precision="0" />
                     <span class="hint ml8">只在后台接口里出现，前台永远看不到</span>
                 </el-form-item>
                 <el-form-item label="重量（克）">
