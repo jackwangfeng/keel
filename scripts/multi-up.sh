@@ -59,7 +59,7 @@ if [ -z "${KEEL_AUTH_SECRET:-}" ]; then
 fi
 
 # proxy.golang.org 在本机与国内网络不通（dial i/o timeout，构建卡在 go mod download）。
-# 与 scripts/demo-up.sh 同一个处理，理由见 PROGRESS.md 的「四个坑」③。
+# 与 scripts/demo-up.sh 同一个处理，理由见 docs/归档/PROGRESS-至2026-10-15.md 的「四个坑」③。
 export GOPROXY="${GOPROXY:-https://goproxy.cn,direct}"
 
 DC=(docker compose -p "$COMPOSE_PROJECT_NAME" -f compose.yaml -f compose.multi.yaml)
