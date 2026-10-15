@@ -55,6 +55,8 @@ type mcpProductCopyIn struct {
 	ProductID int64   `json:"product_id"`
 	Title     *string `json:"title,omitempty" jsonschema:"新标题，1–60 字；不改就不给"`
 	Subtitle  *string `json:"subtitle,omitempty" jsonschema:"新副标题，≤120 字；不改就不给"`
+	// 上新整理（2026-10-16）：顺手把放错 / 没分类的商品挪到对的类目。
+	CategoryID *int64 `json:"category_id,omitempty" jsonschema:"挪到这个类目（启用中的类目 id）；不挪就不给"`
 	mcpProposalMetaIn
 }
 
@@ -129,10 +131,11 @@ func registerMCPProposalTools(srv *mcp.Server, d *MCPDeps) {
 			return apiAgentProposal(p), nil
 		})
 	mcpTool(srv, d, "propose_product_copy",
-		"提一条改商品标题 / 副标题的提案（搜索缺口：让搜得到、点得进）。不会立即执行：人批准后 Keel 改，并过广告法违禁词检查。"+
+		"提一条改商品标题 / 副标题 / 类目的提案（搜索缺口：让搜得到、点得进；上新整理：去掉标题噪音、补副标题、"+
+			"把未分类的商品挪进对的类目）。三项至少给一项。不会立即执行：人批准后 Keel 改，并过广告法违禁词检查。"+
 			"需要全店范围的 AI 员工。",
 		writeProposalError, func(ctx context.Context, in mcpProductCopyIn) (api.AgentProposal, error) {
-			p, err := d.Proposals.ProposeProductCopy(ctx, in.ProductID, in.Title, in.Subtitle, in.meta())
+			p, err := d.Proposals.ProposeProductCopy(ctx, in.ProductID, in.Title, in.Subtitle, in.CategoryID, in.meta())
 			if err != nil {
 				return api.AgentProposal{}, err
 			}

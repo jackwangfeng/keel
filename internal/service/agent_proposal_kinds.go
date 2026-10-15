@@ -367,11 +367,17 @@ type ProductCopyPayload struct {
 	Subtitle       *string `json:"subtitle,omitempty"`
 	BeforeTitle    string  `json:"before_title"`
 	BeforeSubtitle *string `json:"before_subtitle,omitempty"`
+	// CategoryID 是上新整理加的（2026-10-16）：把商品挪到另一个类目。带名字是给审批界面看的，
+	// 执行只认 id；名字是提案那一刻的快照。
+	CategoryID         *int64 `json:"category_id,omitempty"`
+	CategoryName       string `json:"category_name,omitempty"`
+	BeforeCategoryID   int64  `json:"before_category_id,omitempty"`
+	BeforeCategoryName string `json:"before_category_name,omitempty"`
 }
 
 // ProposeProductCopy 是 MCP 工具 propose_product_copy。商品是全店的：要全店范围的 AI 员工。
 func (s *AgentProposalService) ProposeProductCopy(ctx context.Context, productID int64, title, subtitle *string,
-	meta ProposalMeta) (repository.AgentProposal, error) {
+	categoryID *int64, meta ProposalMeta) (repository.AgentProposal, error) {
 	id, err := requireAgent(ctx)
 	if err != nil {
 		return repository.AgentProposal{}, err
@@ -379,8 +385,8 @@ func (s *AgentProposalService) ProposeProductCopy(ctx context.Context, productID
 	if _, err := requireMerchantWide(ctx); err != nil {
 		return repository.AgentProposal{}, err
 	}
-	if title == nil && subtitle == nil {
-		return repository.AgentProposal{}, badProposal("title 与 subtitle 至少给一个")
+	if title == nil && subtitle == nil && categoryID == nil {
+		return repository.AgentProposal{}, badProposal("title、subtitle、category_id 至少给一个")
 	}
 	if title != nil {
 		t := strings.TrimSpace(*title)
@@ -407,15 +413,32 @@ func (s *AgentProposalService) ProposeProductCopy(ctx context.Context, productID
 		}
 		pl := ProductCopyPayload{ProductID: productID, Title: title, Subtitle: subtitle, BeforeTitle: prod.Title,
 			BeforeSubtitle: prod.Subtitle}
+		if categoryID != nil {
+			if *categoryID == prod.CategoryID {
+				return badProposal("商品已经在类目 %d 下", *categoryID)
+			}
+			cat, err := tx.FindCategory(ctx, *categoryID)
+			if err != nil || cat.Status != 1 || cat.DeletedAt != nil {
+				return badProposal("category_id=%d 不存在或已停用", *categoryID)
+			}
+			pl.CategoryID, pl.CategoryName, pl.BeforeCategoryID = categoryID, cat.Name, prod.CategoryID
+			if before, err := tx.FindCategory(ctx, prod.CategoryID); err == nil {
+				pl.BeforeCategoryName = before.Name
+			}
+		}
 		payload, err := json.Marshal(pl)
 		if err != nil {
 			return err
 		}
 		t := "改文案：「" + prod.Title + "」"
-		if title != nil {
+		switch {
+		case title != nil:
 			t += " → 「" + *title + "」"
-		} else {
+		case subtitle != nil:
 			t += " 改副标题"
+		}
+		if pl.CategoryID != nil {
+			t += " 移到「" + pl.CategoryName + "」"
 		}
 		out, err = insertProposal(ctx, tx, repository.NewAgentProposal{AgentStaffID: id.StaffID,
 			Kind: ProposalKindProductCopy, TargetKey: "product:" + strconv.FormatInt(productID, 10), Payload: payload,
@@ -442,11 +465,15 @@ func (s *AgentProposalService) execProductCopy(ctx context.Context, p repository
 	if err := json.Unmarshal(p.Payload, &pl); err != nil {
 		return ProposalResult{}, err
 	}
-	after, err := s.catalog.UpdateProduct(ctx, pl.ProductID, repository.ProductPatch{Title: pl.Title, Subtitle: pl.Subtitle})
+	after, err := s.catalog.UpdateProduct(ctx, pl.ProductID, repository.ProductPatch{Title: pl.Title, Subtitle: pl.Subtitle,
+		CategoryID: pl.CategoryID})
 	if err != nil {
 		return ProposalResult{}, err
 	}
 	d := map[string]any{"product_id": pl.ProductID, "before_title": pl.BeforeTitle, "after_title": after.Title}
+	if pl.CategoryID != nil {
+		d["before_category_id"], d["after_category_id"] = pl.BeforeCategoryID, after.CategoryID
+	}
 	if after.Subtitle != nil {
 		d["after_subtitle"] = *after.Subtitle
 	}

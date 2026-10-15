@@ -1,6 +1,8 @@
 package handler_test
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -199,5 +201,55 @@ func TestMCPPromotionReview(t *testing.T) {
 	res, _ = mcpCall(t, storeSess, "promotion_review", map[string]any{"promotion_id": promo.Id})
 	if !res.IsError || !strings.Contains(mcpText(res), "role-forbidden") {
 		t.Fatalf("门店管理员身份看活动 / 券复盘应 role-forbidden：%q", mcpText(res))
+	}
+}
+
+// catalog_issues（上新整理）：把衬衫的标题改成典型的「清单原样」—— 营销词 + 装饰符号，
+// 体检要标出 title_noise，并带上命中的词作依据；两件商品都没有商品图，no_image 计 2。
+func TestMCPCatalogIssues(t *testing.T) {
+	cs := newCouponShop(t)
+	if _, err := admin(t).Exec(context.Background(),
+		`UPDATE products SET title = '【特价】纯棉衬衫 包邮', subtitle = NULL WHERE id = $1`, cs.ShirtProduct); err != nil {
+		t.Fatal(err)
+	}
+	a := createAgent(t, cs.adminShop, `{"name":"上新 AI","role":2}`)
+	sess := mcpConnect(t, cs.Host, issueAgentKey(t, cs.adminShop, a.Id, `{"name":"t"}`).Secret)
+
+	res, out := mcpCall(t, sess, "catalog_issues", map[string]any{})
+	if res.IsError {
+		t.Fatalf("catalog_issues 出错：%s", mcpText(res))
+	}
+	var got struct {
+		Scanned    int            `json:"scanned"`
+		Summary    map[string]int `json:"summary"`
+		Categories []struct {
+			ID       int64  `json:"id"`
+			PathName string `json:"path_name"`
+		} `json:"categories"`
+		Items   []struct {
+			ProductID int64 `json:"product_id"`
+			Issues    []struct {
+				Code   string `json:"code"`
+				Detail string `json:"detail"`
+			} `json:"issues"`
+		} `json:"items"`
+	}
+	raw, _ := json.Marshal(out)
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Scanned < 2 || got.Summary["no_image"] < 2 || got.Summary["title_noise"] != 1 || len(got.Categories) == 0 {
+		t.Fatalf("体检结果不对：%+v", got)
+	}
+	found := false
+	for _, it := range got.Items {
+		for _, is := range it.Issues {
+			if it.ProductID == cs.ShirtProduct && is.Code == "title_noise" {
+				found = strings.Contains(is.Detail, "特价") && strings.Contains(is.Detail, "包邮") && strings.Contains(is.Detail, "【")
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("衬衫的 title_noise 没有带上命中的词：%s", raw)
 	}
 }

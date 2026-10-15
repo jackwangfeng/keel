@@ -59,6 +59,48 @@ func (q *Queries) AgentRecentOutcomes(ctx context.Context, arg AgentRecentOutcom
 	return items, nil
 }
 
+const agentRestockTotals = `-- name: AgentRestockTotals :one
+SELECT count(*)::bigint AS reviewed,
+       count(*) FILTER (WHERE p.outcome ? 'forecast_accuracy')::bigint AS with_forecast,
+       COALESCE(avg((p.outcome->>'forecast_accuracy')::float8), 0)::float8 AS avg_accuracy,
+       COALESCE(sum((p.outcome->>'avoided_stockout_days')::bigint), 0)::bigint AS avoided_days,
+       COALESCE(sum((p.outcome->>'extra_sold_qty')::bigint), 0)::bigint AS extra_qty,
+       COALESCE(sum((p.outcome->>'extra_sold_cents')::bigint), 0)::bigint AS extra_cents
+  FROM agent_proposals p
+ WHERE p.agent_staff_id = $1 AND p.kind = 'inventory_adjust'
+   AND p.outcome_at IS NOT NULL AND p.created_at >= $2
+`
+
+type AgentRestockTotalsParams struct {
+	AgentStaffID int64
+	Since        pgtype.Timestamptz
+}
+
+type AgentRestockTotalsRow struct {
+	Reviewed     int64
+	WithForecast int64
+	AvgAccuracy  float64
+	AvoidedDays  int64
+	ExtraQty     int64
+	ExtraCents   int64
+}
+
+// 成绩单里补货那一行的汇总（2026-10-16）：近 since 以来已经复盘过的补货提案。
+// 各字段的口径在 service/agent_proposal_outcome.go 的 restockReview；老提案没有这些字段，按缺席处理。
+func (q *Queries) AgentRestockTotals(ctx context.Context, arg AgentRestockTotalsParams) (AgentRestockTotalsRow, error) {
+	row := q.db.QueryRow(ctx, agentRestockTotals, arg.AgentStaffID, arg.Since)
+	var i AgentRestockTotalsRow
+	err := row.Scan(
+		&i.Reviewed,
+		&i.WithForecast,
+		&i.AvgAccuracy,
+		&i.AvoidedDays,
+		&i.ExtraQty,
+		&i.ExtraCents,
+	)
+	return i, err
+}
+
 const agentScorecardByKind = `-- name: AgentScorecardByKind :many
 SELECT p.kind,
        count(*)::bigint                                                  AS proposed,
@@ -511,6 +553,59 @@ func (q *Queries) PublicAILogSummary(ctx context.Context) (PublicAILogSummaryRow
 		&i.Negative,
 	)
 	return i, err
+}
+
+const sKUDailyUnitsSold = `-- name: SKUDailyUnitsSold :many
+SELECT floor(extract(epoch FROM (o.paid_at - $1::timestamptz)) / 86400)::int AS day_idx,
+       COALESCE(sum(oi.quantity), 0)::bigint AS qty
+  FROM order_items oi
+  JOIN orders o ON o.id = oi.order_id
+ WHERE oi.sku_id = $2
+   AND o.store_id = $3
+   AND o.status IN (20, 30, 40, 50)
+   AND o.paid_at >= $1 AND o.paid_at < $4
+ GROUP BY 1
+ ORDER BY 1
+`
+
+type SKUDailyUnitsSoldParams struct {
+	FromAt  pgtype.Timestamptz
+	SkuID   int64
+	StoreID int64
+	ToAt    pgtype.Timestamptz
+}
+
+type SKUDailyUnitsSoldRow struct {
+	DayIdx int32
+	Qty    int64
+}
+
+// 补货复盘（2026-10-16）：一个 SKU 在一家门店、[from, to) 内按「执行后第几天」分桶的已付款件数。
+// 用 24 小时一桶而不是按日历日，复盘窗口本来就是从执行那一刻起算的 7 个 24 小时，不牵扯店铺时区。
+// 没卖的那一天不出现，调用方按 0 补。
+func (q *Queries) SKUDailyUnitsSold(ctx context.Context, arg SKUDailyUnitsSoldParams) ([]SKUDailyUnitsSoldRow, error) {
+	rows, err := q.db.Query(ctx, sKUDailyUnitsSold,
+		arg.FromAt,
+		arg.SkuID,
+		arg.StoreID,
+		arg.ToAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SKUDailyUnitsSoldRow
+	for rows.Next() {
+		var i SKUDailyUnitsSoldRow
+		if err := rows.Scan(&i.DayIdx, &i.Qty); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const sKUUnitsSoldBetween = `-- name: SKUUnitsSoldBetween :one

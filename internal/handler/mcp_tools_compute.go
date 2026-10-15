@@ -33,7 +33,23 @@ type mcpChannelAllocationIn struct {
 	Days    int     `json:"days,omitempty" jsonschema:"窗口天数，7–30，默认 14"`
 }
 
+type mcpCatalogIssuesIn struct {
+	Statuses []int16 `json:"statuses,omitempty" jsonschema:"只看这些状态的商品：0 草稿 / 1 上架 / 2 下架；不传则看草稿与上架"`
+	Limit    int     `json:"limit,omitempty" jsonschema:"最多体检几件商品（按 id 从小到大），默认 200，最多 500"`
+}
+
 func registerMCPComputeTools(srv *mcp.Server, d *MCPDeps) {
+	mcpTool(srv, d, "catalog_issues",
+		"上新整理：逐件商品体检，只列有问题的商品。问题码：title_noise（标题有装饰符号或营销词）、"+
+			"title_too_long（超过 30 字）、no_subtitle、forbidden_words（广告法违禁词）、uncategorized（未分类 / 默认分类）、"+
+			"no_image、price_outlier（同类目至少 5 个 SKU 时，价格是中位数的 5 倍以上或 1/5 以下）、"+
+			"duplicate_title（去掉规格与修饰后与另一件同名）、zero_stock（全部 SKU 可售为 0）。"+
+			"每条带 detail 依据。前四种和 uncategorized 可以用 propose_product_copy 提整理提案；"+
+			"no_image、price_outlier、duplicate_title、zero_stock 要人处理，写进简报。summary 是各码件数；"+
+			"categories 是店里启用中的叶子类目（id 与名字路径），挪类目时从这里挑。",
+		writeAdminListError, func(ctx context.Context, in mcpCatalogIssuesIn) (service.CatalogIssuesResult, error) {
+			return d.CatalogIssues.Scan(ctx, service.CatalogIssuesQuery{Statuses: in.Statuses, Limit: in.Limit})
+		})
 	mcpTool(srv, d, "slow_movers",
 		"滞销清仓：每个（门店，SKU）的库存周转天数（可售 ÷ 日均，日均口径与 restock_plan 相同——"+
 			"分母去掉断货天）。周转天数为 null 的是回看期内一件没卖出去的，排最前，比任何数字都更该清。"+

@@ -48,6 +48,10 @@ type AgentOutcomeTx interface {
 	// DeferAgentProposalOutcome 把一条到点的复盘推迟到 dueAt（统计窗口还没走完）。
 	DeferAgentProposalOutcome(ctx context.Context, id int64, dueAt time.Time) error
 	SKUUnitsSoldBetween(ctx context.Context, skuIDs []int64, storeID *int64, from, to time.Time) (qty, amountCents int64, err error)
+	// SKUDailyUnitsSold 是补货复盘的逐日卖出件数：下标 = 执行后第几个 24 小时，长度 = days，没卖的那天是 0。
+	SKUDailyUnitsSold(ctx context.Context, skuID, storeID int64, from time.Time, days int) ([]int64, error)
+	// AgentRestockTotals 是成绩单里补货那一行的汇总（db/queries/agent_outcomes.sql 同名查询）。
+	AgentRestockTotals(ctx context.Context, agentStaffID int64, since time.Time) (RestockTotals, error)
 	ProductUnitsSoldBetween(ctx context.Context, productID int64, from, to time.Time) (int64, error)
 	CouponTemplateUsage(ctx context.Context, templateID int64) (claimed, used int64, err error)
 	AgentScorecard(ctx context.Context, agentStaffID int64, since time.Time) ([]ScorecardKind, []RecentOutcome, error)
@@ -134,7 +138,7 @@ type AgentAutoPolicy struct {
 	// MaxRatioStepBP 是 channel_stock_rule 每条改动的比例变化上限（万分比，00332）；0 = 不自动执行。
 	MaxRatioStepBP int32
 	UpdatedBy      *int64
-	UpdatedAt        *time.Time
+	UpdatedAt      *time.Time
 }
 
 // ErrAutoPolicyNotFound：这名 AI 员工对这种提案没有策略。
@@ -267,4 +271,35 @@ func (t tenantTx) PublicAILog(ctx context.Context) ([]PublicAILogEntry, PublicAI
 	}
 	return out, PublicAILogSummary{Proposed: s.Proposed, Executed: s.Executed, AutoExecuted: s.AutoExecuted,
 		Rejected: s.Rejected, Positive: s.Positive, Negative: s.Negative}, nil
+}
+
+func (t tenantTx) SKUDailyUnitsSold(ctx context.Context, skuID, storeID int64, from time.Time, days int) ([]int64, error) {
+	rows, err := t.q.SKUDailyUnitsSold(ctx, db.SKUDailyUnitsSoldParams{FromAt: ts(from), SkuID: skuID, StoreID: storeID,
+		ToAt: ts(from.Add(time.Duration(days) * 24 * time.Hour))})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]int64, days)
+	for _, r := range rows {
+		if r.DayIdx >= 0 && int(r.DayIdx) < days {
+			out[r.DayIdx] = r.Qty
+		}
+	}
+	return out, nil
+}
+
+// RestockTotals 是一名 AI 员工已复盘补货提案的汇总。
+type RestockTotals struct {
+	Reviewed, WithForecast            int64
+	AvgAccuracy                       float64
+	AvoidedDays, ExtraQty, ExtraCents int64
+}
+
+func (t tenantTx) AgentRestockTotals(ctx context.Context, agentStaffID int64, since time.Time) (RestockTotals, error) {
+	r, err := t.q.AgentRestockTotals(ctx, db.AgentRestockTotalsParams{AgentStaffID: agentStaffID, Since: tsArg(since)})
+	if err != nil {
+		return RestockTotals{}, err
+	}
+	return RestockTotals{Reviewed: r.Reviewed, WithForecast: r.WithForecast, AvgAccuracy: r.AvgAccuracy,
+		AvoidedDays: r.AvoidedDays, ExtraQty: r.ExtraQty, ExtraCents: r.ExtraCents}, nil
 }

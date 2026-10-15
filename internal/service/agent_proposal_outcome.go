@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"time"
 
 	"github.com/keel/keel/internal/inventory"
@@ -58,6 +59,53 @@ type ProposalOutcome struct {
 	ComparisonStart string   `json:"comparison_start,omitempty"`
 	// Cells 是 channel_stock_rule 的逐格前后对比。
 	Cells []ChannelOutcomeCell `json:"cells,omitempty"`
+	// 补货的「能讲的数字」（2026-10-16，算法见 restockReview）。老提案没有测算快照时 ForecastQty 与
+	// ForecastAccuracy 缺席；执行结果里没有执行前可售时反事实那几项缺席。
+	ForecastQty                *float64 `json:"forecast_qty,omitempty"`
+	ForecastAccuracy           *float64 `json:"forecast_accuracy,omitempty"`
+	BeforeAvailable            *int32   `json:"before_available,omitempty"`
+	CounterfactualStockoutDays *int     `json:"counterfactual_stockout_days,omitempty"`
+	AvoidedStockoutDays        *int     `json:"avoided_stockout_days,omitempty"`
+	ExtraSoldQty               *int64   `json:"extra_sold_qty,omitempty"`
+	ExtraSoldCents             *int64   `json:"extra_sold_cents,omitempty"`
+}
+
+// restockReview 是补货复盘的四个数，全部能手算：
+//
+//	预测准确率   = 1 − |实际卖出 − 日均×天数| ÷ (日均×天数)，截在 [0, 1]；日均为 0 时不算
+//	不补会断几天 = 拿执行前可售，按实际逐日卖出往下扣，一天结束时 ≤ 0 的天数
+//	少断的天数   = max(0, 不补会断几天 − 实际断货天数)
+//	多卖的件数   = max(0, 实际卖出 − 执行前可售)；金额 = 件数 × 窗口内实际成交均价
+//
+// 反事实的前提是「需求不因补货而变」：没补的话卖不出去的那部分，就是补货多卖出来的。
+func restockReview(o *ProposalOutcome, forecast *RestockForecast, before *int32, daily []int64,
+	sold, amountCents int64, stockoutDays int) {
+	days := len(daily)
+	if forecast != nil && forecast.DailyAvg > 0 && days > 0 {
+		f := forecast.DailyAvg * float64(days)
+		acc := 1 - math.Abs(float64(sold)-f)/f
+		acc = math.Max(0, math.Min(1, acc))
+		f, acc = math.Round(f*10)/10, math.Round(acc*1000)/1000
+		o.ForecastQty, o.ForecastAccuracy = &f, &acc
+	}
+	if before == nil {
+		return
+	}
+	o.BeforeAvailable = before
+	left, cf := int64(*before), 0
+	for _, q := range daily {
+		left -= q
+		if left <= 0 {
+			cf++
+		}
+	}
+	avoided := max(0, cf-stockoutDays)
+	extra := max(0, sold-int64(*before))
+	var extraCents int64
+	if sold > 0 {
+		extraCents = extra * amountCents / sold
+	}
+	o.CounterfactualStockoutDays, o.AvoidedStockoutDays, o.ExtraSoldQty, o.ExtraSoldCents = &cf, &avoided, &extra, &extraCents
 }
 
 // outcomePlan：执行成功时决定何时量效果；不量效果的种类直接给一份结果。
@@ -154,12 +202,21 @@ func computeOutcome(ctx context.Context, tx repository.Tx, stockout map[int64]in
 			return ProposalOutcome{}, err
 		}
 		from, to := d.ExecutedAt, d.ExecutedAt.Add(outcomeWindow)
-		sold, _, err := tx.SKUUnitsSoldBetween(ctx, []int64{pl.SKUID}, &pl.StoreID, from, to)
+		sold, amount, err := tx.SKUUnitsSoldBetween(ctx, []int64{pl.SKUID}, &pl.StoreID, from, to)
 		if err != nil {
 			return ProposalOutcome{}, err
 		}
 		n := stockout[pl.SKUID]
 		o := ProposalOutcome{SoldQty: &sold, StockoutDays: &n, DeltaQty: &pl.Delta, WindowStart: day(from), WindowEnd: day(to)}
+		daily, err := tx.SKUDailyUnitsSold(ctx, pl.SKUID, pl.StoreID, from, int(outcomeWindow/(24*time.Hour)))
+		if err != nil {
+			return ProposalOutcome{}, err
+		}
+		var res ProposalResult
+		if raw, err := proposalResultOf(ctx, tx, d.ID); err == nil && len(raw) > 0 {
+			_ = json.Unmarshal(raw, &res)
+		}
+		restockReview(&o, pl.Forecast, res.BeforeAvailable, daily, sold, amount, n)
 		switch {
 		case n >= 2:
 			o.Verdict, o.Explanation = verdictNegative, "补货后 7 天里仍断货 2 天及以上"
@@ -370,6 +427,8 @@ type Scorecard struct {
 	Since        time.Time
 	Kinds        []repository.ScorecardKind
 	Recent       []repository.RecentOutcome
+	// Restock 是补货的汇总（2026-10-16）；一条都没复盘过时为 nil。
+	Restock *repository.RestockTotals
 }
 
 const scorecardWindow = 30 * 24 * time.Hour
@@ -402,7 +461,13 @@ func (s *AgentProposalService) scorecard(ctx context.Context, agentStaffID int64
 			return err
 		}
 		var e error
-		out.Kinds, out.Recent, e = tx.AgentScorecard(ctx, agentStaffID, out.Since)
+		if out.Kinds, out.Recent, e = tx.AgentScorecard(ctx, agentStaffID, out.Since); e != nil {
+			return e
+		}
+		rt, e := tx.AgentRestockTotals(ctx, agentStaffID, out.Since)
+		if e == nil && rt.Reviewed > 0 {
+			out.Restock = &rt
+		}
 		return e
 	})
 	if errors.Is(err, repository.ErrAgentNotFound) {

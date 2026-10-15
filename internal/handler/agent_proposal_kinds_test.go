@@ -124,6 +124,30 @@ func TestAgentProposalKindsExecuteOnApproval(t *testing.T) {
 		t.Fatal("执行结果应带原标题")
 	}
 
+	// 上新整理：只挪类目（衬衫从「服装」挪进子类目），载荷带前后类目名给审批界面看。
+	mv := propose("propose_product_copy", map[string]any{"product_id": cs.ShirtProduct, "category_id": cs.ChildCat,
+		"evidence": "catalog_issues：衬衫挂在一级类目下，同类商品都在二级类目"})
+	if pl := mv["payload"].(map[string]any); pl["category_name"] == "" || pl["before_category_name"] == "" ||
+		int64(pl["before_category_id"].(float64)) != cs.ParentCat {
+		t.Fatalf("挪类目的载荷不对：%v", pl)
+	}
+	approve(mv["id"].(float64))
+	var cat int64
+	if err := admin(t).QueryRow(context.Background(), `SELECT category_id FROM products WHERE id = $1`, cs.ShirtProduct).Scan(&cat); err != nil ||
+		cat != cs.ChildCat {
+		t.Fatalf("批准后应已挪类目：%d err=%v", cat, err)
+	}
+	for _, bad := range []map[string]any{
+		{"product_id": cs.ShirtProduct, "category_id": cs.ChildCat}, // 已经在这个类目下
+		{"product_id": cs.ShirtProduct, "category_id": 99999999},    // 不存在
+		{"product_id": cs.ShirtProduct},                             // 三项一项都没给
+	} {
+		bad["evidence"] = "catalog_issues：uncategorized"
+		if res, _ := mcpCall(t, sess, "propose_product_copy", bad); !res.IsError {
+			t.Fatalf("应被拒：%v", bad)
+		}
+	}
+
 	// 售后审核：买家申请一张退款，AI 建议同意，人批准。
 	b := cs.newBuyer(t, "ai-refund")
 	o := cs.placePaid(t, b, cs.NorthStore, cs.DressSKU, 1, nil)
@@ -185,5 +209,33 @@ func TestProposalWhoseTargetChangedFailsInsteadOfSticking(t *testing.T) {
 	if res, _ := mcpCall(t, sess, "propose_refund_decision", map[string]any{"refund_no": rf.RefundNo, "action": "approve",
 		"evidence": "list_refunds：再提一次，未发货、仅退款"}); res.IsError && strings.Contains(mcpText(res), "同样的待处理提案") {
 		t.Fatalf("失败的提案不该挡住同一目标再提：%s", mcpText(res))
+	}
+}
+
+// 平台级账号不能审批店里的提案：审批人记在 decided_by，外键指向本店员工。
+// 2026-10-16 之前平台会话切进店里点「批准」会撞外键、回 500；现在是 403 role-forbidden，提案原样待处理。
+func TestPlatformAccountCannotDecideProposals(t *testing.T) {
+	cs := newCouponShop(t)
+	a := createAgent(t, cs.adminShop, `{"name":"上新 AI","role":2}`)
+	sess := mcpConnect(t, cs.Host, issueAgentKey(t, cs.adminShop, a.Id, `{"name":"t"}`).Secret)
+	res, out := mcpCall(t, sess, "propose_product_copy", map[string]any{"product_id": cs.ShirtProduct, "subtitle": "纯棉透气",
+		"evidence": "catalog_issues：no_subtitle"})
+	if res.IsError {
+		t.Fatalf("提案失败：%s", mcpText(res))
+	}
+	id := int64(out["id"].(float64))
+	plat := newPlatformAdmin(t)
+	for _, c := range []struct{ path, body string }{
+		{fmt.Sprintf("/api/v1/admin/agent-proposals/%d/approve", id), ""},
+		{fmt.Sprintf("/api/v1/admin/agent-proposals/%d/reject", id), `{"reason":"不要"}`},
+	} {
+		w := postWithKey(t, cs.Host, c.path, c.body, plat, freshIdemKey())
+		if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "role-forbidden") {
+			t.Fatalf("%s：期望 403 role-forbidden，实得 %d %s", c.path, w.Code, w.Body.String())
+		}
+	}
+	var status int16
+	if err := admin(t).QueryRow(context.Background(), `SELECT status FROM agent_proposals WHERE id = $1`, id).Scan(&status); err != nil || status != 10 {
+		t.Fatalf("提案应仍待处理：%d %v", status, err)
 	}
 }

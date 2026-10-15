@@ -11,6 +11,7 @@ import {
     flashPricePayload,
     inventoryAdjustPayload,
     productCopyPayload,
+    restockSummary,
     refundDecisionPayload,
     safeRatePercent,
 } from "./agentProposalRules.ts";
@@ -106,6 +107,14 @@ test("改文案 payload：标题 / 副标题改了哪个就标哪个", () => {
     assert.equal(titleOnly.subtitleChanged, false);
     assert.equal(titleOnly.beforeTitle, "旧标题");
     assert.equal(titleOnly.afterTitle, "新标题");
+    assert.equal(titleOnly.categoryChanged, false);
+    const moved = productCopyPayload({
+        product_id: 9, before_title: "脐橙", category_id: 12, category_name: "水果", before_category_id: 3, before_category_name: "未分类",
+    });
+    assert.equal(moved.categoryChanged, true);
+    assert.equal(moved.titleChanged, false);
+    assert.equal(moved.beforeCategory, "未分类");
+    assert.equal(moved.afterCategory, "水果");
 });
 
 test("售后审核 payload：同意 / 驳回", () => {
@@ -253,4 +262,14 @@ test("安全除法百分比：分母为 0 给 —，不给 0% / NaN", () => {
     assert.equal(safeRatePercent(0, 0), "—");
     assert.equal(safeRatePercent(3, 10), "30%");
     assert.equal(safeRatePercent(1, 3), "33%");
+});
+
+test("成绩单补货汇总：有快照 / 没快照", () => {
+    const v = restockSummary({ reviewed: 3, with_forecast: 2, avg_forecast_accuracy: 0.8123, avoided_stockout_days: 9,
+        extra_sold_qty: 41, extra_sold_cents: 52300 });
+    assert.equal(v.accuracy, "平均预测准确率 81%（2 条）");
+    assert.equal(v.avoided, "少断货 9 天");
+    assert.equal(v.extra, "多卖 41 件，约 ¥523.00");
+    const old = restockSummary({ reviewed: 1, with_forecast: 0, avoided_stockout_days: 0, extra_sold_qty: 0, extra_sold_cents: 0 });
+    assert.match(old.accuracy, /—/);
 });

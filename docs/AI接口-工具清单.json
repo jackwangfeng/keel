@@ -30,6 +30,145 @@
     }
   },
   {
+    "description": "上新整理：逐件商品体检，只列有问题的商品。问题码：title_noise（标题有装饰符号或营销词）、title_too_long（超过 30 字）、no_subtitle、forbidden_words（广告法违禁词）、uncategorized（未分类 / 默认分类）、no_image、price_outlier（同类目至少 5 个 SKU 时，价格是中位数的 5 倍以上或 1/5 以下）、duplicate_title（去掉规格与修饰后与另一件同名）、zero_stock（全部 SKU 可售为 0）。每条带 detail 依据。前四种和 uncategorized 可以用 propose_product_copy 提整理提案；no_image、price_outlier、duplicate_title、zero_stock 要人处理，写进简报。summary 是各码件数；categories 是店里启用中的叶子类目（id 与名字路径），挪类目时从这里挑。",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "limit": {
+          "description": "最多体检几件商品（按 id 从小到大），默认 200，最多 500",
+          "type": "integer"
+        },
+        "statuses": {
+          "description": "只看这些状态的商品：0 草稿 / 1 上架 / 2 下架；不传则看草稿与上架",
+          "items": {
+            "maximum": 32767,
+            "minimum": -32768,
+            "type": "integer"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "name": "catalog_issues",
+    "outputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "categories": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "integer"
+              },
+              "path_name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "path_name"
+            ],
+            "type": "object"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        },
+        "generated_at": {
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "category_id": {
+                "type": "integer"
+              },
+              "category_name": {
+                "type": "string"
+              },
+              "issues": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    },
+                    "detail": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "detail"
+                  ],
+                  "type": "object"
+                },
+                "type": [
+                  "null",
+                  "array"
+                ]
+              },
+              "product_id": {
+                "type": "integer"
+              },
+              "status": {
+                "maximum": 32767,
+                "minimum": -32768,
+                "type": "integer"
+              },
+              "subtitle": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "product_id",
+              "title",
+              "status",
+              "category_id",
+              "category_name",
+              "issues"
+            ],
+            "type": "object"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        },
+        "scanned": {
+          "type": "integer"
+        },
+        "summary": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "type": "object"
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "generated_at",
+        "scanned",
+        "summary",
+        "items",
+        "truncated",
+        "categories"
+      ],
+      "type": "object"
+    }
+  },
+  {
     "description": "渠道库存分配复盘（只读）：一家门店每个 SKU 在每个销售渠道（自营 + 接入的外卖 / 电商渠道）上的当前分配规则（比例 ratio_bp、安全库存、上限，及来自哪一级）、对外可售数、窗口内卖出件数、有货时的日均销量（分母去掉挂零的时间）、挂零小时数（held_zero_hours = keel 有货但规则算成 0；empty_zero_hours = keel 自己没货）、缺货拒单件数、单件净收入（扣佣金与成本价；cost_missing 表示没填成本价、净收入没减成本）。suggestions 是 keel 按固定规则算的基线建议，可以照用、修改或不用；keel 自己可售为 0 的 SKU 不给建议——缺的是货，不是分配。",
     "inputSchema": {
       "additionalProperties": false,
@@ -1624,6 +1763,43 @@
             "array"
           ]
         },
+        "restock": {
+          "additionalProperties": false,
+          "properties": {
+            "avg_forecast_accuracy": {
+              "type": [
+                "null",
+                "number"
+              ]
+            },
+            "avoided_stockout_days": {
+              "type": "integer"
+            },
+            "extra_sold_cents": {
+              "type": "integer"
+            },
+            "extra_sold_qty": {
+              "type": "integer"
+            },
+            "reviewed": {
+              "type": "integer"
+            },
+            "with_forecast": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "avoided_stockout_days",
+            "extra_sold_cents",
+            "extra_sold_qty",
+            "reviewed",
+            "with_forecast"
+          ],
+          "type": [
+            "null",
+            "object"
+          ]
+        },
         "since": {
           "type": "string"
         }
@@ -2980,10 +3156,17 @@
     }
   },
   {
-    "description": "提一条改商品标题 / 副标题的提案（搜索缺口：让搜得到、点得进）。不会立即执行：人批准后 Keel 改，并过广告法违禁词检查。需要全店范围的 AI 员工。",
+    "description": "提一条改商品标题 / 副标题 / 类目的提案（搜索缺口：让搜得到、点得进；上新整理：去掉标题噪音、补副标题、把未分类的商品挪进对的类目）。三项至少给一项。不会立即执行：人批准后 Keel 改，并过广告法违禁词检查。需要全店范围的 AI 员工。",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
+        "category_id": {
+          "description": "挪到这个类目（启用中的类目 id）；不挪就不给",
+          "type": [
+            "null",
+            "integer"
+          ]
+        },
         "evidence": {
           "description": "证据（markdown）：引用工具返回的数字，能被人复现；10–8000 字",
           "type": "string"

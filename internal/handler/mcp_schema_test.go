@@ -75,6 +75,7 @@ func TestMCPEveryToolReturnsItsDeclaredShape(t *testing.T) {
 		{"list_events", map[string]any{}},
 		{"ack_events", map[string]any{"up_to_id": evID}},
 		{"slow_movers", map[string]any{}},
+		{"catalog_issues", map[string]any{}},
 		{"promotion_review", map[string]any{"coupon_template_id": tpl.Id}},
 		{"channel_allocation_review", map[string]any{"store_id": cs.NorthStore}},
 	}

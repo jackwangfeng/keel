@@ -765,6 +765,8 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 	if ro.channels != nil { // 渠道分配提案（channel_stock_rule）的执行者；关着时这种提案拒收
 		proposals.SetChannels(ro.channels)
 	}
+	// 补货提案拍测算快照（复盘算预测准确率用，2026-10-16）。
+	proposals.SetRestock(service.NewRestockService(repo, inv, service.NewAdminStoreService(repo, inv).WithChannels(ro.channels)))
 	aph := handler.NewAgentProposalHandler(proposals)
 	v1.GET("/admin/agent-proposals", staffAuth, aph.List)
 	v1.GET("/admin/agent-proposals/:proposal_id", staffAuth, aph.Get)
@@ -794,6 +796,7 @@ func Router(pool *pgxpool.Pool, res *tenant.Resolver, signer *auth.Signer,
 		Briefs:          briefs,
 		Events:          agentEvents,
 		SlowMovers:      service.NewSlowMoversService(repo, inv, service.NewAdminStoreService(repo, inv).WithChannels(ro.channels)),
+		CatalogIssues:   service.NewCatalogIssuesService(repo, inv),
 		PromotionReview: service.NewPromotionReviewService(repo),
 		Channels:        ro.channels,
 		Version:         buildinfo.Get().Version,

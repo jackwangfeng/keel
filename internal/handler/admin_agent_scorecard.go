@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"math"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -38,6 +39,14 @@ func apiScorecard(sc service.Scorecard) api.AgentScorecard {
 		}
 		out.Recent = append(out.Recent, api.AgentScorecardEntry{ProposalId: r.ID, Kind: r.Kind, Title: r.Title,
 			Outcome: o, OutcomeAt: r.OutcomeAt})
+	}
+	if r := sc.Restock; r != nil {
+		out.Restock = &api.AgentScorecardRestock{Reviewed: r.Reviewed, WithForecast: r.WithForecast,
+			AvoidedStockoutDays: r.AvoidedDays, ExtraSoldQty: r.ExtraQty, ExtraSoldCents: r.ExtraCents}
+		if r.WithForecast > 0 {
+			acc := math.Round(r.AvgAccuracy*1000) / 1000
+			out.Restock.AvgForecastAccuracy = &acc
+		}
 	}
 	return out
 }

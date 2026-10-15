@@ -8,7 +8,7 @@
 import { ref, onMounted } from "vue";
 import { Refresh } from "@element-plus/icons-vue";
 import { keel, type AdminAgent, type AgentScorecard, type AgentScorecardEntry, type AgentScorecardKind } from "../../api/client.ts";
-import { KIND_LABEL, VERDICT, describeOutcome, safeRatePercent, type AgentProposalKind } from "../../api/agentProposalRules.ts";
+import { KIND_LABEL, VERDICT, describeOutcome, restockSummary, safeRatePercent, type AgentProposalKind } from "../../api/agentProposalRules.ts";
 import { datetime } from "../../ui/format.ts";
 import { useMobile } from "../../ui/useMobile.ts";
 import ProblemAlert from "../../components/ProblemAlert.vue";
@@ -108,6 +108,14 @@ function kindStats(k: AgentScorecardKind): { label: string; value: string | numb
         <template v-if="card">
             <p class="hint">统计区间：{{ datetime(card.since) }} 至今（近 30 天）</p>
 
+            <el-alert v-if="card.restock" type="success" :closable="false" class="restock-summary" :title="restockSummary(card.restock).headline">
+                <p>
+                    {{ restockSummary(card.restock).accuracy }} · {{ restockSummary(card.restock).avoided }} ·
+                    {{ restockSummary(card.restock).extra }}
+                </p>
+                <p class="muted">{{ restockSummary(card.restock).footnote }}</p>
+            </el-alert>
+
             <el-table v-if="!mobile" :data="card.kinds" v-loading="loading" border stripe size="small">
                 <el-table-column label="种类" width="100">
                     <template #default="{ row }: { row: AgentScorecardKind }">{{ kindLabel(row.kind) }}</template>
@@ -187,6 +195,9 @@ function kindStats(k: AgentScorecardKind): { label: string; value: string | numb
 </template>
 
 <style scoped>
+.restock-summary {
+    margin-bottom: 12px;
+}
 .section-title {
     margin: 16px 0 8px;
     font-size: 13px;

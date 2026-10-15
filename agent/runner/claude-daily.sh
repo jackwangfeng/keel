@@ -29,6 +29,11 @@ chmod 600 "$CFG"
 
 TODAY=$(date +%Y-%m-%d)
 PROMPT="今天是 ${TODAY}。按 skills/巡店日报.md 做今天的巡店：补货部分按 skills/补货.md，渠道分配按 skills/渠道库存分配.md。只用 keel 这个 MCP 服务的工具，最后用 post_brief 写简报。"
+# KEEL_AGENT_SKILL=上新整理（skills/ 下的文件名，不带 .md）：不巡店，只按那一本手册做一次。
+if [ -n "${KEEL_AGENT_SKILL:-}" ]; then
+  [ -f "skills/${KEEL_AGENT_SKILL}.md" ] || { echo "没有 skills/${KEEL_AGENT_SKILL}.md" >&2; exit 2; }
+  PROMPT="今天是 ${TODAY}。按 skills/${KEEL_AGENT_SKILL}.md 做一次。只用 keel 这个 MCP 服务的工具，最后用 post_brief 写简报。"
+fi
 
 # 只放行 keel 的 MCP 工具与读本目录的手册：agent 不需要、也不该有 shell 与改文件的能力。
 "$CLAUDE" -p "$PROMPT" \

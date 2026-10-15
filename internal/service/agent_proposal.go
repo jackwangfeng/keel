@@ -53,6 +53,18 @@ type InventoryAdjustPayload struct {
 	SKUID   int64  `json:"sku_id"`
 	Delta   int32  `json:"delta"`
 	Reason  string `json:"reason"`
+	// Forecast 是提案那一刻 Keel 自己算的补货测算（2026-10-16 起）：复盘时拿它判预测准不准。
+	// 由服务端算、不收 agent 传来的数 —— 不让它自己出题自己判卷。算不出来（比如测算服务没接上）就没有。
+	Forecast *RestockForecast `json:"forecast,omitempty"`
+}
+
+// RestockForecast 是一个（门店，SKU）的补货测算快照，口径与 restock_plan 相同。
+type RestockForecast struct {
+	DailyAvg      float64 `json:"daily_avg"`
+	EffectiveDays int     `json:"effective_days"`
+	LookbackDays  int     `json:"lookback_days"`
+	Available     int32   `json:"available"`
+	Confidence    string  `json:"confidence"`
 }
 
 // ProposalResult 是执行结果快照（写进 agent_proposals.result）。
@@ -89,6 +101,34 @@ type AgentProposalService struct {
 	refunds *RefundService
 	// channels 是渠道层（channel_stock_rule 的执行者，SetChannels）；KEEL_CHANNELS 关着时为 nil。
 	channels *ChannelService
+	// restock 给补货提案拍测算快照（SetRestock）；为 nil 时提案照提，只是没有 forecast、复盘不算准确率。
+	restock *RestockService
+}
+
+// SetRestock 接上补货测算（装配时调用）。
+func (s *AgentProposalService) SetRestock(r *RestockService) { s.restock = r }
+
+// restockSnapshot 取一个（门店，SKU）此刻的补货测算。取不到返回 nil：快照是复盘的锦上添花，
+// 不能因为它挡住提案本身。
+func (s *AgentProposalService) restockSnapshot(ctx context.Context, storeID, skuID int64) *RestockForecast {
+	if s.restock == nil {
+		return nil
+	}
+	const lookback = 14 // 与手册（skills/补货.md）调 restock_plan 的参数一致
+	plan, err := s.restock.Plan(ctx, RestockQuery{StoreID: &storeID, CoverDays: 14, LookbackDays: lookback})
+	if err != nil {
+		if s.log != nil {
+			s.log.WarnContext(ctx, "补货提案拍测算快照失败，复盘将不算预测准确率", "store_id", storeID, "sku_id", skuID, "err", err)
+		}
+		return nil
+	}
+	for _, l := range plan.Lines {
+		if l.SKUID == skuID {
+			return &RestockForecast{DailyAvg: l.DailyAvg, EffectiveDays: l.EffectiveDays, LookbackDays: lookback,
+				Available: l.Available, Confidence: l.Confidence}
+		}
+	}
+	return nil
 }
 
 // SetExecutors 接上 M10 提案的执行者（装配时调用；没接上的种类提得出、批准时执行失败并说明原因）。
@@ -146,7 +186,7 @@ func (s *AgentProposalService) ProposeInventoryAdjust(ctx context.Context, in Pr
 		return repository.AgentProposal{}, err
 	}
 	payload, err := json.Marshal(InventoryAdjustPayload{StoreID: in.StoreID, SKUID: in.SKUID, Delta: in.Delta,
-		Reason: strings.TrimSpace(in.Reason)})
+		Reason: strings.TrimSpace(in.Reason), Forecast: s.restockSnapshot(ctx, in.StoreID, in.SKUID)})
 	if err != nil {
 		return repository.AgentProposal{}, err
 	}
@@ -312,6 +352,11 @@ func (s *AgentProposalService) Approve(ctx context.Context, proposalID int64) (r
 	if id.IsAgent() {
 		return repository.AgentProposal{}, ErrHumanOnly
 	}
+	// 审批人记在 decided_by 上，它的外键指向本店员工：平台级账号切进店里批，库会拒，原先表现为 500。
+	// 规则与「AI 员工只能由本店管理员管理」一致 —— 提案是店里的经营决定，由店里的人拍板。
+	if id.Platform() {
+		return repository.AgentProposal{}, fmt.Errorf("%w: 提案只能由本店员工审批，平台级账号不行", ErrRoleForbidden)
+	}
 	var p repository.AgentProposal
 	var agentID auth.StaffIdentity
 	agentActive := false
@@ -452,6 +497,11 @@ func (s *AgentProposalService) Reject(ctx context.Context, proposalID int64, rea
 	}
 	if id.IsAgent() {
 		return repository.AgentProposal{}, ErrHumanOnly
+	}
+	// 审批人记在 decided_by 上，它的外键指向本店员工：平台级账号切进店里批，库会拒，原先表现为 500。
+	// 规则与「AI 员工只能由本店管理员管理」一致 —— 提案是店里的经营决定，由店里的人拍板。
+	if id.Platform() {
+		return repository.AgentProposal{}, fmt.Errorf("%w: 提案只能由本店员工审批，平台级账号不行", ErrRoleForbidden)
 	}
 	if err := checkProposalText("reason", reason, 1, 500); err != nil {
 		return repository.AgentProposal{}, err

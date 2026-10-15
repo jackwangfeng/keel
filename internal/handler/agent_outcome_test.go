@@ -23,12 +23,18 @@ func TestProposalOutcomeAndScorecard(t *testing.T) {
 	k := issueAgentKey(t, cs.adminShop, a.Id, `{"name":"test"}`)
 	sess := mcpConnect(t, cs.Host, k.Secret)
 
+	// 先卖出 2 件：提案时的补货测算才有日均（2026-10-16 起提案载荷带 Keel 自己算的 forecast 快照）。
+	b := cs.newBuyer(t, "outcome")
+	cs.placePaid(t, b, cs.NorthStore, cs.DressSKU, 2, nil)
 	res, pr := mcpCall(t, sess, "propose_inventory_adjust", map[string]any{"store_id": cs.NorthStore, "sku_id": cs.DressSKU,
 		"delta": 10, "reason": "补货", "evidence": "restock_plan：日均 2 件，可售 3，预计明天卖断"})
 	if res.IsError {
 		t.Fatalf("提案出错：%s", mcpText(res))
 	}
 	id := int64(pr["id"].(float64))
+	if fc, _ := pr["payload"].(map[string]any)["forecast"].(map[string]any); fc == nil || fc["daily_avg"].(float64) <= 0 {
+		t.Fatalf("补货提案应带测算快照、日均 > 0：%v", pr["payload"])
+	}
 	var p api.AgentProposal
 	decodeInto(t, postWithKey(t, cs.Host, fmt.Sprintf("/api/v1/admin/agent-proposals/%d/approve", id), "", cs.Token, freshIdemKey()),
 		http.StatusOK, "批准", &p)
@@ -63,8 +69,19 @@ func TestProposalOutcomeAndScorecard(t *testing.T) {
 		t.Fatalf("复盘后应有 verdict 与卖出件数：%+v", p.Outcome)
 	}
 
+	// 补货的「能讲的数字」：窗口（执行后 7 天，已拨到过去）里一件没卖 → 预测准确率 0、多卖 0、不补也不会断。
+	o := *p.Outcome
+	if o["forecast_qty"] == nil || o["forecast_accuracy"] != float64(0) || o["before_available"] == nil ||
+		o["extra_sold_qty"] != float64(0) || o["counterfactual_stockout_days"] != float64(0) || o["avoided_stockout_days"] != float64(0) {
+		t.Fatalf("补货复盘应带准确率与反事实几项：%v", o)
+	}
+
 	var sc api.AgentScorecard
 	decodeInto(t, getAs(t, cs.Host, fmt.Sprintf("/api/v1/admin/agents/%d/scorecard", a.Id), cs.Token), http.StatusOK, "成绩单", &sc)
+	if sc.Restock == nil || sc.Restock.Reviewed != 1 || sc.Restock.WithForecast != 1 || sc.Restock.AvgForecastAccuracy == nil {
+		raw, _ := json.Marshal(sc.Restock)
+		t.Fatalf("成绩单应有补货汇总：%s", raw)
+	}
 	if len(sc.Kinds) != 1 || sc.Kinds[0].Kind != "inventory_adjust" || sc.Kinds[0].Executed != 1 || len(sc.Recent) != 1 ||
 		sc.Recent[0].ProposalId != id {
 		raw, _ := json.Marshal(sc)

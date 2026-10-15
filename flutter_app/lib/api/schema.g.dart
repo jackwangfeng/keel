@@ -1985,23 +1985,53 @@ class AgentScorecardEntry {
       };
 }
 
+/// 补货复盘的「能讲的数字」（2026-10-16）。逐条的口径见提案 outcome 的同名字段：
+class AgentScorecardRestock {
+  final int reviewed;
+  final int withForecast;
+  final double? avgForecastAccuracy;
+  final int avoidedStockoutDays;
+  final int extraSoldQty;
+  final int extraSoldCents;
+  const AgentScorecardRestock({required this.reviewed, required this.withForecast, this.avgForecastAccuracy, required this.avoidedStockoutDays, required this.extraSoldQty, required this.extraSoldCents});
+  factory AgentScorecardRestock.fromJson(Map<String, dynamic> j) => AgentScorecardRestock(
+        reviewed: (j['reviewed'] as num).toInt(),
+        withForecast: (j['with_forecast'] as num).toInt(),
+        avgForecastAccuracy: (j['avg_forecast_accuracy'] as num?)?.toDouble(),
+        avoidedStockoutDays: (j['avoided_stockout_days'] as num).toInt(),
+        extraSoldQty: (j['extra_sold_qty'] as num).toInt(),
+        extraSoldCents: (j['extra_sold_cents'] as num).toInt(),
+      );
+  Map<String, dynamic> toJson() => {
+        'reviewed': reviewed,
+        'with_forecast': withForecast,
+        if (avgForecastAccuracy != null) 'avg_forecast_accuracy': avgForecastAccuracy,
+        'avoided_stockout_days': avoidedStockoutDays,
+        'extra_sold_qty': extraSoldQty,
+        'extra_sold_cents': extraSoldCents,
+      };
+}
+
 class AgentScorecard {
   final int agentStaffId;
   final String since;
   final List<AgentScorecardKind> kinds;
   final List<AgentScorecardEntry> recent;
-  const AgentScorecard({required this.agentStaffId, required this.since, required this.kinds, required this.recent});
+  final AgentScorecardRestock? restock;
+  const AgentScorecard({required this.agentStaffId, required this.since, required this.kinds, required this.recent, this.restock});
   factory AgentScorecard.fromJson(Map<String, dynamic> j) => AgentScorecard(
         agentStaffId: (j['agent_staff_id'] as num).toInt(),
         since: j['since'] as String,
         kinds: (j['kinds'] as List).map((e) => AgentScorecardKind.fromJson(e as Map<String, dynamic>)).toList(),
         recent: (j['recent'] as List).map((e) => AgentScorecardEntry.fromJson(e as Map<String, dynamic>)).toList(),
+        restock: j['restock'] == null ? null : AgentScorecardRestock.fromJson(j['restock'] as Map<String, dynamic>),
       );
   Map<String, dynamic> toJson() => {
         'agent_staff_id': agentStaffId,
         'since': since,
         'kinds': kinds.map((e) => e.toJson()).toList(),
         'recent': recent.map((e) => e.toJson()).toList(),
+        if (restock != null) 'restock': restock!.toJson(),
       };
 }
 

@@ -3976,7 +3976,7 @@ type AgentProposal struct {
 	// `flash_price` {name, store_id?, items: [{sku_id, discount_rate}], starts_at, ends_at}；
 	// `coupon` {name, coupon_type, threshold_cents, discount_cents, discount_rate, max_discount_cents,
 	// valid_days, total_count, per_user_limit, claimable}；`product_copy` {product_id, title?, subtitle?,
-	// before_title, before_subtitle?}；`refund_decision` {refund_no, action, reject_reason?, amount_cents}；
+	// before_title, before_subtitle?, category_id?, category_name?, before_category_id?, before_category_name?}（类目四项是上新整理加的）；`refund_decision` {refund_no, action, reject_reason?, amount_cents}；
 	// `channel_stock_rule` {binding_id, binding_name, store_id, store_name, changes: [{sku_id?（空 = 门店级）, ratio_bp,
 	// safety_qty, cap_qty?, prev: {ratio_bp, safety_qty, cap_qty?, level}}], preview: [{sku_id, available,
 	// before_qty, after_qty}]（提案时按当时 keel 可售试算的对外可售数，至多 40 格）}
@@ -4019,7 +4019,10 @@ type AgentScorecard struct {
 	AgentStaffId int64                 `json:"agent_staff_id"`
 	Kinds        []AgentScorecardKind  `json:"kinds"`
 	Recent       []AgentScorecardEntry `json:"recent"`
-	Since        time.Time             `json:"since"`
+
+	// Restock 补货提案的汇总（同一时间窗、已复盘的那些）。一条都没复盘过时不出现。
+	Restock *AgentScorecardRestock `json:"restock,omitempty"`
+	Since   time.Time              `json:"since"`
 }
 
 // AgentScorecardEntry defines model for AgentScorecardEntry.
@@ -4047,6 +4050,31 @@ type AgentScorecardKind struct {
 	Positive int64 `json:"positive"`
 	Proposed int64 `json:"proposed"`
 	Rejected int64 `json:"rejected"`
+}
+
+// AgentScorecardRestock 补货复盘的「能讲的数字」（2026-10-16）。逐条的口径见提案 outcome 的同名字段：
+// 预测准确率 = 1 − |实际 7 天卖出 − 提案时日均 × 7| ÷ (日均 × 7)，截在 0 到 1；
+// 少断的天数 = 不补会断的天数（执行前可售按实际逐日卖出扣到 ≤ 0 的天数）− 实际断货天数；
+// 多卖的件数 = 实际卖出 − 执行前可售（不小于 0）。前提是需求不因补货而变。
+// 2026-10-16 之前提的补货提案没有测算快照，不计入准确率（with_forecast 不含它们）。
+type AgentScorecardRestock struct {
+	// AvgForecastAccuracy 平均预测准确率（0–1）；with_forecast 为 0 时不出现
+	AvgForecastAccuracy *float64 `json:"avg_forecast_accuracy,omitempty"`
+
+	// AvoidedStockoutDays 少断的天数合计
+	AvoidedStockoutDays int64 `json:"avoided_stockout_days"`
+
+	// ExtraSoldCents 多卖的金额合计（分，按窗口内实际成交均价）
+	ExtraSoldCents int64 `json:"extra_sold_cents"`
+
+	// ExtraSoldQty 多卖的件数合计
+	ExtraSoldQty int64 `json:"extra_sold_qty"`
+
+	// Reviewed 已复盘的补货提案条数
+	Reviewed int64 `json:"reviewed"`
+
+	// WithForecast 其中有测算快照、算得出准确率的条数
+	WithForecast int64 `json:"with_forecast"`
 }
 
 // AgentUpdateRequest defines model for AgentUpdateRequest.

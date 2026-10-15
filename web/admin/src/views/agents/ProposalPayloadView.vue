@@ -44,6 +44,7 @@ const channelRule = computed(() => (props.kind === "channel_stock_rule" ? channe
         <template v-else-if="copy">
             <p v-if="copy.titleChanged">标题：{{ copy.beforeTitle }} → {{ copy.afterTitle }}</p>
             <p v-if="copy.subtitleChanged">副标题：{{ copy.beforeSubtitle || "（空）" }} → {{ copy.afterSubtitle }}</p>
+            <p v-if="copy.categoryChanged">类目：{{ copy.beforeCategory }} → {{ copy.afterCategory }}</p>
         </template>
         <template v-else-if="refund">
             <p>售后 {{ refund.refundNo }}：建议{{ refund.actionText }}（{{ refund.amountText }}）</p>

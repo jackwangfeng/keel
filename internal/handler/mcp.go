@@ -64,7 +64,9 @@ type MCPDeps struct {
 	Events *service.AgentEventService
 	// SlowMovers 与 PromotionReview 是 M10 的计算工具（docs/AI经营-M10M11设计.md §2），
 	// 注册在 mcp_tools_compute.go。
-	SlowMovers      *service.SlowMoversService
+	SlowMovers *service.SlowMoversService
+	// CatalogIssues 是上新整理的体检工具（docs/superpowers/specs/2026-10-16-ai-ops-onboarding-restock-coupon-design.md §1）。
+	CatalogIssues   *service.CatalogIssuesService
 	PromotionReview *service.PromotionReviewService
 	// Channels 是渠道层（channel_allocation_review）；KEEL_CHANNELS 关着时为 nil，工具返回空结果与说明。
 	Channels *service.ChannelService

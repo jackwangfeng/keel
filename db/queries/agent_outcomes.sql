@@ -34,6 +34,21 @@ SELECT COALESCE(sum(oi.quantity), 0)::bigint AS qty,
    AND o.status IN (20, 30, 40, 50)
    AND o.paid_at >= sqlc.arg(from_at) AND o.paid_at < sqlc.arg(to_at);
 
+-- name: SKUDailyUnitsSold :many
+-- 补货复盘（2026-10-16）：一个 SKU 在一家门店、[from, to) 内按「执行后第几天」分桶的已付款件数。
+-- 用 24 小时一桶而不是按日历日，复盘窗口本来就是从执行那一刻起算的 7 个 24 小时，不牵扯店铺时区。
+-- 没卖的那一天不出现，调用方按 0 补。
+SELECT floor(extract(epoch FROM (o.paid_at - sqlc.arg(from_at)::timestamptz)) / 86400)::int AS day_idx,
+       COALESCE(sum(oi.quantity), 0)::bigint AS qty
+  FROM order_items oi
+  JOIN orders o ON o.id = oi.order_id
+ WHERE oi.sku_id = sqlc.arg(sku_id)
+   AND o.store_id = sqlc.arg(store_id)
+   AND o.status IN (20, 30, 40, 50)
+   AND o.paid_at >= sqlc.arg(from_at) AND o.paid_at < sqlc.arg(to_at)
+ GROUP BY 1
+ ORDER BY 1;
+
 -- name: ProductUnitsSoldBetween :one
 SELECT COALESCE(sum(oi.quantity), 0)::bigint AS qty
   FROM order_items oi
@@ -67,6 +82,19 @@ SELECT p.kind,
  WHERE p.agent_staff_id = sqlc.arg(agent_staff_id) AND p.created_at >= sqlc.arg(since)
  GROUP BY p.kind
  ORDER BY p.kind;
+
+-- name: AgentRestockTotals :one
+-- 成绩单里补货那一行的汇总（2026-10-16）：近 since 以来已经复盘过的补货提案。
+-- 各字段的口径在 service/agent_proposal_outcome.go 的 restockReview；老提案没有这些字段，按缺席处理。
+SELECT count(*)::bigint AS reviewed,
+       count(*) FILTER (WHERE p.outcome ? 'forecast_accuracy')::bigint AS with_forecast,
+       COALESCE(avg((p.outcome->>'forecast_accuracy')::float8), 0)::float8 AS avg_accuracy,
+       COALESCE(sum((p.outcome->>'avoided_stockout_days')::bigint), 0)::bigint AS avoided_days,
+       COALESCE(sum((p.outcome->>'extra_sold_qty')::bigint), 0)::bigint AS extra_qty,
+       COALESCE(sum((p.outcome->>'extra_sold_cents')::bigint), 0)::bigint AS extra_cents
+  FROM agent_proposals p
+ WHERE p.agent_staff_id = sqlc.arg(agent_staff_id) AND p.kind = 'inventory_adjust'
+   AND p.outcome_at IS NOT NULL AND p.created_at >= sqlc.arg(since);
 
 -- name: AgentRecentOutcomes :many
 -- 成绩单的明细：近 since 以来已经量过效果的提案，新的在前。

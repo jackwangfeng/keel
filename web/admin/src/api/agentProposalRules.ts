@@ -189,9 +189,16 @@ export interface ProductCopyDiffView {
     afterSubtitle?: string;
     titleChanged: boolean;
     subtitleChanged: boolean;
+    /** 上新整理（2026-10-16）：挪类目。名字是提案那一刻的快照。 */
+    categoryChanged: boolean;
+    beforeCategory: string;
+    afterCategory?: string;
 }
 
-/** `product_copy` 执行参数：{product_id, title?, subtitle?, before_title, before_subtitle?}（M10）。 */
+/**
+ * `product_copy` 执行参数：{product_id, title?, subtitle?, before_title, before_subtitle?}（M10），
+ * 上新整理起另有 {category_id?, category_name?, before_category_id?, before_category_name?}。
+ */
 export function productCopyPayload(payload: Rec): ProductCopyDiffView {
     const afterTitle = str(payload["title"]);
     const afterSubtitle = str(payload["subtitle"]);
@@ -203,6 +210,9 @@ export function productCopyPayload(payload: Rec): ProductCopyDiffView {
         afterSubtitle,
         titleChanged: afterTitle !== undefined,
         subtitleChanged: afterSubtitle !== undefined,
+        categoryChanged: num(payload["category_id"]) !== undefined,
+        beforeCategory: str(payload["before_category_name"]) || "（未分类）",
+        afterCategory: str(payload["category_name"]),
     };
 }
 
@@ -472,4 +482,33 @@ export function describeOutcome(kind: AgentProposalKind, outcome: Rec | undefine
 export function safeRatePercent(a: number, b: number): string {
     if (b <= 0) return DASH;
     return `${((a / b) * 100).toFixed(0)}%`;
+}
+
+// --------------------------------------------------------------- 成绩单：补货的能讲的数字
+
+/** 成绩单里补货汇总（契约 AgentScorecardRestock）的展示文字；口径写在契约那一段说明里。 */
+export interface RestockSummaryView {
+    headline: string;
+    accuracy: string;
+    avoided: string;
+    extra: string;
+    footnote: string;
+}
+
+export function restockSummary(r: {
+    reviewed: number;
+    with_forecast: number;
+    avg_forecast_accuracy?: number;
+    avoided_stockout_days: number;
+    extra_sold_qty: number;
+    extra_sold_cents: number;
+}): RestockSummaryView {
+    const acc = r.avg_forecast_accuracy;
+    return {
+        headline: `已复盘 ${r.reviewed} 条补货提案`,
+        accuracy: acc === undefined ? "预测准确率：—（这批提案没有测算快照）" : `平均预测准确率 ${Math.round(acc * 100)}%（${r.with_forecast} 条）`,
+        avoided: `少断货 ${r.avoided_stockout_days} 天`,
+        extra: `多卖 ${r.extra_sold_qty} 件，约 ¥${(r.extra_sold_cents / 100).toFixed(2)}`,
+        footnote: "「少断货」「多卖」按「不补的话，执行前的库存按实际卖速会在哪天卖完」推算，前提是需求不因补货而变。",
+    };
 }

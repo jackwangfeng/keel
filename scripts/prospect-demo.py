@@ -519,6 +519,44 @@ def simulate(a):
 
 # ---------- 能讲的数字 ----------
 
+def mcp_tool(api, st, name, args):
+    """以这家店的 AI 员工身份调一个 MCP 工具（JSON-RPC over HTTP），返回结构化结果。"""
+    key = open(os.path.join(CONF_DIR, "prospect-%s-agent-key" % st["code"])).read().strip()
+    hdr = {"Authorization": "Bearer " + key, "Accept": "application/json, text/event-stream",
+           "Content-Type": "application/json", "Host": api.host}
+
+    def post(body, sid=None):
+        h = dict(hdr, **({"Mcp-Session-Id": sid} if sid else {}))
+        req = urllib.request.Request(api.base + "/mcp", data=json.dumps(body).encode(), headers=h, method="POST")
+        with opener.open(req, timeout=60) as r:
+            raw = r.read().decode()
+            sid = r.headers.get("Mcp-Session-Id") or sid
+        line = next((l for l in raw.splitlines() if l.startswith("data:")), None)
+        return (json.loads(line[5:]) if line else (json.loads(raw) if raw.strip() else {})), sid
+
+    _, sid = post({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+        "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "prospect-demo", "version": "1"}}})
+    post({"jsonrpc": "2.0", "method": "notifications/initialized"}, sid)
+    out, _ = post({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": name, "arguments": args}}, sid)
+    res = out.get("result") or {}
+    return res.get("structuredContent") or json.loads((res.get("content") or [{}])[0].get("text") or "{}")
+
+
+ISSUE_NAMES = {"title_noise": "标题有噪音", "title_too_long": "标题过长", "no_subtitle": "缺副标题",
+               "forbidden_words": "违禁词", "uncategorized": "未分类", "no_image": "缺图", "price_outlier": "价格异常",
+               "duplicate_title": "疑似重复", "zero_stock": "无库存"}
+
+
+def catalog_summary(api, st):
+    try:
+        r = mcp_tool(api, st, "catalog_issues", {})
+    except Exception as e:  # 报告里少一行不该让整份报告失败
+        return "商品体检：调 catalog_issues 失败（%s）" % e
+    summ = r.get("summary") or {}
+    total = sum(summ.values())
+    parts = "、".join("%s %d" % (ISSUE_NAMES.get(k, k), v) for k, v in sorted(summ.items(), key=lambda x: -x[1]))
+    return "商品体检：%d 件里 %d 件有问题，共 %d 处（%s）" % (r.get("scanned", 0), len(r.get("items") or []), total, parts or "无")
+
 REPORT_SQL = """
 SELECT 'orders', count(*), coalesce(sum(paid_cents), 0) FROM orders WHERE merchant_id = :mid AND paid_at IS NOT NULL;
 SELECT 'days', count(DISTINCT created_at::date), 0 FROM orders WHERE merchant_id = :mid AND paid_at IS NOT NULL;
@@ -559,7 +597,8 @@ def report(a, api=None, db=None, st=None):
     else:
         print("搜了没有的词 %s 次：%s" % (rows["nores"][0], "、".join(
             "「%s」%s 次" % tuple(t.split("\t")) for t in terms.splitlines() if t) or "无"))
-    print("→ 让 AI 员工巡一次店：%s run-agent --code %s" % (os.path.relpath(__file__, ROOT), st["code"]))
+    print(catalog_summary(api, st))
+    print("→ 让 AI 员工巡一次店：%s run-agent --code %s（整理商品加 --skill 上新整理）" % (os.path.relpath(__file__, ROOT), st["code"]))
 
 
 def run_agent(a):
@@ -568,6 +607,8 @@ def run_agent(a):
     no_proxy = ",".join(filter(None, [os.environ.get("NO_PROXY"), "localhost", "127.0.0.1", ".nip.io"]))
     env = dict(os.environ, KEEL_AGENT_KEY=open(os.path.join(CONF_DIR, "prospect-%s-agent-key" % a.code)).read().strip(),
                KEEL_MCP_URL="http://%s:%s/api/v1/mcp" % (st["domain"], st["port"]), NO_PROXY=no_proxy, no_proxy=no_proxy)
+    if a.skill:
+        env["KEEL_AGENT_SKILL"] = a.skill
     sys.exit(subprocess.call([os.path.join(ROOT, "agent/runner/claude-daily.sh")], env=env))
 
 
@@ -603,6 +644,8 @@ def main():
                            help="开店请求带的 Host（任一已有店的域名），默认 shop-a.<base-domain>")
         if name == "simulate":
             p.add_argument("--orders", type=int, default=5)
+        if name == "run-agent":
+            p.add_argument("--skill", help="只按 agent/skills/<名字>.md 做一次（如 上新整理），不给则是每日巡店")
     a = ap.parse_args()
     {"create": create, "simulate": simulate, "report": report, "run-agent": run_agent}[a.cmd](a)
 
