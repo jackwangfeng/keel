@@ -205,6 +205,13 @@ func TestShipThenConfirm(t *testing.T) {
 	if tm := orderTimesOf(t, o.OrderNo); tm.Status != 30 || !tm.ShippedAt || tm.FinishedAt {
 		t.Fatalf("发货之后订单是 %+v，期望 30、有 shipped_at、没有 finished_at", tm)
 	}
+	// 买家看得到运单：详情里带发货记录与承运商中文名（2026-10-16 之前只有后台详情有）。
+	var bd api.OrderDetail
+	decodeInto(t, getAs(t, cs.Host, "/api/v1/orders/"+o.OrderNo, b.Token), http.StatusOK, "买家订单详情", &bd)
+	if bd.Shipments == nil || len(*bd.Shipments) != 1 || (*bd.Shipments)[0].TrackingNo != tracking ||
+		(*bd.Shipments)[0].CarrierName == nil || *(*bd.Shipments)[0].CarrierName != "顺丰" {
+		t.Fatalf("买家详情应带这条运单：%+v", bd.Shipments)
+	}
 	// 规则一：发货不动库存。
 	if got := availableAt(t, cs.NorthStore, cs.DressSKU); got != stock {
 		t.Fatalf("发货之后水位 %d，期望仍是 %d —— 发货重复扣了库存", got, stock)

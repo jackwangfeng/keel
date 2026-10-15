@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 
 import '../api/client.dart';
@@ -189,6 +190,27 @@ class _OrderPageState extends State<OrderPage> {
                 _card(Column(key: const Key('order.returns'), crossAxisAlignment: CrossAxisAlignment.start, children: [
                   for (final line in v.returnLines) Text(line, style: KeelText.body),
                 ])),
+              // 物流信息（2026-10-16）：发货后给买家承运商与运单号，拿去查快递。
+              if (v.shipments.isNotEmpty)
+                _card(Column(key: const Key('order.shipments'), crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  const Text('物流信息', style: KeelText.overline),
+                  const SizedBox(height: 6),
+                  for (final sh in v.shipments)
+                    Row(children: [
+                      Expanded(
+                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          SelectableText('${sh.carrierText} ${sh.trackingNo}',
+                              key: Key('order.tracking.${sh.trackingNo}'), style: KeelText.body),
+                          Text('${sh.statusText} · ${sh.timeText}', style: KeelText.sub),
+                        ]),
+                      ),
+                      TextButton(
+                        key: Key('order.copyTracking.${sh.trackingNo}'),
+                        onPressed: () => _copyTracking(sh.trackingNo),
+                        child: const Text('复制'),
+                      ),
+                    ]),
+                ])),
               if (v.receiver.isNotEmpty)
                 _card(Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   const Text('收货信息', style: KeelText.overline),
@@ -317,6 +339,17 @@ class _OrderPageState extends State<OrderPage> {
                   : FilledButton(key: const Key('order.pay'), onPressed: _paying ? null : _pay, child: Text(_paying ? '处理中…' : '立即支付')),
             ),
     );
+  }
+
+  // 小程序（mp-flutter）上剪贴板不一定接得上：复制失败就提示长按选中，运单号本身是可选中的文字。
+  Future<void> _copyTracking(String no) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await Clipboard.setData(ClipboardData(text: no));
+      messenger.showSnackBar(const SnackBar(content: Text('运单号已复制')));
+    } catch (_) {
+      messenger.showSnackBar(const SnackBar(content: Text('复制失败，请长按运单号选中复制')));
+    }
   }
 
   Widget _card(Widget child) => Container(

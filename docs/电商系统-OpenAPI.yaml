@@ -10642,6 +10642,12 @@ components:
             payments:
               type: array
               items: { $ref: '#/components/schemas/PaymentRecord' }
+            shipments:
+              type: array
+              description: |
+                这一单的发货记录（承运商与运单号），按发货时间先后。没发货的单是空数组。
+                2026-10-16 之前只有后台的 AdminOrderDetail 有它，买家发货后只看得到「已发货」、拿不到运单号去查快递。
+              items: { $ref: '#/components/schemas/Shipment' }
             refunds:
               type: array
               description: |
@@ -11035,6 +11041,9 @@ components:
       properties:
         id:           { type: integer, format: int64 }
         carrier_code: { type: string, description: '承运商标识，如 sf / jd / yto' }
+        carrier_name:
+          type: string
+          description: 承运商的中文名（顺丰、京东……），服务端按 carrier_code 对照给出；认不出的代码原样返回代码
         tracking_no:  { type: string }
         status:
           type: integer

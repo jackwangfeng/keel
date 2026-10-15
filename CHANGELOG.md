@@ -39,6 +39,14 @@ so "which one is running?" never depends on anyone's memory.
 
 ## [Unreleased]
 
+### Added
+
+- **Buyers can see the tracking number.** `GET /orders/{order_no}` now returns `shipments` (carrier, tracking number,
+  status, ship time); before, only the console's order detail had them and a buyer saw nothing but "shipped".
+  `Shipment` gains `carrier_name`, the Chinese carrier name resolved server-side from `carrier_code` (unknown codes
+  come back as the code). The Flutter order page shows a logistics card with a copy button; where the clipboard is
+  unavailable (mini-program) it tells the buyer to long-press the selectable number instead.
+
 ---
 
 ## [0.10.0] - 2026-10-16

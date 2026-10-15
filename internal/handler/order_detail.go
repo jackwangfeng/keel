@@ -41,6 +41,10 @@ func (h *OrderHandler) Detail(c *gin.Context) {
 	base := apiOrder(d.Order)
 	items := apiOrderItems(d.Items)
 	payments := apiPayments(d.Payments)
+	shipments := make([]api.Shipment, 0, len(d.Shipments))
+	for _, sh := range d.Shipments {
+		shipments = append(shipments, apiShipment(sh))
+	}
 	refunds := apiRefunds(d.Refunds)
 	receiver := api.ReceiverSnapshot{
 		ReceiverName: d.Receiver.ReceiverName,
@@ -108,6 +112,8 @@ func (h *OrderHandler) Detail(c *gin.Context) {
 		Receiver: &receiver,
 		Items:    &items,
 		Payments: &payments,
+		// 发货记录（2026-10-16）：之前只有后台详情有，买家发货后拿不到运单号。
+		Shipments: &shipments,
 
 		// 退款域（00034）落地之后这是**查过的**：空数组的意思就是「这一单没有售后」。
 		Refunds: &refunds,

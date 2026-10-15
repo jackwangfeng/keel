@@ -1,4 +1,4 @@
-// 履约：买家下单付款 → 后台订单页按单号找到 → 发货 → 买家看到「已发货」，后台详情里有这条运单。
+// 履约：买家下单付款 → 后台订单页按单号找到 → 发货 → 买家看到「已发货」与运单号。
 // 售后：买家对已付款的单申请仅退款 → 后台售后页同意 → 退款单变成已退款，订单退款金额回写。
 import { test, expect, openAdmin, dialog, formItem, buyerPaidOrder, expectToast } from "./support.ts";
 
@@ -9,7 +9,7 @@ interface BuyerOrder {
     refunded_cents?: number;
 }
 
-test("待发货订单发货，买家看到已发货", async ({ page, request, admin }) => {
+test("待发货订单发货，买家看到运单", async ({ page, request }) => {
     const { orderNo, buyer } = await buyerPaidOrder(request);
     const tracking = `SF${Date.now()}`;
 
@@ -31,10 +31,8 @@ test("待发货订单发货，买家看到已发货", async ({ page, request, ad
     await expect
         .poll(async () => (await buyer.call<BuyerOrder>("GET", `/orders/${orderNo}`)).status)
         .toBe(30);
-    // 运单号目前只在后台的订单详情里（契约 AdminOrderDetail.shipments）；买家侧的 OrderDetail 没有这一项，
-    // 买家只看得到「已发货」—— 这是已知缺口，记在 PROGRESS 待办里。
-    const detail = await admin.call<{ shipments: { tracking_no: string }[] }>("GET", `/admin/orders/${orderNo}`);
-    expect(detail.shipments.map((x) => x.tracking_no)).toContain(tracking);
+    const o = await buyer.call<BuyerOrder>("GET", `/orders/${orderNo}`);
+    expect(o.shipments?.map((x) => x.tracking_no)).toContain(tracking);
 });
 
 test("仅退款申请在后台同意，买家侧退款到账", async ({ page, request }) => {

@@ -5831,6 +5831,10 @@ type OrderDetail struct {
 	// 门店可以被调到另一个大区去，而这一单的价格是按当时那个大区算的。
 	RegionId *int64 `json:"region_id,omitempty"`
 
+	// Shipments 这一单的发货记录（承运商与运单号），按发货时间先后。没发货的单是空数组。
+	// 2026-10-16 之前只有后台的 AdminOrderDetail 有它，买家发货后只看得到「已发货」、拿不到运单号去查快递。
+	Shipments *[]Shipment `json:"shipments,omitempty"`
+
 	// ShippedAt 发货时间。「发货后 N 天自动确认收货」的倒计时从这里算
 	ShippedAt *time.Time `json:"shipped_at,omitempty"`
 
@@ -7669,7 +7673,10 @@ type SearchRequest struct {
 // Shipment defines model for Shipment.
 type Shipment struct {
 	// CarrierCode 承运商标识，如 sf / jd / yto
-	CarrierCode string     `json:"carrier_code"`
+	CarrierCode string `json:"carrier_code"`
+
+	// CarrierName 承运商的中文名（顺丰、京东……），服务端按 carrier_code 对照给出；认不出的代码原样返回代码
+	CarrierName *string    `json:"carrier_name,omitempty"`
 	DeliveredAt *time.Time `json:"delivered_at,omitempty"`
 	Id          int64      `json:"id"`
 	ShippedAt   time.Time  `json:"shipped_at"`

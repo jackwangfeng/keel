@@ -219,6 +219,23 @@ PaymentRow paymentRow(PaymentRecord p) => PaymentRow(
       yuan(p.amountCents),
     );
 
+/// 一条发货记录（契约 Shipment，2026-10-16 起买家详情也带）：承运商中文名、运单号、发货时间、物流状态。
+class ShipmentRow {
+  final String carrierText;
+  final String trackingNo;
+  final String timeText;
+  final String statusText;
+  const ShipmentRow({required this.carrierText, required this.trackingNo, required this.timeText, required this.statusText});
+}
+
+ShipmentRow shipmentRow(Shipment s) => ShipmentRow(
+      // carrier_name 由服务端按代码对照；认不出时服务端原样回代码，再没有就退到代码本身
+      carrierText: (s.carrierName ?? '').isNotEmpty ? s.carrierName! : s.carrierCode,
+      trackingNo: s.trackingNo,
+      timeText: '${shortTime(s.shippedAt)} 发出',
+      statusText: switch (s.status) { 2 => '已签收', 3 => '物流异常', _ => '运输中' },
+    );
+
 class OrderDetailView {
   final OrderRow head;
   final String receiver;
@@ -241,6 +258,8 @@ class OrderDetailView {
   final String couponName;
   final List<OrderItemRow> items;
   final List<PaymentRow> payments;
+  /// 发货记录（物流信息卡片）；没发货时空。
+  final List<ShipmentRow> shipments;
   /// 这一单的售后单。
   final List<RefundRow> refunds;
   /// 多收款退回（契约 OrderDetail.payment_returns，00150）：订单只认一笔到账，其余的系统自动原路退回。
@@ -257,7 +276,7 @@ class OrderDetailView {
       required this.hasPaid, required this.refundedText, required this.freightDiscountText, required this.autoConfirmAt,
       required this.promotionDiscountText, required this.promotionLines, required this.freightNote, this.freightLabel = '运费', required this.canCancel,
       required this.canConfirm, required this.couponId, required this.couponName, required this.items,
-      required this.payments, required this.refunds, this.returnLines = const [], this.afterSaleText = '', required this.canRefund, required this.raw});
+      required this.payments, this.shipments = const [], required this.refunds, this.returnLines = const [], this.afterSaleText = '', required this.canRefund, required this.raw});
 
   /// 状态下面那一句说明。
   String get statusLine => switch (head.statusText) {
@@ -304,6 +323,7 @@ OrderDetailView orderDetailView(OrderDetail o, String Function(String) asset) {
     couponName: o.couponName ?? '',
     items: (o.items ?? const <OrderItem>[]).map((it) => orderItemRow(it, asset)).toList(),
     payments: (o.payments ?? const <PaymentRecord>[]).map(paymentRow).toList(),
+    shipments: (o.shipments ?? const <Shipment>[]).map(shipmentRow).toList(),
     refunds: (o.refunds ?? const <Refund>[]).map(refundRow).toList(),
     returnLines: [for (final r in o.paymentReturns ?? const <PaymentReturn>[]) paymentReturnLine(r)],
     // 已完成的单过了售后期（00151）就不给「申请售后」：服务端会 409 after-sale-window-closed。

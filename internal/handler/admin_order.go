@@ -92,9 +92,11 @@ func (h *AdminOrderHandler) Ship(c *gin.Context) {
 }
 
 func apiShipment(s repository.Shipment) api.Shipment {
+	name := service.CarrierName(s.CarrierCode)
 	return api.Shipment{
 		Id:          s.ID,
 		CarrierCode: s.CarrierCode,
+		CarrierName: &name,
 		TrackingNo:  s.TrackingNo,
 		Status:      api.ShipmentStatus(s.Status),
 		ShippedAt:   s.ShippedAt,

@@ -784,14 +784,16 @@ class PaymentRecord {
 class Shipment {
   final int id;
   final String carrierCode;
+  final String? carrierName;
   final String trackingNo;
   final int status;
   final String shippedAt;
   final String? deliveredAt;
-  const Shipment({required this.id, required this.carrierCode, required this.trackingNo, required this.status, required this.shippedAt, this.deliveredAt});
+  const Shipment({required this.id, required this.carrierCode, this.carrierName, required this.trackingNo, required this.status, required this.shippedAt, this.deliveredAt});
   factory Shipment.fromJson(Map<String, dynamic> j) => Shipment(
         id: (j['id'] as num).toInt(),
         carrierCode: j['carrier_code'] as String,
+        carrierName: j['carrier_name'] as String?,
         trackingNo: j['tracking_no'] as String,
         status: (j['status'] as num).toInt(),
         shippedAt: j['shipped_at'] as String,
@@ -800,6 +802,7 @@ class Shipment {
   Map<String, dynamic> toJson() => {
         'id': id,
         'carrier_code': carrierCode,
+        if (carrierName != null) 'carrier_name': carrierName,
         'tracking_no': trackingNo,
         'status': status,
         'shipped_at': shippedAt,
@@ -4149,11 +4152,12 @@ class OrderDetail {
   final FreightBreakdown? freight;
   final List<OrderItem>? items;
   final List<PaymentRecord>? payments;
+  final List<Shipment>? shipments;
   final List<Refund>? refunds;
   final String? afterSaleDeadline;
   final List<PaymentReturn>? paymentReturns;
   final String? autoConfirmAt;
-  const OrderDetail({required this.orderNo, required this.storeId, this.regionId, required this.status, required this.refundStatus, this.goodsAmountCents, this.freightCents, this.freightDiscountCents, this.discountCents, this.userCouponId, this.couponName, this.promotionDiscountCents, this.promotions, required this.payableCents, this.paidCents, this.refundedCents, this.expireAt, required this.createdAt, this.paidAt, this.shippedAt, this.finishedAt, this.receiver, this.store, this.freight, this.items, this.payments, this.refunds, this.afterSaleDeadline, this.paymentReturns, this.autoConfirmAt});
+  const OrderDetail({required this.orderNo, required this.storeId, this.regionId, required this.status, required this.refundStatus, this.goodsAmountCents, this.freightCents, this.freightDiscountCents, this.discountCents, this.userCouponId, this.couponName, this.promotionDiscountCents, this.promotions, required this.payableCents, this.paidCents, this.refundedCents, this.expireAt, required this.createdAt, this.paidAt, this.shippedAt, this.finishedAt, this.receiver, this.store, this.freight, this.items, this.payments, this.shipments, this.refunds, this.afterSaleDeadline, this.paymentReturns, this.autoConfirmAt});
   factory OrderDetail.fromJson(Map<String, dynamic> j) => OrderDetail(
         orderNo: j['order_no'] as String,
         storeId: (j['store_id'] as num).toInt(),
@@ -4181,6 +4185,7 @@ class OrderDetail {
         freight: j['freight'] == null ? null : FreightBreakdown.fromJson(j['freight'] as Map<String, dynamic>),
         items: (j['items'] as List?)?.map((e) => OrderItem.fromJson(e as Map<String, dynamic>)).toList(),
         payments: (j['payments'] as List?)?.map((e) => PaymentRecord.fromJson(e as Map<String, dynamic>)).toList(),
+        shipments: (j['shipments'] as List?)?.map((e) => Shipment.fromJson(e as Map<String, dynamic>)).toList(),
         refunds: (j['refunds'] as List?)?.map((e) => Refund.fromJson(e as Map<String, dynamic>)).toList(),
         afterSaleDeadline: j['after_sale_deadline'] as String?,
         paymentReturns: (j['payment_returns'] as List?)?.map((e) => PaymentReturn.fromJson(e as Map<String, dynamic>)).toList(),
@@ -4213,6 +4218,7 @@ class OrderDetail {
         if (freight != null) 'freight': freight!.toJson(),
         if (items != null) 'items': items!.map((e) => e.toJson()).toList(),
         if (payments != null) 'payments': payments!.map((e) => e.toJson()).toList(),
+        if (shipments != null) 'shipments': shipments!.map((e) => e.toJson()).toList(),
         if (refunds != null) 'refunds': refunds!.map((e) => e.toJson()).toList(),
         if (afterSaleDeadline != null) 'after_sale_deadline': afterSaleDeadline,
         if (paymentReturns != null) 'payment_returns': paymentReturns!.map((e) => e.toJson()).toList(),

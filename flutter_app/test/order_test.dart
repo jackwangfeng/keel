@@ -97,6 +97,20 @@ void main() {
     expect(d.items.single.amountText, '¥112.00');
   });
 
+  test('订单详情：发货后带物流信息（承运商中文名、运单号）；认不出的承运商显示代码；没发货是空', () {
+    final d = orderDetailView(OrderDetail.fromJson({
+      ...order('N2', 30),
+      'shipments': [
+        {'id': 1, 'carrier_code': 'sf', 'carrier_name': '顺丰', 'tracking_no': 'SF123', 'status': 1, 'shipped_at': '2026-10-16T02:00:00Z'},
+        {'id': 2, 'carrier_code': 'xyz', 'tracking_no': 'X9', 'status': 2, 'shipped_at': '2026-10-16T03:00:00Z'},
+      ],
+    }), (s) => s);
+    expect(d.shipments.map((x) => '${x.carrierText} ${x.trackingNo} ${x.statusText}').toList(),
+        ['顺丰 SF123 运输中', 'xyz X9 已签收']);
+    expect(d.shipments.first.timeText, endsWith('发出'));
+    expect(orderDetailView(OrderDetail.fromJson(order('N3', 20)), (s) => s).shipments, isEmpty);
+  });
+
   group('下单', () {
     test('in-flight：按 Retry-After 等一会儿、同一个键重试', () async {
       var n = 0;

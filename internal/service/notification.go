@@ -166,6 +166,14 @@ var carrierNames = map[string]string{
 	"yd": "韵达", "ems": "EMS", "jt": "极兔", "db": "德邦",
 }
 
+// CarrierName 是承运商代码的中文名，认不出的原样返回代码（契约 Shipment.carrier_name）。
+func CarrierName(code string) string {
+	if name, ok := carrierNames[strings.ToLower(strings.TrimSpace(code))]; ok {
+		return name
+	}
+	return code
+}
+
 var notificationFuncs = template.FuncMap{
 	// yuan 把分写成「¥12.30」。整数运算，不经浮点。
 	"yuan": func(cents int64) string {

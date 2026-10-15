@@ -57,6 +57,8 @@ type OrderDetail struct {
 	Freight  *FreightBreakdown
 	Items    []repository.OrderItem
 	Payments []repository.Payment
+	// Shipments 是这一单的发货记录（契约 OrderDetail.shipments，2026-10-16 起买家也看得到运单号）。
+	Shipments []repository.Shipment
 	// Refunds 是这一单的全部退款单，按申请时间倒序（契约 OrderDetail.refunds）。
 	Refunds []repository.Refund
 	// Returns 是这一单被原路退回的多收款（重复支付、订单关闭后才到账、金额不符；00150，契约 OrderDetail.payment_returns）。
@@ -180,6 +182,9 @@ func (s *OrderService) Detail(ctx context.Context, orderNo string) (OrderDetail,
 		}
 
 		if out.Items, err = tx.ListOrderItems(ctx, order.ID); err != nil {
+			return err
+		}
+		if out.Shipments, err = tx.ListOrderShipments(ctx, order.ID); err != nil {
 			return err
 		}
 		if out.Payments, err = tx.ListOrderPayments(ctx, order.ID); err != nil {

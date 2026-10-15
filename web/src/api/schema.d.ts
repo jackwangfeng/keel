@@ -20157,6 +20157,11 @@ export interface components {
             items?: components["schemas"]["OrderItem"][];
             payments?: components["schemas"]["PaymentRecord"][];
             /**
+             * @description 这一单的发货记录（承运商与运单号），按发货时间先后。没发货的单是空数组。
+             *     2026-10-16 之前只有后台的 AdminOrderDetail 有它，买家发货后只看得到「已发货」、拿不到运单号去查快递。
+             */
+            shipments?: components["schemas"]["Shipment"][];
+            /**
              * @description 该订单下的全部退款单，按申请时间倒序。
              *     有 `payments` 却没有 `refunds` 是不对称的——订单详情页要展示售后进度，
              *     否则客户端得再请求一次 `GET /orders/{order_no}/refunds`。
@@ -20514,6 +20519,8 @@ export interface components {
             id: number;
             /** @description 承运商标识，如 sf / jd / yto */
             carrier_code: string;
+            /** @description 承运商的中文名（顺丰、京东……），服务端按 carrier_code 对照给出；认不出的代码原样返回代码 */
+            carrier_name?: string;
             tracking_no: string;
             /**
              * @description 1 已发出 · 2 已签收 · 3 异常
