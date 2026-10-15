@@ -574,6 +574,15 @@ type CouponScope struct {
 	Include    bool
 }
 
+type CouponTargetMember struct {
+	MerchantID   int64
+	ProposalID   int64
+	UserID       int64
+	Treated      bool
+	UserCouponID *int64
+	CreatedAt    pgtype.Timestamptz
+}
+
 type CouponTemplate struct {
 	ID               int64
 	MerchantID       int64

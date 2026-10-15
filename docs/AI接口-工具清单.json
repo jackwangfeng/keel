@@ -406,6 +406,81 @@
     }
   },
   {
+    "description": "顾客人群（精准发券前看）：lapsed 沉睡顾客（付过款、最近 days 天没下单）、one_time 只买过一次（且已过去 7 天以上）、cart_abandon 加购未买（近 7 天加过购、之后没付款）、high_value 高价值顾客（近 90 天付款排前 20%）。每个人群给人数、近 90 天人均付款（分）、距上次付款的平均天数。只给人数与画像，不给名单和手机号；要发券就用 propose_coupon 的 target，批准时 Keel 自己按名单发。需要全店范围的 AI 员工。",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "days": {
+          "description": "沉睡顾客的「最近 N 天没下单」，7–180，默认 30",
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "name": "customer_segments",
+    "outputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "generated_at": {
+          "type": "string"
+        },
+        "lapsed_days": {
+          "type": "integer"
+        },
+        "segments": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "avg_days_since_last_paid": {
+                "type": [
+                  "null",
+                  "number"
+                ]
+              },
+              "avg_paid_90d_cents": {
+                "type": "integer"
+              },
+              "definition": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "segment": {
+                "type": "string"
+              },
+              "size": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "segment",
+              "label",
+              "definition",
+              "size",
+              "avg_paid_90d_cents"
+            ],
+            "type": "object"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        },
+        "total_customers": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "generated_at",
+        "total_customers",
+        "lapsed_days",
+        "segments"
+      ],
+      "type": "object"
+    }
+  },
+  {
     "description": "商品详情：全部 SKU（规格、价格、库存）与图片。",
     "inputSchema": {
       "additionalProperties": false,
@@ -2561,12 +2636,12 @@
     }
   },
   {
-    "description": "提一条发券提案：建一张券（满减 / 折扣 / 立减），可放进领券中心。有效期二选一：领取后 N 天（valid_days），或固定时段（valid_start_at + valid_end_at，比如只在国庆 7 天能用）。不会立即执行：人批准后 Keel 建券。需要全店范围的 AI 员工。面额至多 100 元、发行量至多 10000。",
+    "description": "提一条发券提案：建一张券（满减 / 折扣 / 立减），可放进领券中心。有效期二选一：领取后 N 天（valid_days），或固定时段（valid_start_at + valid_end_at，比如只在国庆 7 天能用）。不会立即执行：人批准后 Keel 建券。需要全店范围的 AI 员工。面额至多 100 元、发行量至多 10000。带 target 就是精准发放：批准时按那一刻的人群名单随机留出对照组（holdout_pct），其余每人直接发一张、不进领券中心；复盘比两组的下单率，给出提升、增量顾客、增量金额与券成本。先用 customer_segments 看各人群有多少人。",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
         "claimable": {
-          "description": "是否放进领券中心让买家自己领",
+          "description": "是否放进领券中心让买家自己领（带 target 时不能为 true）",
           "type": "boolean"
         },
         "coupon_type": {
@@ -2602,17 +2677,42 @@
           "type": "string"
         },
         "per_user_limit": {
-          "description": "每人限领，1–5",
+          "description": "每人限领，1–5（带 target 时固定每人一张）",
           "maximum": 2147483647,
           "minimum": -2147483648,
           "type": "integer"
+        },
+        "target": {
+          "additionalProperties": false,
+          "description": "定向发给一个顾客人群并留对照组；不给就是普通的券",
+          "properties": {
+            "days": {
+              "description": "lapsed 的「最近 N 天没下单」，7–180，默认 30",
+              "type": "integer"
+            },
+            "holdout_pct": {
+              "description": "对照组占比（不发券，用来比），10–50，默认 20",
+              "type": "integer"
+            },
+            "segment": {
+              "description": "人群：lapsed 沉睡顾客 / one_time 只买过一次 / cart_abandon 加购未买 / high_value 高价值顾客（定义见 customer_segments）",
+              "type": "string"
+            }
+          },
+          "required": [
+            "segment"
+          ],
+          "type": [
+            "null",
+            "object"
+          ]
         },
         "threshold_cents": {
           "description": "满多少可用（分）；立减券为 0",
           "type": "integer"
         },
         "total_count": {
-          "description": "发行量，1–10000",
+          "description": "发行量，1–10000（带 target 时不看它，发行量由名单定）",
           "maximum": 2147483647,
           "minimum": -2147483648,
           "type": "integer"

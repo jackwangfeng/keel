@@ -40,6 +40,7 @@ const channelRule = computed(() => (props.kind === "channel_stock_rule" ? channe
         <template v-else-if="coupon">
             <p>「{{ coupon.name }}」· {{ coupon.typeText }} · {{ coupon.thresholdText }} · {{ coupon.faceText }}</p>
             <p class="muted">{{ coupon.validDaysText }} · 共 {{ coupon.totalText }} · {{ coupon.perUserLimitText }} · {{ coupon.claimableText }}</p>
+            <p v-if="coupon.targetText">{{ coupon.targetText }}</p>
         </template>
         <template v-else-if="copy">
             <p v-if="copy.titleChanged">标题：{{ copy.beforeTitle }} → {{ copy.afterTitle }}</p>

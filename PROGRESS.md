@@ -28,10 +28,15 @@
 5. ✅ 后台关键流程浏览器测试 10 条进 CI（`4fc84ec`，`make admin-e2e`）；顺带修了改价只能填整元（`23e2ff8`）。
    未做：H5（Flutter Web 已有 25 条无头用例 `make flutter-e2e-web`）还没进 CI；`make test-engine` 在 CI 仍无执行者。
 
-2026-10-16 用户给的下一批（AI 方向，都走 提案 → 审批 → 执行 → 复盘）：
-1. **上新整理**（服务卖 keel，与演示店同一条线）
-2. **补货准确率复盘**（成本低，出可讲的数字）
-3. **券的精准发放 / 调价**（证明 AI 运营比人好）
+2026-10-16 用户给的下一批（AI 方向，都走 提案 → 审批 → 执行 → 复盘；设计稿
+`docs/superpowers/specs/2026-10-16-ai-ops-onboarding-restock-coupon-design.md`，**用户还没审**）：
+1. ✅ 上新整理（`c9a2e81`）：`catalog_issues` + `propose_product_copy.category_id` + 手册 `上新整理.md`。
+   演示：乱清单 24 处问题 → 12 条提案 → 批准后剩 2 处（AI 有意交给人的价格异常与缺类目）。
+2. ✅ 补货准确率复盘（`c9a2e81`）：提案带服务端测算快照；复盘加准确率 / 少断天数 / 多卖件数金额；成绩单汇总。
+   数字要执行后 7 天才有，演示站（每小时模拟下单 + 每天巡店）跑一周后就能讲。
+3. 券的精准发放（带对照组）：`customer_segments` + `propose_coupon.target` + 迁移 00350 `coupon_target_members`
+   + 手册 `精准发券.md`。见下一条提交。
+顺带修：平台账号审批提案 500 → 403（`c9a2e81`）。
 
 已知缺口：买家侧订单详情没有运单号（契约 OrderDetail 无 shipments），发货后买家只看到「已发货」。
 infero（推理引擎 18081）2026-10-16 凌晨没在跑：演示站新品搜不到，需要的话 `scripts/infero-up.sh`。

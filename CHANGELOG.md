@@ -39,6 +39,46 @@ so "which one is running?" never depends on anyone's memory.
 
 ## [Unreleased]
 
+### Added
+
+- **AI onboarding cleanup: `catalog_issues`.** A read-only MCP tool that checks every product and lists only the ones
+  with problems, each with a code and the evidence behind it: decoration and marketing words in the title, titles over
+  30 characters, no subtitle, banned advertising words, uncategorised, no image, price outliers (5x away from the
+  category median, only when the category has at least 5 SKUs), likely duplicates after stripping specs and
+  decoration, and products whose every SKU is out of stock. It also returns the shop's leaf categories, so an agent can
+  move a product without falling back to `query_sql`. `propose_product_copy` takes an optional `category_id`; the
+  payload records the category before and after, and the admin approval view shows it. New playbook
+  `agent/skills/上新整理.md`. Measured on a deliberately messy 36-product catalogue: 24 issues, 12 proposals, 2 issues
+  left after approval — both of them ones the agent is told to hand to a human (a price and a missing category).
+- **Restock accuracy review.** A restock proposal now carries Keel's own `restock_plan` snapshot (`forecast`), computed
+  server-side rather than taken from the agent. The 7-day review adds forecast accuracy, the stock before execution,
+  how many days the SKU would have been out without the restock, stock-out days avoided, and the units and money sold
+  beyond the pre-restock stock. Every number can be recomputed by hand; the counterfactual assumes demand does not
+  change because of the restock, and says so. The scorecard (admin and `my_scorecard`) gets a `restock` summary.
+- **Targeted coupons with a control group.** `customer_segments` returns the size and profile (never the member list or
+  phone numbers) of four segments: lapsed, one-time, cart-abandon and high-value. `propose_coupon` takes an optional
+  `target` (`segment`, `days`, `holdout_pct` 10–50, default 20). On approval Keel computes the list at that moment,
+  holds out a stable pseudo-random share as the control group, grants one coupon to everyone else and records both
+  groups in `coupon_target_members`. The review compares conversion between the groups and reports lift, incremental
+  buyers, incremental revenue and coupon cost; it gives numbers but no verdict while the control group has fewer than
+  30 people. New playbook `agent/skills/精准发券.md`.
+- **`make prospect-demo`**: open a demo shop on the multi-merchant stack from a prospect's own catalogue (the same file
+  the bulk import accepts), with a simulated sales history, so the AI staff's proposals are about their goods. See
+  `docs/指南/客户演示店.md`.
+- **Browser tests for the merchant console** (`make admin-e2e`, Playwright on the system Chrome): ten key flows, run in
+  CI's end-to-end lane.
+
+### Fixed
+
+- **Prices in the console could only be whole yuan.** The SKU price and cost inputs and the regional / per-store price
+  inputs used `step-strictly` with a step of 100 cents, which silently rounded ¥19.90 to ¥20.00 on save. Found by the new
+  browser tests.
+- **A platform-level session switched into a shop got `500` when approving or rejecting an AI proposal** (the decider's
+  foreign key points at shop staff). It now gets `403 role-forbidden`, the same rule as managing AI staff.
+
+Core migration `00350` (`coupon_target_members`, plus a `(id, merchant_id)` unique key on `agent_proposals` for the
+composite foreign key).
+
 ---
 
 ## [0.9.0] - 2026-10-09

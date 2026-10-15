@@ -220,6 +220,42 @@ type CouponPayload struct {
 	TotalCount   int32      `json:"total_count"`
 	PerUserLimit int32      `json:"per_user_limit"`
 	Claimable    bool       `json:"claimable"`
+	// Target 是精准发放（2026-10-16）：批准执行时按那一刻的人群名单随机留出对照组，其余每人发一张，
+	// 名单记在 coupon_target_members，复盘比两组的下单率。带它的券不进领券中心，发行量由名单定。
+	Target *CouponTarget `json:"target,omitempty"`
+}
+
+// CouponTarget 是精准发券的目标人群。EstimatedSize 是提案时按当时名单算的人数（给审批的人看），
+// 执行时会重算一次，以那一刻的名单为准。
+type CouponTarget struct {
+	Segment       string `json:"segment"`
+	Days          int    `json:"days,omitempty"`
+	HoldoutPct    int    `json:"holdout_pct"`
+	EstimatedSize int    `json:"estimated_size"`
+}
+
+const (
+	couponTargetDefaultHoldout = 20
+	couponTargetMinTreated     = 10
+)
+
+// targetMembers 按人群定义算出此刻的名单。
+func (s *AgentProposalService) targetMembers(ctx context.Context, t CouponTarget) ([]int64, error) {
+	days, err := checkLapsedDays(t.Days)
+	if err != nil {
+		return nil, badProposal("target.%s", err.Error())
+	}
+	now := time.Now()
+	var stats []repository.CustomerStat
+	err = s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+		var e error
+		stats, e = tx.CustomerStats(ctx, now)
+		return e
+	})
+	if err != nil {
+		return nil, err
+	}
+	return segmentMembers(stats, t.Segment, days, now), nil
 }
 
 // ProposeCoupon 是 MCP 工具 propose_coupon。
@@ -255,6 +291,35 @@ func (s *AgentProposalService) ProposeCoupon(ctx context.Context, in CouponPaylo
 	if err != nil {
 		return repository.AgentProposal{}, err
 	}
+	targetText := ""
+	if t := in.Target; t != nil {
+		if !ValidSegment(t.Segment) {
+			return repository.AgentProposal{}, badProposal("target.segment 取 lapsed / one_time / cart_abandon / high_value")
+		}
+		if in.Claimable {
+			return repository.AgentProposal{}, badProposal("带 target 的券是定向发放，不进领券中心：claimable 不要给 true")
+		}
+		if t.HoldoutPct == 0 {
+			t.HoldoutPct = couponTargetDefaultHoldout
+		}
+		if t.HoldoutPct < 10 || t.HoldoutPct > 50 {
+			return repository.AgentProposal{}, badProposal("target.holdout_pct 取 10–50（对照组占比）")
+		}
+		members, err := s.targetMembers(ctx, *t)
+		if err != nil {
+			return repository.AgentProposal{}, err
+		}
+		treated, _ := splitHoldout(0, members, t.HoldoutPct)
+		if len(treated) < couponTargetMinTreated {
+			return repository.AgentProposal{}, badProposal("人群「%s」现在只有 %d 人，扣掉对照组不到 %d 人，量不出效果",
+				segmentLabels[t.Segment][0], len(members), couponTargetMinTreated)
+		}
+		t.EstimatedSize = len(members)
+		// 发行量由名单定（执行时再按那一刻的名单定一次）；每人一张。
+		in.TotalCount = int32(min(len(treated), couponMaxTotal))
+		in.PerUserLimit = 1
+		targetText = fmt.Sprintf("，定向发给「%s」约 %d 人（留 %d%% 对照）", segmentLabels[t.Segment][0], len(members), t.HoldoutPct)
+	}
 	// 与后台建券同一套规则（执行时就是调它建券）：提案阶段放过、批准时才被拒的券，
 	// 之前会掉进执行失败（更早时卡死在 15）—— 2026-09-28 破坏性测试：满 100 减 200、负门槛、立减券带门槛都提得出来。
 	if err := validateCouponTemplate(repository.CouponTemplateFields{Name: in.Name, CouponType: in.CouponType,
@@ -286,7 +351,7 @@ func (s *AgentProposalService) ProposeCoupon(ctx context.Context, in CouponPaylo
 	default:
 		what = "立减 " + yuan(in.DiscountCents)
 	}
-	title := fmt.Sprintf("发券「%s」：%s，%d 张，%s", in.Name, what, in.TotalCount, validText)
+	title := fmt.Sprintf("发券「%s」：%s，%d 张，%s%s", in.Name, what, in.TotalCount, validText, targetText)
 	var out repository.AgentProposal
 	err = s.repo.WithTenant(ctx, func(tx repository.Tx) error {
 		var e error
@@ -345,6 +410,9 @@ func (s *AgentProposalService) execCoupon(ctx context.Context, p repository.Agen
 	if err := json.Unmarshal(p.Payload, &pl); err != nil {
 		return ProposalResult{}, err
 	}
+	if pl.Target != nil {
+		return s.execTargetedCoupon(ctx, p, pl)
+	}
 	v, _, err := s.coupons.Create(ctx, CouponTemplateInput{Name: pl.Name, CouponType: pl.CouponType,
 		ThresholdCents: pl.ThresholdCents, DiscountCents: pl.DiscountCents, DiscountRate: pl.DiscountRate,
 		MaxDiscountCents: pl.MaxDiscountCents, ValidMode: couponValidMode(pl), ValidStartAt: pl.ValidStartAt,
@@ -354,6 +422,59 @@ func (s *AgentProposalService) execCoupon(ctx context.Context, p repository.Agen
 		return ProposalResult{}, err
 	}
 	return ProposalResult{Detail: map[string]any{"coupon_template_id": v.Template.Rule.TemplateID}}, nil
+}
+
+// execTargetedCoupon：按此刻的名单分组 → 建券（发行量 = 发券组人数，不进领券中心）→ 同一个事务里
+// 给发券组逐个发、两组都记进 coupon_target_members。名单与分组只在这里算一次，之后不改。
+func (s *AgentProposalService) execTargetedCoupon(ctx context.Context, p repository.AgentProposal,
+	pl CouponPayload) (ProposalResult, error) {
+	members, err := s.targetMembers(ctx, *pl.Target)
+	if err != nil {
+		return ProposalResult{}, err
+	}
+	treated, control := splitHoldout(p.ID, members, pl.Target.HoldoutPct)
+	if len(treated) > couponMaxTotal {
+		treated = treated[:couponMaxTotal] // 超出发行上限的那部分不进实验（既不发券、也不当对照）
+	}
+	if len(treated) == 0 {
+		return ProposalResult{}, fmt.Errorf("人群「%s」执行时已经没有人了", pl.Target.Segment)
+	}
+	v, _, err := s.coupons.Create(ctx, CouponTemplateInput{Name: pl.Name, CouponType: pl.CouponType,
+		ThresholdCents: pl.ThresholdCents, DiscountCents: pl.DiscountCents, DiscountRate: pl.DiscountRate,
+		MaxDiscountCents: pl.MaxDiscountCents, ValidMode: couponValidMode(pl), ValidStartAt: pl.ValidStartAt,
+		ValidEndAt: pl.ValidEndAt, ValidDays: pl.ValidDays, TotalCount: int32(len(treated)),
+		PerUserLimit: 1, Claimable: false}, proposalIdemKey(p.ID))
+	if err != nil {
+		return ProposalResult{}, err
+	}
+	tid := v.Template.Rule.TemplateID
+	now := time.Now()
+	err = s.repo.WithTenant(ctx, func(tx repository.Tx) error {
+		win, err := tx.BumpTemplateForGrant(ctx, tid, int32(len(treated)), now)
+		if err != nil {
+			return err
+		}
+		for _, uid := range treated {
+			cid, err := issueCoupon(ctx, tx, tid, uid, repository.CouponSourceGrant, win, now)
+			if err != nil {
+				return err
+			}
+			if err := tx.InsertCouponTargetMember(ctx, p.ID, uid, true, &cid); err != nil {
+				return err
+			}
+		}
+		for _, uid := range control {
+			if err := tx.InsertCouponTargetMember(ctx, p.ID, uid, false, nil); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return ProposalResult{}, err
+	}
+	return ProposalResult{Detail: map[string]any{"coupon_template_id": tid, "segment": pl.Target.Segment,
+		"treated": len(treated), "holdout": len(control)}}, nil
 }
 
 // ---------------------------------------------------------------------------

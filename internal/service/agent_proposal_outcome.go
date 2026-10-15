@@ -68,6 +68,62 @@ type ProposalOutcome struct {
 	AvoidedStockoutDays        *int     `json:"avoided_stockout_days,omitempty"`
 	ExtraSoldQty               *int64   `json:"extra_sold_qty,omitempty"`
 	ExtraSoldCents             *int64   `json:"extra_sold_cents,omitempty"`
+	// 精准发券的对照实验（2026-10-16，算法见 couponTargetReview）。
+	TreatedSize       *int64   `json:"treated_size,omitempty"`
+	HoldoutSize       *int64   `json:"holdout_size,omitempty"`
+	TreatedConversion *float64 `json:"treated_conversion,omitempty"`
+	HoldoutConversion *float64 `json:"holdout_conversion,omitempty"`
+	Lift              *float64 `json:"lift,omitempty"`
+	IncrementalBuyers *float64 `json:"incremental_buyers,omitempty"`
+	IncrementalCents  *int64   `json:"incremental_cents,omitempty"`
+	CouponCostCents   *int64   `json:"coupon_cost_cents,omitempty"`
+}
+
+// couponTargetMinHoldout：对照组少于这么多人时只给数、不下结论 —— 十几个人里多一两个下单，
+// 下单率就能差出十几个百分点，那是噪音不是效果。
+const couponTargetMinHoldout = 30
+
+// couponTargetReview 是精准发券的复盘：发券组与对照组比下单率。全部能手算：
+//
+//	下单率   = 窗口内下过已付款订单的人数 ÷ 组内人数
+//	提升     = 发券组下单率 − 对照组下单率
+//	增量顾客 ≈ 提升 × 发券组人数
+//	增量金额 ≈ (发券组人均付款 − 对照组人均付款) × 发券组人数
+//	券成本   = 用了这张券的已付款订单里，券让出的优惠合计
+//
+// 判定：对照组不到 30 人 → neutral（只给数）；提升 ≤ 0 → negative；增量金额 > 券成本 → positive；其余 neutral。
+func couponTargetReview(o *ProposalOutcome, treated, control repository.CouponTargetGroup, costCents int64) {
+	r4 := func(x float64) float64 { return math.Round(x*10000) / 10000 }
+	o.TreatedSize, o.HoldoutSize, o.CouponCostCents = &treated.Members, &control.Members, &costCents
+	if treated.Members == 0 {
+		o.Verdict, o.Explanation = verdictNeutral, "发券组是空的"
+		return
+	}
+	ct := float64(treated.Converted) / float64(treated.Members)
+	cc := 0.0
+	if control.Members > 0 {
+		cc = float64(control.Converted) / float64(control.Members)
+	}
+	lift := ct - cc
+	buyers := math.Round(lift*float64(treated.Members)*10) / 10
+	perT := float64(treated.PaidCents) / float64(treated.Members)
+	perC := 0.0
+	if control.Members > 0 {
+		perC = float64(control.PaidCents) / float64(control.Members)
+	}
+	inc := int64(math.Round((perT - perC) * float64(treated.Members)))
+	ct, cc, lift = r4(ct), r4(cc), r4(lift)
+	o.TreatedConversion, o.HoldoutConversion, o.Lift, o.IncrementalBuyers, o.IncrementalCents = &ct, &cc, &lift, &buyers, &inc
+	switch {
+	case control.Members < couponTargetMinHoldout:
+		o.Verdict, o.Explanation = verdictNeutral, fmt.Sprintf("对照组只有 %d 人（不到 %d），只给数、不下结论", control.Members, couponTargetMinHoldout)
+	case lift <= 0:
+		o.Verdict, o.Explanation = verdictNegative, "发券组的下单率不比对照组高：这张券没有带来额外的顾客"
+	case inc > costCents:
+		o.Verdict, o.Explanation = verdictPositive, "发券组下单率高于对照组，且多带来的付款超过了券让出的钱"
+	default:
+		o.Verdict, o.Explanation = verdictNeutral, "发券组下单率更高，但多带来的付款没有超过券让出的钱"
+	}
 }
 
 // restockReview 是补货复盘的四个数，全部能手算：
@@ -271,6 +327,30 @@ func computeOutcome(ctx context.Context, tx repository.Tx, stockout map[int64]in
 			return ProposalOutcome{}, err
 		}
 		o := ProposalOutcome{Claimed: &claimed, Used: &used}
+		var pl CouponPayload
+		if json.Unmarshal(d.Payload, &pl) == nil && pl.Target != nil {
+			// 精准发券：比发券组与对照组，而不是看使用率（定向发的券人人都「领」了，使用率说明不了生意）。
+			from, to := d.ExecutedAt, outcomeWindowClose(d)
+			groups, err := tx.CouponTargetGroups(ctx, d.ID, from, to)
+			if err != nil {
+				return ProposalOutcome{}, err
+			}
+			var t, c repository.CouponTargetGroup
+			for _, g := range groups {
+				if g.Treated {
+					t = g
+				} else {
+					c = g
+				}
+			}
+			st, err := tx.CouponOrderStats(ctx, tid)
+			if err != nil {
+				return ProposalOutcome{}, err
+			}
+			o.WindowStart, o.WindowEnd = day(from), day(to)
+			couponTargetReview(&o, t, c, st.DiscountCents)
+			return o, nil
+		}
 		rate := 0.0
 		if claimed > 0 {
 			rate = float64(used) / float64(claimed)

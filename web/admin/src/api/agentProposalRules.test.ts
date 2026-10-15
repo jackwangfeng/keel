@@ -273,3 +273,19 @@ test("成绩单补货汇总：有快照 / 没快照", () => {
     const old = restockSummary({ reviewed: 1, with_forecast: 0, avoided_stockout_days: 0, extra_sold_qty: 0, extra_sold_cents: 0 });
     assert.match(old.accuracy, /—/);
 });
+
+test("发券 payload：精准发放显示人群与对照组", () => {
+    const v = couponPayload({ name: "回来看看", coupon_type: 3, discount_cents: 500, valid_days: 7, total_count: 32,
+        per_user_limit: 1, claimable: false, target: { segment: "lapsed", holdout_pct: 20, estimated_size: 40 } });
+    assert.equal(v.targetText, "定向发给「沉睡顾客」约 40 人，随机留 20% 不发作对照");
+    assert.equal(couponPayload({ name: "普通券", coupon_type: 3, discount_cents: 500 }).targetText, undefined);
+});
+
+test("复盘：精准发券的对照实验指标", () => {
+    const v = describeOutcome("coupon", { verdict: "positive", treated_size: 160, holdout_size: 40, treated_conversion: 0.2,
+        holdout_conversion: 0.1, lift: 0.1, incremental_cents: 240000 });
+    const byLabel = Object.fromEntries(v.metrics.map((m) => [m.label, m.value]));
+    assert.equal(byLabel["发券组下单率"], "20.0%");
+    assert.equal(byLabel["提升"], "10.0 个百分点");
+    assert.match(byLabel["增量金额"] ?? "", /^¥2400(\.00)?$/);
+});

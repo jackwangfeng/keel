@@ -38,7 +38,19 @@ type mcpCatalogIssuesIn struct {
 	Limit    int     `json:"limit,omitempty" jsonschema:"最多体检几件商品（按 id 从小到大），默认 200，最多 500"`
 }
 
+type mcpCustomerSegmentsIn struct {
+	Days int `json:"days,omitempty" jsonschema:"沉睡顾客的「最近 N 天没下单」，7–180，默认 30"`
+}
+
 func registerMCPComputeTools(srv *mcp.Server, d *MCPDeps) {
+	mcpTool(srv, d, "customer_segments",
+		"顾客人群（精准发券前看）：lapsed 沉睡顾客（付过款、最近 days 天没下单）、one_time 只买过一次（且已过去 7 天以上）、"+
+			"cart_abandon 加购未买（近 7 天加过购、之后没付款）、high_value 高价值顾客（近 90 天付款排前 20%）。"+
+			"每个人群给人数、近 90 天人均付款（分）、距上次付款的平均天数。只给人数与画像，不给名单和手机号；"+
+			"要发券就用 propose_coupon 的 target，批准时 Keel 自己按名单发。需要全店范围的 AI 员工。",
+		writeAdminListError, func(ctx context.Context, in mcpCustomerSegmentsIn) (service.CustomerSegmentsResult, error) {
+			return d.CustomerSegments.Segments(ctx, in.Days)
+		})
 	mcpTool(srv, d, "catalog_issues",
 		"上新整理：逐件商品体检，只列有问题的商品。问题码：title_noise（标题有装饰符号或营销词）、"+
 			"title_too_long（超过 30 字）、no_subtitle、forbidden_words（广告法违禁词）、uncategorized（未分类 / 默认分类）、"+

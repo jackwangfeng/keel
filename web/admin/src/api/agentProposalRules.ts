@@ -128,7 +128,16 @@ export interface CouponView {
     totalText: string;
     perUserLimitText: string;
     claimableText: string;
+    /** 精准发放（2026-10-16）：发给哪群人、留多少对照；普通的券没有这一行。 */
+    targetText?: string;
 }
+
+const SEGMENT_LABEL: Record<string, string> = {
+    lapsed: "沉睡顾客",
+    one_time: "只买过一次的顾客",
+    cart_abandon: "加购未买的顾客",
+    high_value: "高价值顾客",
+};
 
 /**
  * `coupon` 执行参数：{name, coupon_type, threshold_cents, discount_cents, discount_rate,
@@ -153,6 +162,15 @@ export function couponPayload(payload: Rec): CouponView {
     const totalCount = num(payload["total_count"]);
     const perUserLimit = num(payload["per_user_limit"]);
     const claimable = bool(payload["claimable"]);
+    const target = payload["target"] as Rec | undefined;
+    let targetText: string | undefined;
+    if (target && typeof target === "object") {
+        const seg = str(target["segment"]) ?? "";
+        const size = num(target["estimated_size"]);
+        const holdout = num(target["holdout_pct"]);
+        targetText = `定向发给「${SEGMENT_LABEL[seg] ?? seg}」${size === undefined ? "" : `约 ${size} 人`}` +
+            (holdout === undefined ? "" : `，随机留 ${holdout}% 不发作对照`);
+    }
 
     let faceText = DASH;
     if (type === 2 && discountRate !== undefined) {
@@ -176,6 +194,7 @@ export function couponPayload(payload: Rec): CouponView {
         totalText: totalCount === undefined ? DASH : `${totalCount} 张`,
         perUserLimitText: perUserLimit === undefined ? DASH : `每人限 ${perUserLimit} 张`,
         claimableText: claimable === undefined ? DASH : claimable ? "进领券中心" : "不进领券中心",
+        targetText,
     };
 }
 
@@ -453,6 +472,23 @@ const OUTCOME_METRIC_FIELDS: { key: string; label: string; format?: (v: number) 
     { key: "claimed", label: "领取数" },
     { key: "used", label: "核销数" },
     { key: "use_rate", label: "核销率", format: (v) => `${(v * 100).toFixed(1)}%` },
+    // 补货复盘（2026-10-16）
+    { key: "forecast_qty", label: "预测销量", format: (v) => `${v} 件` },
+    { key: "forecast_accuracy", label: "预测准确率", format: (v) => `${Math.round(v * 100)}%` },
+    { key: "before_available", label: "执行前可售", format: (v) => `${v} 件` },
+    { key: "counterfactual_stockout_days", label: "不补会断", format: (v) => `${v} 天` },
+    { key: "avoided_stockout_days", label: "少断货", format: (v) => `${v} 天` },
+    { key: "extra_sold_qty", label: "多卖", format: (v) => `${v} 件` },
+    { key: "extra_sold_cents", label: "多卖金额", format: (v) => yuanText(v) },
+    // 精准发券的对照实验（2026-10-16）
+    { key: "treated_size", label: "发券组", format: (v) => `${v} 人` },
+    { key: "holdout_size", label: "对照组", format: (v) => `${v} 人` },
+    { key: "treated_conversion", label: "发券组下单率", format: (v) => `${(v * 100).toFixed(1)}%` },
+    { key: "holdout_conversion", label: "对照组下单率", format: (v) => `${(v * 100).toFixed(1)}%` },
+    { key: "lift", label: "提升", format: (v) => `${(v * 100).toFixed(1)} 个百分点` },
+    { key: "incremental_buyers", label: "增量顾客", format: (v) => `约 ${v} 人` },
+    { key: "incremental_cents", label: "增量金额", format: (v) => yuanText(v) },
+    { key: "coupon_cost_cents", label: "券成本", format: (v) => yuanText(v) },
 ];
 
 /**

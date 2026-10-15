@@ -66,8 +66,10 @@ type MCPDeps struct {
 	// 注册在 mcp_tools_compute.go。
 	SlowMovers *service.SlowMoversService
 	// CatalogIssues 是上新整理的体检工具（docs/superpowers/specs/2026-10-16-ai-ops-onboarding-restock-coupon-design.md §1）。
-	CatalogIssues   *service.CatalogIssuesService
-	PromotionReview *service.PromotionReviewService
+	CatalogIssues *service.CatalogIssuesService
+	// CustomerSegments 是精准发券要看的顾客人群（同一份设计稿 §3）。
+	CustomerSegments *service.CustomerSegmentsService
+	PromotionReview  *service.PromotionReviewService
 	// Channels 是渠道层（channel_allocation_review）；KEEL_CHANNELS 关着时为 nil，工具返回空结果与说明。
 	Channels *service.ChannelService
 	Log      *slog.Logger

@@ -45,10 +45,18 @@ type mcpCouponIn struct {
 	ValidDays        int32      `json:"valid_days,omitempty" jsonschema:"领取后几天内有效，1–90。与 valid_start_at / valid_end_at 二选一"`
 	ValidStartAt     *time.Time `json:"valid_start_at,omitempty" jsonschema:"固定可用时段的开始（RFC 3339，带时区，如 2026-10-01T00:00:00+08:00）；与 valid_end_at 成对，与 valid_days 二选一"`
 	ValidEndAt       *time.Time `json:"valid_end_at,omitempty" jsonschema:"固定可用时段的结束（不含）；时段至多 90 天，结束在 90 天内"`
-	TotalCount       int32      `json:"total_count" jsonschema:"发行量，1–10000"`
-	PerUserLimit     int32      `json:"per_user_limit" jsonschema:"每人限领，1–5"`
-	Claimable        bool       `json:"claimable,omitempty" jsonschema:"是否放进领券中心让买家自己领"`
+	TotalCount       int32      `json:"total_count" jsonschema:"发行量，1–10000（带 target 时不看它，发行量由名单定）"`
+	PerUserLimit     int32      `json:"per_user_limit" jsonschema:"每人限领，1–5（带 target 时固定每人一张）"`
+	Claimable        bool       `json:"claimable,omitempty" jsonschema:"是否放进领券中心让买家自己领（带 target 时不能为 true）"`
+	// 精准发放（2026-10-16）
+	Target *mcpCouponTargetIn `json:"target,omitempty" jsonschema:"定向发给一个顾客人群并留对照组；不给就是普通的券"`
 	mcpProposalMetaIn
+}
+
+type mcpCouponTargetIn struct {
+	Segment    string `json:"segment" jsonschema:"人群：lapsed 沉睡顾客 / one_time 只买过一次 / cart_abandon 加购未买 / high_value 高价值顾客（定义见 customer_segments）"`
+	Days       int    `json:"days,omitempty" jsonschema:"lapsed 的「最近 N 天没下单」，7–180，默认 30"`
+	HoldoutPct int    `json:"holdout_pct,omitempty" jsonschema:"对照组占比（不发券，用来比），10–50，默认 20"`
 }
 
 type mcpProductCopyIn struct {
@@ -118,13 +126,15 @@ func registerMCPProposalTools(srv *mcp.Server, d *MCPDeps) {
 	mcpTool(srv, d, "propose_coupon",
 		"提一条发券提案：建一张券（满减 / 折扣 / 立减），可放进领券中心。有效期二选一：领取后 N 天（valid_days），"+
 			"或固定时段（valid_start_at + valid_end_at，比如只在国庆 7 天能用）。不会立即执行：人批准后 Keel 建券。"+
-			"需要全店范围的 AI 员工。面额至多 100 元、发行量至多 10000。",
+			"需要全店范围的 AI 员工。面额至多 100 元、发行量至多 10000。"+
+			"带 target 就是精准发放：批准时按那一刻的人群名单随机留出对照组（holdout_pct），其余每人直接发一张、不进领券中心；"+
+			"复盘比两组的下单率，给出提升、增量顾客、增量金额与券成本。先用 customer_segments 看各人群有多少人。",
 		writeProposalError, func(ctx context.Context, in mcpCouponIn) (api.AgentProposal, error) {
 			p, err := d.Proposals.ProposeCoupon(ctx, service.CouponPayload{Name: in.Name, CouponType: in.CouponType,
 				ThresholdCents: in.ThresholdCents, DiscountCents: in.DiscountCents, DiscountRate: in.DiscountRate,
 				MaxDiscountCents: in.MaxDiscountCents, ValidDays: in.ValidDays, ValidStartAt: in.ValidStartAt,
 				ValidEndAt: in.ValidEndAt, TotalCount: in.TotalCount, PerUserLimit: in.PerUserLimit,
-				Claimable: in.Claimable}, in.meta())
+				Claimable: in.Claimable, Target: in.Target.toService()}, in.meta())
 			if err != nil {
 				return api.AgentProposal{}, err
 			}
@@ -184,4 +194,11 @@ func registerMCPSQLTool(srv *mcp.Server, d *MCPDeps) {
 		writeProposalError, func(ctx context.Context, in mcpQuerySQLIn) (service.AgentSQLResult, error) {
 			return d.Proposals.QuerySQL(ctx, in.SQL)
 		})
+}
+
+func (t *mcpCouponTargetIn) toService() *service.CouponTarget {
+	if t == nil {
+		return nil
+	}
+	return &service.CouponTarget{Segment: t.Segment, Days: t.Days, HoldoutPct: t.HoldoutPct}
 }

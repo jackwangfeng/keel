@@ -103,6 +103,7 @@ type Tx interface {
 	AgentEventTx
 	AgentComputeTx
 	CatalogIssuesTx
+	CouponTargetTx
 	PaymentReturnTx
 	MsgTx
 	SearchEvalTx

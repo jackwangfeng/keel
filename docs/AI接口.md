@@ -231,6 +231,7 @@ def verify(secret: str, body: bytes, header: str) -> bool:
 | 2026-10-03 | 加 `propose_channel_stock_rule`（调一个销售渠道在一家门店 / 门店 × SKU 的分配比例、安全库存、封顶；`prev` 照抄 `channel_allocation_review` 的 `rule` 与 `rule_level`，与当前规则不一致 409；提案详情 `payload.preview` 是按当时可售的对外可售数试算；执行时规则被人改过 → 执行失败 `stale`，不覆盖；需全店范围；渠道层没开 409）。自动执行策略加 `max_ratio_step_bp`（默认 0 = 不自动执行，永远不自动把比例调到 0）；复盘 `outcome.cells` 逐格比执行前后 7 天 |
 | 2026-10-16 | 上新整理：加 `catalog_issues`（逐件商品体检，只读）；`propose_product_copy` 加可选 `category_id`（挪类目），载荷多 `category_name` `before_category_id` `before_category_name` |
 | 2026-10-16 | 补货复盘：`propose_inventory_adjust` 的载荷多一份 Keel 自己算的 `forecast` 快照；复盘 outcome 加 `forecast_qty` `forecast_accuracy` `before_available` `counterfactual_stockout_days` `avoided_stockout_days` `extra_sold_qty` `extra_sold_cents`；`my_scorecard` 加 `restock` 汇总 |
+| 2026-10-16 | 精准发券：加 `customer_segments`（顾客人群人数与画像，只读，不给名单）；`propose_coupon` 加可选 `target`（人群 + 对照组占比），批准时按名单定向发、留对照组；复盘 outcome 加 `treated_size` `holdout_size` `treated_conversion` `holdout_conversion` `lift` `incremental_buyers` `incremental_cents` `coupon_cost_cents` |
 
 ## 接入方式举例
 

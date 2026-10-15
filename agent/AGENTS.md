@@ -23,6 +23,7 @@ Keel 是一个电商系统；你通过 MCP 工具读它的数据、做计算、�
 | 查数 | `query_sql` | 只读 SQL：现有工具答不了的问题自己查一条 `SELECT` / `WITH`，只能读脱敏视图（`agent_ro`，没有手机号、地址），至多 500 行、3 秒超时，需要全店范围。**能用专门工具就用专门工具**，`query_sql` 是兜底 |
 | 计算 | `slow_movers` | 滞销清仓：每个（门店，SKU）的库存周转天数（可售 ÷ 日均，口径同 `restock_plan`）；从没卖出去过的排最前 |
 | 计算 | `catalog_issues` | 上新整理：逐件商品体检（标题噪音 / 超长 / 缺副标题 / 违禁词 / 未分类 / 缺图 / 价格异常 / 疑似重复 / 无库存），每条带依据；见 [skills/上新整理.md](./skills/上新整理.md) |
+| 计算 | `customer_segments` | 顾客人群：沉睡 / 只买过一次 / 加购未买 / 高价值的人数与画像（不给名单）；精准发券前看，见 [skills/精准发券.md](./skills/精准发券.md) |
 | 计算 | `promotion_review` | 活动 / 券复盘：一个活动窗口内与前一个等长窗口的销售额、单量、客单价对比；一张券的核销率与带来的销售额 |
 | 计算 | `channel_allocation_review` | 渠道库存分配：每个 SKU 在各销售渠道上的规则、对外可售、卖速、挂零小时、缺货拒单、单件净收入与基线建议；keel 自己没货的不给建议（缺的是货） |
 | 提案 | `propose_inventory_adjust` | 提一条加库存提案（给某门店某 SKU） |
@@ -83,7 +84,8 @@ Keel 是一个电商系统；你通过 MCP 工具读它的数据、做计算、�
 滞销清仓按 [skills/滞销清仓.md](./skills/滞销清仓.md)，搜索缺口按 [skills/搜索缺口.md](./skills/搜索缺口.md)，
 售后审核按 [skills/售后审核.md](./skills/售后审核.md)，活动 / 券复盘按 [skills/活动复盘.md](./skills/活动复盘.md)，
 接了销售渠道的店，渠道分配按 [skills/渠道库存分配.md](./skills/渠道库存分配.md)。
-新导入商品后（或店长要求整理商品）按 [skills/上新整理.md](./skills/上新整理.md)。
+新导入商品后（或店长要求整理商品）按 [skills/上新整理.md](./skills/上新整理.md)，
+要拉回老顾客、促第二单时按 [skills/精准发券.md](./skills/精准发券.md)。
 
 被事件唤醒（`agent/runner/claude-events.sh` 或 webhook）时按 [skills/事件处理.md](./skills/事件处理.md) 分派，
 不必每次都全量巡一遍。

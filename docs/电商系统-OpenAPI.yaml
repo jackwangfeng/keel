@@ -11572,7 +11572,7 @@ components:
             执行参数，按 kind：`inventory_adjust` {store_id, sku_id, delta, reason}；
             `flash_price` {name, store_id?, items: [{sku_id, discount_rate}], starts_at, ends_at}；
             `coupon` {name, coupon_type, threshold_cents, discount_cents, discount_rate, max_discount_cents,
-            valid_days, total_count, per_user_limit, claimable}；`product_copy` {product_id, title?, subtitle?,
+            valid_days, total_count, per_user_limit, claimable, target?: {segment, days?, holdout_pct, estimated_size}（精准发放，2026-10-16）}；`product_copy` {product_id, title?, subtitle?,
             before_title, before_subtitle?, category_id?, category_name?, before_category_id?, before_category_name?}（类目四项是上新整理加的）；`refund_decision` {refund_no, action, reject_reason?, amount_cents}；
             `channel_stock_rule` {binding_id, binding_name, store_id, store_name, changes: [{sku_id?（空 = 门店级）, ratio_bp,
             safety_qty, cap_qty?, prev: {ratio_bp, safety_qty, cap_qty?, level}}], preview: [{sku_id, available,

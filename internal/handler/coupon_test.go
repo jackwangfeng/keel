@@ -60,6 +60,7 @@ func newCouponShop(t *testing.T) couponShop {
 	// 而这几张表引用着它。
 	t.Cleanup(func() {
 		for _, stmt := range []string{
+			`DELETE FROM coupon_target_members WHERE merchant_id = $1`, // 精准发券的名单（00350），指着 user_coupons 与 users
 			// orders.user_coupon_id 与 user_coupons.order_id 互相引用；先把订单上的券摘掉
 			// （连同优惠与券名快照，否则 chk_discount_needs_coupon /
 			// chk_coupon_name_with_coupon 不让摘），环才解得开。
