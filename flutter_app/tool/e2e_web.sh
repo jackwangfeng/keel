@@ -33,12 +33,15 @@ VIEWPORT=${KEEL_E2E_VIEWPORT:-390x844@3}
 CHROME=${CHROME:-"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"}
 export CHROME_EXECUTABLE=${CHROME_EXECUTABLE:-$CHROME}
 VER=$("$CHROME" --version | awk '{print $3}')
-DRIVER=".tools/chromedriver-$VER/chromedriver"
+# KEEL_E2E_TOOLS_DIR：chromedriver 的缓存目录。默认 .tools（gitignore）；CI 每次检出会清掉被忽略的文件，
+# 所以 CI 指到 $HOME 下的缓存，免得每次都去 Google 的 CDN 下载（国内常常下不来）。
+TOOLS=${KEEL_E2E_TOOLS_DIR:-.tools}
+DRIVER="$TOOLS/chromedriver-$VER/chromedriver"
 if [ ! -x "$DRIVER" ]; then
-  mkdir -p .tools
-  npx -y @puppeteer/browsers install "chromedriver@$VER" --path "$PWD/.tools/pb" >/dev/null
-  mkdir -p ".tools/chromedriver-$VER"
-  cp "$(find .tools/pb -name chromedriver -type f | head -1)" "$DRIVER"
+  mkdir -p "$TOOLS"
+  npx -y @puppeteer/browsers install "chromedriver@$VER" --path "$(cd "$TOOLS" && pwd)/pb" >/dev/null
+  mkdir -p "$TOOLS/chromedriver-$VER"
+  cp "$(find "$TOOLS/pb" -name chromedriver -type f | head -1)" "$DRIVER"
 fi
 "$DRIVER" --port=4444 >/dev/null 2>&1 &
 DRV=$!

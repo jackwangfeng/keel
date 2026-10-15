@@ -18,6 +18,7 @@
 # 镜像只编一次，两套栈用不同的项目名和端口同时起来。
 # 单商家栈起来后还跑后台关键流程的浏览器测试（make admin-e2e，十条约 20 秒），
 # 它等 gates 那一路装完 web/admin 依赖（记号文件 $logdir/admin-installed）。
+# 之后跑 H5（Flutter Web）浏览器测试（make flutter-e2e-web，约 4 分钟），等 Flutter 那一路收工（$logdir/flutter-done）。
 set -uo pipefail
 
 cd "$(dirname "$0")/.."
@@ -143,6 +144,9 @@ go_lane() {
 }
 
 flutter_lane() {
+    # e2e 那一路的 H5 浏览器测试要用同一个 flutter_app 目录（.dart_tool、build/），与这里的 flutter build web
+    # 同时跑会互相踩。退出时（无论成败）留个记号，那边等它。
+    trap 'touch "$logdir/flutter-done"' EXIT
     renice -n 10 -p $$ >/dev/null 2>&1 || true
     export PUB_HOSTED_URL=https://pub.flutter-io.cn
     export FLUTTER_STORAGE_BASE_URL=https://storage.flutter-io.cn
@@ -236,6 +240,25 @@ e2e_lane() {
         [ -e "$logdir/admin-installed" ] || { echo "::error::等了 300 秒 gates 还没装完 web/admin 依赖"; exit 1; }
         CI=1 KEEL_E2E_ADMIN_URL="http://127.0.0.1:${KEEL_CONSOLE_PORT}" KEEL_E2E_COMPOSE_PROJECT=keelci make admin-e2e \
             || { echo "::error::后台浏览器测试失败，trace 在 web/admin/e2e-results/（npx playwright show-trace <zip>）"; exit 1; }
+        # H5（Flutter Web）浏览器测试：等 Flutter 那一路收工 → 补夹具（包邮券模板）→ 用后台测试留下的
+        # 本店管理员会话造四个前置状态（已发货 / 驳回 / 已退款 / 待寄回）→ 无头 Chrome 跑全套。
+        for i in $(seq 1 600); do
+            [ -e "$logdir/flutter-done" ] && break
+            sleep 1
+        done
+        [ -e "$logdir/flutter-done" ] || { echo "::error::等了 600 秒 Flutter 那一路还没收工"; exit 1; }
+        docker exec -i keelci-postgres-1 psql -U keel -d keel -v ON_ERROR_STOP=1 -q < deploy/e2e/h5-fixtures.sql
+        local fixtures
+        fixtures=$(python3 scripts/h5-e2e-fixtures.py --api "http://127.0.0.1:${KEEL_HTTP_PORT}/api/v1" \
+            --admin-session web/admin/e2e/.auth/session.json --phone 13800000000 --password keel-demo-2026)
+        echo "$fixtures"
+        # shellcheck disable=SC2046
+        env $fixtures KEEL_API_BASE="http://127.0.0.1:${KEEL_HTTP_PORT}/api/v1" \
+            KEEL_E2E_PHONE=13800000000 KEEL_E2E_PASSWORD=keel-demo-2026 KEEL_E2E_ENV=/dev/null \
+            KEEL_E2E_TOOLS_DIR="$HOME/.cache/keel-ci/flutter-e2e" CHROME=/usr/bin/google-chrome NO_PROXY='*' \
+            PUB_HOSTED_URL=https://pub.flutter-io.cn FLUTTER_STORAGE_BASE_URL=https://storage.flutter-io.cn \
+            make flutter-e2e-web \
+            || { echo "::error::H5 浏览器测试失败（flutter_app/integration_test），往上翻 EXCEPTION CAUGHT"; exit 1; }
     ) &
     local single_pid=$!
     KEEL_AUTH_SECRET="$secret" COMPOSE_PROJECT_NAME=keelcimulti \

@@ -26,7 +26,8 @@
 4. ✅ 客户演示店 `make prospect-demo`（`7daf36e`，`docs/指南/客户演示店.md`）：示例清单 14 天约 2 分钟，
    AI 员工巡店出 10 条补货提案 + 日报。
 5. ✅ 后台关键流程浏览器测试 10 条进 CI（`4fc84ec`，`make admin-e2e`）；顺带修了改价只能填整元（`23e2ff8`）。
-   未做：H5（Flutter Web 已有 25 条无头用例 `make flutter-e2e-web`）还没进 CI；`make test-engine` 在 CI 仍无执行者。
+   H5（Flutter Web）25 条无头用例也已进 CI（e2e 那一路，后台测试之后，带四个后台前置状态）。
+   未做：`make test-engine` 在 CI 仍无执行者。
 
 2026-10-16 用户给的下一批（AI 方向，都走 提案 → 审批 → 执行 → 复盘；设计稿
 `docs/superpowers/specs/2026-10-16-ai-ops-onboarding-restock-coupon-design.md`，**用户还没审**）：

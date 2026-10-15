@@ -7,7 +7,6 @@ import 'helpers.dart';
 const guaer = (productId: 19, skuId: 21); // 限时特价 49.9（门店价 69），限购 2
 const mill = (productId: 22, skuId: 25); // 238 元：命中满 199 减 20，且满 99 包邮
 const cheap = (productId: 23, skuId: 26); // 55.8 元：运费 8 元
-const freeShipTemplate = 3;
 const freightName = 'e2e 运费';
 
 Future<void> cleanFreightAddresses() async {
@@ -205,6 +204,10 @@ void orderTests() {
     e2e('包邮券：99 元以下的单自动选最省的券、选包邮券抵掉 8 元运费；已包邮的单里不出现；加到满 99 时照实报错并展开券列表', (t) async {
       await startApp(t);
       await loginInApp(t);
+      // 按「包邮券、可领」现查模板，不写死 id：演示站重置后是 3，CI 那一栈由 deploy/e2e/h5-fixtures.sql 建，id 不同。
+      final tpls = ((((await Api.get('/coupon-templates?page_size=50')) as Map)['items']) as List).cast<Map>();
+      final freeShipTemplate = tpls.firstWhere((x) => x['coupon_type'] == 4 && '${x['name']}'.contains('包邮'),
+          orElse: () => throw TestFailure('店里没有可领的包邮券模板（演示站由 reset-demo.sh 建，CI 由 deploy/e2e/h5-fixtures.sql 建）'))['id'];
       final claim = await Api.idem('POST', '/coupon-templates/$freeShipTemplate/claim', null);
       expect(claim is Map && claim['_status'] == null, isTrue, reason: '领包邮券：$claim');
       final addr = (await Api.addresses()).firstWhere((a) => a['is_default'] == true)['id'] as int;
