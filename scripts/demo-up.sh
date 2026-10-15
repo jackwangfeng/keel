@@ -47,7 +47,14 @@ mode="up"
 extra=()
 for arg in "$@"; do
     case "$arg" in
-        --build)  extra+=(--build) ;;
+        --build)
+            extra+=(--build)
+            # 版本号编进二进制，GET /version 才答得出「跑的是哪一版」。以前靠部署的人手工 export，
+            # 2026-10-16 用脚本部署时漏了，/version 变成 dev、没有 commit。显式给了就尊重给的。
+            KEEL_VERSION="${KEEL_VERSION:-$(git describe --tags --always 2>/dev/null || echo dev)}"
+            KEEL_COMMIT="${KEEL_COMMIT:-$(git rev-parse --short HEAD 2>/dev/null)}"
+            export KEEL_VERSION KEEL_COMMIT
+            ;;
         --pull)   extra+=(--pull) ;;
         --down)   mode="down" ;;
         --config) mode="config" ;;

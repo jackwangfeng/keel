@@ -45,6 +45,10 @@ infero（推理引擎 18081）2026-10-16 凌晨没在跑：演示站新品搜不
 不做：拼团、循环满减、拍照搜同款、大规模秒杀（方案在 `docs/大规模秒杀-方案备忘.md`）。
 小尾巴：下一版删 `promotion_skus.stock_qty / sold_qty`；dtmrs barrier 表未清理。
 
+**演示站 2026-10-16 已部署到 `2d91bc0`**（库 00350；部署前备份 `~/.local/share/keel-eshop/backup-pre-00350-{core,inv}-202610160341.dump`，
+迁移先在备份副本上试跑过）。基线 35/35。模拟器加了 150 个结构化买家（`simulate.py` 的 MORE，原文件备份 `.bak-segments`），
+一周后演示站上会有沉睡 / 只买一次人群；补货复盘的数字执行满 7 天后出现。
+
 ## 待用户处理 / 拍板
 
 - 清理 keelchaos 残留（dtmrs 容器在重启循环）：
